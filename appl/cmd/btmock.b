@@ -25,7 +25,9 @@ implement Btmockcmd;
 # Usage:
 #   btmock [-a addr] [-n 'addr class rssi name']... [-s] [-t ms] [path]
 #     -a   the controller's BD_ADDR (default b8:27:eb:00:00:01)
-#     -n   a device an inquiry finds; repeatable
+#     -n   a device an inquiry finds; repeatable. A fifth word makes it
+#          demand pairing before it connects: pin=NNNN for a legacy PIN,
+#          ssp for Secure Simple Pairing (numeric comparison, 123456)
 #     -s   stingy: withhold command credits and refund them on the tick
 #     -t   the tick, in ms (default 200): one inquiry result per tick
 #     -H   write a small .hcd patch file there, for exercising bt9p's
@@ -70,6 +72,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	addr := "b8:27:eb:00:00:01";
 	nearby: list of ref Found;
+	auth: list of (string, string);
 	stingy := 0;
 	tickms := 200;
 	arg->init(args);
@@ -85,6 +88,8 @@ init(nil: ref Draw->Context, args: list of string)
 			nm := "";
 			if(nf > 3)
 				nm = hd tl tl tl f;
+			if(nf > 4)
+				auth = (hd f, hd tl tl tl tl f) :: auth;
 			(cls, nil) := hexint(hd tl f);
 			nearby = ref Found(hd f, cls, int hd tl tl f, nm, -1) :: nearby;
 		's' =>	stingy = 1;
@@ -99,6 +104,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	c := Ctlr.new(addr);
 	c.nearby = nearby;
+	c.auth = auth;
 	c.stingy = stingy;
 
 	if(hcd != nil && writehcd(hcd) < 0){

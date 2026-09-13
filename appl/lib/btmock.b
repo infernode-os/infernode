@@ -24,7 +24,7 @@ Ctlr.new(addr: string): ref Ctlr
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, nil, nil, Deframer.new(), nil, nil, 1, nil);
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, 0);
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -205,8 +205,121 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		pr.state = 0;
 		c.pendconn = appendpeer(c.pendconn, pr);
 		return cmdstatus(c, op, Bthci->Sok);
-	Bthci->RejectConnection or Bthci->LinkKeyNegative or Bthci->PinCodeNegative =>
+	Bthci->RejectConnection =>
 		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->LinkKeyReply =>
+		if(len params < 22)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		addr := bthci->bdaddr(params, 0);
+		pr := findpeer(c, addr);
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr == nil || pr.state != 3)
+			return out;
+		k := storedkey(c, addr);
+		if(k != nil && sameb(k, params[6:22])){
+			pr.state = 7;		# authenticated: the connection completes on the tick
+			c.pendconn = appendpeer(c.pendconn, pr);
+		}else
+			out = cat(out, connfail(c, pr, Bthci->Sauthfail));
+		return out;
+	Bthci->LinkKeyNegative =>
+		if(len params < 6)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		addr := bthci->bdaddr(params, 0);
+		pr := findpeer(c, addr);
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr == nil || pr.state != 3)
+			return out;
+		# no key at the host: pair, the way this device pairs
+		kind := authkind(c, addr);
+		if(len kind >= 4 && kind[0:4] == "pin="){
+			pr.state = 4;
+			out = cat(out, event(Bthci->EvPinRequest, params[0:6]));
+		}else if(kind == "ssp"){
+			pr.state = 5;
+			out = cat(out, event(Bthci->EvIoCapRequest, params[0:6]));
+		}else
+			out = cat(out, connfail(c, pr, Bthci->Sauthfail));
+		return out;
+	Bthci->PinCodeReply =>
+		if(len params < 23)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		addr := bthci->bdaddr(params, 0);
+		pr := findpeer(c, addr);
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr == nil || pr.state != 4)
+			return out;
+		n := int params[6];
+		if(n > 16)
+			n = 16;
+		pin := string params[7:7+n];
+		if("pin=" + pin == authkind(c, addr))
+			return cat(out, paired(c, pr, Bthci->LKcombination));
+		return cat(out, connfail(c, pr, Bthci->Sauthfail));
+	Bthci->PinCodeNegative =>
+		if(len params < 6)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		pr := findpeer(c, bthci->bdaddr(params, 0));
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr != nil && pr.state == 4)
+			out = cat(out, connfail(c, pr, Bthci->Snokey));
+		return out;
+	Bthci->IoCapabilityReply =>
+		if(len params < 9)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		addr := bthci->bdaddr(params, 0);
+		pr := findpeer(c, addr);
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr == nil || pr.state != 5)
+			return out;
+		# our capability: none, no OOB, general bonding; then the number to confirm
+		r := array[9] of byte;
+		r[0:] = params[0:6];
+		r[6] = byte Bthci->IOnone;
+		r[7] = byte 0;
+		r[8] = byte Bthci->AUTHbond;
+		out = cat(out, event(Bthci->EvIoCapResponse, r));
+		u := array[10] of byte;
+		u[0:] = params[0:6];
+		bthci->put4(u, 6, 123456);
+		pr.state = 6;
+		return cat(out, event(Bthci->EvUserConfirmRequest, u));
+	Bthci->IoCapabilityNegative =>
+		if(len params < 7)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		pr := findpeer(c, bthci->bdaddr(params, 0));
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr != nil && pr.state == 5)
+			out = cat(out, connfail(c, pr, Bthci->Sauthfail));
+		return out;
+	Bthci->UserConfirmReply =>
+		if(len params < 6)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		pr := findpeer(c, bthci->bdaddr(params, 0));
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr != nil && pr.state == 6){
+			sp := array[7] of byte;
+			sp[0] = byte Bthci->Sok;
+			sp[1:] = params[0:6];
+			out = cat(out, event(Bthci->EvSimplePairingComplete, sp));
+			out = cat(out, paired(c, pr, Bthci->LKunauthenticated));
+		}
+		return out;
+	Bthci->UserConfirmNegative =>
+		if(len params < 6)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		pr := findpeer(c, bthci->bdaddr(params, 0));
+		out := complete(c, op, Bthci->Sok, params[0:6]);
+		if(pr != nil && pr.state == 6){
+			sp := array[7] of byte;
+			sp[0] = byte Bthci->Sauthfail;
+			sp[1:] = params[0:6];
+			out = cat(out, event(Bthci->EvSimplePairingComplete, sp));
+			out = cat(out, connfail(c, pr, Bthci->Sauthfail));
+		}
+		return out;
+	Bthci->WriteSimplePairingMode =>
+		return complete(c, op, Bthci->Sok, nil);
 	Bthci->Disconnect =>
 		if(len params < 3)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
@@ -256,6 +369,76 @@ lookup(c: ref Ctlr, addr: string): ref Found
 		if((hd l).addr == addr)
 			return hd l;
 	return nil;
+}
+
+sameb(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+authkind(c: ref Ctlr, addr: string): string
+{
+	for(l := c.auth; l != nil; l = tl l){
+		(a, k) := hd l;
+		if(a == addr)
+			return k;
+	}
+	return nil;
+}
+
+storedkey(c: ref Ctlr, addr: string): array of byte
+{
+	for(l := c.keys; l != nil; l = tl l){
+		(a, k) := hd l;
+		if(a == addr)
+			return k;
+	}
+	return nil;
+}
+
+# pairing succeeded: a new key, told to the host, and the connection goes on
+paired(c: ref Ctlr, pr: ref Peer, ktype: int): array of byte
+{
+	k := array[16] of byte;
+	for(i := 0; i < 16; i++)
+		k[i] = byte (i * 17 + c.pairings + 1);
+	c.pairings++;
+	keep: list of (string, array of byte);
+	for(l := c.keys; l != nil; l = tl l){
+		(a, nil) := hd l;
+		if(a != pr.addr)
+			keep = hd l :: keep;
+	}
+	c.keys = (pr.addr, k) :: keep;
+	n := array[23] of byte;
+	a := bthci->parsebdaddr(pr.addr);
+	if(a != nil)
+		n[0:] = a;
+	n[6:] = k;
+	n[22] = byte ktype;
+	pr.state = 7;
+	c.pendconn = appendpeer(c.pendconn, pr);
+	return event(Bthci->EvLinkKeyNotify, n);
+}
+
+# pairing failed: the connection completes with the reason
+connfail(c: ref Ctlr, pr: ref Peer, status: int): array of byte
+{
+	droppeer(c, pr);
+	d := array[11] of byte;
+	d[0] = byte status;
+	bthci->put2(d, 1, 0);
+	a := bthci->parsebdaddr(pr.addr);
+	if(a != nil)
+		d[3:] = a;
+	d[9] = byte 1;
+	d[10] = byte 0;
+	return event(Bthci->EvConnComplete, d);
 }
 
 appendpeer(l: list of ref Peer, p: ref Peer): list of ref Peer
@@ -424,6 +607,12 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			d[9] = byte 1;
 			c.links = pr :: c.links;
 			out = cat(out, event(Bthci->EvConnRequest, d));
+		}else if(pr.handle != 0 && pr.state == 0 && authkind(c, pr.addr) != nil && pr.l2 == nil){
+			# this device pairs before it connects: Link Key Request
+			# first; the host's answer decides what follows
+			pr.state = 3;
+			c.links = pr :: c.links;
+			out = cat(out, event(Bthci->EvLinkKeyRequest, a));
 		}else{
 			# Connection Complete: status, handle, addr, link type ACL, no encryption
 			d := array[11] of byte;

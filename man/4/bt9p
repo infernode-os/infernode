@@ -8,6 +8,12 @@ bt9p, btmock \- Bluetooth host, serving the controller as /net/bt
 ] [
 .B -m
 .I mountpoint
+] [
+.B -k
+.I keyfile
+] [
+.B -f
+.I factotum
 ]
 .B -t
 .I transport
@@ -124,6 +130,25 @@ Write_Scan_Enable, inquiry scan and page scan respectively.
 .BI scan " seconds"
 How long the next inquiry runs, 1 to 61 (default 10).
 .TP
+.BR iocap " none|display|yesno|keyboard"
+What we tell peers we can do about pairing (default
+.BR none ,
+so Secure Simple Pairing is Just Works and nothing prompts).
+.TP
+.BR pairable " on|off"
+Whether a peer may start a pairing we did not ask for (default
+.BR off :
+refused, with
+.B "failed ... pairing not allowed"
+on
+.BR pair ).
+Pairing on a connection we made is always allowed.
+.TP
+.BI forget " addr"
+Delete the link key for
+.IR addr ,
+from factotum and from the keys file.
+.TP
 .BI firmware " path"
 Name a Broadcom
 .B .hcd
@@ -185,6 +210,23 @@ While it is held the stack has lent the controller to the holder,
 and
 .B ctl
 verbs that would issue commands are refused. For bring-up and tests.
+Owner-only.
+.TP
+.B pair
+Read-only stream of pairing prompts while held open:
+.BI "confirm " "addr number"
+(numeric comparison),
+.BI "passkey " "addr number"
+(show it to the peer),
+.BI "passkey? " addr
+(the peer showed one),
+.BI "paired " addrR,
+.BI "failed " "addr why"R.
+Written to answer:
+.BI "yes " addrR,
+.BI "no " addrR,
+.BI "passkey " "addr digits"R.
+A confirmation that arrives with nobody holding the file is refused.
 Owner-only.
 .TP
 .B clone
@@ -269,9 +311,48 @@ translates
 addresses to
 .B /net/bt/clone
 because that file exists.
+.SH KEYS
+Keys are held the way WiFi's are. factotum is the only source of
+secrets: a peer's Link Key Request is answered from
+.BR "proto=btlink addr=" IpeerR,
+a PIN Code Request from
+.BR "proto=btpin addr=" IpeerR
+and then
+.B proto=btpin
+alone -- the protocol modules are
+.B auth/proto/btlink
+and
+.BR auth/proto/btpin .
+A link key the controller reports at the end of a pairing is written
+to factotum's ctl as
+.IP
+.EX
+key proto=btlink addr=94:bb:43:44:61:04 type=4 !key=<32 hex digits>
+.EE
 .PP
-Not yet: pairing and keys (milestone 6). A peer that demands
-authentication is refused and the connection fails with its reason.
+and, given
+.BR -k ,
+appended to
+.I keyfile
+in the same line; at start every
+.B key
+line in
+.I keyfile
+is written to factotum, one write each, so a board loads its pairings
+from the card as it loads its WiFi keys. Legacy PINs are pre-shared
+and go in the same file:
+.IP
+.EX
+key proto=btpin addr=00:1f:20:aa:bb:cc !pin=0000
+key proto=btpin !pin=1234
+.EE
+.PP
+.B -f
+names factotum's directory (default
+.BR /mnt/factotum ).
+.B "cat /mnt/factotum/ctl"
+lists whom the machine is paired with, keys elided.
+.PP
 See
 .B docs/BLUETOOTH.md
 for the whole tree and the order it arrives in.
@@ -290,7 +371,12 @@ runs with no radio and no kernel.
 .B -a
 sets its address;
 .B -n
-adds a device an inquiry finds, repeatable;
+adds a device an inquiry finds, repeatable; a fifth word
+.BI pin= NNNN
+or
+.B ssp
+makes it demand pairing before it connects, by that PIN or by numeric
+comparison of 123456;
 .B -s
 makes it stingy with command credits, refunding them on the tick;
 .B -t
@@ -315,7 +401,7 @@ On the board:
 .EX
 bind -a '#t' /dev
 echo 1 > '#G/gpio/128/level'
-bt9p -t /dev/eia0
+bt9p -t /dev/eia0 -k /n/dos/btkeys
 echo up > /net/bt/ctl
 cat /net/bt/addr
 cat /net/bt/scan

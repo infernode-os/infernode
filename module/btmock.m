@@ -45,6 +45,9 @@ Btmock: module
 		pendconn:	list of ref Peer;	# Connection Completes to emit
 		nexthandle:	int;
 		received:	list of string;	# what peers were sent on their channels, newest first
+		auth:	list of (string, string);	# devices that demand pairing: addr, "pin=NNNN" or "ssp"
+		keys:	list of (string, array of byte);	# link keys issued, by address
+		pairings:	int;		# how many pairings completed
 
 		new:	fn(addr: string): ref Ctlr;
 		feed:	fn(c: self ref Ctlr, b: array of byte): array of byte;
@@ -64,7 +67,9 @@ Btmock: module
 	Peer: adt {
 		addr:	string;
 		handle:	int;
-		state:	int;			# 0 connecting, 1 up, 2 requested (incoming to the host)
+		state:	int;			# 0 connecting, 1 up, 2 requested (incoming to the host),
+					# 3 waiting for the host's link key, 4 for its PIN,
+					# 5 for its IO capability, 6 for its confirmation
 		l2:	ref L2cap->Link;
 		calling:	int;		# an L2CAP connect to make once the link is up
 		callpsm:	int;

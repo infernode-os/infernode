@@ -465,6 +465,57 @@ aclheader(p: ref Pkt): (int, int)
 	return (hf & 16rfff, (hf >> 12) & 3);
 }
 
+evaddr(e: ref Event): string
+{
+	if(e == nil || len e.params < 6)
+		return nil;
+	if(e.code == EvSimplePairingComplete){
+		if(len e.params < 7)
+			return nil;
+		return bdaddr(e.params, 1);
+	}
+	return bdaddr(e.params, 0);
+}
+
+linkkeynotify(e: ref Event): (string, array of byte, int)
+{
+	if(e == nil || e.code != EvLinkKeyNotify || len e.params < 23)
+		return (nil, nil, 0);
+	k := array[16] of byte;
+	k[0:] = e.params[6:22];
+	return (bdaddr(e.params, 0), k, int e.params[22]);
+}
+
+usernumber(e: ref Event): (string, int)
+{
+	if(e == nil || len e.params < 10)
+		return (nil, -1);
+	return (bdaddr(e.params, 0), get4(e.params, 6));
+}
+
+keytext(k: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len k; i++)
+		s += sys->sprint("%2.2ux", int k[i]);
+	return s;
+}
+
+parsekey(s: string): array of byte
+{
+	if(len s != 32)
+		return nil;
+	k := array[16] of byte;
+	for(i := 0; i < 16; i++){
+		hi := hexval(s[2*i]);
+		lo := hexval(s[2*i+1]);
+		if(hi < 0 || lo < 0)
+			return nil;
+		k[i] = byte ((hi << 4) | lo);
+	}
+	return k;
+}
+
 hcdrecords(hcd: array of byte): (list of (int, array of byte), int)
 {
 	l: list of (int, array of byte);

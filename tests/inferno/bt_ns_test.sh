@@ -26,18 +26,36 @@ mkdir -p $MNT
 mkdir -p $MNT/chan
 
 HCD=/tmp/btns.hcd
-btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -t 100 -H $HCD $MNT/chan/btmock &
+KEYS=/tmp/btns-keys
+rm -f $KEYS
+btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -t 100 -H $HCD $MNT/chan/btmock &
 sleep 1
 if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
 }
 
-bt9p -t $MNT/chan/btmock -m $MNT
+# factotum, for the pairing keys: the one already running if there is
+# one, else our own at a mount point of our own.
+FACT=/mnt/factotum
+if {! ftest -f $FACT/ctl} {
+	if {! ftest -f /dis/auth/factotum.dis} {
+		raise 'skip:no factotum'
+	}
+	FACT=$MNT/factotum
+	mkdir -p $FACT
+	auth/factotum -m $FACT
+	sleep 1
+}
+if {! ftest -f $FACT/ctl} {
+	raise 'fail:factotum did not start'
+}
+
+bt9p -t $MNT/chan/btmock -m $MNT -f $FACT -k $KEYS
 sleep 1
 BT=$MNT/bt
 
 # The tree.
-for (f in addr status ctl scan lescan event hci) {
+for (f in addr status ctl scan lescan event hci pair) {
 	if {! ftest -f $BT/$f} {
 		raise 'fail:'^$f^' missing'
 	}
@@ -127,8 +145,8 @@ if {! ~ $"v 'discoverable 1'} {
 echo scan 1 > $BT/ctl
 scan=`{cat $BT/scan}
 n=`{cat $BT/scan | wc -l}
-if {! ~ $"n 2} {
-	raise 'fail:scan returned '^$"n^' lines, wanted 2'
+if {! ~ $"n 6} {
+	raise 'fail:scan returned '^$"n^' lines, wanted 6 (every device given to the mock)'
 }
 if {! ~ $"scan *94:bb:43:44:61:04*0x1c010c*-61*hephaestus*} {
 	raise 'fail:scan is missing the first device or its name: '^$"scan
@@ -141,8 +159,8 @@ if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
 # name from its advertising data; EOF when the scan time is up.
 le=`{cat $BT/lescan}
 n=`{cat $BT/lescan | wc -l}
-if {! ~ $"n 2} {
-	raise 'fail:lescan returned '^$"n^' lines, wanted 2'
+if {! ~ $"n 6} {
+	raise 'fail:lescan returned '^$"n^' lines, wanted 6'
 }
 if {! ~ $"le *94:bb:43:44:61:04*public*-61*hephaestus*} {
 	raise 'fail:lescan is missing the first device: '^$"le
@@ -317,6 +335,120 @@ if {ftest -d $BT/$CONV} {
 		raise 'fail:announce on a Listen conversation was accepted'
 	}
 } <> $BT/clone
+
+# Pairing, the WiFi way: factotum is the only source of keys.
+#
+# A legacy device wants a PIN. With none in factotum the connection
+# fails and says so; with "key proto=btpin addr=... !pin=..." written
+# to factotum's ctl -- as a card file would be loaded -- it pairs, and
+# the link key the controller made appears in factotum (elided) and
+# in the keys file (whole). The next connection uses the key.
+{
+	if {echo 'connect aa:aa:aa:aa:aa:01!0x1001' >[1=0] >[2] /dev/null} {
+		raise 'fail:paired with no PIN anywhere'
+	}
+} <> $BT/clone
+echo 'key proto=btpin addr=aa:aa:aa:aa:aa:01 !pin=1234' > $FACT/ctl
+{
+	echo 'connect aa:aa:aa:aa:aa:01!0x1001' >[1=0]
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+v=`{cat $FACT/ctl | grep 'proto=btlink addr=aa:aa:aa:aa:aa:01'}
+if {~ $#v 0} {
+	raise 'fail:the link key did not reach factotum'
+}
+v=`{cat $KEYS | grep 'proto=btlink addr=aa:aa:aa:aa:aa:01 type=0 !key='}
+if {~ $#v 0} {
+	raise 'fail:the link key did not reach the keys file'
+}
+{
+	echo 'connect aa:aa:aa:aa:aa:01!0x1001' >[1=0]
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+
+# Secure Simple Pairing with iocap none, the default: Just Works, and
+# the key is kept.
+{
+	echo 'connect bb:bb:bb:bb:bb:02!0x1001' >[1=0]
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+v=`{cat $KEYS | grep 'proto=btlink addr=bb:bb:bb:bb:bb:02 type=4'}
+if {~ $#v 0} {
+	raise 'fail:the SSP link key did not reach the keys file'
+}
+
+# forget: out of factotum and out of the file.
+echo forget aa:aa:aa:aa:aa:01 > $BT/ctl
+v=`{cat $FACT/ctl | grep 'proto=btlink addr=aa:aa:aa:aa:aa:01'}
+if {! ~ $#v 0} {
+	raise 'fail:forget left the key in factotum'
+}
+v=`{cat $KEYS | grep 'aa:aa:aa:aa:aa:01'}
+if {! ~ $#v 0} {
+	raise 'fail:forget left the key in the keys file'
+}
+v=`{cat $KEYS | grep 'bb:bb:bb:bb:bb:02'}
+if {~ $#v 0} {
+	raise 'fail:forget took the wrong key with it'
+}
+
+# iocap yesno: a numeric comparison is a line on pair, answered by a
+# write. Nobody reading it is a no.
+echo iocap yesno > $BT/ctl
+{
+	if {echo 'connect cc:cc:cc:cc:cc:03!0x1001' >[1=0] >[2] /dev/null} {
+		raise 'fail:paired with a confirmation nobody could give'
+	}
+} <> $BT/clone
+PAIR=/tmp/btns-pair
+read 200 < $BT/pair > $PAIR &
+sleep 1
+{
+	echo 'connect cc:cc:cc:cc:cc:03!0x1001' >[1=0]
+	echo hangup >[1=0]
+	echo confirmed-connected > /tmp/btns-confirmed
+} <> $BT/clone &
+sleep 2
+v=`{cat $PAIR}
+if {! ~ $"v 'confirm cc:cc:cc:cc:cc:03 123456'} {
+	raise 'fail:the pair file did not show the confirmation: '^$"v
+}
+echo yes cc:cc:cc:cc:cc:03 > $BT/pair
+sleep 2
+v=`{cat /tmp/btns-confirmed}
+if {! ~ $"v confirmed-connected} {
+	raise 'fail:the connection did not complete after yes'
+}
+rm -f $PAIR /tmp/btns-confirmed
+
+# pairable off, the default: a peer that calls and wants to pair is
+# refused; pairable on lets it in.
+echo iocap none > $BT/ctl
+read 200 < $BT/pair > $PAIR &
+{
+	id=`{read 10}
+	echo 'announce 0x1003' >[1=0]
+	echo 'call dd:dd:dd:dd:dd:04 0x1003 knock' > $MNT/chan/btmockctl
+	sleep 2
+	v=`{cat $PAIR}
+	if {! ~ $"v 'failed dd:dd:dd:dd:dd:04 pairing not allowed'} {
+		raise 'fail:an uninvited pairing was not refused: '^$"v
+	}
+	echo pairable on > $BT/ctl
+	echo 'call dd:dd:dd:dd:dd:04 0x1003 knock2' > $MNT/chan/btmockctl
+	{
+		nid=`{read 10}
+		v=`{read 100 < $BT/$nid/data}
+		if {! ~ $"v knock2} {
+			raise 'fail:the call after pairing did not carry its text: '^$"v
+		}
+	} < $BT/$id/listen
+} <> $BT/clone
+echo pairable off > $BT/ctl
+rm -f $PAIR $KEYS
 
 # dial(2), unchanged: the kernel's dial against this tree. The dial
 # command runs its argument with the connection on fds 0 and 1.

@@ -79,6 +79,8 @@ dis/auth/proto/infauth.dis
 dis/auth/proto/p9any.dis
 dis/auth/proto/pass.dis
 dis/auth/proto/sign.dis
+dis/auth/proto/btlink.dis
+dis/auth/proto/btpin.dis
 dis/auth/proto/wpapsk.dis
 dis/auth/rpc.dis
 dis/auth/rsagen.dis

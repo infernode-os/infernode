@@ -78,9 +78,17 @@ Bthci: module
 	Disconnect:		con (1<<10) | 16r06;
 	AcceptConnection:	con (1<<10) | 16r09;
 	RejectConnection:	con (1<<10) | 16r0a;
+	LinkKeyReply:		con (1<<10) | 16r0b;
 	LinkKeyNegative:	con (1<<10) | 16r0c;
+	PinCodeReply:		con (1<<10) | 16r0d;
 	PinCodeNegative:	con (1<<10) | 16r0e;
 	RemoteNameRequest:	con (1<<10) | 16r19;
+	IoCapabilityReply:	con (1<<10) | 16r2b;
+	UserConfirmReply:	con (1<<10) | 16r2c;
+	UserConfirmNegative:	con (1<<10) | 16r2d;
+	UserPasskeyReply:	con (1<<10) | 16r2e;
+	UserPasskeyNegative:	con (1<<10) | 16r2f;
+	IoCapabilityNegative:	con (1<<10) | 16r34;
 	SetEventMask:		con (3<<10) | 16r01;
 	Reset:			con (3<<10) | 16r03;
 	WriteLocalName:		con (3<<10) | 16r13;
@@ -89,6 +97,7 @@ Bthci: module
 	ReadScanEnable:		con (3<<10) | 16r19;
 	WriteClassOfDevice:	con (3<<10) | 16r24;
 	WriteInquiryMode:	con (3<<10) | 16r45;
+	WriteSimplePairingMode:	con (3<<10) | 16r56;
 	ReadLocalVersion:	con (4<<10) | 16r01;
 	ReadLocalCommands:	con (4<<10) | 16r02;
 	ReadLocalFeatures:	con (4<<10) | 16r03;
@@ -123,6 +132,21 @@ Bthci: module
 	EvLinkKeyRequest:	con 16r17;
 	EvLinkKeyNotify:	con 16r18;
 	EvMaxSlots:		con 16r1b;
+	EvIoCapRequest:		con 16r31;
+	EvIoCapResponse:	con 16r32;
+	EvUserConfirmRequest:	con 16r33;
+	EvUserPasskeyRequest:	con 16r34;
+	EvSimplePairingComplete: con 16r36;
+	EvUserPasskeyNotify:	con 16r3b;
+
+	# IO capabilities, for IO_Capability_Request_Reply
+	IOdisplayonly, IOdisplayyesno, IOkeyboardonly, IOnone:	con iota;
+	# authentication requirements: general bonding, MITM not/required
+	AUTHbond, AUTHbondmitm:	con 16r04 + iota;
+	# link key types worth naming
+	LKcombination:		con 0;
+	LKunauthenticated:	con 4;
+	LKauthenticated:	con 5;
 	EvInquiryResultRssi:	con 16r22;
 	EvExtInquiryResult:	con 16r2f;
 	EvLeMeta:		con 16r3e;
@@ -205,6 +229,15 @@ Bthci: module
 	numcompleted:	fn(e: ref Event): list of (int, int);
 	# ACL packet header: handle, flags (start/continue in bits 12-13)
 	aclheader:	fn(p: ref Pkt): (int, int);
+	# the address most pairing events begin with
+	evaddr:		fn(e: ref Event): string;
+	# a Link Key Notification: address, the 16-byte key, its type
+	linkkeynotify:	fn(e: ref Event): (string, array of byte, int);
+	# a User Confirmation Request or Passkey Notification: address, the six-digit number
+	usernumber:	fn(e: ref Event): (string, int);
+	# 32 hex digits <-> 16 bytes
+	keytext:	fn(k: array of byte): string;
+	parsekey:	fn(s: string): array of byte;
 
 	#
 	# The transport: an fd and a reader process turning its bytes into

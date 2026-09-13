@@ -225,6 +225,14 @@ pins; they are a separate proposal.
                         "firmware <path>"        the .hcd, named by the caller
                                                  (kernel and bt9p name no path;
                                                  boot script says /n/dos/firmware/BCM4345C0.hcd)
+                        "baud <n>"               the controller, then the transport's ctl
+                        "iocap none|display|yesno|keyboard"   default none: Just Works
+                        "pairable on|off"        default off: no uninvited pairing
+                        "forget <addr>"          the link key, from factotum and the keys file
+      pair        read  pairing prompts while held open: "confirm <addr> <n>",
+                        "passkey <addr> <n>", "passkey? <addr>", "paired <addr>",
+                        "failed <addr> <why>"; write "yes <addr>" | "no <addr>" |
+                        "passkey <addr> <digits>". Nobody reading is a no. Root only.
       scan        read  runs a BR/EDR inquiry; one line per device:
                         "<addr> <class> <rssi> <name>", written once the
                         name is known (EIR, or a Remote Name Request after
@@ -265,7 +273,7 @@ does, and an RFCOMM serial port has every reason to present as
 
     ; bind -a '#t' /dev
     ; echo 1 > '#G/gpio/128/level'
-    ; bt9p -t /dev/eia0
+    ; bt9p -t /dev/eia0 -k /n/dos/btkeys
     ; echo 'firmware /n/dos/firmware/BCM4345C0.hcd' > /net/bt/ctl
     ; echo up > /net/bt/ctl
     ; cat /net/bt/addr
@@ -276,10 +284,15 @@ does, and an RFCOMM serial port has every reason to present as
 
 ### What it composes with, and does not do
 
-- **factotum** holds link keys, `proto=btlink addr=<remote> !key=<hex>`
-  (milestone 6). Pairing that needs a human (a PIN, a numeric
-  comparison) goes through factotum's confirmation path, the same door
-  `logon` uses. `bt9p` never writes a key to a file.
+- **factotum** holds link keys, `proto=btlink addr=<remote> type=<n>
+  !key=<hex>`, and pre-shared PINs, `proto=btpin [addr=<remote>]
+  !pin=<digits>`. A missing PIN is factotum's `needkey` like any other
+  missing key. A numeric comparison is a line on `/net/bt/pair` for
+  whoever holds it open; with `iocap none` there is none. `bt9p`
+  writes a key to one file only: the keys file named by `-k`, in
+  factotum's syntax, because factotum cannot be read back for secrets
+  and whoever receives the key is the only one who can persist it --
+  Plan 9's `factotum -S` and NVRAM, the same shape.
 - **audit**: `up`, `down`, pairing and connection events are logged the
   way `#l`'s attach is; nothing new.
 - It does **not** do audio, mesh, GATT beyond scanning, or any kernel
@@ -429,6 +442,19 @@ and runs the kernel's `dial(2)` against the tree with no change to
 
 **M6 — pairing through factotum.** `proto=btlink`; SSP numeric
 comparison via the confirmation path; legacy PIN for old peripherals.
+*Done against the mock 2026-09-13, the WiFi way.* factotum is the only
+source of secrets (`auth/proto/btlink`, `auth/proto/btpin`); a link
+key the controller makes goes to factotum's ctl and, with `-k`, to the
+keys file in factotum's own syntax, which `bt9p` loads at start one
+write per key -- the card is the persistence, factotum the runtime
+holder, exactly `/n/dos/wifikeys` (#606). Nothing prompts unless a
+file is being read: `iocap none` (default) is Just Works; `pairable
+off` (default) refuses pairings we did not ask for; `iocap yesno`
+turns confirmations into lines on `/net/bt/pair`, and nobody holding
+it open is a no. `forget <addr>` removes a key from both places. The
+mock demands a PIN or SSP per device and remembers the keys it
+issued, so the contract test pairs, reconnects on the key, forgets,
+confirms through the file, and is refused when pairable is off.
 
 **M7 — first profiles.** `bt/hid` (a keyboard at the board, the
 `kbdusb.b` shape) and RFCOMM SPP.

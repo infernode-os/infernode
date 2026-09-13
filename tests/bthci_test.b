@@ -590,6 +590,42 @@ testLeAndNames(t: ref T)
 	t.asserteq(st, Bthci->Spagetimeout, "a page timeout is reported as its status");
 }
 
+testPairingEvents(t: ref T)
+{
+	# Link Key Notification: addr, key, type
+	p := array[23] of byte;
+	p[0:] = bthci->parsebdaddr("aa:aa:aa:aa:aa:01");
+	for(i := 0; i < 16; i++)
+		p[6+i] = byte i;
+	p[22] = byte Bthci->LKunauthenticated;
+	(who, key, ktype) := bthci->linkkeynotify(ref Event(Bthci->EvLinkKeyNotify, p));
+	t.assertseq(who, "aa:aa:aa:aa:aa:01", "the peer");
+	t.asserteq(len key, 16, "sixteen key bytes");
+	t.asserteq(ktype, Bthci->LKunauthenticated, "its type");
+	t.assertseq(bthci->keytext(key), "000102030405060708090a0b0c0d0e0f", "as factotum will hold it");
+	t.assert(sameb(bthci->parsekey("000102030405060708090a0b0c0d0e0f"), key), "and back");
+	t.assert(bthci->parsekey("00010203") == nil, "a short key is refused");
+	t.assert(bthci->parsekey("000102030405060708090a0b0c0d0e0g") == nil, "a non-hex key is refused");
+
+	# User Confirmation Request: addr, number
+	q := array[10] of byte;
+	q[0:] = bthci->parsebdaddr("cc:cc:cc:cc:cc:03");
+	bthci->put4(q, 6, 123456);
+	n: int;
+	(who, n) = bthci->usernumber(ref Event(Bthci->EvUserConfirmRequest, q));
+	t.assertseq(who, "cc:cc:cc:cc:cc:03", "the peer asking");
+	t.asserteq(n, 123456, "the number to compare");
+
+	# Simple Pairing Complete puts its status first
+	r := array[7] of byte;
+	r[0] = byte Bthci->Sauthfail;
+	r[1:] = bthci->parsebdaddr("cc:cc:cc:cc:cc:03");
+	t.assertseq(bthci->evaddr(ref Event(Bthci->EvSimplePairingComplete, r)), "cc:cc:cc:cc:cc:03",
+		"evaddr knows the address is after the status");
+	t.assertseq(bthci->evaddr(ref Event(Bthci->EvLinkKeyRequest, q)), "cc:cc:cc:cc:cc:03",
+		"and first everywhere else");
+}
+
 testHcdRecords(t: ref T)
 {
 	# two Write_RAM records and a Launch_RAM, as a .hcd lays them out
@@ -664,6 +700,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BroadcomVendor", testBroadcomVendor);
 	run("HcdRecords", testHcdRecords);
 	run("LeAndNames", testLeAndNames);
+	run("PairingEvents", testPairingEvents);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

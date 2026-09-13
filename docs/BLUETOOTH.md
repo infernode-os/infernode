@@ -327,12 +327,18 @@ the first boot, and the harness then passes both).
 
 **A real controller is on the development host.** This Jetson has a USB
 Bluetooth radio, `hci0`. Linux's `HCI_CHANNEL_USER` hands a raw HCI
-socket to one process with the device down; a ~60-line bridge (python,
-host side, `tools/`) can present it as H4 over TCP, and `bt9p -t
-tcp!localhost!<port>` in hosted emu then drives real silicon with no
-board and no kernel. That needs root once and takes `hci0` away from
-`bluetoothd` while it runs; it is the fastest loop for milestones 2 and
-4–7 and is not a substitute for milestone 3.
+socket to one process with the device down; `tools/hci-h4-bridge.py`
+presents it as H4 over TCP, and `bt9p -t tcp!127.0.0.1!5555` in hosted
+emu then drives real silicon with no board and no kernel:
+
+    sudo hciconfig hci0 down
+    sudo ./tools/hci-h4-bridge.py 0 5555
+    ./emu/Linux/o.emu -r. sh -c 'bt9p -t tcp!127.0.0.1!5555; echo up > /net/bt/ctl; cat /net/bt/status; cat /net/bt/lescan'
+
+It needs root once and takes `hci0` away from `bluetoothd` while it
+runs (the kernel gives it back on exit). It is the fastest loop for
+milestones 2 and 4–7 and is not a substitute for milestone 3. Not yet
+run: it needs a root shell, which this session does not have.
 
 **A mock controller** for the Limbo unit tests: a fake H4 peer that
 answers Reset, Read_Local_Version, Read_BD_ADDR and the vendor

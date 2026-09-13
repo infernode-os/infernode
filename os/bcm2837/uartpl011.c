@@ -69,6 +69,7 @@ static Uart pl011uart = {
 };
 
 static int clkfromfirmware;	/* did the mailbox give us the rate? */
+static ulong nintr, nrx, ntx;	/* interrupts taken, bytes in, bytes out; one PL011, so one set */
 
 static int baud(Uart*, int);
 
@@ -93,9 +94,11 @@ interrupt(Ureg*, void *arg)
 
 	uart = arg;
 	coherence();
+	nintr++;
 	mis = R(uart, Mis);
 	while((R(uart, Fr) & Rxfe) == 0){
 		d = R(uart, Dr);
+		nrx++;
 		if(d & Rxerrors){
 			if(d & Rxfe_err)
 				uart->ferr++;
@@ -212,6 +215,7 @@ kick(Uart *uart)
 			break;
 		}
 		R(uart, Dr) = *(uart->op++);
+		ntx++;
 	}
 	/* see uarton: the transmit interrupt is on only while there is more */
 	if(more)
@@ -361,16 +365,32 @@ status(Uart *uart, void *buf, long n, long offset)
 	p = malloc(READSTR);
 	if(p == nil)
 		error(Enomem);
+	/*
+	 * The third and fourth lines are the hardware and the path as
+	 * they stand: the raw flag, control, interrupt-mask and
+	 * raw-interrupt-status registers, the divisors, and how many
+	 * bytes passed each hop -- the interrupt handler, the staging
+	 * buffer into the queue, the queue into readers. Together they
+	 * separate "the peer said nothing" from "it spoke and no
+	 * interrupt came" from "it arrived and someone else read it",
+	 * which is how the first board session found two bt9p instances
+	 * sharing one port. QEMU cannot tell those apart for us.
+	 */
 	snprint(p, READSTR,
 		"b%d c%d d%d e%d l%d m%d p%c r%d s%d\n"
 		"dev(%d) type(%d) framing(%d) overruns(%d) parity(%d) "
-		"berr(%d) serr(%d) freq(%lud) clock(%s) cts(%d)\n",
+		"berr(%d) serr(%d) freq(%lud) clock(%s) cts(%d)\n"
+		"fr(0x%ux) cr(0x%ux) imsc(0x%ux) ris(0x%ux) ibrd(%ud) fbrd(%ud) intrs(%lud) rx(%lud) tx(%lud)\n"
+		"staged(%lud) read(%lud) clocks(%lud) qlen(%d) enabled(%d)\n",
 		uart->baud, uart->hup_dcd, uart->dsr, uart->hup_dsr,
 		uart->bits, uart->modem, uart->parity, uart->cts, uart->stop,
 		uart->dev, uart->type, uart->ferr, uart->oerr, uart->perr,
 		uart->berr, uart->serr, uart->freq,
 		clkfromfirmware ? "firmware" : "default",
-		(R(uart, Fr) & Frcts) != 0);
+		(R(uart, Fr) & Frcts) != 0,
+		R(uart, Fr), R(uart, Cr), R(uart, Imsc), R(uart, Ris), R(uart, Ibrd), R(uart, Fbrd),
+		nintr, nrx, ntx,
+		uart->nstaged, uart->nread, uart->nclock, uart->iq != nil ? qlen(uart->iq) : -1, uart->enabled);
 	n = readstr(offset, buf, n, p);
 	free(p);
 	return n;

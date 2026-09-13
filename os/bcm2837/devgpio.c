@@ -320,8 +320,11 @@ gpiowrite(Chan *c, void *a, long n, vlong off)
 			 */
 			if(mboxgpioconfig(pin, &dir, &pullup) == 0 && dir == 0)
 				error("not an output");
-			if(mboxsetgpio(pin, s[0] == '1') < 0)
-				error("firmware refused");
+			if(mboxsetgpio(pin, s[0] == '1') < 0){
+				snprint(up->genbuf, sizeof up->genbuf,
+					"firmware refused (code 0x%ux)", mboxlastcode());
+				error(up->genbuf);
+			}
 			expstate[pin - Gpioexpbase] = s[0] == '1';
 			return n;
 		}

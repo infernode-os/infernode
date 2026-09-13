@@ -45,6 +45,7 @@ u32int	mboxclockrate(u32int);
 u32int	mboxmaxclockrate(u32int);
 int	mboxsetgpio(u32int, int);
 int	mboxgetgpio(u32int);
+u32int	mboxlastcode(void);
 int	mboxgpioconfig(u32int, int*, int*);
 void	mboxlockon(void);
 int	mboxedid(u32int, uchar*);

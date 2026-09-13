@@ -48,6 +48,7 @@
  * but the buffer stays volatile because it really is shared.
  */
 static volatile u32int mboxbuf[64] __attribute__((aligned(16)));
+static u32int mboxcode;		/* the firmware's answer word from the last call */
 
 /*
  * One buffer, therefore one lock -- and it is the BUFFER that is
@@ -203,6 +204,7 @@ enum
 	 * point is to fail eventually with a message, not to be precise.
 	 */
 	Mboxspin = 100*1000*1000,
+	Mboxlatespin = 20*1000,	/* 10us steps: 200ms, for a word that normally lands within one */
 
 	/* every caller hands mboxcall the one shared buffer */
 	Mboxbufsize = 64 * sizeof(u32int),
@@ -227,6 +229,7 @@ mboxcall(u32int chan, volatile u32int *buf, int size)
 {
 	u32int v, want;
 	long i;
+	char latemsg[80];
 
 	want = (u32int)(BUSADDR(buf) & ~0xFUL) | (chan & 0xF);
 
@@ -309,7 +312,43 @@ mboxcall(u32int chan, volatile u32int *buf, int size)
 	 */
 	cachedwbinvse((void*)buf, size);
 
+	/*
+	 * The reply word can trail the mailbox reply. On the board, a
+	 * SET_GPIO_STATE for an expander line came back with buf[1] still
+	 * 0 -- no code written yet -- while the line itself did change:
+	 * the firmware posts the mailbox before its write of the buffer
+	 * has landed. Zero is not a code the firmware ever writes, so
+	 * wait for a real one, bounded, invalidating before each look so
+	 * the read is from memory. Paced, not spun: a tight loop of cache
+	 * operations on the line was observed never to see the word at
+	 * all, where a 10us pause between looks sees it inside a
+	 * millisecond -- 22 of a boot's calls were late that way. QEMU's
+	 * firmware model writes the buffer before it answers, so this
+	 * loop is never entered there.
+	 */
+	for(i = 0; buf[1] == 0 && i < Mboxlatespin; i++){
+		microdelay(10);
+		cachedwbinvse((void*)buf, size);
+	}
+	/* uartputstr, not print: the console's own print path is a mailbox call */
+	if(i*10 >= 1000){
+		snprint(latemsg, sizeof latemsg, "mbox: tag 0x%ux: reply word %ldus after the mailbox reply\n", buf[2], i*10);
+		uartputstr(latemsg);
+	}
+
+	mboxcode = buf[1];
 	return buf[1] == Propok ? 0 : -1;
+}
+
+/*
+ * The firmware's answer word from the last call, for a caller that wants
+ * to say why "refused": 0x80000001 is "error parsing request buffer",
+ * anything without the top bit is a reply the firmware never wrote.
+ */
+u32int
+mboxlastcode(void)
+{
+	return mboxcode;
 }
 
 /* the buffer lock, for a caller that fills and reads mboxbuf itself */

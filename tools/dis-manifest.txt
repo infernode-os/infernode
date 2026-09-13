@@ -97,6 +97,8 @@ dis/bind.dis
 dis/bioget.dis
 dis/bit2gif.dis
 dis/broke.dis
+dis/bt9p.dis
+dis/btmock.dis
 dis/bytes.dis
 dis/cal.dis
 dis/calc.dis

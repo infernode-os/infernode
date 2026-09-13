@@ -366,11 +366,21 @@ removed, serialboot unaffected (it muxes 14/15 itself).
 `#G/gpio/128..135` landed the same day: the expander as pins, `ether4330`
 claiming 129, seven harness checks.
 
-**M2 — `bt9p` exists and speaks HCI.** `bttransport.m`, `h4`, the HCI
-core (command queue honouring Num_HCI_Command_Packets, event dispatch,
-timeouts), `/net/bt/{addr,status,ctl,event,hci}`. Unit tests against
-the mock. Reports "no controller" cleanly when the transport is silent,
-the way `ether4330: no radio` does under QEMU.
+**M2 — `bt9p` exists and speaks HCI.** *Done 2026-09-13, against the
+mock.* `module/bthci.m` + `appl/lib/bthci.b`: the Deframer, event and
+Inquiry Result decoders, and an `Hci` that queues commands under
+Num_HCI_Command_Packets, matches Command Complete/Status by opcode,
+times out, and survives a stingy, silent or dead controller
+(`tests/bthci_test.b`, 14 checks). `module/btmock.m` + `appl/lib/
+btmock.b`: the fake controller, bytes in and out, also served as a
+file by `btmock(4)`. `appl/cmd/bt9p.b` serves `/net/bt/{addr,status,
+ctl,scan,event,hci}` -- `scan` came forward from M4 because the
+streaming-read idiom was needed for `event` anyway; names are `-`
+until M4 asks for them. `tests/inferno/bt_ns_test.sh` is the contract
+test: modes, refusals, `up`, a two-device scan twice, the event
+stream, the exclusive `hci`. `man/4/bt9p`. "No controller" is
+`up`'s error when the reset goes unanswered. The transport is one
+name: `-t /dev/eia0`, `-t tcp!host!port`, `-t /chan/btmock`.
 
 **M3 — first light on the board.** `#G/gpio/128` up, ROM firmware answers at
 115200, `.hcd` uploaded, baud raised to 921600 then 3 Mbaud with
@@ -416,8 +426,7 @@ comparison via the confirmation path; legacy PIN for old peripherals.
 3. Whether RFCOMM belongs in `bt9p` or in a separate `bt/rfcomm`
    composing over L2CAP conversations. Proposed: separate, decided at
    M7 when there is a measurement of what the extra hop costs.
-4. The name. `bt9p` follows `msg9p`/`wallet9p`/`tools9p`; `btsrv` would
-   follow `llmsrv`. Either is fine; pick one before M2.
+4. *Closed:* `bt9p`, following `msg9p`/`wallet9p`/`tools9p`.
 
 ## References
 

@@ -1,0 +1,410 @@
+# Bluetooth for InferNode
+
+Status: Proposed. Branch `feat/baremetal-bt`, off `feat/baremetal-pi`.
+Board: Raspberry Pi 3B+ (BCM2837, CYW43455 combo radio). Nothing here
+applies to hosted `emu` except where it says so.
+
+This is the design, written before the code, as
+[DESIGN-PRINCIPLES.md](DESIGN-PRINCIPLES.md) "Proposing a new service or
+tool" asks. The file interface is the design; review it first.
+
+## What exists, and what does not
+
+**In this tree: nothing.** The one mention is a line in the roadmap of
+[os/bcm2837/README.md](../os/bcm2837/README.md): "Bluetooth is on the
+PL011 the console uses; it would mean the mini-UART for the console
+first." That sentence is correct and is where this document starts.
+
+**In the Plan 9 family: nothing either.** A code search of 9front, Plan 9
+4th edition and open Inferno for "bluetooth" finds a USB keyboard quirk
+(`kb.c`, both trees), a WiFi driver (`etherwpi.c`), a PCI id, and one
+`#define PHYSUARTBT` in Inferno's `os/cerf250/mem.h` — a memory-map
+entry for a UART with a Bluetooth module behind it, and no driver. No
+repository written in Limbo mentions Bluetooth at all. Vita Nuova sold
+Inferno into embedded products that had Bluetooth; whatever stack they
+had was never in the open tree. So there is no stack to port. There is,
+however, a great deal of *shape* to inherit, and this tree has already
+made the decisions that matter.
+
+## Precedents this design inherits
+
+1. **The mechanism/protocol line**, `os/bcm2837/README.md` §"Decision:
+   device protocols live outside the kernel, mechanism inside". The
+   kernel owns registers, DMA and interrupts, and resources every user
+   must share. One device family's protocol is a program. Applied three
+   times already: `#u` + `etherusb.b`/`kbdusb.b`/`mouseusb.b`;
+   `ether4330.c` (SDIO, firmware upload) + `wpa.b`/`wpakey.b`/factotum
+   `wpapsk`; `#l` + `etherusb.b`. The Ethernet data path moved into the
+   kernel *only after a measurement* said the Dis + 9P per-frame cost
+   was the ceiling. Bluetooth will follow the same rule and the same
+   order: protocol in Limbo, kernel data path only if a number demands
+   one. At HID and RFCOMM rates none will; audio is the only candidate
+   and is out of scope here.
+
+2. **The serial device is `#t`, and it is already specified.** Inferno's
+   `os/port/devuart.c` serves `/dev/eiaN`, `/dev/eiaNctl`,
+   `/dev/eiaNstatus` on top of a per-board `PhysUart` (`os/port/uart.h`);
+   the hosted emulator's `emu/port/deveia-posix.c` serves the *same
+   names* over host ttys; `man/3/eia` documents the ctl verbs (`b<n>`
+   baud, `m<n>` CTS/RTS flow control, `r<n>`, `d<n>`, ...). This
+   repository carried `os/port/devuart.c` (748 lines) and `uart.h` until
+   the migration commit `e3914b1c7` (2026-01-21) deleted them with the
+   rest of the 32-bit `os/` tree; the upstream copies are identical and
+   MIT. Reinstating them is an import, like `ethermedium.c` was, not a
+   design. The payoff is that Limbo code speaking to `/dev/eia0` runs
+   unchanged on the board and in hosted emu against a USB-serial adapter.
+
+3. **The mini-UART driver exists and is MIT.** Plan 9 4e and 9front boot
+   the Pi 3 with the console on the AUX mini-UART (`sys/src/9/bcm/
+   uartmini.c`, 274 lines in 9front), GPIO 14/15 on ALT5, *precisely so
+   that the PL011 is free for the radio*. It is written to the `PhysUart`
+   interface, so it slots under the imported `devuart.c` with a rename.
+   Provenance policy is the one the README sets: take driver code from
+   Plan 9 4e or 9front and cite it, never via a third-party fork.
+
+4. **The enable line is already mechanism the kernel has.** `BT_ON` is
+   pin 0 of the VideoCore's GPIO expander, reached through the mailbox
+   (`mailbox.c` "A pin on the firmware's GPIO expander: 128 + n");
+   `ether4330.c` drives `WL_REG_ON`, expander pin 1, through exactly
+   that call. `#G` today exposes only the 54 SoC pins, one directory per
+   pin so that a namespace can hand a program one pin.
+
+5. **Firmware lives on the card**, README §"The WiFi firmware lives on
+   the card, not in the tree": asked for as `/n/dos/firmware/<name>`,
+   never committed, never in a release artefact. The Bluetooth patch
+   file has the same licence problem and gets the same answer.
+
+6. **Keys live in factotum**, precedent `proto=wpapsk`: the supplicant
+   asks factotum for the key and never sees it stored.
+
+7. **`/net/<proto>/clone` is how Plan 9 spells a network.** `#I` serves
+   `/net/tcp/clone` and conversation directories `N/{ctl,data,status,
+   local,remote}`; `#l` serves `/net/ether0` the same way. Inferno's
+   `sys->dial("net!addr!service")` is implemented against that shape:
+   open `/net/<net>/clone`, write `connect addr!service`. A Bluetooth
+   service that serves it inherits every program that already dials.
+
+## Hardware facts (verified against the Raspberry Pi device tree)
+
+From `bcm2837-rpi-3-b-plus.dts` and `bcm283x-rpi-wifi-bt.dtsi`
+(raspberrypi/linux, `rpi-6.6.y`):
+
+| signal | where | note |
+|---|---|---|
+| BT UART | **uart0 = PL011** | `compatible = "brcm,bcm43438-bt"`, `max-speed = <2000000>` |
+| PL011 TXD0/RXD0 | GPIO **32/33** ALT3 | *not* the header pins |
+| PL011 CTS0/RTS0 | GPIO **30/31** ALT3 | hardware flow control is required at speed |
+| 32.768 kHz LPO | GPIO **43** GPCLK2 | whether `start.elf` leaves GPCLK2 running must be read from `CM_GP2CTL` on the board, not assumed |
+| BT_ON | expander pin **0** | via mailbox, like WL_ON (pin 1) |
+| header UART | **uart1 = mini-UART**, GPIO 14/15 ALT5 | the console's new home |
+
+The console cable does not move: the same header pins carry TXD/RXD,
+only the alternate function changes. What does change is the clock. The
+mini-UART's baud divisor is derived from the VPU core clock, which the
+firmware scales unless `config.txt` pins it (`enable_uart=1` does this
+on the Pi 3, fixing `core_freq=250`). The PL011 runs from
+`init_uart_clock`, which is why the current console never had this
+problem (`uart.c` records the distinction). The card's `config.txt`
+gains `enable_uart=1` and the README's config recipe is updated in the
+same change.
+
+This kernel's console today (`os/bcm2837/uart.c`, `os/arm64/main.c`
+`uartkproc`) is polled in both directions with a 10 ms sleep, which is
+why AGENTS.md has to warn that scripted writes lose everything past the
+PL011's 16-byte FIFO. An interrupt-driven `#t` console fixes that as a
+side effect; the harness should assert it.
+
+## Layering
+
+```
+                    kernel (C)                    │      programs (Limbo)
+                                                  │
+  mailbox ── #G/exp/0/level  (BT_ON)  ────────────┼──► bt9p ─────────────► /net/bt/...
+                                                  │     │                   ctl addr status
+  PL011  ── PhysUart pl011 ─┐                     │     │ h4 over            scan lescan
+                            ├── devuart.c (#t) ───┼──► /dev/eia0 ◄──────── event hci
+  mini   ── PhysUart mini  ─┘   /dev/eia0..1      │     (bttransport.m)     clone N/{ctl,data,...}
+                  │                               │
+             console (kbdq)                       │   factotum ◄── proto=btlink (link keys)
+                                                  │
+                                                  │   profiles compose above /net/bt:
+                                                  │   bt/hid → /dev/keyboard (as kbdusb.b does)
+                                                  │   bt/serial (RFCOMM SPP), later audio
+```
+
+**Kernel.** Three things, all mechanism: `#t` (the import), two
+`PhysUart`s, and `#G` learning about the expander. No Bluetooth word
+appears in kernel code.
+
+**Limbo.** One program, `bt9p`, owns the controller: it is the HCI host.
+It opens a *transport* and serves `/net/bt`. Everything the Bluetooth
+specification calls "the host" — HCI command/event flow control, the
+Broadcom patch upload, inquiry, connection management, L2CAP, security
+manager — is inside it, in a memory-safe language. That is not the
+reason for the split (the README explains why fault isolation cannot
+be), but it is a real property of the result: the parser facing an
+over-the-air attacker is Limbo, not C, which `#I` cannot say.
+
+**Transport independence is the portability argument.** HCI is defined
+over several transports (Core Spec Vol 4): H4 over UART (Part A), USB
+(Part B), SDIO (Part D). `bt9p` takes its transport as an argument:
+
+    bt9p -t /dev/eia0                the board: H4 over the PL011
+    bt9p -t tcp!host!port            hosted emu: H4 over a socket to a
+                                     bridge or a mock controller
+    bt9p -t '#u/usb/ep3.0' ...       later: a USB dongle over #u, the
+                                     kbdusb.b shape
+
+`module/bttransport.m` is a channel of typed packets (command, event,
+ACL, SCO) in each direction; `h4` is the first implementation and is
+the only one this document commits to. The same `bt9p` then serves a
+Pi 3, a Pi 4/5 (still UART) or any machine with a dongle. WiFi got no
+such gift; `ether4330.c` is welded to one chip's SDIO protocol.
+
+## Namespace sketch
+
+### `#t` — serial ports (kernel; reinstated Inferno interface)
+
+    #t/eia0          PL011: the radio            data, exclusive open
+    #t/eia0ctl       b<n> m<n> r<n> ... as man/3/eia
+    #t/eia0status    "b115200 c0 d0 e0 l8 m1 p n r1 s1 ..."  errors, queue lengths
+    #t/eia1          mini-UART: the console (bound to kbdq at boot)
+    #t/eia1ctl
+    #t/eia1status
+
+Bound at `/dev`. Nothing new to design; the interface is `man/3/eia`.
+Only what the PL011 cannot do is refused (`p e`, `l7` may be; `m1`
+must work).
+
+### `#G/exp/N` — the firmware GPIO expander (kernel; small extension)
+
+    #G/exp/0/level   read "0\n"|"1\n"; write "1" drives BT_ON
+    #G/exp/1/level   WL_ON -- claimed by ether4330, refuses writes
+    ...
+
+Level only: the expander has no function select or pull. Same claiming
+rule as SoC pins: a driver that owns a line makes `#G` refuse it, so a
+stray echo cannot power the radio off under the WiFi driver. A
+namespace can hand `bt9p` exactly `#G/exp/0` and nothing else.
+
+### `/net/bt` — the controller and its links (Limbo, `bt9p`)
+
+    /net/bt/
+      addr        read  "b8:27:eb:xx:xx:xx\n"           the local BD_ADDR
+      status      read  one field per line:
+                        up 1
+                        name infernode
+                        hci 4.2 lmp 4.2 manufacturer 15
+                        firmware BCM4345C0 1.0.0
+                        transport /dev/eia0 3000000
+                        connections 1
+      ctl         write "up" | "down" | "reset"
+                        "name <string>"
+                        "class <hex>"
+                        "discoverable on|off"   "connectable on|off"
+                        "firmware <path>"        the .hcd, named by the caller
+                                                 (kernel and bt9p name no path;
+                                                 boot script says /n/dos/firmware/BCM4345C0.hcd)
+      scan        read  runs a BR/EDR inquiry; each line as found:
+                        "<addr> <class> <rssi> <name>"
+                        EOF at Inquiry Complete (default 10 s; "scan <secs>" on ctl adjusts)
+      lescan      read  same for LE advertising: "<addr> <addrtype> <rssi> <name-or-->"
+      event       read  the HCI event stream as text, one event per line,
+                        for debugging -- what btmon shows. Root only.
+      hci         read/write raw H4 packets. Exclusive open; takes the
+                        transport away from the stack while held. For
+                        bring-up and tests. Root only, never granted.
+      clone       open  yields a new conversation N
+      N/ctl       write "connect <addr>!<psm>"           L2CAP, as a dial string
+                        "connect <addr>!rfcomm<chan>"    RFCOMM (milestone 7)
+                        "announce <psm>"                 listen
+                        "hangup"
+      N/data      read/write. L2CAP: one SDU per read or write.
+                  RFCOMM: a byte stream.
+      N/status    read  "Connected\n" | "Listen\n" ... as /net/tcp
+      N/local     read  "<addr>!<psm>"
+      N/remote    read  "<addr>!<psm>"
+      N/listen    open  accept the next inbound connection (as /net/tcp)
+
+Because `clone` exists, `sys->dial("bt!b8:27:eb:11:22:33!17")` works
+with no change to `dial`. So does `listen`.
+
+Placement: `/net`, not `/mnt`. This is a network — the tree's own
+precedent is `/net/ether0` served by `#l` and `/net/tcp` by `#I`, and
+the dial string is the interface. Profiles that *interpret* a link
+(keyboard, serial port, audio) invent schema and therefore go under
+`/mnt/bt/<profile>` or, where a precedent says otherwise, where the
+precedent says: `bt/hid` writes into the console the way `kbdusb.b`
+does, and an RFCOMM serial port has every reason to present as
+`eiaN`-shaped files.
+
+### Example session
+
+    ; bind -a '#t' /dev
+    ; echo 1 > '#G/exp/0/level'
+    ; bt9p -t /dev/eia0
+    ; echo 'firmware /n/dos/firmware/BCM4345C0.hcd' > /net/bt/ctl
+    ; echo up > /net/bt/ctl
+    ; cat /net/bt/addr
+    b8:27:eb:5a:6b:7c
+    ; cat /net/bt/scan
+    94:bb:43:44:61:04 0x1c010c -61 hephaestus
+    ; dial bt!94:bb:43:44:61:04!1                    # SDP, psm 1
+
+### What it composes with, and does not do
+
+- **factotum** holds link keys, `proto=btlink addr=<remote> !key=<hex>`
+  (milestone 6). Pairing that needs a human (a PIN, a numeric
+  comparison) goes through factotum's confirmation path, the same door
+  `logon` uses. `bt9p` never writes a key to a file.
+- **audit**: `up`, `down`, pairing and connection events are logged the
+  way `#l`'s attach is; nothing new.
+- It does **not** do audio, mesh, GATT beyond scanning, or any kernel
+  data path.
+
+### Agents
+
+`/net/bt` is not in a confined agent's namespace unless granted, the
+same as `/net`. If granted: conversation directories `N/` are
+grantable (a pipe to one peer); `ctl`, `hci`, `event`, `scan` are
+control plane and are not — `scan` in particular pairs a sensitive read
+(who is nearby) with nothing an agent needs. `#G/exp/0` is a power
+switch and is never granted.
+
+## Firmware
+
+The CYW43455's Bluetooth core boots from ROM and takes a patch RAM
+image over HCI: `BCM4345C0.hcd`, from `RPi-Distro/bluez-firmware`,
+under the same Cypress/Broadcom binary-redistribution stanza as the
+WiFi blobs. Not committed, not in any artefact, asked for by the boot
+script as `/n/dos/firmware/BCM4345C0.hcd`. Without it the controller
+still answers HCI at 115200 with its ROM firmware and a default
+address, so `addr` and `status` work before the patch and are the
+first thing to see on the board.
+
+The upload sequence is Broadcom vendor HCI (opcodes 0xFC2E
+Download_Minidriver, 0xFC4C Write_RAM per `.hcd` record, 0xFC4E
+Launch_RAM, then 0xFC18 Update_UART_Baud_Rate), as BlueZ's `hciattach
+bcm43xx` and Linux `btbcm.c` perform it. Those are GPL and are
+references for *behaviour*, not sources of code; the sequence itself is
+Broadcom's documented vendor interface and the `.hcd` format is a
+sequence of HCI command packets.
+
+## Development without the board
+
+**QEMU cannot emulate the controller.** The whole Bluetooth subsystem
+was removed from QEMU in 5.1, and `raspi3b` never modelled the radio.
+What QEMU does model is both UARTs, so milestones 0–1 are exercised
+there, and the PL011 can be pointed at a host socket for a *mock*
+controller. This box's QEMU is 6.2.0, whose `raspi3b` does not deliver
+`-append` (7 harness assertions fail for that reason alone, none
+tree-related); a newer QEMU is milestone 0. Under QEMU the PL011 is
+`-serial` #0 and the AUX mini-UART is `-serial` #1 (to be confirmed by
+the first boot, and the harness then passes both).
+
+**A real controller is on the development host.** This Jetson has a USB
+Bluetooth radio, `hci0`. Linux's `HCI_CHANNEL_USER` hands a raw HCI
+socket to one process with the device down; a ~60-line bridge (python,
+host side, `tools/`) can present it as H4 over TCP, and `bt9p -t
+tcp!localhost!<port>` in hosted emu then drives real silicon with no
+board and no kernel. That needs root once and takes `hci0` away from
+`bluetoothd` while it runs; it is the fastest loop for milestones 2 and
+4–7 and is not a substitute for milestone 3.
+
+**A mock controller** for the Limbo unit tests: a fake H4 peer that
+answers Reset, Read_Local_Version, Read_BD_ADDR and the vendor
+commands, and emits Inquiry_Result events. Enough to pin command flow
+control, event parsing and the patch-upload state machine in
+`tests/bt_*_test.b` with no hardware at all.
+
+## Milestones
+
+Each lands separately, with tests, and each leaves the board no worse.
+
+**M0 — a QEMU that models the machine.** Build or install QEMU ≥ 8.x on
+the development host; confirm `-append` and both serial ports; the 7
+failing harness assertions go green. No tree change beyond notes.
+
+**M1 — the console moves to the mini-UART; `#t` returns.** Import
+`devuart.c`/`uart.h`; port 9front's `uartmini.c` to a `PhysUart`; turn
+`uart.c`'s PL011 code into a `PhysUart` too; early `bootsay` output
+moves to the mini-UART (polled, as now). Console on `eia1`,
+interrupt-driven, `kbdq` fed by `devuart`. PL011 idle on GPIO 32/33 as
+`eia0`. Harness: banner on `-serial` #1; `cat /dev/eia0status`;
+loopback through a host pty on `eia0`; a 200-byte burst pasted at the
+console arrives intact (the FIFO fix). Board: cable unchanged,
+`enable_uart=1` on the card, serial loader untouched (it runs before
+the kernel and still speaks PL011 on 14/15 — this is checked, not
+assumed, before the change is called done). `#G/exp/N`. Manifest and
+README updated.
+
+**M2 — `bt9p` exists and speaks HCI.** `bttransport.m`, `h4`, the HCI
+core (command queue honouring Num_HCI_Command_Packets, event dispatch,
+timeouts), `/net/bt/{addr,status,ctl,event,hci}`. Unit tests against
+the mock. Reports "no controller" cleanly when the transport is silent,
+the way `ether4330: no radio` does under QEMU.
+
+**M3 — first light on the board.** `BT_ON` up, ROM firmware answers at
+115200, `.hcd` uploaded, baud raised to 921600 then 3 Mbaud with
+`m1`, `Read_BD_ADDR` returns the board's own address. The first
+hardware milestone and the first that needs the board at all.
+
+**M4 — discovery.** `scan`, `lescan`, remote name requests. Verified
+against this host's `hci0`, which is discoverable on demand.
+
+**M5 — L2CAP and conversations.** `clone`, `N/`, `dial` and `listen`
+over L2CAP; SDP client as a library (`sdp.m`); the board and the host
+exchange bytes.
+
+**M6 — pairing through factotum.** `proto=btlink`; SSP numeric
+comparison via the confirmation path; legacy PIN for old peripherals.
+
+**M7 — first profiles.** `bt/hid` (a keyboard at the board, the
+`kbdusb.b` shape) and RFCOMM SPP.
+
+## Test plan
+
+- **Limbo unit tests** (`tests/bt_hci_test.b`, `bt_h4_test.b`,
+  `bt_l2cap_test.b`, `bt_hcd_test.b`): framing, flow control, the
+  patch state machine, SDU reassembly, against the mock transport.
+- **Namespace contract tests** (`tests/inferno/bt_ns_test.sh`): `/net/bt`
+  has exactly the files above with the modes above; `ctl` rejects
+  malformed verbs with an error, not silence; `hci` is exclusive.
+- **Host harness** (`tests/host/baremetal_test.sh`): M1's assertions;
+  later, a mock controller on the PL011 socket so `bt9p` reaches
+  `addr` under QEMU with no radio.
+- **Board runbook** in `os/bcm2837/README.md`, as every other subsystem
+  has: what was measured, on which kernel, and what QEMU could not
+  have shown.
+
+## Open questions for review
+
+1. `#G/exp/N` versus a `power` verb on `eia0ctl` (Inferno's `PhysUart`
+   has a `.power` op). The pin is the module's, not the UART's, so the
+   file is proposed; the verb is the smaller change.
+2. `scan` as a blocking streamed read that ends at Inquiry Complete,
+   versus a table refreshed by a ctl verb. Streaming is proposed
+   because `cat` then does the whole job.
+3. Whether RFCOMM belongs in `bt9p` or in a separate `bt/rfcomm`
+   composing over L2CAP conversations. Proposed: separate, decided at
+   M7 when there is a measurement of what the extra hop costs.
+4. The name. `bt9p` follows `msg9p`/`wallet9p`/`tools9p`; `btsrv` would
+   follow `llmsrv`. Either is fine; pick one before M2.
+
+## References
+
+- Bluetooth Core Specification v5.x, Vol 4 Part A (UART transport,
+  H4), Part E (HCI); Vol 3 Part A (L2CAP), Part B (SDP), Part H
+  (Security Manager). RFCOMM (Bluetooth SIG, TS 07.10-derived).
+- Plan 9 4e / 9front `sys/src/9/bcm/uartmini.c` (MIT) — the mini-UART
+  `PhysUart`, and the choice of console.
+- Inferno `os/port/devuart.c`, `os/port/uart.h`, `os/pxa/devuart.c`
+  (MIT; also in this repository's history at `e3914b1c7^`) — `#t`.
+- This tree: `emu/port/deveia-posix.c`, `man/3/eia`, `os/port/devgpio.c`,
+  `os/bcm2837/mailbox.c`, `os/init/etherusb.b`, `os/bcm2837/README.md`.
+- raspberrypi/linux `arch/arm/boot/dts/broadcom/bcm2837-rpi-3-b-plus.dts`,
+  `bcm283x-rpi-wifi-bt.dtsi` — pins and the enable line.
+- BlueZ `tools/hciattach_bcm43xx.c`, Linux `drivers/bluetooth/btbcm.c`
+  (GPL) — behaviour reference for the patch upload, not code.
+- Zephyr `subsys/bluetooth/host` (Apache-2.0) — a compact, readable
+  host implementation, for cross-checking state machines.

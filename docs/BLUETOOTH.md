@@ -226,6 +226,7 @@ pins; they are a separate proposal.
                                                  (kernel and bt9p name no path;
                                                  boot script says /n/dos/firmware/BCM4345C0.hcd)
                         "baud <n>"               the controller, then the transport's ctl
+                        "bdaddr <addr>"          Broadcom Write_BD_ADDR; the patch leaves a default
                         "iocap none|display|yesno|keyboard"   default none: Just Works
                         "pairable on|off"        default off: no uninvited pairing
                         "forget <addr>"          the link key, from factotum and the keys file

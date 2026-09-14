@@ -19,7 +19,7 @@ implement Bt9p;
 #                     transport, scans, events dropped
 #     ctl       write up | down | reset | name <s> | class <hex>
 #                     discoverable on|off | connectable on|off | scan <secs>
-#                     firmware <path> | baud <n> | iocap none|display|yesno|keyboard
+#                     firmware <path> | baud <n> | bdaddr <addr> | iocap none|display|yesno|keyboard
 #                     pairable on|off | forget <addr>
 #     pair      read  pairing prompts, one per line, while held open:
 #                     "confirm <addr> <123456>", "passkey <addr> <123456>",
@@ -1211,7 +1211,7 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 		else
 			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 		return;
-	"up" or "down" or "reset" or "name" or "class" or "discoverable" or "connectable" or "baud" =>
+	"up" or "down" or "reset" or "name" or "class" or "discoverable" or "connectable" or "baud" or "bdaddr" =>
 		;
 	* =>
 		srv.reply(ref Rmsg.Error(tm.tag, "unknown ctl verb: " + verb));
@@ -1244,6 +1244,22 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 	"discoverable" or "connectable" =>
 		if(nf != 2 || (hd args != "on" && hd args != "off")){
 			srv.reply(ref Rmsg.Error(tm.tag, "usage: " + verb + " on|off"));
+			return;
+		}
+	"bdaddr" =>
+		if(nf != 2 || bthci->parsebdaddr(hd args) == nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: bdaddr <xx:xx:xx:xx:xx:xx>"));
+			return;
+		}
+		if(!up || version == nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "controller not up"));
+			return;
+		}
+		# 0xfc01 is Write_BD_ADDR on a Broadcom or Cypress part and
+		# something else on anyone else's; nothing is sent to a
+		# controller that would take it for something else
+		if(version.manuf != 15 && version.manuf != 305){
+			srv.reply(ref Rmsg.Error(tm.tag, "bdaddr: not a Broadcom controller: " + version.text()));
 			return;
 		}
 	"baud" =>
@@ -1319,6 +1335,16 @@ ctlwork(tm: ref Tmsg.Write, verb: string, args: list of string)
 		r.err = bringup(r);
 	"baud" =>
 		r.err = setbaud(r, int hd args);
+	"bdaddr" =>
+		# Broadcom's Write_BD_ADDR takes effect at once, and the
+		# address the controller then reports is what we record
+		(nil, r.err) = must("write bd_addr", Bthci->BcmWriteBdaddr, bthci->parsebdaddr(hd args));
+		if(r.err == nil){
+			ret: array of byte;
+			(ret, r.err) = must("read bd_addr", Bthci->ReadBdaddr, nil);
+			if(r.err == nil)
+				r.addr = bthci->bdaddr(ret, 0);
+		}
 	"down" =>
 		(nil, r.err) = must("scan enable", Bthci->WriteScanEnable, array[] of { byte 0 });
 		r.setup = -1;
@@ -1416,10 +1442,21 @@ bringup(r: ref Ctlres): string
 	mask := array[8] of { * => byte 16rff };
 	mask[5] = byte 16r1f;
 	mask[6] = byte 16rbf;	# IO capability, confirmation, passkey, pairing complete
-	mask[7] = byte 16r1d;	# passkey notification, remote host features
+	# bit 61 (0x20 here) is the LE Meta Event, and every LE event --
+	# every advertising report a scan exists to hear -- arrives inside
+	# one. Without it the controller answers LE_Set_Scan_Enable with
+	# success and then says nothing, which is what the board did while
+	# a Linux host beside it heard a dozen advertisers. The mock never
+	# consulted the mask, so nothing below the radio could have shown
+	# this.
+	mask[7] = byte 16r3d;	# LE meta, passkey notification, remote host features
 	(nil, err) = must("set event mask", Bthci->SetEventMask, mask);
 	if(err != nil)
 		return err;
+	# A dual-mode controller starts with its LE half invisible to the
+	# host; BlueZ sets this for the same reason. Not fatal: a
+	# classic-only controller refuses it and loses nothing.
+	cmd(Bthci->WriteLeHostSupported, array[] of { byte 1, byte 0 });
 	# how big an ACL packet the controller takes, and how many at once
 	(ret, err) = must("read buffer size", Bthci->ReadBufferSize, nil);
 	if(err != nil)
@@ -1594,6 +1631,8 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 	}else if(r.baud > 0){
 		baud = r.baud;
 	}else{
+		if(r.addr != nil)
+			addr = r.addr;
 		if(r.name != nil)
 			name = r.name;
 		if(r.class >= 0)
@@ -1990,15 +2029,24 @@ release(srv: ref Styxserver, cv: ref Conv)
 	idlelinks();
 }
 
-# a link nobody uses goes down; it is forgotten now rather than at
-# its Disconnection Complete, so a new connect to the same peer makes
-# a new link instead of using one on its way out. A channel still
-# waiting for its Disconnection Response keeps the link until it comes.
+# a link we made that nobody uses goes down; it is forgotten now
+# rather than at its Disconnection Complete, so a new connect to the
+# same peer makes a new link instead of using one on its way out. A
+# channel still waiting for its Disconnection Response keeps the link
+# until it comes.
+#
+# A link the peer made is the peer's to end. A phone pairing with us
+# connects, asks about L2CAP features, and only then starts
+# authentication; hanging up the moment it had no channel -- which
+# this did, on the board, and the phone said "couldn't connect" --
+# ends the pairing before it begins. The peer that made the link
+# drops it when it is done, and the controller's supervision timeout
+# covers a peer that vanishes.
 idlelinks()
 {
 	for(ll := links; ll != nil; ll = tl ll){
 		lk := hd ll;
-		if(lk.state == Lup && lk.l2 != nil && lk.l2.chans == nil && lk.waiting == nil && !linkwanted(lk)){
+		if(lk.ours && lk.state == Lup && lk.l2 != nil && lk.l2.chans == nil && lk.waiting == nil && !linkwanted(lk)){
 			forgetlink(lk);
 			spawn disconnect(lk.handle);
 		}

@@ -38,6 +38,8 @@ Btmock: module
 		inquirydone:	int;		# Inquiry Complete not yet emitted
 		naming:	list of string;		# Remote Name Requests to answer, by address
 		lescanning:	int;		# LE scan enabled
+		lemeta:		int;		# LE Meta Event unmasked (Set_Event_Mask bit 61)
+		lehost:		int;		# Write_LE_Host_Supported
 		leadv:	list of ref Bthci->Found;	# advertising reports not yet emitted
 		log:	list of string;		# "cmd 0x0c03 <hex params>", newest first
 		d:	ref Bthci->Deframer;

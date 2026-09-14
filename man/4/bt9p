@@ -128,6 +128,14 @@ Write_Local_Name; the rest of the line is the name.
 .BI class " hex"
 Write_Class_Of_Device.
 .TP
+.BI bdaddr " xx:xx:xx:xx:xx:xx"
+Broadcom's Write_BD_ADDR, then Read_BD_ADDR to record what took.
+Refused unless the controller says it is Broadcom's or Cypress's,
+because the same opcode means something else elsewhere. The CYW43455's
+patch firmware leaves the address at the patch's default, so a board
+that wants its own sets it here; what it should be is the boot
+script's decision, not this program's.
+.TP
 .BR discoverable " on|off"
 .TP
 .BR connectable " on|off"

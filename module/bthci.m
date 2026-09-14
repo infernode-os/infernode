@@ -98,6 +98,7 @@ Bthci: module
 	WriteClassOfDevice:	con (3<<10) | 16r24;
 	WriteInquiryMode:	con (3<<10) | 16r45;
 	WriteSimplePairingMode:	con (3<<10) | 16r56;
+	WriteLeHostSupported:	con (3<<10) | 16r6d;
 	ReadLocalVersion:	con (4<<10) | 16r01;
 	ReadLocalCommands:	con (4<<10) | 16r02;
 	ReadLocalFeatures:	con (4<<10) | 16r03;

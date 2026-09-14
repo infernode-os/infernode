@@ -24,7 +24,7 @@ Ctlr.new(addr: string): ref Ctlr
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, 0);
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, 0);
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -150,7 +150,17 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 			return complete(c, op, Bthci->Sinvalidparams, nil);
 		c.class = int params[0] | (int params[1] << 8) | (int params[2] << 16);
 		return complete(c, op, Bthci->Sok, nil);
-	Bthci->SetEventMask or Bthci->WriteInquiryMode or Bthci->InquiryCancel
+	Bthci->SetEventMask =>
+		# A controller emits only what the mask lets it. Bit 61 is the
+		# LE Meta Event, and this one obeys it: on the board an LE scan
+		# with that bit clear succeeded and then reported nothing,
+		# while a host beside it heard a dozen advertisers, and nothing
+		# here could have shown that while the mask was ignored.
+		if(len params < 8)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		c.lemeta = (int params[7] & 16r20) != 0;
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->WriteInquiryMode or Bthci->InquiryCancel
 	or Bthci->LeSetScanParameters =>
 		if(op == Bthci->InquiryCancel){
 			c.inquiring = nil;
@@ -354,6 +364,11 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 	Bthci->BcmDownloadMinidriver or Bthci->BcmWriteRam or Bthci->BcmLaunchRam
 	or Bthci->BcmUpdateBaudrate =>
 		return complete(c, op, Bthci->Sok, nil);
+	Bthci->WriteLeHostSupported =>
+		if(len params < 1)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		c.lehost = int params[0];
+		return complete(c, op, Bthci->Sok, nil);
 	Bthci->BcmWriteBdaddr =>
 		if(len params < 6)
 			return complete(c, op, Bthci->Sinvalidparams, nil);
@@ -515,6 +530,18 @@ peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, e.sdu)));
 			else
 				c.received = sys->sprint("recv %s 0x%4.4ux %s", pr.addr, e.c.psm, string e.sdu) :: c.received;
+		Closed =>
+			# a peer that called us hangs its link up once its last
+			# channel is gone, as a real one does: the link is the
+			# maker's to end, and the host leaves a peer's alone
+			if(pr.callpsm != 0 && pr.l2.chans == nil && pr.state == 1){
+				droppeer(c, pr);
+				d := array[4] of byte;
+				d[0] = byte 0;
+				bthci->put2(d, 1, pr.handle);
+				d[3] = byte Bthci->Sremoteterm;
+				out = cat(out, event(Bthci->EvDisconnComplete, d));
+			}
 		* =>
 			;
 		}
@@ -657,7 +684,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			out = cat(out, event(Bthci->EvNumCompleted, d));
 		}
 	}
-	if(c.lescanning && c.leadv != nil){
+	if(c.lescanning && c.lemeta && c.leadv != nil){
 		# LE Advertising Report, one device: subevent, n, type, addrtype, addr, dlen, data, rssi
 		f := hd c.leadv;
 		c.leadv = tl c.leadv;

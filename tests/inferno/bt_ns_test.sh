@@ -138,6 +138,18 @@ if {! ~ $"v 'discoverable 1'} {
 	raise 'fail:discoverable after write: '^$"v
 }
 
+# bdaddr: the vendor write, then what the controller reports is what
+# addr says. A malformed address is refused before anything is sent.
+if {echo bdaddr not-an-address > $BT/ctl >[2] /dev/null} {
+	raise 'fail:bdaddr took a malformed address'
+}
+echo bdaddr b8:27:eb:ca:4c:8e > $BT/ctl
+v=`{cat $BT/addr}
+if {! ~ $"v 'b8:27:eb:ca:4c:8e'} {
+	raise 'fail:addr after bdaddr: '^$"v
+}
+echo bdaddr b8:27:eb:00:00:42 > $BT/ctl	# back to the mock's own; it keeps what it is told
+
 # A scan: one line per device, written once its name is known -- a
 # Remote Name Request after the inquiry -- EOF after the last. Two
 # devices were given to the mock, one with a name; the other's name

@@ -46,8 +46,27 @@
  * When the MMU comes up and this memory is mapped Normal rather than
  * Device, unaligned accesses become legal and the constraint relaxes --
  * but the buffer stays volatile because it really is shared.
+ *
+ * Aligned to a cache line and sized in whole lines, and this is
+ * load-bearing. mboxcall cleans the buffer before the call and
+ * cleans-and-invalidates it after, and the second of those is safe
+ * only if the lines are still clean: a dirty line is written back,
+ * and what it writes back is OUR stale copy of the buffer, over the
+ * reply the firmware has just put in memory. With a 16-byte-aligned
+ * buffer the first and last lines are shared with whatever the linker
+ * put beside it, and a store to any of that -- a counter an interrupt
+ * handler bumps, a static some caller sets on the way in -- between
+ * the two cache operations dirties a line the firmware is writing.
+ * The reply then reads as never written: "firmware refused", for a
+ * request that took effect. On the board this came and went with the
+ * link layout: one build saw every reply word inside a millisecond,
+ * the next saw none for 200ms on the same tags, and 22 replies in
+ * an earlier boot were late for the same reason. It is also the
+ * likeliest cause of the USB power refusal usbdwc.c reports. Owning
+ * the lines outright is what makes the sequence sound; QEMU has no
+ * caches and cannot show any of it.
  */
-static volatile u32int mboxbuf[64] __attribute__((aligned(16)));
+static volatile u32int mboxbuf[64] __attribute__((aligned(CACHELINESZ)));
 static u32int mboxcode;		/* the firmware's answer word from the last call */
 
 /*
@@ -322,9 +341,12 @@ mboxcall(u32int chan, volatile u32int *buf, int size)
 	 * the read is from memory. Paced, not spun: a tight loop of cache
 	 * operations on the line was observed never to see the word at
 	 * all, where a 10us pause between looks sees it inside a
-	 * millisecond -- 22 of a boot's calls were late that way. QEMU's
-	 * firmware model writes the buffer before it answers, so this
-	 * loop is never entered there.
+	 * millisecond. Most of what this loop was written against turned
+	 * out to be the buffer sharing cache lines with its neighbours
+	 * (see mboxbuf); with that fixed the loop is a guard against the
+	 * firmware itself being late, which the shape of the interface
+	 * permits. QEMU's model writes the buffer before it answers, so
+	 * the loop is never entered there.
 	 */
 	for(i = 0; buf[1] == 0 && i < Mboxlatespin; i++){
 		microdelay(10);
@@ -458,7 +480,8 @@ mboxprop(u32int tag, u32int *data, int nreq, int nresp)
  * -append, so the whole path is testable there; the length problem
  * is not.
  */
-static volatile u32int cmdlinebuf[8 + Cmdlinewords] __attribute__((aligned(16)));
+/* whole cache lines, for the reason mboxbuf gives: 16 header words is a line */
+static volatile u32int cmdlinebuf[16 + Cmdlinewords] __attribute__((aligned(CACHELINESZ)));
 
 int
 mboxcmdline(char *buf, int n)

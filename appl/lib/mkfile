@@ -82,6 +82,8 @@ TARG=\
 	wirefmt.dis\
 	keyset.dis\
 	l2cap.dis\
+	sdp.dis\
+	rfcomm.dis\
 	libc.dis\
 	libc0.dis\
 	lists.dis\
@@ -189,6 +191,8 @@ SYSMODULES=\
 	btmock.m\
 	bufio.m\
 	l2cap.m\
+	sdp.m\
+	rfcomm.m\
 	cfg.m\
 	cfgfile.m\
 	complete.m\

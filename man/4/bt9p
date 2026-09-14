@@ -466,6 +466,24 @@ bt9p -t /chan/btmock
 echo up > /net/bt/ctl
 cat /net/bt/status
 .EE
+.SH AUDIT
+When
+.B /mnt/audit/log
+is in the namespace (see
+.IR auditfs (4)),
+one record goes there for each thing that changes whom the machine
+trusts or talks to:
+.BR up ,
+.BR down ,
+.BI "paired peer=" addr " iocap=" modeR,
+.BI "forget peer=" addrR,
+and
+.BI "connect peer=" addr " port=" port " incoming|outgoing"R.
+Without it nothing is recorded and nothing fails: a radio that cannot
+come up for want of a log is a worse outcome than an unlogged radio.
+The pairing prompts and refusals are on
+.BR event ,
+which is the transcript, not the record.
 .SH SOURCE
 .B /appl/cmd/bt9p.b
 .br

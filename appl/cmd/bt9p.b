@@ -121,6 +121,8 @@ include "bthci.m";
 include "l2cap.m";
 	l2cap: L2cap;
 	Link, Chan, Ev, Psmsdp, Psmrfcomm: import l2cap;
+include "audit.m";
+	audit: Audit;
 include "sdp.m";
 	sdp: Sdp;
 	Server, Record: import sdp;
@@ -324,6 +326,12 @@ init(nil: ref Draw->Context, args: list of string)
 	l2cap = load L2cap L2cap->PATH;
 	sdp = load Sdp Sdp->PATH;
 	rfcomm = load Rfcomm Rfcomm->PATH;
+	# the audit trail, when this install has one: a no-op otherwise,
+	# as 2fa does, because a radio that cannot come up for want of a
+	# log is a worse outcome than an unlogged radio
+	audit = load Audit Audit->PATH;
+	if(audit != nil)
+		audit->init();
 	if(l2cap == nil)
 		badmod(L2cap->PATH);
 	factotum = load Factotum Factotum->PATH;
@@ -990,9 +998,10 @@ event(srv: ref Styxserver, e: ref Event)
 		who := bthci->evaddr(e);
 		if(who == nil)
 			return;
-		if(int e.params[0] == Bthci->Sok)
+		if(int e.params[0] == Bthci->Sok){
 			pairnote(srv, sys->sprint("paired %s\n", who));
-		else
+			auditlog("paired", sys->sprint("peer=%s iocap=%s", who, iocapname(iocap)));
+		}else
 			pairnote(srv, sys->sprint("failed %s %s\n", who, bthci->statusname(int e.params[0])));
 	Bthci->EvLeMeta =>
 		s := findsub(Qlescan);
@@ -1288,8 +1297,10 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 		err := forget(hd args);
 		if(err != nil)
 			srv.reply(ref Rmsg.Error(tm.tag, err));
-		else
+		else{
+			auditlog("forget", sys->sprint("peer=%s", hd args));
 			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+		}
 		return;
 	"up" or "down" or "reset" or "name" or "class" or "discoverable" or "connectable" or "baud" or "bdaddr" =>
 		;
@@ -1713,6 +1724,7 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 		addr = r.addr;
 		name = r.name;
 		version = r.version;
+		auditlog("up", sys->sprint("addr=%s name=%q %s", addr, name, transportname));
 		if(r.aclmtu > 0){
 			aclmtu = r.aclmtu;
 			aclcredits = r.aclnum;
@@ -1721,6 +1733,7 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 			uploaded = r.uploaded;
 	}else if(r.setup < 0){
 		up = 0;
+		auditlog("down", sys->sprint("addr=%s", addr));
 		for(ll := links; ll != nil; ll = tl ll)
 			linkdown(srv, hd ll, "controller down");
 	}else if(r.baud > 0){
@@ -2591,6 +2604,7 @@ rfevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Rfcomm->Ev)
 			if(cv == nil)
 				continue;
 			cv.state = "Connected";
+			auditlog("connect", sys->sprint("peer=%s port=%s %s", cv.raddr, portname(cv), direction(cv)));
 			if(cv.cpending != nil){
 				srv.reply(ref Rmsg.Write(cv.cpending.tag, len cv.cpending.data));
 				cv.cpending = nil;
@@ -2784,6 +2798,7 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 			if(cv == nil)
 				continue;
 			cv.state = "Connected";
+			auditlog("connect", sys->sprint("peer=%s port=%s %s", cv.raddr, portname(cv), direction(cv)));
 			if(cv.cpending != nil){
 				srv.reply(ref Rmsg.Write(cv.cpending.tag, len cv.cpending.data));
 				cv.cpending = nil;
@@ -2870,6 +2885,13 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 		}
 	}
 	idlelinks();
+}
+
+direction(cv: ref Conv): string
+{
+	if(cv.accepted)
+		return "incoming";
+	return "outgoing";
 }
 
 withoutchan(l: list of ref Chan, ch: ref Chan): list of ref Chan
@@ -3098,6 +3120,14 @@ pairwrite(srv: ref Styxserver, tm: ref Tmsg.Write)
 		return;
 	}
 	srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+}
+
+# one line to the audit trail, if there is one: what changed about
+# whom this machine trusts or talks to
+auditlog(event, msg: string)
+{
+	if(audit != nil)
+		audit->log("bt9p", event, msg);
 }
 
 # one secret from factotum, or nil with the reason in errstr

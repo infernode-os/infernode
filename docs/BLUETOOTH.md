@@ -295,8 +295,10 @@ does, and an RFCOMM serial port has every reason to present as
   factotum's syntax, because factotum cannot be read back for secrets
   and whoever receives the key is the only one who can persist it --
   Plan 9's `factotum -S` and NVRAM, the same shape.
-- **audit**: `up`, `down`, pairing and connection events are logged the
-  way `#l`'s attach is; nothing new.
+- **audit**: `up`, `down`, `paired`, `forget` and every `connect`
+  (either direction) go to `/mnt/audit/log` through `audit(2)` when
+  it is in the namespace, as `2fa` does, and nowhere when it is not.
+  The contract test binds a sink and reads the records back.
 - It does **not** do audio, mesh, GATT beyond scanning, or any kernel
   data path.
 

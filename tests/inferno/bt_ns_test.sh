@@ -50,6 +50,17 @@ if {! ftest -f $FACT/ctl} {
 	raise 'fail:factotum did not start'
 }
 
+# An audit sink, so that what bt9p records can be checked: a plain
+# file where auditfs would be, holding the last record written at its
+# start (the module opens and writes at offset 0; auditfs appends and
+# seals), so a check is a prefix match.
+AUDIT=$MNT/audit
+mkdir -p $AUDIT
+echo -n > $AUDIT/log
+if {! ftest -d /mnt/audit} {
+	mkdir -p /mnt/audit
+}
+bind $AUDIT /mnt/audit
 bt9p -t $MNT/chan/btmock -m $MNT -f $FACT -k $KEYS
 sleep 1
 BT=$MNT/bt
@@ -402,6 +413,10 @@ v=`{cat $KEYS | grep 'aa:aa:aa:aa:aa:01'}
 if {! ~ $#v 0} {
 	raise 'fail:forget left the key in the keys file'
 }
+v=`{cat /mnt/audit/log}
+if {! ~ $"v 'bt9p forget peer=aa:aa:aa:aa:aa:01'*} {
+	raise 'fail:forgetting a peer was not audited: '^$"v
+}
 v=`{cat $KEYS | grep 'bb:bb:bb:bb:bb:02'}
 if {~ $#v 0} {
 	raise 'fail:forget took the wrong key with it'
@@ -492,6 +507,10 @@ sleep 1
 v=`{cat $BT/status | grep '^links '}
 if {! ~ $"v 'links 0'} {
 	raise 'fail:the link outlived its serial port: '^$"v
+}
+v=`{cat /mnt/audit/log}
+if {! ~ $"v 'bt9p connect peer=94:bb:43:44:61:04 port=rfcomm1 outgoing'*} {
+	raise 'fail:the serial connect was not audited: '^$"v
 }
 
 # "spp": the channel comes from the peer's SDP record

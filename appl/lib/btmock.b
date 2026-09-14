@@ -212,10 +212,13 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		if(len params < 5)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
 		# an LE-only device does not answer an inquiry
-		c.inquiring = nil;
+		rl: list of ref Found;
 		for(nl := c.nearby; nl != nil; nl = tl nl)
 			if(authkind(c, (hd nl).addr) != "le")
-				c.inquiring = hd nl :: c.inquiring;
+				rl = hd nl :: rl;
+		c.inquiring = nil;
+		for(; rl != nil; rl = tl rl)
+			c.inquiring = hd rl :: c.inquiring;
 		c.inquirydone = 1;
 		return cmdstatus(c, op, Bthci->Sok);
 	Bthci->LeReadBufferSize =>

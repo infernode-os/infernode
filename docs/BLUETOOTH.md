@@ -462,7 +462,13 @@ the mock now refuses the rest as the controller did.
 
 **M6 — pairing through factotum.** `proto=btlink`; SSP numeric
 comparison via the confirmation path; legacy PIN for old peripherals.
-*Done against the mock 2026-09-13, the WiFi way.* factotum is the only
+*Done against the mock 2026-09-13, the WiFi way; on silicon 2026-09-14
+with an Android phone (it paired, Just Works, and its key landed in
+factotum and on the card) and with BlueZ (paired, and reconnected on
+the stored key).* One thing the card needs that the runbook had not
+said: the protocol modules at `/dis/auth/proto/btlink.dis` and
+`btpin.dis`. Without them a key can be stored but never found, so
+pairing works and reuse does not, silently. factotum is the only
 source of secrets (`auth/proto/btlink`, `auth/proto/btpin`); a link
 key the controller makes goes to factotum's ctl and, with `-k`, to the
 keys file in factotum's own syntax, which `bt9p` loads at start one
@@ -487,8 +493,18 @@ against themselves. In `bt9p`, `connect <addr>!rfcomm<n>` and `!spp`
 offered for as long as it is announced), a byte stream on `data`, one
 multiplexer per link made for the first port and taken down after the
 last; SDP itself always answered. The mock's peer offers a serial echo
-on channel 1 with a record for it, and can call ours. HID is not
-started; the peripherals to hand turned out to be LE (below).
+on channel 1 with a record for it, and can call ours. *On silicon the
+same day, against BlueZ on the development host with no bridge:*
+`sdptool browse` read the board's Serial Port record verbatim; a Linux
+RFCOMM socket connected to the board's `announce spp` and exchanged a
+line each way; the board's `connect <host>!rfcomm5` reached a Linux
+RFCOMM server, over a link the board first authenticated and
+encrypted -- the first time by pairing (Just Works, both sides), the
+next by offering the stored key, which the host accepted. What that
+found: a serial port needs the link secured first (BlueZ refuses
+otherwise, and does not pair on its own); paging in mode R1 timed out
+where R2 did not; a peer has one key. HID is not started; the
+peripherals to hand turned out to be LE (below).
 
 ## Test plan
 

@@ -2388,6 +2388,15 @@ because the mount dies with it):
     ...
     firmware /n/dos/firmware/BCM4345C0.hcd (uploaded 323 records)
 
+The card also needs `dis/auth/proto/btlink.dis` and `btpin.dis` beside
+`wpapsk.dis` -- factotum loads a protocol from `/dis/auth/proto/` by
+name, and without them a link key can be stored but never found, so
+pairing works and reconnection re-pairs every time, silently. Run
+`bt9p` from the *serial* console, whose namespace is the boot namespace
+every later network-console session forks from; started from a
+network-console session it outlives the session and its mount does
+not, so nothing can reach it and the next one fights it for the port.
+
 Before the `.hcd` the ROM answers as `BCM4345C0`, HCI 4.1, address
 `aa:aa:aa:aa:aa:aa`; after it, the name and version above and the
 address `43:45:c0:00:1f:ac`, which is the *patch's* default, not the

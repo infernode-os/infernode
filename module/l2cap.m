@@ -20,6 +20,9 @@ L2cap: module
 
 	# channel identifiers
 	Cidnull, Cidsig, Cidconnless:	con iota;
+	Cidatt:		con 4;		# LE fixed channels: the Attribute Protocol,
+	Cidlesig:	con 5;		# LE signalling,
+	Cidsmp:		con 6;		# and the Security Manager
 	Ciddyn:		con 16r40;	# first dynamically allocated CID
 
 	# signalling command codes, 4.1
@@ -78,6 +81,9 @@ L2cap: module
 		Data =>
 			c:	ref Chan;
 			sdu:	array of byte;
+		Fixed =>
+			cid:	int;		# an LE fixed channel: ATT or SMP, one SDU
+			sdu:	array of byte;
 		}
 	};
 
@@ -95,6 +101,7 @@ L2cap: module
 		connect:	fn(l: self ref Link, psm: int): (ref Chan, list of ref Ev);
 		disconnect:	fn(l: self ref Link, c: ref Chan): list of ref Ev;
 		send:	fn(l: self ref Link, c: ref Chan, sdu: array of byte): list of ref Ev;
+		sendfixed: fn(l: self ref Link, cid: int, sdu: array of byte): list of ref Ev;
 		recv:	fn(l: self ref Link, p: ref Bthci->Pkt): list of ref Ev;
 		down:	fn(l: self ref Link, reason: string): list of ref Ev;
 		find:	fn(l: self ref Link, scid: int): ref Chan;

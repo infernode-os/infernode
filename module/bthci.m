@@ -106,7 +106,12 @@ Bthci: module
 	ReadLocalFeatures:	con (4<<10) | 16r03;
 	ReadBufferSize:		con (4<<10) | 16r05;
 	ReadBdaddr:		con (4<<10) | 16r09;
+	LeReadBufferSize:	con (8<<10) | 16r02;
 	LeSetScanParameters:	con (8<<10) | 16r0b;
+	LeCreateConnection:	con (8<<10) | 16r0d;
+	LeCreateConnCancel:	con (8<<10) | 16r0e;
+	LeConnectionUpdate:	con (8<<10) | 16r13;
+	LeStartEncryption:	con (8<<10) | 16r19;
 	LeSetScanEnable:	con (8<<10) | 16r0c;
 
 	# Broadcom vendor commands, for the CYW43455's patch upload (bt9p M3)
@@ -156,6 +161,9 @@ Bthci: module
 	EvExtInquiryResult:	con 16r2f;
 	EvLeMeta:		con 16r3e;
 	LeAdvReport:		con 16r02;	# LE Meta subevent: Advertising Report
+	LeConnComplete:		con 16r01;	# LE Meta subevent: status, handle, role, peer type, peer, interval...
+	LeConnUpdate:		con 16r03;
+	LeEnhConnComplete:	con 16r0a;
 
 	# HCI status codes worth naming
 	Sok:			con 16r00;

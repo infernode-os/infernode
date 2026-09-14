@@ -294,7 +294,15 @@ Serve
 .I port
 on this conversation: peers that connect to it appear through
 .BR listen .
-For
+The
+.BI * ! port
+form
+.IR announce (2)
+writes for
+.BI bt!*! port
+is taken too, and a local half other than
+.B *
+or this controller's address is refused. For
 .BI rfcomm n
 and
 .B spp

@@ -2391,11 +2391,36 @@ because the mount dies with it):
 The card also needs `dis/auth/proto/btlink.dis` and `btpin.dis` beside
 `wpapsk.dis` -- factotum loads a protocol from `/dis/auth/proto/` by
 name, and without them a link key can be stored but never found, so
-pairing works and reconnection re-pairs every time, silently. Run
-`bt9p` from the *serial* console, whose namespace is the boot namespace
-every later network-console session forks from; started from a
-network-console session it outlives the session and its mount does
-not, so nothing can reach it and the next one fights it for the port.
+pairing works and reconnection re-pairs every time, silently.
+
+**At boot.** `osinit` starts `bt9p` when the card has `/n/dos/bt`, a
+file of `ctl` lines written in order once the tree is served:
+
+    firmware /n/dos/firmware/BCM4345C0.hcd
+    up
+    bdaddr b8:27:eb:ca:4c:8e
+    name infernode
+    class 0x000104
+    pairable on
+    discoverable on
+
+No file, no Bluetooth. The mount is made before the shell starts, so
+the console, the network console and the desktop all see `/net/bt`;
+the firmware and radio follow in a thread the shell does not wait for,
+and the console prints `init: bt: <addr>` when they are done. factotum
+is the WiFi join's, through `#sfactotum` at `/tmp/factotum`, or one
+started for the purpose when there is no WiFi. From then on Inferno's
+own `listen(1)` and `dial(2)` are the interface:
+
+    ; listen -A 'bt!*!spp' sh -c 'echo hello from infernode; cat' &
+
+and a Linux RFCOMM client on channel 1 gets the greeting, over a link
+secured with the key stored at pairing. (Whether a shell should ever
+be behind that `listen` is the card's decision, not this program's:
+anyone who can pair can connect.) Started by hand from a
+network-console session instead, `bt9p` outlives the session while its
+mount does not, so nothing can reach it and the next one fights it for
+the port; from the serial console it works, in the boot namespace.
 
 Before the `.hcd` the ROM answers as `BCM4345C0`, HCI 4.1, address
 `aa:aa:aa:aa:aa:aa`; after it, the name and version above and the

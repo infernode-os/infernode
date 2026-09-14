@@ -2076,8 +2076,21 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 		spawn conntimer(cv.id);
 	"announce" =>
 		kind, psm, channel: int;
-		if(nf == 2)
-			(kind, psm, channel) = parseport(hd tl f);
+		if(nf == 2){
+			# announce(2) writes what follows the network: "*!spp"
+			# for bt!*!spp, as /net/tcp is given "*!17". The local
+			# half may only be "*" or this controller's address.
+			(na, parts) := sys->tokenize(hd tl f, "!");
+			port := hd tl f;
+			if(na == 2){
+				if(hd parts != "*" && hd parts != addr){
+					srv.reply(ref Rmsg.Error(tm.tag, "announce: not a local address: " + hd parts));
+					return;
+				}
+				port = hd tl parts;
+			}
+			(kind, psm, channel) = parseport(port);
+		}
 		if(nf != 2 || kind < 0){
 			srv.reply(ref Rmsg.Error(tm.tag, "usage: announce <psm>|rfcomm<n>|spp"));
 			return;

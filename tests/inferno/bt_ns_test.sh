@@ -557,7 +557,10 @@ if {! ~ $"v 'links 0'} {
 }
 {
 	id=`{read 10}
-	echo 'announce spp' >[1=0]
+	if {echo 'announce 11:22:33:44:55:66!spp' >[1=0] >[2] /dev/null} {
+		raise 'fail:announce on an address that is not ours was accepted'
+	}
+	echo 'announce *!spp' >[1=0]	# what announce(2) writes for bt!*!spp
 	v=`{cat $BT/$id/status}
 	if {! ~ $"v Listen} {
 		raise 'fail:status after announce spp: '^$"v

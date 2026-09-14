@@ -287,6 +287,38 @@ Port Profile record is asked for and its RFCOMM channel used. Fails
 with
 .I no serial port offered
 if there is none.
+.TP
+.B gatt
+An LE link to the peer, encrypted first (below), with the Attribute
+Protocol on
+.BR data :
+one ATT PDU per write, and each PDU the peer sends is one read.
+.TP
+.B hid
+An LE link, encrypted, then the peer's HID service found with GATT:
+the device is put in boot protocol if it has one and its input
+reports subscribed to, and each report the device notifies is one
+read of
+.BR data .
+A boot mouse report is three bytes, buttons then dx then dy; a boot
+keyboard report is eight.
+.IR bthid (1)
+is the reader that makes a pointer of them. Writes are refused.
+.PP
+An LE link is encrypted before either port is used: with the long-term
+key factotum holds for the peer
+.RB ( "proto=btltk" ),
+or, when it has none and
+.B pairable
+is on, by pairing -- Just Works, legacy pairing; the key the device
+gives is stored as
+.B btlink
+keys are, in factotum and in the keys file, and offered next time.
+A device that will only pair with LE Secure Connections is refused
+and says so. The peer's address type is what
+.B lescan
+heard for it, or, unheard, what the address itself says -- so scan
+first for a device with a resolvable private address.
 .RE
 .TP
 .BI announce " port"
@@ -368,6 +400,13 @@ addresses to
 .B /net/bt/clone
 because that file exists.
 .SH KEYS
+LE peripherals add a third protocol:
+.IP
+.B "key proto=btltk addr=<peer> type=<0|1> ediv=<n> rand=<16 hex> !ltk=<32 hex>"
+.PP
+the long-term key an LE pairing produced, with the EDIV and Rand the
+controller must be given to start encryption with it, and the peer's
+address type. Stored and forgotten as the others are.
 Keys are held the way WiFi's are. factotum is the only source of
 secrets: a peer's Link Key Request is answered from
 .BR "proto=btlink addr=" IpeerR,

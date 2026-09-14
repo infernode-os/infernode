@@ -216,6 +216,7 @@ Sub: adt {
 	found:	list of ref Found;	# scan: devices whose names are still to be asked for
 	naming:	string;			# scan: the address a Remote Name Request is out for
 	seen:	list of string;		# lescan: addresses already reported
+	nameless: list of ref Found;	# lescan: heard, no name yet; a scan response may bring one
 };
 subs: list of ref Sub;
 Maxlines: con 1000;
@@ -519,7 +520,7 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 			hciq = nil;
 			hcipending = nil;
 		Qevent or Qscan or Qlescan or Qpair =>
-			subs = ref Sub(tm.fid, int c.path, nil, nil, 0, 0, 0, 0, nil, nil, nil) :: subs;
+			subs = ref Sub(tm.fid, int c.path, nil, nil, 0, 0, 0, 0, nil, nil, nil, nil) :: subs;
 		}
 	Read =>
 		c := srv.getfid(tm.fid);
@@ -946,14 +947,42 @@ event(srv: ref Styxserver, e: ref Event)
 		s := findsub(Qlescan);
 		if(s == nil || s.done)
 			return;
+		# The same rule as scan: a device's line waits for its name.
+		# An advertisement rarely carries one; the scan response to
+		# our active scan usually does, and it is a separate report.
+		# A device still nameless when the scan ends gets its line
+		# with "-" then, once, so nothing is ever corrected.
 		for(f := bthci->leadvreports(e); f != nil; f = tl f){
 			d := hd f;
 			if(knows(s, d.addr))
 				continue;
+			if(d.name == nil){
+				if(!nameless(s, d.addr))
+					s.nameless = d :: s.nameless;
+				continue;
+			}
 			s.seen = d.addr :: s.seen;
+			s.nameless = dropfound(s.nameless, d.addr);
 			post(srv, s, foundline(d));
 		}
 	}
+}
+
+nameless(s: ref Sub, addr: string): int
+{
+	for(l := s.nameless; l != nil; l = tl l)
+		if((hd l).addr == addr)
+			return 1;
+	return 0;
+}
+
+dropfound(l: list of ref Found, addr: string): list of ref Found
+{
+	keep: list of ref Found;
+	for(; l != nil; l = tl l)
+		if((hd l).addr != addr)
+			keep = hd l :: keep;
+	return keep;
 }
 
 knows(s: ref Sub, addr: string): int
@@ -1587,8 +1616,18 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 		return;
 	"ledone" =>
 		s := findsub(Qlescan);
-		if(s != nil)
+		if(s != nil){
+			# the devices that never said their name, oldest first
+			rest: list of ref Found;
+			for(l := s.nameless; l != nil; l = tl l)
+				rest = hd l :: rest;
+			for(; rest != nil; rest = tl rest){
+				s.seen = (hd rest).addr :: s.seen;
+				post(srv, s, foundline(hd rest));
+			}
+			s.nameless = nil;
 			finish(srv, s);
+		}
 		scans++;
 		return;
 	}

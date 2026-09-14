@@ -76,6 +76,8 @@ Bthci: module
 	InquiryCancel:		con (1<<10) | 16r02;
 	CreateConnection:	con (1<<10) | 16r05;
 	Disconnect:		con (1<<10) | 16r06;
+	AuthRequested:		con (1<<10) | 16r11;
+	SetConnEncryption:	con (1<<10) | 16r13;
 	AcceptConnection:	con (1<<10) | 16r09;
 	RejectConnection:	con (1<<10) | 16r0a;
 	LinkKeyReply:		con (1<<10) | 16r0b;
@@ -122,6 +124,8 @@ Bthci: module
 	EvConnComplete:		con 16r03;
 	EvConnRequest:		con 16r04;
 	EvDisconnComplete:	con 16r05;
+	EvAuthComplete:		con 16r06;	# status, handle
+	EvEncryptChange:	con 16r08;	# status, handle, enabled
 	EvRemoteName:		con 16r07;
 	EvCmdComplete:		con 16r0e;
 	EvCmdStatus:		con 16r0f;

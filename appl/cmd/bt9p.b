@@ -159,7 +159,10 @@ Lnk: adt {
 	rfch:	ref Chan;		# its L2CAP channel, PSM 3
 	rfwait:	list of ref Conv;	# serial conversations waiting for the multiplexer
 	sdpchans: list of ref Chan;	# SDP channels peers opened to ask what we offer
+	secure:	int;			# Snone .. Sencrypted: how far the link's security has got
 };
+# a link's security, in the order it is established
+Snone, Sauthenticating, Sauthenticated, Sencrypting, Sencrypted: con iota;
 sdpsrv: ref Sdp->Server;	# what we offer: a record per announced serial channel
 links: list of ref Lnk;
 aclmtu := 27;			# the controller's ACL packet size, from Read_Buffer_Size
@@ -880,8 +883,31 @@ event(srv: ref Styxserver, e: ref Event)
 		# a peer calls: accept, as a peripheral. The link then completes
 		# like one we asked for.
 		if(linkbyaddr(who) == nil)
-			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil) :: links;
+			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil, Snone) :: links;
 		spawn accept(who);
+	Bthci->EvAuthComplete =>
+		if(len e.params < 3)
+			return;
+		lk := linkbyhandle(bthci->get2(e.params, 1));
+		if(lk == nil || lk.secure != Sauthenticating)
+			return;
+		st := int e.params[0];
+		if(st == Bthci->Sok)
+			lk.secure = Sauthenticated;
+		secured(srv, lk, st == Bthci->Sok, "authentication failed: " + bthci->statusname(st));
+	Bthci->EvEncryptChange =>
+		if(len e.params < 4)
+			return;
+		lk := linkbyhandle(bthci->get2(e.params, 1));
+		if(lk == nil)
+			return;
+		st := int e.params[0];
+		if(lk.secure == Sencrypting){
+			if(st == Bthci->Sok && int e.params[3] != 0)
+				lk.secure = Sencrypted;
+			secured(srv, lk, lk.secure == Sencrypted, "encryption failed: " + bthci->statusname(st));
+		}else if(st == Bthci->Sok && int e.params[3] == 0)
+			lk.secure = Snone;	# the peer turned it off; next time starts over
 	Bthci->EvDisconnComplete =>
 		(nil, h, reason) := bthci->disconncomplete(e);
 		lk := linkbyhandle(h);
@@ -1105,7 +1131,7 @@ lescanwork(secs: int)
 data(srv: ref Styxserver, p: ref Pkt)
 {
 	if(debug)
-		sys->fprint(stderr, "bt9p: data kind %d %d bytes\n", p.kind, len p.data);
+		sys->fprint(stderr, "bt9p: data kind %d %d bytes: %s\n", p.kind, len p.data, bthci->hex(p.data));
 	if(hcifid >= 0){
 		rawpost(srv, p);
 		return;
@@ -1638,6 +1664,11 @@ finished(srv: ref Styxserver, r: ref Ctlres)
 				s.pending = nil;
 			}
 		}
+		return;
+	"securefail" =>
+		lk := linkbyhandle(int r.who);
+		if(lk != nil)
+			secured(srv, lk, 0, r.err);
 		return;
 	"ledone" =>
 		s := findsub(Qlescan);
@@ -2324,7 +2355,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 {
 	lk := linkbyaddr(cv.raddr);
 	if(lk == nil){
-		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil);
+		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone);
 		links = lk :: links;
 		spawn createconn(cv.raddr);
 	}
@@ -2363,6 +2394,18 @@ l2connect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 
 rfconnect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 {
+	# A serial port is authenticated and encrypted, as the profile
+	# requires (SPP 1.2, 5.1) and as a Linux host insists: an RFCOMM
+	# connect on a bare link is refused with "security block" and no
+	# attempt to pair. So the link is secured first, once, and a
+	# peer that has no key for us pairs on the way -- the events go
+	# through factotum as any pairing does. SDP is asked over a bare
+	# link; nothing in a record is secret.
+	if(lk.secure < Sencrypted){
+		lk.rfwait = cv :: lk.rfwait;
+		secure(srv, lk);
+		return;
+	}
 	if(lk.rf != nil && lk.rf.up){
 		(d, evs) := lk.rf.connect(cv.channel);
 		if(d == nil){
@@ -2380,6 +2423,66 @@ rfconnect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 		lk.rfch = ch;
 		l2events(srv, lk, evs);
 	}
+}
+
+secure(nil: ref Styxserver, lk: ref Lnk)
+{
+	case lk.secure {
+	Snone =>
+		lk.secure = Sauthenticating;
+		spawn linkcmd(lk.handle, Bthci->AuthRequested, handleparam(lk.handle), "authenticate");
+	Sauthenticated =>
+		lk.secure = Sencrypting;
+		p := array[3] of byte;
+		bthci->put2(p, 0, lk.handle);
+		p[2] = byte 1;
+		spawn linkcmd(lk.handle, Bthci->SetConnEncryption, p, "encrypt");
+	}
+}
+
+handleparam(h: int): array of byte
+{
+	p := array[2] of byte;
+	bthci->put2(p, 0, h);
+	return p;
+}
+
+# a command about a link whose answer is a Command Status: only a
+# refusal comes back this way; the outcome is an event
+linkcmd(h: int, op: int, p: array of byte, what: string)
+{
+	(st, nil, err) := cmd(op, p);
+	if(err != nil || st != Bthci->Sok){
+		r := ref Ctlres(nil, nil, 0, "securefail", sys->sprint("%d", h), 0, nil, nil, nil, -1, -1, -1, 0, 0, 0, 0);
+		if(err != nil)
+			r.err = what + ": " + err;
+		else
+			r.err = what + ": " + bthci->statusname(st);
+		ctldone <-= r;
+	}
+}
+
+# the link's security moved: on to the next step, or to what waited
+secured(srv: ref Styxserver, lk: ref Lnk, ok: int, why: string)
+{
+	if(!ok){
+		lk.secure = Snone;
+		w := lk.rfwait;
+		lk.rfwait = nil;
+		for(; w != nil; w = tl w)
+			closed(srv, hd w, why);
+		rfidle(srv, lk);
+		return;
+	}
+	if(lk.secure < Sencrypted){
+		secure(srv, lk);
+		return;
+	}
+	w := lk.rfwait;
+	lk.rfwait = nil;
+	for(; w != nil; w = tl w)
+		if((hd w).state == "Connecting")
+			rfconnect(srv, lk, hd w);
 }
 
 # the multiplexer's L2CAP channel is open: bring the multiplexer up
@@ -2429,8 +2532,10 @@ rfidle(srv: ref Styxserver, lk: ref Lnk)
 # fresh multiplexer once the old channel has closed, rather than
 # failing for having been early. A teardown -- ours, or the peer
 # ending a session, whichever side's channel close arrives first --
-# is restarted from; a refused session is an answer, and the waiters
-# get it.
+# is restarted from; a refusal of any wording is an answer, and the
+# waiters get it. (Restarting on a refusal opened a fresh channel per
+# refusal, 663 times in fifteen seconds against a Linux host that
+# wanted the link secured first.)
 rfdown(srv: ref Styxserver, lk: ref Lnk, why: string)
 {
 	lk.rf = nil;
@@ -2447,7 +2552,7 @@ rfdown(srv: ref Styxserver, lk: ref Lnk, why: string)
 		}
 		lk.rfch = nil;
 	}
-	if(lk.rfwait != nil && why != "refused" && lk.state == Lup && lk.l2 != nil){
+	if(lk.rfwait != nil && (why == "closed" || why == "hangup" || why == "remote hangup") && lk.state == Lup && lk.l2 != nil){
 		(ch, evs) := lk.l2.connect(Psmrfcomm);
 		lk.rfch = ch;
 		l2events(srv, lk, evs);
@@ -2659,6 +2764,8 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 	for(; evs != nil; evs = tl evs){
 		pick e := hd evs {
 		Send =>
+			if(debug)
+				sys->fprint(stderr, "bt9p: l2cap out %d bytes: %s\n", len e.frame, bthci->hex(e.frame));
 			for(pl := l2cap->fragment(lk.handle, e.frame, aclmtu); pl != nil; pl = tl pl)
 				aclq = appendp(aclq, hd pl);
 			aclpump();
@@ -2859,7 +2966,15 @@ createconn(who: string)
 	p := array[13] of { * => byte 0 };
 	p[0:] = a;
 	bthci->put2(p, 6, 16rcc18);	# DM1 DH1 DM3 DH3 DM5 DH5
-	p[8] = byte 1;			# page scan repetition mode R1
+	# page scan repetition mode R2: the peer's page scan interval is
+	# not known here, and R2 is the mode that reaches a device on any
+	# interval the specification allows. R1 assumes 1.28s or better,
+	# and paging a Linux host on a USB controller with R1 timed out
+	# three times in a row on the board where R2 answered. BlueZ uses
+	# the mode the inquiry reported for a device it has seen and R2
+	# otherwise, which is the refinement to make when scan results
+	# are kept.
+	p[8] = byte 2;
 	p[12] = byte 1;			# allow role switch
 	(st, nil, err) := cmd(Bthci->CreateConnection, p);
 	if(err != nil || st != Bthci->Sok){
@@ -3085,6 +3200,12 @@ loadkeys()
 		ln := hd lines;
 		if(len ln < 4 || ln[0:4] != "key ")
 			continue;
+		# factotum keeps every key it is given, duplicates included, and
+		# this program may be started more than once per boot: a key
+		# for this peer already held is replaced, not joined
+		who := attrval(ln, "addr");
+		if(who != nil)
+			sys->fprint(fd, "delkey proto=btlink addr=%q", who);
 		if(sys->fprint(fd, "%s", ln) < 0){
 			sys->fprint(stderr, "bt9p: %s: factotum refused a key: %r\n", keyfile);
 			continue;
@@ -3095,9 +3216,13 @@ loadkeys()
 		sys->fprint(stderr, "bt9p: %d key(s) from %s\n", loaded, keyfile);
 }
 
-# a key the controller made: into factotum now, and onto the card for next time
+# a key the controller made: into factotum now, and onto the card for
+# next time. A peer has one key: a new pairing with a known peer
+# replaces what was held, in both places, since the old key is what
+# the peer has just stopped using.
 storekey(who: string, key: array of byte, ktype: int)
 {
+	forget(who);
 	line := sys->sprint("key proto=btlink addr=%q type=%d !key=%s", who, ktype, bthci->keytext(key));
 	fd := sys->open(factdir + "/ctl", Sys->OWRITE);
 	if(fd == nil || sys->fprint(fd, "%s", line) < 0){
@@ -3111,6 +3236,17 @@ storekey(who: string, key: array of byte, ktype: int)
 		if(kf == nil || sys->seek(kf, big 0, Sys->SEEKEND) < big 0 || sys->fprint(kf, "%s\n", line) < 0)
 			sys->fprint(stderr, "bt9p: cannot write %s: %r\n", keyfile);
 	}
+}
+
+# the value of attr=value in a key line, nil if absent
+attrval(ln: string, attr: string): string
+{
+	(nil, f) := sys->tokenize(ln, " ");
+	want := attr + "=";
+	for(; f != nil; f = tl f)
+		if(len hd f > len want && (hd f)[0:len want] == want)
+			return (hd f)[len want:];
+	return nil;
 }
 
 # forget a peer: its key out of factotum, and out of the keys file

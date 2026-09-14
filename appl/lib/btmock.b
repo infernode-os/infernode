@@ -344,6 +344,30 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		return out;
 	Bthci->WriteSimplePairingMode =>
 		return complete(c, op, Bthci->Sok, nil);
+	Bthci->AuthRequested =>
+		# a link is authenticated on request; a real controller would
+		# pair first if there were no key, which the devices marked
+		# pin= and ssp do at connection time instead
+		if(len params < 2)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		h := bthci->get2(params, 0) & 16rfff;
+		if(findhandle(c, h) == nil)
+			return cmdstatus(c, op, Bthci->Sunknownconn);
+		d := array[3] of byte;
+		d[0] = byte 0;
+		bthci->put2(d, 1, h);
+		return cat(cmdstatus(c, op, Bthci->Sok), event(Bthci->EvAuthComplete, d));
+	Bthci->SetConnEncryption =>
+		if(len params < 3)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		h := bthci->get2(params, 0) & 16rfff;
+		if(findhandle(c, h) == nil)
+			return cmdstatus(c, op, Bthci->Sunknownconn);
+		d := array[4] of byte;
+		d[0] = byte 0;
+		bthci->put2(d, 1, h);
+		d[3] = params[2];
+		return cat(cmdstatus(c, op, Bthci->Sok), event(Bthci->EvEncryptChange, d));
 	Bthci->Disconnect =>
 		if(len params < 3)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);

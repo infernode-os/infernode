@@ -101,6 +101,7 @@ dis/bioget.dis
 dis/bit2gif.dis
 dis/broke.dis
 dis/bt9p.dis
+dis/bthid.dis
 dis/btmock.dis
 dis/bytes.dis
 dis/cal.dis

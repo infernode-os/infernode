@@ -36,6 +36,7 @@ TARG=\
 	bit2gif.dis\
 	broke.dis\
 	bt9p.dis\
+	bthid.dis\
 	btmock.dis\
 	bytes.dis\
 	cal.dis\

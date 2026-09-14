@@ -175,6 +175,7 @@ Bthci: module
 	Snokey:			con 16r06;
 	Smemory:		con 16r07;
 	Sconntimeout:		con 16r08;
+	Sconnexists:		con 16r0b;
 	Scmddisallowed:		con 16r0c;
 	Sinvalidparams:		con 16r12;
 	Sremoteterm:		con 16r13;

@@ -28,7 +28,7 @@ mkdir -p $MNT/chan
 HCD=/tmp/btns.hcd
 KEYS=/tmp/btns-keys
 rm -f $KEYS
-btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -t 100 -H $HCD $MNT/chan/btmock &
+btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -n 'ee:ee:ee:ee:ee:05 0x000000 -55 mockmouse le' -t 100 -H $HCD $MNT/chan/btmock &
 sleep 1
 if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
@@ -182,8 +182,8 @@ if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
 # name from its advertising data; EOF when the scan time is up.
 le=`{cat $BT/lescan}
 n=`{cat $BT/lescan | wc -l}
-if {! ~ $"n 6} {
-	raise 'fail:lescan returned '^$"n^' lines, wanted 6'
+if {! ~ $"n 7} {
+	raise 'fail:lescan returned '^$"n^' lines, wanted 7 (every device given to the mock advertises)'
 }
 if {! ~ $"le *94:bb:43:44:61:04*public*-61*hephaestus*} {
 	raise 'fail:lescan is missing the first device: '^$"le
@@ -597,6 +597,64 @@ v=`{cat $BT/status | grep '^links '}
 if {! ~ $"v 'links 0'} {
 	raise 'fail:a link outlived the serial call: '^$"v
 }
+
+# LE: a mouse. lescan hears it; connect <addr>!hid pairs (Just Works,
+# the LTK into factotum and the keys file), finds the HID service,
+# subscribes to the boot report, and a report the device notifies is
+# one read. A second connect encrypts with the stored LTK and pairs
+# no more. connect <addr>!gatt is the raw ATT channel.
+echo pairable on > $BT/ctl
+v=`{cat $BT/lescan | grep 'ee:ee:ee:ee:ee:05'}
+if {! ~ $"v 'ee:ee:ee:ee:ee:05 random -55 mockmouse'} {
+	raise 'fail:lescan did not hear the mouse as random: '^$"v
+}
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:05!hid' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after hid connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v 'ee:ee:ee:ee:ee:05!hid'} {
+		raise 'fail:hid remote: '^$"v
+	}
+	v=`{cat $FACT/ctl | grep 'proto=btltk' | grep 'addr=ee:ee:ee:ee:ee:05'}
+	if {~ $#v 0} {
+		raise 'fail:the LTK did not reach factotum: '^`{cat $FACT/ctl}
+	}
+	v=`{cat $KEYS | grep 'proto=btltk addr=ee:ee:ee:ee:ee:05 type=1 ediv=4660 rand=030405060708090a'}
+	if {~ $#v 0} {
+		raise 'fail:the LTK did not reach the keys file with its EDIV and Rand: '^`{cat $KEYS}
+	}
+	echo 'notify ee:ee:ee:ee:ee:05 01 05 fb' > $MNT/chan/btmockctl
+	v=`{read 100 < $BT/$id/data | xd -1x}
+	if {! ~ $"v *'01 05 fb'*} {
+		raise 'fail:the boot report did not arrive as one read: '^$"v
+	}
+	if {echo -n x > $BT/$id/data >[2] /dev/null} {
+		raise 'fail:writing to a hid conversation was accepted'
+	}
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:the LE link outlived its conversation: '^$"v
+}
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:05!gatt' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after gatt connect on the stored LTK: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v 'ee:ee:ee:ee:ee:05!gatt'} {
+		raise 'fail:gatt remote: '^$"v
+	}
+} <> $BT/clone
+echo pairable off > $BT/ctl
 
 # dial(2), unchanged: the kernel's dial against this tree. The dial
 # command runs its argument with the connection on fds 0 and 1.

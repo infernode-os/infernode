@@ -374,9 +374,6 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	hci = Hci.new(Transport.h4(fd));
 
-	if(keyfile != nil)
-		loadkeys();
-
 	(tree, treeop) := nametree->start();
 	tree.create(big Qroot, dir(".", Sys->DMDIR|8r555, Qroot));
 	tree.create(big Qroot, dir("bt", Sys->DMDIR|8r555, Qbt));
@@ -1493,9 +1490,18 @@ ctlwork(tm: ref Tmsg.Write, verb: string, args: list of string)
 # status work before milestone 3 and are the first thing to see on
 # the board.
 #
+keysloaded := 0;
+
 bringup(r: ref Ctlres): string
 {
 	ret: array of byte;
+	# the keys go to factotum at the first up, not at start: started
+	# from init before the shell, bt9p must mount at once, and the
+	# factotum it shares may be a moment behind it
+	if(keyfile != nil && !keysloaded){
+		loadkeys();
+		keysloaded = 1;
+	}
 	(nil, err) := must("reset", Bthci->Reset, nil);
 	if(err != nil)
 		return "no controller: " + err;

@@ -1344,42 +1344,30 @@ wifisetup()
 # compiled in read-only and the desktop puts its own factotum under
 # /mnt/factotum after login.
 #
+#
+# The mount is made HERE, before the shell, in milliseconds: bt9p's
+# init returns once its tree is on /net, and the shell that starts
+# next -- and forks its namespace as it does -- inherits it, as do the
+# network console and the desktop that fork from the shell. What takes
+# time, the firmware and the radio, happens afterwards in a thread the
+# shell does not wait for. (Spawning the whole thing put /net/bt in a
+# namespace the shell had already copied from, and only later network
+# console sessions could see it.)
+#
 btsetup()
 {
 	(txt, found) := slurp(Btfile);
 	if(!found)
 		return;
-	spawn btjoin(txt);
-}
-
-btjoin(txt: string)
-{
 	if(sys->bind("#t", "/dev", Sys->MAFTER) < 0){
 		sys->print("init: bt: no serial ports (#t): %r\n");
 		return;
 	}
-	if(sys->stat(Btfactotum + "/ctl").t0 < 0){
-		sys->create(Btfactotum, Sys->OREAD, Sys->DMDIR|8r700);
-		ok := -1;
-		# the WiFi join starts its factotum in its own time
-		for(i := 0; i < 20 && ok < 0; i++){
-			ok = sys->bind("#sfactotum", Btfactotum, Sys->MREPL);
-			if(ok < 0)
-				sys->sleep(500);
-		}
-		if(ok < 0){
-			fact := load Command "/dis/auth/factotum.dis";
-			if(fact == nil){
-				sys->print("init: bt: cannot load factotum: %r\n");
-				return;
-			}
-			fact->init(nil, "factotum" :: "-m" :: Btfactotum :: nil);
-		}
-		if(sys->stat(Btfactotum + "/ctl").t0 < 0){
-			sys->print("init: bt: no factotum at %s: %r\n", Btfactotum);
-			return;
-		}
-	}
+	# the srv entry binds whether or not factotum has posted to it yet;
+	# bt9p reads the keys at its first up, and btjoin waits for the
+	# WiFi join's factotum -- or starts one -- before asking for that
+	sys->create(Btfactotum, Sys->OREAD, Sys->DMDIR|8r700);
+	sys->bind("#sfactotum", Btfactotum, Sys->MREPL);
 	bt := load Command "/dis/bt9p.dis";
 	if(bt == nil){
 		sys->print("init: bt: cannot load /dis/bt9p.dis: %r\n");
@@ -1391,6 +1379,28 @@ btjoin(txt: string)
 	"fail:*" =>
 		sys->print("init: bt: bt9p: %s\n", e[5:]);
 		return;
+	}
+	spawn btjoin(txt);
+}
+
+btjoin(txt: string)
+{
+	if(sys->stat(Btfactotum + "/ctl").t0 < 0){
+		(nil, wifi) := slurp(Wififile);
+		for(i := 0; wifi && i < 60 && sys->stat(Btfactotum + "/ctl").t0 < 0; i++)
+			sys->sleep(500);
+		if(sys->stat(Btfactotum + "/ctl").t0 < 0){
+			fact := load Command "/dis/auth/factotum.dis";
+			if(fact == nil){
+				sys->print("init: bt: cannot load factotum: %r\n");
+				return;
+			}
+			fact->init(nil, "factotum" :: "-m" :: Btfactotum :: nil);
+		}
+		if(sys->stat(Btfactotum + "/ctl").t0 < 0){
+			sys->print("init: bt: no factotum at %s: %r\n", Btfactotum);
+			return;
+		}
 	}
 	fd := sys->open("/net/bt/ctl", Sys->OWRITE);
 	if(fd == nil){

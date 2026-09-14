@@ -120,7 +120,13 @@ include "bthci.m";
 
 include "l2cap.m";
 	l2cap: L2cap;
-	Link, Chan, Ev: import l2cap;
+	Link, Chan, Ev, Psmsdp, Psmrfcomm: import l2cap;
+include "sdp.m";
+	sdp: Sdp;
+	Server, Record: import sdp;
+include "rfcomm.m";
+	rfcomm: Rfcomm;
+	Mux, Dlc: import rfcomm;
 
 Bt9p: module
 {
@@ -149,7 +155,12 @@ Lnk: adt {
 	l2:	ref Link;
 	waiting: list of ref Conv;	# to connect once the link is up
 	ours:	int;			# we made it, so pairing on it was asked for
+	rf:	ref Mux;		# the RFCOMM multiplexer on this link, if any
+	rfch:	ref Chan;		# its L2CAP channel, PSM 3
+	rfwait:	list of ref Conv;	# serial conversations waiting for the multiplexer
+	sdpchans: list of ref Chan;	# SDP channels peers opened to ask what we offer
 };
+sdpsrv: ref Sdp->Server;	# what we offer: a record per announced serial channel
 links: list of ref Lnk;
 aclmtu := 27;			# the controller's ACL packet size, from Read_Buffer_Size
 aclcredits := 1;		# ACL packets the controller can take now
@@ -171,7 +182,16 @@ Conv: adt {
 	cpending: ref Tmsg.Write;	# a connect waiting for the channel
 	lpending: ref Tmsg.Open;	# a listen waiting for a call
 	lq:	list of int;		# calls accepted, not yet handed to a listener
+	# a serial conversation: RFCOMM over the link's multiplexer
+	kind:	int;			# Kl2cap or Krfcomm
+	channel: int;			# the RFCOMM server channel; 0 while SDP is resolving it
+	dlc:	ref Dlc;
+	rbytes:	array of byte;		# the byte stream waiting to be read
+	sdpch:	ref Chan;		# the SDP channel a "connect <addr>!spp" is asking on
+	sdpbody: array of byte;		# the answer so far
+	sdphandle: int;			# the record announced for a listening channel, 0 if none
 };
+Kl2cap, Krfcomm: con iota;
 convs: list of ref Conv;
 nconv := 0;
 clonefids: list of (int, int);	# fid -> conversation, for opens of clone and listen
@@ -299,6 +319,8 @@ init(nil: ref Draw->Context, args: list of string)
 	if(bthci == nil)
 		badmod(Bthci->PATH);
 	l2cap = load L2cap L2cap->PATH;
+	sdp = load Sdp Sdp->PATH;
+	rfcomm = load Rfcomm Rfcomm->PATH;
 	if(l2cap == nil)
 		badmod(L2cap->PATH);
 	factotum = load Factotum Factotum->PATH;
@@ -329,6 +351,9 @@ init(nil: ref Draw->Context, args: list of string)
 	nametree->init();
 	bthci->init();
 	l2cap->init(bthci);
+	sdp->init(bthci);
+	rfcomm->init(bthci);
+	sdpsrv = Server.new();
 	factotum->init();
 
 	fd := opentransport(transportname);
@@ -855,7 +880,7 @@ event(srv: ref Styxserver, e: ref Event)
 		# a peer calls: accept, as a peripheral. The link then completes
 		# like one we asked for.
 		if(linkbyaddr(who) == nil)
-			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0) :: links;
+			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil) :: links;
 		spawn accept(who);
 	Bthci->EvDisconnComplete =>
 		(nil, h, reason) := bthci->disconncomplete(e);
@@ -1722,7 +1747,7 @@ cancelinquiry()
 
 newconv(): ref Conv
 {
-	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil);
+	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0);
 	convs = cv :: convs;
 	id := cv.id;
 	nm := sys->sprint("%d", id);
@@ -1791,12 +1816,23 @@ listener(psm: int): ref Conv
 	return nil;
 }
 
+# the PSMs we answer Connection Requests for: the announced L2CAP ones,
+# SDP always -- a peer may ask what we offer at any time, and the
+# answer to "nothing" is an empty list, not a refused channel -- and
+# RFCOMM while any serial channel is announced
 announced(): list of int
 {
-	l: list of int;
+	l := Psmsdp :: nil;
+	rf := 0;
 	for(cl := convs; cl != nil; cl = tl cl)
-		if((hd cl).listening)
-			l = (hd cl).psm :: l;
+		if((hd cl).listening){
+			if((hd cl).kind == Krfcomm)
+				rf = 1;
+			else
+				l = (hd cl).psm :: l;
+		}
+	if(rf)
+		l = Psmrfcomm :: l;
 	return l;
 }
 
@@ -1872,12 +1908,12 @@ convread(srv: ref Styxserver, tm: ref Tmsg.Read, c: ref Fid)
 	Qcstatus =>
 		srv.reply(styxservers->readstr(tm, cv.state + "\n"));
 	Qclocal =>
-		srv.reply(styxservers->readstr(tm, sys->sprint("%s!%d\n", addr, cv.psm)));
+		srv.reply(styxservers->readstr(tm, sys->sprint("%s!%s\n", addr, portname(cv))));
 	Qcremote =>
 		if(cv.raddr == nil)
 			srv.reply(styxservers->readstr(tm, "\n"));
 		else
-			srv.reply(styxservers->readstr(tm, sys->sprint("%s!%d\n", cv.raddr, cv.psm)));
+			srv.reply(styxservers->readstr(tm, sys->sprint("%s!%s\n", cv.raddr, portname(cv))));
 	Qclisten =>
 		# the accepted conversation's number, as dial(2) reads it
 		acc := clonefid(tm.fid);
@@ -1886,7 +1922,16 @@ convread(srv: ref Styxserver, tm: ref Tmsg.Read, c: ref Fid)
 		else
 			srv.reply(styxservers->readstr(tm, sys->sprint("%d", acc.id)));
 	Qcdata =>
-		if(cv.rq != nil){
+		if(cv.kind == Krfcomm && len cv.rbytes > 0){
+			n := tm.count;
+			if(n > len cv.rbytes)
+				n = len cv.rbytes;
+			b := cv.rbytes[0:n];
+			cv.rbytes = cv.rbytes[n:];
+			tm.offset = big 0;
+			srv.reply(styxservers->readbytes(tm, b));
+			rfconsumed(srv, cv);
+		}else if(cv.rq != nil){
 			sdu := hd cv.rq;
 			cv.rq = tl cv.rq;
 			tm.offset = big 0;
@@ -1913,6 +1958,16 @@ convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
 	Qcctl =>
 		convctl(srv, tm, cv);
 	Qcdata =>
+		if(cv.kind == Krfcomm){
+			if(cv.state != "Connected" || cv.lnk == nil || cv.lnk.rf == nil || cv.dlc == nil){
+				srv.reply(ref Rmsg.Error(tm.tag, "not connected"));
+				return;
+			}
+			# a byte stream: the multiplexer frames it and credits pace it
+			rfevents(srv, cv.lnk, cv.lnk.rf.send(cv.dlc, tm.data));
+			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+			return;
+		}
 		if(cv.state != "Connected" || cv.lnk == nil || cv.ch == nil){
 			srv.reply(ref Rmsg.Error(tm.tag, "not connected"));
 			return;
@@ -1938,12 +1993,15 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 	case hd f {
 	"connect" =>
 		if(nf != 2){
-			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>"));
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>|rfcomm<n>|spp"));
 			return;
 		}
 		(na, parts) := sys->tokenize(hd tl f, "!");
-		if(na != 2 || bthci->parsebdaddr(hd parts) == nil || (psm := parsepsm(hd tl parts)) <= 0){
-			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>"));
+		kind, psm, channel: int;
+		if(na == 2)
+			(kind, psm, channel) = parseport(hd tl parts);
+		if(na != 2 || bthci->parsebdaddr(hd parts) == nil || kind < 0){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>|rfcomm<n>|spp"));
 			return;
 		}
 		if(cv.state != "Closed"){
@@ -1959,36 +2017,115 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 			return;
 		}
 		cv.raddr = hd parts;
+		cv.kind = kind;
 		cv.psm = psm;
+		cv.channel = channel;
 		cv.state = "Connecting";
 		cv.cpending = tm;
 		connect(srv, cv);
 		spawn conntimer(cv.id);
 	"announce" =>
-		if(nf != 2 || (psm := parsepsm(hd tl f)) <= 0){
-			srv.reply(ref Rmsg.Error(tm.tag, "usage: announce <psm>"));
+		kind, psm, channel: int;
+		if(nf == 2)
+			(kind, psm, channel) = parseport(hd tl f);
+		if(nf != 2 || kind < 0){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: announce <psm>|rfcomm<n>|spp"));
 			return;
 		}
 		if(cv.state != "Closed"){
 			srv.reply(ref Rmsg.Error(tm.tag, "conversation in use: " + cv.state));
 			return;
 		}
-		if(listener(psm) != nil){
+		if(kind == Krfcomm){
+			# "spp" is the first free channel; a number is that one
+			if(channel == 0)
+				for(channel = 1; channel <= 30 && rflistener(channel) != nil; channel++)
+					;
+			if(channel > 30){
+				srv.reply(ref Rmsg.Error(tm.tag, "no free RFCOMM channel"));
+				return;
+			}
+			if(rflistener(channel) != nil){
+				srv.reply(ref Rmsg.Error(tm.tag, "channel already announced"));
+				return;
+			}
+			cv.channel = channel;
+			# a serial port is a Serial Port Profile record: peers find the channel by asking
+			cv.sdphandle = sdpsrv.add(sdp->spprecord(0, channel, "Serial Port"));
+		}else if(listener(psm) != nil){
 			srv.reply(ref Rmsg.Error(tm.tag, "PSM already announced"));
 			return;
 		}
+		cv.kind = kind;
 		cv.psm = psm;
 		cv.listening = 1;
 		cv.state = "Listen";
-		for(ll := links; ll != nil; ll = tl ll)
-			if((hd ll).l2 != nil)
-				(hd ll).l2.accept = announced();
+		acceptall();
 		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 	"hangup" =>
 		hangup(srv, cv, "hangup");
 		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 	* =>
 		srv.reply(ref Rmsg.Error(tm.tag, "unknown ctl verb: " + hd f));
+	}
+}
+
+# the port half of a dial string: an L2CAP PSM, an RFCOMM channel
+# as "rfcomm<n>", or "spp" -- a serial port whose channel SDP will say
+# (connect) or the first free one (announce). (kind, psm, channel),
+# kind -1 if it is none of those.
+parseport(s: string): (int, int, int)
+{
+	if(s == "spp")
+		return (Krfcomm, Psmrfcomm, 0);
+	if(len s > 6 && s[0:6] == "rfcomm"){
+		(n, rest) := str->toint(s[6:], 10);
+		if(rest == nil && n >= 1 && n <= 30)
+			return (Krfcomm, Psmrfcomm, n);
+		return (-1, 0, 0);
+	}
+	psm := parsepsm(s);
+	if(psm <= 0)
+		return (-1, 0, 0);
+	return (Kl2cap, psm, 0);
+}
+
+portname(cv: ref Conv): string
+{
+	if(cv.kind == Krfcomm){
+		if(cv.channel == 0)
+			return "spp";
+		return sys->sprint("rfcomm%d", cv.channel);
+	}
+	return sys->sprint("%d", cv.psm);
+}
+
+rflistener(channel: int): ref Conv
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).listening && (hd cl).kind == Krfcomm && (hd cl).channel == channel)
+			return hd cl;
+	return nil;
+}
+
+rfannounced(): list of int
+{
+	l: list of int;
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).listening && (hd cl).kind == Krfcomm)
+			l = (hd cl).channel :: l;
+	return l;
+}
+
+# every link's L2CAP accepts what is announced, and the multiplexers
+# the channels announced
+acceptall()
+{
+	for(ll := links; ll != nil; ll = tl ll){
+		if((hd ll).l2 != nil)
+			(hd ll).l2.accept = announced();
+		if((hd ll).rf != nil)
+			(hd ll).rf.accept = rfannounced();
 	}
 }
 
@@ -2053,9 +2190,11 @@ release(srv: ref Styxserver, cv: ref Conv)
 		hangup(srv, cv, "closed");
 	if(cv.listening){
 		cv.listening = 0;
-		for(ll := links; ll != nil; ll = tl ll)
-			if((hd ll).l2 != nil)
-				(hd ll).l2.accept = announced();
+		if(cv.sdphandle != 0){
+			sdpsrv.remove(cv.sdphandle);
+			cv.sdphandle = 0;
+		}
+		acceptall();
 		# calls accepted that no listen ever read
 		for(q := cv.lq; q != nil; q = tl q){
 			acc := conv(hd q);
@@ -2111,11 +2250,23 @@ linkwanted(lk: ref Lnk): int
 
 hangup(srv: ref Styxserver, cv: ref Conv, why: string)
 {
-	if(cv.lnk != nil && cv.ch != nil && cv.lnk.l2 != nil && cv.state == "Connected")
+	if(cv.kind == Krfcomm && cv.lnk != nil){
+		lk := cv.lnk;
+		if(lk.rf != nil && cv.dlc != nil && (cv.state == "Connected" || cv.state == "Connecting"))
+			rfevents(srv, lk, lk.rf.disconnect(cv.dlc));
+		lk.rfwait = without(lk.rfwait, cv);
+		if(cv.sdpch != nil && lk.l2 != nil){
+			l2events(srv, lk, lk.l2.disconnect(cv.sdpch));
+			cv.sdpch = nil;
+		}
+	}
+	if(cv.kind == Kl2cap && cv.lnk != nil && cv.ch != nil && cv.lnk.l2 != nil && cv.state == "Connected")
 		l2events(srv, cv.lnk, cv.lnk.l2.disconnect(cv.ch));
 	if(cv.state == "Connecting" && cv.lnk != nil)
 		cv.lnk.waiting = without(cv.lnk.waiting, cv);
 	closed(srv, cv, why);
+	if(cv.kind == Krfcomm && cv.lnk != nil)
+		rfidle(srv, cv.lnk);
 }
 
 # the conversation is over, one way or another
@@ -2126,6 +2277,8 @@ closed(srv: ref Styxserver, cv: ref Conv, why: string)
 	else
 		cv.state = "Hangup " + why;
 	cv.ch = nil;
+	cv.dlc = nil;
+	cv.sdpch = nil;
 	if(cv.cpending != nil){
 		srv.reply(ref Rmsg.Error(cv.cpending.tag, why));
 		cv.cpending = nil;
@@ -2171,7 +2324,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 {
 	lk := linkbyaddr(cv.raddr);
 	if(lk == nil){
-		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1);
+		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil);
 		links = lk :: links;
 		spawn createconn(cv.raddr);
 	}
@@ -2185,9 +2338,286 @@ connect(srv: ref Styxserver, cv: ref Conv)
 
 l2connect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 {
+	if(cv.kind == Krfcomm){
+		if(cv.channel == 0){
+			# "spp": ask SDP which channel the serial port is on
+			(ch, evs) := lk.l2.connect(Psmsdp);
+			cv.sdpch = ch;
+			cv.sdpbody = array[0] of byte;
+			l2events(srv, lk, evs);
+			return;
+		}
+		rfconnect(srv, lk, cv);
+		return;
+	}
 	(ch, evs) := lk.l2.connect(cv.psm);
 	cv.ch = ch;
 	l2events(srv, lk, evs);
+}
+
+#
+# Serial ports: RFCOMM on the link's one multiplexer, over an L2CAP
+# channel to PSM 3 that is made on the first serial conversation and
+# taken down after the last.
+#
+
+rfconnect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
+{
+	if(lk.rf != nil && lk.rf.up){
+		(d, evs) := lk.rf.connect(cv.channel);
+		if(d == nil){
+			closed(srv, cv, "channel in use");
+			return;
+		}
+		cv.dlc = d;
+		rfevents(srv, lk, evs);
+		return;
+	}
+	lk.rfwait = cv :: lk.rfwait;
+	if(lk.rfch == nil){
+		lk.rf = nil;
+		(ch, evs) := lk.l2.connect(Psmrfcomm);
+		lk.rfch = ch;
+		l2events(srv, lk, evs);
+	}
+}
+
+# the multiplexer's L2CAP channel is open: bring the multiplexer up
+# (ours) or wait for the peer to (theirs), and start what waited
+rfchannelup(srv: ref Styxserver, lk: ref Lnk)
+{
+	ch := lk.rfch;
+	if(lk.rf == nil){
+		lk.rf = Mux.new(ch.initiator, ch.mtu);
+		lk.rf.accept = rfannounced();
+	}
+	if(!ch.initiator)
+		return;		# the peer's SABM on DLCI 0 will come
+	rfevents(srv, lk, lk.rf.start());
+	rfstartwaiting(srv, lk);
+}
+
+rfstartwaiting(srv: ref Styxserver, lk: ref Lnk)
+{
+	if(lk.rf == nil || !lk.rf.up)
+		return;
+	w := lk.rfwait;
+	lk.rfwait = nil;
+	for(; w != nil; w = tl w)
+		if((hd w).state == "Connecting")
+			rfconnect(srv, lk, hd w);
+}
+
+# the last serial conversation on a link is gone: take the multiplexer
+# we made down, and its channel with it
+rfidle(srv: ref Styxserver, lk: ref Lnk)
+{
+	if(lk.rf == nil || !lk.rf.initiator || lk.rf.dlcs != nil || lk.rfwait != nil)
+		return;
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).lnk == lk && (hd cl).kind == Krfcomm && (hd cl).state == "Connecting")
+			return;
+	if(lk.rf.up)
+		rfevents(srv, lk, lk.rf.shutdown());
+	else
+		rfdown(srv, lk, "closed");
+}
+
+# the multiplexer is gone, one way or another. Its channel follows;
+# conversations that were waiting for it wait on: a connect that
+# arrived while the last port's teardown was still in flight starts a
+# fresh multiplexer once the old channel has closed, rather than
+# failing for having been early. A teardown -- ours, or the peer
+# ending a session, whichever side's channel close arrives first --
+# is restarted from; a refused session is an answer, and the waiters
+# get it.
+rfdown(srv: ref Styxserver, lk: ref Lnk, why: string)
+{
+	lk.rf = nil;
+	for(cl := convs; cl != nil; cl = tl cl){
+		cv := hd cl;
+		if(cv.lnk == lk && cv.kind == Krfcomm && cv.dlc != nil)
+			closed(srv, cv, why);
+	}
+	if(lk.rfch != nil && lk.l2 != nil){
+		ch := lk.rfch;
+		if(ch.state == L2cap->Open){
+			l2events(srv, lk, lk.l2.disconnect(ch));
+			return;		# the Closed for it brings us back here
+		}
+		lk.rfch = nil;
+	}
+	if(lk.rfwait != nil && why != "refused" && lk.state == Lup && lk.l2 != nil){
+		(ch, evs) := lk.l2.connect(Psmrfcomm);
+		lk.rfch = ch;
+		l2events(srv, lk, evs);
+		return;
+	}
+	for(w := lk.rfwait; w != nil; w = tl w)
+		closed(srv, hd w, why);
+	lk.rfwait = nil;
+}
+
+convbydlc(lk: ref Lnk, d: ref Dlc): ref Conv
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).lnk == lk && (hd cl).dlc == d)
+			return hd cl;
+	return nil;
+}
+
+# a reader took bytes: the peer may have credits back
+rfconsumed(srv: ref Styxserver, cv: ref Conv)
+{
+	if(cv.lnk != nil && cv.lnk.rf != nil && cv.dlc != nil && len cv.rbytes == 0)
+		rfevents(srv, cv.lnk, cv.lnk.rf.consumed(cv.dlc));
+}
+
+# what RFCOMM asked for
+rfevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Rfcomm->Ev)
+{
+	for(; evs != nil; evs = tl evs){
+		pick e := hd evs {
+		Send =>
+			if(lk.rfch != nil && lk.l2 != nil)
+				l2events(srv, lk, lk.l2.send(lk.rfch, e.sdu));
+		Opened =>
+			cv := convbydlc(lk, e.d);
+			if(cv == nil)
+				continue;
+			cv.state = "Connected";
+			if(cv.cpending != nil){
+				srv.reply(ref Rmsg.Write(cv.cpending.tag, len cv.cpending.data));
+				cv.cpending = nil;
+			}
+			if(cv.accepted){
+				ls := rflistener(cv.channel);
+				if(ls == nil)
+					release(srv, cv);
+				else{
+					ls.lq = appendi(ls.lq, cv.id);
+					listenwake(srv, ls);
+				}
+			}
+		Incoming =>
+			if(rflistener(e.d.channel) == nil)
+				continue;
+			nc := newconv();
+			nc.lnk = lk;
+			nc.kind = Krfcomm;
+			nc.psm = Psmrfcomm;
+			nc.channel = e.d.channel;
+			nc.dlc = e.d;
+			nc.raddr = lk.addr;
+			nc.state = "Connecting";
+			nc.accepted = 1;
+			nc.opens = 1;
+		Closed =>
+			cv := convbydlc(lk, e.d);
+			if(cv != nil){
+				held := cv.accepted && cv.state == "Connecting";
+				closed(srv, cv, e.reason);
+				if(held)
+					release(srv, cv);
+			}
+			rfidle(srv, lk);
+		Data =>
+			cv := convbydlc(lk, e.d);
+			if(cv == nil)
+				continue;
+			cv.rbytes = catb(cv.rbytes, e.data);
+			if(cv.rpending != nil){
+				tm := cv.rpending;
+				cv.rpending = nil;
+				n := tm.count;
+				if(n > len cv.rbytes)
+					n = len cv.rbytes;
+				b := cv.rbytes[0:n];
+				cv.rbytes = cv.rbytes[n:];
+				tm.offset = big 0;
+				srv.reply(styxservers->readbytes(tm, b));
+			}
+			rfconsumed(srv, cv);
+		Muxdown =>
+			rfdown(srv, lk, e.reason);
+		}
+	}
+}
+
+catb(a, b: array of byte): array of byte
+{
+	if(a == nil)
+		return b;
+	r := array[len a + len b] of byte;
+	r[0:] = a;
+	r[len a:] = b;
+	return r;
+}
+
+#
+# SDP: what we offer, asked over PSM 1; and asking a peer where its
+# serial port is, for "connect <addr>!spp".
+#
+
+sdpclient(lk: ref Lnk, ch: ref Chan): ref Conv
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).lnk == lk && (hd cl).sdpch == ch)
+			return hd cl;
+	return nil;
+}
+
+sdpserved(lk: ref Lnk, ch: ref Chan): int
+{
+	for(l := lk.sdpchans; l != nil; l = tl l)
+		if(hd l == ch)
+			return 1;
+	return 0;
+}
+
+sdpask(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, cont: array of byte)
+{
+	req := sdp->searchattrreq(cv.id & 16rffff, Sdp->Userialport :: nil, (Sdp->Aprotocols, Sdp->Aprotocols) :: (Sdp->Aservicename, Sdp->Aservicename) :: nil, cv.sdpch.mtu - 16, cont);
+	l2events(srv, lk, lk.l2.send(cv.sdpch, req));
+}
+
+# a piece of the peer's answer
+sdpanswer(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, pdu: array of byte)
+{
+	(piece, cont, err) := sdp->searchattrrsp(pdu);
+	if(err != nil){
+		sdpfinish(srv, lk, cv, "sdp: " + err);
+		return;
+	}
+	cv.sdpbody = catb(cv.sdpbody, piece);
+	if(cont != nil){
+		sdpask(srv, lk, cv, cont);
+		return;
+	}
+	channel := -1;
+	for(rl := sdp->records(cv.sdpbody); rl != nil && channel < 0; rl = tl rl)
+		channel = (hd rl).rfcommchan();
+	if(channel < 0){
+		sdpfinish(srv, lk, cv, "no serial port offered");
+		return;
+	}
+	cv.channel = channel;
+	sdpfinish(srv, lk, cv, nil);
+}
+
+sdpfinish(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, err: string)
+{
+	ch := cv.sdpch;
+	cv.sdpch = nil;
+	cv.sdpbody = nil;
+	if(ch != nil && lk.l2 != nil)
+		l2events(srv, lk, lk.l2.disconnect(ch));
+	if(err != nil){
+		closed(srv, cv, err);
+		return;
+	}
+	if(cv.state == "Connecting")
+		rfconnect(srv, lk, cv);
 }
 
 # a Connection Complete: the link is up, or it is not
@@ -2233,6 +2663,16 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				aclq = appendp(aclq, hd pl);
 			aclpump();
 		Opened =>
+			if(e.c == lk.rfch){
+				rfchannelup(srv, lk);
+				continue;
+			}
+			if((sc := sdpclient(lk, e.c)) != nil){
+				sdpask(srv, lk, sc, nil);
+				continue;
+			}
+			if(sdpserved(lk, e.c))
+				continue;
 			cv := convbychan(lk, e.c);
 			if(cv == nil)
 				continue;
@@ -2252,6 +2692,15 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				}
 			}
 		Incoming =>
+			if(e.c.psm == Psmsdp){
+				lk.sdpchans = e.c :: lk.sdpchans;
+				continue;
+			}
+			if(e.c.psm == Psmrfcomm){
+				if(lk.rfch == nil)
+					lk.rfch = e.c;	# the peer's multiplexer; ours if we had one first
+				continue;
+			}
 			ls := listener(e.c.psm);
 			if(ls == nil)
 				continue;
@@ -2264,6 +2713,20 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 			nc.accepted = 1;
 			nc.opens = 1;		# held for the listener until a listen takes it
 		Closed =>
+			if(e.c == lk.rfch){
+				lk.rfch = nil;
+				rfdown(srv, lk, e.reason);
+				continue;
+			}
+			if((sc := sdpclient(lk, e.c)) != nil){
+				if(sc.state == "Connecting")
+					sdpfinish(srv, lk, sc, "sdp: " + e.reason);
+				continue;
+			}
+			if(sdpserved(lk, e.c)){
+				lk.sdpchans = withoutchan(lk.sdpchans, e.c);
+				continue;
+			}
 			cv := convbychan(lk, e.c);
 			if(cv != nil){
 				held := cv.accepted && cv.state == "Connecting";
@@ -2272,6 +2735,21 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 					release(srv, cv);	# a call that died before any listen saw it
 			}
 		Data =>
+			if(e.c == lk.rfch){
+				if(lk.rf != nil){
+					rfevents(srv, lk, lk.rf.recv(e.sdu));
+					rfstartwaiting(srv, lk);
+				}
+				continue;
+			}
+			if((sc := sdpclient(lk, e.c)) != nil){
+				sdpanswer(srv, lk, sc, e.sdu);
+				continue;
+			}
+			if(sdpserved(lk, e.c)){
+				l2events(srv, lk, lk.l2.send(e.c, sdpsrv.request(e.sdu, e.c.mtu)));
+				continue;
+			}
 			cv := convbychan(lk, e.c);
 			if(cv == nil)
 				continue;
@@ -2285,6 +2763,15 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 		}
 	}
 	idlelinks();
+}
+
+withoutchan(l: list of ref Chan, ch: ref Chan): list of ref Chan
+{
+	keep: list of ref Chan;
+	for(; l != nil; l = tl l)
+		if(hd l != ch)
+			keep = hd l :: keep;
+	return keep;
 }
 
 convbychan(lk: ref Lnk, ch: ref Chan): ref Conv

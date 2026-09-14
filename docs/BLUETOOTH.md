@@ -248,8 +248,9 @@ pins; they are a separate proposal.
                         bring-up and tests. Root only, never granted.
       clone       open  yields a new conversation N
       N/ctl       write "connect <addr>!<psm>"           L2CAP, as a dial string
-                        "connect <addr>!rfcomm<chan>"    RFCOMM (milestone 7)
-                        "announce <psm>"                 listen
+                        "connect <addr>!rfcomm<chan>"    RFCOMM, a serial port
+                        "connect <addr>!spp"             the channel the peer's SDP record names
+                        "announce <psm>|rfcomm<chan>|spp"  listen; a serial port gets an SDP record
                         "hangup"
       N/data      read/write. L2CAP: one SDU per read or write.
                   RFCOMM: a byte stream.
@@ -476,7 +477,18 @@ issued, so the contract test pairs, reconnects on the key, forgets,
 confirms through the file, and is refused when pairable is off.
 
 **M7 — first profiles.** `bt/hid` (a keyboard at the board, the
-`kbdusb.b` shape) and RFCOMM SPP.
+`kbdusb.b` shape) and RFCOMM SPP. *SDP and SPP done against the mock
+2026-09-14:* `sdp(2)` is the protocol as data -- elements, records, the
+server's request-to-response, the client's request and response parse,
+continuation state for a cut response -- and `rfcomm(2)` the multiplexer
+as a state machine, both I/O-free like `l2cap(2)` and unit-tested
+against themselves. In `bt9p`, `connect <addr>!rfcomm<n>` and `!spp`
+(SDP finds the channel), `announce rfcomm<n>|spp` (an SDP record is
+offered for as long as it is announced), a byte stream on `data`, one
+multiplexer per link made for the first port and taken down after the
+last; SDP itself always answered. The mock's peer offers a serial echo
+on channel 1 with a record for it, and can call ours. HID is not
+started; the peripherals to hand turned out to be LE (below).
 
 ## Test plan
 
@@ -501,9 +513,15 @@ confirms through the file, and is refused when pairable is off.
 2. *Closed:* `scan` is a streamed read; `cat` does the whole job. One
    refinement from building it: a device's line waits for its name,
    so a line is complete when it appears and there are no corrections.
-3. Whether RFCOMM belongs in `bt9p` or in a separate `bt/rfcomm`
-   composing over L2CAP conversations. Proposed: separate, decided at
-   M7 when there is a measurement of what the extra hop costs.
+3. *Closed, 2026-09-14:* RFCOMM is in `bt9p`. It is a transport, not a
+   profile: it interprets nothing, it multiplexes byte streams onto a
+   link the way L2CAP multiplexes SDUs, and a serial port *is* a
+   conversation -- `connect <addr>!rfcomm3` beside `connect <addr>!17`
+   with the same files. Separate would have meant a second 9P server
+   re-serving every conversation's files over the first's for no
+   change in what they mean, one more hop per byte, and a program
+   that had to hold `/net/bt` open to exist. What was expected to
+   need measuring did not.
 4. *Closed:* `bt9p`, following `msg9p`/`wallet9p`/`tools9p`.
 
 ## References

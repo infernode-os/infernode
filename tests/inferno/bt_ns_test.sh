@@ -462,6 +462,120 @@ read 200 < $BT/pair > $PAIR &
 echo pairable off > $BT/ctl
 rm -f $PAIR $KEYS
 
+# Serial ports: RFCOMM on the link's one multiplexer. The mock echoes
+# on channel 1 and its SDP record says so, so "rfcomm1" and "spp" reach
+# the same port; data is a byte stream, so one write may come back in
+# one read; the multiplexer and its channel go when the last port does.
+{
+	id=`{read 10}
+	echo 'connect 94:bb:43:44:61:04!rfcomm1' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after rfcomm connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v '94:bb:43:44:61:04!rfcomm1'} {
+		raise 'fail:rfcomm remote: '^$"v
+	}
+	echo -n 'bytes over a serial port' > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v 'bytes over a serial port'} {
+		raise 'fail:rfcomm echo round trip: '^$"v
+	}
+	echo hangup >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Closed} {
+		raise 'fail:status after rfcomm hangup: '^$"v
+	}
+} <> $BT/clone
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:the link outlived its serial port: '^$"v
+}
+
+# "spp": the channel comes from the peer's SDP record
+{
+	id=`{read 10}
+	echo 'connect 94:bb:43:44:61:04!spp' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after spp connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v '94:bb:43:44:61:04!rfcomm1'} {
+		raise 'fail:spp resolved to the wrong channel: '^$"v
+	}
+	echo -n 'found by sdp' > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v 'found by sdp'} {
+		raise 'fail:spp echo round trip: '^$"v
+	}
+	echo hangup >[1=0]
+} <> $BT/clone
+
+# a channel the peer does not serve is refused by DM, and says so
+{
+	id=`{read 10}
+	if {echo 'connect 94:bb:43:44:61:04!rfcomm7' >[1=0] >[2] /dev/null} {
+		raise 'fail:connect to an unserved RFCOMM channel succeeded'
+	}
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v 'Hangup refused'} {
+		raise 'fail:status after rfcomm refusal: '^$"v
+	}
+	if {echo 'connect 94:bb:43:44:61:04!rfcomm31' >[1=0] >[2] /dev/null} {
+		raise 'fail:an RFCOMM channel out of range was accepted'
+	}
+} <> $BT/clone
+
+# announce spp: the first free channel, with a Serial Port record for
+# peers to find; the mock's peer calls it and gets its bytes back
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:a link outlived the refused serial port: '^$"v
+}
+{
+	id=`{read 10}
+	echo 'announce spp' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Listen} {
+		raise 'fail:status after announce spp: '^$"v
+	}
+	v=`{cat $BT/$id/local}
+	if {! ~ $"v 'b8:27:eb:00:00:42!rfcomm1'} {
+		raise 'fail:announce spp did not take channel 1: '^$"v
+	}
+	echo 'call 94:bb:43:44:61:04 rfcomm1 serial from peer' > $MNT/chan/btmockctl
+	{
+		nid=`{read 10}
+		v=`{cat $BT/$nid/status}
+		if {! ~ $"v Connected} {
+			raise 'fail:accepted serial conversation status: '^$"v
+		}
+		v=`{cat $BT/$nid/remote}
+		if {! ~ $"v '94:bb:43:44:61:04!rfcomm1'} {
+			raise 'fail:accepted serial remote: '^$"v
+		}
+		v=`{read 100 < $BT/$nid/data}
+		if {! ~ $"v 'serial from peer'} {
+			raise 'fail:what the serial peer sent: '^$"v
+		}
+		echo -n 'serial pong' > $BT/$nid/data
+		sleep 1
+		v=`{cat $MNT/chan/btmockctl}
+		if {! ~ $"v *'recv 94:bb:43:44:61:04 rfcomm1 serial pong'*} {
+			raise 'fail:the serial peer did not record our reply: '^$"v
+		}
+	} < $BT/$id/listen
+} <> $BT/clone
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:a link outlived the serial call: '^$"v
+}
+
 # dial(2), unchanged: the kernel's dial against this tree. The dial
 # command runs its argument with the connection on fds 0 and 1.
 v=`{dial -A $MNT/bt^'!94:bb:43:44:61:04!4097' sh -c 'echo -n via-dial; read 100 >[1=2]' >[2=1]}

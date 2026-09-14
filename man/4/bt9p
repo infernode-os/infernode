@@ -259,32 +259,62 @@ Write-only verbs, as
 .BR /net/tcp 's:
 .RS
 .TP
-.BI connect " addr" ! psm
-Make an L2CAP channel to
-.I psm
+.BI connect " addr" ! port
+Connect to
+.I port
 on the device at
 .IR addr ,
 over an ACL link made if there is not one; the write returns when the
-channel is open, or fails saying why -- a PSM the peer does not serve,
-a device that does not answer its page, a peer that never answers
-(fifteen seconds).
-.I psm
-is decimal or 0x hex, odd.
+connection is open, or fails saying why -- a port the peer does not
+serve, a device that does not answer its page, a peer that never
+answers (fifteen seconds).
+.I port
+is one of:
+.RS
 .TP
-.BI announce " psm"
-Serve
 .I psm
+An L2CAP channel; decimal or 0x hex, odd.
+.TP
+.BI rfcomm n
+A serial port: RFCOMM server channel
+.IR n ,
+1 to 30, on the link's one multiplexer, which is made for the first
+serial port to a device and taken down after the last.
+.TP
+.B spp
+A serial port whose channel the peer's SDP record names: the Serial
+Port Profile record is asked for and its RFCOMM channel used. Fails
+with
+.I no serial port offered
+if there is none.
+.RE
+.TP
+.BI announce " port"
+Serve
+.I port
 on this conversation: peers that connect to it appear through
 .BR listen .
+For
+.BI rfcomm n
+and
+.B spp
+-- the latter the lowest free channel -- a Serial Port Profile record
+naming the channel is offered over SDP for as long as the conversation
+is announced, which is how a peer's
+.B spp
+finds it. SDP itself (PSM 1) is always answered while the controller is
+up; a peer asking what we offer gets the list, empty or not.
 .TP
 .B hangup
 Disconnect the channel.
 .RE
 .TP
 .BI N /data
-One SDU per write and one per read: a whole L2CAP frame each. A write
-larger than the peer's MTU fails saying so. Reads return EOF once
-the channel has gone.
+L2CAP: one SDU per write and one per read, a whole frame each; a write
+larger than the peer's MTU fails saying so. RFCOMM: a byte stream, as
+a serial port is -- a read returns what has arrived, up to its count,
+and a write of any length is framed and paced by the peer's credits.
+Reads return EOF once the connection has gone.
 .TP
 .BI N /status
 .BR Connected ,
@@ -295,8 +325,14 @@ or
 .BI "Hangup " why\fR.
 .TP
 .BI N /local
-.RI "" addr ! psm
-of this end.
+.RI "" addr ! port
+of this end;
+.I port
+as it was given, so a serial port reads
+.BI rfcomm n
+(an
+.B spp
+connect reads the channel SDP found).
 .TP
 .BI N /remote
 The peer's.
@@ -394,18 +430,21 @@ makes it stingy with command credits, refunding them on the tick;
 .B -t
 sets the tick in milliseconds (default 200), one inquiry result per
 tick. Every nearby device answers L2CAP connections to PSM 0x1001 by
-echoing what it is sent. A second file,
+echoing what it is sent, offers a serial port on RFCOMM channel 1 that
+echoes too, and says so in an SDP record. A second file,
 .IB path ctl\fR,
 is the far side's telephone: writing
-.BI "call " "addr psm text"
+.BI "call " "addr port text"
 makes the device at
 .I addr
 connect to the host and send
 .I text
 on
-.IR psm ;
-reading it lists what the peers received, one
-.BI "recv " "addr psm text"
+.I port
+-- a PSM, or
+.BI rfcomm n
+-- and reading it lists what the peers received, one
+.BI "recv " "addr port text"
 per line.
 .SH EXAMPLES
 On the board:

@@ -24,6 +24,7 @@ Btmock: module
 	init:	fn(b: Bthci, l: L2cap);
 
 	Echopsm:	con 16r1001;	# the L2CAP service every mock offers: it echoes
+	Echochan:	con 1;		# and the RFCOMM channel it echoes on, which its SDP record names
 
 	Ctlr: adt {
 		addr:	array of byte;		# little-endian, as on the wire
@@ -58,6 +59,7 @@ Btmock: module
 		# a nearby device calls us: a Connection Request, then once the
 		# link is up an L2CAP connection to psm carrying text
 		call:	fn(c: self ref Ctlr, addr: string, psm: int, text: string): string;
+		callrf:	fn(c: self ref Ctlr, addr: string, channel: int, text: string): string;
 	};
 
 	#
@@ -77,5 +79,8 @@ Btmock: module
 		callpsm:	int;
 		calltext:	string;
 		acks:	int;			# ACL packets received, owed as Number Of Completed Packets
+		rf:	ref Rfcomm->Mux;	# the RFCOMM multiplexer, once PSM 3 is open
+		rfch:	ref L2cap->Chan;
+		callchan: int;			# a call() on an RFCOMM channel rather than a PSM
 	};
 };

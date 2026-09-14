@@ -43,6 +43,7 @@ include "bthci.m";
 	Found: import bthci;
 include "l2cap.m";
 	l2cap: L2cap;
+include "rfcomm.m";
 include "btmock.m";
 	btmock: Btmock;
 	Ctlr: import btmock;
@@ -220,17 +221,23 @@ serve(c: ref Ctlr, fio, cio: ref Sys->FileIO, tickms: int)
 				continue;
 			(nf, f) := sys->tokenize(string data, " \t\r\n");
 			if(nf < 4 || hd f != "call"){
-				wc <-= (0, "usage: call <addr> <psm> <text>");
+				wc <-= (0, "usage: call <addr> <psm>|rfcomm<n> <text>");
 				continue;
 			}
-			(psm, nil) := hexint(hd tl tl f);
+			port := hd tl tl f;
 			text := "";
 			for(t := tl tl tl f; t != nil; t = tl t){
 				if(text != "")
 					text += " ";
 				text += hd t;
 			}
-			err := c.call(hd tl f, psm, text);
+			err: string;
+			if(len port > 6 && port[0:6] == "rfcomm")
+				err = c.callrf(hd tl f, int port[6:], text);
+			else{
+				(psm, nil) := hexint(port);
+				err = c.call(hd tl f, psm, text);
+			}
 			if(err != nil)
 				wc <-= (0, err);
 			else

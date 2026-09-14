@@ -8,13 +8,27 @@ include "bthci.m";
 include "l2cap.m";
 	l2cap: L2cap;
 	Link, Chan, Ev: import l2cap;
+include "sdp.m";
+	sdp: Sdp;
+	Server: import sdp;
+include "rfcomm.m";
+	rfcomm: Rfcomm;
+	Mux: import rfcomm;
 include "btmock.m";
+
+peersdp: ref Server;	# what every mock peer offers: a serial port on Echochan
 
 init(b: Bthci, l: L2cap)
 {
 	sys = load Sys Sys->PATH;
 	bthci = b;
 	l2cap = l;
+	sdp = load Sdp Sdp->PATH;
+	sdp->init(b);
+	rfcomm = load Rfcomm Rfcomm->PATH;
+	rfcomm->init(b);
+	peersdp = Server.new();
+	peersdp.add(sdp->spprecord(0, Echochan, "Echo Port"));
 }
 
 Aclmtu: con 1021;	# what Read_Buffer_Size promises
@@ -198,7 +212,7 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		if(len params < 13)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
 		addr := bthci->bdaddr(params, 0);
-		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0);
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0);
 		if(lookup(c, addr) != nil)
 			pr.handle = c.nexthandle++;
 		# unknown devices page out: Connection Complete with page timeout, on the tick
@@ -521,16 +535,36 @@ peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
 			for(pl := l2cap->fragment(pr.handle, e.frame, Aclmtu); pl != nil; pl = tl pl)
 				out = cat(out, bthci->frame(hd pl));
 		Opened =>
-			if(pr.calling && e.c.psm == pr.callpsm){
+			if(e.c.psm == L2cap->Psmrfcomm){
+				# one multiplexer per link: ours if we opened the
+				# channel, the host's otherwise; it echoes on Echochan
+				pr.rfch = e.c;
+				pr.rf = Mux.new(e.c.initiator, e.c.mtu);
+				pr.rf.accept = Echochan :: nil;
+				if(e.c.initiator && pr.calling && pr.callchan != 0){
+					pr.calling = 0;
+					(nil, revs) := pr.rf.connect(pr.callchan);
+					out = cat(out, rfevents(c, pr, revs));
+				}
+			}else if(pr.calling && e.c.psm == pr.callpsm){
 				pr.calling = 0;
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, array of byte pr.calltext)));
 			}
 		Data =>
 			if(e.c.psm == Echopsm)
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, e.sdu)));
-			else
+			else if(e.c.psm == L2cap->Psmsdp)
+				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, peersdp.request(e.sdu, e.c.mtu))));
+			else if(e.c == pr.rfch){
+				if(pr.rf != nil)
+					out = cat(out, rfevents(c, pr, pr.rf.recv(e.sdu)));
+			}else
 				c.received = sys->sprint("recv %s 0x%4.4ux %s", pr.addr, e.c.psm, string e.sdu) :: c.received;
 		Closed =>
+			if(e.c == pr.rfch){
+				pr.rfch = nil;
+				pr.rf = nil;
+			}
 			# a peer that called us hangs its link up once its last
 			# channel is gone, as a real one does: the link is the
 			# maker's to end, and the host leaves a peer's alone
@@ -549,13 +583,62 @@ peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
 	return out;
 }
 
+# what the peer's RFCOMM asked for: frames onto its channel, the echo
+# on Echochan, the text of a call once its channel opens, a record of
+# what came back on it
+rfevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Rfcomm->Ev): array of byte
+{
+	out := array[0] of byte;
+	for(; evs != nil; evs = tl evs){
+		pick e := hd evs {
+		Send =>
+			if(pr.rfch != nil)
+				out = cat(out, peerevents(c, pr, pr.l2.send(pr.rfch, e.sdu)));
+		Opened =>
+			if(e.d.initiator && e.d.channel == pr.callchan)
+				out = cat(out, rfevents(c, pr, pr.rf.send(e.d, array of byte pr.calltext)));
+		Data =>
+			if(e.d.channel == Echochan && !e.d.initiator)
+				out = cat(out, rfevents(c, pr, pr.rf.send(e.d, e.data)));
+			else
+				c.received = sys->sprint("recv %s rfcomm%d %s", pr.addr, e.d.channel, string e.data) :: c.received;
+			out = cat(out, rfevents(c, pr, pr.rf.consumed(e.d)));
+		Closed =>
+			# a caller whose channel is gone hangs its link up
+			if(pr.callchan != 0 && pr.rf != nil && pr.rf.dlcs == nil){
+				out = cat(out, rfevents(c, pr, pr.rf.shutdown()));
+				if(pr.rfch != nil)
+					out = cat(out, peerevents(c, pr, pr.l2.disconnect(pr.rfch)));
+			}
+		Muxdown =>
+			if(pr.rfch != nil && pr.rfch.state == L2cap->Open)
+				out = cat(out, peerevents(c, pr, pr.l2.disconnect(pr.rfch)));
+			pr.rf = nil;
+		}
+	}
+	return out;
+}
+
 Ctlr.call(c: self ref Ctlr, addr: string, psm: int, text: string): string
 {
 	if(lookup(c, addr) == nil)
 		return "no such device nearby: " + addr;
 	if(findpeer(c, addr) != nil)
 		return "already connected: " + addr;
-	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0);
+	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0, nil, nil, 0);
+	c.pendconn = appendpeer(c.pendconn, pr);
+	return nil;
+}
+
+# a call on an RFCOMM channel: the peer opens PSM 3, brings the
+# multiplexer up, opens the channel and sends the text
+Ctlr.callrf(c: self ref Ctlr, addr: string, channel: int, text: string): string
+{
+	if(lookup(c, addr) == nil)
+		return "no such device nearby: " + addr;
+	if(findpeer(c, addr) != nil)
+		return "already connected: " + addr;
+	pr := ref Peer(addr, 0, 2, nil, 1, L2cap->Psmrfcomm, text, 0, nil, nil, channel);
 	c.pendconn = appendpeer(c.pendconn, pr);
 	return nil;
 }
@@ -661,7 +744,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			if(pr.handle != 0){
 				pr.state = 1;
 				pr.l2 = Link.new(pr.handle);
-				pr.l2.accept = Echopsm :: nil;
+				pr.l2.accept = Echopsm :: L2cap->Psmsdp :: L2cap->Psmrfcomm :: nil;
 				droppeer(c, pr);
 				c.links = pr :: c.links;
 			}

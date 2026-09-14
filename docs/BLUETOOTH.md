@@ -505,8 +505,17 @@ encrypted -- the first time by pairing (Just Works, both sides), the
 next by offering the stored key, which the host accepted. What that
 found: a serial port needs the link secured first (BlueZ refuses
 otherwise, and does not pair on its own); paging in mode R1 timed out
-where R2 did not; a peer has one key. HID is not started; the
-peripherals to hand turned out to be LE (below).
+where R2 did not; a peer has one key. HID over classic is not
+started -- no classic HID device is to hand; the peripherals here are
+LE, which is #624, and its first cut landed 2026-09-14: `att(2)` (a
+GATT client and the discovery a HID device needs), `smp(2)` (legacy
+Just Works from the central's side, the sample data checked), LE
+links in `bt9p` with `connect <addr>!gatt` and `!hid`, the LTK in
+factotum as `proto=btltk`, and `bthid(1)` turning boot mouse reports
+into `/dev/pointer`. The mock is an LE mouse; the contract test pairs
+with it, subscribes, reads a report and reconnects on the stored key.
+Not yet on silicon: the board wedged (#622) before the real mouse
+could be tried.
 
 ## Test plan
 

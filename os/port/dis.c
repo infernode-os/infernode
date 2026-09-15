@@ -1236,11 +1236,27 @@ vmachine(void*)
 				 * the native address of a JIT-compiled instruction
 				 * says nothing to anyone.
 				 */
+				int i, n;
+
+				n = up->nerrlab;
 				print("vmachine: error stack %d, expected %d, after prog %d %s pc %ld; repaired\n",
-					up->nerrlab, nerr, r->pid,
+					n, nerr, r->pid,
 					r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?",
 					r->R.M != nil && r->R.M->m != nil && r->R.M->m->prog != nil ?
 						(long)(r->R.PC - r->R.M->m->prog) : -1L);
+				/*
+				 * Each label records the pc of the waserror() that
+				 * pushed it, so a label left behind names its own
+				 * leaker; and the label that should be here but was
+				 * popped still holds who pushed it, since poperror()
+				 * only counts down. Print what is at every index from
+				 * the lower count to the higher.
+				 */
+				if(n > NERR)
+					n = NERR;
+				for(i = nerr < n ? nerr : n; i < (nerr > n ? nerr : n) && i < NERR; i++)
+					print("vmachine:   errlab[%d] pushed at pc %#p sp %#p\n",
+						i, up->errlab[i].pc, up->errlab[i].sp);
 				up->nerrlab = nerr;
 			}
 

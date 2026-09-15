@@ -1230,10 +1230,17 @@ vmachine(void*)
 			FPsave(&o->fpu);
 
 			if(up->nerrlab != nerr){
-				print("vmachine: error stack %d, expected %d, after prog %d %s pc %#p; repaired\n",
+				/*
+				 * The PC as an instruction index into the module,
+				 * which its .sbl file turns into a source line --
+				 * the native address of a JIT-compiled instruction
+				 * says nothing to anyone.
+				 */
+				print("vmachine: error stack %d, expected %d, after prog %d %s pc %ld; repaired\n",
 					up->nerrlab, nerr, r->pid,
 					r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?",
-					r->R.PC);
+					r->R.M != nil && r->R.M->m != nil && r->R.M->m->prog != nil ?
+						(long)(r->R.PC - r->R.M->m->prog) : -1L);
 				up->nerrlab = nerr;
 			}
 

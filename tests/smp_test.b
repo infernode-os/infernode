@@ -108,6 +108,11 @@ testVectors(t: ref T)
 	fk := le("000102030405060708090a0b0c0d0e0f");
 	fp := le("00112233445566778899aabbccddeeff");
 	t.assertseq(hex(smp->e(fk, fp)), hex(le("69c4e0d86a7b0430d8cdb78070b4c55a")), "e is AES-128 (FIPS-197 C.1)");
+	# Vol 6 Part B 1.3.2.3 sample: IRK, prand 0x708194, hash 0x0dfbaa
+	irk := le("ec0234a357c8ad05341010a60a397d9b");
+	t.assert(smp->resolves(irk, le("7081940dfbaa")), "the specification's sample private address resolves with its IRK");
+	t.assert(!smp->resolves(irk, le("7081940dfbab")), "and not with the hash off by one");
+	t.assert(!smp->resolves(irk, le("c8f3e806558b")), "and a static address never does");
 }
 
 # the responder, scripted: it answers as a Just Works peripheral with

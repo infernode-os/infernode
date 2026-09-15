@@ -598,6 +598,25 @@ if {! ~ $"v 'links 0'} {
 	raise 'fail:a link outlived the serial call: '^$"v
 }
 
+# pair <addr>: a classic peer paired for its own sake -- the link made,
+# secured (pairing on the way: this device demands SSP), the key kept,
+# the link let go.
+echo pairable on > $BT/ctl
+echo pair cc:cc:cc:cc:cc:03 > $BT/ctl
+v=`{cat $FACT/ctl | grep 'proto=btlink addr=cc:cc:cc:cc:cc:03'}
+if {~ $#v 0} {
+	raise 'fail:pair did not leave a key in factotum: '^`{cat $FACT/ctl}
+}
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:the link made for pairing was not let go: '^$"v
+}
+if {echo pair 00:11:22:33:44:55 > $BT/ctl >[2] /dev/null} {
+	raise 'fail:pairing with a device that is not there succeeded'
+}
+echo pairable off > $BT/ctl
+
 # LE: a mouse. lescan hears it; connect <addr>!hid pairs (Just Works,
 # the LTK into factotum and the keys file), finds the HID service,
 # subscribes to the boot report, and a report the device notifies is

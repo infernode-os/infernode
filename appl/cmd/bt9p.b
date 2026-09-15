@@ -176,6 +176,7 @@ Lnk: adt {
 	gatt:	ref Client;		# the ATT client on fixed channel 4
 	pairing: ref Pairing;		# an SMP pairing in progress
 	ltk:	array of byte;		# the key encryption was started with, for the record
+	pairtm:	ref Tmsg.Write;		# a "pair <addr>" waiting for this link to be secured
 };
 # a link's security, in the order it is established
 Snone, Sauthenticating, Sauthenticated, Sencrypting, Sencrypted: con iota;
@@ -918,7 +919,7 @@ event(srv: ref Styxserver, e: ref Event)
 		# a peer calls: accept, as a peripheral. The link then completes
 		# like one we asked for.
 		if(linkbyaddr(who) == nil)
-			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil) :: links;
+			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil) :: links;
 		spawn accept(who);
 	Bthci->EvAuthComplete =>
 		if(len e.params < 3)
@@ -1330,6 +1331,34 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 		}
 		pairable = hd args == "on";
 		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+		return;
+	"pair" =>
+		# a classic peer, paired for its own sake: a link made for the
+		# purpose, authenticated and encrypted -- pairing on the way if
+		# there is no key -- the key kept, and the link let go. The
+		# write returns when that is done, or fails saying why. An LE
+		# peripheral pairs at its first connect instead.
+		if(nf != 2 || bthci->parsebdaddr(hd args) == nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: pair <addr>"));
+			return;
+		}
+		if(!up){
+			srv.reply(ref Rmsg.Error(tm.tag, "controller not up"));
+			return;
+		}
+		lk := linkbyaddr(hd args);
+		if(lk != nil && lk.pairtm != nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "pairing already in progress"));
+			return;
+		}
+		if(lk == nil){
+			lk = ref Lnk(hd args, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil);
+			links = lk :: links;
+			spawn createconn(hd args);
+		}
+		lk.pairtm = tm;
+		if(lk.state == Lup)
+			secure(srv, lk);
 		return;
 	"forget" =>
 		if(nf != 2 || bthci->parsebdaddr(hd args) == nil){
@@ -2384,6 +2413,8 @@ forgetlink(lk: ref Lnk)
 
 linkwanted(lk: ref Lnk): int
 {
+	if(lk.pairtm != nil || lk.secure == Sauthenticating || lk.secure == Sencrypting)
+		return 1;
 	for(cl := convs; cl != nil; cl = tl cl)
 		if((hd cl).lnk == lk)
 			return 1;
@@ -2466,7 +2497,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 {
 	lk := linkbyaddr(cv.raddr);
 	if(lk == nil){
-		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil);
+		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil);
 		links = lk :: links;
 		if(cv.kind == Kgatt || cv.kind == Khid){
 			# an LE peer: its address type is what lescan heard, or
@@ -2595,18 +2626,28 @@ secured(srv: ref Styxserver, lk: ref Lnk, ok: int, why: string)
 		lk.rfwait = nil;
 		for(; w != nil; w = tl w)
 			closed(srv, hd w, why);
+		if(lk.pairtm != nil){
+			srv.reply(ref Rmsg.Error(lk.pairtm.tag, why));
+			lk.pairtm = nil;
+		}
 		rfidle(srv, lk);
+		idlelinks();
 		return;
 	}
 	if(lk.secure < Sencrypted){
 		secure(srv, lk);
 		return;
 	}
+	if(lk.pairtm != nil){
+		srv.reply(ref Rmsg.Write(lk.pairtm.tag, len lk.pairtm.data));
+		lk.pairtm = nil;
+	}
 	w := lk.rfwait;
 	lk.rfwait = nil;
 	for(; w != nil; w = tl w)
 		if((hd w).state == "Connecting")
 			rfconnect(srv, lk, hd w);
+	idlelinks();
 }
 
 # the multiplexer's L2CAP channel is open: bring the multiplexer up
@@ -3264,11 +3305,17 @@ linkup(srv: ref Styxserver, who: string, h, st: int)
 	lk.waiting = nil;
 	for(; w != nil; w = tl w)
 		l2connect(srv, lk, hd w);
+	if(lk.pairtm != nil)
+		secure(srv, lk);
 }
 
 linkdown(srv: ref Styxserver, lk: ref Lnk, why: string)
 {
 	forgetlink(lk);
+	if(lk.pairtm != nil){
+		srv.reply(ref Rmsg.Error(lk.pairtm.tag, why));
+		lk.pairtm = nil;
+	}
 	for(w := lk.waiting; w != nil; w = tl w)
 		closed(srv, hd w, why);
 	lk.waiting = nil;

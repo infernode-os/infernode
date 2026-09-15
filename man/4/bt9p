@@ -158,6 +158,19 @@ on
 .BR pair ).
 Pairing on a connection we made is always allowed.
 .TP
+.BI pair " addr"
+Pair with a classic peer for its own sake: a link is made to it,
+authenticated and encrypted -- pairing on the way when there is no
+key, under
+.B iocap
+and
+.B pairable
+as any pairing -- the key kept, and the link let go. The write returns
+when that is done, or fails saying why. An LE peripheral pairs at its
+first
+.B connect
+instead.
+.TP
 .BI forget " addr"
 Delete the link key for
 .IR addr ,

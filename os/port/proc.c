@@ -944,6 +944,31 @@ poperrunder(void)
 	up->nerrlab = 0;
 }
 
+/*
+ * The pop itself, with the frame check poperror() describes. The
+ * frame's sp is the caller's, which getcallerpc's argument gives: it
+ * is the address of a local in the frame that called poperror(). A
+ * Label's sp is what setlabel saw, one frame below waserror()'s
+ * caller as well, so the two agree for a matched pair and differ by
+ * at least a frame for a mismatched one.
+ */
+__attribute__((noinline)) void
+poperrchk(uintptr pc)
+{
+	Label *l;
+
+	/*
+	 * noinline is load-bearing too: inlined into its caller, &pc is
+	 * a slot in the caller's own frame, above the sp its label
+	 * recorded, and every pop is a mismatch.
+	 */
+	l = &up->errlab[up->nerrlab-1];
+	if(l->pc != 0 && (l->sp < (uintptr)&pc || l->sp - (uintptr)&pc > 4096))
+		print("poperror: label pushed at pc %#p sp %#p popped at pc %#p in %lud:%s\n",
+			l->pc, l->sp, pc, up->pid, up->text);
+	up->nerrlab--;
+}
+
 void
 error(char *err)
 {

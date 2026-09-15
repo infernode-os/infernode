@@ -204,8 +204,24 @@ Cmdbuf*		parsecmd(char*, int);
 void		pexit(char*, int);
 void		pgrpcpy(Pgrp*, Pgrp*);
 void		poperrunder(void);
+void		poperrchk(uintptr);
 int		procok(Proc*);
-#define		poperror()		(up->nerrlab > 0 ? (void)(up->nerrlab--) : poperrunder())
+/*
+ * poperror() checks that the label it pops was pushed from the frame
+ * it is popped in: the Label recorded sp at waserror(), and a function
+ * does not move its stack pointer between the two, so a difference
+ * means this poperror() is not the partner of that waserror() -- an
+ * unbalanced pair, which is the class of bug that has been killing the
+ * Dis kproc (#622). poperrsp() prints who, once per site, and pops
+ * anyway. The comparison is one load and a branch on a hot path.
+ */
+/*
+ * The empty asm after the call is load-bearing: without it clang turns a
+ * poperror() that ends a function into a tail call, poperrchk() then
+ * runs in the CALLER's frame, and every such site is reported as a
+ * mismatch. It was -- 2245 times in one boot, all of them tsleep().
+ */
+#define		poperror()		do{ if(up->nerrlab > 0) poperrchk(getcallerpc(&up)); else poperrunder(); __asm__ volatile(""); }while(0)
 int		poolread(char*, int, ulong);
 void		poolsize(Pool *, int, int);
 int		postnote(Proc *, int, char *, int);

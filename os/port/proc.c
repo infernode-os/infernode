@@ -193,11 +193,10 @@ sched(void)
 	 * naming both cores at the instant is worth infinitely more
 	 * than the wild-PC panic thirty milliseconds later.
 	 */
-	if(up->mach != nil)
+	if(up->mach != MACHP(m->machno))
 		panic("double-run: %s mach=cpu%d on cpu%d",
-			up->text, (int)((Mach*)up->mach - MACHP(0)), m->machno);
+			up->text, up->mach != nil ? (int)((Mach*)up->mach - MACHP(0)) : -1, m->machno);
 	up->state = Running;
-	up->mach = MACHP(m->machno);	/* m might be a fixed address; use MACHP */
 	m->proc = up;
 
 	/*
@@ -249,6 +248,22 @@ ready(Proc *p)
 	if(p->state == Ready)
 		panic("ready: %s already Ready (cpu%d, caller %#p)",
 			p->text, m->machno, getcallerpc(&p));
+	/*
+	 * A proc that is Running with a core's Mach on it is not
+	 * waiting for anything, and a proc that is Scheding has just
+	 * been dequeued by a core that is about to run it. Readying
+	 * either puts a live proc on the run queue a second time, and
+	 * two cores then resume the same saved context -- the shared
+	 * error stack of #622. The one legitimate ready() of a Running
+	 * proc is schedinit's, for the proc it is switching away from,
+	 * and that one has cleared mach first; a new proc is Scheding
+	 * with no mach yet. Name any other.
+	 */
+	if((p->state == Running || p->state == Scheding) && p->mach != nil)
+		print("ready: %lud:%s is %s on cpu%d, readied from cpu%d caller %#p\n",
+			p->pid, p->text, statename[p->state],
+			p->mach != nil ? (int)((Mach*)p->mach - MACHP(0)) : -1,
+			m->machno, getcallerpc(&p));
 	p->rnext = 0;
 	if(rq->tail)
 		rq->tail->rnext = p;
@@ -414,8 +429,19 @@ loop:
 	}
 	if(p->state != Ready)
 		print("runproc %s %lud %s\n", p->text, p->pid, statename[p->state]);
-	unlock(&runq[0].l);
+	/*
+	 * Claim it for this core HERE, under the run queue lock, not in
+	 * sched() after the lock is dropped. Between this dequeue and
+	 * sched() setting mach there was a window in which the proc was
+	 * off the queue, Scheding, with mach nil -- and a ready() landing
+	 * in it (one is known: see the print in ready()) put the proc
+	 * back on the queue for a second core to dequeue with mach still
+	 * nil, so that two cores resumed one saved context. With mach set
+	 * at the dequeue, the second core's runproc refuses it.
+	 */
 	p->state = Scheding;
+	p->mach = MACHP(m->machno);
+	unlock(&runq[0].l);
 	if(p->mp != MACHP(m->machno))
 		p->movetime = MACHP(0)->ticks + HZ/10;
 	p->mp = MACHP(m->machno);
@@ -904,6 +930,44 @@ errlabcheck(void)
 			"guard1 %#llux guard2 %#llux nerrlab %#ux pc %lux",
 			p->pid, p->text, p->guard1, p->guard2,
 			(uint)p->nerrlab, getcallerpc(&up));
+	/*
+	 * Is this Proc running HERE, and only here? sched() sets mach
+	 * to the core that dequeued it and schedinit clears it on the
+	 * way out; a Proc whose mach names another core while this core
+	 * is executing its code is being run twice, and its error stack
+	 * -- this very push -- is about to be shared. That is the #622
+	 * signature (counts off both ways, labels from functions that
+	 * balance). Say so with both cores named; the panic guard in
+	 * sched() only sees the case where the second core comes through
+	 * runproc.
+	 */
+	if(p->mach != nil && p->mach != MACHP(m->machno)){
+		uvlong hw;
+		Mach *om;
+		Proc *op;
+
+		/*
+		 * Read the other core's view once, before the print moves
+		 * time on: is that core executing this same Proc right now?
+		 */
+		om = p->mach;
+		op = om->proc;
+		print("waserror: other core cpu%d has proc %lud:%s (this proc %s)\n",
+			(int)(om - MACHP(0)), op != nil ? op->pid : 0UL, op != nil ? op->text : "-",
+			op == p ? "TOO" : "not");
+
+		/*
+		 * The hardware's own idea of which core this is, beside
+		 * m->machno: m is x28, and if the two disagree the register
+		 * is stale -- this code is running on one core with the
+		 * Mach of another, so `up` is another core's process.
+		 */
+		__asm__ volatile("mrs %0, mpidr_el1" : "=r"(hw));
+		print("waserror: %lud:%s runs on cpu%d (hw core %d, that core's proc %lud) but its mach is cpu%d, pc %lux\n",
+			p->pid, p->text, m->machno, (int)(hw & 0xff),
+			MACHP((int)(hw & 0xff))->proc != nil ? MACHP((int)(hw & 0xff))->proc->pid : 0UL,
+			(int)((Mach*)p->mach - MACHP(0)), getcallerpc(&up));
+	}
 	n = p->nerrlab;
 	if(n >= NERR)
 		panic("waserror: error stack overflow, nerrlab %d in %lud:%s pc %lux",

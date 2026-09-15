@@ -200,6 +200,14 @@ statusname(s: int): string
 	Sinvalidparams =>	return "invalid HCI command parameters";
 	Sremoteterm =>		return "remote user terminated connection";
 	Slocalterm =>		return "connection terminated by local host";
+	16r14 =>		return "remote device terminated connection due to low resources";
+	16r15 =>		return "remote device terminated connection due to power off";
+	16r1f =>		return "unspecified error";
+	16r22 =>		return "LMP response timeout";
+	16r28 =>		return "instant passed";
+	16r3b =>		return "unacceptable connection parameters";
+	16r3d =>		return "connection terminated due to MIC failure";
+	16r3e =>		return "connection failed to be established";
 	}
 	return sys->sprint("status 0x%2.2ux", s);
 }

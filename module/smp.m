@@ -114,6 +114,10 @@ Smp: module
 	c1:	fn(k, r, preq, pres: array of byte, iat: int, ia: array of byte, rat: int, ra: array of byte): array of byte;
 	s1:	fn(k, r1, r2: array of byte): array of byte;
 	e:	fn(k, p: array of byte): array of byte;		# AES-128, little-endian in and out
+	# does the resolvable private address (little-endian, as on the
+	# wire) belong to the holder of irk? Vol 6 Part B 1.3.2.3: the
+	# address is hash || prand and hash is ah(irk, prand)
+	resolves: fn(irk, addr: array of byte): int;
 
 	failtext: fn(reason: int): string;
 };

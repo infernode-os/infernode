@@ -177,6 +177,8 @@ Lnk: adt {
 	pairing: ref Pairing;		# an SMP pairing in progress
 	ltk:	array of byte;		# the key encryption was started with, for the record
 	pairtm:	ref Tmsg.Write;		# a "pair <addr>" waiting for this link to be secured
+	irk:	array of byte;		# the LE peer's identity resolving key, if it gave one
+	rpa:	string;			# the private address it was found advertising with
 };
 # a link's security, in the order it is established
 Snone, Sauthenticating, Sauthenticated, Sencrypting, Sencrypted: con iota;
@@ -218,6 +220,7 @@ Conv: adt {
 	# an LE conversation
 	hidchars: list of ref Characteristic;	# hid: the input reports subscribed to, value handles
 	hidwait: int;			# hid: CCCD writes still to be answered
+	hidkind: string;		# hid: "boot-mouse", "boot-keyboard" or "report", once subscribed
 };
 Kl2cap, Krfcomm, Kgatt, Khid: con iota;
 leseen: list of (string, int);	# addresses lescan has heard, with their types
@@ -919,7 +922,7 @@ event(srv: ref Styxserver, e: ref Event)
 		# a peer calls: accept, as a peripheral. The link then completes
 		# like one we asked for.
 		if(linkbyaddr(who) == nil)
-			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil) :: links;
+			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil) :: links;
 		spawn accept(who);
 	Bthci->EvAuthComplete =>
 		if(len e.params < 3)
@@ -951,8 +954,10 @@ event(srv: ref Styxserver, e: ref Event)
 	Bthci->EvDisconnComplete =>
 		(nil, h, reason) := bthci->disconncomplete(e);
 		lk := linkbyhandle(h);
-		if(lk != nil)
+		if(lk != nil){
+			eventnote(srv, sys->sprint("link %s down: %s\n", lk.addr, bthci->statusname(reason)));
 			linkdown(srv, lk, "link lost: " + bthci->statusname(reason));
+		}
 		# whatever was still in the controller for that handle is
 		# gone with it, and so is the room it took (Vol 4 Part E 7.7.5)
 		credit(h, -1);
@@ -1044,9 +1049,12 @@ event(srv: ref Styxserver, e: ref Event)
 			return;
 		s := findsub(Qlescan);
 		if(s == nil || s.done){
-			# remember the address types all the same: a connect needs them
-			for(f := bthci->leadvreports(e); f != nil; f = tl f)
+			# remember the address types all the same: a connect needs
+			# them; and a link waiting on its IRK may be hearing its peer
+			for(f := bthci->leadvreports(e); f != nil; f = tl f){
 				noteletype((hd f).addr, (hd f).letype);
+				leresolve(srv, (hd f).addr, (hd f).letype);
+			}
 			return;
 		}
 		# The same rule as scan: a device's line waits for its name.
@@ -1057,6 +1065,7 @@ event(srv: ref Styxserver, e: ref Event)
 		for(f := bthci->leadvreports(e); f != nil; f = tl f){
 			d := hd f;
 			noteletype(d.addr, d.letype);
+			leresolve(srv, d.addr, d.letype);
 			if(knows(s, d.addr))
 				continue;
 			if(d.name == nil){
@@ -1352,7 +1361,7 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 			return;
 		}
 		if(lk == nil){
-			lk = ref Lnk(hd args, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil);
+			lk = ref Lnk(hd args, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil);
 			links = lk :: links;
 			spawn createconn(hd args);
 		}
@@ -1879,7 +1888,7 @@ cancelinquiry()
 
 newconv(): ref Conv
 {
-	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0);
+	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0, nil);
 	convs = cv :: convs;
 	id := cv.id;
 	nm := sys->sprint("%d", id);
@@ -2068,7 +2077,7 @@ convread(srv: ref Styxserver, tm: ref Tmsg.Read, c: ref Fid)
 			cv.rq = tl cv.rq;
 			tm.offset = big 0;
 			srv.reply(styxservers->readbytes(tm, sdu));
-		}else if(cv.state != "Connected" && cv.state != "Connecting")
+		}else if(!isconn(cv) && cv.state != "Connecting")
 			srv.reply(ref Rmsg.Read(tm.tag, nil));	# EOF: hung up
 		else if(cv.rpending != nil)
 			srv.reply(ref Rmsg.Error(tm.tag, "read already pending"));
@@ -2091,7 +2100,7 @@ convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
 		convctl(srv, tm, cv);
 	Qcdata =>
 		if(cv.kind == Kgatt){
-			if(cv.state != "Connected" || cv.lnk == nil || cv.lnk.l2 == nil){
+			if(!isconn(cv) || cv.lnk == nil || cv.lnk.l2 == nil){
 				srv.reply(ref Rmsg.Error(tm.tag, "not connected"));
 				return;
 			}
@@ -2105,7 +2114,7 @@ convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
 			return;
 		}
 		if(cv.kind == Krfcomm){
-			if(cv.state != "Connected" || cv.lnk == nil || cv.lnk.rf == nil || cv.dlc == nil){
+			if(!isconn(cv) || cv.lnk == nil || cv.lnk.rf == nil || cv.dlc == nil){
 				srv.reply(ref Rmsg.Error(tm.tag, "not connected"));
 				return;
 			}
@@ -2114,7 +2123,7 @@ convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 			return;
 		}
-		if(cv.state != "Connected" || cv.lnk == nil || cv.ch == nil){
+		if(!isconn(cv) || cv.lnk == nil || cv.ch == nil){
 			srv.reply(ref Rmsg.Error(tm.tag, "not connected"));
 			return;
 		}
@@ -2357,7 +2366,7 @@ release(srv: ref Styxserver, cv: ref Conv)
 		srv.reply(ref Rmsg.Error(cv.lpending.tag, "listener closed"));
 		cv.lpending = nil;
 	}
-	if(cv.state == "Connected" || cv.state == "Connecting")
+	if(isconn(cv) || cv.state == "Connecting")
 		hangup(srv, cv, "closed");
 	if(cv.listening){
 		cv.listening = 0;
@@ -2425,7 +2434,7 @@ hangup(srv: ref Styxserver, cv: ref Conv, why: string)
 {
 	if(cv.kind == Krfcomm && cv.lnk != nil){
 		lk := cv.lnk;
-		if(lk.rf != nil && cv.dlc != nil && (cv.state == "Connected" || cv.state == "Connecting"))
+		if(lk.rf != nil && cv.dlc != nil && (isconn(cv) || cv.state == "Connecting"))
 			rfevents(srv, lk, lk.rf.disconnect(cv.dlc));
 		lk.rfwait = without(lk.rfwait, cv);
 		if(cv.sdpch != nil && lk.l2 != nil){
@@ -2433,13 +2442,33 @@ hangup(srv: ref Styxserver, cv: ref Conv, why: string)
 			cv.sdpch = nil;
 		}
 	}
-	if(cv.kind == Kl2cap && cv.lnk != nil && cv.ch != nil && cv.lnk.l2 != nil && cv.state == "Connected")
+	if(cv.kind == Kl2cap && cv.lnk != nil && cv.ch != nil && cv.lnk.l2 != nil && isconn(cv))
 		l2events(srv, cv.lnk, cv.lnk.l2.disconnect(cv.ch));
 	if(cv.state == "Connecting" && cv.lnk != nil)
 		cv.lnk.waiting = without(cv.lnk.waiting, cv);
+	if((cv.kind == Kgatt || cv.kind == Khid) && cv.lnk != nil){
+		lk := cv.lnk;
+		lk.rfwait = without(lk.rfwait, cv);
+		if(lk.state == Lconnecting && lk.waiting == nil){
+			# nobody else wants the link: stop looking for the peer
+			if(lk.rpa == nil && lk.irk != nil){
+				if(findsub(Qlescan) == nil)
+					spawn lescanon(0);
+				forgetlink(lk);
+			}else
+				spawn fire(Bthci->LeCreateConnCancel, nil);	# its Connection Complete ends the link
+		}
+	}
 	closed(srv, cv, why);
 	if(cv.kind == Krfcomm && cv.lnk != nil)
 		rfidle(srv, cv.lnk);
+}
+
+# "Connected", or "Connected <what>" for a HID conversation saying
+# which reports it gets
+isconn(cv: ref Conv): int
+{
+	return len cv.state >= 9 && cv.state[0:9] == "Connected";
 }
 
 # the conversation is over, one way or another
@@ -2497,7 +2526,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 {
 	lk := linkbyaddr(cv.raddr);
 	if(lk == nil){
-		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil);
+		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil);
 		links = lk :: links;
 		if(cv.kind == Kgatt || cv.kind == Khid){
 			# an LE peer: its address type is what lescan heard, or
@@ -2506,7 +2535,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 			# cannot be told from public by looking, so lescan first
 			lk.le = 1;
 			lk.peertype = letype(cv.raddr);
-			spawn lecreateconn(cv.raddr, lk.peertype);
+			lestartlink(srv, lk);
 		}else
 			spawn createconn(cv.raddr);
 	}
@@ -2859,6 +2888,71 @@ noteletype(a: string, t: int)
 	leseen = (a, t) :: leseen;
 }
 
+# A bonded peripheral that gave us an IRK advertises under private
+# addresses it changes every quarter hour, and LE_Create_Connection
+# to its identity address then never finds it. So: scan, resolve
+# each random address heard against the IRK (Vol 6 Part B 1.3.2.3,
+# ah()), and connect to the one that is the peer. Without an IRK the
+# identity address is the address.
+lestartlink(srv: ref Styxserver, lk: ref Lnk)
+{
+	k := secret(sys->sprint("proto=btltk addr=%q", lk.addr));
+	if(k != nil){
+		(nf, f) := sys->tokenize(k, " ");
+		if(nf >= 4 && hd tl tl tl f != "-")
+			lk.irk = parsehexbytes(hd tl tl tl f, 16);
+	}
+	if(lk.irk == nil){
+		spawn lecreateconn(lk.addr, lk.peertype);
+		return;
+	}
+	eventnote(srv, sys->sprint("resolving %s by its IRK\n", lk.addr));
+	spawn lescanon(1);
+}
+
+# passive scanning on or off, for resolution; an lescan in progress
+# has it on already and turns it off itself
+lescanon(on: int)
+{
+	if(on){
+		p := array[7] of byte;
+		p[0] = byte 0;			# passive
+		bthci->put2(p, 1, 16r60);
+		bthci->put2(p, 3, 16r30);
+		p[5] = byte 0;
+		p[6] = byte 0;
+		cmd(Bthci->LeSetScanParameters, p);
+	}
+	cmd(Bthci->LeSetScanEnable, array[] of { byte on, byte 0 });
+}
+
+
+# an advertisement heard while some link is being resolved
+leresolve(srv: ref Styxserver, who: string, atype: int)
+{
+	for(ll := links; ll != nil; ll = tl ll){
+		lk := hd ll;
+		if(!lk.le || lk.irk == nil || lk.state != Lconnecting || lk.rpa != nil)
+			continue;
+		# a peer with an IRK may still advertise under its own address
+		if(who == lk.addr){
+			lk.rpa = who;
+			if(findsub(Qlescan) == nil)
+				spawn lescanon(0);
+			spawn lecreateconn(who, lk.peertype);
+			return;
+		}
+		if(atype == 1 && smp->resolves(lk.irk, bthci->parsebdaddr(who))){
+			lk.rpa = who;
+			eventnote(srv, sys->sprint("%s is %s\n", lk.addr, who));
+			if(findsub(Qlescan) == nil)
+				spawn lescanon(0);
+			spawn lecreateconn(who, 1);
+			return;
+		}
+	}
+}
+
 # LE_Create_Connection: scan for the peer and connect, 7.8.12
 lecreateconn(who: string, ptype: int)
 {
@@ -2897,6 +2991,10 @@ leconncomplete(srv: ref Styxserver, p: array of byte)
 	h := bthci->get2(p, 2) & 16rfff;
 	who := bthci->bdaddr(p, 6);
 	lk := linkbyaddr(who);
+	if(lk == nil)
+		for(ll := links; ll != nil && lk == nil; ll = tl ll)
+			if((hd ll).rpa == who)
+				lk = hd ll;
 	if(lk == nil || !lk.le)
 		return;
 	if(st != Bthci->Sok){
@@ -2962,6 +3060,18 @@ randombytes(n: int): array of byte
 			b[i] = byte (t >> (8 * (i % 4)));
 	}
 	return b;
+}
+
+# LE_Connection_Update, 7.8.18: what the peer asked for, as it asked
+leconnupdate(h, min, max, latency, timeout: int)
+{
+	p := array[14] of { * => byte 0 };
+	bthci->put2(p, 0, h);
+	bthci->put2(p, 2, min);
+	bthci->put2(p, 4, max);
+	bthci->put2(p, 6, latency);
+	bthci->put2(p, 8, timeout);
+	cmd(Bthci->LeConnectionUpdate, p);
 }
 
 # LE_Start_Encryption, 7.8.24: handle, random(8), EDIV(2), LTK(16)
@@ -3084,7 +3194,7 @@ attdata(srv: ref Styxserver, lk: ref Lnk, pdu: array of byte)
 	# for a hid conversation on the same link
 	for(cl := convs; cl != nil; cl = tl cl){
 		cv := hd cl;
-		if(cv.lnk == lk && cv.kind == Kgatt && cv.state == "Connected")
+		if(cv.lnk == lk && cv.kind == Kgatt && isconn(cv))
 			deliver(srv, cv, pdu);
 	}
 	if(lk.gatt != nil)
@@ -3129,7 +3239,7 @@ attevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Att->Ev)
 		Written =>
 			cv := hidconv(lk);
 			if(cv != nil && cv.state == "Connecting" && --cv.hidwait <= 0){
-				cv.state = "Connected";
+				cv.state = "Connected " + cv.hidkind;
 				auditlog("connect", sys->sprint("peer=%s port=hid outgoing", cv.raddr));
 				if(cv.cpending != nil){
 					srv.reply(ref Rmsg.Write(cv.cpending.tag, len cv.cpending.data));
@@ -3166,6 +3276,8 @@ hidfound(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, chars: list of ref Char
 	boot, reports: list of ref Characteristic;
 	for(l := chars; l != nil; l = tl l){
 		c := hd l;
+		eventnote(srv, sys->sprint("hid %s char 0x%4.4x value 0x%4.4x props 0x%2.2x cccd 0x%4.4x reportref 0x%4.4x\n",
+			lk.addr, c.uuid, c.value, c.props, c.cccd(), c.reportref()));
 		case c.uuid {
 		Att->Uprotocolmode =>	pm = c;
 		Att->Ubootmousein or Att->Ubootkbdin =>
@@ -3177,8 +3289,14 @@ hidfound(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, chars: list of ref Char
 		}
 	}
 	inputs := boot;
-	if(inputs != nil && pm != nil)
-		attevents(srv, lk, lk.gatt.writecmd(pm.value, array[] of { byte 0 }));	# boot protocol mode
+	cv.hidkind = "report";
+	if(inputs != nil){
+		cv.hidkind = "boot-mouse";
+		if((hd inputs).uuid == Att->Ubootkbdin)
+			cv.hidkind = "boot-keyboard";
+		if(pm != nil)
+			attevents(srv, lk, lk.gatt.writecmd(pm.value, array[] of { byte 0 }));	# boot protocol mode
+	}
 	if(inputs == nil)
 		inputs = reports;
 	if(inputs == nil){
@@ -3198,7 +3316,10 @@ hidfound(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, chars: list of ref Char
 storeltk(who: string, ptype: int, k: ref Smp->Keys)
 {
 	forgetltk(who);
-	line := sys->sprint("key proto=btltk addr=%q type=%d ediv=%d rand=%s !ltk=%s", who, ptype, k.ediv, hexbytes(k.rand), bthci->keytext(k.ltk));
+	line := sys->sprint("key proto=btltk addr=%q type=%d ediv=%d rand=%s", who, ptype, k.ediv, hexbytes(k.rand));
+	if(k.irk != nil)
+		line += " irk=" + hexbytes(k.irk);
+	line += " !ltk=" + bthci->keytext(k.ltk);
 	fd := sys->open(factdir + "/ctl", Sys->OWRITE);
 	if(fd == nil || sys->fprint(fd, "%s", line) < 0){
 		sys->fprint(stderr, "bt9p: factotum refused the LTK for %s: %r\n", who);
@@ -3414,6 +3535,9 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				if(held)
 					release(srv, cv);	# a call that died before any listen saw it
 			}
+		Params =>
+			eventnote(srv, sys->sprint("link %s asks interval %d-%d latency %d timeout %d\n", lk.addr, e.min, e.max, e.latency, e.timeout));
+			spawn leconnupdate(lk.handle, e.min, e.max, e.latency, e.timeout);
 		Fixed =>
 			case e.cid {
 			L2cap->Cidsmp =>
@@ -3666,6 +3790,17 @@ mayPair(who: string): int
 }
 
 # a line for whoever holds the pair file open
+# a line on the event stream that is not an HCI event: what the host
+# side did, for the same readers -- the transcript is of both
+eventnote(srv: ref Styxserver, ln: string)
+{
+	if(debug)
+		sys->fprint(stderr, "bt9p: %s", ln);
+	for(l := subs; l != nil; l = tl l)
+		if((hd l).path == Qevent)
+			post(srv, hd l, ln);
+}
+
 pairnote(srv: ref Styxserver, ln: string)
 {
 	if(debug)
@@ -3872,9 +4007,15 @@ forget(who: string): string
 	fd := sys->open(factdir + "/ctl", Sys->OWRITE);
 	if(fd == nil)
 		return sys->sprint("%s/ctl: %r", factdir);
-	if(sys->fprint(fd, "delkey proto=btlink addr=%q", who) < 0)
-		return sys->sprint("factotum: %r");
-	sys->fprint(fd, "delkey proto=btltk addr=%q", who);
+	# a peer may hold either kind of key or both; factotum says "no
+	# key" for the kind it has not got, which is not a failure here
+	n := 0;
+	if(sys->fprint(fd, "delkey proto=btlink addr=%q", who) >= 0)
+		n++;
+	if(sys->fprint(fd, "delkey proto=btltk addr=%q", who) >= 0)
+		n++;
+	if(n == 0)
+		return "no key for " + who;
 	err := dropkeylines("proto=btlink", who);
 	if(err == nil)
 		err = dropkeylines("proto=btltk", who);

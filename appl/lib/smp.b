@@ -74,6 +74,16 @@ s1(k, r1, r2: array of byte): array of byte
 	return e(k, r);
 }
 
+resolves(irk, a: array of byte): int
+{
+	if(len irk != 16 || len a != 6 || (int a[5] & 16rc0) != 16r40)
+		return 0;
+	r := array[16] of { * => byte 0 };
+	r[0:] = a[3:6];
+	h := e(irk, r);
+	return h[0] == a[0] && h[1] == a[1] && h[2] == a[2];
+}
+
 failtext(reason: int): string
 {
 	case reason {

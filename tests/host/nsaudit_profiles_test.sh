@@ -67,6 +67,21 @@ for profile in "${profiles[@]}"; do
   esac
 
   case "$profile" in
+    profile-messaging)
+      echo "$out" | grep -q 'authority=proposes_message' ||
+        fail_profile "$profile" "messaging profile lacks proposal authority" "$out"
+      echo "$out" | grep -q 'writes_fs=/mnt/msg/draft.*reversibility=proposal' ||
+        fail_profile "$profile" "message draft is not classified as a proposal" "$out"
+      echo "$out" | grep -q 'authority=writes_fs_durable' &&
+        fail_profile "$profile" "message proposal misclassified as durable mutation" "$out"
+      ;;
+    *)
+      echo "$out" | grep -q 'authority=proposes_message' &&
+        fail_profile "$profile" "non-messaging profile has proposal authority" "$out"
+      ;;
+  esac
+
+  case "$profile" in
     profile-payments)
       echo "$out" | grep -q 'authority=spends' ||
         fail_profile "$profile" "payments profile lacks spend authority" "$out"

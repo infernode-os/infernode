@@ -463,11 +463,15 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 		inv.sources = ("writes_fs:/tmp/veltro/scratch", "always-on activity cowfs") :: inv.sources;
 	}
 
-	# writes_fs_durable = writes_fs entries that are not activity workspace
-	# and are not covered by the activity's cowfs-staged writable grants.
+	# writes_fs_durable = writes_fs entries that are not activity workspace,
+	# transactional proposal endpoints, or covered by the activity's
+	# cowfs-staged writable grants. /mnt/msg/draft queues an immutable proposal;
+	# only the separately hidden trusted approval endpoint can send it.
 	for(wl := inv.writes_fs; wl != nil; wl = tl wl) {
 		p := hd wl;
 		if(pathwithin("/tmp/veltro", p))
+			continue;
+		if(messageProposalGrant(p))
 			continue;
 		if(caps.actid >= 0 && contains(caps.writepaths, p))
 			continue;
@@ -537,6 +541,12 @@ buildInventory(caps: ref Caps, tools: list of ref ToolInfo): ref Inventory
 			if(!contains(inv.auths, "direct_mail_send"))
 				inv.auths = "direct_mail_send" :: inv.auths;
 			inv.sources = ("direct_mail_send", "via path " + p) :: inv.sources;
+		}
+		if(messageProposalGrant(p) && contains(caps.writepaths, p) &&
+		   contains(inv.auths, "writes_fs")) {
+			if(!contains(inv.auths, "proposes_message"))
+				inv.auths = "proposes_message" :: inv.auths;
+			inv.sources = ("proposes_message", "via exact writable " + p) :: inv.sources;
 		}
 	}
 
@@ -694,6 +704,13 @@ directMailSendGrant(p: string): int
 			return 1;
 	}
 	return 0;
+}
+
+messageProposalGrant(p: string): int
+{
+	# This exception is deliberately exact. The parent tree also contains
+	# trusted approval and control endpoints and is not proposal-only.
+	return p == "/mnt/msg/draft";
 }
 
 mailAccountSendAncestor(p: string): int
@@ -908,6 +925,8 @@ runReport(inv: ref Inventory, rules: list of ref Rule)
 			tag := "";
 			if(pathwithin("/tmp/veltro", p))
 				tag = " [ephemeral]";
+			else if(messageProposalGrant(p))
+				tag = " [proposal; trusted approval required]";
 			else if(inv.caps.actid >= 0 && pathwithin("/n/local", p))
 				tag = sys->sprint(" [cowfs actid=%d]", inv.caps.actid);
 			else
@@ -964,6 +983,8 @@ runReach(inv: ref Inventory, path: string)
 		tag := "";
 		if(pathwithin("/tmp/veltro", writ))
 			tag = " (ephemeral)";
+		else if(messageProposalGrant(writ))
+			tag = " (immutable proposal; trusted approval required)";
 		else if(inv.caps.actid >= 0 && pathwithin("/n/local", writ))
 			tag = sys->sprint(" (cowfs actid=%d, reversible)", inv.caps.actid);
 		else
@@ -1099,6 +1120,8 @@ runReportMachine(stdout: ref Sys->FD, inv: ref Inventory, rules: list of ref Rul
 		tag := "durable";
 		if(pathwithin("/tmp/veltro", p))
 			tag = "ephemeral";
+		else if(messageProposalGrant(p))
+			tag = "proposal";
 		else if(c.actid >= 0 && pathwithin("/n/local", p))
 			tag = "cowfs";
 		sys->fprint(stdout, "writes_fs=%s\treversibility=%s\n",
@@ -1136,6 +1159,8 @@ runReachMachine(stdout: ref Sys->FD, inv: ref Inventory, path, reach, writ: stri
 		tag := "durable";
 		if(pathwithin("/tmp/veltro", writ))
 			tag = "ephemeral";
+		else if(messageProposalGrant(writ))
+			tag = "proposal";
 		else if(inv.caps.actid >= 0 && pathwithin("/n/local", writ))
 			tag = "cowfs";
 		sys->fprint(stdout, "writes_fs=yes\tvia=%s\treversibility=%s\n",

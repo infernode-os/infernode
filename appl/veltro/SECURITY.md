@@ -667,6 +667,7 @@ and enumerable. Adding a new axis is a deliberate act, not a derivation:
 | Secrets | `reads_secrets_factotum` | `/mnt/factotum` in reads_fs |
 | Secrets | `reads_env` | `NEWENV` unset |
 | Economic | `spends` | tool manifest (wallet, pay) |
+| Comms | `proposes_message` | `writes_fs` and exact `/mnt/msg/draft` grant |
 | Comms | `sends_llm` | tool manifest, `caps.llmconfig` |
 | Comms | `sends_ui` | `caps.xenith` ∨ `/mnt/ui` in writes_fs |
 | Comms | `receives_input` | `/dev/cons` in reads_fs |
@@ -717,8 +718,11 @@ Current fixtures under `tests/nsaudit-fixtures/`:
   is not a path grant: `nsconstruct` derives its narrowed visibility from the
   granted UI tools, preventing generic filesystem and shell tools from reusing
   raw UI controller authority.
-- `profile-messaging` — base profile plus the message read/proposal surface
-  (`/mnt/msg`, `/mnt/msg/draft`). Trusted message controls remain excluded.
+- `profile-messaging` — base profile plus the `write` tool and exact message
+  read/proposal surface (`/mnt/msg`, `/mnt/msg/draft`). A draft write queues an
+  immutable proposal; it does not send or approve it. Trusted message controls
+  remain excluded, and the identity of the trusted approver is a deployment
+  property rather than something the draft capability can attest.
 - `profile-payments` — base profile plus wallet proposal authority
   (`/n/wallet`) and a declared `walletbudget`. The declaration is exactly a
   positive uint256 integer in base units followed by `ETH`, `USDC`, or `USD`
@@ -772,6 +776,7 @@ The profile invariant test currently fails on:
 - missing `NODEVS` / `attaches_device`;
 - explicit trusted control-path grants;
 - factotum secret visibility;
+- message proposal authority outside the messaging profile;
 - UI authority outside the GUI profile;
 - spend authority outside the payments profile;
 - unbounded spend in the payments profile.

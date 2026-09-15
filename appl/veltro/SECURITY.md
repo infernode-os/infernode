@@ -78,7 +78,8 @@ protected by namespace narrowing alone, so it was removed rather than hidden
 grant). wallet9p constructs everything it signs
 (transactions from `pay`, EIP-712 digests from `authorize`) and enforces budget
 and approval policy on every execution path. Payment approval and wallet
-configuration remain trusted-controller actions outside the model namespace.
+configuration remain trusted-controller actions outside the model namespace;
+approval cannot be disabled for an agent-visible account.
 
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates
@@ -666,7 +667,8 @@ and enumerable. Adding a new axis is a deliberate act, not a derivation:
 | Kernel | `attaches_device` | `role=toplevel` ∧ `nodevs=unset` |
 | Secrets | `reads_secrets_factotum` | `/mnt/factotum` in reads_fs |
 | Secrets | `reads_env` | `NEWENV` unset |
-| Economic | `spends` | tool manifest (wallet, pay) |
+| Economic | `proposes_payment` | tool manifest (wallet, payfetch) |
+| Economic | `spends` | tool manifest for a distinct direct-spend capability |
 | Comms | `proposes_message` | `writes_fs` and exact `/mnt/msg/draft` grant |
 | Comms | `sends_llm` | tool manifest, `caps.llmconfig` |
 | Comms | `sends_ui` | `caps.xenith` ∨ `/mnt/ui` in writes_fs |
@@ -691,7 +693,7 @@ under `tests/nsaudit-rules/`. New rules land as (file, test) pairs.
 | `UNCONSTRAINED_SHELL` | `exec` in tools ∧ `shellcmds` empty | high |
 | `SPAWN_INHERITANCE` | `spawn` in tools ∧ `writes_fs_durable` | medium |
 | `DURABLE_HOST_MUTATION` | `writes_fs_durable` non-empty | medium |
-| `UNBOUNDED_SPEND` | `spends` without per-call gating metadata | high |
+| `UNBOUNDED_SPEND` | `spends` without capability-bound enforcement attestation | high |
 | `LLM_AS_EGRESS_FOR_SECRETS` | `sends_llm` ∧ reads_fs contains secrets path | high |
 | `NET_EGRESS_IMPLICIT` | `dials_net` without matching `mcproviders` entry | medium |
 | `SUBAGENT_MISSING_NODEVS` | `role=child` ∧ `nodevs=unset` | high |
@@ -724,11 +726,10 @@ Current fixtures under `tests/nsaudit-fixtures/`:
   remain excluded, and the identity of the trusted approver is a deployment
   property rather than something the draft capability can attest.
 - `profile-payments` — base profile plus wallet proposal authority
-  (`/n/wallet`) and a declared `walletbudget`. The declaration is exactly a
-  positive uint256 integer in base units followed by `ETH`, `USDC`, or `USD`
-  (for example, `1000000 USDC`). Missing, zero, negative, overflowing, or
-  malformed declarations fail closed as unbounded spend. Trusted wallet
-  controls remain excluded.
+  (`/n/wallet`). Agent-visible `pay` and `authorize` files can only queue
+  proposals; approval cannot be disabled, and trusted wallet controls remain
+  excluded. A future direct-spend capability would be a distinct authority and
+  would require enforcement metadata for that exact agent view.
 
 The important design rule is additive composition. Start with a small base
 namespace, then overlay only the capability layer required for the job:
@@ -778,8 +779,8 @@ The profile invariant test currently fails on:
 - factotum secret visibility;
 - message proposal authority outside the messaging profile;
 - UI authority outside the GUI profile;
-- spend authority outside the payments profile;
-- unbounded spend in the payments profile.
+- payment proposal authority outside the payments profile;
+- direct spend authority in the proposal-only payments profile.
 
 This is intentionally narrower than a full snapshot gate. It lets ordinary
 profile details churn while making the non-negotiable security properties

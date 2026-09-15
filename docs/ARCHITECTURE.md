@@ -170,10 +170,10 @@ Cryptocurrency wallet exposed as a 9P file server at `/n/wallet/`.
     ├── address      r    public address (EIP-55 checksummed)
     ├── balance      r    live balance from blockchain RPC
     ├── chain        rw   chain name
-    ├── pay          rw   write: "amount recipient" → read: txhash or pending:id
-    ├── authorize    rw   write: structured x402/EIP-3009 request → read: signature
+    ├── pay          rw   write: "amount recipient" → read: pending:id
+    ├── authorize    rw   write: structured x402/EIP-3009 request → read: pending:id
     ├── ctl          rw   "budget maxpertx maxpersess currency",
-    │                     "gasbudget maxpertx maxpersess", "requireapproval"
+    │                     "gasbudget maxpertx maxpersess", "requireapproval on"
     └── history      r    recent transactions
 ```
 
@@ -182,8 +182,8 @@ Key design properties:
   never in wallet9p's memory long-term. Keys are fetched per operation and zeroed.
 - **Secstore persistence** — new accounts trigger factotum sync to secstore (async).
   Keys survive emu restart.
-- **Budget + approval enforcement** — server-side; every execution path checks the
-  account budget, and payments queue for trusted approval by default. There is no
+- **Budget + mandatory approval enforcement** — server-side; every execution path checks the
+  account budget, and payments always queue for trusted approval. There is no
   raw signing file: agents submit structured `pay`/`authorize` requests that
   wallet9p constructs, policy-checks, and signs itself.
 - **Namespace-gated** — agents need `"/n/wallet"` in `caps.paths` to access.

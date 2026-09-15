@@ -1068,10 +1068,11 @@ a few hundred bytes.
 The one `config.txt`. `init_uart_clock` is pinned because serialboot
 divides for 115200 assuming 48MHz and the firmware, not the loader,
 decides what that reference is; `enable_uart=1` because the console is
-on the mini-UART now, whose divisor comes off the core clock, and on a
-Pi 3 that line is what pins `core_freq` to 250MHz so the rate holds
-(the kernel asks the mailbox for the rate and prints it in its banner
-either way). `dtoverlay=disable-bt` is gone: it told the firmware to
+on the mini-UART now, whose divisor comes off the core clock, and that
+line is what pins `core_freq` so the rate holds -- at 400MHz on this
+board's firmware, not the 250 the Pi documentation gives for a Pi 3;
+the kernel asks the mailbox for the rate and prints it in its banner,
+which is how that was learned. `dtoverlay=disable-bt` is gone: it told the firmware to
 route the PL011 to the header and leave the radio's Bluetooth side
 unpowered, and the PL011 now belongs to the radio (`docs/BLUETOOTH.md`).
 serialboot does not depend on the overlay -- it sets GPIO 14/15 to ALT0
@@ -2329,16 +2330,112 @@ on first open and disables on last close, and a receiver disabled
 between two commands drops the peer's echo -- which is not a bug but
 how a program that owns a port has to hold it.
 
-**What QEMU cannot show.** Whether the board's core clock reads 250MHz
-(`enable_uart=1` on the card, recipe above) and the console comes up
-readable on the first try. Whether GPIO 30-33 on ALT3 reach the radio.
-Whether the FIFO-clear in `enable()` -- which waits for the transmitter
-to drain first, since `#t`'s reset runs it a second time mid-boot-log
--- ever eats a character. Whether the PL011's RT interrupt fires on
-real silicon at the 1/8 trigger. Whether `probeuartin` still sees a
-typed byte on the mini-UART. All of that is the first board session,
-and it should be done with the network console token on the card,
-because a console that comes up garbled otherwise leaves no way in.
+**What the board showed (2026-09-13/14, two sessions).** The console
+came up clean on the mini-UART at 115200 on the first boot, read by a
+passive serial capture with no garbage. The core clock the mailbox
+reports with `enable_uart=1` is **400MHz**, not the 250 the recipe
+above predicts for a Pi 3 -- on this firmware `enable_uart=1` pins the
+core clock at its *maximum* rather than its minimum, and it holds
+under load either way. The driver asked rather than assumed, so the
+divisor was right without anyone noticing, which is the argument for
+asking. `#t` binds, `/dev/eia0` opens, GPIO 30-33 go to ALT3 on first
+open (not at boot: the pins are the port's while it is open and
+inputs otherwise, so a boot-time listing does not show them), and the
+PL011's receive path works on silicon: `eia0status`'s third and fourth
+lines count interrupts, bytes in and out, bytes staged into the queue
+and bytes handed to readers, and they agree.
+
+Two things looked like hardware gaps at first and were not:
+
+- **The controller does not transmit until its CTS is asserted.** With
+  `m0`, `eia0status` reads `cts(0)`, the HCI Reset goes out and nothing
+  comes back; with `m1` it reads `cts(1)` and the Command Complete
+  arrives at once. hciattach sets CRTSCTS for bcm43xx for the same
+  reason. `bt9p` now writes `m1` to the ctl file beside any serial
+  transport it opens, so the runbook has no manual step for it.
+- **A `bt9p` started from the network console outlives the session**
+  -- every process does, that is what the forked namespace means --
+  and keeps the port open and *reading*. The next session's `bt9p`
+  opens the same port, sends its Reset, and the reply is read by the
+  first one: `eia0status` shows `rx` and `read` advancing by exactly
+  the seven bytes of a Command Complete while the new instance times
+  out. It presents as "the second open never works". `kill Bt9p
+  Bthci` first; `ps` lists the survivors by module name.
+
+One firmware fact that was a gap, now closed: **the mailbox's reply word
+can trail its mailbox reply.** `SET_GPIO_STATE` for an expander line
+came back with the buffer's code word still 0 while the line itself had
+changed, so `#G/gpio/128/level` said *firmware refused* and lied.
+`mboxcall` now waits for a non-zero word, paced at 10us between looks
+because a tight loop of cache operations on the line was observed never
+to see it; it lands inside a millisecond. Twenty-two of a boot's calls
+were late that way before anyone looked. QEMU's model writes the buffer
+before it answers, so nothing of this was visible there.
+
+**First light, as it actually runs** (network console; one session,
+because the mount dies with it):
+
+    ; bind -a '#t' /dev
+    ; bind /tmp /mnt
+    ; bt9p -t /dev/eia0
+    ; echo 'firmware /n/dos/firmware/BCM4345C0.hcd' > /net/bt/ctl
+    ; echo up > /net/bt/ctl
+    ; cat /net/bt/status
+    up 1
+    addr 43:45:c0:00:1f:ac
+    name BCM43455 37.4MHz Raspberry Pi 3+-0190
+    hci 5.0 lmp 5.0 manufacturer 305 (Cypress)
+    ...
+    firmware /n/dos/firmware/BCM4345C0.hcd (uploaded 323 records)
+
+The card also needs `dis/auth/proto/btlink.dis` and `btpin.dis` beside
+`wpapsk.dis` -- factotum loads a protocol from `/dis/auth/proto/` by
+name, and without them a link key can be stored but never found, so
+pairing works and reconnection re-pairs every time, silently.
+
+**At boot.** `osinit` starts `bt9p` when the card has `/n/dos/bt`, a
+file of `ctl` lines written in order once the tree is served:
+
+    firmware /n/dos/firmware/BCM4345C0.hcd
+    up
+    bdaddr b8:27:eb:ca:4c:8e
+    name infernode
+    class 0x000104
+    pairable on
+    discoverable on
+
+No file, no Bluetooth. The mount is made before the shell starts, so
+the console, the network console and the desktop all see `/net/bt`;
+the firmware and radio follow in a thread the shell does not wait for,
+and the console prints `init: bt: <addr>` when they are done. factotum
+is the WiFi join's, through `#sfactotum` at `/tmp/factotum`, or one
+started for the purpose when there is no WiFi. From then on Inferno's
+own `listen(1)` and `dial(2)` are the interface:
+
+    ; listen -A 'bt!*!spp' sh -c 'echo hello from infernode; cat' &
+
+and a Linux RFCOMM client on channel 1 gets the greeting, over a link
+secured with the key stored at pairing. (Whether a shell should ever
+be behind that `listen` is the card's decision, not this program's:
+anyone who can pair can connect.) Started by hand from a
+network-console session instead, `bt9p` outlives the session while its
+mount does not, so nothing can reach it and the next one fights it for
+the port; from the serial console it works, in the boot namespace.
+
+Before the `.hcd` the ROM answers as `BCM4345C0`, HCI 4.1, address
+`aa:aa:aa:aa:aa:aa`; after it, the name and version above and the
+address `43:45:c0:00:1f:ac`, which is the *patch's* default, not the
+board's -- Linux writes one derived from the board serial with a vendor
+command, and so will we (`bdaddr` on `ctl`, not yet written). Name the
+firmware before `up`: `up` is what uploads it. `BT_ON` (`#G/gpio/128`)
+is high at boot with `disable-bt` gone; `echo 0`, `echo 1` power-cycles
+the radio and the ROM answers afterwards. With the development host's
+own controller behind `tools/hci-h4-bridge.py` and a hosted `bt9p` on
+it: the board's `scan` found the host at -33dBm with its name; the host
+dialled `bt!<board>!4099` through the kernel's `dial(2)`, the board's
+`listen` accepted, and *hello-from-hephaestus* / *pong from pi* crossed
+the air. Nothing above L2CAP has been tried on silicon, and no third
+party's device has been paired.
 
 ## Next
 

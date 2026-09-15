@@ -8,6 +8,7 @@ TARG=\
 	wpapsk.dis\
 	btpin.dis\
 	btlink.dis\
+	btltk.dis\
 
 SYSMODULES=\
 	factotum.m\

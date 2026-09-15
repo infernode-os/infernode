@@ -58,6 +58,37 @@ sig(code, ident: int, data: array of byte): ref Ev
 	return ref Ev.Send(frame(Cidsig, sigcmd(code, ident, data)));
 }
 
+# a fixed channel needs no connection: the frame just goes
+Link.sendfixed(nil: self ref Link, cid: int, sdu: array of byte): list of ref Ev
+{
+	return ref Ev.Send(frame(cid, sdu)) :: nil;
+}
+
+# LE signalling (Vol 3 Part A 4.20, 4.21): a peripheral asks for
+# connection parameters and is told yes -- the controller's are what
+# they are, and a mouse that wants a slower interval to save its
+# battery gets a Connection Parameter Update Response accepting; the
+# actual update is the caller's LE_Connection_Update, if it wants.
+# Anything else on this channel is rejected as not understood.
+lesignal(d: array of byte): list of ref Ev
+{
+	if(len d < 4)
+		return nil;
+	code := int d[0];
+	id := int d[1];
+	case code {
+	16r12 =>
+		r := array[2] of byte;
+		bthci->put2(r, 0, 0);
+		return ref Ev.Send(frame(Cidlesig, sigcmd(16r13, id, r))) :: nil;
+	16r01 or 16r13 =>
+		return nil;
+	}
+	r := array[2] of byte;
+	bthci->put2(r, 0, 0);
+	return ref Ev.Send(frame(Cidlesig, sigcmd(Creject, id, r))) :: nil;
+}
+
 # ACL header: handle and flags in 2 bytes, then the data length
 Pbstart: con 2<<12;
 Pbcont: con 1<<12;
@@ -249,6 +280,10 @@ Link.recv(l: self ref Link, p: ref Pkt): list of ref Ev
 		return signal(l, payload);
 	Cidconnless =>
 		return nil;
+	Cidatt or Cidsmp =>
+		return ref Ev.Fixed(cid, payload) :: nil;
+	Cidlesig =>
+		return lesignal(payload);
 	}
 	c := l.find(cid);
 	if(c == nil || c.state != Open)

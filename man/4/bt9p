@@ -46,8 +46,14 @@ or a dial string such as
 .BR tcp!host!port ,
 anything with a
 .B !
-in it is dialled -- and speaks H4 over it. Nothing in the kernel knows
-the word Bluetooth; the controller's power line is a pin in
+in it is dialled -- and speaks H4 over it. A file transport with a
+.B ctl
+file beside it
+.RB ( /dev/eia0ctl )
+is a serial port, and gets hardware flow control turned on
+.RB ( m1 ):
+the Broadcom controller does not transmit until its CTS is asserted.
+Nothing in the kernel knows the word Bluetooth; the controller's power line is a pin in
 .B #G
 .RB ( os/bcm2837/devgpio.c ,
 pin 128 on a Pi 3B+) and its UART is a port in
@@ -122,6 +128,14 @@ Write_Local_Name; the rest of the line is the name.
 .BI class " hex"
 Write_Class_Of_Device.
 .TP
+.BI bdaddr " xx:xx:xx:xx:xx:xx"
+Broadcom's Write_BD_ADDR, then Read_BD_ADDR to record what took.
+Refused unless the controller says it is Broadcom's or Cypress's,
+because the same opcode means something else elsewhere. The CYW43455's
+patch firmware leaves the address at the patch's default, so a board
+that wants its own sets it here; what it should be is the boot
+script's decision, not this program's.
+.TP
 .BR discoverable " on|off"
 .TP
 .BR connectable " on|off"
@@ -143,6 +157,19 @@ refused, with
 on
 .BR pair ).
 Pairing on a connection we made is always allowed.
+.TP
+.BI pair " addr"
+Pair with a classic peer for its own sake: a link is made to it,
+authenticated and encrypted -- pairing on the way when there is no
+key, under
+.B iocap
+and
+.B pairable
+as any pairing -- the key kept, and the link let go. The write returns
+when that is done, or fails saying why. An LE peripheral pairs at its
+first
+.B connect
+instead.
 .TP
 .BI forget " addr"
 Delete the link key for
@@ -169,9 +196,7 @@ to the transport's own ctl file
 .RB ( /dev/eia0ctl
 for
 .BR /dev/eia0 );
-refused for a transport that has none. Enable hardware flow control
-on the port first
-.RB ( "echo m1 > /dev/eia0ctl" ).
+refused for a transport that has none.
 .RE
 .TP
 .B scan
@@ -247,32 +272,102 @@ Write-only verbs, as
 .BR /net/tcp 's:
 .RS
 .TP
-.BI connect " addr" ! psm
-Make an L2CAP channel to
-.I psm
+.BI connect " addr" ! port
+Connect to
+.I port
 on the device at
 .IR addr ,
 over an ACL link made if there is not one; the write returns when the
-channel is open, or fails saying why -- a PSM the peer does not serve,
-a device that does not answer its page, a peer that never answers
-(fifteen seconds).
-.I psm
-is decimal or 0x hex, odd.
+connection is open, or fails saying why -- a port the peer does not
+serve, a device that does not answer its page, a peer that never
+answers (fifteen seconds).
+.I port
+is one of:
+.RS
 .TP
-.BI announce " psm"
-Serve
 .I psm
+An L2CAP channel; decimal or 0x hex, odd.
+.TP
+.BI rfcomm n
+A serial port: RFCOMM server channel
+.IR n ,
+1 to 30, on the link's one multiplexer, which is made for the first
+serial port to a device and taken down after the last.
+.TP
+.B spp
+A serial port whose channel the peer's SDP record names: the Serial
+Port Profile record is asked for and its RFCOMM channel used. Fails
+with
+.I no serial port offered
+if there is none.
+.TP
+.B gatt
+An LE link to the peer, encrypted first (below), with the Attribute
+Protocol on
+.BR data :
+one ATT PDU per write, and each PDU the peer sends is one read.
+.TP
+.B hid
+An LE link, encrypted, then the peer's HID service found with GATT:
+the device is put in boot protocol if it has one and its input
+reports subscribed to, and each report the device notifies is one
+read of
+.BR data .
+A boot mouse report is three bytes, buttons then dx then dy; a boot
+keyboard report is eight.
+.IR bthid (1)
+is the reader that makes a pointer of them. Writes are refused.
+.PP
+An LE link is encrypted before either port is used: with the long-term
+key factotum holds for the peer
+.RB ( "proto=btltk" ),
+or, when it has none and
+.B pairable
+is on, by pairing -- Just Works, legacy pairing; the key the device
+gives is stored as
+.B btlink
+keys are, in factotum and in the keys file, and offered next time.
+A device that will only pair with LE Secure Connections is refused
+and says so. The peer's address type is what
+.B lescan
+heard for it, or, unheard, what the address itself says -- so scan
+first for a device with a resolvable private address.
+.RE
+.TP
+.BI announce " port"
+Serve
+.I port
 on this conversation: peers that connect to it appear through
 .BR listen .
+The
+.BI * ! port
+form
+.IR announce (2)
+writes for
+.BI bt!*! port
+is taken too, and a local half other than
+.B *
+or this controller's address is refused. For
+.BI rfcomm n
+and
+.B spp
+-- the latter the lowest free channel -- a Serial Port Profile record
+naming the channel is offered over SDP for as long as the conversation
+is announced, which is how a peer's
+.B spp
+finds it. SDP itself (PSM 1) is always answered while the controller is
+up; a peer asking what we offer gets the list, empty or not.
 .TP
 .B hangup
 Disconnect the channel.
 .RE
 .TP
 .BI N /data
-One SDU per write and one per read: a whole L2CAP frame each. A write
-larger than the peer's MTU fails saying so. Reads return EOF once
-the channel has gone.
+L2CAP: one SDU per write and one per read, a whole frame each; a write
+larger than the peer's MTU fails saying so. RFCOMM: a byte stream, as
+a serial port is -- a read returns what has arrived, up to its count,
+and a write of any length is framed and paced by the peer's credits.
+Reads return EOF once the connection has gone.
 .TP
 .BI N /status
 .BR Connected ,
@@ -283,8 +378,14 @@ or
 .BI "Hangup " why\fR.
 .TP
 .BI N /local
-.RI "" addr ! psm
-of this end.
+.RI "" addr ! port
+of this end;
+.I port
+as it was given, so a serial port reads
+.BI rfcomm n
+(an
+.B spp
+connect reads the channel SDP found).
 .TP
 .BI N /remote
 The peer's.
@@ -312,6 +413,13 @@ addresses to
 .B /net/bt/clone
 because that file exists.
 .SH KEYS
+LE peripherals add a third protocol:
+.IP
+.B "key proto=btltk addr=<peer> type=<0|1> ediv=<n> rand=<16 hex> !ltk=<32 hex>"
+.PP
+the long-term key an LE pairing produced, with the EDIV and Rand the
+controller must be given to start encryption with it, and the peer's
+address type. Stored and forgotten as the others are.
 Keys are held the way WiFi's are. factotum is the only source of
 secrets: a peer's Link Key Request is answered from
 .BR "proto=btlink addr=" IpeerR,
@@ -382,18 +490,21 @@ makes it stingy with command credits, refunding them on the tick;
 .B -t
 sets the tick in milliseconds (default 200), one inquiry result per
 tick. Every nearby device answers L2CAP connections to PSM 0x1001 by
-echoing what it is sent. A second file,
+echoing what it is sent, offers a serial port on RFCOMM channel 1 that
+echoes too, and says so in an SDP record. A second file,
 .IB path ctl\fR,
 is the far side's telephone: writing
-.BI "call " "addr psm text"
+.BI "call " "addr port text"
 makes the device at
 .I addr
 connect to the host and send
 .I text
 on
-.IR psm ;
-reading it lists what the peers received, one
-.BI "recv " "addr psm text"
+.I port
+-- a PSM, or
+.BI rfcomm n
+-- and reading it lists what the peers received, one
+.BI "recv " "addr port text"
 per line.
 .SH EXAMPLES
 On the board:
@@ -415,6 +526,24 @@ bt9p -t /chan/btmock
 echo up > /net/bt/ctl
 cat /net/bt/status
 .EE
+.SH AUDIT
+When
+.B /mnt/audit/log
+is in the namespace (see
+.IR auditfs (4)),
+one record goes there for each thing that changes whom the machine
+trusts or talks to:
+.BR up ,
+.BR down ,
+.BI "paired peer=" addr " iocap=" modeR,
+.BI "forget peer=" addrR,
+and
+.BI "connect peer=" addr " port=" port " incoming|outgoing"R.
+Without it nothing is recorded and nothing fails: a radio that cannot
+come up for want of a log is a worse outcome than an unlogged radio.
+The pairing prompts and refusals are on
+.BR event ,
+which is the transcript, not the record.
 .SH SOURCE
 .B /appl/cmd/bt9p.b
 .br
@@ -428,6 +557,15 @@ cat /net/bt/status
 .IR dial (2),
 .B docs/BLUETOOTH.md
 .SH BUGS
-Has run against
+On a Pi 3B+ the CYW43455 has answered
+.BR up ,
+taken its firmware, found a peer by inquiry and carried an L2CAP
+conversation each way; pairing and
+.B baud
+above 115200 have run against
 .I btmock
-only; no CYW43455 has answered it yet.
+only. The address after the firmware is the patch's default, not the
+board's; there is no verb yet to set it.
+Started from the network console it outlives the session and keeps the
+port, and the next instance's Reset is answered to the first one:
+kill it before starting another.

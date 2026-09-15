@@ -8,13 +8,33 @@ include "bthci.m";
 include "l2cap.m";
 	l2cap: L2cap;
 	Link, Chan, Ev: import l2cap;
+include "sdp.m";
+	sdp: Sdp;
+	Server: import sdp;
+include "rfcomm.m";
+	rfcomm: Rfcomm;
+	Mux: import rfcomm;
+include "keyring.m";
+include "att.m";
+include "smp.m";
+	smp: Smp;
 include "btmock.m";
+
+peersdp: ref Server;	# what every mock peer offers: a serial port on Echochan
 
 init(b: Bthci, l: L2cap)
 {
 	sys = load Sys Sys->PATH;
 	bthci = b;
 	l2cap = l;
+	sdp = load Sdp Sdp->PATH;
+	sdp->init(b);
+	rfcomm = load Rfcomm Rfcomm->PATH;
+	rfcomm->init(b);
+	smp = load Smp Smp->PATH;
+	smp->init(b, load Keyring Keyring->PATH);
+	peersdp = Server.new();
+	peersdp.add(sdp->spprecord(0, Echochan, "Echo Port"));
 }
 
 Aclmtu: con 1021;	# what Read_Buffer_Size promises
@@ -24,7 +44,7 @@ Ctlr.new(addr: string): ref Ctlr
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, 0);
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, nil, 0);
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -150,7 +170,17 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 			return complete(c, op, Bthci->Sinvalidparams, nil);
 		c.class = int params[0] | (int params[1] << 8) | (int params[2] << 16);
 		return complete(c, op, Bthci->Sok, nil);
-	Bthci->SetEventMask or Bthci->WriteInquiryMode or Bthci->InquiryCancel
+	Bthci->SetEventMask =>
+		# A controller emits only what the mask lets it. Bit 61 is the
+		# LE Meta Event, and this one obeys it: on the board an LE scan
+		# with that bit clear succeeded and then reported nothing,
+		# while a host beside it heard a dozen advertisers, and nothing
+		# here could have shown that while the mask was ignored.
+		if(len params < 8)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		c.lemeta = (int params[7] & 16r20) != 0;
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->WriteInquiryMode or Bthci->InquiryCancel
 	or Bthci->LeSetScanParameters =>
 		if(op == Bthci->InquiryCancel){
 			c.inquiring = nil;
@@ -181,14 +211,56 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 	Bthci->Inquiry =>
 		if(len params < 5)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
-		c.inquiring = c.nearby;
+		# an LE-only device does not answer an inquiry
+		rl: list of ref Found;
+		for(nl := c.nearby; nl != nil; nl = tl nl)
+			if(authkind(c, (hd nl).addr) != "le")
+				rl = hd nl :: rl;
+		c.inquiring = nil;
+		for(; rl != nil; rl = tl rl)
+			c.inquiring = hd rl :: c.inquiring;
 		c.inquirydone = 1;
+		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->LeReadBufferSize =>
+		r := array[3] of byte;
+		bthci->put2(r, 0, 27);
+		r[2] = byte 4;
+		return complete(c, op, Bthci->Sok, r);
+	Bthci->LeCreateConnection =>
+		if(len params < 25)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		addr := bthci->bdaddr(params, 6);
+		if(findpeer(c, addr) != nil)
+			return cmdstatus(c, op, Bthci->Sconnexists);
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 1, hidtable(), 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
+		if(lookup(c, addr) != nil && authkind(c, addr) == "le")
+			pr.handle = c.nexthandle++;
+		c.pendconn = appendpeer(c.pendconn, pr);
+		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->LeStartEncryption =>
+		if(len params < 28)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		h := bthci->get2(params, 0) & 16rfff;
+		pr := findhandle(c, h);
+		if(pr == nil || !pr.le)
+			return cmdstatus(c, op, Bthci->Sunknownconn);
+		key := params[12:28];
+		# the STK of a pairing in progress, or the LTK this device gave out
+		ok := 0;
+		if(pr.sstate == 3 && pr.stk != nil && same(key, pr.stk))
+			ok = 1;
+		else if(same(key, ltkfor(c, pr.addr)) && bthci->get2(params, 10) == 16r1234)
+			ok = 1;
+		if(ok)
+			pr.penc = 1;
+		else
+			pr.penc = 1 + Bthci->Snokey;
 		return cmdstatus(c, op, Bthci->Sok);
 	Bthci->CreateConnection =>
 		if(len params < 13)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
 		addr := bthci->bdaddr(params, 0);
-		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0);
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
 		if(lookup(c, addr) != nil)
 			pr.handle = c.nexthandle++;
 		# unknown devices page out: Connection Complete with page timeout, on the tick
@@ -320,9 +392,39 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		return out;
 	Bthci->WriteSimplePairingMode =>
 		return complete(c, op, Bthci->Sok, nil);
+	Bthci->AuthRequested =>
+		# a link is authenticated on request; a real controller would
+		# pair first if there were no key, which the devices marked
+		# pin= and ssp do at connection time instead
+		if(len params < 2)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		h := bthci->get2(params, 0) & 16rfff;
+		if(findhandle(c, h) == nil)
+			return cmdstatus(c, op, Bthci->Sunknownconn);
+		d := array[3] of byte;
+		d[0] = byte 0;
+		bthci->put2(d, 1, h);
+		return cat(cmdstatus(c, op, Bthci->Sok), event(Bthci->EvAuthComplete, d));
+	Bthci->SetConnEncryption =>
+		if(len params < 3)
+			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		h := bthci->get2(params, 0) & 16rfff;
+		if(findhandle(c, h) == nil)
+			return cmdstatus(c, op, Bthci->Sunknownconn);
+		d := array[4] of byte;
+		d[0] = byte 0;
+		bthci->put2(d, 1, h);
+		d[3] = params[2];
+		return cat(cmdstatus(c, op, Bthci->Sok), event(Bthci->EvEncryptChange, d));
 	Bthci->Disconnect =>
 		if(len params < 3)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
+		# the reasons a host may give (Core 5, Vol 4 Part E, 7.1.6);
+		# a real controller refuses the rest, so this one does too
+		case int params[2] {
+		16r05 or 16r13 or 16r14 or 16r15 or 16r1a or 16r29 or 16r3b => ;
+		* =>	return cmdstatus(c, op, Bthci->Sinvalidparams);
+		}
 		h := bthci->get2(params, 0) & 16rfff;
 		pr := findhandle(c, h);
 		if(pr == nil)
@@ -338,14 +440,20 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 			pr.acks = 0;
 			out = cat(out, event(Bthci->EvNumCompleted, a));
 		}
-		# Disconnection Complete: status, handle, reason (the one asked for)
+		# Disconnection Complete: status, handle, reason -- which on the
+		# side that asked is always "terminated by local host"
 		d := array[4] of byte;
 		d[0] = byte 0;
 		bthci->put2(d, 1, h);
-		d[3] = byte params[2];
+		d[3] = byte Bthci->Slocalterm;
 		return cat(out, event(Bthci->EvDisconnComplete, d));
 	Bthci->BcmDownloadMinidriver or Bthci->BcmWriteRam or Bthci->BcmLaunchRam
 	or Bthci->BcmUpdateBaudrate =>
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->WriteLeHostSupported =>
+		if(len params < 1)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		c.lehost = int params[0];
 		return complete(c, op, Bthci->Sok, nil);
 	Bthci->BcmWriteBdaddr =>
 		if(len params < 6)
@@ -499,20 +607,389 @@ peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
 			for(pl := l2cap->fragment(pr.handle, e.frame, Aclmtu); pl != nil; pl = tl pl)
 				out = cat(out, bthci->frame(hd pl));
 		Opened =>
-			if(pr.calling && e.c.psm == pr.callpsm){
+			if(e.c.psm == L2cap->Psmrfcomm){
+				# one multiplexer per link: ours if we opened the
+				# channel, the host's otherwise; it echoes on Echochan
+				pr.rfch = e.c;
+				pr.rf = Mux.new(e.c.initiator, e.c.mtu);
+				pr.rf.accept = Echochan :: nil;
+				if(e.c.initiator && pr.calling && pr.callchan != 0){
+					pr.calling = 0;
+					(nil, revs) := pr.rf.connect(pr.callchan);
+					out = cat(out, rfevents(c, pr, revs));
+				}
+			}else if(pr.calling && e.c.psm == pr.callpsm){
 				pr.calling = 0;
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, array of byte pr.calltext)));
 			}
 		Data =>
 			if(e.c.psm == Echopsm)
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, e.sdu)));
-			else
+			else if(e.c.psm == L2cap->Psmsdp)
+				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, peersdp.request(e.sdu, e.c.mtu))));
+			else if(e.c == pr.rfch){
+				if(pr.rf != nil)
+					out = cat(out, rfevents(c, pr, pr.rf.recv(e.sdu)));
+			}else
 				c.received = sys->sprint("recv %s 0x%4.4ux %s", pr.addr, e.c.psm, string e.sdu) :: c.received;
+		Fixed =>
+			case e.cid {
+			L2cap->Cidsmp =>
+				out = cat(out, peerevents(c, pr, smpresponder(c, pr, e.sdu)));
+			L2cap->Cidatt =>
+				rsp := gattserve(pr, e.sdu);
+				if(rsp != nil)
+					out = cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidatt, rsp)));
+			}
+		Closed =>
+			if(e.c == pr.rfch){
+				pr.rfch = nil;
+				pr.rf = nil;
+			}
+			# a peer that called us hangs its link up once its last
+			# channel is gone, as a real one does: the link is the
+			# maker's to end, and the host leaves a peer's alone
+			if(pr.callpsm != 0 && pr.l2.chans == nil && pr.state == 1){
+				droppeer(c, pr);
+				d := array[4] of byte;
+				d[0] = byte 0;
+				bthci->put2(d, 1, pr.handle);
+				d[3] = byte Bthci->Sremoteterm;
+				out = cat(out, event(Bthci->EvDisconnComplete, d));
+			}
 		* =>
 			;
 		}
 	}
 	return out;
+}
+
+# what the peer's RFCOMM asked for: frames onto its channel, the echo
+# on Echochan, the text of a call once its channel opens, a record of
+# what came back on it
+rfevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Rfcomm->Ev): array of byte
+{
+	out := array[0] of byte;
+	for(; evs != nil; evs = tl evs){
+		pick e := hd evs {
+		Send =>
+			if(pr.rfch != nil)
+				out = cat(out, peerevents(c, pr, pr.l2.send(pr.rfch, e.sdu)));
+		Opened =>
+			if(e.d.initiator && e.d.channel == pr.callchan)
+				out = cat(out, rfevents(c, pr, pr.rf.send(e.d, array of byte pr.calltext)));
+		Data =>
+			if(e.d.channel == Echochan && !e.d.initiator)
+				out = cat(out, rfevents(c, pr, pr.rf.send(e.d, e.data)));
+			else
+				c.received = sys->sprint("recv %s rfcomm%d %s", pr.addr, e.d.channel, string e.data) :: c.received;
+			out = cat(out, rfevents(c, pr, pr.rf.consumed(e.d)));
+		Closed =>
+			# a caller whose channel is gone hangs its link up
+			if(pr.callchan != 0 && pr.rf != nil && pr.rf.dlcs == nil){
+				out = cat(out, rfevents(c, pr, pr.rf.shutdown()));
+				if(pr.rfch != nil)
+					out = cat(out, peerevents(c, pr, pr.l2.disconnect(pr.rfch)));
+			}
+		Muxdown =>
+			if(pr.rfch != nil && pr.rfch.state == L2cap->Open)
+				out = cat(out, peerevents(c, pr, pr.l2.disconnect(pr.rfch)));
+			pr.rf = nil;
+		}
+	}
+	return out;
+}
+
+#
+# The LE peripheral: a mouse. Legacy Just Works pairing as the
+# responder, an LTK it gives out and remembers, and a GATT table with
+# a HID service in boot protocol whose boot mouse report notifies
+# when the host has subscribed and notify() has something to say.
+#
+
+zero16 := array[16] of { * => byte 0 };
+mockltk := array[] of {
+	byte 16r0f, byte 16r0e, byte 16r0d, byte 16r0c, byte 16r0b, byte 16r0a, byte 16r09, byte 16r08,
+	byte 16r07, byte 16r06, byte 16r05, byte 16r04, byte 16r03, byte 16r02, byte 16r01, byte 16r00,
+};
+
+same(a, b: array of byte): int
+{
+	if(a == nil || b == nil || len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+ltkfor(c: ref Ctlr, addr: string): array of byte
+{
+	for(l := c.lekeys; l != nil; l = tl l){
+		(a, k) := hd l;
+		if(a == addr)
+			return k;
+	}
+	return nil;
+}
+
+# the responder's half of smp(2)'s exchange, with the same functions
+smpresponder(c: ref Ctlr, pr: ref Peer, pdu: array of byte): list of ref Ev
+{
+	if(len pdu < 1)
+		return nil;
+	code := int pdu[0];
+	ia := c.addr;				# the host's address, as the mock knows it: ours is the controller's
+	ra := bthci->parsebdaddr(pr.addr);
+	case code {
+	Smp->Cpairreq =>
+		if(len pdu < 7)
+			return nil;
+		pr.preq = pdu[0:7];
+		rsp := array[] of { byte Smp->Cpairrsp, byte Smp->IOnone, byte 0, byte Smp->Abonding, byte 16, byte 0, byte (Smp->Kenc | Smp->Kid) };
+		pr.pres = rsp;
+		pr.sstate = 1;
+		return pr.l2.sendfixed(L2cap->Cidsmp, rsp);
+	Smp->Cconfirm =>
+		if(len pdu < 17 || pr.sstate != 1)
+			return nil;
+		pr.mconfirm = pdu[1:17];
+		pr.srand = array[16] of byte;
+		for(i := 0; i < 16; i++)
+			pr.srand[i] = byte (16r40 + i);
+		sconf := smp->c1(zero16, pr.srand, pr.preq, pr.pres, 0, ia, 1, ra);
+		pr.sstate = 2;
+		return pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cconfirm, sconf));
+	Smp->Crandom =>
+		if(len pdu < 17 || pr.sstate != 2)
+			return nil;
+		pr.mrand = pdu[1:17];
+		want := smp->c1(zero16, pr.mrand, pr.preq, pr.pres, 0, ia, 1, ra);
+		if(!same(want, pr.mconfirm)){
+			pr.sstate = 0;
+			return pr.l2.sendfixed(L2cap->Cidsmp, array[] of { byte Smp->Cfailed, byte Smp->Fconfirmfailed });
+		}
+		pr.stk = smp->s1(zero16, pr.srand, pr.mrand);
+		pr.sstate = 3;
+		return pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Crandom, pr.srand));
+	}
+	return nil;
+}
+
+# encrypted with the STK: the keys, as the response promised
+distribute(c: ref Ctlr, pr: ref Peer): array of byte
+{
+	pr.sstate = 4;
+	c.lekeys = (pr.addr, mockltk) :: c.lekeys;
+	out := peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cencinfo, mockltk)));
+	mid := array[11] of byte;
+	mid[0] = byte Smp->Cmasterid;
+	bthci->put2(mid, 1, 16r1234);
+	for(i := 3; i < 11; i++)
+		mid[i] = byte i;
+	out = cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidsmp, mid)));
+	irk := array[16] of { * => byte 16raa };
+	out = cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cidinfo, irk))));
+	ida := array[8] of byte;
+	ida[0] = byte Smp->Cidaddr;
+	ida[1] = byte 1;
+	ida[2:] = bthci->parsebdaddr(pr.addr);
+	return cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidsmp, ida)));
+}
+
+withcode(code: int, v: array of byte): array of byte
+{
+	r := array[1 + len v] of byte;
+	r[0] = byte code;
+	r[1:] = v;
+	return r;
+}
+
+# a mouse's attribute table: GAP, then HID with protocol mode, the
+# boot mouse input report with its CCCD, a report map, and a report
+# with a Report Reference; then battery
+hidtable(): list of ref Attr
+{
+	l: list of ref Attr;
+	l = ref Attr(1, Att->Uprimary, u16(16r1800)) :: l;
+	l = ref Attr(2, Att->Ucharacteristic, chardecl(Att->Pread, 3, 16r2a00)) :: l;
+	l = ref Attr(3, 16r2a00, array of byte "Mock Mouse") :: l;
+	l = ref Attr(16r10, Att->Uprimary, u16(Att->Uhidservice)) :: l;
+	l = ref Attr(16r11, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pwritenorsp, 16r12, Att->Uprotocolmode)) :: l;
+	l = ref Attr(16r12, Att->Uprotocolmode, array[] of { byte 1 }) :: l;
+	l = ref Attr(16r13, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pnotify, Hidreport, Att->Ubootmousein)) :: l;
+	l = ref Attr(Hidreport, Att->Ubootmousein, array[] of { byte 0, byte 0, byte 0 }) :: l;
+	l = ref Attr(Hidcccd, Att->Ucccd, u16(0)) :: l;
+	l = ref Attr(16r16, Att->Ucharacteristic, chardecl(Att->Pread, 16r17, Att->Ureportmap)) :: l;
+	l = ref Attr(16r17, Att->Ureportmap, array[] of { byte 16r05, byte 16r01, byte 16r09, byte 16r02 }) :: l;
+	l = ref Attr(16r18, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pnotify, 16r19, Att->Ureport)) :: l;
+	l = ref Attr(16r19, Att->Ureport, array[] of { byte 0 }) :: l;
+	l = ref Attr(16r1a, Att->Ucccd, u16(0)) :: l;
+	l = ref Attr(16r1b, Att->Ureportref, array[] of { byte 1, byte 1 }) :: l;
+	l = ref Attr(16r20, Att->Uprimary, u16(16r180f)) :: l;
+	l = ref Attr(16r21, Att->Ucharacteristic, chardecl(Att->Pread, 16r22, 16r2a19)) :: l;
+	l = ref Attr(16r22, 16r2a19, array[] of { byte 99 }) :: l;
+	r: list of ref Attr;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+u16(v: int): array of byte
+{
+	a := array[2] of byte;
+	bthci->put2(a, 0, v);
+	return a;
+}
+
+chardecl(props, value, uuid: int): array of byte
+{
+	a := array[5] of byte;
+	a[0] = byte props;
+	bthci->put2(a, 1, value);
+	bthci->put2(a, 3, uuid);
+	return a;
+}
+
+cccdon(pr: ref Peer): int
+{
+	for(l := pr.attrs; l != nil; l = tl l)
+		if((hd l).handle == Hidcccd)
+			return int (hd l).value[0] & 1;
+	return 0;
+}
+
+groupend(tab: list of ref Attr, start: int): int
+{
+	end := 16rffff;
+	for(; tab != nil; tab = tl tab)
+		if((hd tab).uuid == Att->Uprimary && (hd tab).handle > start && (hd tab).handle - 1 < end)
+			end = (hd tab).handle - 1;
+	return end;
+}
+
+atterr(op, h, code: int): array of byte
+{
+	a := array[5] of byte;
+	a[0] = byte Att->Oerror;
+	a[1] = byte op;
+	bthci->put2(a, 2, h);
+	a[4] = byte code;
+	return a;
+}
+
+# the GATT server, within the default MTU; reads and writes need the
+# link encrypted, as a real HID device requires
+gattserve(pr: ref Peer, req: array of byte): array of byte
+{
+	mtu := Att->Defmtu;
+	if(len req < 1)
+		return nil;
+	op := int req[0];
+	tab := pr.attrs;
+	case op {
+	Att->Omtureq =>
+		a := array[3] of byte;
+		a[0] = byte Att->Omtursp;
+		bthci->put2(a, 1, 23);
+		return a;
+	Att->Oreadbygroupreq =>
+		start := bthci->get2(req, 1);
+		end := bthci->get2(req, 3);
+		u := bthci->get2(req, 5);
+		out := array[] of { byte Att->Oreadbygrouprsp, byte 6 };
+		for(l := tab; l != nil; l = tl l){
+			a := hd l;
+			if(a.handle < start || a.handle > end || a.uuid != u)
+				continue;
+			if(len out + 6 > mtu)
+				break;
+			e := array[6] of byte;
+			bthci->put2(e, 0, a.handle);
+			bthci->put2(e, 2, groupend(tab, a.handle));
+			e[4:] = a.value;
+			out = cat(out, e);
+		}
+		if(len out == 2)
+			return atterr(op, start, Att->Eattrnotfound);
+		return out;
+	Att->Oreadbytypereq =>
+		start := bthci->get2(req, 1);
+		end := bthci->get2(req, 3);
+		u := bthci->get2(req, 5);
+		out := array[] of { byte Att->Oreadbytypersp, byte 7 };
+		for(l := tab; l != nil; l = tl l){
+			a := hd l;
+			if(a.handle < start || a.handle > end || a.uuid != u)
+				continue;
+			if(len out + 7 > mtu)
+				break;
+			e := array[7] of byte;
+			bthci->put2(e, 0, a.handle);
+			e[2:] = a.value;
+			out = cat(out, e);
+		}
+		if(len out == 2)
+			return atterr(op, start, Att->Eattrnotfound);
+		return out;
+	Att->Ofindinforeq =>
+		start := bthci->get2(req, 1);
+		end := bthci->get2(req, 3);
+		out := array[] of { byte Att->Ofindinforsp, byte 1 };
+		for(l := tab; l != nil; l = tl l){
+			a := hd l;
+			if(a.handle < start || a.handle > end)
+				continue;
+			if(len out + 4 > mtu)
+				break;
+			e := array[4] of byte;
+			bthci->put2(e, 0, a.handle);
+			bthci->put2(e, 2, a.uuid);
+			out = cat(out, e);
+		}
+		if(len out == 2)
+			return atterr(op, start, Att->Eattrnotfound);
+		return out;
+	Att->Oreadreq =>
+		h := bthci->get2(req, 1);
+		if(!pr.encrypted)
+			return atterr(op, h, Att->Einsufencrypt);
+		for(l := tab; l != nil; l = tl l)
+			if((hd l).handle == h)
+				return cat(array[] of { byte Att->Oreadrsp }, (hd l).value);
+		return atterr(op, h, Att->Einvalidhandle);
+	Att->Owritereq or Att->Owritecmd =>
+		h := bthci->get2(req, 1);
+		if(!pr.encrypted)
+			return atterr(op, h, Att->Einsufencrypt);
+		for(l := tab; l != nil; l = tl l)
+			if((hd l).handle == h){
+				(hd l).value = req[3:];
+				if(op == Att->Owritecmd)
+					return nil;
+				return array[] of { byte Att->Owritersp };
+			}
+		return atterr(op, h, Att->Einvalidhandle);
+	Att->Oconfirm =>
+		return nil;
+	}
+	return atterr(op, 0, Att->Enotsupported);
+}
+
+Ctlr.notify(c: self ref Ctlr, addr: string, report: array of byte): string
+{
+	pr := findpeer(c, addr);
+	if(pr == nil || !pr.le)
+		return "not connected as an LE device: " + addr;
+	pr.notifyq = appendb(pr.notifyq, report);
+	return nil;
+}
+
+appendb(l: list of array of byte, b: array of byte): list of array of byte
+{
+	if(l == nil)
+		return b :: nil;
+	return hd l :: appendb(tl l, b);
 }
 
 Ctlr.call(c: self ref Ctlr, addr: string, psm: int, text: string): string
@@ -521,7 +998,20 @@ Ctlr.call(c: self ref Ctlr, addr: string, psm: int, text: string): string
 		return "no such device nearby: " + addr;
 	if(findpeer(c, addr) != nil)
 		return "already connected: " + addr;
-	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0);
+	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
+	c.pendconn = appendpeer(c.pendconn, pr);
+	return nil;
+}
+
+# a call on an RFCOMM channel: the peer opens PSM 3, brings the
+# multiplexer up, opens the channel and sends the text
+Ctlr.callrf(c: self ref Ctlr, addr: string, channel: int, text: string): string
+{
+	if(lookup(c, addr) == nil)
+		return "no such device nearby: " + addr;
+	if(findpeer(c, addr) != nil)
+		return "already connected: " + addr;
+	pr := ref Peer(addr, 0, 2, nil, 1, L2cap->Psmrfcomm, text, 0, nil, nil, channel, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
 	c.pendconn = appendpeer(c.pendconn, pr);
 	return nil;
 }
@@ -607,12 +1097,31 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			d[9] = byte 1;
 			c.links = pr :: c.links;
 			out = cat(out, event(Bthci->EvConnRequest, d));
-		}else if(pr.handle != 0 && pr.state == 0 && authkind(c, pr.addr) != nil && pr.l2 == nil){
+		}else if(pr.handle != 0 && pr.state == 0 && !pr.le && authkind(c, pr.addr) != nil && pr.l2 == nil){
 			# this device pairs before it connects: Link Key Request
 			# first; the host's answer decides what follows
 			pr.state = 3;
 			c.links = pr :: c.links;
 			out = cat(out, event(Bthci->EvLinkKeyRequest, a));
+		}else if(pr.le){
+			# LE Connection Complete: subevent, status, handle, role, peer type, peer, interval, latency, timeout, mca
+			d := array[19] of { * => byte 0 };
+			d[0] = byte Bthci->LeConnComplete;
+			if(pr.handle == 0)
+				d[1] = byte Bthci->Sconntimeout;
+			bthci->put2(d, 2, pr.handle);
+			d[4] = byte 0;			# we are the peripheral; the host is central
+			d[5] = byte 1;			# random
+			d[6:] = a;
+			bthci->put2(d, 12, 16r18);
+			bthci->put2(d, 16, 16r190);
+			if(pr.handle != 0){
+				pr.state = 1;
+				pr.l2 = Link.new(pr.handle);
+				droppeer(c, pr);
+				c.links = pr :: c.links;
+			}
+			out = cat(out, event(Bthci->EvLeMeta, d));
 		}else{
 			# Connection Complete: status, handle, addr, link type ACL, no encryption
 			d := array[11] of byte;
@@ -627,7 +1136,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			if(pr.handle != 0){
 				pr.state = 1;
 				pr.l2 = Link.new(pr.handle);
-				pr.l2.accept = Echopsm :: nil;
+				pr.l2.accept = Echopsm :: L2cap->Psmsdp :: L2cap->Psmrfcomm :: nil;
 				droppeer(c, pr);
 				c.links = pr :: c.links;
 			}
@@ -635,6 +1144,34 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			if(pr.state == 1 && pr.calling){
 				(nil, evs) := pr.l2.connect(pr.callpsm);
 				out = cat(out, peerevents(c, pr, evs));
+			}
+		}
+	}
+	# LE: encryption changes asked for, and boot reports to notify
+	for(ll := c.links; ll != nil; ll = tl ll){
+		pr := hd ll;
+		if(!pr.le)
+			continue;
+		if(pr.penc != 0){
+			st := pr.penc - 1;
+			pr.penc = 0;
+			d := array[4] of byte;
+			d[0] = byte st;
+			bthci->put2(d, 1, pr.handle);
+			d[3] = byte (st == 0);
+			out = cat(out, event(Bthci->EvEncryptChange, d));
+			if(st == 0){
+				pr.encrypted = 1;
+				if(pr.sstate == 3)
+					out = cat(out, distribute(c, pr));
+			}
+		}
+		if(pr.encrypted && pr.notifyq != nil && cccdon(pr)){
+			for(; pr.notifyq != nil; pr.notifyq = tl pr.notifyq){
+				n := array[3] of byte;
+				n[0] = byte Att->Onotify;
+				bthci->put2(n, 1, Hidreport);
+				out = cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidatt, cat(n, hd pr.notifyq))));
 			}
 		}
 	}
@@ -650,7 +1187,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			out = cat(out, event(Bthci->EvNumCompleted, d));
 		}
 	}
-	if(c.lescanning && c.leadv != nil){
+	if(c.lescanning && c.lemeta && c.leadv != nil){
 		# LE Advertising Report, one device: subevent, n, type, addrtype, addr, dlen, data, rssi
 		f := hd c.leadv;
 		c.leadv = tl c.leadv;
@@ -667,6 +1204,8 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 		p[1] = byte 1;
 		p[2] = byte 0;			# ADV_IND
 		p[3] = byte 0;			# public
+		if(authkind(c, f.addr) == "le")
+			p[3] = byte 1;		# an LE device here has a random static address
 		a := bthci->parsebdaddr(f.addr);
 		if(a == nil)
 			a = array[6] of { * => byte 0 };

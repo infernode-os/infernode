@@ -2272,6 +2272,7 @@ PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
         'read 100 < /dev/eia0' \
         'echo -n second-frame > /dev/eia0' \
         'read 100 < /dev/eia0' \
+        'cat /dev/eia0status' \
         "echo $LONGLINE")"
 PLOUT="$(tr -d '\r' <<<"$PLOUT")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- #t session ---"; echo "$PLOUT"; }
@@ -2312,6 +2313,16 @@ if grep 'PL011-PEER-SAW' <<<"$PLOUT" | grep -q 'PL011-LOOPBACK-42second-frame'; 
     pass "the peer on the PL011 saw exactly the bytes written, in order, with nothing between"
 else
     fail "the PL011 peer did not see PL011-LOOPBACK-42 then second-frame back to back"
+fi
+# The status file's third and fourth lines count the bytes at each hop:
+# interrupt handler, staging into the queue, out to readers. After two
+# round trips of 17 and 12 bytes all three must say 29, and so must tx.
+# On the board these are what told a reply eaten by another reader from
+# a reply that never came; here they prove the counters count.
+if grep -q 'intrs([1-9][0-9]*) rx(29) tx(29)' <<<"$PLOUT" && grep -q 'staged(29) read(29)' <<<"$PLOUT"; then
+    pass "eia0status counts the bytes at every hop: 29 in through the interrupt, 29 staged, 29 read, 29 out"
+else
+    fail "eia0status byte counters did not all read 29 after the two round trips: $(grep -o 'intrs.*' <<<"$PLOUT" | tail -1; grep -o 'staged.*' <<<"$PLOUT" | tail -1)"
 fi
 if [[ "$(grep -c "$LONGLINE" <<<"$PLOUT")" -ge 2 ]]; then
     pass "a ${#LONGLINE}-byte line typed at the console arrived intact through the receive interrupt (echo and output)"

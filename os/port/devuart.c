@@ -362,7 +362,10 @@ uartread(Chan *c, void *buf, long n, vlong off)
 	p = uart[NETID(c->qid.path)];
 	switch(NETTYPE(c->qid.path)){
 	case Ndataqid:
-		return qread(p->iq, buf, n);
+		n = qread(p->iq, buf, n);
+		if(n > 0)
+			p->nread += n;
+		return n;
 	case Nctlqid:
 		return readnum(offset, buf, n, NETID(c->qid.path), NUMSIZE);
 	case Nstatqid:
@@ -691,6 +694,7 @@ uartclock(void)
 	uchar *iw;
 
 	for(p = uartalloc.elist; p; p = p->elist){
+		p->nclock++;
 
 		/* this amortizes cost of qproduce to many chars */
 		if(p->iw != p->ir){
@@ -698,11 +702,16 @@ uartclock(void)
 			if(iw < p->ir){
 				if(qproduce(p->iq, p->ir, p->ie-p->ir) < 0)
 					(*p->phys->rts)(p, 0);
+				else
+					p->nstaged += p->ie-p->ir;
 				p->ir = p->istage;
 			}
-			if(iw > p->ir)
+			if(iw > p->ir){
 				if(qproduce(p->iq, p->ir, iw-p->ir) < 0)
 					(*p->phys->rts)(p, 0);
+				else
+					p->nstaged += iw-p->ir;
+			}
 			p->ir = iw;
 		}
 

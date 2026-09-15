@@ -263,6 +263,7 @@ enum
 	Cr		= 0x30,		/* control */
 	Ifls		= 0x34,		/* FIFO interrupt levels */
 	Imsc		= 0x38,		/* interrupt mask */
+	Ris		= 0x3C,		/* raw interrupt status */
 	Mis		= 0x40,		/* masked interrupt status */
 	Icr		= 0x44,		/* interrupt clear */
 };

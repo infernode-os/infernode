@@ -76,6 +76,8 @@ Bthci: module
 	InquiryCancel:		con (1<<10) | 16r02;
 	CreateConnection:	con (1<<10) | 16r05;
 	Disconnect:		con (1<<10) | 16r06;
+	AuthRequested:		con (1<<10) | 16r11;
+	SetConnEncryption:	con (1<<10) | 16r13;
 	AcceptConnection:	con (1<<10) | 16r09;
 	RejectConnection:	con (1<<10) | 16r0a;
 	LinkKeyReply:		con (1<<10) | 16r0b;
@@ -98,12 +100,18 @@ Bthci: module
 	WriteClassOfDevice:	con (3<<10) | 16r24;
 	WriteInquiryMode:	con (3<<10) | 16r45;
 	WriteSimplePairingMode:	con (3<<10) | 16r56;
+	WriteLeHostSupported:	con (3<<10) | 16r6d;
 	ReadLocalVersion:	con (4<<10) | 16r01;
 	ReadLocalCommands:	con (4<<10) | 16r02;
 	ReadLocalFeatures:	con (4<<10) | 16r03;
 	ReadBufferSize:		con (4<<10) | 16r05;
 	ReadBdaddr:		con (4<<10) | 16r09;
+	LeReadBufferSize:	con (8<<10) | 16r02;
 	LeSetScanParameters:	con (8<<10) | 16r0b;
+	LeCreateConnection:	con (8<<10) | 16r0d;
+	LeCreateConnCancel:	con (8<<10) | 16r0e;
+	LeConnectionUpdate:	con (8<<10) | 16r13;
+	LeStartEncryption:	con (8<<10) | 16r19;
 	LeSetScanEnable:	con (8<<10) | 16r0c;
 
 	# Broadcom vendor commands, for the CYW43455's patch upload (bt9p M3)
@@ -121,6 +129,8 @@ Bthci: module
 	EvConnComplete:		con 16r03;
 	EvConnRequest:		con 16r04;
 	EvDisconnComplete:	con 16r05;
+	EvAuthComplete:		con 16r06;	# status, handle
+	EvEncryptChange:	con 16r08;	# status, handle, enabled
 	EvRemoteName:		con 16r07;
 	EvCmdComplete:		con 16r0e;
 	EvCmdStatus:		con 16r0f;
@@ -151,6 +161,9 @@ Bthci: module
 	EvExtInquiryResult:	con 16r2f;
 	EvLeMeta:		con 16r3e;
 	LeAdvReport:		con 16r02;	# LE Meta subevent: Advertising Report
+	LeConnComplete:		con 16r01;	# LE Meta subevent: status, handle, role, peer type, peer, interval...
+	LeConnUpdate:		con 16r03;
+	LeEnhConnComplete:	con 16r0a;
 
 	# HCI status codes worth naming
 	Sok:			con 16r00;
@@ -162,6 +175,7 @@ Bthci: module
 	Snokey:			con 16r06;
 	Smemory:		con 16r07;
 	Sconntimeout:		con 16r08;
+	Sconnexists:		con 16r0b;
 	Scmddisallowed:		con 16r0c;
 	Sinvalidparams:		con 16r12;
 	Sremoteterm:		con 16r13;

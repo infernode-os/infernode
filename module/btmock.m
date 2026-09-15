@@ -24,6 +24,11 @@ Btmock: module
 	init:	fn(b: Bthci, l: L2cap);
 
 	Echopsm:	con 16r1001;	# the L2CAP service every mock offers: it echoes
+	Echochan:	con 1;		# and the RFCOMM channel it echoes on, which its SDP record names
+	# an LE device's GATT table: a mouse with a HID service in boot
+	# protocol, whose boot report is at this handle and its CCCD next
+	Hidreport:	con 16r14;
+	Hidcccd:	con 16r15;
 
 	Ctlr: adt {
 		addr:	array of byte;		# little-endian, as on the wire
@@ -38,6 +43,8 @@ Btmock: module
 		inquirydone:	int;		# Inquiry Complete not yet emitted
 		naming:	list of string;		# Remote Name Requests to answer, by address
 		lescanning:	int;		# LE scan enabled
+		lemeta:		int;		# LE Meta Event unmasked (Set_Event_Mask bit 61)
+		lehost:		int;		# Write_LE_Host_Supported
 		leadv:	list of ref Bthci->Found;	# advertising reports not yet emitted
 		log:	list of string;		# "cmd 0x0c03 <hex params>", newest first
 		d:	ref Bthci->Deframer;
@@ -45,7 +52,8 @@ Btmock: module
 		pendconn:	list of ref Peer;	# Connection Completes to emit
 		nexthandle:	int;
 		received:	list of string;	# what peers were sent on their channels, newest first
-		auth:	list of (string, string);	# devices that demand pairing: addr, "pin=NNNN" or "ssp"
+		auth:	list of (string, string);	# devices that demand pairing: addr, "pin=NNNN", "ssp" or "le"
+		lekeys:	list of (string, array of byte);	# LTKs given out, by address, for the next encryption
 		keys:	list of (string, array of byte);	# link keys issued, by address
 		pairings:	int;		# how many pairings completed
 
@@ -56,6 +64,8 @@ Btmock: module
 		# a nearby device calls us: a Connection Request, then once the
 		# link is up an L2CAP connection to psm carrying text
 		call:	fn(c: self ref Ctlr, addr: string, psm: int, text: string): string;
+		callrf:	fn(c: self ref Ctlr, addr: string, channel: int, text: string): string;
+		notify:	fn(c: self ref Ctlr, addr: string, report: array of byte): string;	# an LE device's boot report
 	};
 
 	#
@@ -75,5 +85,22 @@ Btmock: module
 		callpsm:	int;
 		calltext:	string;
 		acks:	int;			# ACL packets received, owed as Number Of Completed Packets
+		rf:	ref Rfcomm->Mux;	# the RFCOMM multiplexer, once PSM 3 is open
+		rfch:	ref L2cap->Chan;
+		callchan: int;			# a call() on an RFCOMM channel rather than a PSM
+		# an LE peripheral
+		le:	int;
+		attrs:	list of ref Attr;	# its GATT table
+		sstate:	int;			# SMP responder: 0 idle, 1 sent response, 2 sent confirm, 3 waiting for encryption, 4 keys given
+		preq, pres, mconfirm, mrand, srand, stk: array of byte;
+		encrypted: int;
+		penc:	int;			# an Encryption Change to emit on the tick: 0 none, else the status + 1
+		notifyq: list of array of byte;	# boot reports to notify, once subscribed
+	};
+
+	Attr: adt {
+		handle:	int;
+		uuid:	int;
+		value:	array of byte;
 	};
 };

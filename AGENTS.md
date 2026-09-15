@@ -110,13 +110,23 @@ Because the namespace is forked, anything you `bind` or start there is invisible
 to the console shell and dies with the session — convenient for experiments,
 useless for making a change stick.
 
-**Pace scripted writes to the serial line.** The board's UART drops everything
-past the first 16 bytes of a burst, so a scripted `write()` of a whole command
-line arrives truncated at exactly 16 characters and executes as garbage. About
-8ms per character is reliable. Interactive typing is unaffected, which is why
-this only shows up in automation. (The cause is the console's 10ms poll of the
-PL011's 16-byte FIFO; `feat/baremetal-bt` replaces it with an interrupt-driven
-console on the mini-UART, and this note should be re-measured there.)
+**Pace scripted writes to the serial line** on kernels before the console
+moved to the mini-UART (2026-09-13): those polled the PL011's 16-byte FIFO
+every 10ms, so a scripted `write()` of a whole command line arrived truncated
+at exactly 16 characters and executed as garbage; about 8ms per character was
+reliable. The interrupt-driven console has not been measured for this yet --
+the first board session drove it through the network console -- so keep the
+pacing until someone has.
+
+**Processes started from the network console outlive it.** The session's
+shell dies; what it started does not, and it keeps whatever it held open. A
+`bt9p` left behind keeps `/dev/eia0` open *and reading*, so the next session's
+`bt9p` sends its Reset and the survivor eats the reply -- `eia0status`'s byte
+counters advance, the new instance times out, and it reads as "the second
+open never works". The mount it served died with its session, so nothing can
+reach it either. `ps` lists survivors by module name (`Bt9p`, `Bthci`,
+`Listen`); `kill Bt9p Bthci` before starting another. `listen(1)` does the
+same with its connection.
 
 **On the host, `brltty` steals CH340 adapters.** The generic `1a86:7523`
 USB-serial ID is also a Baum braille display, so a running `brltty` claims the

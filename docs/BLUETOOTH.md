@@ -226,6 +226,7 @@ pins; they are a separate proposal.
                                                  (kernel and bt9p name no path;
                                                  boot script says /n/dos/firmware/BCM4345C0.hcd)
                         "baud <n>"               the controller, then the transport's ctl
+                        "bdaddr <addr>"          Broadcom Write_BD_ADDR; the patch leaves a default
                         "iocap none|display|yesno|keyboard"   default none: Just Works
                         "pairable on|off"        default off: no uninvited pairing
                         "forget <addr>"          the link key, from factotum and the keys file
@@ -247,8 +248,9 @@ pins; they are a separate proposal.
                         bring-up and tests. Root only, never granted.
       clone       open  yields a new conversation N
       N/ctl       write "connect <addr>!<psm>"           L2CAP, as a dial string
-                        "connect <addr>!rfcomm<chan>"    RFCOMM (milestone 7)
-                        "announce <psm>"                 listen
+                        "connect <addr>!rfcomm<chan>"    RFCOMM, a serial port
+                        "connect <addr>!spp"             the channel the peer's SDP record names
+                        "announce <psm>|rfcomm<chan>|spp"  listen; a serial port gets an SDP record
                         "hangup"
       N/data      read/write. L2CAP: one SDU per read or write.
                   RFCOMM: a byte stream.
@@ -293,8 +295,10 @@ does, and an RFCOMM serial port has every reason to present as
   factotum's syntax, because factotum cannot be read back for secrets
   and whoever receives the key is the only one who can persist it --
   Plan 9's `factotum -S` and NVRAM, the same shape.
-- **audit**: `up`, `down`, pairing and connection events are logged the
-  way `#l`'s attach is; nothing new.
+- **audit**: `up`, `down`, `paired`, `forget` and every `connect`
+  (either direction) go to `/mnt/audit/log` through `audit(2)` when
+  it is in the namespace, as `2fa` does, and nowhere when it is not.
+  The contract test binds a sink and reads the records back.
 - It does **not** do audio, mesh, GATT beyond scanning, or any kernel
   data path.
 
@@ -371,7 +375,9 @@ harness assertions pass. `raspi3b` gives `-serial` #0 to the PL011 and
 source and by boot.
 
 **M1 — the console moves to the mini-UART; `#t` returns.** *Landed
-under QEMU 2026-09-13; not yet run on the board.* `os/port/devuart.c`
+under QEMU 2026-09-13; on the board the same night: console clean at
+115200 first boot, core clock 400MHz (asked, not assumed), PL011 receive
+path proven byte for byte.* `os/port/devuart.c`
 and `uart.h` reinstated with the locks named; `os/bcm2837/uartmini.c`
 (from 9front, MIT) and `uartpl011.c` as `PhysUart`s; `uart.c` reduced
 to console policy over the polled mini-UART. Console input arrives on
@@ -408,12 +414,19 @@ name: `-t /dev/eia0`, `-t tcp!host!port`, `-t /chan/btmock`.
 115200, `.hcd` uploaded, baud raised to 921600 then 3 Mbaud with
 `m1`, `Read_BD_ADDR` returns the board's own address. The first
 hardware milestone and the first that needs the board at all.
-*The code is in place (2026-09-13):* `firmware <path>` names the
-`.hcd`, `up` uploads it in BlueZ's order and resets, `baud <n>` tells
-the controller and then the transport's ctl file; `bthci->hcdrecords`
-parses the file and is unit-tested; the contract test uploads a
-three-record patch through the mock. What is not done is the only
-thing that matters here: a CYW43455 has not seen any of it.
+*Done on the board 2026-09-14.* The ROM answered once two things
+were understood: the controller holds its transmitter until CTS is
+asserted (`bt9p` now sets `m1` on any serial transport itself), and a
+`bt9p` left over from an earlier console session was reading the
+port (`os/bcm2837/README.md`, "What the board showed"). `firmware`
+uploaded the 323 records of `BCM4345C0.hcd`; the controller came back
+as `BCM43455 37.4MHz Raspberry Pi 3+-0190`, HCI 5.0, Cypress. Its
+address after the patch is the patch's default `43:45:c0:00:1f:ac`;
+a `bdaddr` verb (Broadcom `Write_BD_ADDR`) for the board's own is
+still to write. `baud` above 115200 has not been tried on silicon.
+Also found on the way: the firmware's mailbox reply word trails its
+mailbox reply, so `#G/gpio/128/level` reported *refused* for writes
+that took effect; `mboxcall` now waits for it.
 
 **M4 — discovery.** `scan`, `lescan`, remote name requests. *Done
 against the mock 2026-09-13:* a device's `scan` line is written once
@@ -421,8 +434,10 @@ its name is known -- from the EIR, or from a Remote Name Request made
 after the inquiry, one at a time, `-` on a page timeout -- and
 `lescan` is an active LE scan for the `scan` time, one line per
 device heard with its address type and the name from its advertising
-data. Still to do: run it against this host's `hci0`, which is
-discoverable on demand, through the bridge (below).
+data. *On silicon 2026-09-14:* the board's `scan` found the host's
+controller (behind the bridge, made discoverable by a hosted `bt9p`)
+at -33dBm with its name; `lescan` ran clean and heard nothing, there
+being no LE advertiser in the room to hear.
 
 **M5 — L2CAP and conversations.** `clone`, `N/`, `dial` and `listen`
 over L2CAP; SDP client as a library (`sdp.m`); the board and the host
@@ -438,11 +453,24 @@ echo service on PSM 0x1001, an incoming call on request, and it
 records what it is sent. The contract test connects, echoes, hangs up,
 is refused by PSM and by page timeout, announces and takes a call,
 and runs the kernel's `dial(2)` against the tree with no change to
-`dial`. SDP is deferred to when a profile needs it (M7).
+`dial`. SDP is deferred to when a profile needs it (M7). *On silicon
+2026-09-14:* the host's `dial(2)` on `bt!<board>!4099` against a
+hosted `bt9p` on the bridge, the board's `listen` accepting, and a
+line each way over the air; the board reported `Hangup remote hangup`
+after. The one thing real controllers corrected: the Disconnect
+command's reason was 16r16, which the mock accepted and a Realtek
+refused as a parameter error -- 16r13 is the reason a host gives, and
+the mock now refuses the rest as the controller did.
 
 **M6 — pairing through factotum.** `proto=btlink`; SSP numeric
 comparison via the confirmation path; legacy PIN for old peripherals.
-*Done against the mock 2026-09-13, the WiFi way.* factotum is the only
+*Done against the mock 2026-09-13, the WiFi way; on silicon 2026-09-14
+with an Android phone (it paired, Just Works, and its key landed in
+factotum and on the card) and with BlueZ (paired, and reconnected on
+the stored key).* One thing the card needs that the runbook had not
+said: the protocol modules at `/dis/auth/proto/btlink.dis` and
+`btpin.dis`. Without them a key can be stored but never found, so
+pairing works and reuse does not, silently. factotum is the only
 source of secrets (`auth/proto/btlink`, `auth/proto/btpin`); a link
 key the controller makes goes to factotum's ctl and, with `-k`, to the
 keys file in factotum's own syntax, which `bt9p` loads at start one
@@ -457,7 +485,37 @@ issued, so the contract test pairs, reconnects on the key, forgets,
 confirms through the file, and is refused when pairable is off.
 
 **M7 — first profiles.** `bt/hid` (a keyboard at the board, the
-`kbdusb.b` shape) and RFCOMM SPP.
+`kbdusb.b` shape) and RFCOMM SPP. *SDP and SPP done against the mock
+2026-09-14:* `sdp(2)` is the protocol as data -- elements, records, the
+server's request-to-response, the client's request and response parse,
+continuation state for a cut response -- and `rfcomm(2)` the multiplexer
+as a state machine, both I/O-free like `l2cap(2)` and unit-tested
+against themselves. In `bt9p`, `connect <addr>!rfcomm<n>` and `!spp`
+(SDP finds the channel), `announce rfcomm<n>|spp` (an SDP record is
+offered for as long as it is announced), a byte stream on `data`, one
+multiplexer per link made for the first port and taken down after the
+last; SDP itself always answered. The mock's peer offers a serial echo
+on channel 1 with a record for it, and can call ours. *On silicon the
+same day, against BlueZ on the development host with no bridge:*
+`sdptool browse` read the board's Serial Port record verbatim; a Linux
+RFCOMM socket connected to the board's `announce spp` and exchanged a
+line each way; the board's `connect <host>!rfcomm5` reached a Linux
+RFCOMM server, over a link the board first authenticated and
+encrypted -- the first time by pairing (Just Works, both sides), the
+next by offering the stored key, which the host accepted. What that
+found: a serial port needs the link secured first (BlueZ refuses
+otherwise, and does not pair on its own); paging in mode R1 timed out
+where R2 did not; a peer has one key. HID over classic is not
+started -- no classic HID device is to hand; the peripherals here are
+LE, which is #624, and its first cut landed 2026-09-14: `att(2)` (a
+GATT client and the discovery a HID device needs), `smp(2)` (legacy
+Just Works from the central's side, the sample data checked), LE
+links in `bt9p` with `connect <addr>!gatt` and `!hid`, the LTK in
+factotum as `proto=btltk`, and `bthid(1)` turning boot mouse reports
+into `/dev/pointer`. The mock is an LE mouse; the contract test pairs
+with it, subscribes, reads a report and reconnects on the stored key.
+Not yet on silicon: the board wedged (#622) before the real mouse
+could be tried.
 
 ## Test plan
 
@@ -482,9 +540,15 @@ confirms through the file, and is refused when pairable is off.
 2. *Closed:* `scan` is a streamed read; `cat` does the whole job. One
    refinement from building it: a device's line waits for its name,
    so a line is complete when it appears and there are no corrections.
-3. Whether RFCOMM belongs in `bt9p` or in a separate `bt/rfcomm`
-   composing over L2CAP conversations. Proposed: separate, decided at
-   M7 when there is a measurement of what the extra hop costs.
+3. *Closed, 2026-09-14:* RFCOMM is in `bt9p`. It is a transport, not a
+   profile: it interprets nothing, it multiplexes byte streams onto a
+   link the way L2CAP multiplexes SDUs, and a serial port *is* a
+   conversation -- `connect <addr>!rfcomm3` beside `connect <addr>!17`
+   with the same files. Separate would have meant a second 9P server
+   re-serving every conversation's files over the first's for no
+   change in what they mean, one more hop per byte, and a program
+   that had to hold `/net/bt` open to exist. What was expected to
+   need measuring did not.
 4. *Closed:* `bt9p`, following `msg9p`/`wallet9p`/`tools9p`.
 
 ## References

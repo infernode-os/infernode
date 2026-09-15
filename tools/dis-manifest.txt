@@ -80,6 +80,7 @@ dis/auth/proto/p9any.dis
 dis/auth/proto/pass.dis
 dis/auth/proto/sign.dis
 dis/auth/proto/btlink.dis
+dis/auth/proto/btltk.dis
 dis/auth/proto/btpin.dis
 dis/auth/proto/wpapsk.dis
 dis/auth/rpc.dis
@@ -100,6 +101,7 @@ dis/bioget.dis
 dis/bit2gif.dis
 dis/broke.dis
 dis/bt9p.dis
+dis/bthid.dis
 dis/btmock.dis
 dis/bytes.dis
 dis/cal.dis
@@ -302,6 +304,10 @@ dis/lib/bthci.dis
 dis/lib/btmock.dis
 dis/lib/bufio.dis
 dis/lib/l2cap.dis
+dis/lib/sdp.dis
+dis/lib/rfcomm.dis
+dis/lib/att.dis
+dis/lib/smp.dis
 dis/lib/cfg.dis
 dis/lib/cfgfile.dis
 dis/lib/chanfill.dis
@@ -683,6 +689,10 @@ dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
 dis/tests/bthci_test.dis
 dis/tests/l2cap_test.dis
+dis/tests/sdp_test.dis
+dis/tests/rfcomm_test.dis
+dis/tests/att_test.dis
+dis/tests/smp_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/dial_test.dis

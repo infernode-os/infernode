@@ -297,6 +297,13 @@ init()
 	wifisetup();
 
 	#
+	# Bluetooth, the same way: a file on the card says what to do,
+	# and nothing happens without one. Spawned; the shell must not
+	# wait on a radio.
+	#
+	btsetup();
+
+	#
 	# The touch panel, if the kernel found one. Spawned because it is
 	# a poll loop; it exits with one line on every machine without the
 	# ribbon, which is expected and not an error.
@@ -1243,6 +1250,9 @@ netshell(fd: ref Sys->FD, tok: string)
 #
 Firmwaredir: con "/n/dos/firmware";
 Wififile: con "/n/dos/wifi";
+Btfile: con "/n/dos/bt";
+Btkeys: con "/n/dos/btkeys";
+Btfactotum: con "/tmp/factotum";
 
 radiosetup()
 {
@@ -1308,6 +1318,109 @@ wifisetup()
 	}
 	spawn wifijoin(essid, pass);
 	pass = nil;
+}
+
+#
+# Bluetooth. /n/dos/bt holds the ctl lines for /net/bt, one per line,
+# written in order once bt9p is up -- typically
+#
+#	firmware /n/dos/firmware/BCM4345C0.hcd
+#	up
+#	bdaddr b8:27:eb:ca:4c:8e
+#	name infernode
+#	class 0x000104
+#	pairable on
+#	discoverable on
+#
+# so what the board does with its radio is the card's decision and
+# nothing is assumed here: no file, no Bluetooth. Link keys live in
+# /n/dos/btkeys in factotum's own syntax, loaded by bt9p itself.
+#
+# In THIS namespace, not a forked one, unlike the WiFi join: /net/bt
+# is for every session, and the network console forks from here.
+# factotum is the one WiFi started, reached through its global srv
+# entry, or one started here if there is none; either way its files
+# are under /tmp, which is a memory filesystem by now, because /mnt is
+# compiled in read-only and the desktop puts its own factotum under
+# /mnt/factotum after login.
+#
+#
+# The mount is made HERE, before the shell, in milliseconds: bt9p's
+# init returns once its tree is on /net, and the shell that starts
+# next -- and forks its namespace as it does -- inherits it, as do the
+# network console and the desktop that fork from the shell. What takes
+# time, the firmware and the radio, happens afterwards in a thread the
+# shell does not wait for. (Spawning the whole thing put /net/bt in a
+# namespace the shell had already copied from, and only later network
+# console sessions could see it.)
+#
+btsetup()
+{
+	(txt, found) := slurp(Btfile);
+	if(!found)
+		return;
+	if(sys->bind("#t", "/dev", Sys->MAFTER) < 0){
+		sys->print("init: bt: no serial ports (#t): %r\n");
+		return;
+	}
+	# the srv entry binds whether or not factotum has posted to it yet;
+	# bt9p reads the keys at its first up, and btjoin waits for the
+	# WiFi join's factotum -- or starts one -- before asking for that
+	sys->create(Btfactotum, Sys->OREAD, Sys->DMDIR|8r700);
+	sys->bind("#sfactotum", Btfactotum, Sys->MREPL);
+	bt := load Command "/dis/bt9p.dis";
+	if(bt == nil){
+		sys->print("init: bt: cannot load /dis/bt9p.dis: %r\n");
+		return;
+	}
+	{
+		bt->init(nil, "bt9p" :: "-t" :: "/dev/eia0" :: "-k" :: Btkeys :: "-f" :: Btfactotum :: nil);
+	} exception e {
+	"fail:*" =>
+		sys->print("init: bt: bt9p: %s\n", e[5:]);
+		return;
+	}
+	spawn btjoin(txt);
+}
+
+btjoin(txt: string)
+{
+	if(sys->stat(Btfactotum + "/ctl").t0 < 0){
+		(nil, wifi) := slurp(Wififile);
+		for(i := 0; wifi && i < 60 && sys->stat(Btfactotum + "/ctl").t0 < 0; i++)
+			sys->sleep(500);
+		if(sys->stat(Btfactotum + "/ctl").t0 < 0){
+			fact := load Command "/dis/auth/factotum.dis";
+			if(fact == nil){
+				sys->print("init: bt: cannot load factotum: %r\n");
+				return;
+			}
+			fact->init(nil, "factotum" :: "-m" :: Btfactotum :: nil);
+		}
+		if(sys->stat(Btfactotum + "/ctl").t0 < 0){
+			sys->print("init: bt: no factotum at %s: %r\n", Btfactotum);
+			return;
+		}
+	}
+	fd := sys->open("/net/bt/ctl", Sys->OWRITE);
+	if(fd == nil){
+		sys->print("init: bt: /net/bt/ctl: %r\n");
+		return;
+	}
+	for(i := 0; i < len txt;){
+		j := i;
+		while(j < len txt && txt[j] != '\n')
+			j++;
+		line := txt[i:j];
+		i = j + 1;
+		if(line == nil || line[0] == '#')
+			continue;
+		if(sys->fprint(fd, "%s", line) < 0)
+			sys->print("init: bt: %s: %r\n", line);
+	}
+	(a, got) := slurp("/net/bt/addr");
+	if(got)
+		sys->print("init: bt: %s", a);
 }
 
 #

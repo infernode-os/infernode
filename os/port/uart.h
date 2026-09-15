@@ -68,6 +68,9 @@ struct Uart
 	int	oerr;			/* rcvr overruns */
 	int	berr;			/* no input buffers */
 	int	serr;			/* input queue overflow */
+	ulong	nstaged;		/* bytes moved istage -> iq by uartclock */
+	ulong	nread;			/* bytes handed to readers */
+	ulong	nclock;			/* uartclock visits while enabled */
 
 	/* buffers */
 	int	(*putc)(Queue*, int);

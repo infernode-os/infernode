@@ -21,6 +21,10 @@ TARG=\
 	asyncio_test.dis\
 	bthci_test.dis\
 	l2cap_test.dis\
+	sdp_test.dis\
+	rfcomm_test.dis\
+	att_test.dis\
+	smp_test.dis\
 	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\

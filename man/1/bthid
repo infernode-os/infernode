@@ -1,0 +1,52 @@
+.TH BTHID 1
+.SH NAME
+bthid \- a Bluetooth LE mouse into the pointer
+.SH SYNOPSIS
+.B bthid
+[
+.B -v
+]
+.I addr
+.SH DESCRIPTION
+.I Bthid
+dials
+.BI bt! addr !hid
+-- so
+.IR bt9p (4)
+must be serving
+.B /net/bt
+-- and turns each report the device notifies into pointer movement,
+writing
+.BI "d " "dx dy buttons"
+to
+.BR /dev/pointer ,
+as the USB mouse driver does. The boot mouse report is three bytes:
+buttons (bit 0 left, 1 right, 2 middle), then dx and dy as signed
+bytes.
+.PP
+A mouse sleeps and drops its link; when it moves it advertises
+again, and
+.I bthid
+dials again, for as long as it runs. The first dial pairs if the
+device is not known, which
+.IR bt9p (4)
+does only with
+.B pairable
+on.
+.PP
+Boot keyboard reports (eight bytes) are recognised and counted, not
+typed: a keyboard wants the decoder in
+.BR os/init/kbdusb.b ,
+and there has been no keyboard to try it on.
+.SH EXAMPLE
+.EX
+; cat /net/bt/lescan
+c8:f3:e8:06:55:8b random -71 Microsoft Ocean Plastic Mouse
+; echo pairable on > /net/bt/ctl
+; bthid -v c8:f3:e8:06:55:8b &
+.EE
+.SH SOURCE
+.B /appl/cmd/bthid.b
+.SH SEE ALSO
+.IR bt9p (4),
+.B docs/BLUETOOTH.md

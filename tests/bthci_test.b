@@ -29,6 +29,7 @@ include "bthci.m";
 
 include "l2cap.m";
 	l2cap: L2cap;
+include "rfcomm.m";
 include "btmock.m";
 	btmock: Btmock;
 	Ctlr: import btmock;

@@ -28,7 +28,7 @@ mkdir -p $MNT/chan
 HCD=/tmp/btns.hcd
 KEYS=/tmp/btns-keys
 rm -f $KEYS
-btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -t 100 -H $HCD $MNT/chan/btmock &
+btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -n 'ee:ee:ee:ee:ee:05 0x000000 -55 mockmouse le' -t 100 -H $HCD $MNT/chan/btmock &
 sleep 1
 if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
@@ -50,6 +50,17 @@ if {! ftest -f $FACT/ctl} {
 	raise 'fail:factotum did not start'
 }
 
+# An audit sink, so that what bt9p records can be checked: a plain
+# file where auditfs would be, holding the last record written at its
+# start (the module opens and writes at offset 0; auditfs appends and
+# seals), so a check is a prefix match.
+AUDIT=$MNT/audit
+mkdir -p $AUDIT
+echo -n > $AUDIT/log
+if {! ftest -d /mnt/audit} {
+	mkdir -p /mnt/audit
+}
+bind $AUDIT /mnt/audit
 bt9p -t $MNT/chan/btmock -m $MNT -f $FACT -k $KEYS
 sleep 1
 BT=$MNT/bt
@@ -138,6 +149,18 @@ if {! ~ $"v 'discoverable 1'} {
 	raise 'fail:discoverable after write: '^$"v
 }
 
+# bdaddr: the vendor write, then what the controller reports is what
+# addr says. A malformed address is refused before anything is sent.
+if {echo bdaddr not-an-address > $BT/ctl >[2] /dev/null} {
+	raise 'fail:bdaddr took a malformed address'
+}
+echo bdaddr b8:27:eb:ca:4c:8e > $BT/ctl
+v=`{cat $BT/addr}
+if {! ~ $"v 'b8:27:eb:ca:4c:8e'} {
+	raise 'fail:addr after bdaddr: '^$"v
+}
+echo bdaddr b8:27:eb:00:00:42 > $BT/ctl	# back to the mock's own; it keeps what it is told
+
 # A scan: one line per device, written once its name is known -- a
 # Remote Name Request after the inquiry -- EOF after the last. Two
 # devices were given to the mock, one with a name; the other's name
@@ -159,8 +182,8 @@ if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
 # name from its advertising data; EOF when the scan time is up.
 le=`{cat $BT/lescan}
 n=`{cat $BT/lescan | wc -l}
-if {! ~ $"n 6} {
-	raise 'fail:lescan returned '^$"n^' lines, wanted 6'
+if {! ~ $"n 7} {
+	raise 'fail:lescan returned '^$"n^' lines, wanted 7 (every device given to the mock advertises)'
 }
 if {! ~ $"le *94:bb:43:44:61:04*public*-61*hephaestus*} {
 	raise 'fail:lescan is missing the first device: '^$"le
@@ -390,6 +413,10 @@ v=`{cat $KEYS | grep 'aa:aa:aa:aa:aa:01'}
 if {! ~ $#v 0} {
 	raise 'fail:forget left the key in the keys file'
 }
+v=`{cat /mnt/audit/log}
+if {! ~ $"v 'bt9p forget peer=aa:aa:aa:aa:aa:01'*} {
+	raise 'fail:forgetting a peer was not audited: '^$"v
+}
 v=`{cat $KEYS | grep 'bb:bb:bb:bb:bb:02'}
 if {~ $#v 0} {
 	raise 'fail:forget took the wrong key with it'
@@ -449,6 +476,204 @@ read 200 < $BT/pair > $PAIR &
 } <> $BT/clone
 echo pairable off > $BT/ctl
 rm -f $PAIR $KEYS
+
+# Serial ports: RFCOMM on the link's one multiplexer. The mock echoes
+# on channel 1 and its SDP record says so, so "rfcomm1" and "spp" reach
+# the same port; data is a byte stream, so one write may come back in
+# one read; the multiplexer and its channel go when the last port does.
+{
+	id=`{read 10}
+	echo 'connect 94:bb:43:44:61:04!rfcomm1' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after rfcomm connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v '94:bb:43:44:61:04!rfcomm1'} {
+		raise 'fail:rfcomm remote: '^$"v
+	}
+	echo -n 'bytes over a serial port' > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v 'bytes over a serial port'} {
+		raise 'fail:rfcomm echo round trip: '^$"v
+	}
+	echo hangup >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Closed} {
+		raise 'fail:status after rfcomm hangup: '^$"v
+	}
+} <> $BT/clone
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:the link outlived its serial port: '^$"v
+}
+v=`{cat /mnt/audit/log}
+if {! ~ $"v 'bt9p connect peer=94:bb:43:44:61:04 port=rfcomm1 outgoing'*} {
+	raise 'fail:the serial connect was not audited: '^$"v
+}
+
+# "spp": the channel comes from the peer's SDP record
+{
+	id=`{read 10}
+	echo 'connect 94:bb:43:44:61:04!spp' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after spp connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v '94:bb:43:44:61:04!rfcomm1'} {
+		raise 'fail:spp resolved to the wrong channel: '^$"v
+	}
+	echo -n 'found by sdp' > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v 'found by sdp'} {
+		raise 'fail:spp echo round trip: '^$"v
+	}
+	echo hangup >[1=0]
+} <> $BT/clone
+
+# a channel the peer does not serve is refused by DM, and says so
+{
+	id=`{read 10}
+	if {echo 'connect 94:bb:43:44:61:04!rfcomm7' >[1=0] >[2] /dev/null} {
+		raise 'fail:connect to an unserved RFCOMM channel succeeded'
+	}
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v 'Hangup refused'} {
+		raise 'fail:status after rfcomm refusal: '^$"v
+	}
+	if {echo 'connect 94:bb:43:44:61:04!rfcomm31' >[1=0] >[2] /dev/null} {
+		raise 'fail:an RFCOMM channel out of range was accepted'
+	}
+} <> $BT/clone
+
+# announce spp: the first free channel, with a Serial Port record for
+# peers to find; the mock's peer calls it and gets its bytes back
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:a link outlived the refused serial port: '^$"v
+}
+{
+	id=`{read 10}
+	if {echo 'announce 11:22:33:44:55:66!spp' >[1=0] >[2] /dev/null} {
+		raise 'fail:announce on an address that is not ours was accepted'
+	}
+	echo 'announce *!spp' >[1=0]	# what announce(2) writes for bt!*!spp
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Listen} {
+		raise 'fail:status after announce spp: '^$"v
+	}
+	v=`{cat $BT/$id/local}
+	if {! ~ $"v 'b8:27:eb:00:00:42!rfcomm1'} {
+		raise 'fail:announce spp did not take channel 1: '^$"v
+	}
+	echo 'call 94:bb:43:44:61:04 rfcomm1 serial from peer' > $MNT/chan/btmockctl
+	{
+		nid=`{read 10}
+		v=`{cat $BT/$nid/status}
+		if {! ~ $"v Connected} {
+			raise 'fail:accepted serial conversation status: '^$"v
+		}
+		v=`{cat $BT/$nid/remote}
+		if {! ~ $"v '94:bb:43:44:61:04!rfcomm1'} {
+			raise 'fail:accepted serial remote: '^$"v
+		}
+		v=`{read 100 < $BT/$nid/data}
+		if {! ~ $"v 'serial from peer'} {
+			raise 'fail:what the serial peer sent: '^$"v
+		}
+		echo -n 'serial pong' > $BT/$nid/data
+		sleep 1
+		v=`{cat $MNT/chan/btmockctl}
+		if {! ~ $"v *'recv 94:bb:43:44:61:04 rfcomm1 serial pong'*} {
+			raise 'fail:the serial peer did not record our reply: '^$"v
+		}
+	} < $BT/$id/listen
+} <> $BT/clone
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:a link outlived the serial call: '^$"v
+}
+
+# pair <addr>: a classic peer paired for its own sake -- the link made,
+# secured (pairing on the way: this device demands SSP), the key kept,
+# the link let go.
+echo pairable on > $BT/ctl
+echo pair cc:cc:cc:cc:cc:03 > $BT/ctl
+v=`{cat $FACT/ctl | grep 'proto=btlink addr=cc:cc:cc:cc:cc:03'}
+if {~ $#v 0} {
+	raise 'fail:pair did not leave a key in factotum: '^`{cat $FACT/ctl}
+}
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:the link made for pairing was not let go: '^$"v
+}
+if {echo pair 00:11:22:33:44:55 > $BT/ctl >[2] /dev/null} {
+	raise 'fail:pairing with a device that is not there succeeded'
+}
+echo pairable off > $BT/ctl
+
+# LE: a mouse. lescan hears it; connect <addr>!hid pairs (Just Works,
+# the LTK into factotum and the keys file), finds the HID service,
+# subscribes to the boot report, and a report the device notifies is
+# one read. A second connect encrypts with the stored LTK and pairs
+# no more. connect <addr>!gatt is the raw ATT channel.
+echo pairable on > $BT/ctl
+v=`{cat $BT/lescan | grep 'ee:ee:ee:ee:ee:05'}
+if {! ~ $"v 'ee:ee:ee:ee:ee:05 random -55 mockmouse'} {
+	raise 'fail:lescan did not hear the mouse as random: '^$"v
+}
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:05!hid' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after hid connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v 'ee:ee:ee:ee:ee:05!hid'} {
+		raise 'fail:hid remote: '^$"v
+	}
+	v=`{cat $FACT/ctl | grep 'proto=btltk' | grep 'addr=ee:ee:ee:ee:ee:05'}
+	if {~ $#v 0} {
+		raise 'fail:the LTK did not reach factotum: '^`{cat $FACT/ctl}
+	}
+	v=`{cat $KEYS | grep 'proto=btltk addr=ee:ee:ee:ee:ee:05 type=1 ediv=4660 rand=030405060708090a'}
+	if {~ $#v 0} {
+		raise 'fail:the LTK did not reach the keys file with its EDIV and Rand: '^`{cat $KEYS}
+	}
+	echo 'notify ee:ee:ee:ee:ee:05 01 05 fb' > $MNT/chan/btmockctl
+	v=`{read 100 < $BT/$id/data | xd -1x}
+	if {! ~ $"v *'01 05 fb'*} {
+		raise 'fail:the boot report did not arrive as one read: '^$"v
+	}
+	if {echo -n x > $BT/$id/data >[2] /dev/null} {
+		raise 'fail:writing to a hid conversation was accepted'
+	}
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+v=`{cat $BT/status | grep '^links '}
+if {! ~ $"v 'links 0'} {
+	raise 'fail:the LE link outlived its conversation: '^$"v
+}
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:05!gatt' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after gatt connect on the stored LTK: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v 'ee:ee:ee:ee:ee:05!gatt'} {
+		raise 'fail:gatt remote: '^$"v
+	}
+} <> $BT/clone
+echo pairable off > $BT/ctl
 
 # dial(2), unchanged: the kernel's dial against this tree. The dial
 # command runs its argument with the connection on fds 0 and 1.

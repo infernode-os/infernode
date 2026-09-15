@@ -84,6 +84,8 @@ L2cap: module
 		Fixed =>
 			cid:	int;		# an LE fixed channel: ATT or SMP, one SDU
 			sdu:	array of byte;
+		Params =>
+			min, max, latency, timeout: int;	# an LE peer asks for these connection parameters; accepted
 		}
 	};
 

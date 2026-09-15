@@ -65,11 +65,11 @@ Link.sendfixed(nil: self ref Link, cid: int, sdu: array of byte): list of ref Ev
 }
 
 # LE signalling (Vol 3 Part A 4.20, 4.21): a peripheral asks for
-# connection parameters and is told yes -- the controller's are what
-# they are, and a mouse that wants a slower interval to save its
-# battery gets a Connection Parameter Update Response accepting; the
-# actual update is the caller's LE_Connection_Update, if it wants.
-# Anything else on this channel is rejected as not understood.
+# connection parameters -- a mouse wants a slower interval to save
+# its battery -- and is told yes; the caller then makes it so with
+# LE_Connection_Update, since a peer whose request is accepted and
+# not acted on may well hang up. Anything else on this channel is
+# rejected as not understood.
 lesignal(d: array of byte): list of ref Ev
 {
 	if(len d < 4)
@@ -78,9 +78,12 @@ lesignal(d: array of byte): list of ref Ev
 	id := int d[1];
 	case code {
 	16r12 =>
+		if(len d < 12)
+			return nil;
 		r := array[2] of byte;
 		bthci->put2(r, 0, 0);
-		return ref Ev.Send(frame(Cidlesig, sigcmd(16r13, id, r))) :: nil;
+		return ref Ev.Send(frame(Cidlesig, sigcmd(16r13, id, r))) ::
+			ref Ev.Params(bthci->get2(d, 4), bthci->get2(d, 6), bthci->get2(d, 8), bthci->get2(d, 10)) :: nil;
 	16r01 or 16r13 =>
 		return nil;
 	}

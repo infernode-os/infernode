@@ -1128,7 +1128,7 @@ vmachine(void*)
 {
 	Prog *r;
 	Osenv *o;
-	int cycles;
+	int cycles, nerr;
 	static int gccounter;
 
 	startup();
@@ -1186,6 +1186,28 @@ vmachine(void*)
 		up->env = &up->defenv;
 	}
 
+	/*
+	 * The error stack as it should be for the whole of the loop
+	 * below: the trampoline's label under this function's. A Prog's
+	 * quantum is a syscall path or a hundred, and one with a
+	 * poperror() too many -- or a handler that pops the label the
+	 * longjmp to it already consumed -- leaves the count one short,
+	 * with nothing said. The NEXT error() raised in this kproc then
+	 * unwinds past this function's label to the trampoline's, and
+	 * that is a dead machine: the interpreter's owner exits, and
+	 * userspace stops while the kernel pings. The board did exactly
+	 * this four times in a day under Bluetooth load, and the only
+	 * line it left was the trampoline naming "dis".
+	 *
+	 * So after every quantum the count is compared with what it
+	 * was, and a difference is printed -- naming the Prog and the
+	 * module that just ran, which is where the unbalanced pop is --
+	 * and repaired, so that the label stays where the next error()
+	 * expects it. This does not fix the pop; it makes the pop a line
+	 * on the console that says whose, instead of a power cycle.
+	 */
+	nerr = up->nerrlab;
+
 	cycles = 0;
 	for(;;) {
 		if(tready(nil) == 0) {
@@ -1206,6 +1228,14 @@ vmachine(void*)
 			FPrestore(&o->fpu);
 			r->xec(r);
 			FPsave(&o->fpu);
+
+			if(up->nerrlab != nerr){
+				print("vmachine: error stack %d, expected %d, after prog %d %s pc %#p; repaired\n",
+					up->nerrlab, nerr, r->pid,
+					r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?",
+					r->R.PC);
+				up->nerrlab = nerr;
+			}
 
 			if(isched.runhd != nil)
 			if(r == isched.runhd)

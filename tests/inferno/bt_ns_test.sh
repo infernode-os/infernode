@@ -631,7 +631,7 @@ if {! ~ $"v 'ee:ee:ee:ee:ee:05 random -55 mockmouse'} {
 	id=`{read 10}
 	echo 'connect ee:ee:ee:ee:ee:05!hid' >[1=0]
 	v=`{cat $BT/$id/status}
-	if {! ~ $"v Connected} {
+	if {! ~ $"v 'Connected boot-mouse'} {
 		raise 'fail:status after hid connect: '^$"v
 	}
 	v=`{cat $BT/$id/remote}

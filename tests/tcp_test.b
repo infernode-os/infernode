@@ -157,6 +157,31 @@ testLoopback(t: ref T)
 		t.error("acceptor: " + e);
 }
 
+# Only discriminates on BSD-family hosts. POSIX makes shutdown() on a listening
+# socket ENOTCONN and macOS and FreeBSD return it, which is where the descriptor
+# leaks; Linux permits it as the idiom for unblocking a thread parked in accept(),
+# so the close happens there either way and this passes with or without the fix.
+# Most of the CI runners are Linux. Do not remove it after watching it pass there.
+testAnnounceHangupReleasesPort(t: ref T)
+{
+	addr := "tcp!127.0.0.1!18798";
+	(aok, ac) := sys->announce(addr);
+	if(aok < 0){
+		t.skip(sys->sprint("no IP stack (announce failed): %r"));
+		return;
+	}
+	b := array of byte "hangup";
+	if(sys->write(ac.cfd, b, len b) != len b){
+		t.fatal(sys->sprint("announced socket hangup failed: %r"));
+		return;
+	}
+
+	(bok, bc) := sys->announce(addr);
+	t.assert(bok >= 0, "hangup releases an announced TCP port for reuse");
+	if(bok >= 0)
+		sys->write(bc.cfd, b, len b);
+}
+
 # ── outbound Internet (opt-in; skip cleanly when offline) ───────────────────
 testTcpDialIp(t: ref T)
 {
@@ -239,6 +264,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# Always-on, self-contained assertion first.
 	run("Loopback", testLoopback);
+	run("AnnounceHangupReleasesPort", testAnnounceHangupReleasesPort);
 
 	# Opt-in outbound tests; each skips (does not hang) when offline.
 	run("TcpDialIp", testTcpDialIp);

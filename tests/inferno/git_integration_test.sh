@@ -11,6 +11,15 @@ echo '=========================================='
 
 failed=0
 
+# Declared offline run: the runner (or the operator) declares the
+# environment instead of the test inferring it from a dial that may block
+# forever — a host firewall in ask mode never fails the connect, it blocks
+# until a human answers a dialog, and the skip-guard below never runs.
+if {cat /env/INFERNODE_TESTS_OFFLINE > /dev/null >[2] /dev/null} {
+	echo 'SKIP: INFERNODE_TESTS_OFFLINE set'
+	raise 'skip:INFERNODE_TESTS_OFFLINE set'
+}
+
 echo ''
 echo 'Step 1: Start network services'
 ndb/cs

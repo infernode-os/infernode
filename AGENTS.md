@@ -128,6 +128,34 @@ reach it either. `ps` lists survivors by module name (`Bt9p`, `Bthci`,
 `Listen`); `kill Bt9p Bthci` before starting another. `listen(1)` does the
 same with its connection.
 
+**Bluetooth comes up from the card, not from a session.** `/n/dos/bt`
+holds the `ctl` lines (`firmware`, `up`, `bdaddr`, `name`, `pairable`
+...) and `osinit` mounts `bt9p` on `/net/bt` *before the shell starts*,
+so the console, the network console and the desktop all inherit it;
+`init: bt: <addr>` on the console says the radio is up. Change
+`bt9p.dis` on the card and `echo reboot > '#c/sysctl'` rather than
+restarting it by hand: a `bt9p` started from any session mounts into
+that session's namespace only, and killing the boot one leaves every
+other namespace's `/net/bt` pointing at a dead server, where the next
+read blocks for ever. Keys live in `/n/dos/btkeys`; `cat
+/tmp/factotum/ctl` lists whom the board is paired with. `listen -A
+'bt!*!spp' cmd` and `dial("bt!addr!port")` are the application
+interface; `bthid addr` puts an LE mouse on `/dev/pointer`.
+
+**Userspace dead, kernel alive, no panic: the Dis kproc died.** The
+presentation is exact -- the board pings, `tcp!*!17010` accepts and
+then resets, the serial line echoes keystrokes and nothing answers --
+and it means `vmachine`, the kproc that owns the interpreter, unwound
+out through an `error()` with no handler left (#622). The capture line
+is `linkproc: error() underflow in N:dis`. Since 2026-09-15 `vmachine`
+audits its error stack after every Prog quantum and prints `vmachine:
+error stack N, expected M, after prog P <module> pc <inst>; repaired`
+instead of dying; that line names the Prog whose syscall path left a
+`waserror()` unpopped, and `<module>.sbl` turns the instruction index
+into a source line. Anything else that kills userspace without a
+panic is new. A *panic* reboots the board by itself; this does not,
+and needs the power pulled.
+
 **On the host, `brltty` steals CH340 adapters.** The generic `1a86:7523`
 USB-serial ID is also a Baum braille display, so a running `brltty` claims the
 interface over usbfs and the `ttyUSB0` node disappears a second or two after

@@ -106,13 +106,13 @@ schedinit(void)		/* never returns */
 		 * momentarily running on two cores' worth of state.
 		 */
 		coherence();
-		p->mach = nil;
+		SETMACH(p, nil);
 		switch(p->state) {
 		case Running:
 			ready(p);
 			break;
 		case Moribund:
-			p->state = Dead;
+			SETSTATE(p, Dead);
 /*
 			edfstop(p);
 			if(p->edf){
@@ -196,7 +196,7 @@ sched(void)
 	if(up->mach != MACHP(m->machno))
 		panic("double-run: %s mach=cpu%d on cpu%d",
 			up->text, up->mach != nil ? (int)((Mach*)up->mach - MACHP(0)) : -1, m->machno);
-	up->state = Running;
+	SETSTATE(up, Running);
 	m->proc = up;
 
 	/*
@@ -259,11 +259,13 @@ ready(Proc *p)
 	 * and that one has cleared mach first; a new proc is Scheding
 	 * with no mach yet. Name any other.
 	 */
-	if((p->state == Running || p->state == Scheding) && p->mach != nil)
+	if((p->state == Running || p->state == Scheding) && p->mach != nil){
 		print("ready: %lud:%s is %s on cpu%d, readied from cpu%d caller %#p\n",
 			p->pid, p->text, statename[p->state],
 			p->mach != nil ? (int)((Mach*)p->mach - MACHP(0)) : -1,
 			m->machno, getcallerpc(&p));
+		ptracedump(p);
+	}
 	p->rnext = 0;
 	if(rq->tail)
 		rq->tail->rnext = p;
@@ -273,7 +275,7 @@ ready(Proc *p)
 
 	nrdy++;
 	occupied |= 1<<p->pri;
-	p->state = Ready;
+	SETSTATEC(p, Ready, getcallerpc(&p));	/* who readied it */
 	unlock(&runq[0].l);
 	splx(s);
 	idlewake();	/* an idle core may be waiting in wfe for exactly this */
@@ -423,7 +425,7 @@ loop:
 	}
 	nrdy--;
 	if(p->dbgstop){
-		p->state = Stopped;
+		SETSTATE(p, Stopped);
 		unlock(&runq[0].l);
 		goto loop;
 	}
@@ -439,9 +441,25 @@ loop:
 	 * nil, so that two cores resumed one saved context. With mach set
 	 * at the dequeue, the second core's runproc refuses it.
 	 */
-	p->state = Scheding;
-	p->mach = MACHP(m->machno);
+	SETSTATE(p, Scheding);
+	SETMACH(p, MACHP(m->machno));
 	unlock(&runq[0].l);
+	/*
+	 * The birth of a double-run, if there is one: this core has just
+	 * taken p off the run queue, and some other core's m->proc is p
+	 * -- that core is still executing it. Say so, with p's recording
+	 * of every state and mach write, before both cores go on.
+	 */
+	{
+		int c;
+
+		for(c = 0; c < conf.nmach; c++)
+			if(c != m->machno && MACHP(c)->proc == p){
+				print("runproc: cpu%d dequeued %lud:%s while cpu%d has it as its proc (state was %s)\n",
+					m->machno, p->pid, p->text, c, statename[p->state]);
+				ptracedump(p);
+			}
+	}
 	if(p->mp != MACHP(m->machno))
 		p->movetime = MACHP(0)->ticks + HZ/10;
 	p->mp = MACHP(m->machno);
@@ -486,10 +504,13 @@ newproc(void)
 	unlock(&procalloc.l);
 
 	p->type = Unknown;
-	p->state = Scheding;
+#ifdef PROCTRACE
+	p->ptracen = 0;
+#endif
+	SETSTATE(p, Scheding);
 	p->pri = PriNormal;
 	p->psstate = "New";
-	p->mach = 0;
+	SETMACH(p, 0);
 	p->qnext = 0;
 	p->fpstate = FPINIT;
 	p->kp = 0;
@@ -603,7 +624,7 @@ sleep(Rendez *r, int (*f)(void*), void *arg)
 			dumpstack();
 			panic("sleep");
 		}
-		up->state = Wakeme;
+		SETSTATE(up, Wakeme);
 		r->p = up;
 		unlock(&r->l);
 		up->swipend = 0;
@@ -765,7 +786,7 @@ pexit(char*, int)
 /*
 	edfstop(up);
 */
-	up->state = Moribund;
+	SETSTATE(up, Moribund);
 	sched();
 	panic("pexit");
 }
@@ -941,33 +962,12 @@ errlabcheck(void)
 	 * sched() only sees the case where the second core comes through
 	 * runproc.
 	 */
-	if(p->mach != nil && p->mach != MACHP(m->machno)){
-		uvlong hw;
-		Mach *om;
-		Proc *op;
-
-		/*
-		 * Read the other core's view once, before the print moves
-		 * time on: is that core executing this same Proc right now?
-		 */
-		om = p->mach;
-		op = om->proc;
-		print("waserror: other core cpu%d has proc %lud:%s (this proc %s)\n",
-			(int)(om - MACHP(0)), op != nil ? op->pid : 0UL, op != nil ? op->text : "-",
-			op == p ? "TOO" : "not");
-
-		/*
-		 * The hardware's own idea of which core this is, beside
-		 * m->machno: m is x28, and if the two disagree the register
-		 * is stale -- this code is running on one core with the
-		 * Mach of another, so `up` is another core's process.
-		 */
-		__asm__ volatile("mrs %0, mpidr_el1" : "=r"(hw));
-		print("waserror: %lud:%s runs on cpu%d (hw core %d, that core's proc %lud) but its mach is cpu%d, pc %lux\n",
-			p->pid, p->text, m->machno, (int)(hw & 0xff),
-			MACHP((int)(hw & 0xff))->proc != nil ? MACHP((int)(hw & 0xff))->proc->pid : 0UL,
-			(int)((Mach*)p->mach - MACHP(0)), getcallerpc(&up));
-	}
+	/*
+	 * (A check that p->mach names this core lived here and fired
+	 * often -- falsely: a proc preempted and resumed on another core
+	 * between the compiler's load of m->machno and the compare. The
+	 * ownership check that means something is in runproc.)
+	 */
 	n = p->nerrlab;
 	if(n >= NERR)
 		panic("waserror: error stack overflow, nerrlab %d in %lud:%s pc %lux",
@@ -1032,6 +1032,55 @@ poperrchk(uintptr pc)
 			l->pc, l->sp, pc, up->pid, up->text);
 	up->nerrlab--;
 }
+
+#ifdef PROCTRACE
+__attribute__((noinline)) void
+ptrace(Proc *p, int what, uintptr val, uintptr pc)
+{
+	Ptrace *t;
+
+	/*
+	 * The slot is claimed atomically: two cores writing this Proc's
+	 * state at once is the very thing being recorded, and a plain ++
+	 * would put their entries in each other's slots and out of order.
+	 * A dmb after the entry so that a dump on another core sees it.
+	 */
+	t = &p->ptrace[(ainc(&p->ptracen) - 1) % NPTRACE];
+	t->core = m->machno;
+	t->what = what;
+	t->tick = MACHP(0)->ticks;
+	if(pc == 0)
+		pc = (uintptr)__builtin_return_address(0);
+	t->pc = pc;
+	coherence();
+	t->val = val;
+}
+
+void
+ptracedump(Proc *p)
+{
+	int i, n, k;
+	Ptrace *t;
+
+	n = (int)p->ptracen;
+	k = n > NPTRACE ? NPTRACE : n;
+	print("ptrace %lud:%s, %d writes, last %d:\n", p->pid, p->text, n, k);
+	for(i = n - k; i < n; i++){
+		t = &p->ptrace[i % NPTRACE];
+		if(t->what == 's')
+			print("  cpu%d tick %lud state %s pc %#p\n", t->core, t->tick,
+				t->val < nelem(statename) ? statename[t->val] : "?", t->pc);
+		else
+			print("  cpu%d tick %lud mach %ld pc %#p\n", t->core, t->tick,
+				t->val != 0 ? (long)((Mach*)t->val - MACHP(0)) : -1L, t->pc);
+	}
+}
+#else
+void
+ptracedump(Proc*)
+{
+}
+#endif
 
 void
 error(char *err)

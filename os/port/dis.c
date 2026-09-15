@@ -938,7 +938,7 @@ acquire(void)
 		}
 		isched.vmqt = up;
 
-		up->state = Queueing;
+		SETSTATE(up, Queueing);
 		up->pc = getcallerpc(&empty);
 		unlock(&isched.l);
 		if(empty)
@@ -1018,7 +1018,7 @@ iyield(void)
 	up->qnext = isched.idlevmq;
 	isched.idlevmq = up;
 
-	up->state = Queueing;
+	SETSTATE(up, Queueing);
 	up->pc = getcallerpc(&p);
 	unlock(&isched.l);
 	ready(p);
@@ -1042,7 +1042,7 @@ startup(void)
 	}
 	up->qnext = isched.idlevmq;
 	isched.idlevmq = up;
-	up->state = Queueing;
+	SETSTATE(up, Queueing);
 	up->pc = getcallerpc(&x);
 	unlock(&isched.l);
 	sched();

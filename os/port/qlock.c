@@ -31,7 +31,7 @@ qlock(QLock *q)
 		p->qnext = mp;
 	q->tail = mp;
 	mp->qnext = 0;
-	mp->state = Queueing;
+	SETSTATE(mp, Queueing);
 	up->qpc = getcallerpc(&q);
 	unlock(&q->use);
 	sched();

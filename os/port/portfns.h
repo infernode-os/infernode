@@ -204,6 +204,18 @@ Cmdbuf*		parsecmd(char*, int);
 void		pexit(char*, int);
 void		pgrpcpy(Pgrp*, Pgrp*);
 void		poperrunder(void);
+void		ptrace(Proc*, int, uintptr, uintptr);
+void		ptracedump(Proc*);
+/* pc 0: ptrace records its own return address, the site of the write */
+#ifdef PROCTRACE
+#define		SETMACH(p, v)	(ptrace((p), 'm', (uintptr)(v), 0), (p)->mach = (v))
+#define		SETSTATE(p, v)	(ptrace((p), 's', (uintptr)(v), 0), (p)->state = (v))
+#define		SETSTATEC(p, v, pc)	(ptrace((p), 's', (uintptr)(v), (pc)), (p)->state = (v))
+#else
+#define		SETMACH(p, v)	((p)->mach = (v))
+#define		SETSTATE(p, v)	((p)->state = (v))
+#define		SETSTATEC(p, v, pc)	((p)->state = (v))
+#endif
 void		poperrchk(uintptr);
 int		procok(Proc*);
 /*

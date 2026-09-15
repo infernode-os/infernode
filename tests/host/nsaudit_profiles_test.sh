@@ -83,14 +83,14 @@ for profile in "${profiles[@]}"; do
 
   case "$profile" in
     profile-payments)
-      echo "$out" | grep -q 'authority=spends' ||
-        fail_profile "$profile" "payments profile lacks spend authority" "$out"
-      echo "$out" | grep -q 'authority=spend_ungated' &&
-        fail_profile "$profile" "payments profile has unbounded spend" "$out"
+      echo "$out" | grep -q 'authority=proposes_payment' ||
+        fail_profile "$profile" "payments profile lacks proposal authority" "$out"
+      echo "$out" | grep -q 'authority=spends' &&
+        fail_profile "$profile" "payments profile unexpectedly has direct spend authority" "$out"
       ;;
     *)
-      echo "$out" | grep -q 'authority=spends' &&
-        fail_profile "$profile" "non-payment profile has spend authority" "$out"
+      echo "$out" | grep -q 'authority=proposes_payment' &&
+        fail_profile "$profile" "non-payment profile has payment proposal authority" "$out"
       ;;
   esac
 

@@ -16,10 +16,10 @@ each of them.
 
 **Operational guidance:**
 
-- Every wallet account starts with `requireapproval on`: agent-initiated
+- Every wallet account has mandatory `requireapproval on`: agent-initiated
   payments and x402 authorizations wait in a queue until a human approves
-  them in the wallet GUI (**Pending Payments**). Leave this on for any
-  account an agent can reach.
+  them in the wallet GUI (**Pending Payments**). Approval cannot be disabled;
+  this keeps the agent-visible capability proposal-only.
 - Set a budget (`budget <maxpertx> <maxpersess> <currency>`) on any
   account holding real funds. Budgets are hard caps enforced inside
   wallet9p on every execution path, including approved payments.
@@ -51,7 +51,7 @@ each of them.
 
 ## Overview
 
-InferNode provides a native cryptocurrency wallet that enables Veltro AI agents to make autonomous payments for external services. The system follows Plan 9 architecture principles: everything is a file, secrets are managed by factotum, and persistent storage uses secstore.
+InferNode provides a native cryptocurrency wallet that enables Veltro AI agents to propose payments for external services. A trusted controller must approve every proposal. The system follows Plan 9 architecture principles: everything is a file, secrets are managed by factotum, and persistent storage uses secstore.
 
 ### Architecture
 
@@ -324,11 +324,11 @@ The wallet filesystem mounts at `/n/wallet/` and provides account management, si
     ├── address      r    public address (EIP-55 checksummed)
     ├── balance      r    live balance from blockchain RPC
     ├── chain        rw   chain name
-    ├── pay          rw   write: "amount recipient" → read: pending:id or txhash
-    ├── authorize    rw   write: structured x402 request → read: pending:id or
-    │                         "sig <hex> from <addr> nonce <hex> validafter <n> validbefore <n>"
+    ├── pay          rw   write: "amount recipient" → read: pending:id
+    ├── authorize    rw   write: structured x402 request → read: pending:id;
+    │                         signature is returned after trusted approval
     ├── ctl          rw   "budget maxpertx maxpersess currency",
-    │                     "gasbudget maxpertx maxpersess", "requireapproval [off]"
+    │                     "gasbudget maxpertx maxpersess", "requireapproval on"
     └── history      r    recent transactions (timestamped, capped at 200)
 ```
 
@@ -440,8 +440,8 @@ echo 'gasbudget 10000000000000000 50000000000000000' > /n/wallet/myaccount/ctl
 ```
 
 Budgets are hard caps enforced inside wallet9p on **every** execution path:
-direct payments, approved payments, ERC-20 transfers, x402 authorizations,
-and Stripe charges. Amounts are integer base units and per-tx / per-session
+approved ETH payments, ERC-20 transfers, x402 authorizations, and Stripe
+charges. Amounts are integer base units and per-tx / per-session
 limits both apply. Budgets are currency-scoped (`USDC`, `ETH` in wei, `USD`
 in cents): a payment in a currency the configured budget cannot evaluate is
 **rejected**, not waved through — including x402 requests for any asset other
@@ -467,7 +467,7 @@ amounts and balances above 2^63 wei do not wrap.
 
 ### Payment Approval
 
-New and restored accounts require approval by default. Writing to
+All accounts require trusted approval. Writing to
 `/n/wallet/{account}/pay` or `/n/wallet/{account}/authorize` queues a pending
 payment and returns `pending:<id>`. Requests are validated *before* queueing
 (malformed or over-budget requests are rejected immediately), and pending
@@ -485,11 +485,10 @@ echo 'approve 3' > /n/wallet/ctl      # or: deny 3
 Payments the user initiates in the wallet GUI itself are auto-approved (the
 human just clicked Send); agent proposals always wait.
 
-Trusted live-payment tests or administrative sessions may explicitly opt out:
-
-```sh
-echo 'requireapproval off' > /n/wallet/myaccount/ctl
-```
+`requireapproval off` is rejected. Automation that needs direct spending must
+use a separately designed, capability-bound interface whose limits can be
+attested for that exact agent view; it cannot silently change the semantics of
+these proposal files.
 
 ### Network Pinning
 

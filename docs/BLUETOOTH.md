@@ -514,8 +514,20 @@ links in `bt9p` with `connect <addr>!gatt` and `!hid`, the LTK in
 factotum as `proto=btltk`, and `bthid(1)` turning boot mouse reports
 into `/dev/pointer`. The mock is an LE mouse; the contract test pairs
 with it, subscribes, reads a report and reconnects on the stored key.
-Not yet on silicon: the board wedged (#622) before the real mouse
-could be tried.
+*On silicon 2026-09-15 with a Microsoft Ocean Plastic Mouse:* paired
+(Just Works; LTK, EDIV, Rand and IRK to factotum and the card),
+reconnected on the stored key every time it woke, its boot mouse
+report found and subscribed, and the cursor on the board's panel
+follows it through `bthid`. What silicon taught: a bonded peripheral
+may advertise under private addresses (so the IRK is kept and used to
+resolve them); a peripheral whose connection-parameter request is
+accepted but not applied hangs up (so `LE_Connection_Update` follows
+the acceptance); and a boot mouse report may be eight bytes (so the
+conversation's `status` says which kind of report is coming, and the
+reader does not guess from the length). Not done: report-protocol
+devices (the report map is not parsed), keyboards (no device to try),
+LE Secure Connections (a peer that insists is refused and says so),
+being a peripheral.
 
 ## Test plan
 

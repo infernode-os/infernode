@@ -1133,6 +1133,7 @@ vmachine(void*)
 
 	startup();
 
+    for(;;){
 	while(waserror()) {
 		if(up->type != Interp)
 			panic("vmachine: non-interp kproc");
@@ -1210,6 +1211,9 @@ vmachine(void*)
 
 	cycles = 0;
 	for(;;) {
+		int pid;
+		char *modname;
+
 		if(tready(nil) == 0) {
 			execatidle();
 			sleep(&isched.irend, tready, 0);
@@ -1224,6 +1228,16 @@ vmachine(void*)
 		if(r != nil) {
 			o = r->osenv;
 			up->env = o;
+			/*
+			 * Taken before the quantum: a Prog that exits during it
+			 * is freed by the time the audit below runs, and every
+			 * catch so far has printed the poison of a freed Prog
+			 * where its pc should be -- which is itself the finding
+			 * (the imbalance comes with an exit), and the reason to
+			 * read these two fields first.
+			 */
+			pid = r->pid;
+			modname = r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?";
 
 			FPrestore(&o->fpu);
 			r->xec(r);
@@ -1239,11 +1253,9 @@ vmachine(void*)
 				int i, n;
 
 				n = up->nerrlab;
-				print("vmachine: error stack %d, expected %d, after prog %d %s pc %ld; repaired\n",
-					n, nerr, r->pid,
-					r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?",
-					r->R.M != nil && r->R.M->m != nil && r->R.M->m->prog != nil ?
-						(long)(r->R.PC - r->R.M->m->prog) : -1L);
+				print("vmachine: error stack %d, expected %d, after prog %d %s (%s); re-armed\n",
+					n, nerr, pid, modname,
+					isched.runhd == r || r->pid == pid ? "still live" : "exited in this quantum");
 				/*
 				 * Each label records the pc of the waserror() that
 				 * pushed it, so a label left behind names its own
@@ -1257,7 +1269,21 @@ vmachine(void*)
 				for(i = nerr < n ? nerr : n; i < (nerr > n ? nerr : n) && i < NERR; i++)
 					print("vmachine:   errlab[%d] pushed at pc %#p sp %#p\n",
 						i, up->errlab[i].pc, up->errlab[i].sp);
-				up->nerrlab = nerr;
+				/*
+				 * Repairing the COUNT is not enough. When it came
+				 * up short, the slot this function's own label lived
+				 * in has been reused by whoever pushed after the
+				 * extra pop -- rread, rwrite, kopen have all been
+				 * seen there -- and the next error() would land in
+				 * that dead frame. So drop to below this function's
+				 * slot and go round the outer loop, whose waserror()
+				 * pushes a fresh label there. The board ran 41
+				 * minutes on a count-only repair before a longjmp
+				 * into rread's ghost ended in "Double release".
+				 */
+				up->env = &up->defenv;
+				up->nerrlab = nerr - 1;
+				goto rearm;
 			}
 
 			if(isched.runhd != nil)
@@ -1319,6 +1345,9 @@ vmachine(void*)
 				print("up->iprog not nil (%lux)\n", up->iprog);
 		}
 	}
+rearm:
+	;
+    }
 }
 
 void

@@ -71,6 +71,11 @@ NsConstruct: module {
 	# Returns nil on success, error string on failure
 	restrictns: fn(caps: ref Capabilities): string;
 
+	# Apply the model-facing tool policy. This is the same restriction as
+	# restrictns, with trusted UI metadata hidden before /tmp is sealed so no
+	# later shadow construction can recreate the private backing tree.
+	restricttoolns: fn(caps: ref Capabilities): string;
+
 	# Emit namespace manifest for the UI to display.
 	# Writes to mpath — one entry per line.
 	# Must be called AFTER restrictns() from the restricted namespace.

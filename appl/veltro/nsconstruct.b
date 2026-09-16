@@ -159,6 +159,19 @@ restrictdirx(target: string, allowed: list of string,
 # Apply full namespace restriction policy
 restrictns(caps: ref Capabilities): string
 {
+	return restrictnsx(caps, 0);
+}
+
+# Tool workers must finish every shadow-backed restriction before the final
+# /tmp replacement. Constructing another shadow afterward recreates
+# /tmp/.veltro-ns inside the restricted writable view.
+restricttoolns(caps: ref Capabilities): string
+{
+	return restrictnsx(caps, 1);
+}
+
+restrictnsx(caps: ref Capabilities, hidemetadata: int): string
+{
 	if(sys == nil)
 		init();
 
@@ -651,6 +664,11 @@ restrictns(caps: ref Capabilities): string
 	err = restrictdir("/tmp/veltro", tmpveltroallow(caps), 1);
 	if(err != nil)
 		return sys->sprint("restrict /tmp/veltro: %s", err);
+	if(hidemetadata) {
+		err = restrictdir("/tmp/veltro/.ns", nil, 0);
+		if(err != nil)
+			return sys->sprint("hide namespace manifest: %s", err);
+	}
 
 	# Provenance (INFR-355): record this restriction while the trusted
 	# /tmp/.veltro-ns tree is still reachable (step 10 hides it). The
@@ -664,6 +682,8 @@ restrictns(caps: ref Capabilities): string
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
 		("tools=" + joincsv(caps.tools)) :: nil;
+	if(hidemetadata)
+		auditops = "restrict /tmp/veltro/.ns -> empty" :: auditops;
 	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd, 0) != 0 &&
 	   auditrequired)
 		return "required namespace audit write failed";

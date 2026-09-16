@@ -778,7 +778,7 @@ validstat(uchar *s, int n)
 	int m;
 	char buf[64];
 
-	if(statcheck(s, n) < 0)
+	if(n < 0 || statcheckbuf(s, n) != n)
 		error(Ebadstat);
 	/* verify that name entry is acceptable */
 	s += STATFIXLEN - 4*BIT16SZ;	/* location of first string */
@@ -1022,8 +1022,8 @@ dirpackage(uchar *buf, long ts, Dir **d)
 	ss = 0;
 	n = 0;
 	for(i = 0; i < ts; i += m){
-		m = BIT16SZ + GBIT16(&buf[i]);
-		if(statcheck(&buf[i], m) < 0)
+		m = statcheckbuf(&buf[i], ts - i);
+		if(m < 0)
 			break;
 		ss += m;
 		n++;

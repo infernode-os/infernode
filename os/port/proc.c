@@ -967,7 +967,30 @@ errlabcheck(void)
 	 * often -- falsely: a proc preempted and resumed on another core
 	 * between the compiler's load of m->machno and the compare. The
 	 * ownership check that means something is in runproc.)
+	 *
+	 * This one is exact: the stack this waserror() runs on must be
+	 * the kstack of the Proc it is about to push a label on. The
+	 * board has shown one kproc's stack gaining rread's label while
+	 * another's lost one, eleven seconds apart -- the shape of a
+	 * push made through an `up` that named the wrong Proc. A local's
+	 * address is the stack; if it is outside up->kstack, `up` is
+	 * lying, and the owner of this stack is found by searching.
 	 */
+	if(p->kstack != nil){
+		uintptr sp;
+		Proc *o, *eo;
+
+		sp = (uintptr)&sp;
+		if(sp < (uintptr)p->kstack || sp >= (uintptr)p->kstack + KSTACK){
+			for(o = procalloc.arena, eo = o + conf.nproc; o < eo; o++)
+				if(o->kstack != nil && sp >= (uintptr)o->kstack && sp < (uintptr)o->kstack + KSTACK)
+					break;
+			print("waserror: up is %lud:%s but the stack is %lud:%s's (sp %#p, cpu%d, m->proc %lud, pc %lux)\n",
+				p->pid, p->text,
+				o < eo ? o->pid : 0UL, o < eo ? o->text : "?",
+				sp, m->machno, m->proc != nil ? m->proc->pid : 0UL, getcallerpc(&up));
+		}
+	}
 	n = p->nerrlab;
 	if(n >= NERR)
 		panic("waserror: error stack overflow, nerrlab %d in %lud:%s pc %lux",

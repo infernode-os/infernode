@@ -549,6 +549,7 @@ struct Proc
 	ulong		movetime;	/* next time process should switch processors */
 	ulong		delaysched;
 	int			preempted;	/* process yielding in interrupt */
+	int			samecore;	/* switched out while Running: resume on the same core (see mayrun) */
 	ulong		qpc;		/* last call that blocked in qlock */
 	void*		dbgreg;		/* User registers for devproc */
  	int		dbgstop;		/* don't run this kproc */

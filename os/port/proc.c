@@ -109,6 +109,7 @@ schedinit(void)		/* never returns */
 		SETMACH(p, nil);
 		switch(p->state) {
 		case Running:
+			p->samecore = 1;	/* see mayrun */
 			ready(p);
 			break;
 		case Moribund:
@@ -308,6 +309,39 @@ preemption(int tick)
 	return 0;
 }
 		
+/*
+ * May this core run p?
+ *
+ * Wired procs run where they are wired. And a proc that was PREEMPTED
+ * -- interrupted at an arbitrary instruction and put on the run queue
+ * by schedinit -- resumes only on the core it was taken from. Reason:
+ * clang compiles `up` (m->proc, m being the fixed register x28) as a
+ * copy of x28 into a scratch register followed by the load, and the
+ * trap path restores every register but x28 on the way back. A proc
+ * interrupted between those two instructions and resumed on another
+ * core reads the OLD core's Mach through the copy: `up` is then
+ * whichever proc that core happens to be running, and the caller pushes
+ * its error label on that proc's stack, links that proc into the alarm
+ * list, and so on. The board caught it in the act in tsleep (#622):
+ * "up is 40:dis but the stack is 37:dis's, m->proc 37" -- two reads of
+ * the same field in one statement, two answers. -ffixed-x28 keeps m in
+ * a register; it cannot keep the compiler from copying it. A proc that
+ * BLOCKED (Wakeme, Queueing) did so through a call, where no scratch
+ * copy is live, and may migrate; one that was still Running when it
+ * was switched out -- by either preemption path, or a yield from
+ * inside a spinning lock -- is pinned by schedinit for one resume.
+ * p->mp is the core that ran it last.
+ */
+static int
+mayrun(Proc *p)
+{
+	if(p->wired != nil && p->wired != MACHP(m->machno))
+		return 0;
+	if(p->samecore && p->mp != nil && p->mp != MACHP(m->machno))
+		return 0;
+	return 1;
+}
+
 Proc*
 runproc(void)
 {
@@ -349,7 +383,7 @@ loop:
 		 * sev ends any wait that matters.
 		 */
 		for(p = rq->head; p != nil; p = p->rnext)
-			if(p->wired == nil || p->wired == MACHP(m->machno))
+			if(mayrun(p))
 				break;
 		if(p == nil)
 			continue;	/* nothing here for this core */
@@ -357,7 +391,7 @@ loop:
 			continue;	/* busy; try the next queue, not the world */
 		l = nil;
 		for(p = rq->head; p != nil; l = p, p = p->rnext){
-			if(p->wired != nil && p->wired != MACHP(m->machno))
+			if(!mayrun(p))
 				continue;
 			if(p->mp == nil || p->mp == MACHP(m->machno) ||
 			   p->movetime < MACHP(0)->ticks)
@@ -366,7 +400,7 @@ loop:
 		if(p == nil){
 			/* second pass: anything here this core MAY run */
 			for(p = rq->head, l = nil; p != nil; l = p, p = p->rnext)
-				if(p->wired == nil || p->wired == MACHP(m->machno))
+				if(mayrun(p))
 					break;
 		}
 		if(p != nil)
@@ -443,6 +477,7 @@ loop:
 	 */
 	SETSTATE(p, Scheding);
 	SETMACH(p, MACHP(m->machno));
+	p->samecore = 0;
 	unlock(&runq[0].l);
 	/*
 	 * The birth of a double-run, if there is one: this core has just
@@ -511,6 +546,7 @@ newproc(void)
 	p->pri = PriNormal;
 	p->psstate = "New";
 	SETMACH(p, 0);
+	p->samecore = 0;
 	p->qnext = 0;
 	p->fpstate = FPINIT;
 	p->kp = 0;

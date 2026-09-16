@@ -332,9 +332,17 @@ cclose(Chan *c)
 	if(decref(&c->r))
 		return;
 
-	if(!waserror()){
-		devtab[c->type]->close(c);
-		poperror();
+	{
+		int n0;
+
+		n0 = up->nerrlab;
+		if(!waserror()){
+			devtab[c->type]->close(c);
+			poperror();
+		}
+		if(up->nerrlab != n0)
+			print("cclose: error stack %d -> %d closing %s (dev %C) in %lud:%s\n",
+				n0, up->nerrlab, c->name != nil ? c->name->s : "-", devtab[c->type]->dc, up->pid, up->text);
 	}
 	chanfree(c);
 }

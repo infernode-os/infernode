@@ -324,15 +324,31 @@ delprog(Prog *p, char *msg)
 	Osenv *o;
 	Prog **ph;
 
+	int n0, n1, n2, n3;
+
+	n0 = up->nerrlab;
 	tellsomeone(p, msg);	/* call before being removed from prog list */
+	n1 = up->nerrlab;
 
 	o = p->osenv;
 	release();
 	closepgrp(o->pgrp);
+	n2 = up->nerrlab;
 	closefgrp(o->fgrp);
+	n3 = up->nerrlab;
 	closeegrp(o->egrp);
 	closesigs(o->sigs);
 	acquire();
+	/*
+	 * The one place a kproc runs kernel code for a Prog that is
+	 * gone, released, with closes that block on other Progs and a
+	 * kill that can land as Eintr in the middle. Every error-stack
+	 * imbalance the board has caught came with a Prog exiting in
+	 * that quantum, so: which of these left the stack off?
+	 */
+	if(up->nerrlab != n0)
+		print("delprog %d \"%s\": error stack %d -> tellsomeone %d -> closepgrp %d -> closefgrp %d -> %d\n",
+			p->pid, msg, n0, n1, n2, n3, up->nerrlab);
 
 	delgrp(p);
 
@@ -1053,9 +1069,10 @@ progexit(void)
 {
 	Prog *r;
 	Module *m;
-	int broken;
+	int broken, n0;
 	char *estr, msg[ERRMAX+2*KNAMELEN];
 
+	n0 = up->nerrlab;
 	estr = up->env->errstr;
 	broken = 0;
 	if(estr[0] != '\0' && strcmp(estr, Eintr) != 0 && strncmp(estr, "fail:", 5) != 0)
@@ -1087,6 +1104,8 @@ progexit(void)
 		tellsomeone(r, msg);
 		r = isave();
 		r->state = Pbroken;
+		if(up->nerrlab != n0)
+			print("progexit (broken): error stack %d -> %d\n", n0, up->nerrlab);
 		return;
 	}
 
@@ -1094,6 +1113,8 @@ progexit(void)
 	destroystack(&R);
 	delprog(r, msg);
 	gcunlock();
+	if(up->nerrlab != n0)
+		print("progexit: error stack %d -> %d\n", n0, up->nerrlab);
 }
 
 void

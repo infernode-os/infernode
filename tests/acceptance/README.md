@@ -65,6 +65,24 @@ so, for the record, the first run of each:
   though it is by the mock -- #632. Discovery, name, SDP browse/search,
   L2CAP configuration at MTU 672, data both ways, bonding: all pass.
 
+- Wi-Fi (hostapd on the Jetson's radio, 2026-09-17): **12 pass / 6 fail**.
+  WPA2-PSK authenticates in 19 s -- the AP's own log shows
+  `EAPOL-4WAY-HS-COMPLETED` for the board, a third stack's word for the
+  supplicant -- hidden SSID too, wrong passphrase refused without
+  wedging the radio, 30/30 echoes and 26.7 Mbit/s TCP over the radio
+  alone. The failures: an **open network cannot be joined** (`crypt
+  off` + `essid`: "join failed", every time); on **5 GHz** the handshake
+  completes (109 s) but no frame crosses afterwards; the station does
+  **not re-join on its own** within two minutes after the AP goes away
+  and returns; PMF-required and WPA3-SAE are refused (the station
+  implements neither, as expected). Two lessons the battery had to
+  learn before it could run, both already in AGENTS.md: write `essid
+  default` to a conversation before a supplicant, or it re-joins the
+  OLD network; and bind `/tmp` over `/mnt` so `ip/wpa` finds factotum.
+  DHCP over the radio is a SKIP: the boot's own client holds UDP 68.
+  The run's last scenario also triggered #635 -- ten misaligned-PC
+  breaks and a panic in JIT-emitted code -- which is what the serial
+  check is for.
 - GPIO (jig wired 2026-09-17): **45/45** -- every pair drives and reads
   both ways, pulls hold, no crosstalk, the console UART's pins refuse a
   function change, the firmware expander reports its lines. (One pair

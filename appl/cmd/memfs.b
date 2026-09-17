@@ -29,6 +29,7 @@ Memfile : adt {
 	mtime : int;
 	nopen : int;
 	data : array of array of byte;			# allocated in blks, no holes
+	nblks : int;			# blocks charged to freeblks; len data is capacity
 	length : int;
 	parent : cyclic ref Memfile;	# Dir entry linkage
 	kids : cyclic ref Memfile;
@@ -220,10 +221,11 @@ memfs(maxsz : int, tc : chan of ref Tmsg, srv : ref Styxserver, sync: chan of in
 			if ((tm.mode & OTRUNC) && !(mf.perm & Sys->DMAPPEND)) {
 				# OTRUNC cannot be set for a directory
 				# always at least one blk so don't need to check fs limit
-				freeblks += (len mf.data);
+				freeblks += mf.nblks;
 				mf.data = nil;
 				freeblks--;
 				mf.data = array[1] of {* => array [blksz] of byte};
+				mf.nblks = 1;
 				mf.length = 0;
 				mf.mtime = now();
 			}
@@ -263,6 +265,7 @@ memfs(maxsz : int, tc : chan of ref Tmsg, srv : ref Styxserver, sync: chan of in
 			if (!isdir) {
 				freeblks--;
 				nmf.data = array[1] of {* => array [blksz] of byte};
+				nmf.nblks = 1;
 			}
 
 			# link in the new MemFile
@@ -404,12 +407,45 @@ writefile(mf: ref Memfile, offset: int, data: array of byte): string
 	startblk := offset/blksz;
 	nblks := ((len data + offset) - (startblk * blksz))/blksz;
 	lastblk := startblk + nblks;
-	need := lastblk + 1 - len mf.data;
-	if (need > 0) {
-		if (need > freeblks)
+
+	#
+	# The block table grows by DOUBLING, not by exactly what this
+	# write needs.
+	#
+	# Sized exactly, it was reallocated and copied on every write
+	# that extended the file, which is quadratic in the number of
+	# blocks: a 2MB file is 4200 blocks of 512 bytes, so writing it
+	# in ATOMICIO pieces meant 262 reallocations copying an average
+	# of 2100 references each, and 262 tables' worth of garbage for
+	# the collector on a heap that already holds every data block.
+	# Measured, a 2MB copy inside this filesystem ran at 150 KB/s
+	# while reading it out to the network ran at 12.4 MB/s -- and
+	# reads take no such path (#609).
+	#
+	# Capacity and occupancy have to be counted separately once the
+	# table can be longer than the file. The table's length WAS the
+	# charged count, and three other places still returned blocks to
+	# the store with "len mf.data"; with a doubling table that would
+	# hand back more than was ever taken and let the store grow past
+	# its size. mf.nblks now carries what freeblks was charged, and
+	# those places return that instead.
+	#
+	nb := lastblk + 1;
+	if (nb > mf.nblks) {
+		if (nb - mf.nblks > freeblks)
 			return Efull;
-		mf.data = (array [lastblk+1] of array of byte)[:] = mf.data;
-		freeblks -= need;
+		freeblks -= nb - mf.nblks;
+		mf.nblks = nb;
+	}
+	if (nb > len mf.data) {
+		cap := len mf.data;
+		if (cap == 0)
+			cap = 1;
+		while (cap < nb)
+			cap *= 2;
+		nd := array [cap] of array of byte;
+		nd[0:] = mf.data;
+		mf.data = nd;
 	}
 	mf.length = max(mf.length, offset + len data);
 
@@ -507,7 +543,8 @@ newmf(qh : ref Qidhash, parent : ref Memfile, name, owner : string, perm : int) 
 {
 	# qid gets set by Qidhash.add()
 	t := now();
-	mf := ref Memfile (name, owner, Sys->Qid(big 0,0,Sys->QTFILE), perm, t, t, 0, nil, 0, parent, nil, nil, nil, nil);
+	# name, owner, qid, perm, atime, mtime, nopen, data, nblks, length, ...
+	mf := ref Memfile (name, owner, Sys->Qid(big 0,0,Sys->QTFILE), perm, t, t, 0, nil, 0, 0, parent, nil, nil, nil, nil);
 	qh.add(mf);
 	if(perm & Sys->DMDIR)
 		mf.qid.qtype = Sys->QTDIR;
@@ -546,8 +583,9 @@ delfile(qh : ref Qidhash, mf : ref Memfile) : int
 	if (mf.nopen <= 0 && mf.parent == nil && mf.kids == nil
 	&& mf.prev == nil && mf.next == nil) {
 		qh.remove(mf);
-		nblks := len mf.data;
+		nblks := mf.nblks;
 		mf.data = nil;
+		mf.nblks = 0;
 		return nblks;
 	}
 	return 0;

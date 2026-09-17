@@ -45,6 +45,7 @@ enum
 	Prestrict = 1<<2,	/* enforce memory limits */
 	Prestricted = 1<<3,
 	Pkilled = 1<<4,
+	Pbadpc = 1<<7,		/* #635: reported once by vmachine's queue scan */
 	Pprivatemem = 1<<5	/* keep heap and stack private */
 };
 

@@ -124,6 +124,10 @@ Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md]
 
 Contributions welcome — security audits, 9P integrations, bug fixes, and documentation all help. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Sponsor
+
+InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/sponsors/infernode-os) pays for the things that keep releases trustworthy and move the harder work forward: code signing and notarization, ARM64 and macOS CI hardware, external security review of the Veltro isolation boundary and the wallet signing path, the bare-metal Raspberry Pi port, compliance evidence (FIPS 140-3 and Common Criteria readiness, SP 800-53/171 mapping), and maintainer time.
+
 ## About
 
 InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64 and ARM64, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.

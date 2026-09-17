@@ -658,6 +658,7 @@ enum{
 	Qkprint,
 	Qscancode,
 	Qmemory,
+	Qmemtags,
 	Qmsec,
 	Qnull,
 	Qrandom,
@@ -682,6 +683,7 @@ static Dirtab consdir[]=
 	"kprint",		{Qkprint},	0,		0444,
 	"scancode",	{Qscancode},	0,		0444,
 	"memory",	{Qmemory},	0,		0444,
+	"memtags",	{Qmemtags},	0,		0444,
 	"msec",		{Qmsec},	NUMSIZE,	0444,
 	"null",		{Qnull},	0,		0666,
 	"random",	{Qrandom},	0,		0444,
@@ -1139,6 +1141,14 @@ consread(Chan *c, void *buf, long n, vlong offset)
 
 	case Qmemory:
 		return poolread(buf, n, offset);
+
+	/*
+	 * The main pool's live blocks summed by the PC that allocated
+	 * them, largest first (alloc.c pooltagsread). /dev/memory says a
+	 * pool is filling; this says who is filling it.
+	 */
+	case Qmemtags:
+		return pooltagsread(buf, n, offset);
 
 	/*
 	 * One line per running core: its tick count, how many clock

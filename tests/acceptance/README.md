@@ -15,9 +15,11 @@ run of the real battery later maps onto it directly.
 |---|---|---|---|
 | `ethernet.py` | RFC 2544 26.1-26.5 (adapted for an end system), TCP behaviour | `ping`, Python sockets | `listen -A tcp!*!5001 {cat > /dev/null}`, a source |
 | `bluetooth.py` | Bluetooth SIG PTS: GAP/DISC, GAP/IDLE/NAMP, L2CAP/COS/{ECH,CED,CFD}, SDP/SR/{SA,SS}, RFCOMM/DLC, SPP, GAP/SEC | BlueZ `hcitool l2ping l2test rctest sdptool bluetoothctl` | `listen -A 'bt!*!<psm>' {cat >> file}`, `bt!*!spp` |
-| (to do) `wifi.py` | hostap `hwsim` scenarios: WPA2-PSK, WPA3-SAE, PMF, re-association, DHCP after roam; 24 h association soak | `hostapd` on the tester's radio (AP mode is supported: `iw list`), `iperf3` | the station; `/n/dos/wifi` |
+| `wifi.py` | hostap `hwsim` scenarios: WPA2-PSK, WPA3-SAE, PMF, re-association, DHCP after roam; 24 h association soak | `hostapd` on the tester's radio (AP mode is supported: `iw list`), `iperf3` | the station; `/n/dos/wifi` |
 | (to do) `usb.py` | Linux `usbtest`/`testusb` patterns against a gadget; enumeration matrix; plug/unplug under load | a Pi Zero running `g_zero` | the host controller |
-| (to do) `gpio.py` | no official Pi suite; a loopback jig (pins paired with jumpers): drive/read, pulls, alt functions, edges | serial console only | `#G`, the expander |
+| `gpio.py` | no official Pi suite; a loopback jig (eight pairs of header pins jumpered; the map is in the file): drive/read both ways, pull-up/down, ctl read-back, crosstalk, the kernel's own pins refusing | network console only | `#G/gpio/N/{ctl,level}` |
+| (to do) `hdmi.py` | HDMI CTS approximated: an HDMI-to-USB capture on the tester; mode, pixel order, tearing | `v4l2` | the framebuffer |
+| (to do) `audio.py` | the 3.5 mm jack: tone/sweep played, measured at a line-in (frequency, level, THD, separation) | `arecord`, FFT | PWM audio |
 
 Each battery prints `PASS:`/`FAIL:`/`SKIP:` lines and a `Passed:/Failed:`
 summary as the QEMU harness does, and with `--serial-log` pointed at the
@@ -63,4 +65,11 @@ so, for the record, the first run of each:
   though it is by the mock -- #632. Discovery, name, SDP browse/search,
   L2CAP configuration at MTU 672, data both ways, bonding: all pass.
 
-Neither would have been found by pairing another speaker.
+- GPIO (jig wired 2026-09-17): **45/45** -- every pair drives and reads
+  both ways, pulls hold, no crosstalk, the console UART's pins refuse a
+  function change, the firmware expander reports its lines. (One pair
+  read open on the first run and passed after reseating: the battery
+  is also a jig checker.)
+
+Neither of the first two would have been found by pairing another
+speaker.

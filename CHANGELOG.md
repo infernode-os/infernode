@@ -2,6 +2,55 @@
 
 All notable changes to InferNode are documented in this file.
 
+## [0.4.1] - 2026-09-17
+
+Security patch release. Three containment fixes from the external
+escape-room campaign (`infernode-os/infernode-escape-room`), found after 0.4.0
+was cut, and a wallet change that operators need to know about.
+
+### Security
+
+- **Tool metadata sealed before `/tmp`** — `tools9p` restricted
+  `/tmp/veltro/.ns` after the worker's `/tmp` had already been replaced, which
+  recreated `/tmp/.veltro-ns` inside the model-visible view. A single `list`
+  showed the shadow tree, and concurrent calls exposed live worker directory
+  names. The 0.4.0 entry for #600 said the shadow tree was no longer visible;
+  through `tools9p` it still was. Shadow-backed restriction now completes
+  before the final `/tmp` replacement, and model-facing calls wait for the
+  trusted startup manifest probe (#619, INFR-470).
+- **Tool workers get a fresh environment group** — Inferno lets a process name
+  its own `#e` device even under `NODEVS`, so a worker that inherited the
+  launcher's environment could read it by spelling `/env` as `#e`,
+  bypassing the narrowed view. Every tool worker now starts with `NEWENV` and
+  carries only `VELTRO_SESSION` (#618, INFR-480).
+- **9P directory stat entries bounded** — `statcheck` advanced by an untrusted
+  string length without checking it against the bytes returned, so a malformed
+  directory entry could read past its buffer and fault the emulator. Each
+  entry is now validated against the remaining span before any field is
+  decoded, with an ASan/UBSan guard-page regression (#617, INFR-479).
+
+### Wallet
+
+- **Agent payments are proposal-only** — trusted approval is mandatory for
+  every `pay` and x402 authorization. **`requireapproval off` is now
+  rejected**: it turned the same agent-visible files into immediate spending
+  without changing the agent's namespace or its `nsaudit` report.
+  `requireapproval on` is accepted as a no-op. `wallet` and `payfetch` are
+  classified as `proposes_payment`, and the caller-asserted `walletbudget`
+  audit metadata is removed; any future direct-spend authority fails closed
+  without capability-bound enforcement evidence (#627, INFR-488).
+- `nsaudit` models `/mnt/msg/draft` as an immutable proposal rather than a
+  durable mutation, and the messaging profile grants a real `write` tool
+  (#625).
+
+### Build & CI
+
+- Runtime namespace residue under the repo root and host-tool Python bytecode
+  are ignored (#611).
+- OSSF Scorecard reads branch protection with the default token instead of an
+  expired PAT (#607).
+- GitHub Sponsors enabled (#628). Dependency bumps (#590, #612, #613).
+
 ## [0.4.0] - 2026-09-12
 
 ### Runtime tree & build

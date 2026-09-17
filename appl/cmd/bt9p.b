@@ -206,7 +206,8 @@ Conv: adt {
 	raddr:	string;
 	opens:	int;
 	listening: int;
-	accepted: int;			# an incoming call, held for a listener
+	accepted: int;
+	taken:	int;			# accepted: a listen has read it; the hold is now that fid's
 	rq:	list of array of byte;	# SDUs waiting to be read
 	rpending: ref Tmsg.Read;
 	cpending: ref Tmsg.Write;	# a connect waiting for the channel
@@ -1897,7 +1898,7 @@ cancelinquiry()
 
 newconv(): ref Conv
 {
-	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0, nil, 0, 0, nil, nil);
+	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0, nil, 0, 0, nil, nil);
 	convs = cv :: convs;
 	id := cv.id;
 	nm := sys->sprint("%d", id);
@@ -2013,6 +2014,7 @@ convopen(srv: ref Styxserver, tm: ref Tmsg.Open, c: ref Fid): int
 		nc := srv.open(tm);
 		if(nc == nil)
 			return 0;
+		taken(hd cv.lq);
 		clonefids = (tm.fid, hd cv.lq) :: clonefids;
 		cv.lq = tl cv.lq;
 		cv.opens++;
@@ -2037,6 +2039,7 @@ listenwake(srv: ref Styxserver, cv: ref Conv)
 	c := srv.getfid(tm.fid);
 	if(c == nil)
 		return;
+	taken(hd cv.lq);
 	clonefids = (tm.fid, hd cv.lq) :: clonefids;
 	cv.lq = tl cv.lq;
 	c.open(Styx->OREAD, Sys->Qid(big CPATH(cv.id, Qclisten), 0, Sys->QTFILE));
@@ -2387,8 +2390,10 @@ release(srv: ref Styxserver, cv: ref Conv)
 		# calls accepted that no listen ever read
 		for(q := cv.lq; q != nil; q = tl q){
 			acc := conv(hd q);
-			if(acc != nil)
+			if(acc != nil){
+				acc.taken = 1;
 				release(srv, acc);
+			}
 		}
 		cv.lq = nil;
 	}
@@ -2499,6 +2504,37 @@ closed(srv: ref Styxserver, cv: ref Conv, why: string)
 		cv.rpending = nil;
 	}
 	cv.lnk = nil;
+	# A call no listen ever read: the hold kept for the listener is
+	# the only reference, and it leaves the listener's queue too --
+	# a listen must not be handed a conversation the peer has already
+	# hung up while the live one waits behind it. A connect/disconnect
+	# storm from BlueZ left 569 of these on the board (#632).
+	if(cv.accepted && !cv.taken){
+		cv.taken = 1;
+		for(cl := convs; cl != nil; cl = tl cl)
+			if((hd cl).listening)
+				(hd cl).lq = withouti((hd cl).lq, cv.id);
+		release(srv, cv);
+	}
+}
+
+taken(id: int)
+{
+	cv := conv(id);
+	if(cv != nil)
+		cv.taken = 1;
+}
+
+withouti(l: list of int, v: int): list of int
+{
+	keep: list of int;
+	for(; l != nil; l = tl l)
+		if(hd l != v)
+			keep = hd l :: keep;
+	r: list of int;
+	for(; keep != nil; keep = tl keep)
+		r = hd keep :: r;
+	return r;
 }
 
 without(l: list of ref Conv, cv: ref Conv): list of ref Conv
@@ -2823,12 +2859,8 @@ rfevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Rfcomm->Ev)
 			nc.opens = 1;
 		Closed =>
 			cv := convbydlc(lk, e.d);
-			if(cv != nil){
-				held := cv.accepted && cv.state == "Connecting";
-				closed(srv, cv, e.reason);
-				if(held)
-					release(srv, cv);
-			}
+			if(cv != nil)
+				closed(srv, cv, e.reason);	# releases a call no listen took
 			rfidle(srv, lk);
 		Data =>
 			cv := convbydlc(lk, e.d);
@@ -3612,12 +3644,8 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				continue;
 			}
 			cv := convbychan(lk, e.c);
-			if(cv != nil){
-				held := cv.accepted && cv.state == "Connecting";
-				closed(srv, cv, e.reason);
-				if(held)
-					release(srv, cv);	# a call that died before any listen saw it
-			}
+			if(cv != nil)
+				closed(srv, cv, e.reason);	# releases a call no listen took
 		Params =>
 			eventnote(srv, sys->sprint("link %s asks interval %d-%d latency %d timeout %d\n", lk.addr, e.min, e.max, e.latency, e.timeout));
 			spawn leconnupdate(lk.handle, e.min, e.max, e.latency, e.timeout);

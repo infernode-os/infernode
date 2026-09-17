@@ -44,7 +44,7 @@ Ctlr.new(addr: string): ref Ctlr
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, nil, 0);
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, nil, 1, nil, nil, nil, nil, 0);
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -1029,6 +1029,23 @@ Ctlr.call(c: self ref Ctlr, addr: string, psm: int, text: string): string
 	return nil;
 }
 
+# the peer goes away: its link ends with the peer's reason, as when a
+# device is switched off mid-call
+Ctlr.drop(c: self ref Ctlr, addr: string): string
+{
+	pr := findpeer(c, addr);
+	if(pr == nil || pr.handle == 0)
+		return "not connected: " + addr;
+	h := pr.handle;
+	droppeer(c, pr);
+	d := array[4] of byte;
+	d[0] = byte 0;
+	bthci->put2(d, 1, h);
+	d[3] = byte 16r13;	# remote user terminated connection
+	c.dropped = cat(c.dropped, event(Bthci->EvDisconnComplete, d));
+	return nil;
+}
+
 # a call on an RFCOMM channel: the peer opens PSM 3, brings the
 # multiplexer up, opens the channel and sends the text
 Ctlr.callrf(c: self ref Ctlr, addr: string, channel: int, text: string): string
@@ -1051,6 +1068,10 @@ Ctlr.callrf(c: self ref Ctlr, addr: string, channel: int, text: string): string
 Ctlr.tick(c: self ref Ctlr): array of byte
 {
 	out := array[0] of byte;
+	if(c.dropped != nil){
+		out = cat(out, c.dropped);
+		c.dropped = nil;
+	}
 	if(c.owed){
 		c.owed = 0;
 		p := array[3] of byte;

@@ -50,6 +50,7 @@ Btmock: module
 		d:	ref Bthci->Deframer;
 		links:	list of ref Peer;	# ACL links to the devices nearby
 		pendconn:	list of ref Peer;	# Connection Completes to emit
+		dropped:	array of byte;		# Disconnection Completes from peers that left
 		nexthandle:	int;
 		received:	list of string;	# what peers were sent on their channels, newest first
 		auth:	list of (string, string);	# devices that demand pairing: addr, "pin=NNNN", "ssp", "le" or "lereport"
@@ -64,6 +65,7 @@ Btmock: module
 		# a nearby device calls us: a Connection Request, then once the
 		# link is up an L2CAP connection to psm carrying text
 		call:	fn(c: self ref Ctlr, addr: string, psm: int, text: string): string;
+		drop:	fn(c: self ref Ctlr, addr: string): string;		# the peer ends its link
 		callrf:	fn(c: self ref Ctlr, addr: string, channel: int, text: string): string;
 		notify:	fn(c: self ref Ctlr, addr: string, report: array of byte): string;	# an LE device's boot report
 	};

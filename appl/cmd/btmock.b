@@ -235,8 +235,16 @@ serve(c: ref Ctlr, fio, cio: ref Sys->FileIO, tickms: int)
 					wc <-= (len data, nil);
 				continue;
 			}
+			if(nf == 2 && hd f == "drop"){
+				err := c.drop(hd tl f);
+				if(err != nil)
+					wc <-= (0, err);
+				else
+					wc <-= (len data, nil);
+				continue;
+			}
 			if(nf < 4 || hd f != "call"){
-				wc <-= (0, "usage: call <addr> <psm>|rfcomm<n> <text> | notify <addr> <hex>...");
+				wc <-= (0, "usage: call <addr> <psm>|rfcomm<n> <text> | notify <addr> <hex>... | drop <addr>");
 				continue;
 			}
 			port := hd tl tl f;

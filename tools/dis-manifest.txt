@@ -695,6 +695,7 @@ dis/tests/rfcomm_test.dis
 dis/tests/att_test.dis
 dis/tests/smp_test.dis
 dis/tests/hid_test.dis
+dis/tests/exception_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/dial_test.dis

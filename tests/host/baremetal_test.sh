@@ -572,6 +572,11 @@ build_kernel() {
             # error that reads like a bug in the program.
             "/dis/memfs.dis=$ROOT/dis/memfs.dis"
             "/dis/lib/styxlib.dis=$ROOT/dis/lib/styxlib.dis"
+            # the exception handler's search, as a Limbo test run in the
+            # kernel's own interpreter (#635: a 32-bit NOPC against a
+            # 64-bit sentinel resumed Progs at prog - 1 for four days)
+            "/dis/lib/testing.dis=$ROOT/dis/lib/testing.dis"
+            "/dis/tests/exception_test.dis=$ROOT/dis/tests/exception_test.dis"
         )
         # A font, so acme has something to draw with.
         #
@@ -1584,6 +1589,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'echo shell-is-alive' \
         'ls /dis' \
         'echo piped-through | cat' \
+        '/dis/tests/exception_test.dis' \
         'echo env-round-trip > /env/probe' \
         'cat /env/probe' \
         'q=`{echo one two three}; echo subst-count $#q' \
@@ -1634,6 +1640,17 @@ if grep -q "/dis/sh.dis" <<<"$SHOUT"; then
     pass "ls lists the in-kernel root filesystem"
 else
     fail "ls did not list /dis"
+fi
+
+# The exception handler's search, in the kernel's own interpreter: an
+# exception block whose clauses do not match and has no wildcard is not
+# a handler (#635). exception_test.dis raises across two such blocks to
+# the one that names the exception, four ways; "4 passed" is the whole
+# verdict, and "misaligned PC" anywhere in the session is the old bug.
+if grep -q "^4 passed" <<<"$SHOUT" && ! grep -q "misaligned PC" <<<"$SHOUT"; then
+    pass "exception_test: an unmatched exception block is not a handler (4 passed; #635)"
+else
+    fail "exception_test did not report 4 passed (or a misaligned PC appeared): $(grep -E 'passed|FAIL|misaligned|Broken' <<<"$SHOUT" | head -3 | tr '\n' ' ')"
 fi
 
 # The per-core clock is readable from the shell, not only asserted at
@@ -4026,30 +4043,6 @@ else
     [[ "$VERBOSE" -eq 1 ]] && tail -20 "$BUILD/cc.log"
 fi
 
-echo ""
-}
-
-#
-# The Pi 3B+ SoC. -M raspi3b fixes the CPU, so no -cpu is needed.
-#
-# A USB Ethernet device is attached so the bus has something on it.
-#
-# QEMU's raspi3b models no built-in NIC -- which was read as "networking
-# cannot be developed in emulation" -- but it DOES model the DWC OTG
-# controller, and it accepts a usb-net on that bus. So device presence,
-# and eventually enumeration and a real driver, can all be exercised
-# here rather than only on hardware.
-# ---------------------------------------------------------------------
-# Source-level gate: mboxprop's counts are ELEMENTS, not bytes.
-#
-# This exists because the runtime checks below could not catch the bug it
-# guards. setpower passed `sizeof buf` where mboxprop wants a u32int
-# count -- declaring a 32-byte value buffer for an 8-byte tag, reading six
-# words past a two-element array and writing eight back over the caller's
-# stack frame. Restoring that bug and re-running the whole suite gives 90
-# green: QEMU's property handler tolerates the mismatched size and replies
-# ON regardless, so asserting the reply proves nothing about the call.
-#
 # ---------------------------------------------------------------------
 # The scheduler under load, with the kernel's own detectors as the
 # oracle (#622, docs/PLAN9-C-UNDER-OTHER-COMPILERS.md 1).
@@ -4076,7 +4069,6 @@ echo ""
 #     a regression of the fix, or a new fault of the same class, is one
 #     grep away rather than a week. SOAKSECS=0 skips it; 90 is the
 #     default and has never produced a false report.
-# ---------------------------------------------------------------------
 SOAKSECS="${SOAKSECS:-90}"
 if [[ "$SOAKSECS" -gt 0 ]]; then
     SOAKOUT="$(SESSION_DRAIN=$((SOAKSECS + 60)) shell_session "$BUILD/$PLAT-kernel.img" \
@@ -4102,6 +4094,31 @@ if [[ "$SOAKSECS" -gt 0 ]]; then
     fi
 fi
 
+echo ""
+}
+
+#
+# The Pi 3B+ SoC. -M raspi3b fixes the CPU, so no -cpu is needed.
+#
+# A USB Ethernet device is attached so the bus has something on it.
+#
+# QEMU's raspi3b models no built-in NIC -- which was read as "networking
+# cannot be developed in emulation" -- but it DOES model the DWC OTG
+# controller, and it accepts a usb-net on that bus. So device presence,
+# and eventually enumeration and a real driver, can all be exercised
+# here rather than only on hardware.
+# ---------------------------------------------------------------------
+# Source-level gate: mboxprop's counts are ELEMENTS, not bytes.
+#
+# This exists because the runtime checks below could not catch the bug it
+# guards. setpower passed `sizeof buf` where mboxprop wants a u32int
+# count -- declaring a 32-byte value buffer for an 8-byte tag, reading six
+# words past a two-element array and writing eight back over the caller's
+# stack frame. Restoring that bug and re-running the whole suite gives 90
+# green: QEMU's property handler tolerates the mismatched size and replies
+# ON regardless, so asserting the reply proves nothing about the call.
+#
+# ---------------------------------------------------------------------
 # A calling-convention error is a property of the source, so check the
 # source. Anything else is theatre.
 # ---------------------------------------------------------------------

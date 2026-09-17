@@ -128,7 +128,43 @@ address against the caller's frame reports every site as a mismatch
 never a tail call; both are load-bearing and say so in comments. Plan 9 C
 neither inlines across functions nor emits tail calls.
 
-## 6. The JIT is a compiler too
+## 6. A sentinel written as a 32-bit constant, compared with a 64-bit value (#635)
+
+Not a compiler difference but a *width* one, and it belongs here because
+it wore the same disguise for four days: a symptom in compiled code
+with no explanation in the source. Plan 9 C's `ulong` is 32 bits; this
+kernel's is 64. `os/port/exception.c` kept
+
+```
+#define NOPC	0xffffffff
+```
+
+while `load.c` stores "no handler" as `(ulong)-1` and `patchex()`
+preserves it. So `handler()`'s `if(newpc != NOPC)` never matched: an
+exception block whose clauses did not name the exception and had no
+wildcard was taken as a handler at pc `(ulong)-1`, and the Prog was
+resumed at `(ulong)m->prog + (ulong)-1` -- **one byte below its module's
+compiled code**, written straight into the Prog's saved registers with
+`memmove(&p->R, &R, ...)`. That is why seven probes on every path the
+interpreter writes a PC stayed silent and only the victim's next quantum
+fired ("misaligned PC in compiled module", `R.PC == prog - 1`). Any
+Limbo `raise` that crosses a non-matching `exception` block did it:
+`osinit`'s `{ bt->init } exception e { "fail:*" => }` when `bt9p` raised
+"module not loaded" (a library missing from the card), `sh`'s blocks
+around every command, the `kill Wpa` in the Wi-Fi battery.
+
+The emulator's copy of the same file had been fixed in March 2026
+(`903d18c70`, "LP64 NOPC mismatch"); the kernel's copy was imported from
+the older source in August without it. **Two copies of one file are two
+bugs.** Regression test: `tests/exception_test.b`, run by the QEMU
+harness inside the kernel's own interpreter and by the emu suite.
+
+The wider lesson for this port: every `0xffffffff`, `0x7fffffff`, `-1`
+cast to a fixed width, and every `%lux`/`%ux` format on an `ulong` is
+suspect where Plan 9 C meant 32 bits. `grep -n '0xffffffff' os/port
+libinterp` is a five-minute audit; it found this one after the fact.
+
+## 7. The JIT is a compiler too
 
 `libinterp/comp-arm64.c` emits AArch64 for Dis instructions. Its
 preamble saves x19-x22, x29, x30 and uses x0-x5, x20-x22; it does not

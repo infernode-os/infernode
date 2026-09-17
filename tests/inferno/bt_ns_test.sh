@@ -377,6 +377,29 @@ if {ftest -d $BT/$CONV} {
 	}
 } <> $BT/clone
 
+# A listener killed while its listen waits -- kill(1) on a process
+# blocked in open(listen), which is how every listen(1) ends -- must
+# take its announce with it. The pending open counted against the
+# listener and a flushed open never counted off, so the PSM stayed
+# "already announced" and the conversation lived on: four per battery
+# run on the board (#632). Here: a subshell announces and blocks in the
+# listen open; it is killed; the count is back and the PSM is free.
+before=`{cat $BT/status | grep conversations}
+{ id=`{read 20}; echo 'announce 0x1005' >[1=0]; read 10 < $BT/$id/listen } <> $BT/clone &
+lpid=$apid
+sleep 1
+kill $lpid
+sleep 1
+after=`{cat $BT/status | grep conversations}
+if {! ~ $"after $"before} {
+	raise 'fail:a killed listener left its announce behind: '^$"before^' -> '^$"after
+}
+{
+	if {! echo 'announce 0x1005' >[1=0]} {
+		raise 'fail:the PSM a killed listener held was not released'
+	}
+} <> $BT/clone
+
 # Pairing, the WiFi way: factotum is the only source of keys.
 #
 # A legacy device wants a PIN. With none in factotum the connection

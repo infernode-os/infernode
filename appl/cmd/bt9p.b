@@ -557,7 +557,7 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 	Readerror =>
 		return 0;
 	Flush =>
-		cancel(tm.oldtag);
+		cancelconv(srv, tm.oldtag);
 		srv.reply(ref Rmsg.Flush(tm.tag));
 	Open =>
 		c := srv.getfid(tm.fid);
@@ -777,7 +777,12 @@ dropsub(fid: int)
 	subs = keep;
 }
 
-cancel(tag: int)
+# srv is needed only for a flushed listen, whose open counted against
+# the listener (convopen: cv.opens++ while it waits) and, dropped here,
+# must be counted off again -- or the listener conversation lives on
+# after its process is killed, its PSM "already announced" to the next
+# one, and every battery run leaves four of them behind (#632).
+cancelconv(srv: ref Styxserver, tag: int)
 {
 	for(l := subs; l != nil; l = tl l){
 		s := hd l;
@@ -792,8 +797,10 @@ cancel(tag: int)
 			cv.rpending = nil;
 		if(cv.cpending != nil && cv.cpending.tag == tag)
 			cv.cpending = nil;
-		if(cv.lpending != nil && cv.lpending.tag == tag)
+		if(cv.lpending != nil && cv.lpending.tag == tag){
 			cv.lpending = nil;
+			release(srv, cv);
+		}
 	}
 }
 

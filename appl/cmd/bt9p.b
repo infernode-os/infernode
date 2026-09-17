@@ -3588,8 +3588,19 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				continue;
 			}
 			if(e.c.psm == Psmrfcomm){
-				if(lk.rfch == nil)
-					lk.rfch = e.c;	# the peer's multiplexer; ours if we had one first
+				# the peer's multiplexer; ours if we had one first. A
+				# peer that closes its session and opens another at
+				# once -- BlueZ does, on every reconnect -- arrives
+				# while the old channel's close is still in flight:
+				# then the new channel is the multiplexer, and the old
+				# one's Closed, no longer the multiplexer's, is nothing
+				# more. Left unadopted it got no answers, and the
+				# acceptance battery's reconnect storm saw one refusal
+				# per connection (#632).
+				if(lk.rfch == nil || lk.rf == nil || lk.rf.dlcs == nil){
+					lk.rfch = e.c;
+					lk.rf = nil;
+				}
 				continue;
 			}
 			ls := listener(e.c.psm);

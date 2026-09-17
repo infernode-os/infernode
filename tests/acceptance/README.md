@@ -59,11 +59,21 @@ so, for the record, the first run of each:
   slower than transmit (18-28 vs 113 Mbit/s) -- #633. Latency 1.3-2 ms,
   0% loss over 2000 back-to-back full frames, 200 simultaneous
   connections fine, RST on a closed port immediate.
-- Bluetooth: **569 conversations leaked** by two 20-second connect/
-  disconnect storms (accepted, hung up by the peer before a listen
-  took them), and a listener's close is not seen by a real BlueZ peer
-  though it is by the mock -- #632. Discovery, name, SDP browse/search,
-  L2CAP configuration at MTU 672, data both ways, bonding: all pass.
+- Bluetooth, first run: **569 conversations leaked** by two 20-second
+  connect/disconnect storms (accepted, hung up by the peer before a
+  listen took them), and a listener's close not seen by a real BlueZ
+  peer -- #632. After the fixes (a call nobody read is freed when the
+  peer hangs up; a flushed listen open counts off its listener; a
+  peer's fresh RFCOMM session displaces its closing one): **18 pass,
+  2 fail, 0 conversations leaked**, the close seen. Left: the RFCOMM
+  reconnect storm still sees a refusal on some cycles (one per
+  reconnect that arrives inside the previous session's teardown), and
+  the last ACL of a storm takes its idle timer to go.
+- The chain that led to #635: the fixed `bt9p` raised "module not
+  loaded" (its new `hid` library was not on the card) past `osinit`'s
+  `"fail:*"` block, and the kernel's exception handler took a
+  non-matching block for a handler at pc -1. `tests/exception_test.b`
+  now runs inside the QEMU kernel as a harness check.
 
 - Wi-Fi (hostapd on the Jetson's radio, 2026-09-17): **12 pass / 6 fail**.
   WPA2-PSK authenticates in 19 s -- the AP's own log shows

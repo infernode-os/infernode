@@ -872,9 +872,6 @@ OP(iload)
 	}
 	else {
 		m = readmod(n, lookmod(n), 1);
-		if(R.M->compiled && PC_MISALIGNED(R.PC))
-			print("BUG: iload: R.PC=%p misaligned after readmod %s (in %s, prog %p)\n",
-				R.PC, n, R.M->m? R.M->m->name : "?", R.M->m? (void*)R.M->m->prog : nil);
 		ml = linkmod(m, ldt, 1);
 		if(R.M->compiled && PC_MISALIGNED(R.PC))
 			print("BUG: iload: R.PC=%p misaligned after linkmod %s\n", R.PC, n);

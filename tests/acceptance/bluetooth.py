@@ -125,7 +125,7 @@ def main():
 
     b.kill("Listen")
     b.sh("rm -f /tmp/l2in /tmp/rfin", wait=0.5)
-    time.sleep(2)
+    time.sleep(8)	# the last ACL of the storm idles out on its own timer
     st = b.sh("cat /net/bt/status", wait=1.0)
     m = re.search(r"links (\d+)", st)
     b.check(m is not None and int(m.group(1)) == 0, "no links left open after the run", st.strip()[:100])

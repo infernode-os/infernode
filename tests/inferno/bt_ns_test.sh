@@ -375,6 +375,32 @@ if {ftest -d $BT/$CONV} {
 	if {echo 'announce 0x1003' >[1=0] >[2] /dev/null} {
 		raise 'fail:announce on a Listen conversation was accepted'
 	}
+	# Two calls before any listen reads; the second peer hangs up
+	# first. The listen must get the live one, and the dead one must
+	# be gone -- not queued, not held: #632 left 569 of them on the
+	# board after a connect/disconnect storm.
+	before=`{cat $BT/status | grep conversations}
+	echo 'call 94:bb:43:44:61:04 0x1003 first' > $MNT/chan/btmockctl
+	echo 'call aa:bb:cc:dd:ee:ff 0x1003 second' > $MNT/chan/btmockctl
+	sleep 1
+	echo 'drop aa:bb:cc:dd:ee:ff' > $MNT/chan/btmockctl
+	sleep 1
+	{
+		nid=`{read 10}
+		v=`{cat $BT/$nid/remote}
+		if {! ~ $"v '94:bb:43:44:61:04!4099'} {
+			raise 'fail:the listen was handed the wrong call: '^$"v
+		}
+		v=`{read 100 < $BT/$nid/data}
+		if {! ~ $"v first} {
+			raise 'fail:the live call did not deliver: '^$"v
+		}
+	} < $BT/$id/listen
+	sleep 1
+	after=`{cat $BT/status | grep conversations}
+	if {! ~ $"after $"before} {
+		raise 'fail:a call the peer hung up before a listen took it was not freed: '^$"before^' -> '^$"after
+	}
 } <> $BT/clone
 
 # A listener killed while its listen waits -- kill(1) on a process

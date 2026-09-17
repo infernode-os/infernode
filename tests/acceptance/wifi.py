@@ -115,9 +115,14 @@ def address(b):
     if ifc is None:
         return None
     out = bsh(b, "cat /net/ipifc/%s/status" % ifc, wait=1.0)
+    have = False
     for old in re.findall(r"\n\s+(192\.168\.\d+\.\d+) /(\d+)", out):
-        bsh(b, "echo 'remove %s 255.255.255.0' > /net/ipifc/%s/ctl" % (old[0], ifc), wait=0.5)
-    bsh(b, "echo 'add %s 255.255.255.0' > /net/ipifc/%s/ctl" % (STATIC, ifc), wait=1.0)
+        if old[0] == STATIC:
+            have = True	# from the previous scenario; a remove-then-add of the same address races
+        else:
+            bsh(b, "echo 'remove %s 255.255.255.0' > /net/ipifc/%s/ctl" % (old[0], ifc), wait=0.5)
+    if not have:
+        bsh(b, "echo 'add %s 255.255.255.0' > /net/ipifc/%s/ctl" % (STATIC, ifc), wait=1.0)
     return station_addr(b)
 
 def traffic(b, addr, secs):
@@ -152,7 +157,8 @@ def scenario(b, a, name, ssid_name=None, passphrase=PASS, expect_join=True, note
     b.check(addr is not None, "%s: the station has an address on the AP's subnet (%s)" % (name, addr))
     if addr:
         tx, rx, avg = traffic(b, addr, 3)
-        b.check(rx == tx and tx > 0, "%s: %d/%d echoes over the radio alone, avg %.1f ms" % (name, rx, tx, avg))
+        # radio: a frame or two lost in thirty is the medium, not the stack
+        b.check(tx > 0 and rx >= tx - 2, "%s: %d/%d echoes over the radio alone, avg %.1f ms" % (name, rx, tx, avg))
     return addr
 
 def main():

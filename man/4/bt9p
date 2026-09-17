@@ -314,7 +314,19 @@ reports subscribed to, and each report the device notifies is one
 read of
 .BR data .
 A boot mouse report is three bytes, buttons then dx then dy; a boot
-keyboard report is eight.
+keyboard report is eight. A device with no boot report has its Report
+Map read and parsed
+.RI ( hid (2)),
+and each of its reports is handed on in the boot layout -- buttons,
+dx, dy, wheel -- so the reader never sees the map. The conversation's
+.B status
+says which:
+.BR "Connected boot-mouse" ,
+.BR boot-keyboard ,
+.B mouse
+(a report-protocol mouse, translated) or
+.B report
+(a map describing no mouse; reports as they came).
 .IR bthid (1)
 is the reader that makes a pointer of them. Writes are refused.
 .PP

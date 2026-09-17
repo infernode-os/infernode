@@ -524,8 +524,11 @@ resolve them); a peripheral whose connection-parameter request is
 accepted but not applied hangs up (so `LE_Connection_Update` follows
 the acceptance); and a boot mouse report may be eight bytes (so the
 conversation's `status` says which kind of report is coming, and the
-reader does not guess from the length). Not done: report-protocol
-devices (the report map is not parsed), keyboards (no device to try),
+reader does not guess from the length). *2026-09-17:* report-protocol mice too --
+`hid(2)` parses the Report Map and `bt9p` hands each report on in the
+boot layout, so `bthid` is none the wiser (`status` says `mouse`); the
+mock has a report-only mouse and the contract test drives it with the
+HID specification's vectors. Not done: keyboards (no device to try),
 LE Secure Connections (a peer that insists is refused and says so),
 being a peripheral.
 

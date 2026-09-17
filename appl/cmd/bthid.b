@@ -18,8 +18,9 @@ implement Bthid;
 # this dials again for as long as it runs. Boot keyboard reports are
 # recognised and, for now, counted rather than typed: kbdusb.b's
 # decoder is the shape they need, and there is no keyboard here yet.
-# Report-protocol devices need their report map read, which nobody
-# does yet; they are refused with a word.
+# A report-protocol mouse arrives as "mouse": bt9p has read its report
+# map and hands each report on in the boot layout, so it reads the
+# same here.
 #
 # Mechanism/protocol as the tree draws it: bt9p speaks the radio and
 # GATT; this program knows what a mouse report means and where the
@@ -83,7 +84,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(verbose)
 			sys->fprint(stderr, "bthid: %s connected: %s\n", who, kind);
 		case kind {
-		"boot-mouse" =>
+		"boot-mouse" or "mouse" =>
 			reports(conn.dfd, ptr);
 		"boot-keyboard" =>
 			sys->fprint(stderr, "bthid: %s is a keyboard; its reports are not decoded yet\n", who);

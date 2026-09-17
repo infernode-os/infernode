@@ -28,7 +28,13 @@ mkdir -p $MNT/chan
 HCD=/tmp/btns.hcd
 KEYS=/tmp/btns-keys
 rm -f $KEYS
-btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -n 'ee:ee:ee:ee:ee:05 0x000000 -55 mockmouse le' -t 100 -H $HCD $MNT/chan/btmock &
+# a keys file from before the one-key-per-peer rule: the same peer three
+# times, the last line the current key. Loading keeps one and rewrites.
+echo 'key proto=btlink addr=99:99:99:99:99:99 type=4 !key=00000000000000000000000000000001' > $KEYS
+echo 'key proto=btlink addr=99:99:99:99:99:99 type=4 !key=00000000000000000000000000000002' >> $KEYS
+echo 'key proto=btlink addr=98:98:98:98:98:98 type=4 !key=00000000000000000000000000000009' >> $KEYS
+echo 'key proto=btlink addr=99:99:99:99:99:99 type=4 !key=00000000000000000000000000000003' >> $KEYS
+btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -n 'ee:ee:ee:ee:ee:05 0x000000 -55 mockmouse le' -n 'ee:ee:ee:ee:ee:06 0x000000 -60 modernmouse lereport' -t 100 -H $HCD $MNT/chan/btmock &
 sleep 1
 if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
@@ -115,6 +121,18 @@ if {echo discoverable maybe > $BT/ctl >[2] /dev/null} {
 
 # up: reset the controller and learn who it is.
 echo up > $BT/ctl
+v=`{grep '99:99:99:99:99:99' $KEYS | wc -l}
+if {! ~ $"v 1} {
+	raise 'fail:superseded keys were not dropped from the keys file: '^$"v^' lines'
+}
+v=`{grep '99:99:99:99:99:99' $KEYS}
+if {! ~ $"v *0000003} {
+	raise 'fail:the wrong key survived the rewrite: '^$"v
+}
+v=`{grep '98:98:98:98:98:98' $KEYS | wc -l}
+if {! ~ $"v 1} {
+	raise 'fail:an unrelated key was lost in the rewrite'
+}
 v=`{cat $BT/addr}
 if {! ~ $"v 'b8:27:eb:00:00:42'} {
 	raise 'fail:addr after up: '^$"v
@@ -182,8 +200,8 @@ if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
 # name from its advertising data; EOF when the scan time is up.
 le=`{cat $BT/lescan}
 n=`{cat $BT/lescan | wc -l}
-if {! ~ $"n 7} {
-	raise 'fail:lescan returned '^$"n^' lines, wanted 7 (every device given to the mock advertises)'
+if {! ~ $"n 8} {
+	raise 'fail:lescan returned '^$"n^' lines, wanted 8 (every device given to the mock advertises)'
 }
 if {! ~ $"le *94:bb:43:44:61:04*public*-61*hephaestus*} {
 	raise 'fail:lescan is missing the first device: '^$"le
@@ -672,6 +690,24 @@ if {! ~ $"v 'links 0'} {
 	if {! ~ $"v 'ee:ee:ee:ee:ee:05!gatt'} {
 		raise 'fail:gatt remote: '^$"v
 	}
+} <> $BT/clone
+# a mouse with no boot report: its Report Map is read and parsed, the
+# report id learnt from the Report Reference, and each report handed on
+# in the boot layout -- status says "mouse", and the reader is none the
+# wiser. id 26: button 1, X -3, Y 5, wheel -1 (hid_test's vector)
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:06!hid' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v 'Connected mouse'} {
+		raise 'fail:status after a report-protocol hid connect: '^$"v
+	}
+	echo 'notify ee:ee:ee:ee:ee:06 01 fd 5f 00 ff' > $MNT/chan/btmockctl
+	v=`{read 100 < $BT/$id/data | xd -1x}
+	if {! ~ $"v *'01 fd 05 ff'*} {
+		raise 'fail:the report was not handed on in the boot layout: '^$"v
+	}
+	echo hangup >[1=0]
 } <> $BT/clone
 echo pairable off > $BT/ctl
 

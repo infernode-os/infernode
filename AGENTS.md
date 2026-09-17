@@ -142,19 +142,31 @@ read blocks for ever. Keys live in `/n/dos/btkeys`; `cat
 'bt!*!spp' cmd` and `dial("bt!addr!port")` are the application
 interface; `bthid addr` puts an LE mouse on `/dev/pointer`.
 
+**The C is Plan 9 C; the compilers are not.** gcc on Linux, clang on
+macOS and for the bare-metal kernel, MSVC on Windows -- whatever the
+host ships, by Inferno inheritance; Forsyth's `7c` is not in use. Every
+guarantee the dialect takes from Plan 9 C that these compilers do not
+give is recorded in `docs/PLAN9-C-UNDER-OTHER-COMPILERS.md` with the
+fault it produced and the invariant that replaces it. When a fault has
+no explanation in the source, read the compiler's output for the site
+before theorising; the worst of these (#622, a stale copy of `m` across
+a preempted migration) looked like a scheduler race for four days.
+
 **Userspace dead, kernel alive, no panic: the Dis kproc died.** The
 presentation is exact -- the board pings, `tcp!*!17010` accepts and
 then resets, the serial line echoes keystrokes and nothing answers --
 and it means `vmachine`, the kproc that owns the interpreter, unwound
 out through an `error()` with no handler left (#622). The capture line
-is `linkproc: error() underflow in N:dis`. Since 2026-09-15 `vmachine`
-audits its error stack after every Prog quantum and prints `vmachine:
-error stack N, expected M, after prog P <module> pc <inst>; repaired`
-instead of dying; that line names the Prog whose syscall path left a
-`waserror()` unpopped, and `<module>.sbl` turns the instruction index
-into a source line. Anything else that kills userspace without a
-panic is new. A *panic* reboots the board by itself; this does not,
-and needs the power pulled.
+is `linkproc: error() underflow in N:dis`. Root cause found and fixed
+2026-09-17 (#622, `docs/PLAN9-C-UNDER-OTHER-COMPILERS.md` 1): a stale
+copy of `m` across a preempted migration pushed one kproc's error label
+on another's stack; `runproc` now resumes a preempted proc only on its
+own core. `vmachine` still audits its error stack after every Prog
+quantum and prints `vmachine: error stack N, expected M, after prog P
+<module> ...; re-armed` if it ever recurs, and `waserror()` prints
+`waserror: up is X but the stack is Y's` naming the site. Either line is
+a new instance of the class in that document. A *panic* reboots the
+board by itself; the dead-Dis state did not, and needed the power pulled.
 
 **On the host, `brltty` steals CH340 adapters.** The generic `1a86:7523`
 USB-serial ID is also a Baum braille display, so a running `brltty` claims the

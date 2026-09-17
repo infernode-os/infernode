@@ -27,6 +27,18 @@ typedef struct Mhead	Mhead;
 typedef struct Osenv	Osenv;
 typedef struct Pgrp	Pgrp;
 typedef struct Proc	Proc;
+typedef struct Ptrace	Ptrace;
+
+enum { NPTRACE = 48 };
+struct Ptrace
+{
+	uchar	core;
+	uchar	what;		/* 'm' mach, 's' state */
+	ushort	pad;
+	ulong	tick;
+	uintptr	pc;
+	uintptr	val;
+};
 typedef struct QLock	QLock;
 typedef struct Queue	Queue;
 typedef struct Ref	Ref;
@@ -537,10 +549,25 @@ struct Proc
 	ulong		movetime;	/* next time process should switch processors */
 	ulong		delaysched;
 	int			preempted;	/* process yielding in interrupt */
+	int			samecore;	/* switched out while Running: resume on the same core (see mayrun) */
 	ulong		qpc;		/* last call that blocked in qlock */
 	void*		dbgreg;		/* User registers for devproc */
  	int		dbgstop;		/* don't run this kproc */
 	Edf*	edf;	/* if non-null, real-time proc, edf contains scheduling params */
+	/*
+	 * A recording of every write to mach and state, for #622: which
+	 * core, from where, what value, when. Dumped by the detectors in
+	 * ready() and runproc(), so that the sequence that put a live proc
+	 * in two cores' hands is read off, not inferred. Compiled in with
+	 * -DPROCTRACE only: it grows the Proc by 1.5KB and, in six soaks,
+	 * the race did not show with it in and did within minutes without
+	 * -- which is itself evidence (a layout- or timing-sensitive
+	 * fault), and a reason not to leave it on.
+	 */
+#ifdef PROCTRACE
+	Ptrace	ptrace[NPTRACE];
+	ulong	ptracen;		/* advanced with ainc: cores write this from either side */
+#endif
 };
 
 enum

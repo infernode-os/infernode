@@ -94,7 +94,8 @@
 | [JETSON-PORT-ESTIMATE.md](JETSON-PORT-ESTIMATE.md) | Jetson port effort estimate |
 | [COMPLETE-PORT-SUMMARY.md](COMPLETE-PORT-SUMMARY.md) | Port completion summary |
 | [../os/bcm2837/README.md](../os/bcm2837/README.md) | Bare-metal Raspberry Pi 3B+ kernel: status, decisions, board runbook |
-| [BLUETOOTH.md](BLUETOOTH.md) | Bluetooth design: `#t` serial, mini-UART console, `bt9p` at `/net/bt` (proposed) |
+| [BLUETOOTH.md](BLUETOOTH.md) | Bluetooth design: `#t` serial, mini-UART console, `bt9p` at `/net/bt`; classic pairing, SDP/RFCOMM, LE HID -- on the Pi 3B+ |
+| [PLAN9-C-UNDER-OTHER-COMPILERS.md](PLAN9-C-UNDER-OTHER-COMPILERS.md) | Every guarantee Plan 9 C gives that gcc/clang do not, the fault each produced (#622: `m` copied across a migration), the invariant that replaces it, and the detectors kept in the kernel |
 
 ## ARM64 JIT Compiler
 

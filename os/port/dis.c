@@ -324,15 +324,31 @@ delprog(Prog *p, char *msg)
 	Osenv *o;
 	Prog **ph;
 
+	int n0, n1, n2, n3;
+
+	n0 = up->nerrlab;
 	tellsomeone(p, msg);	/* call before being removed from prog list */
+	n1 = up->nerrlab;
 
 	o = p->osenv;
 	release();
 	closepgrp(o->pgrp);
+	n2 = up->nerrlab;
 	closefgrp(o->fgrp);
+	n3 = up->nerrlab;
 	closeegrp(o->egrp);
 	closesigs(o->sigs);
 	acquire();
+	/*
+	 * The one place a kproc runs kernel code for a Prog that is
+	 * gone, released, with closes that block on other Progs and a
+	 * kill that can land as Eintr in the middle. Every error-stack
+	 * imbalance the board has caught came with a Prog exiting in
+	 * that quantum, so: which of these left the stack off?
+	 */
+	if(up->nerrlab != n0)
+		print("delprog %d \"%s\": error stack %d -> tellsomeone %d -> closepgrp %d -> closefgrp %d -> %d\n",
+			p->pid, msg, n0, n1, n2, n3, up->nerrlab);
 
 	delgrp(p);
 
@@ -938,7 +954,7 @@ acquire(void)
 		}
 		isched.vmqt = up;
 
-		up->state = Queueing;
+		SETSTATE(up, Queueing);
 		up->pc = getcallerpc(&empty);
 		unlock(&isched.l);
 		if(empty)
@@ -1018,7 +1034,7 @@ iyield(void)
 	up->qnext = isched.idlevmq;
 	isched.idlevmq = up;
 
-	up->state = Queueing;
+	SETSTATE(up, Queueing);
 	up->pc = getcallerpc(&p);
 	unlock(&isched.l);
 	ready(p);
@@ -1042,7 +1058,7 @@ startup(void)
 	}
 	up->qnext = isched.idlevmq;
 	isched.idlevmq = up;
-	up->state = Queueing;
+	SETSTATE(up, Queueing);
 	up->pc = getcallerpc(&x);
 	unlock(&isched.l);
 	sched();
@@ -1053,9 +1069,10 @@ progexit(void)
 {
 	Prog *r;
 	Module *m;
-	int broken;
+	int broken, n0;
 	char *estr, msg[ERRMAX+2*KNAMELEN];
 
+	n0 = up->nerrlab;
 	estr = up->env->errstr;
 	broken = 0;
 	if(estr[0] != '\0' && strcmp(estr, Eintr) != 0 && strncmp(estr, "fail:", 5) != 0)
@@ -1087,6 +1104,8 @@ progexit(void)
 		tellsomeone(r, msg);
 		r = isave();
 		r->state = Pbroken;
+		if(up->nerrlab != n0)
+			print("progexit (broken): error stack %d -> %d\n", n0, up->nerrlab);
 		return;
 	}
 
@@ -1094,6 +1113,8 @@ progexit(void)
 	destroystack(&R);
 	delprog(r, msg);
 	gcunlock();
+	if(up->nerrlab != n0)
+		print("progexit: error stack %d -> %d\n", n0, up->nerrlab);
 }
 
 void
@@ -1133,6 +1154,7 @@ vmachine(void*)
 
 	startup();
 
+    for(;;){
 	while(waserror()) {
 		if(up->type != Interp)
 			panic("vmachine: non-interp kproc");
@@ -1210,6 +1232,9 @@ vmachine(void*)
 
 	cycles = 0;
 	for(;;) {
+		int pid;
+		char *modname;
+
 		if(tready(nil) == 0) {
 			execatidle();
 			sleep(&isched.irend, tready, 0);
@@ -1224,6 +1249,16 @@ vmachine(void*)
 		if(r != nil) {
 			o = r->osenv;
 			up->env = o;
+			/*
+			 * Taken before the quantum: a Prog that exits during it
+			 * is freed by the time the audit below runs, and every
+			 * catch so far has printed the poison of a freed Prog
+			 * where its pc should be -- which is itself the finding
+			 * (the imbalance comes with an exit), and the reason to
+			 * read these two fields first.
+			 */
+			pid = r->pid;
+			modname = r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?";
 
 			FPrestore(&o->fpu);
 			r->xec(r);
@@ -1236,12 +1271,40 @@ vmachine(void*)
 				 * the native address of a JIT-compiled instruction
 				 * says nothing to anyone.
 				 */
-				print("vmachine: error stack %d, expected %d, after prog %d %s pc %ld; repaired\n",
-					up->nerrlab, nerr, r->pid,
-					r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?",
-					r->R.M != nil && r->R.M->m != nil && r->R.M->m->prog != nil ?
-						(long)(r->R.PC - r->R.M->m->prog) : -1L);
-				up->nerrlab = nerr;
+				int i, n;
+
+				n = up->nerrlab;
+				print("vmachine: error stack %d, expected %d, after prog %d %s (%s); re-armed\n",
+					n, nerr, pid, modname,
+					isched.runhd == r || r->pid == pid ? "still live" : "exited in this quantum");
+				/*
+				 * Each label records the pc of the waserror() that
+				 * pushed it, so a label left behind names its own
+				 * leaker; and the label that should be here but was
+				 * popped still holds who pushed it, since poperror()
+				 * only counts down. Print what is at every index from
+				 * the lower count to the higher.
+				 */
+				if(n > NERR)
+					n = NERR;
+				for(i = nerr < n ? nerr : n; i < (nerr > n ? nerr : n) && i < NERR; i++)
+					print("vmachine:   errlab[%d] pushed at pc %#p sp %#p\n",
+						i, up->errlab[i].pc, up->errlab[i].sp);
+				/*
+				 * Repairing the COUNT is not enough. When it came
+				 * up short, the slot this function's own label lived
+				 * in has been reused by whoever pushed after the
+				 * extra pop -- rread, rwrite, kopen have all been
+				 * seen there -- and the next error() would land in
+				 * that dead frame. So drop to below this function's
+				 * slot and go round the outer loop, whose waserror()
+				 * pushes a fresh label there. The board ran 41
+				 * minutes on a count-only repair before a longjmp
+				 * into rread's ghost ended in "Double release".
+				 */
+				up->env = &up->defenv;
+				up->nerrlab = nerr - 1;
+				goto rearm;
 			}
 
 			if(isched.runhd != nil)
@@ -1303,6 +1366,9 @@ vmachine(void*)
 				print("up->iprog not nil (%lux)\n", up->iprog);
 		}
 	}
+rearm:
+	;
+    }
 }
 
 void

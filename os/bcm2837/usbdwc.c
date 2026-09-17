@@ -127,6 +127,7 @@ struct Ctlr {
 	Dwcregs	*regs;		/* controller registers */
 	int	nchan;		/* number of host channels */
 	ulong	chanbusy;	/* bitmap of in-use channels */
+	ulong	chandead;	/* channels that would not halt: never handed out again (#641) */
 	QLock	chanlock;	/* serialise access to chanbusy */
 	QLock	split;		/* serialise split transactions */
 	int	splitretry;	/* count retries of Nyet */
@@ -254,7 +255,7 @@ chanalloc(Ep *ep)
 
 	ctlr = ep->hp->aux;
 	qlock(&ctlr->chanlock);
-	bitmap = ctlr->chanbusy;
+	bitmap = ctlr->chanbusy | ctlr->chandead;
 	for(i = 0; i < ctlr->nchan; i++)
 		if((bitmap & (1<<i)) == 0){
 			ctlr->chanbusy = bitmap | 1<<i;
@@ -289,9 +290,25 @@ chanrelease(Ep *ep, Hostchan *chan)
 	 * enabled indefinitely and writes its next packet at hcdma no
 	 * matter who owns that memory by then.
 	 */
-	if(chan->hcchar & Chen)
-		panic("chanrelease: ep%d.%d channel %d still enabled hcchar %8.8ux hcdma %8.8ux cpu%d",
-			ep->dev->nb, ep->nb, i, chan->hcchar, chan->hcdma, m->machno);
+	if(chan->hcchar & Chen){
+		/*
+		 * It would not halt (chanwait said so), so it keeps its
+		 * channel and its buffer for good: a channel of eight is
+		 * a small price against a DMA engine writing into memory
+		 * somebody else owns by the time it finishes. Before this
+		 * the release panicked, or -- when the halt was only
+		 * half-asked-for, see chanwait -- the channel went back to
+		 * the pool live, and an unpopulated hub port's phantom
+		 * attach then cost the board its main pool or its JIT
+		 * code within a minute (#641, #610).
+		 */
+		qlock(&ctlr->chanlock);
+		ctlr->chandead |= 1<<i;
+		qunlock(&ctlr->chanlock);
+		print("usbotg: ep%d.%d channel %d retired: still enabled hcchar %8.8ux hcdma %8.8ux\n",
+			ep->dev->nb, ep->nb, i, chan->hcchar, chan->hcdma);
+		return;
+	}
 	qlock(&ctlr->chanlock);
 	ctlr->chanbusy &= ~(1<<i);
 	qunlock(&ctlr->chanlock);
@@ -576,7 +593,7 @@ restart:
 			hc->hcintmsk = 0;
 			splx(x);
 			if(++ntmout > Maxtmout){
-				hc->hcchar |= Chdis;
+				hc->hcchar |= Chen | Chdis;	/* both bits: CHDIS alone is not a request the core honours */
 				print("usbotg: ep%d.%d transfer timed out "
 					"(hcint %8.8ux hcchar %8.8ux gintsts %8.8ux\n"
 					"usbotg:   hcdma %8.8ux hctsiz %8.8ux "
@@ -636,7 +653,15 @@ restart:
 			ep->dev->nb, ep->nb, intr, hc->hcchar, r->grxstsr,
 			r->gnptxsts, r->hptxsts);
 		mask = Chhltd;
-		hc->hcchar |= Chdis;
+		/*
+		 * The DWC OTG core disables an active channel only when
+		 * CHENA and CHDIS are written together (chanintr below and
+		 * the datasheet both have it so); CHDIS alone left the
+		 * channel running and this loop reporting "won't halt" --
+		 * the ep4.1 line seen on every day of board work -- with
+		 * the DMA still armed at hcdma.
+		 */
+		hc->hcchar |= Chen | Chdis;
 		start = m->ticks;
 		while(hc->hcchar & Chen){
 			if(m->ticks - start >= 100){

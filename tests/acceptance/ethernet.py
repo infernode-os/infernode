@@ -52,6 +52,11 @@ def throughput_out(host, port, seconds):
     s.close()
     return n * 8 / seconds / 1e6
 
+def default_gateway():
+    rc, out = run(["ip", "route", "show", "default"], timeout=10)
+    m = re.search(r"default via (\S+)", out)
+    return m.group(1) if m else None
+
 def ping(host, count, size, interval):
     rc, out = run(["ping", "-c", str(count), "-i", str(interval), "-s", str(size), "-W", "2", host], timeout=count * (interval + 2) + 10)
     m = re.search(r"(\d+) packets transmitted, (\d+) received", out)
@@ -98,11 +103,21 @@ def main():
     tx, rx, avg, mx = ping(a.board, burst, 1472, 0.002)
     loss = 100.0 * (tx - rx) / max(tx, 1)
     b.check(loss < 1.0, "26.3 frame loss: %.2f%% of %d back-to-back 1500-byte frames" % (loss, tx), "avg %.2f max %.2f ms" % (avg, mx))
-    # fragmented echoes: the stack reassembles
-    tx, rx, avg, mx = ping(a.board, 20, 4000, 0.05)
-    b.check(rx == tx, "IP reassembly: %d/%d 4000-byte (fragmented) echoes answered" % (rx, tx))
-    tx, rx, avg, mx = ping(a.board, 5, 60000, 0.2)
-    b.check(rx == tx, "IP reassembly: %d/%d 60000-byte echoes answered" % (rx, tx))
+    # fragmented echoes: the stack reassembles. First the TESTER is
+    # checked: on 2026-09-17 this host's fragments reached no wired host
+    # at all -- not the board, not the gateway -- while a second tester's
+    # reached the board 3/3 and the board reassembled the gateway's own
+    # 5 KB broadcasts all along (#633 was the tester, not the stack). A
+    # tester that cannot send fragments to its gateway skips, and says so.
+    gw = default_gateway()
+    gtx, grx, _, _ = ping(gw, 3, 4000, 0.3) if gw else (0, 0, 0, 0)
+    if grx == 0:
+        b.skip("IP reassembly (4000- and 60000-byte echoes)", "this tester's fragments do not reach its own gateway %s; test from another host" % gw)
+    else:
+        tx, rx, avg, mx = ping(a.board, 20, 4000, 0.05)
+        b.check(rx == tx, "IP reassembly: %d/%d 4000-byte (fragmented) echoes answered" % (rx, tx))
+        tx, rx, avg, mx = ping(a.board, 5, 60000, 0.2)
+        b.check(rx == tx, "IP reassembly: %d/%d 60000-byte echoes answered" % (rx, tx))
 
     print("== TCP behaviour")
     t0 = time.time()
@@ -113,17 +128,28 @@ def main():
         b.check(time.time() - t0 < 1.0, "a connect to a closed port is refused at once (RST), %.2fs" % (time.time() - t0))
     except Exception as e:
         b.check(False, "a connect to a closed port is refused", "%s after %.1fs" % (type(e).__name__, time.time() - t0))
-    # many connections at once, then closed: the board keeps up and frees them
+    # a burst of connections held open, then a byte on each: a call the
+    # stack accepted and then reset (its accept queue full -- Maxincall,
+    # os/ip/ip.h) looks connected to the client until it writes, so the
+    # write is the test. 100 is under the queue; a serial listener takes
+    # them one at a time and every one of them must still be there.
     conns = []
     failed = 0
-    for i in range(100 if a.quick else 200):
+    reset = 0
+    for i in range(50 if a.quick else 100):
         try:
             conns.append(socket.create_connection((a.board, 5001), timeout=5))
         except Exception:
             failed += 1
+    time.sleep(0.5)
+    for c in conns:
+        try:
+            c.sendall(b"x")
+        except Exception:
+            reset += 1
     for c in conns:
         c.close()
-    b.check(failed == 0, "%d simultaneous connections accepted, none refused" % len(conns), "%d failed" % failed)
+    b.check(failed == 0 and reset == 0, "%d simultaneous connections accepted and held, none refused or reset" % len(conns), "%d failed to connect, %d reset after connecting" % (failed, reset))
     time.sleep(1)
     try:
         s = socket.create_connection((a.board, 5001), timeout=5)

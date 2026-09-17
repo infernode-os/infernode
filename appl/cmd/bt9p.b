@@ -3649,10 +3649,20 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 			}
 		Data =>
 			if(e.c == lk.rfch){
-				if(lk.rf != nil){
-					rfevents(srv, lk, lk.rf.recv(e.sdu));
-					rfstartwaiting(srv, lk);
+				# A frame on the multiplexer's channel after the peer
+				# took the multiplexer down (DISC on DLCI 0, which
+				# rfdown answered by dropping lk.rf) is the peer
+				# bringing a new session up on the same channel --
+				# SABM on DLCI 0 -- and dropping it left BlueZ's
+				# reconnect waiting for a UA that never came, one
+				# refusal per cycle of the acceptance battery's storm
+				# (#632). A fresh multiplexer answers it.
+				if(lk.rf == nil){
+					lk.rf = Mux.new(e.c.initiator, e.c.mtu);
+					lk.rf.accept = rfannounced();
 				}
+				rfevents(srv, lk, lk.rf.recv(e.sdu));
+				rfstartwaiting(srv, lk);
 				continue;
 			}
 			if((sc := sdpclient(lk, e.c)) != nil){

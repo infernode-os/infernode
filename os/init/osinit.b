@@ -184,6 +184,16 @@ init()
 		sys->print("init: cannot bind #s on /chan: %r\n");
 
 	#
+	# And the jack: /dev/audio and /dev/audioctl (audio(3)), served by
+	# the kernel's PWM-through-DMA driver (os/bcm2837/audiopwm.c). After
+	# /dev, so the console's names win; the device costs nothing until
+	# something opens it, and from then on it holds the jack at a
+	# steady level rather than the buzz an unconfigured pin makes.
+	#
+	if(sys->bind("#A", "/dev", Sys->MAFTER) < 0)
+		sys->print("init: cannot bind #A on /dev: %r\n");
+
+	#
 	# Bring up loopback.
 	#
 	# This is the first thing that exercises the stack rather than

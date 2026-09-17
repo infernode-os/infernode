@@ -179,6 +179,7 @@ TARG=\
 	telnet.dis\
 	test.dis\
 	time.dis\
+	tone.dis\
 	timestamp.dis\
 	tokenize.dis\
 	touch.dis\

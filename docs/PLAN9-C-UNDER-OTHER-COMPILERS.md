@@ -164,7 +164,24 @@ cast to a fixed width, and every `%lux`/`%ux` format on an `ulong` is
 suspect where Plan 9 C meant 32 bits. `grep -n '0xffffffff' os/port
 libinterp` is a five-minute audit; it found this one after the fact.
 
-## 7. The JIT is a compiler too
+## 7. The anonymous struct member, again, in new code
+
+`struct Ctlr { QLock; Rendez r; ... }` is Plan 9 C for "a Ctlr is a
+QLock, among other things": `qlock(&ctlr)` works because the compiler
+knows a `Ctlr*` converts to the `QLock*` of its unnamed member. Under
+clang the line `QLock;` declares nothing (a warning), the Rendez lands
+at offset 0, `qlock(&ctlr)` is an incompatible-pointer call (another
+warning) that spins on the Rendez's bytes, and the first open of
+`/dev/audio` on the board was a data abort inside `qlock` (2026-09-18,
+`os/bcm2837/audiopwm.c`, the first cut). The harness had escalated
+both warnings to errors for `os/port` and `os/ip` since the day they
+destroyed xalloc's free list (`tests/host/baremetal_test.sh`, the
+comment at the os/port loop, "167 call sites") -- but not for the
+platform directory, where new drivers are written. It does now.
+Rule for new kernel C: **name the member** (`QLock lk;`) and lock
+`&x->lk`; the escalation catches the other form at build time.
+
+## 8. The JIT is a compiler too
 
 `libinterp/comp-arm64.c` emits AArch64 for Dis instructions. Its
 preamble saves x19-x22, x29, x30 and uses x0-x5, x20-x22; it does not

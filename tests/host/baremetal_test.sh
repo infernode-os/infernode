@@ -1188,8 +1188,14 @@ IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -DINFERNO_NATIVE
         -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include"
         -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
 
+# The two escalations the os/port and os/ip loops below apply are applied to
+# the platform files too: an anonymous "QLock;" member in a NEW driver
+# (audiopwm.c, 2026-09-18) declared nothing, qlock() took the Rendez at
+# offset 0, and the first open of /dev/audio was a data abort. The
+# warning was in cc.log all along; this makes it the build's business.
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
-        -O2 -fno-omit-frame-pointer -Wall -Wextra -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -O2 -fno-omit-frame-pointer -Wall -Wextra
+        -Werror=missing-declarations -Werror=incompatible-pointer-types -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"

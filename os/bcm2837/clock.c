@@ -340,7 +340,7 @@ struct Armtimer
 void
 armtimerset(int n)
 {
-	Armtimer *tm;
+	volatile Armtimer *tm;
 
 	tm = ARMTIMER;
 	if(n > 0){

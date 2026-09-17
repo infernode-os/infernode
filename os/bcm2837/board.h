@@ -28,6 +28,12 @@ void	gpioout(int, int);
 int	gpioin(int);
 int	gpiogetfunc(int);
 void	gpioclaim(int, char*);
+int	dmaenable(int, void (*)(void*), void*, char*);
+void	dmastart(int, void*);
+void	dmastop(int);
+void	dmadisable(int);
+int	dmaactive(int);
+u32int	dmawhere(int);
 char*	gpioclaimed(int);
 
 /* mailbox.c */

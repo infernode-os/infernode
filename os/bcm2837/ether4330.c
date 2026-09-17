@@ -2950,6 +2950,27 @@ setauth(Ctlr *ctlr, uchar *wpaie, int i)
 }
 
 /*
+ * No WPA: what setauth() turned on, turned off. "crypt off" used to
+ * set only the 802.11 authentication type and leave wpa_auth, wsec
+ * and the RSN element as the last WPA join had them, so a board that
+ * had ever joined a WPA2 network could never join an open one -- the
+ * firmware offered PSK to an AP that had none and said "join failed"
+ * every time, with the network in its own scan results at -28 dBm
+ * (the Wi-Fi acceptance battery, #638). WEP keeps wsec's WEP bit.
+ */
+static void
+setnowpa(Ctlr *ctlr, int t)
+{
+	wlsetint(ctlr, "wpa_auth", 0);
+	wlsetint(ctlr, "auth", 0);
+	wlsetint(ctlr, "wsec", t == Wep? 1 : 0);
+	if(!waserror()){
+		wlsetvar(ctlr, "wpaie", nil, 0);
+		poperror();
+	}
+}
+
+/*
  * "crypt off" and its spellings, decided and nothing more: -1 for a
  * word that is neither. Nothing is changed here, so a verb that is
  * going to be refused for want of a firmware does not leave the
@@ -3075,7 +3096,7 @@ etherbcmctl(Ether *edev, void *a, long n)
 			cmderror(cb, "bad crypt type");
 		wlrunning(ctl);
 		ctl->cryptotype = t;
-		wlsetint(ctl, "auth", t);
+		setnowpa(ctl, t);
 		if(ctl->essid[0])
 			wljoin(ctl, ctl->essid, ctl->chanid);
 		break;
@@ -3118,7 +3139,7 @@ etherbcmctl(Ether *edev, void *a, long n)
 		ctl->chanid = i;
 		if(t >= 0){
 			ctl->cryptotype = t;
-			wlsetint(ctl, "auth", t);
+			setnowpa(ctl, t);
 		}else
 			setauth(ctl, wpaie, nie);
 		if(ctl->essid[0])

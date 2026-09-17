@@ -113,6 +113,19 @@ Retrymax:	con 60000;	# ms
 #
 Realassoc:	con 1000;	# ms
 
+#
+#	How long the radio is left unassociated before the join is asked
+#	for again. The firmware's join is one attempt: if the network is
+#	not there when it looks -- an access point rebooting, a board
+#	that came up first -- nothing in the radio tries again, and a
+#	supplicant that only watched ifstats waited for an association
+#	that could never come (the Wi-Fi acceptance battery took the AP
+#	down for five seconds and the board had not re-joined after two
+#	minutes, "still waiting for the radio to associate" every 20 s,
+#	#638). So the wait re-issues the join, and this is how often.
+#
+Rejoin:		con 15000;	# ms
+
 #	The largest int, as a millisecond count: about twenty-five days.
 Maxms:		con 16r7FFFFFFF;
 
@@ -329,7 +342,7 @@ init(nil: ref Draw->Context, args: list of string)
 				report(sys->sprint("essid %q: %r", essid));
 		}
 
-		waited := associate(cfd, rsne, announce);
+		waited := associate(cfd, rsne, announce, essid);
 		announce = 0;
 		supp.reset();
 		began := sys->millisec();
@@ -542,9 +555,10 @@ addms(a, b: int): int
 	return a + b;
 }
 
-associate(cfd: ref Sys->FD, rsne: array of byte, announce: int): int
+associate(cfd: ref Sys->FD, rsne: array of byte, announce: int, essid: string): int
 {
 	waited := 0;
+	sincejoin := 0;
 	say := Sparse.mk(Sayfirst);
 	while(!connected()){
 		sys->sleep(Assocpoll);
@@ -557,9 +571,23 @@ associate(cfd: ref Sys->FD, rsne: array of byte, announce: int): int
 			waited = Maxms;
 		else
 			waited += Assocpoll;
+		sincejoin += Assocpoll;
 		if(say.due(Assocpoll))
 			report(sys->sprint("still waiting for the radio to associate (%s)",
 				duration(waited)));
+		#
+		# Ask again (see Rejoin): the same three writes as the
+		# lost-link path, name cleared first so the element write
+		# is inert. The essid write blocks for the join and may
+		# fail; that is one rationed line and another turn here.
+		#
+		if(sincejoin >= Rejoin && essid != nil){
+			sincejoin = 0;
+			sys->fprint(cfd, "essid default");
+			sys->fprint(cfd, "auth %s", RSNE);
+			if(sys->fprint(cfd, "essid %q", essid) < 0 && say.due(Assocpoll))
+				report(sys->sprint("essid %q: %r", essid));
+		}
 	}
 	#
 	# Said when the caller asked for it, and whenever the radio kept

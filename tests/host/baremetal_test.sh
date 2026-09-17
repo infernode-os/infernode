@@ -991,7 +991,7 @@ PYEOF
 shell_session() {
     local img="$1"; shift
     python3 - "$QEMU" "$img" "$QEMUARGS" "$@" <<'PYEOF'
-import subprocess, sys, time, threading
+import os, subprocess, sys, time, threading
 qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
 cmds = sys.argv[4:]
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
@@ -1057,7 +1057,9 @@ try:
     # means every command before it has finished.
     p.stdin.write(b"echo dRaInEd\r")
     p.stdin.flush()
-    deadline = time.time() + 30
+    # SESSION_DRAIN: how long the last command may take before the
+    # session is given up on; the scheduler soak below runs for minutes
+    deadline = time.time() + int(os.environ.get("SESSION_DRAIN", "30"))
     while time.time() < deadline:
         if bytes(buf).count(b"dRaInEd") >= 2:
             break
@@ -4048,6 +4050,58 @@ echo ""
 # green: QEMU's property handler tolerates the mismatched size and replies
 # ON regardless, so asserting the reply proves nothing about the call.
 #
+# ---------------------------------------------------------------------
+# The scheduler under load, with the kernel's own detectors as the
+# oracle (#622, docs/PLAN9-C-UNDER-OTHER-COMPILERS.md 1).
+#
+#     For four days the board's Dis interpreter died of an error-stack
+#     imbalance nobody could place. The cause was clang copying `m`
+#     (x28) into a scratch register before dereferencing it: a process
+#     interrupted between the two instructions and resumed on another
+#     core read the old core's Mach through the copy, and pushed its
+#     error label onto another process's stack. runproc() now resumes
+#     a preempted process only on the core it left; the detectors that
+#     found it stayed in the kernel, each one a line on the console:
+#
+#         vmachine: error stack N, expected M ...   (dis.c, the audit)
+#         waserror: up is X but the stack is Y's    (proc.c, exact)
+#         poperror: label pushed at ... popped at   (frame check)
+#         ready: ... / runproc: ...                 (double-owner tripwires)
+#
+#     This runs the reproduction that used to bring one out in two to
+#     five minutes -- six shell loops on /tmp, so short-lived Progs are
+#     created, preempted across cores and torn down without pause --
+#     for SOAKSECS seconds, and fails on any detector line. The lines
+#     are cheap and silent on a healthy kernel, so the check is exact:
+#     a regression of the fix, or a new fault of the same class, is one
+#     grep away rather than a week. SOAKSECS=0 skips it; 90 is the
+#     default and has never produced a false report.
+# ---------------------------------------------------------------------
+SOAKSECS="${SOAKSECS:-90}"
+if [[ "$SOAKSECS" -gt 0 ]]; then
+    SOAKOUT="$(SESSION_DRAIN=$((SOAKSECS + 60)) shell_session "$BUILD/$PLAT-kernel.img" \
+        '{while {~ 1 1} {echo hello-a > /tmp/a; cat /tmp/a > /dev/null; ls -l /tmp/a > /dev/null; rm /tmp/a}} &' \
+        '{while {~ 1 1} {echo hello-b > /tmp/b; cat /tmp/b > /dev/null; rm /tmp/b}} &' \
+        '{while {~ 1 1} {cat /dis/sh.dis > /tmp/c; cat /tmp/c | cat > /dev/null; rm /tmp/c}} &' \
+        '{while {~ 1 1} {echo x | cat > /tmp/d; ls /tmp > /dev/null; rm /tmp/d}} &' \
+        '{while {~ 1 1} {mkdir /tmp/dd; echo y > /tmp/dd/e; mv /tmp/dd/e /tmp/dd/f; rm /tmp/dd/f; rm /tmp/dd}} &' \
+        '{while {~ 1 1} {cat /dis/sh.dis /dis/sh.dis > /tmp/big; cat /tmp/big > /dev/null; rm /tmp/big}} &' \
+        "sleep $SOAKSECS")"
+    SOAKOUT="$(tr -d '\r' <<<"$SOAKOUT")"
+    [[ "$VERBOSE" -eq 1 ]] && { echo "  --- soak session ---"; echo "$SOAKOUT" | tail -20; }
+    if ! grep -q "dRaInEd" <<<"$SOAKOUT"; then
+        fail "scheduler soak: the shell did not come back after $SOAKSECS s of load (wedged, or the drain deadline is too short)"
+    else
+        pass "scheduler soak: the shell survived $SOAKSECS s of six /tmp loops"
+    fi
+    SOAKBAD="$(grep -E 'vmachine: error stack|waserror: up is [^3]|poperror: label|^ready: |runproc: cpu|panic|unhandled exception|BUG: misaligned' <<<"$SOAKOUT" | head -3)"
+    if [[ -z "$SOAKBAD" ]]; then
+        pass "scheduler soak: no detector fired (#622 error-stack audit, up-vs-stack, frame check, double-owner tripwires)"
+    else
+        fail "scheduler soak: a detector fired under load: $SOAKBAD"
+    fi
+fi
+
 # A calling-convention error is a property of the source, so check the
 # source. Anything else is theatre.
 # ---------------------------------------------------------------------

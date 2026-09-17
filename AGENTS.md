@@ -101,6 +101,54 @@ concluding the directory is empty.
 Notes from bringing wifi up on a Pi 3B+ running the native kernel
 (`os/init/osinit.b`, `/osinit.dis`). None of this applies to hosted `emu`.
 
+### What must not regress, and what gates it
+
+The hard-won fixes on this board each have a test that fails if they go,
+and a change in their area is not done until that test has run. In
+order of how much they cost to find:
+
+| what | where it is guarded | run it when |
+|---|---|---|
+| The scheduler fix for #622 (a preempted proc resumes on its own core; clang copies `m`) and the kernel's four error-stack detectors | `tests/host/baremetal_test.sh`, the **scheduler soak** at the end: 90 s of six `/tmp` loops under QEMU, any detector line is a FAIL (`SOAKSECS=0` skips, `SOAKSECS=600` for a real soak) | every kernel change; CI runs it |
+| Every Plan 9 C guarantee clang/gcc do not give, with the fault each produced | `docs/PLAN9-C-UNDER-OTHER-COMPILERS.md` -- a new fault of that class is a new entry **before** its fix merges | a fault with no explanation in the source |
+| `bt9p` behaviour: pairing, keys, SDP, RFCOMM, LE HID, #632 (a call the peer hangs up before a listen takes it) | `tests/inferno/bt_ns_test.sh` against the mock (CI); `tests/acceptance/bluetooth.py` against BlueZ on the board | any change under `appl/lib/{bthci,l2cap,sdp,rfcomm,att,smp,hid}.b`, `appl/cmd/bt9p.b` |
+| Wi-Fi: `crypt off` clears the firmware's WPA state (open networks join, #638); the supplicant re-issues the join while unassociated (re-join after an AP outage) | `tests/acceptance/wifi.py` with `wifi-ap.sh` on the tester -- the only test there is, since the radio is hardware | any change to `os/bcm2837/ether4330.c` or `appl/cmd/ip/wpa.b` |
+| Ethernet: RFC 2544 figures, TCP behaviour, and #633 when fixed | `tests/acceptance/ethernet.py` | any change under `os/ip/`, the LAN78xx driver, `etherusb` |
+| GPIO as files, the console pins refusing | harness check at boot (QEMU); `tests/acceptance/gpio.py` with the jig | `devgpio.c` |
+
+The acceptance batteries need the board and a Linux tester
+(`tests/acceptance/README.md`); their PASS/FAIL lines go in the PR. A
+battery that cannot be run for want of hardware is said so in the PR,
+not skipped silently.
+
+### Installing a kernel on the board: candidate first, always
+
+**Never write a kernel over `infernode8.img`.** Twice on 2026-09-17 a
+kernel that panicked before the console shell existed went on the card
+that way, and each time the card had to come out and go into a reader
+-- once for a double free in the JIT that no QEMU run had reached, once
+for a module load that broke the loader. The A/B procedure in
+`os/bcm2837/README.md` exists for exactly this and costs nothing:
+
+    cp <kernel> /n/dos/tryboot.img          # the candidate, under its own name
+    echo tryboot > /dev/sysctl              # one boot under the 90 s watchdog
+    # it comes up saying CANDIDATE, or the watchdog boots infernode8.img again
+    mv /n/dos/tryboot.img /n/dos/infernode8.img   # promote, from its own shell
+
+A candidate that panics costs a reset. The serial loader (`recover.c`,
+`~/pitools/serialboot.py` sprays ETX until it answers) is the fallback
+for a card whose good kernel is also gone -- but note that a kernel fed
+that way once died at once in `qproduce` with a nil queue (console input
+arriving before the UART's queue existed), so it is not yet a substitute
+for the candidate boot.
+
+**Copying to the card over the network console: verify, never remove
+first.** `mount -A tcp!...!6666 /tmp/jet` fails silently if `/tmp/jet`
+does not exist in that session's namespace (each session is a fresh
+fork), and an `rm` before the `cp` then deletes the only copy --
+`/dis/ip/wpa.dis` was gone from the card for a minute that way. `cp`
+over the file, `ls -l` the size, then trust it.
+
 **Two ways in, and you want both.** A USB serial console at 115200
 (`/dev/ttyUSB0` on the host) always works and needs no network. A network
 console on `tcp!*!17010` is enabled only if `/n/dos/netconsole` exists on the

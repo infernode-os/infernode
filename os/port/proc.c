@@ -1012,7 +1012,7 @@ errlabcheck(void)
 	 * address is the stack; if it is outside up->kstack, `up` is
 	 * lying, and the owner of this stack is found by searching.
 	 */
-	if(p->kstack != nil){
+	if(p->kstack != nil && p->kp){	/* the boot proc runs on the boot stack, not its kstack */
 		uintptr sp;
 		Proc *o, *eo;
 

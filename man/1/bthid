@@ -34,8 +34,15 @@ does only with
 .B pairable
 on.
 .PP
-Boot keyboard reports (eight bytes) are recognised and counted, not
-typed: a keyboard wants the decoder in
+Which report kind is coming is what the conversation's
+.B status
+says
+.RB ( "Connected boot-mouse" ", " mouse "),"
+not a guess from the length; a report-protocol mouse arrives already
+translated to the boot layout by
+.IR bt9p (4).
+Boot keyboard reports are recognised and counted, not typed: a
+keyboard wants the decoder in
 .BR os/init/kbdusb.b ,
 and there has been no keyboard to try it on.
 .SH EXAMPLE

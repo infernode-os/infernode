@@ -137,6 +137,9 @@ include "att.m";
 include "smp.m";
 	smp: Smp;
 	Pairing: import smp;
+include "hid.m";
+	hid: Hid;
+	Report: import hid;
 
 Bt9p: module
 {
@@ -220,7 +223,11 @@ Conv: adt {
 	# an LE conversation
 	hidchars: list of ref Characteristic;	# hid: the input reports subscribed to, value handles
 	hidwait: int;			# hid: CCCD writes still to be answered
-	hidkind: string;		# hid: "boot-mouse", "boot-keyboard" or "report", once subscribed
+	hidkind: string;		# hid: "boot-mouse", "boot-keyboard", "mouse" or "report", once subscribed
+	hidreads: int;			# hid: reads of the report map and report references still to come
+	hidmaph: int;			# hid: the Report Map's value handle
+	hidmap: list of ref Report;	# hid: the map, parsed, for report protocol
+	hidids: list of (int, int, int);	# hid: (reference handle, value handle, report id) per input report
 };
 Kl2cap, Krfcomm, Kgatt, Khid: con iota;
 leseen: list of (string, int);	# addresses lescan has heard, with their types
@@ -358,6 +365,7 @@ init(nil: ref Draw->Context, args: list of string)
 	keyring = load Keyring Keyring->PATH;
 	att = load Att Att->PATH;
 	smp = load Smp Smp->PATH;
+	hid = load Hid Hid->PATH;
 	# the audit trail, when this install has one: a no-op otherwise,
 	# as 2fa does, because a radio that cannot come up for want of a
 	# log is a worse outcome than an unlogged radio
@@ -398,6 +406,7 @@ init(nil: ref Draw->Context, args: list of string)
 	rfcomm->init(bthci);
 	att->init(bthci);
 	smp->init(bthci, keyring);
+	hid->init();
 	sdpsrv = Server.new();
 	factotum->init();
 
@@ -1888,7 +1897,7 @@ cancelinquiry()
 
 newconv(): ref Conv
 {
-	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0, nil);
+	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0, nil, 0, 0, nil, nil);
 	convs = cv :: convs;
 	id := cv.id;
 	nm := sys->sprint("%d", id);
@@ -3238,21 +3247,43 @@ attevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Att->Ev)
 				closed(srv, cv, "no HID service");
 		Written =>
 			cv := hidconv(lk);
-			if(cv != nil && cv.state == "Connecting" && --cv.hidwait <= 0){
-				cv.state = "Connected " + cv.hidkind;
-				auditlog("connect", sys->sprint("peer=%s port=hid outgoing", cv.raddr));
-				if(cv.cpending != nil){
-					srv.reply(ref Rmsg.Write(cv.cpending.tag, len cv.cpending.data));
-					cv.cpending = nil;
-				}
+			if(cv != nil && cv.state == "Connecting"){
+				cv.hidwait--;
+				hidready(srv, cv);
 			}
+		Value =>
+			cv := hidconv(lk);
+			if(cv == nil || cv.state != "Connecting")
+				continue;
+			if(e.handle == cv.hidmaph){
+				cv.hidmap = hid->parse(e.value);
+				if(cv.hidmap != nil)
+					cv.hidkind = "mouse";
+				eventnote(srv, sys->sprint("hid %s report map %d bytes: %d mouse report(s)\n", lk.addr, len e.value, len cv.hidmap));
+			}else{
+				# a Report Reference: report id, then type (1 input)
+				nl: list of (int, int, int);
+				for(il := cv.hidids; il != nil; il = tl il){
+					(rh, vh, nil) := hd il;
+					if(rh == e.handle && len e.value >= 1)
+						nl = (rh, vh, int e.value[0]) :: nl;
+					else
+						nl = hd il :: nl;
+				}
+				cv.hidids = nl;
+			}
+			cv.hidreads--;
+			hidready(srv, cv);
 		Notified =>
 			cv := hidconv(lk);
 			if(cv == nil)
 				continue;
 			for(hl := cv.hidchars; hl != nil; hl = tl hl)
 				if((hd hl).value == e.handle){
-					deliver(srv, cv, e.value);
+					if(cv.hidkind == "mouse")
+						deliver(srv, cv, hidmouse(cv, e.handle, e.value));
+					else
+						deliver(srv, cv, e.value);
 					break;
 				}
 		Failed =>
@@ -3265,11 +3296,45 @@ attevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Att->Ev)
 	}
 }
 
+# everything asked for has been answered: the conversation is up
+hidready(srv: ref Styxserver, cv: ref Conv)
+{
+	if(cv.hidwait > 0 || cv.hidreads > 0)
+		return;
+	cv.state = "Connected " + cv.hidkind;
+	auditlog("connect", sys->sprint("peer=%s port=hid outgoing", cv.raddr));
+	if(cv.cpending != nil){
+		srv.reply(ref Rmsg.Write(cv.cpending.tag, len cv.cpending.data));
+		cv.cpending = nil;
+	}
+}
+
+# a report-protocol input report, as the boot layout the map says it
+# means: buttons, dx, dy, wheel. A report whose id the map does not
+# describe as a mouse's is passed as it came.
+hidmouse(cv: ref Conv, vh: int, data: array of byte): array of byte
+{
+	id := 0;
+	for(il := cv.hidids; il != nil; il = tl il){
+		(nil, h, rid) := hd il;
+		if(h == vh)
+			id = rid;
+	}
+	r := hid->find(cv.hidmap, id);
+	if(r == nil && len cv.hidmap == 1)
+		r = hd cv.hidmap;	# one report in the map: the map's
+	if(r == nil)
+		return data;
+	return r.mouse(data);
+}
+
 # The HID service is known. Boot protocol if the device has it: the
 # reports are then the fixed ones USB defines and mouseusb.b already
 # reads (buttons, dx, dy), and no report map need be parsed. Else
-# the input Reports of report protocol, each delivered as it comes,
-# whose shape the report map describes and the reader must know.
+# the input Reports of report protocol, subscribed to, with the Report
+# Map read and parsed so that each report can be handed on in the boot
+# layout ("mouse"), or as it came when the map describes no mouse
+# ("report").
 hidfound(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, chars: list of ref Characteristic)
 {
 	pm: ref Characteristic;
@@ -3300,11 +3365,29 @@ hidfound(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv, chars: list of ref Char
 	if(inputs == nil)
 		inputs = reports;
 	if(inputs == nil){
-		closed(srv, cv, "hid: no input reports to inputscribe to");
+		closed(srv, cv, "hid: no input reports to subscribe to");
 		return;
 	}
 	cv.hidchars = inputs;
 	cv.hidwait = 0;
+	cv.hidreads = 0;
+	if(boot == nil){
+		# report protocol: the map, and which report each characteristic carries
+		for(l = chars; l != nil; l = tl l)
+			if((hd l).uuid == Att->Ureportmap){
+				cv.hidmaph = (hd l).value;
+				cv.hidreads++;
+				attevents(srv, lk, lk.gatt.read(cv.hidmaph));
+			}
+		for(rl := inputs; rl != nil; rl = tl rl){
+			rh := (hd rl).reportref();
+			if(rh >= 0){
+				cv.hidids = (rh, (hd rl).value, 0) :: cv.hidids;
+				cv.hidreads++;
+				attevents(srv, lk, lk.gatt.read(rh));
+			}
+		}
+	}
 	for(sl := inputs; sl != nil; sl = tl sl){
 		cv.hidwait++;
 		attevents(srv, lk, lk.gatt.subscribe((hd sl).cccd(), 0));
@@ -3946,11 +4029,31 @@ loadkeys()
 		return;
 	}
 	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
-	loaded := 0;
+	# One key per (protocol, peer), the last written winning: files
+	# from before that rule held one line per pairing, and a peer
+	# re-paired twice had three. The file is rewritten so if it was
+	# not already in that shape.
+	keep: list of string;
+	dups := 0;
 	for(; lines != nil; lines = tl lines){
 		ln := hd lines;
 		if(len ln < 4 || ln[0:4] != "key ")
 			continue;
+		who := attrval(ln, "addr");
+		proto := attrval(ln, "proto");
+		nl: list of string;
+		for(kl := keep; kl != nil; kl = tl kl)
+			if(who != nil && proto != nil && attrval(hd kl, "addr") == who && attrval(hd kl, "proto") == proto)
+				dups++;
+			else
+				nl = hd kl :: nl;
+		keep = ln :: nl;
+	}
+	loaded := 0;
+	kept: list of string;
+	for(; keep != nil; keep = tl keep){
+		ln := hd keep;
+		kept = ln :: kept;
 		# factotum keeps every key it is given, duplicates included, and
 		# this program may be started more than once per boot: a key
 		# for this peer already held is replaced, not joined
@@ -3963,6 +4066,17 @@ loadkeys()
 			continue;
 		}
 		loaded++;
+	}
+	if(dups > 0){
+		out := "";
+		for(; kept != nil; kept = tl kept)
+			out += hd kept + "\n";
+		wf := sys->create(keyfile, Sys->OWRITE|Sys->OTRUNC, 8r600);
+		b := array of byte out;
+		if(wf == nil || sys->write(wf, b, len b) != len b)
+			sys->fprint(stderr, "bt9p: cannot rewrite %s: %r\n", keyfile);
+		else if(debug)
+			sys->fprint(stderr, "bt9p: %s: %d superseded key(s) dropped\n", keyfile, dups);
 	}
 	if(debug)
 		sys->fprint(stderr, "bt9p: %d key(s) from %s\n", loaded, keyfile);

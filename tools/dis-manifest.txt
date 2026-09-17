@@ -308,6 +308,7 @@ dis/lib/sdp.dis
 dis/lib/rfcomm.dis
 dis/lib/att.dis
 dis/lib/smp.dis
+dis/lib/hid.dis
 dis/lib/cfg.dis
 dis/lib/cfgfile.dis
 dis/lib/chanfill.dis
@@ -693,6 +694,7 @@ dis/tests/sdp_test.dis
 dis/tests/rfcomm_test.dis
 dis/tests/att_test.dis
 dis/tests/smp_test.dis
+dis/tests/hid_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/dial_test.dis

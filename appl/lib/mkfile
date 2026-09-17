@@ -86,6 +86,7 @@ TARG=\
 	rfcomm.dis\
 	att.dis\
 	smp.dis\
+	hid.dis\
 	libc.dis\
 	libc0.dis\
 	lists.dis\
@@ -197,6 +198,7 @@ SYSMODULES=\
 	rfcomm.m\
 	att.m\
 	smp.m\
+	hid.m\
 	cfg.m\
 	cfgfile.m\
 	complete.m\

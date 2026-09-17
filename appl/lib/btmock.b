@@ -214,7 +214,7 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		# an LE-only device does not answer an inquiry
 		rl: list of ref Found;
 		for(nl := c.nearby; nl != nil; nl = tl nl)
-			if(authkind(c, (hd nl).addr) != "le")
+			if(authkind(c, (hd nl).addr) != "le" && authkind(c, (hd nl).addr) != "lereport")
 				rl = hd nl :: rl;
 		c.inquiring = nil;
 		for(; rl != nil; rl = tl rl)
@@ -232,8 +232,9 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		addr := bthci->bdaddr(params, 6);
 		if(findpeer(c, addr) != nil)
 			return cmdstatus(c, op, Bthci->Sconnexists);
-		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 1, hidtable(), 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
-		if(lookup(c, addr) != nil && authkind(c, addr) == "le")
+		kind := authkind(c, addr);
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 1, hidtable(kind == "lereport"), 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
+		if(lookup(c, addr) != nil && (kind == "le" || kind == "lereport"))
 			pr.handle = c.nexthandle++;
 		c.pendconn = appendpeer(c.pendconn, pr);
 		return cmdstatus(c, op, Bthci->Sok);
@@ -808,7 +809,9 @@ withcode(code: int, v: array of byte): array of byte
 # a mouse's attribute table: GAP, then HID with protocol mode, the
 # boot mouse input report with its CCCD, a report map, and a report
 # with a Report Reference; then battery
-hidtable(): list of ref Attr
+# reportonly: no boot report, as a modern mouse; its input Report is
+# id 26 with the layout of hid_test's "modern mouse" map
+hidtable(reportonly: int): list of ref Attr
 {
 	l: list of ref Attr;
 	l = ref Attr(1, Att->Uprimary, u16(16r1800)) :: l;
@@ -817,15 +820,17 @@ hidtable(): list of ref Attr
 	l = ref Attr(16r10, Att->Uprimary, u16(Att->Uhidservice)) :: l;
 	l = ref Attr(16r11, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pwritenorsp, 16r12, Att->Uprotocolmode)) :: l;
 	l = ref Attr(16r12, Att->Uprotocolmode, array[] of { byte 1 }) :: l;
-	l = ref Attr(16r13, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pnotify, Hidreport, Att->Ubootmousein)) :: l;
-	l = ref Attr(Hidreport, Att->Ubootmousein, array[] of { byte 0, byte 0, byte 0 }) :: l;
-	l = ref Attr(Hidcccd, Att->Ucccd, u16(0)) :: l;
+	if(!reportonly){
+		l = ref Attr(16r13, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pnotify, Hidreport, Att->Ubootmousein)) :: l;
+		l = ref Attr(Hidreport, Att->Ubootmousein, array[] of { byte 0, byte 0, byte 0 }) :: l;
+		l = ref Attr(Hidcccd, Att->Ucccd, u16(0)) :: l;
+	}
 	l = ref Attr(16r16, Att->Ucharacteristic, chardecl(Att->Pread, 16r17, Att->Ureportmap)) :: l;
-	l = ref Attr(16r17, Att->Ureportmap, array[] of { byte 16r05, byte 16r01, byte 16r09, byte 16r02 }) :: l;
-	l = ref Attr(16r18, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pnotify, 16r19, Att->Ureport)) :: l;
-	l = ref Attr(16r19, Att->Ureport, array[] of { byte 0 }) :: l;
-	l = ref Attr(16r1a, Att->Ucccd, u16(0)) :: l;
-	l = ref Attr(16r1b, Att->Ureportref, array[] of { byte 1, byte 1 }) :: l;
+	l = ref Attr(16r17, Att->Ureportmap, modernmap) :: l;
+	l = ref Attr(16r18, Att->Ucharacteristic, chardecl(Att->Pread|Att->Pnotify, Reporth, Att->Ureport)) :: l;
+	l = ref Attr(Reporth, Att->Ureport, array[] of { byte 0 }) :: l;
+	l = ref Attr(Reportcccd, Att->Ucccd, u16(0)) :: l;
+	l = ref Attr(16r1b, Att->Ureportref, array[] of { byte 26, byte 1 }) :: l;
 	l = ref Attr(16r20, Att->Uprimary, u16(16r180f)) :: l;
 	l = ref Attr(16r21, Att->Ucharacteristic, chardecl(Att->Pread, 16r22, 16r2a19)) :: l;
 	l = ref Attr(16r22, 16r2a19, array[] of { byte 99 }) :: l;
@@ -834,6 +839,23 @@ hidtable(): list of ref Attr
 		r = hd l :: r;
 	return r;
 }
+
+Reporth: con 16r19;
+Reportcccd: con 16r1a;
+
+# the report map of hid_test's "modern mouse": id 26, five buttons,
+# 12-bit X and Y, a wheel byte
+modernmap := array[] of {
+	byte 16r05, byte 16r01, byte 16r09, byte 16r02, byte 16rA1, byte 16r01, byte 16r85, byte 16r1A,
+	byte 16r09, byte 16r01, byte 16rA1, byte 16r00, byte 16r05, byte 16r09, byte 16r19, byte 16r01,
+	byte 16r29, byte 16r05, byte 16r15, byte 16r00, byte 16r25, byte 16r01, byte 16r75, byte 16r01,
+	byte 16r95, byte 16r05, byte 16r81, byte 16r02, byte 16r75, byte 16r03, byte 16r95, byte 16r01,
+	byte 16r81, byte 16r01, byte 16r05, byte 16r01, byte 16r09, byte 16r30, byte 16r09, byte 16r31,
+	byte 16r16, byte 16r01, byte 16rF8, byte 16r26, byte 16rFF, byte 16r07, byte 16r75, byte 16r0C,
+	byte 16r95, byte 16r02, byte 16r81, byte 16r06, byte 16r09, byte 16r38, byte 16r15, byte 16r81,
+	byte 16r25, byte 16r7F, byte 16r75, byte 16r08, byte 16r95, byte 16r01, byte 16r81, byte 16r06,
+	byte 16rC0, byte 16rC0,
+};
 
 u16(v: int): array of byte
 {
@@ -851,11 +873,15 @@ chardecl(props, value, uuid: int): array of byte
 	return a;
 }
 
+# the value handle of the subscribed input report, 0 if none
 cccdon(pr: ref Peer): int
 {
-	for(l := pr.attrs; l != nil; l = tl l)
-		if((hd l).handle == Hidcccd)
-			return int (hd l).value[0] & 1;
+	for(l := pr.attrs; l != nil; l = tl l){
+		if((hd l).handle == Hidcccd && (int (hd l).value[0] & 1))
+			return Hidreport;
+		if((hd l).handle == Reportcccd && (int (hd l).value[0] & 1))
+			return Reporth;
+	}
 	return 0;
 }
 
@@ -1166,11 +1192,11 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 					out = cat(out, distribute(c, pr));
 			}
 		}
-		if(pr.encrypted && pr.notifyq != nil && cccdon(pr)){
+		if(pr.encrypted && pr.notifyq != nil && cccdon(pr) != 0){
 			for(; pr.notifyq != nil; pr.notifyq = tl pr.notifyq){
 				n := array[3] of byte;
 				n[0] = byte Att->Onotify;
-				bthci->put2(n, 1, Hidreport);
+				bthci->put2(n, 1, cccdon(pr));
 				out = cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidatt, cat(n, hd pr.notifyq))));
 			}
 		}
@@ -1204,7 +1230,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 		p[1] = byte 1;
 		p[2] = byte 0;			# ADV_IND
 		p[3] = byte 0;			# public
-		if(authkind(c, f.addr) == "le")
+		if(authkind(c, f.addr) == "le" || authkind(c, f.addr) == "lereport")
 			p[3] = byte 1;		# an LE device here has a random static address
 		a := bthci->parsebdaddr(f.addr);
 		if(a == nil)

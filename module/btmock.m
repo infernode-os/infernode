@@ -52,7 +52,7 @@ Btmock: module
 		pendconn:	list of ref Peer;	# Connection Completes to emit
 		nexthandle:	int;
 		received:	list of string;	# what peers were sent on their channels, newest first
-		auth:	list of (string, string);	# devices that demand pairing: addr, "pin=NNNN", "ssp" or "le"
+		auth:	list of (string, string);	# devices that demand pairing: addr, "pin=NNNN", "ssp", "le" or "lereport"
 		lekeys:	list of (string, array of byte);	# LTKs given out, by address, for the next encryption
 		keys:	list of (string, array of byte);	# link keys issued, by address
 		pairings:	int;		# how many pairings completed

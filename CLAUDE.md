@@ -407,6 +407,8 @@ timeoutTask(ch: chan of int, ms: int)
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
+| `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
+| `fdclose_test.b` | Dropping the last reference to an fd closes it |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

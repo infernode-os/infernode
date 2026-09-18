@@ -29,7 +29,7 @@ its own. Thresholds are deliberately loose where the number is what
 matters (throughput records the figure; it gates only on absurdity).
 
 ```
-tests/acceptance/ethernet.py  --board 192.168.1.104 --serial-log ~/captures/serial/today.log
+tests/acceptance/ethernet.py  --board 192.168.1.104 --serial-log ~/captures/serial/today.log [--frag-via minipc]
 tests/acceptance/bluetooth.py --board 192.168.1.104 --bdaddr b8:27:eb:ca:4c:8e
 ```
 
@@ -63,6 +63,13 @@ so, for the record, the first run of each:
   slower than transmit (18-28 vs 113 Mbit/s) -- #633. Latency 1.3-2 ms,
   0% loss over 2000 back-to-back full frames, 200 simultaneous
   connections fine, RST on a closed port immediate.
+  **Both resolved 2026-09-19.** The fragments were the tester: this
+  host's never leave it, and from a second host (`--frag-via minipc`)
+  the board answers 20/20 at 4000 and 20000 bytes. Receive is now 164
+  Mbit/s (143 out). 60000-byte echoes pass at 100 Mb/s and are a stated
+  hardware limit at 1000; see
+  [docs/BAREMETAL-PORTING-LESSONS.md](../../docs/BAREMETAL-PORTING-LESSONS.md),
+  section 3. Battery: 16 pass, 0 fail.
 - Bluetooth, first run: **569 conversations leaked** by two 20-second
   connect/disconnect storms (accepted, hung up by the peer before a
   listen took them), and a listener's close not seen by a real BlueZ

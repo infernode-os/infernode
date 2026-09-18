@@ -9,6 +9,12 @@ implement L2capTest;
 #	request every real peer sends first. Layouts are the Core
 #	Specification's, Vol 3 Part A 3 and 4.
 #
+#	LE credit-based channels (4.22-4.24, 10.1) the same way: the
+#	parameters exchanged, an SDU cut into K-frames and put back
+#	together, a sender stalled for want of credit and released by it,
+#	refusal on an unencrypted link, and a peer that breaks each of the
+#	rules the receiver must police.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -115,8 +121,11 @@ note(s: ref Seen, e: ref Ev)
 	Incoming =>	s.incoming = ev.c :: s.incoming;
 	Closed =>	s.closed = (ev.c, ev.reason) :: s.closed;
 	Data =>		s.data = (ev.c, ev.sdu) :: s.data;
+	Sendable =>	sendables++;
 	}
 }
+
+sendables := 0;
 
 sameb(a, b: array of byte): int
 {
@@ -189,6 +198,239 @@ testConnectAndData(t: ref T)
 	t.asserteq(ca.state, L2cap->Closed, "initiator Closed");
 	t.asserteq(cb.state, L2cap->Closed, "acceptor Closed");
 	t.assert(a.find(ca.scid) == nil, "and forgotten");
+}
+
+# an open LE channel between two fresh links: (a, b, ca, cb, sa, sb)
+lepair(t: ref T, psm: int): (ref Link, ref Link, ref Chan, ref Chan, ref Seen, ref Seen)
+{
+	a := Link.new(16r42);
+	b := Link.new(16r42);
+	a.encrypted = b.encrypted = 1;
+	b.accept = psm :: nil;
+	sa := ref Seen(nil, nil, nil, nil);
+	sb := ref Seen(nil, nil, nil, nil);
+	(ca, evs) := a.leconnect(psm);
+	if(ca == nil)
+		t.fatal("leconnect gave no channel");
+	pump(a, b, evs, sa, sb);
+	if(sb.opened == nil || sa.opened == nil)
+		t.fatal("the LE channel did not open");
+	return (a, b, ca, hd sb.opened, sa, sb);
+}
+
+# one frame, as the peer's controller would deliver it
+feed(l: ref Link, f: array of byte): list of ref Ev
+{
+	evs: list of ref Ev;
+	for(pl := l2cap->fragment(l.handle, f, Aclmtu); pl != nil; pl = tl pl)
+		evs = cat(evs, l.recv(hd pl));
+	return evs;
+}
+
+# is this event a Disconnection Request on the LE signalling channel?
+isledisc(e: ref Ev): int
+{
+	pick ev := e {
+	Send =>
+		return bthci->get2(ev.frame, 2) == L2cap->Cidlesig && int ev.frame[4] == L2cap->Cdiscreq;
+	}
+	return 0;
+}
+
+pattern(n: int): array of byte
+{
+	d := array[n] of byte;
+	for(i := 0; i < n; i++)
+		d[i] = byte (i * 7 + (i >> 8));
+	return d;
+}
+
+testLeConnectAndData(t: ref T)
+{
+	(a, b, ca, cb, sa, sb) := lepair(t, 16r80);
+
+	t.asserteq(len sb.incoming, 1, "the acceptor saw an incoming LE channel");
+	t.asserteq(ca.state, L2cap->Open, "open on the response, with no configuration phase");
+	t.asserteq(cb.state, L2cap->Open, "and at the acceptor on its own response");
+	t.assert(ca.le && cb.le, "both know it is credit-based");
+	t.asserteq(ca.dcid, cb.scid, "the initiator's destination is the acceptor's source CID");
+	t.asserteq(cb.dcid, ca.scid, "and the other way");
+	t.assert(ca.scid >= L2cap->Cidledyn && ca.scid <= L2cap->Cidlemax, "an LE dynamic CID");
+	t.asserteq(ca.mtu, L2cap->Lemtu, "each learned the other's MTU");
+	t.asserteq(cb.mps, L2cap->Lemps, "and MPS");
+	t.asserteq(ca.txcredits, L2cap->Lecredits, "and was given its initial credits");
+	t.asserteq(cb.txcredits, L2cap->Lecredits, "both ways");
+
+	# a small SDU: one K-frame, one credit
+	pump(a, b, a.send(ca, array of byte "Tversion"), sa, sb);
+	t.asserteq(len sb.data, 1, "one SDU arrived");
+	if(sb.data != nil){
+		(c, sdu) := hd sb.data;
+		t.assert(c == cb, "on its channel");
+		t.assertseq(string sdu, "Tversion", "intact");
+	}
+	t.asserteq(ca.txcredits, L2cap->Lecredits - 1, "at the cost of one credit");
+
+	# the largest SDU: 2048 + 2 bytes of length is five K-frames of 512
+	whole := pattern(L2cap->Lemtu);
+	pump(b, a, b.send(cb, whole), sb, sa);
+	t.asserteq(len sa.data, 1, "the largest SDU arrived as one");
+	if(sa.data != nil){
+		(nil, sdu) := hd sa.data;
+		t.assert(sameb(sdu, whole), "put back together from its K-frames, byte for byte");
+	}
+	t.assert(a.send(ca, array[L2cap->Lemtu + 1] of byte) == nil, "an SDU over the peer's MTU is not sent");
+
+	# an empty SDU is a K-frame holding only its length
+	pump(a, b, a.send(ca, array[0] of byte), sa, sb);
+	t.asserteq(len sb.data, 2, "an empty SDU arrives");
+	if(sb.data != nil){
+		(nil, sdu) := hd sb.data;
+		t.asserteq(len sdu, 0, "empty");
+	}
+
+	# hang up: on the LE signalling channel, not the classic one
+	evs := a.disconnect(ca);
+	t.assert(evs != nil && isledisc(hd evs), "the Disconnection Request goes on the LE signalling channel");
+	pump(a, b, evs, sa, sb);
+	t.asserteq(ca.state, L2cap->Closed, "initiator Closed");
+	t.asserteq(cb.state, L2cap->Closed, "acceptor Closed");
+	t.assert(a.find(ca.scid) == nil && b.find(cb.scid) == nil, "and forgotten at both ends");
+}
+
+testLeCredits(t: ref T)
+{
+	(a, b, ca, cb, sa, sb) := lepair(t, 16r81);
+	sendables = 0;
+
+	# forty SDUs of 600 bytes, two K-frames each, written before the
+	# peer has been heard from: sixteen go, sixty-four wait
+	out: list of ref Ev;
+	for(i := 0; i < 40; i++){
+		d := pattern(600);
+		d[0] = byte i;
+		out = cat(out, a.send(ca, d));
+	}
+	t.asserteq(len out, L2cap->Lecredits, "only as many K-frames leave as there are credits");
+	t.asserteq(ca.txcredits, 0, "the credits are spent");
+	t.asserteq(ca.queued(), 80 - L2cap->Lecredits, "and the rest wait in the channel");
+
+	# let the peer answer: it returns credit as it consumes, and the queue drains
+	pump(a, b, out, sa, sb);
+	t.asserteq(len sb.data, 40, "every SDU arrived once the credits came back");
+	t.asserteq(ca.queued(), 0, "nothing left waiting");
+	t.assert(sendables > 0, "and the writer was told the queue had drained");
+	n := 39;
+	for(dl := sb.data; dl != nil; dl = tl dl){
+		(nil, sdu) := hd dl;
+		if(len sdu != 600 || int sdu[0] != n){
+			t.error(sys->sprint("SDU %d out of order or damaged (len %d first %d)", n, len sdu, int sdu[0]));
+			break;
+		}
+		n--;
+	}
+	t.assert(cb.rxcredits > L2cap->Lecredits/2, "the receiver kept its grant topped up");
+}
+
+testLeRefused(t: ref T)
+{
+	a := Link.new(3);
+	b := Link.new(3);
+	b.accept = 16r80 :: nil;
+	sa := ref Seen(nil, nil, nil, nil);
+	sb := ref Seen(nil, nil, nil, nil);
+
+	# the link is not encrypted, and a fresh Link wants it to be
+	(ca, evs) := a.leconnect(16r80);
+	pump(a, b, evs, sa, sb);
+	t.asserteq(len sb.incoming, 0, "nothing opens on an unencrypted link");
+	t.asserteq(len sa.closed, 1, "the initiator is told");
+	if(sa.closed != nil){
+		(nil, why) := hd sa.closed;
+		t.assertseq(why, "connection refused: insufficient authentication", "to pair and ask again");
+	}
+	t.assert(a.find(ca.scid) == nil, "and its channel is gone");
+
+	# encrypted, but nobody announced the PSM
+	a.encrypted = b.encrypted = 1;
+	sa.closed = nil;
+	(nil, evs) = a.leconnect(16r99);
+	pump(a, b, evs, sa, sb);
+	if(sa.closed == nil)
+		t.fatal("no refusal for an unannounced PSM");
+	(nil, why) := hd sa.closed;
+	t.assertseq(why, "connection refused: PSM not supported", "an unannounced PSM is refused");
+
+	# a caller that says its PSM needs no encryption gets none asked of it
+	b.needenc = 0;
+	b.encrypted = 0;
+	(nil, evs) = a.leconnect(16r80);
+	pump(a, b, evs, sa, sb);
+	t.asserteq(len sb.opened, 1, "needenc off: the channel opens in the clear");
+
+	# 64 CIDs and no more
+	c := Link.new(4);
+	for(i := 0; i < 64; i++){
+		(cc, nil) := c.leconnect(16r80);
+		if(cc == nil)
+			t.fatal(sys->sprint("CID space ran out at %d", i));
+	}
+	(cc, nil) := c.leconnect(16r80);
+	t.assert(cc == nil, "the sixty-fifth LE channel on a link is not made");
+}
+
+testLeMisbehaviour(t: ref T)
+{
+	# a K-frame with no credit to pay for it
+	(a, b, ca, cb, sa, sb) := lepair(t, 16r82);
+	cb.rxcredits = 0;
+	kf := array[2+1] of byte;
+	bthci->put2(kf, 0, 1);
+	kf[2] = byte 'x';
+	evs := feed(b, l2cap->frame(cb.scid, kf));
+	t.assert(evs != nil && isledisc(hd evs), "a K-frame sent without credit disconnects the channel");
+	pump(b, a, evs, sb, sa);
+	t.asserteq(ca.state, L2cap->Closed, "at both ends");
+	t.asserteq(len sb.data, 0, "and its data is not delivered");
+
+	# an SDU that claims more than our MTU
+	(a, b, ca, cb, sa, sb) = lepair(t, 16r82);
+	bthci->put2(kf, 0, L2cap->Lemtu + 1);
+	evs = feed(b, l2cap->frame(cb.scid, kf));
+	t.assert(evs != nil && isledisc(hd evs), "an SDU longer than our MTU disconnects");
+
+	# a K-frame longer than our MPS
+	(a, b, ca, cb, sa, sb) = lepair(t, 16r82);
+	long := array[L2cap->Lemps + 1] of { * => byte 0 };
+	bthci->put2(long, 0, L2cap->Lemps - 1);
+	evs = feed(b, l2cap->frame(cb.scid, long));
+	t.assert(evs != nil && isledisc(hd evs), "a K-frame over our MPS disconnects");
+
+	# more bytes than the SDU said it had
+	(a, b, ca, cb, sa, sb) = lepair(t, 16r82);
+	over := array[2+10] of { * => byte 0 };
+	bthci->put2(over, 0, 4);
+	evs = feed(b, l2cap->frame(cb.scid, over));
+	t.assert(evs != nil && isledisc(hd evs), "an SDU that overruns its own length disconnects");
+	t.asserteq(len sb.data, 0, "and nothing of it is delivered");
+
+	# credit beyond what can be counted
+	(a, b, ca, cb, sa, sb) = lepair(t, 16r82);
+	cr := array[4] of byte;
+	bthci->put2(cr, 0, cb.scid);
+	bthci->put2(cr, 2, 65535);
+	evs = feed(a, l2cap->frame(L2cap->Cidlesig, l2cap->sigcmd(L2cap->Clecredit, 9, cr)));
+	t.assert(evs != nil && isledisc(hd evs), "credit past 65535 disconnects");
+
+	# a link going down takes its LE channels and their queues with it
+	(a, b, ca, cb, sa, sb) = lepair(t, 16r82);
+	for(i := 0; i < 20; i++)
+		a.send(ca, pattern(600));
+	t.assert(ca.queued() > 0, "frames are waiting");
+	for(el := a.down("link lost"); el != nil; el = tl el)
+		note(sa, hd el);
+	t.asserteq(len sa.closed, 1, "the channel closes with the link");
+	t.asserteq(ca.state, L2cap->Closed, "Closed");
 }
 
 testRefused(t: ref T)
@@ -342,6 +584,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Refused", testRefused);
 	run("RemoteHangupAndDown", testRemoteHangupAndDown);
 	run("InfoEchoAndJunk", testInfoEchoAndJunk);
+	run("LeConnectAndData", testLeConnectAndData);
+	run("LeCredits", testLeCredits);
+	run("LeRefused", testLeRefused);
+	run("LeMisbehaviour", testLeMisbehaviour);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

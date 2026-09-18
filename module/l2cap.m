@@ -7,9 +7,19 @@
 #	that arrived -- and bt9p(4) is the program that does it, which is
 #	what lets tests/l2cap_test.b drive both ends with no radio.
 #
-#	Basic mode only: no retransmission or flow-control modes, no
-#	enhanced configuration. That is what a keyboard, a serial port
-#	(RFCOMM) and SDP need; audio would want more and is out of scope.
+#	Basic mode only on a classic link: no retransmission or
+#	flow-control modes, no enhanced configuration. That is what a
+#	keyboard, a serial port (RFCOMM), SDP and A2DP need.
+#
+#	On an LE link, credit-based channels (Part A 4.22-4.24, 10.1):
+#	the one kind of L2CAP channel both phone platforms hand to an
+#	ordinary app, and so what 9P to a phone rides on (#647). There
+#	is no configuration phase: MTU, MPS and credits travel in the
+#	connection request and response and the channel is open when
+#	the response arrives. An SDU goes as K-frames of at most the
+#	peer's MPS, the first carrying the SDU's length, each costing a
+#	credit; what the peer has not yet paid for waits in the channel's
+#	queue, and Ev.Sendable says when it has drained.
 #
 
 L2cap: module
@@ -37,6 +47,28 @@ L2cap: module
 	Cechorsp:	con 16r09;
 	Cinforeq:	con 16r0a;
 	Cinforsp:	con 16r0b;
+	Clecreq:	con 16r14;	# LE credit based connection request
+	Clecrsp:	con 16r15;	# ... response
+	Clecredit:	con 16r16;	# LE flow control credit
+
+	# LE credit based connection results, 4.23
+	LRok:		con 0;
+	LRnopsm:	con 2;
+	LRnoresources:	con 4;
+	LRauthen:	con 5;		# the link is not encrypted and the PSM wants it: pair, then ask again
+	LRauthor:	con 6;
+	LRkeysize:	con 7;
+	LRencrypt:	con 8;
+	LRbadscid:	con 9;
+	LRscidinuse:	con 10;
+	LRparams:	con 11;
+
+	Cidledyn:	con 16r40;	# an LE link's dynamic CIDs end at 0x7f
+	Cidlemax:	con 16r7f;
+	Lemtu:		con 2048;	# the largest SDU we take on an LE channel
+	Lemps:		con 512;	# the largest K-frame payload we take
+	Lecredits:	con 16;		# K-frames the peer may have in flight; topped up at half
+	Leminmtu:	con 23;		# the least either number may be
 
 	# connection response results
 	Rok, Rpending, Rnopsm, Rsecurity, Rnoresources:	con iota;
@@ -63,7 +95,18 @@ L2cap: module
 		initiator: int;		# we asked
 		confsent, confdone, peerconf:	int;
 
+		# an LE credit-based channel
+		le:	int;
+		mps:	int;		# the most the peer takes in one K-frame
+		txcredits:	int;	# K-frames we may still send
+		rxcredits:	int;	# K-frames the peer may still send
+		rxsdu:	array of byte;	# an SDU being put together from K-frames
+		rxn:	int;
+		rxwant:	int;		# -1 between SDUs
+		txq:	list of array of byte;	# K-frames waiting for credit, in order
+
 		statename:	fn(c: self ref Chan): string;
+		queued:		fn(c: self ref Chan): int;	# K-frames waiting for credit
 	};
 
 	# what recv() and the others hand back
@@ -86,6 +129,8 @@ L2cap: module
 			sdu:	array of byte;
 		Params =>
 			min, max, latency, timeout: int;	# an LE peer asks for these connection parameters; accepted
+		Sendable =>
+			c:	ref Chan;	# an LE channel's queue has drained: the writer may go on
 		}
 	};
 
@@ -98,9 +143,16 @@ L2cap: module
 		rx:	array of byte;	# a frame being reassembled from fragments
 		rxn:	int;
 		rxwant:	int;
+		# LE channels are refused (LRauthen) on a link that is not
+		# encrypted, unless the caller says otherwise: radio range
+		# is a weaker boundary than a wire. bt9p sets encrypted
+		# when the controller says the link is.
+		encrypted:	int;
+		needenc:	int;
 
 		new:	fn(handle: int): ref Link;
 		connect:	fn(l: self ref Link, psm: int): (ref Chan, list of ref Ev);
+		leconnect:	fn(l: self ref Link, psm: int): (ref Chan, list of ref Ev);
 		disconnect:	fn(l: self ref Link, c: ref Chan): list of ref Ev;
 		send:	fn(l: self ref Link, c: ref Chan, sdu: array of byte): list of ref Ev;
 		sendfixed: fn(l: self ref Link, cid: int, sdu: array of byte): list of ref Ev;

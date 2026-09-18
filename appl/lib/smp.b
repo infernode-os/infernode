@@ -49,6 +49,148 @@ e(k, p: array of byte): array of byte
 	return rev(buf);
 }
 
+#
+# LE Secure Connections: AES-CMAC and the four functions built on it.
+# The specification writes every input most significant octet first
+# and concatenates them that way; the arrays here are the wire's, so
+# each is reversed going in and the result reversed coming out.
+#
+
+# one AES-128 block, big-endian, in place
+aesbe(k, b: array of byte)
+{
+	iv := array[16] of { * => byte 0 };
+	st := keyring->aessetup(k, iv);
+	keyring->aescbc(st, b, 16, Keyring->Encrypt);
+}
+
+# RFC 4493 subkey step: shift left one bit, and fold the carry back in
+dbl(b: array of byte)
+{
+	carry := int b[0] & 16r80;
+	for(i := 0; i < 15; i++)
+		b[i] = byte ((int b[i] << 1) | (int b[i+1] >> 7));
+	b[15] = byte (int b[15] << 1);
+	if(carry)
+		b[15] ^= byte 16r87;
+}
+
+cmac(k, m: array of byte): array of byte
+{
+	k1 := array[16] of { * => byte 0 };
+	aesbe(k, k1);
+	dbl(k1);
+	k2 := array[16] of byte;
+	k2[0:] = k1;
+	dbl(k2);
+
+	nblk := (len m + 15) / 16;
+	last := array[16] of { * => byte 0 };
+	sub := k2;
+	if(nblk == 0){
+		nblk = 1;
+		last[0] = byte 16r80;
+	}else if(len m % 16 == 0){
+		last[0:] = m[(nblk-1)*16:];
+		sub = k1;
+	}else{
+		r := len m - (nblk-1)*16;
+		last[0:] = m[(nblk-1)*16:];
+		last[r] = byte 16r80;
+	}
+	x := array[16] of { * => byte 0 };
+	for(i := 0; i < nblk-1; i++){
+		for(j := 0; j < 16; j++)
+			x[j] ^= m[i*16 + j];
+		aesbe(k, x);
+	}
+	for(i = 0; i < 16; i++)
+		x[i] ^= last[i] ^ sub[i];
+	aesbe(k, x);
+	return x;
+}
+
+# big-endian concatenation of little-endian parts
+becat(parts: list of array of byte): array of byte
+{
+	n := 0;
+	for(l := parts; l != nil; l = tl l)
+		n += len hd l;
+	m := array[n] of byte;
+	o := 0;
+	for(l = parts; l != nil; l = tl l){
+		m[o:] = rev(hd l);
+		o += len hd l;
+	}
+	return m;
+}
+
+# f4(U, V, X, Z) = AES-CMAC_X(U || V || Z)
+f4(u, v, x: array of byte, z: int): array of byte
+{
+	return rev(cmac(rev(x), becat(u :: v :: array[1] of { byte z } :: nil)));
+}
+
+# f5: the key T is AES-CMAC_SALT(W); then counter || "btle" || N1 || N2
+# || A1 || A2 || 256 under T, counter 0 for the MacKey and 1 for the LTK
+f5(w, n1, n2, a1, a2: array of byte): (array of byte, array of byte)
+{
+	salt := array[] of {
+		byte 16r6C, byte 16r88, byte 16r83, byte 16r91, byte 16rAA, byte 16rF5, byte 16rA5, byte 16r38,
+		byte 16r60, byte 16r37, byte 16r0B, byte 16rDB, byte 16r5A, byte 16r60, byte 16r83, byte 16rBE };
+	t := cmac(salt, rev(w));
+	keyid := array[] of { byte 16r65, byte 16r6c, byte 16r74, byte 16r62 };	# "btle", least significant first
+	length := array[] of { byte 16r00, byte 16r01 };				# 256
+	m0 := becat(array[1] of { byte 0 } :: keyid :: n1 :: n2 :: a1 :: a2 :: length :: nil);
+	m1 := becat(array[1] of { byte 1 } :: keyid :: n1 :: n2 :: a1 :: a2 :: length :: nil);
+	return (rev(cmac(t, m0)), rev(cmac(t, m1)));
+}
+
+# f6(W, N1, N2, R, IOcap, A1, A2) = AES-CMAC_W(N1 || N2 || R || IOcap || A1 || A2)
+f6(w, n1, n2, r, iocap, a1, a2: array of byte): array of byte
+{
+	return rev(cmac(rev(w), becat(n1 :: n2 :: r :: iocap :: a1 :: a2 :: nil)));
+}
+
+# g2(U, V, X, Y) = AES-CMAC_X(U || V || Y) mod 2^32, and then mod 10^6
+g2(u, v, x, y: array of byte): int
+{
+	c := cmac(rev(x), becat(u :: v :: y :: nil));
+	n := (big c[12] << 24) | (big c[13] << 16) | (big c[14] << 8) | big c[15];
+	return int (n % big 1000000);
+}
+
+sckeys(): (array of byte, array of byte, array of byte)
+{
+	(priv, pub) := keyring->p256_keygen();
+	if(priv == nil || pub == nil)
+		return (nil, nil, nil);
+	b := keyring->p256_point_bytes(pub);	# 0x04 || X || Y, big-endian
+	if(len b != 65)
+		return (nil, nil, nil);
+	return (priv, rev(b[1:33]), rev(b[33:65]));
+}
+
+# keyring refuses a point that is not on the curve, which is the check
+# the specification requires before the key is used (2.3.5.6.1): an
+# invalid-curve point is how a peer would learn our private key
+dhkey(priv, x, y: array of byte): array of byte
+{
+	if(len priv != 32 || len x != 32 || len y != 32)
+		return nil;
+	b := array[65] of byte;
+	b[0] = byte 16r04;
+	b[1:] = rev(x);
+	b[33:] = rev(y);
+	pt := keyring->p256_make_point(b);
+	if(pt == nil)
+		return nil;
+	s := keyring->p256_ecdh(priv, pt);
+	if(len s != 32)
+		return nil;
+	return rev(s);
+}
+
 # c1, 2.2.3: e(k, e(k, r xor p1) xor p2), with
 #   p1 = pres || preq || rat || iat  (iat least significant)
 #   p2 = padding || ia || ra          (ra least significant)

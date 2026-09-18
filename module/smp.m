@@ -119,5 +119,24 @@ Smp: module
 	# address is hash || prand and hash is ah(irk, prand)
 	resolves: fn(irk, addr: array of byte): int;
 
+	#
+	# LE Secure Connections, 2.2.6-2.2.9. Values are little-endian
+	# arrays as they travel, like the rest: a P-256 coordinate or the
+	# DHKey is 32 bytes, a nonce or check 16, an address 7 with its
+	# type last (so the specification's A1 = type || address reads
+	# most significant first), iocap 3 as IO capability, OOB flag,
+	# AuthReq.
+	#
+	cmac:	fn(k, m: array of byte): array of byte;	# AES-CMAC, RFC 4493: big-endian in and out
+	f4:	fn(u, v, x: array of byte, z: int): array of byte;	# the confirm value
+	f5:	fn(w, n1, n2, a1, a2: array of byte): (array of byte, array of byte);	# (MacKey, LTK)
+	f6:	fn(w, n1, n2, r, iocap, a1, a2: array of byte): array of byte;	# the DHKey check
+	g2:	fn(u, v, x, y: array of byte): int;	# the six digits both sides show
+	# a fresh P-256 key pair: (private, public X, public Y)
+	sckeys:	fn(): (array of byte, array of byte, array of byte);
+	# the shared secret from our private key and the peer's public one;
+	# nil if the peer's point is not on the curve, which must end the pairing
+	dhkey:	fn(priv, x, y: array of byte): array of byte;
+
 	failtext: fn(reason: int): string;
 };

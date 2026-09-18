@@ -115,6 +115,67 @@ testVectors(t: ref T)
 	t.assert(!smp->resolves(irk, le("c8f3e806558b")), "and a static address never does");
 }
 
+# LE Secure Connections: Vol 3 Part H Appendix D's sample data, and
+# RFC 4493's for the CMAC beneath it
+testSecureConnections(t: ref T)
+{
+	# RFC 4493 section 4: the empty message, one block, 40 bytes, four blocks
+	ck := be("2b7e151628aed2a6abf7158809cf4f3c");
+	t.assertseq(hex(smp->cmac(ck, array[0] of byte)), hex(be("bb1d6929e95937287fa37d129b756746")), "AES-CMAC of the empty message (RFC 4493 example 1)");
+	t.assertseq(hex(smp->cmac(ck, be("6bc1bee22e409f96e93d7e117393172a"))), hex(be("070a16b46b4d4144f79bdd9dd04a287c")), "of one block (example 2)");
+	t.assertseq(hex(smp->cmac(ck, be("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411"))), hex(be("dfa66747de9ae63030ca32611497c827")), "of 40 bytes (example 3)");
+
+	# D.1: the two P-256 key pairs and what they agree on
+	pa := be("3f49f6d4a3c55f3874c9b3e3d2103f504aff607beb40b7995899b8a6cd3c1abd");
+	pax := le("20b003d2f297be2c5e2c83a7e9f9a5b9eff49111acf4fddbcc0301480e359de6");
+	pay := le("dc809c49652aeb6d63329abf5a52155c766345c28fed3024741c8ed01589d28b");
+	pb := be("55188b3d32f6bb9a900afcfbeed4e72a59cb9ac2f19d7cfb6b4fdd49f47fc5fd");
+	pbx := le("1ea1f0f01faf1d9609592284f19e4c0047b58afd8615a69f559077b22faaa190");
+	pby := le("4c55f33e429dad377356703a9ab85160472d1130e28e36765f89aff915b1214a");
+	dh := le("ec0234a357c8ad05341010a60a397d9b99796b13b4f866f1868d34f373bfa698");
+	t.assertseq(hex(smp->dhkey(pa, pbx, pby)), hex(dh), "A's private key and B's public key give the sample DHKey (D.1)");
+	t.assertseq(hex(smp->dhkey(pb, pax, pay)), hex(dh), "and B's with A's the same");
+	bad := le("4c55f33e429dad377356703a9ab85160472d1130e28e36765f89aff915b1214b");
+	t.assert(smp->dhkey(pa, pbx, bad) == nil, "a point that is not on the curve gives no key");
+	(priv, x, y) := smp->sckeys();
+	t.assert(len priv == 32 && len x == 32 && len y == 32, "a fresh key pair is 32 bytes each way");
+	(priv2, x2, y2) := smp->sckeys();
+	t.assertseq(hex(smp->dhkey(priv, x2, y2)), hex(smp->dhkey(priv2, x, y)), "and two fresh pairs agree on a secret");
+
+	# D.2: f4
+	u := le("20b003d2f297be2c5e2c83a7e9f9a5b9eff49111acf4fddbcc0301480e359de6");
+	v := le("55188b3d32f6bb9a900afcfbeed4e72a59cb9ac2f19d7cfb6b4fdd49f47fc5fd");
+	xx := le("d5cb8454d177733effffb2ec712baeab");
+	t.assertseq(hex(smp->f4(u, v, xx, 0)), hex(le("f2c916f107a9bd1cf1eda1bea974872d")), "f4 matches the sample (D.2)");
+
+	# D.3: f5
+	n1 := le("d5cb8454d177733effffb2ec712baeab");
+	n2 := le("a6e8e7cc25a75f6e216583f7ff3dc4cf");
+	a1 := le("0056123737bfce");
+	a2 := le("00a713702dcfc1");
+	(mackey, ltk) := smp->f5(dh, n1, n2, a1, a2);
+	t.assertseq(hex(mackey), hex(le("2965f176a1084a02fd3f6a20ce636e20")), "f5's MacKey matches the sample (D.3)");
+	t.assertseq(hex(ltk), hex(le("6986791169d7cd23980522b594750a38")), "and its LTK");
+
+	# D.4: f6
+	r := le("12a3343bb453bb5408da42d20c2d0fc8");
+	iocap := le("010102");
+	t.assertseq(hex(smp->f6(mackey, n1, n2, r, iocap, a1, a2)), hex(le("e3c473989cd0e8c5d26c0b09da958f61")), "f6 matches the sample (D.4)");
+
+	# D.5: g2 is 0x2f9ed5ba, and the six digits are that mod a million
+	t.asserteq(smp->g2(u, v, n1, n2), 16r2f9ed5ba % 1000000, "g2 matches the sample (D.5)");
+}
+
+# a hex string as the bytes it spells, most significant first
+be(h: string): array of byte
+{
+	a := le(h);
+	r := array[len a] of byte;
+	for(i := 0; i < len a; i++)
+		r[i] = a[len a - 1 - i];
+	return r;
+}
+
 # the responder, scripted: it answers as a Just Works peripheral with
 # bonding and both key kinds to give
 Responder: adt {
@@ -272,6 +333,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("Vectors", testVectors);
+	run("SecureConnections", testSecureConnections);
 	run("Pairing", testPairing);
 	run("Refusals", testRefusals);
 

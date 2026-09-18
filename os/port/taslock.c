@@ -52,7 +52,26 @@ lock(Lock *l)
 			lockloop(l, pc);
 			break;
 		}
-		if(conf.nmach == 1 && up->state == Running && islo()) {
+		/*
+		 * Yield now and then, on any number of cores.
+		 *
+		 * The holder can be a proc that was preempted inside the
+		 * lock -- inside unlock(), between "l->pc = 0" and
+		 * "l->key = 0", is the widest window -- and since #622 a
+		 * proc preempted while Running resumes only on the core it
+		 * was taken from (mayrun's samecore). If THIS proc is on that
+		 * core, at the same priority, nothing ever preempts it:
+		 * anyhigher() wants strictly higher, so the holder waits for
+		 * a core that is busy waiting for the holder. A hundred
+		 * million spins later that was "lock loop ... key 0x1 held
+		 * by pc 0x0", the pc already cleared and the key not yet,
+		 * twice in one morning under module churn on the board
+		 * (2026-09-18). Every thousand spins, let the scheduler run
+		 * whatever else this core owes; the holder finishes its
+		 * three stores and the spin ends. Only where a reschedule
+		 * is legal: interrupts on, and a Running proc.
+		 */
+		if(up->state == Running && islo() && (conf.nmach == 1 || (i & 1023) == 1023)) {
 			up->pc = pc;
 			sched();
 		}

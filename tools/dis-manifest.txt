@@ -286,6 +286,7 @@ dis/jitshift.dis
 dis/jittest.dis
 dis/js.dis
 dis/kill.dis
+dis/lan78stats.dis
 dis/ktrans.dis
 dis/lib/aadraw.dis
 dis/lib/acmewin.dis

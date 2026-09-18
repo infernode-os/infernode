@@ -122,6 +122,8 @@ Lburstcap:	con 16r090;
 Lbulkindly:	con 16r094;
 Lfctrxctl:	con 16r0C0;
 Lfcttxctl:	con 16r0C4;
+Lfctflow:	con 16r0D0;		# FCT_FLOW: receive FIFO levels that start and stop pause frames
+Lflow:		con 16r10C;		# FLOW: 802.3x pause, both directions, and the pause time
 Lmacrx:		con 16r104;
 Lmactx:		con 16r108;
 Lrxaddrh:	con 16r118;
@@ -167,6 +169,12 @@ Lphyaddr:	con 1;			# the LAN78xx internal PHY
 
 # Registers every MII PHY has, in the numbering the standard gives them.
 Mbmcr:		con 0;			# control
+Manar:		con 4;			# auto-negotiation advertisement
+Manarpause:	con 16r0400;		# ANAR/LPA: symmetric pause
+Manarasym:	con 16r0800;		# ANAR/LPA: asymmetric pause
+Lflowtxen:	con 1 << 30;		# FLOW: send pause frames when the receive FIFO fills
+Lflowrxen:	con 1 << 29;		# FLOW: honour the partner's pause frames
+Lfcthigh:	con 16r211;		# FCT_FLOW levels for a high-speed USB link (Linux lan78xx)
 Mbmsr:		con 1;			# status
 Mphyid1:	con 2;
 Mphyid2:	con 3;
@@ -189,7 +197,12 @@ Lhwmef:		con 16r00000010;	# HW_CFG: multiple frames per transfer
 Lusbbce:	con 16r00000020;	# USB_CFG0: honour BURST_CAP
 Lusbbir:	con 16r00000040;	# USB_CFG0: NAK an IN with nothing to say
 Rxburst:	con 16*1024;		# what one aggregated bulk IN may carry
-Bindly:		con 16r2000;		# BULK_IN_DLY -- how long to gather
+# BULK_IN_DLY, in half-microseconds: how long the chip gathers before it
+# ends a transfer. 16r0800 (1 ms) is Linux's value. This was 16r2000
+# (4 ms), which is four times what the chip's 12 KB FIFO holds at
+# 100 Mb/s: measured on a live link with lan78stats(8), inbound TCP was
+# 42-58 Mbit/s at 16r2000 and 70-90 at 16r0800, 16r0200 and 0 alike.
+Bindly:		con 16r0800;
 # 1<<31, not 16r80000000: bit 31 does not fit a Limbo int, which
 # is signed 32-bit, so the literal would be a big and the argument
 # types would not match.
@@ -2905,6 +2918,27 @@ lanphy(): int
 		sys->sleep(10);
 	}
 
+	#
+	# Offer 802.3x pause before negotiating; see lanflow().
+	#
+	(ea, an) := lanmiird(Manar);
+	if(ea >= 0)
+		lanmiiwr(Manar, an | Manarpause | Manarasym);
+
+	#
+	# Gigabit stays offered. Withholding it was tried (2026-09-18): the
+	# part's receive FIFO is about twelve kilobytes, a TCP burst at
+	# 1000 Mb/s overran it, and inbound ran at 17-30 Mbit/s against 115
+	# out (#633). Withholding gigabit did not help, because the wire was
+	# never the fault. Three things behind the part were: no bulk IN
+	# was posted for a tick after every empty read; a lost interrupt
+	# mask bit parked transfers for 200 ms (both in usbdwc); and this
+	# stack offered no SACK, so each overrun cost the sender a timeout.
+	# With those fixed the same link carries 160 Mbit/s in and 148 out
+	# at 1000 Mb/s, against 91 and 93 when held to 100. The part still
+	# drops about 1.5% of a gigabit burst, and SACK pays for it.
+	#
+
 	if(lanmiiwr(Mbmcr, Mbmcraneg | Mbmcrrestart) < 0){
 		sys->print("etherusb: LAN78xx autonegotiation failed to start: %r\n");
 		return -1;
@@ -2946,6 +2980,7 @@ lanphy(): int
 			}
 			sys->print("etherusb: LAN78xx link up, %d Mb/s\n",
 				phymbps);
+			lanflow();
 			return 0;
 		}
 		sys->sleep(100);
@@ -2953,6 +2988,38 @@ lanphy(): int
 	nocarrier = 1;
 	sys->print("etherusb: LAN78xx no link (cable unplugged?)\n");
 	return 0;
+}
+
+#
+# 802.3x flow control, which this driver never turned on.
+#
+# The wire delivers faster than this machine drains the part: a bulk IN
+# is posted for well under a millisecond of every three, and in the
+# gaps the receive FIFO fills and the part DROPS. Nothing above it sees
+# a drop -- /net/ether0/stats, ipifc and tcp all count every frame the
+# driver was given -- but the sender does: a Linux peer ran with its
+# congestion window collapsed to 8 segments and hundreds of
+# retransmissions, and receive sat at 17-30 Mbit/s against 115 out
+# (#633, #610; measured with ss -ti on the tester, 2026-09-18). With
+# pause enabled the part asks the switch to wait instead, and TCP
+# keeps its window.
+#
+# Thresholds before the enable, as Linux's lan78xx_update_flowcontrol
+# does it, and only if the partner advertised pause: a pause frame to a
+# partner that never offered is noise.
+#
+lanflow()
+{
+	(el, lp) := lanmiird(Mlpa);
+	if(el < 0 || (lp & (Manarpause|Manarasym)) == 0){
+		sys->print("etherusb: LAN78xx flow control off: the link partner does not offer pause (lpa %4.4ux)\n", lp);
+		return;
+	}
+	if(lanwr(Lfctflow, Lfcthigh) < 0 || lanwr(Lflow, Lflowtxen | Lflowrxen | 16rFFFF) < 0){
+		sys->print("etherusb: LAN78xx flow control not set: %r\n");
+		return;
+	}
+	sys->print("etherusb: LAN78xx flow control on (pause both ways; partner lpa %4.4ux)\n", lp);
 }
 
 #

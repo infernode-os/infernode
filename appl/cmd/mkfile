@@ -101,6 +101,7 @@ TARG=\
 	iostats.dis\
 	js.dis\
 	kill.dis\
+	lan78stats.dis\
 	ktrans.dis\
 	limbtest.dis\
 	listen.dis\

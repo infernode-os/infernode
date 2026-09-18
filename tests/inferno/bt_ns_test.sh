@@ -732,6 +732,72 @@ if {! ~ $"v 'links 0'} {
 	}
 	echo hangup >[1=0]
 } <> $BT/clone
+# An LE credit-based channel: what a phone's app is given, and what 9P
+# to one will ride on (#647). The link is the mouse's, already bonded,
+# so it is encrypted from the stored LTK and the channel is allowed; the
+# mock echoes on le128. An SDU of 1500 bytes is three K-frames each way.
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:05!le0x80' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after an LE channel connect: '^$"v
+	}
+	v=`{cat $BT/$id/remote}
+	if {! ~ $"v 'ee:ee:ee:ee:ee:05!le128'} {
+		raise 'fail:LE channel remote: '^$"v
+	}
+	echo -n le-channel-echo > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v le-channel-echo} {
+		raise 'fail:LE channel echo: '^$"v
+	}
+	# larger than the MPS, so it is segmented and reassembled both ways
+	dd -if /dis/sh.dis -bs 1500 -count 1 > /tmp/btns.le.out >[2] /dev/null
+	cat /tmp/btns.le.out > $BT/$id/data
+	read 2000 < $BT/$id/data > /tmp/btns.le.in
+	if {! cmp -s /tmp/btns.le.out /tmp/btns.le.in} {
+		raise 'fail:a 1500-byte SDU did not survive the LE channel'
+	}
+	# a PSM the peer never announced
+	echo hangup >[1=0]
+} <> $BT/clone
+{
+	id=`{read 10}
+	if {echo 'connect ee:ee:ee:ee:ee:05!le0x99' >[1=0] >[2] /dev/null} {
+		raise 'fail:an LE channel to an unannounced PSM was not refused'
+	}
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v 'Hangup connection refused: PSM not supported'} {
+		raise 'fail:status after a refused LE channel: '^$"v
+	}
+	if {echo 'connect ee:ee:ee:ee:ee:05!le0' >[1=0] >[2] /dev/null} {
+		raise 'fail:le0 was taken for a PSM'
+	}
+	if {echo 'connect ee:ee:ee:ee:ee:05!le256' >[1=0] >[2] /dev/null} {
+		raise 'fail:le256 was taken for a PSM: an LE PSM is one byte'
+	}
+} <> $BT/clone
+# announcing one: classic and LE PSMs are separate number spaces
+{
+	id=`{read 10}
+	echo 'announce le0x81' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Listen} {
+		raise 'fail:status after announce le0x81: '^$"v
+	}
+	v=`{cat $BT/$id/local}
+	if {! ~ $"v *'!le129'} {
+		raise 'fail:local of an LE listener: '^$"v
+	}
+	{
+		id2=`{read 10}
+		if {echo 'announce le129' >[1=0] >[2] /dev/null} {
+			raise 'fail:the same LE PSM was announced twice'
+		}
+		echo 'announce 0x1081' >[1=0]
+	} <> $BT/clone
+} <> $BT/clone
 echo pairable off > $BT/ctl
 
 # dial(2), unchanged: the kernel's dial against this tree. The dial

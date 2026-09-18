@@ -624,7 +624,7 @@ peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, array of byte pr.calltext)));
 			}
 		Data =>
-			if(e.c.psm == Echopsm)
+			if(e.c.psm == Echopsm || (e.c.le && e.c.psm == Leechopsm))
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, e.sdu)));
 			else if(e.c.psm == L2cap->Psmsdp)
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, peersdp.request(e.sdu, e.c.mtu))));
@@ -1144,6 +1144,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			if(pr.handle != 0){
 				pr.state = 1;
 				pr.l2 = Link.new(pr.handle);
+				pr.l2.accept = Leechopsm :: nil;
 				droppeer(c, pr);
 				c.links = pr :: c.links;
 			}
@@ -1188,6 +1189,8 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			out = cat(out, event(Bthci->EvEncryptChange, d));
 			if(st == 0){
 				pr.encrypted = 1;
+				if(pr.l2 != nil)
+					pr.l2.encrypted = 1;
 				if(pr.sstate == 3)
 					out = cat(out, distribute(c, pr));
 			}

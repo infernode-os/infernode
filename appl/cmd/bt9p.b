@@ -39,6 +39,8 @@ implement Bt9p;
 #     clone     open  a new conversation N; the open fid is N's ctl and reads "N"
 #     N/ctl     write "connect <addr>!<psm>" -- the reply waits until the L2CAP
 #                     channel is open, or fails saying why; "announce <psm>";
+#                     "connect <addr>!le<psm>" and "announce le<psm>" are an
+#                     LE credit-based channel (what a phone's app is given);
 #                     "hangup"
 #     N/data    read  one SDU per read (a whole L2CAP frame); write one SDU
 #     N/status  read  Connected | Connecting | Listen | Closed | Hangup <why>
@@ -228,8 +230,14 @@ Conv: adt {
 	hidmaph: int;			# hid: the Report Map's value handle
 	hidmap: list of ref Report;	# hid: the map, parsed, for report protocol
 	hidids: list of (int, int, int);	# hid: (reference handle, value handle, report id) per input report
+	# an LE credit-based channel
+	wpending: ref Tmsg.Write;	# a write held until the peer's credits let the queue drain
 };
-Kl2cap, Krfcomm, Kgatt, Khid: con iota;
+Kl2cap, Krfcomm, Kgatt, Khid, Kle: con iota;
+
+# K-frames an LE channel may have waiting for credit before its writer
+# is made to wait too: about two of the largest SDUs
+Lehighwater: con 10;
 leseen: list of (string, int);	# addresses lescan has heard, with their types
 convs: list of ref Conv;
 nconv := 0;
@@ -798,6 +806,8 @@ cancelconv(srv: ref Styxserver, tag: int)
 			cv.rpending = nil;
 		if(cv.cpending != nil && cv.cpending.tag == tag)
 			cv.cpending = nil;
+		if(cv.wpending != nil && cv.wpending.tag == tag)
+			cv.wpending = nil;
 		if(cv.lpending != nil && cv.lpending.tag == tag){
 			cv.lpending = nil;
 			release(srv, cv);
@@ -1905,7 +1915,7 @@ cancelinquiry()
 
 newconv(): ref Conv
 {
-	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0, nil, 0, 0, nil, nil);
+	cv := ref Conv(nconv++, "Closed", nil, nil, 0, nil, 0, 0, 0, nil, nil, nil, nil, nil, Kl2cap, 0, nil, nil, nil, nil, 0, nil, 0, nil, 0, 0, nil, nil, nil);
 	convs = cv :: convs;
 	id := cv.id;
 	nm := sys->sprint("%d", id);
@@ -1965,13 +1975,40 @@ dropclonefid(fid: int)
 	clonefids = keep;
 }
 
-# listeners announced for a PSM
+# listeners announced for a PSM. Classic and LE PSMs are different
+# number spaces: 0x81 announced on one says nothing about the other.
 listener(psm: int): ref Conv
 {
 	for(cl := convs; cl != nil; cl = tl cl)
-		if((hd cl).listening && (hd cl).psm == psm)
+		if((hd cl).listening && (hd cl).psm == psm && (hd cl).kind != Kle)
 			return hd cl;
 	return nil;
+}
+
+lelistener(psm: int): ref Conv
+{
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).listening && (hd cl).psm == psm && (hd cl).kind == Kle)
+			return hd cl;
+	return nil;
+}
+
+# the listener an accepted call belongs to
+listenerfor(cv: ref Conv): ref Conv
+{
+	if(cv.kind == Kle)
+		return lelistener(cv.psm);
+	return listener(cv.psm);
+}
+
+# the LE PSMs we answer LE Credit Based Connection Requests for
+leannounced(): list of int
+{
+	l: list of int;
+	for(cl := convs; cl != nil; cl = tl cl)
+		if((hd cl).listening && (hd cl).kind == Kle)
+			l = (hd cl).psm :: l;
+	return l;
 }
 
 # the PSMs we answer Connection Requests for: the announced L2CAP ones,
@@ -1986,7 +2023,7 @@ announced(): list of int
 		if((hd cl).listening){
 			if((hd cl).kind == Krfcomm)
 				rf = 1;
-			else
+			else if((hd cl).kind != Kle)
 				l = (hd cl).psm :: l;
 		}
 	if(rf)
@@ -2148,7 +2185,21 @@ convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("SDU too large: peer MTU is %d", cv.ch.mtu)));
 			return;
 		}
-		l2events(srv, cv.lnk, cv.lnk.l2.send(cv.ch, tm.data));
+		if(cv.wpending != nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "write already pending"));
+			return;
+		}
+		ch := cv.ch;
+		l2events(srv, cv.lnk, cv.lnk.l2.send(ch, tm.data));
+		# An LE channel sends only what the peer has given credit for
+		# and queues the rest. A writer that outruns the peer is held
+		# here, as a write to a full pipe is, until the queue drains
+		# (Ev.Sendable), or until the channel closes and closed()
+		# answers it with why.
+		if(cv.kind == Kle && cv.ch == ch && ch.queued() > Lehighwater){
+			cv.wpending = tm;
+			return;
+		}
 		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 	* =>
 		srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
@@ -2165,7 +2216,7 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 	case hd f {
 	"connect" =>
 		if(nf != 2){
-			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>|rfcomm<n>|spp"));
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>|rfcomm<n>|spp|le<psm>|gatt|hid"));
 			return;
 		}
 		(na, parts) := sys->tokenize(hd tl f, "!");
@@ -2173,7 +2224,7 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 		if(na == 2)
 			(kind, psm, channel) = parseport(hd tl parts);
 		if(na != 2 || bthci->parsebdaddr(hd parts) == nil || kind < 0){
-			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>|rfcomm<n>|spp"));
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>|rfcomm<n>|spp|le<psm>|gatt|hid"));
 			return;
 		}
 		if(cv.state != "Closed"){
@@ -2214,7 +2265,7 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 			(kind, psm, channel) = parseport(port);
 		}
 		if(nf != 2 || kind < 0){
-			srv.reply(ref Rmsg.Error(tm.tag, "usage: announce <psm>|rfcomm<n>|spp"));
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: announce <psm>|rfcomm<n>|spp|le<psm>"));
 			return;
 		}
 		if(cv.state != "Closed"){
@@ -2223,6 +2274,10 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 		}
 		if(kind == Kgatt || kind == Khid){
 			srv.reply(ref Rmsg.Error(tm.tag, "announce: being an LE peripheral is not offered"));
+			return;
+		}
+		if(kind == Kle && lelistener(psm) != nil){
+			srv.reply(ref Rmsg.Error(tm.tag, "PSM already announced"));
 			return;
 		}
 		if(kind == Krfcomm){
@@ -2241,7 +2296,7 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 			cv.channel = channel;
 			# a serial port is a Serial Port Profile record: peers find the channel by asking
 			cv.sdphandle = sdpsrv.add(sdp->spprecord(0, channel, "Serial Port"));
-		}else if(listener(psm) != nil){
+		}else if(kind != Kle && listener(psm) != nil){
 			srv.reply(ref Rmsg.Error(tm.tag, "PSM already announced"));
 			return;
 		}
@@ -2271,6 +2326,18 @@ parseport(s: string): (int, int, int)
 		return (Kgatt, 0, 0);
 	if(s == "hid")
 		return (Khid, 0, 0);
+	if(len s > 2 && s[0:2] == "le"){
+		# an LE PSM is one byte: 0x01-0x7f assigned, 0x80-0xff dynamic
+		n: int;
+		rest: string;
+		if(len s > 4 && (s[2:4] == "0x" || s[2:4] == "0X"))
+			(n, rest) = str->toint(s[4:], 16);
+		else
+			(n, rest) = str->toint(s[2:], 10);
+		if(rest == nil && n >= 1 && n <= 16rff)
+			return (Kle, n, 0);
+		return (-1, 0, 0);
+	}
 	if(len s > 6 && s[0:6] == "rfcomm"){
 		(n, rest) := str->toint(s[6:], 10);
 		if(rest == nil && n >= 1 && n <= 30)
@@ -2289,6 +2356,8 @@ portname(cv: ref Conv): string
 		return "gatt";
 	if(cv.kind == Khid)
 		return "hid";
+	if(cv.kind == Kle)
+		return sys->sprint("le%d", cv.psm);
 	if(cv.kind == Krfcomm){
 		if(cv.channel == 0)
 			return "spp";
@@ -2319,8 +2388,12 @@ rfannounced(): list of int
 acceptall()
 {
 	for(ll := links; ll != nil; ll = tl ll){
-		if((hd ll).l2 != nil)
-			(hd ll).l2.accept = announced();
+		if((hd ll).l2 != nil){
+			if((hd ll).le)
+				(hd ll).l2.accept = leannounced();
+			else
+				(hd ll).l2.accept = announced();
+		}
 		if((hd ll).rf != nil)
 			(hd ll).rf.accept = rfannounced();
 	}
@@ -2459,11 +2532,11 @@ hangup(srv: ref Styxserver, cv: ref Conv, why: string)
 			cv.sdpch = nil;
 		}
 	}
-	if(cv.kind == Kl2cap && cv.lnk != nil && cv.ch != nil && cv.lnk.l2 != nil && isconn(cv))
+	if((cv.kind == Kl2cap || cv.kind == Kle) && cv.lnk != nil && cv.ch != nil && cv.lnk.l2 != nil && isconn(cv))
 		l2events(srv, cv.lnk, cv.lnk.l2.disconnect(cv.ch));
 	if(cv.state == "Connecting" && cv.lnk != nil)
 		cv.lnk.waiting = without(cv.lnk.waiting, cv);
-	if((cv.kind == Kgatt || cv.kind == Khid) && cv.lnk != nil){
+	if((cv.kind == Kgatt || cv.kind == Khid || cv.kind == Kle) && cv.lnk != nil){
 		lk := cv.lnk;
 		lk.rfwait = without(lk.rfwait, cv);
 		if(lk.state == Lconnecting && lk.waiting == nil){
@@ -2506,6 +2579,10 @@ closed(srv: ref Styxserver, cv: ref Conv, why: string)
 		srv.reply(ref Rmsg.Read(cv.rpending.tag, nil));
 		cv.rpending = nil;
 	}
+	if(cv.wpending != nil){
+		srv.reply(ref Rmsg.Error(cv.wpending.tag, why));
+		cv.wpending = nil;
+	}
 	cv.lnk = nil;
 }
 
@@ -2545,7 +2622,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 	if(lk == nil){
 		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil);
 		links = lk :: links;
-		if(cv.kind == Kgatt || cv.kind == Khid){
+		if(cv.kind == Kgatt || cv.kind == Khid || cv.kind == Kle){
 			# an LE peer: its address type is what lescan heard, or
 			# what the address says -- random static addresses have
 			# their top two bits set, and a resolvable private one
@@ -2566,7 +2643,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 
 l2connect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 {
-	if(cv.kind == Kgatt || cv.kind == Khid){
+	if(cv.kind == Kgatt || cv.kind == Khid || cv.kind == Kle){
 		leconnect(srv, lk, cv);
 		return;
 	}
@@ -3226,6 +3303,8 @@ lesecured(srv: ref Styxserver, lk: ref Lnk, ok: int, why: string)
 		return;
 	}
 	lk.secure = Sencrypted;
+	if(lk.l2 != nil)
+		lk.l2.encrypted = 1;	# LE channels are refused on a link that is not
 	for(; w != nil; w = tl w)
 		if((hd w).state == "Connecting")
 			lestart(srv, lk, hd w);
@@ -3244,6 +3323,15 @@ lestart(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 		}
 	Khid =>
 		attevents(srv, lk, lk.gatt.discover(Att->Uhidservice));
+	Kle =>
+		# the channel itself; Opened, in l2events, answers the connect
+		(ch, evs) := lk.l2.leconnect(cv.psm);
+		if(ch == nil){
+			closed(srv, cv, "no free LE channel on this link");
+			return;
+		}
+		cv.ch = ch;
+		l2events(srv, lk, evs);
 	}
 }
 
@@ -3617,7 +3705,7 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 			}
 			# an accepted call, now open: hand it to the listener
 			if(cv.accepted){
-				ls := listener(cv.psm);
+				ls := listenerfor(cv);
 				if(ls == nil)
 					release(srv, cv);
 				else{
@@ -3649,9 +3737,13 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				continue;
 			}
 			ls := listener(e.c.psm);
+			if(e.c.le)
+				ls = lelistener(e.c.psm);
 			if(ls == nil)
 				continue;
 			nc := newconv();
+			if(e.c.le)
+				nc.kind = Kle;
 			nc.lnk = lk;
 			nc.ch = e.c;
 			nc.psm = e.c.psm;
@@ -3681,6 +3773,12 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				closed(srv, cv, e.reason);
 				if(held)
 					release(srv, cv);	# a call that died before any listen saw it
+			}
+		Sendable =>
+			cv := convbychan(lk, e.c);
+			if(cv != nil && cv.wpending != nil){
+				srv.reply(ref Rmsg.Write(cv.wpending.tag, len cv.wpending.data));
+				cv.wpending = nil;
 			}
 		Params =>
 			eventnote(srv, sys->sprint("link %s asks interval %d-%d latency %d timeout %d\n", lk.addr, e.min, e.max, e.latency, e.timeout));

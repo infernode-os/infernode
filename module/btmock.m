@@ -24,6 +24,7 @@ Btmock: module
 	init:	fn(b: Bthci, l: L2cap);
 
 	Echopsm:	con 16r1001;	# the L2CAP service every mock offers: it echoes
+	Leechopsm:	con 16r80;	# and the LE credit-based one every LE mock offers, once encrypted
 	Echochan:	con 1;		# and the RFCOMM channel it echoes on, which its SDP record names
 	# an LE device's GATT table: a mouse with a HID service in boot
 	# protocol, whose boot report is at this handle and its CCCD next

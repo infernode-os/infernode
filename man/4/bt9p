@@ -301,6 +301,24 @@ with
 .I no serial port offered
 if there is none.
 .TP
+.BI le psm
+An LE link to the peer, encrypted first (below), and on it an LE
+credit-based L2CAP channel to
+.IR psm ,
+decimal or 0x hex, 1 to 255 (128 and up are the dynamic ones). This is
+the one kind of channel a phone gives an ordinary app. Each write of
+.B data
+is one SDU, of at most the peer's MTU, and each read returns one; the
+SDU travels as K-frames the peer has given credit for, and a writer
+that outruns the peer's credit blocks until it catches up. Classic and
+LE PSMs are separate number spaces. An
+.B announce
+of one is accepted, and answers peers on LE links that are already up;
+making the board connectable to a new one needs advertising, which is
+not offered yet. A peer on a link that is not encrypted is refused with
+.IR "insufficient authentication" ,
+which is its cue to pair.
+.TP
 .B gatt
 An LE link to the peer, encrypted first (below), with the Attribute
 Protocol on

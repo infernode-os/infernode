@@ -532,6 +532,19 @@ HID specification's vectors. Not done: keyboards (no device to try),
 LE Secure Connections (a peer that insists is refused and says so),
 being a peripheral.
 
+*2026-09-19, towards #647* (a phone's InferNode app sets up and rescues
+a board that has no network): LE credit-based channels. `l2cap(2)` has
+`Link.leconnect`, K-frame segmentation and reassembly, credits both
+ways with a queue for what the peer has not paid for, and the
+specification's refusals and disconnections for a peer that breaks the
+rules; `bt9p` has `connect <addr>!le<psm>` and `announce le<psm>`, a
+writer held while the queue is over its high-water mark, and classic
+and LE PSMs kept as separate number spaces. Closed by default: an LE
+channel is refused on a link that is not encrypted. The mock's LE peers
+echo on `le128`, and the contract test sends a 1500-byte SDU through it
+and back. This is the board as *central*; being found by a phone is the
+peripheral role, which is next, with LE Secure Connections.
+
 ## Test plan
 
 - **Limbo unit tests** (`tests/bt_hci_test.b`, `bt_h4_test.b`,

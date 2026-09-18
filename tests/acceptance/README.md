@@ -41,10 +41,14 @@ set the defaults.
 
 ## Tester prerequisites
 
-- BlueZ's tools (`bluez` package; the Jetson has them). `l2ping` and
-  `l2test -z` open raw L2CAP sockets and need `CAP_NET_RAW`:
-  `sudo setcap cap_net_raw+ep $(which l2ping)` (and `l2test`), or they
-  print as SKIP with that instruction.
+- BlueZ's tools (`bluez` package; the Jetson has them). `l2ping` opens a
+  raw L2CAP socket and `btmon` the monitor channel; both need
+  `CAP_NET_RAW`, or their checks print as SKIP with this instruction.
+  `setcap` takes the capability before EACH file:
+  `sudo setcap cap_net_raw+ep /usr/bin/btmon cap_net_raw+ep /usr/bin/l2ping cap_net_raw+ep /usr/bin/l2test`
+  The information-request check is read off the wire with `btmon`:
+  `l2test -z` hangs on this kernel even while the board answers, because
+  the kernel's L2CAP consumes information responses itself.
 - For `GAP/SEC`, the tester must already be bonded with the board:
   `echo pair <tester-bdaddr> > /net/bt/ctl` on the board once.
 - `hostapd` for the Wi-Fi battery (not yet installed on the Jetson).

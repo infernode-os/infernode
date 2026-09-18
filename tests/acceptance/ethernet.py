@@ -83,9 +83,17 @@ def main():
     print("== RFC 2544 26.1 throughput (TCP, both directions)")
     b.kill("Listen")
     # the source: no /dev/zero on this kernel, so a loop over a file the
-    # image has; the listener's shell is fresh, so it loads std itself
+    # image has; the listener's shell is fresh, so it loads std itself.
+    #
+    # The loop's CONDITION is the cat, so it ends when the tester hangs
+    # up: cat's write then fails and the loop is over. The first version
+    # looped on {~ 1 1} with the cat as the body, and outlived its
+    # connection -- cat failing instantly, re-spawned ~800 times a second
+    # for ever, each spawn loading a module whose type code the kernel
+    # does not free (heap.c freetypecode, the INFR-458 experiment). That
+    # was #641: 40 MB/min from the battery's own leftover, not from USB.
     b.sh("listen -A 'tcp!*!5001' {cat > /dev/null} &",
-         "listen -A 'tcp!*!5002' {sh -c 'load std; while {~ 1 1} {cat /dis/sh.dis}'} &", wait=0.8)
+         "listen -A 'tcp!*!5002' {sh -c 'load std; while {cat /dis/sh.dis} {}'} &", wait=0.8)
     time.sleep(1)
     try:
         mbps_in = throughput_in(a.board, 5001, secs)

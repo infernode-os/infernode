@@ -183,7 +183,9 @@ def main():
     if addr:
         # throughput over the radio alone: the board sends, the tester reads
         b.kill("Listen")
-        bsh(b, "listen -A 'tcp!*!5002' {sh -c 'load std; while {~ 1 1} {cat /dis/sh.dis}'} &", wait=0.8)
+        # the cat is the loop's condition, so the source ends when the
+        # tester hangs up (see ethernet.py: the {~ 1 1} form was #641)
+        bsh(b, "listen -A 'tcp!*!5002' {sh -c 'load std; while {cat /dis/sh.dis} {}'} &", wait=0.8)
         try:
             s = socket.create_connection((addr, 5002), timeout=10, source_address=("192.168.7.1", 0))
             s.settimeout(5)

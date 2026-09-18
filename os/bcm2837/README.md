@@ -1447,7 +1447,7 @@ reads, against a handful per tens of thousands.
 What remains is the hardware: a 12 KB FIFO behind USB 2 drops about 1.5%
 of a gigabit burst, which TCP recovers and a 41-fragment datagram does
 not. The full account, the measurements, the hypotheses eliminated, and
-what of it carries to the next board are in
+what of it applies to a port to other hardware are in
 [docs/BAREMETAL-PORTING-LESSONS.md](../../docs/BAREMETAL-PORTING-LESSONS.md).
 
 ### Smaller things still open

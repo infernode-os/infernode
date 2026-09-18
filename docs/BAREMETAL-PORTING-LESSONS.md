@@ -1,12 +1,16 @@
-# Lessons from the Pi 3B+ bare-metal port, for the next board
+# Lessons from the first bare-metal port, for whoever does the next
 
 The BCM2837 port (`os/bcm2837`, `os/arm64`, `os/port`) took Inferno from
-nothing to a machine that passes acceptance batteries for Ethernet,
-Wi-Fi, Bluetooth, GPIO and audio. [os/bcm2837/README.md](../os/bcm2837/README.md)
-is the chronological record, three thousand lines of it. This document
-is the other thing: what a port to different hardware should take from
-it, sorted by whether it travels. The Raspberry Pi 4 (BCM2711) is the
-expected next target and is used as the worked example.
+nothing to a Raspberry Pi 3B+ that passes acceptance batteries for
+Ethernet, Wi-Fi, Bluetooth, GPIO and audio.
+[os/bcm2837/README.md](../os/bcm2837/README.md) is the chronological
+record, three thousand lines of it. This document is the other thing:
+what a port to **any other hardware** should take from it. It assumes
+nothing about the target. Another Raspberry Pi, a different ARM64 SoC, a
+RISC-V board or an x86 machine will each keep a different share of the
+tree, and section 1 is a way of working out which share before writing
+code. Most of what follows is about the kernel and about method, and
+holds wherever the port goes.
 
 Every claim here has an issue or a commit behind it. Where a number is
 given it was measured on the bench, and the measurement is named.
@@ -15,25 +19,61 @@ Companion documents: [PLAN9-C-UNDER-OTHER-COMPILERS.md](PLAN9-C-UNDER-OTHER-COMP
 (what clang does to Plan 9 C; eight entries, all of which travel),
 [BLUETOOTH.md](BLUETOOTH.md), and [tests/acceptance/README.md](../tests/acceptance/README.md).
 
-## 1. What travels to a Pi 4, and what does not
+## 1. Working out what travels
+
+The tree is layered so that this question has an answer per directory.
+Sort the target's hardware into four kinds and the answer follows.
+
+| kind | lives in | travels when |
+|---|---|---|
+| Portable kernel: scheduler, allocator, namespace, devices with no hardware under them, the IP stack, the Dis VM | `os/port`, `os/ip`, `libinterp` and the libraries | always. Section 2 is about the faults found here, and they go wherever the code goes |
+| Architecture: MMU, exception vectors, context switch, cache maintenance, SMP bring-up, the JIT back end | `os/arm64`, `libinterp/comp-*.c` | the target shares the instruction set. A new architecture needs a new directory of the same shape, and a JIT back end or the interpreter alone |
+| SoC blocks: interrupt controller, timers, UARTs, GPIO, SD host, DMA, mailbox, display | `os/bcm2837` | the target has the same block, which is a fact about the silicon vendor's reuse, not about the board's name. Expect the base address and the pin mux to move even then |
+| Devices behind a bus: the Ethernet MAC, the Wi-Fi/Bluetooth combo chip, USB devices | drivers in `os/bcm2837` and `os/port`, protocol in Limbo (`os/init/etherusb.b`, `appl/cmd/bt9p.b`, `wpa.b`) | the same part is fitted, on any bus the target can drive. The Limbo halves travel with no change at all |
+
+Two design decisions make the last row cheaper than it looks, and a new
+port should keep them. Device *protocols* live outside the kernel, in
+Limbo, with only mechanism inside (the README's "Decision" sections give
+the argument). And every device is a file tree, so a new driver that
+serves the same files is invisible to everything above it: the batteries
+in `tests/acceptance` run unchanged against a different NIC.
+
+Before starting, fill in this list for the target. Each line was a
+surprise on this port or would have been on the next.
+
+- **Interrupt controller.** Which one, and do its mask registers have
+  set/clear pairs (2.1)?
+- **How each high-rate device is attached.** On the SoC with DMA rings,
+  or behind a host controller? Section 3 is what "behind USB 2" cost.
+- **DMA reach.** Can every device address all of RAM? If not, bounce
+  buffers or a zoned allocator come before the first driver that needs
+  them, not after.
+- **Cache coherency for DMA.** Hardware-coherent, or maintained by the
+  driver (2.2)?
+- **Pins shared between controllers.** The 3B+ has two SD controllers and
+  one can reach the radio's pins, which decided where the card went.
+- **What the boot firmware leaves running.** Clocks, pin mux and a
+  framebuffer inherited from firmware are state nobody wrote down.
+- **What the emulator models.** QEMU carried this port a long way and
+  was wrong about interrupts, timing and every USB corner that mattered.
+  List what it cannot tell you (README, "QEMU vs real hardware").
+- **How a bad kernel is recovered without hands** (section 4).
+
+### One illustration: a Raspberry Pi 4
+
+Offered only to show the method on a concrete case. It is not a plan,
+and a different target will sort differently.
 
 | subsystem | 3B+ | Pi 4 | carries? |
 |---|---|---|---|
-| CPU, MMU, SMP, scheduler | Cortex-A53, `os/arm64` | Cortex-A72, same ARMv8-A | yes, all of `os/arm64` and `os/port` |
-| interrupt controller | BCM2836 local + legacy ARMC | GIC-400 (GICv2) | **no**: new driver; the legacy controller still exists but is not the one to use |
-| Ethernet | LAN7515 on USB 2 (`usbdwc` + `etherusb.b` + `devether`) | GENET v5 on the SoC, DMA rings, RGMII to a BCM54213PE PHY | **no**: new driver, and most of section 3 stops applying |
-| USB host | DWC2 (`usbdwc.c`) | VL805 xHCI behind PCIe; the DWC2 survives only as the USB-C OTG port | **no**: PCIe root complex + xHCI is the largest new piece |
-| Wi-Fi / Bluetooth | CYW43455 on SDIO and PL011 | the same CYW43455, same wiring | yes: `ether4330.c`, `wpa.b`, `bt9p`, firmware files |
-| SD card | SDHOST (Arasan given to the radio) | EMMC2, a second Arasan-style SDHCI | mostly: the SDHCI code moves, the SDHOST code is not needed |
-| GPIO, mini-UART, PL011, PWM audio, mailbox, framebuffer | BCM2835 blocks at `0x3F000000` | the same blocks at `0xFE000000` | yes, with the base address and a few pin-mux differences |
-| DMA addressing | 1 GB, everything reachable | up to 8 GB; legacy peripherals reach only the low 1 GB, PCIe devices the low 3 GB | **new constraint**: bounce buffers or zoned allocation |
-
-So the Pi 4's Ethernet is no longer behind a USB controller, and the
-whole class of problem in section 3 (a 12 KB chip FIFO drained through a
-host controller one transfer at a time) does not arise. What replaces it
-is a conventional descriptor-ring NIC, where the equivalent questions
-are ring size, interrupt coalescing and cache maintenance on the ring.
-Section 2 applies to it in full.
+| CPU, MMU, SMP, scheduler | Cortex-A53 | Cortex-A72, same ARMv8-A | yes |
+| interrupt controller | BCM2836 local + legacy | GIC-400 | no: new driver |
+| Ethernet | LAN7515 behind USB 2 | MAC on the SoC, DMA rings | no: new driver, and section 3's class of problem does not arise |
+| USB host | DWC2 | xHCI behind PCIe | no: the largest new piece |
+| Wi-Fi / Bluetooth | CYW43455 | the same part | yes |
+| SD card | SDHOST | a second SDHCI | mostly |
+| GPIO, UARTs, PWM audio, mailbox, framebuffer | BCM2835 blocks | the same blocks at a new base | yes |
+| DMA reach | all of RAM | legacy blocks reach the low 1 GB only | new constraint |
 
 ## 2. Lessons that are about the kernel, not the board
 
@@ -53,11 +93,10 @@ held". `splhi` stops the local core only.
 How it showed: a bulk OUT measured at 199937 us, the timeout to the
 microsecond, and TCP retransmission timeouts with no loss to explain
 them. How to look for the next one: any register with per-unit bits
-(interrupt masks, enable sets without set/clear twins, GPIO function
-selects) written from more than one context. On the Pi 4 the GIC has
-set/clear register pairs and is immune by design; GENET's `INTRL2` masks
-are set/clear too; the legacy blocks that carry over are not.
-(commit d953155ec, #633)
+(interrupt masks, enable sets, GPIO function selects) written from more
+than one context. Hardware with separate set and clear registers is
+immune by design, and a good interrupt controller has them; older
+peripheral blocks usually do not. (commit d953155ec, #633)
 
 ### 2.2 Cache maintenance goes on both sides of a receive DMA
 
@@ -68,9 +107,10 @@ loaded in the window (a prefetcher running off a neighbouring block is
 enough) and were clean, valid and stale when the device wrote beneath
 them: 91 framing errors, 6 ICMP checksum errors and one echo request
 answered twice in 2200 frames. The rule for a device-to-memory transfer
-is clean before, invalidate after. A descriptor-ring NIC keeps buffers
-armed indefinitely, so on GENET this is the normal case from the first
-packet. (commit d953155ec)
+is clean before, invalidate after, unless the platform's DMA is
+hardware-coherent. A descriptor-ring NIC keeps its buffers armed
+indefinitely, so there the long window is the normal case from the first
+packet, not a corner. (commit d953155ec)
 
 ### 2.3 A preempted process resumes on the core it was taken from
 
@@ -122,7 +162,13 @@ source loop, and `freetypecode()` having been stubbed out during the #635
 hunt so that JIT-compiled type code was never freed. Every diagnostic
 disablement needs an issue that outlives the hunt it served.
 
-## 3. The Ethernet receive path on the 3B+ (#633, #610)
+## 3. A case study: the Ethernet receive path on the 3B+ (#633, #610)
+
+This section is specific to one board, and is kept in full for two
+reasons. Any target whose NIC sits behind a host controller, or has a
+small FIFO, will meet the same shape of problem. And the way it was
+found, by reading the device's own counters and eliminating hypotheses
+by measurement, is the part that travels everywhere.
 
 Inbound TCP ran at 7 to 32 Mbit/s against about 115 outbound for weeks.
 It is now 164 in and 143 out at 1000 Mb/s. The frames were being dropped

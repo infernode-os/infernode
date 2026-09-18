@@ -77,6 +77,9 @@ fdtochan(Fgrp *f, int fd, int mode, int chkmnt, int iref)
 		unlock(&f->l);
 		error(Ebadfd);
 	}
+	/* DETECTOR (#640 lock loop): a Chan in an fd table must be live and unlocked-or-briefly-locked by a known pc */
+	if(c->flag & CFREE)
+		panic("fdtochan: fd %d of %lud:%s is a FREED Chan %#p (%s)", fd, up->pid, up->text, c, c->name != nil ? c->name->s : "-");
 	if(iref)
 		incref(&c->r);
 	unlock(&f->l);
@@ -166,7 +169,7 @@ fdclose(Fgrp *f, int fd)
 int
 kchdir(char *path)
 {
-	Chan *c;
+	Chan *c, *old;
 	Pgrp *pg;
 
 	if(waserror())
@@ -174,8 +177,11 @@ kchdir(char *path)
 
 	c = namec(path, Atodir, 0, 0);
 	pg = up->env->pgrp;
-	cclose(pg->dot);
+	wlock(&pg->ns);
+	old = pg->dot;
 	pg->dot = c;
+	wunlock(&pg->ns);
+	cclose(old);
 	poperror();
 	return 0;
 }
@@ -308,8 +314,8 @@ kfd2path(int fd)
 			error(Enomem);
 		}
 		memmove(s, c->name->s, c->name->len+1);
-		cclose(c);
 	}
+	cclose(c);
 	poperror();
 	return s;
 }
@@ -446,6 +452,7 @@ kfwstat(int fd, uchar *buf, int n)
 		cclose(c);
 		nexterror();
 	}
+	checkwritable(c);
 	n = devtab[c->type]->wstat(c, buf, n);
 	poperror();
 	cclose(c);
@@ -460,8 +467,13 @@ bindmount(Chan *c, char *old, int flag, char *spec)
 	int ret;
 	Chan *c1;
 
-	if(flag>MMASK || (flag&MORDER) == (MBEFORE|MAFTER))
+	if(flag>MMASK || (flag&MORDER) == (MBEFORE|MAFTER) ||
+	   (flag&(MCREATE|MREADONLY)) == (MCREATE|MREADONLY))
 		error(Ebadarg);
+	if(c->mflag & MREADONLY){
+		flag &= ~MCREATE;
+		flag |= MREADONLY;
+	}
 
 	c1 = namec(old, Amount, 0, 0);
 	if(waserror()){
@@ -804,7 +816,7 @@ kseek(int fd, vlong off, int whence)
 		break;
 	}
 	poperror();
-	c->dri = 0;
+	c->dri = 0;	/* clear before cclose to avoid write-after-free */
 	cclose(c);
 	poperror();
 	return off;
@@ -816,7 +828,7 @@ validstat(uchar *s, int n)
 	int m;
 	char buf[64];
 
-	if(statcheck(s, n) < 0)
+	if(n < 0 || statcheckbuf(s, n) != n)
 		error(Ebadstat);
 	/* verify that name entry is acceptable */
 	s += STATFIXLEN - 4*BIT16SZ;	/* location of first string */
@@ -938,6 +950,7 @@ kwstat(char *path, uchar *buf, int n)
 		cclose(c);
 		nexterror();
 	}
+	checkwritable(c);
 	n = devtab[c->type]->wstat(c, buf, n);
 	poperror();
 	cclose(c);
@@ -1073,8 +1086,8 @@ dirpackage(uchar *buf, long ts, Dir **d)
 	ss = 0;
 	n = 0;
 	for(i = 0; i < ts; i += m){
-		m = BIT16SZ + GBIT16(&buf[i]);
-		if(statcheck(&buf[i], m) < 0)
+		m = statcheckbuf(&buf[i], ts - i);
+		if(m < 0)
 			break;
 		ss += m;
 		n++;

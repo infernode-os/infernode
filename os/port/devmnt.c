@@ -46,6 +46,16 @@
  * connection.
  */
 
+/*
+ * Max 9P RPC / negotiated msize ceiling. Historically 8K.
+ * INFR-214: a 64K bump was tried and REVERTED — the mnt negotiation handles it
+ * fine, but it BROKE keyring/SSL'd remote mounts (mount -k, e.g. /mnt/llm): the
+ * mount attaches but the first real RPC fails, because devssl below the mnt
+ * layer can't carry a 64K 9P message (TLS records cap ~16K). Local mcp9p mounts
+ * (no SSL) were unaffected. So raising this alone is NOT enough for SSL'd
+ * mounts — the devssl path needs addressing too. Kept at 8K. See INFR-214 (the
+ * surgical alternative is llmsrv chunk-and-reassemble, which sidesteps msize).
+ */
 #define MAXRPC (IOHDRSZ+8192)
 
 struct Mntrpc
@@ -68,6 +78,8 @@ struct Mntrpc
 
 enum
 {
+	Version9Plen = sizeof(VERSION9P)-1,
+	Min9pmsg = BIT32SZ+BIT8SZ+BIT16SZ,
 	TAGSHIFT = 5,			/* ulong has to be 32 bits */
 	TAGMASK = (1<<TAGSHIFT)-1,
 	NMASK = (64*1024)>>TAGSHIFT,
@@ -102,12 +114,45 @@ void	mountmux(Mnt*, Mntrpc*);
 void	mountrpc(Mnt*, Mntrpc*);
 int	rpcattn(void*);
 Chan*	mntchan(void);
+static int	versionrequested(char*);
+static int	versioncompatible(char*, char*);
+static int	versionexact(char*, char*);
 
 char	Esbadstat[] = "invalid directory entry received from server";
 char Enoversion[] = "version not established for mount channel";
 
 
 void (*mntstats)(int, Chan*, uvlong, ulong);
+
+static int
+versionrequested(char *v)
+{
+	int i;
+
+	for(i=0; i<Version9Plen; i++)
+		if(v[i] == '\0' || v[i] != VERSION9P[i])
+			return 0;
+	return v[Version9Plen] == '\0' || v[Version9Plen] == '.';
+}
+
+static int
+versionexact(char *a, char *b)
+{
+	for(;; a++, b++){
+		if(*a != *b)
+			return 0;
+		if(*a == '\0')
+			return 1;
+	}
+}
+
+static int
+versioncompatible(char *req, char *got)
+{
+	if(versionexact(req, got))
+		return 1;
+	return versionexact(got, VERSION9P) && versionrequested(req) && req[Version9Plen] == '.';
+}
 
 static void
 mntreset(void)
@@ -154,7 +199,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	/* validity */
 	if(msize < 0)
 		error("bad iounit in version call");
-	if(strncmp(v, VERSION9P, strlen(VERSION9P)) != 0)
+	if(!versionrequested(v))
 		error("bad 9P version specification");
 
 	m = c->mux;
@@ -165,7 +210,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 
 		strecpy(buf, buf+sizeof buf, m->version);
 		k = strlen(buf);
-		if(strncmp(buf, v, k) != 0){
+		if(!versioncompatible(v, buf)){
 			snprint(buf, sizeof buf, "incompatible 9P versions %s %s", m->version, v);
 			error(buf);
 		}
@@ -181,14 +226,14 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	f.tag = NOTAG;
 	f.msize = msize;
 	f.version = v;
-	msg = malloc(8192+IOHDRSZ);
+	msg = malloc(MAXRPC);
 	if(msg == nil)
 		exhausted("version memory");
 	if(waserror()){
 		free(msg);
 		nexterror();
 	}
-	k = convS2M(&f, msg, 8192+IOHDRSZ);
+	k = convS2M(&f, msg, MAXRPC);
 	if(k == 0)
 		error("bad fversion conversion on send");
 
@@ -207,7 +252,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	}
 
 	/* message sent; receive and decode reply */
-	k = devtab[c->type]->read(c, msg, 8192+IOHDRSZ, c->offset);
+	k = devtab[c->type]->read(c, msg, MAXRPC, c->offset);
 	if(k <= 0)
 		error("EOF receiving fversion reply");
 
@@ -227,7 +272,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 		error("server tries to increase msize in fversion");
 	if(f.msize<256 || f.msize>1024*1024)
 		error("nonsense value of msize in fversion");
-	if(strncmp(f.version, v, strlen(f.version)) != 0)
+	if(!versioncompatible(v, f.version))
 		error("bad 9P version returned from server");
 
 	/* now build Mnt associated with this connection */
@@ -431,7 +476,7 @@ mntwalk(Chan *c, Chan *nc, char **name, int nname)
 	if(nname > MAXWELEM)
 		error("devmnt: too many name elements");
 	alloc = 0;
-	wq = smalloc(sizeof(Walkqid)+(nname-1)*sizeof(Qid));
+	wq = smalloc(sizeof(Walkqid)+(nname > 0 ? nname-1 : 0)*sizeof(Qid));
 	if(waserror()){
 		if(alloc && wq->clone!=nil)
 			cclose(wq->clone);
@@ -889,17 +934,21 @@ mntrpcread(Mnt *m, Mntrpc *r)
 	int i, t, len, hlen;
 	Block *b, **l, *nb;
 
+	if(r->b != nil){
+		freeblist(r->b);
+		r->b = nil;
+	}
 	r->reply.type = 0;
 	r->reply.tag = 0;
 
 	/* read at least length, type, and tag and pullup to a single block */
-	if(doread(m, BIT32SZ+BIT8SZ+BIT16SZ) < 0)
+	if(doread(m, Min9pmsg) < 0)
 		return -1;
-	nb = pullupqueue(m->q, BIT32SZ+BIT8SZ+BIT16SZ);
+	nb = pullupqueue(m->q, Min9pmsg);
 
 	/* read in the rest of the message, avoid ridiculous (for now) message sizes */
 	len = GBIT32(nb->rp);
-	if(len > m->msize){
+	if(len < Min9pmsg || len > m->msize){
 		qdiscard(m->q, qlen(m->q));
 		return -1;
 	}
@@ -910,11 +959,15 @@ mntrpcread(Mnt *m, Mntrpc *r)
 	t = nb->rp[BIT32SZ];
 	switch(t){
 	case Rread:
-		hlen = BIT32SZ+BIT8SZ+BIT16SZ+BIT32SZ;
+		hlen = Min9pmsg+BIT32SZ;
 		break;
 	default:
 		hlen = len;
 		break;
+	}
+	if(hlen > len){
+		qdiscard(m->q, qlen(m->q));
+		return -1;
 	}
 	nb = pullupqueue(m->q, hlen);
 
@@ -1003,7 +1056,14 @@ mountmux(Mnt *m, Mntrpc *r)
 		l = &q->list;
 	}
 	unlock(&m->l);
-	print("unexpected reply tag %ud; type %d\n", r->reply.tag, r->reply.type);
+	if(r->b != nil){
+		freeblist(r->b);
+		r->b = nil;
+	}
+	if(r->reply.type == Rerror)
+		print("unexpected reply tag %ud; type %d (error %q)\n", r->reply.tag, r->reply.type, r->reply.ename);
+	else
+		print("unexpected reply tag %ud; type %d\n", r->reply.tag, r->reply.type);
 }
 
 /*
@@ -1103,6 +1163,7 @@ mntralloc(Chan *c, ulong msize)
 		new->rpclen = msize;
 		new->request.tag = alloctag();
 		if(new->request.tag == NOTAG){
+			free(new->rpc);
 			free(new);
 			unlock(&mntalloc.l);
 			exhausted("rpc tags");

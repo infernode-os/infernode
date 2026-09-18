@@ -146,6 +146,7 @@ extern	int	parseether(uchar*, char*);
 #define	MAFTER	0x0002	/* mount goes after others in union directory */
 #define	MCREATE	0x0004	/* permit creation in mounted directory */
 #define	MCACHE	0x0010	/* cache some data */
+#define	MREADONLY	0x0008	/* the mount is read-only: writes, creates and removes through it are refused (Sys->MREADONLY) */
 #define	MMASK	0x0017	/* all bits on */
 
 #define	OREAD	0	/* open for read */

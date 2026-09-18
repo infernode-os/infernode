@@ -132,7 +132,6 @@ devclone(Chan *c)
 		panic("clone of open file type %C\n", devtab[c->type]->dc);
 
 	nc = newchan();
-
 	nc->type = c->type;
 	nc->dev = c->dev;
 	nc->mode = c->mode;
@@ -140,6 +139,7 @@ devclone(Chan *c)
 	nc->offset = c->offset;
 	nc->umh = nil;
 	nc->mountid = c->mountid;
+	nc->mflag = c->mflag;
 	nc->aux = c->aux;
 	nc->mqid = c->mqid;
 	nc->mcp = c->mcp;
@@ -173,7 +173,7 @@ devwalk(Chan *c, Chan *nc, char **name, int nname, Dirtab *tab, int ntab, Devgen
 		isdir(c);
 
 	alloc = 0;
-	wq = smalloc(sizeof(Walkqid)+(nname-1)*sizeof(Qid));
+	wq = smalloc(sizeof(Walkqid)+(nname > 0 ? nname-1 : 0)*sizeof(Qid));
 	if(waserror()){
 		if(alloc && wq->clone!=nil)
 			cclose(wq->clone);

@@ -210,6 +210,7 @@ struct Chan
 	int	fid;			/* for devmnt */
 	ulong	iounit;	/* chunk size for i/o; 0==default */
 	Mhead*	umh;			/* mount point that derived Chan; used in unionread */
+	int	mflag;			/* flags of the mount entry used to reach this channel (MREADONLY) */
 	Chan*	umc;			/* channel in union; held for union read */
 	QLock	umqlock;		/* serialize unionreads */
 	int	uri;			/* union read index */
@@ -232,6 +233,9 @@ struct Cname
 	int	alen;			/* allocated length */
 	int	len;			/* strlen(s) */
 	char	*s;
+	int	mlen;			/* mount-point slots in use */
+	int	malen;			/* slots allocated */
+	Chan	**mtpt;			/* mount point crossed per element; [0] is the root pin (emu/port/dat.h) */
 };
 
 struct Dev

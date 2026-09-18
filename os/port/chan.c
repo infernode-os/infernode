@@ -96,6 +96,8 @@ kstrcpy(char *s, char *t, int ns)
 {
 	int nt;
 
+	if(s == nil || t == nil || ns <= 0)
+		return;
 	nt = strlen(t);
 	if(nt+1 <= ns){
 		memmove(s, t, nt+1);
@@ -202,6 +204,10 @@ newchan(void)
 		unlock(&chanalloc.l);
 	}
 
+	/* DETECTOR (#640): a Chan from the free list, or a fresh block, with a lock already held */
+	if(c->r.l.key != 0)
+		panic("newchan: Chan %#p arrives with lock key %lux pc %#p (ref %ld flag %#x)", c, c->r.l.key, c->r.l.pc, c->r.ref, c->flag);
+
 	/* if you get an error before associating with a dev,
 	   close calls rootclose, a nop */
 	c->type = 0;
@@ -220,6 +226,7 @@ newchan(void)
 	c->mqid.path = 0;
 	c->mqid.vers = 0;
 	c->mqid.type = 0;
+	c->mflag = 0;
 	c->name = 0;
 	return c;
 }
@@ -239,7 +246,113 @@ newcname(char *s)
 	n->s = smalloc(n->alen);
 	memmove(n->s, s, i+1);
 	n->r.ref = 1;
+	n->mlen = 0;
+	n->malen = 0;
+	n->mtpt = nil;
 	incref(&ncname);
+	return n;
+}
+
+/*
+ * Mount-point stack helpers (Plan 9 4e Path semantics).
+ *
+ * Every slot holds a counted reference. The array is owned by the Cname and
+ * so is shared under the same copy-on-write discipline as the string: a
+ * Cname with r.ref > 1 must be duplicated, references and all, before it is
+ * modified. Getting this wrong leaks channels or frees them early, and the
+ * symptom surfaces far from here.
+ */
+enum { MTPTSLOP = 4 };
+
+static void
+mtptfree(Cname *n)
+{
+	int i;
+
+	if(n->mtpt == nil)
+		return;
+	for(i = 0; i < n->mlen; i++)
+		if(n->mtpt[i] != nil)
+			cclose(n->mtpt[i]);
+	free(n->mtpt);
+	n->mtpt = nil;
+	n->mlen = 0;
+	n->malen = 0;
+}
+
+static void
+mtptgrow(Cname *n, int want)
+{
+	Chan **t;
+	int a;
+
+	if(want <= n->malen)
+		return;
+	a = want + MTPTSLOP;
+	t = smalloc(a * sizeof(Chan*));
+	memset(t, 0, a * sizeof(Chan*));
+	if(n->mtpt != nil){
+		memmove(t, n->mtpt, n->mlen * sizeof(Chan*));
+		free(n->mtpt);
+	}
+	n->mtpt = t;
+	n->malen = a;
+}
+
+/* Duplicate the stack into a fresh Cname, taking a reference on each entry. */
+static void
+mtptcopy(Cname *dst, Cname *src)
+{
+	int i;
+
+	if(src->mlen == 0)
+		return;
+	mtptgrow(dst, src->mlen);
+	for(i = 0; i < src->mlen; i++){
+		dst->mtpt[i] = src->mtpt[i];
+		if(dst->mtpt[i] != nil)
+			incref(&dst->mtpt[i]->r);
+	}
+	dst->mlen = src->mlen;
+}
+
+/* Push the mount point crossed for one new path element (nil if none). */
+void
+cnamepush(Cname *n, Chan *mp)
+{
+	mtptgrow(n, n->mlen + 1);
+	n->mtpt[n->mlen] = mp;
+	if(mp != nil)
+		incref(&mp->r);
+	n->mlen++;
+}
+
+/*
+ * Record a mount crossed at the current path element.  walk() can discover a
+ * mount either while walking a batch of names or at the start of the next
+ * iteration.  The latter consumes no name, so it belongs in the most recent
+ * slot rather than a new one.  A later crossing at the same element replaces
+ * the earlier one: ".." must undo the mount most recently entered.
+ */
+static Cname*
+cnamecross(Cname *n, Chan *mp)
+{
+	Cname *new;
+	int i;
+
+	if(mp == nil || n->mlen == 0)
+		return n;
+	if(n->r.ref > 1){
+		new = newcname(n->s);
+		mtptcopy(new, n);
+		cnameclose(n);
+		n = new;
+	}
+	i = n->mlen - 1;
+	if(n->mtpt[i] != nil)
+		cclose(n->mtpt[i]);
+	n->mtpt[i] = mp;
+	incref(&mp->r);
 	return n;
 }
 
@@ -251,6 +364,7 @@ cnameclose(Cname *n)
 	if(decref(&n->r))
 		return;
 	decref(&ncname);
+	mtptfree(n);
 	free(n->s);
 	free(n);
 }
@@ -266,8 +380,9 @@ addelem(Cname *n, char *s)
 		return n;
 
 	if(n->r.ref > 1){
-		/* copy on write */
+		/* copy on write — the mount-point stack copies with the string */
 		new = newcname(n->s);
+		mtptcopy(new, n);
 		cnameclose(n);
 		n = new;
 	}
@@ -285,8 +400,17 @@ addelem(Cname *n, char *s)
 		n->s[n->len++] = '/';
 	memmove(n->s+n->len, s, i+1);
 	n->len += i;
-	if(isdotdot(s))
+	if(isdotdot(s)){
 		cleancname(n);
+		/* Drop the child before undomount() examines the parent slot. */
+		if(n->mlen > 1){
+			n->mlen--;
+			if(n->mtpt[n->mlen] != nil){
+				cclose(n->mtpt[n->mlen]);
+				n->mtpt[n->mlen] = nil;
+			}
+		}
+	}
 	return n;
 }
 
@@ -496,13 +620,14 @@ if(old->umh)
 		/*
 		 *  copy a union when binding it onto a directory
 		 */
-		flg = order;
+		flg = order | (flag&MREADONLY);
 		if(order == MREPL)
-			flg = MAFTER;
+			flg = MAFTER | (flag&MREADONLY);
 		h = &nm->next;
 		um = mh->mount;
 		for(um = um->next; um; um = um->next) {
-			f = newmount(m, um->to, flg, um->spec);
+			f = newmount(m, um->to,
+				flg | (um->mflag&MREADONLY), um->spec);
 			*h = f;
 			h = &f->next;
 		}
@@ -618,6 +743,7 @@ cclone(Chan *c)
 	nc = wq->clone;
 	free(wq);
 	nc->name = c->name;
+	nc->mflag = c->mflag;
 	if(c->name)
 		incref(&c->name->r);
 	return nc;
@@ -661,53 +787,86 @@ if(m->from == nil){
 }
 
 int
-domount(Chan **cp, Mhead **mp)
+domount(Chan **cp, Mhead **mp, Cname **name)
 {
-	return findmount(cp, mp, (*cp)->type, (*cp)->dev, (*cp)->qid);
+	if(!findmount(cp, mp, (*cp)->type, (*cp)->dev, (*cp)->qid))
+		return 0;
+	if(name != nil)
+		*name = cnamecross(*name, (*mp)->from);
+	return 1;
+}
+
+static int
+mheadflag(Mhead *m)
+{
+	int flag;
+
+	if(m == nil)
+		return 0;
+	rlock(&m->lock);
+	flag = m->mount != nil ? m->mount->mflag : 0;
+	runlock(&m->lock);
+	return flag;
+}
+
+int
+mutatingmode(int mode)
+{
+	int rwmode;
+
+	rwmode = mode & 3;
+	return rwmode == OWRITE || rwmode == ORDWR ||
+		(mode & (OTRUNC|ORCLOSE));
+}
+
+void
+checkwritable(Chan *c)
+{
+	if(c->mflag & MREADONLY)
+		error(Eperm);
 }
 
 Chan*
 undomount(Chan *c, Cname *name)
 {
 	Chan *nc;
-	Pgrp *pg;
-	Mount *t;
-	Mhead **h, **he, *f;
 
-	pg = up->env->pgrp;
-	rlock(&pg->ns);
-	if(waserror()) {
-		runlock(&pg->ns);
-		nexterror();
+	/*
+	 * Plan 9 4e semantics. The pre-4e version of this function searched the
+	 * mount table for a head whose recorded NAME matched the cleaned path,
+	 * then returned that head's left-hand side. Two things went wrong with
+	 * that. It over-fired: any head whose name happened to match handed back
+	 * a channel from before the namespace was restricted. And it under-fired:
+	 * restrictdir() binds a real directory onto a shadow placeholder, so the
+	 * head's recorded name is the shadow path and never the path an agent
+	 * walks — no match, no clamp, and ".." kept the raw device parent.
+	 *
+	 * The stack records the channel actually crossed, so no comparison is
+	 * needed, and slot 0 is never popped, which pins the root.
+	 */
+	if(name->mlen == 0)
+		return c;
+
+	if(name->mlen == 1){
+		/*
+		 * Slot 0 pins the namespace root and is never popped, so it keeps
+		 * its reference and we take a fresh one. This is the clamp: any
+		 * number of ".." elements at the root return the root.
+		 */
+		nc = name->mtpt[0];
+		if(nc == nil || nc == c)
+			return c;
+		incref(&nc->r);
+		cclose(c);
+		return nc;
 	}
 
-	he = &pg->mnthash[MNTHASH];
-	for(h = pg->mnthash; h < he; h++) {
-		for(f = *h; f; f = f->hash) {
-			if(strcmp(f->from->name->s, name->s) != 0)
-				continue;
-			for(t = f->mount; t; t = t->next) {
-				if(eqchan(c, t->to, 1)) {
-					/*
-					 * We want to come out on the left hand side of the mount
-					 * point using the element of the union that we entered on.
-					 * To do this, find the element that has a from name of
-					 * c->name->s.
-					 */
-					if(strcmp(t->head->from->name->s, name->s) != 0)
-						continue;
-					nc = t->head->from;
-					incref(&nc->r);
-					cclose(c);
-					c = nc;
-					break;
-				}
-			}
-		}
-	}
-	poperror();
-	runlock(&pg->ns);
-	return c;
+	nc = name->mtpt[name->mlen-1];
+	name->mtpt[name->mlen-1] = nil;
+	if(nc == nil)
+		return c;	/* no mount crossed at this element — the device's parent is correct */
+	cclose(c);
+	return nc;		/* inherit the slot's reference */
 }
 
 /*
@@ -718,7 +877,7 @@ static char Edoesnotexist[] = "does not exist";
 int
 walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 {
-	int dev, dotdot, i, n, nhave, ntry, type;
+	int dev, didmount, dotdot, i, mflag, n, nhave, ntry, type;
 	Chan *c, *nc;
 	Cname *cname;
 	Mount *f;
@@ -732,16 +891,40 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 	mh = nil;
 
 	/*
+	 * Pin the origin of this walk (INFR-407). A channel that has never been
+	 * walked has an empty stack; slot 0 records where it started, and is
+	 * never popped, so ".." cannot rise above it. For an absolute path that
+	 * origin is the namespace root. For a relative walk the starting channel
+	 * already carries the stack it accumulated when it was walked to, so
+	 * mlen is non-zero and cwd keeps its real parents.
+	 */
+	if(cname->mlen == 0){
+		if(cname->r.ref > 1){
+			Cname *pinned;
+
+			pinned = newcname(cname->s);
+			cnameclose(cname);
+			cname = pinned;
+		}
+		cnamepush(cname, c);
+	}
+
+	/*
 	 * While we haven't gotten all the way down the path:
 	 *    1. step through a mount point, if any
 	 *    2. send a walk request for initial dotdot or initial prefix without dotdot
 	 *    3. move to the first mountpoint along the way.
 	 *    4. repeat.
 	 *
-	 * An invariant is that each time through the loop, c is on the undomount
-	 * side of the mount point, and c's name is cname.
-	 */
+	 * Each time through the loop:
+	 *
+	 *	If didmount==0, c is on the undomount side of the mount point.
+	 *	If didmount==1, c is on the domount side of the mount point.
+	 * 	Either way, c's full path is path.
+  	 */
+	didmount = 0;
 	for(nhave=0; nhave<nnames; nhave+=n){
+		mflag = c->mflag;
 		if((c->qid.type&QTDIR)==0){
 			if(nerror)
 				*nerror = nhave;
@@ -767,8 +950,10 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 			}
 		}
 
-		if(!dotdot && !nomount)
-			domount(&c, &mh);
+		if(!dotdot && !nomount && !didmount)
+			if(domount(&c, &mh, &cname)){
+				mflag = mheadflag(mh);
+			}
 
 		type = c->type;
 		dev = c->dev;
@@ -783,11 +968,12 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				for(f = mh->mount->next; f; f = f->next)
 					if((wq = devtab[f->to->type]->walk(f->to, nil, names+nhave, ntry)) != nil)
 						break;
-				runlock(&mh->lock);
 				if(f != nil){
 					type = f->to->type;
 					dev = f->to->dev;
+					mflag = f->mflag;
 				}
+				runlock(&mh->lock);
 			}
 			if(wq == nil){
 				cclose(c);
@@ -799,21 +985,30 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				return -1;
 			}
 		}
+		if(wq->clone != nil)
+			wq->clone->mflag = mflag;
 
 		nmh = nil;
+		didmount = 0;
 		if(dotdot) {
 			assert(wq->nqid == 1);
 			assert(wq->clone != nil);
 
 			cname = addelem(cname, "..");
 			nc = undomount(wq->clone, cname);
+			nmh = nil;
 			n = 1;
 		} else {
 			nc = nil;
-			if(!nomount)
-				for(i=0; i<wq->nqid && i<ntry-1; i++)
-					if(findmount(&nc, &nmh, type, dev, wq->qid[i]))
+			nmh = nil;
+			if(!nomount){
+				for(i=0; i<wq->nqid && i<ntry-1; i++){
+					if(findmount(&nc, &nmh, type, dev, wq->qid[i])){
+						didmount = 1;
 						break;
+					}
+				}
+			}
 			if(nc == nil){	/* no mount points along path */
 				if(wq->clone == nil){
 					cclose(c);
@@ -835,14 +1030,31 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 				n = wq->nqid;
 				nc = wq->clone;
 			}else{		/* stopped early, at a mount point */
+				didmount = 1;
+				nc = cunique(nc);
+				nc->mflag = mheadflag(nmh);
 				if(wq->clone != nil){
 					cclose(wq->clone);
 					wq->clone = nil;
 				}
 				n = i+1;
 			}
-			for(i=0; i<n; i++)
+			for(i=0; i<n; i++){
 				cname = addelem(cname, names[nhave+i]);
+				/*
+				 * One stack slot per element. Only the element a mount
+				 * was found at records a crossing; the rest are nil,
+				 * which means the device's own ".." is already correct
+				 * (we are inside a bound tree, not at its boundary).
+				 * nmh->from is the LEFT side of the mount — for a Veltro
+				 * shadow that is the placeholder inside the shadow, which
+				 * is exactly where ".." must land.
+				 */
+				if(i == n-1 && nmh != nil)
+					cnamepush(cname, nmh->from);
+				else
+					cnamepush(cname, nil);
+			}
 		}
 		cclose(c);
 		c = nc;
@@ -886,8 +1098,9 @@ createdir(Chan *c, Mhead *m)
 		nexterror();
 	}
 	for(f = m->mount; f; f = f->next) {
-		if(f->mflag&MCREATE) {
+		if((f->mflag&(MCREATE|MREADONLY)) == MCREATE) {
 			nc = cclone(f->to);
+			nc->mflag = f->mflag;
 			runlock(&m->lock);
 			poperror();
 			cclose(c);
@@ -942,11 +1155,13 @@ growparse(volatile Elemlist *e)
 
 	if(e->nelems % Delta == 0){
 		new = smalloc((e->nelems+Delta) * sizeof(char*));
-		memmove(new, e->elems, e->nelems*sizeof(char*));
+		if(e->nelems > 0)
+			memmove(new, e->elems, e->nelems*sizeof(char*));
 		free(e->elems);
 		e->elems = new;
 		inew = smalloc((e->nelems+Delta+1) * sizeof(int));
-		memmove(inew, e->off, e->nelems*sizeof(int));
+		if(e->nelems > 0)
+			memmove(inew, e->off, e->nelems*sizeof(int));
 		free(e->off);
 		e->off = inew;
 	}
@@ -1045,14 +1260,16 @@ memrchr(void *va, int c, long n)
  * domount() on behalf of a volatile Chan*, for the same reason and by
  * the same means as walkc below.
  */
-static void
-domountc(Chan *volatile *cp, Mhead **mp)
+static int
+domountc(Chan *volatile *cp, Mhead **mp, Cname **name)
 {
 	Chan *t;
+	int r;
 
 	t = *cp;
-	domount(&t, mp);
+	r = domount(&t, mp, name);
 	*cp = t;
+	return r;
 }
 
 static int
@@ -1124,6 +1341,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 	volatile Elemlist e;
 	Rune r;
 	Mhead *m;
+	Pgrp *pg;
 	char *createerr, tmperrbuf[ERRMAX];
 	char *name;
 
@@ -1138,10 +1356,13 @@ namec(char *aname, int amode, int omode, ulong perm)
 	 * evaluate starting there.
 	 */
 	nomount = 0;
+	pg = up->env->pgrp;
 	switch(name[0]){
 	case '/':
-		c = up->env->pgrp->slash;
+		rlock(&pg->ns);
+		c = pg->slash;
 		incref(&c->r);
+		runlock(&pg->ns);
 		break;
 	
 	case '#':
@@ -1165,7 +1386,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		 *	D private secure sockets name space
 		 *	a private TLS name space
 		 */
-		if(up->env->pgrp->nodevs &&
+		if(pg->nodevs &&
 		   (utfrune("|esDa", r) == nil || r == 's' && up->genbuf[n]!='\0'))
 			error(Enoattach);
 		t = devno(r, 1);
@@ -1175,8 +1396,10 @@ namec(char *aname, int amode, int omode, ulong perm)
 		break;
 
 	default:
-		c = up->env->pgrp->dot;
+		rlock(&pg->ns);
+		c = pg->dot;
 		incref(&c->r);
+		runlock(&pg->ns);
 		break;
 	}
 	prefix = name - aname;
@@ -1245,14 +1468,20 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 	switch(amode){
 	case Aaccess:
-		if(!nomount)
-			domountc(&c, nil);
+		m = nil;
+		if(!nomount && domountc(&c, &m, nil)){
+			c = cunique(c);
+			c->mflag = mheadflag(m);
+		}
+		putmhead(m);
 		break;
 
 	case Abind:
 		m = nil;
-		if(!nomount)
-			domountc(&c, &m);
+		if(!nomount && domountc(&c, &m, nil)){
+			c = cunique(c);
+			c->mflag = mheadflag(m);
+		}
 		if(c->umh != nil)
 			putmhead(c->umh);
 		c->umh = m;
@@ -1266,10 +1495,12 @@ namec(char *aname, int amode, int omode, ulong perm)
 		incref(&cname->r);
 		m = nil;
 		if(!nomount)
-			domountc(&c, &m);
+			domountc(&c, &m, &cname);
 
 		/* our own copy to open or remove */
 		c = cunique(c);
+		if(m != nil)
+			c->mflag = mheadflag(m);
 
 		/* now it's our copy anyway, we can put the name back */
 		cnameclose(c->name);
@@ -1277,11 +1508,19 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 		switch(amode){
 		case Aremove:
+			if(c->mflag & MREADONLY){
+				putmhead(m);
+				error(Eperm);
+			}
 			putmhead(m);
 			break;
 
 		case Aopen:
 		case Acreate:
+			if((c->mflag & MREADONLY) && mutatingmode(omode)){
+				putmhead(m);
+				error(Eperm);
+			}
 if(c->umh != nil){
 	print("cunique umh\n");
 	putmhead(c->umh);
@@ -1398,6 +1637,8 @@ if(c->umh != nil){
 			 * if findmount gave us a new Chan.
 			 */
 			cnew = cunique(cnew);
+			if(cnew->mflag & MREADONLY)
+				error(Eperm);
 			cnameclose(cnew->name);
 			cnew->name = c->name;
 			incref(&cnew->name->r);

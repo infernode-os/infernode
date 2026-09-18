@@ -104,7 +104,7 @@ pgrpcpy(Pgrp *to, Pgrp *from)
 				runlock(&f->lock);
 				nexterror();
 			}
-			mh = malloc(sizeof(Mhead));
+			mh = mallocz(sizeof(Mhead), 1);
 			if(mh == nil)
 				error(Enomem);
 			mh->from = f->from;
@@ -218,7 +218,9 @@ newmount(Mhead *mh, Chan *to, int flag, char *spec)
 {
 	Mount *m;
 
-	m = smalloc(sizeof(Mount));
+	m = mallocz(sizeof(Mount), 1);
+	if(m == nil)
+		error(Enomem);
 	m->to = to;
 	m->head = mh;
 	incref(&to->r);

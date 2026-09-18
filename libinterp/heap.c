@@ -441,6 +441,7 @@ heapz(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -462,6 +463,7 @@ heap(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -502,6 +504,7 @@ initarray(Type *t, Array *a)
 	int i;
 	uchar *p;
 
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	if(t->np == 0)
 		return;
@@ -530,6 +533,7 @@ arraycpy(Array *sa)
 	Tarray.ref++;
 	da = H2D(Array*, dh);
 	da->t = sa->t;
+	if(da->t->ref <= 0 || da->t->ref > 50000000) panic("heap: Type %#p ref %d in use (array) -- freed type?", da->t, da->t->ref);
 	da->t->ref++;
 	da->len = sa->len;
 	da->root = H;

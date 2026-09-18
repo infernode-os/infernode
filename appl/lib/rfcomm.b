@@ -303,18 +303,18 @@ sabm(m: ref Mux, dlci: int): list of ref Ev
 		return ctlframe(m, 0, UA, 0) :: nil;
 	}
 	if(!m.up)
-		return ctlframe(m, dlci, DM, 0) :: nil;
+		return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "multiplexer not up") :: nil;
 	channel := dlci >> 1;
 	d := m.find(dlci);
 	if(d == nil){
 		if(!accepts(m, channel))
-			return ctlframe(m, dlci, DM, 0) :: nil;
+			return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "channel not offered") :: nil;
 		# no PN first: TS 07.10 defaults, credits as the spec says (RFCOMM 6.5.2)
 		d = ref Dlc(dlci, channel, Waitua, Defframe, 0, Initcredits, 0, 0, 0, nil);
 		m.dlcs = d :: m.dlcs;
 	}
 	if(d.initiator)
-		return ctlframe(m, dlci, DM, 0) :: nil;	# a collision on our own DLCI; refuse
+		return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "collision on our own DLCI") :: nil;
 	d.state = Open;
 	# UA, then our MSC command: the port is open at our end
 	evs := ctlframe(m, dlci, UA, 0) :: mcc(m, Tmsc, 1, mscbody(d.dlci)) :: nil;
@@ -445,7 +445,7 @@ control(m: ref Mux, data: array of byte): list of ref Ev
 			# size we cannot take is answered with ours, the smaller.
 			if(d == nil){
 				if(!accepts(m, dlci >> 1))
-					return ctlframe(m, dlci, DM, 0) :: nil;
+					return ctlframe(m, dlci, DM, 0) :: ref Ev.Refused(dlci, "channel not offered") :: nil;
 				d = ref Dlc(dlci, dlci >> 1, Waitua, Defframe, 0, Initcredits, 0, 0, 0, nil);
 				m.dlcs = d :: m.dlcs;
 			}

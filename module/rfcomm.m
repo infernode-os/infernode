@@ -57,6 +57,9 @@ Rfcomm: module
 			data:	array of byte;
 		Muxdown =>
 			reason:	string;		# the multiplexer is gone; the L2CAP channel should follow
+		Refused =>
+			dlci:	int;		# a peer's SABM or PN answered with DM: the channel is not offered, or the multiplexer is not up
+			reason:	string;
 		}
 	};
 

@@ -84,6 +84,16 @@ def main():
     n = out.count("Connected")
     b.check(n >= 5 and "Can't" not in out, "L2CAP connect/disconnect storm on the PSM, 20 s: %d connections, none refused" % n, out.strip()[-120:])
 
+    # the storm's last ACL idles out on its own timer; an SDP connect that
+    # lands inside that teardown times out (seen once in three runs) and
+    # says nothing about SDP. Wait for the board to report no links first.
+    for _ in range(12):
+        st = b.sh("cat /net/bt/status", wait=0.8)
+        m = re.search(r"links (\d+)", st)
+        if m is not None and int(m.group(1)) == 0:
+            break
+        time.sleep(1)
+
     print("== SDP")
     rc, out = run(["sdptool", "-i", a.hci, "browse", bd], timeout=60)
     b.check("Serial Port" in out and "RFCOMM" in out, "SDP/SR/SA browse: Serial Port service with an RFCOMM channel", out.strip()[-160:])
@@ -106,9 +116,21 @@ def main():
     b.check(rc == 0 and "Connected" in out, "SPP data from the board to the tester, connection closed by the board's side (#632)", out.strip()[-120:])
     b.kill("Listen")
     b.sh("listen -A 'bt!*!spp' {cat >> /tmp/rfin} &", wait=0.8)
+    # rctest reconnects faster than BlueZ tears its previous session down,
+    # so the tester's own stack answers most attempts with EBUSY and, once a
+    # cycle, ECONNREFUSED/ECONNRESET of its own making -- 47 of each in 50
+    # cycles with the board's event log showing no DM and no channel dropped
+    # (2026-09-18). So the board is asked directly: its status counts the
+    # SABMs and PNs it answered with DM, and that count must not move.
+    def refused():
+        m = re.search(r"rfcomm refused (\d+)", b.sh("cat /net/bt/status", wait=0.8))
+        return int(m.group(1)) if m else -1
+    r0 = refused()
     rc, out = run("timeout 20 rctest -i %s -c -P 1 %s" % (a.hci, bd), timeout=40)
     n = out.count("Connected")
-    b.check(n >= 5 and "Can't" not in out, "RFCOMM connect/disconnect storm on channel 1, 20 s: %d connections, none refused" % n, out.strip()[-120:])
+    r1 = refused()
+    b.check(n >= 5 and r0 >= 0 and r1 == r0, "RFCOMM connect/disconnect storm on channel 1, 20 s: %d connections, the board refused none" % n,
+            "board refusals %s -> %s; tester-side: %d busy, %d refused, %d reset" % (r0, r1, out.count("resource busy"), out.count("refused"), out.count("reset by peer")))
     rc, out = run(["rctest", "-i", a.hci, "-n", "-P", "7", bd], timeout=30)
     b.check(rc != 0 or "Connected" not in out, "RFCOMM a channel not offered (7) is refused", out.strip()[-120:])
 
@@ -125,8 +147,15 @@ def main():
 
     b.kill("Listen")
     b.sh("rm -f /tmp/l2in /tmp/rfin", wait=0.5)
-    time.sleep(8)	# the last ACL of the storm idles out on its own timer
-    st = b.sh("cat /net/bt/status", wait=1.0)
+    # the last ACL of the storm idles out on its own timer, which starts
+    # only when the tester has closed its side; rctest cut off by timeout
+    # can leave that to BlueZ's own idle. Poll rather than guess.
+    for _ in range(25):
+        st = b.sh("cat /net/bt/status", wait=1.0)
+        m = re.search(r"links (\d+)", st)
+        if m is not None and int(m.group(1)) == 0:
+            break
+        time.sleep(1)
     m = re.search(r"links (\d+)", st)
     b.check(m is not None and int(m.group(1)) == 0, "no links left open after the run", st.strip()[:100])
     m = re.search(r"conversations (\d+)", st)

@@ -155,6 +155,17 @@ int
 consuartputc(Queue *q, int c)
 {
 	USED(q);
+	/*
+	 * Before consinit() there is no kbdq to produce into. A card-booted
+	 * kernel never receives this early, but a kernel loaded over the
+	 * wire inherits the loader's PL011 with the tail of the handshake
+	 * in its FIFO, and the first spllo() delivered it straight into
+	 * qproduce(nil) -- ilock on address 0, and the loader's whole
+	 * point, a bad kernel without a card pull, was lost to it (#639).
+	 * Nothing typed before the console exists is worth keeping.
+	 */
+	if(kbdq == nil)
+		return 0;
 	if(c == '\r')
 		c = '\n';
 	if(c == '\n')

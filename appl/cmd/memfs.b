@@ -470,9 +470,14 @@ writefile(mf: ref Memfile, offset: int, data: array of byte): string
 
 filedata(mf: ref Memfile, offset, n: int): array of byte
 {
+	# A read at or past the end is empty, not negative. Two clients
+	# racing on one file -- one reading while the other truncates or
+	# removes it -- read past mf.length, and array[n] of a negative n
+	# killed the whole server ("negative array size"), taking /tmp
+	# with it for every process on the machine.
 	if (offset +n > mf.length)
 		n = mf.length - offset;
-	if (n == 0)
+	if (n <= 0)
 		return nil;
 
 	data := array [n] of byte;

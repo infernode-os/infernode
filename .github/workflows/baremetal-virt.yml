@@ -112,12 +112,14 @@ jobs:
 
     # dis/ is a build product. The kernel's recovery root takes some
     # fifty modules from it, and the desktop check copies all of it onto
-    # a card. (tests/ is not built: nothing here runs it.)
+    # a card. All four directories, tests/ included: the root manifest
+    # carries dis/tests/exception_test.dis, and this job's first run
+    # found that out by leaving tests/ out.
     - name: Build the Dis tree
       run: |
         set -e
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
-        for d in appl appl/mpeg appl/veltro; do
+        for d in appl appl/mpeg appl/veltro tests; do
           (cd "$d" && mk install) > "/tmp/dis-$(basename "$d").log" 2>&1 || {
             grep -E '\.b:[0-9]+:' "/tmp/dis-$(basename "$d").log" | grep -v 'warning:' | head -40
             echo "::error::mk install failed in $d"; exit 1; }
@@ -151,6 +153,12 @@ jobs:
         failed=$(echo "$summary" | sed -E 's/.*Failed: ([0-9]+).*/\1/')
         skipped=$(echo "$summary" | sed -E 's/.*Skipped: ([0-9]+).*/\1/')
         grep -E '^(FAIL|SKIP)' "$log.plain" || true
+        if [ "$HARNESS_STATUS" != "0" ] && [ -f "$RUNNER_TEMP/bm/cc.log" ]; then
+          # a build that fails outside the compiler -- mkrootfs.py not
+          # finding a module, limbo refusing runt.m -- leaves no "error:"
+          # line for the harness to quote, so show the end of the log
+          echo "--- the end of cc.log:"; tail -20 "$RUNNER_TEMP/bm/cc.log"
+        fi
         [ "$HARNESS_STATUS" = "0" ] || { echo "::error::the harness exited $HARNESS_STATUS"; exit 1; }
         [ "$failed" = "0" ]   || { echo "::error::$failed checks failed"; exit 1; }
         [ "$skipped" = "0" ]  || { echo "::error::$skipped checks were skipped; on this runner nothing should be"; exit 1; }

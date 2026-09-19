@@ -645,13 +645,13 @@ SBEOF
         # -mgeneral-regs-only so no interrupt path can dirty FP state.
         if [[ "$(basename "$f")" == "devprog.c" ]]; then
             "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything \
-                 -Werror=missing-declarations -Werror=incompatible-pointer-types \
+                 -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
                  -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
             objs+=("$o")
             continue
         fi
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
-             -Werror=missing-declarations -Werror=incompatible-pointer-types \
+             -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
     done
@@ -668,7 +668,7 @@ SBEOF
         [[ -e "$f" ]] || continue
         o="$BUILD/osip-$(basename "$f").o"
         "$CC" "${CFLAGS[@]}" -I"$ROOT/os/ip" -I"$BUILD" -Wno-everything \
-             -Werror=missing-declarations -Werror=incompatible-pointer-types \
+             -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         objs+=("$o")
     done
@@ -875,7 +875,7 @@ SBEOF
         [[ -e "$f" ]] || continue
         o="$BUILD/libkern-$(basename "$f").o"
         "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything \
-             -Werror=missing-declarations -Werror=incompatible-pointer-types \
+             -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
              -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
@@ -1244,7 +1244,7 @@ IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -DINFERNO_NATIVE
 # warning was in cc.log all along; this makes it the build's business.
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
         -O2 -fno-omit-frame-pointer -Wall -Wextra
-        -Werror=missing-declarations -Werror=incompatible-pointer-types -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 }
 

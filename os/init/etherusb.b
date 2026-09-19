@@ -469,6 +469,19 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 	dev = hd argv;
 
+	#
+	# -k: the kernel already has the link. A machine whose Ethernet is
+	# a driver in the kernel (QEMU's virt, with a virtio card; see
+	# os/virt/ethervirtio.c) has no USB device to bring up and nothing
+	# to hand over -- #l's ether0 is live from boot. What is left is
+	# the half of this program that was never about USB: put the
+	# interface at /net/ether0 and configure it.
+	#
+	if(dev == "-k"){
+		kernellink();
+		return;
+	}
+
 	ctl = sys->open("/usb/usb/" + dev + "/ctl", Sys->ORDWR);
 	#
 	# The enumerator that found this device may still be letting go of
@@ -1051,6 +1064,60 @@ mountproc(fd: ref Sys->FD)
 # the network rather than from this file, and the QEMU pair survives only
 # as the fallback for the one network that has no DHCP server.
 #
+#
+# The interface is the kernel's already: take its address from the
+# netif, which is where DHCP's client identifier comes from, bind it
+# over the mount-point stub exactly as the hand-over path does, and
+# configure it.
+#
+kernellink()
+{
+	fd := sys->open("#l/ether0/addr", Sys->OREAD);
+	if(fd == nil){
+		sys->print("etherusb: -k: no #l/ether0/addr: %r\n");
+		return;
+	}
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	fd = nil;
+	if(n < 12){
+		sys->print("etherusb: -k: short address from #l/ether0/addr\n");
+		return;
+	}
+	a := string buf[0:12];
+	nz := 0;
+	for(i := 0; i < 6; i++){
+		v := hexval(a[2*i])*16 + hexval(a[2*i+1]);
+		if(v < 0){
+			sys->print("etherusb: -k: bad address %s\n", a);
+			return;
+		}
+		mac[i] = byte v;
+		nz |= v;
+	}
+	if(nz == 0){
+		sys->print("etherusb: -k: ether0 has no address; is there a kernel driver?\n");
+		return;
+	}
+	if(sys->bind("#l/ether0", "/net/ether0", Sys->MREPL) < 0){
+		sys->print("etherusb: cannot bind #l/ether0: %r\n");
+		return;
+	}
+	sys->print("etherusb: serving /net/ether0 (kernel link driver, %s)\n", a);
+	netconfig();
+}
+
+hexval(c: int): int
+{
+	if(c >= '0' && c <= '9')
+		return c - '0';
+	if(c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -16r100;
+}
+
 netconfig()
 {
 	#

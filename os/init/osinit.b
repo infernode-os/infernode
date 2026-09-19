@@ -320,6 +320,12 @@ init()
 	#
 	touchstart();
 
+	#
+	# Ethernet the kernel drives itself, where there is such a thing.
+	# Before the bus walk, which on such a machine finds no bus.
+	#
+	kernelether();
+
 	spawn usbprobe();
 
 	#
@@ -719,6 +725,33 @@ touchstart()
 		return;
 	}
 	spawn t->init(nil, "touch" :: nil);
+}
+
+#
+# On the board, wired Ethernet is a USB device: the bus walk finds it,
+# etherusb brings it up and hands its endpoints to #l. A machine whose
+# Ethernet is a kernel driver (os/virt) has an ether0 that is live from
+# boot, and the tell is its address: the netif's addr file reads as
+# zeros until something has claimed instance 0, which on the board is
+# etherusb's bind, some seconds from now. So a non-zero address here
+# means there is nothing to bring up and only the configuring is left,
+# which is etherusb's -k.
+#
+kernelether()
+{
+	fd := sys->open("#l/ether0/addr", Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 12)
+		return;
+	for(i := 0; i < 12; i++)
+		if(int buf[i] != '0'){
+			sys->print("init: ether0 is a kernel link driver (%s)\n", string buf[0:12]);
+			runstart("/dis/etherusb.dis", "-k", -1, 0, 0);
+			return;
+		}
 }
 
 usbprobe()

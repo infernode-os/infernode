@@ -4510,6 +4510,34 @@ PYEOF
         fail "virt: desktop -- '$desk'"
     fi
     vrefute "nothing panics under the desktop"          "panic:"
+
+    #
+    # And the same card with no screen: headless, which is a way of
+    # running the machine and not a fault. boot-baremetal.sh asks the
+    # draw device whether there is a display, and with none it must say
+    # so ONCE and start nothing -- not retry logon three times and advise
+    # fixing it, and not (with skiplogon, as here) start the desktop's
+    # servers and then announce that the desktop has exited.
+    #
+    # This check has a twin above. The first version of that test asked
+    # the question with cat, which fails on a machine WITH a screen, and
+    # every machine came up headless; "Lucifer draws the desktop" is what
+    # caught it. Between them the question is held from both sides.
+    #
+    cp "$VCARD" "$BUILD/$PLAT-card-headless.img"
+    OUT="$(timeout -s KILL 150 "$QEMU" $VIRTARGS \
+        -kernel "$BUILD/$PLAT-kernel.img" -display none -serial stdio \
+        -drive "file=$BUILD/$PLAT-card-headless.img,if=none,format=raw,id=sd" -device virtio-blk-device,drive=sd \
+        -netdev user,id=n0 -device virtio-net-device,netdev=n0 < /dev/null 2>/dev/null)"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-headless.txt"
+    rm -f "$BUILD/$PLAT-card-headless.img"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    vcheck "headless: with no screen the boot script says so"  "boot: no display -- running headless"
+    vrefute "headless: logon is not tried"                  "wm/logon failed"
+    vrefute "headless: the desktop is not started"          "lucifer: INIT"
+    vrefute "headless: nothing claims a desktop exited"     "the desktop has exited"
+    vcheck "headless: the machine is up -- shell and network" "etherusb: 10.0.2.15 mask"
+    vrefute "headless: nothing panics"                      "panic:"
 else
     fail "virt: mkcard failed: $(tail -2 "$BUILD/mkcard.txt" | tr '\n' ' ')"
 fi

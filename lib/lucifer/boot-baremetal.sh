@@ -105,6 +105,44 @@ if {~ $narrowed 0} {
 # startup, and logon's first act is to attach the draw device.
 sleep 3
 
+#
+# Is there a screen? If not, this machine is HEADLESS, and that is a
+# way of running it, not a fault -- it is how the port ran for its
+# first weeks, and how a board in a cupboard runs for ever. The serial
+# console is already a shell with the full namespace, the network is up
+# or coming up, the network console listens if the card asked for one;
+# none of that is this script's doing and none of it needs a desktop.
+#
+# It has to be asked here, of the draw device, because nothing else
+# knows. Without the question the two paths below both go wrong in a
+# way that reads as breakage: wm/logon dies three times with "no
+# display" and the advice printed is to fix logon or create skiplogon;
+# and WITH skiplogon, luciuisrv and lucifer are started, fail, and the
+# machine announces that "the desktop has exited" and explains about a
+# Quit from a panel that was never there.
+#
+# The question is the one logon and lucifer would ask first: open
+# /dev/draw/new. With no framebuffer the draw device refuses it. With
+# one, the read allocates a client that the close frees, and the text
+# console gives up the screen a moment before the login form would
+# have taken it anyway. (#i is bound here because nothing has bound it
+# yet -- see kmain -- and libdraw would bind it in the same place.)
+#
+# Two details, both learned by getting them wrong. ONE read of 144
+# bytes (twelve fields of twelve), not cat: `new` is not a file that
+# ends, cat's second read fails, and the first version of this test
+# declared a machine with a perfectly good screen headless. And in a
+# subshell, because the open is a REDIRECTION and it is the open that
+# fails on a headless machine: a failed redirection can end a
+# non-interactive shell where it stands, and the shell it must not end
+# is this one, before it has said why.
+#
+bind -a '#i' /dev >[2] /dev/null
+if {! sh -c 'read 144 < /dev/draw/new > /dev/null >[2] /dev/null'} {
+	echo 'boot: no display -- running headless; not starting the desktop. This console is the machine''s shell.'
+	exit
+}
+
 skip=0
 if {ftest -f /n/dos/skiplogon} {skip=1}
 if {~ $skiplogon 1} {skip=1}
@@ -118,7 +156,8 @@ if {~ $skiplogon 1} {skip=1}
 #			Deliberate, so the desktop starts -- but said
 #			so here, because from the panel it looks the
 #			same as a login and it is not one.
-#	anything else	it died: no display, no keyboard, no form. Retry,
+#	anything else	it died: no keyboard, no form. (No display never
+#			gets this far: see the headless test above.) Retry,
 #			and after three tries say so and STOP. A crash
 #			is not a login, and the serial console is still
 #			a shell; skiplogon exists for the deliberate

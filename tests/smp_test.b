@@ -481,6 +481,188 @@ testScRefusals(t: ref T)
 	t.asserteq(int (sendof(hd evs))[0], Smp->Cconfirm, "and a peer's offer is answered with a legacy confirm");
 }
 
+# Both roles from the library, one fed to the other. The initiator has
+# been checked against a responder scripted from the specification, so
+# a responder that pairs with it is checked too -- and the two of them
+# are what the board and a phone, or two boards, will actually run.
+Side: adt {
+	p:	ref Pairing;
+	key:	array of byte;		# from Ev.Encrypt
+	digits:	int;			# from Ev.Confirm, -1 if none
+	keys:	ref Smp->Keys;		# from Ev.Paired
+	failed:	int;			# the reason, -1 if it has not
+};
+
+newside(p: ref Pairing): ref Side
+{
+	return ref Side(p, nil, -1, nil, -1);
+}
+
+# what came out of one end: events noted, PDUs returned for the other
+take(s: ref Side, evs: list of ref Ev): list of array of byte
+{
+	out: list of array of byte;
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Send =>		out = e.pdu :: out;
+		Encrypt =>	s.key = e.key;
+		Confirm =>	s.digits = e.value;
+		Paired =>	s.keys = e.keys;
+		Failed =>	s.failed = e.reason;
+		}
+	r: list of array of byte;
+	for(; out != nil; out = tl out)
+		r = hd out :: r;
+	return r;
+}
+
+# carry PDUs between the two until neither has more to say
+shuttle(a, b: ref Side, toa, tob: list of array of byte)
+{
+	for(round := 0; round < 40 && (toa != nil || tob != nil); round++){
+		na, nb: list of array of byte;
+		for(; tob != nil; tob = tl tob)
+			na = catb(na, take(b, b.p.recv(hd tob)));
+		for(; toa != nil; toa = tl toa)
+			nb = catb(nb, take(a, a.p.recv(hd toa)));
+		toa = na;
+		tob = nb;
+	}
+}
+
+catb(l, m: list of array of byte): list of array of byte
+{
+	if(l == nil)
+		return m;
+	return hd l :: catb(tl l, m);
+}
+
+bothends(io: int, sc: int): (ref Side, ref Side)
+{
+	ia := le("A1A2A3A4A5A6");
+	ra := le("C1C2C3C4C5C6");
+	seed := array[26] of byte;
+	for(i := 0; i < len seed; i++)
+		seed[i] = byte (16r80 + i);
+	ini := Pairing.new(0, ia, 1, ra, le("d5cb8454d177733effffb2ec712baeab"));
+	rsp := Pairing.respond(0, ia, 1, ra, le("a6e8e7cc25a75f6e216583f7ff3dc4cf"), seed);
+	ini.io = rsp.io = io;
+	rsp.offersc = sc;
+	# the debug keys, for speed: key generation is a second each
+	ini.priv = be(PA); ini.pkx = le(PAX); ini.pky = le(PAY);
+	rsp.priv = be(PB); rsp.pkx = le(PBX); rsp.pky = le(PBY);
+	return (newside(ini), newside(rsp));
+}
+
+testBothLegacy(t: ref T)
+{
+	(a, b) := bothends(Smp->IOnone, 0);
+	shuttle(a, b, nil, take(a, a.p.start()));
+	t.assert(!a.p.sc && !b.p.sc, "a responder that does not offer Secure Connections gets a legacy pairing");
+	t.assert(a.key != nil && b.key != nil, "both ends reach a key");
+	t.assertseq(hex(a.key), hex(b.key), "the same STK at both");
+	t.assertseq(hex(a.key), hex(smp->s1(array[16] of { * => byte 0 }, b.p.srand, a.p.mrand)), "which is s1(TK, Srand, Mrand)");
+	# the link encrypts; the responder gives out the LTK it made
+	tob := take(a, a.p.encrypted());
+	shuttle(a, b, take(b, b.p.encrypted()), tob);
+	if(a.keys == nil || b.keys == nil)
+		t.fatal("the pairing did not finish at both ends");
+	t.assertseq(hex(a.keys.ltk), hex(b.keys.ltk), "the initiator holds the LTK the responder made");
+	t.asserteq(a.keys.ediv, b.keys.ediv, "with its EDIV");
+	t.assertseq(hex(a.keys.rand), hex(b.keys.rand), "and Rand, which the responder will be asked for by");
+	t.assert(a.keys.ediv != 0, "a legacy LTK is found by a nonzero EDIV");
+	t.assert(!a.keys.sc && !b.keys.sc, "and neither end calls it a Secure Connections key");
+	t.asserteq(b.p.state, Smp->Done, "the responder is done");
+}
+
+testBothSc(t: ref T)
+{
+	(a, b) := bothends(Smp->IOnone, 1);
+	shuttle(a, b, nil, take(a, a.p.start()));
+	t.assert(a.p.sc && b.p.sc, "both offered it: Secure Connections");
+	t.asserteq(a.digits, -1, "with nothing to show, nothing is asked of anyone");
+	t.assert(a.key != nil && b.key != nil, "both ends reach a key");
+	t.assertseq(hex(a.key), hex(b.key), "the same LTK, which neither sent");
+	tob := take(a, a.p.encrypted());
+	shuttle(a, b, take(b, b.p.encrypted()), tob);
+	if(a.keys == nil || b.keys == nil)
+		t.fatal("the pairing did not finish at both ends");
+	t.assert(a.keys.sc && b.keys.sc, "both keep it as a Secure Connections key");
+	t.assertseq(hex(a.keys.ltk), hex(b.keys.ltk), "the same one");
+	t.asserteq(b.keys.ediv, 0, "with EDIV 0");
+}
+
+testBothNumeric(t: ref T)
+{
+	# the initiator's user is quicker: its check waits at the responder
+	(a, b) := bothends(Smp->IOdisplayyesno, 1);
+	shuttle(a, b, nil, take(a, a.p.start()));
+	t.assert(a.digits >= 0 && b.digits >= 0, "both ends have six digits to show");
+	t.asserteq(a.digits, b.digits, "the same six digits");
+	t.assert(a.key == nil && b.key == nil, "and no key until somebody has looked");
+	shuttle(a, b, nil, take(a, a.p.confirm(1)));
+	t.assert(b.key == nil, "the initiator's yes alone does not finish it");
+	shuttle(a, b, take(b, b.p.confirm(1)), nil);
+	t.assert(a.key != nil && b.key != nil, "both yes: both ends reach a key");
+	t.assertseq(hex(a.key), hex(b.key), "the same one");
+
+	# the responder's user is quicker
+	(a, b) = bothends(Smp->IOdisplayyesno, 1);
+	shuttle(a, b, nil, take(a, a.p.start()));
+	shuttle(a, b, take(b, b.p.confirm(1)), nil);
+	t.assert(a.key == nil && b.key == nil, "the responder's yes alone does not finish it either");
+	shuttle(a, b, nil, take(a, a.p.confirm(1)));
+	t.assertseq(hex(a.key), hex(b.key), "then the initiator's does");
+
+	# the responder's user says the digits differ
+	(a, b) = bothends(Smp->IOdisplayyesno, 1);
+	shuttle(a, b, nil, take(a, a.p.start()));
+	shuttle(a, b, take(b, b.p.confirm(0)), nil);
+	t.asserteq(b.failed, Smp->Fnumcmp, "no at the responder fails it there");
+	t.asserteq(a.failed, Smp->Fnumcmp, "and the initiator is told why");
+	t.assert(a.key == nil && b.key == nil, "with no key at either end");
+}
+
+testResponderRefusals(t: ref T)
+{
+	ia := le("A1A2A3A4A5A6");
+	ra := le("C1C2C3C4C5C6");
+	seed := array[26] of { * => byte 1 };
+	rnd := le("a6e8e7cc25a75f6e216583f7ff3dc4cf");
+
+	p := Pairing.respond(0, ia, 1, ra, rnd, seed);
+	t.asserteq(reason(p.recv(array[] of { byte Smp->Cpairreq, byte Smp->IOnone, byte 0, byte Smp->Abonding, byte 6, byte 0, byte 0 })), Smp->Fenckeysize, "a key shorter than seven bytes is refused");
+
+	p = Pairing.respond(0, ia, 1, ra, rnd, seed);
+	t.asserteq(reason(p.recv(array[] of { byte Smp->Cconfirm, byte 0 })), Smp->Finvalidparams, "anything before a Pairing Request is refused");
+
+	# an initiator whose confirm does not match its random
+	p = Pairing.respond(0, ia, 1, ra, rnd, seed);
+	p.offersc = 0;
+	p.recv(array[] of { byte Smp->Cpairreq, byte Smp->IOnone, byte 0, byte Smp->Abonding, byte 16, byte 0, byte Smp->Kenc });
+	p.recv(withcode(Smp->Cconfirm, le("00112233445566778899aabbccddeeff")));
+	t.asserteq(reason(p.recv(withcode(Smp->Crandom, le("000102030405060708090a0b0c0d0e0f")))), Smp->Fconfirmfailed, "a random that does not match the initiator's confirm fails it");
+
+	# a wrong DHKey check from the initiator
+	p = Pairing.respond(0, ia, 1, ra, rnd, seed);
+	p.priv = be(PB); p.pkx = le(PBX); p.pky = le(PBY);
+	p.recv(array[] of { byte Smp->Cpairreq, byte Smp->IOnone, byte 0, byte (Smp->Abonding | Smp->Asc), byte 16, byte 0, byte 0 });
+	pk := array[65] of byte;
+	pk[0] = byte Smp->Cpublickey;
+	pk[1:] = le(PAX);
+	pk[33:] = le(PAY);
+	p.recv(pk);
+	p.recv(withcode(Smp->Crandom, le("d5cb8454d177733effffb2ec712baeab")));
+	t.asserteq(reason(p.recv(withcode(Smp->Cdhkeycheck, le("000102030405060708090a0b0c0d0e0f")))), Smp->Fdhkeycheck, "an initiator that did not derive our key fails the check");
+
+	# the initiator's key off the curve
+	p = Pairing.respond(0, ia, 1, ra, rnd, seed);
+	p.priv = be(PB); p.pkx = le(PBX); p.pky = le(PBY);
+	p.recv(array[] of { byte Smp->Cpairreq, byte Smp->IOnone, byte 0, byte (Smp->Abonding | Smp->Asc), byte 16, byte 0, byte 0 });
+	pk[33:] = le("dc809c49652aeb6d63329abf5a52155c766345c28fed3024741c8ed01589d28c");
+	t.asserteq(reason(p.recv(pk)), Smp->Fdhkeycheck, "and a key off the curve ends it before anything is computed with it");
+}
+
 testRefusals(t: ref T)
 {
 	ia := le("A1A2A3A4A5A6");
@@ -560,6 +742,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ScJustWorks", testScJustWorks);
 	run("ScNumeric", testScNumeric);
 	run("ScRefusals", testScRefusals);
+	run("BothLegacy", testBothLegacy);
+	run("BothSc", testBothSc);
+	run("BothNumeric", testBothNumeric);
+	run("ResponderRefusals", testResponderRefusals);
 	run("Refusals", testRefusals);
 
 	if(testing->summary(passed, failed, skipped) > 0)

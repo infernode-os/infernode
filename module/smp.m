@@ -15,7 +15,17 @@
 #	both ends now hold and neither sent. A peer that does not offer
 #	it gets legacy pairing as before.
 #
-#	Not here: passkey entry, OOB, and the responder's side.
+#	Both roles. The initiator is the LE central that asks to pair;
+#	the responder is the peripheral that is asked, which is what the
+#	board is when a phone connects to it. The addresses keep their
+#	names from the specification whichever end we are: ia the
+#	initiator's, ra the responder's. For the responder, Ev.Encrypt is
+#	not a command to start encryption but the key to answer the
+#	controller's Long Term Key Request with, since the central starts
+#	it; and in a legacy pairing the responder makes and gives out the
+#	LTK, from ltkseed.
+#
+#	Not here: passkey entry and OOB.
 #
 
 Smp: module
@@ -96,7 +106,8 @@ Smp: module
 
 	# states
 	Idle, Waitrsp, Waitconfirm, Waitrandom, Waitencrypt, Waitkeys, Done, Failed,
-	Waitpubkey, Waitscconfirm, Waitscrandom, Waituser, Waitdhcheck: con iota;
+	Waitpubkey, Waitscconfirm, Waitscrandom, Waituser, Waitdhcheck,
+	Waitreq: con iota;		# a responder that has not been asked yet
 
 	Pairing: adt {
 		state:	int;
@@ -123,10 +134,18 @@ Smp: module
 		dh:	array of byte;		# the shared secret
 		mackey:	array of byte;
 		numeric: int;			# numeric comparison, not Just Works
+		# the responder
+		responder: int;
+		ltkseed: array of byte;		# 26 random bytes from the caller: the LTK, EDIV and Rand a legacy pairing gives out
+		confirmed: int;			# the user has said yes; the initiator's check may not have come yet
+		heldcheck: array of byte;	# the initiator's DHKey check, come before the user answered
+		give:	int;			# key distribution bits we still have to send
 
 		# begin as the central: mrand is 16 random bytes from the caller
 		new:	fn(iat: int, ia: array of byte, rat: int, ra: array of byte, mrand: array of byte): ref Pairing;
 		start:	fn(p: self ref Pairing): list of ref Ev;
+		# wait as the peripheral: rnd is 16 random bytes (our nonce), seed 26 more
+		respond: fn(iat: int, ia: array of byte, rat: int, ra: array of byte, rnd, seed: array of byte): ref Pairing;
 		recv:	fn(p: self ref Pairing, pdu: array of byte): list of ref Ev;
 		# the link is now encrypted with the STK: key distribution follows
 		encrypted: fn(p: self ref Pairing): list of ref Ev;

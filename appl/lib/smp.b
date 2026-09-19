@@ -248,7 +248,20 @@ failtext(reason: int): string
 Pairing.new(iat: int, ia: array of byte, rat: int, ra: array of byte, mrand: array of byte): ref Pairing
 {
 	return ref Pairing(Idle, iat, ia, rat, ra, nil, nil, mrand, nil, nil, array[16] of { * => byte 0 }, nil, nil, 0,
-		IOnone, 1, 0, nil, nil, nil, nil, nil, nil, nil, 0);
+		IOnone, 1, 0, nil, nil, nil, nil, nil, nil, nil, 0,
+		0, nil, 0, nil, 0);
+}
+
+# The responder keeps its own nonce in srand and learns the initiator's
+# as mrand, so every formula reads as the specification writes it.
+Pairing.respond(iat: int, ia: array of byte, rat: int, ra: array of byte, rnd, seed: array of byte): ref Pairing
+{
+	p := Pairing.new(iat, ia, rat, ra, nil);
+	p.srand = rnd;
+	p.ltkseed = seed;
+	p.responder = 1;
+	p.state = Waitreq;
+	return p;
 }
 
 # Pairing Request: bonding, a 16-byte key, and we ask for the peer's
@@ -295,6 +308,8 @@ Pairing.recv(p: self ref Pairing, pdu: array of byte): list of ref Ev
 			reason = int pdu[1];
 		return ref Ev.Failed(reason, failtext(reason)) :: nil;
 	}
+	if(p.responder)
+		return resprecv(p, code, pdu);
 	case p.state {
 	Waitrsp =>
 		if(code != Cpairrsp || len pdu < 7)
@@ -455,11 +470,184 @@ sccheck(p: ref Pairing): list of ref Ev
 
 Pairing.confirm(p: self ref Pairing, yes: int): list of ref Ev
 {
+	if(p.responder){
+		if(p.state != Waitdhcheck || !p.numeric || p.confirmed)
+			return nil;
+		if(!yes)
+			return fail(p, Fnumcmp);
+		p.confirmed = 1;
+		if(p.heldcheck != nil)
+			return respcheck(p, p.heldcheck);
+		return nil;
+	}
 	if(p.state != Waituser)
 		return nil;
 	if(!yes)
 		return fail(p, Fnumcmp);
 	return sccheck(p);
+}
+
+#
+# The responder: 2.3.5.5 for a legacy pairing and 2.3.5.6 for Secure
+# Connections, from the other end. A is the initiator, B is us.
+#
+
+resprecv(p: ref Pairing, code: int, pdu: array of byte): list of ref Ev
+{
+	case p.state {
+	Waitreq =>
+		if(code != Cpairreq || len pdu < 7)
+			return fail(p, Finvalidparams);
+		if(int pdu[4] < 7 || int pdu[4] > 16)
+			return fail(p, Fenckeysize);
+		p.preq = pdu[0:7];
+		auth := int pdu[3] & Abonding;
+		p.sc = p.offersc && (int pdu[3] & Asc) != 0;
+		if(p.sc)
+			auth |= Asc;
+		if(canconfirm(p.io))
+			auth |= Amitm;
+		# what we ask of the initiator is its identity, if it offers it:
+		# a phone hides behind private addresses, and its IRK is how it
+		# is known again. What we give is the LTK, in a legacy pairing;
+		# Secure Connections has no LTK to give.
+		p.want = int pdu[5] & Kid;
+		p.give = 0;
+		if(!p.sc)
+			p.give = int pdu[6] & Kenc;
+		rsp := array[] of { byte Cpairrsp, byte p.io, byte 0, byte auth, byte 16, byte p.want, byte p.give };
+		p.pres = rsp;
+		if(p.sc){
+			peerio := int pdu[1];
+			mitm := (int pdu[3] | auth) & Amitm;
+			p.numeric = 0;
+			if(mitm){
+				if(canconfirm(p.io) && canconfirm(peerio))
+					p.numeric = 1;
+				else if(p.io != IOnone && peerio != IOnone &&
+				   (p.io == IOkeyboardonly || peerio == IOkeyboardonly || p.io == IOkeyboarddisplay || peerio == IOkeyboarddisplay))
+					return fail(p, Fauthreq);	# passkey entry
+			}
+			p.state = Waitpubkey;
+		}else
+			p.state = Waitconfirm;
+		return ref Ev.Send(rsp) :: nil;
+
+	# legacy
+	Waitconfirm =>
+		if(code != Cconfirm || len pdu < 17)
+			return fail(p, Finvalidparams);
+		p.sconfirm = pdu[1:17];		# the initiator's, to be checked when its random comes
+		p.state = Waitrandom;
+		ours := c1(p.tk, p.srand, p.preq, p.pres, p.iat, p.ia, p.rat, p.ra);
+		return ref Ev.Send(withcode(Cconfirm, ours)) :: nil;
+	Waitrandom =>
+		if(code != Crandom || len pdu < 17)
+			return fail(p, Finvalidparams);
+		p.mrand = pdu[1:17];
+		if(!same(c1(p.tk, p.mrand, p.preq, p.pres, p.iat, p.ia, p.rat, p.ra), p.sconfirm))
+			return fail(p, Fconfirmfailed);
+		p.stk = s1(p.tk, p.srand, p.mrand);
+		p.state = Waitencrypt;
+		return ref Ev.Send(withcode(Crandom, p.srand)) :: ref Ev.Encrypt(p.stk) :: nil;
+
+	# Secure Connections
+	Waitpubkey =>
+		if(code != Cpublickey || len pdu < 65)
+			return fail(p, Finvalidparams);
+		p.peerx = pdu[1:33];
+		p.peery = pdu[33:65];
+		if(p.priv == nil)
+			(p.priv, p.pkx, p.pky) = sckeys();
+		if(p.priv == nil)
+			return fail(p, Funspecified);
+		if(same(p.peerx, p.pkx))
+			return fail(p, Fdhkeycheck);
+		p.dh = dhkey(p.priv, p.peerx, p.peery);
+		if(p.dh == nil)
+			return fail(p, Fdhkeycheck);
+		pk := array[65] of byte;
+		pk[0] = byte Cpublickey;
+		pk[1:] = p.pkx;
+		pk[33:] = p.pky;
+		# our key, and with it the commitment to our nonce: Cb = f4(PKbx, PKax, Nb, 0)
+		p.state = Waitscrandom;
+		return ref Ev.Send(pk) :: ref Ev.Send(withcode(Cconfirm, f4(p.pkx, p.peerx, p.srand, 0))) :: nil;
+	Waitscrandom =>
+		if(code != Crandom || len pdu < 17)
+			return fail(p, Finvalidparams);
+		p.mrand = pdu[1:17];
+		p.state = Waitdhcheck;
+		evs: list of ref Ev;
+		evs = ref Ev.Send(withcode(Crandom, p.srand)) :: nil;
+		if(p.numeric)
+			evs = append(evs, ref Ev.Confirm(g2(p.peerx, p.pkx, p.mrand, p.srand)));
+		return evs;
+	Waitdhcheck =>
+		if(code != Cdhkeycheck || len pdu < 17)
+			return fail(p, Finvalidparams);
+		# the initiator's user may be quicker than ours
+		if(p.numeric && !p.confirmed){
+			p.heldcheck = pdu[1:17];
+			return nil;
+		}
+		return respcheck(p, pdu[1:17]);
+
+	Waitencrypt or Waitkeys =>
+		return keydist(p, code, pdu);
+	}
+	return nil;
+}
+
+# the initiator's check verified, ours sent, and the LTK ready for the
+# controller's Long Term Key Request
+respcheck(p: ref Pairing, ea: array of byte): list of ref Ev
+{
+	zero := array[16] of { * => byte 0 };
+	a := addr7(p.ia, p.iat);
+	b := addr7(p.ra, p.rat);
+	(p.mackey, p.stk) = f5(p.dh, p.mrand, p.srand, a, b);
+	if(!same(f6(p.mackey, p.mrand, p.srand, zero, p.preq[1:4], a, b), ea))
+		return fail(p, Fdhkeycheck);
+	eb := f6(p.mackey, p.srand, p.mrand, zero, p.pres[1:4], b, a);
+	p.state = Waitencrypt;
+	return ref Ev.Send(withcode(Cdhkeycheck, eb)) :: ref Ev.Encrypt(p.stk) :: nil;
+}
+
+# encrypted: the responder gives its keys first (2.3.5.5), then takes
+# the initiator's
+respgive(p: ref Pairing): list of ref Ev
+{
+	if(p.keys == nil)
+		p.keys = ref Keys(nil, 0, nil, nil, 0, nil, 0);
+	evs: list of ref Ev;
+	if((p.give & Kenc) && len p.ltkseed >= 26){
+		p.keys.ltk = p.ltkseed[0:16];
+		p.keys.ediv = int p.ltkseed[16] | (int p.ltkseed[17] << 8);
+		p.keys.rand = p.ltkseed[18:26];
+		mid := array[11] of byte;
+		mid[0] = byte Cmasterid;
+		mid[1] = p.ltkseed[16];
+		mid[2] = p.ltkseed[17];
+		mid[3:] = p.keys.rand;
+		evs = ref Ev.Send(withcode(Cencinfo, p.keys.ltk)) :: ref Ev.Send(mid) :: nil;
+	}
+	p.give = 0;
+	return evs;
+}
+
+append(l: list of ref Ev, e: ref Ev): list of ref Ev
+{
+	if(l == nil)
+		return e :: nil;
+	return hd l :: append(tl l, e);
+}
+
+catev(a, b: list of ref Ev): list of ref Ev
+{
+	if(a == nil)
+		return b;
+	return hd a :: catev(tl a, b);
 }
 
 Pairing.encrypted(p: self ref Pairing): list of ref Ev
@@ -469,6 +657,8 @@ Pairing.encrypted(p: self ref Pairing): list of ref Ev
 	p.state = Waitkeys;
 	if(p.keys == nil)
 		p.keys = ref Keys(nil, 0, nil, nil, 0, nil, 0);
+	if(p.responder)
+		return catev(respgive(p), done(p));
 	return done(p);
 }
 
@@ -520,6 +710,8 @@ done(p: ref Pairing): list of ref Ev
 		p.keys.rand = array[8] of { * => byte 0 };
 		p.keys.ediv = 0;
 		p.keys.sc = 1;
+	}else if(p.responder && p.keys.ltk != nil){
+		;	# the LTK we made and gave: ours to keep, with its EDIV and Rand
 	}else if(p.keys.ltk == nil){
 		# no encryption key was to come: the STK is all there is,
 		# and it cannot be stored (Rand 0, EDIV 0 marks it as such)

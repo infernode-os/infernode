@@ -26,6 +26,32 @@ void	(*heapmonitor)(int, void*, ulong);
 
 #define	BIT(bt, nb)	(bt & (1<<nb))
 
+/*
+ * Release a Type's compiled initialize/destroy code.
+ *
+ * On hosted 64-bit builds the JIT maps that code rather than mallocs
+ * it, so free() must not see it, and for a long time nothing released
+ * it at all: "this leaks type code on module unload", this file said,
+ * and it did -- about 52 KB for every command run, since a command
+ * loads a module, compiles its types and drops them again. Measured on
+ * Linux/arm64, 1000 commands in one emulator: resident +52 MB with the
+ * JIT, +0 without. Hosted arm64 now unmaps it (freetypejit, in
+ * comp-arm64.c, by a length typecom() keeps in front of the code).
+ * Hosted amd64 still leaks: its type code is carved from a slab that is
+ * never returned, which wants a different fix.
+ */
+static void
+freetypecode(Type *t)
+{
+#if defined(__aarch64__)
+	freetypejit(t);
+#elif defined(__x86_64__) || defined(_M_X64)
+	USED(t);
+#else
+	free(t->initialize);
+#endif
+}
+
 void
 freeptrs(void *v, Type *t)
 {
@@ -129,10 +155,7 @@ freearray(Heap *h, int swept)
 		}
 	}
 	if(t->ref-- == 1) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-		if(t->initialize == nil)
-#endif
-		free(t->initialize);
+		freetypecode(t);
 		free(t);
 	}
 }
@@ -152,10 +175,7 @@ freelist(Heap *h, int swept)
 			freeptrs(l->data, t);
 		t->ref--;
 		if(t->ref == 0) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-			if(t->initialize == nil)
-#endif
-			free(t->initialize);
+			freetypecode(t);
 			free(t);
 		}
 	}
@@ -173,10 +193,7 @@ freelist(Heap *h, int swept)
 				freeptrs(l->data, t);
 			t->ref--;
 			if(t->ref == 0) {
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-				if(t->initialize == nil)
-#endif
-				free(t->initialize);
+				freetypecode(t);
 				free(t);
 			}
 		}
@@ -286,12 +303,7 @@ freetype(Type *t)
 	if(t == nil || --t->ref > 0)
 		return;
 
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
-	/* JIT typecom() uses mmap/VirtualAlloc for type code; skip free() to avoid pool panic.
-	 * This leaks type code on module unload. */
-	if(t->initialize == nil)
-#endif
-	free(t->initialize);
+	freetypecode(t);
 	free(t);
 }
 

@@ -23,7 +23,10 @@ power and ground.
 Checks, per pair and both ways round: drive high and low, the partner
 reads it; both inputs, pull-up reads 1 and pull-down reads 0 on each
 (this proves the pull, since the partner is floating); ctl reads back
-what was set. Then, with every pair set up, each output toggled alone
+what was set. Edge events (#651) on one pair: every edge reported with
+its level and a time from the interrupt, rising-only halves them, a
+reader that falls behind is told by how much, and nothing is reported
+that was not asked for. Then, with every pair set up, each output toggled alone
 must move only its own partner (no crosstalk, no wiring mistake). And
 the pins the kernel owns refuse ctl writes, so a stray echo cannot
 take the console down. Everything is left as input, pull none.
@@ -108,6 +111,56 @@ def main():
             "the console UART's pins (BCM 14, 15) refuse a function change", out.strip()[-120:])
     out = sh("cat %s/128/ctl" % G, "cat %s/129/ctl" % G, wait=0.5)
     b.check("function" in out, "the firmware expander's lines (128 BT_ON, 129 WL_ON) report their configuration", out.strip()[-100:])
+
+    # Edge events (#651): pair A, BCM 4 drives and BCM 17 listens. A kernel
+    # without them has no event file, and the section says so and skips.
+    print("== edge events: the time and level of every edge, from the interrupt")
+    out = sh("ls %s/17" % G, wait=0.5)
+    if "event" not in out:
+        b.skip("edge events", "this kernel's #G has no event file (#651)")
+    else:
+        def toggles(pin, n):
+            return "; ".join("echo %d > %s/%d/level" % (1 - (i % 2), G, pin) for i in range(n))
+        def events(text):
+            return [(int(t), int(l)) for t, l in re.findall(r"^(\d{6,}) ([01])\s*$", text, re.M)]
+
+        out = sh(setpin(4, "out"), "echo 0 > %s/4/level" % G, setpin(17, "in"),
+                 "echo 'edge both' > %s/17/ctl" % G, "cat %s/17/ctl" % G, wait=0.4)
+        b.check("edge both" in out, "ctl reads back 'edge both'", out.strip()[-80:])
+
+        # a reader, ten edges, and what it saw
+        out = sh("{cat %s/17/event > /tmp/gpioev} &" % G, "sleep 1", toggles(4, 10), "sleep 1",
+                 "cat /tmp/gpioev", wait=1.5)
+        ev = events(out)
+        b.check(len(ev) == 10, "ten edges driven, ten reported (got %d)" % len(ev), out.strip()[-160:])
+        b.check([l for _, l in ev] == [1, 0] * 5, "with the level after each: 1,0,1,0,...", str([l for _, l in ev]))
+        ts = [t for t, _ in ev]
+        b.check(ts == sorted(ts) and len(set(ts)) == len(ts), "in order, each with a later time than the last", str(ts[:4]))
+        b.check(len(ts) > 1 and 0 < ts[-1] - ts[0] < 5000000, "microseconds on a plausible clock: %d us across the ten" % (ts[-1] - ts[0] if ts else 0))
+
+        # rising only: half of them
+        out = sh("echo 'edge rising' > %s/17/ctl" % G, "echo 0 > %s/4/level" % G,
+                 "{cat %s/17/event > /tmp/gpioev} &" % G, "sleep 1", toggles(4, 10), "sleep 1", "cat /tmp/gpioev", wait=1.5)
+        ev = events(out)
+        b.check(len(ev) == 5 and all(l == 1 for _, l in ev), "'edge rising' reports the five rising edges of ten, each at level 1 (got %d)" % len(ev), out.strip()[-120:])
+
+        # a reader that falls behind is told how far: the file is open, and so
+        # queueing, for three seconds before anything reads it
+        out = sh("echo 'edge both' > %s/17/ctl" % G, "echo 0 > %s/4/level" % G,
+                 "{sleep 3; cat} < %s/17/event > /tmp/gpioev &" % G, "sleep 1", toggles(4, 300), "sleep 4",
+                 "sed 2q /tmp/gpioev; wc -l /tmp/gpioev", wait=6.0)
+        m = re.search(r"overrun (\d+)", out)
+        b.check(m is not None and int(m.group(1)) >= 300 - 256, "a reader 300 edges behind is told 'overrun %s' first, and keeps the newest 256" % (m.group(1) if m else "?"), out.strip()[-160:])
+
+        # nothing asked for, nothing reported; and the pins that are not ours to watch
+        out = sh("echo 'edge none' > %s/17/ctl" % G, "{cat %s/17/event > /tmp/gpioev} &" % G, "sleep 1", toggles(4, 6), "sleep 1",
+                 "wc -c /tmp/gpioev", wait=1.5)
+        m = re.search(r"^\s*(\d+)\s+/tmp/gpioev", out, re.M)
+        b.check(m is not None and int(m.group(1)) == 0, "'edge none': six edges driven, none reported", out.strip()[-80:])
+        out = sh("echo 'edge both' > %s/14/ctl" % G, "ls %s/128" % G, wait=0.5)
+        b.check("in use" in out or "rror" in out, "a pin a driver has claimed (BCM 14) refuses 'edge'", out.strip()[-100:])
+        b.check("event" not in out.split("ls ")[-1] if "ls " in out else "event" not in out[-60:], "the firmware expander's lines have no event file", out.strip()[-80:])
+        sh("rm -f /tmp/gpioev", wait=0.3)
 
     # leave everything as input, no pull
     cmds = []

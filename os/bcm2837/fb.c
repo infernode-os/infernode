@@ -137,3 +137,24 @@ fbrect(Fbinfo *fb, int x0, int y0, int w, int h, u32int colour)
 		}
 	}
 }
+
+/*
+ * What ../arm64/fbcons.c asks of whatever is under it, besides an
+ * Fbinfo and fbfill: which display the next call is about, and whether
+ * the scanout window can be moved down the buffer (which is how this
+ * board scrolls without copying a pixel). Here both are mailbox tags.
+ * They have names of their own because fbcons serves a second board
+ * (os/virt) that has no mailbox; there the answers are "there is one
+ * display" and "no".
+ */
+int
+fbdisplay(u32int disp)
+{
+	return mboxfbdispnum(disp);
+}
+
+int
+fbvoffset(u32int x, u32int y)
+{
+	return mboxfbvoff(x, y);
+}

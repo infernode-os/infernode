@@ -1724,7 +1724,7 @@ measured, and not before.
 the firmware upload and the command path to the running firmware.
 The halves are split by *when a file can be found*:
 
-- The **probe** runs at board init, from `boardsdprobe()`
+- The **probe** runs at board init, from `boarddevprobe()`
   immediately after the card probe -- the radio's SDIO lines can only
   be driven by the Arasan and the Arasan is free only once `sdmmc.c`
   has moved the card to SDHOST, so calling it from there makes the

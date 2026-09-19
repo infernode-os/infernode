@@ -1,4 +1,9 @@
 /*
+ * (This file was os/bcm2837/screen.c. It moved here unchanged when a
+ * second board, os/virt, turned out to need every line of it: all it
+ * asks of a board is boardfb(), an Fbinfo for a linear XRGB32
+ * framebuffer, wherever that came from.)
+ *
  * The framebuffer, presented to devdraw.
  *
  * This is the whole board-specific half of having a GUI, and it is

@@ -1,4 +1,11 @@
 /*
+ * (This file was os/bcm2837/devsd.c. It moved here when a second
+ * board, os/virt, put a virtio disk under it: all it asks of a board is
+ * sdblkpresent(), sdblknblocks(), sdblkread() and sdblkwrite(), declared
+ * in the board's board.h. They were emmcread() and friends while the
+ * only thing under #S was this SoC's card. "The SD card" below is
+ * whatever answers those.)
+ *
  * #S -- the SD card, as a file.
  *
  * The kernel's whole contribution to storage on this board: a byte
@@ -85,7 +92,7 @@ sdaddpart(char *name, vlong startblk, vlong nblk)
 static vlong
 sdlength(void)
 {
-	return (vlong)emmcnblocks() * Blen;
+	return (vlong)sdblknblocks() * Blen;
 }
 
 /*
@@ -131,7 +138,7 @@ sdgen(Chan *c, char *nm, Dirtab *tab, int ntab, int i, Dir *dp)
 static Chan*
 sdattach(char *spec)
 {
-	if(!emmcpresent())
+	if(!sdblkpresent())
 		error("no SD card");
 	return devattach('S', spec);
 }
@@ -213,17 +220,17 @@ sdio(int iswrite, void *a, long n, vlong off, vlong base, vlong total)
 			m = n - done;
 
 		if(!iswrite){
-			if(emmcread(blk, sd.buf) < 0)
+			if(sdblkread(blk, sd.buf) < 0)
 				error(Eio);
 			memmove(p + done, sd.buf + boff, m);
 		}else{
 			if(m != Blen){
 				/* partial: keep what the caller did not send */
-				if(emmcread(blk, sd.buf) < 0)
+				if(sdblkread(blk, sd.buf) < 0)
 					error(Eio);
 			}
 			memmove(sd.buf + boff, p + done, m);
-			if(emmcwrite(blk, sd.buf) < 0)
+			if(sdblkwrite(blk, sd.buf) < 0)
 				error(Eio);
 		}
 		done += m;
@@ -268,7 +275,7 @@ sdread(Chan *c, void *a, long n, vlong off)
 
 	if((ulong)c->qid.path == Qctl){
 		l = snprint(buf, sizeof buf, "blocks %lld\n",
-			(vlong)emmcnblocks());
+			(vlong)sdblknblocks());
 		for(i = 0; i < sd.npart && l < sizeof buf - 64; i++)
 			l += snprint(buf+l, sizeof buf - l, "part %s %lld %lld\n",
 				sd.part[i].name, sd.part[i].off / Blen,

@@ -818,7 +818,7 @@ sdprobe(void)
 	if(i < 0)
 		return;
 
-	if(emmcread(0, sec) < 0){
+	if(sdblkread(0, sec) < 0){
 		uartputstr("sd: cannot read sector 0\n");
 		return;
 	}
@@ -848,9 +848,9 @@ sdprobe(void)
 
 		for(j = 0; j < 512; j++)
 			wbuf[j] = (uchar)(j ^ 0x5A);
-		if(emmcwrite(Sdtestblock, wbuf) < 0)
+		if(sdblkwrite(Sdtestblock, wbuf) < 0)
 			uartputstr("sd: write failed\n");
-		else if(emmcread(Sdtestblock, rbuf) < 0)
+		else if(sdblkread(Sdtestblock, rbuf) < 0)
 			uartputstr("sd: read back failed\n");
 		else{
 			bad = 0;
@@ -900,7 +900,7 @@ sdprobe(void)
  * its image; no radio is one line and an ether1 that says so.
  */
 void
-boardsdprobe(void)
+boarddevprobe(void)
 {
 	sdprobe();
 	ether4330probe();
@@ -1006,4 +1006,112 @@ boardfb(void)
 	if(fb.base == 0)
 		return nil;
 	return &fb;
+}
+
+/*
+ * The hooks below were code in os/arm64/main.c until a second board
+ * (os/virt) showed which lines of kmain were this SoC's. They are moved,
+ * not rewritten.
+ */
+
+/*
+ * boardintrprobe: does a device interrupt reach a handler?
+ */
+static int intrprobefired;
+
+enum { Intprobechan = 3 };		/* system timer compare channel */
+
+#define STREG(r)	(*(volatile u32int*)((uintptr)SYSTIMERREGS + (r)))
+
+static void
+intrprobehandler(Ureg*, void*)
+{
+	STREG(Stcs) = 1 << Intprobechan;	/* acknowledge the match */
+	intrprobefired++;
+}
+
+void
+boardintrprobe(void)
+{
+	u64int deadline;
+
+	/*
+	 * The system timer, not the ARM timer.
+	 *
+	 * The obvious vehicle is the ARM timer at PHYSIO+0xB400, and it
+	 * is the wrong one: QEMU's raspi3b does not model it. Writes are
+	 * dropped and its control register reads back zero, so a probe
+	 * built on it reports "no interrupt" whether or not interrupts
+	 * work -- which is exactly the sort of answer that sends you
+	 * looking in the wrong place. It is also worth knowing in its own
+	 * right, because usbdwc.c defers its wakeups through that timer.
+	 *
+	 * The system timer is modelled, and it is a better subject
+	 * anyway: it is a genuine GPU source, so a match exercises the
+	 * GPU enable word as well -- the same path every device on this
+	 * SoC uses, including the USB controller.
+	 *
+	 * Channels 0 and 2 belong to the VideoCore firmware on real
+	 * hardware. 1 and 3 are ours.
+	 */
+	intrprobefired = 0;
+	STREG(Stcs) = 1 << Intprobechan;
+	intrenable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
+	STREG(Stc0 + Intprobechan*4) = STREG(Stclo) + 10000;	/* 10ms */
+	coherence();
+
+	spllo();
+	deadline = clockcount() + clockfreq()/2;		/* 500ms */
+	while(intrprobefired == 0 && clockcount() < deadline)
+		;
+	splhi();
+
+	print("intr: device interrupt %s (system timer via the VideoCore controller)\n",
+		intrprobefired ? "delivered" : "NEVER DELIVERED");
+
+	intrdisable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
+	STREG(Stcs) = 1 << Intprobechan;
+}
+
+/*
+ * boardstartcpus: release the secondary cores to entry.
+ */
+void
+boardstartcpus(uintptr entry)
+{
+	uvlong *rel;
+	int i;
+
+	/*
+	 * The actual release. Under the real boot chain (and QEMU's
+	 * model of it) the secondaries never reached our own park loop:
+	 * the ARM stub holds them spinning on the spin-table words,
+	 * indexed by CORE NUMBER from a base of 0xd8 -- so core 1 waits
+	 * at 0xe0, core 2 at 0xe8, core 3 at 0xf0. (Core 0's slot at
+	 * 0xd8 exists and is nobody's; the first attempt wrote core 1's
+	 * address there and three cores kept spinning.) Write secentry there, clean the lines
+	 * (the spinners run uncached), and sev. Cores that WERE in our
+	 * park loop wake on the same sev and take the smpboot route;
+	 * both roads meet at secwake.
+	 */
+	for(i = 1; i < MAXMACH; i++){
+		rel = (uvlong*)(uintptr)(0xd8 + 8*i);
+		*rel = (uvlong)entry;
+		cachedwbse(rel, sizeof *rel);
+	}
+	__asm__ volatile("dsb sy; sev" ::: "memory");
+}
+
+/* exclusives work from here (the MMU is on): the mailbox may lock */
+void
+boardlockon(void)
+{
+	mboxlockon();
+}
+
+/* this SoC's USB host controller is a DWC OTG */
+void
+boardusblink(void)
+{
+	usbdwclink();
 }

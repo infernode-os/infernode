@@ -1,4 +1,13 @@
 /*
+ * (This file was os/bcm2837/fbcons.c. It moved here when a second
+ * board, os/virt, needed it whole. What it asks of a board is an
+ * Fbinfo, fbfill(), and two questions a board answers however it can:
+ * fbdisplay(), select a display, and fbvoffset(), move the scanout
+ * window down the buffer. bcm2837 answers both through the VideoCore
+ * mailbox; a board with no movable window says no, which sends
+ * scrolling down the copying path that already exists for a second
+ * display.)
+ *
  * A console on the framebuffer.
  *
  * The panel has worked since the mailbox cache fix, and until now it has
@@ -386,8 +395,8 @@ fbcls(void)
 		screens[i].cx = 0;
 		screens[i].cy = 0;
 		if(screens[i].hwscroll){
-			mboxfbdispnum(screens[i].fb->disp);
-			mboxfbvoff(0, 0);
+			fbdisplay(screens[i].fb->disp);
+			fbvoffset(0, 0);
 		}
 	}
 }
@@ -425,8 +434,8 @@ screenscroll(Screen *s)
 			memmove(base, base + (ulong)s->voff * s->fb->pitch,
 				(ulong)s->h * s->fb->pitch);
 			s->voff = 0;
-			mboxfbdispnum(s->fb->disp);
-			mboxfbvoff(0, 0);
+			fbdisplay(s->fb->disp);
+			fbvoffset(0, 0);
 		}
 		s->voff += s->scrollpix;
 
@@ -435,8 +444,8 @@ screenscroll(Screen *s)
 			uartputstr("fb:   SCROLL OUT OF RANGE, reverting to copy\n");
 			s->hwscroll = 0;
 			s->voff = 0;
-			mboxfbdispnum(s->fb->disp);
-			mboxfbvoff(0, 0);
+			fbdisplay(s->fb->disp);
+			fbvoffset(0, 0);
 			s->cy = newcy;
 			return;
 		}
@@ -449,8 +458,8 @@ screenscroll(Screen *s)
 		 * current, so with two screens the second one's offset
 		 * would otherwise be written to the first.
 		 */
-		mboxfbdispnum(s->fb->disp);
-		mboxfbvoff(0, s->voff);
+		fbdisplay(s->fb->disp);
+		fbvoffset(0, s->voff);
 		s->cy = newcy;
 		return;
 	}
@@ -749,10 +758,10 @@ fbconsadd(Fbinfo *fb)
 	 */
 	s->hwscroll = 0;
 	if(nscreens == 0){
-		mboxfbdispnum(fb->disp);
-		if(s->vh >= s->h + Fh && mboxfbvoff(0, Fh) == Fh)
+		fbdisplay(fb->disp);
+		if(s->vh >= s->h + Fh && fbvoffset(0, Fh) == Fh)
 			s->hwscroll = 1;
-		mboxfbvoff(0, 0);
+		fbvoffset(0, 0);
 	}
 
 	/*

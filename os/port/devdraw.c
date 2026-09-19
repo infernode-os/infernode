@@ -1478,7 +1478,7 @@ printmesg(char *fmt, uchar *a, int plsprnt)
  * anything on the screen animates (#654). The question "does this
  * overlap the cursor" does have a right place, and it is not here: it
  * is memdraw's hwdraw() hook, which sees every operation's destination,
- * source and mask, and which the platform defines (os/bcm2837/screen.c,
+ * source and mask, and which the platform defines (os/arm64/screen.c,
  * after the Plan 9 Pi port). That takes the cursor off for exactly the
  * operations that meet it. This puts it back.
  */

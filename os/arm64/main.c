@@ -122,7 +122,7 @@ startmmu(void)
 	 * locking. Before this point it must not: a Lock is taken with
 	 * load-exclusive, and exclusives with the MMU off fault.
 	 */
-	mboxlockon();
+	boardlockon();
 	uartlockon();
 
 	uartputstr("mmu:  ");
@@ -280,60 +280,16 @@ probeuartin(void)
 		print("uart: input OK, %d byte(s) received\n", n);
 }
 
-static int intrprobefired;
-
-enum { Intprobechan = 3 };		/* system timer compare channel */
-
-#define STREG(r)	(*(volatile u32int*)((uintptr)SYSTIMERREGS + (r)))
-
-static void
-intrprobehandler(Ureg*, void*)
-{
-	STREG(Stcs) = 1 << Intprobechan;	/* acknowledge the match */
-	intrprobefired++;
-}
-
+/*
+ * Does a device interrupt reach a handler? Which device can be made to
+ * raise one on demand is the board's to know -- a system-timer compare
+ * channel on the BCM2837, a software-set pending bit on a GIC -- so the
+ * probe is the board's: boardintrprobe() in os/<board>/board.c.
+ */
 static void
 probeintr(void)
 {
-	u64int deadline;
-
-	/*
-	 * The system timer, not the ARM timer.
-	 *
-	 * The obvious vehicle is the ARM timer at PHYSIO+0xB400, and it
-	 * is the wrong one: QEMU's raspi3b does not model it. Writes are
-	 * dropped and its control register reads back zero, so a probe
-	 * built on it reports "no interrupt" whether or not interrupts
-	 * work -- which is exactly the sort of answer that sends you
-	 * looking in the wrong place. It is also worth knowing in its own
-	 * right, because usbdwc.c defers its wakeups through that timer.
-	 *
-	 * The system timer is modelled, and it is a better subject
-	 * anyway: it is a genuine GPU source, so a match exercises the
-	 * GPU enable word as well -- the same path every device on this
-	 * SoC uses, including the USB controller.
-	 *
-	 * Channels 0 and 2 belong to the VideoCore firmware on real
-	 * hardware. 1 and 3 are ours.
-	 */
-	intrprobefired = 0;
-	STREG(Stcs) = 1 << Intprobechan;
-	intrenable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
-	STREG(Stc0 + Intprobechan*4) = STREG(Stclo) + 10000;	/* 10ms */
-	coherence();
-
-	spllo();
-	deadline = clockcount() + clockfreq()/2;		/* 500ms */
-	while(intrprobefired == 0 && clockcount() < deadline)
-		;
-	splhi();
-
-	print("intr: device interrupt %s (system timer via the VideoCore controller)\n",
-		intrprobefired ? "delivered" : "NEVER DELIVERED");
-
-	intrdisable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
-	STREG(Stcs) = 1 << Intprobechan;
+	boardintrprobe();
 }
 
 static void
@@ -1792,7 +1748,7 @@ usbkproc(void *a)
 {
 	USED(a);
 
-	usbdwclink();		/* addhcitype("dwcotg", reset) */
+	boardusblink();		/* the board's host controller: addhcitype(...) */
 	if(usbdevtab.reset != nil)
 		usbdevtab.reset();
 	if(usbdevtab.init != nil)
@@ -2120,14 +2076,20 @@ squidboy(void)
 	secclockinit();
 	{
 		uvlong ctl, tval, cnt;
-		u32int lroute;
 
+		/*
+		 * The generic timer's own registers only. This line also
+		 * printed the BCM2837's per-core timer routing register,
+		 * read from its address as a number; on a second board
+		 * that address is ordinary memory. Whether the routing took
+		 * is what "clock ticks on N of N cores" reports, for any
+		 * board.
+		 */
 		__asm__ volatile("mrs %0, cntp_ctl_el0" : "=r"(ctl));
 		__asm__ volatile("mrs %0, cntp_tval_el0" : "=r"(tval));
 		__asm__ volatile("mrs %0, cntpct_el0" : "=r"(cnt));
-		lroute = *(volatile u32int*)(uintptr)(0x40000040 + 4*m->machno);
-		iprint("CLK%d ctl=%llux tval=%llud route=%ux cnt=%llud\n",
-			m->machno, ctl, tval, lroute, cnt);
+		iprint("CLK%d ctl=%llux tval=%llud cnt=%llud\n",
+			m->machno, ctl, tval, cnt);
 	}
 
 	/*
@@ -2306,7 +2268,6 @@ smpcheck(void *)
 static void
 launchsmp(void)
 {
-	uvlong *rel;
 	int i, n, tries;
 
 	/*
@@ -2340,23 +2301,13 @@ launchsmp(void)
 		cachedwbse(&smpboot[i], sizeof smpboot[i]);
 	}
 	/*
-	 * The actual release. Under the real boot chain (and QEMU's
-	 * model of it) the secondaries never reached our own park loop:
-	 * the ARM stub holds them spinning on the spin-table words,
-	 * indexed by CORE NUMBER from a base of 0xd8 -- so core 1 waits
-	 * at 0xe0, core 2 at 0xe8, core 3 at 0xf0. (Core 0's slot at
-	 * 0xd8 exists and is nobody's; the first attempt wrote core 1's
-	 * address there and three cores kept spinning.) Write secentry there, clean the lines
-	 * (the spinners run uncached), and sev. Cores that WERE in our
-	 * park loop wake on the same sev and take the smpboot route;
-	 * both roads meet at secwake.
+	 * The actual release, which is the board's: a spin table the
+	 * firmware holds the cores on (bcm2837), a PSCI call to whatever
+	 * is below us (virt). Either way the core arrives at secentry with
+	 * nothing but mpidr to go on, and finds its stack and its Mach in
+	 * the smpboot slot filled in above.
 	 */
-	for(i = 1; i < MAXMACH; i++){
-		rel = (uvlong*)(uintptr)(0xd8 + 8*i);
-		*rel = (uvlong)(uintptr)secentry;
-		cachedwbse(rel, sizeof *rel);
-	}
-	__asm__ volatile("dsb sy; sev" ::: "memory");
+	boardstartcpus((uintptr)secentry);
 
 	for(tries = 0; tries < 5000; tries++){
 		n = 0;
@@ -2597,7 +2548,7 @@ kmain(void)
 	}
 
 	boardfbprobe();
-	boardsdprobe();
+	boarddevprobe();
 
 	/*
 	 * Bind the card into /dev AFTER probing for it, not before.

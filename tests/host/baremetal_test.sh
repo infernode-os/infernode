@@ -617,6 +617,12 @@ SBEOF
     fi
 
     for f in "$ROOT"/os/port/*.c; do
+        # A board says which of os/port it has no hardware for. devaudio.c
+        # is the portable half of /dev/audio and calls a dozen functions
+        # the board's half supplies; a machine with no audio device has
+        # no such half, and the alternative to leaving the file out is a
+        # file of stubs that exist to satisfy a linker.
+        case " ${PORTSKIP:-} " in *" $(basename "$f") "*) continue;; esac
         #
         #
         # exportfs.c IS built again. It was held out because the window
@@ -919,10 +925,12 @@ SBEOF
 # stdio. A test that wants the PL011 -- /dev/eia0 -- replaces the null.
 boot_kernel() {
     local img="$1" secs="${2:-10}" append="${3:-}"
-    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "$append" <<'PYEOF'
+    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "$append" "${SERIALARGS:--serial null -serial stdio}" <<'PYEOF'
 import subprocess, sys
 qemu, img, secs, extra, append = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
-args = [qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "null", "-serial", "stdio"]
+# Which -serial is the console is the machine's business: raspi3b's is
+# its second (above), virt has one UART and it is the first.
+args = [qemu] + extra.split() + ["-kernel", img, "-display", "none"] + sys.argv[6].split()
 if append:
     args += ["-append", append]
 p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -945,12 +953,12 @@ PYEOF
 # from the outside.
 shell_session() {
     local img="$1"; shift
-    python3 - "$QEMU" "$img" "$QEMUARGS" "$@" <<'PYEOF'
+    python3 - "$QEMU" "$img" "$QEMUARGS" "${SERIALARGS:--serial null -serial stdio}" "$@" <<'PYEOF'
 import os, subprocess, sys, time, threading
-qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
-cmds = sys.argv[4:]
+qemu, img, extra, serial = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+cmds = sys.argv[5:]
 p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img,
-                      "-display", "none", "-serial", "null", "-serial", "stdio"],
+                      "-display", "none"] + serial.split(),
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.DEVNULL)
 
@@ -1124,13 +1132,102 @@ PYEOF
 # Python indented too -- a syntax error inside a heredoc that bash -n
 # cannot see.
 #
-run_platform() {
-PLAT="$1"
-SRC="$ROOT/os/$PLAT"
-QEMUARGS="$2"
+# A 64MB card image: an MBR, one FAT16 partition at sector 2048, and
+# HELLO.TXT in its root. A function because both machines boot it --
+# the board's through its SD controller model, virt's as a virtio disk.
+make_sd_image() {
+python3 - "$1" <<'PYEOF'
+import struct, sys
 
-[[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
+# A card with a partition table and a real FAT16 filesystem in it.
+#
+# Built here rather than with mkfs or hdiutil so the test carries its own
+# fixture and does not depend on what the host happens to provide. It is
+# also the only way to assert on EXACT contents: the partition entry and
+# the file inside it are both known because both were written right here.
+SEC   = 512
+PSTART = 2048            # where the partition begins, in sectors
+PSECS  = 65536           # 32MB
+SPC    = 4               # sectors per cluster
+RESV   = 1
+NFAT   = 2
+FATSECS = 64
+ROOTENT = 512
+ROOTSECS = ROOTENT * 32 // SEC
 
+part = bytearray(PSECS * SEC)
+
+# Boot sector: the BIOS parameter block is what dossrv reads to find
+# everything else, so every field below is load-bearing.
+bs = bytearray(SEC)
+bs[0:3]   = b"\xEB\x3C\x90"
+bs[3:11]  = b"INFRNODE"
+struct.pack_into("<H", bs, 11, SEC)       # bytes per sector
+bs[13] = SPC
+struct.pack_into("<H", bs, 14, RESV)      # reserved sectors
+bs[16] = NFAT
+struct.pack_into("<H", bs, 17, ROOTENT)   # root directory entries
+struct.pack_into("<H", bs, 19, PSECS if PSECS < 65536 else 0)
+bs[21] = 0xF8                             # media descriptor
+struct.pack_into("<H", bs, 22, FATSECS)   # sectors per FAT
+struct.pack_into("<H", bs, 24, 32)        # sectors per track
+struct.pack_into("<H", bs, 26, 64)        # heads
+struct.pack_into("<I", bs, 28, PSTART)    # hidden sectors
+struct.pack_into("<I", bs, 32, 0 if PSECS < 65536 else PSECS)
+bs[36] = 0x80                             # drive number
+bs[38] = 0x29                             # extended boot signature
+struct.pack_into("<I", bs, 39, 0x12345678)
+bs[43:54] = b"INFRBOOT   "
+bs[54:62] = b"FAT16   "
+bs[510] = 0x55; bs[511] = 0xAA
+part[0:SEC] = bs
+
+CONTENT = b"hello from the SD card\n"
+
+# Two FATs. Cluster 0 and 1 are reserved; the file occupies cluster 2
+# and ends there.
+fat = bytearray(FATSECS * SEC)
+struct.pack_into("<H", fat, 0, 0xFFF8)
+struct.pack_into("<H", fat, 2, 0xFFFF)
+struct.pack_into("<H", fat, 4, 0xFFFF)
+for i in range(NFAT):
+    off = (RESV + i*FATSECS) * SEC
+    part[off:off+len(fat)] = fat
+
+# One root directory entry, in the 8.3 form FAT stores.
+rootoff = (RESV + NFAT*FATSECS) * SEC
+d = bytearray(32)
+d[0:11] = b"HELLO   TXT"
+d[11] = 0x20                              # archive
+struct.pack_into("<H", d, 26, 2)          # first cluster
+struct.pack_into("<I", d, 28, len(CONTENT))
+part[rootoff:rootoff+32] = d
+
+dataoff = (RESV + NFAT*FATSECS + ROOTSECS) * SEC
+part[dataoff:dataoff+len(CONTENT)] = CONTENT
+
+# And the card around it.
+#
+# 64MB exactly, because QEMU's SD model requires a power-of-two image
+# and silently refuses to present a card otherwise -- which arrives as
+# "sd: no card in the slot" and reads like a driver fault.
+buf = bytearray(64*1024*1024)
+e = bytearray(16)
+e[0] = 0x80                               # bootable
+e[4] = 0x06                               # FAT16
+struct.pack_into("<I", e, 8, PSTART)
+struct.pack_into("<I", e, 12, PSECS)
+buf[446:462] = e
+buf[510] = 0x55; buf[511] = 0xAA
+buf[PSTART*SEC : PSTART*SEC + len(part)] = part
+open(sys.argv[1], "wb").write(buf)
+PYEOF
+}
+
+# The compiler flags for $SRC. A function because there are two
+# platforms and each sets them the same way; called by run_platform and
+# run_virt once $SRC is known.
+platform_flags() {
 # Rebuilt per platform rather than once at the top: -I"$SRC" is what
 # selects which os/<plat> supplies mem.h, io.h and board.h to the shared
 # os/arm64 and os/port sources, and $SRC is not known until here.
@@ -1147,6 +1244,16 @@ CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
         -O2 -fno-omit-frame-pointer -Wall -Wextra
         -Werror=missing-declarations -Werror=incompatible-pointer-types -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
+}
+
+run_platform() {
+PLAT="$1"
+SRC="$ROOT/os/$PLAT"
+QEMUARGS="$2"
+
+[[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
+
+platform_flags
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
 
@@ -2639,92 +2746,7 @@ fi
 #     just not this data.
 #
 SDIMG="$BUILD/$PLAT-sd.img"
-python3 - "$SDIMG" <<'PYEOF'
-import struct, sys
-
-# A card with a partition table and a real FAT16 filesystem in it.
-#
-# Built here rather than with mkfs or hdiutil so the test carries its own
-# fixture and does not depend on what the host happens to provide. It is
-# also the only way to assert on EXACT contents: the partition entry and
-# the file inside it are both known because both were written right here.
-SEC   = 512
-PSTART = 2048            # where the partition begins, in sectors
-PSECS  = 65536           # 32MB
-SPC    = 4               # sectors per cluster
-RESV   = 1
-NFAT   = 2
-FATSECS = 64
-ROOTENT = 512
-ROOTSECS = ROOTENT * 32 // SEC
-
-part = bytearray(PSECS * SEC)
-
-# Boot sector: the BIOS parameter block is what dossrv reads to find
-# everything else, so every field below is load-bearing.
-bs = bytearray(SEC)
-bs[0:3]   = b"\xEB\x3C\x90"
-bs[3:11]  = b"INFRNODE"
-struct.pack_into("<H", bs, 11, SEC)       # bytes per sector
-bs[13] = SPC
-struct.pack_into("<H", bs, 14, RESV)      # reserved sectors
-bs[16] = NFAT
-struct.pack_into("<H", bs, 17, ROOTENT)   # root directory entries
-struct.pack_into("<H", bs, 19, PSECS if PSECS < 65536 else 0)
-bs[21] = 0xF8                             # media descriptor
-struct.pack_into("<H", bs, 22, FATSECS)   # sectors per FAT
-struct.pack_into("<H", bs, 24, 32)        # sectors per track
-struct.pack_into("<H", bs, 26, 64)        # heads
-struct.pack_into("<I", bs, 28, PSTART)    # hidden sectors
-struct.pack_into("<I", bs, 32, 0 if PSECS < 65536 else PSECS)
-bs[36] = 0x80                             # drive number
-bs[38] = 0x29                             # extended boot signature
-struct.pack_into("<I", bs, 39, 0x12345678)
-bs[43:54] = b"INFRBOOT   "
-bs[54:62] = b"FAT16   "
-bs[510] = 0x55; bs[511] = 0xAA
-part[0:SEC] = bs
-
-CONTENT = b"hello from the SD card\n"
-
-# Two FATs. Cluster 0 and 1 are reserved; the file occupies cluster 2
-# and ends there.
-fat = bytearray(FATSECS * SEC)
-struct.pack_into("<H", fat, 0, 0xFFF8)
-struct.pack_into("<H", fat, 2, 0xFFFF)
-struct.pack_into("<H", fat, 4, 0xFFFF)
-for i in range(NFAT):
-    off = (RESV + i*FATSECS) * SEC
-    part[off:off+len(fat)] = fat
-
-# One root directory entry, in the 8.3 form FAT stores.
-rootoff = (RESV + NFAT*FATSECS) * SEC
-d = bytearray(32)
-d[0:11] = b"HELLO   TXT"
-d[11] = 0x20                              # archive
-struct.pack_into("<H", d, 26, 2)          # first cluster
-struct.pack_into("<I", d, 28, len(CONTENT))
-part[rootoff:rootoff+32] = d
-
-dataoff = (RESV + NFAT*FATSECS + ROOTSECS) * SEC
-part[dataoff:dataoff+len(CONTENT)] = CONTENT
-
-# And the card around it.
-#
-# 64MB exactly, because QEMU's SD model requires a power-of-two image
-# and silently refuses to present a card otherwise -- which arrives as
-# "sd: no card in the slot" and reads like a driver fault.
-buf = bytearray(64*1024*1024)
-e = bytearray(16)
-e[0] = 0x80                               # bootable
-e[4] = 0x06                               # FAT16
-struct.pack_into("<I", e, 8, PSTART)
-struct.pack_into("<I", e, 12, PSECS)
-buf[446:462] = e
-buf[510] = 0x55; buf[511] = 0xAA
-buf[PSTART*SEC : PSTART*SEC + len(part)] = part
-open(sys.argv[1], "wb").write(buf)
-PYEOF
+make_sd_image "$SDIMG"
 
 #     Boot with a card, wait for the driver's verdict on it, and then
 #     ask QEMU which controller the card is on.
@@ -4085,14 +4107,18 @@ else
     pass "every mboxprop call passes element counts, not sizeof"
 fi
 
-run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
+# BAREMETAL_PLATFORMS picks which machines to build and test; the
+# default is every one there is. Naming one is for working on it:
+#
+#     BAREMETAL_PLATFORMS=bcm2837 ./tests/host/baremetal_test.sh
+want_platform() {
+    case " ${BAREMETAL_PLATFORMS:-bcm2837} " in *" $1 "*) return 0;; esac
+    return 1
+}
 
-#
-# A second machine (QEMU virt) once ran here too. If one comes back,
-# remember: -M virt defaults to cortex-a15, a 32-bit CPU, even under
-# qemu-system-aarch64, and an AArch64 kernel booted without
-# -cpu cortex-a53 produces no output at all.
-#
+if want_platform bcm2837; then
+run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
+fi
 
 
 echo ""

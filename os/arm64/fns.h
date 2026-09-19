@@ -35,14 +35,31 @@ void	uartputd(u64int);
  *                 wrong one never presents as a clock bug.
  * boardfbprobe    framebuffer bring-up, last, once everything it needs
  *                 is up
+ * boarddevprobe   the devices found late, after devether's reset and
+ *                 before #S is bound: the card and the radio on
+ *                 bcm2837, the virtio disk and network card on virt.
+ *                 It was boardsdprobe until it was plainly not only that.
+ *
+ * And four more that a second board (os/virt) forced, each of which WAS
+ * lines of kmain that turned out to be the BCM2837's:
+ *
+ * boardintrprobe  raise a device interrupt on demand and see it handled
+ * boardstartcpus  release the secondary cores to the given entry point
+ * boardlockon     the MMU is on and exclusives work: board code that
+ *                 must not take a Lock before that may start
+ * boardusblink    register the board's USB host controller, if it has one
  */
 char*	boardname(void);
 void	boardprobe(void);
 void	boardioprobe(void);
 void	boardclockcheck(void);
 void	boardfbprobe(void);
-void	boardsdprobe(void);
+void	boarddevprobe(void);
 void	displaywatch(void*);
+void	boardintrprobe(void);
+void	boardstartcpus(uintptr);
+void	boardlockon(void);
+void	boardusblink(void);
 void	mboxlockon(void);
 
 /* arch.S -- AArch64 primitives that cannot be written in C */

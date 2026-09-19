@@ -6,9 +6,16 @@
 #	fact of the link having been encrypted, and hands back the PDUs
 #	to send, the key to encrypt with, and the keys the peer gave.
 #
-#	Not here: LE Secure Connections (ECDH, f4/f5/f6), passkey entry,
-#	OOB, and the responder's side. A peer that will only do Secure
-#	Connections is refused with "pairing not supported" and says so.
+#	LE Secure Connections (2.3.5.6) is offered on every request and
+#	used when the peer offers it too: P-256 keys exchanged, the
+#	peer's confirm checked against its nonce, the six digits of
+#	numeric comparison shown when both ends can show and answer
+#	(Ev.Confirm, answered with Pairing.confirm), the DHKey checks
+#	exchanged, and the link encrypted with the LTK f5 made, which
+#	both ends now hold and neither sent. A peer that does not offer
+#	it gets legacy pairing as before.
+#
+#	Not here: passkey entry, OOB, and the responder's side.
 #
 
 Smp: module
@@ -45,6 +52,8 @@ Smp: module
 	Funspecified:	con 16r08;
 	Frepeated:	con 16r09;
 	Finvalidparams:	con 16r0a;
+	Fdhkeycheck:	con 16r0b;
+	Fnumcmp:	con 16r0c;
 
 	# IO capabilities, 2.3.2
 	IOdisplayonly, IOdisplayyesno, IOkeyboardonly, IOnone, IOkeyboarddisplay: con iota;
@@ -66,6 +75,7 @@ Smp: module
 		irk:	array of byte;		# 16, nil if not given
 		idtype:	int;			# the identity address type
 		idaddr:	string;			# and address, nil if not given
+		sc:	int;			# made by Secure Connections: EDIV 0 and Rand 0, and still one to store
 	};
 
 	Ev: adt {
@@ -76,6 +86,8 @@ Smp: module
 			key:	array of byte;		# the STK: LE_Start_Encryption with EDIV 0, Rand 0
 		Paired =>
 			keys:	ref Keys;		# distribution done; keys.ltk is what to store
+		Confirm =>
+			value:	int;			# numeric comparison: show these six digits, then Pairing.confirm
 		Failed =>
 			reason:	int;
 			text:	string;
@@ -83,7 +95,8 @@ Smp: module
 	};
 
 	# states
-	Idle, Waitrsp, Waitconfirm, Waitrandom, Waitencrypt, Waitkeys, Done, Failed: con iota;
+	Idle, Waitrsp, Waitconfirm, Waitrandom, Waitencrypt, Waitkeys, Done, Failed,
+	Waitpubkey, Waitscconfirm, Waitscrandom, Waituser, Waitdhcheck: con iota;
 
 	Pairing: adt {
 		state:	int;
@@ -100,6 +113,16 @@ Smp: module
 		stk:	array of byte;
 		keys:	ref Keys;
 		want:	int;			# key distribution bits still to come from the peer
+		# Secure Connections. io and offersc may be set before start();
+		# priv, pkx and pky too, by a test that wants the debug keys.
+		io:	int;			# our IO capability: IOnone, or IOdisplayyesno for numeric comparison
+		offersc: int;
+		sc:	int;			# both ends offered it: this pairing is one
+		priv, pkx, pky:	array of byte;	# our P-256 key pair
+		peerx, peery:	array of byte;	# the peer's public key
+		dh:	array of byte;		# the shared secret
+		mackey:	array of byte;
+		numeric: int;			# numeric comparison, not Just Works
 
 		# begin as the central: mrand is 16 random bytes from the caller
 		new:	fn(iat: int, ia: array of byte, rat: int, ra: array of byte, mrand: array of byte): ref Pairing;
@@ -107,6 +130,8 @@ Smp: module
 		recv:	fn(p: self ref Pairing, pdu: array of byte): list of ref Ev;
 		# the link is now encrypted with the STK: key distribution follows
 		encrypted: fn(p: self ref Pairing): list of ref Ev;
+		# the answer to Ev.Confirm: do both ends show the same digits?
+		confirm: fn(p: self ref Pairing, yes: int): list of ref Ev;
 	};
 
 	# the cryptographic functions, on 16-byte little-endian values as

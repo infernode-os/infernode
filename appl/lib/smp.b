@@ -239,24 +239,35 @@ failtext(reason: int): string
 	Funspecified =>		return "unspecified reason";
 	Frepeated =>		return "repeated attempts";
 	Finvalidparams =>	return "invalid parameters";
+	Fdhkeycheck =>		return "DHKey check failed";
+	Fnumcmp =>		return "numeric comparison failed";
 	}
 	return sys->sprint("pairing failed 0x%2.2x", reason);
 }
 
 Pairing.new(iat: int, ia: array of byte, rat: int, ra: array of byte, mrand: array of byte): ref Pairing
 {
-	return ref Pairing(Idle, iat, ia, rat, ra, nil, nil, mrand, nil, nil, array[16] of { * => byte 0 }, nil, nil, 0);
+	return ref Pairing(Idle, iat, ia, rat, ra, nil, nil, mrand, nil, nil, array[16] of { * => byte 0 }, nil, nil, 0,
+		IOnone, 1, 0, nil, nil, nil, nil, nil, nil, nil, 0);
 }
 
-# Pairing Request: Just Works with bonding, a 16-byte key, and we ask
-# for the peer's encryption and identity keys and give none
+# Pairing Request: bonding, a 16-byte key, and we ask for the peer's
+# encryption and identity keys and give none. Secure Connections is
+# offered unless the caller said not; man-in-the-middle protection is
+# asked for when we can show digits and take an answer, which is what
+# numeric comparison needs.
 Pairing.start(p: self ref Pairing): list of ref Ev
 {
 	req := array[7] of byte;
 	req[0] = byte Cpairreq;
-	req[1] = byte IOnone;
+	req[1] = byte p.io;
 	req[2] = byte 0;			# no OOB
-	req[3] = byte Abonding;
+	auth := Abonding;
+	if(p.offersc)
+		auth |= Asc;
+	if(p.io == IOdisplayyesno || p.io == IOkeyboarddisplay)
+		auth |= Amitm;
+	req[3] = byte auth;
 	req[4] = byte 16;
 	req[5] = byte 0;			# we distribute nothing
 	req[6] = byte (Kenc | Kid);
@@ -294,9 +305,15 @@ Pairing.recv(p: self ref Pairing, pdu: array of byte): list of ref Ev
 		if(int pdu[4] < 7)
 			return fail(p, Fenckeysize);
 		p.want = int pdu[6] & (Kenc | Kid);
+		if(p.offersc && (int pdu[3] & Asc))
+			return scstart(p);
 		p.state = Waitconfirm;
 		mconfirm := c1(p.tk, p.mrand, p.preq, p.pres, p.iat, p.ia, p.rat, p.ra);
 		return ref Ev.Send(withcode(Cconfirm, mconfirm)) :: nil;
+	Waitpubkey or Waitscconfirm or Waitscrandom or Waitdhcheck =>
+		return screcv(p, code, pdu);
+	Waituser =>
+		return nil;	# nothing is due from the peer while the user looks at the digits
 	Waitconfirm =>
 		if(code != Cconfirm || len pdu < 17)
 			return fail(p, Finvalidparams);
@@ -322,20 +339,143 @@ Pairing.recv(p: self ref Pairing, pdu: array of byte): list of ref Ev
 	return nil;
 }
 
+#
+# LE Secure Connections, 2.3.5.6, as the initiator. A is us, B the peer.
+#
+
+# an address as f5 and f6 take it: six bytes and then its type
+addr7(a: array of byte, t: int): array of byte
+{
+	r := array[7] of byte;
+	r[0:] = a[0:6];
+	r[6] = byte t;
+	return r;
+}
+
+# can this end show six digits and take a yes or no?
+canconfirm(io: int): int
+{
+	return io == IOdisplayyesno || io == IOkeyboarddisplay;
+}
+
+# Public keys first: ours goes, the peer's comes back.
+scstart(p: ref Pairing): list of ref Ev
+{
+	p.sc = 1;
+	# SC distributes no LTK: both ends make it. Only the identity is still to come.
+	p.want &= Kid;
+	if(p.priv == nil)
+		(p.priv, p.pkx, p.pky) = sckeys();
+	if(p.priv == nil)
+		return fail(p, Funspecified);
+	# Numeric comparison when both ends can show and answer and either
+	# asked for protection from a man in the middle (2.3.5.1, table
+	# 2.8); Just Works otherwise. A pairing that would need a passkey
+	# typed is not one we can do.
+	peerio := int p.pres[1];
+	mitm := (int p.preq[3] | int p.pres[3]) & Amitm;
+	p.numeric = 0;
+	if(mitm){
+		if(canconfirm(p.io) && canconfirm(peerio))
+			p.numeric = 1;
+		else if(p.io != IOnone && peerio != IOnone &&
+		   (p.io == IOkeyboardonly || peerio == IOkeyboardonly || p.io == IOkeyboarddisplay || peerio == IOkeyboarddisplay))
+			return fail(p, Fauthreq);	# passkey entry
+	}
+	pk := array[65] of byte;
+	pk[0] = byte Cpublickey;
+	pk[1:] = p.pkx;
+	pk[33:] = p.pky;
+	p.state = Waitpubkey;
+	return ref Ev.Send(pk) :: nil;
+}
+
+screcv(p: ref Pairing, code: int, pdu: array of byte): list of ref Ev
+{
+	zero := array[16] of { * => byte 0 };
+	case p.state {
+	Waitpubkey =>
+		if(code != Cpublickey || len pdu < 65)
+			return fail(p, Finvalidparams);
+		p.peerx = pdu[1:33];
+		p.peery = pdu[33:65];
+		# our own key handed back proves nothing about who holds its
+		# private half; and dhkey() refuses a point off the curve
+		if(same(p.peerx, p.pkx))
+			return fail(p, Fdhkeycheck);
+		p.dh = dhkey(p.priv, p.peerx, p.peery);
+		if(p.dh == nil)
+			return fail(p, Fdhkeycheck);
+		p.state = Waitscconfirm;
+		return nil;
+	Waitscconfirm =>
+		# the peer commits to its nonce before it sees ours
+		if(code != Cconfirm || len pdu < 17)
+			return fail(p, Finvalidparams);
+		p.sconfirm = pdu[1:17];
+		p.state = Waitscrandom;
+		return ref Ev.Send(withcode(Crandom, p.mrand)) :: nil;
+	Waitscrandom =>
+		if(code != Crandom || len pdu < 17)
+			return fail(p, Finvalidparams);
+		p.srand = pdu[1:17];
+		if(!same(f4(p.peerx, p.pkx, p.srand, 0), p.sconfirm))
+			return fail(p, Fconfirmfailed);
+		if(p.numeric){
+			p.state = Waituser;
+			return ref Ev.Confirm(g2(p.pkx, p.peerx, p.mrand, p.srand)) :: nil;
+		}
+		return sccheck(p);
+	Waitdhcheck =>
+		if(code != Cdhkeycheck || len pdu < 17)
+			return fail(p, Finvalidparams);
+		a := addr7(p.ia, p.iat);
+		b := addr7(p.ra, p.rat);
+		eb := f6(p.mackey, p.srand, p.mrand, zero, p.pres[1:4], b, a);
+		if(!same(eb, pdu[1:17]))
+			return fail(p, Fdhkeycheck);
+		# the LTK both ends computed is the key: no STK, nothing sent
+		p.state = Waitencrypt;
+		return ref Ev.Encrypt(p.stk) :: nil;
+	}
+	return nil;
+}
+
+# authentication stage 2: the keys from f5, and our check value
+sccheck(p: ref Pairing): list of ref Ev
+{
+	zero := array[16] of { * => byte 0 };
+	a := addr7(p.ia, p.iat);
+	b := addr7(p.ra, p.rat);
+	(p.mackey, p.stk) = f5(p.dh, p.mrand, p.srand, a, b);
+	ea := f6(p.mackey, p.mrand, p.srand, zero, p.preq[1:4], a, b);
+	p.state = Waitdhcheck;
+	return ref Ev.Send(withcode(Cdhkeycheck, ea)) :: nil;
+}
+
+Pairing.confirm(p: self ref Pairing, yes: int): list of ref Ev
+{
+	if(p.state != Waituser)
+		return nil;
+	if(!yes)
+		return fail(p, Fnumcmp);
+	return sccheck(p);
+}
+
 Pairing.encrypted(p: self ref Pairing): list of ref Ev
 {
 	if(p.state != Waitencrypt)
 		return nil;
 	p.state = Waitkeys;
 	if(p.keys == nil)
-		p.keys = ref Keys(nil, 0, nil, nil, 0, nil);
+		p.keys = ref Keys(nil, 0, nil, nil, 0, nil, 0);
 	return done(p);
 }
 
 keydist(p: ref Pairing, code: int, pdu: array of byte): list of ref Ev
 {
 	if(p.keys == nil)
-		p.keys = ref Keys(nil, 0, nil, nil, 0, nil);
+		p.keys = ref Keys(nil, 0, nil, nil, 0, nil, 0);
 	case code {
 	Cencinfo =>
 		if(len pdu < 17)
@@ -372,7 +512,15 @@ done(p: ref Pairing): list of ref Ev
 	if(p.want != 0)
 		return nil;
 	p.state = Done;
-	if(p.keys.ltk == nil){
+	if(p.sc){
+		# the LTK f5 made: EDIV 0 and Rand 0 by definition, and a
+		# key to keep -- which is what keys.sc tells the caller,
+		# since a legacy STK looks the same and is not
+		p.keys.ltk = p.stk;
+		p.keys.rand = array[8] of { * => byte 0 };
+		p.keys.ediv = 0;
+		p.keys.sc = 1;
+	}else if(p.keys.ltk == nil){
 		# no encryption key was to come: the STK is all there is,
 		# and it cannot be stored (Rand 0, EDIV 0 marks it as such)
 		p.keys.ltk = p.stk;

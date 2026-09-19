@@ -3181,6 +3181,11 @@ leconnect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 	}
 	rnd := randombytes(16);
 	lk.pairing = Pairing.new(0, bthci->parsebdaddr(addr), lk.peertype, bthci->parsebdaddr(lk.addr), rnd);
+	# "iocap yesno" means the same for an LE pairing as a classic one:
+	# we can show six digits and take an answer. Anything else pairs
+	# as Just Works; a passkey is not something smp(2) does.
+	if(iocap == Bthci->IOdisplayyesno)
+		lk.pairing.io = Smp->IOdisplayyesno;
 	smpevents(srv, lk, lk.pairing.start());
 }
 
@@ -3241,12 +3246,22 @@ smpevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Smp->Ev)
 			spawn lestartencryption(lk.handle, array[8] of { * => byte 0 }, 0, e.key);
 		Paired =>
 			k := e.keys;
-			if(k.ediv != 0 || !allzero(k.rand))
+			# a Secure Connections LTK has EDIV 0 and Rand 0 by
+			# definition and is a key to keep; a legacy STK looks
+			# the same and is not
+			if(k.sc || k.ediv != 0 || !allzero(k.rand))
 				storeltk(lk.addr, lk.peertype, k);
-			auditlog("paired", sys->sprint("peer=%s le", lk.addr));
+			auditlog("paired", sys->sprint("peer=%s le %s", lk.addr, choose(k.sc, "sc", "legacy")));
 			pairnote(srv, sys->sprint("paired %s\n", lk.addr));
 			lk.pairing = nil;
 			lesecured(srv, lk, 1, nil);
+		Confirm =>
+			# numeric comparison: the same prompt, and the same
+			# answers, as a classic pairing's (pairwrite)
+			if(findsub(Qpair) != nil)
+				pairnote(srv, sys->sprint("confirm %s %6.6d\n", lk.addr, e.value));
+			else if(lk.pairing != nil)
+				smpevents(srv, lk, lk.pairing.confirm(0));	# nobody to ask is a no
 		Failed =>
 			lk.pairing = nil;
 			pairnote(srv, sys->sprint("failed %s %s\n", lk.addr, e.text));
@@ -4079,6 +4094,13 @@ pairwrite(srv: ref Styxserver, tm: ref Tmsg.Write)
 	(nf, f) := sys->tokenize(string tm.data, " \t\r\n");
 	if(nf < 2 || (a := bthci->parsebdaddr(hd tl f)) == nil){
 		srv.reply(ref Rmsg.Error(tm.tag, "usage: yes|no <addr> | passkey <addr> <digits>"));
+		return;
+	}
+	# an LE pairing waiting on its six digits takes the answer itself
+	lelk := linkbyaddr(hd tl f);
+	if(lelk != nil && lelk.le && lelk.pairing != nil && lelk.pairing.state == Smp->Waituser && (hd f == "yes" || hd f == "no")){
+		smpevents(srv, lelk, lelk.pairing.confirm(hd f == "yes"));
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 		return;
 	}
 	case hd f {

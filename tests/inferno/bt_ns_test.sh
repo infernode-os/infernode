@@ -34,7 +34,7 @@ echo 'key proto=btlink addr=99:99:99:99:99:99 type=4 !key=0000000000000000000000
 echo 'key proto=btlink addr=99:99:99:99:99:99 type=4 !key=00000000000000000000000000000002' >> $KEYS
 echo 'key proto=btlink addr=98:98:98:98:98:98 type=4 !key=00000000000000000000000000000009' >> $KEYS
 echo 'key proto=btlink addr=99:99:99:99:99:99 type=4 !key=00000000000000000000000000000003' >> $KEYS
-btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -n 'ee:ee:ee:ee:ee:05 0x000000 -55 mockmouse le' -n 'ee:ee:ee:ee:ee:06 0x000000 -60 modernmouse lereport' -t 100 -H $HCD $MNT/chan/btmock &
+btmock -a 'b8:27:eb:00:00:42' -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' -n 'aa:bb:cc:dd:ee:ff 0x000104 -80' -n 'aa:aa:aa:aa:aa:01 0x000540 -50 oldkbd pin=1234' -n 'bb:bb:bb:bb:bb:02 0x000540 -50 sspdev ssp' -n 'cc:cc:cc:cc:cc:03 0x000540 -50 sspdev2 ssp' -n 'dd:dd:dd:dd:dd:04 0x000540 -50 caller ssp' -n 'ee:ee:ee:ee:ee:05 0x000000 -55 mockmouse le' -n 'ee:ee:ee:ee:ee:06 0x000000 -60 modernmouse lereport' -n 'ee:ee:ee:ee:ee:07 0x000000 -58 scphone lesc' -t 100 -H $HCD $MNT/chan/btmock &
 sleep 1
 if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
@@ -200,8 +200,8 @@ if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
 # name from its advertising data; EOF when the scan time is up.
 le=`{cat $BT/lescan}
 n=`{cat $BT/lescan | wc -l}
-if {! ~ $"n 8} {
-	raise 'fail:lescan returned '^$"n^' lines, wanted 8 (every device given to the mock advertises)'
+if {! ~ $"n 9} {
+	raise 'fail:lescan returned '^$"n^' lines, wanted 9 (every device given to the mock advertises)'
 }
 if {! ~ $"le *94:bb:43:44:61:04*public*-61*hephaestus*} {
 	raise 'fail:lescan is missing the first device: '^$"le
@@ -778,6 +778,70 @@ if {! ~ $"v 'links 0'} {
 		raise 'fail:le256 was taken for a PSM: an LE PSM is one byte'
 	}
 } <> $BT/clone
+# LE Secure Connections (#647): a peer that offers it is paired with it.
+# With iocap none that is Just Works over ECDH; the LTK is one both ends
+# computed and neither sent, so it has EDIV 0 and Rand 0 and is kept all
+# the same -- the next connection encrypts from it with no pairing.
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:07!le0x80' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:status after a Secure Connections pairing: '^$"v
+	}
+	echo -n over-sc > $BT/$id/data
+	v=`{read 100 < $BT/$id/data}
+	if {! ~ $"v over-sc} {
+		raise 'fail:echo on a link secured by Secure Connections: '^$"v
+	}
+	v=`{cat $KEYS | grep 'proto=btltk addr=ee:ee:ee:ee:ee:07 type=1 ediv=0 rand=0000000000000000'}
+	if {~ $#v 0} {
+		raise 'fail:the Secure Connections LTK was not kept: '^`{cat $KEYS}
+	}
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+{
+	id=`{read 10}
+	echo 'connect ee:ee:ee:ee:ee:07!le0x80' >[1=0]
+	v=`{cat $BT/$id/status}
+	if {! ~ $"v Connected} {
+		raise 'fail:reconnecting on the stored Secure Connections LTK: '^$"v
+	}
+	echo hangup >[1=0]
+} <> $BT/clone
+sleep 1
+# iocap yesno: both ends can show digits, so they are compared. The six
+# digits are a line on pair; yes lets the pairing finish.
+echo 'forget ee:ee:ee:ee:ee:07' > $BT/ctl
+echo iocap yesno > $BT/ctl
+{
+	if {echo 'connect ee:ee:ee:ee:ee:07!le0x80' >[1=0] >[2] /dev/null} {
+		raise 'fail:an LE pairing went through with digits nobody could compare'
+	}
+} <> $BT/clone
+sleep 1
+read 200 < $BT/pair > $PAIR &
+sleep 1
+{
+	echo 'connect ee:ee:ee:ee:ee:07!le0x80' >[1=0]
+	echo hangup >[1=0]
+	echo sc-confirmed > /tmp/btns-confirmed
+} <> $BT/clone &
+sleep 8
+v=`{cat $PAIR}
+if {! ~ $"v 'confirm ee:ee:ee:ee:ee:07 '[0-9][0-9][0-9][0-9][0-9][0-9]} {
+	raise 'fail:the pair file did not show six digits for the LE pairing: '^$"v
+}
+echo yes ee:ee:ee:ee:ee:07 > $BT/pair
+sleep 4
+v=`{cat /tmp/btns-confirmed}
+if {! ~ $"v sc-confirmed} {
+	raise 'fail:the LE connection did not complete after yes'
+}
+rm -f $PAIR /tmp/btns-confirmed
+echo iocap none > $BT/ctl
+
 # announcing one: classic and LE PSMs are separate number spaces
 {
 	id=`{read 10}

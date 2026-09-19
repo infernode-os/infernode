@@ -97,6 +97,10 @@ Btmock: module
 		encrypted: int;
 		penc:	int;			# an Encryption Change to emit on the tick: 0 none, else the status + 1
 		notifyq: list of array of byte;	# boot reports to notify, once subscribed
+		# an LE peer that pairs with Secure Connections (kind "lesc"): it can
+		# show digits and answer, and always answers yes
+		sc:	int;
+		peerx, peery, dh, na, nb: array of byte;
 	};
 
 	Attr: adt {

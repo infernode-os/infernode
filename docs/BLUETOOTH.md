@@ -543,7 +543,29 @@ and LE PSMs kept as separate number spaces. Closed by default: an LE
 channel is refused on a link that is not encrypted. The mock's LE peers
 echo on `le128`, and the contract test sends a 1500-byte SDU through it
 and back. This is the board as *central*; being found by a phone is the
-peripheral role, which is next, with LE Secure Connections.
+peripheral role.
+
+*LE Secure Connections, the same day:* `smp(2)` has AES-CMAC and f4, f5,
+f6 and g2, checked against RFC 4493 and the specification's Appendix D
+sample data, with keyring's P-256 for the key exchange (the board's
+kernel already links it), and the initiator's state machine: public
+keys, the peer's commitment checked against its nonce, numeric
+comparison when both ends can show digits and answer (`iocap yesno`; the
+six digits are a `confirm` line on `pair`, answered `yes` or `no` as a
+classic pairing's is), the DHKey checks, and the link encrypted with an
+LTK both ends computed and neither sent. It is offered on every Pairing
+Request and used when the peer offers it too; a legacy peer pairs as
+before. Such an LTK has EDIV 0 and Rand 0 and is kept all the same,
+which `Keys.sc` tells the caller, since a legacy STK looks identical and
+must not be. A public key off the curve, or our own reflected, ends the
+pairing, as does a pairing that could only be protected by a typed
+passkey. The mock has a Secure Connections peer (`lesc`), and the
+contract test pairs with it both ways and reconnects on the stored key.
+What that test found on the way: an LE link's last packet credits were
+returned to the classic pool once the link had been forgotten, so LE
+starved after a disconnection with packets in flight; fixed. Not done:
+the responder's side, which the peripheral role needs, and passkey
+entry.
 
 ## Test plan
 

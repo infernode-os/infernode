@@ -214,7 +214,7 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		# an LE-only device does not answer an inquiry
 		rl: list of ref Found;
 		for(nl := c.nearby; nl != nil; nl = tl nl)
-			if(authkind(c, (hd nl).addr) != "le" && authkind(c, (hd nl).addr) != "lereport")
+			if(!lekind(authkind(c, (hd nl).addr)))
 				rl = hd nl :: rl;
 		c.inquiring = nil;
 		for(; rl != nil; rl = tl rl)
@@ -233,8 +233,9 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		if(findpeer(c, addr) != nil)
 			return cmdstatus(c, op, Bthci->Sconnexists);
 		kind := authkind(c, addr);
-		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 1, hidtable(kind == "lereport"), 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
-		if(lookup(c, addr) != nil && (kind == "le" || kind == "lereport"))
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 1, hidtable(kind == "lereport"), 0, nil, nil, nil, nil, nil, nil, 0, 0, nil,
+			kind == "lesc", nil, nil, nil, nil, nil);
+		if(lookup(c, addr) != nil && lekind(kind))
 			pr.handle = c.nexthandle++;
 		c.pendconn = appendpeer(c.pendconn, pr);
 		return cmdstatus(c, op, Bthci->Sok);
@@ -252,6 +253,8 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 			ok = 1;
 		else if(same(key, ltkfor(c, pr.addr)) && bthci->get2(params, 10) == 16r1234)
 			ok = 1;
+		else if(pr.sc && same(key, ltkfor(c, pr.addr)) && bthci->get2(params, 10) == 0)
+			ok = 1;		# a Secure Connections LTK: EDIV 0, Rand 0
 		if(ok)
 			pr.penc = 1;
 		else
@@ -261,7 +264,7 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		if(len params < 13)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
 		addr := bthci->bdaddr(params, 0);
-		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil);
 		if(lookup(c, addr) != nil)
 			pr.handle = c.nexthandle++;
 		# unknown devices page out: Connection Complete with page timeout, on the tick
@@ -488,6 +491,12 @@ sameb(a, b: array of byte): int
 		if(a[i] != b[i])
 			return 0;
 	return 1;
+}
+
+# the kinds of device that are LE peripherals
+lekind(k: string): int
+{
+	return k == "le" || k == "lereport" || k == "lesc";
 }
 
 authkind(c: ref Ctlr, addr: string): string
@@ -747,10 +756,55 @@ smpresponder(c: ref Ctlr, pr: ref Peer, pdu: array of byte): list of ref Ev
 		if(len pdu < 7)
 			return nil;
 		pr.preq = pdu[0:7];
+		if(pr.sc && (int pdu[3] & Smp->Asc)){
+			# Secure Connections, from a peer that can show digits and
+			# wants protection: numeric comparison if the host can too
+			rsp := array[] of { byte Smp->Cpairrsp, byte Smp->IOdisplayyesno, byte 0,
+				byte (Smp->Abonding | Smp->Asc | Smp->Amitm), byte 16, byte 0, byte Smp->Kid };
+			pr.pres = rsp;
+			pr.sstate = 10;
+			return pr.l2.sendfixed(L2cap->Cidsmp, rsp);
+		}
 		rsp := array[] of { byte Smp->Cpairrsp, byte Smp->IOnone, byte 0, byte Smp->Abonding, byte 16, byte 0, byte (Smp->Kenc | Smp->Kid) };
 		pr.pres = rsp;
 		pr.sstate = 1;
 		return pr.l2.sendfixed(L2cap->Cidsmp, rsp);
+	Smp->Cpublickey =>
+		# the host's key in; ours out, and with it the commitment to our
+		# nonce. The key pair is the specification's debug pair B: a
+		# mock has no secret worth a second of key generation per test.
+		if(len pdu < 65 || pr.sstate != 10)
+			return nil;
+		pr.peerx = pdu[1:33];
+		pr.peery = pdu[33:65];
+		pr.dh = smp->dhkey(scpriv(), pr.peerx, pr.peery);
+		if(pr.dh == nil){
+			pr.sstate = 0;
+			return pr.l2.sendfixed(L2cap->Cidsmp, array[] of { byte Smp->Cfailed, byte Smp->Fdhkeycheck });
+		}
+		pr.nb = array[16] of byte;
+		for(i := 0; i < 16; i++)
+			pr.nb[i] = byte (16r60 + i);
+		pk := array[65] of byte;
+		pk[0] = byte Smp->Cpublickey;
+		pk[1:] = scpubx();
+		pk[33:] = scpuby();
+		pr.sstate = 11;
+		cb := smp->f4(scpubx(), pr.peerx, pr.nb, 0);
+		return catev(pr.l2.sendfixed(L2cap->Cidsmp, pk), pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cconfirm, cb)));
+	Smp->Cdhkeycheck =>
+		if(len pdu < 17 || pr.sstate != 12)
+			return nil;
+		a := addr7(ia, 0);
+		b := addr7(ra, 1);
+		(mackey, ltk) := smp->f5(pr.dh, pr.na, pr.nb, a, b);
+		if(!same(smp->f6(mackey, pr.na, pr.nb, zero16, pr.preq[1:4], a, b), pdu[1:17])){
+			pr.sstate = 0;
+			return pr.l2.sendfixed(L2cap->Cidsmp, array[] of { byte Smp->Cfailed, byte Smp->Fdhkeycheck });
+		}
+		pr.stk = ltk;
+		pr.sstate = 3;
+		return pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cdhkeycheck, smp->f6(mackey, pr.nb, pr.na, zero16, pr.pres[1:4], b, a)));
 	Smp->Cconfirm =>
 		if(len pdu < 17 || pr.sstate != 1)
 			return nil;
@@ -762,6 +816,12 @@ smpresponder(c: ref Ctlr, pr: ref Peer, pdu: array of byte): list of ref Ev
 		pr.sstate = 2;
 		return pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cconfirm, sconf));
 	Smp->Crandom =>
+		if(len pdu >= 17 && pr.sstate == 11){
+			# Secure Connections: the host's nonce, answered with ours
+			pr.na = pdu[1:17];
+			pr.sstate = 12;
+			return pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Crandom, pr.nb));
+		}
 		if(len pdu < 17 || pr.sstate != 2)
 			return nil;
 		pr.mrand = pdu[1:17];
@@ -777,9 +837,87 @@ smpresponder(c: ref Ctlr, pr: ref Peer, pdu: array of byte): list of ref Ev
 	return nil;
 }
 
+# the specification's debug key pair B (Vol 3 Part H D.1), least significant octet first where it travels
+scpriv(): array of byte
+{
+	return key32("55188b3d32f6bb9a900afcfbeed4e72a", "59cb9ac2f19d7cfb6b4fdd49f47fc5fd");
+}
+
+scpubx(): array of byte
+{
+	return revb(key32("1ea1f0f01faf1d9609592284f19e4c00", "47b58afd8615a69f559077b22faaa190"));
+}
+
+scpuby(): array of byte
+{
+	return revb(key32("4c55f33e429dad377356703a9ab85160", "472d1130e28e36765f89aff915b1214a"));
+}
+
+# 32 bytes from two 32-digit halves, in the order written
+key32(hi, lo: string): array of byte
+{
+	r := array[32] of byte;
+	r[0:] = hexbytes(hi);
+	r[16:] = hexbytes(lo);
+	return r;
+}
+
+hexbytes(h: string): array of byte
+{
+	a := array[len h / 2] of byte;
+	for(i := 0; i < len a; i++){
+		v := 0;
+		for(j := 0; j < 2; j++){
+			ch := h[2*i + j];
+			d := ch - '0';
+			if(ch >= 'a')
+				d = ch - 'a' + 10;
+			v = v*16 + d;
+		}
+		a[i] = byte v;
+	}
+	return a;
+}
+
+revb(a: array of byte): array of byte
+{
+	r := array[len a] of byte;
+	for(i := 0; i < len a; i++)
+		r[i] = a[len a - 1 - i];
+	return r;
+}
+
+addr7(a: array of byte, typ: int): array of byte
+{
+	r := array[7] of byte;
+	r[0:] = a[0:6];
+	r[6] = byte typ;
+	return r;
+}
+
+catev(a, b: list of ref Ev): list of ref Ev
+{
+	if(a == nil)
+		return b;
+	return hd a :: catev(tl a, b);
+}
+
 # encrypted with the STK: the keys, as the response promised
 distribute(c: ref Ctlr, pr: ref Peer): array of byte
 {
+	if(pr.sc && pr.dh != nil){
+		# Secure Connections: both ends made the LTK, so only the
+		# identity is given
+		pr.sstate = 4;
+		c.lekeys = (pr.addr, pr.stk) :: c.lekeys;
+		sirk := array[16] of { * => byte 16rbb };
+		sout := peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cidinfo, sirk)));
+		sida := array[8] of byte;
+		sida[0] = byte Smp->Cidaddr;
+		sida[1] = byte 1;
+		sida[2:] = bthci->parsebdaddr(pr.addr);
+		return cat(sout, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidsmp, sida)));
+	}
 	pr.sstate = 4;
 	c.lekeys = (pr.addr, mockltk) :: c.lekeys;
 	out := peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidsmp, withcode(Smp->Cencinfo, mockltk)));
@@ -1024,7 +1162,7 @@ Ctlr.call(c: self ref Ctlr, addr: string, psm: int, text: string): string
 		return "no such device nearby: " + addr;
 	if(findpeer(c, addr) != nil)
 		return "already connected: " + addr;
-	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
+	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil);
 	c.pendconn = appendpeer(c.pendconn, pr);
 	return nil;
 }
@@ -1037,7 +1175,7 @@ Ctlr.callrf(c: self ref Ctlr, addr: string, channel: int, text: string): string
 		return "no such device nearby: " + addr;
 	if(findpeer(c, addr) != nil)
 		return "already connected: " + addr;
-	pr := ref Peer(addr, 0, 2, nil, 1, L2cap->Psmrfcomm, text, 0, nil, nil, channel, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil);
+	pr := ref Peer(addr, 0, 2, nil, 1, L2cap->Psmrfcomm, text, 0, nil, nil, channel, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil);
 	c.pendconn = appendpeer(c.pendconn, pr);
 	return nil;
 }
@@ -1233,7 +1371,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 		p[1] = byte 1;
 		p[2] = byte 0;			# ADV_IND
 		p[3] = byte 0;			# public
-		if(authkind(c, f.addr) == "le" || authkind(c, f.addr) == "lereport")
+		if(lekind(authkind(c, f.addr)))
 			p[3] = byte 1;		# an LE device here has a random static address
 		a := bthci->parsebdaddr(f.addr);
 		if(a == nil)

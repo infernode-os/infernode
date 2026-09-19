@@ -259,6 +259,228 @@ testPairing(t: ref T)
 	t.asserteq(p.state, Smp->Done, "and the pairing is done");
 }
 
+# The specification's two debug key pairs (D.1): A is the initiator.
+PA:  con "3f49f6d4a3c55f3874c9b3e3d2103f504aff607beb40b7995899b8a6cd3c1abd";
+PAX: con "20b003d2f297be2c5e2c83a7e9f9a5b9eff49111acf4fddbcc0301480e359de6";
+PAY: con "dc809c49652aeb6d63329abf5a52155c766345c28fed3024741c8ed01589d28b";
+PB:  con "55188b3d32f6bb9a900afcfbeed4e72a59cb9ac2f19d7cfb6b4fdd49f47fc5fd";
+PBX: con "1ea1f0f01faf1d9609592284f19e4c0047b58afd8615a69f559077b22faaa190";
+PBY: con "4c55f33e429dad377356703a9ab85160472d1130e28e36765f89aff915b1214a";
+
+# A Secure Connections responder, scripted from 2.3.5.6 and not from
+# the code under test: it holds B's keys and says what B must say.
+Scpeer: adt {
+	ia, ra:	array of byte;
+	iat, rat: int;
+	preq, pres: array of byte;
+	na, nb:	array of byte;
+	dh, mackey, ltk: array of byte;
+
+	pubkey:	fn(r: self ref Scpeer): array of byte;
+	confirm: fn(r: self ref Scpeer): array of byte;
+	check:	fn(r: self ref Scpeer, t: ref T, ea: array of byte): array of byte;
+};
+
+addr7(a: array of byte, typ: int): array of byte
+{
+	r := array[7] of byte;
+	r[0:] = a[0:6];
+	r[6] = byte typ;
+	return r;
+}
+
+Scpeer.pubkey(nil: self ref Scpeer): array of byte
+{
+	pk := array[65] of byte;
+	pk[0] = byte Smp->Cpublickey;
+	pk[1:] = le(PBX);
+	pk[33:] = le(PBY);
+	return pk;
+}
+
+# Cb = f4(PKbx, PKax, Nb, 0)
+Scpeer.confirm(r: self ref Scpeer): array of byte
+{
+	return withcode(Smp->Cconfirm, smp->f4(le(PBX), le(PAX), r.nb, 0));
+}
+
+# B checks Ea = f6(MacKey, Na, Nb, 0, IOcapA, A, B) and answers
+# Eb = f6(MacKey, Nb, Na, 0, IOcapB, B, A)
+Scpeer.check(r: self ref Scpeer, t: ref T, ea: array of byte): array of byte
+{
+	zero := array[16] of { * => byte 0 };
+	a := addr7(r.ia, r.iat);
+	b := addr7(r.ra, r.rat);
+	r.dh = smp->dhkey(be(PB), le(PAX), le(PAY));
+	(r.mackey, r.ltk) = smp->f5(r.dh, r.na, r.nb, a, b);
+	t.assertseq(hex(ea), hex(smp->f6(r.mackey, r.na, r.nb, zero, r.preq[1:4], a, b)), "the responder finds our DHKey check good");
+	return withcode(Smp->Cdhkeycheck, smp->f6(r.mackey, r.nb, r.na, zero, r.pres[1:4], b, a));
+}
+
+# a pairing as far as the peer's nonce: (pairing, peer, the events its nonce produced)
+scupto(t: ref T, ourio, peerio, peerauth: int): (ref Pairing, ref Scpeer, list of ref Ev)
+{
+	ia := le("A1A2A3A4A5A6");
+	ra := le("C1C2C3C4C5C6");
+	r := ref Scpeer(ia, ra, 0, 1, nil, nil, le("d5cb8454d177733effffb2ec712baeab"), le("a6e8e7cc25a75f6e216583f7ff3dc4cf"), nil, nil, nil);
+	p := Pairing.new(0, ia, 1, ra, r.na);
+	p.io = ourio;
+	p.priv = be(PA);
+	p.pkx = le(PAX);
+	p.pky = le(PAY);
+	req := sendof(hd p.start());
+	r.preq = req[0:7];
+	t.assert((int req[3] & Smp->Asc) != 0, "the request offers Secure Connections");
+	r.pres = array[] of { byte Smp->Cpairrsp, byte peerio, byte 0, byte peerauth, byte 16, byte 0, byte (Smp->Kenc | Smp->Kid) };
+	evs := p.recv(r.pres);
+	if(evs == nil)
+		t.fatal("the response produced nothing");
+	if(reason(evs) >= 0)
+		return (p, r, evs);	# refused on the response: the caller wants to see why
+	pk := sendof(hd evs);
+	t.asserteq(int pk[0], Smp->Cpublickey, "a peer that offers it too is sent our public key");
+	t.assertseq(hex(pk[1:33]), hex(le(PAX)), "X");
+	t.assertseq(hex(pk[33:65]), hex(le(PAY)), "and Y, least significant octet first");
+	t.asserteq(len p.recv(r.pubkey()), 0, "the peer's key is taken in silence: its confirm comes next");
+	evs = p.recv(r.confirm());
+	rnd := sendof(hd evs);
+	t.asserteq(int rnd[0], Smp->Crandom, "the peer's commitment is answered with our nonce");
+	t.assertseq(hex(rnd[1:17]), hex(r.na), "which is the one we were given");
+	return (p, r, p.recv(withcode(Smp->Crandom, r.nb)));
+}
+
+testScJustWorks(t: ref T)
+{
+	(p, r, evs) := scupto(t, Smp->IOnone, Smp->IOnone, Smp->Abonding | Smp->Asc);
+	t.asserteq(len evs, 1, "with nothing to show, the peer's nonce is answered at once");
+	ea := sendof(hd evs);
+	t.asserteq(int ea[0], Smp->Cdhkeycheck, "with our DHKey check");
+	evs = p.recv(r.check(t, ea[1:17]));
+	t.asserteq(len evs, 1, "the peer's check yields one event");
+	pick e := hd evs {
+	Encrypt =>
+		t.assertseq(hex(e.key), hex(r.ltk), "the key to encrypt with is the LTK both ends computed");
+	* =>
+		t.fatal("expected Encrypt");
+	}
+	t.asserteq(len p.encrypted(), 0, "encrypted: the identity is still to come, the LTK is not");
+	t.asserteq(len p.recv(withcode(Smp->Cidinfo, le("aaaabbbbccccddddeeeeffff00001111"))), 0, "the IRK alone is not the end");
+	ida := array[8] of byte;
+	ida[0] = byte Smp->Cidaddr;
+	ida[1] = byte 0;
+	ida[2:] = r.ra;
+	evs = p.recv(ida);
+	t.asserteq(len evs, 1, "the identity address completes it");
+	pick e := hd evs {
+	Paired =>
+		t.assertseq(hex(e.keys.ltk), hex(r.ltk), "the key to keep is that LTK");
+		t.assert(e.keys.sc, "marked as one to keep, though EDIV and Rand are zero");
+		t.asserteq(e.keys.ediv, 0, "EDIV 0");
+		t.assert(e.keys.irk != nil, "with the peer's IRK");
+	* =>
+		t.error("expected Paired");
+	}
+}
+
+testScNumeric(t: ref T)
+{
+	mitm := Smp->Abonding | Smp->Asc | Smp->Amitm;
+	(p, r, evs) := scupto(t, Smp->IOdisplayyesno, Smp->IOkeyboarddisplay, mitm);
+	t.assert((int r.preq[3] & Smp->Amitm) != 0, "an end that can show digits asks for MITM protection");
+	t.asserteq(len evs, 1, "the peer's nonce yields one event");
+	pick e := hd evs {
+	Confirm =>
+		t.asserteq(e.value, smp->g2(le(PAX), le(PBX), r.na, r.nb), "six digits to show: g2(PKax, PKbx, Na, Nb)");
+		t.assert(e.value >= 0 && e.value < 1000000, "and six digits is what it is");
+	* =>
+		t.fatal("expected Confirm");
+	}
+	t.asserteq(len p.recv(r.confirm()), 0, "nothing the peer sends moves it while the user is looking");
+	evs = p.confirm(1);
+	ea := sendof(hd evs);
+	t.asserteq(int ea[0], Smp->Cdhkeycheck, "yes: our DHKey check goes");
+	evs = p.recv(r.check(t, ea[1:17]));
+	pick e := hd evs {
+	Encrypt =>	t.assertseq(hex(e.key), hex(r.ltk), "and the LTK is agreed");
+	* =>		t.error("expected Encrypt");
+	}
+
+	# and the user who says the digits differ
+	(p, r, evs) = scupto(t, Smp->IOdisplayyesno, Smp->IOdisplayyesno, mitm);
+	t.asserteq(reason(p.confirm(0)), Smp->Fnumcmp, "no: the pairing fails as a failed comparison");
+	t.asserteq(p.state, Smp->Failed, "and is over");
+}
+
+# the reason a list of events fails with, -1 if it does not
+reason(evs: list of ref Ev): int
+{
+	for(; evs != nil; evs = tl evs)
+		pick e := hd evs {
+		Failed =>	return e.reason;
+		}
+	return -1;
+}
+
+testScRefusals(t: ref T)
+{
+	sc := Smp->Abonding | Smp->Asc;
+	ia := le("A1A2A3A4A5A6");
+	ra := le("C1C2C3C4C5C6");
+	pres := array[] of { byte Smp->Cpairrsp, byte Smp->IOnone, byte 0, byte sc, byte 16, byte 0, byte Smp->Kid };
+
+	# a public key that is not on the curve: the invalid-curve attack
+	p := Pairing.new(0, ia, 1, ra, le("d5cb8454d177733effffb2ec712baeab"));
+	p.start();
+	p.recv(pres);
+	bad := array[65] of byte;
+	bad[0] = byte Smp->Cpublickey;
+	bad[1:] = le(PBX);
+	bad[33:] = le("4c55f33e429dad377356703a9ab85160472d1130e28e36765f89aff915b1214b");
+	t.asserteq(reason(p.recv(bad)), Smp->Fdhkeycheck, "a point off the curve ends the pairing");
+
+	# our own public key handed back to us
+	p = Pairing.new(0, ia, 1, ra, le("d5cb8454d177733effffb2ec712baeab"));
+	p.priv = be(PA);
+	p.pkx = le(PAX);
+	p.pky = le(PAY);
+	p.start();
+	p.recv(pres);
+	mine := array[65] of byte;
+	mine[0] = byte Smp->Cpublickey;
+	mine[1:] = le(PAX);
+	mine[33:] = le(PAY);
+	t.asserteq(reason(p.recv(mine)), Smp->Fdhkeycheck, "so does our own key reflected");
+
+	# a nonce that does not match the commitment
+	(p2, r, nil) := scupto(t, Smp->IOnone, Smp->IOnone, sc);
+	p2 = Pairing.new(0, ia, 1, ra, r.na);
+	p2.priv = be(PA);
+	p2.pkx = le(PAX);
+	p2.pky = le(PAY);
+	p2.start();
+	p2.recv(r.pres);
+	p2.recv(r.pubkey());
+	p2.recv(r.confirm());
+	t.asserteq(reason(p2.recv(withcode(Smp->Crandom, le("00000000000000000000000000000001")))), Smp->Fconfirmfailed, "a nonce the peer did not commit to fails the confirm");
+
+	# a DHKey check that is wrong: the peer did not derive our key
+	(p3, nil, evs) := scupto(t, Smp->IOnone, Smp->IOnone, sc);
+	t.assert(evs != nil, "as far as our check");
+	t.asserteq(reason(p3.recv(withcode(Smp->Cdhkeycheck, le("000102030405060708090a0b0c0d0e0f")))), Smp->Fdhkeycheck, "a wrong DHKey check fails as one");
+
+	# protection asked for, and the only way to give it a typed passkey
+	(nil, nil, evs) = scupto(t, Smp->IOdisplayyesno, Smp->IOkeyboardonly, sc | Smp->Amitm);
+	t.asserteq(reason(evs), Smp->Fauthreq, "a pairing that needs a passkey typed is refused, not downgraded");
+
+	# a caller that does not want it does not offer it
+	p4 := Pairing.new(0, ia, 1, ra, le("d5cb8454d177733effffb2ec712baeab"));
+	p4.offersc = 0;
+	req := sendof(hd p4.start());
+	t.assert((int req[3] & Smp->Asc) == 0, "offersc off: the request is a legacy one");
+	evs = p4.recv(pres);
+	t.asserteq(int (sendof(hd evs))[0], Smp->Cconfirm, "and a peer's offer is answered with a legacy confirm");
+}
+
 testRefusals(t: ref T)
 {
 	ia := le("A1A2A3A4A5A6");
@@ -335,6 +557,9 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Vectors", testVectors);
 	run("SecureConnections", testSecureConnections);
 	run("Pairing", testPairing);
+	run("ScJustWorks", testScJustWorks);
+	run("ScNumeric", testScNumeric);
+	run("ScRefusals", testScRefusals);
 	run("Refusals", testRefusals);
 
 	if(testing->summary(passed, failed, skipped) > 0)

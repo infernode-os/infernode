@@ -2217,7 +2217,7 @@ convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(tm.tag, "not connected"));
 			return;
 		}
-		if(len tm.data > cv.ch.mtu){
+		if(cv.kind != Kle && len tm.data > cv.ch.mtu){
 			srv.reply(ref Rmsg.Error(tm.tag, sys->sprint("SDU too large: peer MTU is %d", cv.ch.mtu)));
 			return;
 		}
@@ -2226,7 +2226,20 @@ convwrite(srv: ref Styxserver, tm: ref Tmsg.Write, c: ref Fid)
 			return;
 		}
 		ch := cv.ch;
-		l2events(srv, cv.lnk, cv.lnk.l2.send(ch, tm.data));
+		# An LE channel is a byte stream to the phone at its other end
+		# (that is all either platform gives an app), and what rides it
+		# here is 9P, whose messages are larger than any SDU the peer
+		# will take. So a write longer than the peer's MTU goes as
+		# several SDUs, in order; a classic channel keeps its one write,
+		# one SDU, and refuses what does not fit.
+		for(o := 0; ; o += ch.mtu){
+			n := len tm.data - o;
+			if(n > ch.mtu)
+				n = ch.mtu;
+			l2events(srv, cv.lnk, cv.lnk.l2.send(ch, tm.data[o:o+n]));
+			if(cv.ch != ch || o + n >= len tm.data)
+				break;
+		}
 		# An LE channel sends only what the peer has given credit for
 		# and queues the rest. A writer that outruns the peer is held
 		# here, as a write to a full pipe is, until the queue drains

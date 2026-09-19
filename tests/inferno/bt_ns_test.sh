@@ -759,6 +759,15 @@ if {! ~ $"v 'links 0'} {
 	if {! cmp -s /tmp/btns.le.out /tmp/btns.le.in} {
 		raise 'fail:a 1500-byte SDU did not survive the LE channel'
 	}
+	# and a write longer than the peer's MTU (2048) goes as several SDUs,
+	# in order: it is a byte stream to a phone, and 9P's messages are
+	# longer than any SDU. 5000 bytes come back as 2048, 2048 and 904.
+	dd -if /dis/sh.dis -bs 5000 -count 1 > /tmp/btns.le.out >[2] /dev/null
+	cat /tmp/btns.le.out > $BT/$id/data
+	{read 2048 < $BT/$id/data; read 2048 < $BT/$id/data; read 2048 < $BT/$id/data} > /tmp/btns.le.in
+	if {! cmp -s /tmp/btns.le.out /tmp/btns.le.in} {
+		raise 'fail:5000 bytes did not survive the LE channel as a stream'
+	}
 	# a PSM the peer never announced
 	echo hangup >[1=0]
 } <> $BT/clone

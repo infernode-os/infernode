@@ -329,11 +329,14 @@ An LE link to the peer, encrypted first (below), and on it an LE
 credit-based L2CAP channel to
 .IR psm ,
 decimal or 0x hex, 1 to 255 (128 and up are the dynamic ones). This is
-the one kind of channel a phone gives an ordinary app. Each write of
+the one kind of channel a phone gives an ordinary app, and a phone
+gives it as a byte stream. So it is one here: a write of
 .B data
-is one SDU, of at most the peer's MTU, and each read returns one; the
-SDU travels as K-frames the peer has given credit for, and a writer
-that outruns the peer's credit blocks until it catches up. Classic and
+longer than the peer's MTU goes as several SDUs, in order, and each
+read returns one SDU as it arrived, which may be any part of what the
+peer wrote. That is what lets 9P ride it, whose messages are longer
+than an SDU. SDUs travel as K-frames the peer has given credit for, and
+a writer that outruns the peer's credit blocks until it catches up. Classic and
 LE PSMs are separate number spaces. An
 .B announce
 of one is accepted, and answers peers on LE links that are already up;

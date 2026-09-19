@@ -50,8 +50,9 @@ void	(*heapmonitor)(int, void*, ulong);
  * put 7452 of the 7468 blocks gained over four minutes on this one
  * malloc.
  *
- * Hosted 64-bit builds still leak here. Unmapping needs a length and
- * Type carries none; giving it one is a separate change.
+ * Hosted arm64 builds leaked here too, until the mapping's length went
+ * in front of the code (freetypejit, comp-arm64.c). Hosted amd64 still
+ * does: its type code is carved from a slab that is never returned.
  */
 /*
  * 52b8f796 made this a no-op as an experiment (INFR-458): the board was
@@ -74,8 +75,10 @@ void	(*heapmonitor)(int, void*, ulong);
 static void
 freetypecode(Type *t)
 {
-#if !defined(INFERNO_NATIVE) && (defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64))
-	USED(t);	/* hosted 64-bit: mmap()ed, and Type carries no length to unmap */
+#if !defined(INFERNO_NATIVE) && defined(__aarch64__)
+	freetypejit(t);	/* hosted arm64: a mapping of its own, its length in front of it */
+#elif !defined(INFERNO_NATIVE) && (defined(__x86_64__) || defined(_M_X64))
+	USED(t);	/* hosted amd64: carved from a slab; still leaks */
 #else
 	free(t->initialize);
 #endif

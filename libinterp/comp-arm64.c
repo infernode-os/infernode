@@ -2638,6 +2638,7 @@ comd(Type *t)
  * that may need its offset materialised, a con() of a 64-bit address, and
  * a BLR.  24 leaves headroom over the ~16 they actually take.
  */
+#define Typejithdr	16	/* hosted: the mapping's length, in front of a type's code; keeps the code 16-aligned */
 #define TYPECOM_FIXED	64
 #define TYPECOM_PERPTR	24
 #define TYPECOM_SLACK	1024
@@ -2690,6 +2691,19 @@ typecom(Type *t)
 
 	sz = n * sizeof(u32int);
 
+#ifndef INFERNO_NATIVE
+	/*
+	 * A hosted type's code is a mapping of its own, and a mapping is
+	 * unmapped by length, which Type does not carry. So the length goes
+	 * in a header in front of the code, where freetypejit() finds it.
+	 * Without it the code was never released: every command run loads a
+	 * module, compiles its types and drops them again, and each left a
+	 * page behind. Measured on Linux/arm64: 1000 commands, +52 MB
+	 * resident with the JIT and +0 without.
+	 */
+	sz += Typejithdr;
+#endif
+
 #ifdef INFERNO_NATIVE
 	start = malloc(sz);
 	if(start == nil)
@@ -2708,6 +2722,10 @@ typecom(Type *t)
 #endif
 
 	code = start;
+#ifndef INFERNO_NATIVE
+	*(ulong*)start = sz;
+	code = (u32int*)((uchar*)start + Typejithdr);
+#endif
 	t->initialize = code;
 	comi(t);
 	t->destroy = code;
@@ -2744,6 +2762,28 @@ patchex(Module *m, ulong *p)
 		if(e->pc != (ulong)-1)
 			e->pc = p[e->pc] * sizeof(u32int);
 	}
+}
+
+/*
+ * Release a type's compiled initialize/destroy code. Native builds
+ * malloc it and heap.c frees it; hosted builds map it, with its length
+ * in the header typecom() put in front of it.
+ */
+void
+freetypejit(Type *t)
+{
+#ifdef INFERNO_NATIVE
+	USED(t);
+#else
+	uchar *base;
+
+	if(t == nil || t->initialize == nil)
+		return;
+	base = (uchar*)t->initialize - Typejithdr;
+	munmap(base, *(ulong*)base);
+	t->initialize = nil;
+	t->destroy = nil;
+#endif
 }
 
 /*

@@ -52,6 +52,37 @@ console if the card is bad. Everything else, including the whole
 desktop, comes off the card (or a file server) at boot: see `rootpath`
 in section 5.
 
+### Headless, or with a desktop
+
+Both are ways of running it, and the machine decides which at boot by
+one question: **is there a screen?**
+
+**Headless** is what the port was for its first weeks and what a board
+in a cupboard is for ever. No HDMI or DSI panel on a Pi; no
+`-device ramfb` under QEMU. The machine boots to a shell on the serial
+console with the full namespace; brings up Ethernet by DHCP (and Wi-Fi
+and Bluetooth if the card says to); mounts the card and takes its
+userspace from it, so every command in `dis/` is there; and listens on
+the network console if the card has a `netconsole` file. The boot script
+says one line —
+
+    boot: no display -- running headless; not starting the desktop. This console is the machine's shell.
+
+— and starts nothing else. A headless machine is administered over the
+serial line, the network console, or whatever it is told to serve: it is
+an Inferno system, so `listen`, `styxlisten` and `mount` are how it
+offers and takes services. Nothing about it is degraded.
+
+**With a desktop**: a screen is present, so the same boot goes on to
+`wm/logon` (or straight past it, with `skiplogon`) and the Lucifer
+desktop. The serial console is *still* a shell with the full namespace —
+the desktop runs in a narrowed copy (section 6) — so a machine with a
+desktop is a headless machine with a desktop as well.
+
+With **no card at all** either kind still boots, to the recovery root
+compiled into the kernel: a shell, the file utilities, the network. That
+is what the image carries them for.
+
 ## 2. Building
 
 There is one supported way to build the kernel, and it is the test
@@ -89,9 +120,13 @@ What it leaves in the build directory:
 | `cc.log` | every compiler, linker and tool diagnostic |
 | `*-boot.txt`, `*-full.txt`, `*-desktop.txt`, `*.ppm` | serial logs and screens from the boots it made |
 
-The bcm2837 half takes 15–35 minutes depending on the machine; the virt
-half three to twelve. CI runs the virt half on every pull request that
-touches the kernel (`.github/workflows/baremetal-virt.yml`).
+The bcm2837 half takes 18–35 minutes depending on the machine; the virt
+half four to twelve. **CI runs both**, a job each, on every pull request
+that touches the kernel, its libraries, the harness or the image tools
+(`.github/workflows/baremetal.yml`). Because the harness skips when its
+tools are missing, the jobs do not trust its exit status: they require
+zero skipped, a floor on the number passed, and a named check near the
+end of each machine's list.
 
 ## 3. Running it under QEMU
 
@@ -113,9 +148,13 @@ touches the kernel (`.github/workflows/baremetal-virt.yml`).
 
 A window opens on the Lucifer desktop in under a minute, and the terminal
 you started QEMU from is the serial console — a root shell, the whole
-time. For no window, use `-nographic` in place of `-serial stdio` and
-drop the last line (`Ctrl-A x` quits). Leave `skiplogon` out for the
-login screen.
+time. Leave `skiplogon` out for the login screen.
+
+**Headless**: use `-nographic` in place of `-serial stdio` and drop the
+last line (`Ctrl-A x` quits). Same kernel, same card; it notices there
+is no screen and boots to the shell and the network. Drop the `-drive`
+line as well and it boots from the recovery root alone — the fastest way
+to a prompt there is.
 
 Each of those flags matters and most fail silently when wrong;
 `os/virt/README.md` has the table. The two that catch everyone:
@@ -136,8 +175,9 @@ framebuffer for this machine); drop `-display none` to see it.
 **Two `-serial`s**: the first is the PL011, which on a Pi 3 belongs to
 the Bluetooth radio; the console is the second, the mini-UART. With one
 `-serial stdio` the machine appears to hang. The card image must be a
-power of two in size. QEMU 6.2 does not pass `-append` to this machine;
-9.2 is what the port is developed against.
+power of two in size. QEMU 6.2 does not pass `-append` to this machine
+and fails checks for that alone; CI passes every check on 8.2.2, and 9.2
+is what the port is developed against.
 
 ### Debugging a boot
 
@@ -279,7 +319,9 @@ background, so the serial console stays an interactive shell.
 **`boot-baremetal.sh`**: fork the namespace and **take the raw card, the
 GPIO pins, `/dev/sysctl` and `/dev/hostowner` out of it** — then check
 that they are really gone, and refuse to start the desktop if not. Then
-`wm/logon` (three attempts; or `skiplogon`), `luciuisrv`, `lucifer`.
+ask the draw device whether there is a screen: **if not, say so in one
+line and stop — the machine is headless.** Otherwise `wm/logon` (three
+attempts; or `skiplogon`), `luciuisrv`, `lucifer`.
 When the desktop exits the machine is still up: its `/dev/sysctl` is
 null, so it cannot halt the board. The serial console can.
 
@@ -354,7 +396,7 @@ is data on the card, and `osinit` reads the MBR and writes those lines.
 
 | | what it proves | where it runs |
 |-|-|-|
-| `tests/host/baremetal_test.sh`, bcm2837 half (≈260 checks) | the Pi kernel against QEMU's `raspi3b`: boot, SMP, JIT, USB hot-plug, the SD controllers, dossrv on FAT16/32, DHCP/TCP over emulated USB Ethernet, framebuffer by screendump, keyboard and mouse by QMP, tryboot, the kernel installing itself | anywhere with QEMU ≥ 9 |
+| `tests/host/baremetal_test.sh`, bcm2837 half (≈260 checks; **CI**) | the Pi kernel against QEMU's `raspi3b`: boot, SMP, JIT, USB hot-plug, the SD controllers, dossrv on FAT16/32, DHCP/TCP over emulated USB Ethernet, framebuffer by screendump, keyboard and mouse by QMP, tryboot, the kernel installing itself | anywhere with QEMU 8.2 or later |
 | …virt half (≈50 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucifer desktop from a card** | anywhere with QEMU; **CI** |
 | `tests/acceptance/*.py` | the *board*, as a peer to standard tools on a Linux tester: RFC 2544-style Ethernet, Bluetooth PTS cases, hostap-style Wi-Fi scenarios, a GPIO loopback jig. See its [README](../tests/acceptance/README.md). | a bench with a Pi on it |
 

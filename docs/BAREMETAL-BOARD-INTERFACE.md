@@ -25,6 +25,8 @@ The harness (`tests/host/baremetal_test.sh`) builds a kernel for board
 `B` from:
 
     os/arm64/*.S  os/arm64/*.c      shared AArch64
+    $SHARED/*.c                     a family's shared drivers, if the board names one
+                                    (os/bcm for the Raspberry Pis; less $SHAREDSKIP)
     os/B/*.S      os/B/*.c          the board
     os/port/*.c                     portable kernel   (less $PORTSKIP)
     os/ip/*.c                       TCP/IP
@@ -161,7 +163,7 @@ time.
   `nif.mbps`, `nif.link`; delivers received frames with `etheriqb` **from
   process context** (it may allocate). Instance 0 is `/net/ether0`;
   `osinit` notices that its address is non-zero at boot and configures
-  it. `os/virt/ethervirtio.c` and `os/bcm2837/ether4330.c` are the two
+  it. `os/virt/ethervirtio.c` and `os/bcm/ether4330.c` are the two
   examples.
 - **Input** goes to `kbdputc(kbdq, rune)` and
   `mousetrack(buttons, x, y, isdelta)`, from process context.
@@ -174,7 +176,22 @@ A board gets a function in `tests/host/baremetal_test.sh` beside
 `PORTSKIP`, calls `platform_flags` and `build_kernel`, and then asserts
 on the boot log. `make_sd_image` and `tools/mkcard.py` make card images;
 `boot_kernel` and `shell_session` boot one and type at it. Add the
-board's name to `want_platform`'s default list.
+board's name to `want_platform`'s default list. **Every platform's
+function sets every one of those globals**, even to empty: they run one
+after another in one shell, and a `SHARED` left over from the last
+machine is a kernel built from the wrong files.
+
+### A family of boards
+
+When two boards share silicon, the shared drivers get a directory of
+their own and each board builds its kernel from it: `os/bcm` beside
+`os/bcm2837` and `os/bcm2711`, as upstream Inferno has `os/sa1110`
+beside `os/ipaq1110` and `os/cerf1110`. The shared drivers are compiled
+once per board, against that board's `io.h` — which defines the
+peripheral window and the interrupt numbers and then includes the
+family's register layouts (`os/bcm/bcmio.h`) — and the board's `board.h`
+includes the family's declarations (`os/bcm/bcm.h`). A shared driver
+names no address and no interrupt number of its own.
 
 `BAREMETAL_BUILD_ONLY=1` stops after the link. The first thing worth
 doing with a new board directory is that, repeatedly: the undefined

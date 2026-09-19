@@ -113,7 +113,7 @@ problem (`uart.c` records the distinction). The card's `config.txt`
 gains `enable_uart=1` and the README's config recipe is updated in the
 same change.
 
-This kernel's console today (`os/bcm2837/uart.c`, `os/arm64/main.c`
+This kernel's console today (`os/bcm/uart.c`, `os/arm64/main.c`
 `uartkproc`) is polled in both directions with a 10 ms sleep, which is
 why AGENTS.md has to warn that scripted writes lose everything past the
 PL011's 16-byte FIFO. An interrupt-driven `#t` console fixes that as a
@@ -378,7 +378,7 @@ source and by boot.
 under QEMU 2026-09-13; on the board the same night: console clean at
 115200 first boot, core clock 400MHz (asked, not assumed), PL011 receive
 path proven byte for byte.* `os/port/devuart.c`
-and `uart.h` reinstated with the locks named; `os/bcm2837/uartmini.c`
+and `uart.h` reinstated with the locks named; `os/bcm/uartmini.c`
 (from 9front, MIT) and `uartpl011.c` as `PhysUart`s; `uart.c` reduced
 to console policy over the polled mini-UART. Console input arrives on
 the mini-UART's receive interrupt through `consuartputc`; the 10ms
@@ -576,7 +576,7 @@ being a peripheral.
 - Inferno `os/port/devuart.c`, `os/port/uart.h`, `os/pxa/devuart.c`
   (MIT; also in this repository's history at `e3914b1c7^`) — `#t`.
 - This tree: `emu/port/deveia-posix.c`, `man/3/eia`, `os/port/devgpio.c`,
-  `os/bcm2837/mailbox.c`, `os/init/etherusb.b`, `os/bcm2837/README.md`.
+  `os/bcm/mailbox.c`, `os/init/etherusb.b`, `os/bcm2837/README.md`.
 - raspberrypi/linux `arch/arm/boot/dts/broadcom/bcm2837-rpi-3-b-plus.dts`,
   `bcm283x-rpi-wifi-bt.dtsi` — pins and the enable line.
 - BlueZ `tools/hciattach_bcm43xx.c`, Linux `drivers/bluetooth/btbcm.c`

@@ -16,7 +16,7 @@
  * - The embedded QLock and Lock are named members (README, "the Plan 9
  *   C dialect is de-anonymized by hand").
  * - The polled console routines (consuart, uartgetc/uartputc/uartputs)
- *   are not here. os/bcm2837/uart.c owns them, lock-protected and
+ *   are not here. os/bcm/uart.c owns them, lock-protected and
  *   bounded, and they are the panic path; devcons calls them through
  *   serwrite. This file does not set printq either: console OUTPUT
  *   stays synchronous and polled, by the decision recorded in uart.c.

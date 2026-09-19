@@ -1625,7 +1625,7 @@ probecons(void)
 	 * #t's reset enumerates the board's UARTs and, for the one marked
 	 * console, enables it with interrupts: from here the console's
 	 * received bytes arrive on the mini-UART's IRQ and go to kbdq
-	 * through consuartputc (os/bcm2837/uart.c). Until this line the
+	 * through consuartputc (os/bcm/uart.c). Until this line the
 	 * console is output-only, which is fine -- nothing is reading yet.
 	 * Needs intrinit() and clockinit(), both long done by now.
 	 */
@@ -1716,7 +1716,7 @@ extern void	ethermediumlink(void);
  * debug keys (a soak run lost a board exactly that way). Both problems
  * are gone with the polling: #t's console Uart delivers each byte from
  * the mini-UART's receive interrupt through consuartputc
- * (os/bcm2837/uart.c) to kbdputc, which drops into a full queue with
+ * (os/bcm/uart.c) to kbdputc, which drops into a full queue with
  * a rate-limited complaint and handles the debug keys before it looks
  * at the queue at all. And a burst no longer loses everything past the
  * FIFO, which is what a 10ms poll of a 16-byte FIFO did to scripts.

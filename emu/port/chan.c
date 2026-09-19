@@ -658,10 +658,26 @@ cclone(Chan *c)
 {
 	Chan *nc;
 	Walkqid *wq;
+	char why[ERRMAX];
 
 	wq = devtab[c->type]->walk(c, nil, nil, 0);
-	if(wq == nil)
+	if(wq == nil){
+		/*
+		 * A mounted server that refuses the walk says why in an
+		 * Rerror, and mntwalk returns nil with that reason still in
+		 * errstr -- which "clone failed" then overwrote, so the one
+		 * fact needed to diagnose it was thrown away (#650: opens on
+		 * /tmp failing one time in 300 after processes were killed
+		 * mid-request, and no way to tell "fid in use" from anything
+		 * else). Only for devmnt: another device's nil leaves errstr
+		 * whatever it was before, which is nobody's reason.
+		 */
+		if(devtab[c->type]->dc == 'M' && up->env->errstr[0] != 0){
+			kstrcpy(why, up->env->errstr, sizeof why);
+			errorf("clone failed: %s", why);
+		}
 		error("clone failed");
+	}
 	nc = wq->clone;
 	free(wq);
 	nc->name = c->name;

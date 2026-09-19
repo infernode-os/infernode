@@ -1,9 +1,14 @@
 /*
  * #G -- GPIO pins as files.
  *
- *	#G/gpio/N/ctl	write "function in|out|alt0..alt5", "pull up|down|none"
- *			read  "function out\npull none\n"
+ *	#G/gpio/N/ctl	write "function in|out|alt0..alt5", "pull up|down|none",
+ *			      "edge rising|falling|both|none"
+ *			read  "function out\npull none\nedge none\n"
  *	#G/gpio/N/level	read "0\n" or "1\n"; write "0" or "1" to drive an output
+ *	#G/gpio/N/event	read blocks for an edge, then a line per edge, oldest
+ *			first: "<microseconds> <level>\n", the time the
+ *			interrupt's, on #b/busec's clock; "overrun <n>\n"
+ *			first if this reader fell behind and n were dropped
  *
  * One directory per pin, in BCM numbering because that is the only
  * numbering the hardware has, so that a namespace can hand a program
@@ -13,8 +18,15 @@
  * touch one can touch the UART's.
  *
  * This is the mechanism and nothing else: function select, pull,
- * level. No pin names, no LED polarity, no PWM, no events. Those are
- * policy and compose on top of this from user space (INFR-455). The
+ * level, edge. No pin names, no LED polarity, no PWM, no debounce, no
+ * counting. Those are policy and compose on top of this from user space
+ * (INFR-455). Edges came in later (#651) and are on the mechanism's side
+ * of that line: what to do about an edge is policy, but that one
+ * happened, and when, only the kernel can know, because only the kernel
+ * takes the interrupt. A program polling level every millisecond learns
+ * of an edge a millisecond late, cannot tell two from none, and makes a
+ * thousand system calls a second for ever. Nothing is enabled for a pin
+ * until a ctl write asks for an edge AND an event file is open. The
  * pins the kernel drives itself -- the console UART, the SD card --
  * are claimed by their drivers and refuse ctl writes: a stray echo
  * must not be able to take the console down.
@@ -57,6 +69,9 @@ enum{
 	Qpin,		/* a pin's directory */
 	Qctl,
 	Qlevel,
+	Qevent,
+
+	Nev	= 256,		/* edges a reader may fall behind by */
 
 	Qshift	= 4,
 	Qmask	= (1<<Qshift)-1,
@@ -69,12 +84,40 @@ enum{
 enum{
 	CMfunction,
 	CMpull,
+	CMedge,
 };
 
 static Cmdtab gpiocmd[] = {
 	{CMfunction,	"function",	2},
 	{CMpull,	"pull",		2},
+	{CMedge,	"edge",		2},
 };
+
+/* an edge setting is two bits: rising, falling */
+static char *edgename[4] = { "none", "rising", "falling", "both" };
+static int edgewant[Npin];
+
+/*
+ * One per open event file, on its pin's list. The interrupt handler
+ * fills every reader of the pin; each drains at its own pace, and one
+ * that falls Nev behind loses its oldest and is told how many.
+ */
+typedef struct Evq Evq;
+struct Evq
+{
+	Evq	*next;
+	int	pin;
+	Rendez	r;
+	int	ri, n;
+	ulong	overrun;
+	struct {
+		uvlong	us;
+		int	level;
+	} ev[Nev];
+};
+
+static Lock evlock;		/* the lists, the queues, and GPREN/GPFEN */
+static Evq *readers[Npin];
 
 /* GPFSEL encoding -> name */
 static char *funcname[8] = {
@@ -94,6 +137,72 @@ static int expstate[Nexppin];
 
 #define ISEXP(pin)	((pin) >= Gpioexpbase && (pin) < Gpioexpbase + Nexppin)
 
+/* detection is on only while somebody both asked for an edge and is listening */
+static void
+applyedge(int pin)
+{
+	int w;
+
+	w = readers[pin] != nil ? edgewant[pin] : 0;
+	gpioedge(pin, w & 1, w & 2);
+}
+
+/*
+ * The time is taken here, so it is good to tens of microseconds however
+ * late a reader runs. All three bank interrupts come here; both status
+ * registers are read, because a pin's bank is not its register.
+ */
+static void
+gpiointr(Ureg*, void*)
+{
+	u32int eds;
+	uvlong us;
+	int reg, b, pin, level, slot;
+	Evq *q;
+
+	us = fastticks2ns(fastticks(nil)) / 1000;
+	for(reg = 0; reg < 2; reg++){
+		eds = gpioevents(reg);
+		for(b = 0; eds != 0; b++, eds >>= 1){
+			if((eds & 1) == 0)
+				continue;
+			pin = reg*32 + b;
+			if(pin >= Npin)
+				break;
+			level = gpioin(pin);
+			ilock(&evlock);
+			for(q = readers[pin]; q != nil; q = q->next){
+				if(q->n == Nev){
+					q->ri = (q->ri + 1) % Nev;
+					q->n--;
+					q->overrun++;
+				}
+				slot = (q->ri + q->n) % Nev;
+				q->ev[slot].us = us;
+				q->ev[slot].level = level;
+				q->n++;
+				/*
+				 * Woken with the lock held: close unlinks a
+				 * reader under this lock and frees it after,
+				 * so a reader seen here cannot be gone before
+				 * its wakeup.
+				 */
+				wakeup(&q->r);
+			}
+			iunlock(&evlock);
+		}
+	}
+}
+
+static int
+evready(void *a)
+{
+	Evq *q;
+
+	q = a;
+	return q->n > 0 || q->overrun > 0;
+}
+
 static void
 gpioinit(void)
 {
@@ -103,6 +212,9 @@ gpioinit(void)
 		pullstate[i] = -1;
 	for(i = 0; i < Nexppin; i++)
 		expstate[i] = -1;
+	intrenable(IRQgpio0, gpiointr, nil, 0, "gpio0");
+	intrenable(IRQgpio1, gpiointr, nil, 0, "gpio1");
+	intrenable(IRQgpio2, gpiointr, nil, 0, "gpio2");
 }
 
 static int
@@ -145,6 +257,7 @@ gpiogen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 	case Qpin:
 	case Qctl:
 	case Qlevel:
+	case Qevent:
 		/*
 		 * A pin's directory and the two files in it answer alike
 		 * for s >= 0: the entries of the pin's directory. That is
@@ -181,6 +294,12 @@ gpiogen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 			devdir(c, q, "level", 0, eve, 0664, dp);
 			return 1;
 		}
+		/* the expander's lines have no interrupt, so no event file */
+		if(s == 2 && !ISEXP(pin)){
+			mkqid(&q, QPATH(pin, Qevent), 0, QTFILE);
+			devdir(c, q, "event", 0, eve, 0444, dp);
+			return 1;
+		}
 		return -1;
 	}
 	return -1;
@@ -207,25 +326,111 @@ gpiostat(Chan *c, uchar *db, int n)
 static Chan*
 gpioopen(Chan *c, int omode)
 {
-	return devopen(c, omode, nil, 0, gpiogen);
+	Evq *q;
+	int pin;
+
+	c = devopen(c, omode, nil, 0, gpiogen);
+	if(QTYPE(c->qid.path) == Qevent){
+		pin = QPIN(c->qid.path);
+		q = mallocz(sizeof(Evq), 1);
+		if(q == nil){
+			c->flag &= ~COPEN;
+			error(Enomem);
+		}
+		q->pin = pin;
+		c->aux = q;
+		ilock(&evlock);
+		q->next = readers[pin];
+		readers[pin] = q;
+		applyedge(pin);
+		iunlock(&evlock);
+	}
+	return c;
 }
 
 static void
 gpioclose(Chan *c)
 {
-	USED(c);
+	Evq *q, **l;
+
+	if(QTYPE(c->qid.path) != Qevent || (c->flag & COPEN) == 0 || c->aux == nil)
+		return;
+	q = c->aux;
+	c->aux = nil;
+	ilock(&evlock);
+	for(l = &readers[q->pin]; *l != nil; l = &(*l)->next)
+		if(*l == q){
+			*l = q->next;
+			break;
+		}
+	applyedge(q->pin);
+	iunlock(&evlock);
+	free(q);
+}
+
+/*
+ * As many whole lines as fit, never part of one: a reader that asked
+ * for little gets one edge at a time, and none is ever split.
+ */
+static long
+eventread(Evq *q, char *a, long n)
+{
+	char line[48];
+	long tot;
+	int l, level;
+	uvlong us;
+	ulong lost;
+
+	sleep(&q->r, evready, q);
+	tot = 0;
+	for(;;){
+		ilock(&evlock);
+		lost = q->overrun;
+		if(lost == 0 && q->n == 0){
+			iunlock(&evlock);
+			break;
+		}
+		us = 0;
+		level = 0;
+		if(lost == 0){
+			us = q->ev[q->ri].us;
+			level = q->ev[q->ri].level;
+		}
+		iunlock(&evlock);
+		if(lost != 0)
+			l = snprint(line, sizeof line, "overrun %lud\n", lost);
+		else
+			l = snprint(line, sizeof line, "%llud %d\n", us, level);
+		if(tot + l > n)
+			break;
+		memmove(a + tot, line, l);
+		tot += l;
+		ilock(&evlock);
+		if(lost != 0)
+			q->overrun -= lost;	/* more may have been lost meanwhile: they are reported next */
+		else{
+			q->ri = (q->ri + 1) % Nev;
+			q->n--;
+		}
+		iunlock(&evlock);
+	}
+	if(tot == 0)
+		error("read too short for an event line");
+	return tot;
 }
 
 static long
 gpioread(Chan *c, void *a, long n, vlong off)
 {
-	char buf[64];
+	char buf[96];
 	int pin, f, dir, pullup;
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, a, n, nil, 0, gpiogen);
 	pin = QPIN(c->qid.path);
 	switch(QTYPE(c->qid.path)){
+	case Qevent:
+		return eventread(c->aux, a, n);
 	case Qctl:
 		if(ISEXP(pin)){
 			if(mboxgpioconfig(pin, &dir, &pullup) < 0)
@@ -236,9 +441,10 @@ gpioread(Chan *c, void *a, long n, vlong off)
 			return readstr(off, a, n, buf);
 		}
 		f = gpiogetfunc(pin);
-		snprint(buf, sizeof buf, "function %s\npull %s\n",
+		snprint(buf, sizeof buf, "function %s\npull %s\nedge %s\n",
 			f >= 0 && f < 8 ? funcname[f] : "?",
-			pullstate[pin] < 0 ? "unknown" : pullname[pullstate[pin]]);
+			pullstate[pin] < 0 ? "unknown" : pullname[pullstate[pin]],
+			edgename[edgewant[pin] & 3]);
 		return readstr(off, a, n, buf);
 	case Qlevel:
 		if(ISEXP(pin)){
@@ -300,6 +506,17 @@ gpiowrite(Chan *c, void *a, long n, vlong off)
 				error(Ebadctl);
 			gpiopull(pin, i);
 			pullstate[pin] = i;
+			break;
+		case CMedge:
+			for(i = 0; i < nelem(edgename); i++)
+				if(strcmp(edgename[i], cb->f[1]) == 0)
+					break;
+			if(i >= nelem(edgename))
+				error(Ebadctl);
+			ilock(&evlock);
+			edgewant[pin] = i;
+			applyedge(pin);
+			iunlock(&evlock);
 			break;
 		}
 		poperror();

@@ -27,6 +27,8 @@ void	gpiopull(int, int);
 void	gpioout(int, int);
 int	gpioin(int);
 int	gpiogetfunc(int);
+void	gpioedge(int, int, int);
+u32int	gpioevents(int);
 void	gpioclaim(int, char*);
 int	dmaenable(int, void (*)(void*), void*, char*);
 void	dmastart(int, void*);

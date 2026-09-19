@@ -122,6 +122,48 @@ gpioin(int pin)
 }
 
 /*
+ * Edge detection, for #G's event files. GPREN and GPFEN are the
+ * synchronous detectors: the pin is sampled by the system clock and an
+ * edge is two samples that differ, so a glitch shorter than a clock
+ * is not an edge. A detected edge sets the pin's bit in GPEDS and
+ * raises the bank's interrupt until the bit is written back.
+ *
+ * Read-modify-write, and devgpio is the only caller, under its lock.
+ */
+void
+gpioedge(int pin, int rising, int falling)
+{
+	int reg;
+	u32int bit;
+
+	if(pin < 0 || pin >= Npin)
+		return;
+	reg = (pin / 32) * 4;
+	bit = 1u << (pin % 32);
+	if(rising)
+		GPIO(Gpren0 + reg) |= bit;
+	else
+		GPIO(Gpren0 + reg) &= ~bit;
+	if(falling)
+		GPIO(Gpfen0 + reg) |= bit;
+	else
+		GPIO(Gpfen0 + reg) &= ~bit;
+	GPIO(Gpeds0 + reg) = bit;	/* whatever was latched before is not news */
+}
+
+/* the edges latched in one 32-pin register, acknowledged */
+u32int
+gpioevents(int reg)
+{
+	u32int v;
+
+	v = GPIO(Gpeds0 + reg*4);
+	if(v != 0)
+		GPIO(Gpeds0 + reg*4) = v;
+	return v;
+}
+
+/*
  * Read back the function select for a pin.  Mostly useful for proving
  * that a mux actually took, which is otherwise invisible.
  */

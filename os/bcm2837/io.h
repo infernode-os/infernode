@@ -71,6 +71,9 @@ enum
 	Nirq		= 72,
 	IRQusb		= 9,		/* DWC OTG host controller */
 	IRQaux		= 29,		/* the AUX block: mini-UART (and SPI1/2, unused) */
+	IRQgpio0	= 49,		/* GPIO bank 0, pins 0-27 */
+	IRQgpio1	= 50,		/* bank 1, pins 28-45 */
+	IRQgpio2	= 51,		/* bank 2, pins 46-53 */
 	IRQsdhost	= 56,		/* the BCM2835 SDHOST controller */
 	IRQuart		= 57,		/* the PL011 */
 	IRQmmc		= 62,		/* the Arasan SDHCI controller */
@@ -382,6 +385,9 @@ enum
 	Gpset0		= 0x1C,
 	Gpclr0		= 0x28,
 	Gplev0		= 0x34,
+	Gpeds0		= 0x40,		/* event detect status: write 1 to clear */
+	Gpren0		= 0x4C,		/* rising edge detect enable */
+	Gpfen0		= 0x58,		/* falling edge detect enable */
 	Gppud		= 0x94,
 	Gppudclk0	= 0x98,
 };

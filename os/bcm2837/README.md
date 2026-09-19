@@ -1,5 +1,11 @@
 # Bare-metal BCM2837 (Raspberry Pi 3B+) port
 
+> **This file is the engineering journal** — every decision and
+> measurement, in the order they happened. To *run* the system, or to find
+> what a file on the card or a word on the command line does, start with
+> [docs/BAREMETAL.md](../../docs/BAREMETAL.md); for what a new board must
+> supply, [docs/BAREMETAL-BOARD-INTERFACE.md](../../docs/BAREMETAL-BOARD-INTERFACE.md).
+
 Tracked as **INFR-404**. This is InferNode running *native* — as the
 firmware on the board, with no host OS underneath — rather than *hosted*,
 which is what everything under `emu/` does.
@@ -13,7 +19,7 @@ runs on the A53 at 27× the interpreter with bit-identical results.
 Everything below has been exercised on the board, not only in QEMU,
 except where a section says otherwise.
 
-Working, in the kernel (`os/arm64/notyet.c` holds the device table):
+Working, in the kernel (`os/bcm2837/devtab.c` holds the device table):
 
 - boot, EL2 → EL1, MMU with caches on, all four cores up, exception
   vectors with a register dump on fault, the ARM generic timer, device
@@ -61,7 +67,11 @@ the end of this file:
   CI job runs the bare-metal harness at all. (The `virt` half of the
   harness does boot one, built by `tools/mkcard.py`, through rootpath to
   the Lucifer desktop -- with `skiplogon`, so logon and secstore are
-  still unexercised anywhere but the board. See `os/virt/README.md`.)
+  still unexercised anywhere but the board. See `os/virt/README.md`.
+  The same card has since been booted BY HAND under `raspi3b` with this
+  kernel, to the same desktop at 640x480 -- the command is in
+  `docs/BAREMETAL.md` -- so what is missing here is the check, not the
+  ability.)
 - the fixes of 2026-09-05 (below) have run under QEMU only; none has
   been on the board
 - WiFi: the radio identifies itself and runs its firmware on the board
@@ -157,7 +167,9 @@ that is actually exercised.
 
 leaves the artefacts in `/tmp/bm`:
 
-    bcm2837-kernel.img     the image -- rename to kernel8.img for a Pi
+    bcm2837-kernel.img     the image -- infernode8.img on a card set up as
+                           below (kernel8.img is only the firmware's
+                           default name, for a card with no kernel= line)
     bcm2837-kernel.elf     the same thing unflattened, for addr2line
     bcm2837-nojit.img      the same kernel with -DCFLAG=0, for the
                            JIT comparison

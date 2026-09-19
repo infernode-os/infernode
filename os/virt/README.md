@@ -7,8 +7,10 @@ involved and none is needed: this port exists so that the bare-metal
 kernel can be built, booted and tested on any machine that has QEMU,
 including CI.
 
-Read `os/bcm2837/README.md` first. It is the history and the reasoning of
-the kernel; this file is only what is different here.
+[docs/BAREMETAL.md](../../docs/BAREMETAL.md) is the manual for both
+machines — how to build, run and control them. `os/bcm2837/README.md` is
+the history and the reasoning of the kernel. This file is only what is
+different here.
 
 ## What it is for, and what it is not
 

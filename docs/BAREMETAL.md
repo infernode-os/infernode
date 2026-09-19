@@ -8,7 +8,10 @@ up the hardware, starts the Dis virtual machine, and runs the same Limbo
 bytecode the hosted emulator runs: the same shell, the same Tk, the same
 Lucifer desktop.
 
-It runs on two machines:
+It runs on three machines. Two are below; the third, the **Raspberry Pi
+4B** (`os/bcm2711`), boots to the desktop under QEMU's `raspi4b` and has
+never run on a board — [os/bcm2711/README.md](../os/bcm2711/README.md)
+says exactly what that does and does not establish.
 
 | | Raspberry Pi 3B+ (`os/bcm2837`) | QEMU `virt` (`os/virt`) |
 |-|-|-|
@@ -43,8 +46,9 @@ exact contract a new board directory has to meet.
     lib*/                   Dis VM + ARM64 JIT, Tk, draw, crypto, math
     os/port  os/ip          the portable kernel and TCP/IP, from upstream Inferno
     os/arm64                boot, traps, SMP, kmain — any AArch64 board
-    os/bcm                  drivers the Raspberry Pi SoCs share (mailbox, UARTs, SD, USB, GPIO…)
-    os/bcm2837 │ os/virt    one board each: memory map, interrupt controller, board.c, device list
+    os/bcm                  what the Raspberry Pi SoCs share: drivers (mailbox, UARTs, SD, USB, GPIO…), board.c, the MMU map
+    os/bcm2837 │ os/bcm2711 │ os/virt
+                            one board each: addresses, interrupt numbers, RNG, device list
 
 The kernel image carries a small **recovery root** compiled into it —
 `osinit`, the shell and its builtins, file utilities, `dossrv`, the USB
@@ -69,7 +73,7 @@ leave a stale image behind a failed build.
 | variable | |
 |-|-|
 | `BAREMETAL_BUILD_DIR=dir` | keep the artefacts there (otherwise a temp dir, deleted) |
-| `BAREMETAL_PLATFORMS="bcm2837 virt"` | which machines; the default is both. Name one to work on it. |
+| `BAREMETAL_PLATFORMS="bcm2837 virt bcm2711"` | which machines; the default is all three. Name one to work on it. |
 | `BAREMETAL_BUILD_ONLY=1` | (virt) stop after the link |
 | `EXTRACFLAGS=-D…` | extra compiler flags for an experiment, without editing anything |
 

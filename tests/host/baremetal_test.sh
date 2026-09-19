@@ -4139,7 +4139,7 @@ fi
 #
 #     BAREMETAL_PLATFORMS=virt ./tests/host/baremetal_test.sh
 want_platform() {
-    case " ${BAREMETAL_PLATFORMS:-bcm2837 virt} " in *" $1 "*) return 0;; esac
+    case " ${BAREMETAL_PLATFORMS:-bcm2837 virt bcm2711} " in *" $1 "*) return 0;; esac
     return 1
 }
 
@@ -4519,6 +4519,208 @@ echo ""
 
 if want_platform virt; then
 run_virt
+fi
+
+#
+# The third machine: a Raspberry Pi 4 (os/bcm2711), on QEMU's raspi4b.
+#
+# Almost none of this kernel is new. The drivers are os/bcm's, the ones
+# the Pi 3 runs; the interrupt controller and the clock are os/arm64's,
+# the ones virt runs (a Pi 4 has a GIC-400); what is the board's own is
+# a memory map, a list of interrupt numbers and a random-number
+# generator. So what this asks is whether those three were put together
+# right: the same drivers, reached through a different controller at
+# different addresses.
+#
+# raspi4b arrived in QEMU 9.0. An older QEMU skips, which is not a pass.
+#
+# What QEMU's model has and has not decides what can be asked of it. It
+# has the UARTs, the mailbox and framebuffer, the SD controllers, the
+# DWC2 USB controller (so: a USB keyboard, mouse and Ethernet, exactly
+# as on raspi3b). It has NO gigabit Ethernet, NO PCIe and so none of the
+# board's four USB-A ports, and NO random-number generator -- the kernel
+# finds that out for itself and says so (os/bcm2711/random.c).
+#
+PI4ARGS="-M raspi4b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
+
+run_bcm2711() {
+PLAT=bcm2711
+SRC="$ROOT/os/$PLAT"
+QEMUARGS="$PI4ARGS"
+SERIALARGS="-serial null -serial stdio"
+SHARED="$ROOT/os/bcm"
+SHAREDSKIP=""
+ARCHSKIP=""
+PORTSKIP=""
+
+[[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
+platform_flags
+
+echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
+
+if ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
+    skip "bcm2711: this QEMU has no raspi4b machine (it arrived in 9.0)"
+    return
+fi
+
+if build_kernel "$BUILD/$PLAT-kernel.img" ""; then
+    pass "bcm2711: kernel cross-builds for aarch64-elf"
+else
+    fail "bcm2711: kernel failed to build"
+    grep -m 20 'error:\|undefined symbol\|duplicate symbol' "$BUILD/cc.log"
+    tail -5 "$BUILD/cc.log"
+    return
+fi
+[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+
+OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 90)"
+printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+pcheck() {
+    if grep -qF -- "$2" <<<"$OUT"; then pass "bcm2711: $1"; else fail "bcm2711: $1 -- no '$2' in the boot log"; fi
+}
+prefute() {
+    if grep -qF -- "$2" <<<"$OUT"; then fail "bcm2711: $1 -- '$2' in the boot log"; else pass "bcm2711: $1"; fi
+}
+
+pcheck "the banner names the board"                 "InferNode bare-metal (BCM2711 / Raspberry Pi 4B)"
+pcheck "the mailbox answers at the new address"     "mbox: board rev"
+pcheck "the MMU is on with caches"                  "mmu:  on, caches on"
+prefute "the GIC-400 has a CPU interface"           "NO GICv2 CPU INTERFACE"
+pcheck "the clock ticks through the GIC"            "clk:  irq firing"
+pcheck "a DEVICE interrupt arrives through the GIC (system timer)" "intr: device interrupt delivered"
+pcheck "boot completes"                             "boot OK"
+for i in 1 2 3; do
+    pcheck "cpu$i comes up from the spin table" "cpu$i: up"
+done
+if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then
+    pass "bcm2711: a wired kproc preempts a hog on every secondary core"
+else
+    fail "bcm2711: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
+fi
+pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS"
+prefute "nothing panics"                            "panic:"
+prefute "no exception goes unhandled"               "unhandled exception"
+pcheck "init reaches the shell"                     "init: starting the shell"
+
+#
+# The whole machine, from a populated card: the SD controller, the USB
+# host controller with a hub, a network adapter, a keyboard and a mouse
+# behind it, the framebuffer, and the desktop. One boot, watched two
+# ways -- the serial console and QMP.
+#
+# Two things here are QEMU's and are asserted AS QEMU's, so that nobody
+# reads them as the board's:
+#
+#   the card. A Pi 4's is on EMMC2. raspi4b (9.2) wires it to the first
+#   SDHCI controller, and the kernel must find it there AND SAY SO.
+#
+#   the address. DHCP over QEMU's emulated USB Ethernet answers about two
+#   boots in five, on the Pi 3's kernel exactly as on this one (measured:
+#   the OFFER reaches the emulated adapter and the bulk IN never returns
+#   it). etherusb falls back to QEMU's well-known address when it does
+#   not. So what is asserted is that the interface came up and has the
+#   address, which is what the Pi 3's half of this file has always
+#   asserted; which road it took is not.
+#
+PCARD="$BUILD/$PLAT-card.img"
+printf 'local\n' > "$BUILD/rootpath"
+: > "$BUILD/skiplogon"
+if python3 "$ROOT/tools/mkcard.py" "$PCARD" 256 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+        /fonts="$ROOT/fonts" /icons="$ROOT/icons" /usr= \
+        /rootpath="$BUILD/rootpath" /skiplogon="$BUILD/skiplogon" > "$BUILD/$PLAT-mkcard.txt" 2>&1; then
+    PQMP="$BUILD/$PLAT-qmp.sock"
+    rm -f "$PQMP"
+    python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$PI4ARGS" "$PCARD" "$PQMP" "$BUILD/$PLAT-desktop.ppm" <<'PYEOF' > "$BUILD/$PLAT-desktop.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, sd, qmp, ppm = sys.argv[1:7]
+p = subprocess.Popen([qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "null", "-serial", "stdio",
+    "-device", "usb-kbd", "-device", "usb-mouse",
+    "-drive", "file=%s,if=sd,format=raw" % sd,
+    "-qmp", "unix:%s,server,nowait" % qmp],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+ACCENT = (0xE8, 0x55, 0x3A)
+w = h = best = 0
+try:
+    end = time.time() + 240
+    while time.time() < end and b"lucifer: INIT" not in buf:
+        time.sleep(0.5)
+    # the console is still a shell while the desktop runs
+    p.stdin.write(b"cat /dev/sdctl\r"); p.stdin.flush(); time.sleep(2)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw"); f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    end = time.time() + 90
+    while time.time() < end and best < 1000:
+        time.sleep(3)
+        if os.path.exists(ppm):
+            os.unlink(ppm)
+        f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
+        f.readline(); time.sleep(1)
+        if not os.path.exists(ppm):
+            continue
+        d = open(ppm, "rb").read()
+        parts = d.split(b"\n", 3)
+        w, h = map(int, parts[1].split()); px = parts[3]
+        n = 0
+        for o in range(0, w*h*3, 3):
+            if px[o] == ACCENT[0] and px[o+1] == ACCENT[1] and px[o+2] == ACCENT[2]:
+                n += 1
+        best = max(best, n)
+    # give the network its time before the log is cut: DHCP gives up after ~45 s
+    end = time.time() + 60
+    while time.time() < end and b"etherusb: default route" not in buf:
+        time.sleep(1)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+print("\nDESKTOP %dx%d accent %d" % (w, h, best))
+PYEOF
+    OUT="$(cat "$BUILD/$PLAT-desktop.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    pcheck "the card is found where QEMU wires it, and the kernel says that is what it did" "which is where QEMU's raspi4b wires it"
+    pcheck "the SDHCI controller identifies the card"    "sd: emmc: card ready"
+    pcheck "sector 0 reads back with a boot signature"   "sd: MBR ok"
+    pcheck "the radio is left alone: its controller holds the card" "radio not probed"
+    pcheck "the FAT32 partition mounts"                  "init: /dev/sd0 mounted on /n/dos"
+    pcheck "userspace comes off the card"                "init: /dis grown from /n/dos/dis"
+    pcheck "#S serves the partition table init wrote"    "part sd0 2048"
+    pcheck "the DWC2 controller enumerates QEMU's hub"   "class 9 (hub)"
+    pcheck "a USB keyboard is claimed, through the GIC"  "kbdusb: ep"
+    pcheck "a USB mouse is claimed"                      "mouseusb: ep"
+    pcheck "USB Ethernet comes up as ether0 (kernel data path)" "etherusb: serving /net/ether0 (kernel data path)"
+    pcheck "ether0 has QEMU's address (by DHCP or by etherusb's fallback; see above)" "etherusb: 10.0.2.15 mask"
+    pcheck "Lucifer starts"                              "lucifer: INIT"
+    desk="$(grep -a '^DESKTOP' <<<"$OUT" | tail -1)"
+    read -r _ ddim _ dacc <<<"$desk"
+    if [[ "$ddim" == "640x480" && "${dacc:-0}" -ge 1000 ]]; then
+        pass "bcm2711: Lucifer draws the desktop on the firmware framebuffer ($desk)"
+    else
+        fail "bcm2711: desktop -- '$desk'"
+    fi
+    prefute "nothing panics under the desktop"           "panic:"
+    prefute "no exception goes unhandled under the desktop" "unhandled exception"
+    rm -f "$PCARD"
+else
+    fail "bcm2711: mkcard failed: $(tail -2 "$BUILD/$PLAT-mkcard.txt" | tr '\n' ' ')"
+fi
+
+echo ""
+}
+
+if want_platform bcm2711; then
+run_bcm2711
 fi
 
 echo ""

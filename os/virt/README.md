@@ -94,8 +94,8 @@ both kinds work and the boot log says which each device is.
 | `io.h` | the memory map (it is *below* RAM) and interrupt numbers |
 | `mmu.c` | identity map: `[0,1GB)` Device, `[1GB,ramtop)` Normal, the rest unmapped |
 | `fdt.c` | just enough device tree: memory size, `/psci` method, `/chosen/bootargs` |
-| `gic.c` | GICv2: distributor, per-core CPU interface, `intrenable`, `irqdispatch` |
-| `clock.c` | the generic timer, per core, on PPI 30 |
+| `../arm64/gic.c` | GICv2: distributor, per-core CPU interface, `intrenable`, `irqdispatch`. Written here; moved when a Raspberry Pi 4, whose controller is a GIC-400, needed it |
+| `../arm64/clockgt.c` | the generic timer, per core, on PPI 30. Likewise |
 | `uart.c`, `uartpl011.c` | the PL011: polled console, and `#t`'s `eia0` with receive interrupts |
 | `board.c` | the hooks in `../arm64/fns.h`; PSCI (SMP, reset, power off); the PL031 RTC |
 | `virtio.c`, `virtio.h` | the MMIO transport (legacy and modern) and virtqueues |
@@ -111,7 +111,7 @@ both kinds work and the boot log says which each device is.
 Lines of `os/arm64` that were the BCM2837's, found by compiling the
 shared code against this directory and by booting it. Each became a hook
 in `../arm64/fns.h`, with the code moved — not rewritten — into
-`os/bcm2837/board.c`:
+`os/bcm/board.c`:
 
 - the device table named GPIO, the touch panel, the SD card and the audio
   jack (`devtab.c`, per board)

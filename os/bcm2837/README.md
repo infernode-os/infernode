@@ -150,10 +150,14 @@ against that board's `io.h`. It is upstream Inferno's arrangement:
 `os/sa1110` beside `os/ipaq1110` and `os/cerf1110`.
 
 What stays here is what is genuinely this SoC's and this board's: the
-interrupt controller (`intr.c`), the memory map (`mmu.c`), the timer's
-routing and the system-timer clock check (`clock.c`), the BCM2835
-random-number generator, `board.c`, the device table, and the serial
-loader, whose link address and UART are this board's. `io.h` is eighty
+interrupt controller (`intr.c`), the timer's routing (`clock.c`), the
+BCM2835 random-number generator, the device table, and the serial
+loader, whose link address and UART are this board's. `board.c` and
+`mmu.c` were expected to stay and did not: when the Pi 4's came to be
+written, the only thing in `board.c`'s eleven hundred lines that named
+this board was its banner string, and the only thing in `mmu.c` was how
+many gigabytes to map. Both are in `os/bcm`, with those two facts left
+behind in `io.h` and `mem.h`. `io.h` is eighty
 lines -- the peripheral window, the local-interrupt block, the interrupt
 numbers -- followed by an include of the family's register layouts.
 

@@ -10,6 +10,12 @@ name: Bare-metal kernel
 #             network, screen and input. About fifty checks, ending with
 #             the Lucifer desktop drawn off a FAT card. Minutes.
 #
+#   bcm2711   QEMU's model of the Raspberry Pi 4B (-M raspi4b): the Pi 3's
+#             drivers behind a GIC-400, to the desktop. What that model
+#             lacks -- gigabit Ethernet, PCIe and the USB 3 controller
+#             behind it, a random-number generator -- no job here can
+#             speak to. Needs QEMU 9, which it builds and caches.
+#
 #   bcm2837   QEMU's model of the Raspberry Pi 3B+ (-M raspi3b), which
 #             is the board the product is: some 260 checks -- SMP, the
 #             JIT against the interpreter, USB hot-plug, both SD
@@ -96,6 +102,16 @@ jobs:
             timeout: 90
             least: 240
             last: 'PASS: eight refused verbs left the interface exactly as they found it'
+          # The Raspberry Pi 4. QEMU's raspi4b arrived in 9.0 and the
+          # runner's QEMU is 8.2, so this job builds its own (`qemu`
+          # below) -- once: it is cached by version. The other two keep
+          # the distribution's, which is how this workflow comes to test
+          # the kernel against two QEMUs rather than one.
+          - platform: bcm2711
+            timeout: 90
+            least: 28
+            last: 'PASS: bcm2711: Lucifer draws the desktop on the firmware framebuffer'
+            qemu: 9.2.4
     env:
       ROOT: ${{ github.workspace }}
       PLATFORM: ${{ matrix.platform }}
@@ -114,6 +130,42 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential clang lld llvm qemu-system-arm dosfstools python3
 
+    # Only for a machine the distribution's QEMU does not have. Built
+    # for one target with everything optional off but the user-mode
+    # network, which the harness's -netdev user needs; about ten minutes
+    # uncached, seconds cached.
+    - name: Restore a built QEMU ${{ matrix.qemu }}
+      if: matrix.qemu
+      id: qemucache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/qemu
+        key: qemu-${{ matrix.qemu }}-aarch64-softmmu-slirp-ubuntu-24.04-v1
+
+    - name: Build QEMU ${{ matrix.qemu }}
+      if: matrix.qemu && steps.qemucache.outputs.cache-hit != 'true'
+      env:
+        QEMU_VERSION: ${{ matrix.qemu }}
+      run: |
+        set -e
+        sudo apt-get install -y ninja-build pkg-config libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o qemu.tar.xz "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
+        tar xf qemu.tar.xz
+        cd "qemu-${QEMU_VERSION}"
+        ./configure --prefix="$RUNNER_TEMP/qemu" --target-list=aarch64-softmmu \
+          --enable-slirp --disable-docs --disable-werror --disable-tools --disable-guest-agent \
+          --disable-gtk --disable-sdl --disable-vnc --disable-opengl --disable-curses \
+          --disable-xen --disable-kvm --disable-capstone
+        make -j"$(nproc)"
+        make install
+
+    - name: Put that QEMU first
+      if: matrix.qemu
+      run: |
+        sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0
+        echo "$RUNNER_TEMP/qemu/bin" >> "$GITHUB_PATH"
+
     - name: The tools the harness would otherwise skip for
       run: |
         set -e
@@ -125,6 +177,9 @@ jobs:
         clang --print-targets | grep -q aarch64 || { echo "::error::this clang has no aarch64 target"; exit 1; }
         qemu-system-aarch64 -machine help | grep -q '^virt ' || { echo "::error::this QEMU has no virt machine"; exit 1; }
         qemu-system-aarch64 -machine help | grep -q '^raspi3b ' || { echo "::error::this QEMU has no raspi3b machine"; exit 1; }
+        if [ "$PLATFORM" = bcm2711 ]; then
+          qemu-system-aarch64 -machine help | grep -q '^raspi4b ' || { echo "::error::this QEMU has no raspi4b machine; the harness would SKIP the whole platform"; exit 1; }
+        fi
 
     # The kernel build runs the native limbo: runt.h and the other C views
     # of the Dis module interfaces are generated from module/runt.m, and

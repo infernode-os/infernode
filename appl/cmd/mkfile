@@ -160,6 +160,7 @@ TARG=\
 	scap.dis\
 	sed.dis\
 	sendmail.dis\
+	setupfs.dis\
 	seq.dis\
 	sha1sum.dis\
 	sleep.dis\

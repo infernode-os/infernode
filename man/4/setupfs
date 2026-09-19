@@ -1,0 +1,128 @@
+.TH SETUPFS 4
+.SH NAME
+setupfs \- what a phone in radio range may do to a board with no network
+.SH SYNOPSIS
+.B mount
+.B {setupfs
+[
+.BI -w " wififile"
+] [
+.BI -c " ctlfile"
+] [
+.BI -n " ipifcdir"
+] [
+.BI -l " logfile"
+] ...
+.B }
+.B /mnt/setup
+.SH DESCRIPTION
+.I Setupfs
+serves the namespace a board exports over Bluetooth when it has no
+network to be reached by
+.RI ( bt9p (4),
+.BR "announce le9p" ):
+enough to put the board on a network, or to find out why it is not on
+one, and nothing else. Radio range is a weaker boundary than a wire, so
+the tree is the whole of what a paired phone can touch, and access
+control is by placement: the listener exports this tree and never the
+root.
+.IP
+.EX
+mount {setupfs} /mnt/setup
+echo pairable on > /net/bt/ctl
+echo advertise on > /net/bt/ctl
+listen 'bt!*!le9p' {export /mnt/setup}
+.EE
+.PP
+The files:
+.TP
+.B wifi
+Read, it names the network the board is configured to join and says
+whether a passphrase is set, and never gives the passphrase:
+.RS
+.IP
+.EX
+essid My Network
+password set
+.EE
+.RE
+.IP
+or
+.B unconfigured
+if the card has no configuration. A write replaces the configuration.
+It must be the whole of one in a single write, in the card file's own
+syntax, both lines present:
+.RS
+.IP
+.EX
+essid My Network
+password the passphrase, rest of line
+.EE
+.RE
+.IP
+so that a configuration that is refused is refused on the write that
+offered it. An essid is 1 to 32 bytes and a WPA passphrase 8 to 63. The
+new file is written beside the old one and renamed over it: a power cut
+leaves one or the other. It takes effect at the next boot. The
+passphrase is not logged, and is cleared from memory once written.
+.TP
+.B net
+Read only: the status of each IP interface, one per line, under the
+interface's number, as
+.B /net/ipifc
+gives it.
+.TP
+.B log
+Read only: each log named with
+.BR -l ,
+under a line naming it;
+.B (nothing)
+for one that is empty or absent. By default the Wi-Fi supplicant's,
+which is where a join that failed says why.
+.TP
+.B ctl
+Write only.
+.B reboot
+restarts the board, and
+.B tryboot
+boots the candidate kernel once. Nothing else is accepted.
+.PP
+Writes to
+.B wifi
+and
+.B ctl
+are recorded on
+.B /mnt/audit/log
+if it is there, without the passphrase.
+.PP
+The options name what stands behind each file, for a board laid out
+differently and for the test:
+.TP
+.BI -w " file"
+The Wi-Fi configuration; default
+.BR /n/dos/wifi .
+.TP
+.BI -c " file"
+Where
+.B reboot
+and
+.B tryboot
+are written; default
+.BR /dev/sysctl .
+.TP
+.BI -n " dir"
+The IP interfaces; default
+.BR /net/ipifc .
+.TP
+.BI -l " file"
+A log to serve. May be repeated; default
+.BR /tmp/wpa.log .
+.SH SOURCE
+.B /appl/cmd/setupfs.b
+.SH SEE ALSO
+.IR bt9p (4),
+.IR export (4),
+.IR listen (1)
+.SH BUGS
+A configuration is one network. Several, with a policy for choosing
+among them, is a separate proposal.

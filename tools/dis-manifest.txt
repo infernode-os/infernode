@@ -610,6 +610,7 @@ dis/scap.dis
 dis/sed.dis
 dis/sendmail.dis
 dis/seq.dis
+dis/setupfs.dis
 dis/sh.dis
 dis/sh/arg.dis
 dis/sh/csv.dis

@@ -16,8 +16,10 @@ include "rfcomm.m";
 	Mux: import rfcomm;
 include "keyring.m";
 include "att.m";
+	att: Att;
 include "smp.m";
 	smp: Smp;
+	Pairing: import smp;
 include "btmock.m";
 
 peersdp: ref Server;	# what every mock peer offers: a serial port on Echochan
@@ -33,6 +35,8 @@ init(b: Bthci, l: L2cap)
 	rfcomm->init(b);
 	smp = load Smp Smp->PATH;
 	smp->init(b, load Keyring Keyring->PATH);
+	att = load Att Att->PATH;
+	att->init(b);
 	peersdp = Server.new();
 	peersdp.add(sdp->spprecord(0, Echochan, "Echo Port"));
 }
@@ -44,7 +48,7 @@ Ctlr.new(addr: string): ref Ctlr
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, nil, 0);
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, nil, 0, 0, nil, nil);
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -234,11 +238,38 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 			return cmdstatus(c, op, Bthci->Sconnexists);
 		kind := authkind(c, addr);
 		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 1, hidtable(kind == "lereport"), 0, nil, nil, nil, nil, nil, nil, 0, 0, nil,
-			kind == "lesc", nil, nil, nil, nil, nil);
+			kind == "lesc", nil, nil, nil, nil, nil, 0, 0);
 		if(lookup(c, addr) != nil && lekind(kind))
 			pr.handle = c.nexthandle++;
 		c.pendconn = appendpeer(c.pendconn, pr);
 		return cmdstatus(c, op, Bthci->Sok);
+	Bthci->LeSetAdvParams =>
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->LeSetAdvData =>
+		c.advdata = params;
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->LeSetScanRspData =>
+		c.scanrsp = params;
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->LeSetAdvEnable =>
+		if(len params < 1)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		c.advertising = int params[0];
+		return complete(c, op, Bthci->Sok, nil);
+	Bthci->LeLtkReply or Bthci->LeLtkNegReply =>
+		# the host's answer to our Long Term Key Request: the right key
+		# and the link encrypts, anything else and it does not
+		if(len params < 2)
+			return complete(c, op, Bthci->Sinvalidparams, nil);
+		lh := bthci->get2(params, 0) & 16rfff;
+		lpr := findhandle(c, lh);
+		if(lpr == nil)
+			return complete(c, op, Bthci->Sunknownconn, params[0:2]);
+		if(op == Bthci->LeLtkReply && len params >= 18 && lpr.stk != nil && same(params[2:18], lpr.stk))
+			lpr.penc = 1;
+		else
+			lpr.penc = 1 + Bthci->Snokey;
+		return complete(c, op, Bthci->Sok, params[0:2]);
 	Bthci->LeStartEncryption =>
 		if(len params < 28)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
@@ -264,7 +295,7 @@ handle(c: ref Ctlr, op: int, params: array of byte): array of byte
 		if(len params < 13)
 			return cmdstatus(c, op, Bthci->Sinvalidparams);
 		addr := bthci->bdaddr(params, 0);
-		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil);
+		pr := ref Peer(addr, 0, 0, nil, 0, 0, nil, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, 0, 0);
 		if(lookup(c, addr) != nil)
 			pr.handle = c.nexthandle++;
 		# unknown devices page out: Connection Complete with page timeout, on the tick
@@ -645,8 +676,18 @@ peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
 		Fixed =>
 			case e.cid {
 			L2cap->Cidsmp =>
+				if(pr.phone){
+					pg := phonepairing(pr);
+					if(pg != nil)
+						out = cat(out, peerevents(c, pr, phonesmp(c, pr, pg.recv(e.sdu))));
+					continue;
+				}
 				out = cat(out, peerevents(c, pr, smpresponder(c, pr, e.sdu)));
 			L2cap->Cidatt =>
+				if(pr.phone){
+					out = cat(out, peerevents(c, pr, phonestep(c, pr, e.sdu)));
+					continue;
+				}
 				rsp := gattserve(pr, e.sdu);
 				if(rsp != nil)
 					out = cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidatt, rsp)));
@@ -1162,9 +1203,153 @@ Ctlr.call(c: self ref Ctlr, addr: string, psm: int, text: string): string
 		return "no such device nearby: " + addr;
 	if(findpeer(c, addr) != nil)
 		return "already connected: " + addr;
-	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil);
+	pr := ref Peer(addr, 0, 2, nil, 1, psm, text, 0, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, 0, 0);
 	c.pendconn = appendpeer(c.pendconn, pr);
 	return nil;
+}
+
+# A phone. It connects only to a host that is advertising InferNode's
+# service, as a phone's app scans for that UUID and nothing else.
+Ctlr.lecall(c: self ref Ctlr, addr: string, text: string): string
+{
+	if(!c.advertising)
+		return "the host is not advertising";
+	if(!advertises(c.advdata, att->parseuuid(Att->Uinfernode)))
+		return "the host does not advertise InferNode's service";
+	if(findpeer(c, addr) != nil)
+		return "already connected: " + addr;
+	pr := ref Peer(addr, c.nexthandle++, 0, nil, 0, 0, text, 0, nil, nil, 0, 1, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, 1, 0);
+	c.pendconn = appendpeer(c.pendconn, pr);
+	c.advertising = 0;		# a controller stops advertising when a central connects
+	return nil;
+}
+
+# is this 128-bit UUID in the advertising data's service lists?
+advertises(ad, uuid: array of byte): int
+{
+	if(len ad < 1 || uuid == nil)
+		return 0;
+	n := int ad[0];
+	for(i := 1; i + 1 < 1 + n && i + 1 < len ad; ){
+		l := int ad[i];
+		if(l == 0 || i + 1 + l > len ad)
+			break;
+		t := int ad[i+1];
+		if((t == 16r06 || t == 16r07) && l >= 17 && same(ad[i+2:i+18], uuid))
+			return 1;
+		i += 1 + l;
+	}
+	return 0;
+}
+
+phonepairs: list of (ref Peer, ref Pairing);
+
+phonepairing(pr: ref Peer): ref Pairing
+{
+	for(l := phonepairs; l != nil; l = tl l){
+		(p, pg) := hd l;
+		if(p == pr)
+			return pg;
+	}
+	return nil;
+}
+
+attreq(op, start, end: int, rest: array of byte): array of byte
+{
+	p := array[5 + len rest] of byte;
+	p[0] = byte op;
+	bthci->put2(p, 1, start);
+	bthci->put2(p, 3, end);
+	p[5:] = rest;
+	return p;
+}
+
+readreq(h: int): array of byte
+{
+	p := array[3] of byte;
+	p[0] = byte Att->Oreadreq;
+	bthci->put2(p, 1, h);
+	return p;
+}
+
+# the phone's next move, given what the host's GATT server just said
+phonestep(c: ref Ctlr, pr: ref Peer, rsp: array of byte): list of ref Ev
+{
+	if(len rsp < 1)
+		return nil;
+	op := int rsp[0];
+	case pr.phone {
+	2 =>	# the service, by its UUID
+		if(op != Att->Ofindbytypersp || len rsp < 5){
+			c.received = "phone " + pr.addr + ": InferNode's service not found" :: c.received;
+			return nil;
+		}
+		pr.phone = 3;
+		return pr.l2.sendfixed(L2cap->Cidatt, attreq(Att->Oreadbytypereq, bthci->get2(rsp, 1), bthci->get2(rsp, 3), att->uuidbytes(Att->Ucharacteristic)));
+	3 =>	# its characteristic: handle, properties, value handle, UUID
+		if(op != Att->Oreadbytypersp || len rsp < 7){
+			c.received = "phone " + pr.addr + ": no characteristic in the service" :: c.received;
+			return nil;
+		}
+		pr.vh = bthci->get2(rsp, 5);
+		pr.phone = 4;
+		return pr.l2.sendfixed(L2cap->Cidatt, readreq(pr.vh));
+	4 =>	# refused until the link is encrypted: so pair, as a phone's stack does
+		if(op == Att->Oerror && len rsp >= 5 && int rsp[4] == Att->Einsufauthn){
+			pg := Pairing.new(1, bthci->parsebdaddr(pr.addr), 0, c.addr, array[16] of { * => byte 16r5a });
+			pg.priv = scprivA();
+			pg.pkx = revb(key32("20b003d2f297be2c5e2c83a7e9f9a5b9", "eff49111acf4fddbcc0301480e359de6"));
+			pg.pky = revb(key32("dc809c49652aeb6d63329abf5a52155c", "766345c28fed3024741c8ed01589d28b"));
+			phonepairs = (pr, pg) :: phonepairs;
+			pr.phone = 5;
+			return phonesmp(c, pr, pg.start());
+		}
+		c.received = "phone " + pr.addr + ": the PSM was readable on an unencrypted link" :: c.received;
+		return nil;
+	6 =>	# the PSM, now that the link is encrypted
+		if(op != Att->Oreadrsp || len rsp < 3){
+			c.received = "phone " + pr.addr + ": PSM still not readable after pairing" :: c.received;
+			return nil;
+		}
+		pr.phone = 7;
+		pr.calling = 1;
+		pr.callpsm = bthci->get2(rsp, 1);
+		(nil, evs) := pr.l2.leconnect(pr.callpsm);
+		return evs;
+	}
+	return nil;
+}
+
+# the debug key pair A, for the phone: the host's side generates its own
+scprivA(): array of byte
+{
+	return key32("3f49f6d4a3c55f3874c9b3e3d2103f50", "4aff607beb40b7995899b8a6cd3c1abd");
+}
+
+# what the phone's pairing wants done, as L2CAP events
+phonesmp(c: ref Ctlr, pr: ref Peer, sevs: list of ref Smp->Ev): list of ref Ev
+{
+	out: list of ref Ev;
+	for(; sevs != nil; sevs = tl sevs)
+		pick e := hd sevs {
+		Send =>
+			out = catev(out, pr.l2.sendfixed(L2cap->Cidsmp, e.pdu));
+		Encrypt =>
+			pr.stk = e.key;		# the controller asks the host for this key, on the tick
+			pr.sstate = 20;
+		Confirm =>
+			pg := phonepairing(pr);
+			if(pg != nil)
+				out = catev(out, phonesmp(c, pr, pg.confirm(1)));	# the phone's user always says yes
+		Paired =>
+			c.pairings++;
+			pr.phone = 6;
+			out = catev(out, pr.l2.sendfixed(L2cap->Cidatt, readreq(pr.vh)));
+		Failed =>
+			c.received = "phone " + pr.addr + ": pairing failed: " + e.text :: c.received;
+			pr.phone = 99;		# a phone refused goes away: the tick hangs its link up
+		}
+	return out;
 }
 
 # a call on an RFCOMM channel: the peer opens PSM 3, brings the
@@ -1175,7 +1360,7 @@ Ctlr.callrf(c: self ref Ctlr, addr: string, channel: int, text: string): string
 		return "no such device nearby: " + addr;
 	if(findpeer(c, addr) != nil)
 		return "already connected: " + addr;
-	pr := ref Peer(addr, 0, 2, nil, 1, L2cap->Psmrfcomm, text, 0, nil, nil, channel, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil);
+	pr := ref Peer(addr, 0, 2, nil, 1, L2cap->Psmrfcomm, text, 0, nil, nil, channel, 0, nil, 0, nil, nil, nil, nil, nil, nil, 0, 0, nil, 0, nil, nil, nil, nil, nil, 0, 0);
 	c.pendconn = appendpeer(c.pendconn, pr);
 	return nil;
 }
@@ -1274,7 +1459,7 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 			if(pr.handle == 0)
 				d[1] = byte Bthci->Sconntimeout;
 			bthci->put2(d, 2, pr.handle);
-			d[4] = byte 0;			# we are the peripheral; the host is central
+			d[4] = byte (pr.phone != 0);	# the host's role: central, unless this is a phone calling it
 			d[5] = byte 1;			# random
 			d[6:] = a;
 			bthci->put2(d, 12, 16r18);
@@ -1287,6 +1472,11 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 				c.links = pr :: c.links;
 			}
 			out = cat(out, event(Bthci->EvLeMeta, d));
+			if(pr.phone && pr.handle != 0){
+				pr.phone = 2;
+				find := cat(att->uuidbytes(Att->Uprimary), att->parseuuid(Att->Uinfernode));
+				out = cat(out, peerevents(c, pr, pr.l2.sendfixed(L2cap->Cidatt, attreq(Att->Ofindbytypereq, 1, 16rffff, find))));
+			}
 		}else{
 			# Connection Complete: status, handle, addr, link type ACL, no encryption
 			d := array[11] of byte;
@@ -1317,6 +1507,25 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 		pr := hd ll;
 		if(!pr.le)
 			continue;
+		if(pr.phone == 99){
+			droppeer(c, pr);
+			hd4 := array[4] of byte;
+			hd4[0] = byte 0;
+			bthci->put2(hd4, 1, pr.handle);
+			hd4[3] = byte Bthci->Sremoteterm;
+			out = cat(out, event(Bthci->EvDisconnComplete, hd4));
+			continue;
+		}
+		if(pr.sstate == 20){
+			# the phone's stack starts encryption with the key its pairing
+			# made, so the controller asks the host for the same one: LE
+			# Long Term Key Request, Rand 0 and EDIV 0 as for any such key
+			pr.sstate = 21;
+			lr := array[13] of { * => byte 0 };
+			lr[0] = byte Bthci->LeLtkRequest;
+			bthci->put2(lr, 1, pr.handle);
+			out = cat(out, event(Bthci->EvLeMeta, lr));
+		}
 		if(pr.penc != 0){
 			st := pr.penc - 1;
 			pr.penc = 0;
@@ -1329,6 +1538,8 @@ Ctlr.tick(c: self ref Ctlr): array of byte
 				pr.encrypted = 1;
 				if(pr.l2 != nil)
 					pr.l2.encrypted = 1;
+				if(pr.phone && (pg := phonepairing(pr)) != nil)
+					out = cat(out, peerevents(c, pr, phonesmp(c, pr, pg.encrypted())));
 				if(pr.sstate == 3)
 					out = cat(out, distribute(c, pr));
 			}

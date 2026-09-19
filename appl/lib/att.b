@@ -111,12 +111,12 @@ isrequest(pdu: array of byte): int
 	return 0;
 }
 
-Server.new(): ref Server
+Gattsrv.new(): ref Gattsrv
 {
-	return ref Server(Defmtu, nil, 1, 0);
+	return ref Gattsrv(Defmtu, nil, 1, 0);
 }
 
-addattr(s: ref Server, a: ref Attr)
+addattr(s: ref Gattsrv, a: ref Attr)
 {
 	r: list of ref Attr;
 	for(l := s.attrs; l != nil; l = tl l)
@@ -128,7 +128,7 @@ addattr(s: ref Server, a: ref Attr)
 }
 
 # the service declaration the characteristics now being added belong to
-lastservice(s: ref Server): ref Attr
+lastservice(s: ref Gattsrv): ref Attr
 {
 	sv: ref Attr;
 	for(l := s.attrs; l != nil; l = tl l)
@@ -137,14 +137,14 @@ lastservice(s: ref Server): ref Attr
 	return sv;
 }
 
-Server.service(s: self ref Server, uuid: array of byte): int
+Gattsrv.service(s: self ref Gattsrv, uuid: array of byte): int
 {
 	h := s.next++;
 	addattr(s, ref Attr(h, uuidbytes(Uprimary), uuid, h, 0));
 	return h;
 }
 
-Server.characteristic(s: self ref Server, uuid: array of byte, value: array of byte, needenc: int): int
+Gattsrv.characteristic(s: self ref Gattsrv, uuid: array of byte, value: array of byte, needenc: int): int
 {
 	sv := lastservice(s);
 	if(sv == nil)
@@ -162,7 +162,7 @@ Server.characteristic(s: self ref Server, uuid: array of byte, value: array of b
 	return vh;
 }
 
-Server.set(s: self ref Server, handle: int, value: array of byte)
+Gattsrv.set(s: self ref Gattsrv, handle: int, value: array of byte)
 {
 	for(l := s.attrs; l != nil; l = tl l)
 		if((hd l).handle == handle)
@@ -203,14 +203,14 @@ samebytes(a, b: array of byte): int
 }
 
 # may this attribute be read now? 0, or the error that says why not
-readable(s: ref Server, a: ref Attr): int
+readable(s: ref Gattsrv, a: ref Attr): int
 {
 	if(a.needenc && !s.encrypted)
 		return Einsufauthn;
 	return 0;
 }
 
-Server.recv(s: self ref Server, pdu: array of byte): array of byte
+Gattsrv.recv(s: self ref Gattsrv, pdu: array of byte): array of byte
 {
 	if(len pdu < 1)
 		return nil;

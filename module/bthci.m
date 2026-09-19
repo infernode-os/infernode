@@ -113,6 +113,12 @@ Bthci: module
 	LeConnectionUpdate:	con (8<<10) | 16r13;
 	LeStartEncryption:	con (8<<10) | 16r19;
 	LeSetScanEnable:	con (8<<10) | 16r0c;
+	LeSetAdvParams:		con (8<<10) | 16r06;
+	LeSetAdvData:		con (8<<10) | 16r08;
+	LeSetScanRspData:	con (8<<10) | 16r09;
+	LeSetAdvEnable:		con (8<<10) | 16r0a;
+	LeLtkReply:		con (8<<10) | 16r1a;	# LE Long Term Key Request Reply: handle, key
+	LeLtkNegReply:		con (8<<10) | 16r1b;
 
 	# Broadcom vendor commands, for the CYW43455's patch upload (bt9p M3)
 	BcmDownloadMinidriver:	con (16r3f<<10) | 16r2e;
@@ -163,6 +169,7 @@ Bthci: module
 	LeAdvReport:		con 16r02;	# LE Meta subevent: Advertising Report
 	LeConnComplete:		con 16r01;	# LE Meta subevent: status, handle, role, peer type, peer, interval...
 	LeConnUpdate:		con 16r03;
+	LeLtkRequest:		con 16r05;	# LE Meta subevent: handle, Rand (8), EDIV: the central wants the link encrypted
 	LeEnhConnComplete:	con 16r0a;
 
 	# HCI status codes worth naming

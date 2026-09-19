@@ -14,7 +14,7 @@
 #	a phone needs to find it and learn which L2CAP channel to open
 #	(#647), and the data goes over that.
 #
-#	Both can be on one link: requests and commands go to the Server,
+#	Both can be on one link: requests and commands go to the Gattsrv (the server),
 #	everything else to the Client; isrequest() says which.
 #
 
@@ -166,26 +166,33 @@ Att: module
 		needenc: int;		# readable only on an encrypted link
 	};
 
-	Srvmtu:		con 185;	# what the Server offers in an MTU exchange
+	Srvmtu:		con 185;	# what the Gattsrv offers in an MTU exchange
 
-	Server: adt {
+	# InferNode's own service (#647): a board that will be mounted over an
+	# LE L2CAP channel advertises Uinfernode, and the one characteristic in
+	# it, readable once the link is encrypted, is the channel's PSM as two
+	# bytes. Both were drawn at random on 2026-09-19 and mean nothing.
+	Uinfernode:	con "8fb227af-9790-4a44-a7fd-fc8b6c54aafc";
+	Uinfernodepsm:	con "56209656-5cc7-4d77-a283-34cddf937d75";
+
+	Gattsrv: adt {
 		mtu:	int;
 		attrs:	list of ref Attr;	# ascending by handle
 		next:	int;			# the next free handle
 		encrypted: int;			# the caller says when the link is
 
-		new:	fn(): ref Server;
+		new:	fn(): ref Gattsrv;
 		# a primary service begins; returns its handle. The characteristics
 		# that follow belong to it until the next service.
-		service: fn(s: self ref Server, uuid: array of byte): int;
+		service: fn(s: self ref Gattsrv, uuid: array of byte): int;
 		# a read-only characteristic of the service in progress; returns
 		# its value handle. needenc: refuse the read, with insufficient
 		# authentication, on a link that is not encrypted -- which is
 		# also how a phone is made to pair, since its apps cannot ask.
-		characteristic: fn(s: self ref Server, uuid: array of byte, value: array of byte, needenc: int): int;
-		set:	fn(s: self ref Server, handle: int, value: array of byte);
+		characteristic: fn(s: self ref Gattsrv, uuid: array of byte, value: array of byte, needenc: int): int;
+		set:	fn(s: self ref Gattsrv, handle: int, value: array of byte);
 		# a request or command arrived on channel 4: the PDU to send back, nil for none
-		recv:	fn(s: self ref Server, pdu: array of byte): array of byte;
+		recv:	fn(s: self ref Gattsrv, pdu: array of byte): array of byte;
 	};
 
 	# is this PDU one a server answers (a request or a command), and

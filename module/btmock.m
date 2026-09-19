@@ -57,6 +57,8 @@ Btmock: module
 		lekeys:	list of (string, array of byte);	# LTKs given out, by address, for the next encryption
 		keys:	list of (string, array of byte);	# link keys issued, by address
 		pairings:	int;		# how many pairings completed
+		advertising:	int;		# LE advertising enabled by the host
+		advdata, scanrsp: array of byte;	# what it advertises
 
 		new:	fn(addr: string): ref Ctlr;
 		feed:	fn(c: self ref Ctlr, b: array of byte): array of byte;
@@ -67,6 +69,10 @@ Btmock: module
 		call:	fn(c: self ref Ctlr, addr: string, psm: int, text: string): string;
 		callrf:	fn(c: self ref Ctlr, addr: string, channel: int, text: string): string;
 		notify:	fn(c: self ref Ctlr, addr: string, report: array of byte): string;	# an LE device's boot report
+		# a phone: an LE central that connects if the host is advertising
+		# InferNode's service, finds it, is refused its PSM, pairs with
+		# Secure Connections, reads the PSM, opens the channel, sends text
+		lecall:	fn(c: self ref Ctlr, addr: string, text: string): string;
 	};
 
 	#
@@ -101,6 +107,9 @@ Btmock: module
 		# show digits and answer, and always answers yes
 		sc:	int;
 		peerx, peery, dh, na, nb: array of byte;
+		# a phone (lecall): 0 not one, else how far it has got
+		phone:	int;
+		vh:	int;			# the PSM characteristic's value handle, once found
 	};
 
 	Attr: adt {

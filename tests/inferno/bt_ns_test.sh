@@ -842,6 +842,87 @@ if {! ~ $"v sc-confirmed} {
 rm -f $PAIR /tmp/btns-confirmed
 echo iocap none > $BT/ctl
 
+# Being an LE peripheral (#647): what lets a phone's app find the board
+# and mount it with no network. Off unless told; "announce le9p" takes a
+# dynamic PSM and publishes it in InferNode's GATT service, readable
+# only on an encrypted link, which is how a phone is made to pair. The
+# mock's phone connects only to a host advertising that service, finds
+# it, is refused the PSM, pairs with Secure Connections (we are the
+# responder, and the controller asks us for the key), reads the PSM,
+# opens the channel and sends its text.
+v=`{grep '^advertising' $BT/status}
+if {! ~ $"v 'advertising 0'} {
+	raise 'fail:a board advertises without having been told to: '^$"v
+}
+if {echo 'lecall a0:a0:a0:a0:a0:01 too-early' > $MNT/chan/btmockctl >[2] /dev/null} {
+	raise 'fail:the phone found a board that was not advertising'
+}
+{
+	id=`{read 10}
+	echo 'announce le9p' >[1=0]
+	v=`{cat $BT/$id/local}
+	if {! ~ $"v *'!le128'} {
+		raise 'fail:le9p did not take the first dynamic LE PSM: '^$"v
+	}
+	{
+		id2=`{read 10}
+		if {echo 'announce le9p' >[1=0] >[2] /dev/null} {
+			raise 'fail:le9p was announced twice'
+		}
+		if {echo 'connect ee:ee:ee:ee:ee:05!le9p' >[1=0] >[2] /dev/null} {
+			raise 'fail:le9p was dialled: it is a thing announced'
+		}
+	} <> $BT/clone
+	echo advertise on > $BT/ctl
+	sleep 1
+	v=`{grep '^advertising' $BT/status}
+	if {! ~ $"v 'advertising 1'} {
+		raise 'fail:status after advertise on: '^$"v
+	}
+	# pairable off, the default: the phone may look, and may not pair
+	echo pairable off > $BT/ctl
+	echo 'lecall a0:a0:a0:a0:a0:01 refused' > $MNT/chan/btmockctl
+	sleep 3
+	v=`{cat $KEYS | grep 'a0:a0:a0:a0:a0:01'}
+	if {! ~ $#v 0} {
+		raise 'fail:a phone paired with a board that was not pairable: '^$"v
+	}
+} <> $BT/clone
+sleep 1
+echo pairable on > $BT/ctl
+{
+	id=`{read 10}
+	echo 'announce le9p' >[1=0]
+	echo advertise on > $BT/ctl
+	sleep 1
+	echo 'lecall a0:a0:a0:a0:a0:02 hello from the phone' > $MNT/chan/btmockctl
+	{
+		nid=`{read 10}
+		v=`{cat $BT/$nid/remote}
+		if {! ~ $"v 'a0:a0:a0:a0:a0:02!le128'} {
+			raise 'fail:the phone''s conversation: remote '^$"v
+		}
+		v=`{cat $BT/$nid/status}
+		if {! ~ $"v Connected} {
+			raise 'fail:the phone''s conversation: status '^$"v
+		}
+		v=`{read 100 < $BT/$nid/data}
+		if {! ~ $"v 'hello from the phone'} {
+			raise 'fail:what the phone sent did not arrive: '^$"v
+		}
+	} <> $BT/$id/listen
+	v=`{cat $KEYS | grep 'proto=btltk addr=a0:a0:a0:a0:a0:02 type=1 ediv=0 rand=0000000000000000'}
+	if {~ $#v 0} {
+		raise 'fail:the key made with the phone was not kept: '^`{cat $KEYS}
+	}
+} <> $BT/clone
+echo advertise off > $BT/ctl
+v=`{grep '^advertising' $BT/status}
+if {! ~ $"v 'advertising 0'} {
+	raise 'fail:status after advertise off: '^$"v
+}
+sleep 2
+
 # announcing one: classic and LE PSMs are separate number spaces
 {
 	id=`{read 10}

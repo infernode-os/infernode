@@ -135,7 +135,7 @@ include "keyring.m";
 	keyring: Keyring;
 include "att.m";
 	att: Att;
-	Client, Characteristic: import att;
+	Client, Characteristic, Gattsrv: import att;
 include "smp.m";
 	smp: Smp;
 	Pairing: import smp;
@@ -184,6 +184,9 @@ Lnk: adt {
 	pairtm:	ref Tmsg.Write;		# a "pair <addr>" waiting for this link to be secured
 	irk:	array of byte;		# the LE peer's identity resolving key, if it gave one
 	rpa:	string;			# the private address it was found advertising with
+	# a link a central made to us while we advertised
+	periph:	int;
+	gsrv:	ref Gattsrv;	# what that central may ask of us over GATT
 };
 # a link's security, in the order it is established
 Snone, Sauthenticating, Sauthenticated, Sencrypting, Sencrypted: con iota;
@@ -264,6 +267,9 @@ scansecs := 10;
 scans := 0;			# inquiries run
 iocap := Bthci->IOnone;		# what we tell peers we can do about pairing
 pairable := 0;			# may a peer start a pairing we did not ask for?
+advertising := 0;		# are we a connectable LE peripheral? "advertise on|off"; off unless told
+advname := "";			# the name in the scan response; the system's if unset
+lepsm9p := 0;			# the LE PSM "announce le9p" chose, published in the InferNode service
 keyfile := "";			# where new link keys are also written, in factotum's syntax
 factdir := "/mnt/factotum";
 firmware := "";			# a .hcd to upload on up
@@ -949,7 +955,7 @@ event(srv: ref Styxserver, e: ref Event)
 		# a peer calls: accept, as a peripheral. The link then completes
 		# like one we asked for.
 		if(linkbyaddr(who) == nil)
-			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil) :: links;
+			links = ref Lnk(who, 0, Lconnecting, nil, nil, 0, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil, 0, nil) :: links;
 		spawn accept(who);
 	Bthci->EvAuthComplete =>
 		if(len e.params < 3)
@@ -1074,6 +1080,10 @@ event(srv: ref Styxserver, e: ref Event)
 		}
 		if(len e.params >= 1 && int e.params[0] == Bthci->LeConnUpdate)
 			return;
+		if(len e.params >= 13 && int e.params[0] == Bthci->LeLtkRequest){
+			leltkrequest(bthci->get2(e.params, 1) & 16rfff, e.params[3:11], bthci->get2(e.params, 11));
+			return;
+		}
 		s := findsub(Qlescan);
 		if(s == nil || s.done){
 			# remember the address types all the same: a connect needs
@@ -1279,7 +1289,7 @@ status(): string
 		s += sys->sprint("discoverable %d\nconnectable %d\n", discoverable, connectable);
 	}
 	s += sys->sprint("transport %s\n", transportname);
-	s += sys->sprint("iocap %s\npairable %d\n", iocapname(iocap), pairable);
+	s += sys->sprint("iocap %s\npairable %d\nadvertising %d\n", iocapname(iocap), pairable, advertising);
 	if(keyfile != nil)
 		s += sys->sprint("keyfile %s\n", keyfile);
 	if(baud > 0)
@@ -1360,6 +1370,32 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 		iocap = v;
 		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
 		return;
+	"advertise" =>
+		# Being found is a decision, never a default: a board is not
+		# connectable over the air merely because it is powered.
+		if(nf != 2 || (hd args != "on" && hd args != "off")){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: advertise on|off"));
+			return;
+		}
+		if(!up){
+			srv.reply(ref Rmsg.Error(tm.tag, "controller not up"));
+			return;
+		}
+		advertising = hd args == "on";
+		advertise(advertising);
+		auditlog("advertise", hd args);
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+		return;
+	"advname" =>
+		if(nf != 2){
+			srv.reply(ref Rmsg.Error(tm.tag, "usage: advname <name>"));
+			return;
+		}
+		advname = hd args;
+		if(advertising)
+			advertise(1);
+		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
+		return;
 	"pairable" =>
 		if(nf != 2 || (hd args != "on" && hd args != "off")){
 			srv.reply(ref Rmsg.Error(tm.tag, "usage: pairable on|off"));
@@ -1388,7 +1424,7 @@ ctl(srv: ref Styxserver, tm: ref Tmsg.Write)
 			return;
 		}
 		if(lk == nil){
-			lk = ref Lnk(hd args, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil);
+			lk = ref Lnk(hd args, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil, 0, nil);
 			links = lk :: links;
 			spawn createconn(hd args);
 		}
@@ -2227,6 +2263,10 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 			srv.reply(ref Rmsg.Error(tm.tag, "usage: connect <addr>!<psm>|rfcomm<n>|spp|le<psm>|gatt|hid"));
 			return;
 		}
+		if(kind == Kle && psm == 0){
+			srv.reply(ref Rmsg.Error(tm.tag, "connect: le9p is announced, not dialled: read the peer's PSM and dial le<psm>"));
+			return;
+		}
 		if(cv.state != "Closed"){
 			srv.reply(ref Rmsg.Error(tm.tag, "conversation in use: " + cv.state));
 			return;
@@ -2275,6 +2315,21 @@ convctl(srv: ref Styxserver, tm: ref Tmsg.Write, cv: ref Conv)
 		if(kind == Kgatt || kind == Khid){
 			srv.reply(ref Rmsg.Error(tm.tag, "announce: being an LE peripheral is not offered"));
 			return;
+		}
+		le9p := kind == Kle && psm == 0;
+		if(le9p){
+			if(lepsm9p != 0){
+				srv.reply(ref Rmsg.Error(tm.tag, "le9p already announced"));
+				return;
+			}
+			for(psm = 16r80; psm <= 16rff && lelistener(psm) != nil; psm++)
+				;
+			if(psm > 16rff){
+				srv.reply(ref Rmsg.Error(tm.tag, "no free LE PSM"));
+				return;
+			}
+			lepsm9p = psm;
+			publishpsm();
 		}
 		if(kind == Kle && lelistener(psm) != nil){
 			srv.reply(ref Rmsg.Error(tm.tag, "PSM already announced"));
@@ -2326,6 +2381,8 @@ parseport(s: string): (int, int, int)
 		return (Kgatt, 0, 0);
 	if(s == "hid")
 		return (Khid, 0, 0);
+	if(s == "le9p")
+		return (Kle, 0, 0);	# announce: a dynamic PSM, published over GATT for a phone to find
 	if(len s > 2 && s[0:2] == "le"){
 		# an LE PSM is one byte: 0x01-0x7f assigned, 0x80-0xff dynamic
 		n: int;
@@ -2463,6 +2520,10 @@ release(srv: ref Styxserver, cv: ref Conv)
 		if(cv.sdphandle != 0){
 			sdpsrv.remove(cv.sdphandle);
 			cv.sdphandle = 0;
+		}
+		if(cv.kind == Kle && cv.psm == lepsm9p){
+			lepsm9p = 0;		# no longer offered, so no longer published
+			publishpsm();
 		}
 		acceptall();
 		# calls accepted that no listen ever read
@@ -2620,7 +2681,7 @@ connect(srv: ref Styxserver, cv: ref Conv)
 {
 	lk := linkbyaddr(cv.raddr);
 	if(lk == nil){
-		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil);
+		lk = ref Lnk(cv.raddr, 0, Lconnecting, nil, nil, 1, nil, nil, nil, nil, Snone, 0, 0, nil, nil, nil, nil, nil, nil, 0, nil);
 		links = lk :: links;
 		if(cv.kind == Kgatt || cv.kind == Khid || cv.kind == Kle){
 			# an LE peer: its address type is what lescan heard, or
@@ -3131,6 +3192,20 @@ leconncomplete(srv: ref Styxserver, p: array of byte)
 		for(ll := links; ll != nil && lk == nil; ll = tl ll)
 			if((hd ll).rpa == who)
 				lk = hd ll;
+	if(lk == nil && st == Bthci->Sok && int p[4] == 1 && advertising){
+		# role 1: a central found our advertisement and connected. The
+		# link is its to end. It may ask what we serve over GATT, pair
+		# if we are pairable, and open the LE channels we announced.
+		lk = ref Lnk(who, h, Lup, nil, nil, 0, nil, nil, nil, nil, Snone, 1, int p[5], nil, nil, nil, nil, nil, nil, 1, nil);
+		links = lk :: links;
+		lk.l2 = Link.new(h);
+		lk.l2.accept = leannounced();
+		lk.gatt = Client.new();
+		lk.gsrv = gatttable();
+		auditlog("accept", sys->sprint("peer=%s le", who));
+		eventnote(srv, sys->sprint("link %s: a central connected\n", who));
+		return;
+	}
 	if(lk == nil || !lk.le)
 		return;
 	if(st != Bthci->Sok){
@@ -3189,6 +3264,179 @@ leconnect(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 	smpevents(srv, lk, lk.pairing.start());
 }
 
+#
+# Being an LE peripheral (#647): advertised only when told to be, and
+# serving over GATT only what a phone needs to find the board and learn
+# which channel to open.
+#
+
+# GAP's two mandatory characteristics, GATT (empty: nothing here ever
+# changes while a link is up), and InferNode's service if le9p is
+# announced, its PSM readable only on an encrypted link
+gatttable(): ref Gattsrv
+{
+	g := Gattsrv.new();
+	g.service(att->uuidbytes(Att->Ugap));
+	g.characteristic(att->uuidbytes(Att->Udevname), array of byte localname(), 0);
+	g.characteristic(att->uuidbytes(Att->Uappearance), array[] of { byte 16r80, byte 0 }, 0);	# a generic computer
+	g.service(att->uuidbytes(Att->Ugatt));
+	if(lepsm9p != 0){
+		g.service(att->parseuuid(Att->Uinfernode));
+		g.characteristic(att->parseuuid(Att->Uinfernodepsm), array[] of { byte lepsm9p, byte 0 }, 1);
+	}
+	return g;
+}
+
+# le9p was announced or withdrawn: links that are up serve the new table
+publishpsm()
+{
+	for(ll := links; ll != nil; ll = tl ll){
+		lk := hd ll;
+		if(lk.gsrv == nil)
+			continue;
+		enc := lk.gsrv.encrypted;
+		mtu := lk.gsrv.mtu;
+		lk.gsrv = gatttable();
+		lk.gsrv.encrypted = enc;
+		lk.gsrv.mtu = mtu;
+	}
+	if(advertising)
+		advertise(1);
+}
+
+localname(): string
+{
+	if(advname != nil)
+		return advname;
+	fd := sys->open("/dev/sysname", Sys->OREAD);
+	if(fd != nil){
+		b := array[64] of byte;
+		n := sys->read(fd, b, len b);
+		if(n > 0)
+			return string b[0:n];
+	}
+	return "infernode";
+}
+
+# Whatever changes what is advertised -- the verb, the name, le9p
+# announced or withdrawn, a central gone -- asks here, and one process
+# does the work. Each used to spawn its own sequence of five commands;
+# three of them started within a millisecond interleaved, and the
+# controller was left disabled, or advertising without the service, by
+# whichever ran last. The request carries nothing: the process reads
+# what is wanted when it gets there, so a burst of requests is one update.
+advreq: chan of int;
+
+advertise(nil: int)
+{
+	if(advreq == nil){
+		advreq = chan[4] of int;
+		spawn advproc(advreq);
+	}
+	alt{
+	advreq <-= 1 =>
+		;
+	* =>
+		;	# one is already waiting, and it will see the same state
+	}
+}
+
+advproc(req: chan of int)
+{
+	for(;;){
+		<-req;
+		for(more := 1; more; )
+			alt{
+			<-req =>	;
+			* =>		more = 0;
+			}
+		setadvertising(advertising);
+	}
+}
+
+# Connectable undirected advertising, 100 to 150 ms. The advertisement
+# carries the flags and, if le9p is announced, InferNode's service UUID,
+# which is what a phone's app scans for; the name goes in the scan
+# response, where there is room for it.
+setadvertising(on: int)
+{
+	cmd(Bthci->LeSetAdvEnable, array[] of { byte 0 });
+	if(!on)
+		return;
+	p := array[15] of { * => byte 0 };
+	bthci->put2(p, 0, 16ra0);
+	bthci->put2(p, 2, 16rf0);
+	p[13] = byte 7;			# all three advertising channels
+	cmd(Bthci->LeSetAdvParams, p);
+
+	ad := array[32] of { * => byte 0 };
+	n := 1;
+	ad[n++] = byte 2; ad[n++] = byte 16r01; ad[n++] = byte 16r06;	# flags: general discoverable, no BR/EDR
+	if(lepsm9p != 0){
+		ad[n++] = byte 17; ad[n++] = byte 16r07;			# complete list of 128-bit service UUIDs
+		ad[n:] = att->parseuuid(Att->Uinfernode);
+		n += 16;
+	}
+	ad[0] = byte (n - 1);
+	cmd(Bthci->LeSetAdvData, ad);
+
+	sr := array[32] of { * => byte 0 };
+	name := array of byte localname();
+	if(len name > 29)
+		name = name[0:29];
+	sr[0] = byte (2 + len name);
+	sr[1] = byte (1 + len name);
+	sr[2] = byte 16r09;		# complete local name
+	sr[3:] = name;
+	cmd(Bthci->LeSetScanRspData, sr);
+	cmd(Bthci->LeSetAdvEnable, array[] of { byte 1 });
+}
+
+# The central wants the link encrypted and the controller asks us for
+# the key. During a pairing it is the key that pairing just made; later
+# it is the one we kept for this peer, if the EDIV and Rand it names are
+# that key's (both zero for a Secure Connections key). No key is a
+# negative reply, and the central is left to pair afresh.
+leltkrequest(h: int, rnd: array of byte, ediv: int)
+{
+	lk := linkbyhandle(h);
+	key: array of byte;
+	if(lk != nil && lk.pairing != nil && lk.ltk != nil)
+		key = lk.ltk;
+	else if(lk != nil){
+		k := secret(sys->sprint("proto=btltk addr=%q", lk.addr));
+		(nf, f) := sys->tokenize(k, " ");
+		if(nf >= 3){
+			(kediv, nil) := str->toint(hd tl f, 10);
+			krnd := parsehexbytes(hd tl tl f, 8);
+			if(kediv == ediv && krnd != nil && samebytes(krnd, rnd))
+				key = bthci->parsekey(hd f);
+		}
+	}
+	if(key == nil){
+		p := array[2] of byte;
+		bthci->put2(p, 0, h);
+		spawn fire(Bthci->LeLtkNegReply, p);
+		return;
+	}
+	if(lk.secure == Snone)
+		lk.secure = Sencrypting;
+	p := array[18] of byte;
+	bthci->put2(p, 0, h);
+	p[2:] = key[0:16];
+	spawn fire(Bthci->LeLtkReply, p);
+}
+
+samebytes(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
 randombytes(n: int): array of byte
 {
 	b := array[n] of byte;
@@ -3243,7 +3491,10 @@ smpevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Smp->Ev)
 				l2events(srv, lk, lk.l2.sendfixed(L2cap->Cidsmp, e.pdu));
 		Encrypt =>
 			lk.ltk = e.key;
-			spawn lestartencryption(lk.handle, array[8] of { * => byte 0 }, 0, e.key);
+			# the central starts encryption; a responder keeps the key
+			# for the controller's Long Term Key Request (leltkrequest)
+			if(lk.pairing == nil || !lk.pairing.responder)
+				spawn lestartencryption(lk.handle, array[8] of { * => byte 0 }, 0, e.key);
 		Paired =>
 			k := e.keys;
 			# a Secure Connections LTK has EDIV 0 and Rand 0 by
@@ -3320,6 +3571,8 @@ lesecured(srv: ref Styxserver, lk: ref Lnk, ok: int, why: string)
 	lk.secure = Sencrypted;
 	if(lk.l2 != nil)
 		lk.l2.encrypted = 1;	# LE channels are refused on a link that is not
+	if(lk.gsrv != nil)
+		lk.gsrv.encrypted = 1;	# and so is a read of the PSM
 	for(; w != nil; w = tl w)
 		if((hd w).state == "Connecting")
 			lestart(srv, lk, hd w);
@@ -3352,6 +3605,15 @@ lestart(srv: ref Styxserver, lk: ref Lnk, cv: ref Conv)
 
 attdata(srv: ref Styxserver, lk: ref Lnk, pdu: array of byte)
 {
+	# what a central asks of us; everything else is an answer to what we asked
+	if(att->isrequest(pdu)){
+		if(lk.gsrv == nil)
+			lk.gsrv = gatttable();
+		rsp := lk.gsrv.recv(pdu);
+		if(rsp != nil && lk.l2 != nil)
+			l2events(srv, lk, lk.l2.sendfixed(L2cap->Cidatt, rsp));
+		return;
+	}
 	# a gatt conversation sees everything raw; the client sees it too,
 	# for a hid conversation on the same link
 	for(cl := convs; cl != nil; cl = tl cl){
@@ -3669,6 +3931,10 @@ linkup(srv: ref Styxserver, who: string, h, st: int)
 linkdown(srv: ref Styxserver, lk: ref Lnk, why: string)
 {
 	forgetlink(lk);
+	# a controller stops advertising when a central connects; when
+	# that central goes, we are to be findable again
+	if(lk.periph && advertising)
+		advertise(1);
 	if(lk.pairtm != nil){
 		srv.reply(ref Rmsg.Error(lk.pairtm.tag, why));
 		lk.pairtm = nil;
@@ -3801,6 +4067,17 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 		Fixed =>
 			case e.cid {
 			L2cap->Cidsmp =>
+				if(lk.pairing == nil && lk.periph && len e.sdu >= 1 && int e.sdu[0] == Smp->Cpairreq){
+					# a central asks to pair: only if we said peers may
+					if(!pairable){
+						l2events(srv, lk, lk.l2.sendfixed(L2cap->Cidsmp, array[] of { byte Smp->Cfailed, byte Smp->Fnotsupported }));
+						pairnote(srv, sys->sprint("refused %s pairable is off\n", lk.addr));
+						continue;
+					}
+					lk.pairing = Pairing.respond(lk.peertype, bthci->parsebdaddr(lk.addr), 0, bthci->parsebdaddr(addr), randombytes(16), randombytes(26));
+					if(iocap == Bthci->IOdisplayyesno)
+						lk.pairing.io = Smp->IOdisplayyesno;
+				}
 				if(lk.pairing != nil)
 					smpevents(srv, lk, lk.pairing.recv(e.sdu));
 			L2cap->Cidatt =>

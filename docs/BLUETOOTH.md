@@ -563,9 +563,28 @@ passkey. The mock has a Secure Connections peer (`lesc`), and the
 contract test pairs with it both ways and reconnects on the stored key.
 What that test found on the way: an LE link's last packet credits were
 returned to the classic pool once the link had been forgotten, so LE
-starved after a disconnection with packets in flight; fixed. Not done:
-the responder's side, which the peripheral role needs, and passkey
-entry.
+starved after a disconnection with packets in flight; fixed.
+
+*The peripheral role, the same day:* `smp(2)` has the responder's side
+(legacy, and Secure Connections as Just Works or numeric comparison),
+tested by pairing the library's two roles against each other; `att(2)`
+has a small GATT server (`Gattsrv`: read-only characteristics, the
+requests a central uses to find a service and read a value, a
+characteristic readable only when encrypted); and `bt9p` has
+`advertise on|off`, `advname`, and `announce le9p`, which takes a
+dynamic LE PSM and publishes it as the one characteristic of InferNode's
+service. A central that connects is served that table, may pair if
+`pairable` is on, and has the controller's Long Term Key Request
+answered from the pairing in progress or from the key kept for it. The
+mock has a phone (`lecall`): it connects only to a host advertising the
+service, finds it, is refused the PSM, pairs, reads it, opens the
+channel and sends text; the contract test checks that it is refused
+before `advertise on`, cannot pair with `pairable off`, and otherwise
+arrives at a listener with its key kept. Advertising updates go through
+one process: three requests within a millisecond used to interleave
+their commands and leave the controller disabled. Not done, and needing
+hardware: any of this on the board, and against a real phone. Not done
+at all: passkey entry, and the host `/net/bt` in the phone emulators.
 
 ## Test plan
 

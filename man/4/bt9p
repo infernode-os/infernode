@@ -158,6 +158,29 @@ on
 .BR pair ).
 Pairing on a connection we made is always allowed.
 .TP
+.BR advertise " on|off"
+Be an LE peripheral that a central may find and connect to:
+connectable advertising, with the local name in the scan response and,
+while
+.B le9p
+is announced, InferNode's service UUID in the advertisement, which is
+what a phone's app scans for. Off until told otherwise: a board is not
+connectable over the air merely because it is powered. A controller
+stops advertising when a central connects, and
+.I bt9p
+starts it again when that central has gone. A central that connects
+may ask what is served over GATT (the device name, and InferNode's
+service if announced), may pair only if
+.B pairable
+is on, and may open the LE channels that are announced.
+.B status
+says
+.B advertising
+0 or 1.
+.TP
+.BI advname " name"
+The name advertised; the system's name if unset.
+.TP
 .BI pair " addr"
 Pair with a classic peer for its own sake: a link is made to it,
 authenticated and encrypted -- pairing on the way when there is no
@@ -314,10 +337,23 @@ that outruns the peer's credit blocks until it catches up. Classic and
 LE PSMs are separate number spaces. An
 .B announce
 of one is accepted, and answers peers on LE links that are already up;
-making the board connectable to a new one needs advertising, which is
-not offered yet. A peer on a link that is not encrypted is refused with
+making the board connectable to a new one is
+done with
+.B advertise
+(below). A peer on a link that is not encrypted is refused with
 .IR "insufficient authentication" ,
 which is its cue to pair.
+.TP
+.B le9p
+In an
+.B announce
+only: the first free dynamic LE PSM, published as the one
+characteristic of InferNode's GATT service, where a phone's app finds
+it. The characteristic is readable only on an encrypted link, so a
+phone that reads it is made to pair first, which its apps have no other
+way to ask for. Closing the listener withdraws the service. It is not
+dialled: a central reads the peer's PSM and dials
+.BI le psm\fR.
 .TP
 .B gatt
 An LE link to the peer, encrypted first (below), with the Attribute

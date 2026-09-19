@@ -235,6 +235,21 @@ serve(c: ref Ctlr, fio, cio: ref Sys->FileIO, tickms: int)
 					wc <-= (len data, nil);
 				continue;
 			}
+			if(nf >= 3 && hd f == "lecall"){
+				# lecall <addr> <text>: a phone finds the host, pairs, opens its le9p channel
+				ltext := "";
+				for(lt := tl tl f; lt != nil; lt = tl lt){
+					if(ltext != "")
+						ltext += " ";
+					ltext += hd lt;
+				}
+				lerr := c.lecall(hd tl f, ltext);
+				if(lerr != nil)
+					wc <-= (0, lerr);
+				else
+					wc <-= (len data, nil);
+				continue;
+			}
 			if(nf < 4 || hd f != "call"){
 				wc <-= (0, "usage: call <addr> <psm>|rfcomm<n> <text> | notify <addr> <hex>...");
 				continue;

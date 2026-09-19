@@ -15,7 +15,7 @@ include "bthci.m";
 	bthci: Bthci;
 include "att.m";
 	att: Att;
-	Client, Characteristic, Service, Ev, Server: import att;
+	Client, Characteristic, Service, Ev, Gattsrv: import att;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -389,7 +389,7 @@ testUse(t: ref T)
 INFERNODE: con "6e6f6465-7265-666e-692d-000000000001";	# stands in for the service UUID #647 will fix
 
 # the client against the library's server
-drivesrv(c: ref Client, srv: ref Server, evs: list of ref Ev, r: ref Result)
+drivesrv(c: ref Client, srv: ref Gattsrv, evs: list of ref Ev, r: ref Result)
 {
 	for(rounds := 0; evs != nil && rounds < 200; rounds++){
 		more: list of ref Ev;
@@ -414,9 +414,9 @@ drivesrv(c: ref Client, srv: ref Server, evs: list of ref Ev, r: ref Result)
 	}
 }
 
-boardtable(): (ref Server, int, int)
+boardtable(): (ref Gattsrv, int, int)
 {
-	srv := Server.new();
+	srv := Gattsrv.new();
 	srv.service(att->uuidbytes(Att->Ugap));
 	name := srv.characteristic(att->uuidbytes(Att->Udevname), array of byte "infernode", 0);
 	srv.characteristic(att->uuidbytes(Att->Uappearance), array[] of { byte 16r80, byte 0 }, 0);

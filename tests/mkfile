@@ -29,12 +29,14 @@ TARG=\
 	cut_test.dis\
 	crypto_test.dis\
 	delegation_budget_test.dis\
+	destructor_test.dis\
 	dial_test.dis\
 	dialnorm_test.dis\
 	edit_test.dis\
 	editor_test.dis\
 	example_test.dis\
 	factotum_test.dis\
+	fdclose_test.dis\
 	font_format_test.dis\
 	git_test.dis\
 	goroutine_leak_test.dis\

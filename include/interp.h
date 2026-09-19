@@ -403,6 +403,7 @@ extern	void		cmovw(void*, void*);
 extern	Channel*	cnewc(Type*, void (*)(void), int);
 extern	int		compile(Module*, int, Modlink*);
 extern	void		freejitcode(void*, ulong);
+extern	void		freetypejit(Type*);
 extern	void		cqadd(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);

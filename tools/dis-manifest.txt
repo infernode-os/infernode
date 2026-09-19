@@ -670,6 +670,7 @@ dis/tests/crypto_props_test.dis
 dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
 dis/tests/delegation_budget_test.dis
+dis/tests/destructor_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
 dis/tests/edit_test.dis
@@ -678,6 +679,7 @@ dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
 dis/tests/factotum_test.dis
+dis/tests/fdclose_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis
 dis/tests/geomap_test.dis

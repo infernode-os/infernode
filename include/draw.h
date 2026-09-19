@@ -513,7 +513,24 @@ extern	int	_cursorfd;
 extern	int	_drawdebug;	/* set to 1 to see errors from flushimage */
 
 #define	BGSHORT(p)		(((p)[0]<<0) | ((p)[1]<<8))
-#define	BGLONG(p)		((BGSHORT(p)<<0) | (BGSHORT(p+2)<<16))
+/*
+ * UNSIGNED, and 32 bits wide however wide a ulong is.
+ *
+ * The shift used to be done in int arithmetic, so any value with bit 31
+ * set came out negative -- and assigning that to a 64-bit ulong sign
+ * extended it. Nofill is 0xFFFFFF00, which has bit 31 set, so devdraw
+ * read it as 0xFFFFFFFFFFFFFF00 and its "was I asked not to fill this?"
+ * test never matched. Every window was therefore FILLED, with that
+ * value as a colour, instead of being left alone: the window manager
+ * painted its grey desktop and devdraw painted over it, so the screen
+ * came up black with only the cursor on it, and a window that exited
+ * left a black hole where it had been.
+ *
+ * Invisible on Plan 9, where a ulong is 32 bits and the sign extension
+ * has nowhere to go. Same family as the 32-bit pixel written through a
+ * ulong* in libmemdraw.
+ */
+#define	BGLONG(p)		((u32int)(((u32int)BGSHORT(p)) | ((u32int)BGSHORT(p+2)<<16)))
 #define	BPSHORT(p, v)		((p)[0]=(v), (p)[1]=((v)>>8))
 #define	BPLONG(p, v)		(BPSHORT(p, (v)), BPSHORT(p+2, (v)>>16))
 

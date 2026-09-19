@@ -2198,22 +2198,44 @@ preamble(void)
 /*
  * Macro implementations.
  */
+/*
+ * Free-pointer macro: drop one reference to the heap cell in RA0.
+ *
+ * The shape is comp-amd64.c's, and the two things it gets right are
+ * both load-bearing. The test is "ref == 1" BEFORE any decrement, and
+ * the last-reference path does not store one: destroy() in heap.c
+ * does its own --ref, so a macro that stored ref-1 first would hand
+ * it a zero, the unsigned decrement would wrap, and the cell would
+ * read as referenced for ever. And the flags the branch consumes are
+ * set by the compare on the refcount, not left over from the nil
+ * check. The previous version did SUB_IMM (which sets no flags) and
+ * then BCOND(NE) on the nil check's flags, always NE for a non-nil
+ * pointer, so rdestroy was unreachable and no compiled code ever ran
+ * a destructor: a dropped fd stayed open until the collector found
+ * it. Found by reading; confirmed by etherusb's #l handoff, whose
+ * endpoint stayed "inuse" after fd = nil.
+ */
 static void
 macfrp(void)
 {
-	u32int *nilcheck, *notzero;
+	u32int *nilcheck, *lastref;
 
-	CMN_IMM(RA0, 1);
+	CMN_IMM(RA0, 1);		/* H is (void*)-1: nothing to count */
 	nilcheck = code;
 	BCOND(EQ, 0);
 
 	mem(Ldw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
+	CMP_IMM(RA2, 1);
+	lastref = code;
+	BCOND(EQ, 0);
+
+	/* ref > 1: one fewer, and done */
 	SUB_IMM(RA2, RA2, 1);
 	mem(Stw, O(Heap, ref) - sizeof(Heap), RA0, RA2);
-	notzero = code;
-	BCOND(NE, 0);
+	RET_X30();
 
-	/* ref == 0: save state, call rdestroy */
+	/* ref == 1: save state, let rdestroy take the last one */
+	PATCH_BCOND(lastref);
 	mem(Stw, O(REG, FP), RREG, RFP);
 	mem(Stw, O(REG, s), RREG, RA0);
 	mem(Stw, O(REG, st), RREG, 30);
@@ -2225,7 +2247,6 @@ macfrp(void)
 	mem(Ldw, O(REG, MP), RREG, RMP);
 
 	PATCH_BCOND(nilcheck);
-	PATCH_BCOND(notzero);
 	RET_X30();
 }
 
@@ -2572,6 +2593,8 @@ comd(Type *t)
 #define TYPECOM_PERPTR	24
 #define TYPECOM_SLACK	1024
 
+#define Typejithdr	16	/* the mapping's length, in front of a type's code; keeps the code 16-aligned */
+
 void
 typecom(Type *t)
 {
@@ -2618,7 +2641,12 @@ typecom(Type *t)
 	}
 	free(tmp);
 
-	sz = n * sizeof(u32int);
+	/*
+	 * The code is a mapping of its own, and a mapping is unmapped by
+	 * length, which Type does not carry: so the length goes in a header
+	 * in front of the code, where freetypejit() finds it.
+	 */
+	sz = n * sizeof(u32int) + Typejithdr;
 
 #ifdef APPLE_JIT
 	start = mmap(0, sz, PROT_READ|PROT_WRITE|PROT_EXEC,
@@ -2633,7 +2661,8 @@ typecom(Type *t)
 		return;
 #endif
 
-	code = start;
+	*(ulong*)start = sz;
+	code = (u32int*)((uchar*)start + Typejithdr);
 	t->initialize = code;
 	comi(t);
 	t->destroy = code;
@@ -2668,6 +2697,23 @@ patchex(Module *m, ulong *p)
 		if(e->pc != (ulong)-1)
 			e->pc = p[e->pc] * sizeof(u32int);
 	}
+}
+
+/*
+ * Release a type's compiled initialize/destroy code: a mapping, with
+ * its length in the header typecom() put in front of it.
+ */
+void
+freetypejit(Type *t)
+{
+	uchar *base;
+
+	if(t == nil || t->initialize == nil)
+		return;
+	base = (uchar*)t->initialize - Typejithdr;
+	munmap(base, *(ulong*)base);
+	t->initialize = nil;
+	t->destroy = nil;
 }
 
 /*
@@ -2840,8 +2886,17 @@ compile(Module *m, int size, Modlink *ml)
 
 	if(cflag > 3)
 		print("A: mod->entry=%.8p\n", mod->entry);
+	/*
+	 * A module's exported global data -- the ".mp" link, which the
+	 * compiler emits with pc -1 and load.c admits as a sentinel -- is
+	 * not code and has no entry in patch[]: relocating it read
+	 * patch[-1], the pool word before the array, and gave the link
+	 * base + whatever that was. It is left as loaded, exactly as the
+	 * interpreter sees it; nothing ever jumps to it.
+	 */
 	for(l = m->ext; l->name; l++) {
-		l->u.pc = (Inst*)RELPC(patch[l->u.pc - m->prog]);
+		if(l->u.pc - m->prog != -1)
+			l->u.pc = (Inst*)RELPC(patch[l->u.pc - m->prog]);
 		typecom(l->frame);
 	}
 	if(cflag > 3)
@@ -2849,7 +2904,8 @@ compile(Module *m, int size, Modlink *ml)
 	if(ml != nil) {
 		e = &ml->links[0];
 		for(i = 0; i < ml->nlinks; i++) {
-			e->u.pc = (Inst*)RELPC(patch[e->u.pc - m->prog]);
+			if(e->u.pc - m->prog != -1)
+				e->u.pc = (Inst*)RELPC(patch[e->u.pc - m->prog]);
 			typecom(e->frame);
 			e++;
 		}

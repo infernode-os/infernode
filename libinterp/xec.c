@@ -873,6 +873,8 @@ OP(iload)
 	else {
 		m = readmod(n, lookmod(n), 1);
 		ml = linkmod(m, ldt, 1);
+		if(R.M->compiled && PC_MISALIGNED(R.PC))
+			print("BUG: iload: R.PC=%p misaligned after linkmod %s\n", R.PC, n);
 	}
 
 	mp = R.d;
@@ -1779,6 +1781,17 @@ isave(void)
 	Prog *p;
 
 	p = delrun(Prelease);
+	/*
+	 * The saved PC is what xec() will jump to when this Prog next
+	 * runs. If it is already misaligned here, the compiled code that
+	 * called into C left it so, and the C caller's address names
+	 * which system call (#635: "misaligned PC in compiled module",
+	 * R.PC one byte below the module's prog, twice on the board).
+	 */
+	if(R.M != H && R.M->compiled && PC_MISALIGNED(R.PC))
+		print("BUG: isave: misaligned R.PC=%p in %s (prog %p) saved from %p\n",
+			R.PC, R.M->m ? R.M->m->name : "?", R.M->m ? (void*)R.M->m->prog : nil,
+			getcallerpc(&p));
 	p->R = R;
 	return p;
 }
@@ -1786,6 +1799,8 @@ isave(void)
 void
 irestore(Prog *p)
 {
+	if(p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
+		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->R.PC);
 	R = p->R;
 	R.IC = 1;
 }

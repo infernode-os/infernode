@@ -309,6 +309,7 @@ Ctlres: adt {
 };
 ctldone: chan of ref Ctlres;
 busy := 0;			# a worker is talking to the controller
+rfrefused := 0;		# SABMs and PNs we answered with DM, for status
 
 dir(nm: string, perm: int, path: int): Sys->Dir
 {
@@ -557,7 +558,7 @@ request(tmsg: ref Tmsg, srv: ref Styxserver): int
 	Readerror =>
 		return 0;
 	Flush =>
-		cancel(tm.oldtag);
+		cancelconv(srv, tm.oldtag);
 		srv.reply(ref Rmsg.Flush(tm.tag));
 	Open =>
 		c := srv.getfid(tm.fid);
@@ -777,7 +778,12 @@ dropsub(fid: int)
 	subs = keep;
 }
 
-cancel(tag: int)
+# srv is needed only for a flushed listen, whose open counted against
+# the listener (convopen: cv.opens++ while it waits) and, dropped here,
+# must be counted off again -- or the listener conversation lives on
+# after its process is killed, its PSM "already announced" to the next
+# one, and every battery run leaves four of them behind (#632).
+cancelconv(srv: ref Styxserver, tag: int)
 {
 	for(l := subs; l != nil; l = tl l){
 		s := hd l;
@@ -792,8 +798,10 @@ cancel(tag: int)
 			cv.rpending = nil;
 		if(cv.cpending != nil && cv.cpending.tag == tag)
 			cv.cpending = nil;
-		if(cv.lpending != nil && cv.lpending.tag == tag)
+		if(cv.lpending != nil && cv.lpending.tag == tag){
 			cv.lpending = nil;
+			release(srv, cv);
+		}
 	}
 }
 
@@ -1286,7 +1294,7 @@ status(): string
 	nc := 0;
 	for(cl := convs; cl != nil; cl = tl cl)
 		nc++;
-	s += sys->sprint("links %d\nconversations %d\nacl mtu %d credits %d\n", nl, nc, aclmtu, aclcredits);
+	s += sys->sprint("links %d\nconversations %d\nacl mtu %d credits %d\nrfcomm refused %d\n", nl, nc, aclmtu, aclcredits, rfrefused);
 	return s;
 }
 
@@ -2741,12 +2749,28 @@ rfidle(srv: ref Styxserver, lk: ref Lnk)
 # wanted the link secured first.)
 rfdown(srv: ref Styxserver, lk: ref Lnk, why: string)
 {
+	theirs := lk.rf != nil && !lk.rf.initiator;
 	lk.rf = nil;
 	for(cl := convs; cl != nil; cl = tl cl){
 		cv := hd cl;
 		if(cv.lnk == lk && cv.kind == Krfcomm && cv.dlc != nil)
 			closed(srv, cv, why);
 	}
+	#
+	# The peer's multiplexer, ended by the peer's own DISC on DLCI 0:
+	# the L2CAP channel under it is the peer's to close (RFCOMM 5.2 --
+	# the initiator opened it), and BlueZ keeps it open and brings the
+	# next session up on it at once. Disconnecting it here raced every
+	# reconnect: the peer's fresh SABM met our L2CAP disconnect ("reset
+	# by peer" at the tester), or its SABM for the port arrived before
+	# its SABM for the multiplexer had been answered ("refused"), one
+	# of each per cycle of the acceptance battery's storm (#632). Keep
+	# the channel; the Data case above starts a fresh multiplexer on
+	# the next SABM, and the channel's own Closed event, when the peer
+	# does close it, comes back here with lk.rf already nil.
+	#
+	if(theirs && why == "hangup" && lk.rfwait == nil && lk.rfch != nil && lk.rfch.state == L2cap->Open)
+		return;
 	if(lk.rfch != nil && lk.l2 != nil){
 		ch := lk.rfch;
 		if(ch.state == L2cap->Open){
@@ -2848,9 +2872,35 @@ rfevents(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Rfcomm->Ev)
 			}
 			rfconsumed(srv, cv);
 		Muxdown =>
+			eventnote(srv, sys->sprint("rf %s: multiplexer down: %s (%s)\n", lk.addr, e.reason, choose(lk.rf != nil && !lk.rf.initiator, "theirs", "ours")));
 			rfdown(srv, lk, e.reason);
+		Refused =>
+			# counted into status as "rfcomm refused": the acceptance
+			# battery's reconnect storm reads it before and after, because
+			# the tester's own stack refuses and resets on its side while
+			# it tears the previous session down, and errno alone cannot
+			# say whose refusal it was (#632)
+			rfrefused++;
+			eventnote(srv, sys->sprint("rf %s: refused dlci %d: %s\n", lk.addr, e.dlci, e.reason));
 		}
 	}
+}
+
+# Limbo has no conditional expression
+choose(c: int, a, b: string): string
+{
+	if(c)
+		return a;
+	return b;
+}
+
+rfstate(lk: ref Lnk): string
+{
+	if(lk.rf == nil)
+		return "nil";
+	if(lk.rf.up)
+		return "up";
+	return "down";
 }
 
 catb(a, b: array of byte): array of byte
@@ -3581,8 +3631,21 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 				continue;
 			}
 			if(e.c.psm == Psmrfcomm){
-				if(lk.rfch == nil)
-					lk.rfch = e.c;	# the peer's multiplexer; ours if we had one first
+				# the peer's multiplexer; ours if we had one first. A
+				# peer that closes its session and opens another at
+				# once -- BlueZ does, on every reconnect -- arrives
+				# while the old channel's close is still in flight:
+				# then the new channel is the multiplexer, and the old
+				# one's Closed, no longer the multiplexer's, is nothing
+				# more. Left unadopted it got no answers, and the
+				# acceptance battery's reconnect storm saw one refusal
+				# per connection (#632).
+				adopt := lk.rfch == nil || lk.rf == nil || lk.rf.dlcs == nil;
+				eventnote(srv, sys->sprint("rf %s: incoming channel, %s (rfch %s rf %s)\n", lk.addr, choose(adopt, "adopted", "NOT adopted"), choose(lk.rfch != nil, "set", "nil"), choose(lk.rf != nil, "up", "nil")));
+				if(adopt){
+					lk.rfch = e.c;
+					lk.rf = nil;
+				}
 				continue;
 			}
 			ls := listener(e.c.psm);
@@ -3598,6 +3661,7 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 			nc.opens = 1;		# held for the listener until a listen takes it
 		Closed =>
 			if(e.c == lk.rfch){
+				eventnote(srv, sys->sprint("rf %s: channel closed: %s (rf %s)\n", lk.addr, e.reason, choose(lk.rf != nil, "up", "nil")));
 				lk.rfch = nil;
 				rfdown(srv, lk, e.reason);
 				continue;
@@ -3631,10 +3695,22 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 			}
 		Data =>
 			if(e.c == lk.rfch){
-				if(lk.rf != nil){
-					rfevents(srv, lk, lk.rf.recv(e.sdu));
-					rfstartwaiting(srv, lk);
+				# A frame on the multiplexer's channel after the peer
+				# took the multiplexer down (DISC on DLCI 0, which
+				# rfdown answered by dropping lk.rf) is the peer
+				# bringing a new session up on the same channel --
+				# SABM on DLCI 0 -- and dropping it left BlueZ's
+				# reconnect waiting for a UA that never came, one
+				# refusal per cycle of the acceptance battery's storm
+				# (#632). A fresh multiplexer answers it.
+				if(len e.sdu >= 2 && (int e.sdu[1] & 16rEF) != 16rEF)
+					eventnote(srv, sys->sprint("rf %s: frame dlci %d ctl %#2.2x (rf %s)\n", lk.addr, int e.sdu[0] >> 2, int e.sdu[1] & 16rEF, rfstate(lk)));
+				if(lk.rf == nil){
+					lk.rf = Mux.new(e.c.initiator, e.c.mtu);
+					lk.rf.accept = rfannounced();
 				}
+				rfevents(srv, lk, lk.rf.recv(e.sdu));
+				rfstartwaiting(srv, lk);
 				continue;
 			}
 			if((sc := sdpclient(lk, e.c)) != nil){

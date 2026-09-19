@@ -291,6 +291,13 @@ enum
 static	u32int*	code;
 static	u32int*	base;
 static	ulong*	patch;
+static	int	incompile;	/* #635 tripwire: compile() is not reentrant */
+
+void
+compiledone(void)
+{
+	incompile = 0;
+}
 static	ulong	codeoff;
 static	int	pass;
 static	Module*	mod;
@@ -2771,6 +2778,17 @@ compile(Module *m, int size, Modlink *ml)
 
 	ulong tmpsize;
 
+	/*
+	 * #635 tripwires. The compiler's state -- base, patch, mod, code
+	 * -- is static: a second compile() entered before the first has
+	 * returned would relocate the first module's entries with the
+	 * second's tables, and every compiled address is base+patch[idx],
+	 * so a wrong table gives exactly the "prog - 1" the board keeps
+	 * printing (patch[idx] read as all-ones). Say so at once.
+	 */
+	if(incompile)
+		panic("compile: re-entered while compiling %s (this: %s)", mod? mod->name : "?", m->name);
+	incompile = 1;
 	base = nil;
 	patch = mallocz((size + 1) * sizeof(*patch), 0);
 	tinit = malloc(m->ntype * sizeof(*tinit));
@@ -2919,7 +2937,25 @@ compile(Module *m, int size, Modlink *ml)
 
 	if(cflag > 3)
 		print("A: mod->entry=%.8p\n", mod->entry);
+	/*
+	 * A module's exported global data -- the ".mp" link, which the
+	 * compiler emits with pc -1 and load.c admits as a sentinel -- is
+	 * not code and has no entry in patch[]: relocating it read
+	 * patch[-1], the pool word before the array, and gave the link
+	 * base + whatever that was, which for a block header is often
+	 * all-ones, so base - 1. That is the "misaligned R.PC = prog - 1"
+	 * of #635, found by the tripwire below on the board: "compile IP:
+	 * export .mp pc index -1". The sentinel stays a sentinel.
+	 */
 	for(l = m->ext; l->name; l++) {
+		if(l->u.pc - m->prog == -1){
+			l->u.pc = (Inst*)-1;
+			typecom(l->frame);
+			continue;
+		}
+		if(l->u.pc - m->prog < 0 || l->u.pc - m->prog > size)
+			panic("compile %s: export %s pc index %ld outside 0..%d (already relocated?)",
+				m->name, l->name, (long)(l->u.pc - m->prog), size);
 		l->u.pc = (Inst*)RELPC(patch[l->u.pc - m->prog]);
 		typecom(l->frame);
 	}
@@ -2928,6 +2964,15 @@ compile(Module *m, int size, Modlink *ml)
 	if(ml != nil) {
 		e = &ml->links[0];
 		for(i = 0; i < ml->nlinks; i++) {
+			if(e->u.pc - m->prog == -1){
+				e->u.pc = (Inst*)-1;
+				typecom(e->frame);
+				e++;
+				continue;
+			}
+			if(e->u.pc - m->prog < 0 || e->u.pc - m->prog > size)
+				panic("compile %s: link %d pc index %ld outside 0..%d (already relocated?)",
+					m->name, i, (long)(e->u.pc - m->prog), size);
 			e->u.pc = (Inst*)RELPC(patch[e->u.pc - m->prog]);
 			typecom(e->frame);
 			e++;
@@ -2987,8 +3032,10 @@ compile(Module *m, int size, Modlink *ml)
 	m->compiled = 1;
 	free(tinit);
 	free(tmp);
+	compiledone();
 	return 1;
 bad:
+	compiledone();
 	free(patch);
 	free(tinit);
 	free(tmp);

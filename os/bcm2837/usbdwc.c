@@ -127,7 +127,9 @@ struct Ctlr {
 	Dwcregs	*regs;		/* controller registers */
 	int	nchan;		/* number of host channels */
 	ulong	chanbusy;	/* bitmap of in-use channels */
+	ulong	chandead;	/* channels that would not halt: never handed out again (#641) */
 	QLock	chanlock;	/* serialise access to chanbusy */
+	Lock	masklock;	/* haintmsk is shared by every channel; see chanwait */
 	QLock	split;		/* serialise split transactions */
 	int	splitretry;	/* count retries of Nyet */
 	int	sofchan;	/* bitmap of channels waiting for sof */
@@ -236,6 +238,18 @@ static uvlong epwrns, eprdns, epwrmax;
 static ulong nchanfast;		/* already complete; never slept */
 static ulong nchanwake;		/* slept, and the wait was ended by a wakeup */
 static ulong nchantmout;	/* slept, and tsleep timed out */
+static ulong nbulkidle;		/* armed bulk INs ended because nothing came */
+
+/*
+ * From the interrupt that ends a bulk IN to its waiter running again.
+ * The chip behind that endpoint holds a millisecond of a 100 Mb/s wire,
+ * so this latency -- a scheduling cost, nothing to do with USB -- is
+ * what decides whether frames are dropped. Buckets: under 50us, 100us,
+ * 250us, 500us, 1, 2, 5 ms, and beyond.
+ */
+static uvlong chanwaket[16];
+static ulong wakehist[8];
+static uvlong wakemax;
 
 /* how many interrupt failures still to report; see eptrans */
 static int dwcintrerr;
@@ -254,7 +268,7 @@ chanalloc(Ep *ep)
 
 	ctlr = ep->hp->aux;
 	qlock(&ctlr->chanlock);
-	bitmap = ctlr->chanbusy;
+	bitmap = ctlr->chanbusy | ctlr->chandead;
 	for(i = 0; i < ctlr->nchan; i++)
 		if((bitmap & (1<<i)) == 0){
 			ctlr->chanbusy = bitmap | 1<<i;
@@ -289,9 +303,25 @@ chanrelease(Ep *ep, Hostchan *chan)
 	 * enabled indefinitely and writes its next packet at hcdma no
 	 * matter who owns that memory by then.
 	 */
-	if(chan->hcchar & Chen)
-		panic("chanrelease: ep%d.%d channel %d still enabled hcchar %8.8ux hcdma %8.8ux cpu%d",
-			ep->dev->nb, ep->nb, i, chan->hcchar, chan->hcdma, m->machno);
+	if(chan->hcchar & Chen){
+		/*
+		 * It would not halt (chanwait said so), so it keeps its
+		 * channel and its buffer for good: a channel of eight is
+		 * a small price against a DMA engine writing into memory
+		 * somebody else owns by the time it finishes. Before this
+		 * the release panicked, or -- when the halt was only
+		 * half-asked-for, see chanwait -- the channel went back to
+		 * the pool live, and an unpopulated hub port's phantom
+		 * attach then cost the board its main pool or its JIT
+		 * code within a minute (#641, #610).
+		 */
+		qlock(&ctlr->chanlock);
+		ctlr->chandead |= 1<<i;
+		qunlock(&ctlr->chanlock);
+		print("usbotg: ep%d.%d channel %d retired: still enabled hcchar %8.8ux hcdma %8.8ux\n",
+			ep->dev->nb, ep->nb, i, chan->hcchar, chan->hcdma);
+		return;
+	}
 	qlock(&ctlr->chanlock);
 	ctlr->chanbusy &= ~(1<<i);
 	qunlock(&ctlr->chanlock);
@@ -464,8 +494,26 @@ chanwait(Ep *ep, Ctlr *ctlr, Hostchan *hc, int mask)
 	for(;;){
 restart:
 		x = splhi();
+		/*
+		 * haintmsk has one bit per channel and is written here, by
+		 * whichever core is starting a wait, and in the interrupt
+		 * handler, which clears the bit of the channel it is waking.
+		 * Both are read-modify-write. Unlocked, a handler that read
+		 * the register before this store and wrote it back after
+		 * erases the bit just set: the channel then completes
+		 * without ever interrupting and its waiter sleeps out the
+		 * whole of Chantmout. It was measured as a bulk OUT taking
+		 * 199937 us -- Chantmout to the microsecond -- and it is
+		 * 200 ms in which no bulk IN is served either side of it,
+		 * which the LAN78xx's 12 KB FIFO turns into dropped frames
+		 * and TCP into a retransmission timeout. The driver this
+		 * came from holds a lock here; splhi is not one, it only
+		 * stops THIS core.
+		 */
+		ilock(&ctlr->masklock);
 		r->haintmsk |= 1<<n;
 		hc->hcintmsk = mask;
+		iunlock(&ctlr->masklock);
 		/*
 		 * Bounded, not indefinite.
 		 *
@@ -553,8 +601,24 @@ restart:
 			 * a USB problem at all.
 			 */
 			t0 = fastticks(nil);
+			if(n < nelem(chanwaket))
+				chanwaket[n] = 0;
 			tsleep(&ctlr->chanintr[n], chandone, hc, Chantmout);
 			el = fastticks2ns(fastticks(nil) - t0);
+			if(n < nelem(chanwaket) && chanwaket[n] != 0 &&
+			   ep->ttype == Tbulk && (hc->hcchar & Epin)){
+				static uvlong lim[] = { 50000, 100000, 250000, 500000, 1000000, 2000000, 5000000 };
+				uvlong w;
+				int k;
+
+				w = fastticks2ns(fastticks(nil) - chanwaket[n]);
+				for(k = 0; k < nelem(lim); k++)
+					if(w < lim[k])
+						break;
+				wakehist[k]++;
+				if(w > wakemax)
+					wakemax = w;
+			}
 			chanwaitns += el;
 			if(el > chanwaitmax)
 				chanwaitmax = el;
@@ -575,8 +639,19 @@ restart:
 		if(!chandone(hc)){
 			hc->hcintmsk = 0;
 			splx(x);
+			/*
+			 * A bulk IN left armed (see chanio) that has seen
+			 * nothing for Chantmout is an idle network, not a
+			 * fault. Say "Nak": chanio halts the channel, looks
+			 * at what raced in, and ends the read empty, which
+			 * lets the reader notice an unbind and ask again.
+			 */
+			if(mask == Chhltd && ep->ttype == Tbulk && (hc->hcchar & Epin)){
+				nbulkidle++;
+				return Nak;
+			}
 			if(++ntmout > Maxtmout){
-				hc->hcchar |= Chdis;
+				hc->hcchar |= Chen | Chdis;	/* both bits: CHDIS alone is not a request the core honours */
 				print("usbotg: ep%d.%d transfer timed out "
 					"(hcint %8.8ux hcchar %8.8ux gintsts %8.8ux\n"
 					"usbotg:   hcdma %8.8ux hctsiz %8.8ux "
@@ -636,7 +711,15 @@ restart:
 			ep->dev->nb, ep->nb, intr, hc->hcchar, r->grxstsr,
 			r->gnptxsts, r->hptxsts);
 		mask = Chhltd;
-		hc->hcchar |= Chdis;
+		/*
+		 * The DWC OTG core disables an active channel only when
+		 * CHENA and CHDIS are written together (chanintr below and
+		 * the datasheet both have it so); CHDIS alone left the
+		 * channel running and this loop reporting "won't halt" --
+		 * the ep4.1 line seen on every day of board work -- with
+		 * the DMA still armed at hcdma.
+		 */
+		hc->hcchar |= Chen | Chdis;
 		start = m->ticks;
 		while(hc->hcchar & Chen){
 			if(m->ticks - start >= 100){
@@ -905,7 +988,31 @@ chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 			 * the driver was still asleep in the read it had
 			 * posted beforehand.
 			 */
-			i = chanwait(ep, ctlr, hc, Chhltd|Nak);
+			/*
+			 * ...and now Chhltd alone again (2026-09-18, #633),
+			 * which is what the Plan 9 driver this came from
+			 * always did. The note above dates from bring-up,
+			 * when no USB interrupt arrived at all; they do now.
+			 *
+			 * Waking on Nak meant an idle link ended every read
+			 * within a microframe, the reader slept a tick, and
+			 * for that tick NO bulk IN was posted. The LAN78xx
+			 * holds 12 KB. Eight full frames arriving inside the
+			 * tick fill it and the ninth is dropped in the chip:
+			 * measured, UDP in bursts of 4 lost 0 of 3000, in
+			 * bursts of 10 lost 361 -- all of them counted by
+			 * the chip as rx dropped, none by the switch. A TCP
+			 * sender's window IS such a burst, so it never grew
+			 * past about ten segments.
+			 *
+			 * Masking Nak leaves the channel armed: the core
+			 * retries the IN by itself every microframe, takes
+			 * the data the moment the chip has any, and raises
+			 * nothing until the transfer completes. chanwait
+			 * turns a long silence into a synthetic Nak so the
+			 * halt-then-decide path below still ends the read.
+			 */
+			i = chanwait(ep, ctlr, hc, Chhltd);
 		else if(ep->ttype == Tintr && (hc->hcsplt & Spltena))
 			i = chanwait(ep, ctlr, hc, Chhltd);
 		else
@@ -1694,6 +1801,12 @@ dump(Hci *hp)
 	print("usbotg: bulk in %lud waits mean %llud us; bulk out %lud waits mean %llud us\n",
 		nbulkin, nbulkin ? bulkinns/1000/nbulkin : (uvlong)0,
 		nbulkout, nbulkout ? bulkoutns/1000/nbulkout : (uvlong)0);
+	print("usbotg: bulk in wake latency <50us %lud <100us %lud <250us %lud <500us %lud "
+		"<1ms %lud <2ms %lud <5ms %lud more %lud; max %llud us; %lud idle ends\n",
+		wakehist[0], wakehist[1], wakehist[2], wakehist[3],
+		wakehist[4], wakehist[5], wakehist[6], wakehist[7], wakemax/1000, nbulkidle);
+	memset(wakehist, 0, sizeof wakehist);
+	wakemax = 0;
 	print("usbotg: epwrite %lud calls mean %llud us max %llud us; epread %lud mean %llud us\n",
 		nepwr, nepwr ? epwrns/1000/nepwr : (uvlong)0, epwrmax/1000,
 		neprd, neprd ? eprdns/1000/neprd : (uvlong)0);
@@ -1729,7 +1842,9 @@ fiqintr(Ureg*, void *a)
 		for(i = 0; haint; i++){
 			if(haint & 1){
 				if(chanintr(ctlr, i) == 0){
+					ilock(&ctlr->masklock);	/* see chanwait */
 					r->haintmsk &= ~(1<<i);
+					iunlock(&ctlr->masklock);
 					wakechan |= 1<<i;
 				}
 			}
@@ -1771,8 +1886,11 @@ fiqintr(Ureg*, void *a)
 	 * ever needing to be woken.
 	 */
 	for(i = 0; wakechan; i++){
-		if(wakechan & 1)
+		if(wakechan & 1){
+			if(i < nelem(chanwaket) && chanwaket[i] == 0)
+				chanwaket[i] = fastticks(nil);
 			wakeup(&ctlr->chanintr[i]);
+		}
 		wakechan >>= 1;
 	}
 }
@@ -1887,6 +2005,23 @@ epread(Ep *ep, void *a, long n)
 		cachedwbinvse(p, n);
 		nr = eptrans(ep, Read, p, n);
 		epio->lastpoll = TK2MS(m->ticks);
+		/*
+		 * Drop the CPU's view of the buffer AFTER the device has
+		 * written it, as well as before.
+		 *
+		 * The call above empties the cache over the buffer, but the
+		 * buffer then sits armed until data arrives, and any line of
+		 * it that is loaded in that time -- a prefetcher running off
+		 * the end of a neighbouring block is enough -- is a clean,
+		 * valid, STALE line by the time the device writes underneath
+		 * it. While reads ended on the first NAK the window was a
+		 * microframe and nobody saw it. With the bulk IN left armed
+		 * for up to Chantmout it is the normal case: 91 framing
+		 * errors and 6 ICMP checksum errors in 2200 frames, one echo
+		 * request answered twice.
+		 */
+		if(nr > 0)
+			cachedwbinvse(p, nr);
 		memmove(a, p, nr);
 		qunlock(lk);
 		poperror();

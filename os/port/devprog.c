@@ -839,6 +839,8 @@ int2flag(int flag, char *s)
 		*s++ = 'b';
 	if(flag & MCREATE)
 		*s++ = 'c';
+	if(flag & MREADONLY)
+		*s++ = 'R';
 	if(flag & MCACHE)
 		*s++ = 'C';
 	*s = '\0';

@@ -50,6 +50,14 @@ def main():
     st = b.sh("cat /net/bt/status", wait=1.0)
     b.check("up 1" in st, "the radio is up", st.strip()[:80])
 
+    # A run that was interrupted can leave bluetoothd holding the board
+    # "Connected" at the device level: the ACL then never idles, inquiry
+    # does not find a board it is already connected to, and the links
+    # check at the end fails -- two red lines that say nothing about the
+    # board (2026-09-18, after a killed run). Start from no connection.
+    run(["bluetoothctl", "--", "disconnect", bd], timeout=20)
+    time.sleep(3)
+
     print("== GAP")
     rc, out = run(["hcitool", "-i", a.hci, "scan", "--length=8"], timeout=40)
     b.check(bd in out.lower(), "GAP/DISC/GENM general discoverable: found by inquiry", out.strip()[-120:])
@@ -65,11 +73,30 @@ def main():
         m = re.search(r"(\d+) sent, (\d+) received", out)
         sent, recv = (int(m.group(1)), int(m.group(2))) if m else (10, 0)
         b.check(recv == sent and sent > 0, "L2CAP/COS/ECH echo: %d/%d answered" % (recv, sent), out.strip()[-100:])
-    rc, out = run(["l2test", "-i", a.hci, "-z", bd], timeout=30)
-    if "not permitted" in out:
-        b.skip("L2CAP information request (l2test -z)", "needs CAP_NET_RAW")
+    # The information request is read off the wire. "l2test -z" cannot judge it:
+    # on this tester's kernel the L2CAP layer consumes information responses
+    # itself and the tool's raw socket never sees them, so it hangs in silence
+    # while btmon shows the board answering both of its requests inside 30 ms
+    # (2026-09-18). Every new ACL begins with the kernel's own request for the
+    # extended feature mask, so: drop the link, watch, make one, and look.
+    import subprocess as _sp
+    run(["bluetoothctl", "--", "disconnect", bd], timeout=20)
+    time.sleep(2)
+    mon = _sp.Popen(["btmon", "-i", a.hci], stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
+    time.sleep(1.5)
+    run(["l2ping", "-i", a.hci, "-c", "2", bd], timeout=30)
+    time.sleep(1.5)
+    mon.terminate()
+    try:
+        trace = mon.communicate(timeout=5)[0]
+    except Exception:
+        mon.kill(); trace = ""
+    if "not permitted" in trace or "Failed to" in trace[:400]:
+        b.skip("L2CAP information request (btmon)", "needs CAP_NET_RAW: setcap cap_net_raw+ep $(which btmon)")
     else:
-        b.check(rc == 0 and "Features" in out, "L2CAP information request answered (extended features)", out.strip()[-120:])
+        m = re.search(r"Information Response \(0x0b\)[^\n]*\n\s+Type: Extended features supported[^\n]*\n\s+Result: (\w[^\n]*)", trace)
+        b.check(m is not None and m.group(1).startswith("Success"), "L2CAP information request answered (extended features), read off the wire",
+                m.group(1) if m else "no information response in the trace")
     # connection on the PSM at a larger MTU; 20 frames of 600 bytes, counted at the board
     rc, out = run(["l2test", "-i", a.hci, "-s", "-P", "4097", "-O", "672", "-I", "672", "-b", "600", "-N", "20", bd], timeout=60)
     m = re.search(r"omtu (\d+)", out)
@@ -83,6 +110,16 @@ def main():
     rc, out = run("timeout 20 l2test -i %s -c -P 4097 %s" % (a.hci, bd), timeout=40)
     n = out.count("Connected")
     b.check(n >= 5 and "Can't" not in out, "L2CAP connect/disconnect storm on the PSM, 20 s: %d connections, none refused" % n, out.strip()[-120:])
+
+    # the storm's last ACL idles out on its own timer; an SDP connect that
+    # lands inside that teardown times out (seen once in three runs) and
+    # says nothing about SDP. Wait for the board to report no links first.
+    for _ in range(12):
+        st = b.sh("cat /net/bt/status", wait=0.8)
+        m = re.search(r"links (\d+)", st)
+        if m is not None and int(m.group(1)) == 0:
+            break
+        time.sleep(1)
 
     print("== SDP")
     rc, out = run(["sdptool", "-i", a.hci, "browse", bd], timeout=60)
@@ -106,9 +143,21 @@ def main():
     b.check(rc == 0 and "Connected" in out, "SPP data from the board to the tester, connection closed by the board's side (#632)", out.strip()[-120:])
     b.kill("Listen")
     b.sh("listen -A 'bt!*!spp' {cat >> /tmp/rfin} &", wait=0.8)
+    # rctest reconnects faster than BlueZ tears its previous session down,
+    # so the tester's own stack answers most attempts with EBUSY and, once a
+    # cycle, ECONNREFUSED/ECONNRESET of its own making -- 47 of each in 50
+    # cycles with the board's event log showing no DM and no channel dropped
+    # (2026-09-18). So the board is asked directly: its status counts the
+    # SABMs and PNs it answered with DM, and that count must not move.
+    def refused():
+        m = re.search(r"rfcomm refused (\d+)", b.sh("cat /net/bt/status", wait=0.8))
+        return int(m.group(1)) if m else -1
+    r0 = refused()
     rc, out = run("timeout 20 rctest -i %s -c -P 1 %s" % (a.hci, bd), timeout=40)
     n = out.count("Connected")
-    b.check(n >= 5 and "Can't" not in out, "RFCOMM connect/disconnect storm on channel 1, 20 s: %d connections, none refused" % n, out.strip()[-120:])
+    r1 = refused()
+    b.check(n >= 5 and r0 >= 0 and r1 == r0, "RFCOMM connect/disconnect storm on channel 1, 20 s: %d connections, the board refused none" % n,
+            "board refusals %s -> %s; tester-side: %d busy, %d refused, %d reset" % (r0, r1, out.count("resource busy"), out.count("refused"), out.count("reset by peer")))
     rc, out = run(["rctest", "-i", a.hci, "-n", "-P", "7", bd], timeout=30)
     b.check(rc != 0 or "Connected" not in out, "RFCOMM a channel not offered (7) is refused", out.strip()[-120:])
 
@@ -125,8 +174,15 @@ def main():
 
     b.kill("Listen")
     b.sh("rm -f /tmp/l2in /tmp/rfin", wait=0.5)
-    time.sleep(2)
-    st = b.sh("cat /net/bt/status", wait=1.0)
+    # the last ACL of the storm idles out on its own timer, which starts
+    # only when the tester has closed its side; rctest cut off by timeout
+    # can leave that to BlueZ's own idle. Poll rather than guess.
+    for _ in range(25):
+        st = b.sh("cat /net/bt/status", wait=1.0)
+        m = re.search(r"links (\d+)", st)
+        if m is not None and int(m.group(1)) == 0:
+            break
+        time.sleep(1)
     m = re.search(r"links (\d+)", st)
     b.check(m is not None and int(m.group(1)) == 0, "no links left open after the run", st.strip()[:100])
     m = re.search(r"conversations (\d+)", st)

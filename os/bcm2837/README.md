@@ -1432,13 +1432,23 @@ calls hzclock at HZ exactly as before; armtick's TVAL re-arm keeps
 the tick fixed at the millisecond, which every ms-scale periodic is
 fine with.
 
-### OPEN: residual ~0.02% framing desync under burst
+### RESOLVED: the receive path (#633), and the desync with it
 
-Down from ~0.5% at the start of the hunt: the NAK race, the stale
-post-halt interrupt word, and the per-packet timeout chaos each fed
-it. What remains is a handful per tens of thousands of frames,
-TCP-healed, byte-verified end to end. Resume with the byte-capture
-probe in devether.c's used<0 branch, never with theories.
+Inbound TCP went from 7-32 Mbit/s to 164 (143 out) at 1000 Mb/s on
+2026-09-18/19. The frames had been dropped inside the LAN78xx all along,
+where only its own statistics block (`lan78stats`) could see them. Four
+faults: no bulk IN posted for a tick after every NAK-ended read; an
+unlocked cross-core read-modify-write of `haintmsk` that parked
+transfers for 200 ms; no cache invalidate after receive DMA; and a TCP
+with no SACK. `BULK_IN_DLY` was also four times Linux's. The framing
+desync recorded here before is gone with them: 0 desyncs in 103,000
+reads, against a handful per tens of thousands.
+
+What remains is the hardware: a 12 KB FIFO behind USB 2 drops about 1.5%
+of a gigabit burst, which TCP recovers and a 41-fragment datagram does
+not. The full account, the measurements, the hypotheses eliminated, and
+what of it applies to a port to other hardware are in
+[docs/BAREMETAL-PORTING-LESSONS.md](../../docs/BAREMETAL-PORTING-LESSONS.md).
 
 ### Smaller things still open
 

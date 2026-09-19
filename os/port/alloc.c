@@ -606,6 +606,134 @@ poolread(char *va, int count, ulong offset)
 	return n;
 }
 
+/*
+ * Who holds the main pool.
+ *
+ * Every block malloc() hands out carries the PC of its caller (the
+ * tracing Npadlong above: setmalloctag), and allocb() overwrites that
+ * with ITS caller, so a Block is charged to the driver that asked for
+ * it, not to allocb. Nothing read those tags back. This walks every
+ * chunk of the pool and sums live bytes by tag, which is the question
+ * a runaway pool actually poses -- not "how much" (/dev/memory has
+ * said that for years) but "who" -- and the answer comes as PCs for
+ * llvm-nm on the kernel's .elf. Written for #641: the main pool going
+ * from 7 MB to 120 MB in four minutes after a phantom hub-port attach,
+ * with nothing in the serial log and no way to provoke it by hand.
+ *
+ * The walk runs under the pool's ilock, as poolalloc does, so it sees
+ * a consistent chain; the table and the text it is rendered into are
+ * static and serialised by a QLock, so a read allocates nothing --
+ * asking an exhausted pool for a buffer to say why it is exhausted is
+ * the one thing this must not do. Direct-mapped by PC with linear
+ * probing, so a walk over a hundred thousand blocks costs about as
+ * many table lookups, not that many times the table's size.
+ */
+typedef struct Tagsum Tagsum;
+struct Tagsum {
+	ulong	pc;
+	ulong	n;
+	ulong	bytes;
+};
+enum {
+	Ntagsum	= 512,		/* distinct allocating PCs; a kernel has a few hundred */
+	Tagtext	= 8192,
+};
+static Tagsum tagsum[Ntagsum];
+static int ntagsum;
+static char tagtext[Tagtext];
+static QLock tagsumlk;
+
+static void
+tagadd(ulong pc, ulong bytes)
+{
+	int i, start;
+
+	start = (pc >> 2) % Ntagsum;
+	for(i = start; ; i = (i + 1) % Ntagsum){
+		if(tagsum[i].n == 0){
+			if(ntagsum >= Ntagsum - 1)
+				break;		/* full: charge to the sink below */
+			tagsum[i].pc = pc;
+			tagsum[i].n = 1;
+			tagsum[i].bytes = bytes;
+			ntagsum++;
+			return;
+		}
+		if(tagsum[i].pc == pc){
+			tagsum[i].n++;
+			tagsum[i].bytes += bytes;
+			return;
+		}
+	}
+	/* overflow sink: everything the table had no room for, pc 0 */
+	tagsum[Ntagsum-1].pc = 0;
+	tagsum[Ntagsum-1].n++;
+	tagsum[Ntagsum-1].bytes += bytes;
+}
+
+int
+pooltagsread(char *va, int count, ulong offset)
+{
+	Pool *p;
+	Bhdr *c, *b, *lim;
+	Tagsum t;
+	ulong live, nlive;
+	int i, j, n, corrupt;
+
+	p = mainmem;
+	qlock(&tagsumlk);
+	if(waserror()){
+		qunlock(&tagsumlk);
+		nexterror();
+	}
+	memset(tagsum, 0, sizeof tagsum);
+	ntagsum = 0;
+	live = nlive = 0;
+	corrupt = 0;
+
+	ilock(&p->l);
+	for(c = p->chain; c != nil; c = c->clink){
+		lim = B2LIMIT(c);
+		for(b = B2NB(c); b < lim && b->magic != MAGIC_E; b = B2NB(b)){
+			if(b->size == 0){
+				corrupt++;
+				break;
+			}
+			if(b->magic == MAGIC_A || b->magic == MAGIC_I){
+				tagadd(((ulong*)B2D(b))[MallocOffset], b->size);
+				live += b->size;
+				nlive++;
+			}else if(b->magic != MAGIC_F){
+				corrupt++;
+				break;
+			}
+		}
+	}
+	iunlock(&p->l);
+
+	/* compact the table, then largest first: a leak is at the top */
+	for(i = 0, j = 0; i < Ntagsum; i++)
+		if(tagsum[i].n != 0)
+			tagsum[j++] = tagsum[i];
+	n = j;
+	for(i = 1; i < n; i++){
+		t = tagsum[i];
+		for(j = i; j > 0 && tagsum[j-1].bytes < t.bytes; j--)
+			tagsum[j] = tagsum[j-1];
+		tagsum[j] = t;
+	}
+
+	j = snprint(tagtext, Tagtext, "main cursize %lud live %lud blocks %lud tags %d chunks %d corrupt %d\n",
+		p->cursize, live, nlive, n, p->nbrk, corrupt);
+	for(i = 0; i < n && j < Tagtext - 64; i++)
+		j += snprint(tagtext + j, Tagtext - j, "%11lud %9lud %#lux\n",
+			tagsum[i].bytes, tagsum[i].n, tagsum[i].pc);
+	n = readstr(offset, va, count, tagtext);
+	poperror();
+	qunlock(&tagsumlk);
+	return n;
+}
+
 void*
 malloc(ulong size)
 {

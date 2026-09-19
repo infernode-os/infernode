@@ -57,6 +57,10 @@ enum
 	MSS_LENGTH	= 4,		/* Mean segment size */
 	WSOPT		= 3,
 	WS_LENGTH	= 3,		/* Bits to scale window size by */
+	SACKOKOPT	= 4,
+	SACKOK_LENGTH	= 2,		/* SACK permitted (RFC 2018), in a SYN */
+	SACKOPT		= 5,		/* SACK blocks: 2 + 8 per block */
+	Nsack		= 4,		/* blocks that fit with no timestamp option */
 	MSL2		= 10,
 	MSPTICK		= 50,		/* Milliseconds per timer tick */
 	DEF_MSS		= 1460,		/* Default mean segment */
@@ -187,6 +191,10 @@ struct	Tcp
 	ushort	urg;
 	ushort	mss;	/* max segment size option (if not zero) */
 	ushort	len;	/* size of data */
+	uchar	sackok;	/* SACK-permitted option (in a SYN) */
+	uchar	nsack;	/* SACK blocks to send with this ACK */
+	u32int	sackl[Nsack];	/* left edges */
+	u32int	sackr[Nsack];	/* right edges: the sequence number AFTER the block */
 };
 
 /*
@@ -246,6 +254,8 @@ struct Tcpctl
 	int	backedoff;		/* ms we've backed off for rexmits */
 	uchar	flags;			/* State flags */
 	Reseq	*reseq;			/* Resequencing queue */
+	uchar	sackok;			/* both ends offered SACK: describe reseq in our ACKs */
+	u32int	sacklast;		/* seq of the segment queued most recently: its block goes first */
 	Tcptimer	timer;			/* Activity timer */
 	Tcptimer	acktimer;		/* Acknowledge timer */
 	Tcptimer	rtt_timer;		/* Round trip timer */
@@ -292,6 +302,7 @@ struct Limbo
 	ushort	mss;		/* mss from the other end */
 	ushort	rcvscale;	/* how much to scale rcvd windows */
 	ushort	sndscale;	/* how much to scale sent windows */
+	uchar	sackok;		/* the caller's SYN offered SACK */
 	ulong	lastsend;	/* last time we sent a synack */
 	uchar	version;	/* v4 or v6 */
 	uchar	rexmits;	/* number of retransmissions */
@@ -376,6 +387,7 @@ int tcpporthogdefense = 0;
 
 int	addreseq(Tcpctl*, Tcppriv*, Tcp*, Block*, ushort);
 void	getreseq(Tcpctl*, Tcp*, Block**, ushort*);
+static void	sackblocks(Tcpctl*, Tcp*);
 void	localclose(Conv*, char*);
 void	procsyn(Conv*, Tcp*);
 void	tcpiput(Proto*, Ipifc*, Block*);
@@ -944,11 +956,14 @@ htontcp6(Tcp *tcph, Block *data, Tcp6hdr *ph, Tcpctl *tcb)
 			hdrlen += MSS_LENGTH;
 		if(tcph->ws)
 			hdrlen += WS_LENGTH;
+		if(tcph->sackok)
+			hdrlen += SACKOK_LENGTH;
 		optpad = hdrlen & 3;
 		if(optpad)
 			optpad = 4 - optpad;
 		hdrlen += optpad;
-	}
+	}else if(tcph->nsack > 0)
+		hdrlen += 4 + 8*tcph->nsack;	/* NOP NOP kind len, then the blocks */
 
 	if(data) {
 		dlen = blocklen(data);
@@ -993,8 +1008,25 @@ htontcp6(Tcp *tcph, Block *data, Tcp6hdr *ph, Tcpctl *tcb)
 			*opt++ = WS_LENGTH;
 			*opt++ = tcph->ws;
 		}
+		if(tcph->sackok){
+			*opt++ = SACKOKOPT;
+			*opt++ = SACKOK_LENGTH;
+		}
 		while(optpad-- > 0)
 			*opt++ = NOOPOPT;
+	}else if(tcph->nsack > 0){
+		int i;
+
+		opt = h->tcpopt;
+		*opt++ = NOOPOPT;
+		*opt++ = NOOPOPT;
+		*opt++ = SACKOPT;
+		*opt++ = 2 + 8*tcph->nsack;
+		for(i = 0; i < tcph->nsack; i++){
+			hnputl(opt, tcph->sackl[i]);
+			hnputl(opt+4, tcph->sackr[i]);
+			opt += 8;
+		}
 	}
 
 	if(tcb != nil && tcb->nochecksum){
@@ -1028,11 +1060,14 @@ htontcp4(Tcp *tcph, Block *data, Tcp4hdr *ph, Tcpctl *tcb)
 			hdrlen += MSS_LENGTH;
 		if(tcph->ws)
 			hdrlen += WS_LENGTH;
+		if(tcph->sackok)
+			hdrlen += SACKOK_LENGTH;
 		optpad = hdrlen & 3;
 		if(optpad)
 			optpad = 4 - optpad;
 		hdrlen += optpad;
-	}
+	}else if(tcph->nsack > 0)
+		hdrlen += 4 + 8*tcph->nsack;	/* NOP NOP kind len, then the blocks */
 
 	if(data) {
 		dlen = blocklen(data);
@@ -1073,8 +1108,25 @@ htontcp4(Tcp *tcph, Block *data, Tcp4hdr *ph, Tcpctl *tcb)
 			*opt++ = WS_LENGTH;
 			*opt++ = tcph->ws;
 		}
+		if(tcph->sackok){
+			*opt++ = SACKOKOPT;
+			*opt++ = SACKOK_LENGTH;
+		}
 		while(optpad-- > 0)
 			*opt++ = NOOPOPT;
+	}else if(tcph->nsack > 0){
+		int i;
+
+		opt = h->tcpopt;
+		*opt++ = NOOPOPT;
+		*opt++ = NOOPOPT;
+		*opt++ = SACKOPT;
+		*opt++ = 2 + 8*tcph->nsack;
+		for(i = 0; i < tcph->nsack; i++){
+			hnputl(opt, tcph->sackl[i]);
+			hnputl(opt+4, tcph->sackr[i]);
+			opt += 8;
+		}
 	}
 
 	if(tcb != nil && tcb->nochecksum){
@@ -1116,6 +1168,8 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 	tcph->urg = nhgets(h->tcpurg);
 	tcph->mss = 0;
 	tcph->ws = 0;
+	tcph->sackok = 0;
+	tcph->nsack = 0;
 	tcph->len = nhgets(h->ploadlen) - hdrlen;
 
 	*bpp = pullupblock(*bpp, hdrlen+TCP6_PKT);
@@ -1141,6 +1195,10 @@ ntohtcp6(Tcp *tcph, Block **bpp)
 		case WSOPT:
 			if(optlen == WS_LENGTH && *(optr+2) <= 14)
 				tcph->ws = HaveWS | *(optr+2);
+			break;
+		case SACKOKOPT:
+			if(optlen == SACKOK_LENGTH)
+				tcph->sackok = 1;
 			break;
 		}
 		n -= optlen;
@@ -1179,6 +1237,8 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 	tcph->urg = nhgets(h->tcpurg);
 	tcph->mss = 0;
 	tcph->ws = 0;
+	tcph->sackok = 0;
+	tcph->nsack = 0;
 	tcph->len = nhgets(h->length) - (hdrlen + TCP4_PKT);
 
 	*bpp = pullupblock(*bpp, hdrlen+TCP4_PKT);
@@ -1204,6 +1264,10 @@ ntohtcp4(Tcp *tcph, Block **bpp)
 		case WSOPT:
 			if(optlen == WS_LENGTH && *(optr+2) <= 14)
 				tcph->ws = HaveWS | *(optr+2);
+			break;
+		case SACKOKOPT:
+			if(optlen == SACKOK_LENGTH)
+				tcph->sackok = 1;
 			break;
 		}
 		n -= optlen;
@@ -1407,6 +1471,8 @@ sndsynack(Proto *tcp, Limbo *lp)
 	seg.urg = 0;
 	seg.mss = tcpmtu(tcp, lp->laddr, lp->version, &scale);
 	seg.wnd = QMAX;
+	seg.sackok = lp->sackok;	/* offered to us: accept it */
+	seg.nsack = 0;
 
 	/* if the other side set scale, we should too */
 	if(lp->rcvscale){
@@ -1487,6 +1553,7 @@ limbo(Conv *s, uchar *source, uchar *dest, Tcp *seg, int version)
 		lp->rport = seg->source;
 		lp->mss = seg->mss;
 		lp->rcvscale = seg->ws;
+		lp->sackok = seg->sackok;
 		lp->irs = seg->seq;
 		lp->iss = (nrand(1<<16)<<16)|nrand(1<<16);
 	}
@@ -1668,6 +1735,9 @@ tcpincoming(Conv *s, Tcp *segp, uchar *src, uchar *dst, uchar version)
 	/* our sending max segment size cannot be bigger than what he asked for */
 	if(lp->mss != 0 && lp->mss < tcb->mss)
 		tcb->mss = lp->mss;
+
+	/* he offered SACK and sndsynack accepted: describe our holes to him */
+	tcb->sackok = lp->sackok;
 
 	/* window scaling */
 	tcpsetscale(new, tcb, lp->rcvscale, lp->sndscale);
@@ -2304,6 +2374,14 @@ reset:
 					 */
 					if(++(tcb->rcv.una) >= 2)
 						tcb->flags |= FORCE;
+
+					/*
+					 *  data that fills (part of) a hole is acknowledged
+					 *  at once (RFC 5681 4.2): the sender is in recovery
+					 *  and clocking its retransmissions off these.
+					 */
+					if(tcb->reseq != nil)
+						tcb->flags |= FORCE;
 				}
 				tcb->rcv.nxt += length;
 
@@ -2490,6 +2568,8 @@ tcpoutput(Conv *s)
 		seg.flags = ACK;
 		seg.mss = 0;
 		seg.ws = 0;
+		seg.sackok = 0;
+		seg.nsack = 0;
 		switch(tcb->state){
 		case Syn_sent:
 			seg.flags = 0;
@@ -2498,6 +2578,7 @@ tcpoutput(Conv *s)
 				dsize--;
 				seg.mss = tcb->mss;
 				seg.ws = tcb->scale;
+				seg.sackok = 1;
 			}
 			break;
 		case Syn_received:
@@ -2512,6 +2593,7 @@ tcpoutput(Conv *s)
 				ssize = 1;
 				seg.mss = tcb->mss;
 				seg.ws = tcb->scale;
+				seg.sackok = tcb->sackok;
 			}
 			break;
 		}
@@ -2531,6 +2613,15 @@ tcpoutput(Conv *s)
 
 		if(sent+dsize == sndcnt)
 			seg.flags |= PSH;
+
+		/*
+		 *  tell him what we hold beyond the hole, so that he resends
+		 *  the hole and nothing else.  Only on a bare ACK: the option
+		 *  would eat into a data segment already cut to the MSS.
+		 */
+		if(bp == nil && tcb->sackok && tcb->reseq != nil)
+		if((seg.flags & (SYN|FIN|RST)) == 0)
+			sackblocks(tcb, &seg);
 
 		/* keep track of balance of resent data */
 		if(seq_lt(tcb->snd.ptr, tcb->snd.nxt)) {
@@ -2640,6 +2731,8 @@ tcpsendka(Conv *s)
 	seg.flags = ACK|PSH;
 	seg.mss = 0;
 	seg.ws = 0;
+	seg.sackok = 0;
+	seg.nsack = 0;
 	if(tcpporthogdefense)
 		seg.seq = tcb->snd.una-(1<<30)-nrand(1<<20);
 	else
@@ -2846,9 +2939,78 @@ procsyn(Conv *s, Tcp *seg)
 	if(seg->mss != 0 && seg->mss < tcb->mss)
 		tcb->mss = seg->mss;
 
+	/*
+	 *  every SYN of ours offers SACK, so his SYN (or SYN ACK) carrying
+	 *  the option settles it
+	 */
+	tcb->sackok = seg->sackok;
+
 	/* the congestion window always starts out as a single segment */
 	tcb->snd.wnd = seg->wnd;
 	tcb->cwind = tcb->mss;
+}
+
+/*
+ *  Selective acknowledgement, receiving side (RFC 2018).
+ *
+ *  Without it a sender that loses several segments from one window learns
+ *  of them one per round trip, runs out of duplicate ACKs, times out, and
+ *  then resends everything from the hole onwards, including all that sits
+ *  here in the resequence queue.  Measured against a Linux sender over the
+ *  LAN78xx (which does drop bursts): 24 timeouts and some 250 needless
+ *  segments in a 16 MB transfer, 7-30 Mbit/s in against 87 out.
+ *
+ *  The resequence queue is sorted by starting sequence number and may hold
+ *  overlaps; runs that touch or overlap are one block.  The block holding
+ *  the segment that arrived last goes first, as the RFC requires, because
+ *  the sender may see only the first block of some ACKs.
+ */
+static void
+sackblocks(Tcpctl *tcb, Tcp *seg)
+{
+	Reseq *rp;
+	u32int l, r, e, tl, tr;
+	int n, i;
+
+	n = 0;
+	l = r = 0;
+	for(rp = tcb->reseq; rp != nil; rp = rp->next){
+		if(rp->length == 0)
+			continue;
+		e = rp->seg.seq + rp->length;
+		if(n > 0 && seq_le(rp->seg.seq, r)){
+			if(seq_gt(e, r))
+				seg->sackr[n-1] = r = e;
+			continue;
+		}
+		if(seq_le(e, tcb->rcv.nxt))
+			continue;		/* stale: already delivered */
+		if(n == Nsack){
+			/*
+			 *  more holes than the option has room for: keep the
+			 *  block with the latest arrival, give up the last
+			 */
+			if(!(seq_ge(tcb->sacklast, rp->seg.seq) && seq_lt(tcb->sacklast, e)))
+				continue;
+			n--;
+		}
+		l = rp->seg.seq;
+		r = e;
+		seg->sackl[n] = l;
+		seg->sackr[n] = r;
+		n++;
+	}
+	for(i = 1; i < n; i++)
+		if(seq_ge(tcb->sacklast, seg->sackl[i]) && seq_lt(tcb->sacklast, seg->sackr[i])){
+			tl = seg->sackl[i];
+			tr = seg->sackr[i];
+			memmove(&seg->sackl[1], &seg->sackl[0], i*sizeof(seg->sackl[0]));
+			memmove(&seg->sackr[1], &seg->sackr[0], i*sizeof(seg->sackr[0]));
+			seg->sackl[0] = tl;
+			seg->sackr[0] = tr;
+			break;
+		}
+	seg->nsack = n;
 }
 
 int
@@ -2866,6 +3028,7 @@ addreseq(Tcpctl *tcb, Tcppriv *tpriv, Tcp *seg, Block *bp, ushort length)
 	rp->seg = *seg;
 	rp->bp = bp;
 	rp->length = length;
+	tcb->sacklast = seg->seq;	/* RFC 2018: its block is reported first */
 
 	/* Place on reassembly list sorting by starting seq number */
 	rp1 = tcb->reseq;

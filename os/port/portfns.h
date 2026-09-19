@@ -88,7 +88,10 @@ Walkqid*	devwalk(Chan*, Chan*, char**, int, Dirtab*, int, Devgen*);
 int		devwstat(Chan*, uchar*, int);
 void		disinit(void*);
 void		disfault(void*, char*);
-int		domount(Chan**, Mhead**);
+int		domount(Chan**, Mhead**, Cname**);
+void		cnamepush(Cname*, Chan*);
+void		checkwritable(Chan*);
+int		mutatingmode(int);
 void		drawactive(int);
 void		drawcmap(void);
 void		dumpstack(void);
@@ -235,6 +238,7 @@ int		procok(Proc*);
  */
 #define		poperror()		do{ if(up->nerrlab > 0) poperrchk(getcallerpc(&up)); else poperrunder(); __asm__ volatile(""); }while(0)
 int		poolread(char*, int, ulong);
+int		pooltagsread(char*, int, ulong);
 void		poolsize(Pool *, int, int);
 int		postnote(Proc *, int, char *, int);
 int		pprint(char*, ...);

@@ -717,6 +717,7 @@ struct F_Sys_wstat
 #define Sys_MBEFORE 1
 #define Sys_MAFTER 2
 #define Sys_MCREATE 4
+#define Sys_MREADONLY 8
 #define Sys_MCACHE 16
 #define Sys_NEWFD 1
 #define Sys_FORKFD 2

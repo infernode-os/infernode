@@ -350,6 +350,25 @@ rndisunwrap(uchar *p, long n, uchar **fp, long *lp)
 	return msglen;
 }
 
+/*
+ * Which bucket a duration falls in: under 250us, 500us, 1, 2, 5, 20,
+ * 100 ms, and beyond. The chip holds 12 KB -- one millisecond of a
+ * 100 Mb/s wire -- so the means say nothing: a single stall of a few
+ * milliseconds, in the read or between reads, is a run of dropped
+ * frames, and only a histogram shows whether there are any.
+ */
+static int
+rxbucket(uvlong ns)
+{
+	static uvlong lim[] = { 250000, 500000, 1000000, 2000000, 5000000, 20000000, 100000000 };
+	int i;
+
+	for(i = 0; i < nelem(lim); i++)
+		if(ns < lim[i])
+			return i;
+	return i;
+}
+
 static long
 lanunwrap(uchar *p, long n, int atend, uchar **fp, long *lp)
 {
@@ -485,6 +504,7 @@ etherrxproc(void *a)
 	Chan *in;
 	long n, used, flen, off;
 	uchar *fp;
+	uvlong rdtook;
 
 	e = a;
 	in = e->inchan;
@@ -527,14 +547,18 @@ etherrxproc(void *a)
 				uvlong g;
 
 				g = fastticks2ns(t0 - tlast);
-				if(g < 50000000ULL)
+				if(g < 50000000ULL){
 					e->gapns += g;
+					e->gaphist[rxbucket(g)]++;
+				}
 			}
 			n = kchanio(in, e->rxbuf + e->nacc, e->burst, OREAD);
 			tlast = fastticks(nil);
+			rdtook = fastticks2ns(tlast - t0);
 			if(n > 0){
 				e->nrd++;
 				e->rdns += fastticks2ns(tlast - t0);
+				e->rdhist[rxbucket(rdtook)]++;
 				e->rdbytes += n;
 				if(n > e->rdmax)
 					e->rdmax = n;
@@ -544,12 +568,33 @@ etherrxproc(void *a)
 			error(Ehungup);
 		if(n == 0){
 			/*
-			 * Nothing waiting. On real hardware bulk IN blocks
-			 * until there is (the device NAKs and the
-			 * controller retries); QEMU's model answers empty
-			 * immediately, and a spin here would burn the one
-			 * core everything shares. One tick, then ask again.
+			 * Nothing waiting: the device NAKed and usbdwc ended
+			 * the read there (halt-then-decide; a NAK is the
+			 * record boundary lanunwrap trusts). One tick, then
+			 * ask again.
+			 *
+			 * TRIED AND MEASURED WORSE (2026-09-18, #633): asking
+			 * again at once while traffic was recent, to close
+			 * the millisecond in which no bulk IN is posted. It
+			 * re-posted 300,000 to 1,300,000 times per 16 MB --
+			 * about 450 NAKed asks per read that carried data --
+			 * and the interrupt load took receive from 17-30
+			 * Mbit/s down to 7-12 and transmit from 115 to 26.
+			 * The deaf tick is not where the frames go.
 			 */
+			/*
+			 * usbdwc now leaves the bulk IN armed and ends an
+			 * empty read only after a long silence (its
+			 * Chantmout). Such a read is re-posted at once: the
+			 * tick below is a tick with nothing posted, and the
+			 * chip's 12 KB FIFO does not survive a burst landing
+			 * in it. Only an empty read that came back FAST --
+			 * a host controller that ends reads on NAK, which
+			 * would otherwise spin here -- earns the sleep.
+			 */
+			if(rdtook >= 20000000ULL)
+				continue;
+			e->nemptysleep++;
 			tsleep(&up->sleep, return0, nil, 1);
 			continue;
 		}
@@ -564,6 +609,7 @@ etherrxproc(void *a)
 				break;
 			if(used < 0){
 				e->nif.frames++;
+				e->ndesync++;
 				off = e->nacc;	/* drop the remainder */
 				break;
 			}
@@ -907,14 +953,25 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 		}
 		if(n >= 7 && strncmp(buf, "rxstats", 7) == 0){
 			print("rx: %lud reads %llud KB mean %llud B max %ld; "
-				"in-read %llud us gap %llud us (means %llud/%llud us)\n",
+				"in-read %llud us gap %llud us (means %llud/%llud us); "
+				"%lud empty reads; %lud record desyncs\n",
 				e->nrd, e->rdbytes/1024,
 				e->nrd ? e->rdbytes/e->nrd : 0, e->rdmax,
 				e->rdns/1000, e->gapns/1000,
 				e->nrd ? e->rdns/1000/e->nrd : 0,
-				e->nrd ? e->gapns/1000/e->nrd : 0);
+				e->nrd ? e->gapns/1000/e->nrd : 0,
+				e->nemptysleep, e->ndesync);
+			print("rx: read <250us %lud <500us %lud <1ms %lud <2ms %lud <5ms %lud <20ms %lud <100ms %lud more %lud\n",
+				e->rdhist[0], e->rdhist[1], e->rdhist[2], e->rdhist[3],
+				e->rdhist[4], e->rdhist[5], e->rdhist[6], e->rdhist[7]);
+			print("rx: gap  <250us %lud <500us %lud <1ms %lud <2ms %lud <5ms %lud <20ms %lud <100ms %lud more %lud\n",
+				e->gaphist[0], e->gaphist[1], e->gaphist[2], e->gaphist[3],
+				e->gaphist[4], e->gaphist[5], e->gaphist[6], e->gaphist[7]);
+			memset(e->rdhist, 0, sizeof e->rdhist);
+			memset(e->gaphist, 0, sizeof e->gaphist);
 			e->nrd = 0; e->rdns = 0; e->gapns = 0;
 			e->rdbytes = 0; e->rdmax = 0;
+			e->nemptysleep = 0; e->ndesync = 0;
 			return n;
 		}
 		if(n > 5 && strncmp(buf, "bind ", 5) == 0){

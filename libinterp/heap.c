@@ -54,37 +54,31 @@ void	(*heapmonitor)(int, void*, ulong);
  * Type carries none; giving it one is a separate change.
  */
 /*
- * EXPERIMENT, INFR-458, and it is meant to be reverted.
+ * 52b8f796 made this a no-op as an experiment (INFR-458): the board was
+ * calling through garbage function pointers, the theory was compiled
+ * code reading a Type's code address after the Type was freed, and the
+ * experiment was to put the leak back and see whether the panics
+ * stopped. They stopped -- but because of #622 (a proc preempted
+ * between clang's copy of x28 and its use, resumed on another core),
+ * found and fixed with the leak still in place. The experiment's own
+ * note said what to do in that case: the free goes straight back in.
  *
- * 7a1641a1 started freeing this on the native kernel, correctly: the
- * pointer is pool memory there, the guard that suppressed the free was
- * written on the architecture when it is a property of the build, and
- * the leak it closed was measured at 2MB every six minutes under load.
- *
- * Since then the board has produced repeated panics whose signature is
- * a call through a garbage function pointer -- once to 0x8228d0, which
- * is pool memory 8MB up where the kernel's text ends at 1.5MB, and
- * once to 0x340. The stack under the second has freeptrs in it, which
- * is the collector walking a Type's pointer map. The ARM64 JIT reads a
- * type's compiled-code address out of the Type at run time rather than
- * baking it in, so compiled code holding a Type that has been freed
- * reads whatever is in the recycled block and calls it.
- *
- * Freeing the Type itself is upstream behaviour and predates all of
- * this, so the dangling read is not created here. But before 7a1641a1
- * a stale read would still have found valid code, because the code
- * outlived the Type. That accident is what this removed.
- *
- * So: put the leak back, and see whether the garbage-pointer panics
- * stop. A leak that fills a 123MB pool in four hours is recoverable.
- * Executing arbitrary heap is not. If they stop, Type lifetime is the
- * bug and this is where to fix it. If they continue, this was never
- * implicated and the free goes straight back in.
+ * What the leak cost while it was in: any loop that loads modules is
+ * an out-of-memory in minutes (#641 -- an acceptance battery's leftover
+ * shell re-spawning cat 800 times a second took the 123 MB main pool
+ * in three and a half; /dev/memtags put 266,716 of 266,717 new blocks
+ * on typecom's malloc), and even a clean battery run left ~3 MB
+ * behind. If a garbage-pointer panic ever names freed type code again,
+ * /dev/memtags and the #622 detectors are both in the kernel to say so.
  */
 static void
 freetypecode(Type *t)
 {
-	USED(t);
+#if !defined(INFERNO_NATIVE) && (defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64))
+	USED(t);	/* hosted 64-bit: mmap()ed, and Type carries no length to unmap */
+#else
+	free(t->initialize);
+#endif
 }
 
 void
@@ -447,6 +441,7 @@ heapz(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -468,6 +463,7 @@ heap(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -508,6 +504,7 @@ initarray(Type *t, Array *a)
 	int i;
 	uchar *p;
 
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	if(t->np == 0)
 		return;
@@ -536,6 +533,7 @@ arraycpy(Array *sa)
 	Tarray.ref++;
 	da = H2D(Array*, dh);
 	da->t = sa->t;
+	if(da->t->ref <= 0 || da->t->ref > 50000000) panic("heap: Type %#p ref %d in use (array) -- freed type?", da->t, da->t->ref);
 	da->t->ref++;
 	da->len = sa->len;
 	da->root = H;

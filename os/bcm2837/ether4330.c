@@ -207,7 +207,10 @@ enum
 	Ioreadytries	= 10,		/* x100ms: a function to enable */
 	Cmdtimeout	= 5000,		/* ms: the firmware to answer a command */
 	Intwaitmax	= 5000,		/* ms: the dongle to say anything at all */
-	Jointimeout	= 5000,		/* ms: the firmware to report an association */
+	Jointimeout	= 5000,		/* ms: the firmware to report an association, channel given */
+	Scanjointimeout	= 15000,	/* ms: the same when it must find the channel first -- 5 GHz has
+					 * two dozen of them at 390 ms passive each, and the acceptance
+					 * battery's 5 GHz join timed out at 5 s every time (#638) */
 
 	/* the link, as ifstats reports it and a supplicant polls it */
 	Disconnected	= 0,
@@ -252,6 +255,8 @@ struct Ctlr
 	int	scansecs;	/* rescan this often, or 0 for not at all */
 
 	int	cryptotype;	/* 0, Wep, Wpa, Wpa2 */
+	uchar	wpaie[64];	/* the element setauth() last gave the firmware, to spare a re-join for the same one */
+	int	nwpaie;
 	int	chanid;		/* the channel to join on, 0 for any */
 	char	essid[WNameLen + 1];
 	uchar	bssid[Eaddrlen];	/* the station joined, as the firmware reports it */
@@ -2216,11 +2221,11 @@ joindone(void *a)
  * reported in time". 0 is an association.
  */
 static int
-waitjoin(Ctlr *ctl)
+waitjoin(Ctlr *ctl, int chan)
 {
 	int n;
 
-	tsleep(&ctl->joinr, joindone, ctl, Jointimeout);
+	tsleep(&ctl->joinr, joindone, ctl, chan? Jointimeout : Scanjointimeout);
 	n = ctl->joinstatus;
 	ctl->joinstatus = 0;
 	return n - 1;
@@ -2349,7 +2354,7 @@ wljoin(Ctlr *ctl, char *ssid, int chan)
 	ctl->status = Connecting;
 	memset(ctl->bssid, 0, Eaddrlen);
 	wlsetvar(ctl, "join", params, chan? sizeof params : sizeof params - 4);
-	switch(waitjoin(ctl)){
+	switch(waitjoin(ctl, chan)){
 	case 0:
 		ctl->status = Connected;
 		ctl->edev->nif.link = 1;
@@ -2931,6 +2936,11 @@ parseauthie(Cmdbuf *cb, uchar *ie, int len, char *a)
 static void
 setauth(Ctlr *ctlr, uchar *wpaie, int i)
 {
+	if(i <= sizeof ctlr->wpaie){
+		memmove(ctlr->wpaie, wpaie, i);
+		ctlr->nwpaie = i;
+	}else
+		ctlr->nwpaie = 0;
 	if(wpaie[0] == 0xdd)
 		ctlr->cryptotype = Wpa;
 	else
@@ -2946,6 +2956,27 @@ setauth(Ctlr *ctlr, uchar *wpaie, int i)
 		wlsetint(ctlr, "auth", 0);
 		wlsetint(ctlr, "wsec", 4);		/* aes */
 		wlsetint(ctlr, "wpa_auth", 0x80);	/* psk */
+	}
+}
+
+/*
+ * No WPA: what setauth() turned on, turned off. "crypt off" used to
+ * set only the 802.11 authentication type and leave wpa_auth, wsec
+ * and the RSN element as the last WPA join had them, so a board that
+ * had ever joined a WPA2 network could never join an open one -- the
+ * firmware offered PSK to an AP that had none and said "join failed"
+ * every time, with the network in its own scan results at -28 dBm
+ * (the Wi-Fi acceptance battery, #638). WEP keeps wsec's WEP bit.
+ */
+static void
+setnowpa(Ctlr *ctlr, int t)
+{
+	wlsetint(ctlr, "wpa_auth", 0);
+	wlsetint(ctlr, "auth", 0);
+	wlsetint(ctlr, "wsec", t == Wep? 1 : 0);
+	if(!waserror()){
+		wlsetvar(ctlr, "wpaie", nil, 0);
+		poperror();
 	}
 }
 
@@ -3056,6 +3087,17 @@ etherbcmctl(Ether *edev, void *a, long n)
 	case CMauth:
 		i = parseauthie(cb, wpaie, sizeof wpaie, cb->f[1]);
 		wlrunning(ctl);
+		/*
+		 * The same element again on a link that is up is not a
+		 * change, and re-joining for it cost the association it
+		 * describes: the supplicant writes its RSN element once
+		 * before the join and once after the association, and the
+		 * second write threw away a 5 GHz association whose re-join
+		 * then timed out -- "the firmware did not report an
+		 * association" on every 5 GHz attempt (#638).
+		 */
+		if(ctl->status == Connected && i == ctl->nwpaie && memcmp(wpaie, ctl->wpaie, i) == 0)
+			break;
 		setauth(ctl, wpaie, i);
 		if(ctl->essid[0])
 			wljoin(ctl, ctl->essid, ctl->chanid);
@@ -3075,7 +3117,7 @@ etherbcmctl(Ether *edev, void *a, long n)
 			cmderror(cb, "bad crypt type");
 		wlrunning(ctl);
 		ctl->cryptotype = t;
-		wlsetint(ctl, "auth", t);
+		setnowpa(ctl, t);
 		if(ctl->essid[0])
 			wljoin(ctl, ctl->essid, ctl->chanid);
 		break;
@@ -3118,7 +3160,7 @@ etherbcmctl(Ether *edev, void *a, long n)
 		ctl->chanid = i;
 		if(t >= 0){
 			ctl->cryptotype = t;
-			wlsetint(ctl, "auth", t);
+			setnowpa(ctl, t);
 		}else
 			setauth(ctl, wpaie, nie);
 		if(ctl->essid[0])

@@ -52,8 +52,16 @@ def throughput_out(host, port, seconds):
     s.close()
     return n * 8 / seconds / 1e6
 
-def ping(host, count, size, interval):
-    rc, out = run(["ping", "-c", str(count), "-i", str(interval), "-s", str(size), "-W", "2", host], timeout=count * (interval + 2) + 10)
+def default_gateway():
+    rc, out = run(["ip", "route", "show", "default"], timeout=10)
+    m = re.search(r"default via (\S+)", out)
+    return m.group(1) if m else None
+
+def ping(host, count, size, interval, via=None):
+    cmd = ["ping", "-c", str(count), "-i", str(interval), "-s", str(size), "-W", "2", host]
+    if via:		# from another host: this tester's own fragments may go nowhere
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", via, " ".join(cmd)]
+    rc, out = run(cmd, timeout=count * (interval + 2) + 20)
     m = re.search(r"(\d+) packets transmitted, (\d+) received", out)
     tx, rx = (int(m.group(1)), int(m.group(2))) if m else (count, 0)
     m = re.search(r"= ([\d.]+)/([\d.]+)/([\d.]+)/", out)
@@ -61,7 +69,9 @@ def ping(host, count, size, interval):
     return tx, rx, avg, mx
 
 def main():
-    a = args(__doc__.split("\n")[1]).parse_args()
+    p = args(__doc__.split("\n")[1])
+    p.add_argument("--frag-via", metavar="HOST", help="ssh host to send the fragmented echoes from, when this tester's own fragments do not leave it")
+    a = p.parse_args()
     b = Board(a.board, token_file=a.token, serial_log=a.serial_log)
     secs = 3 if a.quick else 10
     mark = b.serial_mark()
@@ -78,9 +88,17 @@ def main():
     print("== RFC 2544 26.1 throughput (TCP, both directions)")
     b.kill("Listen")
     # the source: no /dev/zero on this kernel, so a loop over a file the
-    # image has; the listener's shell is fresh, so it loads std itself
+    # image has; the listener's shell is fresh, so it loads std itself.
+    #
+    # The loop's CONDITION is the cat, so it ends when the tester hangs
+    # up: cat's write then fails and the loop is over. The first version
+    # looped on {~ 1 1} with the cat as the body, and outlived its
+    # connection -- cat failing instantly, re-spawned ~800 times a second
+    # for ever, each spawn loading a module whose type code the kernel
+    # does not free (heap.c freetypecode, the INFR-458 experiment). That
+    # was #641: 40 MB/min from the battery's own leftover, not from USB.
     b.sh("listen -A 'tcp!*!5001' {cat > /dev/null} &",
-         "listen -A 'tcp!*!5002' {sh -c 'load std; while {~ 1 1} {cat /dis/sh.dis}'} &", wait=0.8)
+         "listen -A 'tcp!*!5002' {sh -c 'load std; while {cat /dis/sh.dis} {}'} &", wait=0.8)
     time.sleep(1)
     try:
         mbps_in = throughput_in(a.board, 5001, secs)
@@ -98,11 +116,38 @@ def main():
     tx, rx, avg, mx = ping(a.board, burst, 1472, 0.002)
     loss = 100.0 * (tx - rx) / max(tx, 1)
     b.check(loss < 1.0, "26.3 frame loss: %.2f%% of %d back-to-back 1500-byte frames" % (loss, tx), "avg %.2f max %.2f ms" % (avg, mx))
-    # fragmented echoes: the stack reassembles
-    tx, rx, avg, mx = ping(a.board, 20, 4000, 0.05)
-    b.check(rx == tx, "IP reassembly: %d/%d 4000-byte (fragmented) echoes answered" % (rx, tx))
-    tx, rx, avg, mx = ping(a.board, 5, 60000, 0.2)
-    b.check(rx == tx, "IP reassembly: %d/%d 60000-byte echoes answered" % (rx, tx))
+    # fragmented echoes: the stack reassembles. First the TESTER is
+    # checked: on 2026-09-17 this host's fragments reached no wired host
+    # at all -- not the board, not the gateway -- while a second tester's
+    # reached the board 3/3 and the board reassembled the gateway's own
+    # 5 KB broadcasts all along (#633 was the tester, not the stack). A
+    # tester that cannot send fragments to its gateway skips, and says so.
+    gw = default_gateway()
+    via = a.frag_via
+    gtx, grx, _, _ = ping(gw, 3, 4000, 0.3, via) if gw else (0, 0, 0, 0)
+    if grx == 0:
+        b.skip("IP reassembly (4000- to 60000-byte echoes)", "this tester's fragments do not reach its own gateway %s; test from another host with --frag-via" % gw)
+    else:
+        frm = " from %s" % via if via else ""
+        tx, rx, avg, mx = ping(a.board, 20, 4000, 0.2, via)
+        b.check(rx == tx, "IP reassembly: %d/%d 4000-byte (3-fragment) echoes answered%s" % (rx, tx, frm))
+        tx, rx, avg, mx = ping(a.board, 20, 20000, 0.2, via)
+        b.check(rx == tx, "IP reassembly: %d/%d 20000-byte (14-fragment) echoes answered%s" % (rx, tx, frm))
+        # 41 frames back to back is 60 KB into a LAN78xx that holds 12 and
+        # drains over USB 2. At 100 Mb/s the wire cannot outrun the drain
+        # and the stack answers them (59/60 at 60000 and 65000 bytes,
+        # 2026-09-19). At 1000 Mb/s behind a switch that ignores pause the
+        # part drops a fragment of nearly every one -- its own "rx dropped
+        # frames" counts them -- and that is the hardware, not the stack:
+        # Linux on the same board has the same 12 KB. So the size is a
+        # check at 100 Mb/s and a stated limit at gigabit.
+        tx, rx, avg, mx = ping(a.board, 20, 60000, 0.2, via)
+        m = re.search(r"mbps: (\d+)", b.sh("cat /net/ether0/stats"))
+        mbps = int(m.group(1)) if m else 0
+        if mbps >= 1000 and rx < tx - 1:
+            b.skip("IP reassembly: 60000-byte (41-fragment) echoes", "%d/%d at %d Mb/s: a 60 KB burst overruns the LAN78xx's 12 KB FIFO unless the switch honours pause; passes at 100 Mb/s" % (rx, tx, mbps))
+        else:
+            b.check(rx >= tx - 1, "IP reassembly: %d/%d 60000-byte (41-fragment) echoes answered%s" % (rx, tx, frm))
 
     print("== TCP behaviour")
     t0 = time.time()
@@ -113,17 +158,28 @@ def main():
         b.check(time.time() - t0 < 1.0, "a connect to a closed port is refused at once (RST), %.2fs" % (time.time() - t0))
     except Exception as e:
         b.check(False, "a connect to a closed port is refused", "%s after %.1fs" % (type(e).__name__, time.time() - t0))
-    # many connections at once, then closed: the board keeps up and frees them
+    # a burst of connections held open, then a byte on each: a call the
+    # stack accepted and then reset (its accept queue full -- Maxincall,
+    # os/ip/ip.h) looks connected to the client until it writes, so the
+    # write is the test. 100 is under the queue; a serial listener takes
+    # them one at a time and every one of them must still be there.
     conns = []
     failed = 0
-    for i in range(100 if a.quick else 200):
+    reset = 0
+    for i in range(50 if a.quick else 100):
         try:
             conns.append(socket.create_connection((a.board, 5001), timeout=5))
         except Exception:
             failed += 1
+    time.sleep(0.5)
+    for c in conns:
+        try:
+            c.sendall(b"x")
+        except Exception:
+            reset += 1
     for c in conns:
         c.close()
-    b.check(failed == 0, "%d simultaneous connections accepted, none refused" % len(conns), "%d failed" % failed)
+    b.check(failed == 0 and reset == 0, "%d simultaneous connections accepted and held, none refused or reset" % len(conns), "%d failed to connect, %d reset after connecting" % (failed, reset))
     time.sleep(1)
     try:
         s = socket.create_connection((a.board, 5001), timeout=5)

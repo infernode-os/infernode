@@ -62,6 +62,10 @@ struct Ether
 	ulong	nrd;		/* reads that returned data */
 	uvlong	rdns;		/* ns inside kchanio for those */
 	uvlong	gapns;		/* ns between one read's end and the next's start */
+	ulong	nemptysleep;	/* empty reads since the last rxstats: each costs a tick with no bulk IN posted */
+	ulong	ndesync;	/* record walks that lost their place since the last rxstats: each drops the rest of a buffer */
+	ulong	rdhist[8];	/* data reads by how long they took; see rxbucket */
+	ulong	gaphist[8];	/* and the time between reads, likewise */
 	uvlong	rdbytes;	/* bytes those reads returned */
 	long	rdmax;		/* largest single read */
 	int	blackhole;	/* count arrivals, deliver nothing: the sink */

@@ -71,6 +71,7 @@ extern Dev ssldevtab;
 extern Dev gpiodevtab;
 extern Dev touchdevtab;
 extern Dev uartdevtab;
+extern Dev audiodevtab;
 
 Dev*	devtab[] =
 {
@@ -93,6 +94,7 @@ Dev*	devtab[] =
 	&gpiodevtab,		/* 'G' -- #G, GPIO pins as files */
 	&touchdevtab,		/* 'T' -- #T, the DSI panel's touch buffer */
 	&uartdevtab,		/* 't' -- #t, serial ports: eia0 the PL011, eia1 the mini-UART */
+	&audiodevtab,		/* 'A' -- #A, /dev/audio: the jack, PWM through DMA (os/bcm2837/audiopwm.c) */
 	nil,
 };
 

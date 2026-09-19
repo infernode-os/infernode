@@ -827,6 +827,11 @@ addrun(Prog *p)
 		panic("addrun of ready prog %8.8p by %8.8lux\n", p, getcallerpc(&p));
 	p->state = Pready;
 	p->link = nil;
+	/* #635: where does a compiled Prog's saved PC go bad? */
+	if(p->R.M != H && p->R.M->compiled && ((uintptr)p->R.PC & 3))
+		print("BUG: addrun: prog %d %s R.PC=%p (prog %p) from %#p\n",
+			p->pid, p->R.M->m? p->R.M->m->name : "?", p->R.PC,
+			p->R.M->m? (void*)p->R.M->m->prog : nil, getcallerpc(&p));
 	chkprog(p, "addrun");
 	chkprog(isched.runtl, "addrun.tl");
 	if(isched.runhd == nil)
@@ -1263,6 +1268,25 @@ vmachine(void*)
 			FPrestore(&o->fpu);
 			r->xec(r);
 			FPsave(&o->fpu);
+			/*
+			 * #635: a queued Prog's saved PC goes bad while some
+			 * OTHER Prog runs. Every check at the points where a PC
+			 * is written stays silent; only xec()'s check at the
+			 * victim's next quantum fires. So after each quantum,
+			 * look at every Prog in the run queue: the first one
+			 * found bad names the quantum -- this Prog, this module,
+			 * this pc -- during which it happened.
+			 */
+			{
+				Prog *q;
+				for(q = isched.runhd; q != nil; q = q->link)
+					if(q != r && q->R.M != H && q->R.M->compiled && ((uintptr)q->R.PC & 3) && !(q->flags & Pbadpc)){
+						q->flags |= Pbadpc;
+						print("BUG: prog %d %s R.PC=%p (prog %p) went bad during the quantum of prog %d %s at pc %p (prog %p, state %d)\n",
+							q->pid, q->R.M->m? q->R.M->m->name : "?", q->R.PC, q->R.M->m? (void*)q->R.M->m->prog : nil,
+							pid, modname, r->R.PC, r->R.M != H && r->R.M->m? (void*)r->R.M->m->prog : nil, r->state);
+					}
+			}
 
 			if(up->nerrlab != nerr){
 				/*

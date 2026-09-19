@@ -55,7 +55,16 @@ enum
 	Addrlen=	64,
 	Maxproto=	20,
 	Nhash=		64,
-	Maxincall=	5,
+	/*
+	 * Calls accepted by the protocol and not yet taken by a listen.
+	 * Plan 9's 5 was written for a listener that forks per call; this
+	 * system's listen(1) runs its command inline, so the queue is
+	 * what a burst of connects lives in, and past it the sixth caller
+	 * is answered with RST after its handshake completed -- it learns
+	 * on its first write. 128 is what other stacks default to, and a
+	 * queued call costs one Conv of the 1024 a tcp has here.
+	 */
+	Maxincall=	128,
 	Nchans=		256,
 	MAClen=		16,		/* longest mac address */
 

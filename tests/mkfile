@@ -26,6 +26,7 @@ TARG=\
 	att_test.dis\
 	smp_test.dis\
 	hid_test.dis\
+	exception_test.dis\
 	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\

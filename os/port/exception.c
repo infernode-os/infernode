@@ -65,7 +65,19 @@ newestring(char *estr)
 	return s;
 }
 
-#define NOPC	0xffffffff
+/*
+ * "No handler here" in an exception table: load.c stores (ulong)-1 and
+ * patchex() preserves it. This was 0xffffffff -- a 32-bit constant left
+ * behind when ulong became 64 bits -- so the comparison below never
+ * matched, an exception block whose clauses did not match and had no
+ * wildcard was taken as a handler at pc -1, and the Prog was resumed
+ * at (ulong)m->prog + (ulong)-1: one byte below its module's compiled
+ * code. That was #635 ("misaligned PC in compiled module", four days,
+ * two card pulls). emu/port/exception.c had the same bug and fixed it
+ * in March 2026 (903d18c70); this file was imported from the older
+ * source in August without the fix. docs/PLAN9-C-UNDER-OTHER-COMPILERS.md.
+ */
+#define NOPC	((ulong)-1)
 
 #define FRTYPE(f)	((f)->t == nil ? SEXTYPE(f)->reg.TR : (f)->t)
 
@@ -122,7 +134,8 @@ handler(char *estr)
 				for(e = h->etab, ne = h->ne; e->s != nil; e++, ne--){
 					if(ematch(e->s, estr) && (str && ne <= 0 || !str && ne > 0)){
 						newpc = e->pc;
-						goto found;
+						if(newpc != NOPC)
+							goto found;
 					}
 				}
 				newpc = e->pc;

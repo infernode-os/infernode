@@ -101,6 +101,7 @@ TARG=\
 	iostats.dis\
 	js.dis\
 	kill.dis\
+	lan78stats.dis\
 	ktrans.dis\
 	limbtest.dis\
 	listen.dis\
@@ -179,6 +180,7 @@ TARG=\
 	telnet.dis\
 	test.dis\
 	time.dis\
+	tone.dis\
 	timestamp.dis\
 	tokenize.dis\
 	touch.dis\

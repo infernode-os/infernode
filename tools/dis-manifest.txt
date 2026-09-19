@@ -286,6 +286,7 @@ dis/jitshift.dis
 dis/jittest.dis
 dis/js.dis
 dis/kill.dis
+dis/lan78stats.dis
 dis/ktrans.dis
 dis/lib/aadraw.dis
 dis/lib/acmewin.dis
@@ -695,6 +696,7 @@ dis/tests/rfcomm_test.dis
 dis/tests/att_test.dis
 dis/tests/smp_test.dis
 dis/tests/hid_test.dis
+dis/tests/exception_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/dial_test.dis
@@ -830,6 +832,7 @@ dis/tests/xenith_concurrency_test.dis
 dis/tests/xenith_exit_test.dis
 dis/tests/xml_test.dis
 dis/time.dis
+dis/tone.dis
 dis/timestamp.dis
 dis/tlsperf.dis
 dis/tokenize.dis

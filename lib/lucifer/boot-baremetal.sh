@@ -33,7 +33,8 @@ load std
 #	#S	/dev/sdcard, /dev/sdctl	the raw card and its partition
 #					table (sdaddpart checks nothing)
 #	#G	/dev/gpio/N/{ctl,level}	the pins
-#	/dev/sysctl			reboot, tryboot, halt, panic
+#	/dev/sysctl			reboot, tryboot, halt, panic (and
+#					booted, console, broken, nobroken)
 #	/dev/hostowner			renames the owner of every process
 #
 # and keeps: #c (cons, keyboard, random, time, user, null, drivers --

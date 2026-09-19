@@ -1,0 +1,236 @@
+.TH OSINIT 8
+.SH NAME
+osinit \- first program of the native kernel
+.SH SYNOPSIS
+.B /osinit.dis
+.SH DESCRIPTION
+.I Osinit
+is the Limbo program the native (bare-metal) kernel starts when the Dis
+virtual machine is up.
+It is compiled into the kernel image, takes no arguments, and turns a
+kernel with devices into a machine with a namespace, a network, a card
+and a shell.
+The hosted emulator does not use it; see
+.IR init (8).
+.PP
+It does the following, in this order.
+.IP 1.
+Checks of the machine it has been given, each of which prints a line:
+the kernel image read back from
+.IR boot (3)
+with its SHA-1, a GPIO pin driven and read, every core's clock ticking,
+the command line, an integer benchmark and a run of the JIT across the
+instruction set.
+If the command line holds the word
+.BR tryboot ,
+it prints how to keep or reject this kernel.
+.IP 2.
+Binds the kernel's devices:
+.B #I
+before
+.BR /net ,
+.B #p
+on
+.BR /prog ,
+.B #e
+on
+.BR /env ,
+.B #u
+on
+.BR /usb ,
+.B #s
+on
+.BR /chan ,
+.B #A
+after
+.BR /dev .
+(The kernel has already bound
+.BR #c ", " #m ", " #S ", " #B ", " #G ", " #T
+and
+.BR #b .)
+.IP 3.
+Configures the loopback interface.
+.IP 4.
+Reads the master boot record from
+.BR /dev/sdcard ,
+names each partition to
+.IR sd (3)
+as
+.BR sd0 ", " sd1 ...,
+and runs
+.IR dossrv (4)
+on the first FAT partition, mounting it on
+.BR /n/dos .
+With no card this is silent.
+.IP 5.
+Applies
+.BR /n/dos/rootpath :
+see below.
+.IP 6.
+Gives the Wi-Fi driver the names of its firmware files in
+.BR /n/dos/firmware .
+.IP 7.
+Mounts an 8MB memory file system on
+.BR /tmp .
+.IP 8.
+If
+.B /n/dos/wifi
+exists, joins that network; if
+.B /n/dos/bt
+exists, starts
+.IR bt9p (4)
+and writes it that file's lines.
+.IP 9.
+Starts
+.B touch.dis
+for a touch panel; starts
+.B "etherusb -k"
+if
+.B #l/ether0/addr
+is already non-zero, that being a network device the kernel drives itself
+(see
+.IR ether (3)).
+.IP 10.
+In processes of their own, and not waited for: walks the USB bus,
+starting
+.BR kbdusb ,
+.B mouseusb
+and
+.B etherusb
+for what it finds and watching hubs for changes; and, if
+.B /n/dos/netconsole
+exists, serves a shell on TCP port 17010.
+.IP 11.
+Writes
+.B booted
+to
+.BR /dev/sysctl ,
+releasing the boot watchdog, and runs
+.B "sh -l"
+on the console.
+.PP
+.B Sh -l
+reads
+.BR /lib/sh/profile ,
+which in the kernel image is
+.BR /os/init/profile :
+it starts
+.B auth/secstored
+and, in the background,
+.BR /lib/lucifer/boot-baremetal.sh .
+That script forks its namespace; removes
+.B #S
+and
+.B #G
+from it and binds
+.B /dev/null
+over
+.B /dev/sysctl
+and
+.BR /dev/hostowner ;
+verifies that they are gone and stops if not; and then asks the draw
+device whether there is a screen.
+With none the machine is
+.IR headless :
+the script says so and starts nothing.
+Otherwise it runs
+.B wm/logon
+(unless
+.B /n/dos/skiplogon
+exists) and the Lucifer desktop.
+The console remains a shell with the whole namespace in either case.
+.SS "Files on the card"
+All are optional.
+.TP
+.B rootpath
+Where user programs come from; one source a line, applied in order.
+.B local
+unions the card's
+.BR dis ,
+.BR lib ,
+.B fonts
+and
+.B icons
+after the kernel's own and binds its
+.B usr
+over
+.B /usr
+for writing.
+.BI "net " addr
+mounts the file server at dial string
+.IR addr ,
+unauthenticated, on
+.B /n/remote
+and does the same from there.
+Without the file the policy is
+.BR local .
+.TP
+.B wifi
+Lines
+.BI essid " name"
+and
+.BI password " phrase" \fR,\fP
+the value being the rest of the line.
+.TP
+.B bt
+Control lines for
+.BR /net/bt ,
+written in order; blank lines and lines beginning
+.B #
+are skipped.
+.TP
+.B btkeys
+Where
+.I bt9p
+keeps link keys.
+.TP
+.B netconsole
+Its existence enables the network console.
+If it has a first line, that is a token a client must send, in clear,
+before it is given a shell; if it is empty there is none, and
+.I osinit
+says so loudly.
+.TP
+.B skiplogon
+Its existence starts the desktop without
+.BR wm/logon ,
+.I factotum
+or
+.IR secstore .
+.SH FILES
+.TF /lib/lucifer/boot-baremetal.sh
+.TP
+.B /osinit.dis
+in the kernel's root
+.TP
+.B /n/dos
+the card's FAT partition
+.TP
+.B /os/init/profile
+.B /lib/sh/profile
+in the kernel's root
+.TP
+.B /lib/lucifer/boot-baremetal.sh
+narrows the namespace; starts the desktop if there is a screen
+.SH SOURCE
+.B /os/init/osinit.b
+.SH SEE ALSO
+.IR boot (3),
+.IR cons (3),
+.IR ether (3),
+.IR sd (3),
+.IR bt9p (4),
+.IR dossrv (4),
+.IR init (8),
+.IR wpa (8)
+.br
+.B /docs/BAREMETAL.md
+.SH BUGS
+Every process it starts, the desktop's included, runs as the host owner.
+.br
+The network console's token and the
+.B wifi
+file's passphrase are clear text, the first on the network and the second
+on a FAT card.
+.br
+The self-checks of step 1 run on every boot and take some seconds.

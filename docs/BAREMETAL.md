@@ -327,6 +327,13 @@ no longer answers anything else.
 Kernel devices (`#x`) and where they appear. "Pi" and "virt" say which
 kernel includes them (`os/<board>/devtab.c`).
 
+The ones that exist only in the native kernel have manual pages:
+`sd(3)`, `boot(3)`, `ether(3)`, `gpio(3)`, `bench(3)`, `touch(3)`; with
+`eia(3)`, `audio(3)`, `cons(3)`, `pointer(3)` and `draw(3)` for the rest.
+`osinit(8)` is the boot sequence and the card's control files as a
+reference page, and `mkcard(10.1)` the image tools. (`man 3 gpio` inside
+Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
+
 | | where | files | |
 |-|-|-|-|
 | `#c` | `/dev` | `cons consctl sysctl hostowner keyboard time random notquiterandom memory memtags sysstat sysname user jit` … | both |

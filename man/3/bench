@@ -1,0 +1,78 @@
+.TH BENCH 3
+.SH NAME
+bench \- microsecond time, for measuring
+.SH SYNOPSIS
+.nf
+.B bind -a #b /dev
+
+.B /dev/busec
+
+.B include \&"bench.m";
+.B bench := load Bench Bench->PATH;
+.fi
+.SH DESCRIPTION
+.I Bench
+is the native kernel's apparatus for timing things.
+.IR Sys-millisec (2)
+is the only clock Limbo otherwise has, and a millisecond is far too coarse
+for a machine that runs millions of instructions inside one.
+.PP
+.B Busec
+is a read-only file holding the number of microseconds since the zero
+point, as decimal text with no newline.
+It is read from the processor's free-running counter
+.RI ( fastticks ),
+not from the scheduler's tick, and is monotonic.
+It is the clock on which
+.IR gpio (3)
+stamps edges.
+.PP
+The device also provides the built-in module
+.BR $Bench ,
+declared in
+.BR /module/bench.m ,
+which is the interface Vita Nuova's
+.I "Reliable Benchmarking with Limbo on Inferno"
+is written against, so that benchmarks written to it run here unchanged:
+.TP
+.B microsec()
+The same number as
+.BR busec ,
+as a
+.BR big ,
+without a system call's worth of text conversion.
+.TP
+.B reset()
+Make now the zero point.
+Times are relative to it rather than to an epoch so that they are small
+enough to read and subtract.
+.TP
+.B "disablegc()\fR, \fPenablegc()"
+Stop the garbage collector from running inside a sample, and let it run
+again.
+A collection is not part of what is being timed, and presents as an
+outlier indistinguishable from a real one.
+The two nest: they keep a count, and a program that forgets the second
+suspends collection only until it exits.
+.TP
+.B read()
+Declared by the module and present so that programs written to it load;
+it returns 0.
+The original used it to hand back a trace from its built-in benchmarks,
+which are not here.
+.SH SOURCE
+.B /os/port/devbench.c
+.br
+.B /module/bench.m
+.SH SEE ALSO
+.IR sys-millisec (2),
+.IR gpio (3)
+.SH BUGS
+Native kernel only; the hosted emulator has no
+.BR #b .
+.SH HISTORY
+Inferno's other native kernels have a
+.B devbench
+that reads the x86 timestamp counter and carries a suite of benchmarks
+besides.
+This keeps the module's interface and none of the rest.

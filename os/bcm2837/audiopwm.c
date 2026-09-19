@@ -112,9 +112,10 @@ enum {
 	Dreqpwm		= 5,		/* the PWM's DREQ line */
 
 	Nbuf		= 4,		/* the writer may run three buffers ahead */
-	Bufframes	= 2048,		/* stereo frames per buffer: 46 ms at 44.1 kHz */
-	Bufwords	= Bufframes * 2,
-	Bufbytes	= Bufwords * 4,
+	Maxframes	= 2048,		/* stereo frames per buffer: 46 ms at 44.1 kHz; the default, and what is allocated */
+	Minframes	= 64,		/* 1.5 ms */
+	Lowlat		= 256,		/* at or below this the writer keeps ONE buffer ahead, not three */
+	Bufbytes	= Maxframes * 2 * 4,
 
 	/* control block Ti */
 	Tinten		= 1<<0,
@@ -150,6 +151,8 @@ struct Ctlr {
 	int	wbuf;		/* the writer's next buffer */
 	int	woff;		/* words already in it */
 	int	pbuf;		/* the buffer the engine is on: counted, not read back */
+	int	frames;		/* stereo frames per buffer now: Maxframes unless audioctl's buf said less (#653) */
+	int	ahead;		/* how many buffers the writer may be in front of the engine */
 	ulong	played;		/* buffers played out, for the curious */
 	ulong	underruns;	/* buffers silenced for want of data */
 	Audio_t	av;
@@ -184,14 +187,48 @@ pwmclock(int rate)
 		;
 }
 
+/*
+ * LATENCY (#653). A sound written now is heard when the engine reaches
+ * the buffer it went into. With 2048-frame buffers and the writer three
+ * ahead that is 50 to 150 ms: right for playing a file, since big
+ * buffers ride out scheduling gaps, and useless for anything that
+ * answers a person -- a click, a beep, a sidetone, speech -- where past
+ * 20 ms a sound stops feeling caused by the action. audio(3) already
+ * has the control for it: "buf n", the buffer size as a percentage,
+ * which this driver used to ignore. 100 is the default; the frames are
+ * the power of two at or below that share of 2048, and at least 64:
+ *
+ *	buf	100	50	25	13	7	4
+ *	frames	2048	1024	512	256	128	64
+ *	ms	46	23	12	5.8	2.9	1.5	(at 44.1 kHz)
+ *
+ * At 256 frames and below the writer is held to ONE buffer ahead of
+ * the engine, so the worst case is two buffers: about 6 ms at buf 7.
+ * The cost is an interrupt per buffer and a writer that must keep up;
+ * one that does not is silenced for the gap, as ever, and the underrun
+ * count in the status line says how often. The setting lasts for one
+ * open: close puts the default back.
+ */
+static int
+framesfor(ulong pct)
+{
+	int want, f;
+
+	want = Maxframes * pct / 100;
+	for(f = Minframes; f * 2 <= want && f * 2 <= Maxframes; f *= 2)
+		;
+	return f;
+}
+
 static void
 fillsilence(u32int *b)
 {
-	int i;
+	int i, words;
 
-	for(i = 0; i < Bufwords; i++)
+	words = ctlr.frames * 2;
+	for(i = 0; i < words; i++)
 		b[i] = Silence;
-	cachedwbse(b, Bufbytes);
+	cachedwbse(b, words * 4);
 }
 
 /*
@@ -222,6 +259,55 @@ audiointr(void *a)
 	wakeup(&c->r);
 }
 
+/* the ring of control blocks, for the buffer length in force, all silent */
+static void
+ring(Ctlr *c)
+{
+	int i;
+
+	for(i = 0; i < Nbuf; i++){
+		fillsilence(c->buf[i]);
+		c->full[i] = 0;
+		c->cb[i].ti = Tinten | Tiwaitresp | Tidestdreq | Tisrcinc | (Dreqpwm << Tipermap);
+		c->cb[i].src = BUSADDR(PADDR(c->buf[i]));
+		c->cb[i].dst = PWMFIFOBUS;
+		c->cb[i].len = c->frames * 2 * 4;
+		c->cb[i].stride = 0;
+		c->cb[i].next = BUSADDR(PADDR(&c->cb[(i+1) % Nbuf]));
+	}
+	cachedwbse(c->cb, Nbuf * sizeof(Cb));
+	c->wbuf = 0;
+	c->woff = 0;
+	c->pbuf = 0;
+}
+
+/*
+ * A new buffer length. The engine reads the control blocks as it goes,
+ * so they are not changed under it: it is stopped, the ring rebuilt,
+ * and started again, a few milliseconds of silence. Refused while
+ * anything written is still waiting to be played, which a program
+ * avoids by setting buf before it writes.
+ */
+static void
+setframes(Ctlr *c, int frames)
+{
+	int i;
+
+	if(frames == c->frames)
+		return;
+	for(i = 0; i < Nbuf; i++)
+		if(c->full[i] || c->woff != 0)
+			error("audio: sound is queued; set buf before writing");
+	if(c->running)
+		dmastop(Dmachan);
+	c->frames = frames;
+	c->ahead = frames <= Lowlat ? 1 : Nbuf - 1;
+	if(c->running){
+		ring(c);
+		dmastart(Dmachan, c->cb);
+	}
+}
+
 static void
 start(Ctlr *c)
 {
@@ -236,20 +322,7 @@ start(Ctlr *c)
 		if(c->cb == nil || c->buf[0] == nil || c->buf[Nbuf-1] == nil)
 			error(Enomem);
 	}
-	for(i = 0; i < Nbuf; i++){
-		fillsilence(c->buf[i]);
-		c->full[i] = 0;
-		c->cb[i].ti = Tinten | Tiwaitresp | Tidestdreq | Tisrcinc | (Dreqpwm << Tipermap);
-		c->cb[i].src = BUSADDR(PADDR(c->buf[i]));
-		c->cb[i].dst = PWMFIFOBUS;
-		c->cb[i].len = Bufbytes;
-		c->cb[i].stride = 0;
-		c->cb[i].next = BUSADDR(PADDR(&c->cb[(i+1) % Nbuf]));
-	}
-	cachedwbse(c->cb, Nbuf * sizeof(Cb));
-	c->wbuf = 0;
-	c->woff = 0;
-	c->pbuf = 0;
+	ring(c);
 
 	gpioclaim(Gpiopwm0, "audio");
 	gpioclaim(Gpiopwm1, "audio");
@@ -277,6 +350,9 @@ void
 audio_file_init(void)
 {
 	audio_info_init(&ctlr.av);
+	ctlr.frames = Maxframes;
+	ctlr.ahead = Nbuf - 1;
+	ctlr.av.out.buf = 100;
 	ctlr.av.out.rate = 44100;
 	ctlr.av.out.chan = 2;
 	ctlr.av.out.bits = 16;
@@ -308,6 +384,14 @@ audio_file_close(Chan *c)
 	qlock(&ctlr.lk);
 	ctlr.open = 0;
 	/* the PWM keeps running at silence: see the comment at the top */
+	if(ctlr.frames != Maxframes && !waserror()){
+		/* a low-latency setting is one program's, for one open */
+		ctlr.woff = 0;
+		memset(ctlr.full, 0, sizeof ctlr.full);
+		setframes(&ctlr, Maxframes);
+		ctlr.av.out.buf = 100;
+		poperror();
+	}
 	qunlock(&ctlr.lk);
 }
 
@@ -319,13 +403,25 @@ audio_file_read(Chan *c, void *va, long count, vlong offset)
 	return 0;
 }
 
+/*
+ * May the writer start on its next buffer? Not while it is still to be
+ * played from last time round; and in the low-latency case not while it
+ * is more than one in front of the engine, which is the whole of how
+ * the latency is kept down.
+ */
 static int
 roomfor(void *a)
 {
 	Ctlr *c;
+	int d;
 
 	c = a;
-	return !c->full[c->wbuf];
+	if(c->full[c->wbuf])
+		return 0;
+	if(c->ahead >= Nbuf - 1)
+		return 1;
+	d = (c->wbuf - c->pbuf + Nbuf) % Nbuf;
+	return d <= c->ahead;
 }
 
 /*
@@ -372,6 +468,13 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 	p = va;
 	for(n = 0; n < count; n += ba){
 		if(ctlr.woff == 0){
+			/*
+			 * Low latency: a writer the engine has caught up with
+			 * (it paused, or has only now begun) would be filling
+			 * the buffer being played. It goes to the next one.
+			 */
+			if(ctlr.ahead < Nbuf - 1 && ctlr.wbuf == ctlr.pbuf)
+				ctlr.wbuf = (ctlr.pbuf + 1) % Nbuf;
 			/* a fresh buffer: wait for the engine to be done with it */
 			while(!roomfor(&ctlr))
 				sleep(&ctlr.r, roomfor, &ctlr);
@@ -386,8 +489,8 @@ audio_file_write(Chan *c, void *va, long count, vlong offset)
 		b = ctlr.buf[ctlr.wbuf];
 		b[ctlr.woff++] = level(l, lg);
 		b[ctlr.woff++] = level(r, rg);
-		if(ctlr.woff >= Bufwords){
-			cachedwbse(b, Bufbytes);
+		if(ctlr.woff >= ctlr.frames * 2){
+			cachedwbse(b, ctlr.frames * 2 * 4);
 			ctlr.full[ctlr.wbuf] = 1;
 			ctlr.wbuf = (ctlr.wbuf + 1) % Nbuf;
 			ctlr.woff = 0;
@@ -424,6 +527,8 @@ audio_ctl_write(Chan *c, void *va, long count, vlong offset)
 		error("audio: 1 or 2 channels");
 	if(tmp.out.flags & AUDIO_RATE_FLAG && tmp.out.rate != ctlr.av.out.rate && ctlr.running)
 		pwmclock(tmp.out.rate);
+	if(tmp.out.flags & AUDIO_BUF_FLAG)
+		setframes(&ctlr, framesfor(tmp.out.buf));
 	tmp.out.flags = 0;
 	ctlr.av = tmp;
 	poperror();
@@ -435,7 +540,7 @@ audio_ctl_write(Chan *c, void *va, long count, vlong offset)
 char*
 audiostatus(char *buf, char *e)
 {
-	return seprint(buf, e, "audio: %s rate %lud chans %lud bits %lud played %lud underruns %lud\n",
+	return seprint(buf, e, "audio: %s rate %lud chans %lud bits %lud frames %d ahead %d played %lud underruns %lud\n",
 		ctlr.running? "running" : "idle", ctlr.av.out.rate, ctlr.av.out.chan, ctlr.av.out.bits,
-		ctlr.played, ctlr.underruns);
+		ctlr.frames, ctlr.ahead, ctlr.played, ctlr.underruns);
 }

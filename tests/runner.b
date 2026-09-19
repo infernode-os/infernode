@@ -37,6 +37,7 @@ TestModule: module
 };
 
 verbosemode := 0;
+offlinemode := 0;
 ctxt: ref Draw->Context;
 
 # Counts
@@ -69,15 +70,29 @@ init(drawctxt: ref Draw->Context, args: list of string)
 	}
 
 	arg->init(args);
-	arg->setusage("runner [-v]");
+	arg->setusage("runner [-v] [-o]");
 
 	while((opt := arg->opt()) != 0) {
 		case opt {
 		'v' =>
 			verbosemode = 1;
+		'o' =>
+			offlinemode = 1;
 		* =>
 			arg->usage();
 		}
+	}
+
+	# Offline opt-out: a runner declares the environment instead of the
+	# tests inferring it from a dial that may block forever (host firewall
+	# in ask mode never fails the connect). Network-dependent tests check
+	# /env/INFERNODE_TESTS_OFFLINE and skip deterministically.
+	if(offlinemode) {
+		fd := sys->create("/env/INFERNODE_TESTS_OFFLINE", Sys->OWRITE, 8r666);
+		if(fd == nil)
+			sys->fprint(sys->fildes(2), "runner: cannot create /env/INFERNODE_TESTS_OFFLINE: %r\n");
+		else
+			sys->write(fd, array of byte "1", 1);
 	}
 
 	sys->fprint(sys->fildes(2), "=== LIMBO TESTS ===\n");

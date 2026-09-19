@@ -27,6 +27,12 @@ include "publicnet.m";
 
 MAXREDIRECTS: con 10;
 
+# How long a connect (dial plus TLS handshake) may block before the
+# library abandons it. A connect held open by a host firewall prompt or a
+# blackholed route never fails on its own, so every caller would hang
+# forever waiting for it. Bound it and report a timeout error instead.
+CONNECTMS: con 10000;
+
 init(): string
 {
 	sys = load Sys Sys->PATH;
@@ -92,23 +98,136 @@ post(requrl, contenttype: string, body: array of byte): (ref Response, string)
 
 tlsdial(addr, servername: string): (ref Sys->FD, string)
 {
+	(conn, err) := tlsconnect(addr, servername);
+	if(err != nil)
+		return (nil, err);
+	return tlsconnfd(conn);
+}
+
+# [private]
+# Dial and complete the TLS handshake under a time bound, returning the
+# established connection. The dial and the handshake both block in host
+# read/connect calls that never fail on their own when a firewall holds
+# the connect open, so run them in a child proc, race the result against
+# a timer, and kill the child if the timer wins — a killed-but-blocked
+# child would otherwise keep the whole emulator alive at exit.
+tlsconnect(addr, servername: string): (ref Conn, string)
+{
 	err := loadtls();
 	if(err != nil)
 		return (nil, err);
 
+	res := chan of (ref Conn, string);
+	pch := chan of int;
+	spawn tlsconnectproc(addr, servername, pch, res);
+	pid := <-pch;
+	tch := chan of int;
+	spawn timerproc(tch, CONNECTMS);
+	alt {
+	r := <-res =>
+		return r;
+	<-tch =>
+		killproc(pid);
+		return (nil, sys->sprint("connect %s: no response within %dms", addr, CONNECTMS));
+	}
+}
+
+# [private]
+tlsconnectproc(addr, servername: string, pch: chan of int,
+	res: chan of (ref Conn, string))
+{
+	pch <-= sys->pctl(0, nil);
+
 	c := dial->dial(addr, nil);
-	if(c == nil)
-		return (nil, sys->sprint("dial %s: %r", addr));
+	if(c == nil) {
+		err := sys->sprint("dial %s: %r", addr);
+		alt {
+		res <-= (nil, err) =>
+			;
+		* =>
+			;
+		}
+		return;
+	}
 
 	cfg := tls->defaultconfig();
 	cfg.servername = servername;
-
 	(conn, terr) := tls->client(c.dfd, cfg);
-	if(terr != nil)
-		return (nil, "tls: " + terr);
+	if(terr != nil) {
+		alt {
+		res <-= (nil, "tls: " + terr) =>
+			;
+		* =>
+			;
+		}
+		return;
+	}
 
-	# Wrap TLS conn as a pipe-like FD pair
-	return tlsconnfd(conn);
+	alt {
+	res <-= (conn, nil) =>
+		;
+	* =>
+		;
+	}
+}
+
+# [private]
+# Dial under a time bound. Returns (connection, nil) or (nil, error).
+bounddial(addr: string): (ref Sys->Connection, string)
+{
+	res := chan of (ref Sys->Connection, string);
+	pch := chan of int;
+	spawn bounddialproc(addr, pch, res);
+	pid := <-pch;
+	tch := chan of int;
+	spawn timerproc(tch, CONNECTMS);
+	alt {
+	r := <-res =>
+		return r;
+	<-tch =>
+		killproc(pid);
+		return (nil, sys->sprint("dial %s: no response within %dms", addr, CONNECTMS));
+	}
+}
+
+# [private]
+bounddialproc(addr: string, pch: chan of int,
+	res: chan of (ref Sys->Connection, string))
+{
+	pch <-= sys->pctl(0, nil);
+	c := dial->dial(addr, nil);
+	err: string;
+	if(c == nil)
+		err = sys->sprint("dial %s: %r", addr);
+	alt {
+	res <-= (c, err) =>
+		;
+	* =>
+		;
+	}
+}
+
+# [private]
+timerproc(ch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	ch <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
+# [private]
+# Kill a process blocked in a host syscall. A blocked dialer cannot be
+# waited on or ignored: left alive it holds the emulator (and its bound
+# ports) after the caller has moved on.
+killproc(pid: int)
+{
+	ctl := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(ctl != nil)
+		sys->write(ctl, array of byte "kill", 4);
 }
 
 # [private]
@@ -336,23 +455,15 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, pub
 
 	fd: ref Sys->FD;
 	if(ishttps) {
-		err := loadtls();
-		if(err != nil)
-			return (nil, err);
-		c := dial->dial(addr, nil);
-		if(c == nil)
-			return (nil, sys->sprint("dial %s: %r", addr));
-		cfg := tls->defaultconfig();
-		cfg.servername = host;
-		(conn, terr) := tls->client(c.dfd, cfg);
+		(conn, terr) := tlsconnect(addr, host);
 		if(terr != nil)
-			return (nil, "tls: " + terr);
+			return (nil, terr);
 		# Use TLS conn's read/write directly
 		return dotlsrequest(conn, method, u, host, hdrs, body);
 	} else {
-		c := dial->dial(addr, nil);
+		(c, derr) := bounddial(addr);
 		if(c == nil)
-			return (nil, sys->sprint("dial %s: %r", addr));
+			return (nil, derr);
 		fd = c.dfd;
 	}
 

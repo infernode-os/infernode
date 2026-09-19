@@ -192,7 +192,7 @@ links: list of ref Lnk;
 aclmtu := 27;			# the controller's ACL packet size, from Read_Buffer_Size
 aclcredits := 1;		# ACL packets the controller can take now
 aclq: list of ref Pkt;		# waiting for a credit
-inflight: list of (int, int);	# per handle, packets sent and not yet completed
+inflight: list of (int, int, int);	# per handle: packets sent and not yet completed, and whether from the LE pool
 # LE has its own buffers in the controller when LE_Read_Buffer_Size says
 # so, and shares the BR/EDR ones when it says 0
 leaclmtu := 0;
@@ -3883,7 +3883,7 @@ aclpump()
 			continue;
 		aclcredits--;
 		(h, nil) := bthci->aclheader(p);
-		sent(h);
+		sent(h, 0);
 	}
 	while(leaclcredits > 0 && leaclq != nil){
 		p := hd leaclq;
@@ -3892,57 +3892,64 @@ aclpump()
 			continue;
 		leaclcredits--;
 		(h, nil) := bthci->aclheader(p);
-		sent(h);
+		sent(h, 1);
 	}
 }
 
-# a completion on a handle gives its pool the credits back
+# A completion on a handle gives its pool the credits back. Which pool
+# is remembered from when the packets were sent, not asked of the link:
+# the last completions for a link arrive around its disconnection, often
+# after it has been forgotten, and asking then put an LE link's credits
+# in the classic pool. The LE pool lost them for good, and once it had
+# lost them all no LE link could send its first packet -- the next
+# pairing after a refused one simply timed out.
 credit(h, n: int)
 {
-	back := completed(h, n);
-	lk := linkbyhandle(h);
-	if(lk != nil && lk.le && leaclmtu > 0)
+	(back, le) := completed(h, n);
+	if(le)
 		leaclcredits += back;
 	else
 		aclcredits += back;
 }
 
-sent(h: int)
+sent(h, le: int)
 {
-	l: list of (int, int);
+	l: list of (int, int, int);
 	found := 0;
 	for(il := inflight; il != nil; il = tl il){
-		(ih, n) := hd il;
+		(ih, n, ile) := hd il;
 		if(ih == h){
 			n++;
 			found = 1;
 		}
-		l = (ih, n) :: l;
+		l = (ih, n, ile) :: l;
 	}
 	if(!found)
-		l = (h, 1) :: l;
+		l = (h, 1, le) :: l;
 	inflight = l;
 }
 
 # n packets on handle h completed, or all of them if n < 0; returns
-# how many credits that gives back
-completed(h, n: int): int
+# how many credits that gives back, and whether to the LE pool
+completed(h, n: int): (int, int)
 {
-	l: list of (int, int);
+	l: list of (int, int, int);
 	back := 0;
+	le := 0;
 	for(il := inflight; il != nil; il = tl il){
-		(ih, m) := hd il;
+		(ih, m, ile) := hd il;
 		if(ih == h){
 			if(n < 0 || n > m)
 				n = m;
 			back = n;
+			le = ile;
 			m -= n;
 		}
 		if(m > 0)
-			l = (ih, m) :: l;
+			l = (ih, m, ile) :: l;
 	}
 	inflight = l;
-	return back;
+	return (back, le);
 }
 
 #

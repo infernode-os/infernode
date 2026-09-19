@@ -57,13 +57,332 @@ uuid16(a: array of byte, i: int, n: int): int
 	return get2(a, i + 12);
 }
 
+#
+# The server.
+#
+
+uuidbytes(u: int): array of byte
+{
+	a := array[2] of byte;
+	put2(a, 0, u);
+	return a;
+}
+
+parseuuid(str: string): array of byte
+{
+	h := "";
+	for(i := 0; i < len str; i++)
+		if(str[i] != '-')
+			h[len h] = str[i];
+	if(len h != 32)
+		return nil;
+	a := array[16] of byte;
+	for(i = 0; i < 16; i++){
+		v := 0;
+		for(j := 0; j < 2; j++){
+			c := h[2*i + j];
+			d := -1;
+			if(c >= '0' && c <= '9')
+				d = c - '0';
+			else if(c >= 'a' && c <= 'f')
+				d = c - 'a' + 10;
+			else if(c >= 'A' && c <= 'F')
+				d = c - 'A' + 10;
+			if(d < 0)
+				return nil;
+			v = v*16 + d;
+		}
+		a[15 - i] = byte v;	# written most significant first, carried least
+	}
+	return a;
+}
+
+# requests have even opcodes below 0x20 that are not responses; the
+# commands are Write Command, Signed Write, and Handle Value Confirmation
+isrequest(pdu: array of byte): int
+{
+	if(len pdu < 1)
+		return 0;
+	case int pdu[0] {
+	Omtureq or Ofindinforeq or Ofindbytypereq or Oreadbytypereq or Oreadreq or Oreadblobreq or
+	16r0e or Oreadbygroupreq or Owritereq or 16r16 or 16r18 or Owritecmd or 16rd2 or Oconfirm =>
+		return 1;
+	}
+	return 0;
+}
+
+Server.new(): ref Server
+{
+	return ref Server(Defmtu, nil, 1, 0);
+}
+
+addattr(s: ref Server, a: ref Attr)
+{
+	r: list of ref Attr;
+	for(l := s.attrs; l != nil; l = tl l)
+		r = hd l :: r;
+	r = a :: r;
+	s.attrs = nil;
+	for(; r != nil; r = tl r)
+		s.attrs = hd r :: s.attrs;
+}
+
+# the service declaration the characteristics now being added belong to
+lastservice(s: ref Server): ref Attr
+{
+	sv: ref Attr;
+	for(l := s.attrs; l != nil; l = tl l)
+		if(uuid16((hd l).uuid, 0, len (hd l).uuid) == Uprimary)
+			sv = hd l;
+	return sv;
+}
+
+Server.service(s: self ref Server, uuid: array of byte): int
+{
+	h := s.next++;
+	addattr(s, ref Attr(h, uuidbytes(Uprimary), uuid, h, 0));
+	return h;
+}
+
+Server.characteristic(s: self ref Server, uuid: array of byte, value: array of byte, needenc: int): int
+{
+	sv := lastservice(s);
+	if(sv == nil)
+		return -1;
+	dh := s.next++;
+	vh := s.next++;
+	# the declaration: properties, the value's handle, its UUID
+	d := array[3 + len uuid] of byte;
+	d[0] = byte Pread;
+	put2(d, 1, vh);
+	d[3:] = uuid;
+	addattr(s, ref Attr(dh, uuidbytes(Ucharacteristic), d, dh, 0));
+	addattr(s, ref Attr(vh, uuid, value, vh, needenc));
+	sv.end = vh;
+	return vh;
+}
+
+Server.set(s: self ref Server, handle: int, value: array of byte)
+{
+	for(l := s.attrs; l != nil; l = tl l)
+		if((hd l).handle == handle)
+			(hd l).value = value;
+}
+
+srverr(op, handle, code: int): array of byte
+{
+	e := array[5] of byte;
+	e[0] = byte Oerror;
+	e[1] = byte op;
+	put2(e, 2, handle);
+	e[4] = byte code;
+	return e;
+}
+
+sameuuid(a, b: array of byte): int
+{
+	# a 16-bit UUID and its 128-bit form on the base are the same UUID
+	if(len a != len b){
+		x := uuid16(a, 0, len a);
+		return x >= 0 && x == uuid16(b, 0, len b);
+	}
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+samebytes(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+# may this attribute be read now? 0, or the error that says why not
+readable(s: ref Server, a: ref Attr): int
+{
+	if(a.needenc && !s.encrypted)
+		return Einsufauthn;
+	return 0;
+}
+
+Server.recv(s: self ref Server, pdu: array of byte): array of byte
+{
+	if(len pdu < 1)
+		return nil;
+	op := int pdu[0];
+	case op {
+	Omtureq =>
+		if(len pdu < 3)
+			return srverr(op, 0, Einvalidpdu);
+		m := get2(pdu, 1);
+		if(m < Defmtu)
+			m = Defmtu;
+		if(m > Srvmtu)
+			m = Srvmtu;
+		s.mtu = m;
+		r := array[3] of byte;
+		r[0] = byte Omtursp;
+		put2(r, 1, Srvmtu);
+		return r;
+
+	Ofindinforeq =>
+		if(len pdu < 5)
+			return srverr(op, 0, Einvalidpdu);
+		(start, end) := (get2(pdu, 1), get2(pdu, 3));
+		if(start == 0 || start > end)
+			return srverr(op, start, Einvalidhandle);
+		# handle and UUID pairs, all of one UUID length
+		out := array[2] of byte;
+		out[0] = byte Ofindinforsp;
+		ulen := 0;
+		for(l := s.attrs; l != nil; l = tl l){
+			a := hd l;
+			if(a.handle < start || a.handle > end)
+				continue;
+			if(ulen == 0)
+				ulen = len a.uuid;
+			if(len a.uuid != ulen || len out + 2 + ulen > s.mtu)
+				break;
+			e := array[2 + ulen] of byte;
+			put2(e, 0, a.handle);
+			e[2:] = a.uuid;
+			out = cat(out, e);
+		}
+		if(ulen == 0)
+			return srverr(op, start, Eattrnotfound);
+		out[1] = byte 1;
+		if(ulen == 16)
+			out[1] = byte 2;
+		return out;
+
+	Ofindbytypereq =>
+		# how a central finds one service by its UUID: type 0x2800, value the UUID
+		if(len pdu < 7)
+			return srverr(op, 0, Einvalidpdu);
+		(start, end) := (get2(pdu, 1), get2(pdu, 3));
+		if(start == 0 || start > end)
+			return srverr(op, start, Einvalidhandle);
+		typ := get2(pdu, 5);
+		val := pdu[7:];
+		out := array[1] of { byte Ofindbytypersp };
+		for(l := s.attrs; l != nil; l = tl l){
+			a := hd l;
+			if(a.handle < start || a.handle > end || uuid16(a.uuid, 0, len a.uuid) != typ)
+				continue;
+			if(!sameuuid(a.value, val) && !samebytes(a.value, val))
+				continue;
+			if(len out + 4 > s.mtu)
+				break;
+			e := array[4] of byte;
+			put2(e, 0, a.handle);
+			put2(e, 2, a.end);
+			out = cat(out, e);
+		}
+		if(len out == 1)
+			return srverr(op, start, Eattrnotfound);
+		return out;
+
+	Oreadbytypereq or Oreadbygroupreq =>
+		if(len pdu != 7 && len pdu != 21)
+			return srverr(op, 0, Einvalidpdu);
+		(start, end) := (get2(pdu, 1), get2(pdu, 3));
+		if(start == 0 || start > end)
+			return srverr(op, start, Einvalidhandle);
+		typ := pdu[5:];
+		group := op == Oreadbygroupreq;
+		if(group && uuid16(typ, 0, len typ) != Uprimary)
+			return srverr(op, start, Eunsupportedgroup);
+		hdr := 2;
+		if(group)
+			hdr = 4;
+		out := array[2] of byte;
+		out[0] = byte (op + 1);
+		vlen := -1;
+		for(l := s.attrs; l != nil; l = tl l){
+			a := hd l;
+			if(a.handle < start || a.handle > end || !sameuuid(a.uuid, typ))
+				continue;
+			if((why := readable(s, a)) != 0){
+				if(vlen < 0)
+					return srverr(op, a.handle, why);
+				break;
+			}
+			v := a.value;
+			if(len v > s.mtu - 2 - hdr)
+				v = v[0:s.mtu - 2 - hdr];
+			if(len v > 255 - hdr)
+				v = v[0:255 - hdr];
+			if(vlen < 0)
+				vlen = len v;
+			if(len v != vlen || len out + hdr + vlen > s.mtu)
+				break;
+			e := array[hdr + vlen] of byte;
+			put2(e, 0, a.handle);
+			if(group)
+				put2(e, 2, a.end);
+			e[hdr:] = v;
+			out = cat(out, e);
+		}
+		if(vlen < 0)
+			return srverr(op, start, Eattrnotfound);
+		out[1] = byte (hdr + vlen);
+		return out;
+
+	Oreadreq or Oreadblobreq =>
+		need := 3;
+		if(op == Oreadblobreq)
+			need = 5;
+		if(len pdu < need)
+			return srverr(op, 0, Einvalidpdu);
+		h := get2(pdu, 1);
+		off := 0;
+		if(op == Oreadblobreq)
+			off = get2(pdu, 3);
+		for(l := s.attrs; l != nil; l = tl l){
+			a := hd l;
+			if(a.handle != h)
+				continue;
+			if((why := readable(s, a)) != 0)
+				return srverr(op, h, why);
+			if(off > len a.value)
+				return srverr(op, h, Einvalidoffset);
+			v := a.value[off:];
+			if(len v > s.mtu - 1)
+				v = v[0:s.mtu - 1];
+			return cat(array[1] of { byte (op + 1) }, v);
+		}
+		return srverr(op, h, Einvalidhandle);
+
+	Owritereq =>
+		h := 0;
+		if(len pdu >= 3)
+			h = get2(pdu, 1);
+		for(l := s.attrs; l != nil; l = tl l)
+			if((hd l).handle == h)
+				return srverr(op, h, Ewritenotpermitted);
+		return srverr(op, h, Einvalidhandle);
+
+	Owritecmd or 16rd2 or Oconfirm =>
+		return nil;		# commands are not answered, even to refuse them
+	}
+	return srverr(op, 0, Enotsupported);
+}
+
 errtext(code: int): string
 {
 	case code {
 	Einvalidhandle =>	return "invalid handle";
 	Ereadnotpermitted =>	return "read not permitted";
 	Ewritenotpermitted =>	return "write not permitted";
+	Einvalidpdu =>		return "invalid PDU";
 	Einsufauthn =>		return "insufficient authentication";
+	Einvalidoffset =>	return "invalid offset";
+	Eunsupportedgroup =>	return "unsupported group type";
 	Enotsupported =>	return "request not supported";
 	Einsufauthz =>		return "insufficient authorization";
 	Eattrnotfound =>	return "attribute not found";
@@ -94,7 +413,7 @@ Characteristic.reportref(c: self ref Characteristic): int
 
 Client.new(): ref Client
 {
-	return ref Client(Defmtu, 0, 0, nil, 0, nil, nil, 0, nil);
+	return ref Client(Defmtu, 0, 0, nil, 0, nil, nil, 0, nil, 0);
 }
 
 # a request goes now if the line is free, else it waits
@@ -128,6 +447,7 @@ Client.exchangemtu(c: self ref Client, mtu: int): list of ref Ev
 	p := array[3] of byte;
 	p[0] = byte Omtureq;
 	put2(p, 1, mtu);
+	c.offer = mtu;
 	return request(c, p);
 }
 
@@ -231,10 +551,17 @@ Client.recv(c: self ref Client, pdu: array of byte): list of ref Ev
 	h := c.phandle;
 	case op {
 	Omtursp =>
+		# the MTU is the smaller of the two offers (3.4.2.2), and never
+		# under the default. It used to be the smaller of the server's
+		# and the DEFAULT, our own offer forgotten, so it never rose
+		# above 23 whatever either end could take.
 		if(len pdu >= 3){
 			m := get2(pdu, 1);
-			if(m < c.mtu)
-				c.mtu = m;
+			if(c.offer < m)
+				m = c.offer;
+			if(m < Defmtu)
+				m = Defmtu;
+			c.mtu = m;
 		}
 		return ref Ev.Mtu(c.mtu) :: next(c);
 	Oreadrsp =>

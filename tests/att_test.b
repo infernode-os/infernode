@@ -15,7 +15,7 @@ include "bthci.m";
 	bthci: Bthci;
 include "att.m";
 	att: Att;
-	Client, Characteristic, Service, Ev: import att;
+	Client, Characteristic, Service, Ev, Server: import att;
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -330,7 +330,7 @@ testUse(t: ref T)
 	c := Client.new();
 	r := newresult();
 	drive(c, tab, c.exchangemtu(64), 64, r, w);
-	t.asserteq(r.mtu, 23, "the MTU is the smaller of ours (23 by default) and theirs");
+	t.asserteq(r.mtu, 64, "the MTU is the smaller of our offer and theirs (3.4.2.2): both said 64");
 	drive(c, tab, c.read(16r17), 23, r, w);
 	t.asserteq(len r.values, 1, "a read is answered");
 	if(r.values != nil){
@@ -381,6 +381,182 @@ testUse(t: ref T)
 	t.assertseq(att->errtext(Att->Einsufauthn), "insufficient authentication", "error text");
 }
 
+#
+# The server: the table the board will serve as a peripheral, asked by
+# the library's own client and then by hand.
+#
+
+INFERNODE: con "6e6f6465-7265-666e-692d-000000000001";	# stands in for the service UUID #647 will fix
+
+# the client against the library's server
+drivesrv(c: ref Client, srv: ref Server, evs: list of ref Ev, r: ref Result)
+{
+	for(rounds := 0; evs != nil && rounds < 200; rounds++){
+		more: list of ref Ev;
+		for(; evs != nil; evs = tl evs){
+			pick e := hd evs {
+			Send =>
+				r.sent++;
+				rsp := srv.recv(e.pdu);
+				if(rsp == nil)
+					continue;
+				for(x := c.recv(rsp); x != nil; x = tl x)
+					more = hd x :: more;
+			Found =>	r.found = (e.s, e.chars) :: r.found;
+			Nosuch =>	r.nosuch = e.uuid;
+			Value =>	r.values = (e.handle, e.value) :: r.values;
+			Failed =>	r.failed = (e.op, e.code) :: r.failed;
+			Mtu =>		r.mtu = e.mtu;
+			}
+		}
+		for(; more != nil; more = tl more)
+			evs = hd more :: evs;
+	}
+}
+
+boardtable(): (ref Server, int, int)
+{
+	srv := Server.new();
+	srv.service(att->uuidbytes(Att->Ugap));
+	name := srv.characteristic(att->uuidbytes(Att->Udevname), array of byte "infernode", 0);
+	srv.characteristic(att->uuidbytes(Att->Uappearance), array[] of { byte 16r80, byte 0 }, 0);
+	srv.service(att->uuidbytes(Att->Ugatt));
+	srv.service(att->parseuuid(INFERNODE));
+	psm := srv.characteristic(att->parseuuid("6e6f6465-7265-666e-692d-000000000002"), array[] of { byte 16r80, byte 0 }, 1);
+	return (srv, name, psm);
+}
+
+testServerWithClient(t: ref T)
+{
+	(srv, name, nil) := boardtable();
+	c := Client.new();
+	r := newresult();
+	drivesrv(c, srv, c.exchangemtu(100), r);
+	t.asserteq(r.mtu, 100, "the MTU settles on the smaller of the two offers");
+	t.asserteq(srv.mtu, 100, "at the server too");
+	drivesrv(c, srv, c.discover(Att->Ugap), r);
+	t.asserteq(len r.found, 1, "the client finds the GAP service");
+	if(r.found != nil){
+		(sv, chars) := hd r.found;
+		t.asserteq(sv.start, 1, "at handle 1");
+		t.asserteq(sv.end, 5, "ending with its last characteristic's value");
+		t.asserteq(len chars, 2, "with its two characteristics");
+		for(; chars != nil; chars = tl chars)
+			if((hd chars).uuid == Att->Udevname){
+				t.asserteq((hd chars).value, name, "the device name where the server said it put it");
+				t.asserteq((hd chars).props, Att->Pread, "readable and nothing else");
+			}
+	}
+	drivesrv(c, srv, c.read(name), r);
+	if(r.values == nil)
+		t.fatal("no value read");
+	(nil, v) := hd r.values;
+	t.assertseq(string v, "infernode", "and it reads as the name");
+	drivesrv(c, srv, c.discover(Att->Uhidservice), r);
+	t.asserteq(r.nosuch, Att->Uhidservice, "a service that is not there is reported as such");
+	drivesrv(c, srv, c.write(name, array of byte "x"), r);
+	t.assert(r.failed != nil, "a write is refused");
+	if(r.failed != nil){
+		(nil, code) := hd r.failed;
+		t.asserteq(code, Att->Ewritenotpermitted, "as not permitted");
+	}
+}
+
+iserr(t: ref T, rsp: array of byte, op, code: int, what: string)
+{
+	if(len rsp != 5 || int rsp[0] != Att->Oerror){
+		t.error(what + ": not an error response");
+		return;
+	}
+	t.asserteq(int rsp[1], op, what + ": names the request");
+	t.asserteq(int rsp[4], code, what);
+}
+
+req(op, start, end: int, rest: array of byte): array of byte
+{
+	p := array[5 + len rest] of byte;
+	p[0] = byte op;
+	p[1] = byte start; p[2] = byte (start >> 8);
+	p[3] = byte end; p[4] = byte (end >> 8);
+	p[5:] = rest;
+	return p;
+}
+
+# what a phone does: find the service by its 128-bit UUID, find the
+# characteristic in it, read the PSM -- and be made to pair first
+testServerByHand(t: ref T)
+{
+	(srv, nil, psm) := boardtable();
+	u := att->parseuuid(INFERNODE);
+	t.asserteq(len u, 16, "a UUID string parses to sixteen bytes");
+	t.asserteq(int u[15], 16r6e, "most significant octet last, as ATT carries it");
+	t.assert(att->parseuuid("not-a-uuid") == nil, "and a malformed one to nil");
+
+	# Find By Type Value: primary service, this UUID
+	rsp := srv.recv(req(Att->Ofindbytypereq, 1, 16rffff, cat(att->uuidbytes(Att->Uprimary), u)));
+	t.asserteq(int rsp[0], Att->Ofindbytypersp, "the service is found by its UUID");
+	t.asserteq(len rsp, 5, "once");
+	start := int rsp[1] | (int rsp[2] << 8);
+	end := int rsp[3] | (int rsp[4] << 8);
+	t.asserteq(end, psm, "its group ends at the PSM's value");
+
+	# the characteristic declarations in that range
+	rsp = srv.recv(req(Att->Oreadbytypereq, start, end, att->uuidbytes(Att->Ucharacteristic)));
+	t.asserteq(int rsp[0], Att->Oreadbytypersp, "its characteristic is listed");
+	t.asserteq(int rsp[1], 2 + 3 + 16, "with a 128-bit UUID: handle, properties, value handle, UUID");
+	t.asserteq(int rsp[5] | (int rsp[6] << 8), psm, "pointing at the value");
+
+	# the value, on a link that is not encrypted
+	rd := array[] of { byte Att->Oreadreq, byte psm, byte (psm >> 8) };
+	iserr(t, srv.recv(rd), Att->Oreadreq, Att->Einsufauthn, "the PSM is not read on an unencrypted link, which is a phone's cue to pair");
+	iserr(t, srv.recv(req(Att->Oreadbytypereq, start, end, att->parseuuid("6e6f6465-7265-666e-692d-000000000002"))), Att->Oreadbytypereq, Att->Einsufauthn, "nor by type");
+	srv.encrypted = 1;
+	rsp = srv.recv(rd);
+	t.asserteq(int rsp[0], Att->Oreadrsp, "encrypted, it is");
+	t.asserteq(int rsp[1] | (int rsp[2] << 8), 16r80, "and it is the PSM");
+	srv.set(psm, array[] of { byte 16r93, byte 0 });
+	rsp = srv.recv(rd);
+	t.asserteq(int rsp[1], 16r93, "a value that is set is what is read next");
+
+	# all the services, as a central that discovers everything asks
+	rsp = srv.recv(req(Att->Oreadbygroupreq, 1, 16rffff, att->uuidbytes(Att->Uprimary)));
+	t.asserteq(int rsp[0], Att->Oreadbygrouprsp, "services are listed by group");
+	t.asserteq(int rsp[1], 6, "the 16-bit ones first, six bytes each");
+	t.asserteq(len rsp, 2 + 2*6, "two of them: a 128-bit UUID cannot share the response");
+	rsp = srv.recv(req(Att->Oreadbygroupreq, start, 16rffff, att->uuidbytes(Att->Uprimary)));
+	t.asserteq(int rsp[1], 20, "the 128-bit one next, twenty bytes");
+	iserr(t, srv.recv(req(Att->Oreadbygroupreq, end + 1, 16rffff, att->uuidbytes(Att->Uprimary))), Att->Oreadbygroupreq, Att->Eattrnotfound, "and then no more");
+	iserr(t, srv.recv(req(Att->Oreadbygroupreq, 1, 16rffff, att->uuidbytes(Att->Ucharacteristic))), Att->Oreadbygroupreq, Att->Eunsupportedgroup, "only services are groups");
+
+	# Find Information, Read Blob, and the refusals
+	rsp = srv.recv(req(Att->Ofindinforeq, 1, 3, nil));
+	t.asserteq(int rsp[1], 1, "Find Information gives 16-bit UUIDs in the 16-bit format");
+	t.asserteq(len rsp, 2 + 3*4, "one pair per attribute");
+	blob := array[] of { byte Att->Oreadblobreq, byte 3, byte 0, byte 5, byte 0 };
+	rsp = srv.recv(blob);
+	t.assertseq(string rsp[1:], "node", "Read Blob reads from an offset");
+	blob[3] = byte 99;
+	iserr(t, srv.recv(blob), Att->Oreadblobreq, Att->Einvalidoffset, "an offset past the end");
+	iserr(t, srv.recv(req(Att->Ofindinforeq, 0, 5, nil)), Att->Ofindinforeq, Att->Einvalidhandle, "handle 0 is not a handle");
+	iserr(t, srv.recv(req(Att->Ofindinforeq, 9, 5, nil)), Att->Ofindinforeq, Att->Einvalidhandle, "nor is a range that runs backwards");
+	iserr(t, srv.recv(array[] of { byte Att->Oreadreq, byte 200, byte 0 }), Att->Oreadreq, Att->Einvalidhandle, "a handle that is not there");
+	iserr(t, srv.recv(array[] of { byte 16r20, byte 1, byte 0 }), 16r20, Att->Enotsupported, "a request it does not know");
+	iserr(t, srv.recv(array[] of { byte Att->Oreadreq }), Att->Oreadreq, Att->Einvalidpdu, "a request cut short");
+	t.assert(srv.recv(array[] of { byte Att->Owritecmd, byte 3, byte 0, byte 'x' }) == nil, "a command is not answered, even to refuse it");
+
+	# a long value is cut to the MTU, and the rest comes by Read Blob
+	long := array[60] of { * => byte 'n' };
+	srv.set(3, long);
+	rsp = srv.recv(array[] of { byte Att->Oreadreq, byte 3, byte 0 });
+	t.asserteq(len rsp, Att->Defmtu, "a long value is cut to the MTU");
+
+	t.assert(att->isrequest(array[] of { byte Att->Oreadreq }), "a Read Request is for the server");
+	t.assert(att->isrequest(array[] of { byte Att->Owritecmd }), "so is a Write Command");
+	t.assert(!att->isrequest(array[] of { byte Att->Oreadrsp }), "a Read Response is for the client");
+	t.assert(!att->isrequest(array[] of { byte Att->Onotify }), "so is a notification");
+	t.assert(!att->isrequest(array[] of { byte Att->Oerror }), "and an error");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -396,6 +572,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Discovery", testDiscovery);
 	run("Use", testUse);
+	run("ServerWithClient", testServerWithClient);
+	run("ServerByHand", testServerByHand);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -352,38 +352,11 @@ build_kernel() {
             # to be reachable from it, and this is what serves one.
             "/dis/lib/styx.dis=$ROOT/dis/lib/styx.dis"
 
-            # acme is not one module. /dis/acme.dis is a loader for the
-            # twenty-four in /dis/acme/, which it loads by path at run
-            # time -- so a dependency scan that follows "load X X->PATH"
-            # never sees them, and acme failed with the least helpful
-            # message Limbo has: "module not loaded". 288KB in total.
-            "/dis/acme/acme.dis=$ROOT/dis/acme/acme.dis"
-            "/dis/acme/buff.dis=$ROOT/dis/acme/buff.dis"
-            "/dis/acme/col.dis=$ROOT/dis/acme/col.dis"
-            "/dis/acme/dat.dis=$ROOT/dis/acme/dat.dis"
-            "/dis/acme/disk.dis=$ROOT/dis/acme/disk.dis"
-            "/dis/acme/ecmd.dis=$ROOT/dis/acme/ecmd.dis"
-            "/dis/acme/edit.dis=$ROOT/dis/acme/edit.dis"
-            "/dis/acme/elog.dis=$ROOT/dis/acme/elog.dis"
-            "/dis/acme/exec.dis=$ROOT/dis/acme/exec.dis"
-            "/dis/acme/file.dis=$ROOT/dis/acme/file.dis"
-            "/dis/acme/frame.dis=$ROOT/dis/acme/frame.dis"
-            "/dis/acme/fsys.dis=$ROOT/dis/acme/fsys.dis"
-            "/dis/acme/graph.dis=$ROOT/dis/acme/graph.dis"
-            "/dis/acme/gui.dis=$ROOT/dis/acme/gui.dis"
-            "/dis/acme/look.dis=$ROOT/dis/acme/look.dis"
-            "/dis/acme/regx.dis=$ROOT/dis/acme/regx.dis"
-            "/dis/acme/row.dis=$ROOT/dis/acme/row.dis"
-            "/dis/acme/scrl.dis=$ROOT/dis/acme/scrl.dis"
-            "/dis/acme/styxaux.dis=$ROOT/dis/acme/styxaux.dis"
-            "/dis/acme/text.dis=$ROOT/dis/acme/text.dis"
-            "/dis/acme/time.dis=$ROOT/dis/acme/time.dis"
-            "/dis/acme/util.dis=$ROOT/dis/acme/util.dis"
-            "/dis/acme/wind.dis=$ROOT/dis/acme/wind.dis"
-            "/dis/acme/xfid.dis=$ROOT/dis/acme/xfid.dis"
+            # (styxservers and nametree are etherusb's too. acme used to
+            # be compiled in here, all twenty-five modules of it; see
+            # "What is NOT in the image" below.)
             "/dis/lib/styxservers.dis=$ROOT/dis/lib/styxservers.dis"
             "/dis/lib/nametree.dis=$ROOT/dis/lib/nametree.dis"
-            "/dis/lib/tables.dis=$ROOT/dis/lib/tables.dis"
 
             # The mount point for it. #I is bound on /net with MBEFORE
             # rather than MREPL precisely so this survives in the union:
@@ -512,62 +485,39 @@ build_kernel() {
             "/dis/lib/styxpersist.dis=$ROOT/dis/lib/styxpersist.dis"
 
             #
-            # The window system.
+            # What is NOT in the image: the desktop.
             #
-            # wm/wm is the window manager: it owns the screen, hands
-            # each client a window, and moves and resizes them. Its
-            # clients are ordinary Limbo programs -- there is nothing
-            # privileged about it beyond having been started first.
+            # wm/wm, the clock, colors, the shell window, acme and the
+            # fourteen libraries only they used were compiled in on 27
+            # and 28 August, when the kernel could not yet read the card
+            # and the image was the only place a program could come
+            # from. The card has carried the whole of /dis since 2
+            # September, init unions it over the root, and the desktop
+            # has been started from it ever since; nothing at boot and
+            # no test in this file ever ran the compiled-in copies. They
+            # stayed, 389 KB of them, and did harm: the kernel's root is
+            # first in that union, so its clock.dis was the one that ran
+            # whatever was on the card, and every name the two shared
+            # was listed twice (#655).
             #
-            # The module list is not a guess. It is the transitive
-            # closure of "load X X->PATH" from appl/wm/wm.b and from
-            # each client below, resolved against the PATH constants in
-            # module/*.m. A missing library does not report itself
-            # missing: the program fails to LOAD, which surfaces as a
-            # window that never appears.
+            # The rule: the image holds what it takes to reach the card
+            # and to have a usable console if the card is bad -- init,
+            # the FAT server, the USB and Ethernet drivers, the shell and
+            # the file utilities -- and what this harness runs. A program
+            # that is only ever wanted once the machine is up belongs on
+            # the card. Which libraries can go with a program is not a
+            # guess: it is the closure of the /dis paths in the compiled
+            # files that STAY, and a library outside it is removable.
             #
-            "/dis/wm/wm.dis=$ROOT/dis/wm/wm.dis"
-            "/dis/lib/wmclient.dis=$ROOT/dis/lib/wmclient.dis"
-            "/dis/lib/wmsrv.dis=$ROOT/dis/lib/wmsrv.dis"
-            "/dis/lib/wmlib.dis=$ROOT/dis/lib/wmlib.dis"
-            "/dis/lib/winplace.dis=$ROOT/dis/lib/winplace.dis"
-            "/dis/lib/menuhit.dis=$ROOT/dis/lib/menuhit.dis"
-            "/dis/lib/lucitheme.dis=$ROOT/dis/lib/lucitheme.dis"
             "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
 
-            # Two clients, chosen for what they exercise rather than
-            # for what they do. The clock is the smallest thing that
-            # draws continuously and is the only reason $Math is
-            # linked -- it wants sin and cos for the hands. The shell
-            # window is the one that matters: a Tk toplevel with a
-            # text widget, keyboard input, and a shell behind it.
-            "/dis/wm/clock.dis=$ROOT/dis/wm/clock.dis"
-            # wm's button-3 menu offers acme, wm/clock and wm/colors.
-            # colors needs nothing that is not already here, and a menu
-            # whose entries do nothing is worse than a shorter menu.
-            "/dis/wm/colors.dis=$ROOT/dis/wm/colors.dis"
-
-            # acme, the third entry on wm's menu. Its closure is only
-            # four files this image does not already have -- complete,
-            # libc, styx and acme itself, about 75KB -- so the menu no
-            # longer offers something that cannot run.
-            "/dis/acme.dis=$ROOT/dis/acme.dis"
-            "/dis/lib/complete.dis=$ROOT/dis/lib/complete.dis"
-            "/dis/lib/libc.dis=$ROOT/dis/lib/libc.dis"
             "/dis/lib/styx.dis=$ROOT/dis/lib/styx.dis"
-            "/dis/wm/shell.dis=$ROOT/dis/wm/shell.dis"
-            "/dis/lib/tkclient.dis=$ROOT/dis/lib/tkclient.dis"
-            "/dis/lib/titlebar.dis=$ROOT/dis/lib/titlebar.dis"
             "/dis/lib/daytime.dis=$ROOT/dis/lib/daytime.dis"
             "/dis/lib/arg.dis=$ROOT/dis/lib/arg.dis"
             "/dis/lib/bufio.dis=$ROOT/dis/lib/bufio.dis"
-            "/dis/lib/dis.dis=$ROOT/dis/lib/dis.dis"
-            "/dis/lib/debug.dis=$ROOT/dis/lib/debug.dis"
             "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
-            "/dis/lib/plumbmsg.dis=$ROOT/dis/lib/plumbmsg.dis"
 
-            # A writable /tmp, which acme needs and the compiled-in
-            # root cannot be: the whole image is read-only, so anything
+            # A writable /tmp, which the compiled-in root cannot be: the whole image is read-only, so anything
             # that opens a temporary file fails with a permission
             # error that reads like a bug in the program.
             "/dis/memfs.dis=$ROOT/dis/memfs.dis"

@@ -1251,6 +1251,12 @@ verifies byte-identical at ~630 KB/s each way. The remaining distance
 to wire speed is the per-message cost times how many messages remain;
 the lever from here is deeper batches, not new machinery.
 
+(That was the judgement at the time, and the next section overturned
+it. The 9P data path, the `packed` file and ethermedium's client for it
+were all deleted on 2026-09-19 -- see "The Ethernet data path is in the
+kernel". The numbers stay here because they are what the decision was
+made from.)
+
 ### RESOLVED: the "console wedge" was silent type-ahead loss
 
 What looked like an intermittent hang -- the shell stops executing
@@ -1306,17 +1312,23 @@ negotiation, the LAN78xx register bring-up. When the device is ready,
 etherusb.b closes its endpoint fds and hands the open endpoints to #l
 with one ctl write ("bind <family> <mac> <mbps> <burst> <in> <out>");
 the endpoint paths are resolved in the writer's namespace, and
-exclusive-open endpoints are the interlock that keeps both data paths
-from ever attaching at once. Where #l does not exist the old 9P server
-still runs -- the namespace decides, not a build flag.
+exclusive-open endpoints are the interlock that keeps the driver and
+the kernel from ever holding them at once.
+
+For a while the old 9P server stayed in etherusb.b as a fallback where
+#l did not exist, selectable on the card for comparison. It was deleted
+on 2026-09-19 (last present at 63a40e92d), with the `packed` client in
+os/ip/ethermedium.c: nothing tested it, the USB layer under it had
+changed, and at a few percent of #l's throughput nobody would choose
+it. A kernel built without #l now has no Ethernet, and etherusb says so.
 
 Hunting lessons written in blood, for the next person here:
 
 - devether.reset() must be called from main.c by hand -- this kernel
   has no chandevreset(), and an uninitialised netif is not a device
   that fails but a directory with an empty name that walks miss.
-- The compiled-in root carries an EMPTY /net/ether0 stub for the 9P
-  mount; a union bind of #l after /net leaves the stub in front and
+- The compiled-in root carries an EMPTY /net/ether0 stub (once the 9P
+  mount point); a union bind of #l after /net leaves the stub in front and
   every walk lands in it. Bind #l/ether0 OVER the stub, MREPL.
 - ethermedium writes "nonblocking" to every ether ctl; netifwrite
   rejects unknown tokens with -1, and escalating that to an error

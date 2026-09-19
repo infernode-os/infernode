@@ -349,21 +349,16 @@ build_kernel() {
             "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
             "/dis/lib/arg.dis=$ROOT/dis/lib/arg.dis"
 
-            # The 9P server library, for etherusb. A class driver that
-            # lives outside the kernel has to publish a file interface
-            # to be reachable from it, and this is what serves one.
+            # The 9P message library: dossrv, mount and memfs speak it,
+            # and dossrv is how the card gets mounted at all.
+            # (styxservers and nametree were here for etherusb's 9P
+            # data path and left with it.)
             "/dis/lib/styx.dis=$ROOT/dis/lib/styx.dis"
 
-            # (styxservers and nametree are etherusb's too. acme used to
-            # be compiled in here, all twenty-five modules of it; see
-            # "What is NOT in the image" below.)
-            "/dis/lib/styxservers.dis=$ROOT/dis/lib/styxservers.dis"
-            "/dis/lib/nametree.dis=$ROOT/dis/lib/nametree.dis"
-
-            # The mount point for it. #I is bound on /net with MBEFORE
-            # rather than MREPL precisely so this survives in the union:
-            # devip has no "ether0" of its own, and a mount needs its
-            # target to exist.
+            # Where etherusb binds #l/ether0. #I is bound on /net with
+            # MBEFORE rather than MREPL precisely so this survives in
+            # the union: devip has no "ether0" of its own, and a bind
+            # needs its target to exist.
             "/net/ether0="
 
             # Where a filesystem gets mounted. dossrv mounts itself at

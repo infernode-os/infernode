@@ -67,13 +67,16 @@ enum
 	 * failure, not to police latency.
 	 */
 	/*
-	 * The timeout IS the cost of every transfer here.
+	 * The timeout is what a transfer costs WHEN NO INTERRUPT COMES.
 	 *
-	 * This driver never takes a USB interrupt: chanwait runs the
-	 * whole wait at splhi and clears hcintmsk before spl drops, so
-	 * the core asserts and de-asserts where nothing can be
-	 * delivered. tsleep therefore returns on its timeout rather than
-	 * on a wakeup, every time.
+	 * What follows was written believing this driver never took a
+	 * USB interrupt at all, so that tsleep returned on its timeout
+	 * every time. That was true of the bring-up kernel and is not
+	 * true now: measured on the board, 63114 channel waits ended in
+	 * a wakeup against one that timed out. Read the rest as the
+	 * history of why Chantmout is long and must stay long, which
+	 * still holds -- a missed interrupt (see masklock) costs exactly
+	 * this much.
 	 *
 	 * At 200ms a slice that made a keyboard unusable: about a minute
 	 * to echo a key, and anything pressed and released between polls
@@ -410,8 +413,8 @@ chansetup(Hostchan *hc, Ep *ep)
 /*
  * sofdone was the condition sofwait slept on. sofwait polls the frame
  * counter now -- see the comment there -- so nothing sleeps on a
- * start-of-frame any more, and the interrupt it waited for is one this
- * driver never takes.
+ * start-of-frame any more, and the start-of-frame interrupt it waited
+ * for is one this driver leaves masked.
  */
 
 static void
@@ -427,12 +430,12 @@ sofwait(Ctlr *ctlr, int n)
 	 * Watch the frame counter instead of waiting for an interrupt.
 	 *
 	 * This slept -- unbounded, not tsleep -- on the start-of-frame
-	 * interrupt. This driver never takes a USB interrupt: chanwait
-	 * runs its whole wait at splhi and clears hcintmsk before
-	 * lowering spl, so the core asserts and de-asserts where nothing
-	 * can be delivered. So the sleep returned only when sofdone
-	 * happened to be true on entry, and would otherwise have waited
-	 * for ever for a wakeup that cannot come.
+	 * interrupt, which at the time never arrived: the sleep returned
+	 * only when sofdone happened to be true on entry, and would
+	 * otherwise have waited for ever. Channel interrupts do arrive
+	 * now (see Chantmout), but an interrupt 8000 times a second to
+	 * learn what a register read says is no bargain either, so the
+	 * counter is still what is watched.
 	 *
 	 * It matters only here, because only a split transaction calls
 	 * this -- which is to say only a low-speed or full-speed device
@@ -533,14 +536,13 @@ restart:
 		/*
 		 * Poll briefly before sleeping.
 		 *
-		 * This driver never takes a USB interrupt -- the whole wait
-		 * runs at splhi and hcintmsk is cleared before spl drops,
-		 * so the core asserts and de-asserts where nothing can be
-		 * delivered. tsleep therefore almost always returns on its
-		 * TIMEOUT rather than on a wakeup, and every transfer that
-		 * does not complete before the sleep begins costs the full
-		 * Chantmout, which is now a few milliseconds rather than
-		 * microseconds.
+		 * (History: this and the next comment date from when no
+		 * USB interrupt was ever delivered, tsleep always ran to
+		 * its timeout, and every transfer not already complete
+		 * cost the full Chantmout. Interrupts are delivered now --
+		 * see Chantmout -- and the sleep below normally ends in a
+		 * wakeup. What they record about split transactions and
+		 * this wait still stands.)
 		 *
 		 * Enumeration survived that because it is a few dozen
 		 * transfers. A keyboard does not: polling an interrupt
@@ -571,12 +573,10 @@ restart:
 		 * left alone, and four failures is enough evidence to stop
 		 * trying to make the approach work.
 		 *
-		 * The cost is real and understood: without interrupts tsleep
-		 * returns on its timeout, so an interrupt endpoint is read
-		 * about once a second, and a HID device that holds only its
-		 * latest state loses keys pressed between reads. The fix for
-		 * that is to make the USB interrupt actually arrive -- see
-		 * the note in eptrans -- not to keep shaving this timeout.
+		 * The cost, when this was written, was an interrupt endpoint
+		 * read about once a second. The fix was to make the USB
+		 * interrupt actually arrive, which it now does, and not to
+		 * keep shaving this timeout.
 		 */
 		nchanwait++;
 		if(chandone(hc))
@@ -1337,18 +1337,6 @@ account:
 			panic("chanio: ep%d.%d dma %8.8ux outside %8.8ux..%8.8ux cpu%d",
 				ep->dev->nb, ep->nb, hc->hcdma, dstart, dend, m->machno);
 	}
-	/*
-	 * Say once whether any of this was interrupt-driven.
-	 *
-	 * The board reports nusbintr == 0 on every timeout: the
-	 * controller has never raised an interrupt, so chanwait is
-	 * running entirely on its tsleep timeout and the chandone poll.
-	 * That works, but it is not what this driver is written to do,
-	 * and it wants distinguishing from a hardware-only fault --
-	 * hence reporting it after a transfer that SUCCEEDED, which only
-	 * happens under emulation at present.
-	 */
-
 	return len - nleft;
 }
 
@@ -1814,6 +1802,10 @@ dump(Hci *hp)
 		ctlr->regs->gintmsk, ctlr->regs->gahbcfg, ctlr->regs->haintmsk);
 }
 
+/*
+ * The name is upstream's and is kept so the two files still compare.
+ * It is not an FIQ here: see the comment before the wakeups below.
+ */
 static void
 fiqintr(Ureg*, void *a)
 {

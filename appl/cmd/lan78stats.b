@@ -17,8 +17,7 @@ implement Lan78stats;
 #
 # The control endpoint is exclusive-open and os/init/etherusb.b closes
 # it once the kernel data path is bound, which is what lets this open
-# it; under the Limbo data path the driver still holds it and this
-# says "in use".
+# it.
 #
 
 include "sys.m";

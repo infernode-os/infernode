@@ -121,21 +121,11 @@ struct Etherrock
 	Proc	*read4p;	/* reading process (v4)*/
 	Proc	*read6p;	/* reading process (v6)*/
 	Chan	*mchan4;	/* Data channel for v4 */
-	Chan	*pchan4;	/* packed data channel for v4, nil if none */
-	Proc	*wproc;		/* packed writer, nil if none */
-	Lock	wl;		/* guards the outbound chain */
-	Block	*whead;		/* frames waiting for the writer */
-	Block	*wtail;
-	int	wcount;		/* how many */
-	Rendez	wr;		/* where the writer waits */
 	Chan	*achan;		/* Arp channel */
 	Chan	*cchan4;	/* Control channel for v4 */
 	Chan	*mchan6;	/* Data channel for v6 */
 	Chan	*cchan6;	/* Control channel for v6 */
 };
-
-static void	etherreadpacked(Ipifc *ifc, Etherrock *er);
-static void	etherwritepacked(void *a);
 
 /*
  *  ethernet arp request
@@ -187,12 +177,11 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	 * way. Same hazard and same idiom as kmount in os/port/sysfile.c.
 	 */
 	volatile struct {
-		Chan *mchan4, *cchan4, *achan, *mchan6, *cchan6, *pchan4;
+		Chan *mchan4, *cchan4, *achan, *mchan6, *cchan6;
 		char *buf;
 	} v;
 	char addr[Maxpath];	//char addr[2*KNAMELEN];
 	char dir[Maxpath];	//char dir[2*KNAMELEN];
-	char dir4[Maxpath];
 	int fd, cfd, n;
 	char *ptr;
 	Etherrock *er;
@@ -200,7 +189,7 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	if(argc < 2)
 		error(Ebadarg);
 
-	v.mchan4 = v.cchan4 = v.achan = v.mchan6 = v.cchan6 = v.pchan4 = nil;
+	v.mchan4 = v.cchan4 = v.achan = v.mchan6 = v.cchan6 = nil;
 	v.buf = nil;
 	if(waserror()){
 		if(v.mchan4 != nil)
@@ -213,8 +202,6 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 			cclose(v.mchan6);
 		if(v.cchan6 != nil)
 			cclose(v.cchan6);
-		if(v.pchan4 != nil)
-			cclose(v.pchan4);
 		if(v.buf != nil)
 			free(v.buf);
 		nexterror(); 
@@ -234,7 +221,6 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	v.cchan4 = commonfdtochan(cfd, ORDWR, 0, 1);
 	kclose(fd);
 	kclose(cfd);
-	kstrcpy(dir4, dir, sizeof(dir4));	/* the v6 dial below reuses dir */
 
 	/*
 	 *  make it non-blocking
@@ -244,7 +230,7 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	/*
 	 *  get mac address and speed
 	 */
-	snprint(addr, sizeof(addr), "%s/stats", dir4);
+	snprint(addr, sizeof(addr), "%s/stats", dir);
 	fd = kopen(addr, OREAD);
 	if(fd < 0)
 		errorf("can't open ether stats: %s", up->env->errstr);
@@ -299,33 +285,7 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	 */
 	devtab[v.cchan6->type]->write(v.cchan6, nbmsg, strlen(nbmsg), 0);
 
-	/*
-	 *  Ask for the packed data file, and do without it if it is not
-	 *  there.
-	 *
-	 *  A read of "data" returns one packet, which is what an
-	 *  Ethernet data file has always meant and what every other
-	 *  reader still gets. A driver that can hand over several frames
-	 *  at once offers a second file beside it; opening that file IS
-	 *  the negotiation, so there is no version to agree and no mode
-	 *  to set, and a driver without one is not asked to care.
-	 *
-	 *  Worth having because the frames really are waiting. Measured
-	 *  on the bcm2837 board under a one-megabyte inbound transfer,
-	 *  594 of 1137 arrivals found no reader waiting and had to be
-	 *  queued, at a mean depth of 4.5 and a peak of 16 -- so half the
-	 *  9P round trips on the receive path were fetching one frame
-	 *  while others sat behind it.
-	 */
-	snprint(addr, sizeof(addr), "%s/packed", dir4);
-	fd = kopen(addr, ORDWR);
-	if(fd >= 0){
-		v.pchan4 = commonfdtochan(fd, ORDWR, 0, 1);
-		kclose(fd);
-	}
-
 	er = smalloc(sizeof(*er));
-	er->pchan4 = v.pchan4;
 	er->mchan4 = v.mchan4;
 	er->cchan4 = v.cchan4;
 	er->achan = v.achan;
@@ -340,8 +300,6 @@ etherbind(Ipifc *ifc, int argc, char **argv)
 	kproc("etherread4", etherread4, ifc, 0);
 	kproc("recvarpproc", recvarpproc, ifc, 0);
 	kproc("etherread6", etherread6, ifc, 0);
-	if(v.pchan4 != nil)
-		kproc("etherwpacked", etherwritepacked, ifc, 0);
 }
 
 /*
@@ -358,15 +316,11 @@ etherunbind(Ipifc *ifc)
 		postnote(er->read6p, 1, "unbind", 0);
 	if(er->arpp)
 		postnote(er->arpp, 1, "unbind", 0);
-	if(er->wproc)
-		postnote(er->wproc, 1, "unbind", 0);
 
 	/* wait for readers to die */
-	while(er->arpp != 0 || er->read4p != 0 || er->read6p != 0 || er->wproc != 0)
+	while(er->arpp != 0 || er->read4p != 0 || er->read6p != 0)
 		tsleep(&up->sleep, return0, 0, 300);
 
-	if(er->pchan4 != nil)
-		cclose(er->pchan4);
 	if(er->mchan4 != nil)
 		cclose(er->mchan4);
 	if(er->achan != nil)
@@ -428,43 +382,6 @@ etherbwrite(Ipifc *ifc, Block *bp, int version, uchar *ip)
 	case V4:
 		eh->t[0] = 0x08;
 		eh->t[1] = 0x00;
-		if(er->wproc != nil){
-			/*
-			 * Hand the frame to the writer and return.
-			 *
-			 * The write used to happen here, synchronously: one
-			 * 9P transaction per frame, with the IP stack's
-			 * caller blocked through all of it. On this system
-			 * that transaction costs about two milliseconds --
-			 * every TCP ack paid it, which capped the INBOUND
-			 * direction too, since acks gate the sender's
-			 * window. Queueing lets acks and data that arrive
-			 * close together cross to the driver in one write.
-			 *
-			 * The cap is Ethernet honesty, not tidiness: if the
-			 * writer has fallen 256 frames behind, the link is
-			 * not delivering, and dropping here is what any
-			 * interface does when its transmit ring is full.
-			 * TCP recovers; a queue that grows without bound
-			 * does not.
-			 */
-			lock(&er->wl);
-			if(er->wcount >= 256){
-				unlock(&er->wl);
-				freeb(bp);
-				break;
-			}
-			bp->next = nil;
-			if(er->whead == nil)
-				er->whead = bp;
-			else
-				er->wtail->next = bp;
-			er->wtail = bp;
-			er->wcount++;
-			unlock(&er->wl);
-			wakeup(&er->wr);
-			break;
-		}
 		devtab[er->mchan4->type]->bwrite(er->mchan4, bp, 0);
 		break;
 	case V6:
@@ -496,8 +413,6 @@ etherread4(void *a)
 		er->read4p = 0;
 		pexit("hangup", 1);
 	}
-	if(er->pchan4 != nil)
-		etherreadpacked(ifc, er);	/* does not return */
 	for(;;){
 		bp = devtab[er->mchan4->type]->bread(er->mchan4, ifc->maxtu, 0);
 		if(!canrlock(&ifc->rwl)){
@@ -519,165 +434,6 @@ etherread4(void *a)
 	}
 }
 
-
-/*
- *  Read several frames per 9P message.
- *
- *  Same work per frame as the loop above -- take the interface read
- *  lock, step over the Ethernet header, hand the packet up -- and one
- *  read where there were several. Each frame in the reply is preceded
- *  by its length, two bytes little-endian, and the reply holds as many
- *  whole frames as the driver could fit in what was asked for.
- *
- *  A malformed reply costs the remainder of that one message and
- *  nothing more: a length that runs past the end is treated as the end.
- *  That is the right response to a driver disagreeing with us about
- *  framing -- carrying on into the next message would turn a bounded
- *  confusion into a stream of corrupt packets.
- *
- *  iounit is what the mount will actually carry in one reply, so it is
- *  the honest size to ask for. Asking for more only produces a short
- *  read, which costs a round trip to discover.
- */
-static void
-etherreadpacked(Ipifc *ifc, Etherrock *er)
-{
-	enum { Packfallback = 8192 };	/* if the mount did not say */
-	Block *bp;
-	uchar *buf, *p, *e;
-	long n, want;
-	int len;
-
-	want = (long)er->pchan4->iounit;
-	if(want <= 0)
-		want = Packfallback;
-	buf = smalloc(want);
-	if(waserror()){
-		free(buf);
-		nexterror();
-	}
-	for(;;){
-		n = devtab[er->pchan4->type]->read(er->pchan4, buf, want, 0);
-		if(n <= 0)
-			continue;
-		p = buf;
-		e = buf + n;
-		while(p + 2 <= e){
-			len = p[0] | (p[1] << 8);
-			p += 2;
-			if(len <= 0 || p + len > e)
-				break;
-			if(len <= ifc->m->hsize){
-				p += len;
-				continue;	/* header and nothing else */
-			}
-			if(!canrlock(&ifc->rwl)){
-				p += len;
-				continue;
-			}
-			if(waserror()){
-				runlock(&ifc->rwl);
-				nexterror();
-			}
-			ifc->in++;
-			if(ifc->lifc == nil)
-				;
-			else{
-				bp = allocb(len);
-				memmove(bp->wp, p, len);
-				bp->wp += len;
-				bp->rp += ifc->m->hsize;
-				ipiput4(er->f, ifc, bp);
-			}
-			runlock(&ifc->rwl);
-			poperror();
-			p += len;
-		}
-	}
-}
-
-static int
-wready(void *a)
-{
-	Etherrock *er = a;
-
-	return er->whead != nil;
-}
-
-/*
- *  Write several frames per 9P message.
- *
- *  Mirror of etherreadpacked: take whatever etherbwrite has queued,
- *  pack each frame behind a two-byte little-endian length, and hand
- *  the lot to the driver in one write. The driver puts them on the
- *  wire in one bulk transfer.
- *
- *  The batch is sized by how long the previous write took and nothing
- *  else -- the same discipline as the driver's own transmit side. A
- *  lone frame on a quiet link is written at once; frames that arrive
- *  while a write is in flight join the next one.
- */
-static void
-etherwritepacked(void *a)
-{
-	Ipifc *ifc;
-	Etherrock *er;
-	Block *bp, *next;
-	uchar *buf;
-	long want, o;
-	int len;
-
-	ifc = a;
-	er = ifc->arg;
-	er->wproc = up;
-	want = (long)er->pchan4->iounit;
-	if(want <= 0)
-		want = 8192;
-	buf = smalloc(want);
-	if(waserror()){
-		free(buf);
-		er->wproc = nil;
-		pexit("hangup", 1);
-	}
-	for(;;){
-		sleep(&er->wr, wready, er);
-
-		lock(&er->wl);
-		bp = er->whead;
-		er->whead = er->wtail = nil;
-		er->wcount = 0;
-		unlock(&er->wl);
-
-		o = 0;
-		for(; bp != nil; bp = next){
-			next = bp->next;
-			len = BLEN(bp);
-			if(o + 2 + len > want){
-				/*
-				 * Flush what is packed and start over with
-				 * this frame. A frame larger than the whole
-				 * buffer cannot happen -- maxtu fits several
-				 * times over -- but guard the arithmetic
-				 * anyway rather than trusting it.
-				 */
-				if(o > 0)
-					devtab[er->pchan4->type]->write(er->pchan4, buf, o, 0);
-				o = 0;
-				if(2 + len > want){
-					freeb(bp);
-					continue;
-				}
-			}
-			buf[o++] = len;
-			buf[o++] = len >> 8;
-			memmove(buf+o, bp->rp, len);
-			o += len;
-			freeb(bp);
-		}
-		if(o > 0)
-			devtab[er->pchan4->type]->write(er->pchan4, buf, o, 0);
-	}
-}
 
 /*
  *  process to read from the ethernet, IPv6

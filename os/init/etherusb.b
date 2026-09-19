@@ -35,16 +35,6 @@ include "draw.m";
 
 include "sh.m";
 
-include "styx.m";
-	styx: Styx;
-	Tmsg, Rmsg: import Styx;
-
-include "styxservers.m";
-	styxservers: Styxservers;
-	Styxserver, Navigator, Fid: import styxservers;
-	nametree: Nametree;
-	Tree: import nametree;
-
 #
 # Control-request shape. Same eight bytes as always; what differs from
 # the bus walk in osinit is the recipient -- these go to an INTERFACE,
@@ -249,102 +239,9 @@ Ltxlen:		con 16r000FFFFF;	# TX_CMD_A: frame length
 Lrxlen:		con 16r00003FFF;	# RX_CMD_A: frame length
 Lrxerr:		con 16r00400000;	# RX_CMD_A: receive error
 
-#
-# The file interface ethermedium dials. Taken from os/port/dial.c
-# call() and etherbind() rather than from memory:
-#
-#	clone		open, then read -> the connection number
-#	<n>/ctl		"connect 0x800", then "nonblocking"
-#	<n>/data	one read or write is one ETHERNET FRAME, header
-#			and all -- ethermedium strips the 14 bytes itself
-#	<n>/stats	"addr: <12 hex>" and "mbps: <n>"
-#
-# ethermedium opens three connections -- 0x800 (IPv4), 0x806 (ARP) and
-# 0x86DD (IPv6) -- and expects inbound frames demultiplexed onto them
-# by ether type. Four are provided so there is one spare.
-#
-Nconv:		con 4;
-Qdir:		con 0;
-Qclone:		con 1;
-Qcbase:		con 16;		# per-connection qids start here
-
-# the files of a connection, in qid order
-#
-# "packed" carries several frames in one reply, each behind a two-byte
-# little-endian length. It exists beside "data" rather than replacing
-# it because one read returning one packet is the documented meaning of
-# an Ethernet data file, and a reader that has not asked for the other
-# thing must keep getting that. Which one a client uses is settled by
-# which one it opens -- the namespace says what is on offer, so there
-# is no mode to set and no version to agree.
-Qcdir, Qcctl, Qcdata, Qcstats, Qcpacked: con iota;
-Qcnf:		con 5;		# files per connection; the qid stride
-
-#
-# Frames buffered per connection, and sixteen was far too few.
-#
-# The IP stack collects with ONE outstanding read per conversation, so
-# everything that arrives while that read is being answered has to
-# wait here. A burst is not unusual -- it is what a TCP window IS --
-# and at sixteen frames a 64k window overran the queue on every
-# transfer: measured, 30 frames dropped in one 256k transfer, about
-# ten per cent, each one costing a retransmission and a collapsed
-# congestion window. Inbound ran at 7.9KB/s while outbound, which does
-# not go through this queue, ran at 75KB/s.
-#
-# A hundred and twenty-eight holds a full window with room to spare.
-# The cost is a pointer each until the frames arrive, and the frames
-# are allocated whether or not there is room for them here -- so the
-# shallow queue was not saving the memory it appeared to.
-#
-Qmax:		con 128;	# frames buffered per connection
-Npend:		con 8;		# reads outstanding per connection
-
-#
-# How the receive loop waits when the endpoint has nothing.
-#
-# A drained bulk IN answers with a zero-length packet, so there is
-# nothing to wait on and the endpoint must be asked. Ask every
-# millisecond for Rxactive of them -- two seconds' worth -- and only
-# then fall back to Rxidle, where the added latency costs nothing
-# because nobody is talking.
-#
-Rxactive:	con 2000;	# millisecond polls to take before backing off
-Rxidle:		con 20;		# ms, once the link has been quiet that long
 Maxframe:	con 1514;	# an Ethernet frame, header included
 Rnisdata:	con 16r00000001;
 Rnishdr:	con 44;		# RNDIS_PACKET_MSG, before the frame
-
-Conv: adt {
-	etype:	int;			# ether type, -1 until connected
-	#
-	# Frames waiting for a reader, as a RING.
-	#
-	# This was a plain array dequeued from the front, which moved
-	# every remaining entry down by one on each frame taken. That is
-	# cheap at the sixteen entries it used to hold and quadratic as
-	# the queue deepens -- and deepening it is exactly what the
-	# overflow measurement asked for. A head and a tail cost two
-	# integers and make taking a frame the same work whether one is
-	# queued or a hundred.
-	#
-	q:	array of array of byte;	# frames waiting for a reader
-	qhd:	int;			# next to hand out
-	nq:	int;			# how many are queued
-	pend:	array of int;		# tags of reads waiting for a frame
-	npend:	int;
-	#
-	# Which file the parked reads came from, and so how a frame
-	# arriving for them must be shaped. A connection is read one way
-	# or the other -- ethermedium opens "packed" or it opens "data",
-	# never both on the same conversation -- so one flag covers every
-	# tag in pend.
-	#
-	packed:	int;
-	drops:	int;
-	inpkt:	int;
-	outpkt:	int;
-};
 
 #
 # THE DRIVER FAMILY TABLE.
@@ -374,69 +271,14 @@ Family: adt {
 	setup:	ref fn(): int;
 	wrap:	ref fn(frame: array of byte): array of byte;
 	unwrap:	ref fn(buf: array of byte, n, atend: int): (int, array of byte);
-	txalign: int;		# boundary the NEXT record must start on
 };
 
 families: array of Family;
 family: Family;
 
-convs: array of ref Conv;
 mac := array[6] of byte;
 bulkfd: ref Sys->FD;		# bulk IN
 bulkoutfd: ref Sys->FD;		# bulk OUT; the same fd when one endpoint serves both
-tc: chan of ref Tmsg;
-srv: ref Styxserver;
-rxq: chan of (int, array of byte);
-
-# Receive-path accounting; reported by stats().
-ndata: int;			# bulk reads that returned a frame
-datams: int;			# milliseconds spent in those reads
-nempty: int;			# bulk reads that returned nothing
-emptyms: int;			# milliseconds spent in those
-nsleep: int;			# times the loop backed off to Rxidle
-rxpollms := 1;			# ms between polls while the link is busy
-rxactive := Rxactive;		# polls to take at that rate after traffic
-nempty0: int;			# empty reads that took no measurable time
-emptymax: int;			# longest empty read seen, ms
-ntx: int;			# frames written to the bulk OUT endpoint
-txms: int;			# milliseconds spent in those writes
-txmax: int;			# longest single write, ms
-txframes: int;			# frames carried by those writes
-
-#
-# Frames waiting to go out in one transfer. Sixteen is a TCP window's
-# worth at this frame size and costs 24k of the heap, which is
-# nothing beside what one avoided write is worth.
-#
-# TWO buffers, and the second one is the whole point. The batching
-# below only ever collected one frame per transfer while the server
-# loop did the write itself: the loop queued a frame, found nothing
-# else waiting, wrote it, and only THEN went back to listening -- so
-# the frames that arrived during the write could not be seen until it
-# was over, and each one got a transfer of its own. Filling one buffer
-# while the other is being written is what lets a batch form.
-#
-Txbatch: con 16;
-Txbufs:	con 2;			# one being filled, one being written
-txpend := array[Txbatch * (Ltxhdr + Maxframe + 4)] of byte;
-ntxpend := 0;			# bytes filled
-nqueued := 0;			# frames in them
-txq: chan of (array of byte, int, int);	# buffer, bytes, frames
-txfree: chan of array of byte;		# buffers not in use
-txasync := 0;			# is txproc running?
-ntxerr: int;			# transfers the device did not take
-ndirect: int;			# frames handed straight to a waiting read
-nqueue: int;			# frames that had to be queued instead
-nqdepth: int;			# sum of the queue depth at those moments
-nqmax: int;			# deepest the queue ever got
-npacked: int;			# packed reads answered with at least one frame
-npackedframes: int;		# frames those replies carried
-npackedmax: int;		# most frames in any one reply
-npackedwr: int;			# packed writes taken
-npackedwrframes: int;		# frames they carried
-npackedwrmax: int;		# most frames in any one write
-nframe: int;			# frames handed to the demultiplex
-nframing: int;			# record walks that lost the stream
 
 phymbps := 100;			# what autonegotiation settled on
 nocarrier := 0;			# the PHY positively reported no link
@@ -451,16 +293,6 @@ init(nil: ref Draw->Context, argv: list of string)
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return;
-	styx = load Styx Styx->PATH;
-	styxservers = load Styxservers Styxservers->PATH;
-	nametree = load Nametree Nametree->PATH;
-	if(styx == nil || styxservers == nil || nametree == nil){
-		sys->print("etherusb: cannot load the 9P modules: %r\n");
-		return;
-	}
-	styx->init();
-	styxservers->init(styx);
-	nametree->init();
 
 	argv = tl argv;
 	if(argv == nil){
@@ -499,7 +331,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	}
 
 	families = array[] of {
-		Family("rndis", 16r0525, 16ra4a2, rndissetup, rndiswrap, rndisunwrap, 1),
+		Family("rndis", 16r0525, 16ra4a2, rndissetup, rndiswrap, rndisunwrap),
 		#
 		# Microchip. -1 matches any product because the 3B+ carries a
 		# LAN7515 while the family covers 7800 and 7850 too, and
@@ -507,7 +339,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		# is a better check than a number in a table, since it also
 		# proves register access works.
 		#
-		Family("lan78xx", 16r0424, -1, lansetup, lanwrap, lanunwrap, 4),
+		Family("lan78xx", 16r0424, -1, lansetup, lanwrap, lanunwrap),
 	};
 
 	#
@@ -620,8 +452,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	# operation. This is the driver that knows the device, so this
 	# is where the policy belongs -- QEMU's controller model cannot
 	# do it, and its RNDIS device never asks. Set here, before the
-	# path split, so the Limbo 9P server and the kernel data path
-	# ride the same transfer regime and their numbers compare.
+	# endpoints are handed to the kernel, which inherits the setting.
 	#
 	if(family.name == "lan78xx"){
 		for(el := inname :: outname :: nil; el != nil; el = tl el){
@@ -697,49 +528,31 @@ init(nil: ref Draw->Context, argv: list of string)
 		lanselftest();
 
 	#
-	# Hand the data path to the kernel, when there is a kernel to
-	# hand it to.
+	# Hand the data path to the kernel.
 	#
 	# Everything above -- enumeration, the register bring-up, the
 	# self-test -- is discovery and policy, runs once, and stays
 	# here. Moving bytes is mechanism, runs per frame, and lives in
-	# #l (os/port/devether.c): measured through this process and its
-	# 9P server, a frame paid about two milliseconds of scheduling
-	# and protocol per message, which capped the network at a few
-	# percent of the wire.
+	# #l (os/port/devether.c).
+	#
+	# It used to be able to live here too. Until 2026-09-19 this file
+	# also held the port's first data path -- a 9P server for
+	# /net/ether0 with the receive and transmit loops as Limbo
+	# processes -- kept after #l arrived so the two could be compared
+	# on one card, chosen by a file called etherpath. The comparison
+	# was made and is not close: a frame through that server paid
+	# about two milliseconds of scheduling and protocol, which capped
+	# the network at a few percent of the wire, against 160 Mbit/s
+	# through #l. After that it was a second driver nobody ran: no
+	# battery, soak or harness test ever selected it, and the USB
+	# layer under it changed (an idle bulk IN now blocks rather than
+	# returning at once) with nothing to say whether it still worked.
+	# Two implementations of one job are two bugs, so it went: over
+	# a thousand lines, recoverable from history at 63a40e92d.
 	#
 	# The endpoints are exclusive-open, so OUR fds must close before
-	# the kernel can take them -- which is also the interlock: the
-	# 9P data path and the kernel one cannot both be attached.
+	# the kernel can take them.
 	#
-	# Where #l does not exist, serve() carries on exactly as before;
-	# the namespace decides, not a build flag.
-	#
-	#
-	# WHICH data path, selectable per card -- the same convention as
-	# the network-console token: a file the operator writes on the
-	# boot partition. "limbo" keeps the driver here, serving 9P, the
-	# way the whole port ran before #l existed; anything else (or no
-	# file) hands the endpoints to the kernel. Both implementations
-	# stay live in the tree so their performance can be compared on
-	# the same boot media, and the portable one remains one file
-	# edit away from being the one that runs.
-	#
-	sfd := sys->open("/n/dos/etherpath", Sys->OREAD);
-	if(sfd != nil){
-		sbuf := array[32] of byte;
-		sn := sys->read(sfd, sbuf, len sbuf);
-		sfd = nil;
-		if(sn > 0){
-			(nil, sfl) := sys->tokenize(string sbuf[0:sn], " \t\r\n");
-			if(sfl != nil && hd sfl == "limbo"){
-				sys->print("etherusb: /n/dos/etherpath says limbo; serving 9P\n");
-				serve();
-				return;
-			}
-		}
-	}
-
 	probe := sys->open("#l/ether0/addr", Sys->OREAD);
 	if(probe != nil){
 		probe = nil;
@@ -785,7 +598,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		#
 		# Bind the kernel interface EXACTLY over the mount-point
 		# stub. The compiled-in root carries an empty /net/ether0
-		# for the 9P server to mount on, and a union bind of #l
+		# as a place to put it, and a union bind of #l
 		# after /net leaves that stub in front: the walk finds the
 		# empty directory, not the netif behind it, and everything
 		# downstream reports "clone does not exist" about a tree
@@ -816,7 +629,8 @@ init(nil: ref Draw->Context, argv: list of string)
 		ep0 = nil;
 		return;
 	}
-	serve();
+	# a kernel with no #l has no Ethernet: there is nothing to fall back to
+	sys->print("etherusb: no #l/ether0 in this kernel; the device is set up and nothing will move its frames\n");
 }
 
 #
@@ -970,83 +784,6 @@ configvalue(): int
 		return -1;
 	}
 	return int hdr[5];
-}
-
-#
-# Serve the netif interface, and mount it where ethermedium will dial
-# it.
-#
-# The mount is visible system-wide because this driver was spawned
-# rather than forked into its own namespace: a device that only its own
-# driver can see would be of no use to anyone.
-#
-serve()
-{
-	convs = array[Nconv] of ref Conv;
-	for(i := 0; i < Nconv; i++)
-		convs[i] = ref Conv(-1, array[Qmax] of array of byte, 0, 0,
-			array[Npend] of int, 0, 0, 0, 0, 0);
-
-	(tree, treeop) := nametree->start();
-	tree.create(big Qdir, dir(".", Sys->DMDIR|8r555, Qdir));
-	tree.create(big Qdir, dir("clone", 8r666, Qclone));
-	for(i = 0; i < Nconv; i++){
-		cd := Qcbase + i*Qcnf;
-		tree.create(big Qdir, dir(string i, Sys->DMDIR|8r555, cd+Qcdir));
-		tree.create(big (cd+Qcdir), dir("ctl", 8r666, cd+Qcctl));
-		tree.create(big (cd+Qcdir), dir("data", 8r666, cd+Qcdata));
-		tree.create(big (cd+Qcdir), dir("stats", 8r444, cd+Qcstats));
-		tree.create(big (cd+Qcdir), dir("packed", 8r666, cd+Qcpacked));
-	}
-
-	p := array[2] of ref Sys->FD;
-	if(sys->pipe(p) < 0){
-		sys->print("etherusb: no pipe: %r\n");
-		return;
-	}
-	(tc, srv) = Styxserver.new(p[0], Navigator.new(treeop), big Qdir);
-
-	rxq = chan of (int, array of byte);
-	spawn rxproc();
-
-	#
-	# The writer, and the spare buffer it hands back and forth with
-	# the loop. Started here rather than at setup so that everything
-	# before this point -- the loopback self-test in particular --
-	# still writes synchronously and sees its frame leave.
-	#
-	txq = chan of (array of byte, int, int);
-	txfree = chan[Txbufs] of array of byte;
-	for(b := 1; b < Txbufs; b++)
-		txfree <-= array[Txbatch * (Ltxhdr + Maxframe + 4)] of byte;
-	txasync = 1;
-	spawn txproc();
-
-	#
-	# The mount happens in ANOTHER process, and that is not a style
-	# choice.
-	#
-	# Styxserver.new starts reading the pipe straight away and hands
-	# every request to the channel this process is about to select
-	# on. mount() begins by exchanging Tversion and Tattach with the
-	# server -- so mounting from here would block sending the first
-	# request to a channel that only this process, now stuck inside
-	# mount, will ever read from. The server must be answering before
-	# anything tries to mount it.
-	#
-	spawn mountproc(p[1]);
-
-	loop(tree);
-}
-
-mountproc(fd: ref Sys->FD)
-{
-	if(sys->mount(fd, nil, "/net/ether0", Sys->MREPL, "") < 0){
-		sys->print("etherusb: cannot mount /net/ether0: %r\n");
-		return;
-	}
-	sys->print("etherusb: serving /net/ether0\n");
-	netconfig();
 }
 
 #
@@ -1952,827 +1689,21 @@ epname(d: string, nb: int): string
 	return d;
 }
 
-dir(name: string, perm: int, path: int): Sys->Dir
-{
-	d := sys->zerodir;
-	d.name = name;
-	d.uid = "inferno";
-	d.gid = "inferno";
-	d.qid.path = big path;
-	if(perm & Sys->DMDIR)
-		d.qid.qtype = Sys->QTDIR;
-	else
-		d.qid.qtype = Sys->QTFILE;
-	d.mode = perm;
-	return d;
-}
-
-qconv(path: int): int
-{
-	return (path - Qcbase) / Qcnf;
-}
-
-qkind(path: int): int
-{
-	return (path - Qcbase) % Qcnf;
-}
-
 #
-# The serve loop handles 9P requests and arriving frames in ONE
-# process, which is what makes the pending-read bookkeeping safe: a
-# reply is only ever written from here.
+# Wrap one Ethernet frame the way the family wants it and write it to
+# the bulk OUT endpoint.
 #
-# A read of <n>/data with no frame waiting cannot be answered yet, so
-# its tag is remembered and answered when one arrives. Doing that by
-# blocking here instead would stall every other connection, and doing
-# it by spawning a process per read would have several of them writing
-# replies down the same pipe at once.
-#
-loop(tree: ref Tree)
-{
-	done := 0;
-
-	while(done == 0){
-		#
-		# With frames pending, wait on the writer as well.
-		#
-		# The offer to txq is a third thing to wait for, not a
-		# default case, and that distinction is what makes the
-		# batching work without costing latency. If the writer is
-		# free it takes the buffer at once, so a lone frame on an
-		# idle link is delayed by nothing. If it is busy inside a
-		# transfer the offer simply is not taken, and this keeps
-		# serving 9P -- so the frames that arrive during the
-		# transfer join the batch instead of waiting for one of
-		# their own.
-		#
-		# The batch is therefore sized by how long the device takes
-		# and nothing else. A default case here would busy-wait
-		# against a writer that is not ready, and a timer would put
-		# latency on a link that is quiet.
-		#
-		if(ntxpend > 0){
-			alt {
-			tmsg := <-tc =>
-				if(tmsg == nil)
-					done = 1;
-				else
-					done = request(tmsg);
-			(ci, frame) := <-rxq =>
-				deliver(ci, frame);
-			txq <-= (txpend, ntxpend, nqueued) =>
-				txpend = <-txfree;
-				ntxpend = 0;
-				nqueued = 0;
-			}
-		}else{
-			alt {
-			tmsg := <-tc =>
-				if(tmsg == nil)
-					done = 1;
-				else
-					done = request(tmsg);
-			(ci, frame) := <-rxq =>
-				deliver(ci, frame);
-			}
-		}
-	}
-	tree.quit();
-}
-
-request(tmsg: ref Tmsg): int
-{
-	pick tm := tmsg {
-	Readerror =>
-		return 1;
-	Open =>
-		return openreq(tm);
-	Read =>
-		return readreq(tm);
-	Write =>
-		return writereq(tm);
-	Flush =>
-		# Cancel any read waiting on this tag before acknowledging,
-		# or a frame arriving later would be replied to a tag the
-		# client has already given up on.
-		for(i := 0; i < Nconv; i++)
-			unpend(convs[i], tm.oldtag);
-		srv.reply(ref Rmsg.Flush(tm.tag));
-	Clunk =>
-		srv.clunk(tm);
-	* =>
-		srv.default(tmsg);
-	}
-	return 0;
-}
-
-#
-# Opening clone allocates a connection AND rebinds the fid to that
-# connection's ctl file.
-#
-# That is not a flourish: os/port/dial.c writes "connect ..." to the
-# same descriptor it opened clone with, so the clone fid has to BE the
-# new connection's ctl afterwards. A server that returns only a number
-# and leaves the fid pointing at clone gets the connect request written
-# to the wrong file.
-#
-openreq(tm: ref Tmsg.Open): int
-{
-	(c, mode, f, err) := srv.canopen(tm);
-	if(c == nil){
-		srv.reply(ref Rmsg.Error(tm.tag, err));
-		return 0;
-	}
-	if(int c.path != Qclone){
-		c.open(mode, f.qid);
-		srv.reply(ref Rmsg.Open(tm.tag, f.qid, srv.iounit()));
-		return 0;
-	}
-
-	n := -1;
-	for(i := 0; i < Nconv; i++)
-		if(convs[i].etype < 0){
-			n = i;
-			break;
-		}
-	if(n < 0){
-		srv.reply(ref Rmsg.Error(tm.tag, "no free connections"));
-		return 0;
-	}
-	convs[n].etype = 0;		# taken, not yet connected
-
-	q := Sys->Qid(big (Qcbase + n*Qcnf + Qcctl), 0, Sys->QTFILE);
-	c.open(mode, q);
-	srv.reply(ref Rmsg.Open(tm.tag, q, srv.iounit()));
-	return 0;
-}
-
-readreq(tm: ref Tmsg.Read): int
-{
-	(c, err) := srv.canread(tm);
-	if(c == nil){
-		srv.reply(ref Rmsg.Error(tm.tag, err));
-		return 0;
-	}
-	path := int c.path;
-	if(path == Qdir){
-		srv.read(tm);
-		return 0;
-	}
-	if(path < Qcbase){
-		srv.reply(ref Rmsg.Error(tm.tag, "phase error"));
-		return 0;
-	}
-
-	n := qconv(path);
-	case qkind(path) {
-	Qcdir =>
-		srv.read(tm);
-	Qcctl =>
-		# The connection number, which is what dial reads back.
-		srv.reply(styxservers->readstr(tm, string n));
-	Qcstats =>
-		srv.reply(styxservers->readstr(tm, stats(n)));
-	Qcdata =>
-		cv := convs[n];
-		#
-		# A read of nothing is answered with nothing, at once.
-		#
-		# It must never be parked waiting for a frame. ethermedium
-		# starts its reader processes from inside etherbind(), and
-		# ipifcbind() only sets ifc->maxtu AFTER that returns -- so
-		# the first read each of them issues asks for
-		# ifc->maxtu == 0 bytes. Parking those means the readers
-		# never come back to issue a real read, and worse, the
-		# first frame to arrive is handed to a zero-length read and
-		# truncated away. That is precisely what happened to the
-		# ARP reply: delivered, consumed, and reported to arp.c as
-		# "0 bytes".
-		#
-		if(tm.count == 0){
-			srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
-			return 0;
-		}
-		if(cv.nq > 0){
-			frame := cv.q[cv.qhd];
-			cv.q[cv.qhd] = nil;	# let the collector have it
-			cv.qhd = (cv.qhd + 1) % Qmax;
-			cv.nq--;
-			srv.reply(ref Rmsg.Read(tm.tag, frame));
-		}else if(cv.npend < Npend)
-			cv.pend[cv.npend++] = tm.tag;
-		else
-			srv.reply(ref Rmsg.Error(tm.tag, "too many reads outstanding"));
-	Qcpacked =>
-		cv := convs[n];
-		cv.packed = 1;
-		if(tm.count == 0){		# see the note under Qcdata
-			srv.reply(ref Rmsg.Read(tm.tag, array[0] of byte));
-			return 0;
-		}
-		if(cv.nq > 0){
-			b := packq(cv, tm.count);
-			if(b == nil){
-				srv.reply(ref Rmsg.Error(tm.tag,
-					"read too small for a frame"));
-				return 0;
-			}
-			npacked++;
-			srv.reply(ref Rmsg.Read(tm.tag, b));
-		}else if(cv.npend < Npend)
-			cv.pend[cv.npend++] = tm.tag;
-		else
-			srv.reply(ref Rmsg.Error(tm.tag, "too many reads outstanding"));
-	* =>
-		srv.reply(ref Rmsg.Error(tm.tag, "phase error"));
-	}
-	return 0;
-}
-
-writereq(tm: ref Tmsg.Write): int
-{
-	(c, err) := srv.canwrite(tm);
-	if(c == nil){
-		srv.reply(ref Rmsg.Error(tm.tag, err));
-		return 0;
-	}
-	path := int c.path;
-	if(path < Qcbase){
-		srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
-		return 0;
-	}
-
-	n := qconv(path);
-	case qkind(path) {
-	Qcctl =>
-		e := ctlwrite(n, string tm.data);
-		if(e != nil)
-			srv.reply(ref Rmsg.Error(tm.tag, e));
-		else
-			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
-	Qcpacked =>
-		#
-		# Several frames in one write, the mirror of the packed
-		# read: each behind a two-byte little-endian length. They
-		# all land in the pending buffer and go to the device in
-		# one bulk transfer -- this is the path that finally lets
-		# the transmit batching batch, because the kernel's plain
-		# data file carries one frame per write and the batch
-		# machinery never saw a second frame in hand.
-		#
-		# A malformed length fails the whole write rather than
-		# guessing at a resynchronisation point: the writer and
-		# this driver disagreeing about framing is a bug to
-		# surface, not to paper over.
-		#
-		buf := tm.data;
-		o := 0;
-		nf := 0;
-		while(o + 2 <= len buf){
-			flen := int buf[o] | (int buf[o+1] << 8);
-			o += 2;
-			if(flen <= 0 || o + flen > len buf)
-				break;
-			if(transmit(buf[o:o+flen]) < 0){
-				srv.reply(ref Rmsg.Error(tm.tag, "write failed"));
-				return 0;
-			}
-			o += flen;
-			nf++;
-		}
-		if(o != len buf){
-			srv.reply(ref Rmsg.Error(tm.tag, "malformed packed write"));
-			return 0;
-		}
-		flushtx();
-		convs[n].outpkt += nf;
-		npackedwr++;
-		npackedwrframes += nf;
-		if(nf > npackedwrmax)
-			npackedwrmax = nf;
-		srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
-	Qcdata =>
-		if(transmit(tm.data) < 0)
-			srv.reply(ref Rmsg.Error(tm.tag, "write failed"));
-		else {
-			convs[n].outpkt++;
-			srv.reply(ref Rmsg.Write(tm.tag, len tm.data));
-		}
-	* =>
-		srv.reply(ref Rmsg.Error(tm.tag, Styxservers->Eperm));
-	}
-	return 0;
-}
-
-ctlwrite(n: int, s: string): string
-{
-	(nf, flds) := sys->tokenize(s, " \t\n");
-	if(nf < 1)
-		return "empty control request";
-
-	case hd flds {
-	"connect" =>
-		if(nf != 2)
-			return "usage: connect <ethertype>";
-		convs[n].etype = hexint(hd tl flds);
-	"nonblocking" =>
-		# Accepted and ignored: every read here is already answered
-		# out of a queue or deferred, so nothing blocks the client
-		# that this could switch off.
-		;
-	"rxpoll" =>
-		#
-		# How hard the receive loop asks, settable while it runs.
-		#
-		# The endpoint has to be polled -- a drained bulk IN
-		# answers with a zero-length packet, so there is nothing
-		# to block on -- and how often to ask is a trade this
-		# driver cannot make on its own: every poll is a Dis
-		# system call, and Limbo runs one process at a time, so
-		# asking more often for lower receive latency directly
-		# takes the machine away from the process doing the
-		# transmitting.
-		#
-		# Finding the right numbers meant measuring both, and a
-		# constant would have meant rebuilding and reloading the
-		# kernel for each pair. So it is a file, and mechanism
-		# rather than policy: write "rxpoll <ms> <n>" to poll
-		# every <ms> milliseconds for <n> polls after traffic
-		# before backing off to the idle interval.
-		#
-		if(nf != 3)
-			return "usage: rxpoll <ms> <count>";
-		ms := int hd tl flds;
-		cnt := int hd tl tl flds;
-		if(ms < 0 || cnt < 0)
-			return "rxpoll: negative";
-		rxpollms = ms;
-		rxactive = cnt;
-	* =>
-		return "unknown control request";
-	}
-	return nil;
-}
-
-stats(n: int): string
-{
-	cv := convs[n];
-	#
-	# The receive-path timings go out with the standard counters
-	# rather than into a print, because what they are for is
-	# comparing one build against the next: a round trip on this
-	# board costs tens of milliseconds and the whole of that is
-	# somewhere in these four numbers.
-	#
-	return sys->sprint("in: %d\nlink: 1\nout: %d\ncrc errs: 0\n" +
-		"overflows: %d\nsoft overflows: 0\nframing errs: %d\n" +
-		"buffer size: %d\nmbps: %d\naddr: %2.2x%2.2x%2.2x%2.2x%2.2x%2.2x\n" +
-		"reads with data: %d in %d ms\nempty reads: %d in %d ms\n" +
-		"idle sleeps: %d\nframes parsed: %d\n" +
-		"rxpoll: %d ms for %d polls\n" +
-		"instant empty reads: %d\nslowest empty read: %d ms\n" +
-		"writes: %d in %d ms\nslowest write: %d ms\n" +
-		"frames sent by those writes: %d\nfailed writes: %d\n" +
-		"rx to a waiting read: %d\nrx queued: %d\n" +
-		"queue depth sum: %d\ndeepest queue: %d\n" +
-		"packed reads: %d\nframes in them: %d\nlargest: %d\n" +
-		"packed writes: %d\nframes in them: %d\nlargest: %d\n",
-		cv.inpkt, cv.outpkt, cv.drops, nframing, Maxframe, phymbps,
-		int mac[0], int mac[1], int mac[2],
-		int mac[3], int mac[4], int mac[5],
-		ndata, datams, nempty, emptyms, nsleep, nframe,
-		rxpollms, rxactive,
-		nempty0, emptymax, ntx, txms, txmax, txframes, ntxerr,
-		ndirect, nqueue, nqdepth, nqmax,
-		npacked, npackedframes, npackedmax,
-		npackedwr, npackedwrframes, npackedwrmax);
-}
-
-unpend(cv: ref Conv, tag: int)
-{
-	for(i := 0; i < cv.npend; i++)
-		if(cv.pend[i] == tag){
-			for(j := i+1; j < cv.npend; j++)
-				cv.pend[j-1] = cv.pend[j];
-			cv.npend--;
-			return;
-		}
-}
-
-#
-# A frame has arrived for connection ci. Answer a waiting read if there
-# is one, otherwise queue it, otherwise drop it -- which is what a NIC
-# does when nobody is collecting, and is counted rather than hidden.
-#
-deliver(ci: int, frame: array of byte)
-{
-	cv := convs[ci];
-	cv.inpkt++;
-
-	#
-	# Which of these two branches runs says who is behind.
-	#
-	# Taking the first means a read was already waiting when the
-	# frame arrived: the kernel is keeping up and this driver is
-	# what it is waiting for. Taking the second means frames are
-	# piling up because the kernel has not come back for them.
-	#
-	# Worth counting because it decides whether batching can help
-	# at all. Carrying several frames per 9P message is only worth
-	# doing if there are several to carry, and the transmit side
-	# has already shown what happens when there are not: the
-	# machinery works perfectly and every batch holds one frame.
-	#
-	if(cv.npend > 0){
-		tag := cv.pend[0];
-		for(i := 1; i < cv.npend; i++)
-			cv.pend[i-1] = cv.pend[i];
-		cv.npend--;
-		ndirect++;
-		if(cv.packed)
-			srv.reply(ref Rmsg.Read(tag, withlen(frame)));
-		else
-			srv.reply(ref Rmsg.Read(tag, frame));
-		return;
-	}
-	if(cv.nq < Qmax){
-		cv.q[(cv.qhd + cv.nq) % Qmax] = frame;
-		cv.nq++;
-		nqueue++;
-		nqdepth += cv.nq;
-		if(cv.nq > nqmax)
-			nqmax = cv.nq;
-	}else
-		cv.drops++;
-}
-
-#
-# One frame in the packed form: a two-byte little-endian length, then
-# the frame. Used when a frame arrives for a read that is already
-# parked, which by then is committed to a reply of one frame -- the
-# saving is in the reads that find several waiting, not in this one.
-#
-withlen(frame: array of byte): array of byte
-{
-	n := len frame;
-	b := array[2 + n] of byte;
-	b[0] = byte n;
-	b[1] = byte (n >> 8);
-	b[2:] = frame;
-	return b;
-}
-
-#
-# As many queued frames as fit in count, each behind its length.
-#
-# Returns nil only when not even the first one fits, which is a caller
-# asking with a buffer too small to be useful rather than a condition
-# to paper over: answering it with a truncated frame would corrupt the
-# stream, and answering with nothing would spin.
-#
-packq(cv: ref Conv, count: int): array of byte
-{
-	tot := 0;
-	nf := 0;
-	while(nf < cv.nq){
-		f := cv.q[(cv.qhd + nf) % Qmax];
-		if(tot + 2 + len f > count)
-			break;
-		tot += 2 + len f;
-		nf++;
-	}
-	if(nf == 0)
-		return nil;
-
-	b := array[tot] of byte;
-	o := 0;
-	for(i := 0; i < nf; i++){
-		f := cv.q[cv.qhd];
-		cv.q[cv.qhd] = nil;	# let the collector have it
-		cv.qhd = (cv.qhd + 1) % Qmax;
-		cv.nq--;
-		b[o++] = byte (len f);
-		b[o++] = byte ((len f) >> 8);
-		b[o:] = f;
-		o += len f;
-	}
-	npackedframes += nf;
-	if(nf > npackedmax)
-		npackedmax = nf;
-	return b;
-}
-
-#
-# Wrap an Ethernet frame in an RNDIS packet message and send it.
-#
-#
-# Queue a frame, and send whatever is queued.
-#
-# These are separate because one bulk transfer can carry many frames
-# and a transfer is expensive out of all proportion to what it moves.
-# Measured on this board a single-frame write costs about 24ms, of
-# which the USB driver accounts for 3ms and the wire for 12
-# microseconds. The rest is this process giving up the Dis machine for
-# the system call and queueing to get it back, and that cost is per
-# WRITE and not per frame -- so the way to be rid of it is to write
-# less often rather than to make each write faster.
-#
-# TCP hands frames over in bursts, a window's worth back to back, so
-# when one has been queued there is nearly always another already
-# waiting. The server loop takes those and calls flushtx once.
-#
-# The device's framing allows it: a bulk OUT may carry several
-# records, each a header and a frame, with the next starting on the
-# boundary the family declares -- the same rule the receive side
-# follows, from the same part of the datasheet.
+# Only the loopback self-test sends frames from here. Traffic goes
+# through the kernel's #l, which does its own framing and batches
+# several frames into a transfer; this is one frame, one write, and
+# the caller sees whether it left.
 #
 transmit(frame: array of byte): int
 {
 	buf := family.wrap(frame);
-	n := len buf;
-
-	pad := 0;
-	if(family.txalign > 1)
-		pad = (family.txalign - (n % family.txalign)) % family.txalign;
-
-	if(ntxpend + n + pad > len txpend)
-		if(flushtx() < 0)
-			return -1;
-	if(ntxpend + n + pad > len txpend)
-		return -1;		# one frame larger than the whole buffer
-
-	txpend[ntxpend:] = buf;
-	ntxpend += n;
-	for(i := 0; i < pad; i++)
-		txpend[ntxpend++] = byte 0;
-	nqueued++;
-	return 0;
-}
-
-#
-# Put the pending frames on the wire.
-#
-# Two callers with different needs. The server loop hands the buffer to
-# txproc and carries on, which is what makes batching possible; but the
-# loopback self-test runs before that process exists and has to see the
-# frame actually leave, so with no writer running this still does the
-# write itself.
-#
-flushtx(): int
-{
-	if(ntxpend == 0)
-		return 0;
-
-	if(txasync){
-		txq <-= (txpend, ntxpend, nqueued);
-		txpend = <-txfree;
-		ntxpend = 0;
-		nqueued = 0;
-		return 0;
-	}
-
-	r := txwrite(txpend, ntxpend, nqueued);
-	ntxpend = 0;
-	nqueued = 0;
-	return r;
-}
-
-#
-# One bulk OUT transfer, and the accounting for it.
-#
-txwrite(buf: array of byte, n: int, nf: int): int
-{
-	t0 := sys->millisec();
-	r := sys->write(bulkoutfd, buf[0:n], n);
-	dt := sys->millisec() - t0;
-	ntx++;
-	txms += dt;
-	txframes += nf;
-	if(dt > txmax)
-		txmax = dt;
-	if(r != n){
-		ntxerr++;
+	if(sys->write(bulkoutfd, buf, len buf) != len buf)
 		return -1;
-	}
 	return 0;
-}
-
-#
-# The writer.
-#
-# It exists so that the process serving 9P is never the one waiting on
-# USB. While this is inside a transfer the server loop stays in its
-# alt, still answering writes and still queueing the frames they carry,
-# and the next batch is however many arrived in the meantime. The size
-# of a batch is therefore set by how long the device takes rather than
-# by any timer, and a lone frame on an idle link waits for nothing --
-# the loop offers the buffer the moment it has one, and this is sitting
-# here ready to take it.
-#
-# A failed transfer is counted and dropped rather than reported back.
-# By the time it fails the write has been acknowledged; Ethernet does
-# not promise delivery, and the layer above recovers by retransmitting.
-#
-txproc()
-{
-	for(;;){
-		(buf, n, nf) := <-txq;
-		if(buf == nil)
-			break;
-		txwrite(buf, n, nf);
-		txfree <-= buf;
-	}
-}
-
-#
-# Read frames off the bulk endpoint for as long as the device lives.
-#
-# One bulk read can carry several RNDIS messages, so the buffer is
-# walked rather than assumed to hold exactly one.
-#
-rxproc()
-{
-	#
-	# Reassembly, because a read boundary is not a message boundary.
-	#
-	# The endpoint delivers maxpkt bytes at a time and a read ends at
-	# the first short packet, so a message larger than one packet --
-	# which every Ethernet frame is -- can arrive split across two
-	# reads. Parsing each read on its own throws away the head of
-	# every such message and then finds nonsense where the next header
-	# should be, which is worse than losing a frame: the stream never
-	# resynchronises.
-	#
-	# So keep what does not yet form a whole message, and prepend it
-	# to the next read. What counts as a whole message is the family's
-	# business, not this loop's.
-	#
-	#
-	# Big enough for one aggregated transfer plus a message that
-	# straddles into the next -- the lan78xx gathers up to Rxburst
-	# per bulk IN once burst is enabled, and a buffer sized for the
-	# single-frame regime would truncate the gathered form back into
-	# one read per frame.
-	#
-	acc := array[Rxburst + 2 * (Rnishdr + Maxframe)] of byte;
-	nacc := 0;
-	idle := 0;
-
-	for(;;){
-		if(nacc >= len acc)			# desynchronised; start over
-			nacc = 0;
-
-		#
-		# Exactly one aggregation cap per read, for the same reason
-		# the kernel driver asks that way: offered more buffer, a
-		# transfer that fills the cap completes by length with no
-		# short packet to stop at, and the read glues it to the
-		# next transfer -- after which the record walk cannot be
-		# right. Ending short of the cap is what marks a real
-		# transfer boundary.
-		#
-		want := len acc - nacc;
-		if(family.name == "lan78xx" && want > Rxburst)
-			want = Rxburst;
-		t0 := sys->millisec();
-		n := sys->read(bulkfd, acc[nacc:nacc+want], want);
-		dt := sys->millisec() - t0;
-		if(n < 0){
-			sys->print("etherusb: bulk read failed: %r\n");
-			return;
-		}
-		if(n == 0){
-			nempty++;
-			emptyms += dt;
-			#
-			# The shape of the distribution, not just its mean.
-			#
-			# A drained bulk IN answers with a zero-length
-			# packet, which is one transaction and should cost
-			# microseconds; the mean said 8.8ms. Those are
-			# different faults. If nearly all of these reads
-			# take no measurable time and a few take tens of
-			# milliseconds, the cost is this process waiting to
-			# be scheduled, and the fix is to stop spinning. If
-			# they are uniformly slow, it is the transfer.
-			#
-			if(dt == 0)
-				nempty0++;
-			if(dt > emptymax)
-				emptymax = dt;
-			#
-			# Nothing waiting.
-			#
-			# This slept 20ms every time, and that sleep IS the
-			# receive latency of the machine: a frame arriving
-			# just after a read that found nothing waits out the
-			# rest of the interval before anyone looks again. A
-			# request and its answer pay it, so a round trip on
-			# a wire measured in microseconds cost 44ms, and a
-			# TCP window of a few kilobytes divided by that is
-			# the 23KB/s this port was getting.
-			#
-			# A bulk IN that finds nothing costs one NAKed
-			# transaction, which is cheap, so for a short while
-			# after traffic just ask again. Back off only once
-			# the link is genuinely quiet, where 20ms of added
-			# latency costs nothing and a spin would burn the
-			# bus for no one.
-			#
-			#
-			# Poll at a millisecond while there is any reason
-			# to, and back off only after a long quiet spell.
-			#
-			# Asking again with no pause at all was worse than
-			# the 20ms sleep it replaced: this process is the
-			# one the 9P server, the IP stack and the shell all
-			# wait behind, and a spin here takes the processor
-			# from exactly them. Now that the tick is a
-			# kilohertz, sleep(1) is a real millisecond rather
-			# than "some time before the next tick", which is
-			# the whole reason this can be a poll at all.
-			#
-			if(idle < rxactive){
-				idle++;
-				if(rxpollms > 0)
-					sys->sleep(rxpollms);
-				continue;
-			}
-			nsleep++;
-			sys->sleep(Rxidle);
-			continue;
-		}
-		ndata++;
-		datams += dt;
-		idle = 0;
-		nacc += n;
-
-		atend := 1;
-		if(family.name == "lan78xx" && n == want)
-			atend = 0;	# cap filled; the stream continues
-		off := 0;
-		while(off < nacc){
-			(used, frame) := family.unwrap(acc[off:nacc], nacc - off, atend);
-			if(used < 0){		# never going to parse; drop it
-				nframing++;
-				off = nacc;
-				break;
-			}
-			if(used == 0)		# incomplete; wait for more
-				break;
-			off += used;
-
-			if(frame == nil)
-				continue;
-
-			#
-			# Ether type is bytes 12 and 13, after the two
-			# addresses. It is the only field this driver has to
-			# understand: everything above the demultiplex is
-			# os/ip's business.
-			#
-			etype := (int frame[12] << 8) | int frame[13];
-			nframe++;
-			for(i := 0; i < Nconv; i++)
-				if(convs[i].etype == etype){
-					rxq <-= (i, frame);
-					break;
-				}
-		}
-
-		# Shuffle whatever is left of a partial message to the front.
-		if(off > 0 && off < nacc)
-			acc[0:] = acc[off:nacc];
-		nacc -= off;
-	}
-}
-
-#
-# "0x800" -> 2048. Limbo's string-to-int conversion stops at the 'x',
-# and every ether type ethermedium dials is written that way -- so
-# taking it as decimal silently binds every connection to type 0 and
-# the demultiplex never matches anything.
-#
-hexint(s: string): int
-{
-	if(len s > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
-		s = s[2:];
-
-	v := 0;
-	for(i := 0; i < len s; i++){
-		c := s[i];
-		d := -1;
-		if(c >= '0' && c <= '9')
-			d = c - '0';
-		else if(c >= 'a' && c <= 'f')
-			d = c - 'a' + 10;
-		else if(c >= 'A' && c <= 'F')
-			d = c - 'A' + 10;
-		if(d < 0)
-			break;
-		v = v * 16 + d;
-	}
-	return v;
 }
 
 pingsend(d: ref Sys->FD, req: array of byte)
@@ -3310,15 +2241,7 @@ lanloopback(mode: int): int
 	# registers says which.
 	#
 
-	#
-	# Queue it AND send it. transmit() only fills the pending buffer;
-	# without the flush the frame sat there and the test waited for
-	# something that had never been put on the wire, then reported
-	# that nothing came back. It only runs when there is no link, so
-	# the one path that would have shown this up is the one nobody
-	# takes.
-	#
-	if(transmit(tx) < 0 || flushtx() < 0){
+	if(transmit(tx) < 0){
 		sys->print("etherusb: loopback transmit failed: %r\n");
 		lanunloop(cr);
 		return -1;

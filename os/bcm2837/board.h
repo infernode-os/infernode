@@ -121,12 +121,12 @@ extern SDio emmcio;		/* emmc.c */
 
 /* sdmmc.c: the card, as blocks -- devsd.c's contract */
 int	emmcinit(void);
-int	emmcread(uvlong, void*);
-int	emmcwrite(uvlong, void*);
-int	emmcpresent(void);
-uvlong	emmcnblocks(void);
+int	sdblkread(uvlong, void*);
+int	sdblkwrite(uvlong, void*);
+int	sdblkpresent(void);
+uvlong	sdblknblocks(void);
 char*	sdcontroller(void);
-void	boardsdprobe(void);
+void	boarddevprobe(void);
 
 /*
  * ether4330.c: the CYW43455 radio on the Arasan. Probed at board init
@@ -141,6 +141,8 @@ int	mboxfbgetvoff(void);
 int	fbinit(Fbinfo*);
 int	fbinitdisp(u32int, Fbinfo*);
 void	fbfill(Fbinfo*, u32int);
+int	fbdisplay(u32int);		/* fb.c: fbcons's two questions, over the mailbox */
+int	fbvoffset(u32int, u32int);
 void	fbrect(Fbinfo*, int, int, int, int, u32int);
 int	fbconsinit(Fbinfo*);
 int	fbconsadd(Fbinfo*);

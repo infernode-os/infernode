@@ -792,7 +792,7 @@ consinit(void)
 	extern void screendumpkey(void);
 	/*
 	 * Show the screen on the console. See screendump in
-	 * os/bcm2837/screen.c for why a kernel needs this when it
+	 * os/arm64/screen.c for why a kernel needs this when it
 	 * already serves /dev/screen.
 	 */
 	debugkey('S', "screen", screendumpkey, 1);

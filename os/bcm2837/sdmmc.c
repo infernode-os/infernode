@@ -343,7 +343,7 @@ blockaddr(uvlong blockno)
  * Read one 512-byte block. Returns 0 on success.
  */
 int
-emmcread(uvlong blockno, void *a)
+sdblkread(uvlong blockno, void *a)
 {
 	if(!card.valid)
 		return -1;
@@ -378,7 +378,7 @@ emmcread(uvlong blockno, void *a)
  * the card's busy line.
  */
 int
-emmcwrite(uvlong blockno, void *a)
+sdblkwrite(uvlong blockno, void *a)
 {
 	u32int resp[4];
 	int i;
@@ -408,13 +408,13 @@ emmcwrite(uvlong blockno, void *a)
 }
 
 int
-emmcpresent(void)
+sdblkpresent(void)
 {
 	return card.valid;
 }
 
 uvlong
-emmcnblocks(void)
+sdblknblocks(void)
 {
 	return card.nblocks;
 }

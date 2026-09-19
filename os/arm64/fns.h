@@ -193,6 +193,25 @@ void	kmain(void);
 void	setpanic(void);
 extern void	(*screenputs)(char*, int);
 
+/*
+ * Five functions os/port called with no declaration in scope. It
+ * compiled, because the imported files are built with warnings off,
+ * and an undeclared function is assumed to return int -- which for
+ * getconf(), returning a char*, means a pointer cut to 32 bits and
+ * sign-extended. It returns nil on every board there is, so nothing
+ * has gone wrong yet; the harness now builds with
+ * -Werror=implicit-function-declaration so that nothing can.
+ *
+ * struct Hci rather than Hci: usb.h owns the typedef and most files
+ * that see this header never see that one.
+ */
+struct Hci;
+long	kchanio(void*, void*, int, int);	/* ../port/sysfile.c, for devether.c */
+char*	getconf(char*);				/* notyet.c, for devusb.c */
+int	isaconfig(char*, int, struct Hci*);	/* notyet.c, for devusb.c */
+void	clockcheck(void);			/* notyet.c, for taslock.c */
+void	swcursorat(int, int);			/* screen.c, for devpointer.c */
+
 /* platform hooks os/port/proc.c calls */
 void	idlehands(void);
 void	idlewake(void);

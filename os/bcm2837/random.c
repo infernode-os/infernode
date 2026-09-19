@@ -118,36 +118,57 @@ hwrandom(uchar *p, int n)
 }
 
 /*
- * genrandom -- the fast, explicitly non-cryptographic source behind
- * #c/notquiterandom.
+ * genrandom -- n bytes from the hardware generator, ALL of them from
+ * the hardware generator, however long that takes.
  *
- * devcons.c calls this as genrandom(buf, n). An earlier stub here
- * declared it as "ulong genrandom(void)" and returned 0, which is a
- * different function wearing the same name: it linked, because nothing
- * declared a prototype, and it would have handed callers whatever
- * happened to be in the register.
+ * This began as "the fast, explicitly non-cryptographic source behind
+ * #c/notquiterandom", and for that a short read padded with zeros was
+ * a fair answer: repetitive at worst, and not a disclosure of whatever
+ * the buffer held. But it did not stay that. prng() and prngtry() below
+ * are libsec's SECURE entropy entry points and delegate here, and
+ * libsec's key generators -- RSA, DSA, ElGamal, ECC, Ed25519, ML-KEM,
+ * ML-DSA, SLH-DSA -- call genrandom by name. So the padding became: a
+ * private key whose tail is zeros, made without a word to anyone,
+ * whenever hwrandom() came back short.
+ *
+ * And it can come back short. hwrandom() gives up after a bounded spin,
+ * deliberately (see above: the entropy producer must not spin), and the
+ * generator discards Rngwarmup words after it is enabled before it
+ * offers one. A caller inside that window gets fewer bytes than it
+ * asked for. QEMU's model always has a word ready, so no run of the
+ * harness has ever taken this path; it was found by reading, while
+ * writing the same function for a second board (os/virt), and only a
+ * board can show how wide the window really is.
+ *
+ * So: wait. A key is worth waiting for and a machine with a dead
+ * generator should not be minting keys, so this fails closed -- it does
+ * not return until the bytes are real, and it says so on the console
+ * every few seconds while it waits, because a boot that hangs silently
+ * here would be read as anything but this.
  */
 void
 genrandom(uchar *p, int n)
 {
-	int got;
+	int got, r, waited;
 
-	got = hwrandom(p, n);
-
-	/*
-	 * Short reads are padded rather than left as stale stack, so the
-	 * result is at worst repetitive instead of a disclosure of
-	 * whatever the buffer held.
-	 */
-	while(got < n)
-		p[got++] = 0;
+	waited = 0;
+	for(got = 0; got < n; got += r){
+		r = hwrandom(p + got, n - got);
+		if(r > 0)
+			continue;
+		r = 0;
+		microdelay(1000);
+		if(++waited % 5000 == 0)
+			print("random: the hardware generator has produced nothing for %d seconds; still waiting for %d bytes\n",
+				waited/1000, n - got);
+	}
 }
 
 /*
  * libsec's entropy entry points, which its host build (prng.c) fills
  * from getentropy/urandom. On bare metal the hardware generator is the
  * secure source, so both delegate here -- and prngtry never fails,
- * because there is no "no secure source" case to report.
+ * because genrandom does not return until it has real bytes.
  */
 void
 prng(uchar *p, int n)

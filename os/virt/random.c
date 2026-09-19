@@ -178,18 +178,29 @@ hwrandom(uchar *p, int n)
 }
 
 /*
- * libsec's names. As on the board these read the generator directly;
- * a short read is filled with zeros there too, which is a decision
- * worth revisiting on both, in one place, when that place exists.
+ * libsec's names, and what its key generators call. All n bytes come
+ * from hwrandom, however long that takes -- never padding; see
+ * os/bcm2837/random.c's genrandom for how padding with zeros turned
+ * into zero-tailed private keys. A source that has run dry is waited
+ * for, out loud. (A machine with NO source gets hwrandom's labelled
+ * counter, which has already said what it is in capitals.)
  */
 void
 genrandom(uchar *p, int n)
 {
-	int got;
+	int got, r, waited;
 
-	got = hwrandom(p, n);
-	while(got < n)
-		p[got++] = 0;
+	waited = 0;
+	for(got = 0; got < n; got += r){
+		r = hwrandom(p + got, n - got);
+		if(r > 0)
+			continue;
+		r = 0;
+		microdelay(1000);
+		if(++waited % 5000 == 0)
+			print("random: no entropy for %d seconds; still waiting for %d bytes\n",
+				waited/1000, n - got);
+	}
 }
 
 void

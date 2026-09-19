@@ -185,7 +185,7 @@ init()
 
 	#
 	# And the jack: /dev/audio and /dev/audioctl (audio(3)), served by
-	# the kernel's PWM-through-DMA driver (os/bcm2837/audiopwm.c). After
+	# the kernel's PWM-through-DMA driver (os/bcm/audiopwm.c). After
 	# /dev, so the console's names win; the device costs nothing until
 	# something opens it, and from then on it holds the jack at a
 	# steady level rather than the buzz an unconfigured pin makes.
@@ -2944,7 +2944,7 @@ devnum(name: string): int
 
 #
 # Declare the boot finished. The kernel side is devcons's "booted"
-# sysctl word; what it does to the hardware is in os/bcm2837/board.c.
+# sysctl word; what it does to the hardware is in os/bcm/board.c.
 # The kernel prints its own line either way, which is what the harness
 # checks; this one only reports a write that did not get there.
 #

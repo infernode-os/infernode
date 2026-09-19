@@ -7,6 +7,8 @@
  * become virtual addresses and only this file should need to change.
  */
 
+#define BOARDNAME	"BCM2837 / Raspberry Pi 3B+"
+
 enum
 {
 	PHYSIO		= 0x3F000000,	/* peripheral base */
@@ -54,6 +56,7 @@ enum
 enum
 {
 	Nirq		= 72,
+	IRQvc		= 0,		/* the VideoCore's interrupt n is interrupt n here; with a GIC it is not */
 	IRQusb		= 9,		/* DWC OTG host controller */
 	IRQaux		= 29,		/* the AUX block: mini-UART (and SPI1/2, unused) */
 	IRQgpio0	= 49,		/* GPIO bank 0, pins 0-27 */

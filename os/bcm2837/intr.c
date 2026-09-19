@@ -32,6 +32,7 @@
 #include "dat.h"
 #include "io.h"
 #include "fns.h"
+#include "board.h"
 
 typedef struct Intregs Intregs;
 struct Intregs
@@ -389,4 +390,16 @@ intrpending(void)
 		(INTREGS->GPUpending[0] & irqenabled[0]) != 0 ||
 		(INTREGS->GPUpending[1] & irqenabled[1]) != 0 ||
 		(INTREGS->ARMpending & 0xFF & irqenabled[2]) != 0;
+}
+
+/*
+ * boardintrprobe: a system-timer channel is made to match, and the
+ * interrupt has to come in through the controller above. The probe
+ * itself is the family's (../bcm/board.c); on this SoC there is no
+ * second way to ask, so its answer is the answer.
+ */
+void
+boardintrprobe(void)
+{
+	bcmintrprobe();
 }

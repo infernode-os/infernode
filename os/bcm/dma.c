@@ -37,7 +37,7 @@ enum {
 	DMAREGS		= PHYSIO + 0x007000,
 	Nchan		= 7,		/* 0-6: the full-featured channels the ARM may use */
 	Chanstride	= 0x100,
-	IRQdma0		= 16,		/* GPU IRQ of channel 0; channel n is 16+n for n < 11 */
+	IRQdma0		= IRQvc + 16,	/* VideoCore IRQ of channel 0; channel n is 16+n for n < 11 */
 
 	/* per-channel registers */
 	Cs		= 0x00,

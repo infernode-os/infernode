@@ -1,7 +1,12 @@
 /*
  * The interrupt controller: an ARM GICv2.
  *
- * This is virt's os/bcm2837/intr.c, and the interface is the same one
+ * For any board whose io.h defines GICDREGS and GICCREGS: QEMU's virt,
+ * and the BCM2711 of a Raspberry Pi 4, whose GIC-400 is this part. A
+ * board with a controller of its own (os/bcm2837/intr.c) has the harness
+ * leave this file out (ARCHSKIP).
+ *
+ * It does the job os/bcm2837/intr.c does, and the interface is the same one
  * -- intrenable(irq, f, a, tbdf, name) registers a handler for a source,
  * and irqdispatch() runs it -- but the hardware underneath is a
  * different kind of thing, and the differences are the reason to have
@@ -45,7 +50,6 @@
 #include "dat.h"
 #include "io.h"
 #include "fns.h"
-#include "board.h"
 
 enum
 {
@@ -409,9 +413,12 @@ intrsummary(void)
 }
 
 /*
- * boardintrprobe: does a device interrupt reach a handler?
+ * gicintrprobe: does an interrupt reach a handler? For a board to call
+ * from its boardintrprobe if it has nothing better -- a Raspberry Pi
+ * makes a real device, a system-timer channel, interrupt instead, which
+ * on a Pi 4 tests this file AND the wire.
  *
- * The board makes a system-timer channel match. A GIC needs no device
+ * A Raspberry Pi makes a system-timer channel match. A GIC needs no device
  * at all: a write to the distributor's set-pending register makes any
  * interrupt pending exactly as its wire would, so the whole path --
  * distributor enable, target, priority, CPU interface, the IRQ vector,
@@ -422,7 +429,7 @@ intrsummary(void)
  * Twice, because once does not prove the END worked: an interrupt
  * acknowledged and never ended is delivered exactly once.
  */
-enum { IRQprobe = IRQspi + 15 };
+/* IRQprobe is the board's io.h: a shared interrupt nothing is wired to */
 
 static int intrprobefired;
 
@@ -434,7 +441,7 @@ intrprobehandler(Ureg*, void*)
 }
 
 void
-boardintrprobe(void)
+gicintrprobe(void)
 {
 	u64int deadline;
 	int want;

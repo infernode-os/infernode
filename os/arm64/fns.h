@@ -125,6 +125,11 @@ ulong	ainc(ulong*);
 void	intrenable(int, void (*)(Ureg*, void*), void*, int, char*);
 void	intrdisable(int, void (*)(Ureg*, void*), void*, int, char*);
 void	intrinit(void);
+/* gic.c -- for boards whose controller is a GICv2 */
+void	gicsecinit(void);	/* a secondary core's CPU interface; from secclockinit */
+void	gicppienable(int);	/* a per-processor interrupt, for the calling core */
+void	gicintrprobe(void);	/* a boardintrprobe for a board with nothing better */
+void	intrsummary(void);
 void	armtimerset(int);
 void	usbdwclink(void);
 int	intrgpu(Ureg*);
@@ -153,6 +158,7 @@ u64int	mmumair(void);
 extern uintptr	dtbptr;
 
 /* trap.c */
+int	probe32(uintptr, u32int*);	/* read an address that may not exist; -1 if it faulted */
 void	trap(Ureg*);
 void	dumpureg(Ureg*);
 
@@ -246,7 +252,7 @@ void	tryboot(void);
 
 /*
  * The boot watchdog and the command line that controls it -- see
- * os/bcm2837/board.c. booted() is devcons's "booted" sysctl word;
+ * os/bcm/board.c. booted() is devcons's "booted" sysctl word;
  * boardbooted() is what it means to the hardware.
  */
 void	booted(void);

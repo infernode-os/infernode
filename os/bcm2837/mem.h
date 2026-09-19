@@ -62,6 +62,14 @@
 #define	MAXMACH		4			/* four Cortex-A53 cores */
 
 /*
+ * How much of the address space ../bcm/mmu.c maps, in gigabytes. Two:
+ * RAM and the peripheral window are in the first, and the ARM-local
+ * block (per-core timer and interrupt routing) is at the start of the
+ * second.
+ */
+#define	MAPGB		2
+
+/*
  * Cortex-A53 L1 data cache line. Upstream's bcm port says 32, which is
  * the ARM11 in a Pi 1; getting this too LARGE skips lines during cache
  * maintenance and corrupts DMA under load, so it is worth stating

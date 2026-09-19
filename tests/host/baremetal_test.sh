@@ -610,6 +610,13 @@ SBEOF
         done
     fi
     for f in "$ROOT"/os/arm64/*.S "$ROOT"/os/arm64/*.c "${sharedsrc[@]}" "$SRC"/*.S "$SRC"/*.c; do
+        # os/arm64 holds two drivers that are the architecture's but not
+        # every board's: gic.c (GICv2) and clockgt.c (the generic timer
+        # through a GIC). A board with an interrupt controller of its
+        # own names them in $ARCHSKIP.
+        if [[ "$f" == "$ROOT"/os/arm64/* ]]; then
+            case " ${ARCHSKIP:-} " in *" $(basename "$f") "*) continue;; esac
+        fi
         # serialboot is a separate program that happens to live in this
         # directory: it is the bootloader that fetches this kernel, has
         # a _start of its own, and must not be linked into it.
@@ -1267,6 +1274,7 @@ QEMUARGS="$2"
 # left over from the last machine is a kernel built from the wrong files.
 SHARED="$ROOT/os/bcm"
 SHAREDSKIP=""
+ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
 PORTSKIP=""
 SERIALARGS="-serial null -serial stdio"
 
@@ -1869,7 +1877,7 @@ fi
 # command line carrying the word "tryboot". That word is what makes the
 # kernel arm the boot watchdog in kmain and osinit print the promotion
 # step; "booted" on /dev/sysctl releases the watchdog once the shell is
-# loaded. See os/bcm2837/board.c and the README's "Working on the board
+# loaded. See os/bcm/board.c and the README's "Working on the board
 # without moving the card".
 #
 # What QEMU can and cannot show here is settled by two facts about its
@@ -4167,6 +4175,7 @@ SERIALARGS="-serial stdio"
 PORTSKIP="devaudio.c"
 SHARED=""
 SHAREDSKIP=""
+ARCHSKIP=""
 
 [[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
 platform_flags
@@ -4216,7 +4225,7 @@ done
 vrefute "no core fails to answer"                  "did not answer"
 # The check that found this port's first real bug: with a GIC, the
 # timer's end-of-interrupt has to be written before hzclock can sched()
-# away from the handler (os/virt/gic.c), or one core stops ticking.
+# away from the handler (os/arm64/gic.c), or one core stops ticking.
 if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then   # the line ends in the serial line's CR
     pass "virt: a wired kproc preempts a hog on every secondary core"
 else

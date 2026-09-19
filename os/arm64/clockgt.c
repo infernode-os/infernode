@@ -22,9 +22,11 @@
  * through its local-interrupt block; here each core enables INTID 30
  * in its own banked copy of the GIC's per-processor enables (gic.c).
  *
- * The generic-timer half of this belongs in os/arm64, with the routing
- * behind a hook. It is a copy only until both boards have been seen to
- * boot from the same source.
+ * This was os/arm64/clockgt.c. It is here because a Raspberry Pi 4 is the
+ * same in every respect that matters to a clock -- generic timer, GIC,
+ * interrupt 30 -- and a board whose timer is routed some other way
+ * (os/bcm2837/clock.c, through the BCM2836 local-interrupt block) has
+ * the harness leave this file out (ARCHSKIP).
  */
 
 #include "u.h"

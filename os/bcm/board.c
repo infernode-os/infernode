@@ -23,7 +23,7 @@
 char*
 boardname(void)
 {
-	return "BCM2837 / Raspberry Pi 3B+";
+	return BOARDNAME;	/* the board's io.h: the one thing in this file that differs between them */
 }
 
 /*
@@ -1030,8 +1030,14 @@ intrprobehandler(Ureg*, void*)
 	intrprobefired++;
 }
 
-void
-boardintrprobe(void)
+/*
+ * Returns whether it was delivered. Each board's boardintrprobe calls
+ * this and decides what a "no" means: on a BCM2837 it is a fault; on a
+ * BCM2711 it may be an emulator that does not wire this source to its
+ * GIC, and the GIC can be asked a second way (../bcm2711/intr.c).
+ */
+int
+bcmintrprobe(void)
 {
 	u64int deadline;
 
@@ -1056,7 +1062,7 @@ boardintrprobe(void)
 	 */
 	intrprobefired = 0;
 	STREG(Stcs) = 1 << Intprobechan;
-	intrenable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
+	intrenable(IRQvc + Intprobechan, intrprobehandler, nil, 0, "intrprobe");
 	STREG(Stc0 + Intprobechan*4) = STREG(Stclo) + 10000;	/* 10ms */
 	coherence();
 
@@ -1066,11 +1072,20 @@ boardintrprobe(void)
 		;
 	splhi();
 
-	print("intr: device interrupt %s (system timer via the VideoCore controller)\n",
-		intrprobefired ? "delivered" : "NEVER DELIVERED");
+	print("intr: device interrupt %s (system timer compare %d, as interrupt %d)\n",
+		intrprobefired ? "delivered" : "NEVER DELIVERED", Intprobechan, IRQvc + Intprobechan);
+	/*
+	 * When it is not, what the controller thinks is the whole of the
+	 * evidence: the match has been made, so the source is asserting,
+	 * and the dump shows which interrupt it is asserting AS -- which on
+	 * a new SoC is the question.
+	 */
+	if(!intrprobefired)
+		intrdump();
 
-	intrdisable(Intprobechan, intrprobehandler, nil, 0, "intrprobe");
+	intrdisable(IRQvc + Intprobechan, intrprobehandler, nil, 0, "intrprobe");
 	STREG(Stcs) = 1 << Intprobechan;
+	return intrprobefired != 0;
 }
 
 /*

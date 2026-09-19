@@ -42,6 +42,7 @@ enum
 	IRQuart		= IRQspi + 1,
 	IRQrtc		= IRQspi + 2,
 	IRQvirtio0	= IRQspi + 16,	/* transport n interrupts on IRQvirtio0+n */
+	IRQprobe	= IRQspi + 15,	/* wired to nothing (10-15 are spare): ../arm64/gic.c's self-test */
 };
 
 /*

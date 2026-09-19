@@ -1470,14 +1470,17 @@ printmesg(char *fmt, uchar *a, int plsprnt)
 }
 
 /*
- * Draw a batch of operations with the software cursor off the screen.
+ * Draw a batch of operations, and put the software cursor back at the
+ * end if anything took it off.
  *
- * Coarse on purpose. The alternative -- teaching every operation to
- * notice whether it overlaps the cursor -- puts the question in the
- * wrong place: drawing should not have to know there is a cursor, and
- * the cursor should not have to know what was drawn. Taking it off for
- * the duration of one message batch costs a save and a restore per
- * write and is always right.
+ * It used to come off for the whole of every batch, which is always
+ * right and, the cursor living in scanout memory, blinks it at the rate
+ * anything on the screen animates (#654). The question "does this
+ * overlap the cursor" does have a right place, and it is not here: it
+ * is memdraw's hwdraw() hook, which sees every operation's destination,
+ * source and mask, and which the platform defines (os/bcm2837/screen.c,
+ * after the Plan 9 Pi port). That takes the cursor off for exactly the
+ * operations that meet it. This puts it back.
  */
 static void drawmesg1(Client*, void*, int);
 extern void swcursorhide(void);
@@ -1486,7 +1489,6 @@ extern void swcursorshow(void);
 void
 drawmesg(Client *client, void *av, int n)
 {
-	swcursorhide();
 	if(waserror()){
 		swcursorshow();
 		nexterror();

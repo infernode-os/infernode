@@ -747,7 +747,7 @@ SBEOF
     # It used to be four files, because memdraw alone needs only the
     # rectangle arithmetic (Rect, rectclip, rectXrect, rectinrect,
     # bytesperline) and the channel descriptors (chantostr, chantodepth).
-    for f in "$ROOT"/libmemdraw/{arc,cmap,defont,ellipse,fillpoly,hwdraw,icossin,icossin2,line,poly,string,subfont,alloc,cload,draw,load,unload}.c \
+    for f in "$ROOT"/libmemdraw/{arc,cmap,defont,ellipse,fillpoly,icossin,icossin2,line,poly,string,subfont,alloc,cload,draw,load,unload}.c \
              "$ROOT"/libmemlayer/*.c \
              "$ROOT"/libdraw/*.c; do
         # test.c is a PROGRAM, not part of the library -- it has its

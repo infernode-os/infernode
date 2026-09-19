@@ -299,6 +299,64 @@ swcurson(void)
 	swc.shown = 1;
 }
 
+/*
+ * Take the cursor off the screen if this rectangle meets it, and only
+ * then. It goes back at the end of the draw batch (swcursorshow) or at
+ * the next pointer move, whichever is first.
+ */
+static ulong navoid;
+
+static void
+swcursoravoid(Rectangle r)
+{
+	lock(&swc.l);
+	if(swc.shown
+	&& r.min.x < swc.at.x + swc.sw && swc.at.x < r.max.x
+	&& r.min.y < swc.at.y + swc.sh && swc.at.y < r.max.y){
+		swcursoff();
+		navoid++;
+	}
+	unlock(&swc.l);
+}
+
+/*
+ * memdraw's hook, called at the top of every memimagedraw with what is
+ * about to be drawn, and the ONE place every drawing operation passes
+ * through: fills, copies, strings, lines, window moves, all of it.
+ *
+ * This is how the Plan 9 Raspberry Pi port keeps a software cursor out
+ * of the way, in its bcm/screen.c: the cursor comes off only when an
+ * operation's destination, source or mask is the framebuffer AND its
+ * rectangle meets the cursor's. The destination, because the draw
+ * would go over it; the source and mask, because the cursor's pixels
+ * would be copied along with the content. It comes off BEFORE the
+ * operation runs, so the saved patch under it is never stale.
+ *
+ * It replaces taking the cursor off for every draw batch from every
+ * client, which was always right and, the cursor living in the scanout
+ * memory itself, was an erase and a repaint in the visible frame each
+ * time: an app animating thirty times a second made the pointer blink
+ * thirty times a second from the far side of the screen (#654).
+ *
+ * Nothing is drawn here: 0 says "not handled, do it in software".
+ */
+int
+hwdraw(Memdrawparam *par)
+{
+	uchar *fb;
+
+	if(par == nil || screenfb == nil)
+		return 0;
+	fb = (uchar*)screenbase();
+	if(par->dst != nil && par->dst->data != nil && par->dst->data->bdata == fb)
+		swcursoravoid(par->r);
+	if(par->src != nil && par->src->data != nil && par->src->data->bdata == fb)
+		swcursoravoid(par->sr);
+	if(par->mask != nil && par->mask->data != nil && par->mask->data->bdata == fb)
+		swcursoravoid(par->mr);
+	return 0;
+}
+
 void
 flushmemscreen(Rectangle r)
 {
@@ -330,9 +388,19 @@ flushmemscreen(Rectangle r)
 	 * drawing, and a blanket discard would leave cursor-shaped
 	 * residue in the part that was not drawn over.
 	 */
+	/*
+	 * With hwdraw taking the cursor off before anything is drawn over
+	 * it, what is left for this is what does not go through memdraw:
+	 * pixels loaded straight into the screen image. And only where the
+	 * rectangle meets the cursor: this used to put the cursor's saved
+	 * pixels back and repaint it on EVERY flush, wherever it was, which
+	 * is the same blink as the blanket hide by another road (#654).
+	 */
 	nflushscreen++;
 	lock(&swc.l);
-	if(swc.shown && screenfb != nil){
+	if(swc.shown && screenfb != nil
+	&& r.min.x < swc.at.x + swc.sw && swc.at.x < r.max.x
+	&& r.min.y < swc.at.y + swc.sh && swc.at.y < r.max.y){
 		stride = screenfb->pitch / sizeof(u32int);
 		fb = (u32int*)screenbase();
 		for(y = 0; y < swc.sh; y++)

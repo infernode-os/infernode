@@ -121,11 +121,12 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	fio := sys->file2chan(dir, file);
 	cio := sys->file2chan(dir, file + "ctl");
-	if(fio == nil || cio == nil){
+	pio := sys->file2chan(dir, file + "phone");	# the far end of a relaying phone's channel
+	if(fio == nil || cio == nil || pio == nil){
 		sys->fprint(stderr, "btmock: file2chan %s: %r\n", path);
 		raise "fail:file2chan";
 	}
-	spawn serve(c, fio, cio, tickms);
+	spawn serve(c, fio, cio, pio, tickms);
 }
 
 #
@@ -195,15 +196,30 @@ ticker(c: chan of int, ms: int)
 # Reads are served in order and each gets at most what it asked for,
 # as a UART would.
 #
-serve(c: ref Ctlr, fio, cio: ref Sys->FileIO, tickms: int)
+serve(c: ref Ctlr, fio, cio, pio: ref Sys->FileIO, tickms: int)
 {
 	tick := chan of int;
 	spawn ticker(tick, tickms);
 	q := array[0] of byte;
 	waiting: list of ref Pending;
+	pwaiting: list of ref Pending;
 
 	for(;;){
 		alt {
+		(nil, data, nil, wc) := <-pio.write =>
+			if(wc == nil)
+				continue;
+			(pout, perr) := c.phonesend(data);
+			if(perr != nil)
+				wc <-= (0, perr);
+			else{
+				q = cat(q, pout);
+				wc <-= (len data, nil);
+			}
+		(nil, count, nil, rc) := <-pio.read =>
+			if(rc == nil)
+				continue;
+			pwaiting = appendp(pwaiting, ref Pending(count, rc));
 		(nil, data, nil, wc) := <-fio.write =>
 			if(wc == nil)
 				continue;
@@ -287,6 +303,18 @@ serve(c: ref Ctlr, fio, cio: ref Sys->FileIO, tickms: int)
 					e = len b;
 				rc <-= (b[off:e], nil);
 			}
+		}
+		# what the phone has received, to whoever reads at its end
+		while(pwaiting != nil && len c.phonerx > 0){
+			pp := hd pwaiting;
+			pwaiting = tl pwaiting;
+			pn := pp.count;
+			if(pn > len c.phonerx)
+				pn = len c.phonerx;
+			pb := array[pn] of byte;
+			pb[0:] = c.phonerx[0:pn];
+			c.phonerx = c.phonerx[pn:];
+			pp.rc <-= (pb, nil);
 		}
 		# satisfy readers, oldest first, while there is anything
 		while(waiting != nil && len q > 0){

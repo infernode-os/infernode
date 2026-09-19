@@ -59,6 +59,7 @@ Btmock: module
 		pairings:	int;		# how many pairings completed
 		advertising:	int;		# LE advertising enabled by the host
 		advdata, scanrsp: array of byte;	# what it advertises
+		phonerx: array of byte;		# what a relaying phone has received on its channel, not yet read
 
 		new:	fn(addr: string): ref Ctlr;
 		feed:	fn(c: self ref Ctlr, b: array of byte): array of byte;
@@ -73,6 +74,11 @@ Btmock: module
 		# InferNode's service, finds it, is refused its PSM, pairs with
 		# Secure Connections, reads the PSM, opens the channel, sends text
 		lecall:	fn(c: self ref Ctlr, addr: string, text: string): string;
+		# With the text "-relay" the phone sends nothing of its own: what
+		# arrives on its channel gathers in phonerx, and phonesend puts
+		# bytes on it, so a 9P client can be stood at the phone's end.
+		# Returns the HCI bytes that carries them, or an error.
+		phonesend: fn(c: self ref Ctlr, data: array of byte): (array of byte, string);
 	};
 
 	#

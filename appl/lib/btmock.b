@@ -48,7 +48,7 @@ Ctlr.new(addr: string): ref Ctlr
 	a := bthci->parsebdaddr(addr);
 	if(a == nil)
 		a = array[6] of { * => byte 0 };
-	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, nil, 0, 0, nil, nil);
+	return ref Ctlr(a, "btmock", 8, 8, 15, 0, 0, nil, 0, 0, nil, 0, nil, 0, 0, 0, nil, nil, Deframer.new(), nil, nil, 1, nil, nil, nil, nil, 0, 0, nil, nil, nil);
 }
 
 Ctlr.seen(c: self ref Ctlr, op: int): int
@@ -661,9 +661,15 @@ peerevents(c: ref Ctlr, pr: ref Peer, evs: list of ref Ev): array of byte
 				}
 			}else if(pr.calling && e.c.psm == pr.callpsm){
 				pr.calling = 0;
-				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, array of byte pr.calltext)));
+				if(pr.calltext != "-relay")
+					out = cat(out, peerevents(c, pr, pr.l2.send(e.c, array of byte pr.calltext)));
 			}
 		Data =>
+			if(pr.phone){
+				# a phone echoes nothing: what it is sent is for whoever stands at its end
+				c.phonerx = cat(c.phonerx, e.sdu);
+				continue;
+			}
 			if(e.c.psm == Echopsm || (e.c.le && e.c.psm == Leechopsm))
 				out = cat(out, peerevents(c, pr, pr.l2.send(e.c, e.sdu)));
 			else if(e.c.psm == L2cap->Psmsdp)
@@ -1222,6 +1228,29 @@ Ctlr.lecall(c: self ref Ctlr, addr: string, text: string): string
 	c.pendconn = appendpeer(c.pendconn, pr);
 	c.advertising = 0;		# a controller stops advertising when a central connects
 	return nil;
+}
+
+Ctlr.phonesend(c: self ref Ctlr, data: array of byte): (array of byte, string)
+{
+	for(l := c.links; l != nil; l = tl l){
+		pr := hd l;
+		if(!pr.phone || pr.l2 == nil)
+			continue;
+		for(cl := pr.l2.chans; cl != nil; cl = tl cl){
+			ch := hd cl;
+			if(!ch.le || ch.state != L2cap->Open)
+				continue;
+			out := array[0] of byte;
+			for(o := 0; o < len data; o += ch.mtu){
+				n := len data - o;
+				if(n > ch.mtu)
+					n = ch.mtu;
+				out = cat(out, peerevents(c, pr, pr.l2.send(ch, data[o:o+n])));
+			}
+			return (out, nil);
+		}
+	}
+	return (nil, "no phone has a channel open");
 }
 
 # is this 128-bit UUID in the advertising data's service lists?

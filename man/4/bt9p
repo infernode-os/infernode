@@ -332,10 +332,11 @@ decimal or 0x hex, 1 to 255 (128 and up are the dynamic ones). This is
 the one kind of channel a phone gives an ordinary app, and a phone
 gives it as a byte stream. So it is one here: a write of
 .B data
-longer than the peer's MTU goes as several SDUs, in order, and each
-read returns one SDU as it arrived, which may be any part of what the
-peer wrote. That is what lets 9P ride it, whose messages are longer
-than an SDU. SDUs travel as K-frames the peer has given credit for, and
+longer than the peer's MTU goes as several SDUs, in order, and a read
+returns as many bytes as were asked for of what has arrived, leaving the
+rest for the next. That is what lets 9P ride it: its messages are
+longer than an SDU, and its reader asks for the four bytes of a length
+before the body. SDUs travel as K-frames the peer has given credit for, and
 a writer that outruns the peer's credit blocks until it catches up. Classic and
 LE PSMs are separate number spaces. An
 .B announce
@@ -626,6 +627,12 @@ which is the transcript, not the record.
 .IR dial (2),
 .B docs/BLUETOOTH.md
 .SH BUGS
+The tree is mounted over its mount point as a union, so a key file named with
+.B -k
+must not lie under it:
+.I bt9p
+would walk into itself to save a key, and stop.
+.PP
 On a Pi 3B+ the CYW43455 has answered
 .BR up ,
 taken its firmware, found a peer by inquiry and carried an L2CAP

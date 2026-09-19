@@ -2153,7 +2153,16 @@ convread(srv: ref Styxserver, tm: ref Tmsg.Read, c: ref Fid)
 		else
 			srv.reply(styxservers->readstr(tm, sys->sprint("%d", acc.id)));
 	Qcdata =>
-		if(cv.kind == Krfcomm && len cv.rbytes > 0){
+		if(cv.kind == Kle && len cv.rbytes > 0){
+			# a byte stream, like a serial port's: see the Data event
+			n := tm.count;
+			if(n > len cv.rbytes)
+				n = len cv.rbytes;
+			b := cv.rbytes[0:n];
+			cv.rbytes = cv.rbytes[n:];
+			tm.offset = big 0;
+			srv.reply(styxservers->readbytes(tm, b));
+		}else if(cv.kind == Krfcomm && len cv.rbytes > 0){
 			n := tm.count;
 			if(n > len cv.rbytes)
 				n = len cv.rbytes;
@@ -4127,6 +4136,27 @@ l2events(srv: ref Styxserver, lk: ref Lnk, evs: list of ref Ev)
 			cv := convbychan(lk, e.c);
 			if(cv == nil)
 				continue;
+			if(cv.kind == Kle){
+				# An LE channel is a byte stream in both directions. A
+				# reader that asks for less than an SDU holds -- 9P's
+				# asks for the four bytes of a length first -- must find
+				# the rest still there: handing over an SDU per read and
+				# dropping what did not fit left an export waiting for
+				# ever for the body of its first message.
+				cv.rbytes = catb(cv.rbytes, e.sdu);
+				if(cv.rpending != nil && len cv.rbytes > 0){
+					tm := cv.rpending;
+					cv.rpending = nil;
+					n := tm.count;
+					if(n > len cv.rbytes)
+						n = len cv.rbytes;
+					b := cv.rbytes[0:n];
+					cv.rbytes = cv.rbytes[n:];
+					tm.offset = big 0;
+					srv.reply(styxservers->readbytes(tm, b));
+				}
+				continue;
+			}
 			if(cv.rpending != nil){
 				tm := cv.rpending;
 				cv.rpending = nil;

@@ -1,26 +1,36 @@
-name: Bare-metal kernel (QEMU virt)
+name: Bare-metal kernel
 
 # The native kernel -- os/arm64, os/port, os/ip and the libraries, with
-# no host OS under them -- built for QEMU's `virt` machine and booted
-# there: to a shell, through DHCP, off a FAT card, and on to the Lucifer
-# desktop. It is the half of tests/host/baremetal_test.sh that needs no
-# Raspberry Pi and no Raspberry Pi model, which is what makes it
-# something a CI runner can do. os/virt/README.md says what the port is
-# for and, as important, what it is not evidence of.
+# no host OS under them -- built and booted under QEMU, once for each
+# machine it runs on. Both jobs run tests/host/baremetal_test.sh, which
+# is also the only supported way to build the kernel; docs/BAREMETAL.md
+# is the manual.
 #
-# NOT run here: the bcm2837 half (QEMU's raspi3b). It is three times as
-# long and several of its checks are about timing -- USB hot-plug, a
-# boot watchdog, a preemption budget -- on a machine model that is slow
-# under emulation. It has only ever been run on a developer's machine,
-# and how it behaves on a shared runner is not known. Until it is,
-# putting it in front of every pull request would teach people to
-# ignore a red mark. Run it by hand:
+#   virt      QEMU's `virt` machine (os/virt): GICv2, PSCI, virtio disk,
+#             network, screen and input. About fifty checks, ending with
+#             the Lucifer desktop drawn off a FAT card. Minutes.
 #
-#     BAREMETAL_PLATFORMS=bcm2837 ./tests/host/baremetal_test.sh
+#   bcm2837   QEMU's model of the Raspberry Pi 3B+ (-M raspi3b), which
+#             is the board the product is: some 260 checks -- SMP, the
+#             JIT against the interpreter, USB hot-plug, both SD
+#             controllers, dossrv on FAT16 and FAT32, DHCP and TCP over
+#             emulated USB Ethernet, the framebuffer by screendump,
+#             keyboard and mouse by QMP, tryboot, the kernel installing
+#             itself onto a card. Several of those are about TIMING (a
+#             preemption budget, a boot watchdog, hot-plug settling) on
+#             a machine model that is slow under emulation, and until
+#             this job they had only ever run on a developer's machine.
+#             If one of them turns out to flake on a shared runner, the
+#             fix is in that check's tolerance, in the harness, where it
+#             is visible -- not a retry wrapped round the job here.
+#
+# Neither is evidence about the board. QEMU has no caches, no DMA to go
+# stale, no bus that NAKs and no watchdog that counts; tests/acceptance
+# is what says a Pi works, and it needs a Pi.
 #
 # THE HARNESS SKIPS, AND EXITS ZERO, when clang, ld.lld or QEMU is
 # missing. That is right on a laptop and would be a lie here: a green
-# mark that built nothing. So this job does not trust the exit status
+# mark that built nothing. So these jobs do not trust the exit status
 # alone -- see "Assert that the checks ran".
 
 on:
@@ -46,14 +56,14 @@ on:
       - 'tests/host/baremetal_test.sh'
       - 'tools/mkrootfs.py'
       - 'tools/mkcard.py'
-      - '.github/workflows/baremetal-virt.yml'
+      - '.github/workflows/baremetal.yml'
   push:
     branches: [ master, feat/baremetal-pi ]
     paths:
       - 'os/**'
       - 'libinterp/**'
       - 'tests/host/baremetal_test.sh'
-      - '.github/workflows/baremetal-virt.yml'
+      - '.github/workflows/baremetal.yml'
   workflow_dispatch:
 
 permissions: {}
@@ -63,14 +73,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  virt:
-    name: Build, boot and test on QEMU virt
+  harness:
+    name: ${{ matrix.platform }} (build, boot, test)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout }}
     permissions:
       contents: read
+    strategy:
+      # one machine failing says nothing about the other; let both finish
+      fail-fast: false
+      matrix:
+        include:
+          # `least` is a floor, not the count: it is there so that a run
+          # which quietly did a tenth of the work cannot pass. `last` is
+          # a check near the end of that machine's list, required by
+          # name, because a run that reached it ran what came before.
+          - platform: virt
+            timeout: 30
+            least: 45
+            last: 'PASS: virt: Lucifer draws the desktop on the ramfb screen'
+          - platform: bcm2837
+            timeout: 90
+            least: 240
+            last: 'PASS: eight refused verbs left the interface exactly as they found it'
     env:
       ROOT: ${{ github.workspace }}
+      PLATFORM: ${{ matrix.platform }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,6 +124,7 @@ jobs:
         qemu-system-aarch64 --version | head -1
         clang --print-targets | grep -q aarch64 || { echo "::error::this clang has no aarch64 target"; exit 1; }
         qemu-system-aarch64 -machine help | grep -q '^virt ' || { echo "::error::this QEMU has no virt machine"; exit 1; }
+        qemu-system-aarch64 -machine help | grep -q '^raspi3b ' || { echo "::error::this QEMU has no raspi3b machine"; exit 1; }
 
     # The kernel build runs the native limbo: runt.h and the other C views
     # of the Dis module interfaces are generated from module/runt.m, and
@@ -126,22 +155,23 @@ jobs:
         done
         test -f dis/sh.dis && test -f dis/lucifer.dis
 
-    - name: Build the kernel, boot it, and run the virt checks
+    - name: Build the kernel, boot it, and run the checks
       run: |
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         mkdir -p "$RUNNER_TEMP/bm"
         set +e
-        BAREMETAL_PLATFORMS=virt BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
+        BAREMETAL_PLATFORMS="$PLATFORM" BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
           ./tests/host/baremetal_test.sh 2>&1 | tee "$RUNNER_TEMP/bm/harness.log"
         echo "HARNESS_STATUS=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
         exit 0
 
     # The exit status says nothing failed. It does not say anything RAN:
-    # see the top of this file. So read the summary line, and require
-    # the last and most demanding check by name -- the desktop, drawn,
-    # from a card -- because a run that reached it ran everything
-    # before it.
+    # see the top of this file. So read the summary line, and require a
+    # check near the end of the list by name (the matrix's `last`).
     - name: Assert that the checks ran
+      env:
+        LEAST: ${{ matrix.least }}
+        LAST: ${{ matrix.last }}
       run: |
         set -e
         log="$RUNNER_TEMP/bm/harness.log"
@@ -162,27 +192,24 @@ jobs:
         [ "$HARNESS_STATUS" = "0" ] || { echo "::error::the harness exited $HARNESS_STATUS"; exit 1; }
         [ "$failed" = "0" ]   || { echo "::error::$failed checks failed"; exit 1; }
         [ "$skipped" = "0" ]  || { echo "::error::$skipped checks were skipped; on this runner nothing should be"; exit 1; }
-        [ "$passed" -ge 45 ]  || { echo "::error::only $passed checks passed; the virt half has about fifty"; exit 1; }
-        grep -q '^PASS: virt: Lucifer draws the desktop on the ramfb screen' "$log.plain" \
-          || { echo "::error::the run never reached the desktop check"; exit 1; }
+        [ "$passed" -ge "$LEAST" ] || { echo "::error::only $passed checks passed; $PLATFORM should manage at least $LEAST"; exit 1; }
+        grep -qF -- "$LAST" "$log.plain" \
+          || { echo "::error::the run never reached: $LAST"; exit 1; }
 
     # What a failure needs to be understood: every boot's serial log,
-    # the compiler's, and the two screens as QEMU saw them. The kernel
-    # itself too -- virt-kernel.elf has the symbols a panic's addresses
-    # want.
+    # the compiler's, and the screens as QEMU saw them. The kernel
+    # itself too -- the .elf has the symbols a panic's addresses want.
     - name: Keep the logs, the screens and the kernel
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: baremetal-virt
+        name: baremetal-${{ matrix.platform }}
         retention-days: 14
         if-no-files-found: warn
         path: |
           ${{ runner.temp }}/bm/harness.log
           ${{ runner.temp }}/bm/cc.log
-          ${{ runner.temp }}/bm/virt-*.txt
-          ${{ runner.temp }}/bm/virt-*.ppm
-          ${{ runner.temp }}/bm/mkcard.txt
-          ${{ runner.temp }}/bm/fsck.txt
-          ${{ runner.temp }}/bm/virt-kernel.elf
-          ${{ runner.temp }}/bm/virt-kernel.img
+          ${{ runner.temp }}/bm/*.txt
+          ${{ runner.temp }}/bm/*.ppm
+          ${{ runner.temp }}/bm/*-kernel.elf
+          ${{ runner.temp }}/bm/*-kernel.img

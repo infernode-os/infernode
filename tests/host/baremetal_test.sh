@@ -31,8 +31,10 @@
 # below), the DSI panel, and anything the userspace on a card does
 # after osinit (logon, secstored, the desktop). See the README's "Next".
 #
-# There was once a second machine here (QEMU virt). It is not in the
-# tree; the shared os/arm64 split it forced is.
+# A second machine, QEMU's virt (os/virt), runs after the board: the
+# same kernel with virtio devices under it, a shorter list of checks
+# (run_virt, at the end), and the one boot here that reaches the
+# desktop. BAREMETAL_PLATFORMS=bcm2837 or =virt runs one of them.
 #
 # Does NOT source common.sh: that resolves $EMU, and nothing here runs
 # inside emu. The native limbo IS needed, for runt.h/sysmod.h and the
@@ -68,7 +70,7 @@ fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); return 0; }
 skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); return 0; }
 info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; return 0; }
 
-echo -e "${BOLD}Bare-metal AArch64 boot tests (bcm2837)${NC}"
+echo -e "${BOLD}Bare-metal AArch64 boot tests${NC}"
 echo ""
 
 #
@@ -4110,9 +4112,9 @@ fi
 # BAREMETAL_PLATFORMS picks which machines to build and test; the
 # default is every one there is. Naming one is for working on it:
 #
-#     BAREMETAL_PLATFORMS=bcm2837 ./tests/host/baremetal_test.sh
+#     BAREMETAL_PLATFORMS=virt ./tests/host/baremetal_test.sh
 want_platform() {
-    case " ${BAREMETAL_PLATFORMS:-bcm2837} " in *" $1 "*) return 0;; esac
+    case " ${BAREMETAL_PLATFORMS:-bcm2837 virt} " in *" $1 "*) return 0;; esac
     return 1
 }
 
@@ -4120,6 +4122,376 @@ if want_platform bcm2837; then
 run_platform bcm2837 "-M raspi3b -netdev user,id=n0 -device usb-net,netdev=n0,id=usbnet0"
 fi
 
+#
+# The second machine: QEMU's virt. See os/virt/board.c for what it is
+# for. Same kernel -- os/arm64, os/port, os/ip and the libraries are
+# compiled from the same files with -I pointing at os/virt instead --
+# and a different set of checks, because nearly everything run_platform
+# asserts is about a USB bus, an SD controller or a VideoCore that this
+# machine does not have.
+#
+# -cpu cortex-a53 is not optional: -M virt defaults to cortex-a15, a
+# 32-bit CPU, even under qemu-system-aarch64, and an AArch64 kernel
+# booted on one produces no output at all. It is also the board's core,
+# so the JIT emits for the same part on both.
+#
+# Devices are all -device virtio-*-device: the MMIO transport, which is
+# what os/virt/virtio.c drives. The plain names (virtio-net-pci and
+# friends, and what -drive if=virtio gives) are PCI, and land on a bus
+# this kernel does not walk.
+#
+VIRTARGS="-M virt -cpu cortex-a53 -smp 4 -m 1024 -device virtio-rng-device"
+
+run_virt() {
+PLAT=virt
+SRC="$ROOT/os/$PLAT"
+QEMUARGS="$VIRTARGS"
+SERIALARGS="-serial stdio"
+PORTSKIP="devaudio.c"
+
+[[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
+platform_flags
+
+echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
+
+if ! "$QEMU" -machine help 2>/dev/null | grep -q '^virt '; then
+    skip "this QEMU build has no virt machine model"
+    return
+fi
+
+if build_kernel "$BUILD/$PLAT-kernel.img" ""; then
+    pass "virt: kernel cross-builds for aarch64-elf"
+else
+    fail "virt: kernel failed to build"
+    grep -m 20 'error:\|undefined symbol' "$BUILD/cc.log"
+    return
+fi
+[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+
+OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 60)"
+printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+vcheck() {   # vcheck <description> <fixed string that must be in the boot log>
+    if grep -qF -- "$2" <<<"$OUT"; then pass "virt: $1"; else fail "virt: $1 -- no '$2' in the boot log"; fi
+}
+vrefute() {  # vrefute <description> <fixed string that must NOT be there>
+    if grep -qF -- "$2" <<<"$OUT"; then fail "virt: $1 -- '$2' in the boot log"; else pass "virt: $1"; fi
+}
+
+vcheck "the banner names the machine"              "InferNode bare-metal (QEMU virt)"
+vcheck "the device tree is found and sized"        "fdt:  at 0x"
+vcheck "memory size comes from the device tree"    "memory 1024MB at 0x0000000040000000"
+vcheck "PSCI is found, by hvc"                     "psci: hvc"
+vcheck "the MMU is on with caches"                 "mmu:  on, caches on"
+vrefute "the GIC has a CPU interface"              "NO GICv2 CPU INTERFACE"
+vcheck "a device interrupt is delivered, twice"    "intr: device interrupt delivered"
+vcheck "virtio-rng is found"                       "(entropy)"
+vcheck "entropy comes from virtio-rng"             "rng:  virtio-rng"
+vrefute "there is an entropy source"               "NO ENTROPY SOURCE"
+vcheck "time of day comes from the PL031"          "time of day set"
+vcheck "boot completes"                            "boot OK"
+for i in 1 2 3; do
+    vcheck "cpu$i comes up through PSCI" "cpu$i: up"
+done
+vrefute "no core fails to answer"                  "did not answer"
+# The check that found this port's first real bug: with a GIC, the
+# timer's end-of-interrupt has to be written before hzclock can sched()
+# away from the handler (os/virt/gic.c), or one core stops ticking.
+if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then   # the line ends in the serial line's CR
+    pass "virt: a wired kproc preempts a hog on every secondary core"
+else
+    fail "virt: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
+fi
+vrefute "nothing panics"                           "panic:"
+vcheck "init reaches the shell"                    "init: starting the shell"
+
+#
+# The whole machine: a disk, a network card, a screen, a keyboard and a
+# tablet. One boot, driven three ways at once -- the serial console for
+# what the kernel and the shell say, QMP for what is on the screen and
+# for pressing keys, and the emulated network for DHCP.
+#
+# The disk is the image the board's checks boot from its SD controller
+# model, byte for byte (make_sd_image); what differs is only what is
+# under #S.
+#
+VSD="$BUILD/$PLAT-sd.img"
+make_sd_image "$VSD"
+VQMP="$BUILD/$PLAT-qmp.sock"
+rm -f "$VQMP"
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$VSD" "$VQMP" "$BUILD/$PLAT-screen.ppm" <<'PYEOF' > "$BUILD/$PLAT-full.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, sd, qmp, ppm = sys.argv[1:7]
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % sd, "-device", "virtio-blk-device,drive=sd",
+    "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
+    "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device",
+    "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+
+# Linux key names as QMP spells them, for the few characters typed below
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def qkey(f, ch):
+    shift = ch.isupper()
+    q = QCODE.get(ch, ch.lower())
+    keys = (["shift"] if shift else []) + [q]
+    for down in (True, False):
+        ev = [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}
+              for k in (keys if down else reversed(keys))]
+        f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.03)
+
+try:
+    waitfor(b"init: starting the shell", 90)
+    # DHCP runs in its own thread after the shell starts; give it its time
+    waitfor(b"etherusb: default route", 30)
+    time.sleep(1.5)
+    typed("cat /n/dos/HELLO.TXT")
+    typed("echo written-through-virtio > /n/dos/virt.txt; cat /n/dos/virt.txt", 2.5)
+    typed("cat /net/ether0/addr; echo")
+    typed("cat /net/ether0/ifstats")
+    typed("cat /dev/sdctl")
+    typed("echo VIRT-DATE `{date}")
+
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+
+    # the keyboard: type a command on the VIRTIO keyboard and see the
+    # shell run it. The echo comes back on the serial line because the
+    # two keyboards feed one queue and the console answers on both.
+    for ch in "echo Virtio-Keys\n":
+        qkey(f, ch)
+    time.sleep(2)
+
+    # the tablet: put the pointer somewhere and read it back
+    ev = [{"type": "abs", "data": {"axis": "x", "value": 16384}},
+          {"type": "abs", "data": {"axis": "y", "value": 8192}}]
+    f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+    f.flush(); f.readline()
+    time.sleep(1)
+    typed("read -o 0 49 < /dev/pointer; echo")
+
+    # the screen
+    if os.path.exists(ppm):
+        os.unlink(ppm)
+    f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
+    f.readline(); time.sleep(1)
+    if os.path.exists(ppm):
+        d = open(ppm, "rb").read()
+        parts = d.split(b"\n", 3)
+        w, h = map(int, parts[1].split()); px = parts[3]
+        BG = (0x10, 0x10, 0x18); FG = (0xC8, 0xC8, 0xC8)
+        nbg = nfg = 0
+        for y in range(h):
+            for x in range(0, w, 2):
+                o = (y*w + x)*3
+                c = tuple(px[o:o+3])
+                if c == BG: nbg += 1
+                elif c == FG: nfg += 1
+        print("\nSCREEN %dx%d bg %d fg %d" % (w, h, nbg, nfg))
+    else:
+        print("\nSCREEN none")
+    typed("echo session-drained", 1)
+    waitfor(b"session-drained\r\nsession-drained", 10) or waitfor(b"session-drained", 2)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-full.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+vcheck "a virtio disk is found"                    "blk:  virtio disk, 131072 blocks"
+vcheck "the card's FAT partition is read through #S and dossrv" "hello from the SD card"
+vcheck "a file written through virtio-blk reads back" "written-through-virtio"
+vcheck "the network card is ether0"                "is #l (ether0)"
+vcheck "init finds the kernel link driver"         "init: ether0 is a kernel link driver"
+vcheck "DHCP answers over virtio-net"              "etherusb: 10.0.2.15 mask"
+vcheck "a default route is installed"              "etherusb: default route via 10.0.2.2"
+vcheck "the framebuffer is configured through fw_cfg" "fb:   ramfb 1280x720x32"
+vcheck "the keyboard and the tablet are found"     "(absolute pointer)"
+vcheck "keys typed on the virtio keyboard reach the shell" "Virtio-Keys"
+if grep -aq '^m *640 *180 ' <<<"$OUT"; then
+    pass "virt: the tablet's position is scaled to the screen (640,180)"
+else
+    fail "virt: tablet position -- $(grep -a '^m ' <<<"$OUT" | head -1)"
+fi
+scr="$(grep -a '^SCREEN' <<<"$OUT" | tail -1)"
+read -r _ sdim _ sbg _ sfg <<<"$scr"
+if [[ "$sdim" == "1280x720" && "${sfg:-0}" -ge 500 && "${sbg:-0}" -ge 100000 ]]; then
+    pass "virt: the console is legible on the ramfb screen ($scr)"
+else
+    fail "virt: screen -- '$scr'"
+fi
+vrefute "nothing panics with every device attached" "panic:"
+if grep -aq '^VIRT-DATE.* 20[2-9][0-9]' <<<"$OUT"; then
+    pass "virt: date(1) has the PL031's year, with no time server"
+else
+    fail "virt: date -- $(grep -a '^VIRT-DATE' <<<"$OUT" | head -1)"
+fi
+
+#
+# The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)
+# unless told otherwise, and everything above ran on that; a modern one
+# finds its queues by three addresses instead of a page number, insists
+# on FEATURES_OK, and -- the part that bites -- makes the network
+# header twelve bytes instead of ten. Same devices, same checks, the
+# other half of os/virt/virtio.c.
+#
+cp "$VSD" "$BUILD/$PLAT-sd-modern.img"
+MODOUT="$( (sleep 45; printf 'cat /n/dos/HELLO.TXT\r'; sleep 2; printf 'cat /net/ether0/ifstats\r'; sleep 4) | \
+    timeout -s KILL 60 "$QEMU" $VIRTARGS -global virtio-mmio.force-legacy=false \
+        -kernel "$BUILD/$PLAT-kernel.img" -display none -serial stdio \
+        -drive "file=$BUILD/$PLAT-sd-modern.img,if=none,format=raw,id=sd" -device virtio-blk-device,drive=sd \
+        -netdev user,id=n0 -device virtio-net-device,netdev=n0 2>/dev/null)"
+OUT="$MODOUT"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "modern transports are recognised"          "(network), modern transport"
+vrefute "no device is left on a legacy transport"  "legacy transport"
+vcheck "modern: entropy"                           "rng:  virtio-rng"
+vcheck "modern: the disk reads through dossrv"     "hello from the SD card"
+vcheck "modern: DHCP answers, with a 12-byte header" "etherusb: 10.0.2.15 mask"
+vcheck "modern: the driver says which header it uses" "modern transport, header 12 bytes"
+vrefute "modern: nothing panics"                   "panic:"
+
+#
+# The desktop, from a populated card.
+#
+# tools/mkcard.py writes what a Raspberry Pi's card holds -- dis/, lib/,
+# fonts/, icons/, a writable usr/, a rootpath saying "local" -- as a
+# FAT32 image, and the kernel takes its userspace from it through the
+# same rootpath policy, dossrv and boot-baremetal.sh the board uses.
+# skiplogon, because there is nobody here to type a password. What is
+# asserted is that Lucifer DREW: its accent colour, which no console
+# text and no kernel test pattern contains, covers a tab's worth of
+# the screen.
+#
+# This is the check os/bcm2837/README.md has wanted since September
+# ("a populated FAT32 card image booting through rootpath ... under
+# QEMU"); it is here first because a virtio disk reads the 20MB the
+# desktop loads in seconds.
+#
+VCARD="$BUILD/$PLAT-card.img"
+printf 'local\n' > "$BUILD/rootpath"
+: > "$BUILD/skiplogon"
+if python3 "$ROOT/tools/mkcard.py" "$VCARD" 192 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+        /fonts="$ROOT/fonts" /icons="$ROOT/icons" /usr= \
+        /rootpath="$BUILD/rootpath" /skiplogon="$BUILD/skiplogon" > "$BUILD/mkcard.txt" 2>&1; then
+    pass "virt: mkcard builds a populated FAT32 card ($(sed 's/^mkcard: [^:]*: //' "$BUILD/mkcard.txt"))"
+    FSCK="$(command -v fsck.fat 2>/dev/null || ls /usr/sbin/fsck.fat /sbin/fsck.fat 2>/dev/null | head -1)"
+    if [[ -n "$FSCK" ]]; then
+        dd if="$VCARD" of="$BUILD/$PLAT-card.part" bs=512 skip=2048 status=none
+        if "$FSCK" -n "$BUILD/$PLAT-card.part" > "$BUILD/fsck.txt" 2>&1; then
+            pass "virt: fsck.fat finds nothing wrong with it"
+        else
+            fail "virt: fsck.fat objects to mkcard's image: $(tail -3 "$BUILD/fsck.txt" | tr '\n' ' ')"
+        fi
+        rm -f "$BUILD/$PLAT-card.part"
+    else
+        skip "virt: no fsck.fat to check mkcard's image with"
+    fi
+
+    rm -f "$VQMP"
+    python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$VCARD" "$VQMP" "$BUILD/$PLAT-desktop.ppm" <<'PYEOF' > "$BUILD/$PLAT-desktop.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, sd, qmp, ppm = sys.argv[1:7]
+p = subprocess.Popen([qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % sd, "-device", "virtio-blk-device,drive=sd",
+    "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
+    "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device",
+    "-qmp", "unix:%s,server,nowait" % qmp],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+ACCENT = (0xE8, 0x55, 0x3A)
+w = h = best = 0
+try:
+    end = time.time() + 180
+    while time.time() < end and b"lucifer: INIT" not in buf:
+        time.sleep(0.5)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw"); f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    # Lucifer has started; dump until it has drawn, or a minute passes
+    end = time.time() + 60
+    while time.time() < end and best < 1000:
+        time.sleep(3)
+        if os.path.exists(ppm):
+            os.unlink(ppm)
+        f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
+        f.readline(); time.sleep(1)
+        if not os.path.exists(ppm):
+            continue
+        d = open(ppm, "rb").read()
+        parts = d.split(b"\n", 3)
+        w, h = map(int, parts[1].split()); px = parts[3]
+        n = 0
+        for o in range(0, w*h*3, 3):
+            if px[o] == ACCENT[0] and px[o+1] == ACCENT[1] and px[o+2] == ACCENT[2]:
+                n += 1
+        best = max(best, n)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+print("\nDESKTOP %dx%d accent %d" % (w, h, best))
+PYEOF
+    OUT="$(cat "$BUILD/$PLAT-desktop.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    vcheck "the card's FAT32 partition mounts"         "init: /dev/sd0: type 0x0c"
+    vcheck "userspace comes off the card (rootpath local)" "init: /dis grown from /n/dos/dis"
+    vcheck "/usr is the card's, writable"              "init: /usr from /n/dos/usr (writable)"
+    vcheck "boot-baremetal.sh narrows the namespace and starts the desktop" "boot: skiplogon"
+    vcheck "Lucifer starts"                            "lucifer: INIT"
+    desk="$(grep -a '^DESKTOP' <<<"$OUT" | tail -1)"
+    read -r _ ddim _ dacc <<<"$desk"
+    if [[ "$ddim" == "1280x720" && "${dacc:-0}" -ge 1000 ]]; then
+        pass "virt: Lucifer draws the desktop on the ramfb screen ($desk)"
+    else
+        fail "virt: desktop -- '$desk'"
+    fi
+    vrefute "nothing panics under the desktop"          "panic:"
+else
+    fail "virt: mkcard failed: $(tail -2 "$BUILD/mkcard.txt" | tr '\n' ' ')"
+fi
+
+echo ""
+}
+
+if want_platform virt; then
+run_virt
+fi
 
 echo ""
 echo -e "${BOLD}Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED${NC}"

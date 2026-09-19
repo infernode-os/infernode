@@ -57,8 +57,11 @@ the end of this file:
   run them
 - the harness types the boot script's namespace lines into a shell
   and tests dossrv on the host, but does not boot a populated card
-  through rootpath, logon and secstore under QEMU, and no CI job runs
-  the bare-metal harness at all
+  through rootpath, logon and secstore under QEMU's `raspi3b`, and no
+  CI job runs the bare-metal harness at all. (The `virt` half of the
+  harness does boot one, built by `tools/mkcard.py`, through rootpath to
+  the Lucifer desktop -- with `skiplogon`, so logon and secstore are
+  still unexercised anywhere but the board. See `os/virt/README.md`.)
 - the fixes of 2026-09-05 (below) have run under QEMU only; none has
   been on the board
 - WiFi: the radio identifies itself and runs its firmware on the board
@@ -76,9 +79,12 @@ Regression-tested by `tests/host/baremetal_test.sh`, which builds the
 port, boots it under QEMU's `raspi3b`, and asserts on the result —
 pulling the framebuffer back through QMP, hot-plugging USB devices,
 round-tripping TCP through the emulated network, and comparing the
-served kernel image with the file it booted. 194 checks. A second
-QEMU machine (`virt`) once shared this kernel and forced the
-`os/arm64` split; it is not in the tree today.
+served kernel image with the file it booted. 260 checks. A second
+QEMU machine, `virt`, shares this kernel (`os/virt`): it forced the
+`os/arm64` split in August, left the tree, and came back in September
+with virtio drivers for a disk, a network card, a screen and input,
+which `raspi3b` cannot offer. The same script runs both;
+`BAREMETAL_PLATFORMS=bcm2837` or `=virt` runs one.
 
 ## Why `os/` and not `emu/<Platform>`
 
@@ -101,17 +107,23 @@ stub, exception vectors, trap decoding, `spl`, the device-tree parser,
 the portable probes and `kmain` itself. `os/bcm2837` keeps only what is
 genuinely this SoC — the memory map, PL011 wiring, VideoCore mailbox,
 GPIO, framebuffer, the system timer and the MMU map — plus `board.c`,
-the five hooks `../arm64/fns.h` declares.
+the hooks `../arm64/fns.h` declares, and `devtab.c`, the list of devices
+this board's kernel includes.
 
 That split was forced by a second QEMU machine (`virt`) that shared the
 kernel for a while, and it is the honest place for the line: with one
 board, "shared" and "BCM2837" were indistinguishable, and `main.c` had
 grown to 1700 lines of mostly board-independent bring-up checks. The
-`virt` port is not in the tree today; the line it drew held. Since then
-`os/bcm2837` has also grown the drivers that are this SoC's — `usbdwc`,
-`emmc`/`devsd`, `devgpio`, `fbcons`/`screen`, `random`, `serialboot` —
-which is the right side of the line for them. A further board hook
-should be read as an argument for moving code into `os/arm64`, not for
+`virt` port was out of the tree from late August to mid September, and
+the line it drew held; when it came back (`os/virt`) it moved the line
+a little further. `os/bcm2837` has the drivers that are this SoC's —
+`usbdwc`, `emmc`/`sdhost`/`sdmmc`, `devgpio`, `random`, `serialboot` —
+while `devsd` (now `os/port`) and `fbcons`/`screen` (now `os/arm64`)
+turned out to serve a virtio disk and a QEMU framebuffer without a line
+changed, which is what not being this SoC's looks like. Four lines of
+`kmain` that WERE this SoC's became hooks; `os/virt/README.md`, "What
+the second board showed", lists them. A further board hook should still
+be read as an argument for moving code into `os/arm64`, not for
 widening the interface.
 
 ## Why the Pi 3B+

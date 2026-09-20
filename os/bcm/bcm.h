@@ -123,6 +123,8 @@ enum
 
 extern SDio sdhostio;		/* sdhost.c */
 extern SDio emmcio;		/* emmc.c */
+extern SDio emmc2io;		/* os/bcm2711/emmc2.c: a second instance of emmc.c, for EMMC2 */
+extern int sdarasantaken;	/* sdmmc.c: the card is on the Arasan; the radio must keep off */
 
 /* sdmmc.c: the card, as blocks -- devsd.c's contract */
 int	emmcinit(void);

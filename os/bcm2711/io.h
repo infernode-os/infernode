@@ -65,22 +65,18 @@ enum
 
 /*
  * The SD card is on EMMC2, a second SDHCI controller this SoC added for
- * it, with pins of its own; the first (the "Arasan", at +0x300000) is
- * wired to the radio, as on a Pi 3, and SDHOST to nothing. ../bcm/emmc.c
- * drives ONE controller, at EMMCREGS, so for now this board points it at
- * EMMC2 and builds the card onto it (SDCARD_ARASAN, in mem.h), which
- * means the radio has no controller: ether4330.c says so at boot and
- * does not probe. Wi-Fi on this board needs emmc.c to take an instance.
+ * it, with pins of its own; the first (the "Arasan", EMMCREGS) is wired
+ * to the radio, as on a Pi 3, and SDHOST to nothing. emmc2.c is the
+ * instance of ../bcm/emmc.c that drives it.
+ *
+ * QEMU's raspi4b (as of 9.2) attaches the card to the Arasan instead,
+ * as if the board had a Pi 3's pin mux; emmc2.c names the Arasan as the
+ * second place to look.
  */
-#define EMMCOFF		0x340000
-#define CLKEMMC		12		/* the mailbox's clock id for EMMC2 */
-
-/*
- * ...and QEMU's raspi4b (as of 9.2) attaches the card to the first
- * controller instead, as if the board had a Pi 3's pin mux. emmc.c looks
- * here if, and only if, EMMC2 reports no card and this one reports one,
- * and says that it has.
- */
-#define EMMCALTOFF	0x300000
+enum
+{
+	EMMC2REGS	= PHYSIO+0x340000,
+	Clkemmc2	= 12,		/* the mailbox's clock id for EMMC2 */
+};
 
 #include "../bcm/bcmio.h"

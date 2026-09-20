@@ -4628,6 +4628,12 @@ else
     fail "bcm2711: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
 fi
 pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS"
+# With no card in it, the Arasan is the radio's and the radio's driver
+# probes it -- which on this board means two instances of one SDHCI
+# driver alive at once (os/bcm2711/emmc2.c). QEMU models no radio, so
+# what is asserted is that the probe ran and came back empty-handed
+# rather than not at all, and took nothing down with it.
+pcheck "with no card, the radio is probed on the Arasan and reported absent" "ether4330: no radio"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"
@@ -4719,9 +4725,9 @@ PYEOF
     OUT="$(cat "$BUILD/$PLAT-desktop.txt")"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
     pcheck "the card is found where QEMU wires it, and the kernel says that is what it did" "which is where QEMU's raspi4b wires it"
-    pcheck "the SDHCI controller identifies the card"    "sd: emmc: card ready"
+    pcheck "the EMMC2 instance of the SDHCI driver identifies the card" "sd: emmc2: card ready"
     pcheck "sector 0 reads back with a boot signature"   "sd: MBR ok"
-    pcheck "the radio is left alone: its controller holds the card" "radio not probed"
+    pcheck "the radio is told at RUNTIME that its controller holds the card, and keeps off" "turned out to hold the card"
     pcheck "the FAT32 partition mounts"                  "init: /dev/sd0 mounted on /n/dos"
     pcheck "userspace comes off the card"                "init: /dis grown from /n/dos/dis"
     pcheck "#S serves the partition table init wrote"    "part sd0 2048"

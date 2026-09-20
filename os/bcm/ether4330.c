@@ -3325,6 +3325,14 @@ ether4330probe(void)
 	bootsay("the Arasan holds the card (-DSDCARD_ARASAN), radio not probed", 0, -1);
 	return;
 #endif
+	/*
+	 * ...or holds it although nobody built it that way: see
+	 * sdarasantaken in sdmmc.c. boarddevprobe finds the card first.
+	 */
+	if(sdarasantaken){
+		bootsay("the Arasan turned out to hold the card (QEMU's raspi4b wiring), radio not probed", 0, -1);
+		return;
+	}
 #ifdef ETHER4330STUB
 	/*
 	 * A kernel built for the harness: the radio is DECLARED present

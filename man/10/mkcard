@@ -1,0 +1,139 @@
+.TH MKCARD 10.1
+.SH NAME
+mkcard, mkrootfs \- build a card image and a kernel root for the native kernel
+.SH SYNOPSIS
+.B tools/mkcard.py
+.I image
+.I megabytes
+[
+.BI / dest = src
+|
+.BI / dir =
+] ...
+.PP
+.B tools/mkrootfs.py
+.I output.c
+[
+.BI / dest = src
+|
+.BI / dir =
+] ...
+.SH DESCRIPTION
+These run on the host, in Python, and need nothing else.
+Between them they make the two places the native kernel finds files:
+the small root compiled into its image, and the card.
+.PP
+Both take the same manifest.
+.BI / dest = src
+puts the host file
+.I src
+at
+.IR dest ;
+for
+.IR mkcard ,
+if
+.I src
+is a directory it is copied whole.
+.BI / dir =
+with nothing after the
+.B =
+makes an empty directory.
+Directories above a
+.I dest
+are made as needed.
+.SS mkcard
+.I Mkcard
+writes
+.IR image ,
+of the given size, as a card for the native kernel: a master boot record,
+one FAT32 partition beginning at sector 2048, and the files named.
+It is what a Raspberry Pi's card looks like to
+.IR osinit (8),
+and the same image boots a board, QEMU's
+.B raspi3b
+(as
+.BR "-drive if=sd" )
+and QEMU's
+.B virt
+(as a
+.BR virtio-blk-device ).
+.PP
+It writes the file system itself, so it needs neither root, a loop
+mount, nor
+.IR mtools ,
+and an image built twice from the same tree is the same bytes:
+timestamps are fixed, names are taken in sorted order, and each file and
+directory is laid out contiguously.
+Every name that is not already an upper-case 8.3 name \- in an Inferno
+tree, every name \- gets a long-name entry, which is what
+.IR dossrv (4)
+reads, and a generated short alias
+.RB ( NAME~1.EXT )
+because the format requires one.
+.PP
+The cluster size is the largest of 4096, 2048, 1024 and 512 bytes that
+still leaves the 65525 clusters that make a volume FAT32;
+the type of a FAT volume is decided by that count and by nothing written
+in it.
+About 40MB is the least that can be one.
+.I Mkcard
+says what it made:
+.IP
+.EX
+mkcard: card.img: 256MB, FAT32, 2048-byte clusters,
+    2336 files in 97 directories, 46MB used
+.EE
+.SS mkrootfs
+.I Mkrootfs
+writes
+.IR output.c ,
+the tables
+.B /os/port/devroot.c
+serves the kernel's own root from: every file compiled in as an array of
+bytes.
+It stands in for the
+.I mkroot
+of Inferno's other native kernels.
+The kernel build runs it; it is rarely run by hand.
+That root is a recovery floor \-
+.IR osinit ,
+the shell, file utilities,
+.IR dossrv ,
+the USB and Ethernet drivers \- and everything else comes from the card.
+.SH EXAMPLE
+A card holding a whole user space, that boots to the desktop with no
+login:
+.IP
+.EX
+printf 'local\en' > /tmp/rootpath;  : > /tmp/skiplogon
+tools/mkcard.py card.img 256 /dis=dis /lib=lib \e
+    /fonts=fonts /icons=icons /usr= \e
+    /rootpath=/tmp/rootpath /skiplogon=/tmp/skiplogon
+.EE
+.PP
+The files that control a machine from its card are described in
+.IR osinit (8).
+.SH SOURCE
+.B /tools/mkcard.py
+.br
+.B /tools/mkrootfs.py
+.SH SEE ALSO
+.IR sd (3),
+.IR dossrv (4),
+.IR osinit (8)
+.br
+.B /docs/BAREMETAL.md
+.SH BUGS
+.I Mkcard
+only writes; it cannot add to an image or read one.
+.br
+QEMU's SD card model, unlike a card reader, refuses an image whose size is
+not a power of two.
+.br
+A Raspberry Pi also needs Broadcom's boot files,
+.B config.txt
+and the kernel on the card;
+.I mkcard
+will copy them if they are named, but knows nothing about them.
+.br
+The whole image is built in memory.

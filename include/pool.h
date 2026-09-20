@@ -65,6 +65,7 @@ extern	ulong	poolmsize(Pool*, void*);
 extern	void	poolmutable(void*);
 extern	char*	poolname(Pool*);
 extern	int	poolread(char*, int, ulong);
+extern	int	pooltagsread(char*, int, ulong);
 extern	void*	poolrealloc(Pool*, void*, ulong);
 extern	int	poolsetsize(char*, int);
 extern	void	poolsetcompact(Pool*, void (*)(void*, void*));

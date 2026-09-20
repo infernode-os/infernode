@@ -79,6 +79,10 @@ dis/auth/proto/infauth.dis
 dis/auth/proto/p9any.dis
 dis/auth/proto/pass.dis
 dis/auth/proto/sign.dis
+dis/auth/proto/btlink.dis
+dis/auth/proto/btltk.dis
+dis/auth/proto/btpin.dis
+dis/auth/proto/wpapsk.dis
 dis/auth/rpc.dis
 dis/auth/rsagen.dis
 dis/auth/secstore-setup.dis
@@ -96,6 +100,9 @@ dis/bind.dis
 dis/bioget.dis
 dis/bit2gif.dis
 dis/broke.dis
+dis/bt9p.dis
+dis/bthid.dis
+dis/btmock.dis
 dis/bytes.dis
 dis/cal.dis
 dis/calc.dis
@@ -177,6 +184,7 @@ dis/disk/mkext.dis
 dis/disk/mkfs.dis
 dis/disk/pedit.dis
 dis/disk/prep.dis
+dis/dossrv.dis
 dis/du.dis
 dis/echo.dis
 dis/ed.dis
@@ -268,6 +276,7 @@ dis/ip/rip.dis
 dis/ip/sntp.dis
 dis/ip/tftpd.dis
 dis/ip/virgild.dis
+dis/ip/wpa.dis
 dis/jitbench.dis
 dis/jitbench2.dis
 dis/jitbug.dis
@@ -277,6 +286,7 @@ dis/jitshift.dis
 dis/jittest.dis
 dis/js.dis
 dis/kill.dis
+dis/lan78stats.dis
 dis/ktrans.dis
 dis/lib/aadraw.dis
 dis/lib/acmewin.dis
@@ -291,7 +301,15 @@ dis/lib/auth.dis
 dis/lib/auth9.dis
 dis/lib/bioauth.dis
 dis/lib/bloomfilter.dis
+dis/lib/bthci.dis
+dis/lib/btmock.dis
 dis/lib/bufio.dis
+dis/lib/l2cap.dis
+dis/lib/sdp.dis
+dis/lib/rfcomm.dis
+dis/lib/att.dis
+dis/lib/smp.dis
+dis/lib/hid.dis
 dis/lib/cfg.dis
 dis/lib/cfgfile.dis
 dis/lib/chanfill.dis
@@ -323,6 +341,7 @@ dis/lib/debsrc.dis
 dis/lib/debug.dis
 dis/lib/deflate.dis
 dis/lib/devpointer.dis
+dis/lib/dhcpclient.dis
 dis/lib/dial.dis
 dis/lib/dialnorm.dis
 dis/lib/dialog.dis
@@ -462,6 +481,7 @@ dis/lib/wmclient.dis
 dis/lib/wmlib.dis
 dis/lib/wmsrv.dis
 dis/lib/workdir.dis
+dis/lib/wpakey.dis
 dis/lib/writegif.dis
 dis/lib/x402.dis
 dis/lib/xenithwin.dis
@@ -669,6 +689,15 @@ dis/tests/cowfs_test.dis
 dis/tests/crypto_props_test.dis
 dis/tests/crypto_test.dis
 dis/tests/cut_test.dis
+dis/tests/bthci_test.dis
+dis/tests/l2cap_test.dis
+dis/tests/sdp_test.dis
+dis/tests/rfcomm_test.dis
+dis/tests/att_test.dis
+dis/tests/smp_test.dis
+dis/tests/hid_test.dis
+dis/tests/exception_test.dis
+dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
 dis/tests/destructor_test.dis
 dis/tests/dial_test.dis
@@ -695,6 +724,7 @@ dis/tests/imap_test.dis
 dis/tests/imgload_test.dis
 dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
+dis/tests/intsem_test.dis
 dis/tests/jit_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis
@@ -796,12 +826,14 @@ dis/tests/wiki9p_security_probe.dis
 dis/tests/wireformat_test.dis
 dis/tests/wm_apps_test.dis
 dis/tests/wmsrv_zorder_test.dis
+dis/tests/wpa_test.dis
 dis/tests/x402_test.dis
 dis/tests/x509_test.dis
 dis/tests/xenith_concurrency_test.dis
 dis/tests/xenith_exit_test.dis
 dis/tests/xml_test.dis
 dis/time.dis
+dis/tone.dis
 dis/timestamp.dis
 dis/tlsperf.dis
 dis/tokenize.dis

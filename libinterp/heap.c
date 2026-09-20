@@ -29,6 +29,46 @@ void	(*heapmonitor)(int, void*, ulong);
 /*
  * Release a Type's compiled initialize/destroy code.
  *
+ * Whether that pointer can be freed depends on where this build's
+ * typecom() put it, which is a property of the BUILD, not of the
+ * architecture -- and the four places that used to do this inline all
+ * decided it on the architecture alone.
+ *
+ * The 64-bit JITs were given a blanket "never free it", with the
+ * workaround's own comment saying what it cost: "This leaks type code
+ * on module unload." The reason was real for a hosted build, where
+ * typecom() maps type code with mmap() and handing that pointer to
+ * free() panics the pool.
+ *
+ * The native kernel has no mmap. typecom() there calls malloc(), so the
+ * pointer is ordinary pool memory and the guard was suppressing a free
+ * that had been correct all along. It cost the whole pool, slowly:
+ * running a command loads a module, compiles its types and unloads it
+ * again, and every cycle left its type code behind. Measured on a Pi
+ * 3B+ with a loop spawning about twenty processes a second, the main
+ * pool grew 2 MB every six minutes, and walking it by allocation site
+ * put 7452 of the 7468 blocks gained over four minutes on this one
+ * malloc.
+ *
+ *
+ * 52b8f796 made this a no-op as an experiment (INFR-458): the board was
+ * calling through garbage function pointers, the theory was compiled
+ * code reading a Type's code address after the Type was freed, and the
+ * experiment was to put the leak back and see whether the panics
+ * stopped. They stopped -- but because of #622 (a proc preempted
+ * between clang's copy of x28 and its use, resumed on another core),
+ * found and fixed with the leak still in place. The experiment's own
+ * note said what to do in that case: the free goes straight back in.
+ *
+ * What the leak cost while it was in: any loop that loads modules is
+ * an out-of-memory in minutes (#641 -- an acceptance battery's leftover
+ * shell re-spawning cat 800 times a second took the 123 MB main pool
+ * in three and a half; /dev/memtags put 266,716 of 266,717 new blocks
+ * on typecom's malloc), and even a clean battery run left ~3 MB
+ * behind. If a garbage-pointer panic ever names freed type code again,
+ * /dev/memtags and the #622 detectors are both in the kernel to say so.
+ *
+ * Hosted builds (added when this met the hosted port of the same fix):
  * On hosted 64-bit builds the JIT maps that code rather than mallocs
  * it, so free() must not see it, and for a long time nothing released
  * it at all: "this leaks type code on module unload", this file said,
@@ -44,9 +84,9 @@ static void
 freetypecode(Type *t)
 {
 #if defined(__aarch64__)
-	freetypejit(t);
-#elif defined(__x86_64__) || defined(_M_X64)
-	USED(t);
+	freetypejit(t);		/* free() on a native kernel, munmap() hosted: comp-arm64.c knows which */
+#elif !defined(INFERNO_NATIVE) && (defined(__x86_64__) || defined(_M_X64))
+	USED(t);		/* hosted amd64: carved from a slab that is never returned */
 #else
 	free(t->initialize);
 #endif
@@ -412,6 +452,7 @@ heapz(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -433,6 +474,7 @@ heap(Type *t)
 		error(exHeap);
 
 	h->t = t;
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
@@ -473,6 +515,7 @@ initarray(Type *t, Array *a)
 	int i;
 	uchar *p;
 
+	if(t->ref <= 0 || t->ref > 50000000) panic("heap: Type %#p ref %d in use (size %d np %d) -- freed type?", t, t->ref, t->size, t->np);
 	t->ref++;
 	if(t->np == 0)
 		return;
@@ -501,6 +544,7 @@ arraycpy(Array *sa)
 	Tarray.ref++;
 	da = H2D(Array*, dh);
 	da->t = sa->t;
+	if(da->t->ref <= 0 || da->t->ref > 50000000) panic("heap: Type %#p ref %d in use (array) -- freed type?", da->t, da->t->ref);
 	da->t->ref++;
 	da->len = sa->len;
 	da->root = H;

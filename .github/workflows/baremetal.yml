@@ -1,0 +1,270 @@
+name: Bare-metal kernel
+
+# The native kernel -- os/arm64, os/port, os/ip and the libraries, with
+# no host OS under them -- built and booted under QEMU, once for each
+# machine it runs on. Both jobs run tests/host/baremetal_test.sh, which
+# is also the only supported way to build the kernel; docs/BAREMETAL.md
+# is the manual.
+#
+#   virt      QEMU's `virt` machine (os/virt): GICv2, PSCI, virtio disk,
+#             network, screen and input. About fifty checks, ending with
+#             the Lucifer desktop drawn off a FAT card. Minutes.
+#
+#   bcm2711   QEMU's model of the Raspberry Pi 4B (-M raspi4b): the Pi 3's
+#             drivers behind a GIC-400, to the desktop. What that model
+#             lacks -- gigabit Ethernet, PCIe and the USB 3 controller
+#             behind it, a random-number generator -- no job here can
+#             speak to. Needs QEMU 9, which it builds and caches.
+#
+#   bcm2837   QEMU's model of the Raspberry Pi 3B+ (-M raspi3b), which
+#             is the board the product is: some 260 checks -- SMP, the
+#             JIT against the interpreter, USB hot-plug, both SD
+#             controllers, dossrv on FAT16 and FAT32, DHCP and TCP over
+#             emulated USB Ethernet, the framebuffer by screendump,
+#             keyboard and mouse by QMP, tryboot, the kernel installing
+#             itself onto a card. Several of those are about TIMING (a
+#             preemption budget, a boot watchdog, hot-plug settling) on
+#             a machine model that is slow under emulation, and until
+#             this job they had only ever run on a developer's machine.
+#             If one of them turns out to flake on a shared runner, the
+#             fix is in that check's tolerance, in the harness, where it
+#             is visible -- not a retry wrapped round the job here.
+#
+# Neither is evidence about the board. QEMU has no caches, no DMA to go
+# stale, no bus that NAKs and no watchdog that counts; tests/acceptance
+# is what says a Pi works, and it needs a Pi.
+#
+# THE HARNESS SKIPS, AND EXITS ZERO, when clang, ld.lld or QEMU is
+# missing. That is right on a laptop and would be a lie here: a green
+# mark that built nothing. So these jobs do not trust the exit status
+# alone -- see "Assert that the checks ran".
+
+on:
+  pull_request:
+    paths:
+      - 'os/**'
+      - 'libinterp/**'
+      - 'libkern/**'
+      - 'libkernfp/**'
+      - 'libsec/**'
+      - 'libmp/**'
+      - 'libkeyring/**'
+      - 'libmath/**'
+      - 'libtk/**'
+      - 'libdraw/**'
+      - 'libmemdraw/**'
+      - 'libmemlayer/**'
+      - 'include/**'
+      - 'Inferno/arm64/**'
+      - 'module/runt.m'
+      - 'module/bench.m'
+      - 'lib/lucifer/boot-baremetal.sh'
+      - 'tests/host/baremetal_test.sh'
+      - 'tools/mkrootfs.py'
+      - 'tools/mkcard.py'
+      - '.github/workflows/baremetal.yml'
+  push:
+    branches: [ master, feat/baremetal-pi ]
+    paths:
+      - 'os/**'
+      - 'libinterp/**'
+      - 'tests/host/baremetal_test.sh'
+      - '.github/workflows/baremetal.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness:
+    name: ${{ matrix.platform }} (build, boot, test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout }}
+    permissions:
+      contents: read
+    strategy:
+      # one machine failing says nothing about the other; let both finish
+      fail-fast: false
+      matrix:
+        include:
+          # `least` is a floor, not the count: it is there so that a run
+          # which quietly did a tenth of the work cannot pass. `last` is
+          # a check near the end of that machine's list, required by
+          # name, because a run that reached it ran what came before.
+          - platform: virt
+            timeout: 30
+            least: 45
+            last: 'PASS: virt: Lucifer draws the desktop on the ramfb screen'
+          - platform: bcm2837
+            timeout: 90
+            least: 240
+            last: 'PASS: eight refused verbs left the interface exactly as they found it'
+          # The Raspberry Pi 4. QEMU's raspi4b arrived in 9.0 and the
+          # runner's QEMU is 8.2, so this job builds its own (`qemu`
+          # below) -- once: it is cached by version. The other two keep
+          # the distribution's, which is how this workflow comes to test
+          # the kernel against two QEMUs rather than one.
+          - platform: bcm2711
+            timeout: 90
+            least: 28
+            last: 'PASS: bcm2711: Lucifer draws the desktop on the firmware framebuffer'
+            qemu: 9.2.4
+    env:
+      ROOT: ${{ github.workspace }}
+      PLATFORM: ${{ matrix.platform }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    # clang targets every architecture it was built for, so the distro's
+    # is a cross compiler already; lld and llvm supply ld.lld,
+    # llvm-objcopy, llvm-ar and llvm-nm under the names the harness looks
+    # for. qemu-system-arm is the package that carries
+    # qemu-system-aarch64. dosfstools is for fsck.fat, which checks the
+    # card image tools/mkcard.py writes.
+    - name: Install the cross toolchain and QEMU
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang lld llvm qemu-system-arm dosfstools python3
+
+    # Only for a machine the distribution's QEMU does not have. Built
+    # for one target with everything optional off but the user-mode
+    # network, which the harness's -netdev user needs; about ten minutes
+    # uncached, seconds cached.
+    - name: Restore a built QEMU ${{ matrix.qemu }}
+      if: matrix.qemu
+      id: qemucache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/qemu
+        key: qemu-${{ matrix.qemu }}-aarch64-softmmu-slirp-ubuntu-24.04-v1
+
+    - name: Build QEMU ${{ matrix.qemu }}
+      if: matrix.qemu && steps.qemucache.outputs.cache-hit != 'true'
+      env:
+        QEMU_VERSION: ${{ matrix.qemu }}
+      run: |
+        set -e
+        sudo apt-get install -y ninja-build pkg-config libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o qemu.tar.xz "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
+        tar xf qemu.tar.xz
+        cd "qemu-${QEMU_VERSION}"
+        ./configure --prefix="$RUNNER_TEMP/qemu" --target-list=aarch64-softmmu \
+          --enable-slirp --disable-docs --disable-werror --disable-tools --disable-guest-agent \
+          --disable-gtk --disable-sdl --disable-vnc --disable-opengl --disable-curses \
+          --disable-xen --disable-kvm --disable-capstone
+        make -j"$(nproc)"
+        make install
+
+    - name: Put that QEMU first
+      if: matrix.qemu
+      run: |
+        sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0
+        echo "$RUNNER_TEMP/qemu/bin" >> "$GITHUB_PATH"
+
+    - name: The tools the harness would otherwise skip for
+      run: |
+        set -e
+        for t in clang ld.lld llvm-objcopy llvm-ar llvm-nm qemu-system-aarch64 python3; do
+          command -v "$t" >/dev/null || { echo "::error::$t is not on PATH"; exit 1; }
+        done
+        clang --version | head -1
+        qemu-system-aarch64 --version | head -1
+        clang --print-targets | grep -q aarch64 || { echo "::error::this clang has no aarch64 target"; exit 1; }
+        qemu-system-aarch64 -machine help | grep -q '^virt ' || { echo "::error::this QEMU has no virt machine"; exit 1; }
+        qemu-system-aarch64 -machine help | grep -q '^raspi3b ' || { echo "::error::this QEMU has no raspi3b machine"; exit 1; }
+        if [ "$PLATFORM" = bcm2711 ]; then
+          qemu-system-aarch64 -machine help | grep -q '^raspi4b ' || { echo "::error::this QEMU has no raspi4b machine; the harness would SKIP the whole platform"; exit 1; }
+        fi
+
+    # The kernel build runs the native limbo: runt.h and the other C views
+    # of the Dis module interfaces are generated from module/runt.m, and
+    # the Limbo that goes into the image is compiled by it.
+    - name: Build mk and limbo
+      run: |
+        set -e
+        SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        for d in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+          (cd "$d" && mk install)
+        done
+        test -x Linux/amd64/bin/limbo
+
+    # dis/ is a build product. The kernel's recovery root takes some
+    # fifty modules from it, and the desktop check copies all of it onto
+    # a card. All four directories, tests/ included: the root manifest
+    # carries dis/tests/exception_test.dis, and this job's first run
+    # found that out by leaving tests/ out.
+    - name: Build the Dis tree
+      run: |
+        set -e
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        for d in appl appl/mpeg appl/veltro tests; do
+          (cd "$d" && mk install) > "/tmp/dis-$(basename "$d").log" 2>&1 || {
+            grep -E '\.b:[0-9]+:' "/tmp/dis-$(basename "$d").log" | grep -v 'warning:' | head -40
+            echo "::error::mk install failed in $d"; exit 1; }
+        done
+        test -f dis/sh.dis && test -f dis/lucifer.dis
+
+    - name: Build the kernel, boot it, and run the checks
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        mkdir -p "$RUNNER_TEMP/bm"
+        set +e
+        BAREMETAL_PLATFORMS="$PLATFORM" BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
+          ./tests/host/baremetal_test.sh 2>&1 | tee "$RUNNER_TEMP/bm/harness.log"
+        echo "HARNESS_STATUS=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+        exit 0
+
+    # The exit status says nothing failed. It does not say anything RAN:
+    # see the top of this file. So read the summary line, and require a
+    # check near the end of the list by name (the matrix's `last`).
+    - name: Assert that the checks ran
+      env:
+        LEAST: ${{ matrix.least }}
+        LAST: ${{ matrix.last }}
+      run: |
+        set -e
+        log="$RUNNER_TEMP/bm/harness.log"
+        tail -1 "$log"
+        sed -e 's/\x1b\[[0-9;]*m//g' "$log" > "$log.plain"
+        summary="$(grep -E '^Passed: [0-9]+ +Failed: [0-9]+ +Skipped: [0-9]+' "$log.plain" | tail -1)"
+        [ -n "$summary" ] || { echo "::error::the harness printed no summary"; exit 1; }
+        passed=$(echo "$summary" | sed -E 's/^Passed: ([0-9]+).*/\1/')
+        failed=$(echo "$summary" | sed -E 's/.*Failed: ([0-9]+).*/\1/')
+        skipped=$(echo "$summary" | sed -E 's/.*Skipped: ([0-9]+).*/\1/')
+        grep -E '^(FAIL|SKIP)' "$log.plain" || true
+        if [ "$HARNESS_STATUS" != "0" ] && [ -f "$RUNNER_TEMP/bm/cc.log" ]; then
+          # a build that fails outside the compiler -- mkrootfs.py not
+          # finding a module, limbo refusing runt.m -- leaves no "error:"
+          # line for the harness to quote, so show the end of the log
+          echo "--- the end of cc.log:"; tail -20 "$RUNNER_TEMP/bm/cc.log"
+        fi
+        [ "$HARNESS_STATUS" = "0" ] || { echo "::error::the harness exited $HARNESS_STATUS"; exit 1; }
+        [ "$failed" = "0" ]   || { echo "::error::$failed checks failed"; exit 1; }
+        [ "$skipped" = "0" ]  || { echo "::error::$skipped checks were skipped; on this runner nothing should be"; exit 1; }
+        [ "$passed" -ge "$LEAST" ] || { echo "::error::only $passed checks passed; $PLATFORM should manage at least $LEAST"; exit 1; }
+        grep -qF -- "$LAST" "$log.plain" \
+          || { echo "::error::the run never reached: $LAST"; exit 1; }
+
+    # What a failure needs to be understood: every boot's serial log,
+    # the compiler's, and the screens as QEMU saw them. The kernel
+    # itself too -- the .elf has the symbols a panic's addresses want.
+    - name: Keep the logs, the screens and the kernel
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: baremetal-${{ matrix.platform }}
+        retention-days: 14
+        if-no-files-found: warn
+        path: |
+          ${{ runner.temp }}/bm/harness.log
+          ${{ runner.temp }}/bm/cc.log
+          ${{ runner.temp }}/bm/*.txt
+          ${{ runner.temp }}/bm/*.ppm
+          ${{ runner.temp }}/bm/*-kernel.elf
+          ${{ runner.temp }}/bm/*-kernel.img

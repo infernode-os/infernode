@@ -1,0 +1,583 @@
+.TH BT9P 4
+.SH NAME
+bt9p, btmock \- Bluetooth host, serving the controller as /net/bt
+.SH SYNOPSIS
+.B bt9p
+[
+.B -D
+] [
+.B -m
+.I mountpoint
+] [
+.B -k
+.I keyfile
+] [
+.B -f
+.I factotum
+]
+.B -t
+.I transport
+.PP
+.B btmock
+[
+.B -a
+.I addr
+] [
+.B -n
+.I 'addr class rssi name'
+] ... [
+.B -s
+] [
+.B -t
+.I ms
+] [
+.I path
+]
+.SH DESCRIPTION
+.I Bt9p
+is the Bluetooth host: the one program that owns a controller, speaks
+HCI to it through
+.IR bthci (2),
+and puts it behind files. It opens
+.I transport
+-- a file such as the board's
+.BR /dev/eia0 ,
+or a dial string such as
+.BR tcp!host!port ,
+anything with a
+.B !
+in it is dialled -- and speaks H4 over it. A file transport with a
+.B ctl
+file beside it
+.RB ( /dev/eia0ctl )
+is a serial port, and gets hardware flow control turned on
+.RB ( m1 ):
+the Broadcom controller does not transmit until its CTS is asserted.
+Nothing in the kernel knows the word Bluetooth; the controller's power line is a pin in
+.B #G
+.RB ( os/bcm2837/devgpio.c ,
+pin 128 on a Pi 3B+) and its UART is a port in
+.IR eia (3).
+.PP
+The tree is served into
+.I mountpoint
+(default
+.BR /net ,
+union-mounted after, so that
+.B /net/bt
+appears beside
+.B /net/tcp
+and
+.BR /net/ether0 ).
+.B -D
+traces every command and event to standard error.
+.SH FILESYSTEM
+.TF status
+.TP
+.B addr
+Read-only: the controller's BD_ADDR,
+.BR b8:27:eb:5a:6b:7c ,
+one line. An error until the controller is up.
+.TP
+.B status
+Read-only, one field per line:
+.B up
+0 or 1; and when up,
+.BR addr ,
+.BR name ,
+a version line
+.RB ( "hci 4.2 lmp 4.2 manufacturer 15 (Broadcom)" ),
+.BR class ,
+.BR discoverable ,
+.BR connectable ;
+always
+.B transport
+(what was opened),
+.B scans
+(inquiries run),
+.B events dropped
+(events nobody was reading);
+.B controller gone
+if the transport has died;
+.B hci held
+while the raw file is open.
+.TP
+.B ctl
+Write-only. Verbs that talk to the controller wait for its answer
+and fail with the HCI status name if it refuses; an unknown verb, a
+malformed one, or one for a milestone not yet built is an error,
+never silence.
+.RS
+.TP
+.B up
+Reset the controller and learn who it is: local version, BD_ADDR,
+name; set the event mask; apply the scan enable. Fails with
+.B no controller: ...
+if nothing answers the reset.
+.TP
+.B down
+Disable page and inquiry scan and mark the controller down.
+.TP
+.B reset
+HCI_Reset; the controller forgets its name and scan settings, and is
+down.
+.TP
+.BI name " string"
+Write_Local_Name; the rest of the line is the name.
+.TP
+.BI class " hex"
+Write_Class_Of_Device.
+.TP
+.BI bdaddr " xx:xx:xx:xx:xx:xx"
+Broadcom's Write_BD_ADDR, then Read_BD_ADDR to record what took.
+Refused unless the controller says it is Broadcom's or Cypress's,
+because the same opcode means something else elsewhere. The CYW43455's
+patch firmware leaves the address at the patch's default, so a board
+that wants its own sets it here; what it should be is the boot
+script's decision, not this program's.
+.TP
+.BR discoverable " on|off"
+.TP
+.BR connectable " on|off"
+Write_Scan_Enable, inquiry scan and page scan respectively.
+.TP
+.BI scan " seconds"
+How long the next inquiry runs, 1 to 61 (default 10).
+.TP
+.BR iocap " none|display|yesno|keyboard"
+What we tell peers we can do about pairing (default
+.BR none ,
+so Secure Simple Pairing is Just Works and nothing prompts).
+.TP
+.BR pairable " on|off"
+Whether a peer may start a pairing we did not ask for (default
+.BR off :
+refused, with
+.B "failed ... pairing not allowed"
+on
+.BR pair ).
+Pairing on a connection we made is always allowed.
+.TP
+.BI pair " addr"
+Pair with a classic peer for its own sake: a link is made to it,
+authenticated and encrypted -- pairing on the way when there is no
+key, under
+.B iocap
+and
+.B pairable
+as any pairing -- the key kept, and the link let go. The write returns
+when that is done, or fails saying why. An LE peripheral pairs at its
+first
+.B connect
+instead.
+.TP
+.BI forget " addr"
+Delete the link key for
+.IR addr ,
+from factotum and from the keys file.
+.TP
+.BI firmware " path"
+Name a Broadcom
+.B .hcd
+patch file; the next
+.B up
+uploads it -- Download_Minidriver, every record, Launch_RAM -- then
+resets and asks the controller who it is now. On the board the file
+is
+.BR /n/dos/firmware/BCM4345C0.hcd ,
+on the card and never in the tree.
+.B status
+reports how many records went, or that the upload failed.
+.TP
+.BI baud " rate"
+Update_UART_Baud_Rate to the controller, at the old rate, then
+.BI b rate
+to the transport's own ctl file
+.RB ( /dev/eia0ctl
+for
+.BR /dev/eia0 );
+refused for a transport that has none.
+.RE
+.TP
+.B scan
+Read-only, one reader at a time. The first read starts an inquiry;
+each read returns the devices whose lines are ready, one per line,
+.IR "addr class rssi name" ,
+class in hex, rssi in dBm. A device's line is written once its name
+is known: from its extended inquiry response, or from a Remote Name
+Request made for it after the inquiry, or
+.B -
+if it will not say. EOF after the last. Closing the file early
+cancels the inquiry. A second open while one runs fails with
+.BR "scan in progress" .
+.TP
+.B lescan
+The same for Bluetooth Low Energy: an active scan for the
+.B scan
+time, one line per device heard,
+.IR "addr public|random rssi name" ,
+the name from its advertising data or
+.BR - ;
+EOF when the time is up.
+.TP
+.B event
+Read-only. The HCI event stream as text, one event per line,
+.BR "event 0x0e 01 03 0c 00" ,
+for as long as the file is held open; what
+.I btmon
+shows. Each reader has its own queue, bounded at a thousand lines.
+Owner-only.
+.TP
+.B hci
+Read/write, exclusive. Raw H4 packets: a write is a packet with its
+indicator byte, a read returns the next packet the controller sent.
+While it is held the stack has lent the controller to the holder,
+and
+.B ctl
+verbs that would issue commands are refused. For bring-up and tests.
+Owner-only.
+.TP
+.B pair
+Read-only stream of pairing prompts while held open:
+.BI "confirm " "addr number"
+(numeric comparison),
+.BI "passkey " "addr number"
+(show it to the peer),
+.BI "passkey? " addr
+(the peer showed one),
+.BI "paired " addrR,
+.BI "failed " "addr why"R.
+Written to answer:
+.BI "yes " addrR,
+.BI "no " addrR,
+.BI "passkey " "addr digits"R.
+A confirmation that arrives with nobody holding the file is refused.
+Owner-only.
+.TP
+.B clone
+Opening it makes a new conversation
+.I N
+and the open file is
+.IR N 's
+.BR ctl :
+reading gives
+.IR N .
+The conversation lives while any of its files is open and no longer;
+.IR dial (2)
+holds the clone open for the life of the connection, and so should
+anything else.
+.TP
+.BI N /ctl
+Write-only verbs, as
+.BR /net/tcp 's:
+.RS
+.TP
+.BI connect " addr" ! port
+Connect to
+.I port
+on the device at
+.IR addr ,
+over an ACL link made if there is not one; the write returns when the
+connection is open, or fails saying why -- a port the peer does not
+serve, a device that does not answer its page, a peer that never
+answers (fifteen seconds).
+.I port
+is one of:
+.RS
+.TP
+.I psm
+An L2CAP channel; decimal or 0x hex, odd.
+.TP
+.BI rfcomm n
+A serial port: RFCOMM server channel
+.IR n ,
+1 to 30, on the link's one multiplexer, which is made for the first
+serial port to a device and taken down after the last.
+.TP
+.B spp
+A serial port whose channel the peer's SDP record names: the Serial
+Port Profile record is asked for and its RFCOMM channel used. Fails
+with
+.I no serial port offered
+if there is none.
+.TP
+.B gatt
+An LE link to the peer, encrypted first (below), with the Attribute
+Protocol on
+.BR data :
+one ATT PDU per write, and each PDU the peer sends is one read.
+.TP
+.B hid
+An LE link, encrypted, then the peer's HID service found with GATT:
+the device is put in boot protocol if it has one and its input
+reports subscribed to, and each report the device notifies is one
+read of
+.BR data .
+A boot mouse report is three bytes, buttons then dx then dy; a boot
+keyboard report is eight. A device with no boot report has its Report
+Map read and parsed
+.RI ( hid (2)),
+and each of its reports is handed on in the boot layout -- buttons,
+dx, dy, wheel -- so the reader never sees the map. The conversation's
+.B status
+says which:
+.BR "Connected boot-mouse" ,
+.BR boot-keyboard ,
+.B mouse
+(a report-protocol mouse, translated) or
+.B report
+(a map describing no mouse; reports as they came).
+.IR bthid (1)
+is the reader that makes a pointer of them. Writes are refused.
+.PP
+An LE link is encrypted before either port is used: with the long-term
+key factotum holds for the peer
+.RB ( "proto=btltk" ),
+or, when it has none and
+.B pairable
+is on, by pairing -- Just Works, legacy pairing; the key the device
+gives is stored as
+.B btlink
+keys are, in factotum and in the keys file, and offered next time.
+A device that will only pair with LE Secure Connections is refused
+and says so. The peer's address type is what
+.B lescan
+heard for it, or, unheard, what the address itself says -- so scan
+first for a device with a resolvable private address.
+.RE
+.TP
+.BI announce " port"
+Serve
+.I port
+on this conversation: peers that connect to it appear through
+.BR listen .
+The
+.BI * ! port
+form
+.IR announce (2)
+writes for
+.BI bt!*! port
+is taken too, and a local half other than
+.B *
+or this controller's address is refused. For
+.BI rfcomm n
+and
+.B spp
+-- the latter the lowest free channel -- a Serial Port Profile record
+naming the channel is offered over SDP for as long as the conversation
+is announced, which is how a peer's
+.B spp
+finds it. SDP itself (PSM 1) is always answered while the controller is
+up; a peer asking what we offer gets the list, empty or not.
+.TP
+.B hangup
+Disconnect the channel.
+.RE
+.TP
+.BI N /data
+L2CAP: one SDU per write and one per read, a whole frame each; a write
+larger than the peer's MTU fails saying so. RFCOMM: a byte stream, as
+a serial port is -- a read returns what has arrived, up to its count,
+and a write of any length is framed and paced by the peer's credits.
+Reads return EOF once the connection has gone.
+.TP
+.BI N /status
+.BR Connected ,
+.BR Connecting ,
+.BR Listen ,
+.BR Closed ,
+or
+.BI "Hangup " why\fR.
+.TP
+.BI N /local
+.RI "" addr ! port
+of this end;
+.I port
+as it was given, so a serial port reads
+.BI rfcomm n
+(an
+.B spp
+connect reads the channel SDP found).
+.TP
+.BI N /remote
+The peer's.
+.TP
+.BI N /listen
+On an announced conversation: the open blocks until a peer connects
+to the PSM, and then reading gives the accepted conversation's number
+-- which is how
+.IR dial (2)'s
+.I listen
+works. The accepted conversation is held until the listen file is
+closed.
+.PP
+Because the shape is
+.BR /net/tcp 's,
+.IR dial (2)
+works unchanged:
+.BR "dial(""bt!b8:27:eb:11:22:33!17"")" ,
+.BR "announce(""bt!*!17"")" ,
+and
+.IR ndb/cs (8)
+translates
+.B bt!
+addresses to
+.B /net/bt/clone
+because that file exists.
+.SH KEYS
+LE peripherals add a third protocol:
+.IP
+.B "key proto=btltk addr=<peer> type=<0|1> ediv=<n> rand=<16 hex> !ltk=<32 hex>"
+.PP
+the long-term key an LE pairing produced, with the EDIV and Rand the
+controller must be given to start encryption with it, and the peer's
+address type. Stored and forgotten as the others are.
+Keys are held the way WiFi's are. factotum is the only source of
+secrets: a peer's Link Key Request is answered from
+.BR "proto=btlink addr=" IpeerR,
+a PIN Code Request from
+.BR "proto=btpin addr=" IpeerR
+and then
+.B proto=btpin
+alone -- the protocol modules are
+.B auth/proto/btlink
+and
+.BR auth/proto/btpin .
+A link key the controller reports at the end of a pairing is written
+to factotum's ctl as
+.IP
+.EX
+key proto=btlink addr=94:bb:43:44:61:04 type=4 !key=<32 hex digits>
+.EE
+.PP
+and, given
+.BR -k ,
+appended to
+.I keyfile
+in the same line; at start every
+.B key
+line in
+.I keyfile
+is written to factotum, one write each, so a board loads its pairings
+from the card as it loads its WiFi keys. Legacy PINs are pre-shared
+and go in the same file:
+.IP
+.EX
+key proto=btpin addr=00:1f:20:aa:bb:cc !pin=0000
+key proto=btpin !pin=1234
+.EE
+.PP
+.B -f
+names factotum's directory (default
+.BR /mnt/factotum ).
+.B "cat /mnt/factotum/ctl"
+lists whom the machine is paired with, keys elided.
+.PP
+See
+.B docs/BLUETOOTH.md
+for the whole tree and the order it arrives in.
+.SH BTMOCK
+.I Btmock
+is a fake controller as a file, served through
+.IR file2chan
+at
+.I path
+(default
+.BR /chan/btmock ).
+Bytes written are H4 commands, bytes read are the controller's
+answers, so
+.B "bt9p -t /chan/btmock"
+runs with no radio and no kernel.
+.B -a
+sets its address;
+.B -n
+adds a device an inquiry finds, repeatable; a fifth word
+.BI pin= NNNN
+or
+.B ssp
+makes it demand pairing before it connects, by that PIN or by numeric
+comparison of 123456;
+.B -s
+makes it stingy with command credits, refunding them on the tick;
+.B -t
+sets the tick in milliseconds (default 200), one inquiry result per
+tick. Every nearby device answers L2CAP connections to PSM 0x1001 by
+echoing what it is sent, offers a serial port on RFCOMM channel 1 that
+echoes too, and says so in an SDP record. A second file,
+.IB path ctl\fR,
+is the far side's telephone: writing
+.BI "call " "addr port text"
+makes the device at
+.I addr
+connect to the host and send
+.I text
+on
+.I port
+-- a PSM, or
+.BI rfcomm n
+-- and reading it lists what the peers received, one
+.BI "recv " "addr port text"
+per line.
+.SH EXAMPLES
+On the board:
+.IP
+.EX
+bind -a '#t' /dev
+echo 1 > '#G/gpio/128/level'
+bt9p -t /dev/eia0 -k /n/dos/btkeys
+echo up > /net/bt/ctl
+cat /net/bt/addr
+cat /net/bt/scan
+.EE
+.PP
+Anywhere:
+.IP
+.EX
+btmock -n '94:bb:43:44:61:04 0x1c010c -61 hephaestus' &
+bt9p -t /chan/btmock
+echo up > /net/bt/ctl
+cat /net/bt/status
+.EE
+.SH AUDIT
+When
+.B /mnt/audit/log
+is in the namespace (see
+.IR auditfs (4)),
+one record goes there for each thing that changes whom the machine
+trusts or talks to:
+.BR up ,
+.BR down ,
+.BI "paired peer=" addr " iocap=" modeR,
+.BI "forget peer=" addrR,
+and
+.BI "connect peer=" addr " port=" port " incoming|outgoing"R.
+Without it nothing is recorded and nothing fails: a radio that cannot
+come up for want of a log is a worse outcome than an unlogged radio.
+The pairing prompts and refusals are on
+.BR event ,
+which is the transcript, not the record.
+.SH SOURCE
+.B /appl/cmd/bt9p.b
+.br
+.B /appl/cmd/btmock.b
+.br
+.B /appl/lib/bthci.b
+.br
+.B /appl/lib/btmock.b
+.SH SEE ALSO
+.IR eia (3),
+.IR dial (2),
+.B docs/BLUETOOTH.md
+.SH BUGS
+On a Pi 3B+ the CYW43455 has answered
+.BR up ,
+taken its firmware, found a peer by inquiry and carried an L2CAP
+conversation each way; pairing and
+.B baud
+above 115200 have run against
+.I btmock
+only. The address after the firmware is the patch's default, not the
+board's; there is no verb yet to set it.
+Started from the network console it outlives the session and keeps the
+port, and the next instance's Reset is answered to the first one:
+kill it before starting another.

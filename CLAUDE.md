@@ -407,6 +407,8 @@ timeoutTask(ch: chan of int, ms: int)
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
+| `wpa_test.b` | WPA2 key derivation (RFC 6070, 802.11i, RFC 3394) + the four-way handshake |
+| `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
 
@@ -430,6 +432,11 @@ infernode/
 │   ├── wm/              #   Window manager
 │   └── svc/             #   Services (httpd, etc.)
 ├── module/              # Limbo module interfaces (.m files)
+├── os/                  # NATIVE (bare-metal) kernel: os/arm64 shared AArch64,
+│                        #   os/bcm2837 Raspberry Pi 3B+, os/port portable kernel,
+│                        #   os/ip TCP/IP, os/init the Dis that boots it.
+│                        #   Built and tested ONLY via tests/host/baremetal_test.sh;
+│                        #   status and roadmap in os/bcm2837/README.md.
 ├── tests/               # Unit tests (Limbo + shell)
 │   ├── host/            #   Host-side shell tests
 │   ├── inferno/         #   Inferno-side shell tests

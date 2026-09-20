@@ -20,8 +20,28 @@ if {! ~ $user ''} {
 # logon runs). When $skiplogon is 1, secstore stays locked and
 # factotum starts empty; downstream code that needs keys (LLM
 # keyring mounts, etc.) will fail in expected ways.
+#
+# wm/logon returns when the user logged in, fails with status
+# "skipped" when they chose to go on without secstore, and fails with
+# the reason otherwise (no display, no keyboard -- see the top of
+# appl/wm/logon.b). The hosted boot goes on to the desktop in every
+# case, as it always has: the host's own login already stands between
+# the world and this screen, and a developer running without a
+# display wants the desktop, not a refusal. But it says which of the
+# three it was, because a desktop with no factotum looks exactly like
+# one with. ($status is copied first: `if` resets it from every
+# condition it evaluates, the `~` included.)
 if {! ~ $skiplogon 1} {
-	wm/logon
+	if {wm/logon} {
+		echo 'boot: logged in — secstore keys are in factotum'
+	}{
+		why=$status
+		if {~ $why skipped} {
+			echo 'boot: login skipped at the screen — no factotum, no secstore; keys will not persist'
+		}{
+			echo 'boot: wm/logon failed:' $why '— continuing without factotum/secstore'
+		}
+	}
 }{
 	echo 'boot: skiplogon=1 — wm/logon bypassed (dev mode; no factotum, no secstore)'
 }

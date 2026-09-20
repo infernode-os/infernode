@@ -29,6 +29,8 @@ TARG=\
 	auth.dis\
 	auth9.dis\
 	bloomfilter.dis\
+	bthci.dis\
+	btmock.dis\
 	bufio.dis\
 	cfg.dis\
 	cfgfile.dis\
@@ -42,6 +44,7 @@ TARG=\
 	mermaid.dis\
 	deflate.dis\
 	devpointer.dis\
+	dhcpclient.dis\
 	dial.dis\
 	dialnorm.dis\
 	dialog.dis\
@@ -78,6 +81,12 @@ TARG=\
 	llmclient.dis\
 	wirefmt.dis\
 	keyset.dis\
+	l2cap.dis\
+	sdp.dis\
+	rfcomm.dis\
+	att.dis\
+	smp.dis\
+	hid.dis\
 	libc.dis\
 	libc0.dis\
 	lists.dis\
@@ -160,6 +169,7 @@ TARG=\
 	wmlib.dis\
 	wmsrv.dis\
 	workdir.dis\
+	wpakey.dis\
 	writegif.dis\
 	x402.dis\
 	xml.dis\
@@ -180,7 +190,15 @@ SYSMODULES=\
 	attrdb.m\
 	auth9.m\
 	bloomfilter.m\
+	bthci.m\
+	btmock.m\
 	bufio.m\
+	l2cap.m\
+	sdp.m\
+	rfcomm.m\
+	att.m\
+	smp.m\
+	hid.m\
 	cfg.m\
 	cfgfile.m\
 	complete.m\
@@ -302,6 +320,7 @@ SYSMODULES=\
 	wmlib.m\
 	wmsrv.m\
 	workdir.m\
+	wpakey.m\
 	x402.m\
 	xml.m\
 

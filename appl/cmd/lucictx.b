@@ -1242,6 +1242,20 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 		lineH = TAPMIN;	# 44pt finger tap target for browser entries
 	y := zone.min.y + pad;
 
+	#
+	# Into the backing image, copied to the screen once at the end --
+	# the same discipline redrawctx() got in bef57443 and this modal
+	# was left out of. Clearing the zone and repainting straight into
+	# the window is invisible on a hosted display behind a compositor
+	# and a full-panel flicker on a framebuffer that IS the screen.
+	#
+	if(backbuf == nil || backbuf.r.dx() != zone.dx() || backbuf.r.dy() != zone.dy() ||
+			backbuf.r.min.x != zone.min.x || backbuf.r.min.y != zone.min.y)
+		backbuf = display_g.newimage(zone, mainwin.chans, 0, Draw->Nofill);
+	front := mainwin;
+	if(backbuf != nil)
+		mainwin = backbuf;
+
 	mainwin.draw(zone, bgcol, nil, (0, 0));
 
 	# Header row: ↑  <path>  Bind ✕
@@ -1470,6 +1484,10 @@ drawbrowser(curpath: string, dirs, files: list of string, scroll: int)
 		}
 	}
 
+	if(backbuf != nil) {
+		mainwin = front;
+		mainwin.draw(zone, backbuf, nil, backbuf.r.min);
+	}
 	mainwin.flush(Draw->Flushnow);
 }
 
@@ -1483,30 +1501,49 @@ filebrowser(startpath: string): string
 	result := "";
 	prevbut := 0;
 
-	for(;;) {
-		# Collect directory entries
-		dirs: list of string;
-		files: list of string;
+	#
+	# The directory is read when the path changes and the view is
+	# drawn when something changed -- NOT once per mouse event. This
+	# loop used to read the directory and repaint the whole zone on
+	# every pointer motion; on a card filesystem behind a framebuffer
+	# that is the screen, that was a directory read plus a full
+	# clear-and-repaint dozens of times a second under the cursor:
+	# profuse flicker, and clicks lost behind the backlog.
+	#
+	dirs: list of string;
+	files: list of string;
+	readpath := "";
+	needdraw := 1;
 
-		fd := sys->open(curpath, Sys->OREAD);
-		if(fd != nil) {
-			for(;;) {
-				(n, ds) := sys->dirread(fd);
-				if(n <= 0)
-					break;
-				for(di := 0; di < len ds; di++) {
-					if(ds[di].mode & Sys->DMDIR)
-						dirs = ds[di].name :: dirs;
-					else
-						files = ds[di].name :: files;
+	for(;;) {
+		if(readpath != curpath) {
+			dirs = nil;
+			files = nil;
+			fd := sys->open(curpath, Sys->OREAD);
+			if(fd != nil) {
+				for(;;) {
+					(n, ds) := sys->dirread(fd);
+					if(n <= 0)
+						break;
+					for(di := 0; di < len ds; di++) {
+						if(ds[di].mode & Sys->DMDIR)
+							dirs = ds[di].name :: dirs;
+						else
+							files = ds[di].name :: files;
+					}
 				}
 			}
+			dirs = sortstrlist(dirs);
+			files = sortstrlist(files);
+			readpath = curpath;
+			needdraw = 1;
 		}
-		dirs = sortstrlist(dirs);
-		files = sortstrlist(files);
 
 		# Draw browser UI (populates brow_* module-level arrays)
-		drawbrowser(curpath, dirs, files, scroll);
+		if(needdraw) {
+			drawbrowser(curpath, dirs, files, scroll);
+			needdraw = 0;
+		}
 
 		# Wait for mouse event, zone resize, or context event.
 		# INFR-28: also handle ctx events here so theme switches that
@@ -1525,9 +1562,11 @@ filebrowser(startpath: string): string
 				result = nil;
 				break;
 			}
+			needdraw = 1;
 			continue;
 		ev := <-evch_g =>
 			handleevent(ev);
+			needdraw = 1;
 			continue;	# loop redraws browser with refreshed colours
 		}
 		if(p == nil)
@@ -1537,12 +1576,11 @@ filebrowser(startpath: string): string
 
 		# Mouse wheel scroll
 		if(p.buttons & 8) {
-			if(scroll > 0) scroll--;
+			if(scroll > 0) { scroll--; needdraw = 1; }
 			continue;
 		}
 		if(p.buttons & 16) {
-			if(scroll < brow_maxscroll)
-				scroll++;
+			if(scroll < brow_maxscroll) { scroll++; needdraw = 1; }
 			continue;
 		}
 

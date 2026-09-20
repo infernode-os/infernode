@@ -35,6 +35,9 @@ TARG=\
 	bind.dis\
 	bit2gif.dis\
 	broke.dis\
+	bt9p.dis\
+	bthid.dis\
+	btmock.dis\
 	bytes.dis\
 	cal.dis\
 	calc.dis\
@@ -62,6 +65,7 @@ TARG=\
 	diff.dis\
 	disdep.dis\
 	disdump.dis\
+	dossrv.dis\
 	du.dis\
 	echo.dis\
 	ed.dis\
@@ -97,6 +101,7 @@ TARG=\
 	iostats.dis\
 	js.dis\
 	kill.dis\
+	lan78stats.dis\
 	ktrans.dis\
 	limbtest.dis\
 	listen.dis\
@@ -175,6 +180,7 @@ TARG=\
 	telnet.dis\
 	test.dis\
 	time.dis\
+	tone.dis\
 	timestamp.dis\
 	tokenize.dis\
 	touch.dis\

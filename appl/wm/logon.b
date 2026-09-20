@@ -4,7 +4,16 @@ implement WmLogon;
 # InferNode Login Screen / Secstore Unlock
 #
 # Fullscreen login displayed at boot before the window manager starts.
-# Uses raw Draw (no wmclient/wmsrv needed) so it can run before lucifer.
+#
+# The form is Tk. There is no window manager yet, but Tk has never
+# needed one: it needs a window to draw in, and this allocates a
+# screen over the display and gives Tk a backed window covering it.
+# That buys everything a text field is expected to do -- click to
+# place the caret, arrow keys, Home/End, drag to select, masking --
+# and a backing store, so the panel never shows a half-painted frame.
+# The first version of this screen drew with the raw draw library and
+# hand-rolled a field that could append and backspace and nothing
+# else; on bare metal every one of its shortcuts showed.
 #
 # Shows brand image, password field, version info.
 # On Enter: unlocks secstore and loads keys into factotum.
@@ -14,7 +23,25 @@ implement WmLogon;
 # First boot: prompts for new password + confirmation, creates secstore account.
 # Subsequent boots: prompts for password, unlocks secstore, loads keys.
 #
-# For headless: profile detects no display and falls back to console prompt.
+# The exit status is the contract with the boot script, and there are
+# three outcomes it has to tell apart. Inferno sh treats a command
+# that returns as success and one that raises "fail:<reason>" as a
+# failure with $status set to <reason>, so:
+#
+#	logged in	init returns; factotum holds the keys
+#	skipped		raise "fail:skipped" -- the user chose to go
+#			on without secstore (Escape twice, or Escape
+#			after a failed unlock). Deliberate, and the
+#			desktop may start, but not silently: it has
+#			no factotum and the script must say so.
+#	anything else	raise "fail:<why>" -- no display, no keyboard,
+#			the form would not build, the keyboard closed.
+#			Nothing was authenticated and nothing was
+#			chosen; a crash is not a login.
+#
+# Before this, every one of those returned normally, and the bare-metal
+# boot script -- which starts the desktop on success -- could not tell
+# a login from a login screen that had died before it drew.
 #
 
 include "sys.m";
@@ -23,6 +50,9 @@ include "sys.m";
 include "draw.m";
 	draw: Draw;
 	Display, Font, Screen, Image, Point, Rect, Pointer: import draw;
+
+include "tk.m";
+	tk: Tk;
 
 include "lucitheme.m";
 	lucitheme: Lucitheme;
@@ -53,11 +83,10 @@ WmLogon: module
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-ZP := Point(0, 0);
-
 IMGPATH:  con "/lib/lucifer/login-screen.png";
-IMGW:     con 300;
-IMGH:     con 205;
+BODYFONT: con "/fonts/combined/unicode.sans.14.font";
+SMALLFONT: con "/fonts/combined/unicode.sans.12.font";
+FIELDW:   con 300;
 PADDING:  con 16;
 
 # Login states
@@ -69,9 +98,7 @@ STATE_RECOVERY:		con 4;
 STATE_FIDOPIN:		con 5;
 
 display_g: ref Display;
-screen: ref Image;
-bodyfont: ref Font;
-smallfont: ref Font;
+top: ref Tk->Toplevel;
 logo_g: ref Image;	# cached brand image
 
 # Password state
@@ -80,10 +107,16 @@ confirmbuf: string;
 savedpass: string;
 savedloginpass: string;	# secstore password held while prompting for the recovery passphrase
 current2fadkhex: string;	# 2FA data key (hex) for this session — for DK-encrypted secstore save-back
-cursor: int;
 statusmsg: string;
 state: int;
 escpending: int;
+
+# How this screen ended, for the exit status described at the top:
+# nil means logged in; anything else is raised as "fail:<outcome>"
+# once the input readers are dead. The handlers set it when they
+# return 1 to leave the loop.
+outcome: string;
+SKIPPED: con "skipped";
 
 stderr: ref Sys->FD;
 
@@ -92,6 +125,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
 	draw = load Draw Draw->PATH;
+	tk = load Tk Tk->PATH;
 	bufio = load Bufio Bufio->PATH;
 	kr = load Keyring Keyring->PATH;
 	secstore = load Secstore Secstore->PATH;
@@ -103,20 +137,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		display_g = ctxt.display;
 	if(display_g == nil) {
 		display_g = Display.allocate(nil);
-		if(display_g == nil) {
-			# No display — headless fallback
-			headlessprompt();
-			return;
-		}
+		if(display_g == nil)
+			giveup(sys->sprint("no display: %r"));
 	}
-	screen = display_g.image;
-
-	bodyfont = Font.open(display_g, "/fonts/combined/unicode.sans.14.font");
-	if(bodyfont == nil)
-		bodyfont = Font.open(display_g, "*default*");
-	smallfont = Font.open(display_g, "/fonts/combined/unicode.sans.10.font");
-	if(smallfont == nil)
-		smallfont = bodyfont;
 
 	# If factotum was already started with secstore backing (e.g. headless
 	# mode with $SECSTORE_PASSWORD), skip the login screen entirely.
@@ -128,8 +151,8 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	passbuf = "";
 	confirmbuf = "";
 	savedpass = "";
-	cursor = 0;
 	escpending = 0;
+	outcome = nil;
 
 	# Load brand image once (reloading per-redraw can fail under resource pressure)
 	logo_g = loadpng(IMGPATH);
@@ -140,50 +163,147 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	if(!secstoreacctexists()) {
 		state = STATE_SETUP_PASS;
-		statusmsg = "First boot \u2014 choose a secstore password";
+		statusmsg = "First boot — choose a secstore password";
 	} else {
 		state = STATE_LOGIN;
 		statusmsg = "Enter password to unlock";
 	}
 
+	if(tk == nil || !buildform())
+		giveup(sys->sprint("cannot build the login form: %r"));
 	redraw();
 
-	# Read keyboard input directly from /dev/keyboard
+	# Input straight from the devices: there is no window manager to
+	# route it yet. Enter and Escape drive the state machine here;
+	# everything else is the field's business and goes to Tk.
 	kbdfd := sys->open("/dev/keyboard", Sys->OREAD);
-	if(kbdfd == nil) {
-		sys->fprint(stderr, "logon: cannot open /dev/keyboard: %r\n");
-		headlessprompt();
-		return;
+	if(kbdfd == nil)
+		giveup(sys->sprint("cannot open /dev/keyboard: %r"));
+	ptrfd := sys->open("/dev/pointer", Sys->OREAD);
+
+	kbdch := chan of int;
+	ptrch := chan of ref Pointer;
+	pids := chan of int;
+	spawn kbdreader(kbdfd, kbdch, pids);
+	kbdpid := <-pids;
+	ptrpid := -1;
+	if(ptrfd != nil){
+		spawn ptrreader(ptrfd, ptrch, pids);
+		ptrpid = <-pids;
 	}
 
-	kbdbuf := array[12] of byte;
-	for(;;) {
-		n := sys->read(kbdfd, kbdbuf, len kbdbuf);
+	#
+	# A break inside an alt arm leaves the alt, not the loop (the
+	# first version of this loop did exactly that and the desktop
+	# never started), so the loop's exit is a flag.
+	#
+	done := 0;
+	while(!done) alt {
+	k := <-kbdch =>
+		if(k < 0){
+			# The keyboard went away under us. Nobody typed a
+			# password and nobody chose to skip.
+			outcome = "keyboard closed";
+			done = 1;
+		}else case k {
+		'\n' or '\r' =>
+			escpending = 0;
+			passbuf = fieldtext();
+			done = handleenter();
+		27 =>	# Escape
+			passbuf = fieldtext();
+			done = handleescape();
+		* =>
+			escpending = 0;
+			tk->keyboard(top, k);
+			tk->cmd(top, "update");
+		}
+	p := <-ptrch =>
+		tk->pointer(top, *p);
+		tk->cmd(top, "update");
+	}
+
+	# The readers are blocked in read; left alone they would go on
+	# eating the desktop's keystrokes after this screen is gone.
+	# Killed BEFORE the raise below, on every path: a raise leaves
+	# init at once and would otherwise leave them running.
+	kill(kbdpid);
+	if(ptrpid >= 0)
+		kill(ptrpid);
+
+	if(outcome != nil)
+		raise "fail:" + outcome;
+}
+
+# Fail before the input loop ever ran: nothing to kill, nothing on
+# screen worth a delay, and the reason goes to stderr as well as to
+# the shell -- on a bare-metal boot stderr is the serial console and
+# the only place the reason can be read.
+giveup(why: string)
+{
+	sys->fprint(stderr, "logon: %s\n", why);
+	raise "fail:" + why;
+}
+
+kbdreader(fd: ref Sys->FD, out: chan of int, pids: chan of int)
+{
+	pids <-= sys->pctl(0, nil);
+	buf := array[64] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
 		if(n <= 0)
 			break;
-
-		s := string kbdbuf[0:n];
-		for(j := 0; j < len s; j++) {
-			k := s[j];
-			case k {
-			'\n' or '\r' =>
-				escpending = 0;
-				if(handleenter())
-					return;
-			27 =>	# Escape
-				if(handleescape())
-					return;
-			'\b' =>
-				escpending = 0;
-				handlebackspace();
-			* =>
-				if(k >= 16r20) {
-					escpending = 0;
-					handlechar(k);
-				}
-			}
-		}
+		s := string buf[0:n];
+		for(i := 0; i < len s; i++)
+			out <-= s[i];
 	}
+	out <-= -1;
+}
+
+ptrreader(fd: ref Sys->FD, out: chan of ref Pointer, pids: chan of int)
+{
+	pids <-= sys->pctl(0, nil);
+	buf := array[64] of byte;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		s := string buf[0:n];
+		if(len s < 2 || s[0] != 'm')
+			continue;
+		(nf, f) := sys->tokenize(s[1:], " ");
+		if(nf < 3)
+			continue;
+		x := int hd f; f = tl f;
+		y := int hd f; f = tl f;
+		b := int hd f;
+		out <-= ref Pointer(b, Point(x, y), 0);
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+#
+# " -font <path>" if that font exists, otherwise nothing at all.
+#
+fontopt(path: string): string
+{
+	(ok, nil) := sys->stat(path);
+	if(ok < 0){
+		sys->fprint(stderr, "logon: %s is missing; using the built-in font\n", path);
+		return "";
+	}
+	return " -font " + path;
+}
+
+fieldtext(): string
+{
+	return tk->cmd(top, ".f.pw get");
 }
 
 # Returns 1 if login screen should exit
@@ -205,7 +325,7 @@ handleenter(): int
 
 	STATE_SETUP_CONFIRM =>
 		if(passbuf != savedpass) {
-			statusmsg = "Passwords don't match \u2014 try again";
+			statusmsg = "Passwords don't match — try again";
 			passbuf = "";
 			savedpass = "";
 			state = STATE_SETUP_PASS;
@@ -213,10 +333,21 @@ handleenter(): int
 			return 0;
 		}
 		# Passwords match — create account and unlock
-		dosetupandunlock(passbuf);
+		err := dosetupandunlock(passbuf);
 		passbuf = "";
 		savedpass = "";
-		return 1;
+		if(err == nil)
+			return 1;
+		# It used to exit here whatever dosetupandunlock had done,
+		# which on a first boot with no secstored running meant a
+		# desktop with no factotum and no account, two seconds after
+		# an error nobody had time to read. Offer the same two ways
+		# out a failed unlock gets; Enter goes back to setup, since
+		# there is still no account.
+		state = STATE_LOGIN_FAILED;
+		statusmsg = err + "\nEnter: try again  |  Escape: continue without secstore";
+		redraw();
+		return 0;
 
 	STATE_LOGIN =>
 		r := dounlock();
@@ -233,10 +364,16 @@ handleenter(): int
 		return 0;
 
 	STATE_LOGIN_FAILED =>
-		# Enter from failed state — go back to password entry
+		# Enter from failed state — go back to password entry, or
+		# to account setup if the failure was there and left none.
 		passbuf = "";
-		state = STATE_LOGIN;
-		statusmsg = "Enter password to unlock";
+		if(secstoreacctexists()){
+			state = STATE_LOGIN;
+			statusmsg = "Enter password to unlock";
+		}else{
+			state = STATE_SETUP_PASS;
+			statusmsg = "First boot — choose a secstore password";
+		}
 		redraw();
 		return 0;
 
@@ -311,6 +448,7 @@ handleescape(): int
 		statusmsg = "Continuing without secstore";
 		redraw();
 		sys->sleep(500);
+		outcome = SKIPPED;
 		return 1;
 
 	* =>
@@ -319,6 +457,7 @@ handleescape(): int
 			statusmsg = "Skipped";
 			redraw();
 			sys->sleep(300);
+			outcome = SKIPPED;
 			return 1;
 		}
 		escpending = 1;
@@ -328,132 +467,153 @@ handleescape(): int
 	}
 }
 
-handlebackspace()
+# A Tk colour from a packed lucitheme colour (0xRRGGBBAA).
+tkcol(c: int): string
 {
-	if(len passbuf > 0) {
-		passbuf = passbuf[0:len passbuf - 1];
-		redraw();
+	return sys->sprint("#%06x", (c >> 8) & 16rffffff);
+}
+
+#
+# The form. A screen over the display, a backed window covering it,
+# and the widgets; redraw() decides which of them show.
+#
+buildform(): int
+{
+	di := display_g.image;
+
+	bg := int 16r1a1a1aff;
+	input := int 16r2a2a2aff;
+	accent := int 16rff5500ff;
+	text := int 16rffffffff;
+	dim := int 16r666666ff;
+	red := int 16rff4444ff;
+	if(lucitheme != nil){
+		th := lucitheme->gettheme();
+		if(th != nil){
+			bg = th.bg;
+			input = th.input;
+			accent = th.accent;
+			text = th.text;
+			dim = th.dim;
+			red = th.red;
+		}
 	}
+
+	scr := Screen.allocate(di, display_g.color(bg), 0);
+	if(scr == nil)
+		return 0;
+	di.draw(di.r, scr.fill, nil, scr.fill.r.min);
+	win := scr.newwindow(di.r, Draw->Refbackup, bg);
+	if(win == nil)
+		return 0;
+
+	top = tk->toplevel(display_g, "-bd 0 -bg " + tkcol(bg));
+	if(top == nil)
+		return 0;
+	top.screenr = di.r;
+	e := tk->putimage(top, ".", win, nil);
+	if(e != nil){
+		sys->fprint(stderr, "logon: tk window: %s\n", e);
+		return 0;
+	}
+
+	#
+	# A named font that will not open takes its whole widget with it:
+	# Tk fails the create, nothing is packed, and the screen shows the
+	# logo and nothing else -- which is what a card whose font
+	# directory had been emptied did. Tk's own default (libtk's
+	# utils.c) already falls back to the font built into libdraw, so
+	# the fix is to stop naming a font that is not there.
+	#
+	bodyf := fontopt(BODYFONT);
+	smallf := fontopt(SMALLFONT);
+
+	cmds := array[] of {
+		". configure -width " + string di.r.dx() + " -height " + string di.r.dy(),
+		"pack propagate . 0",
+		"frame .f -bd 0 -bg " + tkcol(bg),
+		"label .f.prompt -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf,
+		"entry .f.pw -show • -width " + string FIELDW + " -bd 0 -relief flat"
+			+ " -bg " + tkcol(input) + " -fg " + tkcol(text)
+			+ " -highlightthickness 1 -highlightcolor " + tkcol(accent)
+			+ " -selectbackground " + tkcol(accent)
+			+ bodyf,
+		"label .f.status -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + bodyf,
+		"label .f.err -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(red) + bodyf,
+		"label .f.choice -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(text) + bodyf,
+		"label .f.warn1 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf
+			+ " -text {Keys and secrets will not be available.}",
+		"label .f.warn2 -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf
+			+ " -text {AI integration may not work.}",
+		"frame .b -bd 0 -bg " + tkcol(bg),
+		"label .b.version -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
+		"label .b.copy -bd 0 -bg " + tkcol(bg) + " -fg " + tkcol(dim) + smallf,
+		"pack .b.version .b.copy -side top",
+		"pack .b -side bottom -pady " + string PADDING,
+		"pack .f -expand 1",
+	};
+	for(i := 0; i < len cmds; i++){
+		e = tk->cmd(top, cmds[i]);
+		if(e != nil && e[0] == '!')
+			sys->fprint(stderr, "logon: tk: %s: %s\n", cmds[i], e);
+	}
+
+	if(logo_g != nil){
+		# The brand image is RGBA. Composite it over the background
+		# here, once, and hand Tk an opaque image of known geometry.
+		flat := display_g.newimage(Rect((0, 0), (logo_g.r.dx(), logo_g.r.dy())), di.chans, 0, bg);
+		if(flat != nil){
+			flat.draw(flat.r, logo_g, nil, logo_g.r.min);
+			logo_g = flat;
+		}
+		tk->cmd(top, "image create bitmap logo");
+		tk->putimage(top, "logo", logo_g, nil);
+		tk->cmd(top, "label .f.logo -bd 0 -image logo -bg " + tkcol(bg));
+	}
+	# There is no window manager to say so: this window has the keyboard.
+	tk->cmd(top, "focus -global 1");
+
+	version := rf("/dev/sysctl");
+	if(version == nil)
+		version = brandname();
+	tk->cmd(top, ".b.version configure -text " + tk->quote(version));
+	tk->cmd(top, ".b.copy configure -text " + tk->quote(brandcopyright()));
+	return 1;
 }
 
-handlechar(k: int)
-{
-	passbuf[len passbuf] = k;
-	redraw();
-}
-
-# Build a Draw colour from a packed lucitheme colour. lucitheme stores each
-# colour as 0xRRGGBBAA with the alpha byte always FF, so drop the low byte
-# and take the top three (a 0xRRGGBB shift would read the alpha as blue).
-rgbint(c: int): ref Image
-{
-	return display_g.rgb((c >> 24) & 16rff, (c >> 16) & 16rff, (c >> 8) & 16rff);
-}
-
+#
+# Show the state: which widgets are packed and what they say. Every
+# state change in the handlers ends by calling this.
+#
 redraw()
 {
-	if(screen == nil)
+	if(top == nil)
 		return;
 
-	r := screen.r;
-	cx := (r.min.x + r.max.x) / 2;
-	cy := (r.min.y + r.max.y) / 2;
+	for(w := list of {".f.logo", ".f.prompt", ".f.pw", ".f.status", ".f.err", ".f.choice", ".f.warn1", ".f.warn2"}; w != nil; w = tl w)
+		tk->cmd(top, "pack forget " + hd w);
 
-	# Theme palette. logon runs very early in boot, so if lucitheme is
-	# unavailable we fall back to the historical hardcoded colours and
-	# never block login. gettheme() itself substitutes Brimstone defaults
-	# for any missing key, so a loaded module always yields a full palette.
-	th: ref Lucitheme->Theme;
-	if(lucitheme != nil)
-		th = lucitheme->gettheme();
-	bgcol, fieldbg, accentcol, textcol, dimcol, redcol: ref Image;
-	if(th != nil) {
-		bgcol     = rgbint(th.bg);
-		fieldbg   = rgbint(th.input);
-		accentcol = rgbint(th.accent);
-		textcol   = rgbint(th.text);
-		dimcol    = rgbint(th.dim);
-		redcol    = rgbint(th.red);
-	} else {
-		bgcol     = display_g.rgb(16r1a, 16r1a, 16r1a);
-		fieldbg   = display_g.rgb(16r2a, 16r2a, 16r2a);
-		accentcol = display_g.rgb(16rff, 16r55, 16r00);
-		textcol   = display_g.rgb(16rff, 16rff, 16rff);
-		dimcol    = display_g.rgb(16r66, 16r66, 16r66);
-		redcol    = display_g.rgb(16rff, 16r44, 16r44);
-	}
-
-	# Background
-	screen.draw(r, bgcol, nil, ZP);
-
-	# Field dimensions (declared early so we can size the centered group)
-	fh := bodyfont.height + 12;
-	fw := 300;
-
-	# Total height of the logo + prompt + field + status group. The
-	# status line below the field is part of the visible group, so
-	# include it when present — otherwise the group's visual centroid
-	# sits below cy and the grouping reads as too low.
-	grouph := 0;
 	if(logo_g != nil)
-		grouph += logo_g.r.dy() + PADDING * 2;
-	else
-		grouph += PADDING * 4;
-	grouph += bodyfont.height + 4;	# prompt + spacing
-	grouph += fh;			# password field
-	if(state != STATE_LOGIN_FAILED && statusmsg != nil && statusmsg != "")
-		grouph += PADDING + bodyfont.height;	# gap + status line
-
-	# Small upward optical bias: the bottom-anchored version/copyright
-	# adds visual weight near r.max.y, so pure geometric centre reads
-	# as low. Nudging up by ~1/24 of the viewport balances it.
-	y := cy - grouph / 2 - r.dy() / 24;
-	if(y < r.min.y + PADDING)
-		y = r.min.y + PADDING;
-
-	# Draw cached brand image (centered)
-	if(logo_g != nil) {
-		lw := logo_g.r.dx();
-		lh := logo_g.r.dy();
-		lx := cx - lw / 2;
-		screen.draw(Rect((lx, y), (lx + lw, y + lh)), logo_g, nil, logo_g.r.min);
-		y += lh + PADDING * 2;
-	} else
-		y += PADDING * 4;
+		tk->cmd(top, "pack .f.logo -side top -pady " + string PADDING);
 
 	if(state == STATE_LOGIN_FAILED) {
 		# Failed state: show error and choices, no password field
-
-		# Error message
 		errline := statusmsg;
-		# Split on \n — first line is the error, second is the choices
-		nl := -1;
+		choiceline := "";
 		for(si := 0; si < len errline; si++)
-			if(errline[si] == '\n') { nl = si; break; }
-		if(nl >= 0) {
-			ew := bodyfont.width(errline[0:nl]);
-			screen.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline[0:nl]);
-			y += bodyfont.height + PADDING;
-			choiceline := errline[nl+1:];
-			cw2 := bodyfont.width(choiceline);
-			screen.text(Point(cx - cw2 / 2, y), textcol, ZP, bodyfont, choiceline);
-			y += bodyfont.height + PADDING;
-		} else {
-			ew := bodyfont.width(errline);
-			screen.text(Point(cx - ew / 2, y), redcol, ZP, bodyfont, errline);
-			y += bodyfont.height + PADDING;
+			if(errline[si] == '\n') {
+				choiceline = errline[si+1:];
+				errline = errline[0:si];
+				break;
+			}
+		tk->cmd(top, ".f.err configure -text " + tk->quote(errline));
+		tk->cmd(top, "pack .f.err -side top -pady 8");
+		if(choiceline != "") {
+			tk->cmd(top, ".f.choice configure -text " + tk->quote(choiceline));
+			tk->cmd(top, "pack .f.choice -side top -pady 8");
 		}
-
-		# Warning about consequences
-		warn := "Keys and secrets will not be available.";
-		ww := smallfont.width(warn);
-		screen.text(Point(cx - ww / 2, y), dimcol, ZP, smallfont, warn);
-		y += smallfont.height;
-		warn2 := "AI integration may not work.";
-		ww2 := smallfont.width(warn2);
-		screen.text(Point(cx - ww2 / 2, y), dimcol, ZP, smallfont, warn2);
+		tk->cmd(top, "pack .f.warn1 .f.warn2 -side top");
 	} else {
-		# Normal states: show prompt + password field
 		prompt := "Password:";
 		case state {
 		STATE_SETUP_PASS =>
@@ -465,60 +625,28 @@ redraw()
 		STATE_FIDOPIN =>
 			prompt = "Security key PIN:";
 		}
-		pw := bodyfont.width(prompt);
-		screen.text(Point(cx - pw / 2, y), dimcol, ZP, bodyfont, prompt);
-		y += bodyfont.height + 4;
-
-		# Field background (centered)
-		fx := cx - fw / 2;
-		fieldr := Rect((fx, y), (fx + fw, y + fh));
-		screen.draw(fieldr, fieldbg, nil, ZP);
-		screen.border(fieldr, 1, accentcol, ZP);
-
-		# Masked password (dots)
-		dots := "";
-		for(i := 0; i < len passbuf; i++)
-			dots += "\u2022";
-		screen.text(Point(fx + 6, y + 6), textcol, ZP, bodyfont, dots);
-
-		y += fh + PADDING;
-
-		# Status message (centered)
-		if(statusmsg != nil && statusmsg != "") {
-			sw := bodyfont.width(statusmsg);
-			screen.text(Point(cx - sw / 2, y), dimcol, ZP, bodyfont, statusmsg);
-		}
+		tk->cmd(top, ".f.prompt configure -text " + tk->quote(prompt));
+		tk->cmd(top, "pack .f.prompt -side top -pady 2");
+		if(passbuf == "")
+			tk->cmd(top, ".f.pw delete 0 end");
+		tk->cmd(top, "pack .f.pw -side top");
+		tk->cmd(top, ".f.status configure -text " + tk->quote(statusmsg));
+		if(statusmsg != nil && statusmsg != "")
+			tk->cmd(top, "pack .f.status -side top -pady " + string PADDING);
+		tk->cmd(top, "focus .f.pw");
 	}
-
-	# Build info at bottom (dim, small)
-	by := r.max.y - smallfont.height * 2 - PADDING;
-
-	version := rf("/dev/sysctl");
-	if(version == nil)
-		version = brandname();
-	vw := smallfont.width(version);
-	screen.text(Point(cx - vw / 2, by), dimcol, ZP, smallfont, version);
-	by += smallfont.height + 2;
-
-	ctext := brandcopyright();
-	cw := smallfont.width(ctext);
-	screen.text(Point(cx - cw / 2, by), dimcol, ZP, smallfont, ctext);
-
-	screen.flush(Draw->Flushnow);
+	tk->cmd(top, "update");
 }
 
-# First boot: create secstore account, then unlock
-dosetupandunlock(pass: string)
+# First boot: create secstore account, then unlock.
+# Returns nil on success, else what went wrong, for the caller to show.
+dosetupandunlock(pass: string): string
 {
 	statusmsg = "Creating secstore account...";
 	redraw();
 	err := createsecstoreacct(pass);
-	if(err != nil) {
-		statusmsg = "Setup failed: " + err;
-		redraw();
-		sys->sleep(2000);
-		return;
-	}
+	if(err != nil)
+		return "Setup failed: " + err;
 
 	statusmsg = "Unlocking (this may take a moment)...";
 	redraw();
@@ -531,14 +659,11 @@ dosetupandunlock(pass: string)
 
 	pass = "";
 
-	if(err != nil) {
-		statusmsg = err;
-		redraw();
-		sys->sleep(2000);
-		return;
-	}
+	if(err != nil)
+		return err;
 
 	finishunlock();
+	return nil;
 }
 
 # Normal boot: unlock secstore and load keys.
@@ -661,7 +786,7 @@ connectfactotum(pass, recoverypass, fidopin: string): string
 	filekey := secstore->mkfilekey2(pass);
 	legacykey := secstore->mkfilekey(pass);
 
-	(conn, nil, diag) := secstore->connect2("tcp!localhost!5356", user, pwhash, pwhash2);
+	(conn, nil, diag) := secstore->connect2("tcp!127.0.0.1!5356", user, pwhash, pwhash2);
 	if(conn == nil) {
 		if(diag != nil)
 			return "secstore: " + diag;
@@ -888,7 +1013,7 @@ enablesecstoresave(pass: string)
 	# For a 2FA account, hand factotum the data key so its save-back stays
 	# DK-encrypted (auth still uses the password). Ordinary accounts pass no
 	# DK and factotum encrypts under the password-derived root key as before.
-	cmd := "secstore tcp!localhost!5356 " + user + " " + pass;
+	cmd := "secstore tcp!127.0.0.1!5356 " + user + " " + pass;
 	if(current2fadkhex != "")
 		cmd += " " + current2fadkhex;
 	fd := sys->open("/mnt/factotum/ctl", Sys->OWRITE);
@@ -920,15 +1045,6 @@ secstoreacctexists(): int
 		user = "inferno";
 	(ok, nil) := sys->stat("/usr/inferno/secstore/" + user + "/PAK");
 	return ok >= 0;
-}
-
-headlessprompt()
-{
-	# Fallback for headless: use factotum's built-in console prompt
-	sys->fprint(stderr, "logon: no display, using console\n");
-	# Nothing to do — factotum -S will prompt on its own if needed,
-	# or the user can manually run:
-	#   auth/factotum -S tcp!localhost!5356
 }
 
 loadpng(path: string): ref Image

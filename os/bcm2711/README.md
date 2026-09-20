@@ -179,7 +179,8 @@ Everything below will be met for the first time on the board.
    DMA limit requires (`os/virt/README.md`, "USB"). What is the VL805's
    alone is untried: its firmware load, its scratchpad buffers (QEMU
    asks for none), 64-byte contexts if it uses them, and MSI through
-   this bridge rather than a wire. `echo dump > /usb/usb/ctl` prints
+   *this* bridge — MSI itself, `../port/pci.c`'s setup of it and the
+   driver living on it have run on `virt`, through the GIC's MSI frame. `echo dump > /usb/usb/ctl` prints
    the controller's status and every port's. Under QEMU the DWC2
    controller stands in for all this; on a board the DWC2 is only the
    USB-C port, and is `#u/usb/ep1.0` — the xHCI is `ep2.0`.

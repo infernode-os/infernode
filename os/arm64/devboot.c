@@ -30,7 +30,7 @@
  * handed this boot, which is how osinit knows it is the candidate
  * (the tryboot configuration puts the word "tryboot" on it) and so
  * whether to print the promotion step. Board code reads it from the
- * firmware; see os/bcm2837/board.c.
+ * firmware; see os/bcm/board.c.
  *
  * A SNAPSHOT is served rather than the live memory, and that is the
  * whole subtlety here. The image runs from where it was loaded, so its

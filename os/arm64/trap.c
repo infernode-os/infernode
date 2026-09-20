@@ -217,6 +217,49 @@ dumpureg(Ureg *u)
 
 static int panicking;
 
+/*
+ * Is there anything at this address?
+ *
+ * A driver normally knows. The case this exists for is a machine that
+ * is one thing on silicon and another under emulation: QEMU's model of
+ * the Raspberry Pi 4 has no random-number generator where the BCM2711
+ * has one, and a read of a register that is not there is an external
+ * abort -- which is an unhandled exception, which is a panic, in a
+ * driver's first line. There is no register that says "this is QEMU",
+ * and guessing from a firmware version number is a guess.
+ *
+ * So ask, with the fault expected: one 32-bit load, with a per-core
+ * flag up that tells trap() to step over it and report. Returns 0 and
+ * the value, or -1. splhi throughout: the flag means "the next data
+ * abort on this core is mine", and an interrupt handler's is not.
+ */
+static int probing[MAXMACH];
+static int probefault[MAXMACH];
+
+int
+probe32(uintptr addr, u32int *vp)
+{
+	volatile u32int *p;
+	u32int v;
+	int s, bad;
+
+	p = (volatile u32int*)addr;
+	s = splhi();
+	probefault[m->machno] = 0;
+	probing[m->machno] = 1;
+	coherence();
+	v = *p;
+	coherence();
+	probing[m->machno] = 0;
+	bad = probefault[m->machno];
+	splx(s);
+	if(bad)
+		return -1;
+	if(vp != nil)
+		*vp = v;
+	return 0;
+}
+
 void
 trap(Ureg *u)
 {
@@ -282,6 +325,17 @@ trap(Ureg *u)
 		uartputstr(" at pc=");
 		uartputx(u->pc);
 		uartputstr(" -- stepping over\n");
+		u->pc += 4;
+		return;
+	}
+
+	/*
+	 * An expected fault: probe32() below is asking whether an address
+	 * answers at all. Step over the load and say it did not.
+	 */
+	if((ec == 0x25 || ec == 0x21 || ec == 0x2F) && probing[m->machno]){
+		probing[m->machno] = 0;
+		probefault[m->machno] = 1;
 		u->pc += 4;
 		return;
 	}

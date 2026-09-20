@@ -1,5 +1,8 @@
 /*
- * Memory layout and machine constants for BCM2837.
+ * Memory layout and machine constants for BCM2711 (Raspberry Pi 4).
+ *
+ * The same as ../bcm2837/mem.h, whose comments give the reasons, but for
+ * MAPGB and SDCARD_ARASAN at the end.
  *
  * os/port expects each platform to supply this. The values that matter
  * most are the word sizes, because upstream's allocators do their
@@ -59,15 +62,30 @@
 #define	TK2SEC(t)	((t)/HZ)		/* ticks to seconds */
 #define	MS2TK(t)	((t)/MS2HZ)		/* milliseconds to ticks */
 
-#define	MAXMACH		4			/* four Cortex-A53 cores */
+#define	MAXMACH		4			/* four Cortex-A72 cores */
 
 /*
- * How much of the address space ../bcm/mmu.c maps, in gigabytes. Two:
- * RAM and the peripheral window are in the first, and the ARM-local
- * block (per-core timer and interrupt routing) is at the start of the
- * second.
+ * How much of the address space ../bcm/mmu.c maps, in gigabytes. Four:
+ * the peripheral window is at 0xFE000000, the GIC just above it.
+ *
+ * RAM IS STILL ONLY WHAT THE FIRMWARE CALLS "ARM MEMORY" -- the first
+ * block, under a gigabyte, whatever the board has. That is deliberate
+ * and it is not only caution. Several of this SoC's DMA masters, the
+ * SD controller's among them, can address only the first gigabyte, and
+ * the drivers in ../bcm hand physical addresses straight to hardware
+ * because on a BCM2837 every address is reachable. A kernel that used
+ * all of a 4GB board's memory would work under QEMU, which does not
+ * model the limit, and corrupt memory on the board. Using the rest needs
+ * an allocator that knows which memory a device can reach; until there
+ * is one, there is a gigabyte.
  */
-#define	MAPGB		2
+#define	MAPGB		4
+
+/*
+ * The card is on an SDHCI controller (EMMC2; see io.h), not on SDHOST.
+ * ../bcm/sdmmc.c picks between the two when it is compiled.
+ */
+#define	SDCARD_ARASAN	1
 
 /*
  * Cortex-A53 L1 data cache line. Upstream's bcm port says 32, which is

@@ -1,7 +1,7 @@
 /*
  * MMU and page tables.
  *
- * A flat identity map, for os/bcm2837/mmu.c's reasons: no user space,
+ * A flat identity map, for os/bcm/mmu.c's reasons: no user space,
  * so a translation that moved addresses would buy nothing; what the MMU
  * buys is memory ATTRIBUTES, and with it off every access is
  * Device-nGnRnE -- uncached, and faulting on anything unaligned.

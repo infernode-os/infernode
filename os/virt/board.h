@@ -7,11 +7,6 @@
 /* uart.c */
 int	consuartputc(Queue*, int);
 
-/* gic.c */
-void	gicsecinit(void);
-void	gicppienable(int);
-void	intrsummary(void);
-
 /* fdt.c */
 int	fdtvalid(void);
 uintptr	fdtsize(void);

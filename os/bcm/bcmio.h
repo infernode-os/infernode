@@ -12,6 +12,19 @@
  * This was the body of os/bcm2837/io.h until a second SoC needed it.
  */
 
+/*
+ * Which SDHCI controller emmc.c drives, and the mailbox's name for its
+ * clock. On a BCM2837 there is one, the Arasan, and it is the radio's
+ * unless the card is built onto it. A BCM2711 has a second (EMMC2) that
+ * the card is wired to, and its io.h says so before including this.
+ */
+#ifndef EMMCOFF
+#define EMMCOFF		0x300000
+#endif
+#ifndef CLKEMMC
+#define CLKEMMC		1
+#endif
+
 enum
 {
 	GPIOREGS	= PHYSIO+0x200000,
@@ -45,7 +58,7 @@ enum
 	ARMTIMERREGS	= PHYSIO+0x00B400,
 	PMREGS		= PHYSIO+0x100000,	/* power management / watchdog */
 	SDHOSTREGS	= PHYSIO+0x202000,	/* BCM2835 SDHOST: the card */
-	EMMCREGS	= PHYSIO+0x300000,	/* Arasan SDHCI: for the WiFi chip */
+	EMMCREGS	= PHYSIO+EMMCOFF,	/* the SDHCI controller ../bcm/emmc.c drives */
 
 	/*
 	 * The watchdog, which is how this SoC reboots: there is no reset
@@ -186,7 +199,7 @@ enum
 	Tagsetrebootflags = 0x00038064,
 	Rebootflagtryboot = 1,
 
-	Clkemmc		= 1,		/* clock id for the SD controller */
+	Clkemmc		= CLKEMMC,	/* clock id for the SD controller emmc.c drives */
 	Clkuart		= 2,		/* the PL011's reference (init_uart_clock) */
 	Clkcore		= 4,		/* the VPU core clock; SDHOST and the mini-UART divide it */
 

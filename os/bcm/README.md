@@ -14,6 +14,9 @@ Ethernet chip, their own `arch*.c` and their own list of devices.
 
 | here | |
 |-|-|
+| `board.c` | the hooks `../arm64/fns.h` asks of a board, for any Pi: the boot watchdog and tryboot, the command line, framebuffer and card bring-up, the spin-table release of the secondary cores. The one thing in its 1,100 lines that names a board is the banner, which is `BOARDNAME` from the board's `io.h` |
+| `mmu.c` | the identity map: RAM Normal, everything else Device. How many gigabytes is `MAPGB`, the board's |
+| `timers.c` | the system timer and the ARM timer — neither is anyone's clock |
 | `mailbox.c`, `fb.c` | the VideoCore property interface; framebuffers from it |
 | `uartmini.c`, `uart.c` | the mini-UART, and the console's policy over it |
 | `uartpl011.c` | the PL011 as `/dev/eia0` — the Bluetooth radio's line |
@@ -28,8 +31,10 @@ Ethernet chip, their own `arch*.c` and their own list of devices.
 | `bcm.h` | what these drivers and their boards declare to each other; included by a board's `board.h` |
 
 What is **not** here is what differs between the SoCs: the interrupt
-controller, the memory map, the timer's routing, the random-number
-generator, and `board.c`. Those are the board directory's.
+controller, the peripheral window and interrupt numbers, the timer's
+routing, the random-number generator, and the list of devices. Those
+are the board directory's, and they are most of what a board directory
+is: `os/bcm2711` is about five hundred lines.
 
 A driver here must not name an address or an interrupt number of its
 own. If one needs to know which SoC it is on, that is a sign the

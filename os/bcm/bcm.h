@@ -177,3 +177,4 @@ void	fbconsputs(char*, int);
  */
 u64int	systimer(void);
 void	boardreboot(void);
+int	bcmintrprobe(void);		/* board.c: a system-timer match, as a device interrupt */

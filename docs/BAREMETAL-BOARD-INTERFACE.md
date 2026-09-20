@@ -1,7 +1,8 @@
 # What a board supplies: the bare-metal kernel's board interface
 
-The native kernel is one kernel and, so far, two machines: a Raspberry
-Pi 3B+ (`os/bcm2837`) and QEMU's `virt` (`os/virt`). Everything else —
+The native kernel is one kernel and, so far, three machines: a Raspberry
+Pi 3B+ (`os/bcm2837`), a Raspberry Pi 4B (`os/bcm2711`) and QEMU's `virt`
+(`os/virt`). Everything else —
 `os/arm64`, `os/port`, `os/ip`, the libraries — is compiled from the
 same files for both. This document is the contract between the shared
 part and a board directory: exactly what a new `os/<board>` has to
@@ -24,7 +25,7 @@ into `os/arm64`, not for widening the interface.**
 The harness (`tests/host/baremetal_test.sh`) builds a kernel for board
 `B` from:
 
-    os/arm64/*.S  os/arm64/*.c      shared AArch64
+    os/arm64/*.S  os/arm64/*.c      shared AArch64        (less $ARCHSKIP)
     $SHARED/*.c                     a family's shared drivers, if the board names one
                                     (os/bcm for the Raspberry Pis; less $SHAREDSKIP)
     os/B/*.S      os/B/*.c          the board
@@ -54,6 +55,22 @@ A board directory must contain:
 `MAXMACH` is 4 on both boards and `l.S` derives a core's number from
 `mpidr_el1 & 3`; a board with more cores, or with core numbers in a
 higher affinity field, has to change `l.S`, which is shared.
+
+### Two drivers in `os/arm64` that are not every board's
+
+`os/arm64/gic.c` (a GICv2) and `os/arm64/clockgt.c` (the generic timer,
+delivered through one) are the architecture's, and two of the three
+boards use them as they stand: they supply `intrinit`, `intrenable`,
+`intrdisable`, `irqdispatch`, `intrdump`, `intrpending`, `clockinit`,
+`secclockinit`, `microdelay`, `fastticks`, `timerset` and the rest of
+rows 7, 8 and 15 below. A board using them puts `GICDREGS`, `GICCREGS`,
+`Nirq`, `IRQspi`, `IRQcntpnsirq` and `IRQprobe` in its `io.h`. A board
+with an interrupt controller of its own (`os/bcm2837`) names both files
+in `$ARCHSKIP` and supplies those functions itself.
+
+`probe32(addr, &v)` (`trap.c`) reads an address that may not exist and
+returns -1 if it faulted, for the case where silicon and its emulator
+disagree about what is there.
 
 ## What is assumed at entry
 

@@ -81,10 +81,16 @@ static struct
 	Rendez	cardr;		/* the card interrupt, polled a tick at a time */
 } arasan;
 
+/*
+ * Where the controller is. EMMCREGS, unless the board gave a second
+ * place to look and the card turned out to be there; see arasaninit.
+ */
+static uintptr emmcbase = EMMCREGS;
+
 static u32int
 emmcrd(int off)
 {
-	return *(volatile u32int*)(uintptr)(EMMCREGS + off);
+	return *(volatile u32int*)(emmcbase + off);
 }
 
 /*
@@ -94,7 +100,7 @@ static void
 emmcwr(int off, u32int v)
 {
 	microdelay(arasan.fastclock? 2 : 20);
-	*(volatile u32int*)(uintptr)(EMMCREGS + off) = v;
+	*(volatile u32int*)(emmcbase + off) = v;
 	coherence();
 }
 
@@ -104,7 +110,7 @@ emmcwr(int off, u32int v)
 static void
 datawr(u32int v)
 {
-	*(volatile u32int*)(uintptr)(EMMCREGS + Emmcdata) = v;
+	*(volatile u32int*)(emmcbase + Emmcdata) = v;
 }
 
 /*
@@ -256,9 +262,32 @@ arasaninit(void)
 {
 	int i;
 
-#ifdef SDCARD_ARASAN
+	/*
+	 * The card's six pins, when the card is on the Arasan. Not when it
+	 * is on a BCM2711's EMMC2 (EMMCOFF says which; io.h), whose pins
+	 * are its own and are not GPIOs at all.
+	 */
+#if defined(SDCARD_ARASAN) && EMMCOFF == 0x300000
 	for(i = 48; i <= 53; i++)
 		gpioclaim(i, "emmc");
+#endif
+#ifdef EMMCALTOFF
+	/*
+	 * A board may name a second controller of the same kind, for the
+	 * case where the silicon and its emulator disagree about which one
+	 * the card is on. A Raspberry Pi 4's card is on EMMC2; QEMU's
+	 * raspi4b (9.2) puts it on the first controller, the way a Pi 3's
+	 * GPIO mux would. Bit 16 of the present-state register says whether
+	 * a card is inserted, and it is believed only in this one direction
+	 * -- nothing here, something there -- and said out loud, because a
+	 * kernel that quietly used the wrong controller on a board would be
+	 * driving the radio's.
+	 */
+	if((emmcrd(Emmcstatus) & (1<<16)) == 0
+	&& (*(volatile u32int*)(uintptr)(PHYSIO + EMMCALTOFF + Emmcstatus) & (1<<16)) != 0){
+		uartputstr("sd:   no card on the board's SD controller; one on the OTHER SDHCI controller, which is where QEMU's raspi4b wires it -- using that\n");
+		emmcbase = PHYSIO + EMMCALTOFF;
+	}
 #endif
 	arasan.fastclock = 0;
 	arasan.bsize = 0;

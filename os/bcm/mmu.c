@@ -51,7 +51,9 @@ enum
 	 * is everything on this SoC -- RAM tops out at 1GB and the ARM
 	 * local peripherals sit just above it at 0x40000000.
 	 */
-	Nl2tab		= 2,
+	Nl2tab		= MAPGB,	/* the board's mem.h: 2 reaches a BCM2837's
+					 * ARM-local block at 1GB; 4 reaches a
+					 * BCM2711's peripherals at 0xFE000000 */
 	Ntabent		= 512,
 
 	L2blocksize	= 2*1024*1024,

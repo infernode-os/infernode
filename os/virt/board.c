@@ -284,6 +284,13 @@ boardstartcpus(uintptr entry)
 	}
 }
 
+/* a GIC can be asked to interrupt with no device's help: ../arm64/gic.c */
+void
+boardintrprobe(void)
+{
+	gicintrprobe();
+}
+
 /* nothing in this directory needs to wait for exclusives */
 void
 boardlockon(void)

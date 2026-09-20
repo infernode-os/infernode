@@ -70,6 +70,15 @@
 #define	MAPGB		2
 
 /*
+ * How far this SoC's DMA masters can reach, and the most RAM the kernel
+ * will use (../bcm/dmamem.c, ../bcm/mmu.c). A gigabyte, and a gigabyte:
+ * a Pi 3 has no more, so every address is reachable and neither number
+ * ever decides anything here. They decide a great deal on a BCM2711.
+ */
+#define	DMATOP		0x40000000UL
+#define	RAMLIMIT	0x40000000UL
+
+/*
  * Cortex-A53 L1 data cache line. Upstream's bcm port says 32, which is
  * the ARM11 in a Pi 1; getting this too LARGE skips lines during cache
  * maintenance and corrupts DMA under load, so it is worth stating

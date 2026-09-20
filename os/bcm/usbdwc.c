@@ -822,8 +822,68 @@ logdump(Ep *ep)
 	nchanlog = 0;
 }
 
+static int chanio1(Ep*, Hostchan*, int, int, void*, int);
+
+/*
+ * A transfer's buffer is somebody else's -- a Block, a Limbo array, a
+ * frame on its way to the IP stack -- and this controller does DMA on
+ * it. On a BCM2837 any address will do. On a BCM2711 the controller
+ * reaches only the first gigabyte (dmamem.c), and a buffer that came
+ * from above it has to go by way of one that did not: copied in before
+ * an OUT, copied out after an IN.
+ *
+ * One bounce buffer a channel, grown to the largest transfer the
+ * channel has carried and kept: a channel belongs to one process for
+ * the length of a transfer, so there is nothing to lock. On a machine
+ * with nothing above the line dmareachable() is always true and this
+ * is one comparison a transfer.
+ *
+ * NOT TESTED BY ANY DEVICE THAT CARES. QEMU's controller reaches all of
+ * memory, so under emulation the bounce is exercised -- busaddr() would
+ * panic otherwise, and does if this is taken out -- but whether the
+ * data survives it on silicon has only the copy's word for it.
+ */
+static struct
+{
+	uchar	*p;
+	int	n;
+} bounce[16];
+static ulong nbounce;		/* transfers that went the long way */
+
 static int
 chanio(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
+{
+	Ctlr *ctlr;
+	uchar *b;
+	int i, n;
+
+	if(a == nil || len <= 0 || dmareachable(a, len))
+		return chanio1(ep, hc, dir, pid, a, len);
+
+	ctlr = ep->hp->aux;
+	i = hc - ctlr->regs->hchan;
+	if(i < 0 || i >= nelem(bounce))
+		panic("usbdwc: channel %d has no bounce buffer", i);
+	if(bounce[i].n < len){
+		dmafree(bounce[i].p, bounce[i].n);
+		bounce[i].n = 0;
+		bounce[i].p = dmaalloc(len, CACHELINESZ);
+		if(bounce[i].p == nil)
+			error(Enomem);
+		bounce[i].n = len;
+	}
+	b = bounce[i].p;
+	nbounce++;
+	if(dir == Epout)
+		memmove(b, a, len);
+	n = chanio1(ep, hc, dir, pid, b, len);
+	if(dir == Epin && n > 0)
+		memmove(a, b, n);
+	return n;
+}
+
+static int
+chanio1(Ep *ep, Hostchan *hc, int dir, int pid, void *a, int len)
 {
 	Ctlr *ctlr;
 	int nleft, n, nt, i, maxpkt, npkt, nprog;
@@ -1786,6 +1846,7 @@ dump(Hci *hp)
 		chanwaitns/1000, chanwaitmax/1000,
 		nchanwake+nchantmout ?
 			chanwaitns/1000/(nchanwake+nchantmout) : (uvlong)0);
+	print("usbotg: %lud transfers bounced through the DMA arena (buffers above the DMA limit)\n", nbounce);
 	print("usbotg: bulk in %lud waits mean %llud us; bulk out %lud waits mean %llud us\n",
 		nbulkin, nbulkin ? bulkinns/1000/nbulkin : (uvlong)0,
 		nbulkout, nbulkout ? bulkoutns/1000/nbulkout : (uvlong)0);

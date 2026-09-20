@@ -124,7 +124,14 @@ enum
  * what we want for buffers the ARM has written: it means the GPU is not
  * reading through a cache the ARM cannot flush.
  */
-#define BUSADDR(a)	(((uintptr)(a) & ~0xC0000000UL) | 0xC0000000UL)
+/*
+ * ...and it is a function, not the mask it was, because on a BCM2711 not
+ * every address may be given to a device: see dmamem.c. Every address a
+ * driver hands to hardware goes through here, which is what lets the
+ * limit be enforced in one place.
+ */
+uintptr	busaddr(uintptr);
+#define BUSADDR(a)	busaddr((uintptr)(a))
 
 /* mailbox register offsets */
 enum

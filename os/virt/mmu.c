@@ -212,6 +212,13 @@ mmuramtop(void)
 	return ramtop;
 }
 
+/* one bank of memory here, so its top is the top; see ../bcm/mmu.c */
+uintptr
+mmuhightop(void)
+{
+	return ramtop;
+}
+
 u64int
 mmutcr(void)
 {

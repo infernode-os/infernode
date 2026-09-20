@@ -139,6 +139,7 @@ static u64int l1tab[Ntabent] __attribute__((aligned(4096)));
 static u64int l2tab[Nl2tab][Ntabent] __attribute__((aligned(4096)));
 
 static uintptr ramtop;
+static uintptr hightop;		/* one past RAM above the first gigabyte, or 0 */
 
 /*
  * Where does ARM-visible memory end?  Above this the VideoCore owns the
@@ -158,6 +159,35 @@ findramtop(void)
 	return Deframtop;
 }
 
+/*
+ * Is there memory above the first gigabyte, and where does it end?
+ *
+ * GET_ARM_MEMORY describes only the first block -- under a gigabyte on
+ * every Pi, the VideoCore's share coming out of the top of it -- and on
+ * a Pi 4 the rest starts at 1GB and runs up to the board's size. The
+ * size is in the board's revision code, which is the firmware's own
+ * statement of what it is: in the new-style encoding (bit 23 set) bits
+ * 22:20 are the memory size as a power of two times 256MB. It is capped
+ * at RAMLIMIT, the board's mem.h, which on a BCM2711 is where the
+ * peripheral window begins.
+ */
+static uintptr
+findhightop(void)
+{
+	u32int rev[1];
+	uvlong size;
+
+	rev[0] = 0;
+	if(mboxprop(Taggetrev, rev, 0, 1) != 0 || (rev[0] & (1<<23)) == 0)
+		return 0;
+	size = 256ULL*1024*1024 << ((rev[0] >> 20) & 7);
+	if(size > RAMLIMIT)
+		size = RAMLIMIT;
+	if(size <= 0x40000000ULL)
+		return 0;
+	return (uintptr)size;
+}
+
 void
 mmuinit(void)
 {
@@ -166,6 +196,7 @@ mmuinit(void)
 	int i, j;
 
 	ramtop = findramtop();
+	hightop = findhightop();
 
 	/* level 1: one entry per level-2 table, each covering 1GB */
 	for(i = 0; i < Ntabent; i++)
@@ -178,7 +209,7 @@ mmuinit(void)
 		for(j = 0; j < Ntabent; j++){
 			pa = (uintptr)((i * Ntabent + j) * (uvlong)L2blocksize);
 
-			if(pa < ramtop)
+			if(pa < ramtop || (pa >= 0x40000000UL && pa < hightop))
 				desc = Dblock | Attridx0 | Apkrw | Shinner | Af;
 			else
 				desc = Dblock | Attridx1 | Apkrw | Shnone | Af |
@@ -195,6 +226,18 @@ uintptr
 mmuramtop(void)
 {
 	return ramtop;
+}
+
+/*
+ * One past the highest address that is memory. mmuramtop() is the top
+ * of the FIRST bank, which is what confinit builds the allocator on and
+ * is below the VideoCore's share; this is what "could this be a stack?"
+ * wants. They are the same number on a Pi 3.
+ */
+uintptr
+mmuhightop(void)
+{
+	return hightop != 0 ? hightop : ramtop;
 }
 
 u64int

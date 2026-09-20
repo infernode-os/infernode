@@ -31,6 +31,7 @@ beside `os/ipaq1110` and `os/cerf1110`). What is here:
 | `io.h` | the peripheral window (`0xFE000000`), the GIC's addresses, and **the interrupt numbers**: VideoCore interrupt *n* is GIC interrupt 96+*n*; "ARMC" source *n* is 64+*n*; the timer is 30 |
 | `mem.h` | the BCM2837's, but for `MAPGB` (4) and the SD controller choice |
 | `random.c` | the RNG200 — a different generator from the BCM2837's |
+| `emmc2.c` | the card's SDHCI controller: a second instance of `../bcm/emmc.c`, six lines |
 | `intr.c` | not the controller (that is `../arm64/gic.c`), only the boot-time question asked of it |
 | `devtab.c` | the device list: the Pi 3B+'s, today |
 | `recover.c` | an empty `serialrecover`: there is no serial loader for this board |
@@ -101,23 +102,39 @@ Everything below will be met for the first time on the board.
    revision: its clock comes from a different mailbox clock id (12,
    assumed), it may want its 1.8V/3.3V regulator handled, and its quirks
    are unknown to this tree.
-4. **DMA above 1GB — a trap that QEMU cannot spring.** Several of this
-   SoC's DMA masters, the SD controller's among them, can address only
-   the first gigabyte. The drivers in `../bcm` hand physical addresses
-   straight to hardware, which is right on a BCM2837, where everything is
-   reachable. **So this kernel uses only the first memory block the
-   firmware reports (under 1GB) whatever the board has**; see `mem.h`.
-   Using the rest needs an allocator that knows what a device can reach,
-   and that must exist *before* anyone raises the limit, because QEMU
-   does not model it and a kernel that ignored it would pass every check
-   here and corrupt memory on a 4GB board.
+4. **DMA above 1GB — a trap QEMU cannot spring, so the kernel springs
+   it on itself.** Several of this SoC's DMA masters (the DMA engine,
+   the DWC2 USB controller, the mailbox) address only the first
+   gigabyte; QEMU lets them reach everything; and the drivers in `../bcm`
+   were written on a BCM2837, where every address is reachable. A kernel
+   that ignored this would pass every check here and corrupt memory on
+   a 4GB board. `../bcm/dmamem.c` is the answer, in three parts:
+   `busaddr()`, the only way an address reaches a device, **panics** on
+   one beyond the limit, under emulation as on a board; `dmaalloc()`
+   gives memory from an arena reserved below the limit *before* the
+   high memory is added; and the kernel's own allocations are taken from
+   *above* the limit first (`xallocpref`), which both keeps low memory
+   for devices and means that under QEMU a USB transfer's buffer really
+   is unreachable and really is bounced — 750 of them on a boot to the
+   desktop. What that does **not** show is that the limit is where this
+   file says it is for each master, or that the bounce's copies are
+   coherent with a real cache. The kernel uses memory up to `0xFC000000`;
+   an 8GB board's memory above 4GB is not used.
 5. **Caches and the JIT.** QEMU has no caches. The instruction-cache
    maintenance the JIT depends on was proved on a Cortex-A53; an A72 has
    a different cache hierarchy and the same code has not run on one.
-6. **Wi-Fi and Bluetooth.** Same CYW43455 as the Pi 3B+, same driver —
-   but `emmc.c` drives one SDHCI controller, this board's card is on
-   one and its radio on the other, and for now the card has it:
-   `ether4330: … radio not probed`. Needs `emmc.c` to take an instance.
+6. **Wi-Fi and Bluetooth.** Same CYW43455 as the Pi 3B+, same driver,
+   and the plumbing is there: the card is driven by a second instance of
+   the SDHCI driver (`emmc2.c` — `../bcm/emmc.c` compiled again with a
+   different base), so the Arasan is the radio's, as on a Pi 3, and the
+   two run at once. **Nothing has ever answered on either.** QEMU has no
+   radio, and it puts the *card* on the Arasan, so under emulation the
+   EMMC2 instance falls back to the Arasan's registers and tells the
+   radio's driver to keep off (`sdarasantaken`). A real EMMC2 has never
+   been addressed by this code; the radio's firmware, its pins (GPIO
+   34-39, ALT3, assumed the same as the 3B+) and its power enable on the
+   firmware's GPIO expander (whose pin numbers differ on this board and
+   have NOT been checked) are all untried.
 7. **No network and no USB-A on a board at all, yet.** Gigabit Ethernet
    needs a GENET driver (plus its BCM54213 PHY over MDIO); the USB-A
    ports need a PCIe host driver and an xHCI driver, and the VL805

@@ -68,27 +68,28 @@
  * How much of the address space ../bcm/mmu.c maps, in gigabytes. Four:
  * the peripheral window is at 0xFE000000, the GIC just above it.
  *
- * RAM IS STILL ONLY WHAT THE FIRMWARE CALLS "ARM MEMORY" -- the first
- * block, under a gigabyte, whatever the board has. That is deliberate
- * and it is not only caution. Several of this SoC's DMA masters, the
- * SD controller's among them, can address only the first gigabyte, and
- * the drivers in ../bcm hand physical addresses straight to hardware
- * because on a BCM2837 every address is reachable. A kernel that used
- * all of a 4GB board's memory would work under QEMU, which does not
- * model the limit, and corrupt memory on the board. Using the rest needs
- * an allocator that knows which memory a device can reach; until there
- * is one, there is a gigabyte.
+ * RAM above the first gigabyte IS used, up to RAMLIMIT, and that is
+ * safe only because of ../bcm/dmamem.c: several of this SoC's DMA
+ * masters reach only the first gigabyte (DMATOP), QEMU does not model
+ * that, and the drivers in ../bcm were written where every address was
+ * reachable. Read that file before changing either number.
+ *
+ * RAMLIMIT is where the peripheral window begins. An 8GB board has
+ * memory above 4GB as well; using it needs more than 32 bits of
+ * physical address in ../bcm/mmu.c and has not been attempted.
  */
 #define	MAPGB		4
+#define	DMATOP		0x40000000UL
+#define	RAMLIMIT	0xFC000000UL
 
 /*
- * The card is on an SDHCI controller (EMMC2; see io.h), not on SDHOST.
- * ../bcm/sdmmc.c picks between the two when it is compiled.
+ * The card is on EMMC2 (io.h, emmc2.c). ../bcm/sdmmc.c picks between the
+ * places a card can be when it is compiled.
  */
-#define	SDCARD_ARASAN	1
+#define	SDCARD_EMMC2	1
 
 /*
- * Cortex-A53 L1 data cache line. Upstream's bcm port says 32, which is
+ * Cortex-A72 L1 data cache line: 64 bytes, as the A53's is. Upstream's bcm port says 32, which is
  * the ARM11 in a Pi 1; getting this too LARGE skips lines during cache
  * maintenance and corrupts DMA under load, so it is worth stating
  * per-SoC rather than inheriting.

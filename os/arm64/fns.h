@@ -96,6 +96,7 @@ void	ixsummary(void);
 
 /* os/port/xalloc.c */
 void*	xspanalloc(ulong, int, ulong);
+extern uintptr	xallocpref;	/* ../port/xalloc.c: holes at or above this are tried first */
 void	xhole(uintptr, uintptr);
 int	xmerge(void*, void*);
 
@@ -139,7 +140,8 @@ void	mmuinit(void);
 void	mmuenable(void);
 int	mmuon(void);
 int	mmucaches(void);
-uintptr	mmuramtop(void);
+uintptr	mmuramtop(void);	/* the top of the FIRST bank: what confinit builds on */
+uintptr	mmuhightop(void);	/* one past the highest memory: "could this be a stack?" */
 uintptr	mmul1(void);
 uintptr	mmumapped(void);
 u64int	mmutcr(void);

@@ -72,6 +72,12 @@ boardioprobe(void)
 {
 	int f14, f15;
 
+	/*
+	 * First, before anything below allocates: the DMA arena has to be
+	 * taken while the low bank is all xalloc has. See dmamem.c.
+	 */
+	dmainit();
+
 	f14 = gpiogetfunc(14);
 	f15 = gpiogetfunc(15);
 

@@ -4628,6 +4628,12 @@ else
     fail "bcm2711: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
 fi
 pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS"
+# With no card in it, the Arasan is the radio's and the radio's driver
+# probes it -- which on this board means two instances of one SDHCI
+# driver alive at once (os/bcm2711/emmc2.c). QEMU models no radio, so
+# what is asserted is that the probe ran and came back empty-handed
+# rather than not at all, and took nothing down with it.
+pcheck "with no card, the radio is probed on the Arasan and reported absent" "ether4330: no radio"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"
@@ -4685,6 +4691,7 @@ try:
         time.sleep(0.5)
     # the console is still a shell while the desktop runs
     p.stdin.write(b"cat /dev/sdctl\r"); p.stdin.flush(); time.sleep(2)
+    p.stdin.write(b"echo dump > /usb/usb/ctl\r"); p.stdin.flush(); time.sleep(3)
     s = socket.socket(socket.AF_UNIX); s.connect(qmp)
     f = s.makefile("rw"); f.readline()
     f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
@@ -4718,9 +4725,9 @@ PYEOF
     OUT="$(cat "$BUILD/$PLAT-desktop.txt")"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
     pcheck "the card is found where QEMU wires it, and the kernel says that is what it did" "which is where QEMU's raspi4b wires it"
-    pcheck "the SDHCI controller identifies the card"    "sd: emmc: card ready"
+    pcheck "the EMMC2 instance of the SDHCI driver identifies the card" "sd: emmc2: card ready"
     pcheck "sector 0 reads back with a boot signature"   "sd: MBR ok"
-    pcheck "the radio is left alone: its controller holds the card" "radio not probed"
+    pcheck "the radio is told at RUNTIME that its controller holds the card, and keeps off" "turned out to hold the card"
     pcheck "the FAT32 partition mounts"                  "init: /dev/sd0 mounted on /n/dos"
     pcheck "userspace comes off the card"                "init: /dis grown from /n/dos/dis"
     pcheck "#S serves the partition table init wrote"    "part sd0 2048"
@@ -4730,6 +4737,28 @@ PYEOF
     pcheck "USB Ethernet comes up as ether0 (kernel data path)" "etherusb: serving /net/ether0 (kernel data path)"
     pcheck "ether0 has QEMU's address (by DHCP or by etherusb's fallback; see above)" "etherusb: 10.0.2.15 mask"
     pcheck "Lucifer starts"                              "lucifer: INIT"
+
+    #
+    # Memory a device can reach (os/bcm/dmamem.c). Several BCM2711 DMA
+    # masters address only the first gigabyte and QEMU does not model
+    # that, so the limit is enforced in software: busaddr() panics on an
+    # address beyond it. For that to mean anything the kernel's own
+    # allocations must really BE above the line here -- they are taken
+    # from there first -- and then everything above worked THROUGH the
+    # bounce: the hub, the keyboard, the mouse and the network adapter
+    # were all enumerated with buffers a Pi 4's USB controller could not
+    # have addressed.
+    #
+    pcheck "memory above the first gigabyte is found and used" "MB above the DMA limit at 0x40000000 added"
+    pcheck "a DMA arena is reserved below the limit first"     "MB arena below it"
+    nb="$(grep -a 'transfers bounced through the DMA arena' <<<"$OUT" | tail -1 | sed -E 's/.*usbotg: ([0-9]+) transfers.*/\1/')"
+    if [[ "${nb:-0}" -ge 50 ]]; then
+        pass "bcm2711: USB ran through the bounce ($nb transfers had buffers above the DMA limit)"
+    else
+        fail "bcm2711: only '${nb:-none}' USB transfers bounced -- allocations are not coming from above the limit, so busaddr() is checking nothing"
+    fi
+    prefute "no driver handed a device an address it could not reach" "busaddr:"
+
     desk="$(grep -a '^DESKTOP' <<<"$OUT" | tail -1)"
     read -r _ ddim _ dacc <<<"$desk"
     if [[ "$ddim" == "640x480" && "${dacc:-0}" -ge 1000 ]]; then

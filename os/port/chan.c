@@ -736,7 +736,6 @@ cclone(Chan *c)
 {
 	Chan *nc;
 	Walkqid *wq;
-	char why[ERRMAX];
 
 	wq = devtab[c->type]->walk(c, nil, nil, 0);
 	if(wq == nil){
@@ -750,10 +749,13 @@ cclone(Chan *c)
 		 * else). Only for devmnt: another device's nil leaves errstr
 		 * whatever it was before, which is nobody's reason.
 		 */
-		if(devtab[c->type]->dc == 'M' && up->env->errstr[0] != 0){
-			kstrcpy(why, up->env->errstr, sizeof why);
-			errorf("clone failed: %s", why);
-		}
+		/*
+		 * errstr can be the argument as it stands: errorf formats
+		 * into a buffer of its own, bounded, and only then does
+		 * error() copy the result over errstr.
+		 */
+		if(devtab[c->type]->dc == 'M' && up->env->errstr[0] != 0)
+			errorf("clone failed: %s", up->env->errstr);
 		error("clone failed");
 	}
 	nc = wq->clone;

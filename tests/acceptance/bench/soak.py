@@ -93,7 +93,7 @@ while time.time() - start < 50*3600:
         say('main ' + (' '.join(main[0].split()[:3]) if main else '?') + ' shells %d' % n)
         if time.time() - lastbat > 24*3600 - 600:
             lastbat = time.time()
-            for bat, args in (('ethernet', []), ('bluetooth', ['--bdaddr', 'b8:27:eb:ca:4c:8e'])):
+            for bat, args in (('ethernet', ['--frag-via', 'minipc']), ('bluetooth', ['--bdaddr', 'b8:27:eb:ca:4c:8e']), ('gpio', [])):
                 say('battery %s start' % bat)
                 out = os.path.join(D, 'soak-%s-%s.txt' % (bat, time.strftime('%m%d-%H%M')))
                 rc = subprocess.call(['python3', '-u', os.path.join(A, bat + '.py'), '--board', HOST] + args, stdout=open(out, 'w'), stderr=subprocess.STDOUT, timeout=1800)

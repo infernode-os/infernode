@@ -2003,6 +2003,9 @@ drawmesg1(Client *client, void *av, int n)
 			client->readdata = mallocz(c, 0);
 			if(client->readdata == nil)
 				error("readimage malloc failed");
+			/* and a reader of the screen should not be handed the cursor */
+			if(screenimage != nil && i->data == screenimage->data)
+				swcursorhide();
 			client->nreaddata = memunload(i, r, client->readdata, c);
 			if(client->nreaddata < 0){
 				free(client->readdata);
@@ -2155,6 +2158,14 @@ drawmesg1(Client *client, void *av, int n)
 			drawrectangle(&r, a+5);
 			if(!rectinrect(r, dst->r))
 				error(Ewriteoutside);
+			/*
+			 * memload writes pixels without going through memdraw,
+			 * so hwdraw never sees it: take the software cursor
+			 * off first if this is the screen or a window on it
+			 * (they share the screen's data). drawmesg puts it back.
+			 */
+			if(screenimage != nil && dst->data == screenimage->data)
+				swcursorhide();
 			y = memload(dst, r, a+m, n-m, *a=='Y');
 			if(y < 0)
 				error("bad writeimage call");

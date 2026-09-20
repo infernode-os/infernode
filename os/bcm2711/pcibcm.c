@@ -264,6 +264,25 @@ pcibusaddr(void *va)
 	return busaddr((uintptr)va) & ~0xC0000000ULL;
 }
 
+/* the SoC's DMA arena and its limit: ../bcm/dmamem.c */
+void*
+pcidmaalloc(ulong size, int align)
+{
+	return dmaalloc(size, align);
+}
+
+void
+pcidmafree(void *p, ulong size)
+{
+	dmafree(p, size);
+}
+
+int
+pcidmaok(void *va, ulong len)
+{
+	return dmareachable(va, len);
+}
+
 static void
 pcicfginit(void)
 {

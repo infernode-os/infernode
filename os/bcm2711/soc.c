@@ -20,3 +20,14 @@ socdevprobe(void)
 	ethergenetlink();
 	pcibcmlink();
 }
+
+/*
+ * The USB-A sockets: a VL805 xHCI controller, if pcibcmlink found the
+ * bridge and the bus scan found it. Under QEMU there is no bus and this
+ * finds nothing, silently; pcibcmlink has already said why.
+ */
+void
+socusblink(void)
+{
+	usbxhcipcilink();
+}

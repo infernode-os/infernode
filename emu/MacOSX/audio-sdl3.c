@@ -67,6 +67,47 @@
 
 #include "audio-tbls.c"
 
+/*
+ * Per-stream queue caps in milliseconds (INFR-194). Shared
+ * by the SDL3 backend and the headless stub so audioctl can report
+ * what was written even when there is no queue to cap.
+ *
+ * Defaults are 0 (no cap) so non-voice workloads — audiotone, music
+ * playback, anything that bulk-writes ahead of the device — keep
+ * smooth, unbounded queueing. Voice opts in by writing to the ctl:
+ *
+ *   echo 'play_buffer_ms 100' > /dev/audioctl
+ *   echo 'rec_buffer_ms  100' > /dev/audioctl
+ *
+ * Drop policy on the SDL3 path is HEAD-drop. Headless stores the
+ * verbs only.
+ */
+static int play_buffer_ms = 0;
+static int rec_buffer_ms  = 0;
+
+static void
+audio_get_buffer_ms(int *play, int *rec)
+{
+	*play = play_buffer_ms;
+	*rec = rec_buffer_ms;
+}
+
+static int
+audio_parse_buffer_ms(char *s, long n)
+{
+	if(n > 15 && memcmp(s, "play_buffer_ms ", 15) == 0){
+		play_buffer_ms = atoi(s + 15);
+		return 1;
+	}
+	if(n > 14 && memcmp(s, "rec_buffer_ms ", 14) == 0){
+		rec_buffer_ms = atoi(s + 14);
+		return 1;
+	}
+	return 0;
+}
+
+
+
 #ifdef GUI_SDL3
 
 /*
@@ -96,35 +137,32 @@ static void audio_platform_init(void) { }
 #endif
 
 static int sdl_audio_inited;		/* SDL_InitSubSystem(SDL_INIT_AUDIO) done? */
+static int sdl_quiet_host;		/* probed once: the host has no audio devices */
 static SDL_AudioStream *in_stream;	/* mic capture */
 static SDL_AudioStream *out_stream;	/* speaker playback */
 static QLock inlock;
 static QLock outlock;
 static int in_refcnt;			/* opens still holding /dev/audio for read */
 static int out_refcnt;			/* opens still holding /dev/audio for write */
+
+static void
+select_audio_driver(void)
+{
+#ifdef __ANDROID__
+	/* Android API 28+ ships AAudio and the APK links SDL3's AAudio backend. */
+	SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "aaudio");
+#else
+	/* macOS and iOS use SDL3's CoreAudio backend. */
+	SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "coreaudio");
+#endif
+}
 static Audio_t av;			/* current format (in.rate / chan / bits, out.*) */
 
 /*
- * Per-stream queue caps in milliseconds (INFR-194). Without these
- * SDL_AudioStream queues are unbounded; on a sustained 9P voice flow
- * the macOS playback side accumulates whatever the network feeds it
- * and the audio drifts minutes behind the speaker.
- *
- * Defaults are 0 (no cap) so non-voice workloads — audiotone, music
- * playback, anything that bulk-writes ahead of the device — keep
- * smooth, unbounded queueing. Voice opts in by writing to the ctl:
- *
- *   echo 'play_buffer_ms 100' > /dev/audioctl
- *   echo 'rec_buffer_ms  100' > /dev/audioctl
- *
- * voice/listen and voice/dial both set these as part of their setup,
- * so end users don't have to think about it.
- *
- * Drop policy is HEAD-drop (clear the stale catch-up backlog, keep
- * the freshest data). For voice that's always right.
+ * SDL3 applies play_buffer_ms / rec_buffer_ms as queue depth caps
+ * (INFR-194). See the shared statics above audio_get_buffer_ms.
  */
-static int play_buffer_ms = 0;
-static int rec_buffer_ms  = 0;
+
 
 /* bytes-per-second for a given Audio_d — used to translate the
  * per-direction buffer cap from ms to bytes against the live format. */
@@ -146,11 +184,58 @@ sdlfmt(ulong bits)
 	return SDL_AUDIO_S16LE;
 }
 
+/* Retry budget for an audio subsystem that comes up with an empty device
+ * list — see ensure_sdl_audio. */
+#define AUDIO_INIT_TRIES	20
+#define AUDIO_INIT_DELAY_MS	50
+
+static int
+audio_devices_present(void)
+{
+	int nrec = 0, nplay = 0;
+	SDL_AudioDeviceID *rec, *play;
+
+	rec = SDL_GetAudioRecordingDevices(&nrec);
+	play = SDL_GetAudioPlaybackDevices(&nplay);
+	if(rec != nil)
+		SDL_free(rec);
+	if(play != nil)
+		SDL_free(play);
+	return nrec > 0 || nplay > 0;
+}
+
+static int
+sdl_streams_live(void)
+{
+	return in_stream != NULL || out_stream != NULL;
+}
+
 static int
 ensure_sdl_audio(void)
 {
-	if(sdl_audio_inited)
-		return 1;
+	int i;
+
+	/* An earlier caller may have left the subsystem up with an empty
+	 * device list. That state never recovers on its own, so re-init
+	 * rather than trusting the flag — but only once: a host that came
+	 * up with no devices stays device-less as far as this probe is
+	 * concerned, and re-running the bounded probe below on every call
+	 * would block each /dev/audio open and audioctl read for a second
+	 * or more, forever. SDL still notices devices that appear later:
+	 * the subsystem is left up, and SDL3 refreshes its device list
+	 * while it runs. */
+	if(sdl_audio_inited) {
+		if(sdl_quiet_host || audio_devices_present())
+			return 1;
+		/* Tearing the subsystem down under a live stream leaves
+		 * the stream pointer dangling; the next
+		 * SDL_DestroyAudioStream would be a use-after-free. Leave
+		 * it up instead. */
+		if(sdl_streams_live())
+			return 1;
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		sdl_audio_inited = 0;
+	}
 	/* Configure AVAudioSession (or platform equivalent) before SDL
 	 * touches CoreAudio — no-op on macOS/Linux desktop, real impl on
 	 * iOS. INFR-186. */
@@ -165,25 +250,109 @@ ensure_sdl_audio(void)
 	 * a subsystem has already been brought up; it's a no-op past the
 	 * first invocation for the same flags.
 	 *
-	 * Force the CoreAudio driver explicitly via the hint — without
-	 * this, SDL3 sometimes silently falls back to a dummy driver
-	 * when run from a non-GUI process on macOS, which then surfaces
-	 * as "No default audio device available" instead of the more
-	 * obvious "no audio backend available."
+	 * Select the platform's real audio driver explicitly — without this,
+	 * SDL3 can silently fall back to a dummy driver in a non-GUI process.
+	 * Android uses AAudio; Apple targets use CoreAudio.
 	 */
-	SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "coreaudio");
-	if(!SDL_Init(SDL_INIT_AUDIO)) {
-		fprint(2, "audio-sdl3: SDL_Init(SDL_INIT_AUDIO) failed: %s\n",
-			SDL_GetError());
-		return 0;
+	/*
+	 * SDL_Init can report success while the driver still enumerates no
+	 * devices at all. An audio subsystem in that state is useless: every
+	 * open fails with "No default audio device available", and the
+	 * failure is indistinguishable from a machine with no sound card.
+	 * Bring the subsystem back up until the devices appear, bounded so a
+	 * genuinely silent host (CI, headless runner) still settles quickly
+	 * and fails the open the way it always has.
+	 */
+	for(i = 0;; i++) {
+		select_audio_driver();
+		if(!SDL_Init(SDL_INIT_AUDIO)) {
+			fprint(2, "audio-sdl3: SDL_Init(SDL_INIT_AUDIO) failed: %s\n",
+				SDL_GetError());
+			return 0;
+		}
+		if(audio_devices_present() || i >= AUDIO_INIT_TRIES)
+			break;
+		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+		SDL_Delay(AUDIO_INIT_DELAY_MS);
 	}
 	sdl_audio_inited = 1;
+	if(!audio_devices_present())
+		sdl_quiet_host = 1;
 	return 1;
 }
 
-static SDL_AudioStream *
-open_stream(SDL_AudioDeviceID dev, Audio_d *fmt)
+/*
+ * Host device selection (see audio.h). Empty means "follow the system
+ * default", which is what the emulator did unconditionally before.
+ */
+static char in_devname[128];
+static char out_devname[128];
+
+/* Capture-silence accounting. A device that opens and then delivers
+ * nothing but zeroes is the failure this selection exists to diagnose:
+ * a virtual input from an app that is not running, an OS-muted device,
+ * or missing microphone authorization all look identical to a working
+ * microphone in a quiet room until you count the samples. */
+static vlong cap_bytes;
+static vlong cap_nonzero;
+static int cap_warned;
+static Uint64 cap_opened_ms;
+
+/* How long a capture may stay all-zero before it is worth saying so.
+ * Measured in wall time rather than bytes: the devices that fail this
+ * way often deliver almost no data either, so a byte threshold can take
+ * minutes to reach — or never arrive at all. */
+#define CAP_SILENT_MS	2000
+
+static SDL_AudioDeviceID
+find_device(int isin, const char *name)
 {
+	SDL_AudioDeviceID *ids, id = 0;
+	const char *dn;
+	int i, n = 0;
+
+	ids = isin ? SDL_GetAudioRecordingDevices(&n)
+		   : SDL_GetAudioPlaybackDevices(&n);
+	if(ids == nil)
+		return 0;
+	for(i = 0; i < n; i++) {
+		dn = SDL_GetAudioDeviceName(ids[i]);
+		if(dn != nil && strcmp(dn, name) == 0) {
+			id = ids[i];
+			break;
+		}
+	}
+	SDL_free(ids);
+	return id;
+}
+
+/*
+ * Resolve the configured name to a live SDL id at open time. A name that
+ * matches nothing falls back to the system default rather than failing
+ * the open: devices are unplugged, and a warning plus the default beats
+ * a voice stack that refuses to start.
+ */
+static SDL_AudioDeviceID
+selected_device(int isin)
+{
+	SDL_AudioDeviceID id;
+	char *name = isin ? in_devname : out_devname;
+
+	if(name[0] != 0) {
+		if((id = find_device(isin, name)) != 0)
+			return id;
+		fprint(2, "audio-sdl3: no %s device named \"%s\"; "
+			"using the system default\n",
+			isin ? "input" : "output", name);
+	}
+	return isin ? SDL_AUDIO_DEVICE_DEFAULT_RECORDING
+		    : SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+}
+
+static SDL_AudioStream *
+open_stream(int isin, Audio_d *fmt)
+{
+	SDL_AudioDeviceID dev = selected_device(isin);
 	SDL_AudioSpec spec;
 	SDL_AudioStream *s;
 
@@ -210,21 +379,26 @@ open_stream(SDL_AudioDeviceID dev, Audio_d *fmt)
 			 * subsystem and re-init it via SDL_Init (not
 			 * SubSystem, see ensure_sdl_audio for why). Do NOT
 			 * call SDL_Quit — that's process-wide and would tear
-			 * down the parent's audio too.
+			 * down the parent's audio too. Skipped when a stream
+			 * is live: quitting under an open stream leaves the
+			 * pointer dangling (use-after-free on the next
+			 * SDL_DestroyAudioStream); failing the open is safe.
 			 */
-			SDL_QuitSubSystem(SDL_INIT_AUDIO);
-			sdl_audio_inited = 0;
-			SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "coreaudio");
-			if(SDL_Init(SDL_INIT_AUDIO)) {
-				sdl_audio_inited = 1;
-				s = SDL_OpenAudioDeviceStream(dev, &spec, NULL, NULL);
+			if(!sdl_streams_live()) {
+				SDL_QuitSubSystem(SDL_INIT_AUDIO);
+				sdl_audio_inited = 0;
+				select_audio_driver();
+				if(SDL_Init(SDL_INIT_AUDIO)) {
+					sdl_audio_inited = 1;
+					s = SDL_OpenAudioDeviceStream(dev, &spec, NULL, NULL);
+				}
 			}
 		}
 	}
 	if(s == NULL) {
-		fprint(2, "audio-sdl3: SDL_OpenAudioDeviceStream(%s) failed: %s\n",
-			dev == SDL_AUDIO_DEVICE_DEFAULT_RECORDING ? "rec" : "play",
-			SDL_GetError());
+		fprint(2, "audio-sdl3: SDL_OpenAudioDeviceStream(%s) failed: %s (devices present: %s)\n",
+			isin ? "rec" : "play",
+			SDL_GetError(), audio_devices_present() ? "yes" : "no");
 		return NULL;
 	}
 	/* Streams are bound paused — resume so data starts flowing. */
@@ -232,10 +406,129 @@ open_stream(SDL_AudioDeviceID dev, Audio_d *fmt)
 	return s;
 }
 
+/*
+ * #A/audiodev readback. Names are quoted because almost every real one
+ * contains spaces, and quoting makes a line from this read valid input to
+ * the same file. The trailing capture line reports whether the input
+ * device has actually produced a non-zero sample, which is the one thing
+ * that distinguishes a silenced or virtual microphone from a quiet room.
+ */
+static int
+sdl_devs_list(char *buf, char *e)
+{
+	SDL_AudioDeviceID *ids;
+	const char *dn, *sel;
+	char *p = buf;
+	int dir, i, n;
+
+	if(!ensure_sdl_audio())
+		return snprint(buf, e - buf, "unavailable\n");
+
+	for(dir = 1; dir >= 0; dir--) {
+		sel = dir ? in_devname : out_devname;
+		if(sel[0] != 0)
+			p = seprint(p, e, "%s selected '%s'\n",
+				dir ? "in" : "out", sel);
+		else
+			p = seprint(p, e, "%s selected default\n",
+				dir ? "in" : "out");
+		ids = dir ? SDL_GetAudioRecordingDevices(&n)
+			  : SDL_GetAudioPlaybackDevices(&n);
+		if(ids == nil)
+			continue;
+		for(i = 0; i < n; i++) {
+			dn = SDL_GetAudioDeviceName(ids[i]);
+			if(dn != nil)
+				p = seprint(p, e, "%s device '%s'\n",
+					dir ? "in" : "out", dn);
+		}
+		SDL_free(ids);
+	}
+
+	/* Reported for the most recent capture, not only a live one: the
+	 * useful question is "did that recording hear anything", and it is
+	 * usually asked after the stream has been closed again. */
+	if(cap_bytes == 0)
+		p = seprint(p, e, "capture idle\n");
+	else if(cap_nonzero > 0)
+		p = seprint(p, e, "capture active\n");
+	else
+		p = seprint(p, e, "capture silent\n");
+
+	return p - buf;
+}
+
+/*
+ * Take effect immediately: a stream already open on the old device is
+ * reopened on the new one, so an operator can fix a wrong input device
+ * without restarting the voice stack.
+ */
+static int
+sdl_devs_select(int isin, char *name)
+{
+	/* Selection can arrive before anything has opened /dev/audio, and
+	 * SDL enumerates nothing until the subsystem is up — without this
+	 * every name looks unknown. */
+	if(name[0] != 0) {
+		if(!ensure_sdl_audio())
+			return -1;
+		if(find_device(isin, name) == 0)
+			return -1;
+	}
+
+	if(isin) {
+		qlock(&inlock);
+		snprint(in_devname, sizeof in_devname, "%s", name);
+		if(in_stream != NULL) {
+			SDL_DestroyAudioStream(in_stream);
+			cap_bytes = cap_nonzero = 0;
+			cap_warned = 0;
+			cap_opened_ms = SDL_GetTicks();
+			in_stream = open_stream(1, &av.in);
+		}
+		qunlock(&inlock);
+	} else {
+		qlock(&outlock);
+		snprint(out_devname, sizeof out_devname, "%s", name);
+		if(out_stream != NULL) {
+			SDL_DestroyAudioStream(out_stream);
+			out_stream = open_stream(0, &av.out);
+		}
+		qunlock(&outlock);
+	}
+	return 0;
+}
+
+static Audiodevops sdl_devops = { sdl_devs_list, sdl_devs_select };
+
+/*
+ * Starting device names from the host environment. A launcher that wants
+ * a particular device — a test rig pointing capture at a virtual input,
+ * a kiosk pinned to a USB headset — sets these before exec rather than
+ * writing to #A/audiodev after boot, which would be too late: the voice
+ * stack opens capture during startup. An unknown name is not validated
+ * here (SDL is deliberately not up yet); selected_device warns and falls
+ * back to the system default at open time.
+ */
+static void
+devnames_from_env(void)
+{
+	char *s;
+
+	if((s = getenv("INFERNODE_AUDIO_IN")) != nil && *s != 0)
+		snprint(in_devname, sizeof in_devname, "%s", s);
+	if((s = getenv("INFERNODE_AUDIO_OUT")) != nil && *s != 0)
+		snprint(out_devname, sizeof out_devname, "%s", s);
+}
+
 void
 audio_file_init(void)
 {
 	audio_info_init(&av);
+	audio_devops_register(&sdl_devops);
+	audio_bufcaps_register(audio_get_buffer_ms);
+
+	devnames_from_env();
 	/* SDL_InitSubSystem is deferred until first open so a headless
 	 * build with no audio HW (e.g. CI runners) doesn't pay startup
 	 * cost or trigger a TCC prompt it can't satisfy. */
@@ -261,8 +554,10 @@ audio_file_open(Chan *c, int omode)
 	if(omode == OREAD || omode == ORDWR) {
 		qlock(&inlock);
 		if(in_stream == NULL) {
-			in_stream = open_stream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING,
-						&av.in);
+			cap_bytes = cap_nonzero = 0;
+			cap_warned = 0;
+			cap_opened_ms = SDL_GetTicks();
+			in_stream = open_stream(1, &av.in);
 			if(in_stream == NULL) {
 				qunlock(&inlock);
 				error("audio in unavailable");
@@ -274,8 +569,7 @@ audio_file_open(Chan *c, int omode)
 	if(omode == OWRITE || omode == ORDWR) {
 		qlock(&outlock);
 		if(out_stream == NULL) {
-			out_stream = open_stream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
-						 &av.out);
+			out_stream = open_stream(0, &av.out);
 			if(out_stream == NULL) {
 				/* clean up the input we just acquired */
 				if(omode == ORDWR) {
@@ -343,6 +637,28 @@ audio_file_read(Chan *c, void *va, long n, vlong off)
 		}
 		SDL_Delay(5);	/* ~220 frames @ 44.1k stereo 16-bit */
 	}
+
+	/* Count towards the silence diagnostic until the device has proved
+	 * itself once; after that the scan stops costing anything. */
+	if(cap_nonzero == 0) {
+		uchar *b = va;
+		long i;
+
+		for(i = 0; i < got; i++)
+			if(b[i] != 0) {
+				cap_nonzero += got;
+				break;
+			}
+		cap_bytes += got;
+		if(cap_nonzero == 0 && !cap_warned &&
+		   SDL_GetTicks() - cap_opened_ms > CAP_SILENT_MS) {
+			fprint(2, "audio-sdl3: the capture device has produced "
+				"nothing but silence for 2s — check the input "
+				"device in #A/audiodev and microphone "
+				"authorization\n");
+			cap_warned = 1;
+		}
+	}
 	return got;
 }
 
@@ -387,21 +703,11 @@ audio_ctl_write(Chan *c, void *va, long n, vlong off)
 	/*
 	 * Buffer-cap verbs (INFR-194). Parsed and stripped here before
 	 * audioparse sees the rest of the line so audioparse doesn't
-	 * have to learn about non-format verbs. Each verb is a key + int.
-	 * "play_buffer_ms N" — cap playback queue depth, 0 = unbounded
-	 * "rec_buffer_ms  N" — cap capture queue depth, 0 = unbounded
+	 * have to learn about non-format verbs.
 	 */
-	{
-		char *s = (char*)va;
-		if(n > 16 && memcmp(s, "play_buffer_ms ", 15) == 0) {
-			play_buffer_ms = atoi(s + 15);
-			return n;
-		}
-		if(n > 15 && memcmp(s, "rec_buffer_ms ", 14) == 0) {
-			rec_buffer_ms = atoi(s + 14);
-			return n;
-		}
-	}
+	if(audio_parse_buffer_ms((char*)va, n))
+		return n;
+
 
 	/* Parse the verb into a scratch struct first so a malformed line
 	 * leaves the live av untouched. audioparse mutates only the
@@ -419,8 +725,7 @@ audio_ctl_write(Chan *c, void *va, long n, vlong off)
 	    tmp.in.bits != av.in.bits)) {
 		qlock(&inlock);
 		SDL_DestroyAudioStream(in_stream);
-		in_stream = open_stream(SDL_AUDIO_DEVICE_DEFAULT_RECORDING,
-					&tmp.in);
+		in_stream = open_stream(1, &tmp.in);
 		qunlock(&inlock);
 	}
 	if(out_stream &&
@@ -428,8 +733,7 @@ audio_ctl_write(Chan *c, void *va, long n, vlong off)
 	    tmp.out.bits != av.out.bits)) {
 		qlock(&outlock);
 		SDL_DestroyAudioStream(out_stream);
-		out_stream = open_stream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
-					 &tmp.out);
+		out_stream = open_stream(0, &tmp.out);
 		qunlock(&outlock);
 	}
 	av = tmp;
@@ -504,7 +808,9 @@ void
 audio_file_init(void)
 {
 	audio_info_init(&av);
+	audio_bufcaps_register(audio_get_buffer_ms);
 }
+
 
 void
 audio_ctl_init(void)
@@ -540,9 +846,13 @@ audio_file_write(Chan *c, void *va, long n, vlong off)
 long
 audio_ctl_write(Chan *c, void *va, long n, vlong off)
 {
-	USED(c); USED(va); USED(off);
+	USED(c); USED(off);
+	if(audio_parse_buffer_ms((char*)va, n))
+		return n;
+	USED(va);
 	return n;
 }
+
 
 void
 audio_file_close(Chan *c)

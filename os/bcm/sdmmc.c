@@ -90,11 +90,23 @@ enum
  * Arasan path kept buildable with -DSDCARD_ARASAN the way the other
  * single-purpose variants are.
  */
-#ifdef SDCARD_ARASAN
+#if defined(SDCARD_EMMC2)
+static SDio *io = &emmc2io;	/* a BCM2711: os/bcm2711/emmc2.c */
+#elif defined(SDCARD_ARASAN)
 static SDio *io = &emmcio;
 #else
 static SDio *io = &sdhostio;
 #endif
+
+/*
+ * Set when the card has turned out to be on the ARASAN although this
+ * kernel was built to find it somewhere else -- which is what QEMU's
+ * raspi4b does to a kernel that expects it on EMMC2 (emmc.c). The
+ * radio's driver reads it: the Arasan is the radio's, a probe of it
+ * resets it, and a reset of the controller the root filesystem is on
+ * is not a way to find out that there is no radio.
+ */
+int sdarasantaken;
 
 static struct
 {

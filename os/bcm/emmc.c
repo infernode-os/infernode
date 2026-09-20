@@ -82,10 +82,39 @@ static struct
 } arasan;
 
 /*
- * Where the controller is. EMMCREGS, unless the board gave a second
- * place to look and the card turned out to be there; see arasaninit.
+ * AN INSTANCE OF THIS DRIVER IS A COMPILATION OF THIS FILE.
+ *
+ * Everything in it is static but the SDio it exports, so a second
+ * controller of the same kind is a second translation unit that defines
+ * the five names below and then includes this one: os/bcm2711/emmc2.c,
+ * for the BCM2711's EMMC2, which that SoC added for the card so that
+ * this, the Arasan, could be the radio's alone. Compiled by itself, as
+ * it is for a BCM2837, the file is the Arasan as it always was.
+ *
+ *	EMMCIO		the exported SDio
+ *	EMMCNAME	what it calls itself
+ *	EMMCBASE	where its registers are
+ *	EMMCCLK		the mailbox's id for its clock
+ *	EMMCCARDPINS	defined if a card on it sits on GPIO 48-53, which
+ *			is true of the Arasan and not of EMMC2
+ *	EMMCALTBASE	optional: a second place to look for the card, for
+ *			when silicon and its emulator disagree (arasaninit)
+ *
+ * That is not how one would design a driver for two controllers; it is
+ * how one gets two from a driver that works, without touching what
+ * works. The SDio vtable has no instance argument, sdmmc.c and
+ * ether4330.c were written against it, and this file's every quirk --
+ * the write pacing, the response normalisation -- was found on a board.
  */
-static uintptr emmcbase = EMMCREGS;
+#ifndef EMMCIO
+#define EMMCIO		emmcio
+#define EMMCNAME	"emmc"
+#define EMMCBASE	EMMCREGS
+#define EMMCCLK		Clkemmc
+#define EMMCCARDPINS
+#endif
+
+static uintptr emmcbase = EMMCBASE;
 
 static u32int
 emmcrd(int off)
@@ -201,7 +230,7 @@ emmcsetclock(u32int hz)
 	u32int base, div, c1;
 	int i;
 
-	base = mboxclockrate(Clkemmc);
+	base = mboxclockrate(EMMCCLK);
 	if(base == 0)
 		base = Corefallback;
 
@@ -263,30 +292,29 @@ arasaninit(void)
 	int i;
 
 	/*
-	 * The card's six pins, when the card is on the Arasan. Not when it
-	 * is on a BCM2711's EMMC2 (EMMCOFF says which; io.h), whose pins
-	 * are its own and are not GPIOs at all.
+	 * The card's six pins, when the card is on a controller that uses
+	 * them. EMMC2's pins are its own and are not GPIOs at all.
 	 */
-#if defined(SDCARD_ARASAN) && EMMCOFF == 0x300000
+#if defined(SDCARD_ARASAN) && defined(EMMCCARDPINS)
 	for(i = 48; i <= 53; i++)
 		gpioclaim(i, "emmc");
 #endif
-#ifdef EMMCALTOFF
+#ifdef EMMCALTBASE
 	/*
-	 * A board may name a second controller of the same kind, for the
-	 * case where the silicon and its emulator disagree about which one
-	 * the card is on. A Raspberry Pi 4's card is on EMMC2; QEMU's
-	 * raspi4b (9.2) puts it on the first controller, the way a Pi 3's
-	 * GPIO mux would. Bit 16 of the present-state register says whether
-	 * a card is inserted, and it is believed only in this one direction
-	 * -- nothing here, something there -- and said out loud, because a
-	 * kernel that quietly used the wrong controller on a board would be
-	 * driving the radio's.
+	 * A second controller of the same kind to look at, for the case
+	 * where the silicon and its emulator disagree about which one the
+	 * card is on. A Raspberry Pi 4's card is on EMMC2; QEMU's raspi4b
+	 * (9.2) puts it on the Arasan, the way a Pi 3's GPIO mux would. Bit
+	 * 16 of the present-state register says whether a card is inserted,
+	 * and it is believed only in this one direction -- nothing here,
+	 * something there -- and said out loud. sdarasantaken tells the
+	 * radio's driver, whose controller that is, to keep off it.
 	 */
 	if((emmcrd(Emmcstatus) & (1<<16)) == 0
-	&& (*(volatile u32int*)(uintptr)(PHYSIO + EMMCALTOFF + Emmcstatus) & (1<<16)) != 0){
+	&& (*(volatile u32int*)(uintptr)(EMMCALTBASE + Emmcstatus) & (1<<16)) != 0){
 		uartputstr("sd:   no card on the board's SD controller; one on the OTHER SDHCI controller, which is where QEMU's raspi4b wires it -- using that\n");
-		emmcbase = PHYSIO + EMMCALTOFF;
+		emmcbase = EMMCALTBASE;
+		sdarasantaken = 1;
 	}
 #endif
 	arasan.fastclock = 0;
@@ -605,8 +633,8 @@ arasancardintr(int wait)
 	return i;
 }
 
-SDio emmcio = {
-	"emmc",
+SDio EMMCIO = {
+	EMMCNAME,
 	arasaninit,
 	arasanenable,
 	arasancmd,

@@ -83,13 +83,13 @@
 #define	RAMLIMIT	0xFC000000UL
 
 /*
- * The card is on an SDHCI controller (EMMC2; see io.h), not on SDHOST.
- * ../bcm/sdmmc.c picks between the two when it is compiled.
+ * The card is on EMMC2 (io.h, emmc2.c). ../bcm/sdmmc.c picks between the
+ * places a card can be when it is compiled.
  */
-#define	SDCARD_ARASAN	1
+#define	SDCARD_EMMC2	1
 
 /*
- * Cortex-A53 L1 data cache line. Upstream's bcm port says 32, which is
+ * Cortex-A72 L1 data cache line: 64 bytes, as the A53's is. Upstream's bcm port says 32, which is
  * the ARM11 in a Pi 1; getting this too LARGE skips lines during cache
  * maintenance and corrupts DMA under load, so it is worth stating
  * per-SoC rather than inheriting.

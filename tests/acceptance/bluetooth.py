@@ -184,7 +184,20 @@ def main():
             break
         time.sleep(1)
     m = re.search(r"links (\d+)", st)
-    b.check(m is not None and int(m.group(1)) == 0, "no links left open after the run", st.strip()[:100])
+    if m is not None and int(m.group(1)) != 0:
+        # A link the peer made is the peer's to end (bt9p's idlelinks says why),
+        # and BlueZ sometimes keeps its ACL up long after its last channel closed:
+        # seen held for minutes after the dedicated-bonding case, with no
+        # conversation on the board. That is the tester lingering, not the board
+        # leaking. Hang up from here, and then the board must let go.
+        run("bluetoothctl disconnect %s" % a.bdaddr, timeout=20)
+        for _ in range(10):
+            time.sleep(1)
+            st = b.sh("cat /net/bt/status", wait=1.0)
+            m = re.search(r"links (\d+)", st)
+            if m is not None and int(m.group(1)) == 0:
+                break
+    b.check(m is not None and int(m.group(1)) == 0, "no links left open after the run (the tester's own hung up if BlueZ kept it)", st.strip()[-60:])
     m = re.search(r"conversations (\d+)", st)
     b.check(m is not None and int(m.group(1)) <= 2, "no conversations leaked by the connection storms (#632): %s" % (m.group(1) if m else "?"))
     text = b.serial_since(mark)

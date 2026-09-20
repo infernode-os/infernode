@@ -4596,11 +4596,50 @@ try:
             if px[o] == ACCENT[0] and px[o+1] == ACCENT[1] and px[o+2] == ACCENT[2]:
                 n += 1
         best = max(best, n)
+
+    # The software cursor. It starts at 0,0 and the desktop draws around
+    # it; move the tablet to the middle of the screen and the arrow must
+    # be THERE and must not still be at 0,0. The arrow is the kernel's
+    # own (os/arm64/screen.c: set mask black, clear-and-not-set white),
+    # so it can be looked for exactly.
+    CLR = [0xFF,0xFF,0x80,0x01,0x80,0x02,0x80,0x0C,0x80,0x10,0x80,0x10,0x80,0x08,0x80,0x04,
+           0x80,0x02,0x80,0x01,0x80,0x02,0x8C,0x04,0x92,0x08,0x91,0x10,0xA0,0xA0,0xC0,0x40]
+    SET = [0x00,0x00,0x7F,0xFE,0x7F,0xFC,0x7F,0xF0,0x7F,0xE0,0x7F,0xE0,0x7F,0xF0,0x7F,0xF8,
+           0x7F,0xFC,0x7F,0xFE,0x7F,0xFC,0x73,0xF8,0x61,0xF0,0x60,0xE0,0x40,0x40,0x00,0x00]
+    def arrow(px, w, h, x0, y0):
+        hit = tot = 0
+        for y in range(16):
+            for x in range(16):
+                st = SET[y*2 + (x >> 3)] & (0x80 >> (x & 7)); cl = CLR[y*2 + (x >> 3)] & (0x80 >> (x & 7))
+                if not (st or cl) or x0+x < 0 or y0+y < 0 or x0+x >= w or y0+y >= h:
+                    continue
+                o = ((y0+y)*w + x0+x)*3; tot += 1
+                if tuple(px[o:o+3]) == ((0, 0, 0) if st else (255, 255, 255)):
+                    hit += 1
+        return 100 * hit // max(tot, 1)
+    time.sleep(10)          # several more batches drawn around a cursor nothing has moved
+    ev = [{"type": "abs", "data": {"axis": "x", "value": 16384}},
+          {"type": "abs", "data": {"axis": "y", "value": 16384}}]
+    f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+    f.flush(); f.readline()
+    time.sleep(2)
+    if os.path.exists(ppm):
+        os.unlink(ppm)
+    f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
+    f.readline(); time.sleep(1)
+    cmoved = corigin = -1
+    if os.path.exists(ppm):
+        d = open(ppm, "rb").read()
+        parts = d.split(b"\n", 3)
+        w, h = map(int, parts[1].split()); px = parts[3]
+        cmoved = max(arrow(px, w, h, w//2 + dx, h//2 + dy) for dx in range(-3, 3) for dy in range(-3, 3))
+        corigin = arrow(px, w, h, 0, 0)
     s.close()
 finally:
     p.kill(); p.communicate()
 sys.stdout.write(buf.decode(errors="replace"))
 print("\nDESKTOP %dx%d accent %d" % (w, h, best))
+print("CURSOR moved %d origin %d" % (cmoved, corigin))
 PYEOF
     OUT="$(cat "$BUILD/$PLAT-desktop.txt")"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
@@ -4615,6 +4654,27 @@ PYEOF
         pass "virt: Lucifer draws the desktop on the ramfb screen ($desk)"
     else
         fail "virt: desktop -- '$desk'"
+    fi
+    #
+    # The pointer is where it was put, and only there. flushmemscreen used
+    # to mend the cursor against the rectangle devdraw flushed, which is a
+    # batch's bounding box and not the pixels drawn: once the cursor stayed
+    # on the screen unless an operation met it (#654), a box that merely
+    # covered it made the arrow's own pixels the saved background, and the
+    # first move left a second arrow behind at 0,0. It reached the board
+    # because nothing here looked at the cursor at all.
+    #
+    curs="$(grep -a '^CURSOR' <<<"$OUT" | tail -1)"
+    read -r _ _ cmoved _ corigin <<<"$curs"
+    if [[ "${cmoved:-0}" -ge 95 ]]; then
+        pass "virt: the pointer moved to mid-screen is drawn there ($curs)"
+    else
+        fail "virt: no arrow where the tablet put the pointer -- '$curs'"
+    fi
+    if [[ "${corigin:-100}" -le 50 && "${corigin:--1}" -ge 0 ]]; then
+        pass "virt: and it left nothing behind at 0,0"
+    else
+        fail "virt: an arrow is still drawn at 0,0 after the pointer left -- '$curs'"
     fi
     vrefute "nothing panics under the desktop"          "panic:"
 

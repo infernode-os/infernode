@@ -1808,7 +1808,16 @@ comp(Inst *i)
 			break;
 		}
 		opwld(i, Oldw, RAX);
-		modrr(Omovsxd, RAX, RAX);
+		/*
+		 * Only the conversion narrows. movw is W(d) = W(s) in xec.c
+		 * and a plain load and store in the arm64 JIT: all 64 bits.
+		 * This sign-extended both from 32 (fb64f7767, written with
+		 * no amd64 machine to run it on), and a word that was not an
+		 * int -- the first CI run on amd64 found one in llmsrv --
+		 * came out as the low half of itself: "SEGV: addr=39a9d420".
+		 */
+		if(i->op == ICVTLW)
+			modrr(Omovsxd, RAX, RAX);
 		opwst(i, Ostw, RAX);
 		break;
 	case ICVTWL:

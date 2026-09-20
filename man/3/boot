@@ -1,41 +1,83 @@
 .TH BOOT 3
 .SH NAME
-boot \- reboot under program control
+boot \- the running kernel as a file, and its command line
 .SH SYNOPSIS
+.nf
 .B bind -a #B /dev
-.PP
-.B /dev/boot
-.br
-.B /dev/kexec
-.br
-.B /dev/mem
+
+.B /dev/bootimage
+.B /dev/bootargs
+.fi
 .SH DESCRIPTION
 .I Boot
-serves a directory containing three files that control a reboot of the system.
-The files can only be opened by the host owner
-(see
-.IR eve (10.2)).
+serves two read-only files describing the kernel that is running.
 .PP
-.B Boot
-is a write-only file that accepts 4 bytes representing a kernel address, high-order byte first.
-The system will transfer control to that address, which is assumed to be the start of low-level reboot code.
-There is no return from the write on success or failure.
+.B Bootimage
+is the kernel image, byte for byte as it was loaded: its length and
+contents are those of the file it was booted from.
+Installing the running kernel on the card therefore needs no mechanism
+of its own:
+.IP
+.EX
+cp /dev/bootimage /n/dos/tryboot.img
+.EE
 .PP
-.B Kexec
-is a write-only file to which an uncompressed kernel image can be written, a chunk at a time.
-When the file is closed, the system will transfer control to the start of the image, which again
-is assumed to be low-level reboot code.
+It is a snapshot, not live memory.
+The image executes where it was loaded, so its data segment changes
+for as long as the machine is up; what is served is a copy of that
+segment taken at the top of the kernel's entry, before any C code has
+written to it, with the text and read-only data taken in place.
 .PP
-.B Mem
-copies data to and from kernel memory, taking the current file offset as an address therein.
+.B Bootargs
+is the kernel command line, followed by a newline:
+the contents of
+.B cmdline.txt
+(or, for a trial boot,
+.BR tryboot.cmd )
+as the Raspberry Pi's firmware reports it; under QEMU's
+.B virt
+machine, the
+.B bootargs
+property of the device tree's
+.B /chosen
+node, which is what
+.B -append
+sets.
+It is empty, but for the newline, when there is none.
+The words the kernel itself looks for are listed in
+.BR /docs/BAREMETAL.md .
+.SH EXAMPLE
+Install the running kernel as a candidate and try it once (Raspberry Pi):
+.IP
+.EX
+cp /dev/bootimage /n/dos/tryboot.img
+echo tryboot > /dev/sysctl
+.EE
 .PP
-.I Boot
-flushes caches as necessary to ensure that writes to kernel memory through any
-of these files will be visible when subsequently executed as instructions.
+The candidate boots under a watchdog.
+From its own shell, keep it with
+.IP
+.EX
+mv /n/dos/tryboot.img /n/dos/infernode8.img
+.EE
+.PP
+or reject it by rebooting.
+Never copy over
+.BR infernode8.img ,
+which is the kernel known to work.
 .SH SOURCE
-.B /os/port/devboot.c
+.B /os/arm64/devboot.c
 .SH SEE ALSO
-.IR tftp (2),
-.IR cons (3)
-.SH DIAGNOSTICS
-Invalid addresses are diagnosed, but otherwise there is no error return.
+.IR cons (3),
+.IR osinit (8)
+.br
+.B /docs/BAREMETAL.md
+.SH HISTORY
+The device of this name in Inferno's other native kernels serves
+.BR boot ,
+.B kexec
+and
+.BR mem ,
+for jumping to an address or a new image and for reading kernel memory.
+None of those is here: this kernel is replaced through the file system
+and a reset, and its memory is not a file.

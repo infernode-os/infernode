@@ -1,0 +1,164 @@
+.TH ETHER 3
+.SH NAME
+ether \- Ethernet and Wi-Fi interfaces of the native kernel
+.SH SYNOPSIS
+.nf
+.B bind #l/ether0 /net/ether0
+.B bind -a #l1 /net
+
+.BI /net/ether n /clone
+.BI /net/ether n /addr
+.BI /net/ether n /stats
+.BI /net/ether n /ifstats
+.BI /net/ether n / c /ctl
+.BI /net/ether n / c /data
+.BI /net/ether n / c /type
+.fi
+.SH DESCRIPTION
+.I Ether
+serves the native kernel's link-level network interfaces.
+.B #l
+is
+.BR ether0 ,
+wired Ethernet;
+.B #l1
+is
+.BR ether1 ,
+the Raspberry Pi's Wi-Fi.
+An interface with nothing behind it refuses to attach, so a kernel with no
+radio has no
+.B /net/ether1
+rather than an empty one.
+.PP
+The files are those of every Inferno and Plan 9 network interface.
+Opening
+.B clone
+makes a new conversation,
+.IR c ,
+and the descriptor is its
+.B ctl
+file; writing
+.B "connect \fItype\fP"
+to it selects the Ethernet type whose frames
+.B data
+will carry
+.RB ( -1
+for all), and
+.BR promiscuous ,
+.BR headersonly ,
+.B "addmulti \fIaddr\fP"
+and
+.B "remmulti \fIaddr\fP"
+have their usual meanings.
+A read of
+.B data
+returns one whole frame, header included; a write sends one.
+.B Addr
+is the interface's address as twelve hexadecimal digits \- all zeros while
+nothing drives the interface \- and
+.B stats
+the counters the kernel keeps (packets in and out, errors,
+.BR link ,
+.BR mbps ,
+.BR addr ).
+.B Ifstats
+is the driver's own report.
+.PP
+The IP stack uses an interface by name:
+.IP
+.EX
+bind ether /net/ether0
+.EE
+.PP
+written to an
+.B ipifc
+(see
+.IR ip (3)).
+.SS "What is behind ether0"
+Three different things, none of which a user of the files can see.
+.TP
+A USB Ethernet adapter (Raspberry Pi)
+The board's LAN7515, or an RNDIS gadget under QEMU, is brought up by a
+Limbo program,
+.B /dis/etherusb.dis
+\- registers, PHY negotiation, address \- which then hands the kernel
+the adapter's two open bulk endpoints with
+.RS
+.IP
+.EX
+bind \fIfamily mac mbps burst inpath outpath\fP
+.EE
+.PP
+written to any
+.B ctl
+of
+.BR #l/ether0 .
+.I Family
+is
+.B lan78xx
+or
+.BR rndis ,
+naming the framing the kernel is to apply; the paths are resolved in the
+writer's namespace.
+From then on frames move inside the kernel.
+.B unbind
+releases the endpoints.
+An interface binds once at a time.
+.RE
+.TP
+A kernel driver (QEMU's virt)
+A virtio network device is driven wholly in the kernel and is live from
+boot, its address already in
+.BR addr ;
+.IR osinit (8)
+takes a non-zero address there to mean there is nothing to bring up.
+.TP
+Nothing
+.B Addr
+is zeros and
+.B data
+writes fail until a
+.B bind
+arrives.
+.SS ether1
+The CYW43455 radio, driven in the kernel.
+Its
+.B ctl
+messages \- joining a network, keys \- and its firmware files are
+described in
+.IR wpa (8)
+and
+.BR /docs/WIFI-WPA2.md ;
+.B scanbs
+in a conversation's
+.B ctl
+asks for a scan.
+.SH SOURCE
+.B /os/port/devether.c
+.br
+.B /os/port/netif.c
+.br
+.B /os/bcm2837/ether4330.c
+.br
+.B /os/virt/ethervirtio.c
+.br
+.B /os/init/etherusb.b
+.SH SEE ALSO
+.IR ip (3),
+.IR osinit (8),
+.IR wpa (8)
+.SH BUGS
+The link is taken to be up for as long as the interface is bound:
+nothing watches the cable.
+.br
+On
+.B ether0
+with a USB adapter, two further
+.B ctl
+messages,
+.B blackhole
+and
+.BR rxstats ,
+and the contents of
+.BR ifstats ,
+are instruments left from measuring the receive path and may change.

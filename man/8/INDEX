@@ -25,6 +25,7 @@ kfscmd kfscmd
 logind logind
 mkext mkfs
 mkfs mkfs
+osinit osinit
 ping ping
 plumber plumber
 rdbgsrv rdbgsrv

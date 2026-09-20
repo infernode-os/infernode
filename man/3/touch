@@ -1,0 +1,63 @@
+.TH TOUCH 3
+.SH NAME
+touch \- the Raspberry Pi touch display's raw touch buffer
+.SH SYNOPSIS
+.nf
+.B bind -a #T /dev
+
+.B /dev/touch
+.fi
+.SH DESCRIPTION
+The official Raspberry Pi DSI display's touch controller, an FT5406, is
+polled by the VideoCore firmware, which keeps the controller's register
+block in a buffer.
+.I Touch
+serves that buffer as one read-only file.
+.PP
+Each read of
+.B touch
+returns one whole 64-byte snapshot, and marks it consumed in the way the
+firmware expects, by setting the point count to 99; the firmware
+overwrites that at its next poll.
+A snapshot whose point count is 99 is therefore one that has been read
+already.
+.PP
+The layout is the panel's and is not interpreted here:
+.IP
+.EX
+.ta 8n
+[0]	device mode
+[1]	gesture
+[2]	number of points, 0-10; 99 if unchanged since the last read
+[3+6i]	bits 7:6 event, bits 3:0 high nibble of x
+[4+6i]	low byte of x
+[5+6i]	bits 7:4 touch id, bits 3:0 high nibble of y
+[6+6i]	low byte of y
+[7+6i]	weight;  [8+6i] area
+.EE
+.PP
+.B /dis/touch.dis
+.RB ( /os/init/touch.b ),
+which
+.IR osinit (8)
+starts, reads it and writes pointer events to
+.B /dev/pointer
+(see
+.IR pointer (3)).
+What is in the kernel is what a program cannot do: ask the firmware for
+the buffer, reach memory the firmware shares, and keep the cache honest
+about it.
+.PP
+The device refuses to attach when there is no panel, so the bind fails and
+there is no file.
+.SH SOURCE
+.B /os/bcm2837/devtouch.c
+.br
+.B /os/init/touch.b
+.SH SEE ALSO
+.IR pointer (3),
+.IR osinit (8)
+.SH BUGS
+Raspberry Pi only.
+QEMU implements neither of the firmware requests involved, so the device
+has been exercised only on a board.

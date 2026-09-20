@@ -114,6 +114,32 @@ testBigAndBack(t: ref T)
 	t.asserteq(int r, -1, "int of a real 2^32-1 is -1");
 }
 
+# A string converted to an int is an int: in range, canonical in its slot,
+# and the same number whichever engine ran the conversion. cvtcw stored
+# strtol()'s whole 64-bit long, so int "4294967297" printed as 1, compared
+# greater than 16r7FFFFFFF, and was 4294967297 as a big under the
+# interpreter and 1 under the JITs. It saturates now, as it did when a C
+# long was 32 bits. The strings are built at run time so that nothing is
+# folded by the compiler.
+testStringToInt(t: ref T)
+{
+	d := "42949672";
+	s := d + "97";			# 2^32 + 1
+	v := int s;
+	t.asserteq(v, 16r7FFFFFFF, "int of a string past 2^31-1 saturates at max int");
+	t.assert(big v == big 16r7FFFFFFF, "and is that number as a big too");
+	t.assert(!(v > 16r7FFFFFFF), "and does not compare greater than max int");
+	s = "-" + d + "97";
+	v = int s;
+	t.asserteq(v, -16r7FFFFFFF - 1, "int of a string below -2^31 saturates at min int");
+	t.assert(big v == -big 16r7FFFFFFF - big 1, "and is that number as a big too");
+	s = "-" + "7";
+	t.asserteq(int s, -7, "a small negative string is itself");
+	t.assert(big int s == big -7, "and sign-extends into a big");
+	s = "21474836" + "47";
+	t.asserteq(int s, 16r7FFFFFFF, "max int itself converts exactly");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -132,6 +158,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Wraparound", testWraparound);
 	run("ArithmeticShift", testArithmeticShift);
 	run("BigAndBack", testBigAndBack);
+	run("StringToInt", testStringToInt);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

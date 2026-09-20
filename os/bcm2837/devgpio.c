@@ -7,10 +7,43 @@
  *
  * One directory per pin, in BCM numbering because that is the only
  * numbering the hardware has, so that a namespace can hand a program
- * exactly one pin: bind '#G/gpio/29' /mnt/led. That is the difference
- * from the original Inferno Pi port's devgpio and from Plan 9's, which
- * are a single control file for all 54 pins -- a program that can
- * touch one can touch the UART's.
+ * exactly one pin -- its configuration included:
+ *
+ *	bind '#G/gpio/29' /mnt/led
+ *
+ * The prior art, read rather than assumed (checked 2026-09-20):
+ *
+ * - Plan 9 4e's bcm kernel has no GPIO device at all. gpiosel(),
+ *   gpioout(), gpioin() and gpiopulloff() are static functions in
+ *   uartmini.c, called to mux the console pins and the OK LED. There
+ *   is no #G and no gpio(3): nothing outside the kernel can see or
+ *   ask.
+ * - Inferno upstream has no Pi port. The devgpio it does have is the
+ *   SA1110's (os/sa1110/devgpio.c, man/3/gpio): a flat directory of
+ *   five files named for the registers behind them -- gpioset,
+ *   gpioclear, gpioedge, gpioctl, gpiostatus -- where gpioset takes a
+ *   32-bit hex mask and stores it straight into GPSR.
+ * - 9front's is the closest to this one: a data file per pin, named
+ *   under a selectable BCM/board/wiringPi scheme, plus a shared ctl
+ *   taking "function <f> <pin>" and "pull <p> <pin>", one pin per
+ *   command.
+ *
+ * So the difference is narrower than "a single control file for all
+ * 54 pins", and it is this: in each of those, configuration is either
+ * unreachable or global. Hand out 9front's per-pin data file and the
+ * holder can drive the pin but not set its function; hand out the ctl
+ * that can, and it can retarget all 54 -- the console UART's 14 and
+ * 15 included. Putting ctl inside the pin's own directory is what
+ * makes the unit of delegation and the unit of configuration the same
+ * object.
+ *
+ * What that costs, recorded so it is not rediscovered: nothing here
+ * changes several pins at once. The SoC can -- GPSET0/GPCLR0 set any
+ * subset of 32 pins in one store -- and the SA1110 interface above
+ * did, by handing the register out whole. This one cannot, because a
+ * mask is authority over every pin in it and a per-pin namespace has
+ * no way to bound one. A parallel bus or a bit-banged clock wants a
+ * bus device (SPI, I2C), not a wider pin device.
  *
  * This is the mechanism and nothing else: function select, pull,
  * level. No pin names, no LED polarity, no PWM, no events. Those are
@@ -35,10 +68,10 @@
  * not pullable from under its driver, and the Bluetooth radio's is a
  * program's to drive (docs/BLUETOOTH.md).
  *
- * Before this, every port -- the old Inferno Pi port, Plan 9, 9front
- * -- switched these lines with a kernel-internal function call and
- * nothing outside could see or ask. 9front's egpset() is the model
- * for the mailbox side and nothing else.
+ * Before this, Plan 9 and 9front switched these lines with a
+ * kernel-internal function call and nothing outside could see or ask.
+ * 9front's egpset() is the model for the mailbox side and nothing
+ * else.
  */
 #include "u.h"
 #include "../port/lib.h"

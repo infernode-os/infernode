@@ -21,7 +21,7 @@ runs. This file is only what is this board's.
 | `os/arm64`, `os/port`, `os/ip`, the libraries | ~190,000 | every board's |
 | `os/bcm` | ~14,000 | the Raspberry Pi SoCs' shared drivers: what the Pi 3 runs |
 | `os/arm64/gic.c`, `clockgt.c` | ~700 | what QEMU's `virt` runs — a Pi 4's interrupt controller is a GIC-400 |
-| **`os/bcm2711`** | **~1,700** | this directory — 1,200 of them one Ethernet driver, 9front's |
+| **`os/bcm2711`** | **~2,100** | this directory — 1,600 of them two drivers of 9front's that no emulator can run |
 
 That is the point of the arrangement (upstream Inferno's: `os/sa1110`
 beside `os/ipaq1110` and `os/cerf1110`). What is here:
@@ -33,6 +33,7 @@ beside `os/ipaq1110` and `os/cerf1110`). What is here:
 | `random.c` | the RNG200 — a different generator from the BCM2837's |
 | `emmc2.c` | the card's SDHCI controller: a second instance of `../bcm/emmc.c`, six lines |
 | `ethergenet.c` | the gigabit Ethernet MAC, from 9front. **Never run**: see below |
+| `pcibcm.c` | the PCIe bridge, from 9front. **Never run**: see below |
 | `soc.c` | the probe for what this SoC has and the family does not |
 | `intr.c` | not the controller (that is `../arm64/gic.c`), only the boot-time question asked of it |
 | `devtab.c` | the device list: the Pi 3B+'s, today |
@@ -155,11 +156,25 @@ Everything below will be met for the first time on the board.
    157/158 from Linux's device tree), and that the firmware has left
    the MAC's clocks on. `cat /net/ether0/ifstats` shows interrupt,
    frame and MDIO-timeout counts and the PHY's state, for that day.
-8. **No USB-A on a board, yet.** The USB-A ports need a PCIe host
-   driver and an xHCI driver, and the VL805 wants its firmware loaded
-   through a mailbox call after a PCIe reset. 9front's 64-bit Pi
-   kernel has all of that under an MIT licence. Under QEMU the DWC2
-   controller stands in; on a board the DWC2 is only the USB-C port.
+8. **PCIe: a bridge driver that has never met its bridge; no USB-A
+   yet.** The four USB-A sockets are a VL805 xHCI controller on the
+   SoC's one PCIe lane. `pcibcm.c` is 9front's driver for the bridge
+   (reset, link training, the outbound window at `0x6_0000_0000` —
+   which `../bcm/mmu.c` now maps, with a 36-bit physical address size —
+   an inbound window of the first gigabyte, MSI), plus the mailbox call
+   that has the VideoCore reload the VL805's firmware after the reset.
+   **None of it has run.** Under QEMU it asks (`probe32`), is told
+   there is no bridge, and says `pci: NO PCIe BRIDGE…`. What *has* run
+   is everything above it: `../port/pci.c`, 9front's too, enumerates
+   QEMU's `virt` machine on every harness run (`../virt/pciecam.c`). On
+   a board the log should show the bridge's revision, a bus listing
+   with `1106 3483` on it, and the firmware's answer. To suspect first:
+   the link not coming up (it prints the status register), and
+   `pcibusaddr()`, which holds PCI devices to the same first-gigabyte
+   DMA limit as the rest of the SoC — it panics on a buffer beyond it.
+   The xHCI driver is the next piece; until it lands the sockets are
+   dead. Under QEMU the DWC2 controller stands in; on a board the DWC2
+   is only the USB-C port.
 9. **Two HDMI outputs.** `fbcons` and `displaywatch` already handle a
    second display (the Pi 3's DSI panel plus HDMI) through the
    firmware's display-select call. Whether a Pi 4's second HDMI answers

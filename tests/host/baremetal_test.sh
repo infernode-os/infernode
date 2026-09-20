@@ -1275,7 +1275,7 @@ QEMUARGS="$2"
 SHARED="$ROOT/os/bcm"
 SHAREDSKIP=""
 ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
-PORTSKIP="ethermii.c"		# a PHY library; this board's Ethernet is a USB device
+PORTSKIP="ethermii.c pci.c"	# a PHY library and a bus this board has neither of
 SERIALARGS="-serial null -serial stdio"
 
 [[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
@@ -4165,7 +4165,9 @@ fi
 # friends, and what -drive if=virtio gives) are PCI, and land on a bus
 # this kernel does not walk.
 #
-VIRTARGS="-M virt -cpu cortex-a53 -smp 4 -m 1024 -device virtio-rng-device"
+# qemu-xhci is a PCI device: it is what makes os/port/pci.c and
+# os/virt/pciecam.c run at all, on every virt boot below.
+VIRTARGS="-M virt -cpu cortex-a53 -smp 4 -m 1024 -device virtio-rng-device -device qemu-xhci"
 
 run_virt() {
 PLAT=virt
@@ -4230,6 +4232,15 @@ if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then   # the line ends 
     pass "virt: a wired kproc preempts a hog on every secondary core"
 else
     fail "virt: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
+fi
+# PCI. Nothing on this machine needs it; it is here because a Raspberry
+# Pi 4's USB sockets are behind a PCIe bridge no emulator has, and this
+# is where the code above that bridge can be run (os/virt/pciecam.c).
+vcheck "PCI configuration space is found, wherever QEMU put it" "pci: ECAM at 0x"
+if grep -aEq '0c 03 30 1b36 000d .* 0:1[0-9a-f]{7} 16384' <<<"$OUT"; then
+    pass "virt: the bus scan finds the xHCI controller and gives its registers an address in the window"
+else
+    fail "virt: PCI scan -- $(grep -a '1b36 000d' <<<"$OUT" | head -1)"
 fi
 vrefute "nothing panics"                           "panic:"
 vcheck "init reaches the shell"                    "init: starting the shell"
@@ -4639,6 +4650,9 @@ pcheck "with no card, the radio is probed on the Arasan and reported absent" "et
 # nothing, and leaves ether0 to the USB path -- whose checks, below, are
 # then also the proof that it did.
 pcheck "the missing GENET is noticed, not faulted on" "genet: NO ETHERNET MAC AT"
+# Likewise the PCIe bridge (os/bcm2711/pcibcm.c). The code above it --
+# os/port/pci.c -- is run on the virt machine, which has a bridge.
+pcheck "the missing PCIe bridge is noticed, not faulted on" "pci: NO PCIe BRIDGE AT"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"

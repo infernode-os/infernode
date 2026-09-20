@@ -8,3 +8,6 @@
 
 /* ethergenet.c */
 void	ethergenetlink(void);
+
+/* pcibcm.c: the PCIe bridge; ../port/pci.c above it */
+void	pcibcmlink(void);

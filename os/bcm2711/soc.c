@@ -18,4 +18,5 @@ void
 socdevprobe(void)
 {
 	ethergenetlink();
+	pcibcmlink();
 }

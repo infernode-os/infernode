@@ -411,4 +411,5 @@ boarddevprobe(void)
 {
 	blkvirtioinit();
 	ethervirtiolink();
+	pciecamlink();
 }

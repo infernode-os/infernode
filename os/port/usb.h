@@ -78,6 +78,7 @@ enum
 	Lowspeed,
 	Highspeed,
 	Nospeed,
+	Superspeed,		/* after Nospeed: xHCI only, and the three above are indices elsewhere */
 
 	/* request type */
 	Rh2d = 0<<7,
@@ -118,6 +119,7 @@ enum
 	HPpower		= 0x100,
 	HPslow		= 0x200,
 	HPhigh		= 0x400,
+	HPsuper		= 0x800,	/* this tree's: an xHCI root port at SuperSpeed (a real hub's bit 11 is test mode) */
 	HPstatuschg	= 0x10000,
 	HPchange	= 0x20000,
 };
@@ -203,6 +205,15 @@ struct Hci
 	int	(*portstatus)(Hci*, int);	/* get port status */
 	void	(*shutdown)(Hci*);		/* shutdown for reboot */
 	void	(*debug)(Hci*, int);		/* set/clear debug flag */
+
+	/*
+	 * Not Plan 9's: what an xHCI controller needs and the others do
+	 * not, so nil for the others. An xHC keeps state per DEVICE (a
+	 * slot) and must be told a device is a hub before it will address
+	 * anything behind it.
+	 */
+	void	(*devclose)(Udev*);		/* the device's last endpoint has gone */
+	void	(*hubupdate)(Ep*);		/* ep0 of a device whose nports, ttt or mtt were just set */
 };
 
 /*
@@ -262,6 +273,24 @@ struct Udev
 	int	hub;		/* dev number for the parent hub */
 	int	port;		/* port number in the parent hub */
 	Ep*	eps[Ndeveps];	/* end points for this device (cached) */
+
+	/*
+	 * Where the device is, as an xHC's slot context wants it said
+	 * (9front's fields and arithmetic; set at newdev, and harmless to
+	 * a controller that addresses devices by number). A Udev is never
+	 * freed, so tthub cannot dangle; the slot behind its aux can have
+	 * gone, and usbxhci.c checks.
+	 */
+	int	addr;		/* the address the CONTROLLER gave it, if it is one that does */
+	int	depth;		/* hubs between it and the root port; -1 for a root hub */
+	int	rootport;	/* the root hub port it is below */
+	int	routestr;	/* route string: 4 bits of port number per tier */
+	int	nports;		/* if a hub: downstream ports ("hub N" ctl) */
+	int	ttt;		/* if a high-speed hub: TT think time */
+	int	mtt;		/* ...and whether it has a TT per port */
+	Udev*	tthub;		/* low/full speed: the high-speed hub whose TT serves it */
+	int	ttport;		/* ...and the port on that hub */
+	void*	aux;		/* the controller's */
 };
 
 void	addhcitype(char *type, int (*reset)(Hci*));

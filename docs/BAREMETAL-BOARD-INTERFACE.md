@@ -191,7 +191,17 @@ time.
   kernel memory. It sets `pcimaxdno`, calls `pciscan` and `pcibusmap`
   from its link function, and says what it found. `os/virt/pciecam.c`
   is the one that runs; `os/bcm2711/pcibcm.c` is the one that cannot
-  yet. A board without PCI has `pci.c` in `PORTSKIP`.
+  yet. A board without PCI has `pci.c` in `PORTSKIP`. A bridge also
+  supplies `pcidmaalloc`, `pcidmafree` and `pcidmaok`: memory a device
+  on its bus can reach, and whether a given buffer is such memory — on
+  the Pi 4 the DMA arena and its limit, on virt `malloc` and yes (or,
+  with `pcibounce`, no, so that drivers' bounce paths are tested).
+- **USB host controllers** register with `addhcitype` from
+  `boardusblink`. `os/bcm/usbdwc.c` is the family's; xHCI on a PCI bus is
+  `os/port/usbxhcipci.c`'s `usbxhcipcilink()`, with `usbxhci.c` — both
+  skipped on a board without PCI. An xHC needs `devusb`'s `devclose` and
+  `hubupdate` hooks and the topology in `Udev`; a controller that
+  addresses by number ignores them.
 - **Input** goes to `kbdputc(kbdq, rune)` and
   `mousetrack(buttons, x, y, isdelta)`, from process context.
 

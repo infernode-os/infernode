@@ -326,12 +326,19 @@ extern int tbdffmt(Fmt*);
  *			0, or -1 having said why not.
  *	pcibusaddr	the address a device must be given to reach this
  *			kernel memory
+ *	pcidmaalloc	memory a device on this bus can reach, zeroed, aligned;
+ *	pcidmafree	nil if there is none. The size comes back at free.
+ *	pcidmaok	may this buffer be handed to a device as it is? If
+ *			not the driver bounces it through one that may.
  */
 int	pcicfgrw8(int tbdf, int rno, int data, int read);
 int	pcicfgrw16(int tbdf, int rno, int data, int read);
 int	pcicfgrw32(int tbdf, int rno, int data, int read);
 int	pciintrenable(Pcidev*, void (*f)(Ureg*, void*), void *a, char *name);
 u64int	pcibusaddr(void *va);
+void*	pcidmaalloc(ulong size, int align);
+void	pcidmafree(void *p, ulong size);
+int	pcidmaok(void *va, ulong len);
 
 #ifndef BUSUNKNOWN
 #define BUSUNKNOWN	(-1)

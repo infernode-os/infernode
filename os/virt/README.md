@@ -105,8 +105,44 @@ both kinds work and the boot log says which each device is.
 | `ethervirtio.c` | `/net/ether0`, as `devether`'s instance 0 |
 | `ramfb.c` | a linear framebuffer, configured through fw_cfg, under `../arm64/screen.c` and `fbcons.c` |
 | `inputvirtio.c` | keyboard and tablet to `kbdputc` and `mousetrack` |
-| `pciecam.c` | the PCIe host bridge: configuration space as an array in memory, four interrupt wires. `../port/pci.c` (9front's) does the enumeration |
+| `pciecam.c` | the PCIe host bridge: configuration space as an array in memory, four interrupt wires. `../port/pci.c` (9front's) does the enumeration; `../port/usbxhci.c` and `usbxhcipci.c` are the one driver on the bus |
 | `devtab.c` | the device table: the board's, less GPIO, touch and audio |
+
+## USB, and why it is here
+
+    -device qemu-xhci -device usb-hub,port=1 -device usb-kbd,port=1.2 \
+        -device usb-mouse,port=2 -netdev user,id=u0 -device usb-net,netdev=u0,port=3
+
+`../port/usbxhci.c` is 9front's xHCI driver, and this machine is where
+it has run: every harness boot initialises the controller, and one
+boots the line above — a hub, a keyboard *behind* the hub, a mouse and
+a network adapter — and types on the keyboard, pings through the
+adapter, and reads the controller's state back.
+
+It is here for the Raspberry Pi 4, whose USB-A sockets are a VL805 xHCI
+controller behind a PCIe bridge that QEMU's `raspi4b` does not have.
+Three things were wanted of this machine for that:
+
+- **The driver, run.** It found a bug on its first hub: 9front issues
+  Configure Endpoint with the ep0 flag set when it tells the controller
+  a device is a hub; the specification says that flag must be clear
+  (4.6.6), real controllers evidently let it pass, and QEMU's answers
+  TRB Error. Linux sends the slot flag alone, and now so does this.
+- **The rest of the tree made ready for it.** This tree's `devusb` is
+  Plan 9's, which addresses devices by number; an xHC routes by
+  topology. `devusb.c` now computes a device's route string, root port
+  and TT hub (9front's arithmetic, in `settopology`), takes `hub N ttt
+  mtt` as well as `hub`, and has two hooks (`devclose`, `hubupdate`)
+  that are nil for the Pi 3's DWC OTG. `osinit`'s walker, which knew one
+  root hub with one port because a Pi 3 has exactly that, walks every
+  port of every controller.
+- **The Pi 4's constraint, imposed.** There a PCI device reaches only
+  the first gigabyte, and every structure and buffer the driver hands
+  the controller must come from the DMA arena or be bounced
+  (`pcidmaalloc`, `pcidmaok`: `../port/pci.h`). Here everything is
+  reachable, so that path would never run. `-append pcibounce` makes
+  this bridge refuse every buffer, the harness's USB boot runs that way,
+  and `echo dump > /usb/usb/ctl` reports how many transfers bounced.
 
 ## What the second board showed
 
@@ -177,18 +213,19 @@ is `os/arm64`.
 
 ## Not done
 
-- **PCI devices' drivers.** The bus is there (`pciecam.c`): it is
-  scanned, BARs are placed in the 32-bit window at `0x10000000`, and
-  the boot log lists what was found. It exists for the sake of a
-  machine that is not this one — a Raspberry Pi 4's USB sockets are an
-  xHCI controller behind a PCIe bridge, QEMU's `raspi4b` models
-  neither, and here both can be had with `-device qemu-xhci` — so the
-  PCI core and what goes above it are run here and only the Pi's bridge
-  is left untried. NVMe and e1000 would be found and have no driver.
-  Devices behind a PCI-PCI bridge get no interrupt (root bus only), and
-  the 512GB window above RAM is not used.
-- **No USB**, so `#u` is an empty bus and `kbdusb`/`mouseusb`/`etherusb`'s
-  device halves are not exercised here. The raspi3b run still does that.
+- **PCI devices' drivers, but for one.** The bus is there
+  (`pciecam.c`): it is scanned, BARs are placed in the 32-bit window at
+  `0x10000000`, and the boot log lists what was found. It exists for the
+  sake of a machine that is not this one — a Raspberry Pi 4's USB
+  sockets are an xHCI controller behind a PCIe bridge, QEMU's `raspi4b`
+  models neither, and here both can be had with `-device qemu-xhci`.
+  NVMe and e1000 would be found and have no driver. Devices behind a
+  PCI-PCI bridge get no interrupt (root bus only), and the 512GB window
+  above RAM is not used.
+- **USB only if asked for**: `-device qemu-xhci`, then `-device usb-kbd`,
+  `usb-mouse`, `usb-hub`, `usb-net` as wanted (see "USB" above). Without
+  it `#u` is an empty bus. SuperSpeed hubs, streams and USB storage are
+  not done.
 - **No audio, GPIO, touch, Wi-Fi, Bluetooth, tryboot or boot watchdog.**
   They are the board's.
 - **GICv3**, which virt needs above eight cores and newer boards have.

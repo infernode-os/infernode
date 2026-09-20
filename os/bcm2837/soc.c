@@ -16,3 +16,8 @@ void
 socdevprobe(void)
 {
 }
+
+void
+socusblink(void)
+{
+}

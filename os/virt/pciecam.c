@@ -188,6 +188,50 @@ pcibusaddr(void *va)
 }
 
 /*
+ * Memory a device can reach is all of it, so this is malloc with an
+ * alignment: over-allocate, and keep what malloc gave just below what
+ * the caller gets.
+ */
+void*
+pcidmaalloc(ulong size, int align)
+{
+	uchar *m, *p;
+
+	if(align < (int)sizeof(void*))
+		align = sizeof(void*);
+	m = malloc(size + align + sizeof(void*));
+	if(m == nil)
+		return nil;
+	p = (uchar*)ROUND((uintptr)m + sizeof(void*), (uintptr)align);
+	((void**)p)[-1] = m;
+	return p;
+}
+
+void
+pcidmafree(void *p, ulong size)
+{
+	USED(size);
+	if(p != nil)
+		free(((void**)p)[-1]);
+}
+
+/*
+ * Every buffer is reachable here -- which would leave a driver's bounce
+ * path, the one a Raspberry Pi 4 cannot do without, never run by
+ * anything. "pcibounce" in the kernel's arguments makes this say no to
+ * everything, and the harness boots that way once.
+ */
+static int bounceall;
+
+int
+pcidmaok(void *va, ulong len)
+{
+	USED(va);
+	USED(len);
+	return !bounceall;
+}
+
+/*
  * Called from boarddevprobe: board init, in kmain, no scheduler. A
  * machine started without PCI devices still has the bridge; what it
  * says then is one line.
@@ -199,7 +243,14 @@ pciecamlink(void)
 	u32int id;
 	uvlong base;
 	ulong ioa;
+	char *a;
 	int i;
+
+	for(a = boardcmdline(); *a != 0; a++)
+		if((a == boardcmdline() || a[-1] == ' ') && strncmp(a, "pcibounce", 9) == 0){
+			bounceall = 1;
+			print("pci: pcibounce: every buffer a PCI driver is handed will be refused and bounced\n");
+		}
 
 	for(i = 0; i < nelem(where); i++){
 		if(probe32(where[i], &id) < 0)

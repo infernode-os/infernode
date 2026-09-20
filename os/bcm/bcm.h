@@ -147,6 +147,7 @@ void	ether4330probe(void);
  * has and the others do not. boarddevprobe calls it last.
  */
 void	socdevprobe(void);
+void	socusblink(void);	/* and its USB host controllers, after the DWC OTG */
 int	mboxfbvoff(u32int, u32int);
 int	mboxfbgetvoff(void);
 

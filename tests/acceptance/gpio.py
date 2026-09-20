@@ -75,6 +75,36 @@ def main():
         v = [b_ for a_, b_ in levels(text) if int(a_) == n]
         return int(v[-1]) if v else None
 
+    # Is the jig on the header? Without it every pair check fails and the edge
+    # checks wait for edges that cannot come, which says nothing about the
+    # kernel. So ask first: drive one end of each pair high against a pull-down
+    # on the other. If no pair follows, check what a bare header can show --
+    # each pin drives and reads itself, and each pull moves its own pin -- and
+    # skip the rest by name.
+    cmds = []
+    for name, x, y in PAIRS:
+        cmds += [setpin(y, "in", "down"), setpin(x, "out"), "echo 1 > %s/%d/level" % (G, x), rd_(y),
+                 "echo 0 > %s/%d/level" % (G, x), setpin(x, "in"), setpin(y, "in")]
+    out = sh("; ".join(cmds), wait=1.0)      # one line: a drain costs three seconds, a command does not
+    fitted = [name for name, x, y in PAIRS if readlevel(out, y) == 1]
+    if not fitted:
+        print("== no loopback jig on the header: single-pin checks only")
+        for name, x, y in PAIRS:
+            for n in (x, y):
+                out = sh("; ".join([setpin(n, "out"), "echo 1 > %s/%d/level" % (G, n), rd_(n), "echo 0 > %s/%d/level" % (G, n), rd_(n),
+                         setpin(n, "in", "up"), rd_(n), setpin(n, "in", "down"), rd_(n), setpin(n, "in")]), wait=0.8)
+                vals = [v_ for n_, v_ in levels(out) if int(n_) == n]
+                b.check(vals == ["1", "0", "1", "0"], "BCM %d: driven 1,0 reads 1,0; pulled up,down reads 1,0 (got %s)" % (n, ",".join(vals)), out.strip()[-80:])
+        out = sh("echo 'edge both' > %s/14/ctl" % G, "cat %s/4/ctl" % G, wait=0.5)
+        b.check("in use" in out or "rror" in out, "a pin a driver has claimed (BCM 14) refuses 'edge'", out.strip()[-100:])
+        b.check("edge none" in out, "a pin's ctl reports its edge setting", out.strip()[-60:])
+        for what in ("pairs driven and read both ways", "pulls seen across a pair", "crosstalk", "edge events (#651)"):
+            b.skip(what, "no loopback jig fitted; the pair map is at the top of this file")
+        text = b.serial_since(mark)
+        bad = [l for l in text.splitlines() if re.search(r"panic|unhandled exception|vmachine:|waserror: up is [^3]", l)]
+        b.check(not bad, "the kernel said nothing alarming during the run", "; ".join(bad[:3]))
+        sys.exit(0 if b.summary() else 1)
+
     print("== each pair, each direction: drive and read; pulls")
     for name, x, y in PAIRS:
         for drv, rd in ((x, y), (y, x)):

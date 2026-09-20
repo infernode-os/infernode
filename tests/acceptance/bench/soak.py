@@ -26,11 +26,21 @@ def keeper(i, cmd):
             try: c.recv(4096)          # the shell says nothing after a good token
             except socket.timeout: pass
             c.sendall((cmd + '\n').encode()); say('loop %d up' % i); c.settimeout(60.0)
-            while True:                   # the loop never prints; a reboot leaves the socket half-open,
-                try:                      # so poke it every minute and let the RST tell us
+            # The loop never prints, and a reboot leaves the socket half-open. TCP
+            # keepalives find that out (the rebooted board answers the probe with a
+            # RST) and cost the board nothing. This used to send a newline a minute:
+            # each one is a one-byte segment that the console's queue keeps as a
+            # whole Block, 240 an hour over four sessions, and over a day that read
+            # as a slow leak in the main pool (it was 0.9 MB after 35 hours).
+            c.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 15)
+            c.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
+            while True:
+                try:
                     if not c.recv(65536): break
                 except socket.timeout:
-                    c.sendall(b'\n')
+                    pass
         except Exception as e:
             pass
         say('loop %d down; retrying in 60 s' % i); time.sleep(60)

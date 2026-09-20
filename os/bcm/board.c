@@ -910,6 +910,7 @@ boarddevprobe(void)
 {
 	sdprobe();
 	ether4330probe();
+	socdevprobe();
 }
 
 /*

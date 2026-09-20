@@ -5,3 +5,6 @@
  * with them; a declaration that is this board's alone goes below.
  */
 #include "../bcm/bcm.h"
+
+/* ethergenet.c */
+void	ethergenetlink(void);

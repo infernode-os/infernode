@@ -1275,7 +1275,7 @@ QEMUARGS="$2"
 SHARED="$ROOT/os/bcm"
 SHAREDSKIP=""
 ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
-PORTSKIP=""
+PORTSKIP="ethermii.c"		# a PHY library; this board's Ethernet is a USB device
 SERIALARGS="-serial null -serial stdio"
 
 [[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
@@ -4172,7 +4172,7 @@ PLAT=virt
 SRC="$ROOT/os/$PLAT"
 QEMUARGS="$VIRTARGS"
 SERIALARGS="-serial stdio"
-PORTSKIP="devaudio.c"
+PORTSKIP="devaudio.c ethermii.c"
 SHARED=""
 SHAREDSKIP=""
 ARCHSKIP=""
@@ -4634,6 +4634,11 @@ pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS
 # what is asserted is that the probe ran and came back empty-handed
 # rather than not at all, and took nothing down with it.
 pcheck "with no card, the radio is probed on the Arasan and reported absent" "ether4330: no radio"
+# The gigabit MAC (os/bcm2711/ethergenet.c) is a driver no emulator can
+# run. What CAN be asserted is that it asks before it touches, finds
+# nothing, and leaves ether0 to the USB path -- whose checks, below, are
+# then also the proof that it did.
+pcheck "the missing GENET is noticed, not faulted on" "genet: NO ETHERNET MAC AT"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"

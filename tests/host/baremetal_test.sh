@@ -4409,7 +4409,9 @@ fi
 # under, where PCI devices reach the first gigabyte only -- so that the
 # bounce path is run by this harness and not first on a board.
 #
-python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-xqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-xhci.txt" 2>&1
+# virt_usb_boot <machine args> <log>: the boot described above
+virt_usb_boot() {
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" <<'PYEOF' > "$2" 2>&1
 import json, os, socket, subprocess, sys, threading, time
 qemu, img, extra, qmp = sys.argv[1:5]
 if os.path.exists(qmp):
@@ -4467,6 +4469,8 @@ finally:
     p.kill(); p.communicate()
 sys.stdout.write(buf.decode(errors="replace"))
 PYEOF
+}
+virt_usb_boot "$VIRTARGS" "$BUILD/$PLAT-xhci.txt"
 OUT="$(cat "$BUILD/$PLAT-xhci.txt")"
 [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
 
@@ -4488,6 +4492,29 @@ else
 fi
 vrefute "xhci: nothing panics"                         "panic:"
 vrefute "xhci: no exception goes unhandled"            "unhandled exception"
+vcheck "xhci: qemu-xhci has no MSI, and is given a wire" "usbxhci interrupts by wire"
+
+#
+# The same again with the interrupts arriving as MESSAGES. A Raspberry
+# Pi 4's PCIe bridge delivers nothing else, so os/port/pci.c's MSI code
+# and a driver living on it are run here or nowhere. QEMU's qemu-xhci
+# has only MSI-X; its nec-usb-xhci has MSI, as the Pi's VL805 does. The
+# message goes to the GIC's MSI frame (GICv2m), which pulses a shared
+# interrupt -- one that must have been made edge-triggered first.
+#
+if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
+    virt_usb_boot "${VIRTARGS/qemu-xhci/nec-usb-xhci}" "$BUILD/$PLAT-xhci-msi.txt"
+    OUT="$(cat "$BUILD/$PLAT-xhci-msi.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    vcheck "msi: the GIC's MSI frame is found"             "pci: MSI frame at 0x8020000: interrupts 80-"
+    vcheck "msi: the controller is given a message, not a wire" "usbxhci interrupts by MSI"
+    vcheck "msi: a keyboard behind a hub is claimed"       "kbdusb: ep"
+    vcheck "msi: keys typed on it reach the shell"         "Xhci-Keys"
+    vcheck "msi: the gateway answers a ping over USB Ethernet" "ICMP echo reply from 10.0.2.2"
+    vrefute "msi: nothing panics"                          "panic:"
+else
+    skip "virt: this QEMU has no nec-usb-xhci, the xHCI model with MSI"
+fi
 
 #
 # The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)

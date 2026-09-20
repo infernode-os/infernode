@@ -28,13 +28,26 @@
  * the 32-bit MMIO window at 0x10000000, which is below RAMZERO and so
  * already mapped Device. The 512GB window above RAM is not used.
  *
- * INTERRUPTS. The bridge has four level-triggered lines, shared
- * peripheral interrupts 3-6; a device in slot s using pin p (INTA = 0)
- * is on line (s + p) % 4 (hw/arm/virt.c, create_pcie). That holds for
- * the root bus only, which is where -device puts things. Lines are
- * shared, so each keeps a list and an interrupt calls every handler on
- * it; a handler must already cope with being called for nothing, as
- * every PCI driver's does.
+ * INTERRUPTS, two ways, because the machine this one stands in for has
+ * only the second.
+ *
+ * Wires. The bridge has four level-triggered lines, shared peripheral
+ * interrupts 3-6; a device in slot s using pin p (INTA = 0) is on line
+ * (s + p) % 4 (hw/arm/virt.c, create_pcie). That holds for the root
+ * bus only, which is where -device puts things. Lines are shared, so
+ * each keeps a list and an interrupt calls every handler on it; a
+ * handler must already cope with being called for nothing, as every
+ * PCI driver's does.
+ *
+ * Messages. A device with the MSI capability is given one instead: it
+ * writes an interrupt number to a register of the GIC's MSI frame
+ * (GICv2m, which virt has beside a GICv2) and that shared interrupt is
+ * pulsed -- so it must be made edge-triggered first. A Raspberry Pi 4's
+ * bridge delivers NOTHING BUT messages (../bcm2711/pcibcm.c), so
+ * ../port/pci.c's MSI code and a driver taking its interrupts that way
+ * are run here or nowhere. QEMU's qemu-xhci has only MSI-X and gets a
+ * wire; its nec-usb-xhci has MSI, as the Pi's VL805 does. "pcinomsi" in
+ * the kernel's arguments gives everything a wire.
  *
  * DMA. A device's view of memory is the CPU's: pcibusaddr is PADDR.
  */
@@ -64,6 +77,16 @@ struct Intvec
 	void	(*f)(Ureg*, void*);
 	void	*a;
 };
+
+/* the GICv2m frame: ARM's Server Base System Architecture, appendix on MSI */
+enum
+{
+	V2mtyper	= 0x008,	/* 25:16 the first interrupt, 9:0 how many */
+	V2msetspi	= 0x040,	/* a device writes an interrupt number here */
+};
+
+static int msifirst, msin, msinext;	/* the frame's interrupts, and the next unused */
+static int nomsi;
 
 static volatile uchar *ecam;
 static Intvec vec[Nline][Nvec];
@@ -144,6 +167,24 @@ pciintrenable(Pcidev *p, void (*f)(Ureg*, void*), void *a, char *name)
 	Intvec *v;
 	int line, pin, i;
 
+	/* a message if the device can send one and there is a frame to send it to */
+	if(!nomsi && msin > 0 && pcicap(p, PciCapMSI) >= 0){
+		ilock(&veclock);
+		i = msinext < msifirst + msin ? msinext++ : -1;
+		iunlock(&veclock);
+		if(i >= 0 && i < Nirq){
+			gicedge(i);
+			intrenable(i, f, a, 0, name);
+			if(pcimsienable(p, GICV2MREGS + V2msetspi, i) == 0){
+				p->intl = i;
+				print("pci: %T: %s interrupts by MSI, as interrupt %d\n", p->tbdf, name, i);
+				return 0;
+			}
+			/* the handler stays on an interrupt nothing will raise */
+		}
+		print("pci: %T: %s: no MSI after all; trying a wire\n", p->tbdf, name);
+	}
+
 	pin = pcicfgr8(p, PciINTP);
 	if(pin < 1 || pin > 4){
 		print("pci: %T: %s has no interrupt pin\n", p->tbdf, name);
@@ -178,6 +219,7 @@ pciintrenable(Pcidev *p, void (*f)(Ureg*, void*), void *a, char *name)
 	if(!i)
 		intrenable(IRQpcie + line, pciinterrupt, vec[line], 0, "pci");
 	p->intl = IRQpcie + line;
+	print("pci: %T: %s interrupts by wire, INT%c, as interrupt %d\n", p->tbdf, name, 'A'+pin-1, p->intl);
 	return 0;
 }
 
@@ -250,7 +292,8 @@ pciecamlink(void)
 		if((a == boardcmdline() || a[-1] == ' ') && strncmp(a, "pcibounce", 9) == 0){
 			bounceall = 1;
 			print("pci: pcibounce: every buffer a PCI driver is handed will be refused and bounced\n");
-		}
+		}else if((a == boardcmdline() || a[-1] == ' ') && strncmp(a, "pcinomsi", 8) == 0)
+			nomsi = 1;
 
 	for(i = 0; i < nelem(where); i++){
 		if(probe32(where[i], &id) < 0)
@@ -282,4 +325,14 @@ pciecamlink(void)
 
 	print("pci: ECAM at %#p, windows from %#ux\n", ecam, PCIMMIO);
 	pcihinv(pciroot);
+
+	/* the MSI frame: there with a GICv2 unless QEMU was told msi=off */
+	if(probe32(GICV2MREGS + V2mtyper, &id) == 0 && (id & 0x3FF) != 0){
+		msifirst = (id >> 16) & 0x3FF;
+		msin = id & 0x3FF;
+		msinext = msifirst;
+		print("pci: MSI frame at %#ux: interrupts %d-%d%s\n", GICV2MREGS,
+			msifirst, msifirst+msin-1, nomsi ? " (pcinomsi: not used)" : "");
+	}else
+		print("pci: no MSI frame; every device gets a wire\n");
 }

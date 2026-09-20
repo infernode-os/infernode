@@ -80,7 +80,7 @@ Every one of those choices has a way to go wrong that says nothing:
 | `virtio-*-device` | The MMIO transport, which `virtio.c` drives. `virtio-net-pci`, and whatever `-drive if=virtio` makes, are PCI devices on a bus this kernel does not walk. |
 | `-device virtio-rng-device` | The kernel's entropy. Without it the kernel boots, says **NO ENTROPY SOURCE** in capitals, and every key it makes is predictable. |
 | `-smp 4` | `MAXMACH` is 4, as on the board. With fewer, the missing cores are reported as not answering. |
-| `-device qemu-xhci` | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
+| `-device qemu-xhci` (or `nec-usb-xhci`) | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
 | GICv2 | virt's default up to eight cores. With `gic-version=3` there is no memory-mapped CPU interface; `intrinit` says so. |
 
 `-append "fb=1024x768"` sets the screen size; the default is 1280x720.
@@ -136,6 +136,13 @@ Three things were wanted of this machine for that:
   that are nil for the Pi 3's DWC OTG. `osinit`'s walker, which knew one
   root hub with one port because a Pi 3 has exactly that, walks every
   port of every controller.
+- **The Pi 4's interrupts.** Its bridge delivers nothing but messages
+  (MSI). `pciecam.c` gives a device that has the MSI capability one —
+  an interrupt of the GIC's MSI frame (GICv2m), made edge-triggered
+  with `gicedge()` — and a wire otherwise. `qemu-xhci` has only MSI-X
+  and gets a wire; `-device nec-usb-xhci` has MSI, as the VL805 does,
+  and the harness boots the whole USB line above on it as well. The
+  boot log says which each device got; `-append pcinomsi` forces wires.
 - **The Pi 4's constraint, imposed.** There a PCI device reaches only
   the first gigabyte, and every structure and buffer the driver hands
   the controller must come from the DMA arena or be bounced

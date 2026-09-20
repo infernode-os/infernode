@@ -119,6 +119,27 @@ gicdisable(int irq)
 }
 
 /*
+ * Make a shared interrupt edge-triggered: call before intrenable. The
+ * reset state is level, which is right for a wire from a device and
+ * wrong for a message-signalled interrupt -- an MSI frame PULSES its
+ * line, and a level-sensitive input that is low again by the time
+ * anyone looks has nothing pending.
+ */
+void
+gicedge(int irq)
+{
+	u32int v;
+
+	if(irq < IRQspi || irq >= Nirq)
+		panic("gicedge: irq %d is not a shared interrupt", irq);
+	ilock(&intrlock);
+	v = GICD(Dicfgr + 4*(irq/16));
+	v |= 2 << 2*(irq%16);
+	GICD(Dicfgr + 4*(irq/16)) = v;
+	iunlock(&intrlock);
+}
+
+/*
  * Register a handler and enable the source.
  *
  * Shared interrupts go to core 0 and only core 0. The GIC would spread

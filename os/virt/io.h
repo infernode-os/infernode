@@ -16,6 +16,7 @@ enum
 {
 	GICDREGS	= 0x08000000,	/* GICv2 distributor */
 	GICCREGS	= 0x08010000,	/* GICv2 CPU interface */
+	GICV2MREGS	= 0x08020000,	/* GICv2m: the frame a PCI device writes to for an MSI; pciecam.c */
 	UART0REGS	= 0x09000000,	/* PL011 */
 	RTCREGS		= 0x09010000,	/* PL031 */
 	FWCFGREGS	= 0x09020000,	/* fw_cfg: how ramfb is configured */
@@ -42,7 +43,7 @@ enum
  */
 enum
 {
-	Nirq		= 128,		/* virt wires SPIs up to 32+95 at most this low */
+	Nirq		= 160,		/* wires end at 32+95; the MSI frame's 64 interrupts follow, 80-143 */
 
 	IRQcntvirq	= 27,		/* PPI: the virtual timer */
 	IRQcntpnsirq	= 30,		/* PPI: the non-secure physical timer -- ours */

@@ -43,7 +43,8 @@ exact contract a new board directory has to meet.
     lib*/                   Dis VM + ARM64 JIT, Tk, draw, crypto, math
     os/port  os/ip          the portable kernel and TCP/IP, from upstream Inferno
     os/arm64                boot, traps, SMP, kmain — any AArch64 board
-    os/bcm2837 │ os/virt    one board each
+    os/bcm                  drivers the Raspberry Pi SoCs share (mailbox, UARTs, SD, USB, GPIO…)
+    os/bcm2837 │ os/virt    one board each: memory map, interrupt controller, board.c, device list
 
 The kernel image carries a small **recovery root** compiled into it —
 `osinit`, the shell and its builtins, file utilities, `dossrv`, the USB

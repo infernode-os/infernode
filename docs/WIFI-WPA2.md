@@ -28,7 +28,7 @@ So the division is:
 | | |
 |---|---|
 | firmware | scan, authenticate, associate, encrypt and decrypt frames |
-| kernel driver (`os/bcm2837/ether4330.c`) | the SDIO transport, and the ctl verbs `essid`, `auth`, `txkey`, `rxkey`*n* |
+| kernel driver (`os/bcm/ether4330.c`) | the SDIO transport, and the ctl verbs `essid`, `auth`, `txkey`, `rxkey`*n* |
 | `ip/wpa` | the handshake, and the ctl writes that install what it derives |
 | `factotum` | the passphrase |
 

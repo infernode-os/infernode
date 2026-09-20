@@ -1,7 +1,7 @@
 /*
  * The PL011 as a PhysUart: /dev/eia0, and the console.
  *
- * This is os/bcm2837/uartpl011.c with the board taken out of it. There
+ * This is os/bcm/uartpl011.c with the board taken out of it. There
  * the PL011 is the radio's HCI line, muxed onto GPIO 30-33 and clocked
  * at a rate the firmware has to be asked for; here it is the only UART
  * there is, it has no pins to mux, its clock is the fixed 24MHz in

@@ -173,7 +173,7 @@ clang the line `QLock;` declares nothing (a warning), the Rendez lands
 at offset 0, `qlock(&ctlr)` is an incompatible-pointer call (another
 warning) that spins on the Rendez's bytes, and the first open of
 `/dev/audio` on the board was a data abort inside `qlock` (2026-09-18,
-`os/bcm2837/audiopwm.c`, the first cut). The harness had escalated
+`os/bcm/audiopwm.c`, the first cut). The harness had escalated
 both warnings to errors for `os/port` and `os/ip` since the day they
 destroyed xalloc's free list (`tests/host/baremetal_test.sh`, the
 comment at the os/port loop, "167 call sites") -- but not for the

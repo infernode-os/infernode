@@ -136,6 +136,32 @@ the second board showed", lists them. A further board hook should still
 be read as an argument for moving code into `os/arm64`, not for
 widening the interface.
 
+### `os/bcm`, and what is left here now
+
+A third machine, the Raspberry Pi 4 (`os/bcm2711`), moved the line
+again, and this time most of this directory crossed it. Sorted by what
+each file IS, 57% of `os/bcm2837` was Broadcom/VideoCore silicon that
+the BCM2711 has unchanged at a different address -- mailbox, both UARTs,
+DMA, both SD controllers, the DWC2 host controller, PWM audio, GPIO,
+the touch buffer -- and another 21% was the CYW43455 radio, which is a
+chip on the board rather than in the SoC but is on the Pi 4's board too.
+Those files are in `os/bcm` now, compiled into each board's kernel
+against that board's `io.h`. It is upstream Inferno's arrangement:
+`os/sa1110` beside `os/ipaq1110` and `os/cerf1110`.
+
+What stays here is what is genuinely this SoC's and this board's: the
+interrupt controller (`intr.c`), the memory map (`mmu.c`), the timer's
+routing and the system-timer clock check (`clock.c`), the BCM2835
+random-number generator, `board.c`, the device table, and the serial
+loader, whose link address and UART are this board's. `io.h` is eighty
+lines -- the peripheral window, the local-interrupt block, the interrupt
+numbers -- followed by an include of the family's register layouts.
+
+The file moves changed no code. **This journal still says
+`os/bcm2837/usbdwc.c` and the like wherever it tells the story of a
+file that has since moved**; the paths were rewritten mechanically, and
+the history is the same history.
+
 ## Why the Pi 3B+
 
 - InferNode is 64-bit only, which rules out the Pi 1 and Pi Zero
@@ -2789,7 +2815,7 @@ double detach, two for `badent-1`).
 
 **5. FT5406 touch** — done; seen working on the board 2026-09-06. The firmware
 polls the panel's controller into a 64-byte buffer, so there is no I2C
-driver; the split is the usual one. `os/bcm2837/devtouch.c` (`#T`, bound
+driver; the split is the usual one. `os/bcm/devtouch.c` (`#T`, bound
 as `/dev/touch`) does what a Limbo program cannot: asks for the buffer
 with `0x0004000F` (GET, a buffer the firmware allocated in VideoCore
 memory above ramtop, already Device-mapped so uncached) or, failing

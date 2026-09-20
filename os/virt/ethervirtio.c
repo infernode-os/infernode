@@ -10,7 +10,7 @@
  *
  * Here a frame is a buffer on a virtio queue. This file fills in
  * devether's vtable for instance 0 -- the way the radio driver
- * (os/bcm2837/ether4330.c) fills in instance 1 -- so that what the rest
+ * (os/bcm/ether4330.c) fills in instance 1 -- so that what the rest
  * of the system sees is exactly what it sees on the board: #l is
  * ether0, /net/ether0 has an addr and a clone, ethermedium binds it by
  * name. Everything above the driver -- os/ip, DHCP, 9P over TCP, TLS --

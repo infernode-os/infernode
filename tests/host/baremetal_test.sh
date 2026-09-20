@@ -594,7 +594,22 @@ SBEOF
     # vectors, trap decoding, spl, the Dis-level probes and kmain itself.
     # $SRC holds only what is genuinely machine-specific. Both are globbed
     # so a new file in either is picked up rather than silently untested.
-    for f in "$ROOT"/os/arm64/*.S "$ROOT"/os/arm64/*.c "$SRC"/*.S "$SRC"/*.c; do
+    # $SHARED is a directory of drivers a family of boards has in common
+    # -- os/bcm, for the Raspberry Pis: the same silicon blocks at
+    # addresses and interrupt numbers each board's io.h supplies. It is
+    # upstream's arrangement (os/sa1110 beside os/ipaq1110 and
+    # os/cerf1110), and it is compiled per board, with -I"$SRC" first, so
+    # that "io.h" in a shared driver is the board's. $SHAREDSKIP names
+    # files of it a board does not want.
+    local sharedsrc=()
+    if [[ -n "${SHARED:-}" ]]; then
+        for f in "$SHARED"/*.S "$SHARED"/*.c; do
+            [[ -e "$f" ]] || continue
+            case " ${SHAREDSKIP:-} " in *" $(basename "$f") "*) continue;; esac
+            sharedsrc+=("$f")
+        done
+    fi
+    for f in "$ROOT"/os/arm64/*.S "$ROOT"/os/arm64/*.c "${sharedsrc[@]}" "$SRC"/*.S "$SRC"/*.c; do
         # serialboot is a separate program that happens to live in this
         # directory: it is the bootloader that fetches this kernel, has
         # a _start of its own, and must not be linked into it.
@@ -1247,6 +1262,13 @@ run_platform() {
 PLAT="$1"
 SRC="$ROOT/os/$PLAT"
 QEMUARGS="$2"
+# Set outright, every one, by every platform's function: these are
+# globals, the platforms run one after another in one shell, and a value
+# left over from the last machine is a kernel built from the wrong files.
+SHARED="$ROOT/os/bcm"
+SHAREDSKIP=""
+PORTSKIP=""
+SERIALARGS="-serial null -serial stdio"
 
 [[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
 
@@ -1621,7 +1643,7 @@ check "intr: device interrupt delivered" "a device interrupt reaches the CPU thr
 
 check "init: starting the shell"        "the initial Dis program hands over to /dis/sh.dis"
 
-# The radio driver (os/bcm2837/ether4330.c) probes at board init, after
+# The radio driver (os/bcm/ether4330.c) probes at board init, after
 # sdmmc.c has moved the card off the Arasan. QEMU's raspi3b has no
 # CYW43455 and hangs no SDIO function on the Arasan, so the one outcome
 # it can prove is the absent-radio path: the probe answers CMD5 twice,
@@ -4097,9 +4119,9 @@ echo ""
 # A calling-convention error is a property of the source, so check the
 # source. Anything else is theatre.
 # ---------------------------------------------------------------------
-if grep -n 'mboxprop(' os/bcm2837/*.c | grep -q 'sizeof'; then
+if grep -n 'mboxprop(' os/bcm/*.c os/bcm2837/*.c | grep -q 'sizeof'; then
     fail "mboxprop called with sizeof -- its counts are elements, not bytes"
-    grep -n 'mboxprop(' os/bcm2837/*.c | grep 'sizeof'
+    grep -n 'mboxprop(' os/bcm/*.c os/bcm2837/*.c | grep 'sizeof'
 else
     pass "every mboxprop call passes element counts, not sizeof"
 fi
@@ -4143,6 +4165,8 @@ SRC="$ROOT/os/$PLAT"
 QEMUARGS="$VIRTARGS"
 SERIALARGS="-serial stdio"
 PORTSKIP="devaudio.c"
+SHARED=""
+SHAREDSKIP=""
 
 [[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
 platform_flags

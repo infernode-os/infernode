@@ -45,7 +45,7 @@
  * A SECOND INSTANCE, FOR A KERNEL LINK DRIVER. The attach spec picks
  * the instance the way Plan 9's devether does: "#l" is ether0, the
  * USB path above; "#l1" is ether1, which a driver linked into the
- * kernel (the CYW43455 radio, os/bcm2837/ether4330.c) fills in with
+ * kernel (the CYW43455 radio, os/bcm/ether4330.c) fills in with
  * the vtable in etherif.h -- attach, transmit, ifstat, ctl, shutdown
  * -- and devether.c calls those where instance 0 moves bytes itself.
  * The instance is chosen from c->dev, which devattach leaves at 0 and

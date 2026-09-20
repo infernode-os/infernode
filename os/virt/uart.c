@@ -3,10 +3,10 @@
  *
  * On virt the PL011 is the only UART and it is the console, which is
  * what it was on the board too until the radio took it (see
- * os/bcm2837/uart.c). QEMU's -serial goes to it, and with -nographic
+ * os/bcm/uart.c). QEMU's -serial goes to it, and with -nographic
  * that is the terminal QEMU was started from.
  *
- * Everything below consuartputc is os/bcm2837/uart.c's, unchanged, and
+ * Everything below consuartputc is os/bcm/uart.c's, unchanged, and
  * belongs to neither board: one core emits at a time, output is
  * synchronous because this is the path a panic takes, input is echoed
  * here because nothing above will. It is copied rather than shared

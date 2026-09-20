@@ -316,9 +316,9 @@ start(Ctlr *c)
 	if(c->running)
 		return;
 	if(c->cb == nil){
-		c->cb = xspanalloc(Nbuf * sizeof(Cb), 32, 0);
+		c->cb = dmaalloc(Nbuf * sizeof(Cb), 32);	/* the DMA engine reads these: dmamem.c */
 		for(i = 0; i < Nbuf; i++)
-			c->buf[i] = xspanalloc(Bufbytes, 32, 0);
+			c->buf[i] = dmaalloc(Bufbytes, 32);
 		if(c->cb == nil || c->buf[0] == nil || c->buf[Nbuf-1] == nil)
 			error(Enomem);
 	}

@@ -161,10 +161,10 @@ dumpureg(Ureg *u)
 		uintptr fp, pc;
 		fp = u->r[29];
 		for(i = 0; i < 16; i++){
-			if((fp & 7) != 0 || fp < 0x1000 || fp >= mmuramtop())
+			if((fp & 7) != 0 || fp < 0x1000 || fp >= mmuhightop())
 				break;
 			pc = *(uintptr*)(fp + 8);
-			if(pc < 0x1000 || pc >= mmuramtop())
+			if(pc < 0x1000 || pc >= mmuhightop())
 				break;
 			uartputx(pc);
 			uartputstr(" ");
@@ -393,7 +393,7 @@ dumpstack(void)
 	 * bound rejected every pool-allocated kproc stack and this
 	 * function printed nothing exactly when it was wanted.
 	 */
-	top = mmuramtop();
+	top = mmuhightop();
 	print("stack trace:\n");
 	for(i = 0; i < 32 && fp != 0; i++){
 		if((fp & 7) != 0 || fp < 0x1000 || fp >= top)

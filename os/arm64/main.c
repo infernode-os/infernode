@@ -642,7 +642,7 @@ probexalloc(void)
 		 */
 		if((uintptr)a < conf.base0 || (uintptr)b < conf.base0)
 			ok = 0;
-		if((uintptr)a + 4096 > mmuramtop() || (uintptr)b + 4096 > mmuramtop())
+		if((uintptr)a + 4096 > mmuhightop() || (uintptr)b + 4096 > mmuhightop())
 			ok = 0;
 
 		/*
@@ -1113,7 +1113,7 @@ probeproc(void)
 		if(p->kstack == nil || q->kstack == nil)
 			ok = 0;
 		else if((uintptr)p->kstack < conf.base0
-		     || (uintptr)p->kstack >= mmuramtop())
+		     || (uintptr)p->kstack >= mmuhightop())
 			ok = 0;
 		if(p->kstack == q->kstack)
 			ok = 0;			/* two procs sharing one stack */

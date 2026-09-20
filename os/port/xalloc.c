@@ -121,18 +121,41 @@ xspanalloc(ulong size, int align, ulong span)
 	return (void*)v;
 }
 
+/*
+ * Memory to be given out FIRST, if there is any: holes at or above this
+ * address are tried before the rest. Zero, which is what it is on every
+ * machine that has not said otherwise, leaves upstream's behaviour --
+ * the lowest address that fits -- exactly as it was.
+ *
+ * It exists for a machine where low memory is the scarce kind: a
+ * Raspberry Pi 4's DMA masters reach only the first gigabyte, so the
+ * kernel's own allocations should come from above it and leave what is
+ * below for buffers a device must be able to address. os/bcm/dmamem.c
+ * sets it. It has a second use there that matters as much: QEMU does
+ * not model that limit, so the only way to find a driver handing a
+ * device an address it could not reach is for ordinary allocations to
+ * really BE up there under emulation, where a check can catch them.
+ */
+uintptr	xallocpref;
+
 void*
 xallocz(ulong size, int zero)
 {
 	Xhdr *p;
 	Hole *h, **l;
+	int pass;
 
 	size += BY2V + sizeof(Xhdr);
 	size &= ~(BY2V-1);
 
 	ilock(&xlists.l);
+	for(pass = xallocpref != 0 ? 0 : 1; pass < 2; pass++){
 	l = &xlists.table;
 	for(h = *l; h; h = h->link) {
+		if(pass == 0 && h->addr < xallocpref){
+			l = &h->link;
+			continue;
+		}
 		if(h->size >= size) {
 			p = (Xhdr*)h->addr;
 			h->addr += size;
@@ -151,6 +174,7 @@ xallocz(ulong size, int zero)
 			return p->data;
 		}
 		l = &h->link;
+	}
 	}
 	iunlock(&xlists.l);
 	return nil;

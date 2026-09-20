@@ -178,3 +178,9 @@ void	fbconsputs(char*, int);
 u64int	systimer(void);
 void	boardreboot(void);
 int	bcmintrprobe(void);		/* board.c: a system-timer match, as a device interrupt */
+
+/* dmamem.c: memory a device can reach */
+void	dmainit(void);
+void*	dmaalloc(ulong, int);		/* zeroed; below DMATOP; nil if the arena is spent */
+void	dmafree(void*, ulong);
+int	dmareachable(void*, ulong);	/* may this buffer be handed to a device as it is? */

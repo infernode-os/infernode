@@ -28,7 +28,7 @@ class Board:
         self.serial_log = os.path.expanduser(serial_log) if serial_log else None
         self.passed = self.failed = 0
 
-    def sh(self, *cmds, wait=1.5):
+    def sh(self, *cmds, wait=1.5, until=None, limit=900):
         """Run shell lines on the board in one console session; return the transcript."""
         c = socket.create_connection((self.host, self.port), timeout=10)
         c.settimeout(3.0)
@@ -42,6 +42,11 @@ class Board:
         for cmd in cmds:
             c.sendall((cmd + "\n").encode())
             text += self._drain(c, wait)
+        # a command with no fixed duration (checksumming a card) says when it
+        # is done; keep reading until it has, or until the limit
+        t0 = time.time()
+        while until and until not in text and time.time() - t0 < limit:
+            text += self._drain(c, 1.0)
         c.close()
         return text
 

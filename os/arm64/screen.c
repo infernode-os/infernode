@@ -365,62 +365,36 @@ hwdraw(Memdrawparam *par)
 void
 flushmemscreen(Rectangle r)
 {
-	u32int *fb;
-	int x, y, px, py, stride;
-
 	/*
-	 * NOT a no-op, and the reason is the software cursor.
+	 * Nothing to do, and that is a correction.
 	 *
-	 * attachscreen hands back the real scanout memory, so drawing
-	 * goes straight to the panel and nothing needs copying out --
-	 * which is why this was empty. But the cursor is painted INTO
-	 * that same memory and keeps the pixels it covered in swc.save,
-	 * so anything drawn under a displayed cursor makes that save
-	 * stale. The next time the cursor moves it puts the stale pixels
-	 * back, painting old content over new: rectangles of whatever was
-	 * there before, appearing and disappearing as the mouse moves.
+	 * attachscreen hands back the real scanout memory, so there is
+	 * nothing to copy out. What this did do was mend the software
+	 * cursor: where the flushed rectangle met a displayed cursor it kept
+	 * the pixels inside the rectangle as "just drawn", put the saved
+	 * ones back outside it, and saved the lot afresh as what the cursor
+	 * covers. That was sound while devdraw took the cursor off for the
+	 * whole of every batch, because then a cursor still displayed here
+	 * had been put back after the drawing.
 	 *
-	 * That is the "glitchy drawing" and the ghosting, and it is why
-	 * the same wm and wmclient code is clean inside Lucifer on the
-	 * hosted emulator -- there the host draws the pointer and nothing
-	 * of ours is in the draw buffer.
+	 * It stopped being sound with #654. The cursor now stays on the
+	 * screen unless an operation meets it (hwdraw, above), and the
+	 * rectangle passed here is the BOUNDING BOX of a batch, not the
+	 * pixels drawn. A login screen that draws a field in the middle and
+	 * a label in a corner flushes a box that covers a cursor nothing
+	 * touched; the cursor's own pixels were then taken for new content
+	 * and saved as the background, and the next move put an arrow back
+	 * where the arrow had been. Found on the board the first time this
+	 * ran there: the pointer moved and a second arrow stayed at 0,0.
 	 *
-	 * devdraw calls this with the rectangle it has just drawn, which
-	 * is exactly the information needed: put back the saved pixels
-	 * ONLY where the draw did not touch, keep the new content where
-	 * it did, then save the lot afresh and repaint the cursor. A
-	 * blanket restore would paint the stale pixels back over the new
-	 * drawing, and a blanket discard would leave cursor-shaped
-	 * residue in the part that was not drawn over.
+	 * So the cursor is only ever taken off BEFORE something writes
+	 * under it: by hwdraw for everything that goes through memdraw, and
+	 * by devdraw itself for the two operations that do not (loading
+	 * pixels into the screen, and reading them out). The saved patch is
+	 * then never stale and there is nothing here to mend.
 	 */
-	/*
-	 * With hwdraw taking the cursor off before anything is drawn over
-	 * it, what is left for this is what does not go through memdraw:
-	 * pixels loaded straight into the screen image. And only where the
-	 * rectangle meets the cursor: this used to put the cursor's saved
-	 * pixels back and repaint it on EVERY flush, wherever it was, which
-	 * is the same blink as the blanket hide by another road (#654).
-	 */
+	USED(r);
 	nflushscreen++;
-	lock(&swc.l);
-	if(swc.shown && screenfb != nil
-	&& r.min.x < swc.at.x + swc.sw && swc.at.x < r.max.x
-	&& r.min.y < swc.at.y + swc.sh && swc.at.y < r.max.y){
-		stride = screenfb->pitch / sizeof(u32int);
-		fb = (u32int*)screenbase();
-		for(y = 0; y < swc.sh; y++)
-			for(x = 0; x < swc.sw; x++){
-				px = swc.at.x + x;
-				py = swc.at.y + y;
-				if(px >= r.min.x && px < r.max.x
-				&& py >= r.min.y && py < r.max.y)
-					continue;	/* just drawn; leave it */
-				fb[py * stride + px] = swc.save[y * Curswid + x];
-			}
-		swc.shown = 0;
-		swcurson();
-	}
-	unlock(&swc.l);
 }
 
 /*

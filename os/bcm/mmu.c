@@ -118,6 +118,14 @@ enum
  * half mapped, a TTBR1 walk could only ever be a bug, and EPD1 turns
  * that bug into a clean translation fault.
  */
+/*
+ * IPS is 32 bits unless the board's mem.h says otherwise, which a
+ * BCM2711 does: its PCIe window is 24GB up (PCIWIN).
+ */
+#ifndef MMUIPS
+#define MMUIPS	0
+#endif
+
 #define Tcrval		(25ULL		/* T0SZ */		\
 			| 25ULL<<16	/* T1SZ */		\
 			| 1ULL<<8	/* IRGN0: WB WA */	\
@@ -125,7 +133,7 @@ enum
 			| 3ULL<<12	/* SH0: inner */	\
 			| 0ULL<<14	/* TG0: 4KB */		\
 			| 1ULL<<23	/* EPD1 */		\
-			| 0ULL<<32)	/* IPS: 32-bit PA */
+			| (u64int)MMUIPS<<32)	/* IPS: how wide a physical address is */
 
 /*
  * Page tables live in .bss and are 4KB aligned as the architecture
@@ -218,6 +226,16 @@ mmuinit(void)
 			l2tab[i][j] = (u64int)pa | desc;
 		}
 	}
+
+#ifdef PCIWIN
+	/*
+	 * A board with PCIe has its devices' registers in a window far
+	 * above all that: one Device gigabyte, as a single level-1 block.
+	 * Needs MMUIPS to reach it.
+	 */
+	l1tab[PCIWIN >> 30] = (PCIWIN & ~((1ULL<<30)-1)) |
+		Dblock | Attridx1 | Apkrw | Shnone | Af | Pxn | Uxn;
+#endif
 
 	mmuenable();
 }

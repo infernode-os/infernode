@@ -20,10 +20,19 @@ enum
 	RTCREGS		= 0x09010000,	/* PL031 */
 	FWCFGREGS	= 0x09020000,	/* fw_cfg: how ramfb is configured */
 	VIRTIOREGS	= 0x0A000000,	/* virtio-mmio transports */
+	PCIMMIO		= 0x10000000,	/* where PCI devices' registers are put; pciecam.c */
+	PCIMMIOSIZE	= 0x2EFF0000,
+	PCIECAMLOW	= 0x3F000000,	/* PCI configuration space, if highmem-ecam=off */
 
 	Nvirtio		= 32,		/* how many, */
 	Virtiostride	= 0x200,	/* this far apart */
 };
+
+/*
+ * ...and the one thing that is above it: PCI configuration space, by
+ * default. 256GB up; mmu.c maps the gigabyte it is in.
+ */
+#define PCIECAMHIGH	0x4010000000ULL
 
 /*
  * Interrupts, as GIC INTIDs: 0-15 are software-generated, 16-31 are
@@ -41,6 +50,7 @@ enum
 	IRQspi		= 32,
 	IRQuart		= IRQspi + 1,
 	IRQrtc		= IRQspi + 2,
+	IRQpcie		= IRQspi + 3,	/* and the next three: the PCIe bridge's INTA-INTD */
 	IRQvirtio0	= IRQspi + 16,	/* transport n interrupts on IRQvirtio0+n */
 	IRQprobe	= IRQspi + 15,	/* wired to nothing (10-15 are spare): ../arm64/gic.c's self-test */
 };

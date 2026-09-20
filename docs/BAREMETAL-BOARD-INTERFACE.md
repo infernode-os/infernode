@@ -180,8 +180,18 @@ time.
   `nif.mbps`, `nif.link`; delivers received frames with `etheriqb` **from
   process context** (it may allocate). Instance 0 is `/net/ether0`;
   `osinit` notices that its address is non-zero at boot and configures
-  it. `os/virt/ethervirtio.c` and `os/bcm/ether4330.c` are the two
-  examples.
+  it. `os/virt/ethervirtio.c`, `os/bcm/ether4330.c` and
+  `os/bcm2711/ethergenet.c` are the examples; the last needs
+  `os/port/ethermii.c`, which the others skip.
+- **PCI.** `os/port/pci.c` (9front's) enumerates, sizes and places; a
+  board with a host bridge supplies, per `os/port/pci.h`, the three
+  `pcicfgrw*` configuration accessors, `pciintrenable(Pcidev*, f, a,
+  name)` — however the bridge delivers interrupts, wires or messages —
+  and `pcibusaddr(va)`, the address a device must be given to reach
+  kernel memory. It sets `pcimaxdno`, calls `pciscan` and `pcibusmap`
+  from its link function, and says what it found. `os/virt/pciecam.c`
+  is the one that runs; `os/bcm2711/pcibcm.c` is the one that cannot
+  yet. A board without PCI has `pci.c` in `PORTSKIP`.
 - **Input** goes to `kbdputc(kbdq, rune)` and
   `mousetrack(buttons, x, y, isdelta)`, from process context.
 

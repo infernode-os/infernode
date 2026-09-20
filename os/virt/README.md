@@ -80,6 +80,7 @@ Every one of those choices has a way to go wrong that says nothing:
 | `virtio-*-device` | The MMIO transport, which `virtio.c` drives. `virtio-net-pci`, and whatever `-drive if=virtio` makes, are PCI devices on a bus this kernel does not walk. |
 | `-device virtio-rng-device` | The kernel's entropy. Without it the kernel boots, says **NO ENTROPY SOURCE** in capitals, and every key it makes is predictable. |
 | `-smp 4` | `MAXMACH` is 4, as on the board. With fewer, the missing cores are reported as not answering. |
+| `-device qemu-xhci` | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
 | GICv2 | virt's default up to eight cores. With `gic-version=3` there is no memory-mapped CPU interface; `intrinit` says so. |
 
 `-append "fb=1024x768"` sets the screen size; the default is 1280x720.
@@ -104,6 +105,7 @@ both kinds work and the boot log says which each device is.
 | `ethervirtio.c` | `/net/ether0`, as `devether`'s instance 0 |
 | `ramfb.c` | a linear framebuffer, configured through fw_cfg, under `../arm64/screen.c` and `fbcons.c` |
 | `inputvirtio.c` | keyboard and tablet to `kbdputc` and `mousetrack` |
+| `pciecam.c` | the PCIe host bridge: configuration space as an array in memory, four interrupt wires. `../port/pci.c` (9front's) does the enumeration |
 | `devtab.c` | the device table: the board's, less GPIO, touch and audio |
 
 ## What the second board showed
@@ -175,8 +177,16 @@ is `os/arm64`.
 
 ## Not done
 
-- **No PCI.** virt has an ECAM PCIe host and everything interesting QEMU
-  can emulate (NVMe, xHCI, e1000) hangs off it. Nothing here needs it.
+- **PCI devices' drivers.** The bus is there (`pciecam.c`): it is
+  scanned, BARs are placed in the 32-bit window at `0x10000000`, and
+  the boot log lists what was found. It exists for the sake of a
+  machine that is not this one — a Raspberry Pi 4's USB sockets are an
+  xHCI controller behind a PCIe bridge, QEMU's `raspi4b` models
+  neither, and here both can be had with `-device qemu-xhci` — so the
+  PCI core and what goes above it are run here and only the Pi's bridge
+  is left untried. NVMe and e1000 would be found and have no driver.
+  Devices behind a PCI-PCI bridge get no interrupt (root bus only), and
+  the 512GB window above RAM is not used.
 - **No USB**, so `#u` is an empty bus and `kbdusb`/`mouseusb`/`etherusb`'s
   device halves are not exercised here. The raspi3b run still does that.
 - **No audio, GPIO, touch, Wi-Fi, Bluetooth, tryboot or boot watchdog.**

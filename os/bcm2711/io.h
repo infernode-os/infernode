@@ -60,6 +60,7 @@ enum
 	 * numbers them (GIC_SPI n is IRQspi+n). No emulator has them, so
 	 * none of these has ever been raised.
 	 */
+	IRQpci		= IRQspi + 148,	/* the PCIe bridge's MSI interrupt, pcibcm.c */
 	IRQether	= IRQspi + 157,	/* GENET: this and the next, ethergenet.c */
 
 	/*
@@ -88,11 +89,12 @@ enum
 };
 
 /*
- * The gigabit Ethernet MAC is outside the peripheral window, with the
- * PCIe host, in a block of its own below it.
+ * The gigabit Ethernet MAC and the PCIe bridge are outside the
+ * peripheral window, in a block of their own below it.
  */
 enum
 {
+	PCIEREGS	= 0xFD500000,	/* the PCIe root complex; its window is PCIWIN, mem.h */
 	GENETREGS	= 0xFD580000,
 };
 

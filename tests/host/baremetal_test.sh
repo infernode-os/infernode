@@ -1126,6 +1126,14 @@ try:
         p.stdin.write(c.encode() + b"\r")
         p.stdin.flush()
         time.sleep(pause)
+        # and then until the console has been quiet for half a second (eight
+        # at most): the next line is not typed into the middle of this one's
+        # output, however slowly the host is running the machine
+        quiet = time.time(); last = len(buf); limit = time.time() + 8
+        while time.time() - quiet < 0.5 and time.time() < limit:
+            time.sleep(0.1)
+            if len(buf) != last:
+                last = len(buf); quiet = time.time()
     p.stdin.write(b"echo dRaInEd\r")
     p.stdin.flush()
     deadline = time.time() + 30
@@ -2392,18 +2400,22 @@ PLOUT="$(tr -d '\r' <<<"$PLOUT")"
 
 OUT_SAVED="$OUT"; OUT="$PLOUT"
 check "/dev/eia1status"                 "#t binds at /dev: eia0 (PL011) and eia1 (mini-UART) with ctl and status files"
-if grep -A1 'cat /dev/eia1status' <<<"$PLOUT" | grep -q '^b115200 c0 d0 e0 l8 m0 pn r1 s1'; then
+# The three status lines asserted here differ from one another (r1; r0;
+# b921600 m1), so each is looked for wherever it is. They used to be
+# required on the line after the command that asked for them, and on a
+# busy host the next command's echo can get there first.
+if grep -q '^b115200 c0 d0 e0 l8 m0 pn r1 s1' <<<"$PLOUT"; then
     pass "eia1status describes the console: 115200 8n1, no flow control"
 else
     fail "eia1status did not read back as the console's settings"
 fi
-if grep -A1 'cat /dev/eia0status' <<<"$PLOUT" | grep -q '^b115200 c0 d0 e0 l8 m0 pn r0 s1'; then
+if grep -q '^b115200 c0 d0 e0 l8 m0 pn r0 s1' <<<"$PLOUT"; then
     pass "eia0status reads before the port is ever opened: 115200 8n1, nothing asserted"
 else
     fail "eia0status did not read back sensibly before the first open"
 fi
 check "clock(default)"                  "the PL011 disbelieved QEMU's 3MHz UART clock and used the firmware default (48MHz)"
-if grep -A1 'cat /dev/eia0status' <<<"$PLOUT" | tail -n +3 | grep -q '^b921600 c0 d0 e0 l8 m1 pn r1 s1'; then
+if grep -q '^b921600 c0 d0 e0 l8 m1 pn r1 s1' <<<"$PLOUT"; then
     pass "eia0ctl took b921600 and m1: baud and hardware flow control are set through the file"
 else
     fail "eia0ctl's b921600/m1 did not show in eia0status"

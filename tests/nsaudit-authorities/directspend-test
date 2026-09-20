@@ -1,0 +1,5 @@
+tool=directspend-test
+	description='Test-only direct spend authority'
+	authorities='spends'
+	irreversible='spends'
+	notes='Test fixture for generic direct-spend rules; not an installed Veltro tool.'

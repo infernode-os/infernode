@@ -9,7 +9,6 @@
 # Usage:
 #   serve-codex-gate.sh              # 127.0.0.1:11436, codex CLI backend
 #   serve-codex-gate.sh --mock       # deterministic mock backend (tests)
-#   serve-codex-gate.sh --inventory  # hash the CLI's model-side state, exit
 #   serve-codex-gate.sh --help
 #
 # Auth: the Codex CLI's own login is used — run `codex login` once for this
@@ -29,8 +28,8 @@ case "${1:-}" in
 	--mock) export CODEX_GATE_MOCK=1; shift ;;
 esac
 
-# The umask matters here: a campaign's gateway writes its own logs and the CLI
-# writes into CODEX_HOME, which holds an OAuth credential (INFR-412/413).
+# CODEX_HOME holds an OAuth credential, so files created by the CLI and the
+# gateway must not be group- or world-readable.
 umask 077
 
 if ! command -v "${CODEX_GATE_BIN:-codex}" >/dev/null 2>&1 && [ "${CODEX_GATE_MOCK:-}" != "1" ]; then
@@ -48,6 +47,4 @@ fi
 # Billing guard: an inherited API key can override ChatGPT auth in the CLI.
 unset OPENAI_API_KEY
 
-# Remaining arguments (--inventory [HOME]) go to the gate; the server mode
-# takes none.
 exec "$VENV/bin/python" "$HERE/codex_gate.py" "$@"

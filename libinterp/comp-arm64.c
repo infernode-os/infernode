@@ -2642,6 +2642,8 @@ comd(Type *t)
 #define TYPECOM_PERPTR	24
 #define TYPECOM_SLACK	1024
 
+#define Typejithdr	16	/* the mapping's length, in front of a type's code; keeps the code 16-aligned */
+
 void
 typecom(Type *t)
 {
@@ -2688,7 +2690,12 @@ typecom(Type *t)
 	}
 	free(tmp);
 
-	sz = n * sizeof(u32int);
+	/*
+	 * The code is a mapping of its own, and a mapping is unmapped by
+	 * length, which Type does not carry: so the length goes in a header
+	 * in front of the code, where freetypejit() finds it.
+	 */
+	sz = n * sizeof(u32int) + Typejithdr;
 
 #ifdef INFERNO_NATIVE
 	start = malloc(sz);
@@ -2707,7 +2714,8 @@ typecom(Type *t)
 		return;
 #endif
 
-	code = start;
+	*(ulong*)start = sz;
+	code = (u32int*)((uchar*)start + Typejithdr);
 	t->initialize = code;
 	comi(t);
 	t->destroy = code;
@@ -2744,6 +2752,27 @@ patchex(Module *m, ulong *p)
 		if(e->pc != (ulong)-1)
 			e->pc = p[e->pc] * sizeof(u32int);
 	}
+}
+
+/*
+ * Release a type's compiled initialize/destroy code: a mapping, with
+ * its length in the header typecom() put in front of it.
+ */
+void
+freetypejit(Type *t)
+{
+	uchar *base;
+
+	if(t == nil || t->initialize == nil)
+		return;
+	base = (uchar*)t->initialize - Typejithdr;
+#ifdef INFERNO_NATIVE
+	free(base);		/* typecom() took it from the pool: there is no mmap in a kernel */
+#else
+	munmap(base, *(ulong*)base);
+#endif
+	t->initialize = nil;
+	t->destroy = nil;
 }
 
 /*

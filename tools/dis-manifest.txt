@@ -699,6 +699,7 @@ dis/tests/hid_test.dis
 dis/tests/exception_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/delegation_budget_test.dis
+dis/tests/destructor_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
 dis/tests/edit_test.dis

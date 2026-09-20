@@ -38,6 +38,7 @@ TARG=\
 	dhcp_test.dis\
 	crypto_test.dis\
 	delegation_budget_test.dis\
+	destructor_test.dis\
 	dial_test.dis\
 	dialnorm_test.dis\
 	edit_test.dis\

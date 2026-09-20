@@ -25,7 +25,9 @@ implement Tools9p;
 #   ├── ctl          (rw)  trusted control plane (user/UI only)
 #   ├── provision    (rw)  child-task provisioning (narrowing only)
 #   ├── _registry    (r)   Space-separated tool names
-#   ├── paths        (r)   Bound namespace paths
+#   ├── paths        (r)   Effective namespace capabilities
+#   ├── activity     (r)   Activity identifier
+#   ├── meta/        (dir) Audit metadata scalars
 #   └── <tool>/      (dir) Per-tool directory
 #       ├── ctl      (rw)  Write args, read result
 #       ├── run      (rw)  Write args, read result (alias of ctl, per INFR-2)
@@ -87,7 +89,7 @@ stderr: ref Sys->FD;
 user: string;
 tools: list of ref ToolInfo;     # active (exposed) tools; mutated by serveloop, read by asyncexec (snapshot-safe)
 alltools: list of ref ToolInfo;  # pre-loaded inactive tools (available for ctl-add)
-extpaths: list of string;  # Extra paths from -p flags (e.g. "/dis/wm")
+extpaths: list of string;  # Legacy untyped path grants (kept for callers)
 
 # Bound namespace paths with per-path permissions.
 # Each entry is "path perm" where perm is "ro" or "rw".
@@ -96,7 +98,7 @@ BoundPath: adt {
 	path: string;
 	perm: string;  # "ro" or "rw"
 };
-boundpaths: list of ref BoundPath;  # Paths registered via bindpath ctl command
+boundpaths: list of ref BoundPath;  # Explicit ordinary path capabilities
 budget: list of string;    # Tools delegatable to child tasks (-b flag)
 activityid := 0;           # Activity ID this tools9p serves (-a flag)
 mountpt_g := "/tool";      # This instance's mount point (set from -m flag)
@@ -118,14 +120,13 @@ cleanupchan: chan of int;
 # `activity create` plus the following activity-list read is one allocation
 # transaction. The long-lived dispatcher owns its serialization (INFR-362).
 taskcreatelock: chan of int;
-provisiondelay := 0;
 ProvisionState: adt {
 	id: int;
 	state: string;
 };
 provisionstates: list of ref ProvisionState;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
-manifest_written := 0;  # Set after first emitmanifest() call
+manifestgate: chan of int;  # Closed startup manifest phase before tool calls
 
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
@@ -201,13 +202,12 @@ TOOL_PATHS := array[] of {
 
 usage()
 {
-	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] [-z ms] ... tool [tool ...]\n");
+	sys->fprint(stderr, "Usage: tools9p [-DvN] [-a activityid] [-r role] [-m mountpoint] [-b tool,tool,...] [-p path[:ro|:rw]] ... tool [tool ...]\n");
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
 	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
 	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
-	sys->fprint(stderr, "  -z ms         Delay child namespace setup (test harness only)\n");
 	sys->fprint(stderr, "  -b tools      Delegation budget: the maximum tool set a child/subagent\n");
 	sys->fprint(stderr, "                may ever be granted (comma-separated; children narrow, never expand)\n");
 	sys->fprint(stderr, "  -p path       Expose extra path to agent namespace (repeatable; :ro/:rw\n");
@@ -277,11 +277,6 @@ init(nil: ref Draw->Context, args: list of string)
 			agentrole = rarg;
 		'N' =>	agentnodevs = "set";
 		'm' =>	mountpt = arg->earg();
-		'z' =>
-			(zarg, nil) := str->toint(arg->earg(), 10);
-			if(zarg < 0 || zarg > 10000)
-				usage();
-			provisiondelay = zarg;
 		'p' =>
 			parg := arg->earg();
 			explicitperm := "";
@@ -297,13 +292,14 @@ init(nil: ref Draw->Context, args: list of string)
 				sys->fprint(stderr, "tools9p: privileged -p path not grantable: %s\n", ppath);
 				raise "fail:usage";
 			}
-			# Explicit :ro/:rw grants are permission-bearing capabilities.
-			# Keep them in boundpaths only so raw exec cannot inherit a
-			# read-only grant through the untyped extpaths list.
-			if(explicitperm == "")
-				extpaths = ppath :: extpaths;
-			else if(findboundpath(ppath) == nil)
-				boundpaths = ref BoundPath(ppath, pperm) :: boundpaths;
+			# Scratch is an implicit per-activity cowfs capability. Feeding it
+			# back through generic path staging recursively overlays the mount.
+			if(ppath != "/tmp/veltro/scratch") {
+				if(explicitperm == "")
+					extpaths = ppath :: extpaths;
+				else if(findboundpath(ppath) == nil)
+					boundpaths = ref BoundPath(ppath, pperm) :: boundpaths;
+			}
 		'a' =>
 			aarg := arg->earg();
 			(aid, nil) := str->toint(aarg, 10);
@@ -319,7 +315,6 @@ init(nil: ref Draw->Context, args: list of string)
 	args = arg->argv();
 	arg = nil;
 	mountpt_g = mountpt;
-
 	# Remaining args are tool names to register
 	if(args == nil)
 		usage();  # Need at least one tool
@@ -334,11 +329,11 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "tools9p: no valid tools specified\n");
 		raise "fail:no tools";
 	}
-
 	# Clean shadow dirs left by previous session (crash or kill).
 	# Current-session dirs are cleaned per-invocation via shadowcleanloop.
 	cleanupchan = chan[32] of int;
 	taskcreatelock = chan[1] of int;
+	manifestgate = chan[1] of int;
 	cleanshadows();
 	spawn shadowcleanloop();
 
@@ -398,9 +393,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# restrictns + emitmanifest — its namespace is discarded after.
 	# Each tools9p writes to its own manifest path so activities don't
 	# overwrite each other's namespace descriptions.
-	if(agentrole == "child" && provisiondelay > 0)
-		sys->sleep(provisiondelay);
-	spawn emitmanifestnow(manifestpath(mountpt));
+	spawn emitmanifestnow(manifestpath(mountpt), manifestgate);
 }
 
 # Look up tool path by name
@@ -634,16 +627,20 @@ validtooltoken(name: string): int
 	return 1;
 }
 
-# Generate list of bound paths (newline-separated for /tool/paths).
-# Format: "path perm" per line (e.g. "/n/local/Users/pdfinn/tmp rw").
+# Generate the effective path capability list. Scratch is constructed by
+# nsconstruct for every activity and is never an ordinary caller grant.
 genpathlist(): string
 {
-	result := "";
+	result := "/tmp/veltro/scratch cow";
+	for(ep := extpaths; ep != nil; ep = tl ep) {
+		if(hd ep == "/tmp/veltro/scratch")
+			continue;
+		result += "\n" + hd ep + " ro";
+	}
 	for(p := boundpaths; p != nil; p = tl p) {
 		bp := hd p;
-		if(result != "")
-			result += "\n";
-		result += bp.path + " " + bp.perm;
+		if(bp.path != "/tmp/veltro/scratch")
+			result += "\n" + bp.path + " " + bp.perm;
 	}
 	return result;
 }
@@ -968,6 +965,8 @@ fixedservicecontrolpath(path: string): int
 
 pathperm(path: string): string
 {
+	if(path == "/tmp/veltro/scratch")
+		return "cow";
 	# The narrowest grant controls. Otherwise a broad rw grant can override a
 	# more specific ro grant solely because of command-line/list ordering.
 	best := "";
@@ -1207,8 +1206,33 @@ releasetaskcreate(locked: int)
 	}
 }
 
+# A tool worker must not inherit the launcher's environment group.  /env is
+# narrowed later by restrictns(), but the private #e device otherwise names
+# the inherited group directly.  Preserve only the session pointer that the
+# plan and todo tools consume through the canonical /env path.
+isolateenv(): string
+{
+	session := rf("/env/VELTRO_SESSION");
+	if(sys->pctl(Sys->NEWENV, nil) < 0)
+		return sys->sprint("cannot create private environment: %r");
+	if(session == nil)
+		return nil;
+	fd := sys->create("/env/VELTRO_SESSION", Sys->OWRITE, 8r600);
+	if(fd == nil)
+		return sys->sprint("cannot restore session environment: %r");
+	b := array of byte session;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("cannot restore session environment: %r");
+	return nil;
+}
+
 asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
 {
+	# The trusted startup manifest needs a restricted namespace in which .ns
+	# remains writable. Finish that one-time probe before model-facing workers
+	# use restricttoolns(), which hides .ns before sealing /tmp.
+	<-manifestgate;
+	manifestgate <-= 1;
 	# Keep batched creates single-file before either invocation forks its
 	# namespace. This covers the whole allocation/provision transaction and
 	# leaves status/list/result calls independently responsive.
@@ -1222,6 +1246,14 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	if(mypid < 0) {
 		ti.result = array of byte "error: cannot fork namespace";
 		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
+		releasetaskcreate(locked);
+		return;
+	}
+	enverr := isolateenv();
+	if(enverr != nil) {
+		ti.result = array of byte ("error: " + enverr);
+		srv.reply(ref Rmsg.Error(tag, "cannot isolate tool environment"));
+		cleanupchan <-= mypid;
 		releasetaskcreate(locked);
 		return;
 	}
@@ -1535,10 +1567,6 @@ provisionparse(args: string): (int, string, list of string, string)
 	rargs = "child" :: rargs;
 	rargs = "-r" :: rargs;
 	rargs = "-N" :: rargs;
-	if(provisiondelay > 0) {
-		rargs = string provisiondelay :: rargs;
-		rargs = "-z" :: rargs;
-	}
 	if(verbose)
 		rargs = "-v" :: rargs;
 	rargs = "tools9p" :: rargs;
@@ -1690,11 +1718,13 @@ manifestpath(mpt: string): string
 # namespace before any tool calls happen. Runs in a throwaway goroutine
 # with its own FORKNS — the restricted namespace is discarded after
 # emitmanifest completes.
-emitmanifestnow(mpath: string)
+emitmanifestnow(mpath: string, ready: chan of int)
 {
 	nsconstruct := load NsConstruct NsConstruct->PATH;
-	if(nsconstruct == nil)
+	if(nsconstruct == nil) {
+		ready <-= 1;
 		return;
+	}
 	nsconstruct->init();
 	sys->pctl(Sys->FORKNS, nil);
 
@@ -1725,12 +1755,12 @@ emitmanifestnow(mpath: string)
 			sys->fprint(stderr, "tools9p: manifest restrictns failed: %s\n", nserr);
 		else {
 			nsconstruct->emitmanifest(caps, mpath);
-			manifest_written = 1;
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: manifest exception: %s\n", e);
 	}
+	ready <-= 1;
 }
 
 # Apply namespace restriction to the current (already-forked) namespace.
@@ -1783,25 +1813,16 @@ applynsrestriction(invokedtool: string): string
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, writepaths
 	, nil);
 	{
-		nserr := nsconstruct->restrictns(caps);
+		nserr := nsconstruct->restricttoolns(caps);
 		if(nserr != nil) {
 			sys->fprint(stderr, "tools9p: restrictns failed: %s\n", nserr);
 			return nserr;
-		} else if(!manifest_written) {
-			nsconstruct->emitmanifest(caps, manifestpath(mountpt_g));
-			manifest_written = 1;
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: restrictns exception: %s\n", e);
 		return e;
 	}
-	# The manifest is trusted UI/audit metadata for Lucifer's context view.
-	# tools9p may write it from this private namespace, but the model-run tool
-	# code must not be able to spoof or corrupt it afterward.
-	herr := nsconstruct->restrictdir("/tmp/veltro/.ns", nil, 0);
-	if(herr != nil)
-		return "hide namespace manifest: " + herr;
 	return nil;
 }
 
@@ -2022,6 +2043,10 @@ Serve:
 					}
 					if(!bindpathallowed(bpath)) {
 						srv.reply(ref Rmsg.Error(m.tag, "privileged path not bindable: " + bpath));
+						break;
+					}
+					if(bpath == "/tmp/veltro/scratch") {
+						srv.reply(ref Rmsg.Error(m.tag, "activity scratch is an implicit cow capability"));
 						break;
 					}
 					existing := findboundpath(bpath);
@@ -2342,8 +2367,8 @@ navigator(navops: chan of ref Navop)
 
 			case qtype {
 			Qroot =>
-				# Root contains: tools, grantable, help, _registry, ctl, paths, budget,
-				# activity, optional provision, and tool directories.
+				# Root contains the audit/control scalars, optional provision,
+				# and the active tool directories.
 				i := n.offset;
 				count := n.count;
 

@@ -124,9 +124,25 @@ Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md]
 
 Contributions welcome — security audits, 9P integrations, bug fixes, and documentation all help. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Sponsor
+
+InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/sponsors/infernode-os) pays for the things that keep releases trustworthy and move the harder work forward: code signing and notarization, ARM64 and macOS CI hardware, external security review of the Veltro isolation boundary and the wallet signing path, the bare-metal Raspberry Pi port, compliance evidence (FIPS 140-3 and Common Criteria readiness, SP 800-53/171 mapping), and maintainer time.
+
 ## About
 
 InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64 and ARM64, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
+
+## Acknowledgements
+
+InferNode is a late arrival in a long lineage.
+
+- **Dr Charles Forsyth and Vita Nuova** — the Limbo compiler, the Dis VM, and the JIT back ends are Forsyth's; some 800 commits in this history are his, and `libinterp/comp-arm64.c` is written against the shape he set in `comp-arm.c`. Vita Nuova carried Inferno for two decades, gave it work like Roger Peppé's shell ([doc/sh.ms](doc/sh.ms)), and relicensed it under MIT — without which InferNode could not exist. Through the long years when the industry had no use for any of it, they kept Inferno a living system rather than a paper about one. InferNode exists because that torch never went out.
+- **Inferno's originators at Bell Labs** — Sean Dorward, Rob Pike, David Presotto, Dennis Ritchie, Howard Trickey, and Phil Winterbottom, for Inferno, Limbo, Dis, and Styx/9P. Their papers ship in this tree ([doc/bltj.ms](doc/bltj.ms), [doc/dis.ms](doc/dis.ms), [doc/limbo/limbo.ms](doc/limbo/limbo.ms)).
+- **Caerwyn Jones** — [Acme SAC](https://github.com/caerwynj/acme-sac), Acme carried out of Plan 9 as a self-contained Inferno system rather than an app hosted on someone else's desktop. That framing is the major influence on [Xenith](docs/XENITH.md).
+- **The Hellaphone crew** — John Floren, Joel Armstrong, and colleagues at Sandia National Laboratories, who ran Inferno on Android in place of the Java runtime and made a cellular radio a directory of text files. `emu/port/devphone.c` mirrors their `/phone` interface deliberately, their RIL bridge is still the reference for `emu/Android/phonebridge.c`, and the mobile target carries their name ([docs/HELLAPHONE.md](docs/HELLAPHONE.md), [Plan9-Archive/hellaphone](https://github.com/Plan9-Archive/hellaphone)).
+- **The bare-metal Pi lineage** — **Richard Miller**, whose Plan 9 Raspberry Pi kernels nearly all Pi work in this world starts from (and, here, the Inferno RISC-V toolchain); **LynxLine Labs** of Kyiv, who did the [original native Inferno port to the Pi](https://lynxline.com/posts/labs-portintg-inferno-os-to-raspberry-pi/) in 2014 and documented it lab by lab ([github.com/yshurik](https://github.com/yshurik/inferno-rpi)); and **David Boddie**, who carries the native ports forward today ([Inferno Ports](https://dboddie.github.io/inferno-ports/)).
+
+Third-party components (FreeType, SDL3, the Bigelow & Holmes fonts, libmp/libsec under the Lucent Public Licence) are credited in [NOTICE](NOTICE).
 
 ## License
 

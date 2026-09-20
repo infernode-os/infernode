@@ -294,6 +294,35 @@ cnamepush(Cname *n, Chan *mp)
 	n->mlen++;
 }
 
+/*
+ * Record a mount crossed at the current path element.  walk() can discover a
+ * mount either while walking a batch of names or at the start of the next
+ * iteration.  The latter consumes no name, so it belongs in the most recent
+ * slot rather than a new one.  A later crossing at the same element replaces
+ * the earlier one: ".." must undo the mount most recently entered.
+ */
+static Cname*
+cnamecross(Cname *n, Chan *mp)
+{
+	Cname *new;
+	int i;
+
+	if(mp == nil || n->mlen == 0)
+		return n;
+	if(n->r.ref > 1){
+		new = newcname(n->s);
+		mtptcopy(new, n);
+		cnameclose(n);
+		n = new;
+	}
+	i = n->mlen - 1;
+	if(n->mtpt[i] != nil)
+		cclose(n->mtpt[i]);
+	n->mtpt[i] = mp;
+	incref(&mp->r);
+	return n;
+}
+
 void
 cnameclose(Cname *n)
 {
@@ -338,8 +367,17 @@ addelem(Cname *n, char *s)
 		n->s[n->len++] = '/';
 	memmove(n->s+n->len, s, i+1);
 	n->len += i;
-	if(isdotdot(s))
+	if(isdotdot(s)){
 		cleancname(n);
+		/* Drop the child before undomount() examines the parent slot. */
+		if(n->mlen > 1){
+			n->mlen--;
+			if(n->mtpt[n->mlen] != nil){
+				cclose(n->mtpt[n->mlen]);
+				n->mtpt[n->mlen] = nil;
+			}
+		}
+	}
 	return n;
 }
 
@@ -725,9 +763,13 @@ if(m->from == nil){
 }
 
 int
-domount(Chan **cp, Mhead **mp)
+domount(Chan **cp, Mhead **mp, Cname **name)
 {
-	return findmount(cp, mp, (*cp)->type, (*cp)->dev, (*cp)->qid);
+	if(!findmount(cp, mp, (*cp)->type, (*cp)->dev, (*cp)->qid))
+		return 0;
+	if(name != nil)
+		*name = cnamecross(*name, (*mp)->from);
+	return 1;
 }
 
 static int
@@ -795,9 +837,8 @@ undomount(Chan *c, Cname *name)
 		return nc;
 	}
 
-	name->mlen--;
-	nc = name->mtpt[name->mlen];
-	name->mtpt[name->mlen] = nil;
+	nc = name->mtpt[name->mlen-1];
+	name->mtpt[name->mlen-1] = nil;
 	if(nc == nil)
 		return c;	/* no mount crossed at this element — the device's parent is correct */
 	cclose(c);
@@ -886,8 +927,9 @@ walk(Chan **cp, char **names, int nnames, int nomount, int *nerror)
 		}
 
 		if(!dotdot && !nomount && !didmount)
-			if(domount(&c, &mh))
+			if(domount(&c, &mh, &cname)){
 				mflag = mheadflag(mh);
+			}
 
 		type = c->type;
 		dev = c->dev;
@@ -1322,7 +1364,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 	switch(amode){
 	case Aaccess:
 		m = nil;
-		if(!nomount && domount(&c, &m)){
+		if(!nomount && domount(&c, &m, nil)){
 			c = cunique(c);
 			c->mflag = mheadflag(m);
 		}
@@ -1331,7 +1373,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 
 	case Abind:
 		m = nil;
-		if(!nomount && domount(&c, &m)){
+		if(!nomount && domount(&c, &m, nil)){
 			c = cunique(c);
 			c->mflag = mheadflag(m);
 		}
@@ -1348,7 +1390,7 @@ namec(char *aname, int amode, int omode, ulong perm)
 		incref(&cname->r);
 		m = nil;
 		if(!nomount)
-			domount(&c, &m);
+			domount(&c, &m, &cname);
 
 		/* our own copy to open or remove */
 		c = cunique(c);

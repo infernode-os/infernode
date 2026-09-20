@@ -2932,14 +2932,24 @@ compile(Module *m, int size, Modlink *ml)
 #endif
 
 	v = (uvlong)base;
+	/*
+	 * A module's exported global data -- the ".mp" link, which the
+	 * compiler emits with pc -1 and load.c admits as a sentinel -- is
+	 * not code and has no entry in patch[]: relocating it read
+	 * patch[-1], the pool word before the array, and gave the link
+	 * base + whatever that was. It is left as loaded, exactly as the
+	 * interpreter sees it; nothing ever jumps to it.
+	 */
 	for(l = m->ext; l->name; l++) {
-		l->u.pc = (Inst*)(v+patch[l->u.pc-m->prog]);
+		if(l->u.pc-m->prog != -1)
+			l->u.pc = (Inst*)(v+patch[l->u.pc-m->prog]);
 		typecom(l->frame);
 	}
 	if(ml != nil) {
 		e = &ml->links[0];
 		for(i = 0; i < ml->nlinks; i++) {
-			e->u.pc = (Inst*)(v+patch[e->u.pc-m->prog]);
+			if(e->u.pc-m->prog != -1)
+				e->u.pc = (Inst*)(v+patch[e->u.pc-m->prog]);
 			typecom(e->frame);
 			e++;
 		}

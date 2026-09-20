@@ -46,15 +46,16 @@ sleep 3
 
 echo '=== 1. check balance ==='
 cat /n/wallet/veltro-demo-wallet/balance
-echo 'requireapproval off' > /n/wallet/veltro-demo-wallet/ctl
 
 echo '=== 2. send 1000 wei ETH ==='
 echo '1000 $BURN' > /n/wallet/veltro-demo-wallet/pay
-cat /n/wallet/veltro-demo-wallet/pay
+pending=\`{cat /n/wallet/pending}
+echo approve \$pending(1) > /n/wallet/ctl
 
 echo '=== 3. send 1 USDC (1000000 base units) ==='
 echo 'usdc 1000000 $BURN' > /n/wallet/veltro-demo-wallet/pay
-cat /n/wallet/veltro-demo-wallet/pay
+pending=\`{cat /n/wallet/pending}
+echo approve \$pending(1) > /n/wallet/ctl
 
 echo '=== 4. check history ==='
 cat /n/wallet/veltro-demo-wallet/history

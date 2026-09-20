@@ -2,7 +2,75 @@
 
 All notable changes to InferNode are documented in this file.
 
-## [Unreleased]
+## [0.4.1] - 2026-09-17
+
+Security patch release. Three containment fixes from the external
+escape-room campaign (`infernode-os/infernode-escape-room`), found after 0.4.0
+was cut, and a wallet change that operators need to know about.
+
+### Security
+
+- **Tool metadata sealed before `/tmp`** — `tools9p` restricted
+  `/tmp/veltro/.ns` after the worker's `/tmp` had already been replaced, which
+  recreated `/tmp/.veltro-ns` inside the model-visible view. A single `list`
+  showed the shadow tree, and concurrent calls exposed live worker directory
+  names. The 0.4.0 entry for #600 said the shadow tree was no longer visible;
+  through `tools9p` it still was. Shadow-backed restriction now completes
+  before the final `/tmp` replacement, and model-facing calls wait for the
+  trusted startup manifest probe (#619, INFR-470).
+- **Tool workers get a fresh environment group** — Inferno lets a process name
+  its own `#e` device even under `NODEVS`, so a worker that inherited the
+  launcher's environment could read it by spelling `/env` as `#e`,
+  bypassing the narrowed view. Every tool worker now starts with `NEWENV` and
+  carries only `VELTRO_SESSION` (#618, INFR-480).
+- **9P directory stat entries bounded** — `statcheck` advanced by an untrusted
+  string length without checking it against the bytes returned, so a malformed
+  directory entry could read past its buffer and fault the emulator. Each
+  entry is now validated against the remaining span before any field is
+  decoded, with an ASan/UBSan guard-page regression (#617, INFR-479).
+
+### Wallet
+
+- **Agent payments are proposal-only** — trusted approval is mandatory for
+  every `pay` and x402 authorization. **`requireapproval off` is now
+  rejected**: it turned the same agent-visible files into immediate spending
+  without changing the agent's namespace or its `nsaudit` report.
+  `requireapproval on` is accepted as a no-op. `wallet` and `payfetch` are
+  classified as `proposes_payment`, and the caller-asserted `walletbudget`
+  audit metadata is removed; any future direct-spend authority fails closed
+  without capability-bound enforcement evidence (#627, INFR-488).
+- `nsaudit` models `/mnt/msg/draft` as an immutable proposal rather than a
+  durable mutation, and the messaging profile grants a real `write` tool
+  (#625).
+
+### Build & CI
+
+- Runtime namespace residue under the repo root and host-tool Python bytecode
+  are ignored (#611).
+- OSSF Scorecard reads branch protection with the default token instead of an
+  expired PAT (#607).
+- GitHub Sponsors enabled (#628). Dependency bumps (#590, #612, #613).
+
+## [0.4.0] - 2026-09-12
+
+### Runtime tree & build
+
+- **`dis/` is a build product and is no longer tracked** — compiled Dis
+  bytecode is untracked, exactly like `emu/*/o.emu`. A fresh clone builds its
+  runtime in about 20 seconds, and `hooks/install.sh` installs a `post-merge`
+  rebuild. What the build must *produce* is tracked instead, as
+  `tools/dis-manifest.txt`, gated by `tools/verify-dis-build.sh` in CI and in
+  every release job. Tracking the bytecode had let the tree drift from the
+  source that produced it in every way it could: `appl/cmd/git` had not
+  compiled since 2026-07-02, `dis/acme.dis` shipped font paths the source
+  abandoned five months earlier, 45 modules shipped that no mkfile ever
+  compiled, and programs shipped whose sources had been deleted. Releases
+  still ship a runnable tree — the packaging job builds it before staging
+  (#559).
+- **Go-on-Dis removed** — the experimental Go-to-Dis work is gone from the
+  tree (#566).
+- `mk emuinstall` repaired on a clean clone (#507). Android builds target
+  API 36 (Android 16) for Play compliance (#581).
 
 ### Agent provenance & audit (INFR-355)
 
@@ -41,6 +109,15 @@ All notable changes to InferNode are documented in this file.
   dialogue, so a user who already pays for one of those subscriptions isn't
   steered to paste an API key. Desktop dialogue buttons now wrap onto further
   rows instead of silently dropping the ones that don't fit on one line.
+- **codex-gate hardening** — the OAuth gateway uses backend defaults instead
+  of forwarding llmsrv's Anthropic default model to an OpenAI-compatible
+  backend, and requires a verified ChatGPT login before reporting readiness
+  (#529). The gateway is pinned and the CLI's native shell disabled, so Codex
+  requests Veltro tools rather than inspecting the gateway filesystem (#539).
+  Quota control is returned to callers (#597), and transient model-capacity
+  failures are classified as structured retryable errors instead of assistant
+  content — the classifier deliberately narrow, so model prose cannot
+  authenticate a retry (#603).
 
 ### GUI & video
 
@@ -49,11 +126,80 @@ All notable changes to InferNode are documented in this file.
 
 ### Security
 
-- ~40 further namespace-hardening fixes: control-grammar tightening
-  (wallet #499, wiki #500, msg #496), path-delimiter rejection across
-  write/editor/wiki (#493–#495), luciuisrv control metadata (#502),
+Namespace hardening continued through a sustained internal red-team campaign.
+This cycle the mounts and the pathname stack themselves were the focus, rather
+than the control grammars above them.
+
+- **Read-only mounts genuinely attenuate** — a new `MREADONLY` mount flag
+  attenuates Veltro's code, library, metadata, and source views. The
+  restriction survives rebinds and 9P exports, writable protocol filters stay
+  distinct, and intentional nested writable mounts are retained. This closes a
+  campaign path that overwrote `sh.dis`, and a remote-export laundering
+  regression (#586, INFR-453).
+- **Mount boundaries survive parent walks** — completing the Fourth Edition
+  pathname-stack port in the emulator: final-element mount crossings performed
+  by `open` are recorded, the child slot is discarded before undoing a parent
+  mount, and reference ownership is preserved across `Cname` copy-on-write.
+  The private `.veltro-ns` shadow tree is no longer visible (#600, INFR-470).
+- **A namespace traversal escape closed**, with delegation evidence hardened
+  in the same pass (#537).
+- **Runtime profiles are materialized and audited** rather than assembled ad
+  hoc, and campaign-only runtime hooks and duplicate profiles are gone from
+  the product path (#591, #592, #596, #598 — INFR-456, INFR-466).
+- **No hidden audit fallback during namespace construction** — by the time
+  `restrictns` emits its audit record, `/mnt` has already been narrowed, so
+  reaching for a hidden or stale 9P audit mount could block construction
+  outright. The fallback is refused there rather than attempted (#593,
+  INFR-459).
+- **Copy-on-write overlays keyed by path** — a delegated agent holding a
+  writable grant could create a file that `list` and `read` saw but `exec`
+  reported absent at the same absolute path, because the overlay directory was
+  keyed by a path's position in the invocation list rather than by the path.
+  The capability is now composable across tools (#571, INFR-435).
+- **Campaign metadata fails closed** — `NODEVS` and wallet-budget
+  declarations are validated semantically, and their validity is reported in
+  `nsaudit` machine output (#580 — INFR-440, INFR-441, INFR-442).
+- **A stalled tool call can no longer silence the audit trail** — a hung 9P
+  tool request blocked lucibridge's activity loop indefinitely, so `toolres`
+  and `agentdone` records were never written. The existing 60-second Veltro
+  tool bound now applies there too (#599).
+- **Truthful grantable tool catalogue** — delegation planning context is
+  derived from the live `tools9p` budget instead of a hand-maintained persona
+  list, preserving namespace attenuation (#544, INFR-393).
+- Further fixes: delegated message draft writes preserved (#546), concurrent
+  task provisioning made atomic (#547), delayed tasks kept observable (#542,
+  INFR-362).
+- Earlier in the cycle, ~40 further namespace-hardening fixes: control-grammar
+  tightening (wallet #499, wiki #500, msg #496), path-delimiter rejection
+  across write/editor/wiki (#493–#495), luciuisrv control metadata (#502),
   matrix composition grants (#501), provisioning validation (#503),
   failed-tool-mutation reporting (#505).
+
+### Emulator, JIT & shell reliability
+
+- **JIT `typecom` slab exhaustion** — scratch overflow and incorrect rollover
+  of an exhausted slab, both under sustained load (#561, #570, INFR-421).
+- **Linux memory faults report PC and symbol** rather than an address alone
+  (#558), and `devfs` directory reads can no longer fault on an
+  uninitialised `Fsinfo` (#557).
+- **The pthread process leader stays alive**, so a Linux emulator no longer
+  strands children when the leader exits (#582), plus further Linux
+  concurrency fixes (#602, INFR-601).
+- `sh` raises instead of panicking when the wait file is unavailable (#572,
+  INFR-436). `llmsrv` cancels flushed async replies safely (#541).
+
+### Testing & compliance
+
+- **The escape-room harness moved out of the product tree**, with a CI
+  ring-fence that fails the release stage if harness material reappears in it
+  (#585).
+- Source-aware `nsaudit` campaign (#555) and dynamic red-team qualification
+  (#562). Grind fixes: evidence preserved on scorer errors (#569),
+  qualification effects required (#567), scenario canary post-state preserved
+  (#545), fail-closed on live child tasks (#543), dynamic child activities
+  reconciled (#548), campaigns resume after quota pauses (#576, INFR-437).
+- Compliance evidence scorecard re-rolled and stale AU residuals corrected
+  (#532). Rooted capability delegation proposed for review (#535).
 
 ## [0.3.6] - 2026-07-20
 

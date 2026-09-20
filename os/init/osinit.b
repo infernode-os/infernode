@@ -620,6 +620,7 @@ HPreset:	con 16r10;	# the hub clears this itself when the reset is done
 HPpower:	con 16r100;
 HPslow:		con 16r200;
 HPhigh:		con 16r400;
+HPsuper:	con 16r800;	# not a hub's: an xHCI root port at SuperSpeed (os/port/usb.h)
 
 #
 # A control request is eight bytes on the wire in every case, so one
@@ -693,6 +694,8 @@ statusflags(status: int): string
 		flags += " lowspeed";
 	if(status & HPhigh)
 		flags += " highspeed";
+	if(status & HPsuper)
+		flags += " superspeed";
 	return flags;
 }
 
@@ -710,6 +713,8 @@ hidival := 0;
 
 speedname(status: int): string
 {
+	if(status & HPsuper)
+		return "super";
 	if(status & HPhigh)
 		return "high";
 	if(status & HPslow)
@@ -773,58 +778,131 @@ usbprobe()
 
 usbwalk()
 {
-	d := sys->open("/usb/usb/ep1.0/data", Sys->ORDWR);
-	if(d == nil){
-		sys->print("init: cannot open the usb root hub: %r\n");
+	roots := roothubs();
+	if(roots == nil){
+		sys->print("init: no USB host controller\n");
 		return;
 	}
-
-	status := portstatus(d, 1);
-	if(status < 0){
-		sys->print("init: usb port status failed: %r\n");
-		return;
-	}
-	sys->print("init: USB root hub port 1 status %#4.4x%s\n",
-		status, statusflags(status));
-
-	if((status & HPpresent) == 0){
-		sys->print("init: USB bus is empty\n");
-		return;
-	}
-
-	#
-	# Reset the port. A device that is merely present is not yet
-	# addressable: until the port is reset it has not negotiated a
-	# speed and does not answer on the default address.
-	#
-	if(portfeature(d, 1, Fportreset) < 0){
-		sys->print("init: usb port reset failed: %r\n");
-		return;
-	}
-
-	status = portstatus(d, 1);
-	if(status < 0){
-		sys->print("init: usb port status after reset failed: %r\n");
-		return;
-	}
-	sys->print("init: USB port 1 after reset %#4.4x%s\n",
-		status, statusflags(status));
-
-	if((status & HPenable) == 0){
-		sys->print("init: USB port did not enable\n");
-		return;
-	}
-
+	found := 0;
 	walking = 1;
-	(ok, dev) := enumerate("/usb/usb/ep1.0/ctl", d, 1, speedname(status), "");
-	#
-	# The root port has no watcher to clean up after it: a device that
-	# failed to come up here would otherwise hold its ep0 for the life
-	# of the machine.
-	#
-	if(ok < 0 && dev != "")
-		detachdev(dev);
+	for(; roots != nil; roots = tl roots){
+		(name, nports) := hd roots;
+		found += rootwalk(name, nports);
+	}
+	if(found == 0)
+		sys->print("init: USB bus is empty\n");
 	startpending();
+}
+
+#
+# The host controllers' root hubs, in devusb's order, and how many
+# ports each has. #u/usb/ctl lists every endpoint on a line of its own
+# and follows a root hub's with what the controller said of itself:
+#
+#	ep1.0 enabled control rw speed high ... idle
+#	ports 1 dwcotg
+#
+# A Pi 3 has one controller with one port, which is all this walker
+# knew until there was an xHCI: QEMU's has eight, a Pi 4's VL805 five,
+# and a Pi 4 has a DWC OTG as well.
+#
+roothubs(): list of (string, int)
+{
+	(txt, err) := slurp("/usb/usb/ctl");
+	if(err < 0)
+		return nil;
+	roots: list of (string, int);
+	last := "";
+	(nil, lines) := sys->tokenize(txt, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf < 2)
+			continue;
+		if(len hd f > 2 && (hd f)[0:2] == "ep"){
+			last = hd f;
+			continue;
+		}
+		if(hd f == "ports" && last != ""){
+			roots = (last, int hd tl f) :: roots;
+			last = "";
+		}
+	}
+	rev: list of (string, int);
+	for(; roots != nil; roots = tl roots)
+		rev = hd roots :: rev;
+	return rev;
+}
+
+#
+# Every port of one root hub. Returns how many had something on them.
+#
+# The messages for the first controller are the ones a Pi 3 has always
+# printed, because the harness reads them; another controller's name
+# the hub.
+#
+rootwalk(name: string, nports: int): int
+{
+	tag := "";
+	if(name != "ep1.0")
+		tag = " " + name;
+
+	d := sys->open("/usb/usb/" + name + "/data", Sys->ORDWR);
+	if(d == nil){
+		sys->print("init: cannot open the usb root hub%s: %r\n", tag);
+		return 0;
+	}
+
+	found := 0;
+	for(port := 1; port <= nports; port++){
+		status := portstatus(d, port);
+		if(status < 0){
+			sys->print("init: usb%s port %d status failed: %r\n", tag, port);
+			continue;
+		}
+		if((status & HPpresent) == 0){
+			# one line for an empty port only where there is one port to be empty
+			if(nports == 1)
+				sys->print("init: USB root hub%s port %d status %#4.4x%s\n",
+					tag, port, status, statusflags(status));
+			continue;
+		}
+		found++;
+		sys->print("init: USB root hub%s port %d status %#4.4x%s\n",
+			tag, port, status, statusflags(status));
+
+		#
+		# Reset the port. A device that is merely present is not yet
+		# addressable: until the port is reset it has not negotiated a
+		# speed and does not answer on the default address.
+		#
+		if(portfeature(d, port, Fportreset) < 0){
+			sys->print("init: usb%s port %d reset failed: %r\n", tag, port);
+			continue;
+		}
+
+		status = portstatus(d, port);
+		if(status < 0){
+			sys->print("init: usb%s port %d status after reset failed: %r\n", tag, port);
+			continue;
+		}
+		sys->print("init: USB%s port %d after reset %#4.4x%s\n",
+			tag, port, status, statusflags(status));
+
+		if((status & HPenable) == 0){
+			sys->print("init: USB%s port %d did not enable\n", tag, port);
+			continue;
+		}
+
+		(ok, dev) := enumerate("/usb/usb/" + name + "/ctl", d, port, speedname(status), "");
+		#
+		# The root port has no watcher to clean up after it: a device that
+		# failed to come up here would otherwise hold its ep0 for the life
+		# of the machine.
+		#
+		if(ok < 0 && dev != "")
+			detachdev(dev);
+	}
+	return found;
 }
 
 #
@@ -2403,6 +2481,18 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 
 	sys->print("init: %s%s is a hub with %d port(s), power good in %dms\n",
 		indent, name, nports, pwrgood);
+
+	#
+	# An xHCI controller routes by topology and must be told how many
+	# ports a hub has, and a high-speed hub's TT think time, before it
+	# will address anything behind it (os/port/devusb.c, "hub"). A
+	# controller that addresses by number takes the same words and does
+	# nothing with them. Multiple TTs are an alternate setting this
+	# walker never selects, so: one.
+	#
+	ttt := ((int hubd[3] | (int hubd[4] << 8)) >> 5) & 3;
+	if(sys->fprint(dctl, "hub %d %d 0", nports, ttt) < 0)
+		sys->print("init: %s%s: the controller would not be told it is a hub: %r\n", indent, name);
 
 	for(port := 1; port <= nports; port++){
 		if(portfeature(d, port, Fportpower) < 0){

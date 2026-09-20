@@ -96,7 +96,7 @@ jobs:
           # name, because a run that reached it ran what came before.
           - platform: virt
             timeout: 30
-            least: 45
+            least: 62
             last: 'PASS: virt: Lucifer draws the desktop on the ramfb screen'
           - platform: bcm2837
             timeout: 90
@@ -109,7 +109,7 @@ jobs:
           # the kernel against two QEMUs rather than one.
           - platform: bcm2711
             timeout: 90
-            least: 28
+            least: 35
             last: 'PASS: bcm2711: Lucifer draws the desktop on the firmware framebuffer'
             qemu: 9.2.4
     env:

@@ -56,3 +56,9 @@ void	swcursorhide(void);
 void	swcursorshow(void);
 void	screendumpkey(void);
 void	screenhexkey(void);
+
+/* pciecam.c: the PCIe host bridge; ../port/pci.c above it */
+void	pciecamlink(void);
+
+/* ../port/usbxhcipci.c: xHCI controllers on the PCI bus, for devusb */
+void	usbxhcipcilink(void);

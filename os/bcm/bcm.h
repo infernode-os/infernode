@@ -141,6 +141,13 @@ void	boarddevprobe(void);
  * or not a radio was found, so the bind says why when there is none.
  */
 void	ether4330probe(void);
+
+/*
+ * soc.c, in each board's directory: the devices one SoC of the family
+ * has and the others do not. boarddevprobe calls it last.
+ */
+void	socdevprobe(void);
+void	socusblink(void);	/* and its USB host controllers, after the DWC OTG */
 int	mboxfbvoff(u32int, u32int);
 int	mboxfbgetvoff(void);
 

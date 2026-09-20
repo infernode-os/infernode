@@ -297,10 +297,15 @@ boardlockon(void)
 {
 }
 
-/* no USB host controller on this machine; #u is present and empty */
+/*
+ * A USB host controller only if QEMU was given one: -device qemu-xhci,
+ * which is a PCI device (pciecam.c) and the reason this machine has a
+ * PCI bus. Without it #u is present and empty.
+ */
 void
 boardusblink(void)
 {
+	usbxhcipcilink();
 }
 
 void
@@ -411,4 +416,5 @@ boarddevprobe(void)
 {
 	blkvirtioinit();
 	ethervirtiolink();
+	pciecamlink();
 }

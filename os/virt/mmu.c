@@ -203,6 +203,16 @@ mmuinit(void)
 		}
 	}
 
+	/*
+	 * And one gigabyte far above all that, as a single level-1 block:
+	 * the one QEMU puts PCI configuration space in (pciecam.c). Most
+	 * of it is a hole. A hole reached through a valid mapping is an
+	 * external abort rather than a translation fault, and probe32
+	 * treats the two alike.
+	 */
+	l1tab[PCIECAMHIGH >> 30] = (PCIECAMHIGH & ~((1ULL<<30)-1)) |
+		Dblock | Attridx1 | Apkrw | Shnone | Af | Pxn | Uxn;
+
 	mmuenable();
 }
 

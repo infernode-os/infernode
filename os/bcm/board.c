@@ -910,6 +910,7 @@ boarddevprobe(void)
 {
 	sdprobe();
 	ether4330probe();
+	socdevprobe();
 }
 
 /*
@@ -1130,9 +1131,14 @@ boardlockon(void)
 	mboxlockon();
 }
 
-/* this SoC's USB host controller is a DWC OTG */
+/*
+ * Every SoC of the family has a DWC OTG, and it goes first so that it
+ * is #u/usb/ep1.0 on all of them; then whatever else this one has
+ * (soc.c: on a BCM2711, xHCI behind the PCIe bridge).
+ */
 void
 boardusblink(void)
 {
 	usbdwclink();
+	socusblink();
 }

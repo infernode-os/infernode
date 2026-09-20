@@ -434,4 +434,4 @@ for software.
 - **The tryboot firmware handshake and the watchdog's countdown** are
   things QEMU models neither of.
 - Not started: USB storage, the Pi 4, an audio or HDMI acceptance battery.
-- On virt only: no PCI, no USB, no GICv3; KVM untried.
+- On virt only: no GICv3; KVM untried. USB there is xHCI on the PCI bus and optional (`-device qemu-xhci`).

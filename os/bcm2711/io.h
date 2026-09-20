@@ -55,6 +55,15 @@ enum
 	IRQmmc		= IRQvc + 62,	/* both SDHCI controllers share this */
 
 	/*
+	 * Not the VideoCore's: the blocks this SoC added have GIC
+	 * interrupts of their own, numbered here as Linux's bcm2711.dtsi
+	 * numbers them (GIC_SPI n is IRQspi+n). No emulator has them, so
+	 * none of these has ever been raised.
+	 */
+	IRQpci		= IRQspi + 148,	/* the PCIe bridge's MSI interrupt, pcibcm.c */
+	IRQether	= IRQspi + 157,	/* GENET: this and the next, ethergenet.c */
+
+	/*
 	 * ../arm64/gic.c's self-test wants a shared interrupt nothing
 	 * drives. os/bcm/board.c does not use it -- it makes the system
 	 * timer interrupt, which is a better test -- but gic.c is compiled
@@ -77,6 +86,16 @@ enum
 {
 	EMMC2REGS	= PHYSIO+0x340000,
 	Clkemmc2	= 12,		/* the mailbox's clock id for EMMC2 */
+};
+
+/*
+ * The gigabit Ethernet MAC and the PCIe bridge are outside the
+ * peripheral window, in a block of their own below it.
+ */
+enum
+{
+	PCIEREGS	= 0xFD500000,	/* the PCIe root complex; its window is PCIWIN, mem.h */
+	GENETREGS	= 0xFD580000,
 };
 
 #include "../bcm/bcmio.h"

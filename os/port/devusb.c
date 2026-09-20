@@ -139,7 +139,7 @@ static Cmdtab epctls[] =
 {
 	{CMnew,		"new",		4},
 	{CMnewdev,	"newdev",	3},
-	{CMhub,		"hub",		1},
+	{CMhub,		"hub",		0},	/* hub [nports [ttt mtt]] */
 	{CMspeed,	"speed",	2},
 	{CMmaxpkt,	"maxpkt",	2},
 	{CMntds,	"ntds",		2},
@@ -184,6 +184,7 @@ static char *spname[] =
 	[Lowspeed]	"low",
 	[Highspeed]	"high",
 	[Nospeed]	"no",
+	[Superspeed]	"super",
 };
 
 static int	debug;
@@ -411,7 +412,8 @@ putep(Ep *ep)
 		if(ep->ep0 != ep){
 			putep(ep->ep0);
 			ep->ep0 = nil;
-		}
+		}else if(d != nil && ep->hp != nil && ep->hp->devclose != nil)
+			ep->hp->devclose(d);	/* the device's last reference: an xHC frees its slot */
 		free(ep->info);
 		free(ep->name);
 		free(ep);
@@ -498,6 +500,7 @@ newdev(Hci *hp, int ishub, int isroot)
 	ep->toggle[0] = ep->toggle[1] = 0;
 	d->ishub = ishub;
 	d->isroot = isroot;
+	d->depth = -1;			/* a root hub's; newdev's caller says otherwise */
 	if(hp->highspeed != 0)
 		d->speed = Highspeed;
 	else
@@ -510,6 +513,36 @@ newdev(Hci *hp, int ishub, int isroot)
 	ep->mode = ORDWR;
 	dprint("newdev %#p ep%d.%d %#p\n", d, d->nb, ep->nb, ep);
 	return ep;
+}
+
+/*
+ * Where a new device is, for a controller that routes by topology
+ * rather than by address: 9front's newdev arithmetic. hub is the device
+ * it was found on.
+ */
+static void
+settopology(Udev *d, Udev *hub)
+{
+	d->tthub = nil;
+	d->ttport = 0;
+	d->routestr = 0;
+	if(hub->isroot){
+		d->depth = 0;
+		d->rootport = d->port;
+		return;
+	}
+	d->depth = hub->depth + 1;
+	d->rootport = hub->rootport;
+	d->routestr = hub->routestr | (d->port < 15 ? d->port : 15) << 4*(d->depth-1);
+	if(d->speed == Fullspeed || d->speed == Lowspeed){
+		if(hub->speed == Highspeed){
+			d->tthub = hub;
+			d->ttport = d->port;
+		}else{
+			d->tthub = hub->tthub;
+			d->ttport = hub->ttport;
+		}
+	}
 }
 
 /*
@@ -741,7 +774,9 @@ hciprobe(int cardno, int ctlrno)
 	if(hp->irq == 2)
 		hp->irq = 9;
 	snprint(name, sizeof(name), "usb%s", hcitypes[cardno].type);
-	intrenable(hp->irq, hp->interrupt, hp, hp->tbdf, name);
+	/* a PCI controller's interrupt is its bridge's to deliver, and its reset asked (irq < 0) */
+	if(hp->irq >= 0)
+		intrenable(hp->irq, hp->interrupt, hp, hp->tbdf, name);
 
 	/*
 	 * modern machines have too many usb controllers to list on
@@ -1206,12 +1241,17 @@ epctl(Ep *ep, Chan *c, void *a, long n)
 		l = name2speed(cb->f[1]);
 		if(l == Nospeed)
 			error("speed must be full|low|high");
+		if(!d->isroot && d->depth >= 4)
+			error("hub depth exceeded");	/* a route string has five tiers */
 		nep = newdev(ep->hp, 0, 0);
 		nep->dev->speed = l;
-		if(nep->dev->speed  != Lowspeed)
+		if(nep->dev->speed == Superspeed)
+			nep->maxpkt = 512;
+		else if(nep->dev->speed  != Lowspeed)
 			nep->maxpkt = 64;	/* assume full speed */
 		nep->dev->hub = d->nb;
 		nep->dev->port = atoi(cb->f[2]);
+		settopology(nep->dev, d);
 		/* next read request will read
 		 * the name for the new endpoint
 		 */
@@ -1229,6 +1269,27 @@ epctl(Ep *ep, Chan *c, void *a, long n)
 	case CMhub:
 		deprint("usb epctl %s\n", cb->f[0]);
 		d->ishub = 1;
+		/*
+		 * "hub" alone is Plan 9's and all a controller that addresses
+		 * by number needs. An xHC must also know how many ports, and
+		 * a high-speed hub's TT think time and whether it has one TT
+		 * or one per port, BEFORE anything behind the hub is
+		 * addressed; whoever read the hub descriptor says.
+		 */
+		if(cb->nf >= 2){
+			l = strtoul(cb->f[1], nil, 0);
+			if(l < 1 || l > 127 || (l > 15 && d->speed == Superspeed))
+				error("bad hub port count");
+			if(d->depth >= 5)
+				error("hub depth exceeded");
+			d->nports = l;
+			if(d->speed == Highspeed && cb->nf >= 4){
+				d->ttt = strtoul(cb->f[2], nil, 0) & 3;
+				d->mtt = strtoul(cb->f[3], nil, 0) != 0;
+			}
+			if(ep->hp->hubupdate != nil)
+				ep->hp->hubupdate(ep->ep0);
+		}
 		break;
 	case CMspeed:
 		l = name2speed(cb->f[1]);

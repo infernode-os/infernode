@@ -1275,7 +1275,7 @@ QEMUARGS="$2"
 SHARED="$ROOT/os/bcm"
 SHAREDSKIP=""
 ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
-PORTSKIP=""
+PORTSKIP="ethermii.c pci.c usbxhci.c usbxhcipci.c"	# a PHY library, a bus and what is on it: this board has none
 SERIALARGS="-serial null -serial stdio"
 
 [[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
@@ -4165,14 +4165,16 @@ fi
 # friends, and what -drive if=virtio gives) are PCI, and land on a bus
 # this kernel does not walk.
 #
-VIRTARGS="-M virt -cpu cortex-a53 -smp 4 -m 1024 -device virtio-rng-device"
+# qemu-xhci is a PCI device: it is what makes os/port/pci.c and
+# os/virt/pciecam.c run at all, on every virt boot below.
+VIRTARGS="-M virt -cpu cortex-a53 -smp 4 -m 1024 -device virtio-rng-device -device qemu-xhci"
 
 run_virt() {
 PLAT=virt
 SRC="$ROOT/os/$PLAT"
 QEMUARGS="$VIRTARGS"
 SERIALARGS="-serial stdio"
-PORTSKIP="devaudio.c"
+PORTSKIP="devaudio.c ethermii.c"
 SHARED=""
 SHAREDSKIP=""
 ARCHSKIP=""
@@ -4230,6 +4232,15 @@ if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then   # the line ends 
     pass "virt: a wired kproc preempts a hog on every secondary core"
 else
     fail "virt: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
+fi
+# PCI. Nothing on this machine needs it; it is here because a Raspberry
+# Pi 4's USB sockets are behind a PCIe bridge no emulator has, and this
+# is where the code above that bridge can be run (os/virt/pciecam.c).
+vcheck "PCI configuration space is found, wherever QEMU put it" "pci: ECAM at 0x"
+if grep -aEq '0c 03 30 1b36 000d .* 0:1[0-9a-f]{7} 16384' <<<"$OUT"; then
+    pass "virt: the bus scan finds the xHCI controller and gives its registers an address in the window"
+else
+    fail "virt: PCI scan -- $(grep -a '1b36 000d' <<<"$OUT" | head -1)"
 fi
 vrefute "nothing panics"                           "panic:"
 vcheck "init reaches the shell"                    "init: starting the shell"
@@ -4381,6 +4392,102 @@ if grep -aq '^VIRT-DATE.* 20[2-9][0-9]' <<<"$OUT"; then
 else
     fail "virt: date -- $(grep -a '^VIRT-DATE' <<<"$OUT" | head -1)"
 fi
+
+#
+# USB, through xHCI on the PCI bus. Nothing on this machine needs USB.
+# It is here because a Raspberry Pi 4's four USB-A sockets are an xHCI
+# controller behind a PCIe bridge, QEMU's raspi4b has neither, and this
+# machine has both for the asking -- so os/port/usbxhci.c, the topology
+# devusb computes for it and the walker in osinit that finds more than
+# one root port are RUN here, and only the Pi's bridge is left untried.
+#
+# One boot: a hub, a keyboard BEHIND the hub (a full-speed device
+# routed through a hub is the case a slot context's route string and
+# hub fields exist for), a mouse, and a network adapter for bulk
+# transfers. And with pcibounce, which makes the bridge refuse every
+# buffer a driver offers it -- the condition a Pi 4's drivers live
+# under, where PCI devices reach the first gigabyte only -- so that the
+# bounce path is run by this harness and not first on a board.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-xqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-xhci.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "pcibounce",
+    "-device", "usb-hub,port=1", "-device", "usb-kbd,port=1.2", "-device", "usb-mouse,port=2",
+    "-netdev", "user,id=u0", "-device", "usb-net,netdev=u0,port=3",
+    "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def qkey(f, ch):
+    shift = ch.isupper()
+    q = QCODE.get(ch, ch.lower())
+    keys = (["shift"] if shift else []) + [q]
+    for down in (True, False):
+        ev = [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}
+              for k in (keys if down else reversed(keys))]
+        f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.05)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"kbdusb: ep", 30)
+    waitfor(b"etherusb: default route", 40)
+    time.sleep(2)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    for ch in "echo Xhci-Keys\n":
+        qkey(f, ch)
+    time.sleep(2)
+    typed("cat /usb/usb/ctl")
+    typed("echo dump > /usb/usb/ctl", 2.5)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-xhci.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+vcheck "xhci: the controller is found on the PCI bus"  "usbxhci: PCI.0."
+vcheck "xhci: every buffer is being refused, as on a Pi 4" "pci: pcibounce:"
+vcheck "xhci: a hub on a root port other than the first is enumerated" "is a hub with 8 port(s)"
+vrefute "xhci: the controller accepts being told it is a hub" "would not be told it is a hub"
+vcheck "xhci: a keyboard BEHIND the hub is claimed"    "kbdusb: ep"
+vcheck "xhci: a mouse is claimed"                      "mouseusb: ep"
+vcheck "xhci: keys typed on the USB keyboard reach the shell (interrupt IN, through the hub)" "Xhci-Keys"
+vcheck "xhci: USB Ethernet comes up as ether0 (bulk endpoints)" "etherusb: serving /net/ether0 (kernel data path)"
+vcheck "xhci: ether0 has QEMU's address"               "etherusb: 10.0.2.15 mask"
+vcheck "xhci: the gateway answers a ping over it"      "ICMP echo reply from 10.0.2.2"
+xb="$(grep -a 'usbxhci: [0-9]* transfers bounced' <<<"$OUT" | tail -1 | sed -E 's/.*usbxhci: ([0-9]+) transfers.*/\1/')"
+if [[ "${xb:-0}" -ge 20 ]]; then
+    pass "virt: xhci: all of that ran through the bounce ($xb transfers)"
+else
+    fail "virt: xhci: only '${xb:-none}' transfers bounced -- pcibounce is not refusing buffers, so the path a Pi 4 needs did not run"
+fi
+vrefute "xhci: nothing panics"                         "panic:"
+vrefute "xhci: no exception goes unhandled"            "unhandled exception"
 
 #
 # The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)
@@ -4634,6 +4741,14 @@ pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS
 # what is asserted is that the probe ran and came back empty-handed
 # rather than not at all, and took nothing down with it.
 pcheck "with no card, the radio is probed on the Arasan and reported absent" "ether4330: no radio"
+# The gigabit MAC (os/bcm2711/ethergenet.c) is a driver no emulator can
+# run. What CAN be asserted is that it asks before it touches, finds
+# nothing, and leaves ether0 to the USB path -- whose checks, below, are
+# then also the proof that it did.
+pcheck "the missing GENET is noticed, not faulted on" "genet: NO ETHERNET MAC AT"
+# Likewise the PCIe bridge (os/bcm2711/pcibcm.c). The code above it --
+# os/port/pci.c -- is run on the virt machine, which has a bridge.
+pcheck "the missing PCIe bridge is noticed, not faulted on" "pci: NO PCIe BRIDGE AT"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"

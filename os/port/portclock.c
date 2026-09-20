@@ -190,26 +190,6 @@ hzclock(Ureg *ur)
 	 * too.
 	 */
 	if(up && up->state == Running && !up->inpreempt){
-		/*
-		 * A proc holding a spin lock -- or between trying for one and
-		 * having it, which is the same thing a moment later -- keeps
-		 * its core. Taken off it, the lock stays held by something
-		 * that is not running, and whoever spins for it with
-		 * interrupts off spins on the one core the holder could come
-		 * back to (#681). It is asked to go as soon as it lets go:
-		 * unlock() sees delaysched.
-		 *
-		 * Locks are held for instants, so a count that stays up is a
-		 * bug somewhere -- a lock taken by one proc and released by
-		 * another. After five seconds of it, say so once and preempt
-		 * anyway, which is what happened before there was a count.
-		 */
-		if(up->nlocks > 0 && ++up->delaysched < 5*HZ)
-			return;
-		if(up->nlocks > 0 && up->delaysched == 5*HZ)
-			print("hzclock: pid %lud %s has held a spin lock count of %d for 5s; preempting\n",
-				up->pid, up->text, up->nlocks);
-		up->delaysched = 0;
 		if(anyready()){
 			up->inpreempt = 1;
 			sched();

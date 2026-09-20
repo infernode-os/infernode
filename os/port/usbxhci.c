@@ -31,7 +31,8 @@
  *   on a board.
  *
  *   This tree's devusb is Plan 9's, not 9front's (usb.h says why), so:
- *   there is one hook where 9front has epstop and epclose; one "toy"
+ *   epstop is called by devusb only when a device is detached (and by
+ *   epclose here, where 9front's devusb would have); one "toy"
  *   root hub with every port on it, answering in one status layout
  *   with HPsuper added, where 9front has a USB 2 root hub and a USB 3
  *   one; portreset is synchronous, as Plan 9's callers expect; the
@@ -355,12 +356,17 @@ struct Epio
 /* transfers that went through a bounce buffer; dump() says */
 static ulong nbounced;
 
+/* rings believed stopped that the controller said were running; unstall() */
+static ulong nnotstopped;
+
 static char Ebadlen[] = "bad usb request length";
 static char Enotconfig[] = "usb endpoint not configured";
 static char Exrecover[] = "xhci controller needs reset";
+static char Eaborted[] = "transfer timed out and was abandoned: the controller had nothing to stop (device gone?)";
 
 static char*
 ctlrcmd(Ctlr *ctlr, u32int c, u32int s, u64int p, u32int *er);
+static void abortring(Ring *r);
 
 static void
 setrptr(volatile u32int *reg, u64int pa)
@@ -853,6 +859,7 @@ queuetd(Ring *r, u32int c, u32int s, u64int p, Wait *w)
 }
 
 static char *ccerrtab[] = {
+[0]	"transfer aborted: no completion from the controller",
 [2]	"Data Buffer Error",
 [3]	"Babble Detected Error",
 [4]	"USB Transaction Error",
@@ -929,8 +936,35 @@ waittd(Wait *w, int tmout)
 
 		if(r == c->cr)
 			c->opr[CRCR] |= CA;
-		else
-			ctlrcmd(c, CR_STOPEP | (r->id<<16) | (r->slot->id<<24), 0, 0, nil);
+		else {
+			char *serr;
+
+			serr = ctlrcmd(c, CR_STOPEP | (r->id<<16) | (r->slot->id<<24), 0, 0, nil);
+			r->stopped = 1;
+
+			/*
+			 * 9front now waits five seconds more for the transfer
+			 * to complete as "Stopped", and if it does not, takes
+			 * that for a dead controller and resets it -- which
+			 * then waits for every device on it to be unplugged.
+			 * But the command above was answered. A Stopped event
+			 * for a transfer in progress is posted BEFORE the
+			 * command's completion (4.6.9), so if it has not come
+			 * by now it never will: the controller had nothing of
+			 * ours to stop. QEMU's drops a device's transfers
+			 * without a word when the device is unplugged; pulling
+			 * a hub left its watcher's GET_STATUS in exactly that
+			 * state, and the second timeout reset the controller
+			 * under everything else plugged into it. So: a stop
+			 * that succeeded and woke nobody means the transfer is
+			 * gone, and that is this endpoint's trouble alone.
+			 * A stop that FAILS is still the controller's.
+			 */
+			if(serr == nil && !waitdone(w)){
+				abortring(r);
+				return Eaborted;
+			}
+		}
 		r->stopped = 1;
 
 		/* time to abort the transaction */
@@ -1208,6 +1242,27 @@ initdevctx(Ctlr *ctlr, Slot *slot)
 	return slot->ibase;
 }
 
+/*
+ * Wake whoever is still waiting on a ring that has just been stopped.
+ *
+ * Stop Endpoint is supposed to complete the transfer in progress with a
+ * "Stopped" event, and that event wakes its waiter; then there is
+ * nobody left here to wake. But a controller need not have a transfer
+ * in progress to have a waiter: QEMU's, when a device is unplugged,
+ * discards the device's transfers without an event, and the Stop
+ * Endpoint that follows finds nothing to stop. The reader of a
+ * keyboard's interrupt endpoint then slept for ever, holding the
+ * endpoint, the device and the slot -- found by unplugging one. The
+ * waiter wakes with no completion code, which ccerrstr calls what it is.
+ */
+static void
+abortring(Ring *r)
+{
+	ilock(&r->l);
+	flushring(r);
+	iunlock(&r->l);
+}
+
 static void
 epstop(Ep *ep)
 {
@@ -1231,10 +1286,12 @@ epstop(Ep *ep)
 	if((ring = io[OREAD].ring) != nil && ring->stopped == 0){
 		ctlrcmd(ctlr, CR_STOPEP | (ring->id<<16) | (slot->id<<24), 0, 0, nil);
 		ring->stopped = 1;
+		abortring(ring);
 	}
 	if((ring = io[OWRITE].ring) != nil && ring->stopped == 0){
 		ctlrcmd(ctlr, CR_STOPEP | (ring->id<<16) | (slot->id<<24), 0, 0, nil);
 		ring->stopped = 1;
+		abortring(ring);
 	}
 }
 
@@ -1250,7 +1307,7 @@ epclose(Ep *ep)
 	if(ep->dev->isroot)
 		return;
 
-	/* 9front's devusb calls epstop and then epclose; this tree's has one hook */
+	/* 9front's devusb always calls epstop before epclose; this tree's calls it only at detach */
 	epstop(ep);
 
 	io = ep->aux;
@@ -1727,8 +1784,21 @@ unstall(Ep *ep, Ring *r)
 	if(r->stopped){
 		err = ctlrcmd(r->ctlr, CR_SETTRDQP | (r->id<<16) | (r->slot->id<<24), 0, resetring(r), nil);
 		dmainval(r->ctx, 8*4 << r->ctlr->csz);
-		if(err != nil)
-			return err;
+		if(err != nil){
+			/*
+			 * The controller refuses this for an endpoint that is
+			 * running (Context State Error). If it IS running, the
+			 * belief that it was stopped was wrong, and 9front's
+			 * return here makes that permanent: stopped stays set,
+			 * and every transfer after fails the same way. Seen
+			 * once under QEMU, on a hub's control endpoint, before
+			 * waittd stopped abandoning transfers the hard way;
+			 * dump() counts them, and should say none.
+			 */
+			if(err != ccerrtab[19] || (r->ctx[0]&7) != 1)
+				return err;
+			nnotstopped++;
+		}
 		r->stopped = 0;
 	}
 	if(r->wp - r->rp >= r->mask)
@@ -2065,6 +2135,8 @@ dump(Hci *hp)
 		print("usbxhci %llux: port %d %s portsc %#ux\n", ctlr->x.base, i+1,
 			(ctlr->superspeed & (1<<i)) ? "usb3" : "usb2", ctlr->port[i].reg[PORTSC]);
 	print("usbxhci: %lud transfers bounced (buffers the controller could not be given as they were)\n", nbounced);
+	if(nnotstopped != 0)
+		print("usbxhci: %lud TIMES A RING THOUGHT STOPPED WAS RUNNING -- see unstall()\n", nnotstopped);
 }
 
 static u64int
@@ -2104,6 +2176,7 @@ xhcilinkage(Hci *hp, Xhci *ctlr)
 	hp->interrupt = interrupt;
 	hp->dump = dump;
 	hp->epopen = epopen;
+	hp->epstop = epstop;
 	hp->epclose = epclose;
 	hp->epread = epread;
 	hp->epwrite = epwrite;

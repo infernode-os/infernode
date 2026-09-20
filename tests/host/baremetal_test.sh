@@ -4517,6 +4517,128 @@ else
 fi
 
 #
+# Plugging things in and pulling them out, on xHCI. On a Raspberry Pi 4
+# the sockets ARE root ports and hubs get pulled with things in them;
+# every device in the boots above was there from the start. One boot,
+# with a mouse that stays put throughout and must come through it all:
+#
+#   a hub is plugged into a root port, a keyboard into the hub, keys
+#   are typed on it, and the HUB is pulled -- so the keyboard's driver,
+#   asleep in a read with no timeout, must be woken (devusb's epstop at
+#   detach), the hub's watcher must notice it is watching nothing and
+#   go, and a control transfer left in flight must be abandoned WITHOUT
+#   resetting the controller under the mouse (usbxhci.c, waittd);
+#
+#   then a keyboard straight into a root port, typed on and pulled.
+#
+# What is asserted at the end is that the controller holds exactly one
+# slot -- the mouse's. Each of the three things above leaked one when
+# this was first tried.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "pcibounce",
+    "-device", "usb-mouse,port=4", "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if buf.find(what, start) >= 0:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+def q(f, o):
+    f.write(json.dumps(o) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r:
+            return r
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def keys(f, text):
+    for ch in text:
+        q(f, {"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": QCODE.get(ch, ch.lower())}], "hold-time": 40}})
+        time.sleep(0.12)
+def add(f, **a):
+    return q(f, {"execute": "device_add", "arguments": a})
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"mouseusb: ep", 30)
+    time.sleep(3)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw"); f.readline()
+    q(f, {"execute": "qmp_capabilities"})
+
+    # a hub, a keyboard in the hub, and then the hub goes
+    mark = len(buf)
+    add(f, driver="usb-hub", id="h1", bus="usb-bus.0", port="1")
+    waitfor(b"is a hub with", 25, mark); time.sleep(2)
+    add(f, driver="usb-kbd", id="k1", bus="usb-bus.0", port="1.2")
+    waitfor(b"kbdusb: ep", 25, mark); time.sleep(1.5)
+    keys(f, "echo hub-keys\n"); time.sleep(2)
+    mark = len(buf)
+    q(f, {"execute": "device_del", "arguments": {"id": "h1"}})
+    waitfor(b"has gone", 30, mark)
+    waitfor(b"detached", 15, mark); time.sleep(2)
+
+    # a keyboard in a root port, and then it goes
+    mark = len(buf)
+    add(f, driver="usb-kbd", id="k2", bus="usb-bus.0", port="2")
+    waitfor(b"kbdusb: ep", 25, mark); time.sleep(1.5)
+    keys(f, "echo root-keys\n"); time.sleep(2)
+    mark = len(buf)
+    q(f, {"execute": "device_del", "arguments": {"id": "k2"}})
+    waitfor(b"detached", 20, mark); time.sleep(2)
+
+    typed("cat /usb/usb/ctl")
+    typed("echo dump > /usb/usb/ctl", 2.5)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+vcheck "hotplug: a hub plugged into a root port after boot is seen and walked" "ep1.0 port 5: device attached"
+vcheck "hotplug: keys typed on a keyboard plugged into that hub reach the shell" "hub-keys"
+vcheck "hotplug: the pulled hub's watcher notices, and goes"  "has gone; so has what was on it"
+vcheck "hotplug: keys typed on a keyboard plugged into a root port reach the shell" "root-keys"
+nd="$(grep -ac 'kbdusb: ep.* detached' <<<"$OUT")"
+if [[ "$nd" -eq 2 ]]; then
+    pass "virt: hotplug: both keyboards' drivers were woken from their reads and left"
+else
+    fail "virt: hotplug: $nd of 2 keyboard drivers noticed their device had gone"
+fi
+vrefute "hotplug: pulling a hub does not reset the controller under everything else" "need recover"
+vrefute "hotplug: no ring was thought stopped while it ran" "THOUGHT STOPPED"
+slots="$(grep -a 'slots in use' <<<"$OUT" | tail -1 | sed -E 's/.* ([0-9]+) of [0-9]+ slots in use.*/\1/')"
+if [[ "$slots" == "1" ]]; then
+    pass "virt: hotplug: the controller holds one slot at the end -- the mouse's, which sat through it all"
+else
+    fail "virt: hotplug: '${slots:-no}' slots in use at the end, not 1 -- $(grep -a 'slots in use' <<<"$OUT" | tail -1)"
+fi
+if grep -aq '^ep2\.1 enabled interrupt' <<<"$OUT"; then
+    pass "virt: hotplug: the mouse's endpoint is still enabled"
+else
+    fail "virt: hotplug: the mouse did not survive -- $(grep -a '^ep2' <<<"$OUT" | head -2 | tr '\n' '|')"
+fi
+vrefute "hotplug: nothing panics"                      "panic:"
+
+#
 # The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)
 # unless told otherwise, and everything above ran on that; a modern one
 # finds its queues by three addresses instead of a page number, insists

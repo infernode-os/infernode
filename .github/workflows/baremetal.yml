@@ -95,8 +95,8 @@ jobs:
           # a check near the end of that machine's list, required by
           # name, because a run that reached it ran what came before.
           - platform: virt
-            timeout: 30
-            least: 70
+            timeout: 40
+            least: 80
             last: 'PASS: virt: Lucifer draws the desktop on the ramfb screen'
           - platform: bcm2837
             timeout: 90

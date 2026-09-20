@@ -806,6 +806,22 @@ usbwalk()
 # knew until there was an xHCI: QEMU's has eight, a Pi 4's VL805 five,
 # and a Pi 4 has a DWC OTG as well.
 #
+#
+# Set if any host controller is an xHCI, which no Raspberry Pi 3 has.
+#
+# Two changes to the hub watcher below were found and proved on xHCI,
+# under emulation, and nowhere else: it starts from what the walk saw
+# rather than looking again, and it gives up on a hub that has gone.
+# Both are as true of a Pi 3's walker in principle. But that board is in
+# production on the behaviour it has, the second change DETACHES
+# DEVICES on the strength of failed status reads -- and the hub it
+# would be judging on a 3B+ is the one the Ethernet is on -- and there
+# is no evidence from a board about how often those reads fail. So a
+# machine with no xHCI gets the watcher it has always had, exactly,
+# until someone has tried the new one on it. (Issue #679.)
+#
+havexhci := 0;
+
 roothubs(): list of (string, int)
 {
 	(txt, err) := slurp("/usb/usb/ctl");
@@ -824,6 +840,8 @@ roothubs(): list of (string, int)
 		}
 		if(hd f == "ports" && last != ""){
 			roots = (last, int hd tl f) :: roots;
+			if(nf >= 3 && hd tl tl f == "xhci")
+				havexhci = 1;
 			last = "";
 		}
 	}
@@ -853,12 +871,15 @@ rootwalk(name: string, nports: int): int
 	}
 
 	found := 0;
+	devs := array[nports+1] of { * => "" };	# port -> the device on it
+	seen := array[nports+1] of { * => 0 };	# port -> was anything there when this looked
 	for(port := 1; port <= nports; port++){
 		status := portstatus(d, port);
 		if(status < 0){
 			sys->print("init: usb%s port %d status failed: %r\n", tag, port);
 			continue;
 		}
+		seen[port] = (status & HPpresent) != 0;
 		if((status & HPpresent) == 0){
 			# one line for an empty port only where there is one port to be empty
 			if(nports == 1)
@@ -901,7 +922,20 @@ rootwalk(name: string, nports: int): int
 		#
 		if(ok < 0 && dev != "")
 			detachdev(dev);
+		else
+			devs[port] = dev;
 	}
+
+	#
+	# Root ports that are sockets get the watcher a hub's ports get: the
+	# same code, since a root hub answers the same requests. A controller
+	# with ONE root port is a DWC OTG, and on the boards this runs on
+	# that port has a hub soldered to it -- it is left as it always was,
+	# unwatched. An xHCI's ports are where things are plugged in: all of
+	# them under QEMU, the SuperSpeed ones on a Raspberry Pi 4.
+	#
+	if(nports > 1)
+		spawn hubwatch(d, name, nports, "", devs, seen);
 	return found;
 }
 
@@ -2503,6 +2537,7 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 	sys->sleep(pwrgood);
 
 	devs := array[nports+1] of { * => "" };	# port -> the device on it
+	seen := array[nports+1] of { * => 0 };	# port -> was anything there when this looked
 	for(port = 1; port <= nports; port++){
 		#
 		# Poll, rather than asking once.
@@ -2539,6 +2574,7 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 		if((status & HPpresent) == 0)
 			continue;
 
+		seen[port] = 1;
 		devs[port] = portsetup(d, name, port, indent);
 	}
 
@@ -2551,7 +2587,7 @@ hubwalk(name: string, d, dctl: ref Sys->FD, indent: string)
 	# broken. Every hub reports port changes, so there is no reason
 	# for a device to go unnoticed.
 	#
-	spawn hubwatch(d, name, nports, indent, devs);
+	spawn hubwatch(d, name, nports, indent, devs, seen);
 }
 
 #
@@ -2583,20 +2619,35 @@ detachdev(dev: string)
 # A second a poll is imperceptible to a person plugging something in
 # and negligible beside what the HID drivers already ask of the bus.
 #
-hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array of string)
+hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array of string, was: array of int)
 {
-	was := array[nports+1] of int;
-	for(i := 1; i <= nports; i++){
-		st := portstatus(d, i);
-		was[i] = st >= 0 && (st & HPpresent);
-	}
+	#
+	# was[] is what the WALK saw on each port, not a fresh look. A fresh
+	# look loses a device plugged in while the hub was being walked: the
+	# walk had passed its port, this found it already present, and
+	# "present, as before" is not a change -- it was never enumerated,
+	# however long it stayed. Found by hot-plugging a keyboard under
+	# QEMU a few seconds into the boot; it needs no emulator to happen.
+	#
+	# Only where there is an xHCI (see havexhci); elsewhere, the fresh
+	# look this has always taken.
+	#
+	if(!havexhci)
+		for(i := 1; i <= nports; i++){
+			st := portstatus(d, i);
+			was[i] = st >= 0 && (st & HPpresent);
+		}
 
+	dead := 0;
 	for(;;){
 		sys->sleep(Watchival);
+		nfail := 0;
 		for(port := 1; port <= nports; port++){
 			status := portstatus(d, port);
-			if(status < 0)
+			if(status < 0){
+				nfail++;
 				continue;
+			}
 			now := (status & HPpresent) != 0;
 			if(now == was[port])
 				continue;
@@ -2627,6 +2678,30 @@ hubwatch(d: ref Sys->FD, name: string, nports: int, indent: string, devs: array 
 				}
 			}
 		}
+
+		#
+		# The hub itself has gone: every port refused to answer, three
+		# passes running. (Whoever watches the port it was on has
+		# detached it, and devusb refuses a detached device everything.)
+		# What was plugged into it went with it, and nobody else knows
+		# those devices existed; and this process holds the hub's
+		# endpoint open, which keeps the hub's device -- and on an xHCI
+		# controller its slot, of which there are a finite number --
+		# for as long as it runs. It used to run for ever.
+		#
+		if(!havexhci || nfail < nports){
+			dead = 0;
+			continue;
+		}
+		if(++dead < 3)
+			continue;
+		sys->print("init: %s%s has gone; so has what was on it\n", indent, name);
+		for(port = 1; port <= nports; port++)
+			if(devs[port] != ""){
+				detachdev(devs[port]);
+				devs[port] = "";
+			}
+		return;
 	}
 }
 

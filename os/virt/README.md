@@ -136,6 +136,40 @@ Three things were wanted of this machine for that:
   that are nil for the Pi 3's DWC OTG. `osinit`'s walker, which knew one
   root hub with one port because a Pi 3 has exactly that, walks every
   port of every controller.
+- **Things plugged in and pulled out.** On a Pi 4 the sockets are root
+  ports, and every device in the boot above was there from the start.
+  The harness now plugs a hub into a root port, a keyboard into the
+  hub, types, and pulls the *hub*; then the same with a keyboard in a
+  root port; with a mouse that must sit through it all. It found four
+  things, none of them QEMU's fault and two of them not xHCI's:
+  - a driver asleep in a read of an interrupt endpoint has no timeout,
+    and an xHC does not end a transfer because the device left: it
+    slept for ever holding the endpoint, the device and the slot.
+    `devusb` now asks the controller to stop a detached device's
+    endpoints (`epstop`, 9front's, which had been folded away);
+  - 9front's driver, when a transfer times out, stops the endpoint,
+    waits five seconds more, and then **resets the controller** — and
+    waits for every device on it to be unplugged. A control request in
+    flight to a pulled hub did that to the whole bus. A stop command
+    that succeeds and wakes nobody now means the transfer is gone, and
+    only that (`waittd`);
+  - *(the walker's)* a pulled hub's watcher polled
+    the dead hub for ever, holding its endpoint, and never told devusb
+    that what was plugged into it had gone;
+  - *(likewise)* a device plugged in **while a hub was being walked at
+    boot** was never enumerated: the walk had passed its port, the
+    watcher's first look found it already there, and "there, as
+    before" is not a change. The watcher now starts from what the walk
+    saw.
+
+  The last two are in `osinit`'s walker, which a Pi 3 runs too, and are
+  as true there in principle. **They are fixed only on a machine that
+  has an xHCI** (`havexhci`): the Pi 3 is in production on the watcher
+  it has, the first of the two *detaches devices* on the strength of
+  failed status reads — on a 3B+ the hub being judged carries the
+  Ethernet — and nobody has measured on a board how often those reads
+  fail. #679 has the reproduction and what trying them there would
+  take.
 - **The Pi 4's interrupts.** Its bridge delivers nothing but messages
   (MSI). `pciecam.c` gives a device that has the MSI capability one —
   an interrupt of the GIC's MSI frame (GICv2m), made edge-triggered

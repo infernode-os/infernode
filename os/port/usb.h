@@ -213,6 +213,7 @@ struct Hci
 	 * anything behind it.
 	 */
 	void	(*devclose)(Udev*);		/* the device's last endpoint has gone */
+	void	(*epstop)(Ep*);			/* the device is detached: abort what is pending on ep, so its reader wakes */
 	void	(*hubupdate)(Ep*);		/* ep0 of a device whose nports, ttt or mtt were just set */
 };
 

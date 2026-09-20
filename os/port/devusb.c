@@ -1436,6 +1436,25 @@ epctl(Ep *ep, Chan *c, void *a, long n)
 		}
 		ep->dev->state = Ddetach;
 		qunlock(&epslck);
+		/*
+		 * A driver asleep in a read of an interrupt endpoint has no
+		 * timeout, and an xHC does not end a transfer because the
+		 * device went away: the reader would sleep for ever, holding
+		 * the endpoint, its device and the controller's slot -- 64
+		 * unpluggings and there are no slots. So the controller is
+		 * asked to stop each endpoint in use, which completes what is
+		 * pending with an error. (9front's epstop. A DWC OTG's pending
+		 * transfer fails by itself when the device stops answering,
+		 * and it has no such hook.)
+		 */
+		if(ep->hp->epstop != nil)
+			for(i = 0; i < nelem(ep->dev->eps); i++){
+				Ep *e = ep->dev->eps[i];
+				if(e != nil && e->inuse && !waserror()){
+					ep->hp->epstop(e);
+					poperror();
+				}
+			}
 		/* Release file system ref. for its endpoints */
 		for(i = 0; i < nelem(ep->dev->eps); i++)
 			putep(ep->dev->eps[i]);

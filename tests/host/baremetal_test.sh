@@ -1117,9 +1117,23 @@ try:
         time.sleep(0.2)
     time.sleep(1.5)
     for c in cmds:
+        # "@N command" is given N seconds before the next line is typed,
+        # for a command that takes longer than the usual one
+        pause = 1.0
+        if c.startswith("@"):
+            n, c = c[1:].split(" ", 1)
+            pause = float(n)
         p.stdin.write(c.encode() + b"\r")
         p.stdin.flush()
-        time.sleep(1.0)
+        time.sleep(pause)
+        # and then until the console has been quiet for half a second (eight
+        # at most): the next line is not typed into the middle of this one's
+        # output, however slowly the host is running the machine
+        quiet = time.time(); last = len(buf); limit = time.time() + 8
+        while time.time() - quiet < 0.5 and time.time() < limit:
+            time.sleep(0.1)
+            if len(buf) != last:
+                last = len(buf); quiet = time.time()
     p.stdin.write(b"echo dRaInEd\r")
     p.stdin.flush()
     deadline = time.time() + 30
@@ -2371,16 +2385,14 @@ PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
         'ls /dev/eia0 /dev/eia0ctl /dev/eia0status /dev/eia1 /dev/eia1ctl /dev/eia1status' \
         'cat /dev/eia1status' \
         'cat /dev/eia0status' \
-        'sleep 40 <> /dev/eia0 &' \
+        'sleep 120 <> /dev/eia0 &' \
         'sleep 1' \
         'echo b921600 > /dev/eia0ctl' \
         'echo m1 > /dev/eia0ctl' \
         'cat /dev/eia0status' \
         'echo zzz > /dev/eia0ctl' \
-        'echo -n PL011-LOOPBACK-42 > /dev/eia0' \
-        'read 100 < /dev/eia0' \
-        'echo -n second-frame > /dev/eia0' \
-        'read 100 < /dev/eia0' \
+        '@7 echo -n PL011-LOOPBACK-42 > /dev/eia0; sleep 3; echo; {for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 {read 1}} < /dev/eia0; echo' \
+        '@7 echo -n second-frame > /dev/eia0; sleep 3; echo; {for i in 1 2 3 4 5 6 7 8 9 10 11 12 {read 1}} < /dev/eia0; echo' \
         'cat /dev/eia0status' \
         "echo $LONGLINE")"
 PLOUT="$(tr -d '\r' <<<"$PLOUT")"
@@ -2388,26 +2400,44 @@ PLOUT="$(tr -d '\r' <<<"$PLOUT")"
 
 OUT_SAVED="$OUT"; OUT="$PLOUT"
 check "/dev/eia1status"                 "#t binds at /dev: eia0 (PL011) and eia1 (mini-UART) with ctl and status files"
-if grep -A1 'cat /dev/eia1status' <<<"$PLOUT" | grep -q '^b115200 c0 d0 e0 l8 m0 pn r1 s1'; then
+# The three status lines asserted here differ from one another (r1; r0;
+# b921600 m1), so each is looked for wherever it is. They used to be
+# required on the line after the command that asked for them, and on a
+# busy host the next command's echo can get there first.
+if grep -q '^b115200 c0 d0 e0 l8 m0 pn r1 s1' <<<"$PLOUT"; then
     pass "eia1status describes the console: 115200 8n1, no flow control"
 else
     fail "eia1status did not read back as the console's settings"
 fi
-if grep -A1 'cat /dev/eia0status' <<<"$PLOUT" | grep -q '^b115200 c0 d0 e0 l8 m0 pn r0 s1'; then
+if grep -q '^b115200 c0 d0 e0 l8 m0 pn r0 s1' <<<"$PLOUT"; then
     pass "eia0status reads before the port is ever opened: 115200 8n1, nothing asserted"
 else
     fail "eia0status did not read back sensibly before the first open"
 fi
 check "clock(default)"                  "the PL011 disbelieved QEMU's 3MHz UART clock and used the firmware default (48MHz)"
-if grep -A1 'cat /dev/eia0status' <<<"$PLOUT" | tail -n +3 | grep -q '^b921600 c0 d0 e0 l8 m1 pn r1 s1'; then
+if grep -q '^b921600 c0 d0 e0 l8 m1 pn r1 s1' <<<"$PLOUT"; then
     pass "eia0ctl took b921600 and m1: baud and hardware flow control are set through the file"
 else
     fail "eia0ctl's b921600/m1 did not show in eia0status"
 fi
 check "bad arg"                         "an unknown ctl verb is refused with an error, not swallowed"
-# read prints the bytes with no newline, so the prompt and the next typed
-# command follow on the same line; the output is the copy at column 0,
-# the typed command is the one after the prompt.
+# Each round trip is ONE command line: write, wait for the echo to be
+# back and staged, print a newline, read, print a newline. It used to be
+# a write typed at one second and a read typed at the next, which left
+# two things to the pace of whatever machine ran it. The reply might
+# not be back when the read began, and the read's output might land in
+# the middle of the next line being typed rather than at column 0. On
+# a CI runner it did: every byte made the trip (rx(29) tx(29), and the
+# peer saw both frames) and the check still failed, with the second
+# frame staged and never read -- staged(29) read(17) qlen(12).
+#
+# And each frame is read by COUNT, a byte at a time (read 1, as many
+# times as the frame is long: dd is not in the image), not with one read.
+# A read of the device returns one staging pass's worth, which is what
+# a serial line owes its reader and no more; on a busy host the echo
+# comes back in pieces (a transcript under load: "PL011-LOOPBACK", then
+# "-42" to the read that was meant for the second frame), and "one read
+# is one frame" was the test's assumption, never the driver's promise.
 if grep -q '^PL011-LOOPBACK-42' <<<"$PLOUT"; then
     pass "bytes written to /dev/eia0 came back through the PL011's receive interrupt"
 else

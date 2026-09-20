@@ -35,6 +35,25 @@ lock(Lock *l)
 		return;
 	}
 
+	/*
+	 * Counted BEFORE the lock is tried for, and that order is the
+	 * point: hzclock() does not preempt a proc whose nlocks is
+	 * non-zero, so there is no instant at which this proc holds the
+	 * lock and can be taken off its core.
+	 *
+	 * There were two. After _tas() succeeds the holder is still at its
+	 * ordinary priority, with l->pc still zero, until the three stores
+	 * below; and in unlock(), between "l->pc = 0" and "l->key = 0". A
+	 * tick in either leaves "key 0x1 held by pc 0x0" -- a lock held by
+	 * a proc that is not running. The yield below lets a spinner wait
+	 * that out, but only where a reschedule is legal, and usbdwc's
+	 * chanwait() calls tsleep() at splhi: two such spinners, ether0tx
+	 * and ether0rx, spun on talarm.l with interrupts off on the core
+	 * its preempted holder had to come back to (#622's samecore), a
+	 * hundred million times, five hours into the pre-release soak
+	 * (#681). Plan 9 has the same rule and the same counter.
+	 */
+	up->nlocks++;
 	for(i=0; ; i++) {
 		if(_tas(&l->key) == 0)
 			break;
@@ -73,7 +92,9 @@ lock(Lock *l)
 		 */
 		if(up->state == Running && islo() && (conf.nmach == 1 || (i & 1023) == 1023)) {
 			up->pc = pc;
+			up->nlocks--;		/* holding nothing yet: this is a voluntary yield */
 			sched();
+			up->nlocks++;
 		}
 	}
 	l->pri = up->pri;
@@ -89,6 +110,8 @@ ilock(Lock *l)
 
 	pc = getcallerpc(&l);
 	x = splhi();
+	if(up)
+		up->nlocks++;		/* interrupts are off already; counted so the books balance in iunlock */
 	for(;;) {
 		if(_tas(&l->key) == 0) {
 			l->sr = x;
@@ -121,8 +144,13 @@ ilock(Lock *l)
 int
 canlock(Lock *l)
 {
-	if(_tas(&l->key))
+	if(up)
+		up->nlocks++;
+	if(_tas(&l->key)){
+		if(up)
+			up->nlocks--;
 		return 0;
+	}
 	if(up){
 		l->pri = up->pri;
 		up->pri = PriLock;
@@ -197,8 +225,20 @@ unlock(Lock *l)
 		 * which point the guard word finally reports a corrupt
 		 * process on a stack that has nothing to do with the driver.
 		 */
-		if(up->state == Running && anyhigher() && islo())
+		/*
+		 * The count comes down only now, with the lock free. If a
+		 * tick came due while it was up, hzclock() left a note
+		 * instead of preempting; pay it here, on the same terms as
+		 * the courtesy above -- a Running proc with interrupts on.
+		 * (In an interrupt handler islo() is false, so checkalarms'
+		 * canlock/unlock from the clock never reschedules from here.)
+		 */
+		if(up->nlocks > 0)
+			up->nlocks--;
+		if(up->state == Running && islo() && (anyhigher() || up->nlocks == 0 && up->delaysched)){
+			up->delaysched = 0;
 			sched();
+		}
 	}
 }
 
@@ -230,5 +270,7 @@ iunlock(Lock *l)
 	 */
 	coherence();
 	l->key = 0;
+	if(up && up->nlocks > 0)
+		up->nlocks--;
 	splxpc(sr);
 }

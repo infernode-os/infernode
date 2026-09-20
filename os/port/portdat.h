@@ -551,7 +551,8 @@ struct Proc
 	Mach*		mp;		/* machine this process last ran on */
 	Mach*		wired;		/* non-nil: only this core may run it */
 	ulong		movetime;	/* next time process should switch processors */
-	ulong		delaysched;
+	int		nlocks;		/* spin locks held (or being taken): not preempted while non-zero */
+	ulong		delaysched;	/* a preemption came due while nlocks was non-zero; unlock() pays it */
 	int			preempted;	/* process yielding in interrupt */
 	int			samecore;	/* switched out while Running: resume on the same core (see mayrun) */
 	ulong		qpc;		/* last call that blocked in qlock */

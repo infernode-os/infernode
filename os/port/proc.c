@@ -557,6 +557,7 @@ newproc(void)
 				 * no core will ever agree to run */
 	p->movetime = 0;
 	p->delaysched = 0;
+	p->nlocks = 0;
 	p->edf = nil;
 
 	/*

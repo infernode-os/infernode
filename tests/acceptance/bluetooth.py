@@ -61,8 +61,18 @@ def main():
     print("== GAP")
     rc, out = run(["hcitool", "-i", a.hci, "scan", "--length=8"], timeout=40)
     b.check(bd in out.lower(), "GAP/DISC/GENM general discoverable: found by inquiry", out.strip()[-120:])
-    rc, out = run(["hcitool", "-i", a.hci, "name", bd], timeout=30)
-    b.check(rc == 0 and out.strip() != "", "GAP/IDLE/NAMP name discovery: remote name is %r" % out.strip())
+    # Up to three requests. A remote name request issued the instant an
+    # eight-second inquiry ends sometimes comes back empty from BlueZ with
+    # the board answering every one asked a moment later (seen once against
+    # the release kernel: '' here, 'infernode' three times of three by hand).
+    # What is being tested is that the board gives its name, not that the
+    # tester's first page after an inquiry lands.
+    for attempt in (1, 2, 3):
+        rc, out = run(["hcitool", "-i", a.hci, "name", bd], timeout=30)
+        if rc == 0 and out.strip() != "":
+            break
+        time.sleep(2)
+    b.check(rc == 0 and out.strip() != "", "GAP/IDLE/NAMP name discovery: remote name is %r (request %d)" % (out.strip(), attempt))
 
     print("== L2CAP")
     # raw L2CAP sockets want CAP_NET_RAW; without it these two are skipped, not failed

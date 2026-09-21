@@ -156,7 +156,7 @@ Contributions welcome — security audits, 9P integrations, bug fixes, and docum
 
 ## Sponsor
 
-InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/sponsors/infernode-os) pays for the things that keep releases trustworthy and move the harder work forward: code signing and notarization, ARM64 and macOS CI hardware, external security review of the Veltro isolation boundary and the wallet signing path, the bare-metal Raspberry Pi port, compliance evidence (FIPS 140-3 and Common Criteria readiness, SP 800-53/171 mapping), and maintainer time.
+InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/sponsors/infernode-os) pays for the things that keep releases trustworthy and move the harder work forward: code signing and notarization, ARM64 and macOS CI hardware, external security review of the Veltro isolation boundary and the wallet signing path, bare-metal port work, compliance evidence (FIPS 140-3 and Common Criteria readiness, SP 800-53/171 mapping), and maintainer time.
 
 ## About
 

@@ -106,11 +106,41 @@ Run with `emu -c1` to enable the JIT (Dis bytecode → native code at module loa
 
 Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Performance envelope: [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md).
 
+### Bare metal — InferNode as the kernel
+
+InferNode also runs *native*, with nothing underneath it: the kernel boots the
+board, brings up the hardware, starts the Dis VM, and runs the same bytecode the
+hosted emulator runs — the same shell, the same Tk, the same Lucifer desktop. A
+recovery root (shell, file utilities, `dossrv`, the USB and Ethernet drivers) is
+compiled into the kernel image; the rest of userspace comes off the SD card at
+boot. The machine decides how to boot by one question — is there a screen? With
+one it goes on to the desktop; without one it boots headless to a shell on the
+serial console, with the full namespace and the network up.
+
+| Board | State |
+|-------|-------|
+| **Raspberry Pi 3B+** (`os/bcm2837`) | Runs on the real board, and on QEMU's `raspi3b`. Ethernet (LAN7515 over USB), Wi-Fi (CYW43455), Bluetooth, SD card, HDMI/DSI, USB keyboard and mouse, touch, GPIO, audio, A/B kernel update, boot watchdog. |
+| **QEMU `virt`** (`os/virt`) | GICv2 and virtio (net, blk, keyboard, tablet, ramfb) — the kernel anywhere QEMU runs, which is what CI boots. |
+| **Raspberry Pi 4B** (`os/bcm2711`) | Boots to the desktop under QEMU's `raspi4b`; has never run on a board. [os/bcm2711/README.md](os/bcm2711/README.md) says what that does and does not establish. |
+
+Building and booting it is one command — the test harness, which is the only
+supported way to build the kernel (it needs `clang`, `ld.lld`, `llvm-objcopy`,
+`python3`, `qemu-system-aarch64` and a built `dis/`):
+
+```bash
+BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
+```
+
+CI builds, boots and tests both machines on every pull request that touches the
+kernel. Full manual — running it, the card image, the QEMU flags that fail
+silently, what controls it: [docs/BAREMETAL.md](docs/BAREMETAL.md).
+
 ## Documentation
 
 - [QUICKSTART.md](QUICKSTART.md) — running in under a minute
 - [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — namespaces, devices, host integration
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system architecture
+- [docs/BAREMETAL.md](docs/BAREMETAL.md) — running InferNode as the operating system, on Raspberry Pi and QEMU
 - [docs/XENITH.md](docs/XENITH.md) — AI-native text environment
 - [docs/matrix-architecture.md](docs/matrix-architecture.md) — Matrix compositional module runtime
 - [docs/WALLET-AND-PAYMENTS.md](docs/WALLET-AND-PAYMENTS.md) — wallet, x402, secstore, key management
@@ -140,7 +170,7 @@ InferNode is a late arrival in a long lineage.
 - **Inferno's originators at Bell Labs** — Sean Dorward, Rob Pike, David Presotto, Dennis Ritchie, Howard Trickey, and Phil Winterbottom, for Inferno, Limbo, Dis, and Styx/9P. Their papers ship in this tree ([doc/bltj.ms](doc/bltj.ms), [doc/dis.ms](doc/dis.ms), [doc/limbo/limbo.ms](doc/limbo/limbo.ms)).
 - **Caerwyn Jones** — [Acme SAC](https://github.com/caerwynj/acme-sac), Acme carried out of Plan 9 as a self-contained Inferno system rather than an app hosted on someone else's desktop. That framing is the major influence on [Xenith](docs/XENITH.md).
 - **The Hellaphone crew** — John Floren, Joel Armstrong, and colleagues at Sandia National Laboratories, who ran Inferno on Android in place of the Java runtime and made a cellular radio a directory of text files. `emu/port/devphone.c` mirrors their `/phone` interface deliberately, their RIL bridge is still the reference for `emu/Android/phonebridge.c`, and the mobile target carries their name ([docs/HELLAPHONE.md](docs/HELLAPHONE.md), [Plan9-Archive/hellaphone](https://github.com/Plan9-Archive/hellaphone)).
-- **The bare-metal Pi lineage** — **Richard Miller**, whose Plan 9 Raspberry Pi kernels nearly all Pi work in this world starts from (and, here, the Inferno RISC-V toolchain); **LynxLine Labs** of Kyiv, who did the [original native Inferno port to the Pi](https://lynxline.com/posts/labs-portintg-inferno-os-to-raspberry-pi/) in 2014 and documented it lab by lab ([github.com/yshurik](https://github.com/yshurik/inferno-rpi)); and **David Boddie**, who carries the native ports forward today ([Inferno Ports](https://dboddie.github.io/inferno-ports/)).
+- **The bare-metal Pi lineage** — **Richard Miller**, whose Plan 9 Raspberry Pi kernels nearly all Pi work in this world starts from (and, here, the Inferno RISC-V toolchain); **LynxLine Labs** of Kyiv, who did the [original native Inferno port to the Pi](https://lynxline.com/posts/labs-portintg-inferno-os-to-raspberry-pi/) in 2014 and documented it lab by lab ([github.com/yshurik](https://github.com/yshurik/inferno-rpi)); and **David Boddie**, who carries the native ports forward today ([Inferno Ports](https://dboddie.github.io/inferno-ports/)). And **the 9front project**, whose MIT-licensed `bcm` kernel this port reads from directly: `os/bcm/uartmini.c` is 9front's mini-UART, the console the machine boots on; `os/bcm/uartpl011.c` takes its structure from 9front's PL011, which is how the port speaks H4 to the Bluetooth radio; `os/bcm/sdhost.c` has its register semantics cross-checked against 9front's; and 9front's `egpset()` is the model for the firmware GPIO expander in `os/bcm/devgpio.c`.
 
 Third-party components (FreeType, SDL3, the Bigelow & Holmes fonts, libmp/libsec under the Lucent Public Licence) are credited in [NOTICE](NOTICE).
 

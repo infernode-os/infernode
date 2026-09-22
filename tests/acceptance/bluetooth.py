@@ -61,8 +61,18 @@ def main():
     print("== GAP")
     rc, out = run(["hcitool", "-i", a.hci, "scan", "--length=8"], timeout=40)
     b.check(bd in out.lower(), "GAP/DISC/GENM general discoverable: found by inquiry", out.strip()[-120:])
-    rc, out = run(["hcitool", "-i", a.hci, "name", bd], timeout=30)
-    b.check(rc == 0 and out.strip() != "", "GAP/IDLE/NAMP name discovery: remote name is %r" % out.strip())
+    # Up to three requests. A remote name request issued the instant an
+    # eight-second inquiry ends sometimes comes back empty from BlueZ with
+    # the board answering every one asked a moment later (seen once against
+    # the release kernel: '' here, 'infernode' three times of three by hand).
+    # What is being tested is that the board gives its name, not that the
+    # tester's first page after an inquiry lands.
+    for attempt in (1, 2, 3):
+        rc, out = run(["hcitool", "-i", a.hci, "name", bd], timeout=30)
+        if rc == 0 and out.strip() != "":
+            break
+        time.sleep(2)
+    b.check(rc == 0 and out.strip() != "", "GAP/IDLE/NAMP name discovery: remote name is %r (request %d)" % (out.strip(), attempt))
 
     print("== L2CAP")
     # raw L2CAP sockets want CAP_NET_RAW; without it these two are skipped, not failed
@@ -184,7 +194,20 @@ def main():
             break
         time.sleep(1)
     m = re.search(r"links (\d+)", st)
-    b.check(m is not None and int(m.group(1)) == 0, "no links left open after the run", st.strip()[:100])
+    if m is not None and int(m.group(1)) != 0:
+        # A link the peer made is the peer's to end (bt9p's idlelinks says why),
+        # and BlueZ sometimes keeps its ACL up long after its last channel closed:
+        # seen held for minutes after the dedicated-bonding case, with no
+        # conversation on the board. That is the tester lingering, not the board
+        # leaking. Hang up from here, and then the board must let go.
+        run("bluetoothctl disconnect %s" % a.bdaddr, timeout=20)
+        for _ in range(10):
+            time.sleep(1)
+            st = b.sh("cat /net/bt/status", wait=1.0)
+            m = re.search(r"links (\d+)", st)
+            if m is not None and int(m.group(1)) == 0:
+                break
+    b.check(m is not None and int(m.group(1)) == 0, "no links left open after the run (the tester's own hung up if BlueZ kept it)", st.strip()[-60:])
     m = re.search(r"conversations (\d+)", st)
     b.check(m is not None and int(m.group(1)) <= 2, "no conversations leaked by the connection storms (#632): %s" % (m.group(1) if m else "?"))
     text = b.serial_since(mark)

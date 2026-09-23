@@ -52,8 +52,12 @@ surprise on this port or would have been on the next.
   driver (2.2)?
 - **Pins shared between controllers.** The 3B+ has two SD controllers and
   one can reach the radio's pins, which decided where the card went.
-- **What the boot firmware leaves running.** Clocks, pin mux and a
-  framebuffer inherited from firmware are state nobody wrote down.
+- **What the boot firmware leaves running, and what it leaves for you
+  to finish.** Clocks, pin mux and a framebuffer inherited from firmware
+  are state nobody wrote down -- and some of it is deliberately
+  half-done, waiting for the operating system. The Pi's firmware boots
+  the ARM cores at their idle clock and expects the OS to ask for the
+  rated one; nothing tells you (section 2.9).
 - **What the emulator models.** QEMU carried this port a long way and
   was wrong about interrupts, timing and every USB corner that mattered.
   List what it cannot tell you (README, "QEMU vs real hardware").
@@ -162,6 +166,26 @@ source loop, and `freetypecode()` having been stubbed out during the #635
 hunt so that JIT-compiled type code was never freed. Every diagnostic
 disablement needs an issue that outlives the hunt it served.
 
+### 2.9 The firmware left the clock for you, and nothing said so
+
+The 3B+ port ran every soak, battery and benchmark of its first months
+at 600 MHz on a 1400 MHz part. The Pi firmware brings the ARM cores up
+at `arm_freq_min` and leaves raising them to the operating system's
+cpufreq driver, which asks through the mailbox; Linux does within a
+second of booting. Inferno predates the idea, this port never touched
+the clock, and there was no way to notice from inside: a machine at
+600 MHz looks exactly like a machine at 1400 MHz that is a bit slow,
+and the only reference was a different chip.
+
+It was found the day the same suites ran under Raspberry Pi OS on the
+same board: every compute-bound benchmark was 2.31-2.34x slower on the
+kernel, a constant, and 1400/600 is 2.33 (#691). One mailbox call at
+boot fixed it, and the boot line now prints the clock before and after
+so the fact is never hidden again. The Pi 4 has the same contract and
+the same fix, in `os/bcm`; another board family will have a different
+one, and the only way to learn it is to measure against a known OS on
+the same silicon on day one.
+
 ## 3. A case study: the Ethernet receive path on the 3B+ (#633, #610)
 
 This section is specific to one board, and is kept in full for two
@@ -241,6 +265,10 @@ Build these early on a new board. Each found something nothing else did.
   (`tests/acceptance`), following a published method where one exists
   (RFC 2544 for Ethernet). A battery line is SKIP with a reason, never a
   silent pass.
+- **A known operating system on the same board**, on a second card
+  (`docs/arm64-jit/BENCHMARK-arm64-bcm2837.md`). The one instrument that
+  can tell the silicon from the kernel: it found the clock (2.9) in the
+  first table, and gave the JIT's call path a number to answer to.
 
 ## 5. The test rig lies too
 

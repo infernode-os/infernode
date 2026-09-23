@@ -2,6 +2,94 @@
 
 All notable changes to InferNode are documented in this file.
 
+## [0.5.0] - 2026-09-23
+
+InferNode runs on bare metal. This release adds a native kernel for the
+Raspberry Pi 3B+, brought up on the hardware and soaked for 48 hours
+before being cut, and the fixes that work found in the shared code:
+in the Dis VM, both JITs and the hosted emulator.
+
+### Bare metal
+
+- **A native kernel** (`os/`): Inferno's kernel structure, `os/port` and
+  `os/ip` shared, `os/arm64` for the architecture, `os/bcm` and
+  `os/bcm2837` for the Raspberry Pi 3B+. It boots to the Lucifer desktop
+  from the SD card: USB keyboard and mouse, HDMI, the card as a
+  filesystem (`dossrv`), the audio jack as `/dev/audio` (#636) with a
+  low-latency mode (#653), GPIO pins as files with edge events and
+  interrupt timestamps (#651), Wi-Fi (WPA2 and DHCP), Bluetooth (`bt9p`:
+  HCI, L2CAP, SDP, RFCOMM, HID), and the on-board Ethernet.
+- **Ethernet at 160 Mbit/s in and 148 out** on the 3B+'s LAN7515 behind
+  its USB 2 controller, from 7-32 before (#633): a bulk IN kept armed
+  across NAKs, a cross-core race on the controller's interrupt mask, a
+  cache invalidate after receive DMA, 802.3x pause frames, and
+  receiver-side selective acknowledgement (RFC 2018) in the TCP stack.
+  One data path, in the kernel; the earlier 9P path is gone.
+- **Two more machines under QEMU**: the `virt` machine (#656, #657) and
+  the Raspberry Pi 4 (#662-#666). The Pi 4 port has never run on a
+  board and says so; both are built and booted in CI.
+- **A lock loop found by the soak, and fixed** (#681, #682): `tsleep()`
+  took the timer-sleep lock with interrupts on while the USB driver spun
+  for it with them off; a holder preempted at the wrong instant pinned
+  the spinner's core for ever. Reproduced in 40-125 s under a sleep
+  storm, then 48 hours clean. Also from the board: a process preempted
+  between two uses of a register resumed on another core (#622), the
+  JIT's module-pointer sentinel taken for code (#635), type code never
+  freed on module unload (#641), the entropy source padding a short
+  read with zeros (#658), a software cursor that left a second arrow
+  behind (#654), and "clone failed" now says why (#650).
+
+### Dis VM and JITs
+
+- **A Limbo `int` is 32 bits on a 64-bit word**, in the interpreter and
+  both JITs. `16r7FFFFFFF + 1` was positive, a `-1` assembled from bytes
+  did not compare equal to `-1`, and shifts did not sign-extend; every
+  int result is now stored sign-extended, and a string converted to an
+  int saturates at the int's own range (#683) instead of carrying a
+  64-bit `long` into the slot.
+- **Hosted arm64 no longer leaks every type's compiled code** (#646,
+  #649): about 52 KB per command run, 52 MB per thousand, now zero. The
+  amd64 JIT stored `movw` results sign-extended and truncated 64-bit
+  words; fixed and verified on x86-64.
+- `memfs`: a read past the end of a file returns nothing instead of
+  killing the server (found by the soak, #641).
+
+### Tests
+
+- `tests/host/baremetal_test.sh`: 355 checks across the three machines
+  under QEMU, run by CI on every change.
+- `tests/acceptance/`: batteries run from a Linux tester against a
+  board -- Ethernet after RFC 2544, Bluetooth after the SIG PTS cases,
+  GPIO on a loopback jig, and the card's contents against the build --
+  with the soak and bench tools beside them.
+- `tests/intsem_test.b` pins the 32-bit int semantics under both
+  engines; `tests/host/arm64_jit_typecode_leak_test.sh` pins the leak.
+
+### Documentation
+
+- `docs/BAREMETAL-PORTING-LESSONS.md`, written for any port; the
+  bare-metal manual and board contract; `os/bcm2837/README.md`, the
+  port's working notes; man pages for the native devices, `osinit(8)`
+  and `mkcard(10.1)`. 9front is credited for the drivers taken from it.
+
+### Known limitations
+
+- At gigabit, a 60 KB IP burst overruns the LAN7515's 12 KB FIFO unless
+  the switch honours pause; it passes at 100 Mb/s (#633).
+- Empty hub ports report phantom attaches under load (#644): noisy on
+  the console, harmless.
+- `dossrv` does not validate a long-name entry set on read, and a
+  create that fails part-way leaves slots behind (#673).
+- The Pi 4 port is QEMU-only.
+
+### Release artifacts
+
+`bcm2837-kernel.img` and a card image, built from this commit. The
+kernel is byte-identical to the one that ran the 48-hour soak
+(2026-09-21 13:13 to 09-23 13:59: 0 panics, 0 reboots, 290/290 inbound
+pushes at a mean 144.7 Mbit/s, batteries passed twice, no memory growth
+unaccounted for).
+
 ## [0.4.1] - 2026-09-17
 
 Security patch release. Three containment fixes from the external

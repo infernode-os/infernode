@@ -168,6 +168,7 @@ enum
 	Tagsettouchbuf	= 0x0004801F,	/* hand the firmware a buffer of ours instead */
 	Taggetclockrate	= 0x00030002,	/* a peripheral clock's actual rate */
 	Taggetmaxclockrate= 0x00030004,	/* the most the firmware will ever run it at */
+	Tagsetclockrate	= 0x00038002,	/* ask for a rate; the firmware answers with what it set */
 	Taggetgpiostate	= 0x00030041,	/* a pin on the firmware's GPIO expander (128+n) */
 	Tagsetgpiostate	= 0x00038041,
 	Taggetgpioconfig= 0x00030043,	/* its direction, polarity, termination */
@@ -195,6 +196,7 @@ enum
 
 	Clkemmc		= 1,		/* clock id for the Arasan SD controller */
 	Clkuart		= 2,		/* the PL011's reference (init_uart_clock) */
+	Clkarm		= 3,		/* the ARM cores: the firmware boots them at arm_freq_min and waits to be asked for more */
 	Clkcore		= 4,		/* the VPU core clock; SDHOST and the mini-UART divide it */
 
 	Tagend		= 0x00000000,

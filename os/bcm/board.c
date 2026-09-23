@@ -54,6 +54,44 @@ boardprobe(void)
 		uartputx(v[0]);
 	}
 	uartputstr("\n");
+	boardclock();
+}
+
+/*
+ * Run the ARM cores at the speed the board is rated for.
+ *
+ * The firmware brings the cores up at arm_freq_min -- 600 MHz on a
+ * 3B+ against a rated 1400 -- and leaves raising them to the operating
+ * system's cpufreq driver, which asks through this same mailbox tag.
+ * Linux does that within a second of booting. This kernel never did,
+ * and ran everything at the idle clock: the first JIT benchmark on the
+ * board came out at half the speed of the hosted emulator under Linux
+ * on the same chip (77.2 s against 37.3 s for jitbench v1), and the
+ * clock ratio, 1400/600, is 2.3.
+ *
+ * Ask for the maximum the firmware will give. It answers with what it
+ * set, so the line printed here is the evidence: three numbers, and
+ * the last one is what the machine runs at from here on. With
+ * force_turbo=1 in config.txt the firmware has already done this and
+ * the numbers agree.
+ */
+void
+boardclock(void)
+{
+	u32int was, max, now;
+
+	was = mboxclockrate(Clkarm);
+	max = mboxmaxclockrate(Clkarm);
+	now = was;
+	if(max > was)
+		now = mboxsetclockrate(Clkarm, max);
+	uartputstr("mbox: ARM clock ");
+	uartputd(was/1000000);
+	uartputstr(" MHz, max ");
+	uartputd(max/1000000);
+	uartputstr(", now ");
+	uartputd(now/1000000);
+	uartputstr(" MHz\n");
 }
 
 /*

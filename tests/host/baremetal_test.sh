@@ -2394,7 +2394,8 @@ PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
         '@7 echo -n PL011-LOOPBACK-42 > /dev/eia0; sleep 3; echo; {for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 {read 1}} < /dev/eia0; echo' \
         '@7 echo -n second-frame > /dev/eia0; sleep 3; echo; {for i in 1 2 3 4 5 6 7 8 9 10 11 12 {read 1}} < /dev/eia0; echo' \
         'cat /dev/eia0status' \
-        "echo $LONGLINE")"
+        "echo $LONGLINE" \
+        'echo 0 > /dev/jit; /dis/echo.dis JIT-TO-INTERP-HANDOFF-OK; echo 1 > /dev/jit')"
 PLOUT="$(tr -d '\r' <<<"$PLOUT")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- #t session ---"; echo "$PLOUT"; }
 
@@ -2467,6 +2468,16 @@ if [[ "$(grep -c "$LONGLINE" <<<"$PLOUT")" -ge 2 ]]; then
     pass "a ${#LONGLINE}-byte line typed at the console arrived intact through the receive interrupt (echo and output)"
 else
     fail "the long line typed at the console did not come back whole (got $(grep -c "$LONGLINE" <<<"$PLOUT") copies, wanted 2)"
+fi
+# The JIT switched off at run time, then a module loaded interpreted and
+# called from the still-compiled shell. The arm64 JIT branched into that
+# module's bytecode as if it were code: a kernel panic on the board, found
+# by the benchmark's interpreter runs (#687). The kernel must print the
+# module's line, not reset.
+if [[ "$(grep -c '^JIT-TO-INTERP-HANDOFF-OK' <<<"$PLOUT")" -ge 1 ]]; then
+    pass "a compiled module calls an interpreted one: the JIT hands off to the interpreter instead of branching into bytecode (#687)"
+else
+    fail "no output from an interpreted module called after 'echo 0 > /dev/jit' (#687: the kernel panicked here before the fix)"
 fi
 OUT="$OUT_SAVED"
 

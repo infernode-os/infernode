@@ -24,11 +24,11 @@ Two benchmark suites measure JIT speedup: **v1** (6 compute-intensive benchmarks
 | AMD64 Windows | 19,115 ms | 1,437 ms | **13.3x** | 1,464 ms | 261 ms | **5.6x** |
 | ARM64 macOS | 16,697 ms | 1,735 ms | **9.6x** | 1,086 ms | 413 ms | **2.6x** |
 | ARM64 Linux | 38,320 ms | 4,615 ms | **8.3x** | 2,743 ms | 938 ms | **2.9x** |
-| ARM64 bare metal | 480,186 ms | 77,229 ms | **6.2x** | 30,969 ms | 14,572 ms | **2.1x** |
+| ARM64 bare metal | 273,572 ms | 38,618 ms | **7.1x** | 17,752 ms | 7,354 ms | **2.4x** |
 
 The AMD64 JIT achieves the highest speedup ratios (14.2x on v1) due to efficient x86-64 instruction encoding for the Dis VM's register-based bytecode. AMD64 Windows matches Linux within 3% on JIT absolute performance (1,437 ms vs 1,500 ms on v1) despite different ABIs and W^X mechanisms, confirming the Windows x64 ABI adaptation (callee-saved RSI/RDI, shadow space) introduces no measurable overhead. In absolute terms, AMD64 and Apple M4 JIT performance are comparable (~1,500 ms vs 1,735 ms on v1) despite different architectures. The Jetson Cortex-A78AE is roughly 2.5x slower in absolute terms but achieves similar JIT-over-interpreter ratios, confirming the ARM64 JIT generates efficient code on both microarchitectures.
 
-The bare-metal row is the same JIT in the native kernel on a Raspberry Pi 3B+, with no emulator and no host OS: `comp-arm64.c` built with `INFERNO_NATIVE`, taking executable memory from the kernel pool. The absolute numbers are those of a 1.4 GHz in-order Cortex-A53 -- 17x the Jetson's time on v1 against a 1.6x clock ratio -- and the per-category speedups (6-9x) have the same shape as the hosted ARM64 results, with one exception: deep recursion gains nothing from compilation on this core, and `Recursive fib` in v2 runs slower compiled than interpreted (0.75x; the Jetson shows the same shape at 1.3x). That is #689. What running without a host OS is worth has not been measured: it needs the hosted emulator on the same board, which has not been done.
+The bare-metal row is the same JIT in the native kernel on a Raspberry Pi 3B+, with no emulator and no host OS: `comp-arm64.c` built with `INFERNO_NATIVE`, taking executable memory from the kernel pool. Measured against the hosted Linux emulator on the *same board* (Raspberry Pi OS on a second card, same afternoon): on straight-line code bare metal costs a consistent 14-17% more (#695, unexplained), on anything that allocates frames it is far cheaper (the kernel's pool against the host's malloc), and the totals land within 4% of hosted on v1 and 33% faster on v2. Deep recursion gains little from compilation on this core (#689). The first run of these suites on the board was at 600 MHz -- the Pi firmware boots the cores at `arm_freq_min` and the kernel had never asked for more (#691); every compute-bound item was then exactly 1400/600 slower than hosted, which is how that was found. The per-platform file keeps both.
 
 The v1-to-v2 speedup reduction reflects benchmark composition: v2 includes function calls (recursive Fibonacci, mutual recursion) where the JIT must still pay runtime overhead for frame allocation, type checking, and garbage collector interaction. v1 is dominated by tight loops where eliminating interpreter dispatch yields the greatest gains.
 
@@ -36,12 +36,12 @@ The v1-to-v2 speedup reduction reflects benchmark composition: v2 includes funct
 
 | Benchmark | AMD64 JIT | AMD64 Interp | Speedup | M4 JIT | M4 Interp | Speedup | Jetson JIT | Jetson Interp | Speedup | Pi 3B+ JIT | Pi 3B+ Interp | Speedup |
 |-----------|-----------|-------------|---------|--------|-----------|---------|------------|---------------|---------|------------|---------------|---------|
-| Integer Arithmetic | 23 ms | 466 ms | 20.3x | 29 ms | 354 ms | 12.2x | 119 ms | 856 ms | 7.2x | 1,656 ms | 11,401 ms | 6.9x |
-| Array Access | 1,131 ms | 18,284 ms | 16.2x | 1,317 ms | 14,496 ms | 11.0x | 3,666 ms | 33,708 ms | 9.2x | 67,196 ms | 426,691 ms | 6.4x |
-| Function Calls | 1 ms | 20 ms | 20.0x | 1 ms | 18 ms | 18.0x | 4 ms | 38 ms | 9.5x | 62 ms | 495 ms | 8.0x |
-| Fibonacci | 243 ms | 777 ms | 3.2x | 220 ms | 786 ms | 3.6x | 633 ms | 1,671 ms | 2.6x | 5,021 ms | 15,475 ms | 3.1x |
-| Sieve | 5 ms | 74 ms | 14.8x | 5 ms | 51 ms | 10.2x | 16 ms | 136 ms | 8.5x | 257 ms | 1,587 ms | 6.2x |
-| Nested Loops | 65 ms | 1,152 ms | 17.7x | 54 ms | 990 ms | 18.3x | 169 ms | 1,911 ms | 11.3x | 3,036 ms | 24,536 ms | 8.1x |
+| Integer Arithmetic | 23 ms | 466 ms | 20.3x | 29 ms | 354 ms | 12.2x | 119 ms | 856 ms | 827 ms | 6,806 ms | 8.2x |
+| Array Access | 1,131 ms | 18,284 ms | 16.2x | 1,317 ms | 14,496 ms | 11.0x | 3,666 ms | 33,708 ms | 33,570 ms | 241,981 ms | 7.2x |
+| Function Calls | 1 ms | 20 ms | 20.0x | 1 ms | 18 ms | 18.0x | 4 ms | 38 ms | 31 ms | 288 ms | 9.3x |
+| Fibonacci | 243 ms | 777 ms | 3.2x | 220 ms | 786 ms | 3.6x | 633 ms | 1,671 ms | 2,511 ms | 8,950 ms | 3.6x |
+| Sieve | 5 ms | 74 ms | 14.8x | 5 ms | 51 ms | 10.2x | 16 ms | 136 ms | 134 ms | 967 ms | 7.2x |
+| Nested Loops | 65 ms | 1,152 ms | 17.7x | 54 ms | 990 ms | 18.3x | 169 ms | 1,911 ms | 1,517 ms | 14,580 ms | 9.6x |
 
 Fibonacci shows the lowest speedup across all platforms (2.6-3.6x) because recursive function calls involve frame allocation, module pointer validation, and type checking at each call site — operations the JIT cannot eliminate.
 
@@ -133,7 +133,7 @@ Limbo JIT reaches 69% of unoptimized C throughput on the Jetson — closer to na
 ## Methodology
 
 - **Protocol:** Best-of-N reported (N=3 or N=4 depending on suite) for v1/v2/cross-language. System idle during runs.
-- **JIT benchmarks:** `appl/cmd/jitbench.b` (v1, 6 benchmarks), `appl/cmd/jitbench2.b` (v2, 26 benchmarks). Run via `emu -c0` (interpreter) and `emu -c1` (JIT). On the bare-metal kernel there is no `emu`: the JIT is on by default and the interpreter is `echo 0 > /dev/jit` before the module loads; both suites ran from the card over the network console, the board otherwise idle at its login screen. Three JIT runs, one interpreter run (v1 interpreted takes eight minutes there).
+- **JIT benchmarks:** `appl/cmd/jitbench.b` (v1, 6 benchmarks), `appl/cmd/jitbench2.b` (v2, 26 benchmarks). Run via `emu -c0` (interpreter) and `emu -c1` (JIT). On the bare-metal kernel there is no `emu`: the JIT is on by default and the interpreter is `echo 0 > /dev/jit` before the module loads (#688 made that switch safe); both suites ran from the card over the network console, the board otherwise idle at its login screen, the ARM clock confirmed at 1400 MHz on the boot line (#691). Three JIT runs, one interpreter run.
 - **Cross-language:** `benchmarks/run-comparison.sh`. Same algorithms with matched parameters and 64-bit integers. C compiled with `cc` (Apple Clang on macOS, GCC on Linux). Go, Java HotSpot (where available), CPython. Run on Apple M4 and Jetson AGX Orin.
 - **Correctness:** 181/181 JIT correctness tests pass on Linux and macOS; 216/216 on Windows. Benchmark result values match between JIT and interpreter on all platforms.
 - **Variation:** JIT run-to-run variance <5% on macOS and Windows, <1% on Linux. Interpreter variance <5% on all platforms. Windows system timer resolution (~15.6 ms) limits per-benchmark precision for fast tests; totals and longer benchmarks are unaffected.

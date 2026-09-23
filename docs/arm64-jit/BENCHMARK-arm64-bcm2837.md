@@ -8,8 +8,6 @@
 
 No emulator: the JIT (`libinterp/comp-arm64.c`, `INFERNO_NATIVE`) takes executable memory from the kernel pool and flushes the icache itself. The interpreter is the same kernel with `echo 0 > /dev/jit` before the module loads. Timings are the benchmark's own `sys->millisec()`; the board idle at its login screen, gigabit link up. Three JIT runs (within 0.5%), one interpreter run.
 
-**The clock.** The first run of these suites on the board, earlier the same day, was made at 600 MHz: the Pi firmware boots the ARM cores at `arm_freq_min` and waits for the operating system to ask for more, and until #691 this kernel never asked. Those numbers are kept below as the 600 MHz rows, because they are how the fault was found -- against the hosted emulator on the same board they were a constant 2.31–2.34x slower on every compute-bound item, which is 1400/600.
-
 ---
 
 ### jitbench v1 — Totals
@@ -23,15 +21,15 @@ No emulator: the JIT (`libinterp/comp-arm64.c`, `INFERNO_NATIVE`) takes executab
 
 ### jitbench v1 — Per-benchmark breakdown (best of 3 JIT, one interpreter run)
 
-| Benchmark | Interp (ms) | JIT (ms) | Speedup | at 600 MHz: Interp / JIT |
-|-----------|-------------|----------|---------|---------------------------|
-| Integer Arithmetic | 6,806 | 827 | 8.23x | 11,401 / 1,656 |
-| Loop with Array Access | 241,981 | 33,570 | 7.21x | 426,691 / 67,196 |
-| Function Calls | 288 | 31 | 9.29x | 495 / 62 |
-| Fibonacci (recursive) | 8,950 | 2,511 | 3.56x | 15,475 / 5,021 |
-| Sieve of Eratosthenes | 967 | 134 | 7.22x | 1,587 / 257 |
-| Nested Loops | 14,580 | 1,517 | 9.61x | 24,536 / 3,036 |
-| **Total** | **273,572** | **38,618** | **7.08x** | 480,186 / 77,229 |
+| Benchmark | Interp (ms) | JIT (ms) | Speedup |
+|-----------|-------------|----------|---------|
+| Integer Arithmetic | 6,806 | 827 | 8.23x |
+| Loop with Array Access | 241,981 | 33,570 | 7.21x |
+| Function Calls | 288 | 31 | 9.29x |
+| Fibonacci (recursive) | 8,950 | 2,511 | 3.56x |
+| Sieve of Eratosthenes | 967 | 134 | 7.22x |
+| Nested Loops | 14,580 | 1,517 | 9.61x |
+| **Total** | **273,572** | **38,618** | **7.08x** |
 
 ### jitbench v2 — Totals
 
@@ -87,11 +85,11 @@ No emulator: the JIT (`libinterp/comp-arm64.c`, `INFERNO_NATIVE`) takes executab
 | 9a. int<->big | 306 | 31 | 9.87x |
 | 9b. int<->byte | 316 | 28 | 11.29x |
 
-### Bare metal against the hosted emulator, same board, same clock
+### Interpreter vs JIT vs Emu, same Raspberry Pi 3B+
 
-The hosted numbers are the Linux arm64 emulator (headless build of the same master) under Raspberry Pi OS Trixie on the same Pi 3B+, run the same afternoon from a second SD card. Best of 3 JIT, one interpreter run, ms.
+**Emu** is the hosted InferNode emulator (`emu/Linux/o.emu`, a headless Linux arm64 build of the same master commit) running under Raspberry Pi OS Lite (Trixie, 2026-09-15, 64-bit, kernel 6.18) on the same board from a second SD card, the same afternoon, its cpufreq governor at 1400 MHz throughout (sampled). Same two suites, same protocol: best of 3 JIT, one interpreter run, ms. "Bare" is the native kernel: no host OS, the Dis VM in the kernel.
 
-| | bare interp | bare JIT | speedup | hosted interp | hosted JIT | speedup | bare ÷ hosted (JIT) |
+| | bare interp | bare JIT | speedup | emu interp | emu JIT | speedup | bare ÷ emu (JIT) |
 |---|---|---|---|---|---|---|---|
 | Integer Arithmetic | 6,806 | 827 | 8.2x | 5,401 | 715 | 7.6x | 1.16 |
 | Loop with Array Access | 241,981 | 33,570 | 7.2x | 192,467 | 29,043 | 6.6x | 1.16 |
@@ -119,4 +117,4 @@ Against the Jetson AGX Orin's hosted JIT the totals are 8.4x (v1) and 7.8x (v2) 
 
 ### Provenance
 
-Raw output for every run named here -- three JIT and one interpreter run of each suite at 1400 MHz and at 600 MHz, and the hosted runs -- is kept with the bench evidence (`infernode-bench/benchmarks/2026-09-23-*.txt` on the bench store). The 1400 MHz kernel is the one whose 48-hour soak began the same evening, after the batteries and a ten-minute storm passed on it.
+Raw output for every run named here -- three JIT and one interpreter run of each suite, bare and emu -- is kept with the bench evidence (`infernode-bench/benchmarks/2026-09-23-*.txt` on the bench store). The kernel is the one whose 48-hour soak began the same evening, after the batteries and a ten-minute storm passed on it.

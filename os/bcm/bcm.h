@@ -49,6 +49,8 @@ enum
 	Mboxcmdlinemax	= 1024,	/* the GET_COMMAND_LINE value buffer, in bytes */
 };
 int	mboxprop(u32int, u32int*, int, int);
+u32int	mboxsetclockrate(u32int, u32int);
+void	boardclock(void);
 u32int	mboxresp(void);
 int	mboxprop1(u32int, u32int*, int, int, u32int*);
 int	setpower(int, int);

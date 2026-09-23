@@ -1,0 +1,18 @@
+[ca]
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+[ca0]
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+[notca]
+basicConstraints = critical, CA:false
+keyUsage = critical, keyCertSign
+[nosign]
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature
+[leaf]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:test.infernode.invalid

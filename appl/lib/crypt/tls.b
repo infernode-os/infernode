@@ -128,6 +128,9 @@ ConnState: adt {
 	# Ephemeral CNSA hybrid (SecP384r1MLKEM1024) private material; nil otherwise
 	eph_p384_priv:	array of byte;
 	eph_mlkem_sk:	array of byte;
+
+	# Ephemeral P-256 private key for the TLS 1.3 secp256r1 key share; nil otherwise
+	eph_p256_priv:	array of byte;
 };
 
 # Entropy source fd, opened once in init() and reused for all randombuf() calls.
@@ -200,10 +203,12 @@ init(): string
 defaultconfig(): ref Config
 {
 	return ref Config(
+		TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 ::
 		TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 ::
 		TLS_AES_128_GCM_SHA256 ::
 		TLS_AES_256_GCM_SHA384 ::
 		TLS_CHACHA20_POLY1305_SHA256 ::
+		TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 ::
 		TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 ::
 		TLS_RSA_WITH_AES_128_GCM_SHA256 ::
 		nil,			# suites
@@ -672,6 +677,7 @@ handshake(cs: ref ConnState, config: ref Config): string
 	x25519_priv: array of byte;
 	x25519_pub: array of byte;
 	hybridshare: array of byte;
+	p256share: array of byte;
 	cnsa := cnsamode();
 	if(cnsa){
 		strictcnsaconfig(config);
@@ -686,10 +692,17 @@ handshake(cs: ref ConnState, config: ref Config): string
 	}else{
 		x25519_priv = randombytes(32);
 		x25519_pub = keyring->x25519_base(x25519_priv);
+		# Also offer a secp256r1 share, so TLS 1.3 servers that prefer
+		# P-256 (e.g. www.nist.gov) accept it without a HelloRetryRequest.
+		(p256priv, p256pt) := keyring->p256_keygen();
+		if(p256priv != nil && p256pt != nil) {
+			cs.eph_p256_priv = p256priv;
+			p256share = keyring->p256_point_bytes(p256pt);
+		}
 	}
 
 	# Build and send ClientHello
-	hello := buildclienthello(config, client_random, x25519_pub, hybridshare);
+	hello := buildclienthello(config, client_random, x25519_pub, hybridshare, p256share);
 	err := sendhsmsg(cs, HT_CLIENT_HELLO, hello);
 	if(err != nil) {
 		if(cnsa)
@@ -745,6 +758,8 @@ handshake(cs: ref ConnState, config: ref Config): string
 			x25519_priv);
 	if(cnsa)
 		clearcnsa(cs);
+	wipebytes(cs.eph_p256_priv);	# unused if the server chose X25519
+	cs.eph_p256_priv = nil;
 	return e;
 }
 
@@ -798,12 +813,16 @@ handshake12(cs: ref ConnState, config: ref Config,
 		}
 	}
 
-	# Verify server certificate
-	if(!cs.insecure && server_certs != nil) {
+	# Verify server certificate: mandatory (no anonymous or PSK suites)
+	if(!cs.insecure) {
+		if(server_certs == nil)
+			return "tls: server sent no certificate";
 		verr := verifycerts(cs, server_certs);
 		if(verr != nil)
 			return verr;
 	}
+	if(isecdhe(cs.suite) && !uses_ecdhe)
+		return "tls: ECDHE suite without ServerKeyExchange";
 
 	# Compute premaster secret
 	premaster: array of byte;
@@ -985,6 +1004,19 @@ handshake13(cs: ref ConnState, config: ref Config,
 		shared_secret = keyring->x25519(x25519_priv, key_share_data);
 		if(shared_secret == nil)
 			return "tls: X25519 computation failed";
+	}else if(key_share_group == GROUP_SECP256R1){
+		if(cs.eph_p256_priv == nil)
+			return "tls: server chose secp256r1, which we did not offer";
+		if(key_share_data == nil || len key_share_data != 65)
+			return "tls: invalid server P-256 key share";
+		srv_pt := keyring->p256_make_point(key_share_data);
+		if(srv_pt == nil)
+			return "tls: invalid server P-256 point";
+		shared_secret = keyring->p256_ecdh(cs.eph_p256_priv, srv_pt);
+		wipebytes(cs.eph_p256_priv);
+		cs.eph_p256_priv = nil;
+		if(shared_secret == nil)
+			return "tls: P-256 ECDH failed";
 	}else
 		return "tls: unsupported key share group";
 
@@ -1014,6 +1046,7 @@ handshake13(cs: ref ConnState, config: ref Config,
 	# Read encrypted handshake messages
 	server_certs: list of array of byte;
 	hs_done := 0;
+	got_cv := 0;
 	# Some peers (e.g. Gmail's SMTP submission frontend) send CertificateRequest
 	# during the handshake even when the cert is optional. RFC 8446 §4.4.2
 	# requires the client to respond with a Certificate message (empty is OK)
@@ -1058,13 +1091,21 @@ handshake13(cs: ref ConnState, config: ref Config,
 
 		HT_CERTIFICATE_VERIFY =>
 			# Verify server's signature over transcript (EXCLUDING CertificateVerify)
+			if(server_certs == nil)
+				return "tls: CertificateVerify before Certificate";
 			if(!cs.insecure) {
 				verr := verifycertverify_hash(cs, mdata, server_certs, pre_read_hash);
 				if(verr != nil)
 					return verr;
 			}
+			got_cv = 1;
 
 		HT_FINISHED =>
+			# Without PSK the server must have authenticated itself
+			# (RFC 8446 §4.4): a Finished alone proves only knowledge of
+			# the (attacker-chosen) key share.
+			if(!cs.insecure && (server_certs == nil || !got_cv))
+				return "tls: server did not authenticate (Certificate/CertificateVerify missing)";
 			# Verify server Finished using transcript hash BEFORE Finished was hashed
 			fverr := verifyfinished13_hash(cs, mdata, s_hs_traffic, pre_read_hash);
 			if(fverr != nil)
@@ -1076,8 +1117,10 @@ handshake13(cs: ref ConnState, config: ref Config,
 		}
 	}
 
-	# Verify server certificate chain
-	if(!cs.insecure && server_certs != nil) {
+	# Verify server certificate chain (mandatory: see HT_FINISHED above)
+	if(!cs.insecure) {
+		if(server_certs == nil)
+			return "tls: server sent no certificate";
 		verr := verifycerts(cs, server_certs);
 		if(verr != nil)
 			return verr;
@@ -1132,7 +1175,7 @@ handshake13(cs: ref ConnState, config: ref Config,
 # ================================================================
 
 buildclienthello(config: ref Config, random: array of byte,
-	x25519_pub: array of byte, hybridshare: array of byte): array of byte
+	x25519_pub: array of byte, hybridshare: array of byte, p256share: array of byte): array of byte
 {
 	# Build extensions
 	exts: array of byte;
@@ -1152,7 +1195,7 @@ buildclienthello(config: ref Config, random: array of byte,
 		keyshare = buildkeyshare_group(GROUP_SECP384R1MLKEM1024, hybridshare);
 	}else{
 		groups = buildsupportedgroups();
-		keyshare = buildkeyshare(x25519_pub);
+		keyshare = buildkeyshare(x25519_pub, p256share);
 	}
 
 	# Signature algorithms extension
@@ -1322,10 +1365,12 @@ buildsupportedversions(config: ref Config): array of byte
 	return ext;
 }
 
-buildkeyshare(x25519_pub: array of byte): array of byte
+buildkeyshare(x25519_pub, p256_pub: array of byte): array of byte
 {
-	# X25519 key share only
+	# X25519 first (preferred), then secp256r1 if we have one
 	listlen := 2 + 2 + 32;	# group(2) + keylen(2) + data(32)
+	if(p256_pub != nil)
+		listlen += 2 + 2 + len p256_pub;
 
 	ext := array [4 + 2 + listlen] of byte;
 	put16(ext, 0, EXT_KEY_SHARE);
@@ -1335,6 +1380,11 @@ buildkeyshare(x25519_pub: array of byte): array of byte
 	put16(ext, 6, GROUP_X25519);
 	put16(ext, 8, 32);
 	ext[10:] = x25519_pub;
+	if(p256_pub != nil) {
+		put16(ext, 42, GROUP_SECP256R1);
+		put16(ext, 44, len p256_pub);
+		ext[46:] = p256_pub;
+	}
 
 	return ext;
 }
@@ -1566,85 +1616,34 @@ parseserverkeyexchange(data: array of byte,
 	ecpoint := data[off:off+point_len];
 	off += point_len;
 
-	# Parse and verify the signature over the ECDHE params
-	if(!insecure && off + 4 <= len data && server_certs != nil) {
-		sig_hash_alg := get16(data, off);
+	# The signature over the ECDHE params authenticates the key exchange;
+	# it is mandatory unless verification is explicitly disabled.
+	if(!insecure) {
+		if(server_certs == nil)
+			return (0, nil, "tls: ServerKeyExchange before Certificate");
+		if(off + 4 > len data)
+			return (0, nil, "tls: ServerKeyExchange is not signed");
+		scheme := get16(data, off);
 		off += 2;
 		sig_len := get16(data, off);
 		off += 2;
-		if(off + sig_len > len data)
-			return (0, nil, "tls: SKE signature truncated");
+		if(off + sig_len != len data)
+			return (0, nil, "tls: ServerKeyExchange signature length");
 		sig := data[off:off+sig_len];
 
-		# Build signed content: client_random(32) + server_random(32) + server_params
-		# server_params = curve_type(1) + named_curve(2) + point_len(1) + point
+		# signed content: client_random(32) + server_random(32) + server_params
 		params_len := 1 + 2 + 1 + point_len;
 		signed_content := array [32 + 32 + params_len] of byte;
 		signed_content[0:] = client_random;
 		signed_content[32:] = server_random;
 		signed_content[64:] = data[0:params_len];
 
-		# Determine hash algorithm from sig_hash_alg
-		hash_id := (sig_hash_alg >> 8) & 16rFF;
-		# hash_id: 4=SHA-256, 5=SHA-384, 6=SHA-512
-		digest: array of byte;
-		algid: int;
-
-		case hash_id {
-		4 =>
-			digest = array [Keyring->SHA256dlen] of byte;
-			keyring->sha256(signed_content, len signed_content, digest, nil);
-			algid = 1;
-		5 =>
-			digest = array [Keyring->SHA384dlen] of byte;
-			keyring->sha384(signed_content, len signed_content, digest, nil);
-			algid = 1;
-		6 =>
-			digest = array [Keyring->SHA512dlen] of byte;
-			keyring->sha512(signed_content, len signed_content, digest, nil);
-			algid = 1;
-		* =>
-			digest = array [Keyring->SHA256dlen] of byte;
-			keyring->sha256(signed_content, len signed_content, digest, nil);
-			algid = 1;
-		}
-
-		# Verify with server's RSA public key
-		sig_alg := sig_hash_alg & 16rFF;
-		if(sig_alg == 1) {
-			# RSA signature
-			(rsakey, pkerr) := extractrsakey(server_certs);
-			if(pkerr != nil)
-				return (0, nil, "tls: SKE verify: " + pkerr);
-
-			# RSA PKCS#1 v1.5 verification: decrypt sig, compare digest
-			(decerr, decrypted) := pkcs->rsa_decrypt(sig, rsakey, 1);
-			if(decerr != nil)
-				return (0, nil, "tls: SKE signature verification failed: " + decerr);
-
-			# The decrypted data contains DigestInfo (ASN.1 wrapper around hash)
-			# Extract the hash from the DigestInfo and compare
-			# For simplicity, check if the digest appears in the decrypted data
-			if(!containsbytes(decrypted, digest))
-				return (0, nil, "tls: SKE signature hash mismatch");
-		}
-		# ECDSA signatures (sig_alg == 3) would use p256_ecdsa_verify
+		verr := verifyserversig(server_certs, scheme, signed_content, sig, 0);
+		if(verr != nil)
+			return (0, nil, "tls: ServerKeyExchange: " + verr);
 	}
 
 	return (named_curve, ecpoint, nil);
-}
-
-# Check if haystack contains needle as a suffix (for DigestInfo hash matching)
-containsbytes(haystack, needle: array of byte): int
-{
-	if(len haystack < len needle)
-		return 0;
-	# Check if needle appears at the end of haystack
-	off := len haystack - len needle;
-	for(i := 0; i < len needle; i++)
-		if(haystack[off + i] != needle[i])
-			return 0;
-	return 1;
 }
 
 # ================================================================
@@ -1683,13 +1682,18 @@ verifyhostname(hostname: string, certder: array of byte): string
 	if(cerr != nil)
 		return "tls: hostname verify: decode TBSCert: " + cerr;
 
-	# Try SubjectAltName extension first (preferred per RFC 6125).
-	# parse_exts() aborts on any extension decode error; if it fails
-	# (returning nil), we skip the SAN check entirely rather than crash.
+	# SubjectAltName first (RFC 6125). Decode only that extension, so an
+	# unrelated extension this x509 cannot parse does not hide it, and
+	# fail closed: a SAN that is present but undecodable is an error.
 	san_checked := 0;
-	(_, extclasses) := x509->parse_exts(cert.exts);
-	for(el := extclasses; el != nil; el = tl el) {
-		ec := hd el;
+	san_oid := ref x509->objIdTab[x509->id_ce_subjectAltName];
+	for(xl := cert.exts; xl != nil; xl = tl xl) {
+		ext := hd xl;
+		if(!oideq(ext.oid, san_oid))
+			continue;
+		(derr, ec) := x509->ExtClass.decode(ext);
+		if(derr != "" || ec == nil)
+			return sys->sprint("tls: hostname verify: bad subjectAltName: %s", derr);
 		pick san := ec {
 		SubjectAltName =>
 			san_checked = 1;
@@ -1701,6 +1705,8 @@ verifyhostname(hostname: string, certder: array of byte): string
 						return nil;
 				}
 			}
+		* =>
+			return "tls: hostname verify: subjectAltName decoded as another extension";
 		}
 	}
 
@@ -1724,13 +1730,7 @@ verifyhostname(hostname: string, certder: array of byte): string
 		}
 	}
 
-	# Neither SAN nor CN matched. If SANs were parseable, hard-fail.
-	# If parse_exts() returned nothing (cert extensions unreadable by
-	# this x509 impl), soft-fail: warn and allow the connection.
-	if(san_checked || extclasses != nil)
-		return sys->sprint("tls: hostname %s does not match certificate", hostname);
-	sys->print("tls: warn: cert extension parse failed for %s — skipping hostname check\n", hostname);
-	return nil;
+	return sys->sprint("tls: hostname %s does not match certificate", hostname);
 }
 
 oideq(a, b: ref ASN1->Oid): int
@@ -1854,92 +1854,171 @@ verifycertverify_hash(cs: ref ConnState, data: array of byte, certs: list of arr
 	content[64 + len context_str] = byte 0;
 	content[64 + len context_str + 1:] = transcript_hash;
 
-	case sig_alg {
-	RSA_PKCS1_SHA256 or RSA_PKCS1_SHA384 or RSA_PKCS1_SHA512 =>
-		# PKCS#1 v1.5 RSA signature verification
-		digest := array [Keyring->SHA256dlen] of byte;
-		keyring->sha256(content, len content, digest, nil);
-
-		if(certs == nil)
-			return "tls: no certs for CertificateVerify";
-		(rsakey, pkerr) := extractrsakey(certs);
-		if(pkerr != nil)
-			return "tls: CertificateVerify: " + pkerr;
-
-		(decerr, decrypted) := pkcs->rsa_decrypt(sig, rsakey, 1);
-		if(decerr != nil)
-			return "tls: CertificateVerify RSA decrypt failed: " + decerr;
-
-		if(!containsbytes(decrypted, digest))
-			return "tls: CertificateVerify hash mismatch";
-
-	RSA_PSS_RSAE_SHA256 =>
-		# RSA-PSS with SHA-256
-		digest := array [Keyring->SHA256dlen] of byte;
-		keyring->sha256(content, len content, digest, nil);
-
-		if(certs == nil)
-			return "tls: no certs for CertificateVerify";
-		(rsakey, pkerr) := extractrsakey(certs);
-		if(pkerr != nil)
-			return "tls: CertificateVerify: " + pkerr;
-
-		pssverr := rsapss_verify(digest, sig, rsakey);
-		if(pssverr != nil)
-			return "tls: CertificateVerify PSS: " + pssverr;
-
-	ECDSA_SECP256R1_SHA256 =>
-		# ECDSA with P-256 and SHA-256
-		digest := array [Keyring->SHA256dlen] of byte;
-		keyring->sha256(content, len content, digest, nil);
-
-		if(certs == nil)
-			return "tls: no certs for CertificateVerify";
-		(ecpt, ecerr) := extractecpoint(certs);
-		if(ecpt == nil)
-			return "tls: CertificateVerify: " + ecerr;
-		rawsig := parse_ecdsa_der_sig(sig);
-		if(rawsig == nil)
-			return "tls: CertificateVerify: invalid ECDSA signature";
-		if(!keyring->p256_ecdsa_verify(ecpt, digest, rawsig))
-			# Include diagnostic context. When this fails on a network
-			# where openssl s_client succeeds (test directly in /tests/),
-			# the most likely cause is a TLS-intercepting middlebox
-			# (corporate proxy, antivirus, captive portal) presenting a
-			# substitute cert chain. See INFR-309 thread for analysis.
-			return certverify_fail_context(cs, certs,
-				"ECDSA-P256 verification failed");
-
-	ECDSA_SECP384R1_SHA384 =>
-		# ECDSA with P-384 and SHA-384 (common for Let's Encrypt/DigiCert ECDSA certs)
-		digest := array [Keyring->SHA384dlen] of byte;
-		keyring->sha384(content, len content, digest, nil);
-
-		if(certs == nil)
-			return "tls: no certs for CertificateVerify";
-		(ecbytes384, ecerr384) := extractecpointbytes(certs);
-		if(ecbytes384 == nil)
-			return "tls: CertificateVerify: " + ecerr384;
-		rawsig384 := parse_ecdsa_der_sig_p384(sig);
-		if(rawsig384 == nil)
-			return "tls: CertificateVerify: invalid ECDSA P-384 signature";
-		if(!keyring->p384_ecdsa_verify(ecbytes384, digest, rawsig384))
-			return certverify_fail_context(cs, certs,
-				"ECDSA-P384 verification failed");
-
-	* =>
-		return sys->sprint("tls: unsupported CertificateVerify sig_alg 0x%04x", sig_alg);
-	}
-
+	if(certs == nil)
+		return "tls: CertificateVerify without a server Certificate";
+	verr := verifyserversig(certs, sig_alg, content, sig, 1);
+	if(verr != nil)
+		# When this fails on a network where openssl s_client succeeds,
+		# the most likely cause is a TLS-intercepting middlebox presenting
+		# a substitute chain (INFR-309).
+		return certverify_fail_context(cs, certs, verr);
 	return nil;
 }
 
-# RSA-PSS verification (PKCS#1 v2.1, EMSA-PSS with SHA-256)
-# RFC 8017 §8.1.2 + §9.1.2
+# Verify a server signature over msg with the leaf key in certs, for TLS
+# SignatureScheme scheme (a TLS 1.2 SignatureAndHashAlgorithm has the same
+# encoding). Returns nil if valid. Fails closed on anything unsupported.
+# In TLS 1.3 (RFC 8446 §4.4.3) RSA PKCS#1 v1.5 is not allowed and an
+# ECDSA scheme names its curve; in TLS 1.2 it names only the hash.
+verifyserversig(certs: list of array of byte, scheme: int, msg, sig: array of byte, tls13: int): string
+{
+	hashlen := 0;
+	case scheme >> 8 {
+	16r04 =>	hashlen = Keyring->SHA256dlen;
+	16r05 =>	hashlen = Keyring->SHA384dlen;
+	16r06 =>	hashlen = Keyring->SHA512dlen;
+	}
+	case scheme {
+	RSA_PKCS1_SHA256 or RSA_PKCS1_SHA384 or RSA_PKCS1_SHA512 =>
+		if(tls13)
+			return "RSA PKCS#1 v1.5 is not allowed in TLS 1.3";
+		(rsakey, kerr) := extractrsakey(certs);
+		if(kerr != nil)
+			return kerr;
+		di := catbytes(digestinfoprefix(hashlen), hashbytes(msg, hashlen));
+		if(!pkcs1v15_verify(sig, rsakey, di))
+			return "RSA signature verification failed";
+	RSA_PSS_RSAE_SHA256 or RSA_PSS_RSAE_SHA384 =>
+		if(scheme == RSA_PSS_RSAE_SHA256)
+			hashlen = Keyring->SHA256dlen;
+		else
+			hashlen = Keyring->SHA384dlen;
+		(rsakey, kerr) := extractrsakey(certs);
+		if(kerr != nil)
+			return kerr;
+		perr := rsapss_verify(hashbytes(msg, hashlen), sig, rsakey);
+		if(perr != nil)
+			return perr;
+	ECDSA_SECP256R1_SHA256 or ECDSA_SECP384R1_SHA384 or ECDSA_SHA512 =>
+		(pt, perr) := extractecpointbytes(certs);
+		if(pt == nil)
+			return perr;
+		digest := hashbytes(msg, hashlen);
+		case len pt {
+		65 =>
+			if(tls13 && scheme != ECDSA_SECP256R1_SHA256)
+				return "ECDSA scheme does not match the P-256 key";
+			ecpt := keyring->p256_make_point(pt);
+			raw := parse_ecdsa_der_sig_n(sig, 32);
+			if(ecpt == nil || raw == nil)
+				return "invalid ECDSA P-256 key or signature";
+			if(!keyring->p256_ecdsa_verify(ecpt, digest, raw))
+				return "ECDSA-P256 verification failed";
+		97 =>
+			if(tls13 && scheme != ECDSA_SECP384R1_SHA384)
+				return "ECDSA scheme does not match the P-384 key";
+			raw := parse_ecdsa_der_sig_n(sig, 48);
+			if(raw == nil)
+				return "invalid ECDSA P-384 signature";
+			if(!keyring->p384_ecdsa_verify(pt, digest, raw))
+				return "ECDSA-P384 verification failed";
+		* =>
+			return "unsupported EC key size";
+		}
+	* =>
+		return sys->sprint("unsupported signature scheme 0x%04x", scheme);
+	}
+	return nil;
+}
+
+ECDSA_SHA512:	con 16r0603;	# TLS 1.2: ecdsa with SHA-512 (any curve); TLS 1.3: P-521, rejected by key size
+
+hashbytes(msg: array of byte, hashlen: int): array of byte
+{
+	d := array [hashlen] of byte;
+	case hashlen {
+	Keyring->SHA384dlen =>	keyring->sha384(msg, len msg, d, nil);
+	Keyring->SHA512dlen =>	keyring->sha512(msg, len msg, d, nil);
+	* =>	keyring->sha256(msg, len msg, d, nil);
+	}
+	return d;
+}
+
+# DER DigestInfo prefixes for SHA-256/384/512 (RFC 8017 §9.2 note 1)
+digestinfoprefix(hashlen: int): array of byte
+{
+	h := byte 16r01;
+	l := byte 16r31;
+	case hashlen {
+	Keyring->SHA384dlen =>	h = byte 16r02; l = byte 16r41;
+	Keyring->SHA512dlen =>	h = byte 16r03; l = byte 16r51;
+	}
+	return array [] of {
+		byte 16r30, l, byte 16r30, byte 16r0d, byte 16r06, byte 16r09,
+		byte 16r60, byte 16r86, byte 16r48, byte 16r01, byte 16r65, byte 16r03,
+		byte 16r04, byte 16r02, h, byte 16r05, byte 16r00,
+		byte 16r04, byte hashlen };
+}
+
+# EMSA-PKCS1-v1_5 verification (RFC 8017 §8.2.2): rebuild the whole encoded
+# message 00 01 FF..FF 00 DigestInfo and compare exactly.
+pkcs1v15_verify(sig: array of byte, key: ref RSAKey, digestinfo: array of byte): int
+{
+	k := key.modlen;
+	if(len sig != k || len digestinfo > k - 11)
+		return 0;
+	x := IPint.bebytestoip(sig);
+	if(x.cmp(key.modulus) >= 0)
+		return 0;
+	yb := x.expmod(key.exponent, key.modulus).iptobebytes();
+	if(len yb > k)
+		return 0;
+	em := array [k] of {* => byte 0};
+	em[k - len yb:] = yb;
+	if(em[0] != byte 0 || em[1] != byte 1)
+		return 0;
+	pad := k - 3 - len digestinfo;
+	for(i := 2; i < 2 + pad; i++)
+		if(em[i] != byte 16rFF)
+			return 0;
+	if(em[2 + pad] != byte 0)
+		return 0;
+	return bytescmp(em[3 + pad:], digestinfo);
+}
+
+# MGF1 (RFC 8017 §B.2.1) with SHA-256 or SHA-384
+mgf1(seed: array of byte, masklen, hashlen: int): array of byte
+{
+	mask := array [masklen] of byte;
+	off := 0;
+	for(c := 0; off < masklen; c++) {
+		in := array [len seed + 4] of byte;
+		in[0:] = seed;
+		in[len seed] = byte (c >> 24);
+		in[len seed + 1] = byte (c >> 16);
+		in[len seed + 2] = byte (c >> 8);
+		in[len seed + 3] = byte c;
+		d := hashbytes(in, hashlen);
+		n := len d;
+		if(off + n > masklen)
+			n = masklen - off;
+		mask[off:] = d[0:n];
+		off += n;
+	}
+	return mask;
+}
+
+# RSA-PSS verification (PKCS#1 v2.1, EMSA-PSS; SHA-256 or SHA-384 by
+# the length of msghash, MGF1 with the same hash, salt length = hash length
+# as TLS requires). RFC 8017 §8.1.2 + §9.1.2
 rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 {
-	hashlen := Keyring->SHA256dlen;	# 32 bytes for SHA-256
-	saltlen := hashlen;		# salt length = hash length (typical)
+	hashlen := len msghash;
+	if(hashlen != Keyring->SHA256dlen && hashlen != Keyring->SHA384dlen)
+		return "PSS: unsupported hash";
+	saltlen := hashlen;
+	if(len sig != rsakey.modlen)
+		return "PSS: bad signature length";
 
 	# Step 1: raw RSA public-key operation (modular exponentiation).
 	# Do NOT use pkcs->rsa_decrypt — that strips PKCS#1 v1.5 padding,
@@ -1986,8 +2065,8 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 	if(topbits > 0 && (int maskeddb[0] & (16rFF << (8 - topbits))) != 0)
 		return "PSS: non-zero top bits";
 
-	# Step 6: MGF1-SHA256 to unmask DB
-	dbmask := mgf1_sha256(h, dblen);
+	# Step 6: MGF1 to unmask DB
+	dbmask := mgf1(h, dblen, hashlen);
 
 	# Step 7: DB = maskedDB XOR dbMask
 	db := array [dblen] of byte;
@@ -2016,37 +2095,14 @@ rsapss_verify(msghash, sig: array of byte, rsakey: ref RSAKey): string
 	mprime[8:] = msghash;
 	mprime[8 + hashlen:] = salt;
 
-	# Step 12: H' = SHA-256(M')
-	hprime := array [hashlen] of byte;
-	keyring->sha256(mprime, len mprime, hprime, nil);
+	# Step 12: H' = Hash(M')
+	hprime := hashbytes(mprime, hashlen);
 
 	# Step 13: compare H and H'
 	if(!bytescmp(h, hprime))
 		return "PSS: hash mismatch";
 
 	return nil;
-}
-
-# MGF1 with SHA-256 (RFC 8017 §B.2.1)
-mgf1_sha256(seed: array of byte, masklen: int): array of byte
-{
-	hashlen := Keyring->SHA256dlen;
-	n := (masklen + hashlen - 1) / hashlen;
-	result := array [n * hashlen] of byte;
-
-	for(i := 0; i < n; i++) {
-		# Hash(seed || counter)
-		input := array [len seed + 4] of byte;
-		input[0:] = seed;
-		input[len seed] = byte (i >> 24);
-		input[len seed + 1] = byte (i >> 16);
-		input[len seed + 2] = byte (i >> 8);
-		input[len seed + 3] = byte i;
-		digest := array [hashlen] of byte;
-		keyring->sha256(input, len input, digest, nil);
-		result[i * hashlen:] = digest;
-	}
-	return result[0:masklen];
 }
 
 verifyfinished13(cs: ref ConnState, data: array of byte, traffic_secret: array of byte): string
@@ -2461,6 +2517,8 @@ hashlength(suite: int): int
 {
 	case suite {
 	TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 or
+	TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 or
+	TLS_RSA_WITH_AES_256_GCM_SHA384 or
 	TLS_AES_256_GCM_SHA384 =>
 		return 48;
 	* =>
@@ -2468,10 +2526,23 @@ hashlength(suite: int): int
 	}
 }
 
+TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:	con 16rC02C;
+
+isecdhe(suite: int): int
+{
+	case suite {
+	TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 or TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 or
+	TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 or TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 =>
+		return 1;
+	}
+	return 0;
+}
+
 keylength(suite: int): int
 {
 	case suite {
 	TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 or
+	TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 or
 	TLS_AES_256_GCM_SHA384 or
 	TLS_RSA_WITH_AES_256_GCM_SHA384 =>
 		return 32;

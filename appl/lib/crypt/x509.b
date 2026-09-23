@@ -411,18 +411,40 @@ Signed.sign(s: self ref Signed, sk: ref PrivateKey, hash: int): (string, array o
 # RSA PKCS#1 v1.5 verification: decrypt signature and compare DigestInfo suffix
 rsa_pkcs1_verify(signature: array of byte, pk: ref PKCS->RSAKey, digestinfo: array of byte): int
 {
-	if(len signature < 2)
+	# signature is the BIT STRING content: unused-bits byte, then the octets
+	if(len signature < 2 || int signature[0] != 0)
 		return 0;
-	(derr, decrypted) := pkcs->rsa_decrypt(signature[1:], pk, 1);
-	if(derr != "")
+	return pkcs1v15_verify(signature[1:], pk, digestinfo);
+}
+
+# [private]
+# EMSA-PKCS1-v1_5 verification (RFC 8017 section 8.2.2): recompute the
+# whole encoded message 00 01 FF..FF 00 DigestInfo and compare it
+# exactly. Comparing only a suffix, or accepting short or non-FF
+# padding, admits Bleichenbacher-style forgeries.
+
+pkcs1v15_verify(sig: array of byte, pk: ref PKCS->RSAKey, digestinfo: array of byte): int
+{
+	k := pk.modlen;
+	if(len sig != k || len digestinfo > k - 11)
 		return 0;
-	if(len decrypted < len digestinfo)
+	x := IPint.bebytestoip(sig);
+	if(x.cmp(pk.modulus) >= 0)
 		return 0;
-	off := len decrypted - len digestinfo;
-	for(i := 0; i < len digestinfo; i++)
-		if(decrypted[off + i] != digestinfo[i])
+	yb := x.expmod(pk.exponent, pk.modulus).iptobebytes();
+	if(len yb > k)
+		return 0;
+	em := array [k] of {* => byte 0};
+	em[k - len yb:] = yb;
+	if(em[0] != byte 0 || em[1] != byte 1)
+		return 0;
+	pad := k - 3 - len digestinfo;
+	for(i := 2; i < 2 + pad; i++)
+		if(em[i] != byte 16rFF)
 			return 0;
-	return 1;
+	if(em[2 + pad] != byte 0)
+		return 0;
+	return bytesequal(em[3 + pad:], digestinfo);
 }
 
 Signed.verify(s: self ref Signed, pk: ref PublicKey, hash: int): int
@@ -1866,86 +1888,321 @@ Extension.tostring(e: self ref Extension): string
 # 
 
 # [public]
-# Verify a decoded certificate chain in order of root to user. This is useful for 
-# non_ASN.1 encoding of certificates, e.g. in SSL. Return (0, error string) if 
-# verification failure or (1, "") if verification ok
+# Verify a certificate chain as presented by a TLS server (leaf first,
+# intermediates in any order, duplicates and extra certificates allowed:
+# RFC 8446 section 4.4.2). Succeeds only when a path from the leaf ends at
+# a root in the trust store (/lib/certs). Return (1, "") on success or
+# (0, reason).
 
 verify_certchain(cs: list of array of byte): (int, string)
 {
-	lsc: list of (ref Signed, ref Certificate);
-
-	l := cs;
-	while(l != nil) {
-		(err, s) := Signed.decode(hd l); 
-		if(err != "") 
-			return (0, err);
+	nodes: list of ref Node;
+	for(l := cs; l != nil; l = tl l) {
+		der := hd l;
+		if(seen(nodes, der))
+			continue;
+		(err, s) := Signed.decode(der);
+		if(err != "")
+			return (0, "certificate: " + err);
 		c: ref Certificate;
 		(err, c) = Certificate.decode(s.tobe_signed);
 		if(err != "")
-			return (0, err);		
-		lsc = (s, c) :: lsc;
-		l = tl l;
+			return (0, "certificate: " + err);
+		nodes = ref Node(der, s, c) :: nodes;
 	}
-	# lsc is in issuer-first order (cons reversal of TLS leaf-first order)
-	return verify_certpath(lsc);
+	if(nodes == nil)
+		return (0, "no certificates");
+	l2: list of ref Node;
+	for(; nodes != nil; nodes = tl nodes)
+		l2 = hd nodes :: l2;	# back to presented order
+	return verify_leaf(hd l2, tl l2);
 }
 
-# [private]
-# along certificate path; first certificate is root
+# [public]
+# The same, for a decoded path given root first (the historical interface).
+# The order is only a hint: the path is rebuilt from the leaf.
 
 verify_certpath(sc: list of (ref Signed, ref Certificate)): (int, string)
 {
-	(s, c) := hd sc;
-	(err, id, pk) := c.subject_pkinfo.getPublicKey();
-	if(err != "")
-		return (0, err);
+	l: list of ref Node;
+	for(; sc != nil; sc = tl sc) {
+		(s, c) := hd sc;
+		l = ref Node(s.tobe_signed, s, c) :: l;	# reversed: leaf first
+	}
+	if(l == nil)
+		return (0, "no certificates");
+	return verify_leaf(hd l, tl l);
+}
+
+# [private]
+# Chain validation, RFC 5280 section 6 reduced to what TLS server
+# authentication needs: signatures, validity, basicConstraints, keyUsage,
+# pathLenConstraint, CRLs, and termination at a trust anchor. It fails
+# closed: an unsupported signature algorithm is an error, not a pass.
+
+MAXPATH: con 8;		# intermediates between leaf and trust anchor
+
+Node: adt {
+	der:	array of byte;
+	s:	ref Signed;
+	c:	ref Certificate;
+};
+
+verify_leaf(leaf: ref Node, pool: list of ref Node): (int, string)
+{
+	if(!is_validtime(leaf.c.validity))
+		return (0, "certificate expired or not yet valid: " + leaf.c.subject.tostring());
+	(revoked, reason) := check_revoked(leaf.c);
+	if(revoked)
+		return (0, reason);
+	return findpath(leaf, pool, 0, leaf :: nil);
+}
+
+# n is accepted; find its issuer. depth counts the intermediates already
+# on the path below n's issuer (0 when n is the leaf).
+findpath(n: ref Node, pool: list of ref Node, depth: int, path: list of ref Node): (int, string)
+{
+	if(is_anchor(n))
+		return (1, "");
+	if(depth > MAXPATH)
+		return (0, "certificate path too long");
+	lasterr := "no trusted root CA for " + n.c.issuer.tostring();
+
+	# a trust anchor that issued n
+	load_trust_store();
+	for(t := trust_store; t != nil; t = tl t) {
+		tr := hd t;
+		if(!tr.cert.subject.equal(n.c.issuer))
+			continue;
+		(ok, err) := verify_issued(n.s, tr.cert);
+		if(ok)
+			return (1, "");
+		lasterr = "trust anchor " + tr.cert.subject.tostring() + ": " + err;
+	}
+
+	# a presented intermediate that issued n; backtrack across alternatives
+	# (cross-signed intermediates present more than one candidate)
+	for(p := pool; p != nil; p = tl p) {
+		cand := hd p;
+		if(onpath(path, cand) || !cand.c.subject.equal(n.c.issuer))
+			continue;
+		err := check_ca(cand.c, depth);
+		if(err == nil) {
+			(ok, e) := verify_issued(n.s, cand.c);
+			if(!ok)
+				err = e;
+		}
+		if(err == nil) {
+			(revoked, reason) := check_revoked(cand.c);
+			if(revoked)
+				err = reason;
+		}
+		if(err == nil) {
+			(ok, e) := findpath(cand, pool, depth+1, cand :: path);
+			if(ok)
+				return (1, "");
+			err = e;
+		}
+		lasterr = cand.c.subject.tostring() + ": " + err;
+	}
+	return (0, lasterr);
+}
+
+# n is itself in the trust store (the server sent the root, or is one)
+is_anchor(n: ref Node): int
+{
+	load_trust_store();
+	for(t := trust_store; t != nil; t = tl t)
+		if(bytesequal((hd t).signed.tobe_signed, n.s.tobe_signed))
+			return 1;
+	return 0;
+}
+
+onpath(path: list of ref Node, n: ref Node): int
+{
+	for(; path != nil; path = tl path)
+		if(bytesequal((hd path).s.tobe_signed, n.s.tobe_signed))
+			return 1;
+	return 0;
+}
+
+seen(l: list of ref Node, der: array of byte): int
+{
+	for(; l != nil; l = tl l)
+		if(bytesequal((hd l).der, der))
+			return 1;
+	return 0;
+}
+
+bytesequal(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
+# May c issue certificates at this depth? nil if so, else why not.
+check_ca(c: ref Certificate, depth: int): string
+{
 	if(!is_validtime(c.validity))
-		return (0, "validity expired");
-
-	if(c.issuer.equal(c.subject)) {
-		# self-signed root: verify signature against own key
-		if(!s.verify(pk, 0))
-			return (0, "root signature verification failure");
-	} else {
-		# Look up issuer in trust store
-		trusted := find_trusted_root(c.issuer);
-		if(trusted != nil) {
-			(rerr, nil, rpk) := trusted.cert.subject_pkinfo.getPublicKey();
-			if(rerr == "" && sig_algo_supported(s, rpk)) {
-				if(!s.verify(rpk, 0))
-					return (0, "trust anchor: signature verification failure");
-			}
+		return "issuer certificate expired or not yet valid";
+	ca := 0;
+	pathlen := -1;
+	bc := 0;
+	for(l := c.exts; l != nil; l = tl l) {
+		e := hd l;
+		if(oideq(e.oid, OID_BASICCONSTRAINTS)) {
+			bc = 1;
+			(ok, isca, plen) := parse_basicconstraints(e.value);
+			if(!ok)
+				return "bad basicConstraints";
+			ca = isca;
+			pathlen = plen;
+		} else if(oideq(e.oid, OID_KEYUSAGE)) {
+			(ok, certsign) := parse_keycertsign(e.value);
+			if(!ok)
+				return "bad keyUsage";
+			if(!certsign)
+				return "issuer keyUsage lacks keyCertSign";
 		}
-		# If no trusted root found, continue (graceful degradation)
 	}
+	if(!bc || !ca)
+		return "issuer is not a CA (basicConstraints)";
+	if(pathlen >= 0 && depth > pathlen)
+		return "issuer pathLenConstraint exceeded";
+	return nil;
+}
 
-	sc = tl sc;
-	while(sc != nil) {
-		(ns, nc) := hd sc;
-		(err, id, pk) = c.subject_pkinfo.getPublicKey();
-		if(err != "")
-			return (0, err);
-		if(!is_validtime(nc.validity))
-			return (0, "validity expired");
-		if(!nc.issuer.equal(c.subject))
-			return (0, "issuer mismatch");
-		# Only verify if we support the signature algorithm.
-		# For EC keys, we support P-256/SHA-256 and P-384/SHA-384.
-		# Unsupported algorithms are skipped rather than
-		# treated as verification failures.
-		if(sig_algo_supported(ns, pk)) {
-			if(!ns.verify(pk, 0))
-				return (0, "signature verification failure");
+OID_BASICCONSTRAINTS := array [] of {2,5,29,19};
+OID_KEYUSAGE := array [] of {2,5,29,15};
+OID_SHA512RSA := array [] of {1,2,840,113549,1,1,13};
+OID_ECDSASHA512 := array [] of {1,2,840,10045,4,3,4};
+
+oideq(o: ref Oid, nums: array of int): int
+{
+	if(o == nil || len o.nums != len nums)
+		return 0;
+	for(i := 0; i < len nums; i++)
+		if(o.nums[i] != nums[i])
+			return 0;
+	return 1;
+}
+
+# BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLenConstraint INTEGER OPTIONAL }
+# returns (ok, ca, pathlen or -1)
+parse_basicconstraints(der: array of byte): (int, int, int)
+{
+	(err, e) := asn1->decode(der);
+	if(err != "")
+		return (0, 0, -1);
+	(ok, el) := e.is_seq();
+	if(!ok)
+		return (0, 0, -1);
+	ca := 0;
+	pathlen := -1;
+	if(el != nil && (hd el).tag.num == BOOLEAN) {
+		pick v := (hd el).val {
+		Bool or Int =>
+			ca = v.v != 0;
+		* =>
+			return (0, 0, -1);
 		}
-		# Check certificate revocation against loaded CRLs
-		(revoked, reason) := check_revoked(nc);
-		if(revoked)
-			return (0, reason);
-		(s, c) = (ns, nc);
-		sc = tl sc;
+		el = tl el;
 	}
+	if(el != nil) {
+		(ok, pathlen) = (hd el).is_int();
+		if(!ok || pathlen < 0)
+			return (0, 0, -1);
+	}
+	return (1, ca, pathlen);
+}
 
-	return (1, "");
+# KeyUsage ::= BIT STRING; keyCertSign is bit 5 (counting from the most
+# significant bit of the first byte). returns (ok, keycertsign)
+parse_keycertsign(der: array of byte): (int, int)
+{
+	(err, e) := asn1->decode(der);
+	if(err != "")
+		return (0, 0);
+	(ok, nil, bits) := e.is_bitstring();
+	if(!ok)
+		return (0, 0);
+	if(len bits == 0)
+		return (1, 0);
+	return (1, (int bits[0] & 16r04) != 0);
+}
+
+# Verify that child was signed by the key in issuer. Fails closed.
+verify_issued(child: ref Signed, issuer: ref Certificate): (int, string)
+{
+	(err, nil, pk) := issuer.subject_pkinfo.getPublicKey();
+	if(err != "")
+		return (0, "issuer key: " + err);
+	algid := asn1->oid_lookup(child.alg.oid, pkcs->objIdTab);
+	pick key := pk {
+	RSA =>
+		if(algid == PKCS->id_sha256WithRSAEncryption || algid == PKCS->id_sha384WithRSAEncryption) {
+			if(child.verify(pk, 0))
+				return (1, "");
+			return (0, "RSA signature verification failure");
+		}
+		if(oideq(child.alg.oid, OID_SHA512RSA)) {
+			digest := array [Keyring->SHA512dlen] of byte;
+			keyring->sha512(child.tobe_signed, len child.tobe_signed, digest, nil);
+			pfx := array [] of {
+				byte 16r30, byte 16r51, byte 16r30, byte 16r0d,
+				byte 16r06, byte 16r09, byte 16r60, byte 16r86,
+				byte 16r48, byte 16r01, byte 16r65, byte 16r03,
+				byte 16r04, byte 16r02, byte 16r03, byte 16r05,
+				byte 16r00, byte 16r04, byte 16r40
+			};
+			di := array [len pfx + len digest] of byte;
+			di[0:] = pfx;
+			di[len pfx:] = digest;
+			if(rsa_pkcs1_verify(child.signature, key.pk, di))
+				return (1, "");
+			return (0, "RSA signature verification failure");
+		}
+	EC =>
+		digest: array of byte;
+		if(algid == PKCS->id_ecdsa_sha256) {
+			digest = array [Keyring->SHA256dlen] of byte;
+			keyring->sha256(child.tobe_signed, len child.tobe_signed, digest, nil);
+		} else if(algid == PKCS->id_ecdsa_sha384) {
+			digest = array [Keyring->SHA384dlen] of byte;
+			keyring->sha384(child.tobe_signed, len child.tobe_signed, digest, nil);
+		} else if(oideq(child.alg.oid, OID_ECDSASHA512)) {
+			digest = array [Keyring->SHA512dlen] of byte;
+			keyring->sha512(child.tobe_signed, len child.tobe_signed, digest, nil);
+		} else
+			return (0, "unsupported signature algorithm " + child.alg.oid.tostring());
+		# ECDSA takes the hash truncated or zero-extended to the curve
+		# size; the libsec verifiers do that for any hash length
+		case len key.point {
+		65 =>
+			(serr, raw) := decode_ecdsa_sig(child.signature, 32);
+			if(serr != nil)
+				return (0, "ECDSA signature: " + serr);
+			pt := keyring->p256_make_point(key.point);
+			if(pt == nil)
+				return (0, "bad P-256 key");
+			if(keyring->p256_ecdsa_verify(pt, digest, raw))
+				return (1, "");
+		97 =>
+			(serr, raw) := decode_ecdsa_sig(child.signature, 48);
+			if(serr != nil)
+				return (0, "ECDSA signature: " + serr);
+			if(keyring->p384_ecdsa_verify(key.point, digest, raw))
+				return (1, "");
+		* =>
+			return (0, "unsupported EC key size");
+		}
+		return (0, "ECDSA signature verification failure");
+	}
+	return (0, "unsupported signature algorithm " + child.alg.oid.tostring());
 }
 
 # [private]
@@ -2972,6 +3229,7 @@ parse:
 			if(!ok)
 				break parse;
 			l_pm = (idp, sdp) :: l_pm;
+			el = tl el;
 		}
 		# reverse the order
 		l: list of (ref Oid, ref Oid);
@@ -3030,7 +3288,7 @@ parse:
 			(ok, e_pi) = (hd el).is_seq();
 			if(!ok || len e_pi > 2 || len e_pi < 1)
 				break parse;
-			pi: ref PolicyInfo;	
+			pi := ref PolicyInfo(nil, nil);
 			(ok, pi.oid) = (hd e_pi).is_oid();
 			if(!ok)
 				break parse;
@@ -3043,7 +3301,7 @@ parse:
 					break parse;
 				l_pq: list of ref PolicyQualifier;
 				while(e_pq != nil) {
-					pq: ref PolicyQualifier;
+					pq := ref PolicyQualifier(nil, nil);
 					(ok, pq.oid) = (hd e_pq).is_oid();
 					if(!ok || pq.oid == nil)
 						break parse;
@@ -3063,6 +3321,7 @@ parse:
 				}
 			}
 			l_pi = pi :: l_pi;
+			el = tl el;
 		}
 		# reverse the order
 		l: list of ref PolicyInfo;
@@ -3333,6 +3592,7 @@ pack_gsubtrees(gs: list of ref GSubtree): (int, ref Elem)
 		if(!ok)
 			return (0, nil);
 		l = e :: l;
+		gs = tl gs;
 	}
 	while(l != nil) {
 		el = (hd l) :: el;
@@ -3601,7 +3861,8 @@ parse:
 			if(!ok)
 				break parse;
 			dpl = dp :: dpl;
-		} 
+			el = tl el;
+		}
 		# reverse order
 		while(dpl != nil) {
 			l = (hd dpl) :: l;
@@ -3625,6 +3886,7 @@ encode_cRLDistributionPoint(c: ref ExtClass.CRLDistributionPoint): (string, arra
 		if(!ok)
 			return ("crl distribution point: encoding error", nil);
 		l = e :: l;
+		dpl = tl dpl;
 	}
 	while(l != nil) {
 		el = (hd l) :: el;
@@ -3645,7 +3907,7 @@ parse:
 			break parse;
 		if(!ok || len el > 3 || len el < 1)
 			break parse;
-		dp: ref DistrPoint;
+		dp := ref DistrPoint(nil, 0, nil);
 		e = hd el;
 		# get optional distribution point name
 		(ok, e) = is_context(e, 0);
@@ -3737,13 +3999,29 @@ parse:
 	for(;;) {
 		# parse CHOICE
 		ok := 0;
-		(ok, e) = is_context(e, 0);
-		if(ok) {
-			lg: list of ref GeneralName;
-			(ok, lg) = parse_lgname(e);
-			if(!ok)
+		# fullName [0] IMPLICIT GeneralNames: the content is the
+		# GeneralName elements themselves, one or more of them
+		if(e != nil && e.tag.class == ASN1->Context && e.tag.num == 0) {
+			pick v := e.val {
+			Octets =>
+				(derr, gel) := asn1->decode_seq(v.bytes);
+				if(derr != "" || gel == nil)
+					break parse;
+				lg: list of ref GeneralName;
+				for(; gel != nil; gel = tl gel) {
+					g: ref GeneralName;
+					(ok, g) = parse_gname(hd gel);
+					if(!ok)
+						break parse;
+					lg = g :: lg;
+				}
+				rl: list of ref GeneralName;
+				for(; lg != nil; lg = tl lg)
+					rl = hd lg :: rl;
+				return (1, ref DistrPointName(rl, nil));
+			* =>
 				break parse;
-			return (1, ref DistrPointName(lg, nil));
+			}
 		}
 		(ok, e) = is_context(e, 1);
 		if(!ok)
@@ -4101,6 +4379,8 @@ DistrPoint.tostring(dp: self ref DistrPoint): string
 
 is_context(e: ref Elem, num: int): (int, ref Elem)
 {
+	if(e == nil)
+		return (0, nil);
 	if(e.tag.class == ASN1->Context && e.tag.num == num) {
 		pick v := e.val {
 		Octets =>

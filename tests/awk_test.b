@@ -372,6 +372,93 @@ testUserFunction(t: ref T)
 	t.assertseq(result, "10\n20\n", "user-defined function");
 }
 
+# $0 must keep the input text verbatim; it is rebuilt with OFS only
+# when a field is assigned.  (Reading $0 used to rejoin the fields
+# with OFS, turning tabs into spaces.)
+testRecordVerbatim(t: ref T)
+{
+	prog := "{ print index($0, \"\\t\"), length($0), split($0, f, \"\\t\"), NF }";
+	result := runawk(prog :: nil, "a\tb\tc\n");
+	if(result == nil) {
+		t.skip("cannot run awk");
+		return;
+	}
+	t.assertseq(result, "2 5 3 3\n", "$0 keeps tabs");
+
+	result = runawk("{ print }" :: nil, "  a   b  \n");
+	t.assertseq(result, "  a   b  \n", "$0 keeps whitespace runs");
+
+	result = runawk("{ s = $0; n = gsub(/\\t/, \"|\", s); print n, s }" :: nil, "a\tb\tc\n");
+	t.assertseq(result, "2 a|b|c\n", "gsub /\\t/ on copy of $0");
+}
+
+# Assigning a field (or NF) rebuilds $0 with OFS
+testFieldAssignRebuild(t: ref T)
+{
+	result := runawk("{ $2 = \"X\"; print }" :: nil, "a b c\n");
+	if(result == nil) {
+		t.skip("cannot run awk");
+		return;
+	}
+	t.assertseq(result, "a X c\n", "field assign rebuilds $0");
+
+	result = runawk("{ $2 = \"X\"; print }" :: nil, "a\tb\tc\n");
+	t.assertseq(result, "a X c\n", "field assign rebuilds tab record with OFS");
+
+	result = runawk("BEGIN { OFS = \"-\" } { $5 = \"e\"; print; print NF }" :: nil, "a b c\n");
+	t.assertseq(result, "a-b-c--e\n5\n", "assign past NF extends record");
+
+	result = runawk("{ NF = 2; print; print $1 }" :: nil, "a b c\n");
+	t.assertseq(result, "a b\na\n", "NF assign truncates, $1 intact");
+}
+
+# FS = "\t" splits on tabs and keeps empty fields
+testTabFS(t: ref T)
+{
+	result := runawk("BEGIN { FS = \"\\t\" } { print NF, $2; print }" :: nil, "a b\t\tc\n");
+	if(result == nil) {
+		t.skip("cannot run awk");
+		return;
+	}
+	t.assertseq(result, "3 \na b\t\tc\n", "FS tab split");
+}
+
+# break/continue in every loop kind, including for-in, inside if,
+# and in nested loops (break used to escape as an uncaught exception)
+testBreakContinue(t: ref T)
+{
+	# probe with a trivial program: a broken break yields no output at all
+	if(runawk("BEGIN { print 1 }" :: nil, "") == nil) {
+		t.skip("cannot run awk");
+		return;
+	}
+
+	prog := "{ a[$0] = 1 } END { for (k in a) { print \"k\"; break }; print \"survived\" }";
+	result := runawk(prog :: nil, "x\ny\n");
+	t.assertseq(result, "k\nsurvived\n", "break in for-in");
+
+	prog = "{ a[$0] = 1 } END { for (k in a) { n++; if (1) continue; print \"bad\" }; print n }";
+	result = runawk(prog :: nil, "x\ny\n");
+	t.assertseq(result, "2\n", "continue in for-in");
+
+	result = runawk("BEGIN { for (i = 0; i < 5; i++) { if (i == 2) break; print i } }" :: nil, "");
+	t.assertseq(result, "0\n1\n", "break in if in for");
+
+	result = runawk("BEGIN { for (i = 0; i < 4; i++) { if (i == 1) continue; print i } }" :: nil, "");
+	t.assertseq(result, "0\n2\n3\n", "continue in if in for");
+
+	prog = "BEGIN { while (1) { i++; if (i > 3) break; if (i == 2) continue; print i } }";
+	result = runawk(prog :: nil, "");
+	t.assertseq(result, "1\n3\n", "break/continue in while");
+
+	result = runawk("BEGIN { do { i++; if (i == 2) break } while (i < 10); print i }" :: nil, "");
+	t.assertseq(result, "2\n", "break in do-while");
+
+	prog = "BEGIN { for (i = 0; i < 2; i++) for (j = 0; j < 3; j++) { if (j == 1) break; print i, j } }";
+	result = runawk(prog :: nil, "");
+	t.assertseq(result, "0 0\n1 0\n", "break leaves inner loop only");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -423,6 +510,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("OFS", testOFS);
 	run("ComparisonPattern", testComparisonPattern);
 	run("UserFunction", testUserFunction);
+	run("RecordVerbatim", testRecordVerbatim);
+	run("FieldAssignRebuild", testFieldAssignRebuild);
+	run("TabFS", testTabFS);
+	run("BreakContinue", testBreakContinue);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

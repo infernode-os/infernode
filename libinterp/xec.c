@@ -1662,7 +1662,7 @@ OP(divx1)
 	else
 		s >>= (-p);
 	s /= (LONG)y;
-	W(d) = (WORD)s + v;
+	W(d) = CW(s + v);
 }
 OP(cvtxx1)
 {
@@ -1716,7 +1716,7 @@ OP(cvtfx)
 
 	v = F(s)*F(m);
 	v = v < 0 ? v-0.5: v+0.5;
-	W(d) = (WORD)v;
+	W(d) = CW((vlong)v);
 }
 OP(cvtxf)
 {

@@ -46,10 +46,16 @@ rc=$?
 
 echo "$out"
 
-if [ "$rc" -ne 0 ]; then
-	echo "FAIL: dhcp_test exited $rc"
-	exit 1
-fi
+# 137 is not a failure. The hosted emulator leaves by sending SIGKILL to
+# its own process group and then calling exit(0) (cleanexit, emu/Linux/
+# os.c, unchanged since 2006), and which of the two the shell sees is a
+# race between its threads: the same run is 0 on one machine and 137 on
+# the next. What the test proved is in its output, checked below.
+case "$rc" in
+0|137) ;;
+*)	echo "FAIL: dhcp_test exited $rc"
+	exit 1 ;;
+esac
 
 if ! echo "$out" | grep -q '^PASS$'; then
 	echo "FAIL: dhcp_test did not report PASS"

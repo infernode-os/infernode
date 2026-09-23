@@ -409,6 +409,8 @@ timeoutTask(ch: chan of int, ms: int)
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
 | `wpa_test.b` | WPA2 key derivation (RFC 6070, 802.11i, RFC 3394) + the four-way handshake |
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
+| `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
+| `fdclose_test.b` | Dropping the last reference to an fd closes it |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

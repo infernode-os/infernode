@@ -73,8 +73,10 @@ Status as of 2026-06-01. Package: `io.infernode`. Owner decisions are marked
         - `INFERNODE_UPLOAD_KEY_PASSWORD`
         - `PLAY_SERVICE_ACCOUNT_JSON`         (Play Console service account,
           "Release apps to testing tracks")
-      versionCode is the repo commit count (always climbs; the store is at
-      3). First upload still needs the manual one below so the track exists.
+      versionCode is the repo commit count (always climbs). The first
+      automated upload (`android-v0.1.1`, 2026-06-04) stamped 3001, so that
+      is what the store is at — not the 3 of the hand-built bundle. First
+      upload still needed the manual one below so the track exists.
 
 ## Build command (once native libs + assets are staged)
 

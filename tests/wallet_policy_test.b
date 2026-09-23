@@ -220,6 +220,17 @@ testGasBudget(t: ref T)
 		"malformed gas budget rejected");
 }
 
+testApprovalMandatory(t: ref T)
+{
+	ctl := rd(W + "/policy/ctl");
+	t.assert(contains(ctl, "requireapproval on"),
+		"account reports mandatory approval");
+	t.assert(wr(W + "/policy/ctl", "requireapproval off") <= 0,
+		"trusted controller cannot disable approval");
+	t.assert(wr(W + "/policy/ctl", "requireapproval on") > 0,
+		"legacy explicit approval-on command remains accepted");
+}
+
 testNetworkPinning(t: ref T)
 {
 	wr(W + "/policy/ctl", "budget 500 2000 USDC");
@@ -358,6 +369,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Budget/Uint256", testBudgetUint256);
 	run("Budget/CurrencyFailsClosed", testBudgetCurrencyFailsClosed);
 	run("Budget/Gas", testGasBudget);
+	run("Approval/Mandatory", testApprovalMandatory);
 	run("Network/Pinning", testNetworkPinning);
 	run("Authorize/InjectionRejected", testInjectionRejected);
 	run("Authorize/ApprovalFlow", testApprovalFlow);

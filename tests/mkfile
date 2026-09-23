@@ -38,6 +38,7 @@ TARG=\
 	dhcp_test.dis\
 	crypto_test.dis\
 	delegation_budget_test.dis\
+	destructor_test.dis\
 	dial_test.dis\
 	dialnorm_test.dis\
 	edit_test.dis\
@@ -129,6 +130,8 @@ TARG=\
 	pqc_fuzz_test.dis\
 	tls_pq_test.dis\
 	x509_test.dis\
+	x509_path_test.dis\
+	tls_chain_live.dis\
 	xml_test.dis\
 	xenith_concurrency_test.dis\
 	xenith_exit_test.dis\

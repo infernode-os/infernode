@@ -78,7 +78,8 @@ protected by namespace narrowing alone, so it was removed rather than hidden
 grant). wallet9p constructs everything it signs
 (transactions from `pay`, EIP-712 digests from `authorize`) and enforces budget
 and approval policy on every execution path. Payment approval and wallet
-configuration remain trusted-controller actions outside the model namespace.
+configuration remain trusted-controller actions outside the model namespace;
+approval cannot be disabled for an agent-visible account.
 
 When a workflow appears to require user files and the web simultaneously, split
 it into stages with a trusted mediator. There is no safe prompt that compensates
@@ -263,11 +264,22 @@ For ordinary tools the ordering remains security-critical:
 ```
 asyncexec(tool):
   1. pctl(FORKNS)
-  2. pctl(NODEVS)
-  3. bind /tool.N over /tool
-  4. restrictns(Capabilities(tools = [tool], ...))
-  5. execute only that tool module
+  2. pctl(NEWENV), then copy only VELTRO_SESSION
+  3. pctl(NODEVS)
+  4. bind /tool.N over /tool
+  5. restricttoolns(Capabilities(tools = [tool], ...))
+  6. execute only that tool module
 ```
+
+The fresh environment group is required even though `restrictns()` narrows
+`/env`: Inferno deliberately permits a process to name its private `#e`
+device after `NODEVS`. Without `NEWENV`, that alias would recover the
+launcher's unfiltered environment behind the restricted `/env` view.
+
+`restricttoolns()` hides trusted `/tmp/veltro/.ns` metadata before the final
+`/tmp` replacement. No model-facing operation may call `restrictdir()` after
+that replacement: doing so would recreate `/tmp/.veltro-ns` inside the
+worker's writable, restricted `/tmp` view and expose its shadow backing.
 
 `exec` defers `NODEVS` to its trusted wrapper. The wrapper opens the current
 worker's `#p/<pid>/wait`, retains only that FD and its I/O across `NEWFD`, then
@@ -344,7 +356,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 |----------|-----------|
 | No ambient host filesystem | `/n/local` is absent unless exactly granted; `#U` attachment is blocked by `NODEVS` at every execution boundary |
 | No project file exposure | Root restriction hides `.env`, `.git`, `CLAUDE.md`, source tree |
-| No env secrets | `/env` is allowlisted; spawned children also use `NEWENV` |
+| No env secrets | Every tool worker and spawned child uses `NEWENV`; workers copy only `VELTRO_SESSION`, then `/env` is allowlisted |
 | No ambient child FDs | Spawn uses `NEWFD`; exec keeps only I/O and its private wait FD |
 | Safe FD 0-2 | `verifysafefds()` redirects nil FDs to `/dev/null` |
 | Empty srv registry | NEWPGRP first (child) |
@@ -360,6 +372,15 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | Host path control | `/n/local` hidden unless `caps.paths` grants specific subpaths (`-p` flag) |
 | Speech preserved | `/n/speech` auto-detected and included in `/n` allowlist |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
+
+The baseline paths above are retained capabilities, not declarations that an
+entire subtree is harmless. `/dev/cons` is an input/output channel, `/prog`
+reveals the current tool process, and `/lib/veltro` contains agent-visible
+prompts and configuration. Installation secrets must never be placed in that
+tree; credentials belong in factotum. The deterministic security suite pins the
+exact `/dev`, `/dis`, `/prog`, and `/lib` top-level views, the granted tool
+module set, protected-key exclusion, and read-only attenuation. Escape-room
+campaign results supplement those checks but do not prove these paths safe.
 
 ## Shell and Exec Access
 
@@ -510,7 +531,8 @@ Tests cover:
 - `restrictns()` full policy (/dis, /dev, /n, /lib, /tmp, /)
 - `restrictns()` shell access via shellcmds
 - `/prog` is empty for exec both with and without shellcmds
-- `restrictns()` concurrent (race safety)
+- baseline `/dev`, `/dis`, `/prog`, and `/lib` surface and read-only attenuation
+- concurrent live-shadow containment while restricted namespaces coexist
 - `verifyns()` violation detection
 - Audit logging
 - Missing items handled gracefully
@@ -585,7 +607,7 @@ parser in `appl/cmd/ndb/`.
 exposes at `/tool/`):
 
     /tool/tools       one tool name per line
-    /tool/paths       one `path ro|rw` grant per line (legacy fixtures imply rw)
+    /tool/paths       one `path ro|rw|cow` effective capability per line
     /tool/meta/role   "toplevel" or "child"
     /tool/meta/xenith "1" or "0"
     /tool/meta/actid  integer or "-1"
@@ -645,7 +667,9 @@ and enumerable. Adding a new axis is a deliberate act, not a derivation:
 | Kernel | `attaches_device` | `role=toplevel` ∧ `nodevs=unset` |
 | Secrets | `reads_secrets_factotum` | `/mnt/factotum` in reads_fs |
 | Secrets | `reads_env` | `NEWENV` unset |
-| Economic | `spends` | tool manifest (wallet, pay) |
+| Economic | `proposes_payment` | tool manifest (wallet, payfetch) |
+| Economic | `spends` | tool manifest for a distinct direct-spend capability |
+| Comms | `proposes_message` | `writes_fs` and exact `/mnt/msg/draft` grant |
 | Comms | `sends_llm` | tool manifest, `caps.llmconfig` |
 | Comms | `sends_ui` | `caps.xenith` ∨ `/mnt/ui` in writes_fs |
 | Comms | `receives_input` | `/dev/cons` in reads_fs |
@@ -669,7 +693,7 @@ under `tests/nsaudit-rules/`. New rules land as (file, test) pairs.
 | `UNCONSTRAINED_SHELL` | `exec` in tools ∧ `shellcmds` empty | high |
 | `SPAWN_INHERITANCE` | `spawn` in tools ∧ `writes_fs_durable` | medium |
 | `DURABLE_HOST_MUTATION` | `writes_fs_durable` non-empty | medium |
-| `UNBOUNDED_SPEND` | `spends` without per-call gating metadata | high |
+| `UNBOUNDED_SPEND` | `spends` without capability-bound enforcement attestation | high |
 | `LLM_AS_EGRESS_FOR_SECRETS` | `sends_llm` ∧ reads_fs contains secrets path | high |
 | `NET_EGRESS_IMPLICIT` | `dials_net` without matching `mcproviders` entry | medium |
 | `SUBAGENT_MISSING_NODEVS` | `role=child` ∧ `nodevs=unset` | high |
@@ -696,21 +720,23 @@ Current fixtures under `tests/nsaudit-fixtures/`:
   is not a path grant: `nsconstruct` derives its narrowed visibility from the
   granted UI tools, preventing generic filesystem and shell tools from reusing
   raw UI controller authority.
-- `profile-messaging` — base profile plus the message read/proposal surface
-  (`/mnt/msg`, `/mnt/msg/draft`). Trusted message controls remain excluded.
+- `profile-messaging` — base profile plus the `write` tool and exact message
+  read/proposal surface (`/mnt/msg`, `/mnt/msg/draft`). A draft write queues an
+  immutable proposal; it does not send or approve it. Trusted message controls
+  remain excluded, and the identity of the trusted approver is a deployment
+  property rather than something the draft capability can attest.
 - `profile-payments` — base profile plus wallet proposal authority
-  (`/n/wallet`) and a declared `walletbudget`. The declaration is exactly a
-  positive uint256 integer in base units followed by `ETH`, `USDC`, or `USD`
-  (for example, `1000000 USDC`). Missing, zero, negative, overflowing, or
-  malformed declarations fail closed as unbounded spend. Trusted wallet
-  controls remain excluded.
+  (`/n/wallet`). Agent-visible `pay` and `authorize` files can only queue
+  proposals; approval cannot be disabled, and trusted wallet controls remain
+  excluded. A future direct-spend capability would be a distinct authority and
+  would require enforcement metadata for that exact agent view.
 
 The important design rule is additive composition. Start with a small base
 namespace, then overlay only the capability layer required for the job:
 messaging, payments, local GUI, or future remote administration. This is a
 natural Plan 9/Inferno shape: profile layers can later be implemented with
-ordinary namespace operations, including union binds where appropriate, without
-turning the audit model into a separate policy engine.
+ordinary namespace operations, including union binds where appropriate,
+without turning the audit model into a separate policy engine.
 
 Headless and desktop are distinct because `/mnt/ui` is authority. A headless
 container should not receive `/mnt/ui` or `/chan` just because a UI service is
@@ -751,9 +777,10 @@ The profile invariant test currently fails on:
 - missing `NODEVS` / `attaches_device`;
 - explicit trusted control-path grants;
 - factotum secret visibility;
+- message proposal authority outside the messaging profile;
 - UI authority outside the GUI profile;
-- spend authority outside the payments profile;
-- unbounded spend in the payments profile.
+- payment proposal authority outside the payments profile;
+- direct spend authority in the proposal-only payments profile.
 
 This is intentionally narrower than a full snapshot gate. It lets ordinary
 profile details churn while making the non-negotiable security properties

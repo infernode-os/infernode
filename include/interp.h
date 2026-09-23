@@ -411,6 +411,7 @@ extern	void		freejitcode(void*, ulong);
  * stopped on an implicit declaration. Both define it with this type.
  */
 extern	void		panic(char*, ...);
+extern	void		freetypejit(Type*);
 extern	void		cqadd(Progq**, Prog*);
 extern	void		cqdel(Progq**);
 extern	void		cqdelp(Progq**, Prog*);

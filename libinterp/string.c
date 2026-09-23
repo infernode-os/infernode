@@ -308,6 +308,32 @@ OP(lenc)
 	W(d) = l;
 }
 
+/*
+ * A string to a Limbo int, which is 32 bits whatever a C long is.
+ *
+ * strtol() saturates at the ends of a long. Where a long is 32 bits
+ * that IS the int's range and "3000000000" came back 2147483647; on an
+ * LP64 build the long is 64 bits, and the whole of it went into the
+ * int's slot: a value that printed as 1 and was not equal to 1
+ * (int "4294967297"), and that the interpreter and the JITs then
+ * disagreed about, since cvtwl narrows in one and reads the slot in
+ * the other. It missed the pass that made every other w result
+ * canonical (CW() in xec.c) because it lives in this file. Saturate at
+ * the int's own ends, as the 32-bit system always did.
+ */
+static WORD
+strtoint(char *s)
+{
+	long v;
+
+	v = strtol(s, nil, 10);
+	if(v > 0x7FFFFFFFL)
+		v = 0x7FFFFFFFL;
+	if(v < -0x7FFFFFFFL - 1)
+		v = -0x7FFFFFFFL - 1;
+	return (WORD)(int)v;
+}
+
 OP(cvtcw)
 {
 	String *s;
@@ -317,10 +343,10 @@ OP(cvtcw)
 		W(d) = 0;
 	else
 	if(s->len < 0)
-		W(d) = strtol(string2c(s), nil, 10);
+		W(d) = strtoint(string2c(s));
 	else {
 		s->Sascii[s->len] = '\0';
-		W(d) = strtol(s->Sascii, nil, 10);
+		W(d) = strtoint(s->Sascii);
 	}
 }
 

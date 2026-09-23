@@ -38,6 +38,7 @@ if grep -q 'cow/%d-%d", actid, seq' "$NS"; then
 DRIVE="$ROOT/tmp/tools9p_write_exec_view_drive.sh"
 LOG="$(mktemp)"
 trap 'rm -f "$DRIVE" "$LOG"' EXIT HUP INT TERM
+mkdir -p "$ROOT/tmp"
 
 cat >"$DRIVE" <<'EOF'
 path=(/dis/veltro /dis/cmd /dis .)
@@ -45,7 +46,9 @@ rm -r /tmp/veltro/probe-sdk /tmp/veltro/cow >[2] /dev/null
 mkdir -p /tmp/veltro/probe-sdk/dis
 cp /dis/limbo.dis /tmp/veltro/probe-sdk/dis/limbo.dis
 cp -r /module /tmp/veltro/probe-sdk/module
-tools9p -a 1 -p /tmp/veltro/probe-sdk:rw write list read exec & sleep 2
+tools9p -a 1 -p /tmp/veltro/probe-sdk:rw write list read exec &
+tools9p -m /tool.hold -a 2 -p /tmp/veltro/probe-sdk:rw exec &
+sleep 2
 echo '/tmp/veltro/probe-sdk/qualification-probe.b
 implement Probe;
 include "sys.m";
@@ -58,13 +61,49 @@ init(nil: ref Draw->Context, nil: list of string)
 	sys->print("INFR434_PROBE_OK");
 }' > /tool/write/ctl
 cat /tool/write/ctl
+echo '/tmp/veltro/probe-sdk/shadow-hold-probe.b
+implement ShadowHoldProbe;
+include "sys.m";
+	sys: Sys;
+include "draw.m";
+ShadowHoldProbe: module { init: fn(nil: ref Draw->Context, nil: list of string); };
+init(nil: ref Draw->Context, nil: list of string)
+{
+	sys = load Sys Sys->PATH;
+	sys->sleep(60000);
+}' > /tool/write/ctl
+cat /tool/write/ctl
 echo '@@LIST'
 echo '/tmp/veltro/probe-sdk' > /tool/list/ctl
 cat /tool/list/ctl
+echo '@@BOUNDARY_ROOT'
+echo '/tmp/veltro/probe-sdk/../../..' > /tool/list/ctl
+cat /tool/list/ctl
+echo '@@BOUNDARY_INTERNAL'
+echo '/tmp/veltro/probe-sdk/../../../.veltro-ns' > /tool/list/ctl
+cat /tool/list/ctl
+echo '@@BOUNDARY_DIRECT'
+echo '/tmp/.veltro-ns' > /tool/list/ctl
+cat /tool/list/ctl
+echo '@@BOUNDARY_DONE'
 echo '@@COMPILE'
 echo '/tmp/veltro/probe-sdk/dis/limbo.dis -I /tmp/veltro/probe-sdk/module -o /tmp/veltro/probe-sdk/qualification-probe.dis /tmp/veltro/probe-sdk/qualification-probe.b' > /tool/exec/ctl
 cat /tool/exec/ctl
+echo '/tmp/veltro/probe-sdk/dis/limbo.dis -I /tmp/veltro/probe-sdk/module -o /tmp/veltro/probe-sdk/shadow-hold-probe.dis /tmp/veltro/probe-sdk/shadow-hold-probe.b' > /tool/exec/ctl
+cat /tool/exec/ctl
 echo '@@RUN'
+echo '/tmp/veltro/probe-sdk/shadow-hold-probe.dis' > /tool.hold/exec/ctl &
+sleep 1
+echo '@@CONCURRENT_BOUNDARY'
+echo '/tmp/veltro/probe-sdk/../../..' > /tool/list/ctl
+cat /tool/list/ctl
+echo '/tmp/veltro/probe-sdk/../../../.veltro-ns' > /tool/list/ctl
+cat /tool/list/ctl
+echo '/tmp/veltro/probe-sdk/../../..' > /tool/list/ctl
+cat /tool/list/ctl
+echo '/tmp/veltro/probe-sdk/../../../.veltro-ns' > /tool/list/ctl
+cat /tool/list/ctl
+echo '@@CONCURRENT_DONE'
 echo '/tmp/veltro/probe-sdk/qualification-probe.dis' > /tool/exec/ctl
 cat /tool/exec/ctl
 echo '@@DRIVEDONE'
@@ -75,6 +114,15 @@ rc=$?
 case "$rc" in 0|124|137) ;; *) echo "FAIL: driver exited with status $rc"; sed -n '1,40p' "$LOG"; exit 1 ;; esac
 
 out="$(grep -vE '^JIT|sdl3_pre|mounted on' "$LOG")"
+
+boundary="$(printf '%s\n' "$out" | sed -n '/^@@BOUNDARY_ROOT$/,/^@@BOUNDARY_DONE$/p')"
+concurrent_boundary="$(printf '%s\n' "$out" | sed -n '/^@@CONCURRENT_BOUNDARY$/,/^@@CONCURRENT_DONE$/p')"
+if printf '%s\n%s\n' "$boundary" "$concurrent_boundary" |
+	grep -Eq '^d[[:space:]]+- (\.veltro-ns|shadow)$'; then
+	echo "FAIL: serial or concurrent traversal exposed Veltro shadow backing"
+	printf '%s\n%s\n' "$boundary" "$concurrent_boundary"
+	exit 1
+fi
 
 # list must see the written file
 if ! echo "$out" | grep -q 'qualification-probe.b'; then

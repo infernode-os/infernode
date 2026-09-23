@@ -81,6 +81,11 @@ in the Dis VM, both JITs and the hosted emulator.
 - `dossrv` does not validate a long-name entry set on read, and a
   create that fails part-way leaves slots behind (#673).
 - The Pi 4 port is QEMU-only.
+- Writing `0` to `/dev/jit` on a running system and then running any
+  module panics the kernel (and faults the hosted arm64 emulator): the
+  arm64 JIT branches into an interpreted module's bytecode as if it
+  were code (#687). Nothing does this unasked; the interpreter is
+  measured by building the kernel with `-DCFLAG=0`.
 
 ### Release artifacts
 

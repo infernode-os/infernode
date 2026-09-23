@@ -101,6 +101,7 @@ enum
 	WRTPC	= (1<<2),
 	TCHECK	= (1<<3),
 	NEWPC	= (1<<4),
+	MODCHK	= (1<<7),	/* the op may have made R.M an interpreted module (IMCALL) */
 	DBRAN	= (1<<5),
 	THREOP	= (1<<6),
 
@@ -945,6 +946,25 @@ punt(Inst *i, int m, void (*fn)(void))
 	mem(Ldw, O(REG, MP), RREG, RMP);
 
 	if(m & NEWPC) {
+		/*
+		 * IMCALL is punted, and OP(mcall) leaves R.M the callee and
+		 * R.PC its entry. If the callee was compiled that is native
+		 * code and the branch below is right; if it was not -- the
+		 * JIT switched off at run time, or a module built with
+		 * limbo -C -- R.PC is a Dis Inst array, and branching to it
+		 * executes bytecode as instructions: a kernel panic on the
+		 * board and a SEGV in JIT code hosted (#687). The interpreter
+		 * takes it from here instead, through xpc, exactly as
+		 * macret() hands a return to an interpreted caller back.
+		 * amd64 inlines the call and makes the same test.
+		 */
+		if(m & MODCHK) {
+			mem(Ldw, O(REG, M), RREG, RA0);
+			mem(Ldw32, O(Modlink, compiled), RA0, RA0);
+			CBNZ_X(RA0, 3);
+			mem(Ldw, O(REG, xpc), RREG, RTA);
+			BR_REG(RTA);
+		}
 		mem(Ldw, O(REG, PC), RREG, RTA);
 		BR_REG(RTA);
 	}
@@ -1365,7 +1385,7 @@ comp(Inst *i)
 		int flags = SRCOP|DSTOP;
 		switch(i->op) {
 		case IMCALL:
-			flags = SRCOP|DSTOP|THREOP|WRTPC|NEWPC;
+			flags = SRCOP|DSTOP|THREOP|WRTPC|NEWPC|MODCHK;
 			break;
 		case ISEND: case IRECV: case IALT:
 			flags = SRCOP|DSTOP|TCHECK|WRTPC;
@@ -1421,7 +1441,7 @@ comp(Inst *i)
 
 	/* ---- Punted opcodes ---- */
 	case IMCALL:
-		punt(i, SRCOP|DSTOP|THREOP|WRTPC|NEWPC, optab[i->op]);
+		punt(i, SRCOP|DSTOP|THREOP|WRTPC|NEWPC|MODCHK, optab[i->op]);
 		break;
 	case ISEND:
 	case IRECV:

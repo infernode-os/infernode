@@ -131,14 +131,14 @@ contains(s, sub: string): int
 }
 
 # Cert file paths
-GLOBALSIGN_ECC := "/lib/certs/globalsign-ecc-root-r5.der";
+GLOBALSIGN_ECC := "/lib/certs/globalsign-ecc-root-ca-r5.der";
 ISRG_ROOT_X1 := "/lib/certs/isrg-root-x1.der";
 DIGICERT_G2 := "/lib/certs/digicert-global-root-g2.der";
-GLOBALSIGN_R6 := "/lib/certs/globalsign-root-r6.der";
-GLOBALSIGN_R3 := "/lib/certs/globalsign-root-r3.der";
-SSLCOM_ECC := "/lib/certs/sslcom-root-ca-ecc.der";
-SSLCOM_RSA := "/lib/certs/sslcom-root-ca-rsa.der";
-COMODO_AAA := "/lib/certs/comodo-aaa-certificate-services.der";
+GLOBALSIGN_R6 := "/lib/certs/globalsign-root-ca-r6.der";
+GLOBALSIGN_R3 := "/lib/certs/globalsign-root-ca-r3.der";
+SSLCOM_ECC := "/lib/certs/ssl-com-root-certification-authority-ecc.der";
+SSLCOM_RSA := "/lib/certs/ssl-com-root-certification-authority-rsa.der";
+COMODO_AAA := "/tests/certs/comodo-aaa-certificate-services.der";	# removed from the Mozilla store; fixture only
 
 CERTFILES: array of string;
 
@@ -548,16 +548,18 @@ testChainSingleRoot(t: ref T)
 
 testChainMismatch(t: ref T)
 {
-	der1 := readfile(GLOBALSIGN_ECC);
+	# A leaf that does not chain to any trust anchor, plus an unrelated
+	# trusted root: extra certificates are ignored (RFC 8446 §4.4.2), so
+	# the root does not help and the chain must fail.
+	der1 := readfile("/tests/certs/pki/leaf.der");
 	der2 := readfile(ISRG_ROOT_X1);
 	if(der1 == nil || der2 == nil) {
 		t.fatal("cannot read cert files");
 		return;
 	}
 
-	# Two unrelated roots: second cert's issuer won't match first's subject
 	(ok, err) := x509->verify_certchain(der1 :: der2 :: nil);
-	t.asserteq(ok, 0, "mismatched chain should fail");
+	t.asserteq(ok, 0, "chain without a path to a trusted root should fail");
 	t.assert(err != nil && len err > 0, "should return error message");
 	t.log("expected error: " + err);
 }

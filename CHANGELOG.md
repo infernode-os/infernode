@@ -51,6 +51,14 @@ in the Dis VM, both JITs and the hosted emulator.
   #649): about 52 KB per command run, 52 MB per thousand, now zero. The
   amd64 JIT stored `movw` results sign-extended and truncated 64-bit
   words; fixed and verified on x86-64.
+- **The arm64 JIT hands off to the interpreter for a callee that is
+  not compiled** (#687). A compiled module calling an interpreted one
+  -- the JIT switched off at run time, or a module built with `limbo
+  -C` -- branched into the callee's bytecode as if it were code: a
+  kernel panic on the board, a fault in the hosted emulator. Found by
+  the JIT benchmark's interpreter runs on the 3B+; amd64 was already
+  right. A regression test runs both directions, hosted and on the
+  Pi 3 kernel under QEMU.
 - `memfs`: a read past the end of a file returns nothing instead of
   killing the server (found by the soak, #641).
 
@@ -81,11 +89,6 @@ in the Dis VM, both JITs and the hosted emulator.
 - `dossrv` does not validate a long-name entry set on read, and a
   create that fails part-way leaves slots behind (#673).
 - The Pi 4 port is QEMU-only.
-- Writing `0` to `/dev/jit` on a running system and then running any
-  module panics the kernel (and faults the hosted arm64 emulator): the
-  arm64 JIT branches into an interpreted module's bytecode as if it
-  were code (#687). Nothing does this unasked; the interpreter is
-  measured by building the kernel with `-DCFLAG=0`.
 
 ### Release artifacts
 

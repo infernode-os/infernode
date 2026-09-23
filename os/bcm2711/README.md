@@ -184,7 +184,11 @@ Everything below will be met for the first time on the board.
    better). MSI itself — `../port/pci.c`'s setup of it and the driver
    living on it — has run on `virt`, through the GIC's MSI frame; so
    have hot-plugging, pulling a hub with a device in it, and the
-   controller-reset recovery path. `echo dump > /usb/usb/ctl` prints
+   controller-reset recovery path; and a USB disk, which `diskusb`
+   (`os/init/diskusb.b`) serves as `/chan/usbdiskN` and mounts on
+   `/n/usbN` — on this board only once the xHCI is real, since the gate
+   is "the machine has an xHCI" and QEMU's `raspi4b` has none.
+   `echo dump > /usb/usb/ctl` prints
    the controller's status and every port's. Under QEMU the DWC2
    controller stands in for all this; on a board the DWC2 is only the
    USB-C port, and is `#u/usb/ep1.0` — the xHCI is `ep2.0`.

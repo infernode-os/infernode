@@ -296,6 +296,11 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/mouseusb.dis" \
             "$ROOT/os/init/mouseusb.b" 2>>"$BUILD/cc.log" || return 1
 
+        # A USB disk (mass storage, bulk-only, SCSI): serves the disk as
+        # /chan/usbdiskN and mounts its FAT on /n/usbN through dossrv.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/diskusb.dis" \
+            "$ROOT/os/init/diskusb.b" 2>>"$BUILD/cc.log" || return 1
+
         # The touch panel's frames as pointer events. Under QEMU there is
         # no panel, so what gets exercised is the driver noticing that
         # and its decoder self-test.
@@ -322,6 +327,7 @@ build_kernel() {
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+            "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
             "/dis/drawtest.dis=$BUILD/drawtest.dis"
             "/dis/tktest.dis=$BUILD/tktest.dis"
@@ -366,6 +372,11 @@ build_kernel() {
             "/n="
             "/n/dos="
             "/n/remote="
+            # ...and where diskusb mounts a USB disk's FAT: one per disk
+            "/n/usb0="
+            "/n/usb1="
+            "/n/usb2="
+            "/n/usb3="
 
             # Mount points for the window system. mount(2) will not
             # create its target, so /mnt/wm has to exist before wm/wm
@@ -4452,15 +4463,17 @@ fi
 #
 # virt_usb_boot <machine args> <log>: the boot described above
 virt_usb_boot() {
-python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" <<'PYEOF' > "$2" 2>&1
+cp "$VSD" "$BUILD/$PLAT-usbdisk.img"
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" "$BUILD/$PLAT-usbdisk.img" <<'PYEOF' > "$2" 2>&1
 import json, os, socket, subprocess, sys, threading, time
-qemu, img, extra, qmp = sys.argv[1:5]
+qemu, img, extra, qmp, udisk = sys.argv[1:6]
 if os.path.exists(qmp):
     os.unlink(qmp)
 args = [qemu] + extra.split() + [
     "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "pcibounce",
     "-device", "usb-hub,port=1", "-device", "usb-kbd,port=1.2", "-device", "usb-mouse,port=2",
     "-netdev", "user,id=u0", "-device", "usb-net,netdev=u0,port=3",
+    "-drive", "if=none,id=ud,file=%s,format=raw" % udisk, "-device", "usb-storage,drive=ud,port=4",
     "-qmp", "unix:%s,server,nowait" % qmp]
 p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 buf = bytearray()
@@ -4503,6 +4516,11 @@ try:
     for ch in "echo Xhci-Keys\n":
         qkey(f, ch)
     time.sleep(2)
+    # the disk: mounted by hand, as the console shell must (diskusb.b says why)
+    waitfor(b"served as /chan/usbdisk0", 20)
+    typed("dossrv -f /chan/usbdisk0 -m /n/usb0", 3)
+    typed("cat /n/usb0/HELLO.TXT")
+    typed("echo written-over-usb > /n/usb0/usb.txt; cat /n/usb0/usb.txt", 3)
     typed("cat /usb/usb/ctl")
     typed("echo dump > /usb/usb/ctl", 2.5)
     s.close()
@@ -4523,6 +4541,18 @@ vcheck "xhci: a keyboard BEHIND the hub is claimed"    "kbdusb: ep"
 vcheck "xhci: a mouse is claimed"                      "mouseusb: ep"
 vcheck "xhci: keys typed on the USB keyboard reach the shell (interrupt IN, through the hub)" "Xhci-Keys"
 vcheck "xhci: USB Ethernet comes up as ether0 (bulk endpoints)" "etherusb: serving /net/ether0 (kernel data path)"
+# a USB disk (os/init/diskusb.b): mass storage, bulk-only, SCSI. Served as
+# a block file and mounted by dossrv -- for init's namespace by the
+# driver, for the console shell's by the shell, which is what is typed.
+vcheck "xhci: a USB disk is found and its size read (INQUIRY, READ CAPACITY)" "QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk0"
+vcheck "xhci: the disk's FAT is mounted for init"        "diskusb: /chan/usbdisk0 mounted on /n/usb0"
+vcheck "xhci: the shell mounts it too and reads a file from it (READ(10))" "hello from the SD card"
+vcheck "xhci: a file written to the USB disk reads back (WRITE(10))" "written-over-usb"
+if grep -aq "written-over-usb" "$BUILD/$PLAT-usbdisk.img"; then
+    pass "virt: xhci: the write reached the disk image itself"
+else
+    fail "virt: xhci: the written file is not on the disk image"
+fi
 vcheck "xhci: ether0 has QEMU's address"               "etherusb: 10.0.2.15 mask"
 vcheck "xhci: the gateway answers a ping over it"      "ICMP echo reply from 10.0.2.2"
 xb="$(grep -a 'usbxhci: [0-9]* transfers bounced' <<<"$OUT" | tail -1 | sed -E 's/.*usbxhci: ([0-9]+) transfers.*/\1/')"
@@ -4552,6 +4582,7 @@ if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
     vcheck "msi: a keyboard behind a hub is claimed"       "kbdusb: ep"
     vcheck "msi: keys typed on it reach the shell"         "Xhci-Keys"
     vcheck "msi: the gateway answers a ping over USB Ethernet" "ICMP echo reply from 10.0.2.2"
+    vcheck "msi: the USB disk reads and writes"            "written-over-usb"
     vrefute "msi: nothing panics"                          "panic:"
 else
     skip "virt: this QEMU has no nec-usb-xhci, the xHCI model with MSI"
@@ -4958,6 +4989,11 @@ else
 fi
 [[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
 
+# A blank USB disk on the DWC OTG: this controller is not an xHCI, so the
+# walker must name it and leave it alone (os/init/osinit.b, the gate on
+# diskusb), which is what is checked.
+dd if=/dev/zero of="$BUILD/$PLAT-usbdisk.img" bs=1M count=4 status=none
+QEMUARGS="$PI4ARGS -drive if=none,id=ud,file=$BUILD/$PLAT-usbdisk.img,format=raw -device usb-storage,drive=ud"
 OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 90)"
 printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
 [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
@@ -4999,6 +5035,7 @@ pcheck "the missing GENET is noticed, not faulted on" "genet: NO ETHERNET MAC AT
 # Likewise the PCIe bridge (os/bcm2711/pcibcm.c). The code above it --
 # os/port/pci.c -- is run on the virt machine, which has a bridge.
 pcheck "the missing PCIe bridge is noticed, not faulted on" "pci: NO PCIe BRIDGE AT"
+pcheck "a USB disk on the DWC OTG is enumerated and, with no xHCI, left alone" "is a USB disk; diskusb is not started on this machine"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"

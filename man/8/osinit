@@ -94,9 +94,17 @@ is already non-zero, that being a network device the kernel drives itself
 In processes of their own, and not waited for: walks the USB bus,
 starting
 .BR kbdusb ,
-.B mouseusb
-and
+.BR mouseusb ,
 .B etherusb
+and, on a machine with an xHCI controller,
+.B diskusb
+(a mass-storage device served as
+.B /chan/usbdiskN
+and mounted on
+.BR /n/usbN ;
+the console shell, whose namespace was forked before the driver ran,
+mounts it itself with
+.BR "dossrv -f /chan/usbdisk0 -m /n/usb0" )
 for what it finds and watching hubs for changes; and, if
 .B /n/dos/netconsole
 exists, serves a shell on TCP port 17010.

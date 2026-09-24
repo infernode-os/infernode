@@ -99,7 +99,12 @@ Everything below will be met for the first time on the board.
    `bcm2711.dtsi` and agree with QEMU's wiring for the UARTs and USB,
    which work. Every other one is unexercised.
 2. **The RNG200 driver.** Written from Linux's `iproc-rng200.c`. Not one
-   line of it has executed.
+   line of it has executed. Its register layout was re-read against that
+   driver on 2026-09-24 — control at `0x00` (enable bit 0, mask
+   `0x1fff`), FIFO data `0x20`, FIFO count `0x24` (mask `0xff`) — and
+   agrees; what it does not do that Linux does is the soft-reset dance
+   before enabling, which a generator the firmware left running should
+   not need.
 3. **The SD card on EMMC2.** The driver is the Pi 3's Arasan driver
    pointed at a different base. EMMC2 is a different controller
    revision: its clock comes from a different mailbox clock id (12,

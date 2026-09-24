@@ -80,6 +80,7 @@ Every one of those choices has a way to go wrong that says nothing:
 | `virtio-*-device` | The MMIO transport, which `virtio.c` drives. `virtio-net-pci`, and whatever `-drive if=virtio` makes, are PCI devices on a bus this kernel does not walk. |
 | `-device virtio-rng-device` | The kernel's entropy. Without it the kernel boots, says **NO ENTROPY SOURCE** in capitals, and every key it makes is predictable. |
 | `-smp 4` | `MAXMACH` is 4, as on the board. With fewer, the missing cores are reported as not answering. |
+| `-m` up to 8192 | `mmu.c` maps eight gigabytes; `-m 6144` boots with 6141 MB of free pages and a 1.6 GB Dis heap, which is the tree's only run with physical addresses above 4 GB (a Pi 4's are capped below it by `RAMLIMIT`). Not in the harness: CI's runners have 7 GB. |
 | `-device qemu-xhci` (or `nec-usb-xhci`) | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
 | GICv2 | virt's default up to eight cores. With `gic-version=3` there is no memory-mapped CPU interface; `intrinit` says so. |
 

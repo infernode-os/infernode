@@ -535,6 +535,11 @@ build_kernel() {
             # that opens a temporary file fails with a permission
             # error that reads like a bug in the program.
             "/dis/memfs.dis=$ROOT/dis/memfs.dis"
+            # mntgen generates mount points under /mnt on reference (#713);
+            # styxservers and nametree are what it is written on.
+            "/dis/mntgen.dis=$ROOT/dis/mntgen.dis"
+            "/dis/lib/styxservers.dis=$ROOT/dis/lib/styxservers.dis"
+            "/dis/lib/nametree.dis=$ROOT/dis/lib/nametree.dis"
             "/dis/lib/styxlib.dis=$ROOT/dis/lib/styxlib.dis"
             # the exception handler's search, as a Limbo test run in the
             # kernel's own interpreter (#635: a 32-bit NOPC against a
@@ -2412,7 +2417,8 @@ PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
         '@7 echo -n second-frame > /dev/eia0; sleep 3; echo; {for i in 1 2 3 4 5 6 7 8 9 10 11 12 {read 1}} < /dev/eia0; echo' \
         'cat /dev/eia0status' \
         "echo $LONGLINE" \
-        'echo 0 > /dev/jit; /dis/echo.dis JIT-TO-INTERP-HANDOFF-OK; echo 1 > /dev/jit')"
+        'echo 0 > /dev/jit; /dis/echo.dis JIT-TO-INTERP-HANDOFF-OK; echo 1 > /dev/jit' \
+        'ls -d /mnt/mntprobe; /dis/echo.dis MNT-PROBE-DONE')"
 PLOUT="$(tr -d '\r' <<<"$PLOUT")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- #t session ---"; echo "$PLOUT"; }
 
@@ -2495,6 +2501,16 @@ if [[ "$(grep -c '^JIT-TO-INTERP-HANDOFF-OK' <<<"$PLOUT")" -ge 1 ]]; then
     pass "a compiled module calls an interpreted one: the JIT hands off to the interpreter instead of branching into bytecode (#687)"
 else
     fail "no output from an interpreted module called after 'echo 0 > /dev/jit' (#687: the kernel panicked here before the fix)"
+fi
+# A program that serves a tree opens its own mount point under /mnt
+# before mounting on it, as it does on the hosted emulator. The kernel's
+# root is read only, so osinit mounts mntgen after /mnt and a new name
+# appears there on reference; before that, matrix's /mnt/matrix did not
+# exist and it died before drawing (#713).
+if grep -q '^/mnt/mntprobe' <<<"$PLOUT"; then
+    pass "a name under /mnt appears on reference: mntgen serves programs' own mount points (#713)"
+else
+    fail "ls -d /mnt/mntprobe found nothing: no mntgen on /mnt (#713: matrix cannot mount at /mnt/matrix)"
 fi
 OUT="$OUT_SAVED"
 

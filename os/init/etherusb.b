@@ -399,8 +399,11 @@ init(nil: ref Draw->Context, argv: list of string)
 	# is already a pair of pipes, and asking for two on the same
 	# number is rejected as already in use.
 	#
-	dumpendpoints();
-	(inep, outep, mp) := bulkeps();
+	cfg := confdesc();
+	if(cfg == nil)
+		return;
+	dumpendpoints(cfg);
+	(inep, outep, mp) := bulkeps(cfg);
 	if(inep < 0 || outep < 0){
 		sys->print("etherusb: no pair of bulk endpoints\n");
 		return;
@@ -634,6 +637,45 @@ init(nil: ref Draw->Context, argv: list of string)
 }
 
 #
+# The whole configuration descriptor, fetched once for dumpendpoints and
+# bulkeps to share. Each of the two control reads is tried a few times:
+# after a warm restart the second fetch of it came back short while the
+# keyboard and mouse were enumerating through the same hub, and that
+# was a boot with no Ethernet, reported only as "no pair of bulk
+# endpoints" (#692). A short read now costs a retry, and one that stays
+# short says which read it was. nil if it cannot be had.
+#
+Confretries: con 3;
+
+confdesc(): array of byte
+{
+	hdr := array[9] of byte;
+	n := 0;
+	for(try := 0; try < Confretries; try++){
+		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr)) == len hdr)
+			break;
+		sys->sleep(50);
+	}
+	if(n != len hdr){
+		sys->print("etherusb: configuration descriptor header: %d of %d bytes after %d tries: %r\n", n, len hdr, Confretries);
+		return nil;
+	}
+	total := int hdr[2] | (int hdr[3] << 8);
+	if(total < len hdr || total > 512){
+		sys->print("etherusb: configuration descriptor claims %d bytes\n", total);
+		return nil;
+	}
+	cfg := array[total] of byte;
+	for(try = 0; try < Confretries; try++){
+		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg)) == total)
+			return cfg;
+		sys->sleep(50);
+	}
+	sys->print("etherusb: configuration descriptor: %d of %d bytes after %d tries: %r\n", n, total, Confretries);
+	return nil;
+}
+
+#
 # Say what endpoints this device actually has.
 #
 # The bulk endpoint number is assumed to be 2 in both directions, which
@@ -643,19 +685,9 @@ init(nil: ref Draw->Context, argv: list of string)
 # and the host controller reports that as a transaction error rather than
 # as an empty read -- which is exactly what ep4.2 returns on this board.
 #
-dumpendpoints()
+dumpendpoints(cfg: array of byte)
 {
-	hdr := array[9] of byte;
-
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
-		return;
-	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512)
-		return;
-	cfg := array[total] of byte;
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
-		return;
-
+	total := len cfg;
 	for(i := 0; i + 2 <= total; ){
 		dlen := int cfg[i];
 		if(dlen < 2)
@@ -687,19 +719,9 @@ dumpendpoints()
 # Walked rather than indexed: a configuration is a run of
 # variable-length descriptors packed end to end, each "length, type".
 #
-bulkeps(): (int, int, int)
+bulkeps(cfg: array of byte): (int, int, int)
 {
-	hdr := array[9] of byte;
-
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
-		return (-1, -1, -1);
-	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512)
-		return (-1, -1, -1);
-	cfg := array[total] of byte;
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
-		return (-1, -1, -1);
-
+	total := len cfg;
 	inep := -1;
 	outep := -1;
 	mp := -1;
@@ -736,39 +758,6 @@ setmaxpkt(name: string, mp: int): int
 	return 0;
 }
 
-
-#
-# wMaxPacketSize of the first bulk endpoint, from the configuration
-# descriptor. Returns -1 if it cannot be found.
-#
-# Walked rather than indexed: the configuration arrives as a run of
-# variable-length descriptors packed end to end, each "length, type".
-#
-bulkmaxpkt(): int
-{
-	hdr := array[9] of byte;
-
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
-		return -1;
-	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512)
-		return -1;
-
-	cfg := array[total] of byte;
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
-		return -1;
-
-	for(i := 0; i + 2 <= total; ){
-		dlen := int cfg[i];
-		if(dlen < 2)
-			break;
-		# 5 is an endpoint descriptor; bmAttributes 2 is bulk
-		if(int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 2)
-			return int cfg[i+4] | (int cfg[i+5] << 8);
-		i += dlen;
-	}
-	return -1;
-}
 
 #
 # The device's own bConfigurationValue, from the first nine bytes of its

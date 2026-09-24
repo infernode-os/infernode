@@ -183,8 +183,10 @@ Everything below will be met for the first time on the board.
    unplugged (QEMU's drops it silently, and the driver no longer needs
    better). MSI itself — `../port/pci.c`'s setup of it and the driver
    living on it — has run on `virt`, through the GIC's MSI frame; so
-   have hot-plugging, pulling a hub with a device in it, and the
-   controller-reset recovery path; and a USB disk, which `diskusb`
+   have hot-plugging, pulling a hub with a device in it, the
+   controller-reset recovery path, and isochronous output against
+   QEMU's USB audio device (paced at the sample rate: a USB headset on
+   this board has a driver-level path that has run, and no driver); and a USB disk, which `diskusb`
    (`os/init/diskusb.b`) serves as `/chan/usbdiskN` and mounts on
    `/n/usbN` — on this board only once the xHCI is real, since the gate
    is "the machine has an xHCI" and QEMU's `raspi4b` has none.

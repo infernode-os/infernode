@@ -322,6 +322,11 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/tktest.dis" \
             "$ROOT/os/init/tktest.b" 2>>"$BUILD/cc.log" || return 1
 
+        # Isochronous USB transfers, timed against a USB audio device:
+        # the one kind of transfer nothing else here exercises.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/isotest.dis" \
+            "$ROOT/os/init/isotest.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
@@ -331,6 +336,7 @@ build_kernel() {
             "/dis/touch.dis=$BUILD/touch.dis"
             "/dis/drawtest.dis=$BUILD/drawtest.dis"
             "/dis/tktest.dis=$BUILD/tktest.dis"
+            "/dis/isotest.dis=$BUILD/isotest.dis"
 
             # The FAT filesystem, as a program. Imported from upstream
             # Inferno (appl/cmd/dossrv.b) -- MIT, the same provenance as
@@ -4474,6 +4480,7 @@ args = [qemu] + extra.split() + [
     "-device", "usb-hub,port=1", "-device", "usb-kbd,port=1.2", "-device", "usb-mouse,port=2",
     "-netdev", "user,id=u0", "-device", "usb-net,netdev=u0,port=3",
     "-drive", "if=none,id=ud,file=%s,format=raw" % udisk, "-device", "usb-storage,drive=ud,port=4",
+    "-audiodev", "none,id=a0", "-device", "usb-audio,audiodev=a0,port=1.3",
     "-qmp", "unix:%s,server,nowait" % qmp]
 p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 buf = bytearray()
@@ -4521,6 +4528,8 @@ try:
     typed("dossrv -f /chan/usbdisk0 -m /n/usb0", 3)
     typed("cat /n/usb0/HELLO.TXT")
     typed("echo written-over-usb > /n/usb0/usb.txt; cat /n/usb0/usb.txt", 3)
+    # isochronous: two seconds of silence at the audio device, timed
+    typed("isotest 2", 5)
     typed("cat /usb/usb/ctl")
     typed("echo dump > /usb/usb/ctl", 2.5)
     s.close()
@@ -4553,6 +4562,15 @@ if grep -aq "written-over-usb" "$BUILD/$PLAT-usbdisk.img"; then
 else
     fail "virt: xhci: the written file is not on the disk image"
 fi
+# isochronous OUT (os/init/isotest.b): the driver must pace the stream by
+# the controller's frame counter -- 192 bytes a millisecond of wall time
+# at 48 kHz stereo -- and not take the data and return, or dribble it.
+vcheck "xhci: an isochronous OUT endpoint is found on the audio device" "isotest: ep"
+if grep -aq "isotest: .*bytes/ms .*: PACED, 0 errors" <<<"$OUT"; then
+    pass "virt: xhci: isochronous writes are paced by the frame counter ($(grep -ao 'wrote [0-9]* bytes in [0-9]* ms = [0-9]* bytes/ms' <<<"$OUT" | tail -1))"
+else
+    fail "virt: xhci: isochronous pacing -- $(grep -a 'isotest:' <<<"$OUT" | tail -1)"
+fi
 vcheck "xhci: ether0 has QEMU's address"               "etherusb: 10.0.2.15 mask"
 vcheck "xhci: the gateway answers a ping over it"      "ICMP echo reply from 10.0.2.2"
 xb="$(grep -a 'usbxhci: [0-9]* transfers bounced' <<<"$OUT" | tail -1 | sed -E 's/.*usbxhci: ([0-9]+) transfers.*/\1/')"
@@ -4583,6 +4601,7 @@ if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
     vcheck "msi: keys typed on it reach the shell"         "Xhci-Keys"
     vcheck "msi: the gateway answers a ping over USB Ethernet" "ICMP echo reply from 10.0.2.2"
     vcheck "msi: the USB disk reads and writes"            "written-over-usb"
+    vcheck "msi: isochronous writes are paced"             ": PACED, 0 errors"
     vrefute "msi: nothing panics"                          "panic:"
 else
     skip "virt: this QEMU has no nec-usb-xhci, the xHCI model with MSI"

@@ -96,7 +96,7 @@ jobs:
           # name, because a run that reached it ran what came before.
           - platform: virt
             timeout: 40
-            least: 88
+            least: 92
             last: 'PASS: virt: Lucifer draws the desktop on the ramfb screen'
           - platform: bcm2837
             timeout: 90

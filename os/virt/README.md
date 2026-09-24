@@ -113,7 +113,8 @@ both kinds work and the boot log says which each device is.
 
     -device qemu-xhci -device usb-hub,port=1 -device usb-kbd,port=1.2 \
         -device usb-mouse,port=2 -netdev user,id=u0 -device usb-net,netdev=u0,port=3 \
-        -drive if=none,id=ud,file=card.img,format=raw -device usb-storage,drive=ud,port=4
+        -drive if=none,id=ud,file=card.img,format=raw -device usb-storage,drive=ud,port=4 \
+        -audiodev none,id=a0 -device usb-audio,audiodev=a0,port=1.3
 
 `../port/usbxhci.c` is 9front's xHCI driver, and this machine is where
 it has run: every harness boot initialises the controller, and one
@@ -181,6 +182,18 @@ Three things were wanted of this machine for that:
   reads it back, and checks the bytes reached the image. Every transfer
   goes through the bounce path. It has met QEMU's disk and no other.
   Gated to machines with an xHCI: a Pi 3 names the disk and leaves it.
+- **Isochronous transfers** (`os/init/isotest.b`, a test program): the
+  one kind nothing else exercises, paced by the controller's frame
+  counter rather than by the device. `-device usb-audio` is a 48 kHz
+  stereo sink, 192 bytes a frame; the test selects its streaming
+  alternate setting, opens the iso OUT endpoint and writes silence at
+  it for two seconds, and the harness requires the writes to have been
+  paced at the sample rate. Found one thing: 9front's `isowrite`
+  sleeps until a write's last frame has played, minus a lead its audio
+  driver sets per endpoint; without that lead the ring drained between
+  writes and the stream restarted 10 ms ahead after every one — half
+  speed for 10 ms writes, 92% for 100 ms. The lead is the driver's own
+  now (`Isolead`).
 - **The Pi 4's interrupts.** Its bridge delivers nothing but messages
   (MSI). `pciecam.c` gives a device that has the MSI capability one —
   an interrupt of the GIC's MSI frame (GICv2m), made edge-triggered

@@ -359,6 +359,10 @@ static ulong nbounced;
 /* rings believed stopped that the controller said were running; unstall() */
 static ulong nnotstopped;
 
+enum {
+	Isolead	= 8,	/* ms of an iso OUT stream left queued when a write returns; isowrite */
+};
+
 static char Ebadlen[] = "bad usb request length";
 static char Enotconfig[] = "usb endpoint not configured";
 static char Exrecover[] = "xhci controller needs reset";
@@ -1746,8 +1750,19 @@ isowrite(Ep *ep, uchar *p, long n)
 	}
 	io->frame = i;
 
+	/*
+	 * Wait until the stream is nearly drained, so that a write's
+	 * length is its latency -- but NOT drained: what remains when this
+	 * returns is what plays while the caller makes the next write, and
+	 * a ring found empty then is a stream that has fallen behind, which
+	 * the loop above restarts 10 ms ahead, as a gap. 9front here
+	 * subtracts a per-endpoint "sampledelay" the audio driver sets;
+	 * this tree's devusb has no such verb, so the lead is the driver's
+	 * own. Without it, every write of 10 ms of audio was followed by
+	 * a 10 ms gap: half speed, measured (os/init/isotest.b).
+	 */
 	while(io->ring->rp != io->ring->wp){
-		int d = (int)(i*uf - uframe(ctlr))/8;
+		int d = (int)(i*uf - uframe(ctlr))/8 - Isolead;
 		if(d < 5)
 			break;
 

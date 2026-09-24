@@ -426,7 +426,7 @@ unit, disks up to 2 TB, no hot removal of the medium.
 | | what it proves | where it runs |
 |-|-|-|
 | `tests/host/baremetal_test.sh`, bcm2837 half (≈260 checks; **CI**) | the Pi kernel against QEMU's `raspi3b`: boot, SMP, JIT, USB hot-plug, the SD controllers, dossrv on FAT16/32, DHCP/TCP over emulated USB Ethernet, framebuffer by screendump, keyboard and mouse by QMP, tryboot, the kernel installing itself | anywhere with QEMU 8.2 or later |
-| …virt half (≈50 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucifer desktop from a card** | anywhere with QEMU; **CI** |
+| …virt half (≈100 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucifer desktop from a card**; and USB on xHCI over PCI — a hub, keyboard, mouse, Ethernet, a disk, an audio device's isochronous stream, hot-plug, MSI | anywhere with QEMU; **CI** |
 | `tests/acceptance/*.py` | the *board*, as a peer to standard tools on a Linux tester: RFC 2544-style Ethernet, Bluetooth PTS cases, hostap-style Wi-Fi scenarios, a GPIO loopback jig. See its [README](../tests/acceptance/README.md). | a bench with a Pi on it |
 
 What QEMU cannot show is a long list — caches, DMA coherence, real USB

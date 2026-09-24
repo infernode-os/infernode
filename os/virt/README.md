@@ -80,7 +80,9 @@ Every one of those choices has a way to go wrong that says nothing:
 | `virtio-*-device` | The MMIO transport, which `virtio.c` drives. `virtio-net-pci`, and whatever `-drive if=virtio` makes, are PCI devices on a bus this kernel does not walk. |
 | `-device virtio-rng-device` | The kernel's entropy. Without it the kernel boots, says **NO ENTROPY SOURCE** in capitals, and every key it makes is predictable. |
 | `-smp 4` | `MAXMACH` is 4, as on the board. With fewer, the missing cores are reported as not answering. |
-| GICv2 | virt's default up to eight cores. With `gic-version=3` there is no memory-mapped CPU interface; `intrinit` says so. |
+| `-m` up to 8192 | `mmu.c` maps eight gigabytes; `-m 6144` boots with 6141 MB of free pages and a 1.6 GB Dis heap, which is the tree's only run with physical addresses above 4 GB (a Pi 4's are capped below it by `RAMLIMIT`). Not in the harness: CI's runners have 7 GB. |
+| `-device qemu-xhci` (or `nec-usb-xhci`) | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
+| GICv2 or v3 | virt's default is a v2 up to eight cores; `gic-version=3` gives the controller of the Orin, the Pi 5 and most boards since 2016. `gic.c` tells them apart at boot and says which (`gic:  GICv2` / `gic:  GICv3: …`); the harness boots both. |
 
 `-append "fb=1024x768"` sets the screen size; the default is 1280x720.
 `-global virtio-mmio.force-legacy=false` gives modern virtio transports;
@@ -94,7 +96,7 @@ both kinds work and the boot log says which each device is.
 | `io.h` | the memory map (it is *below* RAM) and interrupt numbers |
 | `mmu.c` | identity map: `[0,1GB)` Device, `[1GB,ramtop)` Normal, the rest unmapped |
 | `fdt.c` | just enough device tree: memory size, `/psci` method, `/chosen/bootargs` |
-| `../arm64/gic.c` | GICv2: distributor, per-core CPU interface, `intrenable`, `irqdispatch`. Written here; moved when a Raspberry Pi 4, whose controller is a GIC-400, needed it |
+| `../arm64/gic.c` | GICv2 and v3: distributor, per-core CPU interface (memory on a v2, system registers and a redistributor on a v3), `intrenable`, `irqdispatch`. Written here; moved when a Raspberry Pi 4, whose controller is a GIC-400, needed it; v3 added for what comes after |
 | `../arm64/clockgt.c` | the generic timer, per core, on PPI 30. Likewise |
 | `uart.c`, `uartpl011.c` | the PL011: polled console, and `#t`'s `eia0` with receive interrupts |
 | `board.c` | the hooks in `../arm64/fns.h`; PSCI (SMP, reset, power off); the PL031 RTC |
@@ -104,7 +106,108 @@ both kinds work and the boot log says which each device is.
 | `ethervirtio.c` | `/net/ether0`, as `devether`'s instance 0 |
 | `ramfb.c` | a linear framebuffer, configured through fw_cfg, under `../arm64/screen.c` and `fbcons.c` |
 | `inputvirtio.c` | keyboard and tablet to `kbdputc` and `mousetrack` |
+| `pciecam.c` | the PCIe host bridge: configuration space as an array in memory, four interrupt wires. `../port/pci.c` (9front's) does the enumeration; `../port/usbxhci.c` and `usbxhcipci.c` are the one driver on the bus |
 | `devtab.c` | the device table: the board's, less GPIO, touch and audio |
+
+## USB, and why it is here
+
+    -device qemu-xhci -device usb-hub,port=1 -device usb-kbd,port=1.2 \
+        -device usb-mouse,port=2 -netdev user,id=u0 -device usb-net,netdev=u0,port=3 \
+        -drive if=none,id=ud,file=card.img,format=raw -device usb-storage,drive=ud,port=4 \
+        -audiodev none,id=a0 -device usb-audio,audiodev=a0,port=1.3
+
+`../port/usbxhci.c` is 9front's xHCI driver, and this machine is where
+it has run: every harness boot initialises the controller, and one
+boots the line above — a hub, a keyboard *behind* the hub, a mouse and
+a network adapter — and types on the keyboard, pings through the
+adapter, and reads the controller's state back.
+
+It is here for the Raspberry Pi 4, whose USB-A sockets are a VL805 xHCI
+controller behind a PCIe bridge that QEMU's `raspi4b` does not have.
+Three things were wanted of this machine for that:
+
+- **The driver, run.** It found a bug on its first hub: 9front issues
+  Configure Endpoint with the ep0 flag set when it tells the controller
+  a device is a hub; the specification says that flag must be clear
+  (4.6.6), real controllers evidently let it pass, and QEMU's answers
+  TRB Error. Linux sends the slot flag alone, and now so does this.
+- **The rest of the tree made ready for it.** This tree's `devusb` is
+  Plan 9's, which addresses devices by number; an xHC routes by
+  topology. `devusb.c` now computes a device's route string, root port
+  and TT hub (9front's arithmetic, in `settopology`), takes `hub N ttt
+  mtt` as well as `hub`, and has two hooks (`devclose`, `hubupdate`)
+  that are nil for the Pi 3's DWC OTG. `osinit`'s walker, which knew one
+  root hub with one port because a Pi 3 has exactly that, walks every
+  port of every controller.
+- **Things plugged in and pulled out.** On a Pi 4 the sockets are root
+  ports, and every device in the boot above was there from the start.
+  The harness now plugs a hub into a root port, a keyboard into the
+  hub, types, and pulls the *hub*; then the same with a keyboard in a
+  root port; with a mouse that must sit through it all. It found four
+  things, none of them QEMU's fault and two of them not xHCI's:
+  - a driver asleep in a read of an interrupt endpoint has no timeout,
+    and an xHC does not end a transfer because the device left: it
+    slept for ever holding the endpoint, the device and the slot.
+    `devusb` now asks the controller to stop a detached device's
+    endpoints (`epstop`, 9front's, which had been folded away);
+  - 9front's driver, when a transfer times out, stops the endpoint,
+    waits five seconds more, and then **resets the controller** — and
+    waits for every device on it to be unplugged. A control request in
+    flight to a pulled hub did that to the whole bus. A stop command
+    that succeeds and wakes nobody now means the transfer is gone, and
+    only that (`waittd`);
+  - *(the walker's)* a pulled hub's watcher polled
+    the dead hub for ever, holding its endpoint, and never told devusb
+    that what was plugged into it had gone;
+  - *(likewise)* a device plugged in **while a hub was being walked at
+    boot** was never enumerated: the walk had passed its port, the
+    watcher's first look found it already there, and "there, as
+    before" is not a change. The watcher now starts from what the walk
+    saw.
+
+  The last two are in `osinit`'s walker, which a Pi 3 runs too, and are
+  as true there in principle. **They are fixed only on a machine that
+  has an xHCI** (`havexhci`): the Pi 3 is in production on the watcher
+  it has, the first of the two *detaches devices* on the strength of
+  failed status reads — on a 3B+ the hub being judged carries the
+  Ethernet — and nobody has measured on a board how often those reads
+  fail. #679 has the reproduction and what trying them there would
+  take.
+- **A USB disk** (`os/init/diskusb.b`: mass storage, bulk-only, SCSI —
+  a program, like the other USB class drivers). `usb-storage` above is
+  the card image again, as a stick: the driver reads INQUIRY and the
+  capacity, serves the disk as `/chan/usbdisk0` and mounts its FAT on
+  `/n/usb0` for init; the harness then mounts it in the shell (`dossrv
+  -f /chan/usbdisk0 -m /n/usb0`), reads `HELLO.TXT`, writes a file,
+  reads it back, and checks the bytes reached the image. Every transfer
+  goes through the bounce path. It has met QEMU's disk and no other.
+  Gated to machines with an xHCI: a Pi 3 names the disk and leaves it.
+- **Isochronous transfers** (`os/init/isotest.b`, a test program): the
+  one kind nothing else exercises, paced by the controller's frame
+  counter rather than by the device. `-device usb-audio` is a 48 kHz
+  stereo sink, 192 bytes a frame; the test selects its streaming
+  alternate setting, opens the iso OUT endpoint and writes silence at
+  it for two seconds, and the harness requires the writes to have been
+  paced at the sample rate. Found one thing: 9front's `isowrite`
+  sleeps until a write's last frame has played, minus a lead its audio
+  driver sets per endpoint; without that lead the ring drained between
+  writes and the stream restarted 10 ms ahead after every one — half
+  speed for 10 ms writes, 92% for 100 ms. The lead is the driver's own
+  now (`Isolead`).
+- **The Pi 4's interrupts.** Its bridge delivers nothing but messages
+  (MSI). `pciecam.c` gives a device that has the MSI capability one —
+  an interrupt of the GIC's MSI frame (GICv2m), made edge-triggered
+  with `gicedge()` — and a wire otherwise. `qemu-xhci` has only MSI-X
+  and gets a wire; `-device nec-usb-xhci` has MSI, as the VL805 does,
+  and the harness boots the whole USB line above on it as well. The
+  boot log says which each device got; `-append pcinomsi` forces wires.
+- **The Pi 4's constraint, imposed.** There a PCI device reaches only
+  the first gigabyte, and every structure and buffer the driver hands
+  the controller must come from the DMA arena or be bounced
+  (`pcidmaalloc`, `pcidmaok`: `../port/pci.h`). Here everything is
+  reachable, so that path would never run. `-append pcibounce` makes
+  this bridge refuse every buffer, the harness's USB boot runs that way,
+  and `echo dump > /usb/usb/ctl` reports how many transfers bounced.
 
 ## What the second board showed
 
@@ -175,12 +278,24 @@ is `os/arm64`.
 
 ## Not done
 
-- **No PCI.** virt has an ECAM PCIe host and everything interesting QEMU
-  can emulate (NVMe, xHCI, e1000) hangs off it. Nothing here needs it.
-- **No USB**, so `#u` is an empty bus and `kbdusb`/`mouseusb`/`etherusb`'s
-  device halves are not exercised here. The raspi3b run still does that.
+- **PCI devices' drivers, but for one.** The bus is there
+  (`pciecam.c`): it is scanned, BARs are placed in the 32-bit window at
+  `0x10000000`, and the boot log lists what was found. It exists for the
+  sake of a machine that is not this one — a Raspberry Pi 4's USB
+  sockets are an xHCI controller behind a PCIe bridge, QEMU's `raspi4b`
+  models neither, and here both can be had with `-device qemu-xhci`.
+  NVMe and e1000 would be found and have no driver. Devices behind a
+  PCI-PCI bridge get no interrupt (root bus only), and the 512GB window
+  above RAM is not used.
+- **USB only if asked for**: `-device qemu-xhci`, then `-device usb-kbd`,
+  `usb-mouse`, `usb-hub`, `usb-net` as wanted (see "USB" above). Without
+  it `#u` is an empty bus. SuperSpeed hubs, streams and USB storage are
+  not done.
 - **No audio, GPIO, touch, Wi-Fi, Bluetooth, tryboot or boot watchdog.**
   They are the board's.
-- **GICv3**, which virt needs above eight cores and newer boards have.
+- **More than eight cores** (`MAXMACH` is 4), though the GICv3 that
+  would need is there. **MSI on a GICv3** is an ITS, not the GICv2m
+  frame `pciecam.c` knows: on `gic-version=3` every PCI device gets a
+  wire, which the log says.
 - **KVM.** Untried. On an arm64 host it should simply work and be fast;
   `-cpu host` then, and RNDR may appear.

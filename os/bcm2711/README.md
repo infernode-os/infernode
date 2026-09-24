@@ -21,7 +21,7 @@ runs. This file is only what is this board's.
 | `os/arm64`, `os/port`, `os/ip`, the libraries | ~190,000 | every board's |
 | `os/bcm` | ~14,000 | the Raspberry Pi SoCs' shared drivers: what the Pi 3 runs |
 | `os/arm64/gic.c`, `clockgt.c` | ~700 | what QEMU's `virt` runs — a Pi 4's interrupt controller is a GIC-400 |
-| **`os/bcm2711`** | **~500** | this directory |
+| **`os/bcm2711`** | **~2,100** | this directory — 1,600 of them two drivers of 9front's that no emulator can run |
 
 That is the point of the arrangement (upstream Inferno's: `os/sa1110`
 beside `os/ipaq1110` and `os/cerf1110`). What is here:
@@ -32,6 +32,9 @@ beside `os/ipaq1110` and `os/cerf1110`). What is here:
 | `mem.h` | the BCM2837's, but for `MAPGB` (4) and the SD controller choice |
 | `random.c` | the RNG200 — a different generator from the BCM2837's |
 | `emmc2.c` | the card's SDHCI controller: a second instance of `../bcm/emmc.c`, six lines |
+| `ethergenet.c` | the gigabit Ethernet MAC, from 9front. **Never run**: see below |
+| `pcibcm.c` | the PCIe bridge, from 9front. **Never run**: see below |
+| `soc.c` | the probe for what this SoC has and the family does not |
 | `intr.c` | not the controller (that is `../arm64/gic.c`), only the boot-time question asked of it |
 | `devtab.c` | the device list: the Pi 3B+'s, today |
 | `recover.c` | an empty `serialrecover`: there is no serial loader for this board |
@@ -59,7 +62,7 @@ property interface, the framebuffer, SDHOST, two SDHCI controllers, the
 DWC2 USB controller, the system timer, GPIO, DMA, power management and
 the watchdog, 2GB of RAM.
 
-**Not modelled:** the GENET gigabit Ethernet MAC; PCIe, and therefore
+**Not modelled:** the GENET gigabit Ethernet MAC (`ethergenet.c` notices); PCIe, and therefore
 the VL805 USB 3 controller **which is where a real Pi 4's four USB-A
 ports are**; the RNG200; the ARM timer; thermal, and eleven other
 blocks that are stubs.
@@ -96,7 +99,12 @@ Everything below will be met for the first time on the board.
    `bcm2711.dtsi` and agree with QEMU's wiring for the UARTs and USB,
    which work. Every other one is unexercised.
 2. **The RNG200 driver.** Written from Linux's `iproc-rng200.c`. Not one
-   line of it has executed.
+   line of it has executed. Its register layout was re-read against that
+   driver on 2026-09-24 — control at `0x00` (enable bit 0, mask
+   `0x1fff`), FIFO data `0x20`, FIFO count `0x24` (mask `0xff`) — and
+   agrees; what it does not do that Linux does is the soft-reset dance
+   before enabling, which a generator the firmware left running should
+   not need.
 3. **The SD card on EMMC2.** The driver is the Pi 3's Arasan driver
    pointed at a different base. EMMC2 is a different controller
    revision: its clock comes from a different mailbox clock id (12,
@@ -133,23 +141,76 @@ Everything below will be met for the first time on the board.
    radio's driver to keep off (`sdarasantaken`). A real EMMC2 has never
    been addressed by this code; the radio's firmware, its pins (GPIO
    34-39, ALT3, assumed the same as the 3B+) and its power enable on the
-   firmware's GPIO expander (whose pin numbers differ on this board and
-   have NOT been checked) are all untried.
-7. **No network and no USB-A on a board at all, yet.** Gigabit Ethernet
-   needs a GENET driver (plus its BCM54213 PHY over MDIO); the USB-A
-   ports need a PCIe host driver and an xHCI driver, and the VL805
-   wants its firmware loaded through a mailbox call after a PCIe reset.
-   9front's 64-bit Pi kernel has all three under an MIT licence, which
-   is where this tree's USB and Wi-Fi drivers came from. Under QEMU the
-   DWC2 controller stands in for all of it; on a board the DWC2 is only
-   the USB-C port.
-8. **Two HDMI outputs.** `fbcons` and `displaywatch` already handle a
+   firmware's GPIO expander are all untried. The expander pins were
+   checked against Linux's `bcm2711-rpi-4-b.dts` on 2026-09-24: the
+   radio's `WL_REG_ON` is expander pin 1 and Bluetooth's shutdown line
+   pin 0, the same as the 3B+'s `bcm2837-rpi-3-b-plus.dts` — so the
+   family's code needs no change there, on paper.
+7. **Gigabit Ethernet: a driver that has never met its hardware.**
+   `ethergenet.c` is 9front's GENET driver (MIT) — the MAC, its two
+   interrupt lines, its descriptor rings, and the BCM54213PE PHY over
+   MDIO through `../port/ethermii.c`, 9front's too — fitted to this
+   tree's `Ether`. QEMU has no GENET, so **not one line of it has run**:
+   under emulation it asks whether anything is at `0xFD580000`
+   (`probe32`), is told no, prints `genet: NO ETHERNET MAC…` and leaves
+   `ether0` to USB Ethernet, which is what the harness checks. On a
+   board it should print the MAC's revision and the board's address,
+   and `osinit` will then configure it as it does `virt`'s network
+   card. It was kept as close to the original as this tree allows
+   precisely because it could not be tried; the file's header lists
+   every difference. The ones to suspect first: the cache maintenance
+   around receive buffers (9front has aligned block pools, this tree
+   aligns inside `allocb`'s blocks), the interrupt numbers (GIC_SPI
+   157/158 from Linux's device tree), and that the firmware has left
+   the MAC's clocks on. `cat /net/ether0/ifstats` shows interrupt,
+   frame and MDIO-timeout counts and the PHY's state, for that day.
+8. **PCIe and the USB-A sockets: a bridge driver that has never met
+   its bridge, under an xHCI driver that has run elsewhere.** The four USB-A sockets are a VL805 xHCI controller on the
+   SoC's one PCIe lane. `pcibcm.c` is 9front's driver for the bridge
+   (reset, link training, the outbound window at `0x6_0000_0000` —
+   which `../bcm/mmu.c` now maps, with a 36-bit physical address size —
+   an inbound window of the first gigabyte, MSI), plus the mailbox call
+   that has the VideoCore reload the VL805's firmware after the reset.
+   **None of it has run.** Under QEMU it asks (`probe32`), is told
+   there is no bridge, and says `pci: NO PCIe BRIDGE…`. What *has* run
+   is everything above it: `../port/pci.c`, 9front's too, enumerates
+   QEMU's `virt` machine on every harness run (`../virt/pciecam.c`). On
+   a board the log should show the bridge's revision, a bus listing
+   with `1106 3483` on it, and the firmware's answer. To suspect first:
+   the link not coming up (it prints the status register), and
+   `pcibusaddr()`, which holds PCI devices to the same first-gigabyte
+   DMA limit as the rest of the SoC — it panics on a buffer beyond it.
+   Above the bridge is `../port/usbxhci.c`, 9front's xHCI driver, which
+   **has run — on QEMU's `virt` machine, against QEMU's controller, not
+   a VL805**: a hub, a keyboard behind it, a mouse and a network
+   adapter, with every buffer forced through the bounce path this SoC's
+   DMA limit requires (`os/virt/README.md`, "USB"). What is the VL805's
+   alone is untried: its firmware load, its scratchpad buffers (QEMU
+   asks for none), 64-byte contexts if it uses them, MSI through *this*
+   bridge, and what it does with a transfer to a device that has been
+   unplugged (QEMU's drops it silently, and the driver no longer needs
+   better). MSI itself — `../port/pci.c`'s setup of it and the driver
+   living on it — has run on `virt`, through the GIC's MSI frame; so
+   have hot-plugging, pulling a hub with a device in it, the
+   controller-reset recovery path, and isochronous output against
+   QEMU's USB audio device (paced at the sample rate: a USB headset on
+   this board has a driver-level path that has run, and no driver); and a USB disk, which `diskusb`
+   (`os/init/diskusb.b`) serves as `/chan/usbdiskN` and mounts on
+   `/n/usbN` — on this board only once the xHCI is real, since the gate
+   is "the machine has an xHCI" and QEMU's `raspi4b` has none.
+   `echo dump > /usb/usb/ctl` prints
+   the controller's status and every port's. Under QEMU the DWC2
+   controller stands in for all this; on a board the DWC2 is only the
+   USB-C port, and is `#u/usb/ep1.0` — the xHCI is `ep2.0`.
+9. **Two HDMI outputs.** `fbcons` and `displaywatch` already handle a
    second display (the Pi 3's DSI panel plus HDMI) through the
    firmware's display-select call. Whether a Pi 4's second HDMI answers
    to the same call has not been asked.
-9. **Boot.** A Pi 4 boots from an EEPROM bootloader, not `bootcode.bin`;
+10. **Boot.** A Pi 4 boots from an EEPROM bootloader, not `bootcode.bin`;
    needs `arm_64bit=1` and must **not** have `enable_gic=0`; and whether
    the firmware's spin table is where QEMU's is (`0xd8`) is assumed.
+   `docs/BAREMETAL.md` §4 has the card, the `config.txt`, and the boot
+   log line by line with what each one proves.
    Tryboot and the watchdog are the BCM2837's code and the same block.
 
 ## A finding that is not this board's

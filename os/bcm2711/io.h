@@ -33,6 +33,7 @@ enum
 
 	GICDREGS	= 0xFF841000,	/* GIC-400 distributor */
 	GICCREGS	= 0xFF842000,	/* GIC-400 CPU interface */
+	GICRREGS	= 0,		/* a GIC-400 is a v2: no redistributors; ../arm64/gic.c never looks */
 };
 
 enum
@@ -53,6 +54,15 @@ enum
 	IRQsdhost	= IRQvc + 56,	/* SDHOST: present, and wired to nothing on this board */
 	IRQuart		= IRQvc + 57,	/* the PL011s, all of them, share this */
 	IRQmmc		= IRQvc + 62,	/* both SDHCI controllers share this */
+
+	/*
+	 * Not the VideoCore's: the blocks this SoC added have GIC
+	 * interrupts of their own, numbered here as Linux's bcm2711.dtsi
+	 * numbers them (GIC_SPI n is IRQspi+n). No emulator has them, so
+	 * none of these has ever been raised.
+	 */
+	IRQpci		= IRQspi + 148,	/* the PCIe bridge's MSI interrupt, pcibcm.c */
+	IRQether	= IRQspi + 157,	/* GENET: this and the next, ethergenet.c */
 
 	/*
 	 * ../arm64/gic.c's self-test wants a shared interrupt nothing
@@ -77,6 +87,16 @@ enum
 {
 	EMMC2REGS	= PHYSIO+0x340000,
 	Clkemmc2	= 12,		/* the mailbox's clock id for EMMC2 */
+};
+
+/*
+ * The gigabit Ethernet MAC and the PCIe bridge are outside the
+ * peripheral window, in a block of their own below it.
+ */
+enum
+{
+	PCIEREGS	= 0xFD500000,	/* the PCIe root complex; its window is PCIWIN, mem.h */
+	GENETREGS	= 0xFD580000,
 };
 
 #include "../bcm/bcmio.h"

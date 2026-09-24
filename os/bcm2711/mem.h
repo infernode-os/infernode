@@ -80,6 +80,15 @@
  */
 #define	MAPGB		4
 #define	DMATOP		0x40000000UL
+
+/*
+ * PCIe devices' registers appear to the CPU in a window 24GB up
+ * (pcibcm.c). ../bcm/mmu.c maps the gigabyte named here, and needs a
+ * physical address wider than the 32 bits a BCM2837 gets by with: 1 is
+ * 36 bits.
+ */
+#define	PCIWIN		0x600000000ULL
+#define	MMUIPS		1
 #define	RAMLIMIT	0xFC000000UL
 
 /*

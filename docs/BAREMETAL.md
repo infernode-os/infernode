@@ -21,7 +21,7 @@ says exactly what that does and does not establish.
 | storage | SD card | virtio-blk (the *same card image*) |
 | display, input | HDMI/DSI; USB keyboard and mouse; touch | ramfb; virtio keyboard and tablet |
 | also | Bluetooth, GPIO, audio, A/B kernel update, boot watchdog | a real-time clock |
-| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has |
+| interrupts | the BCM2837's own controller | GICv2 — what a Pi 4 has — or GICv3 (`gic-version=3`), what the Orin and the Pi 5 have |
 
 This document is how to run it, what controls it, and where things are.
 It deliberately does not say *why* things are as they are; three other
@@ -238,6 +238,75 @@ You need a **3.3 V USB-serial cable on GPIO 14/15** (115200 8N1). The
 console is mirrored to HDMI once the framebuffer is up, but everything
 before that, and every panic, is on the serial line only.
 
+### And on a Raspberry Pi 4B
+
+The same card, three differences, and a page of what the first boot
+should say — **written before any Pi 4 has run it**, from the QEMU
+model and the datasheets; `os/bcm2711/README.md` lists what is
+untested and what each line of the boot log proves.
+
+**From the Raspberry Pi firmware repository:** `start4.elf` and
+`fixup4.dat` (the `4` variants; a Pi 4 boots from an EEPROM and ignores
+`bootcode.bin`), and `bcm2711-rpi-4-b.dtb`. The kernel reads no device
+tree — it asks the firmware's mailbox for everything — but the firmware
+wants the file there.
+
+**`config.txt`** — the 3B+'s, with the same words meaning the same
+things:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=infernode8.img
+    cmdline=cmdline.txt
+
+    [tryboot]
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+
+`[tryboot]` is native here; the EEPROM is where it came from. Do **not**
+add `enable_gic=0` — the kernel's interrupt controller is the GIC, and
+that line would hand it the 3B+'s instead — and do not add
+`dtoverlay=disable-bt`, for the 3B+'s reason. No `core_freq` pinning:
+the console is the mini-UART, as on the 3B+, and the kernel asks the
+firmware what the core clock is rather than assuming.
+
+**The kernel**: `bcm2711-kernel.img`, on the card as `infernode8.img`.
+Not the 3B+'s: its peripherals are at another address, and a
+`bcm2837-kernel.img` on a Pi 4 prints nothing at all.
+
+**Power**: a USB-C supply that can give 3 A. The serial cable, the
+userspace trees, the radio firmware and the control files are the 3B+'s.
+
+**The first boot, on the serial line.** In order, and what each line
+settles:
+
+| line | settles |
+|-|-|
+| `InferNode bare-metal (BCM2711 / Raspberry Pi 4B)` | the kernel image, `arm_64bit=1`, and the peripheral address |
+| `mbox: board rev …, ARM memory …` | the mailbox, at its new address |
+| `mbox: ARM clock 600 MHz, max 1500, now 1500 MHz` | the clock request; 1800 on a later board |
+| `mmu:  on, caches on, identity map 0-4096MB` | the page tables, including the PCIe window 24 GB up |
+| `intr: device interrupt delivered` (the system timer, first try) | the interrupt numbers in `io.h`. If only the GIC's self-test passes, they are wrong |
+| `cpu1: up` … `cpu3: up` | the firmware's spin table is where QEMU's is |
+| `rng:  RNG200 …` and **not** `NO RNG200 AT ITS ADDRESS` | the RNG200's address and layout |
+| `sd: … EMMC2` and **not** `no card on the board's SD controller` | the card controller and its clock id |
+| `ether4330: …` on the Arasan | the radio has its own controller, as intended |
+| `genet: rev 0x6…, xx:xx:… is #l (ether0)` | the MAC exists and answers; `genet: link up, 1000Mbit/s` is the PHY |
+| `pci: bcmstb bridge revision …`, a bus listing with `1106 3483`, `pci: … VL805 firmware reload requested` | the PCIe link came up and the VL805 is on it |
+| `usbxhci: PCI.0.1.0: 1106:3483 registers at …` then `init: USB root hub ep2.0 …` | the USB-A sockets. The USB-C port is `ep1.0` |
+| `boot OK` | everything else |
+
+A line that says **NO** in capitals is the kernel finding the emulator
+where it expected the board; on a board, each is a bug in this tree, and
+the README says where to look. The Ethernet, PCIe and xHCI lines are the
+first time those drivers have met their hardware, and are the most
+likely to be wrong.
+
+**Memory**: a 2 GB or 4 GB board is used entirely; an 8 GB board's top
+half is not (`RAMLIMIT`). **Displays**: HDMI0, the socket beside the
+USB-C, is display 0 and the console.
+
 ### Changing the kernel without pulling the card
 
 Never overwrite `infernode8.img` in place; it is the kernel you know
@@ -404,18 +473,42 @@ names a range of the device so that it appears as `/dev/<name>`; reading
 it lists them. The kernel parses no partition table — a partition table
 is data on the card, and `osinit` reads the MBR and writes those lines.
 
+**A USB disk** (a stick, a card reader, an external drive: mass storage,
+bulk-only, SCSI) is driven by `diskusb`, a program like the other USB
+class drivers, which serves the whole disk as one file, `/chan/usbdiskN`,
+and mounts its FAT partition on `/n/usbN` — **for init and the network
+console.** The console shell forked its namespace when it started, before
+any USB driver ran, so from it (or the desktop) the disk is mounted with
+one command on the block file, which is in every namespace:
+
+    dossrv -f /chan/usbdisk0 -m /n/usb0
+
+Only on a machine with an xHCI controller so far — QEMU's `virt`, and a
+Pi 4's USB-A sockets once the board is here. On a Pi 3 the disk is
+enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
+on this machine`) and left alone: the driver has run only under
+emulation, and a Pi 3 gets no new behaviour on that evidence. One logical
+unit, disks up to 2 TB, no hot removal of the medium.
+
 ## 9. Testing
 
 | | what it proves | where it runs |
 |-|-|-|
 | `tests/host/baremetal_test.sh`, bcm2837 half (≈260 checks; **CI**) | the Pi kernel against QEMU's `raspi3b`: boot, SMP, JIT, USB hot-plug, the SD controllers, dossrv on FAT16/32, DHCP/TCP over emulated USB Ethernet, framebuffer by screendump, keyboard and mouse by QMP, tryboot, the kernel installing itself | anywhere with QEMU 8.2 or later |
-| …virt half (≈50 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucifer desktop from a card** | anywhere with QEMU; **CI** |
+| …virt half (≈100 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucifer desktop from a card**; and USB on xHCI over PCI — a hub, keyboard, mouse, Ethernet, a disk, an audio device's isochronous stream, hot-plug, MSI | anywhere with QEMU; **CI** |
 | `tests/acceptance/*.py` | the *board*, as a peer to standard tools on a Linux tester: RFC 2544-style Ethernet, Bluetooth PTS cases, hostap-style Wi-Fi scenarios, a GPIO loopback jig. See its [README](../tests/acceptance/README.md). | a bench with a Pi on it |
 
 What QEMU cannot show is a long list — caches, DMA coherence, real USB
 timing, a watchdog that counts, a radio — and it is why there are three
 rows and not one. A change that passes the first two has been proved
 for software.
+
+And what QEMU shows *wrongly* is a shorter list, kept in
+`tests/host/qemu/` as patches CI applies to the QEMU it builds: so far
+one, the Pi's USB controller model servicing a channel the kernel has
+halted, which lost the DHCP OFFER on most boots. A distribution's QEMU
+lacks them, and the harness requires only what holds without them
+unless `BAREMETAL_QEMU_PATCHED=1` says otherwise.
 
 ## 10. What an operator should know is not done
 
@@ -434,4 +527,4 @@ for software.
 - **The tryboot firmware handshake and the watchdog's countdown** are
   things QEMU models neither of.
 - Not started: USB storage, the Pi 4, an audio or HDMI acceptance battery.
-- On virt only: no PCI, no USB, no GICv3; KVM untried.
+- On virt only: no GICv3; KVM untried. USB there is xHCI on the PCI bus and optional (`-device qemu-xhci`).

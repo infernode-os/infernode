@@ -129,6 +129,7 @@ void	intrinit(void);
 /* gic.c -- for boards whose controller is a GICv2 */
 void	gicsecinit(void);	/* a secondary core's CPU interface; from secclockinit */
 void	gicppienable(int);	/* a per-processor interrupt, for the calling core */
+void	gicedge(int);		/* a shared interrupt that is pulsed, not held: an MSI */
 void	gicintrprobe(void);	/* a boardintrprobe for a board with nothing better */
 void	intrsummary(void);
 void	armtimerset(int);

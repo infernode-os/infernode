@@ -180,6 +180,7 @@ struct Mach
 	ulong		ticks;		/* of the clock, since boot */
 	ulong		cpuhz;
 	int		nrdy;
+	uintptr		gicr;		/* this core's GICv3 redistributor, if the GIC is one; gic.c */
 	int		stack[1];
 };
 

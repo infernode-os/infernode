@@ -296,6 +296,11 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/mouseusb.dis" \
             "$ROOT/os/init/mouseusb.b" 2>>"$BUILD/cc.log" || return 1
 
+        # A USB disk (mass storage, bulk-only, SCSI): serves the disk as
+        # /chan/usbdiskN and mounts its FAT on /n/usbN through dossrv.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/diskusb.dis" \
+            "$ROOT/os/init/diskusb.b" 2>>"$BUILD/cc.log" || return 1
+
         # The touch panel's frames as pointer events. Under QEMU there is
         # no panel, so what gets exercised is the driver noticing that
         # and its decoder self-test.
@@ -317,14 +322,21 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/tktest.dis" \
             "$ROOT/os/init/tktest.b" 2>>"$BUILD/cc.log" || return 1
 
+        # Isochronous USB transfers, timed against a USB audio device:
+        # the one kind of transfer nothing else here exercises.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/isotest.dis" \
+            "$ROOT/os/init/isotest.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+            "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
             "/dis/drawtest.dis=$BUILD/drawtest.dis"
             "/dis/tktest.dis=$BUILD/tktest.dis"
+            "/dis/isotest.dis=$BUILD/isotest.dis"
 
             # The FAT filesystem, as a program. Imported from upstream
             # Inferno (appl/cmd/dossrv.b) -- MIT, the same provenance as
@@ -366,6 +378,11 @@ build_kernel() {
             "/n="
             "/n/dos="
             "/n/remote="
+            # ...and where diskusb mounts a USB disk's FAT: one per disk
+            "/n/usb0="
+            "/n/usb1="
+            "/n/usb2="
+            "/n/usb3="
 
             # Mount points for the window system. mount(2) will not
             # create its target, so /mnt/wm has to exist before wm/wm
@@ -1289,7 +1306,7 @@ QEMUARGS="$2"
 SHARED="$ROOT/os/bcm"
 SHAREDSKIP=""
 ARCHSKIP="gic.c clockgt.c"	# the BCM2837 has its own controller: os/bcm2837/intr.c, clock.c
-PORTSKIP=""
+PORTSKIP="ethermii.c pci.c usbxhci.c usbxhcipci.c"	# a PHY library, a bus and what is on it: this board has none
 SERIALARGS="-serial null -serial stdio"
 
 [[ -d "$SRC" ]] || { echo "ERROR: $SRC not found" >&2; exit 1; }
@@ -4206,14 +4223,16 @@ fi
 # friends, and what -drive if=virtio gives) are PCI, and land on a bus
 # this kernel does not walk.
 #
-VIRTARGS="-M virt -cpu cortex-a53 -smp 4 -m 1024 -device virtio-rng-device"
+# qemu-xhci is a PCI device: it is what makes os/port/pci.c and
+# os/virt/pciecam.c run at all, on every virt boot below.
+VIRTARGS="-M virt -cpu cortex-a53 -smp 4 -m 1024 -device virtio-rng-device -device qemu-xhci"
 
 run_virt() {
 PLAT=virt
 SRC="$ROOT/os/$PLAT"
 QEMUARGS="$VIRTARGS"
 SERIALARGS="-serial stdio"
-PORTSKIP="devaudio.c"
+PORTSKIP="devaudio.c ethermii.c"
 SHARED=""
 SHAREDSKIP=""
 ARCHSKIP=""
@@ -4272,8 +4291,48 @@ if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then   # the line ends 
 else
     fail "virt: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
 fi
+# PCI. Nothing on this machine needs it; it is here because a Raspberry
+# Pi 4's USB sockets are behind a PCIe bridge no emulator has, and this
+# is where the code above that bridge can be run (os/virt/pciecam.c).
+vcheck "PCI configuration space is found, wherever QEMU put it" "pci: ECAM at 0x"
+if grep -aEq '0c 03 30 1b36 000d .* 0:1[0-9a-f]{7} 16384' <<<"$OUT"; then
+    pass "virt: the bus scan finds the xHCI controller and gives its registers an address in the window"
+else
+    fail "virt: PCI scan -- $(grep -a '1b36 000d' <<<"$OUT" | head -1)"
+fi
 vrefute "nothing panics"                           "panic:"
 vcheck "init reaches the shell"                    "init: starting the shell"
+vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv2"
+
+#
+# The same boot on a GICv3: the interrupt controller of the Orin, the
+# Pi 5 and most boards since 2016, and what virt has above eight cores.
+# os/arm64/gic.c tells the two apart at boot; on a v3 the CPU interface
+# is system registers and each core has a redistributor to wake, so
+# what is asserted is everything that goes through an interrupt: the
+# probe, every core's clock, preemption on every core, a device on a
+# wire (the xHCI's), and a shell.
+#
+QEMUARGS="${VIRTARGS/-M virt/-M virt,gic-version=3}"
+OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 60)"
+printf '%s\n' "$OUT" > "$BUILD/$PLAT-gicv3.txt"
+QEMUARGS="$VIRTARGS"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "gicv3: the controller is recognised as a v3"    "gic:  GICv3: distributor, a redistributor per core, the CPU interface in system registers"
+vrefute "gicv3: every core finds its redistributor"     "NO REDISTRIBUTOR"
+vcheck "gicv3: a device interrupt is delivered, twice"  "intr: device interrupt delivered"
+for i in 1 2 3; do
+    vcheck "gicv3: cpu$i comes up and its clock ticks"  "cpu$i: up"
+done
+if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then
+    pass "virt: gicv3: a wired kproc preempts a hog on every secondary core"
+else
+    fail "virt: gicv3: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
+fi
+vcheck "gicv3: the xHCI controller's wire is routed and enabled" "usbxhci interrupts by wire"
+vcheck "gicv3: boot completes"                           "boot OK"
+vrefute "gicv3: nothing panics"                          "panic:"
+vcheck "gicv3: init reaches the shell"                   "init: starting the shell"
 
 #
 # The whole machine: a disk, a network card, a screen, a keyboard and a
@@ -4422,6 +4481,284 @@ if grep -aq '^VIRT-DATE.* 20[2-9][0-9]' <<<"$OUT"; then
 else
     fail "virt: date -- $(grep -a '^VIRT-DATE' <<<"$OUT" | head -1)"
 fi
+
+#
+# USB, through xHCI on the PCI bus. Nothing on this machine needs USB.
+# It is here because a Raspberry Pi 4's four USB-A sockets are an xHCI
+# controller behind a PCIe bridge, QEMU's raspi4b has neither, and this
+# machine has both for the asking -- so os/port/usbxhci.c, the topology
+# devusb computes for it and the walker in osinit that finds more than
+# one root port are RUN here, and only the Pi's bridge is left untried.
+#
+# One boot: a hub, a keyboard BEHIND the hub (a full-speed device
+# routed through a hub is the case a slot context's route string and
+# hub fields exist for), a mouse, and a network adapter for bulk
+# transfers. And with pcibounce, which makes the bridge refuse every
+# buffer a driver offers it -- the condition a Pi 4's drivers live
+# under, where PCI devices reach the first gigabyte only -- so that the
+# bounce path is run by this harness and not first on a board.
+#
+# virt_usb_boot <machine args> <log>: the boot described above
+virt_usb_boot() {
+cp "$VSD" "$BUILD/$PLAT-usbdisk.img"
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" "$BUILD/$PLAT-usbdisk.img" <<'PYEOF' > "$2" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp, udisk = sys.argv[1:6]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "pcibounce",
+    "-device", "usb-hub,port=1", "-device", "usb-kbd,port=1.2", "-device", "usb-mouse,port=2",
+    "-netdev", "user,id=u0", "-device", "usb-net,netdev=u0,port=3",
+    "-drive", "if=none,id=ud,file=%s,format=raw" % udisk, "-device", "usb-storage,drive=ud,port=4",
+    "-audiodev", "none,id=a0", "-device", "usb-audio,audiodev=a0,port=1.3",
+    "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def qkey(f, ch):
+    shift = ch.isupper()
+    q = QCODE.get(ch, ch.lower())
+    keys = (["shift"] if shift else []) + [q]
+    for down in (True, False):
+        ev = [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}
+              for k in (keys if down else reversed(keys))]
+        f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.05)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"kbdusb: ep", 30)
+    waitfor(b"etherusb: default route", 40)
+    time.sleep(2)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    for ch in "echo Xhci-Keys\n":
+        qkey(f, ch)
+    time.sleep(2)
+    # the disk: mounted by hand, as the console shell must (diskusb.b says why)
+    waitfor(b"served as /chan/usbdisk0", 20)
+    typed("dossrv -f /chan/usbdisk0 -m /n/usb0", 3)
+    typed("cat /n/usb0/HELLO.TXT")
+    typed("echo written-over-usb > /n/usb0/usb.txt; cat /n/usb0/usb.txt", 3)
+    # isochronous: two seconds of silence at the audio device, timed
+    typed("isotest 2", 5)
+    typed("cat /usb/usb/ctl")
+    typed("echo dump > /usb/usb/ctl", 2.5)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+}
+virt_usb_boot "$VIRTARGS" "$BUILD/$PLAT-xhci.txt"
+OUT="$(cat "$BUILD/$PLAT-xhci.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+vcheck "xhci: the controller is found on the PCI bus"  "usbxhci: PCI.0."
+vcheck "xhci: every buffer is being refused, as on a Pi 4" "pci: pcibounce:"
+vcheck "xhci: a hub on a root port other than the first is enumerated" "is a hub with 8 port(s)"
+vrefute "xhci: the controller accepts being told it is a hub" "would not be told it is a hub"
+vcheck "xhci: a keyboard BEHIND the hub is claimed"    "kbdusb: ep"
+vcheck "xhci: a mouse is claimed"                      "mouseusb: ep"
+vcheck "xhci: keys typed on the USB keyboard reach the shell (interrupt IN, through the hub)" "Xhci-Keys"
+vcheck "xhci: USB Ethernet comes up as ether0 (bulk endpoints)" "etherusb: serving /net/ether0 (kernel data path)"
+# a USB disk (os/init/diskusb.b): mass storage, bulk-only, SCSI. Served as
+# a block file and mounted by dossrv -- for init's namespace by the
+# driver, for the console shell's by the shell, which is what is typed.
+vcheck "xhci: a USB disk is found and its size read (INQUIRY, READ CAPACITY)" "QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk0"
+vcheck "xhci: the disk's FAT is mounted for init"        "diskusb: /chan/usbdisk0 mounted on /n/usb0"
+vcheck "xhci: the shell mounts it too and reads a file from it (READ(10))" "hello from the SD card"
+vcheck "xhci: a file written to the USB disk reads back (WRITE(10))" "written-over-usb"
+if grep -aq "written-over-usb" "$BUILD/$PLAT-usbdisk.img"; then
+    pass "virt: xhci: the write reached the disk image itself"
+else
+    fail "virt: xhci: the written file is not on the disk image"
+fi
+# isochronous OUT (os/init/isotest.b): the driver must pace the stream by
+# the controller's frame counter -- 192 bytes a millisecond of wall time
+# at 48 kHz stereo -- and not take the data and return, or dribble it.
+vcheck "xhci: an isochronous OUT endpoint is found on the audio device" "isotest: ep"
+if grep -aq "isotest: .*bytes/ms .*: PACED, 0 errors" <<<"$OUT"; then
+    pass "virt: xhci: isochronous writes are paced by the frame counter ($(grep -ao 'wrote [0-9]* bytes in [0-9]* ms = [0-9]* bytes/ms' <<<"$OUT" | tail -1))"
+else
+    fail "virt: xhci: isochronous pacing -- $(grep -a 'isotest:' <<<"$OUT" | tail -1)"
+fi
+vcheck "xhci: ether0 has QEMU's address"               "etherusb: 10.0.2.15 mask"
+vcheck "xhci: the gateway answers a ping over it"      "ICMP echo reply from 10.0.2.2"
+xb="$(grep -a 'usbxhci: [0-9]* transfers bounced' <<<"$OUT" | tail -1 | sed -E 's/.*usbxhci: ([0-9]+) transfers.*/\1/')"
+if [[ "${xb:-0}" -ge 20 ]]; then
+    pass "virt: xhci: all of that ran through the bounce ($xb transfers)"
+else
+    fail "virt: xhci: only '${xb:-none}' transfers bounced -- pcibounce is not refusing buffers, so the path a Pi 4 needs did not run"
+fi
+vrefute "xhci: nothing panics"                         "panic:"
+vrefute "xhci: no exception goes unhandled"            "unhandled exception"
+vcheck "xhci: qemu-xhci has no MSI, and is given a wire" "usbxhci interrupts by wire"
+
+#
+# The same again with the interrupts arriving as MESSAGES. A Raspberry
+# Pi 4's PCIe bridge delivers nothing else, so os/port/pci.c's MSI code
+# and a driver living on it are run here or nowhere. QEMU's qemu-xhci
+# has only MSI-X; its nec-usb-xhci has MSI, as the Pi's VL805 does. The
+# message goes to the GIC's MSI frame (GICv2m), which pulses a shared
+# interrupt -- one that must have been made edge-triggered first.
+#
+if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
+    virt_usb_boot "${VIRTARGS/qemu-xhci/nec-usb-xhci}" "$BUILD/$PLAT-xhci-msi.txt"
+    OUT="$(cat "$BUILD/$PLAT-xhci-msi.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    vcheck "msi: the GIC's MSI frame is found"             "pci: MSI frame at 0x8020000: interrupts 80-"
+    vcheck "msi: the controller is given a message, not a wire" "usbxhci interrupts by MSI"
+    vcheck "msi: a keyboard behind a hub is claimed"       "kbdusb: ep"
+    vcheck "msi: keys typed on it reach the shell"         "Xhci-Keys"
+    vcheck "msi: the gateway answers a ping over USB Ethernet" "ICMP echo reply from 10.0.2.2"
+    vcheck "msi: the USB disk reads and writes"            "written-over-usb"
+    vcheck "msi: isochronous writes are paced"             ": PACED, 0 errors"
+    vrefute "msi: nothing panics"                          "panic:"
+else
+    skip "virt: this QEMU has no nec-usb-xhci, the xHCI model with MSI"
+fi
+
+#
+# Plugging things in and pulling them out, on xHCI. On a Raspberry Pi 4
+# the sockets ARE root ports and hubs get pulled with things in them;
+# every device in the boots above was there from the start. One boot,
+# with a mouse that stays put throughout and must come through it all:
+#
+#   a hub is plugged into a root port, a keyboard into the hub, keys
+#   are typed on it, and the HUB is pulled -- so the keyboard's driver,
+#   asleep in a read with no timeout, must be woken (devusb's epstop at
+#   detach), the hub's watcher must notice it is watching nothing and
+#   go, and a control transfer left in flight must be abandoned WITHOUT
+#   resetting the controller under the mouse (usbxhci.c, waittd);
+#
+#   then a keyboard straight into a root port, typed on and pulled.
+#
+# What is asserted at the end is that the controller holds exactly one
+# slot -- the mouse's. Each of the three things above leaked one when
+# this was first tried.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "pcibounce",
+    "-device", "usb-mouse,port=4", "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if buf.find(what, start) >= 0:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+def q(f, o):
+    f.write(json.dumps(o) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r:
+            return r
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def keys(f, text):
+    for ch in text:
+        q(f, {"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": QCODE.get(ch, ch.lower())}], "hold-time": 40}})
+        time.sleep(0.12)
+def add(f, **a):
+    return q(f, {"execute": "device_add", "arguments": a})
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"mouseusb: ep", 30)
+    time.sleep(3)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw"); f.readline()
+    q(f, {"execute": "qmp_capabilities"})
+
+    # a hub, a keyboard in the hub, and then the hub goes
+    mark = len(buf)
+    add(f, driver="usb-hub", id="h1", bus="usb-bus.0", port="1")
+    waitfor(b"is a hub with", 25, mark); time.sleep(2)
+    add(f, driver="usb-kbd", id="k1", bus="usb-bus.0", port="1.2")
+    waitfor(b"kbdusb: ep", 25, mark); time.sleep(1.5)
+    keys(f, "echo hub-keys\n"); time.sleep(2)
+    mark = len(buf)
+    q(f, {"execute": "device_del", "arguments": {"id": "h1"}})
+    waitfor(b"has gone", 30, mark)
+    waitfor(b"detached", 15, mark); time.sleep(2)
+
+    # a keyboard in a root port, and then it goes
+    mark = len(buf)
+    add(f, driver="usb-kbd", id="k2", bus="usb-bus.0", port="2")
+    waitfor(b"kbdusb: ep", 25, mark); time.sleep(1.5)
+    keys(f, "echo root-keys\n"); time.sleep(2)
+    mark = len(buf)
+    q(f, {"execute": "device_del", "arguments": {"id": "k2"}})
+    waitfor(b"detached", 20, mark); time.sleep(2)
+
+    typed("cat /usb/usb/ctl")
+    typed("echo dump > /usb/usb/ctl", 2.5)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+vcheck "hotplug: a hub plugged into a root port after boot is seen and walked" "ep1.0 port 5: device attached"
+vcheck "hotplug: keys typed on a keyboard plugged into that hub reach the shell" "hub-keys"
+vcheck "hotplug: the pulled hub's watcher notices, and goes"  "has gone; so has what was on it"
+vcheck "hotplug: keys typed on a keyboard plugged into a root port reach the shell" "root-keys"
+nd="$(grep -ac 'kbdusb: ep.* detached' <<<"$OUT")"
+if [[ "$nd" -eq 2 ]]; then
+    pass "virt: hotplug: both keyboards' drivers were woken from their reads and left"
+else
+    fail "virt: hotplug: $nd of 2 keyboard drivers noticed their device had gone"
+fi
+vrefute "hotplug: pulling a hub does not reset the controller under everything else" "need recover"
+vrefute "hotplug: no ring was thought stopped while it ran" "THOUGHT STOPPED"
+slots="$(grep -a 'slots in use' <<<"$OUT" | tail -1 | sed -E 's/.* ([0-9]+) of [0-9]+ slots in use.*/\1/')"
+if [[ "$slots" == "1" ]]; then
+    pass "virt: hotplug: the controller holds one slot at the end -- the mouse's, which sat through it all"
+else
+    fail "virt: hotplug: '${slots:-no}' slots in use at the end, not 1 -- $(grep -a 'slots in use' <<<"$OUT" | tail -1)"
+fi
+if grep -aq '^ep2\.1 enabled interrupt' <<<"$OUT"; then
+    pass "virt: hotplug: the mouse's endpoint is still enabled"
+else
+    fail "virt: hotplug: the mouse did not survive -- $(grep -a '^ep2' <<<"$OUT" | head -2 | tr '\n' '|')"
+fi
+vrefute "hotplug: nothing panics"                      "panic:"
 
 #
 # The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)
@@ -4702,6 +5039,11 @@ else
 fi
 [[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
 
+# A blank USB disk on the DWC OTG: this controller is not an xHCI, so the
+# walker must name it and leave it alone (os/init/osinit.b, the gate on
+# diskusb), which is what is checked.
+dd if=/dev/zero of="$BUILD/$PLAT-usbdisk.img" bs=1M count=4 status=none
+QEMUARGS="$PI4ARGS -drive if=none,id=ud,file=$BUILD/$PLAT-usbdisk.img,format=raw -device usb-storage,drive=ud"
 OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 90)"
 printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
 [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
@@ -4735,6 +5077,15 @@ pcheck "the missing RNG200 is noticed, not faulted on" "NO RNG200 AT ITS ADDRESS
 # what is asserted is that the probe ran and came back empty-handed
 # rather than not at all, and took nothing down with it.
 pcheck "with no card, the radio is probed on the Arasan and reported absent" "ether4330: no radio"
+# The gigabit MAC (os/bcm2711/ethergenet.c) is a driver no emulator can
+# run. What CAN be asserted is that it asks before it touches, finds
+# nothing, and leaves ether0 to the USB path -- whose checks, below, are
+# then also the proof that it did.
+pcheck "the missing GENET is noticed, not faulted on" "genet: NO ETHERNET MAC AT"
+# Likewise the PCIe bridge (os/bcm2711/pcibcm.c). The code above it --
+# os/port/pci.c -- is run on the virt machine, which has a bridge.
+pcheck "the missing PCIe bridge is noticed, not faulted on" "pci: NO PCIe BRIDGE AT"
+pcheck "a USB disk on the DWC OTG is enumerated and, with no xHCI, left alone" "is a USB disk; diskusb is not started on this machine"
 prefute "nothing panics"                            "panic:"
 prefute "no exception goes unhandled"               "unhandled exception"
 pcheck "init reaches the shell"                     "init: starting the shell"
@@ -4837,6 +5188,15 @@ PYEOF
     pcheck "a USB mouse is claimed"                      "mouseusb: ep"
     pcheck "USB Ethernet comes up as ether0 (kernel data path)" "etherusb: serving /net/ether0 (kernel data path)"
     pcheck "ether0 has QEMU's address (by DHCP or by etherusb's fallback; see above)" "etherusb: 10.0.2.15 mask"
+    # DHCP itself answers only on a QEMU whose DWC2 model does not service
+    # a halted channel (tests/host/qemu/hcd-dwc2-halted-channel.patch, #664);
+    # a distribution's QEMU loses the OFFER on most boots and the check
+    # would flap, so it is made only where the patch is known to be in.
+    if [[ "${BAREMETAL_QEMU_PATCHED:-}" == 1 ]]; then
+        pcheck "DHCP answers over the emulated USB adapter (the DWC2 model is patched)" "etherusb: DHCP gave 10.0.2.15"
+    else
+        echo "      (DHCP over usb-net not required: BAREMETAL_QEMU_PATCHED is unset; see tests/host/qemu/README.md)"
+    fi
     pcheck "Lucifer starts"                              "lucifer: INIT"
 
     #

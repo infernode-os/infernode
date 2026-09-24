@@ -82,7 +82,7 @@ Every one of those choices has a way to go wrong that says nothing:
 | `-smp 4` | `MAXMACH` is 4, as on the board. With fewer, the missing cores are reported as not answering. |
 | `-m` up to 8192 | `mmu.c` maps eight gigabytes; `-m 6144` boots with 6141 MB of free pages and a 1.6 GB Dis heap, which is the tree's only run with physical addresses above 4 GB (a Pi 4's are capped below it by `RAMLIMIT`). Not in the harness: CI's runners have 7 GB. |
 | `-device qemu-xhci` (or `nec-usb-xhci`) | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
-| GICv2 | virt's default up to eight cores. With `gic-version=3` there is no memory-mapped CPU interface; `intrinit` says so. |
+| GICv2 or v3 | virt's default is a v2 up to eight cores; `gic-version=3` gives the controller of the Orin, the Pi 5 and most boards since 2016. `gic.c` tells them apart at boot and says which (`gic:  GICv2` / `gic:  GICv3: …`); the harness boots both. |
 
 `-append "fb=1024x768"` sets the screen size; the default is 1280x720.
 `-global virtio-mmio.force-legacy=false` gives modern virtio transports;
@@ -96,7 +96,7 @@ both kinds work and the boot log says which each device is.
 | `io.h` | the memory map (it is *below* RAM) and interrupt numbers |
 | `mmu.c` | identity map: `[0,1GB)` Device, `[1GB,ramtop)` Normal, the rest unmapped |
 | `fdt.c` | just enough device tree: memory size, `/psci` method, `/chosen/bootargs` |
-| `../arm64/gic.c` | GICv2: distributor, per-core CPU interface, `intrenable`, `irqdispatch`. Written here; moved when a Raspberry Pi 4, whose controller is a GIC-400, needed it |
+| `../arm64/gic.c` | GICv2 and v3: distributor, per-core CPU interface (memory on a v2, system registers and a redistributor on a v3), `intrenable`, `irqdispatch`. Written here; moved when a Raspberry Pi 4, whose controller is a GIC-400, needed it; v3 added for what comes after |
 | `../arm64/clockgt.c` | the generic timer, per core, on PPI 30. Likewise |
 | `uart.c`, `uartpl011.c` | the PL011: polled console, and `#t`'s `eia0` with receive interrupts |
 | `board.c` | the hooks in `../arm64/fns.h`; PSCI (SMP, reset, power off); the PL031 RTC |
@@ -293,6 +293,9 @@ is `os/arm64`.
   not done.
 - **No audio, GPIO, touch, Wi-Fi, Bluetooth, tryboot or boot watchdog.**
   They are the board's.
-- **GICv3**, which virt needs above eight cores and newer boards have.
+- **More than eight cores** (`MAXMACH` is 4), though the GICv3 that
+  would need is there. **MSI on a GICv3** is an ITS, not the GICv2m
+  frame `pciecam.c` knows: on `gic-version=3` every PCI device gets a
+  wire, which the log says.
 - **KVM.** Untried. On an arm64 host it should simply work and be fast;
   `-cpu host` then, and RNDR may appear.

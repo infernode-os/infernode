@@ -33,6 +33,7 @@ enum
 
 	GICDREGS	= 0xFF841000,	/* GIC-400 distributor */
 	GICCREGS	= 0xFF842000,	/* GIC-400 CPU interface */
+	GICRREGS	= 0,		/* a GIC-400 is a v2: no redistributors; ../arm64/gic.c never looks */
 };
 
 enum

@@ -16,6 +16,7 @@ enum
 {
 	GICDREGS	= 0x08000000,	/* GICv2 distributor */
 	GICCREGS	= 0x08010000,	/* GICv2 CPU interface */
+	GICRREGS	= 0x080A0000,	/* GICv3 redistributors, if gic-version=3; a frame per core */
 	GICV2MREGS	= 0x08020000,	/* GICv2m: the frame a PCI device writes to for an MSI; pciecam.c */
 	UART0REGS	= 0x09000000,	/* PL011 */
 	RTCREGS		= 0x09010000,	/* PL031 */

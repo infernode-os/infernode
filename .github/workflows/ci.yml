@@ -211,6 +211,12 @@ jobs:
         rc=0
         ROOT=. bash tests/host/dossrv_badent_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # Long-name slots that are orphaned, mis-summed or out of
+        # sequence must not become a file's name (#673).
+        chmod +x tests/host/dossrv_lfn_test.sh
+        rc=0
+        ROOT=. bash tests/host/dossrv_lfn_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
         # The radio firmware tool's verification path: a mismatched
         # checksum must refuse to install. Network-free (--from a
         # fixture directory), under a second.

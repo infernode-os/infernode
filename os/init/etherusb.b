@@ -399,8 +399,11 @@ init(nil: ref Draw->Context, argv: list of string)
 	# is already a pair of pipes, and asking for two on the same
 	# number is rejected as already in use.
 	#
-	dumpendpoints();
-	(inep, outep, mp) := bulkeps();
+	cfg := confdesc();
+	if(cfg == nil)
+		return;
+	dumpendpoints(cfg);
+	(inep, outep, mp) := bulkeps(cfg);
 	if(inep < 0 || outep < 0){
 		sys->print("etherusb: no pair of bulk endpoints\n");
 		return;
@@ -634,6 +637,95 @@ init(nil: ref Draw->Context, argv: list of string)
 }
 
 #
+# The whole configuration descriptor, fetched once for dumpendpoints and
+# bulkeps to share. Each of the two control reads is tried a few times:
+# after a warm restart the second fetch of it came back short while the
+# keyboard and mouse were enumerating through the same hub, and that
+# was a boot with no Ethernet, reported only as "no pair of bulk
+# endpoints" (#692). A short read now costs a retry, and one that stays
+# short says which read it was. nil if it cannot be had.
+#
+# Length is not enough. The boot that failed on the board answered both
+# reads in full and the bytes were wrong: the host driver had not
+# invalidated the cache over the buffer after the DMA, so what came
+# back was its 0x55 fill (fixed in usbdwc.c, the same fault its bulk
+# path had). A walk over that ends before the first endpoint and says
+# nothing. So a descriptor is also checked for shape -- it names its
+# own length and type, and its sub-descriptors tile it exactly -- and
+# one that fails is printed and fetched again, so that the next such
+# boot says what it read rather than what it could not find.
+#
+Confretries: con 3;
+
+# The first bytes of a descriptor, for a complaint about it.
+descbytes(d: array of byte): string
+{
+	s := "";
+	n := len d;
+	if(n > 16)
+		n = 16;
+	for(i := 0; i < n; i++)
+		s += sys->sprint("%.2x ", int d[i]);
+	if(len d > 16)
+		s += "...";
+	return s;
+}
+
+# A configuration descriptor's shape: length 9, type Dconf, and the
+# descriptors inside it -- each at least 2 bytes -- tiling it exactly.
+confshape(d: array of byte): int
+{
+	if(len d < 9 || int d[0] != 9 || int d[1] != Dconf)
+		return 0;
+	for(i := 0; i < len d; ){
+		dlen := int d[i];
+		if(dlen < 2 || i + dlen > len d)
+			return 0;
+		i += dlen;
+	}
+	return 1;
+}
+
+confdesc(): array of byte
+{
+	hdr := array[9] of byte;
+	n := 0;
+	for(try := 0; try < Confretries; try++){
+		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr)) == len hdr){
+			if(int hdr[0] == 9 && int hdr[1] == Dconf)
+				break;
+			sys->print("etherusb: configuration descriptor header is not one: %s\n", descbytes(hdr));
+			n = 0;
+		}
+		sys->sleep(50);
+	}
+	if(n != len hdr){
+		sys->print("etherusb: configuration descriptor header: %d of %d bytes after %d tries: %r\n", n, len hdr, Confretries);
+		return nil;
+	}
+	total := int hdr[2] | (int hdr[3] << 8);
+	if(total < len hdr || total > 512){
+		sys->print("etherusb: configuration descriptor claims %d bytes\n", total);
+		return nil;
+	}
+	cfg := array[total] of byte;
+	for(try = 0; try < Confretries; try++){
+		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg)) == total){
+			if(confshape(cfg))
+				return cfg;
+			sys->print("etherusb: configuration descriptor of %d bytes is not one: %s\n", total, descbytes(cfg));
+			n = 0;
+		}
+		sys->sleep(50);
+	}
+	if(n == 0)
+		sys->print("etherusb: no well-formed configuration descriptor after %d tries\n", Confretries);
+	else
+		sys->print("etherusb: configuration descriptor: %d of %d bytes after %d tries: %r\n", n, total, Confretries);
+	return nil;
+}
+
+#
 # Say what endpoints this device actually has.
 #
 # The bulk endpoint number is assumed to be 2 in both directions, which
@@ -643,19 +735,9 @@ init(nil: ref Draw->Context, argv: list of string)
 # and the host controller reports that as a transaction error rather than
 # as an empty read -- which is exactly what ep4.2 returns on this board.
 #
-dumpendpoints()
+dumpendpoints(cfg: array of byte)
 {
-	hdr := array[9] of byte;
-
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
-		return;
-	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512)
-		return;
-	cfg := array[total] of byte;
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
-		return;
-
+	total := len cfg;
 	for(i := 0; i + 2 <= total; ){
 		dlen := int cfg[i];
 		if(dlen < 2)
@@ -687,19 +769,9 @@ dumpendpoints()
 # Walked rather than indexed: a configuration is a run of
 # variable-length descriptors packed end to end, each "length, type".
 #
-bulkeps(): (int, int, int)
+bulkeps(cfg: array of byte): (int, int, int)
 {
-	hdr := array[9] of byte;
-
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
-		return (-1, -1, -1);
-	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512)
-		return (-1, -1, -1);
-	cfg := array[total] of byte;
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
-		return (-1, -1, -1);
-
+	total := len cfg;
 	inep := -1;
 	outep := -1;
 	mp := -1;
@@ -736,39 +808,6 @@ setmaxpkt(name: string, mp: int): int
 	return 0;
 }
 
-
-#
-# wMaxPacketSize of the first bulk endpoint, from the configuration
-# descriptor. Returns -1 if it cannot be found.
-#
-# Walked rather than indexed: the configuration arrives as a run of
-# variable-length descriptors packed end to end, each "length, type".
-#
-bulkmaxpkt(): int
-{
-	hdr := array[9] of byte;
-
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
-		return -1;
-	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512)
-		return -1;
-
-	cfg := array[total] of byte;
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
-		return -1;
-
-	for(i := 0; i + 2 <= total; ){
-		dlen := int cfg[i];
-		if(dlen < 2)
-			break;
-		# 5 is an endpoint descriptor; bmAttributes 2 is bulk
-		if(int cfg[i+1] == 5 && i + 6 < total && (int cfg[i+3] & 3) == 2)
-			return int cfg[i+4] | (int cfg[i+5] << 8);
-		i += dlen;
-	}
-	return -1;
-}
 
 #
 # The device's own bConfigurationValue, from the first nine bytes of its

@@ -77,8 +77,10 @@ void	(*heapmonitor)(int, void*, ulong);
  * Linux/arm64, 1000 commands in one emulator: resident +52 MB with the
  * JIT, +0 without. Hosted arm64 now unmaps it (freetypejit, in
  * comp-arm64.c, by a length typecom() keeps in front of the code).
- * Hosted amd64 still leaks: its type code is carved from a slab that is
- * never returned, which wants a different fix.
+ * Hosted amd64 carves its type code from slabs that must stay near the
+ * text segment, so it cannot unmap per type; freetypejit in comp-amd64.c
+ * puts the block on a free list instead, and the next type compiled
+ * reuses it (#649).
  */
 static void
 freetypecode(Type *t)
@@ -86,7 +88,7 @@ freetypecode(Type *t)
 #if defined(__aarch64__)
 	freetypejit(t);		/* free() on a native kernel, munmap() hosted: comp-arm64.c knows which */
 #elif !defined(INFERNO_NATIVE) && (defined(__x86_64__) || defined(_M_X64))
-	USED(t);		/* hosted amd64: carved from a slab that is never returned */
+	freetypejit(t);		/* hosted amd64: back to comp-amd64.c's free list, for the next type */
 #else
 	free(t->initialize);
 #endif

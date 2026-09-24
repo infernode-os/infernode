@@ -2623,15 +2623,63 @@ typecom_bound(Type *t)
  * near-text executable memory. Calling jitmalloc per type consumes
  * one VMA slot each, exhausting the 1024-hint scan after a few
  * hundred types. Instead, grab large slabs and bump-allocate.
- * Type code is never freed individually, so full slabs remain mapped
- * while allocation continues in a new slab.
+ *
+ * A block starts with a Typejithdr-byte header holding its size, and the
+ * code follows it, where freetypejit() finds the header again (#649).  A
+ * freed block goes on a free list and is reused; slabs themselves stay
+ * mapped.  The lists live out of line, in malloc'd Typefree nodes, so
+ * freeing never writes to code memory, which is read-only-execute on
+ * Windows and write-protected under MAP_JIT on Apple.
+ *
+ * Blocks up to TYPEFREE_SMALL bytes are kept by exact size, which is the
+ * common case: a module loaded again compiles the same types to the same
+ * sizes.  Larger ones share one list and are reused first-fit.
  */
 #define TYPECOM_SLAB_SIZE	(2*1024*1024)	/* 2MB holds thousands of types */
+#define Typejithdr	16			/* keeps the code 16-byte aligned */
+#define TYPEFREE_SMALL	4096
 static uchar *typecom_slab = nil;
 static ulong typecom_slab_used = 0;
 
+typedef struct Typefree Typefree;
+struct Typefree
+{
+	uchar*		p;
+	ulong		size;
+	Typefree*	next;
+};
+static Typefree *typefree_small[TYPEFREE_SMALL/16+1];
+static Typefree *typefree_large;
+static Typefree *typefree_nodes;		/* spare nodes */
+
 static uchar*
-typecom_alloc(int n)
+typefree_take(ulong size)
+{
+	Typefree *f, **l;
+	uchar *p;
+
+	if(size <= TYPEFREE_SMALL)
+		l = &typefree_small[size/16];
+	else
+		for(l = &typefree_large; *l != nil && (*l)->size < size; l = &(*l)->next)
+			;
+	f = *l;
+	if(f == nil)
+		return nil;
+	*l = f->next;
+	p = f->p;
+	f->next = typefree_nodes;
+	typefree_nodes = f;
+	return p;
+}
+
+/*
+ * Allocate a block of at least n bytes, header included.  Its size is
+ * returned in *sizep; the caller writes the header once the block is
+ * writable.
+ */
+static uchar*
+typecom_alloc(int n, ulong *sizep)
 {
 	uchar *p;
 	ulong aligned;
@@ -2639,6 +2687,11 @@ typecom_alloc(int n)
 	if(n <= 0 || n > TYPECOM_SLAB_SIZE)
 		return nil;
 	aligned = (n + 15) & ~15;	/* 16-byte align for code */
+	p = typefree_take(aligned);
+	if(p != nil) {
+		*sizep = *(ulong*)p;	/* a large block may be bigger than asked */
+		return p;
+	}
 	if(typecom_slab == nil || typecom_slab_used > TYPECOM_SLAB_SIZE-aligned) {
 #ifdef __APPLE__
 		typecom_slab = mmap(0, TYPECOM_SLAB_SIZE,
@@ -2667,15 +2720,52 @@ typecom_alloc(int n)
 	}
 	p = typecom_slab + typecom_slab_used;
 	typecom_slab_used += aligned;
+	*sizep = aligned;
 	return p;
+}
+
+/*
+ * Release a type's compiled initialize/destroy code to the free list,
+ * by the size in the header typecom() put in front of it.  Called from
+ * freetypecode() in heap.c when the type goes away.
+ */
+void
+freetypejit(Type *t)
+{
+	uchar *base;
+	ulong size;
+	Typefree *f, **l;
+
+	if(t == nil || t->initialize == nil)
+		return;
+	base = (uchar*)t->initialize - Typejithdr;
+	size = *(ulong*)base;
+	f = typefree_nodes;
+	if(f != nil)
+		typefree_nodes = f->next;
+	else {
+		f = malloc(sizeof(*f));
+		if(f == nil)
+			return;		/* leak the block rather than fail a free */
+	}
+	f->p = base;
+	f->size = size;
+	if(size <= TYPEFREE_SMALL)
+		l = &typefree_small[size/16];
+	else
+		l = &typefree_large;
+	f->next = *l;
+	*l = f;
+	t->initialize = nil;
+	t->destroy = nil;
 }
 
 void
 typecom(Type *t)
 {
 	int n;
-	uchar *tmp;
-	ulong need;
+	uchar *tmp, *base;
+	ulong need, size;
 
 	if(t == nil || t->initialize != 0)
 		return;
@@ -2729,8 +2819,8 @@ typecom(Type *t)
 		urk();
 	}
 
-	code = typecom_alloc(n);
-	if(code == nil)
+	base = typecom_alloc(n + Typejithdr, &size);
+	if(base == nil)
 		error(exNomem);
 
 #ifdef __APPLE__
@@ -2744,10 +2834,12 @@ typecom(Type *t)
 		 * after the slab has already been segflush'd RX. */
 		unsigned long old;
 		__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);
-		VirtualProtect(code, n, PAGE_READWRITE, &old);
+		VirtualProtect(base, size, PAGE_READWRITE, &old);
 	}
 #endif
 
+	*(ulong*)base = size;
+	code = base + Typejithdr;
 	t->initialize = code;
 	comi(t);
 	t->destroy = code;
@@ -2759,9 +2851,9 @@ typecom(Type *t)
 
 #ifdef __APPLE__
 	pthread_jit_write_protect_np(1);
-	sys_icache_invalidate(t->initialize, n);
+	sys_icache_invalidate(base, size);
 #else
-	segflush(t->initialize, n);
+	segflush(base, size);
 #endif
 }
 

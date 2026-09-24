@@ -296,6 +296,7 @@ init()
 	# anywhere.
 	#
 	tmpsetup();
+	mntsetup();
 
 	#
 	# After tmpsetup, not before: the join needs a writable directory
@@ -1625,17 +1626,13 @@ wifikey(txt: string): (string, string)
 wifijoin(essid, pass: string)
 {
 	#
-	# A namespace of its own. factotum binds itself on /mnt/factotum
-	# and the root filesystem is read only, so the mount point has to
-	# be made in the memory filesystem -- and doing that in the shared
-	# namespace would put this factotum where the desktop expects to
-	# put its own after login.
+	# A namespace of its own: factotum binds itself on /mnt/factotum,
+	# and doing that in the shared namespace would put this factotum
+	# where the desktop expects to put its own after login. The mount
+	# point itself appears on reference: mntsetup() put mntgen after
+	# /mnt.
 	#
 	sys->pctl(Sys->FORKNS, nil);
-	if(sys->bind("/tmp", "/mnt", Sys->MBEFORE|Sys->MCREATE) < 0){
-		sys->print("init: wifi: cannot make /mnt writable: %r\n");
-		return;
-	}
 	d := sys->create("/mnt/factotum", Sys->OREAD, Sys->DMDIR|8r700);
 	if(d == nil){
 		(ok, nil) := sys->stat("/mnt/factotum");
@@ -1858,6 +1855,53 @@ tmpsetup()
 	"*" =>
 		sys->print("init: memfs on /tmp failed: %s\n", e);
 	}
+}
+
+#
+# Mount points on demand, under /mnt.
+#
+# The root is the kernel's own, read only, and its /mnt holds the few
+# mount points compiled into it (/mnt/ui, /mnt/wm, ...). A program that
+# serves a tree of its own opens its mount point first -- matrix at
+# /mnt/matrix, as any 9P server here may -- and on the hosted emulator
+# that is a directory on the host. Here the open failed, the mount that
+# followed failed with "'/mnt/matrix' does not exist", and matrix was
+# gone before it drew anything, its complaint on the serial console.
+#
+# Inferno's answer to this is mntgen(4): a directory in which a name
+# appears when it is first referenced and stays while it is in use.
+# The hosted profile mounts it after /n ("mount -ac {mntgen} /n") for
+# exactly this purpose; here it goes after /mnt, in the shared
+# namespace the desktop inherits. What the kernel compiled in stays
+# in front; a new name is generated behind it and is a mount point
+# the moment it is walked to. Nothing of /tmp shows through /mnt,
+# which a bind of the memory filesystem over it would have done.
+#
+mntsetup()
+{
+	mg := load Command "/dis/mntgen.dis";
+	if(mg == nil){
+		sys->print("init: cannot load mntgen: %r\n");
+		return;
+	}
+	fds := array[2] of ref Sys->FD;
+	if(sys->pipe(fds) < 0){
+		sys->print("init: mntgen: no pipe: %r\n");
+		return;
+	}
+	spawn mntgenproc(mg, fds[0]);
+	fds[0] = nil;
+	if(sys->mount(fds[1], nil, "/mnt", Sys->MAFTER|Sys->MCREATE, nil) < 0)
+		sys->print("init: cannot mount mntgen on /mnt: %r\n");
+}
+
+# mntgen serves 9P on its standard input; give it the pipe as that
+# and nothing else but a standard error to complain on.
+mntgenproc(mg: Command, fd: ref Sys->FD)
+{
+	sys->pctl(Sys->NEWFD, fd.fd :: 2 :: nil);
+	sys->dup(fd.fd, 0);
+	mg->init(nil, "mntgen" :: nil);
 }
 
 sdsetup()

@@ -645,15 +645,58 @@ init(nil: ref Draw->Context, argv: list of string)
 # endpoints" (#692). A short read now costs a retry, and one that stays
 # short says which read it was. nil if it cannot be had.
 #
+# Length is not enough. The boot that failed on the board answered both
+# reads in full and the bytes were wrong: the host driver had not
+# invalidated the cache over the buffer after the DMA, so what came
+# back was its 0x55 fill (fixed in usbdwc.c, the same fault its bulk
+# path had). A walk over that ends before the first endpoint and says
+# nothing. So a descriptor is also checked for shape -- it names its
+# own length and type, and its sub-descriptors tile it exactly -- and
+# one that fails is printed and fetched again, so that the next such
+# boot says what it read rather than what it could not find.
+#
 Confretries: con 3;
+
+# The first bytes of a descriptor, for a complaint about it.
+descbytes(d: array of byte): string
+{
+	s := "";
+	n := len d;
+	if(n > 16)
+		n = 16;
+	for(i := 0; i < n; i++)
+		s += sys->sprint("%.2x ", int d[i]);
+	if(len d > 16)
+		s += "...";
+	return s;
+}
+
+# A configuration descriptor's shape: length 9, type Dconf, and the
+# descriptors inside it -- each at least 2 bytes -- tiling it exactly.
+confshape(d: array of byte): int
+{
+	if(len d < 9 || int d[0] != 9 || int d[1] != Dconf)
+		return 0;
+	for(i := 0; i < len d; ){
+		dlen := int d[i];
+		if(dlen < 2 || i + dlen > len d)
+			return 0;
+		i += dlen;
+	}
+	return 1;
+}
 
 confdesc(): array of byte
 {
 	hdr := array[9] of byte;
 	n := 0;
 	for(try := 0; try < Confretries; try++){
-		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr)) == len hdr)
-			break;
+		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr)) == len hdr){
+			if(int hdr[0] == 9 && int hdr[1] == Dconf)
+				break;
+			sys->print("etherusb: configuration descriptor header is not one: %s\n", descbytes(hdr));
+			n = 0;
+		}
 		sys->sleep(50);
 	}
 	if(n != len hdr){
@@ -667,11 +710,18 @@ confdesc(): array of byte
 	}
 	cfg := array[total] of byte;
 	for(try = 0; try < Confretries; try++){
-		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg)) == total)
-			return cfg;
+		if((n = ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg)) == total){
+			if(confshape(cfg))
+				return cfg;
+			sys->print("etherusb: configuration descriptor of %d bytes is not one: %s\n", total, descbytes(cfg));
+			n = 0;
+		}
 		sys->sleep(50);
 	}
-	sys->print("etherusb: configuration descriptor: %d of %d bytes after %d tries: %r\n", n, total, Confretries);
+	if(n == 0)
+		sys->print("etherusb: no well-formed configuration descriptor after %d tries\n", Confretries);
+	else
+		sys->print("etherusb: configuration descriptor: %d of %d bytes after %d tries: %r\n", n, total, Confretries);
 	return nil;
 }
 

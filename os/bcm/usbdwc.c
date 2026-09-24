@@ -1541,6 +1541,7 @@ ctltrans(Ep *ep, uchar *req, long n)
 	Block *b;
 	uchar *data;
 	int datalen;
+	long nr;
 
 	epio = ep->aux;
 	if(epio->cb != nil){
@@ -1610,9 +1611,28 @@ ctltrans(Ep *ep, uchar *req, long n)
 		 */
 		if((hc->hcsplt & Spltena) == 0){
 			ep->toggle[Read] = DATA1;
-			b->wp += multitrans(ep, hc, Read, data, datalen);
+			nr = multitrans(ep, hc, Read, data, datalen);
 		}else
-			b->wp += chanio(ep, hc, Epin, DATA1, data, datalen);
+			nr = chanio(ep, hc, Epin, DATA1, data, datalen);
+		/*
+		 * Drop the CPU's view of the buffer AFTER the device has
+		 * written it, as epread does for bulk and for the same
+		 * reason: the invalidate above empties the cache over the
+		 * buffer, but the transfer then waits on the device, and a
+		 * line loaded meanwhile -- the prefetcher running off the
+		 * end of a neighbouring block is enough -- is a clean,
+		 * valid, STALE line when the DMA lands under it. What the
+		 * caller then reads is the 0x55 fill: a descriptor of the
+		 * right length whose first byte says it is 85 bytes long,
+		 * so the walk over it ends before the first endpoint and
+		 * etherusb reports "no pair of bulk endpoints" (#692). One
+		 * boot in eight after a warm reset, when the keyboard and
+		 * mouse enumerate through the same hub and the wait is
+		 * longest; a re-run of the driver seconds later read the
+		 * same descriptor correctly.
+		 */
+		cachedwbinvse(data, ROUND(datalen, ep->maxpkt));
+		b->wp += nr;
 		chanio(ep, hc, Epout, DATA1, nil, 0);
 		n = Rsetuplen;
 	}else{

@@ -2349,7 +2349,7 @@ static void
 macret(void)
 {
 	u32int *notypelab, *nodestroylab, *nofplab, *nomrlab, *noreflab;
-	u32int *linterp;
+	u32int *linterp, *nolrlab;
 	Inst dummy;
 
 	CBZ_X(RA1, 0);
@@ -2401,12 +2401,33 @@ macret(void)
 	mem(Ldw, O(REG, xpc), RREG, RTA);
 	BR_REG(RTA);
 
+	/*
+	 * No mr: a return within the module, which is every return of a
+	 * recursive function. The module is the one running, so it is
+	 * compiled and lr is native code: call destroy and jump to lr, as
+	 * amd64's macret does. This used to punt to OP(ret) and re-enter
+	 * through R.PC, a C call and a dispatch on every such return, and
+	 * recursion ran no faster than the interpreter (#689). lr is
+	 * tested before destroy is called, so the punt below never runs
+	 * destroy twice.
+	 */
+	PATCH_BCOND(nomrlab);
+	mem(Ldw, O(Frame, lr), RFP, RA1);
+	CBZ_X(RA1, 0);
+	nolrlab = code - 1;
+	BLR_REG(RA0);
+	mem(Stw, O(REG, SP), RREG, RFP);
+	mem(Ldw, O(Frame, lr), RFP, RA1);
+	mem(Ldw, O(Frame, fp), RFP, RFP);
+	mem(Stw, O(REG, FP), RREG, RFP);
+	BR_REG(RA1);
+
 	/* Punt fallback */
 	PATCH_BCOND(notypelab);
 	PATCH_BCOND(nodestroylab);
 	PATCH_BCOND(nofplab);
-	PATCH_BCOND(nomrlab);
 	PATCH_BCOND(noreflab);
+	PATCH_BCOND(nolrlab);
 	dummy.add = AXNON;
 	punt(&dummy, TCHECK|NEWPC, optab[IRET]);
 }

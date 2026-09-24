@@ -96,7 +96,7 @@ enum {
 
 	Nfiles		= 8,		/* ipv4 + arp + ipv6 + spare sniffers */
 	Qlimit		= 128*1024,	/* per-conversation input queue */
-	Oqlimit		= 256*1024,	/* outbound, before writers block */
+	Oqlimit		= 256*1024,	/* outbound, before frames are dropped */
 
 	/*
 	 * Frames gathered into one bulk OUT. Sixteen is a TCP window's
@@ -775,6 +775,7 @@ etherbindctl(Ether *e, char *args)
 	e->txbuf = smalloc(e->ntxbuf);
 	e->nacc = 0;
 	qreopen(e->oq);	/* hung up by the last unbind */
+	qnoblock(e->oq, 1);	/* qreopen cleared it; see etherreset */
 	e->nif.link = 1;
 	e->bound = 1;
 
@@ -800,6 +801,16 @@ etherreset(void)
 		ether[i].oq = qopen(Oqlimit, 0, nil, nil);
 		if(ether[i].oq == nil)
 			panic("devether: no memory for the output queue");
+		/*
+		 * A full transmit queue drops the frame rather than put the
+		 * writer to sleep, as Plan 9's does. The writer is IP, and
+		 * ipoput and the ARP resolver write holding the interface's
+		 * read lock: one asleep on a queue a stalled bulk OUT will
+		 * never drain holds it for ever, and ipifc "remove"/"add",
+		 * a status read, and every later reader queue up behind it
+		 * (#692). A dropped frame is what the wire would have done.
+		 */
+		qnoblock(ether[i].oq, 1);
 	}
 }
 

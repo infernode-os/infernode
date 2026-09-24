@@ -195,6 +195,8 @@ Everything below will be met for the first time on the board.
 10. **Boot.** A Pi 4 boots from an EEPROM bootloader, not `bootcode.bin`;
    needs `arm_64bit=1` and must **not** have `enable_gic=0`; and whether
    the firmware's spin table is where QEMU's is (`0xd8`) is assumed.
+   `docs/BAREMETAL.md` §4 has the card, the `config.txt`, and the boot
+   log line by line with what each one proves.
    Tryboot and the watchdog are the BCM2837's code and the same block.
 
 ## A finding that is not this board's

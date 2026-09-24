@@ -238,6 +238,75 @@ You need a **3.3 V USB-serial cable on GPIO 14/15** (115200 8N1). The
 console is mirrored to HDMI once the framebuffer is up, but everything
 before that, and every panic, is on the serial line only.
 
+### And on a Raspberry Pi 4B
+
+The same card, three differences, and a page of what the first boot
+should say — **written before any Pi 4 has run it**, from the QEMU
+model and the datasheets; `os/bcm2711/README.md` lists what is
+untested and what each line of the boot log proves.
+
+**From the Raspberry Pi firmware repository:** `start4.elf` and
+`fixup4.dat` (the `4` variants; a Pi 4 boots from an EEPROM and ignores
+`bootcode.bin`), and `bcm2711-rpi-4-b.dtb`. The kernel reads no device
+tree — it asks the firmware's mailbox for everything — but the firmware
+wants the file there.
+
+**`config.txt`** — the 3B+'s, with the same words meaning the same
+things:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=infernode8.img
+    cmdline=cmdline.txt
+
+    [tryboot]
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+
+`[tryboot]` is native here; the EEPROM is where it came from. Do **not**
+add `enable_gic=0` — the kernel's interrupt controller is the GIC, and
+that line would hand it the 3B+'s instead — and do not add
+`dtoverlay=disable-bt`, for the 3B+'s reason. No `core_freq` pinning:
+the console is the mini-UART, as on the 3B+, and the kernel asks the
+firmware what the core clock is rather than assuming.
+
+**The kernel**: `bcm2711-kernel.img`, on the card as `infernode8.img`.
+Not the 3B+'s: its peripherals are at another address, and a
+`bcm2837-kernel.img` on a Pi 4 prints nothing at all.
+
+**Power**: a USB-C supply that can give 3 A. The serial cable, the
+userspace trees, the radio firmware and the control files are the 3B+'s.
+
+**The first boot, on the serial line.** In order, and what each line
+settles:
+
+| line | settles |
+|-|-|
+| `InferNode bare-metal (BCM2711 / Raspberry Pi 4B)` | the kernel image, `arm_64bit=1`, and the peripheral address |
+| `mbox: board rev …, ARM memory …` | the mailbox, at its new address |
+| `mbox: ARM clock 600 MHz, max 1500, now 1500 MHz` | the clock request; 1800 on a later board |
+| `mmu:  on, caches on, identity map 0-4096MB` | the page tables, including the PCIe window 24 GB up |
+| `intr: device interrupt delivered` (the system timer, first try) | the interrupt numbers in `io.h`. If only the GIC's self-test passes, they are wrong |
+| `cpu1: up` … `cpu3: up` | the firmware's spin table is where QEMU's is |
+| `rng:  RNG200 …` and **not** `NO RNG200 AT ITS ADDRESS` | the RNG200's address and layout |
+| `sd: … EMMC2` and **not** `no card on the board's SD controller` | the card controller and its clock id |
+| `ether4330: …` on the Arasan | the radio has its own controller, as intended |
+| `genet: rev 0x6…, xx:xx:… is #l (ether0)` | the MAC exists and answers; `genet: link up, 1000Mbit/s` is the PHY |
+| `pci: bcmstb bridge revision …`, a bus listing with `1106 3483`, `pci: … VL805 firmware reload requested` | the PCIe link came up and the VL805 is on it |
+| `usbxhci: PCI.0.1.0: 1106:3483 registers at …` then `init: USB root hub ep2.0 …` | the USB-A sockets. The USB-C port is `ep1.0` |
+| `boot OK` | everything else |
+
+A line that says **NO** in capitals is the kernel finding the emulator
+where it expected the board; on a board, each is a bug in this tree, and
+the README says where to look. The Ethernet, PCIe and xHCI lines are the
+first time those drivers have met their hardware, and are the most
+likely to be wrong.
+
+**Memory**: a 2 GB or 4 GB board is used entirely; an 8 GB board's top
+half is not (`RAMLIMIT`). **Displays**: HDMI0, the socket beside the
+USB-C, is display 0 and the console.
+
 ### Changing the kernel without pulling the card
 
 Never overwrite `infernode8.img` in place; it is the kernel you know

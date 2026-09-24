@@ -4302,6 +4302,37 @@ else
 fi
 vrefute "nothing panics"                           "panic:"
 vcheck "init reaches the shell"                    "init: starting the shell"
+vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv2"
+
+#
+# The same boot on a GICv3: the interrupt controller of the Orin, the
+# Pi 5 and most boards since 2016, and what virt has above eight cores.
+# os/arm64/gic.c tells the two apart at boot; on a v3 the CPU interface
+# is system registers and each core has a redistributor to wake, so
+# what is asserted is everything that goes through an interrupt: the
+# probe, every core's clock, preemption on every core, a device on a
+# wire (the xHCI's), and a shell.
+#
+QEMUARGS="${VIRTARGS/-M virt/-M virt,gic-version=3}"
+OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 60)"
+printf '%s\n' "$OUT" > "$BUILD/$PLAT-gicv3.txt"
+QEMUARGS="$VIRTARGS"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "gicv3: the controller is recognised as a v3"    "gic:  GICv3: distributor, a redistributor per core, the CPU interface in system registers"
+vrefute "gicv3: every core finds its redistributor"     "NO REDISTRIBUTOR"
+vcheck "gicv3: a device interrupt is delivered, twice"  "intr: device interrupt delivered"
+for i in 1 2 3; do
+    vcheck "gicv3: cpu$i comes up and its clock ticks"  "cpu$i: up"
+done
+if grep -aq 'smp:  preempt.* OK[[:space:]]*$' <<<"$OUT"; then
+    pass "virt: gicv3: a wired kproc preempts a hog on every secondary core"
+else
+    fail "virt: gicv3: preemption -- $(grep -a 'smp:  preempt' <<<"$OUT" | head -1)"
+fi
+vcheck "gicv3: the xHCI controller's wire is routed and enabled" "usbxhci interrupts by wire"
+vcheck "gicv3: boot completes"                           "boot OK"
+vrefute "gicv3: nothing panics"                          "panic:"
+vcheck "gicv3: init reaches the shell"                   "init: starting the shell"
 
 #
 # The whole machine: a disk, a network card, a screen, a keyboard and a

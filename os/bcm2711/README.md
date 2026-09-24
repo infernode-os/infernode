@@ -141,8 +141,11 @@ Everything below will be met for the first time on the board.
    radio's driver to keep off (`sdarasantaken`). A real EMMC2 has never
    been addressed by this code; the radio's firmware, its pins (GPIO
    34-39, ALT3, assumed the same as the 3B+) and its power enable on the
-   firmware's GPIO expander (whose pin numbers differ on this board and
-   have NOT been checked) are all untried.
+   firmware's GPIO expander are all untried. The expander pins were
+   checked against Linux's `bcm2711-rpi-4-b.dts` on 2026-09-24: the
+   radio's `WL_REG_ON` is expander pin 1 and Bluetooth's shutdown line
+   pin 0, the same as the 3B+'s `bcm2837-rpi-3-b-plus.dts` — so the
+   family's code needs no change there, on paper.
 7. **Gigabit Ethernet: a driver that has never met its hardware.**
    `ethergenet.c` is 9front's GENET driver (MIT) — the MAC, its two
    interrupt lines, its descriptor rings, and the BCM54213PE PHY over

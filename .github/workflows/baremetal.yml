@@ -140,7 +140,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/qemu
-        key: qemu-${{ matrix.qemu }}-aarch64-softmmu-slirp-ubuntu-24.04-v1
+        key: qemu-${{ matrix.qemu }}-aarch64-softmmu-slirp-ubuntu-24.04-v2-dwc2fix
 
     - name: Build QEMU ${{ matrix.qemu }}
       if: matrix.qemu && steps.qemucache.outputs.cache-hit != 'true'
@@ -153,6 +153,10 @@ jobs:
         curl -fsSL -o qemu.tar.xz "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
         tar xf qemu.tar.xz
         cd "qemu-${QEMU_VERSION}"
+        # The DWC2 model services a channel the guest has halted; see
+        # tests/host/qemu/README.md. Without this, DHCP over the emulated
+        # USB adapter fails most boots (#664).
+        patch -p1 < "$GITHUB_WORKSPACE/tests/host/qemu/hcd-dwc2-halted-channel.patch"
         ./configure --prefix="$RUNNER_TEMP/qemu" --target-list=aarch64-softmmu \
           --enable-slirp --disable-docs --disable-werror --disable-tools --disable-guest-agent \
           --disable-gtk --disable-sdl --disable-vnc --disable-opengl --disable-curses \
@@ -211,6 +215,10 @@ jobs:
         test -f dis/sh.dis && test -f dis/lucifer.dis
 
     - name: Build the kernel, boot it, and run the checks
+      env:
+        # a QEMU built above carries tests/host/qemu/*.patch; the harness
+        # then requires what only holds with them (DHCP over usb-net)
+        BAREMETAL_QEMU_PATCHED: ${{ matrix.qemu && '1' || '' }}
       run: |
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         mkdir -p "$RUNNER_TEMP/bm"

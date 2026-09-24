@@ -5138,6 +5138,15 @@ PYEOF
     pcheck "a USB mouse is claimed"                      "mouseusb: ep"
     pcheck "USB Ethernet comes up as ether0 (kernel data path)" "etherusb: serving /net/ether0 (kernel data path)"
     pcheck "ether0 has QEMU's address (by DHCP or by etherusb's fallback; see above)" "etherusb: 10.0.2.15 mask"
+    # DHCP itself answers only on a QEMU whose DWC2 model does not service
+    # a halted channel (tests/host/qemu/hcd-dwc2-halted-channel.patch, #664);
+    # a distribution's QEMU loses the OFFER on most boots and the check
+    # would flap, so it is made only where the patch is known to be in.
+    if [[ "${BAREMETAL_QEMU_PATCHED:-}" == 1 ]]; then
+        pcheck "DHCP answers over the emulated USB adapter (the DWC2 model is patched)" "etherusb: DHCP gave 10.0.2.15"
+    else
+        echo "      (DHCP over usb-net not required: BAREMETAL_QEMU_PATCHED is unset; see tests/host/qemu/README.md)"
+    fi
     pcheck "Lucifer starts"                              "lucifer: INIT"
 
     #

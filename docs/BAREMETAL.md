@@ -434,6 +434,13 @@ timing, a watchdog that counts, a radio — and it is why there are three
 rows and not one. A change that passes the first two has been proved
 for software.
 
+And what QEMU shows *wrongly* is a shorter list, kept in
+`tests/host/qemu/` as patches CI applies to the QEMU it builds: so far
+one, the Pi's USB controller model servicing a channel the kernel has
+halted, which lost the DHCP OFFER on most boots. A distribution's QEMU
+lacks them, and the harness requires only what holds without them
+unless `BAREMETAL_QEMU_PATCHED=1` says otherwise.
+
 ## 10. What an operator should know is not done
 
 - **Every process is the host owner.** The desktop's namespace no longer

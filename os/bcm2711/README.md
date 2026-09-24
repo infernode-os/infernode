@@ -99,7 +99,12 @@ Everything below will be met for the first time on the board.
    `bcm2711.dtsi` and agree with QEMU's wiring for the UARTs and USB,
    which work. Every other one is unexercised.
 2. **The RNG200 driver.** Written from Linux's `iproc-rng200.c`. Not one
-   line of it has executed.
+   line of it has executed. Its register layout was re-read against that
+   driver on 2026-09-24 — control at `0x00` (enable bit 0, mask
+   `0x1fff`), FIFO data `0x20`, FIFO count `0x24` (mask `0xff`) — and
+   agrees; what it does not do that Linux does is the soft-reset dance
+   before enabling, which a generator the firmware left running should
+   not need.
 3. **The SD card on EMMC2.** The driver is the Pi 3's Arasan driver
    pointed at a different base. EMMC2 is a different controller
    revision: its clock comes from a different mailbox clock id (12,
@@ -136,8 +141,11 @@ Everything below will be met for the first time on the board.
    radio's driver to keep off (`sdarasantaken`). A real EMMC2 has never
    been addressed by this code; the radio's firmware, its pins (GPIO
    34-39, ALT3, assumed the same as the 3B+) and its power enable on the
-   firmware's GPIO expander (whose pin numbers differ on this board and
-   have NOT been checked) are all untried.
+   firmware's GPIO expander are all untried. The expander pins were
+   checked against Linux's `bcm2711-rpi-4-b.dts` on 2026-09-24: the
+   radio's `WL_REG_ON` is expander pin 1 and Bluetooth's shutdown line
+   pin 0, the same as the 3B+'s `bcm2837-rpi-3-b-plus.dts` — so the
+   family's code needs no change there, on paper.
 7. **Gigabit Ethernet: a driver that has never met its hardware.**
    `ethergenet.c` is 9front's GENET driver (MIT) — the MAC, its two
    interrupt lines, its descriptor rings, and the BCM54213PE PHY over
@@ -183,8 +191,14 @@ Everything below will be met for the first time on the board.
    unplugged (QEMU's drops it silently, and the driver no longer needs
    better). MSI itself — `../port/pci.c`'s setup of it and the driver
    living on it — has run on `virt`, through the GIC's MSI frame; so
-   have hot-plugging, pulling a hub with a device in it, and the
-   controller-reset recovery path. `echo dump > /usb/usb/ctl` prints
+   have hot-plugging, pulling a hub with a device in it, the
+   controller-reset recovery path, and isochronous output against
+   QEMU's USB audio device (paced at the sample rate: a USB headset on
+   this board has a driver-level path that has run, and no driver); and a USB disk, which `diskusb`
+   (`os/init/diskusb.b`) serves as `/chan/usbdiskN` and mounts on
+   `/n/usbN` — on this board only once the xHCI is real, since the gate
+   is "the machine has an xHCI" and QEMU's `raspi4b` has none.
+   `echo dump > /usb/usb/ctl` prints
    the controller's status and every port's. Under QEMU the DWC2
    controller stands in for all this; on a board the DWC2 is only the
    USB-C port, and is `#u/usb/ep1.0` — the xHCI is `ep2.0`.
@@ -195,6 +209,8 @@ Everything below will be met for the first time on the board.
 10. **Boot.** A Pi 4 boots from an EEPROM bootloader, not `bootcode.bin`;
    needs `arm_64bit=1` and must **not** have `enable_gic=0`; and whether
    the firmware's spin table is where QEMU's is (`0xd8`) is assumed.
+   `docs/BAREMETAL.md` §4 has the card, the `config.txt`, and the boot
+   log line by line with what each one proves.
    Tryboot and the watchdog are the BCM2837's code and the same block.
 
 ## A finding that is not this board's

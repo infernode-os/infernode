@@ -80,8 +80,9 @@ Every one of those choices has a way to go wrong that says nothing:
 | `virtio-*-device` | The MMIO transport, which `virtio.c` drives. `virtio-net-pci`, and whatever `-drive if=virtio` makes, are PCI devices on a bus this kernel does not walk. |
 | `-device virtio-rng-device` | The kernel's entropy. Without it the kernel boots, says **NO ENTROPY SOURCE** in capitals, and every key it makes is predictable. |
 | `-smp 4` | `MAXMACH` is 4, as on the board. With fewer, the missing cores are reported as not answering. |
+| `-m` up to 8192 | `mmu.c` maps eight gigabytes; `-m 6144` boots with 6141 MB of free pages and a 1.6 GB Dis heap, which is the tree's only run with physical addresses above 4 GB (a Pi 4's are capped below it by `RAMLIMIT`). Not in the harness: CI's runners have 7 GB. |
 | `-device qemu-xhci` (or `nec-usb-xhci`) | Optional, and a PCI device: the only kind on this machine that is. `-device …-pci` anything is found by the bus scan; only what has a driver does anything. |
-| GICv2 | virt's default up to eight cores. With `gic-version=3` there is no memory-mapped CPU interface; `intrinit` says so. |
+| GICv2 or v3 | virt's default is a v2 up to eight cores; `gic-version=3` gives the controller of the Orin, the Pi 5 and most boards since 2016. `gic.c` tells them apart at boot and says which (`gic:  GICv2` / `gic:  GICv3: …`); the harness boots both. |
 
 `-append "fb=1024x768"` sets the screen size; the default is 1280x720.
 `-global virtio-mmio.force-legacy=false` gives modern virtio transports;
@@ -95,7 +96,7 @@ both kinds work and the boot log says which each device is.
 | `io.h` | the memory map (it is *below* RAM) and interrupt numbers |
 | `mmu.c` | identity map: `[0,1GB)` Device, `[1GB,ramtop)` Normal, the rest unmapped |
 | `fdt.c` | just enough device tree: memory size, `/psci` method, `/chosen/bootargs` |
-| `../arm64/gic.c` | GICv2: distributor, per-core CPU interface, `intrenable`, `irqdispatch`. Written here; moved when a Raspberry Pi 4, whose controller is a GIC-400, needed it |
+| `../arm64/gic.c` | GICv2 and v3: distributor, per-core CPU interface (memory on a v2, system registers and a redistributor on a v3), `intrenable`, `irqdispatch`. Written here; moved when a Raspberry Pi 4, whose controller is a GIC-400, needed it; v3 added for what comes after |
 | `../arm64/clockgt.c` | the generic timer, per core, on PPI 30. Likewise |
 | `uart.c`, `uartpl011.c` | the PL011: polled console, and `#t`'s `eia0` with receive interrupts |
 | `board.c` | the hooks in `../arm64/fns.h`; PSCI (SMP, reset, power off); the PL031 RTC |
@@ -111,7 +112,9 @@ both kinds work and the boot log says which each device is.
 ## USB, and why it is here
 
     -device qemu-xhci -device usb-hub,port=1 -device usb-kbd,port=1.2 \
-        -device usb-mouse,port=2 -netdev user,id=u0 -device usb-net,netdev=u0,port=3
+        -device usb-mouse,port=2 -netdev user,id=u0 -device usb-net,netdev=u0,port=3 \
+        -drive if=none,id=ud,file=card.img,format=raw -device usb-storage,drive=ud,port=4 \
+        -audiodev none,id=a0 -device usb-audio,audiodev=a0,port=1.3
 
 `../port/usbxhci.c` is 9front's xHCI driver, and this machine is where
 it has run: every harness boot initialises the controller, and one
@@ -170,6 +173,27 @@ Three things were wanted of this machine for that:
   Ethernet — and nobody has measured on a board how often those reads
   fail. #679 has the reproduction and what trying them there would
   take.
+- **A USB disk** (`os/init/diskusb.b`: mass storage, bulk-only, SCSI —
+  a program, like the other USB class drivers). `usb-storage` above is
+  the card image again, as a stick: the driver reads INQUIRY and the
+  capacity, serves the disk as `/chan/usbdisk0` and mounts its FAT on
+  `/n/usb0` for init; the harness then mounts it in the shell (`dossrv
+  -f /chan/usbdisk0 -m /n/usb0`), reads `HELLO.TXT`, writes a file,
+  reads it back, and checks the bytes reached the image. Every transfer
+  goes through the bounce path. It has met QEMU's disk and no other.
+  Gated to machines with an xHCI: a Pi 3 names the disk and leaves it.
+- **Isochronous transfers** (`os/init/isotest.b`, a test program): the
+  one kind nothing else exercises, paced by the controller's frame
+  counter rather than by the device. `-device usb-audio` is a 48 kHz
+  stereo sink, 192 bytes a frame; the test selects its streaming
+  alternate setting, opens the iso OUT endpoint and writes silence at
+  it for two seconds, and the harness requires the writes to have been
+  paced at the sample rate. Found one thing: 9front's `isowrite`
+  sleeps until a write's last frame has played, minus a lead its audio
+  driver sets per endpoint; without that lead the ring drained between
+  writes and the stream restarted 10 ms ahead after every one — half
+  speed for 10 ms writes, 92% for 100 ms. The lead is the driver's own
+  now (`Isolead`).
 - **The Pi 4's interrupts.** Its bridge delivers nothing but messages
   (MSI). `pciecam.c` gives a device that has the MSI capability one —
   an interrupt of the GIC's MSI frame (GICv2m), made edge-triggered
@@ -269,6 +293,9 @@ is `os/arm64`.
   not done.
 - **No audio, GPIO, touch, Wi-Fi, Bluetooth, tryboot or boot watchdog.**
   They are the board's.
-- **GICv3**, which virt needs above eight cores and newer boards have.
+- **More than eight cores** (`MAXMACH` is 4), though the GICv3 that
+  would need is there. **MSI on a GICv3** is an ITS, not the GICv2m
+  frame `pciecam.c` knows: on `gic-version=3` every PCI device gets a
+  wire, which the log says.
 - **KVM.** Untried. On an arm64 host it should simply work and be fast;
   `-cpu host` then, and RNDR may appear.

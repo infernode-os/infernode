@@ -58,7 +58,7 @@ higher affinity field, has to change `l.S`, which is shared.
 
 ### Two drivers in `os/arm64` that are not every board's
 
-`os/arm64/gic.c` (a GICv2) and `os/arm64/clockgt.c` (the generic timer,
+`os/arm64/gic.c` (a GICv2 or v3, told apart at boot) and `os/arm64/clockgt.c` (the generic timer,
 delivered through one) are the architecture's, and two of the three
 boards use them as they stand: they supply `intrinit`, `intrenable`,
 `intrdisable`, `irqdispatch`, `intrdump`, `intrpending`, `clockinit`,

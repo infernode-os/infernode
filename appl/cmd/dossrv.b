@@ -876,50 +876,46 @@ rstat(t: ref Tmsg.Stat): ref Rmsg
 #
 rawstat(f: ref Xfile): ref Sys->Dir
 {
-	islong :=0;
-	prevdo: int;
-	longnamebuf:="";
+	e := f.ptr.p.iobuf[f.ptr.offset:f.ptr.offset+DOSDIRSIZE];
+	dir := getdir(e, f.ptr.addr, f.ptr.offset);
 
-	# get file info.
-	dir := getdir(f.ptr.p.iobuf[f.ptr.offset:f.ptr.offset+DOSDIRSIZE],
-					f.ptr.addr, f.ptr.offset);
-	# get previous entry
-	if(f.ptr.prevaddr == -1) {
-		# maybe extended, but will never cross sector boundary...
-		# short filename at beginning of sector..
-		if(f.ptr.offset!=0) {
-			for(prevdo = f.ptr.offset-DOSDIRSIZE; prevdo >=0; prevdo-=DOSDIRSIZE) {
-				prevdattr := f.ptr.p.iobuf[prevdo+11];
-				if(prevdattr != byte DLONG)
+	# The slots in front of the entry, gathered walking back from it, so
+	# the one farthest back -- slot N -- ends up first in the list.
+	slots: list of array of byte;
+	prevdo := f.ptr.offset-DOSDIRSIZE;
+	for(; prevdo >= 0; prevdo -= DOSDIRSIZE) {
+		if(f.ptr.p.iobuf[prevdo+11] != byte DLONG)
+			break;
+		slots = slotcopy(f.ptr.p.iobuf[prevdo:prevdo+DOSDIRSIZE]) :: slots;
+	}
+	# a long name may start in the previous sector
+	if(prevdo < 0 && f.ptr.prevaddr != -1) {
+		p := getsect(f.xf, f.ptr.prevaddr);
+		if(p != nil) {
+			for(prevdo = f.xf.ptr.sectsize-DOSDIRSIZE; prevdo >= 0; prevdo -= DOSDIRSIZE) {
+				if(p.iobuf[prevdo+11] != byte DLONG)
 					break;
-				islong = 1;
-				longnamebuf += getnamesect(f.ptr.p.iobuf[prevdo:prevdo+DOSDIRSIZE]);
-			}
-		}
-	} else {
-		# extended and will cross sector boundary.
-		for(prevdo = f.ptr.offset-DOSDIRSIZE; prevdo >=0; prevdo-=DOSDIRSIZE) {
-			prevdattr := f.ptr.p.iobuf[prevdo+11];
-			if(prevdattr != byte DLONG)
-				break;
-			islong = 1;
-			longnamebuf += getnamesect(f.ptr.p.iobuf[prevdo:prevdo+DOSDIRSIZE]);
-		}
-		if (prevdo < 0) {
-			p := getsect(f.xf,f.ptr.prevaddr);
-			for(prevdo = f.xf.ptr.sectsize-DOSDIRSIZE; prevdo >=0; prevdo-=DOSDIRSIZE){
-				prevdattr := p.iobuf[prevdo+11];
-				if(prevdattr != byte DLONG)
-					break;
-				islong = 1;
-				longnamebuf += getnamesect(p.iobuf[prevdo:prevdo+DOSDIRSIZE]);
+				slots = slotcopy(p.iobuf[prevdo:prevdo+DOSDIRSIZE]) :: slots;
 			}
 			putsect(p);
 		}
 	}
-	if(islong)
-		dir.name = longnamebuf;
+
+	# Only the run that ends at the entry is its name: an orphan set in
+	# front of it starts over at its own 16r40 slot and is dropped there.
+	lfn := ref Lfn(nil, -1, 0);
+	for(; slots != nil; slots = tl slots)
+		lfnslot(lfn, hd slots);
+	if((ln := lfntake(lfn, e)) != nil)
+		dir.name = ln;
 	return dir;
+}
+
+slotcopy(a: array of byte): array of byte
+{
+	c := array[DOSDIRSIZE] of byte;
+	c[0:] = a[0:DOSDIRSIZE];
+	return c;
 }
 
 dostat(f: ref Xfile): ref Sys->Dir
@@ -1770,7 +1766,7 @@ searchdir(f: ref Xfile, name: string, cflag: int, lflag: int): (int, ref Dosptr)
 	dp :=  ref Dosptr(0,0,0,0,0,0,-1,-1,nil,nil);	# prevaddr and naddr are -1
 	dp.paddr = f.ptr.addr;
 	dp.poffset = f.ptr.offset;
-	islong :=0;
+	lfn := ref Lfn(nil, -1, 0);
 	buf := "";
 
 	need := 1;
@@ -1841,6 +1837,7 @@ searchdir(f: ref Xfile, name: string, cflag: int, lflag: int): (int, ref Dosptr)
 			if(dname0 == byte DOSEMPTY) {
 				if(debug)
 					chat("empty...");
+				lfnreset(lfn);
 				have++;
 				if(addr1 == -1){
 					addr1 = addr;
@@ -1859,20 +1856,20 @@ searchdir(f: ref Xfile, name: string, cflag: int, lflag: int): (int, ref Dosptr)
 				dirdump(p.iobuf[o:o+DOSDIRSIZE],addr,o);
 
 			if((dattr & DMLONG) == DLONG) {
-				if(!islong)
-					buf = "";
-				islong = 1;
-				buf = getnamesect(p.iobuf[o:o+DOSDIRSIZE]) + buf;	# getnamesect should return sum
+				lfnslot(lfn, p.iobuf[o:o+DOSDIRSIZE]);
 				continue;
 			}
 			if(dattr & DVLABEL) {
-				islong = 0;
+				lfnreset(lfn);
 				continue;
 			}
 
-			if(!islong || !lflag) 
+			buf = nil;
+			if(lflag)
+				buf = lfntake(lfn, p.iobuf[o:o+DOSDIRSIZE]);
+			lfnreset(lfn);
+			if(buf == nil)
 				buf = getname(p.iobuf[o:o+DOSDIRSIZE]);
-			islong = 0;
 
 			if(debug)
 				chat(sys->sprint("cmp: [%s] [%s]", buf, name));
@@ -1967,8 +1964,7 @@ readdir(f:ref Xfile, offset: int, count: int): (int, array of byte)
 	bp := xf.ptr;
 	rcnt := 0;
 	buf := array[Styx->MAXFDATA] of byte;
-	islong :=0;
-	longnamebuf:="";
+	lfn := ref Lfn(nil, -1, 0);
 
 	if(count <= 0)
 		return (0, nil);
@@ -1991,8 +1987,10 @@ Read:
 				break Read;
 			}
 
-			if(dname0 == DOSEMPTY)
+			if(dname0 == DOSEMPTY) {
+				lfnreset(lfn);
 				continue;
+			}
 
 			if(dname0 == '.') {
 				dname1 := int p.iobuf[o+1];
@@ -2005,28 +2003,21 @@ Read:
 			}
 
 			if((dattr & DMLONG) == DLONG) {
-				if(!islong)
-					longnamebuf = "";
-				longnamebuf = getnamesect(p.iobuf[o:o+DOSDIRSIZE]) + longnamebuf;
-				islong = 1;
+				lfnslot(lfn, p.iobuf[o:o+DOSDIRSIZE]);
 				continue;
 			}
 			if(dattr & DVLABEL) {
-				islong = 0;
+				lfnreset(lfn);
 				continue;
 			}
 
 			dir := getdir(p.iobuf[o:o+DOSDIRSIZE], addr, o);
-			if(islong) {
-				dir.name = longnamebuf;
-				longnamebuf = "";
-				islong = 0;
-			}
+			if((ln := lfntake(lfn, p.iobuf[o:o+DOSDIRSIZE])) != nil)
+				dir.name = ln;
 			fixname(dir);
 			d := styx->packdir(*dir);
 			if(offset > 0) {
 				offset -= len d;
-				islong = 0;
 				continue;
 			}
 			if(rcnt+len d > count){
@@ -2578,6 +2569,64 @@ isvalidname(s: string): int
 		} else if(s[i] > len isdos || isdos[s[i]] == 0)
 			return 0;
 	return 1;
+}
+
+#
+# A long name is slots N..1 in front of its 8.3 entry, slot N marked
+# 16r40, every slot carrying the checksum of that 8.3 name.  Slots that
+# are out of sequence or whose checksum does not match are orphans -- a
+# create that failed after putlongname, or another system's leftovers --
+# and belong to nothing: taking them as they come glued an orphan onto
+# the next file's name ("NotoSansCJKNotoSansCJK"), and a set whose sum
+# is not its 8.3 entry's is not that file's name at all (#673).  Such a
+# file answers to its 8.3 name, as it does everywhere else.
+#
+Lfn: adt {
+	name:	string;
+	next:	int;	# ordinal the next slot must carry: 0 when complete, -1 when none
+	sum:	int;
+};
+
+lfnreset(l: ref Lfn)
+{
+	l.name = nil;
+	l.next = -1;
+}
+
+lfnslot(l: ref Lfn, e: array of byte)
+{
+	ord := int e[0];
+	if(ord & 16r40){
+		l.name = getnamesect(e);
+		l.next = (ord & 16r3f) - 1;
+		l.sum = int e[13];
+		return;
+	}
+	if(l.next <= 0 || ord != l.next || int e[13] != l.sum){
+		lfnreset(l);
+		return;
+	}
+	l.name = getnamesect(e) + l.name;
+	l.next--;
+}
+
+# the long name for 8.3 entry e, if the slots before it are really its
+lfntake(l: ref Lfn, e: array of byte): string
+{
+	s: string;
+	if(l.next == 0 && l.sum == entsum(e))
+		s = l.name;
+	lfnreset(l);
+	return s;
+}
+
+# the long-name checksum of an 8.3 entry, as it is on the disk
+entsum(e: array of byte): int
+{
+	sum := 0;
+	for(i := 0; i < 11; i++)
+		sum = ((((sum&1)<<7) | ((sum&16rfe)>>1)) + int e[i]) & 16rff;
+	return sum;
 }
 
 getnamesect(arr: array of byte): string

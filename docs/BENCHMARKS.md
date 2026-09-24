@@ -24,7 +24,7 @@ Two benchmark suites measure JIT speedup: **v1** (6 compute-intensive benchmarks
 | AMD64 Windows | 19,115 ms | 1,437 ms | **13.3x** | 1,464 ms | 261 ms | **5.6x** |
 | ARM64 macOS | 16,697 ms | 1,735 ms | **9.6x** | 1,086 ms | 413 ms | **2.6x** |
 | ARM64 Linux | 38,320 ms | 4,615 ms | **8.3x** | 2,743 ms | 938 ms | **2.9x** |
-| ARM64 bare metal | 273,572 ms | 38,618 ms | **7.1x** | 17,752 ms | 7,354 ms | **2.4x** |
+| ARM64 bare metal | 273,572 ms | 37,816 ms | **7.2x** | 17,752 ms | 2,607 ms | **6.8x** |
 
 The AMD64 JIT achieves the highest speedup ratios (14.2x on v1) due to efficient x86-64 instruction encoding for the Dis VM's register-based bytecode. AMD64 Windows matches Linux within 3% on JIT absolute performance (1,437 ms vs 1,500 ms on v1) despite different ABIs and W^X mechanisms, confirming the Windows x64 ABI adaptation (callee-saved RSI/RDI, shadow space) introduces no measurable overhead. In absolute terms, AMD64 and Apple M4 JIT performance are comparable (~1,500 ms vs 1,735 ms on v1) despite different architectures. The Jetson Cortex-A78AE is roughly 2.5x slower in absolute terms but achieves similar JIT-over-interpreter ratios, confirming the ARM64 JIT generates efficient code on both microarchitectures.
 
@@ -37,13 +37,13 @@ The v1-to-v2 speedup reduction reflects benchmark composition: v2 includes funct
 | Benchmark | AMD64 JIT | AMD64 Interp | Speedup | M4 JIT | M4 Interp | Speedup | Jetson JIT | Jetson Interp | Speedup | Pi 3B+ JIT | Pi 3B+ Interp | Speedup |
 |-----------|-----------|-------------|---------|--------|-----------|---------|------------|---------------|---------|------------|---------------|---------|
 | Integer Arithmetic | 23 ms | 466 ms | 20.3x | 29 ms | 354 ms | 12.2x | 119 ms | 856 ms | 827 ms | 6,806 ms | 8.2x |
-| Array Access | 1,131 ms | 18,284 ms | 16.2x | 1,317 ms | 14,496 ms | 11.0x | 3,666 ms | 33,708 ms | 33,570 ms | 241,981 ms | 7.2x |
+| Array Access | 1,131 ms | 18,284 ms | 16.2x | 1,317 ms | 14,496 ms | 11.0x | 3,666 ms | 33,708 ms | 33,564 ms | 241,981 ms | 7.2x |
 | Function Calls | 1 ms | 20 ms | 20.0x | 1 ms | 18 ms | 18.0x | 4 ms | 38 ms | 31 ms | 288 ms | 9.3x |
-| Fibonacci | 243 ms | 777 ms | 3.2x | 220 ms | 786 ms | 3.6x | 633 ms | 1,671 ms | 2,511 ms | 8,950 ms | 3.6x |
+| Fibonacci | 243 ms | 777 ms | 3.2x | 220 ms | 786 ms | 3.6x | 633 ms | 1,671 ms | 1,742 ms | 8,950 ms | 5.1x |
 | Sieve | 5 ms | 74 ms | 14.8x | 5 ms | 51 ms | 10.2x | 16 ms | 136 ms | 134 ms | 967 ms | 7.2x |
 | Nested Loops | 65 ms | 1,152 ms | 17.7x | 54 ms | 990 ms | 18.3x | 169 ms | 1,911 ms | 1,517 ms | 14,580 ms | 9.6x |
 
-Fibonacci shows the lowest speedup across all platforms (2.6-3.6x) because recursive function calls involve frame allocation, module pointer validation, and type checking at each call site — operations the JIT cannot eliminate.
+Fibonacci shows the lowest speedup on the hosted platforms (2.6-3.6x) because recursive function calls involve frame allocation, module pointer validation, and type checking at each call site — operations the JIT cannot eliminate. On arm64 it was worse than that until #707 (2026-09-24): a return within the module punted to the interpreter's `ret`, so recursion ran no faster than interpreted code. The bare-metal column above is measured with the fix (5.1x on Fibonacci); the ARM64 Linux and macOS columns predate it. Same-day before/after on the Jetson with the fix: v2 1,970 → 897 ms, recursive fib 1,611 → 620 ms. Those rows will be re-measured on an idle machine.
 
 ### v2 Category Aggregates (AMD64 Linux, best-of-3)
 

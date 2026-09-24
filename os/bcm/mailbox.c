@@ -983,6 +983,23 @@ mboxmaxclockrate(u32int id)
 }
 
 /*
+ * Ask the firmware to run a clock at hz, and return what it set -- the
+ * firmware rounds, and refuses above the maximum. 0 if the call failed.
+ */
+u32int
+mboxsetclockrate(u32int id, u32int hz)
+{
+	u32int buf[3];
+
+	buf[0] = id;
+	buf[1] = hz;
+	buf[2] = 0;		/* the tag's third word: 1 would forbid the turbo that comes with the top rate */
+	if(mboxprop(Tagsetclockrate, buf, 3, 2) < 0)
+		return 0;
+	return buf[1];
+}
+
+/*
  * Read one 128-byte EDID block from the display.
  *
  * This is how "is anything actually plugged in?" is answered. The

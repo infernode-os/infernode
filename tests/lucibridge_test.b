@@ -21,6 +21,7 @@ implement LucibridgeTest;
 #   - lookuppathperm: permission lookup from path list
 #   - strcontains: list membership check
 #   - toolresultstatus: only direct execution failures taint provenance
+#   - calltoolbounded: a hung tool returns a bounded error
 #   - scratchpaths: trusted backing path and activity-visible path agree
 #
 
@@ -137,6 +138,30 @@ toolresultstatus(name, content: string): string
 	   (name == "limbo" && contains(lower, "status: failed")))
 		return "error";
 	return "success";
+}
+
+tooltimer(timeoutch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	timeoutch <-= 1;
+}
+
+waittool(name: string, resultch: chan of string, timeoutms: int): string
+{
+	timeoutch := chan[1] of int;
+	spawn tooltimer(timeoutch, timeoutms);
+	alt {
+	result := <-resultch =>
+		return result;
+	<-timeoutch =>
+		return sys->sprint("error: tool '%s' timed out after %dms", name, timeoutms);
+	}
+}
+
+delayedresult(resultch: chan of string, delayms: int, result: string)
+{
+	sys->sleep(delayms);
+	resultch <-= result;
 }
 
 scratchpaths(aid, step: int): (string, string)
@@ -750,6 +775,25 @@ testToolresultstatusEmbeddedExit(t: ref T)
 		"error", "direct limbo failure is an error");
 }
 
+testToolCallReturnsBeforeTimeout(t: ref T)
+{
+	resultch := chan[1] of string;
+	spawn delayedresult(resultch, 1, "ok");
+	t.assertseq(waittool("read", resultch, 1000), "ok",
+		"completed tool result wins before timeout");
+}
+
+testToolCallTimeoutIsError(t: ref T)
+{
+	resultch := chan[1] of string;
+	spawn delayedresult(resultch, 100, "late");
+	result := waittool("grep", resultch, 10);
+	t.assertseq(result, "error: tool 'grep' timed out after 10ms",
+		"hung tool returns bounded error");
+	t.assertseq(toolresultstatus("grep", result), "error",
+		"timeout is recorded as an error result");
+}
+
 testScratchpathsActivityView(t: ref T)
 {
 	(backing, visible) := scratchpaths(17, 3);
@@ -855,6 +899,8 @@ init(nil: ref Draw->Context, args: list of string)
 
 	# provenance and activity scratch regressions
 	run("ToolresultstatusEmbeddedExit", testToolresultstatusEmbeddedExit);
+	run("ToolCallReturnsBeforeTimeout", testToolCallReturnsBeforeTimeout);
+	run("ToolCallTimeoutIsError", testToolCallTimeoutIsError);
 	run("ScratchpathsActivityView", testScratchpathsActivityView);
 
 	if(testing->summary(passed, failed, skipped) > 0)

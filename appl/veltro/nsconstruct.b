@@ -159,6 +159,19 @@ restrictdirx(target: string, allowed: list of string,
 # Apply full namespace restriction policy
 restrictns(caps: ref Capabilities): string
 {
+	return restrictnsx(caps, 0);
+}
+
+# Tool workers must finish every shadow-backed restriction before the final
+# /tmp replacement. Constructing another shadow afterward recreates
+# /tmp/.veltro-ns inside the restricted writable view.
+restricttoolns(caps: ref Capabilities): string
+{
+	return restrictnsx(caps, 1);
+}
+
+restrictnsx(caps: ref Capabilities, hidemetadata: int): string
+{
 	if(sys == nil)
 		init();
 
@@ -345,6 +358,18 @@ restrictns(caps: ref Capabilities): string
 	# SECURITY INVARIANT: changes here must keep the negative, positive, and
 	# composition cases in tests/veltro_security_test.b in sync.
 	mntpaths := filterpaths(caps.paths, "/mnt/");
+	# Message descendants are separate proposal capabilities but /mnt/msg has
+	# its own protocol-aware filter below. Recursing through them here and then
+	# filtering the service a second time creates inconsistent stacked mounts.
+	mnttop: list of string;
+	for(mp0 := mntpaths; mp0 != nil; mp0 = tl mp0) {
+		if(prefix(hd mp0, "msg/")) {
+			if(!inlist("msg", mnttop))
+				mnttop = "msg" :: mnttop;
+		} else
+			mnttop = hd mp0 :: mnttop;
+	}
+	mntpaths = mnttop;
 	if(caps.mcproviders != nil && !inlist("mcp", mntpaths))
 		mntpaths = "mcp" :: mntpaths;	# whole /mnt/mcp for generic mc9p
 	# Matrix is a fixed-function capability. Derive its control filesystem from
@@ -566,7 +591,8 @@ restrictns(caps: ref Capabilities): string
 	# trusted /mnt/toolctl* alias outside the restricted root.
 	(toolok, nil) := sys->stat("/tool");
 	if(toolok >= 0) {
-		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" :: "budget" :: "activity" :: nil;
+		toolallow := "tools" :: "grantable" :: "help" :: "_registry" :: "paths" ::
+			"budget" :: "activity" :: nil;
 		if(inlist("task", caps.tools))
 			toolallow = "provision" :: toolallow;
 		for(tl2 := caps.tools; tl2 != nil; tl2 = tl tl2)
@@ -638,6 +664,11 @@ restrictns(caps: ref Capabilities): string
 	err = restrictdir("/tmp/veltro", tmpveltroallow(caps), 1);
 	if(err != nil)
 		return sys->sprint("restrict /tmp/veltro: %s", err);
+	if(hidemetadata) {
+		err = restrictdir("/tmp/veltro/.ns", nil, 0);
+		if(err != nil)
+			return sys->sprint("hide namespace manifest: %s", err);
+	}
 
 	# Provenance (INFR-355): record this restriction while the trusted
 	# /tmp/.veltro-ns tree is still reachable (step 10 hides it). The
@@ -646,11 +677,14 @@ restrictns(caps: ref Capabilities): string
 	# above, so the record comes from inside the restricted namespace.
 	# ops are consumed newest-first (emitauditlog reverses them).
 	auditops := "restrict /tmp -> veltro (final, after this manifest)" ::
+		"effectivepath=/tmp/veltro/scratch perm=cow" ::
 		("shellcmds=" + joincsv(caps.shellcmds)) ::
 		("writepaths=" + joincsv(caps.writepaths)) ::
 		("paths=" + joincsv(caps.paths)) ::
 		("tools=" + joincsv(caps.tools)) :: nil;
-	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd) != 0 &&
+	if(hidemetadata)
+		auditops = "restrict /tmp/veltro/.ns -> empty" :: auditops;
+	if(emitauditlogto(sys->sprint("%d", sys->pctl(0, nil)), caps.actid, auditops, auditfd, 0) != 0 &&
 	   auditrequired)
 		return "required namespace audit write failed";
 	auditfd = nil;
@@ -1279,6 +1313,10 @@ overlaywritepaths(paths: list of string, actid: int): string
 	cowfs: Cowfs;
 	for(p := paths; p != nil; p = tl p) {
 		fullpath := hd p;
+		# Scratch already has a dedicated per-activity cowfs projection below.
+		# Recursively staging that mount can block while its manifest is built.
+		if(fullpath == "/tmp/veltro/scratch")
+			continue;
 		if(directwritepath(fullpath))
 			continue;
 		if(cowfs == nil) {
@@ -1341,7 +1379,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/lib/certs",     "Certificates",     "ro"),
 		("/lib/veltro",    "Veltro Config",    "ro"),
 		("/dis/veltro",    "Veltro Tools",     "ro"),
-		("/tmp/veltro",    "Veltro Workspace", "rw"),
+		("/tmp/veltro/scratch", "Activity Scratch", "cow"),
 	};
 
 	for(i := 0; i < len infra; i++) {
@@ -1498,10 +1536,11 @@ emitauditlog(id: string, ops: list of string)
 	# -1: a direct caller outside restrictns has no activity to attribute the
 	# restriction to. The field is still emitted so a reader can tell an
 	# unattributed record from one written before attribution existed.
-	emitauditlogto(id, -1, ops, nil);
+	emitauditlogto(id, -1, ops, nil, 1);
 }
 
-emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD): int
+emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD,
+	allowfallback: int): int
 {
 	if(sys == nil)
 		init();
@@ -1536,7 +1575,9 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 	# be quietly edited after the fact. restrictns passes a pre-opened append
 	# FD because /mnt/audit is deliberately absent from the completed namespace;
 	# direct callers fall back to Audit->log and may no-op when auditing is off.
-	if(audit == nil) {
+	# restrictns must not use that fallback: /mnt has already been narrowed, and
+	# opening a hidden or stale 9P audit mount can block namespace construction.
+	if(allowfallback && audit == nil) {
 		a := load Audit Audit->PATH;
 		if(a != nil) {
 			a->init();
@@ -1563,7 +1604,7 @@ emitauditlogto(id: string, actid: int, ops: list of string, auditfd: ref Sys->FD
 				return -1;
 			return 0;
 		}
-		if(audit != nil)
+		if(allowfallback && audit != nil)
 			return audit->log("veltro", "nsrestrict", msg);
 	}
 	return -1;

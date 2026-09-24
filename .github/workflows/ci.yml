@@ -390,6 +390,10 @@ jobs:
         # so it is fatal, unlike the GUI-timing tests above.
         chmod +x tests/host/walk_leak_test.sh
         ROOT=. bash tests/host/walk_leak_test.sh
+        # And the byte-order accessors in emu/port/ipaux.c against LP64
+        # sign extension: compiles the function text out of the tree.
+        chmod +x tests/host/nhgetl_test.sh
+        ROOT=. bash tests/host/nhgetl_test.sh
 
     - name: Run JIT correctness tests
       run: |

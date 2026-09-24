@@ -109,7 +109,6 @@ AcctState: adt {
 	acct:       ref Wallet->Account;
 	history:    list of string;	# recent transactions
 	nhistory:   int;
-	requireapproval: int;		# 1 = require trusted approval for payments
 };
 
 # Pending payment (awaiting approval)
@@ -713,10 +712,7 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 				ethcrypto->betodec(fb.maxpertx),
 				ethcrypto->betodec(fb.maxpersess),
 				ethcrypto->betodec(fb.spent));
-		if(as.requireapproval)
-			s += "requireapproval on\n";
-		else
-			s += "requireapproval off\n";
+		s += "requireapproval on\n";
 		readstr(srv, m, s);
 
 	Qhistory =>
@@ -947,34 +943,18 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			return;
 		}
 
-		# Check if approval is required for this account
-		if(as.requireapproval) {
-			(pp, qerr) := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
-			if(qerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "pay: " + qerr));
-				return;
-			}
-			# Bind the proposal to the network it was quoted on, so a
-			# network switch between proposal and approval cannot
-			# silently redirect it to another chain.
-			pp.network = "eip155:" + string getnetwork().chainid;
-			pres := "pending:" + string pp.id;
-			setpaystate(m.fid, pres);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
-		} else {
-			# Execute immediately
-			txhash: string;
-			if(paytoken == "usdc")
-				(txhash, payerr) = executeerc20(as, payamt, payrecip);
-			else
-				(txhash, payerr) = executepayment(as, payamt, payrecip);
-			if(payerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "pay: " + payerr));
-				return;
-			}
-			setpaystate(m.fid, txhash);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		(pp, qerr) := newpending("pay", as.acct.name, payamt, payrecip, paytoken);
+		if(qerr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "pay: " + qerr));
+			return;
 		}
+		# Bind the proposal to the network it was quoted on, so a
+		# network switch between proposal and approval cannot
+		# silently redirect it to another chain.
+		pp.network = "eip155:" + string getnetwork().chainid;
+		pres := "pending:" + string pp.id;
+		setpaystate(m.fid, pres);
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qauthorize =>
 		as := findacctbyid(aid);
@@ -992,29 +972,19 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + aerr));
 			return;
 		}
-		if(as.requireapproval) {
-			(pp, qerr) := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
-			if(qerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "authorize: " + qerr));
-				return;
-			}
-			pp.network = areq.network;
-			pp.tokenname = areq.tokenname;
-			pp.tokenver = areq.tokenver;
-			pp.timeout = areq.timeout;
-			pp.resource = areq.resource;
-			pres := "pending:" + string pp.id;
-			setauthstate(m.fid, pres);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
-		} else {
-			(res, xerr) := executex402(as, areq);
-			if(xerr != nil) {
-				srv.reply(ref Rmsg.Error(m.tag, "authorize: " + xerr));
-				return;
-			}
-			setauthstate(m.fid, res);
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		(pp, qerr) := newpending("x402", as.acct.name, areq.amount, areq.payto, areq.asset);
+		if(qerr != nil) {
+			srv.reply(ref Rmsg.Error(m.tag, "authorize: " + qerr));
+			return;
 		}
+		pp.network = areq.network;
+		pp.tokenname = areq.tokenname;
+		pp.tokenver = areq.tokenver;
+		pp.timeout = areq.timeout;
+		pp.resource = areq.resource;
+		pres := "pending:" + string pp.id;
+		setauthstate(m.fid, pres);
+		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qacctctl =>
 		as := findacctbyid(aid);
@@ -1057,13 +1027,12 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write)
 			wallet->setfeebudget(as.acct, fb);
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 		} else if(ntoks >= 1 && hd toks == "requireapproval") {
-			val := 1;
-			if(ntoks >= 2 && hd tl toks == "off")
-				val = 0;
-			as.requireapproval = val;
-			srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			if(ntoks == 2 && hd tl toks == "on")
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+			else
+				srv.reply(ref Rmsg.Error(m.tag, "requireapproval: approval is mandatory"));
 		} else {
-			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | gasbudget maxpertx maxpersess | requireapproval [off]"));
+			srv.reply(ref Rmsg.Error(m.tag, "usage: budget maxpertx maxpersess currency | gasbudget maxpertx maxpersess | requireapproval on"));
 		}
 
 	* =>
@@ -1109,7 +1078,7 @@ parsetype(s: string): int
 # Register a new account with a stable id
 addaccount(acct: ref Wallet->Account)
 {
-	as := ref AcctState(nextacctid++, acct, nil, 0, 1);
+	as := ref AcctState(nextacctid++, acct, nil, 0);
 	accounts = as :: accounts;
 }
 

@@ -118,6 +118,25 @@ if {~ $over 0} {
 ls -l /tmp/mfstest
 rm -f /tmp/mfstest/g1 /tmp/mfstest/g2 /tmp/mfstest/g3 /tmp/mfstest/g4 /tmp/mfstest/g5 /tmp/mfstest/g6
 
+#
+# A read past the end of a file. A client whose file was truncated by
+# another client under it reads at an offset beyond the new length;
+# the server used to compute a negative count, and array[n] of a
+# negative n killed it -- one racing reader took /tmp away from the
+# whole machine (the Pi 3B+ soak, 2026-09-18). The read must be empty
+# and the server must still be there afterwards.
+#
+echo ''
+echo 'memfs: a read past the end is empty, and the server survives it'
+echo hello > /tmp/mfstest/short
+{ read -o 100 < /tmp/mfstest/short > /dev/null } >[2] /dev/null
+if {echo again > /tmp/mfstest/short} {
+	echo 'PASS: the server answered a read past the end and is still serving'
+} {
+	fail 'the server died on a read past the end of a file'
+}
+rm -f /tmp/mfstest/short
+
 echo ''
 if {~ $failed 0} {
 	echo 'ALL PASS'

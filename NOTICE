@@ -16,6 +16,15 @@ redistribution. Specifically:
     Plan 9 distribution (see fonts/LICENCE).
   - libmp/ and libsec/ carry the Lucent Public Licence (permissive).
 
+Parts of the native (bare-metal) kernel under os/ derive from other
+MIT-licensed Plan 9 systems, and each such file names its upstream and that
+upstream's terms in a header comment. In particular, the Raspberry Pi UART
+drivers os/bcm/uartmini.c and os/bcm/uartpl011.c come from 9front's
+sys/src/9/bcm; os/bcm/usbdwc.c is imported from Plan 9 4th edition; and
+os/bcm/emmc.c, os/bcm/sdhost.c, os/bcm/sdmmc.c and os/bcm/ether4330.c derive
+from Richard Miller's Plan 9 Raspberry Pi work. These terms do not differ from
+the MIT licence above; they are recorded here so the provenance is not lost.
+
 Inferno and Limbo are registered trademarks of Vita Nuova Holdings Limited in
 the USA and other countries. Plan 9 is a registered trademark of Southsuite
 Inc in the USA. Portions of this software were originally authored by employees
@@ -31,7 +40,8 @@ Revisions Copyright © 2000-2015 Vita Nuova Holdings Limited
 Inferno Copyright © 2000-2015 Vita Nuova Holdings Limited
 Plan 9 Copyright © 2002 Lucent Technologies Inc
 Plan 9 Copyright © 2021 Plan 9 Foundation
-9front Copyright © 9front authors (the files under os/ that say so; MIT)
+Portions Copyright © the 9front contributors
+Portions Copyright © 2012, 2016 Richard Miller
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

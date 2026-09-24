@@ -50,10 +50,7 @@ void	(*heapmonitor)(int, void*, ulong);
  * put 7452 of the 7468 blocks gained over four minutes on this one
  * malloc.
  *
- * Hosted 64-bit builds still leak here. Unmapping needs a length and
- * Type carries none; giving it one is a separate change.
- */
-/*
+ *
  * 52b8f796 made this a no-op as an experiment (INFR-458): the board was
  * calling through garbage function pointers, the theory was compiled
  * code reading a Type's code address after the Type was freed, and the
@@ -70,12 +67,26 @@ void	(*heapmonitor)(int, void*, ulong);
  * on typecom's malloc), and even a clean battery run left ~3 MB
  * behind. If a garbage-pointer panic ever names freed type code again,
  * /dev/memtags and the #622 detectors are both in the kernel to say so.
+ *
+ * Hosted builds (added when this met the hosted port of the same fix):
+ * On hosted 64-bit builds the JIT maps that code rather than mallocs
+ * it, so free() must not see it, and for a long time nothing released
+ * it at all: "this leaks type code on module unload", this file said,
+ * and it did -- about 52 KB for every command run, since a command
+ * loads a module, compiles its types and drops them again. Measured on
+ * Linux/arm64, 1000 commands in one emulator: resident +52 MB with the
+ * JIT, +0 without. Hosted arm64 now unmaps it (freetypejit, in
+ * comp-arm64.c, by a length typecom() keeps in front of the code).
+ * Hosted amd64 still leaks: its type code is carved from a slab that is
+ * never returned, which wants a different fix.
  */
 static void
 freetypecode(Type *t)
 {
-#if !defined(INFERNO_NATIVE) && (defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64))
-	USED(t);	/* hosted 64-bit: mmap()ed, and Type carries no length to unmap */
+#if defined(__aarch64__)
+	freetypejit(t);		/* free() on a native kernel, munmap() hosted: comp-arm64.c knows which */
+#elif !defined(INFERNO_NATIVE) && (defined(__x86_64__) || defined(_M_X64))
+	USED(t);		/* hosted amd64: carved from a slab that is never returned */
 #else
 	free(t->initialize);
 #endif

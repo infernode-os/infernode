@@ -102,6 +102,8 @@ Node: adt {
 	Block	=> stmts: cyclic list of ref Node;
 	Return	=> val: cyclic ref Node;
 	Delete	=> arr: string; idx: cyclic ref Node;
+	Break	=>
+	Continue	=>
 	Next	=>
 	Exit	=> val: cyclic ref Node;
 	Getline	=> var: cyclic ref Node; src: cyclic ref Node; cmd: int;
@@ -148,7 +150,7 @@ funcs: list of ref Func;
 symtab: list of ref Sym;
 fields: array of string;
 nfields := 0;
-reclength := 0;
+record := "";	# $0: the input text, rebuilt only when a field or NF is assigned
 openfiles: list of (string, ref Iobuf);
 
 # Built-in variable names
@@ -385,6 +387,7 @@ growfields(n: int)
 
 splitrecord(rec: string)
 {
+	record = rec;
 	if(fs_var == " ") {
 		# default: split on whitespace, skip leading/trailing.
 		# NB: `(nf, fl) :=` must use a fresh name — writing
@@ -483,23 +486,13 @@ rebuildrecord()
 			rec += ofs_var;
 		rec += fields[i];
 	}
-	growfields(0);
-	fields[0] = rec;	# not really; $0 is separate
-	reclength = len rec;
+	record = rec;
 }
 
 getfield(n: int): string
 {
-	if(n == 0) {
-		# rebuild $0
-		rec := "";
-		for(i := 0; i < nfields; i++) {
-			if(i > 0)
-				rec += ofs_var;
-			rec += fields[i];
-		}
-		return rec;
-	}
+	if(n == 0)
+		return record;
 	if(n < 1 || n > nfields)
 		return "";
 	return fields[n-1];
@@ -520,6 +513,7 @@ setfield(n: int, s: string)
 		nfields++;
 	}
 	fields[n-1] = s;
+	rebuildrecord();
 }
 
 
@@ -650,10 +644,17 @@ Lex.next(l: self ref Lex): int
 		pat := "";
 		while(l.pos < len l.src && l.src[l.pos] != '/') {
 			if(l.src[l.pos] == '\\' && l.pos+1 < len l.src) {
-				pat[len pat] = l.src[l.pos];
-				l.pos++;
-				pat[len pat] = l.src[l.pos];
-				l.pos++;
+				# regex(2) has no \t \n \r; awk decodes them (and \/) here
+				case l.src[l.pos+1] {
+				't' => pat[len pat] = '\t';
+				'n' => pat[len pat] = '\n';
+				'r' => pat[len pat] = '\r';
+				'/' => pat[len pat] = '/';
+				* =>
+					pat[len pat] = l.src[l.pos];
+					pat[len pat] = l.src[l.pos+1];
+				}
+				l.pos += 2;
 			} else {
 				pat[len pat] = l.src[l.pos];
 				l.pos++;
@@ -955,10 +956,10 @@ parsestmt(): ref Node
 		return ref Node.Return(rval);
 	TBREAK =>
 		lex.next();
-		raise "break";	# handled by loop constructs
+		return ref Node.Break;
 	TCONTINUE =>
 		lex.next();
-		raise "continue";
+		return ref Node.Continue;
 	* =>
 		e := parseexpr();
 		return e;
@@ -1486,6 +1487,9 @@ eval(n: ref Node): ref Val
 			exec(p.fbody);
 		return mknum(0.0);
 	While =>
+		# "break" is caught by the outer handler of each loop: a Limbo
+		# break inside an exception handler leaves only the handler, so
+		# catching it in the inner one would act like continue.
 		{
 			for(;;) {
 				if(!boolval(eval(p.cond)))
@@ -1495,8 +1499,6 @@ eval(n: ref Node): ref Val
 				} exception e {
 				"continue" =>
 					continue;
-				"break" =>
-					break;
 				"*" =>
 					raise e;
 				}
@@ -1516,8 +1518,6 @@ eval(n: ref Node): ref Val
 				} exception e {
 				"continue" =>
 					;
-				"break" =>
-					break;
 				"*" =>
 					raise e;
 				}
@@ -1543,8 +1543,6 @@ eval(n: ref Node): ref Val
 				} exception e {
 				"continue" =>
 					;
-				"break" =>
-					break;
 				"*" =>
 					raise e;
 				}
@@ -1569,8 +1567,6 @@ eval(n: ref Node): ref Val
 				} exception e {
 				"continue" =>
 					continue;
-				"break" =>
-					break;
 				"*" =>
 					raise e;
 				}
@@ -1604,6 +1600,10 @@ eval(n: ref Node): ref Val
 			s.arr = ref Assoc(nil);
 		}
 		return mknum(0.0);
+	Break =>
+		raise "break";	# handled by loop constructs
+	Continue =>
+		raise "continue";
 	Next =>
 		raise "next";
 	Exit =>
@@ -2681,7 +2681,6 @@ evalgetline(var: ref Node, src: ref Node, nil: int): ref Val
 		assignto(var, mkstr(line));
 	else {
 		setfield(0, line);
-		splitrecord(line);
 	}
 	nr_var++;
 	return mknum(1.0);

@@ -32,11 +32,15 @@ jobs:
         results_format: sarif
         # Publish results to the repository's Security tab
         publish_results: true
-        # Fine-grained PAT with admin:read to check branch protection
-        repo_token: ${{ secrets.SCORECARD_TOKEN }}
+        # No repo_token: it defaults to ${{ github.token }}, which suffices here.
+        # A PAT is only required to read *classic* branch protection. master is
+        # protected by the `protect-master` ruleset instead, and rulesets are
+        # readable with the default token — so the PAT this used to pass
+        # (SCORECARD_TOKEN) was vestigial after that migration, and once it
+        # expired it failed the whole job with "401 Bad credentials".
 
     - name: Upload Scorecard SARIF
-      uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v3
+      uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v3
       with:
         sarif_file: scorecard-results.sarif
 

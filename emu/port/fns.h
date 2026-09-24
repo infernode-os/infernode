@@ -58,7 +58,7 @@ Walkqid*	devwalk(Chan*, Chan*, char**, int, Dirtab*, int, Devgen*);
 void		disfault(void*, char*);
 void		disinit(void*);
 void		cnamepush(Cname*, Chan*);
-int		domount(Chan**, Mhead**);
+int		domount(Chan**, Mhead**, Cname**);
 void	drawqlock(void);
 void	drawqunlock(void);
 Fgrp*	dupfgrp(Fgrp*);

@@ -711,7 +711,31 @@ tsleep(Rendez *r, int (*fn)(void*), void *arg, int ms)
 			r, getcallerpc(&r), m->machno, up->text);
 
 	when = MS2TK(ms)+MACHP(0)->ticks;
-	lock(&talarm.l);
+	/*
+	 * ilock, not lock: nobody may be taken off a core holding this.
+	 *
+	 * Every other lock that is spun for with interrupts off -- a
+	 * Rendez, up->rlock, the run queue -- is only ever TAKEN with
+	 * interrupts off, by sleep(), wakeup() and ready(), so its holder
+	 * cannot be preempted and a spinner never waits for anything but
+	 * a running proc. talarm was the exception. Ordinary callers took
+	 * it here at spllo, where hzclock() may preempt them (most easily
+	 * just after _tas() succeeds, still at ordinary priority with
+	 * l->pc not yet set; also inside unlock()), while usbdwc's
+	 * chanwait() calls tsleep() at splhi and so spins for it with
+	 * interrupts off, unable to yield. Since #622 a proc preempted
+	 * while Running returns only to the core it left: preempt a
+	 * holder there, let that core run ether0rx, and ether0rx spins on
+	 * the one core the holder needs. "lock loop ... key 0x1 ... held
+	 * by pc 0x0" on talarm, five hours into the pre-release soak
+	 * (#681); 40 to 125 seconds under tsleepstorm, six times of six.
+	 *
+	 * checkalarms() takes it with canlock() from the clock interrupt
+	 * and is not held up: on this core interrupts are off while it is
+	 * held here, and from another core canlock() simply fails and the
+	 * next tick tries again.
+	 */
+	ilock(&talarm.l);
 	/* take out of list if checkalarm didn't */
 	if(up->trend) {
 		l = &talarm.list;
@@ -735,7 +759,7 @@ tsleep(Rendez *r, int (*fn)(void*), void *arg, int ms)
 	up->tfn = fn;
 	up->tlink = *l;
 	*l = up;
-	unlock(&talarm.l);
+	iunlock(&talarm.l);
 
 	if(waserror()){
 		up->twhen = 0;

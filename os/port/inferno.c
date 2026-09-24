@@ -879,14 +879,27 @@ Sys_pctl(void *fp)
 	}
 
 	if(f->flags & Sys_NEWNS) {
+		Pgrp *pg;
+
 		np.np = newpgrp();
-		dot = o->pgrp->dot;
+		/*
+		 * dot and nodevs are read under the ns lock and dot is held
+		 * by a reference of its own, so a chdir in another process
+		 * sharing this pgrp cannot free it under cclone (89db5178,
+		 * emu/port's copy of this; #640).
+		 */
+		pg = o->pgrp;
+		rlock(&pg->ns);
+		dot = pg->dot;
+		incref(&dot->r);
+		np.np->nodevs = pg->nodevs;
+		runlock(&pg->ns);
 		np.np->dot = cclone(dot);
 		np.np->slash = cclone(dot);
+		cclose(dot);
 		cnameclose(np.np->slash->name);
 		np.np->slash->name = newcname("/");
-		np.np->nodevs = o->pgrp->nodevs;
-		opg = o->pgrp;
+		opg = pg;
 		o->pgrp = np.np;
 		np.np = nil;
 		closepgrp(opg);

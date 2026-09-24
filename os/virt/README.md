@@ -111,7 +111,8 @@ both kinds work and the boot log says which each device is.
 ## USB, and why it is here
 
     -device qemu-xhci -device usb-hub,port=1 -device usb-kbd,port=1.2 \
-        -device usb-mouse,port=2 -netdev user,id=u0 -device usb-net,netdev=u0,port=3
+        -device usb-mouse,port=2 -netdev user,id=u0 -device usb-net,netdev=u0,port=3 \
+        -drive if=none,id=ud,file=card.img,format=raw -device usb-storage,drive=ud,port=4
 
 `../port/usbxhci.c` is 9front's xHCI driver, and this machine is where
 it has run: every harness boot initialises the controller, and one
@@ -170,6 +171,15 @@ Three things were wanted of this machine for that:
   Ethernet — and nobody has measured on a board how often those reads
   fail. #679 has the reproduction and what trying them there would
   take.
+- **A USB disk** (`os/init/diskusb.b`: mass storage, bulk-only, SCSI —
+  a program, like the other USB class drivers). `usb-storage` above is
+  the card image again, as a stick: the driver reads INQUIRY and the
+  capacity, serves the disk as `/chan/usbdisk0` and mounts its FAT on
+  `/n/usb0` for init; the harness then mounts it in the shell (`dossrv
+  -f /chan/usbdisk0 -m /n/usb0`), reads `HELLO.TXT`, writes a file,
+  reads it back, and checks the bytes reached the image. Every transfer
+  goes through the bounce path. It has met QEMU's disk and no other.
+  Gated to machines with an xHCI: a Pi 3 names the disk and leaves it.
 - **The Pi 4's interrupts.** Its bridge delivers nothing but messages
   (MSI). `pciecam.c` gives a device that has the MSI capability one —
   an interrupt of the GIC's MSI frame (GICv2m), made edge-triggered

@@ -404,6 +404,23 @@ names a range of the device so that it appears as `/dev/<name>`; reading
 it lists them. The kernel parses no partition table — a partition table
 is data on the card, and `osinit` reads the MBR and writes those lines.
 
+**A USB disk** (a stick, a card reader, an external drive: mass storage,
+bulk-only, SCSI) is driven by `diskusb`, a program like the other USB
+class drivers, which serves the whole disk as one file, `/chan/usbdiskN`,
+and mounts its FAT partition on `/n/usbN` — **for init and the network
+console.** The console shell forked its namespace when it started, before
+any USB driver ran, so from it (or the desktop) the disk is mounted with
+one command on the block file, which is in every namespace:
+
+    dossrv -f /chan/usbdisk0 -m /n/usb0
+
+Only on a machine with an xHCI controller so far — QEMU's `virt`, and a
+Pi 4's USB-A sockets once the board is here. On a Pi 3 the disk is
+enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
+on this machine`) and left alone: the driver has run only under
+emulation, and a Pi 3 gets no new behaviour on that evidence. One logical
+unit, disks up to 2 TB, no hot removal of the medium.
+
 ## 9. Testing
 
 | | what it proves | where it runs |

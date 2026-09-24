@@ -608,6 +608,9 @@ Dconf:		con 2;		# descriptor type: configuration
 Dhub:		con 16r29;	# descriptor type: hub
 Clhub:		con 9;		# device class: hub
 Clhid:		con 3;		# interface class: human interface
+Clstorage:	con 8;		# interface class: mass storage
+Sscsi:		con 6;		# ...subclass: SCSI transparent command set
+Pbulkonly:	con 16r50;	# ...protocol: bulk-only transport
 Hidkbd:		con 1;		# HID boot protocol: keyboard
 Hidmouse:	con 2;		# HID boot protocol: mouse
 Clvendor:	con 255;	# device class: vendor-specific
@@ -707,6 +710,7 @@ statusflags(status: int): string
 #
 # What dumpconfig last saw on a HID interface; 0 if none.
 hidproto := 0;
+isdisk := 0;		# dumpconfig saw a mass-storage interface (SCSI over bulk-only)
 hidep := -1;
 hidmaxpkt := 0;
 hidival := 0;
@@ -1161,6 +1165,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	}
 
 	hidproto = 0;
+	isdisk = 0;
 	hidep = -1;
 	dumpconfig(d, indent + "  ");
 
@@ -1188,6 +1193,16 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival);
 	else if(hidproto == Hidmouse)
 		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival);
+	#
+	# A disk. Only on a machine with an xHCI controller, for now: the
+	# driver has run on QEMU's xHCI and nowhere else, and a Raspberry
+	# Pi 3 gets no new behaviour on emulator evidence (#679 says why).
+	# On a Pi 3 the disk is enumerated, listed, and left alone.
+	#
+	else if(isdisk && havexhci)
+		startdriver("/dis/diskusb.dis", name, -1, 0, 0);
+	else if(isdisk)
+		sys->print("init: %s%s is a USB disk; diskusb is not started on this machine\n", indent, name);
 
 	#
 	# Hand it to a class driver, which is a program. The bus walk's
@@ -2334,6 +2349,8 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				#
 				if(int cfg[i+5] == Clhid && hidproto == 0)
 					hidproto = int cfg[i+7];
+				if(int cfg[i+5] == Clstorage && int cfg[i+6] == Sscsi && int cfg[i+7] == Pbulkonly)
+					isdisk = 1;
 			}
 		5 =>	# endpoint
 			if(i + 7 <= total){

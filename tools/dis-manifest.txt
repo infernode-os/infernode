@@ -593,6 +593,7 @@ dis/pipefile.dis
 dis/pipefs.dis
 dis/plumb.dis
 dis/plumber.dis
+dis/procstorm.dis
 dis/prof.dis
 dis/ps.dis
 dis/puttar.dis

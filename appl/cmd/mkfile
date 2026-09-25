@@ -144,6 +144,7 @@ TARG=\
 	pipefs.dis\
 	plumb.dis\
 	plumber.dis\
+	procstorm.dis\
 	prof.dis\
 	ps.dis\
 	puttar.dis\

@@ -499,7 +499,6 @@ confinit(void)
 	memset(&conf, 0, sizeof conf);
 
 	conf.nmach = 1;			/* one core running so far */
-	conf.nproc = 100;
 	conf.ialloc = 128*1024;
 	conf.pipeqsize = 256*1024;
 
@@ -509,6 +508,32 @@ confinit(void)
 	conf.base0 = base;
 	conf.npage0 = (top - base) / BY2PG;
 	conf.npage = conf.npage0;
+
+	/*
+	 * A flat 100 ran out under a real GUI session: several apps open,
+	 * each with a reader or two parked on events, the pointer, the
+	 * keyboard, a timer -- and native Inferno gives every Limbo
+	 * program blocked in a system call its own kernel process, adding
+	 * one whenever the VM queue empties (os/port/dis.c's release()).
+	 * A theme switch made every app reopen its theme files at once;
+	 * the 9P servers answering those opens needed a process too, and
+	 * none was left. The result is not a crash, because nothing
+	 * detects it as an error: sched() calls resrcwait("no procs") and
+	 * retries forever, which reads as a hang.
+	 *
+	 * Scaled from upstream Inferno's os/pc/main.c ("100 +
+	 * npage*BY2PG/MB*5" -- roughly 5 processes per MB of RAM, 100
+	 * as a floor for a small machine), capped so the table this
+	 * reserves cannot run away on a board with a lot of RAM: each
+	 * Proc is ~5KB (procinit(), os/port/proc.c) and its 16KB kernel
+	 * stack is allocated only the first time the slot is used, so the
+	 * cap bounds committed memory, not just a count. 1000 is ten
+	 * times what just failed and reserves about 5MB on this board;
+	 * the 16KB stacks are not part of that reservation.
+	 */
+	conf.nproc = 100 + (((conf.npage0 * BY2PG) >> 20) * 5);
+	if(conf.nproc > 1000)
+		conf.nproc = 1000;
 
 	/*
 	 * uartputstr, not print: confinit runs before printinit and before

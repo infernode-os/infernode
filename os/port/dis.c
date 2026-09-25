@@ -828,7 +828,13 @@ addrun(Prog *p)
 	p->state = Pready;
 	p->link = nil;
 	/* #635: where does a compiled Prog's saved PC go bad? */
-	if(p->R.M != H && p->R.M->compiled && ((uintptr)p->R.PC & 3))
+	/*
+	 * R.M is nil, not H, for a Prog whose module is not linked yet
+	 * (disinit's first). On arm64 page 0 is mapped and the read of
+	 * nil->compiled quietly returned junk; with no memory there (RISC-V,
+	 * no paging) it is a load access fault in the boot's first addrun.
+	 */
+	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && ((uintptr)p->R.PC & 3))
 		print("BUG: addrun: prog %d %s R.PC=%p (prog %p) from %#p\n",
 			p->pid, p->R.M->m? p->R.M->m->name : "?", p->R.PC,
 			p->R.M->m? (void*)p->R.M->m->prog : nil, getcallerpc(&p));
@@ -1280,7 +1286,7 @@ vmachine(void*)
 			{
 				Prog *q;
 				for(q = isched.runhd; q != nil; q = q->link)
-					if(q != r && q->R.M != H && q->R.M->compiled && ((uintptr)q->R.PC & 3) && !(q->flags & Pbadpc)){
+					if(q != r && q->R.M != nil && q->R.M != H && q->R.M->compiled && ((uintptr)q->R.PC & 3) && !(q->flags & Pbadpc)){
 						q->flags |= Pbadpc;
 						print("BUG: prog %d %s R.PC=%p (prog %p) went bad during the quantum of prog %d %s at pc %p (prog %p, state %d)\n",
 							q->pid, q->R.M->m? q->R.M->m->name : "?", q->R.PC, q->R.M->m? (void*)q->R.M->m->prog : nil,

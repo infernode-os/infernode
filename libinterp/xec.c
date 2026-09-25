@@ -1799,7 +1799,7 @@ isave(void)
 void
 irestore(Prog *p)
 {
-	if(p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
+	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
 		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->R.PC);
 	R = p->R;
 	R.IC = 1;

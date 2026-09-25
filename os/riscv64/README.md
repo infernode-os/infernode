@@ -89,7 +89,7 @@ boots each board.
   `os/mpfs/qemu-icicle.dts` is compiled with `dtc` and passed with
   `-dtb`. The run uses 5 harts and 2GB. mpfs checks:
   - userspace off the SD card (Cadence SD4HC, `sd4hc.c`);
-  - DHCP through the GEM (`ethergem.c`);
+  - the PHY over MDIO, and DHCP through the GEM (`ethergem.c`);
   - that the fabric buffer in `/reserved-memory` is not allocated.
 
 ## BeagleV-Fire
@@ -133,8 +133,11 @@ under QEMU only. The things QEMU cannot show are listed next.
   path has not run on a board yet.
 - **RTC.** The MSS RTC is not read, so the time of day comes from the
   network or not at all.
-- **GEM PHY.** No MDIO or PHY bring-up. QEMU's GEM needs none, and the
-  board's VSC8662 will.
+- **GEM PHY, on silicon.** `ethergem.c` finds the PHY over MDIO
+  (Clause 22), autonegotiates, and sets the MAC's speed and duplex from
+  the result. It keeps the SGMII/PCS bits the firmware set. Under QEMU
+  that is the GEM model's 88E1111. The Fire's own PHY and the MSS SGMII
+  block behind it are untested.
 - **DMA coherence.** The GEM and SD4HC descriptors and buffers are
   ordinary cacheable memory, and there is no cache maintenance around
   DMA. Whether the MSS DMA masters see the U54s' caches on the Fire's

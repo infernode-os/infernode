@@ -616,6 +616,8 @@ run_mpfs() {
     mcheck "userspace comes off the card" "init: /dis grown from /n/dos/dis"
     mcheck "/usr is the card's, writable" "init: /usr from /n/dos/usr (writable)"
     mcheck "the GEM is ether0" "ether: gem0"
+    mcheck "the GEM's PHY answers on the MDIO" "at MDIO address"
+    mcheck "the link comes up at what the PHY negotiated" "gem: link up, 1000 Mbps full duplex"
     mcheck "DHCP answers over the GEM" "etherusb: 10.0.2.15 mask"
     mcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
     mcheck "the JIT's correctness suite passes" "=== Results: 182/182 passed ==="

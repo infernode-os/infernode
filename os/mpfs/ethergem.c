@@ -17,12 +17,22 @@
  * a kproc, and the frames are handled there, in process context, where
  * etheriqb may allocate.
  *
- * Under QEMU (hw/net/cadence_gem.c) that is all there is. On the board
- * two things are not done here yet and matter: the PHY (MDIO: its link
- * speed decides NCFGR's speed bits, which are set for gigabit full
- * duplex and left there), and cache coherence of the MAC's DMA, which
- * on a PolarFire depends on which DDR window the buffers are addressed
- * through. Both need the board to answer.
+ * The PHY is found and driven over the GEM's MDIO (Clause 22, the MAN
+ * register): the first address that answers with an ID, told to
+ * autonegotiate. Its link is polled once a second from the kproc, and
+ * when it comes up, NCFGR's speed and duplex are set from what was
+ * negotiated and the interface's link and mbps follow. QEMU's GEM has
+ * a PHY model (an 88E1111 that is always up at gigabit), which is what
+ * this is tested against; a GEM with no PHY answering keeps gigabit full
+ * duplex and a link that is always up, as before.
+ *
+ * On the board the GEM reaches its PHY through the MSS's SGMII block,
+ * which the HSS configures and which NCFGR's PCS-select and SGMII-mode
+ * bits choose: those two are kept as the firmware left them.
+ *
+ * Not done: cache coherence of the MAC's DMA, which on a PolarFire
+ * depends on which DDR window the buffers are addressed through, and
+ * needs the board to answer.
  */
 
 #include "u.h"
@@ -50,6 +60,7 @@ enum
 	Ier		= 0x028,
 	Idr		= 0x02C,
 	Imr		= 0x030,
+	Man		= 0x034,	/* PHY maintenance (MDIO) */
 	Sa1b		= 0x088,	/* specific address 1, bottom 32 bits */
 	Sa1t		= 0x08C,	/* and top 16 */
 	Dcfg1		= 0x280,	/* design configuration: the AMBA data bus width */
@@ -68,9 +79,43 @@ enum
 	Spd100		= 1<<0,
 	Fd		= 1<<1,
 	Gbe		= 1<<10,
+	Pcssel		= 1<<11,	/* the PCS, for SGMII: the firmware's choice */
+	Sgmiien		= 1<<27,
 	Rfcs		= 1<<17,	/* strip the FCS */
 	Mdcdiv		= 5<<18,	/* MDC: pclk/96 */
 	Dbwshift	= 21,		/* AMBA data bus width: 0 32-bit, 1 64, 2 128 */
+
+	/* Nsr */
+	Mdioidle	= 1<<2,
+
+	/* Man: a Clause 22 frame */
+	Mansof		= 1<<30,
+	Manwrite	= 1<<28,
+	Manread		= 2<<28,
+	Manphyshift	= 23,
+	Manregshift	= 18,
+	Mancode		= 2<<16,
+
+	/* Clause 22 registers */
+	Bmcr		= 0,
+		Bmcranen	= 1<<12,
+		Bmcranrestart	= 1<<9,
+	Bmsr		= 1,
+		Bmsrlink	= 1<<2,
+		Bmsrancomp	= 1<<5,
+	Phyid1		= 2,
+	Phyid2		= 3,
+	Anar		= 4,
+	Anlpar		= 5,
+		An100fd		= 1<<8,
+		An100hd		= 1<<7,
+		An10fd		= 1<<6,
+	Gbcr		= 9,
+		Gbcr1000fd	= 1<<9,
+	Gbsr		= 10,
+		Gbsr1000fd	= 1<<11,
+
+	Nophy		= -1,
 
 	/* Tsr, Rsr */
 	Txcomp		= 1<<5,
@@ -129,12 +174,135 @@ struct Ctlr
 	Rendez	r;
 	int	work;
 
+	int	phy;		/* its MDIO address, or Nophy */
+	u32int	phyid;
+	u32int	ncfgr;		/* NCFGR less speed and duplex */
+
 	ulong	nintr, nrx, ntx, nrxdrop, ntxfull, nbna, novr;
 };
 
 static Ctlr ctlr;
 
 #define	R(c, r)	(*(volatile u32int*)((c)->regs + (r)))
+
+/*
+ * One Clause 22 transaction. Only the kproc and gemattach (before the
+ * kproc is started) use the MDIO, so nothing else can be mid-frame.
+ */
+static int
+mdiowait(Ctlr *c)
+{
+	int i;
+
+	for(i = 0; i < 1000; i++){
+		if(R(c, Nsr) & Mdioidle)
+			return 0;
+		microdelay(10);
+	}
+	return -1;
+}
+
+static int
+mdioread(Ctlr *c, int phy, int reg)
+{
+	if(mdiowait(c) < 0)
+		return -1;
+	R(c, Man) = Mansof | Manread | phy<<Manphyshift | reg<<Manregshift | Mancode;
+	if(mdiowait(c) < 0)
+		return -1;
+	return R(c, Man) & 0xFFFF;
+}
+
+static void
+mdiowrite(Ctlr *c, int phy, int reg, int v)
+{
+	if(mdiowait(c) < 0)
+		return;
+	R(c, Man) = Mansof | Manwrite | phy<<Manphyshift | reg<<Manregshift | Mancode | (v & 0xFFFF);
+	mdiowait(c);
+}
+
+/* the first address that answers with an ID, told to autonegotiate */
+static void
+phyprobe(Ctlr *c)
+{
+	int a, id1, id2, bmcr;
+
+	c->phy = Nophy;
+	for(a = 0; a < 32; a++){
+		id1 = mdioread(c, a, Phyid1);
+		id2 = mdioread(c, a, Phyid2);
+		if(id1 < 0 || id2 < 0)
+			return;		/* the MDIO itself is not answering */
+		if((id1 == 0 && id2 == 0) || (id1 == 0xFFFF && id2 == 0xFFFF))
+			continue;
+		c->phy = a;
+		c->phyid = id1<<16 | id2;
+		break;
+	}
+	if(c->phy == Nophy){
+		print("gem: no PHY answers on the MDIO; assuming gigabit full duplex\n");
+		return;
+	}
+	bmcr = mdioread(c, c->phy, Bmcr);
+	if(bmcr >= 0)
+		mdiowrite(c, c->phy, Bmcr, bmcr | Bmcranen | Bmcranrestart);
+	print("gem: PHY %#.8ux at MDIO address %d; autonegotiating\n", c->phyid, c->phy);
+}
+
+/*
+ * Once a second from the kproc: has the link changed? If it has come
+ * up, set the MAC to what was negotiated.
+ */
+static void
+phypoll(Ctlr *c)
+{
+	Ether *e;
+	int bmsr, lpa, adv, gbcr, gbsr, mbps, fd, linkup;
+	u32int speed;
+
+	if(c->phy == Nophy)
+		return;
+	e = c->edev;
+	/* the link bit latches low: the second read is now */
+	mdioread(c, c->phy, Bmsr);
+	bmsr = mdioread(c, c->phy, Bmsr);
+	if(bmsr < 0)
+		return;
+	linkup = (bmsr & Bmsrlink) && (bmsr & Bmsrancomp);
+	if(linkup == e->nif.link)
+		return;
+	if(!linkup){
+		e->nif.link = 0;
+		print("gem: link down\n");
+		return;
+	}
+
+	gbcr = mdioread(c, c->phy, Gbcr);
+	gbsr = mdioread(c, c->phy, Gbsr);
+	adv = mdioread(c, c->phy, Anar);
+	lpa = mdioread(c, c->phy, Anlpar);
+	if(gbcr >= 0 && gbsr >= 0 && (gbcr & Gbcr1000fd) && (gbsr & Gbsr1000fd)){
+		mbps = 1000;
+		fd = 1;
+	}else if(adv >= 0 && lpa >= 0){
+		lpa &= adv;
+		if(lpa & (An100fd|An100hd)){
+			mbps = 100;
+			fd = (lpa & An100fd) != 0;
+		}else{
+			mbps = 10;
+			fd = (lpa & An10fd) != 0;
+		}
+	}else
+		return;
+
+	speed = mbps == 1000 ? Gbe : mbps == 100 ? Spd100 : 0;
+	R(c, Ncfgr) = c->ncfgr | speed | (fd ? Fd : 0);
+	e->nif.mbps = mbps;
+	e->nif.link = 1;
+	print("gem: link up, %d Mbps %s duplex\n", mbps, fd ? "full" : "half");
+}
 
 static void
 geminterrupt(Ureg*, void *a)
@@ -228,8 +396,10 @@ gemproc(void *a)
 	c = a;
 	e = c->edev;
 	for(;;){
-		sleep(&c->r, gemwork, c);
+		/* a second at most, so the PHY is looked at */
+		tsleep(&c->r, gemwork, c, 1000);
 		c->work = 0;
+		phypoll(c);
 
 		for(;;){
 			d = &c->rx[c->rxhead];
@@ -303,11 +473,19 @@ gemattach(Ether *e)
 	/* the bus width the GEM was built with (DCFG1 27:25: 1, 2, 4 for 32, 64, 128) */
 	i = (R(c, Dcfg1) >> 25) & 7;
 	i = i >= 4 ? 2 : i >= 2 ? 1 : 0;
-	R(c, Ncfgr) = Spd100 | Fd | Gbe | Rfcs | Mdcdiv | (i << Dbwshift);
+	c->ncfgr = (R(c, Ncfgr) & (Pcssel|Sgmiien)) | Rfcs | Mdcdiv | (i << Dbwshift);
+	R(c, Ncfgr) = c->ncfgr | Gbe | Fd;
 	R(c, Sa1b) = e->ea[0] | e->ea[1]<<8 | e->ea[2]<<16 | (u32int)e->ea[3]<<24;
 	R(c, Sa1t) = e->ea[4] | e->ea[5]<<8;
 
 	c->rxhead = c->txhead = c->txtail = 0;
+	R(c, Ncr) = Mpe;
+	phyprobe(c);
+	/* with a PHY, the link is down until it says otherwise */
+	if(c->phy != Nophy)
+		e->nif.link = 0;
+	phypoll(c);
+
 	intrenable(c->irq, geminterrupt, c, 0, "gem");
 	R(c, Ier) = Irxcomp | Irxubr | Itxcomp | Irxovr | Ihresp;
 	R(c, Ncr) = Re | Te | Mpe;
@@ -327,10 +505,10 @@ gemifstat(Ether *e, void *a, long n, ulong off)
 	if(p == nil)
 		error(Enomem);
 	snprint(p, READSTR,
-		"gem at %#p irq %d\n"
+		"gem at %#p irq %d phy %d id %#.8ux\n"
 		"intrs %lud rx %lud tx %lud rxdrop %lud txfull %lud bna %lud ovr %lud\n"
 		"ncr %#ux ncfgr %#ux nsr %#ux dmacfg %#ux tsr %#ux rsr %#ux imr %#ux\n",
-		(void*)c->regs, c->irq,
+		(void*)c->regs, c->irq, c->phy, c->phyid,
 		c->nintr, c->nrx, c->ntx, c->nrxdrop, c->ntxfull, c->nbna, c->novr,
 		R(c, Ncr), R(c, Ncfgr), R(c, Nsr), R(c, Dmacfg), R(c, Tsr), R(c, Rsr), R(c, Imr));
 	n = readstr(off, a, n, p);
@@ -348,6 +526,7 @@ ethergemlink(void)
 	c = &ctlr;
 	c->regs = GEM0REGS;
 	c->irq = IRQgem0;
+	c->phy = Nophy;
 
 	e = etherinstance(0);
 	if(e == nil)

@@ -201,30 +201,10 @@ putstrn(char *str, int n)
 	putstrn0(str, n, 0);
 }
 
-int
-snprint(char *s, int n, char *fmt, ...)
-{
-	va_list arg;
-
-	va_start(arg, fmt);
-	n = vseprint(s, s+n, fmt, arg) - s;
-	va_end(arg);
-
-	return n;
-}
-
-int
-sprint(char *s, char *fmt, ...)
-{
-	int n;
-	va_list arg;
-
-	va_start(arg, fmt);
-	n = vseprint(s, s+PRINTSIZE, fmt, arg) - s;
-	va_end(arg);
-
-	return n;
-}
+/*
+ * snprint and sprint are in printfp.c, compiled with floating point:
+ * a double passed to them must reach va_arg (see there).
+ */
 
 int
 print(char *fmt, ...)

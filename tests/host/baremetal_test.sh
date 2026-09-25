@@ -546,6 +546,8 @@ build_kernel() {
             # 64-bit sentinel resumed Progs at prog - 1 for four days)
             "/dis/lib/testing.dis=$ROOT/dis/lib/testing.dis"
             "/dis/tests/exception_test.dis=$ROOT/dis/tests/exception_test.dis"
+            # formats and parses reals in the kernel's own VM (os/port/printfp.c)
+            "/dis/tests/fltfmt_test.dis=$ROOT/dis/tests/fltfmt_test.dis"
         )
         # A font, so acme has something to draw with.
         #
@@ -682,6 +684,19 @@ SBEOF
         # REAL with %g -- so it needs FP, like libinterp and for the
         # same reason. Everything else in os/port keeps
         # -mgeneral-regs-only so no interrupt path can dirty FP state.
+        # printfp.c holds snprint and sprint, through which Limbo formats
+        # a REAL: a double passed to a variadic function is in a vector
+        # register, and only an FP build spills those for va_arg. It is
+        # built -mno-implicit-float as well, so that spill is ALL it does
+        # with them: without it clang copies the va_list through q0/q1,
+        # a write to FP state that would be wrong under an interrupt.
+        if [[ "$(basename "$f")" == "printfp.c" ]]; then
+            "$CC" "${IFLAGS[@]}" -mno-implicit-float -I"$BUILD" -Wno-everything \
+                 -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
+                 -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+            objs+=("$o")
+            continue
+        fi
         if [[ "$(basename "$f")" == "devprog.c" ]]; then
             "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything \
                  -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
@@ -1716,6 +1731,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ls /dis' \
         'echo piped-through | cat' \
         '/dis/tests/exception_test.dis' \
+        '/dis/tests/fltfmt_test.dis' \
+        'echo 0 > /dev/jit; /dis/tests/fltfmt_test.dis; echo 1 > /dev/jit' \
         'echo env-round-trip > /env/probe' \
         'cat /env/probe' \
         'q=`{echo one two three}; echo subst-count $#q' \
@@ -1777,6 +1794,18 @@ if grep -q "^4 passed" <<<"$SHOUT" && ! grep -q "misaligned PC" <<<"$SHOUT"; the
     pass "exception_test: an unmatched exception block is not a handler (4 passed; #635)"
 else
     fail "exception_test did not report 4 passed (or a misaligned PC appeared): $(grep -E 'passed|FAIL|misaligned|Broken' <<<"$SHOUT" | head -3 | tr '\n' ' ')"
+fi
+
+# A REAL formatted and parsed as text in the kernel's own VM, with the
+# JIT and without it. Every one of these printed garbage until snprint
+# and sprint moved to printfp.c, built with FP: a double passed to a
+# variadic function is in a vector register, and a -mgeneral-regs-only
+# va_start never saves it. The hosted emulator was always right, so
+# only a kernel run shows it. Two "8 passed", one per mode.
+if [[ "$(grep -c '^8 passed$' <<<"$SHOUT")" -ge 2 ]]; then
+    pass "fltfmt_test: %g, %f, %e, string and real of a string are right in the kernel, JIT and interpreter (8 passed twice)"
+else
+    fail "fltfmt_test did not report 8 passed with the JIT and without: $(grep -E 'passed|got ' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
 fi
 
 # The per-core clock is readable from the shell, not only asserted at

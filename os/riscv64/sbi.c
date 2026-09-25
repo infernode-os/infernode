@@ -141,6 +141,23 @@ sbihartstart(ulong hartid, uintptr entry, uintptr opaque)
 	return (int)sbicall(Sbihsm, 0, hartid, entry, opaque, 0, nil);
 }
 
+/*
+ * A hart's HSM state: 0 started, 1 stopped, 2 start pending, 3 stop
+ * pending; -1 if the firmware cannot say.
+ */
+int
+sbihartstatus(ulong hartid)
+{
+	vlong v;
+
+	sbiprobeall();
+	if(!hashsm)
+		return -1;
+	if(sbicall(Sbihsm, 2, hartid, 0, 0, 0, &v) != 0)
+		return -1;
+	return (int)v;
+}
+
 /* type 0 shutdown, 1 cold reboot */
 void
 sbireset(int type)

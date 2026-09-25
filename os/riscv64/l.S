@@ -59,6 +59,26 @@ realstart:
 	mv	s1, a1
 
 	csrw	sie, zero
+
+	/*
+	 * The hart lottery, as Linux's head.S has it. The SBI boot protocol
+	 * brings one hart here, but a U-Boot built with CONFIG_SMP sends
+	 * every hart to the image it boots at once (arch/riscv/lib/bootm.c,
+	 * smp_call_function), and four harts clearing .bss and running kmain
+	 * on top of one another is not a boot. The first to increment
+	 * hartlottery is the boot hart; any other gives itself back to the
+	 * firmware (SBI HSM hart_stop), stopped, so that launchsmp can start
+	 * it at secentry like any other. Firmware without HSM refuses the
+	 * stop, and then the hart parks here for good.
+	 *
+	 * hartlottery is in .data, not .bss, because .bss is not cleared
+	 * yet; the winner zeroes the stash's copy of it (below) so that an
+	 * image #B reproduces starts with a fresh draw.
+	 */
+	la	t0, hartlottery
+	li	t1, 1
+	amoadd.w	t1, t1, (t0)
+	bnez	t1, lostlottery
 	la	sp, bootstacktop
 
 	/*
@@ -94,6 +114,14 @@ realstart:
 	addi	t2, t2, 8
 	j	3b
 4:
+	/* the stash's hartlottery: a fresh draw for a reproduced image */
+	la	t0, hartlottery
+	la	t1, __data_start
+	sub	t0, t0, t1
+	la	t2, __datastash
+	add	t0, t0, t2
+	sw	zero, 0(t0)
+
 	la	t0, dtbptr
 	sd	s1, 0(t0)
 	la	t0, boothartid
@@ -110,6 +138,19 @@ realstart:
 	j	5b
 
 	/*
+	 * A hart that lost the lottery: back to the firmware, stopped
+	 * (HSM, extension "HSM", function 1, hart_stop). It does not
+	 * return if the firmware has HSM.
+	 */
+lostlottery:
+	li	a7, 0x48534D
+	li	a6, 1
+	ecall
+6:
+	wfi
+	j	6b
+
+	/*
 	 * A secondary hart, started by sbihartstart(): a0 its hart id,
 	 * a1 the address of its Smpboot slot (sp, mach). It has its own
 	 * stack and Mach from the slot and goes straight to C.
@@ -124,6 +165,12 @@ secentry:
 	csrs	sstatus, t0
 	call	squidboy
 	j	5b
+
+	.section ".data"
+	.align	2
+	.global	hartlottery
+hartlottery:
+	.word	0
 
 	.section ".bss"
 	.align	4

@@ -60,6 +60,7 @@ void	sbisettimer(uvlong);
 void	sbisendipi(ulong hartmask, ulong hartbase);
 void	sbiremotefencei(void);
 int	sbihartstart(ulong hartid, uintptr entry, uintptr opaque);
+int	sbihartstatus(ulong hartid);
 void	sbireset(int type);
 void	sbiputc(int);
 char*	sbidescribe(void);

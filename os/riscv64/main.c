@@ -398,6 +398,39 @@ squidboy(void)
 	schedinit();
 }
 
+/*
+ * "lotterytest" on the command line (-append under QEMU): before the
+ * other harts are started at secentry, start each at _start, as a U-Boot
+ * built with CONFIG_SMP sends them all to the image it boots. Each must
+ * lose l.S's hart lottery and give itself back to the firmware; the
+ * normal start below then brings it up. A hart that does not come back
+ * to "stopped" is a lottery that let two harts through.
+ */
+static void
+lotterytest(int n)
+{
+	extern void _start(void);
+	int i, r, tries;
+
+	for(i = 1; i < n; i++){
+		r = sbihartstart(machs[i].hartid, (uintptr)_start, dtbptr);
+		if(r != 0){
+			print("lottery: hart %lud refused (%d)\n", machs[i].hartid, r);
+			continue;
+		}
+		for(tries = 0; tries < 2000; tries++){
+			if(sbihartstatus(machs[i].hartid) == 1)
+				break;
+			microdelay(1000);
+		}
+		if(sbihartstatus(machs[i].hartid) == 1)
+			print("lottery: hart %lud entered at _start, lost, and stopped\n", machs[i].hartid);
+		else
+			print("lottery: hart %lud did NOT stop (state %d)\n",
+				machs[i].hartid, sbihartstatus(machs[i].hartid));
+	}
+}
+
 static void
 launchsmp(void)
 {
@@ -422,6 +455,8 @@ launchsmp(void)
 		coherence();
 		n++;
 	}
+	if(strstr(boardcmdline(), "lotterytest") != nil)
+		lotterytest(n);
 	/* ilock's "nmach<2" shortcut must be gone before a second hart runs */
 	conf.nmach = n;
 	for(i = 1; i < n; i++){

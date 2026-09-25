@@ -527,6 +527,28 @@ run_riscvvirt() {
     rrefute "no unhandled exception" "unhandled exception"
 
     #
+    # The hart lottery (l.S): a U-Boot built with CONFIG_SMP sends every
+    # hart to the kernel at once. -append lotterytest makes launchsmp do
+    # the same to the three secondaries first -- each must lose, stop
+    # itself through SBI HSM, and then come up normally.
+    #
+    local savedargs="$QEMUARGS"
+    QEMUARGS="$RVVIRTARGS -append lotterytest"
+    OUT="$(session "$BUILD/$PLAT-kernel.img" 300 'echo lottery drawn')"
+    QEMUARGS="$savedargs"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-lottery.txt"
+    local lost
+    lost=$(grep -c "entered at _start, lost, and stopped" <<<"$OUT")
+    if [[ "$lost" -eq 3 ]]; then
+        pass "riscvvirt: three harts entering at _start lose the lottery and stop"
+    else
+        fail "riscvvirt: lottery -- $lost of 3 harts lost and stopped"
+    fi
+    rrefute "no hart gets through the lottery twice" "did NOT stop"
+    rcheck "and all four run once started properly" "smp:  4 harts running"
+    rcheck "the kernel still boots to the shell" "lottery drawn"
+
+    #
     # The kernel as a boot loader's "Linux": U-Boot in S-mode loads the
     # image off the card and booti's it, which is the BeagleV-Fire's
     # chain after the HSS. booti checks the Image header (l.S) and runs

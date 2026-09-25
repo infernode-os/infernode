@@ -254,44 +254,39 @@ getmacaddr(uchar *mac)
 }
 
 /*
- * No display on this board yet (ramfb over fw_cfg is ../virt's, for
- * later), but a keyboard is still a keyboard.
+ * The display, if QEMU was given one (-device ramfb), and then the
+ * things that point at it: exactly ../virt/board.c's. The console moves
+ * onto the screen; the serial line carries it regardless.
  */
+static Fbinfo fb;
+
 void
 boardfbprobe(void)
 {
+	if(ramfbinit(&fb) < 0){
+		fb.base = 0;
+		inputvirtioinit();	/* a keyboard is still a keyboard */
+		return;
+	}
+	print("fb:   ramfb %udx%udx%ud at %#p\n", fb.width, fb.height, fb.depth, (void*)fb.base);
+
+	if(fbconsinit(&fb) == 0){
+		screenputs = fbconsputs;
+		consoleprint = 1;
+	}
+	pointerbounds((int)fb.width, (int)fb.height);
 	inputvirtioinit();
 }
 
 Fbinfo*
 boardfb(void)
 {
-	return nil;
+	if(fb.base == 0)
+		return nil;
+	return &fb;
 }
 
-/* the framebuffer's side of ../fb/fbcons.c, for when there is one */
-void
-fbfill(Fbinfo *fb, u32int colour)
-{
-	USED(fb);
-	USED(colour);
-}
-
-int
-fbdisplay(u32int disp)
-{
-	USED(disp);
-	return -1;
-}
-
-int
-fbvoffset(u32int x, u32int y)
-{
-	USED(x);
-	USED(y);
-	return -1;
-}
-
+/* a second display cannot be plugged into this machine */
 void
 displaywatch(void *a)
 {

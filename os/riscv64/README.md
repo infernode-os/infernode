@@ -83,6 +83,8 @@ boots each board.
   - the shell and 4 harts;
   - a virtio card for userspace, and DHCP over virtio-net;
   - `jittest` and `jit_fault` on the bare-metal JIT;
+  - a ramfb screen with virtio keyboard and tablet, with the graphical
+    logon drawn on it (checked by a QMP screendump);
   - that U-Boot's `booti` boots the image (`qemu-riscv64_smode`).
 - **mpfs** boots QEMU's `microchip-icicle-kit`, which models the MSS but
   not the fabric. It has no device tree of its own, so
@@ -145,5 +147,7 @@ under QEMU only. The things QEMU cannot show are listed next.
 - **The fabric.** The FPGA gateware's devices (the cape GPIO, and any
   accelerator the user loads) have no drivers. Its reserved buffers are
   honoured.
-- **A screen.** The riscvvirt board has no framebuffer yet (ramfb is
-  arm64 virt's). The Fire has none.
+- **A screen on the Fire.** riscvvirt draws on QEMU's ramfb
+  (`../virtio/ramfb.c`, shared with arm64 virt), all the way to the
+  graphical logon. The BeagleV-Fire has no display controller in the MSS:
+  a screen there would be gateware in the fabric, or USB.

@@ -33,7 +33,11 @@
  * the host's window.
  *
  * No cache maintenance and no special mapping: QEMU reads guest RAM
- * from the host side, coherent by construction. See mmu.c.
+ * from the host side, coherent by construction. See ../virt/mmu.c.
+ *
+ * Nothing here is ARM's: QEMU's RISC-V virt machine has the same fw_cfg
+ * (at its own address, the board's FWCFGREGS) and takes the same
+ * -device ramfb, so ../riscvvirt uses this file too.
  */
 
 #include "u.h"

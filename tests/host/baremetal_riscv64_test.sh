@@ -345,10 +345,19 @@ session() {
     local img="$1" secs="$2"
     shift 2
     python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "${BIOS:-default}" "$@" <<'PYEOF'
-import os, select, subprocess, sys, time
+import json, os, select, socket, subprocess, sys, time
 qemu, img, secs, extra, bios = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
 cmds = sys.argv[6:]
 args = [qemu] + extra.split() + ["-bios", bios, "-kernel", img, "-display", "none", "-serial", "stdio", "-monitor", "none"]
+# SESSION_PPM: when the commands are done, dump the screen there and
+# count the console's colours in it (as tests/host/baremetal_test.sh's
+# virt check does): a line "SCREEN WxH bg N fg M" in the output
+ppm = os.environ.get("SESSION_PPM", "")
+qmp = ppm + ".qmp" if ppm else ""
+if qmp:
+    if os.path.exists(qmp):
+        os.unlink(qmp)
+    args += ["-qmp", "unix:%s,server,nowait" % qmp]
 p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 out = b""
 deadline = time.time() + secs
@@ -378,6 +387,35 @@ while time.time() < deadline:
                 if out[mark:].rstrip().endswith(b";"):
                     break
         deadline = min(deadline, time.time() + 3)
+if qmp:
+    try:
+        q = socket.socket(socket.AF_UNIX); q.connect(qmp)
+        f = q.makefile("rw")
+        f.readline()
+        f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+        if os.path.exists(ppm):
+            os.unlink(ppm)
+        f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
+        f.readline(); time.sleep(1)
+        d = open(ppm, "rb").read()
+        parts = d.split(b"\n", 3)
+        w, h = map(int, parts[1].split()); px = parts[3]
+        # the text console's colours (../fb/fbcons.c), and the logo's
+        # orange, which is what wm/logon draws once the console has
+        # been handed to the draw device
+        BG = (0x10, 0x10, 0x18); FG = (0xC8, 0xC8, 0xC8); LOGO = (0xFF, 0x66, 0x33)
+        nbg = nfg = nlogo = 0
+        for y in range(h):
+            for x in range(0, w, 2):
+                o = (y*w + x)*3
+                c = tuple(px[o:o+3])
+                if c == BG: nbg += 1
+                elif c == FG: nfg += 1
+                elif c == LOGO: nlogo += 1
+        out += b"\nSCREEN %dx%d bg %d fg %d logo %d\n" % (w, h, nbg, nfg, nlogo)
+        q.close()
+    except Exception as e:
+        out += b"\nSCREEN none (%s)\n" % str(e).encode()
 p.kill()
 p.wait()
 sys.stdout.write(out.replace(b"\0", b"").decode(errors="replace"))
@@ -441,7 +479,8 @@ run_riscvvirt() {
         fail "riscvvirt: mkcard could not build a card"
     fi
     QEMUARGS="$QEMUARGS -netdev user,id=n0 -device virtio-net-device,netdev=n0"
-    OUT="$(session "$BUILD/$PLAT-kernel.img" 900 'echo hello from riscv64' 'cat /dev/sysname' 'ls /dis/sh' 'ps' \
+    QEMUARGS="$QEMUARGS -device ramfb -device virtio-keyboard-device -device virtio-tablet-device"
+    OUT="$(SESSION_PPM="$BUILD/$PLAT-screen.ppm" session "$BUILD/$PLAT-kernel.img" 900 'echo hello from riscv64' 'cat /dev/sysname' 'ls /dis/sh' 'ps' \
         '/dis/jittest.dis' '/dis/tests/jit_fault_test.dis' '/dis/tests/exception_test.dis' '/dis/tests/fltfmt_test.dis')"
     printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
@@ -466,6 +505,20 @@ run_riscvvirt() {
     rcheck "userspace comes off the card" "init: /dis grown from /n/dos/dis"
     rcheck "/usr is the card's, writable" "init: /usr from /n/dos/usr (writable)"
     rcheck "DHCP answers over virtio-net" "etherusb: 10.0.2.15 mask"
+    rcheck "the framebuffer is configured through fw_cfg" "fb:   ramfb 1280x720x32"
+    rcheck "the keyboard and the tablet are found" "(absolute pointer)"
+    rcheck "the kernel's console moves to the screen" "fb:   console on display 0, 1280x720"
+    rcheck "and is handed to the draw device" "fb:   console released to the draw device"
+    # With a screen, boot-baremetal.sh runs wm/logon on it (a first boot:
+    # "choose a secstore password"), drawn by Limbo through devdraw and
+    # libmemdraw -- JIT-compiled -- onto the ramfb.
+    scr="$(grep -a '^SCREEN' <<<"$OUT" | tail -1)"
+    read -r _ sdim _ sbg _ sfg _ slogo <<<"$scr"
+    if [[ "$sdim" == "1280x720" && "${slogo:-0}" -ge 500 ]]; then
+        pass "riscvvirt: the graphical logon is drawn on the ramfb screen ($scr)"
+    else
+        fail "riscvvirt: screen -- '$scr'"
+    fi
     rcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
     rcheck "the JIT's correctness suite passes in the kernel" "=== Results: 182/182 passed ==="
     rcheck "faults in compiled code reach the right handler" "6 passed"
@@ -554,7 +607,7 @@ run_mpfs() {
     BIOS="$OPENSBI"
     PORTSKIP="devaudio.c ethermii.c pci.c usbxhci.c usbxhcipci.c devusb.c usbdwc.c"
     SHARED="$ROOT/os/virtio"
-    SHAREDSKIP="virtio.c blkvirtio.c ethervirtio.c inputvirtio.c"
+    SHAREDSKIP="virtio.c blkvirtio.c ethervirtio.c inputvirtio.c ramfb.c"
     EXTRASRC="$ROOT/os/bcm/sdmmc.c"
     platform_flags
 

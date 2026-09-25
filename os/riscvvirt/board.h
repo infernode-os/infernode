@@ -31,7 +31,8 @@ void	ethervirtiolink(void);
 
 void	inputvirtioinit(void);
 
-/* what ../fb/fbcons.c asks of a framebuffer; no display here yet */
+/* ../virtio/ramfb.c: a framebuffer, and fbcons.c's two questions about it */
+int	ramfbinit(Fbinfo*);
 void	fbfill(Fbinfo*, u32int);
 int	fbdisplay(u32int);
 int	fbvoffset(u32int, u32int);

@@ -1,6 +1,6 @@
 /*
  * The device table: ../riscvvirt/devtab.c's. #S is the card
- * (sd4hc.c), #l has no MAC driver behind it yet,
+ * (sd4hc.c), #l the GEM (ethergem.c),
  * #i and #m with no display: the drivers come, the table stays.
  */
 

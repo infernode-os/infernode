@@ -528,6 +528,7 @@ run_mpfs() {
     else
         fail "mpfs: mkcard could not build a card"
     fi
+    QEMUARGS="$QEMUARGS -nic user"
     OUT="$(session "$BUILD/$PLAT-kernel.img" 900 'echo hello from polarfire' 'cat /dev/sysname' 'ps' 'ls /n/dos' \
         '/dis/jittest.dis' '/dis/tests/jit_fault_test.dis')"
     printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
@@ -550,6 +551,9 @@ run_mpfs() {
     mcheck "its FAT32 partition is found" "init: /dev/sd0: type 0x0c"
     mcheck "userspace comes off the card" "init: /dis grown from /n/dos/dis"
     mcheck "/usr is the card's, writable" "init: /usr from /n/dos/usr (writable)"
+    mcheck "the GEM is ether0" "ether: gem0"
+    mcheck "DHCP answers over the GEM" "etherusb: 10.0.2.15 mask"
+    mcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
     mcheck "the JIT's correctness suite passes" "=== Results: 182/182 passed ==="
     mcheck "faults in compiled code reach the right handler" "6 passed"
     mrefute "no test fails" "FAIL"

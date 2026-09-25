@@ -15,10 +15,10 @@
  * passes it with -dtb.
  *
  * The card is the Cadence SD4HC (sd4hc.c) under the Pis' card protocol
- * (../bcm/sdmmc.c). What is not here yet: the Cadence GEM Ethernet MAC
- * and the system controller's TRNG service for entropy -- until then,
- * loopback networking and a loud warning that there is no entropy
- * source.
+ * (../bcm/sdmmc.c); the network is the Cadence GEM (ethergem.c). What
+ * is not here yet: the system controller's TRNG service for entropy --
+ * until then, a loud warning that there is no entropy source -- and the
+ * GEM's PHY, which QEMU does not need and the board does.
  */
 
 #include "u.h"
@@ -328,9 +328,10 @@ displaywatch(void *a)
 	USED(a);
 }
 
-/* the devices found late: the card */
+/* the devices found late: the card and the network */
 void
 boarddevprobe(void)
 {
 	emmcinit();
+	ethergemlink();
 }

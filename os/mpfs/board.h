@@ -25,6 +25,8 @@ Fbinfo*	boardfb(void);
 extern SDio sd4hcio;
 #define	SDCARD_IO	sd4hcio
 int	emmcinit(void);
+
+void	ethergemlink(void);	/* ethergem.c: GEM0 as #l/ether0 */
 char*	sdcontroller(void);
 int	sdblkread(uvlong, void*);
 int	sdblkwrite(uvlong, void*);

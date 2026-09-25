@@ -12,6 +12,7 @@ int	fdtvalid(void);
 uintptr	fdtsize(void);
 int	fdtmemory(uintptr*, uintptr*);
 uchar*	fdtgetprop(char*, char*, int*);
+int	fdtcpus(ulong*, int);
 
 /* random.c */
 void	rnginit(void);
@@ -43,7 +44,7 @@ void	fbfill(Fbinfo*, u32int);
 int	fbdisplay(u32int);
 int	fbvoffset(u32int, u32int);
 
-/* ../arm64/fbcons.c and screen.c: the text console, the draw screen, the cursor */
+/* ../fb/fbcons.c and screen.c: the text console, the draw screen, the cursor */
 int	fbconsinit(Fbinfo*);
 int	fbconsadd(Fbinfo*);
 int	fbconsscreens(void);

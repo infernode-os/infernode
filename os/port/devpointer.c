@@ -10,7 +10,7 @@
  * Derived from emu/port/devpointer.c.
  *
  * /dev/cursor came back with the draw device, which is what it needs:
- * a write hands a shape to drawcursor(), and os/arm64/screen.c paints
+ * a write hands a shape to drawcursor(), and os/fb/screen.c paints
  * it in software because this SoC's scanout path has no hardware
  * cursor. Without it the pointer is invisible -- the mouse works
  * perfectly and there is simply nothing on the screen to show where it

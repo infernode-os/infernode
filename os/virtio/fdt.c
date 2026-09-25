@@ -307,3 +307,87 @@ fdtgetprop(char *node, char *prop, int *lenp)
 	}
 	return nil;
 }
+
+/*
+ * The processors: the reg (hart id, or MPIDR on arm64) of each
+ * /cpus/cpu@N node whose status is not "disabled", up to max of them.
+ * A RISC-V kernel needs this to start its harts, because the hart ids
+ * are not 0..n-1 on every machine: a PolarFire SoC's first application
+ * hart is 1, its hart 0 (the E51 monitor core) marked disabled.
+ */
+int
+fdtcpus(ulong *ids, int max)
+{
+	uchar *base, *p, *end, *strs, *nm, *data;
+	u32int tok, len, nameoff;
+	int depth, incpus, incpu, n, disabled, hasreg;
+	ulong reg;
+
+	if(!fdtvalid())
+		return 0;
+
+	base = (uchar*)dtbptr;
+	p    = base + be32(base + 8);
+	end  = p + be32(base + 36);
+	strs = base + be32(base + 12);
+
+	depth = 0;
+	incpus = incpu = 0;
+	n = 0;
+	disabled = hasreg = 0;
+	reg = 0;
+	while(p + 4 <= end){
+		tok = be32(p);
+		p += 4;
+		switch(tok){
+		case Fdtbeginnode:
+			depth++;
+			nm = p;
+			p += (namelen(nm) + 1 + 3) & ~3;
+			if(depth == 2 && nameis(nm, "cpus"))
+				incpus = 1;
+			else if(depth == 3 && incpus && namestarts(nm, "cpu@")){
+				incpu = 1;
+				disabled = hasreg = 0;
+			}
+			break;
+		case Fdtendnode:
+			if(depth == 3 && incpu){
+				if(hasreg && !disabled && n < max)
+					ids[n++] = reg;
+				incpu = 0;
+			}
+			if(depth == 2)
+				incpus = 0;
+			if(--depth < 0)
+				return n;
+			break;
+		case Fdtprop:
+			if(p + 8 > end)
+				return n;
+			len = be32(p);
+			nameoff = be32(p + 4);
+			p += 8;
+			data = p;
+			if(data + len > end)
+				return n;
+			p += (len + 3) & ~3;
+			if(depth == 3 && incpu){
+				nm = strs + nameoff;
+				if(nameis(nm, "reg") && len >= 4){
+					reg = be32(data);
+					if(len >= 8)
+						reg = (reg << 32) | be32(data + 4);
+					hasreg = 1;
+				}else if(nameis(nm, "status") && len >= 8 && namestarts(data, "disabled"))
+					disabled = 1;
+			}
+			break;
+		case Fdtnop:
+			break;
+		default:
+			return n;
+		}
+	}
+	return n;
+}

@@ -139,7 +139,7 @@ fbrect(Fbinfo *fb, int x0, int y0, int w, int h, u32int colour)
 }
 
 /*
- * What ../arm64/fbcons.c asks of whatever is under it, besides an
+ * What ../fb/fbcons.c asks of whatever is under it, besides an
  * Fbinfo and fbfill: which display the next call is about, and whether
  * the scanout window can be moved down the buffer (which is how this
  * board scrolls without copying a pixel). Here both are mailbox tags.

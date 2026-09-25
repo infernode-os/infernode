@@ -104,7 +104,7 @@ both kinds work and the boot log says which each device is.
 | `random.c` | `hwrandom` from virtio-rng, polled; RNDR if the CPU has it |
 | `blkvirtio.c` | the blocks under `#S` (`../port/devsd.c`) |
 | `ethervirtio.c` | `/net/ether0`, as `devether`'s instance 0 |
-| `ramfb.c` | a linear framebuffer, configured through fw_cfg, under `../arm64/screen.c` and `fbcons.c` |
+| `ramfb.c` | a linear framebuffer, configured through fw_cfg, under `../fb/screen.c` and `fbcons.c` |
 | `inputvirtio.c` | keyboard and tablet to `kbdputc` and `mousetrack` |
 | `pciecam.c` | the PCIe host bridge: configuration space as an array in memory, four interrupt wires. `../port/pci.c` (9front's) does the enumeration; `../port/usbxhci.c` and `usbxhcipci.c` are the one driver on the bus |
 | `devtab.c` | the device table: the board's, less GPIO, touch and audio |

@@ -47,7 +47,7 @@ A board directory must contain:
 |-|-|
 | `mem.h` | `BY2PG`, `BY2V`, `BY2WD`, `PGROUND`, `ROUND`; `HZ` and the tick conversions (`MS2TK`, `TK2SEC`, `MS2HZ`); `MAXMACH`; `KSTACK`; `CACHELINESZ`; `KZERO`, `KADDR`, `PADDR`; `KTZERO` (the address the image is linked at — the profiler subtracts it) |
 | `io.h` | Nothing. It must exist, because shared files include it; what is in it is the board's own register map. |
-| `board.h` | Declarations for what `os/port/devsd.c`, `os/arm64/screen.c` and `os/arm64/fbcons.c` call downward (below), plus whatever the board's own files share |
+| `board.h` | Declarations for what `os/port/devsd.c`, `os/fb/screen.c` and `os/fb/fbcons.c` call downward (below), plus whatever the board's own files share |
 | `kernel.ld` | The link address, `.text.boot` first, and the symbols `_start`, `__data_start`, `edata`, `__bss_start`, `__bss_end`, `__datastash` (a `NOLOAD` region of `SIZEOF(.data)+16`), and `end` (page-aligned; the allocator's bank starts here). Copy `os/bcm2837/kernel.ld` and change the address. |
 | `devtab.c` | `Dev *devtab[]`, nil-terminated: which devices this kernel includes |
 | `board.c` | the hooks (next section) |
@@ -80,7 +80,7 @@ disagree about what is there.
   (it drops from EL2 itself), MMU and caches off.
 - **`x0` holds a device tree pointer.** It is saved to `dtbptr`;
   `confinit` reserves the blob if it lies inside the allocator's bank.
-  Whether anything *parses* it is the board's business (`os/virt/fdt.c`
+  Whether anything *parses* it is the board's business (`os/virtio/fdt.c`
   does; bcm2837 asks its firmware instead).
 - Any core may arrive at `_start`. Core 0 continues; the others park
   until released. A board whose firmware holds the secondaries
@@ -147,7 +147,7 @@ block at a time, under `devsd`'s own `QLock`, from process context —
 and from `kmain` before the scheduler runs, so the driver must be able
 to poll.
 
-**`os/arm64/screen.c`** (what `#i` draws on, and the software cursor)
+**`os/fb/screen.c`** (what `#i` draws on, and the software cursor)
 
     Fbinfo* boardfb(void);      /* nil: no display */
 
@@ -157,7 +157,7 @@ little-endian load reads `0x00RRGGBB`): `base`, `size`, `pitch`,
 without seeing the CPU's caches, the board must have mapped it
 non-cacheable (`mmunormalnc`).
 
-**`os/arm64/fbcons.c`** (the kernel's text on that framebuffer)
+**`os/fb/fbcons.c`** (the kernel's text on that framebuffer)
 
     void    fbfill(Fbinfo*, u32int colour);
     int     fbdisplay(u32int disp);         /* select a display; <0 if there is no such */
@@ -180,7 +180,7 @@ time.
   `nif.mbps`, `nif.link`; delivers received frames with `etheriqb` **from
   process context** (it may allocate). Instance 0 is `/net/ether0`;
   `osinit` notices that its address is non-zero at boot and configures
-  it. `os/virt/ethervirtio.c`, `os/bcm/ether4330.c` and
+  it. `os/virtio/ethervirtio.c`, `os/bcm/ether4330.c` and
   `os/bcm2711/ethergenet.c` are the examples; the last needs
   `os/port/ethermii.c`, which the others skip.
 - **PCI.** `os/port/pci.c` (9front's) enumerates, sizes and places; a

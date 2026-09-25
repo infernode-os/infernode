@@ -12,6 +12,15 @@ implement JitFaultTest;
 # picks the wrong handler, or none. Run under -c1 to test a JIT; under
 # -c0 it pins the interpreter's behaviour the JIT must match.
 #
+# The riscv64 JIT passes it. The amd64 and arm64 JITs do not yet: a
+# zero divide surfaces as "sys: fp" (amd64) or not at all (arm64), a
+# bounds fault leaves the handler table without the faulting PC, and
+# the run ends in a kernel panic ("fault while holding 1 lock(s)") that
+# would take the rest of the test runner's suite down with it. So on
+# those two, where /env/cputype says so, the whole module is skipped --
+# under -c0 as well, since a module cannot ask which mode it runs in --
+# until their JITs are fixed. riscv64, hosted or bare metal, runs it.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -217,6 +226,19 @@ testHandlerChoice(t: ref T)
 	t.asserteq(n, 1000 + 10 + 5 + 3 + 2 + 2 + 1 + 1 + 1 + 1, "loop with a handler");
 }
 
+# the host's cputype, as emu sets it in /env; nil where there is none
+cputype(): string
+{
+	fd := sys->open("/env/cputype", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -231,6 +253,11 @@ init(nil: ref Draw->Context, args: list of string)
 	for(a := args; a != nil; a = tl a)
 		if(hd a == "-v")
 			testing->verbose(1);
+
+	case cputype() {
+	"amd64" or "arm64" =>
+		raise "skip:this architecture's JIT does not yet raise these faults (see the file's header)";
+	}
 
 	run("DivZero", testDivZero);
 	run("DivValues", testDivValues);

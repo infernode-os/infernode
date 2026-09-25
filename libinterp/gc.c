@@ -196,6 +196,8 @@ marklist(Type *t, void *vw)
 	}
 }
 
+extern Modlink *retpending;	/* xec.c */
+
 static void
 rootset(Prog *root)
 {
@@ -249,6 +251,18 @@ rootset(Prog *root)
 		}
 
 		root = root->next;
+	}
+
+	/* the module OP(ret) is holding for release (xec.c) */
+	ml = retpending;
+	if(ml != nil) {
+		h = D2H(ml);
+		Setmark(h);
+		mp = ml->MP;
+		if(mp != H) {
+			h = D2H(mp);
+			Setmark(h);
+		}
 	}
 
 	for(m = modules; m != nil; m = m->link) {

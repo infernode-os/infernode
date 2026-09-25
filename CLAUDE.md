@@ -412,6 +412,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
 | `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler |
+| `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

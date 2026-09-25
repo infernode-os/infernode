@@ -1,6 +1,6 @@
 /*
- * The device table: ../riscvvirt/devtab.c's. #S is here with no card
- * driver behind it yet (it refuses to attach), #l with no MAC driver,
+ * The device table: ../riscvvirt/devtab.c's. #S is the card
+ * (sd4hc.c), #l has no MAC driver behind it yet,
  * #i and #m with no display: the drivers come, the table stays.
  */
 
@@ -36,7 +36,7 @@ Dev*	devtab[] =
 	&mntdevtab,		/* 'M' -- #M, the 9P client */
 	&envdevtab,		/* 'e' -- #e, the environment */
 	&ipdevtab,		/* 'I' -- #I, the IP stack */
-	&sddevtab,		/* 'S' -- #S, the disk as a file: a no card driver yet */
+	&sddevtab,		/* 'S' -- #S, the disk as a file: a the SD card, through sd4hc.c */
 	&bootdevtab,		/* 'B' -- #B, the running kernel image */
 	&benchdevtab,		/* 'b' -- #b, microsecond timing */
 	&srvdevtab,		/* 's' -- #s, names a Limbo program serves */

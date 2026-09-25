@@ -232,6 +232,11 @@ build_kernel() {
     # the architecture, the framebuffer console and draw screen (os/fb,
     # shared with arm64), the family's shared drivers, the board
     local sharedsrc=()
+    # EXTRASRC: single files a board takes from another family's
+    # directory (the PolarFire's card protocol is os/bcm/sdmmc.c)
+    for f in ${EXTRASRC:-}; do
+        sharedsrc+=("$f")
+    done
     if [[ -n "${SHARED:-}" ]]; then
         for f in "$SHARED"/*.S "$SHARED"/*.c; do
             [[ -e "$f" ]] || continue
@@ -379,6 +384,18 @@ sys.stdout.write(out.replace(b"\0", b"").decode(errors="replace"))
 PYEOF
 }
 
+#
+# A card with the userspace on it, as a board's card is: tools/mkcard.py
+# writes dis/, lib/, fonts/ and a writable usr/ into a FAT32 partition,
+# and rootpath "local" tells osinit to grow /dis and /lib from it. 256MB,
+# a power of two, because QEMU's SD model will not present anything else.
+#
+make_card() {
+    printf 'local\n' > "$BUILD/rootpath"
+    python3 "$ROOT/tools/mkcard.py" "$1" 256 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+        /fonts="$ROOT/fonts" /usr= /rootpath="$BUILD/rootpath" > "$BUILD/mkcard.txt" 2>&1
+}
+
 want_platform() {
     case " ${BAREMETAL_RV_PLATFORMS:-riscvvirt mpfs} " in *" $1 "*) return 0;; esac
     return 1
@@ -399,6 +416,7 @@ run_riscvvirt() {
     PORTSKIP="devaudio.c ethermii.c pci.c usbxhci.c usbxhcipci.c devusb.c usbdwc.c"
     SHARED="$ROOT/os/virtio"
     SHAREDSKIP=""
+    EXTRASRC=""
     platform_flags
 
     echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
@@ -417,6 +435,12 @@ run_riscvvirt() {
         return
     fi
 
+    if make_card "$BUILD/$PLAT-card.img"; then
+        QEMUARGS="$QEMUARGS -drive file=$BUILD/$PLAT-card.img,if=none,format=raw,id=sd -device virtio-blk-device,drive=sd"
+    else
+        fail "riscvvirt: mkcard could not build a card"
+    fi
+    QEMUARGS="$QEMUARGS -netdev user,id=n0 -device virtio-net-device,netdev=n0"
     OUT="$(session "$BUILD/$PLAT-kernel.img" 900 'echo hello from riscv64' 'cat /dev/sysname' 'ls /dis/sh' 'ps' \
         '/dis/jittest.dis' '/dis/tests/jit_fault_test.dis' '/dis/tests/exception_test.dis' '/dis/tests/fltfmt_test.dis')"
     printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
@@ -438,6 +462,11 @@ run_riscvvirt() {
     rcheck "the shell answers" "hello from riscv64"
     rcheck "/dev/sysname reads back" "infernode"
     rcheck "ls lists the shell's builtins" "std.dis"
+    rcheck "the card is a virtio disk" "init: /dev/sd0: type 0x0c"
+    rcheck "userspace comes off the card" "init: /dis grown from /n/dos/dis"
+    rcheck "/usr is the card's, writable" "init: /usr from /n/dos/usr (writable)"
+    rcheck "DHCP answers over virtio-net" "etherusb: 10.0.2.15 mask"
+    rcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
     rcheck "the JIT's correctness suite passes in the kernel" "=== Results: 182/182 passed ==="
     rcheck "faults in compiled code reach the right handler" "6 passed"
     rrefute "no test fails" "FAIL"
@@ -467,6 +496,7 @@ run_mpfs() {
     PORTSKIP="devaudio.c ethermii.c pci.c usbxhci.c usbxhcipci.c devusb.c usbdwc.c"
     SHARED="$ROOT/os/virtio"
     SHAREDSKIP="virtio.c blkvirtio.c ethervirtio.c inputvirtio.c"
+    EXTRASRC="$ROOT/os/bcm/sdmmc.c"
     platform_flags
 
     echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
@@ -493,7 +523,12 @@ run_mpfs() {
         return
     }
 
-    OUT="$(session "$BUILD/$PLAT-kernel.img" 900 'echo hello from polarfire' 'cat /dev/sysname' 'ps' \
+    if make_card "$BUILD/$PLAT-card.img"; then
+        QEMUARGS="$QEMUARGS -drive if=sd,file=$BUILD/$PLAT-card.img,format=raw"
+    else
+        fail "mpfs: mkcard could not build a card"
+    fi
+    OUT="$(session "$BUILD/$PLAT-kernel.img" 900 'echo hello from polarfire' 'cat /dev/sysname' 'ps' 'ls /n/dos' \
         '/dis/jittest.dis' '/dis/tests/jit_fault_test.dis')"
     printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
@@ -511,6 +546,10 @@ run_mpfs() {
     mcheck "boot completes" "boot OK"
     mcheck "all four U54 harts run, and the E51 is left alone" "smp:  4 harts running"
     mcheck "the shell answers" "hello from polarfire"
+    mcheck "the Cadence SD4HC finds the card" "sd: sd4hc: card ready"
+    mcheck "its FAT32 partition is found" "init: /dev/sd0: type 0x0c"
+    mcheck "userspace comes off the card" "init: /dis grown from /n/dos/dis"
+    mcheck "/usr is the card's, writable" "init: /usr from /n/dos/usr (writable)"
     mcheck "the JIT's correctness suite passes" "=== Results: 182/182 passed ==="
     mcheck "faults in compiled code reach the right handler" "6 passed"
     mrefute "no test fails" "FAIL"

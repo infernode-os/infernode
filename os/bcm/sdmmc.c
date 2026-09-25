@@ -90,7 +90,9 @@ enum
  * Arasan path kept buildable with -DSDCARD_ARASAN the way the other
  * single-purpose variants are.
  */
-#if defined(SDCARD_EMMC2)
+#if defined(SDCARD_IO)
+static SDio *io = &SDCARD_IO;	/* a board that is not a Pi names its controller in board.h */
+#elif defined(SDCARD_EMMC2)
 static SDio *io = &emmc2io;	/* a BCM2711: os/bcm2711/emmc2.c */
 #elif defined(SDCARD_ARASAN)
 static SDio *io = &emmcio;

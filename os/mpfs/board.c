@@ -14,11 +14,11 @@
  * qemu-icicle.dts in this directory describes it, and the harness
  * passes it with -dtb.
  *
- * What is not here yet, and is next: the Cadence SD4HC card controller
- * (the Fire's eMMC and microSD), the Cadence GEM Ethernet MAC, and the
- * system controller's TRNG service for entropy. Until they are, the
- * machine boots from what is compiled into the image, with loopback
- * networking and a loud warning that it has no entropy source.
+ * The card is the Cadence SD4HC (sd4hc.c) under the Pis' card protocol
+ * (../bcm/sdmmc.c). What is not here yet: the Cadence GEM Ethernet MAC
+ * and the system controller's TRNG service for entropy -- until then,
+ * loopback networking and a loud warning that there is no entropy
+ * source.
  */
 
 #include "u.h"
@@ -328,36 +328,9 @@ displaywatch(void *a)
 	USED(a);
 }
 
+/* the devices found late: the card */
 void
 boarddevprobe(void)
 {
-}
-
-/* no card driver yet: #S does not attach */
-int
-sdblkpresent(void)
-{
-	return 0;
-}
-
-uvlong
-sdblknblocks(void)
-{
-	return 0;
-}
-
-int
-sdblkread(uvlong blk, void *buf)
-{
-	USED(blk);
-	USED(buf);
-	return -1;
-}
-
-int
-sdblkwrite(uvlong blk, void *buf)
-{
-	USED(blk);
-	USED(buf);
-	return -1;
+	emmcinit();
 }

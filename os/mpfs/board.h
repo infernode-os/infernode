@@ -20,6 +20,12 @@ int	boardharts(ulong*, int);
 
 Fbinfo*	boardfb(void);
 
+/* the card: ../bcm/sdmmc.c's protocol over this board's controller, sd4hc.c */
+#include "../port/sdio.h"
+extern SDio sd4hcio;
+#define	SDCARD_IO	sd4hcio
+int	emmcinit(void);
+char*	sdcontroller(void);
 int	sdblkread(uvlong, void*);
 int	sdblkwrite(uvlong, void*);
 int	sdblkpresent(void);

@@ -24,6 +24,7 @@ esac
 case "$(uname -m)" in
     x86_64)         OBJTYPE=amd64 ;;
     aarch64|arm64)  OBJTYPE=arm64 ;;
+    riscv64)        OBJTYPE=riscv64 ;;
     *) echo "SKIP: unsupported arch $(uname -m)"; exit 77 ;;
 esac
 

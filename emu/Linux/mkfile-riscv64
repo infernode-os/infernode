@@ -1,0 +1,3 @@
+# riscv64-specific files for Linux
+# tas is included in asm-riscv64.S, no separate file needed
+ARCHFILES=

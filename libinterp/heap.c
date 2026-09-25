@@ -85,8 +85,8 @@ void	(*heapmonitor)(int, void*, ulong);
 static void
 freetypecode(Type *t)
 {
-#if defined(__aarch64__)
-	freetypejit(t);		/* free() on a native kernel, munmap() hosted: comp-arm64.c knows which */
+#if defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64)
+	freetypejit(t);		/* free() on a native kernel, munmap() hosted: comp-arm64.c and comp-riscv64.c know which */
 #elif !defined(INFERNO_NATIVE) && (defined(__x86_64__) || defined(_M_X64))
 	freetypejit(t);		/* hosted amd64: back to comp-amd64.c's free list, for the next type */
 #else

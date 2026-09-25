@@ -830,7 +830,7 @@ freemod(Module *m)
 		free(m->type);
 	}
 	free(m->name);
-#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64)
+#if defined(__aarch64__) || defined(__x86_64__) || defined(_M_X64) || (defined(__riscv) && __riscv_xlen == 64)
 	/*
 	 * On these targets a compiled module's text is an executable
 	 * mapping from the JIT allocator, not pool memory: free() would

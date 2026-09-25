@@ -18,7 +18,7 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="$ROOT/emu/Linux/o.emu"
-TIMEOUT=60
+TIMEOUT=${TIMEOUT:-60}
 LOG=$(mktemp /tmp/jit-boot-test.XXXXXX)
 BOOTSCRIPT=$(mktemp /tmp/jit-boot-script.XXXXXX)
 

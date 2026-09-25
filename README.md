@@ -103,6 +103,7 @@ Run with `emu -c1` to enable the JIT (Dis bytecode → native code at module loa
 | macOS ARM64 | Apple M4 | **9.6×** | SDL3 GUI with Metal |
 | Linux ARM64 | Cortex-A78AE (Jetson) | **8.3×** | Jetson AGX, Raspberry Pi 4/5 |
 | Windows AMD64 | Intel / AMD x86_64 | **5.7×** | SDL3 GUI with D3D |
+| Linux RISC-V 64 | RV64GC | not yet measured | Headless; cross-built and tested under qemu-user in CI. BeagleV-Fire, VisionFive 2 ([os/riscv64/README.md](os/riscv64/README.md)) |
 
 Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Performance envelope: [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md).
 
@@ -122,6 +123,8 @@ serial console, with the full namespace and the network up.
 | **Raspberry Pi 3B+** (`os/bcm2837`) | Runs on the real board, and on QEMU's `raspi3b`. Ethernet (LAN7515 over USB), Wi-Fi (CYW43455), Bluetooth, SD card, HDMI/DSI, USB keyboard and mouse, touch, GPIO, audio, A/B kernel update, boot watchdog. |
 | **QEMU `virt`** (`os/virt`) | GICv2 and virtio (net, blk, keyboard, tablet, ramfb) — the kernel anywhere QEMU runs, which is what CI boots. |
 | **Raspberry Pi 4B** (`os/bcm2711`) | Boots to the desktop under QEMU's `raspi4b`; has never run on a board. [os/bcm2711/README.md](os/bcm2711/README.md) says what that does and does not establish. |
+| **QEMU RISC-V `virt`** (`os/riscvvirt`) | RV64GC under OpenSBI with the RISC-V Dis JIT: 4 harts, PLIC, virtio (net, blk, keyboard, tablet), ramfb to the graphical logon, and U-Boot `booti`/`boot.scr`. [os/riscv64/README.md](os/riscv64/README.md). |
+| **PolarFire SoC: BeagleV-Fire, Icicle Kit** (`os/mpfs`) | Boots under QEMU's `microchip-icicle-kit`: SD card (Cadence SD4HC), Gigabit Ethernet (Cadence GEM, PHY over MDIO), the system controller's TRNG service, `/reserved-memory`. It has never run on a board. |
 
 Building and booting it is one command — the test harness, which is the only
 supported way to build the kernel (it needs `clang`, `ld.lld`, `llvm-objcopy`,

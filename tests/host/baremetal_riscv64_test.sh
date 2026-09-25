@@ -472,6 +472,65 @@ run_riscvvirt() {
     rrefute "no test fails" "FAIL"
     rrefute "no panic" "panic:"
     rrefute "no unhandled exception" "unhandled exception"
+
+    #
+    # The kernel as a boot loader's "Linux": U-Boot in S-mode loads the
+    # image off the card and booti's it, which is the BeagleV-Fire's
+    # chain after the HSS. booti checks the Image header (l.S) and runs
+    # the image where it was loaded, so it is loaded at the address it
+    # is linked at, not at U-Boot's kernel_addr_r; U-Boot's own control
+    # tree lives in memory it has reserved, so it is moved to fdt_addr_r
+    # first, as a board's boot script loads a tree there.
+    #
+    local uboot=/usr/lib/u-boot/qemu-riscv64_smode/u-boot.bin
+    if [[ ! -f "$uboot" ]]; then
+        skip "riscvvirt: no S-mode U-Boot ($uboot) to booti the kernel with"
+        return
+    fi
+    if ! python3 "$ROOT/tools/mkcard.py" "$BUILD/$PLAT-ubootcard.img" 64 \
+            /infernode.img="$BUILD/$PLAT-kernel.img" > "$BUILD/mkcard-uboot.txt" 2>&1; then
+        fail "riscvvirt: mkcard could not build the U-Boot card"
+        return
+    fi
+    OUT="$(python3 - "$QEMU" "$uboot" "$BUILD/$PLAT-ubootcard.img" <<'PYEOF'
+import os, select, subprocess, sys, time
+qemu, uboot, card = sys.argv[1:4]
+p = subprocess.Popen([qemu, "-M", "virt", "-smp", "4", "-m", "1024", "-bios", "default",
+    "-kernel", uboot, "-drive", "file=%s,if=none,format=raw,id=sd" % card,
+    "-device", "virtio-blk-device,drive=sd", "-device", "virtio-rng-device",
+    "-display", "none", "-serial", "stdio", "-monitor", "none"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+out = b""
+def pump(t, until=None):
+    global out
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([p.stdout], [], [], 0.2)
+        if r:
+            b = os.read(p.stdout.fileno(), 65536)
+            if not b:
+                return
+            out += b
+        if until is not None and until in out:
+            return
+def send(s):
+    p.stdin.write(s.encode())
+    p.stdin.flush()
+pump(60, b"Hit any key")
+send("\n"); pump(2)
+send("virtio scan\n"); pump(3)
+send("load virtio 0:1 0x80200000 infernode.img\n"); pump(10, b"bytes read")
+send("fdt move ${fdtcontroladdr} ${fdt_addr_r} 0x10000\n"); pump(2)
+send("booti 0x80200000 - ${fdt_addr_r}\n"); pump(240, b"\n; ")
+send("echo booted by u-boot\n"); pump(10, b"booted by u-boot\r")
+p.kill()
+p.wait()
+sys.stdout.write(out.replace(b"\0", b"").decode(errors="replace"))
+PYEOF
+)"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-uboot.txt"
+    rcheck "U-Boot's booti takes it as a RISC-V Image" "Starting kernel ..."
+    rcheck "and it boots to the shell from there" "booted by u-boot"
 }
 
 #

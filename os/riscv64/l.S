@@ -21,6 +21,36 @@
 	.global	_start
 _start:
 	/*
+	 * The RISC-V Linux Image header, 64 bytes, so a boot loader that
+	 * boots Linux boots this: U-Boot's booti checks magic2 and takes
+	 * the size from here. That is the BeagleV-Fire's shipped chain --
+	 * the HSS's OpenSBI, then U-Boot in S-mode, then "Linux" -- and
+	 * the kernel's entry contract is already Linux's (hart id in a0,
+	 * device tree in a1, S-mode, paging off). This kernel is linked at
+	 * a fixed address and not relocatable, so it must be loaded at
+	 * that address (the board's kernel.ld); booti runs an Image where
+	 * it was loaded.
+	 *
+	 * The first word is a jump over the rest (uncompressed, so it is
+	 * the whole of code0).
+	 */
+	.option	push
+	.option	norvc
+	j	realstart		/* code0 */
+	.option	pop
+	.word	0			/* code1 */
+	.dword	0x200000		/* text_offset: 2MB above RAM, like Linux */
+	.dword	end - _start		/* image_size, .bss and all */
+	.dword	0			/* flags: little-endian */
+	.word	2			/* header version 0.2 */
+	.word	0
+	.dword	0
+	.ascii	"RISCV\0\0\0"		/* magic, deprecated */
+	.ascii	"RSC\x05"		/* magic2 */
+	.word	0			/* no PE/COFF header */
+
+realstart:
+	/*
 	 * a0 and a1 are the only record of which hart this is and where
 	 * the tree is. Park them in callee-saved registers until .bss is
 	 * clear, then store them.

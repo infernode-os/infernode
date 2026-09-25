@@ -73,6 +73,7 @@ on:
       - 'tests/host/baremetal_riscv64_test.sh'
       - 'tools/mkrootfs.py'
       - 'tools/mkcard.py'
+      - 'tools/mkbootscr.py'
       - '.github/workflows/baremetal.yml'
   push:
     branches: [ master, feat/baremetal-pi ]

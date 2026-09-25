@@ -17,7 +17,9 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-EMU="$ROOT/emu/Linux/o.emu"
+# EMU may be overridden: a cross-built emulator runs through a wrapper
+# that execs it under qemu-user (the linux-riscv64 CI job).
+EMU="${EMU:-$ROOT/emu/Linux/o.emu}"
 TIMEOUT=${TIMEOUT:-60}
 LOG=$(mktemp /tmp/jit-boot-test.XXXXXX)
 BOOTSCRIPT=$(mktemp /tmp/jit-boot-script.XXXXXX)

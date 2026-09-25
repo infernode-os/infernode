@@ -548,6 +548,11 @@ build_kernel() {
             "/dis/tests/exception_test.dis=$ROOT/dis/tests/exception_test.dis"
             # formats and parses reals in the kernel's own VM (os/port/printfp.c)
             "/dis/tests/fltfmt_test.dis=$ROOT/dis/tests/fltfmt_test.dis"
+            # 150 threads blocked in sys->sleep at once -- 150 concurrent
+            # kprocs (os/port/dis.c release()) -- proves conf.nproc holds
+            # more than the 100 that hung the board under a real GUI
+            # session with a theme switch.
+            "/dis/procstorm.dis=$ROOT/dis/procstorm.dis"
         )
         # A font, so acme has something to draw with.
         #
@@ -1733,6 +1738,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         '/dis/tests/exception_test.dis' \
         '/dis/tests/fltfmt_test.dis' \
         'echo 0 > /dev/jit; /dis/tests/fltfmt_test.dis; echo 1 > /dev/jit' \
+        '/dis/procstorm.dis 150' \
         'echo env-round-trip > /env/probe' \
         'cat /env/probe' \
         'q=`{echo one two three}; echo subst-count $#q' \
@@ -1806,6 +1812,19 @@ if [[ "$(grep -c '^8 passed$' <<<"$SHOUT")" -ge 2 ]]; then
     pass "fltfmt_test: %g, %f, %e, string and real of a string are right in the kernel, JIT and interpreter (8 passed twice)"
 else
     fail "fltfmt_test did not report 8 passed with the JIT and without: $(grep -E 'passed|got ' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
+fi
+
+# 150 Limbo threads blocked in sys->sleep at once, so the kernel holds
+# 150 concurrent kprocs (os/port/dis.c release() spawns one per blocked
+# Prog once the VM's ready queues are both empty). A GUI session with a
+# handful of apps and a theme switch hit the old flat limit of 100 and
+# every process in the system -- desktop, apps, the soak's own shells
+# -- hung on "no procs" until the board was power-cycled. conf.nproc is
+# now scaled from RAM, capped at 1000 (os/arm64/main.c).
+if grep -q "^PROCSTORM-OK 150$" <<<"$SHOUT"; then
+    pass "procstorm: 150 concurrently blocked Limbo threads all complete -- conf.nproc holds more than the 100 that hung the board"
+else
+    fail "procstorm 150 did not report PROCSTORM-OK 150: no procs table is still too small, or something else hung: $(grep -E 'no procs|PROCSTORM' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
 fi
 
 # The per-core clock is readable from the shell, not only asserted at

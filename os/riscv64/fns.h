@@ -108,6 +108,11 @@ uintptr	mmumapped(void);
 extern uintptr	dtbptr;
 extern ulong	boothartid;
 
+/* ../virtio/fdt.c: every riscv64 board has a device tree */
+int	fdtvalid(void);
+uintptr	fdtsize(void);
+int	fdtreserved(uintptr*, uintptr*, int);
+
 int	probe32(uintptr, u32int*);
 void	trap(Ureg*);
 void	dumpureg(Ureg*);

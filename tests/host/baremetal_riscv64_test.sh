@@ -601,6 +601,8 @@ run_mpfs() {
     mcheck "the MMUART is the console" "console:         16550 at 0x20000000"
     mrefute "no hart is the E51 (hart 0)" "(hart 0)"
     mcheck "the 1 MHz timebase comes from the tree" "time: 1000000 Hz timebase"
+    mcheck "/reserved-memory is kept from the allocator" "conf: reserved 0x0000000088000000 size 0x0000000002000000"
+    mcheck "the bank is split around it" "runs between"
     mcheck "the trap path round-trips" "trap: returned, save/restore OK"
     mcheck "the U54s' S-mode PLIC contexts take interrupts" "intr: self-IPI taken"
     mcheck "boot completes" "boot OK"

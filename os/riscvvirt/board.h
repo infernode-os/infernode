@@ -10,6 +10,7 @@ uintptr	fdtsize(void);
 int	fdtmemory(uintptr*, uintptr*);
 uchar*	fdtgetprop(char*, char*, int*);
 int	fdtcpus(ulong*, int);
+int	fdtreserved(uintptr*, uintptr*, int);
 
 void	rnginit(void);
 

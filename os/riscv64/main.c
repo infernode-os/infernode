@@ -56,11 +56,67 @@ checktraps(void)
 	uartputstr("trap: returned, save/restore OK\n");
 }
 
+/*
+ * RAM the kernel may allocate: /memory, less the image, less what the
+ * device tree reserves -- the tree itself (INFR-458: OpenSBI puts it
+ * near the top of RAM), the header's reservation block and the
+ * /reserved-memory regions (../virtio/fdt.c, fdtreserved). On QEMU's
+ * machines that last is only OpenSBI's own region, below the image; on
+ * a BeagleV-Fire it is also the fabric's buffers, in the middle of the
+ * bank.
+ *
+ * What is left is a list of free runs. conf has two banks, so the two
+ * largest become banks 0 and 1 and any others are handed to the
+ * allocator by confextra, after xinit.
+ */
+enum
+{
+	Maxresv	= 32,
+	Maxfree	= Maxresv + 2,
+};
+
+static uintptr	freelo[Maxfree];
+static uintptr	freehi[Maxfree];
+static int	nfree;
+
+static void
+carve(uintptr lo, uintptr hi)
+{
+	int i;
+
+	lo &= ~(uintptr)(BY2PG-1);
+	hi = PGROUND(hi);
+	if(hi <= lo)
+		return;
+	for(i = 0; i < nfree; i++){
+		if(hi <= freelo[i] || lo >= freehi[i])
+			continue;
+		if(lo > freelo[i] && hi < freehi[i]){
+			/* in the middle: split the run */
+			if(nfree >= Maxfree){
+				/* no room to split: lose the upper part */
+				freehi[i] = lo;
+				continue;
+			}
+			freelo[nfree] = hi;
+			freehi[nfree] = freehi[i];
+			nfree++;
+			freehi[i] = lo;
+		}else if(lo <= freelo[i] && hi >= freehi[i])
+			freehi[i] = freelo[i];		/* all of it: now empty */
+		else if(lo <= freelo[i])
+			freelo[i] = hi;
+		else
+			freehi[i] = lo;
+	}
+}
+
 void
 confinit(void)
 {
 	extern char end[];
-	uintptr base, top;
+	uintptr base, top, rbase[Maxresv], rsize[Maxresv], t;
+	int i, j, nres;
 
 	memset(&conf, 0, sizeof conf);
 
@@ -71,53 +127,77 @@ confinit(void)
 	base = PGROUND((uintptr)end);
 	top = mmuramtop();
 
-	conf.base0 = base;
-	conf.npage0 = (top - base) / BY2PG;
-	conf.npage = conf.npage0;
+	freelo[0] = base;
+	freehi[0] = top;
+	nfree = 1;
+
+	if(fdtvalid()){
+		carve(dtbptr, dtbptr + fdtsize());
+		uartputstr("conf: dtb at ");
+		uartputx(dtbptr);
+		uartputstr(" size ");
+		uartputd(fdtsize());
+		uartputstr(" -- reserved\n");
+	}
+	nres = fdtreserved(rbase, rsize, Maxresv);
+	for(i = 0; i < nres; i++){
+		if(rbase[i] + rsize[i] <= base || rbase[i] >= top)
+			continue;	/* not in what we would allocate */
+		carve(rbase[i], rbase[i] + rsize[i]);
+		uartputstr("conf: reserved ");
+		uartputx(rbase[i]);
+		uartputstr(" size ");
+		uartputx(rsize[i]);
+		uartputstr("\n");
+	}
+
+	/* largest first */
+	for(i = 0; i < nfree; i++)
+		for(j = i+1; j < nfree; j++)
+			if(freehi[j] - freelo[j] > freehi[i] - freelo[i]){
+				t = freelo[i]; freelo[i] = freelo[j]; freelo[j] = t;
+				t = freehi[i]; freehi[i] = freehi[j]; freehi[j] = t;
+			}
+	while(nfree > 0 && freehi[nfree-1] == freelo[nfree-1])
+		nfree--;
+
+	if(nfree > 0){
+		conf.base0 = freelo[0];
+		conf.npage0 = (freehi[0] - freelo[0]) / BY2PG;
+	}
+	if(nfree > 1){
+		conf.base1 = freelo[1];
+		conf.npage1 = (freehi[1] - freelo[1]) / BY2PG;
+	}
+	for(i = 0; i < nfree; i++)
+		conf.npage += (freehi[i] - freelo[i]) / BY2PG;
 
 	/* see ../arm64/main.c: about five processes per MB, bounded */
-	conf.nproc = 100 + (((conf.npage0 * BY2PG) >> 20) * 5);
+	conf.nproc = 100 + (((conf.npage * BY2PG) >> 20) * 5);
 	if(conf.nproc > 1000)
 		conf.nproc = 1000;
 
 	uartputstr("conf: ");
-	uartputd(conf.npage0);
+	uartputd(conf.npage);
 	uartputstr(" free pages (");
-	uartputd((conf.npage0 * BY2PG) >> 20);
-	uartputstr("MB) from ");
+	uartputd((conf.npage * BY2PG) >> 20);
+	uartputstr("MB) in ");
+	uartputd(nfree);
+	uartputstr(" runs between ");
 	uartputx(base);
-	uartputstr(" to ");
+	uartputstr(" and ");
 	uartputx(top);
 	uartputstr("\n");
+}
 
-	/*
-	 * Keep the allocator off the device tree (INFR-458): split the
-	 * bank around it if it lies inside. OpenSBI puts it near the top
-	 * of RAM, which is inside.
-	 */
-	if(dtbptr >= base && dtbptr < top){
-		uchar *h = (uchar*)dtbptr;
-		u32int magic, dtbsize;
-		uintptr dstart, dend;
+/* the free runs beyond conf's two banks, once the allocator is up */
+static void
+confextra(void)
+{
+	int i;
 
-		magic = h[0]<<24 | h[1]<<16 | h[2]<<8 | h[3];
-		dtbsize = h[4]<<24 | h[5]<<16 | h[6]<<8 | h[7];
-		if(magic == 0xd00dfeed && dtbsize >= 8 && dtbsize <= 4*1024*1024){
-			dstart = dtbptr & ~(BY2PG-1);
-			dend = PGROUND(dtbptr + dtbsize);
-			if(dend > top)
-				dend = top;
-			conf.npage0 = (dstart - base) / BY2PG;
-			conf.base1 = dend;
-			conf.npage1 = (top - dend) / BY2PG;
-			conf.npage = conf.npage0 + conf.npage1;
-			uartputstr("conf: dtb at ");
-			uartputx(dtbptr);
-			uartputstr(" size ");
-			uartputd(dtbsize);
-			uartputstr(" -- reserved, bank split\n");
-		}
-	}
+	for(i = 2; i < nfree; i++)
+		xhole(freelo[i], freehi[i] - freelo[i]);
 }
 
 /*
@@ -426,6 +506,7 @@ kmain(void)
 
 	confinit();
 	xinit();
+	confextra();
 	poolinit();
 	printinit();
 

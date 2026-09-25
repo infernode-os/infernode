@@ -391,3 +391,119 @@ fdtcpus(ulong *ids, int max)
 	}
 	return n;
 }
+
+/*
+ * What the firmware says is not the kernel's to allocate: the entries
+ * of the header's memory reservation block, then the reg of each child
+ * of the top-level /reserved-memory node (whose own #address-cells and
+ * #size-cells describe them). Up to max of them into base[] and size[];
+ * returns how many.
+ *
+ * A child with no reg -- a "size" and "alloc-ranges" asking the OS to
+ * find room for, say, a CMA pool -- is a request to Linux, not a
+ * region, and is not counted. Whether a region is no-map does not
+ * matter here: this kernel maps nothing, and it must not allocate a
+ * reserved page either way.
+ *
+ * A PolarFire SoC board needs this: the BeagleV-Fire's tree reserves
+ * the HSS's region and buffers the FPGA fabric DMAs into, inside the
+ * one /memory bank.
+ */
+int
+fdtreserved(uintptr *rbase, uintptr *rsize, int max)
+{
+	uchar *base, *p, *end, *strs, *nm, *data, *r;
+	u32int tok, len, nameoff, acells, scells;
+	int depth, inres, n, i, j, k;
+	uintptr addr, size;
+
+	if(!fdtvalid())
+		return 0;
+
+	base = (uchar*)dtbptr;
+	n = 0;
+
+	/* the memory reservation block: (address, size) be64 pairs, ending in 0,0 */
+	r = base + be32(base + 16);
+	for(;;){
+		if(r + 16 > base + fdtsize() || n >= max)
+			break;
+		addr = ((uintptr)be32(r) << 32) | be32(r + 4);
+		size = ((uintptr)be32(r + 8) << 32) | be32(r + 12);
+		if(addr == 0 && size == 0)
+			break;
+		rbase[n] = addr;
+		rsize[n] = size;
+		n++;
+		r += 16;
+	}
+
+	p    = base + be32(base + 8);
+	end  = p + be32(base + 36);
+	strs = base + be32(base + 12);
+
+	acells = 2;
+	scells = 2;
+	depth = 0;
+	inres = 0;
+	while(p + 4 <= end && n < max){
+		tok = be32(p);
+		p += 4;
+		switch(tok){
+		case Fdtbeginnode:
+			depth++;
+			nm = p;
+			p += (namelen(nm) + 1 + 3) & ~3;
+			if(depth == 2 && nameis(nm, "reserved-memory"))
+				inres = 1;
+			break;
+		case Fdtendnode:
+			if(depth == 2)
+				inres = 0;
+			if(--depth < 0)
+				return n;
+			break;
+		case Fdtprop:
+			if(p + 8 > end)
+				return n;
+			len = be32(p);
+			nameoff = be32(p + 4);
+			p += 8;
+			data = p;
+			if(data + len > end)
+				return n;
+			p += (len + 3) & ~3;
+			if(!inres)
+				break;
+			nm = strs + nameoff;
+			if(depth == 2){
+				if(nameis(nm, "#address-cells") && len == 4)
+					acells = be32(data);
+				else if(nameis(nm, "#size-cells") && len == 4)
+					scells = be32(data);
+			}else if(depth == 3 && nameis(nm, "reg")){
+				if(acells == 0 || acells > 2 || scells == 0 || scells > 2)
+					break;
+				/* reg may list several regions */
+				for(j = 0; (j+1)*(acells+scells)*4 <= len && n < max; j++){
+					k = j*(acells+scells);
+					addr = 0;
+					for(i = 0; i < (int)acells; i++)
+						addr = (addr << 32) | be32(data + (k+i)*4);
+					size = 0;
+					for(i = 0; i < (int)scells; i++)
+						size = (size << 32) | be32(data + (k+acells+i)*4);
+					rbase[n] = addr;
+					rsize[n] = size;
+					n++;
+				}
+			}
+			break;
+		case Fdtnop:
+			break;
+		default:
+			return n;
+		}
+	}
+	return n;
+}

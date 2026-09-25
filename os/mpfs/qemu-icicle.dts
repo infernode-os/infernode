@@ -108,6 +108,23 @@
 		reg = <0x0 0x80000000 0x0 0x40000000>;
 	};
 
+	/*
+	 * As the BeagleV-Fire's tree has it: a buffer the FPGA fabric
+	 * DMAs into, in the middle of the bank, which the kernel must not
+	 * allocate (../riscv64/main.c, confinit).
+	 */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		fabricbuf0: buffer@88000000 {
+			compatible = "shared-dma-pool";
+			reg = <0x0 0x88000000 0x0 0x2000000>;
+			no-map;
+		};
+	};
+
 	soc {
 		#address-cells = <2>;
 		#size-cells = <2>;

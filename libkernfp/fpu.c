@@ -57,6 +57,11 @@ sqrt(double x)
 
 	__asm__ volatile("fsqrt %d0, %d1" : "=w"(r) : "w"(x));
 	return r;
+#elif defined(__riscv)
+	double r;
+
+	__asm__ volatile("fsqrt.d %0, %1" : "=f"(r) : "f"(x));
+	return r;
 #else
 	return __ieee754_sqrt(x);
 #endif
@@ -80,6 +85,12 @@ getfcr(void)
 
 	__asm__ volatile("mrs %0, fpcr" : "=r"(v));
 	return (ulong)v;
+#elif defined(__riscv)
+	ulong v;
+
+	/* Inferno/riscv64/include/u.h: the rounding mode, as fcsr has it */
+	__asm__ volatile("frrm %0" : "=r"(v));
+	return (v & 7) << 5;
 #else
 	return 0;
 #endif
@@ -93,6 +104,8 @@ setfcr(ulong fcr)
 
 	v = fcr;
 	__asm__ volatile("msr fpcr, %0" : : "r"(v));
+#elif defined(__riscv)
+	__asm__ volatile("fsrm %0" : : "r"((fcr >> 5) & 7));
 #else
 	USED(fcr);
 #endif
@@ -106,6 +119,11 @@ getfsr(void)
 
 	__asm__ volatile("mrs %0, fpsr" : "=r"(v));
 	return (ulong)v;
+#elif defined(__riscv)
+	ulong v;
+
+	__asm__ volatile("frflags %0" : "=r"(v));
+	return v & 0x1F;
 #else
 	return 0;
 #endif
@@ -119,6 +137,8 @@ setfsr(ulong fsr)
 
 	v = fsr;
 	__asm__ volatile("msr fpsr, %0" : : "r"(v));
+#elif defined(__riscv)
+	__asm__ volatile("fsflags %0" : : "r"(fsr & 0x1F));
 #else
 	USED(fsr);
 #endif

@@ -339,11 +339,11 @@ build_kernel() {
 session() {
     local img="$1" secs="$2"
     shift 2
-    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "$@" <<'PYEOF'
+    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "${BIOS:-default}" "$@" <<'PYEOF'
 import os, select, subprocess, sys, time
-qemu, img, secs, extra = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-cmds = sys.argv[5:]
-args = [qemu] + extra.split() + ["-bios", "default", "-kernel", img, "-display", "none", "-serial", "stdio", "-monitor", "none"]
+qemu, img, secs, extra, bios = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+cmds = sys.argv[6:]
+args = [qemu] + extra.split() + ["-bios", bios, "-kernel", img, "-display", "none", "-serial", "stdio", "-monitor", "none"]
 p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 out = b""
 deadline = time.time() + secs
@@ -380,7 +380,7 @@ PYEOF
 }
 
 want_platform() {
-    case " ${BAREMETAL_RV_PLATFORMS:-riscvvirt} " in *" $1 "*) return 0;; esac
+    case " ${BAREMETAL_RV_PLATFORMS:-riscvvirt mpfs} " in *" $1 "*) return 0;; esac
     return 1
 }
 
@@ -395,6 +395,7 @@ run_riscvvirt() {
     PLAT=riscvvirt
     SRC="$ROOT/os/$PLAT"
     QEMUARGS="$RVVIRTARGS"
+    BIOS=default
     PORTSKIP="devaudio.c ethermii.c pci.c usbxhci.c usbxhcipci.c devusb.c usbdwc.c"
     SHARED="$ROOT/os/virtio"
     SHAREDSKIP=""
@@ -444,8 +445,84 @@ run_riscvvirt() {
     rrefute "no unhandled exception" "unhandled exception"
 }
 
+#
+# A PolarFire SoC: the BeagleV-Fire's and the Icicle Kit's. QEMU's
+# microchip-icicle-kit models the MSS -- the E51 and four U54s, the
+# PLIC, the MMUARTs, the SD controller, the GEM MACs -- but ships no
+# device tree and no firmware but Microchip's HSS: os/mpfs/qemu-icicle.dts
+# describes the machine and the distribution's OpenSBI (a generic
+# fw_dynamic new enough to boot on it) stands in for the HSS's.
+#
+OPENSBI=""
+for f in /usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin \
+         /usr/share/opensbi/lp64/generic/firmware/fw_dynamic.bin; do
+    [[ -z "$OPENSBI" && -f "$f" ]] && OPENSBI="$f"
+done
+
+run_mpfs() {
+    PLAT=mpfs
+    SRC="$ROOT/os/$PLAT"
+    QEMUARGS="-M microchip-icicle-kit -smp 5 -m 2G -dtb $BUILD/mpfs-icicle.dtb"
+    BIOS="$OPENSBI"
+    PORTSKIP="devaudio.c ethermii.c pci.c usbxhci.c usbxhcipci.c devusb.c usbdwc.c"
+    SHARED="$ROOT/os/virtio"
+    SHAREDSKIP="virtio.c blkvirtio.c ethervirtio.c inputvirtio.c"
+    platform_flags
+
+    echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
+
+    if build_kernel "$BUILD/$PLAT-kernel.img" ""; then
+        pass "mpfs: kernel cross-builds for riscv64 (rv64gc, lp64d)"
+    else
+        fail "mpfs: kernel failed to build"
+        grep -m 30 'error:\|undefined symbol' "$BUILD/cc.log"
+        return
+    fi
+    [[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+
+    if [[ -z "$QEMU" ]] || ! "$QEMU" -machine help 2>/dev/null | grep -q '^microchip-icicle-kit '; then
+        skip "mpfs: no qemu-system-riscv64 with microchip-icicle-kit: built, not booted"
+        return
+    fi
+    if [[ -z "$OPENSBI" ]] || ! command -v dtc >/dev/null; then
+        skip "mpfs: need OpenSBI's generic fw_dynamic.bin and dtc to boot the Icicle Kit model"
+        return
+    fi
+    dtc -I dts -O dtb -o "$BUILD/mpfs-icicle.dtb" "$SRC/qemu-icicle.dts" 2>>"$BUILD/cc.log" || {
+        fail "mpfs: qemu-icicle.dts does not compile"
+        return
+    }
+
+    OUT="$(session "$BUILD/$PLAT-kernel.img" 900 'echo hello from polarfire' 'cat /dev/sysname' 'ps' \
+        '/dis/jittest.dis' '/dis/tests/jit_fault_test.dis')"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+    mcheck() { if grep -qF -- "$2" <<<"$OUT"; then pass "mpfs: $1"; else fail "mpfs: $1 -- no '$2' in the boot log"; fi; }
+    mrefute() { if grep -qF -- "$2" <<<"$OUT"; then fail "mpfs: $1 -- '$2' in the boot log"; else pass "mpfs: $1"; fi; }
+
+    mcheck "OpenSBI starts the kernel on a U54" "InferNode bare-metal (Microchip PolarFire SoC)"
+    mcheck "the board is named by its device tree" "board: Microchip PolarFire-SoC Icicle Kit (QEMU)"
+    mcheck "the MMUART is the console" "console:         16550 at 0x20000000"
+    mrefute "no hart is the E51 (hart 0)" "(hart 0)"
+    mcheck "the 1 MHz timebase comes from the tree" "time: 1000000 Hz timebase"
+    mcheck "the trap path round-trips" "trap: returned, save/restore OK"
+    mcheck "the U54s' S-mode PLIC contexts take interrupts" "intr: self-IPI taken"
+    mcheck "boot completes" "boot OK"
+    mcheck "all four U54 harts run, and the E51 is left alone" "smp:  4 harts running"
+    mcheck "the shell answers" "hello from polarfire"
+    mcheck "the JIT's correctness suite passes" "=== Results: 182/182 passed ==="
+    mcheck "faults in compiled code reach the right handler" "6 passed"
+    mrefute "no test fails" "FAIL"
+    mrefute "no panic" "panic:"
+    mrefute "no unhandled exception" "unhandled exception"
+}
+
 if want_platform riscvvirt; then
     run_riscvvirt
+fi
+if want_platform mpfs; then
+    run_mpfs
 fi
 
 finish

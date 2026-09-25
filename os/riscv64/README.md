@@ -105,17 +105,29 @@ The board ships with this boot chain:
 
 InferNode sits in the Linux Image's place:
 
-1. Put `mpfs-kernel.img` on a FAT partition U-Boot can read (the eMMC's
-   boot partition, or a microSD card) as `infernode.img`.
-   `tools/mkcard.py` builds a card with the userspace trees too.
-2. At U-Boot's prompt:
+1. Make a boot partition U-Boot can read (FAT) holding two files:
+   `infernode.img` (the harness's `mpfs-kernel.img`) and `boot.scr`:
+
+       tools/mkbootscr.py os/riscv64/boot.cmd boot.scr
+
+   `tools/mkcard.py` builds a whole card, the userspace trees included:
+
+       tools/mkcard.py card.img 192 /infernode.img=mpfs-kernel.img /boot.scr=boot.scr \
+           /dis=dis /lib=lib /fonts=fonts /icons=icons /usr=
+
+2. Boot. U-Boot's standard boot finds `boot.scr` and runs it with nobody
+   at the prompt: `load` at `0x80200000`, copy U-Boot's device tree out
+   of its reserved memory, then `booti`. The riscvvirt harness checks
+   exactly this, unattended. U-Boot takes the first boot method it finds,
+   and the eMMC's shipped Linux partition has its own. So use a card, or
+   stop autoboot and run the script's four commands by hand:
 
        load mmc 0:1 0x80200000 infernode.img
+       fdt addr ${fdtcontroladdr}; fdt header get sz totalsize
+       fdt move ${fdtcontroladdr} ${fdt_addr_r} ${sz}
        booti 0x80200000 - ${fdt_addr_r}
 
-   The address must be `0x80200000` (see above). If U-Boot says it cannot
-   reserve memory for the fdt, move the tree first:
-   `fdt move ${fdtcontroladdr} ${fdt_addr_r} 0x10000`.
+   The address must be `0x80200000` (see above).
 3. The console is MMUART0 (the debug header, 115200 8N1).
 
 The other way is to make the kernel the HSS payload itself, with no

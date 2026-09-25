@@ -584,6 +584,54 @@ PYEOF
     printf '%s\n' "$OUT" > "$BUILD/$PLAT-uboot.txt"
     rcheck "U-Boot's booti takes it as a RISC-V Image" "Starting kernel ..."
     rcheck "and it boots to the shell from there" "booted by u-boot"
+
+    #
+    # And with no one at the prompt: os/riscv64/boot.cmd, wrapped as
+    # boot.scr by tools/mkbootscr.py, beside infernode.img in the root
+    # of the partition. U-Boot's standard boot finds the script and the
+    # script does the above -- what a BeagleV-Fire's card or eMMC boot
+    # partition would carry.
+    #
+    if ! python3 "$ROOT/tools/mkbootscr.py" "$ROOT/os/riscv64/boot.cmd" "$BUILD/boot.scr" > "$BUILD/mkbootscr.txt" 2>&1 ||
+       ! python3 "$ROOT/tools/mkcard.py" "$BUILD/$PLAT-bootscrcard.img" 64 \
+            /infernode.img="$BUILD/$PLAT-kernel.img" /boot.scr="$BUILD/boot.scr" >> "$BUILD/mkbootscr.txt" 2>&1; then
+        fail "riscvvirt: could not build the boot.scr card"
+        return
+    fi
+    OUT="$(python3 - "$QEMU" "$uboot" "$BUILD/$PLAT-bootscrcard.img" <<'PYEOF'
+import os, select, subprocess, sys, time
+qemu, uboot, card = sys.argv[1:4]
+p = subprocess.Popen([qemu, "-M", "virt", "-smp", "4", "-m", "1024", "-bios", "default",
+    "-kernel", uboot, "-drive", "file=%s,if=none,format=raw,id=sd" % card,
+    "-device", "virtio-blk-device,drive=sd", "-device", "virtio-rng-device",
+    "-display", "none", "-serial", "stdio", "-monitor", "none"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+out = b""
+def pump(t, until):
+    global out
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([p.stdout], [], [], 0.2)
+        if r:
+            b = os.read(p.stdout.fileno(), 65536)
+            if not b:
+                return
+            out += b
+        if until in out:
+            return
+# nothing is typed until the Inferno shell prompts
+pump(300, b"\n; ")
+p.stdin.write(b"echo booted by boot.scr\n"); p.stdin.flush()
+pump(10, b"booted by boot.scr\r")
+p.kill()
+p.wait()
+sys.stdout.write(out.replace(b"\0", b"").decode(errors="replace"))
+PYEOF
+)"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-bootscr.txt"
+    rcheck "U-Boot's standard boot finds boot.scr" "Found U-Boot script /boot.scr"
+    rcheck "which loads the kernel" "InferNode: /infernode.img from virtio 0:1"
+    rcheck "and boots it to the shell unattended" "booted by boot.scr"
 }
 
 #

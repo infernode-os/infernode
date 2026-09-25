@@ -26,6 +26,7 @@
 
 	aliases {
 		serial0 = &mmuart0;
+		serial1 = &mmuart1;
 	};
 
 	cpus {
@@ -162,6 +163,17 @@
 			reg-shift = <2>;
 			interrupt-parent = <&plic>;
 			interrupts = <90>;
+			clock-frequency = <150000000>;
+			current-speed = <115200>;
+		};
+
+		mmuart1: serial@20100000 {
+			compatible = "microchip,mpfs-mmuart", "ns16550a";
+			reg = <0x0 0x20100000 0x0 0x400>;
+			reg-io-width = <4>;
+			reg-shift = <2>;
+			interrupt-parent = <&plic>;
+			interrupts = <91>;
 			clock-frequency = <150000000>;
 			current-speed = <115200>;
 		};

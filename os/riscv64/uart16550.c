@@ -93,7 +93,14 @@ wr(uintptr base, int r, u32int v)
 		*(volatile uchar*)ureg(base, r) = v;
 }
 
-#define	CONS	((uintptr)UARTREGS)
+/*
+ * The console: the board's UARTREGS and UARTIRQ unless it moves it
+ * (uartconsole) once it has read the device tree.
+ */
+static uintptr	consbase = UARTREGS;
+static int	consirq = UARTIRQ;
+
+#define	CONS	consbase
 
 static void
 setdivisor(uintptr base, ulong freq, int baud)
@@ -136,7 +143,7 @@ uartdescribe(void)
 	static char buf[80];
 
 	snprint(buf, sizeof buf, "16550 at %#p, polled; %s",
-		(void*)(uintptr)UARTREGS, UARTCLK != 0 ? "115200 baud" : "firmware's rate");
+		(void*)consbase, UARTCLK != 0 ? "115200 baud" : "firmware's rate");
 	return buf;
 }
 
@@ -301,6 +308,27 @@ uartputs(char *s, int n)
  * The PhysUart: #t's view of the same part.
  */
 extern PhysUart ns16550physuart;
+static Uart consuart;
+
+/*
+ * Move the console to another UART of the same kind: what a board
+ * does when its device tree's /chosen/stdout-path names a different
+ * one from the board's default. Before interrupts, and before #t has
+ * the console, so there is nothing to hand over but the address. The
+ * firmware was using that UART, so its rate is left as it set it.
+ */
+void
+uartconsole(uintptr base, int irq)
+{
+	int held;
+
+	held = uartlock();
+	consbase = base;
+	consirq = irq;
+	consuart.regs = (void*)base;
+	uartunlock(held);
+	uartinit();
+}
 
 static Uart consuart = {
 	.regs	= (void*)(uintptr)UARTREGS,
@@ -362,7 +390,7 @@ enable(Uart *uart, int ie)
 	wr(UB(uart), Fcr, Fena | Frclr | Ftclr);
 	wr(UB(uart), Mcr, Dtr | Rts | Out2);
 	if(ie){
-		intrenable(UARTIRQ, interrupt, uart, 0, uart->name);
+		intrenable(consirq, interrupt, uart, 0, uart->name);
 		wr(UB(uart), Ier, Erda | Erls);
 	}
 }

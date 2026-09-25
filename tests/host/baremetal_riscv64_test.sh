@@ -393,25 +393,32 @@ if qmp:
         f = q.makefile("rw")
         f.readline()
         f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
-        if os.path.exists(ppm):
-            os.unlink(ppm)
-        f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
-        f.readline(); time.sleep(1)
-        d = open(ppm, "rb").read()
-        parts = d.split(b"\n", 3)
-        w, h = map(int, parts[1].split()); px = parts[3]
         # the text console's colours (../fb/fbcons.c), and the logo's
         # orange, which is what wm/logon draws once the console has
-        # been handed to the draw device
+        # been handed to the draw device. Dumped until the logo is there
+        # or a minute has gone: on a loaded machine the logon draws
+        # well after the shell has answered.
         BG = (0x10, 0x10, 0x18); FG = (0xC8, 0xC8, 0xC8); LOGO = (0xFF, 0x66, 0x33)
-        nbg = nfg = nlogo = 0
-        for y in range(h):
-            for x in range(0, w, 2):
-                o = (y*w + x)*3
-                c = tuple(px[o:o+3])
-                if c == BG: nbg += 1
-                elif c == FG: nfg += 1
-                elif c == LOGO: nlogo += 1
+        end = time.time() + 60
+        while True:
+            if os.path.exists(ppm):
+                os.unlink(ppm)
+            f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
+            f.readline(); time.sleep(1)
+            d = open(ppm, "rb").read()
+            parts = d.split(b"\n", 3)
+            w, h = map(int, parts[1].split()); px = parts[3]
+            nbg = nfg = nlogo = 0
+            for y in range(h):
+                for x in range(0, w, 2):
+                    o = (y*w + x)*3
+                    c = tuple(px[o:o+3])
+                    if c == BG: nbg += 1
+                    elif c == FG: nfg += 1
+                    elif c == LOGO: nlogo += 1
+            if nlogo >= 500 or time.time() > end:
+                break
+            time.sleep(3)
         out += b"\nSCREEN %dx%d bg %d fg %d logo %d\n" % (w, h, nbg, nfg, nlogo)
         q.close()
     except Exception as e:
@@ -748,6 +755,63 @@ run_mpfs() {
     mrefute "no test fails" "FAIL"
     mrefute "no panic" "panic:"
     mrefute "no unhandled exception" "unhandled exception"
+
+    #
+    # A board whose firmware console is not MMUART0: the tree's
+    # /chosen/stdout-path names serial1, and "-serial null" before the
+    # session's "-serial stdio" puts stdio on MMUART1. OpenSBI and the
+    # kernel's first lines go to the other port; once boardprobe has
+    # read the tree, the console -- and the shell, interrupt-driven on
+    # MMUART1's own IRQ -- must be here.
+    #
+    sed 's/stdout-path = "serial0:115200n8"/stdout-path = "serial1:115200n8"/' "$SRC/qemu-icicle.dts" |
+        dtc -I dts -O dtb -o "$BUILD/mpfs-icicle-uart1.dtb" - 2>>"$BUILD/cc.log"
+    local savedargs="$QEMUARGS"
+    QEMUARGS="-M microchip-icicle-kit -smp 5 -m 2G -dtb $BUILD/mpfs-icicle-uart1.dtb -serial null"
+    OUT="$(session "$BUILD/$PLAT-kernel.img" 300 'echo typed on mmuart1')"
+    QEMUARGS="$savedargs"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-uart1.txt"
+    mcheck "stdout-path moves the console to MMUART1" "console: MMUART1, as the firmware had it"
+    mcheck "the kernel's output follows it" "boot OK"
+    # the command's output, not the echo of the command typed
+    if grep -v "echo typed on mmuart1" <<<"$OUT" | grep -q "typed on mmuart1"; then
+        pass "mpfs: and the shell answers there, on MMUART1's interrupt"
+    else
+        fail "mpfs: no shell answer on MMUART1"
+    fi
+
+    #
+    # The eMMC: the same card image, grown to 4GB so the device runs in
+    # sector mode and its size must come from EXT_CSD, on the SD4HC as an
+    # eMMC rather than an SD card. QEMU cannot put one there unless it
+    # carries tests/host/qemu/sd-emmc-user-creatable.patch, so this runs
+    # only on a QEMU built with the harness's patches
+    # (BAREMETAL_QEMU_PATCHED=1), and is not counted otherwise.
+    #
+    if [[ -n "${BAREMETAL_QEMU_PATCHED:-}" ]]; then
+        if ! "$QEMU" -device help 2>/dev/null | grep -q '"emmc"'; then
+            fail "mpfs: BAREMETAL_QEMU_PATCHED is set, but this QEMU has no -device emmc"
+            return
+        fi
+        cp "$BUILD/$PLAT-card.img" "$BUILD/$PLAT-emmc.img"
+        truncate -s 4G "$BUILD/$PLAT-emmc.img"
+        savedargs="$QEMUARGS"
+        QEMUARGS="-M microchip-icicle-kit -smp 5 -m 2G -dtb $BUILD/mpfs-icicle.dtb -nic user"
+        QEMUARGS="$QEMUARGS -drive if=none,id=e,file=$BUILD/$PLAT-emmc.img,format=raw -device emmc,drive=e"
+        OUT="$(session "$BUILD/$PLAT-kernel.img" 600 'echo emmc-write > /n/dos/usr/emmctest' 'cat /n/dos/usr/emmctest')"
+        QEMUARGS="$savedargs"
+        printf '%s\n' "$OUT" > "$BUILD/$PLAT-emmc.txt"
+        mcheck "an eMMC is found by the MMC path, in sector mode, sized from EXT_CSD" "sd: sd4hc: eMMC ready, high capacity (block addressed), 4096 MB"
+        mrefute "the eMMC takes the 4-bit bus" "eMMC kept a 1-bit bus"
+        mcheck "userspace comes off the eMMC" "init: /dis grown from /n/dos/dis"
+        if grep -v "echo emmc-write" <<<"$OUT" | grep -q "emmc-write"; then
+            pass "mpfs: a file written to the eMMC reads back"
+        else
+            fail "mpfs: eMMC write did not read back"
+        fi
+    else
+        info "mpfs: eMMC not tested (needs a QEMU with tests/host/qemu/sd-emmc-user-creatable.patch; BAREMETAL_QEMU_PATCHED=1)"
+    fi
 }
 
 if want_platform riscvvirt; then

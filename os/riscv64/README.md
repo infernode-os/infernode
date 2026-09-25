@@ -136,7 +136,66 @@ entry and load address at `0x80200000`, S-mode, and the board's tree as
 the ancillary data.
 
 None of this has been on a real board yet. Everything above is proved
-under QEMU only. The things QEMU cannot show are listed next.
+under QEMU only. The things QEMU cannot show are listed below.
+
+### First boot: what to have and what to capture
+
+What to have:
+
+- A 3.3V USB-serial adapter on the debug header (MMUART0, 115200 8N1).
+  Not 5V, and not the USB-C port: that is power and a USB gadget, not
+  the console.
+- A microSD card built as above. Booting from a card leaves the eMMC's
+  shipped system alone, and a card can be rebuilt on another machine
+  after every attempt.
+- Ethernet to a network with DHCP, and USB-C power.
+
+Capture the serial log from power-on, all of it: the HSS, OpenSBI,
+U-Boot and the kernel. Keep it even if the boot works; it is the only
+record of what the firmware told the kernel. Before the first attempt,
+stop U-Boot's autoboot (any key) and save this:
+
+    version
+    printenv
+    bdinfo
+    mmc list
+    mmc info
+    fdt addr ${fdtcontroladdr}
+    fdt print /cpus
+    fdt print /memory
+    fdt print /reserved-memory
+    fdt print /soc/ethernet@20110000
+    fdt print /soc/serial@20000000
+
+What the answers settle:
+
+- **Whether U-Boot sends every hart to the kernel.** `bdinfo` and the
+  boot log show whether it was built with SMP. `l.S`'s hart lottery
+  copes either way, and `lotterytest` on the command line exercises it.
+- **The memory map.** `/memory` and `/reserved-memory` are what
+  `confinit` carves; the kernel prints each reservation it keeps
+  (`conf: reserved ...`). None of them should overlap the kernel at
+  `0x80200000`.
+- **Which MAC is wired, and to what PHY.** `mpfs/io.h` assumes GEM0
+  at `0x20110000`. The kernel prints the PHY it finds
+  (`gem: PHY ... at MDIO address ...`) and the negotiated link.
+- **The console.** `mpfs/io.h` assumes MMUART0 with 32-bit registers.
+  The kernel keeps the firmware's baud divisor (`UARTCLK` 0), so if
+  U-Boot's output is readable, the kernel's should be too.
+- **Storage.** `mmc info` says whether the controller holds the SD card
+  or the eMMC. The kernel handles both: SD first, then MMC. It prints
+  which it found and its size (`sd: ...: card ready` or `eMMC ready`).
+
+The kernel lines worth searching for first, in order:
+
+    InferNode bare-metal (Microchip PolarFire SoC)
+    board: ...
+    conf: ...
+    rng:  ...
+    smp:  4 harts running
+    sd: ...
+    gem: link up, ...
+    etherusb: ... mask
 
 ## Not done yet
 

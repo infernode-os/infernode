@@ -12,6 +12,9 @@ enum
 	SYSREGREGS	= 0x20002000,
 	EMMCSDREGS	= 0x20008000,	/* Cadence SD4HC */
 	MMUART1REGS	= 0x20100000,
+	MMUART2REGS	= 0x20102000,
+	MMUART3REGS	= 0x20104000,
+	MMUART4REGS	= 0x20106000,
 	GEM0REGS	= 0x20110000,	/* Cadence GEM Ethernet */
 	GEM1REGS	= 0x20112000,
 	GPIO2REGS	= 0x20122000,
@@ -24,6 +27,9 @@ enum
 	IRQemmcsd	= 88,
 	IRQmmuart0	= 90,
 	IRQmmuart1	= 91,
+	IRQmmuart2	= 92,
+	IRQmmuart3	= 93,
+	IRQmmuart4	= 94,
 	IRQmailbox	= 96,
 };
 

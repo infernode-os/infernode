@@ -100,6 +100,73 @@ fdtmodel(void)
 	}
 }
 
+/*
+ * The console the firmware used, from /chosen/stdout-path: a path
+ * ("/soc/serial@20100000:115200n8") or an alias ("serial1:115200n8")
+ * that /aliases turns into one. Only the MSS's own MMUARTs are
+ * believed, by address; anything else leaves the console where it is.
+ * The kernel starts on MMUART0 (io.h), so whatever it printed before
+ * this went there.
+ */
+static struct {
+	uintptr	base;
+	int	irq;
+} mmuarts[] = {
+	MMUART0REGS,	IRQmmuart0,
+	MMUART1REGS,	IRQmmuart1,
+	MMUART2REGS,	IRQmmuart2,
+	MMUART3REGS,	IRQmmuart3,
+	MMUART4REGS,	IRQmmuart4,
+};
+
+static void
+consoleprobe(void)
+{
+	char path[128], *p, *at;
+	uchar *v;
+	int n, i;
+	uintptr base;
+
+	v = fdtgetprop("chosen", "stdout-path", &n);
+	if(v == nil || n <= 1)
+		return;
+	for(i = 0; i < n && i < (int)sizeof path - 1 && v[i] != 0 && v[i] != ':'; i++)
+		path[i] = v[i];
+	path[i] = 0;
+	if(path[0] != '/'){
+		/* an alias */
+		v = fdtgetprop("aliases", path, &n);
+		if(v == nil)
+			return;
+		for(i = 0; i < n && i < (int)sizeof path - 1 && v[i] != 0; i++)
+			path[i] = v[i];
+		path[i] = 0;
+	}
+	/* the unit address of the last component */
+	p = strrchr(path, '/');
+	if(p == nil || (at = strchr(p, '@')) == nil)
+		return;
+	base = strtoull(at+1, nil, 16);
+	for(i = 0; i < nelem(mmuarts); i++)
+		if(mmuarts[i].base == base)
+			break;
+	if(i == nelem(mmuarts)){
+		uartputstr("console: stdout-path ");
+		uartputstr(path);
+		uartputstr(" is not an MMUART; staying on MMUART0\n");
+		return;
+	}
+	if(i == 0)
+		return;
+	uartputstr("console: stdout-path is ");
+	uartputstr(path);
+	uartputstr("; moving there\n");
+	uartconsole(base, mmuarts[i].irq);
+	uartputstr("console: MMUART");
+	uartputd(i);
+	uartputstr(", as the firmware had it\n");
+}
+
 void
 boardprobe(void)
 {
@@ -107,15 +174,15 @@ boardprobe(void)
 	uintptr base, size;
 	int n, i;
 
-	uartputstr("fdt:  ");
 	if(!fdtvalid()){
-		uartputstr("NO DEVICE TREE at ");
+		uartputstr("fdt:  NO DEVICE TREE at ");
 		uartputx(dtbptr);
 		uartputstr("\n");
 		return;
 	}
 	fdtmodel();
-	uartputstr("at ");
+	consoleprobe();
+	uartputstr("fdt:  at ");
 	uartputx(dtbptr);
 	uartputstr(", ");
 	uartputd(fdtsize());

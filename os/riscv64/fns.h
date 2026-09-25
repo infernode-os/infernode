@@ -14,6 +14,7 @@
 
 /* the console: board UART, polled */
 void	uartinit(void);
+void	uartconsole(uintptr, int);
 char*	uartdescribe(void);
 void	uartputc(int);
 int	uartgetc(void);

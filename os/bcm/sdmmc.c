@@ -49,6 +49,15 @@ enum
 	Sdsendopcond	= 41,		/* ACMD41 */
 	Setbuswidth	= 6,		/* ACMD6 */
 
+	/* MMC and eMMC: the same indices, some of them other commands */
+	Mmcsendopcond	= 1,
+	Mmcswitch	= 6,		/* CMD6, not ACMD6 */
+	Mmcsendextcsd	= 8,		/* CMD8 in the transfer state */
+	Mmcsector	= 1<<30,	/* CMD1: host does sector addressing */
+	Extcsdseccount	= 212,		/* EXT_CSD[215:212], little-endian */
+	Extcsdbuswidth	= 183,
+	Switcherror	= 1<<7,		/* card status: the SWITCH was refused */
+
 	/* CMD8 argument: 2.7-3.6V and a pattern the card must echo */
 	Ifcondarg	= 0x1AA,
 
@@ -116,7 +125,10 @@ static struct
 	int	hcs;		/* high capacity: addresses are blocks */
 	u32int	rca;		/* the card's relative address */
 	uvlong	nblocks;	/* 0 if unknown */
+	int	mmc;		/* MMC or eMMC, not SD */
 } card;
+
+static uchar extcsd[512];
 
 char*
 sdcontroller(void)
@@ -195,6 +207,128 @@ appcmd(int idx, u32int arg, int flags, u32int *resp)
 	return io->cmd(idx, arg, flags, resp);
 }
 
+static void
+announce(void)
+{
+	uartputstr("sd: ");
+	uartputstr(io->name);
+	uartputstr(card.mmc? ": eMMC ready, " : ": card ready, ");
+	uartputstr(card.hcs? "high capacity (block addressed), "
+		: "standard capacity (byte addressed), ");
+	uartputd(card.nblocks / 2048);
+	uartputstr(" MB\n");
+}
+
+/*
+ * An MMC device, which in practice means eMMC: soldered to the board,
+ * as the BeagleV-Fire's 16GB is. It is found only once SD has been
+ * tried and nothing answered ACMD41 -- an MMC ignores CMD8 and CMD55
+ * in the idle state, so the SD sequence has done it no harm -- and it
+ * differs from SD in four places:
+ *
+ *   CMD1, not ACMD41, to power up, with the host's offer of sector
+ *   addressing where SD has HCS;
+ *
+ *   CMD3 is the host ASSIGNING the address, where an SD card picks one;
+ *
+ *   the capacity of anything over 2GB is not in the CSD at all but in
+ *   the 512-byte EXT_CSD, read with CMD8 once the device is selected;
+ *
+ *   the bus width is set with CMD6 SWITCH writing EXT_CSD[BUS_WIDTH],
+ *   not ACMD6, and the device says whether it took it in its status.
+ *
+ * Returns 0 if a device came up.
+ */
+static int
+mmcinit(void)
+{
+	u32int resp[4], csz, mult, blen, sec;
+	int i, nofail;
+
+	io->cmd(Goidle, 0, Rnone, nil);
+
+	resp[0] = 0;
+	nofail = 0;
+	for(i = 0; i < Inittimeout; i += 1000){
+		if(io->cmd(Mmcsendopcond, Mmcsector | Vddwindow, R48 | Rnocrc, resp) < 0){
+			if(++nofail >= Maxnocard)
+				return -1;
+			microdelay(1000);
+			continue;
+		}
+		nofail = 0;
+		if(resp[0] & Powerup)
+			break;
+		microdelay(1000);
+	}
+	if((resp[0] & Powerup) == 0){
+		uartputstr("sd: eMMC never came ready\n");
+		return -1;
+	}
+	card.mmc = 1;
+	card.hcs = (resp[0] & Ccs) != 0;	/* sector mode: addresses are blocks */
+
+	if(io->cmd(Allsendcid, 0, R136, resp) < 0){
+		uartputstr("sd: eMMC: no CID\n");
+		return -1;
+	}
+	card.rca = 1;
+	if(io->cmd(Sendrelativeaddr, card.rca << 16, R48, resp) < 0){
+		uartputstr("sd: eMMC: will not take a relative address\n");
+		return -1;
+	}
+	if(io->cmd(Sendcsd, card.rca << 16, R136, resp) < 0){
+		uartputstr("sd: eMMC: no CSD\n");
+		return -1;
+	}
+	/* a byte-addressed MMC's size is in the CSD, laid out as SD's version 1 */
+	blen = rbits(resp, 80, 4);		/* READ_BL_LEN, 83:80 */
+	csz = rbits(resp, 62, 12);		/* C_SIZE, 73:62 */
+	mult = rbits(resp, 47, 3);		/* C_SIZE_MULT, 49:47 */
+	card.nblocks = ((uvlong)csz + 1) << (mult + 2);
+	if(blen > 9)
+		card.nblocks <<= blen - 9;
+
+	if(io->cmd(Selectcard, card.rca << 16, R48busy, resp) < 0){
+		uartputstr("sd: eMMC will not select\n");
+		return -1;
+	}
+	io->bus(0, Sdclk);
+
+	/* the real size, for a sector-mode device, is SEC_COUNT */
+	io->iosetup(0, Blocksize, 1);
+	if(io->cmd(Mmcsendextcsd, 0, R48 | Dread, nil) == 0 && io->io(0, extcsd, Blocksize) == 0){
+		sec = extcsd[Extcsdseccount] | extcsd[Extcsdseccount+1]<<8 |
+			extcsd[Extcsdseccount+2]<<16 | (u32int)extcsd[Extcsdseccount+3]<<24;
+		if(card.hcs && sec != 0)
+			card.nblocks = sec;
+	}else if(card.hcs){
+		uartputstr("sd: eMMC: no EXT_CSD, so its size is unknown\n");
+		card.nblocks = 0;
+	}
+
+	if(io->cmd(Setblocklen, Blocksize, R48, resp) < 0){
+		uartputstr("sd: eMMC: cannot set block length\n");
+		return -1;
+	}
+
+	/*
+	 * Four bits wide: SWITCH, access "write byte" (3), EXT_CSD[183]
+	 * = 1. The device reports a refusal in its status, not by failing
+	 * the command, so ask it (CMD13) before the host follows.
+	 */
+	if(io->cmd(Mmcswitch, 3<<24 | Extcsdbuswidth<<16 | 1<<8, R48busy, resp) == 0 &&
+	   io->cmd(Sendstatus, card.rca << 16, R48, resp) == 0 &&
+	   (resp[0] & Switcherror) == 0)
+		io->bus(4, 0);
+	else
+		uartputstr("sd: eMMC kept a 1-bit bus\n");
+
+	card.valid = 1;
+	announce();
+	return 0;
+}
+
 /*
  * Bring the controller and the card up. Returns 0 if there is a card.
  */
@@ -207,6 +341,7 @@ emmcinit(void)
 	card.valid = 0;
 	card.nblocks = 0;
 	card.rca = 0;
+	card.mmc = 0;
 
 	if(io->init() < 0)
 		return -1;
@@ -251,6 +386,9 @@ emmcinit(void)
 			 * during boot on a certainty.
 			 */
 			if(++nofail >= Maxnocard){
+				/* not SD: perhaps MMC, the BeagleV-Fire's eMMC */
+				if(mmcinit() == 0)
+					return 0;
 				uartputstr("sd: no card in the slot\n");
 				return -1;
 			}
@@ -331,14 +469,7 @@ emmcinit(void)
 		uartputstr("sd: card kept a 1-bit bus\n");
 
 	card.valid = 1;
-
-	uartputstr("sd: ");
-	uartputstr(io->name);
-	uartputstr(": card ready, ");
-	uartputstr(card.hcs? "high capacity (block addressed), "
-		: "standard capacity (byte addressed), ");
-	uartputd(card.nblocks / 2048);
-	uartputstr(" MB\n");
+	announce();
 	return 0;
 }
 

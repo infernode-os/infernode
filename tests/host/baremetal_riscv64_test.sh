@@ -601,6 +601,9 @@ run_mpfs() {
     mcheck "the MMUART is the console" "console:         16550 at 0x20000000"
     mrefute "no hart is the E51 (hart 0)" "(hart 0)"
     mcheck "the 1 MHz timebase comes from the tree" "time: 1000000 Hz timebase"
+    # QEMU's system controller fails every service with status 1: the
+    # nonce driver must see the refusal and say there is no entropy
+    mcheck "the TRNG driver sees the system controller refuse" "rng:  the system controller refused the nonce service (status 1): NO ENTROPY SOURCE"
     mcheck "/reserved-memory is kept from the allocator" "conf: reserved 0x0000000088000000 size 0x0000000002000000"
     mcheck "the bank is split around it" "runs between"
     mcheck "the trap path round-trips" "trap: returned, save/restore OK"

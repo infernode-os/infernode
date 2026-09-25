@@ -16,6 +16,7 @@ enum
 	GEM1REGS	= 0x20112000,
 	GPIO2REGS	= 0x20122000,
 	RTCREGS		= 0x20124000,
+	SCBCTRLREGS	= 0x37020000,	/* the system controller's service request */
 	MAILBOXREGS	= 0x37020800,	/* the system controller's services */
 
 	Nirq		= 187,		/* PLIC sources 1..186 */

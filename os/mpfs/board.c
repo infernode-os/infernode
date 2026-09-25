@@ -15,10 +15,10 @@
  * passes it with -dtb.
  *
  * The card is the Cadence SD4HC (sd4hc.c) under the Pis' card protocol
- * (../bcm/sdmmc.c); the network is the Cadence GEM (ethergem.c). What
- * is not here yet: the system controller's TRNG service for entropy --
- * until then, a loud warning that there is no entropy source -- and the
- * GEM's PHY, which QEMU does not need and the board does.
+ * (../bcm/sdmmc.c); the network is the Cadence GEM (ethergem.c);
+ * entropy is the system controller's nonce service (random.c). What is
+ * not here yet: the GEM's PHY, which QEMU does not need and the board
+ * does.
  */
 
 #include "u.h"

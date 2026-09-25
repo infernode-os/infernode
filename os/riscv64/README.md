@@ -126,9 +126,11 @@ under QEMU only. The things QEMU cannot show are listed next.
 
 ## Not done yet
 
-- **Entropy.** The PolarFire's TRNG is behind the system controller's
-  mailbox, and nothing drives it. `os/mpfs/random.c` says so loudly at
-  boot. Nothing that needs real keys should run on it yet.
+- **Entropy, on silicon.** `os/mpfs/random.c` asks the system
+  controller's nonce service (a TRNG-seeded DRBG) through the mailbox.
+  QEMU fails every service, so only the refusal path is proved: the
+  kernel then says loudly that it has NO ENTROPY SOURCE. The success
+  path has not run on a board yet.
 - **RTC.** The MSS RTC is not read, so the time of day comes from the
   network or not at all.
 - **GEM PHY.** No MDIO or PHY bring-up. QEMU's GEM needs none, and the

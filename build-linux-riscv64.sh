@@ -23,8 +23,9 @@
 # Every library is cleaned before it is built here for that reason; after
 # this script, rebuilding the host means cleaning the same way.
 #
-# There is no JIT yet: libinterp/comp-riscv64.c declines every module and
-# the VM interprets, so -c1 behaves as -c0.
+# The JIT is libinterp/comp-riscv64.c: -c1 compiles, -c0 interprets.
+# Under qemu-user both work; tests/host/jit_boot_test.sh and
+# tests/jittest.b are what say the JIT is right.
 #
 
 set -e

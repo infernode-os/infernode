@@ -15,7 +15,7 @@ servers, emulator C) are project skills under `.claude/skills/`.
 
 ## JIT Compiler Availability
 
-**AMD64 (x86-64) and ARM64 have JIT compilers.** The ARM64 JIT (`libinterp/comp-arm64.c`) supports both macOS (Apple Silicon) and Linux (e.g. NVIDIA Jetson). Run with `emu -c1` to enable JIT compilation, `emu -c0` for interpreter only.
+**AMD64 (x86-64), ARM64 and RISC-V (RV64GC) have JIT compilers.** The ARM64 JIT (`libinterp/comp-arm64.c`) supports both macOS (Apple Silicon) and Linux (e.g. NVIDIA Jetson). Run with `emu -c1` to enable JIT compilation, `emu -c0` for interpreter only.
 
 When compiling Limbo code:
 - **Use the native `limbo` compiler** (`MacOSX/arm64/bin/limbo`) - produces portable Dis bytecode
@@ -411,6 +411,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
+| `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 
@@ -437,6 +438,10 @@ infernode/
 │                        #   os/ip TCP/IP, os/init the Dis that boots it.
 │                        #   Built and tested ONLY via tests/host/baremetal_test.sh;
 │                        #   status and roadmap in os/bcm2837/README.md.
+│                        #   RISC-V: os/riscv64 (arch), os/riscvvirt (QEMU virt),
+│                        #   os/mpfs (PolarFire SoC: BeagleV-Fire, Icicle Kit),
+│                        #   via tests/host/baremetal_riscv64_test.sh;
+│                        #   see os/riscv64/README.md.
 ├── tests/               # Unit tests (Limbo + shell)
 │   ├── host/            #   Host-side shell tests
 │   ├── inferno/         #   Inferno-side shell tests

@@ -790,6 +790,12 @@ reloadcolors()
 	progfgcol = display_g.color(th.progfg);
 	if(menumod != nil)
 		menumod->retheme(display_g);
+	# The variables above are silent until something else redraws this
+	# zone -- a tool list changing, an activity switch. Nothing else
+	# does, on a theme switch: repaint now, with the colours just
+	# reloaded (this zone, unlike a hosted app, has no tkclient ctl
+	# channel for lucifer.b's "retheme" broadcast to reach).
+	redrawctx();
 }
 
 # --- Drawing ---

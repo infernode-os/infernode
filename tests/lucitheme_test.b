@@ -1,7 +1,7 @@
 implement LucithemeTest;
 
 #
-# Regression tests for Lucitheme module (2026-03).
+# Regression tests for Lucitheme module (2026-03, extended 2026-09).
 #
 # Covers:
 #   - Lucitheme->gettheme() renamed from load() (Limbo reserved keyword fix)
@@ -9,6 +9,24 @@ implement LucithemeTest;
 #   - wmclient border colour fix: accent (not hardcoded teal 0x448888FF)
 #   - wmclient border colour fix: border (not hardcoded cyan 0x9EEEEEFF)
 #   - wmclient background fix: bg is not white (no white flash on window close)
+#   - A theme file's colour whose red channel is >= 0x80 is parsed, not
+#     silently dropped (2026-09; see FromFileHighRed* below)
+#
+# What the tests above never exercised: parsehex() packs "RRGGBB" into
+# a 32-bit RRGGBBAA int with alpha always FF, and any colour whose red
+# channel is >= 0x80 -- most of a light theme's near-white colours --
+# sets that int's sign bit and comes back negative. gettheme() used to
+# read "value < 0" as "this line failed to parse" and silently kept
+# Brimstone's default for that key. On Halo (bg FFFFEA, header
+# EAFFFF, ...) the desktop's own hand-drawn zones (conv, ctx,
+# presentation -- appl/cmd/luci{conv,ctx,pres}.b) kept Brimstone's
+# dark background and header while Halo's accent (2266CC, red channel
+# 0x22, unaffected) came through fine: the highlight changed, the
+# background didn't. Every test above uses brimstone()'s own
+# hardcoded fields (correct regardless, since they are Limbo int
+# literals, not parsed) or gettheme() with no theme file on disk (the
+# same brimstone() fallback) -- neither one calls parsehex() on a
+# colour that would expose the bug.
 #
 
 include "sys.m";
@@ -113,6 +131,86 @@ testGetThemeAlpha(t: ref T)
 	t.asserteq(th.text   & 16rFF, 16rFF, "text has full alpha");
 }
 
+THEMEDIR: con "/lib/lucifer/theme/";
+
+writefile(path, data: string)
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		fd = sys->open(path, Sys->OWRITE|Sys->OTRUNC);
+	if(fd == nil)
+		return;
+	b := array of byte data;
+	sys->write(fd, b, len b);
+}
+
+# Fork a namespace, shadow THEMEDIR with a fixture shaped exactly like
+# Halo's real file -- a light background, a light header, an accent
+# that always worked, and a line that is not a valid colour at all --
+# and hand the parsed theme back. The bind is in a forked namespace so
+# the tree's real theme files are never touched.
+probefromfile(resc: chan of ref Lucitheme->Theme)
+{
+	sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->FORKNS, nil);
+
+	dir := sys->sprint("/tmp/lucitheme_test.%d", sys->pctl(0, nil));
+	sys->create(dir, Sys->OREAD, Sys->DMDIR|8r755);
+	writefile(dir + "/current", "lighttest");
+	writefile(dir + "/lighttest",
+		"bg FFFFEA\n" +			# red channel 0xFF: the failing case
+		"header EAFFFF\n" +		# red channel 0xEA: also failing
+		"accent 2266CC\n" +		# red channel 0x22: always worked
+		"badline notahexcolour\n");	# still skipped, not a crash
+
+	if(sys->bind(dir, THEMEDIR, Sys->MREPL) < 0) {
+		resc <-= nil;
+		return;
+	}
+
+	lt := load Lucitheme Lucitheme->PATH;
+	resc <-= lt->gettheme();
+}
+
+fromfiletheme(): ref Lucitheme->Theme
+{
+	resc := chan of ref Lucitheme->Theme;
+	spawn probefromfile(resc);
+	return <-resc;
+}
+
+testFromFileHighRedBackground(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.bg, int 16rFFFFEAFF, "bg FFFFEA (red 0xFF) is applied, not left at Brimstone's default");
+}
+
+testFromFileHighRedHeader(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.header, int 16rEAFFFFFF, "header EAFFFF (red 0xEA) is applied, not left at Brimstone's default");
+}
+
+testFromFileLowRedAccentStillWorks(t: ref T)
+{
+	th := fromfiletheme();
+	if(!t.assert(th != nil, "probe could not set up its namespace"))
+		return;
+	t.asserteq(th.accent, int 16r2266CCFF, "accent 2266CC (red 0x22, the case that always worked) is unaffected");
+}
+
+testFromFileInvalidLineIsSkippedNotFatal(t: ref T)
+{
+	th := fromfiletheme();
+	# "badline notahexcolour" must not have crashed gettheme() or
+	# corrupted a neighbouring field; accent is the check for that.
+	t.assert(th != nil, "gettheme survives a line that is not a valid colour");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -140,6 +238,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("BrimstoneColors",  testBrimstoneColors);
 	run("GetThemeNotNil",   testGetThemeNotNil);
 	run("GetThemeAlpha",    testGetThemeAlpha);
+	run("FromFileHighRedBackground",       testFromFileHighRedBackground);
+	run("FromFileHighRedHeader",           testFromFileHighRedHeader);
+	run("FromFileLowRedAccentStillWorks",  testFromFileLowRedAccentStillWorks);
+	run("FromFileInvalidLineIsSkippedNotFatal", testFromFileInvalidLineIsSkippedNotFatal);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

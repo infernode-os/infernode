@@ -524,6 +524,10 @@ reloadcolors()
 	for(i := 0; i < nmsg; i++)
 		msgstore[i].rendimg = nil;
 	lastrendw = 0;
+	# The cache invalidation above is silent until something else redraws
+	# this zone -- a new message, an activity switch. Nothing else does,
+	# on a theme switch: repaint now, with the colours just reloaded.
+	redrawconv();
 }
 
 # --- Drawing ---

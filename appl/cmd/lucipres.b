@@ -757,6 +757,13 @@ reloadcolors()
 	for(al := artifacts; al != nil; al = tl al)
 		(hd al).rendimg = nil;
 	artrendw = 0;
+	# The cache invalidation above is silent until something else redraws
+	# this zone -- an artifact update, a presentation event. Nothing else
+	# does, on a theme switch: repaint now, with the colours just
+	# reloaded. A hosted Tk app (matrix, editor, ...) gets its own
+	# "retheme" through lucifer.b's broadcast to its ctl channel; the
+	# picker and any other native content this zone draws itself do not.
+	redrawpres();
 }
 
 # --- Drawing ---

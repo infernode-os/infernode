@@ -33,19 +33,32 @@ hexdig(c: int): int
 }
 
 # Parse a 6-digit hex RGB string into an RGBA int (alpha FF).
-# Returns -1 on error.
-parsehex(s: string): int
+# Returns (value, 1) on success, (0, 0) on error.
+#
+# The value is returned alongside an explicit ok flag rather than as a
+# sentinel (e.g. -1) on its own: it is an RRGGBBAA pixel packed into a
+# 32-bit Limbo int, and any colour whose red channel is >= 0x80 --
+# which is most of a light theme's near-white colours, since the alpha
+# byte this always appends is 0xFF -- sets the sign bit and comes back
+# negative. A caller that read "value < 0" as "parse failed" (as this
+# one used to) silently drops every such colour and keeps whatever the
+# theme's built-in fallback had there instead. On Halo (bg FFFFEA,
+# header EAFFFF, border CCCCBB, ...) that meant the desktop's own
+# hand-drawn zones kept Brimstone's dark background and header while
+# Halo's accent (2266CC, red channel 0x22) came through fine -- the
+# highlight changed, the background didn't.
+parsehex(s: string): (int, int)
 {
 	if(len s != 6)
-		return -1;
+		return (0, 0);
 	v := 0;
 	for(i := 0; i < 6; i++) {
 		d := hexdig(s[i]);
 		if(d < 0)
-			return -1;
+			return (0, 0);
 		v = (v << 4) | d;
 	}
-	return (v << 8) | 16rFF;
+	return ((v << 8) | 16rFF, 1);
 }
 
 # Read an entire small file as a string.  Returns nil on error.
@@ -233,8 +246,8 @@ gettheme(): ref Theme
 			continue;
 		key := hd toks;
 		hexval := hd tl toks;
-		val := parsehex(hexval);
-		if(val >= 0)
+		(val, ok) := parsehex(hexval);
+		if(ok)
 			setkey(th, key, val);
 	}
 

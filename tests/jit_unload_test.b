@@ -46,6 +46,19 @@ skipped := 0;
 # the only reference, apart from the call's own
 g: JitUnloadHelper;
 
+# Where the helper is: beside this test in /tests, where the runner and
+# every other test are compiled (tests/mkfile installs there too, and
+# CI's per-file compile loop only there), or in /dis/tests.
+HELPERS: con "/tests/jit_unload_helper.dis";
+
+loadhelper(): JitUnloadHelper
+{
+	h := load JitUnloadHelper HELPERS;
+	if(h == nil)
+		h = load JitUnloadHelper JitUnloadHelper->PATH;
+	return h;
+}
+
 run(name: string, testfn: ref fn(t: ref T))
 {
 	t := testing->newTsrc(name, SRCFILE);
@@ -78,9 +91,9 @@ dropper(ms: int, done: chan of int)
 testLastReferenceReturn(t: ref T)
 {
 	for(i := 0; i < 20; i++){
-		g = load JitUnloadHelper JitUnloadHelper->PATH;
+		g = loadhelper();
 		if(g == nil)
-			t.fatal(sys->sprint("cannot load %s: %r", JitUnloadHelper->PATH));
+			t.fatal(sys->sprint("cannot load %s or %s: %r", HELPERS, JitUnloadHelper->PATH));
 		done := chan of int;
 		spawn dropper(10, done);
 		r := g->hold(60);
@@ -94,9 +107,9 @@ testLastReferenceReturn(t: ref T)
 # the ordinary case beside it: the caller keeps its reference
 testHeldReferenceReturn(t: ref T)
 {
-	h := load JitUnloadHelper JitUnloadHelper->PATH;
+	h := loadhelper();
 	if(h == nil)
-		t.fatal(sys->sprint("cannot load %s: %r", JitUnloadHelper->PATH));
+		t.fatal(sys->sprint("cannot load %s or %s: %r", HELPERS, JitUnloadHelper->PATH));
 	for(i := 0; i < 20; i++)
 		t.asserteq(h->hold(1), 2, "hold returned");
 }

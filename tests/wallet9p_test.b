@@ -2,19 +2,13 @@ implement Wallet9pTest;
 
 #
 # wallet9p integration test.
-# Starts wallet9p, creates an account, reads address, signs a hash.
+# Starts its factotum-backed fixture, creates an account, and reads its address.
 #
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
-
-include "keyring.m";
-	kr: Keyring;
-
-include "ethcrypto.m";
-	ethcrypto: Ethcrypto;
 
 include "testing.m";
 	testing: Testing;
@@ -23,6 +17,7 @@ include "testing.m";
 Wallet9pTest: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
+	_marker: fn();	# prevents joiniface() type conflation with Wallet9p
 };
 
 passed := 0;
@@ -30,6 +25,18 @@ failed := 0;
 skipped := 0;
 
 SRCFILE: con "/tests/wallet9p_test.b";
+W: con "/tmp/wallet9p-test";
+
+Pinfo: adt {
+	pid: string;
+	mod: string;
+};
+
+# Teardown compares against this snapshot so it cannot kill a service
+# that was already present when the fixture started.
+baseline: list of ref Pinfo;
+factotumowned := 0;
+walletstarted := 0;
 
 run(name: string, testfn: ref fn(t: ref T))
 {
@@ -53,32 +60,6 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
-hexdecode(s: string): array of byte
-{
-	if(len s % 2 != 0)
-		return nil;
-	buf := array[len s / 2] of byte;
-	for(i := 0; i < len buf; i++) {
-		hi := hexval(s[2*i]);
-		lo := hexval(s[2*i+1]);
-		if(hi < 0 || lo < 0)
-			return nil;
-		buf[i] = byte (hi * 16 + lo);
-	}
-	return buf;
-}
-
-hexval(c: int): int
-{
-	if(c >= '0' && c <= '9')
-		return c - '0';
-	if(c >= 'a' && c <= 'f')
-		return c - 'a' + 10;
-	if(c >= 'A' && c <= 'F')
-		return c - 'A' + 10;
-	return -1;
-}
-
 readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
@@ -91,22 +72,124 @@ readfile(path: string): string
 	return string buf[0:n];
 }
 
-writefile(path: string, data: string): int
-{
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil)
-		return -1;
-	b := array of byte data;
-	return sys->write(fd, b, len b);
-}
-
 include "sh.m";
 
-# Start wallet9p in background
+hasprefix(s, prefix: string): int
+{
+	return len s >= len prefix && s[0:len prefix] == prefix;
+}
+
+procinfo(pid: string): ref Pinfo
+{
+	fd := sys->open("/prog/" + pid + "/status", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[512] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	(nil, fields) := sys->tokenize(string buf[0:n], " ");
+	modname := "";
+	for(; fields != nil; fields = tl fields)
+		modname = hd fields;
+	if(modname == "")
+		return nil;
+	return ref Pinfo(pid, modname);
+}
+
+procs(): list of ref Pinfo
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	out: list of ref Pinfo;
+	for(;;) {
+		(n, dirs) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			p := procinfo(dirs[i].name);
+			if(p != nil)
+				out = p :: out;
+		}
+	}
+	return out;
+}
+
+haspid(pid: string, ps: list of ref Pinfo): int
+{
+	for(; ps != nil; ps = tl ps)
+		if((hd ps).pid == pid)
+			return 1;
+	return 0;
+}
+
+isfixturemodule(mod: string): int
+{
+	return hasprefix(mod, "Factotum") || hasprefix(mod, "Wallet9p") ||
+		hasprefix(mod, "Styx");
+}
+
+waitmount(path: string)
+{
+	for(i := 0; i < 50; i++) {
+		(ok, nil) := sys->stat(path);
+		if(ok >= 0)
+			return;
+		sys->sleep(100);
+	}
+}
+
+runfactotum()
+{
+	mod := load Command "/dis/auth/factotum.dis";
+	if(mod == nil) {
+		sys->fprint(sys->fildes(2), "cannot load factotum: %r\n");
+		return;
+	}
+	mod->init(nil, nil);
+}
+
+# Start factotum and wallet9p in background.
 startserver()
 {
+	baseline = procs();
+	(ok, nil) := sys->stat("/mnt/factotum/ctl");
+	if(ok < 0) {
+		factotumowned = 1;
+		spawn runfactotum();
+	}
+	waitmount("/mnt/factotum/ctl");
+	walletstarted = 1;
 	spawn runsrv();
-	sys->sleep(1500);	# wait for mount
+	waitmount(W + "/accounts");
+}
+
+killproc(pid: string)
+{
+	fd := sys->open("/prog/" + pid + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte "kill";
+	sys->write(fd, b, len b);
+}
+
+stopserver()
+{
+	# Unmount private fixture paths before stopping only its new service
+	# threads; unrelated wallet/factotum services are left untouched.
+	if(walletstarted) {
+		sys->unmount(nil, W);
+		sys->remove(W);
+	}
+	if(factotumowned)
+		sys->unmount(nil, "/mnt/factotum");
+	current := procs();
+	for(ps := current; ps != nil; ps = tl ps) {
+		p := hd ps;
+		if(!haspid(p.pid, baseline) && isfixturemodule(p.mod))
+			killproc(p.pid);
+	}
 }
 
 runsrv()
@@ -116,7 +199,7 @@ runsrv()
 		sys->fprint(sys->fildes(2), "cannot load wallet9p: %r\n");
 		return;
 	}
-	mod->init(nil, "wallet9p" :: nil);
+	mod->init(nil, "wallet9p" :: "-m" :: W :: nil);
 }
 
 #
@@ -124,10 +207,12 @@ runsrv()
 #
 testMount(t: ref T)
 {
-	s := readfile("/n/wallet/accounts");
-	# Initially empty, but the file should exist
-	t.assert(s != nil || s == "", "accounts file readable");
-	t.log("accounts: '" + s + "'");
+	(ok, nil) := sys->stat(W + "/accounts");
+	t.assert(ok >= 0, "accounts file exists after wallet mount");
+	if(ok >= 0) {
+		s := readfile(W + "/accounts");
+		t.log("accounts: '" + s + "'");
+	}
 }
 
 #
@@ -135,39 +220,42 @@ testMount(t: ref T)
 #
 testImportAndAddress(t: ref T)
 {
-	# Import private key = 1
-	n := writefile("/n/wallet/new", "import eth ethereum testkey 0000000000000000000000000000000000000000000000000000000000000001");
-	t.assert(n > 0, "write to new succeeded");
+	# Import private key = 1. Keep the descriptor open: the result is
+	# bound to the writing fid and is cleared when that fid is clunked.
+	fd := sys->open(W + "/new", Sys->ORDWR);
+	if(fd == nil) {
+		t.fatal("cannot open new: " + sys->sprint("%r"));
+		return;
+	}
+	data := "import eth ethereum testkey 0000000000000000000000000000000000000000000000000000000000000001";
+	b := array of byte data;
+	n := sys->write(fd, b, len b);
+	t.assert(n == len b, "write to new succeeded");
 
-	# Read back the account name
-	name := readfile("/n/wallet/new");
+	# Read back the account name on the same fid.
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	buf := array[128] of byte;
+	n = sys->read(fd, buf, len buf);
+	name := "";
+	if(n > 0)
+		name = string buf[0:n];
+	t.assert(name == "testkey\n", "new reports the imported account");
 	t.log("new account: '" + name + "'");
 
 	# Read address
-	addr := readfile("/n/wallet/testkey/address");
-	t.assert(addr != nil, "address readable");
+	addr := readfile(W + "/testkey/address");
+	t.assert(addr != nil && len addr > 1, "address readable");
 	t.log("address: " + addr);
 }
 
 #
-# Test: sign a hash and recover
+# Test: the removed raw signing oracle is not exercised
 #
 testSign(t: ref T)
 {
-	# Hash to sign (keccak256 of "test")
-	msg := array of byte "test";
-	hash := array[32] of byte;
-	kr->keccak256(msg, len msg, hash);
-	hexhash := ethcrypto->hexencode(hash);
-
-	# Write hash to sign file
-	n := writefile("/n/wallet/testkey/sign", hexhash);
-	t.assert(n > 0, "write to sign succeeded");
-
-	# Read signature
-	sig := readfile("/n/wallet/testkey/sign");
-	t.assert(sig != nil && len sig > 0, "signature readable");
-	t.log("signature: " + sig);
+	# The raw hash-signing oracle was intentionally removed. The supported
+	# authorize flow is covered by wallet_policy_test.
+	t.skip("raw sign oracle removed; authorize is covered by wallet policy tests");
 }
 
 #
@@ -175,43 +263,38 @@ testSign(t: ref T)
 #
 testChain(t: ref T)
 {
-	chain := readfile("/n/wallet/testkey/chain");
+	chain := readfile(W + "/testkey/chain");
 	t.assert(chain != nil, "chain readable");
 	t.log("chain: " + chain);
 }
 
+_marker() {}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
-	kr = load Keyring Keyring->PATH;
-	ethcrypto = load Ethcrypto "/dis/lib/ethcrypto.dis";
 	testing = load Testing Testing->PATH;
 
 	if(testing == nil) {
 		sys->fprint(sys->fildes(2), "cannot load testing module: %r\n");
 		raise "fail:cannot load testing";
 	}
-	if(ethcrypto == nil) {
-		sys->fprint(sys->fildes(2), "cannot load ethcrypto: %r\n");
-		raise "fail:cannot load ethcrypto";
-	}
-
 	testing->init();
-	ethcrypto->init();
 
 	for(a := args; a != nil; a = tl a) {
 		if(hd a == "-v")
 			testing->verbose(1);
 	}
 
-	# Start wallet9p
+	# Start the factotum-backed wallet fixture.
 	startserver();
 
 	run("Mount", testMount);
 	run("ImportAndAddress", testImportAndAddress);
-	run("Sign", testSign);
+	run("SignOracleRemoved", testSign);
 	run("Chain", testChain);
 
+	stopserver();
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
 }

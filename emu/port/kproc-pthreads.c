@@ -16,7 +16,7 @@
 #include	<errno.h>
 #include	<semaphore.h>
 
-#if defined(__NetBSD__) || defined(LINUX_ARM) || defined(LINUX_AMD64) || defined(LINUX_ARM64) || defined(__BIONIC__)
+#if defined(__NetBSD__) || defined(LINUX_ARM) || defined(LINUX_AMD64) || defined(LINUX_ARM64) || defined(LINUX_RISCV64) || defined(__BIONIC__)
 #include	<sched.h>
 /* pthread_yield is a glibc-era non-POSIX extension that Bionic dropped
  * in NDK r28+. sched_yield is the POSIX standard and identical in

@@ -86,7 +86,7 @@ dossrv -f /dev/boot -m /n/dos
 .B /os/bcm2837/sdmmc.c
 (the card, on either of the BCM2837's controllers)
 .br
-.B /os/virt/blkvirtio.c
+.B /os/virtio/blkvirtio.c
 (a virtio block device)
 .SH SEE ALSO
 .IR dossrv (4),

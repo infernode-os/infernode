@@ -1085,6 +1085,86 @@ jobs:
         retention-days: 14
 
   # ─────────────────────────────────────────────
+  # Linux RISC-V 64: cross-built, run under qemu-user
+  # ─────────────────────────────────────────────
+  # No hosted riscv64 runner exists, so the emulator is cross-compiled
+  # (build-linux-riscv64.sh) and run under qemu-riscv64. What this says
+  # is that the port builds and that the JIT (comp-riscv64.c) is right
+  # instruction by instruction and on the boot path; it says nothing
+  # about speed. The bare-metal RISC-V kernel is baremetal.yml's.
+  linux-riscv64-cross:
+    name: Linux RISC-V 64 Cross Build & JIT Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install the cross compiler and qemu-user
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+    # The host's mk and limbo drive the cross build; dis/ is portable
+    # bytecode, built once by the host.
+    - name: Build the host's mk and limbo, and the Dis tree
+      run: |
+        set -e
+        SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        for d in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+          (cd "$d" && mk install)
+        done
+        for d in appl appl/mpeg appl/veltro tests; do
+          (cd "$d" && mk install) > "/tmp/dis-$(basename "$d").log" 2>&1 || {
+            grep -E '\.b:[0-9]+:' "/tmp/dis-$(basename "$d").log" | grep -v 'warning:' | head -40
+            echo "::error::mk install failed in $d"; exit 1; }
+        done
+        test -f dis/jittest.dis && test -f dis/tests/jit_fault_test.dis
+
+    - name: Cross-build the riscv64 emulator
+      run: |
+        ./build-linux-riscv64.sh
+        file emu/Linux/o.emu | grep -q 'RISC-V' || { echo "::error::o.emu is not a RISC-V binary"; exit 1; }
+
+    - name: Wrap the emulator in qemu-user
+      run: |
+        cat > "$RUNNER_TEMP/emu-rv" <<EOF
+        #!/bin/sh
+        exec qemu-riscv64 -L /usr/riscv64-linux-gnu "$ROOT/emu/Linux/o.emu" "\$@"
+        EOF
+        chmod +x "$RUNNER_TEMP/emu-rv"
+        # emu leaves by killing its process group; timeout gives it one
+        # of its own, so the step's shell is not in it
+        timeout 60 "$RUNNER_TEMP/emu-rv" -c0 -r. /dis/echo.dis riscv64 emu runs > echo.txt 2>&1 < /dev/null || true
+        cat echo.txt
+        grep -q "riscv64 emu runs" echo.txt
+
+    - name: Run JIT correctness tests
+      run: |
+        timeout 600 "$RUNNER_TEMP/emu-rv" -c1 -r . /dis/jittest.dis > jit-test.txt 2>&1 < /dev/null || true
+        cat jit-test.txt
+        grep -q "^PASS$" jit-test.txt || { echo "::error::jittest failed under the riscv64 JIT"; exit 1; }
+
+    - name: Run JIT fault tests (JIT and interpreter)
+      run: |
+        for c in 1 0; do
+          timeout 300 "$RUNNER_TEMP/emu-rv" -c$c -r . /dis/tests/jit_fault_test.dis -v > jit-fault-c$c.txt 2>&1 < /dev/null || true
+          cat jit-fault-c$c.txt
+          grep -qx PASS jit-fault-c$c.txt && ! grep -q -- '--- FAIL' jit-fault-c$c.txt \
+            || { echo "::error::jit_fault_test failed with -c$c"; exit 1; }
+        done
+
+    - name: Run JIT boot smoke test
+      run: |
+        chmod +x tests/host/jit_boot_test.sh
+        EMU="$RUNNER_TEMP/emu-rv" TIMEOUT=600 tests/host/jit_boot_test.sh
+
+  # ─────────────────────────────────────────────
   # macOS ARM64: Build using shipped toolchain
   # ─────────────────────────────────────────────
   macos-arm64:

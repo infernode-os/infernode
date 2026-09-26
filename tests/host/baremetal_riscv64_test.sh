@@ -1,0 +1,824 @@
+#!/bin/bash
+#
+# Bare-metal RISC-V: build the native kernel for a RISC-V board and boot
+# it under QEMU with OpenSBI.
+#
+#     ./tests/host/baremetal_riscv64_test.sh            # every board
+#     BAREMETAL_RV_PLATFORMS=riscvvirt ./tests/host/baremetal_riscv64_test.sh
+#     BAREMETAL_BUILD_ONLY=1 ...                        # stop after the link
+#     BAREMETAL_BUILD_DIR=/tmp/bm ...                   # keep the build (ELFs for nm/objdump)
+#     VERBOSE=1 ...                                     # print the boot logs
+#
+# The RISC-V counterpart of tests/host/baremetal_test.sh, and built the
+# same way: os/riscv64 (the architecture) + the board directory +
+# os/port + os/ip + the libraries, the board's directory first on the
+# include path so its mem.h, io.h and board.h are the ones shared code
+# gets, and a root filesystem compiled into the image by
+# tools/mkrootfs.py from the same manifest. What differs is the target
+# (RV64GC, LP64D, medany), the code generator (comp-riscv64.c), the
+# firmware in front of the kernel (OpenSBI, QEMU's -bios default) and
+# the machines.
+#
+# It is a separate script rather than a function in that one because
+# that one is AArch64 from its first line -- its toolchain probe, its
+# -ffixed-x28, its QEMU and the dozens of board assertions written
+# against a Raspberry Pi -- and a new architecture's harness should
+# start small and say only what it has seen. Folding the two builds
+# into one parameterised build_kernel is the obvious next step once
+# this one has settled.
+#
+# Exit 0 if every check passed (or the toolchain is absent: skipped).
+#
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+VERBOSE="${VERBOSE:-0}"
+PASSED=0
+FAILED=0
+SKIPPED=0
+
+if test -t 1; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BOLD='\033[1m'; NC='\033[0m'
+else
+    RED=''; GREEN=''; YELLOW=''; BOLD=''; NC=''
+fi
+
+pass()  { echo -e "${GREEN}PASS${NC}: $1"; PASSED=$((PASSED+1)); return 0; }
+fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); return 0; }
+skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); return 0; }
+info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; return 0; }
+
+finish() {
+    echo ""
+    echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
+    [[ $FAILED -eq 0 ]]
+    exit $?
+}
+
+echo -e "${BOLD}Bare-metal RISC-V boot tests${NC}"
+echo ""
+
+CC="$(command -v clang 2>/dev/null)"
+LLD="$(command -v ld.lld 2>/dev/null)"
+OBJCOPY="$(command -v llvm-objcopy 2>/dev/null)"
+AR="$(command -v llvm-ar 2>/dev/null)"
+QEMU="$(command -v qemu-system-riscv64 2>/dev/null)"
+LIMBO="$(command -v limbo 2>/dev/null)"
+for d in Linux/amd64 Linux/arm64 Linux/riscv64 MacOSX/arm64; do
+    [[ -z "$LIMBO" && -x "$ROOT/$d/bin/limbo" ]] && LIMBO="$ROOT/$d/bin/limbo"
+done
+
+if [[ -z "$CC" || -z "$LLD" || -z "$OBJCOPY" || -z "$AR" ]]; then
+    skip "RISC-V cross toolchain not available (need clang, ld.lld, llvm-objcopy, llvm-ar)"
+    finish
+fi
+if ! "$CC" -print-targets 2>/dev/null | grep -q riscv64; then
+    skip "this clang has no riscv64 target"
+    finish
+fi
+if [[ -z "$LIMBO" ]]; then
+    skip "no limbo compiler (build the host first: ./build-linux-amd64.sh headless)"
+    finish
+fi
+if [[ ! -f "$ROOT/dis/sh.dis" ]]; then
+    skip "dis/ is not built (see CLAUDE.md, 'Dis Files: A Build Product')"
+    finish
+fi
+
+info "cc:      $CC"
+info "limbo:   $LIMBO"
+info "qemu:    ${QEMU:-none}"
+
+if [ -n "${BAREMETAL_BUILD_DIR:-}" ]; then
+    BUILD="$BAREMETAL_BUILD_DIR"
+    mkdir -p "$BUILD"
+else
+    BUILD="$(mktemp -d)"
+    trap 'rm -rf "$BUILD"' EXIT
+fi
+
+ARCH="$ROOT/os/riscv64"
+
+#
+# The flags, per platform because -I"$SRC" is what picks the board.
+#
+# RV64GC with the double-float ABI everywhere, and not just in
+# libinterp as on arm64: a RISC-V link refuses to mix float ABIs, and
+# unlike AArch64's NEON no RISC-V compiler uses the FP registers for
+# integer code, so the core stays out of them without being told.
+# -mcmodel=medany because the kernel is linked at 0x80200000, outside
+# medlow's +-2GB of zero; -mno-relax because nothing sets gp for the
+# linker's gp-relative relaxation to use.
+#
+platform_flags() {
+    local target=(--target=riscv64-unknown-elf -march=rv64gc -mabi=lp64d -mcmodel=medany -mno-relax)
+    IFLAGS=("${target[@]}" -ffreestanding -nostdlib -DINFERNO_NATIVE
+            -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ARCH" -I"$ROOT/os/fb" -I"$ROOT/os/port" -I"$ROOT/os/ip"
+            -I"$ROOT/Inferno/riscv64/include" -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
+    CFLAGS=("${target[@]}" -ffreestanding -nostdlib -DINFERNO_NATIVE
+            -O2 -fno-omit-frame-pointer -Wall -Wextra
+            -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration
+            -I"$SRC" -I"$ARCH" -I"$ROOT/os/fb" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/riscv64/include"
+            -I"$ROOT/libinterp" -I"$ROOT/include" -I"$ROOT/libkern")
+}
+
+PORTWERR=(-Wno-everything -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration)
+
+#
+# The kernel: tests/host/baremetal_test.sh's build_kernel, which says
+# at each step why it is as it is. Kept in the same order so the two
+# can be read side by side.
+#
+build_kernel() {
+    local outimg="$1" extra="$2"
+    local objs=() libobjs=() f o
+    local CFLAGS=("${CFLAGS[@]}" $extra ${EXTRACFLAGS:-})
+    local IFLAGS=("${IFLAGS[@]}" $extra ${EXTRACFLAGS:-})
+
+    rm -f "$outimg" "${outimg%.img}.elf"
+    : > "$BUILD/cc.log"
+
+    # the C view of the builtin modules, generated as libinterp's mkfile does
+    "$LIMBO" -a -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/runt.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t Sys -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/sysmod.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -a -I"$ROOT/module" "$ROOT/module/bench.m" > "$BUILD/bench.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t Bench -I"$ROOT/module" "$ROOT/module/bench.m" > "$BUILD/benchmod.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t Draw -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/drawmod.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t Tk -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/tkmod.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t Keyring -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/keyringmod.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t IPints -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/ipintsmod.h" 2>>"$BUILD/cc.log" || return 1
+    "$LIMBO" -t Math -I"$ROOT/module" "$ROOT/module/runt.m" > "$BUILD/mathmod.h" 2>>"$BUILD/cc.log" || return 1
+
+    # init and the programs it may start, then the root filesystem
+    for f in osinit etherusb kbdusb mouseusb diskusb touch drawtest tktest isotest; do
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/$f.dis" "$ROOT/os/init/$f.b" 2>>"$BUILD/cc.log" || return 1
+    done
+    local rootmanifest=(
+        "/osinit.dis=$BUILD/osinit.dis"
+        "/dis/etherusb.dis=$BUILD/etherusb.dis"
+        "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
+        "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+        "/dis/diskusb.dis=$BUILD/diskusb.dis"
+        "/dis/touch.dis=$BUILD/touch.dis"
+        "/dis/drawtest.dis=$BUILD/drawtest.dis"
+        "/dis/tktest.dis=$BUILD/tktest.dis"
+        "/dis/isotest.dis=$BUILD/isotest.dis"
+        "/dis/dossrv.dis=$ROOT/dis/dossrv.dis"
+        "/dev=" "/net=" "/prog=" "/usb=" "/chan=" "/env=" "/icons="
+        "/dis/sh.dis=$ROOT/dis/sh.dis"
+        "/dis/lib/filepat.dis=$ROOT/dis/lib/filepat.dis"
+        "/dis/lib/string.dis=$ROOT/dis/lib/string.dis"
+        "/dis/lib/bufio.dis=$ROOT/dis/lib/bufio.dis"
+        "/dis/lib/env.dis=$ROOT/dis/lib/env.dis"
+        "/dis/lib/arg.dis=$ROOT/dis/lib/arg.dis"
+        "/dis/lib/styx.dis=$ROOT/dis/lib/styx.dis"
+        "/net/ether0=" "/n=" "/n/dos=" "/n/remote="
+        "/n/usb0=" "/n/usb1=" "/n/usb2=" "/n/usb3="
+        "/mnt=" "/mnt/wm=" "/mnt/ui=" "/mnt/llm=" "/mnt/msg=" "/tool=" "/mnt/acme=" "/tmp=" "/usr="
+        "/dis/echo.dis=$ROOT/dis/echo.dis"
+        "/dis/cat.dis=$ROOT/dis/cat.dis"
+        "/dis/read.dis=$ROOT/dis/read.dis"
+        "/dis/rm.dis=$ROOT/dis/rm.dis"
+        "/dis/pwd.dis=$ROOT/dis/pwd.dis"
+        "/dis/ls.dis=$ROOT/dis/ls.dis"
+        "/dis/lib/readdir.dis=$ROOT/dis/lib/readdir.dis"
+        "/dis/lib/daytime.dis=$ROOT/dis/lib/daytime.dis"
+        "/dis/lib/workdir.dis=$ROOT/dis/lib/workdir.dis"
+        "/dis/sh/std.dis=$ROOT/dis/sh/std.dis"
+        "/dis/sh/expr.dis=$ROOT/dis/sh/expr.dis"
+        "/dis/sh/string.dis=$ROOT/dis/sh/string.dis"
+        "/lib/sh/profile=$ROOT/os/init/profile"
+        "/dis/cd.dis=$ROOT/dis/cd.dis"
+        "/dis/date.dis=$ROOT/dis/date.dis"
+        "/dis/ps.dis=$ROOT/dis/ps.dis"
+        "/dis/ns.dis=$ROOT/dis/ns.dis"
+        "/dis/bind.dis=$ROOT/dis/bind.dis"
+        "/dis/mount.dis=$ROOT/dis/mount.dis"
+        "/dis/unmount.dis=$ROOT/dis/unmount.dis"
+        "/dis/ftest.dis=$ROOT/dis/ftest.dis"
+        "/dis/mkdir.dis=$ROOT/dis/mkdir.dis"
+        "/dis/cp.dis=$ROOT/dis/cp.dis"
+        "/dis/mv.dis=$ROOT/dis/mv.dis"
+        "/dis/wc.dis=$ROOT/dis/wc.dis"
+        "/dis/sleep.dis=$ROOT/dis/sleep.dis"
+        "/dis/tail.dis=$ROOT/dis/tail.dis"
+        "/dis/sort.dis=$ROOT/dis/sort.dis"
+        "/dis/grep.dis=$ROOT/dis/grep.dis"
+        "/dis/basename.dis=$ROOT/dis/basename.dis"
+        "/dis/du.dis=$ROOT/dis/du.dis"
+        "/dis/kill.dis=$ROOT/dis/kill.dis"
+        "/dis/lib/auth.dis=$ROOT/dis/lib/auth.dis"
+        "/dis/lib/factotum.dis=$ROOT/dis/lib/factotum.dis"
+        "/dis/lib/names.dis=$ROOT/dis/lib/names.dis"
+        "/dis/lib/regex.dis=$ROOT/dis/lib/regex.dis"
+        "/dis/lib/styxpersist.dis=$ROOT/dis/lib/styxpersist.dis"
+        "/dis/memfs.dis=$ROOT/dis/memfs.dis"
+        "/dis/mntgen.dis=$ROOT/dis/mntgen.dis"
+        "/dis/lib/styxservers.dis=$ROOT/dis/lib/styxservers.dis"
+        "/dis/lib/nametree.dis=$ROOT/dis/lib/nametree.dis"
+        "/dis/lib/styxlib.dis=$ROOT/dis/lib/styxlib.dis"
+        "/dis/lib/testing.dis=$ROOT/dis/lib/testing.dis"
+        "/dis/tests/exception_test.dis=$ROOT/dis/tests/exception_test.dis"
+        "/dis/tests/fltfmt_test.dis=$ROOT/dis/tests/fltfmt_test.dis"
+        "/dis/tests/jit_fault_test.dis=$ROOT/dis/tests/jit_fault_test.dis"
+        "/dis/jittest.dis=$ROOT/dis/jittest.dis"
+        "/dis/procstorm.dis=$ROOT/dis/procstorm.dis"
+    )
+    python3 "$ROOT/tools/mkrootfs.py" "$BUILD/rootfs.c" "${rootmanifest[@]}" 2>>"$BUILD/cc.log" || return 1
+    "$CC" "${CFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$BUILD/rootfs.c" -o "$BUILD/rootfs.o" 2>>"$BUILD/cc.log" || return 1
+    objs+=("$BUILD/rootfs.o")
+
+    sed 's/extern //;s,;.*/\* , = ",;s, \*/,";,' < "$ROOT/os/port/error.h" > "$BUILD/errstr.h" || return 1
+
+    # the architecture, the framebuffer console and draw screen (os/fb,
+    # shared with arm64), the family's shared drivers, the board
+    local sharedsrc=()
+    # EXTRASRC: single files a board takes from another family's
+    # directory (the PolarFire's card protocol is os/bcm/sdmmc.c)
+    for f in ${EXTRASRC:-}; do
+        sharedsrc+=("$f")
+    done
+    if [[ -n "${SHARED:-}" ]]; then
+        for f in "$SHARED"/*.S "$SHARED"/*.c; do
+            [[ -e "$f" ]] || continue
+            case " ${SHAREDSKIP:-} " in *" $(basename "$f") "*) continue;; esac
+            sharedsrc+=("$f")
+        done
+    fi
+    for f in "$ARCH"/*.S "$ARCH"/*.c "$ROOT"/os/fb/*.c "${sharedsrc[@]}" "$SRC"/*.S "$SRC"/*.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/$(basename "$(dirname "$f")")-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -I"$BUILD" -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
+
+    for f in "$ROOT"/os/port/*.c; do
+        case " ${PORTSKIP:-} " in *" $(basename "$f") "*) continue;; esac
+        o="$BUILD/osport-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" "${PORTWERR[@]}" -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
+
+    for f in "$ROOT"/os/ip/*.c; do
+        o="$BUILD/osip-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -I"$ROOT/os/ip" -I"$BUILD" "${PORTWERR[@]}" -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        objs+=("$o")
+    done
+
+    for f in "$ROOT"/libmemdraw/{arc,cmap,defont,ellipse,fillpoly,icossin,icossin2,line,poly,string,subfont,alloc,cload,draw,load,unload}.c \
+             "$ROOT"/libmemlayer/*.c "$ROOT"/libdraw/*.c; do
+        case "$(basename "$f")" in test.c|mkfont.c|readcolmap.c) continue;; esac
+        [[ -e "$f" ]] || continue
+        o="$BUILD/draw-$(basename "$(dirname "$f")")-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$ROOT/libmemdraw" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+
+    for f in "$ROOT"/libmath/fdlibm/*.c "$ROOT"/libmath/dtoa.c "$ROOT"/libmath/fdim.c \
+             "$ROOT"/libmath/g_fmt.c "$ROOT"/libmath/gfltconv.c "$ROOT"/libmath/blas.c \
+             "$ROOT"/libmath/gemm.c "$ROOT"/libmath/FPcontrol-Inferno.c; do
+        [[ -e "$f" ]] || continue
+        o="$BUILD/libmath-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$ROOT/libmath/fdlibm" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+
+    for f in "$ROOT"/libtk/*.c; do
+        o="$BUILD/libtk-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$ROOT/libmemdraw" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+
+    # the Dis VM, with EXACTLY one code generator: this architecture's
+    for f in "$ROOT"/libinterp/*.c; do
+        case "$(basename "$f")" in
+        comp-riscv64.c) ;;
+        comp-*.c) continue;;
+        das-*.c) continue;;
+        gpu.c|crypt.c) continue;;
+        esac
+        o="$BUILD/libinterp-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+    o="$BUILD/libinterp-das-riscv64.c.o"
+    "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$ROOT/libinterp/das-riscv64.c" -o "$o" 2>>"$BUILD/cc.log" || return 1
+    libobjs+=("$o")
+
+    for f in "$ROOT"/libmp/*.c "$ROOT"/libsec/*.c "$ROOT"/libkeyring/*.c; do
+        case "$(basename "$f")" in
+        bigtest.c|crttest.c|mtest.c|test.c|egtest.c|hmactest.c|md4test.c|p384ecdhtest.c|rsatest.c|primetest.c) continue;;
+        decodepem.c|prng.c) continue;;
+        esac
+        o="$BUILD/crypto-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -I"$ROOT/libmp" -I"$ROOT/libsec" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+
+    for f in "$ROOT"/libkernfp/*.c; do
+        o="$BUILD/libkernfp-$(basename "$f").o"
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+
+    for f in "$ROOT"/libkern/*.c; do
+        o="$BUILD/libkern-$(basename "$f").o"
+        "$CC" "${CFLAGS[@]}" -I"$BUILD" "${PORTWERR[@]}" -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        libobjs+=("$o")
+    done
+    rm -f "$BUILD/libkern.a"
+    "$AR" rcs "$BUILD/libkern.a" "${libobjs[@]}" 2>>"$BUILD/cc.log" || return 1
+
+    local kelf="${outimg%.img}.elf"
+    "$LLD" -T "$SRC/kernel.ld" "${objs[@]}" "$BUILD/libkern.a" -o "$kelf" 2>>"$BUILD/cc.log" || return 1
+    "$OBJCOPY" -O binary "$kelf" "$outimg" 2>>"$BUILD/cc.log" || return 1
+    return 0
+}
+
+#
+# Boot an image, type commands at its shell once it has one, and return
+# everything the machine said. The kernel never exits; it is killed at
+# the deadline.
+#
+#     session <image> <seconds> <command>...
+#
+session() {
+    local img="$1" secs="$2"
+    shift 2
+    python3 - "$QEMU" "$img" "$secs" "$QEMUARGS" "${BIOS:-default}" "$@" <<'PYEOF'
+import json, os, select, socket, subprocess, sys, time
+qemu, img, secs, extra, bios = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+cmds = sys.argv[6:]
+args = [qemu] + extra.split() + ["-bios", bios, "-kernel", img, "-display", "none", "-serial", "stdio", "-monitor", "none"]
+# SESSION_PPM: when the commands are done, dump the screen there and
+# count the console's colours in it (as tests/host/baremetal_test.sh's
+# virt check does): a line "SCREEN WxH bg N fg M" in the output
+ppm = os.environ.get("SESSION_PPM", "")
+qmp = ppm + ".qmp" if ppm else ""
+if qmp:
+    if os.path.exists(qmp):
+        os.unlink(qmp)
+    args += ["-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+out = b""
+deadline = time.time() + secs
+prompted = False
+while time.time() < deadline:
+    r, _, _ = select.select([p.stdout], [], [], 0.2)
+    if r:
+        b = os.read(p.stdout.fileno(), 65536)
+        if not b:
+            break
+        out += b
+    if not prompted and cmds and b"\n; " in out[-4096:] or (not prompted and cmds and out.endswith(b"; ")):
+        prompted = True
+        for c in cmds:
+            time.sleep(0.5)
+            p.stdin.write((c + "\n").encode())
+            p.stdin.flush()
+            t = time.time() + 180
+            mark = len(out)
+            while time.time() < t:
+                r, _, _ = select.select([p.stdout], [], [], 0.2)
+                if r:
+                    b = os.read(p.stdout.fileno(), 65536)
+                    if not b:
+                        break
+                    out += b
+                if out[mark:].rstrip().endswith(b";"):
+                    break
+        deadline = min(deadline, time.time() + 3)
+if qmp:
+    try:
+        q = socket.socket(socket.AF_UNIX); q.connect(qmp)
+        f = q.makefile("rw")
+        f.readline()
+        f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+        # the text console's colours (../fb/fbcons.c), and the logo's
+        # orange, which is what wm/logon draws once the console has
+        # been handed to the draw device. Dumped until the logo is there
+        # or a minute has gone: on a loaded machine the logon draws
+        # well after the shell has answered.
+        BG = (0x10, 0x10, 0x18); FG = (0xC8, 0xC8, 0xC8); LOGO = (0xFF, 0x66, 0x33)
+        end = time.time() + 60
+        while True:
+            if os.path.exists(ppm):
+                os.unlink(ppm)
+            f.write(json.dumps({"execute": "screendump", "arguments": {"filename": ppm}}) + "\n"); f.flush()
+            f.readline(); time.sleep(1)
+            d = open(ppm, "rb").read()
+            parts = d.split(b"\n", 3)
+            w, h = map(int, parts[1].split()); px = parts[3]
+            nbg = nfg = nlogo = 0
+            for y in range(h):
+                for x in range(0, w, 2):
+                    o = (y*w + x)*3
+                    c = tuple(px[o:o+3])
+                    if c == BG: nbg += 1
+                    elif c == FG: nfg += 1
+                    elif c == LOGO: nlogo += 1
+            if nlogo >= 500 or time.time() > end:
+                break
+            time.sleep(3)
+        out += b"\nSCREEN %dx%d bg %d fg %d logo %d\n" % (w, h, nbg, nfg, nlogo)
+        q.close()
+    except Exception as e:
+        out += b"\nSCREEN none (%s)\n" % str(e).encode()
+p.kill()
+p.wait()
+sys.stdout.write(out.replace(b"\0", b"").decode(errors="replace"))
+PYEOF
+}
+
+#
+# A card with the userspace on it, as a board's card is: tools/mkcard.py
+# writes dis/, lib/, fonts/ and a writable usr/ into a FAT32 partition,
+# and rootpath "local" tells osinit to grow /dis and /lib from it. 256MB,
+# a power of two, because QEMU's SD model will not present anything else.
+#
+make_card() {
+    printf 'local\n' > "$BUILD/rootpath"
+    python3 "$ROOT/tools/mkcard.py" "$1" 256 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+        /fonts="$ROOT/fonts" /usr= /rootpath="$BUILD/rootpath" > "$BUILD/mkcard.txt" 2>&1
+}
+
+want_platform() {
+    case " ${BAREMETAL_RV_PLATFORMS:-riscvvirt mpfs} " in *" $1 "*) return 0;; esac
+    return 1
+}
+
+#
+# QEMU's RISC-V virt: OpenSBI, four harts, a gigabyte, and the virtio
+# devices the shared drivers (os/virtio) drive. virtio-*-device is the
+# MMIO transport; the -pci names land on a bus this kernel does not walk.
+#
+RVVIRTARGS="-M virt -smp 4 -m 1024 -device virtio-rng-device"
+
+run_riscvvirt() {
+    PLAT=riscvvirt
+    SRC="$ROOT/os/$PLAT"
+    QEMUARGS="$RVVIRTARGS"
+    BIOS=default
+    PORTSKIP="devaudio.c ethermii.c pci.c usbxhci.c usbxhcipci.c devusb.c usbdwc.c"
+    SHARED="$ROOT/os/virtio"
+    SHAREDSKIP=""
+    EXTRASRC=""
+    platform_flags
+
+    echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
+
+    if build_kernel "$BUILD/$PLAT-kernel.img" ""; then
+        pass "riscvvirt: kernel cross-builds for riscv64 (rv64gc, lp64d)"
+    else
+        fail "riscvvirt: kernel failed to build"
+        grep -m 30 'error:\|undefined symbol' "$BUILD/cc.log"
+        return
+    fi
+    [[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+
+    if [[ -z "$QEMU" ]]; then
+        skip "qemu-system-riscv64 not installed: built, not booted"
+        return
+    fi
+
+    if make_card "$BUILD/$PLAT-card.img"; then
+        QEMUARGS="$QEMUARGS -drive file=$BUILD/$PLAT-card.img,if=none,format=raw,id=sd -device virtio-blk-device,drive=sd"
+    else
+        fail "riscvvirt: mkcard could not build a card"
+    fi
+    QEMUARGS="$QEMUARGS -netdev user,id=n0 -device virtio-net-device,netdev=n0"
+    QEMUARGS="$QEMUARGS -device ramfb -device virtio-keyboard-device -device virtio-tablet-device"
+    OUT="$(SESSION_PPM="$BUILD/$PLAT-screen.ppm" session "$BUILD/$PLAT-kernel.img" 900 'echo hello from riscv64' 'cat /dev/sysname' 'ls /dis/sh' 'ps' \
+        '/dis/jittest.dis' '/dis/tests/jit_fault_test.dis' '/dis/tests/exception_test.dis' '/dis/tests/fltfmt_test.dis')"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+    rcheck() { if grep -qF -- "$2" <<<"$OUT"; then pass "riscvvirt: $1"; else fail "riscvvirt: $1 -- no '$2' in the boot log"; fi; }
+    rrefute() { if grep -qF -- "$2" <<<"$OUT"; then fail "riscvvirt: $1 -- '$2' in the boot log"; else pass "riscvvirt: $1"; fi; }
+
+    rcheck "OpenSBI starts the kernel in S-mode" "InferNode bare-metal (QEMU riscv64 virt)"
+    rcheck "SBI reports its extensions" "firmware:        SBI v"
+    rcheck "the trap path round-trips" "trap: returned, save/restore OK"
+    rcheck "the device tree is found" "fdt:  at "
+    rcheck "the first process's namespace" "proc: first process up"
+    rcheck "/dev/cons works" "cons: /dev/cons OK"
+    rcheck "a self-IPI is taken" "intr: self-IPI taken"
+    rcheck "boot completes" "boot OK"
+    rcheck "control passes to Dis" "dis:  handing control to the Dis VM"
+    rcheck "all four harts run" "smp:  4 harts running"
+    rcheck "the shell answers" "hello from riscv64"
+    rcheck "/dev/sysname reads back" "infernode"
+    rcheck "ls lists the shell's builtins" "std.dis"
+    rcheck "the card is a virtio disk" "init: /dev/sd0: type 0x0c"
+    rcheck "userspace comes off the card" "init: /dis grown from /n/dos/dis"
+    rcheck "/usr is the card's, writable" "init: /usr from /n/dos/usr (writable)"
+    rcheck "DHCP answers over virtio-net" "etherusb: 10.0.2.15 mask"
+    rcheck "the framebuffer is configured through fw_cfg" "fb:   ramfb 1280x720x32"
+    rcheck "the keyboard and the tablet are found" "(absolute pointer)"
+    rcheck "the kernel's console moves to the screen" "fb:   console on display 0, 1280x720"
+    rcheck "and is handed to the draw device" "fb:   console released to the draw device"
+    # With a screen, boot-baremetal.sh runs wm/logon on it (a first boot:
+    # "choose a secstore password"), drawn by Limbo through devdraw and
+    # libmemdraw -- JIT-compiled -- onto the ramfb.
+    scr="$(grep -a '^SCREEN' <<<"$OUT" | tail -1)"
+    read -r _ sdim _ sbg _ sfg _ slogo <<<"$scr"
+    if [[ "$sdim" == "1280x720" && "${slogo:-0}" -ge 500 ]]; then
+        pass "riscvvirt: the graphical logon is drawn on the ramfb screen ($scr)"
+    else
+        fail "riscvvirt: screen -- '$scr'"
+    fi
+    rcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
+    rcheck "the JIT's correctness suite passes in the kernel" "=== Results: 182/182 passed ==="
+    rcheck "faults in compiled code reach the right handler" "6 passed"
+    rrefute "no test fails" "FAIL"
+    rrefute "no panic" "panic:"
+    rrefute "no unhandled exception" "unhandled exception"
+
+    #
+    # The hart lottery (l.S): a U-Boot built with CONFIG_SMP sends every
+    # hart to the kernel at once. -append lotterytest makes launchsmp do
+    # the same to the three secondaries first -- each must lose, stop
+    # itself through SBI HSM, and then come up normally.
+    #
+    local savedargs="$QEMUARGS"
+    QEMUARGS="$RVVIRTARGS -append lotterytest"
+    OUT="$(session "$BUILD/$PLAT-kernel.img" 300 'echo lottery drawn')"
+    QEMUARGS="$savedargs"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-lottery.txt"
+    local lost
+    lost=$(grep -c "entered at _start, lost, and stopped" <<<"$OUT")
+    if [[ "$lost" -eq 3 ]]; then
+        pass "riscvvirt: three harts entering at _start lose the lottery and stop"
+    else
+        fail "riscvvirt: lottery -- $lost of 3 harts lost and stopped"
+    fi
+    rrefute "no hart gets through the lottery twice" "did NOT stop"
+    rcheck "and all four run once started properly" "smp:  4 harts running"
+    rcheck "the kernel still boots to the shell" "lottery drawn"
+
+    #
+    # The kernel as a boot loader's "Linux": U-Boot in S-mode loads the
+    # image off the card and booti's it, which is the BeagleV-Fire's
+    # chain after the HSS. booti checks the Image header (l.S) and runs
+    # the image where it was loaded, so it is loaded at the address it
+    # is linked at, not at U-Boot's kernel_addr_r; U-Boot's own control
+    # tree lives in memory it has reserved, so it is moved to fdt_addr_r
+    # first, as a board's boot script loads a tree there.
+    #
+    local uboot=/usr/lib/u-boot/qemu-riscv64_smode/u-boot.bin
+    if [[ ! -f "$uboot" ]]; then
+        skip "riscvvirt: no S-mode U-Boot ($uboot) to booti the kernel with"
+        return
+    fi
+    if ! python3 "$ROOT/tools/mkcard.py" "$BUILD/$PLAT-ubootcard.img" 64 \
+            /infernode.img="$BUILD/$PLAT-kernel.img" > "$BUILD/mkcard-uboot.txt" 2>&1; then
+        fail "riscvvirt: mkcard could not build the U-Boot card"
+        return
+    fi
+    OUT="$(python3 - "$QEMU" "$uboot" "$BUILD/$PLAT-ubootcard.img" <<'PYEOF'
+import os, select, subprocess, sys, time
+qemu, uboot, card = sys.argv[1:4]
+p = subprocess.Popen([qemu, "-M", "virt", "-smp", "4", "-m", "1024", "-bios", "default",
+    "-kernel", uboot, "-drive", "file=%s,if=none,format=raw,id=sd" % card,
+    "-device", "virtio-blk-device,drive=sd", "-device", "virtio-rng-device",
+    "-display", "none", "-serial", "stdio", "-monitor", "none"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+out = b""
+def pump(t, until=None):
+    global out
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([p.stdout], [], [], 0.2)
+        if r:
+            b = os.read(p.stdout.fileno(), 65536)
+            if not b:
+                return
+            out += b
+        if until is not None and until in out:
+            return
+def send(s):
+    p.stdin.write(s.encode())
+    p.stdin.flush()
+pump(60, b"Hit any key")
+send("\n"); pump(2)
+send("virtio scan\n"); pump(3)
+send("load virtio 0:1 0x80200000 infernode.img\n"); pump(10, b"bytes read")
+send("fdt move ${fdtcontroladdr} ${fdt_addr_r} 0x10000\n"); pump(2)
+send("booti 0x80200000 - ${fdt_addr_r}\n"); pump(240, b"\n; ")
+send("echo booted by u-boot\n"); pump(10, b"booted by u-boot\r")
+p.kill()
+p.wait()
+sys.stdout.write(out.replace(b"\0", b"").decode(errors="replace"))
+PYEOF
+)"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-uboot.txt"
+    rcheck "U-Boot's booti takes it as a RISC-V Image" "Starting kernel ..."
+    rcheck "and it boots to the shell from there" "booted by u-boot"
+
+    #
+    # And with no one at the prompt: os/riscv64/boot.cmd, wrapped as
+    # boot.scr by tools/mkbootscr.py, beside infernode.img in the root
+    # of the partition. U-Boot's standard boot finds the script and the
+    # script does the above -- what a BeagleV-Fire's card or eMMC boot
+    # partition would carry.
+    #
+    if ! python3 "$ROOT/tools/mkbootscr.py" "$ROOT/os/riscv64/boot.cmd" "$BUILD/boot.scr" > "$BUILD/mkbootscr.txt" 2>&1 ||
+       ! python3 "$ROOT/tools/mkcard.py" "$BUILD/$PLAT-bootscrcard.img" 64 \
+            /infernode.img="$BUILD/$PLAT-kernel.img" /boot.scr="$BUILD/boot.scr" >> "$BUILD/mkbootscr.txt" 2>&1; then
+        fail "riscvvirt: could not build the boot.scr card"
+        return
+    fi
+    OUT="$(python3 - "$QEMU" "$uboot" "$BUILD/$PLAT-bootscrcard.img" <<'PYEOF'
+import os, select, subprocess, sys, time
+qemu, uboot, card = sys.argv[1:4]
+p = subprocess.Popen([qemu, "-M", "virt", "-smp", "4", "-m", "1024", "-bios", "default",
+    "-kernel", uboot, "-drive", "file=%s,if=none,format=raw,id=sd" % card,
+    "-device", "virtio-blk-device,drive=sd", "-device", "virtio-rng-device",
+    "-display", "none", "-serial", "stdio", "-monitor", "none"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+out = b""
+def pump(t, until):
+    global out
+    end = time.time() + t
+    while time.time() < end:
+        r, _, _ = select.select([p.stdout], [], [], 0.2)
+        if r:
+            b = os.read(p.stdout.fileno(), 65536)
+            if not b:
+                return
+            out += b
+        if until in out:
+            return
+# nothing is typed until the Inferno shell prompts
+pump(300, b"\n; ")
+p.stdin.write(b"echo booted by boot.scr\n"); p.stdin.flush()
+pump(10, b"booted by boot.scr\r")
+p.kill()
+p.wait()
+sys.stdout.write(out.replace(b"\0", b"").decode(errors="replace"))
+PYEOF
+)"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-bootscr.txt"
+    rcheck "U-Boot's standard boot finds boot.scr" "Found U-Boot script /boot.scr"
+    rcheck "which loads the kernel" "InferNode: /infernode.img from virtio 0:1"
+    rcheck "and boots it to the shell unattended" "booted by boot.scr"
+}
+
+#
+# A PolarFire SoC: the BeagleV-Fire's and the Icicle Kit's. QEMU's
+# microchip-icicle-kit models the MSS -- the E51 and four U54s, the
+# PLIC, the MMUARTs, the SD controller, the GEM MACs -- but ships no
+# device tree and no firmware but Microchip's HSS: os/mpfs/qemu-icicle.dts
+# describes the machine and the distribution's OpenSBI (a generic
+# fw_dynamic new enough to boot on it) stands in for the HSS's.
+#
+OPENSBI=""
+for f in /usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin \
+         /usr/share/opensbi/lp64/generic/firmware/fw_dynamic.bin; do
+    [[ -z "$OPENSBI" && -f "$f" ]] && OPENSBI="$f"
+done
+
+run_mpfs() {
+    PLAT=mpfs
+    SRC="$ROOT/os/$PLAT"
+    QEMUARGS="-M microchip-icicle-kit -smp 5 -m 2G -dtb $BUILD/mpfs-icicle.dtb"
+    BIOS="$OPENSBI"
+    PORTSKIP="devaudio.c ethermii.c pci.c usbxhci.c usbxhcipci.c devusb.c usbdwc.c"
+    SHARED="$ROOT/os/virtio"
+    SHAREDSKIP="virtio.c blkvirtio.c ethervirtio.c inputvirtio.c ramfb.c"
+    EXTRASRC="$ROOT/os/bcm/sdmmc.c"
+    platform_flags
+
+    echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
+
+    if build_kernel "$BUILD/$PLAT-kernel.img" ""; then
+        pass "mpfs: kernel cross-builds for riscv64 (rv64gc, lp64d)"
+    else
+        fail "mpfs: kernel failed to build"
+        grep -m 30 'error:\|undefined symbol' "$BUILD/cc.log"
+        return
+    fi
+    [[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+
+    if [[ -z "$QEMU" ]] || ! "$QEMU" -machine help 2>/dev/null | grep -q '^microchip-icicle-kit '; then
+        skip "mpfs: no qemu-system-riscv64 with microchip-icicle-kit: built, not booted"
+        return
+    fi
+    if [[ -z "$OPENSBI" ]] || ! command -v dtc >/dev/null; then
+        skip "mpfs: need OpenSBI's generic fw_dynamic.bin and dtc to boot the Icicle Kit model"
+        return
+    fi
+    dtc -I dts -O dtb -o "$BUILD/mpfs-icicle.dtb" "$SRC/qemu-icicle.dts" 2>>"$BUILD/cc.log" || {
+        fail "mpfs: qemu-icicle.dts does not compile"
+        return
+    }
+
+    if make_card "$BUILD/$PLAT-card.img"; then
+        QEMUARGS="$QEMUARGS -drive if=sd,file=$BUILD/$PLAT-card.img,format=raw"
+    else
+        fail "mpfs: mkcard could not build a card"
+    fi
+    QEMUARGS="$QEMUARGS -nic user"
+    OUT="$(session "$BUILD/$PLAT-kernel.img" 900 'echo hello from polarfire' 'cat /dev/sysname' 'ps' 'ls /n/dos' \
+        '/dis/jittest.dis' '/dis/tests/jit_fault_test.dis')"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+
+    mcheck() { if grep -qF -- "$2" <<<"$OUT"; then pass "mpfs: $1"; else fail "mpfs: $1 -- no '$2' in the boot log"; fi; }
+    mrefute() { if grep -qF -- "$2" <<<"$OUT"; then fail "mpfs: $1 -- '$2' in the boot log"; else pass "mpfs: $1"; fi; }
+
+    mcheck "OpenSBI starts the kernel on a U54" "InferNode bare-metal (Microchip PolarFire SoC)"
+    mcheck "the board is named by its device tree" "board: Microchip PolarFire-SoC Icicle Kit (QEMU)"
+    mcheck "the MMUART is the console" "console:         16550 at 0x20000000"
+    mrefute "no hart is the E51 (hart 0)" "(hart 0)"
+    mcheck "the 1 MHz timebase comes from the tree" "time: 1000000 Hz timebase"
+    # QEMU's system controller fails every service with status 1: the
+    # nonce driver must see the refusal and say there is no entropy
+    mcheck "the TRNG driver sees the system controller refuse" "rng:  the system controller refused the nonce service (status 1): NO ENTROPY SOURCE"
+    mcheck "/reserved-memory is kept from the allocator" "conf: reserved 0x0000000088000000 size 0x0000000002000000"
+    mcheck "the bank is split around it" "runs between"
+    mcheck "the trap path round-trips" "trap: returned, save/restore OK"
+    mcheck "the U54s' S-mode PLIC contexts take interrupts" "intr: self-IPI taken"
+    mcheck "boot completes" "boot OK"
+    mcheck "all four U54 harts run, and the E51 is left alone" "smp:  4 harts running"
+    mcheck "the shell answers" "hello from polarfire"
+    mcheck "the Cadence SD4HC finds the card" "sd: sd4hc: card ready"
+    mcheck "its FAT32 partition is found" "init: /dev/sd0: type 0x0c"
+    mcheck "userspace comes off the card" "init: /dis grown from /n/dos/dis"
+    mcheck "/usr is the card's, writable" "init: /usr from /n/dos/usr (writable)"
+    mcheck "the GEM is ether0" "ether: gem0"
+    mcheck "the GEM's PHY answers on the MDIO" "at MDIO address"
+    mcheck "the link comes up at what the PHY negotiated" "gem: link up, 1000 Mbps full duplex"
+    mcheck "DHCP answers over the GEM" "etherusb: 10.0.2.15 mask"
+    mcheck "a default route is installed" "etherusb: default route via 10.0.2.2"
+    mcheck "the JIT's correctness suite passes" "=== Results: 182/182 passed ==="
+    mcheck "faults in compiled code reach the right handler" "6 passed"
+    mrefute "no test fails" "FAIL"
+    mrefute "no panic" "panic:"
+    mrefute "no unhandled exception" "unhandled exception"
+
+    #
+    # A board whose firmware console is not MMUART0: the tree's
+    # /chosen/stdout-path names serial1, and "-serial null" before the
+    # session's "-serial stdio" puts stdio on MMUART1. OpenSBI and the
+    # kernel's first lines go to the other port; once boardprobe has
+    # read the tree, the console -- and the shell, interrupt-driven on
+    # MMUART1's own IRQ -- must be here.
+    #
+    sed 's/stdout-path = "serial0:115200n8"/stdout-path = "serial1:115200n8"/' "$SRC/qemu-icicle.dts" |
+        dtc -I dts -O dtb -o "$BUILD/mpfs-icicle-uart1.dtb" - 2>>"$BUILD/cc.log"
+    local savedargs="$QEMUARGS"
+    QEMUARGS="-M microchip-icicle-kit -smp 5 -m 2G -dtb $BUILD/mpfs-icicle-uart1.dtb -serial null"
+    OUT="$(session "$BUILD/$PLAT-kernel.img" 300 'echo typed on mmuart1')"
+    QEMUARGS="$savedargs"
+    printf '%s\n' "$OUT" > "$BUILD/$PLAT-uart1.txt"
+    mcheck "stdout-path moves the console to MMUART1" "console: MMUART1, as the firmware had it"
+    mcheck "the kernel's output follows it" "boot OK"
+    # the command's output, not the echo of the command typed
+    if grep -v "echo typed on mmuart1" <<<"$OUT" | grep -q "typed on mmuart1"; then
+        pass "mpfs: and the shell answers there, on MMUART1's interrupt"
+    else
+        fail "mpfs: no shell answer on MMUART1"
+    fi
+
+    #
+    # The eMMC: the same card image, grown to 4GB so the device runs in
+    # sector mode and its size must come from EXT_CSD, on the SD4HC as an
+    # eMMC rather than an SD card. QEMU cannot put one there unless it
+    # carries tests/host/qemu/sd-emmc-user-creatable.patch, so this runs
+    # only on a QEMU built with the harness's patches
+    # (BAREMETAL_QEMU_PATCHED=1), and is not counted otherwise.
+    #
+    if [[ -n "${BAREMETAL_QEMU_PATCHED:-}" ]]; then
+        if ! "$QEMU" -device help 2>/dev/null | grep -q '"emmc"'; then
+            fail "mpfs: BAREMETAL_QEMU_PATCHED is set, but this QEMU has no -device emmc"
+            return
+        fi
+        cp "$BUILD/$PLAT-card.img" "$BUILD/$PLAT-emmc.img"
+        truncate -s 4G "$BUILD/$PLAT-emmc.img"
+        savedargs="$QEMUARGS"
+        QEMUARGS="-M microchip-icicle-kit -smp 5 -m 2G -dtb $BUILD/mpfs-icicle.dtb -nic user"
+        QEMUARGS="$QEMUARGS -drive if=none,id=e,file=$BUILD/$PLAT-emmc.img,format=raw -device emmc,drive=e"
+        OUT="$(session "$BUILD/$PLAT-kernel.img" 600 'echo emmc-write > /n/dos/usr/emmctest' 'cat /n/dos/usr/emmctest')"
+        QEMUARGS="$savedargs"
+        printf '%s\n' "$OUT" > "$BUILD/$PLAT-emmc.txt"
+        mcheck "an eMMC is found by the MMC path, in sector mode, sized from EXT_CSD" "sd: sd4hc: eMMC ready, high capacity (block addressed), 4096 MB"
+        mrefute "the eMMC takes the 4-bit bus" "eMMC kept a 1-bit bus"
+        mcheck "userspace comes off the eMMC" "init: /dis grown from /n/dos/dis"
+        if grep -v "echo emmc-write" <<<"$OUT" | grep -q "emmc-write"; then
+            pass "mpfs: a file written to the eMMC reads back"
+        else
+            fail "mpfs: eMMC write did not read back"
+        fi
+    else
+        info "mpfs: eMMC not tested (needs a QEMU with tests/host/qemu/sd-emmc-user-creatable.patch; BAREMETAL_QEMU_PATCHED=1)"
+    fi
+}
+
+if want_platform riscvvirt; then
+    run_riscvvirt
+fi
+if want_platform mpfs; then
+    run_mpfs
+fi
+
+finish

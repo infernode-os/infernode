@@ -140,7 +140,7 @@ asks for a scan.
 .br
 .B /os/bcm2837/ether4330.c
 .br
-.B /os/virt/ethervirtio.c
+.B /os/virtio/ethervirtio.c
 .br
 .B /os/init/etherusb.b
 .SH SEE ALSO

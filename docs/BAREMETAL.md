@@ -13,6 +13,12 @@ It runs on three machines. Two are below; the third, the **Raspberry Pi
 never run on a board — [os/bcm2711/README.md](../os/bcm2711/README.md)
 says exactly what that does and does not establish.
 
+It also runs on 64-bit RISC-V: `os/riscv64` is the architecture, with
+QEMU's RISC-V `virt` (`os/riscvvirt`) and the PolarFire SoC of the
+BeagleV-Fire (`os/mpfs`) as its boards, built and booted by
+`tests/host/baremetal_riscv64_test.sh`. It has its own manual:
+[os/riscv64/README.md](../os/riscv64/README.md).
+
 | | Raspberry Pi 3B+ (`os/bcm2837`) | QEMU `virt` (`os/virt`) |
 |-|-|-|
 | what it is | a real board, and QEMU's `raspi3b` model of it | a machine that exists only in QEMU |

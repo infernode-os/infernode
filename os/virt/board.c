@@ -38,7 +38,7 @@
 #include "io.h"
 #include "fns.h"
 #include "board.h"
-#include "virtio.h"
+#include "../virtio/virtio.h"
 
 char*
 boardname(void)

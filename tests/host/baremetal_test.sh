@@ -638,7 +638,9 @@ SBEOF
             sharedsrc+=("$f")
         done
     fi
-    for f in "$ROOT"/os/arm64/*.S "$ROOT"/os/arm64/*.c "${sharedsrc[@]}" "$SRC"/*.S "$SRC"/*.c; do
+    # os/fb is the framebuffer console and the draw screen, which every
+    # board with a linear framebuffer shares, of either architecture.
+    for f in "$ROOT"/os/arm64/*.S "$ROOT"/os/arm64/*.c "$ROOT"/os/fb/*.c "${sharedsrc[@]}" "$SRC"/*.S "$SRC"/*.c; do
         # os/arm64 holds two drivers that are the architecture's but not
         # every board's: gic.c (GICv2) and clockgt.c (the generic timer
         # through a GIC). A board with an interrupt controller of its
@@ -1307,7 +1309,7 @@ platform_flags() {
 # selects which os/<plat> supplies mem.h, io.h and board.h to the shared
 # os/arm64 and os/port sources, and $SRC is not known until here.
 IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -DINFERNO_NATIVE
-        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include"
+        -O2 -fno-omit-frame-pointer -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/fb" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include"
         -I"$ROOT/include" -I"$ROOT/libkern" -I"$ROOT/libinterp")
 
 # The two escalations the os/port and os/ip loops below apply are applied to
@@ -1317,7 +1319,7 @@ IFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -DINFERNO_NATIVE
 # warning was in cc.log all along; this makes it the build's business.
 CFLAGS=(--target=aarch64-elf -ffreestanding -nostdlib -mgeneral-regs-only
         -O2 -fno-omit-frame-pointer -Wall -Wextra
-        -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
+        -Werror=missing-declarations -Werror=incompatible-pointer-types -Werror=implicit-function-declaration -I"$SRC" -I"$ROOT/os/arm64" -I"$ROOT/os/fb" -I"$ROOT/os/port" -I"$ROOT/os/ip" -I"$ROOT/Inferno/arm64/include" -I"$ROOT/libinterp"
         -I"$ROOT/include" -I"$ROOT/libkern")
 }
 
@@ -4283,7 +4285,7 @@ fi
 # so the JIT emits for the same part on both.
 #
 # Devices are all -device virtio-*-device: the MMIO transport, which is
-# what os/virt/virtio.c drives. The plain names (virtio-net-pci and
+# what os/virtio/virtio.c drives. The plain names (virtio-net-pci and
 # friends, and what -drive if=virtio gives) are PCI, and land on a bus
 # this kernel does not walk.
 #
@@ -4297,7 +4299,7 @@ SRC="$ROOT/os/$PLAT"
 QEMUARGS="$VIRTARGS"
 SERIALARGS="-serial stdio"
 PORTSKIP="devaudio.c ethermii.c"
-SHARED=""
+SHARED="$ROOT/os/virtio"
 SHAREDSKIP=""
 ARCHSKIP=""
 
@@ -4830,7 +4832,7 @@ vrefute "hotplug: nothing panics"                      "panic:"
 # finds its queues by three addresses instead of a page number, insists
 # on FEATURES_OK, and -- the part that bites -- makes the network
 # header twelve bytes instead of ten. Same devices, same checks, the
-# other half of os/virt/virtio.c.
+# other half of os/virtio/virtio.c.
 #
 cp "$VSD" "$BUILD/$PLAT-sd-modern.img"
 MODOUT="$( (sleep 45; printf 'cat /n/dos/HELLO.TXT\r'; sleep 2; printf 'cat /net/ether0/ifstats\r'; sleep 4) | \
@@ -4935,7 +4937,7 @@ try:
     # The software cursor. It starts at 0,0 and the desktop draws around
     # it; move the tablet to the middle of the screen and the arrow must
     # be THERE and must not still be at 0,0. The arrow is the kernel's
-    # own (os/arm64/screen.c: set mask black, clear-and-not-set white),
+    # own (os/fb/screen.c: set mask black, clear-and-not-set white),
     # so it can be looked for exactly.
     CLR = [0xFF,0xFF,0x80,0x01,0x80,0x02,0x80,0x0C,0x80,0x10,0x80,0x10,0x80,0x08,0x80,0x04,
            0x80,0x02,0x80,0x01,0x80,0x02,0x8C,0x04,0x92,0x08,0x91,0x10,0xA0,0xA0,0xC0,0x40]

@@ -56,6 +56,9 @@ TARG=\
 	html_test.dis\
 	imgload_test.dis\
 	imap_test.dis\
+	jit_fault_test.dis\
+	jit_unload_helper.dis\
+	jit_unload_test.dis\
 	jit_test.dis\
 	json_test.dis\
 	llmclient_think_gating_test.dis\

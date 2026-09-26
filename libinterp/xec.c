@@ -790,6 +790,29 @@ OP(mspawn)
 	newstack(p);
 	unframe();
 }
+/*
+ * The Modlink a compiled module returned from for the last time (OP(ret)),
+ * held until nothing can be executing its code. That is certain once
+ * the compiled code has come back to xec, and it is also certain when
+ * another return comes to OP(ret): that call is from another module's
+ * code, and the first module has no reference left that could run it.
+ * There is one R, and so one of these. Nothing else refers to it, so
+ * the collector is told of it (gc.c, rootset), or it would be swept.
+ */
+Modlink *retpending;		/* a GC root: gc.c, rootset */
+
+static void
+retrelease(void)
+{
+	Modlink *ml;
+
+	ml = retpending;
+	if(ml != nil){
+		retpending = nil;
+		destroy(ml);
+	}
+}
+
 OP(ret)
 {
 	Frame *f;
@@ -834,13 +857,30 @@ OP(ret)
 		freeptrs(f, f->t);
 
 	if(m != nil) {
+		Modlink *old;
+
 		if(R.M->compiled != m->compiled) {
 			R.IC = 1;
 			R.t = 1;
 		}
-		destroy(R.M);
+		old = R.M;
 		R.M = m;
 		R.MP = m->MP;
+		/*
+		 * A compiled module returns through this function by a call
+		 * from its own code (the JITs' ret macro punts here when the
+		 * module's Modlink is about to lose its last reference), and
+		 * that call returns into the same code. Destroying the last
+		 * reference now would unload the module and unmap its code
+		 * (freemod, freejitcode) with the return still to run in it:
+		 * a jump into unmapped memory. So the release waits until
+		 * control is back in C (xec, retrelease).
+		 */
+		if(old->compiled && D2H(old)->ref == 1){
+			retrelease();
+			retpending = old;
+		}else
+			destroy(old);
 	}
 }
 OP(iload)
@@ -1799,7 +1839,7 @@ isave(void)
 void
 irestore(Prog *p)
 {
-	if(p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
+	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
 		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->R.PC);
 	R = p->R;
 	R.IC = 1;
@@ -1848,6 +1888,7 @@ xec(Prog *p)
 {
 	int op;
 
+	retrelease();
 	R = p->R;
 	R.MP = R.M->MP;
 	R.IC = p->quanta;

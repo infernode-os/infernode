@@ -1,0 +1,38 @@
+TARGMODEL=	Posix
+TARGSHTYPE=	sh
+CPUS=		riscv64
+
+O=		o
+OS=		o
+
+# Native on a riscv64 host, CROSS empty.  To cross-compile from another
+# host, set CROSS=riscv64-linux-gnu- in the environment (build-linux-riscv64.sh
+# does), and put a host-built mk and limbo first on PATH.
+AR=		${CROSS}ar
+ARFLAGS=	ruvs
+
+AS=		${CROSS}gcc -c
+ASFLAGS=
+
+CC=		${CROSS}gcc -c
+CFLAGS=		-g\
+		-O\
+		-fno-strict-aliasing\
+		-fstack-protector-strong\
+		-D_FORTIFY_SOURCE=2\
+		-fstack-clash-protection\
+		-Wuninitialized -Wunused-variable -Wreturn-type -Wimplicit\
+		-Werror=return-type -Werror=implicit-function-declaration\
+		-I$ROOT/Linux/riscv64/include\
+		-I$ROOT/include\
+		-DLINUX_RISCV64\
+		-fcommon
+
+ANSICPP=
+LD=		${CROSS}gcc
+LDFLAGS=	-fcommon
+
+SYSLIBS=
+
+YACC=		yacc
+YFLAGS=		-d

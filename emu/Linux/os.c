@@ -33,6 +33,13 @@ enum
 	X11STACK=	256*1024
 };
 char *hosttype = "Linux";
+#if defined(__x86_64__)
+char *cputype = "amd64";
+#elif defined(__aarch64__)
+char *cputype = "arm64";
+#elif defined(__riscv) && __riscv_xlen == 64
+char *cputype = "riscv64";
+#endif
 
 typedef sem_t	Sem;
 
@@ -116,6 +123,8 @@ faultwhere(void *a)
 	pc = (void*)uc->uc_mcontext.gregs[Gregeip];
 #elif defined(__aarch64__)
 	pc = (void*)uc->uc_mcontext.pc;
+#elif defined(__riscv)
+	pc = (void*)uc->uc_mcontext.__gregs[0];	/* REG_PC */
 #else
 	USED(uc);
 	return;

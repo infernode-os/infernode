@@ -30,7 +30,18 @@ name: Bare-metal kernel
 #             fix is in that check's tolerance, in the harness, where it
 #             is visible -- not a retry wrapped round the job here.
 #
-# Neither is evidence about the board. QEMU has no caches, no DMA to go
+#   riscv64   The RISC-V kernel (os/riscv64) on its two boards, by
+#             tests/host/baremetal_riscv64_test.sh: QEMU's RISC-V virt
+#             (os/riscvvirt: SMP, virtio card and network, the JIT's
+#             tests, the graphical logon on a ramfb, U-Boot's booti) and
+#             its microchip-icicle-kit model of the PolarFire SoC
+#             (os/mpfs: the BeagleV-Fire's SoC; SD card, GEM Ethernet and
+#             its PHY, the TRNG service's refusal, /reserved-memory, the
+#             console where stdout-path says). Twice: on the distribution's
+#             QEMU, and on QEMU 9.2 built with tests/host/qemu's patches,
+#             which adds the eMMC. The distribution's OpenSBI and U-Boot.
+#
+# None is evidence about the board. QEMU has no caches, no DMA to go
 # stale, no bus that NAKs and no watchdog that counts; tests/acceptance
 # is what says a Pi works, and it needs a Pi.
 #
@@ -56,12 +67,16 @@ on:
       - 'libmemlayer/**'
       - 'include/**'
       - 'Inferno/arm64/**'
+      - 'Inferno/riscv64/**'
       - 'module/runt.m'
       - 'module/bench.m'
       - 'lib/lucifer/boot-baremetal.sh'
       - 'tests/host/baremetal_test.sh'
+      - 'tests/host/baremetal_riscv64_test.sh'
       - 'tools/mkrootfs.py'
       - 'tools/mkcard.py'
+      - 'tools/mkbootscr.py'
+      - 'tests/host/qemu/**'
       - '.github/workflows/baremetal.yml'
   push:
     branches: [ master, feat/baremetal-pi ]
@@ -69,6 +84,7 @@ on:
       - 'os/**'
       - 'libinterp/**'
       - 'tests/host/baremetal_test.sh'
+      - 'tests/host/baremetal_riscv64_test.sh'
       - '.github/workflows/baremetal.yml'
   workflow_dispatch:
 
@@ -140,7 +156,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/qemu
-        key: qemu-${{ matrix.qemu }}-aarch64-softmmu-slirp-ubuntu-24.04-v2-dwc2fix
+        key: qemu-${{ matrix.qemu }}-aarch64-softmmu-slirp-ubuntu-24.04-v3-${{ hashFiles('tests/host/qemu/*.patch') }}
 
     - name: Build QEMU ${{ matrix.qemu }}
       if: matrix.qemu && steps.qemucache.outputs.cache-hit != 'true'
@@ -156,7 +172,7 @@ jobs:
         # The DWC2 model services a channel the guest has halted; see
         # tests/host/qemu/README.md. Without this, DHCP over the emulated
         # USB adapter fails most boots (#664).
-        patch -p1 < "$GITHUB_WORKSPACE/tests/host/qemu/hcd-dwc2-halted-channel.patch"
+        for p in "$GITHUB_WORKSPACE"/tests/host/qemu/*.patch; do patch -p1 < "$p"; done
         ./configure --prefix="$RUNNER_TEMP/qemu" --target-list=aarch64-softmmu \
           --enable-slirp --disable-docs --disable-werror --disable-tools --disable-guest-agent \
           --disable-gtk --disable-sdl --disable-vnc --disable-opengl --disable-curses \
@@ -276,3 +292,170 @@ jobs:
           ${{ runner.temp }}/bm/*.ppm
           ${{ runner.temp }}/bm/*-kernel.elf
           ${{ runner.temp }}/bm/*-kernel.img
+
+  # The RISC-V kernel. Its own job rather than a row of the matrix above
+  # because everything the steps check for is different -- the QEMU, the
+  # firmware, the harness -- and the same "do not trust a zero exit"
+  # rule applies (see the top of this file).
+  riscv64:
+    name: "riscv64 on QEMU ${{ matrix.qemu || 'distro' }} (riscvvirt and mpfs: build, boot, test)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the distribution's QEMU 8.2: what a developer has
+          - qemu: ''
+            least: 65
+          # QEMU built with tests/host/qemu's patches, which is what
+          # lets the harness put an eMMC on the icicle-kit's SD bus
+          - qemu: 9.2.4
+            least: 72
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    # qemu-system-misc carries qemu-system-riscv64 (with the virt and
+    # microchip-icicle-kit machines); opensbi the fw_dynamic.bin the
+    # Icicle Kit model is booted with (it has no -bios default); u-boot-qemu
+    # the S-mode U-Boot the booti check runs; device-tree-compiler the
+    # dtc that builds os/mpfs/qemu-icicle.dts.
+    - name: Install the cross toolchain, QEMU and the firmware
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang lld llvm qemu-system-misc opensbi u-boot-qemu device-tree-compiler dosfstools python3
+
+    - name: Restore a built QEMU ${{ matrix.qemu }}
+      if: matrix.qemu
+      id: qemucache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/qemu
+        key: qemu-${{ matrix.qemu }}-riscv64-softmmu-slirp-ubuntu-24.04-v1-${{ hashFiles('tests/host/qemu/*.patch') }}
+
+    - name: Build QEMU ${{ matrix.qemu }}
+      if: matrix.qemu && steps.qemucache.outputs.cache-hit != 'true'
+      env:
+        QEMU_VERSION: ${{ matrix.qemu }}
+      run: |
+        set -e
+        sudo apt-get install -y ninja-build pkg-config libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o qemu.tar.xz "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
+        tar xf qemu.tar.xz
+        cd "qemu-${QEMU_VERSION}"
+        for p in "$GITHUB_WORKSPACE"/tests/host/qemu/*.patch; do patch -p1 < "$p"; done
+        ./configure --prefix="$RUNNER_TEMP/qemu" --target-list=riscv64-softmmu \
+          --enable-slirp --disable-docs --disable-werror --disable-tools --disable-guest-agent \
+          --disable-gtk --disable-sdl --disable-vnc --disable-opengl --disable-curses \
+          --disable-xen --disable-kvm --disable-capstone
+        make -j"$(nproc)"
+        make install
+
+    - name: Put that QEMU first
+      if: matrix.qemu
+      run: |
+        sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0
+        echo "$RUNNER_TEMP/qemu/bin" >> "$GITHUB_PATH"
+
+    - name: The tools the harness would otherwise skip for
+      run: |
+        set -e
+        for t in clang ld.lld llvm-objcopy llvm-ar qemu-system-riscv64 dtc python3; do
+          command -v "$t" >/dev/null || { echo "::error::$t is not on PATH"; exit 1; }
+        done
+        qemu-system-riscv64 --version | head -1
+        clang --print-targets | grep -q riscv64 || { echo "::error::this clang has no riscv64 target"; exit 1; }
+        qemu-system-riscv64 -machine help | grep -q '^virt ' || { echo "::error::this QEMU has no virt machine"; exit 1; }
+        qemu-system-riscv64 -machine help | grep -q '^microchip-icicle-kit ' || { echo "::error::this QEMU has no microchip-icicle-kit machine"; exit 1; }
+        test -f /usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin || { echo "::error::no OpenSBI fw_dynamic.bin"; exit 1; }
+        test -f /usr/lib/u-boot/qemu-riscv64_smode/u-boot.bin || { echo "::error::no S-mode U-Boot"; exit 1; }
+        if [ -n "${{ matrix.qemu }}" ]; then
+          qemu-system-riscv64 -device help | grep -q '"emmc"' || { echo "::error::this QEMU has no -device emmc: the patches did not apply"; exit 1; }
+        fi
+
+    - name: Build mk and limbo
+      run: |
+        set -e
+        SYSTARG=Linux OBJTYPE=amd64 ./makemk.sh
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        for d in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+          (cd "$d" && mk install)
+        done
+        test -x Linux/amd64/bin/limbo
+
+    - name: Build the Dis tree
+      run: |
+        set -e
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        for d in appl appl/mpeg appl/veltro tests; do
+          (cd "$d" && mk install) > "/tmp/dis-$(basename "$d").log" 2>&1 || {
+            grep -E '\.b:[0-9]+:' "/tmp/dis-$(basename "$d").log" | grep -v 'warning:' | head -40
+            echo "::error::mk install failed in $d"; exit 1; }
+        done
+        test -f dis/sh.dis
+
+    - name: Build the kernels, boot them, and run the checks
+      env:
+        # a QEMU built above carries tests/host/qemu/*.patch; the harness
+        # then makes the checks that need them (the eMMC)
+        BAREMETAL_QEMU_PATCHED: ${{ matrix.qemu && '1' || '' }}
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        mkdir -p "$RUNNER_TEMP/bm"
+        set +e
+        BAREMETAL_BUILD_DIR="$RUNNER_TEMP/bm" \
+          ./tests/host/baremetal_riscv64_test.sh 2>&1 | tee "$RUNNER_TEMP/bm/harness.log"
+        echo "HARNESS_STATUS=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+        exit 0
+
+    - name: Assert that the checks ran
+      env:
+        LEAST: ${{ matrix.least }}
+        PATCHED: ${{ matrix.qemu }}
+      run: |
+        set -e
+        log="$RUNNER_TEMP/bm/harness.log"
+        sed -e 's/\x1b\[[0-9;]*m//g' "$log" > "$log.plain"
+        summary="$(grep -E '^Passed: [0-9]+ +Failed: [0-9]+ +Skipped: [0-9]+' "$log.plain" | tail -1)"
+        [ -n "$summary" ] || { echo "::error::the harness printed no summary"; exit 1; }
+        echo "$summary"
+        passed=$(echo "$summary" | sed -E 's/^Passed: ([0-9]+).*/\1/')
+        failed=$(echo "$summary" | sed -E 's/.*Failed: ([0-9]+).*/\1/')
+        skipped=$(echo "$summary" | sed -E 's/.*Skipped: ([0-9]+).*/\1/')
+        grep -E '^(FAIL|SKIP)' "$log.plain" || true
+        [ "$HARNESS_STATUS" = "0" ] || { echo "::error::the harness exited $HARNESS_STATUS"; exit 1; }
+        [ "$failed" = "0" ]   || { echo "::error::$failed checks failed"; exit 1; }
+        [ "$skipped" = "0" ]  || { echo "::error::$skipped checks were skipped; on this runner nothing should be"; exit 1; }
+        [ "$passed" -ge "$LEAST" ] || { echo "::error::only $passed checks passed; at least $LEAST expected"; exit 1; }
+        for last in 'PASS: riscvvirt: and it boots to the shell from there' \
+                    'PASS: riscvvirt: the graphical logon is drawn on the ramfb screen' \
+                    'PASS: mpfs: DHCP answers over the GEM' \
+                    'PASS: mpfs: stdout-path moves the console to MMUART1' \
+                    'PASS: riscvvirt: three harts entering at _start lose the lottery and stop'; do
+          grep -qF -- "$last" "$log.plain" || { echo "::error::the run never reached: $last"; exit 1; }
+        done
+        if [ -n "$PATCHED" ]; then
+          grep -qF -- 'PASS: mpfs: a file written to the eMMC reads back' "$log.plain" \
+            || { echo "::error::the eMMC checks did not run on the patched QEMU"; exit 1; }
+        fi
+
+    - name: Keep the logs and the kernels
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: baremetal-riscv64-${{ matrix.qemu || 'distro' }}
+        retention-days: 14
+        if-no-files-found: warn
+        path: |
+          ${{ runner.temp }}/bm/harness.log
+          ${{ runner.temp }}/bm/cc.log
+          ${{ runner.temp }}/bm/*.txt
+          ${{ runner.temp }}/bm/*-kernel.elf
+          ${{ runner.temp }}/bm/*-kernel.img
+          ${{ runner.temp }}/bm/*.ppm

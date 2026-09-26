@@ -304,7 +304,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	#
 	# -k: the kernel already has the link. A machine whose Ethernet is
 	# a driver in the kernel (QEMU's virt, with a virtio card; see
-	# os/virt/ethervirtio.c) has no USB device to bring up and nothing
+	# os/virtio/ethervirtio.c) has no USB device to bring up and nothing
 	# to hand over -- #l's ether0 is live from boot. What is left is
 	# the half of this program that was never about USB: put the
 	# interface at /net/ether0 and configure it.

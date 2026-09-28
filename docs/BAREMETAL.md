@@ -352,7 +352,7 @@ bench machine depending on what these say. All are optional.
 | `wifi` | `essid <name>` and `password <phrase>`, one per line; the value is the rest of the line | Join at boot, before anyone logs in. **The card is FAT: no permissions, and this is a passphrase in clear text.** Absent = the radio is left alone. |
 | `bt` | one `/net/bt` ctl line per line (`#` comments). Typically `firmware /n/dos/firmware/BCM4345C0.hcd`, `up`, `name …`, `pairable on`, `discoverable on` | Bluetooth, via `bt9p` on `/dev/eia0`. `firmware` must precede `up`. Absent = no Bluetooth. See [BLUETOOTH.md](BLUETOOTH.md). |
 | `btkeys` | factotum key syntax | Where `bt9p` keeps link keys so pairings survive a reboot. |
-| `netconsole` | empty, or a token on the first line | A shell on **TCP 17010**, section 7. Absent = off. |
+| `netconsole` | first line: empty, or a token; a later line `interface ether0` (recommended) | A shell on **TCP 17010**, section 7. With `interface`, only connections arriving at that interface's addresses are served; without it, every interface, Wi-Fi included. Absent = off. |
 | `cpulisten` | empty, or an address (`tcp!*!17030`) on the first line | The remote-desktop listener: `cpu(1)` from another InferNode runs programs here that draw on its screen, authenticated by certificate and encrypted (AES-256). Needs this machine's certificate in `usr/inferno/keyring/default`, or it refuses to start. Runs in the desktop's narrowed namespace, headless or not. Empty = `tcp!*!rstyx` (6668). Absent = off. See [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md). |
 | `firmware/` | | Radio firmware, as above. |
 | `infernode8.img`, `tryboot.img`, `tryboot.cmd` | | The kernel, a candidate, and the word `tryboot` — section 4. |
@@ -418,6 +418,25 @@ answer before giving it anything. The token crosses the network in the
 clear; it stops a port scan and a curious neighbour, nothing more. Each
 connection gets its own forked namespace and a plain `sh` (no profile,
 so `load std` yourself); a mount made in a session dies with it.
+
+**Keep it to the wire.** The console is a full-power shell behind a
+cleartext token, so anyone who can see the traffic can take the
+machine. The recommended file is
+
+```
+yourtoken
+interface ether0
+```
+
+With the `interface` line, the console serves only connections that
+arrive at `ether0`'s own addresses (the wired port; whatever DHCP gave
+it, checked per connection). A connection that reaches port 17010
+through the Wi-Fi is closed before it is asked for the token, and the
+refusal is logged on the serial console. Without the line the console
+answers on every interface, and the boot log says so and suggests the
+line. Put the machine's wired side on a network you trust, and use the
+radio for things that carry their own authentication and encryption —
+the remote desktop ([REMOTE-DESKTOP.md](REMOTE-DESKTOP.md)), for one.
 
 **A remote desktop**: with a `cpulisten` file and a certificate on the
 card, another InferNode runs `cpu` to get this machine's desktop in a

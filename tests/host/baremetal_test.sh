@@ -477,6 +477,8 @@ build_kernel() {
             "/dis/ns.dis=$ROOT/dis/ns.dis"
             "/dis/bind.dis=$ROOT/dis/bind.dis"
             "/dis/mount.dis=$ROOT/dis/mount.dis"
+            # a TCP client for the network-console interface check
+            "/dis/dial.dis=$ROOT/dis/dial.dis"
 
             # An authenticated 9P connection, both ends on this kernel:
             # listen serves export / after Keyring->auth, mount takes it
@@ -3404,6 +3406,76 @@ if grep -q '^boot: /n/dos/cpulisten is set but /usr/.*/keyring/default is missin
     pass "cpu listener: with cpulisten but no certificate it refuses to start, and says why"
 else
     fail "cpu listener: without a certificate it did not refuse -- $(grep -a 'boot: cpu\|cpulisten' <<<"$CLNOKEY" | head -1)"
+fi
+
+#
+#     The network console, and keeping it to one interface.
+#
+#     osinit starts it when the card has /n/dos/netconsole: the first
+#     line a token, and a later line "interface ether0" restricting it
+#     to connections that arrive at that interface's own addresses --
+#     the documented posture is wired only, because the token crosses
+#     the network in clear (docs/BAREMETAL.md, section 7). The file is
+#     read at boot, so this is three boots on one card image:
+#
+#       1  the file is created, token only, through the running system
+#       2  token only: a connection over loopback is served, as every
+#          card before this change expects, and the boot line warns that
+#          the console answers on every interface
+#       3  "interface ether0" added: a connection to the guest's own
+#          Ethernet address is served, one over loopback is closed
+#          before the token is asked for, and the refusal is logged
+#
+#     "Served" is proven the only way that does not need the host: the
+#     client sends the token and one command, and the command writes a
+#     marker to /dev/cons, the kernel console the harness reads.
+#
+NCIMG="$BUILD/$PLAT-netcons.img"
+cp "$SDIMG" "$NCIMG"
+QEMUARGS="$SAVEDARGS -drive file=$NCIMG,if=sd,format=raw"
+NC1="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        "echo t0k > /n/dos/netconsole" \
+        'cat /n/dos/netconsole; echo NC1-END')"
+NC2="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'sleep 2' \
+        "dial -A tcp!127.0.0.1!17010 {echo t0k; echo 'echo NETCONS-LO-SERVED > /dev/cons'; sleep 3}" \
+        'sleep 4' \
+        "echo 'interface ether0' >> /n/dos/netconsole" \
+        'echo NC2-END')"
+NC3="$(shell_session "$BUILD/$PLAT-kernel.img" \
+        'path=(/dis .)' \
+        'sleep 12' \
+        "dial -A tcp!10.0.2.15!17010 {echo t0k; echo 'echo NETCONS-ETHER0-SERVED > /dev/cons'; sleep 3}" \
+        'sleep 4' \
+        "dial -A tcp!127.0.0.1!17010 {echo t0k; echo 'echo NETCONS-LO3-SERVED > /dev/cons'; sleep 3}" \
+        'sleep 4' \
+        'rm -f /n/dos/netconsole' \
+        'echo NC3-END')"
+NC2="$(tr -d '\r' <<<"$NC2")"; NC3="$(tr -d '\r' <<<"$NC3")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- network console, boot 2 ---"; echo "$NC2"; echo "  --- boot 3 ---"; echo "$NC3"; }
+if grep -q 'init: network console on tcp!\*!17010 (every interface), token required' <<<"$NC2" \
+   && grep -q '^NETCONS-LO-SERVED$' <<<"$NC2" \
+   && grep -q 'add "interface ether0"' <<<"$NC2"; then
+    pass "network console: a token-only card file still serves every interface, and the boot line says so"
+else
+    fail "network console: token-only file -- $(grep -a -E 'network console|NETCONS' <<<"$NC2" | head -2 | tr '\n' ' ')"
+fi
+if grep -q 'init: network console on tcp!\*!17010 (/net/ether0 only), token required' <<<"$NC3" \
+   && grep -q 'init: network console: refused 127.0.0.1!' <<<"$NC3" \
+   && ! grep -q '^NETCONS-LO3-SERVED$' <<<"$NC3"; then
+    pass "network console: with \"interface ether0\" a connection over loopback is refused before the token"
+else
+    fail "network console: loopback was not refused -- $(grep -a -E 'network console|NETCONS-LO3' <<<"$NC3" | head -3 | tr '\n' ' ')"
+fi
+if grep -q 'etherusb: 10.0.2.15 mask' <<<"$NC3"; then
+    if grep -q '^NETCONS-ETHER0-SERVED$' <<<"$NC3"; then
+        pass "network console: with \"interface ether0\" a connection to ether0's address is served"
+    else
+        fail "network console: a connection to ether0's own address was not served -- $(grep -a -E 'network console|NETCONS-ETHER0' <<<"$NC3" | head -2 | tr '\n' ' ')"
+    fi
+else
+    skip "network console: ether0 got no address under this QEMU (unpatched usb-net; BAREMETAL_QEMU_PATCHED)"
 fi
 
 #

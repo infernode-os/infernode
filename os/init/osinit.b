@@ -1269,6 +1269,19 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 # substitute for the authentication this wants once libsec is in the
 # kernel.
 #
+#
+# ONE INTERFACE, if the file says so. A later line "interface ether0"
+# (any name under /net) makes the console answer only connections that
+# arrive at that interface's own addresses: the port is still announced
+# on every interface, but a connection whose local address belongs to
+# another one -- the guest Wi-Fi, say -- is closed before the token is
+# asked for. It is checked per connection against the interface's
+# addresses at that moment, so it works whenever DHCP gets round to
+# giving one, and the card never has to carry an IP. The documented
+# posture is a wired-only console (docs/BAREMETAL.md, section 7): a
+# cleartext token on a shared radio network is a token for anyone who
+# is listening.
+#
 Netconsport: con "tcp!*!17010";
 Netconsfile: con "/n/dos/netconsole";
 
@@ -1280,22 +1293,70 @@ Netconsfile: con "/n/dos/netconsole";
 # with no check on it, which is their call to make and is announced
 # loudly rather than quietly honoured.
 #
-netconstoken(): (string, int)
+netconstoken(): (string, int, string)
 {
-	fd := sys->open(Netconsfile, Sys->OREAD);
+	(f, ok) := slurp(Netconsfile);
+	if(!ok)
+		return ("", 0, "");
+	# the token is the first line, exactly as before (empty is no token);
+	# later lines may say "interface <name>"
+	tok := f;
+	rest := "";
+	for(i := 0; i < len f; i++)
+		if(f[i] == '\n' || f[i] == '\r'){
+			tok = f[0:i];
+			rest = f[i:];
+			break;
+		}
+	iface := "";
+	(nil, lines) := sys->tokenize(rest, "\r\n");
+	for(; lines != nil; lines = tl lines){
+		(nw, w) := sys->tokenize(hd lines, " \t");
+		if(nw == 2 && hd w == "interface")
+			iface = hd tl w;
+	}
+	return (tok, 1, iface);
+}
+
+#
+# Does a connection's local address belong to /net/<iface>? Asked of
+# the IP stack each time: the interface's addresses are whatever DHCP
+# has given it by now. /net/ipifc/N/status begins "device /net/ether0
+# ..." and each following line starts with one of its addresses.
+#
+netconsifcaddr(iface, local: string): int
+{
+	(nil, lw) := sys->tokenize(local, "!\n ");
+	if(lw == nil)
+		return 0;
+	laddr := hd lw;
+	fd := sys->open("/net/ipifc", Sys->OREAD);
 	if(fd == nil)
-		return ("", 0);
-
-	buf := array[256] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return ("", 1);
-
-	s := string buf[0:n];
-	for(i := 0; i < len s; i++)
-		if(s[i] == '\n' || s[i] == '\r')
-			return (s[0:i], 1);
-	return (s, 1);
+		return 0;
+	for(;;){
+		(nd, d) := sys->dirread(fd);
+		if(nd <= 0)
+			break;
+		for(i := 0; i < nd; i++){
+			if(d[i].name[0] < '0' || d[i].name[0] > '9')
+				continue;
+			(st, ok) := slurp("/net/ipifc/" + d[i].name + "/status");
+			if(!ok)
+				continue;
+			(nil, ls) := sys->tokenize(st, "\n");
+			if(ls == nil)
+				continue;
+			(nf, f) := sys->tokenize(hd ls, " \t");
+			if(nf < 2 || hd tl f != "/net/" + iface)
+				continue;
+			for(ls = tl ls; ls != nil; ls = tl ls){
+				(na, a) := sys->tokenize(hd ls, " \t");
+				if(na > 0 && hd a == laddr)
+					return 1;
+			}
+		}
+	}
+	return 0;
 }
 
 #
@@ -1326,7 +1387,7 @@ netconsline(fd: ref Sys->FD): string
 
 netconsole()
 {
-	(tok, enabled) := netconstoken();
+	(tok, enabled, iface) := netconstoken();
 	if(!enabled){
 		#
 		# Said once, and not as a warning: this is the default and
@@ -1343,18 +1404,32 @@ netconsole()
 		sys->print("init: no network console: %r\n");
 		return;
 	}
+	where := "every interface";
+	if(iface != "")
+		where = "/net/" + iface + " only";
 	if(tok == "")
-		sys->print("init: network console on %s, NO TOKEN SET -- "
-			+ "anything that can reach this port gets a shell\n",
-			Netconsport);
+		sys->print("init: network console on %s (%s), NO TOKEN SET -- "
+			+ "anything that can reach it gets a shell\n",
+			Netconsport, where);
 	else
-		sys->print("init: network console on %s, token required\n",
-			Netconsport);
+		sys->print("init: network console on %s (%s), token required\n",
+			Netconsport, where);
+	if(iface == "")
+		sys->print("init: network console answers on every interface; "
+			+ "add \"interface ether0\" to %s to keep it to the wire\n",
+			Netconsfile);
 	for(;;){
 		(lok, nc) := sys->listen(c);
 		if(lok < 0){
 			sys->print("init: network console listen: %r\n");
 			return;
+		}
+		if(iface != "" && !netconsifcaddr(iface, slurp(nc.dir + "/local").t0)){
+			# not this interface: closed before it is asked for anything
+			sys->print("init: network console: refused %s (not on /net/%s)\n",
+				slurp(nc.dir + "/remote").t0, iface);
+			nc.cfd = nil;
+			continue;
 		}
 		fd := sys->open(nc.dir + "/data", Sys->ORDWR);
 		if(fd == nil){

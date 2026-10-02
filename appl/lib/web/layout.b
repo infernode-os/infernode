@@ -208,7 +208,7 @@ element(b: ref B, n: int): list of ref Box
 			return splitinline(box, kids);
 	}
 	box.kids = fixkids(box, kids);
-	if(kind == Kblock && (fs := b.c.firstletter[n]) != nil)
+	if((kind == Kblock || kind == Kcell) && (fs := b.c.firstletter[n]) != nil)
 		firstletter(box, fs);
 	return box :: nil;
 }
@@ -233,8 +233,8 @@ firstletter(box: ref Box, st: ref St)
 	j := a;
 	while(j < n && bidi->punct(s[j]))
 		j++;
-	if(j >= n)
-		return;
+	if(j >= n || isspacesep(s[j]))
+		return;	# punctuation alone, or a space where the letter would be: no first letter
 	j++;
 	while(j < n && bidi->joining(s[j]) == Bidi->JT)
 		j++;
@@ -271,6 +271,12 @@ firstletter(box: ref Box, st: ref St)
 		kids[m++] = hd l;
 	kids[m:] = p.kids[i+1:];
 	p.kids = kids;
+}
+
+# a space separator (General_Category Zs) other than the ASCII space
+isspacesep(c: int): int
+{
+	return c == 16rA0 || c == 16r1680 || c >= 16r2000 && c <= 16r200A || c == 16r202F || c == 16r205F || c == 16r3000;
 }
 
 # the first text box of a block's first formatted line (its parent
@@ -2228,10 +2234,10 @@ tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list
 					per := 0.0;
 					for(k := 0; k < len rt; k++) {
 						sz := rt[k].hi;
-						if(sz.kind != Tfixed && sz.kind != Tpct)
+						if(sz.kind != Tfixed && sz.kind != Tpct && sz.kind != Tfit)
 							sz = rt[k].lo;
 						case sz.kind {
-						Tfixed => per += sz.v;
+						Tfixed or Tfit => per += sz.v;
 						Tpct => per += sz.v * real avail / 100.0;
 						* => per += repsize;
 						}
@@ -4750,8 +4756,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		if(w < summn)
 			w = summn;
 		cw = w;
-	} else if(cw < summn)
-		cw = summn;
+	} else if(cw < summn && !st.tablefixed)
+		cw = summn;	# fixed layout keeps the width it was given (§17.5.2.1)
 	b.w = cw + hextra(b);
 	# column widths
 	colw := array[n] of int;
@@ -4763,6 +4769,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		for(i = 0; i < n; i++) {
 			if(t.colw[i] > 0)
 				colw[i] = t.colw[i];
+			else if(fixw[i])
+				colw[i] = mn[i];	# a cell's width in the first row (§17.5.2.1)
 			else if(pct[i] >= 0.0)
 				colw[i] = ir(pct[i] * real avail / 100.0);
 			else
@@ -4903,8 +4911,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		gh := sy * (nr + 1);
 		for(r = 0; r < nr; r++)
 			gh += rowh[r];
-		capsh := gridtop - b.bt - b.pt;
-		extra := sh - vextra(b) - capsh - gh;
+		# the height is the table box's: captions are outside it (§17.4)
+		extra := sh - vextra(b) - gh;
 		if(extra > 0 && nr > 0) {
 			# to the rows of unspecified height, equally; failing
 			# any, to all in proportion (§17.5.3 leaves it open)
@@ -4999,14 +5007,17 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		k.x = colx[c.c] - rx;
 		k.y = rowy[c.r] - ry;
 	}
+	capsh := gridtop - b.bt - b.pt;	# the captions, above and below, outside the table box
+	gridbot := y;
 	for(cl = t.captions; cl != nil; cl = tl cl) {
 		k := hd cl;
 		if(k.st.captionbottom)
 			y = laycaption(l, k, b, cw, y);
 	}
+	capsh += y - gridbot;
 	h := y - b.bt - b.pt + vextra(b);
-	if(sh > h)
-		h = sh;
+	if(sh + capsh > h)
+		h = sh + capsh;
 	b.h = h;
 }
 

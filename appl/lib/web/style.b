@@ -1916,6 +1916,7 @@ Nshare: con 1024;
 
 Shared: adt {
 	st, before, after, marker:	ref St;
+	firstletter:	ref St;
 };
 
 # Elements whose style is computed from the same inputs -- parent style,
@@ -1946,6 +1947,7 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 				c.before[n] = x.before;
 				c.after[n] = x.after;
 				c.marker[n] = x.marker;
+				c.firstletter[n] = x.firstletter;
 				return x.st;
 			}
 	}
@@ -1986,7 +1988,7 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 		c.firstletter[n] = pseudostyle(pse, "first-letter", fparent, ctx);
 	}
 	if(key != nil)
-		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n])) :: share[slot];
+		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n], c.firstletter[n])) :: share[slot];
 	return st;
 }
 
@@ -2000,6 +2002,8 @@ sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 	for(; matched != nil; matched = tl matched)
 		k += " " + string (hd matched).order + "." + string (hd matched).sel.spec + (hd matched).sel.pseudo;
 	nd := d.nodes[n];
+	if(nd.tag == Dom->Ttd || nd.tag == Dom->Tth)
+		return nil;	# cellpadding and border come from the table
 	if(nd.attrs != nil) {
 		k += "|" + nd.name;
 		for(l := nd.attrs; l != nil; l = tl l)
@@ -2009,8 +2013,6 @@ sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 			"cellpadding" or "hspace" or "vspace" or "nowrap" or "noshade" or "cols" or "rows" =>
 				k += "|" + (hd l).t0 + "=" + (hd l).t1;
 			}
-		if(nd.tag == Dom->Ttd || nd.tag == Dom->Tth)
-			return nil;	# cellpadding comes from the table
 	}
 	return k;
 }
@@ -5318,7 +5320,11 @@ copyprop(d, s: ref St, nm: string)
 hints(d: ref Doc, n: int): list of ref Decl
 {
 	nd := d.nodes[n];
-	if(nd.ns != Dom->HTML || nd.attrs == nil)
+	if(nd.ns != Dom->HTML)
+		return nil;
+	# a cell's hints come from its table's attributes (cellpadding,
+	# border) whether or not it has any of its own
+	if(nd.attrs == nil && nd.tag != Dom->Ttd && nd.tag != Dom->Tth)
 		return nil;
 	s := "";
 	case nd.tag {

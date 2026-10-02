@@ -119,6 +119,7 @@ input:is([type=reset i], [type=button i], [type=submit i]), button { text-align:
 input, button { display: inline-block; }
 input, textarea, select, button { margin: 0; color: FieldText; background-color: Field; border: 2px inset ButtonBorder; padding: 1px 2px; }
 input:is([type=reset i], [type=button i], [type=submit i]), button { border: 2px outset ButtonBorder; background-color: ButtonFace; color: ButtonText; padding: 1px 6px; }
+input:is([type=checkbox i], [type=radio i]) { margin: 3px 3px 3px 4px; padding: 0; border: 0; box-sizing: border-box; background-color: transparent; }
 textarea { white-space: pre-wrap; display: inline-block; }
 select { display: inline-block; }
 fieldset { margin-inline: 2px; border: groove 2px ThreeDFace; padding-block: 0.35em 0.625em; padding-inline: 0.75em; min-inline-size: min-content; }

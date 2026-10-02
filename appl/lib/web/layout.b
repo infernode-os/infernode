@@ -655,6 +655,13 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		r.ih = 150;
 		if(nd.tag == Dom->Tvideo && (p := b.d.attr(n, "poster")) != nil)
 			r.url = style->resolveurl(b.d.url, p);
+		if(nd.tag == Dom->Tiframe) {
+			# the document shown, fetched and rendered by page
+			if((src := b.d.attr(n, "src")) != nil)
+				r.url = style->resolveurl(b.d.url, src);
+			else if(b.d.hasattr(n, "srcdoc"))
+				r.url = "about:srcdoc";
+		}
 		return r;
 	Dom->Tinput =>
 		t := lower(b.d.attr(n, "type"));
@@ -3247,7 +3254,12 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		c := hd cl2;
 		k := c.box;
 		h := rowy[c.r + c.rs - 1] + rowh[c.r + c.rs - 1] - rowy[c.r];
-		contenth := contentheight(k);	# not k.h: a specified height may be less than the content
+		# the content's height: the cell's own when that came from its
+		# content (child margins that collapsed through it included),
+		# else measured, as a specified height may be less than the content
+		contenth := k.h;
+		if(k.st.height.kind != Style->Lauto)
+			contenth = contentheight(k);
 		# the row's height is definite for the cell's content when the
 		# table's or the row's own height is (browsers resolve a
 		# percentage inside an auto-height table's cell to auto)
@@ -3667,10 +3679,20 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		ih = b.img.r.dy();
 	}
 	if(b.text != nil && b.iw == 0 && b.img == nil && b.node != 0) {
-		# a form control or an image's alt text: size to the text
+		# a form control or an image's alt text: size to the text; a
+		# text field to its size attribute (20 characters by default),
+		# as browsers do, whatever it holds
 		f := face(b.st);
 		iw = ir(f.width(b.text)) + 2;
 		ih = ir(lineheight(b.st, f));
+		if(curdoc != nil && curdoc.nodes[b.node].tag == Dom->Tinput && textfield(curdoc, b.node)) {
+			size := 20;
+			if((sz := curdoc.attr(b.node, "size")) != nil && int sz > 0)
+				size = int sz;
+			sw := ir(real size * f.width("0")) + 2;
+			if(sw > iw)
+				iw = sw;
+		}
 	}
 	st := b.st;
 	w := -1;
@@ -3835,6 +3857,16 @@ trimsp(s: string): string
 	return s[i:j];
 }
 
+# an <input> that takes typed text
+textfield(d: ref Doc, n: int): int
+{
+	case lower(d.attr(n, "type")) {
+	"" or "text" or "search" or "email" or "url" or "tel" or "password" or "number" =>
+		return 1;
+	}
+	return 0;
+}
+
 # the ratio a replaced box keeps: aspect-ratio, else its content's
 aspect(b: ref Box, iw, ih: int): real
 {
@@ -3881,6 +3913,28 @@ intrinsic(b: ref Box): (int, int)
 	if(b.igen == laygen && b.iex == ex)
 		return (b.imn, b.imx);
 	(mn, mx) := intrinsic1(b);
+	# the box's own min-width and max-width bound what it contributes
+	# (CSS Sizing 3 §5.2): a submit button with min-width: 40px takes 40
+	st := b.st;
+	mg := nz(b.ml) + nz(b.mr);
+	if(st.minwidth.kind == Style->Lpx && st.minwidth.pct == 0.0) {
+		w := ir(st.minwidth.px) + mg;
+		if(!st.borderbox)
+			w += hextra(b);
+		if(mn < w)
+			mn = w;
+		if(mx < w)
+			mx = w;
+	}
+	if(st.maxwidth.kind == Style->Lpx && st.maxwidth.pct == 0.0) {
+		w := ir(st.maxwidth.px) + mg;
+		if(!st.borderbox)
+			w += hextra(b);
+		if(mx > w)
+			mx = w;
+		if(mn > w)
+			mn = w;
+	}
 	b.imn = mn;
 	b.imx = mx;
 	b.iex = ex;
@@ -4542,7 +4596,10 @@ lineheight(st: ref St, f: ref Typeface): real
 # align vertically (baselines, line-height) and horizontally.
 finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 {
-	# trailing collapsible white space hangs
+	# trailing collapsible white space hangs; so does preserved
+	# white space at the end of a line (white-space: pre-wrap), which
+	# keeps its width but takes no part in alignment (Text 3 §4.1.3)
+	hanging: list of ref Frag;
 	for(fl := ln.frags; fl != nil; fl = tl fl) {
 		f := hd fl;
 		if(f.kind == Fspan)
@@ -4551,6 +4608,11 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			ln.x -= real f.w;
 			f.w = 0;
 			ln.spaces--;
+			continue;
+		}
+		if(f.kind == Ftext && isblankrun(f.text) && f.box.st.whitespace == Style->Wprewrap && !forced) {
+			ln.x -= real f.w;
+			hanging = f :: hanging;
 			continue;
 		}
 		break;
@@ -4647,14 +4709,14 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			for(i = 0; i < len frags; i++) {
 				f := frags[i];
 				f.x += ir(acc);
-				if(f.kind == Ftext && f.text == " ") {
+				if(f.kind == Ftext && f.text == " " && f.w > 0) {	# not a hanging trailing space
 					acc += per;
 					f.w += ir(per);
 				}
 			}
 		}
 	}
-	if(b.st.dirrtl && align == Style->Astart)
+	if(ln.para % 2 == 1 && align == Style->Astart)
 		off = extra;
 	if(off < 0.0)
 		off = 0.0;
@@ -4662,7 +4724,43 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		f := frags[i];
 		f.x += x0 + ir(off);
 	}
+	relativeinlines(frags, ln.avail);
+	hw := 0;
+	for(hl := hanging; hl != nil; hl = tl hl) {	# set aside while the rest is ordered
+		hw += (hd hl).w;
+		(hd hl).w = 0;
+	}
 	reorderline(frags, ln.para);
+	if(hanging != nil) {
+		# then past the line's end: the right in a left-to-right paragraph,
+		# the left in a right-to-left one
+		lo := 1 << 30;
+		hi := -(1 << 30);
+		for(i = 0; i < len frags; i++) {
+			f := frags[i];
+			if(f.kind == Fspan || ishanging(f, hanging))
+				continue;
+			if(f.x < lo)
+				lo = f.x;
+			if(f.x + f.w > hi)
+				hi = f.x + f.w;
+		}
+		if(hi < lo) {
+			lo = x0 + ir(off);
+			hi = lo;
+		}
+		for(hl = hanging; hl != nil; hl = tl hl) {
+			f := hd hl;
+			f.w = ir(f.face.width(f.text));
+			if(ln.para % 2 == 1) {
+				lo -= f.w;
+				f.x = lo;
+			} else {
+				f.x = hi;
+				hi += f.w;
+			}
+		}
+	}
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
 		if(f.kind == Fatomic) {
@@ -4671,6 +4769,55 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		}
 	}
 	return line;
+}
+
+# position: relative on an inline box moves its fragments and what
+# they hold (CSS 2.2 §9.4.3); the line is laid out as if it were
+# static.  Membership is by the fragments' places before any move, so
+# that a box inside a moved box moves with it and then by its own.
+relativeinlines(frags: array of ref Frag, cbw: int)
+{
+	n := len frags;
+	ox := array[n] of int;
+	for(i := 0; i < n; i++)
+		ox[i] = frags[i].x;
+	for(i = 0; i < n; i++) {
+		f := frags[i];
+		if(f.kind != Fspan)
+			continue;
+		st := f.box.st;
+		if(st.position != Style->Prelative && st.position != Style->Psticky)
+			continue;
+		dx := 0;
+		dy := 0;
+		if(st.left.kind != Style->Lauto)
+			dx = res(st.left, cbw);
+		else if(st.right.kind != Style->Lauto)
+			dx = -res(st.right, cbw);
+		if(st.top.kind != Style->Lauto && st.top.pct == 0.0)
+			dy = ir(st.top.px);
+		else if(st.bottom.kind != Style->Lauto && st.bottom.pct == 0.0)
+			dy = -ir(st.bottom.px);
+		if(dx == 0 && dy == 0)
+			continue;
+		for(k := 0; k < n; k++) {
+			g := frags[k];
+			if(g == f || g.kind == Fspan)
+				continue;
+			if(ox[k] >= ox[i] && ox[k] + g.w <= ox[i] + f.w)
+				shiftfrag(g, dx, dy);
+		}
+		shiftfrag(f, dx, dy);
+	}
+}
+
+shiftfrag(g: ref Frag, dx, dy: int)
+{
+	g.x += dx;
+	g.y += dy;
+	g.base += dy;
+	if(g.kind == Fatomic)
+		g.box.y += dy;
 }
 
 # ---- bidi (UAX #9 through CSS Writing Modes 3 §2) ----
@@ -4760,6 +4907,8 @@ bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 					piece = ref *it;
 					piece.text = it.text[a:e];
 					piece.w = partwidth(it, a, e);
+					if(a > 0)
+						piece.nowrap = 1;	# still one word: no break inside it
 				}
 				piece.level = lev[s + a];
 				r = piece :: r;
@@ -4845,60 +4994,137 @@ controls(text: array of int, n: int, st: ref St, open: int): int
 # order with their levels, take their visual order; trailing white
 # space takes the paragraph level.  Inline boxes' fragments then
 # cover what they hold.
+# a thing on a line with a place in the visual order: a text or
+# atomic fragment, or the start or end edge (margin, border, padding)
+# of an inline box's fragment
+Vis: adt {
+	frag:	ref Frag;
+	edge:	int;		# 0 content, 1 start edge, 2 end edge
+	logx:	int;		# logical place
+	x, w:	int;		# visual place, and width
+	level:	int;
+};
+
 reorderline(frags: array of ref Frag, para: int)
 {
-	n := 0;
 	any := para % 2;
-	for(i := 0; i < len frags; i++) {
-		f := frags[i];
-		if(f.kind == Fspan)
-			continue;
-		n++;
-		if(f.level % 2 == 1)
+	for(i := 0; i < len frags; i++)
+		if(frags[i].kind != Fspan && frags[i].level % 2 == 1)
 			any = 1;
-	}
-	if(!any || n == 0)
+	if(!any)
 		return;
-	content := array[n] of ref Frag;
-	lev := array[n] of int;
-	k := 0;
-	for(i = 0; i < len frags; i++)
-		if(frags[i].kind != Fspan) {
-			content[k] = frags[i];
-			lev[k] = frags[i].level;
-			k++;
+	# the sequence in logical order: content, and the edges of the
+	# inline boxes, which sit before and after their content
+	vl: list of ref Vis;
+	n := 0;
+	for(i = 0; i < len frags; i++) {
+		f := frags[i];
+		if(f.kind != Fspan) {
+			vl = ref Vis(f, 0, f.x, f.x, f.w, f.level) :: vl;
+			n++;
+			continue;
 		}
-	for(k = n - 1; k >= 0 && content[k].kind == Ftext && isblankrun(content[k].text); k--)
-		lev[k] = para;
-	order := bidi->reorder(lev);
-	old := array[n] of int;
-	for(k = 0; k < n; k++)
-		old[k] = content[k].x;
-	x := content[0].x;
-	for(k = 0; k < n; k++) {
-		f := content[order[k]];
-		f.x = x;
-		x += f.w;
+		k := f.box;
+		if(f.first && (e := k.ml + k.bl + k.pl) > 0) {
+			vl = ref Vis(f, 1, f.x, f.x, e, -1) :: vl;
+			n++;
+		}
+		if(f.last && (e = k.mr + k.br + k.pr) > 0) {
+			vl = ref Vis(f, 2, f.x + f.w - e, f.x + f.w - e, e, -1) :: vl;
+			n++;
+		}
 	}
-	# an inline box's fragment covers its content's new places
+	if(n == 0)
+		return;
+	v := array[n] of ref Vis;
+	for(k := n - 1; vl != nil; vl = tl vl)
+		v[k--] = hd vl;
+	# by logical place (edges before the content they enclose)
+	for(i = 1; i < n; i++)
+		for(j := i; j > 0 && visbefore(v[j], v[j-1]); j--)
+			(v[j], v[j-1]) = (v[j-1], v[j]);
+	# an edge takes the level of the content it touches
+	for(i = 0; i < n; i++)
+		if(v[i].level < 0) {
+			lv := para;
+			if(v[i].edge == 1) {
+				for(j := i + 1; j < n && v[j].level < 0; j++)
+					;
+				if(j < n)
+					lv = v[j].level;
+			} else {
+				for(j := i - 1; j >= 0 && v[j].level < 0; j--)
+					;
+				if(j >= 0)
+					lv = v[j].level;
+			}
+			v[i].level = lv;
+		}
+	lev := array[n] of int;
+	for(i = 0; i < n; i++)
+		lev[i] = v[i].level;
+	# L1: trailing white space at the paragraph level
+	for(k = n - 1; k >= 0 && (v[k].edge != 0 || v[k].frag.kind == Ftext && isblankrun(v[k].frag.text)); k--)
+		if(v[k].edge == 0)
+			lev[k] = para;
+	order := bidi->reorder(lev);
+	x := v[0].x;
+	for(k = 0; k < n; k++) {
+		e := v[order[k]];
+		e.x = x;
+		x += e.w;
+	}
+	for(k = 0; k < n; k++)
+		if(v[k].edge == 0)
+			v[k].frag.x = v[k].x;
+	# an inline box's fragment covers its edges and content where they
+	# are now (the ranges tested are the logical ones, so inner boxes
+	# first: the fragments come in closing order, inner before outer)
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
 		if(f.kind != Fspan)
 			continue;
 		lo := 1 << 30;
 		hi := -(1 << 30);
-		for(k = 0; k < n; k++)
-			if(old[k] >= f.x && old[k] + content[k].w <= f.x + f.w) {
-				if(content[k].x < lo)
-					lo = content[k].x;
-				if(content[k].x + content[k].w > hi)
-					hi = content[k].x + content[k].w;
+		for(k = 0; k < n; k++) {
+			e := v[k];
+			mine := e.frag == f;
+			if(e.edge == 0)
+				mine = oldin(e, f);
+			if(mine) {
+				if(e.x < lo)
+					lo = e.x;
+				if(e.x + e.w > hi)
+					hi = e.x + e.w;
 			}
+		}
 		if(hi >= lo) {
 			f.x = lo;
 			f.w = hi - lo;
 		}
 	}
+}
+
+# was content e within the inline box fragment f, before anything moved?
+oldin(e: ref Vis, f: ref Frag): int
+{
+	return e.w > 0 && e.logx >= f.x && e.logx + e.w <= f.x + f.w;	# a collapsed space is nowhere
+}
+
+visbefore(a, b: ref Vis): int
+{
+	if(a.logx != b.logx)
+		return a.logx < b.logx;
+	# at the same place: a start edge first, an end edge last
+	return a.edge == 1 && b.edge != 1 || b.edge == 2 && a.edge != 2;
+}
+
+ishanging(f: ref Frag, l: list of ref Frag): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == f)
+			return 1;
+	return 0;
 }
 
 isblankrun(s: string): int

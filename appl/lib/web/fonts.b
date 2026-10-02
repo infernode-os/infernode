@@ -233,8 +233,18 @@ inranges(r: array of int, c: int): int
 
 advance(f: ref Typeface, c: int): real
 {
+	if(zerowidth(c))
+		return 0.0;
 	(o, g) := glyph(f, c);
 	return advanceg(f, o, g, c);
+}
+
+# format characters (bidi controls, joiners, the byte-order mark, the
+# soft hyphen): no glyph, no advance
+zerowidth(c: int): int
+{
+	return c >= 16r200B && c <= 16r200F || c >= 16r202A && c <= 16r202E ||
+		c >= 16r2060 && c <= 16r2064 || c >= 16r2066 && c <= 16r2069 || c == 16rFEFF || c == 16rAD;
 }
 
 # the advance of c, its glyph (o, g) already looked up
@@ -283,6 +293,8 @@ Typeface.width(f: self ref Typeface, s: string): real
 	po: ref OutlineFont->Face;
 	pg := -1;
 	for(i := 0; i < len s; i++) {
+		if(zerowidth(s[i]))
+			continue;
 		(o, g) := glyph(f, s[i]);
 		if(o != nil && o == po && !f.nokern && kerns(s, i))
 			w += real o.kern(pg, g) * f.size / real o.upem;
@@ -299,6 +311,8 @@ Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: re
 	pg := -1;
 	for(i := 0; i < len s; i++) {
 		c := s[i];
+		if(zerowidth(c))
+			continue;
 		(o, g) := glyph(f, c);
 		if(o != nil && o == po && !f.nokern && kerns(s, i))
 			x += real o.kern(pg, g) * f.size / real o.upem;	# pair kerning

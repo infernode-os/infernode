@@ -108,7 +108,128 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	loadbgimages(p);
 	layout->lay(p.root, width, height);
 	inlinesvg(p, p.root);
+	loadframes(p);
 	return (p, nil);
+}
+
+# ---- nested documents ----
+#
+# An <iframe>, and an <object> whose data is a document, shows another
+# page: the same pipeline run again at the frame's content size, and
+# the result painted into an image the frame's box shows as a replaced
+# element would.  A picture of the page, for now: no scrolling or
+# clicking inside it.  Frames nest to FRAMEDEPTH, and a page does not
+# frame itself.
+
+FRAMEDEPTH: con 3;
+framedepth := 0;
+framing: list of string;	# the URLs of the pages being framed, innermost first
+
+loadframes(p: ref Pg)
+{
+	if(framedepth >= FRAMEDEPTH)
+		return;
+	for(l := frameboxes(p, p.root, nil); l != nil; l = tl l) {
+		b := hd l;
+		w := b.w - b.bl - b.br - b.pl - b.pr;
+		h := b.h - b.bt - b.bb - b.pt - b.pb;
+		if(w <= 0 || h <= 0)
+			continue;
+		if(b.img != nil && b.img.r.dx() == w && b.img.r.dy() == h)
+			continue;	# a relayout at the same size
+		url := b.url;
+		if(url == "about:srcdoc")
+			url = "data:text/html;charset=utf-8," + pctencode(p.doc.attr(b.node, "srcdoc"));
+		if(framed(url) || unfrag(url) == unfrag(p.url))
+			continue;
+		framedepth++;
+		framing = p.url :: framing;
+		sub: ref Pg;
+		{
+			(sub, nil) = request(url, "GET", nil, nil, w, h);
+		} exception {
+		"*" =>
+			sub = nil;
+		}
+		framing = tl framing;
+		framedepth--;
+		img := display.newimage(Rect((0, 0), (w, h)), Draw->RGB24, 0, Draw->White);
+		if(img == nil)
+			continue;
+		if(sub != nil)
+			sub.paint(img, Point(0, 0));
+		b.img = img;
+		b.iw = w;
+		b.ih = h;
+		b.text = nil;
+	}
+}
+
+framed(url: string): int
+{
+	for(l := framing; l != nil; l = tl l)
+		if(unfrag(hd l) == unfrag(url))
+			return 1;
+	return 0;
+}
+
+unfrag(u: string): string
+{
+	for(i := 0; i < len u; i++)
+		if(u[i] == '#')
+			return u[0:i];
+	return u;
+}
+
+# the boxes that show documents: <iframe>s, and <object>s whose data
+# turned out to be one
+frameboxes(p: ref Pg, b: ref Box, acc: list of ref Box): list of ref Box
+{
+	if(b.kind == Layout->Kreplaced && b.node != 0 && isframe(p, b))
+		acc = b :: acc;
+	for(i := 0; i < len b.kids; i++)
+		acc = frameboxes(p, b.kids[i], acc);
+	for(l := b.pos; l != nil; l = tl l)
+		acc = frameboxes(p, hd l, acc);
+	for(i = 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++)
+			if(ln.frags[j].kind == Layout->Fatomic)
+				acc = frameboxes(p, ln.frags[j].box, acc);
+	}
+	return acc;
+}
+
+isframe(p: ref Pg, b: ref Box): int
+{
+	nd := p.doc.nodes[b.node];
+	if(nd.ns != Dom->HTML)
+		return 0;
+	if(nd.tag == Dom->Tiframe)
+		return b.url != nil;
+	if(nd.tag == Dom->Tobject)
+		for(l := p.objects; l != nil; l = tl l) {
+			(n, kind, u) := hd l;
+			if(n == b.node && kind == Layout->Odoc) {
+				b.url = u;
+				return 1;
+			}
+		}
+	return 0;
+}
+
+pctencode(s: string): string
+{
+	r := "";
+	b := array of byte s;
+	for(i := 0; i < len b; i++) {
+		c := int b[i];
+		if(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.' || c == '_' || c == '~')
+			r[len r] = c;
+		else
+			r += sys->sprint("%%%.2X", c);
+	}
+	return r;
 }
 
 Pg.relayout(p: self ref Pg, width, height: int)
@@ -166,6 +287,7 @@ Pg.update(p: self ref Pg)
 	carryimages(old, p.root);
 	layout->lay(p.root, p.width, p.height);
 	inlinesvg(p, p.root);
+	loadframes(p);
 }
 
 Pg.paint(p: self ref Pg, dst: ref Image, scroll: Point)
@@ -558,8 +680,11 @@ loadbgimages(p: ref Pg)
 }
 
 # Images for replaced boxes, fetched once per URL.
+curdoc: ref Doc;	# the document whose boxes replacedboxes walks
+
 loadimages(p: ref Pg, root: ref Box)
 {
+	curdoc = p.doc;
 	cache: list of (string, ref Image);
 	boxes := replacedboxes(root, nil);
 	urls: list of string;
@@ -781,7 +906,7 @@ xmlesc(s: string): string
 
 replacedboxes(b: ref Box, acc: list of ref Box): list of ref Box
 {
-	if(b.kind == Layout->Kreplaced && b.url != nil)
+	if(b.kind == Layout->Kreplaced && b.url != nil && !(b.node != 0 && curdoc != nil && curdoc.nodes[b.node].tag == Dom->Tiframe))
 		acc = b :: acc;
 	for(i := 0; i < len b.kids; i++)
 		acc = replacedboxes(b.kids[i], acc);
@@ -790,6 +915,7 @@ replacedboxes(b: ref Box, acc: list of ref Box): list of ref Box
 
 carryimages(old, new: ref Box)
 {
+	curdoc = nil;	# frames' pictures carry over too; loadframes checks their size
 	imgs: list of (string, ref Image);
 	for(l := replacedboxes(old, nil); l != nil; l = tl l)
 		if((hd l).img != nil)

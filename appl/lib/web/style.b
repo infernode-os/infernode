@@ -5065,6 +5065,8 @@ hints(d: ref Doc, n: int): list of ref Decl
 		s += colorhint(d, n, "bgcolor", "background-color") + alignhint(d, n) + valignhint(d, n);
 		s += dimhint(d, n, "height", "height");
 	Dom->Timg or Dom->Tobject or Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe or Dom->Tembed or Dom->Tinput =>
+		if(nd.tag == Dom->Tiframe && d.hasattr(n, "frameborder") && atoi(d.attr(n, "frameborder")) == 0)
+			s += "border-width:0;";
 		if(nd.tag != Dom->Tinput || lower(d.attr(n, "type")) == "image") {
 			s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
 			if((h := d.attr(n, "hspace")) != nil)

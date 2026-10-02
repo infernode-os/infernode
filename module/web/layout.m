@@ -78,6 +78,7 @@ Layout: module
 		first, last:	int;	# Fspan: this is the box's first/last fragment
 		deco:	int;		# Ftext: text-decoration lines, as propagated
 		decocolor:	int;
+		level:	int;		# bidi embedding level (odd: right to left)
 	};
 
 	build:	fn(d: ref Dom->Doc, c: ref Style->Computed): ref Box;

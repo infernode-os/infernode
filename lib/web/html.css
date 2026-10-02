@@ -134,6 +134,11 @@ audio:not([controls]) { display: none !important; }
 hr { color: gray; border-style: inset; border-width: 1px; margin-block: 0.5em; margin-inline: auto; overflow: hidden; }
 
 /* §15.3.12 the ::marker */
+bdi, output { unicode-bidi: isolate; }
+[dir=ltr i] { direction: ltr; unicode-bidi: isolate; }
+[dir=rtl i] { direction: rtl; unicode-bidi: isolate; }
+[dir=auto i], textarea[dir=auto i], input[dir=auto i] { unicode-bidi: plaintext; }
+bdo, bdo[dir] { unicode-bidi: isolate-override; }
 ::marker { unicode-bidi: isolate; font-variant-numeric: tabular-nums; white-space: pre; text-transform: none; }
 
 /* presentational SVG defaults */

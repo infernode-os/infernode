@@ -15,6 +15,7 @@ MODULES=
 
 SYSMODULES=\
 	sys.m\
+	bidi.m\
 	web/dom.m\
 	web/html.m\
 	web/css.m\

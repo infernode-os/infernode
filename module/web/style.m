@@ -73,6 +73,8 @@ Style: module
 	TTnone, TTupper, TTlower, TTcap: con iota;			# text-transform
 	TDunder, TDover, TDthrough: con 1<<iota;			# text-decoration-line bits
 	VAbaseline, VAtop, VAmiddle, VAbottom, VAtexttop, VAtextbottom, VAsub, VAsuper, VAlen: con iota;
+	# unicode-bidi
+	UBnormal, UBembed, UBisolate, UBoverride, UBisolateoverride, UBplaintext: con iota;
 	FSnormal, FSitalic, FSoblique: con iota;			# font-style
 	# flex/grid alignment
 	ALnormal, ALstretch, ALstart, ALend, ALcenter, ALbaseline, ALbetween,
@@ -211,6 +213,7 @@ Style: module
 		vars:	ref Vars;	# custom properties
 		sid:	int;		# serial number, for style sharing
 		nokern:	int;		# font-kerning: none (or "kern" off)
+		unicodebidi:	int;	# UBnormal ...
 
 		new:	fn(): ref St;		# initial values
 	};

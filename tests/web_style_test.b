@@ -343,6 +343,11 @@ testHints(t: ref T)
 	z := st(p, "z");
 	t.assert(px(z.pt) == 0.0 && px(z.pl) == 0.0, sys->sprint("cellpadding=0 beats the UA padding: %g", px(z.pt)));
 	t.assert(z.bt == 0 && z.bl == 0, sys->sprint("border=0: no cell border: %d", z.bt));
+	p = page("<p dir=rtl id=r>x<bdo dir=ltr id=o>y</bdo><span id=s style='unicode-bidi: embed'>z</span></p>");
+	t.assert(st(p, "r").dirrtl && st(p, "r").unicodebidi == Style->UBisolate, "dir=rtl: direction and isolation");
+	t.assert(!st(p, "o").dirrtl && st(p, "o").unicodebidi == Style->UBisolateoverride,
+		sys->sprint("bdo overrides: rtl %d ub %d", st(p, "o").dirrtl, st(p, "o").unicodebidi));
+	t.asserteq(st(p, "s").unicodebidi, Style->UBembed, "unicode-bidi: embed");
 }
 
 testPseudo(t: ref T)

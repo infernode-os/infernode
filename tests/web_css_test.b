@@ -119,6 +119,8 @@ testRules(t: ref T)
 	t.assertseq(dumprules(s.rules, ""), "@media screen\n  p { x:1; }\nq { --v:{ a b }; w:var(--v); }\n", "custom property with a block");
 	s = css->parse("@scope (.card) { img { x: 1 } } @starting-style { p { y: 2 } } @scope { q { z: 3 } }");
 	t.assertseq(dumprules(s.rules, ""), "@media \n  :is(.card) img { x:1; }\n@media \n  q { z:3; }\n", "scope and starting-style");
+	s = css->parse("c { y: 2 } d:unknown(e) { z: 3 } f { w: 4 }");
+	t.assertseq(dumprules(s.rules, ""), "c { y:2; }\nf { w:4; }\n", "an unknown functional pseudo-class drops only its own rule");
 	s = css->parse("@import url( \"c.css\" );");
 	t.assertseq(dumprules(s.rules, ""), "@import c.css \n", "import url with spaces");
 	d := css->parsedecls("color: blue; background: url(a.png) no-repeat; ;; bogus; width: 10px !IMPORTANT");

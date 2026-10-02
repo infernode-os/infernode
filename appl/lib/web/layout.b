@@ -26,6 +26,8 @@ include "web/style.m";
 	St, Len, Computed: import style;
 include "outlinefont.m";
 include "web/fonts.m";
+include "bidi.m";
+	bidi: Bidi;
 	fonts: Fonts;
 	Typeface: import fonts;
 include "web/layout.m";
@@ -53,6 +55,9 @@ init(d: ref Display): string
 	css = load Css Css->PATH;
 	style = load Style Style->PATH;
 	fonts = load Fonts Fonts->PATH;
+	bidi = load Bidi Bidi->PATH;
+	if(bidi != nil && bidi->init() != nil)
+		bidi = nil;
 	if(dom == nil || css == nil || style == nil || fonts == nil || math == nil)
 		return sys->sprint("cannot load modules: %r");
 	display = d;
@@ -4032,6 +4037,7 @@ Item: adt {
 	nowrap:	int;		# no soft wrap here
 	deco:	int;
 	decocolor:	int;
+	level:	int;		# bidi embedding level, set by bidiitems
 };
 
 Fl: adt {
@@ -4066,7 +4072,7 @@ flat(f: ref Fl, b: ref Box)
 	Kmarker =>
 		markeritem(f, b);
 	Kbr =>
-		emit(f, ref Item(Ibreak, nil, 0.0, b, nil, 0, 0, 0));
+		emit(f, ref Item(Ibreak, nil, 0.0, b, nil, 0, 0, 0, 0));
 		f.space = 1;
 	Kinline =>
 		edges(b, 0);
@@ -4076,19 +4082,19 @@ flat(f: ref Fl, b: ref Box)
 			f.deco |= b.st.decoration;
 			f.decocolor = b.st.decorationcolor;
 		}
-		emit(f, ref Item(Iopen, nil, real (b.ml + b.bl + b.pl), b, nil, 0, 0, 0));
+		emit(f, ref Item(Iopen, nil, real (b.ml + b.bl + b.pl), b, nil, 0, 0, 0, 0));
 		for(i := 0; i < len b.kids; i++)
 			flat(f, b.kids[i]);
-		emit(f, ref Item(Iclose, nil, real (b.mr + b.br + b.pr), b, nil, 0, 0, 0));
+		emit(f, ref Item(Iclose, nil, real (b.mr + b.br + b.pr), b, nil, 0, 0, 0, 0));
 		f.deco = odeco;
 		f.decocolor = ocol;
 	* =>
 		if(isabs(b))
-			emit(f, ref Item(Iabs, nil, 0.0, b, nil, 0, 0, 0));
+			emit(f, ref Item(Iabs, nil, 0.0, b, nil, 0, 0, 0, 0));
 		else if(isfloat(b))
-			emit(f, ref Item(Ifloat, nil, 0.0, b, nil, 0, 0, 0));
+			emit(f, ref Item(Ifloat, nil, 0.0, b, nil, 0, 0, 0, 0));
 		else {
-			emit(f, ref Item(Iatomic, nil, 0.0, b, nil, 0, 0, 0));
+			emit(f, ref Item(Iatomic, nil, 0.0, b, nil, 0, 0, 0, 0));
 			f.space = 0;
 		}
 	}
@@ -4101,7 +4107,7 @@ markeritem(f: ref Fl, b: ref Box)
 	if(b.text == "")
 		return;
 	fc := face(b.st);
-	emit(f, ref Item(Iword, b.text, fc.width(b.text), b, fc, 1, 0, 0));
+	emit(f, ref Item(Iword, b.text, fc.width(b.text), b, fc, 1, 0, 0, 0));
 	f.space = 1;
 }
 
@@ -4185,7 +4191,7 @@ text(f: ref Fl, b: ref Box)
 	while(i < len s) {
 		c := s[i];
 		if(c == '\n' && keepnl) {
-			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0));
+			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0, 0));
 			f.space = 1;
 			i++;
 			continue;
@@ -4194,7 +4200,7 @@ text(f: ref Fl, b: ref Box)
 			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl))
 				i++;
 			if(!f.space) {
-				emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor));
+				emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0));
 				f.space = 1;
 			}
 			continue;
@@ -4210,14 +4216,14 @@ text(f: ref Fl, b: ref Box)
 				t = "\t";
 			} else if(c == '　')
 				w = fc.width("　");
-			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor));
+			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0));
 			f.space = 0;
 			i++;
 			continue;
 		}
 		if(c == 16r200B) {
 			# a zero-width space: a break opportunity that shows nothing
-			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor));
+			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0));
 			f.space = 0;
 			i++;
 			continue;
@@ -4243,16 +4249,17 @@ text(f: ref Fl, b: ref Box)
 			# every character is a break opportunity
 			for(k := 0; k < len word; k++) {
 				ch := word[k:k+1];
-				emit(f, ref Item(Iword, ch, fc.width(ch) + ls, b, fc, 0, f.deco, f.decocolor));
+				emit(f, ref Item(Iword, ch, fc.width(ch) + ls, b, fc, 0, f.deco, f.decocolor, 0));
 			}
 		} else
-			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor));
+			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0));
 		f.space = 0;
 	}
 }
 
 # a line under construction
 Ln: adt {
+	para:	int;			# the paragraph's bidi level
 	frags:	list of ref Frag;	# reversed
 	x:	real;			# where the next thing goes
 	avail:	int;			# right edge, in content coordinates
@@ -4315,7 +4322,9 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	lines: list of ref Line;
 	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch);
 	x0 := b.bl + b.pl;
-	ln := ref Ln(nil, 0.0, cw, 0, 0, nil, 0, nil);
+	para := 0;
+	(items, para) = bidiitems(b, items);
+	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, 0, nil);
 	edgesat(f, ln);
 	indent := res(st.indent, cw);
 	ln.x += real indent;
@@ -4387,7 +4396,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 			while(!ln.content && ln.x + real w > real ln.avail + 0.01 && movedown(f, ln))
 				;
-			fr := ref Frag(Fatomic, ir(ln.x) + k.ml, 0, k.w, k.h, 0, k, nil, nil, 0, 0, 0, 0);
+			fr := ref Frag(Fatomic, ir(ln.x) + k.ml, 0, k.w, k.h, 0, k, nil, nil, 0, 0, 0, 0, it.level);
 			ln.frags = fr :: ln.frags;
 			ln.x += real w;
 			ln.content = 1;
@@ -4461,7 +4470,7 @@ removebox(l: list of ref Box, b: ref Box): list of ref Box
 
 newline(f: ref Ifc, old: ref Ln, opened: list of ref Box): ref Ln
 {
-	ln := ref Ln(nil, 0.0, f.cw, 0, 0, nil, 0, nil);
+	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0, nil);
 	edgesat(f, ln);
 	# inline boxes still open continue on the new line
 	r: list of ref Box;
@@ -4495,7 +4504,7 @@ splitword(it: ref Item, avail: real): (ref Item, ref Item)
 
 textfrag(ln: ref Ln, it: ref Item): ref Frag
 {
-	return ref Frag(Ftext, ir(ln.x), 0, ir(it.w), 0, 0, it.box, it.text, it.face, 0, 0, it.deco, it.decocolor);
+	return ref Frag(Ftext, ir(ln.x), 0, ir(it.w), 0, 0, it.box, it.text, it.face, 0, 0, it.deco, it.decocolor, it.level);
 }
 
 # close an inline box's fragment on this line
@@ -4515,7 +4524,7 @@ span(ln: ref Ln, b: ref Box, last: int): ref Frag
 	ln.open = nil;
 	for(; r != nil; r = tl r)
 		ln.open = hd r :: ln.open;
-	return ref Frag(Fspan, ir(x), 0, ir(ln.x - x), 0, 0, b, nil, nil, first, last, 0, 0);
+	return ref Frag(Fspan, ir(x), 0, ir(ln.x - x), 0, 0, b, nil, nil, first, last, 0, 0, 0);
 }
 
 lineheight(st: ref St, f: ref Typeface): real
@@ -4652,12 +4661,265 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
 		f.x += x0 + ir(off);
+	}
+	reorderline(frags, ln.para);
+	for(i = 0; i < len frags; i++) {
+		f := frags[i];
 		if(f.kind == Fatomic) {
 			f.box.x = f.x;
 			relative(f.box, ln.avail, -1);
 		}
 	}
 	return line;
+}
+
+# ---- bidi (UAX #9 through CSS Writing Modes 3 §2) ----
+
+# The items of a block container's inline content with their bidi
+# levels resolved: the whole content is one paragraph (forced breaks
+# separate paragraphs), inline boxes with unicode-bidi add the
+# controls the property stands for, and a word whose characters come
+# out at different levels is split so that each item has one.  Also
+# the paragraph's level.  Content with nothing right-to-left in it is
+# left as it is.
+bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
+{
+	st := b.st;
+	if(bidi == nil)
+		return (items, 0);
+	need := st.dirrtl || st.unicodebidi == Style->UBplaintext;
+	for(l := items; l != nil && !need; l = tl l) {
+		it := hd l;
+		case it.kind {
+		Iword or Ispace =>
+			for(i := 0; i < len it.text; i++)
+				if(it.text[i] >= 16r590) {
+					need = 1;
+					break;
+				}
+		Iopen =>
+			if(it.box.st.unicodebidi != Style->UBnormal)
+				need = 1;
+		}
+	}
+	if(!need)
+		return (items, 0);
+	# the paragraph's characters, and where each item's are
+	n := 0;
+	for(l = items; l != nil; l = tl l)
+		n += len (hd l).text + 4;
+	text := array[n] of int;
+	n = 0;
+	starts: list of int;	# reversed; one per item
+	for(l = items; l != nil; l = tl l) {
+		it := hd l;
+		starts = n :: starts;
+		case it.kind {
+		Iword or Ispace =>
+			if(it.text == "")
+				text[n++] = 16r200B;
+			for(i := 0; i < len it.text; i++)
+				text[n++] = it.text[i];
+		Iatomic =>
+			text[n++] = 16rFFFC;
+		Ibreak =>
+			text[n++] = 16r2029;
+		Iopen =>
+			n = controls(text, n, it.box.st, 1);
+		Iclose =>
+			n = controls(text, n, it.box.st, 0);
+		}
+	}
+	dir := st.dirrtl;
+	if(st.unicodebidi == Style->UBplaintext)
+		dir = -1;
+	lev := bidi->levels(text[0:n], dir);
+	para := dir;
+	if(para < 0) {
+		para = bidi->basedir(text[0:n]);
+		if(para < 0)
+			para = 0;
+	}
+	# back to items, words split where their level changes
+	sa := array[len starts] of int;
+	for(i := len sa - 1; starts != nil; starts = tl starts)
+		sa[i--] = hd starts;
+	r: list of ref Item;
+	i = 0;
+	for(l = items; l != nil; l = tl l) {
+		it := hd l;
+		s := sa[i++];
+		if(it.kind == Iword && len it.text > 1) {
+			a := 0;
+			while(a < len it.text) {
+				e := a + 1;
+				while(e < len it.text && lev[s + e] == lev[s + a])
+					e++;
+				piece := it;
+				if(a > 0 || e < len it.text) {
+					piece = ref *it;
+					piece.text = it.text[a:e];
+					piece.w = partwidth(it, a, e);
+				}
+				piece.level = lev[s + a];
+				r = piece :: r;
+				a = e;
+			}
+			continue;
+		}
+		if(s < n)
+			it.level = lev[s];
+		else
+			it.level = para;
+		r = it :: r;
+	}
+	out: list of ref Item;
+	for(; r != nil; r = tl r)
+		out = hd r :: out;
+	return (out, para);
+}
+
+# the width of a word's characters [a:e), letter-spacing included
+partwidth(it: ref Item, a, e: int): real
+{
+	if(a == 0 && e == len it.text)
+		return it.w;
+	fw := it.face.width(it.text);
+	pw := it.face.width(it.text[a:e]);
+	extra := it.w - fw;	# letter-spacing over the word
+	if(extra != 0.0 && len it.text > 0)
+		pw += extra * real (e - a) / real len it.text;
+	return pw;
+}
+
+# the bidi control characters an inline box's unicode-bidi stands for
+# at its start (open) or end, into text at n
+controls(text: array of int, n: int, st: ref St, open: int): int
+{
+	case st.unicodebidi {
+	Style->UBembed =>
+		if(open) {
+			if(st.dirrtl)
+				text[n++] = 16r202B;	# RLE
+			else
+				text[n++] = 16r202A;	# LRE
+		} else
+			text[n++] = 16r202C;	# PDF
+	Style->UBisolate =>
+		if(open) {
+			if(st.dirrtl)
+				text[n++] = 16r2067;	# RLI
+			else
+				text[n++] = 16r2066;	# LRI
+		} else
+			text[n++] = 16r2069;	# PDI
+	Style->UBoverride =>
+		if(open) {
+			if(st.dirrtl)
+				text[n++] = 16r202E;	# RLO
+			else
+				text[n++] = 16r202D;	# LRO
+		} else
+			text[n++] = 16r202C;
+	Style->UBisolateoverride =>
+		if(open) {
+			text[n++] = 16r2068;	# FSI
+			if(st.dirrtl)
+				text[n++] = 16r202E;
+			else
+				text[n++] = 16r202D;
+		} else {
+			text[n++] = 16r202C;
+			text[n++] = 16r2069;
+		}
+	Style->UBplaintext =>
+		if(open)
+			text[n++] = 16r2068;	# FSI
+		else
+			text[n++] = 16r2069;
+	}
+	return n;
+}
+
+# L1 and L2 for a line: its text and atomic fragments, in logical
+# order with their levels, take their visual order; trailing white
+# space takes the paragraph level.  Inline boxes' fragments then
+# cover what they hold.
+reorderline(frags: array of ref Frag, para: int)
+{
+	n := 0;
+	any := para % 2;
+	for(i := 0; i < len frags; i++) {
+		f := frags[i];
+		if(f.kind == Fspan)
+			continue;
+		n++;
+		if(f.level % 2 == 1)
+			any = 1;
+	}
+	if(!any || n == 0)
+		return;
+	content := array[n] of ref Frag;
+	lev := array[n] of int;
+	k := 0;
+	for(i = 0; i < len frags; i++)
+		if(frags[i].kind != Fspan) {
+			content[k] = frags[i];
+			lev[k] = frags[i].level;
+			k++;
+		}
+	for(k = n - 1; k >= 0 && content[k].kind == Ftext && isblankrun(content[k].text); k--)
+		lev[k] = para;
+	order := bidi->reorder(lev);
+	old := array[n] of int;
+	for(k = 0; k < n; k++)
+		old[k] = content[k].x;
+	x := content[0].x;
+	for(k = 0; k < n; k++) {
+		f := content[order[k]];
+		f.x = x;
+		x += f.w;
+	}
+	# an inline box's fragment covers its content's new places
+	for(i = 0; i < len frags; i++) {
+		f := frags[i];
+		if(f.kind != Fspan)
+			continue;
+		lo := 1 << 30;
+		hi := -(1 << 30);
+		for(k = 0; k < n; k++)
+			if(old[k] >= f.x && old[k] + content[k].w <= f.x + f.w) {
+				if(content[k].x < lo)
+					lo = content[k].x;
+				if(content[k].x + content[k].w > hi)
+					hi = content[k].x + content[k].w;
+			}
+		if(hi >= lo) {
+			f.x = lo;
+			f.w = hi - lo;
+		}
+	}
+}
+
+isblankrun(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(!isspace(s[i]))
+			return 0;
+	return 1;
+}
+
+# a right-to-left run is drawn with its characters reversed, each
+# mirrored where Unicode says (brackets)
+visual(f: ref Frag): string
+{
+	if(f.level % 2 == 0 || bidi == nil)
+		return f.text;
+	s := f.text;
+	r := "";
+	for(i := len s - 1; i >= 0; i--)
+		r[len r] = bidi->mirror(s[i]);
+	return r;
 }
 
 # A fragment's ascent and descent around its baseline, half-leading
@@ -6069,13 +6331,14 @@ painttext(dst: ref Image, f: ref Frag, o: Point)
 		return paintdeco(dst, f, o);
 	fc := f.face;
 	p := Point(o.x + f.x, o.y + f.base);
+	text := visual(f);
 	for(i := 0; i < len st.textshadows; i++) {
 		s := st.textshadows[i];
 		if(visible(s.color))
-			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), f.text, colorimg(s.color), st.letterspacing);
+			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), text, colorimg(s.color), st.letterspacing);
 	}
 	if(visible(st.color))
-		drawtext(dst, fc, p, f.text, colorimg(st.color), st.letterspacing);
+		drawtext(dst, fc, p, text, colorimg(st.color), st.letterspacing);
 	paintdeco(dst, f, o);
 }
 

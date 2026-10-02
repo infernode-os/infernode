@@ -1693,7 +1693,7 @@ St.new(): ref St
 		0, 0, 0.0, 0.0, 0, 0,	# border-spacing: 0 (the UA sheet gives <table> 2px)
 		0, a, 3, Bnone, Ccurrent,
 		0, nil, "auto", 1, 1, 0, Ccurrent,
-		nil, 0, 0);
+		nil, 0, 0, UBnormal);
 }
 
 nextsid := 1;
@@ -4224,6 +4224,16 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"rtl" => st.dirrtl = 1;
 		* => return 0;
 		}
+	"unicode-bidi" =>
+		case id {
+		"normal" => st.unicodebidi = UBnormal;
+		"embed" => st.unicodebidi = UBembed;
+		"isolate" => st.unicodebidi = UBisolate;
+		"bidi-override" => st.unicodebidi = UBoverride;
+		"isolate-override" => st.unicodebidi = UBisolateoverride;
+		"plaintext" => st.unicodebidi = UBplaintext;
+		* => return 0;
+		}
 	"tab-size" =>
 		# a number of spaces, or a length (kept negated: px)
 		(ok, n) := number(v, ctx);
@@ -4948,6 +4958,7 @@ copyprop(d, s: ref St, nm: string)
 		d.valign = s.valign;
 		d.valignlen = s.valignlen;
 	"direction" => d.dirrtl = s.dirrtl;
+	"unicode-bidi" => d.unicodebidi = s.unicodebidi;
 	"tab-size" => d.tabsize = s.tabsize;
 	"list-style-type" => d.liststyle = s.liststyle;
 	"list-style-position" => d.listinside = s.listinside;

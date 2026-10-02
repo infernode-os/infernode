@@ -1727,7 +1727,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0);
 }
 
 nextsid := 1;
@@ -1798,7 +1798,7 @@ isinherited(nm: string): int
 	"font-variant" or "font-variant-caps" or "line-height" or "text-align" or
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
-	"text-wrap-mode" or "word-break" or "overflow-wrap" or "word-wrap" or
+	"text-wrap-mode" or "word-break" or "line-break" or "overflow-wrap" or "word-wrap" or
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
@@ -2049,6 +2049,8 @@ pseudostyle(pse: list of (string, ref Md), name: string, parent: ref St, ctx: re
 	st := cascade(sortmd(mds, n), parent, ctx);
 	if(name != "marker" && name != "first-letter" && st.content == nil)
 		return nil;	# content: normal/none generates no box
+	if(st.display == Dnone && name != "marker")
+		return nil;	# not generated: its counters do not count either
 	fixup(st, parent, nil, 0);
 	return st;
 }
@@ -3205,6 +3207,8 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 			else
 				return nil;
 		}
+		if(nones + haslh(r, "list-style-type") + haslh(r, "list-style-image") > 2)
+			return nil;	# a none with nothing left for it to be
 		if(nones > 0) {
 			nonev := array[] of {ref Tok(Kident, "none", 0.0, 0, nil)};
 			if(!haslh(r, "list-style-type"))
@@ -3878,10 +3882,17 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.maxheight = l;
 	"aspect-ratio" =>
 		x := nows(v);
-		if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "auto")
+		auto := 0;
+		if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "auto") {
 			x = x[1:];
+			auto = 1;
+		} else if(len x >= 2 && x[len x - 1].kind == Kident && lower(x[len x - 1].s) == "auto") {
+			x = x[0:len x - 1];
+			auto = 1;
+		}
 		if(len x == 0) {
 			st.aspect = 0.0;
+			st.aspectauto = 0;
 			return 1;
 		}
 		if(x[0].kind != Knumber)
@@ -3890,6 +3901,7 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		if(len x >= 3 && x[1].kind == Kdelim && x[1].s == "/" && x[2].kind == Knumber && x[2].n != 0.0)
 			r /= x[2].n;
 		st.aspect = r;
+		st.aspectauto = auto;
 	"margin-top" or "margin-right" or "margin-bottom" or "margin-left" =>
 		(ok, l) := lenauto(v, ctx);
 		if(!ok || (l.kind != Lpx && l.kind != Lauto && l.kind != Lcalc))
@@ -4423,6 +4435,14 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"break-all" => st.breakall = 1;
 		"keep-all" => st.keepall = 1;
 		"break-word" => st.anywhere = 1;
+		* => return 0;
+		}
+	"line-break" =>
+		case id {
+		"auto" or "loose" or "normal" or "strict" =>
+			if(st.breakall == 2)
+				st.breakall = 0;
+		"anywhere" => st.breakall = 2;
 		* => return 0;
 		}
 	"overflow-wrap" =>
@@ -5194,7 +5214,7 @@ copyprop(d, s: ref St, nm: string)
 	"min-height" => d.minheight = s.minheight;
 	"max-width" => d.maxwidth = s.maxwidth;
 	"max-height" => d.maxheight = s.maxheight;
-	"aspect-ratio" => d.aspect = s.aspect;
+	"aspect-ratio" => d.aspect = s.aspect; d.aspectauto = s.aspectauto;
 	"margin-top" => d.mt = s.mt;
 	"margin-right" => d.mr = s.mr;
 	"margin-bottom" => d.mb = s.mb;
@@ -5264,7 +5284,7 @@ copyprop(d, s: ref St, nm: string)
 	"font-kerning" or "font-feature-settings" => d.nokern = s.nokern;
 	"word-spacing" => d.wordspacing = s.wordspacing;
 	"white-space" or "white-space-collapse" or "text-wrap" or "text-wrap-mode" => d.whitespace = s.whitespace;
-	"word-break" =>
+	"word-break" or "line-break" =>
 		d.breakall = s.breakall;
 		d.keepall = s.keepall;
 	"overflow-wrap" => d.anywhere = s.anywhere;

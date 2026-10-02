@@ -103,8 +103,13 @@ build(d: ref Doc, c: ref Computed): ref Box
 		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
 	b := ref B(d, c, nil);
 	l := element(b, root);
-	if(l == nil)
-		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
+	if(l == nil) {
+		# display: none on the root: nothing but its background, which
+		# the canvas still takes (CSS 2.2 §14.2)
+		r := newbox(Kblock, 0, root, c.st[root]);
+		r.doc = d;
+		return r;
+	}
 	setparents(hd l);
 	(hd l).doc = d;
 	return hd l;
@@ -446,8 +451,16 @@ wrapruns(parent: ref Box, kids: list of ref Box, ok: ref fn(k: ref Box): int, ki
 
 flushwrap(parent: ref Box, run, r: list of ref Box, kind, display: int): list of ref Box
 {
-	if(run == nil || blankrun(run))
+	if(run == nil)
 		return r;
+	if(blankrun(run)) {
+		# out-of-flow boxes stand where they are (an absolutely
+		# positioned row group is a block among the table's children)
+		for(l := rev(run); l != nil; l = tl l)
+			if(isoof(hd l))
+				r = hd l :: r;
+		return r;
+	}
 	a := newbox(kind, 0, 0, style->anon(parent.st, display));
 	kids := rev(run);
 	case kind {
@@ -1139,7 +1152,7 @@ lay(root: ref Box, width, height: int)
 	laygen++;
 	l := ref L(width, height, root, nil);
 	edges(root, width);
-	sizew(root, width);
+	sizew(root, width, height);
 	layblock(l, root, width, height, ref Fctx(nil, nil), root.ml, root.mt);
 	root.x = root.ml;
 	root.y = root.mt;
@@ -1289,6 +1302,35 @@ clamph(b: ref Box, h, cbh: int): int
 	return h;
 }
 
+# a scroll container (overflow other than visible or clip): its
+# automatic minimum size is 0 (Sizing 3 §5.1)
+isscroller(b: ref Box): int
+{
+	return b.st.overflowx != Style->Ovisible && b.st.overflowx != Style->Oclip ||
+		b.st.overflowy != Style->Ovisible && b.st.overflowy != Style->Oclip;
+}
+
+# aspect-ratio (Sizing 4 §5): a non-replaced box with a preferred ratio
+# and one size definite takes the other from it.  The ratio is of the
+# box box-sizing names.  Border-box sizes in and out; -1 without a ratio.
+ratiow(b: ref Box, h: int): int
+{
+	if(b.st.aspect <= 0.0 || b.kind == Kreplaced)
+		return -1;
+	if(b.st.borderbox && !b.st.aspectauto)
+		return ir(real h * b.st.aspect);
+	return ir(real (h - vextra(b)) * b.st.aspect) + hextra(b);
+}
+
+ratioh(b: ref Box, w: int): int
+{
+	if(b.st.aspect <= 0.0 || b.kind == Kreplaced)
+		return -1;
+	if(b.st.borderbox && !b.st.aspectauto)
+		return ir(real w / b.st.aspect);
+	return ir(real (w - hextra(b)) / b.st.aspect) + vextra(b);
+}
+
 # Does b establish a new block formatting context?
 isbfc(b: ref Box): int
 {
@@ -1308,10 +1350,12 @@ isbfc(b: ref Box): int
 
 # The used width of a block-level box in a containing block cbw wide
 # (CSS 2.2 §10.3.3): auto fills, auto margins centre.
-sizew(b: ref Box, cbw: int)
+sizew(b: ref Box, cbw, cbh: int)
 {
 	st := b.st;
 	w := specw(b, st.width, cbw);
+	if(w < 0 && st.aspect > 0.0 && b.kind != Kreplaced && (sh := spech(b, st.height, cbh)) >= 0)
+		w = ratiow(b, sh);	# transferred from its height
 	if(w < 0) {
 		if(b.kind == Kreplaced) {
 			(iw, nil) := replacedsize(b, cbw, -1);
@@ -1350,7 +1394,8 @@ sizew(b: ref Box, cbw: int)
 		# text-align: -webkit-center), as pages of its era expect
 		b.ml += free/2;
 		b.mr += free - free/2;
-	}
+	} else if(free != 0 && b.parent != nil && b.parent.st.dirrtl)
+		b.ml += free;	# over-constrained in a right-to-left block: margin-left gives (§10.3.3)
 }
 
 # is b a block child of <center> (or of its anonymous blocks)?
@@ -1456,7 +1501,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 				continue;
 			}
 			edges(k, cw);
-			sizew(k, cw);
+			sizew(k, cw, ch);
 			# where it will go, before its own margins collapse
 			ky := cury;
 			if(!adjoining)
@@ -1572,8 +1617,17 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			empty = 0;
 	}
 	h := sh;
-	if(h < 0)
+	if(h < 0) {
 		h = contenth + vextra(b);
+		if((ah := ratioh(b, b.w)) >= 0) {
+			# from its width; an auto min-height keeps the content in
+			# (the automatic minimum, Sizing 4 §5.2.2)
+			if(ah > h || b.st.minheight.kind != Style->Lauto || isscroller(b))
+				h = ah;
+			if(h > 0)
+				empty = 0;
+		}
+	}
 	b.h = clamph(b, h, cbh);
 	if(empty && b.h != 0)
 		empty = 0;
@@ -4540,8 +4594,8 @@ gridw(k: ref Box, aw: int, b: ref Box): int
 	js := ks.justifyself;
 	if(js == Style->ALauto)
 		js = b.st.justifyitems;
-	if((js == Style->ALnormal || js == Style->ALstretch) && ks.ml.kind != Style->Lauto && ks.mr.kind != Style->Lauto && k.kind != Kreplaced)
-		return clampw(k, aw - k.ml - k.mr, aw);
+	if((js == Style->ALstretch || js == Style->ALnormal && ks.aspect == 0.0) && ks.ml.kind != Style->Lauto && ks.mr.kind != Style->Lauto && k.kind != Kreplaced)
+		return clampw(k, aw - k.ml - k.mr, aw);	# normal is start for a box with a ratio (Grid 2 §6.2)
 	if(k.kind == Kreplaced) {
 		(rw, nil) := replacedsize(k, aw, -1);
 		return clampw(k, rw + hextra(k), aw);
@@ -4656,7 +4710,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 		c := 0;
 		for(j := 0; j < len row.kids; j++) {
 			cell := row.kids[j];
-			if(cell.kind != Kcell && cell.inl)
+			if(cell.kind != Kcell && (cell.inl || isoof(cell)))
 				continue;
 			while(intlist(taken[r], c))
 				c++;
@@ -4830,9 +4884,24 @@ tableintrinsic(b: ref Box): (int, int)
 	return (smn + hextra(b), smx + hextra(b));
 }
 
+# Absolutely positioned boxes among a table's parts (a positioned
+# row group is a block, CSS 2.2 §9.7) await their containing block,
+# with the table's content box start as their static position.
+tableabs(l: ref L, t, b: ref Box)
+{
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(isabs(k))
+			l.pending = ref Abs(k, cbof(l, k), t, t.bl + t.pl, t.bt + t.pt, nil, t.st.dirrtl, nil) :: l.pending;
+		else if(isrowgroup(k) || k.kind == Krow)
+			tableabs(l, t, k);
+	}
+}
+
 laytable(l: ref L, b: ref Box, cbw, cbh: int)
 {
 	st := b.st;
+	tableabs(l, b, b);
 	t := tgrid(curdoc, b);
 	n := t.ncols;
 	(sx, sy) := tspacing(b);
@@ -5144,7 +5213,7 @@ rowgroupof(t: ref Tgrid, row: ref Box): ref Box
 laycaption(l: ref L, k, b: ref Box, cw, y: int): int
 {
 	edges(k, cw);
-	sizew(k, cw);
+	sizew(k, cw, -1);
 	layblock(l, k, cw, -1, nil, 0, 0);
 	k.x = b.bl + b.pl + k.ml;
 	k.y = y + k.mt;
@@ -5199,7 +5268,8 @@ relative(k: ref Box, cbw, cbh: int)
 	st := k.st;
 	if(st.position != Style->Prelative && st.position != Style->Psticky)
 		return;
-	if(st.left.kind != Style->Lauto)
+	# both left and right set: the one in the direction's start wins (§9.4.3)
+	if(st.left.kind != Style->Lauto && (st.right.kind == Style->Lauto || !st.dirrtl))
 		k.x += res(st.left, cbw);
 	else if(st.right.kind != Style->Lauto)
 		k.x -= res(st.right, cbw);
@@ -5273,6 +5343,8 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	if(mrauto)
 		k.mr = 0;
 	w := specw(k, st.width, cbw);
+	if(w < 0 && (lauto || rauto) && (sh := spech(k, st.height, cbh)) >= 0)
+		w = ratiow(k, sh);
 	if(w < 0) {
 		if(!lauto && !rauto)
 			w = cbw - left - right - k.ml - k.mr;
@@ -5296,6 +5368,16 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		if(mlauto && mrauto) {
 			k.ml = free/2;
 			k.mr = free - k.ml;
+			if(free < 0) {
+				# not negative: the one at the direction's start is 0
+				# and the other takes the overflow (§10.3.7)
+				k.ml = 0;
+				k.mr = free;
+				if(st.dirrtl) {
+					k.mr = 0;
+					k.ml = free;
+				}
+			}
 		} else if(mlauto)
 			k.ml = free - k.mr;
 		else
@@ -5331,6 +5413,16 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	if(spech(k, st.height, cbh) < 0 && !tauto && !bauto) {
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
 		k.h = h;
+	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {
+		# auto margins take what the insets and height leave (§10.6.4)
+		free := cbh - top - bottom - h;
+		if(st.mt.kind == Style->Lauto && st.mb.kind == Style->Lauto) {
+			k.mt = free/2;
+			k.mb = free - k.mt;
+		} else if(st.mt.kind == Style->Lauto)
+			k.mt = free - k.mb;
+		else
+			k.mb = free - k.mt;
 	}
 	y: int;
 	if(!tauto)
@@ -5757,9 +5849,24 @@ textfield(d: ref Doc, n: int): int
 aspect(b: ref Box, iw, ih: int): real
 {
 	ratio := b.st.aspect;
-	if(ratio == 0.0 && iw > 0 && ih > 0)
+	if((ratio == 0.0 || b.st.aspectauto) && iw > 0 && ih > 0 && hasratio(b))
 		ratio = real iw / real ih;
 	return ratio;
+}
+
+# the default 300x150 of an iframe, canvas, embed or posterless video
+# is a size, not a ratio (CSS 2.2 §10.3.2 gives them none)
+hasratio(b: ref Box): int
+{
+	if(b.node == 0 || curdoc == nil)
+		return 1;
+	case curdoc.nodes[b.node].tag {
+	Dom->Tiframe or Dom->Tcanvas or Dom->Tembed =>
+		return 0;
+	Dom->Tvideo =>
+		return b.img != nil;
+	}
+	return 1;
 }
 
 # The content height of a replaced box whose height is auto, once its
@@ -5857,6 +5964,14 @@ intrinsic1(b: ref Box): (int, int)
 	if(b.kind == Kreplaced) {
 		(w, nil) := replacedsize(b, -1, -1);
 		return (w + ex, w + ex);
+	}
+	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0) {
+		# transferred from its height (Sizing 4 §5.2.1)
+		h := ir(st.height.px);
+		if(!st.borderbox)
+			h += vextra(b);
+		w := ratiow(b, h) + mgs(b);
+		return (w, w);
 	}
 	if(b.kind == Ktable) {
 		(tmn, tmx) := tableintrinsic(b);
@@ -6255,6 +6370,21 @@ lbbreak(a, b: int): int
 	return lbideo(ca) || lbideo(cb);
 }
 
+# the character the break rules see before s[i]: a combining mark or
+# joiner takes its base's class (LB9), so look back past them
+lbbase(s: string, i, st0: int): int
+{
+	if(bidi == nil)
+		return i;
+	while(i > st0) {
+		cl := bidi->lbclass(s[i]);
+		if(cl != Bidi->LBCM && cl != Bidi->LBZWJ)
+			break;
+		i--;
+	}
+	return i;
+}
+
 # the classes a line breaks beside: ideographs, emoji, Hangul (CJ as
 # in line-break: normal)
 lbideo(cl: int): int
@@ -6349,8 +6479,10 @@ text(f: ref Fl, b: ref Box)
 				if(st.tabsize < 0.0)
 					w = -st.tabsize;	# a length
 				t = "\t";
-			} else if(c == '　')
+			} else if(c == '　') {
 				w = fc.width("　");
+				t = "　";	# not a collapsible space: it keeps its width at a line's end
+			}
 			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 			f.space = 0;
 			i++;
@@ -6366,7 +6498,7 @@ text(f: ref Fl, b: ref Box)
 		# a word: up to the next space or break opportunity
 		st0 := i;
 		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && s[i] != '　') {
-			if(i > st0 && lbbreak(s[i-1], s[i]))
+			if(i > st0 && lbbreak(s[lbbase(s, i-1, st0)], s[i]))
 				break;
 			i++;
 			if(s[i-1] == '-' && i < len s && !isspace(s[i]) && i - st0 > 2)
@@ -6491,14 +6623,45 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 		Ispace =>
 			if(!ln.content && it.text == " " && collapsible(it.box.st))
 				continue;
-			fr := textfrag(ln, it);
-			w := it.w;
-			if(it.text == "\t" && w > 0.0) {
-				# to the next tab stop, a multiple of the tab size from
-				# the content edge (CSS Text 3 §4.1); a tab at a stop is a whole one
-				w -= math->fmod(ln.x, w);
-				fr.w = ir(w);
+			w := tabw(ln, it);
+			if(it.box.st.whitespace == Style->Wbreakspaces && !it.nowrap && ln.content && ln.x + w > real ln.avail + 0.01) {
+				# break-spaces: a space never hangs, and the opportunity
+				# is after it, so one that does not fit wraps, taking the
+				# word before it along when something it could break
+				# from precedes that word (Text 3 §4.1.3, §5.4.2)
+				word: ref Frag;
+				wrap := 1;
+				if(it.box.st.breakall != 2 && ln.frags != nil && (hd ln.frags).kind == Ftext && !isblankrun((hd ln.frags).text)) {
+					# after a word: that goes too, or nothing does when
+					# the word starts the line (line-break: anywhere
+					# breaks before the space itself)
+					wrap = 0;
+					for(fl := tl ln.frags; fl != nil; fl = tl fl)
+						if((hd fl).kind == Ftext) {
+							word = hd ln.frags;
+							wrap = 1;
+							break;
+						}
+				}
+				if(wrap) {
+					if(word != nil) {
+						ln.frags = tl ln.frags;
+						ln.x -= real word.w;
+					}
+					lines = endline(f, ln, x0, first, 0) :: lines;
+					first = 0;
+					ln = newline(f, ln, opened);
+					if(word != nil) {
+						word.x = ir(ln.x);
+						ln.frags = word :: ln.frags;
+						ln.x += real word.w;
+						ln.content = 1;
+					}
+					w = tabw(ln, it);
+				}
 			}
+			fr := textfrag(ln, it);
+			fr.w = ir(w);
 			ln.frags = fr :: ln.frags;
 			ln.x += w;
 			if(!collapsible(it.box.st))
@@ -6684,6 +6847,17 @@ splitword(it: ref Item, avail: real): (ref Item, ref Item)
 	t.text = s[k:];
 	t.w = it.face.width(t.text);
 	return (h, t);
+}
+
+# a space's width on the line: a tab's is to the next tab stop, a
+# multiple of the tab size from the content edge (CSS Text 3 §4.1); a
+# tab at a stop is a whole one
+tabw(ln: ref Ln, it: ref Item): real
+{
+	w := it.w;
+	if(it.text == "\t" && w > 0.0)
+		w -= math->fmod(ln.x, w);
+	return w;
 }
 
 textfrag(ln: ref Ln, it: ref Item): ref Frag

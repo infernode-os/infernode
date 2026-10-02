@@ -239,6 +239,7 @@ Style: module
 		tolerance:	Len;	# flow-tolerance: Lnormal (1em), Lnone (infinite), or a length (% of the grid axis)
 		subcols, subrows:	int;	# grid-template-columns/rows: subgrid (the tokens are then its line names)
 		contain:	int;		# contain: CT bits
+		aspectauto:	int;	# aspect-ratio: auto <ratio>: a replaced box's natural ratio first, else the ratio of the content box
 
 		new:	fn(): ref St;		# initial values
 	};

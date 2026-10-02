@@ -348,6 +348,11 @@ testHints(t: ref T)
 	t.assert(!st(p, "o").dirrtl && st(p, "o").unicodebidi == Style->UBisolateoverride,
 		sys->sprint("bdo overrides: rtl %d ub %d", st(p, "o").dirrtl, st(p, "o").unicodebidi));
 	t.asserteq(st(p, "s").unicodebidi, Style->UBembed, "unicode-bidi: embed");
+	p = page("<style>p { margin: 0; color: red } #r { margin-top: revert; color: revert } .f { align-content: safe center; justify-content: unsafe end }</style><p id=r>x<div class=f id=f></div>");
+	t.assert(px(st(p, "r").mt) == 16.0, sys->sprint("margin: revert restores the UA margin: %g", px(st(p, "r").mt)));
+	t.assertseq(col(st(p, "r").color), "000000ff", "color: revert with no UA value is unset (inherited)");
+	t.asserteq(st(p, "f").safe, 1, "safe recorded for align-content only");
+	t.asserteq(st(p, "f").aligncontent, Style->ALcenter, "safe center is center");
 }
 
 testPseudo(t: ref T)

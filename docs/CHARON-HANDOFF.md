@@ -40,6 +40,24 @@ reviewers, one per area: html/dom, css/style, layout/fonts), verified
 each finding against the code, and fixed what mattered; every fix has
 a fixture or unit test that fails on the previous engine.
 
+- `14fc892`…`b6c0356` **Bidirectional text.**  `lib/bidi` (module
+  `bidi.m`, `/dis/lib/bidi.dis`) is UAX #9 complete, tables generated
+  from Unicode 18 by `tools/bidi/gen.py`, tested against every 25th
+  case of Unicode's `BidiCharacterTest.txt` (the whole file of 91,707
+  passes).  The engine resolves each block's inline content as a
+  paragraph (forced breaks split paragraphs; plaintext takes each
+  paragraph's direction from its first strong character), splits words
+  at level changes, reorders each line's text, atomic and inline-box
+  edges, draws right-to-left runs reversed with mirrored brackets.
+  `unicode-bidi` is a property; `dir`, `bdo`, `bdi` get theirs.  Not
+  shaping (Arabic letters are drawn unjoined).
+- `9e35a95` Nested documents: `<iframe>` (src, srcdoc) and `<object>`
+  documents are the pipeline run again at the frame's size, painted
+  into an image (no scrolling or clicking inside yet; three levels
+  deep).  `position: relative` on inlines.  `safe` alignment; `revert`.
+  Text fields as wide as `size` says; checkboxes without the UA
+  border; min/max-width bound intrinsic widths; `<center>` centres
+  blocks; `border=0`; a cell's content height.
 - `4e4db7b` Encodings (undeclared pages sniffed as UTF-8 or
   windows-1252, UTF-16, more labels), `<meta http-equiv=refresh>`,
   srcset and `<picture>`, overflow clipping of layers through
@@ -206,13 +224,14 @@ In rough order of payoff.
    - `CSS2/floats/float-nowrap-hyphen-rewind-1`, `CSS2/box/ltr-span-only`,
      `css-lists/ol-change-display-type`, `css-display/run-in`: unexamined.
    The list, with current status: `tools/ref/baseline/open-regressions.txt`.
-3. **Exposed gaps behind many failures:** bidi (UAX #9), vertical writing
-   modes, complex-script shaping (Arabic joining; the `css-text/shaping`
-   tests now load their WOFF2 fonts and fail honestly), GPOS kerning
-   (only the legacy `kern` table is read), `<iframe>`/nested documents
-   (`<object>` with HTML data shows an empty frame), translucent opacity on
+3. **Exposed gaps behind many failures:** vertical writing modes,
+   complex-script shaping (Arabic joining; the `css-text/shaping` tests
+   load their WOFF2 fonts and fail honestly) and GSUB in general (icon
+   fonts such as Material Icons use ligatures: go.dev's header shows the
+   ligature names as text), GPOS kerning (only the legacy `kern` table is
+   read), scrolling and clicking inside frames, translucent opacity on
    inline boxes (floats inside them paint at full opacity; opacity 0 is
-   handled).
+   handled).  Bidi and `<iframe>` are done (above).
 4. **Sub-pixel layout.**  Layout positions are ints; Chromium uses 1/64 px.
    Many near-miss reftests (a few hundred pixels at glyph edges) come
    from this.  Large change; do it deliberately.

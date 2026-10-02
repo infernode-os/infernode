@@ -204,7 +204,6 @@ Style: module
 
 		# replaced elements and the rest
 		objectfit:	int;	# 0 fill, 1 contain, 2 cover, 3 none, 4 scale-down
-		transformv:	array of ref Css->Tok;	# transform, unparsed; nil = none
 		cursor:	string;
 		pointer:	int;	# pointer-events not none
 		appearance:	int;	# appearance not none
@@ -214,6 +213,9 @@ Style: module
 		sid:	int;		# serial number, for style sharing
 		nokern:	int;		# font-kerning: none (or "kern" off)
 		unicodebidi:	int;	# UBnormal ...
+		safe:	int;		# "safe" alignment: bit 1 align-content, 2 justify-content, 4 align-items/self
+		translated:	int;	# a transform applies (a stacking context); only its translation is drawn
+		tx, ty:	Len;		# that translation (percentages of the box's own size)
 
 		new:	fn(): ref St;		# initial values
 	};

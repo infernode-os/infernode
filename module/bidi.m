@@ -27,6 +27,11 @@ Bidi: module
 	class:	fn(c: int): int;
 	mirror:	fn(c: int): int;	# the mirrored character, or c
 
+	# Joining_Type (Unicode chapter 9, ArabicShaping.txt): how a cursive
+	# letter connects to its neighbours
+	JU, JC, JD, JR, JL, JT: con iota;	# none, join-causing, dual, right, left, transparent
+	joining:	fn(c: int): int;
+
 	# the paragraph's base direction from its first strong character
 	# (P2, P3): 0 left to right, 1 right to left, -1 none found
 	basedir:	fn(s: array of int): int;

@@ -1431,6 +1431,22 @@ trim(v: array of ref Tok): array of ref Tok
 	return v[i:e];
 }
 
+# v split at its commas
+commas(v: array of ref Tok): list of array of ref Tok
+{
+	r: list of array of ref Tok;
+	st := 0;
+	for(i := 0; i <= len v; i++)
+		if(i == len v || v[i].kind == Kcomma) {
+			r = v[st:i] :: r;
+			st = i+1;
+		}
+	o: list of array of ref Tok;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
 # v without whitespace tokens
 nows(v: array of ref Tok): array of ref Tok
 {
@@ -1692,8 +1708,9 @@ St.new(): ref St
 		nogrid, nogrid, nogrid, nogrid, nil,
 		0, 0, 0.0, 0.0, 0, 0,	# border-spacing: 0 (the UA sheet gives <table> 2px)
 		0, a, 3, Bnone, Ccurrent,
-		0, nil, "auto", 1, 1, 0, Ccurrent,
-		nil, 0, 0, UBnormal);
+		0, "auto", 1, 1, 0, Ccurrent,
+		nil, 0, 0, UBnormal, 0,
+		0, z, z);
 }
 
 nextsid := 1;
@@ -2091,6 +2108,7 @@ msort(a, t: array of ref Md)
 
 cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 {
+	curmds = mds;
 	st := inherit(parent);
 	pfs := 16.0;
 	if(parent != nil)
@@ -2247,7 +2265,7 @@ applydecl(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx)
 		if(!ok) {
 			# invalid at computed-value time: as if unset
 			for(l := longhands(d.name, nil); l != nil; l = tl l)
-				wide(st, (hd l).t0, "unset", parent);
+				wide(st, (hd l).t0, "unset", parent, ctx);
 			return;
 		}
 		val = trim(val);
@@ -2276,7 +2294,7 @@ applyonly(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx, only: string)
 }
 
 # CSS-wide keywords.
-wide(st: ref St, nm, k: string, parent: ref St)
+wide(st: ref St, nm, k: string, parent: ref St, ctx: ref Ctx)
 {
 	src: ref St;
 	case k {
@@ -2284,7 +2302,21 @@ wide(st: ref St, nm, k: string, parent: ref St)
 		src = parent;
 	"initial" =>
 		src = initial;
-	"unset" or "revert" or "revert-layer" =>
+	"revert" =>
+		# the value the UA sheet (or a presentational hint) gave, if any
+		# (Cascade 5 §7.3.1), else as unset
+		for(i := len curmds - 1; i >= 0; i--) {
+			md := curmds[i];
+			if(md.tier < Tauthor && md.decl.name != "all" && setslonghand(md.decl, nm)) {
+				applyonly(st, md.decl, parent, ctx, nm);
+				return;
+			}
+		}
+		if(isinherited(nm))
+			src = parent;
+		else
+			src = initial;
+	"unset" or "revert-layer" =>
 		if(isinherited(nm))
 			src = parent;
 		else
@@ -2293,6 +2325,18 @@ wide(st: ref St, nm, k: string, parent: ref St)
 	if(src == nil)
 		src = initial;
 	copyprop(st, src, nm);
+}
+
+# the declarations of the element being cascaded, for revert
+curmds: array of ref Md;
+
+# does the declaration set the longhand nm?
+setslonghand(d: ref Decl, nm: string): int
+{
+	for(l := longhands(d.name, d.val); l != nil; l = tl l)
+		if((hd l).t0 == nm)
+			return 1;
+	return 0;
 }
 
 iswide(v: array of ref Tok): string
@@ -3360,7 +3404,7 @@ allprops := array[] of {
 	"border-left-width", "border-top-style", "border-right-style", "border-bottom-style",
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
-	"overflow-y", "visibility", "opacity", "color", "background-color", "background-image",
+	"overflow-y", "visibility", "opacity", "transform", "color", "background-color", "background-image",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
@@ -3711,7 +3755,7 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	if(v == nil)
 		return 0;
 	if((w := iswide(v)) != nil) {
-		wide(st, nm, w, parent);
+		wide(st, nm, w, parent, ctx);
 		return 1;
 	}
 	id := ident(v);
@@ -3937,6 +3981,57 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		if(o < 0.0) o = 0.0;
 		if(o > 1.0) o = 1.0;
 		st.opacity = o;
+	"transform" =>
+		# a list of transform functions; translations are composed, the
+		# rest (rotations, scales, skews) make the box a stacking
+		# context and are otherwise not drawn
+		if(id == "none") {
+			st.translated = 0;
+			st.tx = st.ty = px(0.0);
+			return 1;
+		}
+		x := nows(v);
+		if(len x == 0)
+			return 0;
+		tx := 0.0;
+		ty := 0.0;
+		ptx := 0.0;
+		pty := 0.0;
+		for(i := 0; i < len x; i++) {
+			t := x[i];
+			if(t.kind != Kfunction)
+				return 0;
+			args := commas(t.kids);
+			case t.s {
+			"translate" or "translateX" or "translateY" or "translate3d" =>
+				n := len args;
+				if(n < 1 || t.s == "translateY" && n > 1 || t.s == "translateX" && n > 1 || t.s == "translate" && n > 2 || t.s == "translate3d" && n != 3)
+					return 0;
+				for(k := 0; k < n && k < 2; k++) {
+					(ok, l) := length(hd args, ctx);
+					args = tl args;
+					if(!ok || l.kind != Lpx)
+						return 0;
+					# a percentage is of the box's own size; kept as such
+					if(t.s == "translateY" || k == 1) {
+						ty += l.px;
+						pty += l.pct;
+					} else {
+						tx += l.px;
+						ptx += l.pct;
+					}
+				}
+			"rotate" or "rotateX" or "rotateY" or "rotateZ" or "rotate3d" or "scale" or "scaleX" or
+			"scaleY" or "scaleZ" or "scale3d" or "skew" or "skewX" or "skewY" or "matrix" or
+			"matrix3d" or "perspective" =>
+				;
+			* =>
+				return 0;
+			}
+		}
+		st.translated = 1;
+		st.tx = Len(Lpx, tx, ptx, nil);
+		st.ty = Len(Lpx, ty, pty, nil);
 	"color" =>
 		(ok, c) := color(v);
 		if(!ok)
@@ -4335,14 +4430,19 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		a := alignment(nows(v));
 		if(a < 0)
 			return 0;
+		bit := 0;
 		case nm {
-		"justify-content" => st.justifycontent = a;
-		"align-items" => st.alignitems = a;
-		"align-self" => st.alignself = a;
-		"align-content" => st.aligncontent = a;
+		"justify-content" => st.justifycontent = a; bit = 2;
+		"align-items" => st.alignitems = a; bit = 4;
+		"align-self" => st.alignself = a; bit = 4;
+		"align-content" => st.aligncontent = a; bit = 1;
 		"justify-items" => st.justifyitems = a;
 		"justify-self" => st.justifyself = a;
 		}
+		if(sawsafe)
+			st.safe |= bit;
+		else
+			st.safe &= ~bit;
 	"row-gap" or "column-gap" =>
 		l: Len;
 		if(id == "normal")
@@ -4461,11 +4561,6 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"scale-down" => st.objectfit = 4;
 		* => return 0;
 		}
-	"transform" =>
-		if(id == "none")
-			st.transformv = nil;
-		else
-			st.transformv = lentoks(trim(v), ctx);
 	"cursor" =>
 		x := nows(v);
 		if(len x > 0 && x[len x - 1].kind == Kident)
@@ -4547,9 +4642,13 @@ display(x: array of ref Tok): int
 	return Dblock;
 }
 
+# whether the last alignment value parsed had the "safe" keyword
+sawsafe := 0;
+
 alignment(x: array of ref Tok): int
 {
 	a := -1;
+	sawsafe = 0;
 	for(k := 0; k < len x; k++) {
 		if(x[k].kind != Kident)
 			return -1;
@@ -4566,7 +4665,8 @@ alignment(x: array of ref Tok): int
 		"left" => a = ALleft;
 		"right" => a = ALright;
 		"auto" => a = ALauto;
-		"safe" or "unsafe" or "legacy" => ;
+		"safe" => sawsafe = 1;
+		"unsafe" or "legacy" => ;
 		* => return -1;
 		}
 	}
@@ -4921,6 +5021,10 @@ copyprop(d, s: ref St, nm: string)
 	"overflow-y" => d.overflowy = s.overflowy;
 	"visibility" => d.visibility = s.visibility;
 	"opacity" => d.opacity = s.opacity;
+	"transform" =>
+		d.translated = s.translated;
+		d.tx = s.tx;
+		d.ty = s.ty;
 	"color" => d.color = s.color;
 	"background-color" => d.bgcolor = s.bgcolor;
 	"background-image" or "background-repeat" or "background-position" or "background-size" or
@@ -5005,7 +5109,6 @@ copyprop(d, s: ref St, nm: string)
 	"column-rule-style" => d.colrules = s.colrules;
 	"column-rule-color" => d.colrulec = s.colrulec;
 	"object-fit" => d.objectfit = s.objectfit;
-	"transform" => d.transformv = s.transformv;
 	"cursor" => d.cursor = s.cursor;
 	"pointer-events" => d.pointer = s.pointer;
 	"appearance" => d.appearance = s.appearance;
@@ -5254,6 +5357,8 @@ dump(st: ref St): string
 	s += "text-align " + names4[st.align] + "\n";
 	s += "white-space " + names5[st.whitespace] + "\n";
 	s += "opacity " + realstr(st.opacity) + "\n";
+	if(st.translated)
+		s += "transform translate(" + lenstr(st.tx) + ", " + lenstr(st.ty) + ")\n";
 	s += "visibility " + names6[st.visibility] + "\n";
 	if(st.display == Dflex || st.display == Dinlineflex) {
 		s += "flex-direction " + names7[st.flexdir] + "\n";

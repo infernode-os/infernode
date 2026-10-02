@@ -185,6 +185,20 @@ testWOFF2hmtx(t: ref T)
 
 # OpenType with CFF outlines, as Font Awesome is: upem 512, the
 # language icon U+F1AB 576 units wide, the magnifier U+F002 512
+# GSUB ligatures: liga.ttf (made by fontTools) has f i -> f_i (600
+# units) and f f i -> f_f_i (1100); f is 500, i 300
+testLigatures(t: ref T)
+{
+	t.assertnil(fonts->addface("lig", 400, 0, nil, readfile(DIR + "liga.ttf")), "add liga.ttf");
+	f := fonts->face("lig" :: nil, 400, 0, 100.0);
+	t.assert(f != nil, "face");
+	t.assert(f.width("f") == 50.0 && f.width("i") == 30.0, sys->sprint("single glyphs: %g %g", f.width("f"), f.width("i")));
+	t.assert(f.width("fi") == 60.0, sys->sprint("fi is one ligature glyph: %g", f.width("fi")));
+	t.assert(f.width("ffi") == 110.0, sys->sprint("the longest ligature wins: %g", f.width("ffi")));
+	t.assert(f.width("if") == 80.0, sys->sprint("no ligature backwards: %g", f.width("if")));
+	t.assert(f.width("fi fi") == 145.0, sys->sprint("ligatures around a space: %g", f.width("fi fi")));
+}
+
 testOTF(t: ref T)
 {
 	(a, err) := ofont->open(readfile(DIR + "FASubset.otf"), "ttf");
@@ -271,6 +285,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WOFF2", testWOFF2);
 	run("WOFF2hmtx", testWOFF2hmtx);
 	run("WOFF2face", testWOFF2face);
+	run("Ligatures", testLigatures);
 	run("OTF", testOTF);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

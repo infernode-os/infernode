@@ -1350,9 +1350,13 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	ch := -1;
 	if(sh >= 0)
 		ch = clamph(b, sh, cbh) - vextra(b);
-	# the main and cross space
+	# the main and cross space; a column's main size is definite only
+	# when its height is (§9.2), the space to flex into may come from
+	# max-height as well
+	maindef := cw;
 	mainavail := cw;
 	if(!row) {
+		maindef = ch;
 		mainavail = ch;
 		if(mainavail < 0) {
 			mx := spech(b, st.maxheight, cbh);
@@ -1422,7 +1426,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				basis = ks.height;
 		}
 		if(basis.kind != Style->Lauto && basis.kind != Style->Lcontent)
-			base = mainsize(k, basis, row, mainavail);
+			base = mainsize(k, basis, row, maindef);
+		contenth := -1;	# a column item's content height, once known
 		if(base < 0) {
 			# content size
 			if(row) {
@@ -1431,7 +1436,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			} else {
 				k.w = flexcrossw(k, b, cw);
 				layblock(l, k, cw, -1, nil, 0, 0);
-				base = k.h;
+				base = contenth = k.h;
 			}
 		}
 		fi.base = real base;
@@ -1442,16 +1447,25 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			mnv = ks.minheight;
 			mxv = ks.maxheight;
 		}
-		minm := mainsize(k, mnv, row, mainavail);
+		minm := mainsize(k, mnv, row, maindef);
 		if(minm < 0) {
 			minm = 0;
-			if(mnv.kind == Style->Lauto && ks.overflowx == Style->Ovisible) {
+			if(mnv.kind == Style->Lauto && ks.overflowx == Style->Ovisible && ks.overflowy == Style->Ovisible) {
 				if(row) {
 					(mn, nil) := intrinsic(k);
 					minm = mn - nz(k.ml) - nz(k.mr);
 					# no larger than a definite specified size
 					if((sw := specw(k, ks.width, mainavail)) >= 0 && sw < minm)
 						minm = sw;
+				} else {
+					if(contenth < 0) {
+						k.w = flexcrossw(k, b, cw);
+						layblock(l, k, cw, -1, nil, 0, 0);
+						contenth = k.h;
+					}
+					minm = contenth;
+					if((sh := spech(k, ks.height, maindef)) >= 0 && sh < minm)
+						minm = sh;
 				}
 			}
 		}
@@ -1461,7 +1475,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			minm = vextra(k);
 		fi.minm = real minm;
 		if(mxv.kind != Style->Lnone)
-			fi.maxm = real mainsize(k, mxv, row, mainavail);
+			fi.maxm = real mainsize(k, mxv, row, maindef);
 		fi.hyp = clampr(fi.base, fi.minm, fi.maxm);
 	}
 
@@ -1603,7 +1617,13 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	# they in a column container whose direction is rtl, whose cross
 	# start is the right; both at once cancel
 	wrapr := st.flexwrap == 2;
-	if(wrapr != (!row && st.dirrtl))
+	if(free < 0 && (st.safe & 1)) {
+		# safe: the lines overflow, so they align to the start and spill
+		# past the end edge, whichever way they run (Box Alignment 3 §4.4)
+		for(i = 0; i < len la; i++)
+			la[i].pos -= off;
+		off = 0;
+	} else if(wrapr != (!row && st.dirrtl))
 		for(i = 0; i < len la; i++)
 			la[i].pos = containercross - la[i].pos - la[i].cross;
 
@@ -1657,6 +1677,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		# reversed line is then mirrored in its space: that reverses
 		# both the order and the justification at once.
 		jc := st.justifycontent;
+		if(freem < 0 && (st.safe & 2))
+			jc = Style->ALstart;	# safe: overflow past the end edge
 		case jc {
 		Style->ALend or Style->ALright =>
 			start = freem;
@@ -2551,7 +2573,7 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 			k := g.box;
 			mn, mx: int;
 			if(cols)
-				(mn, mx) = intrinsic(k);
+				(mn, mx) = contribution(k);
 			else {
 				mn = k.h + k.mt + k.mb;
 				mx = mn;
@@ -2952,7 +2974,7 @@ tcolumns(t: ref Tgrid, tw: int): (array of int, array of int, array of real, arr
 				continue;
 			k := c.box;
 			edges(k, tw);
-			(cmn, cmx) := intrinsic(k);
+			(cmn, cmx) := contribution(k);
 			ks := k.st;
 			if(ks.width.kind == Style->Lpx && ks.width.pct != 0.0 && ks.width.px == 0.0) {
 				if(c.cs == 1 && ks.width.pct > pct[c.c])
@@ -3030,7 +3052,7 @@ tableintrinsic(b: ref Box): (int, int)
 		smx += mx[i];
 	}
 	for(cl := t.captions; cl != nil; cl = tl cl) {
-		(cmn, nil) := intrinsic(hd cl);
+		(cmn, nil) := contribution(hd cl);
 		if(cmn > smn)
 			smn = cmn;
 	}
@@ -3913,8 +3935,20 @@ intrinsic(b: ref Box): (int, int)
 	if(b.igen == laygen && b.iex == ex)
 		return (b.imn, b.imx);
 	(mn, mx) := intrinsic1(b);
-	# the box's own min-width and max-width bound what it contributes
-	# (CSS Sizing 3 §5.2): a submit button with min-width: 40px takes 40
+	b.imn = mn;
+	b.imx = mx;
+	b.iex = ex;
+	b.igen = laygen;
+	return (mn, mx);
+}
+
+# What b contributes to the intrinsic size of its parent: its own
+# widths, bounded by its min-width and max-width (CSS Sizing 3 §5.2).
+# A box's own size ignores them (a flex base size is measured before
+# the min and max are applied), so the two are kept apart.
+contribution(b: ref Box): (int, int)
+{
+	(mn, mx) := intrinsic(b);
 	st := b.st;
 	mg := nz(b.ml) + nz(b.mr);
 	if(st.minwidth.kind == Style->Lpx && st.minwidth.pct == 0.0) {
@@ -3932,13 +3966,12 @@ intrinsic(b: ref Box): (int, int)
 			w += hextra(b);
 		if(mx > w)
 			mx = w;
-		if(mn > w)
+		# a table is never narrower than its minimum (CSS 2.2 §17.5.2)
+		if(mn > w && b.kind != Ktable)
 			mn = w;
+		if(mx < mn)
+			mx = mn;
 	}
-	b.imn = mn;
-	b.imx = mx;
-	b.iex = ex;
-	b.igen = laygen;
 	return (mn, mx);
 }
 
@@ -3993,7 +4026,7 @@ intrinsic1(b: ref Box): (int, int)
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
 			edges(k, 0);
-			(kmn, kmx) := intrinsic(k);
+			(kmn, kmx) := contribution(k);
 			if(b.st.flexwrap != 0) {
 				if(kmn > mn)
 					mn = kmn;
@@ -4005,7 +4038,7 @@ intrinsic1(b: ref Box): (int, int)
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
 			edges(k, 0);
-			(kmn, kmx) := intrinsic(k);
+			(kmn, kmx) := contribution(k);
 			if(kmn > mn)
 				mn = kmn;
 			if(kmx > mx)
@@ -4055,7 +4088,7 @@ inlineintrinsic(b: ref Box): (int, int)
 			word += it.w;
 		Iatomic =>
 			edges(it.box, 0);	# its padding and borders count; % ones are 0 here
-			(kmn, kmx) := intrinsic(it.box);
+			(kmn, kmx) := contribution(it.box);
 			if(real kmn > mn)
 				mn = real kmn;
 			line += real kmx;
@@ -4067,7 +4100,7 @@ inlineintrinsic(b: ref Box): (int, int)
 			word = 0.0;
 		Ifloat =>
 			edges(it.box, 0);
-			(kmn, kmx) := intrinsic(it.box);
+			(kmn, kmx) := contribution(it.box);
 			if(real kmn > mn)
 				mn = real kmn;
 			line += real kmx;
@@ -4162,7 +4195,13 @@ markeritem(f: ref Fl, b: ref Box)
 	if(b.text == "")
 		return;
 	fc := face(b.st);
+	# an inside marker is its own bidi isolate (::marker in html.css)
+	iso := b.st.listinside && isolating(b.st.unicodebidi);
+	if(iso)
+		emit(f, ref Item(Iopen, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
 	emit(f, ref Item(Iword, b.text, fc.width(b.text), b, fc, 1, 0, 0, 0, 0));
+	if(iso)
+		emit(f, ref Item(Iclose, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
 	f.space = 1;
 }
 
@@ -4320,8 +4359,7 @@ Ln: adt {
 	avail:	int;			# right edge, in content coordinates
 	left:	int;			# left edge (past left floats)
 	content:	int;		# something has been placed
-	open:	list of (ref Box, real, int);	# inline boxes open on this line: (box, start x, first?)
-	spaces:	int;		# expansion opportunities, for justify
+	open:	list of (ref Box, real, int, int);	# inline boxes open on this line: (box, start x, first?, the level of its bidi control)
 	floats:	list of ref Box;	# floats met mid-line, placed when the line ends
 };
 
@@ -4379,7 +4417,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	x0 := b.bl + b.pl;
 	para := 0;
 	(items, para) = bidiitems(b, items);
-	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, 0, nil);
+	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, nil);
 	edgesat(f, ln);
 	indent := res(st.indent, cw);
 	ln.x += real indent;
@@ -4389,7 +4427,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 		it := hd il;
 		case it.kind {
 		Iopen =>
-			ln.open = (it.box, ln.x, 1) :: ln.open;
+			ln.open = (it.box, ln.x, 1, it.level) :: ln.open;
 			opened = it.box :: opened;
 			ln.x += it.w;
 			if(it.w > 0.0)
@@ -4398,14 +4436,23 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			ln.x += it.w;
 			if(it.w > 0.0)
 				ln.content = 1;
-			ln.frags = span(ln, it.box, 1) :: ln.frags;
+			fr := span(ln, it.box, 1);
+			fr.level = it.level;
+			ln.frags = fr :: ln.frags;
 			opened = removebox(opened, it.box);
 		Ispace =>
 			if(!ln.content && it.text == " " && collapsible(it.box.st))
 				continue;
-			ln.frags = textfrag(ln, it) :: ln.frags;
-			ln.x += it.w;
-			ln.spaces++;
+			fr := textfrag(ln, it);
+			w := it.w;
+			if(it.text == "\t" && w > 0.0) {
+				# to the next tab stop, a multiple of the tab size from
+				# the content edge (CSS Text 3 §4.1); a tab at a stop is a whole one
+				w -= math->fmod(ln.x, w);
+				fr.w = ir(w);
+			}
+			ln.frags = fr :: ln.frags;
+			ln.x += w;
 			if(!collapsible(it.box.st))
 				ln.content = 1;	# preserved white space is content
 		Iword =>
@@ -4527,14 +4574,14 @@ removebox(l: list of ref Box, b: ref Box): list of ref Box
 
 newline(f: ref Ifc, old: ref Ln, opened: list of ref Box): ref Ln
 {
-	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0, nil);
+	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, nil);
 	edgesat(f, ln);
 	# inline boxes still open continue on the new line
 	r: list of ref Box;
 	for(l := opened; l != nil; l = tl l)
 		r = hd l :: r;
 	for(; r != nil; r = tl r)
-		ln.open = (hd r, ln.x, 0) :: ln.open;
+		ln.open = (hd r, ln.x, 0, -1) :: ln.open;
 	return ln;
 }
 
@@ -4569,19 +4616,21 @@ span(ln: ref Ln, b: ref Box, last: int): ref Frag
 {
 	x := 0.0;
 	first := 0;
-	r: list of (ref Box, real, int);
+	level := -1;
+	r: list of (ref Box, real, int, int);
 	for(l := ln.open; l != nil; l = tl l) {
-		(ob, ox, ofirst) := hd l;
+		(ob, ox, ofirst, olevel) := hd l;
 		if(ob == b) {
 			x = ox;
 			first = ofirst;
+			level = olevel;
 		} else
 			r = hd l :: r;
 	}
 	ln.open = nil;
 	for(; r != nil; r = tl r)
 		ln.open = hd r :: ln.open;
-	return ref Frag(Fspan, ir(x), 0, ir(ln.x - x), 0, 0, b, nil, nil, first, last, 0, 0, 0);
+	return ref Frag(Fspan, ir(x), 0, ir(ln.x) - ir(x), 0, 0, b, nil, nil, first, last, 0, 0, level);	# ends where the next content starts
 }
 
 lineheight(st: ref St, f: ref Typeface): real
@@ -4610,7 +4659,6 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		if(f.kind == Ftext && f.text == " " && collapsible(f.box.st)) {
 			ln.x -= real f.w;
 			f.w = 0;
-			ln.spaces--;
 			continue;
 		}
 		if(f.kind == Ftext && isblankrun(f.text) && f.box.st.whitespace == Style->Wprewrap && !forced) {
@@ -4706,13 +4754,27 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	Style->Acenter =>
 		off = extra/2.0;
 	Style->Ajustify =>
-		if(!forced && ln.spaces > 0 && extra > 0.0) {
-			per := extra / real ln.spaces;
+		# only the spaces after the last tab expand: the tab stops
+		# before it must stay where they are (CSS Text 3 §7.3)
+		from := 0;
+		nsp := 0;
+		for(i = 0; i < len frags; i++) {
+			f := frags[i];
+			if(f.kind != Ftext)
+				continue;
+			if(f.text == "\t") {
+				from = i;
+				nsp = 0;
+			} else if(f.text == " " && f.w > 0 && !ishanging(f, hanging))
+				nsp++;
+		}
+		if(!forced && nsp > 0 && extra > 0.0) {
+			per := extra / real nsp;
 			acc := 0.0;
-			for(i = 0; i < len frags; i++) {
+			for(i = from; i < len frags; i++) {
 				f := frags[i];
 				f.x += ir(acc);
-				if(f.kind == Ftext && f.text == " " && f.w > 0) {	# not a hanging trailing space
+				if(f.kind == Ftext && f.text == " " && f.w > 0 && !ishanging(f, hanging)) {
 					acc += per;
 					f.w += ir(per);
 				}
@@ -5041,73 +5103,67 @@ reorderline(frags: array of ref Frag, para: int)
 			any = 1;
 	if(!any)
 		return;
-	# the sequence in logical order: content, and the edges of the
-	# inline boxes, which sit before and after their content
+	# The content in logical order, without the edges of the inline
+	# boxes: those go back in afterwards, at the ends of each box.  An
+	# isolate's controls are there, at the level outside it, so that
+	# its content and its neighbours are reversed as separate runs.
 	vl: list of ref Vis;
 	n := 0;
+	x0 := 1 << 30;
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		if(f.kind != Fspan) {
-			vl = ref Vis(f, 0, f.x, f.x, f.w, f.level) :: vl;
-			n++;
+		if(f.x < x0)
+			x0 = f.x;
+		if(f.kind == Fspan) {
+			if(f.level < 0 || !isolating(f.box.st.unicodebidi))
+				continue;
+			if(f.first) {
+				vl = ref Vis(f, 1, f.x, f.x, 0, f.level) :: vl;
+				n++;
+			}
+			if(f.last) {
+				vl = ref Vis(f, 2, f.x + f.w, f.x + f.w, 0, f.level) :: vl;
+				n++;
+			}
 			continue;
 		}
-		k := f.box;
-		if(f.first && (e := k.ml + k.bl + k.pl) > 0) {
-			vl = ref Vis(f, 1, f.x, f.x, e, -1) :: vl;
-			n++;
-		}
-		if(f.last && (e = k.mr + k.br + k.pr) > 0) {
-			vl = ref Vis(f, 2, f.x + f.w - e, f.x + f.w - e, e, -1) :: vl;
-			n++;
-		}
+		vl = ref Vis(f, 0, f.x, f.x, f.w, f.level) :: vl;
+		n++;
 	}
 	if(n == 0)
 		return;
 	v := array[n] of ref Vis;
 	for(k := n - 1; vl != nil; vl = tl vl)
 		v[k--] = hd vl;
-	# by logical place (edges before the content they enclose)
 	for(i = 1; i < n; i++)
 		for(j := i; j > 0 && visbefore(v[j], v[j-1]); j--)
 			(v[j], v[j-1]) = (v[j-1], v[j]);
-	# an edge takes the level of the content it touches
-	for(i = 0; i < n; i++)
-		if(v[i].level < 0) {
-			lv := para;
-			if(v[i].edge == 1) {
-				for(j := i + 1; j < n && v[j].level < 0; j++)
-					;
-				if(j < n)
-					lv = v[j].level;
-			} else {
-				for(j := i - 1; j >= 0 && v[j].level < 0; j--)
-					;
-				if(j >= 0)
-					lv = v[j].level;
-			}
-			v[i].level = lv;
-		}
 	lev := array[n] of int;
 	for(i = 0; i < n; i++)
 		lev[i] = v[i].level;
 	# L1: trailing white space at the paragraph level
 	for(k = n - 1; k >= 0 && (v[k].edge != 0 || v[k].frag.kind == Ftext && isblankrun(v[k].frag.text)); k--)
-		if(v[k].edge == 0)
-			lev[k] = para;
+		lev[k] = para;
 	order := bidi->reorder(lev);
-	x := v[0].x;
+	# each one's room is up to the next one's logical place, less any
+	# edges between: the rounding of the logical positions is kept
+	room := array[n] of int;
+	for(k = 0; k < n; k++) {
+		room[k] = v[k].w;
+		if(k + 1 < n)
+			room[k] = v[k+1].logx - v[k].logx - edgesin(frags, v[k].logx + v[k].w, v[k+1].logx);
+	}
+	x := x0;
 	for(k = 0; k < n; k++) {
 		e := v[order[k]];
 		e.x = x;
-		x += e.w;
+		x += room[order[k]];
 	}
-	for(k = 0; k < n; k++)
-		if(v[k].edge == 0)
-			v[k].frag.x = v[k].x;
-	# an inline box's fragment covers its edges and content where they
-	# are now (the ranges tested are the logical ones, so inner boxes
-	# first: the fragments come in closing order, inner before outer)
+	# An inline box covers its content wherever that is now.  Its start
+	# edge goes at the line-left end of that if the box is left-to-right,
+	# at the line-right end if not; the end edge at the other.  Inner
+	# boxes first (the fragments come in closing order), so that an
+	# outer box covers their edges too.
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
 		if(f.kind != Fspan)
@@ -5116,35 +5172,99 @@ reorderline(frags: array of ref Frag, para: int)
 		hi := -(1 << 30);
 		for(k = 0; k < n; k++) {
 			e := v[k];
-			mine := e.frag == f;
-			if(e.edge == 0)
-				mine = oldin(e, f);
-			if(mine) {
+			if(oldin(e, f)) {
 				if(e.x < lo)
 					lo = e.x;
 				if(e.x + e.w > hi)
 					hi = e.x + e.w;
 			}
 		}
-		if(hi >= lo) {
-			f.x = lo;
-			f.w = hi - lo;
+		if(hi < lo)
+			continue;
+		b := f.box;
+		es := 0;
+		ee := 0;
+		if(f.first)
+			es = b.ml + b.bl + b.pl;
+		if(f.last)
+			ee = b.mr + b.br + b.pr;
+		(el, er) := (es, ee);
+		if(b.st.dirrtl)
+			(el, er) = (ee, es);
+		if(el > 0) {
+			for(k = 0; k < n; k++)
+				if(v[k].x >= lo)
+					v[k].x += el;
+			v = append(v, ref Vis(f, 1, f.x, lo, el, 0));
+			n++;
+			hi += el;
 		}
+		if(er > 0) {
+			for(k = 0; k < n; k++)
+				if(v[k].x >= hi)
+					v[k].x += er;
+			v = append(v, ref Vis(f, 2, f.x + f.w - er, hi, er, 0));
+			n++;
+		}
+		f.x = lo;
+		f.w = hi + er - lo;
 	}
+	for(k = 0; k < n; k++)
+		if(v[k].edge == 0)
+			v[k].frag.x = v[k].x;
 }
 
-# was content e within the inline box fragment f, before anything moved?
-oldin(e: ref Vis, f: ref Frag): int
+isolating(ub: int): int
 {
-	return e.w > 0 && e.logx >= f.x && e.logx + e.w <= f.x + f.w;	# a collapsed space is nowhere
+	return ub == Style->UBisolate || ub == Style->UBisolateoverride || ub == Style->UBplaintext;
 }
 
 visbefore(a, b: ref Vis): int
 {
 	if(a.logx != b.logx)
 		return a.logx < b.logx;
-	# at the same place: a start edge first, an end edge last
-	return a.edge == 1 && b.edge != 1 || b.edge == 2 && a.edge != 2;
+	# at the same place: a closing control, then an opening one, then content
+	return visrank(a) < visrank(b);
+}
+
+visrank(e: ref Vis): int
+{
+	case e.edge {
+	2 =>	return 0;
+	1 =>	return 1;
+	}
+	return 2;
+}
+
+# the inline box edges whose logical place lies within [a, b]
+edgesin(frags: array of ref Frag, a, b: int): int
+{
+	w := 0;
+	for(i := 0; i < len frags; i++) {
+		f := frags[i];
+		if(f.kind != Fspan)
+			continue;
+		k := f.box;
+		if(f.first && (e := k.ml + k.bl + k.pl) > 0 && 2*f.x + e >= 2*a && 2*f.x + e <= 2*b)
+			w += e;
+		if(f.last && (e = k.mr + k.br + k.pr) > 0 && 2*(f.x + f.w) - e >= 2*a && 2*(f.x + f.w) - e <= 2*b)
+			w += e;
+	}
+	return w;
+}
+
+append(v: array of ref Vis, e: ref Vis): array of ref Vis
+{
+	a := array[len v + 1] of ref Vis;
+	a[0:] = v;
+	a[len v] = e;
+	return a;
+}
+
+# was content e within the inline box fragment f, before anything moved?
+oldin(e: ref Vis, f: ref Frag): int
+{
+	return e.w > 0 && e.logx >= f.x && e.logx + e.w <= f.x + f.w;	# a collapsed space is nowhere
 }
 
 ishanging(f: ref Frag, l: list of ref Frag): int
@@ -5420,6 +5540,7 @@ height(root: ref Box): int
 }
 
 viewport: Rect;	# being painted: what background-attachment: fixed is relative to
+oncanvas := 0;	# painting the root's background over the canvas: clipped to the viewport, not the box
 scrolled: Point;	# how far the document is scrolled in it; fixed boxes do not move
 
 paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
@@ -5442,6 +5563,17 @@ paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 	dst.draw(clip, display.white, nil, (0, 0));
 	if(visible(bg))
 		dst.draw(clip, colorimg(bg), nil, (0, 0));
+	if(bgbox.st.bg != nil) {
+		# its images too, positioned as on the box, shown over the canvas
+		r := Rect((origin.x + root.x, origin.y + root.y), (origin.x + root.x + root.w, origin.y + root.y + root.h));
+		if(bgbox != root)
+			r = Rect((r.min.x + bgbox.x, r.min.y + bgbox.y), (r.min.x + bgbox.x + bgbox.w, r.min.y + bgbox.y + bgbox.h));
+		oncanvas = 1;
+		for(i := len bgbox.st.bg - 1; i >= 0; i--)
+			if(bgbox.st.bg[i].img != nil)
+				paintbg(dst, bgbox, r, bgbox.st.bg[i]);
+		oncanvas = 0;
+	}
 	painted = root;
 	paintctx(dst, root, origin, clip, bgbox);
 	painted = nil;
@@ -5479,6 +5611,8 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		o = o.add(scrolled);
 		clip = viewport;
 	}
+	if(st.translated)	# moved as drawn: its place in the flow is unchanged
+		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
 	# A positioned box with z-index: auto is painted as a layer but is
 	# not a stacking context: its positioned descendants are layers of
@@ -5526,14 +5660,14 @@ innerclip(b: ref Box, r, clip: Rect): Rect
 # a box that is a layer of its stacking context rather than flow content
 islayer(k: ref Box): int
 {
-	return ispositioned(k) && k.kind != Ktext && k.kind != Kinline;
+	return (ispositioned(k) || k.st.translated) && k.kind != Ktext && k.kind != Kinline;
 }
 
 # a box that establishes a stacking context (CSS 2.2 §9.9.1, Position 3)
 isctx(k: ref Box): int
 {
 	st := k.st;
-	return k == painted || st.position == Style->Pfixed || st.opacity < 1.0 ||
+	return k == painted || st.position == Style->Pfixed || st.opacity < 1.0 || st.translated ||
 		ispositioned(k) && !st.zauto;
 }
 
@@ -6152,21 +6286,20 @@ bgurls(st: ref St): list of string
 
 paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 {
-	if(bg.img.kind == Css->Kfunction && bg.img.s != "url") {
-		paintgradient(dst, b, r, bg);
-		return;
-	}
-	u := bgurl(bg.img);
-	if(u == nil)
-		return;
+	grad := bg.img.kind == Css->Kfunction && bg.img.s != "url";
 	img: ref Image;
-	for(l := bgimages; l != nil; l = tl l)
-		if((hd l).t0 == u) {
-			img = (hd l).t1;
-			break;
-		}
-	if(img == nil)
-		return;
+	if(!grad) {
+		u := bgurl(bg.img);
+		if(u == nil)
+			return;
+		for(l := bgimages; l != nil; l = tl l)
+			if((hd l).t0 == u) {
+				img = (hd l).t1;
+				break;
+			}
+		if(img == nil)
+			return;
+	}
 	pad := Rect((r.min.x + b.bl, r.min.y + b.bt), (r.max.x - b.br, r.max.y - b.bb));
 	cbox := Rect((pad.min.x + b.pl, pad.min.y + b.pt), (pad.max.x - b.pr, pad.max.y - b.pb));
 	area := pad;	# background-origin
@@ -6181,10 +6314,16 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	Style->BOXpadding =>	clip = pad;
 	Style->BOXcontent =>	clip = cbox;
 	}
+	if(oncanvas)
+		clip = viewport;	# the root's background covers the canvas
 	aw := area.dx();
 	ah := area.dy();
-	iw := img.r.dx();
-	ih := img.r.dy();
+	iw := aw;	# a gradient has no size of its own: it is the area's
+	ih := ah;
+	if(!grad) {
+		iw = img.r.dx();
+		ih = img.r.dy();
+	}
 	if(iw <= 0 || ih <= 0)
 		return;
 	# background-size
@@ -6205,19 +6344,22 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			w = bg.sizex.resolve(real aw);
 		if(!ya)
 			h = bg.sizey.resolve(real ah);
-		if(!xa && ya)
-			h = w * real ih / real iw;
-		else if(xa && !ya)
-			w = h * real iw / real ih;
+		if(!grad) {
+			if(!xa && ya)
+				h = w * real ih / real iw;
+			else if(xa && !ya)
+				w = h * real iw / real ih;
+		}
 	}
 	tw := int w;	# int rounds
 	th := int h;
 	if(tw <= 0 || th <= 0)
 		return;
-	if(tw != iw || th != ih)
+	if(!grad && (tw != iw || th != ih)) {
 		img = scale(img, tw, th);
-	if(img == nil)
-		return;
+		if(img == nil)
+			return;
+	}
 	# background-position: a percentage of the room left over
 	px := area.min.x + int (bg.posx.px + bg.posx.pct * real (aw - tw) / 100.0);
 	py := area.min.y + int (bg.posy.px + bg.posy.pct * real (ah - th) / 100.0);
@@ -6235,12 +6377,23 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			y0 -= th;
 		y1 = clip.max.y;
 	}
+	oclip := dst.clipr;
+	(cr, ok) := oclip.clip(clip);
+	if(!ok)
+		return;
+	dst.clipr = cr;
 	for(y := y0; y < y1; y += th)
 		for(x := x0; x < x1; x += tw) {
-			(t, ok) := Rect((x, y), (x + tw, y + th)).clip(clip);
-			if(ok)
+			tile := Rect((x, y), (x + tw, y + th));
+			(t, tok) := tile.clip(cr);
+			if(!tok)
+				continue;
+			if(grad)
+				paintgradient(dst, b, tile, bg);
+			else
 				dst.draw(t, img, nil, img.r.min.add(t.min.sub(Point(x, y))));
 		}
+	dst.clipr = oclip;
 }
 
 # linear-gradient() and radial-gradient() backgrounds, as bands of colour

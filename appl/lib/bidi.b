@@ -19,6 +19,7 @@ MAXDEPTH: con 125;
 clo, chi, ccl: array of int;
 mfrom, mto: array of int;
 bopen, bclose: array of int;	# by opening
+jlo, jhi, jty: array of int;	# joining types, by range
 bcopen, bcclose: array of int;	# by closing
 
 classnames := array[] of {
@@ -50,6 +51,12 @@ init(): string
 		return err;
 	bopen = a[0];
 	bclose = a[1];
+	(a, err) = table(DIR + "/joining", 3);
+	if(err != nil)
+		return err;
+	jlo = a[0];
+	jhi = a[1];
+	jty = a[2];
 	# the same pairs ordered by the closing bracket
 	n := len bopen;
 	bcopen = array[n] of int;
@@ -134,18 +141,29 @@ hex(s: string): int
 
 class(c: int): int
 {
-	lo := 0;
-	hi := len clo;
-	while(lo < hi) {
-		m := (lo + hi) / 2;
-		if(c < clo[m])
-			hi = m;
-		else if(c > chi[m])
-			lo = m + 1;
+	return ranged(clo, chi, ccl, c, L);
+}
+
+joining(c: int): int
+{
+	return ranged(jlo, jhi, jty, c, JU);
+}
+
+# the value of the range holding c, or dflt
+ranged(lo, hi, val: array of int, c, dflt: int): int
+{
+	i := 0;
+	j := len lo;
+	while(i < j) {
+		m := (i + j) / 2;
+		if(c < lo[m])
+			j = m;
+		else if(c > hi[m])
+			i = m + 1;
 		else
-			return ccl[m];
+			return val[m];
 	}
-	return L;
+	return dflt;
 }
 
 mirror(c: int): int

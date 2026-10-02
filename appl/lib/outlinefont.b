@@ -114,6 +114,7 @@ FaceData: adt {
 	ttfwidths:	array of int;	# per-glyph advance width (font units)
 	kernpairs:	int;		# 'kern' format 0: offset of the sorted pairs in ttfdata
 	nkern:	int;		# and how many
+	gsub:	ref Gsub;	# glyph substitution, or nil
 };
 
 # Module state
@@ -370,6 +371,250 @@ Face.kern(f: self ref Face, left, right: int): int
 			hi = m - 1;
 	}
 	return 0;
+}
+
+# ---- GSUB: glyph substitution (OpenType Layout) ----
+
+Gsub: adt {
+	data:	array of byte;
+	lookups:	array of ref Lookup;
+	features:	list of (string, array of int);	# tag, lookup indices
+};
+
+Lookup: adt {
+	kind:	int;		# 1 single, 4 ligature, 0 other (not applied)
+	subs:	array of int;	# subtable offsets, extension lookups resolved
+};
+
+parsegsub(data: array of byte, off: int): ref Gsub
+{
+	if(off <= 0 || off + 10 > len data)
+		return nil;
+	flist := off + getu16be(data, off + 6);
+	llist := off + getu16be(data, off + 8);
+	if(flist + 2 > len data || llist + 2 > len data)
+		return nil;
+	nl := getu16be(data, llist);
+	if(llist + 2 + nl*2 > len data)
+		return nil;
+	lookups := array[nl] of ref Lookup;
+	for(i := 0; i < nl; i++) {
+		lo := llist + getu16be(data, llist + 2 + i*2);
+		if(lo + 6 > len data) {
+			lookups[i] = ref Lookup(0, nil);
+			continue;
+		}
+		kind := getu16be(data, lo);
+		ns := getu16be(data, lo + 4);
+		if(lo + 6 + ns*2 > len data)
+			ns = 0;
+		subs := array[ns] of int;
+		for(j := 0; j < ns; j++) {
+			so := lo + getu16be(data, lo + 6 + j*2);
+			if(kind == 7 && so + 8 <= len data)
+				subs[j] = so + getu32be(data, so + 4);	# an extension: the subtable is elsewhere
+			else
+				subs[j] = so;
+		}
+		if(kind == 7 && ns > 0) {
+			so := lo + getu16be(data, lo + 6);
+			if(so + 4 <= len data)
+				kind = getu16be(data, so + 2);
+		}
+		lookups[i] = ref Lookup(kind, subs);
+	}
+	nf := getu16be(data, flist);
+	feats: list of (string, array of int);
+	for(i = 0; i < nf && flist + 2 + i*6 + 6 <= len data; i++) {
+		e := flist + 2 + i*6;
+		tag := string data[e:e+4];
+		fo := flist + getu16be(data, e + 4);
+		if(fo + 4 > len data)
+			continue;
+		cnt := getu16be(data, fo + 2);
+		if(fo + 4 + cnt*2 > len data)
+			continue;
+		li := array[cnt] of int;
+		for(j := 0; j < cnt; j++)
+			li[j] = getu16be(data, fo + 4 + j*2);
+		feats = (tag, li) :: feats;
+	}
+	return ref Gsub(data, lookups, feats);
+}
+
+# the coverage index of gid in the coverage table at off, or -1
+coverage(data: array of byte, off, gid: int): int
+{
+	if(off + 4 > len data)
+		return -1;
+	fmt := getu16be(data, off);
+	n := getu16be(data, off + 2);
+	if(fmt == 1) {
+		if(off + 4 + n*2 > len data)
+			return -1;
+		lo := 0;
+		hi := n - 1;
+		while(lo <= hi) {
+			m := (lo + hi) / 2;
+			g := getu16be(data, off + 4 + m*2);
+			if(g == gid)
+				return m;
+			if(g < gid)
+				lo = m + 1;
+			else
+				hi = m - 1;
+		}
+		return -1;
+	}
+	if(fmt == 2) {
+		if(off + 4 + n*6 > len data)
+			return -1;
+		for(i := 0; i < n; i++) {
+			r := off + 4 + i*6;
+			s := getu16be(data, r);
+			e := getu16be(data, r + 2);
+			if(gid >= s && gid <= e)
+				return getu16be(data, r + 4) + gid - s;
+		}
+	}
+	return -1;
+}
+
+# the lookups a feature names, in index order, without repeats
+featurelookups(g: ref Gsub, feat: string): list of int
+{
+	r: list of int;
+	for(l := g.features; l != nil; l = tl l) {
+		(tag, li) := hd l;
+		if(tag != feat)
+			continue;
+		for(i := 0; i < len li; i++) {
+			for(m := r; m != nil; m = tl m)
+				if(hd m == li[i])
+					break;
+			if(m == nil)
+				r = li[i] :: r;
+		}
+	}
+	a := array[len r] of int;
+	for(i := 0; r != nil; r = tl r)
+		a[i++] = hd r;
+	for(i = 1; i < len a; i++)
+		for(j := i; j > 0 && a[j] < a[j-1]; j--)
+			(a[j], a[j-1]) = (a[j-1], a[j]);
+	s: list of int;
+	for(i = len a - 1; i >= 0; i--)
+		s = a[i] :: s;
+	return s;
+}
+
+Face.hasfeature(f: self ref Face, feat: string): int
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gsub == nil)
+		return 0;
+	for(l := fd.gsub.features; l != nil; l = tl l)
+		if((hd l).t0 == feat)
+			return 1;
+	return 0;
+}
+
+Face.ligatures(f: self ref Face, gids: array of int, feats: list of string): array of int
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gsub == nil || len gids < 2)
+		return gids;
+	g := fd.gsub;
+	for(; feats != nil; feats = tl feats)
+		for(ll := featurelookups(g, hd feats); ll != nil; ll = tl ll) {
+			lk := g.lookups[hd ll];
+			if(lk.kind != 4)
+				continue;
+			for(j := 0; j < len lk.subs; j++)
+				gids = applylig(g.data, lk.subs[j], gids);
+		}
+	return gids;
+}
+
+# a ligature subtable (format 1) over a run of glyphs: at each glyph
+# the first ligature of its set whose components follow is taken
+applylig(data: array of byte, so: int, gids: array of int): array of int
+{
+	if(so + 6 > len data || getu16be(data, so) != 1)
+		return gids;
+	cov := so + getu16be(data, so + 2);
+	nsets := getu16be(data, so + 4);
+	if(so + 6 + nsets*2 > len data)
+		return gids;
+	out := array[len gids] of int;
+	n := 0;
+	i := 0;
+	while(i < len gids) {
+		ci := coverage(data, cov, gids[i]);
+		if(ci >= 0 && ci < nsets) {
+			seto := so + getu16be(data, so + 6 + ci*2);
+			took := 0;
+			if(seto + 2 <= len data) {
+				nlig := getu16be(data, seto);
+				for(k := 0; k < nlig && seto + 4 + k*2 <= len data; k++) {
+					lo := seto + getu16be(data, seto + 2 + k*2);
+					if(lo + 4 > len data)
+						continue;
+					lig := getu16be(data, lo);
+					nc := getu16be(data, lo + 2);
+					if(nc < 1 || i + nc > len gids || lo + 4 + (nc-1)*2 > len data)
+						continue;
+					ok := 1;
+					for(m := 1; m < nc; m++)
+						if(gids[i+m] != getu16be(data, lo + 4 + (m-1)*2)) {
+							ok = 0;
+							break;
+						}
+					if(ok) {
+						out[n++] = lig;
+						i += nc;
+						took = 1;
+						break;
+					}
+				}
+			}
+			if(took)
+				continue;
+		}
+		out[n++] = gids[i++];
+	}
+	return out[0:n];
+}
+
+Face.subst(f: self ref Face, feat: string, gid: int): int
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gsub == nil)
+		return gid;
+	g := fd.gsub;
+	data := g.data;
+	for(ll := featurelookups(g, feat); ll != nil; ll = tl ll) {
+		lk := g.lookups[hd ll];
+		if(lk.kind != 1)
+			continue;
+		for(j := 0; j < len lk.subs; j++) {
+			so := lk.subs[j];
+			if(so + 6 > len data)
+				continue;
+			fmt := getu16be(data, so);
+			ci := coverage(data, so + getu16be(data, so + 2), gid);
+			if(ci < 0)
+				continue;
+			if(fmt == 1)
+				return (gid + getu16be(data, so + 4)) & 16rFFFF;
+			if(fmt == 2) {
+				n := getu16be(data, so + 4);
+				if(ci < n && so + 6 + ci*2 + 2 <= len data)
+					return getu16be(data, so + 6 + ci*2);
+			}
+		}
+	}
+	return gid;
 }
 
 Face.metrics(f: self ref Face, size: real): (int, int, int)
@@ -1210,7 +1455,8 @@ parsecff(data: array of byte): (ref FaceData, string)
 		fdsel,
 		cidmap,
 		0, nil, 0, 0, nil, cffcmap, nil,	# ttfcmap = cffcmap for charcode→GID
-		0, 0
+		0, 0,
+		nil			# gsub
 	);
 
 	return (fd, nil);
@@ -1728,6 +1974,7 @@ parsettf(data: array of byte): (ref FaceData, string)
 	hheaoff := 0;
 	hmtxoff := 0;
 	kernoff := 0;
+	gsuboff := 0;
 	nameoff := 0;
 
 	for(i := 0; i < numtables; i++){
@@ -1756,6 +2003,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 			nameoff = tableoff;
 		"kern" =>
 			kernoff = tableoff;
+		"GSUB" =>
+			gsuboff = tableoff;
 		}
 	}
 
@@ -1873,7 +2122,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 		ttfcmap,
 		ttfwidths,
 		kernpairs,
-		nkern
+		nkern,
+		parsegsub(data, gsuboff)
 	);
 
 	return (fd, nil);
@@ -1884,7 +2134,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 parseotf(data: array of byte): (ref FaceData, string)
 {
 	ntab := getu16be(data, 4);
-	cffoff, cfflen, cmapoff, cmaplen, headoff, hheaoff: int;
+	cffoff, cfflen, cmapoff, cmaplen, headoff, hheaoff, gsuboff: int;
+	cffoff = cfflen = cmapoff = cmaplen = headoff = hheaoff = gsuboff = 0;
 	for(i := 0; i < ntab; i++) {
 		e := 12 + i*16;
 		if(e + 16 > len data)
@@ -1898,6 +2149,7 @@ parseotf(data: array of byte): (ref FaceData, string)
 		"cmap" =>	(cmapoff, cmaplen) = (off, ln);
 		"head" =>	headoff = off;
 		"hhea" =>	hheaoff = off;
+		"GSUB" =>	gsuboff = off;
 		}
 	}
 	if(cfflen == 0)
@@ -1905,6 +2157,7 @@ parseotf(data: array of byte): (ref FaceData, string)
 	(fd, err) := parsecff(data[cffoff:cffoff + cfflen]);
 	if(fd == nil)
 		return (nil, err);
+	fd.gsub = parsegsub(data, gsuboff);
 	if(cmaplen > 0)
 		fd.ttfcmap = parsettfcmap(data, cmapoff, cmaplen);
 	if(headoff != 0 && hheaoff != 0 && hheaoff + 8 <= len data) {

@@ -48,6 +48,15 @@ OutlineFont: module {
 		# Kerning between two glyphs ('kern' table), in font units
 		kern:	fn(f: self ref Face, left, right: int): int;
 
+		# GSUB.  ligatures() applies the ligature lookups of the
+		# features named (e.g. "liga", "clig", "rlig") to a run of
+		# glyphs, in the order given; subst() is a single substitution
+		# under a feature ("init", "medi", "fina", "isol"), or gid;
+		# hasfeature() says whether the font has the feature at all.
+		ligatures:	fn(f: self ref Face, gids: array of int, feats: list of string): array of int;
+		subst:	fn(f: self ref Face, feat: string, gid: int): int;
+		hasfeature:	fn(f: self ref Face, feat: string): int;
+
 		# The glyph's top (yMax), in font units; 0 if unknown (CFF)
 		ymax:	fn(f: self ref Face, gid: int): int;
 

@@ -16,6 +16,8 @@ include "filter.m";
 	inflate: Filter;
 include "woff2.m";
 	woff2: Woff2;
+include "bidi.m";
+	bidi: Bidi;
 include "web/fonts.m";
 
 # bitmap fallbacks for what the outlines lack (CJK, symbols), by size
@@ -47,6 +49,9 @@ init(d: ref Display): string
 		return sys->sprint("cannot load %s: %r", OutlineFont->PATH);
 	display = d;
 	ofont->init(d);
+	bidi = load Bidi Bidi->PATH;
+	if(bidi != nil && bidi->init() != nil)
+		bidi = nil;
 	loaded = array[len files] of ref OutlineFont->Face;
 	cache = array[Nfaces] of list of ref Typeface;
 	fallbacks = array[len fallbacksizes] of ref Font;
@@ -263,11 +268,11 @@ advanceg(f: ref Typeface, o: ref OutlineFont->Face, g, c: int): real
 	return o.advance(g, f.size);
 }
 
-# kerning between s[i-1] and s[i]: not where either is a space, as
-# browsers shape a word at a time
-kerns(s: string, i: int): int
+# kerning between the characters a and b: not where either is a
+# space, as browsers shape a word at a time
+kernc(a, b: int): int
 {
-	return s[i] != ' ' && s[i] != 16rA0 && s[i-1] != ' ' && s[i-1] != 16rA0;
+	return a != ' ' && a != 16rA0 && b != ' ' && b != 16rA0;
 }
 
 Typeface.kernpair(f: self ref Typeface, a, b: int): real
@@ -287,19 +292,131 @@ Typeface.xheight(f: self ref Typeface): real
 	return f.size / 2.0;	# CSS's fallback: 0.5em
 }
 
+# A string shaped: one slot per glyph drawn.  Each character's face
+# and glyph, then the ligatures of the font's liga, clig and rlig
+# features over each run of one face (an icon font's ligature names,
+# fi and fl).  A slot from the bitmap fallback keeps its character.
+Slot: adt {
+	o:	ref OutlineFont->Face;	# nil: the bitmap fallback draws c
+	g:	int;
+	c:	int;		# the character, 0 for a ligature of several
+};
+
+ligfeats(): list of string
+{
+	return "liga" :: "clig" :: "rlig" :: nil;
+}
+
+hasligs(o: ref OutlineFont->Face): int
+{
+	for(l := ligfeats(); l != nil; l = tl l)
+		if(o.hasfeature(hd l))
+			return 1;
+	return 0;
+}
+
+shape(f: ref Typeface, s: string): array of ref Slot
+{
+	a := array[len s] of ref Slot;
+	n := 0;
+	for(i := 0; i < len s; i++) {
+		if(zerowidth(s[i]))
+			continue;
+		(o, g) := glyph(f, s[i]);
+		a[n++] = ref Slot(o, g, s[i]);
+	}
+	a = a[0:n];
+	joinforms(a);
+	# ligatures, over runs of one outline face
+	for(i = 0; i < n; ) {
+		o := a[i].o;
+		j := i + 1;
+		while(j < n && a[j].o == o)
+			j++;
+		if(o != nil && j - i > 1 && hasligs(o)) {
+			gids := array[j - i] of int;
+			for(k := i; k < j; k++)
+				gids[k - i] = a[k].g;
+			r := o.ligatures(gids, ligfeats());
+			if(len r != len gids) {
+				b := array[n - (j - i) + len r] of ref Slot;
+				b[0:] = a[0:i];
+				for(k = 0; k < len r; k++) {
+					c := 0;
+					if(len r == len gids)
+						c = a[i + k].c;
+					b[i + k] = ref Slot(o, r[k], c);
+				}
+				b[i + len r:] = a[j:];
+				a = b;
+				n = len a;
+				j = i + len r;
+			}
+		}
+		i = j;
+	}
+	return a;
+}
+
+# Cursive joining (Unicode chapter 9): each letter takes its initial,
+# medial, final or isolated form by whether its neighbours join to it,
+# through the font's init, medi, fina and isol features.  Transparent
+# characters (marks) are looked past.
+joinforms(a: array of ref Slot)
+{
+	if(bidi == nil)
+		return;
+	jt := array[len a] of int;
+	any := 0;
+	for(i := 0; i < len a; i++) {
+		jt[i] = bidi->joining(a[i].c);
+		if(jt[i] != Bidi->JU && jt[i] != Bidi->JT)
+			any = 1;
+	}
+	if(!any)
+		return;
+	for(i = 0; i < len a; i++) {
+		t := jt[i];
+		if(t != Bidi->JD && t != Bidi->JR && t != Bidi->JL || a[i].o == nil)
+			continue;
+		prev := Bidi->JU;
+		for(j := i - 1; j >= 0; j--)
+			if(jt[j] != Bidi->JT) {
+				prev = jt[j];
+				break;
+			}
+		next := Bidi->JU;
+		for(j = i + 1; j < len a; j++)
+			if(jt[j] != Bidi->JT) {
+				next = jt[j];
+				break;
+			}
+		before := (t == Bidi->JD || t == Bidi->JR) && (prev == Bidi->JD || prev == Bidi->JL || prev == Bidi->JC);
+		after := (t == Bidi->JD || t == Bidi->JL) && (next == Bidi->JD || next == Bidi->JR || next == Bidi->JC);
+		feat := "isol";
+		if(before && after)
+			feat = "medi";
+		else if(before)
+			feat = "fina";
+		else if(after)
+			feat = "init";
+		a[i].g = a[i].o.subst(feat, a[i].g);
+	}
+}
+
 Typeface.width(f: self ref Typeface, s: string): real
 {
 	w := 0.0;
 	po: ref OutlineFont->Face;
 	pg := -1;
-	for(i := 0; i < len s; i++) {
-		if(zerowidth(s[i]))
-			continue;
-		(o, g) := glyph(f, s[i]);
-		if(o != nil && o == po && !f.nokern && kerns(s, i))
+	pc := ' ';
+	a := shape(f, s);
+	for(i := 0; i < len a; i++) {
+		(o, g, c) := (a[i].o, a[i].g, a[i].c);
+		if(o != nil && o == po && !f.nokern && kernc(pc, c))
 			w += real o.kern(pg, g) * f.size / real o.upem;
-		(po, pg) = (o, g);
-		w += advanceg(f, o, g, s[i]);
+		(po, pg, pc) = (o, g, c);
+		w += advanceg(f, o, g, c);
 	}
 	return w;
 }
@@ -309,14 +426,13 @@ Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: re
 	x := real p.x;
 	po: ref OutlineFont->Face;
 	pg := -1;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		if(zerowidth(c))
-			continue;
-		(o, g) := glyph(f, c);
-		if(o != nil && o == po && !f.nokern && kerns(s, i))
+	pc := ' ';
+	a := shape(f, s);
+	for(i := 0; i < len a; i++) {
+		(o, g, c) := (a[i].o, a[i].g, a[i].c);
+		if(o != nil && o == po && !f.nokern && kernc(pc, c))
 			x += real o.kern(pg, g) * f.size / real o.upem;	# pair kerning
-		(po, pg) = (o, g);
+		(po, pg, pc) = (o, g, c);
 		if(o == nil && f.fallback != nil) {
 			t := "";
 			t[0] = c;

@@ -14,6 +14,7 @@ DIRS=\
 
 TARG=\
 	woff2.dis\
+	bidi.dis\
 	brotli.dis\
 	popup.dis\
 	scoretable.dis\
@@ -184,6 +185,7 @@ TARG=\
 
 MODULES=
 SYSMODULES=\
+	bidi.m\
 	woff2.m\
 	brotli.m\
 	9p.m\

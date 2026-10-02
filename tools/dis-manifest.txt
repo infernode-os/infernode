@@ -301,6 +301,7 @@ dis/lib/auditchain.dis
 dis/lib/auditprov.dis
 dis/lib/auth.dis
 dis/lib/auth9.dis
+dis/lib/bidi.dis
 dis/lib/bioauth.dis
 dis/lib/bloomfilter.dis
 dis/lib/brotli.dis
@@ -697,6 +698,7 @@ dis/tests/auditverify_test.dis
 dis/tests/authneg_test.dis
 dis/tests/authnode.dis
 dis/tests/awk_test.dis
+dis/tests/bidi_test.dis
 dis/tests/bioauth_test.dis
 dis/tests/brotli_test.dis
 dis/tests/bthci_test.dis

@@ -117,6 +117,7 @@ TARG=\
 	web_style_test.dis\
 	web_browser_test.dis\
 	web_fonts_test.dis\
+	bidi_test.dis\
 	brotli_test.dis\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
@@ -194,6 +195,7 @@ MODULES=
 
 SYSMODULES=\
 	woff2.m\
+	bidi.m\
 	brotli.m\
 	web/dom.m\
 	web/html.m\

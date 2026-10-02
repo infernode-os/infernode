@@ -410,53 +410,65 @@ joinforms(s: string, slot: array of int, a: array of ref Slot)
 	}
 }
 
-Typeface.width(f: self ref Typeface, s: string): real
+# Where each shaped glyph goes: its x, its advance, and its y offset
+# (up), in logical order; the total width.  Pair kerning between
+# glyphs of one face; a combining mark the font attaches to its base
+# sits on the base's anchor and advances nothing.
+positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real, array of real, real)
 {
-	w := 0.0;
+	xs := array[len a] of real;
+	adv := array[len a] of real;
+	ys := array[len a] of real;
+	x := 0.0;
 	po: ref OutlineFont->Face;
 	pg := -1;
 	pc := ' ';
-	a := shape(f, s);
+	base := -1;	# the last glyph that was not a mark
 	for(i := 0; i < len a; i++) {
 		(o, g, c) := (a[i].o, a[i].g, a[i].c);
+		ys[i] = 0.0;
+		if(o != nil && base >= 0 && a[base].o == o && bidi != nil && bidi->joining(c) == Bidi->JT) {
+			(ok, dx, dy) := o.markanchor(a[base].g, g);
+			if(ok) {
+				k := f.size / real o.upem;
+				xs[i] = xs[base] + real dx * k;
+				ys[i] = real dy * k;
+				adv[i] = 0.0;
+				continue;
+			}
+		}
 		if(o != nil && o == po && !f.nokern && kernc(pc, c))
-			w += real o.kern(pg, g) * f.size / real o.upem;
+			x += real o.kern(pg, g) * f.size / real o.upem;
 		(po, pg, pc) = (o, g, c);
-		w += advanceg(f, o, g, c);
+		xs[i] = x;
+		adv[i] = advanceg(f, o, g, c);
+		x += adv[i];
+		base = i;
 	}
+	return (xs, adv, ys, x);
+}
+
+Typeface.width(f: self ref Typeface, s: string): real
+{
+	(nil, nil, nil, w) := positions(f, shape(f, s));
 	return w;
 }
 
 Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image, rtl: int): real
 {
 	a := shape(f, s);
-	# each glyph's place and advance, in logical order
-	xs := array[len a] of real;
-	adv := array[len a] of real;
-	x := 0.0;
-	po: ref OutlineFont->Face;
-	pg := -1;
-	pc := ' ';
+	(xs, adv, ys, w) := positions(f, a);
 	for(i := 0; i < len a; i++) {
-		(o, g, c) := (a[i].o, a[i].g, a[i].c);
-		if(o != nil && o == po && !f.nokern && kernc(pc, c))
-			x += real o.kern(pg, g) * f.size / real o.upem;	# pair kerning
-		(po, pg, pc) = (o, g, c);
-		xs[i] = x;
-		adv[i] = advanceg(f, o, g, c);
-		x += adv[i];
-	}
-	w := x;
-	for(i = 0; i < len a; i++) {
 		(o, g, c) := (a[i].o, a[i].g, a[i].c);
 		gx := real p.x + xs[i];
 		if(rtl)	# the first glyph at the right end
 			gx = real p.x + w - xs[i] - adv[i];
+		gy := p.y - int ys[i];
 		if(o == nil && f.fallback != nil) {
 			t := "";
 			t[0] = c;
 			# bitmap fallback: align its baseline with ours
-			dst.text(Point(int gx, p.y - f.fallback.ascent), src, Point(0, 0), f.fallback, t);
+			dst.text(Point(int gx, gy - f.fallback.ascent), src, Point(0, 0), f.fallback, t);
 			continue;
 		}
 		if(o == nil) {
@@ -466,7 +478,7 @@ Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: re
 				continue;
 		}
 		if(c != ' ' && c != ' ')
-			o.drawglyph(g, f.size, dst, Point(int gx, p.y), src);
+			o.drawglyph(g, f.size, dst, Point(int gx, gy), src);
 	}
 	return w;
 }

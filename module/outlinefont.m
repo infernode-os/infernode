@@ -57,6 +57,12 @@ OutlineFont: module {
 		subst:	fn(f: self ref Face, feat: string, gid: int): int;
 		hasfeature:	fn(f: self ref Face, feat: string): int;
 
+		# GPOS.  markanchor() places a combining mark on its base: the
+		# mark's origin relative to the base's, in font units, or ok 0
+		# when the font attaches no such pair.  kern() above consults
+		# GPOS pair adjustment when there is no 'kern' table.
+		markanchor:	fn(f: self ref Face, base, mark: int): (int, int, int);
+
 		# The glyph's top (yMax), in font units; 0 if unknown (CFF)
 		ymax:	fn(f: self ref Face, gid: int): int;
 

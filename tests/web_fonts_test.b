@@ -199,6 +199,46 @@ testLigatures(t: ref T)
 	t.assert(f.width("fi fi") == 145.0, sys->sprint("ligatures around a space: %g", f.width("fi fi")));
 }
 
+testGPOS(t: ref T)
+{
+	# kerning from GPOS pair adjustment when there is no 'kern' table
+	(d, err) := ofont->open(readfile(DIR + "DejaVuSubset.ttf"), "ttf");
+	t.assertnil(err, "DejaVu subset opens");
+	if(d != nil) {
+		av := d.kern(d.lookup('A'), d.lookup('V'));
+		t.assert(av < 0, sys->sprint("A V kerns negatively through GPOS (class pairs): %d", av));
+		t.asserteq(d.kern(d.lookup('A'), d.lookup('A')), 57, "A A: the font's own class-pair value");
+		t.asserteq(d.kern(d.lookup('L'), d.lookup('T')), -282, "L T through classes 10 and 14");
+	}
+	t.assertnil(fonts->addface("marks", 400, 0, nil, readfile(DIR + "marks.ttf")), "add marks.ttf");
+	f := fonts->face("marks" :: nil, 400, 0, 100.0);
+	t.assert(f != nil, "face");
+	t.assert(f.width("AV") == 110.0, sys->sprint("A V kerned by -100 units through a GPOS pair set: %g", f.width("AV")));
+	t.assert(f.width("AA") == 120.0, sys->sprint("A A not kerned: %g", f.width("AA")));
+	adot := "A";
+	adot[1] = 16r307;
+	vdot := "V";
+	vdot[1] = 16r307;
+	t.assert(f.width(adot) == 60.0, sys->sprint("an attached mark advances nothing: %g", f.width(adot)));
+	t.assert(f.width(vdot) == 60.0, sys->sprint("an unattached mark keeps its own zero advance: %g", f.width(vdot)));
+	(m, e2) := ofont->open(readfile(DIR + "marks.ttf"), "ttf");
+	t.assertnil(e2, "opens directly");
+	if(m != nil) {
+		(ok, dx, dy) := m.markanchor(m.lookup('A'), m.lookup(16r307));
+		t.assert(ok && dx == 300 && dy == 750, sys->sprint("the dot's anchor on A: %d %d %d", ok, dx, dy));
+		(ok2, nil, nil) := m.markanchor(m.lookup('V'), m.lookup(16r307));
+		t.asserteq(ok2, 0, "no anchor on V");
+	}
+	# drawn: the dot lands above A's box, not at the origin
+	ia := display.newimage(Rect((0, 0), (120, 120)), Draw->GREY8, 0, Draw->White);
+	f.draw(ia, Point(10, 100), adot, display.black, 0);
+	px := array[120*120] of byte;
+	ia.readpixels(ia.r, px);
+	# A fills x 10..70, y 30..100; the dot (100 units = 10px square) centred at x 40, y 25 (750 units up)
+	t.assert(int px[20*120 + 40] < 128, "the dot is drawn above A, over its middle");
+	t.assert(int px[20*120 + 10] >= 128, "and not at the origin");
+}
+
 testOTF(t: ref T)
 {
 	(a, err) := ofont->open(readfile(DIR + "FASubset.otf"), "ttf");
@@ -286,6 +326,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("WOFF2hmtx", testWOFF2hmtx);
 	run("WOFF2face", testWOFF2face);
 	run("Ligatures", testLigatures);
+	run("GPOS", testGPOS);
 	run("OTF", testOTF);
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

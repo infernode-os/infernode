@@ -115,6 +115,7 @@ FaceData: adt {
 	kernpairs:	int;		# 'kern' format 0: offset of the sorted pairs in ttfdata
 	nkern:	int;		# and how many
 	gsub:	ref Gsub;	# glyph substitution, or nil
+	gpos:	ref Gsub;	# glyph positioning, or nil (the same shape of table)
 };
 
 # Module state
@@ -353,8 +354,13 @@ Face.ymax(f: self ref Face, gid: int): int
 Face.kern(f: self ref Face, left, right: int): int
 {
 	fd := getfacedata(f);
-	if(fd == nil || fd.nkern == 0 || left < 0 || right < 0)
+	if(fd == nil || left < 0 || right < 0)
 		return 0;
+	if(fd.nkern == 0) {
+		if(fd.gpos != nil)
+			return gposkern(fd, left, right);
+		return 0;
+	}
 	key := (left << 16) | right;
 	d := fd.ttfdata;
 	lo := 0;
@@ -373,6 +379,159 @@ Face.kern(f: self ref Face, left, right: int): int
 	return 0;
 }
 
+# GPOS pair adjustment (lookup type 2): the advance change of left
+# before right, from the kern feature's lookups
+gposkern(fd: ref FaceData, left, right: int): int
+{
+	g := fd.gpos;
+	data := g.data;
+	for(ll := featurelookups(g, "kern"); ll != nil; ll = tl ll) {
+		lk := g.lookups[hd ll];
+		if(lk.kind != 2)
+			continue;
+		for(j := 0; j < len lk.subs; j++) {
+			so := lk.subs[j];
+			if(so + 10 > len data)
+				continue;
+			fmt := getu16be(data, so);
+			ci := coverage(data, so + getu16be(data, so + 2), left);
+			if(ci < 0)
+				continue;
+			vf1 := getu16be(data, so + 4);
+			vf2 := getu16be(data, so + 6);
+			n1 := bits(vf1);
+			n2 := bits(vf2);
+			if(!(vf1 & 4))	# no horizontal advance in this subtable
+				continue;
+			adv := 2 * bits(vf1 & 3);	# XPlacement, YPlacement come before XAdvance
+			if(fmt == 1) {
+				nsets := getu16be(data, so + 8);
+				if(ci >= nsets || so + 10 + ci*2 + 2 > len data)
+					continue;
+				ps := so + getu16be(data, so + 10 + ci*2);
+				if(ps + 2 > len data)
+					continue;
+				npairs := getu16be(data, ps);
+				rec := 2 + 2*(n1 + n2);
+				lo := 0;
+				hi := npairs - 1;
+				while(lo <= hi) {	# sorted by second glyph
+					m := (lo + hi) / 2;
+					r := ps + 2 + m*rec;
+					if(r + rec > len data)
+						break;
+					gid := getu16be(data, r);
+					if(gid == right)
+						return geti16be(data, r + 2 + adv);
+					if(gid < right)
+						lo = m + 1;
+					else
+						hi = m - 1;
+				}
+			} else if(fmt == 2 && so + 16 <= len data) {
+				c1 := classof(data, so + getu16be(data, so + 8), left);
+				c2 := classof(data, so + getu16be(data, so + 10), right);
+				n1c := getu16be(data, so + 12);
+				n2c := getu16be(data, so + 14);
+				if(c1 < 0 || c2 < 0 || c1 >= n1c || c2 >= n2c)
+					continue;
+				rec := 2*(n1 + n2);
+				r := so + 16 + (c1*n2c + c2)*rec;
+				if(r + rec <= len data)
+					return geti16be(data, r + adv);
+			}
+		}
+	}
+	return 0;
+}
+
+bits(v: int): int
+{
+	n := 0;
+	for(; v != 0; v >>= 1)
+		n += v & 1;
+	return n;
+}
+
+# the class of gid in a class definition table, 0 if not listed, -1 if the table is bad
+classof(data: array of byte, off, gid: int): int
+{
+	if(off + 4 > len data)
+		return -1;
+	fmt := getu16be(data, off);
+	if(fmt == 1) {
+		start := getu16be(data, off + 2);
+		n := getu16be(data, off + 4);
+		if(gid < start || gid >= start + n || off + 6 + n*2 > len data)
+			return 0;
+		return getu16be(data, off + 6 + (gid - start)*2);
+	}
+	if(fmt == 2) {
+		n := getu16be(data, off + 2);
+		if(off + 4 + n*6 > len data)
+			return -1;
+		for(i := 0; i < n; i++) {
+			r := off + 4 + i*6;
+			if(gid >= getu16be(data, r) && gid <= getu16be(data, r + 2))
+				return getu16be(data, r + 4);
+		}
+		return 0;
+	}
+	return -1;
+}
+
+# an anchor table's point
+anchor(data: array of byte, off: int): (int, int)
+{
+	if(off + 6 > len data)
+		return (0, 0);
+	return (geti16be(data, off + 2), geti16be(data, off + 4));
+}
+
+Face.markanchor(f: self ref Face, base, mark: int): (int, int, int)
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gpos == nil)
+		return (0, 0, 0);
+	g := fd.gpos;
+	data := g.data;
+	for(ll := featurelookups(g, "mark"); ll != nil; ll = tl ll) {
+		lk := g.lookups[hd ll];
+		if(lk.kind != 4)
+			continue;
+		for(j := 0; j < len lk.subs; j++) {
+			so := lk.subs[j];
+			if(so + 12 > len data || getu16be(data, so) != 1)
+				continue;
+			mi := coverage(data, so + getu16be(data, so + 2), mark);
+			bi := coverage(data, so + getu16be(data, so + 4), base);
+			if(mi < 0 || bi < 0)
+				continue;
+			nclass := getu16be(data, so + 6);
+			ma := so + getu16be(data, so + 8);
+			ba := so + getu16be(data, so + 10);
+			if(ma + 2 + mi*4 + 4 > len data || ba + 2 > len data)
+				continue;
+			if(mi >= getu16be(data, ma))
+				continue;
+			cls := getu16be(data, ma + 2 + mi*4);
+			mao := getu16be(data, ma + 4 + mi*4);
+			if(cls >= nclass || bi >= getu16be(data, ba))
+				continue;
+			r := ba + 2 + (bi*nclass + cls)*2;
+			if(r + 2 > len data)
+				continue;
+			bao := getu16be(data, r);
+			if(bao == 0)
+				continue;
+			(bx, by) := anchor(data, ba + bao);
+			(mx, my) := anchor(data, ma + mao);
+			return (1, bx - mx, by - my);
+		}
+	}
+	return (0, 0, 0);
+}
+
 # ---- GSUB: glyph substitution (OpenType Layout) ----
 
 Gsub: adt {
@@ -386,7 +545,9 @@ Lookup: adt {
 	subs:	array of int;	# subtable offsets, extension lookups resolved
 };
 
-parsegsub(data: array of byte, off: int): ref Gsub
+# GSUB and GPOS share a layout: a feature list naming lookups, each
+# of subtables; ext is the lookup type that wraps another (7, 9)
+parsegsub(data: array of byte, off, ext: int): ref Gsub
 {
 	if(off <= 0 || off + 10 > len data)
 		return nil;
@@ -411,12 +572,12 @@ parsegsub(data: array of byte, off: int): ref Gsub
 		subs := array[ns] of int;
 		for(j := 0; j < ns; j++) {
 			so := lo + getu16be(data, lo + 6 + j*2);
-			if(kind == 7 && so + 8 <= len data)
+			if(kind == ext && so + 8 <= len data)
 				subs[j] = so + getu32be(data, so + 4);	# an extension: the subtable is elsewhere
 			else
 				subs[j] = so;
 		}
-		if(kind == 7 && ns > 0) {
+		if(kind == ext && ns > 0) {
 			so := lo + getu16be(data, lo + 6);
 			if(so + 4 <= len data)
 				kind = getu16be(data, so + 2);
@@ -1456,7 +1617,7 @@ parsecff(data: array of byte): (ref FaceData, string)
 		cidmap,
 		0, nil, 0, 0, nil, cffcmap, nil,	# ttfcmap = cffcmap for charcode→GID
 		0, 0,
-		nil			# gsub
+		nil, nil		# gsub, gpos
 	);
 
 	return (fd, nil);
@@ -1975,6 +2136,7 @@ parsettf(data: array of byte): (ref FaceData, string)
 	hmtxoff := 0;
 	kernoff := 0;
 	gsuboff := 0;
+	gposoff := 0;
 	nameoff := 0;
 
 	for(i := 0; i < numtables; i++){
@@ -2005,6 +2167,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 			kernoff = tableoff;
 		"GSUB" =>
 			gsuboff = tableoff;
+		"GPOS" =>
+			gposoff = tableoff;
 		}
 	}
 
@@ -2123,7 +2287,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 		ttfwidths,
 		kernpairs,
 		nkern,
-		parsegsub(data, gsuboff)
+		parsegsub(data, gsuboff, 7),
+		parsegsub(data, gposoff, 9)
 	);
 
 	return (fd, nil);
@@ -2134,8 +2299,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 parseotf(data: array of byte): (ref FaceData, string)
 {
 	ntab := getu16be(data, 4);
-	cffoff, cfflen, cmapoff, cmaplen, headoff, hheaoff, gsuboff: int;
-	cffoff = cfflen = cmapoff = cmaplen = headoff = hheaoff = gsuboff = 0;
+	cffoff, cfflen, cmapoff, cmaplen, headoff, hheaoff, gsuboff, gposoff: int;
+	cffoff = cfflen = cmapoff = cmaplen = headoff = hheaoff = gsuboff = gposoff = 0;
 	for(i := 0; i < ntab; i++) {
 		e := 12 + i*16;
 		if(e + 16 > len data)
@@ -2150,6 +2315,7 @@ parseotf(data: array of byte): (ref FaceData, string)
 		"head" =>	headoff = off;
 		"hhea" =>	hheaoff = off;
 		"GSUB" =>	gsuboff = off;
+		"GPOS" =>	gposoff = off;
 		}
 	}
 	if(cfflen == 0)
@@ -2157,7 +2323,8 @@ parseotf(data: array of byte): (ref FaceData, string)
 	(fd, err) := parsecff(data[cffoff:cffoff + cfflen]);
 	if(fd == nil)
 		return (nil, err);
-	fd.gsub = parsegsub(data, gsuboff);
+	fd.gsub = parsegsub(data, gsuboff, 7);
+	fd.gpos = parsegsub(data, gposoff, 9);
 	if(cmaplen > 0)
 		fd.ttfcmap = parsettfcmap(data, cmapoff, cmaplen);
 	if(headoff != 0 && hheaoff != 0 && hheaoff + 8 <= len data) {

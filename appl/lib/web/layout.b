@@ -869,7 +869,8 @@ heightmatters(b: ref Box): int
 		if(k.kind == Ktext || k.kind == Kmarker)
 			continue;
 		st := k.st;
-		if(st.height.pct != 0.0 || st.minheight.pct != 0.0 || st.maxheight.pct != 0.0 || isabs(k))
+		if(st.height.pct != 0.0 || st.minheight.pct != 0.0 || st.maxheight.pct != 0.0 || isabs(k) ||
+		   st.basis.pct != 0.0 && b.kind == Kflex && b.st.flexdir >= 2)	# a column item's percentage basis
 			return 1;
 		if(heightmatters(k))
 			return 1;
@@ -1294,6 +1295,15 @@ mainsize(k: ref Box, v: Len, row, avail: int): int
 	return spech(k, v, avail);
 }
 
+# an absolutely positioned child of a flex container is not an item:
+# order does not move it
+orderof(k: ref Box): int
+{
+	if(isabs(k))
+		return 0;
+	return k.st.order;
+}
+
 layflex(l: ref L, b: ref Box, cbw, cbh: int)
 {
 	st := b.st;
@@ -1352,9 +1362,10 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		for(j := i; j > 0 && fa[j].box.st.order < fa[j-1].box.st.order; j--)
 			(fa[j], fa[j-1]) = (fa[j-1], fa[j]);
 	# the children too: order-modified document order is also the
-	# painting order (§5.4)
+	# painting order (§5.4); absolutely positioned children are not
+	# items and keep their places
 	for(i = 1; i < len b.kids; i++)
-		for(m := i; m > 0 && b.kids[m].st.order < b.kids[m-1].st.order; m--)
+		for(m := i; m > 0 && orderof(b.kids[m]) < orderof(b.kids[m-1]); m--)
 			(b.kids[m], b.kids[m-1]) = (b.kids[m-1], b.kids[m]);
 
 	# flex base sizes and hypothetical main sizes (§9.2)
@@ -4727,8 +4738,9 @@ layatomic(l: ref L, k: ref Box, cbw: int)
 	layblock(l, k, cbw, -1, nil, 0, 0);
 	# baseline: the last line box's, else the bottom margin edge
 	k.base = k.mt + k.h;
-	if(k.kind == Ktable) {
-		# an inline table's is its first row's (CSS 2.2 §10.8.1)
+	if(k.kind == Ktable || k.kind == Kflex || k.kind == Kgrid) {
+		# an inline table's is its first row's (CSS 2.2 §10.8.1); a flex
+		# or grid container's its first item's (Flexbox §8.5, Grid §10.1)
 		(ok, by) := firstbaseline(k);
 		if(ok)
 			k.base = k.mt + by;

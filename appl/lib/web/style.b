@@ -2239,6 +2239,7 @@ hasvar(v: array of ref Tok): int
 
 applydecl(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx)
 {
+	aliasrtl = st.dirrtl;
 	val := d.val;
 	if(hasvar(val)) {
 		ok: int;
@@ -2260,6 +2261,7 @@ applydecl(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx)
 # One longhand of a shorthand declaration.
 applyonly(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx, only: string)
 {
+	aliasrtl = st.dirrtl;
 	val := d.val;
 	if(hasvar(val)) {
 		ok: int;
@@ -3211,9 +3213,30 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 	return nil;
 }
 
-# properties that are other names for a longhand (writing mode horizontal-tb, ltr)
+# Properties that are other names for a longhand, in writing mode
+# horizontal-tb: the inline ones depend on the direction of the element
+# being styled (aliasrtl, set by whoever applies declarations).
+aliasrtl := 0;
+
 alias(nm: string): string
 {
+	if(aliasrtl)
+		case nm {
+		"margin-inline-start" => return "margin-right";
+		"margin-inline-end" => return "margin-left";
+		"padding-inline-start" => return "padding-right";
+		"padding-inline-end" => return "padding-left";
+		"inset-inline-start" => return "right";
+		"inset-inline-end" => return "left";
+		"border-inline-start" => return "border-right";
+		"border-inline-end" => return "border-left";
+		"border-inline-start-width" => return "border-right-width";
+		"border-inline-end-width" => return "border-left-width";
+		"border-inline-start-color" => return "border-right-color";
+		"border-inline-end-color" => return "border-left-color";
+		"border-inline-start-style" => return "border-right-style";
+		"border-inline-end-style" => return "border-left-style";
+		}
 	case nm {
 	"margin-block-start" => return "margin-top";
 	"margin-block-end" => return "margin-bottom";
@@ -4839,6 +4862,7 @@ position(x: array of ref Tok, ctx: ref Ctx): (int, Len, Len)
 # 'inherit', 'initial' and friends: copy one longhand's computed value.
 copyprop(d, s: ref St, nm: string)
 {
+	aliasrtl = d.dirrtl;
 	case alias(nm) {
 	"display" => d.display = s.display;
 	"position" => d.position = s.position;

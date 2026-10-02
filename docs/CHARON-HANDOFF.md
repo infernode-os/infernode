@@ -145,9 +145,22 @@ In rough order of payoff.
 
 1. **Live sites.**  The network reaches Wikipedia, MDN, news.ycombinator.com,
    go.dev and docs.python.org from this container (github.com's HTML
-   gives 403 to the mirror's fetch; gnu.org drops).  Run
-   `compare.py`/`boxdiff.py` through the mirror over that spread.  The
-   first wrong box per page has been the fastest way to real bugs.
+   gives 403 to the mirror's fetch; gnu.org drops).  Scores at the end
+   of this session (`compare.py`, share of pixels differing, exact and
+   by 8px cell), with the first wrong box `boxdiff.py` reports:
+
+   | Page | exact | layout | first wrong box |
+   |---|---|---|---|
+   | pypi.org | 6.5% | 6.3% | — |
+   | developer.mozilla.org (CSS/display) | 10.0% | 12.7% | an inline `<svg>` path in the header nav has no box |
+   | en.wikipedia.org (Plan 9) | 13.7% | 15.4% | header `input[type=checkbox]` 63×50, Chromium 44×44 (appearance: none sizing) |
+   | news.ycombinator.com | 22.2% | 27.9% | rows 28px tall, Chromium 24: the nested table's cell gets 1px extra all round |
+   | docs.python.org (library/os) | 23.5% | 36.9% | the "related" nav: the long `li` wraps to 5 lines, Chromium 3; the right-floated search form is narrower and wraps |
+   | go.dev | 65.4% | 67.3% | the header nav `ul` is 1659px wide: Material Icons ligature names render as text (the font comes from fonts.googleapis.com; check it loads through the mirror); `body` 768px tall |
+
+   The `<center>` fix came from this list (HN's table was not centred).
+   Take the pages top to bottom: the first wrong box per page has been
+   the fastest way to real bugs.
 2. **Review findings not yet fixed** (verified by reading, not yet
    done; the full lists are in the session's scratch notes, these are
    the ones that matter):

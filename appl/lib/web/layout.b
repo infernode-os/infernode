@@ -1088,6 +1088,25 @@ sizew(b: ref Box, cbw: int)
 		b.ml += free;
 	else if(rauto)
 		b.mr += free;
+	else if(free > 0 && incenter(b)) {
+		# <center> centres its block children too (HTML §15.3.3:
+		# text-align: -webkit-center), as pages of its era expect
+		b.ml += free/2;
+		b.mr += free - free/2;
+	}
+}
+
+# is b a block child of <center> (or of its anonymous blocks)?
+incenter(b: ref Box): int
+{
+	for(p := b.parent; p != nil; p = p.parent) {
+		if(p.node != 0)
+			return curdoc != nil && curdoc.nodes[p.node].tag == Dom->Tcenter &&
+				curdoc.nodes[p.node].ns == Dom->HTML;
+		if(p.kind != Kblock)
+			break;
+	}
+	return 0;
 }
 
 # Lay out a block-level box whose width is settled; set its height and

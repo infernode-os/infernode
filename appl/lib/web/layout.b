@@ -2261,7 +2261,8 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 				if(dense) {
 					r = 0;
 					c = 0;
-				}
+				} else if(g.c0 >= 0 && g.c0 < cc)
+					r++;	# a definite column before the cursor: the next row (§8.5 step 3)
 				for(;;) {
 					if(g.c0 >= 0)
 						c = g.c0;
@@ -2506,17 +2507,18 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 		tr := t[i];
 		tr.base = 0.0;
 		tr.limit = -1.0;
+		# a percentage of an indefinite size is auto (Grid §7.2.3)
+		if(avail < 0 && tr.lo.kind == Tpct)
+			tr.lo = Tsz(Tauto, 0.0);
+		if(avail < 0 && tr.hi.kind == Tpct)
+			tr.hi = Tsz(Tauto, 0.0);
 		case tr.lo.kind {
 		Tfixed => tr.base = tr.lo.v;
-		Tpct =>
-			if(avail >= 0)
-				tr.base = tr.lo.v * real avail / 100.0;
+		Tpct => tr.base = tr.lo.v * real avail / 100.0;
 		}
 		case tr.hi.kind {
 		Tfixed => tr.limit = tr.hi.v;
-		Tpct =>
-			if(avail >= 0)
-				tr.limit = tr.hi.v * real avail / 100.0;
+		Tpct => tr.limit = tr.hi.v * real avail / 100.0;
 		}
 		if(tr.limit >= 0.0 && tr.limit < tr.base)
 			tr.limit = tr.base;
@@ -2741,6 +2743,25 @@ gridw(k: ref Box, aw: int, b: ref Box): int
 	}
 	(mn, mx) := intrinsic(k);
 	return clampw(k, fit(mn, mx, aw) - nz(k.ml) - nz(k.mr), aw);
+}
+
+# the height of a box's content (its last line or lowest child), with
+# its bottom padding and border, whatever height it was given
+contentheight(k: ref Box): int
+{
+	h := 0;
+	if(len k.lines > 0) {
+		ln := k.lines[len k.lines - 1];
+		h = ln.y + ln.h;
+	}
+	for(i := 0; i < len k.kids; i++) {
+		c := k.kids[i];
+		if(c.inl || isabs(c) || c.kind == Ktext)
+			continue;
+		if(c.y + c.h + c.mb > h)
+			h = c.y + c.h + c.mb;
+	}
+	return h + k.pb + k.bb;
 }
 
 # ---- tables (CSS 2.2 §17) ----
@@ -3221,7 +3242,7 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		c := hd cl2;
 		k := c.box;
 		h := rowy[c.r + c.rs - 1] + rowh[c.r + c.rs - 1] - rowy[c.r];
-		contenth := k.h;
+		contenth := contentheight(k);	# not k.h: a specified height may be less than the content
 		# the row's height is definite for the cell's content when the
 		# table's or the row's own height is (browsers resolve a
 		# percentage inside an auto-height table's cell to auto)
@@ -4090,6 +4111,21 @@ isspace(c: int): int
 }
 
 # CJK and the like break between any two characters
+# s without its soft hyphens (U+00AD)
+noshy(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == 16rAD)
+			break;
+	if(i == len s)
+		return s;
+	r := "";
+	for(i = 0; i < len s; i++)
+		if(s[i] != 16rAD)
+			r[len r] = s[i];
+	return r;
+}
+
 isideo(c: int): int
 {
 	return (c >= 16r2E80 && c <= 16r9FFF) || (c >= 16rAC00 && c <= 16rD7AF) ||
@@ -4179,9 +4215,16 @@ text(f: ref Fl, b: ref Box)
 			i++;
 			continue;
 		}
+		if(c == 16r200B) {
+			# a zero-width space: a break opportunity that shows nothing
+			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor));
+			f.space = 0;
+			i++;
+			continue;
+		}
 		# a word: up to the next space or break opportunity
 		st0 := i;
-		while(i < len s && !isspace(s[i]) && !(isideo(s[i]) && i > st0)) {
+		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && !(isideo(s[i]) && i > st0)) {
 			i++;
 			if(s[i-1] == '-' && i < len s && !isspace(s[i]) && i - st0 > 2)
 				break;	# break after a hyphen inside a word
@@ -4192,8 +4235,8 @@ text(f: ref Fl, b: ref Box)
 			i++;	# a control character no case above takes (form feed): dropped
 			continue;
 		}
-		word := s[st0:i];
-		if(word == "­")	# soft hyphen alone
+		word := noshy(s[st0:i]);	# soft hyphens show nothing (no break there yet)
+		if(word == "")
 			continue;
 		w := fc.width(word) + ls * real len word;
 		if(st.breakall && !nowrap) {
@@ -5906,8 +5949,36 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 	}
 }
 
-# nearest-neighbour scaling, for images drawn at other than their size
+# Nearest-neighbour scaling, for images drawn at other than their
+# size.  The last few are kept: a page repaints at every scroll, and
+# scaling a photograph each time is most of the cost.
+Nscaled: con 24;
+scaled: list of (ref Image, int, int, ref Image);
+
 scale(src: ref Image, w, h: int): ref Image
+{
+	for(l := scaled; l != nil; l = tl l) {
+		(s, sw, sh, d) := hd l;
+		if(s == src && sw == w && sh == h)
+			return d;
+	}
+	d := scale1(src, w, h);
+	if(d != nil) {
+		if(len scaled >= Nscaled) {
+			r: list of (ref Image, int, int, ref Image);
+			n := 0;
+			for(l = scaled; l != nil && n < Nscaled - 1; l = tl l)
+				r = hd l :: r;
+			scaled = nil;
+			for(; r != nil; r = tl r)
+				scaled = hd r :: scaled;
+		}
+		scaled = (src, w, h, d) :: scaled;
+	}
+	return d;
+}
+
+scale1(src: ref Image, w, h: int): ref Image
 {
 	if(w <= 0 || h <= 0)
 		return nil;

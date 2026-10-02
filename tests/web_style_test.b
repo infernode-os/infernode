@@ -339,6 +339,10 @@ testHints(t: ref T)
 	t.assert(f.fontsize == 24.0, "font size=5");
 	p = page("<style>p { color: green }</style><p id=p style='color: red' bgcolor=red>x");
 	t.assertseq(col(st(p, "p").color), "ff0000ff", "style attribute beats sheet");
+	p = page("<table border=0 cellpadding=0 cellspacing=0><tr><td id=z>x</table>");
+	z := st(p, "z");
+	t.assert(px(z.pt) == 0.0 && px(z.pl) == 0.0, sys->sprint("cellpadding=0 beats the UA padding: %g", px(z.pt)));
+	t.assert(z.bt == 0 && z.bl == 0, sys->sprint("border=0: no cell border: %d", z.bt));
 }
 
 testPseudo(t: ref T)

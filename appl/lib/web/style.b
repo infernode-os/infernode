@@ -5040,11 +5040,14 @@ hints(d: ref Doc, n: int): list of ref Decl
 		if(d.hasattr(n, "nowrap"))
 			s += "white-space:nowrap;";
 		s += alignhint(d, n) + valignhint(d, n);
-		# cellpadding of the table
+		# cellpadding of the table; and border=0 on it gives its
+		# cells no border (HTML §15.3.9: only a value above zero does)
 		for(t := d.nodes[n].parent; t != 0; t = d.nodes[t].parent)
 			if(d.nodes[t].tag == Dom->Ttable) {
 				if((cp := d.attr(t, "cellpadding")) != nil)
 					s += sys->sprint("padding:%dpx;", atoi(cp));
+				if(d.hasattr(t, "border") && (tb := d.attr(t, "border")) != "" && atoi(tb) == 0)
+					s += "border-width:0;";
 				break;
 			}
 	Dom->Ttr or Dom->Tthead or Dom->Ttbody or Dom->Ttfoot =>

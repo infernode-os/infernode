@@ -234,6 +234,12 @@ inranges(r: array of int, c: int): int
 advance(f: ref Typeface, c: int): real
 {
 	(o, g) := glyph(f, c);
+	return advanceg(f, o, g, c);
+}
+
+# the advance of c, its glyph (o, g) already looked up
+advanceg(f: ref Typeface, o: ref OutlineFont->Face, g, c: int): real
+{
 	if(o == nil) {
 		if(f.fallback != nil) {
 			s := "";
@@ -281,7 +287,7 @@ Typeface.width(f: self ref Typeface, s: string): real
 		if(o != nil && o == po && !f.nokern && kerns(s, i))
 			w += real o.kern(pg, g) * f.size / real o.upem;
 		(po, pg) = (o, g);
-		w += advance(f, s[i]);
+		w += advanceg(f, o, g, s[i]);
 	}
 	return w;
 }

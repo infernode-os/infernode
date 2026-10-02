@@ -2744,8 +2744,10 @@ lenauto(v: array of ref Tok, ctx: ref Ctx): (int, Len)
 	v = trim(v);
 	if(len v == 1 && v[0].kind == Kident)
 		case lower(v[0].s) {
-		"auto" or "stretch" or "-webkit-fill-available" or "-moz-available" =>
+		"auto" =>
 			return (1, kw(Lauto));
+		"stretch" or "-webkit-fill-available" or "-moz-available" =>
+			return (1, kw(Lstretch));
 		"min-content" or "-webkit-min-content" =>
 			return (1, kw(Lmin));
 		"max-content" or "-webkit-max-content" =>
@@ -5703,6 +5705,7 @@ lenstr(l: Len): string
 	Lmin => return "min-content";
 	Lmax => return "max-content";
 	Lfit => return "fit-content";
+	Lstretch => return "stretch";
 	Lcontent => return "content";
 	Lcalc => return "calc(...)";
 	}

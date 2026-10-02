@@ -36,7 +36,7 @@ Style: module
 	};
 
 	# length kinds
-	Lpx, Lauto, Lnone, Lnormal, Lnum, Lmin, Lmax, Lfit, Lcontent, Lcalc: con iota;
+	Lpx, Lauto, Lnone, Lnormal, Lnum, Lmin, Lmax, Lfit, Lcontent, Lcalc, Lstretch: con iota;
 
 	Len: adt {
 		kind:	int;	# Lpx: px + pct% of the basis; Lnum: a bare number (line-height);

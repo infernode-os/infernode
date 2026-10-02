@@ -922,11 +922,7 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		}
 		return r;
 	Dom->Ttextarea =>
-		r := newbox(Kreplaced, inl, n, st);
-		r.text = b.d.textof(n);
-		r.iw = int (st.fontsize * 10.0);
-		r.ih = int (st.fontsize * 2.4);
-		return r;
+		return nil;	# a block of its text, laid out as pre-wrap (the UA sheet); sized by cols and rows
 	Dom->Tselect =>
 		r := newbox(Kreplaced, inl, n, st);
 		# the first selected option, else the first
@@ -1256,6 +1252,10 @@ specw(b: ref Box, v: Len, cbw: int): int
 		Style->Lmax => return mx - mg;
 		}
 		return fit(mn, mx, cbw) - mg;
+	Style->Lstretch =>
+		if(cbw < 0)
+			return -1;
+		return cbw - b.ml - b.mr;	# the stretch-fit size (Sizing 4 §3)
 	}
 	return -1;
 }
@@ -1270,6 +1270,10 @@ spech(b: ref Box, v: Len, cbh: int): int
 		if(!b.st.borderbox)
 			h += vextra(b);
 		return h;
+	Style->Lstretch =>
+		if(cbh < 0)
+			return -1;
+		return cbh - b.mt - b.mb;
 	}
 	return -1;
 }
@@ -1651,6 +1655,9 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	h := sh;
 	if(h < 0) {
 		h = contenth + vextra(b);
+		(nil, rows) := textarea(b);
+		if(rows > 0)
+			h = ir(real rows * lineheight(b.st, face(b.st))) + vextra(b);	# rows lines, whatever it holds
 		if((ah := ratioh(b, b.w)) >= 0) {
 			# from its width; an auto min-height keeps the content in
 			# (the automatic minimum, Sizing 4 §5.2.2)
@@ -4934,9 +4941,9 @@ collapsed(t: ref Tgrid, b: ref Box, cols: list of ref Box): ref Tb
 # a border colour as painted: currentcolor is the owner's text colour
 bcolor(st: ref St, c: int): int
 {
-	if(c == Style->Ccurrent || c == 0)
+	if(c == Style->Ccurrent)
 		return st.color;
-	return c;
+	return c;	# transparent (0) stays so
 }
 
 colfight(tb: ref Tb, k: ref Box, c, span, origin: int)
@@ -5116,6 +5123,21 @@ colbox(k: ref Box, cx, colw, rowy: array of int, sx, sy, c, span, rtl: int)
 	for(i := c; i < c + span; i++)
 		k.w += colw[i];
 	k.h = rowy[nr] - sy - k.y;
+}
+
+# the table box within a table's border box r: the captions above and
+# below are outside it (CSS 2.2 §17.4)
+tablerect(b: ref Box, r: Rect): Rect
+{
+	tb := b.tb;
+	if(tb.nrows == 0 || tb.rows == nil)
+		return r;
+	(nil, sy) := tspacing(b);
+	top := tb.rows[0] - sy - b.bt - b.pt;
+	bot := tb.rows[tb.nrows] + b.bb + b.pb;
+	if(top <= 0 && bot >= b.h)
+		return r;
+	return Rect((r.min.x, r.min.y + top), (r.max.x, r.min.y + bot));
 }
 
 # the physical column (from the left) and grid line of logical ones
@@ -5807,10 +5829,13 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	if(mrauto)
 		k.mr = 0;
 	w := specw(k, st.width, cbw);
+	if(st.width.kind == Style->Lstretch && !lauto && !rauto)
+		w = cbw - left - right - k.ml - k.mr;	# stretch: what the insets leave
 	if(w < 0 && (lauto || rauto) && (sh := spech(k, st.height, cbh)) >= 0)
 		w = transferred(k, sh);
-	if(w < 0 && k.kind == Kreplaced) {
-		# its own size, whatever the insets say (§10.3.8: an inset is dropped instead)
+	if(w < 0 && truereplaced(k)) {
+		# its own size, whatever the insets say (§10.3.8: an inset is
+		# dropped instead); a form control is not replaced that way and stretches
 		(rw, nil) := replacedsize(k, cbw, cbh);
 		w = rw + hextra(k);
 	} else if(w < 0) {
@@ -5875,7 +5900,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	}
 	layblock(l, k, cbw, cbh, nil, 0, 0);
 	h := k.h;
-	if(st.height.kind == Style->Lauto && !tauto && !bauto && k.kind != Kreplaced) {
+	if((st.height.kind == Style->Lauto && !truereplaced(k) || st.height.kind == Style->Lstretch) && !tauto && !bauto) {
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
 		k.h = h;
 	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {
@@ -6320,6 +6345,25 @@ aspect(b: ref Box, iw, ih: int): real
 	return ratio;
 }
 
+# a replaced box in CSS 2.2's sense (an image, video, canvas, frame,
+# object or svg): one with its own size; a form control is a box of
+# its own kind that stretches like a block
+truereplaced(b: ref Box): int
+{
+	if(b.kind != Kreplaced)
+		return 0;
+	if(b.node == 0 || curdoc == nil)
+		return 1;
+	nd := curdoc.nodes[b.node];
+	if(nd.ns == Dom->SVG)
+		return 1;
+	case nd.tag {
+	Dom->Timg or Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe or Dom->Tembed or Dom->Tobject =>
+		return 1;
+	}
+	return 0;
+}
+
 # the default 300x150 of an iframe, embed or object, or of an svg with
 # neither its dimensions nor a viewBox, is a size, not a ratio (CSS 2.2
 # §10.3.2 gives them none); a canvas's bitmap has one
@@ -6421,10 +6465,29 @@ contribution(b: ref Box): (int, int)
 
 nowidth: ref Box;	# being measured for its content's width: its width property is ignored
 
+# a textarea's cols and rows (HTML §4.10.11: 20 and 2 by default)
+textarea(b: ref Box): (int, int)
+{
+	if(b.node == 0 || curdoc == nil || curdoc.nodes[b.node].tag != Dom->Ttextarea || curdoc.nodes[b.node].ns != Dom->HTML)
+		return (0, 0);
+	cols := 20;
+	rows := 2;
+	if((s := curdoc.attr(b.node, "cols")) != nil && int s > 0)
+		cols = int s;
+	if((s = curdoc.attr(b.node, "rows")) != nil && int s > 0)
+		rows = int s;
+	return (cols, rows);
+}
+
 intrinsic1(b: ref Box): (int, int)
 {
 	ex := hextra(b) + mgs(b);
 	st := b.st;
+	(cols, nil) := textarea(b);
+	if(cols > 0 && st.width.kind == Style->Lauto) {
+		w := ir(real cols * face(st).width("0")) + ex;	# cols characters wide, whatever it holds
+		return (w, w);
+	}
 	if(st.width.kind == Style->Lpx && st.width.pct == 0.0 && b != nowidth) {
 		w := ir(st.width.px);
 		if(!st.borderbox)
@@ -7131,7 +7194,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			if(!ln.content && it.text == " " && collapsible(it.box.st))
 				continue;
 			w := tabw(ln, it);
-			if(it.box.st.whitespace == Style->Wbreakspaces && !it.nowrap && ln.content && ln.x + w > real ln.avail + 0.01) {
+			if(it.box.st.whitespace == Style->Wbreakspaces && !it.nowrap && ln.content && ln.x + w > real ln.avail + 0.5) {
 				# break-spaces: a space never hangs, and the opportunity
 				# is after it, so one that does not fit wraps, taking the
 				# word before it along when something it could break
@@ -7184,7 +7247,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				ln.content = 1;
 				continue;
 			}
-			if(ln.content && ln.x + it.w > real ln.avail + 0.01 && !it.nowrap && !prevnowrap(ln)) {
+			if(ln.content && ln.x + it.w > real ln.avail + 0.5 && !it.nowrap && !prevnowrap(ln)) {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -8815,6 +8878,8 @@ before(a, b: ref Lyr): int
 
 paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 {
+	if(b.tb != nil)
+		r = tablerect(b, r);	# the table box: its captions lie outside its background and borders
 	if(b != canvasbg)
 		paintbackground(dst, b, r);
 	else

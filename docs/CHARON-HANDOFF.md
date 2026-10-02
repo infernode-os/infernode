@@ -38,9 +38,71 @@ will move the numbers a little.
 The third and fourth sessions (same branch) took the hand-off list in
 order: the remaining review findings, then the live-site bugs, then bidi
 edges, shaping, the regressions each WPT run turned up, and the largest
-failing WPT directory (`css-grid/grid-lanes`, 891 tests).
+failing WPT directory (`css-grid/grid-lanes`, 891 tests).  The fifth
+session went down the failing families by size: lists and counters,
+backgrounds, aspect-ratio, positioning, break-spaces, text-transform,
+tables.
 
-- `LATER2` **::first-letter, fit-content() tracks.**  `::first-letter`
+- `d201ec3` **The collapsing border model, column backgrounds,
+  fixed-layout percentages.**  `border-collapse: collapse` resolves the
+  border at every grid-line segment among the cells, rows, row groups,
+  columns and the table (`collapsed`/`fight`: hidden, width, style,
+  origin, then left or top), kept in `Tb` on the table box; cells take
+  the halves on their side (`cellhalves`), the table the outer halves
+  and no padding (`tablehalves`); the borders are painted after the
+  cells' backgrounds, centred on the lines (`paintcollapsed`, from
+  `flowbgs`); captions lie outside them.  Columns and groups get their
+  spans' extent in layout (`placecolumns`) and their backgrounds are
+  painted under the rows' (`paintcolumns`).  Fixed layout: a `<col>`
+  percentage is the column's, a cell's is of its content box
+  (`Tgrid.colpct`, `pex`).  Cells in an inline box go in an inline table.
+- `626e14b` **Unicode case mapping, full-width, hanging ideographic
+  spaces.**  `lib/bidi/case` and `casex` (from UnicodeData.txt and
+  SpecialCasing.txt by `tools/bidi/case.py`); `Bidi->toupper/tolower/
+  totitle` with Final_Sigma, the Turkish/Azeri i (`langof` finds the
+  lang attribute) and no Mtavruli for Georgian; `text-transform:
+  full-width`.  An ideographic space at a line's end hangs, keeping
+  its background (the inline boxes reach out over it).  Aspect ratio:
+  the transferred width is no less than the content's min-content
+  (`transferred`, the automatic minimum) unless the box scrolls; a 1/0
+  ratio is auto; svg without dimensions has no natural ratio.  rtl: a
+  relative box with both insets takes the containing block's start;
+  text-indent is at the right.  A block-level absolute met mid-line
+  sits under the line (`Ln.below`).
+- `02f7458` **aspect-ratio, break-spaces, positioned table parts,
+  line-break: anywhere.**  `aspect-ratio` on non-replaced boxes
+  (`ratiow`/`ratioh`, `auto <ratio>` of the content box, `St.aspectauto`;
+  blocks, absolutes, intrinsic contributions, grid items not stretched
+  by `normal`).  `white-space: break-spaces` wraps a space that does
+  not fit, taking the word before it when something it could break
+  from precedes that word (the `Ispace` branch of the line builder;
+  `line-break: anywhere` is `breakall` 2 and breaks before the space).
+  Out-of-flow boxes among a table's parts are kept and registered
+  (`tableabs`).  Absolutes: auto vertical margins, negative auto
+  horizontal margins, right-to-left over-constrained blocks.
+- `89faf88` **Counters, the canvas background, the line-break table.**
+  CSS counters with scope (`Ctr`, `ctrprops`, `counters()` outermost
+  first, `counterrep` without the marker suffix).  The UA sheet gave
+  `html` an opaque Canvas background, so a body background never
+  reached the canvas: dropped; the body is found by tag (`istag`),
+  paint containment stops propagation (`contain` is parsed, `CT` bits),
+  propagated images are positioned on the root's box, a body whose
+  background moved keeps its box-shadow (`paintshadows`).  An atomic
+  inline gets its containing block's height (`height: 100%` on an
+  `<img>` in a 200px div).  The line-break class table was read with
+  its class column as hex (15 became JT, 16 EB, 10 ZWJ): words broke
+  at bidi controls and joiners.  A root box carries its document
+  (`Box.doc`), so a page with frames paints with the right one current.
+- `a0849c0`, `4895a7e`, `0fe4325` **Images in true colour, table
+  height and hints, fixed layout width, UAX #14 line breaking.**
+  `imageremap` returns RGBA32 (+568 tests: images were quantised to a
+  palette); a table's `height` excludes its captions; `cellpadding`
+  hints for attribute-less cells (`sharekey` nil for td/th); a
+  fixed-layout table's width is its columns' given widths plus spacing;
+  a BFC root beside a float needs its start margin and border box to
+  fit; `lbbreak`/`lbclass` (Line_Break classes from LineBreak.txt by
+  `tools/bidi/linebreak.py`) decide breaks inside runs of letters.
+- `3cd836d` **::first-letter, fit-content() tracks.**  `::first-letter`
   (`firstletter`/`firsttext` in layout.b: the first text of the first
   formatted line, through inline boxes and into a first block child;
   the letter with the punctuation around it, General_Category P* from
@@ -359,6 +421,15 @@ In rough order of payoff.
 | `appl/lib/web/layout.b` (grid lanes) | `laylanes` (placement by shortest lane: `fitsat`/`lanesfit`, `Gap` for dense packing, `repsize` for intrinsic auto-repeats, `flowal` for flow-start/flow-end), `lanesintrinsic`/`spreadspan`, `collapsefit`/`ngaps` (auto-fit, grids too), `gridabs`/`Abs.area`/`abspalign` (absolutes in grid areas, aligned by justify-self/align-self), `Track.fit`; grid step-1 placement (definite row, auto column), `sizetracks` span groups, `order` for grid children |
 | `appl/lib/web/layout.b` (subgrid) | `gridplace` (placement, shared), `issubgrid`, `subgridded`/`subitems` (sizing through a subgrid, `Gi.extra`/`Gi.empty`), `subtracks`/`regap`/`subgap` (its edges and gap out of its tracks), `fixedtracks`/`tracksizes`, `subnames`/`mergenames`, `clamplines`, `lanessub`, `namedspan`/`hasname`, `autosized` |
 | `appl/lib/web/layout.b` (::first-letter) | `firstletter`, `firsttext`; `Tfit` tracks |
+| `appl/lib/web/layout.b` (counters) | `Ctr`, `ctrprops`, `ctrfind`/`ctrincr`/`ctrset`, `counters`, `counterrep` |
+| `appl/lib/web/layout.b` (canvas, frames) | `istag`, `hasimage`, `paintshadows`, `Box.doc` set by `build`, read by `lay` and `paint` |
+| `appl/lib/web/layout.b` (aspect-ratio) | `ratiow`/`ratioh`, `transferred`/`noratio`, `isscroller`, `hasratio`, `sizew(b, cbw, cbh)` |
+| `appl/lib/web/layout.b` (lines) | `tabw`, `removefrag`, `Ln.below`, `lbbase`, `inbox`; hanging `　` in `endline`; `transform(s, t, first, lang)`, `langof` |
+| `appl/lib/web/layout.b` (tables) | `collapsed`/`fight`/`stylerank`, `bhalf`/`widest`, `cellhalves`/`tablehalves`, `paintcollapsed`, `placecolumns`/`colspan`/`colbox`, `paintcolumns`, `tableabs`, `Tgrid.colpct`/`tb`, `blankrun(l, pre)` |
+| `appl/lib/bidi.b`, `lib/bidi/linebreak`, `lib/bidi/case`, `lib/bidi/casex` | `lbclass` (UAX #14), `toupper`/`tolower`/`totitle` (`special`, `simple`, `turkic`); generators `tools/bidi/linebreak.py`, `tools/bidi/case.py` |
+| `appl/lib/web/style.b` (this session) | `contain` (`CT` bits), `aspectauto`, `line-break`, `text-transform: full-width` (`TTfull`), display: none pseudo-elements not generated, the list-style shorthand's none |
+| `module/web/layout.m` | `Box.doc`, `Box.tb`, `Tb`, `Bd` |
+| `lib/web/html.css` | `html` has no background of its own |
 | `appl/lib/bidi.b`, `lib/bidi/punct`, `tools/bidi/punct.py` | `punct(c)`: General_Category P*, from UnicodeData.txt |
 | `appl/lib/web/style.b` (::first-letter) | `Computed.firstletter`, `pseudostyle` without content |
 | `appl/lib/web/style.b` (grid lanes) | `display: grid-lanes`/`inline-grid-lanes` (and the two-value forms), `grid-lanes-direction`, `grid-lanes-pack`, `flow-tolerance`, `flow-start`/`flow-end` alignment keywords |
@@ -437,3 +508,26 @@ In rough order of payoff.
 - **Adding a field to a positional adt** (`Abs.area`, `Track.fit`,
   `St.lanesdir`) means every `ref Abs(`/`ref Track(`/`ref St(` site:
   grep them all first; the compiler reports the first mismatch only.
+- **`bidi.b`'s `table()` reads every column as hex.**  The line-break
+  table's class column is decimal and was read as hex for a whole run:
+  CM became JT, ZWJ became EB, so words broke at bidi controls and
+  joiners and never beside an ideographic space.  A new table with a
+  decimal column needs its own case in `table()` (as `/linebreak` and
+  `/classes` have).  Check a generated table with one known code point
+  before trusting a run.
+- **`curdoc` is whichever document was built last.**  A page with
+  frames builds the frames' documents after its own, then paints the
+  main one with a frame's document current: `istag` dereferenced nil
+  (fixture `iframe-basic`, "no image").  `lay` and `paint` now set it
+  from `Box.doc`; anything new that reads the DOM from layout or paint
+  must go through the root's document, not a global set elsewhere.
+- **A `.xht` copied to `.html` parses differently**: the XHTML tests
+  wrap their CSS in `<![CDATA[`, which the HTML parser hands to the CSS
+  tokenizer as junk, so the first rule is lost.  Keep the extension
+  when copying a test under `tmp/t/` for a box dump.
+- **`wptdiff.py` can report "identical" for a build that failed to
+  compile**: it renders with the installed bytecode.  Check `mk`'s
+  output before believing a render.
+- **A one-argument helper named like a two-argument one** (`before`
+  was the layer comparator) is a type error at the first call, not a
+  clash at the definition; the compiler points at the call.

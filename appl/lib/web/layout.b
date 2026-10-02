@@ -213,8 +213,10 @@ element(b: ref B, n: int): list of ref Box
 	b.counters = own;
 	kids = rev(kids);
 	if(kind == Kinline) {
-		# an inline box around blocks is split into inline pieces
+		# cells in it go in an anonymous inline table first (§17.2.1);
+		# then an inline box around blocks is split into inline pieces
 		# either side of them (CSS 2.2 §9.2.1.1)
+		kids = orphans(box, kids);
 		hasblock := 0;
 		for(l = kids; l != nil; l = tl l)
 			if(isblocklevel(hd l))
@@ -1819,7 +1821,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			# (overflow: clip does not take the minimum away, Overflow 3 §3.1)
 			if(mnv.kind == Style->Lauto && seethrough(ks.overflowx) && seethrough(ks.overflowy)) {
 				if(row) {
-					(mn, nil) := intrinsic(k);
+					# the content size suggestion: its content's, not
+					# its width's (Flexbox §4.5)
+					nowidth = k;
+					(mn, nil) := intrinsic1(k);
+					nowidth = nil;
 					minm = mn - mgs(k);
 					# no larger than a definite specified size
 					if((sw := specw(k, ks.width, mainavail)) >= 0 && sw < minm)
@@ -6309,11 +6315,13 @@ contribution(b: ref Box): (int, int)
 	return (mn, mx);
 }
 
+nowidth: ref Box;	# being measured for its content's width: its width property is ignored
+
 intrinsic1(b: ref Box): (int, int)
 {
 	ex := hextra(b) + mgs(b);
 	st := b.st;
-	if(st.width.kind == Style->Lpx && st.width.pct == 0.0) {
+	if(st.width.kind == Style->Lpx && st.width.pct == 0.0 && b != nowidth) {
 		w := ir(st.width.px);
 		if(!st.borderbox)
 			w += hextra(b);
@@ -6323,7 +6331,7 @@ intrinsic1(b: ref Box): (int, int)
 		(w, nil) := replacedsize(b, -1, -1);
 		return (w + ex, w + ex);
 	}
-	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0 && b != noratio) {
+	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0 && b != noratio && b != nowidth) {
 		# transferred from its height (Sizing 4 §5.2.1); a scroll
 		# container's min-content contribution is nothing (its automatic minimum)
 		h := ir(st.height.px);
@@ -8707,7 +8715,7 @@ paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 		paintbackground(dst, b, r);
 	else
 		paintshadows(dst, b, r);	# the background went to the canvas; the shadow is still its own
-	if(b.tb != nil || b.st.collapse && (b.kind == Kcell || b.kind == Krow || isrowgroup(b) || iscolumn(b)))
+	if(b.tb != nil && b.tb.v != nil || b.st.collapse && (b.kind == Kcell || b.kind == Krow || isrowgroup(b) || iscolumn(b)))
 		return;	# collapsed borders: the table paints them over its content
 	paintborders(dst, b, r);
 }

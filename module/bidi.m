@@ -32,6 +32,9 @@ Bidi: module
 	JU, JC, JD, JR, JL, JT: con iota;	# none, join-causing, dual, right, left, transparent
 	joining:	fn(c: int): int;
 
+	# punctuation (General_Category P*), which ::first-letter takes along
+	punct:	fn(c: int): int;
+
 	# the paragraph's base direction from its first strong character
 	# (P2, P3): 0 left to right, 1 right to left, -1 none found
 	basedir:	fn(s: array of int): int;

@@ -40,6 +40,33 @@ order: the remaining review findings, then the live-site bugs, then bidi
 edges, shaping, the regressions each WPT run turned up, and the largest
 failing WPT directory (`css-grid/grid-lanes`, 891 tests).
 
+- `LATER2` **::first-letter, fit-content() tracks.**  `::first-letter`
+  (`firstletter`/`firsttext` in layout.b: the first text of the first
+  formatted line, through inline boxes and into a first block child;
+  the letter with the punctuation around it, General_Category P* from
+  the new `lib/bidi/punct` table and `bidi->punct`, and its combining
+  marks, go in a box of the pseudo-element's style, which inherits from
+  `::before` when the letter is generated content).  339 of the CSS2
+  selectors tests were `first-letter-punctuation-*`.  `fit-content(x)`
+  tracks are their own kind (`Tfit`): max-content no wider than x,
+  which minmax(auto, x) had stood in for (and so clamped automatic
+  minimums it should not).
+- `eed6141` **Subgrid (Grid 2 §9).**  `grid-template-columns/rows:
+  subgrid`: the parent hands a subgrid the tracks, line names and gap it
+  spans each layout (`Box.subcw/subrh` and friends); sizing the
+  parent's tracks, the subgrid stands aside for its items
+  (`subgridded`/`subitems`), which carry its margin, border and padding
+  at its edges (an empty edge track too), nested subgrids included; its
+  own edges come out of its first and last tracks so its lines stay the
+  parent's; its size across is the tracks'; a gap of its own is used
+  within, the difference carried as margins; lines past its own are
+  clamped; grid lanes do the same for subgrid items.  Placement is
+  `gridplace`, shared.  Named lines with counts and `span <name>`.  An
+  auto-sized item's automatic minimum is clamped by a fixed max track
+  size (`minmax(auto, 100px)`).  Not done: a subgrid's own gap when it
+  is also the parent of a nested subgrid with another (gap-004), repeat
+  names after `subgrid`, orthogonal writing modes, intrinsic size
+  transfer through a row subgrid (`aspect-ratio` items).
 - `9287212` **Grid lanes (Grid 3), absolutes in grid areas, auto-fit.**
   `display: grid-lanes`/`inline-grid-lanes` (`laylanes`): items stack
   into the shortest lane, with `grid-lanes-direction` (row or column,
@@ -281,8 +308,7 @@ In rough order of payoff.
    and tentative cases from before.  Each with its reason, as far as
    known: `tools/ref/baseline/open-regressions.txt`.
 3. **Exposed gaps behind many failures:** vertical writing modes,
-   variable-font instances, subgrid (the largest remaining grid-lanes
-   bucket, and the `css-grid/subgrid` directory), `contain-intrinsic-size`,
+   variable-font instances, `contain-intrinsic-size`,
    multi-column layout (the lanes baseline tests' references use it),
    `margin-trim`, scrolling and clicking inside frames, hit-testing of
    transformed boxes (they are drawn moved but clicked where they are in
@@ -290,7 +316,7 @@ In rough order of payoff.
    anti-aliasing), translucent opacity on inline boxes (floats inside
    them paint at full opacity; opacity 0 is handled).  Bidi, `<iframe>`,
    GSUB and GPOS shaping, Arabic joining, ligatures across edges, 2D
-   transforms, grid lanes (Grid 3), absolutes in grid areas and
+   transforms, grid lanes (Grid 3), subgrid, absolutes in grid areas and
    auto-fit collapsing are done (above); declarative shadow DOM is
    approximated (a `<template shadowrootmode>`'s content is shown in
    place, `<slot>`s are transparent).
@@ -331,6 +357,10 @@ In rough order of payoff.
 | `appl/lib/web/fonts.b` (shaping) | `shape` → `Slot`s, `joinforms`, `Typeface.draw` from the right for rtl |
 | `appl/lib/web/layout.b` (this session) | `contribution` vs `intrinsic`, `floatwidth`, `joinruns`, `reorderline` with `Vis` controls and `leftedge`/`rightedge`, `contentheightof`/`asauto`, `oncanvas`, `intransform`, `Abs.frag` |
 | `appl/lib/web/layout.b` (grid lanes) | `laylanes` (placement by shortest lane: `fitsat`/`lanesfit`, `Gap` for dense packing, `repsize` for intrinsic auto-repeats, `flowal` for flow-start/flow-end), `lanesintrinsic`/`spreadspan`, `collapsefit`/`ngaps` (auto-fit, grids too), `gridabs`/`Abs.area`/`abspalign` (absolutes in grid areas, aligned by justify-self/align-self), `Track.fit`; grid step-1 placement (definite row, auto column), `sizetracks` span groups, `order` for grid children |
+| `appl/lib/web/layout.b` (subgrid) | `gridplace` (placement, shared), `issubgrid`, `subgridded`/`subitems` (sizing through a subgrid, `Gi.extra`/`Gi.empty`), `subtracks`/`regap`/`subgap` (its edges and gap out of its tracks), `fixedtracks`/`tracksizes`, `subnames`/`mergenames`, `clamplines`, `lanessub`, `namedspan`/`hasname`, `autosized` |
+| `appl/lib/web/layout.b` (::first-letter) | `firstletter`, `firsttext`; `Tfit` tracks |
+| `appl/lib/bidi.b`, `lib/bidi/punct`, `tools/bidi/punct.py` | `punct(c)`: General_Category P*, from UnicodeData.txt |
+| `appl/lib/web/style.b` (::first-letter) | `Computed.firstletter`, `pseudostyle` without content |
 | `appl/lib/web/style.b` (grid lanes) | `display: grid-lanes`/`inline-grid-lanes` (and the two-value forms), `grid-lanes-direction`, `grid-lanes-pack`, `flow-tolerance`, `flow-start`/`flow-end` alignment keywords |
 | `tests/web/fonts/liga.ttf` | a fontTools-made font with f+i and f+f+i ligatures, for `web_fonts_test` |
 | `tests/` | `web_fonts_test`, `brotli_test`, `charonshot -b/-d`, `charonbatch`, fonts and Brotli vectors under `tests/web/`, fixture `charon/wpt/control-chars.html`, `grid-lanes-basic`/`grid-lanes-dense` fixtures, `web_style_test` GridLanes |

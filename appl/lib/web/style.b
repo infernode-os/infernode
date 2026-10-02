@@ -1859,7 +1859,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		s.idx.env = ref *env;
 	}
 	lastenv = ref *env;	# for light-dark() in colours parsed without a context
-	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
 	m := matcher(d, env);
 	root := d.root();
 	if(root == 0)
@@ -1978,6 +1978,12 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 		c.before[n] = pseudostyle(pse, "before", st, ctx);
 		c.after[n] = pseudostyle(pse, "after", st, ctx);
 		c.marker[n] = pseudostyle(pse, "marker", st, ctx);
+		# the first letter of generated content before the element is
+		# that content's: the pseudo-element inherits from ::before then
+		fparent := st;
+		if((bs := c.before[n]) != nil && len bs.content > 0 && bs.content[0].kind == Kstring)
+			fparent = bs;
+		c.firstletter[n] = pseudostyle(pse, "first-letter", fparent, ctx);
 	}
 	if(key != nil)
 		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n])) :: share[slot];
@@ -2039,7 +2045,7 @@ pseudostyle(pse: list of (string, ref Md), name: string, parent: ref St, ctx: re
 	if(n == 0)
 		return nil;
 	st := cascade(sortmd(mds, n), parent, ctx);
-	if(name != "marker" && st.content == nil)
+	if(name != "marker" && name != "first-letter" && st.content == nil)
 		return nil;	# content: normal/none generates no box
 	fixup(st, parent, nil, 0);
 	return st;

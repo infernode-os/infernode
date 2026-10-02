@@ -273,10 +273,12 @@ Style: module
 	};
 
 	# Computed styles for d's elements, indexed by node; before[n] and
-	# after[n] are the pseudo-elements' styles where they generate boxes.
+	# after[n] are the pseudo-elements' styles where they generate boxes;
+	# firstletter[n] is ::first-letter's where rules give it one.
 	Computed: adt {
 		st:	array of ref St;
 		before, after, marker:	array of ref St;
+		firstletter:	array of ref St;
 	};
 
 	compute:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env): ref Computed;

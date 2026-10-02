@@ -208,7 +208,102 @@ element(b: ref B, n: int): list of ref Box
 			return splitinline(box, kids);
 	}
 	box.kids = fixkids(box, kids);
+	if(kind == Kblock && (fs := b.c.firstletter[n]) != nil)
+		firstletter(box, fs);
 	return box :: nil;
+}
+
+# ::first-letter: the first letter of the block's first formatted
+# line, with the punctuation around it, goes in a box of the
+# pseudo-element's style (CSS 2.2 §5.12.2); the letter's own marks go
+# with it.  Only a letter in one text run, after any punctuation in
+# that run: punctuation alone before a letter in the next run is not
+# gathered.
+firstletter(box: ref Box, st: ref St)
+{
+	(p, i) := firsttext(box);
+	if(p == nil)
+		return;
+	t := p.kids[i];
+	s := t.text;
+	n := len s;
+	a := 0;
+	while(a < n && iswhite(s[a]))
+		a++;
+	j := a;
+	while(j < n && bidi->punct(s[j]))
+		j++;
+	if(j >= n)
+		return;
+	j++;
+	while(j < n && bidi->joining(s[j]) == Bidi->JT)
+		j++;
+	while(j < n && bidi->punct(s[j]))
+		j++;
+	ft := newbox(Ktext, 1, t.node, st);
+	ft.text = s[a:j];
+	fk := Kinline;
+	finl := 1;
+	if(st.float != Style->Fnone || st.display != Style->Dinline) {
+		fk = Kblock;
+		finl = 0;
+	}
+	fb := newbox(fk, finl, 0, st);
+	fb.kids = array[] of {ft};
+	pieces: list of ref Box;
+	if(a > 0) {
+		lead := newbox(Ktext, 1, t.node, t.st);
+		lead.text = s[0:a];
+		pieces = lead :: pieces;
+	}
+	pieces = fb :: pieces;
+	if(j < n) {
+		t.text = s[j:];
+		pieces = t :: pieces;
+	}
+	np := len p.kids - 1;
+	for(l := pieces; l != nil; l = tl l)
+		np++;
+	kids := array[np] of ref Box;
+	kids[0:] = p.kids[0:i];
+	m := i;
+	for(l = rev(pieces); l != nil; l = tl l)
+		kids[m++] = hd l;
+	kids[m:] = p.kids[i+1:];
+	p.kids = kids;
+}
+
+# the first text box of a block's first formatted line (its parent
+# and index): through inline boxes and into a first block child, past
+# markers and out-of-flow boxes; nil at a line break or an atomic box
+firsttext(box: ref Box): (ref Box, int)
+{
+	for(i := 0; i < len box.kids; i++) {
+		k := box.kids[i];
+		if(k.kind == Kmarker || isoof(k))
+			continue;
+		case k.kind {
+		Ktext =>
+			all := 1;
+			for(c := 0; c < len k.text; c++)
+				if(!iswhite(k.text[c]))
+					all = 0;
+			if(all)
+				continue;
+			return (box, i);
+		Kinline =>
+			(p, j) := firsttext(k);
+			if(p != nil)
+				return (p, j);
+			continue;	# an empty inline box
+		Kblock =>
+			if(k.inl)
+				return (nil, 0);
+			return firsttext(k);
+		}
+		return (nil, 0);
+	}
+	return (nil, 0);
 }
 
 children(b: ref B, n: int, st: ref St): list of ref Box
@@ -1987,7 +2082,7 @@ resolveflex(items: array of ref Fi, avail: real)
 # ---- grid layout (CSS Grid 1) ----
 
 # a track sizing function's two ends
-Tfixed, Tpct, Tfr, Tauto, Tmin, Tmax: con iota;
+Tfixed, Tpct, Tfr, Tauto, Tmin, Tmax, Tfit: con iota;	# Tfit: fit-content(v), max-content no wider than v
 
 Tsz: adt {
 	kind:	int;
@@ -2059,6 +2154,8 @@ track(t: ref Tok): ref Track
 			(ok, hi) := tsz(x[0]);
 			if(!ok)
 				return nil;
+			if(hi.kind == Tfixed)
+				hi = Tsz(Tfit, hi.v);
 			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0, 0);
 		}
 		return nil;
@@ -4110,8 +4207,8 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 			}
 			mn += g.extra;
 			mx += g.extra;
-			if(nspan == 1 && a0 < n && t[a0].lo.kind == Tauto && t[a0].limit >= 0.0 && real mn > t[a0].limit &&
-			   autosized(k, cols) && seethrough(k.st.overflowx) && !g.empty)
+			if(nspan == 1 && a0 < n && t[a0].lo.kind == Tauto && (t[a0].hi.kind == Tfixed || t[a0].hi.kind == Tpct) &&
+			   t[a0].limit >= 0.0 && real mn > t[a0].limit && autosized(k, cols) && seethrough(k.st.overflowx) && !g.empty)
 				mn = int t[a0].limit;	# an automatic minimum is clamped by a definite max track size (§6.6)
 			# what the spanned tracks already provide
 			have := 0.0;
@@ -4141,8 +4238,10 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 			# growth limits for auto and max-content tracks
 			if(nspan == 1 && a0 < n) {
 				tr := t[a0];
-				if(tr.hi.kind == Tauto || tr.hi.kind == Tmax) {
+				if(tr.hi.kind == Tauto || tr.hi.kind == Tmax || tr.hi.kind == Tfit) {
 					lim := real mx;
+					if(tr.hi.kind == Tfit && lim > tr.hi.v)
+						lim = tr.hi.v;	# fit-content: no wider than its argument
 					if(tr.limit < lim)
 						tr.limit = lim;
 				}
@@ -5746,7 +5845,12 @@ intrinsic1(b: ref Box): (int, int)
 					wmx += int cols[i].hi.v;
 				} else {
 					wmn += cmn[i];
-					wmx += cmx[i];
+					x := cmx[i];
+					if(cols[i].hi.kind == Tfit && x > int cols[i].hi.v)
+						x = int cols[i].hi.v;	# fit-content: no wider than its argument
+					if(x < cmn[i])
+						x = cmn[i];
+					wmx += x;
 				}
 			return (wmn, wmx);
 		}

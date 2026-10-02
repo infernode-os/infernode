@@ -20,6 +20,7 @@ clo, chi, ccl: array of int;
 mfrom, mto: array of int;
 bopen, bclose: array of int;	# by opening
 jlo, jhi, jty: array of int;	# joining types, by range
+plo, phi, pone: array of int;	# punctuation, by range
 bcopen, bcclose: array of int;	# by closing
 
 classnames := array[] of {
@@ -57,6 +58,12 @@ init(): string
 	jlo = a[0];
 	jhi = a[1];
 	jty = a[2];
+	(a, err) = table(DIR + "/punct", 2);
+	if(err != nil)
+		return err;
+	plo = a[0];
+	phi = a[1];
+	pone = array[len plo] of {* => 1};
 	# the same pairs ordered by the closing bracket
 	n := len bopen;
 	bcopen = array[n] of int;
@@ -147,6 +154,11 @@ class(c: int): int
 joining(c: int): int
 {
 	return ranged(jlo, jhi, jty, c, JU);
+}
+
+punct(c: int): int
+{
+	return ranged(plo, phi, pone, c, 0);
 }
 
 # the value of the range holding c, or dflt

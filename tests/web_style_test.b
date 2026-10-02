@@ -405,7 +405,11 @@ testLanes(t: ref T)
 
 testPseudo(t: ref T)
 {
-	p := page("<style>#q::before { content: '<'; color: green } #q::after { content: none } #r::after { content: attr(x) }</style><p id=q>q<p id=r x=1>r");
+	p := page("<style>#q::before { content: '<'; color: green } #q::after { content: none } #r::after { content: attr(x) } #r::first-letter { font-size: 40px } #r:first-line { color: red }</style><p id=q>q<p id=r x=1>r");
+	r := p.d.find(1, Dom->Tp);
+	r = p.d.nodes[r].next;
+	t.assert(p.c.firstletter[r] != nil && p.c.firstletter[r].fontsize == 40.0, "::first-letter style computed without content");
+	t.assert(p.c.firstletter[p.d.find(1, Dom->Tp)] == nil, "no ::first-letter rule, no style");
 	q := p.d.find(1, Dom->Tp);
 	t.assert(p.c.before[q] != nil, "::before generated");
 	t.assertseq(col(p.c.before[q].color), "008000ff", "::before style");

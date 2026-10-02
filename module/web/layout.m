@@ -62,6 +62,7 @@ Layout: module
 		subcw, subrh:	array of int;
 		subcnames, subrnames:	array of list of string;
 		subcgap, subrgap:	int;
+		doc:	ref Dom->Doc;	# the root box's document (nil elsewhere)
 	};
 
 	Line: adt {

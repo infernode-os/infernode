@@ -68,6 +68,8 @@ Style: module
 	Cnone, Cleft, Cright, Cboth: con iota;			# clear
 	Bnone, Bhidden, Bsolid, Bdashed, Bdotted, Bdouble, Bgroove, Bridge, Binset, Boutset: con iota;	# border-style
 	Ovisible, Ohidden, Oclip, Oscroll, Oauto: con iota;	# overflow
+	# contain
+	CTpaint, CTlayout, CTsize, CTstyle, CTinlinesize: con 1 << iota;
 	Vvisible, Vhidden, Vcollapse: con iota;		# visibility
 	Wnormal, Wpre, Wnowrap, Wprewrap, Wpreline, Wbreakspaces: con iota;	# white-space
 	Astart, Aend, Aleft, Aright, Acenter, Ajustify: con iota;	# text-align
@@ -236,6 +238,7 @@ Style: module
 		lanespack:	int;	# grid-lanes-pack: 1 dense
 		tolerance:	Len;	# flow-tolerance: Lnormal (1em), Lnone (infinite), or a length (% of the grid axis)
 		subcols, subrows:	int;	# grid-template-columns/rows: subgrid (the tokens are then its line names)
+		contain:	int;		# contain: CT bits
 
 		new:	fn(): ref St;		# initial values
 	};

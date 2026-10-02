@@ -20,7 +20,7 @@ details:not([open]) > :not(summary:first-of-type) { display: none; }
 
 /* §15.3.2 the page */
 html, body { display: block; }
-html { color: CanvasText; background: Canvas; }
+html { color: CanvasText; }
 body { margin: 8px; }
 
 /* §15.3.3 flow content */

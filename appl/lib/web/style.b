@@ -1727,7 +1727,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0);
+		0, 0, kw(Lnormal), 0, 0, 0);
 }
 
 nextsid := 1;
@@ -4007,6 +4007,24 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.z = int n;
 			st.zauto = 0;
 		}
+	"contain" =>
+		c := 0;
+		for(k := 0; k < len v; k++) {
+			if(v[k].kind != Css->Kident)
+				return 0;
+			case lower(v[k].s) {
+			"none" => ;
+			"strict" => c |= CTpaint|CTlayout|CTsize|CTstyle;
+			"content" => c |= CTpaint|CTlayout|CTstyle;
+			"paint" => c |= CTpaint;
+			"layout" => c |= CTlayout;
+			"size" => c |= CTsize;
+			"inline-size" => c |= CTinlinesize;
+			"style" => c |= CTstyle;
+			* => return 0;
+			}
+		}
+		st.contain = c;
 	"overflow-x" or "overflow-y" =>
 		o: int;
 		case id {
@@ -5209,6 +5227,7 @@ copyprop(d, s: ref St, nm: string)
 		d.z = s.z;
 		d.zauto = s.zauto;
 	"overflow-x" => d.overflowx = s.overflowx;
+	"contain" => d.contain = s.contain;
 	"overflow-y" => d.overflowy = s.overflowy;
 	"visibility" => d.visibility = s.visibility;
 	"opacity" => d.opacity = s.opacity;

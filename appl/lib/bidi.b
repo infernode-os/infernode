@@ -109,6 +109,8 @@ table(path: string, ncol: int): (array of array of int, string)
 			fl = tl fl;
 			if(i == ncol - 1 && path == DIR + "/classes")
 				r[i] = classnum(fld);
+			else if(i == ncol - 1 && path == DIR + "/linebreak")
+				r[i] = int fld;	# the class number, decimal
 			else
 				r[i] = hex(fld);
 		}

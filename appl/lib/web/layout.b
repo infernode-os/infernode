@@ -75,14 +75,24 @@ init(d: ref Display): string
 B: adt {
 	d:	ref Doc;
 	c:	ref Computed;
-	counters:	list of (string, int);	# list-item numbering, innermost first
+	counters:	list of ref Ctr;	# the counters in scope, innermost first
+};
+
+# A counter instance (CSS Lists 3 §4).  Its scope is the element that
+# created it, that element's descendants and its following siblings with
+# theirs; b.counters is cut back to an element's own list when the
+# element ends, so what its descendants created goes out of scope and
+# what it created itself stays for the siblings to come.
+Ctr: adt {
+	name:	string;
+	val:	int;
 };
 
 newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
-		nil, nil, nil, nil, 0, 0);
+		nil, nil, nil, nil, 0, 0, nil);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -96,6 +106,7 @@ build(d: ref Doc, c: ref Computed): ref Box
 	if(l == nil)
 		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
 	setparents(hd l);
+	(hd l).doc = d;
 	return hd l;
 }
 
@@ -177,14 +188,14 @@ element(b: ref B, n: int): list of ref Box
 	if(nd.tag == Dom->Tbr && nd.ns == Dom->HTML)
 		return newbox(Kbr, 1, n, st) :: nil;
 	box := newbox(kind, inl, n, st);
-	pushed := 0;
-	if(st.counterreset != nil || nd.tag == Dom->Tol || nd.tag == Dom->Tul || nd.tag == Dom->Tmenu) {
+	if(nd.ns == Dom->HTML && (nd.tag == Dom->Tol || nd.tag == Dom->Tul || nd.tag == Dom->Tmenu)) {
 		start := 1;
 		if(nd.tag == Dom->Tol && (s := b.d.attr(n, "start")) != nil)
 			start = int s;
-		b.counters = ("list-item", start - 1) :: b.counters;
-		pushed = 1;
+		b.counters = ref Ctr("list-item", start - 1) :: b.counters;
 	}
+	ctrprops(b, n, st, st.display == Style->Dlistitem);
+	own := b.counters;
 	kids: list of ref Box;
 	if(st.display == Style->Dlistitem)
 		kids = marker(b, n, st) :: nil;
@@ -194,8 +205,7 @@ element(b: ref B, n: int): list of ref Box
 		kids = hd l :: kids;
 	if((as := b.c.after[n]) != nil)
 		kids = generated(b, n, as) :: kids;
-	if(pushed)
-		b.counters = tl b.counters;
+	b.counters = own;
 	kids = rev(kids);
 	if(kind == Kinline) {
 		# an inline box around blocks is split into inline pieces
@@ -571,9 +581,77 @@ generated(b: ref B, n: int, st: ref St): ref Box
 	}
 	g := newbox(kind, inl, n, st);
 	t := newbox(Ktext, 1, n, st);
+	ctrprops(b, n, st, 0);
 	t.text = content(b, n, st);
 	g.kids = array[] of {t};
 	return g;
+}
+
+# counter-reset, counter-increment and counter-set on an element or
+# pseudo-element, in that order (CSS Lists 3 §4.4); a list item counts
+# itself in list-item unless its counter-increment names it, and an
+# li's value attribute sets it.  A counter named by an increment or set
+# that no reset put in scope is created here at 0.
+ctrprops(b: ref B, n: int, st: ref St, li: int)
+{
+	v := st.counterreset;
+	for(i := 0; i < len v; i++)
+		if(v[i].kind == Css->Kident) {
+			x := 0;
+			if(i+1 < len v && v[i+1].kind == Css->Knumber)
+				x = int v[i+1].n;
+			b.counters = ref Ctr(v[i].s, x) :: b.counters;
+		}
+	v = st.counterincrement;
+	if(li && !ctrnamed(v, "list-item"))
+		ctrincr(b, "list-item", 1);
+	for(i = 0; i < len v; i++)
+		if(v[i].kind == Css->Kident) {
+			x := 1;
+			if(i+1 < len v && v[i+1].kind == Css->Knumber)
+				x = int v[i+1].n;
+			ctrincr(b, v[i].s, x);
+		}
+	if(li && (s := b.d.attr(n, "value")) != nil)
+		ctrset(b, "list-item", int s);
+	v = st.counterset;
+	for(i = 0; i < len v; i++)
+		if(v[i].kind == Css->Kident) {
+			x := 0;
+			if(i+1 < len v && v[i+1].kind == Css->Knumber)
+				x = int v[i+1].n;
+			ctrset(b, v[i].s, x);
+		}
+}
+
+ctrnamed(v: array of ref Tok, nm: string): int
+{
+	for(i := 0; i < len v; i++)
+		if(v[i].kind == Css->Kident && v[i].s == nm)
+			return 1;
+	return 0;
+}
+
+ctrfind(b: ref B, nm: string): ref Ctr
+{
+	for(l := b.counters; l != nil; l = tl l)
+		if((hd l).name == nm)
+			return hd l;
+	c := ref Ctr(nm, 0);
+	b.counters = c :: b.counters;
+	return c;
+}
+
+ctrincr(b: ref B, nm: string, d: int)
+{
+	c := ctrfind(b, nm);
+	c.val += d;
+}
+
+ctrset(b: ref B, nm: string, x: int)
+{
+	c := ctrfind(b, nm);
+	c.val = x;
 }
 
 # The text of a content property.
@@ -593,12 +671,17 @@ content(b: ref B, n: int, st: ref St): string
 					s += b.d.attr(n, lower(t.kids[0].s));
 			"counter" or "counters" =>
 				if(len t.kids > 0 && t.kids[0].kind == Css->Kident) {
-					v := counter(b, t.kids[0].s);
 					sty := "decimal";
+					sep := "";
 					for(k := 1; k < len t.kids; k++)
 						if(t.kids[k].kind == Css->Kident)
 							sty = lower(t.kids[k].s);
-					s += markertext(sty, v);
+						else if(t.kids[k].kind == Css->Kstring)
+							sep = t.kids[k].s;
+					if(t.s == "counter")
+						s += counterrep(sty, counter(b, t.kids[0].s));
+					else
+						s += counters(b, t.kids[0].s, sep, sty);
 				}
 			}
 		Css->Kident =>
@@ -616,30 +699,27 @@ content(b: ref B, n: int, st: ref St): string
 counter(b: ref B, nm: string): int
 {
 	for(l := b.counters; l != nil; l = tl l)
-		if((hd l).t0 == nm)
-			return (hd l).t1;
+		if((hd l).name == nm)
+			return (hd l).val;
 	return 0;
 }
 
-bumplistitem(b: ref B, n: int): int
+# counters(): every counter of the name in scope, outermost first.
+counters(b: ref B, nm, sep, sty: string): string
 {
-	v := 1;
-	if((s := b.d.attr(n, "value")) != nil) {
-		v = int s;
-		if(b.counters != nil && (hd b.counters).t0 == "list-item")
-			b.counters = ("list-item", v) :: tl b.counters;
-		return v;
-	}
-	if(b.counters != nil && (hd b.counters).t0 == "list-item") {
-		v = (hd b.counters).t1 + 1;
-		b.counters = ("list-item", v) :: tl b.counters;
-	}
-	return v;
+	s := "";
+	for(l := b.counters; l != nil; l = tl l)
+		if((hd l).name == nm) {
+			if(s != nil)
+				s = sep + s;
+			s = counterrep(sty, (hd l).val) + s;
+		}
+	return s;
 }
 
 marker(b: ref B, n: int, st: ref St): ref Box
 {
-	v := bumplistitem(b, n);
+	v := counter(b, "list-item");
 	m := newbox(Kmarker, 1, n, st);
 	ms := b.c.marker[n];
 	if(ms != nil && ms.content != nil)
@@ -651,6 +731,7 @@ marker(b: ref B, n: int, st: ref St): ref Box
 	return m;
 }
 
+# A marker's text: the counter's representation and the style's suffix.
 markertext(ls: string, v: int): string
 {
 	if(len ls > 0 && ls[0] == '"')
@@ -658,32 +739,46 @@ markertext(ls: string, v: int): string
 	case ls {
 	"none" =>
 		return "";
+	"disc" or "circle" or "square" or "disclosure-closed" or "disclosure-open" =>
+		return counterrep(ls, v) + " ";
+	}
+	return counterrep(ls, v) + ". ";
+}
+
+# A counter value in a counter style, without the suffix.
+counterrep(ls: string, v: int): string
+{
+	case ls {
+	"none" =>
+		return "";
 	"disc" =>
-		return "• ";
+		return "•";
 	"circle" =>
-		return "◦ ";
+		return "◦";
 	"square" =>
-		return "▪ ";
+		return "▪";
 	"disclosure-closed" =>
-		return "▸ ";
+		return "▸";
 	"disclosure-open" =>
-		return "▾ ";
+		return "▾";
 	"decimal-leading-zero" =>
 		if(v < 10 && v >= 0)
-			return "0" + string v + ". ";
-		return string v + ". ";
+			return "0" + string v;
+		if(v > -10 && v < 0)
+			return "-0" + string -v;
+		return string v;
 	"lower-alpha" or "lower-latin" =>
-		return alpha(v, 'a') + ". ";
+		return alpha(v, 'a');
 	"upper-alpha" or "upper-latin" =>
-		return alpha(v, 'A') + ". ";
+		return alpha(v, 'A');
 	"lower-roman" =>
-		return lower(roman(v)) + ". ";
+		return lower(roman(v));
 	"upper-roman" =>
-		return roman(v) + ". ";
+		return roman(v);
 	"lower-greek" =>
-		return alpha(v, 16r3b1) + ". ";
+		return alpha(v, 16r3b1);
 	}
-	return string v + ". ";
+	return string v;
 }
 
 alpha(v, base: int): string
@@ -1039,6 +1134,8 @@ heightmatters(b: ref Box): int
 
 lay(root: ref Box, width, height: int)
 {
+	if(root.doc != nil)
+		curdoc = root.doc;	# a frame's document may have been built since
 	laygen++;
 	l := ref L(width, height, root, nil);
 	edges(root, width);
@@ -6143,6 +6240,8 @@ lbbreak(a, b: int): int
 	case ca {
 	Bidi->LBOP or Bidi->LBBB or Bidi->LBZWJ or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU or Bidi->LBCM or Bidi->LBPR =>
 		return 0;
+	Bidi->LBBA =>
+		return a != 16rAD;	# break after (LB31), but a soft hyphen's break is not taken yet
 	Bidi->LBJL =>
 		if(cb == Bidi->LBJL || cb == Bidi->LBJV || cb == Bidi->LBH2 || cb == Bidi->LBH3)
 			return 0;
@@ -6266,7 +6365,7 @@ text(f: ref Fl, b: ref Box)
 		}
 		# a word: up to the next space or break opportunity
 		st0 := i;
-		while(i < len s && !isspace(s[i]) && s[i] != 16r200B) {
+		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && s[i] != '　') {
 			if(i > st0 && lbbreak(s[i-1], s[i]))
 				break;
 			i++;
@@ -6438,7 +6537,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			ln.content = 1;
 		Iatomic =>
 			k := it.box;
-			layatomic(l, k, cw);
+			layatomic(l, k, cw, f.ch);
 			w := k.ml + k.w + k.mr;
 			if(ln.content && ln.x + real w > real ln.avail + 0.01)  {
 				lines = endline(f, ln, x0, first, 0) :: lines;
@@ -7472,7 +7571,7 @@ vshift(st: ref St, va: int, a, d: real, parent: ref Typeface): real
 }
 
 # Lay out an atomic inline (inline-block, inline replaced, inline flex...).
-layatomic(l: ref L, k: ref Box, cbw: int)
+layatomic(l: ref L, k: ref Box, cbw, cbh: int)
 {
 	edges(k, cbw);
 	w := specw(k, k.st.width, cbw);
@@ -7490,7 +7589,7 @@ layatomic(l: ref L, k: ref Box, cbw: int)
 		k.ml = 0;
 	if(k.st.mr.kind == Style->Lauto)
 		k.mr = 0;
-	layblock(l, k, cbw, -1, nil, 0, 0);
+	layblock(l, k, cbw, cbh, nil, 0, 0);
 	# baseline: the last line box's, else the bottom margin edge
 	k.base = k.mt + k.h;
 	if(k.kind == Ktable || k.kind == Kflex || k.kind == Kgrid) {
@@ -7591,6 +7690,20 @@ visible(c: int): int
 	return (c & 255) != 0;
 }
 
+# b is the box of an HTML element with this tag
+istag(b: ref Box, tag: int): int
+{
+	return b.node != 0 && curdoc != nil && curdoc.nodes[b.node].tag == tag && curdoc.nodes[b.node].ns == Dom->HTML;
+}
+
+hasimage(st: ref St): int
+{
+	for(i := 0; i < len st.bg; i++)
+		if(st.bg[i].img != nil)
+			return 1;
+	return 0;
+}
+
 height(root: ref Box): int
 {
 	return root.y + root.h + root.mb;
@@ -7602,18 +7715,23 @@ scrolled: Point;	# how far the document is scrolled in it; fixed boxes do not mo
 
 paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 {
+	if(root.doc != nil)
+		curdoc = root.doc;
 	viewport = clip;
 	scrolled = clip.min.sub(origin);
 	oclip := dst.clipr;
 	dst.clipr = clip;
 	# the canvas takes the root's background, or else the body's
+	# (Backgrounds 3 §2.11.2; not through paint containment)
 	bg := root.st.bgcolor;
 	bgbox := root;
-	if(!visible(bg) && root.st.bg == nil) {
+	if(!visible(bg) && !hasimage(root.st) && !(root.st.contain & Style->CTpaint) && istag(root, Dom->Thtml)) {
 		for(i := 0; i < len root.kids; i++)
-			if(root.kids[i].node != 0) {
-				bgbox = root.kids[i];
-				bg = bgbox.st.bgcolor;
+			if(istag(root.kids[i], Dom->Tbody)) {
+				if(!(root.kids[i].st.contain & Style->CTpaint)) {
+					bgbox = root.kids[i];
+					bg = bgbox.st.bgcolor;
+				}
 				break;
 			}
 	}
@@ -7621,14 +7739,13 @@ paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 	if(visible(bg))
 		dst.draw(clip, colorimg(bg), nil, (0, 0));
 	if(bgbox.st.bg != nil) {
-		# its images too, positioned as on the box, shown over the canvas
+		# its images too, positioned as if on the root element whichever
+		# box they came from (Backgrounds 3 §2.11.2), shown over the canvas
 		r := Rect((origin.x + root.x, origin.y + root.y), (origin.x + root.x + root.w, origin.y + root.y + root.h));
-		if(bgbox != root)
-			r = Rect((r.min.x + bgbox.x, r.min.y + bgbox.y), (r.min.x + bgbox.x + bgbox.w, r.min.y + bgbox.y + bgbox.h));
 		oncanvas = 1;
 		for(i := len bgbox.st.bg - 1; i >= 0; i--)
 			if(bgbox.st.bg[i].img != nil)
-				paintbg(dst, bgbox, r, bgbox.st.bg[i]);
+				paintbg(dst, root, r, bgbox.st.bg[i]);
 		oncanvas = 0;
 	}
 	painted = root;
@@ -7972,6 +8089,8 @@ paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 {
 	if(b != canvasbg)
 		paintbackground(dst, b, r);
+	else
+		paintshadows(dst, b, r);	# the background went to the canvas; the shadow is still its own
 	paintborders(dst, b, r);
 }
 
@@ -8171,7 +8290,7 @@ inkbounds(b: ref Box, r: Rect): Rect
 	return r.inset(-64);
 }
 
-paintbackground(dst: ref Image, b: ref Box, r: Rect)
+paintshadows(dst: ref Image, b: ref Box, r: Rect)
 {
 	st := b.st;
 	for(i := len st.shadows - 1; i >= 0; i--) {
@@ -8193,6 +8312,12 @@ paintbackground(dst: ref Image, b: ref Box, r: Rect)
 			shadowfill(dst, b, sr.inset(blur/2), r, (c & int 16rFFFFFF00) | a);
 		}
 	}
+}
+
+paintbackground(dst: ref Image, b: ref Box, r: Rect)
+{
+	st := b.st;
+	paintshadows(dst, b, r);
 	if(visible(st.bgcolor)) {
 		br := r;
 		case bgclip(st) {
@@ -8203,7 +8328,7 @@ paintbackground(dst: ref Image, b: ref Box, r: Rect)
 		}
 		fillbox(dst, b, br, st.bgcolor);
 	}
-	for(i = len st.bg - 1; i >= 0; i--)
+	for(i := len st.bg - 1; i >= 0; i--)
 		if(st.bg[i].img != nil)
 			paintbg(dst, b, r, st.bg[i]);
 }

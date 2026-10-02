@@ -60,6 +60,7 @@ Dom: module
 		gen:	int;		# bumped by every change
 		quirks:	int;		# document is in quirks mode
 		url:	string;		# document address, for resolving references
+		xml:	int;		# parsed as XML (attribute values match case-sensitively)
 
 		new:	fn(url: string): ref Doc;
 		create:	fn(d: self ref Doc, kind: int, name: string, ns: int): int;

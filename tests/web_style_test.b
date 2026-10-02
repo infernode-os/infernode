@@ -308,6 +308,12 @@ testSelectors(t: ref T)
 	t.assertseq(col(st(p, "k").color), "008000ff", "nesting");
 	t.assertseq(col(st(p, "in").color), "008000ff", ":has() with a descendant combinator");
 	t.assert(col(st(p, "out").color) != "ff0000ff", ":has() anchors at the element");
+	# HTML compares some attribute values without case (type, dir, ...), others with
+	p = page("<style>input[type=text] { color: green } div[dir=RTL] { color: green } span[title=Hi] { color: red }</style>" +
+		"<input id=t type=TEXT><div id=d dir=rtl></div><span id=s title=hi></span>");
+	t.assertseq(col(st(p, "t").color), "008000ff", "[type=text] matches type=TEXT");
+	t.assertseq(col(st(p, "d").color), "008000ff", "[dir=RTL] matches dir=rtl");
+	t.assertseq(col(st(p, "s").color), "000000ff", "[title=Hi] does not match title=hi");
 }
 
 testBackgrounds(t: ref T)

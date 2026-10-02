@@ -913,6 +913,8 @@ seethrough(o: int): int
 # Percentage heights, and boxes positioned against it.
 heightmatters(b: ref Box): int
 {
+	if(b.kind == Kflex && b.st.flexdir < 2 || b.kind == Kgrid)
+		return 1;	# its items stretch to it, or its rows are sized by it
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(k.kind == Ktext || k.kind == Kmarker)
@@ -4062,21 +4064,41 @@ intrinsic1(b: ref Box): (int, int)
 		return (tmn + mgs(b), tmx + mgs(b));
 	}
 	if(b.kind == Kgrid && st.gridcols != nil) {
-		# columns of fixed size only: the grid is as wide as they are
+		# the columns add up: a fixed one is its size, any other is
+		# the largest contribution of the items placed in it (the
+		# items taken in order, one per column, as auto-placement
+		# would put them without spans)
 		gap := 0;
 		if(st.colgap.kind != Style->Lnormal)
 			gap = res(st.colgap, 0);
 		(cols, nil) := tracks(st.gridcols, 0, gap);
-		w := 0;
-		for(i := 0; i < len cols && w >= 0; i++) {
-			if(cols[i].lo.kind != Tfixed || cols[i].hi.kind != Tfixed)
-				w = -1;
-			else
-				w += int cols[i].hi.v;
-		}
-		if(w >= 0 && len cols > 0) {
-			w += gap * (len cols - 1) + ex;
-			return (w, w);
+		if(len cols > 0) {
+			cmn := array[len cols] of {* => 0};
+			cmx := array[len cols] of {* => 0};
+			c := 0;
+			for(i := 0; i < len b.kids; i++) {
+				k := b.kids[i];
+				if(isabs(k))
+					continue;
+				edges(k, 0);
+				(kmn, kmx) := contribution(k);
+				if(kmn > cmn[c])
+					cmn[c] = kmn;
+				if(kmx > cmx[c])
+					cmx[c] = kmx;
+				c = (c + 1) % len cols;
+			}
+			wmn := gap * (len cols - 1) + ex;
+			wmx := wmn;
+			for(i = 0; i < len cols; i++)
+				if(cols[i].lo.kind == Tfixed && cols[i].hi.kind == Tfixed) {
+					wmn += int cols[i].hi.v;
+					wmx += int cols[i].hi.v;
+				} else {
+					wmn += cmn[i];
+					wmx += cmx[i];
+				}
+			return (wmn, wmx);
 		}
 	}
 	mn := 0;

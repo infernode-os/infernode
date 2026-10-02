@@ -711,7 +711,7 @@ compound(m: ref M, c: array of ref Simple, n: int): int
 				return 0;
 		Css->Sattr =>
 			# not d.attr() != nil: an empty value is nil in Limbo
-			if(!d.hasattr(n, x.name) || !matchattr(d.attr(n, x.name), x))
+			if(!d.hasattr(n, x.name) || !matchattr(d.attr(n, x.name), x, !d.xml && htmlcaseless(x.name)))
 				return 0;
 		Css->Spseudo =>
 			if(!pseudo(m, x, n))
@@ -721,10 +721,26 @@ compound(m: ref M, c: array of ref Simple, n: int): int
 	return 1;
 }
 
-matchattr(v: string, x: ref Simple): int
+# HTML attributes whose values are compared case-insensitively in
+# HTML documents (Selectors 4 §6.3, the list from HTML §4.17)
+htmlcaseless(nm: string): int
+{
+	case nm {
+	"accept" or "accept-charset" or "align" or "alink" or "axis" or "bgcolor" or "charset" or
+	"checked" or "clear" or "codetype" or "color" or "compact" or "declare" or "defer" or "dir" or
+	"direction" or "disabled" or "enctype" or "face" or "frame" or "hreflang" or "http-equiv" or
+	"lang" or "language" or "link" or "media" or "method" or "multiple" or "nohref" or "noresize" or
+	"noshade" or "nowrap" or "readonly" or "rel" or "rev" or "rules" or "scope" or "scrolling" or
+	"selected" or "shape" or "target" or "text" or "type" or "valign" or "valuetype" or "vlink" =>
+		return 1;
+	}
+	return 0;
+}
+
+matchattr(v: string, x: ref Simple, caseless: int): int
 {
 	want := x.val;
-	if(x.icase) {
+	if(x.icase || caseless) {
 		v = lower(v);
 		want = lower(want);
 	}

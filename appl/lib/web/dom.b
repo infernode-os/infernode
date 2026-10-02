@@ -193,7 +193,7 @@ tagname(tag: int): string
 
 Doc.new(url: string): ref Doc
 {
-	d := ref Doc(array[256] of ref Node, 1, 0, 0, url);
+	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0);
 	d.create(Document, "#document", HTML);
 	return d;
 }

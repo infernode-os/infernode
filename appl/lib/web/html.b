@@ -165,6 +165,7 @@ parsexml(data: array of byte, cs, url: string): ref Doc
 		loadentities();
 
 	d := Doc.new(url);
+	d.xml = 1;
 	stack := array[64] of int;
 	nss := array[64] of list of (string, string);	# prefix bindings in scope
 	stack[0] = 1;

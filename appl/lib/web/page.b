@@ -83,7 +83,8 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
 		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
-		p.doc = html->parsestring("<pre>" + escape(string data) + "</pre>", url);
+		# as a page of its own bytes, so that its charset applies
+		p.doc = html->parse(escapebytes(data), charset, url);
 	} else if(prefix(lower(ctype), "image/")) {
 		p.doc = html->parsestring("<body style='margin:0'><img src=\"" + url + "\">", url);
 	} else if(isxml(ctype))
@@ -1283,6 +1284,39 @@ param(ctype, name: string): string
 		}
 	}
 	return nil;
+}
+
+# the bytes of a text/plain page wrapped in a <pre>, with the two
+# characters that would be markup escaped (in any ASCII-compatible
+# charset; UTF-16 pages are not expected as plain text)
+escapebytes(data: array of byte): array of byte
+{
+	n := 0;
+	for(i := 0; i < len data; i++)
+		if(data[i] == byte '<')
+			n += 4;
+		else if(data[i] == byte '&')
+			n += 5;
+		else
+			n++;
+	pre := array of byte "<pre>";
+	post := array of byte "</pre>";
+	r := array[len pre + n + len post] of byte;
+	r[0:] = pre;
+	k := len pre;
+	for(i = 0; i < len data; i++)
+		case int data[i] {
+		'<' =>
+			r[k:] = array of byte "&lt;";
+			k += 4;
+		'&' =>
+			r[k:] = array of byte "&amp;";
+			k += 5;
+		* =>
+			r[k++] = data[i];
+		}
+	r[k:] = post;
+	return r;
 }
 
 escape(s: string): string

@@ -2804,6 +2804,7 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 	}
 	(tr, names) := tracks(tmpl, avail, tgap);
 	repsize = 0.0;
+	tpct := anypct(tr);
 	if(len tr == 0)
 		tr = growtracks(tr, 1, auto, avail);
 
@@ -2884,6 +2885,18 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 		}
 	}
 	sizetracks(tr, sizing, down, avail, tgap, b);
+	tsum := tgap * nz(n - 1);
+	for(i = 0; i < n; i++)
+		tsum += ir(tr[i].base);
+	tsum0 := tsum;	# the container's size across, which percentage rows do not change
+	if(!down && ch < 0 && tpct) {
+		# percentage rows in a container whose height they decide:
+		# auto for that height, then resolved against it (Grid 2 §7.2.1)
+		(again, nil) := tracks(tmpl, tsum, tgap);
+		again = growtracks(again, n, auto, tsum);
+		sizetracks(again, sizing, 0, tsum, tgap, b);
+		tr = again;
+	}
 	# tracks in their physical order
 	ptr := tr;
 	if(trackrev) {
@@ -2891,12 +2904,9 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 		for(i = 0; i < n; i++)
 			ptr[i] = tr[n - 1 - i];
 	}
-	tsum := tgap * nz(n - 1);
-	for(i = 0; i < n; i++)
-		tsum += ir(tr[i].base);
 	tavail := avail;
 	if(tavail < 0)
-		tavail = tsum;
+		tavail = tsum0;
 	talign := st.justifycontent;
 	if(!down)
 		talign = st.aligncontent;
@@ -3133,7 +3143,7 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 	if(h < 0) {
 		h = range;
 		if(!down)
-			h = tsum;
+			h = tsum0;
 		h += vextra(b);
 	}
 	b.h = clamph(b, h, cbh);

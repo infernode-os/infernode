@@ -18,11 +18,11 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,642 judged) | **50.0%** (6,325 passing), from 46.8% at this session's start and 37.8% at the first run ever |
+| WPT CSS reftests (18 directories, 12,642 judged) | **53.8%** (6,797 passing), from 50.0% at this session's start and 37.8% at the first run ever; `css-grid/grid-lanes` 465 of 891 (101 before `display: grid-lanes` existed) |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
-| Unit tests | web_html 5, web_css 6, web_style 15, web_browser 9, web_fonts 9, bidi 3, brotli 3: all pass |
-| Render fixtures (`tools/charon-wpt.sh`) | 66/66 (one intermittent "no image" is the emu SEGV below) |
+| Unit tests | web_html 5, web_css 6, web_style 16, web_browser 9, web_fonts 10, bidi 3, brotli 3: all pass |
+| Render fixtures (`tools/charon-wpt.sh`) | 69/69 (one intermittent "no image" is the emu SEGV below) |
 
 The WPT count is strict: any test with a `<script>` is reported as
 needs-js (1,268 of them) even if its pixels match, and a pass whose
@@ -35,11 +35,37 @@ will move the numbers a little.
 
 ### Commits on the branch (newest first)
 
-The third session (same branch) took the hand-off list in order: the
-remaining review findings, then the live-site bugs, then bidi edges,
-shaping and the regressions each WPT run turned up.
+The third and fourth sessions (same branch) took the hand-off list in
+order: the remaining review findings, then the live-site bugs, then bidi
+edges, shaping, the regressions each WPT run turned up, and the largest
+failing WPT directory (`css-grid/grid-lanes`, 891 tests).
 
-- `LATER`… **GPOS, ligatures across edges, 2D transforms, grids.**
+- `9287212` **Grid lanes (Grid 3), absolutes in grid areas, auto-fit.**
+  `display: grid-lanes`/`inline-grid-lanes` (`laylanes`): items stack
+  into the shortest lane, with `grid-lanes-direction` (row or column,
+  fill-reverse, track-reverse), `grid-lanes-pack: dense`,
+  `flow-tolerance`, the auto-placement cursor (moved only by auto-placed
+  items), definite lines, spans, `order`; track sizing counts an
+  unplaced item at every start it could have; auto-repeats of intrinsic
+  lanes are counted by the items' smallest max-content contribution;
+  the stacking range aligned as a whole, items before room aligned or
+  stretched into it, `flow-start`/`flow-end`; intrinsic widths for both
+  directions (row lanes by a placement pass).  Shared with grid: auto-fit
+  tracks collapse; an item definite in the flow axis only is placed in
+  the first free cells of its row; spanning items' contributions are
+  planned per span group; a spanning item's intrinsic contribution is
+  spread over the non-fixed columns; column flow without a template
+  places items down the rows for the intrinsic width; percentage rows in
+  a container they size are resolved in a second pass.  Absolutely
+  positioned children of grids get the grid area their lines name as
+  containing block (explicit lines only) and are aligned in it by
+  justify-self/align-self (safe keeps an overflowing box at the
+  start).  Also keyword widths as contributions, BFC roots beside
+  floats (start margin and border box must fit; tables never narrower
+  than their minimum), a float before a line's content keeping the
+  indent, column flex height mattering to its content, rtl mark offsets,
+  auto tracks stretching only under normal/stretch.
+- `90571ce`…`ee9fc95` **GPOS, ligatures across edges, 2D transforms, grids.**
   GPOS pair kerning (most web fonts have no legacy `kern` table) and
   mark-to-base positioning; ligatures that span an inline box's edge
   (the shaper reports each glyph's character span, the seam moves the
@@ -239,27 +265,21 @@ In rough order of payoff.
    - page/browser: no HTTP cache in webfs, so every navigation
      refetches.
 3. **Open regressions (tests that passed at the first run ever and fail
-   now; 22 at the end of this session).**  Causes:
-   - `css-text/boundary-shaping-001/003/004/005/010`, `shaping_lig-000`:
-     ligatures across an inline box's edge (joining works across it, a
-     ligature glyph would have to be split between runs).  False passes
-     before: neither side joined.
-   - `css-text/shaping-000`: joins correctly now; a few hundred pixels
-     off, probably GPOS (cursive attachment or mark positioning).
-   - `css-text/white-space/tab-bidi-001`: a combining dagesh drawn as a
-     spacing glyph (GPOS mark positioning).
-   - `css-grid/grid-lanes/*` (6): `display: grid-lanes` is not a display
-     type Charon knows; these passed while the reference was wrong too.
-   - `CSS2/floats/floats-placement-vertical-003`: the test expects a
-     float met after inline content to go below the line; Chromium puts
-     it on the line (checked with Playwright), and so does Charon now.
-   - `CSS2/bidi-text/bidi-box-model-001/002`: a 5px column of an inline
-     box's border in a right-to-left paragraph; unexamined.
-   - `css-fonts/variations/font-weight-metrics`: variable-font instances
-     (fvar/HVAR) are not implemented; the pass was luck.
-     `downloadable-font-in-iframe-print`, `zero-height-ratio-auto-5px`
-     (2 pixels), `hanging-whitespace-003` (tentative): minor.
-   The list, with current status: `tools/ref/baseline/open-regressions.txt`.
+   now; 49 at the end of this session, 22 before it).**  Most are the
+   grid-lanes directory's references changing from "nothing renders" to
+   a real layout: 16 are subgrid (not implemented) inside or beside
+   lanes, 11 are auto-repeats of intrinsic lanes (the count is the
+   items' smallest max-content contribution, which fits most of the
+   directory; no rule found fits `column-auto-repeat-auto-017` and
+   `column-auto-repeat-max-content-005` both, and the container's
+   Chromium has no grid-lanes to ask).  Also: `last baseline`
+   self-alignment of absolutely positioned grid children (4), a fixed
+   child of a grid whose containing block is not the grid, two BFC-root
+   float cases (`adjoining-float-nested-forced-clearance-002`,
+   `floats-wrap-bfc-with-margin-007`), `margin-trim`, the bidi box-model
+   pair, the shaped-run rounding pair, and the variable-font, 2-pixel
+   and tentative cases from before.  Each with its reason, as far as
+   known: `tools/ref/baseline/open-regressions.txt`.
 3. **Exposed gaps behind many failures:** vertical writing modes,
    variable-font instances, subgrid (the largest remaining grid-lanes
    bucket, and the `css-grid/subgrid` directory), `contain-intrinsic-size`,

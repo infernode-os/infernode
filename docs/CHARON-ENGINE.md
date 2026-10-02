@@ -246,7 +246,7 @@ in `tools/ref` (see its README):
   Charon and compared pixel for pixel, over the CSS directories (CSS2,
   flexbox, grid, selectors, cascade, values, color, backgrounds, text,
   display, position, sizing, box, tables, lists, variables, nesting,
-  fonts): 37.8% at the first run, **50.0%** of 12,642 now.  The count is
+  fonts): 37.8% at the first run, **53.8%** of 12,642 now.  The count is
   strict: the 1,267 tests with any script are left out even when their
   pixels match, since a pass without the script would be luck, and a
   pass where nothing renders is flagged as proving little.

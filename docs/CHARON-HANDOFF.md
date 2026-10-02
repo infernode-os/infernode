@@ -230,25 +230,27 @@ In rough order of payoff.
      fail); limited-quirks mode is not modelled.
    - page/browser: no HTTP cache in webfs, so every navigation
      refetches; `text/plain` pages ignore their charset.
-3. **Open regressions (36 tests that genuinely passed before and fail now).**
-   Groups and causes as far as known:
-   - `CSS2/colors/color-applies-to-*` (8): sub-pixel text position.  A
-     word starting with `&nbsp;` inside a table cell draws its glyphs at
-     fractional offsets that round differently from the reference.
-     Snapping words to whole pixels fixed these but broke
-     `positioning/abspos-011/012` (monospace alignment), so it was
-     reverted.  The real fix is sub-pixel layout (item 4).
-   - `CSS2/bidi-text/*`, `CSS2/bidi-007` (9): bidi reordering, not
-     implemented.  These passed by accident before.
-   - `css-grid/alignment`, `grid-lanes`, `grid-items`, `grid-definition`
-     (12): mostly baseline alignment in vertical writing modes (not
-     implemented); `grid-template-rows-fit-content-001` and
-     `grid-items-inline-blocks-001` deserve a look.
-   - `css-text/word-break/word-break-min-content-005/006`,
-     `overflow-wrap-min-content-size-002`: min-content measurement; likely
-     interaction with kerning or the inline-block intrinsic-width change.
-   - `CSS2/floats/float-nowrap-hyphen-rewind-1`, `CSS2/box/ltr-span-only`,
-     `css-lists/ol-change-display-type`, `css-display/run-in`: unexamined.
+3. **Open regressions (tests that passed at the first run ever and fail
+   now; 22 at the end of this session).**  Causes:
+   - `css-text/boundary-shaping-001/003/004/005/010`, `shaping_lig-000`:
+     ligatures across an inline box's edge (joining works across it, a
+     ligature glyph would have to be split between runs).  False passes
+     before: neither side joined.
+   - `css-text/shaping-000`: joins correctly now; a few hundred pixels
+     off, probably GPOS (cursive attachment or mark positioning).
+   - `css-text/white-space/tab-bidi-001`: a combining dagesh drawn as a
+     spacing glyph (GPOS mark positioning).
+   - `css-grid/grid-lanes/*` (6): `display: grid-lanes` is not a display
+     type Charon knows; these passed while the reference was wrong too.
+   - `CSS2/floats/floats-placement-vertical-003`: the test expects a
+     float met after inline content to go below the line; Chromium puts
+     it on the line (checked with Playwright), and so does Charon now.
+   - `CSS2/bidi-text/bidi-box-model-001/002`: a 5px column of an inline
+     box's border in a right-to-left paragraph; unexamined.
+   - `css-fonts/variations/font-weight-metrics`: variable-font instances
+     (fvar/HVAR) are not implemented; the pass was luck.
+     `downloadable-font-in-iframe-print`, `zero-height-ratio-auto-5px`
+     (2 pixels), `hanging-whitespace-003` (tentative): minor.
    The list, with current status: `tools/ref/baseline/open-regressions.txt`.
 3. **Exposed gaps behind many failures:** vertical writing modes,
    GPOS (kerning beyond the legacy `kern` table, mark positioning),

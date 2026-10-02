@@ -1435,7 +1435,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, staticx(b), b.bt + b.pt, nil, b.st.dirrtl) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0) :: l.pending;
 			continue;
 		}
 		items = ref Fi(k, 0.0, 0.0, 0.0, 0.0, -1.0, 0, 0, 0, 0) :: items;
@@ -2237,7 +2237,7 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, staticx(b), b.bt + b.pt, nil, b.st.dirrtl) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0) :: l.pending;
 			continue;
 		}
 		ks := k.st;
@@ -4480,8 +4480,16 @@ edgesat(f: ref Ifc, ln: ref Ln)
 	(lx, rx) := band(f.fc, ly, ly + nz1(f.strut), cx, cx + f.cw);
 	ln.left = lx - cx;
 	ln.avail = rx - cx;
-	if(ln.x < real ln.left + ln.indent)
-		ln.x = real ln.left + ln.indent;
+	if(ln.x < real ln.left)
+		ln.x = real ln.left;
+}
+
+# a line starts past the floats at its left, and its text-indent
+linestart(f: ref Ifc, ln: ref Ln)
+{
+	ln.x = 0.0;
+	edgesat(f, ln);
+	ln.x = real ln.left + ln.indent;
 }
 
 # Nothing fits beside the floats here: move the (empty) line down past one.
@@ -4493,8 +4501,7 @@ movedown(f: ref Ifc, ln: ref Ln): int
 	if(n < 0)
 		return 0;
 	f.y = n - f.oy;
-	ln.x = 0.0;
-	edgesat(f, ln);
+	linestart(f, ln);
 	return 1;
 }
 
@@ -4516,7 +4523,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	joinruns(items);
 	(items, para) = bidiitems(b, items);
 	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil);
-	edgesat(f, ln);
+	linestart(f, ln);
 	first := 1;
 	opened: list of ref Box;	# inline boxes open, outermost last
 	for(il := items; il != nil; il = tl il) {
@@ -4698,7 +4705,7 @@ removebox(l: list of ref Box, b: ref Box): list of ref Box
 newline(f: ref Ifc, old: ref Ln, opened: list of ref Box): ref Ln
 {
 	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil);
-	edgesat(f, ln);
+	linestart(f, ln);
 	# inline boxes still open continue on the new line
 	r: list of ref Box;
 	for(l := opened; l != nil; l = tl l)

@@ -1,49 +1,32 @@
-# Tests that passed at some earlier run and fail now, with the reason
-# as far as known.  Update when a run changes it.
+# Tests that passed at the first run ever (r0) and fail at the end of
+# the third session (r11, 50.0%), with the reason as far as known.
+# Update when a run changes it.
 #
-# From 2026-10-02 (second session): the engine fix that made the
-# reference render as Chromium does; the test needs a feature.
-FAIL css/css-flexbox/flexbox-safe-overflow-position-002.html	the "safe" alignment keyword (not modelled)
-FAIL css/css-flexbox/flexbox-safe-overflow-position-005.html	"safe" and vertical-lr
-FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-005.html	display: grid-lanes (reference now right: implicit grid grows for a span)
-FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-fit-content-003.html	display: grid-lanes
-FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-max-content-003.html	display: grid-lanes
-FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-min-content-003.html	display: grid-lanes
-#
-# From the first session (against a WPT checkout of 2026-09-30); still open
-# unless listed as passing by a later run.
-FAIL css/CSS2/bidi-007.xht	bidi reordering
-FAIL css/CSS2/bidi-text/bidi-007a.xht	bidi
-FAIL css/CSS2/bidi-text/bidi-007b.xht	bidi
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-001.xht	bidi
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-002.xht	bidi
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-003.xht	bidi
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-004.xht	bidi
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-013.xht	bidi
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-014.xht	bidi
-FAIL css/CSS2/box/ltr-span-only.xht	unexamined
-FAIL css/CSS2/colors/color-applies-to-001.xht	sub-pixel text position (nbsp in a cell)
-FAIL css/CSS2/colors/color-applies-to-002.xht	sub-pixel
-FAIL css/CSS2/colors/color-applies-to-003.xht	sub-pixel
-FAIL css/CSS2/colors/color-applies-to-004.xht	sub-pixel
-FAIL css/CSS2/colors/color-applies-to-005.xht	sub-pixel
-FAIL css/CSS2/colors/color-applies-to-006.xht	sub-pixel
-FAIL css/CSS2/colors/color-applies-to-013.xht	sub-pixel
-FAIL css/CSS2/colors/color-applies-to-014.xht	sub-pixel
-FAIL css/CSS2/floats/float-nowrap-hyphen-rewind-1.html	unexamined
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-001.html	baseline alignment in vertical writing modes
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-003.html	vertical writing modes
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-004.html	vertical writing modes
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-005.html	vertical writing modes
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-007.html	vertical writing modes
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-horiz-002.html	grid baseline alignment
-FAIL css/css-grid/grid-definition/grid-template-rows-fit-content-001.html	deserves a look
-FAIL css/css-grid/grid-items/grid-inline-items-inline-blocks-001.html	deserves a look
-FAIL css/css-grid/grid-items/grid-items-inline-blocks-001.html	deserves a look
-FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-001.html	grid-lanes
-FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-002a.html	grid-lanes
-FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-002b.html	grid-lanes
-NEEDSJS css/css-lists/ol-change-display-type.html	needs script
-FAIL css/css-text/overflow-wrap/overflow-wrap-min-content-size-002.html	min-content measurement
-FAIL css/css-text/word-break/word-break-min-content-005.html	min-content measurement
-FAIL css/css-text/word-break/word-break-min-content-006.html	min-content measurement
+FAIL css/CSS2/bidi-text/bidi-box-model-001.xht	a 5px column of an inline box border in a right-to-left paragraph; unexamined
+FAIL css/CSS2/bidi-text/bidi-box-model-002.xht	a 5px column of an inline box border in a right-to-left paragraph; unexamined
+FAIL css/CSS2/floats/floats-placement-vertical-003.xht	the test wants a float met after inline content below the line; Chromium (checked) and Charon put it on the line
+FAIL css/CSS2/text/text-indent-010.xht	unexamined
+FAIL css/CSS2/text/text-indent-overflow-001.xht	unexamined
+FAIL css/CSS2/text/text-indent-overflow-002.xht	unexamined
+FAIL css/CSS2/visuren/right-offset-position-fixed-001.xht	a fixed box with right: auto in an rtl parent lands 8px (the body margin) off; unexamined
+FAIL css/css-backgrounds/background-size/vector/zero-height-ratio-auto-5px.html	2 pixels
+FAIL css/css-fonts/downloadable-font-in-iframe-print.html	unexamined
+FAIL css/css-fonts/variations/font-weight-metrics.html	variable-font instances (fvar/HVAR) are not implemented; the pass was luck
+FAIL css/css-grid/abspos/grid-abspos-staticpos-justify-self-rtl-last-baseline-003.html	unexamined
+FAIL css/css-grid/abspos/grid-abspos-staticpos-justify-self-rtl-last-baseline-004.html	unexamined
+FAIL css/css-grid/grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-auto-fill-005.html	display: grid-lanes is unknown; passed while the reference was wrong too
+FAIL css/css-grid/grid-lanes/subgrid/grid-subgridded-to-grid-lanes/track-sizing/row-subgrid-auto-fill-007.html	display: grid-lanes is unknown; passed while the reference was wrong too
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-005.html	display: grid-lanes is unknown; passed while the reference was wrong too
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-fit-content-003.html	display: grid-lanes is unknown; passed while the reference was wrong too
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-max-content-003.html	display: grid-lanes is unknown; passed while the reference was wrong too
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-min-content-003.html	display: grid-lanes is unknown; passed while the reference was wrong too
+FAIL css/css-text/boundary-shaping/boundary-shaping-001.html	ligatures across an inline box edge (joining works; a ligature glyph would have to be split between runs); a false pass before
+FAIL css/css-text/boundary-shaping/boundary-shaping-003.html	ligatures across an inline box edge (joining works; a ligature glyph would have to be split between runs); a false pass before
+FAIL css/css-text/boundary-shaping/boundary-shaping-004.html	ligatures across an inline box edge (joining works; a ligature glyph would have to be split between runs); a false pass before
+FAIL css/css-text/boundary-shaping/boundary-shaping-005.html	ligatures across an inline box edge (joining works; a ligature glyph would have to be split between runs); a false pass before
+FAIL css/css-text/boundary-shaping/boundary-shaping-010.html	ligatures across an inline box edge (joining works; a ligature glyph would have to be split between runs); a false pass before
+FAIL css/css-text/shaping/shaping-000.html	joins now; a few hundred pixels off, probably GPOS cursive attachment
+FAIL css/css-text/shaping/shaping_lig-000.html	lam-alef ligature across a <span>; same
+FAIL css/css-text/text-indent/text-indent-length-001.html	unexamined
+FAIL css/css-text/white-space/hanging-whitespace-003.tentative.html	tentative: trailing pre-wrap spaces before a forced break should hang conditionally
+FAIL css/css-text/white-space/tab-bidi-001.html	a combining dagesh drawn as a spacing glyph (GPOS mark positioning)

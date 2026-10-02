@@ -22,7 +22,7 @@ not by eye:
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
 | Unit tests | web_html 5, web_css 6, web_style 16, web_browser 9, web_fonts 10, bidi 3, brotli 3: all pass |
-| Render fixtures (`tools/charon-wpt.sh`) | 69/69 (one intermittent "no image" is the emu SEGV below) |
+| Render fixtures (`tools/charon-wpt.sh`) | 70/70 (one intermittent "no image" is the emu SEGV below) |
 
 The WPT count is strict: any test with a `<script>` is reported as
 needs-js (1,268 of them) even if its pixels match, and a pass whose

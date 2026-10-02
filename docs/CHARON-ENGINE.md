@@ -294,7 +294,7 @@ forever stalls only itself.
 ## Size and speed budget
 
 Targets, to be held to: the engine (html, css, style, layout, paint, font)
-in under 12,000 lines of Limbo (it is 23,000 now: tables, grid, grid lanes, web
+in under 12,000 lines of Limbo (it is 24,800 now: tables, grid, grid lanes, web
 fonts and the long tail of CSS cost more than the sketch allowed, and
 the figure is a reminder to cut, not a licence); a 100 KB article page parsed, styled and
 laid out in under 200 ms under the JIT on a 2020 laptop. The old engine

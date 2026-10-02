@@ -4771,29 +4771,74 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 				t.ncols = c;
 		}
 	}
-	# column widths from <col> and <colgroup>
+	# column widths from <col> and <colgroup>; a column element with
+	# a definite width is a column even with no cells in it, one
+	# without is nothing past the cells (col-definite-size-001)
+	cols = expandcols(rev(cols));
+	nc := 0;
+	last := 0;
+	for(ncl := cols; ncl != nil; ncl = tl ncl) {
+		nc += colspan(hd ncl);
+		if(colwidth(hd ncl) > 0)
+			last = nc;
+	}
+	if(last > t.ncols)
+		t.ncols = last;
 	t.colw = array[t.ncols] of {* => 0};
 	t.colpct = array[t.ncols] of {* => -1.0};
 	c := 0;
-	for(cl := rev(cols); cl != nil; cl = tl cl) {
+	for(cl := cols; cl != nil; cl = tl cl) {
 		k := hd cl;
 		n := 1;
 		if(k.node != 0 && d != nil)
 			n = spanattr(d.attr(k.node, "span"), 1000);
-		w := 0;
+		w := colwidth(k);
 		pc := -1.0;
-		if(k.st.width.kind == Style->Lpx && k.st.width.pct == 0.0)
-			w = ir(k.st.width.px);
-		else if(k.st.width.kind == Style->Lpx && k.st.width.px == 0.0)
-			pc = k.st.width.pct;
+		if(w < 0) {
+			w = 0;
+			if(k.st.width.kind == Style->Lpx && k.st.width.px == 0.0)
+				pc = k.st.width.pct;
+		}
 		for(m := 0; m < n && c < t.ncols; m++) {
 			t.colpct[c] = pc;
 			t.colw[c++] = w;
 		}
 	}
 	if(b.st.collapse)
-		t.tb = collapsed(t, b, rev(cols));
+		t.tb = collapsed(t, b, cols);
 	return t;
+}
+
+# a column element's definite width in px: its width or min-width,
+# whichever is more (max-width does not apply to columns); -1 for none
+colwidth(k: ref Box): int
+{
+	st := k.st;
+	w := -1;
+	if(st.width.kind == Style->Lpx && st.width.pct == 0.0)
+		w = ir(st.width.px);
+	if(st.minwidth.kind == Style->Lpx && st.minwidth.pct == 0.0 && ir(st.minwidth.px) > w)
+		w = ir(st.minwidth.px);
+	return w;
+}
+
+# the column boxes in order, a group with columns in it standing for them
+expandcols(cols: list of ref Box): list of ref Box
+{
+	r: list of ref Box;
+	for(; cols != nil; cols = tl cols) {
+		k := hd cols;
+		any := 0;
+		if(k.st.display == Style->Dtablecolumngroup)
+			for(j := 0; j < len k.kids; j++)
+				if(iscolumn(k.kids[j])) {
+					r = k.kids[j] :: r;
+					any = 1;
+				}
+		if(!any)
+			r = k :: r;
+	}
+	return rev(r);
 }
 
 # ---- the collapsing border model (CSS 2.2 §17.6.2) ----
@@ -5124,13 +5169,17 @@ tcolumns(t: ref Tgrid, tw: int): (array of int, array of int, array of real, arr
 	pct := array[n] of {* => -1.0};
 	pex := array[n] of {* => 0};
 	fixw := array[n] of {* => 0};	# has a specified width
+	hascell := array[n] of {* => 0};
+	for(hl := t.cells; hl != nil; hl = tl hl)
+		for(hi := (hd hl).c; hi < (hd hl).c + (hd hl).cs && hi < n; hi++)
+			hascell[hi] = 1;
 	for(i := 0; i < n; i++) {
 		if(t.colw[i] > 0) {
 			mn[i] = mx[i] = t.colw[i];
 			fixw[i] = 1;
 		}
-		if(t.colpct[i] >= 0.0)
-			pct[i] = t.colpct[i];
+		if(t.colpct[i] >= 0.0 && hascell[i])
+			pct[i] = t.colpct[i];	# a percentage column with no cells takes nothing
 	}
 	# single-column cells first, then spanning ones spread their excess
 	for(pass := 1; pass <= 2; pass++)
@@ -6331,7 +6380,7 @@ intrinsic1(b: ref Box): (int, int)
 		(w, nil) := replacedsize(b, -1, -1);
 		return (w + ex, w + ex);
 	}
-	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0 && b != noratio && b != nowidth) {
+	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0 && b != noratio) {
 		# transferred from its height (Sizing 4 §5.2.1); a scroll
 		# container's min-content contribution is nothing (its automatic minimum)
 		h := ir(st.height.px);

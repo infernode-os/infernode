@@ -2004,17 +2004,47 @@ sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 	nd := d.nodes[n];
 	if(nd.tag == Dom->Ttd || nd.tag == Dom->Tth)
 		return nil;	# cellpadding and border come from the table
+	if(rowish(nd.tag) && tablerules(d, n) != nil)
+		return nil;	# so do its rules
 	if(nd.attrs != nil) {
 		k += "|" + nd.name;
 		for(l := nd.attrs; l != nil; l = tl l)
 			case (hd l).t0 {
 			"style" or "width" or "height" or "bgcolor" or "align" or "valign" or "border" or
 			"color" or "face" or "size" or "type" or "background" or "text" or "cellspacing" or
-			"cellpadding" or "hspace" or "vspace" or "nowrap" or "noshade" or "cols" or "rows" =>
+			"cellpadding" or "hspace" or "vspace" or "nowrap" or "noshade" or "cols" or "rows" or "rules" =>
 				k += "|" + (hd l).t0 + "=" + (hd l).t1;
 			}
 	}
 	return k;
+}
+
+# the rules attribute of the table n is in, lower-cased, if it is one
+# of the values that mean something (HTML §15.3.11)
+tablerules(d: ref Doc, n: int): string
+{
+	for(t := d.nodes[n].parent; t != 0; t = d.nodes[t].parent)
+		if(d.nodes[t].tag == Dom->Ttable && d.nodes[t].ns == Dom->HTML)
+			return rulesof(d, t);
+	return nil;
+}
+
+rulesof(d: ref Doc, t: int): string
+{
+	case r := lower(d.attr(t, "rules")) {
+	"none" or "groups" or "rows" or "cols" or "all" =>
+		return r;
+	}
+	return nil;
+}
+
+rowish(tag: int): int
+{
+	case tag {
+	Dom->Ttr or Dom->Tthead or Dom->Ttbody or Dom->Ttfoot or Dom->Tcolgroup or Dom->Tcol =>
+		return 1;
+	}
+	return 0;
 }
 
 idxlayers(idx: ref Index): int
@@ -5368,9 +5398,10 @@ hints(d: ref Doc, n: int): list of ref Decl
 		return nil;
 	# a cell's hints come from its table's attributes (cellpadding,
 	# border) whether or not it has any of its own
-	if(nd.attrs == nil && nd.tag != Dom->Ttd && nd.tag != Dom->Tth)
+	if(nd.attrs == nil && nd.tag != Dom->Ttd && nd.tag != Dom->Tth && !rowish(nd.tag))
 		return nil;
 	s := "";
+	rules := tablerules(d, n);
 	case nd.tag {
 	Dom->Tbody =>
 		s += colorhint(d, n, "bgcolor", "background-color");
@@ -5394,6 +5425,13 @@ hints(d: ref Doc, n: int): list of ref Decl
 		"right" => s += "float:right;";
 		"center" => s += "margin-left:auto;margin-right:auto;";
 		}
+		if(rulesof(d, n) != nil) {
+			# rules= (HTML §15.3.11): the collapsing model, the parts
+			# ruled below; the table's own border hidden unless given
+			s += "border-collapse:collapse;";
+			if(!d.hasattr(n, "border"))
+				s += "border-style:hidden;";
+		}
 	Dom->Ttd or Dom->Tth =>
 		s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
 		s += colorhint(d, n, "bgcolor", "background-color");
@@ -5410,9 +5448,20 @@ hints(d: ref Doc, n: int): list of ref Decl
 					s += "border-width:0;";
 				break;
 			}
+		case rules {
+		"cols" => s += "border-left:1px solid;border-right:1px solid;";
+		"all" => s += "border:1px solid;";
+		"none" => s += "border-style:none;";
+		}
 	Dom->Ttr or Dom->Tthead or Dom->Ttbody or Dom->Ttfoot =>
 		s += colorhint(d, n, "bgcolor", "background-color") + alignhint(d, n) + valignhint(d, n);
 		s += dimhint(d, n, "height", "height");
+		if(nd.tag == Dom->Ttr && (rules == "rows" || rules == "all") ||
+		   nd.tag != Dom->Ttr && rules == "groups")
+			s += "border-top:1px solid;border-bottom:1px solid;";
+	Dom->Tcolgroup or Dom->Tcol =>
+		if(nd.tag == Dom->Tcolgroup && rules == "groups" || rules == "cols" || rules == "all")
+			s += "border-left:1px solid;border-right:1px solid;";
 	Dom->Timg or Dom->Tobject or Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe or Dom->Tembed or Dom->Tinput =>
 		if(nd.tag == Dom->Tiframe && d.hasattr(n, "frameborder") && atoi(d.attr(n, "frameborder")) == 0)
 			s += "border-width:0;";

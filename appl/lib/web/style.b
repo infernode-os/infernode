@@ -1710,7 +1710,7 @@ St.new(): ref St
 		0, a, 3, Bnone, Ccurrent,
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
-		0, z, z);
+		0, z, z, 0);
 }
 
 nextsid := 1;
@@ -2393,7 +2393,11 @@ fixup(st, parent: ref St, d: ref Doc, n: int)
 		}
 	if(d != nil && parentel(d, n) == 0)
 		blockify = 1;
-	if(blockify)
+	if(blockify) {
+		case st.display {
+		Dinline or Dinlineblock or Dinlineflex or Dinlinegrid =>
+			st.wasinline = 1;
+		}
 		case st.display {
 		Dinline or Dinlineblock or Dtablerowgroup or Dtableheadergroup or
 		Dtablefootergroup or Dtablerow or Dtablecell or Dtablecolumngroup or
@@ -2406,6 +2410,7 @@ fixup(st, parent: ref St, d: ref Doc, n: int)
 		Dinlinetable =>
 			st.display = Dtable;
 		}
+	}
 	if(d != nil && parentel(d, n) == 0 && st.display == Dcontents)
 		st.display = Dblock;
 }

@@ -216,6 +216,7 @@ Style: module
 		safe:	int;		# "safe" alignment: bit 1 align-content, 2 justify-content, 4 align-items/self
 		translated:	int;	# a transform applies (a stacking context); only its translation is drawn
 		tx, ty:	Len;		# that translation (percentages of the box's own size)
+		wasinline:	int;	# blockified from an inline-level display: the static position of an absolute is an inline one
 
 		new:	fn(): ref St;		# initial values
 	};

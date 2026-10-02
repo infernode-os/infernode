@@ -805,6 +805,7 @@ Abs: adt {
 	cb:	ref Box;
 	sparent:	ref Box;
 	sx, sy:	int;
+	frag:	ref Frag;	# an inline-level box's place on its line, once the line is aligned (else nil)
 };
 
 # Floats placed in a block formatting context, as margin-box rectangles
@@ -868,6 +869,12 @@ contentheightof(l: ref L, k: ref Box, cw: int): int
 	asauto = k;
 	layblock(l, k, cw, -1, nil, 0, 0);
 	asauto = outer;
+	if(k.st.aspect > 0.0 && k.kind != Kreplaced) {
+		# an aspect ratio gives an auto height from the width
+		ah := ir(real (k.w - hextra(k)) / k.st.aspect) + vextra(k);
+		if(ah > k.h)
+			k.h = ah;
+	}
 	return k.h;
 }
 
@@ -1208,7 +1215,19 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
 			if(isabs(k)) {
-				l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt + cury + msum(pending)) :: l.pending;
+				sx := b.bl + b.pl;
+				if(k.st.wasinline && fc != nil) {
+					# an inline-level box's static position: on a line
+					# of its own here, aligned as text would be (Position 3 §3.1)
+					sy := cy + cury + msum(pending);
+					(lx, rx) := band(fc, sy, sy + 1, cx, cx + cw);
+					sx += lx - cx;
+					case b.st.align {
+					Style->Acenter =>	sx += (rx - lx)/2;
+					Style->Aright or Style->Aend =>	sx += rx - lx;
+					}
+				}
+				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil) :: l.pending;
 				continue;
 			}
 			if(isfloat(k)) {
@@ -1402,7 +1421,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil) :: l.pending;
 			continue;
 		}
 		items = ref Fi(k, 0.0, 0.0, 0.0, 0.0, -1.0, 0, 0, 0, 0) :: items;
@@ -1452,7 +1471,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			# content size
 			if(row) {
 				(nil, mx) := intrinsic(k);
-				base = mx - nz(k.ml) - nz(k.mr);
+				base = mx - mgs(k);
 			} else {
 				k.w = flexcrossw(k, b, cw);
 				base = contenth = contentheightof(l, k, cw);
@@ -1473,7 +1492,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			if(mnv.kind == Style->Lauto && seethrough(ks.overflowx) && seethrough(ks.overflowy)) {
 				if(row) {
 					(mn, nil) := intrinsic(k);
-					minm = mn - nz(k.ml) - nz(k.mr);
+					minm = mn - mgs(k);
 					# no larger than a definite specified size
 					if((sw := specw(k, ks.width, mainavail)) >= 0 && sw < minm)
 						minm = sw;
@@ -1594,8 +1613,12 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	containercross := crosssum;
 	if(row && ch >= 0)
 		containercross = ch;
+	if(row && ch < 0)	# auto height: still bound by min- and max-height
+		containercross = clamph(b, crosssum + vextra(b), cbh) - vextra(b);
 	if(!row)
 		containercross = cw;
+	if(len la == 1 && !wrap)	# a single line fills the container (§9.4 step 8)
+		la[0].cross = containercross;
 
 	# align-content: distribute extra cross space among lines (§9.4.15)
 	ac := st.aligncontent;
@@ -1822,7 +1845,7 @@ flexcrossw(k, b: ref Box, cw: int): int
 	if(al == Style->ALnormal || al == Style->ALstretch)
 		return clampw(k, cw - k.ml - k.mr, cw);
 	(mn, mx) := intrinsic(k);
-	return clampw(k, fit(mn, mx, cw) - nz(k.ml) - nz(k.mr), cw);
+	return clampw(k, fit(mn, mx, cw) - mgs(k), cw);
 }
 
 # §9.7: grow or shrink items to fill avail, freezing those that hit a limit
@@ -2200,7 +2223,7 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil) :: l.pending;
 			continue;
 		}
 		ks := k.st;
@@ -2795,7 +2818,7 @@ gridw(k: ref Box, aw: int, b: ref Box): int
 		return clampw(k, rw + hextra(k), aw);
 	}
 	(mn, mx) := intrinsic(k);
-	return clampw(k, fit(mn, mx, aw) - nz(k.ml) - nz(k.mr), aw);
+	return clampw(k, fit(mn, mx, aw) - mgs(k), aw);
 }
 
 # the height of a box's content (its last line or lowest child), with
@@ -3454,6 +3477,8 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	# static position, in cb coordinates
 	sx := a.sx;
 	sy := a.sy;
+	if(a.frag != nil)
+		sx = a.frag.x;
 	for(p := a.sparent; p != nil && p != cb; p = p.parent) {
 		sx += p.x;
 		sy += p.y;
@@ -3492,7 +3517,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 				avail -= left;
 			if(!rauto)
 				avail -= right;
-			w = fit(mn, mx, avail + nz(k.ml) + nz(k.mr)) - nz(k.ml) - nz(k.mr);
+			w = fit(mn, mx, avail + mgs(k)) - mgs(k);
 		}
 	}
 	k.w = clampw(k, w, cbw);
@@ -3635,7 +3660,7 @@ floatwidth(k: ref Box, cw: int): int
 			w = rw + hextra(k);
 		} else {
 			(mn, mx) := intrinsic(k);
-			w = fit(mn, mx, cw) - nz(k.ml) - nz(k.mr);
+			w = fit(mn, mx, cw) - mgs(k);
 		}
 	}
 	if(k.st.ml.kind == Style->Lauto)
@@ -3648,8 +3673,9 @@ floatwidth(k: ref Box, cw: int): int
 
 placefloat(l: ref L, k: ref Box, fc: ref Fctx, cx, y, cw, ch, ox, oy: int)
 {
-	mw := floatwidth(k, cw);
+	floatwidth(k, cw);
 	layblock(l, k, cw, ch, nil, 0, 0);	# % heights against a definite one
+	mw := k.ml + k.w + k.mr;	# a table may have come out wider than specified
 	mh := k.mt + k.h + k.mb;
 	if(k.st.clear != Style->Cnone) {
 		c := clearance(fc, k.st.clear);
@@ -3956,7 +3982,7 @@ replacedheight(b: ref Box, cbw, cbh: int): int
 # resolved against another width) measures again.
 intrinsic(b: ref Box): (int, int)
 {
-	ex := hextra(b) + nz(b.ml) + nz(b.mr);
+	ex := hextra(b) + mgs(b);
 	if(b.igen == laygen && b.iex == ex)
 		return (b.imn, b.imx);
 	(mn, mx) := intrinsic1(b);
@@ -3975,7 +4001,7 @@ contribution(b: ref Box): (int, int)
 {
 	(mn, mx) := intrinsic(b);
 	st := b.st;
-	mg := nz(b.ml) + nz(b.mr);
+	mg := mgs(b);
 	if(st.minwidth.kind == Style->Lpx && st.minwidth.pct == 0.0) {
 		w := ir(st.minwidth.px) + mg;
 		if(!st.borderbox)
@@ -4002,13 +4028,13 @@ contribution(b: ref Box): (int, int)
 
 intrinsic1(b: ref Box): (int, int)
 {
-	ex := hextra(b) + nz(b.ml) + nz(b.mr);
+	ex := hextra(b) + mgs(b);
 	st := b.st;
 	if(st.width.kind == Style->Lpx && st.width.pct == 0.0) {
 		w := ir(st.width.px);
 		if(!st.borderbox)
 			w += hextra(b);
-		return (w + nz(b.ml) + nz(b.mr), w + nz(b.ml) + nz(b.mr));
+		return (w + mgs(b), w + mgs(b));
 	}
 	if(b.kind == Kreplaced) {
 		(w, nil) := replacedsize(b, -1, -1);
@@ -4016,7 +4042,7 @@ intrinsic1(b: ref Box): (int, int)
 	}
 	if(b.kind == Ktable) {
 		(tmn, tmx) := tableintrinsic(b);
-		return (tmn + nz(b.ml) + nz(b.mr), tmx + nz(b.ml) + nz(b.mr));
+		return (tmn + mgs(b), tmx + mgs(b));
 	}
 	if(b.kind == Kgrid && st.gridcols != nil) {
 		# columns of fixed size only: the grid is as wide as they are
@@ -4073,6 +4099,13 @@ intrinsic1(b: ref Box): (int, int)
 	return (mn + ex, mx + ex);
 }
 
+# a box's horizontal margins together, negative ones and all (auto
+# ones are 0 here); they are part of what it contributes to a parent
+mgs(b: ref Box): int
+{
+	return b.ml + b.mr;
+}
+
 nz(m: int): int
 {
 	if(m < 0)
@@ -4087,6 +4120,10 @@ inlineintrinsic(b: ref Box): (int, int)
 	mx := 0.0;
 	line := 0.0;
 	word := 0.0;
+	# collapsible spaces count only between content: those at a line's
+	# ends are removed when it is laid out
+	sp := 0.0;	# collapsible space waiting for content after it
+	content := 0;	# the line has content
 	for(l := items; l != nil; l = tl l) {
 		it := hd l;
 		case it.kind {
@@ -4098,7 +4135,9 @@ inlineintrinsic(b: ref Box): (int, int)
 				word = w;
 			if(word > mn)
 				mn = word;
-			line += w;
+			line += sp + w;
+			sp = 0.0;
+			content = 1;
 		Ispace =>
 			if(it.nowrap) {
 				# an unbreakable space is part of the word
@@ -4107,22 +4146,35 @@ inlineintrinsic(b: ref Box): (int, int)
 					mn = word;
 			} else
 				word = 0.0;
-			line += it.w;
+			if(it.text == " " && collapsible(it.box.st)) {
+				if(content)
+					sp += it.w;
+			} else {
+				line += sp + it.w;
+				sp = 0.0;
+				content = 1;
+			}
 		Iopen or Iclose =>
 			line += it.w;
 			word += it.w;
+			if(it.w > 0.0)
+				content = 1;
 		Iatomic =>
 			edges(it.box, 0);	# its padding and borders count; % ones are 0 here
 			(kmn, kmx) := contribution(it.box);
 			if(real kmn > mn)
 				mn = real kmn;
-			line += real kmx;
+			line += sp + real kmx;
+			sp = 0.0;
 			word = 0.0;
+			content = 1;
 		Ibreak =>
 			if(line > mx)
 				mx = line;
 			line = 0.0;
 			word = 0.0;
+			sp = 0.0;
+			content = 0;
 		Ifloat =>
 			edges(it.box, 0);
 			(kmn, kmx) := contribution(it.box);
@@ -4552,7 +4604,12 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			} else
 				ln.floats = it.box :: ln.floats;	# after this line
 		Iabs =>
-			l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y) :: l.pending;
+			# its static position is where it would have been on the
+			# line: a fragment of no width marks the place through
+			# alignment and reordering
+			mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level);
+			ln.frags = mark :: ln.frags;
+			l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark) :: l.pending;
 		Ibreak =>
 			ln.content = 1;
 			lines = endline(f, ln, x0, first, 1) :: lines;
@@ -5532,7 +5589,7 @@ layatomic(l: ref L, k: ref Box, cbw: int)
 			w = rw + hextra(k);
 		} else {
 			(mn, mx) := intrinsic(k);
-			w = fit(mn, mx, cbw) - nz(k.ml) - nz(k.mr);
+			w = fit(mn, mx, cbw) - mgs(k);
 		}
 	}
 	k.w = clampw(k, w, cbw);
@@ -6573,6 +6630,13 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 				args = tl args;	# shape and position: drawn centred, circular
 		}
 	}
+	# the gradient line's length, for stops given as lengths
+	rad := angle * Math->Pi / 180.0;
+	dx := math->sin(rad);
+	dy := -math->cos(rad);
+	linelen := math->fabs(real r.dx()*dx) + math->fabs(real r.dy()*dy);
+	if(!lin)
+		linelen = math->sqrt(real (r.dx()*r.dx() + r.dy()*r.dy()))/2.0;
 	# colour stops
 	n := len args;
 	if(n < 1)
@@ -6591,6 +6655,10 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		pos[k] = -1.0;
 		if(len a > 1 && a[1].kind == Css->Kpercent)
 			pos[k] = a[1].n / 100.0;
+		else if(len a > 1 && a[1].kind == Css->Kdimension && a[1].s == "px" && linelen > 0.0)
+			pos[k] = a[1].n / linelen;
+		else if(len a > 1 && a[1].kind == Css->Knumber && a[1].n == 0.0)
+			pos[k] = 0.0;
 		k++;
 	}
 	if(k == 0)
@@ -6616,12 +6684,9 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	dst.clipr = cr;
 	if(lin) {
 		# bands perpendicular to the gradient line
-		rad := angle * Math->Pi / 180.0;
-		dx := math->sin(rad);
-		dy := -math->cos(rad);
 		w := real r.dx();
 		h := real r.dy();
-		glen := math->fabs(w*dx) + math->fabs(h*dy);
+		glen := linelen;
 		cx := real r.min.x + w/2.0;
 		cy := real r.min.y + h/2.0;
 		steps := int glen;
@@ -6864,6 +6929,8 @@ paintspan(dst: ref Image, f: ref Frag, o: Point)
 painttext(dst: ref Image, f: ref Frag, o: Point)
 {
 	st := f.box.st;
+	if(f.text == "")
+		return;	# an absolutely positioned box's place
 	if(f.text == " " || f.text == "\t")
 		return paintdeco(dst, f, o);
 	fc := f.face;

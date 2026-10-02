@@ -1277,9 +1277,26 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			}
 			k.x = b.bl + b.pl + k.ml;
 			if(isbfc(k) && fc.left != nil || isbfc(k) && fc.right != nil) {
-				# a new formatting context does not overlap floats
+				# a new formatting context does not overlap floats: it
+				# narrows beside them, or, when it cannot get narrow
+				# enough, moves down past them (CSS 2.2 §9.5)
 				(lx, rx) := band(fc, cy + ky, cy + ky + 1, cx, cx + cw);
 				if(lx > cx || rx < cx + cw) {
+					need := k.w + k.ml + k.mr;
+					if(k.st.width.kind == Style->Lauto) {
+						(kmn, nil) := intrinsic(k);
+						need = kmn;
+					}
+					for(tries := 0; tries < 1000 && rx - lx < need && (lx > cx || rx < cx + cw); tries++) {
+						n := nextfloat(fc, cy + ky);
+						if(n < 0)
+							break;
+						ky = n - cy;
+						cury = ky - msum(collapse(pending, mval(k.mt)));
+						cleared = 1;
+						adjoining = 0;
+						(lx, rx) = band(fc, cy + ky, cy + ky + 1, cx, cx + cw);
+					}
 					avail := rx - lx - k.ml - k.mr;
 					if(k.w > avail && k.st.width.kind == Style->Lauto)
 						k.w = clampw(k, avail, cw);
@@ -2442,6 +2459,9 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
 		   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced) {
 			imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), aw, ah);
+		} else if(ks.height.pct != 0.0 || ks.minheight.pct != 0.0 || ks.maxheight.pct != 0.0 || heightmatters(k)) {
+			# the area's height is definite for it (Grid 2 §6.6)
+			layblock(l, k, aw, ah, nil, 0, 0);
 		}
 		x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
 		if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
@@ -3239,11 +3259,14 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 	gridtop := y;
 	nr := len t.rows;
 	rowh := array[nr] of {* => 0};
+	rowspec := array[nr] of {* => 0};	# the row's height was specified (by it or a cell)
 	for(r := 0; r < nr; r++) {
 		row := t.rows[r];
 		edges(row, cw);
-		if((sh := spech(row, row.st.height, -1)) > 0)
+		if((sh := spech(row, row.st.height, -1)) > 0) {
 			rowh[r] = sh;
+			rowspec[r] = 1;
+		}
 	}
 	# lay each cell out at its width; single-row cells set row heights
 	for(cl2 := t.cells; cl2 != nil; cl2 = tl cl2) {
@@ -3271,6 +3294,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		layblock(l, k, w, -1, nil, 0, 0);
 		if(c.rs == 1 && k.h > rowh[c.r])
 			rowh[c.r] = k.h;
+		if(c.rs == 1 && k.st.height.kind == Style->Lpx && k.st.height.pct == 0.0)
+			rowspec[c.r] = 1;
 	}
 	for(cl2 = t.cells; cl2 != nil; cl2 = tl cl2) {
 		c := hd cl2;
@@ -3290,8 +3315,19 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 			gh += rowh[r];
 		capsh := gridtop - b.bt - b.pt;
 		extra := sh - vextra(b) - capsh - gh;
-		if(extra > 0 && nr > 0)
-			spread(rowh, 0, nr, extra, rowh);
+		if(extra > 0 && nr > 0) {
+			# to the rows of unspecified height, equally; failing
+			# any, to all in proportion (§17.5.3 leaves it open)
+			wt := array[nr] of int;
+			nauto := 0;
+			for(r = 0; r < nr; r++) {
+				wt[r] = !rowspec[r];
+				nauto += wt[r];
+			}
+			if(nauto == 0)
+				wt = rowh;
+			spread(rowh, 0, nr, extra, wt);
+		}
 	}
 	rowy := array[nr + 1] of int;
 	y = gridtop + sy;

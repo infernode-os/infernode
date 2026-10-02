@@ -63,6 +63,9 @@ init(nil: ref Draw->Context, nil: list of string)
 	}
 	nsc->init();
 
+	if(!exists("/n") || !exists("/mnt/factotum/ctl"))
+		raise "skip:wallet capability driver requires /n and a running factotum (run tests/inferno/wallet_capability.sh)";
+
 	spawn runsrv();
 	sys->sleep(1500);
 

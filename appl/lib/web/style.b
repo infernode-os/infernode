@@ -5394,6 +5394,21 @@ copyprop(d, s: ref St, nm: string)
 hints(d: ref Doc, n: int): list of ref Decl
 {
 	nd := d.nodes[n];
+	if(nd.ns == Dom->SVG && nd.name == "svg" && nd.attrs != nil) {
+		# an outer svg's width and height attributes are its CSS width
+		# and height (SVG 2 §7.2); px or %, as img's
+		p := parentel(d, n);
+		if(p == 0 || d.nodes[p].ns != Dom->SVG) {
+			h := dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
+			if(h == "")
+				return nil;
+			decls := css->parsedecls(h);
+			r: list of ref Decl;
+			for(k := len decls - 1; k >= 0; k--)
+				r = decls[k] :: r;
+			return r;
+		}
+	}
 	if(nd.ns != Dom->HTML)
 		return nil;
 	# a cell's hints come from its table's attributes (cellpadding,
@@ -5448,9 +5463,10 @@ hints(d: ref Doc, n: int): list of ref Decl
 					s += "border-width:0;";
 				break;
 			}
+		# (widths and styles only: the colour stays the table's, inherited)
 		case rules {
-		"cols" => s += "border-left:1px solid;border-right:1px solid;";
-		"all" => s += "border:1px solid;";
+		"cols" => s += "border-left-width:1px;border-left-style:solid;border-right-width:1px;border-right-style:solid;";
+		"all" => s += "border-width:1px;border-style:solid;";
 		"none" => s += "border-style:none;";
 		}
 	Dom->Ttr or Dom->Tthead or Dom->Ttbody or Dom->Ttfoot =>
@@ -5458,10 +5474,10 @@ hints(d: ref Doc, n: int): list of ref Decl
 		s += dimhint(d, n, "height", "height");
 		if(nd.tag == Dom->Ttr && (rules == "rows" || rules == "all") ||
 		   nd.tag != Dom->Ttr && rules == "groups")
-			s += "border-top:1px solid;border-bottom:1px solid;";
+			s += "border-top-width:1px;border-top-style:solid;border-bottom-width:1px;border-bottom-style:solid;";
 	Dom->Tcolgroup or Dom->Tcol =>
 		if(nd.tag == Dom->Tcolgroup && rules == "groups" || rules == "cols" || rules == "all")
-			s += "border-left:1px solid;border-right:1px solid;";
+			s += "border-left-width:1px;border-left-style:solid;border-right-width:1px;border-right-style:solid;";
 	Dom->Timg or Dom->Tobject or Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe or Dom->Tembed or Dom->Tinput =>
 		if(nd.tag == Dom->Tiframe && d.hasattr(n, "frameborder") && atoi(d.attr(n, "frameborder")) == 0)
 			s += "border-width:0;";

@@ -4774,7 +4774,8 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 	# column widths from <col> and <colgroup>; a column element with
 	# a definite width is a column even with no cells in it, one
 	# without is nothing past the cells (col-definite-size-001)
-	cols = expandcols(rev(cols));
+	raw := rev(cols);
+	cols = expandcols(raw);
 	nc := 0;
 	last := 0;
 	for(ncl := cols; ncl != nil; ncl = tl ncl) {
@@ -4805,7 +4806,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 		}
 	}
 	if(b.st.collapse)
-		t.tb = collapsed(t, b, cols);
+		t.tb = collapsed(t, b, raw);
 	return t;
 }
 
@@ -4852,7 +4853,7 @@ collapsed(t: ref Tgrid, b: ref Box, cols: list of ref Box): ref Tb
 {
 	n := t.ncols;
 	nr := len t.rows;
-	tb := ref Tb(n, nr, nil, nil, array[nr*(n+1)] of ref Bd, array[(nr+1)*n] of ref Bd);
+	tb := ref Tb(n, nr, nil, nil, array[nr*(n+1)] of ref Bd, array[(nr+1)*n] of ref Bd, 0);
 	for(i := 0; i < len tb.v; i++)
 		tb.v[i] = ref Bd(0, Style->Bnone, 0, 9);
 	for(i = 0; i < len tb.h; i++)
@@ -4862,72 +4863,97 @@ collapsed(t: ref Tgrid, b: ref Box, cols: list of ref Box): ref Tb
 		c := hd cl;
 		ks := c.box.st;
 		for(r := c.r; r < c.r + c.rs && r < nr; r++) {
-			fight(tb.v[r*(n+1) + c.c], ks.bl, ks.bsl, ks.bcl, 0, 1);
-			fight(tb.v[r*(n+1) + c.c + c.cs], ks.br, ks.bsr, ks.bcr, 0, 0);
+			fight(tb.v[r*(n+1) + c.c], ks.bl, ks.bsl, bcolor(ks, ks.bcl), 0, 1);
+			fight(tb.v[r*(n+1) + c.c + c.cs], ks.br, ks.bsr, bcolor(ks, ks.bcr), 0, 0);
 		}
 		for(cc := c.c; cc < c.c + c.cs && cc < n; cc++) {
-			fight(tb.h[c.r*n + cc], ks.bt, ks.bst, ks.bct, 0, 1);
-			fight(tb.h[(c.r + c.rs)*n + cc], ks.bb, ks.bsb, ks.bcb, 0, 0);
+			fight(tb.h[c.r*n + cc], ks.bt, ks.bst, bcolor(ks, ks.bct), 0, 1);
+			fight(tb.h[(c.r + c.rs)*n + cc], ks.bb, ks.bsb, bcolor(ks, ks.bcb), 0, 0);
 		}
 	}
 	for(r := 0; r < nr; r++) {
 		rs := t.rows[r].st;
 		for(c := 0; c < n; c++) {
-			fight(tb.h[r*n + c], rs.bt, rs.bst, rs.bct, 1, 1);
-			fight(tb.h[(r+1)*n + c], rs.bb, rs.bsb, rs.bcb, 1, 0);
+			fight(tb.h[r*n + c], rs.bt, rs.bst, bcolor(rs, rs.bct), 1, 1);
+			fight(tb.h[(r+1)*n + c], rs.bb, rs.bsb, bcolor(rs, rs.bcb), 1, 0);
 		}
-		fight(tb.v[r*(n+1)], rs.bl, rs.bsl, rs.bcl, 1, 1);
-		fight(tb.v[r*(n+1) + n], rs.br, rs.bsr, rs.bcr, 1, 0);
+		fight(tb.v[r*(n+1)], rs.bl, rs.bsl, bcolor(rs, rs.bcl), 1, 1);
+		fight(tb.v[r*(n+1) + n], rs.br, rs.bsr, bcolor(rs, rs.bcr), 1, 0);
 		g := t.groups[r];
 		if(g == nil)
 			continue;
 		gs := g.st;
 		if(r == 0 || t.groups[r-1] != g)
 			for(c = 0; c < n; c++)
-				fight(tb.h[r*n + c], gs.bt, gs.bst, gs.bct, 2, 1);
+				fight(tb.h[r*n + c], gs.bt, gs.bst, bcolor(gs, gs.bct), 2, 1);
 		if(r == nr - 1 || t.groups[r+1] != g)
 			for(c = 0; c < n; c++)
-				fight(tb.h[(r+1)*n + c], gs.bb, gs.bsb, gs.bcb, 2, 0);
-		fight(tb.v[r*(n+1)], gs.bl, gs.bsl, gs.bcl, 2, 1);
-		fight(tb.v[r*(n+1) + n], gs.br, gs.bsr, gs.bcr, 2, 0);
+				fight(tb.h[(r+1)*n + c], gs.bb, gs.bsb, bcolor(gs, gs.bcb), 2, 0);
+		fight(tb.v[r*(n+1)], gs.bl, gs.bsl, bcolor(gs, gs.bcl), 2, 1);
+		fight(tb.v[r*(n+1) + n], gs.br, gs.bsr, bcolor(gs, gs.bcr), 2, 0);
 	}
-	# columns: left and right on their lines, top and bottom on the outer ones
+	# columns and column groups: left and right on their lines, top
+	# and bottom on the outer ones; a group's columns within it
 	c := 0;
 	for(; cols != nil && c < n; cols = tl cols) {
 		k := hd cols;
-		span := 1;
-		if(k.node != 0 && curdoc != nil)
-			span = spanattr(curdoc.attr(k.node, "span"), 1000);
+		span := colspan(k);
 		if(c + span > n)
 			span = n - c;
-		cs := k.st;
-		origin := 3;
-		if(cs.display == Style->Dtablecolumngroup)
-			origin = 4;
-		for(r = 0; r < nr; r++) {
-			fight(tb.v[r*(n+1) + c], cs.bl, cs.bsl, cs.bcl, origin, 1);
-			fight(tb.v[r*(n+1) + c + span], cs.br, cs.bsr, cs.bcr, origin, 0);
-		}
-		for(cc := c; cc < c + span; cc++) {
-			fight(tb.h[cc], cs.bt, cs.bst, cs.bct, origin, 1);
-			fight(tb.h[nr*n + cc], cs.bb, cs.bsb, cs.bcb, origin, 0);
-		}
+		if(k.st.display == Style->Dtablecolumngroup) {
+			colfight(tb, k, c, span, 4);
+			cc := c;
+			for(j := 0; j < len k.kids && cc < c + span; j++) {
+				col := k.kids[j];
+				if(!iscolumn(col))
+					continue;
+				sp := colspan(col);
+				if(cc + sp > c + span)
+					sp = c + span - cc;
+				colfight(tb, col, cc, sp, 3);
+				cc += sp;
+			}
+		} else
+			colfight(tb, k, c, span, 3);
 		c += span;
 	}
 	st := b.st;
 	for(r = 0; r < nr; r++) {
-		fight(tb.v[r*(n+1)], st.bl, st.bsl, st.bcl, 5, 0);
-		fight(tb.v[r*(n+1) + n], st.br, st.bsr, st.bcr, 5, 1);
+		fight(tb.v[r*(n+1)], st.bl, st.bsl, bcolor(st, st.bcl), 5, 0);
+		fight(tb.v[r*(n+1) + n], st.br, st.bsr, bcolor(st, st.bcr), 5, 1);
 	}
 	for(c = 0; c < n; c++) {
-		fight(tb.h[c], st.bt, st.bst, st.bct, 5, 0);
-		fight(tb.h[nr*n + c], st.bb, st.bsb, st.bcb, 5, 1);
+		fight(tb.h[c], st.bt, st.bst, bcolor(st, st.bct), 5, 0);
+		fight(tb.h[nr*n + c], st.bb, st.bsb, bcolor(st, st.bcb), 5, 1);
 	}
 	return tb;
 }
 
 # side: 0 for a candidate on the left of or above the line (it wins a
 # full tie, CSS 2.2 §17.6.2.1), 1 for one on the right or below
+# a border colour as painted: currentcolor is the owner's text colour
+bcolor(st: ref St, c: int): int
+{
+	if(c == Style->Ccurrent || c == 0)
+		return st.color;
+	return c;
+}
+
+colfight(tb: ref Tb, k: ref Box, c, span, origin: int)
+{
+	n := tb.ncols;
+	nr := tb.nrows;
+	cs := k.st;
+	for(r := 0; r < nr; r++) {
+		fight(tb.v[r*(n+1) + c], cs.bl, cs.bsl, bcolor(cs, cs.bcl), origin, 1);
+		fight(tb.v[r*(n+1) + c + span], cs.br, cs.bsr, bcolor(cs, cs.bcr), origin, 0);
+	}
+	for(cc := c; cc < c + span; cc++) {
+		fight(tb.h[cc], cs.bt, cs.bst, bcolor(cs, cs.bct), origin, 1);
+		fight(tb.h[nr*n + cc], cs.bb, cs.bsb, bcolor(cs, cs.bcb), origin, 0);
+	}
+}
+
 fight(e: ref Bd, w, sty, col, origin, side: int)
 {
 	origin = origin*2 + side;
@@ -5027,9 +5053,9 @@ tablehalves(t: ref Tgrid, b: ref Box)
 
 # The column and column group boxes get the grid's extent of their
 # spans, cell edge to cell edge, for their backgrounds (§17.5.1).
-placecolumns(b: ref Box, colx, rowy: array of int, sx, sy: int)
+placecolumns(b: ref Box, cx, colw, rowy: array of int, sx, sy, rtl: int)
 {
-	n := len colx - 1;
+	n := len colw;
 	nr := len rowy - 1;
 	c := 0;
 	for(i := 0; i < len b.kids; i++) {
@@ -5039,7 +5065,7 @@ placecolumns(b: ref Box, colx, rowy: array of int, sx, sy: int)
 		span := colspan(k);
 		if(c + span > n)
 			span = n - c;
-		colbox(k, colx, rowy, sx, sy, c, span);
+		colbox(k, cx, colw, rowy, sx, sy, c, span, rtl);
 		if(k.st.display == Style->Dtablecolumngroup) {
 			cc := c;
 			for(j := 0; j < len k.kids && cc < c + span; j++) {
@@ -5049,7 +5075,7 @@ placecolumns(b: ref Box, colx, rowy: array of int, sx, sy: int)
 				sp := colspan(col);
 				if(cc + sp > c + span)
 					sp = c + span - cc;
-				colbox(col, colx, rowy, sx, sy, cc, sp);
+				colbox(col, cx, colw, rowy, sx, sy, cc, sp, rtl);
 				col.x -= k.x;	# in its group
 				col.y -= k.y;
 				cc += sp;
@@ -5075,16 +5101,36 @@ colspan(k: ref Box): int
 	return 1;
 }
 
-colbox(k: ref Box, colx, rowy: array of int, sx, sy, c, span: int)
+colbox(k: ref Box, cx, colw, rowy: array of int, sx, sy, c, span, rtl: int)
 {
 	nr := len rowy - 1;
 	k.w = k.h = 0;
 	if(span <= 0 || nr <= 0)
 		return;
-	k.x = colx[c];
+	first := c;	# the leftmost of its columns
+	if(rtl)
+		first = c + span - 1;
+	k.x = cx[first];
 	k.y = rowy[0];
-	k.w = colx[c + span] - sx - k.x;
+	k.w = sx * (span - 1);
+	for(i := c; i < c + span; i++)
+		k.w += colw[i];
 	k.h = rowy[nr] - sy - k.y;
+}
+
+# the physical column (from the left) and grid line of logical ones
+pcol(tb: ref Tb, c: int): int
+{
+	if(tb.rtl)
+		return tb.ncols - 1 - c;
+	return c;
+}
+
+pline(tb: ref Tb, c: int): int
+{
+	if(tb.rtl)
+		return tb.ncols - c;
+	return c;
 }
 
 # Paint a table's collapsed borders, each segment centred on its grid
@@ -5099,7 +5145,7 @@ paintcollapsed(dst: ref Image, b: ref Box, r: Rect)
 			e := tb.v[rr*(n+1) + c];
 			if(e.w <= 0)
 				continue;
-			x := r.min.x + tb.cols[c];
+			x := r.min.x + tb.cols[pline(tb, c)];
 			side(dst, Rect((x - bhalf(e.w), r.min.y + tb.rows[rr]), (x - bhalf(e.w) + e.w, r.min.y + tb.rows[rr+1])),
 				e.w, e.color, e.style, 1, c < n);
 		}
@@ -5122,8 +5168,10 @@ paintcollapsed(dst: ref Image, b: ref Box, r: Rect)
 				if(tb.v[(rr-1)*(n+1) + c + 1].w > rw)
 					rw = tb.v[(rr-1)*(n+1) + c + 1].w;
 			}
-			x0 := r.min.x + tb.cols[c] - bhalf(lw);
-			x1 := r.min.x + tb.cols[c+1] + rw - bhalf(rw);
+			if(tb.rtl)
+				(lw, rw) = (rw, lw);	# the line at its right end is logical c, physically on the left
+			x0 := r.min.x + tb.cols[pcol(tb, c)] - bhalf(lw);
+			x1 := r.min.x + tb.cols[pcol(tb, c) + 1] + rw - bhalf(rw);
 			side(dst, Rect((x0, y - bhalf(e.w)), (x1, y - bhalf(e.w) + e.w)), e.w, e.color, e.style, 0, rr < nr);
 		}
 }
@@ -5424,6 +5472,14 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		x += colw[i] + sx;
 	}
 	colx[n] = x;
+	# where each column is, right to left in a right-to-left table
+	cx := colx;
+	if(st.dirrtl) {
+		cx = array[n] of int;
+		start := b.bl + b.pl;
+		for(i = 0; i < n; i++)
+			cx[i] = start + cw - (colx[i] - start) - colw[i];
+	}
 
 	# captions above (or below); collapsed borders are drawn at the
 	# grid's edge, so the captions lie outside them
@@ -5506,10 +5562,11 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 	rowy[nr] = y;
 	b.tb = t.tb;
 	if(b.tb == nil)
-		b.tb = ref Tb(n, nr, nil, nil, nil, nil);	# the grid lines
+		b.tb = ref Tb(n, nr, nil, nil, nil, nil, 0);	# the grid lines
 	b.tb.cols = colx;
 	b.tb.rows = rowy;
-	placecolumns(b, colx, rowy, sx, sy);
+	b.tb.rtl = st.dirrtl;
+	placecolumns(b, cx, colw, rowy, sx, sy, st.dirrtl);
 	# rows and groups as boxes, then cells within their rows
 	for(r = 0; r < nr; r++) {
 		row := t.rows[r];
@@ -5580,7 +5637,9 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 			rx += g.x;
 			ry += g.y;
 		}
-		k.x = colx[c.c] - rx;
+		k.x = cx[c.c] - rx;
+		if(st.dirrtl)
+			k.x = cx[c.c + c.cs - 1] - rx;
 		k.y = rowy[c.r] - ry;
 	}
 	capsh := gridtop - b.bt - b.pt;	# the captions, above and below, outside the table box
@@ -5732,11 +5791,6 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		sx += p.x;
 		sy += p.y;
 	}
-	if(cb == l.root && a.cb == nil) {
-		# the viewport: undo the root's own offset
-		sx += cb.x;
-		sy += cb.y;
-	}
 	edges(k, cbw);
 	lauto := st.left.kind == Style->Lauto;
 	rauto := st.right.kind == Style->Lauto;
@@ -5755,13 +5809,14 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	w := specw(k, st.width, cbw);
 	if(w < 0 && (lauto || rauto) && (sh := spech(k, st.height, cbh)) >= 0)
 		w = transferred(k, sh);
-	if(w < 0) {
+	if(w < 0 && k.kind == Kreplaced) {
+		# its own size, whatever the insets say (§10.3.8: an inset is dropped instead)
+		(rw, nil) := replacedsize(k, cbw, cbh);
+		w = rw + hextra(k);
+	} else if(w < 0) {
 		if(!lauto && !rauto)
 			w = cbw - left - right - k.ml - k.mr;
-		else if(k.kind == Kreplaced) {
-			(rw, nil) := replacedsize(k, cbw, cbh);
-			w = rw + hextra(k);
-		} else {
+		else {
 			(mn, mx) := intrinsic(k);
 			avail := cbw - k.ml - k.mr;
 			if(!lauto)
@@ -5820,7 +5875,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	}
 	layblock(l, k, cbw, cbh, nil, 0, 0);
 	h := k.h;
-	if(st.height.kind == Style->Lauto && !tauto && !bauto) {
+	if(st.height.kind == Style->Lauto && !tauto && !bauto && k.kind != Kreplaced) {
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
 		k.h = h;
 	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {

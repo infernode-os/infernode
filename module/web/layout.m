@@ -82,6 +82,7 @@ Layout: module
 		cols, rows:	array of int;	# ncols+1, nrows+1 line positions
 		v:	array of ref Bd;	# vertical segments: row r, line c at r*(ncols+1) + c
 		h:	array of ref Bd;	# horizontal segments: line r, column c at r*ncols + c
+		rtl:	int;		# the columns run right to left: logical column c is the (ncols-1-c)th from the left
 	};
 
 	Line: adt {

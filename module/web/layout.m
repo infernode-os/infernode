@@ -57,6 +57,7 @@ Layout: module
 		imn, imx:	int;	# min- and max-content widths, cached during one layout
 		iex:	int;		# the horizontal edges they include
 		igen:	int;		# the layout they were measured in (0: none)
+		seq:	int;		# position in tree order once laid out, for painting
 	};
 
 	Line: adt {

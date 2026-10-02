@@ -76,7 +76,7 @@ B: adt {
 newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0);
+		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -848,7 +848,7 @@ specheight(b: ref Box, cbh: int): int
 # content would come out differently for knowing it
 imposeh(l: ref L, k: ref Box, h, cbw, cbh: int)
 {
-	if(k.h != h && heightmatters(k)) {
+	if(heightmatters(k)) {	# even when h is what it had: it is definite now
 		outer := imposed;
 		outerh := imposedh;
 		imposed = k;
@@ -895,6 +895,21 @@ lay(root: ref Box, width, height: int)
 	for(; vp != nil; vp = tl vp)
 		layabs(l, hd vp, root, Rect((-root.x, -root.y), (width - root.x, height - root.y)));
 	l.pending = nil;
+	number(root, 1);
+}
+
+# Give every box its place in tree order (flex items in order-modified
+# order, as their container sorted them), which decides the painting
+# order of layers with equal z-index whatever path collects them.
+number(b: ref Box, n: int): int
+{
+	b.seq = n++;
+	for(i := 0; i < len b.kids; i++)
+		n = number(b.kids[i], n);
+	for(pl := b.pos; pl != nil; pl = tl pl)
+		if((hd pl).seq == 0)
+			n = number(hd pl, n);
+	return n;
 }
 
 ir(x: real): int
@@ -1284,6 +1299,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	st := b.st;
 	row := st.flexdir < 2;
 	rev := st.flexdir == 1 || st.flexdir == 3;
+	if(row && st.dirrtl)
+		rev = !rev;	# main-start is the right (§5.1)
 	wrap := st.flexwrap != 0;
 	cw := b.w - hextra(b);
 	if(cw < 0)
@@ -1334,6 +1351,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i = 1; i < n; i++)
 		for(j := i; j > 0 && fa[j].box.st.order < fa[j-1].box.st.order; j--)
 			(fa[j], fa[j-1]) = (fa[j-1], fa[j]);
+	# the children too: order-modified document order is also the
+	# painting order (§5.4)
+	for(i = 1; i < len b.kids; i++)
+		for(m := i; m > 0 && b.kids[m].st.order < b.kids[m-1].st.order; m--)
+			(b.kids[m], b.kids[m-1]) = (b.kids[m-1], b.kids[m]);
 
 	# flex base sizes and hypothetical main sizes (§9.2)
 	for(i = 0; i < n; i++) {
@@ -1453,9 +1475,14 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				k.w = flexcrossw(k, b, cw);
 				# a column item's main size is definite for its content
 				# only when the container's is (§9.8)
+				# ... or when the item cannot flex from a definite basis,
+				# which fixes its size as surely
+				ks := k.st;
+				fixedmain := ks.grow == 0.0 && ks.shrink == 0.0 &&
+					(ks.basis.kind == Style->Lpx || ks.basis.kind == Style->Lauto && ks.height.kind == Style->Lpx);
 				outer := imposed;
 				outerh := imposedh;
-				if(ch >= 0) {
+				if(ch >= 0 || fixedmain) {
 					imposed = k;
 					imposedh = m;
 				}
@@ -1530,8 +1557,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		la[i].pos = cpos;
 		cpos += la[i].cross + gapcross + between;
 	}
+	# wrap-reverse: the lines run from the cross end (§5.2); so do
+	# they in a column container whose direction is rtl, whose cross
+	# start is the right; both at once cancel
 	wrapr := st.flexwrap == 2;
-	if(wrapr)	# wrap-reverse: the lines run from the cross end (§5.2)
+	if(wrapr != (!row && st.dirrtl))
 		for(i = 0; i < len la; i++)
 			la[i].pos = containercross - la[i].pos - la[i].cross;
 
@@ -3162,10 +3192,16 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		k := c.box;
 		h := rowy[c.r + c.rs - 1] + rowh[c.r + c.rs - 1] - rowy[c.r];
 		contenth := k.h;
-		# the row's height is not definite for the cell's content:
-		# a percentage height inside resolves against the cell's own
-		# specified height, if any, not the row (as browsers do)
-		k.h = h;
+		# the row's height is definite for the cell's content when the
+		# table's or the row's own height is (browsers resolve a
+		# percentage inside an auto-height table's cell to auto)
+		rowh := c.row.st.height;
+		if(sh >= 0 || rowh.kind == Style->Lpx && rowh.pct == 0.0) {
+			imposeh(l, k, h, k.w - hextra(k), h);
+			if(heightmatters(k))
+				contenth = h;	# laid out again to fill the cell
+		} else
+			k.h = h;
 		# vertical-align within the cell
 		va := k.st.valign;
 		dy := 0;
@@ -5022,7 +5058,7 @@ before(a, b: ref Lyr): int
 {
 	if(a.z != b.z)
 		return a.z < b.z;
-	return a.box.node < b.box.node;
+	return a.box.seq < b.box.seq;
 }
 
 paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)

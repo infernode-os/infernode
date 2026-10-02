@@ -4204,11 +4204,13 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	"tab-size" =>
 		# a number of spaces, or a length (kept negated: px)
 		(ok, n) := number(v, ctx);
-		if(ok)
+		if(ok) {
+			if(n < 0.0)
+				return 0;
 			st.tabsize = n;
-		else {
+		} else {
 			(okl, l) := length(v, ctx);
-			if(!okl || l.pct != 0.0)
+			if(!okl || l.pct != 0.0 || l.px < 0.0)
 				return 0;
 			st.tabsize = -l.px;
 		}

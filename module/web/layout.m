@@ -63,6 +63,25 @@ Layout: module
 		subcnames, subrnames:	array of list of string;
 		subcgap, subrgap:	int;
 		doc:	ref Dom->Doc;	# the root box's document (nil elsewhere)
+		tb:	ref Tb;		# a table's collapsed borders, once laid out
+	};
+
+	# one border of a table's collapsed model: what won at a grid
+	# line segment (CSS 2.2 §17.6.2)
+	Bd: adt {
+		w:	int;
+		style:	int;
+		color:	int;
+		origin:	int;	# 0 cell, 1 row, 2 row group, 3 column, 4 column group, 5 table
+	};
+
+	# a table's collapsed borders: the grid lines' positions in its
+	# border box and the border at each segment of them
+	Tb: adt {
+		ncols, nrows:	int;
+		cols, rows:	array of int;	# ncols+1, nrows+1 line positions
+		v:	array of ref Bd;	# vertical segments: row r, line c at r*(ncols+1) + c
+		h:	array of ref Bd;	# horizontal segments: line r, column c at r*ncols + c
 	};
 
 	Line: adt {

@@ -241,6 +241,8 @@ toupper(s: string, lang: string): string
 		c := s[i];
 		if(tr && c == 'i')
 			r[len r] = 16r130;	# dotted capital I
+		else if(c >= 16r10D0 && c <= 16r10FF)
+			r[len r] = c;	# Georgian Mkhedruli stays: Mtavruli is not its uppercase in text (CSS Text 3 §2.1.1)
 		else if((x := special(c, 1)) != nil)
 			r += x;
 		else

@@ -92,7 +92,7 @@ newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
-		nil, nil, nil, nil, 0, 0, nil);
+		nil, nil, nil, nil, 0, 0, nil, nil);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -376,7 +376,7 @@ splitinline(box: ref Box, kids: list of ref Box): list of ref Box
 fixkids(box: ref Box, kids: list of ref Box): array of ref Box
 {
 	if(box.kind == Kinline)
-		return toarray(kids);
+		return toarray(orphans(box, kids));	# cells in an inline box: an inline table
 	# anonymous table objects (CSS 2.2 §17.2.1)
 	if(box.kind == Ktable)
 		return toarray(tablekids(box, kids));
@@ -525,7 +525,12 @@ flushtable(parent: ref Box, run, r: list of ref Box): list of ref Box
 {
 	if(run == nil)
 		return r;
-	t := newbox(Ktable, 0, 0, style->anon(parent.st, Style->Dtable));
+	# in an inline box the anonymous table is an inline table (§17.2.1)
+	inl := parent.kind == Kinline;
+	d := Style->Dtable;
+	if(inl)
+		d = Style->Dinlinetable;
+	t := newbox(Ktable, inl, 0, style->anon(parent.st, d));
 	# cells straight in the table: tablekids wraps them in a row
 	t.kids = toarray(tablekids(t, rev(run)));
 	return t :: r;
@@ -1208,6 +1213,8 @@ edges(b: ref Box, cbw: int)
 	b.pr = res(st.pr, cbw);
 	b.pb = res(st.pb, cbw);
 	b.pl = res(st.pl, cbw);
+	if(b.kind == Ktable && st.collapse)
+		b.pt = b.pr = b.pb = b.pl = 0;	# no padding in the collapsing model (§17.6.2)
 	b.mt = res(st.mt, cbw);
 	b.mr = res(st.mr, cbw);
 	b.mb = res(st.mb, cbw);
@@ -4662,6 +4669,8 @@ Tgrid: adt {
 	ncols:	int;
 	captions:	list of ref Box;
 	colw:	array of int;	# widths from <col>/<colgroup>, 0 if none
+	colpct:	array of real;	# percentage widths from them, -1 if none
+	tb:	ref Tb;		# the collapsed borders, if border-collapse: collapse
 };
 
 isrowgroup(k: ref Box): int
@@ -4720,7 +4729,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 	for(fl := rev2(foot); fl != nil; fl = tl fl)
 		all = hd fl :: all;
 	all = rev2(all);
-	t := ref Tgrid(array[len all] of ref Box, array[len all] of ref Box, nil, 0, rev(caps), nil);
+	t := ref Tgrid(array[len all] of ref Box, array[len all] of ref Box, nil, 0, rev(caps), nil, nil, nil);
 	i = 0;
 	for(; all != nil; all = tl all) {
 		(t.rows[i], t.groups[i]) = hd all;
@@ -4758,6 +4767,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 	}
 	# column widths from <col> and <colgroup>
 	t.colw = array[t.ncols] of {* => 0};
+	t.colpct = array[t.ncols] of {* => -1.0};
 	c := 0;
 	for(cl := rev(cols); cl != nil; cl = tl cl) {
 		k := hd cl;
@@ -4765,12 +4775,306 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 		if(k.node != 0 && d != nil)
 			n = spanattr(d.attr(k.node, "span"), 1000);
 		w := 0;
+		pc := -1.0;
 		if(k.st.width.kind == Style->Lpx && k.st.width.pct == 0.0)
 			w = ir(k.st.width.px);
-		for(m := 0; m < n && c < t.ncols; m++)
+		else if(k.st.width.kind == Style->Lpx && k.st.width.px == 0.0)
+			pc = k.st.width.pct;
+		for(m := 0; m < n && c < t.ncols; m++) {
+			t.colpct[c] = pc;
 			t.colw[c++] = w;
+		}
 	}
+	if(b.st.collapse)
+		t.tb = collapsed(t, b, rev(cols));
 	return t;
+}
+
+# ---- the collapsing border model (CSS 2.2 §17.6.2) ----
+
+# The border at each segment of the grid lines is the one that wins
+# among the cells, rows, row groups, columns, column groups and the
+# table meeting there: hidden beats all, else the widest, else the
+# style (double, solid, dashed, dotted, ridge, outset, groove, inset),
+# else the nearer origin (cell first), else the leftmost or topmost.
+collapsed(t: ref Tgrid, b: ref Box, cols: list of ref Box): ref Tb
+{
+	n := t.ncols;
+	nr := len t.rows;
+	tb := ref Tb(n, nr, nil, nil, array[nr*(n+1)] of ref Bd, array[(nr+1)*n] of ref Bd);
+	for(i := 0; i < len tb.v; i++)
+		tb.v[i] = ref Bd(0, Style->Bnone, 0, 9);
+	for(i = 0; i < len tb.h; i++)
+		tb.h[i] = ref Bd(0, Style->Bnone, 0, 9);
+	# cells first, so that on a full tie the leftmost and topmost wins
+	for(cl := t.cells; cl != nil; cl = tl cl) {
+		c := hd cl;
+		ks := c.box.st;
+		for(r := c.r; r < c.r + c.rs && r < nr; r++) {
+			fight(tb.v[r*(n+1) + c.c], ks.bl, ks.bsl, ks.bcl, 0, 1);
+			fight(tb.v[r*(n+1) + c.c + c.cs], ks.br, ks.bsr, ks.bcr, 0, 0);
+		}
+		for(cc := c.c; cc < c.c + c.cs && cc < n; cc++) {
+			fight(tb.h[c.r*n + cc], ks.bt, ks.bst, ks.bct, 0, 1);
+			fight(tb.h[(c.r + c.rs)*n + cc], ks.bb, ks.bsb, ks.bcb, 0, 0);
+		}
+	}
+	for(r := 0; r < nr; r++) {
+		rs := t.rows[r].st;
+		for(c := 0; c < n; c++) {
+			fight(tb.h[r*n + c], rs.bt, rs.bst, rs.bct, 1, 1);
+			fight(tb.h[(r+1)*n + c], rs.bb, rs.bsb, rs.bcb, 1, 0);
+		}
+		fight(tb.v[r*(n+1)], rs.bl, rs.bsl, rs.bcl, 1, 1);
+		fight(tb.v[r*(n+1) + n], rs.br, rs.bsr, rs.bcr, 1, 0);
+		g := t.groups[r];
+		if(g == nil)
+			continue;
+		gs := g.st;
+		if(r == 0 || t.groups[r-1] != g)
+			for(c = 0; c < n; c++)
+				fight(tb.h[r*n + c], gs.bt, gs.bst, gs.bct, 2, 1);
+		if(r == nr - 1 || t.groups[r+1] != g)
+			for(c = 0; c < n; c++)
+				fight(tb.h[(r+1)*n + c], gs.bb, gs.bsb, gs.bcb, 2, 0);
+		fight(tb.v[r*(n+1)], gs.bl, gs.bsl, gs.bcl, 2, 1);
+		fight(tb.v[r*(n+1) + n], gs.br, gs.bsr, gs.bcr, 2, 0);
+	}
+	# columns: left and right on their lines, top and bottom on the outer ones
+	c := 0;
+	for(; cols != nil && c < n; cols = tl cols) {
+		k := hd cols;
+		span := 1;
+		if(k.node != 0 && curdoc != nil)
+			span = spanattr(curdoc.attr(k.node, "span"), 1000);
+		if(c + span > n)
+			span = n - c;
+		cs := k.st;
+		origin := 3;
+		if(cs.display == Style->Dtablecolumngroup)
+			origin = 4;
+		for(r = 0; r < nr; r++) {
+			fight(tb.v[r*(n+1) + c], cs.bl, cs.bsl, cs.bcl, origin, 1);
+			fight(tb.v[r*(n+1) + c + span], cs.br, cs.bsr, cs.bcr, origin, 0);
+		}
+		for(cc := c; cc < c + span; cc++) {
+			fight(tb.h[cc], cs.bt, cs.bst, cs.bct, origin, 1);
+			fight(tb.h[nr*n + cc], cs.bb, cs.bsb, cs.bcb, origin, 0);
+		}
+		c += span;
+	}
+	st := b.st;
+	for(r = 0; r < nr; r++) {
+		fight(tb.v[r*(n+1)], st.bl, st.bsl, st.bcl, 5, 0);
+		fight(tb.v[r*(n+1) + n], st.br, st.bsr, st.bcr, 5, 1);
+	}
+	for(c = 0; c < n; c++) {
+		fight(tb.h[c], st.bt, st.bst, st.bct, 5, 0);
+		fight(tb.h[nr*n + c], st.bb, st.bsb, st.bcb, 5, 1);
+	}
+	return tb;
+}
+
+# side: 0 for a candidate on the left of or above the line (it wins a
+# full tie, CSS 2.2 §17.6.2.1), 1 for one on the right or below
+fight(e: ref Bd, w, sty, col, origin, side: int)
+{
+	origin = origin*2 + side;
+	if(e.style == Style->Bhidden)
+		return;
+	if(sty == Style->Bhidden) {
+		e.w = 0;
+		e.style = sty;
+		e.origin = origin;
+		return;
+	}
+	if(sty == Style->Bnone || w <= 0)
+		return;
+	take := e.style == Style->Bnone || w > e.w;
+	if(!take && w == e.w) {
+		take = stylerank(sty) > stylerank(e.style) ||
+			stylerank(sty) == stylerank(e.style) && origin < e.origin;
+	}
+	if(take) {
+		e.w = w;
+		e.style = sty;
+		e.color = col;
+		e.origin = origin;
+	}
+}
+
+stylerank(sty: int): int
+{
+	case sty {
+	Style->Bdouble =>	return 8;
+	Style->Bsolid =>	return 7;
+	Style->Bdashed =>	return 6;
+	Style->Bdotted =>	return 5;
+	Style->Bridge =>	return 4;
+	Style->Boutset =>	return 3;
+	Style->Bgroove =>	return 2;
+	Style->Binset =>	return 1;
+	}
+	return 0;
+}
+
+# a collapsed border straddles its grid line: this much lies before
+# it (left or above) and the rest after
+bhalf(w: int): int
+{
+	return w / 2;
+}
+
+# the widest border along a run of segments
+widest(a: array of ref Bd, from, step, count: int): int
+{
+	w := 0;
+	for(i := 0; i < count; i++)
+		if(a[from + i*step].w > w)
+			w = a[from + i*step].w;
+	return w;
+}
+
+# a cell's borders in the collapsing model: its share of the borders
+# on its four edges, the widest along each
+cellhalves(t: ref Tgrid, c: ref Tcell)
+{
+	tb := t.tb;
+	n := tb.ncols;
+	nr := tb.nrows;
+	k := c.box;
+	rs := c.rs;
+	if(c.r + rs > nr)
+		rs = nr - c.r;
+	cs := c.cs;
+	if(c.c + cs > n)
+		cs = n - c.c;
+	wl := widest(tb.v, c.r*(n+1) + c.c, n+1, rs);
+	wr := widest(tb.v, c.r*(n+1) + c.c + cs, n+1, rs);
+	wt := widest(tb.h, c.r*n + c.c, 1, cs);
+	wb := widest(tb.h, (c.r + rs)*n + c.c, 1, cs);
+	k.bl = wl - bhalf(wl);
+	k.br = bhalf(wr);
+	k.bt = wt - bhalf(wt);
+	k.bb = bhalf(wb);
+}
+
+# and the table's: the outer halves of the outer lines, no padding
+tablehalves(t: ref Tgrid, b: ref Box)
+{
+	tb := t.tb;
+	n := tb.ncols;
+	nr := tb.nrows;
+	b.bl = bhalf(widest(tb.v, 0, n+1, nr));
+	w := widest(tb.v, n, n+1, nr);
+	b.br = w - bhalf(w);
+	b.bt = bhalf(widest(tb.h, 0, 1, n));
+	w = widest(tb.h, nr*n, 1, n);
+	b.bb = w - bhalf(w);
+	b.pl = b.pr = b.pt = b.pb = 0;
+}
+
+# The column and column group boxes get the grid's extent of their
+# spans, cell edge to cell edge, for their backgrounds (§17.5.1).
+placecolumns(b: ref Box, colx, rowy: array of int, sx, sy: int)
+{
+	n := len colx - 1;
+	nr := len rowy - 1;
+	c := 0;
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(!iscolumn(k))
+			continue;
+		span := colspan(k);
+		if(c + span > n)
+			span = n - c;
+		colbox(k, colx, rowy, sx, sy, c, span);
+		if(k.st.display == Style->Dtablecolumngroup) {
+			cc := c;
+			for(j := 0; j < len k.kids && cc < c + span; j++) {
+				col := k.kids[j];
+				if(!iscolumn(col))
+					continue;
+				sp := colspan(col);
+				if(cc + sp > c + span)
+					sp = c + span - cc;
+				colbox(col, colx, rowy, sx, sy, cc, sp);
+				col.x -= k.x;	# in its group
+				col.y -= k.y;
+				cc += sp;
+			}
+		}
+		c += span;
+	}
+}
+
+# a column's span attribute; a group with columns in it spans theirs
+colspan(k: ref Box): int
+{
+	if(k.st.display == Style->Dtablecolumngroup) {
+		n := 0;
+		for(j := 0; j < len k.kids; j++)
+			if(iscolumn(k.kids[j]))
+				n += colspan(k.kids[j]);
+		if(n > 0)
+			return n;
+	}
+	if(k.node != 0 && curdoc != nil)
+		return spanattr(curdoc.attr(k.node, "span"), 1000);
+	return 1;
+}
+
+colbox(k: ref Box, colx, rowy: array of int, sx, sy, c, span: int)
+{
+	nr := len rowy - 1;
+	k.w = k.h = 0;
+	if(span <= 0 || nr <= 0)
+		return;
+	k.x = colx[c];
+	k.y = rowy[0];
+	k.w = colx[c + span] - sx - k.x;
+	k.h = rowy[nr] - sy - k.y;
+}
+
+# Paint a table's collapsed borders, each segment centred on its grid
+# line; the horizontal ones reach out over the corners.
+paintcollapsed(dst: ref Image, b: ref Box, r: Rect)
+{
+	tb := b.tb;
+	n := tb.ncols;
+	nr := tb.nrows;
+	for(rr := 0; rr < nr; rr++)
+		for(c := 0; c <= n; c++) {
+			e := tb.v[rr*(n+1) + c];
+			if(e.w <= 0)
+				continue;
+			x := r.min.x + tb.cols[c];
+			side(dst, Rect((x - bhalf(e.w), r.min.y + tb.rows[rr]), (x - bhalf(e.w) + e.w, r.min.y + tb.rows[rr+1])),
+				e.w, e.color, e.style, 1, c < n);
+		}
+	for(rr = 0; rr <= nr; rr++)
+		for(c = 0; c < n; c++) {
+			e := tb.h[rr*n + c];
+			if(e.w <= 0)
+				continue;
+			y := r.min.y + tb.rows[rr];
+			# out to the far edges of the vertical borders at its ends
+			lw := 0;
+			rw := 0;
+			if(rr < nr) {
+				lw = tb.v[rr*(n+1) + c].w;
+				rw = tb.v[rr*(n+1) + c + 1].w;
+			}
+			if(rr > 0) {
+				if(tb.v[(rr-1)*(n+1) + c].w > lw)
+					lw = tb.v[(rr-1)*(n+1) + c].w;
+				if(tb.v[(rr-1)*(n+1) + c + 1].w > rw)
+					rw = tb.v[(rr-1)*(n+1) + c + 1].w;
+			}
+			x0 := r.min.x + tb.cols[c] - bhalf(lw);
+			x1 := r.min.x + tb.cols[c+1] + rw - bhalf(rw);
+			side(dst, Rect((x0, y - bhalf(e.w)), (x1, y - bhalf(e.w) + e.w)), e.w, e.color, e.style, 0, rr < nr);
+		}
 }
 
 rev2(l: list of (ref Box, ref Box)): list of (ref Box, ref Box)
@@ -4802,18 +5106,26 @@ spanattr(s: string, max: int): int
 }
 
 # column (min, max) widths, and percentages (-1 if none)
-tcolumns(t: ref Tgrid, tw: int): (array of int, array of int, array of real, array of int)
+# The columns' minimum and maximum widths, percentages (-1 for none)
+# with the padding and borders of the cell that gave one (a cell's
+# percentage is of its content box; a column's is of the column), and
+# which have a specified width.
+tcolumns(t: ref Tgrid, tw: int): (array of int, array of int, array of real, array of int, array of int)
 {
 	n := t.ncols;
 	mn := array[n] of {* => 0};
 	mx := array[n] of {* => 0};
 	pct := array[n] of {* => -1.0};
+	pex := array[n] of {* => 0};
 	fixw := array[n] of {* => 0};	# has a specified width
-	for(i := 0; i < n; i++)
+	for(i := 0; i < n; i++) {
 		if(t.colw[i] > 0) {
 			mn[i] = mx[i] = t.colw[i];
 			fixw[i] = 1;
 		}
+		if(t.colpct[i] >= 0.0)
+			pct[i] = t.colpct[i];
+	}
 	# single-column cells first, then spanning ones spread their excess
 	for(pass := 1; pass <= 2; pass++)
 		for(cl := t.cells; cl != nil; cl = tl cl) {
@@ -4822,11 +5134,17 @@ tcolumns(t: ref Tgrid, tw: int): (array of int, array of int, array of real, arr
 				continue;
 			k := c.box;
 			edges(k, tw);
+			if(t.tb != nil)
+				cellhalves(t, c);
 			(cmn, cmx) := contribution(k);
 			ks := k.st;
 			if(ks.width.kind == Style->Lpx && ks.width.pct != 0.0 && ks.width.px == 0.0) {
-				if(c.cs == 1 && ks.width.pct > pct[c.c])
+				if(c.cs == 1 && ks.width.pct > pct[c.c]) {
 					pct[c.c] = ks.width.pct;
+					pex[c.c] = 0;
+					if(!ks.borderbox)
+						pex[c.c] = hextra(k);
+				}
 			} else if(ks.width.kind == Style->Lpx && ks.width.pct == 0.0) {
 				w := ir(ks.width.px);
 				if(!ks.borderbox)
@@ -4860,7 +5178,7 @@ tcolumns(t: ref Tgrid, tw: int): (array of int, array of int, array of real, arr
 	for(i = 0; i < n; i++)
 		if(mx[i] < mn[i])
 			mx[i] = mn[i];
-	return (mn, mx, pct, fixw);
+	return (mn, mx, pct, pex, fixw);
 }
 
 spread(a: array of int, c0, n, extra: int, weights: array of int)
@@ -4891,7 +5209,9 @@ tspacing(b: ref Box): (int, int)
 tableintrinsic(b: ref Box): (int, int)
 {
 	t := tgrid(curdoc, b);
-	(mn, mx, nil, nil) := tcolumns(t, 0);
+	if(t.tb != nil)
+		tablehalves(t, b);
+	(mn, mx, nil, nil, nil) := tcolumns(t, 0);
 	(sx, nil) := tspacing(b);
 	smn := sx * (t.ncols + 1);
 	smx := smn;
@@ -4926,10 +5246,12 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 	st := b.st;
 	tableabs(l, b, b);
 	t := tgrid(curdoc, b);
+	if(t.tb != nil)
+		tablehalves(t, b);
 	n := t.ncols;
 	(sx, sy) := tspacing(b);
 	cw := b.w - hextra(b);	# the width the table's grid gets
-	(mn, mx, pct, fixw) := tcolumns(t, cw);
+	(mn, mx, pct, pex, fixw) := tcolumns(t, cw);
 	summn := sx * (n + 1);
 	summx := summn;
 	for(i := 0; i < n; i++) {
@@ -4974,7 +5296,7 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 			else if(fixw[i])
 				colw[i] = mn[i];	# a cell's width in the first row (§17.5.2.1)
 			else if(pct[i] >= 0.0)
-				colw[i] = ir(pct[i] * real avail / 100.0);
+				colw[i] = ir(pct[i] * real avail / 100.0) + pex[i];
 			else
 				colw[i] = -1;
 			if(colw[i] >= 0)
@@ -4989,7 +5311,7 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		# percentages first, then between min and max
 		for(i = 0; i < n; i++)
 			if(pct[i] >= 0.0) {
-				w := ir(pct[i] * real avail / 100.0);
+				w := ir(pct[i] * real avail / 100.0) + pex[i];
 				if(w > mn[i])
 					mn[i] = mx[i] = w;
 			}
@@ -5048,8 +5370,11 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 	}
 	colx[n] = x;
 
-	# captions above (or below)
+	# captions above (or below); collapsed borders are drawn at the
+	# grid's edge, so the captions lie outside them
 	y := b.bt + b.pt;
+	if(t.tb != nil)
+		y = 0;
 	for(cl := t.captions; cl != nil; cl = tl cl) {
 		k := hd cl;
 		if(k.st.captionbottom)
@@ -5057,6 +5382,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		y = laycaption(l, k, b, cw, y);
 	}
 	gridtop := y;
+	if(t.tb != nil)
+		gridtop += b.bt + b.pt;
 	nr := len t.rows;
 	rowh := array[nr] of {* => 0};
 	rowspec := array[nr] of {* => 0};	# the row's height was specified (by it or a cell)
@@ -5074,22 +5401,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		k := c.box;
 		w := colx[c.c + c.cs - 1] + colw[c.c + c.cs - 1] - colx[c.c];
 		edges(k, cw);
-		if(st.collapse) {
-			# collapsed borders (§17.6.2), simply: a border shared with
-			# the next cell or the table's own is drawn once
-			if(c.c + c.cs < n)
-				k.br = 0;
-			else if(b.br > 0)
-				k.br = 0;
-			if(c.r + c.rs < nr)
-				k.bb = 0;
-			else if(b.bb > 0)
-				k.bb = 0;
-			if(c.c == 0 && b.bl > 0)
-				k.bl = 0;
-			if(c.r == 0 && b.bt > 0)
-				k.bt = 0;
-		}
+		if(t.tb != nil)
+			cellhalves(t, c);
 		k.w = w;
 		layblock(l, k, w, -1, nil, 0, 0);
 		if(c.rs == 1 && k.h > rowh[c.r])
@@ -5136,6 +5449,12 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		y += rowh[r] + sy;
 	}
 	rowy[nr] = y;
+	b.tb = t.tb;
+	if(b.tb == nil)
+		b.tb = ref Tb(n, nr, nil, nil, nil, nil);	# the grid lines
+	b.tb.cols = colx;
+	b.tb.rows = rowy;
+	placecolumns(b, colx, rowy, sx, sy);
 	# rows and groups as boxes, then cells within their rows
 	for(r = 0; r < nr; r++) {
 		row := t.rows[r];
@@ -5210,6 +5529,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		k.y = rowy[c.r] - ry;
 	}
 	capsh := gridtop - b.bt - b.pt;	# the captions, above and below, outside the table box
+	if(t.tb != nil)
+		y += b.bb + b.pb;	# past the bottom border half
 	gridbot := y;
 	for(cl = t.captions; cl != nil; cl = tl cl) {
 		k := hd cl;
@@ -5218,6 +5539,8 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 	}
 	capsh += y - gridbot;
 	h := y - b.bt - b.pt + vextra(b);
+	if(t.tb != nil)
+		h = y;
 	if(sh + capsh > h)
 		h = sh + capsh;
 	b.h = h;
@@ -5235,10 +5558,16 @@ rowgroupof(t: ref Tgrid, row: ref Box): ref Box
 
 laycaption(l: ref L, k, b: ref Box, cw, y: int): int
 {
+	x := b.bl + b.pl;
+	if(b.st.collapse) {
+		# outside the collapsed borders: the table's whole width
+		cw += hextra(b);
+		x = 0;
+	}
 	edges(k, cw);
 	sizew(k, cw, -1);
 	layblock(l, k, cw, -1, nil, 0, 0);
-	k.x = b.bl + b.pl + k.ml;
+	k.x = x + k.ml;
 	k.y = y + k.mt;
 	return k.y + k.h + k.mb;
 }
@@ -6466,11 +6795,10 @@ transform(s: string, t: int, first: int, lang: string): string
 		}
 		return r;
 	Style->TTfull =>
+		# spaces are mapped by text() once collapsed
 		for(i := 0; i < len s; i++)
 			if(s[i] >= '!' && s[i] <= '~')
 				s[i] += 16rFF01 - '!';
-			else if(s[i] == ' ')
-				s[i] = '　';
 	}
 	return s;
 }
@@ -6526,11 +6854,16 @@ text(f: ref Fl, b: ref Box)
 			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl))
 				i++;
 			if(!f.space) {
-				emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+				if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
+					emit(f, ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+				else
+					emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 				f.space = 1;
 			}
 			continue;
 		}
+		if(c == ' ' && st.transform == Style->TTfull)
+			c = '　';
 		if(c == ' ' || c == '\t' || c == '　') {
 			# preserved spaces: each is a break opportunity (unless nowrap)
 			w := fc.space + st.wordspacing + ls;
@@ -8374,6 +8707,8 @@ paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 		paintbackground(dst, b, r);
 	else
 		paintshadows(dst, b, r);	# the background went to the canvas; the shadow is still its own
+	if(b.tb != nil || b.st.collapse && (b.kind == Kcell || b.kind == Krow || isrowgroup(b) || iscolumn(b)))
+		return;	# collapsed borders: the table paints them over its content
 	paintborders(dst, b, r);
 }
 
@@ -8419,6 +8754,8 @@ flowbgs(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	if(b.lines != nil)
 		return;
+	if(b.tb != nil)
+		paintcolumns(dst, b, o);
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(!inflowblock(k))
@@ -8435,6 +8772,26 @@ flowbgs(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			oc := withclip(dst, inner);
 			flowbgs(dst, k, r.min, inner, canvasbg);
 			dst.clipr = oc;
+		}
+	}
+	if(b.tb != nil && b.tb.v != nil && b.st.visibility == Style->Vvisible)
+		paintcollapsed(dst, b, Rect(o, (o.x + b.w, o.y + b.h)));	# over the cells' backgrounds, under their content
+}
+
+# A table's columns' and column groups' backgrounds, over its own and
+# under the rows' (CSS 2.2 §17.5.1), each on the box placecolumns gave it.
+paintcolumns(dst: ref Image, b: ref Box, o: Point)
+{
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(!iscolumn(k))
+			continue;
+		if(k.st.visibility == Style->Vvisible && k.w > 0)
+			paintbackground(dst, k, kidrect(k, o));
+		for(j := 0; j < len k.kids; j++) {
+			col := k.kids[j];
+			if(iscolumn(col) && col.st.visibility == Style->Vvisible && col.w > 0)
+				paintbackground(dst, col, kidrect(col, o));
 		}
 	}
 }

@@ -18,7 +18,7 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,642 judged) | **49.7%** (6,285 passing), from 46.8% at this session's start and 37.8% at the first run ever |
+| WPT CSS reftests (18 directories, 12,642 judged) | **50.0%** (6,325 passing), from 46.8% at this session's start and 37.8% at the first run ever |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
 | Unit tests | web_html 5, web_css 6, web_style 15, web_browser 9, web_fonts 9, bidi 3, brotli 3: all pass |
@@ -291,6 +291,11 @@ In rough order of payoff.
 | `appl/lib/readpng.b`, `imageremap.b`, `readsvg.b` | tRNS (indexed and RGB), transparent full-colour SVG |
 | `appl/lib/webclient.b`, `appl/cmd/webfs.b` | `Content-Encoding: br` |
 | `tools/ref/` | wptrun, wptcmp, wptdiff, wptserve, boxdiff/boxes.js, compare, acid2, mirror, shot.js, fonts.conf, baseline/ |
+| `appl/lib/bidi.b`, `lib/bidi/` | UAX #9 (`levels`, `reorder`, `mirror`) and Joining_Type (`joining`); tables from `tools/bidi/gen.py DerivedBidiClass.txt BidiMirroring.txt BidiBrackets.txt ArabicShaping.txt` (the UCD files are not kept in the tree; fetch them from unicode.org/Public/UNIDATA) |
+| `appl/lib/outlinefont.b` (GSUB) | `parsegsub`, `Face.ligatures`, `Face.subst`, `Face.hasfeature` |
+| `appl/lib/web/fonts.b` (shaping) | `shape` → `Slot`s, `joinforms`, `Typeface.draw` from the right for rtl |
+| `appl/lib/web/layout.b` (this session) | `contribution` vs `intrinsic`, `floatwidth`, `joinruns`, `reorderline` with `Vis` controls and `leftedge`/`rightedge`, `contentheightof`/`asauto`, `oncanvas`, `intransform`, `Abs.frag` |
+| `tests/web/fonts/liga.ttf` | a fontTools-made font with f+i and f+f+i ligatures, for `web_fonts_test` |
 | `tests/` | `web_fonts_test`, `brotli_test`, `charonshot -b/-d`, `charonbatch`, fonts and Brotli vectors under `tests/web/`, fixture `charon/wpt/control-chars.html` |
 
 ## Things that bit, so they need not again

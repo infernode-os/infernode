@@ -806,7 +806,17 @@ Abs: adt {
 	sparent:	ref Box;
 	sx, sy:	int;
 	frag:	ref Frag;	# an inline-level box's place on its line, once the line is aligned (else nil)
+	rightedge:	int;	# sx is the hypothetical box's right edge: its static parent is right-to-left (§10.3.7)
 };
+
+# the static position's x: the content box's start edge, which is the
+# right one in a right-to-left block
+staticx(b: ref Box): int
+{
+	if(b.st.dirrtl)
+		return b.w - b.br - b.pr;
+	return b.bl + b.pl;
+}
 
 # Floats placed in a block formatting context, as margin-box rectangles
 # in the coordinates of the context's root border box.
@@ -1216,19 +1226,22 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
 			if(isabs(k)) {
-				sx := b.bl + b.pl;
+				sx := staticx(b);
 				if(k.st.wasinline && fc != nil) {
 					# an inline-level box's static position: on a line
 					# of its own here, aligned as text would be (Position 3 §3.1)
 					sy := cy + cury + msum(pending);
 					(lx, rx) := band(fc, sy, sy + 1, cx, cx + cw);
-					sx += lx - cx;
-					case b.st.align {
+					sx = b.bl + b.pl + lx - cx;
+					al := b.st.align;
+					if(b.st.dirrtl && al == Style->Astart || !b.st.dirrtl && al == Style->Aend)
+						al = Style->Aright;
+					case al {
 					Style->Acenter =>	sx += (rx - lx)/2;
-					Style->Aright or Style->Aend =>	sx += rx - lx;
+					Style->Aright =>	sx += rx - lx;
 					}
 				}
-				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil) :: l.pending;
+				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil, b.st.dirrtl) :: l.pending;
 				continue;
 			}
 			if(isfloat(k)) {
@@ -1422,7 +1435,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, staticx(b), b.bt + b.pt, nil, b.st.dirrtl) :: l.pending;
 			continue;
 		}
 		items = ref Fi(k, 0.0, 0.0, 0.0, 0.0, -1.0, 0, 0, 0, 0) :: items;
@@ -2224,7 +2237,7 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, staticx(b), b.bt + b.pt, nil, b.st.dirrtl) :: l.pending;
 			continue;
 		}
 		ks := k.st;
@@ -3539,8 +3552,8 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		x = pr.max.x - right - k.mr - k.w;
 	else {
 		x = sx + k.ml;
-		if(a.sparent != nil && a.sparent.st.dirrtl && (a.frag != nil || st.wasinline))
-			x = sx - k.w - k.mr;	# an inline static position in rtl is of the right edge
+		if(a.rightedge)
+			x = sx - k.w - k.mr;
 	}
 	layblock(l, k, cbw, cbh, nil, 0, 0);
 	h := k.h;
@@ -4443,6 +4456,7 @@ Ln: adt {
 	left:	int;			# left edge (past left floats)
 	content:	int;		# something has been placed
 	open:	list of (ref Box, real, int, int);	# inline boxes open on this line: (box, start x, first?, the level of its bidi control)
+	indent:	real;		# text-indent (the first line only): content starts this far past the left edge
 	floats:	list of ref Box;	# floats met mid-line, placed when the line ends
 };
 
@@ -4466,8 +4480,8 @@ edgesat(f: ref Ifc, ln: ref Ln)
 	(lx, rx) := band(f.fc, ly, ly + nz1(f.strut), cx, cx + f.cw);
 	ln.left = lx - cx;
 	ln.avail = rx - cx;
-	if(ln.x < real ln.left)
-		ln.x = real ln.left;
+	if(ln.x < real ln.left + ln.indent)
+		ln.x = real ln.left + ln.indent;
 }
 
 # Nothing fits beside the floats here: move the (empty) line down past one.
@@ -4501,10 +4515,8 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	para := 0;
 	joinruns(items);
 	(items, para) = bidiitems(b, items);
-	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, nil);
+	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil);
 	edgesat(f, ln);
-	indent := res(st.indent, cw);
-	ln.x += real indent;
 	first := 1;
 	opened: list of ref Box;	# inline boxes open, outermost last
 	for(il := items; il != nil; il = tl il) {
@@ -4616,9 +4628,9 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# marks the place through alignment and reordering
 				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level);
 				ln.frags = mark :: ln.frags;
-				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark) :: l.pending;
+				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl) :: l.pending;
 			} else	# a block-level one's is the start of the line
-				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0, f.y, nil) :: l.pending;
+				l.pending = ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl) :: l.pending;
 		Ibreak =>
 			ln.content = 1;
 			lines = endline(f, ln, x0, first, 1) :: lines;
@@ -4685,7 +4697,7 @@ removebox(l: list of ref Box, b: ref Box): list of ref Box
 
 newline(f: ref Ifc, old: ref Ln, opened: list of ref Box): ref Ln
 {
-	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, nil);
+	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil);
 	edgesat(f, ln);
 	# inline boxes still open continue on the new line
 	r: list of ref Box;

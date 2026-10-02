@@ -21,6 +21,7 @@ mfrom, mto: array of int;
 bopen, bclose: array of int;	# by opening
 jlo, jhi, jty: array of int;	# joining types, by range
 plo, phi, pone: array of int;	# punctuation, by range
+lblo, lbhi, lbcl: array of int;	# line break classes, by range
 bcopen, bcclose: array of int;	# by closing
 
 classnames := array[] of {
@@ -64,6 +65,12 @@ init(): string
 	plo = a[0];
 	phi = a[1];
 	pone = array[len plo] of {* => 1};
+	(a, err) = table(DIR + "/linebreak", 3);
+	if(err != nil)
+		return err;
+	lblo = a[0];
+	lbhi = a[1];
+	lbcl = a[2];
 	# the same pairs ordered by the closing bracket
 	n := len bopen;
 	bcopen = array[n] of int;
@@ -159,6 +166,11 @@ joining(c: int): int
 punct(c: int): int
 {
 	return ranged(plo, phi, pone, c, 0);
+}
+
+lbclass(c: int): int
+{
+	return ranged(lblo, lbhi, lbcl, c, LBAL);
 }
 
 # the value of the range holding c, or dflt

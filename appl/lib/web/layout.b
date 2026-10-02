@@ -6109,6 +6109,52 @@ noshy(s: string): string
 	return r;
 }
 
+# Whether a line may break between a and b with no space between them
+# (UAX #14, the part that matters inside a run of letters): on either
+# side of an ideograph or a Hangul syllable, except before closing
+# punctuation, non-starters, marks and the like (LB13, LB21, LB22,
+# LB24), after opening punctuation (LB14), around quotation marks
+# (LB19), across glue and joiners (LB11, LB12) and inside a Hangul
+# syllable's jamo (LB26).  Letters without spaces do not break.
+lbbreak(a, b: int): int
+{
+	if(bidi == nil)
+		return isideo(a) || isideo(b);
+	ca := bidi->lbclass(a);
+	cb := bidi->lbclass(b);
+	case cb {
+	Bidi->LBCL or Bidi->LBCP or Bidi->LBEX or Bidi->LBIS or Bidi->LBSY or Bidi->LBNS or Bidi->LBBA or
+	Bidi->LBHY or Bidi->LBCM or Bidi->LBZWJ or Bidi->LBIN or Bidi->LBPO or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU =>
+		return 0;
+	}
+	case ca {
+	Bidi->LBOP or Bidi->LBBB or Bidi->LBZWJ or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU or Bidi->LBCM or Bidi->LBPR =>
+		return 0;
+	Bidi->LBJL =>
+		if(cb == Bidi->LBJL || cb == Bidi->LBJV || cb == Bidi->LBH2 || cb == Bidi->LBH3)
+			return 0;
+	Bidi->LBJV or Bidi->LBH2 =>
+		if(cb == Bidi->LBJV || cb == Bidi->LBJT)
+			return 0;
+	Bidi->LBJT or Bidi->LBH3 =>
+		if(cb == Bidi->LBJT)
+			return 0;
+	}
+	return lbideo(ca) || lbideo(cb);
+}
+
+# the classes a line breaks beside: ideographs, emoji, Hangul (CJ as
+# in line-break: normal)
+lbideo(cl: int): int
+{
+	case cl {
+	Bidi->LBID or Bidi->LBCJ or Bidi->LBEB or Bidi->LBEM or Bidi->LBH2 or Bidi->LBH3 or
+	Bidi->LBJL or Bidi->LBJV or Bidi->LBJT =>
+		return 1;
+	}
+	return 0;
+}
+
 isideo(c: int): int
 {
 	return (c >= 16r2E80 && c <= 16r9FFF) || (c >= 16rAC00 && c <= 16rD7AF) ||
@@ -6207,12 +6253,12 @@ text(f: ref Fl, b: ref Box)
 		}
 		# a word: up to the next space or break opportunity
 		st0 := i;
-		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && !(isideo(s[i]) && i > st0)) {
+		while(i < len s && !isspace(s[i]) && s[i] != 16r200B) {
+			if(i > st0 && lbbreak(s[i-1], s[i]))
+				break;
 			i++;
 			if(s[i-1] == '-' && i < len s && !isspace(s[i]) && i - st0 > 2)
 				break;	# break after a hyphen inside a word
-			if(isideo(s[i-1]))
-				break;
 		}
 		if(i == st0) {
 			i++;	# a control character no case above takes (form feed): dropped

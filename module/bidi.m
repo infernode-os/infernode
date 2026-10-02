@@ -35,6 +35,12 @@ Bidi: module
 	# punctuation (General_Category P*), which ::first-letter takes along
 	punct:	fn(c: int): int;
 
+	# Line_Break class (UAX #14, LineBreak.txt), AL for the unlisted
+	LBAL, LBID, LBOP, LBCL, LBCP, LBQU, LBGL, LBNS, LBEX, LBIS, LBBA, LBBB, LBHY,
+	LBZW, LBWJ, LBCM, LBZWJ, LBH2, LBH3, LBJL, LBJV, LBJT, LBEB, LBEM, LBPO, LBPR,
+	LBSY, LBIN, LBNU, LBCJ, LBSP, LBBK, LBCR, LBLF, LBNL: con iota;
+	lbclass:	fn(c: int): int;
+
 	# the paragraph's base direction from its first strong character
 	# (P2, P3): 0 left to right, 1 right to left, -1 none found
 	basedir:	fn(s: array of int): int;

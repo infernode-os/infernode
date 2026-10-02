@@ -5865,6 +5865,10 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		clip = viewport;
 	}
 	if(st.translated) {	# moved as drawn: its place in the flow is unchanged
+		if(st.tfs != nil && b != warped) {
+			warp(dst, b, o, clip, canvasbg);
+			return;
+		}
 		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
 		intransform++;
 	}
@@ -5896,6 +5900,122 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 }
 
 intransform := 0;	# painting inside a transformed box: fixed backgrounds attach to it, not the viewport
+warped: ref Box;	# the box being painted for its transform (into its own image)
+
+# A box with a transform beyond translation (CSS Transforms 1): painted
+# untransformed into an image of its own, which is then mapped onto dst
+# through the transform's matrix about the transform-origin, one
+# destination pixel at a time from the nearest source pixel.
+warp(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
+{
+	st := b.st;
+	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+	# the matrix, about the origin: M = T(c) · F1 · F2 … · T(-c)
+	cx := real r.min.x + st.tox.resolve(real b.w);
+	cy := real r.min.y + st.toy.resolve(real b.h);
+	m := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};	# a b c d e f: x' = a x + c y + e, y' = b x + d y + f
+	for(i := 0; i < len st.tfs; i++) {
+		t := st.tfs[i];
+		f: array of real;
+		case t.kind {
+		Style->TFtranslate =>
+			f = array[] of {1.0, 0.0, 0.0, 1.0, t.x.resolve(real b.w), t.y.resolve(real b.h)};
+		Style->TFrotate =>
+			(sn, cs) := (math->sin(t.v[0]), math->cos(t.v[0]));
+			f = array[] of {cs, sn, -sn, cs, 0.0, 0.0};
+		Style->TFscale =>
+			f = array[] of {t.v[0], 0.0, 0.0, t.v[1], 0.0, 0.0};
+		Style->TFskew =>
+			f = array[] of {1.0, math->tan(t.v[1]), math->tan(t.v[0]), 1.0, 0.0, 0.0};
+		Style->TFmatrix =>
+			f = t.v;
+		* =>
+			continue;
+		}
+		m = mmul(m, f);
+	}
+	m = mmul(array[] of {1.0, 0.0, 0.0, 1.0, cx, cy}, mmul(m, array[] of {1.0, 0.0, 0.0, 1.0, -cx, -cy}));
+	det := m[0]*m[3] - m[1]*m[2];
+	if(math->fabs(det) < 1e-9)
+		return;	# flattened to nothing
+	# the box's picture, untransformed
+	src := inkbounds(b, r);
+	img := display.newimage(src, Draw->RGBA32, 0, Draw->Transparent);
+	if(img == nil)
+		return;
+	outer := warped;
+	warped = b;
+	intransform++;
+	paintctx(img, b, o, src, canvasbg);
+	intransform--;
+	warped = outer;
+	# where it lands: the bounds of the mapped corners
+	lo := Point(1 << 29, 1 << 29);
+	hi := Point(-(1 << 29), -(1 << 29));
+	for(k := 0; k < 4; k++) {
+		px := real src.min.x;
+		py := real src.min.y;
+		if(k & 1)
+			px = real src.max.x;
+		if(k & 2)
+			py = real src.max.y;
+		qx := m[0]*px + m[2]*py + m[4];
+		qy := m[1]*px + m[3]*py + m[5];
+		lo = Point(min(lo.x, int math->floor(qx)), min(lo.y, int math->floor(qy)));
+		hi = Point(max(hi.x, int math->ceil(qx)), max(hi.y, int math->ceil(qy)));
+	}
+	(dr, ok) := Rect(lo, hi).clip(clip);
+	if(!ok || !rectok(dr))
+		return;
+	sw := src.dx();
+	sh := src.dy();
+	sp := array[sw*sh*4] of byte;
+	img.readpixels(src, sp);
+	dw := dr.dx();
+	dh := dr.dy();
+	dp := array[dw*dh*4] of { * => byte 0 };
+	# the inverse, for each destination pixel's source
+	ia := m[3]/det;
+	ib := -m[1]/det;
+	ic := -m[2]/det;
+	id := m[0]/det;
+	ie := -(ia*m[4] + ic*m[5]);
+	iff := -(ib*m[4] + id*m[5]);
+	for(y := 0; y < dh; y++) {
+		dy := real (dr.min.y + y) + 0.5;
+		for(x := 0; x < dw; x++) {
+			dx := real (dr.min.x + x) + 0.5;
+			sx := int math->floor(ia*dx + ic*dy + ie) - src.min.x;
+			sy := int math->floor(ib*dx + id*dy + iff) - src.min.y;
+			if(sx < 0 || sy < 0 || sx >= sw || sy >= sh)
+				continue;
+			si := (sy*sw + sx)*4;
+			di := (y*dw + x)*4;
+			dp[di:] = sp[si:si+4];
+		}
+	}
+	out := display.newimage(dr, Draw->RGBA32, 0, Draw->Transparent);
+	if(out == nil)
+		return;
+	out.writepixels(dr, dp);
+	dst.draw(dr, out, nil, dr.min);
+}
+
+mmul(p, q: array of real): array of real
+{
+	return array[] of {
+		p[0]*q[0] + p[2]*q[1], p[1]*q[0] + p[3]*q[1],
+		p[0]*q[2] + p[2]*q[3], p[1]*q[2] + p[3]*q[3],
+		p[0]*q[4] + p[2]*q[5] + p[4], p[1]*q[4] + p[3]*q[5] + p[5],
+	};
+}
+
+max(a, b: int): int
+{
+	if(a > b)
+		return a;
+	return b;
+}
 
 # a layer's clip: the context's, and that of any overflow-clipping box
 # between (a positioned box that is not a stacking context clips its

@@ -1726,7 +1726,7 @@ St.new(): ref St
 		0, a, 3, Bnone, Ccurrent,
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
-		0, z, z, 0);
+		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0);
 }
 
 nextsid := 1;
@@ -2659,6 +2659,26 @@ isnum(e: ref Expr): int
 }
 
 # a bare number, possibly computed with calc()
+# an angle, in radians
+angle(v: array of ref Tok, nil: ref Ctx): (int, real)
+{
+	v = trim(v);
+	if(len v != 1)
+		return (0, 0.0);
+	t := v[0];
+	if(t.kind == Knumber && t.n == 0.0)
+		return (1, 0.0);
+	if(t.kind != Kdimension)
+		return (0, 0.0);
+	case t.s {
+	"deg" =>	return (1, t.n * Math->Pi / 180.0);
+	"grad" =>	return (1, t.n * Math->Pi / 200.0);
+	"rad" =>	return (1, t.n);
+	"turn" =>	return (1, t.n * 2.0 * Math->Pi);
+	}
+	return (0, 0.0);
+}
+
 number(v: array of ref Tok, ctx: ref Ctx): (int, real)
 {
 	v = trim(v);
@@ -3432,7 +3452,7 @@ allprops := array[] of {
 	"border-left-width", "border-top-style", "border-right-style", "border-bottom-style",
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
-	"overflow-y", "visibility", "opacity", "transform", "color", "background-color", "background-image",
+	"overflow-y", "visibility", "opacity", "transform", "transform-origin", "color", "background-color", "background-image",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
@@ -4011,17 +4031,20 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		if(o > 1.0) o = 1.0;
 		st.opacity = o;
 	"transform" =>
-		# a list of transform functions; translations are composed, the
-		# rest (rotations, scales, skews) make the box a stacking
-		# context and are otherwise not drawn
+		# a list of transform functions (the 2D ones; 3D ones are
+		# taken for their 2D part or ignored).  Translations alone
+		# are kept as one offset, the general case as the list.
 		if(id == "none") {
 			st.translated = 0;
 			st.tx = st.ty = px(0.0);
+			st.tfs = nil;
 			return 1;
 		}
 		x := nows(v);
 		if(len x == 0)
 			return 0;
+		tfl: list of ref Tf;
+		pure := 1;
 		tx := 0.0;
 		ty := 0.0;
 		ptx := 0.0;
@@ -4031,29 +4054,94 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			if(t.kind != Kfunction)
 				return 0;
 			args := commas(t.kids);
-			case t.s {
-			"translate" or "translatex" or "translatey" or "translate3d" =>	# function names come lowercased
-				n := len args;
+			n := len args;
+			case t.s {	# function names come lowercased
+			"translate" or "translatex" or "translatey" or "translate3d" =>
 				if(n < 1 || t.s == "translatey" && n > 1 || t.s == "translatex" && n > 1 || t.s == "translate" && n > 2 || t.s == "translate3d" && n != 3)
 					return 0;
+				lx := px(0.0);
+				ly := px(0.0);
 				for(k := 0; k < n && k < 2; k++) {
 					(ok, l) := length(hd args, ctx);
 					args = tl args;
 					if(!ok || l.kind != Lpx)
 						return 0;
-					# a percentage is of the box's own size; kept as such
-					if(t.s == "translatey" || k == 1) {
-						ty += l.px;
-						pty += l.pct;
-					} else {
-						tx += l.px;
-						ptx += l.pct;
-					}
+					if(t.s == "translatey" || k == 1)
+						ly = l;
+					else
+						lx = l;
 				}
-			"rotate" or "rotatex" or "rotatey" or "rotatez" or "rotate3d" or "scale" or "scalex" or
-			"scaley" or "scalez" or "scale3d" or "skew" or "skewx" or "skewy" or "matrix" or
-			"matrix3d" or "perspective" =>
-				;
+				tx += lx.px;
+				ptx += lx.pct;
+				ty += ly.px;
+				pty += ly.pct;
+				tfl = ref Tf(TFtranslate, nil, lx, ly) :: tfl;
+			"rotate" or "rotatez" =>
+				if(n != 1)
+					return 0;
+				(ok, a) := angle(hd args, ctx);
+				if(!ok)
+					return 0;
+				tfl = ref Tf(TFrotate, array[] of {a}, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"scale" or "scalex" or "scaley" or "scale3d" =>
+				if(n < 1 || n > 3)
+					return 0;
+				sx := 1.0;
+				sy := 1.0;
+				(ok, f) := number(hd args, ctx);
+				if(!ok)
+					return 0;
+				if(t.s == "scaley")
+					sy = f;
+				else {
+					sx = f;
+					if(t.s == "scale")
+						sy = f;
+				}
+				if(n > 1 && t.s != "scalex" && t.s != "scaley") {
+					(ok, f) = number(hd tl args, ctx);
+					if(!ok)
+						return 0;
+					sy = f;
+				}
+				tfl = ref Tf(TFscale, array[] of {sx, sy}, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"skew" or "skewx" or "skewy" =>
+				if(n < 1 || n > 2)
+					return 0;
+				ax := 0.0;
+				ay := 0.0;
+				(ok, a) := angle(hd args, ctx);
+				if(!ok)
+					return 0;
+				if(t.s == "skewy")
+					ay = a;
+				else
+					ax = a;
+				if(n > 1 && t.s == "skew") {
+					(ok, a) = angle(hd tl args, ctx);
+					if(!ok)
+						return 0;
+					ay = a;
+				}
+				tfl = ref Tf(TFskew, array[] of {ax, ay}, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"matrix" =>
+				if(n != 6)
+					return 0;
+				m := array[6] of real;
+				for(k := 0; k < 6; k++) {
+					(ok, f) := number(hd args, ctx);
+					args = tl args;
+					if(!ok)
+						return 0;
+					m[k] = f;
+				}
+				tfl = ref Tf(TFmatrix, m, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"rotatex" or "rotatey" or "rotate3d" or "scalez" or "matrix3d" or "perspective" =>
+				;	# no depth here
 			* =>
 				return 0;
 			}
@@ -4061,6 +4149,21 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		st.translated = 1;
 		st.tx = Len(Lpx, tx, ptx, nil);
 		st.ty = Len(Lpx, ty, pty, nil);
+		st.tfs = nil;
+		if(!pure) {
+			st.tfs = array[len tfl] of ref Tf;
+			for(k := len tfl - 1; tfl != nil; tfl = tl tfl)
+				st.tfs[k--] = hd tfl;
+		}
+	"transform-origin" =>
+		x := nows(v);
+		if(len x == 3)
+			x = x[0:2];	# a z offset: ignored
+		(ok, ox, oy) := position(x, ctx);
+		if(!ok)
+			return 0;
+		st.tox = ox;
+		st.toy = oy;
 	"color" =>
 		(ok, c) := color(v);
 		if(!ok)
@@ -5054,6 +5157,10 @@ copyprop(d, s: ref St, nm: string)
 		d.translated = s.translated;
 		d.tx = s.tx;
 		d.ty = s.ty;
+		d.tfs = s.tfs;
+	"transform-origin" =>
+		d.tox = s.tox;
+		d.toy = s.toy;
 	"color" => d.color = s.color;
 	"background-color" => d.bgcolor = s.bgcolor;
 	"background-image" or "background-repeat" or "background-position" or "background-size" or

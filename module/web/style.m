@@ -90,6 +90,15 @@ Style: module
 		inset:	int;
 	};
 
+	# one transform function (CSS Transforms 1 §7); for translate the
+	# lengths x and y, for the rest the numbers v (angles in radians)
+	TFtranslate, TFrotate, TFscale, TFskew, TFmatrix: con iota;
+	Tf: adt {
+		kind:	int;
+		v:	array of real;
+		x, y:	Len;
+	};
+
 	# one background layer
 	Bg: adt {
 		img:	ref Css->Tok;	# url(...) or a gradient function; nil for none
@@ -214,8 +223,10 @@ Style: module
 		nokern:	int;		# font-kerning: none (or "kern" off)
 		unicodebidi:	int;	# UBnormal ...
 		safe:	int;		# "safe" alignment: bit 1 align-content, 2 justify-content, 4 align-items/self
-		translated:	int;	# a transform applies (a stacking context); only its translation is drawn
-		tx, ty:	Len;		# that translation (percentages of the box's own size)
+		translated:	int;	# a transform applies (a stacking context)
+		tx, ty:	Len;		# when it is a translation only: by how much (percentages of the box's own size)
+		tfs:	array of ref Tf;	# otherwise the functions, in order (nil when a translation only)
+		tox, toy:	Len;		# transform-origin
 		wasinline:	int;	# blockified from an inline-level display: the static position of an absolute is an inline one
 
 		new:	fn(): ref St;		# initial values

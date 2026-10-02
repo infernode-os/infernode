@@ -2012,7 +2012,8 @@ sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 			case (hd l).t0 {
 			"style" or "width" or "height" or "bgcolor" or "align" or "valign" or "border" or
 			"color" or "face" or "size" or "type" or "background" or "text" or "cellspacing" or
-			"cellpadding" or "hspace" or "vspace" or "nowrap" or "noshade" or "cols" or "rows" or "rules" =>
+			"cellpadding" or "hspace" or "vspace" or "nowrap" or "noshade" or "cols" or "rows" or "rules" or
+			"start" or "reversed" =>
 				k += "|" + (hd l).t0 + "=" + (hd l).t1;
 			}
 	}
@@ -5540,6 +5541,18 @@ hints(d: ref Doc, n: int): list of ref Decl
 			"I" => s += "list-style-type:upper-roman;";
 			* => s += "list-style-type:" + lower(t) + ";";
 			}
+		if(nd.tag == Dom->Tol) {
+			# start= and reversed (HTML §15.3.8): the list-item counter
+			# counts from start, or down (to 1, or from start)
+			st := d.attr(n, "start");
+			if(d.hasattr(n, "reversed")) {
+				s += "counter-reset:reversed(list-item)";
+				if(st != nil)
+					s += " " + string (int st + 1);	# (int, not atoi: start may be negative)
+				s += ";";
+			} else if(st != nil)
+				s += sys->sprint("counter-reset:list-item %d;", int st - 1);
+		}
 	Dom->Ttextarea =>
 		if((c := d.attr(n, "cols")) != nil)
 			s += sys->sprint("width:%dch;", atoi(c));

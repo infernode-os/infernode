@@ -86,6 +86,9 @@ B: adt {
 Ctr: adt {
 	name:	string;
 	val:	int;
+	rev:	int;	# reversed: a list item counts down
+	origin:	int;	# the node that instantiated it
+	nested:	int;	# inside an ancestor's of the same name: for the subtree only
 };
 
 newbox(kind, inl, node: int, st: ref St): ref Box
@@ -104,9 +107,9 @@ build(d: ref Doc, c: ref Computed): ref Box
 	b := ref B(d, c, nil);
 	l := element(b, root);
 	if(l == nil) {
-		# display: none on the root: nothing but its background, which
-		# the canvas still takes (CSS 2.2 §14.2)
-		r := newbox(Kblock, 0, root, c.st[root]);
+		# display: none on the root: nothing, not even its background
+		# (Backgrounds 3 §2.11.2; CSS 2.2's root-box-003 wanted otherwise)
+		r := newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
 		r.doc = d;
 		return r;
 	}
@@ -193,12 +196,7 @@ element(b: ref B, n: int): list of ref Box
 	if(nd.tag == Dom->Tbr && nd.ns == Dom->HTML)
 		return newbox(Kbr, 1, n, st) :: nil;
 	box := newbox(kind, inl, n, st);
-	if(nd.ns == Dom->HTML && (nd.tag == Dom->Tol || nd.tag == Dom->Tul || nd.tag == Dom->Tmenu)) {
-		start := 1;
-		if(nd.tag == Dom->Tol && (s := b.d.attr(n, "start")) != nil)
-			start = int s;
-		b.counters = ref Ctr("list-item", start - 1) :: b.counters;
-	}
+	# (ol, ul and menu reset list-item by the UA sheet; start= and reversed are hints)
 	ctrprops(b, n, st, st.display == Style->Dlistitem);
 	own := b.counters;
 	kids: list of ref Box;
@@ -210,7 +208,7 @@ element(b: ref B, n: int): list of ref Box
 		kids = hd l :: kids;
 	if((as := b.c.after[n]) != nil)
 		kids = generated(b, n, as) :: kids;
-	b.counters = own;
+	b.counters = ctrleave(own, n);
 	kids = rev(kids);
 	if(kind == Kinline) {
 		# cells in it go in an anonymous inline table first (§17.2.1);
@@ -605,8 +603,12 @@ generated(b: ref B, n: int, st: ref St): ref Box
 	}
 	g := newbox(kind, inl, n, st);
 	t := newbox(Ktext, 1, n, st);
+	# its own counters are not inherited by the element's children (the
+	# values it gives existing ones are): counters-scope-001 and -004
+	saved := b.counters;
 	ctrprops(b, n, st, 0);
 	t.text = content(b, n, st);
+	b.counters = saved;
 	g.kids = array[] of {t};
 	return g;
 }
@@ -624,27 +626,50 @@ ctrprops(b: ref B, n: int, st: ref St, li: int)
 			x := 0;
 			if(i+1 < len v && v[i+1].kind == Css->Knumber)
 				x = int v[i+1].n;
-			b.counters = ref Ctr(v[i].s, x) :: b.counters;
+			instantiate(b, n, v[i].s, x, 0);
+		} else if(v[i].kind == Css->Kfunction && v[i].s == "reversed" && len v[i].kids > 0 && v[i].kids[0].kind == Css->Kident) {
+			# reversed(name [value]) (Lists 3 §4.2): counting down; with no
+			# value, from what its scope's increments add up to
+			nm := v[i].kids[0].s;
+			x := 0;
+			given := 0;
+			for(k := 1; k < len v[i].kids; k++)
+				if(v[i].kids[k].kind == Css->Knumber) {
+					x = int v[i].kids[k].n;
+					given = 1;
+				}
+			if(!given && i+1 < len v && v[i+1].kind == Css->Knumber) {
+				x = int v[i+1].n;
+				given = 1;
+			}
+			if(!given)
+				x = reversedinit(b, n, nm);
+			instantiate(b, n, nm, x, 1);
 		}
 	v = st.counterincrement;
-	if(li && !ctrnamed(v, "list-item"))
-		ctrincr(b, "list-item", 1);
+	if(li && !ctrnamed(v, "list-item")) {
+		c := ctrfind(b, n, "list-item");
+		if(c.rev)
+			c.val--;
+		else
+			c.val++;
+	}
 	for(i = 0; i < len v; i++)
 		if(v[i].kind == Css->Kident) {
 			x := 1;
 			if(i+1 < len v && v[i+1].kind == Css->Knumber)
 				x = int v[i+1].n;
-			ctrincr(b, v[i].s, x);
+			ctrincr(b, n, v[i].s, x);
 		}
 	if(li && (s := b.d.attr(n, "value")) != nil)
-		ctrset(b, "list-item", int s);
+		ctrset(b, n, "list-item", int s);
 	v = st.counterset;
 	for(i = 0; i < len v; i++)
 		if(v[i].kind == Css->Kident) {
 			x := 0;
 			if(i+1 < len v && v[i+1].kind == Css->Knumber)
 				x = int v[i+1].n;
-			ctrset(b, v[i].s, x);
+			ctrset(b, n, v[i].s, x);
 		}
 }
 
@@ -656,25 +681,160 @@ ctrnamed(v: array of ref Tok, nm: string): int
 	return 0;
 }
 
-ctrfind(b: ref B, nm: string): ref Ctr
+ctrfind(b: ref B, n: int, nm: string): ref Ctr
 {
 	for(l := b.counters; l != nil; l = tl l)
 		if((hd l).name == nm)
 			return hd l;
-	c := ref Ctr(nm, 0);
+	c := ref Ctr(nm, 0, 0, n, 0);
 	b.counters = c :: b.counters;
 	return c;
 }
 
-ctrincr(b: ref B, nm: string, d: int)
+# A new counter replaces one of its name that the element itself or a
+# previous sibling instantiated, and nests inside one an ancestor did
+# (Lists 3 §4.4.2).
+instantiate(b: ref B, n: int, nm: string, x, rev: int)
 {
-	c := ctrfind(b, nm);
+	nested := 0;
+	for(l := b.counters; l != nil; l = tl l)
+		if((hd l).name == nm) {
+			o := (hd l).origin;
+			if(o == n || o != 0 && b.d.nodes[o].parent == b.d.nodes[n].parent)
+				b.counters = ctrremove(b.counters, hd l);
+			else
+				nested = 1;	# an ancestor's: this one is for the subtree (counters-001)
+			break;
+		}
+	b.counters = ref Ctr(nm, x, rev, n, nested) :: b.counters;
+}
+
+# what an element leaves its following siblings: its own list without
+# the counters it nested inside an ancestor's
+ctrleave(l: list of ref Ctr, n: int): list of ref Ctr
+{
+	for(x := l; x != nil; x = tl x)
+		if((hd x).origin == n && (hd x).nested)
+			l = ctrremove(l, hd x);
+	return l;
+}
+
+ctrremove(l: list of ref Ctr, c: ref Ctr): list of ref Ctr
+{
+	r, o: list of ref Ctr;
+	for(; l != nil; l = tl l)
+		if(hd l != c)
+			r = hd l :: r;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+# A reversed counter's initial value when none is given: the magnitudes
+# of the increments in its scope (the element's subtree, then its
+# following siblings' subtrees, up to and including the first element
+# that sets it) plus what it is set to there, or else plus the last
+# increment, so that it counts down to that.  An inner reset of the
+# same name starts another counter: its subtree is skipped.
+Rv: adt {
+	sum:	int;	# the increments negated, and the first set value
+	last:	int;	# the last increment negated that was not 0
+	found:	int;	# a set ended the scan
+};
+
+reversedinit(b: ref B, n: int, nm: string): int
+{
+	rv := ref Rv(0, 0, 0);
+	for(k := b.d.nodes[n].first; k != 0 && !rv.found; k = b.d.nodes[k].next)
+		revscan(b, k, nm, rv);
+	# the following siblings, until one instantiates the counter afresh
+	for(k = b.d.nodes[n].next; k != 0 && !rv.found; k = b.d.nodes[k].next) {
+		if(b.d.nodes[k].kind == Dom->Element && b.c.st[k] != nil && resetsctr(b.c.st[k].counterreset, nm))
+			break;
+		revscan(b, k, nm, rv);
+	}
+	return rv.sum + rv.last;
+}
+
+revscan(b: ref B, m: int, nm: string, rv: ref Rv)
+{
+	if(b.d.nodes[m].kind != Dom->Element)
+		return;
+	st := b.c.st[m];
+	if(st == nil || st.display == Style->Dnone)
+		return;
+	if(resetsctr(st.counterreset, nm))
+		return;
+	# the element, then its ::before, its children, its ::after: tree order
+	revprops(b, m, st, nm, rv, 1);
+	if(rv.found)
+		return;
+	if((bs := b.c.before[m]) != nil)
+		revprops(b, m, bs, nm, rv, 0);
+	if(rv.found)
+		return;
+	for(k := b.d.nodes[m].first; k != 0 && !rv.found; k = b.d.nodes[k].next)
+		revscan(b, k, nm, rv);
+	if(!rv.found && (as := b.c.after[m]) != nil)
+		revprops(b, m, as, nm, rv, 0);
+}
+
+revprops(b: ref B, m: int, st: ref St, nm: string, rv: ref Rv, el: int)
+{
+	v := st.counterincrement;
+	inc := 0;
+	any := 0;
+	for(i := 0; i < len v; i++)
+		if(v[i].kind == Css->Kident && v[i].s == nm) {
+			inc = 1;
+			if(i+1 < len v && v[i+1].kind == Css->Knumber)
+				inc = int v[i+1].n;
+			any = 1;
+		}
+	if(!any && el && nm == "list-item" && st.display == Style->Dlistitem) {
+		inc = -1;
+		any = 1;
+	}
+	if(any && inc != 0)
+		rv.last = -inc;
+	# a set ends it: its value counts, the element's increment does not
+	if(el && nm == "list-item" && st.display == Style->Dlistitem && (s := b.d.attr(m, "value")) != nil) {
+		rv.found = 1;
+		rv.sum += int s;
+		return;
+	}
+	v = st.counterset;
+	for(i = 0; i < len v; i++)
+		if(v[i].kind == Css->Kident && v[i].s == nm) {
+			rv.found = 1;
+			if(i+1 < len v && v[i+1].kind == Css->Knumber)
+				rv.sum += int v[i+1].n;
+			return;
+		}
+	if(any)
+		rv.sum -= inc;
+}
+
+resetsctr(v: array of ref Tok, nm: string): int
+{
+	for(i := 0; i < len v; i++) {
+		if(v[i].kind == Css->Kident && v[i].s == nm)
+			return 1;
+		if(v[i].kind == Css->Kfunction && v[i].s == "reversed" && len v[i].kids > 0 && v[i].kids[0].kind == Css->Kident && v[i].kids[0].s == nm)
+			return 1;
+	}
+	return 0;
+}
+
+ctrincr(b: ref B, n: int, nm: string, d: int)
+{
+	c := ctrfind(b, n, nm);
 	c.val += d;
 }
 
-ctrset(b: ref B, nm: string, x: int)
+ctrset(b: ref B, n: int, nm: string, x: int)
 {
-	c := ctrfind(b, nm);
+	c := ctrfind(b, n, nm);
 	c.val = x;
 }
 
@@ -1573,7 +1733,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 					# never narrower than its minimum; one with a width
 					# moves down if its margin box does not fit
 					need := k.ml;
-					if(k.st.width.kind != Style->Lauto)
+					if(k.st.width.kind != Style->Lauto && k.st.width.kind != Style->Lstretch)
 						need += k.w;
 					else if(k.kind == Ktable) {
 						(tmn, nil) := contribution(k);
@@ -1590,7 +1750,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 						(lx, rx) = band(fc, cy + ky, cy + ky + 1, cx, cx + cw);
 					}
 					avail := rx - lx - k.ml - k.mr;
-					if(k.w > avail && k.st.width.kind == Style->Lauto)
+					if(k.w > avail && (k.st.width.kind == Style->Lauto || k.st.width.kind == Style->Lstretch))
 						k.w = clampw(k, avail, cw);
 					k.x = lx - ox + k.ml;
 				}
@@ -4705,6 +4865,8 @@ iscolumn(k: ref Box): int
 tgrid(d: ref Doc, b: ref Box): ref Tgrid
 {
 	head, body, foot: list of (ref Box, ref Box);	# (row, group), reversed
+	hadhead := 0;
+	hadfoot := 0;
 	caps: list of ref Box;
 	cols: list of ref Box;
 	for(i := 0; i < len b.kids; i++) {
@@ -4722,17 +4884,20 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 			for(j := 0; j < len k.kids; j++)
 				if(k.kids[j].kind == Krow)
 					rl = (k.kids[j], k) :: rl;
-			case k.st.display {
-			Style->Dtableheadergroup =>
+			# the first header group goes first and the first footer
+			# group last; any others stay where they are (Tables 3 §2.1)
+			d := k.st.display;
+			if(d == Style->Dtableheadergroup && head == nil && !hadhead) {
+				hadhead = 1;
 				for(rr := rev2(rl); rr != nil; rr = tl rr)
 					head = hd rr :: head;
-			Style->Dtablefootergroup =>
+			} else if(d == Style->Dtablefootergroup && foot == nil && !hadfoot) {
+				hadfoot = 1;
 				for(rr := rev2(rl); rr != nil; rr = tl rr)
 					foot = hd rr :: foot;
-			* =>
+			} else
 				for(rr := rev2(rl); rr != nil; rr = tl rr)
 					body = hd rr :: body;
-			}
 		} else if(k.kind == Krow)
 			body = (k, nil) :: body;
 	}
@@ -5829,8 +5994,17 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	if(mrauto)
 		k.mr = 0;
 	w := specw(k, st.width, cbw);
-	if(st.width.kind == Style->Lstretch && !lauto && !rauto)
-		w = cbw - left - right - k.ml - k.mr;	# stretch: what the insets leave
+	if(st.width.kind == Style->Lstretch) {
+		# stretch: what the insets leave, from the static position when both are auto
+		avail := cbw;
+		if(!lauto)
+			avail -= left;
+		if(!rauto)
+			avail -= right;
+		if(lauto && rauto)
+			avail -= sx - pr.min.x;
+		w = avail - k.ml - k.mr;
+	}
 	if(w < 0 && (lauto || rauto) && (sh := spech(k, st.height, cbh)) >= 0)
 		w = transferred(k, sh);
 	if(w < 0 && truereplaced(k)) {
@@ -5902,6 +6076,16 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	h := k.h;
 	if((st.height.kind == Style->Lauto && !truereplaced(k) || st.height.kind == Style->Lstretch) && !tauto && !bauto) {
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
+		k.h = h;
+	} else if(st.height.kind == Style->Lstretch) {
+		avail := cbh;
+		if(!tauto)
+			avail -= top;
+		if(!bauto)
+			avail -= bottom;
+		if(tauto && bauto)
+			avail -= sy - pr.min.y;
+		h = clamph(k, avail - k.mt - k.mb, cbh);
 		k.h = h;
 	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {
 		# a definite or intrinsic (fit-content) height: auto margins

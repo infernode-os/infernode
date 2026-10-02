@@ -18,7 +18,7 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,642 judged) | **53.8%** (6,797 passing), from 50.0% at this session's start and 37.8% at the first run ever; `css-grid/grid-lanes` 465 of 891 (101 before `display: grid-lanes` existed) |
+| WPT CSS reftests (18 directories, 12,642 judged) | **68.5%** (8,660 passing), from 53.8% at this session's start, 50.0% at the fourth's and 37.8% at the first run ever; CSS2 5,032 of 5,900, css-text 794 of 1,382, css-grid 840 of 1,536, css-flexbox 614 of 945, css-tables 85 of 138 |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
 | Unit tests | web_html 5, web_css 6, web_style 16, web_browser 9, web_fonts 10, bidi 3, brotli 3: all pass |
@@ -43,6 +43,34 @@ session went down the failing families by size: lists and counters,
 backgrounds, aspect-ratio, positioning, break-spaces, text-transform,
 tables.
 
+- `07b2234` **Textareas as pre-wrap text, the table box without its
+  captions, the stretch keyword.**  A textarea is a block of its text
+  (cols wide, rows tall: `textarea()`); a table's background and
+  borders cover the table box only (`tablerect`); `width/height:
+  stretch` (`Lstretch`), for absolutes what the insets leave or the
+  room past the static position; a form control is not a replaced box
+  in CSS 2.2's sense (`truereplaced`); fitting a word on a line allows
+  half a pixel.
+- `2ccf2dd` **Right-to-left tables, column group borders, svg
+  attributes, absolute replaced boxes.**  Columns run right to left in
+  an rtl table (`cx`, `Tb.rtl`, `pcol`/`pline`); a column group's
+  borders in the collapsing model (`colfight`); an outer svg's width and
+  height attributes are its CSS width and height (`hints`); an
+  absolutely positioned replaced box keeps its size whatever the
+  insets say; a fixed box's static position counted the root's margin
+  twice.
+- `27a6ade` **rules= on tables, column elements as columns.**  The
+  `rules` attribute's borders (`tablerules`/`rulesof`, width and style
+  only so the UA sheet's gray stays); a `<colgroup>`'s `<col>`s stand
+  for it (`expandcols`); a column element with a definite width
+  (`colwidth`: width or min-width; max-width does not apply) is a
+  column with no cells in it.
+- `babfc7a` **Separated tables keep their borders; a flex item's
+  content size suggestion; cells in inline boxes.**  Only a `Tb` with
+  resolved segments means collapsed (ninety tests with bordered tables
+  had regressed); a flex item's automatic minimum is its content's
+  min-content width, not its width's (`nowidth`); cells in an inline
+  box go in an inline table before the inline is split around blocks.
 - `d201ec3` **The collapsing border model, column backgrounds,
   fixed-layout percentages.**  `border-collapse: collapse` resolves the
   border at every grid-line segment among the cells, rows, row groups,
@@ -354,23 +382,44 @@ In rough order of payoff.
    - page/browser: no HTTP cache in webfs, so every navigation
      refetches.
 3. **Open regressions (tests that passed at the first run ever and fail
-   now; 49 at the end of this session, 22 before it).**  Most are the
-   grid-lanes directory's references changing from "nothing renders" to
-   a real layout: 16 are subgrid (not implemented) inside or beside
-   lanes, 11 are auto-repeats of intrinsic lanes (the count is the
-   items' smallest max-content contribution, which fits most of the
-   directory; no rule found fits `column-auto-repeat-auto-017` and
-   `column-auto-repeat-max-content-005` both, and the container's
-   Chromium has no grid-lanes to ask).  Also: `last baseline`
-   self-alignment of absolutely positioned grid children (4), a fixed
-   child of a grid whose containing block is not the grid, two BFC-root
-   float cases (`adjoining-float-nested-forced-clearance-002`,
-   `floats-wrap-bfc-with-margin-007`), `margin-trim`, the bidi box-model
-   pair, the shaped-run rounding pair, and the variable-font, 2-pixel
-   and tentative cases from before.  Each with its reason, as far as
-   known: `tools/ref/baseline/open-regressions.txt`.
-3. **Exposed gaps behind many failures:** vertical writing modes,
-   variable-font instances, `contain-intrinsic-size`,
+   now; 53 at r27, of which 5 were fixed in the last commit; 49 at the
+   end of the fourth session).**  Mostly the grid-lanes directory's
+   references changing from "nothing renders" to a real layout: 8 are
+   subgrid gaps and line names inside lanes, 11 are auto-repeats of
+   intrinsic lanes (the count is the items' smallest max-content
+   contribution, which fits most of the directory; no rule found fits
+   `column-auto-repeat-auto-017` and `column-auto-repeat-max-content-005`
+   both, and the container's Chromium has no grid-lanes to ask).  Also:
+   `last baseline` self-alignment of absolutely positioned grid
+   children (4), a fixed child of a grid whose containing block is not
+   the grid, two BFC-root float cases, `margin-trim`, the bidi
+   box-model pair, the shaped-run rounding pair, `@namespace` selectors
+   (`not-default-ns-001`, a former blank pass), `hanging-punctuation`
+   (a former accident), and the variable-font, 2-pixel and tentative
+   cases from before.  Each with its reason, as far as known:
+   `tools/ref/baseline/open-regressions.txt`.
+   **Where the failures are now** (r27): CSS2 868 (tables 70, text 97,
+   borders 94, syntax 64, generated-content 64, normal-flow 61, fonts
+   58, bidi-text 52, visufx 46, floats-clear 43, positioning 49),
+   css-text 588 (white-space 160: `textarea-pre-wrap` done after r27,
+   `text-wrap: balance`, trailing spaces with text-align; line-breaking
+   65, line-break 62, word-break 44, hyphens 42, text-align 39),
+   css-grid 696, css-flexbox 331 (writing modes 14, col-wrap 9,
+   percentage-heights 8, baseline alignment 6, justify-content-vert 6),
+   css-backgrounds 373 (`background-intrinsic-*` need SVG images with
+   no intrinsic size, `background-position-applies-to-*` need row-group
+   image positioning), css-sizing 244 (stretch 24, contain-intrinsic-size
+   36, aspect-ratio 50), css-position 92 (12 are `-in-inline` script
+   tests; `position-absolute-center` 6; vertical modes), css-tables 53
+   (`table-anonymous-objects` 30 differ by a glyph's sub-pixel
+   position between "bc" in one run and two cells: a sub-pixel layout
+   matter), css-lists 107 (list-style-type styles beyond the basic
+   ones, `::marker` content), css-fonts 158.
+4. **Exposed gaps behind many failures:** vertical writing modes (768
+   tests across directories), `@namespace` in selectors, animations and
+   transitions, `text-wrap: balance`, counter styles beyond the basic
+   list (`@counter-style`, the CJK and alphabetic systems),
+   `hanging-punctuation`, variable-font instances, `contain-intrinsic-size`,
    multi-column layout (the lanes baseline tests' references use it),
    `margin-trim`, scrolling and clicking inside frames, hit-testing of
    transformed boxes (they are drawn moved but clicked where they are in
@@ -382,10 +431,10 @@ In rough order of payoff.
    auto-fit collapsing are done (above); declarative shadow DOM is
    approximated (a `<template shadowrootmode>`'s content is shown in
    place, `<slot>`s are transparent).
-4. **Sub-pixel layout.**  Layout positions are ints; Chromium uses 1/64 px.
+5. **Sub-pixel layout.**  Layout positions are ints; Chromium uses 1/64 px.
    Many near-miss reftests (a few hundred pixels at glyph edges) come
    from this.  Large change; do it deliberately.
-5. **Remaining plan milestones:** JavaScript (the seam is described in
+6. **Remaining plan milestones:** JavaScript (the seam is described in
    `CHARON-ENGINE.md`), M8–9 Tk chrome polish and making the new engine
    the default `charon`.
 

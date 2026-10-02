@@ -5095,6 +5095,17 @@ joinruns(items: list of ref Item)
 		it := hd l;
 		case it.kind {
 		Iword =>
+			if(prev != nil && len prev.text > 0 && len it.text > 0 && prev.face == it.face &&
+			   (k := it.face.ligspan(prev.text, it.text)) > 0) {
+				# a ligature across the edge: its characters move to
+				# the first word, so one glyph can stand for them
+				prev.text += it.text[0:k];
+				it.text = it.text[k:];
+				rewidth(prev);
+				rewidth(it);
+				if(it.text == "")
+					continue;	# wholly taken: the word before is still the one to join to
+			}
 			if(prev != nil && len prev.text > 0 && len it.text > 0 && joins(prev.text[len prev.text - 1], it.text[0])) {
 				prev.text[len prev.text] = 16r200D;
 				rewidth(prev);

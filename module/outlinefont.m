@@ -53,7 +53,8 @@ OutlineFont: module {
 		# glyphs, in the order given; subst() is a single substitution
 		# under a feature ("init", "medi", "fina", "isol"), or gid;
 		# hasfeature() says whether the font has the feature at all.
-		ligatures:	fn(f: self ref Face, gids: array of int, feats: list of string): array of int;
+		# with, for each glyph returned, how many of the given glyphs it stands for
+		ligatures:	fn(f: self ref Face, gids: array of int, feats: list of string): (array of int, array of int);
 		subst:	fn(f: self ref Face, feat: string, gid: int): int;
 		hasfeature:	fn(f: self ref Face, feat: string): int;
 

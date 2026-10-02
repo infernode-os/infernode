@@ -197,6 +197,10 @@ testLigatures(t: ref T)
 	t.assert(f.width("ffi") == 110.0, sys->sprint("the longest ligature wins: %g", f.width("ffi")));
 	t.assert(f.width("if") == 80.0, sys->sprint("no ligature backwards: %g", f.width("if")));
 	t.assert(f.width("fi fi") == 145.0, sys->sprint("ligatures around a space: %g", f.width("fi fi")));
+	t.asserteq(f.ligspan("f", "i"), 1, "a ligature across an edge takes the i");
+	t.asserteq(f.ligspan("of", "fice"), 2, "ffi takes two");
+	t.asserteq(f.ligspan("i", "f"), 0, "none backwards");
+	t.asserteq(f.ligspan("fi", "x"), 0, "none when the ligature is complete");
 }
 
 testGPOS(t: ref T)

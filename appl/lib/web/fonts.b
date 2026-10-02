@@ -300,6 +300,8 @@ Slot: adt {
 	o:	ref OutlineFont->Face;	# nil: the bitmap fallback draws c
 	g:	int;
 	c:	int;		# the character, 0 for a ligature of several
+	n:	int;		# how many characters it stands for
+	at:	int;		# the index of its first character in the string shaped
 };
 
 ligfeats(): list of string
@@ -326,7 +328,7 @@ shape(f: ref Typeface, s: string): array of ref Slot
 			continue;
 		(o, g) := glyph(f, s[i]);
 		slot[i] = n;
-		a[n++] = ref Slot(o, g, s[i]);
+		a[n++] = ref Slot(o, g, s[i], 1, i);
 	}
 	a = a[0:n];
 	joinforms(s, slot, a);
@@ -340,15 +342,21 @@ shape(f: ref Typeface, s: string): array of ref Slot
 			gids := array[j - i] of int;
 			for(k := i; k < j; k++)
 				gids[k - i] = a[k].g;
-			r := o.ligatures(gids, ligfeats());
+			(r, cnt) := o.ligatures(gids, ligfeats());
 			if(len r != len gids) {
 				b := array[n - (j - i) + len r] of ref Slot;
 				b[0:] = a[0:i];
 				for(k = 0; k < len r; k++) {
 					c := 0;
-					if(len r == len gids)
+					if(cnt[k] == 1)
 						c = a[i + k].c;
-					b[i + k] = ref Slot(o, r[k], c);
+					b[i + k] = ref Slot(o, r[k], c, cnt[k], 0);
+				}
+				# each result begins where its first component did
+				at := i;
+				for(k = 0; k < len r; k++) {
+					b[i + k].at = a[at].at;
+					at += cnt[k];
 				}
 				b[i + len r:] = a[j:];
 				a = b;
@@ -446,6 +454,21 @@ positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real,
 		base = i;
 	}
 	return (xs, adv, ys, x);
+}
+
+Typeface.ligspan(f: self ref Typeface, a, b: string): int
+{
+	if(len a == 0 || len b == 0)
+		return 0;
+	sl := shape(f, a + b);
+	for(i := 0; i < len sl; i++) {
+		end := len a + len b;	# a slot's characters run to the next slot's
+		if(i + 1 < len sl)
+			end = sl[i+1].at;
+		if(sl[i].at < len a && end > len a)
+			return end - len a;
+	}
+	return 0;
 }
 
 Typeface.width(f: self ref Typeface, s: string): real

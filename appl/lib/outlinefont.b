@@ -680,11 +680,12 @@ Face.hasfeature(f: self ref Face, feat: string): int
 	return 0;
 }
 
-Face.ligatures(f: self ref Face, gids: array of int, feats: list of string): array of int
+Face.ligatures(f: self ref Face, gids: array of int, feats: list of string): (array of int, array of int)
 {
+	cnt := array[len gids] of {* => 1};
 	fd := getfacedata(f);
 	if(fd == nil || fd.gsub == nil || len gids < 2)
-		return gids;
+		return (gids, cnt);
 	g := fd.gsub;
 	for(; feats != nil; feats = tl feats)
 		for(ll := featurelookups(g, hd feats); ll != nil; ll = tl ll) {
@@ -692,22 +693,23 @@ Face.ligatures(f: self ref Face, gids: array of int, feats: list of string): arr
 			if(lk.kind != 4)
 				continue;
 			for(j := 0; j < len lk.subs; j++)
-				gids = applylig(g.data, lk.subs[j], gids);
+				(gids, cnt) = applylig(g.data, lk.subs[j], gids, cnt);
 		}
-	return gids;
+	return (gids, cnt);
 }
 
 # a ligature subtable (format 1) over a run of glyphs: at each glyph
 # the first ligature of its set whose components follow is taken
-applylig(data: array of byte, so: int, gids: array of int): array of int
+applylig(data: array of byte, so: int, gids, cnt: array of int): (array of int, array of int)
 {
 	if(so + 6 > len data || getu16be(data, so) != 1)
-		return gids;
+		return (gids, cnt);
 	cov := so + getu16be(data, so + 2);
 	nsets := getu16be(data, so + 4);
 	if(so + 6 + nsets*2 > len data)
-		return gids;
+		return (gids, cnt);
 	out := array[len gids] of int;
+	ocnt := array[len gids] of int;
 	n := 0;
 	i := 0;
 	while(i < len gids) {
@@ -732,7 +734,11 @@ applylig(data: array of byte, so: int, gids: array of int): array of int
 							break;
 						}
 					if(ok) {
-						out[n++] = lig;
+						out[n] = lig;
+						ocnt[n] = 0;
+						for(m = 0; m < nc; m++)
+							ocnt[n] += cnt[i + m];
+						n++;
 						i += nc;
 						took = 1;
 						break;
@@ -742,9 +748,10 @@ applylig(data: array of byte, so: int, gids: array of int): array of int
 			if(took)
 				continue;
 		}
+		ocnt[n] = cnt[i];
 		out[n++] = gids[i++];
 	}
-	return out[0:n];
+	return (out[0:n], ocnt[0:n]);
 }
 
 Face.subst(f: self ref Face, feat: string, gid: int): int

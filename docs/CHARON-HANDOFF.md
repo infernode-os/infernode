@@ -18,11 +18,11 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,642 judged) | ****48.0%**** (6,069 passing), from 46.8% at this session's start and 37.8% at the first run ever |
+| WPT CSS reftests (18 directories, 12,642 judged) | **49.7%** (6,285 passing), from 46.8% at this session's start and 37.8% at the first run ever |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
-| Unit tests | web_html 5, web_css 6, web_style 15, web_browser 9, web_fonts 8, brotli 3: all pass |
-| Render fixtures (`tools/charon-wpt.sh`) | 56/56 (one intermittent failure is the emu SEGV below) |
+| Unit tests | web_html 5, web_css 6, web_style 15, web_browser 9, web_fonts 9, bidi 3, brotli 3: all pass |
+| Render fixtures (`tools/charon-wpt.sh`) | 66/66 (one intermittent "no image" is the emu SEGV below) |
 
 The WPT count is strict: any test with a `<script>` is reported as
 needs-js (1,268 of them) even if its pixels match, and a pass whose
@@ -34,6 +34,31 @@ WPT checkout was `web-platform-tests/wpt` at
 will move the numbers a little.
 
 ### Commits on the branch (newest first)
+
+The third session (same branch) took the hand-off list in order: the
+remaining review findings, then the live-site bugs, then bidi edges,
+shaping and the regressions each WPT run turned up.
+
+- `LASTCOMMIT`…`2eb0047` **Shaping, floats, backgrounds, flex.**
+  OpenType GSUB (ligatures through liga/clig/rlig, cursive joining
+  through init/medi/fina/isol from `lib/bidi/joining`), right-to-left
+  runs shaped in logical order and drawn from the right, joining across
+  inline box edges of no width (zero width joiners at the seam).  A
+  float met mid-line goes on that line when it fits (docs.python.org's
+  search form).  Column flex items: content height as if `height` were
+  auto, automatic minimum, percentage sizes only against a definite
+  container (go.dev's `flex: 1` main was 0 tall).  A single flex line
+  fills a min-height container.  Inline box edges stay physical; isolate
+  controls take part in line reordering; inside list markers are
+  isolates; tab stops; justification only after the last tab.  The
+  root's background covers the canvas; gradients take size, position,
+  repeat (including `round`) and px stops; the background shorthand had
+  its layers and values reversed.  `transform: translate()` (other
+  functions only make a stacking context).  Intrinsic widths: a box's
+  own size ignores its min/max-width, its contribution applies them,
+  negative margins count, collapsible spaces at line ends do not.
+  Inline-level absolutes get an inline static position.  `revert`,
+  `safe`, `lh`.  `tools/ref` hides Chromium's scrollbars.
 
 This session started with a code review of the whole engine (three
 reviewers, one per area: html/dom, css/style, layout/fonts), verified
@@ -167,34 +192,35 @@ In rough order of payoff.
    of this session (`compare.py`, share of pixels differing, exact and
    by 8px cell), with the first wrong box `boxdiff.py` reports:
 
-   | Page | exact | layout | first wrong box |
-   |---|---|---|---|
-   | pypi.org | 6.5% | 6.3% | — |
-   | developer.mozilla.org (CSS/display) | 10.0% | 12.7% | an inline `<svg>` path in the header nav has no box |
-   | en.wikipedia.org (Plan 9) | 13.7% | 15.4% | header `input[type=checkbox]` 63×50, Chromium 44×44 (appearance: none sizing) |
-   | news.ycombinator.com | 22.2% | 27.9% | rows 28px tall, Chromium 24: the nested table's cell gets 1px extra all round |
-   | docs.python.org (library/os) | 23.5% | 36.9% | the "related" nav: the long `li` wraps to 5 lines, Chromium 3; the right-floated search form is narrower and wraps |
-   | go.dev | 65.4% | 67.3% | the header nav `ul` is 1659px wide: Material Icons ligature names render as text (the font comes from fonts.googleapis.com; check it loads through the mirror); `body` 768px tall |
+   | Page | exact | layout | was (layout) | first wrong box now |
+   |---|---|---|---|---|
+   | news.ycombinator.com | 13.8% | 3.2% | 27.9% | — (glyph rasterisation only) |
+   | pypi.org | 6.5% | 6.3% | 6.3% | — |
+   | go.dev | 11.3% | 8.2% | 67.3% | `body` 4726px tall, Chromium 4526; the header nav 703px wide, Chromium 676 (icon button widths) |
+   | developer.mozilla.org (CSS/display) | 10.1% | 12.7% | 12.7% | `mdn-placement-top` (custom element) has no box; inline `<svg>` paths have none (the svg itself draws, so this is boxdiff noise) |
+   | en.wikipedia.org (Plan 9) | 13.4% | 14.2% | 15.4% | the dropdown panel is 423px tall, Chromium 427 (3px per list item) |
+   | docs.python.org (library/os) | 17.9% | 18.1% | 36.9% | the "related" nav's long `li` still wraps to 5 lines, Chromium 3 (text 1px wider per word, it seems: measure with `boxes.js`) |
 
-   The `<center>` fix came from this list (HN's table was not centred).
-   Take the pages top to bottom: the first wrong box per page has been
-   the fastest way to real bugs.
+   The `<center>`, icon-font, flex-column, mid-line float and intrinsic
+   space fixes all came from this list.  Take the pages top to bottom:
+   the first wrong box per page has been the fastest way to real bugs.
 2. **Review findings not yet fixed** (verified by reading, not yet
    done; the full lists are in the session's scratch notes, these are
    the ones that matter):
-   - layout: images are rescaled on every paint (`scale()` in
-     `paintreplaced`/`paintbg`; cache by target size); `relative()` is
-     skipped for `Kinline` boxes (`position: relative` on an `<a>` does
-     nothing); grid row-flow cursor rule (§8.5 step 3) and percentage
-     tracks against an indefinite size (treated as 0, should be auto);
-     `sizetracks` grows tracks proportionally rather than equally with
-     freezing (§12.6); `intrinsic()` ignores a child's own
-     `max-width`/`min-width`; U+00AD and U+200B are not break
-     opportunities; BFC roots beside floats are narrowed but never moved
-     below one; `spread()` can overflow `int` on huge tables; `Typeface.width`
-     looks each glyph up twice.
-   - style: `revert`/`revert-layer` are treated as `unset` (the UA
-     values should come back); nested `@layer` order is flat; `var()`
+   - layout: `sizetracks` grows tracks proportionally rather than
+     equally with freezing (§12.6); BFC roots beside floats are narrowed
+     but never moved below one; `spread()` can overflow `int` on huge
+     tables; ligatures do not form across an inline box's edge (joining
+     does: `boundary-shaping-001/003/004/005` and `shaping_lig-000` want
+     "ffi" and lam-alef across a `<span>`; the shaper would have to see
+     the neighbouring run's text and split the ligature's glyph); GPOS
+     kerning and mark positioning (the `kern` table only; combining
+     marks are drawn as spacing glyphs, so `tab-bidi-001`'s dagesh is on
+     the wrong side); trailing pre-wrap spaces before a forced break
+     should hang conditionally (`hanging-whitespace-003`, tentative);
+     textareas paint their background but not their text's layout
+     (`textarea-pre-wrap-014`).
+   - style: `revert-layer`; nested `@layer` order is flat; `var()`
      cycles fall through to the fallback; HTML's case-insensitive
      attribute values (`[type=text]` vs `type="Text"`); a `&` inside
      `:is()` in a nested rule; user origin folded into UA.
@@ -225,13 +251,14 @@ In rough order of payoff.
      `css-lists/ol-change-display-type`, `css-display/run-in`: unexamined.
    The list, with current status: `tools/ref/baseline/open-regressions.txt`.
 3. **Exposed gaps behind many failures:** vertical writing modes,
-   complex-script shaping (Arabic joining; the `css-text/shaping` tests
-   load their WOFF2 fonts and fail honestly) and GSUB in general (icon
-   fonts such as Material Icons use ligatures: go.dev's header shows the
-   ligature names as text), GPOS kerning (only the legacy `kern` table is
-   read), scrolling and clicking inside frames, translucent opacity on
-   inline boxes (floats inside them paint at full opacity; opacity 0 is
-   handled).  Bidi and `<iframe>` are done (above).
+   GPOS (kerning beyond the legacy `kern` table, mark positioning),
+   ligatures across inline box edges, transforms other than translation
+   (rotate/scale/skew only make a stacking context), scrolling and
+   clicking inside frames, hit-testing of translated boxes (they are
+   drawn moved but clicked where they are in the flow), translucent
+   opacity on inline boxes (floats inside them paint at full opacity;
+   opacity 0 is handled).  Bidi, `<iframe>`, GSUB shaping and Arabic
+   joining are done (above).
 4. **Sub-pixel layout.**  Layout positions are ints; Chromium uses 1/64 px.
    Many near-miss reftests (a few hundred pixels at glyph edges) come
    from this.  Large change; do it deliberately.
@@ -273,6 +300,25 @@ In rough order of payoff.
   interpreter differ in which; `newbox` written that way lost a grid
   column.  Always write `ref T(...)` with every field.  A separate task
   was suggested to make the compiler or VM do the right thing.
+- **Limbo: a declared-but-unassigned local (`a, b: int;`) is not
+  reliably zero in the interpreter either.**  `parseotf` left `gsuboff`
+  that way; a font without GSUB then parsed from a garbage offset, which
+  the interpreter reported as an array bounds error and the amd64 JIT
+  as a SEGV (a negative index escapes its bounds check: a task was
+  suggested for that).  Initialise every local.
+- **Limbo: `int` of a real rounds to nearest**, it does not truncate.
+  `int (x + 0.5)` rounds twice.
+- **CSS function names come out of the tokenizer lowercased**, so match
+  `translatex`, not `translateX`.
+- **`toarray()` in style.b reverses the list it is given** (it is for
+  lists built by prepending).  `toarray(rev(l))` is the wrong order.
+- **Both panels of `wptdiff.py` are Charon's**: the reference is the
+  reference *page* rendered by Charon, not Chromium.  When test and
+  reference disagree, check Chromium with a Playwright snippet before
+  deciding which is right (`floats-placement-vertical-003` expects
+  something Chromium does not do; the test was a false pass).
+- **A WPT run must not be disturbed by `mk install`** (it loads the
+  installed Dis); edit sources freely meanwhile, install afterwards.
 - **Swapping `.m` files under a stash** (to compare with an older engine)
   needs `tests/` rebuilt too, or `charonshot` fails its link typecheck
   and every fixture reports "no image".  `charon-shot.sh -d` prints the

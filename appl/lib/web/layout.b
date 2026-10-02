@@ -1006,12 +1006,13 @@ specw(b: ref Box, v: Len, cbw: int): int
 			w += hextra(b);
 		return w;
 	Style->Lmin or Style->Lmax or Style->Lfit =>
-		(mn, mx) := intrinsic(b);
+		(mn, mx) := intrinsic(b);	# margin-box widths: the keywords name the border box
+		mg := mgs(b);
 		case v.kind {
-		Style->Lmin => return mn;
-		Style->Lmax => return mx;
+		Style->Lmin => return mn - mg;
+		Style->Lmax => return mx - mg;
 		}
-		return fit(mn, mx, cbw - b.ml - b.mr);
+		return fit(mn, mx, cbw) - mg;
 	}
 	return -1;
 }
@@ -3536,8 +3537,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		x = pr.min.x + left + k.ml;
 	else if(!rauto)
 		x = pr.max.x - right - k.mr - k.w;
-	else
+	else {
 		x = sx + k.ml;
+		if(a.sparent != nil && a.sparent.st.dirrtl && (a.frag != nil || st.wasinline))
+			x = sx - k.w - k.mr;	# an inline static position in rtl is of the right edge
+	}
 	layblock(l, k, cbw, cbh, nil, 0, 0);
 	h := k.h;
 	if(spech(k, st.height, cbh) < 0 && !tauto && !bauto) {
@@ -4096,6 +4100,8 @@ intrinsic1(b: ref Box): (int, int)
 				mx = kmx;
 		}
 	}
+	if(mx < mn)	# negative margins can make a sum smaller than its largest part
+		mx = mn;
 	return (mn + ex, mx + ex);
 }
 
@@ -4604,12 +4610,15 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			} else
 				ln.floats = it.box :: ln.floats;	# after this line
 		Iabs =>
-			# its static position is where it would have been on the
-			# line: a fragment of no width marks the place through
-			# alignment and reordering
-			mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level);
-			ln.frags = mark :: ln.frags;
-			l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark) :: l.pending;
+			if(it.box.st.wasinline) {
+				# an inline-level box's static position is where it
+				# would have been on the line: a fragment of no width
+				# marks the place through alignment and reordering
+				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level);
+				ln.frags = mark :: ln.frags;
+				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark) :: l.pending;
+			} else	# a block-level one's is the start of the line
+				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0, f.y, nil) :: l.pending;
 		Ibreak =>
 			ln.content = 1;
 			lines = endline(f, ln, x0, first, 1) :: lines;
@@ -4624,8 +4633,11 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	# a phantom: no height (the inline boxes' edges were content above)
 	if(ln.content)
 		lines = endline(f, ln, x0, first, 1) :: lines;
-	else
+	else {
 		placepending(f, ln);
+		for(fl := ln.frags; fl != nil; fl = tl fl)
+			(hd fl).x += x0;	# the marks of absolutes on a phantom line, which is never aligned
+	}
 	a := array[len lines] of ref Line;
 	for(i := len a - 1; i >= 0; i--) {
 		a[i] = hd lines;

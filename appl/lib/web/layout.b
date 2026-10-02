@@ -76,7 +76,7 @@ B: adt {
 newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0);
+		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -826,8 +826,60 @@ msum(m: Margin): int
 	return m.pos + m.neg;
 }
 
+laygen := 0;	# which lay() this is: stamps the intrinsic-width cache
+
+# A flex or grid container, or a table, gives an item a height of its
+# own choosing (a stretched item's cross size, a column item's main
+# size, a cell's row height).  That height is definite for the item's
+# content (Flexbox §9.8): percentages inside resolve against it, and
+# boxes positioned against it find it.  The container lays the item
+# out with its height imposed; specheight hands it over.
+imposed: ref Box;
+imposedh: int;
+
+specheight(b: ref Box, cbh: int): int
+{
+	if(b == imposed)
+		return imposedh;
+	return spech(b, b.st.height, cbh);
+}
+
+# lay k out again with the height h (its border box) imposed, if its
+# content would come out differently for knowing it
+imposeh(l: ref L, k: ref Box, h, cbw, cbh: int)
+{
+	if(k.h != h && heightmatters(k)) {
+		outer := imposed;
+		outerh := imposedh;
+		imposed = k;
+		imposedh = h;
+		layblock(l, k, cbw, cbh, nil, 0, 0);
+		imposed = outer;
+		imposedh = outerh;
+	}
+	k.h = h;
+}
+
+# Would b's content come out differently if its height were known?
+# Percentage heights, and boxes positioned against it.
+heightmatters(b: ref Box): int
+{
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(k.kind == Ktext || k.kind == Kmarker)
+			continue;
+		st := k.st;
+		if(st.height.pct != 0.0 || st.minheight.pct != 0.0 || st.maxheight.pct != 0.0 || isabs(k))
+			return 1;
+		if(heightmatters(k))
+			return 1;
+	}
+	return 0;
+}
+
 lay(root: ref Box, width, height: int)
 {
+	laygen++;
 	l := ref L(width, height, root, nil);
 	edges(root, width);
 	sizew(root, width);
@@ -1032,7 +1084,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 {
 	case b.kind {
 	Kreplaced =>
-		h := spech(b, b.st.height, cbh);
+		h := specheight(b, cbh);
 		if(h < 0)
 			h = replacedheight(b, cbw, cbh) + vextra(b);
 		b.h = clamph(b, h, cbh);
@@ -1053,7 +1105,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	cw := b.w - hextra(b);
 	if(cw < 0)
 		cw = 0;
-	sh := spech(b, b.st.height, cbh);
+	sh := specheight(b, cbh);
 	ch := -1;		# content height for percentages inside
 	if(sh >= 0)
 		ch = sh - vextra(b);
@@ -1236,7 +1288,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	cw := b.w - hextra(b);
 	if(cw < 0)
 		cw = 0;
-	sh := spech(b, st.height, cbh);
+	sh := specheight(b, cbh);
 	ch := -1;
 	if(sh >= 0)
 		ch = clamph(b, sh, cbh) - vextra(b);
@@ -1399,7 +1451,13 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				fi.cross = k.h + k.mt + k.mb;
 			} else {
 				k.w = flexcrossw(k, b, cw);
+				outer := imposed;
+				outerh := imposedh;
+				imposed = k;
+				imposedh = m;
 				layblock(l, k, cw, m, nil, 0, 0);
+				imposed = outer;
+				imposedh = outerh;
 				k.h = m;
 				fi.cross = k.w + k.ml + k.mr;
 			}
@@ -1564,8 +1622,12 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			cpos = 0;
 			if(row) {
 				if(al == Style->ALstretch && ks.height.kind == Style->Lauto &&
-				   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto)
-					k.h = clamph(k, lc - k.mt - k.mb, ch);
+				   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto) {
+					hch := -1;
+					if(ch >= 0 && !wrap)
+						hch = ch;
+					imposeh(l, k, clamph(k, lc - k.mt - k.mb, ch), cw, hch);
+				}
 				outer := k.h + k.mt + k.mb;
 				if(ks.mt.kind == Style->Lauto && ks.mb.kind == Style->Lauto)
 					cpos = (lc - outer)/2;
@@ -1981,7 +2043,7 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	cw := b.w - hextra(b);
 	if(cw < 0)
 		cw = 0;
-	sh := spech(b, st.height, cbh);
+	sh := specheight(b, cbh);
 	ch := -1;
 	if(sh >= 0)
 		ch = clamph(b, sh, cbh) - vextra(b);
@@ -2214,10 +2276,7 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			as = st.alignitems;
 		if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
 		   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced) {
-			nh := clamph(k, ah - k.mt - k.mb, ah);
-			if(nh != k.h) {
-				k.h = nh;
-			}
+			imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), aw, ah);
 		}
 		x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
 		if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
@@ -3039,7 +3098,7 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 			rowh[c.r + c.rs - 1] += c.box.h - have;
 	}
 	# a specified table height grows the rows
-	sh := spech(b, st.height, cbh);
+	sh := specheight(b, cbh);
 	if(sh >= 0) {
 		gh := sy * (nr + 1);
 		for(r = 0; r < nr; r++)
@@ -3091,7 +3150,9 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		k := c.box;
 		h := rowy[c.r + c.rs - 1] + rowh[c.r + c.rs - 1] - rowy[c.r];
 		contenth := k.h;
-		k.h = h;
+		imposeh(l, k, h, k.w - hextra(k), h);
+		if(k.h != contenth && heightmatters(k))
+			contenth = h;	# laid out again to fill the cell
 		# vertical-align within the cell
 		va := k.st.valign;
 		dy := 0;
@@ -3179,8 +3240,11 @@ cbof(l: ref L, k: ref Box): ref Box
 {
 	if(k.st.position == Style->Pfixed)
 		return nil;
+	# A positioned inline box's padding box would be the containing
+	# block (CSS 2.2 §10.1); its block container stands in for it,
+	# which places the box rather than never laying it out.
 	for(p := k.parent; p != nil; p = p.parent)
-		if(ispositioned(p))
+		if(ispositioned(p) && p.kind != Kinline)
 			return p;
 	return nil;
 }
@@ -3306,7 +3370,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		y = sy + k.mt;
 	k.x = x;
 	k.y = y;
-	cb.pos = k :: cb.pos;
+	for(pl := cb.pos; pl != nil; pl = tl pl)
+		if(hd pl == k)
+			break;
+	if(pl == nil)
+		cb.pos = k :: cb.pos;
 	k.parent = cb;
 }
 
@@ -3570,7 +3638,26 @@ replacedheight(b: ref Box, cbw, cbh: int): int
 # ---- intrinsic widths (CSS Sizing 3) ----
 
 # (min-content, max-content) border-box widths, plus margins.
+# The min- and max-content widths of b's margin box.  Measured once
+# per layout: a nest of shrink-to-fit, flex and table contexts asks
+# for the same box's widths at every level, and without the cache the
+# text at the bottom is re-measured for each (exponentially in depth).
+# The edges are part of the answer, so a change in them (percentages
+# resolved against another width) measures again.
 intrinsic(b: ref Box): (int, int)
+{
+	ex := hextra(b) + nz(b.ml) + nz(b.mr);
+	if(b.igen == laygen && b.iex == ex)
+		return (b.imn, b.imx);
+	(mn, mx) := intrinsic1(b);
+	b.imn = mn;
+	b.imx = mx;
+	b.iex = ex;
+	b.igen = laygen;
+	return (mn, mx);
+}
+
+intrinsic1(b: ref Box): (int, int)
 {
 	ex := hextra(b) + nz(b.ml) + nz(b.mr);
 	st := b.st;
@@ -4548,7 +4635,9 @@ paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 	dst.draw(clip, display.white, nil, (0, 0));
 	if(visible(bg))
 		dst.draw(clip, colorimg(bg), nil, (0, 0));
+	painted = root;
 	paintctx(dst, root, origin, clip, bgbox);
+	painted = nil;
 	dst.clipr = oclip;
 }
 
@@ -4569,7 +4658,7 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	st := b.st;
 	if(st.opacity == 0.0)
 		return;
-	if(st.opacity < 1.0 && b.kind != Ktext) {
+	if(st.opacity < 1.0 && b.kind != Ktext && b != translucent) {
 		layer(dst, b, o, clip, canvasbg);
 		return;
 	}
@@ -4580,7 +4669,12 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		clip = viewport;
 	}
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
-	layers := sortlayers(collectlayers(b, r.min, nil));
+	# A positioned box with z-index: auto is painted as a layer but is
+	# not a stacking context: its positioned descendants are layers of
+	# the context it is in, collected there (Appendix E).
+	layers: list of ref Lyr;
+	if(isctx(b))
+		layers = sortlayers(collectlayers(b, r.min, nil));
 	if(st.visibility == Style->Vvisible)
 		paintself(dst, b, r, canvasbg);
 	inner := innerclip(b, r, clip);
@@ -4614,6 +4708,17 @@ islayer(k: ref Box): int
 {
 	return ispositioned(k) && k.kind != Ktext && k.kind != Kinline;
 }
+
+# a box that establishes a stacking context (CSS 2.2 §9.9.1, Position 3)
+isctx(k: ref Box): int
+{
+	st := k.st;
+	return k == painted || st.position == Style->Pfixed || st.opacity < 1.0 ||
+		ispositioned(k) && !st.zauto;
+}
+
+painted: ref Box;	# the root being painted
+translucent: ref Box;	# the box whose opacity layer is being painted (into its own image)
 
 # the layers of b's stacking context: positioned descendants, found
 # without descending into layers or nested stacking contexts
@@ -4675,7 +4780,10 @@ addlayer(k: ref Box, o: Point, acc: list of ref Lyr): list of ref Lyr
 	z := 0;
 	if(!k.st.zauto)
 		z = k.st.z;
-	return ref Lyr(k, o, z) :: acc;
+	acc = ref Lyr(k, o, z) :: acc;
+	if(!isctx(k))	# its own layers belong to this context
+		acc = collectlayers(k, o.add(Point(k.x, k.y)), acc);
+	return acc;
 }
 
 revboxes(l: list of ref Box): list of ref Box
@@ -4894,16 +5002,11 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	img := display.newimage(lr, Draw->RGBA32, 0, Draw->Transparent);
 	if(img == nil)
 		return;
-	op := b.st.opacity;
-	b.st.opacity = 1.0;	# shared styles: restore below
-	{
-		paintctx(img, b, o, lr, canvasbg);
-	} exception {
-	* =>
-		;
-	}
-	b.st.opacity = op;
-	a := int (op * 255.0);
+	outer := translucent;
+	translucent = b;
+	paintctx(img, b, o, lr, canvasbg);
+	translucent = outer;
+	a := int (b.st.opacity * 255.0);
 	mask := display.newimage(Rect((0, 0), (1, 1)), Draw->GREY8, 1, (a << 24) | (a << 16) | (a << 8) | 255);
 	dst.draw(lr, img, mask, lr.min);
 }

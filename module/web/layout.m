@@ -20,12 +20,12 @@ Layout: module
 	PATH:	con "/dis/lib/web/layout.dis";
 
 	init:	fn(d: ref Draw->Display): string;
-	fontmod:	fn(): Fonts;
+	fontmod:	fn(): Fonts;	# the Fonts instance layout measures with, for @font-face
 	# What each <object>'s data turned out to be, told to build before
 	# it runs: (node, Oimage or Odoc, url).  An <object> not listed shows
 	# its contents instead (its fallback).
 	Oimage, Odoc: con 1+iota;
-	setobjects:	fn(objs: list of (int, int, string));	# the Fonts instance layout measures with, for @font-face
+	setobjects:	fn(objs: list of (int, int, string));
 	# background and list-style images: what a style asks for, and the
 	# decoded images to paint, by absolute URL
 	bgurls:	fn(st: ref Style->St): list of string;
@@ -54,6 +54,9 @@ Layout: module
 		parent:	cyclic ref Box;
 		pos:	cyclic list of ref Box;	# absolutely positioned boxes this one contains
 		hint:	int;		# replaced: text is a placeholder, drawn dimmed
+		imn, imx:	int;	# min- and max-content widths, cached during one layout
+		iex:	int;		# the horizontal edges they include
+		igen:	int;		# the layout they were measured in (0: none)
 	};
 
 	Line: adt {

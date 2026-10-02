@@ -624,7 +624,7 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 	case nd.tag {
 	Dom->Timg =>
 		r := newbox(Kreplaced, inl, n, st);
-		src := b.d.attr(n, "src");
+		src := imgsrc(b.d, n);
 		if(src != nil)
 			r.url = style->resolveurl(b.d.url, src);
 		r.text = b.d.attr(n, "alt");
@@ -1451,10 +1451,14 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				fi.cross = k.h + k.mt + k.mb;
 			} else {
 				k.w = flexcrossw(k, b, cw);
+				# a column item's main size is definite for its content
+				# only when the container's is (§9.8)
 				outer := imposed;
 				outerh := imposedh;
-				imposed = k;
-				imposedh = m;
+				if(ch >= 0) {
+					imposed = k;
+					imposedh = m;
+				}
 				layblock(l, k, cw, m, nil, 0, 0);
 				imposed = outer;
 				imposedh = outerh;
@@ -1526,6 +1530,10 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		la[i].pos = cpos;
 		cpos += la[i].cross + gapcross + between;
 	}
+	wrapr := st.flexwrap == 2;
+	if(wrapr)	# wrap-reverse: the lines run from the cross end (§5.2)
+		for(i = 0; i < len la; i++)
+			la[i].pos = containercross - la[i].pos - la[i].cross;
 
 	# main-axis alignment (§9.5) and cross-axis alignment (§9.6)
 	for(i = 0; i < len la; i++) {
@@ -1616,9 +1624,13 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				al = st.alignitems;
 			if(al == Style->ALnormal)
 				al = Style->ALstretch;
+			if(wrapr) {	# cross-start and cross-end change places too
+				if(al == Style->ALstart)
+					al = Style->ALend;
+				else if(al == Style->ALend)
+					al = Style->ALstart;
+			}
 			lc := ln.cross;
-			if(st.flexwrap == 2)
-				;	# wrap-reverse: lines run the other way (not modelled)
 			cpos = 0;
 			if(row) {
 				if(al == Style->ALstretch && ks.height.kind == Style->Lauto &&
@@ -3150,9 +3162,10 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		k := c.box;
 		h := rowy[c.r + c.rs - 1] + rowh[c.r + c.rs - 1] - rowy[c.r];
 		contenth := k.h;
-		imposeh(l, k, h, k.w - hextra(k), h);
-		if(k.h != contenth && heightmatters(k))
-			contenth = h;	# laid out again to fill the cell
+		# the row's height is not definite for the cell's content:
+		# a percentage height inside resolves against the cell's own
+		# specified height, if any, not the row (as browsers do)
+		k.h = h;
 		# vertical-align within the cell
 		va := k.st.valign;
 		dy := 0;
@@ -3604,6 +3617,132 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 	return (w, h);
 }
 
+# The image an <img> shows (HTML §4.8.4.3, reduced): a <source> of its
+# <picture> whose type we decode and that has no media condition
+# (media conditions are left to the <img> fallback, which pages make
+# the small, safe choice), else its own srcset, else src.
+imgsrc(d: ref Doc, n: int): string
+{
+	p := d.nodes[n].parent;
+	if(p != 0 && d.nodes[p].tag == Dom->Tpicture && d.nodes[p].ns == Dom->HTML)
+		for(c := d.nodes[p].first; c != 0 && c != n; c = d.nodes[c].next) {
+			nd := d.nodes[c];
+			if(nd.kind != Dom->Element || nd.tag != Dom->Tsource)
+				continue;
+			if(d.hasattr(c, "media") && trimsp(d.attr(c, "media")) != "")
+				continue;
+			if(d.hasattr(c, "type") && !decodes(d.attr(c, "type")))
+				continue;
+			if((u := srcset(d.attr(c, "srcset"))) != nil)
+				return u;
+		}
+	if((u := srcset(d.attr(n, "srcset"))) != nil)
+		return u;
+	return d.attr(n, "src");
+}
+
+# image types the engine decodes
+decodes(t: string): int
+{
+	case lower(trimsp(t)) {
+	"image/png" or "image/jpeg" or "image/jpg" or "image/gif" or "image/webp" or
+	"image/svg+xml" or "image/avif" or "image/x-icon" or "image/vnd.microsoft.icon" =>
+		return 1;
+	}
+	return 0;
+}
+
+# The candidate of a srcset for a 1x display: among density
+# descriptors the one nearest 1x; among width descriptors the
+# narrowest that is at least a typical viewport wide, else the widest.
+srcset(s: string): string
+{
+	best := "";
+	bestd := 0.0;
+	bestw := 0;
+	i := 0;
+	while(i < len s) {
+		while(i < len s && (isblank(s[i]) || s[i] == ','))
+			i++;
+		# the URL runs to white space; a URL may hold commas (data:),
+		# so only trailing ones end the candidate
+		j := i;
+		while(j < len s && !isblank(s[j]))
+			j++;
+		if(j == i)
+			break;
+		u := s[i:j];
+		i = j;
+		d := 0.0;	# density
+		w := 0;		# width
+		ended := 0;
+		while(len u > 0 && u[len u - 1] == ',') {
+			u = u[0:len u - 1];
+			ended = 1;
+		}
+		# the descriptors, up to the next comma
+		for(; !ended; ) {
+			while(i < len s && isblank(s[i]))
+				i++;
+			if(i >= len s || s[i] == ',') {
+				if(i < len s)
+					i++;
+				break;
+			}
+			k := i;
+			while(k < len s && !isblank(s[k]) && s[k] != ',')
+				k++;
+			desc := s[i:k];
+			i = k;
+			if(len desc > 1) {
+				v := desc[0:len desc - 1];
+				case desc[len desc - 1] {
+				'x' =>	d = real v;
+				'w' =>	w = int v;
+				}
+			}
+		}
+		if(w > 0) {
+			if(bestw == 0 || bestw < SRCSETW && w > bestw || w >= SRCSETW && w < bestw) {
+				best = u;
+				bestw = w;
+			}
+		} else {
+			if(d == 0.0)
+				d = 1.0;
+			dd := d - 1.0;
+			if(dd < 0.0)
+				dd = -dd;
+			bd := bestd - 1.0;
+			if(bd < 0.0)
+				bd = -bd;
+			if(best == "" || bestw == 0 && dd < bd) {
+				best = u;
+				bestd = d;
+			}
+		}
+	}
+	return best;
+}
+
+SRCSETW: con 1024;	# the width a w-descriptor candidate should cover
+
+isblank(c: int): int
+{
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+trimsp(s: string): string
+{
+	i := 0;
+	while(i < len s && isblank(s[i]))
+		i++;
+	j := len s;
+	while(j > i && isblank(s[j-1]))
+		j--;
+	return s[i:j];
+}
+
 # the ratio a replaced box keeps: aspect-ratio, else its content's
 aspect(b: ref Box, iw, ih: int): real
 {
@@ -3964,6 +4103,8 @@ text(f: ref Fl, b: ref Box)
 			t := " ";
 			if(c == '\t') {
 				w = fc.space * st.tabsize;
+				if(st.tabsize < 0.0)
+					w = -st.tabsize;	# a length
 				t = "\t";
 			} else if(c == '　')
 				w = fc.width("　");
@@ -4313,12 +4454,19 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		above = 0.0;
 		below = 0.0;
 	}
+	# An aligned subtree (a top- or bottom-aligned inline box and all
+	# it holds) is placed as one: its extent above and below its
+	# baseline is what touches the line's edge, and what is inside
+	# keeps its place relative to it (CSS 2.2 §10.8.1).
+	subtrees: list of (ref Box, real, real);	# (box, above, below)
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift, va) := fragmetrics(f, b, sf);
+		(a, d, shift, nil, anchor) := fragmetrics(f, b, sf);
 		f.base = ir(shift);
-		if(va == Style->VAtop || va == Style->VAbottom)
+		if(anchor != nil) {
+			subtrees = extend(subtrees, anchor, a - shift, d + shift);
 			continue;
+		}
 		if(a - shift > above)
 			above = a - shift;
 		if(d + shift > below)
@@ -4326,27 +4474,25 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	}
 	h := ir(above + below);
 	# top- and bottom-aligned things may make the line taller
-	for(i = 0; i < len frags; i++) {
-		f := frags[i];
-		(a, d, shift, va) := fragmetrics(f, b, sf);
-		if(va == Style->VAtop || va == Style->VAbottom) {
-			if(shift < 0.0)
-				shift = -shift;
-			if(ir(a + d + shift) > h)
-				h = ir(a + d + shift);
-		}
+	for(sl := subtrees; sl != nil; sl = tl sl) {
+		(nil, sa, sd) := hd sl;
+		if(ir(sa + sd) > h)
+			h = ir(sa + sd);
 	}
 	base := ir(above);
 	line := ref Line(y, h, y + base, frags);
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift, va) := fragmetrics(f, b, sf);
+		(a, d, shift, va, anchor) := fragmetrics(f, b, sf);
 		fb := real line.base + shift;
-		case va {
-		Style->VAtop =>
-			fb = real y + a + shift;
-		Style->VAbottom =>
-			fb = real (y + h) - d + shift;
+		if(anchor != nil) {
+			(sa, sd) := extent(subtrees, anchor);
+			case va {
+			Style->VAtop =>
+				fb = real y + sa + shift;
+			Style->VAbottom =>
+				fb = real (y + h) - sd + shift;
+			}
 		}
 		case f.kind {
 		Ftext =>
@@ -4414,7 +4560,40 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 # it up to the block b, each relative to its parent (CSS 2.2 §10.8.1):
 # the glyphs of <sup> move with it.  A box aligned to the line box
 # ends the walk; what it holds is shifted with respect to it.
-fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int)
+# the extents of aligned subtrees, by their box
+extend(l: list of (ref Box, real, real), k: ref Box, a, d: real): list of (ref Box, real, real)
+{
+	r: list of (ref Box, real, real);
+	found := 0;
+	for(; l != nil; l = tl l) {
+		(kb, ka, kd) := hd l;
+		if(kb == k) {
+			found = 1;
+			if(a > ka)
+				ka = a;
+			if(d > kd)
+				kd = d;
+		}
+		r = (kb, ka, kd) :: r;
+	}
+	if(!found)
+		r = (k, a, d) :: r;
+	return r;
+}
+
+extent(l: list of (ref Box, real, real), k: ref Box): (real, real)
+{
+	for(; l != nil; l = tl l) {
+		(kb, ka, kd) := hd l;
+		if(kb == k)
+			return (ka, kd);
+	}
+	return (0.0, 0.0);
+}
+
+# the fifth value is the top- or bottom-aligned inline box the fragment
+# is in (or is), with shift then relative to that box's baseline
+fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int, ref Box)
 {
 	st := f.box.st;
 	a, d: real;
@@ -4437,6 +4616,7 @@ fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int)
 		k = k.parent;	# a text run aligns as its inline box does
 	shift := 0.0;
 	va := Style->VAbaseline;
+	anchor: ref Box;
 	ka := a;
 	kd := d;
 	for(; k != nil && k != b; k = k.parent) {
@@ -4445,6 +4625,7 @@ fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int)
 		kva := k.st.valign;
 		if(kva == Style->VAtop || kva == Style->VAbottom) {
 			va = kva;
+			anchor = k;
 			break;
 		}
 		pf := sf;
@@ -4454,7 +4635,7 @@ fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int)
 		if(k.parent != nil && k.parent != b && k.parent.kind == Kinline)
 			(ka, kd) = boxmetrics(k.parent);
 	}
-	return (a, d, shift, va);
+	return (a, d, shift, va, anchor);
 }
 
 # an inline box's ascent and descent around its baseline, half-leading included
@@ -4647,7 +4828,11 @@ Lyr: adt {
 	box:	ref Box;
 	o:	Point;		# its parent's border-box origin
 	z:	int;
+	clip:	Rect;		# what the overflow of the boxes between it and the context allows
 };
+
+NOCLIP: con 1 << 29;
+noclip := Rect((-NOCLIP, -NOCLIP), (NOCLIP, NOCLIP));
 
 # Paint b as a stacking context (CSS 2.2 Appendix E, simplified): its
 # background and borders, layers with negative z-index, its in-flow
@@ -4674,13 +4859,13 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	# the context it is in, collected there (Appendix E).
 	layers: list of ref Lyr;
 	if(isctx(b))
-		layers = sortlayers(collectlayers(b, r.min, nil));
+		layers = sortlayers(collectlayers(b, r.min, noclip, nil));
 	if(st.visibility == Style->Vvisible)
 		paintself(dst, b, r, canvasbg);
 	inner := innerclip(b, r, clip);
 	for(l := layers; l != nil; l = tl l)
 		if((hd l).z < 0)
-			paintctx(dst, (hd l).box, (hd l).o, inner, canvasbg);
+			paintctx(dst, (hd l).box, (hd l).o, layerclip(inner, hd l), canvasbg);
 	if(rectok(inner)) {
 		oclip := dst.clipr;
 		dst.clipr = inner;
@@ -4689,8 +4874,17 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	}
 	for(l = layers; l != nil; l = tl l)
 		if((hd l).z >= 0)
-			paintctx(dst, (hd l).box, (hd l).o, inner, canvasbg);
+			paintctx(dst, (hd l).box, (hd l).o, layerclip(inner, hd l), canvasbg);
 	paintoutline(dst, b, r, clip);
+}
+
+# a layer's clip: the context's, and that of any overflow-clipping box
+# between (a positioned box that is not a stacking context clips its
+# absolutely positioned descendants all the same)
+layerclip(inner: Rect, l: ref Lyr): Rect
+{
+	(c, nil) := inner.clip(l.clip);
+	return c;
 }
 
 innerclip(b: ref Box, r, clip: Rect): Rect
@@ -4722,10 +4916,10 @@ translucent: ref Box;	# the box whose opacity layer is being painted (into its o
 
 # the layers of b's stacking context: positioned descendants, found
 # without descending into layers or nested stacking contexts
-collectlayers(b: ref Box, o: Point, acc: list of ref Lyr): list of ref Lyr
+collectlayers(b: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of ref Lyr
 {
 	for(pl := revboxes(b.pos); pl != nil; pl = tl pl)
-		acc = addlayer(hd pl, o, acc);
+		acc = addlayer(hd pl, o, clip, acc);
 	if(b.lines != nil) {
 		for(i := 0; i < len b.lines; i++) {
 			ln := b.lines[i];
@@ -4734,28 +4928,35 @@ collectlayers(b: ref Box, o: Point, acc: list of ref Lyr): list of ref Lyr
 				if(f.kind != Fatomic)
 					continue;
 				if(islayer(f.box))
-					acc = addlayer(f.box, o, acc);
+					acc = addlayer(f.box, o, clip, acc);
 				else if(f.box.st.opacity >= 1.0)
-					acc = collectlayers(f.box, o.add(Point(f.box.x, f.box.y)), acc);
+					acc = collectlayers(f.box, o.add(Point(f.box.x, f.box.y)), clipby(f.box, o, clip), acc);
 			}
 		}
-		return floatlayers(b, o, acc);
+		return floatlayers(b, o, clip, acc);
 	}
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k) || k.inl)
 			continue;	# painted from its containing block's pos list
 		if(islayer(k))
-			acc = addlayer(k, o, acc);
+			acc = addlayer(k, o, clip, acc);
 		else if(k.st.opacity >= 1.0)
-			acc = collectlayers(k, o.add(Point(k.x, k.y)), acc);
+			acc = collectlayers(k, o.add(Point(k.x, k.y)), clipby(k, o, clip), acc);
 	}
 	return acc;
 }
 
+# clip narrowed by k's overflow, k's border box being at o
+clipby(k: ref Box, o: Point, clip: Rect): Rect
+{
+	r := Rect((o.x + k.x, o.y + k.y), (o.x + k.x + k.w, o.y + k.y + k.h));
+	return innerclip(k, r, clip);
+}
+
 # floats among inline content (in b, or in its inline boxes): not in
 # the line boxes, but layers if positioned, and holding layers if not
-floatlayers(b: ref Box, o: Point, acc: list of ref Lyr): list of ref Lyr
+floatlayers(b: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of ref Lyr
 {
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
@@ -4763,26 +4964,26 @@ floatlayers(b: ref Box, o: Point, acc: list of ref Lyr): list of ref Lyr
 			continue;
 		if(k.kind == Kinline) {
 			if(k.st.opacity > 0.0)
-				acc = floatlayers(k, o, acc);
+				acc = floatlayers(k, o, clip, acc);
 		}
 		else if(isfloat(k)) {
 			if(islayer(k))
-				acc = addlayer(k, o, acc);
+				acc = addlayer(k, o, clip, acc);
 			else if(k.st.opacity >= 1.0)
-				acc = collectlayers(k, o.add(Point(k.x, k.y)), acc);
+				acc = collectlayers(k, o.add(Point(k.x, k.y)), clipby(k, o, clip), acc);
 		}
 	}
 	return acc;
 }
 
-addlayer(k: ref Box, o: Point, acc: list of ref Lyr): list of ref Lyr
+addlayer(k: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of ref Lyr
 {
 	z := 0;
 	if(!k.st.zauto)
 		z = k.st.z;
-	acc = ref Lyr(k, o, z) :: acc;
+	acc = ref Lyr(k, o, z, clip) :: acc;
 	if(!isctx(k))	# its own layers belong to this context
-		acc = collectlayers(k, o.add(Point(k.x, k.y)), acc);
+		acc = collectlayers(k, o.add(Point(k.x, k.y)), clipby(k, o, clip), acc);
 	return acc;
 }
 
@@ -4805,13 +5006,23 @@ sortlayers(l: list of ref Lyr): list of ref Lyr
 		a[i] = hd l;
 		l = tl l;
 	}
+	# by z-index, then document order: layers reach here by more than
+	# one path (a containing block's pos list, the tree), and only the
+	# document decides among equals
 	for(i = 1; i < n; i++)
-		for(j := i; j > 0 && a[j].z < a[j-1].z; j--)
+		for(j := i; j > 0 && before(a[j], a[j-1]); j--)
 			(a[j], a[j-1]) = (a[j-1], a[j]);
 	r: list of ref Lyr;
 	for(i = n-1; i >= 0; i--)
 		r = a[i] :: r;
 	return r;
+}
+
+before(a, b: ref Lyr): int
+{
+	if(a.z != b.z)
+		return a.z < b.z;
+	return a.box.node < b.box.node;
 }
 
 paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)

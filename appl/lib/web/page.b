@@ -78,6 +78,7 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	if(err != nil && data == nil)
 		return (nil, err);
 	url = final;	# a redirected page's links are relative to where it is
+	svgsrc = nil;	# the previous page's SVG sources
 	charset := param(ctype, "charset");
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
 		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil);
@@ -128,7 +129,7 @@ Pg.target(p: self ref Pg, frag: string): int
 	n := 0;
 	for(i := 1; i < d.n && n == 0; i++) {
 		nd := d.nodes[i];
-		if(nd.kind != Dom->Element)
+		if(nd.kind != Dom->Element || !attached(d, i))
 			continue;
 		if(d.attr(i, "id") == frag || nd.tag == Dom->Ta && d.attr(i, "name") == frag)
 			n = i;
@@ -146,6 +147,14 @@ Pg.target(p: self ref Pg, frag: string): int
 		return y;
 	}
 	return 0;
+}
+
+# in the document, not detached (the parser discards a few nodes)
+attached(d: ref Doc, n: int): int
+{
+	while(n > 1)
+		n = d.nodes[n].parent;
+	return n == 1;
 }
 
 Pg.update(p: self ref Pg)

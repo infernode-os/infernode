@@ -236,6 +236,7 @@ Style: module
 		other:	list of ref Entry;
 		n:	int;
 		layers:	list of string;
+		env:	ref Env;	# the environment whose media queries it reflects
 	};
 	Entry: adt {
 		sel:	ref Css->Sel;

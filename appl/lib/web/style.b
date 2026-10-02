@@ -211,7 +211,7 @@ Ix: adt {
 buildindex(s: ref Styles, env: ref Env): ref Index
 {
 	ix := ref Ix(ref Index(array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry,
-		array[Nbucket] of list of ref Entry, nil, 0, nil), 0, nil, 0, env);
+		array[Nbucket] of list of ref Entry, nil, 0, nil, nil), 0, nil, 0, env);
 	# layer names first, in order of first appearance, so tiers are known
 	sheets: list of (ref Sheet, int, string);
 	for(l := s.sheets; l != nil; l = tl l)
@@ -1805,17 +1805,25 @@ Md: adt {
 
 lastenv: ref Env;
 
+sameenv(a, b: ref Env): int
+{
+	return a != nil && b != nil && a.width == b.width && a.height == b.height &&
+		a.dark == b.dark && a.print == b.print;
+}
+
 compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 {
 	if(sys == nil)
 		init();
 	if(env == nil)
 		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
-	if(s.idx == nil || lastenv == nil || lastenv.width != env.width || lastenv.height != env.height ||
-	   lastenv.dark != env.dark || lastenv.print != env.print) {
+	# the index reflects the media queries of one environment: this
+	# document's, not the last one computed (two pages at two widths)
+	if(s.idx == nil || !sameenv(s.idx.env, env)) {
 		s.idx = buildindex(s, env);
-		lastenv = ref *env;
+		s.idx.env = ref *env;
 	}
+	lastenv = ref *env;	# for light-dark() in colours parsed without a context
 	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
 	m := matcher(d, env);
 	root := d.root();
@@ -1949,7 +1957,7 @@ sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 		return nil;
 	k := string parent.sid;
 	for(; matched != nil; matched = tl matched)
-		k += " " + string (hd matched).order + "." + string (hd matched).sel.spec;
+		k += " " + string (hd matched).order + "." + string (hd matched).sel.spec + (hd matched).sel.pseudo;
 	nd := d.nodes[n];
 	if(nd.attrs != nil) {
 		k += "|" + nd.name;
@@ -4194,10 +4202,16 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		* => return 0;
 		}
 	"tab-size" =>
+		# a number of spaces, or a length (kept negated: px)
 		(ok, n) := number(v, ctx);
-		if(!ok)
-			return 0;
-		st.tabsize = n;
+		if(ok)
+			st.tabsize = n;
+		else {
+			(okl, l) := length(v, ctx);
+			if(!okl || l.pct != 0.0)
+				return 0;
+			st.tabsize = -l.px;
+		}
 	"list-style-type" =>
 		x := trim(v);
 		if(len x != 1)
@@ -4776,8 +4790,10 @@ position(x: array of ref Tok, ctx: ref Ctx): (int, Len, Len)
 		if(t.kind == Kident) {
 			kwd := lower(t.s);
 			off := px(0.0);
-			# an offset after an edge keyword measures from that edge
-			if(k+1 < len x && x[k+1].kind != Kident && kwd != "center") {
+			# an offset after an edge keyword measures from that edge,
+			# in the three- and four-value forms only: "right 10px" is
+			# a horizontal keyword and a vertical length (Backgrounds 3 §3.6)
+			if(len x >= 3 && k+1 < len x && x[k+1].kind != Kident && kwd != "center") {
 				(ok, l) := length(x[k+1:k+2], ctx);
 				if(!ok)
 					return (0, h, v);

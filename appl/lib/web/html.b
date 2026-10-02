@@ -165,8 +165,8 @@ parsexml(data: array of byte, cs, url: string): ref Doc
 		loadentities();
 
 	d := Doc.new(url);
-	stack := array[256] of int;
-	nss := array[256] of list of (string, string);	# prefix bindings in scope
+	stack := array[64] of int;
+	nss := array[64] of list of (string, string);	# prefix bindings in scope
 	stack[0] = 1;
 	nss[0] = ("xml", "http://www.w3.org/XML/1998/namespace") :: nil;
 	sp := 0;
@@ -288,7 +288,15 @@ parsexml(data: array of byte, cs, url: string): ref Doc
 				d.setattr(el, an, av);
 			}
 			d.append(stack[sp], el);
-			if(!empty && sp + 1 < len stack) {
+			if(!empty) {
+				if(sp + 1 >= len stack) {
+					ns2 := array[2*len stack] of int;
+					ns2[0:] = stack;
+					stack = ns2;
+					nn := array[len stack] of list of (string, string);
+					nn[0:] = nss;
+					nss = nn;
+				}
 				sp++;
 				stack[sp] = el;
 				nss[sp] = scope;
@@ -371,13 +379,22 @@ xmlunescape(s: string): string
 		name := s[i+1:e];
 		if(len name > 1 && name[0] == '#') {
 			v := 0;
+			k := 1;
+			base := 10;
 			if(name[1] == 'x' || name[1] == 'X') {
-				for(k := 2; k < len name; k++)
-					v = v*16 + hexval(name[k:k+1]);
-			} else
-				for(k := 1; k < len name; k++)
-					v = v*10 + name[k] - '0';
-			if(v <= 0 || v > 16r10FFFF)
+				k = 2;
+				base = 16;
+			}
+			if(k >= len name)
+				v = -1;
+			for(; k < len name && v >= 0; k++) {
+				dv := digitval(name[k], base == 16);
+				if(dv < 0 || v > 16r10FFFF)
+					v = -1;
+				else
+					v = v*base + dv;
+			}
+			if(v <= 0 || v > 16r10FFFF || v >= 16rD800 && v <= 16rDFFF)
 				v = 16rFFFD;
 			r[len r] = v;
 		} else {
@@ -475,7 +492,58 @@ charset(data: array of byte, transport: string): string
 	cs := prescan(string data[0:n]);
 	if(cs != nil)
 		return cs;
-	return "utf-8";
+	# Undeclared: §13.2.3.2 step 9 leaves the default to the locale and
+	# the implementation; browsers in a Western locale take
+	# windows-1252.  Valid UTF-8 is far too unlikely by chance to be
+	# anything else, so it decides.
+	if(validutf8(data))
+		return "utf-8";
+	return "windows-1252";
+}
+
+# well-formed UTF-8 throughout (RFC 3629): no stray continuation or
+# truncated sequence, no overlong form, no surrogate
+validutf8(b: array of byte): int
+{
+	n := len b;
+	for(i := 0; i < n; ) {
+		c := int b[i];
+		if(c < 16r80) {
+			i++;
+			continue;
+		}
+		k := 0;
+		lo := 16r80;
+		if(c >= 16rC2 && c <= 16rDF)
+			k = 1;
+		else if(c >= 16rE0 && c <= 16rEF) {
+			k = 2;
+			if(c == 16rE0)
+				lo = 16rA0;
+		} else if(c >= 16rF0 && c <= 16rF4) {
+			k = 3;
+			if(c == 16rF0)
+				lo = 16r90;
+		} else
+			return 0;
+		if(i + k >= n)
+			return 0;
+		hi := 16rBF;
+		if(c == 16rED)
+			hi = 16r9F;	# no surrogates
+		if(c == 16rF4)
+			hi = 16r8F;	# no more than U+10FFFF
+		d := int b[i+1];
+		if(d < lo || d > hi)
+			return 0;
+		for(j := 2; j <= k; j++) {
+			d = int b[i+j];
+			if(d < 16r80 || d > 16rBF)
+				return 0;
+		}
+		i += k + 1;
+	}
+	return 1;
 }
 
 canoncs(cs: string): string
@@ -484,8 +552,15 @@ canoncs(cs: string): string
 	case cs {
 	"utf8" or "unicode-1-1-utf-8" or "x-unicode20utf8" =>
 		return "utf-8";
-	"latin1" or "iso-8859-1" or "iso8859-1" or "us-ascii" or "ascii" or "l1" or "cp1252" or "x-cp1252" =>
+	"latin1" or "iso-8859-1" or "iso8859-1" or "us-ascii" or "ascii" or "l1" or "cp1252" or "x-cp1252" or
+	"x-user-defined" =>
 		return "windows-1252";	# as the Encoding standard maps them
+	"gbk" or "gb18030" or "gb_2312" or "gb_2312-80" or "x-gbk" or "chinese" or "csgb2312" =>
+		return "gb2312";	# the superset's common characters; its own tables are not here
+	"shift_jis" or "shift-jis" or "sjis" or "x-sjis" or "ms_kanji" or "windows-31j" or "cp932" =>
+		return "cp932";
+	"utf-16" or "unicodefffe" or "unicodefeff" or "ucs-2" =>
+		return "utf-16";	# the byte-order mark or a guess decides the order
 	}
 	return cs;
 }
@@ -756,8 +831,14 @@ lexraw(p: ref P, refs: int): ref Tok
 			continue;
 		break;
 	}
-	if(e == i)
+	if(e == i) {
+		if(e+2+len en >= n) {
+			# "</script" at the end of the input is text (§13.2.5.17)
+			p.i = n;
+			return chartok(s[i:n]);
+		}
 		return tagtok(p, i+2, Kend);
+	}
 	text := s[i:e];
 	if(refs) {
 		r := "";
@@ -1896,20 +1977,32 @@ prefix(s, p: string): int
 }
 
 # the commonest of the standard's quirky public identifiers
+# public identifier prefixes that put the document in quirks mode
+# (§13.2.6.4.1), where several of the standard's start the same way
 quirkpfx := array[] of {
 	"+//silmaril//dtd html pro v0r11 19970101//",
+	"-//advasoft ltd//dtd html 3.0 aswedit + extensions//",
 	"-//as//dtd html 3.0 aswedit + extensions//",
 	"-//ietf//dtd html 2.0",
+	"-//ietf//dtd html 2.1e//",
 	"-//ietf//dtd html 3",
 	"-//ietf//dtd html//",
 	"-//ietf//dtd html level",
 	"-//ietf//dtd html strict",
+	"-//metrius//dtd metrius presentational//",
 	"-//microsoft//dtd internet explorer",
 	"-//netscape comm. corp.//dtd",
+	"-//o'reilly and associates//dtd html",
+	"-//softquad software//dtd hotmetal pro 6.0::19990601::extensions to html 4.0//",
+	"-//softquad//dtd hotmetal pro 4.0::19971010::extensions to html 4.0//",
+	"-//spyglass//dtd html 2.0 extended//",
+	"-//sq//dtd html 2.0 hotmetal + extensions//",
+	"-//sun microsystems corp.//dtd hotjava",
 	"-//w3c//dtd html 3",
 	"-//w3c//dtd html 4.0 frameset//",
 	"-//w3c//dtd html 4.0 transitional//",
 	"-//w3c//dtd html experimental",
+	"-//w3c//dtd w3 html//",
 	"-//w3o//dtd w3 html 3.0//",
 	"-//webtechs//dtd mozilla html",
 };
@@ -3153,12 +3246,37 @@ insertforeign(p: ref P, t: ref Tok, ns: int)
 	push(p, n);
 }
 
+# the SVG spelling of a lower-cased tag or attribute name, if it has one
 svgname(s: string, tab: array of string): string
 {
+	lt := svglower(tab);
 	for(i := 0; i < len tab; i++)
-		if(len tab[i] == len s && lower(tab[i]) == s)
+		if(lt[i] == s)
 			return tab[i];
 	return s;
+}
+
+# the tables lower-cased, once
+svgtagsl, svgattrsl: array of string;
+
+svglower(tab: array of string): array of string
+{
+	if(tab == svgtags) {
+		if(svgtagsl == nil)
+			svgtagsl = lowerall(tab);
+		return svgtagsl;
+	}
+	if(svgattrsl == nil)
+		svgattrsl = lowerall(tab);
+	return svgattrsl;
+}
+
+lowerall(tab: array of string): array of string
+{
+	r := array[len tab] of string;
+	for(i := 0; i < len tab; i++)
+		r[i] = lower(tab[i]);
+	return r;
 }
 
 svgtags := array[] of {

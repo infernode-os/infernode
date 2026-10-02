@@ -221,6 +221,14 @@ Doc.append(d: self ref Doc, parent, child: int)
 
 Doc.insert(d: self ref Doc, parent, child, before: int)
 {
+	# A script host can ask for the impossible: a node before itself,
+	# before a node elsewhere, or inside its own descendant.  Each
+	# would make a cycle, so the tree is left as it was.
+	if(child == before || child == parent || before != 0 && d.nodes[before].parent != parent)
+		return;
+	for(a := parent; a != 0; a = d.nodes[a].parent)
+		if(a == child)
+			return;
 	if(d.nodes[child].parent != 0)
 		d.remove(child);
 	p := d.nodes[parent];

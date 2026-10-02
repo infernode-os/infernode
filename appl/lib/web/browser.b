@@ -250,6 +250,78 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	u := s.url;
 	unlock(s);
 	event(s, "done " + u);
+	refresh(s, g, pg);
+}
+
+# <meta http-equiv=refresh content="N[; url=U]"> (HTML §4.2.5.3): go to
+# U, or load this page again, after N seconds, unless something else
+# has happened to the session by then.
+refresh(s: ref Session, g: int, pg: ref Pg)
+{
+	d := pg.doc;
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || nd.tag != Dom->Tmeta)
+			continue;
+		if(lower(d.attr(n, "http-equiv")) != "refresh")
+			continue;
+		(secs, u) := refreshcontent(d.attr(n, "content"));
+		if(secs < 0)
+			continue;
+		if(u == "")
+			u = unfrag(pg.url);
+		else
+			u = resolve(pg.url, u);
+		spawn refresher(s, g, u, secs);
+		return;
+	}
+}
+
+refresher(s: ref Session, g: int, url: string, secs: int)
+{
+	if(secs > 0)
+		sys->sleep(secs * 1000);
+	lock(s);
+	live := s.gen == g;
+	unlock(s);
+	if(live)
+		navigate(s, url, "GET", nil, nil, Hnew);
+}
+
+# "5; url=http://x", "0;URL='x'", "3" -> (seconds, url); seconds -1 if unreadable
+refreshcontent(c: string): (int, string)
+{
+	i := 0;
+	while(i < len c && isws(c[i]))
+		i++;
+	j := i;
+	while(j < len c && c[j] >= '0' && c[j] <= '9')
+		j++;
+	if(j == i)
+		return (-1, nil);
+	secs := int c[i:j];
+	while(j < len c && (c[j] >= '0' && c[j] <= '9' || c[j] == '.'))
+		j++;	# a fraction is ignored
+	while(j < len c && (isws(c[j]) || c[j] == ';' || c[j] == ','))
+		j++;
+	if(j >= len c)
+		return (secs, "");
+	u := c[j:];
+	if(len u >= 4 && lower(u[0:3]) == "url") {
+		k := 3;
+		while(k < len u && (isws(u[k]) || u[k] == '='))
+			k++;
+		u = u[k:];
+	}
+	u = trim(u);
+	if(len u >= 2 && (u[0] == '\'' || u[0] == '"') && u[len u - 1] == u[0])
+		u = u[1:len u - 1];
+	return (secs, trim(u));
+}
+
+isws(c: int): int
+{
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
 }
 
 # Make the element the fragment names the :target, and return its y.

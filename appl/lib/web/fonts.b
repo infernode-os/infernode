@@ -138,17 +138,20 @@ face(families: list of string, weight, italic: int, size: real): ref Typeface
 		parts := webparts(hd l, weight, italic);
 		if(parts == nil)
 			continue;
+		# what stands in for the characters this family lacks is part
+		# of the face: "Ahem", serif and "Ahem", sans-serif differ
+		next := shipped(tl l, weight, italic, size);
 		h := ((hashstr(hd l) + weight + italic*7 + int (size*4.0)) & 16r7FFFFFFF) % Nfaces;
 		for(cl := cache[h]; cl != nil; cl = tl cl) {
 			c := hd cl;
-			if(c.size == size && c.parts == parts)
+			if(c.size == size && c.parts == parts && c.next == next)
 				return c;
 		}
 		o := parts[0].outline;
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
 		f := ref Typeface(o, size, asc, desc, asc + desc, 0.0, fallback(size), parts, nil, 0);
-		f.next = shipped(tl l, weight, italic, size);
+		f.next = next;
 		f.space = advance(f, ' ');
 		cache[h] = f :: cache[h];
 		return f;

@@ -171,6 +171,21 @@ testCharset(t: ref T)
 	l1 := array[] of {byte '<', byte 'p', byte '>', byte 16rE9};
 	d = html->parse(l1, "iso-8859-1", nil);
 	t.assertseq(d.textof(d.root()), "é", "latin1 decode");
+	# undeclared and not UTF-8: windows-1252, as browsers in a Western locale
+	t.assertseq(html->charset(l1, nil), "windows-1252", "undeclared latin1 is sniffed");
+	d = html->parse(l1, nil, nil);
+	t.assertseq(d.textof(d.root()), "é", "undeclared latin1 decode");
+	t.assertseq(html->charset(array of byte "<p>日本語", nil), "utf-8", "undeclared valid utf-8");
+	# UTF-16 with a byte-order mark
+	u16 := array[] of {byte 16rFF, byte 16rFE, byte '<', byte 0, byte 'p', byte 0, byte '>', byte 0, byte 16rE9, byte 0};
+	t.assertseq(html->charset(u16, nil), "utf-16le", "utf-16 BOM");
+	d = html->parse(u16, nil, nil);
+	t.assertseq(d.textof(d.root()), "é", "utf-16 decode");
+	t.assertseq(d.nodes[d.find(1, Dom->Tp)].name, "p", "utf-16 markup parsed");
+	t.assertseq(html->charset(array of byte "<p>x", "GBK"), "gb2312", "gbk alias");
+	# a truncated end tag at the end of script data is text
+	d = html->parsestring("<script>x</scri", nil);
+	t.assertseq(d.textof(d.find(1, Dom->Tscript)), "x</scri", "truncated end tag is text");
 }
 
 testMutation(t: ref T)
@@ -184,6 +199,11 @@ testMutation(t: ref T)
 	d.append(li, tx);
 	second := d.nodes[d.nodes[ul].first].next;
 	d.insert(ul, li, second);
+	# the impossible is refused, not done
+	d.insert(ul, second, second);
+	d.insert(second, ul, 0);
+	t.asserteq(d.nodes[second].next, 0, "insert before itself refused");
+	t.asserteq(d.nodes[ul].parent != second, 1, "insert into a descendant refused");
 	t.assertseq(d.textof(ul), "abc", "insert before");
 	d.remove(d.nodes[ul].first);
 	t.assertseq(d.textof(ul), "bc", "remove first");

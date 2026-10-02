@@ -322,6 +322,8 @@ dis/lib/convcs/euc-jp_btos.dis
 dis/lib/convcs/gb2312_btos.dis
 dis/lib/convcs/tune_btos.dis
 dis/lib/convcs/tune_stob.dis
+dis/lib/convcs/utf16_btos.dis
+dis/lib/convcs/utf16_stob.dis
 dis/lib/convcs/utf8_btos.dis
 dis/lib/convcs/utf8_stob.dis
 dis/lib/crc.dis

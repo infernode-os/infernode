@@ -853,7 +853,22 @@ specheight(b: ref Box, cbh: int): int
 {
 	if(b == imposed)
 		return imposedh;
+	if(b == asauto)
+		return -1;
 	return spech(b, b.st.height, cbh);
+}
+
+asauto: ref Box;	# being measured for its content height: its height property is ignored
+
+# k's content height: its height as if auto (the max-content block
+# size, CSS Sizing 3 §5.2), laid out at its width k.w
+contentheightof(l: ref L, k: ref Box, cw: int): int
+{
+	outer := asauto;
+	asauto = k;
+	layblock(l, k, cw, -1, nil, 0, 0);
+	asauto = outer;
+	return k.h;
 }
 
 # lay k out again with the height h (its border box) imposed, if its
@@ -870,6 +885,11 @@ imposeh(l: ref L, k: ref Box, h, cbw, cbh: int)
 		imposedh = outerh;
 	}
 	k.h = h;
+}
+
+seethrough(o: int): int
+{
+	return o == Style->Ovisible || o == Style->Oclip;
 }
 
 # Would b's content come out differently if its height were known?
@@ -1435,8 +1455,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				base = mx - nz(k.ml) - nz(k.mr);
 			} else {
 				k.w = flexcrossw(k, b, cw);
-				layblock(l, k, cw, -1, nil, 0, 0);
-				base = contenth = k.h;
+				base = contenth = contentheightof(l, k, cw);
 			}
 		}
 		fi.base = real base;
@@ -1450,7 +1469,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		minm := mainsize(k, mnv, row, maindef);
 		if(minm < 0) {
 			minm = 0;
-			if(mnv.kind == Style->Lauto && ks.overflowx == Style->Ovisible && ks.overflowy == Style->Ovisible) {
+			# (overflow: clip does not take the minimum away, Overflow 3 §3.1)
+			if(mnv.kind == Style->Lauto && seethrough(ks.overflowx) && seethrough(ks.overflowy)) {
 				if(row) {
 					(mn, nil) := intrinsic(k);
 					minm = mn - nz(k.ml) - nz(k.mr);
@@ -1460,8 +1480,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				} else {
 					if(contenth < 0) {
 						k.w = flexcrossw(k, b, cw);
-						layblock(l, k, cw, -1, nil, 0, 0);
-						contenth = k.h;
+						contenth = contentheightof(l, k, cw);
 					}
 					minm = contenth;
 					if((sh := spech(k, ks.height, maindef)) >= 0 && sh < minm)
@@ -3605,7 +3624,8 @@ topmargin(k: ref Box, cw: int): Margin
 	return m;
 }
 
-placefloat(l: ref L, k: ref Box, fc: ref Fctx, cx, y, cw, ch, ox, oy: int)
+# a float's margin-box width, its edges and width set
+floatwidth(k: ref Box, cw: int): int
 {
 	edges(k, cw);
 	w := specw(k, k.st.width, cw);
@@ -3623,8 +3643,13 @@ placefloat(l: ref L, k: ref Box, fc: ref Fctx, cx, y, cw, ch, ox, oy: int)
 	if(k.st.mr.kind == Style->Lauto)
 		k.mr = 0;
 	k.w = clampw(k, w, cw);
+	return k.ml + k.w + k.mr;
+}
+
+placefloat(l: ref L, k: ref Box, fc: ref Fctx, cx, y, cw, ch, ox, oy: int)
+{
+	mw := floatwidth(k, cw);
 	layblock(l, k, cw, ch, nil, 0, 0);	# % heights against a definite one
-	mw := k.ml + k.w + k.mr;
 	mh := k.mt + k.h + k.mb;
 	if(k.st.clear != Style->Cnone) {
 		c := clearance(fc, k.st.clear);
@@ -4416,6 +4441,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch);
 	x0 := b.bl + b.pl;
 	para := 0;
+	joinruns(items);
 	(items, para) = bidiitems(b, items);
 	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, nil);
 	edgesat(f, ln);
@@ -4503,12 +4529,28 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			ln.x += real w;
 			ln.content = 1;
 		Ifloat =>
-			if(ln.content)
-				ln.floats = it.box :: ln.floats;	# after this line
-			else {
+			if(!ln.content || real floatwidth(it.box, cw) <= real ln.avail - ln.x + 0.01) {
+				# on this line: at its top, beside what is on it already
+				# (CSS 2.2 §9.5.1 rules 4 and 7)
+				oldleft := ln.left;
 				placefloat(l, it.box, fc, ox + x0, oy + f.y, cw, f.ch, ox, oy);
 				edgesat(f, ln);
-			}
+				if(ln.left > oldleft && ln.content) {
+					# a left float: the line's content moves right past it
+					d := ln.left - oldleft;
+					for(fl := ln.frags; fl != nil; fl = tl fl)
+						(hd fl).x += d;
+					ln.x += real d;
+					r: list of (ref Box, real, int, int);
+					for(ol := ln.open; ol != nil; ol = tl ol) {
+						(ob, ostart, ofirst, olevel) := hd ol;
+						r = (ob, ostart + real d, ofirst, olevel) :: r;
+					}
+					for(ln.open = nil; r != nil; r = tl r)
+						ln.open = hd r :: ln.open;
+				}
+			} else
+				ln.floats = it.box :: ln.floats;	# after this line
 		Iabs =>
 			l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y) :: l.pending;
 		Ibreak =>
@@ -4894,6 +4936,54 @@ shiftfrag(g: ref Frag, dx, dy: int)
 # out at different levels is split so that each item has one.  Also
 # the paragraph's level.  Content with nothing right-to-left in it is
 # left as it is.
+# Cursive text shaped across an inline box's edge (CSS Text 3 §8.3):
+# where a word ends and the next begins with nothing between them but
+# edges of no width, each gets a zero width joiner on that side, so
+# the font joins them as if they were one word.
+joinruns(items: list of ref Item)
+{
+	if(bidi == nil)
+		return;
+	prev: ref Item;	# the word before, unless something with width intervened
+	for(l := items; l != nil; l = tl l) {
+		it := hd l;
+		case it.kind {
+		Iword =>
+			if(prev != nil && len prev.text > 0 && len it.text > 0 && joins(prev.text[len prev.text - 1], it.text[0])) {
+				prev.text[len prev.text] = 16r200D;
+				rewidth(prev);
+				z := "";
+				z[0] = 16r200D;
+				it.text = z + it.text;
+				rewidth(it);
+			}
+			prev = it;
+		Iopen or Iclose =>
+			if(it.w > 0.0)
+				prev = nil;
+		* =>
+			prev = nil;
+		}
+	}
+}
+
+# does a letter a, followed by b, join with it?
+joins(a, b: int): int
+{
+	ja := bidi->joining(a);
+	jb := bidi->joining(b);
+	return (ja == Bidi->JD || ja == Bidi->JL || ja == Bidi->JC) && (jb == Bidi->JD || jb == Bidi->JR || jb == Bidi->JC);
+}
+
+rewidth(it: ref Item)
+{
+	n := 0;
+	for(i := 0; i < len it.text; i++)
+		if(it.text[i] != 16r200D)
+			n++;
+	it.w = it.face.width(it.text) + it.box.st.letterspacing * real n;
+}
+
 bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 {
 	st := b.st;
@@ -5182,15 +5272,12 @@ reorderline(frags: array of ref Frag, para: int)
 		if(hi < lo)
 			continue;
 		b := f.box;
-		es := 0;
-		ee := 0;
-		if(f.first)
-			es = b.ml + b.bl + b.pl;
-		if(f.last)
-			ee = b.mr + b.br + b.pr;
-		(el, er) := (es, ee);
-		if(b.st.dirrtl)
-			(el, er) = (ee, es);
+		el := 0;
+		er := 0;
+		if(leftedge(f))
+			el = b.ml + b.bl + b.pl;
+		if(rightedge(f))
+			er = b.mr + b.br + b.pr;
 		if(el > 0) {
 			for(k = 0; k < n; k++)
 				if(v[k].x >= lo)
@@ -5245,12 +5332,30 @@ edgesin(frags: array of ref Frag, a, b: int): int
 		if(f.kind != Fspan)
 			continue;
 		k := f.box;
-		if(f.first && (e := k.ml + k.bl + k.pl) > 0 && 2*f.x + e >= 2*a && 2*f.x + e <= 2*b)
+		if(leftedge(f) && (e := k.ml + k.bl + k.pl) > 0 && 2*f.x + e >= 2*a && 2*f.x + e <= 2*b)
 			w += e;
-		if(f.last && (e = k.mr + k.br + k.pr) > 0 && 2*(f.x + f.w) - e >= 2*a && 2*(f.x + f.w) - e <= 2*b)
+		if(rightedge(f) && (e = k.mr + k.br + k.pr) > 0 && 2*(f.x + f.w) - e >= 2*a && 2*(f.x + f.w) - e <= 2*b)
 			w += e;
 	}
 	return w;
+}
+
+# Which physical edges an inline box's fragment carries: the box's
+# start edge is on its first fragment and its end edge on its last,
+# and in a right-to-left box the start is the right (Writing Modes
+# §2.2); the sides themselves (left border, right padding) stay put.
+leftedge(f: ref Frag): int
+{
+	if(f.box.st.dirrtl)
+		return f.last;
+	return f.first;
+}
+
+rightedge(f: ref Frag): int
+{
+	if(f.box.st.dirrtl)
+		return f.first;
+	return f.last;
 }
 
 append(v: array of ref Vis, e: ref Vis): array of ref Vis
@@ -5285,13 +5390,15 @@ isblankrun(s: string): int
 
 # a right-to-left run is drawn with its characters reversed, each
 # mirrored where Unicode says (brackets)
+# a right-to-left run's text as drawn: still in logical order (the
+# font draws it from the right, shaped as written), brackets mirrored
 visual(f: ref Frag): string
 {
 	if(f.level % 2 == 0 || bidi == nil)
 		return f.text;
 	s := f.text;
 	r := "";
-	for(i := len s - 1; i >= 0; i--)
+	for(i := 0; i < len s; i++)
 		r[len r] = bidi->mirror(s[i]);
 	return r;
 }
@@ -5611,8 +5718,10 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		o = o.add(scrolled);
 		clip = viewport;
 	}
-	if(st.translated)	# moved as drawn: its place in the flow is unchanged
+	if(st.translated) {	# moved as drawn: its place in the flow is unchanged
 		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
+		intransform++;
+	}
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
 	# A positioned box with z-index: auto is painted as a layer but is
 	# not a stacking context: its positioned descendants are layers of
@@ -5636,7 +5745,11 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		if((hd l).z >= 0)
 			paintctx(dst, (hd l).box, (hd l).o, layerclip(inner, hd l), canvasbg);
 	paintoutline(dst, b, r, clip);
+	if(st.translated)
+		intransform--;
 }
+
+intransform := 0;	# painting inside a transformed box: fixed backgrounds attach to it, not the viewport
 
 # a layer's clip: the context's, and that of any overflow-clipping box
 # between (a positioned box that is not a stacking context clips its
@@ -6307,7 +6420,7 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	Style->BOXborder =>	area = r;
 	Style->BOXcontent =>	area = cbox;
 	}
-	if(bg.attfixed)
+	if(bg.attfixed && intransform == 0)
 		area = viewport;	# placed against the viewport, still shown only in the box
 	clip := r;	# background-clip
 	case bg.clip {
@@ -6351,8 +6464,17 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 				w = h * real iw / real ih;
 		}
 	}
+	# round: as many whole tiles as fit nearest, each scaled to fit exactly
+	if(bg.rx == Style->Rround && w > 0.0)
+		w = real aw / real nearest(real aw / w);
+	if(bg.ry == Style->Rround && h > 0.0)
+		h = real ah / real nearest(real ah / h);
 	tw := int w;	# int rounds
 	th := int h;
+	if(w > 0.0 && tw < 1)	# a sliver still shows (it is repeated into a fill)
+		tw = 1;
+	if(h > 0.0 && th < 1)
+		th = 1;
 	if(tw <= 0 || th <= 0)
 		return;
 	if(!grad && (tw != iw || th != ih)) {
@@ -6394,6 +6516,14 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 				dst.draw(t, img, nil, img.r.min.add(t.min.sub(Point(x, y))));
 		}
 	dst.clipr = oclip;
+}
+
+nearest(x: real): int
+{
+	n := int x;	# int rounds
+	if(n < 1)
+		n = 1;
+	return n;
 }
 
 # linear-gradient() and radial-gradient() backgrounds, as bands of colour
@@ -6612,7 +6742,7 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 		(cl, ok) := cr.clip(oc);
 		if(ok) {
 			dst.clipr = cl;
-			f.draw(dst, Point(cr.min.x + 1, y), b.text, colorimg(c));
+			f.draw(dst, Point(cr.min.x + 1, y), b.text, colorimg(c), 0);
 			dst.clipr = oc;
 		}
 	}
@@ -6712,10 +6842,10 @@ paintspan(dst: ref Image, f: ref Frag, o: Point)
 	b := f.box;
 	st := b.st;
 	x0 := o.x + f.x;
-	if(f.first)
+	if(leftedge(f))
 		x0 += b.ml;
 	x1 := o.x + f.x + f.w;
-	if(f.last)
+	if(rightedge(f))
 		x1 -= b.mr;
 	r := Rect((x0, o.y + f.y), (x1, o.y + f.y + f.h));
 	if(visible(st.bgcolor))
@@ -6725,9 +6855,9 @@ paintspan(dst: ref Image, f: ref Frag, o: Point)
 			paintbg(dst, b, r, st.bg[i]);
 	side(dst, Rect(r.min, (r.max.x, r.min.y + b.bt)), b.bt, st.bct, st.bst, 0, 1);
 	side(dst, Rect((r.min.x, r.max.y - b.bb), r.max), b.bb, st.bcb, st.bsb, 0, 0);
-	if(f.first)
+	if(leftedge(f))
 		side(dst, Rect(r.min, (r.min.x + b.bl, r.max.y)), b.bl, st.bcl, st.bsl, 1, 1);
-	if(f.last)
+	if(rightedge(f))
 		side(dst, Rect((r.max.x - b.br, r.min.y), r.max), b.br, st.bcr, st.bsr, 1, 0);
 }
 
@@ -6742,22 +6872,26 @@ painttext(dst: ref Image, f: ref Frag, o: Point)
 	for(i := 0; i < len st.textshadows; i++) {
 		s := st.textshadows[i];
 		if(visible(s.color))
-			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), text, colorimg(s.color), st.letterspacing);
+			drawtext(dst, fc, p.add(Point(int s.x, int s.y)), text, colorimg(s.color), st.letterspacing, f.level % 2);
 	}
 	if(visible(st.color))
-		drawtext(dst, fc, p, text, colorimg(st.color), st.letterspacing);
+		drawtext(dst, fc, p, text, colorimg(st.color), st.letterspacing, f.level % 2);
 	paintdeco(dst, f, o);
 }
 
-drawtext(dst: ref Image, fc: ref Typeface, p: Point, s: string, c: ref Image, ls: real)
+drawtext(dst: ref Image, fc: ref Typeface, p: Point, s: string, c: ref Image, ls: real, rtl: int)
 {
 	if(ls == 0.0) {
-		fc.draw(dst, p, s, c);
+		fc.draw(dst, p, s, c, rtl);
 		return;
 	}
+	# spaced out: one character at a time, the last one leftmost if rtl
 	x := real p.x;
 	for(i := 0; i < len s; i++) {
-		x += fc.draw(dst, Point(int x, p.y), s[i:i+1], c) + ls;
+		k := i;
+		if(rtl)
+			k = len s - 1 - i;
+		x += fc.draw(dst, Point(int x, p.y), s[k:k+1], c, rtl) + ls;
 	}
 }
 

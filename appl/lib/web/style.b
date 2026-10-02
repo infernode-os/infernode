@@ -1168,7 +1168,7 @@ cmpfeature(nm, op: string, val: array of ref Tok, env: ref Env): int
 		have := real env.width;
 		if(nm == "height" || nm == "device-height")
 			have = real env.height;
-		(ok, l) := length(val, ref Ctx(16.0, 16.0, env, 0, nil, 400, 0));
+		(ok, l) := length(val, ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0));
 		if(!ok || l.kind != Lpx)
 			return 0;
 		return cmp(have, op, l.px);
@@ -1259,7 +1259,7 @@ supportsdecl(v: array of ref Tok): int
 	if(prefix(nm, "--"))
 		return 1;
 	s := St.new();
-	ctx := ref Ctx(16.0, 16.0, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
+	ctx := ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
 	lh := longhands(nm, trim(v[2:]));
 	if(lh == nil)
 		return 0;
@@ -1797,6 +1797,7 @@ isinherited(nm: string): int
 Ctx: adt {
 	fs:	real;		# font size for em units
 	rootfs:	real;	# for rem units
+	lh:	real;		# line height for lh units
 	env:	ref Env;
 	pct:	int;		# percentages allowed (unused)
 	fam:	list of string;	# the font, for ex and ch units
@@ -1846,7 +1847,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	root := d.root();
 	if(root == 0)
 		return c;
-	ctx := ref Ctx(16.0, 16.0, env, 0, nil, 400, 0);
+	ctx := ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;	# filter for each element's children
 	n := root;
@@ -2141,6 +2142,12 @@ cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 	ctx.fam = st.family;
 	ctx.weight = st.weight;
 	ctx.italic = st.fontstyle != FSnormal;
+	# then the line height, for lh units (its own lh is the parent's)
+	ctx.lh = lineheightpx(pst);
+	for(i = 0; i < len mds; i++)
+		if(mds[i].decl.name == "line-height")
+			applydecl(st, mds[i].decl, parent, ctx);
+	ctx.lh = lineheightpx(st);
 	for(i = 0; i < len mds; i++) {
 		nm := mds[i].decl.name;
 		if(nm == "font")	# its line-height's em is this element's font size
@@ -2451,7 +2458,7 @@ unit(n: real, u: string, ctx: ref Ctx): (int, real)
 		}
 		return (1, n*ctx.fs*0.5);
 	"ic" => return (1, n*ctx.fs);
-	"lh" => return (1, n*ctx.fs*1.2);
+	"lh" => return (1, n*ctx.lh);
 	"rlh" => return (1, n*ctx.rootfs*1.2);
 	"vw" or "svw" or "lvw" or "dvw" or "cqw" or "cqi" => return (1, n*real ctx.env.width/100.0);
 	"vh" or "svh" or "lvh" or "dvh" or "cqh" or "cqb" => return (1, n*real ctx.env.height/100.0);
@@ -2822,7 +2829,7 @@ channels(t: ref Tok): (int, array of (int, real), (int, real))
 				return (0, nil, alpha);
 			c = (Knumber, 0.0);
 		Kfunction =>
-			e := calcexpr(x, ref Ctx(16.0, 16.0, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0));
+			e := calcexpr(x, ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0));
 			if(e == nil)
 				return (0, nil, alpha);
 			(nil, p, pc) := fold(e);
@@ -3630,10 +3637,11 @@ background(v: array of ref Tok): list of (string, array of ref Tok)
 		}
 		li++;
 	}
-	return ("background-color", col) :: ("background-image", toarray(rev(img))) ::
-		("background-repeat", toarray(rev(rep))) :: ("background-position", toarray(rev(pos))) ::
-		("background-size", toarray(rev(size))) :: ("background-attachment", toarray(rev(att))) ::
-		("background-origin", toarray(rev(org))) :: ("background-clip", toarray(rev(clip))) :: nil;
+	# the lists were built backwards; toarray turns them round
+	return ("background-color", col) :: ("background-image", toarray(img)) ::
+		("background-repeat", toarray(rep)) :: ("background-position", toarray(pos)) ::
+		("background-size", toarray(size)) :: ("background-attachment", toarray(att)) ::
+		("background-origin", toarray(org)) :: ("background-clip", toarray(clip)) :: nil;
 }
 
 rev(l: list of ref Tok): list of ref Tok
@@ -4003,9 +4011,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				return 0;
 			args := commas(t.kids);
 			case t.s {
-			"translate" or "translateX" or "translateY" or "translate3d" =>
+			"translate" or "translatex" or "translatey" or "translate3d" =>	# function names come lowercased
 				n := len args;
-				if(n < 1 || t.s == "translateY" && n > 1 || t.s == "translateX" && n > 1 || t.s == "translate" && n > 2 || t.s == "translate3d" && n != 3)
+				if(n < 1 || t.s == "translatey" && n > 1 || t.s == "translatex" && n > 1 || t.s == "translate" && n > 2 || t.s == "translate3d" && n != 3)
 					return 0;
 				for(k := 0; k < n && k < 2; k++) {
 					(ok, l) := length(hd args, ctx);
@@ -4013,7 +4021,7 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 					if(!ok || l.kind != Lpx)
 						return 0;
 					# a percentage is of the box's own size; kept as such
-					if(t.s == "translateY" || k == 1) {
+					if(t.s == "translatey" || k == 1) {
 						ty += l.px;
 						pty += l.pct;
 					} else {
@@ -4021,8 +4029,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 						ptx += l.pct;
 					}
 				}
-			"rotate" or "rotateX" or "rotateY" or "rotateZ" or "rotate3d" or "scale" or "scaleX" or
-			"scaleY" or "scaleZ" or "scale3d" or "skew" or "skewX" or "skewY" or "matrix" or
+			"rotate" or "rotatex" or "rotatey" or "rotatez" or "rotate3d" or "scale" or "scalex" or
+			"scaley" or "scalez" or "scale3d" or "skew" or "skewx" or "skewy" or "matrix" or
 			"matrix3d" or "perspective" =>
 				;
 			* =>

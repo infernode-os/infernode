@@ -87,6 +87,11 @@ px(l: Len): real
 	return l.px;
 }
 
+suffix(s, e: string): int
+{
+	return len s >= len e && s[len s - len e:] == e;
+}
+
 col(c: int): string
 {
 	return sys->sprint("%.8ux", c);
@@ -319,6 +324,18 @@ testBackgrounds(t: ref T)
 	t.asserteq(len b.bg, 2, "image after size");
 	t.assert(b.bg[0].img != nil && b.bg[1].img != nil, "both images");
 	t.asserteq(b.bg[1].sizex.kind, Style->Lpx, "earlier size kept for both");
+	p = page("<div id=g style='background: linear-gradient(green, green) 25px 10px / 30px 40px no-repeat round, red'></div>");
+	g := st(p, "g");
+	# the colour is the last layer's, whose image is none: two layers
+	t.assert(len g.bg == 2 && g.bg[0].img != nil && g.bg[0].img.kind == Css->Kfunction && g.bg[1].img == nil && col(g.bgcolor) == "ff0000ff",
+		sys->sprint("a gradient layer and the colour: %d layers, colour %s", len g.bg, col(g.bgcolor)));
+	t.assert(px(g.bg[0].posx) == 25.0 && px(g.bg[0].posy) == 10.0, sys->sprint("gradient position %g %g", px(g.bg[0].posx), px(g.bg[0].posy)));
+	t.assert(px(g.bg[0].sizex) == 30.0 && px(g.bg[0].sizey) == 40.0, sys->sprint("gradient size %g %g", px(g.bg[0].sizex), px(g.bg[0].sizey)));
+	t.assert(g.bg[0].rx == Style->Rnorepeat && g.bg[0].ry == Style->Rround, "no-repeat round");
+	p = page("<div id=u style='background: url(a.png) 25px 10px / 30px 40px no-repeat, url(b.png)'></div><div id=v style='background: linear-gradient(green, green) 25px 10px'></div>");
+	u := st(p, "u");
+	t.assert(len u.bg == 2 && suffix(u.bg[0].img.s, "a.png") && px(u.bg[0].posx) == 25.0 && px(u.bg[0].sizey) == 40.0, sys->sprint("two layers in order, position and size: %d layers, first %s, %g %g", len u.bg, u.bg[0].img.s, px(u.bg[0].posx), px(u.bg[0].sizey)));
+	t.assert(px(st(p, "v").bg[0].posx) == 25.0, sys->sprint("gradient alone position %g", px(st(p, "v").bg[0].posx)));
 }
 
 testHints(t: ref T)
@@ -353,6 +370,10 @@ testHints(t: ref T)
 	t.assertseq(col(st(p, "r").color), "000000ff", "color: revert with no UA value is unset (inherited)");
 	t.asserteq(st(p, "f").safe, 1, "safe recorded for align-content only");
 	t.asserteq(st(p, "f").aligncontent, Style->ALcenter, "safe center is center");
+	p = page("<div id=a style='transform: translateX(100%)'></div><div id=b style='transform: translate(10px, 2em) rotate(45deg)'></div><div id=c style='transform: none'></div>");
+	t.assert(st(p, "a").translated && st(p, "a").tx.pct == 100.0 && st(p, "a").ty.px == 0.0, "translateX(100%): a percentage of the box's width");
+	t.assert(st(p, "b").translated && px(st(p, "b").tx) == 10.0 && px(st(p, "b").ty) == 32.0, sys->sprint("translate(10px, 2em) with a rotate: %g %g", px(st(p, "b").tx), px(st(p, "b").ty)));
+	t.assert(!st(p, "c").translated, "transform: none");
 }
 
 testPseudo(t: ref T)

@@ -318,15 +318,18 @@ hasligs(o: ref OutlineFont->Face): int
 shape(f: ref Typeface, s: string): array of ref Slot
 {
 	a := array[len s] of ref Slot;
+	slot := array[len s] of int;	# each character's slot, or -1
 	n := 0;
 	for(i := 0; i < len s; i++) {
+		slot[i] = -1;
 		if(zerowidth(s[i]))
 			continue;
 		(o, g) := glyph(f, s[i]);
+		slot[i] = n;
 		a[n++] = ref Slot(o, g, s[i]);
 	}
 	a = a[0:n];
-	joinforms(a);
+	joinforms(s, slot, a);
 	# ligatures, over runs of one outline face
 	for(i = 0; i < n; ) {
 		o := a[i].o;
@@ -361,23 +364,25 @@ shape(f: ref Typeface, s: string): array of ref Slot
 # Cursive joining (Unicode chapter 9): each letter takes its initial,
 # medial, final or isolated form by whether its neighbours join to it,
 # through the font's init, medi, fina and isol features.  Transparent
-# characters (marks) are looked past.
-joinforms(a: array of ref Slot)
+# characters (marks) are looked past; a zero width joiner at either
+# end stands for a joining neighbour beyond this run (layout puts one
+# there where a run continues across an inline box's edge).
+joinforms(s: string, slot: array of int, a: array of ref Slot)
 {
 	if(bidi == nil)
 		return;
-	jt := array[len a] of int;
+	jt := array[len s] of int;
 	any := 0;
-	for(i := 0; i < len a; i++) {
-		jt[i] = bidi->joining(a[i].c);
+	for(i := 0; i < len s; i++) {
+		jt[i] = bidi->joining(s[i]);
 		if(jt[i] != Bidi->JU && jt[i] != Bidi->JT)
 			any = 1;
 	}
 	if(!any)
 		return;
-	for(i = 0; i < len a; i++) {
+	for(i = 0; i < len s; i++) {
 		t := jt[i];
-		if(t != Bidi->JD && t != Bidi->JR && t != Bidi->JL || a[i].o == nil)
+		if(t != Bidi->JD && t != Bidi->JR && t != Bidi->JL || slot[i] < 0 || a[slot[i]].o == nil)
 			continue;
 		prev := Bidi->JU;
 		for(j := i - 1; j >= 0; j--)
@@ -386,7 +391,7 @@ joinforms(a: array of ref Slot)
 				break;
 			}
 		next := Bidi->JU;
-		for(j = i + 1; j < len a; j++)
+		for(j = i + 1; j < len s; j++)
 			if(jt[j] != Bidi->JT) {
 				next = jt[j];
 				break;
@@ -400,7 +405,8 @@ joinforms(a: array of ref Slot)
 			feat = "fina";
 		else if(after)
 			feat = "init";
-		a[i].g = a[i].o.subst(feat, a[i].g);
+		k := slot[i];
+		a[k].g = a[k].o.subst(feat, a[k].g);
 	}
 }
 
@@ -421,39 +427,48 @@ Typeface.width(f: self ref Typeface, s: string): real
 	return w;
 }
 
-Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image): real
+Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image, rtl: int): real
 {
-	x := real p.x;
+	a := shape(f, s);
+	# each glyph's place and advance, in logical order
+	xs := array[len a] of real;
+	adv := array[len a] of real;
+	x := 0.0;
 	po: ref OutlineFont->Face;
 	pg := -1;
 	pc := ' ';
-	a := shape(f, s);
 	for(i := 0; i < len a; i++) {
 		(o, g, c) := (a[i].o, a[i].g, a[i].c);
 		if(o != nil && o == po && !f.nokern && kernc(pc, c))
 			x += real o.kern(pg, g) * f.size / real o.upem;	# pair kerning
 		(po, pg, pc) = (o, g, c);
+		xs[i] = x;
+		adv[i] = advanceg(f, o, g, c);
+		x += adv[i];
+	}
+	w := x;
+	for(i = 0; i < len a; i++) {
+		(o, g, c) := (a[i].o, a[i].g, a[i].c);
+		gx := real p.x + xs[i];
+		if(rtl)	# the first glyph at the right end
+			gx = real p.x + w - xs[i] - adv[i];
 		if(o == nil && f.fallback != nil) {
 			t := "";
 			t[0] = c;
 			# bitmap fallback: align its baseline with ours
-			dst.text(Point(int x, p.y - f.fallback.ascent), src, Point(0, 0), f.fallback, t);
-			x += real f.fallback.width(t);
+			dst.text(Point(int gx, p.y - f.fallback.ascent), src, Point(0, 0), f.fallback, t);
 			continue;
 		}
 		if(o == nil) {
 			o = f.outline;
 			g = 0;
-			if(o == nil) {
-				x += f.size / 2.0;
+			if(o == nil)
 				continue;
-			}
 		}
 		if(c != ' ' && c != ' ')
-			o.drawglyph(g, f.size, dst, Point(int x, p.y), src);
-		x += o.advance(g, f.size);
+			o.drawglyph(g, f.size, dst, Point(int gx, p.y), src);
 	}
-	return x - real p.x;
+	return w;
 }
 
 # ---- web fonts ----

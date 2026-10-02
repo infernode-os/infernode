@@ -4756,8 +4756,21 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		if(w < summn)
 			w = summn;
 		cw = w;
-	} else if(cw < summn && !st.tablefixed)
-		cw = summn;	# fixed layout keeps the width it was given (§17.5.2.1)
+	} else if(!st.tablefixed) {
+		if(cw < summn)
+			cw = summn;
+	} else {
+		# fixed layout: not the cells' contents, but the columns'
+		# given widths plus the spacing, if that is more (§17.5.2.1)
+		summf := sx * (n + 1);
+		for(i = 0; i < n; i++)
+			if(t.colw[i] > 0)
+				summf += t.colw[i];
+			else if(fixw[i])
+				summf += mn[i];
+		if(cw < summf)
+			cw = summf;
+	}
 	b.w = cw + hextra(b);
 	# column widths
 	colw := array[n] of int;

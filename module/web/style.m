@@ -235,6 +235,7 @@ Style: module
 		lanesdir:	int;	# grid-lanes-direction: 0 normal, 1 row, 2 column; +4 fill-reverse, +8 track-reverse
 		lanespack:	int;	# grid-lanes-pack: 1 dense
 		tolerance:	Len;	# flow-tolerance: Lnormal (1em), Lnone (infinite), or a length (% of the grid axis)
+		subcols, subrows:	int;	# grid-template-columns/rows: subgrid (the tokens are then its line names)
 
 		new:	fn(): ref St;		# initial values
 	};

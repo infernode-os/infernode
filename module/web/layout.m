@@ -58,6 +58,10 @@ Layout: module
 		iex:	int;		# the horizontal edges they include
 		igen:	int;		# the layout they were measured in (0: none)
 		seq:	int;		# position in tree order once laid out, for painting
+		# a subgrid: the tracks, line names and gap of its parent's axis it spans, set by the parent each layout
+		subcw, subrh:	array of int;
+		subcnames, subrnames:	array of list of string;
+		subcgap, subrgap:	int;
 	};
 
 	Line: adt {

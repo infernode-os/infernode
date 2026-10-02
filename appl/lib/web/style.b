@@ -1727,7 +1727,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal));
+		0, 0, kw(Lnormal), 0, 0);
 }
 
 nextsid := 1;
@@ -4594,13 +4594,22 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.colgap = l;
 	"grid-template-columns" or "grid-template-rows" or "grid-auto-columns" or "grid-auto-rows" =>
 		x := trim(v);
+		sub := 0;
+		if(len x > 0 && x[0].kind == Kident && lower(x[0].s) == "subgrid" && nm[5] == 't') {
+			sub = 1;	# subgrid: what follows names its lines
+			x = trim(x[1:]);
+		}
 		if(id == "none")
 			x = nil;
 		else
 			x = lentoks(x, ctx);
 		case nm {
-		"grid-template-columns" => st.gridcols = x;
-		"grid-template-rows" => st.gridrows = x;
+		"grid-template-columns" =>
+			st.gridcols = x;
+			st.subcols = sub;
+		"grid-template-rows" =>
+			st.gridrows = x;
+			st.subrows = sub;
 		"grid-auto-columns" => st.autocols = x;
 		"grid-auto-rows" => st.autorows = x;
 		}
@@ -5264,8 +5273,8 @@ copyprop(d, s: ref St, nm: string)
 	"justify-self" => d.justifyself = s.justifyself;
 	"row-gap" => d.rowgap = s.rowgap;
 	"column-gap" => d.colgap = s.colgap;
-	"grid-template-columns" => d.gridcols = s.gridcols;
-	"grid-template-rows" => d.gridrows = s.gridrows;
+	"grid-template-columns" => d.gridcols = s.gridcols; d.subcols = s.subcols;
+	"grid-template-rows" => d.gridrows = s.gridrows; d.subrows = s.subrows;
 	"grid-template-areas" => d.gridareas = s.gridareas;
 	"grid-auto-columns" => d.autocols = s.autocols;
 	"grid-auto-rows" => d.autorows = s.autorows;

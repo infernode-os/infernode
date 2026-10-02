@@ -81,7 +81,8 @@ B: adt {
 newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0);
+		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
+		nil, nil, nil, nil, 0, 0);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -2003,6 +2004,8 @@ Track: adt {
 Gi: adt {
 	box:	ref Box;
 	r0, r1, c0, c1:	int;	# lines, 0-based: rows r0..r1-1, columns c0..c1-1
+	extra:	int;		# added to its contribution: a subgrid's edges, for the items at them
+	empty:	int;		# contributes nothing but extra: a subgrid's edge with no item in that track
 };
 
 # the size a track function names, or Tauto if it is not one
@@ -2225,15 +2228,32 @@ ngaps(t: array of ref Track): int
 # -1 if auto
 lineof(g: Style->Gline, names: array of list of string, ntracks: int, end: int): int
 {
-	if(g.name != nil && g.n == 0 && !g.span) {
+	if(g.name != nil && !g.span) {
+		# the nth line so named (the first; from the end if negative);
+		# past them, the implicit lines all have the name (§8.3)
 		suffix := "-start";
 		if(end)
 			suffix = "-end";
-		for(i := 0; i < len names; i++)
-			for(l := names[i]; l != nil; l = tl l)
-				if(hd l == g.name || hd l == g.name + suffix)
+		want := g.n;
+		if(want == 0)
+			want = 1;
+		if(want > 0) {
+			seen := 0;
+			for(i := 0; i < len names; i++)
+				if(hasname(names[i], g.name, suffix) && ++seen == want)
 					return i;
-		return -1;
+			if(seen == 0 && g.n == 0)
+				return -1;
+			n := ntracks + want - seen;
+			if(n > MAXTRACKS)
+				n = MAXTRACKS;
+			return n;
+		}
+		seen := 0;
+		for(i := len names - 1; i >= 0; i--)
+			if(hasname(names[i], g.name, suffix) && ++seen == -want)
+				return i;
+		return 0;
 	}
 	if(g.span || g.n == 0)
 		return -1;
@@ -2246,6 +2266,32 @@ lineof(g: Style->Gline, names: array of list of string, ntracks: int, end: int):
 	if(n < 0)
 		n = 0;
 	return n;
+}
+
+hasname(l: list of string, name, suffix: string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == name || hd l == name + suffix)
+			return 1;
+	return 0;
+}
+
+# the line n lines named so from line from, in direction dir (§8.3:
+# "span a" counts lines with that name); past the grid, implicit lines
+namedspan(names: array of list of string, from: int, name: string, n, dir, ntracks: int): int
+{
+	seen := 0;
+	for(i := from + dir; i >= 0 && i < len names; i += dir)
+		if(hasname(names[i], name, "") && ++seen == n)
+			return i;
+	if(dir < 0)
+		return 0;
+	r := ntracks + n - seen;
+	if(from + 1 > r)
+		r = from + 1;
+	if(r > MAXTRACKS)
+		r = MAXTRACKS;
+	return r;
 }
 
 # named areas as lines: (name, r0, r1, c0, c1)
@@ -2303,9 +2349,36 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		rowgap = res(st.rowgap, nz(ch));
 	(cols, colnames) := tracks(st.gridcols, cw, colgap);
 	(rows, rownames) := tracks(st.gridrows, ch, rowgap);
+	# a subgrid's tracks in an axis are its parent's, as the parent
+	# sized them (Grid 2 §9)
+	if(b.subcw != nil) {
+		colgap = b.subcgap;
+		own := copyints(b.subcw);	# this layout may run again
+		if((gs := subgap(b, 1, colgap)) >= 0) {
+			regap(own, gs - colgap);
+			colgap = gs;
+		}
+		cols = fixedtracks(own);
+		colnames = b.subcnames;
+	}
+	if(b.subrh != nil) {
+		rowgap = b.subrgap;
+		own := copyints(b.subrh);
+		if((gs := subgap(b, 0, rowgap)) >= 0) {
+			regap(own, gs - rowgap);
+			rowgap = gs;
+		}
+		rows = fixedtracks(own);
+		rownames = b.subrnames;
+		# its height is its tracks', whatever its properties say (§9.3)
+		ch = rowgap * nz(len rows - 1);
+		for(i := 0; i < len rows; i++)
+			ch += own[i];
+		sh = ch + vextra(b);
+	}
 	ncexp := len cols;
 	nrexp := len rows;
-	rowpct := anypct(rows);
+	rowpct := anypct(rows) && b.subrh == nil;
 	ars := areas(st.gridareas);
 	for(a := ars; a != nil; a = tl a) {
 		(nil, nil, r1, nil, c1) := hd a;
@@ -2314,13 +2387,129 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		if(r1 > len rows)
 			rows = growtracks(rows, r1, st.autorows, ch);
 	}
-	ncols := len cols;
+	(items, ncols, nrows) := gridplace(b, len cols, len rows, colnames, rownames, ars);
+	cols = growtracks(cols, ncols, st.autocols, cw);
+	rows = growtracks(rows, nrows, st.autorows, ch);
+	collapsefit(cols, items, 1);
+	collapsefit(rows, items, 0);
+
+	# column sizes, then rows (laying items out at their column widths);
+	# a subgrid in an axis stands aside for its items, and is told the
+	# tracks it spans before it is laid out
+	for(i := 0; i < len items; i++) {
+		k := items[i].box;
+		k.subcw = nil;
+		k.subrh = nil;
+	}
+	colsizing := subgridded(items, 1, colgap);
+	sizetracks(cols, colsizing, 1, cw, colgap, b);
+	cpos := trackpos(cols, colgap, cw, st.justifycontent);
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		k := g.box;
+		edges(k, areaw(cols, cpos, g.c0, g.c1, colgap));
+		if(issubgrid(k, 1)) {
+			k.subcw = subtracks(tracksizes(cols, g.c0, g.c1), k.ml + k.bl + k.pl, k.mr + k.br + k.pr);
+			k.subcnames = mergenames(colnames, g.c0, g.c1, subnames(k.st.gridcols));
+			k.subcgap = colgap;
+		}
+	}
+	# items' heights at their widths
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		k := g.box;
+		aw := areaw(cols, cpos, g.c0, g.c1, colgap);
+		k.w = gridw(k, aw, b);
+		layblock(l, k, aw, -1, nil, 0, 0);
+	}
+	rowsizing := subgridded(items, 0, rowgap);
+	sizetracks(rows, rowsizing, 0, ch, rowgap, b);
+	gh := 0;
+	for(i = 0; i < len rows; i++)
+		gh += ir(rows[i].base);
+	gh += rowgap * ngaps(rows);
+	if(ch < 0 && rowpct) {
+		# percentage rows in a container whose height they decide:
+		# auto for that height, then resolved against it (§7.2.1)
+		(again, nil) := tracks(st.gridrows, gh, rowgap);
+		again = growtracks(again, len rows, st.autorows, gh);
+		collapsefit(again, items, 0);
+		sizetracks(again, rowsizing, 0, gh, rowgap, b);
+		rows = again;
+	}
+	avh := ch;
+	if(avh < 0)
+		avh = gh;
+	rpos := trackpos(rows, rowgap, avh, st.aligncontent);
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		k := g.box;
+		if(issubgrid(k, 0)) {
+			k.subrh = subtracks(tracksizes(rows, g.r0, g.r1), k.mt + k.bt + k.pt, k.mb + k.bb + k.pb);
+			k.subrnames = mergenames(rownames, g.r0, g.r1, subnames(k.st.gridrows));
+			k.subrgap = rowgap;
+		}
+	}
+
+	# place each item in its area, aligned
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		k := g.box;
+		ks := k.st;
+		ax := cpos[g.c0];
+		aw := areaw(cols, cpos, g.c0, g.c1, colgap);
+		ay := rpos[g.r0];
+		ah := trackend(rows, rpos, g.r1 - 1, rowgap) - ay;
+		js := ks.justifyself;
+		if(js == Style->ALauto)
+			js = st.justifyitems;
+		as := ks.alignself;
+		if(as == Style->ALauto)
+			as = st.alignitems;
+		if(issubgrid(k, 0)) {
+			# its height is its tracks', whatever its properties say (§9.3)
+			imposeh(l, k, ah - k.mt - k.mb, aw, ah);
+		} else if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
+		   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced) {
+			imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), aw, ah);
+		} else if(ks.height.pct != 0.0 || ks.minheight.pct != 0.0 || ks.maxheight.pct != 0.0 || heightmatters(k)) {
+			# the area's height is definite for it (Grid 2 §6.6)
+			layblock(l, k, aw, ah, nil, 0, 0);
+		}
+		x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
+		if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
+			x = ax + (aw - k.w)/2;
+		y := ay + k.mt + crossoff(as, ah, k.h + k.mt + k.mb);
+		if(ks.mt.kind == Style->Lauto && ks.mb.kind == Style->Lauto)
+			y = ay + (ah - k.h)/2;
+		k.x = b.bl + b.pl + x;
+		k.y = b.bt + b.pt + y;
+		relative(k, aw, ah);
+	}
+	h := sh;
+	if(h < 0)
+		h = gh + vextra(b);
+	b.h = clamph(b, h, cbh);
+	gridabs(l, b, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars);
+}
+
+# Place a grid container's items (Grid 2 §8.5): definite in both
+# axes, then those definite in the axis items flow along, then the
+# rest, sparsely or densely.  The children are first put in
+# order-modified document order, which is the painting order too
+# (§10.1); absolutely positioned children are not items and keep their
+# places.  Returns the items and the implicit grid's size.
+gridplace(b: ref Box, lencols, lenrows: int, colnames, rownames: array of list of string, ars: list of (string, int, int, int, int)): (array of ref Gi, int, int)
+{
+	st := b.st;
+	clampc := b.subcw != nil;	# a subgrid has no implicit grid: lines past its own are clamped (§9.4)
+	clampr := b.subrh != nil;
+	ncols := lencols;
 	if(ncols == 0)
 		ncols = 1;
-	nrows := len rows;
+	nrows := lenrows;
 	if(nrows == 0)
 		nrows = 1;
-
 	# the children in order-modified document order, which is the
 	# painting order too (Grid 2 §10.1); absolutely positioned
 	# children are not items and keep their places
@@ -2335,9 +2524,9 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		if(isabs(k))
 			continue;	# placed once the tracks are: gridabs
 		ks := k.st;
-		g := ref Gi(k, -1, -1, -1, -1);
+		g := ref Gi(k, -1, -1, -1, -1, 0, 0);
 		if(ks.gridarea != nil) {
-			for(a = ars; a != nil; a = tl a) {
+			for(a := ars; a != nil; a = tl a) {
 				(an, r0, r1, c0, c1) := hd a;
 				if(an == ks.gridarea) {
 					(g.r0, g.r1, g.c0, g.c1) = (r0, r1, c0, c1);
@@ -2346,9 +2535,13 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			}
 		}
 		if(g.r0 < 0) {
-			(g.c0, g.c1) = gridspan(ks.colstart, ks.colend, colnames, len cols, ars, 1);
-			(g.r0, g.r1) = gridspan(ks.rowstart, ks.rowend, rownames, len rows, ars, 0);
+			(g.c0, g.c1) = gridspan(ks.colstart, ks.colend, colnames, lencols, ars, 1);
+			(g.r0, g.r1) = gridspan(ks.rowstart, ks.rowend, rownames, lenrows, ars, 0);
 		}
+		if(clampc && g.c0 >= 0)
+			(g.c0, g.c1) = clamplines(g.c0, g.c1, lencols);
+		if(clampr && g.r0 >= 0)
+			(g.r0, g.r1) = clamplines(g.r0, g.r1, lenrows);
 		gi = g :: gi;
 	}
 	items := array[len gi] of ref Gi;
@@ -2502,87 +2695,297 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			ncols = g.c1;
 		occ.mark(g.r0, g.r1, g.c0, g.c1);
 	}
-	nrows = len rows;
-	for(i = 0; i < len items; i++)
-		if(items[i].r1 > nrows)
-			nrows = items[i].r1;
-	cols = growtracks(cols, ncols, st.autocols, cw);
-	rows = growtracks(rows, nrows, st.autorows, ch);
-	collapsefit(cols, items, 1);
-	collapsefit(rows, items, 0);
+	nrows = lenrows;
+	for(i = 0; i < len items; i++) {
+		# every item spans at least one track: a negative index later
+		# is a crash under the JIT
+		g := items[i];
+		if(g.c0 < 0)
+			g.c0 = 0;
+		if(g.r0 < 0)
+			g.r0 = 0;
+		if(g.c1 <= g.c0)
+			g.c1 = g.c0 + 1;
+		if(g.r1 <= g.r0)
+			g.r1 = g.r0 + 1;
+		if(g.r1 > nrows)
+			nrows = g.r1;
+		if(g.c1 > ncols)
+			ncols = g.c1;
+	}
+	return (items, ncols, nrows);
+}
 
-	# column sizes, then rows (laying items out at their column widths)
-	sizetracks(cols, items, 1, cw, colgap, b);
-	cpos := trackpos(cols, colgap, cw, st.justifycontent);
-	for(i = 0; i < len items; i++) {
-		g := items[i];
-		k := g.box;
-		edges(k, areaw(cols, cpos, g.c0, g.c1, colgap));
-	}
-	# items' heights at their widths
-	for(i = 0; i < len items; i++) {
-		g := items[i];
-		k := g.box;
-		aw := areaw(cols, cpos, g.c0, g.c1, colgap);
-		k.w = gridw(k, aw, b);
-		layblock(l, k, aw, -1, nil, 0, 0);
-	}
-	sizetracks(rows, items, 0, ch, rowgap, b);
-	gh := 0;
-	for(i = 0; i < len rows; i++)
-		gh += ir(rows[i].base);
-	gh += rowgap * ngaps(rows);
-	if(ch < 0 && rowpct) {
-		# percentage rows in a container whose height they decide:
-		# auto for that height, then resolved against it (§7.2.1)
-		(again, nil) := tracks(st.gridrows, gh, rowgap);
-		again = growtracks(again, len rows, st.autorows, gh);
-		collapsefit(again, items, 0);
-		sizetracks(again, items, 0, gh, rowgap, b);
-		rows = again;
-	}
-	avh := ch;
-	if(avh < 0)
-		avh = gh;
-	rpos := trackpos(rows, rowgap, avh, st.aligncontent);
+clamplines(a0, a1, n: int): (int, int)
+{
+	if(n < 1)
+		n = 1;
+	if(a1 > n)
+		a1 = n;
+	if(a0 >= a1)
+		a0 = a1 - 1;
+	if(a0 < 0)
+		a0 = 0;
+	if(a1 <= a0)
+		a1 = a0 + 1;
+	return (a0, a1);
+}
 
-	# place each item in its area, aligned
-	for(i = 0; i < len items; i++) {
+# whether k is a subgrid in an axis: its tracks there are its parent's
+issubgrid(k: ref Box, cols: int): int
+{
+	if(k.kind != Kgrid || islanes(k))
+		return 0;
+	if(cols)
+		return k.st.subcols;
+	return k.st.subrows;
+}
+
+fixedtracks(a: array of int): array of ref Track
+{
+	t := array[len a] of ref Track;
+	for(i := 0; i < len a; i++)
+		t[i] = ref Track(Tsz(Tfixed, real a[i]), Tsz(Tfixed, real a[i]), 0.0, 0.0, 0);
+	return t;
+}
+
+# the tracks a subgrid spans, as its own: its margin, border and
+# padding at either edge come out of the first and last (§9.5), so
+# that its lines stay its parent's
+subtracks(a: array of int, lead, trail: int): array of int
+{
+	if(len a == 0)
+		return a;
+	a[0] -= lead;
+	a[len a - 1] -= trail;
+	if(a[0] < 0)
+		a[0] = 0;
+	if(a[len a - 1] < 0)
+		a[len a - 1] = 0;
+	return a;
+}
+
+copyints(a: array of int): array of int
+{
+	b := array[len a] of int;
+	b[0:] = a;
+	return b;
+}
+
+# a subgrid's gutters widened by d (narrowed if negative): the tracks
+# either side of each give up half of it, so the lines stay put
+regap(a: array of int, d: int)
+{
+	for(i := 0; i + 1 < len a; i++) {
+		a[i] -= d - d/2;
+		a[i+1] -= d/2;
+		if(a[i] < 0)
+			a[i] = 0;
+		if(a[i+1] < 0)
+			a[i+1] = 0;
+	}
+}
+
+tracksizes(t: array of ref Track, a0, a1: int): array of int
+{
+	if(a1 > len t)
+		a1 = len t;
+	if(a0 > a1)
+		a0 = a1;
+	a := array[a1 - a0] of int;
+	for(i := a0; i < a1; i++)
+		a[i - a0] = ir(t[i].base);
+	return a;
+}
+
+# a subgrid's line names: its parent's for the lines it spans, and its
+# own, given in order ([a] [b] ...) after the subgrid keyword
+subnames(v: array of ref Tok): array of list of string
+{
+	l: list of list of string;
+	n := 0;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind != Css->Kblock || t.s != "[")
+			continue;
+		names: list of string;
+		for(k := 0; k < len t.kids; k++)
+			if(t.kids[k].kind == Css->Kident)
+				names = t.kids[k].s :: names;
+		l = names :: l;
+		n++;
+	}
+	a := array[n] of list of string;
+	for(i = n - 1; i >= 0; i--) {
+		a[i] = hd l;
+		l = tl l;
+	}
+	return a;
+}
+
+mergenames(parent: array of list of string, a0, a1: int, own: array of list of string): array of list of string
+{
+	n := a1 - a0 + 1;
+	if(n < 1)
+		n = 1;
+	a := array[n] of list of string;
+	for(i := 0; i < n; i++) {
+		if(a0 + i < len parent)
+			a[i] = parent[a0 + i];
+		if(i < len own)
+			for(l := own[i]; l != nil; l = tl l)
+				a[i] = hd l :: a[i];
+	}
+	return a;
+}
+
+# the items that size an axis: a subgrid in it stands aside for its
+# items, which take the lines it spans and, at its edges, its margin,
+# border and padding (Grid 2 §9.5); so on down through nested subgrids
+subgridded(items: array of ref Gi, cols, pgap: int): array of ref Gi
+{
+	l: list of ref Gi;
+	n := 0;
+	for(i := 0; i < len items; i++) {
 		g := items[i];
-		k := g.box;
-		ks := k.st;
-		ax := cpos[g.c0];
-		aw := areaw(cols, cpos, g.c0, g.c1, colgap);
-		ay := rpos[g.r0];
-		ah := trackend(rows, rpos, g.r1 - 1, rowgap) - ay;
-		js := ks.justifyself;
-		if(js == Style->ALauto)
-			js = st.justifyitems;
-		as := ks.alignself;
-		if(as == Style->ALauto)
-			as = st.alignitems;
-		if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
-		   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced) {
-			imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), aw, ah);
-		} else if(ks.height.pct != 0.0 || ks.minheight.pct != 0.0 || ks.maxheight.pct != 0.0 || heightmatters(k)) {
-			# the area's height is definite for it (Grid 2 §6.6)
-			layblock(l, k, aw, ah, nil, 0, 0);
+		if(issubgrid(g.box, cols)) {
+			for(sl := subitems(g.box, g, cols, pgap); sl != nil; sl = tl sl) {
+				l = hd sl :: l;
+				n++;
+			}
+		} else {
+			l = g :: l;
+			n++;
 		}
-		x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
-		if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
-			x = ax + (aw - k.w)/2;
-		y := ay + k.mt + crossoff(as, ah, k.h + k.mt + k.mb);
-		if(ks.mt.kind == Style->Lauto && ks.mb.kind == Style->Lauto)
-			y = ay + (ah - k.h)/2;
-		k.x = b.bl + b.pl + x;
-		k.y = b.bt + b.pt + y;
-		relative(k, aw, ah);
 	}
-	h := sh;
-	if(h < 0)
-		h = gh + vextra(b);
-	b.h = clamph(b, h, cbh);
-	gridabs(l, b, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars);
+	a := array[n] of ref Gi;
+	for(i = n - 1; i >= 0; i--) {
+		a[i] = hd l;
+		l = tl l;
+	}
+	return a;
+}
+
+# a subgrid's own gap, if it gives one, replaces its parent's within
+# it: the difference is half a margin on each item beside the gutter
+# (Grid 2 §9.3); -1 when it gives none
+subgap(k: ref Box, cols, pgap: int): int
+{
+	ks := k.st;
+	if(cols) {
+		if(ks.colgap.kind == Style->Lnormal)
+			return -1;
+		return res(ks.colgap, 0);
+	}
+	if(ks.rowgap.kind == Style->Lnormal)
+		return -1;
+	return res(ks.rowgap, 0);
+}
+
+subitems(k: ref Box, g: ref Gi, cols, pgap: int): list of ref Gi
+{
+	ks := k.st;
+	gd := 0;	# the gap difference items beside a gutter carry, half each
+	if((gs := subgap(k, cols, pgap)) >= 0)
+		gd = gs - pgap;
+	(kcols, kcn) := tracks(ks.gridcols, -1, 0);
+	(krows, krn) := tracks(ks.gridrows, -1, 0);
+	nc := len kcols;
+	nr := len krows;
+	if(ks.subcols)
+		nc = g.c1 - g.c0;
+	if(ks.subrows)
+		nr = g.r1 - g.r0;
+	# placed as a subgrid would place them (lines past its own clamped)
+	ocw := k.subcw;
+	orh := k.subrh;
+	if(ks.subcols && ocw == nil)
+		k.subcw = array[nc] of {* => 0};
+	if(ks.subrows && orh == nil)
+		k.subrh = array[nr] of {* => 0};
+	(inner, nil, nil) := gridplace(k, nc, nr, kcn, krn, areas(ks.gridareas));
+	k.subcw = ocw;
+	k.subrh = orh;
+	if(k.ml == 0 && k.mr == 0 && k.bl == 0 && k.pl == 0)
+		edges(k, 0);
+	span := nc;
+	lead := k.ml + k.bl + k.pl;
+	trail := k.mr + k.br + k.pr;
+	if(!cols) {
+		span = nr;
+		lead = k.mt + k.bt + k.pt;
+		trail = k.mb + k.bb + k.pb;
+	}
+	r: list of ref Gi;
+	for(i := 0; i < len inner; i++) {
+		ig := inner[i];
+		v := ref Gi(ig.box, g.r0, g.r1, g.c0, g.c1, 0, 0);
+		first := 0;
+		last := 0;
+		if(cols) {
+			if(ks.subcols) {
+				v.c0 = g.c0 + ig.c0;
+				v.c1 = g.c0 + ig.c1;
+				if(v.c1 > g.c1)
+					v.c1 = g.c1;
+				first = ig.c0 == 0;
+				last = ig.c1 >= span;
+			}
+		} else if(ks.subrows) {
+			v.r0 = g.r0 + ig.r0;
+			v.r1 = g.r0 + ig.r1;
+			if(v.r1 > g.r1)
+				v.r1 = g.r1;
+			first = ig.r0 == 0;
+			last = ig.r1 >= span;
+		}
+		if(first)
+			v.extra += lead;
+		else
+			v.extra += gd - gd/2;
+		if(last)
+			v.extra += trail;
+		else
+			v.extra += gd/2;
+		if(issubgrid(ig.box, cols)) {
+			for(sl := subitems(ig.box, v, cols, pgap); sl != nil; sl = tl sl) {
+				w := hd sl;
+				if(cols && w.c0 == v.c0 || !cols && w.r0 == v.r0)
+					w.extra += lead;
+				if(cols && w.c1 == v.c1 || !cols && w.r1 == v.r1)
+					w.extra += trail;
+				r = w :: r;
+			}
+		} else
+			r = v :: r;
+	}
+	# an edge with no item in its track still counts, as an empty item would
+	seenfirst := 0;
+	seenlast := 0;
+	for(rl := r; rl != nil; rl = tl rl) {
+		w := hd rl;
+		if(cols && w.c0 == g.c0 || !cols && w.r0 == g.r0)
+			seenfirst = 1;
+		if(cols && w.c1 == g.c1 || !cols && w.r1 == g.r1)
+			seenlast = 1;
+	}
+	if(!seenfirst && lead > 0) {
+		e := ref Gi(k, g.r0, g.r0 + 1, g.c0, g.c0 + 1, lead, 1);
+		if(!cols)
+			(e.c0, e.c1) = (g.c0, g.c1);
+		else
+			(e.r0, e.r1) = (g.r0, g.r1);
+		r = e :: r;
+	}
+	if(!seenlast && trail > 0) {
+		e := ref Gi(k, g.r1 - 1, g.r1, g.c1 - 1, g.c1, trail, 1);
+		if(!cols)
+			(e.c0, e.c1) = (g.c0, g.c1);
+		else
+			(e.r0, e.r1) = (g.r0, g.r1);
+		r = e :: r;
+	}
+	return r;
 }
 
 # An absolutely positioned child of a grid container: its static
@@ -2821,7 +3224,7 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 		if(isabs(k))
 			continue;	# placed once the tracks are: gridabs
 		ks := k.st;
-		g := ref Gi(k, -1, -1, -1, -1);
+		g := ref Gi(k, -1, -1, -1, -1, 0, 0);
 		if(down)
 			(g.c0, g.c1) = gridspan(ks.colstart, ks.colend, names, len tr, nil, 1);
 		else
@@ -2855,15 +3258,27 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 	sz: list of ref Gi;
 	for(i = 0; i < len items; i++) {
 		g := items[i];
+		g.box.subcw = nil;
+		g.box.subrh = nil;
 		(a0, nil) := glines(g, down);
 		if(a0 >= 0) {
-			sz = g :: sz;
+			if(issubgrid(g.box, down)) {
+				if(g.box.ml == 0 && g.box.mr == 0)
+					edges(g.box, cw);
+				for(sl := subitems(g.box, g, down, tgap); sl != nil; sl = tl sl)
+					sz = hd sl :: sz;
+			} else
+				sz = g :: sz;
 			continue;
 		}
 		for(t := 0; t + spans[i] <= n; t++) {
-			v := ref Gi(g.box, -1, -1, -1, -1);
+			v := ref Gi(g.box, -1, -1, -1, -1, 0, 0);
 			setlines(v, down, t, t + spans[i]);
-			sz = v :: sz;
+			if(issubgrid(g.box, down)) {
+				for(sl := subitems(g.box, v, down, tgap); sl != nil; sl = tl sl)
+					sz = hd sl :: sz;
+			} else
+				sz = v :: sz;
 		}
 	}
 	sizing := array[len sz] of ref Gi;
@@ -2937,6 +3352,8 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 				}
 			}
 			edges(k, aw);
+			if(a0 >= 0)
+				lanessub(k, tr, names, a0, a1, tgap, down);
 			k.w = gridw(k, aw, b);
 			layblock(l, k, aw, -1, nil, 0, 0);
 			o[i] = k.h + k.mt + k.mb;
@@ -2966,9 +3383,10 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 			# differ from the narrowest it was measured at
 			(p0, p1) := phys(a0, a1, n, trackrev);
 			aw := areaw(ptr, pos, p0, p1, tgap);
-			if(aw != awat[i]) {
+			if(aw != awat[i] || issubgrid(g.box, 1) && g.box.subcw == nil) {
 				k := g.box;
 				edges(k, aw);
+				lanessub(k, tr, names, a0, a1, tgap, down);
 				k.w = gridw(k, aw, b);
 				layblock(l, k, aw, -1, nil, 0, 0);
 				o[i] = k.h + k.mt + k.mb;
@@ -3125,7 +3543,10 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 			if(as == Style->ALauto)
 				as = st.alignitems;
 			as = flowal(as, trackrev);
-			if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
+			lanessub(k, tr, names, a0, a1, tgap, down);
+			if(issubgrid(k, 0))
+				imposeh(l, k, ah - k.mt - k.mb, k.w, ah);
+			else if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
 			   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced)
 				imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), k.w, ah);
 			yy := ay + k.mt + crossoff(as, ah, k.h + k.mt + k.mb);
@@ -3263,6 +3684,23 @@ Lanes.take(s: self ref Lanes, i, a0, a1, y, o: int, ext: array of int)
 				left = gp :: left;
 		}
 		s.gaps[t] = left;
+	}
+}
+
+# a subgrid item of grid lanes gets the lanes it spans as its tracks
+# (in their logical order) before it is laid out
+lanessub(k: ref Box, tr: array of ref Track, names: array of list of string, a0, a1, gap, down: int)
+{
+	if(a0 < 0)
+		return;
+	if(down && issubgrid(k, 1)) {
+		k.subcw = subtracks(tracksizes(tr, a0, a1), k.ml + k.bl + k.pl, k.mr + k.br + k.pr);
+		k.subcnames = mergenames(names, a0, a1, subnames(k.st.gridcols));
+		k.subcgap = gap;
+	} else if(!down && issubgrid(k, 0)) {
+		k.subrh = subtracks(tracksizes(tr, a0, a1), k.mt + k.bt + k.pt, k.mb + k.bb + k.pb);
+		k.subrnames = mergenames(names, a0, a1, subnames(k.st.gridrows));
+		k.subrgap = gap;
 	}
 }
 
@@ -3531,12 +3969,27 @@ gridspan(s, e: Style->Gline, names: array of list of string, ntracks: int, ars: 
 		n := 1;
 		if(e.span)
 			n = clampspan(e.span);
+		if(e.span && e.name != nil) {
+			y := namedspan(names, a, e.name, n, 1, ntracks);
+			if(y <= a)
+				y = a + 1;
+			return (a, y);
+		}
 		return (a, a + n);
 	}
 	if(b >= 0) {
 		n := 1;
 		if(s.span)
 			n = clampspan(s.span);
+		if(s.span && s.name != nil) {
+			x := namedspan(names, b, s.name, n, -1, ntracks);
+			if(x >= b) {
+				x = b - 1;
+				if(x < 0)
+					return (0, 1);
+			}
+			return (x, b);
+		}
 		if(b - n < 0)
 			return (0, n);
 		return (b - n, b);
@@ -3647,12 +4100,19 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 				continue;
 			k := g.box;
 			mn, mx: int;
-			if(cols)
+			if(g.empty)
+				mn = mx = 0;
+			else if(cols)
 				(mn, mx) = contribution(k);
 			else {
 				mn = k.h + k.mt + k.mb;
 				mx = mn;
 			}
+			mn += g.extra;
+			mx += g.extra;
+			if(nspan == 1 && a0 < n && t[a0].lo.kind == Tauto && t[a0].limit >= 0.0 && real mn > t[a0].limit &&
+			   autosized(k, cols) && seethrough(k.st.overflowx) && !g.empty)
+				mn = int t[a0].limit;	# an automatic minimum is clamped by a definite max track size (§6.6)
 			# what the spanned tracks already provide
 			have := 0.0;
 			nintr := 0;
@@ -3779,6 +4239,20 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 	}
 }
 
+# whether an item's size in an axis is automatic (auto, or a
+# percentage of a track being sized), so its minimum is content-based
+autosized(k: ref Box, cols: int): int
+{
+	st := k.st;
+	sz := st.width;
+	mn := st.minwidth;
+	if(!cols) {
+		sz = st.height;
+		mn = st.minheight;
+	}
+	return (sz.kind == Style->Lauto || sz.kind == Style->Lpx && sz.pct != 0.0) && mn.kind == Style->Lauto;
+}
+
 maxr(a, b: real): real
 {
 	if(a > b)
@@ -3856,6 +4330,8 @@ trackend(t: array of ref Track, pos: array of int, i, gap: int): int
 gridw(k: ref Box, aw: int, b: ref Box): int
 {
 	ks := k.st;
+	if(issubgrid(k, 1))	# a subgrid's width is its tracks' (§9.3)
+		return aw - k.ml - k.mr;
 	w := specw(k, ks.width, aw);
 	if(w >= 0)
 		return clampw(k, w, aw);

@@ -1,36 +1,49 @@
-FAIL css/CSS2/bidi-007.xht
-FAIL css/CSS2/bidi-text/bidi-007a.xht
-FAIL css/CSS2/bidi-text/bidi-007b.xht
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-001.xht
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-002.xht
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-003.xht
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-004.xht
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-013.xht
-FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-014.xht
-FAIL css/CSS2/box/ltr-span-only.xht
-FAIL css/CSS2/colors/color-applies-to-001.xht
-FAIL css/CSS2/colors/color-applies-to-002.xht
-FAIL css/CSS2/colors/color-applies-to-003.xht
-FAIL css/CSS2/colors/color-applies-to-004.xht
-FAIL css/CSS2/colors/color-applies-to-005.xht
-FAIL css/CSS2/colors/color-applies-to-006.xht
-FAIL css/CSS2/colors/color-applies-to-013.xht
-FAIL css/CSS2/colors/color-applies-to-014.xht
-FAIL css/CSS2/floats/float-nowrap-hyphen-rewind-1.html
-FAIL css/css-display/run-in/run-in-basic-014.xht
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-001.html
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-003.html
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-004.html
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-005.html
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-007.html
-FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-horiz-002.html
-FAIL css/css-grid/grid-definition/grid-template-rows-fit-content-001.html
-FAIL css/css-grid/grid-items/grid-inline-items-inline-blocks-001.html
-FAIL css/css-grid/grid-items/grid-items-inline-blocks-001.html
-FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-001.html
-FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-002a.html
-FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-002b.html
-NEEDSJS css/css-lists/ol-change-display-type.html
-FAIL css/css-text/overflow-wrap/overflow-wrap-min-content-size-002.html
-FAIL css/css-text/word-break/word-break-min-content-005.html
-FAIL css/css-text/word-break/word-break-min-content-006.html
+# Tests that passed at some earlier run and fail now, with the reason
+# as far as known.  Update when a run changes it.
+#
+# From 2026-10-02 (second session): the engine fix that made the
+# reference render as Chromium does; the test needs a feature.
+FAIL css/css-flexbox/flexbox-safe-overflow-position-002.html	the "safe" alignment keyword (not modelled)
+FAIL css/css-flexbox/flexbox-safe-overflow-position-005.html	"safe" and vertical-lr
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-auto-005.html	display: grid-lanes (reference now right: implicit grid grows for a span)
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-fit-content-003.html	display: grid-lanes
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-max-content-003.html	display: grid-lanes
+FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/column-auto-repeat-min-content-003.html	display: grid-lanes
+#
+# From the first session (against a WPT checkout of 2026-09-30); still open
+# unless listed as passing by a later run.
+FAIL css/CSS2/bidi-007.xht	bidi reordering
+FAIL css/CSS2/bidi-text/bidi-007a.xht	bidi
+FAIL css/CSS2/bidi-text/bidi-007b.xht	bidi
+FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-001.xht	bidi
+FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-002.xht	bidi
+FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-003.xht	bidi
+FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-004.xht	bidi
+FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-013.xht	bidi
+FAIL css/CSS2/bidi-text/unicode-bidi-applies-to-014.xht	bidi
+FAIL css/CSS2/box/ltr-span-only.xht	unexamined
+FAIL css/CSS2/colors/color-applies-to-001.xht	sub-pixel text position (nbsp in a cell)
+FAIL css/CSS2/colors/color-applies-to-002.xht	sub-pixel
+FAIL css/CSS2/colors/color-applies-to-003.xht	sub-pixel
+FAIL css/CSS2/colors/color-applies-to-004.xht	sub-pixel
+FAIL css/CSS2/colors/color-applies-to-005.xht	sub-pixel
+FAIL css/CSS2/colors/color-applies-to-006.xht	sub-pixel
+FAIL css/CSS2/colors/color-applies-to-013.xht	sub-pixel
+FAIL css/CSS2/colors/color-applies-to-014.xht	sub-pixel
+FAIL css/CSS2/floats/float-nowrap-hyphen-rewind-1.html	unexamined
+FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-001.html	baseline alignment in vertical writing modes
+FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-003.html	vertical writing modes
+FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-004.html	vertical writing modes
+FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-005.html	vertical writing modes
+FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-007.html	vertical writing modes
+FAIL css/css-grid/alignment/self-baseline/grid-self-baseline-horiz-002.html	grid baseline alignment
+FAIL css/css-grid/grid-definition/grid-template-rows-fit-content-001.html	deserves a look
+FAIL css/css-grid/grid-items/grid-inline-items-inline-blocks-001.html	deserves a look
+FAIL css/css-grid/grid-items/grid-items-inline-blocks-001.html	deserves a look
+FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-001.html	grid-lanes
+FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-002a.html	grid-lanes
+FAIL css/css-grid/grid-lanes/baseline/grid-lanes-grid-item-self-baseline-002b.html	grid-lanes
+NEEDSJS css/css-lists/ol-change-display-type.html	needs script
+FAIL css/css-text/overflow-wrap/overflow-wrap-min-content-size-002.html	min-content measurement
+FAIL css/css-text/word-break/word-break-min-content-005.html	min-content measurement
+FAIL css/css-text/word-break/word-break-min-content-006.html	min-content measurement

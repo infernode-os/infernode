@@ -1,8 +1,8 @@
 # Charon engine: hand-off
 
-State of the new Charon web engine on branch `claude/vibrant-hamilton-kusgqw`
-as of 2026-10-02, written so a fresh session can carry on without the
-previous one's context.  Read `docs/CHARON-ENGINE.md` for the design and
+State of the new Charon web engine as of 2026-10-02 (second session, branch
+`claude/practical-faraday-whwxhp`, continuing `claude/vibrant-hamilton-kusgqw`),
+written so a fresh session can carry on without the previous one's context.  Read `docs/CHARON-ENGINE.md` for the design and
 `tools/ref/README.md` for the measuring tools; this file is the working
 state: what is done, how it is judged, how to set up, what is next, and
 what bit last time.
@@ -18,25 +18,47 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,626 judged) | **46.7%**, up from 37.8% at the first run |
+| WPT CSS reftests (18 directories, 12,642 judged) | ****48.0%**** (6,069 passing), from 46.8% at this session's start and 37.8% at the first run ever |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
-| Unit tests | web_html 5, web_css 6, web_style 14, web_browser 8, web_fonts 8, brotli 3: all pass |
-| Render fixtures (`tools/charon-wpt.sh`) | 48/48 (one intermittent failure is the emu SEGV below) |
+| Unit tests | web_html 5, web_css 6, web_style 15, web_browser 9, web_fonts 8, brotli 3: all pass |
+| Render fixtures (`tools/charon-wpt.sh`) | 56/56 (one intermittent failure is the emu SEGV below) |
 
 The WPT count is strict: any test with a `<script>` is reported as
-needs-js (1,267 of them) even if its pixels match, and a pass whose
+needs-js (1,268 of them) even if its pixels match, and a pass whose
 rendering is one flat colour is flagged `blank`.  The full per-test
 results of the last run are in `tools/ref/baseline/wpt-results.txt.gz`
-(gunzip it and use it as the "before" for `tools/ref/wptcmp.py`).  That
-run predates the last commit's control-character fix, which turns one
-error (`css-text/white-space/control-chars-00D.html`) into a pass.  The
+(gunzip it and use it as the "before" for `tools/ref/wptcmp.py`).  The
 WPT checkout was `web-platform-tests/wpt` at
-`336cfcec71a274ccc53c124eaa03749c97df3577` (2026-09-30); a newer checkout
+`89c9ebab4fef9e79de92421dd637f00fa4922359` (2026-10-02); a newer checkout
 will move the numbers a little.
 
 ### Commits on the branch (newest first)
 
+This session started with a code review of the whole engine (three
+reviewers, one per area: html/dom, css/style, layout/fonts), verified
+each finding against the code, and fixed what mattered; every fix has
+a fixture or unit test that fails on the previous engine.
+
+- `4e4db7b` Encodings (undeclared pages sniffed as UTF-8 or
+  windows-1252, UTF-16, more labels), `<meta http-equiv=refresh>`,
+  srcset and `<picture>`, overflow clipping of layers through
+  non-context positioned boxes, document-order painting of equal
+  z-index layers, aligned subtrees for `vertical-align: top/bottom`,
+  flex `wrap-reverse`, `tab-size` lengths, per-document media index,
+  XML parser depth, `Doc.insert` refusing cycles.
+- `6ee8c32` Stretched flex and grid items get a definite height for
+  their content (percentages, positioned descendants); absolute boxes
+  inside positioned inlines are laid out; `z-index: auto` boxes are no
+  longer stacking contexts; intrinsic widths cached per layout (nested
+  shrink-to-fit was exponential).
+- `dda0645` Reversed flex lines, `vertical-align` moving glyphs, replaced
+  elements keeping their ratio under `max-width`, nowrap spaces in
+  min-content, grid column-flow hang, bounded grid line numbers and
+  `repeat()` counts, font fallback nil dereference, web-font cache that
+  never hit, WOFF allocation bounds, five-channel colour crash,
+  background layer lists, `:has(.a .b)`, `[lang|=en]`, `@starting-style`
+  dropped, `@scope` scoped.
 - `4ad5fcb` Acid2; Brotli, WOFF2, OpenType-CFF fonts; Appendix E paint
   order; clearance and margin collapsing; fixed positioning and
   backgrounds; diagonal border joins; `<object>` fallback; kerning;
@@ -121,12 +143,37 @@ compares layout, not typeface choice.
 
 In rough order of payoff.
 
-1. **Live sites, now that the network allows.**  Only pypi.org and
-   github.com were reachable here.  Run `compare.py`/`boxdiff.py` through
-   the mirror over a spread: Wikipedia articles, MDN, news.ycombinator.com,
-   go.dev, docs.python.org, gnu.org, a few news sites.  The first wrong box
-   per page has been the fastest way to real bugs.
-2. **Open regressions (36 tests that genuinely passed before and fail now).**
+1. **Live sites.**  The network reaches Wikipedia, MDN, news.ycombinator.com,
+   go.dev and docs.python.org from this container (github.com's HTML
+   gives 403 to the mirror's fetch; gnu.org drops).  Run
+   `compare.py`/`boxdiff.py` through the mirror over that spread.  The
+   first wrong box per page has been the fastest way to real bugs.
+2. **Review findings not yet fixed** (verified by reading, not yet
+   done; the full lists are in the session's scratch notes, these are
+   the ones that matter):
+   - layout: images are rescaled on every paint (`scale()` in
+     `paintreplaced`/`paintbg`; cache by target size); `relative()` is
+     skipped for `Kinline` boxes (`position: relative` on an `<a>` does
+     nothing); grid row-flow cursor rule (§8.5 step 3) and percentage
+     tracks against an indefinite size (treated as 0, should be auto);
+     `sizetracks` grows tracks proportionally rather than equally with
+     freezing (§12.6); `intrinsic()` ignores a child's own
+     `max-width`/`min-width`; U+00AD and U+200B are not break
+     opportunities; BFC roots beside floats are narrowed but never moved
+     below one; `spread()` can overflow `int` on huge tables; `Typeface.width`
+     looks each glyph up twice.
+   - style: `revert`/`revert-layer` are treated as `unset` (the UA
+     values should come back); nested `@layer` order is flat; `var()`
+     cycles fall through to the fallback; HTML's case-insensitive
+     attribute values (`[type=text]` vs `type="Text"`); a `&` inside
+     `:is()` in a nested rule; user origin folded into UA.
+   - html: `canoncs` maps gbk/gb18030 to gb2312 and has no euc-kr or
+     windows-125x beyond 1250–1252 (tables missing from `lib/convcs`);
+     doctype system ids are dropped (html5lib fixtures with ids would
+     fail); limited-quirks mode is not modelled.
+   - page/browser: no HTTP cache in webfs, so every navigation
+     refetches; `text/plain` pages ignore their charset.
+3. **Open regressions (36 tests that genuinely passed before and fail now).**
    Groups and causes as far as known:
    - `CSS2/colors/color-applies-to-*` (8): sub-pixel text position.  A
      word starting with `&nbsp;` inside a table cell draws its glyphs at
@@ -189,6 +236,19 @@ In rough order of payoff.
 
 ## Things that bit, so they need not again
 
+- **Limbo: `t := ref T;` with no initialiser does not zero the adt.**
+  Integer fields come out as -1 (the nil word), and the JIT and the
+  interpreter differ in which; `newbox` written that way lost a grid
+  column.  Always write `ref T(...)` with every field.  A separate task
+  was suggested to make the compiler or VM do the right thing.
+- **Swapping `.m` files under a stash** (to compare with an older engine)
+  needs `tests/` rebuilt too, or `charonshot` fails its link typecheck
+  and every fixture reports "no image".  `charon-shot.sh -d` prints the
+  box tree on stderr.
+- **A "regression" whose test is unchanged is the reference changing**:
+  `wrap-reverse` and `grid-lanes` tests passed while their references
+  rendered as wrongly as they did; a flex fix made the references right.
+  Dump both box trees before and after before chasing the test.
 - **Limbo:** `con` and `fixed` are keywords (not variable names); real →
   int conversion *rounds* (so `int (x + 0.5)` rounds twice); a local
   redeclared in a sibling `for` header is an error; exception patterns

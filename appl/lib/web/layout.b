@@ -158,6 +158,11 @@ element(b: ref B, n: int): list of ref Box
 	Style->Dinlinegrid =>
 		kind = Kgrid;
 		inl = 1;
+	Style->Dgridlanes =>
+		kind = Kgrid;
+	Style->Dinlinegridlanes =>
+		kind = Kgrid;
+		inl = 1;
 	Style->Dtable =>
 		kind = Ktable;
 	Style->Dinlinetable =>
@@ -615,7 +620,7 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 	nd := b.d.nodes[n];
 	inl := 1;
 	case st.display {
-	Style->Dblock or Style->Dlistitem or Style->Dflowroot or Style->Dflex or Style->Dgrid or Style->Dtable =>
+	Style->Dblock or Style->Dlistitem or Style->Dflowroot or Style->Dflex or Style->Dgrid or Style->Dgridlanes or Style->Dtable =>
 		inl = 0;
 	}
 	if(nd.ns == Dom->SVG && nd.name == "svg") {
@@ -807,6 +812,7 @@ Abs: adt {
 	sx, sy:	int;
 	frag:	ref Frag;	# an inline-level box's place on its line, once the line is aligned (else nil)
 	rightedge:	int;	# sx is the hypothetical box's right edge: its static parent is right-to-left (§10.3.7)
+	area:	ref Rect;	# a grid area that is its containing block instead, in cb's coordinates (Grid 2 §9)
 };
 
 # the static position's x: the content box's start edge, which is the
@@ -913,8 +919,8 @@ seethrough(o: int): int
 # Percentage heights, and boxes positioned against it.
 heightmatters(b: ref Box): int
 {
-	if(b.kind == Kflex && b.st.flexdir < 2 || b.kind == Kgrid)
-		return 1;	# its items stretch to it, or its rows are sized by it
+	if(b.kind == Kflex || b.kind == Kgrid)
+		return 1;	# its items stretch or grow into it, or its rows are sized by it
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(k.kind == Ktext || k.kind == Kmarker)
@@ -1243,7 +1249,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 					Style->Aright =>	sx += rx - lx;
 					}
 				}
-				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil, b.st.dirrtl) :: l.pending;
+				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil, b.st.dirrtl, nil) :: l.pending;
 				continue;
 			}
 			if(isfloat(k)) {
@@ -1282,10 +1288,16 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 				# enough, moves down past them (CSS 2.2 §9.5)
 				(lx, rx) := band(fc, cy + ky, cy + ky + 1, cx, cx + cw);
 				if(lx > cx || rx < cx + cw) {
-					need := k.w + k.ml + k.mr;
-					if(k.st.width.kind == Style->Lauto) {
-						(kmn, nil) := intrinsic(k);
-						need = kmn;
+					# a box of auto width narrows to what is left (and may
+					# overflow), but its margins must fit, and a table is
+					# never narrower than its minimum; one with a width
+					# moves down if its margin box does not fit
+					need := k.ml;
+					if(k.st.width.kind != Style->Lauto)
+						need += k.w;
+					else if(k.kind == Ktable) {
+						(tmn, nil) := contribution(k);
+						need = tmn - k.mr;
 					}
 					for(tries := 0; tries < 1000 && rx - lx < need && (lx > cx || rx < cx + cw); tries++) {
 						n := nextfloat(fc, cy + ky);
@@ -1454,7 +1466,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0, nil) :: l.pending;
 			continue;
 		}
 		items = ref Fi(k, 0.0, 0.0, 0.0, 0.0, -1.0, 0, 0, 0, 0) :: items;
@@ -1847,7 +1859,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 crossoff(al, space, outer: int): int
 {
 	case al {
-	Style->ALend or Style->ALright =>
+	Style->ALend or Style->ALright or Style->ALflowend =>
 		return space - outer;
 	Style->ALcenter =>
 		return (space - outer)/2;
@@ -1985,6 +1997,7 @@ Track: adt {
 	lo, hi:	Tsz;		# minmax(lo, hi); a plain size has lo == hi
 	base:	real;		# the track's size as it is worked out
 	limit:	real;		# growth limit (-1: infinite)
+	fit:	int;		# from an auto-fit repeat: 1, or 2 once collapsed for want of items (§7.2.3.2)
 };
 
 Gi: adt {
@@ -2035,7 +2048,7 @@ track(t: ref Tok): ref Track
 				return nil;
 			if(lo.kind == Tfr)
 				lo = Tsz(Tauto, 0.0);
-			return ref Track(lo, hi, 0.0, 0.0);
+			return ref Track(lo, hi, 0.0, 0.0, 0);
 		"fit-content" =>
 			x := nows(t.kids);
 			if(len x != 1)
@@ -2043,7 +2056,7 @@ track(t: ref Tok): ref Track
 			(ok, hi) := tsz(x[0]);
 			if(!ok)
 				return nil;
-			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0);
+			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0, 0);
 		}
 		return nil;
 	}
@@ -2053,8 +2066,13 @@ track(t: ref Tok): ref Track
 	lo := sz;
 	if(sz.kind == Tfr)
 		lo = Tsz(Tauto, 0.0);	# 1fr is minmax(auto, 1fr)
-	return ref Track(lo, sz, 0.0, 0.0);
+	return ref Track(lo, sz, 0.0, 0.0, 0);
 }
+
+# what an intrinsically sized track in an auto-repeat counts as when
+# the repetitions are counted: grid lanes set it to the smallest
+# contribution an item makes to a lane (Grid 3 §5.1)
+repsize := 0.0;
 
 # A track list, with repeat() expanded (auto-fill/auto-fit against
 # avail) and line names collected: names[i] are the names of line i.
@@ -2115,6 +2133,7 @@ tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list
 						case sz.kind {
 						Tfixed => per += sz.v;
 						Tpct => per += sz.v * real avail / 100.0;
+						* => per += repsize;
 						}
 					}
 					per += real (gap * len rt);
@@ -2124,11 +2143,14 @@ tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list
 					if(reps < 1)
 						reps = 1;
 				}
+				fit := cnt[0].kind == Css->Kident && (cnt[0].s == "auto-fit" || cnt[0].s == "AUTO-FIT");
 				for(k := 0; k < reps; k++) {
 					for(m := 0; m < len rt; m++) {
 						for(nl := rn[m]; nl != nil; nl = tl nl)
 							names = (nt, hd nl) :: names;
-						tlist = ref *rt[m] :: tlist;
+						c := ref *rt[m];
+						c.fit = fit;
+						tlist = c :: tlist;
 						nt++;
 					}
 				}
@@ -2156,6 +2178,47 @@ tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list
 			n[at] = nm :: n[at];
 	}
 	return (a, n);
+}
+
+# an auto-fit repeat's tracks that no item occupies collapse: no size,
+# and the gutters around them join (Grid 2 §7.2.3.2)
+collapsefit(t: array of ref Track, items: array of ref Gi, cols: int)
+{
+	for(i := 0; i < len t; i++) {
+		if(t[i].fit != 1)
+			continue;
+		used := 0;
+		for(j := 0; j < len items && !used; j++) {
+			(a0, a1) := (items[j].c0, items[j].c1);
+			if(!cols)
+				(a0, a1) = (items[j].r0, items[j].r1);
+			if(a0 <= i && i < a1)
+				used = 1;
+		}
+		if(!used) {
+			t[i].fit = 2;
+			t[i].lo = Tsz(Tfixed, 0.0);
+			t[i].hi = Tsz(Tfixed, 0.0);
+		}
+	}
+}
+
+anypct(t: array of ref Track): int
+{
+	for(i := 0; i < len t; i++)
+		if(t[i].lo.kind == Tpct || t[i].hi.kind == Tpct)
+			return 1;
+	return 0;
+}
+
+# the gaps between n tracks, less those collapsed away
+ngaps(t: array of ref Track): int
+{
+	n := 0;
+	for(i := 0; i < len t; i++)
+		if(t[i].fit != 2)
+			n++;
+	return nz(n - 1);
 }
 
 # the line a Gline names, 0-based, given the explicit grid's line names;
@@ -2220,6 +2283,10 @@ areas(rows: array of string): list of (string, int, int, int, int)
 
 laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 {
+	if(islanes(b)) {
+		laylanes(l, b, cbw, cbh);
+		return;
+	}
 	st := b.st;
 	cw := b.w - hextra(b);
 	if(cw < 0)
@@ -2236,6 +2303,9 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		rowgap = res(st.rowgap, nz(ch));
 	(cols, colnames) := tracks(st.gridcols, cw, colgap);
 	(rows, rownames) := tracks(st.gridrows, ch, rowgap);
+	ncexp := len cols;
+	nrexp := len rows;
+	rowpct := anypct(rows);
 	ars := areas(st.gridareas);
 	for(a := ars; a != nil; a = tl a) {
 		(nil, nil, r1, nil, c1) := hd a;
@@ -2251,14 +2321,19 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	if(nrows == 0)
 		nrows = 1;
 
+	# the children in order-modified document order, which is the
+	# painting order too (Grid 2 §10.1); absolutely positioned
+	# children are not items and keep their places
+	for(oi := 1; oi < len b.kids; oi++)
+		for(om := oi; om > 0 && orderof(b.kids[om]) < orderof(b.kids[om-1]); om--)
+			(b.kids[om], b.kids[om-1]) = (b.kids[om-1], b.kids[om]);
+
 	# placement
 	gi: list of ref Gi;
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
-		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0) :: l.pending;
-			continue;
-		}
+		if(isabs(k))
+			continue;	# placed once the tracks are: gridabs
 		ks := k.st;
 		g := ref Gi(k, -1, -1, -1, -1);
 		if(ks.gridarea != nil) {
@@ -2310,6 +2385,37 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		if(g.r0 >= 0 && g.c0 >= 0)
 			occ.mark(g.r0, g.r1, g.c0, g.c1);
 	}
+	# definite in the axis items flow along only: the first free cells
+	# in that row (or column), past what this step put there (§8.5 step 1)
+	rcur := array[nrows] of {* => 0};
+	ccur := array[ncols] of {* => 0};
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		ks := g.box.st;
+		if(!colflow && g.r0 >= 0 && g.c0 < 0) {
+			cs := spanof(g.c0, g.c1, ks.colstart, ks.colend);
+			c := rcur[g.r0];
+			while(!occ.free(g.r0, g.r1, c, c + cs))
+				c++;
+			g.c0 = c;
+			g.c1 = c + cs;
+			rcur[g.r0] = g.c1;
+			if(g.c1 > ncols)
+				ncols = g.c1;
+			occ.mark(g.r0, g.r1, g.c0, g.c1);
+		} else if(colflow && g.c0 >= 0 && g.r0 < 0) {
+			rs := spanof(g.r0, g.r1, ks.rowstart, ks.rowend);
+			r := ccur[g.c0];
+			while(!occ.free(r, r + rs, g.c0, g.c1))
+				r++;
+			g.r0 = r;
+			g.r1 = r + rs;
+			ccur[g.c0] = g.r1;
+			if(g.r1 > nrows)
+				nrows = g.r1;
+			occ.mark(g.r0, g.r1, g.c0, g.c1);
+		}
+	}
 	# 2: definite in one axis, then 3: fully automatic
 	cr := 0;
 	cc := 0;
@@ -2356,12 +2462,6 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 				}
 				cc = g.c0;
 				cr = g.r1;
-			} else {
-				r := 0;
-				while(!occ.free(r, r + rs, g.c0, g.c1))
-					r++;
-				g.r0 = r;
-				g.r1 = r + rs;
 			}
 		} else {
 			if(g.r0 < 0) {
@@ -2396,12 +2496,6 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 				g.r1 = r + rs;
 				cr = g.r0;
 				cc = g.c1;
-			} else {
-				r := 0;
-				while(!occ.free(r, r + rs, g.c0, g.c1))
-					r++;
-				g.r0 = r;
-				g.r1 = r + rs;
 			}
 		}
 		if(g.c1 > ncols)
@@ -2414,6 +2508,8 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			nrows = items[i].r1;
 	cols = growtracks(cols, ncols, st.autocols, cw);
 	rows = growtracks(rows, nrows, st.autorows, ch);
+	collapsefit(cols, items, 1);
+	collapsefit(rows, items, 0);
 
 	# column sizes, then rows (laying items out at their column widths)
 	sizetracks(cols, items, 1, cw, colgap, b);
@@ -2435,7 +2531,16 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	gh := 0;
 	for(i = 0; i < len rows; i++)
 		gh += ir(rows[i].base);
-	gh += rowgap * nz(len rows - 1);
+	gh += rowgap * ngaps(rows);
+	if(ch < 0 && rowpct) {
+		# percentage rows in a container whose height they decide:
+		# auto for that height, then resolved against it (§7.2.1)
+		(again, nil) := tracks(st.gridrows, gh, rowgap);
+		again = growtracks(again, len rows, st.autorows, gh);
+		collapsefit(again, items, 0);
+		sizetracks(again, items, 0, gh, rowgap, b);
+		rows = again;
+	}
 	avh := ch;
 	if(avh < 0)
 		avh = gh;
@@ -2477,6 +2582,872 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	if(h < 0)
 		h = gh + vextra(b);
 	b.h = clamph(b, h, cbh);
+	gridabs(l, b, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars);
+}
+
+# An absolutely positioned child of a grid container: its static
+# position is the padding box's start, and, when the container is its
+# containing block, the lines it names bound that block (Grid 2 §9)
+gridabs(l: ref L, b: ref Box, cols: array of ref Track, cpos: array of int, colgap: int, colnames: array of list of string, ncexp: int,
+	rows: array of ref Track, rpos: array of int, rowgap: int, rownames: array of list of string, nrexp: int, ars: list of (string, int, int, int, int))
+{
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(!isabs(k))
+			continue;
+		cb := cbof(l, k);
+		area: ref Rect;
+		if(cb == b) {
+			r := Rect((b.bl, b.bt), (b.w - b.br, b.h - b.bb));
+			# each edge is a line of the explicit grid, or else the
+			# padding edge (§9.1)
+			(c0, c1) := abslines(k.st.colstart, k.st.colend, colnames, ncexp, ars, 1);
+			if(c0 >= 0)
+				r.min.x = b.bl + b.pl + gridlinestart(cols, cpos, c0, colgap);
+			if(c1 >= 0)
+				r.max.x = b.bl + b.pl + gridlineend(cols, cpos, c1, colgap);
+			(r0, r1) := abslines(k.st.rowstart, k.st.rowend, rownames, nrexp, ars, 0);
+			if(r0 >= 0)
+				r.min.y = b.bt + b.pt + gridlinestart(rows, rpos, r0, rowgap);
+			if(r1 >= 0)
+				r.max.y = b.bt + b.pt + gridlineend(rows, rpos, r1, rowgap);
+			area = ref r;
+		}
+		l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, area) :: l.pending;
+	}
+}
+
+# the lines an absolutely positioned child names in one axis: -1 for
+# auto, a span, or a line outside the explicit grid, each of which is
+# the padding edge; the two swapped if backwards, and one alone if equal
+abslines(sg, eg: Style->Gline, names: array of list of string, nexp: int, ars: list of (string, int, int, int, int), cols: int): (int, int)
+{
+	a := absline(sg, names, nexp, 0, ars, cols);
+	e := absline(eg, names, nexp, 1, ars, cols);
+	if(a >= 0 && e >= 0 && e < a)
+		(a, e) = (e, a);
+	if(a >= 0 && a == e)
+		e = -1;
+	return (a, e);
+}
+
+absline(g: Style->Gline, names: array of list of string, nexp, end: int, ars: list of (string, int, int, int, int), cols: int): int
+{
+	if(g.span || g.n == 0 && g.name == nil)
+		return -1;
+	if(g.n < 0 && nexp + 1 + g.n < 0)
+		return -1;
+	i := lineof(g, names, nexp, end);
+	if(i < 0 && g.name != nil)
+		for(l := ars; l != nil; l = tl l) {
+			(an, r0, r1, c0, c1) := hd l;
+			if(an != g.name)
+				continue;
+			if(cols)
+				i = c0;
+			else
+				i = r0;
+			if(end) {
+				i = r1;
+				if(cols)
+					i = c1;
+			}
+		}
+	if(i < 0 || i > nexp)
+		return -1;
+	return i;
+}
+
+# where line i is: the start of track i, or the end of the last track
+gridlinestart(t: array of ref Track, pos: array of int, i, gap: int): int
+{
+	if(len t == 0)
+		return 0;
+	if(i < len t)
+		return pos[i];
+	return trackend(t, pos, len t - 1, gap);
+}
+
+# where line i is as an area's end: the end of track i-1
+gridlineend(t: array of ref Track, pos: array of int, i, gap: int): int
+{
+	if(len t == 0)
+		return 0;
+	if(i <= 0)
+		return pos[0];
+	if(i > len t)
+		i = len t;
+	return trackend(t, pos, i - 1, gap);
+}
+
+# ---- grid lanes (Grid 3) ----
+#
+# Tracks in one axis, as a grid has; in the other, the items stack one
+# after another, each going into whichever lane is shortest.
+
+islanes(b: ref Box): int
+{
+	return b.kind == Kgrid && (b.st.display == Style->Dgridlanes || b.st.display == Style->Dinlinegridlanes);
+}
+
+# the lanes run down (the tracks are columns) unless the direction says
+# row, or says nothing and only rows are given
+lanesdown(b: ref Box): int
+{
+	st := b.st;
+	case st.lanesdir & 3 {
+	1 =>	return 0;
+	2 =>	return 1;
+	}
+	return st.gridcols != nil || st.gridrows == nil;
+}
+
+# an item's lines in the grid axis
+glines(g: ref Gi, down: int): (int, int)
+{
+	if(down)
+		return (g.c0, g.c1);
+	return (g.r0, g.r1);
+}
+
+setlines(g: ref Gi, down, a0, a1: int)
+{
+	if(down)
+		(g.c0, g.c1) = (a0, a1);
+	else
+		(g.r0, g.r1) = (a0, a1);
+}
+
+# room left in a lane behind an item that spans past it: an item may
+# start at a and must end by e (leaving the gutter before the next)
+Gap: adt {
+	a, e:	int;
+	prev:	int;	# the item before it, whose alignment container it is part of; -1 at the lane's start
+};
+
+# the width an item takes stacking along the inline axis: its own
+# (it does not stretch), fitting the container
+lanesw(k: ref Box, cw: int): int
+{
+	w := specw(k, k.st.width, cw);
+	if(w >= 0)
+		return clampw(k, w, cw);
+	if(k.kind == Kreplaced) {
+		(rw, nil) := replacedsize(k, cw, -1);
+		return clampw(k, rw + hextra(k), cw);
+	}
+	(mn, mx) := intrinsic(k);
+	return clampw(k, fit(mn, mx, cw) - mgs(k), cw);
+}
+
+laylanes(l: ref L, b: ref Box, cbw, cbh: int)
+{
+	st := b.st;
+	cw := b.w - hextra(b);
+	if(cw < 0)
+		cw = 0;
+	sh := specheight(b, cbh);
+	ch := -1;
+	if(sh >= 0)
+		ch = clamph(b, sh, cbh) - vextra(b);
+	colgap := 0;
+	rowgap := 0;
+	if(st.colgap.kind != Style->Lnormal)
+		colgap = res(st.colgap, cw);
+	if(st.rowgap.kind != Style->Lnormal)
+		rowgap = res(st.rowgap, nz(ch));
+	down := lanesdown(b);
+	fillrev := st.lanesdir & 4;
+	trackrev := st.lanesdir & 8;
+	# the grid axis: its tracks, size and gap; the stacking axis: its size and gutter
+	tmpl := st.gridcols;
+	auto := st.autocols;
+	avail := cw;
+	tgap := colgap;
+	savail := ch;
+	sgap := rowgap;
+	if(!down) {
+		tmpl = st.gridrows;
+		auto = st.autorows;
+		avail = ch;
+		tgap = rowgap;
+		savail = cw;
+		sgap = colgap;
+	}
+	# an auto-repeat of intrinsic lanes: as many as the items'
+	# smallest max-content contribution fills (across, only a height
+	# given counts)
+	first := 1;
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(isabs(k))
+			continue;
+		edges(k, cw);
+		kmn: int;
+		span: int;
+		if(down) {
+			(nil, kmn) = contribution(k);	# its max-content
+			(ka0, ka1) := gridspan(k.st.colstart, k.st.colend, nil, 0, nil, 1);
+			span = spanof(ka0, ka1, k.st.colstart, k.st.colend);
+		} else {
+			kmn = specheight(k, ch);
+			if(kmn < 0)
+				continue;
+			kmn += k.mt + k.mb;
+			(ka0, ka1) := gridspan(k.st.rowstart, k.st.rowend, nil, 0, nil, 0);
+			span = spanof(ka0, ka1, k.st.rowstart, k.st.rowend);
+		}
+		per := real (kmn - tgap * (span - 1)) / real span;
+		if(first || per < repsize)
+			repsize = per;
+		first = 0;
+	}
+	(tr, names) := tracks(tmpl, avail, tgap);
+	repsize = 0.0;
+	if(len tr == 0)
+		tr = growtracks(tr, 1, auto, avail);
+
+	# the children in order-modified document order, which is the
+	# painting order too (Grid 2 §10.1); absolutely positioned
+	# children are not items and keep their places
+	for(oi := 1; oi < len b.kids; oi++)
+		for(om := oi; om > 0 && orderof(b.kids[om]) < orderof(b.kids[om-1]); om--)
+			(b.kids[om], b.kids[om-1]) = (b.kids[om-1], b.kids[om]);
+	# the items, with their lines where those are definite
+	gi: list of ref Gi;
+	for(i = 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(isabs(k))
+			continue;	# placed once the tracks are: gridabs
+		ks := k.st;
+		g := ref Gi(k, -1, -1, -1, -1);
+		if(down)
+			(g.c0, g.c1) = gridspan(ks.colstart, ks.colend, names, len tr, nil, 1);
+		else
+			(g.r0, g.r1) = gridspan(ks.rowstart, ks.rowend, names, len tr, nil, 0);
+		(a0, a1) := glines(g, down);
+		if(a1 > len tr)
+			tr = growtracks(tr, a1, auto, avail);
+		gi = g :: gi;
+	}
+	n := len tr;
+	items := array[len gi] of ref Gi;
+	for(i = len items - 1; i >= 0; i--) {
+		items[i] = hd gi;
+		gi = tl gi;
+	}
+	spans := array[len items] of int;
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		ks := g.box.st;
+		(a0, a1) := glines(g, down);
+		if(down)
+			spans[i] = spanof(a0, a1, ks.colstart, ks.colend);
+		else
+			spans[i] = spanof(a0, a1, ks.rowstart, ks.rowend);
+		if(spans[i] > n)
+			spans[i] = n;
+	}
+
+	# track sizing: an item not yet placed may land in any lane, so it
+	# contributes as if placed at every start it could have (Grid 3 §5)
+	sz: list of ref Gi;
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		(a0, nil) := glines(g, down);
+		if(a0 >= 0) {
+			sz = g :: sz;
+			continue;
+		}
+		for(t := 0; t + spans[i] <= n; t++) {
+			v := ref Gi(g.box, -1, -1, -1, -1);
+			setlines(v, down, t, t + spans[i]);
+			sz = v :: sz;
+		}
+	}
+	sizing := array[len sz] of ref Gi;
+	for(i = len sizing - 1; i >= 0; i--) {
+		sizing[i] = hd sz;
+		sz = tl sz;
+	}
+	if(down) {
+		for(i = 0; i < len items; i++)
+			edges(items[i].box, cw);
+	} else {
+		# stacking along the inline axis: the items' own widths, and
+		# their heights at those, size the rows
+		for(i = 0; i < len items; i++) {
+			k := items[i].box;
+			edges(k, cw);
+			k.w = lanesw(k, cw);
+			layblock(l, k, cw, ch, nil, 0, 0);
+		}
+	}
+	sizetracks(tr, sizing, down, avail, tgap, b);
+	# tracks in their physical order
+	ptr := tr;
+	if(trackrev) {
+		ptr = array[n] of ref Track;
+		for(i = 0; i < n; i++)
+			ptr[i] = tr[n - 1 - i];
+	}
+	tsum := tgap * nz(n - 1);
+	for(i = 0; i < n; i++)
+		tsum += ir(tr[i].base);
+	tavail := avail;
+	if(tavail < 0)
+		tavail = tsum;
+	talign := st.justifycontent;
+	if(!down)
+		talign = st.aligncontent;
+	pos := trackpos(ptr, tgap, tavail, flowal(talign, trackrev));
+
+	# the stacking axis: each item's size along it
+	o := array[len items] of int;
+	awat := array[len items] of {* => -1};	# the lane width an item was laid out at
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		k := g.box;
+		ks := k.st;
+		if(down) {
+			# its width is settled once its lane is: lay it out at
+			# the narrowest area it might get, for its height
+			(a0, a1) := glines(g, down);
+			aw := 0;
+			if(a0 >= 0) {
+				(p0, p1) := phys(a0, a1, n, trackrev);
+				aw = areaw(ptr, pos, p0, p1, tgap);
+			} else {
+				aw = -1;
+				for(t := 0; t + spans[i] <= n; t++) {
+					(p0, p1) := phys(t, t + spans[i], n, trackrev);
+					w := areaw(ptr, pos, p0, p1, tgap);
+					if(aw < 0 || w < aw)
+						aw = w;
+				}
+			}
+			edges(k, aw);
+			k.w = gridw(k, aw, b);
+			layblock(l, k, aw, -1, nil, 0, 0);
+			o[i] = k.h + k.mt + k.mb;
+			awat[i] = aw;
+		} else
+			o[i] = k.w + k.ml + k.mr;
+	}
+
+	# placement: into the shortest lane, or the first within the tolerance
+	# at or after the cursor (Grid 3 §4)
+	tol := lanestol(b, avail);
+	dense := st.lanespack;
+	ls := newlanes(n, sgap, tol, dense);
+	ext := array[len items] of {* => -1};	# where an item's alignment container ends, if room follows it
+	y := array[len items] of int;
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		(a0, a1) := glines(g, down);
+		span := spans[i];
+		if(a0 < 0) {
+			a0 = ls.choose(span, o[i]);
+			a1 = a0 + span;
+			setlines(g, down, a0, a1);
+		}
+		if(down) {
+			# its lane is settled: its width, and so its height, may
+			# differ from the narrowest it was measured at
+			(p0, p1) := phys(a0, a1, n, trackrev);
+			aw := areaw(ptr, pos, p0, p1, tgap);
+			if(aw != awat[i]) {
+				k := g.box;
+				edges(k, aw);
+				k.w = gridw(k, aw, b);
+				layblock(l, k, aw, -1, nil, 0, 0);
+				o[i] = k.h + k.mt + k.mb;
+				awat[i] = aw;
+			}
+		}
+		y[i] = fitsat(a0, a1, o[i], ls.run, ls.gaps, dense);
+		ls.take(i, a0, a1, y[i], o[i], ext);
+	}
+	last := ls.last;
+	# lanes from an auto-fit repeat that nothing landed in collapse,
+	# and the rest are sized and placed again
+	nfit := 0;
+	for(ti := 0; ti < n; ti++)
+		if(tr[ti].fit == 1)
+			nfit++;
+	if(nfit > 0) {
+		collapsefit(tr, items, down);
+		sizetracks(tr, sizing, down, avail, tgap, b);
+		tsum = tgap * ngaps(tr);
+		for(ti = 0; ti < n; ti++)
+			tsum += ir(tr[ti].base);
+		tavail = avail;
+		if(tavail < 0)
+			tavail = tsum;
+		pos = trackpos(ptr, tgap, tavail, flowal(talign, trackrev));
+		if(down)
+			for(i = 0; i < len items; i++) {
+				g := items[i];
+				k := g.box;
+				(a0, a1) := glines(g, down);
+				(p0, p1) := phys(a0, a1, n, trackrev);
+				aw := areaw(ptr, pos, p0, p1, tgap);
+				if(aw != awat[i]) {
+					edges(k, aw);
+					k.w = gridw(k, aw, b);
+					layblock(l, k, aw, -1, nil, 0, 0);
+					awat[i] = aw;
+				}
+			}
+	}
+	range := 0;
+	for(i = 0; i < len items; i++)
+		if(y[i] + o[i] > range)
+			range = y[i] + o[i];
+
+	# the stacking range in the container, aligned as a whole
+	size := savail;
+	if(size < 0)
+		size = range;
+	free := size - range;
+	off := 0;
+	if(free > 0) {
+		al := st.aligncontent;
+		if(!down)
+			al = st.justifycontent;
+		case flowal(al, fillrev) {
+		Style->ALend or Style->ALright =>
+			off = free;
+		Style->ALcenter =>
+			off = free/2;
+		Style->ALnormal or Style->ALstretch =>
+			if(fillrev)
+				off = free;
+		}
+	}
+	# the last item in a lane has the room to the container's end
+	last0 := range + off;
+	if(!fillrev)
+		last0 = size - off;
+	for(t := 0; t < n; t++)
+		if(last[t] >= 0 && ext[last[t]] < 0)
+			ext[last[t]] = last0;
+	# an item with room after it (before a spanning item, or the last
+	# in its lane) aligns within that room (Grid 3 §7.2) if asked to;
+	# start and end name the container's physical edges, which
+	# stacking in reverse swaps
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		k := g.box;
+		ks := k.st;
+		room := ext[i] - (y[i] + o[i]);
+		if(room <= 0)
+			continue;
+		as := ks.alignself;
+		if(as == Style->ALauto)
+			as = st.alignitems;
+		if(!down) {
+			as = ks.justifyself;
+			if(as == Style->ALauto)
+				as = st.justifyitems;
+		}
+		if(as == Style->ALnormal)
+			continue;
+		as = flowal(as, fillrev);
+		if(fillrev)
+			case as {
+			Style->ALstart or Style->ALleft =>	as = Style->ALend;
+			Style->ALend or Style->ALright =>	as = Style->ALstart;
+			}
+		case as {
+		Style->ALstretch =>
+			if(k.kind == Kreplaced)
+				break;
+			if(down) {
+				if(ks.height.kind == Style->Lauto && ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto) {
+					(a0, a1) := glines(g, down);
+					(p0, p1) := phys(a0, a1, n, trackrev);
+					aw := areaw(ptr, pos, p0, p1, tgap);
+					imposeh(l, k, clamph(k, k.h + room, -1), aw, k.h + room);
+					o[i] = k.h + k.mt + k.mb;
+				}
+			} else if(ks.width.kind == Style->Lauto && ks.ml.kind != Style->Lauto && ks.mr.kind != Style->Lauto) {
+				k.w = clampw(k, k.w + room, cw);
+				layblock(l, k, cw, ch, nil, 0, 0);
+				o[i] = k.w + k.ml + k.mr;
+			}
+		Style->ALend or Style->ALright =>
+			y[i] += room;
+		Style->ALcenter =>
+			y[i] += room/2;
+		}
+	}
+
+	# place each item: its lane, and its position along the stack
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		k := g.box;
+		ks := k.st;
+		(a0, a1) := glines(g, down);
+		(p0, p1) := phys(a0, a1, n, trackrev);
+		p := off + y[i];
+		if(fillrev)
+			p = off + range - (y[i] + o[i]);
+		aw := cw;
+		ah := ch;
+		if(down) {
+			ax := pos[p0];
+			aw = areaw(ptr, pos, p0, p1, tgap);
+			js := ks.justifyself;
+			if(js == Style->ALauto)
+				js = st.justifyitems;
+			js = flowal(js, trackrev);
+			x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
+			if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
+				x = ax + (aw - k.w)/2;
+			k.x = b.bl + b.pl + x;
+			k.y = b.bt + b.pt + p + k.mt;
+			ah = o[i];
+		} else {
+			ay := pos[p0];
+			ah = areaw(ptr, pos, p0, p1, tgap);
+			as := ks.alignself;
+			if(as == Style->ALauto)
+				as = st.alignitems;
+			as = flowal(as, trackrev);
+			if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
+			   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced)
+				imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), k.w, ah);
+			yy := ay + k.mt + crossoff(as, ah, k.h + k.mt + k.mb);
+			if(ks.mt.kind == Style->Lauto && ks.mb.kind == Style->Lauto)
+				yy = ay + (ah - k.h)/2;
+			if(st.dirrtl)
+				p = size - p - o[i];
+			k.x = b.bl + b.pl + p + k.ml;
+			k.y = b.bt + b.pt + yy;
+			aw = o[i];
+		}
+		relative(k, aw, ah);
+	}
+	h := sh;
+	if(h < 0) {
+		h = range;
+		if(!down)
+			h = tsum;
+		h += vextra(b);
+	}
+	b.h = clamph(b, h, cbh);
+	none := array[0] of ref Track;
+	if(down)
+		gridabs(l, b, ptr, pos, tgap, names, n, none, nil, 0, nil, 0, nil);
+	else
+		gridabs(l, b, none, nil, 0, nil, 0, ptr, pos, tgap, names, n, nil);
+}
+
+# flow-start and flow-end name the ends of the flow in an axis: the
+# physical start and end, unless that axis runs in reverse
+flowal(a, rev: int): int
+{
+	case a {
+	Style->ALflowstart =>
+		if(rev)
+			return Style->ALend;
+		return Style->ALstart;
+	Style->ALflowend =>
+		if(rev)
+			return Style->ALstart;
+		return Style->ALend;
+	}
+	return a;
+}
+
+# the tie threshold: positions within it of the shortest count as
+# equally good; normal is 1em, a percentage is of the grid axis
+lanestol(b: ref Box, avail: int): int
+{
+	st := b.st;
+	case st.tolerance.kind {
+	Style->Lnormal =>	return ir(st.fontsize);
+	Style->Lnone =>		return 16r3fffffff;
+	}
+	return res(st.tolerance, nz(avail));
+}
+
+# The lanes as items are placed in them: where each lane's next item
+# starts, the room spanning items skipped (for dense packing), and the
+# auto-placement cursor.
+Lanes: adt {
+	n, sgap, tol, dense:	int;
+	run:	array of int;		# where the next item in each lane starts
+	last:	array of int;		# the last item placed in each lane
+	gaps:	array of list of ref Gap;
+	cursor:	int;
+	choose:	fn(s: self ref Lanes, span, o: int): int;
+	take:	fn(s: self ref Lanes, i, a0, a1, y, o: int, ext: array of int);
+};
+
+newlanes(n, sgap, tol, dense: int): ref Lanes
+{
+	return ref Lanes(n, sgap, tol, dense, array[n] of {* => 0}, array[n] of {* => -1}, array[n] of list of ref Gap, 0);
+}
+
+# the shortest lanes for an item of that span and size, or the first
+# within the tolerance at or after the cursor (Grid 3 §4), which only
+# an item placed this way moves
+Lanes.choose(s: self ref Lanes, span, o: int): int
+{
+	n := s.n;
+	cand := array[n] of {* => -1};
+	miny := -1;
+	for(t := 0; t + span <= n; t++) {
+		cand[t] = fitsat(t, t + span, o, s.run, s.gaps, s.dense);
+		if(miny < 0 || cand[t] < miny)
+			miny = cand[t];
+	}
+	best := -1;
+	if(!s.dense)	# packing densely takes the first position, as a grid does
+		for(t = s.cursor; t + span <= n && best < 0; t++)
+			if(cand[t] >= 0 && cand[t] <= miny + s.tol)
+				best = t;
+	for(t = 0; t + span <= n && best < 0; t++)
+		if(cand[t] >= 0 && cand[t] <= miny + s.tol)
+			best = t;
+	if(best < 0)
+		best = 0;
+	s.cursor = best + span;
+	return best;
+}
+
+# item i takes lanes a0..a1-1 from y for o: what it skips stays as a
+# gap, and a lane's running position never moves back (a negative
+# margin ends an item above where it began)
+Lanes.take(s: self ref Lanes, i, a0, a1, y, o: int, ext: array of int)
+{
+	sgap := s.sgap;
+	end := y + o;
+	for(t := a0; t < a1; t++) {
+		if(y >= s.run[t]) {
+			if(y - sgap > s.run[t]) {
+				s.gaps[t] = ref Gap(s.run[t], y - sgap, s.last[t]) :: s.gaps[t];
+				if(s.last[t] >= 0)
+					ext[s.last[t]] = minext(ext[s.last[t]], y - sgap);
+			}
+			if(end + sgap > s.run[t])
+				s.run[t] = end + sgap;
+			s.last[t] = i;
+			continue;
+		}
+		# in a gap: what is left of it stays one
+		left: list of ref Gap;
+		for(gl := s.gaps[t]; gl != nil; gl = tl gl) {
+			gp := hd gl;
+			if(gp.a <= y && end <= gp.e) {
+				if(y - sgap > gp.a)
+					left = ref Gap(gp.a, y - sgap, gp.prev) :: left;
+				if(gp.prev >= 0)
+					ext[gp.prev] = minext(ext[gp.prev], y - sgap);
+				if(end + sgap < gp.e)
+					left = ref Gap(end + sgap, gp.e, i) :: left;
+				ext[i] = minext(ext[i], gp.e);
+			} else
+				left = gp :: left;
+		}
+		s.gaps[t] = left;
+	}
+}
+
+# lines a0..a1 in the tracks' physical order
+phys(a0, a1, n, rev: int): (int, int)
+{
+	if(rev)
+		return (n - a1, n - a0);
+	return (a0, a1);
+}
+
+minext(e, v: int): int
+{
+	if(e < 0 || v < e)
+		return v;
+	return e;
+}
+
+# the nearest position where an item of size o fits across lanes
+# a0..a1-1: beyond everything in them, or, packing densely, in a gap
+# they all have room in
+fitsat(a0, a1, o: int, run: array of int, gaps: array of list of ref Gap, dense: int): int
+{
+	best := -1;
+	for(t := a0; t < a1; t++) {
+		if(lanesfit(run[t], a0, a1, o, run, gaps, dense) && (best < 0 || run[t] < best))
+			best = run[t];
+		if(dense)
+			for(gl := gaps[t]; gl != nil; gl = tl gl) {
+				gp := hd gl;
+				if(gp.a < best || best < 0)
+					if(lanesfit(gp.a, a0, a1, o, run, gaps, dense))
+						best = gp.a;
+			}
+	}
+	return best;
+}
+
+lanesfit(y, a0, a1, o: int, run: array of int, gaps: array of list of ref Gap, dense: int): int
+{
+	for(t := a0; t < a1; t++) {
+		if(y >= run[t])
+			continue;
+		ok := 0;
+		if(dense)
+			for(gl := gaps[t]; gl != nil && !ok; gl = tl gl) {
+				gp := hd gl;
+				if(gp.a <= y && y + o <= gp.e)
+					ok = 1;
+			}
+		if(!ok)
+			return 0;
+	}
+	return 1;
+}
+
+# the inline size a grid lanes container needs: lanes running down add
+# up its columns, each as wide as anything that might land in it; lanes
+# running across stack the items along the inline axis
+# an item's contribution to the columns c0..c1-1 it spans: less the
+# fixed ones, spread over the others
+spreadspan(cols: array of ref Track, cmn, cmx: array of int, c0, c1, kmn, kmx, gap: int)
+{
+	taken := gap * (c1 - c0 - 1);
+	nvar := 0;
+	for(c := c0; c < c1; c++)
+		if(cols[c].lo.kind == Tfixed && cols[c].hi.kind == Tfixed)
+			taken += int cols[c].hi.v;
+		else
+			nvar++;
+	if(nvar == 0)
+		return;
+	# shares that add up to the whole: the first get the odd pixels
+	rmn := (kmn - taken) % nvar;
+	rmx := (kmx - taken) % nvar;
+	smn := (kmn - taken) / nvar;
+	smx := (kmx - taken) / nvar;
+	for(c = c0; c < c1; c++) {
+		if(cols[c].lo.kind == Tfixed && cols[c].hi.kind == Tfixed)
+			continue;
+		m := smn;
+		if(rmn > 0) {
+			m++;
+			rmn--;
+		}
+		x := smx;
+		if(rmx > 0) {
+			x++;
+			rmx--;
+		}
+		if(m > cmn[c])
+			cmn[c] = m;
+		if(x > cmx[c])
+			cmx[c] = x;
+	}
+}
+
+lanesintrinsic(b: ref Box): (int, int)
+{
+	st := b.st;
+	down := lanesdown(b);
+	gap := 0;
+	if(st.colgap.kind != Style->Lnormal)
+		gap = res(st.colgap, 0);
+	if(!down) {
+		# lanes running across: the stacking range when the items are
+		# placed in the rows at their min-content widths, and again at
+		# their max-content widths
+		rgap := 0;
+		if(st.rowgap.kind != Style->Lnormal)
+			rgap = res(st.rowgap, 0);
+		(rows, names) := tracks(st.gridrows, 0, rgap);
+		if(len rows == 0)
+			rows = growtracks(rows, 1, st.autorows, 0);
+		nk := 0;
+		for(i := 0; i < len b.kids; i++)
+			if(!isabs(b.kids[i]))
+				nk++;
+		kmn := array[nk] of int;
+		kmx := array[nk] of int;
+		ka0 := array[nk] of int;
+		kspan := array[nk] of int;
+		j := 0;
+		for(i = 0; i < len b.kids; i++) {
+			k := b.kids[i];
+			if(isabs(k))
+				continue;
+			edges(k, 0);
+			(kmn[j], kmx[j]) = contribution(k);
+			(a0, a1) := gridspan(k.st.rowstart, k.st.rowend, names, len rows, nil, 0);
+			if(a1 > len rows)
+				rows = growtracks(rows, a1, st.autorows, 0);
+			ka0[j] = a0;
+			kspan[j] = spanof(a0, a1, k.st.rowstart, k.st.rowend);
+			j++;
+		}
+		n := len rows;
+		rng := array[2] of {* => 0};
+		for(pass := 0; pass < 2; pass++) {
+			ls := newlanes(n, gap, lanestol(b, 0), st.lanespack);
+			ext := array[nk] of {* => -1};
+			for(j = 0; j < nk; j++) {
+				o := kmn[j];
+				if(pass == 1)
+					o = kmx[j];
+				span := kspan[j];
+				if(span > n)
+					span = n;
+				a0 := ka0[j];
+				if(a0 < 0)
+					a0 = ls.choose(span, o);
+				a1 := a0 + span;
+				if(a1 > n)
+					a1 = n;
+				y := fitsat(a0, a1, o, ls.run, ls.gaps, st.lanespack);
+				ls.take(j, a0, a1, y, o, ext);
+				if(y + o > rng[pass])
+					rng[pass] = y + o;
+			}
+		}
+		return (rng[0], rng[1]);
+	}
+	(cols, names) := tracks(st.gridcols, 0, gap);
+	if(len cols == 0)
+		cols = growtracks(cols, 1, st.autocols, 0);
+	n := len cols;
+	cmn := array[n] of {* => 0};
+	cmx := array[n] of {* => 0};
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(isabs(k))
+			continue;
+		edges(k, 0);
+		(kmn, kmx) := contribution(k);
+		(a0, a1) := gridspan(k.st.colstart, k.st.colend, names, n, nil, 1);
+		span := spanof(a0, a1, k.st.colstart, k.st.colend);
+		if(span > n)
+			span = n;
+		# wherever it may land: a spanning item's contribution, less
+		# the fixed lanes it spans, is spread over the others
+		for(t := 0; t + span <= n; t++)
+			if(a0 < 0 || t == a0)
+				spreadspan(cols, cmn, cmx, t, t + span, kmn, kmx, gap);
+	}
+	wmn := gap * (n - 1);
+	wmx := wmn;
+	for(i = 0; i < n; i++)
+		if(cols[i].lo.kind == Tfixed && cols[i].hi.kind == Tfixed) {
+			wmn += int cols[i].hi.v;
+			wmx += int cols[i].hi.v;
+		} else {
+			wmn += cmn[i];
+			wmx += cmx[i];
+		}
+	return (wmn, wmx);
 }
 
 Occ: adt {
@@ -2601,7 +3572,7 @@ growtracks(t: array of ref Track, n: int, auto: array of ref Tok, avail: int): a
 		if(len at > 0)
 			r[i] = ref *at[(i - len t) % len at];
 		else
-			r[i] = ref Track(Tsz(Tauto, 0.0), Tsz(Tauto, 0.0), 0.0, 0.0);
+			r[i] = ref Track(Tsz(Tauto, 0.0), Tsz(Tauto, 0.0), 0.0, 0.0, 0);
 	}
 	return r;
 }
@@ -2635,8 +3606,24 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 		if(tr.limit >= 0.0 && tr.limit < tr.base)
 			tr.limit = tr.base;
 	}
-	# content contributions, single-span items first
-	for(pass := 1; pass <= 2; pass++)
+	# content contributions: single-span items, then spanning ones by
+	# span, each group's increases planned against the same bases and
+	# the largest taken (§12.5.1)
+	maxspan := 1;
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		ns := g.c1 - g.c0;
+		if(!cols)
+			ns = g.r1 - g.r0;
+		if(ns > maxspan)
+			maxspan = ns;
+	}
+	if(maxspan > n)
+		maxspan = n;
+	inc := array[n] of real;
+	for(pass := 1; pass <= maxspan; pass++) {
+		for(q := 0; q < n; q++)
+			inc[q] = 0.0;
 		for(i = 0; i < len items; i++) {
 			g := items[i];
 			a0 := g.c0;
@@ -2646,7 +3633,7 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 				a1 = g.r1;
 			}
 			nspan := a1 - a0;
-			if(pass == 1 && nspan != 1 || pass == 2 && nspan == 1)
+			if(nspan != pass && !(pass == maxspan && nspan > maxspan))
 				continue;
 			k := g.box;
 			mn, mx: int;
@@ -2668,14 +3655,18 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 					nintr++;
 			}
 			have += real (gap * (nspan - 1));
-			if(pass == 2 && hasfr)
+			if(pass >= 2 && hasfr)
 				continue;	# spanning fr tracks: left to the fr step
 			need := real mn - have;
 			if(need > 0.0 && nintr > 0) {
 				per := need / real nintr;
 				for(j = a0; j < a1 && j < n; j++)
-					if(intrinsiclo(t[j]))
-						t[j].base += per;
+					if(intrinsiclo(t[j])) {
+						if(pass == 1)
+							t[j].base += per;
+						else if(per > inc[j])
+							inc[j] = per;
+					}
 			}
 			# growth limits for auto and max-content tracks
 			if(nspan == 1 && a0 < n) {
@@ -2689,11 +3680,14 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 					tr.limit = real mn;
 			}
 		}
+		for(q = 0; q < n; q++)
+			t[q].base += inc[q];
+	}
 	for(i = 0; i < n; i++)
 		if(t[i].limit >= 0.0 && t[i].limit < t[i].base)
 			t[i].limit = t[i].base;
 	# free space
-	used := real (gap * (n - 1));
+	used := real (gap * ngaps(t));
 	for(i = 0; i < n; i++)
 		used += t[i].base;
 	if(avail < 0) {
@@ -2759,8 +3753,11 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 		}
 		return;
 	}
-	# else stretch auto tracks
-	if(free > 0.0) {
+	# else stretch auto tracks, when the content is to be stretched (§12.8)
+	al := b.st.justifycontent;
+	if(!cols)
+		al = b.st.aligncontent;
+	if(free > 0.0 && (al == Style->ALnormal || al == Style->ALstretch)) {
 		na := 0;
 		for(i = 0; i < n; i++)
 			if(t[i].hi.kind == Tauto)
@@ -2789,7 +3786,7 @@ trackpos(t: array of ref Track, gap, avail, align: int): array of int
 {
 	n := len t;
 	pos := array[n + 1] of int;
-	used := gap * nz(n - 1);
+	used := gap * ngaps(t);
 	for(i := 0; i < n; i++)
 		used += ir(t[i].base);
 	free := avail - used;
@@ -2797,7 +3794,7 @@ trackpos(t: array of ref Track, gap, avail, align: int): array of int
 	extra := 0;
 	if(free > 0)
 		case align {
-		Style->ALend or Style->ALright =>
+		Style->ALend or Style->ALright or Style->ALflowend =>
 			start = free;
 		Style->ALcenter =>
 			start = free/2;
@@ -2814,11 +3811,17 @@ trackpos(t: array of ref Track, gap, avail, align: int): array of int
 	# accumulate in reals and round each edge, so fractional tracks
 	# tile without gaps
 	p := real start;
+	any := 0;
 	for(i = 0; i < n; i++) {
 		pos[i] = ir(p);
+		if(t[i].fit == 2)
+			continue;	# collapsed: nothing, and no gutter
 		p += t[i].base + real (gap + extra);
+		any = 1;
 	}
-	pos[n] = ir(p) - gap - extra;
+	pos[n] = ir(p);
+	if(any)
+		pos[n] -= gap + extra;
 	return pos;
 }
 
@@ -2833,6 +3836,8 @@ areaw(t: array of ref Track, pos: array of int, a0, a1, gap: int): int
 # tracks meet exactly
 trackend(t: array of ref Track, pos: array of int, i, gap: int): int
 {
+	if(t[i].fit == 2)
+		return pos[i];
 	if(i + 1 < len t)
 		return pos[i+1] - gap;
 	return pos[i] + ir(t[i].base);
@@ -3524,6 +4529,8 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 {
 	k := a.box;
 	st := k.st;
+	if(a.area != nil)
+		pr = *a.area;
 	cbw := pr.dx();
 	cbh := pr.dy();
 	# static position, in cb coordinates
@@ -3531,6 +4538,10 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	sy := a.sy;
 	if(a.frag != nil)
 		sx = a.frag.x;
+	if(a.area != nil) {
+		sx = pr.min.x;
+		sy = pr.min.y;
+	}
 	for(p := a.sparent; p != nil && p != cb; p = p.parent) {
 		sx += p.x;
 		sy += p.y;
@@ -3592,6 +4603,22 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		x = sx + k.ml;
 		if(a.rightedge)
 			x = sx - k.w - k.mr;
+		# auto insets in a grid area: aligned in it as justify-self
+		# says, normal being its start (Grid 2 §9, Position 3 §3.5);
+		# safe keeps a box that overflows it at the start
+		if(a.area != nil) {
+			ja := abspalign(st.justifyself);
+			if(st.safe & 8 && k.w + k.ml + k.mr > cbw)
+				ja = Style->ALstart;
+			case ja {
+			Style->ALstart or Style->ALleft =>
+				x = pr.min.x + k.ml;
+			Style->ALend or Style->ALright =>
+				x = pr.max.x - k.mr - k.w;
+			Style->ALcenter =>
+				x = pr.min.x + (cbw - k.w - k.ml - k.mr)/2 + k.ml;
+			}
+		}
 	}
 	layblock(l, k, cbw, cbh, nil, 0, 0);
 	h := k.h;
@@ -3604,8 +4631,22 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		y = pr.min.y + top + k.mt;
 	else if(!bauto)
 		y = pr.max.y - bottom - k.mb - h;
-	else
+	else {
 		y = sy + k.mt;
+		if(a.area != nil) {
+			aa := abspalign(st.alignself);
+			if(st.safe & 4 && h + k.mt + k.mb > cbh)
+				aa = Style->ALstart;
+			case aa {
+			Style->ALstart =>
+				y = pr.min.y + k.mt;
+			Style->ALend =>
+				y = pr.max.y - k.mb - h;
+			Style->ALcenter =>
+				y = pr.min.y + (cbh - h - k.mt - k.mb)/2 + k.mt;
+			}
+		}
+	}
 	k.x = x;
 	k.y = y;
 	for(pl := cb.pos; pl != nil; pl = tl pl)
@@ -3614,6 +4655,17 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	if(pl == nil)
 		cb.pos = k :: cb.pos;
 	k.parent = cb;
+}
+
+# an absolutely positioned box's self-alignment: auto is normal, and
+# stretch, with its insets auto, behaves as start
+abspalign(a: int): int
+{
+	case a {
+	Style->ALauto or Style->ALstretch =>
+		return Style->ALnormal;
+	}
+	return a;
 }
 
 # ---- floats (CSS 2.2 §9.5) ----
@@ -4041,6 +5093,11 @@ intrinsic(b: ref Box): (int, int)
 	if(b.igen == laygen && b.iex == ex)
 		return (b.imn, b.imx);
 	(mn, mx) := intrinsic1(b);
+	# a keyword width is that size, whatever is inside
+	case b.st.width.kind {
+	Style->Lmax =>	mn = mx;
+	Style->Lmin =>	mx = mn;
+	}
 	b.imn = mn;
 	b.imx = mx;
 	b.iex = ex;
@@ -4099,15 +5156,76 @@ intrinsic1(b: ref Box): (int, int)
 		(tmn, tmx) := tableintrinsic(b);
 		return (tmn + mgs(b), tmx + mgs(b));
 	}
-	if(b.kind == Kgrid && st.gridcols != nil) {
+	if(islanes(b)) {
+		(lmn, lmx) := lanesintrinsic(b);
+		return (lmn + ex, lmx + ex);
+	}
+	if(b.kind == Kgrid && (st.gridcols != nil || st.autoflow & 1)) {
 		# the columns add up: a fixed one is its size, any other is
 		# the largest contribution of the items placed in it (the
 		# items taken in order, one per column, as auto-placement
-		# would put them without spans)
+		# would put them without spans); flowing by column without
+		# a template, each item gets an implicit column of its own
 		gap := 0;
 		if(st.colgap.kind != Style->Lnormal)
 			gap = res(st.colgap, 0);
-		(cols, nil) := tracks(st.gridcols, 0, gap);
+		(cols, names) := tracks(st.gridcols, 0, gap);
+		kcol := array[len b.kids] of {* => -1};	# the column each item starts in
+		if(len cols == 0 && st.autoflow & 1) {
+			# flowing by column with no template: as many implicit
+			# columns as placing the items down the rows takes (an
+			# item given a row takes the first free cell in it)
+			nrows := 1;
+			for(i := 0; i < len b.kids; i++) {
+				k := b.kids[i];
+				if(isabs(k))
+					continue;
+				(r0, r1) := gridspan(k.st.rowstart, k.st.rowend, nil, 0, nil, 0);
+				rs := spanof(r0, r1, k.st.rowstart, k.st.rowend);
+				if(r1 > nrows)
+					nrows = r1;
+				if(rs > nrows)
+					nrows = rs;
+			}
+			occ := ref Occ(array[0] of array of byte, 0);
+			ncols := 0;
+			cc := 0;
+			cr := 0;
+			for(i = 0; i < len b.kids; i++) {
+				k := b.kids[i];
+				if(isabs(k))
+					continue;
+				(r0, r1) := gridspan(k.st.rowstart, k.st.rowend, nil, 0, nil, 0);
+				rs := spanof(r0, r1, k.st.rowstart, k.st.rowend);
+				cs := spanof(-1, -1, k.st.colstart, k.st.colend);
+				c := 0;
+				if(r0 >= 0) {
+					while(!occ.free(r0, r1, c, c + cs))
+						c++;
+					occ.mark(r0, r1, c, c + cs);
+				} else {
+					c = cc;
+					r := cr;
+					for(;;) {
+						if(r + rs > nrows) {
+							r = 0;
+							c++;
+							continue;
+						}
+						if(occ.free(r, r + rs, c, c + cs))
+							break;
+						r++;
+					}
+					occ.mark(r, r + rs, c, c + cs);
+					cc = c;
+					cr = r + rs;
+				}
+				kcol[i] = c;
+				if(c + cs > ncols)
+					ncols = c + cs;
+			}
+			cols = growtracks(cols, ncols, st.autocols, 0);
+		}
 		if(len cols > 0) {
 			cmn := array[len cols] of {* => 0};
 			cmx := array[len cols] of {* => 0};
@@ -4118,11 +5236,21 @@ intrinsic1(b: ref Box): (int, int)
 					continue;
 				edges(k, 0);
 				(kmn, kmx) := contribution(k);
-				if(kmn > cmn[c])
-					cmn[c] = kmn;
-				if(kmx > cmx[c])
-					cmx[c] = kmx;
-				c = (c + 1) % len cols;
+				(a0, a1) := gridspan(k.st.colstart, k.st.colend, names, len cols, nil, 1);
+				span := spanof(a0, a1, k.st.colstart, k.st.colend);
+				if(span > len cols)
+					span = len cols;
+				if(kcol[i] >= 0)
+					a0 = kcol[i];
+				else if(a0 < 0) {
+					if(c + span > len cols)
+						c = 0;
+					a0 = c;
+				}
+				if(a0 + span > len cols)
+					a0 = len cols - span;
+				spreadspan(cols, cmn, cmx, a0, a0 + span, kmn, kmx, gap);
+				c = (a0 + span) % len cols;
 			}
 			wmn := gap * (len cols - 1) + ex;
 			wmx := wmn;
@@ -4668,9 +5796,14 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# on this line: at its top, beside what is on it already
 				# (CSS 2.2 §9.5.1 rules 4 and 7)
 				oldleft := ln.left;
+				oldx := ln.x;
 				placefloat(l, it.box, fc, ox + x0, oy + f.y, cw, f.ch, ox, oy);
 				edgesat(f, ln);
-				if(ln.left > oldleft && ln.content) {
+				if(ln.left > oldleft && !ln.content) {
+					# a left float before any content: the line's start,
+					# with its indent and open edges, moves right past it
+					ln.x = oldx + real (ln.left - oldleft);
+				} else if(ln.left > oldleft) {
 					# a left float: the line's content moves right past it
 					d := ln.left - oldleft;
 					for(fl := ln.frags; fl != nil; fl = tl fl)
@@ -4693,9 +5826,9 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# marks the place through alignment and reordering
 				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level);
 				ln.frags = mark :: ln.frags;
-				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl) :: l.pending;
+				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil) :: l.pending;
 			} else	# a block-level one's is the start of the line
-				l.pending = ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl) :: l.pending;
+				l.pending = ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl, nil) :: l.pending;
 		Ibreak =>
 			ln.content = 1;
 			lines = endline(f, ln, x0, first, 1) :: lines;

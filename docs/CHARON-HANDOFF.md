@@ -39,7 +39,19 @@ The third session (same branch) took the hand-off list in order: the
 remaining review findings, then the live-site bugs, then bidi edges,
 shaping and the regressions each WPT run turned up.
 
-- `LASTCOMMIT`…`2eb0047` **Shaping, floats, backgrounds, flex.**
+- `LATER`… **GPOS, ligatures across edges, 2D transforms, grids.**
+  GPOS pair kerning (most web fonts have no legacy `kern` table) and
+  mark-to-base positioning; ligatures that span an inline box's edge
+  (the shaper reports each glyph's character span, the seam moves the
+  characters into one run); `transform` with rotate, scale, skew and
+  matrix about `transform-origin` (the box is painted into an image and
+  resampled); a grid container's intrinsic width by column; grid areas
+  definite for percentage heights; a table's extra height to its auto
+  rows; a BFC root moved below floats it cannot fit beside; stretched
+  flex and grid containers laid out again at their definite height;
+  HTML's case-insensitive attribute values; text/plain charsets;
+  Chromium's scrollbars hidden in the reference tools.
+- `210f3f7`…`2eb0047` **Shaping, floats, backgrounds, flex.**
   OpenType GSUB (ligatures through liga/clig/rlig, cursive joining
   through init/medi/fina/isol from `lib/bidi/joining`), right-to-left
   runs shaped in logical order and drawn from the right, joining across
@@ -208,28 +220,24 @@ In rough order of payoff.
    done; the full lists are in the session's scratch notes, these are
    the ones that matter):
    - layout: `sizetracks` grows tracks proportionally rather than
-     equally with freezing (§12.6); BFC roots beside floats are narrowed
-     but never moved below one; `spread()` can overflow `int` on huge
-     tables; ligatures do not form across an inline box's edge (joining
-     does: `boundary-shaping-001/003/004/005` and `shaping_lig-000` want
-     "ffi" and lam-alef across a `<span>`; the shaper would have to see
-     the neighbouring run's text and split the ligature's glyph); GPOS
-     kerning and mark positioning (the `kern` table only; combining
-     marks are drawn as spacing glyphs, so `tab-bidi-001`'s dagesh is on
-     the wrong side); trailing pre-wrap spaces before a forced break
+     equally with freezing (§12.6); `spread()` can overflow `int` on huge
+     tables; a ligature across an inline box's edge is drawn wholly in
+     the first box's colour (its characters move there); mark-to-mark
+     and cursive attachment (GPOS types 3 and 6) are not read, so
+     stacked marks fall on the base; `tab-bidi-001`'s dagesh uses a
+     fallback font with no anchors; trailing pre-wrap spaces before a forced break
      should hang conditionally (`hanging-whitespace-003`, tentative);
      textareas paint their background but not their text's layout
      (`textarea-pre-wrap-014`).
    - style: `revert-layer`; nested `@layer` order is flat; `var()`
-     cycles fall through to the fallback; HTML's case-insensitive
-     attribute values (`[type=text]` vs `type="Text"`); a `&` inside
-     `:is()` in a nested rule; user origin folded into UA.
+     cycles fall through to the fallback; a `&` inside `:is()` in a
+     nested rule; user origin folded into UA.
    - html: `canoncs` maps gbk/gb18030 to gb2312 and has no euc-kr or
      windows-125x beyond 1250–1252 (tables missing from `lib/convcs`);
      doctype system ids are dropped (html5lib fixtures with ids would
      fail); limited-quirks mode is not modelled.
    - page/browser: no HTTP cache in webfs, so every navigation
-     refetches; `text/plain` pages ignore their charset.
+     refetches.
 3. **Open regressions (tests that passed at the first run ever and fail
    now; 22 at the end of this session).**  Causes:
    - `css-text/boundary-shaping-001/003/004/005/010`, `shaping_lig-000`:
@@ -253,14 +261,19 @@ In rough order of payoff.
      (2 pixels), `hanging-whitespace-003` (tentative): minor.
    The list, with current status: `tools/ref/baseline/open-regressions.txt`.
 3. **Exposed gaps behind many failures:** vertical writing modes,
-   GPOS (kerning beyond the legacy `kern` table, mark positioning),
-   ligatures across inline box edges, transforms other than translation
-   (rotate/scale/skew only make a stacking context), scrolling and
-   clicking inside frames, hit-testing of translated boxes (they are
-   drawn moved but clicked where they are in the flow), translucent
-   opacity on inline boxes (floats inside them paint at full opacity;
-   opacity 0 is handled).  Bidi, `<iframe>`, GSUB shaping and Arabic
-   joining are done (above).
+   variable-font instances, subgrid (the largest remaining grid-lanes
+   bucket, and the `css-grid/subgrid` directory), `contain-intrinsic-size`,
+   multi-column layout (the lanes baseline tests' references use it),
+   `margin-trim`, scrolling and clicking inside frames, hit-testing of
+   transformed boxes (they are drawn moved but clicked where they are in
+   the flow), transformed boxes resampled nearest-neighbour (no
+   anti-aliasing), translucent opacity on inline boxes (floats inside
+   them paint at full opacity; opacity 0 is handled).  Bidi, `<iframe>`,
+   GSUB and GPOS shaping, Arabic joining, ligatures across edges, 2D
+   transforms, grid lanes (Grid 3), absolutes in grid areas and
+   auto-fit collapsing are done (above); declarative shadow DOM is
+   approximated (a `<template shadowrootmode>`'s content is shown in
+   place, `<slot>`s are transparent).
 4. **Sub-pixel layout.**  Layout positions are ints; Chromium uses 1/64 px.
    Many near-miss reftests (a few hundred pixels at glyph edges) come
    from this.  Large change; do it deliberately.
@@ -297,8 +310,10 @@ In rough order of payoff.
 | `appl/lib/outlinefont.b` (GSUB) | `parsegsub`, `Face.ligatures`, `Face.subst`, `Face.hasfeature` |
 | `appl/lib/web/fonts.b` (shaping) | `shape` → `Slot`s, `joinforms`, `Typeface.draw` from the right for rtl |
 | `appl/lib/web/layout.b` (this session) | `contribution` vs `intrinsic`, `floatwidth`, `joinruns`, `reorderline` with `Vis` controls and `leftedge`/`rightedge`, `contentheightof`/`asauto`, `oncanvas`, `intransform`, `Abs.frag` |
+| `appl/lib/web/layout.b` (grid lanes) | `laylanes` (placement by shortest lane: `fitsat`/`lanesfit`, `Gap` for dense packing, `repsize` for intrinsic auto-repeats, `flowal` for flow-start/flow-end), `lanesintrinsic`/`spreadspan`, `collapsefit`/`ngaps` (auto-fit, grids too), `gridabs`/`Abs.area`/`abspalign` (absolutes in grid areas, aligned by justify-self/align-self), `Track.fit`; grid step-1 placement (definite row, auto column), `sizetracks` span groups, `order` for grid children |
+| `appl/lib/web/style.b` (grid lanes) | `display: grid-lanes`/`inline-grid-lanes` (and the two-value forms), `grid-lanes-direction`, `grid-lanes-pack`, `flow-tolerance`, `flow-start`/`flow-end` alignment keywords |
 | `tests/web/fonts/liga.ttf` | a fontTools-made font with f+i and f+f+i ligatures, for `web_fonts_test` |
-| `tests/` | `web_fonts_test`, `brotli_test`, `charonshot -b/-d`, `charonbatch`, fonts and Brotli vectors under `tests/web/`, fixture `charon/wpt/control-chars.html` |
+| `tests/` | `web_fonts_test`, `brotli_test`, `charonshot -b/-d`, `charonbatch`, fonts and Brotli vectors under `tests/web/`, fixture `charon/wpt/control-chars.html`, `grid-lanes-basic`/`grid-lanes-dense` fixtures, `web_style_test` GridLanes |
 
 ## Things that bit, so they need not again
 
@@ -357,3 +372,18 @@ In rough order of payoff.
   without `fonts.conf` every text width comparison is off by ~5–15%.
 - **Python's http.server ignores wptserve pipes**; Acid2's
   `404.html?pipe=status(404)` needs `wptserve.py`.
+- **The container's Chromium (141) has no `display: grid-lanes`**, with
+  or without the experimental-features flags, so for `css-grid/grid-lanes`
+  there is no ground truth beyond reading the reference pages: a test
+  whose reference is itself a grid-lanes page proves nothing when both
+  render alike (the whole directory "passed" before the display type
+  existed).  `column-auto-repeat-auto-017` is left failing for that
+  reason: no reading of auto-repeat counting and placement beyond the
+  explicit grid fits both it and `column-auto-repeat-max-content-005`.
+- **Parallel tool calls share one shell and its working directory.**
+  A `cd` in one changes where the other's relative paths resolve
+  (`tools/ref/wptdiff.py` was looked for under `tmp/WPT`).  Use absolute
+  paths in anything that may run alongside something else.
+- **Adding a field to a positional adt** (`Abs.area`, `Track.fit`,
+  `St.lanesdir`) means every `ref Abs(`/`ref Track(`/`ref St(` site:
+  grep them all first; the compiler reports the first mismatch only.

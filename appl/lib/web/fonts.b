@@ -422,11 +422,12 @@ joinforms(s: string, slot: array of int, a: array of ref Slot)
 # (up), in logical order; the total width.  Pair kerning between
 # glyphs of one face; a combining mark the font attaches to its base
 # sits on the base's anchor and advances nothing.
-positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real, array of real, real)
+positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real, array of real, array of int, real)
 {
 	xs := array[len a] of real;
 	adv := array[len a] of real;
 	ys := array[len a] of real;
+	on := array[len a] of int;	# the base a mark sits on, or -1
 	x := 0.0;
 	po: ref OutlineFont->Face;
 	pg := -1;
@@ -435,6 +436,7 @@ positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real,
 	for(i := 0; i < len a; i++) {
 		(o, g, c) := (a[i].o, a[i].g, a[i].c);
 		ys[i] = 0.0;
+		on[i] = -1;
 		if(o != nil && base >= 0 && a[base].o == o && bidi != nil && bidi->joining(c) == Bidi->JT) {
 			(ok, dx, dy) := o.markanchor(a[base].g, g);
 			if(ok) {
@@ -442,6 +444,7 @@ positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real,
 				xs[i] = xs[base] + real dx * k;
 				ys[i] = real dy * k;
 				adv[i] = 0.0;
+				on[i] = base;
 				continue;
 			}
 		}
@@ -453,7 +456,7 @@ positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real,
 		x += adv[i];
 		base = i;
 	}
-	return (xs, adv, ys, x);
+	return (xs, adv, ys, on, x);
 }
 
 Typeface.ligspan(f: self ref Typeface, a, b: string): int
@@ -473,19 +476,22 @@ Typeface.ligspan(f: self ref Typeface, a, b: string): int
 
 Typeface.width(f: self ref Typeface, s: string): real
 {
-	(nil, nil, nil, w) := positions(f, shape(f, s));
+	(nil, nil, nil, nil, w) := positions(f, shape(f, s));
 	return w;
 }
 
 Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image, rtl: int): real
 {
 	a := shape(f, s);
-	(xs, adv, ys, w) := positions(f, a);
+	(xs, adv, ys, on, w) := positions(f, a);
 	for(i := 0; i < len a; i++) {
 		(o, g, c) := (a[i].o, a[i].g, a[i].c);
 		gx := real p.x + xs[i];
-		if(rtl)	# the first glyph at the right end
+		if(rtl) {	# the first glyph at the right end
 			gx = real p.x + w - xs[i] - adv[i];
+			if(on[i] >= 0)	# a mark keeps its offset from its base
+				gx = real p.x + w - xs[on[i]] - adv[on[i]] + xs[i] - xs[on[i]];
+		}
 		gy := p.y - int ys[i];
 		if(o == nil && f.fallback != nil) {
 			t := "";

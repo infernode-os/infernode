@@ -60,7 +60,8 @@ Style: module
 	Dnone, Dcontents, Dblock, Dinline, Dinlineblock, Dflowroot, Dlistitem,
 	Dflex, Dinlineflex, Dgrid, Dinlinegrid, Dtable, Dinlinetable,
 	Dtablerowgroup, Dtableheadergroup, Dtablefootergroup, Dtablerow,
-	Dtablecell, Dtablecolumngroup, Dtablecolumn, Dtablecaption: con iota;
+	Dtablecell, Dtablecolumngroup, Dtablecolumn, Dtablecaption,
+	Dgridlanes, Dinlinegridlanes: con iota;
 
 	Pstatic, Prelative, Pabsolute, Pfixed, Psticky: con iota;	# position
 	Fnone, Fleft, Fright: con iota;			# float
@@ -78,7 +79,8 @@ Style: module
 	FSnormal, FSitalic, FSoblique: con iota;			# font-style
 	# flex/grid alignment
 	ALnormal, ALstretch, ALstart, ALend, ALcenter, ALbaseline, ALbetween,
-	ALaround, ALevenly, ALleft, ALright, ALauto: con iota;
+	ALaround, ALevenly, ALleft, ALright, ALauto,
+	ALflowstart, ALflowend: con iota;	# grid lanes: the stacking flow's ends, which reversing swaps (Grid 3 §7)
 
 	# a color is 16rRRGGBBAA; Ccurrent stands for currentcolor until computed
 	Ctransparent:	con 0;
@@ -222,12 +224,17 @@ Style: module
 		sid:	int;		# serial number, for style sharing
 		nokern:	int;		# font-kerning: none (or "kern" off)
 		unicodebidi:	int;	# UBnormal ...
-		safe:	int;		# "safe" alignment: bit 1 align-content, 2 justify-content, 4 align-items/self
+		safe:	int;		# "safe" alignment: bit 1 align-content, 2 justify-content, 4 align-items/self, 8 justify-items/self
 		translated:	int;	# a transform applies (a stacking context)
 		tx, ty:	Len;		# when it is a translation only: by how much (percentages of the box's own size)
 		tfs:	array of ref Tf;	# otherwise the functions, in order (nil when a translation only)
 		tox, toy:	Len;		# transform-origin
 		wasinline:	int;	# blockified from an inline-level display: the static position of an absolute is an inline one
+
+		# grid lanes (Grid 3)
+		lanesdir:	int;	# grid-lanes-direction: 0 normal, 1 row, 2 column; +4 fill-reverse, +8 track-reverse
+		lanespack:	int;	# grid-lanes-pack: 1 dense
+		tolerance:	Len;	# flow-tolerance: Lnormal (1em), Lnone (infinite), or a length (% of the grid axis)
 
 		new:	fn(): ref St;		# initial values
 	};

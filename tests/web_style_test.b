@@ -382,6 +382,27 @@ testHints(t: ref T)
 	t.assert(!st(p, "c").translated, "transform: none");
 }
 
+testLanes(t: ref T)
+{
+	p := page("<div id=a style='display: grid-lanes; grid-lanes-direction: row fill-reverse; grid-lanes-pack: dense; flow-tolerance: 20%; align-items: flow-end'></div>" +
+		"<div id=b style='display: inline grid-lanes; flow-tolerance: infinite; grid-lanes-direction: column track-reverse'></div>" +
+		"<div id=c style='display: inline-grid-lanes; grid-lanes-direction: row column'></div>");
+	a := st(p, "a");
+	t.asserteq(a.display, Style->Dgridlanes, "display: grid-lanes");
+	t.asserteq(a.lanesdir, 1 | 4, "grid-lanes-direction: row fill-reverse");
+	t.asserteq(a.lanespack, 1, "grid-lanes-pack: dense");
+	t.assert(a.tolerance.kind == Style->Lpx && a.tolerance.pct == 20.0, "flow-tolerance: 20%");
+	t.asserteq(a.alignitems, Style->ALflowend, "align-items: flow-end");
+	b := st(p, "b");
+	t.asserteq(b.display, Style->Dinlinegridlanes, "display: inline grid-lanes");
+	t.asserteq(b.tolerance.kind, Style->Lnone, "flow-tolerance: infinite");
+	t.asserteq(b.lanesdir, 2 | 8, "grid-lanes-direction: column track-reverse");
+	c := st(p, "c");
+	t.asserteq(c.display, Style->Dinlinegridlanes, "display: inline-grid-lanes");
+	t.asserteq(c.lanesdir, 0, "grid-lanes-direction: row column is invalid, so normal");
+	t.asserteq(c.tolerance.kind, Style->Lnormal, "flow-tolerance initial: normal");
+}
+
 testPseudo(t: ref T)
 {
 	p := page("<style>#q::before { content: '<'; color: green } #q::after { content: none } #r::after { content: attr(x) }</style><p id=q>q<p id=r x=1>r");
@@ -457,6 +478,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Media", testMedia);
 	run("Selectors", testSelectors);
 	run("Backgrounds", testBackgrounds);
+	run("GridLanes", testLanes);
 	run("Hints", testHints);
 	run("Pseudo", testPseudo);
 	run("Dump", testDump);

@@ -1726,7 +1726,8 @@ St.new(): ref St
 		0, a, 3, Bnone, Ccurrent,
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
-		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0);
+		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
+		0, 0, kw(Lnormal));
 }
 
 nextsid := 1;
@@ -2404,14 +2405,14 @@ fixup(st, parent: ref St, d: ref Doc, n: int)
 		blockify = 1;
 	if(parent != nil)
 		case parent.display {
-		Dflex or Dinlineflex or Dgrid or Dinlinegrid =>
+		Dflex or Dinlineflex or Dgrid or Dinlinegrid or Dgridlanes or Dinlinegridlanes =>
 			blockify = 1;
 		}
 	if(d != nil && parentel(d, n) == 0)
 		blockify = 1;
 	if(blockify) {
 		case st.display {
-		Dinline or Dinlineblock or Dinlineflex or Dinlinegrid =>
+		Dinline or Dinlineblock or Dinlineflex or Dinlinegrid or Dinlinegridlanes =>
 			st.wasinline = 1;
 		}
 		case st.display {
@@ -2423,6 +2424,8 @@ fixup(st, parent: ref St, d: ref Doc, n: int)
 			st.display = Dflex;
 		Dinlinegrid =>
 			st.display = Dgrid;
+		Dinlinegridlanes =>
+			st.display = Dgridlanes;
 		Dinlinetable =>
 			st.display = Dtable;
 		}
@@ -4568,8 +4571,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"align-items" => st.alignitems = a; bit = 4;
 		"align-self" => st.alignself = a; bit = 4;
 		"align-content" => st.aligncontent = a; bit = 1;
-		"justify-items" => st.justifyitems = a;
-		"justify-self" => st.justifyself = a;
+		"justify-items" => st.justifyitems = a; bit = 8;
+		"justify-self" => st.justifyself = a; bit = 8;
 		}
 		if(sawsafe)
 			st.safe |= bit;
@@ -4628,6 +4631,40 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			}
 		}
 		st.autoflow = f;
+	"grid-lanes-direction" =>
+		f := 0;
+		x := nows(v);
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind != Kident)
+				return 0;
+			case lower(x[k].s) {
+			"normal" => ;
+			"row" => f |= 1;
+			"column" => f |= 2;
+			"fill-reverse" => f |= 4;
+			"track-reverse" => f |= 8;
+			* => return 0;
+			}
+		}
+		if((f & 3) == 3)
+			return 0;
+		st.lanesdir = f;
+	"grid-lanes-pack" =>
+		case id {
+		"normal" => st.lanespack = 0;
+		"dense" => st.lanespack = 1;
+		* => return 0;
+		}
+	"flow-tolerance" =>
+		case id {
+		"normal" => st.tolerance = kw(Lnormal);
+		"infinite" => st.tolerance = kw(Lnone);
+		* =>
+			(ok, l) := length(v, ctx);
+			if(!ok)
+				return 0;
+			st.tolerance = l;
+		}
 	"grid-row-start" or "grid-row-end" or "grid-column-start" or "grid-column-end" =>
 		(ok, g) := gridline(nows(v));
 		if(!ok)
@@ -4733,11 +4770,12 @@ display(x: array of ref Tok): int
 		"none" => return Dnone;
 		"contents" => return Dcontents;
 		"block" or "inline" or "run-in" => outer = s;
-		"flow" or "flow-root" or "table" or "flex" or "grid" or "ruby" => inner = s;
+		"flow" or "flow-root" or "table" or "flex" or "grid" or "grid-lanes" or "ruby" => inner = s;
 		"list-item" => li = 1;
 		"inline-block" => return Dinlineblock;
 		"inline-flex" or "-webkit-inline-flex" or "-webkit-inline-box" => return Dinlineflex;
 		"inline-grid" => return Dinlinegrid;
+		"inline-grid-lanes" => return Dinlinegridlanes;
 		"inline-table" => return Dinlinetable;
 		"-webkit-flex" => return Dflex;
 		"-webkit-box" or "-moz-box" => return Dblock;
@@ -4762,6 +4800,7 @@ display(x: array of ref Tok): int
 		"table" => return Dinlinetable;
 		"flex" => return Dinlineflex;
 		"grid" => return Dinlinegrid;
+		"grid-lanes" => return Dinlinegridlanes;
 		}
 	}
 	case inner {
@@ -4769,6 +4808,7 @@ display(x: array of ref Tok): int
 	"table" => return Dtable;
 	"flex" => return Dflex;
 	"grid" => return Dgrid;
+	"grid-lanes" => return Dgridlanes;
 	"ruby" => return Dinline;
 	}
 	return Dblock;
@@ -4797,6 +4837,8 @@ alignment(x: array of ref Tok): int
 		"left" => a = ALleft;
 		"right" => a = ALright;
 		"auto" => a = ALauto;
+		"flow-start" => a = ALflowstart;
+		"flow-end" => a = ALflowend;
 		"safe" => sawsafe = 1;
 		"unsafe" or "legacy" => ;
 		* => return -1;
@@ -5228,6 +5270,9 @@ copyprop(d, s: ref St, nm: string)
 	"grid-auto-columns" => d.autocols = s.autocols;
 	"grid-auto-rows" => d.autorows = s.autorows;
 	"grid-auto-flow" => d.autoflow = s.autoflow;
+	"grid-lanes-direction" => d.lanesdir = s.lanesdir;
+	"grid-lanes-pack" => d.lanespack = s.lanespack;
+	"flow-tolerance" => d.tolerance = s.tolerance;
 	"grid-row-start" => d.rowstart = s.rowstart;
 	"grid-row-end" => d.rowend = s.rowend;
 	"grid-column-start" => d.colstart = s.colstart;

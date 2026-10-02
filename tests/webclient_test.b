@@ -24,6 +24,15 @@ passed := 0;
 failed := 0;
 skipped := 0;
 
+# A runner can declare the environment offline (INFERNODE_TESTS_OFFLINE=1
+# via run-tests.sh, which the runner turns into this env file) instead of
+# having the tests infer it from a dial that may never return.
+offline(): int
+{
+	(s, nil) := sys->stat("/env/INFERNODE_TESTS_OFFLINE");
+	return s >= 0;
+}
+
 run(name: string, testfn: ref fn(t: ref T))
 {
 	t := testing->newTsrc(name, SRCFILE);
@@ -48,6 +57,7 @@ run(name: string, testfn: ref fn(t: ref T))
 
 testHttpsGet(t: ref T)
 {
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
 	(resp, err) := webclient->get("https://example.com");
 	if(err != nil) {
 		t.skip("network: " + err);
@@ -61,6 +71,7 @@ testHttpsGet(t: ref T)
 
 testRedirect(t: ref T)
 {
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
 	# HTTP to HTTPS redirect
 	(resp, err) := webclient->requestpublic("GET", "http://example.com", nil, nil);
 	if(err != nil) {
@@ -75,6 +86,7 @@ testRedirect(t: ref T)
 
 testTlsDial(t: ref T)
 {
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
 	(fd, err) := webclient->tlsdial("tcp!example.com!443", "example.com");
 	if(err != nil) {
 		t.skip("network: " + err);
@@ -97,6 +109,7 @@ testTlsDial(t: ref T)
 
 testPost(t: ref T)
 {
+	if(offline()){ t.skip("INFERNODE_TESTS_OFFLINE set"); return; }
 	body := array of byte "test=hello";
 	(resp, err) := webclient->post("https://httpbin.org/post",
 		"application/x-www-form-urlencoded", body);

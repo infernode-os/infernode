@@ -22,6 +22,8 @@ bopen, bclose: array of int;	# by opening
 jlo, jhi, jty: array of int;	# joining types, by range
 plo, phi, pone: array of int;	# punctuation, by range
 lblo, lbhi, lbcl: array of int;	# line break classes, by range
+ccp, cup, clw, cti: array of int;	# simple case mappings, by code point
+xcp, xkind, xa, xb, xc: array of int;	# one-to-many case mappings, by code point then kind
 bcopen, bcclose: array of int;	# by closing
 
 classnames := array[] of {
@@ -71,6 +73,21 @@ init(): string
 	lblo = a[0];
 	lbhi = a[1];
 	lbcl = a[2];
+	(a, err) = table(DIR + "/case", 4);
+	if(err != nil)
+		return err;
+	ccp = a[0];
+	cup = a[1];
+	clw = a[2];
+	cti = a[3];
+	(a, err) = table(DIR + "/casex", 5);
+	if(err != nil)
+		return err;
+	xcp = a[0];
+	xkind = a[1];
+	xa = a[2];
+	xb = a[3];
+	xc = a[4];
 	# the same pairs ordered by the closing bracket
 	n := len bopen;
 	bcopen = array[n] of int;
@@ -173,6 +190,110 @@ punct(c: int): int
 lbclass(c: int): int
 {
 	return ranged(lblo, lbhi, lbcl, c, LBAL);
+}
+
+# ---- case mapping (Unicode 3.13, SpecialCasing.txt) ----
+
+# c's one-to-many mapping of the kind (1 upper, 2 lower, 3 title), or nil
+special(c, kind: int): string
+{
+	i := find(xcp, c);
+	if(i < 0)
+		return nil;
+	while(i > 0 && xcp[i-1] == c)
+		i--;
+	for(; i < len xcp && xcp[i] == c; i++)
+		if(xkind[i] == kind) {
+			r := "";
+			r[0] = xa[i];
+			if(xb[i] != 0)
+				r[1] = xb[i];
+			if(xc[i] != 0)
+				r[2] = xc[i];
+			return r;
+		}
+	return nil;
+}
+
+simple(a: array of int, c: int): int
+{
+	i := find(ccp, c);
+	if(i < 0 || a[i] == 0)
+		return c;
+	return a[i];
+}
+
+cased(c: int): int
+{
+	return find(ccp, c) >= 0;
+}
+
+turkic(lang: string): int
+{
+	return len lang >= 2 && (lang[0:2] == "tr" || lang[0:2] == "az") && (len lang == 2 || lang[2] == '-');
+}
+
+toupper(s: string, lang: string): string
+{
+	r := "";
+	tr := turkic(lang);
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(tr && c == 'i')
+			r[len r] = 16r130;	# dotted capital I
+		else if((x := special(c, 1)) != nil)
+			r += x;
+		else
+			r[len r] = simple(cup, c);
+	}
+	return r;
+}
+
+tolower(s: string, lang: string): string
+{
+	r := "";
+	tr := turkic(lang);
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(tr && c == 'I') {
+			# a dotless i, unless a combining dot above follows, which the i absorbs
+			if(i+1 < len s && s[i+1] == 16r307) {
+				r[len r] = 'i';
+				i++;
+			} else
+				r[len r] = 16r131;
+		} else if(tr && c == 16r130)
+			r[len r] = 'i';
+		else if(c == 16r3A3) {
+			# Final_Sigma: at the end of a word, after a letter
+			final := i > 0 && cased(s[i-1]) && !(i+1 < len s && cased(s[i+1]));
+			if(final)
+				r[len r] = 16r3C2;
+			else
+				r[len r] = 16r3C3;
+		} else if((x := special(c, 2)) != nil)
+			r += x;
+		else
+			r[len r] = simple(clw, c);
+	}
+	return r;
+}
+
+totitle(c: int, lang: string): string
+{
+	if(turkic(lang) && c == 'i') {
+		r := "";
+		r[0] = 16r130;
+		return r;
+	}
+	if((x := special(c, 3)) != nil)
+		return x;
+	t := simple(cti, c);
+	if(t == c)
+		t = simple(cup, c);
+	r := "";
+	r[0] = t;
+	return r;
 }
 
 # the value of the range holding c, or dflt

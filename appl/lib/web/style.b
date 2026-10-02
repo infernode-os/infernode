@@ -3898,8 +3898,12 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		if(x[0].kind != Knumber)
 			return 0;
 		r := x[0].n;
-		if(len x >= 3 && x[1].kind == Kdelim && x[1].s == "/" && x[2].kind == Knumber && x[2].n != 0.0)
-			r /= x[2].n;
+		if(len x >= 3 && x[1].kind == Kdelim && x[1].s == "/" && x[2].kind == Knumber) {
+			if(x[2].n == 0.0)
+				r = 0.0;	# a degenerate ratio (0 or infinity) is auto
+			else
+				r /= x[2].n;
+		}
 		st.aspect = r;
 		st.aspectauto = auto;
 	"margin-top" or "margin-right" or "margin-bottom" or "margin-left" =>
@@ -4365,7 +4369,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"uppercase" => st.transform = TTupper;
 		"lowercase" => st.transform = TTlower;
 		"capitalize" => st.transform = TTcap;
-		"full-width" or "full-size-kana" => ;
+		"full-width" => st.transform = TTfull;
+		"full-size-kana" => ;
 		* => return 0;
 		}
 	"letter-spacing" or "word-spacing" =>

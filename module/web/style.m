@@ -73,7 +73,7 @@ Style: module
 	Vvisible, Vhidden, Vcollapse: con iota;		# visibility
 	Wnormal, Wpre, Wnowrap, Wprewrap, Wpreline, Wbreakspaces: con iota;	# white-space
 	Astart, Aend, Aleft, Aright, Acenter, Ajustify: con iota;	# text-align
-	TTnone, TTupper, TTlower, TTcap: con iota;			# text-transform
+	TTnone, TTupper, TTlower, TTcap, TTfull: con iota;			# text-transform
 	TDunder, TDover, TDthrough: con 1<<iota;			# text-decoration-line bits
 	VAbaseline, VAtop, VAmiddle, VAbottom, VAtexttop, VAtextbottom, VAsub, VAsuper, VAlen: con iota;
 	# unicode-bidi

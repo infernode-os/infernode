@@ -41,6 +41,13 @@ Bidi: module
 	LBSY, LBIN, LBNU, LBCJ, LBSP, LBBK, LBCR, LBLF, LBNL: con iota;
 	lbclass:	fn(c: int): int;
 
+	# case mapping (UnicodeData.txt, SpecialCasing.txt): s in upper or
+	# lower case, c's title-case form; lang is the content language
+	# (tr, az and lt tailor the dotted and dotless i), nil for none
+	toupper:	fn(s: string, lang: string): string;
+	tolower:	fn(s: string, lang: string): string;
+	totitle:	fn(c: int, lang: string): string;
+
 	# the paragraph's base direction from its first strong character
 	# (P2, P3): 0 left to right, 1 right to left, -1 none found
 	basedir:	fn(s: array of int): int;

@@ -453,7 +453,7 @@ flushwrap(parent: ref Box, run, r: list of ref Box, kind, display: int): list of
 {
 	if(run == nil)
 		return r;
-	if(blankrun(run)) {
+	if(blankrun(run, 0)) {
 		# out-of-flow boxes stand where they are (an absolutely
 		# positioned row group is a block among the table's children)
 		for(l := rev(run); l != nil; l = tl l)
@@ -504,7 +504,7 @@ orphans(parent: ref Box, kids: list of ref Box): list of ref Box
 	run: list of ref Box;
 	for(l = kids; l != nil; l = tl l) {
 		k := hd l;
-		if(isinternal(k) || run != nil && k.kind == Ktext && blankrun(k :: nil))
+		if(isinternal(k) || run != nil && k.kind == Ktext && blankrun(k :: nil, 0))
 			run = k :: run;
 		else {
 			r = flushtable(parent, run, r);
@@ -537,7 +537,7 @@ flushrun(box: ref Box, run, r: list of ref Box): list of ref Box
 {
 	if(run == nil)
 		return r;
-	if(!blankrun(run))
+	if(!blankrun(run, 1))
 		return anonblock(box, rev(run)) :: r;
 	for(l := rev(run); l != nil; l = tl l)
 		if(isoof(hd l))
@@ -552,7 +552,10 @@ anonblock(parent: ref Box, kids: list of ref Box): ref Box
 	return a;
 }
 
-blankrun(l: list of ref Box): int
+# nothing but white space (and out-of-flow boxes): preserved white
+# space is content in a block (pre), never between the parts of a
+# table, where such text generates no box (CSS 2.2 §17.2.1)
+blankrun(l: list of ref Box, pre: int): int
 {
 	for(; l != nil; l = tl l) {
 		k := hd l;
@@ -560,10 +563,11 @@ blankrun(l: list of ref Box): int
 			continue;
 		if(k.kind != Ktext)
 			return 0;
-		case k.st.whitespace {
-		Style->Wpre or Style->Wprewrap or Style->Wbreakspaces =>
-			return 0;
-		}
+		if(pre)
+			case k.st.whitespace {
+			Style->Wpre or Style->Wprewrap or Style->Wbreakspaces =>
+				return 0;
+			}
 		for(i := 0; i < len k.text; i++)
 			if(!iswhite(k.text[i]))
 				return 0;
@@ -1322,6 +1326,25 @@ ratiow(b: ref Box, h: int): int
 	return ir(real (h - vextra(b)) * b.st.aspect) + hextra(b);
 }
 
+# the width transferred from a definite height h (a border box)
+# through the ratio: no less than the content's min-content width
+# unless min-width says so or the box scrolls (the automatic minimum,
+# Sizing 4 §5.2.2); -1 without a ratio
+noratio: ref Box;	# being measured without its ratio
+transferred(b: ref Box, h: int): int
+{
+	w := ratiow(b, h);
+	if(w >= 0 && b.st.minwidth.kind == Style->Lauto && !isscroller(b)) {
+		noratio = b;
+		(mn, nil) := intrinsic1(b);
+		noratio = nil;
+		mn -= mgs(b);
+		if(mn > w)
+			w = mn;
+	}
+	return w;
+}
+
 ratioh(b: ref Box, w: int): int
 {
 	if(b.st.aspect <= 0.0 || b.kind == Kreplaced)
@@ -1355,7 +1378,7 @@ sizew(b: ref Box, cbw, cbh: int)
 	st := b.st;
 	w := specw(b, st.width, cbw);
 	if(w < 0 && st.aspect > 0.0 && b.kind != Kreplaced && (sh := spech(b, st.height, cbh)) >= 0)
-		w = ratiow(b, sh);	# transferred from its height
+		w = transferred(b, sh);
 	if(w < 0) {
 		if(b.kind == Kreplaced) {
 			(iw, nil) := replacedsize(b, cbw, -1);
@@ -5268,8 +5291,11 @@ relative(k: ref Box, cbw, cbh: int)
 	st := k.st;
 	if(st.position != Style->Prelative && st.position != Style->Psticky)
 		return;
-	# both left and right set: the one in the direction's start wins (§9.4.3)
-	if(st.left.kind != Style->Lauto && (st.right.kind == Style->Lauto || !st.dirrtl))
+	# both left and right set: the one at the containing block's start wins (§9.4.3)
+	rtl := st.dirrtl;
+	if(k.parent != nil)
+		rtl = k.parent.st.dirrtl;
+	if(st.left.kind != Style->Lauto && (st.right.kind == Style->Lauto || !rtl))
 		k.x += res(st.left, cbw);
 	else if(st.right.kind != Style->Lauto)
 		k.x -= res(st.right, cbw);
@@ -5344,7 +5370,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		k.mr = 0;
 	w := specw(k, st.width, cbw);
 	if(w < 0 && (lauto || rauto) && (sh := spech(k, st.height, cbh)) >= 0)
-		w = ratiow(k, sh);
+		w = transferred(k, sh);
 	if(w < 0) {
 		if(!lauto && !rauto)
 			w = cbw - left - right - k.ml - k.mr;
@@ -5410,10 +5436,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	}
 	layblock(l, k, cbw, cbh, nil, 0, 0);
 	h := k.h;
-	if(spech(k, st.height, cbh) < 0 && !tauto && !bauto) {
+	if(st.height.kind == Style->Lauto && !tauto && !bauto) {
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
 		k.h = h;
 	} else if(!tauto && !bauto && (st.mt.kind == Style->Lauto || st.mb.kind == Style->Lauto)) {
+		# a definite or intrinsic (fit-content) height: auto margins
 		# auto margins take what the insets and height leave (§10.6.4)
 		free := cbh - top - bottom - h;
 		if(st.mt.kind == Style->Lauto && st.mb.kind == Style->Lauto) {
@@ -5854,16 +5881,18 @@ aspect(b: ref Box, iw, ih: int): real
 	return ratio;
 }
 
-# the default 300x150 of an iframe, canvas, embed or posterless video
-# is a size, not a ratio (CSS 2.2 §10.3.2 gives them none)
+# the default 300x150 of an iframe, embed or object, or of an svg with
+# neither its dimensions nor a viewBox, is a size, not a ratio (CSS 2.2
+# §10.3.2 gives them none); a canvas's bitmap has one
 hasratio(b: ref Box): int
 {
 	if(b.node == 0 || curdoc == nil)
 		return 1;
-	case curdoc.nodes[b.node].tag {
-	Dom->Tiframe or Dom->Tcanvas or Dom->Tembed =>
-		return 0;
-	Dom->Tvideo =>
+	nd := curdoc.nodes[b.node];
+	if(nd.ns == Dom->SVG)
+		return curdoc.attr(b.node, "viewBox") != nil || curdoc.attr(b.node, "width") != nil && curdoc.attr(b.node, "height") != nil;
+	case nd.tag {
+	Dom->Tiframe or Dom->Tembed or Dom->Tobject =>
 		return b.img != nil;
 	}
 	return 1;
@@ -5965,12 +5994,15 @@ intrinsic1(b: ref Box): (int, int)
 		(w, nil) := replacedsize(b, -1, -1);
 		return (w + ex, w + ex);
 	}
-	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0) {
-		# transferred from its height (Sizing 4 §5.2.1)
+	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0 && b != noratio) {
+		# transferred from its height (Sizing 4 §5.2.1); a scroll
+		# container's min-content contribution is nothing (its automatic minimum)
 		h := ir(st.height.px);
 		if(!st.borderbox)
 			h += vextra(b);
-		w := ratiow(b, h) + mgs(b);
+		w := transferred(b, h) + mgs(b);
+		if(isscroller(b))
+			return (mgs(b), w);
 		return (w, w);
 	}
 	if(b.kind == Ktable) {
@@ -6177,9 +6209,9 @@ inlineintrinsic(b: ref Box): (int, int)
 					mn = word;
 			} else
 				word = 0.0;
-			if(it.text == " " && collapsible(it.box.st)) {
+			if(it.text == " " && collapsible(it.box.st) || it.text == "　" && it.box.st.whitespace != Style->Wbreakspaces) {
 				if(content)
-					sp += it.w;
+					sp += it.w;	# at the end it hangs
 			} else {
 				line += sp + it.w;
 				sp = 0.0;
@@ -6370,18 +6402,15 @@ lbbreak(a, b: int): int
 	return lbideo(ca) || lbideo(cb);
 }
 
-# the character the break rules see before s[i]: a combining mark or
-# joiner takes its base's class (LB9), so look back past them
+# the character the break rules see before s[i]: a combining mark
+# takes its base's class (LB9), so look back past them (not a joiner:
+# nothing breaks after one, LB8a)
 lbbase(s: string, i, st0: int): int
 {
 	if(bidi == nil)
 		return i;
-	while(i > st0) {
-		cl := bidi->lbclass(s[i]);
-		if(cl != Bidi->LBCM && cl != Bidi->LBZWJ)
-			break;
+	while(i > st0 && bidi->lbclass(s[i]) == Bidi->LBCM)
 		i--;
-	}
 	return i;
 }
 
@@ -6403,26 +6432,58 @@ isideo(c: int): int
 		(c >= 16rF900 && c <= 16rFAFF) || (c >= 16rFF00 && c <= 16rFFEF) || c >= 16r20000;
 }
 
-transform(s: string, t: int, first: int): string
+# text-transform (Text 3 §2.1): Unicode case mapping, with the content
+# language's tailoring; capitalize takes the first letter of each word
+# (after white space or punctuation) to title case; full-width maps
+# ASCII to the full-width forms
+transform(s: string, t: int, first: int, lang: string): string
 {
 	case t {
 	Style->TTupper =>
+		if(bidi != nil)
+			return bidi->toupper(s, lang);
 		for(i := 0; i < len s; i++)
-			if(s[i] >= 'a' && s[i] <= 'z' || s[i] >= 16rE0 && s[i] <= 16rFE && s[i] != 16rF7)
+			if(s[i] >= 'a' && s[i] <= 'z')
 				s[i] -= 32;
 	Style->TTlower =>
+		if(bidi != nil)
+			return bidi->tolower(s, lang);
 		for(i := 0; i < len s; i++)
-			if(s[i] >= 'A' && s[i] <= 'Z' || s[i] >= 16rC0 && s[i] <= 16rDE && s[i] != 16rD7)
+			if(s[i] >= 'A' && s[i] <= 'Z')
 				s[i] += 32;
 	Style->TTcap =>
 		at := first;
+		r := "";
 		for(i := 0; i < len s; i++) {
-			if(at && s[i] >= 'a' && s[i] <= 'z')
-				s[i] -= 32;
-			at = isspace(s[i]) || s[i] == '-';
+			c := s[i];
+			if(at && bidi != nil && !isspace(c) && !bidi->punct(c))
+				r += bidi->totitle(c, lang);
+			else if(at && c >= 'a' && c <= 'z')
+				r[len r] = c - 32;
+			else
+				r[len r] = c;
+			at = isspace(c) || bidi != nil && bidi->punct(c) || c == '-';
 		}
+		return r;
+	Style->TTfull =>
+		for(i := 0; i < len s; i++)
+			if(s[i] >= '!' && s[i] <= '~')
+				s[i] += 16rFF01 - '!';
+			else if(s[i] == ' ')
+				s[i] = '　';
 	}
 	return s;
+}
+
+# the content language of node n: the nearest lang attribute, lower-cased
+langof(n: int): string
+{
+	if(curdoc == nil)
+		return nil;
+	for(p := n; p != 0; p = curdoc.nodes[p].parent)
+		if((l := curdoc.attr(p, "lang")) != nil)
+			return lower(l);
+	return nil;
 }
 
 crtospace(s: string): string
@@ -6440,7 +6501,7 @@ text(f: ref Fl, b: ref Box)
 	fc := face(st);
 	s := b.text;
 	if(st.transform != Style->TTnone)
-		s = transform(s, st.transform, f.space);
+		s = transform(s, st.transform, f.space, langof(b.node));
 	# a carriage return is a space in every respect (CSS Text 3 §4.1)
 	for(k := 0; k < len s; k++)
 		if(s[k] == '\r') {
@@ -6535,6 +6596,7 @@ Ln: adt {
 	open:	list of (ref Box, real, int, int);	# inline boxes open on this line: (box, start x, first?, the level of its bidi control)
 	indent:	real;		# text-indent (the first line only): content starts this far past the left edge
 	floats:	list of ref Box;	# floats met mid-line, placed when the line ends
+	below:	list of ref Abs;	# block-level absolutes met mid-line: their static position is under it
 };
 
 # the inline formatting state of one block container
@@ -6599,7 +6661,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	para := 0;
 	joinruns(items);
 	(items, para) = bidiitems(b, items);
-	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil);
+	ln := ref Ln(para, nil, 0.0, cw, 0, 0, nil, real res(st.indent, cw), nil, nil);
 	linestart(f, ln);
 	first := 1;
 	opened: list of ref Box;	# inline boxes open, outermost last
@@ -6631,21 +6693,24 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# from precedes that word (Text 3 §4.1.3, §5.4.2)
 				word: ref Frag;
 				wrap := 1;
-				if(it.box.st.breakall != 2 && ln.frags != nil && (hd ln.frags).kind == Ftext && !isblankrun((hd ln.frags).text)) {
+				prev := ln.frags;
+				while(prev != nil && (hd prev).kind == Fspan)
+					prev = tl prev;
+				if(it.box.st.breakall != 2 && prev != nil && (hd prev).kind == Ftext && !isblankrun((hd prev).text)) {
 					# after a word: that goes too, or nothing does when
 					# the word starts the line (line-break: anywhere
 					# breaks before the space itself)
 					wrap = 0;
-					for(fl := tl ln.frags; fl != nil; fl = tl fl)
+					for(fl := tl prev; fl != nil; fl = tl fl)
 						if((hd fl).kind == Ftext) {
-							word = hd ln.frags;
+							word = hd prev;
 							wrap = 1;
 							break;
 						}
 				}
 				if(wrap) {
 					if(word != nil) {
-						ln.frags = tl ln.frags;
+						ln.frags = removefrag(ln.frags, word);
 						ln.x -= real word.w;
 					}
 					lines = endline(f, ln, x0, first, 0) :: lines;
@@ -6749,8 +6814,14 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level);
 				ln.frags = mark :: ln.frags;
 				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil) :: l.pending;
-			} else	# a block-level one's is the start of the line
-				l.pending = ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl, nil) :: l.pending;
+			} else {
+				# a block-level one's is where a block would go: the
+				# start of this line, or under it once content is on it
+				a := ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl, nil);
+				if(ln.content)
+					ln.below = a :: ln.below;
+				l.pending = a :: l.pending;
+			}
 		Ibreak =>
 			ln.content = 1;
 			lines = endline(f, ln, x0, first, 1) :: lines;
@@ -6783,6 +6854,8 @@ endline(f: ref Ifc, ln: ref Ln, x0, first, forced: int): ref Line
 {
 	line := finish(f.l, f.b, ln, f.y, x0, first, forced);
 	f.y += line.h;
+	for(bl := ln.below; bl != nil; bl = tl bl)
+		(hd bl).sy = f.y;
 	placepending(f, ln);
 	return line;
 }
@@ -6817,7 +6890,7 @@ removebox(l: list of ref Box, b: ref Box): list of ref Box
 
 newline(f: ref Ifc, old: ref Ln, opened: list of ref Box): ref Ln
 {
-	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil);
+	ln := ref Ln(old.para, nil, 0.0, f.cw, 0, 0, nil, 0.0, nil, nil);
 	linestart(f, ln);
 	# inline boxes still open continue on the new line
 	r: list of ref Box;
@@ -6847,6 +6920,26 @@ splitword(it: ref Item, avail: real): (ref Item, ref Item)
 	t.text = s[k:];
 	t.w = it.face.width(t.text);
 	return (h, t);
+}
+
+# is k inside b (b itself counts)?
+inbox(k, b: ref Box): int
+{
+	for(; k != nil; k = k.parent)
+		if(k == b)
+			return 1;
+	return 0;
+}
+
+removefrag(l: list of ref Frag, f: ref Frag): list of ref Frag
+{
+	r, o: list of ref Frag;
+	for(; l != nil; l = tl l)
+		if(hd l != f)
+			r = hd l :: r;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
 }
 
 # a space's width on the line: a tab's is to the next tab stop, a
@@ -6915,7 +7008,9 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			f.w = 0;
 			continue;
 		}
-		if(f.kind == Ftext && isblankrun(f.text) && f.box.st.whitespace == Style->Wprewrap && !forced) {
+		if(f.kind == Ftext && isblankrun(f.text) && f.box.st.whitespace == Style->Wprewrap && !forced ||
+		   f.kind == Ftext && f.text == "　" && f.box.st.whitespace != Style->Wbreakspaces) {
+			# so does an ideographic space (Text 3 §4.1.3, other space separators)
 			ln.x -= real f.w;
 			hanging = f :: hanging;
 			continue;
@@ -7005,6 +7100,8 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	case align {
 	Style->Aright or Style->Aend =>
 		off = extra;
+		if(b.st.dirrtl)
+			off -= ln.indent;	# the indent is at the start, the right
 	Style->Acenter =>
 		off = extra/2.0;
 	Style->Ajustify =>
@@ -7036,7 +7133,7 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		}
 	}
 	if(ln.para % 2 == 1 && align == Style->Astart)
-		off = extra;
+		off = extra - ln.indent;	# the start is the right; the indent is there
 	if(off < 0.0)
 		off = 0.0;
 	for(i = 0; i < len frags; i++) {
@@ -7077,6 +7174,18 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			} else {
 				f.x = hi;
 				hi += f.w;
+			}
+			# the inline boxes it is in reach out to it: its background is theirs
+			for(i = 0; i < len frags; i++) {
+				sp := frags[i];
+				if(sp.kind != Fspan || !inbox(f.box, sp.box))
+					continue;
+				if(f.x < sp.x) {
+					sp.w += sp.x - f.x;
+					sp.x = f.x;
+				}
+				if(f.x + f.w > sp.x + sp.w)
+					sp.w = f.x + f.w - sp.x;
 			}
 		}
 	}

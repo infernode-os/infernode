@@ -363,8 +363,8 @@ fixurls(v: array of ref Tok, base: string): array of ref Tok
 		t := v[i];
 		if(t.kind == Kurl)
 			t = ref Tok(Kurl, resolveurl(base, t.s), 0.0, 0, nil);
-		else if(t.kind == Kfunction && t.s == "url" && len t.kids > 0 && t.kids[0].kind == Kstring)
-			t = ref Tok(Kurl, resolveurl(base, t.kids[0].s), 0.0, 0, nil);
+		else if(t.kind == Kfunction && t.s == "url" && len (uk := nows(t.kids)) > 0 && uk[0].kind == Kstring)
+			t = ref Tok(Kurl, resolveurl(base, uk[0].s), 0.0, 0, nil);
 		else if(t.kids != nil)
 			t = ref Tok(t.kind, t.s, t.n, t.flag, fixurls(t.kids, base));
 		r[i] = t;
@@ -2783,7 +2783,9 @@ channels(t: ref Tok): (int, array of (int, real), (int, real))
 			alpha = c;
 			if(!slash)
 				n++;
-		} else
+		} else if(n >= 4)
+			return (0, nil, alpha);	# too many values
+		else
 			ch[n++] = c;
 	}
 	if(n < 3)
@@ -4651,27 +4653,29 @@ shadows(v: array of ref Tok, ctx: ref Ctx): array of ref Shadow
 
 bglonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
 {
-	layers := splitcommas(v);
-	n := len layers;
-	if(st.bg == nil || len st.bg != n) {
-		nb := array[n] of ref Bg;
-		for(k := 0; k < n; k++) {
-			if(st.bg != nil && k < len st.bg)
-				nb[k] = ref *st.bg[k];
-			else
-				nb[k] = ref Bg(nil, Rrepeat, Rrepeat, px(0.0), px(0.0), kw(Lauto), kw(Lauto), BOXborder, BOXpadding, 0);
-		}
-		st.bg = nb;
-	} else {
-		nb := array[n] of ref Bg;
-		for(k := 0; k < n; k++)
-			nb[k] = ref *st.bg[k];
-		st.bg = nb;
+	vals := splitcommas(v);
+	n := len vals;
+	if(n == 0)
+		return 0;
+	# the image list says how many layers there are; the other lists
+	# are repeated to fill them (Backgrounds 3 §2.3)
+	nl := n;
+	if(nm != "background-image" && st.bg != nil)
+		nl = len st.bg;
+	nb := array[nl] of ref Bg;
+	for(k := 0; k < nl; k++) {
+		if(st.bg != nil)
+			nb[k] = ref *st.bg[k % len st.bg];	# the lists set so far repeat
+		else
+			nb[k] = ref Bg(nil, Rrepeat, Rrepeat, px(0.0), px(0.0), kw(Lauto), kw(Lauto), BOXborder, BOXpadding, 0);
 	}
-	k := 0;
-	for(; layers != nil; layers = tl layers) {
-		x := nows(hd layers);
-		b := st.bg[k++];
+	st.bg = nb;
+	layers := array[n] of array of ref Tok;
+	for(k = 0; vals != nil; vals = tl vals)
+		layers[k++] = nows(hd vals);
+	for(k = 0; k < nl; k++) {
+		x := layers[k % n];
+		b := st.bg[k];
 		if(len x == 0)
 			return 0;
 		case nm {

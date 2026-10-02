@@ -1032,10 +1032,9 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 {
 	case b.kind {
 	Kreplaced =>
-		(nil, ih) := replacedsize(b, cbw, cbh);
 		h := spech(b, b.st.height, cbh);
 		if(h < 0)
-			h = ih + vextra(b);
+			h = replacedheight(b, cbw, cbh) + vextra(b);
 		b.h = clamph(b, h, cbh);
 		return (mval(b.mt), mval(b.mb), 0);
 	Kflex =>
@@ -1516,13 +1515,12 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			}
 			freem = 0;
 		}
+		# Items are placed as if the direction were forward, and a
+		# reversed line is then mirrored in its space: that reverses
+		# both the order and the justification at once.
 		jc := st.justifycontent;
-		if(rev && (jc == Style->ALstart || jc == Style->ALnormal))
-			jc = -1;	# packs toward the end, as it is reversed
 		case jc {
 		Style->ALend or Style->ALright =>
-			start = freem;
-		-1 =>
 			start = freem;
 		Style->ALcenter =>
 			start = freem/2;
@@ -1540,26 +1538,17 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				start = freem / (nit + 1);
 			}
 		}
-		if(rev && jc == -1)
-			start = 0;
 		mp := start;
 		for(j = 0; j < nit; j++) {
-			idx := j;
-			if(rev)
-				idx = nit - 1 - j;
-			fi := ln.items[idx];
+			fi := ln.items[j];
 			fi.pos = mp;
 			mp += ir(fi.main) + fi.mm + gap;
 		}
-		if(rev) {
-			# reversed: mirror within the space
+		if(rev)
 			for(j = 0; j < nit; j++) {
 				fi := ln.items[j];
 				fi.pos = space - fi.pos - ir(fi.main) - fi.mm;
-				if(jc == -1)
-					fi.pos -= 0;
 			}
-		}
 		for(j = 0; j < nit; j++) {
 			fi := ln.items[j];
 			k := fi.box;
@@ -1867,9 +1856,13 @@ tracks(v: array of ref Tok, avail, gap: int): (array of ref Track, array of list
 				if(len rt == 0)
 					continue;
 				reps := 1;
-				if(cnt[0].kind == Css->Knumber)
+				if(cnt[0].kind == Css->Knumber) {
 					reps = int cnt[0].n;
-				else if(cnt[0].kind == Css->Kident) {
+					if(reps < 1)
+						reps = 1;
+					if(reps * len rt > MAXTRACKS)
+						reps = MAXTRACKS / len rt;
+				} else if(cnt[0].kind == Css->Kident) {
 					# auto-fill, auto-fit: as many as fit
 					per := 0.0;
 					for(k := 0; k < len rt; k++) {
@@ -1938,8 +1931,11 @@ lineof(g: Style->Gline, names: array of list of string, ntracks: int, end: int):
 	}
 	if(g.span || g.n == 0)
 		return -1;
-	if(g.n > 0)
+	if(g.n > 0) {
+		if(g.n > MAXTRACKS)
+			return MAXTRACKS - 1;
 		return g.n - 1;
+	}
 	n := ntracks + 1 + g.n;	# -1 is the last line
 	if(n < 0)
 		n = 0;
@@ -2008,6 +2004,9 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	ncols := len cols;
 	if(ncols == 0)
 		ncols = 1;
+	nrows := len rows;
+	if(nrows == 0)
+		nrows = 1;
 
 	# placement
 	gi: list of ref Gi;
@@ -2041,10 +2040,26 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	}
 	colflow := st.autoflow & 1;
 	dense := st.autoflow & 2;
-	# columns grow to hold definite placements
-	for(i = 0; i < len items; i++)
-		if(items[i].c1 > ncols)
-			ncols = items[i].c1;
+	# The implicit grid grows to hold definite placements, and, in the
+	# axis items flow across, the largest span of an item placed
+	# automatically in it (§8.5 step 1): otherwise it could never fit.
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		if(g.c1 > ncols)
+			ncols = g.c1;
+		if(g.r1 > nrows)
+			nrows = g.r1;
+		if(!colflow && g.c0 < 0) {
+			cs := spanof(g.c0, g.c1, g.box.st.colstart, g.box.st.colend);
+			if(cs > ncols)
+				ncols = cs;
+		}
+		if(colflow && g.r0 < 0) {
+			rs := spanof(g.r0, g.r1, g.box.st.rowstart, g.box.st.rowend);
+			if(rs > nrows)
+				nrows = rs;
+		}
+	}
 	occ := ref Occ(array[0] of array of byte, ncols);
 	# 1: definite in both
 	for(i = 0; i < len items; i++) {
@@ -2063,6 +2078,8 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		cs := spanof(g.c0, g.c1, items[i].box.st.colstart, items[i].box.st.colend);
 		if(cs > ncols && !colflow)
 			cs = ncols;
+		if(rs > nrows && colflow)
+			rs = nrows;
 		if(colflow) {
 			# column-major: transpose the search
 			if(g.c0 < 0) {
@@ -2075,7 +2092,7 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 				for(;; ) {
 					if(g.r0 >= 0)
 						r = g.r0;
-					if(r + rs > nz1(len rows) && g.r0 < 0) {
+					if(r + rs > nrows && g.r0 < 0) {
 						r = 0;
 						c++;
 						continue;
@@ -2147,7 +2164,7 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			ncols = g.c1;
 		occ.mark(g.r0, g.r1, g.c0, g.c1);
 	}
-	nrows := len rows;
+	nrows = len rows;
 	for(i = 0; i < len items; i++)
 		if(items[i].r1 > nrows)
 			nrows = items[i].r1;
@@ -2288,13 +2305,13 @@ gridspan(s, e: Style->Gline, names: array of list of string, ntracks: int, ars: 
 	if(a >= 0) {
 		n := 1;
 		if(e.span)
-			n = e.span;
+			n = clampspan(e.span);
 		return (a, a + n);
 	}
 	if(b >= 0) {
 		n := 1;
 		if(s.span)
-			n = s.span;
+			n = clampspan(s.span);
 		if(b - n < 0)
 			return (0, n);
 		return (b - n, b);
@@ -2311,6 +2328,20 @@ spanof(a0, a1: int, s, e: Style->Gline): int
 		n = s.span;
 	if(e.span)
 		n = e.span;
+	return clampspan(n);
+}
+
+# A grid has at most this many lines in an axis (as in other engines):
+# a style sheet's "grid-column: 2000000000" or "repeat(1e9, 1px)" must
+# not be an allocation.
+MAXTRACKS: con 10000;
+
+clampspan(n: int): int
+{
+	if(n < 1)
+		return 1;
+	if(n > MAXTRACKS)
+		return MAXTRACKS;
 	return n;
 }
 
@@ -3483,9 +3514,7 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		if(st.borderbox)
 			h -= vextra(b);
 	}
-	ratio := st.aspect;
-	if(ratio == 0.0 && iw > 0 && ih > 0)
-		ratio = real iw / real ih;
+	ratio := aspect(b, iw, ih);
 	if(w < 0 && h < 0) {
 		w = iw;
 		h = ih;
@@ -3505,6 +3534,37 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 	if(h < 0)
 		h = 0;
 	return (w, h);
+}
+
+# the ratio a replaced box keeps: aspect-ratio, else its content's
+aspect(b: ref Box, iw, ih: int): real
+{
+	ratio := b.st.aspect;
+	if(ratio == 0.0 && iw > 0 && ih > 0)
+		ratio = real iw / real ih;
+	return ratio;
+}
+
+# The content height of a replaced box whose height is auto, once its
+# width is used: if min/max-width (or a flex or grid container) made
+# the width other than what replacedsize chose, the height follows the
+# ratio (CSS 2.2 §10.4), so an img { max-width: 100% } keeps its shape.
+replacedheight(b: ref Box, cbw, cbh: int): int
+{
+	(w, h) := replacedsize(b, cbw, cbh);
+	cw := b.w - hextra(b);
+	if(cw != w && cw > 0) {
+		iw := b.iw;
+		ih := b.ih;
+		if(b.img != nil && iw == 0 && ih == 0) {
+			iw = b.img.r.dx();
+			ih = b.img.r.dy();
+		}
+		ratio := aspect(b, iw, ih);
+		if(ratio > 0.0)
+			return ir(real cw / ratio);
+	}
+	return h;
 }
 
 # ---- intrinsic widths (CSS Sizing 3) ----
@@ -3610,7 +3670,12 @@ inlineintrinsic(b: ref Box): (int, int)
 				mn = word;
 			line += w;
 		Ispace =>
-			if(!it.nowrap)
+			if(it.nowrap) {
+				# an unbreakable space is part of the word
+				word += it.w;
+				if(word > mn)
+					mn = word;
+			} else
 				word = 0.0;
 			line += it.w;
 		Iopen or Iclose =>
@@ -4163,11 +4228,8 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	}
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift) := fragmetrics(f, sf);
+		(a, d, shift, va) := fragmetrics(f, b, sf);
 		f.base = ir(shift);
-		va := f.box.st.valign;
-		if(f.kind == Ftext && f.box.kind == Ktext)
-			va = Style->VAbaseline;	# a text run aligns as its inline box does
 		if(va == Style->VAtop || va == Style->VAbottom)
 			continue;
 		if(a - shift > above)
@@ -4179,29 +4241,25 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	# top- and bottom-aligned things may make the line taller
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		va := f.box.st.valign;
-		if(f.kind == Ftext && f.box.kind == Ktext)
-			va = Style->VAbaseline;
+		(a, d, shift, va) := fragmetrics(f, b, sf);
 		if(va == Style->VAtop || va == Style->VAbottom) {
-			(a, d, nil) := fragmetrics(f, sf);
-			if(ir(a + d) > h)
-				h = ir(a + d);
+			if(shift < 0.0)
+				shift = -shift;
+			if(ir(a + d + shift) > h)
+				h = ir(a + d + shift);
 		}
 	}
 	base := ir(above);
 	line := ref Line(y, h, y + base, frags);
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift) := fragmetrics(f, sf);
-		va := f.box.st.valign;
-		if(f.kind == Ftext && f.box.kind == Ktext)
-			va = Style->VAbaseline;
+		(a, d, shift, va) := fragmetrics(f, b, sf);
 		fb := real line.base + shift;
 		case va {
 		Style->VAtop =>
-			fb = real y + a;
+			fb = real y + a + shift;
 		Style->VAbottom =>
-			fb = real (y + h) - d;
+			fb = real (y + h) - d + shift;
 		}
 		case f.kind {
 		Ftext =>
@@ -4261,8 +4319,15 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 }
 
 # A fragment's ascent and descent around its baseline, half-leading
-# included, and how far its baseline is shifted down from the line's.
-fragmetrics(f: ref Frag, parent: ref Typeface): (real, real, real)
+# included; how far its baseline is shifted down from the line's; and
+# whether it is aligned to the line box instead (VAtop, VAbottom).
+#
+# The shift is the vertical-align of the inline box the fragment is
+# (or, for a text run, is in), plus that of every inline box enclosing
+# it up to the block b, each relative to its parent (CSS 2.2 §10.8.1):
+# the glyphs of <sup> move with it.  A box aligned to the line box
+# ends the walk; what it holds is shifted with respect to it.
+fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int)
 {
 	st := f.box.st;
 	a, d: real;
@@ -4280,26 +4345,60 @@ fragmetrics(f: ref Frag, parent: ref Typeface): (real, real, real)
 		a = real (k.base);
 		d = real (k.mt + k.h + k.mb - k.base);
 	}
+	k := f.box;
+	if(f.kind == Ftext && k.kind == Ktext)
+		k = k.parent;	# a text run aligns as its inline box does
 	shift := 0.0;
-	va := st.valign;
-	if(f.kind == Ftext && f.box.kind == Ktext)
-		return (a, d, 0.0);
+	va := Style->VAbaseline;
+	ka := a;
+	kd := d;
+	for(; k != nil && k != b; k = k.parent) {
+		if(k != f.box && k.kind != Kinline)
+			break;
+		kva := k.st.valign;
+		if(kva == Style->VAtop || kva == Style->VAbottom) {
+			va = kva;
+			break;
+		}
+		pf := sf;
+		if(k.parent != nil && k.parent != b)
+			pf = face(k.parent.st);
+		shift += vshift(k.st, kva, ka, kd, pf);
+		if(k.parent != nil && k.parent != b && k.parent.kind == Kinline)
+			(ka, kd) = boxmetrics(k.parent);
+	}
+	return (a, d, shift, va);
+}
+
+# an inline box's ascent and descent around its baseline, half-leading included
+boxmetrics(k: ref Box): (real, real)
+{
+	fc := face(k.st);
+	lh := lineheight(k.st, fc);
+	hl := (lh - fc.ascent - fc.descent)/2.0;
+	return (fc.ascent + hl, fc.descent + hl);
+}
+
+# how far a box with ascent a and descent d is shifted down from its
+# parent's baseline, by its vertical-align; parent is the parent's face
+vshift(st: ref St, va: int, a, d: real, parent: ref Typeface): real
+{
 	case va {
 	Style->VAsub =>
-		shift = parent.size * 0.2;
+		return parent.size * 0.2;
 	Style->VAsuper =>
-		shift = -parent.size * 0.35;
+		return -parent.size * 0.35;
 	Style->VAmiddle =>
 		# the middle of the box at half the parent's x-height
-		shift = (a - d)/2.0 - parent.size * 0.27;
+		return (a - d)/2.0 - parent.size * 0.27;
 	Style->VAtexttop =>
-		shift = a - parent.ascent;
+		return a - parent.ascent;
 	Style->VAtextbottom =>
-		shift = parent.descent - d;
+		return parent.descent - d;
 	Style->VAlen =>
-		shift = -st.valignlen.px;
+		return -st.valignlen.px;
 	}
-	return (a, d, shift);
+	return 0.0;
 }
 
 # Lay out an atomic inline (inline-block, inline replaced, inline flex...).

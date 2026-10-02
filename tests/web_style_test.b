@@ -259,6 +259,10 @@ testColors(t: ref T)
 	}
 	(ok, nil) := style->color(css->tokenize("rgb(1 2)"));
 	t.assert(!ok, "too few channels");
+	(ok, nil) = style->color(css->tokenize("rgb(0 0 0 0 0)"));
+	t.assert(!ok, "too many channels");
+	(ok, nil) = style->color(css->tokenize("rgba(0, 0, 0, .5, 1)"));
+	t.assert(!ok, "too many channels, legacy");
 }
 
 testMedia(t: ref T)
@@ -277,12 +281,14 @@ testMedia(t: ref T)
 testSelectors(t: ref T)
 {
 	p := page("<style>.p:has(> .c) { color: green } li:nth-child(2n+1) { color: green }" +
+		"#out:has(.a .b) { color: red } #in:has(.a .b) { color: green }" +
 		":is(#x, #y) > b { color: green } a[href$='.pdf' i] { color: green } p:not(.n) + p { color: green }" +
 		"input:checked { color: green } div:empty { color: green } .q:first-of-type { color: green }" +
 		".nest { color: red; & > .k { color: green } }</style>" +
 		"<div class=p id=h><span class=c>x</span></div><ul><li id=l1>1<li id=l2>2<li id=l3>3</ul>" +
 		"<div id=y><b id=yb>b</b></div><a id=pdf href=a.PDF>p</a><p>1</p><p id=sib>2</p>" +
 		"<input id=cb type=checkbox checked><div id=em></div><span class=q id=q1></span>" +
+		"<div class=a><div id=out><div class=b></div></div></div><div id=in><div class=a><div class=b></div></div></div>" +
 		"<div class=nest><i class=k id=k>k</i></div>");
 	t.assertseq(col(st(p, "h").color), "008000ff", ":has(> .c)");
 	t.assertseq(col(st(p, "l1").color), "008000ff", "nth-child odd 1");
@@ -295,6 +301,24 @@ testSelectors(t: ref T)
 	t.assertseq(col(st(p, "em").color), "008000ff", ":empty");
 	t.assertseq(col(st(p, "q1").color), "008000ff", ":first-of-type");
 	t.assertseq(col(st(p, "k").color), "008000ff", "nesting");
+	t.assertseq(col(st(p, "in").color), "008000ff", ":has() with a descendant combinator");
+	t.assert(col(st(p, "out").color) != "ff0000ff", ":has() anchors at the element");
+}
+
+testBackgrounds(t: ref T)
+{
+	p := page("<style>#a { background-image: url(a.png), url(b.png); background-size: cover; background-repeat: no-repeat, repeat-x }" +
+		"#b { background-size: 10px; background-image: url(c.png), url(d.png) }</style><p id=a>a<p id=b>b");
+	a := st(p, "a");
+	t.asserteq(len a.bg, 2, "the image list sets the layer count");
+	t.assert(a.bg[1].img != nil, "second image kept");
+	t.asserteq(a.bg[1].sizex.kind, Style->Lcontent, "size repeats over the layers");
+	t.asserteq(a.bg[1].rx, Style->Rrepeat, "second repeat");
+	t.asserteq(a.bg[1].ry, Style->Rnorepeat, "second repeat-x");
+	b := st(p, "b");
+	t.asserteq(len b.bg, 2, "image after size");
+	t.assert(b.bg[0].img != nil && b.bg[1].img != nil, "both images");
+	t.asserteq(b.bg[1].sizex.kind, Style->Lpx, "earlier size kept for both");
 }
 
 testHints(t: ref T)
@@ -391,6 +415,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Colors", testColors);
 	run("Media", testMedia);
 	run("Selectors", testSelectors);
+	run("Backgrounds", testBackgrounds);
 	run("Hints", testHints);
 	run("Pseudo", testPseudo);
 	run("Dump", testDump);

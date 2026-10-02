@@ -561,9 +561,22 @@ atrule(v: array of ref Tok, i: int, parent: array of ref Sel): (ref Rule, int)
 		else if(names == nil)
 			names = "" :: nil;	# anonymous layer
 		return (ref Rule.Layer(names, sub), i);
-	"scope" or "starting-style" or "document" =>
-		# not modelled: apply the contents unconditionally
+	"scope" =>
+		# @scope (<root>) [to (<limit>)] { rules }: the rules apply to
+		# the root's descendants, as nested rules under :is(root) do;
+		# the limit is not modelled.  Without a root, as a nested rule.
+		if(len prelude > 0 && isblock(prelude[0], "(")) {
+			roots := parsesellist(trim(prelude[0].kids), parent);
+			if(roots == nil)
+				return (nil, i);
+			if(hasblk)
+				sub = revrules(blockrules(roots, blk));
+		}
 		return (ref Rule.Media(nil, sub), i);
+	"starting-style" or "document" =>
+		# @starting-style is the state before a transition (none here);
+		# @document is dead
+		return (nil, i);
 	"import" =>
 		if(hasblk || len prelude == 0)
 			return (nil, i);
@@ -573,8 +586,8 @@ atrule(v: array of ref Tok, i: int, parent: array of ref Sel): (ref Rule, int)
 		Kstring or Kurl =>
 			u = prelude[0].s;
 		Kfunction =>
-			if(prelude[0].s == "url" && len prelude[0].kids > 0)
-				u = prelude[0].kids[0].s;
+			if(prelude[0].s == "url" && len (uk := trim(prelude[0].kids)) > 0)
+				u = uk[0].s;
 		* =>
 			return (nil, i);
 		}
@@ -855,9 +868,12 @@ complex(v: array of ref Tok, parent: array of ref Sel, relative: int): ref Sel
 	cbs: list of int;
 	i := 0;
 	lead := 0;
-	if(relative && (c := combinator(v[0])) != 0) {
-		lead = c;
-		i = 1;
+	if(relative) {
+		lead = ' ';	# :has(.a .b) is :has(:scope .a .b)
+		if((c := combinator(v[0])) != 0) {
+			lead = c;
+			i = 1;
+		}
 	}
 	comb := lead;
 	pseudo: string;
@@ -912,13 +928,14 @@ complex(v: array of ref Tok, parent: array of ref Sel, relative: int): ref Sel
 		# resolve '&'
 		isp := ref Simple(Spseudo, "is", 0, nil, 0, 0, 0, parent);
 		if(hasnest) {
+			s.combs[0] = 0;	# '&' says where the parent goes; no implied descendant
 			for(k = 0; k < n; k++)
 				for(j := 0; j < len s.parts[k]; j++)
 					if(s.parts[k][j].kind == Spseudo && s.parts[k][j].name == "&")
 						s.parts[k][j] = isp;
 		} else {
 			# relative: "& <comb> sel"
-			c = s.combs[0];
+			c := s.combs[0];
 			if(c == 0)
 				c = ' ';
 			np := array[n+1] of array of ref Simple;
@@ -1086,7 +1103,8 @@ attrsel(v: array of ref Tok): ref Simple
 	if(len v == 0)
 		return nil;
 	i := 0;
-	if(len v > 2 && v[1].kind == Kdelim && v[1].s == "|" && (v[0].kind == Kident || v[0].kind == Kdelim))
+	if(len v > 2 && v[1].kind == Kdelim && v[1].s == "|" && (v[0].kind == Kident || v[0].kind == Kdelim) &&
+	   !(v[2].kind == Kdelim && v[2].s == "="))
 		i = 2;	# namespace prefix ignored
 	else if(v[0].kind == Kdelim && v[0].s == "|")
 		i = 1;

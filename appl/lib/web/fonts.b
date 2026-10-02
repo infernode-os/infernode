@@ -178,11 +178,22 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 	o := loadface(i);
 	if(o == nil)
 		o = loadface(fam*4);
-	if(o == nil)
-		return nil;
-	asc := real o.ascent * size / real o.upem;
-	desc := real -o.descent * size / real o.upem;
-	f := ref Typeface(o, size, asc, desc, asc + desc, 0.0, fallback(size), nil, nil, 0);
+	f: ref Typeface;
+	if(o != nil) {
+		asc := real o.ascent * size / real o.upem;
+		desc := real -o.descent * size / real o.upem;
+		f = ref Typeface(o, size, asc, desc, asc + desc, 0.0, fallback(size), nil, nil, 0);
+	} else {
+		# no outline file: the bitmap fallback is the face
+		fb := fallback(size);
+		asc := size * 0.8;
+		desc := size * 0.2;
+		if(fb != nil) {
+			asc = real fb.ascent;
+			desc = real (fb.height - fb.ascent);
+		}
+		f = ref Typeface(nil, size, asc, desc, asc + desc, 0.0, fb, nil, nil, 0);
+	}
 	f.space = advance(f, ' ');
 	cache[h] = f :: cache[h];
 	return f;
@@ -201,7 +212,7 @@ glyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
 				if((g := p.outline.lookup(c)) >= 0)
 					return (p.outline, g);
 			}
-		} else if((g := f.outline.lookup(c)) >= 0)
+		} else if(f.outline != nil && (g := f.outline.lookup(c)) >= 0)
 			return (f.outline, g);
 	}
 	return (nil, -1);
@@ -226,6 +237,8 @@ advance(f: ref Typeface, c: int): real
 			s[0] = c;
 			return real f.fallback.width(s);
 		}
+		if(f.outline == nil)
+			return f.size / 2.0;
 		return f.outline.advance(0, f.size);
 	}
 	return o.advance(g, f.size);
@@ -292,6 +305,10 @@ Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: re
 		if(o == nil) {
 			o = f.outline;
 			g = 0;
+			if(o == nil) {
+				x += f.size / 2.0;
+				continue;
+			}
 		}
 		if(c != ' ' && c != ' ')
 			o.drawglyph(g, f.size, dst, Point(int x, p.y), src);
@@ -314,7 +331,16 @@ webfaces: list of ref Web;
 clearfaces()
 {
 	webfaces = nil;
+	partsmade = nil;
 	ahemloaded = 0;
+	# the faces made from them go too; the shipped ones stay
+	for(h := 0; h < len cache; h++) {
+		r: list of ref Typeface;
+		for(cl := cache[h]; cl != nil; cl = tl cl)
+			if((hd cl).parts == nil)
+				r = hd cl :: r;
+		cache[h] = r;
+	}
 }
 
 readall(f: string): array of byte
@@ -358,7 +384,24 @@ addface(family: string, weight, italic: int, ranges: array of int, data: array o
 # font matching rules, simplified: the right slant if there is one,
 # then the nearest weight (heavier first for bold, lighter for light).
 # Every face of that weight and slant comes, one per unicode-range.
+# the faces chosen for a family, weight and style, made once so that
+# the Typeface cache can compare them
+partsmade: list of (string, int, int, array of ref Part);
+
 webparts(family: string, weight, italic: int): array of ref Part
+{
+	for(pl := partsmade; pl != nil; pl = tl pl) {
+		(pf, pw, pi, pa) := hd pl;
+		if(pf == family && pw == weight && pi == italic)
+			return pa;
+	}
+	a := webparts1(family, weight, italic);
+	if(a != nil)
+		partsmade = (family, weight, italic, a) :: partsmade;
+	return a;
+}
+
+webparts1(family: string, weight, italic: int): array of ref Part
 {
 	best := -1;
 	bestit := -1;
@@ -422,6 +465,11 @@ hashstr(s: string): int
 	return h;
 }
 
+# A table's declared uncompressed length is the page's word for how much
+# to allocate: bound it, and the font as a whole.
+MAXTABLE: con 32*1024*1024;
+MAXFONT: con 64*1024*1024;
+
 # WOFF 1.0: the sfnt's tables, each zlib-compressed if that made it
 # smaller; put them back into an sfnt.
 woff(d: array of byte): (array of byte, string)
@@ -443,7 +491,7 @@ woff(d: array of byte): (array of byte, string)
 		clen := be32(d, e+8);
 		olen := be32(d, e+12);
 		sums[i] = be32(d, e+16);
-		if(off < 0 || clen < 0 || off + clen > len d)
+		if(off < 0 || clen < 0 || off + clen > len d || olen < 0 || olen > MAXTABLE)
 			return (nil, "bad WOFF table");
 		t := d[off:off+clen];
 		if(clen < olen) {
@@ -453,6 +501,8 @@ woff(d: array of byte): (array of byte, string)
 		}
 		tabs[i] = t;
 		size += (len t + 3) & ~3;
+		if(size > MAXFONT)
+			return (nil, "WOFF too large");
 	}
 	o := array[size] of {* => byte 0};
 	put32(o, 0, flavor);

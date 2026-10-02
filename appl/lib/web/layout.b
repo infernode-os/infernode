@@ -4092,6 +4092,7 @@ Item: adt {
 	deco:	int;
 	decocolor:	int;
 	level:	int;		# bidi embedding level, set by bidiitems
+	para:	int;		# the level of the paragraph it is in (plaintext: per forced break)
 };
 
 Fl: adt {
@@ -4126,7 +4127,7 @@ flat(f: ref Fl, b: ref Box)
 	Kmarker =>
 		markeritem(f, b);
 	Kbr =>
-		emit(f, ref Item(Ibreak, nil, 0.0, b, nil, 0, 0, 0, 0));
+		emit(f, ref Item(Ibreak, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
 		f.space = 1;
 	Kinline =>
 		edges(b, 0);
@@ -4136,19 +4137,19 @@ flat(f: ref Fl, b: ref Box)
 			f.deco |= b.st.decoration;
 			f.decocolor = b.st.decorationcolor;
 		}
-		emit(f, ref Item(Iopen, nil, real (b.ml + b.bl + b.pl), b, nil, 0, 0, 0, 0));
+		emit(f, ref Item(Iopen, nil, real (b.ml + b.bl + b.pl), b, nil, 0, 0, 0, 0, 0));
 		for(i := 0; i < len b.kids; i++)
 			flat(f, b.kids[i]);
-		emit(f, ref Item(Iclose, nil, real (b.mr + b.br + b.pr), b, nil, 0, 0, 0, 0));
+		emit(f, ref Item(Iclose, nil, real (b.mr + b.br + b.pr), b, nil, 0, 0, 0, 0, 0));
 		f.deco = odeco;
 		f.decocolor = ocol;
 	* =>
 		if(isabs(b))
-			emit(f, ref Item(Iabs, nil, 0.0, b, nil, 0, 0, 0, 0));
+			emit(f, ref Item(Iabs, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
 		else if(isfloat(b))
-			emit(f, ref Item(Ifloat, nil, 0.0, b, nil, 0, 0, 0, 0));
+			emit(f, ref Item(Ifloat, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
 		else {
-			emit(f, ref Item(Iatomic, nil, 0.0, b, nil, 0, 0, 0, 0));
+			emit(f, ref Item(Iatomic, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
 			f.space = 0;
 		}
 	}
@@ -4161,7 +4162,7 @@ markeritem(f: ref Fl, b: ref Box)
 	if(b.text == "")
 		return;
 	fc := face(b.st);
-	emit(f, ref Item(Iword, b.text, fc.width(b.text), b, fc, 1, 0, 0, 0));
+	emit(f, ref Item(Iword, b.text, fc.width(b.text), b, fc, 1, 0, 0, 0, 0));
 	f.space = 1;
 }
 
@@ -4245,7 +4246,7 @@ text(f: ref Fl, b: ref Box)
 	while(i < len s) {
 		c := s[i];
 		if(c == '\n' && keepnl) {
-			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0, 0));
+			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0, 0, 0));
 			f.space = 1;
 			i++;
 			continue;
@@ -4254,7 +4255,7 @@ text(f: ref Fl, b: ref Box)
 			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl))
 				i++;
 			if(!f.space) {
-				emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0));
+				emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 				f.space = 1;
 			}
 			continue;
@@ -4270,14 +4271,14 @@ text(f: ref Fl, b: ref Box)
 				t = "\t";
 			} else if(c == '　')
 				w = fc.width("　");
-			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0));
+			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 			f.space = 0;
 			i++;
 			continue;
 		}
 		if(c == 16r200B) {
 			# a zero-width space: a break opportunity that shows nothing
-			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0));
+			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 			f.space = 0;
 			i++;
 			continue;
@@ -4303,10 +4304,10 @@ text(f: ref Fl, b: ref Box)
 			# every character is a break opportunity
 			for(k := 0; k < len word; k++) {
 				ch := word[k:k+1];
-				emit(f, ref Item(Iword, ch, fc.width(ch) + ls, b, fc, 0, f.deco, f.decocolor, 0));
+				emit(f, ref Item(Iword, ch, fc.width(ch) + ls, b, fc, 0, f.deco, f.decocolor, 0, 0));
 			}
 		} else
-			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0));
+			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 		f.space = 0;
 	}
 }
@@ -4469,6 +4470,8 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			first = 0;
 			ln = newline(f, ln, opened);
 			ln.content = 0;
+			if(tl il != nil)
+				ln.para = (hd tl il).para;	# the next paragraph's level
 		}
 	}
 	# a last line of nothing but white space and empty inline boxes is
@@ -4877,15 +4880,36 @@ bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 			n = controls(text, n, it.box.st, 0);
 		}
 	}
+	# each paragraph (forced breaks separate them) resolved on its own:
+	# under plaintext each takes its direction from its own first
+	# strong character (P2, P3)
 	dir := st.dirrtl;
 	if(st.unicodebidi == Style->UBplaintext)
 		dir = -1;
-	lev := bidi->levels(text[0:n], dir);
-	para := dir;
-	if(para < 0) {
-		para = bidi->basedir(text[0:n]);
-		if(para < 0)
-			para = 0;
+	lev := array[n] of int;
+	plev := array[n] of int;	# the paragraph level at each character
+	para := 0;
+	for(ps := 0; ps < n; ) {
+		pe := ps;
+		while(pe < n && text[pe] != 16r2029)
+			pe++;
+		if(pe < n)
+			pe++;	# the separator belongs to its paragraph
+		seg := text[ps:pe];
+		sl := bidi->levels(seg, dir);
+		pl := dir;
+		if(pl < 0) {
+			pl = bidi->basedir(seg);
+			if(pl < 0)
+				pl = 0;
+		}
+		for(i := ps; i < pe; i++) {
+			lev[i] = sl[i - ps];
+			plev[i] = pl;
+		}
+		if(ps == 0)
+			para = pl;
+		ps = pe;
 	}
 	# back to items, words split where their level changes
 	sa := array[len starts] of int;
@@ -4911,15 +4935,19 @@ bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 						piece.nowrap = 1;	# still one word: no break inside it
 				}
 				piece.level = lev[s + a];
+				piece.para = plev[s + a];
 				r = piece :: r;
 				a = e;
 			}
 			continue;
 		}
-		if(s < n)
+		if(s < n) {
 			it.level = lev[s];
-		else
+			it.para = plev[s];
+		} else {
 			it.level = para;
+			it.para = para;
+		}
 		r = it :: r;
 	}
 	out: list of ref Item;

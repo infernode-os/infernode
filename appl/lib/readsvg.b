@@ -226,6 +226,15 @@ new_canvas(attrs: Attributes): ref Canvas
 	# transparent where nothing is drawn: a viewer shows it on its own
 	# background, a web page on the page's
 	c.img = display.newimage(Rect((0, 0), (c.width, c.height)), Draw->RGBA32, 0, Draw->Transparent);
+	# the root element's CSS background covers the whole canvas
+	# (aspect-ratio/replaced-element-004)
+	if((rs := attrs.get("style")) != nil) {
+		bg := extract_style_prop(rs, "background-color");
+		if(bg == nil)
+			bg = extract_style_prop(rs, "background");
+		if(bg != nil && (bc := parse_color(bg)) != nil && (bsrc := paint(bc, 1.0)) != nil)
+			c.img.draw(c.img.r, bsrc, nil, (0, 0));
+	}
 
 	c.viewbox_x = 0.0;
 	c.viewbox_y = 0.0;

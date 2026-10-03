@@ -2282,8 +2282,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	ch := -1;
 	if(sh >= 0)
 		ch = clamph(b, sh, cbh) - vextra(b);
-	else if(st.height.kind == Style->Lauto && (rh := ratioh(b, b.w)) >= 0)
-		ch = clamph(b, rh, cbh) - vextra(b);	# from its width through its ratio: definite (Sizing 4 §5.3; flex-aspect-ratio-007)
+	else if(st.height.kind == Style->Lauto && (st.minheight.kind != Style->Lauto || isscroller(b) || st.flexdir >= 2 && st.flexwrap != 0) && (rh := ratioh(b, b.w)) >= 0)
+		ch = clamph(b, rh, cbh) - vextra(b);	# from its width through its ratio: definite where the automatic minimum does not keep the content in (Sizing 4 §5.2.2, §5.3; flex-aspect-ratio-007, -040)
 	# the main and cross space; a column's main size is definite only
 	# when its height is (§9.2), the space to flex into may come from
 	# max-height as well
@@ -6948,7 +6948,8 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	}
 	layblock(l, k, cbw, cbh, nil, 0, 0);
 	h := k.h;
-	if((st.height.kind == Style->Lauto && !truereplaced(k) || st.height.kind == Style->Lstretch) && !tauto && !bauto) {
+	if((st.height.kind == Style->Lauto && !truereplaced(k) && !(st.aspect > 0.0) || st.height.kind == Style->Lstretch) && !tauto && !bauto) {
+		# (an auto height with a ratio comes from the width: aspect-ratio/abspos-003)
 		h = clamph(k, cbh - top - bottom - k.mt - k.mb, cbh);
 		k.h = h;
 	} else if(st.height.kind == Style->Lstretch) {
@@ -8051,7 +8052,7 @@ packh(b: ref Box): int
 {
 	if(pcth >= 0)
 		return pcth;
-	if(b.st.height.kind == Style->Lauto && (rh := ratioh(b, b.w)) >= 0)
+	if(b.st.height.kind == Style->Lauto && (b.st.minheight.kind != Style->Lauto || isscroller(b) || b.st.flexwrap != 0) && (rh := ratioh(b, b.w)) >= 0)
 		return rh - vextra(b);	# from its width through its ratio (flex-aspect-ratio-007)
 	if(b.st.maxheight.kind != Style->Lnone && (mh := spech(b, b.st.maxheight, -1)) >= 0)
 		return mh - vextra(b);

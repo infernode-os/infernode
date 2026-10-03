@@ -1194,7 +1194,8 @@ pseudofn(t: ref Tok, parent: array of ref Sel): ref Simple
 				return nil;
 		}
 	"lang" or "dir" or "host" or "host-context" or "state" =>
-		;
+		if(len args == 0)
+			return nil;	# nothing to match: invalid (lang-selector-002)
 	* =>
 		return nil;
 	}

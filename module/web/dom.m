@@ -62,6 +62,7 @@ Dom: module
 		url:	string;		# document address, for resolving references
 		xml:	int;		# parsed as XML (attribute values match case-sensitively)
 		charset:	string;		# the encoding it was decoded from (its stylesheets' default)
+		lang:	string;		# the document's language, from <meta http-equiv=content-language>, for :lang()
 
 		new:	fn(url: string): ref Doc;
 		create:	fn(d: self ref Doc, kind: int, name: string, ns: int): int;

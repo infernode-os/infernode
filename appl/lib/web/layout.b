@@ -96,7 +96,7 @@ newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
-		nil, nil, nil, nil, 0, 0, nil, nil, 0);
+		nil, nil, nil, nil, 0, 0, nil, nil, 0, nil);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -239,7 +239,37 @@ element(b: ref B, n: int): list of ref Box
 	box.kids = fixkids(box, kids);
 	if((kind == Kblock || kind == Kcell) && (fs := b.c.firstletter[n]) != nil)
 		firstletter(box, fs);
+	if(kind == Kblock || kind == Kcell)
+		box.fl = b.c.firstline[n];
 	return box :: nil;
+}
+
+# The ::first-line style that applies to the first line of the block
+# container b: its own, or that of an ancestor whose first formatted
+# line this is, b being the first in-flow block-level box all the way
+# up (CSS 2.2 §5.12.1; first-line-selector-004).  Only the colour is
+# honoured as yet: the line is laid out in the element's own font.
+firstlinest(b: ref Box): ref St
+{
+	for(p := b; p != nil; p = p.parent) {
+		if(p.fl != nil)
+			return p.fl;
+		if(p.inl || isoof(p) || p.parent == nil || !firstinflow(p))
+			return nil;
+	}
+	return nil;
+}
+
+firstinflow(p: ref Box): int
+{
+	q := p.parent;
+	for(i := 0; i < len q.kids; i++) {
+		k := q.kids[i];
+		if(isoof(k))
+			continue;
+		return k == p && isblocklevel(k) || k.kind == Ktext && k.text != nil && isblankrun(k.text) && i + 1 < len q.kids && q.kids[i+1] == p;
+	}
+	return 0;
 }
 
 # ::first-letter: the first letter of the block's first formatted
@@ -8801,7 +8831,9 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			h = ir(sa + sd);
 	}
 	base := ir(above);
-	line := ref Line(y, h, y + base, frags);
+	line := ref Line(y, h, y + base, frags, nil);
+	if(first)
+		line.fl = firstlinest(b);
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
 		(a, d, shift, va, anchor) := fragmetrics(f, b, sf);
@@ -8835,8 +8867,13 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	# horizontal alignment
 	extra := real ln.avail - ln.x;
 	align := b.st.align;
-	if(forced && align == Style->Ajustify)
-		align = b.st.alignlast;
+	if(forced) {
+		# the last line: text-align-last's, or, under justify, start (Text 3 §7.2; text-align-last-center)
+		if(b.st.alignlast != Style->Aauto)
+			align = b.st.alignlast;
+		else if(align == Style->Ajustify)
+			align = Style->Astart;
+	}
 	off := 0.0;
 	if(ln.para % 2 == 1 && align == Style->Aend)
 		align = Style->Aleft;	# the end of a right-to-left line is its left
@@ -11210,8 +11247,10 @@ paintlines(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 				if(sp[k].box.st.visibility == Style->Vvisible)
 					paintspan(dst, sp[k], o);
 		}
+		ofl := linefl;
 		for(k = 0; k < len ln.frags; k++) {
 			f := ln.frags[k];
+			linefl = ln.fl;
 			case f.kind {
 			Ftext =>
 				if(f.box.st.visibility == Style->Vvisible)
@@ -11221,6 +11260,7 @@ paintlines(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 					paintflow(dst, f.box, o, clip, canvasbg);
 			}
 		}
+		linefl = ofl;
 	}
 }
 
@@ -11256,9 +11296,16 @@ paintspan(dst: ref Image, f: ref Frag, o: Point)
 		side(dst, Rect((r.max.x - b.br, r.min.y), r.max), b.br, st.bcr, st.bsr, 1, 0);
 }
 
+linefl: ref St;	# the ::first-line style of the line being painted, if any
+
 painttext(dst: ref Image, f: ref Frag, o: Point)
 {
 	st := f.box.st;
+	if(linefl != nil && linefl.color != st.color) {
+		# the first line's colour (its other properties are not honoured yet)
+		st = ref *st;
+		st.color = linefl.color;
+	}
 	if(f.text == "")
 		return;	# an absolutely positioned box's place
 	if(f.text == " " || f.text == "\t")

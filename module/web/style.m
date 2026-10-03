@@ -72,7 +72,7 @@ Style: module
 	CTpaint, CTlayout, CTsize, CTstyle, CTinlinesize: con 1 << iota;
 	Vvisible, Vhidden, Vcollapse: con iota;		# visibility
 	Wnormal, Wpre, Wnowrap, Wprewrap, Wpreline, Wbreakspaces: con iota;	# white-space
-	Astart, Aend, Aleft, Aright, Acenter, Ajustify: con iota;	# text-align
+	Astart, Aend, Aleft, Aright, Acenter, Ajustify, Aauto: con iota;	# text-align (auto: text-align-last only)
 	TTnone, TTupper, TTlower, TTcap, TTfull: con iota;			# text-transform
 	TDunder, TDover, TDthrough: con 1<<iota;			# text-decoration-line bits
 	VAbaseline, VAtop, VAmiddle, VAbottom, VAtexttop, VAtextbottom, VAsub, VAsuper, VAlen: con iota;
@@ -288,6 +288,7 @@ Style: module
 		st:	array of ref St;
 		before, after, marker:	array of ref St;
 		firstletter:	array of ref St;
+		firstline:	array of ref St;	# ::first-line's, where rules give it one
 	};
 
 	compute:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env): ref Computed;

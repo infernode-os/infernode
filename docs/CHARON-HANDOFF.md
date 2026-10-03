@@ -606,6 +606,37 @@ In rough order of payoff.
 
 ## Things that bit, so they need not again
 
+- **`grep -i error` on `mk install` output misses Limbo errors.**  The
+  compiler prints `file.b:123: cannot make ...` or `near ... : syntax
+  error` with no "error" word in the cases that matter (the latter has
+  it; the former does not), and `redeclaration of local x` is a hard
+  error when it names a local in the same scope but a warning in a
+  nested one.  Filter with `grep -v warning` and look at what is left,
+  or check `mk`'s exit status.  Half a session went into "fixes that
+  do not take effect" that had never been compiled.
+- **`to` is a Limbo keyword** (`case 1 to 5 =>`); `after`, `nxt` are
+  fine as locals.  A `Len` literal has four fields:
+  `Style->Len(Style->Lpx, 0.0, 0.0, nil)`.
+- **Never `mk install` while a WPT run is going.**  r41 was polluted by
+  mid-run rebuilds (23 "regressions", most of them the window when
+  `layout.dis` was absent); the next run settled them.  Make the edits,
+  wait for TOTAL, then build.
+- **Runes are 16 bits in this VM.**  `&#x10A50;` arrives as U+0A50;
+  astral characters cannot be represented in a Limbo string, so
+  `first-letter-punctuation-337..345` (supplementary-plane
+  punctuation) and anything with emoji cannot pass until the
+  interpreter's `Rune` grows.
+- **Chromium fails these too** (checked with the headless binary; the
+  reference and test disagree, or antialiasing of overlapping text):
+  `margin-bottom-applies-to-012..015`, `vertical-align-sub-001`,
+  `vertical-align-super-001`, `text-transform-upperlower-016` (full
+  case mapping of U+1F80 gives two characters, the reference expects
+  one), `table-anonymous-objects-079..086` (the reference's abspos
+  tables wrap), `letter-spacing-080` (reference uses a different
+  margin), `table-anonymous-objects-017/018/177..200` (a cell's rounded
+  width against a text run's real one, one pixel).  `column-visibility-
+  004` we pass by the reference while Chromium does not.
+
 - **`inherit()` in style.b copies inherited properties field by
   field.**  Adding an inherited property means adding it there as well
   as to `isinherited` and `copyprop`, or it inherits through the

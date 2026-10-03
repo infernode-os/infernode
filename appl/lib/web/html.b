@@ -134,6 +134,7 @@ parse(data: array of byte, cs, url: string): ref Doc
 		data = data[3:];
 	d := parsestring(decode(data, cs), url);
 	d.charset = cs;
+	d.lang = metalang(d);
 	return d;
 }
 
@@ -169,6 +170,7 @@ parsexml(data: array of byte, cs, url: string): ref Doc
 	d := Doc.new(url);
 	d.xml = 1;
 	d.charset = cs;
+	d.lang = metalang(d);
 	stack := array[64] of int;
 	nss := array[64] of list of (string, string);	# prefix bindings in scope
 	stack[0] = 1;
@@ -567,6 +569,24 @@ canoncs(cs: string): string
 		return "utf-16";	# the byte-order mark or a guess decides the order
 	}
 	return cs;
+}
+
+# <meta http-equiv=content-language content=...>: the document's language
+metalang(d: ref Doc): string
+{
+	for(i := 1; i < d.n; i++) {
+		nd := d.nodes[i];
+		if(nd == nil || nd.kind != Dom->Element || nd.tag != Dom->Tmeta)
+			continue;
+		if(lower(d.attr(i, "http-equiv")) == "content-language") {
+			l := trim(d.attr(i, "content"));
+			for(k := 0; k < len l; k++)
+				if(l[k] == ',')
+					return trim(l[0:k]);	# the first of a list
+			return l;
+		}
+	}
+	return nil;
 }
 
 # Find <meta charset=...> or <meta http-equiv=content-type content="...charset=...">.

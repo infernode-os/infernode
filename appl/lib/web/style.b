@@ -902,6 +902,8 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 			if(l != nil)
 				return langmatch(lower(l), x.val);
 		}
+		if(d.lang != nil)
+			return langmatch(lower(d.lang), x.val);	# the document's, from <meta http-equiv> (lang-selector-006)
 		return 0;
 	"dir" =>
 		return lower(x.val) == "ltr";
@@ -1818,7 +1820,7 @@ St.new(): ref St
 		3, Bnone, Ccurrent, 0,
 		"serif" :: nil, 16.0, 400, FSnormal, 0,
 		kw(Lnormal),
-		Astart, Astart,
+		Astart, Aauto,
 		z,
 		TTnone,
 		0.0, 0.0,
@@ -1978,7 +1980,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		s.idx.env = ref *env;
 	}
 	lastenv = ref *env;	# for light-dark() in colours parsed without a context
-	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
 	m := matcher(d, env);
 	root := d.root();
 	if(root == 0)
@@ -2036,6 +2038,7 @@ Nshare: con 1024;
 Shared: adt {
 	st, before, after, marker:	ref St;
 	firstletter:	ref St;
+	firstline:	ref St;
 };
 
 # Elements whose style is computed from the same inputs -- parent style,
@@ -2067,6 +2070,7 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 				c.after[n] = x.after;
 				c.marker[n] = x.marker;
 				c.firstletter[n] = x.firstletter;
+				c.firstline[n] = x.firstline;
 				return x.st;
 			}
 	}
@@ -2105,9 +2109,10 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 		if((bs := c.before[n]) != nil && len bs.content > 0 && bs.content[0].kind == Kstring)
 			fparent = bs;
 		c.firstletter[n] = pseudostyle(pse, "first-letter", fparent, ctx);
+		c.firstline[n] = pseudostyle(pse, "first-line", st, ctx);
 	}
 	if(key != nil)
-		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n], c.firstletter[n])) :: share[slot];
+		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n], c.firstletter[n], c.firstline[n])) :: share[slot];
 	return st;
 }
 
@@ -2197,7 +2202,7 @@ pseudostyle(pse: list of (string, ref Md), name: string, parent: ref St, ctx: re
 	if(n == 0)
 		return nil;
 	st := cascade(sortmd(mds, n), parent, ctx);
-	if(name != "marker" && name != "first-letter" && st.content == nil)
+	if(name != "marker" && name != "first-letter" && name != "first-line" && st.content == nil)
 		return nil;	# content: normal/none generates no box
 	if(st.display == Dnone && name != "marker")
 		return nil;	# not generated: its counters do not count either
@@ -4750,7 +4755,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		}
 	"text-align-last" =>
 		case id {
-		"auto" or "start" => st.alignlast = Astart;
+		"auto" => st.alignlast = Aauto;
+		"start" => st.alignlast = Astart;
 		"end" => st.alignlast = Aend;
 		"left" => st.alignlast = Aleft;
 		"right" => st.alignlast = Aright;

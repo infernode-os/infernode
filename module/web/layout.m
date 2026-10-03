@@ -65,6 +65,7 @@ Layout: module
 		doc:	ref Dom->Doc;	# the root box's document (nil elsewhere)
 		tb:	ref Tb;		# a table's collapsed borders, once laid out
 		clip:	int;		# content clipped to the border box (a cell crossing a collapsed column)
+		fl:	ref Style->St;	# ::first-line's style, if rules give the element one
 	};
 
 	# one border of a table's collapsed model: what won at a grid
@@ -89,6 +90,7 @@ Layout: module
 	Line: adt {
 		y, h, base:	int;	# relative to the containing box's border box
 		frags:	cyclic array of ref Frag;
+		fl:	ref Style->St;	# the ::first-line style that applies to it, if any
 	};
 
 	# fragment kinds

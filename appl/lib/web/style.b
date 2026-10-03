@@ -1727,7 +1727,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone));
 }
 
 nextsid := 1;
@@ -2756,8 +2756,13 @@ lenauto(v: array of ref Tok, ctx: ref Ctx): (int, Len)
 		"fit-content" or "-webkit-fit-content" or "-moz-fit-content" =>
 			return (1, kw(Lfit));
 		}
-	if(len v == 1 && v[0].kind == Kfunction && v[0].s == "fit-content")
+	if(len v == 1 && v[0].kind == Kfunction && v[0].s == "fit-content") {
+		# fit-content(<length-percentage>): the argument in px and pct
+		(ok, l) := length(nows(v[0].kids), ctx);
+		if(ok && l.kind == Lpx)
+			return (1, Len(Lfit, l.px, l.pct, nil));
 		return (1, kw(Lfit));
+	}
 	return length(v, ctx);
 }
 
@@ -4056,6 +4061,48 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.z = int n;
 			st.zauto = 0;
 		}
+	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-height" or
+	"contain-intrinsic-inline-size" or "contain-intrinsic-block-size" =>
+		# one or two of: none | <length> | auto <length> (Sizing 4 §5.1;
+		# the last remembered size of auto is not kept, so the length stands)
+		x := nows(v);
+		a := kw(Lnone);
+		bv := kw(Lnone);
+		got := 0;
+		for(k := 0; k < len x; k++) {
+			l := kw(Lnone);
+			if(!(x[k].kind == Kident && lower(x[k].s) == "none")) {
+				if(x[k].kind == Kident && lower(x[k].s) == "auto") {
+					k++;
+					if(k >= len x)
+						return 0;
+				}
+				(ok, ll) := length(x[k:k+1], ctx);
+				if(!ok || ll.kind != Lpx || ll.pct != 0.0 || ll.px < 0.0)
+					return 0;
+				l = ll;
+			}
+			if(got == 0)
+				a = l;
+			else if(got == 1)
+				bv = l;
+			else
+				return 0;
+			got++;
+		}
+		if(got == 0 || got == 2 && nm != "contain-intrinsic-size")
+			return 0;
+		if(got == 1)
+			bv = a;
+		case nm {
+		"contain-intrinsic-size" =>
+			st.cisw = a;
+			st.cish = bv;
+		"contain-intrinsic-width" or "contain-intrinsic-inline-size" =>
+			st.cisw = a;
+		"contain-intrinsic-height" or "contain-intrinsic-block-size" =>
+			st.cish = a;
+		}
 	"contain" =>
 		c := 0;
 		for(k := 0; k < len v; k++) {
@@ -5295,6 +5342,10 @@ copyprop(d, s: ref St, nm: string)
 		d.zauto = s.zauto;
 	"overflow-x" => d.overflowx = s.overflowx;
 	"contain" => d.contain = s.contain;
+	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-inline-size" or
+	"contain-intrinsic-height" or "contain-intrinsic-block-size" =>
+		d.cisw = s.cisw;
+		d.cish = s.cish;
 	"overflow-y" => d.overflowy = s.overflowy;
 	"visibility" => d.visibility = s.visibility;
 	"opacity" => d.opacity = s.opacity;
@@ -5495,7 +5546,8 @@ hints(d: ref Doc, n: int): list of ref Decl
 		if(nd.tag == Dom->Tiframe && d.hasattr(n, "frameborder") && atoi(d.attr(n, "frameborder")) == 0)
 			s += "border-width:0;";
 		if(nd.tag != Dom->Tinput || lower(d.attr(n, "type")) == "image") {
-			s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
+			if(nd.tag != Dom->Tcanvas)	# a canvas's width and height are its bitmap's: its natural size, not a hint
+				s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
 			if((h := d.attr(n, "hspace")) != nil)
 				s += sys->sprint("margin-left:%dpx;margin-right:%dpx;", atoi(h), atoi(h));
 			if((v := d.attr(n, "vspace")) != nil)

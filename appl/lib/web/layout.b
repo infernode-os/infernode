@@ -1159,6 +1159,11 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		r := newbox(Kreplaced, inl, n, st);
 		r.iw = 300;
 		r.ih = 150;
+		if(nd.tag == Dom->Tcanvas) {
+			# its bitmap's size (HTML §4.12.5: 300 by 150 by default)
+			r.iw = dimattr(b.d.attr(n, "width"), 300);
+			r.ih = dimattr(b.d.attr(n, "height"), 150);
+		}
 		if(nd.tag == Dom->Tvideo && (p := b.d.attr(n, "poster")) != nil)
 			r.url = style->resolveurl(b.d.url, p);
 		if(nd.tag == Dom->Tiframe) {
@@ -1537,7 +1542,17 @@ specw(b: ref Box, v: Len, cbw: int): int
 		Style->Lmin => return mn - mg;
 		Style->Lmax => return mx - mg;
 		}
-		return fit(mn, mx, cbw) - mg;
+		avail := cbw;
+		if(v.px != 0.0 || v.pct != 0.0) {
+			# fit-content(<length-percentage>): the argument, a content
+			# box size, stands in for the available space (Sizing 3 §4.1)
+			if(cbw < 0 && v.pct != 0.0)
+				return -1;
+			avail = ir(v.px + v.pct * real cbw / 100.0) + mg;
+			if(!b.st.borderbox)
+				avail += hextra(b);
+		}
+		return fit(mn, mx, avail) - mg;
 	Style->Lstretch =>
 		if(cbw < 0)
 			return -1;
@@ -1674,13 +1689,21 @@ isbfc(b: ref Box): int
 # (CSS 2.2 §10.3.3): auto fills, auto margins centre.
 sizew(b: ref Box, cbw, cbh: int)
 {
+	opcth := pcth;
+	pcth = cbh;	# what percentage heights inside see, should its contents be measured
+	sizew1(b, cbw, cbh);
+	pcth = opcth;
+}
+
+sizew1(b: ref Box, cbw, cbh: int)
+{
 	st := b.st;
 	w := specw(b, st.width, cbw);
 	if(w < 0 && st.aspect > 0.0 && b.kind != Kreplaced && (sh := spech(b, st.height, cbh)) >= 0)
 		w = transferred(b, sh);
 	if(w < 0) {
 		if(b.kind == Kreplaced) {
-			(iw, nil) := replacedsize(b, cbw, -1);
+			(iw, nil) := replacedsize(b, cbw, cbh);	# a percentage height transfers to the width
 			w = iw + hextra(b);
 		} else if(b.kind == Ktable && st.width.kind == Style->Lauto) {
 			(mn, mx) := intrinsic(b);
@@ -1768,6 +1791,8 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	ch := -1;		# content height for percentages inside
 	if(sh >= 0)
 		ch = sh - vextra(b);
+	else if((rh := ratioh(b, b.w)) >= 0 && b.st.minheight.kind == Style->Lauto)
+		ch = rh - vextra(b);	# from its width through its ratio: definite (Sizing 4 §5.3)
 	bfc := isbfc(b) || b == l.root || fc == nil;	# the root holds the initial formatting context
 	if(bfc) {
 		fc = ref Fctx(nil, nil);
@@ -1941,6 +1966,14 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	h := sh;
 	if(h < 0) {
 		h = contenth + vextra(b);
+		if(b.st.contain & Style->CTsize) {
+			# size containment: its explicit intrinsic height, whatever is in it
+			h = vextra(b);
+			if(b.st.cish.kind == Style->Lpx)
+				h += ir(b.st.cish.px);
+			if(h > 0)
+				empty = 0;
+		}
 		(nil, rows) := textarea(b);
 		if(rows > 0)
 			h = ir(real rows * lineheight(b.st, face(b.st))) + vextra(b);	# rows lines, whatever it holds
@@ -6145,7 +6178,18 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		if(!lauto && !rauto)
 			w = cbw - left - right - k.ml - k.mr;
 		else {
+			if((ih := spech(k, st.height, cbh)) >= 0) {
+				# its height is known before its width: its children's
+				# percentage heights see it while it is measured
+				pcthbox = k;
+				pcthval = ih - vextra(k);
+			} else if(st.height.kind == Style->Lauto && !tauto && !bauto) {
+				# as the insets settle it
+				pcthbox = k;
+				pcthval = cbh - top - bottom - k.mt - k.mb - vextra(k);
+			}
 			(mn, mx) := intrinsic(k);
+			pcthbox = nil;
 			avail := cbw - k.ml - k.mr;
 			if(!lauto)
 				avail -= left;
@@ -6727,7 +6771,7 @@ replacedheight(b: ref Box, cbw, cbh: int): int
 # resolved against another width) measures again.
 intrinsic(b: ref Box): (int, int)
 {
-	ex := hextra(b) + mgs(b);
+	ex := hextra(b) + mgs(b) + (pcth + 1) * 131072;	# the height its percentages see is part of the answer
 	if(b.igen == laygen && b.iex == ex)
 		return (b.imn, b.imx);
 	(mn, mx) := intrinsic1(b);
@@ -6807,8 +6851,18 @@ intrinsic1(b: ref Box): (int, int)
 			w += hextra(b);
 		return (w + mgs(b), w + mgs(b));
 	}
+	if(st.contain & (Style->CTsize|Style->CTinlinesize)) {
+		# size containment: as if empty, but for its explicit intrinsic
+		# size (Contain 2 §4, Sizing 4 §5.1)
+		w := 0;
+		if(st.cisw.kind == Style->Lpx)
+			w = ir(st.cisw.px);
+		return (w + ex, w + ex);
+	}
 	if(b.kind == Kreplaced) {
-		(w, nil) := replacedsize(b, -1, -1);
+		# a percentage height resolves against a definite containing
+		# block height and transfers through the ratio (Sizing 3 §5.2.1)
+		(w, nil) := replacedsize(b, -1, pcth);
 		return (w + ex, w + ex);
 	}
 	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0 && b != noratio) {
@@ -6942,6 +6996,8 @@ intrinsic1(b: ref Box): (int, int)
 	}
 	mn := 0;
 	mx := 0;
+	opcth := pcth;
+	pcth = definiteh(b);
 	if(haslines(b) || b.kind == Kinline) {
 		(mn, mx) = inlineintrinsic(b);
 	} else if(b.kind == Kflex && b.st.flexdir < 2 || b.kind == Krow) {
@@ -6974,9 +7030,50 @@ intrinsic1(b: ref Box): (int, int)
 				mx = kmx;
 		}
 	}
+	pcth = opcth;
 	if(mx < mn)	# negative margins can make a sum smaller than its largest part
 		mx = mn;
 	return (mn + ex, mx + ex);
+}
+
+# The definite content height of the box whose children are being
+# measured, which their percentage heights resolve against (Sizing 3
+# §5.2.1); -1 when there is none.  An absolute's insets can impose one
+# from outside while it is measured.
+pcth := -1;
+pcthbox: ref Box;
+pcthval := -1;
+
+definiteh(b: ref Box): int
+{
+	if(b == pcthbox)
+		return pcthval;
+	st := b.st;
+	if(st.height.kind == Style->Lauto && st.aspect > 0.0 && b.kind != Kreplaced &&
+	   st.width.kind == Style->Lpx && st.width.pct == 0.0) {
+		# from a definite width through its aspect ratio (Sizing 4 §5.3)
+		w := ir(st.width.px);
+		if(!st.borderbox)
+			w += hextra(b);
+		h := ratioh(b, w) - vextra(b);
+		if(h < 0)
+			h = 0;
+		return h;
+	}
+	if(st.height.kind != Style->Lpx)
+		return -1;
+	h := -1;
+	if(st.height.pct == 0.0)
+		h = ir(st.height.px);
+	else if(pcth >= 0)
+		h = ir(st.height.px + st.height.pct * real pcth / 100.0);
+	else
+		return -1;
+	if(st.borderbox)
+		h -= vextra(b);
+	if(h < 0)
+		h = 0;
+	return h;
 }
 
 # a box's horizontal margins together, negative ones and all (auto
@@ -7004,13 +7101,14 @@ inlineintrinsic(b: ref Box): (int, int)
 	# ends are removed when it is laid out
 	sp := 0.0;	# collapsible space waiting for content after it
 	content := 0;	# the line has content
+	prevw: ref Item;	# the word before, with nothing but inline box edges since
 	for(l := items; l != nil; l = tl l) {
 		it := hd l;
 		case it.kind {
 		Iword =>
 			w := it.w;
-			if(it.nowrap)
-				word += w;
+			if(it.nowrap || prevw != nil && !wordgap(prevw.box, prevw.text, it))
+				word += w;	# no break between: one unit
 			else
 				word = w;
 			if(word > mn)
@@ -7018,6 +7116,7 @@ inlineintrinsic(b: ref Box): (int, int)
 			line += sp + w;
 			sp = 0.0;
 			content = 1;
+			prevw = it;
 		Ispace =>
 			if(it.nowrap) {
 				# an unbreakable space is part of the word
@@ -7039,6 +7138,7 @@ inlineintrinsic(b: ref Box): (int, int)
 			word += it.w;
 			if(it.w > 0.0)
 				content = 1;
+			continue;	# (prevw stays: edges are no opportunity)
 		Iatomic =>
 			edges(it.box, 0);	# its padding and borders count; % ones are 0 here
 			(kmn, kmx) := contribution(it.box);
@@ -7062,6 +7162,8 @@ inlineintrinsic(b: ref Box): (int, int)
 				mn = real kmn;
 			line += real kmx;
 		}
+		if(it.kind != Iword)
+			prevw = nil;
 	}
 	if(line > mx)
 		mx = line;
@@ -7191,6 +7293,8 @@ noshy(s: string): string
 # (LB19), across glue and joiners (LB11, LB12) and inside a Hangul
 # syllable's jamo (LB26).  Letters without spaces do not break.
 lbmode := 0;	# line-break of the text being broken: 0 normal, 1 loose, 2 strict (Text 4 §5.3)
+lbcjk := 0;	# its language is Chinese or Japanese
+lbbreakall := 0;	# word-break: break-all: letters break like ideographs, punctuation keeps its rules
 
 lbbreak(a, b: int): int
 {
@@ -7198,12 +7302,18 @@ lbbreak(a, b: int): int
 		return isideo(a) || isideo(b);
 	ca := bidi->lbclass(a);
 	cb := bidi->lbclass(b);
+	if(lbbreakall) {
+		if(ca == Bidi->LBAL || ca == Bidi->LBNU)
+			ca = Bidi->LBID;
+		if(cb == Bidi->LBAL || cb == Bidi->LBNU)
+			cb = Bidi->LBID;
+	}
 	if(lbmode == 2 && cb == Bidi->LBCJ)
 		cb = Bidi->LBNS;	# strict: no break before small kana and the prolonged sound mark
 	case cb {
 	Bidi->LBNS =>
-		if(lbmode != 2 && (b == 16r301C || b == 16r30A0))
-			break;	# normal and loose: before 〜 and ゠
+		if(lbmode != 2 && lbcjk && (b == 16r301C || b == 16r30A0))
+			break;	# normal and loose, in Chinese and Japanese: before 〜 and ゠
 		return 0;
 	Bidi->LBCL or Bidi->LBCP or Bidi->LBEX or Bidi->LBIS or Bidi->LBSY or Bidi->LBBA or
 	Bidi->LBHY or Bidi->LBCM or Bidi->LBZWJ or Bidi->LBIN or Bidi->LBPO or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU =>
@@ -7348,6 +7458,7 @@ text(f: ref Fl, b: ref Box)
 		return;
 	}
 	lbmode = st.lbmode;
+	lbcjk = cjklang(langof(b.node));
 	fc := face(st);
 	s := b.text;
 	if(st.transform != Style->TTnone)
@@ -7435,11 +7546,18 @@ text(f: ref Fl, b: ref Box)
 		}
 		w := fc.width(word) + ls * real len word;
 		if(st.breakall && !nowrap) {
-			# every character is a break opportunity
-			for(k := 0; k < len word; k++) {
-				ch := word[k:k+1];
-				emit(f, ref Item(Iword, ch, fc.width(ch) + ls, b, fc, 0, f.deco, f.decocolor, 0, 0));
-			}
+			# break-all: letters break like ideographs, but punctuation
+			# keeps its rules (Text 4 §5.2: no break before a full stop);
+			# anywhere: every character
+			lbbreakall = st.breakall == 1;
+			k0 := 0;
+			for(k := 1; k <= len word; k++)
+				if(k == len word || st.breakall == 2 || lbbreak(word[k-1], word[k])) {
+					ch := word[k0:k];
+					emit(f, ref Item(Iword, ch, fc.width(ch) + ls * real len ch, b, fc, 0, f.deco, f.decocolor, 0, 0));
+					k0 = k;
+				}
+			lbbreakall = 0;
 		} else
 			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 		f.space = 0;
@@ -7739,45 +7857,69 @@ canbreak(ln: ref Ln, it: ref Item): int
 			continue;	# inline box edges, the marks of absolutes, an outside marker
 		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
 			return 1;	# a space, a zero-width one, a soft hyphen, an atomic inline
-		if(f.box == it.box)
-			return 1;	# words of one text: split where it may break
-		if(f.box.st.whitespace == Style->Wnowrap || f.box.st.whitespace == Style->Wpre)
-			return 0;
-		if(len it.text == 0 || it.box.st.breakall || it.box.st.anywhere || f.box.st.breakall)
-			return 1;	# break-all, line-break: anywhere, overflow-wrap: anywhere
-		lbmode = it.box.st.lbmode;
-		return lbbreak(f.text[len f.text - 1], it.text[0]);
+		return wordgap(f.box, f.text, it);
 	}
 	return 1;
 }
 
+# May a line break between the word ptext of the text box pbox and the
+# word it, with nothing between them?  Words of one text were split
+# where it may (text()); between texts the characters at the join
+# decide (UAX #14), unless either text is nowrap.  overflow-wrap only
+# breaks a word that does not fit on a line of its own (splitword), so
+# it is no opportunity here, nor for the min-content size.
+wordgap(pbox: ref Box, ptext: string, it: ref Item): int
+{
+	if(pbox == it.box)
+		return 1;
+	if(len ptext == 0 || len it.text == 0)
+		return 1;
+	if(pbox.st.whitespace == Style->Wnowrap || pbox.st.whitespace == Style->Wpre ||
+	   it.box.st.whitespace == Style->Wnowrap || it.box.st.whitespace == Style->Wpre)
+		return 0;
+	if(it.box.st.breakall == 2 || pbox.st.breakall == 2)
+		return 1;	# line-break: anywhere
+	lbmode = it.box.st.lbmode;
+	lbcjk = cjklang(langof(it.box.node));
+	lbbreakall = it.box.st.breakall == 1 || pbox.st.breakall == 1;
+	r := lbbreak(ptext[len ptext - 1], it.text[0]);
+	lbbreakall = 0;
+	return r;
+}
+
+# is the language Chinese or Japanese? (the 〜 rule of Text 4 §5.3)
+cjklang(l: string): int
+{
+	return len l >= 2 && (l[0:2] == "ja" || l[0:2] == "zh");
+}
+
 # The width of the unbreakable run of items starting at the word at the
 # head of il: words with no opportunity between them, the edges of
-# inline boxes among them (a float or an absolute takes no room).
+# inline boxes among them (a float or an absolute takes no room).  It
+# reaches to the farthest right edge: a negative margin at its end
+# does not pull the glyphs before it back in.
 segwidth(il: list of ref Item): real
 {
 	w := 0.0;
+	pos := 0.0;
 	prev: ref Item;
 	for(; il != nil; il = tl il) {
 		x := hd il;
 		case x.kind {
 		Iword =>
-			if(prev != nil && (x.box == prev.box || len x.text == 0 || len prev.text == 0 || x.box.st.breakall || x.box.st.anywhere || prev.box.st.breakall))
-				return w;	# an opportunity (one text's words are split at them)
-			if(prev != nil) {
-				lbmode = x.box.st.lbmode;
-				if(lbbreak(prev.text[len prev.text - 1], x.text[0]))
-					return w;
-			}
-			w += x.w;
+			if(prev != nil && wordgap(prev.box, prev.text, x))
+				return w;
+			pos += x.w;
 			prev = x;
 		Iopen or Iclose =>
-			w += x.w;
+			pos += x.w;
 		Ifloat or Iabs =>
 			;
 		* =>
 			return w;
 		}
+		if(pos > w)
+			w = pos;
 	}
 	return w;
 }
@@ -8781,7 +8923,7 @@ layatomic(l: ref L, k: ref Box, cbw, cbh: int)
 	w := specw(k, k.st.width, cbw);
 	if(w < 0) {
 		if(k.kind == Kreplaced) {
-			(rw, nil) := replacedsize(k, cbw, -1);
+			(rw, nil) := replacedsize(k, cbw, cbh);	# a percentage height transfers to the width
 			w = rw + hextra(k);
 		} else {
 			(mn, mx) := intrinsic(k);

@@ -2876,6 +2876,7 @@ Track: adt {
 	base:	real;		# the track's size as it is worked out
 	limit:	real;		# growth limit (-1: infinite)
 	fit:	int;		# from an auto-fit repeat: 1, or 2 once collapsed for want of items (§7.2.3.2)
+	endp:	int;		# where it ends, set with its position by trackpos: the next track's start less the gutter and any distributed space
 };
 
 Gi: adt {
@@ -2928,7 +2929,7 @@ track(t: ref Tok): ref Track
 				return nil;
 			if(lo.kind == Tfr)
 				lo = Tsz(Tauto, 0.0);
-			return ref Track(lo, hi, 0.0, 0.0, 0);
+			return ref Track(lo, hi, 0.0, 0.0, 0, 0);
 		"fit-content" =>
 			x := nows(t.kids);
 			if(len x != 1)
@@ -2938,7 +2939,7 @@ track(t: ref Tok): ref Track
 				return nil;
 			if(hi.kind == Tfixed)
 				hi = Tsz(Tfit, hi.v);
-			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0, 0);
+			return ref Track(Tsz(Tauto, 0.0), hi, 0.0, 0.0, 0, 0);
 		}
 		return nil;
 	}
@@ -2948,7 +2949,7 @@ track(t: ref Tok): ref Track
 	lo := sz;
 	if(sz.kind == Tfr)
 		lo = Tsz(Tauto, 0.0);	# 1fr is minmax(auto, 1fr)
-	return ref Track(lo, sz, 0.0, 0.0, 0);
+	return ref Track(lo, sz, 0.0, 0.0, 0, 0);
 }
 
 # what an intrinsically sized track in an auto-repeat counts as when
@@ -3642,7 +3643,7 @@ fixedtracks(a: array of int): array of ref Track
 {
 	t := array[len a] of ref Track;
 	for(i := 0; i < len a; i++)
-		t[i] = ref Track(Tsz(Tfixed, real a[i]), Tsz(Tfixed, real a[i]), 0.0, 0.0, 0);
+		t[i] = ref Track(Tsz(Tfixed, real a[i]), Tsz(Tfixed, real a[i]), 0.0, 0.0, 0, 0);
 	return t;
 }
 
@@ -4965,7 +4966,7 @@ growtracks(t: array of ref Track, n: int, auto: array of ref Tok, avail: int): a
 		if(len at > 0)
 			r[i] = ref *at[(i - len t) % len at];
 		else
-			r[i] = ref Track(Tsz(Tauto, 0.0), Tsz(Tauto, 0.0), 0.0, 0.0, 0);
+			r[i] = ref Track(Tsz(Tauto, 0.0), Tsz(Tauto, 0.0), 0.0, 0.0, 0, 0);
 	}
 	return r;
 }
@@ -5247,8 +5248,10 @@ trackpos(t: array of ref Track, gap, avail, align: int): array of int
 	any := 0;
 	for(i = 0; i < n; i++) {
 		pos[i] = ir(p);
+		t[i].endp = pos[i];
 		if(t[i].fit == 2)
 			continue;	# collapsed: nothing, and no gutter
+		t[i].endp = ir(p + t[i].base);	# the track's own end: distributed space is not the track's (grid-content-distribution-with-collapsed-tracks-002)
 		p += t[i].base + real (gap + extra);
 		any = 1;
 	}
@@ -5271,6 +5274,8 @@ trackend(t: array of ref Track, pos: array of int, i, gap: int): int
 {
 	if(t[i].fit == 2)
 		return pos[i];
+	if(t[i].endp > pos[i])
+		return t[i].endp;
 	if(i + 1 < len t)
 		return pos[i+1] - gap;
 	return pos[i] + ir(t[i].base);
@@ -11089,7 +11094,15 @@ innerclip(b: ref Box, r, clip: Rect): Rect
 # a box that is a layer of its stacking context rather than flow content
 islayer(k: ref Box): int
 {
-	return (ispositioned(k) || k.st.translated) && k.kind != Ktext && k.kind != Kinline;
+	return (ispositioned(k) || k.st.translated || zitem(k)) && k.kind != Ktext && k.kind != Kinline;
+}
+
+# a flex or grid item with a z-index: painted as if positioned, a
+# stacking context of its own (Flexbox §4.3, Grid 2 §10;
+# grid-z-axis-ordering-001)
+zitem(k: ref Box): int
+{
+	return !k.st.zauto && k.parent != nil && (k.parent.kind == Kflex || k.parent.kind == Kgrid) && !k.inl && !isabs(k);
 }
 
 # a box that establishes a stacking context (CSS 2.2 §9.9.1, Position 3)
@@ -11097,7 +11110,7 @@ isctx(k: ref Box): int
 {
 	st := k.st;
 	return k == painted || st.position == Style->Pfixed || st.opacity < 1.0 || st.translated ||
-		ispositioned(k) && !st.zauto;
+		ispositioned(k) && !st.zauto || zitem(k);
 }
 
 painted: ref Box;	# the root being painted

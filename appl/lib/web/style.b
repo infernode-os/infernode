@@ -1375,7 +1375,7 @@ supportsdecl(v: array of ref Tok): int
 		return 1;
 	for(k := 2; k < len v; k++)
 		if(v[k].kind == Kfunction && v[k].s == "var")
-			return 1;	# a var() makes any value valid at parse time (Variables 1 §3)
+			return css->validvars(v[2:]);	# a var() makes any value valid at parse time, unless it is malformed itself (Variables 1 §3; variable-supports-09)
 	s := St.new();
 	ctx := ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
 	lh := longhands(nm, trim(v[2:]));

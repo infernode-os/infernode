@@ -768,6 +768,8 @@ declaration(v: array of ref Tok): ref Decl
 			if(isblock(val[k], "{"))
 				return nil;	# a nested rule, as in a:hover {...}
 	}
+	if(!validvars(val))
+		return nil;
 	imp := 0;
 	n := len val;
 	if(n >= 2 && val[n-1].kind == Kident && lower(val[n-1].s) == "important") {
@@ -780,6 +782,33 @@ declaration(v: array of ref Tok): ref Decl
 		}
 	}
 	return ref Decl(nm, val, imp);
+}
+
+# A var() whose arguments are malformed makes the declaration invalid
+# at parse time (Variables 1 §2.3): its name must be a custom property
+# name, and nothing at the top level of its fallback may be a '!' or a
+# ';' (variable-declaration-11, variable-reference-07)
+validvars(v: array of ref Tok): int
+{
+	for(k := 0; k < len v; k++) {
+		t := v[k];
+		if(t.kind == Kfunction && t.s == "var") {
+			a := trim(t.kids);
+			if(len a == 0 || a[0].kind != Kident || len a[0].s < 3 || a[0].s[0:2] != "--")
+				return 0;
+			j := 1;
+			while(j < len a && a[j].kind == Kws)
+				j++;
+			if(j < len a && a[j].kind != Kcomma)
+				return 0;
+			for(; j < len a; j++)
+				if(a[j].kind == Ksemicolon || a[j].kind == Kdelim && a[j].s == "!")
+					return 0;
+		}
+		if(t.kids != nil && !validvars(t.kids))
+			return 0;
+	}
+	return 1;
 }
 
 parsedecls(s: string): array of ref Decl

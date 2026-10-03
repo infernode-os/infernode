@@ -49,6 +49,22 @@ the CSS2 families (tables, floats, margins, clearance, selectors) and
 css-text (letter-spacing, soft hyphens, hanging space separators,
 text-align-last), 74.0% to 76.0%.
 
+- (next) **var() validity at parse time.**  `css->validvars` (css.b,
+  exported in css.m): a `var()` with a name that is not a custom
+  property, or a `!` or `;` at the top level of its fallback, makes
+  the declaration invalid at parse time, so the earlier declaration
+  stands; `declaration()` drops it and the `@supports` check in
+  style.b consults it (variable-declaration-11, -12,
+  variable-reference-07, -08, variable-supports-09, -10).
+- `22b80f1` **Hanging space sequences, flex ratio constraints, SVG
+  border images, col widths, two-position stops.**  `finish()` keeps
+  spaces among hanging separators and anchors the hanging run past the
+  last fragment with width; an ideographic space makes a line content
+  (`layinline1`'s Ispace); `replacedsize`'s §10.4 table skips a flex
+  item's main-axis constraints only (`fw`/`fh`); `paintborderimage`
+  rasterises an SVG source at its intrinsic size (`svgraster`);
+  `paintgradient` takes `colour p1 p2` stops; `tileplaces` carries a
+  spaced tiling into the painting area; `hints()` maps `<col width>`.
 - `d8b4c53` **border-image, background-clip text and border-area,
   background-repeat space.**  `Bimage` adt and `St.bimage`
   (`bimageof`, `foursides`, `birepeat`, the `borderimage` shorthand

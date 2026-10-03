@@ -46,6 +46,30 @@ encodings, pseudo-element display types, the break-opportunity model
 between inline boxes, percentage heights in intrinsic sizes, floats
 beside tall lines, and a tail of small properties.
 
+- `d1dd7c1` **Soft hyphens, hyphens, hyphenate-character, text-justify:
+  none.**  A soft hyphen is a break opportunity kept as a zero-width
+  item after its word (text()); `canbreak` takes it when the hyphen
+  fits or nothing else on the line could break (`earlierbreak`);
+  `hyphenate()` shows the hyphenate character at the line's end
+  (U+2010 where `Typeface.has` it, else hyphen-minus); `St.hyphens`,
+  `St.hyphenchar`, `St.textjustify`; U+00AD and U+2010 added to
+  `lib/bidi/linebreak`; ::first-line colour spares text of its own
+  colour (`lineflbase`) and stops at flex/grid/table containers.
+- `ad58df4` **::first-line colour, text-align-last everywhere, document
+  language.**  `Computed.firstline`/`Box.fl`/`Line.fl`,
+  `firstlinest`/`firstinflow`, `linefl` in `painttext`; `Aauto` for
+  text-align-last and the last line honouring it under any text-align;
+  `Doc.lang` from `<meta http-equiv=content-language>` (`metalang`)
+  for `:lang()`; an empty `:lang()` is invalid.
+- `eb4b9be` **Letter-spacing at boundaries, tab-stop threshold, hanging
+  space separators, break-spaces with overflow-wrap.**  `lspass`/
+  `commonbox` (the spacing after a character is the innermost common
+  box's, none at the paragraph's end); `tabw` skips a stop within half
+  a space; `hangsp`/`hangsep` generalise the ideographic space to the
+  ogham space mark, en/em spaces and kin (not the figure space); a
+  space under break-spaces wraps alone when overflow-wrap lets it break
+  from a word starting the line; an auto-width BFC beside floats needs
+  room for its margins.
 - `92c4dc9` **Floats mid-line, BFCs beside floats, split inlines,
   spanning-cell borders, lone captions, title case.**  A left float
   placed mid-line moves the line's content from where it was (edgesat
@@ -606,6 +630,9 @@ In rough order of payoff.
 
 ## Things that bit, so they need not again
 
+- **`lib/bidi/linebreak` lacked U+00AD and U+2010** (both BA) though
+  the generator reads LineBreak.txt; they were added by hand.  If the
+  table is regenerated, check they are still there.
 - **`grep -i error` on `mk install` output misses Limbo errors.**  The
   compiler prints `file.b:123: cannot make ...` or `near ... : syntax
   error` with no "error" word in the cases that matter (the latter has

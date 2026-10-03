@@ -7503,15 +7503,17 @@ inlineintrinsic(b: ref Box): (int, int)
 	sp := 0.0;	# collapsible space waiting for content after it
 	content := 0;	# the line has content
 	prevw: ref Item;	# the word before, with nothing but inline box edges since
+	shy := 0;		# a soft hyphen came between: still one word for the min-content size
 	for(l := items; l != nil; l = tl l) {
 		it := hd l;
 		case it.kind {
 		Iword =>
 			w := it.w;
-			if(it.nowrap || prevw != nil && !wordgap(prevw.box, prevw.text, it, 1))
+			if(it.nowrap || shy || prevw != nil && !wordgap(prevw.box, prevw.text, it, 1))
 				word += w;	# no break between: one unit
 			else
 				word = w;
+			shy = 0;
 			if(word > mn)
 				mn = word;
 			line += sp + w;
@@ -7519,9 +7521,11 @@ inlineintrinsic(b: ref Box): (int, int)
 			content = 1;
 			prevw = it;
 		Ispace =>
-			if(it.nowrap && !hangsep(it.text)) {
+			shy = it.text == "\u00AD";
+			if(it.nowrap && !hangsep(it.text) || shy) {
 				# an unbreakable space is part of the word (a hanging one
-				# is never: trailing-ogham-003)
+				# is never: trailing-ogham-003); so is a soft hyphen: the
+				# min-content size does not hyphenate (word-break-auto-phrase-006)
 				word += it.w;
 				if(word > mn)
 					mn = word;
@@ -8029,8 +8033,8 @@ text(f: ref Fl, b: ref Box)
 		# a word: up to the next space or break opportunity
 		st0 := i;
 		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && !hangsp(s[i])) {
-			if(i > st0 && (s[i-1] != 16rAD || st.hyphens != 0) && lbbreak(s[lbbase(s, i-1, st0)], s[i]))
-				break;	# (a soft hyphen is nothing under hyphens: none)
+			if(i > st0 && (s[i-1] != 16rAD || st.hyphens != 0 && !joinedacross(s, i, st0)) && lbbreak(s[lbbase(s, i-1, st0)], s[i]))
+				break;	# (a soft hyphen is nothing under hyphens: none, or between letters that join)
 			i++;
 			if(s[i-1] == '-' && i < len s && !isspace(s[i]) && i - st0 > 2)
 				break;	# break after a hyphen inside a word
@@ -8518,6 +8522,23 @@ canbreak(ln: ref Ln, it: ref Item): int
 	return 1;
 }
 
+# Do the letters either side of the soft hyphen at i-1 join (Arabic
+# and the like)?  Then it stays inside the word, for shaping's sake,
+# and no line breaks there (hyphens-shaping-001).
+joinedacross(s: string, i, st0: int): int
+{
+	if(bidi == nil || i >= len s)
+		return 0;
+	p := i - 2;
+	while(p >= st0 && bidi->joining(s[p]) == Bidi->JT)
+		p--;
+	if(p < st0)
+		return 0;
+	jp := bidi->joining(s[p]);
+	jn := bidi->joining(s[i]);
+	return jp != Bidi->JU && jp != Bidi->JT && jn != Bidi->JU && jn != Bidi->JT;
+}
+
 # A soft hyphen at the end of a line shows the hyphenate character
 # (Text 4 §5.4; hyphens-manual-011).
 hyphenate(ln: ref Ln)
@@ -8964,8 +8985,10 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	}
 	if(ln.para % 2 == 1 && align == Style->Astart)
 		off = extra - ln.indent;	# the start is the right; the indent is there
-	if(off < 0.0)
-		off = 0.0;
+	if(off < 0.0 && !b.st.dirrtl)
+		off = 0.0;	# too wide: the content overflows the end edge, the right in a left-to-right block, the left in a right-to-left one (hyphens-shaping-001)
+	else if(b.st.dirrtl && extra < 0.0 && off > extra)
+		off = extra;
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
 		f.x += x0 + ir(off);

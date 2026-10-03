@@ -46,6 +46,56 @@ encodings, pseudo-element display types, the break-opportunity model
 between inline boxes, percentage heights in intrinsic sizes, floats
 beside tall lines, and a tail of small properties.
 
+- `92c4dc9` **Floats mid-line, BFCs beside floats, split inlines,
+  spanning-cell borders, lone captions, title case.**  A left float
+  placed mid-line moves the line's content from where it was (edgesat
+  had already moved `ln.x`); a BFC beside floats keeps its whole border
+  box clear when its height is known (`bh` band) and resolves auto
+  margins within the band (`automargins`, shared with `sizew1`); a
+  cleared box lands exactly at the clearance; `splitinline` gives the
+  first piece the start edges and the last the end edges (copied `St`);
+  a lone caption is `isinternal`; internal table boxes have no margins
+  (`edges`); `collapsed()` clears the grid-line borders inside a
+  spanning cell; `cellbaseline` is -1 for a cell with no line box;
+  `painttablepart` paints shadows; negative percentage heights invalid,
+  calc() padding clamped; bidi `totitle` honours a title case equal to
+  the character; `glyph()` maps U+00A0 to the space glyph.
+- `c4fad77` **Cell baselines, table-part backgrounds through cells,
+  decoration propagation, nested inline backgrounds, clearance and
+  empty-box margins.**  `Tcell.base`/`rowbase` for `vertical-align:
+  baseline` cells; `painttablepart`/`partcells`/`rowcells` paint a row's,
+  row group's or column's background once per cell, clipped; a column
+  group's columns are left alone by `fixkids`; `flowdeco` propagates
+  text decorations down in-flow boxes; inline box backgrounds are
+  painted by depth (outermost first); a cleared box's margins are used
+  up at the clearance (`topmargin` in `cury`); `pendingclear` keeps an
+  empty cleared box's margins inside the parent; `passempty` lets
+  margins collapse through a `height: 0` box; negative percentage
+  padding invalid; the layout dump lists `span` fragments.
+- `f72b7f4` **Collapsed columns, floats among table children, nowrap
+  breaks, color-mix currentcolor.**  `Tgrid.colhid`, `hidw`, cells
+  laid out at full width and clipped with the leading collapsed part
+  slid out (`Box.clip`, `shiftx`, `innerclip`); a float child of a
+  table is wrapped in an anonymous row and cell (`flushwrap`); rows,
+  row groups and columns paint no borders in the separated model;
+  `spacebefore` lets a nowrap box's word start a line after a space
+  whose boundary is outside nowrap text; `mixcur` is what currentcolor
+  means inside `color-mix()`, and `colormixr` keeps nested mixes in
+  reals.
+- `54aa28a` **color() spaces, SVG viewBox ratio, collapsed rows.**
+  `colorspace` with the sRGB, linear, Display P3, A98, ProPhoto,
+  Rec. 2020 and XYZ transfer functions; an SVG root's ratio from its
+  `viewBox`; rows and row groups with `visibility: collapse` leave the
+  grid.
+- `3e8768c` **Loose line breaking for CJK, atomic inline breaking as
+  browsers do.**  `lbmode` 1 (loose: NS/EX/PO before, PR after;
+  hyphens U+2010/2013); a no-break space beside an atomic inline
+  breaks; GL/WJ/ZWJ/OP/BB/QU/CM hold before, CM/ZWJ/WJ/GL after.
+- `1ae742c` **margin-trim, clip: rect(), overflow propagation.**
+  `St.margintrim` zeroes a block container's first and last in-flow
+  child margins; `St.cliprect` through `layerclip`; `paintself` is
+  clipped by the layer clip; the root's and body's overflow is the
+  viewport's (`innerclip`).
 - `b088614` **:lang() ranges, word-space-transform, wbr, segment breaks,
   system colours.**  Extended filtering for `:lang()` (`langmatch`:
   quoted, `*`, lists, implicit subtags); `word-space-transform`

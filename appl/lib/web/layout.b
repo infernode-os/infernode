@@ -302,6 +302,19 @@ firstletter(box: ref Box, st: ref St)
 	p.kids = kids;
 }
 
+# a space separator that is a break opportunity and hangs at a line's
+# end: the ideographic space, the ogham space mark, the en and em
+# spaces and their kin (not the no-break ones)
+hangsp(c: int): int
+{
+	return c == 16r3000 || c == 16r1680 || c >= 16r2000 && c <= 16r200A && c != 16r2007 || c == 16r205F;	# (the figure space is glue)
+}
+
+hangsep(t: string): int
+{
+	return len t == 1 && hangsp(t[0]);
+}
+
 # a space separator (General_Category Zs) other than the ASCII space
 isspacesep(c: int): int
 {
@@ -2001,9 +2014,9 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 						k.ml = 0;
 					if(k.st.mr.kind == Style->Lauto)
 						k.mr = 0;
-					need := k.ml;
+					need := k.ml + k.mr;	# of auto width: its margins at least (floats-wrap-bfc-with-margin-005)
 					if(k.st.width.kind != Style->Lauto && k.st.width.kind != Style->Lstretch)
-						need += k.w;
+						need = k.ml + k.w;
 					else if(k.kind == Ktable) {
 						(tmn, nil) := contribution(k);
 						need = tmn - k.mr;
@@ -7450,6 +7463,7 @@ inlineintrinsic(b: ref Box): (int, int)
 {
 	items := flatten(b);
 	wstpass(items);
+	lspass(items);
 	mn := 0.0;
 	mx := 0.0;
 	line := 0.0;
@@ -7475,14 +7489,15 @@ inlineintrinsic(b: ref Box): (int, int)
 			content = 1;
 			prevw = it;
 		Ispace =>
-			if(it.nowrap) {
-				# an unbreakable space is part of the word
+			if(it.nowrap && !hangsep(it.text)) {
+				# an unbreakable space is part of the word (a hanging one
+				# is never: trailing-ogham-003)
 				word += it.w;
 				if(word > mn)
 					mn = word;
 			} else
 				word = 0.0;
-			if(it.text == " " && collapsible(it.box.st) || it.text == "　" && it.box.st.whitespace != Style->Wbreakspaces) {
+			if(it.text == " " && collapsible(it.box.st) || hangsep(it.text) && it.box.st.whitespace != Style->Wbreakspaces) {
 				if(content)
 					sp += it.w;	# at the end it hangs
 			} else {
@@ -7952,7 +7967,7 @@ text(f: ref Fl, b: ref Box)
 		}
 		if(c == ' ' && st.transform == Style->TTfull)
 			c = '　';
-		if(c == ' ' || c == '\t' || c == '　') {
+		if(c == ' ' || c == '\t' || hangsp(c)) {
 			# preserved spaces: each is a break opportunity (unless nowrap)
 			w := fc.space + st.wordspacing + ls;
 			t := " ";
@@ -7961,9 +7976,13 @@ text(f: ref Fl, b: ref Box)
 				if(st.tabsize < 0.0)
 					w = -st.tabsize;	# a length
 				t = "\t";
-			} else if(c == '　') {
-				w = fc.width("　");
-				t = "　";	# not a collapsible space: it keeps its width at a line's end
+			} else if(hangsp(c)) {
+				# an ideographic space, or another space separator: not
+				# collapsible, it keeps its width at a line's end, where
+				# it hangs (Text 3 §4.1.3; trailing-ogham-001)
+				t = "";
+				t[0] = c;
+				w = fc.width(t);
 			}
 			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 			f.space = 0;
@@ -7979,7 +7998,7 @@ text(f: ref Fl, b: ref Box)
 		}
 		# a word: up to the next space or break opportunity
 		st0 := i;
-		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && s[i] != '　') {
+		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && !hangsp(s[i])) {
 			if(i > st0 && lbbreak(s[lbbase(s, i-1, st0)], s[i]))
 				break;
 			i++;
@@ -8023,6 +8042,49 @@ text(f: ref Fl, b: ref Box)
 # one) becomes a space, or an ideographic one, unless it is first or
 # last on its line, next to a forced break or the block's edges, the
 # edges of inline boxes apart.
+# The spacing after a character is that of the innermost box holding
+# it and the next character (Text 4 §8.2): between boxes of different
+# letter-spacing the common ancestor's applies, and none after the
+# last character of the paragraph (letter-spacing-nesting-001, -002,
+# -end-of-line-001).  Each text item carries its own box's spacing
+# after its last character; this adjusts that.
+lspass(items: list of ref Item)
+{
+	for(l := items; l != nil; l = tl l) {
+		it := hd l;
+		if(it.kind != Iword && it.kind != Ispace || len it.text == 0)
+			continue;
+		own := it.box.st.letterspacing;
+		if(own == 0.0)
+			continue;
+		next: ref Item;
+		for(nl := tl l; nl != nil && next == nil; nl = tl nl) {
+			n := hd nl;
+			case n.kind {
+			Iword or Ispace =>
+				if(len n.text > 0 || n.kind == Iword)
+					next = n;
+			Iatomic or Ibreak =>
+				break;
+			}
+		}
+		after := 0.0;
+		if(next != nil)
+			after = commonbox(it.box, next.box).st.letterspacing;
+		it.w += after - own;
+	}
+}
+
+# the nearest box holding both a and b
+commonbox(a, b: ref Box): ref Box
+{
+	for(p := a; p != nil; p = p.parent)
+		for(q := b; q != nil; q = q.parent)
+			if(p == q)
+				return p;
+	return a;
+}
+
 wstpass(items: list of ref Item)
 {
 	prev: ref Item;	# content before it on the line
@@ -8166,6 +8228,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 {
 	items := flatten(b);
 	wstpass(items);
+	lspass(items);
 	st := b.st;
 	lines: list of ref Line;
 	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch);
@@ -8208,11 +8271,13 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				prev := ln.frags;
 				while(prev != nil && (hd prev).kind == Fspan)
 					prev = tl prev;
-				if(it.box.st.breakall != 2 && prev != nil && (hd prev).kind == Ftext && !isblankrun((hd prev).text) && (hd prev).text != "　") {
+				if(it.box.st.breakall != 2 && prev != nil && (hd prev).kind == Ftext && !isblankrun((hd prev).text) && !hangsep((hd prev).text)) {
 					# after a word: that goes too, or nothing does when
-					# the word starts the line (line-break: anywhere
-					# breaks before the space itself)
-					wrap = 0;
+					# the word starts the line, unless overflow-wrap
+					# lets the space break from it (line-break: anywhere
+					# breaks before the space itself; break-spaces-
+					# before-first-char-002, -012)
+					wrap = it.box.st.anywhere != 0;
 					for(fl := tl prev; fl != nil; fl = tl fl)
 						if((hd fl).kind == Ftext) {
 							word = hd prev;
@@ -8409,7 +8474,7 @@ canbreak(ln: ref Ln, it: ref Item): int
 			}
 			return 1;
 		}
-		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
+		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || hangsep(f.text))
 			return 1;	# a space, a zero-width one, a soft hyphen
 		return wordgap(f.box, f.text, it, 0);
 	}
@@ -8425,7 +8490,7 @@ spacebefore(ln: ref Ln, it: ref Item): int
 		f := hd fl;
 		if(f.kind == Fspan || f.kind == Ftext && f.box != nil && f.box.kind != Ktext)
 			continue;
-		return f.kind == Ftext && (f.text == " " || f.text == "　") && !nowrapbetween(f.box, it.box);
+		return f.kind == Ftext && (f.text == " " || hangsep(f.text)) && !nowrapbetween(f.box, it.box);
 	}
 	return 0;
 }
@@ -8439,7 +8504,7 @@ atomicbreak(ln: ref Ln, k: ref Box): int
 		f := hd fl;
 		if(f.kind == Fspan || f.kind == Ftext && f.box != nil && f.box.kind != Ktext)
 			continue;
-		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
+		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || hangsep(f.text))
 			return 1;
 		if(nowrapbetween(f.box, k))
 			return 0;
@@ -8607,8 +8672,13 @@ removefrag(l: list of ref Frag, f: ref Frag): list of ref Frag
 tabw(ln: ref Ln, it: ref Item): real
 {
 	w := it.w;
-	if(it.text == "\t" && w > 0.0)
+	if(it.text == "\t" && w > 0.0) {
 		w -= math->fmod(ln.x, w);
+		# too close to the next stop for a tab to show: the one after
+		# (as browsers have it; tab-stop-threshold-002)
+		if(it.face != nil && w < it.face.space/2.0)
+			w += it.w;
+	}
 	return w;
 }
 
@@ -8668,7 +8738,7 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			continue;
 		}
 		if(f.kind == Ftext && isblankrun(f.text) && f.box.st.whitespace == Style->Wprewrap && !forced ||
-		   f.kind == Ftext && f.text == "　" && f.box.st.whitespace != Style->Wbreakspaces) {
+		   f.kind == Ftext && hangsep(f.text) && f.box.st.whitespace != Style->Wbreakspaces) {
 			# so does an ideographic space (Text 3 §4.1.3, other space separators)
 			ln.x -= real f.w;
 			hanging = f :: hanging;

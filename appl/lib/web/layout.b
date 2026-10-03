@@ -203,6 +203,12 @@ element(b: ref B, n: int): list of ref Box
 	(kind, inl) := boxkind(st);
 	if(nd.tag == Dom->Tbr && nd.ns == Dom->HTML)
 		return newbox(Kbr, 1, n, st) :: nil;
+	if(nd.tag == Dom->Twbr && nd.ns == Dom->HTML) {
+		# a line break opportunity: as a zero-width space (HTML §4.5.29)
+		t := newbox(Ktext, 1, n, st);
+		t.text = "\u200B";
+		return t :: nil;
+	}
 	box := newbox(kind, inl, n, st);
 	# (ol, ul and menu reset list-item by the UA sheet; start= and reversed are hints)
 	ctrprops(b, n, st, st.display == Style->Dlistitem);
@@ -1734,6 +1740,8 @@ sizew1(b: ref Box, cbw, cbh: int)
 			w = cw;
 		}
 	}
+	if(st.width.kind != Style->Lpx && st.width.kind != Style->Lcalc)
+		w = transferw(b, w, cbh);	# a keyword width is bounded through the ratio like an auto one
 	w = clampw(b, w, cbw);
 	b.w = w;
 	# auto margins share what is left over
@@ -6908,6 +6916,7 @@ intrinsic1(b: ref Box): (int, int)
 		h := ir(st.height.px);
 		if(!st.borderbox)
 			h += vextra(b);
+		h = clamph(b, h, pcth);	# as used, within min-height and max-height
 		w := transferred(b, h) + mgs(b);
 		if(isscroller(b))
 			return (mgs(b), w);
@@ -7201,6 +7210,7 @@ nz(m: int): int
 inlineintrinsic(b: ref Box): (int, int)
 {
 	items := flatten(b);
+	wstpass(items);
 	mn := 0.0;
 	mx := 0.0;
 	line := 0.0;
@@ -7532,6 +7542,19 @@ langof(n: int): string
 	return nil;
 }
 
+# East Asian Width F, W or H (not A), and not Hangul: the characters a
+# segment break between is removed (Text 3 §4.1.2)
+eaw(c: int): int
+{
+	if(c >= 16r1100 && c <= 16r115F || c >= 16r3130 && c <= 16r318F || c >= 16rAC00 && c <= 16rD7AF)
+		return 0;	# Hangul
+	return c >= 16r2E80 && c <= 16r303E || c >= 16r3041 && c <= 16r33FF || c >= 16r3400 && c <= 16r4DBF ||
+		c >= 16r4E00 && c <= 16r9FFF || c >= 16rA000 && c <= 16rA4CF || c >= 16rF900 && c <= 16rFAFF ||
+		c >= 16rFE30 && c <= 16rFE4F || c >= 16rFF00 && c <= 16rFF60 || c >= 16rFF61 && c <= 16rFF9F ||
+		c >= 16rFFE0 && c <= 16rFFEE || c >= 16r1F300 && c <= 16r1F64F || c >= 16r1F900 && c <= 16r1F9FF ||
+		c >= 16r20000 && c <= 16r3FFFD;
+}
+
 crtospace(s: string): string
 {
 	r := s;
@@ -7596,8 +7619,15 @@ text(f: ref Fl, b: ref Box)
 			continue;
 		}
 		if(isspace(c) && collapsesp) {
-			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl))
+			i0 := i;
+			nl := 0;
+			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl)) {
+				if(s[i] == '\n')
+					nl = 1;
 				i++;
+			}
+			if(nl && i0 > 0 && i < len s && eaw(s[i0-1]) && eaw(s[i]))
+				continue;	# a segment break between East Asian wide characters is removed (Text 3 §4.1.2)
 			if(!f.space) {
 				if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
 					emit(f, ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
@@ -7673,6 +7703,49 @@ text(f: ref Fl, b: ref Box)
 		} else
 			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 		f.space = 0;
+	}
+}
+
+# word-space-transform (Text 4 §8.3): a zero-width space (a <wbr> is
+# one) becomes a space, or an ideographic one, unless it is first or
+# last on its line, next to a forced break or the block's edges, the
+# edges of inline boxes apart.
+wstpass(items: list of ref Item)
+{
+	prev: ref Item;	# content before it on the line
+	for(l := items; l != nil; l = tl l) {
+		it := hd l;
+		case it.kind {
+		Iopen or Iclose or Ifloat or Iabs =>
+			continue;
+		Ibreak =>
+			prev = nil;
+			continue;
+		}
+		if(it.kind == Ispace && it.text == "" && it.box.st.wst != 0 && prev != nil) {
+			after := 0;
+			done := 0;
+			for(m := tl l; m != nil && !done; m = tl m)
+				case (hd m).kind {
+				Iopen or Iclose or Ifloat or Iabs =>
+					;
+				Ibreak =>
+					done = 1;
+				* =>
+					after = 1;
+					done = 1;
+				}
+			if(after) {
+				if(it.box.st.wst == 1) {
+					it.text = " ";
+					it.w = it.face.space + it.box.st.wordspacing;
+				} else {
+					it.text = "　";
+					it.w = it.face.width("　");
+				}
+			}
+		}
+		prev = it;
 	}
 }
 
@@ -7779,6 +7852,7 @@ placepending(f: ref Ifc, ln: ref Ln)
 layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 {
 	items := flatten(b);
+	wstpass(items);
 	st := b.st;
 	lines: list of ref Line;
 	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch);
@@ -7894,7 +7968,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			w := k.ml + k.w + k.mr;
 			ah := k.mt + k.h + k.mb;
 			tallband(f, ln, ah);
-			if(ln.content && ln.x + real w > real ln.avail + 0.01)  {
+			if(ln.content && ln.x + real w > real ln.avail + 0.01 && atomicbreak(ln))  {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -8007,9 +8081,36 @@ canbreak(ln: ref Ln, it: ref Item): int
 		f := hd fl;
 		if(f.kind == Fspan || f.kind == Ftext && f.box != nil && f.box.kind != Ktext)
 			continue;	# inline box edges, the marks of absolutes, an outside marker
+		if(f.kind == Fatomic) {
+			# an atomic inline breaks like an ideograph (Text 3 §5.1): not
+			# before a glue or a closing character
+			if(len it.text == 0)
+				return 1;
+			lbmode = it.box.st.lbmode;
+			return lbbreak(16r4E00, it.text[0]);
+		}
 		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
-			return 1;	# a space, a zero-width one, a soft hyphen, an atomic inline
+			return 1;	# a space, a zero-width one, a soft hyphen
 		return wordgap(f.box, f.text, it, 0);
+	}
+	return 1;
+}
+
+# May the line break before an atomic inline?  It breaks like an
+# ideograph: not after a glue character such as a no-break space, nor
+# after an opening one (Text 3 §5.1, UAX #14).
+atomicbreak(ln: ref Ln): int
+{
+	for(fl := ln.frags; fl != nil; fl = tl fl) {
+		f := hd fl;
+		if(f.kind == Fspan || f.kind == Ftext && f.box != nil && f.box.kind != Ktext)
+			continue;
+		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
+			return 1;
+		if(f.box.st.whitespace == Style->Wnowrap || f.box.st.whitespace == Style->Wpre)
+			return 0;
+		lbmode = f.box.st.lbmode;
+		return lbbreak(f.text[len f.text - 1], 16r4E00);
 	}
 	return 1;
 }

@@ -897,7 +897,7 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"lang" =>
 		for(p := n; p != 0; p = parentel(d, p))
 			if((l := d.attr(p, "lang")) != nil)
-				return lower(l) == lower(x.val) || prefix(lower(l), lower(x.val) + "-");
+				return langmatch(lower(l), x.val);
 		return 0;
 	"dir" =>
 		return lower(x.val) == "ltr";
@@ -905,6 +905,99 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 		return 0;
 	}
 	return 0;
+}
+
+# :lang(<ranges>): the tag against each comma-separated language range,
+# quoted or not, by extended filtering (Selectors 4 §14.1, RFC 4647
+# §3.3.2): the primary subtags agree (or the range's is *), and the
+# range's remaining subtags appear in order in the tag, skipping tag
+# subtags that are not singletons.
+langmatch(tag, ranges: string): int
+{
+	for(rl := splitlist(ranges); rl != nil; rl = tl rl) {
+		r := lower(trim1(hd rl));
+		if(len r >= 2 && (r[0] == '"' || r[0] == '\''))
+			r = r[1:len r - 1];
+		if(r == "")
+			continue;
+		if(r != "*" && !(r[0] >= 'a' && r[0] <= 'z'))
+			continue;	# not a language range (BCP 47 starts with a letter)
+		if(tag == "")
+			continue;	# lang="": no language, matched by nothing
+		rs := subtags(r);
+		ts := subtags(tag);
+		if(rs == nil || ts == nil)
+			continue;
+		if(hd rs != "*" && hd rs != hd ts)
+			continue;
+		rs = tl rs;
+		ts = tl ts;
+		ok := 1;
+		while(rs != nil) {
+			if(hd rs == "*") {
+				rs = tl rs;
+				continue;
+			}
+			if(ts == nil) {
+				ok = 0;
+				break;
+			}
+			if(hd rs == hd ts) {
+				rs = tl rs;
+				ts = tl ts;
+				continue;
+			}
+			if(len hd ts == 1) {
+				ok = 0;	# a singleton: an extension starts here
+				break;
+			}
+			ts = tl ts;
+		}
+		if(ok)
+			return 1;
+	}
+	return 0;
+}
+
+subtags(s: string): list of string
+{
+	r: list of string;
+	st := 0;
+	for(i := 0; i <= len s; i++)
+		if(i == len s || s[i] == '-') {
+			r = s[st:i] :: r;
+			st = i + 1;
+		}
+	o: list of string;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+splitlist(s: string): list of string
+{
+	r: list of string;
+	st := 0;
+	for(i := 0; i <= len s; i++)
+		if(i == len s || s[i] == ',') {
+			r = s[st:i] :: r;
+			st = i + 1;
+		}
+	o: list of string;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+trim1(s: string): string
+{
+	a := 0;
+	b := len s;
+	while(a < b && (s[a] == ' ' || s[a] == '\t' || s[a] == '\n'))
+		a++;
+	while(b > a && (s[b-1] == ' ' || s[b-1] == '\t' || s[b-1] == '\n'))
+		b--;
+	return s[a:b];
 }
 
 anymatch(m: ref M, l: array of ref Sel, n: int): int
@@ -1274,6 +1367,9 @@ supportsdecl(v: array of ref Tok): int
 	nm := lower(v[0].s);
 	if(prefix(nm, "--"))
 		return 1;
+	for(k := 2; k < len v; k++)
+		if(v[k].kind == Kfunction && v[k].s == "var")
+			return 1;	# a var() makes any value valid at parse time (Variables 1 §3)
 	s := St.new();
 	ctx := ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
 	lh := longhands(nm, trim(v[2:]));
@@ -1494,16 +1590,21 @@ splitcommas(v: array of ref Tok): list of array of ref Tok
 		o = hd r :: o;
 	return o;
 }
-# named colours (CSS Color 4 §6.1) and system colours, sorted for binary search
+# named colours (CSS Color 4 §6.1) and system colours, the deprecated ones
+# as the colours they are defined to equal (Appendix A), sorted for binary search
 colornames := array[] of {
 	("accentcolor", int 16r2266CCFF),
 	("accentcolortext", int 16rFFFFFFFF),
+	("activeborder", int 16r767676FF),
+	("activecaption", int 16rFFFFFFFF),
 	("activetext", int 16rFF0000FF),
 	("aliceblue", int 16rF0F8FFFF),
 	("antiquewhite", int 16rFAEBD7FF),
+	("appworkspace", int 16rFFFFFFFF),
 	("aqua", int 16r00FFFFFF),
 	("aquamarine", int 16r7FFFD4FF),
 	("azure", int 16rF0FFFFFF),
+	("background", int 16rFFFFFFFF),
 	("beige", int 16rF5F5DCFF),
 	("bisque", int 16rFFE4C4FF),
 	("black", int 16r000000FF),
@@ -1515,11 +1616,12 @@ colornames := array[] of {
 	("buttonborder", int 16r767676FF),
 	("buttonface", int 16rEFEFEFFF),
 	("buttonhighlight", int 16rEFEFEFFF),
-	("buttonshadow", int 16r767676FF),
+	("buttonshadow", int 16rEFEFEFFF),
 	("buttontext", int 16r000000FF),
 	("cadetblue", int 16r5F9EA0FF),
 	("canvas", int 16rFFFFFFFF),
 	("canvastext", int 16r000000FF),
+	("captiontext", int 16r000000FF),
 	("chartreuse", int 16r7FFF00FF),
 	("chocolate", int 16rD2691EFF),
 	("coral", int 16rFF7F50FF),
@@ -1570,8 +1672,13 @@ colornames := array[] of {
 	("highlighttext", int 16rFFFFFFFF),
 	("honeydew", int 16rF0FFF0FF),
 	("hotpink", int 16rFF69B4FF),
+	("inactiveborder", int 16r767676FF),
+	("inactivecaption", int 16rFFFFFFFF),
+	("inactivecaptiontext", int 16r808080FF),
 	("indianred", int 16rCD5C5CFF),
 	("indigo", int 16r4B0082FF),
+	("infobackground", int 16rFFFFFFFF),
+	("infotext", int 16r000000FF),
 	("ivory", int 16rFFFFF0FF),
 	("khaki", int 16rF0E68CFF),
 	("lavender", int 16rE6E6FAFF),
@@ -1610,6 +1717,8 @@ colornames := array[] of {
 	("mediumspringgreen", int 16r00FA9AFF),
 	("mediumturquoise", int 16r48D1CCFF),
 	("mediumvioletred", int 16rC71585FF),
+	("menu", int 16rFFFFFFFF),
+	("menutext", int 16r000000FF),
 	("midnightblue", int 16r191970FF),
 	("mintcream", int 16rF5FFFAFF),
 	("mistyrose", int 16rFFE4E1FF),
@@ -1640,6 +1749,7 @@ colornames := array[] of {
 	("saddlebrown", int 16r8B4513FF),
 	("salmon", int 16rFA8072FF),
 	("sandybrown", int 16rF4A460FF),
+	("scrollbar", int 16rFFFFFFFF),
 	("seagreen", int 16r2E8B57FF),
 	("seashell", int 16rFFF5EEFF),
 	("selecteditem", int 16r3390FFFF),
@@ -1656,8 +1766,10 @@ colornames := array[] of {
 	("tan", int 16rD2B48CFF),
 	("teal", int 16r008080FF),
 	("thistle", int 16rD8BFD8FF),
+	("threeddarkshadow", int 16r767676FF),
 	("threedface", int 16rEFEFEFFF),
-	("threedhighlight", int 16rEFEFEFFF),
+	("threedhighlight", int 16r767676FF),
+	("threedlightshadow", int 16r767676FF),
 	("threedshadow", int 16r767676FF),
 	("tomato", int 16rFF6347FF),
 	("turquoise", int 16r40E0D0FF),
@@ -1727,7 +1839,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone));
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0);
 }
 
 nextsid := 1;
@@ -1757,6 +1869,8 @@ inherit(p: ref St): ref St
 	s.breakall = p.breakall;
 	s.keepall = p.keepall;
 	s.anywhere = p.anywhere;
+	s.lbmode = p.lbmode;
+	s.wst = p.wst;
 	s.textshadows = p.textshadows;
 	s.dirrtl = p.dirrtl;
 	s.tabsize = p.tabsize;
@@ -1798,7 +1912,7 @@ isinherited(nm: string): int
 	"font-variant" or "font-variant-caps" or "line-height" or "text-align" or
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
-	"text-wrap-mode" or "word-break" or "line-break" or "overflow-wrap" or "word-wrap" or
+	"text-wrap-mode" or "word-break" or "line-break" or "overflow-wrap" or "word-wrap" or "word-space-transform" or
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
@@ -4061,6 +4175,22 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.z = int n;
 			st.zauto = 0;
 		}
+	"word-space-transform" =>
+		# none | [ space | ideographic-space ] && auto-phrase? (Text 4 §8.3)
+		x := nows(v);
+		t := 0;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind != Kident)
+				return 0;
+			case lower(x[k].s) {
+			"none" => t = 0;
+			"space" => t = 1;
+			"ideographic-space" => t = 2;
+			"auto-phrase" => ;
+			* => return 0;
+			}
+		}
+		st.wst = t;
 	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-height" or
 	"contain-intrinsic-inline-size" or "contain-intrinsic-block-size" =>
 		# one or two of: none | <length> | auto <length> (Sizing 4 §5.1;
@@ -5348,6 +5478,7 @@ copyprop(d, s: ref St, nm: string)
 		d.zauto = s.zauto;
 	"overflow-x" => d.overflowx = s.overflowx;
 	"contain" => d.contain = s.contain;
+	"word-space-transform" => d.wst = s.wst;
 	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-inline-size" or
 	"contain-intrinsic-height" or "contain-intrinsic-block-size" =>
 		d.cisw = s.cisw;

@@ -242,6 +242,7 @@ Style: module
 		aspectauto:	int;	# aspect-ratio: auto <ratio>: a replaced box's natural ratio first, else the ratio of the content box
 		lbmode:	int;		# line-break: 0 auto/normal, 1 loose, 2 strict (anywhere is breakall 2)
 		cisw, cish:	Len;	# contain-intrinsic-size: the explicit intrinsic width and height under size containment (Lnone: none)
+		wst:	int;		# word-space-transform: 0 none, 1 space, 2 ideographic-space (what a zero-width space and a wbr become)
 
 		new:	fn(): ref St;		# initial values
 	};

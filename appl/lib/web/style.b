@@ -1845,7 +1845,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil);
 }
 
 nextsid := 1;
@@ -3747,7 +3747,9 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 		return fill(sub, r);
 	"all" =>
 		return nil;	# only the CSS-wide keywords, handled above
-	"transition" or "animation" or "border-image" or "mask" or "text-emphasis" or "offset" or
+	"border-image" =>
+		return borderimage(x);
+	"transition" or "animation" or "mask" or "text-emphasis" or "offset" or
 	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" or "font-variant" =>
 		return nil;
 	}
@@ -3855,7 +3857,7 @@ shorthand(nm: string): list of string
 	"border-radius" => return list of {"border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"};
 	"border" => return list of {"border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
 		"border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
-		"border-top-color", "border-right-color", "border-bottom-color", "border-left-color"};
+		"border-top-color", "border-right-color", "border-bottom-color", "border-left-color", "border-image-source"};
 	"border-top" => return list of {"border-top-width", "border-top-style", "border-top-color"};
 	"border-right" => return list of {"border-right-width", "border-right-style", "border-right-color"};
 	"border-bottom" => return list of {"border-bottom-width", "border-bottom-style", "border-bottom-color"};
@@ -3886,7 +3888,8 @@ shorthand(nm: string): list of string
 		for(i := len allprops - 1; i >= 0; i--)
 			r = allprops[i] :: r;
 		return r;
-	"transition" or "animation" or "border-image" or "mask" or "text-emphasis" or "offset" or
+	"border-image" => return list of {"border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"};
+	"transition" or "animation" or "mask" or "text-emphasis" or "offset" or
 	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" =>
 		return "-x-ignored" :: nil;
 	}
@@ -3905,6 +3908,129 @@ allprops := array[] of {
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
+
+# a copy of the box's border-image to change, the initial values
+# where it has none (source none, slice 100%, width 1, outset 0, stretch)
+bimageof(st: ref St): ref Bimage
+{
+	if(st.bimage != nil)
+		return ref *st.bimage;
+	return ref Bimage(nil, array[] of {Len(Lpx, 0.0, 100.0, nil), Len(Lpx, 0.0, 100.0, nil), Len(Lpx, 0.0, 100.0, nil), Len(Lpx, 0.0, 100.0, nil)}, 0,
+		array[] of {Len(Lnum, 1.0, 0.0, nil), Len(Lnum, 1.0, 0.0, nil), Len(Lnum, 1.0, 0.0, nil), Len(Lnum, 1.0, 0.0, nil)},
+		array[] of {px(0.0), px(0.0), px(0.0), px(0.0)}, BIstretch, BIstretch);
+}
+
+# one to four values, in reverse, to top, right, bottom, left
+foursides(vals: list of Len): array of Len
+{
+	n := len vals;
+	if(n < 1 || n > 4)
+		return nil;
+	a := array[n] of Len;
+	for(i := n - 1; i >= 0; i--) {
+		a[i] = hd vals;
+		vals = tl vals;
+	}
+	case n {
+	1 =>	return array[] of {a[0], a[0], a[0], a[0]};
+	2 =>	return array[] of {a[0], a[1], a[0], a[1]};
+	3 =>	return array[] of {a[0], a[1], a[2], a[1]};
+	}
+	return a;
+}
+
+birepeat(t: ref Tok): int
+{
+	if(t.kind != Kident)
+		return -1;
+	case lower(t.s) {
+	"stretch" =>	return BIstretch;
+	"repeat" =>	return BIrepeat;
+	"round" =>	return BIround;
+	"space" =>	return BIspace;
+	}
+	return -1;
+}
+
+# the border-image shorthand: <source> || <slice> [ / <width> | /
+# <width>? / <outset> ]? || <repeat>, every longhand it leaves out
+# taking its initial value
+borderimage(x: array of ref Tok): list of (string, array of ref Tok)
+{
+	none := array[] of {ref Tok(Kident, "none", 0.0, 0, nil)};
+	src := none;
+	slice := array[] of {ref Tok(Kpercent, "", 100.0, 0, nil)};
+	width := array[] of {ref Tok(Knumber, "", 1.0, 0, nil)};
+	outset := array[] of {ref Tok(Knumber, "", 0.0, 0, nil)};
+	rep := array[] of {ref Tok(Kident, "stretch", 0.0, 0, nil)};
+	gotsrc := 0;
+	gotslice := 0;
+	gotrep := 0;
+	i := 0;
+	while(i < len x) {
+		t := x[i];
+		if(t.kind == Kident && (lower(t.s) == "none" || birepeat(t) >= 0)) {
+			if(lower(t.s) == "none") {
+				if(gotsrc)
+					return nil;
+				gotsrc = 1;
+				src = none;
+				i++;
+			} else {
+				if(gotrep)
+					return nil;
+				gotrep = 1;
+				j := i + 1;
+				if(j < len x && birepeat(x[j]) >= 0)
+					j++;
+				rep = x[i:j];
+				i = j;
+			}
+			continue;
+		}
+		if(t.kind == Kurl || t.kind == Kfunction) {
+			if(gotsrc)
+				return nil;
+			gotsrc = 1;
+			src = x[i:i+1];
+			i++;
+			continue;
+		}
+		if(t.kind == Knumber || t.kind == Kpercent || t.kind == Kident && lower(t.s) == "fill") {
+			if(gotslice)
+				return nil;
+			gotslice = 1;
+			j := i;
+			while(j < len x && (x[j].kind == Knumber || x[j].kind == Kpercent || x[j].kind == Kident && lower(x[j].s) == "fill"))
+				j++;
+			slice = x[i:j];
+			i = j;
+			if(i < len x && x[i].kind == Kdelim && x[i].s == "/") {
+				i++;
+				j = i;
+				while(j < len x && !(x[j].kind == Kdelim && x[j].s == "/") && (x[j].kind == Knumber || x[j].kind == Kpercent || x[j].kind == Kdimension || x[j].kind == Kident && lower(x[j].s) == "auto"))
+					j++;
+				if(j > i)
+					width = x[i:j];
+				i = j;
+				if(i < len x && x[i].kind == Kdelim && x[i].s == "/") {
+					i++;
+					j = i;
+					while(j < len x && (x[j].kind == Knumber || x[j].kind == Kdimension))
+						j++;
+					if(j == i)
+						return nil;
+					outset = x[i:j];
+					i = j;
+				}
+			}
+			continue;
+		}
+		return nil;
+	}
+	return ("border-image-source", src) :: ("border-image-slice", slice) :: ("border-image-width", width) ::
+		("border-image-outset", outset) :: ("border-image-repeat", rep) :: nil;
+}
 
 wrapstyle(w: string): int
 {
@@ -4076,7 +4202,7 @@ background(v: array of ref Tok): list of (string, array of ref Tok)
 				"scroll" or "fixed" or "local" =>
 					latt = t :: latt;
 					continue;
-				"border-box" or "padding-box" or "content-box" or "text" =>
+				"border-box" or "padding-box" or "content-box" or "text" or "border-area" =>
 					boxes = t :: boxes;
 					continue;
 				"left" or "right" or "top" or "bottom" or "center" =>
@@ -4441,6 +4567,108 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"accent-color" => st.accent = c;
 		"caret-color" => st.caret = c;
 		}
+	"border-image-source" =>
+		x := nows(v);
+		if(len x != 1)
+			return 0;
+		bi := bimageof(st);
+		if(x[0].kind == Kident && lower(x[0].s) == "none")
+			bi.src = nil;
+		else if(x[0].kind == Kurl || x[0].kind == Kfunction)
+			bi.src = lentoks(x[0:1], ctx)[0];
+		else
+			return 0;
+		st.bimage = bi;
+	"border-image-slice" =>
+		# [<number> | <percentage>]{1,4} && fill?
+		x := nows(v);
+		vals: list of Len;
+		fl := 0;
+		for(k := 0; k < len x; k++) {
+			case x[k].kind {
+			Kident =>
+				if(lower(x[k].s) != "fill" || fl)
+					return 0;
+				fl = 1;
+			Knumber =>
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lpx, x[k].n, 0.0, nil) :: vals;
+			Kpercent =>
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lpx, 0.0, x[k].n, nil) :: vals;
+			* =>
+				return 0;
+			}
+		}
+		a := foursides(vals);
+		if(a == nil)
+			return 0;
+		bi := bimageof(st);
+		bi.slice = a;
+		bi.fill = fl;
+		st.bimage = bi;
+	"border-image-width" =>
+		# [<length-percentage> | <number> | auto]{1,4}
+		x := nows(v);
+		vals: list of Len;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind == Kident && lower(x[k].s) == "auto")
+				vals = kw(Lauto) :: vals;
+			else if(x[k].kind == Knumber) {
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lnum, x[k].n, 0.0, nil) :: vals;
+			} else {
+				(ok, l) := length(x[k:k+1], ctx);
+				if(!ok || l.px < 0.0 || l.pct < 0.0)
+					return 0;
+				vals = l :: vals;
+			}
+		}
+		a := foursides(vals);
+		if(a == nil)
+			return 0;
+		bi := bimageof(st);
+		bi.width = a;
+		st.bimage = bi;
+	"border-image-outset" =>
+		# [<length> | <number>]{1,4}
+		x := nows(v);
+		vals: list of Len;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind == Knumber) {
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lnum, x[k].n, 0.0, nil) :: vals;
+			} else {
+				(ok, l) := length(x[k:k+1], ctx);
+				if(!ok || l.px < 0.0 || l.pct != 0.0)
+					return 0;
+				vals = l :: vals;
+			}
+		}
+		a := foursides(vals);
+		if(a == nil)
+			return 0;
+		bi := bimageof(st);
+		bi.outset = a;
+		st.bimage = bi;
+	"border-image-repeat" =>
+		x := nows(v);
+		if(len x < 1 || len x > 2)
+			return 0;
+		rx := birepeat(x[0]);
+		ry := rx;
+		if(len x == 2)
+			ry = birepeat(x[1]);
+		if(rx < 0 || ry < 0)
+			return 0;
+		bi := bimageof(st);
+		bi.repx = rx;
+		bi.repy = ry;
+		st.bimage = bi;
 	"outline-offset" =>
 		(ok, l) := length(v, ctx);
 		if(!ok)
@@ -5766,8 +5994,11 @@ bglonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
 			"padding-box" => bx = BOXpadding;
 			"content-box" => bx = BOXcontent;
 			"text" => bx = BOXtext;
+			"border-area" => bx = BOXborderarea;
 			* => return 0;
 			}
+			if(nm == "background-origin" && (bx == BOXtext || bx == BOXborderarea))
+				return 0;
 			if(nm == "background-origin")
 				b.origin = bx;
 			else
@@ -5931,6 +6162,7 @@ copyprop(d, s: ref St, nm: string)
 	"outline-style" => d.outlines = s.outlines;
 	"outline-color" => d.outlinec = s.outlinec;
 	"outline-offset" => d.outlineoff = s.outlineoff;
+	"border-image-source" or "border-image-slice" or "border-image-width" or "border-image-outset" or "border-image-repeat" => d.bimage = s.bimage;
 	"font-family" => d.family = s.family;
 	"font-size" => d.fontsize = s.fontsize;
 	"font-weight" => d.weight = s.weight;

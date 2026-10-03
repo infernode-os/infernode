@@ -7259,28 +7259,31 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		w = 0;
 	if(h < 0)
 		h = 0;
-	if(ratio > 0.0) {
+	if(ratio > 0.0 && !(b.parent != nil && (b.parent.kind == Kflex || b.parent.kind == Kgrid))) {
 		# min/max constraint violations with a ratio (CSS 2.2 §10.4's
 		# table): a constrained dimension takes the other with it
-		# (replaced-elements-max-height-20, -min-height-40)
+		# (replaced-elements-max-height-20, -min-height-40); lengths
+		# and percentages only (a keyword asks for the intrinsic size,
+		# which is this); not for a flex or grid item, whose base size
+		# ignores them (flex-aspect-ratio-img-row-007)
 		mw := -1;
-		if(st.maxwidth.kind != Style->Lnone && (mw = specw(b, st.maxwidth, cbw)) >= 0)
+		if(plainlen(st.maxwidth) && (mw = specw(b, st.maxwidth, cbw)) >= 0)
 			mw -= hextra(b);
 		nw := 0;
-		if((nw = specw(b, st.minwidth, cbw)) >= 0)
+		if(plainlen(st.minwidth) && (nw = specw(b, st.minwidth, cbw)) >= 0)
 			nw -= hextra(b);
 		if(nw < 0)
 			nw = 0;
 		mh := -1;
-		if((mh = spech(b, st.maxheight, cbh)) >= 0)
+		if(plainlen(st.maxheight) && (mh = spech(b, st.maxheight, cbh)) >= 0)
 			mh -= vextra(b);
 		nh := 0;
-		if((nh = spech(b, st.minheight, cbh)) >= 0)
+		if(plainlen(st.minheight) && (nh = spech(b, st.minheight, cbh)) >= 0)
 			nh -= vextra(b);
 		if(nh < 0)
 			nh = 0;
 		if(mw >= 0 && w > mw && mh >= 0 && h > mh) {
-			if(real mw / real w <= real mh / real h) {
+			if(real mw * real h <= real mh * real w) {
 				w = mw;
 				h = ir(real w / ratio);
 				if(h < nh)
@@ -7302,7 +7305,7 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 			if(w < nw)
 				w = nw;
 		} else if(w < nw && h < nh) {
-			if(real nw / real nz1(w) <= real nh / real nz1(h)) {
+			if(real nw * real nz1(h) <= real nh * real nz1(w)) {
 				h = nh;
 				w = ir(real h * ratio);
 				if(mw >= 0 && w > mw)
@@ -7326,6 +7329,12 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		}
 	}
 	return (w, h);
+}
+
+# a length or a percentage, not a keyword
+plainlen(l: Style->Len): int
+{
+	return l.kind == Style->Lpx || l.kind == Style->Lcalc;
 }
 
 # The image an <img> shows (HTML §4.8.4.3, reduced): a <source> of its
@@ -11193,6 +11202,8 @@ before(a, b: ref Lyr): int
 
 paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 {
+	if(textmask)
+		return;	# only text goes into the mask
 	if(b.tb != nil)
 		r = tablerect(b, r);	# the table box: its captions lie outside its background and borders
 	if(b == canvasbg)
@@ -11384,7 +11395,7 @@ overflows(b: ref Box): int
 paintoutline(dst: ref Image, b: ref Box, r, clip: Rect)
 {
 	st := b.st;
-	if(st.visibility != Style->Vvisible || st.outlinew <= 0 || st.outlines == Style->Bnone)
+	if(textmask || st.visibility != Style->Vvisible || st.outlinew <= 0 || st.outlines == Style->Bnone)
 		return;
 	if(iscolumn(b))
 		return;	# columns and column groups are not rendered boxes (outline-applies-to-005)
@@ -11522,8 +11533,81 @@ rowcells(row: ref Box, o: Point, cl: list of Rect): list of Rect
 
 paintbackground(dst: ref Image, b: ref Box, r: Rect)
 {
-	st := b.st;
 	paintshadows(dst, b, r);
+	ck := bgclip(b.st);
+	if(ck == Style->BOXtext || ck == Style->BOXborderarea)
+		maskedbackground(dst, b, r, ck);
+	else
+		plainbackground(dst, b, r);
+}
+
+# background-clip: text or border-area (Backgrounds 4 §2.8): the
+# background is painted into a layer over the border box and comes
+# through a mask, the box's text (glyphs and decorations, painted in
+# white with textmask set) or the border area (the border box less
+# the padding box) (clip-text-multi-line, clip-border-area-solid)
+textmask: int;
+
+maskedbackground(dst: ref Image, b: ref Box, r: Rect, ck: int)
+{
+	(lr, ok) := dst.clipr.clip(r);
+	if(!ok || !rectok(lr))
+		return;
+	layer := display.newimage(lr, Draw->RGBA32, 0, Draw->Transparent);
+	m := display.newimage(lr, Draw->GREY8, 0, Draw->Black);
+	if(layer == nil || m == nil)
+		return;
+	plainbackground(layer, b, r);
+	if(ck == Style->BOXborderarea)
+		borderareamask(m, b, r, 1, 1);
+	else {
+		textmask++;
+		paintcontent(m, b, r, lr, nil);
+		textmask--;
+	}
+	dst.draw(lr, layer, m, lr.min);
+}
+
+# the border area of the box r into the mask m: the box's border box
+# less its padding box, the left and right sides being the box's own
+# or not (a fragment of an inline box in the middle has neither)
+borderareamask(m: ref Image, b: ref Box, r: Rect, left, right: int)
+{
+	(rtl, rtr, rbr, rbl) := radii(b);
+	m.fillpath(rrect(r, rtl, rtr, rbr, rbl), 1, display.white, (0, 0));
+	bl := b.bl;
+	br := b.br;
+	if(!left)
+		bl = 0;
+	if(!right)
+		br = 0;
+	pr := Rect((r.min.x + bl, r.min.y + b.bt), (r.max.x - br, r.max.y - b.bb));
+	m.fillpath(rrect(pr, innerradius(rtl, bl, b.bt), innerradius(rtr, br, b.bt), innerradius(rbr, br, b.bb), innerradius(rbl, bl, b.bb)), 1, display.black, (0, 0));
+}
+
+# a corner's inner radius: the outer less the wider border beside it
+innerradius(r, w1, w2: int): int
+{
+	if(w2 > w1)
+		w1 = w2;
+	r -= w1;
+	if(r < 0)
+		r = 0;
+	return r;
+}
+
+# is k the box b or inside it?
+within(k, b: ref Box): int
+{
+	for(; k != nil; k = k.parent)
+		if(k == b)
+			return 1;
+	return 0;
+}
+
+plainbackground(dst: ref Image, b: ref Box, r: Rect)
+{
+	st := b.st;
 	if(visible(bcolor(st, st.bgcolor))) {
 		br := r;
 		case bgclip(st) {
@@ -11537,6 +11621,256 @@ paintbackground(dst: ref Image, b: ref Box, r: Rect)
 	for(i := len st.bg - 1; i >= 0; i--)
 		if(st.bg[i].img != nil)
 			paintbg(dst, b, r, st.bg[i]);
+}
+
+# border-image (Backgrounds 3 §6): the image is cut into nine parts by
+# the slices; the corners go into the corners of the border image
+# area, the edges along its sides, stretched or tiled, the middle into
+# the rest when fill is asked; it takes the place of the border styles
+paintborderimage(dst: ref Image, b: ref Box, r: Rect): int
+{
+	bi := b.st.bimage;
+	if(bi == nil || bi.src == nil)
+		return 0;
+	# outsets: the image area reaches past the border box (§6.4)
+	ot := bimoutset(bi.outset[0], b.bt);
+	oright := bimoutset(bi.outset[1], b.br);
+	ob := bimoutset(bi.outset[2], b.bb);
+	ol := bimoutset(bi.outset[3], b.bl);
+	area := Rect((r.min.x - ol, r.min.y - ot), (r.max.x + oright, r.max.y + ob));
+	img: ref Image;
+	u := bgurl(bi.src);
+	if(u == nil) {
+		# a gradient: it has no size of its own, so it is the area's
+		# (border-image-outset-003)
+		if(bi.src.kind != Css->Kfunction || !rectok(area))
+			return 0;
+		img = display.newimage(Rect((0, 0), (area.dx(), area.dy())), Draw->RGBA32, 0, Draw->Transparent);
+		if(img == nil)
+			return 0;
+		paintgradient(img, b, img.r, ref Style->Bg(bi.src, Style->Rrepeat, Style->Rrepeat, Style->Len(Style->Lpx, 0.0, 0.0, nil), Style->Len(Style->Lpx, 0.0, 0.0, nil),
+			Style->Len(Style->Lauto, 0.0, 0.0, nil), Style->Len(Style->Lauto, 0.0, 0.0, nil), Style->BOXborder, Style->BOXpadding, 0));
+	} else {
+		for(l := bgimages; l != nil; l = tl l)
+			if((hd l).t0 == u) {
+				img = (hd l).t1;
+				break;
+			}
+	}
+	if(img == nil)
+		return 0;
+	iw := img.r.dx();
+	ih := img.r.dy();
+	if(iw <= 0 || ih <= 0)
+		return 0;
+	# slices: numbers are pixels of the image, percentages of it; two
+	# that overlap are scaled down together, to whole pixels rounded
+	# up, so that a 1 by 1 image sliced at 100% still has its corners
+	# (§6.2; border-image-006)
+	st := slicev(bi.slice[0], ih);
+	sr := slicev(bi.slice[1], iw);
+	sb := slicev(bi.slice[2], ih);
+	sl := slicev(bi.slice[3], iw);
+	if(st + sb > ih) {
+		f := real ih / real (st + sb);
+		st = ceil(real st * f);
+		sb = ceil(real sb * f);
+	}
+	if(sl + sr > iw) {
+		f := real iw / real (sl + sr);
+		sl = ceil(real sl * f);
+		sr = ceil(real sr * f);
+	}
+	# widths: a number is that many border widths, auto the slice, else
+	# a length or a percentage of the border box; too wide, they are
+	# scaled down together (§6.3)
+	wt := bimwidth(bi.width[0], b.bt, st, r.dy());
+	wr := bimwidth(bi.width[1], b.br, sr, r.dx());
+	wb := bimwidth(bi.width[2], b.bb, sb, r.dy());
+	wl := bimwidth(bi.width[3], b.bl, sl, r.dx());
+	f := 1.0;
+	if(wl + wr > area.dx() && wl + wr > 0)
+		f = real area.dx() / real (wl + wr);
+	if(wt + wb > area.dy() && wt + wb > 0)
+		f = minf(f, real area.dy() / real (wt + wb));
+	if(f < 1.0) {
+		wt = ir(real wt * f);
+		wr = ir(real wr * f);
+		wb = ir(real wb * f);
+		wl = ir(real wl * f);
+	}
+	oclip := dst.clipr;
+	(cr, ok) := oclip.clip(area);
+	if(!ok)
+		return 1;
+	dst.clipr = cr;
+	(x0, y0, x1, y1) := (area.min.x, area.min.y, area.max.x, area.max.y);
+	S := Style->BIstretch;
+	bimpart(dst, img, Rect((0, 0), (sl, st)), Rect((x0, y0), (x0 + wl, y0 + wt)), S, S, 0.0, 0.0);
+	bimpart(dst, img, Rect((iw - sr, 0), (iw, st)), Rect((x1 - wr, y0), (x1, y0 + wt)), S, S, 0.0, 0.0);
+	bimpart(dst, img, Rect((iw - sr, ih - sb), (iw, ih)), Rect((x1 - wr, y1 - wb), (x1, y1)), S, S, 0.0, 0.0);
+	bimpart(dst, img, Rect((0, ih - sb), (sl, ih)), Rect((x0, y1 - wb), (x0 + wl, y1)), S, S, 0.0, 0.0);
+	bimpart(dst, img, Rect((sl, 0), (iw - sr, st)), Rect((x0 + wl, y0), (x1 - wr, y0 + wt)), bi.repx, S, 0.0, 0.0);
+	bimpart(dst, img, Rect((sl, ih - sb), (iw - sr, ih)), Rect((x0 + wl, y1 - wb), (x1 - wr, y1)), bi.repx, S, 0.0, 0.0);
+	bimpart(dst, img, Rect((0, st), (sl, ih - sb)), Rect((x0, y0 + wt), (x0 + wl, y1 - wb)), S, bi.repy, 0.0, 0.0);
+	bimpart(dst, img, Rect((iw - sr, st), (iw, ih - sb)), Rect((x1 - wr, y0 + wt), (x1, y1 - wb)), S, bi.repy, 0.0, 0.0);
+	if(bi.fill) {
+		# the middle is scaled as the top and left edges are (§6.5)
+		fx := 1.0;
+		if(st > 0)
+			fx = real wt / real st;
+		else if(sb > 0)
+			fx = real wb / real sb;
+		fy := 1.0;
+		if(sl > 0)
+			fy = real wl / real sl;
+		else if(sr > 0)
+			fy = real wr / real sr;
+		bimpart(dst, img, Rect((sl, st), (iw - sr, ih - sb)), Rect((x0 + wl, y0 + wt), (x1 - wr, y1 - wb)), bi.repx, bi.repy, fx, fy);
+	}
+	dst.clipr = oclip;
+	return 1;
+}
+
+ceil(x: real): int
+{
+	n := int x;	# to the nearest
+	if(real n < x)
+		n++;
+	return n;
+}
+
+slicev(l: Style->Len, size: int): int
+{
+	v := ir(l.px + l.pct * real size / 100.0);
+	if(v < 0)
+		v = 0;
+	if(v > size)
+		v = size;
+	return v;
+}
+
+bimwidth(l: Style->Len, bw, slice, box: int): int
+{
+	case l.kind {
+	Style->Lnum =>	return ir(l.px * real bw);
+	Style->Lauto =>	return slice;
+	}
+	return ir(l.resolve(real box));
+}
+
+bimoutset(l: Style->Len, bw: int): int
+{
+	if(l.kind == Style->Lnum)
+		return ir(l.px * real bw);
+	return ir(l.px);
+}
+
+# One part: the slice src of img into the region dr, along each axis
+# stretched to the region or tiled at the tile size (an edge's is
+# scaled with its thickness, the middle's given) repeated from the
+# centre, rounded to whole tiles, or spaced with the room left shared
+# around them (§6.5).
+bimpart(dst, img: ref Image, src, dr: Rect, repx, repy: int, fx, fy: real)
+{
+	sw := src.dx();
+	sh := src.dy();
+	dw := dr.dx();
+	dh := dr.dy();
+	if(sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0)
+		return;
+	tw := dw;
+	th := dh;
+	if(repx != Style->BIstretch) {
+		if(fx > 0.0)
+			tw = ir(real sw * fx);
+		else
+			tw = ir(real sw * real dh / real sh);
+	}
+	if(repy != Style->BIstretch) {
+		if(fy > 0.0)
+			th = ir(real sh * fy);
+		else
+			th = ir(real sh * real dw / real sw);
+	}
+	sub := subimage(img, src);
+	if(sub == nil)
+		return;
+	oclip := dst.clipr;
+	(cr, ok) := oclip.clip(dr);
+	if(!ok)
+		return;
+	dst.clipr = cr;
+	for(yl := bimplaces(repy, dr.min.y, dh, th); yl != nil; yl = tl yl) {
+		(y, h) := hd yl;
+		for(xl := bimplaces(repx, dr.min.x, dw, tw); xl != nil; xl = tl xl) {
+			(x, w) := hd xl;
+			t := scale(sub, w, h);
+			if(t != nil)
+				dst.draw(Rect((x, y), (x + w, y + h)), t, nil, t.r.min);
+		}
+	}
+	dst.clipr = oclip;
+}
+
+# the tiles along one axis of a part: (start, size) each
+bimplaces(rep, x0, dw, tw: int): list of (int, int)
+{
+	l: list of (int, int);
+	case rep {
+	Style->BIrepeat =>
+		if(tw <= 0)
+			return nil;
+		start := x0 + (dw - tw)/2;
+		while(start > x0)
+			start -= tw;
+		for(x := start; x < x0 + dw; x += tw)
+			l = (x, tw) :: l;
+	Style->BIround =>
+		if(tw <= 0)
+			return nil;
+		n := nearest(real dw / real tw);
+		if(n < 1)
+			n = 1;
+		for(i := n - 1; i >= 0; i--) {
+			a := x0 + ir(real i * real dw / real n);
+			e := x0 + ir(real (i + 1) * real dw / real n);
+			l = (a, e - a) :: l;
+		}
+	Style->BIspace =>
+		if(tw <= 0)
+			return nil;
+		n := dw / tw;
+		if(n == 0)
+			return nil;
+		gap := real (dw - n*tw) / real (n + 1);
+		for(i := n - 1; i >= 0; i--)
+			l = (x0 + ir(real (i + 1) * gap + real (i * tw)), tw) :: l;
+	* =>
+		return (x0, dw) :: nil;
+	}
+	return l;
+}
+
+# the part of an image within sr, as an image of its own (kept, as
+# the border image is drawn at every paint)
+subimages: list of (ref Image, Rect, ref Image);
+
+subimage(img: ref Image, sr: Rect): ref Image
+{
+	for(l := subimages; l != nil; l = tl l) {
+		(si, r, d) := hd l;
+		if(si == img && r.eq(sr))
+			return d;
+	}
+	d := display.newimage(Rect((0, 0), (sr.dx(), sr.dy())), img.chans, 0, Draw->Transparent);
+	if(d == nil)
+		return nil;
+	d.draw(d.r, img, nil, sr.min);
+	if(len subimages >= 32)
+		subimages = nil;
+	subimages = (img, sr, d) :: subimages;
+	return d;
 }
 
 # an outer shadow shows only outside the border box (Backgrounds 3
@@ -11649,6 +11983,8 @@ minf(a, b: real): real
 paintborders(dst: ref Image, b: ref Box, r: Rect)
 {
 	st := b.st;
+	if(paintborderimage(dst, b, r))
+		return;
 	if(b.bt == 0 && b.br == 0 && b.bb == 0 && b.bl == 0)
 		return;
 	if(hasradius(b) && b.bt == b.br && b.bt == b.bb && b.bt == b.bl && st.bct == st.bcr && st.bct == st.bcb && st.bct == st.bcl) {
@@ -12069,6 +12405,8 @@ bgurls(st: ref St): list of string
 			r = u :: r;
 	if(st.listimage != nil && (lu := bgurl(st.listimage)) != nil)
 		r = lu :: r;
+	if(st.bimage != nil && st.bimage.src != nil && (bu := bgurl(st.bimage.src)) != nil)
+		r = bu :: r;
 	return r;
 }
 
@@ -12155,27 +12493,17 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	# background-position: a percentage of the room left over
 	px := area.min.x + int (bg.posx.px + bg.posx.pct * real (aw - tw) / 100.0);
 	py := area.min.y + int (bg.posy.px + bg.posy.pct * real (ah - th) / 100.0);
-	x0 := px;
-	x1 := px + 1;
-	if(bg.rx != Style->Rnorepeat) {
-		while(x0 > clip.min.x)
-			x0 -= tw;
-		x1 = clip.max.x;
-	}
-	y0 := py;
-	y1 := py + 1;
-	if(bg.ry != Style->Rnorepeat) {
-		while(y0 > clip.min.y)
-			y0 -= th;
-		y1 = clip.max.y;
-	}
+	xs := tileplaces(bg.rx, px, tw, area.min.x, aw, clip.min.x, clip.max.x);
+	ys := tileplaces(bg.ry, py, th, area.min.y, ah, clip.min.y, clip.max.y);
 	oclip := dst.clipr;
 	(cr, ok) := oclip.clip(clip);
 	if(!ok)
 		return;
 	dst.clipr = cr;
-	for(y := y0; y < y1; y += th)
-		for(x := x0; x < x1; x += tw) {
+	for(yl := ys; yl != nil; yl = tl yl)
+		for(xl := xs; xl != nil; xl = tl xl) {
+			x := hd xl;
+			y := hd yl;
 			tile := Rect((x, y), (x + tw, y + th));
 			(t, tok) := tile.clip(cr);
 			if(!tok)
@@ -12186,6 +12514,36 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 				dst.draw(t, img, nil, img.r.min.add(t.min.sub(Point(x, y))));
 		}
 	dst.clipr = oclip;
+}
+
+# where the tiles of size t go along one axis, the first at p by
+# background-position: repeated and round fill the clip from there;
+# space fits whole tiles in the positioning area [a0, a0+aw) with the
+# room left shared between them, the first and last touching its
+# edges, or one alone at p (Backgrounds 3 §3.4; background-repeat-space-10)
+tileplaces(rep, p, t, a0, aw, c0, c1: int): list of int
+{
+	l: list of int;
+	case rep {
+	Style->Rnorepeat =>
+		return p :: nil;
+	Style->Rspace =>
+		n := aw / t;
+		if(n < 2)
+			return p :: nil;
+		for(i := n - 1; i >= 0; i--)
+			l = a0 + ir(real i * real (aw - t) / real (n - 1)) :: l;
+		return l;
+	}
+	x0 := p;
+	while(x0 > c0)
+		x0 -= t;
+	for(x := x0; x < c1; x += t)
+		l = x :: l;
+	r: list of int;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 nearest(x: real): int
@@ -12399,6 +12757,8 @@ nows(v: array of ref Tok): array of ref Tok
 
 paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 {
+	if(textmask)
+		return;
 	cr := Rect((r.min.x + b.bl + b.pl, r.min.y + b.bt + b.pt), (r.max.x - b.br - b.pr, r.max.y - b.bb - b.pb));
 	if(b.img != nil) {
 		img := b.img;
@@ -12516,7 +12876,7 @@ paintlines(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			}
 			for(k = 0; k < ns; k++)
 				if(sp[k].box.st.visibility == Style->Vvisible)
-					paintspan(dst, sp[k], o);
+					paintspan(dst, sp[k], o, ln);
 		}
 		ofl := linefl;
 		obase := lineflbase;
@@ -12546,8 +12906,10 @@ hasatomic(ln: ref Line): int
 	return 0;
 }
 
-paintspan(dst: ref Image, f: ref Frag, o: Point)
+paintspan(dst: ref Image, f: ref Frag, o: Point, ln: ref Line)
 {
+	if(textmask)
+		return;
 	b := f.box;
 	st := b.st;
 	x0 := o.x + f.x;
@@ -12577,17 +12939,61 @@ paintspan(dst: ref Image, f: ref Frag, o: Point)
 		paintshadows(dst, b, br);
 		dst.clipr = oclip;
 	}
-	if(visible(st.bgcolor))
-		dst.draw(r, colorimg(st.bgcolor), nil, (0, 0));
-	for(i := len st.bg - 1; i >= 0; i--)
-		if(st.bg[i].img != nil)
-			paintbg(dst, b, r, st.bg[i]);
+	ck := bgclip(st);
+	if(ck == Style->BOXtext || ck == Style->BOXborderarea)
+		maskedspan(dst, f, o, ln, r, ck);
+	else
+		spanbackground(dst, b, r);
 	side(dst, Rect(r.min, (r.max.x, r.min.y + b.bt)), b.bt, st.bct, st.bst, 0, 1);
 	side(dst, Rect((r.min.x, r.max.y - b.bb), r.max), b.bb, st.bcb, st.bsb, 0, 0);
 	if(leftedge(f))
 		side(dst, Rect(r.min, (r.min.x + b.bl, r.max.y)), b.bl, st.bcl, st.bsl, 1, 1);
 	if(rightedge(f))
 		side(dst, Rect((r.max.x - b.br, r.min.y), r.max), b.br, st.bcr, st.bsr, 1, 0);
+}
+
+spanbackground(dst: ref Image, b: ref Box, r: Rect)
+{
+	st := b.st;
+	if(visible(st.bgcolor))
+		dst.draw(r, colorimg(st.bgcolor), nil, (0, 0));
+	for(i := len st.bg - 1; i >= 0; i--)
+		if(st.bg[i].img != nil)
+			paintbg(dst, b, r, st.bg[i]);
+}
+
+# an inline box's fragment with background-clip: text or border-area:
+# as maskedbackground, the text being the line's fragments inside the
+# box (clip-text-inline)
+maskedspan(dst: ref Image, f: ref Frag, o: Point, ln: ref Line, r: Rect, ck: int)
+{
+	b := f.box;
+	(lr, ok) := dst.clipr.clip(r);
+	if(!ok || !rectok(lr))
+		return;
+	layer := display.newimage(lr, Draw->RGBA32, 0, Draw->Transparent);
+	m := display.newimage(lr, Draw->GREY8, 0, Draw->Black);
+	if(layer == nil || m == nil)
+		return;
+	spanbackground(layer, b, r);
+	if(ck == Style->BOXborderarea)
+		borderareamask(m, b, r, leftedge(f), rightedge(f));
+	else {
+		textmask++;
+		for(k := 0; k < len ln.frags; k++) {
+			g := ln.frags[k];
+			if(g == f || !within(g.box, b))
+				continue;
+			case g.kind {
+			Ftext =>
+				painttext(m, g, o);
+			Fatomic =>
+				paintflow(m, g.box, o, lr, nil);
+			}
+		}
+		textmask--;
+	}
+	dst.draw(lr, layer, m, lr.min);
 }
 
 linefl: ref St;	# the ::first-line style of the line being painted, if any
@@ -12608,6 +13014,12 @@ painttext(dst: ref Image, f: ref Frag, o: Point)
 	fc := f.face;
 	p := Point(o.x + f.x, o.y + f.base);
 	text := visual(f);
+	if(textmask) {
+		# into a mask: the glyphs and decorations, whatever the colour
+		drawtext(dst, fc, p, text, display.white, st.letterspacing, f.level % 2);
+		paintdeco(dst, f, o);
+		return;
+	}
 	for(i := 0; i < len st.textshadows; i++) {
 		s := st.textshadows[i];
 		if(visible(s.color))
@@ -12651,6 +13063,8 @@ paintdeco(dst: ref Image, f: ref Frag, o: Point)
 	x0 := o.x + f.x;
 	x1 := x0 + f.w;
 	img := colorimg(c);
+	if(textmask)
+		img = display.white;
 	if(d & Style->TDunder) {
 		y := o.y + f.base + int (fc.descent * 0.35) + 1;
 		dst.draw(Rect((x0, y), (x1, y + t)), img, nil, (0, 0));

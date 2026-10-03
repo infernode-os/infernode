@@ -113,7 +113,18 @@ Style: module
 		attfixed:	int;	# background-attachment: fixed
 	};
 	Rrepeat, Rnorepeat, Rspace, Rround: con iota;
-	BOXborder, BOXpadding, BOXcontent, BOXtext: con iota;
+
+	# border-image (Backgrounds 3 §6)
+	Bimage: adt {
+		src:	ref Css->Tok;	# url(...) or a gradient function; nil for none
+		slice:	array of Len;	# top, right, bottom, left: Lpx numbers (pixels of the image) or percentages of it
+		fill:	int;
+		width:	array of Len;	# Lnum: that many border widths; Lauto: the slice's size; else a length or percentage of the border box
+		outset:	array of Len;	# Lnum: that many border widths; else a length
+		repx, repy:	int;	# BIstretch etc.
+	};
+	BIstretch, BIrepeat, BIround, BIspace: con iota;
+	BOXborder, BOXpadding, BOXcontent, BOXtext, BOXborderarea: con iota;
 
 	# a grid line: a number, a span, or auto
 	Gline: adt {
@@ -251,6 +262,7 @@ Style: module
 		hangpunct:	int;	# hanging-punctuation: 1 first, 2 last, 4 force-end, 8 allow-end
 		textautospace:	int;	# text-autospace: 0 normal (ideograph-alpha and ideograph-numeric), 1 no-autospace
 		textwrap:	int;	# text-wrap-style: 0 auto, 1 balance, 2 stable, 3 pretty
+		bimage:	ref Bimage;	# border-image, nil for none
 
 		new:	fn(): ref St;		# initial values
 	};

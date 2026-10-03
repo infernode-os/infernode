@@ -398,6 +398,8 @@ fixkids(box: ref Box, kids: list of ref Box): array of ref Box
 		return toarray(wrapruns(box, kids, isrow, Krow, Style->Dtablerow));
 	if(box.kind == Krow)
 		return toarray(wrapruns(box, kids, iscell, Kcell, Style->Dtablecell));
+	if(iscolumn(box))
+		return toarray(kids);	# a column group's columns are at home
 	kids = orphans(box, kids);
 	nblock := 0;
 	ninline := 0;
@@ -1850,6 +1852,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	cy := oy + b.bt + b.pt;
 	passtop := !bfc && b.bt == 0 && b.pt == 0;
 	passbot := !bfc && b.bb == 0 && b.pb == 0 && sh < 0;
+	passempty := !bfc && b.bb == 0 && b.pb == 0 && sh <= 0;	# margins may collapse through it if nothing is in it: a height of zero or auto (§8.3.1)
 	mnh := b.st.minheight;
 	mhhold := passbot && !(mnh.kind == Style->Lauto || mnh.kind == Style->Lpx && mnh.px == 0.0 && mnh.pct == 0.0);
 	if(mhhold)
@@ -1866,12 +1869,13 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			# only collapsible white space: no line boxes, so its
 			# margins may collapse through it (§8.3.1)
 			mh := b.st.minheight;
-			if(passtop && passbot && sh <= 0 && b.kind == Kblock &&
+			if(passtop && passempty && b.kind == Kblock &&
 			   (mh.kind == Style->Lauto || mh.kind == Style->Lpx && mh.px == 0.0 && mh.pct == 0.0))
 				empty = 1;
 		}
 	} else {
 		pending := Margin(0, 0);
+		pendingclear := 0;	# the pending margins are an empty cleared box's: they end in this box (§8.3.1)
 		cury := 0;
 		adjoining := passtop;	# still at the top, margins adjoin ours
 		# margin-trim: the first in-flow child's start margin and the
@@ -1933,10 +1937,13 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 					hyp = ky + msum(collapse(top, topmargin(k, cw))) - msum(top);
 				if(cl > hyp) {
 					cleared = 1;
-					# clearance: the margins above no longer collapse with it
+					# clearance: the margins above no longer collapse with
+					# it, and its top border edge goes at the clearance,
+					# its own margins (a child's collapsed through it
+					# included) used up (margin-collapse-039)
 					if(adjoining)
 						adjoining = 0;
-					cury = cl - msum(collapse(pending, mval(k.mt)));
+					cury = cl - msum(collapse(pending, topmargin(k, cw)));
 					ky = cl;
 				}
 			}
@@ -2000,6 +2007,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 					# a following margin joins them rather than adding
 					cury = k.y - b.bt - b.pt - msum(m);
 					pending = m;
+					pendingclear = 1;
 				} else {
 					k.y = b.bt + b.pt + cury + msum(collapse(pending, kt));
 					pending = collapse(pending, m);
@@ -2017,6 +2025,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			}
 			cury = k.y - b.bt - b.pt + k.h;
 			pending = kb;
+			pendingclear = 0;
 			relative(k, cw, ch);
 		}
 		if(b.st.margintrim & 2)
@@ -2024,14 +2033,14 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		if(adjoining) {
 			# no in-flow content at all
 			mh := b.st.minheight;
-			if(passbot && sh <= 0 && (mh.kind == Style->Lauto || mh.kind == Style->Lpx && mh.px == 0.0 && mh.pct == 0.0) &&
+			if(passempty && (mh.kind == Style->Lauto || mh.kind == Style->Lpx && mh.px == 0.0 && mh.pct == 0.0) &&
 			   b.kind == Kblock) {
 				empty = 1;
 				top = collapse(top, pending);
 			}
-		} else if(passbot)
+		} else if(passbot && !pendingclear)
 			bot = collapse(bot, pending);
-		else if(mhhold) {
+		else if(mhhold && !pendingclear) {
 			# a min-height that raises the box above its content holds
 			# the last child's margin: it neither escapes nor adds to the
 			# content, as browsers have it (margin-collapse-min-height-001);
@@ -5095,6 +5104,7 @@ Tcell: adt {
 	row:	ref Box;
 	r, c:	int;		# first row and column
 	rs, cs:	int;		# spans
+	base:	int;		# a baseline-aligned cell's baseline from its top edge, once laid out; -1 for others
 };
 
 Tgrid: adt {
@@ -5205,7 +5215,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 			for(rr := r; rr < r + rs; rr++)
 				for(cc := c; cc < c + cs; cc++)
 					taken[rr] = cc :: taken[rr];
-			t.cells = ref Tcell(cell, row, r, c, rs, cs) :: t.cells;
+			t.cells = ref Tcell(cell, row, r, c, rs, cs, -1) :: t.cells;
 			c += cs;
 			if(c > t.ncols)
 				t.ncols = c;
@@ -6021,6 +6031,22 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 			rowh[c.r] = k.h;
 		if(c.rs == 1 && k.st.height.kind == Style->Lpx && k.st.height.pct == 0.0)
 			rowspec[c.r] = 1;
+		if(c.rs == 1 && k.st.valign == Style->VAbaseline)
+			c.base = cellbaseline(k);
+	}
+	# baseline-aligned cells of a row share a baseline, the lowest of
+	# theirs; the others move down to it, and the row grows to hold
+	# them (§17.5.3)
+	rowbase := array[nr] of {* => -1};
+	for(cl2 = t.cells; cl2 != nil; cl2 = tl cl2) {
+		c := hd cl2;
+		if(c.base >= 0 && c.base > rowbase[c.r])
+			rowbase[c.r] = c.base;
+	}
+	for(cl2 = t.cells; cl2 != nil; cl2 = tl cl2) {
+		c := hd cl2;
+		if(c.base >= 0 && rowbase[c.r] - c.base + c.box.h > rowh[c.r])
+			rowh[c.r] = rowbase[c.r] - c.base + c.box.h;
 	}
 	for(cl2 = t.cells; cl2 != nil; cl2 = tl cl2) {
 		c := hd cl2;
@@ -6128,6 +6154,9 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 			dy = (h - contenth)/2;
 		Style->VAbottom =>
 			dy = h - contenth;
+		Style->VAbaseline =>
+			if(c.base >= 0)
+				dy = rowbase[c.r] - c.base;
 		}
 		if(dy > 0)
 			shiftcontent(k, dy);
@@ -6164,6 +6193,16 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 }
 
 curdoc: ref Doc;
+
+# a cell's baseline: its first in-flow line box's, else its bottom
+# content edge (§17.5.3), from its top border edge
+cellbaseline(k: ref Box): int
+{
+	(ok, by) := firstbaseline(k);
+	if(ok)
+		return by;
+	return k.h - k.bb - k.pb;
+}
 
 rowgroupof(t: ref Tgrid, row: ref Box): ref Box
 {
@@ -7456,13 +7495,35 @@ Fl: adt {
 # The inline content of b as a list of items, white space processed.
 flatten(b: ref Box): list of ref Item
 {
-	f := ref Fl(nil, 1, b.st.decoration, b.st.decorationcolor);
+	(deco, decocolor) := flowdeco(b);
+	f := ref Fl(nil, 1, deco, decocolor);
 	for(i := 0; i < len b.kids; i++)
 		flat(f, b.kids[i]);
 	r: list of ref Item;
 	for(l := f.items; l != nil; l = tl l)
 		r = hd l :: r;
 	return r;
+}
+
+# The text decorations of the block container b's inline content: its
+# own and those propagated to it from its ancestors, down through
+# in-flow boxes (blocks, table parts, anonymous boxes) but not into
+# floats, absolutes or atomic inlines (CSS 2.2 §16.3.1); the colour is
+# the nearest decorated box's.
+flowdeco(b: ref Box): (int, int)
+{
+	d := 0;
+	c := 0;
+	for(k := b; k != nil; k = k.parent) {
+		if(k.st.decoration != 0) {
+			if(d == 0)
+				c = k.st.decorationcolor;
+			d |= k.st.decoration;
+		}
+		if(k.inl || isoof(k))
+			break;
+	}
+	return (d, c);
 }
 
 emit(f: ref Fl, it: ref Item)
@@ -9966,10 +10027,12 @@ paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 {
 	if(b.tb != nil)
 		r = tablerect(b, r);	# the table box: its captions lie outside its background and borders
-	if(b != canvasbg)
-		paintbackground(dst, b, r);
-	else
+	if(b == canvasbg)
 		paintshadows(dst, b, r);	# the background went to the canvas; the shadow is still its own
+	else if(b.kind == Krow || isrowgroup(b) || iscolumn(b))
+		painttablepart(dst, b, r);
+	else
+		paintbackground(dst, b, r);
 	if(b.tb != nil && b.tb.v != nil || b.st.collapse && b.kind == Kcell || b.kind == Krow || isrowgroup(b) || iscolumn(b))
 		return;	# collapsed borders: the table paints them over its content; rows, row groups and columns have none in the separated model (§17.6.1)
 	paintborders(dst, b, r);
@@ -10215,6 +10278,75 @@ paintshadows(dst: ref Image, b: ref Box, r: Rect)
 			shadowfill(dst, b, sr.inset(blur/2), r, (c & int 16rFFFFFF00) | a);
 		}
 	}
+}
+
+# The background of a row, row group, column or column group shows
+# only through its cells: the spacing between them is the table's
+# (CSS 2.2 §17.5.1).  It is positioned on the part's own box and
+# painted once per cell, clipped to the cell.
+painttablepart(dst: ref Image, b: ref Box, r: Rect)
+{
+	st := b.st;
+	if(!visible(st.bgcolor) && len st.bg == 0)
+		return;
+	oclip := dst.clipr;
+	for(cl := partcells(b, r); cl != nil; cl = tl cl) {
+		dst.clipr = intersect(oclip, hd cl);
+		if(rectok(dst.clipr))
+			paintbackground(dst, b, r);
+	}
+	dst.clipr = oclip;
+}
+
+# the cells a table part's background shows through, as rectangles
+# on the canvas: a row's or row group's own, a column's those its
+# columns cross
+partcells(b: ref Box, r: Rect): list of Rect
+{
+	cl: list of Rect;
+	if(b.kind == Krow)
+		return rowcells(b, r.min, nil);
+	if(isrowgroup(b)) {
+		for(i := 0; i < len b.kids; i++)
+			if(b.kids[i].kind == Krow)
+				cl = rowcells(b.kids[i], Point(r.min.x + b.kids[i].x, r.min.y + b.kids[i].y), cl);
+		return cl;
+	}
+	# a column: the table's origin from its own, through a group's
+	o := Point(r.min.x - b.x, r.min.y - b.y);
+	t := b.parent;
+	if(t != nil && t.kind != Ktable) {
+		o = Point(o.x - t.x, o.y - t.y);
+		t = t.parent;
+	}
+	if(t == nil || t.kind != Ktable)
+		return nil;
+	all: list of Rect;
+	for(i := 0; i < len t.kids; i++) {
+		k := t.kids[i];
+		if(k.kind == Krow)
+			all = rowcells(k, Point(o.x + k.x, o.y + k.y), all);
+		else if(isrowgroup(k))
+			for(j := 0; j < len k.kids; j++)
+				if(k.kids[j].kind == Krow)
+					all = rowcells(k.kids[j], Point(o.x + k.x + k.kids[j].x, o.y + k.y + k.kids[j].y), all);
+	}
+	for(; all != nil; all = tl all) {
+		c := hd all;
+		if(c.min.x < r.max.x && c.max.x > r.min.x)
+			cl = c :: cl;
+	}
+	return cl;
+}
+
+rowcells(row: ref Box, o: Point, cl: list of Rect): list of Rect
+{
+	for(i := 0; i < len row.kids; i++) {
+		k := row.kids[i];
+		if(k.kind == Kcell && !isoof(k))
+			cl = kidrect(k, o) :: cl;
+	}
+	return cl;
 }
 
 paintbackground(dst: ref Image, b: ref Box, r: Rect)
@@ -10915,11 +11047,36 @@ paintlines(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			break;
 		if(o.y + ln.y + ln.h < clip.min.y && !hasatomic(ln))
 			continue;
-		# inline box backgrounds and borders first, outermost first
-		for(k := 0; k < len ln.frags; k++) {
-			f := ln.frags[k];
-			if(f.kind == Fspan && f.box.st.visibility == Style->Vvisible)
-				paintspan(dst, f, o);
+		# inline box backgrounds and borders first, outermost first:
+		# the fragments come in closing order, inner boxes first, so
+		# they are taken by depth (an inner box's background covers
+		# its outer box's: inline-formatting-context-002)
+		ns := 0;
+		for(k := 0; k < len ln.frags; k++)
+			if(ln.frags[k].kind == Fspan)
+				ns++;
+		if(ns > 0) {
+			sp := array[ns] of ref Frag;
+			dp := array[ns] of int;
+			ns = 0;
+			for(k = 0; k < len ln.frags; k++) {
+				f := ln.frags[k];
+				if(f.kind != Fspan)
+					continue;
+				d := 0;
+				for(p := f.box; p != nil; p = p.parent)
+					d++;
+				j := ns++;
+				for(; j > 0 && dp[j-1] > d; j--) {
+					sp[j] = sp[j-1];
+					dp[j] = dp[j-1];
+				}
+				sp[j] = f;
+				dp[j] = d;
+			}
+			for(k = 0; k < ns; k++)
+				if(sp[k].box.st.visibility == Style->Vvisible)
+					paintspan(dst, sp[k], o);
 		}
 		for(k = 0; k < len ln.frags; k++) {
 			f := ln.frags[k];
@@ -11119,6 +11276,8 @@ dumpbox(b: ref Box, ind: string, o: Point): string
 					s += sys->sprint("%s    text %d %d %d %d \"%s\"\n", ind, x + f.x, y + f.y, f.w, f.h, f.text);
 				Fatomic =>
 					s += dumpbox(f.box, ind + "    ", Point(x, y));
+				Fspan =>
+					s += sys->sprint("%s    span %d %d %d %d %d %d%d\n", ind, f.box.node, x + f.x, y + f.y, f.w, f.h, f.first, f.last);
 				}
 			}
 		}

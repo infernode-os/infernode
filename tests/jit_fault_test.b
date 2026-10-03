@@ -12,14 +12,13 @@ implement JitFaultTest;
 # picks the wrong handler, or none. Run under -c1 to test a JIT; under
 # -c0 it pins the interpreter's behaviour the JIT must match.
 #
-# The riscv64 JIT passes it. The amd64 and arm64 JITs do not yet: a
-# zero divide surfaces as "sys: fp" (amd64) or not at all (arm64), and
-# a nil list dereference is not caught either; the amd64 JIT does raise
-# and catch the bounds fault now (tests/jit_bounds_test.b covers that
-# on its own and runs everywhere). So on those two, where /env/cputype
-# says so, the whole module is skipped -- under -c0 as well, since a
-# module cannot ask which mode it runs in -- until their JITs are
-# fixed. riscv64, hosted or bare metal, runs it.
+# Every JIT passes it. The arm64 JIT did not: a zero divide gave 0
+# (SDIV does not trap), hd and tl of nil raised "array bounds error",
+# and its bounds and nil faults reached their macro by a branch, not a
+# call, so R.PC named the last call and no handler around the fault
+# matched. A nil ref or list load faults in hardware instead, and x86's
+# divide traps on zero; the emulator's signal handlers raised those with
+# R.PC just as stale, and the divide as "sys: fp: ...", on amd64 too.
 #
 
 include "sys.m";
@@ -63,6 +62,13 @@ run(name: string, testfn: ref fn(t: ref T))
 	else
 		failed++;
 }
+
+Rec: adt {
+	a: int;
+	b: int;
+};
+
+nilrec: ref Rec;
 
 # set at run time, so limbo cannot fold the division away
 zerov := -1;
@@ -124,6 +130,8 @@ fault(k: int): string
 		9 =>	x = hd l;
 		10 =>	x = len tl l;
 		11 =>	x = deep(50);
+		12 =>	x = nilrec.a;
+		13 =>	nilrec.a = 1;
 		}
 	} exception e {
 	"*" =>
@@ -165,6 +173,17 @@ testNilList(t: ref T)
 {
 	t.assertseq(fault(9), "dereference of nil", "hd nil");
 	t.assertseq(fault(10), "dereference of nil", "tl nil");
+}
+
+# a load or store through a nil ref faults in hardware, not in a check.
+# Only the first field: nil is -1, which faults everywhere, but a later
+# field is a small address, which faults only where page zero is not
+# mapped -- not on the bare-metal Pi (#735), nor on mpfs, which runs
+# without paging, so low physical memory simply reads.
+testNilRef(t: ref T)
+{
+	t.assertseq(fault(12), "dereference of nil", "load");
+	t.assertseq(fault(13), "dereference of nil", "store");
 }
 
 # a fault in a callee is caught by the caller: R.FP must be the callee's frame
@@ -226,19 +245,6 @@ testHandlerChoice(t: ref T)
 	t.asserteq(n, 1000 + 10 + 5 + 3 + 2 + 2 + 1 + 1 + 1 + 1, "loop with a handler");
 }
 
-# the host's cputype, as emu sets it in /env; nil where there is none
-cputype(): string
-{
-	fd := sys->open("/env/cputype", Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	buf := array[32] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return nil;
-	return string buf[0:n];
-}
-
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -254,15 +260,11 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	case cputype() {
-	"amd64" or "arm64" =>
-		raise "skip:this architecture's JIT does not yet raise these faults (see the file's header)";
-	}
-
 	run("DivZero", testDivZero);
 	run("DivValues", testDivValues);
 	run("Bounds", testBounds);
 	run("NilList", testNilList);
+	run("NilRef", testNilRef);
 	run("Unwind", testUnwind);
 	run("HandlerChoice", testHandlerChoice);
 

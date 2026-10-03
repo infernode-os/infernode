@@ -27,7 +27,7 @@
 TIMEOUT=${TIMEOUT:-120}
 rc=0
 for c in 0 1; do
-	out=$(timeout "$TIMEOUT" "$EMU" -c$c -r"$ROOT" /dis/sh.dis -c "/dis/tests/jit_bounds_test.dis; echo halt > /dev/sysctl" 2>&1 < /dev/null)
+	out=$(with_timeout "$TIMEOUT" "$EMU" -c$c -r"$ROOT" /dis/sh.dis -c "/dis/tests/jit_bounds_test.dis; echo halt > /dev/sysctl" 2>&1 < /dev/null)
 	if echo "$out" | grep -q "^PASS$" && ! echo "$out" | grep -q -- '--- FAIL\|SEGV: addr=\|BUS: addr=\|panic:'; then
 		echo "PASS: out-of-range indices raise array bounds error under -c$c"
 	else

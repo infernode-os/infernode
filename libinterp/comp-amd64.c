@@ -876,6 +876,19 @@ punt(Inst *i, int m, void (*fn)(void))
 {
 	uvlong pc;
 
+	/*
+	 * R.PC is always written for a real instruction, not only for the
+	 * ops that read it: an op that raises (a big divide by zero, a
+	 * conversion) then leaves R.PC inside this instruction, and the
+	 * exception finds this instruction's handler, as comp-riscv64.c's
+	 * puntop does (and comp-arm64.c's punt).  It was written for WRTPC
+	 * ops only, so a big divide by zero inside a {...} exception block
+	 * was not caught (tests/jit_fault_test.b).  The debug hook's and
+	 * macret's dummy instructions are not real ones.
+	 */
+	if(i >= mod->prog && i < mod->prog + mod->nprog)
+		m |= WRTPC;
+
 	/* Save VM state to R structure */
 	if(m & SRCOP) {
 		if(UXSRC(i->add) == SRC(AIMM))

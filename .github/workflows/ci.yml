@@ -435,6 +435,13 @@ jobs:
         chmod +x tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
 
+    - name: Run JIT fault tests (JIT and interpreter)
+      run: |
+        # A zero divide, a nil list or ref dereference and an index out
+        # of range raise the interpreter's exception from compiled code,
+        # caught by the handler around them.
+        ROOT=. sh tests/host/jit_fault_test.sh
+
     - name: Run JIT type code reuse test
       run: |
         # A freed type's compiled code goes back on comp-amd64.c's free
@@ -750,6 +757,13 @@ jobs:
         # the #F device would ship as a stub. Same guard as the GUI jobs.
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the amd64 and macOS jobs build it: the
+        # host-side JIT tests below run /dis/sh.dis and /dis/tests
+        export PATH="$ROOT/Linux/arm64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/arm64/bin/limbo"
@@ -845,6 +859,15 @@ jobs:
           echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
         fi
+
+    - name: Run JIT fault and bounds tests (JIT and interpreter)
+      run: |
+        # Gating, unlike the suite above: faults raised from compiled
+        # code must be the interpreter's exceptions, caught by the
+        # handler around them. The arm64 JIT failed both while the
+        # suite's non-gating run hid it.
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -1411,6 +1434,15 @@ jobs:
       run: |
         chmod +x verify-port.sh
         ./verify-port.sh
+
+    - name: Run JIT fault and bounds tests (JIT and interpreter)
+      run: |
+        # Gating, unlike the suite above: faults raised from compiled
+        # code must be the interpreter's exceptions, caught by the
+        # handler around them. The arm64 JIT failed both while the
+        # suite's non-gating run hid it.
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |

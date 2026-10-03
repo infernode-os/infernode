@@ -19,6 +19,7 @@
 #include	"dat.h"
 #include	"fns.h"
 #include	"error.h"
+#include	"raise.h"
 
 int	SYS_SLEEP = 2;
 int SOCK_SELECT = 3;
@@ -283,6 +284,30 @@ TrapHandler(LPEXCEPTION_POINTERS ureg)
 
 	code = ureg->ExceptionRecord->ExceptionCode;
 	// pc = ureg->ContextRecord->Eip;
+
+	/*
+	 * A nil address is a Limbo nil dereference: the program's
+	 * "dereference of nil", with R.PC set from the faulting instruction
+	 * so an exception block around it catches it under the JIT (see
+	 * jitfault).  No dump: that is for faults that are emu's bugs.
+	 */
+	if(code == EXCEPTION_ACCESS_VIOLATION
+	&& isnilfault((uintptr)ureg->ExceptionRecord->ExceptionInformation[1])) {
+#if defined(_AMD64_)
+		jitfault((uintptr)ureg->ContextRecord->Rip);
+#elif defined(_ARM64_)
+		jitfault((uintptr)ureg->ContextRecord->Pc);
+#endif
+		disfault(nil, exNilref);
+	}
+
+	/* x86's integer divide traps on zero: the program's "zero divide" (emu/Linux/os.c:trapFPE) */
+	if(code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
+#if defined(_AMD64_)
+		if(jitfault((uintptr)ureg->ContextRecord->Rip))
+			disfault(nil, exZdiv);
+#endif
+	}
 
 #ifdef _AMD64_
 	if(code == EXCEPTION_ACCESS_VIOLATION) {

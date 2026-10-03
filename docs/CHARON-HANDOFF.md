@@ -49,6 +49,37 @@ the CSS2 families (tables, floats, margins, clearance, selectors) and
 css-text (letter-spacing, soft hyphens, hanging space separators,
 text-align-last), 74.0% to 76.0%.
 
+- `f663651` **SVG intrinsic sizes for backgrounds and replaced boxes,
+  percentages in SVG, grid static positions and rtl grids.**  Layout
+  keeps SVG background sources (`setbgsvg`, `bgsvgs`), reads the
+  root's width/height/viewBox (`svgintrinsic`, `svglen`, `svgpct`),
+  sizes by Backgrounds 3 §3.9 (`concretesize`) and draws again at the
+  tile size (`svgraster`, with `svgresize`/`dropattr`/`strindex` moved
+  here from page.b); `Box.svg`/`iratio`/`ipw`/`iph` set by page.b's
+  `svgdims` (an `<object>`'s omitted dimensions are 100%), `replacedsize`
+  resolving them (a specified dimension and the ratio first, a
+  percentage or a ratio alone filling what the containing block leaves
+  after padding and borders, else 300×150), `aspect()` using `iratio`.
+  readsvg.b: `px`/`py`/`pd`/`plen` for percentages, `rootlen`,
+  preserveAspectRatio, and `int width` (Limbo's `int` rounds: a
+  `+ 0.5` makes 16 into 17, which was why every SVG raster was a pixel
+  too big and its edges blended).  Grid: `gridspalign`, `gridabsarea`,
+  `Abs.flexsp` 3 (a grid's content box as the static rectangle) and 4
+  (a descendant's grid area, its own static position), rtl mirroring
+  of item areas in `laygrid` and of `gridabsarea`; `layabs` shrinks to
+  fit the width the static position leaves.
+- `7839793` **text-wrap: balance, segment-break rules, hanging-punctuation
+  allow-end, margin-trim in grid intrinsic sizes.**  `St.textwrap`
+  (`text-wrap-style`, `wrapstyle`); `layinline` is now a wrapper that
+  bisects a width cut per forced-break group with `layinline1` laid out
+  again each trial (`balancing`, `balancecuts`, `balancegroup`,
+  `balancecount`, `cutavail`; floats and `l.pending` restored between
+  trials; nested blocks laid plainly); `segbreaks`/`removable`/
+  `cjkpunct`/`ignorable` run before words are split; `endhangs`/
+  `hangstop` for allow-end and force-end (a break must be possible
+  after the mark); grid intrinsic contributions trim margins; an
+  absolutely positioned table with both insets keeps its own width;
+  the flex "safe" check is against the containing block.
 - `22b74e7` **Inline containing-block edges, sliced inline box-shadows,
   gamut mapping by the spec.**  An absolutely positioned box inside an
   inline takes its containing block from the first fragment's top and

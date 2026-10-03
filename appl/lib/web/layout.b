@@ -3365,10 +3365,11 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
 		if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
 			x = ax + (aw - k.w)/2;
-		if(st.dirrtl) {
+		if(st.dirrtl && !issubgrid(b, 1) && !islanes(b)) {
 			# the columns run from the right (Grid 2 §7.1): the area
 			# is mirrored, start being its right edge; left and right
-			# stay physical
+			# stay physical (a subgrid's tracks are its parent's, in
+			# the parent's order; grid lanes mirror their own)
 			x = cw - ax - aw + k.ml + (aw - k.w - k.ml - k.mr) - crossoff(js, aw, k.w + k.ml + k.mr);
 			if(js == Style->ALleft || js == Style->ALright)
 				x = cw - ax - aw + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
@@ -4453,6 +4454,15 @@ laylanes(l: ref L, b: ref Box, cbw, cbh: int)
 			x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
 			if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
 				x = ax + (aw - k.w)/2;
+			if(st.dirrtl) {
+				# the lanes run from the right, as a grid's columns do
+				# (grid-lanes-item-placement-004)
+				x = cw - ax - aw + k.ml + (aw - k.w - k.ml - k.mr) - crossoff(js, aw, k.w + k.ml + k.mr);
+				if(js == Style->ALleft || js == Style->ALright)
+					x = cw - ax - aw + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
+				if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
+					x = cw - ax - aw + (aw - k.w)/2;
+			}
 			k.x = b.bl + b.pl + x;
 			k.y = b.bt + b.pt + p + k.mt;
 			ah = o[i];
@@ -6810,13 +6820,18 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 				avail -= left;
 			if(!rauto)
 				avail -= right;
-			if(lauto && rauto) {
+			if(lauto && rauto && !spa) {
 				# the static position is the left (or right) inset
-				# (§10.3.7): shrink-to-fit in what it leaves (descendant-static-position-001)
+				# (§10.3.7): shrink-to-fit in what it leaves, even
+				# past the containing block (descendant-static-
+				# position-001); a table, in no more than the
+				# containing block has (absolute-tables-010)
+				room := cbw - (sx - pr.min.x);
 				if(a.rightedge)
-					avail = sx - pr.min.x - k.ml - k.mr;
-				else
-					avail -= sx - pr.min.x;
+					room = sx - pr.min.x;
+				if(k.kind == Ktable && room > cbw)
+					room = cbw;
+				avail = room - k.ml - k.mr;
 			}
 			w = fit(mn, mx, avail + mgs(k)) - mgs(k);
 		}
@@ -7244,6 +7259,72 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		w = 0;
 	if(h < 0)
 		h = 0;
+	if(ratio > 0.0) {
+		# min/max constraint violations with a ratio (CSS 2.2 §10.4's
+		# table): a constrained dimension takes the other with it
+		# (replaced-elements-max-height-20, -min-height-40)
+		mw := -1;
+		if(st.maxwidth.kind != Style->Lnone && (mw = specw(b, st.maxwidth, cbw)) >= 0)
+			mw -= hextra(b);
+		nw := 0;
+		if((nw = specw(b, st.minwidth, cbw)) >= 0)
+			nw -= hextra(b);
+		if(nw < 0)
+			nw = 0;
+		mh := -1;
+		if((mh = spech(b, st.maxheight, cbh)) >= 0)
+			mh -= vextra(b);
+		nh := 0;
+		if((nh = spech(b, st.minheight, cbh)) >= 0)
+			nh -= vextra(b);
+		if(nh < 0)
+			nh = 0;
+		if(mw >= 0 && w > mw && mh >= 0 && h > mh) {
+			if(real mw / real w <= real mh / real h) {
+				w = mw;
+				h = ir(real w / ratio);
+				if(h < nh)
+					h = nh;
+			} else {
+				h = mh;
+				w = ir(real h * ratio);
+				if(w < nw)
+					w = nw;
+			}
+		} else if(mw >= 0 && w > mw) {
+			w = mw;
+			h = ir(real w / ratio);
+			if(h < nh)
+				h = nh;
+		} else if(mh >= 0 && h > mh) {
+			h = mh;
+			w = ir(real h * ratio);
+			if(w < nw)
+				w = nw;
+		} else if(w < nw && h < nh) {
+			if(real nw / real nz1(w) <= real nh / real nz1(h)) {
+				h = nh;
+				w = ir(real h * ratio);
+				if(mw >= 0 && w > mw)
+					w = mw;
+			} else {
+				w = nw;
+				h = ir(real w / ratio);
+				if(mh >= 0 && h > mh)
+					h = mh;
+			}
+		} else if(w < nw) {
+			w = nw;
+			h = ir(real w / ratio);
+			if(mh >= 0 && h > mh)
+				h = mh;
+		} else if(h < nh) {
+			h = nh;
+			w = ir(real h * ratio);
+			if(mw >= 0 && w > mw)
+				w = mw;
+		}
+	}
 	return (w, h);
 }
 
@@ -12057,9 +12138,9 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	}
 	tw := int w;	# int rounds
 	th := int h;
-	if(w > 0.0 && tw < 1)	# a sliver still shows (it is repeated into a fill)
+	if(w > 0.0 && tw < 1 && bg.rx != Style->Rnorepeat)	# a sliver still shows when it is repeated into a fill; alone it is nothing (tall--contain--height)
 		tw = 1;
-	if(h > 0.0 && th < 1)
+	if(h > 0.0 && th < 1 && bg.ry != Style->Rnorepeat)
 		th = 1;
 	if(tw <= 0 || th <= 0)
 		return;

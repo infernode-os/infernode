@@ -7504,6 +7504,7 @@ inlineintrinsic(b: ref Box): (int, int)
 	content := 0;	# the line has content
 	prevw: ref Item;	# the word before, with nothing but inline box edges since
 	shy := 0;		# a soft hyphen came between: still one word for the min-content size
+	trail := 0.0;	# the letter spacing after the line's last character so far: trimmed at a line's end
 	for(l := items; l != nil; l = tl l) {
 		it := hd l;
 		case it.kind {
@@ -7514,9 +7515,10 @@ inlineintrinsic(b: ref Box): (int, int)
 			else
 				word = w;
 			shy = 0;
-			if(word > mn)
-				mn = word;
+			if(word - it.tls > mn)
+				mn = word - it.tls;
 			line += sp + w;
+			trail = it.tls;
 			sp = 0.0;
 			content = 1;
 			prevw = it;
@@ -7536,14 +7538,17 @@ inlineintrinsic(b: ref Box): (int, int)
 					sp += it.w;	# at the end it hangs
 			} else {
 				line += sp + it.w;
+				trail = it.tls;
 				sp = 0.0;
 				content = 1;
 			}
 		Iopen or Iclose =>
 			line += it.w;
 			word += it.w;
-			if(it.w > 0.0)
+			if(it.w > 0.0) {
 				content = 1;
+				trail = 0.0;
+			}
 			continue;	# (prevw stays: edges are no opportunity)
 		Iatomic =>
 			edges(it.box, 0);	# its padding and borders count; % ones are 0 here
@@ -7551,13 +7556,15 @@ inlineintrinsic(b: ref Box): (int, int)
 			if(real kmn > mn)
 				mn = real kmn;
 			line += sp + real kmx;
+			trail = 0.0;
 			sp = 0.0;
 			word = 0.0;
 			content = 1;
 		Ibreak =>
-			if(line > mx)
-				mx = line;
+			if(line - trail > mx)
+				mx = line - trail;
 			line = 0.0;
+			trail = 0.0;
 			word = 0.0;
 			sp = 0.0;
 			content = 0;
@@ -7571,8 +7578,8 @@ inlineintrinsic(b: ref Box): (int, int)
 		if(it.kind != Iword)
 			prevw = nil;
 	}
-	if(line > mx)
-		mx = line;
+	if(line - trail > mx)
+		mx = line - trail;
 	return (ir(mn + 0.49), ir(mx + 0.49));
 }
 
@@ -7591,6 +7598,7 @@ Item: adt {
 	decocolor:	int;
 	level:	int;		# bidi embedding level, set by bidiitems
 	para:	int;		# the level of the paragraph it is in (plaintext: per forced break)
+	tls:	real;		# text: the letter spacing after its last character (lspass)
 };
 
 Fl: adt {
@@ -7647,7 +7655,7 @@ flat(f: ref Fl, b: ref Box)
 	Kmarker =>
 		markeritem(f, b);
 	Kbr =>
-		emit(f, ref Item(Ibreak, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
+		emit(f, ref Item(Ibreak, nil, 0.0, b, nil, 0, 0, 0, 0, 0, 0.0));
 		f.space = 1;
 	Kinline =>
 		edges(b, 0);
@@ -7657,19 +7665,19 @@ flat(f: ref Fl, b: ref Box)
 			f.deco |= b.st.decoration;
 			f.decocolor = b.st.decorationcolor;
 		}
-		emit(f, ref Item(Iopen, nil, real (b.ml + b.bl + b.pl), b, nil, 0, 0, 0, 0, 0));
+		emit(f, ref Item(Iopen, nil, real (b.ml + b.bl + b.pl), b, nil, 0, 0, 0, 0, 0, 0.0));
 		for(i := 0; i < len b.kids; i++)
 			flat(f, b.kids[i]);
-		emit(f, ref Item(Iclose, nil, real (b.mr + b.br + b.pr), b, nil, 0, 0, 0, 0, 0));
+		emit(f, ref Item(Iclose, nil, real (b.mr + b.br + b.pr), b, nil, 0, 0, 0, 0, 0, 0.0));
 		f.deco = odeco;
 		f.decocolor = ocol;
 	* =>
 		if(isabs(b))
-			emit(f, ref Item(Iabs, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
+			emit(f, ref Item(Iabs, nil, 0.0, b, nil, 0, 0, 0, 0, 0, 0.0));
 		else if(isfloat(b))
-			emit(f, ref Item(Ifloat, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
+			emit(f, ref Item(Ifloat, nil, 0.0, b, nil, 0, 0, 0, 0, 0, 0.0));
 		else {
-			emit(f, ref Item(Iatomic, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
+			emit(f, ref Item(Iatomic, nil, 0.0, b, nil, 0, 0, 0, 0, 0, 0.0));
 			f.space = 0;
 		}
 	}
@@ -7685,10 +7693,10 @@ markeritem(f: ref Fl, b: ref Box)
 	# an inside marker is its own bidi isolate (::marker in html.css)
 	iso := b.st.listinside && isolating(b.st.unicodebidi);
 	if(iso)
-		emit(f, ref Item(Iopen, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
-	emit(f, ref Item(Iword, b.text, fc.width(b.text), b, fc, 1, 0, 0, 0, 0));
+		emit(f, ref Item(Iopen, nil, 0.0, b, nil, 0, 0, 0, 0, 0, 0.0));
+	emit(f, ref Item(Iword, b.text, fc.width(b.text), b, fc, 1, 0, 0, 0, 0, 0.0));
 	if(iso)
-		emit(f, ref Item(Iclose, nil, 0.0, b, nil, 0, 0, 0, 0, 0));
+		emit(f, ref Item(Iclose, nil, 0.0, b, nil, 0, 0, 0, 0, 0, 0.0));
 	f.space = 1;
 }
 
@@ -7925,10 +7933,10 @@ text(f: ref Fl, b: ref Box)
 		for(k0 := 0; k0 < len b.text; k0++) {
 			c0 := b.text[k0];
 			if(c0 == '\n' && ws0 != Style->Wnormal && ws0 != Style->Wnowrap) {
-				emit(f, ref Item(Ibreak, nil, 0.0, b, fc0, 0, 0, 0, 0, 0));
+				emit(f, ref Item(Ibreak, nil, 0.0, b, fc0, 0, 0, 0, 0, 0, 0.0));
 				f.space = 1;
 			} else if(c0 == '\t' && ws0 != Style->Wnormal && ws0 != Style->Wnowrap && ws0 != Style->Wpreline && st.tabsize < 0.0) {
-				emit(f, ref Item(Ispace, "\t", -st.tabsize, b, fc0, ws0 == Style->Wpre, f.deco, f.decocolor, 0, 0));
+				emit(f, ref Item(Ispace, "\t", -st.tabsize, b, fc0, ws0 == Style->Wpre, f.deco, f.decocolor, 0, 0, 0.0));
 				f.space = 0;
 			}
 		}
@@ -7936,7 +7944,7 @@ text(f: ref Fl, b: ref Box)
 		# box with a baseline (inline-block-baseline-016)
 		for(k1 := 0; k1 < len b.text; k1++)
 			if(!isspace(b.text[k1])) {
-				emit(f, ref Item(Iword, "", 0.0, b, fc0, 1, f.deco, f.decocolor, 0, 0));
+				emit(f, ref Item(Iword, "", 0.0, b, fc0, 1, f.deco, f.decocolor, 0, 0, 0.0));
 				f.space = 0;
 				break;
 			}
@@ -7963,7 +7971,7 @@ text(f: ref Fl, b: ref Box)
 	while(i < len s) {
 		c := s[i];
 		if(c == '\n' && keepnl) {
-			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0, 0, 0));
+			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0, 0, 0, 0.0));
 			f.space = 1;
 			i++;
 			continue;
@@ -7992,9 +8000,9 @@ text(f: ref Fl, b: ref Box)
 			}
 			if(!f.space) {
 				if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
-					emit(f, ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+					emit(f, ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0));
 				else
-					emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+					emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0));
 				f.space = 1;
 			}
 			continue;
@@ -8018,14 +8026,14 @@ text(f: ref Fl, b: ref Box)
 				t[0] = c;
 				w = fc.width(t);
 			}
-			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0));
 			f.space = 0;
 			i++;
 			continue;
 		}
 		if(c == 16r200B) {
 			# a zero-width space: a break opportunity that shows nothing
-			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0));
 			f.space = 0;
 			i++;
 			continue;
@@ -8050,7 +8058,7 @@ text(f: ref Fl, b: ref Box)
 			# nothing but soft hyphens: a break opportunity that shows
 			# nothing and, unlike a zero-width space, does not come
 			# between the letters around it for shaping
-			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0));
 			f.space = 0;
 			continue;
 		}
@@ -8064,15 +8072,15 @@ text(f: ref Fl, b: ref Box)
 			for(k := 1; k <= len word; k++)
 				if(k == len word || st.breakall == 2 || lbbreak(word[k-1], word[k])) {
 					ch := word[k0:k];
-					emit(f, ref Item(Iword, ch, fc.width(ch) + ls * real len ch, b, fc, 0, f.deco, f.decocolor, 0, 0));
+					emit(f, ref Item(Iword, ch, fc.width(ch) + ls * real len ch, b, fc, 0, f.deco, f.decocolor, 0, 0, 0.0));
 					k0 = k;
 				}
 			lbbreakall = 0;
 		} else
-			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0));
 		f.space = 0;
 		if(s[i-1] == 16rAD && st.hyphens != 0)	# the soft hyphen it ended with: a break opportunity whose hyphen shows only at a line's end
-			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0));
 	}
 }
 
@@ -8082,10 +8090,11 @@ text(f: ref Fl, b: ref Box)
 # edges of inline boxes apart.
 # The spacing after a character is that of the innermost box holding
 # it and the next character (Text 4 §8.2): between boxes of different
-# letter-spacing the common ancestor's applies, and none after the
-# last character of the paragraph (letter-spacing-nesting-001, -002,
-# -end-of-line-001).  Each text item carries its own box's spacing
-# after its last character; this adjusts that.
+# letter-spacing the common ancestor's applies (letter-spacing-
+# nesting-001, -002); at a line's end it is trimmed, finish() taking
+# it off the last fragment (-end-of-line-001, letter-spacing-200).
+# Each text item carries its own box's spacing after its last
+# character; this adjusts that and records what is left (tls).
 lspass(items: list of ref Item)
 {
 	for(l := items; l != nil; l = tl l) {
@@ -8093,6 +8102,7 @@ lspass(items: list of ref Item)
 		if(it.kind != Iword && it.kind != Ispace || len it.text == 0)
 			continue;
 		own := it.box.st.letterspacing;
+		it.tls = own;
 		if(own == 0.0)
 			continue;
 		next: ref Item;
@@ -8106,10 +8116,11 @@ lspass(items: list of ref Item)
 				break;
 			}
 		}
-		after := 0.0;
-		if(next != nil)
-			after = commonbox(it.box, next.box).st.letterspacing;
+		if(next == nil)
+			continue;	# the paragraph's end: a line's end, trimmed there
+		after := commonbox(it.box, next.box).st.letterspacing;
 		it.w += after - own;
+		it.tls = after;
 	}
 }
 
@@ -8393,7 +8404,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 			while(!ln.content && ln.x + real w > real ln.avail + 0.01 && movedown(f, ln))
 				tallband(f, ln, ah);
-			fr := ref Frag(Fatomic, ir(ln.x) + k.ml, 0, k.w, k.h, 0, k, nil, nil, 0, 0, 0, 0, it.level);
+			fr := ref Frag(Fatomic, ir(ln.x) + k.ml, 0, k.w, k.h, 0, k, nil, nil, 0, 0, 0, 0, it.level, 0);
 			ln.frags = fr :: ln.frags;
 			ln.x += real w;
 			ln.content = 1;
@@ -8435,7 +8446,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# an inline-level box's static position is where it
 				# would have been on the line: a fragment of no width
 				# marks the place through alignment and reordering
-				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level);
+				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level, 0);
 				ln.frags = mark :: ln.frags;
 				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil) :: l.pending;
 			} else {
@@ -8677,25 +8688,36 @@ segwidth(il: list of ref Item): real
 {
 	w := 0.0;
 	pos := 0.0;
+	trail := 0.0;	# the letter spacing after the segment's last character: trimmed if the line ends there
 	prev: ref Item;
 	for(; il != nil; il = tl il) {
 		x := hd il;
 		case x.kind {
 		Iword =>
 			if(prev != nil && wordgap(prev.box, prev.text, x, 0))
-				return w;
+				return segend(w, pos, trail);
 			pos += x.w;
+			trail = x.tls;
 			prev = x;
 		Iopen or Iclose =>
 			pos += x.w;
+			if(x.w > 0.0)
+				trail = 0.0;
 		Ifloat or Iabs =>
 			;
 		* =>
-			return w;
+			return segend(w, pos, trail);
 		}
 		if(pos > w)
 			w = pos;
 	}
+	return segend(w, pos, trail);
+}
+
+segend(w, pos, trail: real): real
+{
+	if(pos >= w && trail > 0.0)
+		return pos - trail;
 	return w;
 }
 
@@ -8783,7 +8805,7 @@ tabw(ln: ref Ln, it: ref Item): real
 
 textfrag(ln: ref Ln, it: ref Item): ref Frag
 {
-	return ref Frag(Ftext, ir(ln.x), 0, ir(it.w), 0, 0, it.box, it.text, it.face, 0, 0, it.deco, it.decocolor, it.level);
+	return ref Frag(Ftext, ir(ln.x), 0, ir(it.w), 0, 0, it.box, it.text, it.face, 0, 0, it.deco, it.decocolor, it.level, ir(it.tls));
 }
 
 # close an inline box's fragment on this line
@@ -8805,7 +8827,7 @@ span(ln: ref Ln, b: ref Box, last: int): ref Frag
 	ln.open = nil;
 	for(; r != nil; r = tl r)
 		ln.open = hd r :: ln.open;
-	return ref Frag(Fspan, ir(x), 0, ir(ln.x) - ir(x), 0, 0, b, nil, nil, first, last, 0, 0, level);	# ends where the next content starts
+	return ref Frag(Fspan, ir(x), 0, ir(ln.x) - ir(x), 0, 0, b, nil, nil, first, last, 0, 0, level, 0);	# ends where the next content starts
 }
 
 lineheight(st: ref St, f: ref Typeface): real
@@ -8842,6 +8864,18 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			ln.x -= real f.w;
 			hanging = f :: hanging;
 			continue;
+		}
+		break;
+	}
+	# the letter spacing after the line's last character is trimmed (Text 4 §8.2)
+	for(fl = ln.frags; fl != nil; fl = tl fl) {
+		f := hd fl;
+		if(f.kind == Fspan || ishanging(f, hanging) || f.kind == Ftext && f.text == " " && f.w == 0)
+			continue;
+		if(f.kind == Ftext && f.tls > 0) {
+			f.w -= f.tls;
+			ln.x -= real f.tls;
+			f.tls = 0;
 		}
 		break;
 	}

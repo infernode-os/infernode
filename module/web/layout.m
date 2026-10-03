@@ -107,6 +107,7 @@ Layout: module
 		deco:	int;		# Ftext: text-decoration lines, as propagated
 		decocolor:	int;
 		level:	int;		# bidi embedding level (odd: right to left)
+		tls:	int;		# Ftext: the letter spacing after its last character, trimmed at a line's end
 	};
 
 	build:	fn(d: ref Dom->Doc, c: ref Style->Computed): ref Box;

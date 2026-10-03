@@ -6338,6 +6338,7 @@ hints(d: ref Doc, n: int): list of ref Decl
 		   nd.tag != Dom->Ttr && rules == "groups")
 			s += "border-top-width:1px;border-top-style:solid;border-bottom-width:1px;border-bottom-style:solid;";
 	Dom->Tcolgroup or Dom->Tcol =>
+		s += dimhint(d, n, "width", "width");	# <col width=40> (HTML §15.3.9; border-image-repeat-002's reference)
 		if(nd.tag == Dom->Tcolgroup && rules == "groups" || rules == "cols" || rules == "all")
 			s += "border-left-width:1px;border-left-style:solid;border-right-width:1px;border-right-style:solid;";
 	Dom->Timg or Dom->Tobject or Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe or Dom->Tembed or Dom->Tinput =>

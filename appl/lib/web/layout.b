@@ -7259,26 +7259,37 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		w = 0;
 	if(h < 0)
 		h = 0;
-	if(ratio > 0.0 && !(b.parent != nil && (b.parent.kind == Kflex || b.parent.kind == Kgrid))) {
+	if(ratio > 0.0) {
 		# min/max constraint violations with a ratio (CSS 2.2 §10.4's
 		# table): a constrained dimension takes the other with it
 		# (replaced-elements-max-height-20, -min-height-40); lengths
 		# and percentages only (a keyword asks for the intrinsic size,
-		# which is this); not for a flex or grid item, whose base size
-		# ignores them (flex-aspect-ratio-img-row-007)
+		# which is this).  A flex item's base size ignores its main
+		# axis constraints, which clamp the flexed size later, but
+		# takes the cross axis ones transferred through the ratio
+		# (Flexbox §9.2; flex-aspect-ratio-img-row-007, -010,
+		# flex-minimum-width-flex-items-009)
+		fw := 1;	# the width constraints count
+		fh := 1;
+		if(b.parent != nil && b.parent.kind == Kflex) {
+			if(b.parent.st.flexdir < 2)
+				fw = 0;
+			else
+				fh = 0;
+		}
 		mw := -1;
-		if(plainlen(st.maxwidth) && (mw = specw(b, st.maxwidth, cbw)) >= 0)
+		if(fw && plainlen(st.maxwidth) && (mw = specw(b, st.maxwidth, cbw)) >= 0)
 			mw -= hextra(b);
 		nw := 0;
-		if(plainlen(st.minwidth) && (nw = specw(b, st.minwidth, cbw)) >= 0)
+		if(fw && plainlen(st.minwidth) && (nw = specw(b, st.minwidth, cbw)) >= 0)
 			nw -= hextra(b);
 		if(nw < 0)
 			nw = 0;
 		mh := -1;
-		if(plainlen(st.maxheight) && (mh = spech(b, st.maxheight, cbh)) >= 0)
+		if(fh && plainlen(st.maxheight) && (mh = spech(b, st.maxheight, cbh)) >= 0)
 			mh -= vextra(b);
 		nh := 0;
-		if(plainlen(st.minheight) && (nh = spech(b, st.minheight, cbh)) >= 0)
+		if(fh && plainlen(st.minheight) && (nh = spech(b, st.minheight, cbh)) >= 0)
 			nh -= vextra(b);
 		if(nh < 0)
 			nh = 0;
@@ -9160,8 +9171,8 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			ln.x += w;
 			if(it.hang == 1)
 				ln.x -= w;	# a hanging mark takes no room (finish moves it before the start edge)
-			if(!collapsible(it.box.st))
-				ln.content = 1;	# preserved white space is content
+			if(!collapsible(it.box.st) || hangsep(it.text))
+				ln.content = 1;	# preserved white space is content; so is an ideographic space, which hangs but is never removed (trailing-ideographic-space-023)
 		Iword =>
 			if(it.box.kind == Kmarker && !it.box.st.listinside) {
 				fr := textfrag(ln, it);
@@ -9713,14 +9724,17 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		f := hd fl;
 		if(f.kind == Fspan)
 			continue;
-		if(f.kind == Ftext && f.text == " " && collapsible(f.box.st)) {
+		if(f.kind == Ftext && f.text == " " && collapsible(f.box.st) && hanging == nil) {
 			ln.x -= real f.w;
 			f.w = 0;
 			continue;
 		}
 		if(f.kind == Ftext && isblankrun(f.text) && f.box.st.whitespace == Style->Wprewrap && !forced ||
-		   f.kind == Ftext && hangsep(f.text) && f.box.st.whitespace != Style->Wbreakspaces) {
-			# so does an ideographic space (Text 3 §4.1.3, other space separators)
+		   f.kind == Ftext && hangsep(f.text) && f.box.st.whitespace != Style->Wbreakspaces ||
+		   f.kind == Ftext && f.text == " " && collapsible(f.box.st)) {
+			# so does an ideographic space (Text 3 §4.1.3, other space
+			# separators), and a space among them, which is not at
+			# the line's end and so is not removed (trailing-ideographic-space-002)
 			ln.x -= real f.w;
 			hanging = f :: hanging;
 			continue;
@@ -9941,8 +9955,8 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		hi := -(1 << 30);
 		for(i = 0; i < len frags; i++) {
 			f := frags[i];
-			if(f.kind == Fspan || ishanging(f, hanging))
-				continue;
+			if(f.kind == Fspan || ishanging(f, hanging) || f.kind == Ftext && f.w == 0)
+				continue;	# a collapsed space among the hanging ones keeps its old place, which is not the line's end (trailing-ideographic-space-002)
 			if(f.x < lo)
 				lo = f.x;
 			if(f.x + f.w > hi)
@@ -11650,6 +11664,26 @@ paintborderimage(dst: ref Image, b: ref Box, r: Rect): int
 			return 0;
 		paintgradient(img, b, img.r, ref Style->Bg(bi.src, Style->Rrepeat, Style->Rrepeat, Style->Len(Style->Lpx, 0.0, 0.0, nil), Style->Len(Style->Lpx, 0.0, 0.0, nil),
 			Style->Len(Style->Lauto, 0.0, 0.0, nil), Style->Len(Style->Lauto, 0.0, 0.0, nil), Style->BOXborder, Style->BOXpadding, 0));
+	} else if((svg := bgsvgof(u)) != nil) {
+		# an SVG at its own size, or the area's where it has none
+		# (border-image-image-type-001)
+		(siw, sih, sratio, nil, nil) := svgintrinsic(svg);
+		if(siw < 0 && sih < 0) {
+			siw = area.dx();
+			sih = area.dy();
+			if(sratio > 0.0)
+				sih = ir(real siw / sratio);
+		} else if(siw < 0) {
+			siw = area.dx();
+			if(sratio > 0.0)
+				siw = ir(real sih * sratio);
+		} else if(sih < 0) {
+			sih = area.dy();
+			if(sratio > 0.0)
+				sih = ir(real siw / sratio);
+		}
+		if(siw > 0 && sih > 0)
+			img = svgraster(u, svg, siw, sih);
 	} else {
 		for(l := bgimages; l != nil; l = tl l)
 			if((hd l).t0 == u) {
@@ -12531,9 +12565,18 @@ tileplaces(rep, p, t, a0, aw, c0, c1: int): list of int
 		n := aw / t;
 		if(n < 2)
 			return p :: nil;
-		for(i := n - 1; i >= 0; i--)
-			l = a0 + ir(real i * real (aw - t) / real (n - 1)) :: l;
-		return l;
+		# the same spacing goes on past the positioning area, into
+		# the rest of the painting area (gradient-repeat-spaced-with-borders)
+		step := real (aw - t) / real (n - 1);
+		i := 0;
+		while(a0 + ir(real i * step) > c0)
+			i--;
+		for(; a0 + ir(real i * step) < c1; i++)
+			l = a0 + ir(real i * step) :: l;
+		r: list of int;
+		for(; l != nil; l = tl l)
+			r = hd l :: r;
+		return r;
 	}
 	x0 := p;
 	while(x0 > c0)
@@ -12612,8 +12655,8 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	n := len args;
 	if(n < 1)
 		return;
-	cols := array[n] of int;
-	pos := array[n] of real;
+	cols := array[2*n] of int;
+	pos := array[2*n] of real;
 	k := 0;
 	for(; args != nil; args = tl args) {
 		a := nows(hd args);
@@ -12622,15 +12665,26 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		(ok, c) := style->color(a[0:1]);
 		if(!ok)
 			continue;
-		cols[k] = c;
-		pos[k] = -1.0;
-		if(len a > 1 && a[1].kind == Css->Kpercent)
-			pos[k] = a[1].n / 100.0;
-		else if(len a > 1 && a[1].kind == Css->Kdimension && a[1].s == "px" && linelen > 0.0)
-			pos[k] = a[1].n / linelen;
-		else if(len a > 1 && a[1].kind == Css->Knumber && a[1].n == 0.0)
-			pos[k] = 0.0;
-		k++;
+		# a colour with two positions is two stops (Images 4 §3.4.1:
+		# "yellow 0% 25%" is a band; border-image-repeat-round-003)
+		for(j := 1; j < len a && j <= 2; j++) {
+			cols[k] = c;
+			pos[k] = -1.0;
+			if(a[j].kind == Css->Kpercent)
+				pos[k] = a[j].n / 100.0;
+			else if(a[j].kind == Css->Kdimension && a[j].s == "px" && linelen > 0.0)
+				pos[k] = a[j].n / linelen;
+			else if(a[j].kind == Css->Knumber && a[j].n == 0.0)
+				pos[k] = 0.0;
+			else
+				break;
+			k++;
+		}
+		if(len a == 1) {
+			cols[k] = c;
+			pos[k] = -1.0;
+			k++;
+		}
 	}
 	if(k == 0)
 		return;
@@ -12640,6 +12694,9 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		pos[0] = 0.0;
 	if(pos[k-1] < 0.0)
 		pos[k-1] = 1.0;
+	for(q := 1; q < k; q++)
+		if(pos[q] >= 0.0 && pos[q] < pos[q-1] && pos[q-1] >= 0.0)
+			pos[q] = pos[q-1];	# a stop before the one before it is at it (§3.4.2)
 	for(i := 1; i < k-1; i++)
 		if(pos[i] < 0.0) {
 			j := i;

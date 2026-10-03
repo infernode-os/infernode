@@ -49,6 +49,26 @@ the CSS2 families (tables, floats, margins, clearance, selectors) and
 css-text (letter-spacing, soft hyphens, hanging space separators,
 text-align-last), 74.0% to 76.0%.
 
+- `d8b4c53` **border-image, background-clip text and border-area,
+  background-repeat space.**  `Bimage` adt and `St.bimage`
+  (`bimageof`, `foursides`, `birepeat`, the `borderimage` shorthand
+  splitter; the `border` shorthand resets the source);
+  `paintborderimage` (nine parts via `bimpart`/`bimplaces`/`subimage`,
+  slices via `slicev` rounded up when they overlap, widths `bimwidth`,
+  outsets `bimoutset`, a gradient source rasterised to the area);
+  `maskedbackground`/`maskedspan`/`borderareamask` paint the background
+  into a layer and composite through a GREY8 mask, `textmask` making
+  `painttext`/`paintdeco` draw white and `paintself`/`paintreplaced`/
+  `paintoutline`/`paintspan` draw nothing; `tileplaces` for
+  background-repeat: space.  Not done: `border-style: double` with
+  border-area, conic gradients (2 tests).
+- `2748456` **min/max constraints with a ratio, rtl grid lanes,
+  static-position room, slivers.**  CSS 2.2 §10.4's constraint table
+  at the end of `replacedsize` (lengths and percentages only via
+  `plainlen`, not for flex or grid items); `laylanes` mirrors lane
+  positions in rtl; `layabs` shrink-to-fit room reaches the containing
+  block's end past its width except for tables; a background tile
+  thinner than a pixel is dropped unless repeated.
 - `f663651` **SVG intrinsic sizes for backgrounds and replaced boxes,
   percentages in SVG, grid static positions and rtl grids.**  Layout
   keeps SVG background sources (`setbgsvg`, `bgsvgs`), reads the

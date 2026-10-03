@@ -4450,7 +4450,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				if(nm == "white-space") st.whitespace = Wpre;
 				else st.whitespace = Wprewrap;
 			"nowrap" =>
-				case st.whitespace {
+				if(nm == "white-space")
+					st.whitespace = Wnowrap;	# the shorthand: collapsing too
+				else case st.whitespace {
 				Wprewrap or Wbreakspaces => st.whitespace = Wpre;
 				Wpre => ;
 				* => st.whitespace = Wnowrap;

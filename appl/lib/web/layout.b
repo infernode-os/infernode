@@ -76,6 +76,7 @@ B: adt {
 	d:	ref Doc;
 	c:	ref Computed;
 	counters:	list of ref Ctr;	# the counters in scope, innermost first
+	qdepth:	int;		# quotes open (CSS 2.2 §12.3.2)
 };
 
 # A counter instance (CSS Lists 3 §4).  Its scope is the element that
@@ -104,7 +105,7 @@ build(d: ref Doc, c: ref Computed): ref Box
 	root := d.root();
 	if(root == 0 || c.st[root] == nil)
 		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
-	b := ref B(d, c, nil);
+	b := ref B(d, c, nil, 0);
 	l := element(b, root);
 	if(l == nil) {
 		# display: none on the root: nothing, not even its background
@@ -603,12 +604,16 @@ generated(b: ref B, n: int, st: ref St): ref Box
 	}
 	g := newbox(kind, inl, n, st);
 	t := newbox(Ktext, 1, n, st);
-	# its own counters are not inherited by the element's children (the
-	# values it gives existing ones are): counters-scope-001 and -004
-	saved := b.counters;
-	ctrprops(b, n, st, 0);
+	# A pseudo-element is the element's first (or last) child for
+	# counters: one it creates afresh is in scope for the children that
+	# follow it (content-021), one it nests inside an ancestor's is its
+	# own (counters-scope-001).
+	pid := -(2*n);
+	if(st != b.c.before[n])
+		pid = -(2*n + 1);
+	ctrprops(b, pid, st, 0);
 	t.text = content(b, n, st);
-	b.counters = saved;
+	b.counters = ctrleave(b.counters, pid);
 	g.kids = array[] of {t};
 	return g;
 }
@@ -642,8 +647,12 @@ ctrprops(b: ref B, n: int, st: ref St, li: int)
 				x = int v[i+1].n;
 				given = 1;
 			}
-			if(!given)
-				x = reversedinit(b, n, nm);
+			if(!given) {
+				el := n;
+				if(el < 0)
+					el = (-el) / 2;	# a pseudo-element: its element's subtree
+				x = reversedinit(b, el, nm);
+			}
 			instantiate(b, n, nm, x, 1);
 		}
 	v = st.counterincrement;
@@ -700,13 +709,22 @@ instantiate(b: ref B, n: int, nm: string, x, rev: int)
 	for(l := b.counters; l != nil; l = tl l)
 		if((hd l).name == nm) {
 			o := (hd l).origin;
-			if(o == n || o != 0 && b.d.nodes[o].parent == b.d.nodes[n].parent)
+			if(o == n || o != 0 && parentof(b, o) == parentof(b, n))
 				b.counters = ctrremove(b.counters, hd l);
 			else
 				nested = 1;	# an ancestor's: this one is for the subtree (counters-001)
 			break;
 		}
 	b.counters = ref Ctr(nm, x, rev, n, nested) :: b.counters;
+}
+
+# the parent of a counter's originating element; a pseudo-element,
+# numbered -(2n) for ::before and -(2n+1) for ::after, is a child of n
+parentof(b: ref B, o: int): int
+{
+	if(o < 0)
+		return (-o) / 2;
+	return b.d.nodes[o].parent;
 }
 
 # what an element leaves its following siblings: its own list without
@@ -869,15 +887,40 @@ content(b: ref B, n: int, st: ref St): string
 				}
 			}
 		Css->Kident =>
+			# quotes: the pair for the nesting depth, the last pair
+			# beyond them (CSS 2.2 §12.3.2); none shows nothing
+			q := st.quotes;
+			if(q == nil)
+				q = defaultquotes;
 			case lower(t.s) {
 			"open-quote" =>
-				s += "“";
+				s += quotemark(q, b.qdepth, 0);
+				b.qdepth++;
 			"close-quote" =>
-				s += "”";
+				if(b.qdepth > 0)
+					b.qdepth--;
+				s += quotemark(q, b.qdepth, 1);
+			"no-open-quote" =>
+				b.qdepth++;
+			"no-close-quote" =>
+				if(b.qdepth > 0)
+					b.qdepth--;
 			}
 		}
 	}
 	return s;
+}
+
+defaultquotes := array[] of {"“", "”", "‘", "’"};
+
+quotemark(q: array of string, depth, close: int): string
+{
+	n := len q / 2;
+	if(n == 0)
+		return "";
+	if(depth >= n)
+		depth = n - 1;
+	return q[2*depth + close];
 }
 
 counter(b: ref B, nm: string): int
@@ -1371,8 +1414,14 @@ edges(b: ref Box, cbw: int)
 	b.pr = res(st.pr, cbw);
 	b.pb = res(st.pb, cbw);
 	b.pl = res(st.pl, cbw);
-	if(b.kind == Ktable && st.collapse)
+	if(b.kind == Ktable && st.collapse) {
 		b.pt = b.pr = b.pb = b.pl = 0;	# no padding in the collapsing model (§17.6.2)
+		# and its borders are the outer halves of the collapsed ones,
+		# so that a specified width is the grid's, line to line
+		t := tgrid(curdoc, b);
+		if(t.tb != nil)
+			tablehalves(t, b);
+	}
 	b.mt = res(st.mt, cbw);
 	b.mr = res(st.mr, cbw);
 	b.mb = res(st.mb, cbw);
@@ -7185,6 +7234,23 @@ crtospace(s: string): string
 text(f: ref Fl, b: ref Box)
 {
 	st := b.st;
+	if(st.fontsize <= 0.0) {
+		# font-size: 0 shows nothing, but a preserved newline still ends
+		# the line, and a preserved tab is as wide as a tab-size length
+		ws0 := st.whitespace;
+		fc0 := face(st);
+		for(k0 := 0; k0 < len b.text; k0++) {
+			c0 := b.text[k0];
+			if(c0 == '\n' && ws0 != Style->Wnormal && ws0 != Style->Wnowrap) {
+				emit(f, ref Item(Ibreak, nil, 0.0, b, fc0, 0, 0, 0, 0, 0));
+				f.space = 1;
+			} else if(c0 == '\t' && ws0 != Style->Wnormal && ws0 != Style->Wnowrap && ws0 != Style->Wpreline && st.tabsize < 0.0) {
+				emit(f, ref Item(Ispace, "\t", -st.tabsize, b, fc0, ws0 == Style->Wpre, f.deco, f.decocolor, 0, 0));
+				f.space = 0;
+			}
+		}
+		return;
+	}
 	fc := face(st);
 	s := b.text;
 	if(st.transform != Style->TTnone)
@@ -7431,7 +7497,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				ln.content = 1;
 				continue;
 			}
-			if(ln.content && ln.x + it.w > real ln.avail + 0.5 && !it.nowrap && !prevnowrap(ln)) {
+			if(ln.content && ln.x + it.w > real ln.avail + 0.5 && !it.nowrap && canbreak(ln, it)) {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -7558,14 +7624,25 @@ collapsible(st: ref St): int
 	return ws == Style->Wnormal || ws == Style->Wnowrap || ws == Style->Wpreline;
 }
 
-prevnowrap(ln: ref Ln): int
+# May the line break before the word it?  Not between two words with
+# nothing between them (a float or an absolute does not come between:
+# white-space-processing-048), unless the characters at the join give
+# an opportunity (UAX #14), and never into nowrap text.
+canbreak(ln: ref Ln, it: ref Item): int
 {
-	# no break between two pieces of nowrap text with no space between
-	if(ln.frags == nil)
-		return 0;
-	f := hd ln.frags;
-	return f.kind == Ftext && f.box != nil && f.box.kind != Kinline && f.text != " " &&
-		(f.box.st.whitespace == Style->Wnowrap || f.box.st.whitespace == Style->Wpre) && f.text[len f.text-1] != ' ';
+	for(fl := ln.frags; fl != nil; fl = tl fl) {
+		f := hd fl;
+		if(f.kind == Fspan || f.kind == Ftext && (f.text == "" || f.box != nil && f.box.kind == Kmarker))
+			continue;	# inline box edges, the marks of absolutes, an outside marker
+		if(f.kind != Ftext || f.text == " " || isblankrun(f.text) || f.text == "　")
+			return 1;
+		if(f.box != nil && f.box.kind != Kinline && (f.box.st.whitespace == Style->Wnowrap || f.box.st.whitespace == Style->Wpre))
+			return 0;
+		if(len it.text == 0)
+			return 1;
+		return lbbreak(f.text[len f.text - 1], it.text[0]);
+	}
+	return 1;
 }
 
 removebox(l: list of ref Box, b: ref Box): list of ref Box
@@ -7708,6 +7785,18 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			continue;
 		}
 		break;
+	}
+	# an inline box closed over the dropped spaces ends with the content
+	ex := ir(ln.x);
+	for(fl = ln.frags; fl != nil; fl = tl fl) {
+		f := hd fl;
+		if(f.kind == Fspan && f.x + f.w > ex) {
+			f.w = ex - f.x;
+			if(f.w < 0) {
+				f.x = ex;
+				f.w = 0;
+			}
+		}
 	}
 	for(; ln.open != nil; )
 		ln.frags = span(ln, (hd ln.open).t0, 0) :: ln.frags;

@@ -1424,6 +1424,22 @@ rasterize(path: list of ref PathSeg, scale: real): (ref Image, int, int)
 	}
 	if(n == 0)
 		return (nil, 0, 0);
+	# Light hinting: the glyph's top and bottom edges land on pixel
+	# rows (the baseline, at 0, already does), the outline stretched
+	# linearly between them.  A flat edge is then crisp, as in a
+	# hinted rasteriser, rather than smeared over two rows.
+	sy := 1.0;
+	ty := 0.0;
+	if(maxy - miny > 0.0) {
+		b := math->floor(miny + 0.5);
+		t := math->floor(maxy + 0.5);
+		if(t <= b)
+			t = b + 1.0;
+		sy = (t - b) / (maxy - miny);
+		ty = b - miny*sy;
+		miny = b;
+		maxy = t;
+	}
 	ox := int math->floor(minx) - 1;
 	oy := int math->floor(miny) - 1;
 	w := int math->ceil(maxx) + 1 - ox;
@@ -1432,18 +1448,19 @@ rasterize(path: list of ref PathSeg, scale: real): (ref Image, int, int)
 		return (nil, 0, 0);
 
 	fx := real ox;
-	fy := real oy;
+	fy := real oy - ty;
+	sy *= scale;
 	outline := Path.new();
 	for(p = rpath; p != nil; p = tl p){
 		pick s := hd p {
 		Move =>
-			outline.moveto(s.x*scale - fx, -s.y*scale - fy);
+			outline.moveto(s.x*scale - fx, -s.y*sy - fy);
 		Line =>
-			outline.lineto(s.x*scale - fx, -s.y*scale - fy);
+			outline.lineto(s.x*scale - fx, -s.y*sy - fy);
 		Curve =>
-			outline.curveto(s.x1*scale - fx, -s.y1*scale - fy,
-				s.x2*scale - fx, -s.y2*scale - fy,
-				s.x3*scale - fx, -s.y3*scale - fy);
+			outline.curveto(s.x1*scale - fx, -s.y1*sy - fy,
+				s.x2*scale - fx, -s.y2*sy - fy,
+				s.x3*scale - fx, -s.y3*sy - fy);
 		Close =>
 			outline.close();
 		}

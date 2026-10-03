@@ -43,6 +43,14 @@ session went down the failing families by size: lists and counters,
 backgrounds, aspect-ratio, positioning, break-spaces, text-transform,
 tables.
 
+- `d01cb13` **Counter scopes as Lists 3 has them, reversed counters,
+  row group order.**  A new counter replaces one the element or a
+  previous sibling instantiated and nests inside an ancestor's
+  (`instantiate`, `Ctr.origin`); a nested one is for the subtree only
+  (`ctrleave`); `reversed(name)` with the spec's initial-value
+  algorithm (`reversedinit`/`revscan`); `start=` and `reversed` are
+  hints.  Only the first header and footer group move.  `stretch`
+  beside a float and for absolutes with auto insets.
 - `07b2234` **Textareas as pre-wrap text, the table box without its
   captions, the stretch keyword.**  A textarea is a block of its text
   (cols wide, rows tall: `textarea()`); a table's background and

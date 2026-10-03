@@ -1875,6 +1875,14 @@ if grep -q '^niltest: CAUGHT dereference of nil' <<<"$SHOUT" && grep -q '^niltes
 else
     fail "nil dereference in JIT code -- $(grep -a -E 'niltest:|unhandled exception|panic:' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
 fi
+# The second field of a nil ref is address 7. With page zero mapped it
+# read the firmware's stub there, and a nil pointer in the kernel's own C
+# read the same bytes and used them (#727); unmapped, both fault (#735).
+if grep -q '^niltest: OFFSET CAUGHT dereference of nil' <<<"$SHOUT"; then
+    pass "page zero is not mapped: a nil ref's later field faults too (#735)"
+else
+    fail "page zero -- $(grep -a -E 'niltest: OFFSET|unhandled exception|panic:' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
 
 # The exception handler's search, in the kernel's own interpreter: an
 # exception block whose clauses do not match and has no wildcard is not
@@ -4821,6 +4829,7 @@ vcheck "os/ip: the interface lock is balanced after an unanswerable IPv6 datagra
 # os/init/niltest.b: a nil dereference in JIT code is the program's
 # exception (the bcm2837 check tells the story)
 vcheck "a nil dereference in JIT code is the program's exception, not a panic" "niltest: STILL RUNNING"
+vcheck "page zero is not mapped: a nil ref's later field faults too (#735)" "niltest: OFFSET CAUGHT dereference of nil"
 vcheck "DHCP answers over virtio-net"              "etherusb: 10.0.2.15 mask"
 vcheck "a default route is installed"              "etherusb: default route via 10.0.2.2"
 vcheck "the framebuffer is configured through fw_cfg" "fb:   ramfb 1280x720x32"

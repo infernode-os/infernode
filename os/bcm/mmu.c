@@ -62,6 +62,7 @@ enum
 	/* descriptor types */
 	Dtable		= 3,		/* points at a next-level table */
 	Dblock		= 1,		/* a block of memory, here 2MB */
+	Dpage		= 3,		/* at level 3: one 4KB page */
 
 	/* lower attributes */
 	Attridx0	= 0<<2,		/* MAIR index 0: Normal WB */
@@ -91,6 +92,12 @@ enum
 /* upper attributes */
 #define Pxn		(1ULL<<53)	/* privileged execute never */
 #define Uxn		(1ULL<<54)	/* unprivileged execute never */
+
+/* the contiguous hint: 16 adjacent level-3 pages share one TLB entry */
+#define Contig		(1ULL<<52)
+
+/* a block's attributes, upper and lower, which a level-3 page shares */
+#define Blockattrs	(0xFFCULL | (0xFFFULL<<52))
 
 /*
  * MAIR: attr0 = 0xFF (Normal, inner and outer write-back, read and
@@ -145,9 +152,38 @@ enum
  */
 static u64int l1tab[Ntabent] __attribute__((aligned(4096)));
 static u64int l2tab[Nl2tab][Ntabent] __attribute__((aligned(4096)));
+static u64int l3zero[Ntabent] __attribute__((aligned(4096)));	/* the first 2MB, by page */
 
 static uintptr ramtop;
 static uintptr hightop;		/* one past RAM above the first gigabyte, or 0 */
+
+/*
+ * mmuguardzero: from here on, page zero is not mapped (#735).
+ *
+ * With it mapped, a nil pointer in the kernel's C read whatever lies at
+ * a small address -- the firmware's ARM stub and spin table -- and used
+ * it: the display-hangup panic of #727 reached the kernel only because
+ * a nil Image* read code bytes there and took them for a pointer.  A
+ * load or store through nil in JIT-compiled Dis (a field after the
+ * first of a nil ref) read the same bytes where the program should
+ * have had "dereference of nil".  Unmapped, both are an immediate data
+ * abort at the address, attributable, and the second is the program's
+ * exception (../arm64/trap.c).
+ *
+ * The boot needs the page until the secondary cores are released: the
+ * spin table they wait on is at 0xd8 (board.c, boardstartcpus).  So
+ * this runs after launchsmp.  Valid to invalid needs no
+ * break-before-make, only the TLB invalidation.
+ */
+void
+mmuguardzero(void)
+{
+	l3zero[0] = 0;
+	__asm__ volatile("dsb ishst");
+	__asm__ volatile("tlbi vmalle1is");
+	__asm__ volatile("dsb ish");
+	__asm__ volatile("isb");
+}
 
 /*
  * Where does ARM-visible memory end?  Above this the VideoCore owns the
@@ -226,6 +262,27 @@ mmuinit(void)
 			l2tab[i][j] = (u64int)pa | desc;
 		}
 	}
+
+	/*
+	 * The first 2MB by 4KB pages instead of one block, so that page
+	 * zero alone can be unmapped once the boot no longer needs it
+	 * (mmuguardzero).  It holds the kernel's own text, so it cannot
+	 * be split later: replacing a live block with a table needs the
+	 * entry invalid in between, and the code doing it runs from there.
+	 */
+	for(j = 0; j < Ntabent; j++){
+		l3zero[j] = (u64int)j*BY2PG | (l2tab[0][0] & Blockattrs) | Dpage;
+		/*
+		 * The kernel's text lies in these 2MB, and 4KB pages cost it
+		 * TLB entries the block did not: the interpreter ran 15-85%
+		 * slower per opcode class under QEMU.  Each aligned run of 16
+		 * identical pages is marked contiguous, one TLB entry for 64KB;
+		 * not the first run, whose page zero is unmapped later.
+		 */
+		if(j >= 16)
+			l3zero[j] |= Contig;
+	}
+	l2tab[0][0] = (u64int)(uintptr)l3zero | Dtable;
 
 #ifdef PCIWIN
 	/*

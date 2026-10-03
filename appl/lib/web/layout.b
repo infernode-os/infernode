@@ -1639,6 +1639,8 @@ specw(b: ref Box, v: Len, cbw: int): int
 			w += hextra(b);
 		return w;
 	Style->Lmin or Style->Lmax or Style->Lfit =>
+		if(b == nowidth)
+			return -1;	# being measured for this very keyword: it does not bound itself
 		(mn, mx) := intrinsic(b);	# margin-box widths: the keywords name the border box
 		if(b.st.width.kind == Style->Lpx || b.st.width.kind == Style->Lcalc) {
 			# a min or max keyword beside a definite width: the
@@ -1916,6 +1918,21 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		h := specheight(b, cbh);
 		if(h < 0)
 			h = replacedheight(b, cbw, cbh) + vextra(b);
+		if(kwsize(b.st.minheight) || kwsize(b.st.maxheight)) {
+			# a keyword min or max height: the height the used width
+			# gives through the ratio (replaced-min-height-min-content)
+			cw := b.w - hextra(b);
+			ratio := aspect(b, b.iw, b.ih);
+			if(ratio <= 0.0 && b.img != nil)
+				ratio = aspect(b, b.img.r.dx(), b.img.r.dy());
+			if(ratio > 0.0 && cw > 0) {
+				kh := ir(real cw / ratio) + vextra(b);
+				if(kwsize(b.st.maxheight) && h > kh)
+					h = kh;
+				if(kwsize(b.st.minheight) && h < kh)
+					h = kh;
+			}
+		}
 		b.h = clamph(b, h, cbh);
 		return (mval(b.mt), mval(b.mb), 0);
 	Kflex =>
@@ -2196,7 +2213,15 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 				empty = 0;
 		}
 	}
+	# min-content, max-content and fit-content block sizes are the
+	# content's (Sizing 3 §3.1: for a block, its auto height), as a
+	# min or a max beside another height (block-size-with-min-or-max-content-2)
+	hauto := contenth + vextra(b);
+	if(kwsize(b.st.maxheight) && h > hauto)
+		h = hauto;
 	b.h = clamph(b, h, cbh);
+	if(kwsize(b.st.minheight) && b.h < hauto)
+		b.h = hauto;
 	if(empty && b.h != 0)
 		empty = 0;
 	positioned(l, b);
@@ -3402,7 +3427,12 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 	h := sh;
 	if(h < 0)
 		h = gh + vextra(b);
+	hauto := gh + vextra(b);
+	if(kwsize(b.st.maxheight) && h > hauto)
+		h = hauto;	# a keyword block size is the content's (block-size-with-min-or-max-content-3)
 	b.h = clamph(b, h, cbh);
+	if(kwsize(b.st.minheight) && b.h < hauto)
+		b.h = hauto;
 	gridabs(l, b, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars);
 }
 
@@ -7206,7 +7236,7 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 	st := b.st;
 	w := -1;
 	h := -1;
-	if(st.width.kind == Style->Lpx || st.width.kind == Style->Lcalc) {
+	if((st.width.kind == Style->Lpx || st.width.kind == Style->Lcalc) && b != nowidth) {	# (measured for a keyword min or max: its width aside, replaced-min-width-min-content)
 		if(!(cbw < 0 && st.width.pct != 0.0)) {
 			w = res(st.width, cbw);
 			if(st.borderbox)
@@ -7287,6 +7317,15 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		w = 0;
 	if(h < 0)
 		h = 0;
+	if(ratio > 0.0 && w > 0) {
+		# a keyword min or max height: the height the width gives
+		# through the ratio (replaced-min-height-min-content)
+		kh := ir(real w / ratio);
+		if(kwsize(st.maxheight) && h > kh)
+			h = kh;
+		if(kwsize(st.minheight) && h < kh)
+			h = kh;
+	}
 	if(ratio > 0.0) {
 		# min/max constraint violations with a ratio (CSS 2.2 §10.4's
 		# table): a constrained dimension takes the other with it
@@ -7673,6 +7712,11 @@ contribution(b: ref Box): (int, int)
 			mx = mn;
 	}
 	return (mn, mx);
+}
+
+kwsize(l: Style->Len): int
+{
+	return l.kind == Style->Lmin || l.kind == Style->Lmax || l.kind == Style->Lfit;
 }
 
 # an intrinsic sizing keyword that needs no containing block width

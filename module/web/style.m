@@ -248,6 +248,7 @@ Style: module
 		hyphens:	int;		# hyphens: 0 none, 1 manual, 2 auto (as manual: no dictionary yet)
 		hyphenchar:	string;	# hyphenate-character, auto resolved to "-" (an empty one shows nothing)
 		textjustify:	int;	# text-justify: 0 auto, 1 none, 2 inter-word, 3 inter-character
+		hangpunct:	int;	# hanging-punctuation: 1 first, 2 last, 4 force-end, 8 allow-end
 
 		new:	fn(): ref St;		# initial values
 	};

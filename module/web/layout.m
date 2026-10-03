@@ -108,6 +108,7 @@ Layout: module
 		decocolor:	int;
 		level:	int;		# bidi embedding level (odd: right to left)
 		tls:	int;		# Ftext: the letter spacing after its last character, trimmed at a line's end
+		hang:	int;		# Ftext: hanging punctuation, 1 an opening mark at the first line's start, 2 a closing one at the last line's end
 	};
 
 	build:	fn(d: ref Dom->Doc, c: ref Style->Computed): ref Box;

@@ -1845,7 +1845,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0);
 }
 
 nextsid := 1;
@@ -1880,6 +1880,7 @@ inherit(p: ref St): ref St
 	s.hyphens = p.hyphens;
 	s.hyphenchar = p.hyphenchar;
 	s.textjustify = p.textjustify;
+	s.hangpunct = p.hangpunct;
 	s.textshadows = p.textshadows;
 	s.dirrtl = p.dirrtl;
 	s.tabsize = p.tabsize;
@@ -1922,7 +1923,7 @@ isinherited(nm: string): int
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
 	"text-wrap-mode" or "word-break" or "line-break" or "overflow-wrap" or "word-wrap" or "word-space-transform" or
-	"hyphens" or "hyphenate-character" or "text-justify" or
+	"hyphens" or "hyphenate-character" or "text-justify" or "hanging-punctuation" or
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
@@ -4381,6 +4382,27 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"auto" => st.hyphens = 2;
 		* => return 0;
 		}
+	"hanging-punctuation" =>
+		# none | [ first || [ force-end | allow-end ] || last ] (Text 3 §5.3)
+		hx := nows(v);
+		hp := 0;
+		for(k := 0; k < len hx; k++) {
+			if(hx[k].kind != Kident)
+				return 0;
+			case lower(hx[k].s) {
+			"none" =>
+				if(len hx != 1)
+					return 0;
+			"first" => hp |= 1;
+			"last" => hp |= 2;
+			"force-end" => hp |= 4;
+			"allow-end" => hp |= 8;
+			* => return 0;
+			}
+		}
+		if((hp & 12) == 12)
+			return 0;
+		st.hangpunct = hp;
 	"text-justify" =>
 		case id {
 		"auto" => st.textjustify = 0;
@@ -5708,6 +5730,7 @@ copyprop(d, s: ref St, nm: string)
 	"hyphens" => d.hyphens = s.hyphens;
 	"hyphenate-character" => d.hyphenchar = s.hyphenchar;
 	"text-justify" => d.textjustify = s.textjustify;
+	"hanging-punctuation" => d.hangpunct = s.hangpunct;
 	"clip" => d.cliprect = s.cliprect;
 	"margin-trim" => d.margintrim = s.margintrim;
 	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-inline-size" or

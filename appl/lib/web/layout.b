@@ -8217,6 +8217,7 @@ noshy(s: string): string
 lbmode := 0;	# line-break of the text being broken: 0 normal, 1 loose, 2 strict (Text 4 §5.3)
 lbcjk := 0;	# its language is Chinese or Japanese
 lbbreakall := 0;	# word-break: break-all: letters break like ideographs, punctuation keeps its rules
+lbkeepall := 0;	# word-break: keep-all: no break between the letters of Chinese, Japanese and Korean
 
 lbbreak(a, b: int): int
 {
@@ -8224,6 +8225,8 @@ lbbreak(a, b: int): int
 		return isideo(a) || isideo(b);
 	ca := bidi->lbclass(a);
 	cb := bidi->lbclass(b);
+	if(lbkeepall && cjkletter(ca) && cjkletter(cb))
+		return 0;	# keep-all (Text 4 §5.2; word-break-keep-all-005: the ideographic space is not a letter)
 	if(lbbreakall) {
 		if(ca == Bidi->LBAL || ca == Bidi->LBNU)
 			ca = Bidi->LBID;
@@ -8513,6 +8516,7 @@ text(f: ref Fl, b: ref Box)
 	}
 	lbmode = st.lbmode;
 	lbcjk = cjklang(langof(b.node));
+	lbkeepall = st.keepall;
 	fc := face(st);
 	s := b.text;
 	if(st.transform != Style->TTnone)
@@ -9170,6 +9174,14 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 					w = tabw(ln, it);
 				}
 			}
+			if(it.text == "" && ln.content && !it.nowrap && ln.x > cutavail(ln) + 0.5) {
+				# a zero width space after preserved spaces that
+				# overflow: the line breaks here, and they hang at
+				# its end (letter-spacing-201)
+				lines = endline(f, ln, x0, first, 0) :: lines;
+				first = 0;
+				ln = newline(f, ln, opened);
+			}
 			fr := textfrag(ln, it);
 			fr.w = ir(w);
 			ln.frags = fr :: ln.frags;
@@ -9536,9 +9548,21 @@ wordgap(pbox: ref Box, ptext: string, it: ref Item, min: int): int
 	lbmode = it.box.st.lbmode;
 	lbcjk = cjklang(langof(it.box.node));
 	lbbreakall = it.box.st.breakall == 1 || pbox.st.breakall == 1;
+	lbkeepall = it.box.st.keepall || pbox.st.keepall;
 	r := lbbreak(ptext[len ptext - 1], it.text[0]);
 	lbbreakall = 0;
+	lbkeepall = 0;
 	return r;
+}
+
+# a letter of Chinese, Japanese or Korean, by line-break class
+cjkletter(c: int): int
+{
+	case c {
+	Bidi->LBID or Bidi->LBCJ or Bidi->LBH2 or Bidi->LBH3 or Bidi->LBJL or Bidi->LBJV or Bidi->LBJT =>
+		return 1;
+	}
+	return 0;
 }
 
 # is the language Chinese or Japanese? (the 〜 rule of Text 4 §5.3)
@@ -11251,11 +11275,34 @@ paintcontent(dst: ref Image, b: ref Box, r, clip: Rect, canvasbg: ref Box)
 			paintreplaced(dst, b, r);
 		return;
 	}
+	if(hasitems(b)) {
+		paintitems(dst, b, r.min, clip, canvasbg);
+		return;
+	}
 	# CSS 2.2 Appendix E: the in-flow blocks' backgrounds and borders,
 	# then the floats, then the inline content, each in tree order
 	flowbgs(dst, b, r.min, clip, canvasbg);
 	flowfloats(dst, b, r.min, clip, canvasbg);
 	flowinline(dst, b, r.min, clip, canvasbg);
+}
+
+# a flex or grid container: its items paint as inline blocks do, each
+# whole before the next, in order-modified document order (Flexbox
+# §5.4, Grid 2 §10), in the inline content pass of the flow it is in
+# (column-fill-reverse-definite-size-001)
+hasitems(b: ref Box): int
+{
+	return (b.kind == Kflex || b.kind == Kgrid) && b.lines == nil;
+}
+
+paintitems(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
+{
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(isabs(k) || islayer(k) || isfloat(k))
+			continue;
+		paintflow(dst, k, o, clip, canvasbg);
+	}
 }
 
 # the in-flow block-level boxes of the flow b holds, not stacking
@@ -11297,7 +11344,7 @@ flowbgs(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			continue;
 		if(k.st.visibility == Style->Vvisible)
 			paintself(dst, k, r, canvasbg);
-		if(k.kind == Kreplaced)
+		if(k.kind == Kreplaced || hasitems(k))
 			continue;
 		inner := innerclip(k, r, clip);
 		if(rectok(inner)) {
@@ -11346,7 +11393,7 @@ flowfloats(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 				flowfloats(dst, k, o, clip, canvasbg);
 			continue;
 		}
-		if(!inflowblock(k) || k.kind == Kreplaced)
+		if(!inflowblock(k) || k.kind == Kreplaced || hasitems(k))
 			continue;
 		r := kidrect(k, o);
 		inner := innerclip(k, r, clip);
@@ -11382,7 +11429,10 @@ flowinline(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			inner := innerclip(k, r, clip);
 			if(rectok(inner)) {
 				oc := withclip(dst, inner);
-				flowinline(dst, k, r.min, inner, canvasbg);
+				if(hasitems(k))
+					paintitems(dst, k, r.min, inner, canvasbg);
+				else
+					flowinline(dst, k, r.min, inner, canvasbg);
 				dst.clipr = oc;
 			}
 		}

@@ -18,7 +18,7 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,642 judged) | **76.0%** (9,607 passing), from 74.0% at this session's start (the seventh), 68.5% at the sixth's, 53.8% at the fifth's, 50.0% at the fourth's and 37.8% at the first run ever; CSS2 5,475 of 5,828, css-text 972 of 1,382, css-grid 844 of 1,536, css-flexbox 641 of 945, css-tables 96 of 138 |
+| WPT CSS reftests (18 directories, 12,642 judged) | **80.1%** (10,128 passing), from 74.0% at this session's start (the seventh), 68.5% at the sixth's, 53.8% at the fifth's, 50.0% at the fourth's and 37.8% at the first run ever; CSS2 5,511 of 5,902, css-text 1,013 of 1,382, css-grid 892 of 1,538, css-flexbox 664 of 946, css-backgrounds 523 of 604, css-tables 97 of 138 |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
 | Unit tests | web_html 5, web_css 6, web_style 16, web_browser 9, web_fonts 10, bidi 3, brotli 3: all pass |
@@ -47,9 +47,29 @@ between inline boxes, percentage heights in intrinsic sizes, floats
 beside tall lines, and a tail of small properties.  The seventh took
 the CSS2 families (tables, floats, margins, clearance, selectors) and
 css-text (letter-spacing, soft hyphens, hanging space separators,
-text-align-last), 74.0% to 76.0%.
+text-align-last), 74.0% to 76.0%, and went on through colour gamut
+mapping, positioned inlines and flex and grid static positions, SVG
+intrinsic sizes for backgrounds and replaced boxes (the whole
+`background-size/vector` directory), border-image, background-clip
+text and border-area, text-wrap: balance, the segment-break rules,
+hanging-punctuation allow-end, hanging space sequences and rtl grids,
+76.0% to 80.1%.
 
-- (next) **var() validity at parse time.**  `css->validvars` (css.b,
+- (r57) **Flex and grid items paint atomically.**  `hasitems`/
+  `paintitems`: `paintcontent`, and the parent's `flowbgs`/
+  `flowfloats`/`flowinline` passes, stop at a flex or grid container
+  and paint its items each whole, in order, in the inline content pass
+  (Flexbox §5.4, Grid 2 §10), as inline blocks are; before, all item
+  backgrounds went down before any item's text.  Also `lbkeepall`/
+  `cjkletter` for word-break: keep-all in `lbbreak`, and a zero width
+  space after overflowing preserved spaces breaks the line (both still
+  short of their tests: keep-all-005..008, letter-spacing-201).
+- `c5fcafd` **Grid tracks end where they end, z-index on flex and grid
+  items, var() names are free.**  `Track.endp` set by `trackpos`
+  (`trackend` prefers it: content-distribution space is not the
+  track's), `zitem()` in `islayer`/`isctx`, `validvars` checks only
+  for an empty argument list or a top-level `!`/`;`.
+- `78961ef` **var() validity at parse time.**  `css->validvars` (css.b,
   exported in css.m): a `var()` with a name that is not a custom
   property, or a `!` or `;` at the top level of its fallback, makes
   the declaration invalid at parse time, so the earlier declaration
@@ -637,9 +657,9 @@ In rough order of payoff.
    - page/browser: no HTTP cache in webfs, so every navigation
      refetches.
 3. **Open regressions (tests that passed at the first run ever and fail
-   now; 52 at r45, each with a reason, 9 of them matching Chromium or a
-   reference that changed; 53 at r37, 53 at r27, 49 at the end of the
-   fourth session).**  Mostly the grid-lanes directory's
+   now; 49 at r55, each with a reason, 9 of them matching Chromium or a
+   reference that changed; 52 at r45, 53 at r37, 53 at r27, 49 at the
+   end of the fourth session).**  Mostly the grid-lanes directory's
    references changing from "nothing renders" to a real layout: 8 are
    subgrid gaps and line names inside lanes, 11 are auto-repeats of
    intrinsic lanes (the count is the items' smallest max-content
@@ -648,33 +668,39 @@ In rough order of payoff.
    both, and the container's Chromium has no grid-lanes to ask).  Also:
    `last baseline` self-alignment of absolutely positioned grid
    children (4), a fixed child of a grid whose containing block is not
-   the grid, two BFC-root float cases, `margin-trim`, the bidi
-   box-model pair, the shaped-run rounding pair, `@namespace` selectors
-   (`not-default-ns-001`, a former blank pass), `hanging-punctuation`
-   (a former accident), and the variable-font, 2-pixel and tentative
-   cases from before.  Each with its reason, as far as known:
+   the grid, two BFC-root float cases, the bidi box-model pair, the
+   shaped-run rounding pair, `@namespace` selectors (`not-default-ns-001`,
+   a former blank pass), former blank or lucky passes that real
+   features exposed (`hanging-punctuation-first-ascii-quote`, whose
+   reference uses script; `text-wrap-balance-line-clamp-001`, which
+   needs line-clamp; two vertical text-autospace cases), the strict
+   colour pair `xyz-d50-004` (its two inputs differ in the sixth figure
+   and gamut-map a unit apart), and the variable-font, 2-pixel and
+   tentative cases from before.  Each with its reason, as far as known:
    `tools/ref/baseline/open-regressions.txt`.
-   **Where the failures are now** (r45, 3,029 failing): css-grid 692
-   (grid-lanes 368, alignment 93, abspos 79, grid-items 58, subgrid 51),
-   css-text 410 (white-space 106: `text-wrap: balance`, trailing spaces
-   with alignment in rtl, ideographic spaces without a CJK font; hyphens
-   35 need dictionaries; word-break 32, line-breaking 31 (the
-   segment-break transformation rules), text-transform 27, text-autospace
-   24, letter-spacing 24 (`letter-spacing-2xx`: spacing around inline box
-   edges), hanging-punctuation 18 not implemented), css-backgrounds 371
-   (`background-size/vector` 203 need SVG images without intrinsic size,
-   background-clip 38, border-image), css-flexbox 304 (`balance` 28,
-   writing modes 12, baseline alignment, aspect-ratio images), css-sizing
-   169 (aspect-ratio 61: flex and grid items, abspos; stretch 10;
-   contain-intrinsic-size 9), css-fonts 155, css-position 89, css-values
-   85, css-color 64 (relative colours), css-display 52 (run-in 37),
-   css-lists 46 (`@counter-style`, `::marker` content), css-tables 42,
-   css-variables 40, css-box 36 (margin-trim for flex, grid and inline
-   edges), and in CSS2: bidi-text 47, tables 44 (`table-anonymous-objects`
-   30 differ by a glyph's sub-pixel position), normal-flow 28, selectors
-   24 (`::first-line` beyond colour, first-letter punctuation in the astral
-   planes), text 23, positioning 23, visudet 19, syntax 18, backgrounds 18,
-   floats-clear 17.
+   **Where the failures are now** (r55, 2,508 failing): css-grid 646
+   (grid-lanes 366, alignment 87: self-baseline 38, grid-items 56:
+   inline contributions and aspect-ratio items, subgrid 51, abspos 41:
+   `last baseline` and vertical writing modes), css-flexbox 267
+   (`balance` 28 is Flexbox 2's `flex-wrap: balance`, writing modes,
+   baseline alignment, aspect-ratio items), css-text 369 (white-space 90:
+   pre-wrap trailing spaces with alignment, break-spaces, line-clamp;
+   hyphens 35 need dictionaries; word-break 32: keep-all and auto-phrase;
+   text-transform 27: tailoring, full-size-kana, a webfont; letter-spacing
+   23: around inline box edges, ligatures; text-autospace 18 and
+   line-breaking 24 mostly vertical or font cases), css-fonts 152
+   (font-palette 14, font-stretch 11, font-variant-east-asian 10,
+   font-size-adjust, synthesis: all font-engine work), css-sizing 132
+   (aspect-ratio 59: flex and grid items, abspos; calc-size), css-values
+   61 (ch and ic units in vertical writing 21, calc-size 19), css-backgrounds
+   67 (background-clip 17: text with transforms, double borders; the
+   rest 1-2 pixel cases), CSS2 bidi-text 47 (sub-pixel run rounding),
+   tables 44 (`table-anonymous-objects` differ by a glyph's sub-pixel
+   position), css-lists 43 (`@counter-style`, `::marker` content),
+   css-color 40 (relative colours), css-display run-in 37 (no browser
+   implements run-in), css-variables 33 (CDC tokens, braces in
+   `@supports`), css-tables 31, css-position 29 (sticky 14).
+
 4. **Exposed gaps behind many failures:** vertical writing modes (768
    tests across directories), `@namespace` in selectors, animations and
    transitions, `text-wrap: balance`, counter styles beyond the basic

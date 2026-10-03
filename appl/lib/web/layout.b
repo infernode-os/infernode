@@ -1605,8 +1605,8 @@ transferw(b: ref Box, w, cbh: int): int
 	if(st.aspect <= 0.0 || b.kind == Kreplaced)
 		return w;
 	if(st.maxheight.kind != Style->Lnone && (mh := spech(b, st.maxheight, cbh)) >= 0 && (mw := ratiow(b, mh)) >= 0 && w > mw) {
-		if(st.minwidth.kind == Style->Lauto && !isscroller(b)) {
-			# not below the automatic minimum, the content's (Sizing 4 §5.2.2)
+		if(st.minwidth.kind == Style->Lauto && st.width.kind == Style->Lauto && !isscroller(b)) {
+			# not below the automatic minimum of an auto width, the content's (Sizing 4 §5.2.2)
 			noratio = b;
 			(mn, nil) := intrinsic1(b);
 			noratio = nil;
@@ -1862,6 +1862,15 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		pending := Margin(0, 0);
 		cury := 0;
 		adjoining := passtop;	# still at the top, margins adjoin ours
+		# margin-trim: the first in-flow child's start margin and the
+		# last's end margin, what collapses with them included, are
+		# trimmed away (Box 4 §4)
+		firstflow := 1;
+		lastflow := -1;
+		if(b.st.margintrim & 2)
+			for(j := 0; j < len b.kids; j++)
+				if(!isabs(b.kids[j]) && !isfloat(b.kids[j]))
+					lastflow = j;
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
 			if(isabs(k)) {
@@ -1888,6 +1897,13 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 				continue;
 			}
 			edges(k, cw);
+			trimtop := (b.st.margintrim & 1) && firstflow;
+			trimbot := i == lastflow;
+			firstflow = 0;
+			if(trimtop)
+				k.mt = 0;
+			if(trimbot)
+				k.mb = 0;
 			sizew(k, cw, ch);
 			# where it will go, before its own margins collapse
 			ky := cury;
@@ -1947,6 +1963,16 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 				}
 			}
 			(kt, kb, kempty) := layblock(l, k, cw, ch, fc, ox + k.x, oy + b.bt + b.pt + ky);
+			if(trimtop) {
+				kt = Margin(0, 0);
+				if(kempty)
+					kb = Margin(0, 0);	# one collapsed set at the container's start
+			}
+			if(trimbot) {
+				kb = Margin(0, 0);
+				if(kempty)
+					kt = Margin(0, 0);
+			}
 			if(kempty) {
 				# margins collapse through an empty box
 				m := collapse(kt, kb);
@@ -1981,6 +2007,8 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			pending = kb;
 			relative(k, cw, ch);
 		}
+		if(b.st.margintrim & 2)
+			pending = Margin(0, 0);	# the collapsed set at the end, trimmed whole
 		if(adjoining) {
 			# no in-flow content at all
 			mh := b.st.minheight;
@@ -1991,8 +2019,16 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			}
 		} else if(passbot)
 			bot = collapse(bot, pending);
-		else if(!mhhold)
-			cury += msum(pending);	# (held by min-height, the margin neither escapes nor adds to the content: as browsers have it, margin-collapse-min-height-001)
+		else if(mhhold) {
+			# a min-height that raises the box above its content holds
+			# the last child's margin: it neither escapes nor adds to the
+			# content, as browsers have it (margin-collapse-min-height-001);
+			# one that does not lets it collapse through as usual (-003)
+			mn := spech(b, b.st.minheight, cbh);
+			if(mn >= 0 && cury >= mn - vextra(b))
+				bot = collapse(bot, pending);
+		} else
+			cury += msum(pending);
 		contenth = cury;
 	}
 	if(bfc) {
@@ -6594,7 +6630,7 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 				w -= hextra(b);
 		}
 	}
-	if(st.height.kind == Style->Lpx && (st.height.pct == 0.0 || cbh >= 0)) {
+	if(st.height.kind == Style->Lpx && (st.height.pct == 0.0 || cbh >= 0) && b != asauto) {
 		h = res(st.height, cbh);
 		if(st.borderbox)
 			h -= vextra(b);
@@ -9667,6 +9703,9 @@ innerclip(b: ref Box, r, clip: Rect): Rect
 	st := b.st;
 	if(st.overflowx == Style->Ovisible && st.overflowy == Style->Ovisible)
 		return clip;
+	if(istag(b, Dom->Thtml) || istag(b, Dom->Tbody) && b.parent != nil && istag(b.parent, Dom->Thtml) &&
+	   b.parent.st.overflowx == Style->Ovisible && b.parent.st.overflowy == Style->Ovisible)
+		return clip;	# the root's overflow, or the body's when the root's is visible, is the viewport's, not a clip of its own (Overflow 3 §3.3)
 	pr := Rect((r.min.x + b.bl, r.min.y + b.bt), (r.max.x - b.br, r.max.y - b.bb));
 	(c, nil) := clip.clip(pr);
 	return c;

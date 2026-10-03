@@ -244,6 +244,7 @@ Style: module
 		cisw, cish:	Len;	# contain-intrinsic-size: the explicit intrinsic width and height under size containment (Lnone: none)
 		wst:	int;		# word-space-transform: 0 none, 1 space, 2 ideographic-space (what a zero-width space and a wbr become)
 		cliprect:	array of Len;	# clip: rect(top, right, bottom, left) on an absolutely positioned box (Lauto: that edge); nil for auto
+		margintrim:	int;	# margin-trim: 1 block-start, 2 block-end, 4 inline-start, 8 inline-end
 
 		new:	fn(): ref St;		# initial values
 	};

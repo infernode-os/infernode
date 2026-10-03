@@ -1843,7 +1843,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0);
 }
 
 nextsid := 1;
@@ -4179,6 +4179,25 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.z = int n;
 			st.zauto = 0;
 		}
+	"margin-trim" =>
+		# none | block | inline | [ block-start || inline-start || block-end || inline-end ] (Box 4 §4)
+		x := nows(v);
+		t := 0;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind != Kident)
+				return 0;
+			case lower(x[k].s) {
+			"none" => t = 0;
+			"block" => t |= 3;
+			"inline" => t |= 12;
+			"block-start" => t |= 1;
+			"block-end" => t |= 2;
+			"inline-start" => t |= 4;
+			"inline-end" => t |= 8;
+			* => return 0;
+			}
+		}
+		st.margintrim = t;
 	"clip" =>
 		# auto | rect(<top>, <right>, <bottom>, <left>), each a length or
 		# auto, commas or spaces between (CSS 2.2 §11.1.2)
@@ -5518,6 +5537,7 @@ copyprop(d, s: ref St, nm: string)
 	"contain" => d.contain = s.contain;
 	"word-space-transform" => d.wst = s.wst;
 	"clip" => d.cliprect = s.cliprect;
+	"margin-trim" => d.margintrim = s.margintrim;
 	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-inline-size" or
 	"contain-intrinsic-height" or "contain-intrinsic-block-size" =>
 		d.cisw = s.cisw;

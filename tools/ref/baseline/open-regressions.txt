@@ -1,11 +1,10 @@
 # Tests that passed at the first run ever (r0) and fail at the end of
-# the sixth session (r37, 74.0%), with the reason as far as known.
+# the seventh session (r45, 76.0%), with the reason as far as known.
 # Update when a run changes it.
 #
 FAIL css/CSS2/bidi-text/bidi-box-model-001.xht	a 5px column of an inline box border in a right-to-left paragraph; unexamined
 FAIL css/CSS2/bidi-text/bidi-box-model-002.xht	a 5px column of an inline box border in a right-to-left paragraph; unexamined
 FAIL css/CSS2/box-display/root-box-003.xht	display: none on the root: the test wants the root background on the canvas; Chromium (checked) renders white as Charon does; the reference now renders green (body background propagation works), so a former blank pass
-FAIL css/CSS2/floats-clear/adjoining-float-nested-forced-clearance-002.html	a BFC root after a float with clearance in an ancestor: 2000 pixels; the margins the test describes are not separated the way it wants; unexamined
 FAIL css/CSS2/floats/float-nowrap-8.html	a float met mid-line in nowrap text: the test wants it below the line; Chromium (checked) puts it on the line as Charon now does
 FAIL css/CSS2/floats/floats-placement-vertical-003.xht	the test wants a float met after inline content below the line; Chromium (checked) and Charon put it on the line
 FAIL css/CSS2/floats/floats-wrap-bfc-with-margin-007.tentative.html	tentative; a BFC root beside a float needs its start margin and border box to fit: this one wants something else of a negative margin; unexamined

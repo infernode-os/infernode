@@ -1640,6 +1640,14 @@ specw(b: ref Box, v: Len, cbw: int): int
 		return w;
 	Style->Lmin or Style->Lmax or Style->Lfit =>
 		(mn, mx) := intrinsic(b);	# margin-box widths: the keywords name the border box
+		if(b.st.width.kind == Style->Lpx || b.st.width.kind == Style->Lcalc) {
+			# a min or max keyword beside a definite width: the
+			# content's size, not the width's (fit-content-length-percentage-007)
+			onw := nowidth;
+			nowidth = b;
+			(mn, mx) = intrinsic1(b);
+			nowidth = onw;
+		}
 		mg := mgs(b);
 		case v.kind {
 		Style->Lmin => return mn - mg;
@@ -7079,7 +7087,13 @@ floatwidth(k: ref Box, cw, ch: int): int
 			(rw, nil) := replacedsize(k, cw, ch);
 			w = rw + hextra(k);
 		} else {
+			# its percentage height, and those within it, are of the
+			# containing block's height while it is measured
+			# (intrinsic-percent-replaced-003, -006)
+			opcth := pcth;
+			pcth = ch;
 			(mn, mx) := intrinsic(k);
+			pcth = opcth;
 			w = fit(mn, mx, cw) - mgs(k);
 		}
 	}
@@ -7585,9 +7599,24 @@ intrinsic(b: ref Box): (int, int)
 		return (b.imn, b.imx);
 	(mn, mx) := intrinsic1(b);
 	# a keyword width is that size, whatever is inside
-	case b.st.width.kind {
+	wv := b.st.width;
+	case wv.kind {
 	Style->Lmax =>	mn = mx;
 	Style->Lmin =>	mx = mn;
+	Style->Lfit =>
+		if(wv.px != 0.0 && wv.pct == 0.0) {
+			# fit-content(<length>): min(max-content, max(min-content,
+			# the length)) is its contribution either way
+			# (Sizing 3 §4.1; fit-content-length-percentage-011)
+			a := ir(wv.px) + mgs(b);
+			if(!b.st.borderbox)
+				a += hextra(b);
+			if(a < mn)
+				a = mn;
+			if(a > mx)
+				a = mx;
+			mn = mx = a;
+		}
 	}
 	b.imn = mn;
 	b.imx = mx;
@@ -7605,19 +7634,36 @@ contribution(b: ref Box): (int, int)
 	(mn, mx) := intrinsic(b);
 	st := b.st;
 	mg := mgs(b);
-	if(st.minwidth.kind == Style->Lpx && st.minwidth.pct == 0.0) {
+	if(st.minwidth.kind == Style->Lpx && st.minwidth.pct == 0.0 || sizekw(st.minwidth)) {
 		w := ir(st.minwidth.px) + mg;
 		if(!st.borderbox)
 			w += hextra(b);
+		if(sizekw(st.minwidth)) {
+			# min-content, max-content, fit-content(<length>); a
+			# percentage argument is cyclic here, and the clamp leaves
+			# the min-content size (fit-content-length-percentage-012)
+			v := st.minwidth;
+			if(v.kind == Style->Lfit && v.pct != 0.0)
+				v = Style->Len(Style->Lmin, 0.0, 0.0, nil);
+			w = specw(b, v, -1) + mg;
+		}
 		if(mn < w)
 			mn = w;
 		if(mx < w)
 			mx = w;
 	}
-	if(st.maxwidth.kind == Style->Lpx && st.maxwidth.pct == 0.0) {
+	if(st.maxwidth.kind == Style->Lpx && st.maxwidth.pct == 0.0 || sizekw(st.maxwidth)) {
 		w := ir(st.maxwidth.px) + mg;
 		if(!st.borderbox)
 			w += hextra(b);
+		if(sizekw(st.maxwidth)) {
+			# a cyclic percentage argument: as none, clamped to the
+			# max-content size (fit-content-length-percentage-013)
+			v := st.maxwidth;
+			if(v.kind == Style->Lfit && v.pct != 0.0)
+				v = Style->Len(Style->Lmax, 0.0, 0.0, nil);
+			w = specw(b, v, -1) + mg;
+		}
 		if(mx > w)
 			mx = w;
 		# a table is never narrower than its minimum (CSS 2.2 §17.5.2)
@@ -7627,6 +7673,12 @@ contribution(b: ref Box): (int, int)
 			mx = mn;
 	}
 	return (mn, mx);
+}
+
+# an intrinsic sizing keyword that needs no containing block width
+sizekw(l: Style->Len): int
+{
+	return l.kind == Style->Lmin || l.kind == Style->Lmax || l.kind == Style->Lfit && (l.px != 0.0 || l.pct != 0.0);
 }
 
 nowidth: ref Box;	# being measured for its content's width: its width property is ignored

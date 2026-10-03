@@ -55,7 +55,17 @@ text and border-area, text-wrap: balance, the segment-break rules,
 hanging-punctuation allow-end, hanging space sequences and rtl grids,
 76.0% to 80.1%.
 
-- (r57) **Flex and grid items paint atomically.**  `hasitems`/
+- `049b8a1` **Text split around out-of-flow flex children, ratio-only
+  images in flex cross sizes.**  `fixkids`' run splitter ends a run at
+  an out-of-flow child when the parent is a flex or grid container;
+  `flexcrossw` drops the min-content floor for an SVG replaced item
+  with no natural size.
+- `fee26ff` **Floated items paint, flex automatic minimum clamped by the
+  maximum, keep-all relaxed.**  `paintitems` paints floated items;
+  the flex automatic minimum is clamped by a definite `maxm` (§4.5);
+  `keptall()` lets the overflow split break a keep-all word that
+  starts a line; `auto-phrase` parses as keep-all.
+- `e8453c6` **Flex and grid items paint atomically.**  `hasitems`/
   `paintitems`: `paintcontent`, and the parent's `flowbgs`/
   `flowfloats`/`flowinline` passes, stop at a flex or grid container
   and paint its items each whole, in order, in the inline content pass

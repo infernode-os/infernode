@@ -64,6 +64,7 @@ Layout: module
 		subcgap, subrgap:	int;
 		doc:	ref Dom->Doc;	# the root box's document (nil elsewhere)
 		tb:	ref Tb;		# a table's collapsed borders, once laid out
+		clip:	int;		# content clipped to the border box (a cell crossing a collapsed column)
 	};
 
 	# one border of a table's collapsed model: what won at a grid

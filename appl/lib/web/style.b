@@ -1957,6 +1957,7 @@ Md: adt {
 };
 
 lastenv: ref Env;
+mixcur: int;	# what currentcolor is in a color-mix() being applied: the colour so far (the inherited one for 'color')
 
 sameenv(a, b: ref Env): int
 {
@@ -3327,14 +3328,27 @@ oklab2rgb(l, a, b: real, al: int): int
 # color-mix(in <space>, c1 [p1], c2 [p2]): mixed in sRGB whatever the space
 colormix(t: ref Tok): (int, int)
 {
+	(ok, ch) := colormixr(t);
+	if(!ok)
+		return (0, 0);
+	mix := 0;
+	for(i := 0; i < 4; i++)
+		mix |= clamp(round(ch[i])) << (24 - 8*i);
+	return (1, mix);
+}
+
+# the mix's channels unrounded (a, r, g, b in 0..255), so that a mix
+# within a mix loses nothing to rounding
+colormixr(t: ref Tok): (int, array of real)
+{
 	args := splitcommas(t.kids);
 	if(len args != 3)
-		return (0, 0);
+		return (0, nil);
 	args = tl args;
 	(ok1, c1, p1) := mixarg(hd args);
 	(ok2, c2, p2) := mixarg(hd tl args);
 	if(!ok1 || !ok2)
-		return (0, 0);
+		return (0, nil);
 	if(p1 < 0.0 && p2 < 0.0) {
 		p1 = 50.0;
 		p2 = 50.0;
@@ -3344,17 +3358,15 @@ colormix(t: ref Tok): (int, int)
 		p2 = 100.0 - p1;
 	tot := p1 + p2;
 	if(tot <= 0.0)
-		return (0, 0);
+		return (0, nil);
 	w := p1/tot;
-	mix := 0;
-	for(sh := 24; sh >= 0; sh -= 8) {
-		x := real ((c1 >> sh) & 255)*w + real ((c2 >> sh) & 255)*(1.0-w);
-		mix |= clamp(round(x)) << sh;
-	}
-	return (1, mix);
+	ch := array[4] of real;
+	for(i := 0; i < 4; i++)
+		ch[i] = c1[i]*w + c2[i]*(1.0-w);
+	return (1, ch);
 }
 
-mixarg(v: array of ref Tok): (int, int, real)
+mixarg(v: array of ref Tok): (int, array of real, real)
 {
 	v = nows(v);
 	p := -1.0;
@@ -3368,8 +3380,17 @@ mixarg(v: array of ref Tok): (int, int, real)
 			cv = v[1:];
 		}
 	}
+	if(len cv == 1 && cv[0].kind == Kfunction && lower(cv[0].s) == "color-mix") {
+		(ok, ch) := colormixr(cv[0]);
+		return (ok, ch, p);
+	}
 	(ok, c) := color(cv);
-	return (ok, c, p);
+	if(ok && c == Ccurrent)
+		c = mixcur;
+	ch := array[4] of real;
+	for(i := 0; i < 4; i++)
+		ch[i] = real ((c >> (24 - 8*i)) & 255);
+	return (ok, ch, p);
 }
 
 # ---- shorthands ----
@@ -4090,6 +4111,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		wide(st, nm, w, parent, ctx);
 		return 1;
 	}
+	mixcur = st.color;
+	if(nm == "color" && parent != nil)
+		mixcur = parent.color;
 	id := ident(v);
 	case nm {
 	"display" =>

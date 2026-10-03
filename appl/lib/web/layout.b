@@ -96,7 +96,7 @@ newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
-		nil, nil, nil, nil, 0, 0, nil, nil);
+		nil, nil, nil, nil, 0, 0, nil, nil, 0);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -467,16 +467,22 @@ flushwrap(parent: ref Box, run, r: list of ref Box, kind, display: int): list of
 {
 	if(run == nil)
 		return r;
+	kids := rev(run);
 	if(blankrun(run, 0)) {
-		# out-of-flow boxes stand where they are (an absolutely
-		# positioned row group is a block among the table's children)
-		for(l := rev(run); l != nil; l = tl l)
-			if(isoof(hd l))
+		# absolutely positioned boxes stand where they are (a positioned
+		# row group is a block among the table's children); floats are
+		# wrapped like any other content, as browsers do
+		fl: list of ref Box;
+		for(l := kids; l != nil; l = tl l)
+			if(isfloat(hd l))
+				fl = hd l :: fl;
+			else if(isoof(hd l))
 				r = hd l :: r;
-		return r;
+		if(fl == nil)
+			return r;
+		kids = rev(fl);
 	}
 	a := newbox(kind, 0, 0, style->anon(parent.st, display));
-	kids := rev(run);
 	case kind {
 	Krow =>
 		kids = wrapruns(a, kids, iscell, Kcell, Style->Dtablecell);
@@ -532,7 +538,7 @@ orphans(parent: ref Box, kids: list of ref Box): list of ref Box
 
 isinternal(k: ref Box): int
 {
-	return k.kind == Krow || k.kind == Kcell || isrowgroup(k);
+	return k.kind == Krow || k.kind == Kcell || isrowgroup(k) || iscolumn(k);
 }
 
 flushtable(parent: ref Box, run, r: list of ref Box): list of ref Box
@@ -5099,6 +5105,7 @@ Tgrid: adt {
 	captions:	list of ref Box;
 	colw:	array of int;	# widths from <col>/<colgroup>, 0 if none
 	colpct:	array of real;	# percentage widths from them, -1 if none
+	colhid:	array of int;	# the column is visibility: collapse
 	tb:	ref Tb;		# the collapsed borders, if border-collapse: collapse
 };
 
@@ -5168,7 +5175,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 	for(fl := rev2(foot); fl != nil; fl = tl fl)
 		all = hd fl :: all;
 	all = rev2(all);
-	t := ref Tgrid(array[len all] of ref Box, array[len all] of ref Box, nil, 0, rev(caps), nil, nil, nil);
+	t := ref Tgrid(array[len all] of ref Box, array[len all] of ref Box, nil, 0, rev(caps), nil, nil, nil, nil);
 	i = 0;
 	for(; all != nil; all = tl all) {
 		(t.rows[i], t.groups[i]) = hd all;
@@ -5220,6 +5227,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 		t.ncols = last;
 	t.colw = array[t.ncols] of {* => 0};
 	t.colpct = array[t.ncols] of {* => -1.0};
+	t.colhid = array[t.ncols] of {* => 0};
 	c := 0;
 	for(cl := cols; cl != nil; cl = tl cl) {
 		k := hd cl;
@@ -5233,8 +5241,10 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 			if(k.st.width.kind == Style->Lpx && k.st.width.px == 0.0)
 				pc = k.st.width.pct;
 		}
+		hid := k.st.visibility == Style->Vcollapse;
 		for(m := 0; m < n && c < t.ncols; m++) {
 			t.colpct[c] = pc;
+			t.colhid[c] = hid;
 			t.colw[c++] = w;
 		}
 	}
@@ -5915,11 +5925,22 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		tot += colw[i];
 	if(n > 0 && tot != avail && avail > 0)
 		colw[n-1] += avail - tot;
+	# a collapsed column is removed, its width and spacing with it,
+	# and the table shrinks by as much (§17.5.5)
+	hidw := array[n] of {* => 0};
+	for(i = 0; i < n; i++)
+		if(t.colhid[i]) {
+			cw -= colw[i] + sx;
+			hidw[i] = colw[i];
+			colw[i] = 0;
+		}
+	b.w = cw + hextra(b);
 	colx := array[n + 1] of int;
 	x := b.bl + b.pl + sx;
 	for(i = 0; i < n; i++) {
 		colx[i] = x;
-		x += colw[i] + sx;
+		if(!t.colhid[i])
+			x += colw[i] + sx;
 	}
 	colx[n] = x;
 	# where each column is, right to left in a right-to-left table
@@ -5960,13 +5981,43 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 	for(cl2 := t.cells; cl2 != nil; cl2 = tl cl2) {
 		c := hd cl2;
 		k := c.box;
-		w := colx[c.c + c.cs - 1] + colw[c.c + c.cs - 1] - colx[c.c];
+		w := colx[c.c + c.cs] - sx - colx[c.c];
+		# a cell in a collapsed column is gone; one crossing it is
+		# clipped to what is left of it (§17.5.5)
+		nhid := 0;
+		for(i = c.c; i < c.c + c.cs; i++)
+			nhid += t.colhid[i];
+		if(nhid > 0)
+			k.clip = 1;
 		edges(k, cw);
+		fw := w;	# the width the content is laid out at: with the collapsed columns
+		lead := 0;	# of which before the first column still showing
+		if(nhid == c.cs) {
+			w = fw = 0;
+			k.bl = k.br = k.bt = k.bb = 0;
+			k.pl = k.pr = k.pt = k.pb = 0;
+		} else if(nhid > 0) {
+			nlead := 0;
+			for(i = c.c; i < c.c + c.cs; i++)
+				if(t.colhid[i]) {
+					fw += hidw[i] + sx;
+					if(i == c.c + nlead) {
+						nlead++;
+						lead += hidw[i];	# the spacing goes from the table, not the content
+					}
+				}
+		}
 		if(t.tb != nil)
 			cellhalves(t, c);
-		k.w = w;
-		layblock(l, k, w, -1, nil, 0, 0);
-		if(c.rs == 1 && k.h > rowh[c.r])
+		k.w = fw;
+		layblock(l, k, fw, -1, nil, 0, 0);
+		if(fw != w) {
+			# the content over the collapsed columns is cut away: what
+			# is before the first visible column slides out to the left
+			k.w = w;
+			shiftx(k, -lead);
+		}
+		if(c.rs == 1 && k.h > rowh[c.r] && nhid < c.cs)
 			rowh[c.r] = k.h;
 		if(c.rs == 1 && k.st.height.kind == Style->Lpx && k.st.height.pct == 0.0)
 			rowspec[c.r] = 1;
@@ -6156,6 +6207,19 @@ shiftcontent(b: ref Box, dy: int)
 	if(b.lines == nil)
 		for(i = 0; i < len b.kids; i++)
 			b.kids[i].y += dy;
+}
+
+# the content of b moved dx to the right
+shiftx(b: ref Box, dx: int)
+{
+	for(i := 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++)
+			shiftfrag(ln.frags[j], dx, 0);
+	}
+	if(b.lines == nil)
+		for(i = 0; i < len b.kids; i++)
+			b.kids[i].x += dx;
 }
 
 # ---- positioning (CSS 2.2 §9.3, §10.3.7, §10.6.4) ----
@@ -7745,6 +7809,18 @@ text(f: ref Fl, b: ref Box)
 			}
 			if(nl && i0 > 0 && i < len s && eaw(s[i0-1]) && eaw(s[i]))
 				continue;	# a segment break between East Asian wide characters is removed (Text 3 §4.1.2)
+			if(f.space && !nowrap) {
+				# collapsed into a space before it: a break opportunity is
+				# decided on the text before collapsing (Text 3 §4.1.1), so
+				# that space may break if this one could
+				for(pl := f.items; pl != nil; pl = tl pl) {
+					if((hd pl).kind == Iopen || (hd pl).kind == Iclose)
+						continue;
+					if((hd pl).kind == Ispace)
+						(hd pl).nowrap = 0;
+					break;
+				}
+			}
 			if(!f.space) {
 				if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
 					emit(f, ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
@@ -8055,7 +8131,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				ln.content = 1;
 				continue;
 			}
-			if(ln.content && ln.x + segwidth(il) > real ln.avail + 0.5 && !it.nowrap && canbreak(ln, it)) {
+			if(ln.content && ln.x + segwidth(il) > real ln.avail + 0.5 && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -8216,6 +8292,20 @@ canbreak(ln: ref Ln, it: ref Item): int
 		return wordgap(f.box, f.text, it, 0);
 	}
 	return 1;
+}
+
+# Is the item preceded on the line by a collapsible space whose boundary
+# with it is outside nowrap text?  A word of a nowrap box may then start
+# a line after it, as the opportunity is the space's (white-space-007).
+spacebefore(ln: ref Ln, it: ref Item): int
+{
+	for(fl := ln.frags; fl != nil; fl = tl fl) {
+		f := hd fl;
+		if(f.kind == Fspan || f.kind == Ftext && f.box != nil && f.box.kind != Ktext)
+			continue;
+		return f.kind == Ftext && (f.text == " " || f.text == "　") && !nowrapbetween(f.box, it.box);
+	}
+	return 0;
 }
 
 # May the line break before an atomic inline?  It breaks like an
@@ -9732,6 +9822,8 @@ intersect(a, b: Rect): Rect
 innerclip(b: ref Box, r, clip: Rect): Rect
 {
 	st := b.st;
+	if(b.clip)
+		return intersect(clip, r);
 	if(st.overflowx == Style->Ovisible && st.overflowy == Style->Ovisible)
 		return clip;
 	if(istag(b, Dom->Thtml) || istag(b, Dom->Tbody) && b.parent != nil && istag(b.parent, Dom->Thtml) &&
@@ -9878,8 +9970,8 @@ paintself(dst: ref Image, b: ref Box, r: Rect, canvasbg: ref Box)
 		paintbackground(dst, b, r);
 	else
 		paintshadows(dst, b, r);	# the background went to the canvas; the shadow is still its own
-	if(b.tb != nil && b.tb.v != nil || b.st.collapse && (b.kind == Kcell || b.kind == Krow || isrowgroup(b) || iscolumn(b)))
-		return;	# collapsed borders: the table paints them over its content
+	if(b.tb != nil && b.tb.v != nil || b.st.collapse && b.kind == Kcell || b.kind == Krow || isrowgroup(b) || iscolumn(b))
+		return;	# collapsed borders: the table paints them over its content; rows, row groups and columns have none in the separated model (§17.6.1)
 	paintborders(dst, b, r);
 }
 

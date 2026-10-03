@@ -6714,7 +6714,10 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		(rw, nil) := replacedsize(k, cbw, cbh);
 		w = rw + hextra(k);
 	} else if(w < 0) {
-		if(!lauto && !rauto)
+		# both insets set: the width is what they leave, except for a
+		# table, whose auto width is always its own (CSS 2.1 §17.5.2);
+		# auto margins then centre it (position-absolute-center-006)
+		if(!lauto && !rauto && k.kind != Ktable)
 			w = cbw - left - right - k.ml - k.mr;
 		else {
 			if((ih := spech(k, st.height, cbh)) >= 0) {
@@ -6777,7 +6780,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 			jsafe := st.safe & 8;
 			if(a.flexsp)
 				jsafe = flexspsafe(a, k, 1);
-			if(jsafe && k.w + k.ml + k.mr > sr.dx())
+			if(jsafe && k.w + k.ml + k.mr > cbw)	# against the containing block, not the static rectangle (flex-abspos-align-self-safe-outer-cb-003)
 				ja = Style->ALstart;
 			case ja {
 			Style->ALstart or Style->ALleft =>
@@ -6830,7 +6833,7 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 			asafe := st.safe & 4;
 			if(a.flexsp)
 				asafe = flexspsafe(a, k, 0);
-			if(asafe && h + k.mt + k.mb > sr.dy())
+			if(asafe && h + k.mt + k.mb > cbh)
 				aa = Style->ALstart;
 			case aa {
 			Style->ALstart =>
@@ -7542,6 +7545,14 @@ intrinsic1(b: ref Box): (int, int)
 				}
 				if(a0 + span > len cols)
 					a0 = len cols - span;
+				if(st.margintrim != 0) {
+					# margin-trim: the margins at the grid's edges are not part of the contribution (grid-inline)
+					tr := 0;
+					if(a0 == 0 && st.margintrim & 4) tr += k.ml;
+					if(a0 + span == len cols && st.margintrim & 8) tr += k.mr;
+					kmn -= tr;
+					kmx -= tr;
+				}
 				spreadspan(cols, cmn, cmx, a0, a0 + span, kmn, kmx, gap);
 				c = (a0 + span) % len cols;
 			}
@@ -8159,6 +8170,81 @@ eaw(c: int): int
 		c >= 16r20000 && c <= 16r3FFFD;
 }
 
+# Collapsible segment breaks that are removed go now, with the white
+# space collapsed about them, so that the text either side is one run
+# to the word splitter (it rounds per word: segment-break-
+# transformation-punctuation-001).  The rest become spaces later.
+segbreaks(s: string, keepnl, cj: int): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' && !keepnl)
+			break;
+	if(i == len s)
+		return s;
+	r := "";
+	i = 0;
+	while(i < len s) {
+		c := s[i];
+		if(!isspace(c) || c == '\n' && keepnl) {
+			r[len r] = c;
+			i++;
+			continue;
+		}
+		i0 := i;
+		nl := 0;
+		while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl)) {
+			if(s[i] == '\n')
+				nl = 1;
+			i++;
+		}
+		if(nl && i0 > 0 && i < len s) {
+			# removed or a space by the characters about it, default-
+			# ignorable ones aside (Text 4 §4.3.3, the rules the UA's)
+			p := i0 - 1;
+			while(p > 0 && ignorable(s[p]))
+				p--;
+			q := i;
+			while(q < len s - 1 && ignorable(s[q]))
+				q++;
+			if(removable(s[p], s[q], cj))
+				continue;
+		}
+		r += s[i0:i];
+	}
+	return r;
+}
+
+# Is the segment break between a and b removed?  Beside a zero width
+# space; between East Asian wide characters; and in Chinese or Japanese
+# text beside East Asian punctuation, a symbol or the ideographic space
+# (segment-break-transformation-removable-1, -punctuation-001..003)
+removable(a, b, cj: int): int
+{
+	if(a == 16r200B || b == 16r200B)
+		return 1;
+	if(eaw(a) && eaw(b))
+		return 1;
+	return cj && (cjkpunct(a) || cjkpunct(b));
+}
+
+# East Asian punctuation and symbols of width F, W or H
+cjkpunct(c: int): int
+{
+	if(c >= 16r3005 && c <= 16r3007)
+		return 0;	# 々 〆 〇: letters
+	return c >= 16r3000 && c <= 16r303F || c == 16r30FB || c >= 16rFE30 && c <= 16rFE6B ||
+		c >= 16rFF01 && c <= 16rFF0F || c >= 16rFF1A && c <= 16rFF20 || c >= 16rFF3B && c <= 16rFF40 ||
+		c >= 16rFF5B && c <= 16rFF65 || c >= 16rFFE0 && c <= 16rFFEE;
+}
+
+# default-ignorable: variation selectors, joiners, marks of direction,
+# the soft hyphen (segment-break-transformation-ignorable-1)
+ignorable(c: int): int
+{
+	return c == 16rAD || c == 16r34F || c == 16r180E || c >= 16r200C && c <= 16r200F ||
+		c >= 16r2060 && c <= 16r206F || c >= 16rFE00 && c <= 16rFE0F || c == 16rFEFF;
+}
+
 crtospace(s: string): string
 {
 	r := s;
@@ -8213,6 +8299,8 @@ text(f: ref Fl, b: ref Box)
 	keepnl := !(ws == Style->Wnormal || ws == Style->Wnowrap);
 	nowrap := ws == Style->Wnowrap || ws == Style->Wpre;
 	ls := st.letterspacing;
+	if(collapsesp)
+		s = segbreaks(s, keepnl, cjklang(langof(b.node)));
 	i := 0;
 	while(i < len s) {
 		c := s[i];
@@ -8230,8 +8318,6 @@ text(f: ref Fl, b: ref Box)
 					nl = 1;
 				i++;
 			}
-			if(nl && i0 > 0 && i < len s && eaw(s[i0-1]) && eaw(s[i]))
-				continue;	# a segment break between East Asian wide characters is removed (Text 3 §4.1.2)
 			if(f.space && !nowrap) {
 				# collapsed into a space before it: a break opportunity is
 				# decided on the text before collapsing (Text 3 §4.1.1), so
@@ -8696,7 +8782,86 @@ placepending(f: ref Ifc, ln: ref Ln)
 	ln.floats = nil;
 }
 
+# text-wrap: balance (Text 4 §6.3): the lines are broken at a width
+# cut back as far as it can be without one more line, so that they
+# come out about equal; each run of lines between forced breaks is
+# balanced on its own.  The cut is found by bisection, the block laid
+# out again each time: what a trial lays out (floats, pending
+# absolutes) is put back before the next, and the lines are still
+# aligned in their full width.
+balancing: int;			# a block is being balanced
+balancecuts: array of int;	# the cut per forced-break group, nil when none applies
+balancegroup: int;		# the group of the line being laid
+balancecount: array of int;	# lines laid per group, nil when not counting
+Maxgroups: con 64;		# forced-break groups balanced at most
+
 layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
+{
+	if(balancing) {
+		# a block inside the one being balanced (an inline-block's):
+		# laid out plainly, its lines not counted
+		(ocuts, ogroup, ocount) := (balancecuts, balancegroup, balancecount);
+		balancecuts = nil;
+		balancecount = nil;
+		h := layinline1(l, b, cw, ch, fc, ox, oy);
+		(balancecuts, balancegroup, balancecount) = (ocuts, ogroup, ocount);
+		return h;
+	}
+	if(b.st.textwrap != 1 || cw <= 0)
+		return layinline1(l, b, cw, ch, fc, ox, oy);
+	balancing = 1;
+	(fleft, fright) := (fc.left, fc.right);
+	pending := l.pending;
+	balancecuts = nil;
+	balancecount = array[Maxgroups] of {* => 0};
+	balancegroup = 0;
+	layinline1(l, b, cw, ch, fc, ox, oy);
+	want := balancecount;
+	ngroups := balancegroup + 1;
+	if(ngroups > Maxgroups)
+		ngroups = Maxgroups;
+	cuts := array[ngroups] of {* => 0};
+	for(g := 0; g < ngroups; g++) {
+		if(want[g] < 2)
+			continue;
+		lo := 0;
+		hi := cw;
+		while(hi - lo > 1) {
+			mid := (lo + hi)/2;
+			cuts[g] = mid;
+			balancecuts = cuts;
+			balancecount = array[Maxgroups] of {* => 0};
+			balancegroup = 0;
+			(fc.left, fc.right) = (fleft, fright);
+			l.pending = pending;
+			layinline1(l, b, cw, ch, fc, ox, oy);
+			if(balancecount[g] == want[g])
+				lo = mid;
+			else
+				hi = mid;
+		}
+		cuts[g] = lo;
+	}
+	balancecuts = cuts;
+	balancecount = nil;
+	balancegroup = 0;
+	(fc.left, fc.right) = (fleft, fright);
+	l.pending = pending;
+	h := layinline1(l, b, cw, ch, fc, ox, oy);
+	balancing = 0;
+	balancecuts = nil;
+	return h;
+}
+
+# the width a line may fill before it breaks: less the balancing cut
+cutavail(ln: ref Ln): real
+{
+	if(balancecuts != nil && balancegroup < len balancecuts)
+		return real (ln.avail - balancecuts[balancegroup]);
+	return real ln.avail;
+}
+
+layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 {
 	items := flatten(b);
 	wstpass(items);
@@ -8735,7 +8900,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			if(!ln.content && it.text == " " && collapsible(it.box.st))
 				continue;
 			w := tabw(ln, it);
-			if(it.box.st.whitespace == Style->Wbreakspaces && !it.nowrap && ln.content && ln.x + w > real ln.avail + 0.5) {
+			if(it.box.st.whitespace == Style->Wbreakspaces && !it.nowrap && ln.content && ln.x + w > cutavail(ln) + 0.5) {
 				# break-spaces: a space never hangs, and the opportunity
 				# is after it, so one that does not fit wraps, taking the
 				# word before it along when something it could break
@@ -8792,7 +8957,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				ln.content = 1;
 				continue;
 			}
-			if(it.hang != 2 && ln.content && ln.x + segwidth(il) > real ln.avail + 0.5 && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
+			if(it.hang != 2 && ln.content && ln.x + segwidth(il) > cutavail(ln) + 0.5 && !endhangs(ln, il) && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
 				hyphenate(ln);
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
@@ -8825,7 +8990,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			w := k.ml + k.w + k.mr;
 			ah := k.mt + k.h + k.mb;
 			tallband(f, ln, ah);
-			if(ln.content && ln.x + real w > real ln.avail + 0.01 && atomicbreak(ln, k))  {
+			if(ln.content && ln.x + real w > cutavail(ln) + 0.01 && atomicbreak(ln, k))  {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -8892,6 +9057,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			first = 0;
 			ln = newline(f, ln, opened);
 			ln.content = 0;
+			balancegroup++;
 			if(tl il != nil)
 				ln.para = (hd tl il).para;	# the next paragraph's level
 		}
@@ -8916,6 +9082,8 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 
 endline(f: ref Ifc, ln: ref Ln, x0, first, forced: int): ref Line
 {
+	if(balancecount != nil && balancegroup < len balancecount)
+		balancecount[balancegroup]++;
 	line := finish(f.l, f.b, ln, f.y, x0, first, forced);
 	f.y += line.h;
 	for(bl := ln.below; bl != nil; bl = tl bl)
@@ -8928,6 +9096,48 @@ collapsible(st: ref St): int
 {
 	ws := st.whitespace;
 	return ws == Style->Wnormal || ws == Style->Wnowrap || ws == Style->Wpreline;
+}
+
+# hanging-punctuation: allow-end, force-end.  Does the word at the
+# head of il fit the line once the stop or comma ending it hangs past
+# the end edge?  Only the one mark hangs, and only when it is what
+# overflows (hanging-punctuation-allow-end-basic).
+endhangs(ln: ref Ln, il: list of ref Item): int
+{
+	it := hd il;
+	if(!(it.box.st.hangpunct & 12) || len it.text < 2 || it.face == nil)
+		return 0;
+	c := it.text[len it.text - 1];
+	if(!hangstop(c))
+		return 0;
+	# the line must be able to break after it: not into a word or an
+	# atomic box glued to it (a nowrap span: hanging-punctuation-allow-end)
+	for(nl := tl il; nl != nil; nl = tl nl) {
+		x := hd nl;
+		case x.kind {
+		Iopen or Iclose or Ifloat or Iabs =>
+			continue;
+		Iword =>
+			if(!wordgap(it.box, it.text, x, 0))
+				return 0;
+		Iatomic =>
+			if(nowrapbetween(it.box, x.box))
+				return 0;
+		}
+		break;
+	}
+	hw := it.face.width(it.text[len it.text - 1:]);
+	return ln.x + segwidth(il) - hw <= cutavail(ln) + 0.5;
+}
+
+# the stops and commas that may hang at a line's end (Text 4 §8.2)
+hangstop(c: int): int
+{
+	case c {
+	',' or '.' or 16r60C or 16r6D4 or 16r3001 or 16r3002 or 16rFF0C or 16rFF0E or 16rFE50 or 16rFE51 or 16rFE52 or 16rFF61 or 16rFF64 =>
+		return 1;
+	}
+	return 0;
 }
 
 # May the line break before the word it?  Not between two words with

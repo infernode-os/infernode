@@ -250,6 +250,7 @@ Style: module
 		textjustify:	int;	# text-justify: 0 auto, 1 none, 2 inter-word, 3 inter-character
 		hangpunct:	int;	# hanging-punctuation: 1 first, 2 last, 4 force-end, 8 allow-end
 		textautospace:	int;	# text-autospace: 0 normal (ideograph-alpha and ideograph-numeric), 1 no-autospace
+		textwrap:	int;	# text-wrap-style: 0 auto, 1 balance, 2 stable, 3 pretty
 
 		new:	fn(): ref St;		# initial values
 	};

@@ -49,6 +49,55 @@ the CSS2 families (tables, floats, margins, clearance, selectors) and
 css-text (letter-spacing, soft hyphens, hanging space separators,
 text-align-last), 74.0% to 76.0%.
 
+- `22b74e7` **Inline containing-block edges, sliced inline box-shadows,
+  gamut mapping by the spec.**  An absolutely positioned box inside an
+  inline takes its containing block from the first fragment's top and
+  start edge and the last fragment's bottom and end edge (CSS 2.1
+  §10.1), the pieces of an inline split by a block counting as one
+  (`spanextent`); an inline box's box-shadow is painted per fragment
+  as the shadow of the unbroken box, sliced at the ends that are not
+  its own (`paintspan`), and `shadowfill` goes through a mask with the
+  border box cleared from it (the even-odd fill showed strips inside a
+  box without a background); `color(srgb …)` outside the gamut is
+  mapped like every other space; the chroma bisection runs to the
+  point the spec names; Oklab lightness within an epsilon of its ends
+  is white or black; "safe" alignment of a flex container's absolutely
+  positioned child checks the axis's own bit (`flexspsafe`).
+- `49e5513` **Gamut mapping, positioned inlines as containing blocks,
+  flex static positions, relative table parts, margin-trim in flex
+  lines.**  `topixel` maps an out-of-gamut colour by reducing Oklch
+  chroma (`oklab2lin`, `lin2oklab`, `ingamut`, `clip01`); `Abs.icb`,
+  `inlinearea`; `Abs.flexsp`, `flexarea`, `flexspalign` (the static
+  rectangle `sr` apart from the containing block `pr` in `layabs`);
+  relative offsets for rows, row groups, cells and captions; flex line
+  formation leaves out the margins it will trim; flow-end as end in
+  flex; text-autospace's initial value is no-autospace.
+- `0843e96` **text-autospace, margin-trim for flex and grid, colour
+  clamps, outlines and overflow on table parts, stylesheet content
+  types.**  `autospacepass`/`isideograph`/`isalnumeral`;
+  `St.textautospace`; margin-trim on flex and grid items at the
+  container's edges and in `sizetracks` contributions; `trackpos`
+  shares space among non-collapsed tracks; lab/lch/oklab/oklch
+  lightness clamped (`clampl`), chroma ≥ 0, `display-p3-linear`;
+  `paintoutline` skips columns, `innerclip` ignores overflow on rows,
+  row groups and columns; `page.b` `mediatype` rejects a linked sheet
+  not `text/css` in standards mode.
+- `dd5e6d7` **hanging-punctuation first and last.**  `St.hangpunct`;
+  `hangpass` splits the opening or closing mark into an item of its own
+  (`Item.hang`/`Frag.hang`, `hangopen`/`hangclose`) that takes no room
+  on the line, in the intrinsic sizes or in alignment, provided the
+  inline box holding it has no border or padding on that side
+  (`edged`); `finish()` shifts it past the edge (rtl: the other side).
+  force-end and allow-end are not done.
+- `0b5533e` **Trailing letter-spacing trimmed at a line's end.**
+  `Item.tls`/`Frag.tls`; `segwidth` lets the spacing overflow when
+  fitting a word, `finish()` takes it off the last fragment, the
+  intrinsic measure leaves it out (letter-spacing-200, -end-of-line-001).
+- `ef02bb7` **Soft hyphens between joining letters, min-content without
+  hyphenation, rtl overflow to the left.**  `joinedacross` keeps a soft
+  hyphen inside a shaped word; the measure keeps a shy word one unit
+  (`shy`); inline content too wide for a right-to-left line overflows
+  the left, anchored at the start (`off` clamp only for ltr).
 - `d1dd7c1` **Soft hyphens, hyphens, hyphenate-character, text-justify:
   none.**  A soft hyphen is a break opportunity kept as a zero-width
   item after its word (text()); `canbreak` takes it when the hyphen

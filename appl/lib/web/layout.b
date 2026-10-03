@@ -1734,7 +1734,7 @@ sizew1(b: ref Box, cbw, cbh: int)
 			w = cw;
 		}
 	}
-	w = clampw(b, transferw(b, w, cbh), cbw);
+	w = clampw(b, w, cbw);
 	b.w = w;
 	# auto margins share what is left over
 	free := cbw - w - b.ml - b.mr;
@@ -1808,8 +1808,8 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		ch = sh - vextra(b);
 	else if((rh := ratioh(b, b.w)) >= 0 && b.st.minheight.kind == Style->Lauto)
 		ch = rh - vextra(b);	# from its width through its ratio: definite (Sizing 4 §5.3)
-	else if(curdoc != nil && curdoc.quirks && b.kind == Kblock)
-		ch = cbh;	# the percentage height calculation quirk: through auto-height blocks to the nearest definite one
+	else if(curdoc != nil && curdoc.quirks && b.kind == Kblock && !(b.parent != nil && b.parent.kind == Kcell))
+		ch = cbh;	# the percentage height calculation quirk: through auto-height blocks to the nearest definite one, but not a cell's child
 	bfc := isbfc(b) || b == l.root || fc == nil;	# the root holds the initial formatting context
 	if(bfc) {
 		fc = ref Fctx(nil, nil);
@@ -5095,7 +5095,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 		} else if(k.kind == Krow)
 			body = (k, nil) :: body;
 	}
-	all := rev2(head);
+	all := head;	# (each list is reversed; the final rev2 puts them all in order)
 	for(bl := rev2(body); bl != nil; bl = tl bl)
 		all = hd bl :: all;
 	for(fl := rev2(foot); fl != nil; fl = tl fl)
@@ -6439,6 +6439,7 @@ floatwidth(k: ref Box, cw, ch: int): int
 {
 	edges(k, cw);
 	w := specw(k, k.st.width, cw);
+	wauto := w < 0;
 	if(w < 0 && k.st.aspect > 0.0 && k.kind != Kreplaced && (sh := spech(k, k.st.height, ch)) >= 0)
 		w = transferred(k, clamph(k, sh, ch));
 	if(w < 0) {
@@ -6454,7 +6455,9 @@ floatwidth(k: ref Box, cw, ch: int): int
 		k.ml = 0;
 	if(k.st.mr.kind == Style->Lauto)
 		k.mr = 0;
-	k.w = clampw(k, transferw(k, w, ch), cw);
+	if(wauto)
+		w = transferw(k, w, ch);	# min/max-height bound an auto width through the ratio
+	k.w = clampw(k, w, cw);
 	return k.ml + k.w + k.mr;
 }
 
@@ -7131,8 +7134,8 @@ definiteh(b: ref Box): int
 	if(b == pcthbox)
 		return pcthval;
 	st := b.st;
-	if(st.height.kind == Style->Lauto && b.kind == Kblock && curdoc != nil && curdoc.quirks)
-		return pcth;	# the percentage height calculation quirk: through auto-height blocks
+	if(st.height.kind == Style->Lauto && b.kind == Kblock && curdoc != nil && curdoc.quirks && !(b.parent != nil && b.parent.kind == Kcell))
+		return pcth;	# the percentage height calculation quirk: through auto-height blocks (not a cell's child)
 	if(st.height.kind == Style->Lauto && st.aspect > 0.0 && b.kind != Kreplaced &&
 	   st.width.kind == Style->Lpx && st.width.pct == 0.0) {
 		# from a definite width through its aspect ratio (Sizing 4 §5.3)
@@ -7719,6 +7722,40 @@ linestart(f: ref Ifc, ln: ref Ln)
 	ln.x = real ln.left + ln.indent;
 }
 
+# A tall atomic box reaches floats that the line's strut does not: the
+# line keeps clear of them for its whole height (CSS 2.2 §9.5), so it
+# narrows to the band at that height, what is on it moving right past a
+# float on the left.
+tallband(f: ref Ifc, ln: ref Ln, h: int)
+{
+	if(f.fc == nil || h <= f.strut)
+		return;
+	cx := f.ox + f.b.bl + f.b.pl;
+	ly := f.oy + f.y;
+	(lx, rx) := band(f.fc, ly, ly + h, cx, cx + f.cw);
+	if(rx - cx < ln.avail)
+		ln.avail = rx - cx;
+	if(lx - cx > ln.left) {
+		shiftline(ln, lx - cx - ln.left);
+		ln.left = lx - cx;
+	}
+}
+
+# move a line's content right by d: its fragments and the inline boxes open on it
+shiftline(ln: ref Ln, d: int)
+{
+	for(fl := ln.frags; fl != nil; fl = tl fl)
+		(hd fl).x += d;
+	ln.x += real d;
+	r: list of (ref Box, real, int, int);
+	for(ol := ln.open; ol != nil; ol = tl ol) {
+		(ob, ostart, ofirst, olevel) := hd ol;
+		r = (ob, ostart + real d, ofirst, olevel) :: r;
+	}
+	for(ln.open = nil; r != nil; r = tl r)
+		ln.open = hd r :: ln.open;
+}
+
 # Nothing fits beside the floats here: move the (empty) line down past one.
 movedown(f: ref Ifc, ln: ref Ln): int
 {
@@ -7784,7 +7821,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				prev := ln.frags;
 				while(prev != nil && (hd prev).kind == Fspan)
 					prev = tl prev;
-				if(it.box.st.breakall != 2 && prev != nil && (hd prev).kind == Ftext && !isblankrun((hd prev).text)) {
+				if(it.box.st.breakall != 2 && prev != nil && (hd prev).kind == Ftext && !isblankrun((hd prev).text) && (hd prev).text != "　") {
 					# after a word: that goes too, or nothing does when
 					# the word starts the line (line-break: anywhere
 					# breaks before the space itself)
@@ -7855,19 +7892,25 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			k := it.box;
 			layatomic(l, k, cw, f.ch);
 			w := k.ml + k.w + k.mr;
+			ah := k.mt + k.h + k.mb;
+			tallband(f, ln, ah);
 			if(ln.content && ln.x + real w > real ln.avail + 0.01)  {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
+				tallband(f, ln, ah);
 			}
 			while(!ln.content && ln.x + real w > real ln.avail + 0.01 && movedown(f, ln))
-				;
+				tallband(f, ln, ah);
 			fr := ref Frag(Fatomic, ir(ln.x) + k.ml, 0, k.w, k.h, 0, k, nil, nil, 0, 0, 0, 0, it.level);
 			ln.frags = fr :: ln.frags;
 			ln.x += real w;
 			ln.content = 1;
 		Ifloat =>
-			if(!ln.content || real floatwidth(it.box, cw, f.ch) <= real ln.avail - ln.x + 0.01) {
+			tx := ln.x;
+			if(ln.frags != nil && (hd ln.frags).kind == Ftext && (hd ln.frags).text == " " && collapsible((hd ln.frags).box.st))
+				tx = real (hd ln.frags).x;	# a trailing space goes at the line's end: the float may have its room
+			if(!ln.content || real floatwidth(it.box, cw, f.ch) <= real ln.avail - tx + 0.01) {
 				# on this line: at its top, beside what is on it already
 				# (CSS 2.2 §9.5.1 rules 4 and 7)
 				oldleft := ln.left;

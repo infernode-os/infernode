@@ -4518,8 +4518,13 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		}
 	"word-break" =>
 		case id {
-		"normal" => st.breakall = st.keepall = 0;
-		"break-all" => st.breakall = 1;
+		"normal" =>
+			st.keepall = 0;
+			if(st.breakall == 1)
+				st.breakall = 0;	# (line-break: anywhere, 2, is another property's)
+		"break-all" =>
+			if(st.breakall != 2)
+				st.breakall = 1;	# anywhere already breaks everywhere break-all does
 		"keep-all" => st.keepall = 1;
 		"break-word" => st.anywhere = 2;	# as overflow-wrap: anywhere (Text 4 §5.2)
 		* => return 0;

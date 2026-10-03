@@ -1845,7 +1845,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1);
 }
 
 nextsid := 1;
@@ -3136,13 +3136,9 @@ colorfn(t: ref Tok): (int, int)
 		# lightness is clamped to its range (Color 4 §9.2); at the
 		# ends the colour is white or black whatever the chroma
 		l := clampl(chval(ch[0], 100.0), 100.0);
-		if(l >= 100.0 || l <= 0.0)
-			return (1, lend(l, al));
 		return (1, lab2rgb(l, chval(ch[1], 125.0), chval(ch[2], 125.0), al));
 	"lch" =>
 		l := clampl(chval(ch[0], 100.0), 100.0);
-		if(l >= 100.0 || l <= 0.0)
-			return (1, lend(l, al));
 		c := chval(ch[1], 150.0);
 		if(c < 0.0)
 			c = 0.0;
@@ -3150,13 +3146,9 @@ colorfn(t: ref Tok): (int, int)
 		return (1, lab2rgb(l, c*math->cos(h), c*math->sin(h), al));
 	"oklab" =>
 		l := clampl(chval(ch[0], 1.0), 1.0);
-		if(l >= 1.0 || l <= 0.0)
-			return (1, lend(l, al));
 		return (1, oklab2rgb(l, chval(ch[1], 0.4), chval(ch[2], 0.4), al));
 	"oklch" =>
 		l := clampl(chval(ch[0], 1.0), 1.0);
-		if(l >= 1.0 || l <= 0.0)
-			return (1, lend(l, al));
 		c := chval(ch[1], 0.4);
 		if(c < 0.0)
 			c = 0.0;
@@ -3247,7 +3239,7 @@ xyz2rgb(x65, y65, z65: real, al: int): int
 	r := 3.2409699419045226*x65 - 1.537383177570094*y65 - 0.4986107602930034*z65;
 	g := -0.9692436362808796*x65 + 1.8759675015077202*y65 + 0.04155505740717559*z65;
 	bb := 0.05563007969699366*x65 - 0.20397695888897652*y65 + 1.0569715142428786*z65;
-	return (srgb(r) << 24) | (srgb(g) << 16) | (srgb(bb) << 8) | clamp(al);
+	return topixel(r, g, bb, al);
 }
 
 # color(<space> c1 c2 c3 [/ alpha]) (Color 4 §10): the predefined RGB
@@ -3368,7 +3360,95 @@ oklab2rgb(l, a, b: real, al: int): int
 	r := 4.0767416621*l3 - 3.3077115913*m3 + 0.2309699292*s3;
 	g := -1.2684380046*l3 + 2.6097574011*m3 - 0.3413193965*s3;
 	bb := -0.0041960863*l3 - 0.7034186147*m3 + 1.7076147010*s3;
-	return (srgb(r) << 24) | (srgb(g) << 16) | (srgb(bb) << 8) | clamp(al);
+	return topixel(r, g, bb, al);
+}
+
+oklab2lin(l, a, b: real): (real, real, real)
+{
+	l_ := l + 0.3963377774*a + 0.2158037573*b;
+	m_ := l - 0.1055613458*a - 0.0638541728*b;
+	s_ := l - 0.0894841775*a - 1.2914855480*b;
+	l3 := l_*l_*l_;
+	m3 := m_*m_*m_;
+	s3 := s_*s_*s_;
+	return (4.0767416621*l3 - 3.3077115913*m3 + 0.2309699292*s3,
+		-1.2684380046*l3 + 2.6097574011*m3 - 0.3413193965*s3,
+		-0.0041960863*l3 - 0.7034186147*m3 + 1.7076147010*s3);
+}
+
+lin2oklab(r, g, b: real): (real, real, real)
+{
+	l := cbrt(0.4122214708*r + 0.5363325363*g + 0.0514459929*b);
+	m := cbrt(0.2119034982*r + 0.6806995451*g + 0.1073969566*b);
+	s := cbrt(0.0883024619*r + 0.2817188376*g + 0.6299787005*b);
+	return (0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
+		1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
+		0.0259040371*l + 0.7827717662*m - 0.8086757660*s);
+}
+
+cbrt(x: real): real
+{
+	if(x < 0.0)
+		return -math->pow(-x, 1.0/3.0);
+	return math->pow(x, 1.0/3.0);
+}
+
+ingamut(r, g, b: real): int
+{
+	return r >= -0.00001 && r <= 1.00001 && g >= -0.00001 && g <= 1.00001 && b >= -0.00001 && b <= 1.00001;
+}
+
+clip01(x: real): real
+{
+	if(x < 0.0)
+		return 0.0;
+	if(x > 1.0)
+		return 1.0;
+	return x;
+}
+
+# Linear sRGB to the pixel.  A colour outside the gamut is mapped into
+# it as Color 4 §13.2 says: white or black at the ends of lightness,
+# else its Oklch chroma is reduced until it fits, or until it is
+# within a just noticeable difference of its clipped self
+# (oklab-l-almost-1, lch-009).
+topixel(r, g, b: real, al: int): int
+{
+	if(!ingamut(r, g, b)) {
+		(l, a, bb) := lin2oklab(r, g, b);
+		if(l >= 1.0)
+			(r, g, b) = (1.0, 1.0, 1.0);
+		else if(l <= 0.0)
+			(r, g, b) = (0.0, 0.0, 0.0);
+		else {
+			c := math->sqrt(a*a + bb*bb);
+			h := math->atan2(bb, a);
+			lo := 0.0;
+			hi := c;
+			(r, g, b) = oklab2lin(l, 0.0, 0.0);
+			for(i := 0; i < 24 && hi - lo > 0.0001; i++) {
+				mid := (lo + hi)/2.0;
+				(mr, mg, mb) := oklab2lin(l, mid*math->cos(h), mid*math->sin(h));
+				if(ingamut(mr, mg, mb)) {
+					lo = mid;
+					(r, g, b) = (mr, mg, mb);
+					continue;
+				}
+				# the clipped colour, if close enough, is taken
+				(cr, cg, cb) := (clip01(mr), clip01(mg), clip01(mb));
+				(cl, ca, cbb) := lin2oklab(cr, cg, cb);
+				dl := cl - l;
+				da := ca - mid*math->cos(h);
+				db := cbb - mid*math->sin(h);
+				if(math->sqrt(dl*dl + da*da + db*db) < 0.02) {
+					(r, g, b) = (cr, cg, cb);
+					break;
+				}
+				hi = mid;
+			}
+		}
+	}
+	return (srgb(r) << 24) | (srgb(g) << 16) | (srgb(b) << 8) | clamp(al);
 }
 
 # color-mix(in <space>, c1 [p1], c2 [p2]): mixed in sRGB whatever the space

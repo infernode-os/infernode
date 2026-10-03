@@ -1400,6 +1400,8 @@ Abs: adt {
 	frag:	ref Frag;	# an inline-level box's place on its line, once the line is aligned (else nil)
 	rightedge:	int;	# sx is the hypothetical box's right edge: its static parent is right-to-left (§10.3.7)
 	area:	ref Rect;	# a grid area that is its containing block instead, in cb's coordinates (Grid 2 §9)
+	icb:	ref Box;	# a positioned inline box whose padding box is the containing block (§10.1): cb is its block container, and area is set from its fragments once laid out
+	flexsp:	int;		# a flex container's child: its static position is as the sole item of a row (1) or column (2) container (Flexbox §4.1), area being the content box once laid out
 };
 
 # the static position's x: the content box's start edge, which is the
@@ -1539,8 +1541,14 @@ lay(root: ref Box, width, height: int)
 	for(p := l.pending; p != nil; p = tl p)
 		if((hd p).cb == nil)
 			vp = hd p :: vp;
-	for(; vp != nil; vp = tl vp)
-		layabs(l, hd vp, root, Rect((-root.x, -root.y), (width - root.x, height - root.y)));
+	for(; vp != nil; vp = tl vp) {
+		a := hd vp;
+		if(a.icb != nil && a.area == nil)
+			a.area = inlinearea(root, a.icb);
+		if(a.flexsp && a.area == nil)
+			a.area = flexarea(root, a.sparent);
+		layabs(l, a, root, Rect((-root.x, -root.y), (width - root.x, height - root.y)));
+	}
 	l.pending = nil;
 	number(root, 1);
 }
@@ -1980,7 +1988,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 					Style->Aright =>	sx += rx - lx;
 					}
 				}
-				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil, b.st.dirrtl, nil) :: l.pending;
+				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil, b.st.dirrtl, nil, icbof(k), 0) :: l.pending;
 				continue;
 			}
 			if(isfloat(k)) {
@@ -2263,7 +2271,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0, nil) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0, nil, icbof(k), 2 - row) :: l.pending;
 			continue;
 		}
 		items = ref Fi(k, 0.0, 0.0, 0.0, 0.0, -1.0, 0, 0, 0, 0) :: items;
@@ -2367,14 +2375,36 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	lines: list of ref Fline;
 	st0 := 0;
 	used := 0.0;
+	# (the margins margin-trim takes off a line's first and last item
+	# do not count against the line: flex-row-inline-multiline)
+	trimstart := b.st.margintrim & 4;
+	trimend := b.st.margintrim & 8;
+	if(!row) {
+		trimstart = b.st.margintrim & 1;
+		trimend = b.st.margintrim & 2;
+	}
 	for(i = 0; i < n; i++) {
+		k := fa[i].box;
+		(ms, me) := (k.ml, k.mr);
+		if(!row)
+			(ms, me) = (k.mt, k.mb);
 		outer := fa[i].hyp + real fa[i].mm;
-		if(i > st0)
+		need := outer;
+		if(trimend)
+			need -= real me;
+		if(i > st0) {
 			outer += real gapmain;
-		if(wrap && i > st0 && mainavail >= 0 && used + outer > real mainavail + 0.5) {
+			need += real gapmain;
+		} else if(trimstart) {
+			outer -= real ms;
+			need -= real ms;
+		}
+		if(wrap && i > st0 && mainavail >= 0 && used + need > real mainavail + 0.5) {
 			lines = ref Fline(fa[st0:i], 0, 0) :: lines;
 			st0 = i;
 			used = fa[i].hyp + real fa[i].mm;
+			if(trimstart)
+				used -= real ms;
 		} else
 			used += outer;
 	}
@@ -2508,7 +2538,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				for(i = 0; i < len la; i++)
 					la[i].cross += per;
 			}
-		Style->ALend =>
+		Style->ALend or Style->ALflowend =>
 			off = free;
 		Style->ALcenter =>
 			off = free/2;
@@ -2601,7 +2631,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		rstart := real start;
 		rgap := real gap;
 		case jc {
-		Style->ALend =>
+		Style->ALend or Style->ALflowend =>
 			rstart = real freem;
 		Style->ALright =>
 			# physical: the end of a row, the start of a reversed one
@@ -3867,7 +3897,7 @@ gridabs(l: ref L, b: ref Box, cols: array of ref Track, cpos: array of int, colg
 				r.max.y = b.bt + b.pt + gridlineend(rows, rpos, r1, rowgap);
 			area = ref r;
 		}
-		l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, area) :: l.pending;
+		l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, area, nil, 0) :: l.pending;
 	}
 }
 
@@ -4961,6 +4991,19 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 			}
 			mn += g.extra;
 			mx += g.extra;
+			if(b.st.margintrim != 0 && !g.empty) {
+				# margin-trim: the margins at the grid's edges are not part of the contribution (grid-inline)
+				tr := 0;
+				if(cols) {
+					if(a0 == 0 && b.st.margintrim & 4) tr += k.ml;
+					if(a1 == n && b.st.margintrim & 8) tr += k.mr;
+				} else {
+					if(a0 == 0 && b.st.margintrim & 1) tr += k.mt;
+					if(a1 == n && b.st.margintrim & 2) tr += k.mb;
+				}
+				mn -= tr;
+				mx -= tr;
+			}
 			if(nspan == 1 && a0 < n && t[a0].lo.kind == Tauto && (t[a0].hi.kind == Tfixed || t[a0].hi.kind == Tpct) &&
 			   t[a0].limit >= 0.0 && real mn > t[a0].limit && autosized(k, cols) && seethrough(k.st.overflowx) && !g.empty)
 				mn = int t[a0].limit;	# an automatic minimum is clamped by a definite max track size (§6.6)
@@ -5947,7 +5990,7 @@ tableabs(l: ref L, t, b: ref Box)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k))
-			l.pending = ref Abs(k, cbof(l, k), t, t.bl + t.pl, t.bt + t.pt, nil, t.st.dirrtl, nil) :: l.pending;
+			l.pending = ref Abs(k, cbof(l, k), t, t.bl + t.pl, t.bt + t.pt, nil, t.st.dirrtl, nil, icbof(k), 0) :: l.pending;
 		else if(isrowgroup(k) || k.kind == Krow)
 			tableabs(l, t, k);
 	}
@@ -6312,6 +6355,15 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		if(st.dirrtl)
 			k.x = cx[c.c + c.cs - 1] - rx;
 		k.y = rowy[c.r] - ry;
+		relative(k, cw, -1);
+	}
+	# relatively positioned rows and row groups move once their cells
+	# are placed within them (position-relative-table-tr-top, -tbody-top)
+	for(r = 0; r < nr; r++) {
+		relative(t.rows[r], cw, -1);
+		g := t.groups[r];
+		if(g != nil && (r == 0 || t.groups[r-1] != g))
+			relative(g, cw, -1);
 	}
 	capsh := gridtop - b.bt - b.pt;	# the captions, above and below, outside the table box
 	if(t.tb != nil)
@@ -6365,7 +6417,9 @@ laycaption(l: ref L, k, b: ref Box, cw, y: int): int
 	layblock(l, k, cw, -1, nil, 0, 0);
 	k.x = x + k.ml;
 	k.y = y + k.mt;
-	return k.y + k.h + k.mb;
+	end := k.y + k.h + k.mb;
+	relative(k, cw, -1);	# (position-relative-table-caption)
+	return end;
 }
 
 # move a box's content down (vertical-align in table cells)
@@ -6423,6 +6477,113 @@ cbof(l: ref L, k: ref Box): ref Box
 	return nil;
 }
 
+# the positioned inline box that is k's containing block, if the
+# nearest positioned ancestor is one
+icbof(k: ref Box): ref Box
+{
+	if(k.st.position == Style->Pfixed)
+		return nil;
+	for(p := k.parent; p != nil; p = p.parent)
+		if(ispositioned(p)) {
+			if(p.kind == Kinline)
+				return p;
+			return nil;
+		}
+	return nil;
+}
+
+# A positioned inline box's containing block: its padding box, from
+# its first fragment's start to its last fragment's end (CSS 2.2
+# §10.1), in the coordinates of the block container cb that holds
+# the lines; nil when it has no fragment yet (position-absolute-in-
+# inline-003)
+inlinearea(cb, p: ref Box): ref Rect
+{
+	(ok, r) := spanextent(cb, p, 0, 0, 0, Rect((0, 0), (0, 0)));
+	if(!ok)
+		return nil;
+	return ref r;
+}
+
+spanextent(b, p: ref Box, ox, oy, ok: int, r: Rect): (int, Rect)
+{
+	for(i := 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++) {
+			f := ln.frags[j];
+			if(f.kind != Fspan || f.box != p)
+				continue;
+			x0 := ox + f.x;
+			x1 := x0 + f.w;
+			if(leftedge(f))
+				x0 += p.ml + p.bl;
+			if(rightedge(f))
+				x1 -= p.mr + p.br;
+			fr := Rect((x0, oy + f.y + p.bt), (x1, oy + f.y + f.h - p.bb));
+			if(!ok)
+				r = fr;
+			else {
+				if(fr.min.x < r.min.x) r.min.x = fr.min.x;
+				if(fr.min.y < r.min.y) r.min.y = fr.min.y;
+				if(fr.max.x > r.max.x) r.max.x = fr.max.x;
+				if(fr.max.y > r.max.y) r.max.y = fr.max.y;
+			}
+			ok = 1;
+		}
+	}
+	if(b.lines == nil)
+		for(i = 0; i < len b.kids; i++) {
+			k := b.kids[i];
+			if(k.kind == Kinline || k.kind == Ktext)
+				continue;
+			(ok, r) = spanextent(k, p, ox + k.x, oy + k.y, ok, r);
+		}
+	return (ok, r);
+}
+
+# a flex container's content box, in the coordinates of the
+# containing block cb that holds it (or is it): the static position
+# rectangle of its absolutely positioned children (Flexbox §4.1)
+flexarea(cb, fcb: ref Box): ref Rect
+{
+	x := fcb.bl + fcb.pl;
+	y := fcb.bt + fcb.pt;
+	for(p := fcb; p != nil && p != cb; p = p.parent) {
+		x += p.x;
+		y += p.y;
+	}
+	return ref Rect((x, y), (x + fcb.w - hextra(fcb), y + fcb.h - vextra(fcb)));
+}
+
+# how a flex container's absolutely positioned child aligns in its
+# static position rectangle along the x (horiz 1) or y axis: as the
+# sole item, by the container's justify-content on the main axis and
+# the item's align-self on the cross axis (position-absolute-center-001)
+flexspalign(a: ref Abs, k: ref Box, horiz: int): int
+{
+	fcb := a.sparent;
+	main := a.flexsp == 1 && horiz || a.flexsp == 2 && !horiz;
+	if(main) {
+		case fcb.st.justifycontent {
+		Style->ALend or Style->ALright or Style->ALflowend =>
+			return Style->ALend;
+		Style->ALcenter or Style->ALaround or Style->ALevenly =>
+			return Style->ALcenter;
+		}
+		return Style->ALstart;
+	}
+	al := k.st.alignself;
+	if(al == Style->ALauto)
+		al = fcb.st.alignitems;
+	case al {
+	Style->ALend or Style->ALflowend =>
+		return Style->ALend;
+	Style->ALcenter =>
+		return Style->ALcenter;
+	}
+	return Style->ALstart;
+}
+
 # relative and sticky positioning: shift the box after it is placed
 relative(k: ref Box, cbw, cbh: int)
 {
@@ -6461,16 +6622,26 @@ positioned(l: ref L, b: ref Box)
 		l.pending = hd rest :: l.pending;
 	# the padding box, in b's border-box coordinates
 	pr := Rect((b.bl, b.bt), (b.w - b.br, b.h - b.bb));
-	for(; mine != nil; mine = tl mine)
-		layabs(l, hd mine, b, pr);
+	for(; mine != nil; mine = tl mine) {
+		a := hd mine;
+		if(a.icb != nil && a.area == nil)
+			a.area = inlinearea(b, a.icb);
+		if(a.flexsp && a.area == nil)
+			a.area = flexarea(b, a.sparent);
+		layabs(l, a, b, pr);
+	}
 }
 
 layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 {
 	k := a.box;
 	st := k.st;
-	if(a.area != nil)
-		pr = *a.area;
+	sr := pr;	# the static position rectangle: the containing block's padding box, a grid area, or a flex container's content box
+	if(a.area != nil) {
+		sr = *a.area;
+		if(!a.flexsp)
+			pr = *a.area;	# a grid area is the containing block too
+	}
 	cbw := pr.dx();
 	cbh := pr.dy();
 	# static position, in cb coordinates
@@ -6478,9 +6649,9 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	sy := a.sy;
 	if(a.frag != nil)
 		sx = a.frag.x;
-	if(a.area != nil) {
-		sx = pr.min.x;
-		sy = pr.min.y;
+	if(a.area != nil && a.icb == nil) {
+		sx = sr.min.x;	# a grid area or a flex container: the static position is its start
+		sy = sr.min.y;
 	}
 	for(p := a.sparent; p != nil && p != cb; p = p.parent) {
 		sx += p.x;
@@ -6577,17 +6748,19 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		# auto insets in a grid area: aligned in it as justify-self
 		# says, normal being its start (Grid 2 §9, Position 3 §3.5);
 		# safe keeps a box that overflows it at the start
-		if(a.area != nil) {
+		if(a.area != nil && a.icb == nil) {
 			ja := abspalign(st.justifyself);
+			if(a.flexsp)
+				ja = flexspalign(a, k, 1);
 			if(st.safe & 8 && k.w + k.ml + k.mr > cbw)
 				ja = Style->ALstart;
 			case ja {
 			Style->ALstart or Style->ALleft =>
-				x = pr.min.x + k.ml;
+				x = sr.min.x + k.ml;
 			Style->ALend or Style->ALright =>
-				x = pr.max.x - k.mr - k.w;
+				x = sr.max.x - k.mr - k.w;
 			Style->ALcenter =>
-				x = pr.min.x + (cbw - k.w - k.ml - k.mr)/2 + k.ml;
+				x = sr.min.x + (sr.dx() - k.w - k.ml - k.mr)/2 + k.ml;
 			}
 		}
 	}
@@ -6625,17 +6798,19 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		y = pr.max.y - bottom - k.mb - h;
 	else {
 		y = sy + k.mt;
-		if(a.area != nil) {
+		if(a.area != nil && a.icb == nil) {
 			aa := abspalign(st.alignself);
+			if(a.flexsp)
+				aa = flexspalign(a, k, 0);
 			if(st.safe & 4 && h + k.mt + k.mb > cbh)
 				aa = Style->ALstart;
 			case aa {
 			Style->ALstart =>
-				y = pr.min.y + k.mt;
+				y = sr.min.y + k.mt;
 			Style->ALend =>
-				y = pr.max.y - k.mb - h;
+				y = sr.max.y - k.mb - h;
 			Style->ALcenter =>
-				y = pr.min.y + (cbh - h - k.mt - k.mb)/2 + k.mt;
+				y = sr.min.y + (sr.dy() - h - k.mt - k.mb)/2 + k.mt;
 			}
 		}
 	}
@@ -8179,8 +8354,15 @@ autospacepass(items: list of ref Item)
 		case it.kind {
 		Iword =>
 			if(prev != nil && len it.text > 0 && prev.box.st.textautospace == 0 && it.box.st.textautospace == 0) {
-				a := prev.text[len prev.text - 1];
-				c := it.text[0];
+				# the characters beside the join, past any combining marks (text-autospace-mixed-001)
+				pa := len prev.text - 1;
+				while(pa > 0 && bidi != nil && bidi->lbclass(prev.text[pa]) == Bidi->LBCM)
+					pa--;
+				pc := 0;
+				while(pc < len it.text - 1 && bidi != nil && bidi->lbclass(it.text[pc]) == Bidi->LBCM)
+					pc++;
+				a := prev.text[pa];
+				c := it.text[pc];
 				if(isideograph(a) && isalnumeral(c) || isalnumeral(a) && isideograph(c)) {
 					sp := prev.box.st.fontsize/8.0;
 					prev.w += sp;
@@ -8667,11 +8849,11 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# marks the place through alignment and reordering
 				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level, 0, 0);
 				ln.frags = mark :: ln.frags;
-				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil) :: l.pending;
+				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil, icbof(it.box), 0) :: l.pending;
 			} else {
 				# a block-level one's is where a block would go: the
 				# start of this line, or under it once content is on it
-				a := ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl, nil);
+				a := ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl, nil, icbof(it.box), 0);
 				if(ln.content)
 					ln.below = a :: ln.below;
 				l.pending = a :: l.pending;
@@ -8937,16 +9119,15 @@ segwidth(il: list of ref Item): real
 	return segend(w, pos, trail, tailneg);
 }
 
-# the width a segment needs: its furthest extent, less a negative
-# margin closing it (as browsers fit by the end position), and less
-# the letter spacing after its last character
-segend(w, pos, trail, tailneg: real): real
+# the width a segment needs: its furthest extent (a negative margin
+# closing it does not pull a word back into the line: browsers fit the
+# word before its box's end edge, firefox-bug-1881495), less the
+# letter spacing after its last character
+segend(w, pos, trail, nil: real): real
 {
 	if(pos >= w)
 		return pos - trail;
-	if(w + tailneg > pos - trail)
-		return w + tailneg;
-	return pos - trail;
+	return w;
 }
 
 removebox(l: list of ref Box, b: ref Box): list of ref Box

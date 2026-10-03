@@ -210,12 +210,13 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 # Create a new canvas from SVG attributes
 new_canvas(attrs: Attributes): ref Canvas
 {
-	width := parse_length(attrs.get("width"), real DEFAULT_WIDTH);
-	height := parse_length(attrs.get("height"), real DEFAULT_HEIGHT);
+	# a percentage is of a viewport this image has not got: the default
+	width := rootlen(attrs.get("width"), real DEFAULT_WIDTH);
+	height := rootlen(attrs.get("height"), real DEFAULT_HEIGHT);
 
 	c := ref Canvas;
-	c.width = int (width + 0.5);
-	c.height = int (height + 0.5);
+	c.width = int width;	# to the nearest: Limbo's int rounds
+	c.height = int height;
 	if(c.width <= 0) c.width = DEFAULT_WIDTH;
 	if(c.height <= 0) c.height = DEFAULT_HEIGHT;
 	# Clamp to reasonable size
@@ -245,16 +246,50 @@ new_canvas(attrs: Attributes): ref Canvas
 		}
 	}
 
-	# Compute transform from viewBox to viewport
+	vbw = c.viewbox_w;
+	vbh = c.viewbox_h;
+
+	# Compute transform from viewBox to viewport, as preserveAspectRatio
+	# says (SVG 2 §8.7): none stretches; else one scale, meet (within)
+	# or slice (covering), aligned by xMin/xMid/xMax and YMin/YMid/YMax
 	sx := real c.width / c.viewbox_w;
 	sy := real c.height / c.viewbox_h;
-	# preserveAspectRatio: xMidYMid meet (default)
-	scale := sx;
-	if(sy < scale) scale = sy;
-	tx := (real c.width - c.viewbox_w * scale) / 2.0 - c.viewbox_x * scale;
-	ty := (real c.height - c.viewbox_h * scale) / 2.0 - c.viewbox_y * scale;
-
-	c.transform = ref Matrix(scale, 0.0, tx, 0.0, scale, ty);
+	align := "xMidYMid";
+	slice := 0;
+	par := attrs.get("preserveAspectRatio");
+	if(par != nil) {
+		parts := split_whitespace_comma(par);
+		for(i := 0; i < len parts; i++) {
+			case parts[i] {
+			"none" =>	align = "none";
+			"slice" =>	slice = 1;
+			"meet" =>	slice = 0;
+			* =>
+				if(len parts[i] >= 8 && parts[i][0] == 'x')
+					align = parts[i];
+			}
+		}
+	}
+	if(align == "none")
+		c.transform = ref Matrix(sx, 0.0, -c.viewbox_x * sx, 0.0, sy, -c.viewbox_y * sy);
+	else {
+		scale := sx;
+		if(slice && sy > scale || !slice && sy < scale)
+			scale = sy;
+		ax := 0.5;
+		ay := 0.5;
+		case align[1:4] {
+		"Min" =>	ax = 0.0;
+		"Max" =>	ax = 1.0;
+		}
+		case align[5:8] {
+		"Min" =>	ay = 0.0;
+		"Max" =>	ay = 1.0;
+		}
+		tx := (real c.width - c.viewbox_w * scale) * ax - c.viewbox_x * scale;
+		ty := (real c.height - c.viewbox_h * scale) * ay - c.viewbox_y * scale;
+		c.transform = ref Matrix(scale, 0.0, tx, 0.0, scale, ty);
+	}
 	c.defs = nil;
 
 	return c;
@@ -452,12 +487,12 @@ parse_gradient_stops(parser: ref Parser): list of ref GradStop
 
 render_rect(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	x := parse_length(attrs.get("x"), 0.0);
-	y := parse_length(attrs.get("y"), 0.0);
-	w := parse_length(attrs.get("width"), 0.0);
-	h := parse_length(attrs.get("height"), 0.0);
-	rx := parse_length(attrs.get("rx"), 0.0);
-	ry := parse_length(attrs.get("ry"), 0.0);
+	x := px(attrs.get("x"), 0.0);
+	y := py(attrs.get("y"), 0.0);
+	w := px(attrs.get("width"), 0.0);
+	h := py(attrs.get("height"), 0.0);
+	rx := px(attrs.get("rx"), 0.0);
+	ry := py(attrs.get("ry"), 0.0);
 
 	if(w <= 0.0 || h <= 0.0)
 		return;
@@ -498,9 +533,9 @@ render_rect(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref
 
 render_circle(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	cx := parse_length(attrs.get("cx"), 0.0);
-	cy := parse_length(attrs.get("cy"), 0.0);
-	r := parse_length(attrs.get("r"), 0.0);
+	cx := px(attrs.get("cx"), 0.0);
+	cy := py(attrs.get("cy"), 0.0);
+	r := pd(attrs.get("r"), 0.0);
 	if(r <= 0.0)
 		return;
 
@@ -511,10 +546,10 @@ render_circle(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: r
 
 render_ellipse(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	cx := parse_length(attrs.get("cx"), 0.0);
-	cy := parse_length(attrs.get("cy"), 0.0);
-	rx := parse_length(attrs.get("rx"), 0.0);
-	ry := parse_length(attrs.get("ry"), 0.0);
+	cx := px(attrs.get("cx"), 0.0);
+	cy := py(attrs.get("cy"), 0.0);
+	rx := px(attrs.get("rx"), 0.0);
+	ry := py(attrs.get("ry"), 0.0);
 	if(rx <= 0.0 || ry <= 0.0)
 		return;
 
@@ -542,10 +577,10 @@ make_ellipse_path(cx, cy, rx, ry: real): list of ref Segment
 
 render_line(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	x1 := parse_length(attrs.get("x1"), 0.0);
-	y1 := parse_length(attrs.get("y1"), 0.0);
-	x2 := parse_length(attrs.get("x2"), 0.0);
-	y2 := parse_length(attrs.get("y2"), 0.0);
+	x1 := px(attrs.get("x1"), 0.0);
+	y1 := py(attrs.get("y1"), 0.0);
+	x2 := px(attrs.get("x2"), 0.0);
+	y2 := py(attrs.get("y2"), 0.0);
 
 	segs := ref Segment(SEG_MOVETO, x1, y1, 0.0, 0.0, 0.0, 0.0) ::
 		ref Segment(SEG_LINETO, x2, y2, 0.0, 0.0, 0.0, 0.0) :: nil;
@@ -601,8 +636,8 @@ render_text(parser: ref Parser, canvas: ref Canvas, attrs: Attributes, xform: re
 		pick t := item {
 		Text =>
 			# We have text content - render at position
-			tx := parse_length(attrs.get("x"), 0.0);
-			ty := parse_length(attrs.get("y"), 0.0);
+			tx := px(attrs.get("x"), 0.0);
+			ty := py(attrs.get("y"), 0.0);
 			render_text_string(canvas, t.ch, tx, ty, xform, style);
 		Tag =>
 			if(t.name == "tspan") {
@@ -613,8 +648,8 @@ render_text(parser: ref Parser, canvas: ref Canvas, attrs: Attributes, xform: re
 						break;
 					pick it := inner {
 					Text =>
-						stx := parse_length(t.attrs.get("x"), parse_length(attrs.get("x"), 0.0));
-						sty := parse_length(t.attrs.get("y"), parse_length(attrs.get("y"), 0.0));
+						stx := px(t.attrs.get("x"), px(attrs.get("x"), 0.0));
+						sty := py(t.attrs.get("y"), py(attrs.get("y"), 0.0));
 						render_text_string(canvas, it.ch, stx, sty, xform, style);
 					}
 				}
@@ -1118,7 +1153,7 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 
 	sw := attrs.get("stroke-width");
 	if(sw != nil)
-		s.stroke_width = real sw;
+		s.stroke_width = pd(sw, 1.0);
 
 	op := attrs.get("opacity");
 	if(op != nil)
@@ -1195,7 +1230,7 @@ apply_css_style(s: ref Style, css: string)
 			else
 				s.stroke = parse_color(value);
 		"stroke-width" =>
-			s.stroke_width = real value;
+			s.stroke_width = pd(value, 1.0);
 		"opacity" =>
 			s.opacity *= real value;
 		"fill-opacity" =>
@@ -1416,6 +1451,43 @@ unpremul(c, a: int): int
 }
 
 # ==================== Utility Functions ====================
+
+# the viewport's size in user units: what percentages are of
+vbw := real DEFAULT_WIDTH;
+vbh := real DEFAULT_HEIGHT;
+
+rootlen(s: string, dflt: real): real
+{
+	if(s != nil && len s > 0 && s[len s - 1] == '%')
+		return dflt;
+	return parse_length(s, dflt);
+}
+
+# a length in user units: a percentage is of the reference length
+# (SVG 2 §8.9: the viewport's width, its height, or their normalised diagonal)
+plen(s: string, dflt, base: real): real
+{
+	if(s == nil || len s == 0)
+		return dflt;
+	if(s[len s - 1] == '%')
+		return real s[0:len s - 1] * base / 100.0;
+	return parse_length(s, dflt);
+}
+
+px(s: string, dflt: real): real
+{
+	return plen(s, dflt, vbw);
+}
+
+py(s: string, dflt: real): real
+{
+	return plen(s, dflt, vbh);
+}
+
+pd(s: string, dflt: real): real
+{
+	return plen(s, dflt, sqrt((vbw*vbw + vbh*vbh)/2.0));
+}
 
 parse_length(s: string, dflt: real): real
 {

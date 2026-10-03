@@ -27,6 +27,11 @@ include "web/style.m";
 include "outlinefont.m";
 include "web/fonts.m";
 include "bidi.m";
+include "bufio.m";
+	bufio: Bufio;
+include "imagefile.m";
+	readsvg: RImagefile;
+	imageremap: Imageremap;
 	bidi: Bidi;
 	fonts: Fonts;
 	Typeface: import fonts;
@@ -95,7 +100,7 @@ Ctr: adt {
 newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, nil, nil, nil, 0, 0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
+		0, nil, nil, nil, 0, 0, 0, 0.0, 0.0, 0.0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
 		nil, nil, nil, nil, 0, 0, nil, nil, 0, nil);
 }
 
@@ -1401,7 +1406,7 @@ Abs: adt {
 	rightedge:	int;	# sx is the hypothetical box's right edge: its static parent is right-to-left (§10.3.7)
 	area:	ref Rect;	# a grid area that is its containing block instead, in cb's coordinates (Grid 2 §9)
 	icb:	ref Box;	# a positioned inline box whose padding box is the containing block (§10.1): cb is its block container, and area is set from its fragments once laid out
-	flexsp:	int;		# a flex container's child: its static position is as the sole item of a row (1) or column (2) container (Flexbox §4.1), area being the content box once laid out
+	flexsp:	int;		# how area serves: 1, 2 a flex container's child, its static position as the sole item of a row or column container (Flexbox §4.1), area being the content box once laid out; 3 a grid's child likewise, in its content box (Grid 2 §9.2); 4 a grid's descendant, whose area is the containing block only, the static position its own
 };
 
 # the static position's x: the content box's start edge, which is the
@@ -1545,7 +1550,7 @@ lay(root: ref Box, width, height: int)
 		a := hd vp;
 		if(a.icb != nil && a.area == nil)
 			a.area = inlinearea(root, a.icb);
-		if(a.flexsp && a.area == nil)
+		if(a.flexsp >= 1 && a.flexsp <= 3 && a.area == nil)
 			a.area = flexarea(root, a.sparent);
 		layabs(l, a, root, Rect((-root.x, -root.y), (width - root.x, height - root.y)));
 	}
@@ -3360,6 +3365,16 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
 		if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
 			x = ax + (aw - k.w)/2;
+		if(st.dirrtl) {
+			# the columns run from the right (Grid 2 §7.1): the area
+			# is mirrored, start being its right edge; left and right
+			# stay physical
+			x = cw - ax - aw + k.ml + (aw - k.w - k.ml - k.mr) - crossoff(js, aw, k.w + k.ml + k.mr);
+			if(js == Style->ALleft || js == Style->ALright)
+				x = cw - ax - aw + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
+			if(ks.ml.kind == Style->Lauto && ks.mr.kind == Style->Lauto)
+				x = cw - ax - aw + (aw - k.w)/2;
+		}
 		y := ay + k.mt + crossoff(as, ah, k.h + k.mt + k.mb);
 		if(ks.mt.kind == Style->Lauto && ks.mb.kind == Style->Lauto)
 			y = ay + (ah - k.h)/2;
@@ -3880,25 +3895,49 @@ gridabs(l: ref L, b: ref Box, cols: array of ref Track, cpos: array of int, colg
 		if(!isabs(k))
 			continue;
 		cb := cbof(l, k);
-		area: ref Rect;
-		if(cb == b) {
-			r := Rect((b.bl, b.bt), (b.w - b.br, b.h - b.bb));
-			# each edge is a line of the explicit grid, or else the
-			# padding edge (§9.1)
-			(c0, c1) := abslines(k.st.colstart, k.st.colend, colnames, ncexp, ars, 1);
-			if(c0 >= 0)
-				r.min.x = b.bl + b.pl + gridlinestart(cols, cpos, c0, colgap);
-			if(c1 >= 0)
-				r.max.x = b.bl + b.pl + gridlineend(cols, cpos, c1, colgap);
-			(r0, r1) := abslines(k.st.rowstart, k.st.rowend, rownames, nrexp, ars, 0);
-			if(r0 >= 0)
-				r.min.y = b.bt + b.pt + gridlinestart(rows, rpos, r0, rowgap);
-			if(r1 >= 0)
-				r.max.y = b.bt + b.pt + gridlineend(rows, rpos, r1, rowgap);
-			area = ref r;
-		}
-		l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, area, nil, 0) :: l.pending;
+		if(cb == b)
+			l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, ref gridabsarea(b, k, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars), nil, 0) :: l.pending;
+		else
+			l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, nil, nil, 3) :: l.pending;	# the static position is in the grid's content box, the containing block elsewhere (grid-abspos-staticpos-align-items-center)
 	}
+	# a descendant whose containing block is the grid takes its grid
+	# area too (§9.1), its static position its own (descendant-static-position-001)
+	for(pl := l.pending; pl != nil; pl = tl pl) {
+		a := hd pl;
+		if(a.cb != b || a.sparent == b || a.area != nil || a.icb != nil || a.flexsp != 0)
+			continue;
+		a.area = ref gridabsarea(b, a.box, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars);
+		a.flexsp = 4;
+	}
+}
+
+# the grid area that is the containing block of the absolutely
+# positioned box k: each edge a line of the explicit grid, or else the
+# padding edge (§9.1)
+gridabsarea(b, k: ref Box, cols: array of ref Track, cpos: array of int, colgap: int, colnames: array of list of string, ncexp: int,
+	rows: array of ref Track, rpos: array of int, rowgap: int, rownames: array of list of string, nrexp: int, ars: list of (string, int, int, int, int)): Rect
+{
+	r := Rect((b.bl, b.bt), (b.w - b.br, b.h - b.bb));
+	(c0, c1) := abslines(k.st.colstart, k.st.colend, colnames, ncexp, ars, 1);
+	if(b.st.dirrtl) {
+		# the columns run from the right: the start line is the area's right edge
+		cw := b.w - hextra(b);
+		if(c0 >= 0)
+			r.max.x = b.bl + b.pl + cw - gridlinestart(cols, cpos, c0, colgap);
+		if(c1 >= 0)
+			r.min.x = b.bl + b.pl + cw - gridlineend(cols, cpos, c1, colgap);
+	} else {
+		if(c0 >= 0)
+			r.min.x = b.bl + b.pl + gridlinestart(cols, cpos, c0, colgap);
+		if(c1 >= 0)
+			r.max.x = b.bl + b.pl + gridlineend(cols, cpos, c1, colgap);
+	}
+	(r0, r1) := abslines(k.st.rowstart, k.st.rowend, rownames, nrexp, ars, 0);
+	if(r0 >= 0)
+		r.min.y = b.bt + b.pt + gridlinestart(rows, rpos, r0, rowgap);
+	if(r1 >= 0)
+		r.max.y = b.bt + b.pt + gridlineend(rows, rpos, r1, rowgap);
+	return r;
 }
 
 # the lines an absolutely positioned child names in one axis: -1 for
@@ -6606,6 +6645,39 @@ flexspsafe(a: ref Abs, k: ref Box, horiz: int): int
 	return k.st.safe & 4;
 }
 
+# A grid's absolutely positioned child aligns in its static rectangle
+# by its own justify-self or align-self, auto being the grid's
+# justify-items or align-items (Grid 2 §9.2, Align 3 §6); in the
+# inline axis start and end follow the grid's direction
+# (grid-abspos-staticpos-align-self-001, -rtl-001, -align-items-center).
+gridspalign(a: ref Abs, k: ref Box, horiz: int): int
+{
+	g := a.sparent;
+	al := k.st.alignself;
+	if(horiz)
+		al = k.st.justifyself;
+	if(al == Style->ALauto) {
+		al = g.st.alignitems;
+		if(horiz)
+			al = g.st.justifyitems;
+	}
+	rtl := horiz && g.st.dirrtl;
+	case al {
+	Style->ALend or Style->ALflowend =>
+		if(rtl)
+			return Style->ALstart;
+		return Style->ALend;
+	Style->ALcenter =>
+		return Style->ALcenter;
+	Style->ALright =>
+		if(horiz)
+			return Style->ALend;
+	}
+	if(rtl)
+		return Style->ALend;
+	return Style->ALstart;
+}
+
 # relative and sticky positioning: shift the box after it is placed
 relative(k: ref Box, cbw, cbh: int)
 {
@@ -6648,7 +6720,7 @@ positioned(l: ref L, b: ref Box)
 		a := hd mine;
 		if(a.icb != nil && a.area == nil)
 			a.area = inlinearea(b, a.icb);
-		if(a.flexsp && a.area == nil)
+		if(a.flexsp >= 1 && a.flexsp <= 3 && a.area == nil)
 			a.area = flexarea(b, a.sparent);
 		layabs(l, a, b, pr);
 	}
@@ -6658,12 +6730,13 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 {
 	k := a.box;
 	st := k.st;
-	sr := pr;	# the static position rectangle: the containing block's padding box, a grid area, or a flex container's content box
+	sr := pr;	# the static position rectangle: the containing block's padding box, a grid area, or a flex or grid container's content box
 	if(a.area != nil) {
 		sr = *a.area;
-		if(!a.flexsp)
+		if(a.flexsp == 0 || a.flexsp == 4)
 			pr = *a.area;	# a grid area is the containing block too
 	}
+	spa := a.area != nil && a.icb == nil && a.flexsp != 4;	# the static position is sr's start, the box aligned in sr
 	cbw := pr.dx();
 	cbh := pr.dy();
 	# static position, in cb coordinates
@@ -6671,8 +6744,8 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	sy := a.sy;
 	if(a.frag != nil)
 		sx = a.frag.x;
-	if(a.area != nil && a.icb == nil) {
-		sx = sr.min.x;	# a grid area or a flex container: the static position is its start
+	if(spa) {
+		sx = sr.min.x;	# a grid area or a flex or grid container: the static position is its start
 		sy = sr.min.y;
 	}
 	for(p := a.sparent; p != nil && p != cb; p = p.parent) {
@@ -6737,6 +6810,14 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 				avail -= left;
 			if(!rauto)
 				avail -= right;
+			if(lauto && rauto) {
+				# the static position is the left (or right) inset
+				# (§10.3.7): shrink-to-fit in what it leaves (descendant-static-position-001)
+				if(a.rightedge)
+					avail = sx - pr.min.x - k.ml - k.mr;
+				else
+					avail -= sx - pr.min.x;
+			}
 			w = fit(mn, mx, avail + mgs(k)) - mgs(k);
 		}
 	}
@@ -6773,13 +6854,14 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		# auto insets in a grid area: aligned in it as justify-self
 		# says, normal being its start (Grid 2 §9, Position 3 §3.5);
 		# safe keeps a box that overflows it at the start
-		if(a.area != nil && a.icb == nil) {
+		if(spa) {
 			ja := abspalign(st.justifyself);
-			if(a.flexsp)
-				ja = flexspalign(a, k, 1);
 			jsafe := st.safe & 8;
-			if(a.flexsp)
+			if(a.flexsp == 1 || a.flexsp == 2) {
+				ja = flexspalign(a, k, 1);
 				jsafe = flexspsafe(a, k, 1);
+			} else if(a.sparent.kind == Kgrid)
+				ja = gridspalign(a, k, 1);
 			if(jsafe && k.w + k.ml + k.mr > cbw)	# against the containing block, not the static rectangle (flex-abspos-align-self-safe-outer-cb-003)
 				ja = Style->ALstart;
 			case ja {
@@ -6826,13 +6908,14 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 		y = pr.max.y - bottom - k.mb - h;
 	else {
 		y = sy + k.mt;
-		if(a.area != nil && a.icb == nil) {
+		if(spa) {
 			aa := abspalign(st.alignself);
-			if(a.flexsp)
-				aa = flexspalign(a, k, 0);
 			asafe := st.safe & 4;
-			if(a.flexsp)
+			if(a.flexsp == 1 || a.flexsp == 2) {
+				aa = flexspalign(a, k, 0);
 				asafe = flexspsafe(a, k, 0);
+			} else if(a.sparent.kind == Kgrid)
+				aa = gridspalign(a, k, 0);
 			if(asafe && h + k.mt + k.mb > cbh)
 				aa = Style->ALstart;
 			case aa {
@@ -7057,7 +7140,7 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 {
 	iw := b.iw;
 	ih := b.ih;
-	if(b.img != nil && iw == 0 && ih == 0) {
+	if(b.img != nil && iw == 0 && ih == 0 && !b.svg) {
 		iw = b.img.r.dx();
 		ih = b.img.r.dy();
 	}
@@ -7107,7 +7190,43 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 			w = nw - hextra(b);
 	}
 	ratio := aspect(b, iw, ih);
-	if(w < 0 && h < 0) {
+	if(b.svg) {
+		# an SVG's dimensions (SVG 2 §8.6, CSS 2.2 §10.3.2, §10.6.2): its
+		# own, a percentage of the containing block, a ratio alone
+		# filling the containing block's width, else 300 by 150
+		# (replaced-intrinsic-001..005)
+		# a specified dimension and the ratio give the other first
+		# (CSS 2.2 §10.3.2; replaced-elements-height-20)
+		if(w < 0 && h >= 0 && ratio > 0.0)
+			w = ir(real h * ratio);
+		if(h < 0 && w >= 0 && ratio > 0.0)
+			h = ir(real w / ratio);
+		if(w < 0 && iw > 0)
+			w = iw;
+		if(h < 0 && ih > 0)
+			h = ih;
+		# a percentage width, and a ratio alone, fill the width the
+		# containing block leaves after the box's padding and borders,
+		# as browsers have it (replaced-intrinsic-003)
+		if(w < 0 && b.ipw > 0.0 && cbw >= 0)
+			w = ir(real (cbw - hextra(b)) * b.ipw / 100.0);
+		if(h < 0 && b.iph > 0.0 && cbh >= 0)
+			h = ir(real (cbh - vextra(b)) * b.iph / 100.0);
+		if(w < 0 && h < 0 && ratio > 0.0 && cbw >= 0)
+			w = cbw - hextra(b);
+		if(w < 0) {
+			if(h >= 0 && ratio > 0.0)
+				w = ir(real h * ratio);
+			else
+				w = 300;
+		}
+		if(h < 0) {
+			if(ratio > 0.0)
+				h = ir(real w / ratio);
+			else
+				h = 150;
+		}
+	} else if(w < 0 && h < 0) {
 		w = iw;
 		h = ih;
 	} else if(w < 0) {
@@ -7268,8 +7387,12 @@ textfield(d: ref Doc, n: int): int
 aspect(b: ref Box, iw, ih: int): real
 {
 	ratio := b.st.aspect;
-	if((ratio == 0.0 || b.st.aspectauto) && iw > 0 && ih > 0 && hasratio(b))
-		ratio = real iw / real ih;
+	if(ratio == 0.0 || b.st.aspectauto) {
+		if(b.svg)
+			ratio = b.iratio;
+		else if(iw > 0 && ih > 0 && hasratio(b))
+			ratio = real iw / real ih;
+	}
 	return ratio;
 }
 
@@ -11579,6 +11702,271 @@ setbgimage(url: string, img: ref Image)
 clearbgimages()
 {
 	bgimages = nil;
+	bgsvgs = nil;
+	svgrasters = nil;
+}
+
+# SVG background images: their source, drawn again at each size they
+# are shown at rather than scaled (background-size-vector-*)
+bgsvgs: list of (string, array of byte);
+svgrasters: list of (string, int, int, ref Image);
+
+setbgsvg(url: string, data: array of byte)
+{
+	for(l := bgsvgs; l != nil; l = tl l)
+		if((hd l).t0 == url)
+			return;
+	bgsvgs = (url, data) :: bgsvgs;
+}
+
+bgsvgof(url: string): array of byte
+{
+	for(l := bgsvgs; l != nil; l = tl l)
+		if((hd l).t0 == url)
+			return (hd l).t1;
+	return nil;
+}
+
+svgraster(url: string, data: array of byte, w, h: int): ref Image
+{
+	for(l := svgrasters; l != nil; l = tl l) {
+		(cu, cw, ch, ci) := hd l;
+		if(cu == url && cw == w && ch == h)
+			return ci;
+	}
+	if(readsvg == nil) {
+		bufio = load Bufio Bufio->PATH;
+		readsvg = load RImagefile RImagefile->READSVGPATH;
+		imageremap = load Imageremap Imageremap->PATH;
+		if(bufio == nil || readsvg == nil || imageremap == nil) {
+			readsvg = nil;
+			return nil;
+		}
+		readsvg->init(bufio);
+		imageremap->init(display);
+	}
+	(raw, err) := readsvg->read(bufio->aopen(svgresize(data, w, h)));
+	if(raw == nil || err != nil)
+		return nil;
+	(img, nil) := imageremap->remap(raw, display, 0);
+	if(img == nil)
+		return nil;
+	if(len svgrasters > 64)
+		svgrasters = nil;
+	svgrasters = (url, w, h, img) :: svgrasters;
+	return img;
+}
+
+# the root <svg> tag's text (between "<svg" and ">") and where it lies
+svgroot(s: string): (int, int)
+{
+	i := 0;
+	for(;;) {
+		i = strindex(s, "<svg", i);
+		if(i < 0 || i + 4 >= len s)
+			return (-1, -1);
+		c := s[i+4];
+		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '>' || c == '/')
+			break;
+		i += 4;
+	}
+	e := strindex(s, ">", i);
+	if(e < 0)
+		return (-1, -1);
+	return (i, e);
+}
+
+# The SVG with its root element's size set to w by h: the content is
+# then drawn to fit, through a viewBox (one made from the old size if it
+# had none).
+svgresize(data: array of byte, w, h: int): array of byte
+{
+	s := string data;
+	(i, e) := svgroot(s);
+	if(i < 0)
+		return data;
+	tag := s[i+4:e];
+	ow, oh: string;
+	(tag, ow) = dropattr(tag, "width");
+	(tag, oh) = dropattr(tag, "height");
+	vb := "";
+	if(strindex(tag, "viewBox", 0) < 0 && strindex(tag, "viewbox", 0) < 0) {
+		# "65px" converts as 65; a percentage gives no box to fit
+		if(svglen(ow) > 0 && svglen(oh) > 0)
+			vb = sys->sprint(" viewBox=\"0 0 %d %d\"", svglen(ow), svglen(oh));
+	}
+	n := s[0:i] + sys->sprint("<svg width=\"%d\" height=\"%d\"%s", w, h, vb) + tag + s[e:];
+	return array of byte n;
+}
+
+# An SVG's intrinsic width and height (-1: none; a percentage is none)
+# and ratio (0: none): the root's width and height, the ratio theirs
+# when both are there, else the viewBox's (SVG 2 §8.6, Images 3 §4.1).
+svgintrinsic(data: array of byte): (int, int, real, real, real)
+{
+	s := string data;
+	(i, e) := svgroot(s);
+	if(i < 0)
+		return (-1, -1, 0.0, 0.0, 0.0);
+	tag := s[i+4:e];
+	(nil, ws) := dropattr(tag, "width");
+	(nil, hs) := dropattr(tag, "height");
+	(nil, vs) := dropattr(tag, "viewBox");
+	iw := svglen(ws);
+	ih := svglen(hs);
+	ratio := 0.0;
+	if(iw > 0 && ih > 0)
+		ratio = real iw / real ih;
+	else if((vb := viewbox(vs)) != nil && vb[2] > 0.0 && vb[3] > 0.0)
+		ratio = vb[2] / vb[3];
+	return (iw, ih, ratio, svgpct(ws), svgpct(hs));
+}
+
+# an SVG length that is a percentage: its value, else 0
+svgpct(s: string): real
+{
+	if(s == nil || len s < 2 || s[len s - 1] != '%')
+		return 0.0;
+	i := 0;
+	while(i < len s - 1 && (s[i] >= '0' && s[i] <= '9' || s[i] == '.' || s[i] == ' '))
+		i++;
+	if(i == 0)
+		return 0.0;
+	return real s[0:i];
+}
+
+# an SVG length in CSS pixels, -1 for none or a percentage
+svglen(s: string): int
+{
+	if(s == nil)
+		return -1;
+	i := 0;
+	while(i < len s && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r'))
+		i++;
+	st := i;
+	while(i < len s && (s[i] >= '0' && s[i] <= '9' || s[i] == '.' || s[i] == '-' || s[i] == '+' || s[i] == 'e' || s[i] == 'E'))
+		i++;
+	if(i == st)
+		return -1;
+	v := real s[st:i];
+	u := s[i:];
+	while(len u > 0 && (u[len u-1] == ' ' || u[len u-1] == '\t' || u[len u-1] == '\n' || u[len u-1] == '\r'))
+		u = u[0:len u-1];
+	case lower(u) {
+	"" or "px" =>	;
+	"pt" =>	v = v * 96.0 / 72.0;
+	"pc" =>	v = v * 16.0;
+	"in" =>	v = v * 96.0;
+	"cm" =>	v = v * 96.0 / 2.54;
+	"mm" =>	v = v * 96.0 / 25.4;
+	"em" or "rem" =>	v = v * 16.0;
+	* =>	return -1;
+	}
+	if(v < 0.0)
+		return -1;
+	return int v;	# to the nearest
+}
+
+# remove attribute nm="..." from a tag's text; its value
+dropattr(tag, nm: string): (string, string)
+{
+	for(i := 0; (i = strindex(tag, nm, i)) >= 0; i += len nm) {
+		if(i > 0 && tag[i-1] != ' ' && tag[i-1] != '\t' && tag[i-1] != '\n' && tag[i-1] != '\r')
+			continue;
+		j := i + len nm;
+		while(j < len tag && (tag[j] == ' ' || tag[j] == '\t'))
+			j++;
+		if(j >= len tag || tag[j] != '=')
+			continue;
+		j++;
+		while(j < len tag && (tag[j] == ' ' || tag[j] == '\t'))
+			j++;
+		if(j >= len tag)
+			return (tag, nil);
+		q := tag[j];
+		v0, v1, end: int;
+		if(q == '"' || q == '\'') {
+			v0 = j + 1;
+			for(v1 = v0; v1 < len tag && tag[v1] != q; v1++)
+				;
+			end = v1 + 1;
+		} else {
+			v0 = j;
+			for(v1 = v0; v1 < len tag && tag[v1] != ' ' && tag[v1] != '>' && tag[v1] != '/'; v1++)
+				;
+			end = v1;
+		}
+		if(end > len tag)
+			end = len tag;
+		return (tag[0:i] + tag[end:], tag[v0:v1]);
+	}
+	return (tag, nil);
+}
+
+strindex(s, t: string, from: int): int
+{
+	for(i := from; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return i;
+	return -1;
+}
+
+# The concrete size of a background image (Backgrounds 3 §3.9, Images
+# 3 §4.4) from its intrinsic width and height (-1: none), its ratio
+# (0: none) and the positioning area: contain and cover keep the ratio
+# when there is one, else fill the area; auto takes the intrinsic
+# size, one side from the other through the ratio, a ratio alone as
+# contain, and nothing as the area's size.
+concretesize(bg: ref Style->Bg, iw, ih: int, ratio: real, aw, ah: int): (real, real)
+{
+	w := real aw;
+	h := real ah;
+	if(bg.sizex.kind == Style->Lcontent && (bg.sizex.px == -1.0 || bg.sizex.px == -2.0)) {
+		if(ratio > 0.0) {
+			h = w / ratio;
+			if(bg.sizex.px == -2.0 && h > real ah || bg.sizex.px == -1.0 && h < real ah) {
+				h = real ah;
+				w = h * ratio;
+			}
+		}
+		return (w, h);
+	}
+	xa := bg.sizex.isauto();
+	ya := bg.sizey.isauto();
+	if(!xa)
+		w = bg.sizex.resolve(real aw);
+	if(!ya)
+		h = bg.sizey.resolve(real ah);
+	if(xa && ya) {
+		if(iw >= 0 && ih >= 0)
+			(w, h) = (real iw, real ih);
+		else if(iw >= 0) {
+			w = real iw;
+			if(ratio > 0.0)
+				h = w / ratio;
+		} else if(ih >= 0) {
+			h = real ih;
+			if(ratio > 0.0)
+				w = h * ratio;
+		} else if(ratio > 0.0) {
+			h = w / ratio;
+			if(h > real ah) {
+				h = real ah;
+				w = h * ratio;
+			}
+		}
+	} else if(!xa && ya) {
+		if(ratio > 0.0)
+			h = w / ratio;
+		else if(ih >= 0)
+			h = real ih;
+	} else if(xa && !ya) {
+		if(ratio > 0.0)
+			w = h * ratio;
+		else if(iw >= 0)
+			w = real iw;
+	}
+	return (w, h);
 }
 
 bgurl(t: ref Css->Tok): string
@@ -11607,8 +11995,9 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 {
 	grad := bg.img.kind == Css->Kfunction && bg.img.s != "url";
 	img: ref Image;
+	u := "";
 	if(!grad) {
-		u := bgurl(bg.img);
+		u = bgurl(bg.img);
 		if(u == nil)
 			return;
 		for(l := bgimages; l != nil; l = tl l)
@@ -11637,44 +12026,35 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		clip = viewport;	# the root's background covers the canvas
 	aw := area.dx();
 	ah := area.dy();
-	iw := aw;	# a gradient has no size of its own: it is the area's
-	ih := ah;
+	iw := -1;	# the intrinsic size: a gradient has none
+	ih := -1;
+	ratio := 0.0;
+	svg: array of byte;
 	if(!grad) {
-		iw = img.r.dx();
-		ih = img.r.dy();
-	}
-	if(iw <= 0 || ih <= 0)
-		return;
-	# background-size
-	w := real iw;
-	h := real ih;
-	if(bg.sizex.kind == Style->Lcontent && (bg.sizex.px == -1.0 || bg.sizex.px == -2.0)) {
-		sx := real aw / real iw;
-		sy := real ah / real ih;
-		k := sx;
-		if(bg.sizex.px == -1.0 && sy > sx || bg.sizex.px == -2.0 && sy < sx)
-			k = sy;	# cover: the larger scale; contain: the smaller
-		w = real iw * k;
-		h = real ih * k;
-	} else {
-		xa := bg.sizex.isauto();
-		ya := bg.sizey.isauto();
-		if(!xa)
-			w = bg.sizex.resolve(real aw);
-		if(!ya)
-			h = bg.sizey.resolve(real ah);
-		if(!grad) {
-			if(!xa && ya)
-				h = w * real ih / real iw;
-			else if(xa && !ya)
-				w = h * real iw / real ih;
+		svg = bgsvgof(u);
+		if(svg != nil)
+			(iw, ih, ratio, nil, nil) = svgintrinsic(svg);
+		else {
+			iw = img.r.dx();
+			ih = img.r.dy();
+			if(iw <= 0 || ih <= 0)
+				return;
+			ratio = real iw / real ih;
 		}
 	}
-	# round: as many whole tiles as fit nearest, each scaled to fit exactly
-	if(bg.rx == Style->Rround && w > 0.0)
+	(w, h) := concretesize(bg, iw, ih, ratio, aw, ah);
+	# round: as many whole tiles as fit nearest, each scaled to fit
+	# exactly; an auto other dimension keeps the ratio (background-size-029)
+	if(bg.rx == Style->Rround && w > 0.0) {
 		w = real aw / real nearest(real aw / w);
-	if(bg.ry == Style->Rround && h > 0.0)
+		if(bg.ry != Style->Rround && bg.sizey.isauto() && ratio > 0.0)
+			h = w / ratio;
+	}
+	if(bg.ry == Style->Rround && h > 0.0) {
 		h = real ah / real nearest(real ah / h);
+		if(bg.rx != Style->Rround && bg.sizex.isauto() && ratio > 0.0)
+			w = h * ratio;
+	}
 	tw := int w;	# int rounds
 	th := int h;
 	if(w > 0.0 && tw < 1)	# a sliver still shows (it is repeated into a fill)
@@ -11683,8 +12063,11 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		th = 1;
 	if(tw <= 0 || th <= 0)
 		return;
-	if(!grad && (tw != iw || th != ih)) {
-		img = scale(img, tw, th);
+	if(!grad) {
+		if(svg != nil)
+			img = svgraster(u, svg, tw, th);
+		else if(tw != iw || th != ih)
+			img = scale(img, tw, th);
 		if(img == nil)
 			return;
 	}

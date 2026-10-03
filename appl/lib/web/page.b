@@ -681,8 +681,11 @@ loadbgimages(p: ref Pg)
 			p.errors = g.url + ": " + g.err :: p.errors;
 			continue;
 		}
-		if((img := decodeimage(g.data, g.ctype, g.url)) != nil)
+		if((img := decodeimage(g.data, g.ctype, g.url)) != nil) {
 			layout->setbgimage(g.url, img);
+			if(prefix(lower(g.ctype), "image/svg") || looksvg(g.data))
+				layout->setbgsvg(g.url, g.data);
+		}
 	}
 }
 
@@ -722,90 +725,45 @@ loadimages(p: ref Pg, root: ref Box)
 			b.iw = img.r.dx();
 			b.ih = img.r.dy();
 			b.text = nil;
+			for(sl := svgsrc; sl != nil; sl = tl sl)
+				if((hd sl).t0 == b.url) {
+					nd := p.doc.nodes[b.node];
+					svgdims(b, (hd sl).t1, nd.ns == Dom->HTML && nd.tag == Dom->Tobject);
+					break;
+				}
 		}
+	}
+}
+
+# An SVG image's intrinsic size is its root element's (SVG 2 §8.6):
+# each dimension it has and its ratio.  Shown by <object>, it is a
+# document whose root's percentage dimensions, and omitted ones (100%),
+# are of the box it fills (replaced-intrinsic-001); as an image, a
+# percentage is no dimension at all (CSS Images 3 §4.1).
+svgdims(b: ref Box, data: array of byte, obj: int)
+{
+	(iw, ih, ratio, pw, ph) := layout->svgintrinsic(data);
+	b.svg = 1;
+	b.iw = 0;
+	b.ih = 0;
+	if(iw > 0)
+		b.iw = iw;
+	if(ih > 0)
+		b.ih = ih;
+	b.iratio = ratio;
+	if(obj) {
+		if(iw < 0 && pw == 0.0)
+			pw = 100.0;
+		if(ih < 0 && ph == 0.0)
+			ph = 100.0;
+		b.ipw = pw;
+		b.iph = ph;
 	}
 }
 
 # Inline <svg>: the subtree as markup, rendered at the box's size.
 # SVG images' source, by URL, to draw again at another size
 svgsrc: list of (string, array of byte);
-
-# The SVG with its root element's size set to w by h: the content is
-# then drawn to fit, through a viewBox (one made from the old size if it
-# had none).
-svgresize(data: array of byte, w, h: int): array of byte
-{
-	s := string data;
-	i := 0;
-	for(;;) {
-		i = strindex(s, "<svg", i);
-		if(i < 0 || i + 4 >= len s)
-			return data;
-		c := s[i+4];
-		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '>' || c == '/')
-			break;
-		i += 4;
-	}
-	e := strindex(s, ">", i);
-	if(e < 0)
-		return data;
-	tag := s[i+4:e];
-	ow, oh: string;
-	(tag, ow) = dropattr(tag, "width");
-	(tag, oh) = dropattr(tag, "height");
-	vb := "";
-	if(strindex(tag, "viewBox", 0) < 0 && strindex(tag, "viewbox", 0) < 0) {
-		# "65px" converts as 65; a percentage gives no box to fit
-		if(ow != nil && oh != nil && ow[len ow-1] != '%' && oh[len oh-1] != '%')
-			vb = sys->sprint(" viewBox=\"0 0 %g %g\"", real ow, real oh);
-	}
-	n := s[0:i] + sys->sprint("<svg width=\"%d\" height=\"%d\"%s", w, h, vb) + tag + s[e:];
-	return array of byte n;
-}
-
-# remove attribute nm="..." from a tag's text; its value
-dropattr(tag, nm: string): (string, string)
-{
-	for(i := 0; (i = strindex(tag, nm, i)) >= 0; i += len nm) {
-		if(i > 0 && tag[i-1] != ' ' && tag[i-1] != '\t' && tag[i-1] != '\n' && tag[i-1] != '\r')
-			continue;
-		j := i + len nm;
-		while(j < len tag && (tag[j] == ' ' || tag[j] == '\t'))
-			j++;
-		if(j >= len tag || tag[j] != '=')
-			continue;
-		j++;
-		while(j < len tag && (tag[j] == ' ' || tag[j] == '\t'))
-			j++;
-		if(j >= len tag)
-			return (tag, nil);
-		q := tag[j];
-		v0, v1, end: int;
-		if(q == '"' || q == '\'') {
-			v0 = j + 1;
-			for(v1 = v0; v1 < len tag && tag[v1] != q; v1++)
-				;
-			end = v1 + 1;
-		} else {
-			v0 = j;
-			for(v1 = v0; v1 < len tag && tag[v1] != ' ' && tag[v1] != '>' && tag[v1] != '/'; v1++)
-				;
-			end = v1;
-		}
-		if(end > len tag)
-			end = len tag;
-		return (tag[0:i] + tag[end:], tag[v0:v1]);
-	}
-	return (tag, nil);
-}
-
-strindex(s, t: string, from: int): int
-{
-	for(i := from; i + len t <= len s; i++)
-		if(s[i:i+len t] == t)
-			return i;
-	return -1;
-}
 
 inlinesvg(p: ref Pg, b: ref Box)
 {
@@ -824,7 +782,7 @@ inlinesvg(p: ref Pg, b: ref Box)
 		if(w > 0 && h > 0 && (b.img.r.dx() != w || b.img.r.dy() != h))
 			for(sl := svgsrc; sl != nil; sl = tl sl)
 				if((hd sl).t0 == b.url) {
-					if((img := decodeimage(svgresize((hd sl).t1, w, h), "image/svg+xml", nil)) != nil)
+					if((img := decodeimage(layout->svgresize((hd sl).t1, w, h), "image/svg+xml", nil)) != nil)
 						b.img = img;
 					break;
 				}

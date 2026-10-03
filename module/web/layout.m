@@ -30,7 +30,12 @@ Layout: module
 	# decoded images to paint, by absolute URL
 	bgurls:	fn(st: ref Style->St): list of string;
 	setbgimage:	fn(url: string, img: ref Draw->Image);
+	setbgsvg:	fn(url: string, data: array of byte);	# an SVG's source: drawn again at each size it is shown
 	clearbgimages:	fn();
+	# an SVG's root element resized to w by h; its intrinsic width and
+	# height (-1 when it has none) and ratio (0 when none) (SVG 2 §8.6)
+	svgresize:	fn(data: array of byte, w, h: int): array of byte;
+	svgintrinsic:	fn(data: array of byte): (int, int, real, real, real);	# width, height, ratio, percentage width, percentage height
 
 	# box kinds (the formatting a box establishes or takes part in)
 	Kblock, Kinline, Ktext, Kbr, Kreplaced, Kflex, Kgrid, Ktable, Krow, Kcell, Kmarker: con iota;
@@ -49,6 +54,9 @@ Layout: module
 		text:	string;		# Ktext, Kmarker
 		lines:	cyclic array of ref Line;	# a block container with inline content
 		iw, ih:	int;		# replaced: intrinsic size (0 if unknown)
+		svg:	int;		# replaced: the intrinsic size is an SVG root's (SVG 2 §8.6): iw, ih 0 where it has none, iratio its ratio (0 none), ipw, iph percentage dimensions (0 none)
+		iratio:	real;
+		ipw, iph:	real;
 		img:	ref Draw->Image;	# replaced: content, set by whoever loads url
 		url:	string;		# replaced: what to load (absolute)
 		parent:	cyclic ref Box;

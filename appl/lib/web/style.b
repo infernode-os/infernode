@@ -1727,7 +1727,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0);
 }
 
 nextsid := 1;
@@ -3589,8 +3589,8 @@ borderparts(sub: list of string, x: array of ref Tok): list of (string, array of
 		} else if(x[k].kind == Kdimension || (x[k].kind == Knumber && x[k].n == 0.0) ||
 			  (x[k].kind == Kident && (lower(x[k].s) == "thin" || lower(x[k].s) == "medium" || lower(x[k].s) == "thick")) ||
 			  (x[k].kind == Kfunction && (x[k].s == "calc" || x[k].s == "min" || x[k].s == "max" || x[k].s == "clamp"))) {
-			if(w != nil)
-				return nil;
+			if(w != nil || x[k].kind == Kdimension && x[k].n < 0.0)
+				return nil;	# a negative width makes the whole shorthand invalid (border-width-010)
 			w = t;
 		} else {
 			(ok, nil) := color(t);
@@ -4482,7 +4482,14 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"auto" or "loose" or "normal" or "strict" =>
 			if(st.breakall == 2)
 				st.breakall = 0;
-		"anywhere" => st.breakall = 2;
+			st.lbmode = 0;
+			if(id == "loose")
+				st.lbmode = 1;
+			else if(id == "strict")
+				st.lbmode = 2;
+		"anywhere" =>
+			st.breakall = 2;
+			st.lbmode = 0;
 		* => return 0;
 		}
 	"overflow-wrap" =>
@@ -5327,6 +5334,7 @@ copyprop(d, s: ref St, nm: string)
 	"word-break" or "line-break" =>
 		d.breakall = s.breakall;
 		d.keepall = s.keepall;
+		d.lbmode = s.lbmode;
 	"overflow-wrap" => d.anywhere = s.anywhere;
 	"text-overflow" => d.ellipsis = s.ellipsis;
 	"text-decoration-line" => d.decoration = s.decoration;

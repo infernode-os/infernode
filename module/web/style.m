@@ -240,6 +240,7 @@ Style: module
 		subcols, subrows:	int;	# grid-template-columns/rows: subgrid (the tokens are then its line names)
 		contain:	int;		# contain: CT bits
 		aspectauto:	int;	# aspect-ratio: auto <ratio>: a replaced box's natural ratio first, else the ratio of the content box
+		lbmode:	int;		# line-break: 0 auto/normal, 1 loose, 2 strict (anywhere is breakall 2)
 
 		new:	fn(): ref St;		# initial values
 	};

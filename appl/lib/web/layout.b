@@ -149,18 +149,9 @@ isblocklevel(x: ref Box): int
 	return !x.inl && !isoof(x);
 }
 
-# The boxes an element generates (usually one; none for display:none,
-# several for display:contents or an inline split around a block).
-element(b: ref B, n: int): list of ref Box
+# The box kind a display value makes, and whether it is inline-level.
+boxkind(st: ref St): (int, int)
 {
-	st := b.c.st[n];
-	if(st == nil || st.display == Style->Dnone)
-		return nil;
-	nd := b.d.nodes[n];
-	if(st.display == Style->Dcontents)
-		return children(b, n, st);
-	if((r := replaced(b, n, st)) != nil)
-		return r :: nil;
 	kind := Kblock;
 	inl := 0;
 	case st.display {
@@ -194,6 +185,22 @@ element(b: ref B, n: int): list of ref Box
 	Style->Dtablecell =>
 		kind = Kcell;
 	}
+	return (kind, inl);
+}
+
+# The boxes an element generates (usually one; none for display:none,
+# several for display:contents or an inline split around a block).
+element(b: ref B, n: int): list of ref Box
+{
+	st := b.c.st[n];
+	if(st == nil || st.display == Style->Dnone)
+		return nil;
+	nd := b.d.nodes[n];
+	if(st.display == Style->Dcontents)
+		return children(b, n, st);
+	if((r := replaced(b, n, st)) != nil)
+		return r :: nil;
+	(kind, inl) := boxkind(st);
 	if(nd.tag == Dom->Tbr && nd.ns == Dom->HTML)
 		return newbox(Kbr, 1, n, st) :: nil;
 	box := newbox(kind, inl, n, st);
@@ -203,12 +210,12 @@ element(b: ref B, n: int): list of ref Box
 	kids: list of ref Box;
 	if(st.display == Style->Dlistitem)
 		kids = marker(b, n, st) :: nil;
-	if((bs := b.c.before[n]) != nil)
-		kids = generated(b, n, bs) :: kids;
+	if((bs := b.c.before[n]) != nil && (gb := generated(b, n, bs)) != nil)
+		kids = gb :: kids;
 	for(l := children(b, n, st); l != nil; l = tl l)
 		kids = hd l :: kids;
-	if((as := b.c.after[n]) != nil)
-		kids = generated(b, n, as) :: kids;
+	if((as := b.c.after[n]) != nil && (ga := generated(b, n, as)) != nil)
+		kids = ga :: kids;
 	b.counters = ctrleave(own, n);
 	kids = rev(kids);
 	if(kind == Kinline) {
@@ -590,20 +597,10 @@ iswhite(c: int): int
 # the generated content.
 generated(b: ref B, n: int, st: ref St): ref Box
 {
-	kind := Kinline;
-	inl := 1;
-	case st.display {
-	Style->Dblock or Style->Dlistitem or Style->Dflowroot =>
-		kind = Kblock;
-		inl = 0;
-	Style->Dinlineblock =>
-		kind = Kblock;
-	Style->Dflex =>
-		kind = Kflex;
-		inl = 0;
-	}
+	if(st.display == Style->Dtablecolumn || st.display == Style->Dtablecolumngroup)
+		return nil;	# a column shows no content (before-content-display-012)
+	(kind, inl) := boxkind(st);
 	g := newbox(kind, inl, n, st);
-	t := newbox(Ktext, 1, n, st);
 	# A pseudo-element is the element's first (or last) child for
 	# counters: one it creates afresh is in scope for the children that
 	# follow it (content-021), one it nests inside an ancestor's is its
@@ -611,10 +608,31 @@ generated(b: ref B, n: int, st: ref St): ref Box
 	pid := -(2*n);
 	if(st != b.c.before[n])
 		pid = -(2*n + 1);
-	ctrprops(b, pid, st, 0);
-	t.text = content(b, n, st);
+	li := st.display == Style->Dlistitem;
+	ctrprops(b, pid, st, li);
+	kids: list of ref Box;
+	if(li)
+		kids = marker(b, n, st) :: kids;
+	# its text, with each url() an image: a replaced inline box
+	v := st.content;
+	s0 := 0;
+	for(i := 0; i <= len v; i++) {
+		if(i < len v && v[i].kind != Css->Kurl)
+			continue;
+		if((txt := contentof(b, n, st, v[s0:i])) != "") {
+			t := newbox(Ktext, 1, n, st);
+			t.text = txt;
+			kids = t :: kids;
+		}
+		if(i < len v) {
+			r := newbox(Kreplaced, 1, n, style->anon(st, Style->Dinline));
+			r.url = v[i].s;
+			kids = r :: kids;
+		}
+		s0 = i + 1;
+	}
 	b.counters = ctrleave(b.counters, pid);
-	g.kids = array[] of {t};
+	g.kids = fixkids(g, rev(kids));	# a table's text goes in an anonymous row and cell, as an element's would
 	return g;
 }
 
@@ -670,8 +688,8 @@ ctrprops(b: ref B, n: int, st: ref St, li: int)
 				x = int v[i+1].n;
 			ctrincr(b, n, v[i].s, x);
 		}
-	if(li && (s := b.d.attr(n, "value")) != nil)
-		ctrset(b, n, "list-item", int s);
+	if(li && n > 0 && (s := b.d.attr(n, "value")) != nil)
+		ctrset(b, n, "list-item", int s);	# (a pseudo-element, numbered below zero, has no attributes)
 	v = st.counterset;
 	for(i = 0; i < len v; i++)
 		if(v[i].kind == Css->Kident) {
@@ -859,8 +877,12 @@ ctrset(b: ref B, n: int, nm: string, x: int)
 # The text of a content property.
 content(b: ref B, n: int, st: ref St): string
 {
+	return contentof(b, n, st, st.content);
+}
+
+contentof(b: ref B, n: int, st: ref St, v: array of ref Css->Tok): string
+{
 	s := "";
-	v := st.content;
 	for(i := 0; i < len v; i++) {
 		t := v[i];
 		case t.kind {
@@ -869,8 +891,12 @@ content(b: ref B, n: int, st: ref St): string
 		Css->Kfunction =>
 			case t.s {
 			"attr" =>
-				if(len t.kids > 0 && t.kids[0].kind == Css->Kident)
-					s += b.d.attr(n, lower(t.kids[0].s));
+				if(len t.kids > 0 && t.kids[0].kind == Css->Kident) {
+					an := t.kids[0].s;
+					if(!b.d.xml)
+						an = lower(an);	# HTML attributes match regardless of case; XML's exactly
+					s += b.d.attr(n, an);
+				}
 			"counter" or "counters" =>
 				if(len t.kids > 0 && t.kids[0].kind == Css->Kident) {
 					sty := "decimal";
@@ -897,9 +923,12 @@ content(b: ref B, n: int, st: ref St): string
 				s += quotemark(q, b.qdepth, 0);
 				b.qdepth++;
 			"close-quote" =>
-				if(b.qdepth > 0)
+				# one with no open quote before it shows nothing, as
+				# browsers have it (content-056)
+				if(b.qdepth > 0) {
 					b.qdepth--;
-				s += quotemark(q, b.qdepth, 1);
+					s += quotemark(q, b.qdepth, 1);
+				}
 			"no-open-quote" =>
 				b.qdepth++;
 			"no-close-quote" =>
@@ -1004,8 +1033,56 @@ counterrep(ls: string, v: int): string
 		return roman(v);
 	"lower-greek" =>
 		return alpha(v, 16r3b1);
+	"armenian" or "upper-armenian" =>
+		return armenian(v, 16r531);
+	"lower-armenian" =>
+		return armenian(v, 16r561);
+	"georgian" =>
+		return georgian(v);
 	}
 	return string v;
+}
+
+# Armenian numerals (Counter Styles 3 §6.2): additive, a letter for
+# each digit of each power of ten up to 9999, in alphabet order
+armenian(v, base: int): string
+{
+	if(v <= 0 || v >= 10000)
+		return string v;
+	s := "";
+	for(k := 0; v > 0; k++) {
+		d := v % 10;
+		v /= 10;
+		if(d > 0) {
+			c := "";
+			c[0] = base + 9*k + d - 1;
+			s = c + s;
+		}
+	}
+	return s;
+}
+
+georgianvals := array[] of {10000, 9000, 8000, 7000, 6000, 5000, 4000, 3000, 2000, 1000,
+	900, 800, 700, 600, 500, 400, 300, 200, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10,
+	9, 8, 7, 6, 5, 4, 3, 2, 1};
+georgiansyms := array[] of {16r10F5, 16r10F0, 16r10EF, 16r10F4, 16r10EE, 16r10ED, 16r10EC, 16r10EB, 16r10EA, 16r10E9,
+	16r10E8, 16r10E7, 16r10E6, 16r10E5, 16r10E4, 16r10F3, 16r10E2, 16r10E1, 16r10E0, 16r10DF, 16r10DE, 16r10DD, 16r10F2, 16r10DC, 16r10DB, 16r10DA, 16r10D9, 16r10D8,
+	16r10D7, 16r10F1, 16r10D6, 16r10D5, 16r10D4, 16r10D3, 16r10D2, 16r10D1, 16r10D0};
+
+# Georgian numerals: additive, up to 19999
+georgian(v: int): string
+{
+	if(v <= 0 || v >= 20000)
+		return string v;
+	s := "";
+	for(i := 0; i < len georgianvals; i++)
+		while(v >= georgianvals[i]) {
+			c := "";
+			c[0] = georgiansyms[i];
+			s += c;
+			v -= georgianvals[i];
+		}
+	return s;
 }
 
 alpha(v, base: int): string
@@ -4895,8 +4972,11 @@ Tgrid: adt {
 	tb:	ref Tb;		# the collapsed borders, if border-collapse: collapse
 };
 
+# (a text box carries its parent's style, display included: it is never a table part)
 isrowgroup(k: ref Box): int
 {
+	if(k.kind == Ktext)
+		return 0;
 	case k.st.display {
 	Style->Dtablerowgroup or Style->Dtableheadergroup or Style->Dtablefootergroup =>
 		return 1;
@@ -4906,7 +4986,7 @@ isrowgroup(k: ref Box): int
 
 iscolumn(k: ref Box): int
 {
-	return k.st.display == Style->Dtablecolumn || k.st.display == Style->Dtablecolumngroup;
+	return k.kind != Ktext && (k.st.display == Style->Dtablecolumn || k.st.display == Style->Dtablecolumngroup);
 }
 
 # The table's grid: rows in header, body, footer order; cells with their
@@ -7110,14 +7190,22 @@ noshy(s: string): string
 # LB24), after opening punctuation (LB14), around quotation marks
 # (LB19), across glue and joiners (LB11, LB12) and inside a Hangul
 # syllable's jamo (LB26).  Letters without spaces do not break.
+lbmode := 0;	# line-break of the text being broken: 0 normal, 1 loose, 2 strict (Text 4 §5.3)
+
 lbbreak(a, b: int): int
 {
 	if(bidi == nil)
 		return isideo(a) || isideo(b);
 	ca := bidi->lbclass(a);
 	cb := bidi->lbclass(b);
+	if(lbmode == 2 && cb == Bidi->LBCJ)
+		cb = Bidi->LBNS;	# strict: no break before small kana and the prolonged sound mark
 	case cb {
-	Bidi->LBCL or Bidi->LBCP or Bidi->LBEX or Bidi->LBIS or Bidi->LBSY or Bidi->LBNS or Bidi->LBBA or
+	Bidi->LBNS =>
+		if(lbmode != 2 && (b == 16r301C || b == 16r30A0))
+			break;	# normal and loose: before 〜 and ゠
+		return 0;
+	Bidi->LBCL or Bidi->LBCP or Bidi->LBEX or Bidi->LBIS or Bidi->LBSY or Bidi->LBBA or
 	Bidi->LBHY or Bidi->LBCM or Bidi->LBZWJ or Bidi->LBIN or Bidi->LBPO or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU =>
 		return 0;
 	}
@@ -7249,8 +7337,17 @@ text(f: ref Fl, b: ref Box)
 				f.space = 0;
 			}
 		}
+		# and its words, though they show nothing, are content: a line
+		# box with a baseline (inline-block-baseline-016)
+		for(k1 := 0; k1 < len b.text; k1++)
+			if(!isspace(b.text[k1])) {
+				emit(f, ref Item(Iword, "", 0.0, b, fc0, 1, f.deco, f.decocolor, 0, 0));
+				f.space = 0;
+				break;
+			}
 		return;
 	}
+	lbmode = st.lbmode;
 	fc := face(st);
 	s := b.text;
 	if(st.transform != Style->TTnone)
@@ -7328,8 +7425,14 @@ text(f: ref Fl, b: ref Box)
 			continue;
 		}
 		word := noshy(s[st0:i]);	# soft hyphens show nothing (no break there yet)
-		if(word == "")
+		if(word == "") {
+			# nothing but soft hyphens: a break opportunity that shows
+			# nothing and, unlike a zero-width space, does not come
+			# between the letters around it for shaping
+			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
+			f.space = 0;
 			continue;
+		}
 		w := fc.width(word) + ls * real len word;
 		if(st.breakall && !nowrap) {
 			# every character is a break opportunity
@@ -7497,7 +7600,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				ln.content = 1;
 				continue;
 			}
-			if(ln.content && ln.x + it.w > real ln.avail + 0.5 && !it.nowrap && canbreak(ln, it)) {
+			if(ln.content && ln.x + segwidth(il) > real ln.avail + 0.5 && !it.nowrap && canbreak(ln, it)) {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -7632,17 +7735,51 @@ canbreak(ln: ref Ln, it: ref Item): int
 {
 	for(fl := ln.frags; fl != nil; fl = tl fl) {
 		f := hd fl;
-		if(f.kind == Fspan || f.kind == Ftext && (f.text == "" || f.box != nil && f.box.kind == Kmarker))
+		if(f.kind == Fspan || f.kind == Ftext && f.box != nil && f.box.kind != Ktext)
 			continue;	# inline box edges, the marks of absolutes, an outside marker
-		if(f.kind != Ftext || f.text == " " || isblankrun(f.text) || f.text == "　")
-			return 1;
-		if(f.box != nil && f.box.kind != Kinline && (f.box.st.whitespace == Style->Wnowrap || f.box.st.whitespace == Style->Wpre))
+		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
+			return 1;	# a space, a zero-width one, a soft hyphen, an atomic inline
+		if(f.box == it.box)
+			return 1;	# words of one text: split where it may break
+		if(f.box.st.whitespace == Style->Wnowrap || f.box.st.whitespace == Style->Wpre)
 			return 0;
-		if(len it.text == 0)
-			return 1;
+		if(len it.text == 0 || it.box.st.breakall || it.box.st.anywhere || f.box.st.breakall)
+			return 1;	# break-all, line-break: anywhere, overflow-wrap: anywhere
+		lbmode = it.box.st.lbmode;
 		return lbbreak(f.text[len f.text - 1], it.text[0]);
 	}
 	return 1;
+}
+
+# The width of the unbreakable run of items starting at the word at the
+# head of il: words with no opportunity between them, the edges of
+# inline boxes among them (a float or an absolute takes no room).
+segwidth(il: list of ref Item): real
+{
+	w := 0.0;
+	prev: ref Item;
+	for(; il != nil; il = tl il) {
+		x := hd il;
+		case x.kind {
+		Iword =>
+			if(prev != nil && (x.box == prev.box || len x.text == 0 || len prev.text == 0 || x.box.st.breakall || x.box.st.anywhere || prev.box.st.breakall))
+				return w;	# an opportunity (one text's words are split at them)
+			if(prev != nil) {
+				lbmode = x.box.st.lbmode;
+				if(lbbreak(prev.text[len prev.text - 1], x.text[0]))
+					return w;
+			}
+			w += x.w;
+			prev = x;
+		Iopen or Iclose =>
+			w += x.w;
+		Ifloat or Iabs =>
+			;
+		* =>
+			return w;
+		}
+	}
+	return w;
 }
 
 removebox(l: list of ref Box, b: ref Box): list of ref Box
@@ -8074,6 +8211,9 @@ joinruns(items: list of ref Item)
 		Iopen or Iclose =>
 			if(it.w > 0.0)
 				prev = nil;
+		Ispace =>
+			if(it.text != "\u00AD")
+				prev = nil;	# a soft hyphen is transparent to joining (hyphens-shaping-001)
 		* =>
 			prev = nil;
 		}

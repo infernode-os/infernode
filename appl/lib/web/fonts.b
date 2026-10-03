@@ -506,7 +506,7 @@ Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: re
 			if(o == nil)
 				continue;
 		}
-		if(c != ' ' && c != ' ')
+		if(c != ' ' && c != ' ' && c != 16rAD)	# a soft hyphen shows nothing (Text 3 §6.1: not taken as a break)
 			o.drawglyph(g, f.size, dst, Point(int gx, gy), src);
 	}
 	return w;

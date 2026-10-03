@@ -305,8 +305,9 @@ Pg.pageheight(p: self ref Pg): int
 loadsheets(p: ref Pg)
 {
 	d := p.doc;
-	# the sheets in document order: (inline text, nil) or (nil, url)
-	sheets: list of (string, string);
+	# the sheets in document order: (inline text, nil, nil) or (nil, url,
+	# the link's charset attribute)
+	sheets: list of (string, string, string);
 	for(n := 1; n < d.n; n++) {
 		nd := d.nodes[n];
 		if(nd.kind != Dom->Element || nd.ns != Dom->HTML)
@@ -315,7 +316,7 @@ loadsheets(p: ref Pg)
 		Dom->Tstyle =>
 			if(!style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
 				continue;
-			sheets = (d.textof(n), nil) :: sheets;
+			sheets = (d.textof(n), nil, nil) :: sheets;
 		Dom->Tlink =>
 			rel := " " + lower(d.attr(n, "rel")) + " ";
 			if(index(rel, " stylesheet ") < 0 || index(rel, " alternate ") >= 0)
@@ -327,10 +328,10 @@ loadsheets(p: ref Pg)
 			href := d.attr(n, "href");
 			if(href == nil)
 				continue;
-			sheets = (nil, style->resolveurl(d.url, href)) :: sheets;
+			sheets = (nil, style->resolveurl(d.url, href), d.attr(n, "charset")) :: sheets;
 		}
 	}
-	a := array[len sheets] of (string, string);
+	a := array[len sheets] of (string, string, string);
 	for(i := len a - 1; i >= 0; i--) {
 		a[i] = hd sheets;
 		sheets = tl sheets;
@@ -341,17 +342,17 @@ loadsheets(p: ref Pg)
 			urls = a[i].t1 :: urls;
 	got := fetchall(urls);
 	for(i = 0; i < len a; i++) {
-		(text, u) := a[i];
+		(text, u, hint) := a[i];
 		if(u == nil) {
 			p.styles.add(css->parse(text), Style->Author, d.url);
 			continue;
 		}
-		(data, nil, err) := fetched(got, u);
+		(data, ctype, err) := fetched(got, u);
 		if(err != nil) {
 			p.errors = u + ": " + err :: p.errors;
 			continue;
 		}
-		p.styles.add(css->parse(string data), Style->Author, u);
+		p.styles.add(css->parse(html->cssdecode(data, param(ctype, "charset"), hint, d.charset)), Style->Author, u);
 	}
 	# @import, to a depth of 4
 	for(depth := 0; depth < 4; depth++) {
@@ -360,12 +361,12 @@ loadsheets(p: ref Pg)
 			break;
 		got = fetchall(urls);
 		for(; urls != nil; urls = tl urls) {
-			(data, nil, err) := fetched(got, hd urls);
+			(data, ctype, err) := fetched(got, hd urls);
 			if(err != nil) {
 				p.errors = hd urls + ": " + err :: p.errors;
 				data = nil;
 			}
-			style->addimport(hd urls, css->parse(string data));
+			style->addimport(hd urls, css->parse(html->cssdecode(data, param(ctype, "charset"), nil, d.charset)));
 		}
 		p.styles.idx = nil;
 	}

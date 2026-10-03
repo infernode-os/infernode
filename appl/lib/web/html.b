@@ -132,7 +132,9 @@ parse(data: array of byte, cs, url: string): ref Doc
 	cs = charset(data, cs);
 	if(len data >= 3 && data[0] == byte 16rEF && data[1] == byte 16rBB && data[2] == byte 16rBF)
 		data = data[3:];
-	return parsestring(decode(data, cs), url);
+	d := parsestring(decode(data, cs), url);
+	d.charset = cs;
+	return d;
 }
 
 # ---- XML ----
@@ -166,6 +168,7 @@ parsexml(data: array of byte, cs, url: string): ref Doc
 
 	d := Doc.new(url);
 	d.xml = 1;
+	d.charset = cs;
 	stack := array[64] of int;
 	nss := array[64] of list of (string, string);	# prefix bindings in scope
 	stack[0] = 1;
@@ -637,6 +640,8 @@ decode(data: array of byte, cs: string): string
 {
 	if(cs == "utf-8" || cs == nil)
 		return string data;
+	if(cs == "utf-16" || cs == "utf-16be" || cs == "utf-16le")
+		return utf16(data, cs);
 	if(convcs == nil) {
 		convcs = load Convcs Convcs->PATH;
 		if(convcs == nil || convcs->init(nil) != nil) {
@@ -651,6 +656,87 @@ decode(data: array of byte, cs: string): string
 		return string data;
 	(nil, s, nil) := btos->btos(Convcs->Startstate, data, -1);
 	return s;
+}
+
+# UTF-16 in either byte order; a byte order mark decides and is
+# dropped, and without one utf-16 is little-endian (Encoding §14.4)
+utf16(data: array of byte, cs: string): string
+{
+	be := cs == "utf-16be";
+	if(len data >= 2) {
+		if(data[0] == byte 16rFE && data[1] == byte 16rFF) {
+			be = 1;
+			data = data[2:];
+		} else if(data[0] == byte 16rFF && data[1] == byte 16rFE) {
+			be = 0;
+			data = data[2:];
+		}
+	}
+	s := "";
+	hi := 0;
+	for(i := 0; i + 1 < len data; i += 2) {
+		c := int data[i] << 8 | int data[i+1];
+		if(!be)
+			c = int data[i+1] << 8 | int data[i];
+		if(hi != 0) {
+			if(c >= 16rDC00 && c <= 16rDFFF) {
+				s[len s] = 16r10000 + ((hi - 16rD800) << 10) + (c - 16rDC00);
+				hi = 0;
+				continue;
+			}
+			s[len s] = 16rFFFD;
+			hi = 0;
+		}
+		if(c >= 16rD800 && c <= 16rDBFF) {
+			hi = c;
+			continue;
+		}
+		if(c >= 16rDC00 && c <= 16rDFFF)
+			c = 16rFFFD;
+		s[len s] = c;
+	}
+	if(hi != 0)
+		s[len s] = 16rFFFD;
+	return s;
+}
+
+cssdecode(data: array of byte, transport, hint, docs: string): string
+{
+	if(len data >= 3 && data[0] == byte 16rEF && data[1] == byte 16rBB && data[2] == byte 16rBF)
+		return string data[3:];
+	if(len data >= 2 && data[0] == byte 16rFE && data[1] == byte 16rFF)
+		return utf16(data, "utf-16be");
+	if(len data >= 2 && data[0] == byte 16rFF && data[1] == byte 16rFE)
+		return utf16(data, "utf-16le");
+	cs := "utf-8";
+	if(transport != nil)
+		cs = canoncs(transport);
+	else if((a := atcharset(data)) != nil)
+		cs = a;
+	else if(hint != nil)
+		cs = canoncs(hint);
+	else if(docs != nil)
+		cs = docs;
+	return decode(data, cs);
+}
+
+# the label of an @charset "..."; rule at the very start, byte for byte
+atcharset(data: array of byte): string
+{
+	pfx := "@charset \"";
+	if(len data < len pfx || string data[0:len pfx] != pfx)
+		return nil;
+	for(i := len pfx; i < len data && i < 1024; i++)
+		if(data[i] == byte '"') {
+			if(i + 1 < len data && data[i+1] == byte ';') {
+				cs := canoncs(string data[len pfx:i]);
+				if(cs == "utf-16" || cs == "utf-16be" || cs == "utf-16le")
+					cs = "utf-8";	# the rule was readable, so the bytes are not UTF-16
+				return cs;
+			}
+			return nil;
+		}
+	return nil;
 }
 
 # ---- character references (§13.2.5.72) ----

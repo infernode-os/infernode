@@ -18,7 +18,7 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,642 judged) | **68.5%** (8,660 passing), from 53.8% at this session's start, 50.0% at the fourth's and 37.8% at the first run ever; CSS2 5,032 of 5,900, css-text 794 of 1,382, css-grid 840 of 1,536, css-flexbox 614 of 945, css-tables 85 of 138 |
+| WPT CSS reftests (18 directories, 12,642 judged) | **74.0%** (9,351 passing), from 68.5% at this session's start, 53.8% at the fifth's, 50.0% at the fourth's and 37.8% at the first run ever; CSS2 5,354 of 5,828, css-text 921 of 1,382, css-grid 838 of 1,536, css-flexbox 637 of 945, css-tables 89 of 138 |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
 | Unit tests | web_html 5, web_css 6, web_style 16, web_browser 9, web_fonts 10, bidi 3, brotli 3: all pass |
@@ -444,8 +444,9 @@ In rough order of payoff.
    - page/browser: no HTTP cache in webfs, so every navigation
      refetches.
 3. **Open regressions (tests that passed at the first run ever and fail
-   now; 53 at r27, of which 5 were fixed in the last commit; 49 at the
-   end of the fourth session).**  Mostly the grid-lanes directory's
+   now; 53 at r37, each with a reason, 9 of them matching Chromium or a
+   reference that changed; 53 at r27, 49 at the end of the fourth
+   session).**  Mostly the grid-lanes directory's
    references changing from "nothing renders" to a real layout: 8 are
    subgrid gaps and line names inside lanes, 11 are auto-repeats of
    intrinsic lanes (the count is the items' smallest max-content
@@ -460,23 +461,24 @@ In rough order of payoff.
    (a former accident), and the variable-font, 2-pixel and tentative
    cases from before.  Each with its reason, as far as known:
    `tools/ref/baseline/open-regressions.txt`.
-   **Where the failures are now** (r27): CSS2 868 (tables 70, text 97,
-   borders 94, syntax 64, generated-content 64, normal-flow 61, fonts
-   58, bidi-text 52, visufx 46, floats-clear 43, positioning 49),
-   css-text 588 (white-space 160: `textarea-pre-wrap` done after r27,
-   `text-wrap: balance`, trailing spaces with text-align; line-breaking
-   65, line-break 62, word-break 44, hyphens 42, text-align 39),
-   css-grid 696, css-flexbox 331 (writing modes 14, col-wrap 9,
-   percentage-heights 8, baseline alignment 6, justify-content-vert 6),
-   css-backgrounds 373 (`background-intrinsic-*` need SVG images with
-   no intrinsic size, `background-position-applies-to-*` need row-group
-   image positioning), css-sizing 244 (stretch 24, contain-intrinsic-size
-   36, aspect-ratio 50), css-position 92 (12 are `-in-inline` script
-   tests; `position-absolute-center` 6; vertical modes), css-tables 53
-   (`table-anonymous-objects` 30 differ by a glyph's sub-pixel
-   position between "bc" in one run and two cells: a sub-pixel layout
-   matter), css-lists 107 (list-style-type styles beyond the basic
-   ones, `::marker` content), css-fonts 158.
+   **Where the failures are now** (r37, 3,291 failing): css-grid 698
+   (grid-lanes 368, alignment 93, abspos 79, grid-items 62, subgrid 51),
+   css-text 461 (white-space 124: `text-wrap: balance`, trailing spaces
+   with alignment in rtl, tab stops; hyphens 42 need dictionaries;
+   line-breaking 31, word-break 31, letter-spacing 27, text-align 25,
+   text-transform 25, text-autospace 24), css-backgrounds 371
+   (`background-size/vector` 203 need SVG images without intrinsic size,
+   background-clip 38, border-image), css-flexbox 308 (`balance` 28,
+   writing modes 12, baseline alignment, aspect-ratio images), css-sizing
+   174 (aspect-ratio 62: flex and grid items, abspos; stretch 10;
+   contain-intrinsic-size 9 remaining), css-fonts 155, css-color 119
+   (relative colours, color-mix spaces), css-position 89, css-values 86,
+   css-display 54 (run-in 37), css-tables 49, css-lists 46 (`@counter-style`,
+   `::marker` content), css-variables 40, css-box 39 (margin-trim for flex
+   and grid, inline edges), and in CSS2: tables 61 (`table-anonymous-objects`
+   30 differ by a glyph's sub-pixel position), bidi-text 47, floats-clear
+   40, normal-flow 37, selectors 36 (`::first-line`, first-letter
+   punctuation in the astral planes), text 33, floats 27, positioning 27.
 4. **Exposed gaps behind many failures:** vertical writing modes (768
    tests across directories), `@namespace` in selectors, animations and
    transitions, `text-wrap: balance`, counter styles beyond the basic

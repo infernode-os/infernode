@@ -1134,6 +1134,12 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		r := newbox(Kreplaced, inl, n, st);
 		r.iw = dimattr(b.d.attr(n, "width"), 300);
 		r.ih = dimattr(b.d.attr(n, "height"), 150);
+		if(b.d.attr(n, "width") == nil && b.d.attr(n, "height") == nil && (vb := viewbox(b.d.attr(n, "viewBox"))) != nil && vb[2] > 0.0 && vb[3] > 0.0) {
+			# no size of its own: its ratio is the viewBox's (SVG 2 §8.6),
+			# at the default 300 wide
+			r.iw = 300;
+			r.ih = ir(300.0 * vb[3] / vb[2]);
+		}
 		return r;
 	}
 	if(nd.ns != Dom->HTML)
@@ -5133,9 +5139,11 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 			continue;
 		}
 		if(isrowgroup(k)) {
+			if(k.st.visibility == Style->Vcollapse)
+				continue;	# a collapsed row group takes no room (CSS 2.2 §17.5.5)
 			rl: list of (ref Box, ref Box);
 			for(j := 0; j < len k.kids; j++)
-				if(k.kids[j].kind == Krow)
+				if(k.kids[j].kind == Krow && k.kids[j].st.visibility != Style->Vcollapse)
 					rl = (k.kids[j], k) :: rl;
 			# the first header group goes first and the first footer
 			# group last; any others stay where they are (Tables 3 §2.1)
@@ -5151,7 +5159,7 @@ tgrid(d: ref Doc, b: ref Box): ref Tgrid
 			} else
 				for(rr := rev2(rl); rr != nil; rr = tl rr)
 					body = hd rr :: body;
-		} else if(k.kind == Krow)
+		} else if(k.kind == Krow && k.st.visibility != Style->Vcollapse)
 			body = (k, nil) :: body;
 	}
 	all := head;	# (each list is reversed; the final rev2 puts them all in order)
@@ -7539,6 +7547,29 @@ lbbreak(a, b: int): int
 			return 0;
 	}
 	return lbideo(ca) || lbideo(cb);
+}
+
+# an SVG viewBox attribute's four numbers, or nil
+viewbox(s: string): array of real
+{
+	if(s == nil)
+		return nil;
+	a := array[4] of real;
+	k := 0;
+	i := 0;
+	while(k < 4) {
+		while(i < len s && (s[i] == ' ' || s[i] == ',' || s[i] == '\t' || s[i] == '\n'))
+			i++;
+		if(i >= len s)
+			return nil;
+		st := i;
+		while(i < len s && (s[i] >= '0' && s[i] <= '9' || s[i] == '.' || s[i] == '-' || s[i] == '+' || s[i] == 'e' || s[i] == 'E'))
+			i++;
+		if(i == st)
+			return nil;
+		a[k++] = real s[st:i];
+	}
+	return a;
 }
 
 # the character the break rules see before s[i]: a combining mark

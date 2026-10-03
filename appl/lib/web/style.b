@@ -3096,6 +3096,8 @@ colorfn(t: ref Tok): (int, int)
 		return color(hd args);
 	"color-mix" =>
 		return colormix(t);
+	"color" =>
+		return colorspace(t);
 	}
 	(ok, ch, a) := channels(t);
 	if(!ok)
@@ -3182,13 +3184,123 @@ lab2rgb(l, a, b: real, al: int): int
 	x := labf(fx) * 0.3457/0.3585;
 	y := labf(fy);
 	z := labf(fz) * (1.0 - 0.3457 - 0.3585)/0.3585;
-	x65 := 0.9554734527042182*x - 0.023098536874261423*y + 0.0632593086610217*z;
-	y65 := -0.028369706963208136*x + 1.0099954580058226*y + 0.021041398966943008*z;
-	z65 := 0.012314001688319899*x - 0.020507696433477912*y + 1.3303659366080753*z;
+	(x65, y65, z65) := d50to65(x, y, z);
+	return xyz2rgb(x65, y65, z65, al);
+}
+
+# CIE XYZ under D50 adapted to D65 (Bradford)
+d50to65(x, y, z: real): (real, real, real)
+{
+	return (0.9554734527042182*x - 0.023098536874261423*y + 0.0632593086610217*z,
+		-0.028369706963208136*x + 1.0099954580058226*y + 0.021041398966943008*z,
+		0.012314001688319899*x - 0.020507696433477912*y + 1.3303659366080753*z);
+}
+
+# CIE XYZ (D65) to an sRGB pixel
+xyz2rgb(x65, y65, z65: real, al: int): int
+{
 	r := 3.2409699419045226*x65 - 1.537383177570094*y65 - 0.4986107602930034*z65;
 	g := -0.9692436362808796*x65 + 1.8759675015077202*y65 + 0.04155505740717559*z65;
 	bb := 0.05563007969699366*x65 - 0.20397695888897652*y65 + 1.0569715142428786*z65;
 	return (srgb(r) << 24) | (srgb(g) << 16) | (srgb(bb) << 8) | clamp(al);
+}
+
+# color(<space> c1 c2 c3 [/ alpha]) (Color 4 §10): the predefined RGB
+# spaces through their transfer functions and matrices to XYZ, then to
+# sRGB; xyz, xyz-d65 and xyz-d50 directly
+colorspace(t: ref Tok): (int, int)
+{
+	v := nows(t.kids);
+	if(len v < 1 || v[0].kind != Kident)
+		return (0, 0);
+	space := lower(v[0].s);
+	(ok, ch, a) := channels(ref Tok(Kfunction, "color", 0.0, 0, v[1:]));
+	if(!ok)
+		return (0, 0);
+	al := alphaof(a);
+	c0 := chval(ch[0], 1.0);
+	c1 := chval(ch[1], 1.0);
+	c2 := chval(ch[2], 1.0);
+	x, y, z: real;
+	case space {
+	"srgb" =>
+		return (1, rgba(round(c0*255.0), round(c1*255.0), round(c2*255.0), al));
+	"srgb-linear" =>
+		return (1, (srgb(c0) << 24) | (srgb(c1) << 16) | (srgb(c2) << 8) | clamp(al));
+	"display-p3" =>
+		(r, g, b) := (srgblin(c0), srgblin(c1), srgblin(c2));
+		x = 0.4865709486482162*r + 0.26566769316909306*g + 0.1982172852343625*b;
+		y = 0.2289745640697488*r + 0.6917385218365064*g + 0.079286914093745*b;
+		z = 0.04511338185890264*g + 1.043944368900976*b;
+	"a98-rgb" =>
+		(r, g, b) := (gammalin(c0, 563.0/256.0), gammalin(c1, 563.0/256.0), gammalin(c2, 563.0/256.0));
+		x = 0.5766690429101305*r + 0.1855582379065463*g + 0.1882286462349947*b;
+		y = 0.29734497525053605*r + 0.6273635662554661*g + 0.07529145849399788*b;
+		z = 0.02703136138641234*r + 0.07068885253582723*g + 0.9913375368376388*b;
+	"prophoto-rgb" =>
+		(r, g, b) := (prophotolin(c0), prophotolin(c1), prophotolin(c2));
+		(x, y, z) = d50to65(0.7977604896723027*r + 0.13518583717574031*g + 0.0313493495815248*b,
+			0.2880711282292934*r + 0.7118432178101014*g + 0.00008565396060525902*b,
+			0.8251046025104601*b);
+	"rec2020" =>
+		(r, g, b) := (rec2020lin(c0), rec2020lin(c1), rec2020lin(c2));
+		x = 0.6369580483012914*r + 0.14461690358620832*g + 0.1688809751641721*b;
+		y = 0.2627002120112671*r + 0.6779980715188708*g + 0.05930171646986196*b;
+		z = 0.028072693049087428*g + 1.060985057710791*b;
+	"xyz" or "xyz-d65" =>
+		(x, y, z) = (c0, c1, c2);
+	"xyz-d50" =>
+		(x, y, z) = d50to65(c0, c1, c2);
+	* =>
+		return (0, 0);
+	}
+	return (1, xyz2rgb(x, y, z, al));
+}
+
+# the transfer functions, to linear light
+srgblin(v: real): real
+{
+	s := 1.0;
+	if(v < 0.0) {
+		s = -1.0;
+		v = -v;
+	}
+	if(v <= 0.04045)
+		return s*v/12.92;
+	return s*math->pow((v + 0.055)/1.055, 2.4);
+}
+
+gammalin(v, g: real): real
+{
+	if(v < 0.0)
+		return -math->pow(-v, g);
+	return math->pow(v, g);
+}
+
+prophotolin(v: real): real
+{
+	s := 1.0;
+	if(v < 0.0) {
+		s = -1.0;
+		v = -v;
+	}
+	if(v <= 16.0/512.0)
+		return s*v/16.0;
+	return s*math->pow(v, 1.8);
+}
+
+rec2020lin(v: real): real
+{
+	al := 1.09929682680944;
+	be := 0.018053968510807;
+	s := 1.0;
+	if(v < 0.0) {
+		s = -1.0;
+		v = -v;
+	}
+	if(v < be*4.5)
+		return s*v/4.5;
+	return s*math->pow((v + al - 1.0)/al, 1.0/0.45);
 }
 
 labf(t: real): real

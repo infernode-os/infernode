@@ -30,7 +30,7 @@ every machine and person allowed in.
 | [1. The signer and the certificates](#1-the-signer-and-the-certificates) | 5 min, once | viewer |
 | [2. Turn on the node](#2-turn-on-the-node) | 5 min, once | node |
 | [3. Connect: two ways](#3-connect-two-ways) | 1 min, each time | viewer |
-| [4. End a session cleanly](#4-end-a-session-cleanly) | | viewer |
+| [4. End a session](#4-end-a-session) | | viewer |
 | [5. Adding another person](#5-adding-another-person) | | viewer |
 | [6. How it is protected](#6-how-it-is-protected) | | |
 | [7. When it does not work](#7-when-it-does-not-work) | | |
@@ -337,23 +337,28 @@ inside the Lucifer desktop is untested.
 
 ---
 
-## 4. End a session cleanly
+## 4. End a session
 
-**3a:** quit the programs you started, then close the node's window
-manager (its menu, or `exit` in its shell), then close the emulator.
+A session ends when the command you gave `cpu` ends, and everything it
+started on the node ends with it:
 
-**3b:** quit each remote program in its window (for a shell, `exit`)
-before closing your window manager. Closing it, or the emulator, takes
-their windows away, but the programs may keep running on the node, as
-below.
+**3a:** close the node's window manager (its menu, or `exit` in its
+shell). `cpu` returns, and every program you started from that desktop
+stops on the node.
 
-Closing the window alone is not enough today: programs you started in
-the session keep running on the node, as you, after you disconnect, and
-nothing stops them
-([#732](https://github.com/infernode-os/infernode/issues/732)). A
-forgotten demo will quietly use the node's CPU for hours and make
-everything slow, your next session included. Restarting the node clears
-them.
+**3b:** quit the remote program in its window (for a shell, `exit`).
+
+If your side simply goes away instead -- you close the emulator, the
+laptop sleeps, the network drops -- the node notices within a few
+seconds and ends the session the same way, so nothing is left running
+there for nobody.
+
+**Older releases** did neither
+([#732](https://github.com/infernode-os/infernode/issues/732)): `cpu`
+did not return after a one-shot command, and programs from a session
+kept running on the node, as you, after you disconnected, quietly using
+its CPU until it was restarted. On a node running one of those, quit
+what you started before you close anything.
 
 ---
 

@@ -435,6 +435,12 @@ jobs:
         chmod +x tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
 
+    - name: Run cpu(1) session lifetime test
+      run: |
+        # A cpu session ends when its command does, or when its caller
+        # hangs up, and what it started ends with it (#732).
+        ROOT=. sh tests/host/cpu_session_test.sh
+
     - name: Run JIT type code reuse test
       run: |
         # A freed type's compiled code goes back on comp-amd64.c's free

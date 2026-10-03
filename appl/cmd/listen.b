@@ -261,7 +261,10 @@ listen1(drawctxt: ref Draw->Context, addr: string, argv: list of string,
 				}
 				alt {
 				authslots <-= 1 =>
-					spawn authenticatedcommand(c, algs, addr, ctxt.copy(1), cmd, host);
+					spawn authenticatedcommand(c, algs, addr, ctxt, cmd, host);
+					# the connection is the child's now: holding
+					# its fds here kept it open after the session
+					c.dfd = c.cfd = nil;
 				* =>
 					srcrelease(host);
 					if(verbose)
@@ -322,12 +325,24 @@ listener(listench: chan of (int, Sys->Connection), c: Sys->Connection, addr: str
 				sys->fprint(nc.cfd, "keepalive");
 			listench <-= (ok, nc);
 		}
+		# nor here, while the next listen blocks
+		nc.dfd = nc.cfd = nil;
 	}
 }
 
 authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
 		ctxt: ref Context, cmd: list of ref Sh->Listnode, host: string)
 {
+	# The copy is made here, in the connection's own process: a
+	# Context's wait file is that of the process that copies it.  Made
+	# in the listener, every connection's shell waited for its command
+	# on the listener's wait file, never saw it end, and kept the
+	# connection open, so a cpu(1) session never ended (#732).
+	ctxt = ctxt.copy(1);
+	# Its own fd table, likewise: the dups onto 0 and 1 below went into
+	# the table it shared with the listener, which then held the
+	# connection open until the next one replaced it.
+	sys->pctl(Sys->FORKFD, nil);
 	err: string;
 	cancel := chan[1] of int;
 	spawn authwatchdog(cancel, sys->pctl(0, nil), c.cfd, authtimeout, host);
@@ -349,6 +364,9 @@ authenticatedcommand(c: Sys->Connection, algs: list of string, addr: string,
 
 timerproc(c: chan of int, ms: int)
 {
+	# it only sleeps: holding the connection's fd table here kept the
+	# connection open for the whole auth timeout after a session ended
+	sys->pctl(Sys->NEWFD, nil);
 	sys->sleep(ms);
 	c <-= 1;
 }

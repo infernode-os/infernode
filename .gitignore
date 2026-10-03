@@ -124,6 +124,10 @@ test-output.txt
 /phone/
 /n/*
 !/n/.gitkeep
+# rstyxd mounts a cpu(1) caller's namespace here
+!/n/client/
+/n/client/*
+!/n/client/.gitkeep
 # scap(1) writes this beside the image it captured.
 /scap.status
 

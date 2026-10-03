@@ -1845,7 +1845,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 0);
 }
 
 nextsid := 1;
@@ -1881,6 +1881,7 @@ inherit(p: ref St): ref St
 	s.hyphenchar = p.hyphenchar;
 	s.textjustify = p.textjustify;
 	s.hangpunct = p.hangpunct;
+	s.textautospace = p.textautospace;
 	s.textshadows = p.textshadows;
 	s.dirrtl = p.dirrtl;
 	s.tabsize = p.tabsize;
@@ -1923,7 +1924,7 @@ isinherited(nm: string): int
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
 	"text-wrap-mode" or "word-break" or "line-break" or "overflow-wrap" or "word-wrap" or "word-space-transform" or
-	"hyphens" or "hyphenate-character" or "text-justify" or "hanging-punctuation" or
+	"hyphens" or "hyphenate-character" or "text-justify" or "hanging-punctuation" or "text-autospace" or
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
@@ -3132,17 +3133,33 @@ colorfn(t: ref Tok): (int, int)
 		f := 1.0 - w - bk;
 		return (1, rgba(round((r*f+w)*255.0), round((g*f+w)*255.0), round((b*f+w)*255.0), al));
 	"lab" =>
-		return (1, lab2rgb(chval(ch[0], 100.0), chval(ch[1], 125.0), chval(ch[2], 125.0), al));
+		# lightness is clamped to its range (Color 4 §9.2); at the
+		# ends the colour is white or black whatever the chroma
+		l := clampl(chval(ch[0], 100.0), 100.0);
+		if(l >= 100.0 || l <= 0.0)
+			return (1, lend(l, al));
+		return (1, lab2rgb(l, chval(ch[1], 125.0), chval(ch[2], 125.0), al));
 	"lch" =>
-		l := chval(ch[0], 100.0);
+		l := clampl(chval(ch[0], 100.0), 100.0);
+		if(l >= 100.0 || l <= 0.0)
+			return (1, lend(l, al));
 		c := chval(ch[1], 150.0);
+		if(c < 0.0)
+			c = 0.0;
 		h := chval(ch[2], 360.0)*Math->Pi/180.0;
 		return (1, lab2rgb(l, c*math->cos(h), c*math->sin(h), al));
 	"oklab" =>
-		return (1, oklab2rgb(chval(ch[0], 1.0), chval(ch[1], 0.4), chval(ch[2], 0.4), al));
+		l := clampl(chval(ch[0], 1.0), 1.0);
+		if(l >= 1.0 || l <= 0.0)
+			return (1, lend(l, al));
+		return (1, oklab2rgb(l, chval(ch[1], 0.4), chval(ch[2], 0.4), al));
 	"oklch" =>
-		l := chval(ch[0], 1.0);
+		l := clampl(chval(ch[0], 1.0), 1.0);
+		if(l >= 1.0 || l <= 0.0)
+			return (1, lend(l, al));
 		c := chval(ch[1], 0.4);
+		if(c < 0.0)
+			c = 0.0;
 		h := chval(ch[2], 360.0)*Math->Pi/180.0;
 		return (1, oklab2rgb(l, c*math->cos(h), c*math->sin(h), al));
 	}
@@ -3184,6 +3201,23 @@ srgb(x: real): int
 	else
 		x = 1.055*math->pow(x, 1.0/2.4) - 0.055;
 	return clamp(round(x*255.0));
+}
+
+clampl(l, top: real): real
+{
+	if(l < 0.0)
+		return 0.0;
+	if(l > top)
+		return top;
+	return l;
+}
+
+# white or black with the alpha: the ends of the lightness range
+lend(l: real, al: int): int
+{
+	if(l > 0.0)
+		return rgba(255, 255, 255, al);
+	return rgba(0, 0, 0, al);
 }
 
 lab2rgb(l, a, b: real, al: int): int
@@ -3238,8 +3272,10 @@ colorspace(t: ref Tok): (int, int)
 		return (1, rgba(round(c0*255.0), round(c1*255.0), round(c2*255.0), al));
 	"srgb-linear" =>
 		return (1, (srgb(c0) << 24) | (srgb(c1) << 16) | (srgb(c2) << 8) | clamp(al));
-	"display-p3" =>
+	"display-p3" or "display-p3-linear" =>
 		(r, g, b) := (srgblin(c0), srgblin(c1), srgblin(c2));
+		if(space == "display-p3-linear")
+			(r, g, b) = (c0, c1, c2);
 		x = 0.4865709486482162*r + 0.26566769316909306*g + 0.1982172852343625*b;
 		y = 0.2289745640697488*r + 0.6917385218365064*g + 0.079286914093745*b;
 		z = 0.04511338185890264*g + 1.043944368900976*b;
@@ -4381,6 +4417,20 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"manual" => st.hyphens = 1;
 		"auto" => st.hyphens = 2;
 		* => return 0;
+		}
+	"text-autospace" =>
+		# normal | auto | no-autospace | [ ideograph-alpha || ideograph-numeric ] (Text 4 §8.3)
+		ax := nows(v);
+		if(len ax == 0)
+			return 0;
+		for(k := 0; k < len ax; k++) {
+			if(ax[k].kind != Kident)
+				return 0;
+			case lower(ax[k].s) {
+			"normal" or "auto" or "ideograph-alpha" or "ideograph-numeric" or "punctuation" => st.textautospace = 0;
+			"no-autospace" => st.textautospace = 1;
+			* => return 0;
+			}
 		}
 	"hanging-punctuation" =>
 		# none | [ first || [ force-end | allow-end ] || last ] (Text 3 §5.3)
@@ -5731,6 +5781,7 @@ copyprop(d, s: ref St, nm: string)
 	"hyphenate-character" => d.hyphenchar = s.hyphenchar;
 	"text-justify" => d.textjustify = s.textjustify;
 	"hanging-punctuation" => d.hangpunct = s.hangpunct;
+	"text-autospace" => d.textautospace = s.textautospace;
 	"clip" => d.cliprect = s.cliprect;
 	"margin-trim" => d.margintrim = s.margintrim;
 	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-inline-size" or

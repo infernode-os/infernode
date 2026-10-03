@@ -2385,6 +2385,33 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		la[i] = hd lines;
 		lines = tl lines;
 	}
+	# margin-trim: the items' margins at the container's edges go
+	# (Box 4 §4.2): on the main axis the first and last item of each
+	# line, on the cross axis every item of the first and last line
+	if(b.st.margintrim != 0)
+		for(i = 0; i < len la; i++) {
+			ln := la[i];
+			for(j := 0; j < len ln.items; j++) {
+				k := ln.items[j].box;
+				mainfirst := j == 0;
+				mainlast := j == len ln.items - 1;
+				crossfirst := i == 0;
+				crosslast := i == len la - 1;
+				if(row) {
+					if(mainfirst && b.st.margintrim & 4) k.ml = 0;
+					if(mainlast && b.st.margintrim & 8) k.mr = 0;
+					if(crossfirst && b.st.margintrim & 1) k.mt = 0;
+					if(crosslast && b.st.margintrim & 2) k.mb = 0;
+					ln.items[j].mm = k.ml + k.mr;
+				} else {
+					if(mainfirst && b.st.margintrim & 1) k.mt = 0;
+					if(mainlast && b.st.margintrim & 2) k.mb = 0;
+					if(crossfirst && b.st.margintrim & 4) k.ml = 0;
+					if(crosslast && b.st.margintrim & 8) k.mr = 0;
+					ln.items[j].mm = k.mt + k.mb;
+				}
+			}
+		}
 
 	# resolve flexible lengths (§9.7), then lay each item out at its size
 	usedmain := 0;
@@ -3225,6 +3252,13 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		g := items[i];
 		k := g.box;
 		edges(k, areaw(cols, cpos, g.c0, g.c1, colgap));
+		if(b.st.margintrim != 0) {
+			# margin-trim: the margins of items at the grid's edges go (Box 4 §4.2)
+			if(g.c0 == 0 && b.st.margintrim & 4) k.ml = 0;
+			if(g.c1 == ncols && b.st.margintrim & 8) k.mr = 0;
+			if(g.r0 == 0 && b.st.margintrim & 1) k.mt = 0;
+			if(g.r1 == nrows && b.st.margintrim & 2) k.mb = 0;
+		}
 		if(issubgrid(k, 1)) {
 			k.subcw = subtracks(tracksizes(cols, g.c0, g.c1), k.ml + k.bl + k.pl, k.mr + k.br + k.pr);
 			k.subcnames = mergenames(colnames, g.c0, g.c1, subnames(k.st.gridcols));
@@ -5095,6 +5129,10 @@ trackpos(t: array of ref Track, gap, avail, align: int): array of int
 	free := avail - used;
 	start := 0;
 	extra := 0;
+	nv := 0;	# the tracks that are there: collapsed ones take no share (grid-content-distribution-with-collapsed-tracks-001)
+	for(i = 0; i < n; i++)
+		if(t[i].fit != 2)
+			nv++;
 	if(free > 0)
 		case align {
 		Style->ALend or Style->ALright or Style->ALflowend =>
@@ -5102,13 +5140,13 @@ trackpos(t: array of ref Track, gap, avail, align: int): array of int
 		Style->ALcenter =>
 			start = free/2;
 		Style->ALbetween =>
-			if(n > 1)
-				extra = free / (n - 1);
+			if(nv > 1)
+				extra = free / (nv - 1);
 		Style->ALaround =>
-			extra = free / nz1(n);
+			extra = free / nz1(nv);
 			start = extra/2;
 		Style->ALevenly =>
-			extra = free / (n + 1);
+			extra = free / (nv + 1);
 			start = extra;
 		}
 	# accumulate in reals and round each edge, so fractional tracks
@@ -7495,6 +7533,7 @@ inlineintrinsic(b: ref Box): (int, int)
 	wstpass(items);
 	lspass(items);
 	items = hangpass(items);
+	autospacepass(items);
 	mn := 0.0;
 	mx := 0.0;
 	line := 0.0;
@@ -8128,6 +8167,58 @@ lspass(items: list of ref Item)
 	}
 }
 
+# text-autospace (Text 4 §8.3): an eighth of an em between an
+# ideograph and a letter or numeral of another script beside it,
+# as spacing after the first of the two, trimmed at a line's end like
+# letter spacing (text-autospace-001).
+autospacepass(items: list of ref Item)
+{
+	prev: ref Item;
+	for(l := items; l != nil; l = tl l) {
+		it := hd l;
+		case it.kind {
+		Iword =>
+			if(prev != nil && len it.text > 0 && prev.box.st.textautospace == 0 && it.box.st.textautospace == 0) {
+				a := prev.text[len prev.text - 1];
+				c := it.text[0];
+				if(isideograph(a) && isalnumeral(c) || isalnumeral(a) && isideograph(c)) {
+					sp := prev.box.st.fontsize/8.0;
+					prev.w += sp;
+					prev.tls += sp;
+				}
+			}
+			prev = it;
+			if(len it.text == 0)
+				prev = nil;
+		Iopen or Iclose =>
+			if(it.w != 0.0)
+				prev = nil;
+		* =>
+			prev = nil;
+		}
+	}
+}
+
+# an ideograph as text-autospace sees it: Han, Hiragana, Katakana,
+# their radicals and iteration marks; not punctuation
+isideograph(c: int): int
+{
+	return c >= 16r3041 && c <= 16r30FF && c != 16r30FB || c == 16r3005 || c == 16r3007 || c == 16r303B ||
+		c >= 16r31F0 && c <= 16r31FF || c >= 16r3400 && c <= 16r4DBF || c >= 16r4E00 && c <= 16r9FFF ||
+		c >= 16rF900 && c <= 16rFAFF || c >= 16rFF66 && c <= 16rFF9F || c >= 16r2E80 && c <= 16r2FDF ||
+		c >= 16r20000 && c <= 16r3FFFF;
+}
+
+# a letter or numeral of a non-ideographic script (Latin, Greek,
+# Cyrillic, Arabic, Hebrew letters; decimal digits)
+isalnumeral(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c >= 16rC0 && c <= 16r24F && c != 16rD7 && c != 16rF7 || c >= 16r370 && c <= 16r3FF ||
+		c >= 16r400 && c <= 16r52F || c >= 16r5D0 && c <= 16r5EA || c >= 16r620 && c <= 16r64A ||
+		c >= 16r660 && c <= 16r669 || c >= 16r6F0 && c <= 16r6F9;
+}
+
 # hanging-punctuation first and last (Text 3 §5.3): an opening mark
 # that starts the block's content, with nothing but zero-width inline
 # box edges before it, hangs before the first line's start edge; a
@@ -8401,6 +8492,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 	wstpass(items);
 	lspass(items);
 	items = hangpass(items);
+	autospacepass(items);
 	st := b.st;
 	lines: list of ref Line;
 	f := ref Ifc(l, b, cw, fc, ox, oy, b.bt + b.pt, ir(lineheight(st, face(st))), ch);
@@ -9183,6 +9275,8 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	}
 	if(ln.para % 2 == 1 && align == Style->Astart)
 		off = extra - ln.indent;	# the start is the right; the indent is there
+	else if(ln.para % 2 == 1 && align == Style->Ajustify)
+		off = -real ln.indent;	# justified from the end edge; the indent, taken at the start, moves the content the other way
 	if(off < 0.0 && !b.st.dirrtl)
 		off = 0.0;	# too wide: the content overflows the end edge, the right in a left-to-right block, the left in a right-to-left one (hyphens-shaping-001)
 	else if(b.st.dirrtl && extra < 0.0 && off > extra)
@@ -10336,6 +10430,8 @@ innerclip(b: ref Box, r, clip: Rect): Rect
 		return intersect(clip, r);
 	if(st.overflowx == Style->Ovisible && st.overflowy == Style->Ovisible)
 		return clip;
+	if(b.kind == Krow || isrowgroup(b) || iscolumn(b))
+		return clip;	# overflow does not apply to rows, row groups and columns (CSS 2.2 §11.1.1; overflow-applies-to-001)
 	if(istag(b, Dom->Thtml) || istag(b, Dom->Tbody) && b.parent != nil && istag(b.parent, Dom->Thtml) &&
 	   b.parent.st.overflowx == Style->Ovisible && b.parent.st.overflowy == Style->Ovisible)
 		return clip;	# the root's overflow, or the body's when the root's is visible, is the viewport's, not a clip of its own (Overflow 3 §3.3)
@@ -10667,6 +10763,8 @@ paintoutline(dst: ref Image, b: ref Box, r, clip: Rect)
 	st := b.st;
 	if(st.visibility != Style->Vvisible || st.outlinew <= 0 || st.outlines == Style->Bnone)
 		return;
+	if(iscolumn(b))
+		return;	# columns and column groups are not rendered boxes (outline-applies-to-005)
 	oclip := dst.clipr;
 	dst.clipr = clip;
 	w := st.outlinew;
@@ -10803,7 +10901,7 @@ paintbackground(dst: ref Image, b: ref Box, r: Rect)
 {
 	st := b.st;
 	paintshadows(dst, b, r);
-	if(visible(st.bgcolor)) {
+	if(visible(bcolor(st, st.bgcolor))) {
 		br := r;
 		case bgclip(st) {
 		Style->BOXpadding =>
@@ -10811,7 +10909,7 @@ paintbackground(dst: ref Image, b: ref Box, r: Rect)
 		Style->BOXcontent =>
 			br = Rect((r.min.x + b.bl + b.pl, r.min.y + b.bt + b.pt), (r.max.x - b.br - b.pr, r.max.y - b.bb - b.pb));
 		}
-		fillbox(dst, b, br, st.bgcolor);
+		fillbox(dst, b, br, bcolor(st, st.bgcolor));	# currentcolor is the box's own colour (currentcolor-001)
 	}
 	for(i := len st.bg - 1; i >= 0; i--)
 		if(st.bg[i].img != nil)

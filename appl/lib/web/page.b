@@ -352,6 +352,11 @@ loadsheets(p: ref Pg)
 			p.errors = u + ": " + err :: p.errors;
 			continue;
 		}
+		if(!d.quirks && ctype != nil && lower(mediatype(ctype)) != "text/css") {
+			# in standards mode a linked sheet must be served as text/css (HTML §4.2.4.3; content-type-000)
+			p.errors = u + ": not text/css (" + ctype + ")" :: p.errors;
+			continue;
+		}
 		p.styles.add(css->parse(html->cssdecode(data, param(ctype, "charset"), hint, d.charset)), Style->Author, u);
 	}
 	# @import, to a depth of 4
@@ -1350,6 +1355,23 @@ squash(s: string): string
 	if(len r > 0 && r[len r - 1] == ' ')
 		r = r[0:len r - 1];
 	return r;
+}
+
+# the media type of a Content-Type, without its parameters
+mediatype(ct: string): string
+{
+	e := len ct;
+	for(i := 0; i < len ct; i++)
+		if(ct[i] == ';') {
+			e = i;
+			break;
+		}
+	st := 0;
+	while(st < e && (ct[st] == ' ' || ct[st] == '\t'))
+		st++;
+	while(e > st && (ct[e-1] == ' ' || ct[e-1] == '\t'))
+		e--;
+	return ct[st:e];
 }
 
 lower(s: string): string

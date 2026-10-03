@@ -249,6 +249,7 @@ Style: module
 		hyphenchar:	string;	# hyphenate-character, auto resolved to "-" (an empty one shows nothing)
 		textjustify:	int;	# text-justify: 0 auto, 1 none, 2 inter-word, 3 inter-character
 		hangpunct:	int;	# hanging-punctuation: 1 first, 2 last, 4 force-end, 8 allow-end
+		textautospace:	int;	# text-autospace: 0 normal (ideograph-alpha and ideograph-numeric), 1 no-autospace
 
 		new:	fn(): ref St;		# initial values
 	};

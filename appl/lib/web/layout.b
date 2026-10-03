@@ -2280,10 +2280,16 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		cw = 0;
 	sh := specheight(b, cbh);
 	ch := -1;
+	ratfloor := 0;	# a height from the ratio that the content may push past (flex-aspect-ratio-040)
 	if(sh >= 0)
 		ch = clamph(b, sh, cbh) - vextra(b);
-	else if(st.height.kind == Style->Lauto && (st.minheight.kind != Style->Lauto || isscroller(b) || st.flexdir >= 2 && st.flexwrap != 0) && (rh := ratioh(b, b.w)) >= 0)
-		ch = clamph(b, rh, cbh) - vextra(b);	# from its width through its ratio: definite where the automatic minimum does not keep the content in (Sizing 4 §5.2.2, §5.3; flex-aspect-ratio-007, -040)
+	else if(st.height.kind == Style->Lauto && (rh := ratioh(b, b.w)) >= 0) {
+		# from its width through its ratio: definite (Sizing 4 §5.3;
+		# flex-aspect-ratio-007, flex-aspect-ratio-cross-size-001),
+		# the automatic minimum keeping the content in at the end
+		ch = clamph(b, rh, cbh) - vextra(b);
+		ratfloor = st.minheight.kind == Style->Lauto && !isscroller(b) && !(st.flexdir >= 2 && st.flexwrap != 0);
+	}
 	# the main and cross space; a column's main size is definite only
 	# when its height is (§9.2), the space to flex into may come from
 	# max-height as well
@@ -2772,6 +2778,16 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			h = containercross + vextra(b);
 		else
 			h = usedmain + vextra(b);
+	}
+	if(ratfloor) {
+		# the automatic minimum: no shorter than its items reach
+		for(i = 0; i < len b.kids; i++) {
+			k := b.kids[i];
+			if(isabs(k))
+				continue;
+			if((e := k.y + k.h + k.mb + b.pb + b.bb) > h)
+				h = e;
+		}
 	}
 	b.h = clamph(b, h, cbh);
 }
@@ -6848,6 +6864,11 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 	}
 	if(w < 0 && (lauto || rauto) && (sh := spech(k, st.height, cbh)) >= 0)
 		w = transferred(k, sh);
+	else if(w < 0 && (lauto || rauto) && st.height.kind == Style->Lauto && st.aspect > 0.0 && !tauto && !bauto && !truereplaced(k)) {
+		# its height from the vertical insets, its width from that through the ratio (aspect-ratio/abspos-004)
+		edges(k, cbw);
+		w = transferred(k, cbh - top - bottom - k.mt - k.mb);
+	}
 	if(w < 0 && truereplaced(k)) {
 		# its own size, whatever the insets say (§10.3.8: an inset is
 		# dropped instead); a form control is not replaced that way and stretches

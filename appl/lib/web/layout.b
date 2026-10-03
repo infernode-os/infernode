@@ -1233,7 +1233,7 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 			r.url = style->resolveurl(b.d.url, src);
 		r.text = b.d.attr(n, "alt");
 		return r;
-	Dom->Tobject =>
+	Dom->Tobject or Dom->Tembed =>
 		for(ol := objects; ol != nil; ol = tl ol) {
 			(on, kind, url) := hd ol;
 			if(on != n)
@@ -1247,8 +1247,15 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 			}
 			return r;
 		}
-		# not renderable: its contents, as an ordinary element
-	Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe or Dom->Tembed =>
+		# not renderable: its contents, as an ordinary element (an
+		# embed shows nothing then but its box)
+		if(nd.tag == Dom->Tembed) {
+			r := newbox(Kreplaced, inl, n, st);
+			r.iw = 300;
+			r.ih = 150;
+			return r;
+		}
+	Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe =>
 		r := newbox(Kreplaced, inl, n, st);
 		r.iw = 300;
 		r.ih = 150;

@@ -628,9 +628,12 @@ findobjects(p: ref Pg)
 	urls: list of (int, string);
 	for(n := 1; n < d.n; n++) {
 		nd := d.nodes[n];
-		if(nd.kind != Dom->Element || nd.tag != Dom->Tobject || nd.ns != Dom->HTML)
+		if(nd.kind != Dom->Element || nd.tag != Dom->Tobject && nd.tag != Dom->Tembed || nd.ns != Dom->HTML)
 			continue;
-		if((data := d.attr(n, "data")) == nil)
+		an := "data";
+		if(nd.tag == Dom->Tembed)
+			an = "src";	# <embed src> shows an image as <object data> does (aspect-ratio/replaced-element-018)
+		if((data := d.attr(n, an)) == nil)
 			continue;
 		urls = (n, style->resolveurl(d.url, data)) :: urls;
 	}
@@ -728,7 +731,7 @@ loadimages(p: ref Pg, root: ref Box)
 			for(sl := svgsrc; sl != nil; sl = tl sl)
 				if((hd sl).t0 == b.url) {
 					nd := p.doc.nodes[b.node];
-					svgdims(b, (hd sl).t1, nd.ns == Dom->HTML && nd.tag == Dom->Tobject);
+					svgdims(b, (hd sl).t1, nd.ns == Dom->HTML && (nd.tag == Dom->Tobject || nd.tag == Dom->Tembed));
 					break;
 				}
 		}

@@ -18,7 +18,7 @@ not by eye:
 
 | Measure | Result |
 |---|---|
-| WPT CSS reftests (18 directories, 12,642 judged) | **80.1%** (10,128 passing), from 74.0% at this session's start (the seventh), 68.5% at the sixth's, 53.8% at the fifth's, 50.0% at the fourth's and 37.8% at the first run ever; CSS2 5,511 of 5,902, css-text 1,013 of 1,382, css-grid 892 of 1,538, css-flexbox 664 of 946, css-backgrounds 523 of 604, css-tables 97 of 138 |
+| WPT CSS reftests (18 directories, 12,642 judged) | **81.0%** (10,235 passing), from 74.0% at this session's start (the seventh), 68.5% at the sixth's, 53.8% at the fifth's, 50.0% at the fourth's and 37.8% at the first run ever; CSS2 5,511 of 5,902, css-text 1,016 of 1,382, css-grid 942 of 1,538, css-flexbox 679 of 946, css-sizing 403 of 525, css-backgrounds 523 of 604, css-tables 97 of 138 |
 | Acid2 (`test.html#top`) | renders correctly; ~1,400 pixels differ from Chromium, all anti-aliasing |
 | pypi.org home page vs Chromium (scripts off) | ~7% of pixels differ, from 47.8%; layout, fonts, logo, icons match |
 | Unit tests | web_html 5, web_css 6, web_style 16, web_browser 9, web_fonts 10, bidi 3, brotli 3: all pass |
@@ -53,8 +53,24 @@ intrinsic sizes for backgrounds and replaced boxes (the whole
 `background-size/vector` directory), border-image, background-clip
 text and border-area, text-wrap: balance, the segment-break rules,
 hanging-punctuation allow-end, hanging space sequences and rtl grids,
-76.0% to 80.1%.
+atomic flex and grid item painting, intrinsic sizing keywords and
+fit-content(), and aspect ratios in flex, grid and positioned boxes,
+76.0% to 81.0%.
 
+- `5c5fac8` **Flex ratio heights definite with a content floor, inset
+  heights transferred through ratios.**  `layflex` takes `ch` from
+  `ratioh` and, under an auto min-height (`ratfloor`), raises the final
+  height to where its items reach; `layabs` transfers an inset-derived
+  height to an auto width through the ratio.
+- `c57bae5` **SVG root backgrounds, ratio heights for insets and flex
+  containers.**  readsvg's `new_canvas` paints the root's
+  `background-color`/`background`; `layabs` does not stretch an auto
+  height between insets when the box has a ratio; `packh` takes the
+  ratio height for wrapping column containers.
+- `132ae59` **Aspect-ratio heights in flex containers and grids,
+  keyword block sizes with a ratio.**  A grid item with a ratio is not
+  stretched under `align-self: normal` (Grid 2 §6.2); a keyword block
+  size of a box with a ratio is `ratioh`.
 - `14bb067` **Keyword block sizes; keyword bounds on replaced boxes.**
   `kwsize()`; layblock and laygrid clamp by the content height (`hauto`)
   for keyword min/max heights; the Kreplaced case of layblock derives
@@ -682,7 +698,7 @@ In rough order of payoff.
    - page/browser: no HTTP cache in webfs, so every navigation
      refetches.
 3. **Open regressions (tests that passed at the first run ever and fail
-   now; 49 at r55, each with a reason, 9 of them matching Chromium or a
+   now; 49 at r64, each with a reason, 9 of them matching Chromium or a
    reference that changed; 52 at r45, 53 at r37, 53 at r27, 49 at the
    end of the fourth session).**  Mostly the grid-lanes directory's
    references changing from "nothing renders" to a real layout: 8 are

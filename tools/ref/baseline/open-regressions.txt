@@ -1,5 +1,5 @@
 # Tests that passed at the first run ever (r0) and fail at the end of
-# the seventh session (r45, 76.0%), with the reason as far as known.
+# the seventh session (r64, 81.0%), with the reason as far as known.
 # Update when a run changes it.
 #
 FAIL css/CSS2/bidi-text/bidi-box-model-001.xht	a 5px column of an inline box border in a right-to-left paragraph; unexamined
@@ -11,18 +11,12 @@ FAIL css/CSS2/floats/floats-wrap-bfc-with-margin-007.tentative.html	tentative; a
 FAIL css/CSS2/generated-content/before-content-display-007.xht	an inline-table pseudo-element ending in a no-break space is a pixel wider than the flow text: fractional advances rounded once for the box, per fragment in the flow
 FAIL css/CSS2/tables/table-anonymous-objects-212.xht	unexamined (997 pixels)
 FAIL css/css-backgrounds/animations/background-color-animation-in-body.html	was a blank pass; needs animations
-FAIL css/css-backgrounds/background-size/vector/zero-height-ratio-auto-5px.html	2 pixels
-FAIL css/css-box/margin-trim/grid-inline-end.html	margin-trim is not implemented; the pass was luck (an empty grid)
 FAIL css/css-flexbox/flexbox-justify-content-horiz-003.xhtml	items wider than the container: the free space shared in fractions rounds differently from the reference's integer margins (80 pixels)
 FAIL css/css-flexbox/flexbox-justify-content-horiz-004.xhtml	as -003 (128 pixels)
 FAIL css/css-fonts/downloadable-font-in-iframe-print.html	unexamined
 FAIL css/css-fonts/variations/font-weight-metrics.html	variable-font instances (fvar/HVAR) are not implemented; the pass was luck
-FAIL css/css-grid/abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-003.html	align-self: last baseline on an absolutely positioned grid child in a vertical writing mode; baseline self-alignment of absolutes is not done
-FAIL css/css-grid/abspos/grid-abspos-staticpos-align-self-vertWM-last-baseline-004.html	same
 FAIL css/css-grid/abspos/grid-abspos-staticpos-justify-self-rtl-last-baseline-003.html	justify-self: last baseline on an absolutely positioned grid child in rtl; same
 FAIL css/css-grid/abspos/grid-abspos-staticpos-justify-self-rtl-last-baseline-004.html	same
-FAIL css/css-grid/abspos/grid-fixedpos-static-position-not-containing-block.html	a fixed child of a grid: its static position is the padding edge now, as Grid 2 §9 says for grid containers; this test wants the content edge for a container that is not the containing block; unexamined
-FAIL css/css-grid/grid-items/grid-item-margins-and-writing-modes-001.html	vertical writing modes; 2,595 pixels at half intensity
 FAIL css/css-grid/grid-lanes/alignment/row-grid-lanes-alignment-positioned-items-004.html	absolutes in row lanes with align-self and rtl; unexamined
 FAIL css/css-grid/grid-lanes/subgrid/grid-subgridded-to-grid-lanes/gap/column-subgrid-grid-gap-008.html	a subgrid's gap inside lanes: the subgridded lane fills the whole box; unexamined
 FAIL css/css-grid/grid-lanes/subgrid/grid-subgridded-to-grid-lanes/gap/row-subgrid-grid-gap-009.html	same family
@@ -45,12 +39,15 @@ FAIL css/css-grid/grid-lanes/track-sizing/auto-repeat/intrinsic-auto-repeat/row-
 FAIL css/css-grid/subgrid/line-names-007.html	repeat() names outside a subgrid's span; the reference changed when lanes and auto-fit did
 FAIL css/css-grid/subgrid/line-names-008.html	same
 FAIL css/css-grid/subgrid/orthogonal-writing-mode-005.html	subgrid and vertical writing modes
-FAIL css/css-grid/subgrid/subgrid-scroller-auto-height-padding.html	a scrolling subgrid's padding in its auto height: 802 pixels; unexamined
 FAIL css/css-tables/collapsed-border-positioned-tr-td.html	relatively positioned rows and cells in the collapsing model: 612 pixels; unexamined
 FAIL css/css-text/boundary-shaping/boundary-shaping-010.html	a ligature across an inline box edge, 184 pixels: sub-pixel rounding of the shaped run
-FAIL css/css-text/hanging-punctuation/hanging-punctuation-first-002.html	hanging-punctuation is not implemented: it passed while a leading ideographic space was dropped as a collapsible one
+FAIL css/css-text/hanging-punctuation/hanging-punctuation-first-ascii-quote.html	the reference sets its indent with script; a former blank pass before hanging-punctuation: first was done
 FAIL css/css-text/shaping/shaping-000.html	joins correctly; 374 pixels: sub-pixel rounding of the shaped run
+FAIL css/css-text/text-autospace/text-autospace-vertical-combine-001.html	vertical writing modes are not implemented; a former blank pass before text-autospace was done
+FAIL css/css-text/text-autospace/text-autospace-vertical-upright-001.html	vertical writing modes are not implemented; a former blank pass before text-autospace was done
 FAIL css/css-text/text-transform/text-transform-capitalize-035.html	capitalize after a "\a" in generated content with white-space: pre: 2,795 pixels; unexamined
 FAIL css/css-text/white-space/hanging-whitespace-003.tentative.html	tentative: trailing pre-wrap spaces before a forced break should hang conditionally
 FAIL css/css-text/white-space/tab-bidi-001.html	a combining dagesh drawn as a spacing glyph (GPOS mark positioning in a fallback font without anchors)
+FAIL css/css-text/white-space/text-wrap-balance-line-clamp-001.html	line-clamp is not implemented: the test wants clamping before balancing; a former pass by luck before text-wrap: balance was done
 FAIL css/css-text/white-space/textarea-always-preserves-spaces-001.tentative.html	tentative; a textarea is laid out as pre-wrap text now, which the test does not want
+FAIL css/css-text/word-break/auto-phrase/word-break-auto-phrase-001.html	unexamined

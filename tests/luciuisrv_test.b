@@ -41,6 +41,8 @@ LuciuisrvTest: module {
 
 SRCFILE:	con "/tests/luciuisrv_test.b";
 TESTMNT:	con "/tmp/luciuisrv_test";
+THEMEDIR:	con "/lib/lucifer/theme";
+PRIVTHEME:	con "/tmp/luciuisrv_test_theme";
 SRVPATH:	con "/dis/luciuisrv.dis";
 
 # Number of simulated app subscribers for the fan-out test. In the real
@@ -1620,6 +1622,28 @@ testAutocenterNonCurrent(t: ref T)
 teardown()
 {
 	sys->unmount(nil, TESTMNT);
+	sys->unmount(PRIVTHEME, THEMEDIR);
+}
+
+# luciuisrv persists every "theme <name>" to /lib/lucifer/theme/current,
+# and the theme tests below switch it; in a checkout that rewrote the
+# tracked file, and the last switch (halo) then shipped in whatever was
+# built from the tree next -- a bare-metal card whose desktop the harness
+# no longer recognised.  A private copy of current is bound in front of
+# the real directory first, so the server writes that one.
+privatetheme(): int
+{
+	cur := readfile(THEMEDIR + "/current");
+	if(cur == nil)
+		cur = "brimstone";
+	sys->create(PRIVTHEME, Sys->OREAD, Sys->DMDIR|8r755);
+	fd := sys->create(PRIVTHEME + "/current", Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return -1;
+	b := array of byte cur;
+	if(sys->write(fd, b, len b) != len b)
+		return -1;
+	return sys->bind(PRIVTHEME, THEMEDIR, Sys->MBEFORE);
 }
 
 # ============================================================================
@@ -1908,6 +1932,9 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 	}
+
+	if(privatetheme() < 0)
+		raise sys->sprint("fail:cannot keep the theme tests off %s/current: %r", THEMEDIR);
 
 	# Start server and create activity (must run first)
 	run("Setup", testSetup);

@@ -476,6 +476,12 @@ Typeface.ligspan(f: self ref Typeface, a, b: string): int
 	return 0;
 }
 
+Typeface.has(f: self ref Typeface, c: int): int
+{
+	(o, nil) := glyph(f, c);
+	return o != nil;
+}
+
 Typeface.width(f: self ref Typeface, s: string): real
 {
 	(nil, nil, nil, nil, w) := positions(f, shape(f, s));

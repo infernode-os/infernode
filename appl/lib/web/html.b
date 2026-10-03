@@ -170,7 +170,6 @@ parsexml(data: array of byte, cs, url: string): ref Doc
 	d := Doc.new(url);
 	d.xml = 1;
 	d.charset = cs;
-	d.lang = metalang(d);
 	stack := array[64] of int;
 	nss := array[64] of list of (string, string);	# prefix bindings in scope
 	stack[0] = 1;
@@ -309,6 +308,7 @@ parsexml(data: array of byte, cs, url: string): ref Doc
 			}
 		}
 	}
+	d.lang = metalang(d);
 	return d;
 }
 

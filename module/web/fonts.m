@@ -27,6 +27,7 @@ Fonts: module
 		nokern:	int;		# kerning off
 
 		width:	fn(f: self ref Typeface, s: string): real;
+		has:	fn(f: self ref Typeface, c: int): int;	# a glyph for c, in it or its fallbacks (not the bitmap fallback)
 		ligspan:	fn(f: self ref Typeface, a, b: string): int;	# how many characters of b a ligature begun in a takes
 		xheight:	fn(f: self ref Typeface): real;
 		kernpair:	fn(f: self ref Typeface, a, b: int): real;	# px between the characters a and b	# px: the top of "x" (the ex unit)

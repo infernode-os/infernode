@@ -245,6 +245,9 @@ Style: module
 		wst:	int;		# word-space-transform: 0 none, 1 space, 2 ideographic-space (what a zero-width space and a wbr become)
 		cliprect:	array of Len;	# clip: rect(top, right, bottom, left) on an absolutely positioned box (Lauto: that edge); nil for auto
 		margintrim:	int;	# margin-trim: 1 block-start, 2 block-end, 4 inline-start, 8 inline-end
+		hyphens:	int;		# hyphens: 0 none, 1 manual, 2 auto (as manual: no dictionary yet)
+		hyphenchar:	string;	# hyphenate-character, auto resolved to "-" (an empty one shows nothing)
+		textjustify:	int;	# text-justify: 0 auto, 1 none, 2 inter-word, 3 inter-character
 
 		new:	fn(): ref St;		# initial values
 	};

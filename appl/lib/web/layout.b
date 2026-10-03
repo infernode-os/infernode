@@ -254,8 +254,8 @@ firstlinest(b: ref Box): ref St
 	for(p := b; p != nil; p = p.parent) {
 		if(p.fl != nil)
 			return p.fl;
-		if(p.inl || isoof(p) || p.parent == nil || !firstinflow(p))
-			return nil;
+		if(p.inl || isoof(p) || p.parent == nil || p.parent.kind != Kblock && p.parent.kind != Kcell || !firstinflow(p))
+			return nil;	# (not into a flex, grid or table container: grid-first-line-002)
 	}
 	return nil;
 }
@@ -7764,7 +7764,7 @@ lbbreak(a, b: int): int
 	Bidi->LBOP or Bidi->LBBB or Bidi->LBZWJ or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU or Bidi->LBCM =>
 		return 0;
 	Bidi->LBBA =>
-		return a != 16rAD;	# break after (LB31), but a soft hyphen's break is not taken yet
+		return 1;	# break after (LB31), a soft hyphen's included (text() keeps it as an item)
 	Bidi->LBJL =>
 		if(cb == Bidi->LBJL || cb == Bidi->LBJV || cb == Bidi->LBH2 || cb == Bidi->LBH3)
 			return 0;
@@ -8029,8 +8029,8 @@ text(f: ref Fl, b: ref Box)
 		# a word: up to the next space or break opportunity
 		st0 := i;
 		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && !hangsp(s[i])) {
-			if(i > st0 && lbbreak(s[lbbase(s, i-1, st0)], s[i]))
-				break;
+			if(i > st0 && (s[i-1] != 16rAD || st.hyphens != 0) && lbbreak(s[lbbase(s, i-1, st0)], s[i]))
+				break;	# (a soft hyphen is nothing under hyphens: none)
 			i++;
 			if(s[i-1] == '-' && i < len s && !isspace(s[i]) && i - st0 > 2)
 				break;	# break after a hyphen inside a word
@@ -8039,8 +8039,10 @@ text(f: ref Fl, b: ref Box)
 			i++;	# a control character no case above takes (form feed): dropped
 			continue;
 		}
-		word := noshy(s[st0:i]);	# soft hyphens show nothing (no break there yet)
+		word := noshy(s[st0:i]);	# soft hyphens show nothing unless a line ends there
 		if(word == "") {
+			if(st.hyphens == 0)
+				continue;
 			# nothing but soft hyphens: a break opportunity that shows
 			# nothing and, unlike a zero-width space, does not come
 			# between the letters around it for shaping
@@ -8065,6 +8067,8 @@ text(f: ref Fl, b: ref Box)
 		} else
 			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 		f.space = 0;
+		if(s[i-1] == 16rAD && st.hyphens != 0)	# the soft hyphen it ended with: a break opportunity whose hyphen shows only at a line's end
+			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0));
 	}
 }
 
@@ -8347,6 +8351,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				continue;
 			}
 			if(ln.content && ln.x + segwidth(il) > real ln.avail + 0.5 && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
+				hyphenate(ln);
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -8504,11 +8509,54 @@ canbreak(ln: ref Ln, it: ref Item): int
 			}
 			return 1;
 		}
-		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || hangsep(f.text))
-			return 1;	# a space, a zero-width one, a soft hyphen
+		if(f.kind == Ftext && f.text == "\u00AD")	# a soft hyphen: if its hyphen has room, or nothing else on the line could break (shy-styling-001)
+			return f.face == nil || ln.x + f.face.width(hyphenchar(f)) <= real ln.avail + 0.5 || !earlierbreak(ln, f);
+		if(f.kind != Ftext || f.text == "" || f.text == " " || isblankrun(f.text) || hangsep(f.text))
+			return 1;	# a space, a zero-width one
 		return wordgap(f.box, f.text, it, 0);
 	}
 	return 1;
+}
+
+# A soft hyphen at the end of a line shows the hyphenate character
+# (Text 4 §5.4; hyphens-manual-011).
+hyphenate(ln: ref Ln)
+{
+	for(fl := ln.frags; fl != nil; fl = tl fl) {
+		f := hd fl;
+		if(f.kind == Fspan)
+			continue;
+		if(f.kind == Ftext && f.text == "\u00AD" && f.face != nil) {
+			f.text = hyphenchar(f);
+			f.w = ir(f.face.width(f.text));
+			ln.x += real f.w;
+		}
+		return;
+	}
+}
+
+# the hyphenate character as drawn at the soft hyphen fragment f:
+# the hyphen (U+2010) only where the font has it, else hyphen-minus
+hyphenchar(f: ref Frag): string
+{
+	t := f.box.st.hyphenchar;
+	if(t == "\u2010" && f.face != nil && !f.face.has(16r2010))
+		t = "-";
+	return t;
+}
+
+# is there a break opportunity on the line already (a space, an
+# ideographic one, a zero-width one), before the fragment g?
+earlierbreak(ln: ref Ln, g: ref Frag): int
+{
+	for(fl := ln.frags; fl != nil; fl = tl fl) {
+		f := hd fl;
+		if(f == g || f.kind != Ftext)
+			continue;
+		if(f.text == " " || f.text == "" || hangsep(f.text) || f.text == "\u00AD")
+			return 1;
+	}
+	return 0;
 }
 
 # Is the item preceded on the line by a collapsible space whose boundary
@@ -8874,6 +8922,8 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		else if(align == Style->Ajustify)
 			align = Style->Astart;
 	}
+	if(align == Style->Ajustify && b.st.textjustify == 1)
+		align = Style->Astart;	# text-justify: none (text-justify-none-001)
 	off := 0.0;
 	if(ln.para % 2 == 1 && align == Style->Aend)
 		align = Style->Aleft;	# the end of a right-to-left line is its left
@@ -11248,9 +11298,11 @@ paintlines(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 					paintspan(dst, sp[k], o);
 		}
 		ofl := linefl;
+		obase := lineflbase;
 		for(k = 0; k < len ln.frags; k++) {
 			f := ln.frags[k];
 			linefl = ln.fl;
+			lineflbase = b.st.color;
 			case f.kind {
 			Ftext =>
 				if(f.box.st.visibility == Style->Vvisible)
@@ -11261,6 +11313,7 @@ paintlines(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 			}
 		}
 		linefl = ofl;
+		lineflbase = obase;
 	}
 }
 
@@ -11297,11 +11350,12 @@ paintspan(dst: ref Image, f: ref Frag, o: Point)
 }
 
 linefl: ref St;	# the ::first-line style of the line being painted, if any
+lineflbase: int;	# and the block's own colour: text of another colour has its own (display-contents-first-line-002)
 
 painttext(dst: ref Image, f: ref Frag, o: Point)
 {
 	st := f.box.st;
-	if(linefl != nil && linefl.color != st.color) {
+	if(linefl != nil && linefl.color != st.color && st.color == lineflbase) {
 		# the first line's colour (its other properties are not honoured yet)
 		st = ref *st;
 		st.color = linefl.color;

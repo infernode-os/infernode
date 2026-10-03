@@ -895,9 +895,13 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"defined" or "valid" or "in-range" or "user-valid" =>
 		return 1;
 	"lang" =>
-		for(p := n; p != 0; p = parentel(d, p))
-			if((l := d.attr(p, "lang")) != nil)
+		for(p := n; p != 0; p = parentel(d, p)) {
+			l := d.attr(p, "lang");
+			if(l == nil)
+				l = d.attr(p, "xml:lang");	# XHTML
+			if(l != nil)
 				return langmatch(lower(l), x.val);
+		}
 		return 0;
 	"dir" =>
 		return lower(x.val) == "ltr";
@@ -921,7 +925,7 @@ langmatch(tag, ranges: string): int
 		if(r == "")
 			continue;
 		if(r != "*" && !(r[0] >= 'a' && r[0] <= 'z'))
-			continue;	# not a language range (BCP 47 starts with a letter)
+			return 0;	# not a language range (BCP 47 starts with a letter): the selector is invalid
 		if(tag == "")
 			continue;	# lang="": no language, matched by nothing
 		rs := subtags(r);
@@ -1839,7 +1843,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil);
 }
 
 nextsid := 1;
@@ -4175,6 +4179,37 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.z = int n;
 			st.zauto = 0;
 		}
+	"clip" =>
+		# auto | rect(<top>, <right>, <bottom>, <left>), each a length or
+		# auto, commas or spaces between (CSS 2.2 §11.1.2)
+		if(id == "auto") {
+			st.cliprect = nil;
+			return 1;
+		}
+		x := nows(v);
+		if(len x != 1 || x[0].kind != Kfunction || x[0].s != "rect")
+			return 0;
+		a := array[4] of Len;
+		k := 0;
+		args := nows(x[0].kids);
+		for(i := 0; i < len args; i++) {
+			if(args[i].kind == Kcomma)
+				continue;
+			if(k >= 4)
+				return 0;
+			if(args[i].kind == Kident && lower(args[i].s) == "auto")
+				a[k] = kw(Lauto);
+			else {
+				(ok, l) := length(args[i:i+1], ctx);
+				if(!ok || l.kind != Lpx || l.pct != 0.0)
+					return 0;
+				a[k] = l;
+			}
+			k++;
+		}
+		if(k != 4)
+			return 0;
+		st.cliprect = a;
 	"word-space-transform" =>
 		# none | [ space | ideographic-space ] && auto-phrase? (Text 4 §8.3)
 		x := nows(v);
@@ -4550,6 +4585,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"right" or "-webkit-right" => st.align = Aright;
 		"center" or "-webkit-center" or "-moz-center" or "-internal-center" => st.align = Acenter;
 		"justify" => st.align = Ajustify;
+		"justify-all" =>
+			st.align = Ajustify;
+			st.alignlast = Ajustify;	# the last line too (Text 3 §7.1)
 		"match-parent" =>
 			if(parent != nil)
 				st.align = parent.align;
@@ -5479,6 +5517,7 @@ copyprop(d, s: ref St, nm: string)
 	"overflow-x" => d.overflowx = s.overflowx;
 	"contain" => d.contain = s.contain;
 	"word-space-transform" => d.wst = s.wst;
+	"clip" => d.cliprect = s.cliprect;
 	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-inline-size" or
 	"contain-intrinsic-height" or "contain-intrinsic-block-size" =>
 		d.cisw = s.cisw;

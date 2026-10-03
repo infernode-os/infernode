@@ -41,8 +41,62 @@ edges, shaping, the regressions each WPT run turned up, and the largest
 failing WPT directory (`css-grid/grid-lanes`, 891 tests).  The fifth
 session went down the failing families by size: lists and counters,
 backgrounds, aspect-ratio, positioning, break-spaces, text-transform,
-tables.
+tables.  The sixth went on down them: glyph hinting, stylesheet
+encodings, pseudo-element display types, the break-opportunity model
+between inline boxes, percentage heights in intrinsic sizes, floats
+beside tall lines, and a tail of small properties.
 
+- `b088614` **:lang() ranges, word-space-transform, wbr, segment breaks,
+  system colours.**  Extended filtering for `:lang()` (`langmatch`:
+  quoted, `*`, lists, implicit subtags); `word-space-transform`
+  (`St.wst`, `wstpass` over the items, with the line-edge exception);
+  `<wbr>` is a zero-width space; a segment break between East Asian
+  wide characters is removed (`eaw`); an atomic inline breaks like an
+  ideograph (`atomicbreak`); the deprecated system colours as what they
+  equal; `var()` in `@supports`; `inherit()` copies `lbmode` and `wst`.
+- `08973a6` **Lines clear floats for their whole height, header row
+  order, break-spaces fixes.**  `tallband`/`shiftline` for a tall atomic
+  beside floats; a float after a trailing space may have its room;
+  `tgrid`'s head list was reversed once too often; `word-break:
+  break-all` no longer cancels `line-break: anywhere`; an ideographic
+  space wraps as a space under break-spaces; transferred constraints
+  only for auto widths; the quirks height not through a cell's child.
+- `c0be16f` **Ratio constraints, flex column free space, overflow-wrap
+  levels.**  `transferw` (min/max-height through the ratio), the height
+  as used for a transferred width, `stretched` flex items see the line
+  height, `packh` for column-wrap intrinsic widths, the quirks
+  percentage height, a column flex container's auto main size clamped
+  by min/max-height, free space shared in reals, `left`/`right`
+  physical in rows; `St.anywhere` 1 (break-word) or 2 (anywhere,
+  counted for min-content); loose breaks before U+2010/2013.
+- `a2099de` **Percentage heights in intrinsic sizes, fit-content(),
+  contain-intrinsic-size.**  `pcth`/`pcthbox`/`definiteh` (the definite
+  height a measurement's percentages see; the intrinsic cache keys on
+  it), `replacedsize` given the containing block height at layout too,
+  canvas `width`/`height` as natural size not hints; `fit-content(<lp>)`
+  (`Len(Lfit, px, pct)`); `contain-intrinsic-size` (`St.cisw/cish`,
+  size containment in `intrinsic1` and `layblock`); `wordgap` shared by
+  layout and `inlineintrinsic`, break-all through `lbbreakall`,
+  `segwidth` to the farthest edge, the 〜 rule for ja/zh (`lbcjk`).
+- `acee14f` **Stylesheet encodings, pseudo-element display types,
+  segment-wise wrapping.**  `html->cssdecode` (BOM, transport,
+  `@charset`, link charset, `Doc.charset`; UTF-16 both orders in
+  `utf16`), the runner serves `.headers` sidecars; `boxkind` shared by
+  elements and pseudo-elements (table parts, list items with markers,
+  `content: url()` as a replaced box, `fixkids` on generated kids);
+  `isrowgroup`/`iscolumn` never true of a text box; `canbreak` and
+  `segwidth` (a word may break from the one before only where UAX #14
+  allows, inline edges and floats between them notwithstanding);
+  `St.lbmode`; soft hyphens as transparent opportunities; an unmatched
+  close-quote shows nothing; `attr()` exact in XML; negative border
+  widths invalidate the shorthand; armenian and georgian styles.
+- `21cfb7b` **Light hinting, collapsed table widths, quotes, nowrap,
+  break opportunities.**  `rasterize` snaps a glyph's top and bottom to
+  pixel rows (65 one-row failures); a collapsed table's width is the
+  grid's, `edges()` computing the halves up front; `quotes` and
+  `qdepth`; `font-size: 0` keeps forced breaks and tab-size lengths;
+  `white-space: nowrap` as the shorthand collapses; a pseudo-element
+  has a counter identity of its own (`parentof`, ids below zero).
 - `d01cb13` **Counter scopes as Lists 3 has them, reversed counters,
   row group order.**  A new counter replaces one the element or a
   previous sibling instantiated and nests inside an ancestor's
@@ -482,6 +536,11 @@ In rough order of payoff.
 | `appl/lib/web/layout.b` (canvas, frames) | `istag`, `hasimage`, `paintshadows`, `Box.doc` set by `build`, read by `lay` and `paint` |
 | `appl/lib/web/layout.b` (aspect-ratio) | `ratiow`/`ratioh`, `transferred`/`noratio`, `isscroller`, `hasratio`, `sizew(b, cbw, cbh)` |
 | `appl/lib/web/layout.b` (lines) | `tabw`, `removefrag`, `Ln.below`, `lbbase`, `inbox`; hanging `　` in `endline`; `transform(s, t, first, lang)`, `langof` |
+| `appl/lib/web/layout.b` (sixth session) | `boxkind`, `parentof`, `cssdecode` callers, `canbreak`/`segwidth`/`wordgap`/`atomicbreak`, `lbmode`/`lbcjk`/`lbbreakall`, `pcth`/`pcthbox`/`definiteh`, `transferw`, `stretched`, `packh`, `tallband`/`shiftline`, `wstpass`, `eaw`, `armenian`/`georgian` |
+| `appl/lib/web/html.b`, `module/web/html.m`, `module/web/dom.m` | `cssdecode`, `atcharset`, `utf16`, `Doc.charset` |
+| `appl/lib/web/style.b` (sixth session) | `langmatch`/`subtags`, `word-space-transform`, `contain-intrinsic-size`, `fit-content()`, `line-break` modes, `overflow-wrap` levels, deprecated system colours, `var()` in `@supports` |
+| `appl/lib/outlinefont.b` (`rasterize`) | vertical edge snapping |
+| `tools/ref/wptrun.py` | serves wptserve `.headers` sidecars |
 | `appl/lib/web/layout.b` (tables) | `collapsed`/`fight`/`stylerank`, `bhalf`/`widest`, `cellhalves`/`tablehalves`, `paintcollapsed`, `placecolumns`/`colspan`/`colbox`, `paintcolumns`, `tableabs`, `Tgrid.colpct`/`tb`, `blankrun(l, pre)` |
 | `appl/lib/bidi.b`, `lib/bidi/linebreak`, `lib/bidi/case`, `lib/bidi/casex` | `lbclass` (UAX #14), `toupper`/`tolower`/`totitle` (`special`, `simple`, `turkic`); generators `tools/bidi/linebreak.py`, `tools/bidi/case.py` |
 | `appl/lib/web/style.b` (this session) | `contain` (`CT` bits), `aspectauto`, `line-break`, `text-transform: full-width` (`TTfull`), display: none pseudo-elements not generated, the list-style shorthand's none |
@@ -495,6 +554,35 @@ In rough order of payoff.
 
 ## Things that bit, so they need not again
 
+- **`inherit()` in style.b copies inherited properties field by
+  field.**  Adding an inherited property means adding it there as well
+  as to `isinherited` and `copyprop`, or it inherits through the
+  `inherit` keyword only (`lbmode` and `wst` were missed for a while).
+- **Two properties sharing one field fight.**  `line-break: anywhere`
+  and `word-break: break-all` both lived in `St.breakall`; the second
+  declared wiped the first.  Give each property its own field, or make
+  each setter preserve the other's state.
+- **A text box carries its parent's style, display included.**  Any
+  test of `k.st.display` on a child (`isrowgroup`, `iscolumn`) must
+  exclude `Ktext`, or a row group holding text directly wraps the text
+  in a table of its own and collapses to nothing.
+- **A pseudo-element needs an identity of its own in counters**:
+  numbered below zero (`-(2n)`, `-(2n+1)`), parent `n`, so that
+  sibling-replacement and nesting rules see it as the element's first
+  or last child.
+- **`emu` start-up flakes can make a render differ wholesale** (48,457
+  pixels on a test that differs by 128).  Re-render before chasing a
+  regression that looks too large for the change.
+- **Chromium fails some of these tests too** (`counters-scope-004`,
+  `content-counter-006`, `counters-010`, `root-box-003`, `font-size-121`,
+  `border-width-011`, `content-081`, `float-nowrap-8`, `numbers-units-015`
+  needs Ahem's `ex`).  A "regression" that matches Chromium's rendering
+  is the right behaviour; check with the Chromium binary under
+  `/opt/pw-browsers` before undoing it.
+- **Glyph edges smeared over two rows** were behind 65 one-row
+  failures: the rasteriser now snaps a glyph's top and bottom to pixel
+  rows (light hinting).  A reference that puts an Ahem glyph beside a
+  sized box depends on this.
 - **Limbo: `t := ref T;` with no initialiser does not zero the adt.**
   Integer fields come out as -1 (the nil word), and the JIT and the
   interpreter differ in which; `newbox` written that way lost a grid

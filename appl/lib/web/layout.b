@@ -1604,8 +1604,19 @@ transferw(b: ref Box, w, cbh: int): int
 	st := b.st;
 	if(st.aspect <= 0.0 || b.kind == Kreplaced)
 		return w;
-	if(st.maxheight.kind != Style->Lnone && (mh := spech(b, st.maxheight, cbh)) >= 0 && (mw := ratiow(b, mh)) >= 0 && w > mw)
-		w = mw;
+	if(st.maxheight.kind != Style->Lnone && (mh := spech(b, st.maxheight, cbh)) >= 0 && (mw := ratiow(b, mh)) >= 0 && w > mw) {
+		if(st.minwidth.kind == Style->Lauto && !isscroller(b)) {
+			# not below the automatic minimum, the content's (Sizing 4 §5.2.2)
+			noratio = b;
+			(mn, nil) := intrinsic1(b);
+			noratio = nil;
+			mn -= mgs(b);
+			if(mn > mw)
+				mw = mn;
+		}
+		if(w > mw)
+			w = mw;
+	}
 	if((nh := spech(b, st.minheight, cbh)) > 0 && (nw := ratiow(b, nh)) >= 0 && w < nw)
 		w = nw;
 	return w;
@@ -1827,6 +1838,10 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	cy := oy + b.bt + b.pt;
 	passtop := !bfc && b.bt == 0 && b.pt == 0;
 	passbot := !bfc && b.bb == 0 && b.pb == 0 && sh < 0;
+	mnh := b.st.minheight;
+	mhhold := passbot && !(mnh.kind == Style->Lauto || mnh.kind == Style->Lpx && mnh.px == 0.0 && mnh.pct == 0.0);
+	if(mhhold)
+		passbot = 0;	# a min-height stops the last child's margin collapsing through (§8.3.1)
 	top := mval(b.mt);
 	bot := mval(b.mb);
 	contenth := 0;
@@ -1976,8 +1991,8 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			}
 		} else if(passbot)
 			bot = collapse(bot, pending);
-		else
-			cury += msum(pending);
+		else if(!mhhold)
+			cury += msum(pending);	# (held by min-height, the margin neither escapes nor adds to the content: as browsers have it, margin-collapse-min-height-001)
 		contenth = cury;
 	}
 	if(bfc) {
@@ -5192,6 +5207,8 @@ colwidth(k: ref Box): int
 	w := -1;
 	if(st.width.kind == Style->Lpx && st.width.pct == 0.0)
 		w = ir(st.width.px);
+	if(st.maxwidth.kind == Style->Lpx && st.maxwidth.pct == 0.0 && w >= 0 && ir(st.maxwidth.px) < w)
+		w = ir(st.maxwidth.px);
 	if(st.minwidth.kind == Style->Lpx && st.minwidth.pct == 0.0 && ir(st.minwidth.px) > w)
 		w = ir(st.minwidth.px);
 	return w;
@@ -5920,8 +5937,10 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 		if(c.box.h > have)
 			rowh[c.r + c.rs - 1] += c.box.h - have;
 	}
-	# a specified table height grows the rows
+	# a specified table height, within its min and max, grows the rows
 	sh := specheight(b, cbh);
+	if(sh >= 0)
+		sh = clamph(b, sh, cbh);
 	if(sh >= 0) {
 		gh := sy * (nr + 1);
 		for(r = 0; r < nr; r++)
@@ -6579,6 +6598,20 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		h = res(st.height, cbh);
 		if(st.borderbox)
 			h -= vextra(b);
+	}
+	# a specified dimension is used as its min and max constrain it,
+	# and the other follows the ratio from that (CSS 2.2 §10.4)
+	if(h >= 0) {
+		if((mh := spech(b, st.maxheight, cbh)) >= 0 && h > mh - vextra(b))
+			h = mh - vextra(b);
+		if((nh := spech(b, st.minheight, cbh)) >= 0 && h < nh - vextra(b))
+			h = nh - vextra(b);
+	}
+	if(w >= 0) {
+		if(st.maxwidth.kind != Style->Lnone && (mw := specw(b, st.maxwidth, cbw)) >= 0 && w > mw - hextra(b))
+			w = mw - hextra(b);
+		if((nw := specw(b, st.minwidth, cbw)) >= 0 && w < nw - hextra(b))
+			w = nw - hextra(b);
 	}
 	ratio := aspect(b, iw, ih);
 	if(w < 0 && h < 0) {
@@ -7428,21 +7461,34 @@ lbbreak(a, b: int): int
 	}
 	if(lbmode == 2 && cb == Bidi->LBCJ)
 		cb = Bidi->LBNS;	# strict: no break before small kana and the prolonged sound mark
+	# line-break: loose in Chinese and Japanese (Text 4 §5.3) also
+	# breaks before non-starters (iteration marks, centred punctuation,
+	# small kana), before postfixes and after prefixes
+	loosecjk := lbmode == 1 && lbcjk;
 	case cb {
 	Bidi->LBNS =>
 		if(lbmode != 2 && lbcjk && (b == 16r301C || b == 16r30A0))
 			break;	# normal and loose, in Chinese and Japanese: before 〜 and ゠
+		if(loosecjk)
+			break;
 		return 0;
 	Bidi->LBBA =>
 		if(lbmode == 1 && (b == 16r2010 || b == 16r2013))
 			break;	# loose: before a hyphen and an en dash
 		return 0;
-	Bidi->LBCL or Bidi->LBCP or Bidi->LBEX or Bidi->LBIS or Bidi->LBSY or
-	Bidi->LBHY or Bidi->LBCM or Bidi->LBZWJ or Bidi->LBIN or Bidi->LBPO or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU =>
+	Bidi->LBEX or Bidi->LBPO =>
+		if(loosecjk)
+			break;
+		return 0;
+	Bidi->LBCL or Bidi->LBCP or Bidi->LBIS or Bidi->LBSY or
+	Bidi->LBHY or Bidi->LBCM or Bidi->LBZWJ or Bidi->LBIN or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU =>
 		return 0;
 	}
 	case ca {
-	Bidi->LBOP or Bidi->LBBB or Bidi->LBZWJ or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU or Bidi->LBCM or Bidi->LBPR =>
+	Bidi->LBPR =>
+		if(!loosecjk)
+			return 0;
+	Bidi->LBOP or Bidi->LBBB or Bidi->LBZWJ or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU or Bidi->LBCM =>
 		return 0;
 	Bidi->LBBA =>
 		return a != 16rAD;	# break after (LB31), but a soft hyphen's break is not taken yet
@@ -7536,9 +7582,13 @@ langof(n: int): string
 {
 	if(curdoc == nil)
 		return nil;
-	for(p := n; p != 0; p = curdoc.nodes[p].parent)
-		if((l := curdoc.attr(p, "lang")) != nil)
+	for(p := n; p != 0; p = curdoc.nodes[p].parent) {
+		l := curdoc.attr(p, "lang");
+		if(l == nil)
+			l = curdoc.attr(p, "xml:lang");
+		if(l != nil)
 			return lower(l);
+	}
 	return nil;
 }
 
@@ -7968,7 +8018,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			w := k.ml + k.w + k.mr;
 			ah := k.mt + k.h + k.mb;
 			tallband(f, ln, ah);
-			if(ln.content && ln.x + real w > real ln.avail + 0.01 && atomicbreak(ln))  {
+			if(ln.content && ln.x + real w > real ln.avail + 0.01 && atomicbreak(ln, k))  {
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;
 				ln = newline(f, ln, opened);
@@ -8082,12 +8132,17 @@ canbreak(ln: ref Ln, it: ref Item): int
 		if(f.kind == Fspan || f.kind == Ftext && f.box != nil && f.box.kind != Ktext)
 			continue;	# inline box edges, the marks of absolutes, an outside marker
 		if(f.kind == Fatomic) {
-			# an atomic inline breaks like an ideograph (Text 3 §5.1): not
-			# before a glue or a closing character
-			if(len it.text == 0)
+			# after an atomic inline, as after a contingent break (UAX
+			# #14 LB20; line-breaking-atomic-002, -009), unless what
+			# follows attaches to it or glues: a mark, a joiner, a word
+			# joiner, a glue character other than a no-break space
+			if(len it.text == 0 || it.text[0] == 16rA0 || bidi == nil)
 				return 1;
-			lbmode = it.box.st.lbmode;
-			return lbbreak(16r4E00, it.text[0]);
+			case bidi->lbclass(it.text[0]) {
+			Bidi->LBCM or Bidi->LBZWJ or Bidi->LBWJ or Bidi->LBGL =>
+				return 0;
+			}
+			return 1;
 		}
 		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
 			return 1;	# a space, a zero-width one, a soft hyphen
@@ -8099,7 +8154,7 @@ canbreak(ln: ref Ln, it: ref Item): int
 # May the line break before an atomic inline?  It breaks like an
 # ideograph: not after a glue character such as a no-break space, nor
 # after an opening one (Text 3 §5.1, UAX #14).
-atomicbreak(ln: ref Ln): int
+atomicbreak(ln: ref Ln, k: ref Box): int
 {
 	for(fl := ln.frags; fl != nil; fl = tl fl) {
 		f := hd fl;
@@ -8107,12 +8162,34 @@ atomicbreak(ln: ref Ln): int
 			continue;
 		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
 			return 1;
-		if(f.box.st.whitespace == Style->Wnowrap || f.box.st.whitespace == Style->Wpre)
+		if(nowrapbetween(f.box, k))
 			return 0;
-		lbmode = f.box.st.lbmode;
-		return lbbreak(f.text[len f.text - 1], 16r4E00);
+		c := f.text[len f.text - 1];
+		if(bidi != nil && bidi->lbclass(c) == Bidi->LBCM)
+			return 0;	# a combining mark holds what follows to its base (line-breaking-atomic-016)
+		if(c == 16rA0)
+			return 1;	# a no-break space beside an atomic inline breaks, as browsers have it (line-breaking-atomic-001)
+		if(bidi == nil)
+			return 1;
+		case bidi->lbclass(c) {
+		Bidi->LBGL or Bidi->LBWJ or Bidi->LBZWJ or Bidi->LBOP or Bidi->LBBB or Bidi->LBQU =>
+			return 0;	# glue, joiners, openers and quotes hold it (UAX #14 LB12, LB14, LB19)
+		}
+		return 1;
 	}
 	return 1;
+}
+
+# Is the boundary between the boxes a and b inside nowrap or pre text?
+# The white-space of their nearest common ancestor decides (Text 3
+# §4.1.1), not either box's own.
+nowrapbetween(a, b: ref Box): int
+{
+	for(p := a; p != nil; p = p.parent)
+		for(q := b; q != nil; q = q.parent)
+			if(p == q)
+				return p.st.whitespace == Style->Wnowrap || p.st.whitespace == Style->Wpre;
+	return 0;
 }
 
 # May a line break between the word ptext of the text box pbox and the
@@ -8128,8 +8205,7 @@ wordgap(pbox: ref Box, ptext: string, it: ref Item, min: int): int
 		return 1;
 	if(len ptext == 0 || len it.text == 0)
 		return 1;
-	if(pbox.st.whitespace == Style->Wnowrap || pbox.st.whitespace == Style->Wpre ||
-	   it.box.st.whitespace == Style->Wnowrap || it.box.st.whitespace == Style->Wpre)
+	if(nowrapbetween(pbox, it.box))
 		return 0;
 	if(it.box.st.breakall == 2 || pbox.st.breakall == 2)
 		return 1;	# line-break: anywhere
@@ -8413,6 +8489,8 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	if(forced && align == Style->Ajustify)
 		align = b.st.alignlast;
 	off := 0.0;
+	if(ln.para % 2 == 1 && align == Style->Aend)
+		align = Style->Aleft;	# the end of a right-to-left line is its left
 	case align {
 	Style->Aright or Style->Aend =>
 		off = extra;
@@ -8435,7 +8513,7 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			} else if(f.text == " " && f.w > 0 && !ishanging(f, hanging))
 				nsp++;
 		}
-		if(!forced && nsp > 0 && extra > 0.0) {
+		if(nsp > 0 && extra > 0.0) {	# (a last line is here only when text-align-last says justify)
 			per := extra / real nsp;
 			acc := 0.0;
 			for(i = from; i < len frags; i++) {
@@ -9402,8 +9480,14 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	layers: list of ref Lyr;
 	if(isctx(b))
 		layers = sortlayers(collectlayers(b, r.min, noclip, nil));
-	if(st.visibility == Style->Vvisible)
+	if(st.visibility == Style->Vvisible && rectok(clip)) {
+		# its own background and borders within what clips it too
+		# (an overflow-clipping ancestor, its clip property)
+		oclip := dst.clipr;
+		dst.clipr = intersect(oclip, clip);
 		paintself(dst, b, r, canvasbg);
+		dst.clipr = oclip;
+	}
 	inner := innerclip(b, r, clip);
 	for(l := layers; l != nil; l = tl l)
 		if((hd l).z < 0)
@@ -9546,7 +9630,36 @@ max(a, b: int): int
 layerclip(inner: Rect, l: ref Lyr): Rect
 {
 	(c, nil) := inner.clip(l.clip);
+	b := l.box;
+	cr := b.st.cliprect;
+	if(cr != nil && (b.st.position == Style->Pabsolute || b.st.position == Style->Pfixed)) {
+		# clip: rect(top, right, bottom, left): offsets from the border
+		# box's top and left edges, auto being that edge (CSS 2.2 §11.1.2)
+		x := l.o.x + b.x;
+		y := l.o.y + b.y;
+		r := Rect((x, y), (x + b.w, y + b.h));
+		if(cr[0].kind != Style->Lauto)
+			r.min.y = y + ir(cr[0].px);
+		if(cr[1].kind != Style->Lauto)
+			r.max.x = x + ir(cr[1].px);
+		if(cr[2].kind != Style->Lauto)
+			r.max.y = y + ir(cr[2].px);
+		if(cr[3].kind != Style->Lauto)
+			r.min.x = x + ir(cr[3].px);
+		c = intersect(c, r);
+	}
 	return c;
+}
+
+# the intersection of two rectangles, empty (max at min) when they miss
+intersect(a, b: Rect): Rect
+{
+	r := Rect((max(a.min.x, b.min.x), max(a.min.y, b.min.y)), (min(a.max.x, b.max.x), min(a.max.y, b.max.y)));
+	if(r.max.x < r.min.x)
+		r.max.x = r.min.x;
+	if(r.max.y < r.min.y)
+		r.max.y = r.min.y;
+	return r;
 }
 
 innerclip(b: ref Box, r, clip: Rect): Rect

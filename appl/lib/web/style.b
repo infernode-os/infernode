@@ -5301,7 +5301,7 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"break-all" =>
 			if(st.breakall != 2)
 				st.breakall = 1;	# anywhere already breaks everywhere break-all does
-		"keep-all" => st.keepall = 1;
+		"keep-all" or "auto-phrase" => st.keepall = 1;	# auto-phrase: as keep-all, there being no phrase segmenter (word-break-auto-phrase-001)
 		"break-word" => st.anywhere = 2;	# as overflow-wrap: anywhere (Text 4 §5.2)
 		* => return 0;
 		}

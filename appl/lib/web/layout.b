@@ -2373,6 +2373,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		fi.minm = real minm;
 		if(mxv.kind != Style->Lnone)
 			fi.maxm = real mainsize(k, mxv, row, maindef);
+		if(mnv.kind == Style->Lauto && fi.maxm >= 0.0 && fi.minm > fi.maxm)
+			fi.minm = fi.maxm;	# the automatic minimum is clamped by a definite maximum (§4.5; auto-margins-002)
 		fi.hyp = clampr(fi.base, fi.minm, fi.maxm);
 	}
 
@@ -9206,7 +9208,9 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 			while(!ln.content && ln.x + it.w > real ln.avail + 0.01 && movedown(f, ln))
 				;
-			if(!ln.content && ln.x + it.w > real ln.avail && it.box.st.anywhere && len it.text > 1) {
+			if(!ln.content && ln.x + it.w > real ln.avail && (it.box.st.anywhere || keptall(it)) && len it.text > 1) {
+				# (keep-all is relaxed to normal breaking when the line
+				# has no other opportunity, as browsers do: overflow-wrap-normal-keep-all-001)
 				# overflow-wrap: break the word where it must
 				(head, tail) := splitword(it, real ln.avail - ln.x);
 				if(head != nil) {
@@ -9553,6 +9557,17 @@ wordgap(pbox: ref Box, ptext: string, it: ref Item, min: int): int
 	lbbreakall = 0;
 	lbkeepall = 0;
 	return r;
+}
+
+# a word kept whole by keep-all that normal breaking would split
+keptall(it: ref Item): int
+{
+	if(!it.box.st.keepall || bidi == nil)
+		return 0;
+	for(i := 1; i < len it.text; i++)
+		if(cjkletter(bidi->lbclass(it.text[i-1])) && cjkletter(bidi->lbclass(it.text[i])))
+			return 1;
+	return 0;
 }
 
 # a letter of Chinese, Japanese or Korean, by line-break class
@@ -11299,8 +11314,8 @@ paintitems(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
-		if(isabs(k) || islayer(k) || isfloat(k))
-			continue;
+		if(isabs(k) || islayer(k))
+			continue;	# (a float is an item like any other: float does not apply)
 		paintflow(dst, k, o, clip, canvasbg);
 	}
 }

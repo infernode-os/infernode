@@ -6511,7 +6511,13 @@ spanextent(b, p: ref Box, ox, oy, ok: int, r: Rect): (int, Rect)
 		ln := b.lines[i];
 		for(j := 0; j < len ln.frags; j++) {
 			f := ln.frags[j];
-			if(f.kind != Fspan || f.box != p)
+			if(f.kind == Fatomic) {
+				(ok, r) = spanextent(f.box, p, ox + f.box.x, oy + f.box.y, ok, r);	# (an inline-block holding it: position-absolute-in-inline-005)
+				continue;
+			}
+			# a block inside the inline splits it into pieces, each a
+			# box of its own: the pieces are one inline here (position-absolute-in-inline-003)
+			if(f.kind != Fspan || f.box != p && (p.node == 0 || f.box.node != p.node))
 				continue;
 			x0 := ox + f.x;
 			x1 := x0 + f.w;
@@ -6520,13 +6526,16 @@ spanextent(b, p: ref Box, ox, oy, ok: int, r: Rect): (int, Rect)
 			if(rightedge(f))
 				x1 -= p.mr + p.br;
 			fr := Rect((x0, oy + f.y + p.bt), (x1, oy + f.y + f.h - p.bb));
+			# the top and start edge of the first fragment, the bottom
+			# and end edge of the last (CSS 2.1 §10.1, position-absolute-in-inline-005)
 			if(!ok)
 				r = fr;
 			else {
-				if(fr.min.x < r.min.x) r.min.x = fr.min.x;
-				if(fr.min.y < r.min.y) r.min.y = fr.min.y;
-				if(fr.max.x > r.max.x) r.max.x = fr.max.x;
-				if(fr.max.y > r.max.y) r.max.y = fr.max.y;
+				r.max.y = fr.max.y;
+				if(p.st.dirrtl)
+					r.min.x = fr.min.x;
+				else
+					r.max.x = fr.max.x;
 			}
 			ok = 1;
 		}
@@ -6582,6 +6591,19 @@ flexspalign(a: ref Abs, k: ref Box, horiz: int): int
 		return Style->ALcenter;
 	}
 	return Style->ALstart;
+}
+
+# and whether that alignment is "safe", keeping a box that overflows
+# the rectangle at its start (flex-abspos-staticpos-align-self-safe-001)
+flexspsafe(a: ref Abs, k: ref Box, horiz: int): int
+{
+	fcb := a.sparent;
+	main := a.flexsp == 1 && horiz || a.flexsp == 2 && !horiz;
+	if(main)
+		return fcb.st.safe & 2;
+	if(k.st.alignself == Style->ALauto)
+		return fcb.st.safe & 4;
+	return k.st.safe & 4;
 }
 
 # relative and sticky positioning: shift the box after it is placed
@@ -6752,7 +6774,10 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 			ja := abspalign(st.justifyself);
 			if(a.flexsp)
 				ja = flexspalign(a, k, 1);
-			if(st.safe & 8 && k.w + k.ml + k.mr > cbw)
+			jsafe := st.safe & 8;
+			if(a.flexsp)
+				jsafe = flexspsafe(a, k, 1);
+			if(jsafe && k.w + k.ml + k.mr > sr.dx())
 				ja = Style->ALstart;
 			case ja {
 			Style->ALstart or Style->ALleft =>
@@ -6802,7 +6827,10 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 			aa := abspalign(st.alignself);
 			if(a.flexsp)
 				aa = flexspalign(a, k, 0);
-			if(st.safe & 4 && h + k.mt + k.mb > cbh)
+			asafe := st.safe & 4;
+			if(a.flexsp)
+				asafe = flexspsafe(a, k, 0);
+			if(asafe && h + k.mt + k.mb > sr.dy())
 				aa = Style->ALstart;
 			case aa {
 			Style->ALstart =>
@@ -11097,15 +11125,24 @@ paintbackground(dst: ref Image, b: ref Box, r: Rect)
 			paintbg(dst, b, r, st.bg[i]);
 }
 
-# an outer shadow shows only outside the border box (Backgrounds 3 §7.1)
+# an outer shadow shows only outside the border box (Backgrounds 3
+# §7.1): it goes through a mask with the box cleared from it, so that
+# a box without a background of its own shows nothing of it inside
+# (slice-inline-fragmentation-001)
 shadowfill(dst: ref Image, b: ref Box, sr, r: Rect, c: int)
 {
 	if(!rectok(sr))
 		return;
+	(mr, ok) := dst.clipr.clip(sr);
+	if(!ok || !rectok(mr))
+		return;
 	(rtl, rtr, rbr, rbl) := radii(b);
-	p := rrect(sr, rtl, rtr, rbr, rbl);
-	addrrect(p, r, rtl, rtr, rbr, rbl);
-	dst.fillpath(p, 1, colorimg(c), (0, 0));	# even-odd: the box is a hole
+	m := display.newimage(mr, Draw->GREY8, 0, Draw->Black);
+	if(m == nil)
+		return;
+	m.fillpath(rrect(sr, rtl, rtr, rbr, rbl), 1, display.white, (0, 0));
+	m.fillpath(rrect(r, rtl, rtr, rbr, rbl), 1, display.black, (0, 0));
+	dst.draw(mr, colorimg(c), m, mr.min);
 }
 
 bgclip(st: ref St): int
@@ -11846,6 +11883,26 @@ paintspan(dst: ref Image, f: ref Frag, o: Point)
 	if(rightedge(f))
 		x1 -= b.mr;
 	r := Rect((x0, o.y + f.y), (x1, o.y + f.y + f.h));
+	if(len st.shadows > 0) {
+		# the shadow of the unbroken box, sliced at the fragment's
+		# ends (Break 3 §5.1: slice-inline-fragmentation-001)
+		oclip := dst.clipr;
+		cr := oclip;
+		br := r;	# the box as if unbroken: it goes on past the ends that are not its own
+		if(!leftedge(f)) {
+			if(r.min.x > cr.min.x)
+				cr.min.x = r.min.x;
+			br.min.x -= 1000;
+		}
+		if(!rightedge(f)) {
+			if(r.max.x < cr.max.x)
+				cr.max.x = r.max.x;
+			br.max.x += 1000;
+		}
+		dst.clipr = cr;
+		paintshadows(dst, b, br);
+		dst.clipr = oclip;
+	}
 	if(visible(st.bgcolor))
 		dst.draw(r, colorimg(st.bgcolor), nil, (0, 0));
 	for(i := len st.bg - 1; i >= 0; i--)

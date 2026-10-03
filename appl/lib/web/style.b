@@ -3261,9 +3261,11 @@ colorspace(t: ref Tok): (int, int)
 	x, y, z: real;
 	case space {
 	"srgb" =>
-		return (1, rgba(round(c0*255.0), round(c1*255.0), round(c2*255.0), al));
+		if(ingamut(c0, c1, c2))
+			return (1, rgba(round(c0*255.0), round(c1*255.0), round(c2*255.0), al));
+		return (1, topixel(srgblin(c0), srgblin(c1), srgblin(c2), al));
 	"srgb-linear" =>
-		return (1, (srgb(c0) << 24) | (srgb(c1) << 16) | (srgb(c2) << 8) | clamp(al));
+		return (1, topixel(c0, c1, c2, al));
 	"display-p3" or "display-p3-linear" =>
 		(r, g, b) := (srgblin(c0), srgblin(c1), srgblin(c2));
 		if(space == "display-p3-linear")
@@ -3351,6 +3353,13 @@ labf(t: real): real
 
 oklab2rgb(l, a, b: real, al: int): int
 {
+	# the ends of lightness, and what lies within an epsilon of them
+	# (oklch-009: oklch(100% 110 60) is white; oklab-l-almost-1:
+	# 99.9999% renders as 100%)
+	if(l >= 1.0 - 0.00001)
+		return rgba(255, 255, 255, al);
+	if(l <= 0.00001)
+		return rgba(0, 0, 0, al);
 	l_ := l + 0.3963377774*a + 0.2158037573*b;
 	m_ := l - 0.1055613458*a - 0.0638541728*b;
 	s_ := l - 0.0894841775*a - 1.2914855480*b;
@@ -3421,30 +3430,39 @@ topixel(r, g, b: real, al: int): int
 		else if(l <= 0.0)
 			(r, g, b) = (0.0, 0.0, 0.0);
 		else {
+			# the chroma is bisected to the point where the clipped
+			# colour is just a noticeable difference from the wanted
+			# one, as §13.2.1 says: a search that stops at the first
+			# near-enough step lands differently for inputs that
+			# differ in the sixth figure (xyz-d50-004)
 			c := math->sqrt(a*a + bb*bb);
 			h := math->atan2(bb, a);
 			lo := 0.0;
 			hi := c;
+			loin := 1;
 			(r, g, b) = oklab2lin(l, 0.0, 0.0);
-			for(i := 0; i < 24 && hi - lo > 0.0001; i++) {
+			for(i := 0; i < 40 && hi - lo > 0.0001; i++) {
 				mid := (lo + hi)/2.0;
 				(mr, mg, mb) := oklab2lin(l, mid*math->cos(h), mid*math->sin(h));
-				if(ingamut(mr, mg, mb)) {
+				if(loin && ingamut(mr, mg, mb)) {
 					lo = mid;
 					(r, g, b) = (mr, mg, mb);
 					continue;
 				}
-				# the clipped colour, if close enough, is taken
 				(cr, cg, cb) := (clip01(mr), clip01(mg), clip01(mb));
 				(cl, ca, cbb) := lin2oklab(cr, cg, cb);
 				dl := cl - l;
 				da := ca - mid*math->cos(h);
 				db := cbb - mid*math->sin(h);
-				if(math->sqrt(dl*dl + da*da + db*db) < 0.02) {
+				e := math->sqrt(dl*dl + da*da + db*db);
+				if(e < 0.02) {
 					(r, g, b) = (cr, cg, cb);
-					break;
-				}
-				hi = mid;
+					if(0.02 - e < 0.0001)
+						break;
+					loin = 0;
+					lo = mid;
+				} else
+					hi = mid;
 			}
 		}
 	}

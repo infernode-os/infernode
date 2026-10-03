@@ -55,6 +55,21 @@ text and border-area, text-wrap: balance, the segment-break rules,
 hanging-punctuation allow-end, hanging space sequences and rtl grids,
 76.0% to 80.1%.
 
+- `14bb067` **Keyword block sizes; keyword bounds on replaced boxes.**
+  `kwsize()`; layblock and laygrid clamp by the content height (`hauto`)
+  for keyword min/max heights; the Kreplaced case of layblock derives
+  the keyword height from the used width and ratio; `replacedsize`
+  ignores the width when `b == nowidth`; `specw` returns -1 for a box
+  measured for its own keyword bound (that recursion ran the VM out of
+  memory).
+- `831ad6b` **fit-content() and keyword min/max widths, percentage
+  heights in measured floats.**  `specw` measures the content with
+  `nowidth` for keyword bounds beside a definite width; `intrinsic()`
+  gives `fit-content(<length>)` its clamped contribution;
+  `contribution()` applies keyword min/max widths (`sizekw`), a cyclic
+  percentage argument giving min-content (min-width) or max-content
+  (max-width); `floatwidth` sets `pcth` to the containing block's
+  height while measuring.
 - `049b8a1` **Text split around out-of-flow flex children, ratio-only
   images in flex cross sizes.**  `fixkids`' run splitter ends a run at
   an out-of-flow child when the parent is a flex or grid container;

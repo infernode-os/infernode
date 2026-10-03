@@ -2217,6 +2217,8 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	# content's (Sizing 3 §3.1: for a block, its auto height), as a
 	# min or a max beside another height (block-size-with-min-or-max-content-2)
 	hauto := contenth + vextra(b);
+	if((krh := ratioh(b, b.w)) >= 0)
+		hauto = krh;	# with a ratio, the size its width gives (intrinsic-size-010)
 	if(kwsize(b.st.maxheight) && h > hauto)
 		h = hauto;
 	b.h = clamph(b, h, cbh);
@@ -2280,6 +2282,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	ch := -1;
 	if(sh >= 0)
 		ch = clamph(b, sh, cbh) - vextra(b);
+	else if(st.height.kind == Style->Lauto && (rh := ratioh(b, b.w)) >= 0)
+		ch = clamph(b, rh, cbh) - vextra(b);	# from its width through its ratio: definite (Sizing 4 §5.3; flex-aspect-ratio-007)
 	# the main and cross space; a column's main size is definite only
 	# when its height is (§9.2), the space to flex into may come from
 	# max-height as well
@@ -3396,8 +3400,9 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 		if(issubgrid(k, 0)) {
 			# its height is its tracks', whatever its properties say (§9.3)
 			imposeh(l, k, ah - k.mt - k.mb, aw, ah);
-		} else if((as == Style->ALnormal || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
+		} else if((as == Style->ALnormal && !(ks.aspect > 0.0) || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
 		   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced) {
+			# (normal is start for an item with a ratio, Grid 2 §6.2; grid-aspect-ratio-007)
 			imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), aw, ah);
 		} else if(ks.height.pct != 0.0 || ks.minheight.pct != 0.0 || ks.maxheight.pct != 0.0 || heightmatters(k)) {
 			# the area's height is definite for it (Grid 2 §6.6)
@@ -8046,6 +8051,8 @@ packh(b: ref Box): int
 {
 	if(pcth >= 0)
 		return pcth;
+	if(b.st.height.kind == Style->Lauto && (rh := ratioh(b, b.w)) >= 0)
+		return rh - vextra(b);	# from its width through its ratio (flex-aspect-ratio-007)
 	if(b.st.maxheight.kind != Style->Lnone && (mh := spech(b, b.st.maxheight, -1)) >= 0)
 		return mh - vextra(b);
 	return -1;

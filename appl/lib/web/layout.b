@@ -482,12 +482,15 @@ fixkids(box: ref Box, kids: list of ref Box): array of ref Box
 		return toarray(kids);
 	if(ninline == 0)
 		return toarray(kids);
-	# out-of-flow boxes go with an inline run they sit in, else stand alone
+	# out-of-flow boxes go with an inline run they sit in, else stand
+	# alone; in a flex or grid container one ends the run, so the text
+	# either side is two items (anonymous-flex-item-004)
+	items := box.kind == Kflex || box.kind == Kgrid;
 	r: list of ref Box;
 	run: list of ref Box;
 	for(l = kids; l != nil; l = tl l) {
 		k := hd l;
-		if(isblocklevel(k) || isoof(k) && run == nil) {
+		if(isblocklevel(k) || isoof(k) && (run == nil || items)) {
 			r = flushrun(box, run, r);
 			run = nil;
 			r = k :: r;
@@ -2770,6 +2773,8 @@ flexcrossw(k, b: ref Box, cw: int): int
 	if(al == Style->ALnormal || al == Style->ALstretch)
 		return clampw(k, cw - k.ml - k.mr, cw);
 	(mn, mx) := intrinsic(k);
+	if(k.kind == Kreplaced && k.svg && k.iw == 0 && k.ih == 0)
+		mn = mgs(k);	# no natural width: the default size is contained in the room there is (Images 3 §4.3; align-items-007)
 	return clampw(k, fit(mn, mx, cw) - mgs(k), cw);
 }
 
@@ -4064,6 +4069,8 @@ lanesw(k: ref Box, cw: int): int
 		return clampw(k, rw + hextra(k), cw);
 	}
 	(mn, mx) := intrinsic(k);
+	if(k.kind == Kreplaced && k.svg && k.iw == 0 && k.ih == 0)
+		mn = mgs(k);	# no natural width: the default size is contained in the room there is (Images 3 §4.3; align-items-007)
 	return clampw(k, fit(mn, mx, cw) - mgs(k), cw);
 }
 

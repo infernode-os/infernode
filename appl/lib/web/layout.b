@@ -363,6 +363,7 @@ splitinline(box: ref Box, kids: list of ref Box): list of ref Box
 {
 	r: list of ref Box;
 	run: list of ref Box;
+	pieces: list of ref Box;
 	for(; kids != nil; kids = tl kids) {
 		k := hd kids;
 		if(isblocklevel(k)) {
@@ -370,6 +371,7 @@ splitinline(box: ref Box, kids: list of ref Box): list of ref Box
 				p := ref *box;
 				p.kids = toarray(rev(run));
 				r = p :: r;
+				pieces = p :: pieces;
 				run = nil;
 			}
 			r = k :: r;
@@ -380,6 +382,25 @@ splitinline(box: ref Box, kids: list of ref Box): list of ref Box
 		p := ref *box;
 		p.kids = toarray(rev(run));
 		r = p :: r;
+		pieces = p :: pieces;
+	}
+	# the box's start edges belong to its first piece and its end
+	# edges to its last (§9.2.1.1, as for the fragments of one box
+	# across lines; margin-right-114)
+	if(pieces != nil && tl pieces != nil) {
+		last := hd pieces;
+		for(pl := pieces; pl != nil; pl = tl pl) {
+			p := hd pl;
+			p.st = ref *p.st;
+			if(p != last) {
+				p.st.mr = p.st.pr = Style->Len(Style->Lpx, 0.0, 0.0, nil);
+				p.st.br = 0;
+			}
+			if(tl pl != nil) {
+				p.st.ml = p.st.pl = Style->Len(Style->Lpx, 0.0, 0.0, nil);
+				p.st.bl = 0;
+			}
+		}
 	}
 	return rev(r);
 }
@@ -540,7 +561,8 @@ orphans(parent: ref Box, kids: list of ref Box): list of ref Box
 
 isinternal(k: ref Box): int
 {
-	return k.kind == Krow || k.kind == Kcell || isrowgroup(k) || iscolumn(k);
+	return k.kind == Krow || k.kind == Kcell || isrowgroup(k) || iscolumn(k) ||
+		k.kind != Ktext && k.st.display == Style->Dtablecaption;
 }
 
 flushtable(parent: ref Box, run, r: list of ref Box): list of ref Box
@@ -1532,6 +1554,8 @@ edges(b: ref Box, cbw: int)
 		# vertical margins of inline boxes have no effect on layout
 		b.mt = b.mb = 0;
 	}
+	if(b.kind == Kcell || b.kind == Krow || isrowgroup(b) || iscolumn(b))
+		b.mt = b.mr = b.mb = b.ml = 0;	# margins do not apply to internal table boxes (§8.3; margin-applies-to-007)
 }
 
 hextra(b: ref Box): int
@@ -1769,7 +1793,15 @@ sizew1(b: ref Box, cbw, cbh: int)
 		w = transferw(b, w, cbh);	# a keyword width is bounded through the ratio like an auto one
 	w = clampw(b, w, cbw);
 	b.w = w;
-	# auto margins share what is left over
+	automargins(b, cbw);
+}
+
+# auto margins share what is left over of the width cbw (§10.3.3); the
+# margins hold their non-auto values (an auto one 0) on entry
+automargins(b: ref Box, cbw: int)
+{
+	st := b.st;
+	w := b.w;
 	free := cbw - w - b.ml - b.mr;
 	lauto := st.ml.kind == Style->Lauto;
 	rauto := st.mr.kind == Style->Lauto;
@@ -1951,13 +1983,24 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 			if(isbfc(k) && fc.left != nil || isbfc(k) && fc.right != nil) {
 				# a new formatting context does not overlap floats: it
 				# narrows beside them, or, when it cannot get narrow
-				# enough, moves down past them (CSS 2.2 §9.5)
-				(lx, rx) := band(fc, cy + ky, cy + ky + 1, cx, cx + cw);
+				# enough, moves down past them (CSS 2.2 §9.5); its whole
+				# border box keeps clear when its height is known
+				# (floats-wrap-top-below-bfc-001l)
+				bh := 1;
+				if((sh0 := spech(k, k.st.height, ch)) >= 0)
+					bh = nz1(clamph(k, sh0, ch) + vextra(k));
+				(lx, rx) := band(fc, cy + ky, cy + ky + bh, cx, cx + cw);
 				if(lx > cx || rx < cx + cw) {
 					# a box of auto width narrows to what is left (and may
 					# overflow), but its margins must fit, and a table is
 					# never narrower than its minimum; one with a width
-					# moves down if its margin box does not fit
+					# moves down if its margin box does not fit.  Auto
+					# margins take what is left beside the floats, not
+					# of the whole width (floats-wrap-top-below-bfc-001r)
+					if(k.st.ml.kind == Style->Lauto)
+						k.ml = 0;
+					if(k.st.mr.kind == Style->Lauto)
+						k.mr = 0;
 					need := k.ml;
 					if(k.st.width.kind != Style->Lauto && k.st.width.kind != Style->Lstretch)
 						need += k.w;
@@ -1973,11 +2016,12 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 						cury = ky - msum(collapse(pending, mval(k.mt)));
 						cleared = 1;
 						adjoining = 0;
-						(lx, rx) = band(fc, cy + ky, cy + ky + 1, cx, cx + cw);
+						(lx, rx) = band(fc, cy + ky, cy + ky + bh, cx, cx + cw);
 					}
 					avail := rx - lx - k.ml - k.mr;
 					if(k.w > avail && (k.st.width.kind == Style->Lauto || k.st.width.kind == Style->Lstretch))
 						k.w = clampw(k, avail, cw);
+					automargins(k, rx - lx);
 					k.x = lx - ox + k.ml;
 				}
 			}
@@ -2002,7 +2046,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 					k.y = b.bt + b.pt + cury;
 				} else if(cleared) {
 					# the clearance has taken the place of its margins
-					k.y = b.bt + b.pt + cury + msum(collapse(pending, kt));
+					k.y = b.bt + b.pt + ky;
 					# its collapsed margins end where the clearance put it;
 					# a following margin joins them rather than adding
 					cury = k.y - b.bt - b.pt - msum(m);
@@ -2023,6 +2067,8 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 				m := collapse(pending, kt);
 				k.y = b.bt + b.pt + cury + msum(m);
 			}
+			if(cleared)
+				k.y = b.bt + b.pt + ky;	# at the clearance, whatever its margins collapsed to (nested-clearance-new-formatting-context)
 			cury = k.y - b.bt - b.pt + k.h;
 			pending = kb;
 			pendingclear = 0;
@@ -5381,6 +5427,18 @@ collapsed(t: ref Tgrid, b: ref Box, cols: list of ref Box): ref Tb
 		fight(tb.h[c], st.bt, st.bst, bcolor(st, st.bct), 5, 0);
 		fight(tb.h[nr*n + c], st.bb, st.bsb, bcolor(st, st.bcb), 5, 1);
 	}
+	# a cell spanning columns or rows has no grid lines inside it: the
+	# borders of the columns and rows it crosses stop at it
+	# (border-collapse-spanning-cells-001)
+	for(sl := t.cells; sl != nil; sl = tl sl) {
+		sc := hd sl;
+		for(sr := sc.r; sr < sc.r + sc.rs && sr < nr; sr++)
+			for(scc := sc.c + 1; scc < sc.c + sc.cs && scc < n; scc++)
+				tb.v[sr*(n+1) + scc] = ref Bd(0, Style->Bnone, 0, 9);
+		for(sr = sc.r + 1; sr < sc.r + sc.rs && sr < nr; sr++)
+			for(scc = sc.c; scc < sc.c + sc.cs && scc < n; scc++)
+				tb.h[sr*n + scc] = ref Bd(0, Style->Bnone, 0, 9);
+	}
 	return tb;
 }
 
@@ -6194,14 +6252,15 @@ laytable(l: ref L, b: ref Box, cbw, cbh: int)
 
 curdoc: ref Doc;
 
-# a cell's baseline: its first in-flow line box's, else its bottom
-# content edge (§17.5.3), from its top border edge
+# a cell's baseline: its first in-flow line box's, from its top border
+# edge (§17.5.3); -1 for a cell with none, which is not baseline-aligned
+# but sits at the row's top, as browsers have it (baseline-empty-cell-001)
 cellbaseline(k: ref Box): int
 {
 	(ok, by) := firstbaseline(k);
 	if(ok)
 		return by;
-	return k.h - k.bb - k.pb;
+	return -1;
 }
 
 rowgroupof(t: ref Tgrid, row: ref Box): ref Box
@@ -8125,11 +8184,11 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			ln.open = (it.box, ln.x, 1, it.level) :: ln.open;
 			opened = it.box :: opened;
 			ln.x += it.w;
-			if(it.w > 0.0)
-				ln.content = 1;	# margin, border or padding: not a phantom line (CSS 2.2 §9.4.2)
+			if(it.w > 0.0 || it.box.bl + it.box.pl > 0)
+				ln.content = 1;	# margin, border or padding: not a phantom line (CSS 2.2 §9.4.2), even with a negative margin taking the width back (margin-right-114)
 		Iclose =>
 			ln.x += it.w;
-			if(it.w > 0.0)
+			if(it.w > 0.0 || it.box.br + it.box.pr > 0)
 				ln.content = 1;
 			fr := span(ln, it.box, 1);
 			fr.level = it.level;
@@ -8251,10 +8310,12 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 					ln.x = oldx + real (ln.left - oldleft);
 				} else if(ln.left > oldleft) {
 					# a left float: the line's content moves right past it
+					# (edgesat may have put ln.x at the float's edge already,
+					# as for an empty line: floats-placement-vertical-001a)
 					d := ln.left - oldleft;
 					for(fl := ln.frags; fl != nil; fl = tl fl)
 						(hd fl).x += d;
-					ln.x += real d;
+					ln.x = oldx + real d;
 					r: list of (ref Box, real, int, int);
 					for(ol := ln.open; ol != nil; ol = tl ol) {
 						(ob, ostart, ofirst, olevel) := hd ol;
@@ -10287,6 +10348,7 @@ paintshadows(dst: ref Image, b: ref Box, r: Rect)
 painttablepart(dst: ref Image, b: ref Box, r: Rect)
 {
 	st := b.st;
+	paintshadows(dst, b, r);	# a shadow is the part's own box's (box-shadow-table-row-display)
 	if(!visible(st.bgcolor) && len st.bg == 0)
 		return;
 	oclip := dst.clipr;

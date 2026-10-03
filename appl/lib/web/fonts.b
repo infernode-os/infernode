@@ -211,6 +211,8 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 # covers it, the next family's, else (nil, -1) for the bitmap fallback.
 glyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
 {
+	if(c == 16rA0)
+		c = ' ';	# a no-break space is as wide as a space (float-nowrap-5)
 	for(; f != nil; f = f.next) {
 		if(f.parts != nil) {
 			for(i := 0; i < len f.parts; i++) {

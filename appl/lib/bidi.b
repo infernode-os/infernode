@@ -290,9 +290,15 @@ totitle(c: int, lang: string): string
 	}
 	if((x := special(c, 3)) != nil)
 		return x;
-	t := simple(cti, c);
-	if(t == c)
-		t = simple(cup, c);
+	# the table's title column: 0 means as upper; a title case that
+	# is the character itself (the Latin digraphs ǅ ǈ ǋ ǲ) stays
+	t := c;
+	if((i := find(ccp, c)) >= 0) {
+		if(cti[i] != 0)
+			t = cti[i];
+		else if(cup[i] != 0)
+			t = cup[i];
+	}
 	r := "";
 	r[0] = t;
 	return r;

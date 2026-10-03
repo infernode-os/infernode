@@ -4155,8 +4155,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		(ok, l) := lenauto(v, ctx);
 		if(!ok && nm == "flex-basis" && id == "content")
 			(ok, l) = (1, kw(Lcontent));
-		if(!ok || l.px < 0.0 && l.kind == Lpx && l.pct == 0.0)
-			return 0;
+		if(!ok || l.kind == Lpx && (l.px < 0.0 && l.pct == 0.0 || l.pct < 0.0 && l.px == 0.0))
+			return 0;	# a negative length or percentage is invalid (height-089)
 		case nm {
 		"width" => st.width = l;
 		"height" => st.height = l;
@@ -4210,8 +4210,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		}
 	"padding-top" or "padding-right" or "padding-bottom" or "padding-left" =>
 		(ok, l) := length(v, ctx);
-		if(!ok || (l.kind == Lpx && (l.px < 0.0 || l.pct < 0.0)))
-			return 0;	# a negative length or percentage is invalid (padding-top-089)
+		if(!ok || l.kind == Lpx && (l.px < 0.0 && l.pct == 0.0 || l.pct < 0.0 && l.px == 0.0))
+			return 0;	# a negative length or percentage is invalid (padding-top-089); a calc() is clamped
 		case nm {
 		"padding-top" => st.pt = l;
 		"padding-right" => st.pr = l;

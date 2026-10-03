@@ -4521,7 +4521,7 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"normal" => st.breakall = st.keepall = 0;
 		"break-all" => st.breakall = 1;
 		"keep-all" => st.keepall = 1;
-		"break-word" => st.anywhere = 1;
+		"break-word" => st.anywhere = 2;	# as overflow-wrap: anywhere (Text 4 §5.2)
 		* => return 0;
 		}
 	"line-break" =>
@@ -4542,7 +4542,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	"overflow-wrap" =>
 		case id {
 		"normal" => st.anywhere = 0;
-		"break-word" or "anywhere" => st.anywhere = 1;
+		"break-word" => st.anywhere = 1;	# only where a word fails to fit; not counted for min-content
+		"anywhere" => st.anywhere = 2;	# counted for min-content too (Text 4 §5.5)
 		* => return 0;
 		}
 	"text-overflow" =>

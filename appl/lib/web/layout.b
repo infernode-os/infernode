@@ -1590,6 +1590,21 @@ fit(mn, mx, avail: int): int
 }
 
 # Clamp a border-box width by min-width and max-width.
+# min-height and max-height transferred through the aspect ratio bound
+# the width (Sizing 4 §5.2.1); the explicit min-width and max-width,
+# applied after, still win
+transferw(b: ref Box, w, cbh: int): int
+{
+	st := b.st;
+	if(st.aspect <= 0.0 || b.kind == Kreplaced)
+		return w;
+	if(st.maxheight.kind != Style->Lnone && (mh := spech(b, st.maxheight, cbh)) >= 0 && (mw := ratiow(b, mh)) >= 0 && w > mw)
+		w = mw;
+	if((nh := spech(b, st.minheight, cbh)) > 0 && (nw := ratiow(b, nh)) >= 0 && w < nw)
+		w = nw;
+	return w;
+}
+
 clampw(b: ref Box, w, cbw: int): int
 {
 	if(b.st.maxwidth.kind != Style->Lnone) {
@@ -1700,7 +1715,7 @@ sizew1(b: ref Box, cbw, cbh: int)
 	st := b.st;
 	w := specw(b, st.width, cbw);
 	if(w < 0 && st.aspect > 0.0 && b.kind != Kreplaced && (sh := spech(b, st.height, cbh)) >= 0)
-		w = transferred(b, sh);
+		w = transferred(b, clamph(b, sh, cbh));	# the height as used, within its min and max
 	if(w < 0) {
 		if(b.kind == Kreplaced) {
 			(iw, nil) := replacedsize(b, cbw, cbh);	# a percentage height transfers to the width
@@ -1712,14 +1727,14 @@ sizew1(b: ref Box, cbw, cbh: int)
 			# auto: fill, but if min/max-width step in, auto
 			# margins take up the difference
 			w = cbw - b.ml - b.mr;
-			cw := clampw(b, w, cbw);
+			cw := clampw(b, transferw(b, w, cbh), cbw);
 			b.w = cw;
 			if(cw == w)
 				return;
 			w = cw;
 		}
 	}
-	w = clampw(b, w, cbw);
+	w = clampw(b, transferw(b, w, cbh), cbw);
 	b.w = w;
 	# auto margins share what is left over
 	free := cbw - w - b.ml - b.mr;
@@ -1793,6 +1808,8 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		ch = sh - vextra(b);
 	else if((rh := ratioh(b, b.w)) >= 0 && b.st.minheight.kind == Style->Lauto)
 		ch = rh - vextra(b);	# from its width through its ratio: definite (Sizing 4 §5.3)
+	else if(curdoc != nil && curdoc.quirks && b.kind == Kblock)
+		ch = cbh;	# the percentage height calculation quirk: through auto-height blocks to the nearest definite one
 	bfc := isbfc(b) || b == l.root || fc == nil;	# the root holds the initial formatting context
 	if(bfc) {
 		fc = ref Fctx(nil, nil);
@@ -2211,6 +2228,8 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 			for(j := 0; j < len ln.items; j++)
 				avail += ir(ln.items[j].hyp) + ln.items[j].mm;
 			avail += gapmain * nz(len ln.items - 1);
+			# then the container's min-height and max-height (§9.2 step 4)
+			avail = clamph(b, avail + vextra(b), cbh) - vextra(b);
 		}
 		resolveflex(ln.items, real (avail - gapmain * nz(len ln.items - 1)));
 		cross := 0;
@@ -2339,7 +2358,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		else if(ch >= 0)
 			space = ch;
 		else
-			space = usedmain;
+			space = clamph(b, usedmain + vextra(b), cbh) - vextra(b);	# auto, within min-height and max-height
 		used2 := gapmain * nz(nit - 1);
 		autos := 0;
 		for(j := 0; j < nit; j++) {
@@ -2381,30 +2400,43 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 		jc := st.justifycontent;
 		if(freem < 0 && (st.safe & 2))
 			jc = Style->ALstart;	# safe: overflow past the end edge
+		# in fractions of a pixel, each position rounded, so that the
+		# shares of the free space do not pile their remainders up
+		rstart := real start;
+		rgap := real gap;
 		case jc {
-		Style->ALend or Style->ALright =>
-			start = freem;
+		Style->ALend =>
+			rstart = real freem;
+		Style->ALright =>
+			# physical: the end of a row, the start of a reversed one
+			# (the line is mirrored after placing); in a column, left and
+			# right are start (Align 3 §5.1)
+			if(row && !rev || !row && rev)
+				rstart = real freem;	# (a column's start is its top, the end of a reversed one)
+		Style->ALleft =>
+			if(rev)
+				rstart = real freem;
 		Style->ALcenter =>
-			start = freem/2;
+			rstart = real freem / 2.0;
 		Style->ALbetween =>
 			if(nit > 1 && freem > 0)
-				gap += freem / (nit - 1);
+				rgap += real freem / real (nit - 1);
 		Style->ALaround =>
 			if(freem > 0) {
-				gap += freem / nz1(nit);
-				start = freem / nz1(nit) / 2;
+				rgap += real freem / real nz1(nit);
+				rstart = real freem / real nz1(nit) / 2.0;
 			}
 		Style->ALevenly =>
 			if(freem > 0) {
-				gap += freem / (nit + 1);
-				start = freem / (nit + 1);
+				rgap += real freem / real (nit + 1);
+				rstart = real freem / real (nit + 1);
 			}
 		}
-		mp := start;
+		mp := rstart;
 		for(j = 0; j < nit; j++) {
 			fi := ln.items[j];
-			fi.pos = mp;
-			mp += ir(fi.main) + fi.mm + gap;
+			fi.pos = ir(mp);
+			mp += real (ir(fi.main) + fi.mm) + rgap;
 		}
 		if(rev)
 			for(j = 0; j < nit; j++) {
@@ -6403,13 +6435,15 @@ topmargin(k: ref Box, cw: int): Margin
 }
 
 # a float's margin-box width, its edges and width set
-floatwidth(k: ref Box, cw: int): int
+floatwidth(k: ref Box, cw, ch: int): int
 {
 	edges(k, cw);
 	w := specw(k, k.st.width, cw);
+	if(w < 0 && k.st.aspect > 0.0 && k.kind != Kreplaced && (sh := spech(k, k.st.height, ch)) >= 0)
+		w = transferred(k, clamph(k, sh, ch));
 	if(w < 0) {
 		if(k.kind == Kreplaced) {
-			(rw, nil) := replacedsize(k, cw, -1);
+			(rw, nil) := replacedsize(k, cw, ch);
 			w = rw + hextra(k);
 		} else {
 			(mn, mx) := intrinsic(k);
@@ -6420,13 +6454,13 @@ floatwidth(k: ref Box, cw: int): int
 		k.ml = 0;
 	if(k.st.mr.kind == Style->Lauto)
 		k.mr = 0;
-	k.w = clampw(k, w, cw);
+	k.w = clampw(k, transferw(k, w, ch), cw);
 	return k.ml + k.w + k.mr;
 }
 
 placefloat(l: ref L, k: ref Box, fc: ref Fctx, cx, y, cw, ch, ox, oy: int)
 {
-	floatwidth(k, cw);
+	floatwidth(k, cw, ch);
 	layblock(l, k, cw, ch, nil, 0, 0);	# % heights against a definite one
 	mw := k.ml + k.w + k.mr;	# a table may have come out wider than specified
 	mh := k.mt + k.h + k.mb;
@@ -7011,7 +7045,14 @@ intrinsic1(b: ref Box): (int, int)
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
 			edges(k, 0);
+			if(b.kind == Kflex && pcth >= 0 && b.st.flexwrap == 0 && stretched(b, k)) {
+				# a stretched item is as tall as the line: its
+				# percentage heights see that while it is measured
+				pcthbox = k;
+				pcthval = pcth - k.mt - k.mb - vextra(k);
+			}
 			(kmn, kmx) := contribution(k);
+			pcthbox = nil;
 			if(b.st.flexwrap != 0) {
 				if(kmn > mn)
 					mn = kmn;
@@ -7019,6 +7060,47 @@ intrinsic1(b: ref Box): (int, int)
 				mn += kmn;
 			mx += kmx;
 		}
+	} else if(b.kind == Kflex && b.st.flexwrap != 0 && (ph := packh(b)) >= 0) {
+		# a wrapping column flex container of definite height (or a
+		# max-height): the items fill columns by their flex base sizes,
+		# and the columns' widths add up, with the gaps between
+		# (Flexbox §9.9.1)
+		rg := 0;
+		if(b.st.rowgap.kind != Style->Lnormal)
+			rg = res(b.st.rowgap, 0);
+		cg := 0;
+		if(b.st.colgap.kind != Style->Lnormal)
+			cg = res(b.st.colgap, 0);
+		y := 0;
+		colw := 0;
+		ncol := 0;
+		for(i := 0; i < len b.kids; i++) {
+			k := b.kids[i];
+			if(isabs(k))
+				continue;
+			edges(k, 0);
+			(kmn, kmx) := contribution(k);
+			hb := spech(k, k.st.basis, ph);
+			if(hb < 0)
+				hb = spech(k, k.st.height, ph);
+			if(hb < 0)
+				hb = 0;	# its content height is not known here
+			hb += k.mt + k.mb;
+			if(y > 0 && y + rg + hb > ph) {
+				mx += colw + cg;
+				colw = 0;
+				y = 0;
+			}
+			if(y > 0)
+				y += rg;
+			y += hb;
+			if(kmx > colw)
+				colw = kmx;
+			if(kmn > mn)
+				mn = kmn;
+			ncol++;
+		}
+		mx += colw;
 	} else {
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
@@ -7049,6 +7131,8 @@ definiteh(b: ref Box): int
 	if(b == pcthbox)
 		return pcthval;
 	st := b.st;
+	if(st.height.kind == Style->Lauto && b.kind == Kblock && curdoc != nil && curdoc.quirks)
+		return pcth;	# the percentage height calculation quirk: through auto-height blocks
 	if(st.height.kind == Style->Lauto && st.aspect > 0.0 && b.kind != Kreplaced &&
 	   st.width.kind == Style->Lpx && st.width.pct == 0.0) {
 		# from a definite width through its aspect ratio (Sizing 4 §5.3)
@@ -7074,6 +7158,27 @@ definiteh(b: ref Box): int
 	if(h < 0)
 		h = 0;
 	return h;
+}
+
+# the height a wrapping column flex container packs its columns into:
+# its definite content height, else its max-height
+packh(b: ref Box): int
+{
+	if(pcth >= 0)
+		return pcth;
+	if(b.st.maxheight.kind != Style->Lnone && (mh := spech(b, b.st.maxheight, -1)) >= 0)
+		return mh - vextra(b);
+	return -1;
+}
+
+# is the flex item k stretched across the line (align-self: stretch or
+# normal with an auto height)?
+stretched(b, k: ref Box): int
+{
+	a := k.st.alignself;
+	if(a == Style->ALauto)
+		a = b.st.alignitems;
+	return (a == Style->ALnormal || a == Style->ALstretch) && k.st.height.kind == Style->Lauto;
 }
 
 # a box's horizontal margins together, negative ones and all (auto
@@ -7107,7 +7212,7 @@ inlineintrinsic(b: ref Box): (int, int)
 		case it.kind {
 		Iword =>
 			w := it.w;
-			if(it.nowrap || prevw != nil && !wordgap(prevw.box, prevw.text, it))
+			if(it.nowrap || prevw != nil && !wordgap(prevw.box, prevw.text, it, 1))
 				word += w;	# no break between: one unit
 			else
 				word = w;
@@ -7315,7 +7420,11 @@ lbbreak(a, b: int): int
 		if(lbmode != 2 && lbcjk && (b == 16r301C || b == 16r30A0))
 			break;	# normal and loose, in Chinese and Japanese: before 〜 and ゠
 		return 0;
-	Bidi->LBCL or Bidi->LBCP or Bidi->LBEX or Bidi->LBIS or Bidi->LBSY or Bidi->LBBA or
+	Bidi->LBBA =>
+		if(lbmode == 1 && (b == 16r2010 || b == 16r2013))
+			break;	# loose: before a hyphen and an en dash
+		return 0;
+	Bidi->LBCL or Bidi->LBCP or Bidi->LBEX or Bidi->LBIS or Bidi->LBSY or
 	Bidi->LBHY or Bidi->LBCM or Bidi->LBZWJ or Bidi->LBIN or Bidi->LBPO or Bidi->LBWJ or Bidi->LBGL or Bidi->LBQU =>
 		return 0;
 	}
@@ -7758,7 +7867,7 @@ layinline(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			ln.x += real w;
 			ln.content = 1;
 		Ifloat =>
-			if(!ln.content || real floatwidth(it.box, cw) <= real ln.avail - ln.x + 0.01) {
+			if(!ln.content || real floatwidth(it.box, cw, f.ch) <= real ln.avail - ln.x + 0.01) {
 				# on this line: at its top, beside what is on it already
 				# (CSS 2.2 §9.5.1 rules 4 and 7)
 				oldleft := ln.left;
@@ -7857,7 +7966,7 @@ canbreak(ln: ref Ln, it: ref Item): int
 			continue;	# inline box edges, the marks of absolutes, an outside marker
 		if(f.kind != Ftext || f.text == "" || f.text == "\u00AD" || f.text == " " || isblankrun(f.text) || f.text == "　")
 			return 1;	# a space, a zero-width one, a soft hyphen, an atomic inline
-		return wordgap(f.box, f.text, it);
+		return wordgap(f.box, f.text, it, 0);
 	}
 	return 1;
 }
@@ -7865,10 +7974,11 @@ canbreak(ln: ref Ln, it: ref Item): int
 # May a line break between the word ptext of the text box pbox and the
 # word it, with nothing between them?  Words of one text were split
 # where it may (text()); between texts the characters at the join
-# decide (UAX #14), unless either text is nowrap.  overflow-wrap only
-# breaks a word that does not fit on a line of its own (splitword), so
-# it is no opportunity here, nor for the min-content size.
-wordgap(pbox: ref Box, ptext: string, it: ref Item): int
+# decide (UAX #14), unless either text is nowrap.  overflow-wrap breaks
+# anywhere when a sequence fails to fit, which is when a line asks
+# (min 0); for the min-content size (min 1) only overflow-wrap:
+# anywhere and word-break: break-word count (Text 4 §5.5).
+wordgap(pbox: ref Box, ptext: string, it: ref Item, min: int): int
 {
 	if(pbox == it.box)
 		return 1;
@@ -7879,6 +7989,8 @@ wordgap(pbox: ref Box, ptext: string, it: ref Item): int
 		return 0;
 	if(it.box.st.breakall == 2 || pbox.st.breakall == 2)
 		return 1;	# line-break: anywhere
+	if(it.box.st.anywhere == 2 || pbox.st.anywhere == 2 || !min && (it.box.st.anywhere || pbox.st.anywhere))
+		return 1;
 	lbmode = it.box.st.lbmode;
 	lbcjk = cjklang(langof(it.box.node));
 	lbbreakall = it.box.st.breakall == 1 || pbox.st.breakall == 1;
@@ -7907,7 +8019,7 @@ segwidth(il: list of ref Item): real
 		x := hd il;
 		case x.kind {
 		Iword =>
-			if(prev != nil && wordgap(prev.box, prev.text, x))
+			if(prev != nil && wordgap(prev.box, prev.text, x, 0))
 				return w;
 			pos += x.w;
 			prev = x;

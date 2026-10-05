@@ -35,6 +35,10 @@ On Windows use `tools\xen.ps1` (`-Sam`, `-Wait` in place of `-s`, `-w`).
 Only `C:` is mounted inside InferNode, so files on other drives are
 refused.
 
+Verified on macOS. Linux uses the same script and is yet to be checked
+on a Linux host (INFR-522); `xen.ps1` is untested and has no host
+plumbing.
+
 ## Behaviour
 
 - Host files are reached through `/n/local`, which the profile mounts
@@ -75,7 +79,15 @@ include /path/to/infernode/tools/xen.plumbing
 include basic
 ```
 
-and run plan9port's `plumber` (from your shell start-up, say). Then:
+and have plan9port's `plumber` running. One line in your shell start-up
+(`~/.zshrc`, after plan9port's `bin` is on `PATH`) starts it once per
+login:
+
+```sh
+9p ls plumb >/dev/null 2>&1 || plumber
+```
+
+Then:
 
 ```sh
 plumb foo.c          # opens in the running Xenith

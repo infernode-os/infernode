@@ -148,6 +148,18 @@ Characters the faces lack fall back to DejaVu. `tools/gen-text-fonts.py`
 regenerates the bitmaps from the TrueType sources (Go's are in
 `fonts/go`; the script says where to fetch Noto Serif's).
 
+Go's other weights and slopes are built too, for setting documents
+rather than editing them: `go.medium`, `go.bold`, `go.italic` and
+`go.bolditalic`, at 14, 16, 18 and 22 (`go.bold.22.font`). `Font` does
+not offer them. A program finds a style by putting its name before the
+size in the regular face's file name, which is how Render's markdown
+and HTML get real bold and italic, larger bold headings (22, 18 and 16
+over a 14 body), medium table headers, and tables set with columns as
+wide as their text, aligned as the separator row says, and ruled above,
+below and under the header. Where a family lacks a style (DejaVu has
+bold but no italic built), bold is drawn twice a pixel apart and italic
+is underlined.
+
 ### Opening host files
 
 `tools/xen file ...` runs Xenith by itself, dark and filling the emu

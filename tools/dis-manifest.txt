@@ -797,6 +797,7 @@ dis/tests/refadt_zero_test.dis
 dis/tests/regex_test.dis
 dis/tests/render_registry_test.dis
 dis/tests/rfcomm_test.dis
+dis/tests/rlayout_test.dis
 dis/tests/runner.dis
 dis/tests/sam_test.dis
 dis/tests/scene_test.dis

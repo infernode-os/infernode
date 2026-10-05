@@ -12,7 +12,7 @@ Rlayout: module {
 	# Document node types
 	Ntext,          # Inline text run
 	Nbold,          # Bold text
-	Nitalic,        # Italic text (rendered with underline, since we have limited fonts)
+	Nitalic,        # Italic text (underlined where the family has no italic)
 	Ncode,          # Inline code (monospace)
 	Nlink,          # Hyperlink (rendered as underlined text)
 	Npara,          # Paragraph block

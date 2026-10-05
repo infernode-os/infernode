@@ -81,6 +81,7 @@ TARG=\
 	ninepsrc_config_test.dis\
 	lucifer_winstart_test.dis\
 	lucitheme_test.dis\
+	rlayout_test.dis\
 	luciuisrv_test.dis\
 	outlinefont_test.dis\
 	pdf_conformance_test.dis\

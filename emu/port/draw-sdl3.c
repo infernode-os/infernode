@@ -203,9 +203,16 @@ static float touch_lp_y0 = 0.0f;
  * Previously, flushmemscreen() called dispatch_sync() for every tiny
  * texture update (100s of times per frame for text rendering), causing
  * massive synchronization overhead. Now flushmemscreen() just accumulates
- * dirty rectangles with NO synchronization, and the main loop does a
- * single dispatch_sync() per frame to upload all changes at once.
+ * dirty rectangles, and the main loop does a single upload per frame.
+ *
+ * The box is shared by two threads, InferNode's writer and the main
+ * loop's reader, so it is held under dirty_lock (a spinlock: a few
+ * instructions either side). Without it a rectangle added while the
+ * main loop read and cleared the box was lost, and that part of the
+ * screen never reached the window: text half drawn after a Font switch,
+ * far likelier at 2x, where each upload is four times the size.
  */
+static SDL_SpinLock dirty_lock = 0;
 static volatile int dirty_pending = 0;
 static int dirty_min_x = 0, dirty_min_y = 0;
 static int dirty_max_x = 0, dirty_max_y = 0;
@@ -1101,10 +1108,8 @@ flushmemscreen(Rectangle r)
 	if (r.min.x >= r.max.x || r.min.y >= r.max.y)
 		return;
 
-	/*
-	 * Accumulate into bounding box of all dirty regions.
-	 * No locking needed - single writer (InferNode), single reader (main loop).
-	 */
+	/* Accumulate into bounding box of all dirty regions. */
+	SDL_LockSpinlock(&dirty_lock);
 	if (!dirty_pending) {
 		dirty_min_x = r.min.x;
 		dirty_min_y = r.min.y;
@@ -1118,6 +1123,7 @@ flushmemscreen(Rectangle r)
 		if (r.max.x > dirty_max_x) dirty_max_x = r.max.x;
 		if (r.max.y > dirty_max_y) dirty_max_y = r.max.y;
 	}
+	SDL_UnlockSpinlock(&dirty_lock);
 }
 
 /* sdl_pollevents() removed — all event handling is in sdl3_mainloop() */
@@ -1409,16 +1415,21 @@ update_and_present(Uint64 now, Uint64 last_refresh)
 		uchar *src;
 		int pitch;
 
+		/* Take the box and clear it in one step (see dirty_lock):
+		 * anything drawn after this lands in a fresh box, uploaded
+		 * next frame. */
+		SDL_LockSpinlock(&dirty_lock);
 		dirty.x = dirty_min_x;
 		dirty.y = dirty_min_y;
 		dirty.w = dirty_max_x - dirty_min_x;
 		dirty.h = dirty_max_y - dirty_min_y;
+		dirty_pending = 0;
+		SDL_UnlockSpinlock(&dirty_lock);
 
 		pitch = sdl_stride;
-		src = screen_data + (dirty_min_y * pitch) + (dirty_min_x * 4);
+		src = screen_data + (dirty.y * pitch) + (dirty.x * 4);
 
 		SDL_UpdateTexture(sdl_texture, &dirty, src, pitch);
-		dirty_pending = 0;
 	}
 
 	SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);

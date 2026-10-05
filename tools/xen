@@ -44,7 +44,16 @@ while getopts sw c; do
 done
 shift $((OPTIND - 1))
 
-root=${INFERNODE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+# Find the tree through any symlink (e.g. ~/bin/xen -> .../tools/xen).
+self=$0
+while [ -L "$self" ]; do
+	link=$(readlink "$self")
+	case $link in
+	/*)	self=$link ;;
+	*)	self=$(dirname "$self")/$link ;;
+	esac
+done
+root=${INFERNODE_ROOT:-$(cd "$(dirname "$self")/.." && pwd)}
 case $(uname -s) in
 Darwin)	emu=$root/emu/MacOSX/o.emu ;;
 Linux)	emu=$root/emu/Linux/o.emu ;;

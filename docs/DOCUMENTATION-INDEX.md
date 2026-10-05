@@ -20,6 +20,7 @@
 | [QUICKSTART.md](../QUICKSTART.md) | Get running in 3 commands |
 | [RUN_TOUR.md](../RUN_TOUR.md) | Interactive Veltro feature tour |
 | [XENITH.md](XENITH.md) | Xenith AI-native text environment |
+| [XEN.md](XEN.md) | `xen`: open host files in a standalone Xenith or sam, from a shell or an agent |
 | [NAMESPACE.md](NAMESPACE.md) | Namespace architecture and configuration |
 | [FILESYSTEM-MOUNTING.md](FILESYSTEM-MOUNTING.md) | Filesystem mounting guide |
 | [DIFFERENCES-FROM-STANDARD-INFERNO.md](DIFFERENCES-FROM-STANDARD-INFERNO.md) | How InferNode differs from standard Inferno |

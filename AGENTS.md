@@ -70,6 +70,8 @@ and only appeared to work because their bytecode had been committed by hand.
 `mk install` from the source directory. Choosing an output path yourself is
 how modules end up somewhere no build installs to and no runtime loads from.
 
+To open a file in an editor for the user, run `tools/xen <file>` (Xenith) or `tools/xen -s <file>` (sam); it returns at once. See [docs/XEN.md](docs/XEN.md).
+
 ## Coding Style & Naming Conventions
 
 Match the surrounding code closely. Limbo (`.b`) is close to Go in structure but should follow existing Inferno idioms, naming, and control-flow style. C uses Plan 9 / Inferno conventions and tabs, not generic modern C house styles. *Host-side* shell scripts (`tests/host/`, `tools/`, `build-*.sh`) stay POSIX `sh` compatible; scripts that run *inside Inferno* (`tests/inferno/`, `lib/sh/`, boot scripts) are rc-style — no `&&`/`||` — see [docs/INFERNO-SHELL.md](docs/INFERNO-SHELL.md). Name new emulator tests `*_test.b`, host tests `*_test.sh`, and keep module interfaces in `module/` aligned with their implementation names.

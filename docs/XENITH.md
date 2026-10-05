@@ -89,6 +89,11 @@ export xenith_fg_text=#CDD6F4
 
 20+ color variables for complete UI customization.
 
+### Opening host files
+
+`tools/xen file ...` runs Xenith by itself, dark and filling the emu
+window, on files from the host; Exit ends the instance. See [XEN.md](XEN.md).
+
 ### Image Display
 
 Xenith supports inline image display (PNG, PPM formats):

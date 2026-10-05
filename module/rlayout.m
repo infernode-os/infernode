@@ -58,6 +58,13 @@ Rlayout: module {
 	# Returns (image, total height used).
 	render: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int);
 
+	# Parse markdown, with the line (from 0) each block starts on.
+	parsemdlines: fn(text: string): (list of ref DocNode, array of int);
+
+	# Render a document, with the y each block starts at: with
+	# parsemdlines, a map between the text's lines and the image.
+	renderat: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int);
+
 	# Extract plain text from a document tree (for AI/body buffer).
 	totext: fn(doc: list of ref DocNode): string;
 };

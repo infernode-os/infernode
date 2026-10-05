@@ -31,6 +31,7 @@ Lstate: adt {
 	lh: int;              # Line height
 	asc: int;             # Baseline, below the top of the line
 	maxx: int;            # Rightmost x text has reached (measuring cells)
+	ys: list of int;      # The top of each block laid out, last first
 	mcache: list of (ref DocNode, ref Image);  # Mermaid diagrams, drawn once
 };
 
@@ -50,8 +51,21 @@ init(d: ref Draw->Display)
 
 render(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int)
 {
+	(img, h, nil) := layout(doc, style);
+	return (img, h);
+}
+
+renderat(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int)
+{
+	(img, nil, ys) := layout(doc, style);
+	return (img, ys);
+}
+
+# The document's image, its height, and the top of each of its blocks
+layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array of int)
+{
 	if(style == nil || style.font == nil)
-		return (nil, 0);
+		return (nil, 0, nil);
 
 	width := style.width;
 	if(width <= 0)
@@ -68,7 +82,7 @@ render(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int)
 	r := Rect(Point(0, 0), Point(width, height));
 	img := display.newimage(r, drawm->RGB24, 0, drawm->Black);
 	if(img == nil)
-		return (nil, 0);
+		return (nil, 0, nil);
 	img.draw(r, style.bgcolor, nil, Point(0, 0));
 
 	mc := ls.mcache;
@@ -76,14 +90,18 @@ render(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int)
 	ls.mcache = mc;
 	renderblocks(ls, doc);
 
-	return (img, ls.y);
+	ys := array[len ls.ys] of int;
+	i := len ys;
+	for(l := ls.ys; l != nil; l = tl l)
+		ys[--i] = hd l;
+	return (img, ls.y, ys);
 }
 
 newstate(img: ref Image, style: ref Style, width: int): ref Lstate
 {
 	m := px(style.margin);
 	return ref Lstate(img, style, m, m, m, width - m, m,
-		bodyfaces(style.font), 0, style.font.height, style.font.ascent, 0, nil);
+		bodyfaces(style.font), 0, style.font.height, style.font.ascent, 0, nil, nil);
 }
 
 px(n: int): int
@@ -219,6 +237,7 @@ renderblocks(ls: ref Lstate, doc: list of ref DocNode)
 	inlist := 0;
 	for(; doc != nil; doc = tl doc){
 		node := hd doc;
+		ls.ys = ls.y :: ls.ys;
 		# a list's items sit together; the list is spaced as a
 		# paragraph, from what follows and from a list of another kind
 		islist := 0;
@@ -433,6 +452,7 @@ drawmermaid(ls: ref Lstate, syntax: string): ref Image
 	width := ls.right - ls.left;
 	if(width <= 0)
 		width = 400;
+	mermaid->colours(ls.style.bgcolor, ls.style.codebgcolor, ls.style.linkcolor, ls.style.fgcolor);
 	im: ref Image;
 	{
 		(im, nil) = mermaid->render(syntax, width);
@@ -970,8 +990,18 @@ flattentext(nodes: list of ref DocNode): string
 # Parse markdown text into a list of DocNode blocks.
 parsemd(text: string): list of ref DocNode
 {
+	(doc, nil) := parsemdlines(text);
+	return doc;
+}
+
+# The blocks of a markdown text, and the line each starts on (from 0)
+parsemdlines(text: string): (list of ref DocNode, array of int)
+{
 	doc: list of ref DocNode;
+	starts: list of int;
 	lines := pmd_splitlines(text);
+	pend := doc;	# the blocks before the line being parsed
+	pendline := 0;
 
 	# the indents of the list items open around the current one,
 	# innermost first: an item's nesting level is its place in them
@@ -980,6 +1010,11 @@ parsemd(text: string): list of ref DocNode
 	i := 0;
 	nlines := len lines;
 	for(;;){
+		# the blocks the last pass made start on its line
+		for(l := doc; l != pend; l = tl l)
+			starts = pendline :: starts;
+		pend = doc;
+		pendline = i;
 		if(i >= nlines)
 			break;
 		line := lines[i];
@@ -1075,7 +1110,11 @@ parsemd(text: string): list of ref DocNode
 		i = ni;
 	}
 
-	return pmd_reverselist(doc);
+	ln := array[len starts] of int;
+	k := len ln;
+	for(; starts != nil; starts = tl starts)
+		ln[--k] = hd starts;
+	return (pmd_reverselist(doc), ln);
 }
 
 # 1 if line underlines a first-level setext heading (===), 2 a second (---)

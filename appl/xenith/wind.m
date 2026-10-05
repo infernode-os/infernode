@@ -58,6 +58,9 @@ Windowm : module {
 		docbg : ref Draw->Image;	# and the colours
 		docfg : ref Draw->Image;
 		docaccent : ref Draw->Image;
+		docb : ref Draw->Image;	# where the body's text draws meanwhile, unseen
+		doclines : array of int;	# each block's first line in the text
+		docys : array of int;	# and its top in the document
 		utflastqid : int;
 		utflastboff : int;
 		utflastq : int;

@@ -160,6 +160,25 @@ below and under the header. Where a family lacks a style (DejaVu has
 bold but no italic built), bold is drawn twice a pixel apart and italic
 is underlined.
 
+### Render
+
+`Render` in the tag of a markdown file (`.md`, `.markdown`) shows the
+text typeset; `Render` again shows the markdown. The text itself is
+never changed: `Put` saves it, programs reading the body over 9P see
+it, and typing or a write to the body goes back to it. Each switch
+keeps your place: the document opens at the passage the text was
+showing, and the text at the passage the document was showing.
+
+The typesetting is `rlayout` (`appl/xenith/render/rlayout.b`), the one
+markdown typesetter, which Lucifer's presentation and conversation
+views use too: headings, emphasis, strikethrough, links, nested and
+task lists, quotes, code, tables, and ` ```mermaid ` diagrams, drawn in
+the window's colours.
+
+For editing beside a live preview, `Zerox` the window and `Render` one
+of the two: the rendered one sets the text again as you edit in the
+other.
+
 ### Opening host files
 
 `tools/xen file ...` runs Xenith by itself, dark and filling the emu

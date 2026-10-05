@@ -27,32 +27,32 @@ include "mermaid.m";
 # Layout constants
 # ═══════════════════════════════════════════════════════════════════════════════
 
-HPAD:		con 14;		# node: horizontal text padding
-VPAD:		con 7;		# node: vertical text padding
-MINNODEW:	con 64;		# minimum node width
-MINNODEH:	con 28;		# minimum node height
-VGAP:		con 40;		# gap between layers (TD) / columns (LR)
-HGAP:		con 18;		# gap between nodes in the same layer
-MARGIN:		con 22;		# outer margin around diagram
-AHEADLEN:	con 10;		# arrowhead length (pixels)
-AHEADW:		con 6;		# arrowhead half-width
+HPAD:		int;		# node: horizontal text padding
+VPAD:		int;		# node: vertical text padding
+MINNODEW:	int;		# minimum node width
+MINNODEH:	int;		# minimum node height
+VGAP:		int;		# gap between layers (TD) / columns (LR)
+HGAP:		int;		# gap between nodes in the same layer
+MARGIN:		int;		# outer margin around diagram
+AHEADLEN:	int;		# arrowhead length (pixels)
+AHEADW:		int;		# arrowhead half-width
 
 # Sequence diagram
-SEQ_COLW:	con 140;	# centre-to-centre column spacing
-SEQ_BOXW:	con 110;	# participant box width
-SEQ_BOXH:	con 26;		# participant box height
-SEQ_ROWH:	con 38;		# row height per message
+SEQ_COLW:	int;	# centre-to-centre column spacing
+SEQ_BOXW:	int;	# participant box width
+SEQ_BOXH:	int;		# participant box height
+SEQ_ROWH:	int;		# row height per message
 
 # Gantt
-GNT_ROWH:	con 26;		# task row height
-GNT_LBLW:	con 150;	# left label column width
-GNT_HDRY:	con 32;		# date header height
-GNT_SECTH:	con 20;		# section title height
+GNT_ROWH:	int;		# task row height
+GNT_LBLW:	int;	# left label column width
+GNT_HDRY:	int;		# date header height
+GNT_SECTH:	int;		# section title height
 
 # XY chart
-XY_AXISW:	con 50;		# left axis width
-XY_AXISH:	con 28;		# bottom axis height
-XY_PLOTH:	con 180;	# plot area height
+XY_AXISW:	int;		# left axis width
+XY_AXISH:	int;		# bottom axis height
+XY_PLOTH:	int;	# plot area height
 
 # Default width when caller passes 0
 DEFWIDTH:	con 800;
@@ -433,6 +433,32 @@ init(d: ref Display, mainfont: ref Font, monofont: ref Font)
 	if(mofont == nil)
 		mofont = mfont;
 
+	# the layout's sizes are for a 14-pixel face (18 high); a larger
+	# one (a 2x display's) sets them that many times larger
+	sc := (mfont.height + 9) / 18;
+	if(sc < 1)
+		sc = 1;
+	HPAD = 14 * sc;
+	VPAD = 7 * sc;
+	MINNODEW = 64 * sc;
+	MINNODEH = 28 * sc;
+	VGAP = 40 * sc;
+	HGAP = 18 * sc;
+	MARGIN = 22 * sc;
+	AHEADLEN = 10 * sc;
+	AHEADW = 6 * sc;
+	SEQ_COLW = 140 * sc;
+	SEQ_BOXW = 110 * sc;
+	SEQ_BOXH = 26 * sc;
+	SEQ_ROWH = 38 * sc;
+	GNT_ROWH = 26 * sc;
+	GNT_LBLW = 150 * sc;
+	GNT_HDRY = 32 * sc;
+	GNT_SECTH = 20 * sc;
+	XY_AXISW = 50 * sc;
+	XY_AXISH = 28 * sc;
+	XY_PLOTH = 180 * sc;
+
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	th := lucitheme->gettheme();
 	cbg    = d.color(th.diagbg);
@@ -457,6 +483,27 @@ init(d: ref Display, mainfont: ref Font, monofont: ref Font)
 	cpie[5] = d.color(th.pie5);
 	cpie[6] = d.color(th.pie6);
 	cpie[7] = d.color(th.pie7);
+}
+
+# Draw in a document's colours rather than the theme's: its page, the
+# fill of its code, its accent for lines and arrows, its text
+colours(bg, fill, line, text: ref Image)
+{
+	if(bg != nil)
+		cbg = bg;
+	if(fill != nil){
+		cnode = fill;
+		csect = fill;
+	}
+	if(line != nil){
+		cbord = line;
+		cacc = line;
+	}
+	if(text != nil){
+		ctext = text;
+		ctext2 = text;
+		cwhite = text;
+	}
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -856,8 +903,10 @@ layoutflow(g: ref FCGraph, imgw: int)
 	if(g.nnodes == 0)
 		return;
 
-	nodes := revnodes(g.nodes);
-	edges := revedges(g.edges);
+	# in the order written: the callers have already reversed the
+	# lists parsing built backwards
+	nodes := g.nodes;
+	edges := g.edges;
 
 	# Compute node pixel dimensions
 	for(nl = nodes; nl != nil; nl = tl nl) {
@@ -892,57 +941,50 @@ layoutflow(g: ref FCGraph, imgw: int)
 			}
 	}
 
-	# BFS longest-path layering (Kahn's algorithm with cyclic-component restart)
-	# Each node is enqueued at most once (tracked by queued[]).
-	# When the queue empties, seed one unvisited node and re-drain.
-	# This bounds qtail <= g.nnodes regardless of cycle structure.
-	layer := array[g.nnodes] of {* => -1};
-	queue := array[g.nnodes] of int;
-	queued := array[g.nnodes] of {* => 0};
-	qhead := 0; qtail := 0;
-	indeg2 := array[g.nnodes] of {* => 0};
-	for(j = 0; j < g.nnodes; j++)
-		indeg2[j] = indeg[j];
-
-	for(j = 0; j < g.nnodes; j++)
-		if(indeg2[j] == 0) {
-			layer[j] = 0;
-			queue[qtail++] = j;
-			queued[j] = 1;
+	# Layers by longest path, once cycles are broken: a depth-first
+	# search from the sources (then from the rest, in the order the
+	# nodes were written) marks each edge that closes a cycle, and the
+	# layering ignores those, so A -> B -> A puts A above B, as written,
+	# instead of whichever node a restart happened to pick.
+	esrc := array[len edges] of int;
+	edst := array[len edges] of int;
+	j = 0;
+	for(el = edges; el != nil; el = tl el) {
+		e := hd el;
+		esrc[j] = edst[j] = -1;
+		for(k = 0; k < g.nnodes; k++) {
+			if(na[k].id == e.src) esrc[j] = k;
+			if(na[k].id == e.dst) edst[j] = k;
 		}
-
-	for(;;) {
-		while(qhead < qtail) {
-			u := queue[qhead++];
-			# Propagate to successors
-			for(el = edges; el != nil; el = tl el) {
-				e := hd el;
-				if(na[u].id != e.src) continue;
-				for(j = 0; j < g.nnodes; j++) {
-					if(na[j].id != e.dst) continue;
-					if(layer[u] + 1 > layer[j])
-						layer[j] = layer[u] + 1;
-					indeg2[j]--;
-					if(indeg2[j] == 0 && !queued[j]) {
-						queue[qtail++] = j;
-						queued[j] = 1;
-					}
-					break;
-				}
-			}
-		}
-		# Seed one unvisited node for cyclic components; re-drain
-		found := 0;
-		for(j = 0; j < g.nnodes; j++)
-			if(!queued[j]) {
-				layer[j] = 0;
-				queue[qtail++] = j;
-				queued[j] = 1;
-				found = 1;
-				break;
-			}
-		if(found == 0) break;
+		j++;
 	}
+	back := array[len edges] of {* => 0};
+	state := array[g.nnodes] of {* => 0};	# 0 unseen, 1 on the path, 2 done
+	for(j = 0; j < g.nnodes; j++)
+		if(indeg[j] == 0 && state[j] == 0)
+			markback(j, esrc, edst, state, back);
+	for(j = 0; j < g.nnodes; j++)
+		if(state[j] == 0)
+			markback(j, esrc, edst, state, back);
+
+	layer := array[g.nnodes] of {* => 0};
+	for(changed := 1; changed; ) {	# longest path; at most nnodes passes
+		changed = 0;
+		for(k = 0; k < len esrc; k++) {
+			if(back[k] || esrc[k] < 0 || edst[k] < 0 || esrc[k] == edst[k])
+				continue;
+			if(layer[esrc[k]] + 1 > layer[edst[k]]) {
+				layer[edst[k]] = layer[esrc[k]] + 1;
+				changed = 1;
+			}
+		}
+	}
+	queue := array[g.nnodes] of int;	# discovery order, for columns
+	qtail := 0;
+	for(l := 0; qtail < g.nnodes && l <= g.nnodes; l++)
+		for(j = 0; j < g.nnodes; j++)
+			if(layer[j] == l)
+				queue[qtail++] = j;
 
 	# Count layers and max column per layer
 	nlayers := 0;
@@ -1010,6 +1052,22 @@ layoutflow(g: ref FCGraph, imgw: int)
 }
 
 # Compute flow diagram image dimensions
+# Depth-first from node u: mark the edges that lead back onto the path
+markback(u: int, esrc, edst, state, back: array of int)
+{
+	state[u] = 1;
+	for(k := 0; k < len esrc; k++) {
+		if(esrc[k] != u || edst[k] < 0)
+			continue;
+		v := edst[k];
+		if(state[v] == 1)
+			back[k] = 1;
+		else if(state[v] == 0)
+			markback(v, esrc, edst, state, back);
+	}
+	state[u] = 2;
+}
+
 flowimgdims(g: ref FCGraph, imgw: int): (int, int)
 {
 	if(g.nnodes == 0)
@@ -1023,6 +1081,27 @@ flowimgdims(g: ref FCGraph, imgw: int): (int, int)
 		ry := nd.y + nd.h/2 + MARGIN;
 		if(rx > maxx) maxx = rx;
 		if(ry > maxy) maxy = ry;
+	}
+	# room for the edges that go round the side (drawbackedge)
+	for(el := g.edges; el != nil; el = tl el) {
+		e := hd el;
+		src := findnode(na, g.nnodes, e.src);
+		dst := findnode(na, g.nnodes, e.dst);
+		if(src == nil || dst == nil || !backedge(src, dst, g.dir))
+			continue;
+		if(g.dir == DIRN_LR || g.dir == DIRN_RL) {
+			y := src.y + src.h/2;
+			if(dst.y + dst.h/2 > y)
+				y = dst.y + dst.h/2;
+			y += VGAP + mfont.height + MARGIN/2;
+			if(y > maxy) maxy = y;
+		} else {
+			x := src.x + src.w/2;
+			if(dst.x + dst.w/2 > x)
+				x = dst.x + dst.w/2;
+			x += 2*HGAP + mfont.width(e.label) + 8 + MARGIN/2;
+			if(x > maxx) maxx = x;
+		}
 	}
 	if(maxx < imgw) maxx = imgw;
 	return (maxx, maxy);
@@ -1131,6 +1210,13 @@ drawfcedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir: int)
 	thick := 0;
 	if(e.style == ES_THICK) thick = 1;
 
+	# An edge against the flow (one closing a cycle) goes round the
+	# side, so it does not run back over the edges with the flow
+	if(backedge(src, dst, dir)) {
+		drawbackedge(img, src, dst, e, dir, col, thick);
+		return;
+	}
+
 	# Choose route: straight if aligned, orthogonal bend otherwise
 	if(dir == DIRN_LR || dir == DIRN_RL) {
 		if(p0.y == p1.y) {
@@ -1172,6 +1258,61 @@ drawfcedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir: int)
 		img.text(Point(mx-lw/2, my), ctext2, Point(0,0), mfont, e.label);
 	}
 	sp = sp;	# suppress unused warning
+}
+
+backedge(src, dst: ref FCNode, dir: int): int
+{
+	case dir {
+	DIRN_LR =>	return dst.x < src.x;
+	DIRN_RL =>	return dst.x > src.x;
+	DIRN_BT =>	return dst.y > src.y;
+	}
+	return dst.y < src.y;
+}
+
+# Out of the source's side, along past both nodes, and into the
+# target's side: the right for top-down and bottom-up charts, below for
+# left-to-right and right-to-left ones
+drawbackedge(img: ref Image, src, dst: ref FCNode, e: ref FCEdge, dir: int, col: ref Image, thick: int)
+{
+	p0, p1, a, b: Point;
+	adir: int;
+	if(dir == DIRN_LR || dir == DIRN_RL) {
+		p0 = Point(src.x, src.y + src.h/2);
+		p1 = Point(dst.x, dst.y + dst.h/2);
+		y := p0.y;
+		if(p1.y > y)
+			y = p1.y;
+		y += VGAP;
+		a = Point(p0.x, y);
+		b = Point(p1.x, y);
+		adir = 2;	# up, into the target
+	} else {
+		p0 = Point(src.x + src.w/2, src.y);
+		p1 = Point(dst.x + dst.w/2, dst.y);
+		x := p0.x;
+		if(p1.x > x)
+			x = p1.x;
+		x += 2*HGAP;
+		a = Point(x, p0.y);
+		b = Point(x, p1.y);
+		adir = 3;	# left, into the target
+	}
+	drawedgeseg(img, p0, a, e.style, col, thick);
+	drawedgeseg(img, a, b, e.style, col, thick);
+	drawedgeseg(img, b, p1, e.style, col, thick);
+	if(e.arrow)
+		drawarrowhead(img, p1, adir, col);
+	if(e.label != "") {
+		lw := mfont.width(e.label);
+		mx := (a.x + b.x) / 2;
+		my := (a.y + b.y) / 2 - mfont.height/2;
+		if(dir != DIRN_LR && dir != DIRN_RL)
+			mx += lw/2 + 4;	# beside the upward run
+		img.draw(Rect((mx-lw/2-2, my-1), (mx+lw/2+2, my+mfont.height+1)),
+			cnode, nil, (0,0));
+		img.text(Point(mx-lw/2, my), ctext2, Point(0,0), mfont, e.label);
+	}
 }
 
 drawedgeseg(img: ref Image, p0, p1: Point, style: int, col: ref Image, thick: int)
@@ -1448,8 +1589,8 @@ renderseq(lines: list of string, width: int): (ref Image, string)
 	ncols := d.nparts;
 	iw := ncols * SEQ_COLW + 2 * pad;
 	if(iw < width) iw = width;
-	msgsh := d.nmsgs * SEQ_ROWH + SEQ_ROWH;
-	ih := 2*pad + 2*titleh + 2*SEQ_BOXH + msgsh;
+	# the boxes, the first label's room, a row a message, the boxes again
+	ih := 2*pad + 2*SEQ_BOXH + mfont.height + SEQ_ROWH/4 + d.nmsgs * SEQ_ROWH;
 
 	img := mdisp.newimage(Rect((0,0),(iw,ih)), mdisp.image.chans, 0, Draw->Nofill);
 	if(img == nil) return (nil, "cannot allocate image");
@@ -1465,7 +1606,8 @@ renderseq(lines: list of string, width: int): (ref Image, string)
 
 	topy := pad;
 	boty := ih - pad - SEQ_BOXH;
-	firstmegy := topy + SEQ_BOXH + 8;
+	# room for the first message's label above its arrow
+	firstmegy := topy + SEQ_BOXH + mfont.height + SEQ_ROWH/4;
 
 	# Draw participant boxes (top and bottom)
 	i = 0;
@@ -1975,8 +2117,8 @@ renderxy(lines: list of string, width: int): (ref Image, string)
 # Arrowhead pointing in direction dir: 0=down, 1=right, 2=up, 3=left
 drawarrowhead(img: ref Image, tip: Point, dir: int, col: ref Image)
 {
-	AW: con AHEADW;
-	AH: con AHEADLEN;
+	AW := AHEADW;
+	AH := AHEADLEN;
 	pts := array[3] of Point;
 	case dir {
 	0 =>	# down

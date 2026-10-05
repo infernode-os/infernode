@@ -1018,7 +1018,6 @@ dis/xenith/render/charonrender.dis
 dis/xenith/render/htmlfmt.dis
 dis/xenith/render/htmlrender.dis
 dis/xenith/render/imgrender.dis
-dis/xenith/render/mdfmt.dis
 dis/xenith/render/mdrender.dis
 dis/xenith/render/mermaidrender.dis
 dis/xenith/render/pdfrender.dis

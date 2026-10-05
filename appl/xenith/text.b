@@ -553,6 +553,10 @@ Text.insert(t : self ref Text, q0 : int, r : string, n : int, tofile : int, echo
 		else
 			frinsert(t.frame, r, n, q0-t.org);
 	}
+	# a window showing the text as a document (Render) shows the
+	# edit made in another window on the file
+	if(t.what == Body && t.w != nil && t.w.docview)
+		t.w.docrender();
 	if(t.w != nil){
 		c = 'i';
 		if(t.what == Body)
@@ -651,6 +655,8 @@ Text.delete(t : self ref Text, q0 : int, q1 : int, tofile : int)
 		frdelete(t.frame, p0, p1);
 		t.fill();
 	}
+	if(t.what == Body && t.w != nil && t.w.docview)
+		t.w.docrender();
 	if(t.w != nil){
 		c = 'd';
 		if(t.what == Body)

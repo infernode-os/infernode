@@ -11,6 +11,13 @@
 
 include fileaddr
 
+# from another host (tools/rplumb there, already addressed to xenith):
+# the file is on that host, so no file test here; hostplumb opens it
+# under /n/<host>
+dst is xenith
+plumb to xenith
+plumb client xen
+
 # existing files, possibly tagged by an address
 type is text
 data matches '([.a-zA-Z¡-￿0-9_/\-@]*[a-zA-Z¡-￿0-9_/\-])('$addr')?'

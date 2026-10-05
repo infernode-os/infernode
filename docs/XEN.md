@@ -111,10 +111,53 @@ InferNode. The host side of that pipe ends when the emulator does.
 Every running Xenith reads the port, so with two running, a plumbed file
 opens in both.
 
+## Remote hosts
+
+A file on another machine you ssh to can be plumbed from there into
+the Xenith on your Mac, and saving it saves it on that machine.
+
+```sh
+hephaestus$ plumb src/foo.c:42     # opens in Xenith on the Mac
+```
+
+How it works: ssh carries the Mac's plumber to the remote host
+(`RemoteForward` to `~/.plumb.sock`); the host's `plumb`
+(`tools/rplumb`, a small 9P client) sends the file's absolute path,
+tagged `host=<name>`, to the `xenith` port; Xenith's `hostplumb` opens
+it under `/n/<name>`, where `xen` has mounted that host's file system
+over ssh with Plan 9's `u9fs`. No listener runs on the host, and ssh's
+own authentication covers both directions.
+
+Setting up a host (say `hephaestus`):
+
+1. On the host: build `u9fs` (from Plan 9's
+   `sys/src/cmd/unix/u9fs`) into `~/bin`; install `tools/rplumb` as
+   `~/bin/plumb`; write the name the Mac ssh's to it as into
+   `~/.plumbhost`.
+2. On the host, as root, let a new session replace a dead forward's
+   socket:
+   `echo 'StreamLocalBindUnlink yes' | sudo tee /etc/ssh/sshd_config.d/plumb.conf`
+   then `sudo systemctl reload ssh`.
+3. On the Mac, in `~/.ssh/config` (forwarding only for interactive
+   sessions, so scripted ssh never takes the socket; ssh runs `Match
+   exec` with stdin and stdout on `/dev/null`, hence stderr):
+   ```
+   Match originalhost hephaestus exec "test -t 2"
+     RemoteForward /home/you/.plumb.sock /tmp/ns.you/plumb
+   ```
+4. On the Mac, in `~/.zshrc`: a fixed plumber name space, and the hosts
+   to mount: `export NAMESPACE=/tmp/ns.$USER`,
+   `export XEN_HOSTS="hephaestus"`.
+
+`xen` mounts the `XEN_HOSTS` hosts before Xenith starts (Xenith keeps
+the name space it starts with), so a host added later needs a new
+`xen`. A host that cannot be reached is skipped after a few seconds.
+New files written through `u9fs` are created mode 666.
+
 ## For agents
 
 When the user asks to have a file opened for them to read or edit, run
-`plumb <file>` (or `plumb <file>:<line>`): it opens in the Xenith the
+`plumb <file>` (on a remote host set up as above, too) (or `plumb <file>:<line>`): it opens in the Xenith the
 user already has running, or starts one if none is. If `plumb` fails
 (plan9port's plumber is not running), run `xen <file>` instead, which
 starts a new instance. For sam, run `xen -s <file>`. These return

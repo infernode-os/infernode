@@ -29,6 +29,8 @@
 #			sam takes its colours from the system theme.
 #	XEN_GEOM	initial emu window size (default 1400x900)
 #	XEN_LOG		where a detached emu's output goes (default $TMPDIR/xen.log)
+#	XEN_HOSTS	hosts to mount at /n/<host> (ssh + u9fs), so files they
+#			plumb (tools/rplumb) open and save there
 
 usage() {
 	echo "usage: xen [-s] [-w] [file ...]" >&2
@@ -100,6 +102,14 @@ xenith)
 		host="'$nine' read plumb/xenith & r=\$!; while kill -0 \$PPID 2>/dev/null; do sleep 1; done; kill \$r"
 		run="${run}os sh -c $(q "$host") | hostplumb & "
 	fi
+	# Hosts whose files may be plumbed here (tools/rplumb): mounted at
+	# /n/<host> now, since Xenith keeps the name space it starts with.
+	for h in $XEN_HOSTS; do
+		case $h in
+		*[!A-Za-z0-9._-]*|-*)	echo "xen: bad host name in XEN_HOSTS: $h" >&2 ;;
+		*)	run="${run}run /lib/xen/mounthost $(q "$h") >[2] /dev/null; " ;;
+		esac
+	done
 	run="${run}xenith -t $(q "${XEN_THEME:-xenith}")$files" ;;
 sam)
 	run="wm/wm sh -c $(q "wm/sam$files; echo halt > /dev/sysctl")" ;;

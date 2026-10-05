@@ -40,8 +40,27 @@ attribute, which the host's rules set when they have made the data an
 absolute file name, is appended to the data as
 .BI : addr ;
 .IP \(bu
+a message with the attribute
+.BI host= name\f1,
+which
+.B tools/rplumb
+sends from another machine, has its paths placed under
+.BI /n/ name
+instead of
+.IR root ;
+that machine's file system is mounted there (by
+.BR /lib/xen/mounthost ,
+over
+.IR ssh (1)
+with
+.IR u9fs ),
+so a file opened from it is saved back to it;
+.IP \(bu
 the destination and attributes are cleared, so this name space's
 plumbing rules decide where the message goes.
+.PP
+Attributes are read as plan9port writes them: separated by blanks,
+a value with blanks in it quoted.
 .PP
 If the plumber refuses a message because nothing is reading its port
 and no rule starts a reader, as happens when the receiver is still

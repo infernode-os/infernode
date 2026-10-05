@@ -9,6 +9,11 @@ implement Hostplumb;
 # a file address is folded back into the data, and the message is
 # plumbed here, where this namespace's rules route it.
 #
+# A message from another host (attr host=name, sent by tools/rplumb on
+# that host) has its paths placed under /n/name instead, where that
+# host's file system is mounted (tools/xen does it, before Xenith starts,
+# for the hosts named in $XEN_HOSTS).
+#
 
 include "sys.m";
 	sys: Sys;
@@ -20,6 +25,9 @@ include "arg.m";
 include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
+
+include "string.m";
+	str: String;
 
 include "plumbmsg.m";
 	plumbmsg: Plumbmsg;
@@ -45,6 +53,9 @@ init(nil: ref Draw->Context, args: list of string)
 	plumbmsg = load Plumbmsg Plumbmsg->PATH;
 	if(plumbmsg == nil)
 		fail(sys->sprint("cannot load %s: %r", Plumbmsg->PATH));
+	str = load String String->PATH;
+	if(str == nil)
+		fail(sys->sprint("cannot load %s: %r", String->PATH));
 	arg := load Arg Arg->PATH;
 	if(arg == nil)
 		fail(sys->sprint("cannot load %s: %r", Arg->PATH));
@@ -69,7 +80,16 @@ init(nil: ref Draw->Context, args: list of string)
 
 	in := bufio->fopen(sys->fildes(0), Bufio->OREAD);
 	while((m := readmsg(in)) != nil){
-		m = local(m, root);
+		r := root;
+		(ok, host) := attr(m.attr, "host");
+		if(ok && host != nil){
+			if(!validhost(host)){
+				sys->fprint(stderr, "hostplumb: bad host name %q\n", host);
+				continue;
+			}
+			r = "/n/" + host;
+		}
+		m = local(m, r);
 		# the receiver may still be starting (a message can arrive as
 		# soon as the host's plumber sees this reader): retry a while
 		for(i := 0; m.send() < 0; i++){
@@ -80,6 +100,33 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->sleep(Retrywait);
 		}
 	}
+}
+
+# An attribute of a message from plan9port's plumber, whose attributes
+# are separated by blanks, a value with blanks in it quoted (not the
+# tabs of plumbmsg's string2attrs).
+attr(attrs, name: string): (int, string)
+{
+	for(l := str->unquoted(attrs); l != nil; l = tl l){
+		(n, v) := str->splitl(hd l, "=");
+		if(n == name && v != nil)
+			return (1, v[1:]);
+	}
+	return (0, nil);
+}
+
+# a host name goes into a path: letters, digits, - . _
+validhost(h: string): int
+{
+	if(h == nil || h[0] == '.' || h[0] == '-')
+		return 0;
+	for(i := 0; i < len h; i++){
+		c := h[i];
+		if(!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		    c == '-' || c == '.' || c == '_'))
+			return 0;
+	}
+	return 1;
 }
 
 # one message: six header lines, then the data
@@ -117,8 +164,7 @@ local(m: ref Msg, root: string): ref Msg
 			data = m.dir + "/" + data;
 		if(data[0] == '/')
 			data = root + data;
-		attrs := plumbmsg->string2attrs(m.attr);
-		(ok, addr) := plumbmsg->lookup(attrs, "addr");
+		(ok, addr) := attr(m.attr, "addr");
 		if(ok && addr != nil)
 			data += ":" + addr;
 	}

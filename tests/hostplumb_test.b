@@ -208,6 +208,23 @@ testRoot(t: ref T)
 	t.assertseq(string m.data, "/n/host/home/u/a", "-r sets the root");
 }
 
+testOtherHost(t: ref T)
+{
+	# from another host (tools/rplumb): its own name, its own paths
+	spawn hostplumb(nil, hostmsg("/home/u/src", "host=hephaestus addr=12", "/home/u/src/f.c") :: nil);
+	m := next(t);
+	t.assertseq(string m.data, "/n/hephaestus/home/u/src/f.c:12", "under /n/<host>, not /n/local");
+	t.assertseq(m.dir, "/n/hephaestus/home/u/src", "its directory too");
+}
+
+testBadHost(t: ref T)
+{
+	# a host name that is not one is dropped, not turned into a path
+	spawn hostplumb(nil, hostmsg("/", "host=../etc", "/x") :: hostmsg("/a", "", "/a/after") :: nil);
+	m := next(t);
+	t.assertseq(string m.data, "/n/local/a/after", "the bad message is skipped, the next delivered");
+}
+
 testSeveral(t: ref T)
 {
 	spawn hostplumb(nil, hostmsg("/a", "", "/a/one") :: hostmsg("/a", "addr=3", "/a/two") :: nil);
@@ -257,6 +274,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Absolute", testAbsolute);
 	run("Relative", testRelative);
 	run("Root", testRoot);
+	run("OtherHost", testOtherHost);
+	run("BadHost", testBadHost);
 	run("Several", testSeveral);
 
 	# the plumber's processes would keep the emulator up

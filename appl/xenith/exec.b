@@ -717,47 +717,20 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 	}
 	namer = name;
 
-	# If in render mode, temporarily restore raw text for save
-	wasrendered := w.rendermode;
-	saveddata : array of byte;
-	if(wasrendered && w.contentdata != nil){
-		saveddata = w.contentdata;
-		rawstr := string w.contentdata;
-		w.nomark = 1;
-		w.body.delete(0, w.body.file.buf.nc, TRUE);
-		w.body.insert(0, rawstr, len rawstr, TRUE, 0);
-		w.nomark = 0;
-		rawstr = nil;
+	# A formatted view (Render through a text formatter) holds the
+	# formatted text in the buffer and the raw text aside. Save the raw
+	# text, and stay on it: a large file is written in the background
+	# from the buffer itself (putfile), so putting the formatted text
+	# back after starting the save wrote it to the file.
+	if(w.rendermode && !w.docview){
+		if(w.contentdata == nil){
+			warning(nil, sprint("%s not written: the window shows formatted text\n", name));
+			return;
+		}
+		renderoff(w);
 	}
 
 	putfile(f, 0, f.buf.nc, namer);
-
-	# Restore formatted view if was rendered
-	if(wasrendered && saveddata != nil){
-		w.contentdata = saveddata;
-		if(formatmod != nil){
-			(formatter, nil) := formatmod->find(w.body.file.name);
-			if(formatter != nil){
-				rawstr := string saveddata;
-				charwidth := 80;
-				fw := graph->strwidth(w.body.frame.font, "0");
-				if(fw > 0){
-					dx := w.body.frame.r.max.x - w.body.frame.r.min.x;
-					if(dx > 0)
-						charwidth = dx / fw;
-				}
-				if(charwidth < 20)
-					charwidth = 20;
-				formatted := formatter->format(rawstr, charwidth);
-				w.nomark = 1;
-				w.body.delete(0, w.body.file.buf.nc, TRUE);
-				w.body.insert(0, formatted, len formatted, TRUE, 0);
-				w.body.file.mod = FALSE;
-				w.nomark = 0;
-				rawstr = nil;
-			}
-		}
-	}
 
 	name = nil;
 }

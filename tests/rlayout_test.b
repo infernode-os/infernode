@@ -7,6 +7,8 @@ implement RlayoutTest;
 #   - outer pipes delimit a row; they are not empty columns
 #   - emphasis nests: bold italic is bold around italic, and the text
 #     inside bold or italic is parsed again
+#   - a backslash makes punctuation literal
+#   - a link's text may hold brackets, as a badge's image does
 #
 
 include "sys.m";
@@ -114,6 +116,22 @@ testNestedEmphasis(t: ref T)
 	t.assertseq((hd tl kids).text, " c", "text after");
 }
 
+testEscape(t: ref T)
+{
+	p := block(t, "L\\* 92\\_100", Rlayout->Npara);
+	t.asserteq(len p.children, 1, "one text run, no emphasis");
+	t.assertseq((hd p.children).text, "L* 92_100", "backslash makes punctuation literal");
+}
+
+testBadgeLink(t: ref T)
+{
+	p := block(t, "[![CI](https://x/badge.svg)](https://x/ci) after", Rlayout->Npara);
+	l := hd p.children;
+	t.asserteq(l.kind, Rlayout->Nlink, "a link around the image");
+	t.assertseq((hd l.children).text, "CI", "the image shows its alt text");
+	t.assertseq((hd tl p.children).text, " after", "text after the link");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -138,6 +156,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("TableBare", testTableBare);
 	run("BoldItalic", testBoldItalic);
 	run("NestedEmphasis", testNestedEmphasis);
+	run("Escape", testEscape);
+	run("BadgeLink", testBadgeLink);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

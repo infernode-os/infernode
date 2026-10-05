@@ -848,7 +848,6 @@ renderinlinecode(ls: ref Lstate, text: string)
 	ls.x += tw + 2*pad;
 	if(ls.x > ls.maxx)
 		ls.maxx = ls.x;
-	ls.x += px(2);
 }
 
 # Move to next line
@@ -1140,7 +1139,14 @@ pmd_parseinline(text: string): list of ref DocNode
 	while(i < len text){
 		c := text[i];
 
-		# Image: ![alt](url) — render alt text only, no ! prefix
+		# A backslash makes the punctuation after it literal: \* \_ \` \|
+		if(c == '\\' && i+1 < len text && pmd_ispunct(text[i+1])){
+			plain[len plain] = text[i+1];
+			i += 2;
+			continue;
+		}
+
+		# Image: ![alt](url) — its alt text
 		if(c == '!' && i+1 < len text && text[i+1] == '['){
 			if(len plain > 0){
 				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
@@ -1149,9 +1155,10 @@ pmd_parseinline(text: string): list of ref DocNode
 			(linknode, ni) := pmd_parselink(text, i+1);
 			if(linknode != nil){
 				# Turn link node into plain text (alt text only, no click)
+				# an image shows as its alt text
 				alttxt := flattentext(linknode.children);
 				if(alttxt != nil && len alttxt > 0)
-					nodes = ref DocNode(Ntext, "[image: " + alttxt + "]", nil, 0) :: nodes;
+					nodes = ref DocNode(Ntext, alttxt, nil, 0) :: nodes;
 				i = ni;
 				continue;
 			}
@@ -1280,6 +1287,14 @@ pmd_parseinline(text: string): list of ref DocNode
 	return pmd_reverselist(nodes);
 }
 
+pmd_ispunct(c: int): int
+{
+	for(i := 0; i < len "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"; i++)
+		if(c == "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"[i])
+			return 1;
+	return 0;
+}
+
 pmd_findclose(text: string, start: int, delim: string): int
 {
 	dlen := len delim;
@@ -1292,9 +1307,22 @@ pmd_findclose(text: string, start: int, delim: string): int
 
 pmd_parselink(text: string, start: int): (ref DocNode, int)
 {
+	# the text may hold brackets of its own: [![badge](img)](url)
 	i := start + 1;
-	while(i < len text && text[i] != ']')
-		i++;
+	depth := 0;
+	for(; i < len text; i++){
+		if(text[i] == '\\' && i+1 < len text){
+			i++;
+			continue;
+		}
+		if(text[i] == '[')
+			depth++;
+		else if(text[i] == ']'){
+			if(depth == 0)
+				break;
+			depth--;
+		}
+	}
 	if(i >= len text)
 		return (nil, start + 1);
 
@@ -1312,8 +1340,7 @@ pmd_parselink(text: string, start: int): (ref DocNode, int)
 		return (nil, start + 1);
 	j++;
 
-	children := ref DocNode(Ntext, linktext, nil, 0) :: nil;
-	return (ref DocNode(Nlink, nil, children, 0), j);
+	return (ref DocNode(Nlink, nil, pmd_parseinline(linktext), 0), j);
 }
 
 # Returns 1 if line looks like a table row (contains '|')

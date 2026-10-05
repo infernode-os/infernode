@@ -70,7 +70,7 @@ and only appeared to work because their bytecode had been committed by hand.
 `mk install` from the source directory. Choosing an output path yourself is
 how modules end up somewhere no build installs to and no runtime loads from.
 
-To open a file in an editor for the user, run `tools/xen <file>` (Xenith) or `tools/xen -s <file>` (sam); it returns at once. See [docs/XEN.md](docs/XEN.md).
+To open a file in an editor for the user, run `plumb <file>` (opens it in their running Xenith, starting one if needed), falling back to `tools/xen <file>` if `plumb` fails; `tools/xen -s <file>` for sam. Both return at once. See [docs/XEN.md](docs/XEN.md).
 
 ## Coding Style & Naming Conventions
 

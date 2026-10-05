@@ -114,8 +114,11 @@ opens in both.
 ## For agents
 
 When the user asks to have a file opened for them to read or edit, run
-`xen <file>` (or `xen -s <file>` if they ask for sam). It returns
+`plumb <file>` (or `plumb <file>:<line>`): it opens in the Xenith the
+user already has running, or starts one if none is. If `plumb` fails
+(plan9port's plumber is not running), run `xen <file>` instead, which
+starts a new instance. For sam, run `xen -s <file>`. These return
 immediately and the editor appears on the user's screen; do not wait on
-it. Use `-w` only when the next step depends on the user having finished
-editing (for example, a commit message they are writing), and expect it
-to block until they close the editor.
+them. Use `xen -w` only when the next step depends on the user having
+finished editing (for example, a commit message they are writing), and
+expect it to block until they close the editor.

@@ -172,7 +172,7 @@ stdout/stderr stream to the terminal, Ctrl-C exits, no signing/Gatekeeper/Transl
 
 The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` is currently untracked and authored ad-hoc — treat it as the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
 
-To open a file in an editor for the user, run `tools/xen <file>` (Xenith alone, dark, full-window) or `tools/xen -s <file>` (sam); it returns at once and leaving the editor halts that instance. See [docs/XEN.md](docs/XEN.md).
+To open a file in an editor for the user, run `plumb <file>` (opens it in their running Xenith, starting one if needed), falling back to `tools/xen <file>` (Xenith alone, full-window) if `plumb` fails; `tools/xen -s <file>` for sam. Both return at once; leaving the editor halts that instance. See [docs/XEN.md](docs/XEN.md).
 
 ## Inferno® Shell Differences
 

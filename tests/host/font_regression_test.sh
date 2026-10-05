@@ -147,7 +147,7 @@ done
 # Xenith's reading faces (tools/gen-text-fonts.py): every subfont their
 # manifests name must exist, or the character falls to PJW
 for face in go gomono serif; do
-    for sz in 14 16 18; do
+    for sz in 14 16 18 28 32 36; do
         fontfile="$face.$sz.font"
         if [ ! -f "$COMBINED_DIR/$fontfile" ]; then
             fail "$fontfile missing from fonts/combined/"

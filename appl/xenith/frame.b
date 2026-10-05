@@ -24,6 +24,7 @@ frame : ref Frame;
 init(mods : ref Dat->Mods)
 {
 	sys = mods.sys;
+	FRTICKW = 3;
 	drawm = mods.draw;
 	xenith = mods.xenith;
 	gui = mods.gui;
@@ -526,8 +527,10 @@ frinittick(f : ref Frame)
 	}
 	# background color
 	draw(f.tick, f.tick.r, f.cols[BACK], nil, (0, 0));
-	# vertical line
-	draw(f.tick, ((FRTICKW/2, 0), (FRTICKW/2+1, ft.height)), f.cols[TEXT], nil, (0, 0));
+	# vertical line, a third of the tick wide
+	lw := (FRTICKW+2)/3;
+	lx := (FRTICKW-lw)/2;
+	draw(f.tick, ((lx, 0), (lx+lw, ft.height)), f.cols[TEXT], nil, (0, 0));
 	# box on each end
 	draw(f.tick, ((0,0),(FRTICKW, FRTICKW)), f.cols[TEXT], nil, (0,0));
 	draw(f.tick,  ((0, ft.height-FRTICKW), (FRTICKW, ft.height)), f.cols[TEXT], nil, (0,0));

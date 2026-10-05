@@ -59,6 +59,13 @@ plumbing.
 | `XEN_THEME` | the session's theme: any installed theme; `glenda` is Plan 9's acme | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
 | `XEN_LOG` | output of a detached instance | `$TMPDIR/xen.log` |
+| `INFERNODE_HIDPI` | `0` draws Xenith in points, each doubled on a Retina display, instead of in the display's own pixels | `1` |
+
+On a Retina display Xenith draws in the display's own pixels: the emu
+reports two pixels to the point (`emu(1)`), and Xenith doubles its
+scroll bar, borders and tick and takes its fonts' double-size builds
+under their usual names, so `go.14.font` looks the size it always did,
+only sharp. sam is still drawn in doubled points.
 
 A stand-alone Xenith is pinned to its theme: switching the system theme
 (Settings, or a write to `/lib/lucifer/theme/current`) leaves it alone,

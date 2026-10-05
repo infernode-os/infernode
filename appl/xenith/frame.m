@@ -3,7 +3,7 @@ Framem : module {
 
 	BACK, HIGH, BORD, TEXT, HTEXT, NCOL : con iota;
 
-	FRTICKW : con 3;
+	FRTICKW : int;	# tick width: 3, times $displayscale
 
 	init : fn(mods : ref Dat->Mods);
 

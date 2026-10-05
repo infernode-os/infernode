@@ -31,6 +31,8 @@
 #	XEN_LOG		where a detached emu's output goes (default $TMPDIR/xen.log)
 #	XEN_HOSTS	hosts to mount at /n/<host> (ssh + u9fs), so files they
 #			plumb (tools/rplumb) open and save there
+#	INFERNODE_HIDPI	0 draws Xenith in points doubled on a Retina display
+#			rather than in its own pixels (the default, 1)
 
 usage() {
 	echo "usage: xen [-s] [-w] [file ...]" >&2
@@ -110,7 +112,12 @@ xenith)
 		*)	run="${run}run /lib/xen/mounthost $(q "$h") >[2] /dev/null; " ;;
 		esac
 	done
-	run="${run}xenith -t $(q "${XEN_THEME:-xenith}")$files" ;;
+	run="${run}xenith -t $(q "${XEN_THEME:-xenith}")$files"
+	# The display's own pixels on a Retina screen, not each doubled:
+	# Xenith sizes itself by $displayscale (emu(1)). Not for sam, whose
+	# Tk does not. INFERNODE_HIDPI=0 keeps them doubled.
+	INFERNODE_HIDPI=${INFERNODE_HIDPI:-1}
+	export INFERNODE_HIDPI ;;
 sam)
 	run="wm/wm sh -c $(q "wm/sam$files; echo halt > /dev/sysctl")" ;;
 esac

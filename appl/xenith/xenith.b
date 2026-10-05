@@ -125,6 +125,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		graph->init(mods);
 		dat->init(mods);
 		framem->init(mods);
+		setscale();	# with the display, before anything opens a font
 		regx->init(mods);
 		scrl->init(mods);
 		textm->init(mods);
@@ -1483,6 +1484,35 @@ waitproc(pid : int, sync: chan of int)
 	}
 }
 
+# With the display's own pixels on a Retina screen (the emu's
+# INFERNODE_HIDPI, which tools/xen sets), $displayscale pixels make a
+# point: draw the chrome that many times larger, and bind each reading
+# face's larger build over its name (go.28.font over go.14.font at 2x),
+# so names keep their size, as the mobile boot does for its fonts. The
+# draw device caches a font by name, so this must come before anything
+# opens one.
+setscale()
+{
+	s := int utils->getenv("displayscale");
+	if(s <= 1)
+		return;
+	if(s > 4)
+		s = 4;
+	sys->pctl(Sys->FORKNS, nil);	# the binds are Xenith's own
+	dat->Scrollwid *= s;
+	dat->Scrollgap *= s;
+	dat->Border *= s;
+	dat->Mincolwid *= s;
+	framem->FRTICKW *= s;
+	for(f := list of {"go", "gomono", "serif"}; f != nil; f = tl f)
+		for(z := list of {14, 16, 18}; z != nil; z = tl z){
+			large := sprint("/fonts/combined/%s.%d.font", hd f, s*hd z);
+			(ok, nil) := sys->stat(large);
+			if(ok >= 0)
+				sys->bind(large, sprint("/fonts/combined/%s.%d.font", hd f, hd z), Sys->MREPL);
+		}
+}
+
 get(fix : int, save : int, setfont : int, name : string) : ref Reffont
 {
 	r : ref Reffont;
@@ -1805,7 +1835,7 @@ iconinit()
 	if(button != nil)
 		button = modbutton = colbutton = nil;
 
-	r = ((0, 0), (Dat->Scrollwid+2, font.height+1));
+	r = ((0, 0), (dat->Scrollwid+2, font.height+1));
 	button = balloc(r, mainwin.chans, Draw->White);
 	draw(button, r, tagcols[BACK], nil, r.min);
 	r.max.x -= 2;

@@ -23,7 +23,8 @@ ecmd : Editcmd;
 ALLLOOPER, ALLTOFILE, ALLMATCHFILE, ALLFILECHECK, ALLELOGTERM, ALLEDITINIT, ALLUPDATE, ALLINCREF, ALLDECREF, FIXINDENT: import Edit;
 sprint : import sys;
 FALSE, TRUE, XXX : import Dat;
-Border, BUFSIZE, Astring : import Dat;
+BUFSIZE, Astring : import Dat;
+Border, Mincolwid : import dat;
 Reffont, reffont, Lock, Ref : import dat;
 row, home, mouse : import dat;
 fontnames, rowbordercol, colbordercol, bgcol: import xenith;
@@ -231,10 +232,10 @@ Row.dragcol(row : self ref Row, c : ref Column)
 	if(i == 0)
 		return;
 	d = row.col[i-1];
-	if(p.x < d.r.min.x+80+Dat->Scrollwid)
-		p.x = d.r.min.x+80+Dat->Scrollwid;
-	if(p.x > c.r.max.x-80-Dat->Scrollwid)
-		p.x = c.r.max.x-80-Dat->Scrollwid;
+	if(p.x < d.r.min.x+Mincolwid+dat->Scrollwid)
+		p.x = d.r.min.x+Mincolwid+dat->Scrollwid;
+	if(p.x > c.r.max.x-Mincolwid-dat->Scrollwid)
+		p.x = c.r.max.x-Mincolwid-dat->Scrollwid;
 	r = d.r;
 	r.max.x = c.r.max.x;
 	draw(mainwin, r, bgcol, nil, (0, 0));

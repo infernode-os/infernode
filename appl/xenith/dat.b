@@ -14,6 +14,10 @@ init(mods : ref Dat->Mods)
 	xenith = mods.xenith;
 	utils = mods.utils;
 
+	Scrollwid = 12;
+	Scrollgap = 4;
+	Border = 2;
+	Mincolwid = 80;
 	mouse = ref Draw->Pointer;
 	mouse.buttons = mouse.msec = 0;
 	mouse.xy = (0, 0);

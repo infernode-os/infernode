@@ -57,10 +57,7 @@ Dat : module {
 	BUFSIZE : con MAXRPC;
 	EVENTSIZE : con 256;
 	PLUMBSIZE : con 1024*64;
-	Scrollwid : con 12;	# width of scroll bar
-	Scrollgap : con 4;	# gap right of scroll bar
 	Margin : con 4;		# margin around text
-	Border : con 2;		#  line between rows, cols, windows
 	Maxtab : con 4;		# size of a tab, in units of the '0' character
 	
 	Empty: con 0;
@@ -267,6 +264,12 @@ Dat : module {
 			FC => fc: ref Filecheck;
 		}
 	};
+
+	# in pixels, so times $displayscale (setscale): 12, 4 and 2 at 1x
+	Scrollwid : int;	# width of scroll bar
+	Scrollgap : int;	# gap right of scroll bar
+	Border : int;		#  line between rows, cols, windows
+	Mincolwid : int;	# narrowest a column is dragged
 
 	globalincref: int;
 	globalautoindent: int;

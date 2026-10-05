@@ -1,34 +1,58 @@
-# Xenith — dark theme after Xenith's original look (Catppuccin Mocha)
+# Xenith — the dark theme, measured against the reading research
 #
-# A whole-system theme like the others; tools/xen also pins a
-# stand-alone Xenith to it. Xenith takes its body from the edit*
-# keys, its tags from header and text, its selection from menuhilit,
-# its frame borders from accent and border, and its button 2/3/modified
-# colours from red, green and yellow.
+# Catppuccin Mocha, kept where it already meets the evidence and changed
+# where it does not. A whole-system theme like the others; tools/xen
+# also pins a stand-alone Xenith to it. The xenith-* keys at the end set
+# Xenith's colours by name, so nothing is left to the role mapping.
+#
+# The rules, and where they come from:
+#  - Readability comes from luminance contrast, not hue (Legge 1990;
+#    Knoblauch 1991), and it levels off well short of the maximum
+#    (Legge, Rubin & Luebker 1987). So: dark grey, not black, behind
+#    off-white, not white. Mocha's body already does this: background
+#    L* 12, text L* 86, 11.3:1, APCA Lc 80.
+#  - Desaturated colours read as well as any (Pastoor 1990). Colours
+#    that are read as text are the paler, less saturated ones, at 7:1 or
+#    better; no saturated blue for thin text.
+#  - Contrast is measured with APCA as well as WCAG 2, whose ratio
+#    misjudges pairs near black. Body text is held to Lc 75 or better.
+#  - A selection need only show as an area (Lc 15 against the body);
+#    the text on it is held to the body's standard, so selected text is
+#    drawn brighter rather than the fill made darker. Xenith's three
+#    selections (buttons 1, 2, 3) share one lightness and differ in
+#    hue; which button made one is known without its colour.
+#  - No syntax colouring: its effect on reading code is nil or small
+#    (Hannebauer et al. 2018).
+#
+# Mocha's colours that failed and what replaced them:
+#  dim 6C7086 (3.4:1) -> A6ADC8, accent 89B4FA (Lc 59) -> B4BEFE,
+#  red F38BA8 (Lc 55) -> EBA0AC, menu selection 585B70 (text 4.6:1) ->
+#  45475A, Xenith's button 2 and 3 fills (pastel, glaring in a dark
+#  page) -> muted fills at the selection's lightness.
 
 # Core UI
-bg 181825
+bg 181825		# L* 9
 border 45475A
 windowborder 313244
-header 313244
-accent 89B4FA
-text CDD6F4
-text2 BAC2DE
-dim 6C7086
+header 313244		# tags: L* 21, text on them 8.7:1, Lc 76
+accent B4BEFE		# 9.2:1, Lc 68
+text CDD6F4		# L* 86
+text2 BAC2DE		# 9.3:1, Lc 68
+dim A6ADC8		# 7.4:1, Lc 56: the floor for secondary text
 label 45475A
 
 # Conversation zone
 human 313244
 veltro 1E1E2E
 input 181825
-cursor 89B4FA
+cursor B4BEFE
 
-# Status / semantic
-red F38BA8
-green A6E3A1
-yellow F9E2AF
+# Status / semantic: all read as text, all 7:1 or better
+red EBA0AC		# 7.9:1, Lc 60
+green A6E3A1		# 11.0:1, Lc 78
+yellow F9E2AF		# 12.9:1, Lc 88
 progbg 313244
-progfg 89B4FA
+progfg B4BEFE
 
 # Code blocks
 codebg 181825
@@ -36,29 +60,29 @@ codebg 181825
 # Context menu
 menubg 1E1E2E
 menuborder 45475A
-menuhilit 585B70
+menuhilit 45475A	# menutext on it 6.3:1, Lc 70
 menutext CDD6F4
-menudim 6C7086
+menudim A6ADC8
 
 # Editor
-editbg 1E1E2E
-edittext CDD6F4
-editcursor 89B4FA
-editlineno 6C7086
+editbg 1E1E2E		# L* 12
+edittext CDD6F4		# 11.3:1, Lc 80
+editcursor B4BEFE
+editlineno A6ADC8
 editstatus 181825
 editstattext BAC2DE
 editscroll 313244
-editthumb 585B70
+editthumb 54566E
 
-# Mermaid diagrams
+# Diagrams: areas and lines, not text; Mocha's pastels
 diagbg 1E1E2E
 diagnode 313244
-diagborder 89B4FA
+diagborder B4BEFE
 diagtext CDD6F4
 diagtext2 A6ADC8
-diagacc 89B4FA
+diagacc B4BEFE
 diaggreen A6E3A1
-diagred F38BA8
+diagred EBA0AC
 diagyellow F9E2AF
 diaggrid 45475A
 pie0 89B4FA
@@ -69,3 +93,23 @@ pie4 CBA6F7
 pie5 94E2D5
 pie6 FAB387
 pie7 89DCEB
+
+# Xenith
+xenith-bg-tag-0 313244
+xenith-fg-tag-0 CDD6F4
+xenith-bg-tag-1 54566E		# selection: L* 37, Lc 15 as an area
+xenith-fg-tag-1 EFF1F5		# on it: Lc 80
+xenith-bord-tag-0 6C7086	# lines, not text
+xenith-bg-text-0 1E1E2E
+xenith-fg-text-0 CDD6F4
+xenith-bg-text-1 54566E		# button 1: L* 37, Lc 15 as an area
+xenith-fg-text-1 EFF1F5		# on it: Lc 80
+xenith-bord-text-0 45475A
+xenith-bg-text-2 7C484D		# button 2: the same lightness, red
+xenith-fg-text-2 EFF1F5		# Lc 81
+xenith-bg-text-3 3B603D		# button 3: the same lightness, green
+xenith-fg-text-3 EFF1F5		# Lc 80
+xenith-mod-but-0 89B4FA		# a mark, not text
+xenith-bord-col-0 45475A
+xenith-bord-row-0 45475A
+xenith-bg-col-0 181825

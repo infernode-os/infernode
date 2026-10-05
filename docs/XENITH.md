@@ -10,7 +10,7 @@ Xenith maintains Acme's elegant text-based philosophy while adding capabilities 
 - **Namespace Security** - Capability-based access control for AI containment
 - **Observable Operations** - All agent activity visible to humans
 - **Multimodal Support** - Text and images in the same environment
-- **Dark Mode** - Modern theming with Catppuccin and custom colors
+- **Dark Mode** - Plan 9's colours (`glenda`) for light, a measured dark theme (`xenith`), or any system theme
 
 ## Why Xenith for AI?
 
@@ -84,9 +84,13 @@ installed.
 
 `-t name` pins a session to one theme instead, which the system's
 switches then leave alone; `Theme` in a pinned session changes that
-session only. `tools/xen` starts Xenith pinned to `xenith`, a theme after
-Xenith's original dark look (Catppuccin Mocha). `glenda` is Plan 9's
-own colours, acme's to the pixel; `-t plan9` and `-t acme` name it too.
+session only. `tools/xen` starts Xenith pinned to `xenith`, the dark
+theme: Xenith's original Catppuccin Mocha, corrected against the reading
+research (dark grey behind off-white, every colour read as text at 7:1
+or better, selections bright enough to see with the text on them still
+at body contrast; the file's comments give the numbers and sources).
+`glenda` is Plan 9's own colours, acme's to the pixel, and the light
+theme to prefer; `-t plan9` and `-t acme` name it too.
 
 ```sh
 xenith               # follow the system theme

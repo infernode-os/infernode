@@ -229,7 +229,7 @@ testGlendaShipped(t: ref T)
 	t.asserteq(th.editbg, int 16rFFFFEAFF, "body: Paleyellow over White");
 	t.asserteq(th.menubg, int 16rEAFFEAFF, "menu: Palegreen over White");
 	t.asserteq(th.menuhilit, int 16r448844FF, "menu highlight: DDarkgreen");
-	t.asserteq(th.border, int 16r777777FF, "rio's desktop grey");
+	t.asserteq(th.border, int 16r8888CCFF, "tag border: DPurpleblue");
 }
 
 testEntries(t: ref T)

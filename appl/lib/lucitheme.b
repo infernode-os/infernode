@@ -234,29 +234,42 @@ loadtheme(name: string): ref Theme
 	data := readfile(THEMEDIR + name);
 	if(data == nil)
 		return nil;
-
 	th := brimstone();
+	for(l := parse(data); l != nil; l = tl l){
+		(key, val) := hd l;
+		setkey(th, key, val);
+	}
+	return th;
+}
 
-	# Parse lines
-	(nlines, lines) := sys->tokenize(data, "\n");
-	if(nlines <= 0)
-		return th;
+entries(name: string): list of (string, int)
+{
+	sys = load Sys Sys->PATH;
+	if(!validname(name))
+		return nil;
+	return parse(readfile(THEMEDIR + name));
+}
+
+# "key RRGGBB" lines, in order; comments, blanks and bad colours skipped
+parse(data: string): list of (string, int)
+{
+	r: list of (string, int);
+	(nil, lines) := sys->tokenize(data, "\n");
 	for(; lines != nil; lines = tl lines) {
 		line := strip(hd lines);
 		if(len line == 0 || line[0] == '#')
 			continue;
-		# Split on whitespace: "key RRGGBB"
 		(ntoks, toks) := sys->tokenize(line, " \t");
 		if(ntoks < 2)
 			continue;
-		key := hd toks;
-		hexval := hd tl toks;
-		(val, ok) := parsehex(hexval);
+		(val, ok) := parsehex(hd tl toks);
 		if(ok)
-			setkey(th, key, val);
+			r = (hd toks, val) :: r;
 	}
-
-	return th;
+	l: list of (string, int);
+	for(; r != nil; r = tl r)
+		l = hd r :: l;
+	return l;
 }
 
 current(): string

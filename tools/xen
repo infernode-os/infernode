@@ -24,7 +24,7 @@
 # Environment:
 #	INFERNODE_ROOT	tree to run (default: the tree holding this script)
 #	XEN_THEME	the session's theme (default xenith): any installed theme
-#			(/lib/lucifer/theme), or plan9 for acme's colours. Xenith's
+#			(/lib/lucifer/theme); glenda (or plan9) is Plan 9's acme. Xenith's
 #			Theme command switches it, for this session only.
 #			sam takes its colours from the system theme.
 #	XEN_GEOM	initial emu window size (default 1400x900)

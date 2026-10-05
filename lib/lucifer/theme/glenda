@@ -1,0 +1,97 @@
+# Glenda — Plan 9's own colours, exactly
+#
+# Sources: Plan 9's acme (acme.c, iconinit) and rio (data.c, wind.c),
+# libdraw's menuhit.c, and the D* constants of draw.h. allocimagemix
+# lays a quarter of the first colour over the second (a 0x3F mask), so
+# acme's Paleyellow over White is FFFFEA, Palebluegreen over White
+# EAFFFF, and the menus' Palegreen over White EAFFEA.
+#
+# Where Plan 9 has nothing to copy (code blocks, diagrams, the
+# conversation), the colour is a choice from Plan 9's palette, and is
+# marked so below. Everything else is a quotation.
+
+# Core UI: Lucifer's zones are rio windows on rio's desktop
+bg FFFFFF		# rio window: display->white
+border 777777		# rio desktop (data.c: background)
+windowborder 55AAAA	# rio active window border: DGreygreen
+header 777777		# rio desktop
+accent 55AAAA		# rio active border: DGreygreen
+text 000000		# rio window text: display->black
+text2 666666		# rio darkgrey
+dim 555555		# choice: a Plan 9 grey (0x11 steps) that reads on white and on the desktop grey
+label CCCCCC		# rio selection: cols[HIGH]
+
+# Conversation zone (choice: acme's tag and body colours)
+human EAFFFF
+veltro FFFFEA
+input FFFFFF		# rio window
+cursor 000000		# Plan 9's tick is the text colour
+
+# Status / semantic
+red DD0000		# rio red (data.c)
+green 006600		# acme button 3
+yellow 99994C		# DYellowgreen (choice: Plan 9 has no warning colour; DDarkyellow vanishes on white)
+progbg CCCCCC		# choice
+progfg 000099		# DMedblue (choice)
+
+# Code blocks (choice: acme's body)
+codebg FFFFEA
+
+# Context menu: menuhit.c
+menubg EAFFEA		# allocimagemix(DPalegreen, DWhite)
+menuborder 88CC88	# DMedgreen
+menuhilit 448844	# DDarkgreen
+menutext 000000
+menudim 88CC88		# choice: Plan 9 menus have no disabled items
+
+# Editor: acme's body
+editbg FFFFEA		# allocimagemix(DPaleyellow, DWhite)
+edittext 000000
+editcursor 000000
+editlineno 99994C	# DYellowgreen (choice: acme has no line numbers)
+editstatus EAFFFF	# acme's tag (choice)
+editstattext 000000
+editscroll 99994C	# acme scroll bar: the body's BORD, DYellowgreen
+editthumb FFFFEA	# acme scroll thumb: the body's BACK
+
+# Diagrams (choice: Plan 9's palette)
+diagbg FFFFFF
+diagnode EAFFFF
+diagborder 8888CC
+diagtext 000000
+diagtext2 666666
+diagacc 000099
+diaggreen 448844
+diagred AA0000
+diagyellow EEEE9E
+diaggrid CCCCCC
+pie0 000099
+pie1 448844
+pie2 AA0000
+pie3 55AAAA
+pie4 8888CC
+pie5 99994C
+pie6 4993DD
+pie7 006600
+
+# Xenith: acme's iconinit, every colour by Xenith's own names
+# (the xenith-* environment variables), so nothing is left to the
+# role mapping.
+xenith-bg-tag-0 EAFFFF		# allocimagemix(DPalebluegreen, DWhite)
+xenith-fg-tag-0 000000
+xenith-bg-tag-1 9EEEEE		# DPalegreygreen
+xenith-fg-tag-1 000000
+xenith-bord-tag-0 8888CC	# DPurpleblue; also the column button
+xenith-bg-text-0 FFFFEA		# allocimagemix(DPaleyellow, DWhite)
+xenith-fg-text-0 000000
+xenith-bg-text-1 EEEE9E		# DDarkyellow
+xenith-fg-text-1 000000
+xenith-bord-text-0 99994C	# DYellowgreen
+xenith-bg-text-2 AA0000		# but2col
+xenith-fg-text-2 FFFFFF
+xenith-bg-text-3 006600		# but3col
+xenith-fg-text-3 FFFFFF
+xenith-mod-but-0 000099		# DMedblue
+xenith-bord-col-0 000000	# display->black
+xenith-bord-row-0 000000
+xenith-bg-col-0 FFFFFF		# display->white

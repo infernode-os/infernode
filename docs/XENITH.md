@@ -85,13 +85,13 @@ installed.
 `-t name` pins a session to one theme instead, which the system's
 switches then leave alone; `Theme` in a pinned session changes that
 session only. `tools/xen` starts Xenith pinned to `xenith`, a theme after
-Xenith's original dark look (Catppuccin Mocha). `-t plan9` gives acme's
-own colours.
+Xenith's original dark look (Catppuccin Mocha). `glenda` is Plan 9's
+own colours, acme's to the pixel; `-t plan9` and `-t acme` name it too.
 
 ```sh
 xenith               # follow the system theme
 xenith -t xenith     # this session: the xenith theme
-xenith -t plan9      # this session: acme's colours
+xenith -t glenda     # this session: Plan 9's acme, exactly
 ```
 
 A theme maps onto Xenith by role: body from the theme's `edit*` colours,

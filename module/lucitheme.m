@@ -116,4 +116,9 @@ Lucitheme: module
 
 	# The installed themes' names, sorted.
 	themes: fn(): list of string;
+
+	# Every key and colour (RRGGBBAA) the named theme's file sets, in
+	# file order: keys a program defines for itself (Xenith's
+	# xenith-*) as well as the Theme roles above.
+	entries: fn(name: string): list of (string, int);
 };

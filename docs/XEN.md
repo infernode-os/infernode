@@ -56,7 +56,7 @@ plumbing.
 | Variable | Meaning | Default |
 |---|---|---|
 | `INFERNODE_ROOT` | tree to run | the tree holding the script |
-| `XEN_THEME` | the session's theme: any installed theme, or `plan9` for acme's colours | `xenith` |
+| `XEN_THEME` | the session's theme: any installed theme; `glenda` is Plan 9's acme | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
 | `XEN_LOG` | output of a detached instance | `$TMPDIR/xen.log` |
 

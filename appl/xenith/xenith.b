@@ -1601,7 +1601,8 @@ colinit()
 	acmecols();
 }
 
-# acme's own colours ("-t plan9")
+# acme's own colours, for when there is no theme to be had
+# (glenda, the theme, is these and Plan 9's others)
 acmecols()
 {
 	tagcols[BACK] = display.colormix(Draw->Palebluegreen, Draw->White);
@@ -1657,9 +1658,10 @@ palette(th : ref Lucitheme->Theme)
 usetheme(name : string) : string
 {
 	case name {
-	"" or "plan9" or "acme" =>
+	"" =>
 		acmecols();
-		name = "";
+	"plan9" or "acme" =>
+		return usetheme("glenda");	# Plan 9's own colours
 	"dark" or "catppuccin" or "mocha" =>
 		return usetheme("xenith");	# the old -t names
 	* =>
@@ -1673,10 +1675,44 @@ usetheme(name : string) : string
 			return "no theme " + name;
 		}
 		palette(th);
+		# a theme may set Xenith's colours one by one, by the
+		# names the environment variables use (glenda does, to be
+		# acme's exactly)
+		for(l := lucitheme->entries(name); l != nil; l = tl l){
+			(k, v) := hd l;
+			xenithkey(k, v);
+		}
 	}
 	usercolinit();
 	themenow = name;
 	return nil;
+}
+
+# One of Xenith's colours by its environment variable's name (see
+# usercolinit), as a theme file gives it.
+xenithkey(key : string, v : int)
+{
+	c := display.color(v);
+	case key {
+	"xenith-fg-text-0" =>	textcols[TEXT] = c;
+	"xenith-bg-text-0" =>	textcols[BACK] = c;
+	"xenith-fg-text-1" =>	textcols[HTEXT] = c;
+	"xenith-bg-text-1" =>	textcols[HIGH] = c;
+	"xenith-fg-text-2" =>	but2colt = c;
+	"xenith-bg-text-2" =>	but2col = c;
+	"xenith-fg-text-3" =>	but3colt = c;
+	"xenith-bg-text-3" =>	but3col = c;
+	"xenith-bord-text-0" =>	textcols[BORD] = c;
+	"xenith-fg-tag-0" =>	tagcols[TEXT] = c;
+	"xenith-bg-tag-0" =>	tagcols[BACK] = c;
+	"xenith-fg-tag-1" =>	tagcols[HTEXT] = c;
+	"xenith-bg-tag-1" =>	tagcols[HIGH] = c;
+	"xenith-bord-tag-0" =>	tagcols[BORD] = c;
+	"xenith-mod-but-0" =>	modbutcol = c;
+	"xenith-bord-col-0" =>	colbordercol = c;
+	"xenith-bord-row-0" =>	rowbordercol = c;
+	"xenith-bg-col-0" =>	bgcol = c;
+	}
 }
 
 # Redraw everything in the current colours; the caller holds the row.
@@ -1778,9 +1814,8 @@ iconinit()
 	draw(modbutton, r, modbutcol, nil, (0, 0));	# was DMedblue
 
 	r = button.r;
+	# solid, as in Plan 9's acme (Inferno's left a strip of tag colour)
 	colbutton = balloc(r, mainwin.chans, Draw->White);
-	draw(colbutton, r, tagcols[BACK], nil, r.min);
-	r.max.x -= 2;
 	draw(colbutton, r, tagcols[BORD], nil, (0, 0));
 
 	# the host's own pointer, as every other InferNode window has;

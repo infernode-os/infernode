@@ -58,11 +58,12 @@ stored in factotum and are not written under `/lib/veltro`.
 
 ### Themes
 
-Lucia ships with three themes:
+Lucia ships with four themes:
 
 - **brimstone** — dark theme (default)
 - **halo** — light theme (Plan 9-inspired)
 - **xenith** — dark theme after Xenith's original look
+- **glenda** — Plan 9's own colours: acme, rio and its menus, exactly
 
 To switch themes, pick one in Settings, or write the name to the theme
 file; every running program follows within a second:
@@ -73,7 +74,7 @@ echo halo > /lib/lucifer/theme/current
 
 In Xenith, the `Theme` command does the same (`Theme halo`, or `Theme`
 alone for the next theme). `xenith -t name` pins a Xenith to one theme
-instead, and `-t plan9` gives acme's colours.
+instead.
 
 ### Fonts
 

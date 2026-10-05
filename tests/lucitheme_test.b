@@ -220,6 +220,34 @@ testXenithShipped(t: ref T)
 	t.asserteq(th.header, int 16r313244FF, "xenith tags are Catppuccin surface0");
 }
 
+testGlendaShipped(t: ref T)
+{
+	th := lucitheme->loadtheme("glenda");
+	if(!t.assert(th != nil, "the glenda theme is installed"))
+		return;
+	# acme's body and rio's menus, as allocimagemix makes them
+	t.asserteq(th.editbg, int 16rFFFFEAFF, "body: Paleyellow over White");
+	t.asserteq(th.menubg, int 16rEAFFEAFF, "menu: Palegreen over White");
+	t.asserteq(th.menuhilit, int 16r448844FF, "menu highlight: DDarkgreen");
+	t.asserteq(th.border, int 16r777777FF, "rio's desktop grey");
+}
+
+testEntries(t: ref T)
+{
+	got := "";
+	n := 0;
+	for(l := lucitheme->entries("glenda"); l != nil; l = tl l){
+		(k, v) := hd l;
+		n++;
+		if(k == "xenith-bg-tag-0" || k == "xenith-bord-tag-0" || k == "xenith-mod-but-0")
+			got += sys->sprint(" %s=%.8ux", k, v);
+	}
+	t.assertseq(got, " xenith-bg-tag-0=eaffffff xenith-bord-tag-0=8888ccff xenith-mod-but-0=000099ff",
+		"a program's own keys come through, in file order");
+	t.assert(n > 60, "every entry, roles and all");
+	t.assert(lucitheme->entries("../glenda") == nil, "a path is not a theme name");
+}
+
 # The tests below run with a fixture bound over THEMEDIR in this
 # process's own name space (forked first), so the tree's current file
 # is never written.
@@ -344,6 +372,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("FromFileLowRedAccentStillWorks",  testFromFileLowRedAccentStillWorks);
 	run("FromFileInvalidLineIsSkippedNotFatal", testFromFileInvalidLineIsSkippedNotFatal);
 	run("XenithShipped", testXenithShipped);
+	run("GlendaShipped", testGlendaShipped);
+	run("Entries", testEntries);
 
 	if(fixture() < 0)
 		raise sys->sprint("fail:cannot bind the theme fixture: %r");

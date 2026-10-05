@@ -63,6 +63,14 @@ if [ ! -x "$emu" ]; then
 	echo "xen: no emulator at $emu (build one first)" >&2
 	exit 1
 fi
+# A headless emu runs the editor on an offscreen display and shows no
+# window at all. Refuse it, when the binary still has symbols to tell.
+syms=$(nm "$emu" 2>/dev/null)
+if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q sdl3_mainloop; then
+	echo "xen: $emu is a headless build and cannot open a window;" >&2
+	echo "xen: build the GUI emulator (./build-macos-sdl3.sh or ./build-linux-*.sh) in $root" >&2
+	exit 1
+fi
 
 # Quote for the Inferno shell: wrap in '' and double any embedded '.
 q() {

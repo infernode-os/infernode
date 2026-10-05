@@ -1664,8 +1664,8 @@ drawparticipantbox(img: ref Image, bx, by: int, label: string)
 
 drawseqmsg(img: ref Image, x0, x1, y: int, m: ref SeqMsg)
 {
+	# a reply (-->>) is dashed, in the same colour as a call
 	col := cbord;
-	if(m.mtype == SM_DASH) col = ctext2;
 
 	if(x0 == x1) {
 		# Self-message: right-angle loop
@@ -1679,8 +1679,8 @@ drawseqmsg(img: ref Image, x0, x1, y: int, m: ref SeqMsg)
 		return;
 	}
 
-	# Horizontal arrow
-	img.line(Point(x0, y), Point(x1, y), Draw->Endsquare, Draw->Endsquare, 0, col, Point(0,0));
+	# Horizontal arrow (SM_DASH is ES_DASH: dashed)
+	drawedgeseg(img, Point(x0, y), Point(x1, y), m.mtype, col, 0);
 	if(x1 > x0)
 		drawarrowhead(img, Point(x1, y), 1, col);
 	else

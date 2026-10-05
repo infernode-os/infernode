@@ -1,6 +1,7 @@
 implement Xenith;
 
 include "common.m";
+include "lucitheme.m";
 
 sys : Sys;
 bufio : Bufio;
@@ -194,34 +195,11 @@ deffontnames := array[2] of {
 
 # Theme definitions: (env-var-suffix, color-value)
 # Color values: hex "#RRGGBB" (UPPERCASE!), mixed "#RRGGBB/#RRGGBB", or named
-# Official Catppuccin Mocha palette from https://github.com/catppuccin/catppuccin
-catppuccintheme := array[] of {
-	# Body (text area) colors
-	("bg-text-0", "#1E1E2E"),		# Base - main background
-	("fg-text-0", "#CDD6F4"),		# Text - main foreground
-	("bg-text-1", "#585B70"),		# Surface2 - selection background
-	("fg-text-1", "#CDD6F4"),		# Text - selection foreground
-	("bg-text-2", "#F38BA8"),		# Red - button 2 background
-	("fg-text-2", "#1E1E2E"),		# Base - button 2 text
-	("bg-text-3", "#A6E3A1"),		# Green - button 3 background
-	("fg-text-3", "#1E1E2E"),		# Base - button 3 text
-	("bord-text-0", "#89B4FA"),		# Blue - body border
-	# Tag colors
-	("bg-tag-0", "#313244"),			# Surface0 - tag background
-	("fg-tag-0", "#CDD6F4"),			# Text - tag foreground
-	("bg-tag-1", "#45475A"),			# Surface1 - tag selection
-	("fg-tag-1", "#CDD6F4"),			# Text - tag selection text
-	("bord-tag-0", "#89B4FA"),		# Blue - tag border
-	# Border colors
-	("bord-col-0", "#45475A"),		# Surface1 - column border
-	("bord-row-0", "#45475A"),		# Surface1 - row border
-	# Modifier button
-	("mod-but-0", "#CBA6F7"),		# Mauve - modifier button
-	# Empty space background
-	("bg-col-0", "#181825"),			# Mantle - empty area background
-};
 
-themename : string;
+themename : string;	# -t: this session's own theme, not the system's
+pinned : int;		# a -t theme: the system's switches do not apply
+themenow : string;		# the theme in use ("" for acme's colours)
+lucitheme : Lucitheme;
 
 command : ref Command;
 
@@ -310,8 +288,12 @@ main(argl : list of string)
 	fontcache[0] = reffont;
 
 	colinit();
-	applytheme(themename);
-	usercolinit();
+	lucitheme = load Lucitheme Lucitheme->PATH;
+	pinned = themename != nil;
+	if(!pinned && lucitheme != nil)
+		themename = lucitheme->current();
+	if((e := usetheme(themename)) != nil)
+		warning(nil, e + "\n");
 	iconinit();
 	timerm->timerinit();
 	regx->rxinit();
@@ -380,6 +362,8 @@ main(argl : list of string)
 	spawn keyboardtask();
 	spawn mousetask();
 	spawn waittask();
+	if(!pinned && lucitheme != nil)
+		spawn themewatcher();
 	spawn xfidalloctask();
 	# Run the plumber inside acme, so plumber can start acme clients,
 	# unless one is already serving an edit port (Lucifer's boot, xen)
@@ -1614,7 +1598,12 @@ colinit()
 {
 	tagcols = array[NCOL] of ref Draw->Image;
 	textcols = array[NCOL] of ref Draw->Image;
+	acmecols();
+}
 
+# acme's own colours ("-t plan9")
+acmecols()
+{
 	tagcols[BACK] = display.colormix(Draw->Palebluegreen, Draw->White);
 	tagcols[HIGH] = display.color(Draw->Palegreygreen);
 	tagcols[BORD] = display.color(Draw->Purpleblue);
@@ -1631,10 +1620,138 @@ colinit()
 	but2colt = white;
 	but3colt = white;
 	modbutcol =  display.rgb(16r00, 16r00, 16r99);
-	
+
 	colbordercol = display.black;
 	rowbordercol = display.black;
 	bgcol = white;		# Default background for empty areas
+}
+
+# Xenith's colours from a theme's roles (lucitheme(2)): the body is the
+# theme's editor, tags its header, selections its menu highlight, and
+# the button 2/3/modified colours its red, green and yellow. Elements
+# are replaced, not the arrays.
+palette(th : ref Lucitheme->Theme)
+{
+	textcols[BACK] = display.color(th.editbg);
+	textcols[TEXT] = display.color(th.edittext);
+	textcols[HIGH] = display.color(th.menuhilit);
+	textcols[HTEXT] = display.color(th.edittext);
+	textcols[BORD] = display.color(th.accent);
+	tagcols[BACK] = display.color(th.header);
+	tagcols[TEXT] = display.color(th.text);
+	tagcols[HIGH] = display.color(th.menuhilit);
+	tagcols[HTEXT] = display.color(th.text);
+	tagcols[BORD] = display.color(th.accent);
+	but2col = display.color(th.red);
+	but2colt = display.color(th.editbg);
+	but3col = display.color(th.green);
+	but3colt = display.color(th.editbg);
+	modbutcol = display.color(th.yellow);
+	colbordercol = display.color(th.border);
+	rowbordercol = display.color(th.border);
+	bgcol = display.color(th.bg);
+}
+
+# Take the colours of the named theme; the xenith-* environment
+# variables still override them, as acme-* do acme's.
+usetheme(name : string) : string
+{
+	case name {
+	"" or "plan9" or "acme" =>
+		acmecols();
+		name = "";
+	"dark" or "catppuccin" or "mocha" =>
+		return usetheme("xenith");	# the old -t names
+	* =>
+		th : ref Lucitheme->Theme;
+		if(lucitheme != nil)
+			th = lucitheme->loadtheme(name);
+		if(th == nil){
+			acmecols();
+			usercolinit();
+			themenow = "";
+			return "no theme " + name;
+		}
+		palette(th);
+	}
+	usercolinit();
+	themenow = name;
+	return nil;
+}
+
+# Redraw everything in the current colours; the caller holds the row.
+recolour()
+{
+	iconinit();
+	textcolours(row.tag, tagcols);
+	for(i := 0; i < row.ncol; i++){
+		c := row.col[i];
+		textcolours(c.tag, tagcols);
+		for(j := 0; j < c.nw; j++){
+			textcolours(c.w[j].tag, tagcols);
+			textcolours(c.w[j].body, textcols);
+		}
+	}
+	draw(mainwin, mainwin.r, bgcol, nil, mainwin.r.min);
+	scrl->scrresize();
+	row.reshape(mainwin.clipr);
+	bflush();
+}
+
+# a frame keeps its own copy of the colours it was made with
+textcolours(t : ref Text, cols : array of ref Draw->Image)
+{
+	if(t == nil || t.frame == nil)
+		return;
+	for(i := 0; i < NCOL; i++)
+		t.frame.cols[i] = cols[i];
+}
+
+# Follow the system's theme, whoever switches it (lucitheme->watch).
+themewatcher()
+{
+	c := lucitheme->watch();
+	for(;;){
+		name := <-c;
+		row.qlock.lock();
+		if(name != themenow && usetheme(name) == nil)
+			recolour();
+		row.qlock.unlock();
+	}
+}
+
+# The Theme command (the caller holds the row): the named theme or,
+# with none, the next installed one. A -t session changes only itself;
+# otherwise this is the system's switch, which every watcher follows.
+themecmd(name : string)
+{
+	if(lucitheme == nil){
+		warning(nil, "Theme: no theme module\n");
+		return;
+	}
+	if(name == nil){
+		l := lucitheme->themes();
+		if(l == nil)
+			return;
+		first := hd l;
+		for(; l != nil; l = tl l)
+			if(hd l == themenow)
+				break;
+		if(l == nil || tl l == nil)
+			name = first;
+		else
+			name = hd tl l;
+	}
+	e : string;
+	if(!pinned && (e = lucitheme->settheme(name)) != nil){
+		warning(nil, "Theme: " + e + "\n");
+		return;
+	}
+	if((e = usetheme(name)) != nil){
+		warning(nil, "Theme: " + e + "\n");
+		return;
+	}
+	recolour();
 }
 
 iconinit()
@@ -1744,23 +1861,6 @@ cenv(s : string, t : string, but : int, i : ref Image) : ref Image
 	return i;
 }
 
-applytheme(name: string)
-{
-	if (name == nil || name == "" || name == "plan9")
-		return;		# Default theme, no env vars needed
-
-	theme: array of (string, string);
-	case name {
-	"catppuccin" or "dark" or "mocha" =>
-		theme = catppuccintheme;
-	* =>
-		warning(nil, "unknown theme: " + name + "\n");
-		return;
-	}
-
-	for (i := 0; i < len theme; i++)
-		utils->setenv("xenith-" + theme[i].t0, theme[i].t1);
-}
 
 usercolinit()
 {

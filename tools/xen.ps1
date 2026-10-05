@@ -47,7 +47,7 @@ foreach ($f in $Files) {
 if ($Sam) {
 	$run = 'wm/wm sh -c ' + (Q ("wm/sam$list; echo halt > /dev/sysctl"))
 } else {
-	$theme = if ($env:XEN_THEME) { $env:XEN_THEME } else { 'dark' }
+	$theme = if ($env:XEN_THEME) { $env:XEN_THEME } else { 'xenith' }
 	$run = 'xenith -t ' + (Q $theme) + $list
 }
 $cwd = ToInferno (Get-Location).ProviderPath

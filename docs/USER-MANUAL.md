@@ -509,11 +509,11 @@ Xenith is InferNode's text environment—a fork of Acme designed for AI-human co
 ### Starting Xenith
 
 ```sh
-# From the command line
+# From the command line (follows the system theme)
 xenith
 
-# With dark theme
-xenith -t dark
+# Pinned to one theme for this session (Theme switches it; see XENITH.md)
+xenith -t xenith
 
 # The macOS app bundle runs this automatically
 ```

@@ -71,23 +71,40 @@ Xenith windows are shared workspaces:
 
 ## Features
 
-### Dark Mode and Theming
+### Themes
 
-Xenith includes a modern dark theme (Catppuccin Mocha) and full color customization:
+Xenith takes its colours from the system theme (`/lib/lucifer/theme`,
+the same files every InferNode program uses) and follows it live: write
+a theme's name to `/lib/lucifer/theme/current`, or pick one in Settings,
+and Xenith recolours within a second, on the desktop or off it.
 
-```bash
-# Use dark theme
-xenith -t catppuccin
+The `Theme` command (type it in a tag and middle-click, like `Font`)
+switches: `Theme halo` to a named theme, `Theme` alone to the next one
+installed.
 
-# Traditional Acme colors
-xenith -t plan9
+`-t name` pins a session to one theme instead, which the system's
+switches then leave alone; `Theme` in a pinned session changes that
+session only. `tools/xen` starts Xenith pinned to `xenith`, a theme after
+Xenith's original dark look (Catppuccin Mocha). `-t plan9` gives acme's
+own colours.
 
-# Custom colors via environment
-export xenith_bg_text_0=#1E1E2E
-export xenith_fg_text=#CDD6F4
+```sh
+xenith               # follow the system theme
+xenith -t xenith     # this session: the xenith theme
+xenith -t plan9      # this session: acme's colours
 ```
 
-20+ color variables for complete UI customization.
+A theme maps onto Xenith by role: body from the theme's `edit*` colours,
+tags from `header` and `text`, selections from `menuhilit`, frame borders
+from `accent` and `border`, and the button 2, button 3 and modified
+colours from `red`, `green` and `yellow`. Any colour can still be set
+directly with environment variables, which win over the theme, as
+`acme-*` do in acme:
+
+```sh
+xenith-bg-text-0='#1E1E2E'	# body background
+xenith-fg-text-0='#CDD6F4'	# body text
+```
 
 ### Opening host files
 

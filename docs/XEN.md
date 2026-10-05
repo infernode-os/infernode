@@ -56,11 +56,15 @@ plumbing.
 | Variable | Meaning | Default |
 |---|---|---|
 | `INFERNODE_ROOT` | tree to run | the tree holding the script |
-| `XEN_THEME` | Xenith theme; `plan9` for the classic colours | `dark` |
+| `XEN_THEME` | the session's theme: any installed theme, or `plan9` for acme's colours | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
 | `XEN_LOG` | output of a detached instance | `$TMPDIR/xen.log` |
 
-sam's colours follow the Lucifer theme rather than `XEN_THEME`.
+A stand-alone Xenith is pinned to its theme: switching the system theme
+(Settings, or a write to `/lib/lucifer/theme/current`) leaves it alone,
+and its `Theme` command (`Theme halo`, or `Theme` alone for the next)
+changes that session only. See [XENITH.md](XENITH.md#themes). sam's
+colours follow the system theme rather than `XEN_THEME`.
 
 ## Plumbing
 

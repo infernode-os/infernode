@@ -30,4 +30,5 @@ Xenith : module {
 	xenithexit : fn(err : string);
 	getsnarf : fn(); 
 	putsnarf : fn();
+	themecmd : fn(name : string);
 };

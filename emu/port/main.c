@@ -345,6 +345,7 @@ emuinit(void *imod)
 	kbind("#^", "/dev", MBEFORE);	/* snarf */
 	kbind("#^", "/chan", MBEFORE);
 	kbind("#m", "/dev", MBEFORE);	/* pointer */
+	kbind("#w", "/dev", MBEFORE);	/* host window size: /dev/wmsize; no-op without devwmsz */
 	kbind("#c", "/dev", MBEFORE);
 	kbind("#A", "/dev", MBEFORE);	/* audio; no-op on hosts without devaudio */
 	kbind("#p", "/prog", MREPL);

@@ -107,6 +107,16 @@ Define screen width and height in pixels.
 The default values are 640x480 and the minimum values are 64x48.
 Values smaller than the minimum or greater than the
 available display size are ignored.
+With the SDL graphics of the desktop hosts this is the window's initial
+size: the window may be resized (or made full screen), and the screen
+then becomes the window's new size, shown one to one, not scaled.
+Each change is reported on
+.BR /dev/wmsize ,
+as a line
+.BI m " width height"
+followed by two unused fields, for programs to lay themselves out again
+(Xenith and Lucifer read it); a program that does not read it keeps
+the layout it made for the window it started in.
 .TP
 .BI \-f font
 Specify the default font for the

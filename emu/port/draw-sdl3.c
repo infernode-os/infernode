@@ -233,6 +233,17 @@ static volatile int create_window_result = 0;
  * window size differs from texture size (e.g., full-screen).
  */
 static SDL_FRect dest_rect = {0, 0, 0, 0};
+/*
+ * The part of the screen texture shown, and so the size of the screen
+ * programs see (/dev/wmsize). On desktop the Inferno screen is as large
+ * as the largest display, and the window shows its own size of it, top
+ * left, one to one: a resize changes what is shown and is posted to
+ * /dev/wmsize, and programs lay themselves out to it (Acme-SAC's design;
+ * Xenith and Lucifer read it). Nothing is scaled, and there are no
+ * margins. On the touch platforms the screen is the safe area, shown
+ * whole, as before.
+ */
+static SDL_FRect src_rect = {0, 0, 0, 0};
 static int window_width = 0;
 static int window_height = 0;
 /* Safe-area rect in physical pixels: the part of the window not covered by
@@ -252,6 +263,23 @@ calc_dest_rect(void)
 	float scale_x, scale_y, scale;
 	float dest_w, dest_h;
 	int aw = safe_w, ah = safe_h, ax = safe_x, ay = safe_y;
+
+#if !MOBILE_TOUCH
+	{
+		int vw = window_width < sdl_width ? window_width : sdl_width;
+		int vh = window_height < sdl_height ? window_height : sdl_height;
+		src_rect.x = 0;
+		src_rect.y = 0;
+		src_rect.w = (float)(vw > 0 ? vw : sdl_width);
+		src_rect.h = (float)(vh > 0 ? vh : sdl_height);
+		dest_rect = src_rect;
+		return;
+	}
+#endif
+	src_rect.x = 0;
+	src_rect.y = 0;
+	src_rect.w = (float)sdl_width;
+	src_rect.h = (float)sdl_height;
 
 	/* Present into the safe area, not the full window, so the iOS status
 	 * bar / home indicator don't occlude the UI. Fall back to the full
@@ -304,9 +332,9 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
 	rel_x = win_x - dest_rect.x;
 	rel_y = win_y - dest_rect.y;
 
-	/* Scale from rendered size to texture size */
-	x = (int)(rel_x * (float)sdl_width / dest_rect.w);
-	y = (int)(rel_y * (float)sdl_height / dest_rect.h);
+	/* Scale from rendered size to the shown part of the texture */
+	x = (int)(src_rect.x + rel_x * src_rect.w / dest_rect.w);
+	y = (int)(src_rect.y + rel_y * src_rect.h / dest_rect.h);
 
 	/* Clamp to texture bounds */
 	if (x < 0) x = 0;
@@ -324,6 +352,94 @@ window_to_texture_coords(float win_x, float win_y, int *tex_x, int *tex_y)
  * Must be called after sdl_window is created and before texture creation.
  */
 static void update_text_input_area(void);
+
+/*
+ * Desktop: the Inferno screen's size, in the window's pixels: the
+ * largest display's, so the window can grow to any display without
+ * margins, and at least the window's own.
+ */
+static void
+screenmax(int *w, int *h)
+{
+	SDL_DisplayID *ids;
+	SDL_Rect b;
+	int i, n, mw, mh;
+
+	mw = window_width;
+	mh = window_height;
+	ids = SDL_GetDisplays(&n);
+	if (ids != NULL) {
+		for (i = 0; i < n; i++)
+			if (SDL_GetDisplayBounds(ids[i], &b)) {
+				if ((int)(b.w * display_scale) > mw)
+					mw = (int)(b.w * display_scale);
+				if ((int)(b.h * display_scale) > mh)
+					mh = (int)(b.h * display_scale);
+			}
+		SDL_free(ids);
+	}
+	*w = mw;
+	*h = mh;
+}
+
+/*
+ * Desktop: the screen programs see is the part the window shows. The
+ * buffer behind it is as large as the largest display, so the screen
+ * image only changes its rectangle: wmszproc, a kernel process (it
+ * takes the draw lock, which the SDL thread cannot), sets it, then tells
+ * programs through /dev/wmsize (devwmsz.c) so those that read it (Xenith,
+ * Lucifer) lay themselves out to it. Programs that do not read it keep
+ * the layout they made for the window they started in.
+ */
+extern void wmtrack(int, int, int, int);
+extern Memimage *screenimage;	/* devdraw.c */
+extern void drawqlock(void);
+extern void drawqunlock(void);
+
+static Rendez wmszr;
+static volatile int wmsz_w, wmsz_h, wmsz_pending;
+
+static int
+wmszready(void *a)
+{
+	USED(a);
+	return wmsz_pending;
+}
+
+static void
+wmszproc(void *a)
+{
+	int w, h;
+
+	USED(a);
+	for (;;) {
+		Sleep(&wmszr, wmszready, nil);
+		w = wmsz_w;
+		h = wmsz_h;
+		wmsz_pending = 0;
+		drawqlock();
+		if (screenimage != nil) {
+			screenimage->r = Rect(0, 0, w, h);
+			screenimage->clipr = screenimage->r;
+		}
+		drawqunlock();
+		wmtrack(0, w, h, 0);
+	}
+}
+
+/* called from the SDL thread: record the size and wake wmszproc */
+static void
+postwmsize(void)
+{
+#if !MOBILE_TOUCH
+	if (src_rect.w > 0 && src_rect.h > 0) {
+		wmsz_w = (int)src_rect.w;
+		wmsz_h = (int)src_rect.h;
+		wmsz_pending = 1;
+		Wakeup(&wmszr);
+	}
+#endif
+}
 
 static void
 init_hidpi(void)
@@ -360,10 +476,15 @@ init_hidpi(void)
 		}
 	}
 
+#if MOBILE_TOUCH
 	sdl_width = safe_w;
 	sdl_height = safe_h;
+#else
+	screenmax(&sdl_width, &sdl_height);
+#endif
 	calc_dest_rect();
 	update_text_input_area();	/* window may have resized/rotated */
+	postwmsize();
 }
 
 /* Keep the top pinned (don't slide) for the focused input; set when the
@@ -441,12 +562,12 @@ update_text_input_area(void)
 		 * a degenerate rect to UIKit. */
 		float sx, sy, fx, fy, fw, fh;
 		if (dest_rect.w <= 0 || dest_rect.h <= 0 ||
-		    sdl_width <= 0 || sdl_height <= 0 || display_scale <= 0.0f)
+		    src_rect.w <= 0 || src_rect.h <= 0 || display_scale <= 0.0f)
 			return;
-		sx = dest_rect.w / (float)sdl_width;	/* texture px -> window px */
-		sy = dest_rect.h / (float)sdl_height;
-		fx = (dest_rect.x + (float)softkbd_rect_x * sx) / display_scale;
-		fy = (dest_rect.y + (float)softkbd_rect_y * sy) / display_scale;
+		sx = dest_rect.w / src_rect.w;	/* texture px -> window px */
+		sy = dest_rect.h / src_rect.h;
+		fx = (dest_rect.x + ((float)softkbd_rect_x - src_rect.x) * sx) / display_scale;
+		fy = (dest_rect.y + ((float)softkbd_rect_y - src_rect.y) * sy) / display_scale;
 		fw = ((float)softkbd_rect_w * sx) / display_scale;
 		fh = ((float)softkbd_rect_h * sy) / display_scale;
 		r.x = fx < 0.0f ? 0 : (int)fx;
@@ -902,8 +1023,15 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	/* Initialize buffer to white (InferNode default) */
 	memset(screen_data, 0xFF, sdl_stride * sdl_height);
 
-	/* Return screen parameters to InferNode */
+	/* Return screen parameters to InferNode. On desktop the screen is
+	 * the part the window shows (the buffer, and the stride, are the
+	 * largest display's: wmszproc grows the rectangle in place). */
 	*r = Rect(0, 0, sdl_width, sdl_height);
+#if !MOBILE_TOUCH
+	if (src_rect.w > 0 && src_rect.h > 0)
+		*r = Rect(0, 0, (int)src_rect.w, (int)src_rect.h);
+	kproc("wmsz", wmszproc, nil, 0);
+#endif
 	*chan = XRGB32;
 	*d = 32;
 	/*
@@ -911,7 +1039,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	 * On 64-bit systems sizeof(ulong)=8, so we use wordsperline()
 	 * which correctly calculates based on word size.
 	 */
-	*width = wordsperline(*r, *d);
+	*width = wordsperline(Rect(0, 0, sdl_width, sdl_height), *d);
 	*softscreen = 1;
 
 	return screen_data;
@@ -987,10 +1115,10 @@ setpointer(int x, int y)
 	 * Convert from texture coordinates to window coordinates.
 	 * This is the inverse of window_to_texture_coords.
 	 */
-	if (dest_rect.w > 0 && dest_rect.h > 0 && sdl_width > 0 && sdl_height > 0) {
-		/* Scale from texture size to rendered size, then add offset */
-		win_x = (float)x * dest_rect.w / (float)sdl_width + dest_rect.x;
-		win_y = (float)y * dest_rect.h / (float)sdl_height + dest_rect.y;
+	if (dest_rect.w > 0 && dest_rect.h > 0 && src_rect.w > 0 && src_rect.h > 0) {
+		/* Scale from the shown part of the texture to rendered size, then add offset */
+		win_x = ((float)x - src_rect.x) * dest_rect.w / src_rect.w + dest_rect.x;
+		win_y = ((float)y - src_rect.y) * dest_rect.h / src_rect.h + dest_rect.y;
 	} else {
 		/* Fallback - use display_scale */
 		win_x = (float)x / display_scale;
@@ -1275,7 +1403,7 @@ update_and_present(Uint64 now, Uint64 last_refresh)
 
 	SDL_SetRenderDrawColor(sdl_renderer, 0, 0, 0, 255);
 	SDL_RenderClear(sdl_renderer);
-	SDL_RenderTexture(sdl_renderer, sdl_texture, NULL, &dest_rect);
+	SDL_RenderTexture(sdl_renderer, sdl_texture, &src_rect, &dest_rect);
 	SDL_RenderPresent(sdl_renderer);
 	return now;
 }
@@ -1678,9 +1806,11 @@ sdl3_mainloop(void)
 
 					/*
 					 * Window size changed (e.g., full-screen toggle).
-					 * Recalculate dest rect for centered letterbox rendering.
-					 * Use physical pixel dimensions to match renderer coordinate space.
-					 * Texture/buffer size stays fixed at init dimensions.
+					 * Desktop: show that much of the screen, one to one,
+					 * and post the size to /dev/wmsize. Touch platforms:
+					 * recalculate the centred, letterboxed dest rect.
+					 * Use physical pixel dimensions to match renderer
+					 * coordinate space. The texture keeps its size.
 					 */
 					SDL_GetWindowSizeInPixels(sdl_window, &pix_w, &pix_h);
 					window_width = pix_w;
@@ -1696,6 +1826,7 @@ sdl3_mainloop(void)
 							display_scale = 1.0f;
 					}
 					calc_dest_rect();
+					postwmsize();
 				}
 				break;
 			}

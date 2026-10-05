@@ -56,7 +56,7 @@ progbg 313244
 progfg B4BEFE
 
 # Code blocks
-codebg 181825
+codebg 313244		# a step above bg, as the tags are: text on it 8.7:1
 
 # Context menu
 menubg 1E1E2E

@@ -6,6 +6,7 @@ implement Lucitheme;
 # Reads a colour palette from Plan 9–style flat files.
 # /lib/lucifer/theme/current names the active theme;
 # /lib/lucifer/theme/<name> defines key-value colour pairs.
+# Writing a name to current switches every program that watches it.
 #
 # File format: one "key RRGGBB" per line, # comments, blank lines ignored.
 # Missing keys or unreadable files fall back to Brimstone defaults.
@@ -219,16 +220,20 @@ gettheme(): ref Theme
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return brimstone();
-
-	# Read active theme name
-	name := strip(readfile(THEMEDIR + "current"));
-	if(name == nil || len name == 0)
+	th := loadtheme(current());
+	if(th == nil)
 		return brimstone();
+	return th;
+}
 
-	# Read theme file
+loadtheme(name: string): ref Theme
+{
+	sys = load Sys Sys->PATH;
+	if(!validname(name))
+		return nil;
 	data := readfile(THEMEDIR + name);
 	if(data == nil)
-		return brimstone();
+		return nil;
 
 	th := brimstone();
 
@@ -252,4 +257,112 @@ gettheme(): ref Theme
 	}
 
 	return th;
+}
+
+current(): string
+{
+	sys = load Sys Sys->PATH;
+	name := strip(readfile(THEMEDIR + "current"));
+	if(name == nil)
+		return "brimstone";
+	return name;
+}
+
+# a theme's name is a file in THEMEDIR, not a path and not "current"
+validname(name: string): int
+{
+	if(name == nil || name == "current" || name[0] == '.')
+		return 0;
+	for(i := 0; i < len name; i++)
+		if(name[i] == '/' || name[i] == ' ' || name[i] == '\t' || name[i] == '\n')
+			return 0;
+	return 1;
+}
+
+settheme(name: string): string
+{
+	sys = load Sys Sys->PATH;
+	if(!validname(name))
+		return "invalid theme name";
+	if(sys->stat(THEMEDIR + name).t0 < 0)
+		return "no theme " + name;
+	fd := sys->open(THEMEDIR + "current", Sys->OWRITE|Sys->OTRUNC);
+	if(fd == nil)
+		fd = sys->create(THEMEDIR + "current", Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return sys->sprint("cannot write %scurrent: %r", THEMEDIR);
+	b := array of byte name;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("cannot write %scurrent: %r", THEMEDIR);
+	return nil;
+}
+
+# How often a watcher looks at the current file. A switch is seen
+# within this; the cost is one small read per watcher per interval.
+Pollms: con 1000;
+
+watch(): chan of string
+{
+	sys = load Sys Sys->PATH;
+	c := chan[1] of string;
+	spawn watcher(c, current());
+	return c;
+}
+
+watcher(c: chan of string, last: string)
+{
+	for(;;){
+		sys->sleep(Pollms);
+		name := current();
+		if(name == last)
+			continue;
+		last = name;
+		# never block on a slow reader: one pending change is enough,
+		# since the reader loads whatever is current when it gets to it
+		alt {
+		c <-= name =>
+			;
+		* =>
+			;
+		}
+	}
+}
+
+# the user's theme directory is bound over the system's: a name can
+# appear in both
+member(s: string, a: array of string): int
+{
+	for(i := 0; i < len a; i++)
+		if(a[i] == s)
+			return 1;
+	return 0;
+}
+
+themes(): list of string
+{
+	sys = load Sys Sys->PATH;
+	fd := sys->open(THEMEDIR, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	names: array of string;
+	for(;;){
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++)
+			if(validname(d[i].name) && (d[i].mode & Sys->DMDIR) == 0 && !member(d[i].name, names)){
+				a := array[len names + 1] of string;
+				a[0:] = names;
+				a[len names] = d[i].name;
+				names = a;
+			}
+	}
+	# insertion sort: a handful of names
+	for(i := 1; i < len names; i++)
+		for(j := i; j > 0 && names[j] < names[j-1]; j--)
+			(names[j], names[j-1]) = (names[j-1], names[j]);
+	l: list of string;
+	for(i = len names - 1; i >= 0; i--)
+		l = names[i] :: l;
+	return l;
 }

@@ -1,0 +1,48 @@
+#!/bin/sh
+# xen — open host files in a standalone Xenith, Acme-SAC style.
+#
+#	xen [file ...]
+#
+# Starts an emu whose only program is Xenith: no Lucifer, no window
+# manager, no login. With no window manager Xenith runs Plain over the
+# whole emu window, and its Exit halts the emu (appl/xenith/gui.b,
+# killwins). Host paths are reached through /n/local, which the profile
+# mounts over the host root; Xenith starts in the caller's directory.
+#
+# Environment:
+#	INFERNODE_ROOT	tree to run (default: the tree holding this script)
+#	XEN_THEME	Xenith theme (default dark; "plan9" for the classic colours)
+#	XEN_GEOM	initial emu window size (default 1400x900)
+#	XEN_LOG		where emu's output goes (default $TMPDIR/xen.log)
+
+root=${INFERNODE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+case $(uname -s) in
+Darwin)	emu=$root/emu/MacOSX/o.emu ;;
+Linux)	emu=$root/emu/Linux/o.emu ;;
+*)	echo "xen: unsupported host $(uname -s)" >&2; exit 1 ;;
+esac
+if [ ! -x "$emu" ]; then
+	echo "xen: no emulator at $emu (build one first)" >&2
+	exit 1
+fi
+
+# Quote for the Inferno shell: wrap in '' and double any embedded '.
+q() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
+files=
+for f in "$@"; do
+	case $f in
+	/*)	;;
+	*)	f=$PWD/$f ;;
+	esac
+	files="$files $(q "/n/local$f")"
+done
+
+cmd="cd $(q "/n/local$PWD"); xenith -t $(q "${XEN_THEME:-dark}")$files"
+log=${XEN_LOG:-${TMPDIR:-/tmp}/xen.log}
+
+nohup "$emu" -c1 -pheap=512m -pmain=512m -pimage=512m \
+	-g"${XEN_GEOM:-1400x900}" -r"$root" \
+	/dis/sh.dis -l -c "$cmd" </dev/null >"$log" 2>&1 &

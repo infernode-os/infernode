@@ -21,8 +21,8 @@ display: ref Display;
 propfont: ref Font;
 monofont: ref Font;
 
-PROPFONT: con "/fonts/combined/go.20.font";
-MONOFONT: con "/fonts/combined/gomono.20.font";
+PROPFONT: con "/fonts/combined/go.14.font";
+MONOFONT: con "/fonts/combined/gomono.14.font";
 
 init(d: ref Display)
 {

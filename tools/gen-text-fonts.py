@@ -2,8 +2,8 @@
 #
 # gen-text-fonts.py — Xenith's reading faces as Inferno bitmap fonts.
 #
-# Renders Go, Go Mono (fonts/go) and Noto Serif (fonts/noto) at 16, 20
-# and 24 pixels to the em into k8 subfonts, one per 256-codepoint block,
+# Renders Go, Go Mono (fonts/go) and Noto Serif (fonts/noto) at 14, 16
+# and 18 pixels to the em into k8 subfonts, one per 256-codepoint block,
 # and writes fonts/combined/{go,gomono,serif}.N.font. See
 # docs/THEME-RESEARCH.md for why these faces and sizes.
 #
@@ -44,7 +44,7 @@ FACES = [
 BLOCKS = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x1E, 0x1F,
 	0x20, 0x21, 0x22, 0x23, 0x25, 0x26, 0xFB}
 # size -> the DejaVu manifest (unicode.sans.N.font) that fills the gaps
-SIZES = {16: "14", 20: "18", 24: "24"}
+SIZES = {14: "14", 16: "14", 18: "18"}
 
 
 def main():

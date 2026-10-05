@@ -130,12 +130,16 @@ present evidence nothing could.
 
 Strongest first.
 
-1. **Size matters most.** Reading speed is flat across a wide range of
-   sizes and falls steeply below a critical print size, an x-height of
-   about 0.2° of visual angle; 0.25° and above is comfortably fluent
-   (Legge et al. 1985a; Legge & Bigelow 2011). Thresholds rise with age,
-   by about 81% from 20 to 65 (Dobres et al. 2016), and the dark-mode
-   penalty is concentrated at small sizes (Piepenbrock et al. 2014a).
+1. **Size matters most, up to a point.** Reading speed is flat across a
+   wide range of sizes and falls steeply below a critical print size
+   (Legge et al. 1985a; Legge & Bigelow 2011, who put the fluent range at
+   an x-height of 0.2–2° for the population at large). Measured reader by
+   reader, the critical size is smaller and grows with age: an x-height of
+   about 0.10° from 8 to 23, 0.135° at 68 and 0.18° at 81 (Calabrèse et
+   al. 2016, MNREAD: 0.08, 0.21 and 0.34 logMAR). Above it, larger type
+   reads no faster; it only puts fewer lines on the screen. The dark-mode
+   penalty is concentrated at small sizes (Piepenbrock et al. 2014a), so
+   light text on dark wants a margin above the critical size.
 2. **Heavier type does not close the dark-mode gap.** Thickening strokes
    had no effect on reading in dark mode (Palmén, Gilbert & Crossland
    2023, n=459); speed falls at both extremes of stroke weight and is flat
@@ -172,11 +176,13 @@ Strongest first.
   face by the same designers (Bigelow 2018).
 - **Noto Serif** for a serif: its x-height (0.536 em) matches Go's, and its
   letters are wide and low in contrast.
-- **20 pixels to the em**, an x-height of about 10.6 px. On a laptop at
-  2× (about 127 logical pixels per inch) at 50 cm that is about 0.24°; on
-  a desktop monitor at 60–70 cm it is at or above 0.25°. DejaVu at 14,
-  the previous default, was about 0.17°, below the critical print size.
-  16 and 24 are built too.
+- **14 pixels to the em**, an x-height of about 7.4 px. On a laptop at 2×
+  (about 127 logical pixels per inch) at 50 cm that is about 0.17°: 1.7
+  times the young reader's critical size and 1.25 times a 68-year-old's,
+  the margin for light text on dark. 16 (0.16° at 60 cm) and 18 (0.16° at
+  70 cm) are built for monitors further away and for older eyes. A first
+  cut used 20, aiming at 0.25° from the population figure; that is above
+  even the 81-year-olds' critical size, and read as large print.
 - **Regular weight**, since bold does not help in dark mode.
 - **Line height 1.25 em.** A convention, not evidence.
 
@@ -312,6 +318,7 @@ Head-mounted displays (not applicable to monitors):
 
 ### Type
 
+- Calabrèse, Cheong, Cheung, He, Kwon, Mansfield, Subramanian, Yu, Legge (2016). Baseline MNREAD measures for normally sighted subjects from childhood to old age. *IOVS* 57:3836. https://doi.org/10.1167/iovs.16-19580 [PR; values via the abstract]
 - Legge, Bigelow (2011). Does print size matter for reading? A review of findings from vision science and typography. *Journal of Vision* 11(5):8. https://doi.org/10.1167/11.5.8 [PR]
 - Pelli et al. (2007). Crowding and eccentricity determine reading rate. *Journal of Vision* 7(2):20. https://doi.org/10.1167/7.2.20 [PR]
 - Mansfield, Legge, Bane (1996). Psychophysics of reading XV. Font effects in normal and low vision. *IOVS* 37:1492. PMID 8675391 [PR]

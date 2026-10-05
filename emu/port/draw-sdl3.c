@@ -840,6 +840,8 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 		);
 		if (!sdl_window)
 			snprint(attacherr, sizeof attacherr, "%s", SDL_GetError());
+		else
+			SDL_RaiseWindow(sdl_window);	/* in front of the terminal that started emu */
 	});
 	if (!sdl_window) {
 		fprint(2, "draw-sdl3: attachscreen: SDL_CreateWindow failed (driver=%s): %s\n",
@@ -1231,6 +1233,7 @@ handle_window_creation(void)
 			sdl_window = NULL;
 			create_window_result = 0;
 		} else {
+			SDL_RaiseWindow(sdl_window);	/* in front of the terminal that started emu */
 			create_window_result = 1;
 		}
 	}

@@ -88,7 +88,9 @@ done
 
 case $editor in
 xenith)
-	run="xenith -t $(q "${XEN_THEME:-dark}")$files" ;;
+	# A plumber first, as Lucifer's boot starts one, so plumbing works
+	# from the outset and Xenith does not have to start its own.
+	run="bind -bc '#splumber' /chan; plumber /usr/inferno/lib/plumbing; xenith -t $(q "${XEN_THEME:-dark}")$files" ;;
 sam)
 	run="wm/wm sh -c $(q "wm/sam$files; echo halt > /dev/sysctl")" ;;
 esac

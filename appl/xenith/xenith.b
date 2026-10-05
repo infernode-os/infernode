@@ -381,8 +381,11 @@ main(argl : list of string)
 	spawn mousetask();
 	spawn waittask();
 	spawn xfidalloctask();
-	# Run the plumber inside acme, so plumber can start acme clients
-	spawn exec->run(nil, "{bind -bc '#splumber' /chan; plumber > /tmp/plumb.log >[2=1]&}", nil, 0, TRUE, nil, nil, FALSE);
+	# Run the plumber inside acme, so plumber can start acme clients,
+	# unless one is already serving an edit port (Lucifer's boot, xen)
+	(ok, nil) := sys->stat("/chan/plumb.edit");
+	if(ok < 0)
+		spawn exec->run(nil, "{bind -bc '#splumber' /chan; plumber > /tmp/plumb.log >[2=1]&}", nil, 0, TRUE, nil, nil, FALSE);
 	spawn plumbproc();
 
 	# notify(shutdown);
@@ -1663,7 +1666,9 @@ iconinit()
 	r.max.x -= 2;
 	draw(colbutton, r, tagcols[BORD], nil, (0, 0));
 
-	arrowcursor = ref Cursor((-1, -1), (16, 32), arrowbits);
+	# the host's own pointer, as every other InferNode window has;
+	# the box cursor is still Xenith's, for dragging columns and windows
+	arrowcursor = nil;
 	boxcursor = ref Cursor((-7, -7), (16, 32), boxbits);
 
 	graph->cursorswitch(arrowcursor);

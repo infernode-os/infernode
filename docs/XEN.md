@@ -58,7 +58,7 @@ plumbing.
 | `INFERNODE_ROOT` | tree to run | the tree holding the script |
 | `XEN_THEME` | the session's theme: any installed theme; `glenda` is Plan 9's acme | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
-| `XEN_LOG` | output of a detached instance | `$TMPDIR/xen.log` |
+| `XEN_LOG` | where a detached instance's output is added, between a line marking its start and one giving the emu's exit status | `$TMPDIR/xen.log` |
 | `INFERNODE_HIDPI` | `0` draws Xenith in points, each doubled on a Retina display, instead of in the display's own pixels | `1` |
 
 On a Retina display Xenith draws in the display's own pixels: the emu

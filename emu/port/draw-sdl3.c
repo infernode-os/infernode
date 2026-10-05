@@ -1142,6 +1142,14 @@ setpointer(int x, int y)
 		/* Scale from the shown part of the texture to rendered size, then add offset */
 		win_x = ((float)x - src_rect.x) * dest_rect.w / src_rect.w + dest_rect.x;
 		win_y = ((float)y - src_rect.y) * dest_rect.h / src_rect.h + dest_rect.y;
+		/* dest_rect is in the window's pixels, the warp in its points:
+		 * the inverse of the mouse path's multiply by display_scale.
+		 * Without it a 2x display sent the pointer to twice the place,
+		 * off to the lower right. */
+		if (display_scale > 0.0f) {
+			win_x /= display_scale;
+			win_y /= display_scale;
+		}
 	} else {
 		/* Fallback - use display_scale */
 		win_x = (float)x / display_scale;

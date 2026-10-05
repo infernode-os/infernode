@@ -104,6 +104,9 @@ options are the same as those for the
 .I mount
 command (see
 .IR bind (1)).
+Authenticated mounts default to AES-256-CBC with SHA-256 when
+.B -C
+is omitted.
 .TP
 .B "import [-abcR9i] [\f2net\fP!]\f2machine\fP[!\f2svc\fP] [\f2remotedir\fP] \f2dir\fP"
 Import a directory from a remote Plan 9

@@ -3489,7 +3489,16 @@ NC2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'sleep 2' \
         "dial -A tcp!127.0.0.1!17010 {echo t0k; echo 'echo NETCONS-LO-SERVED > /dev/cons'; sleep 3}" \
         'sleep 4' \
-        "echo 'interface ether0' >> /n/dos/netconsole" \
+		"echo 'interface ether0' >> /n/dos/netconsole" \
+        "dial -A tcp!127.0.0.1!17010 {sleep 30} &" \
+        "dial -A tcp!127.0.0.1!17010 {sleep 30} &" \
+        "dial -A tcp!127.0.0.1!17010 {sleep 30} &" \
+        "dial -A tcp!127.0.0.1!17010 {sleep 30} &" \
+        'sleep 2' \
+        "dial -A tcp!127.0.0.1!17010 {sleep 1}" \
+        'sleep 18' \
+        "dial -A tcp!127.0.0.1!17010 {echo t0k; echo 'echo NETCONS-PRETOKEN-RECOVERED > /dev/cons'; sleep 3}" \
+        'sleep 4' \
         'echo NC2-END')"
 # The "served" case comes from the host, through a port forward to the
 # guest's Ethernet address, as a real wired client would: a guest cannot
@@ -3497,7 +3506,8 @@ NC2="$(shell_session "$BUILD/$PLAT-kernel.img" \
 # for its own non-loopback address out on the wire and QEMU's user
 # network does not reflect it (a stack quirk of its own, not this check's).
 # A host loop waits for the console to answer, sends the token and one
-# command, and goes.
+# command, and goes. The pre-token resource bounds are exercised above
+# over guest loopback, so they do not depend on QEMU's USB network model.
 NCFWD=17110
 QEMUARGS="${SAVEDARGS/user,id=n0/user,id=n0,hostfwd=tcp:127.0.0.1:$NCFWD-:17010} -drive file=$NCIMG,if=sd,format=raw"
 NCHOSTOUT="$BUILD/$PLAT-netcons-host.txt"; rm -f "$NCHOSTOUT"
@@ -3542,6 +3552,16 @@ if grep -q 'init: network console on tcp!\*!17010 (every interface), token requi
     pass "network console: a token-only card file still serves every interface, and the boot line says so"
 else
     fail "network console: token-only file -- $(grep -a -E 'network console|NETCONS' <<<"$NC2" | head -2 | tr '\n' ' ')"
+fi
+# Each silent client's command holds its socket for 30 seconds.  Recovery at
+# 18 seconds therefore proves the server's 15-second watchdog, rather than a
+# voluntary client close, released the slots; console log lines are diagnostic
+# and are not the synchronization primitive for this assertion.
+if grep -q 'init: network console: pre-token limit reached from 127.0.0.1!' <<<"$NC2" \
+   && grep -q 'NETCONS-PRETOKEN-RECOVERED$' <<<"$NC2"; then
+    pass "network console: silent pre-token clients are capped, expire, and release their slots"
+else
+    fail "network console: pre-token bounds -- $(grep -a -E 'pre-token|token timeout|PRETOKEN' <<<"$NC2" | tr '\n' ' ')"
 fi
 if grep -q 'init: network console on tcp!\*!17010 (/net/ether0 only), token required' <<<"$NC3" \
    && grep -q 'init: network console: refused 127.0.0.1!' <<<"$NC3" \

@@ -25,6 +25,8 @@ following the quoting
 conventions of
 .IR sh (1).
 The first argument is the command name.
+The encoded command is limited to 64 KiB; a larger length prefix is rejected
+before allocating its buffer.
 .I Rstyxd
 prepares a modified name space in which
 to run the command.
@@ -39,6 +41,36 @@ and opens the new
 (ie, the remote client's
 .BR /dev/cons )
 on file descriptors 0, 1 and 2.
+After authentication, a trusted helper exports a restricted server namespace
+with empty
+.BR /usr ,
+and server
+.BR /dev .
+The existing
+.B /prog
+is retained so shells can wait for their child processes; fresh process-device
+attachment is still disabled below.
+This is not a container boundary between sessions using the same Inferno user:
+the normal
+.IR prog (3)
+owner permissions apply, so such a session can inspect, and where permitted
+control, that user's other processes.  Give independent remote principals
+distinct certificate user names.
+The command enters a fresh namespace rooted at an empty directory and mounts
+only that restricted export plus the caller's delegated tree.  Unmounting an
+overlay therefore reveals emptiness rather than the server's original root.
+The restricted export also removes a bare-metal node's writable
+.B /n/dos
+boot mount, masks the server factotum locations
+.B /mnt/factotum
+and
+.BR /tmp/factotum ,
+and disables fresh device attachment after the caller's delegated
+devices are in place, so the command cannot recover omitted devices by naming
+.BR #c ,
+.BR #S ,
+.BR #G
+or another kernel device directly.
 Finally, it executes the command.
 .PP
 .I Rstyxd
@@ -66,8 +98,9 @@ in any form accepted by
 .IR ssl ;
 the special name
 .B none
-is usually listed, to allow the client to choose not to use
-.IR ssl .
+can be listed explicitly to allow the client to choose not to use
+.IR ssl ,
+but is not part of the authenticated listener's default policy.
 .SH FILES
 .TF /usr/user/keyring/default
 .TP

@@ -25,7 +25,11 @@ def keeper(i, cmd):
             time.sleep(0.6); c.recv(4096); c.sendall((tok + '\n').encode())
             try: c.recv(4096)          # the shell says nothing after a good token
             except socket.timeout: pass
-            c.sendall((cmd + '\n').encode()); say('loop %d up' % i); c.settimeout(60.0)
+            # Tie the stress process group to this controlling socket.  Bare
+            # metal intentionally lets children outlive a network-console
+            # shell, so EOF must explicitly kill the group it started.
+            held = cmd + " & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl"
+            c.sendall((held + '\n').encode()); say('loop %d up' % i); c.settimeout(60.0)
             # The loop never prints, and a reboot leaves the socket half-open. TCP
             # keepalives find that out (the rebooted board answers the probe with a
             # RST) and cost the board nothing. This used to send a newline a minute:
@@ -48,11 +52,11 @@ for i, cmd in enumerate(LOOPS): threading.Thread(target=keeper, args=(i, cmd), d
 # The receive path is where #610's panic lives, and the four loops above never
 # touch it. A sink held on its own console, and 64 MB pushed into it every ten
 # minutes at whatever the link carries; the rate is logged so a slow-down shows.
-# The sink is not held by a keeper: the Ethernet battery begins and ends with
-# "kill Listen", which takes this listener with its own and leaves the console
-# session that started it alive, so a keeper never notices (that is how 53
-# pushes were refused on 2026-09-19 after a battery run at 03:25). The pusher
-# arms the sink itself whenever it finds the port closed.
+# The sink is held by a console whose EOF kills exactly the listener it started.
+# This matters on bare metal: closing a network-console session does not itself
+# kill children, and the old foreground command left unauthenticated port 8702
+# open after the soak driver exited.  The Ethernet battery's broad "kill Listen"
+# can still remove it, so the pusher re-arms it whenever the port is closed.
 sinkconn = [None]
 def armsink():
     try:
@@ -62,7 +66,7 @@ def armsink():
     time.sleep(0.6); c.recv(4096); c.sendall((tok + '\n').encode())
     try: c.recv(4096)
     except socket.timeout: pass
-    c.sendall(b"load std; listen -A 'tcp!*!8702' {cat > /dev/null}\n"); sinkconn[0] = c
+    c.sendall(b"load std; listen -A 'tcp!*!8702' {cat > /dev/null} & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl\n"); sinkconn[0] = c
     say('sink armed'); time.sleep(3)
 try: armsink()
 except Exception as e: say('sink not armed: %s' % e)
@@ -104,3 +108,7 @@ while time.time() - start < 50*3600:
         say('unreachable: %s' % e)
     time.sleep(300)
 say('soak finished')
+try:
+    if sinkconn[0] is not None: sinkconn[0].close()
+except Exception:
+    pass

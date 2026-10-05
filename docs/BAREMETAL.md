@@ -418,6 +418,11 @@ answer before giving it anything. The token crosses the network in the
 clear; it stops a port scan and a curious neighbour, nothing more. Each
 connection gets its own forked namespace and a plain `sh` (no profile,
 so `load std` yourself); a mount made in a session dies with it.
+At most four token checks may be in progress, and a caller that does not
+finish the token line within 15 seconds is disconnected and releases its
+slot. A fifth pre-token connection receives `busy` and is closed. At most
+eight token attempts enter this path per second, and comparison does fixed
+work across the full bounded input rather than stopping at the first mismatch.
 
 **Keep it to the wire.** The console is a full-power shell behind a
 cleartext token, so anyone who can see the traffic can take the
@@ -547,9 +552,11 @@ unless `BAREMETAL_QEMU_PATCHED=1` says otherwise.
 - **Every process is the host owner.** The desktop's namespace no longer
   holds the raw card, the pins or `/dev/sysctl`, but there is no
   unprivileged user yet.
-- **`/n/dos` is read-write inside the desktop**, because Inferno has no
-  read-only bind on this kernel: a desktop program can still overwrite
-  the kernel it booted from, through the filesystem.
+- **`/n/dos` is read-write inside the local desktop**, because Inferno has
+  no read-only bind on this kernel: a local desktop program can still
+  overwrite the kernel it booted from through the filesystem. Authenticated
+  `cpu` sessions remove this mount and the server's `/usr` mount, mask both
+  factotum locations, then enable `NODEVS` before their command.
 - **The network console's token is sent in clear**, and `rootpath net`
   mounts without authentication.
 - **The Ethernet link is assumed up for ever** once bound: no link

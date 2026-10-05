@@ -67,7 +67,9 @@ Put together: **to show a program's screen somewhere else, give it a
 `/dev` whose drawing files are somewhere else.** That is all `cpu` does:
 
 - `cpu` connects to the node, both sides prove who they are, and it
-  sends the node **your whole namespace** — your files, and your `/dev`.
+  sends the node a small namespace containing **your `/dev` only**.
+  Additional files are delegated only when you explicitly name an export
+  root with `-e`.
 - On the node, a small program, `rstyxd`, puts your namespace at
   `/n/client` and lays **your** `/dev` over the node's own `/dev`.
 - It then runs the command you gave. That command runs on the node's
@@ -86,10 +88,8 @@ The two ways in step 3 differ only in *what* runs on the node:
   yours.
 
 One consequence to remember: inside a session, anything under `/dev` on
-the node is **your** machine's, not the node's. To see where a shell is
-really running, look at something outside `/dev` — `ps` lists the
-processes of the machine it runs on, and on a Raspberry Pi `ls /n/dos`
-lists its SD card.
+the node is **your** machine's, not the node's. The node's writable boot
+mount is deliberately absent, and direct kernel-device attachment is disabled.
 
 ---
 
@@ -302,9 +302,10 @@ A shell window appears inside it. **In that shell window**, one line at
 a time:
 
 ```
-mkdir /tmp/wmx
-mount {wmexport} /tmp/wmx
-cpu tcp!192.168.1.50 wmimport -w /n/client/tmp/wmx wm/sh &
+mkdir -p /tmp/cpuexport/dev /tmp/cpuexport/wmx
+bind /dev /tmp/cpuexport/dev
+mount {wmexport} /tmp/cpuexport/wmx
+cpu -e /tmp/cpuexport tcp!192.168.1.50 wmimport -w /n/client/wmx wm/sh &
 ```
 
 A new window opens among your own, and the shell in it runs on the
@@ -313,17 +314,18 @@ any program in place of `wm/sh`: `wm/clock`, `acme`, `wm/tetris`.
 
 What each line does:
 
-1. **`mkdir /tmp/wmx`** makes an empty directory to hang something on.
-2. **`mount {wmexport} /tmp/wmx`** runs the stock program `wmexport`,
+1. **`mkdir …; bind /dev …`** builds the exact caller-side tree this
+   session will receive: the display devices plus one window-manager mount.
+2. **`mount {wmexport} /tmp/cpuexport/wmx`** runs the stock program `wmexport`,
    which **serves your window manager as files**: opening
-   `/tmp/wmx/clone` creates a new window in it, and each window's
+   `/tmp/cpuexport/wmx/clone` creates a new window in it, and each window's
    keyboard, mouse and window-control files appear beside it. The
    braces mean "the files served by this command", and `mount` puts
-   them at `/tmp/wmx`. It must be typed in a shell *inside* the window
+   them at `/tmp/cpuexport/wmx`. It must be typed in a shell *inside* the window
    manager — that is where it learns which window manager to serve.
-3. **`cpu … wmimport -w /n/client/tmp/wmx wm/sh &`** runs `wmimport` on
-   the node. Your namespace, including `/tmp/wmx`, arrives there under
-   `/n/client`, so `/n/client/tmp/wmx` is your window manager, seen from
+3. **`cpu -e /tmp/cpuexport … wmimport -w /n/client/wmx wm/sh &`** runs
+   `wmimport` on the node. Only the tree you named arrives under
+   `/n/client`, so `/n/client/wmx` is your window manager, seen from
    the node. `wmimport` asks it for a window through those files and
    runs `wm/sh` in it. The program runs on the node; it draws into a
    window of yours, on your screen (your `/dev/draw`, laid over the
@@ -396,9 +398,20 @@ only other way is a new signer and new certificates for everyone.
   ends, which also raises the exchange to ML-KEM-1024) exist, but have
   not yet been verified on a bare-metal node.
 - **A desktop's powers, no more** (bare-metal node). A session can run
-  programs and use the node's files, but has no raw card, no GPIO pins
-  and no `/dev/sysctl`: it cannot rewrite the card or restart the
-  machine. That is what the consoles are for.
+  programs and use ordinary node files, but the server's `/usr` and `/n/dos`
+  mounts are absent and fresh
+  device attachment is disabled after the caller's `/dev` is installed.
+  It therefore has no raw card, GPIO pins or kernel sysctl. The loaded
+  listener key has no backing path in the session, and the server's
+  `/mnt/factotum` and `/tmp/factotum` credential oracles are masked.
+- **The viewer delegates devices, not credentials.** `cpu` exports only
+  `/dev` by default. `-e` is an explicit capability grant; do not use
+  `-e /` with a node you would not trust with your keyring and host mounts.
+- **User identities are the process boundary.** The node retains `/prog`
+  because shells need it to wait for children. Its ordinary owner permissions
+  therefore apply: two certificates with the same Inferno user name are not
+  isolated from each other's processes. Give independent people distinct
+  certificate names, as in section 5.
 - **One host cannot lock others out** by opening many connections: each
   address may hold at most four handshakes in progress (`listen -P`).
 
@@ -415,7 +428,7 @@ only other way is a new signer and new certificates for everyone.
 | The window stays black, and **the node's own monitor** shows a desktop | The viewer's `/dev` had no display in it, so the node's own display showed through. See section 8, `bind -a '#i' /dev`. |
 | A grey window that fills in slowly | Normal over Wi-Fi. If it is very slow, something left on the node is using its CPU (section 4). |
 | `wmexport: no window manager context` (3b) | `mount {wmexport}` was typed in a shell that is not inside a window manager (for example Terminal's `;` prompt). Type it in the shell window inside `wm/wm`. |
-| `wmimport: no wm at /n/client/tmp/wmx` (3b) | The `mount {wmexport} /tmp/wmx` step was skipped or failed, or the path in the `cpu` line differs from the one mounted. |
+| `wmimport: no wm at /n/client/wmx` (3b) | The `mount {wmexport} /tmp/cpuexport/wmx` step was skipped or failed, or `cpu -e /tmp/cpuexport` was omitted. |
 | acme says `can't mount /mnt/acme` | Your certificate's name differs from your user name on the viewer (step 1). |
 | Starting the viewer closes your Lucifer desktop | Section 8. |
 | `boot: /n/dos/cpulisten is set but … missing; NOT starting` | The node's certificate is not at `usr/inferno/keyring/default` on the card. |

@@ -26,7 +26,7 @@ badmodule(p: string)
 
 usage()
 {
-	sys->fprint(stderr, "Usage: cpu [-C cryptoalg] mach command args...\n");
+	sys->fprint(stderr, "Usage: cpu [-C cryptoalg] [-e exportroot] mach command args...\n");
 	raise "fail:usage";
 }
 
@@ -52,9 +52,14 @@ init(nil: ref Context, argv: list of string)
 
 	arg->init(argv);
 	alg := "";
+	exportroot: string;
 	while ((opt := arg->opt()) != 0) {
 		if (opt == 'C') {
 			alg = arg->arg();
+		} else if(opt == 'e') {
+			exportroot = arg->arg();
+			if(exportroot == nil || !exists(exportroot))
+				usage();
 		} else
 			usage();
 	}
@@ -104,7 +109,8 @@ init(nil: ref Context, argv: list of string)
 	ai := kr->readauthinfo(cert);
 
 	# Encrypt and authenticate every record unless told otherwise. The
-	# session carries keystrokes and the caller's whole namespace;
+	# session carries keystrokes and every caller capability explicitly
+	# placed in the export root;
 	# upstream's default was "none", which authenticates the peers and
 	# then sends everything in clear. AES-CBC alone would hide the bytes
 	# but let anyone on the path alter them undetected, so the SHA-256
@@ -132,10 +138,71 @@ init(nil: ref Context, argv: list of string)
 		raise "fail:write error";
 	}
 
-	if(sys->export(fd, "/", sys->EXPWAIT) < 0){
+	# The remote command needs the caller's devices, not its credentials,
+	# home directory and host mounts.  Build a one-use export root containing
+	# only /dev unless the caller explicitly supplies a wider tree with -e.
+	# FORKNS keeps the temporary bind private to this cpu invocation.
+	private := 0;
+	if(exportroot == nil) {
+		if(sys->pctl(Sys->FORKNS, nil) < 0) {
+			sys->fprint(stderr, "cpu: cannot fork export namespace: %r\n");
+			raise "fail:export namespace";
+		}
+		exportroot = mkexportroot();
+		private = 1;
+	}
+	dev := exportroot + "/dev";
+	if(exportroot == "/")
+		dev = "/dev";
+	if(!exists(dev)) {
+		sys->fprint(stderr, "cpu: export root %s has no dev directory\n", exportroot);
+		if(private)
+			rmexportroot(exportroot);
+		raise "fail:bad export root";
+	}
+
+	rc := sys->export(fd, exportroot, sys->EXPWAIT);
+	if(private)
+		rmexportroot(exportroot);
+	if(rc < 0){
 		sys->fprint(stderr, "cpu: export failed: %r\n");
 		raise "fail:export error";
 	}
+}
+
+mkexportroot(): string
+{
+	base := "/tmp/cpu-export-" + string sys->pctl(0, nil) + "-" + string sys->millisec();
+	root := base;
+	for(i := 0; i < 10; i++) {
+		if(i > 0)
+			root = base + "-" + string i;
+		fd := sys->create(root, Sys->OREAD, Sys->DMDIR|8r700);
+		if(fd == nil)
+			continue;
+		fd = nil;
+		fd = sys->create(root + "/dev", Sys->OREAD, Sys->DMDIR|8r700);
+		if(fd == nil) {
+			sys->remove(root);
+			continue;
+		}
+		fd = nil;
+		if(sys->bind("/dev", root + "/dev", Sys->MREPL) < 0) {
+			sys->remove(root + "/dev");
+			sys->remove(root);
+			continue;
+		}
+		return root;
+	}
+	sys->fprint(stderr, "cpu: cannot make private export root: %r\n");
+	raise "fail:export root";
+}
+
+rmexportroot(root: string)
+{
+	sys->unmount(nil, root + "/dev");
+	sys->remove(root + "/dev");
+	sys->remove(root);
 }
 
 exists(file: string): int

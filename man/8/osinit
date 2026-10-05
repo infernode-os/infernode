@@ -198,6 +198,9 @@ If it has a first line, that is a token a client must send, in clear,
 before it is given a shell; if it is empty there is none, and
 .I osinit
 says so loudly.
+With a token, at most four checks may be in progress, each has a 15-second
+deadline, and no more than eight attempts per second enter the check.
+Comparison takes fixed work across the bounded 256-byte input.
 .TP
 .B skiplogon
 Its existence starts the desktop without

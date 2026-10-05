@@ -219,10 +219,10 @@ specify the algorithm,
 to be used following authentication for digesting or encryption. See 
 .IR ssl (3)
 for the supported algorithms.
-The default is
-.BR none :
-.IR ssl (3)
-is not used after authentication.
+The default is AES-256-CBC with SHA-256, providing confidentiality and
+integrity after authentication.  Specify
+.B none
+explicitly only for a compatibility peer that cannot use record protection.
 .TP
 .BI -k " kfile "
 For mount only, specify the keyfile to be used when authenticating.

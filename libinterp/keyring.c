@@ -1923,6 +1923,10 @@ Keyring_auth(void *fp)
 		retstr(exNomem, &f->ret->t0);
 		return;
 	}
+	/* The peer must never receive allocator residue if a later ML-KEM
+	 * allocation fails.  The return values below are checked as the primary
+	 * fail-closed path; zeroing here is defence in depth. */
+	memset(kem, 0, sizeof(Kembuf));
 	myek = kem->myek;
 	mydk = kem->mydk;
 	hisek = kem->hisek;
@@ -2010,10 +2014,14 @@ Keyring_auth(void *fp)
 	/* generate ephemeral ML-KEM keypair for hybrid PQ key agreement */
 	release();
 	if(cnsa)
-		mlkem1024_keygen(myek, mydk);
+		n = mlkem1024_keygen(myek, mydk);
 	else
-		mlkem768_keygen(myek, mydk);
+		n = mlkem768_keygen(myek, mydk);
 	acquire();
+	if(n != 0){
+		err = "ml-kem key generation failed";
+		goto out;
+	}
 
 	/* send alpha**r0 mod p, mycert, and mypk */
 	n = bigtobase64(alphar0, buf, Maxbuf);
@@ -2139,10 +2147,14 @@ Keyring_auth(void *fp)
 	/* encapsulate to his ek, send the ciphertext */
 	release();
 	if(cnsa)
-		mlkem1024_encaps(myct, ss_local, hisek);
+		n = mlkem1024_encaps(myct, ss_local, hisek);
 	else
-		mlkem768_encaps(myct, ss_local, hisek);
+		n = mlkem768_encaps(myct, ss_local, hisek);
 	acquire();
+	if(n != 0){
+		err = "ml-kem encapsulation failed";
+		goto out;
+	}
 	if(sendmsg(fd, (char*)myct, ctlen) <= 0){
 		err = MSG;
 		goto out;
@@ -2160,9 +2172,13 @@ Keyring_auth(void *fp)
 	}
 	memmove(hisct, buf, ctlen);
 	if(cnsa)
-		mlkem1024_decaps(ss_remote, hisct, mydk);
+		n = mlkem1024_decaps(ss_remote, hisct, mydk);
 	else
-		mlkem768_decaps(ss_remote, hisct, mydk);
+		n = mlkem768_decaps(ss_remote, hisct, mydk);
+	if(n != 0){
+		err = "ml-kem decapsulation failed";
+		goto out;
+	}
 
 	/*
 	 * sign alpha**r0, alpha**r1 and both ML-KEM public keys, then send.
@@ -2315,7 +2331,7 @@ out:
 		certmutable(alphacert);
 		destroy(alphacert);
 	}
-	/* scrub ML-KEM secret key and shared secrets from the stack */
+	/* scrub the heap-backed ML-KEM secret key and shared secrets */
 	secureZero(kem, sizeof(Kembuf));
 	free(kem);
 	/* scrub the combiner buffer: it held the DH secret and both ML-KEM shared secrets */
@@ -4105,7 +4121,11 @@ Keyring_mlkem768_keygen(void *fp)
 	f->ret->t0 = H;
 	f->ret->t1 = H;
 
-	mlkem768_keygen(pk, sk);
+	if(mlkem768_keygen(pk, sk) != 0){
+		secureZero(pk, sizeof(pk));
+		secureZero(sk, sizeof(sk));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(pk, MLKEM768_PKLEN);
 	f->ret->t1 = mem2array(sk, MLKEM768_SKLEN);
@@ -4127,7 +4147,11 @@ Keyring_mlkem768_encaps(void *fp)
 	if(f->pk == H || f->pk->len != MLKEM768_PKLEN)
 		error(exBadKey);
 
-	mlkem768_encaps(ct, ss, f->pk->data);
+	if(mlkem768_encaps(ct, ss, f->pk->data) != 0){
+		secureZero(ct, sizeof(ct));
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(ct, MLKEM768_CTLEN);
 	f->ret->t1 = mem2array(ss, MLKEM_SSLEN);
@@ -4151,7 +4175,10 @@ Keyring_mlkem768_decaps(void *fp)
 	if(f->ct == H || f->ct->len != MLKEM768_CTLEN)
 		error(exBadKey);
 
-	mlkem768_decaps(ss, f->ct->data, f->sk->data);
+	if(mlkem768_decaps(ss, f->ct->data, f->sk->data) != 0){
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	*f->ret = mem2array(ss, MLKEM_SSLEN);
 	secureZero(ss, MLKEM_SSLEN);
@@ -4169,7 +4196,11 @@ Keyring_mlkem1024_keygen(void *fp)
 	f->ret->t0 = H;
 	f->ret->t1 = H;
 
-	mlkem1024_keygen(pk, sk);
+	if(mlkem1024_keygen(pk, sk) != 0){
+		secureZero(pk, sizeof(pk));
+		secureZero(sk, sizeof(sk));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(pk, MLKEM1024_PKLEN);
 	f->ret->t1 = mem2array(sk, MLKEM1024_SKLEN);
@@ -4191,7 +4222,11 @@ Keyring_mlkem1024_encaps(void *fp)
 	if(f->pk == H || f->pk->len != MLKEM1024_PKLEN)
 		error(exBadKey);
 
-	mlkem1024_encaps(ct, ss, f->pk->data);
+	if(mlkem1024_encaps(ct, ss, f->pk->data) != 0){
+		secureZero(ct, sizeof(ct));
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	f->ret->t0 = mem2array(ct, MLKEM1024_CTLEN);
 	f->ret->t1 = mem2array(ss, MLKEM_SSLEN);
@@ -4215,7 +4250,10 @@ Keyring_mlkem1024_decaps(void *fp)
 	if(f->ct == H || f->ct->len != MLKEM1024_CTLEN)
 		error(exBadKey);
 
-	mlkem1024_decaps(ss, f->ct->data, f->sk->data);
+	if(mlkem1024_decaps(ss, f->ct->data, f->sk->data) != 0){
+		secureZero(ss, sizeof(ss));
+		error(exNomem);
+	}
 
 	*f->ret = mem2array(ss, MLKEM_SSLEN);
 	secureZero(ss, MLKEM_SSLEN);

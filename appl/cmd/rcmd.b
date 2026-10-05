@@ -11,7 +11,7 @@ Rcmd: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-DEFAULTALG := "none";
+DEFAULTALG := "aes_256_cbc sha256";
 sys: Sys;
 auth: Auth;
 
@@ -24,7 +24,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	arg->init(argv);
 	alg: string;
 	doauth := 1;
-	exportpath := "/";
+	exportpath: string;
 	keyfile: string;
 	arg->setusage("rcmd [-A] [-f keyfile] [-a alg] [-e exportpath] tcp!mach cmd");
 	while((o := arg->opt()) != 0)
@@ -109,10 +109,55 @@ init(nil: ref Draw->Context, argv: list of string)
 		raise "fail:bad arg write";
 	}
 
-	if(sys->export(fd, exportpath, sys->EXPWAIT) < 0) {
+	private := 0;
+	if(exportpath == nil){
+		if(sys->pctl(Sys->FORKNS, nil) < 0)
+			error(sys->sprint("cannot fork export namespace: %r"));
+		exportpath = mkexportroot();
+		private = 1;
+	}
+	rc := sys->export(fd, exportpath, sys->EXPWAIT);
+	if(private)
+		rmexportroot(exportpath);
+	if(rc < 0) {
 		sys->fprint(stderr(), "rcmd: export: %r\n");
 		raise "fail:export failed";
 	}
+}
+
+mkexportroot(): string
+{
+	base := "/tmp/rcmd-export-" + string sys->pctl(0, nil) + "-" + string sys->millisec();
+	root := base;
+	for(i := 0; i < 10; i++){
+		if(i > 0)
+			root = base + "-" + string i;
+		fd := sys->create(root, Sys->OREAD, Sys->DMDIR|8r700);
+		if(fd == nil)
+			continue;
+		fd = nil;
+		fd = sys->create(root + "/dev", Sys->OREAD, Sys->DMDIR|8r700);
+		if(fd == nil){
+			sys->remove(root);
+			continue;
+		}
+		fd = nil;
+		if(sys->bind("/dev", root + "/dev", Sys->MREPL) < 0){
+			sys->remove(root + "/dev");
+			sys->remove(root);
+			continue;
+		}
+		return root;
+	}
+	error(sys->sprint("cannot make private export root: %r"));
+	return nil;
+}
+
+rmexportroot(root: string)
+{
+	sys->unmount(nil, root + "/dev");
+	sys->remove(root + "/dev");
+	sys->remove(root);
 }
 
 exists(f: string): int

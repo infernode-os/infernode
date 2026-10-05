@@ -219,9 +219,15 @@ renderblocks(ls: ref Lstate, doc: list of ref DocNode)
 	inlist := 0;
 	for(; doc != nil; doc = tl doc){
 		node := hd doc;
-		# a list's items sit together; the list is spaced as a paragraph
-		islist := node.kind == Nbullet || node.kind == Nnumber;
-		if(inlist && !islist)
+		# a list's items sit together; the list is spaced as a
+		# paragraph, from what follows and from a list of another kind
+		islist := 0;
+		if(node.kind == Nbullet || node.kind == Nnumber){
+			islist = node.kind;
+			if(node.kind == Nbullet && istask(node))
+				islist = -1;
+		}
+		if(inlist && islist != inlist && (!islist || toplevel(node)))
 			ls.y += ls.lh / 3;
 		inlist = islist;
 		case node.kind {
@@ -265,8 +271,8 @@ renderheading(ls: ref Lstate, node: ref DocNode)
 {
 	level := node.aux;
 	color := ls.style.linkcolor;
-	if(color == nil)
-		color = ls.style.fgcolor;
+	if(color == nil || level >= 6)
+		color = ls.style.fgcolor;	# the sixth level: medium, in the text's colour
 
 	f := ls.f;
 	fb := ls.fb;
@@ -437,29 +443,89 @@ drawmermaid(ls: ref Lstate, syntax: string): ref Image
 	return im;
 }
 
-# Render a bullet list item
+# Render a bullet list item: its level (aux) sets its indent and its
+# mark, a disc, a ring, a square; a task item ([ ] or [x]) is marked
+# with a box, filled when done
 renderbullet(ls: ref Lstate, node: ref DocNode)
 {
-	if(ls.img != nil)
-		ls.img.text(Point(ls.left + px(6), ls.y), ls.style.fgcolor, Point(0, 0), ls.f[0], "•");
-	listitem(ls, node, px(20));
+	level := node.aux;
+	indent := level * px(20);
+	kids := node.children;
+	task := -1;
+	if(kids != nil && (hd kids).kind == Ntext && (t := (hd kids).text) != nil &&
+	    len t >= 3 && t[0] == '[' && t[2] == ']' && (t[1] == ' ' || t[1] == 'x' || t[1] == 'X')){
+		task = t[1] != ' ';
+		rest := pmd_stripws(t[3:]);
+		kids = tl kids;
+		if(len rest > 0)
+			kids = ref DocNode(Ntext, rest, nil, 0) :: kids;
+	}
+	if(ls.img != nil){
+		f := ls.f[0];
+		x := ls.left + indent + px(6);
+		if(task >= 0){
+			sz := f.ascent * 3 / 4;
+			y := ls.y + ls.asc - sz;
+			r := Rect(Point(x, y), Point(x + sz, y + sz));
+			if(task){
+				fill(ls, r, ls.style.linkcolor);
+				# a tick in the page's colour
+				ls.img.line(Point(x + sz/5, y + sz/2), Point(x + sz*2/5, y + sz*3/4),
+					drawm->Endsquare, drawm->Endsquare, (px(1)+1)/2, ls.style.bgcolor, Point(0, 0));
+				ls.img.line(Point(x + sz*2/5, y + sz*3/4), Point(x + sz*4/5, y + sz/4),
+					drawm->Endsquare, drawm->Endsquare, (px(1)+1)/2, ls.style.bgcolor, Point(0, 0));
+			}else{
+				t := px(1);
+				fill(ls, Rect(r.min, Point(r.max.x, r.min.y + t)), ls.style.fgcolor);
+				fill(ls, Rect(Point(r.min.x, r.max.y - t), r.max), ls.style.fgcolor);
+				fill(ls, Rect(r.min, Point(r.min.x + t, r.max.y)), ls.style.fgcolor);
+				fill(ls, Rect(Point(r.max.x - t, r.min.y), r.max), ls.style.fgcolor);
+			}
+		}else{
+			mark := "•";
+			case level % 3 {
+			1 =>	mark = "◦";
+			2 =>	mark = "▪";
+			}
+			ls.img.text(Point(x, ls.y), ls.style.fgcolor, Point(0, 0), f, mark);
+		}
+	}
+	listitem(ls, kids, indent + px(24));
 }
 
-# Render a numbered list item
+istask(node: ref DocNode): int
+{
+	if(node.children == nil || (hd node.children).kind != Ntext)
+		return 0;
+	t := (hd node.children).text;
+	return t != nil && len t >= 3 && t[0] == '[' && t[2] == ']' && (t[1] == ' ' || t[1] == 'x' || t[1] == 'X');
+}
+
+toplevel(node: ref DocNode): int
+{
+	if(node.kind == Nbullet)
+		return node.aux == 0;
+	return node.text == nil || node.text == "0";
+}
+
+# Render a numbered list item; node.text is its level
 rendernumber(ls: ref Lstate, node: ref DocNode)
 {
+	indent := 0;
+	if(node.text != nil)
+		indent = int node.text * px(24);
 	if(ls.img != nil)
-		ls.img.text(Point(ls.left + px(2), ls.y), ls.style.fgcolor, Point(0, 0), ls.f[0],
+		ls.img.text(Point(ls.left + indent + px(2), ls.y), ls.style.fgcolor, Point(0, 0), ls.f[0],
 			sys->sprint("%d.", node.aux));
-	listitem(ls, node, px(24));
+	listitem(ls, node.children, indent + px(24));
 }
 
-listitem(ls: ref Lstate, node: ref DocNode, indent: int)
+listitem(ls: ref Lstate, kids: list of ref DocNode, indent: int)
 {
 	left := ls.left;
 	ls.left += indent;
 	ls.x = ls.left;
-	renderinlines(ls, node.children, 0, ls.style.fgcolor, 0);
+	renderinlines(ls, kids, 0, ls.style.fgcolor, 0);
 	newline(ls);
 	ls.left = left;
 	ls.x = left;
@@ -474,22 +540,26 @@ renderhrule(ls: ref Lstate)
 	ls.y += ls.lh;
 }
 
-# Render a blockquote
+# Render a blockquote paragraph: a bar for each level it is nested (aux)
 renderblockquote(ls: ref Lstate, node: ref DocNode)
 {
-	bx := ls.left + px(3);
+	depth := node.aux;
+	if(depth < 1)
+		depth = 1;
 	y0 := ls.y;
 
 	left := ls.left;
-	ls.left += px(16);
+	ls.left += depth * px(16);
 	ls.x = ls.left;
 	renderinlines(ls, node.children, 0, ls.style.fgcolor, 0);
 	newline(ls);
 	ls.left = left;
 	ls.x = left;
 
-	# The quote bar
-	fill(ls, Rect(Point(bx, y0), Point(bx + px(3), ls.y)), ls.style.linkcolor);
+	for(d := 0; d < depth; d++){
+		bx := ls.left + d * px(16) + px(3);
+		fill(ls, Rect(Point(bx, y0), Point(bx + px(3), ls.y)), ls.style.linkcolor);
+	}
 
 	ls.y += ls.lh / 4;
 }
@@ -720,26 +790,34 @@ pmd_splittablerow(row: string): array of string
 	if(len row > 0 && row[len row - 1] == '|')
 		row = row[:len row - 1];
 
+	# a pipe escaped with a backslash is the cell's, even in code
 	nsep := 0;
 	for(i := 0; i < len row; i++)
-		if(row[i] == '|')
+		if(row[i] == '|' && (i == 0 || row[i-1] != '\\'))
 			nsep++;
 	cells := array[nsep + 1] of string;
 	ci := 0;
-	start := 0;
+	cell := "";
 	for(j := 0; j <= len row; j++){
-		if(j == len row || row[j] == '|'){
-			cells[ci++] = row[start:j];
-			start = j + 1;
-		}
+		if(j == len row || (row[j] == '|' && (j == 0 || row[j-1] != '\\'))){
+			cells[ci++] = cell;
+			cell = "";
+		}else if(row[j] == '\\' && j+1 < len row && row[j+1] == '|')
+			;
+		else
+			cell[len cell] = row[j];
 	}
 	return cells;
 }
 
 # ---- Inline text ----
 
+# lines drawn with text, as Ul|Strike
+Ul: con 1;
+Strike: con 2;
+
 # Render inline nodes (text, bold, italic, code, links) with word
-# wrapping, in weight w (Bold|Italic), colour color, and underlined if ul
+# wrapping, in weight w (Bold|Italic), colour color, and lined as ul
 renderinlines(ls: ref Lstate, nodes: list of ref DocNode, w: int, color: ref Image, ul: int)
 {
 	for(; nodes != nil; nodes = tl nodes){
@@ -751,13 +829,15 @@ renderinlines(ls: ref Lstate, nodes: list of ref DocNode, w: int, color: ref Ima
 			renderinlines(ls, node.children, w | Bold, color, ul);
 		Nitalic =>
 			renderinlines(ls, node.children, w | Italic, color, ul);
+		Nstrike =>
+			renderinlines(ls, node.children, w, color, ul | Strike);
 		Ncode =>
 			renderinlinecode(ls, node.text);
 		Nlink =>
 			lc := ls.style.linkcolor;
 			if(lc == nil)
 				lc = color;
-			renderinlines(ls, node.children, w, lc, 1);
+			renderinlines(ls, node.children, w, lc, ul | Ul);
 		Nnewline =>
 			newline(ls);
 		* =>
@@ -779,7 +859,8 @@ rendertext(ls: ref Lstate, text: string, w: int, color: ref Image, underline: in
 	(font, emb, ul) := face(ls, w);
 	if(emb)
 		emb = px(1);
-	underline |= ul;
+	if(ul)
+		underline |= Ul;	# for want of an italic
 	dy := ls.asc - font.ascent;
 
 	i := 0;
@@ -798,10 +879,7 @@ rendertext(ls: ref Lstate, text: string, w: int, color: ref Image, underline: in
 				ls.img.text(p, color, Point(0, 0), font, word);
 				if(emb)
 					ls.img.text(p.add(Point(emb, 0)), color, Point(0, 0), font, word);
-				if(underline){
-					uy := ls.y + ls.asc + px(2);
-					fill(ls, Rect(Point(ls.x, uy), Point(ls.x + ww, uy + px(1))), color);
-				}
+				decorate(ls, ls.x, ls.x + ww, font, color, underline);
 			}
 			ls.x += ww;
 			if(ls.x > ls.maxx)
@@ -814,11 +892,8 @@ rendertext(ls: ref Lstate, text: string, w: int, color: ref Image, underline: in
 			newline(ls);
 		else if(ls.x > ls.left){
 			sw := font.width(" ");
-			if(underline && i + 1 < len text){
-				# join a link's words, not its last one to what follows
-				uy := ls.y + ls.asc + px(2);
-				fill(ls, Rect(Point(ls.x, uy), Point(ls.x + sw, uy + px(1))), color);
-			}
+			if(i + 1 < len text)	# join the words, not the last to what follows
+				decorate(ls, ls.x, ls.x + sw, font, color, underline);
 			ls.x += sw;
 		}
 		i++;
@@ -857,6 +932,19 @@ newline(ls: ref Lstate)
 	ls.x = ls.left;
 }
 
+# The underline (Ul) and strike (Strike) under or through x0 to x1
+decorate(ls: ref Lstate, x0, x1: int, font: ref Font, color: ref Image, lines: int)
+{
+	if(lines & Ul){
+		y := ls.y + ls.asc + px(2);
+		fill(ls, Rect(Point(x0, y), Point(x1, y + px(1))), color);
+	}
+	if(lines & Strike){
+		y := ls.y + ls.asc - font.ascent * 3 / 10;
+		fill(ls, Rect(Point(x0, y), Point(x1, y + px(1))), color);
+	}
+}
+
 fill(ls: ref Lstate, r: Rect, color: ref Image)
 {
 	if(ls.img != nil)
@@ -885,6 +973,10 @@ parsemd(text: string): list of ref DocNode
 	doc: list of ref DocNode;
 	lines := pmd_splitlines(text);
 
+	# the indents of the list items open around the current one,
+	# innermost first: an item's nesting level is its place in them
+	indents: list of int;
+
 	i := 0;
 	nlines := len lines;
 	for(;;){
@@ -897,6 +989,30 @@ parsemd(text: string): list of ref DocNode
 			i++;
 			continue;
 		}
+
+		# A list item (- * + or 1. 1)), nested by its indent
+		(mk, ind, nil, nil) := pmd_listmarker(line);
+		if(mk != 0){
+			while(indents != nil && ind < hd indents)
+				indents = tl indents;
+			if(indents == nil || ind > hd indents)
+				indents = ind :: indents;
+			(item, ni) := pmd_parseitem(lines, i, nlines, len indents - 1);
+			doc = item :: doc;
+			i = ni;
+			continue;
+		}
+		inlist := indents != nil;
+		indents = nil;
+
+		# Indented code block: four spaces or a tab, not under a list item
+		if(!inlist && (line[0] == '\t' || (len line >= 4 && line[0:4] == "    "))){
+			(block, ni) := pmd_parseindented(lines, i, nlines);
+			doc = block :: doc;
+			i = ni;
+			continue;
+		}
+		line = pmd_stripws(line);
 
 		# Code block (```)
 		if(len line >= 3 && line[0:3] == "```"){
@@ -927,29 +1043,12 @@ parsemd(text: string): list of ref DocNode
 		}
 
 		# Blockquote (>)
-		if(len line > 0 && line[0] == '>'){
-			(bq, ni) := pmd_parseblockquote(lines, i, nlines);
-			doc = bq :: doc;
+		if(line[0] == '>'){
+			(bqs, ni) := pmd_parseblockquote(lines, i, nlines);
+			for(; bqs != nil; bqs = tl bqs)
+				doc = hd bqs :: doc;
 			i = ni;
 			continue;
-		}
-
-		# Bullet list (- or *)
-		if(len line >= 2 && (line[0] == '-' || line[0] == '*') && line[1] == ' '){
-			(item, ni) := pmd_parsebullet(lines, i, nlines);
-			doc = item :: doc;
-			i = ni;
-			continue;
-		}
-
-		# Numbered list (1. 2. etc)
-		if(len line >= 3 && line[0] >= '0' && line[0] <= '9'){
-			(item, ni) := pmd_parsenumber(lines, i, nlines);
-			if(item != nil){
-				doc = item :: doc;
-				i = ni;
-				continue;
-			}
 		}
 
 		# Table (line contains '|' and next line is a separator)
@@ -962,6 +1061,14 @@ parsemd(text: string): list of ref DocNode
 			}
 		}
 
+		# Setext heading: a line underlined with === (first level) or --- (second)
+		if(i+1 < nlines && (u := pmd_setext(lines[i+1])) != 0){
+			children := pmd_parseinline(pmd_trim(line));
+			doc = ref DocNode(Nheading, nil, children, u) :: doc;
+			i += 2;
+			continue;
+		}
+
 		# Default: paragraph
 		(para, ni) := pmd_parsepara(lines, i, nlines);
 		doc = para :: doc;
@@ -970,6 +1077,185 @@ parsemd(text: string): list of ref DocNode
 
 	return pmd_reverselist(doc);
 }
+
+# 1 if line underlines a first-level setext heading (===), 2 a second (---)
+pmd_setext(line: string): int
+{
+	line = pmd_trim(line);
+	if(len line == 0 || (line[0] != '=' && line[0] != '-'))
+		return 0;
+	for(i := 0; i < len line; i++)
+		if(line[i] != line[0])
+			return 0;
+	if(line[0] == '=')
+		return 1;
+	return 2;
+}
+
+# A list item's marker: (kind, indent, where its text starts, number);
+# kind is Nbullet or Nnumber, or 0 if line is not a list item
+pmd_listmarker(line: string): (int, int, int, int)
+{
+	ind := 0;
+	i := 0;
+	for(; i < len line; i++){
+		if(line[i] == ' ')
+			ind++;
+		else if(line[i] == '\t')
+			ind += 4;
+		else
+			break;
+	}
+	if(i >= len line)
+		return (0, 0, 0, 0);
+	c := line[i];
+	if((c == '-' || c == '*' || c == '+') && i+1 < len line && line[i+1] == ' '){
+		if(pmd_ishrule(line[i:]))
+			return (0, 0, 0, 0);
+		return (Nbullet, ind, i+2, 0);
+	}
+	j := i;
+	while(j < len line && line[j] >= '0' && line[j] <= '9')
+		j++;
+	if(j > i && j - i < 10 && j+1 < len line && (line[j] == '.' || line[j] == ')') && line[j+1] == ' ')
+		return (Nnumber, ind, j+2, int line[i:j]);
+	return (0, 0, 0, 0);
+}
+
+# A list item and the lines that continue it: indented lines that are
+# not items themselves. Nbullet: aux is the nesting level. Nnumber:
+# aux is the number, text the nesting level.
+pmd_parseitem(lines: array of string, start, nlines, level: int): (ref DocNode, int)
+{
+	(kind, nil, at, num) := pmd_listmarker(lines[start]);
+	text := lines[start][at:];
+	i := start + 1;
+	while(i < nlines && !pmd_isblank(lines[i]) &&
+	    (lines[i][0] == ' ' || lines[i][0] == '\t')){
+		(k, nil, nil, nil) := pmd_listmarker(lines[i]);
+		if(k != 0)
+			break;
+		text += " " + pmd_stripws(lines[i]);
+		i++;
+	}
+	children := pmd_parseinline(pmd_trim(text));
+	if(kind == Nbullet)
+		return (ref DocNode(Nbullet, nil, children, level), i);
+	return (ref DocNode(Nnumber, string level, children, num), i);
+}
+
+# An indented code block: lines indented four spaces or a tab, and the
+# blank lines between them
+pmd_parseindented(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	code := "";
+	i := start;
+	last := start;
+	for(; i < nlines; i++){
+		line := lines[i];
+		if(pmd_isblank(line)){
+			if(len code > 0)
+				code += "\n";
+			continue;
+		}
+		if(line[0] == '\t')
+			line = line[1:];
+		else if(len line >= 4 && line[0:4] == "    ")
+			line = line[4:];
+		else
+			break;
+		if(i > start)
+			code += "\n";
+		code += line;
+		last = i;
+	}
+	# trailing blank lines are not the code's
+	n := len code;
+	while(n > 0 && code[n-1] == '\n')
+		n--;
+	return (ref DocNode(Ncodeblock, code[0:n], nil, 0), last + 1);
+}
+
+# A block quote: its lines' text, one Nblockquote a paragraph, aux the
+# depth of > marks (> > nests)
+pmd_parseblockquote(lines: array of string, start, nlines: int): (list of ref DocNode, int)
+{
+	out: list of ref DocNode;
+	text := "";
+	depth := 0;
+	i := start;
+	for(; i < nlines; i++){
+		line := pmd_stripws(lines[i]);
+		if(len line == 0 || line[0] != '>')
+			break;
+		d := 0;
+		while(len line > 0 && line[0] == '>'){
+			d++;
+			line = pmd_stripws(line[1:]);
+		}
+		if(pmd_isblank(line) || (d != depth && len text > 0)){
+			if(len text > 0)
+				out = ref DocNode(Nblockquote, nil, pmd_parseinline(text), depth) :: out;
+			text = "";
+			if(pmd_isblank(line))
+				continue;
+		}
+		depth = d;
+		if(len text > 0)
+			text += " ";
+		text += pmd_trim(line);
+	}
+	if(len text > 0)
+		out = ref DocNode(Nblockquote, nil, pmd_parseinline(text), depth) :: out;
+	r: list of ref DocNode;
+	for(; out != nil; out = tl out)
+		r = hd out :: r;
+	return (r, i);
+}
+
+pmd_parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	text := "";
+	i := start;
+	while(i < nlines){
+		line := lines[i];
+		if(pmd_isblank(line))
+			break;
+		if(i > start){
+			s := pmd_stripws(line);
+			if(len s > 0 && (s[0] == '#' || s[0] == '>'))
+				break;
+			if(len s >= 3 && s[0:3] == "```")
+				break;
+			if(pmd_ishrule(s) || pmd_setext(s) == 1)
+				break;
+			(k, nil, nil, nil) := pmd_listmarker(line);
+			if(k != 0)
+				break;
+			# Stop at table rows
+			if(pmd_istablerow(line))
+				break;
+		}
+		# two spaces or a backslash at the end of a line break it there
+		sep := " ";
+		n := len text;
+		if(n >= 2 && text[n-2:] == "  "){
+			text = pmd_trim(text);
+			sep = "\n";
+		}else if(n >= 1 && text[n-1] == '\\'){
+			text = text[0:n-1];
+			sep = "\n";
+		}
+		if(len text > 0)
+			text += sep;
+		text += pmd_stripws(line);
+		i++;
+	}
+
+	children := pmd_parseinline(pmd_trim(text));
+	return (ref DocNode(Npara, nil, children, 0), i);
+}
+
 
 pmd_parseheading(line: string): (ref DocNode, int)
 {
@@ -1032,103 +1318,9 @@ pmd_parsecodeblock(lines: array of string, start: int): (ref DocNode, int)
 	return (ref DocNode(Ncodeblock, code, nil, 0), i);
 }
 
-pmd_parseblockquote(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	text := "";
-	i := start;
-	while(i < nlines){
-		line := lines[i];
-		if(len line == 0 || line[0] != '>')
-			break;
-		content := "";
-		j := 1;
-		if(j < len line && line[j] == ' ')
-			j++;
-		if(j < len line)
-			content = line[j:];
-		if(len text > 0)
-			text += " ";
-		text += content;
-		i++;
-	}
 
-	children := pmd_parseinline(text);
-	return (ref DocNode(Nblockquote, nil, children, 0), i);
-}
 
-pmd_parsebullet(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	text := lines[start][2:];
-	i := start + 1;
-	while(i < nlines && len lines[i] > 0 && (lines[i][0] == ' ' || lines[i][0] == '\t')){
-		text += " " + pmd_stripws(lines[i]);
-		i++;
-	}
 
-	children := pmd_parseinline(text);
-	return (ref DocNode(Nbullet, nil, children, 0), i);
-}
-
-pmd_parsenumber(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	line := lines[start];
-	i := 0;
-	while(i < len line && line[i] >= '0' && line[i] <= '9')
-		i++;
-	if(i == 0 || i >= len line || line[i] != '.')
-		return (nil, start);
-	num := int line[0:i];
-	i++;
-	if(i < len line && line[i] == ' ')
-		i++;
-
-	text := "";
-	if(i < len line)
-		text = line[i:];
-	j := start + 1;
-	while(j < nlines && len lines[j] > 0 && (lines[j][0] == ' ' || lines[j][0] == '\t')){
-		text += " " + pmd_stripws(lines[j]);
-		j++;
-	}
-
-	children := pmd_parseinline(text);
-	return (ref DocNode(Nnumber, nil, children, num), j);
-}
-
-pmd_parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	text := "";
-	i := start;
-	while(i < nlines){
-		line := lines[i];
-		if(pmd_isblank(line))
-			break;
-		if(i > start){
-			if(len line > 0 && line[0] == '#')
-				break;
-			if(len line >= 3 && line[0:3] == "```")
-				break;
-			if(pmd_ishrule(line))
-				break;
-			if(len line > 0 && line[0] == '>')
-				break;
-			if(len line >= 2 && (line[0] == '-' || line[0] == '*') && line[1] == ' ')
-				break;
-			if(len line >= 3 && line[0] >= '0' && line[0] <= '9' && pmd_hasdotspace(line))
-				break;
-			# Stop at table rows
-			if(pmd_istablerow(line))
-				break;
-		}
-		if(len text > 0)
-			text += " ";
-		text += line;
-		i++;
-	}
-
-	children := pmd_parseinline(text);
-	return (ref DocNode(Npara, nil, children, 0), i);
-}
 
 pmd_parseinline(text: string): list of ref DocNode
 {
@@ -1175,9 +1367,8 @@ pmd_parseinline(text: string): list of ref DocNode
 			}
 			end := pmd_findclose(text, i+2, "~~");
 			if(end > 0){
-				# Render as plain text — we don't have a strike font
 				inner := text[i+2:end];
-				nodes = ref DocNode(Ntext, inner, nil, 0) :: nodes;
+				nodes = ref DocNode(Nstrike, nil, pmd_parseinline(inner), 0) :: nodes;
 				i = end + 2;
 				continue;
 			}
@@ -1263,6 +1454,23 @@ pmd_parseinline(text: string): list of ref DocNode
 			continue;
 		}
 
+		# Autolink: <https://...>, <mailto:...>
+		if(c == '<'){
+			end := pmd_findclose(text, i+1, ">");
+			if(end > 0){
+				u := text[i+1:end];
+				if(pmd_isurl(u)){
+					if(len plain > 0){
+						nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+						plain = "";
+					}
+					nodes = ref DocNode(Nlink, nil, ref DocNode(Ntext, u, nil, 0) :: nil, 0) :: nodes;
+					i = end + 1;
+					continue;
+				}
+			}
+		}
+
 		# Link: [text](url)
 		if(c == '['){
 			if(len plain > 0){
@@ -1285,6 +1493,17 @@ pmd_parseinline(text: string): list of ref DocNode
 		nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
 
 	return pmd_reverselist(nodes);
+}
+
+pmd_isurl(u: string): int
+{
+	for(i := 0; i < len u; i++)
+		if(u[i] == ' ' || u[i] == '\t')
+			return 0;
+	for(l := list of {"http://", "https://", "mailto:"}; l != nil; l = tl l)
+		if(len u > len hd l && u[0:len hd l] == hd l)
+			return 1;
+	return 0;
 }
 
 pmd_ispunct(c: int): int

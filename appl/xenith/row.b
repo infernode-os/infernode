@@ -443,7 +443,10 @@ Row.dump(row : self ref Row, file : string)
 						fontname));
 				}else if(len a == 0){	# don't save unnamed windows 
 					continue;
-				}else if((!w.dirty && utils->access(a)==0) || w.isdir){
+				}else if((!w.dirty && utils->access(a)==0) || w.isdir ||
+				    (w.rendermode && !w.docview && utils->access(a)==0)){
+					# (a formatted view's text is the formatter's,
+					# not the file's: Load reads the file again)
 					dumped = FALSE;
 					t.file.dumpid = w.id;
 					b.puts(sprint("f%11d %11d %11d %11d %11d %s\n", i, w.id,

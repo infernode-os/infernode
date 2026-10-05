@@ -132,6 +132,49 @@ testBadgeLink(t: ref T)
 	t.assertseq((hd tl p.children).text, " after", "text after the link");
 }
 
+testNestedList(t: ref T)
+{
+	doc := rlayout->parsemd("- a\n  - b\n    - c\n- d\n");
+	t.asserteq(len doc, 4, "four items");
+	if(len doc != 4)
+		return;
+	levels := "";
+	for(; doc != nil; doc = tl doc)
+		levels += string (hd doc).aux;
+	t.assertseq(levels, "0120", "levels by indent");
+}
+
+testSetext(t: ref T)
+{
+	h := block(t, "Title\n=====\n", Rlayout->Nheading);
+	t.asserteq(h.aux, 1, "=== is the first level");
+	h = block(t, "Sub\n---\n", Rlayout->Nheading);
+	t.asserteq(h.aux, 2, "--- is the second level");
+}
+
+testQuoteDepth(t: ref T)
+{
+	doc := rlayout->parsemd("> outer\n>> inner\n");
+	t.asserteq(len doc, 2, "a paragraph each");
+	if(len doc == 2)
+		t.asserteq((hd tl doc).aux, 2, ">> nests");
+}
+
+testStrikeAndAutolink(t: ref T)
+{
+	p := block(t, "~~gone~~ <https://go.dev>", Rlayout->Npara);
+	t.asserteq((hd p.children).kind, Rlayout->Nstrike, "~~ strikes");
+	l := hd tl tl p.children;
+	t.asserteq(l.kind, Rlayout->Nlink, "<url> links");
+	t.assertseq((hd l.children).text, "https://go.dev", "showing the url");
+}
+
+testEscapedPipe(t: ref T)
+{
+	n := block(t, "| a | b |\n|---|---|\n| `x \\| y` | z |\n", Rlayout->Ntable);
+	t.asserteq(n.aux, 2, "the escaped pipe does not split the cell");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -158,6 +201,11 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NestedEmphasis", testNestedEmphasis);
 	run("Escape", testEscape);
 	run("BadgeLink", testBadgeLink);
+	run("NestedList", testNestedList);
+	run("Setext", testSetext);
+	run("QuoteDepth", testQuoteDepth);
+	run("StrikeAndAutolink", testStrikeAndAutolink);
+	run("EscapedPipe", testEscapedPipe);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

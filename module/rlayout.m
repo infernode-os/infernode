@@ -18,12 +18,14 @@ Rlayout: module {
 	Npara,          # Paragraph block
 	Nheading,       # Heading block (level in aux)
 	Ncodeblock,     # Code block (monospace, background)
-	Nbullet,        # Bullet list item
-	Nnumber,        # Numbered list item (number in aux)
+	Nbullet,        # Bullet list item (nesting level in aux)
+	Nnumber,        # Numbered list item (number in aux, nesting level in text)
 	Nhrule,         # Horizontal rule
-	Nblockquote,    # Block quote
+	Nblockquote,    # Block quote paragraph (depth of nesting in aux)
 	Nnewline,       # Explicit line break
-	Ntable          # Table (rows in text, pipe-separated cells, aux=ncols)
+	Ntable,         # Table (rows in text, pipe-separated cells, aux=ncols)
+	Nmermaid,       # Mermaid diagram (text= is raw mermaid syntax, rendered as image)
+	Nstrike         # Struck-through text
 		: con iota;
 
 	# Document node: tree of content

@@ -507,11 +507,14 @@ frinit(f : ref Frame, r : Rect, ft : ref Font, b : ref Image, cols : array of re
 		frinittick(f);
 }
 
+# Also called when the frame's font or colours change, to draw the tick
+# again in them; the caller redraws the frame, tick included.
 frinittick(f : ref Frame)
 {
 	ft : ref Font;
 
 	ft = f.font;
+	f.ticked = 0;
 	f.tick = nil;
 	f.tick = graph->balloc(((0, 0), (FRTICKW, ft.height)), (gui->mainwin).chans, Draw->White);
 	if(f.tick == nil)

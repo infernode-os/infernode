@@ -13,8 +13,9 @@
 # its block's subfont), then DejaVu's manifest of the nearest size for
 # everything else (libdraw aligns baselines across sizes).
 #
-# Line height is 1.25 em, or the face's own if larger, the extra split
-# above and below.
+# Line height is 1.25 em, or more if the faces' Latin-1 letters need it,
+# the extra split above and below; every face at a size has the same
+# height and ascent, and every subfont is rendered to them.
 #
 # Needs FreeType (for fonts/dejavu/ttf2subfont) and fontTools. Go's
 # TrueType files are in fonts/go; Noto Serif's is not kept (fonts/noto
@@ -27,11 +28,12 @@
 #	`pkg-config --cflags --libs freetype2`
 #   python3 tools/gen-text-fonts.py /tmp/ttf2subfont
 
+import math
 import os
-import re
 import subprocess
 import sys
 
+from fontTools.pens.boundsPen import BoundsPen
 from fontTools.ttLib import TTFont
 
 FACES = [
@@ -52,18 +54,32 @@ def main():
 		sys.exit("usage: gen-text-fonts.py ttf2subfont")
 	t2s = os.path.abspath(sys.argv[1])
 	os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts"))
+	# One box for every face, so Font changes face and not line height:
+	# as high and as deep as their Latin-1 letters reach (rounded up;
+	# ttf2subfont's own metrics round down and cut descenders short).
+	top = bottom = 0
+	for name, ttf, outdir, man in FACES:
+		tt = TTFont(ttf)
+		upm = tt["head"].unitsPerEm
+		gs = tt.getGlyphSet()
+		cmap = tt.getBestCmap()
+		for c in range(0x20, 0x100):
+			if c in cmap:
+				pen = BoundsPen(gs)
+				gs[cmap[c]].draw(pen)
+				if pen.bounds:
+					top = max(top, pen.bounds[3] / upm)
+					bottom = max(bottom, -pen.bounds[1] / upm)
 	for name, ttf, outdir, man in FACES:
 		os.makedirs(outdir, exist_ok=True)
 		cps = sorted(c for c in TTFont(ttf).getBestCmap()
 			if (c >> 8) in BLOCKS and c >= 0x20)
 		blocks = sorted(set(c >> 8 for c in cps))
 		for size, fallback in SIZES.items():
-			info = subprocess.run([t2s, "-info", "-p", str(size), "-r", "72",
-				"-start", "0", "-end", "0", ttf],
-				capture_output=True, text=True, check=True).stderr
-			h, a = map(int, re.search(r"height=(\d+) ascent=(\d+)", info).groups())
-			height = max(h, round(1.25 * size))
-			ascent = a + (height - h) // 2
+			a = math.ceil(top * size)
+			d = math.ceil(bottom * size)
+			height = max(a + d, round(1.25 * size))
+			ascent = a + (height - a - d) // 2
 			lines = ["%d\t%d" % (height, ascent),
 				"0x0000\t0x001F\t../10646/9x15/9x15.2400-2426"]
 			for b in blocks:
@@ -71,6 +87,7 @@ def main():
 				sub = "%s/%s.%d.%04X" % (outdir, name, size, base)
 				subprocess.run([t2s, "-p", str(size), "-r", "72",
 					"-start", "0x%04X" % base, "-end", "0x%04X" % (base + 0xFF),
+					"-height", str(height), "-ascent", str(ascent),
 					ttf, sub], check=True, capture_output=True)
 				run = [c for c in cps if c >> 8 == b]
 				s = p = run[0]

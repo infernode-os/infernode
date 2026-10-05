@@ -22,6 +22,7 @@ asyncio: Asyncio;
 
 Dir, OREAD, OWRITE : import Sys;
 formatmod : Format;
+framem : Framem;
 EVENTSIZE, QWaddr, QWdata, QWevent, Astring, CHAPPEND : import dat;
 Lock, Reffont, Ref, seltext, seq, row : import dat;
 warning, error, skipbl, findbl, stralloc, strfree, strncmp, exec : import utils;
@@ -52,6 +53,7 @@ init(mods : ref Dat->Mods)
 	scrl = mods.scroll;
 	filem = mods.filem;
 	rowm = mods.rowm;
+	framem = mods.framem;
 	windowm = mods.windowm;
 	columnm = mods.columnm;
 	fsys = mods.fsys;
@@ -1242,6 +1244,7 @@ fontx(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 		t.reffont.close();
 		t.reffont = newfont;
 		t.frame.font = newfont.f;
+		framem->frinittick(t.frame);	# the tick is the font's height
 		if(t.w.isdir){
 			t.all.min.x++;	# force recolumnation; disgusting! 
 			for(i=0; i<t.w.ndl; i++){

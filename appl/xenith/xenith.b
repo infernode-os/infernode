@@ -1747,6 +1747,8 @@ textcolours(t : ref Text, cols : array of ref Draw->Image)
 		return;
 	for(i := 0; i < NCOL; i++)
 		t.frame.cols[i] = cols[i];
+	if(t.frame.tick != nil)
+		framem->frinittick(t.frame);	# the tick is drawn in them
 }
 
 # Follow the system's theme, whoever switches it (lucitheme->watch).

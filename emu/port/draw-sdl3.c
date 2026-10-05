@@ -169,6 +169,20 @@ struct touch_finger {
 	float		last_y;
 };
 static struct touch_finger touch_fingers[TOUCH_MAX_FINGERS];
+
+/*
+ * The gestures are for a touchscreen, whose fingers are on the screen.
+ * A Mac trackpad also reports its fingers (an indirect device): taken
+ * as gestures, a two-finger scroll arrived twice, as the trackpad's own
+ * wheel events and as ticks made from its fingers, and a finger resting
+ * on the pad pressed button 3 as a long-press. Its wheel events and
+ * clicks already say what it means; its fingers are left alone.
+ */
+static int
+touchscreen(SDL_TouchID id)
+{
+	return SDL_GetTouchDeviceType(id) == SDL_TOUCH_DEVICE_DIRECT;
+}
 static int touch_finger_count = 0;
 static float touch_scroll_accum_x = 0.0f;
 static float touch_scroll_accum_y = 0.0f;
@@ -1705,6 +1719,8 @@ sdl3_mainloop(void)
 			 */
 			case SDL_EVENT_FINGER_DOWN: {
 				float px, py;
+				if (!touchscreen(event.tfinger.touchID))
+					break;
 				touch_finger_to_pixels(&event.tfinger, &px, &py);
 				if (touch_finger_count < TOUCH_MAX_FINGERS) {
 					touch_fingers[touch_finger_count].id = event.tfinger.fingerID;
@@ -1743,7 +1759,10 @@ sdl3_mainloop(void)
 			}
 
 			case SDL_EVENT_FINGER_UP: {
-				int idx = touch_finger_index(event.tfinger.fingerID);
+				int idx;
+				if (!touchscreen(event.tfinger.touchID))
+					break;
+				idx = touch_finger_index(event.tfinger.fingerID);
 				touch_finger_remove_at(idx);
 				if (touch_finger_count < 2)
 					touch_in_multi_gesture = 0;
@@ -1763,8 +1782,11 @@ sdl3_mainloop(void)
 			}
 
 			case SDL_EVENT_FINGER_MOTION: {
-				int idx = touch_finger_index(event.tfinger.fingerID);
+				int idx;
 				float px, py, dx, dy;
+				if (!touchscreen(event.tfinger.touchID))
+					break;
+				idx = touch_finger_index(event.tfinger.fingerID);
 				if (idx < 0)
 					break;
 				touch_finger_to_pixels(&event.tfinger, &px, &py);

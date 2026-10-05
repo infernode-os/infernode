@@ -660,6 +660,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(actid >= 0)
 		spawn nslistener();
 	spawn globallistener();
+	spawn themewatcher();
 	spawn tileblinker();
 
 	# Main loop (header redraws + quit/resize)
@@ -2256,35 +2257,49 @@ globallistener()
 			# Any activity event: signal main loop to reload tiles and redraw
 			alt { uievent <-= 1 => ; * => ; }
 		}
-		if(hasprefix(ev, "theme ")) {
-			# Live theme switch: reload colours, redraw chrome, notify zones
-			reloadtheme();
-			convEvCh <-= ev;
-			ctxEvCh <-= ev;
-			if(lucipres_g != nil)
-				lucipres_g->deliverevent(ev);
-			if(presrender_g != nil)
-				presrender_g->deliverevent(ev);
-			# Push "retheme" down every embedded app's ctl channel.  The
-			# stock tkclient loop routes it (<-top.ctxt.ctl => wmctl) to the
-			# libtk "retheme" command, so ANY Tk app — including ones with no
-			# theme listener of their own (tetris, task, …) and .dis-only apps
-			# (they load the current tkclient at runtime) — refreshes its
-			# colour environment.  Apps that also self-handle theme events are
-			# unaffected (retheme is idempotent).
-			for(tti := 0; tti < ntaskpres; tti++) {
-				ttp := taskpres[tti];
-				if(ttp == nil)
-					continue;
-				<-ttp.applock;
-				for(tai := 0; tai < ttp.nappslots; tai++)
-					if(ttp.appslots[tai] != nil && ttp.appslots[tai].client != nil)
-						alt { ttp.appslots[tai].client.ctl <-= "retheme" => ; * => ; }
-				ttp.applock <-= 1;
-			}
-			alt { uievent <-= 1 => ; * => ; }
-		}
 	}
+}
+
+
+# Live theme switch, whoever wrote /lib/lucifer/theme/current
+# (lucitheme->watch): reload colours, redraw chrome, notify zones
+themewatcher()
+{
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
+		return;
+	c := lt->watch();
+	for(;;)
+		themechanged("theme " + <-c);
+}
+
+themechanged(ev: string)
+{
+	reloadtheme();
+	convEvCh <-= ev;
+	ctxEvCh <-= ev;
+	if(lucipres_g != nil)
+		lucipres_g->deliverevent(ev);
+	if(presrender_g != nil)
+		presrender_g->deliverevent(ev);
+	# Push "retheme" down every embedded app's ctl channel.  The
+	# stock tkclient loop routes it (<-top.ctxt.ctl => wmctl) to the
+	# libtk "retheme" command, so ANY Tk app — including ones with no
+	# theme listener of their own (tetris, task, …) and .dis-only apps
+	# (they load the current tkclient at runtime) — refreshes its
+	# colour environment.  Apps that also self-handle theme events are
+	# unaffected (retheme is idempotent).
+	for(tti := 0; tti < ntaskpres; tti++) {
+		ttp := taskpres[tti];
+		if(ttp == nil)
+			continue;
+		<-ttp.applock;
+		for(tai := 0; tai < ttp.nappslots; tai++)
+			if(ttp.appslots[tai] != nil && ttp.appslots[tai].client != nil)
+				alt { ttp.appslots[tai].client.ctl <-= "retheme" => ; * => ; }
+		ttp.applock <-= 1;
+	}
+	alt { uievent <-= 1 => ; * => ; }
 }
 
 # Toggle blink state for urgency tiles
@@ -3168,7 +3183,7 @@ launchapp(id, dispath, appdata: string, targetact: int)
 	newctxt := ref Draw->Context(display, presscr, appwm);
 	appargs: list of string;
 	if(appdata != nil && appdata != "") {
-		# Tokenize appdata so multi-flag strings like "-c 1 -t dark -E"
+		# Tokenize appdata so multi-flag strings like "-c 1 -E"
 		# arrive as separate list elements (argopt expects one flag per element).
 		(nil, datatl) := sys->tokenize(appdata, " \t");
 		appargs = dispath :: datatl;

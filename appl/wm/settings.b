@@ -8,7 +8,7 @@ implement Settings;
 # paths, agent prompts, and startup profile.
 #
 # Configuration reads/writes:
-#   Theme:        /lib/lucifer/theme/current (persistent, live)
+#   Theme:        /lib/lucifer/theme/current (persistent, live: lucitheme)
 #   Tool budget:  /tool/budget + /tool/ctl budget-add/budget-remove (live, ephemeral)
 #   Active tools: /tool/tools + /tool/ctl add/remove (live, ephemeral)
 #   Paths:        /tool/paths + /tool/ctl bindpath/unbindpath (live, ephemeral)
@@ -1145,26 +1145,18 @@ inlist(s: string, arr: array of string): int
 
 applytheme(name: string)
 {
-	# Write to /mnt/ui/ctl for live theme switching across all zones.
-	# luciuisrv persists the choice to /lib/lucifer/theme/current and
-	# broadcasts a "theme <name>" global event so every zone reloads.
-	fd := sys->open("/mnt/ui/ctl", Sys->OWRITE);
-	if(fd != nil) {
-		cmd := "theme " + name;
-		b := array of byte cmd;
-		sys->write(fd, b, len b);
-		flashstatus("theme set to " + name);
+	# every watching program, desktop or not, follows (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil){
+		flashstatus(sys->sprint("error: cannot load %s: %r", Lucitheme->PATH));
 		return;
 	}
-	# Fallback: write directly (pre-luciuisrv or standalone mode)
-	fd = sys->open("/lib/lucifer/theme/current", Sys->OWRITE|Sys->OTRUNC);
-	if(fd == nil) {
-		flashstatus(sys->sprint("error: %r"));
+	err := lt->settheme(name);
+	if(err != nil){
+		flashstatus("error: " + err);
 		return;
 	}
-	b := array of byte name;
-	sys->write(fd, b, len b);
-	flashstatus("theme set to " + name + " — restart for full effect");
+	flashstatus("theme set to " + name);
 }
 
 applytool(name: string, active: int)
@@ -1792,22 +1784,14 @@ openineditor(path: string)
 
 themelistener()
 {
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
+	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
 		return;
-	buf := array[256] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		# INFR-28: reset client-side fid offset so the next read on
-		# this streaming queue starts at 0 (otherwise the kernel
-		# applies the accumulated offset to the server reply and
-		# truncates / EOFs on the third read onward).
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			themech <-= 1;
+	c := lt->watch();
+	for(;;){
+		<-c;
+		themech <-= 1;
 	}
 }
 

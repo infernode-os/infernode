@@ -41,14 +41,12 @@ LuciuisrvTest: module {
 
 SRCFILE:	con "/tests/luciuisrv_test.b";
 TESTMNT:	con "/tmp/luciuisrv_test";
-THEMEDIR:	con "/lib/lucifer/theme";
-PRIVTHEME:	con "/tmp/luciuisrv_test_theme";
 SRVPATH:	con "/dis/luciuisrv.dis";
 
 # Number of simulated app subscribers for the fan-out test. In the real
-# desktop, settings / matrix / editor / shell / keyring / wallet / about /
-# fractals / ftree each hold an open fd on /mnt/ui/event; one theme switch
-# must reach all of them. NSUBS picks a representative handful.
+# desktop several programs (lucifer's zones among them) each hold an open
+# fd on /mnt/ui/event; one global event must reach all of them. NSUBS
+# picks a representative handful.
 NSUBS:		con 5;
 
 passed := 0;
@@ -1622,41 +1620,57 @@ testAutocenterNonCurrent(t: ref T)
 teardown()
 {
 	sys->unmount(nil, TESTMNT);
-	sys->unmount(PRIVTHEME, THEMEDIR);
 }
 
-# luciuisrv persists every "theme <name>" to /lib/lucifer/theme/current,
-# and the theme tests below switch it; in a checkout that rewrote the
-# tracked file, and the last switch (halo) then shipped in whatever was
-# built from the tree next -- a bare-metal card whose desktop the harness
-# no longer recognised.  A private copy of current is bound in front of
-# the real directory first, so the server writes that one.
-privatetheme(): int
+# Two activities to switch between. A switch is a global event with
+# known text ("activity <id>"), carried like every other global event
+# the desktop's programs read.
+evids(): (string, string)
 {
-	cur := readfile(THEMEDIR + "/current");
-	if(cur == nil)
-		cur = "brimstone";
-	sys->create(PRIVTHEME, Sys->OREAD, Sys->DMDIR|8r755);
-	fd := sys->create(PRIVTHEME + "/current", Sys->OWRITE, 8r644);
-	if(fd == nil)
-		return -1;
-	b := array of byte cur;
-	if(sys->write(fd, b, len b) != len b)
-		return -1;
-	return sys->bind(PRIVTHEME, THEMEDIR, Sys->MBEFORE);
+	for(;;){
+		ids: list of string;
+		fd := sys->open(TESTMNT + "/activity", Sys->OREAD);
+		if(fd != nil)
+			for(;;){
+				(n, d) := sys->dirread(fd);
+				if(n <= 0)
+					break;
+				for(i := 0; i < n; i++)
+					if(d[i].name != nil && d[i].name[0] >= '0' && d[i].name[0] <= '9')
+						ids = d[i].name :: ids;
+			}
+		if(ids != nil && tl ids != nil)
+			return (hd ids, hd tl ids);
+		if(writefile(TESTMNT + "/ctl", "activity create EventTest") < 0)
+			return ("0", "0");
+	}
+}
+
+current(): string
+{
+	s := readfile(TESTMNT + "/activity/current");
+	while(s != nil && (s[len s-1] == '\n' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	return s;
+}
+
+switchto(id: string): int
+{
+	return writefile(TESTMNT + "/activity/current", id);
 }
 
 # ============================================================================
-# Test: ThemeEventStreaming
+# Test: EventStreaming
 #
-# Regression: every wm app's themelistener opens /mnt/ui/event ONCE and
-# reads from that fd in a loop.  Before INFR-28 (commit 5f90faba) the
-# styx fid's client-side offset accumulated by each read's byte count;
-# the second read returned only the tail of the next event (data[offset:])
-# and the third returned 0 / EOF, killing the listener.  Every theme
-# switch after the first was thus silently dropped.
+# Regression: a subscriber opens /mnt/ui/event ONCE and reads from that
+# fd in a loop.  Before INFR-28 (commit 5f90faba) the styx fid's
+# client-side offset accumulated by each read's byte count; the second
+# read returned only the tail of the next event (data[offset:]) and the
+# third returned 0 / EOF, killing the listener.  Every event after the
+# first was thus silently dropped.  (Theme switches were the events that
+# showed it then; they no longer travel here, see lucitheme->watch.)
 #
-# Fix: themelisteners sys->seek(fd, big 0, Sys->SEEKSTART) after each
+# Fix: subscribers sys->seek(fd, big 0, Sys->SEEKSTART) after each
 # successful read.  This test simulates that pattern and asserts each
 # pushed event is fully delivered to a long-lived subscriber.
 #
@@ -1664,31 +1678,33 @@ privatetheme(): int
 # offset bug.  The whole point is that ONE fd survives many events.
 # ============================================================================
 
-testThemeEventStreaming(t: ref T)
+testEventStreaming(t: ref T)
 {
 	evpath := TESTMNT + "/event";
-	ctlpath := TESTMNT + "/ctl";
 
 	# Drain any earlier events so our reads see only what we push here.
+	evids();	# any activity it creates is drained below
 	drainall(evpath);
 
-	# Open the event stream ONCE — exactly as themelistener does.
+	# Open the event stream ONCE — exactly as a subscriber does.
 	fd := sys->open(evpath, Sys->OREAD);
 	if(fd == nil) {
 		t.assert(0, "cannot open " + evpath + ": %r");
 		return;
 	}
 
-	# Push a sequence of theme events and verify each one round-trips
+	# Push a sequence of global events and verify each one round-trips
 	# through the open fd in order, in full.
-	themes := array[] of {"brimstone", "halo", "brimstone", "halo", "brimstone"};
+	(a, b) := evids();
+	prev := current();
+	seq := array[] of {a, b, a, b, a};
 	buf := array[256] of byte;
 
-	for(i := 0; i < len themes; i++) {
-		# Trigger a global "theme <name>" event via /mnt/ui/ctl.
-		n := writefile(ctlpath, "theme " + themes[i]);
+	for(i := 0; i < len seq; i++) {
+		# Trigger a global "activity <id>" event by switching activity.
+		n := switchto(seq[i]);
 		t.assert(n > 0,
-			sys->sprint("write 'theme %s' to ctl should succeed", themes[i]));
+			sys->sprint("switch to activity %s should succeed", seq[i]));
 
 		# Read on the long-lived fd.  Must use a goroutine + timeout
 		# because read blocks until the event arrives.
@@ -1704,8 +1720,8 @@ testThemeEventStreaming(t: ref T)
 			;
 		<-toch =>
 			t.assert(0, sys->sprint(
-				"timed out waiting for 'theme %s' event (iteration %d)",
-				themes[i], i));
+				"timed out waiting for 'activity %s' event (iteration %d)",
+				seq[i], i));
 			return;
 		}
 
@@ -1714,15 +1730,16 @@ testThemeEventStreaming(t: ref T)
 				"if 0/EOF, the fid-offset regression has returned",
 				nread, i));
 
-		expected := "theme " + themes[i] + "\n";
+		expected := "activity " + seq[i] + "\n";
 		t.assertseq(ev, expected,
 			sys->sprint("event content should match exactly on iter %d", i));
 
-		# Reset client-side fid offset — exactly as the themelistener
+		# Reset client-side fid offset — exactly as the subscriber
 		# fix does.  Without this, the bug returns immediately.
 		sys->seek(fd, big 0, Sys->SEEKSTART);
 	}
 
+	switchto(prev);
 	fd = nil;
 }
 
@@ -1751,8 +1768,8 @@ testThemeEventStreaming(t: ref T)
 testBufferedEventOrder(t: ref T)
 {
 	evpath := TESTMNT + "/event";
-	ctlpath := TESTMNT + "/ctl";
 
+	evids();	# any activity it creates is drained below
 	drainall(evpath);
 
 	fd := sys->open(evpath, Sys->OREAD);
@@ -1763,11 +1780,13 @@ testBufferedEventOrder(t: ref T)
 
 	# Burst three writes back-to-back with no intervening read. With no
 	# pending reader, all three accumulate in s.events.
-	bursts := array[] of {"brimstone", "halo", "brimstone"};
+	(a, b) := evids();
+	prev := current();
+	bursts := array[] of {a, b, a};
 	for(wi := 0; wi < len bursts; wi++) {
-		n := writefile(ctlpath, "theme " + bursts[wi]);
+		n := switchto(bursts[wi]);
 		t.assert(n > 0,
-			sys->sprint("write 'theme %s' to ctl should succeed", bursts[wi]));
+			sys->sprint("switch to activity %s should succeed", bursts[wi]));
 	}
 
 	# Now drain three reads on the same fd and check FIFO order.
@@ -1791,7 +1810,7 @@ testBufferedEventOrder(t: ref T)
 			return;
 		}
 
-		expected := "theme " + bursts[i] + "\n";
+		expected := "activity " + bursts[i] + "\n";
 		t.assertseq(ev, expected,
 			sys->sprint("buffered event %d should be %q (got %q) — "+
 				"FIFO ordering regression (INFR-36)",
@@ -1800,6 +1819,7 @@ testBufferedEventOrder(t: ref T)
 		sys->seek(fd, big 0, Sys->SEEKSTART);
 	}
 
+	switchto(prev);
 	fd = nil;
 }
 
@@ -1816,16 +1836,16 @@ fdreader(fd: ref Sys->FD, buf: array of byte, ch: chan of (int, string))
 # ============================================================================
 # Test: ThemeBroadcastAllSubs
 #
-# Regression: a single theme switch must reach EVERY subscribed app at once.
+# Regression: a single global event must reach EVERY subscriber at once.
 #
-# In the running desktop, every wm app's themelistener holds its own open fd
-# on /mnt/ui/event and blocks reading it. A theme change in Settings writes
-# ONE "theme <name>" to /mnt/ui/ctl; luciuisrv's pushglobalevent must fan it
-# out to ALL of those subscribers so the whole UI re-themes together.
+# In the running desktop, several programs each hold their own open fd on
+# /mnt/ui/event and block reading it; luciuisrv's pushglobalevent must fan
+# each event out to ALL of them. (It was found with theme switches, which
+# now travel by lucitheme->watch instead.)
 #
 # The rest of the suite only ever drives a SINGLE subscriber (ThemeEventStreaming,
 # BufferedEventOrder), so a fan-out break — one app updates, the rest don't,
-# i.e. the user-visible "theme stopped switching across all apps" — would sail
+# i.e. the user-visible "the desktop stopped re-theming" of its day — would sail
 # through green. This stands up NSUBS concurrent long-lived subscribers, each
 # pending on a blocking read exactly like a real app, then asserts one ctl
 # write is delivered in full to every one of them.
@@ -1836,9 +1856,9 @@ fdreader(fd: ref Sys->FD, buf: array of byte, ch: chan of (int, string))
 # controls the mount point via -m cannot observe an app's hardcoded path.)
 # ============================================================================
 
-# One simulated app themelistener: open the global event file, announce it is
+# One simulated subscriber: open the global event file, announce it is
 # registered, then block on a single read and report what arrives.
-themeSubReader(idx: int, evpath: string, readyc: chan of int,
+eventSubReader(idx: int, evpath: string, readyc: chan of int,
 		resultc: chan of (int, string))
 {
 	fd := sys->open(evpath, Sys->OREAD);
@@ -1857,20 +1877,20 @@ themeSubReader(idx: int, evpath: string, readyc: chan of int,
 	fd = nil;
 }
 
-testThemeBroadcastAllSubs(t: ref T)
+testEventBroadcastAllSubs(t: ref T)
 {
 	evpath := TESTMNT + "/event";
-	ctlpath := TESTMNT + "/ctl";
 
+	evids();	# any activity it creates is drained below
 	drainall(evpath);
 
 	readyc := chan of int;
 	resultc := chan of (int, string);
 
 	# Stand up NSUBS subscribers, each blocking on a read — the steady
-	# state of NSUBS running apps with live themelisteners.
+	# state of NSUBS running programs with live subscriptions.
 	for(i := 0; i < NSUBS; i++)
-		spawn themeSubReader(i, evpath, readyc, resultc);
+		spawn eventSubReader(i, evpath, readyc, resultc);
 
 	# Wait until every subscriber has opened and registered its fd.
 	for(i = 0; i < NSUBS; i++)
@@ -1880,12 +1900,14 @@ testThemeBroadcastAllSubs(t: ref T)
 	# NSUBS pending readers rather than racing ahead of them.
 	sys->sleep(300);
 
-	# ONE theme switch, exactly as Settings' applytheme does.
-	n := writefile(ctlpath, "theme halo");
-	t.assert(n > 0, "single 'theme halo' write to ctl should succeed");
+	# ONE global event.
+	(a, nil) := evids();
+	prev := current();
+	n := switchto(a);
+	t.assert(n > 0, "single activity switch should succeed");
 
 	# Gather every subscriber's result under one overall timeout.
-	expected := "theme halo\n";
+	expected := "activity " + a + "\n";
 	got := array[NSUBS] of { * => "(none)" };
 	toch := chan[1] of int;
 	spawn timerwait(toch, 5000);
@@ -1903,13 +1925,14 @@ testThemeBroadcastAllSubs(t: ref T)
 	}
 
 	t.asserteq(ndone, NSUBS,
-		sys->sprint("all %d subscribers must receive the theme event (got %d) — "+
-			"a shortfall is the 'theme stops switching across apps' regression",
+		sys->sprint("all %d subscribers must receive the event (got %d) — "+
+			"a shortfall means programs silently miss global events",
 			NSUBS, ndone));
 	for(i = 0; i < NSUBS; i++)
 		t.assertseq(got[i], expected,
 			sys->sprint("subscriber %d should receive %#q in full, got %#q",
 				i, expected, got[i]));
+	switchto(prev);
 }
 
 # ============================================================================
@@ -1933,8 +1956,6 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 	}
 
-	if(privatetheme() < 0)
-		raise sys->sprint("fail:cannot keep the theme tests off %s/current: %r", THEMEDIR);
 
 	# Start server and create activity (must run first)
 	run("Setup", testSetup);
@@ -1984,20 +2005,20 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ActivityLabel", testActivityLabel);
 	run("ActivityStatus", testActivityStatus);
 
-	# INFR-28 regression: theme events must stream to long-lived
-	# subscribers across many switches (fid offset must reset).
-	run("ThemeEventStreaming", testThemeEventStreaming);
+	# INFR-28 regression: global events must stream to long-lived
+	# subscribers across many events (fid offset must reset).
+	run("EventStreaming", testEventStreaming);
 
 	# INFR-36 regression: multiple buffered events must drain in
 	# FIFO order (earlier qrev-on-every-read corrupted order from
 	# the second event onward).
 	run("BufferedEventOrder", testBufferedEventOrder);
 
-	# Multi-subscriber fan-out: one theme switch must reach EVERY subscribed
-	# app at once. The single-subscriber theme tests above can't see an
+	# Multi-subscriber fan-out: one global event must reach EVERY subscriber
+	# at once. The single-subscriber tests above can't see an
 	# "all apps" fan-out break — the exact shape of the post-/mnt/ui-move
 	# regression where the desktop stopped re-theming.
-	run("ThemeBroadcastAllSubs", testThemeBroadcastAllSubs);
+	run("EventBroadcastAllSubs", testEventBroadcastAllSubs);
 
 	teardown();
 

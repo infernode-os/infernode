@@ -28,7 +28,8 @@
 #			Theme command switches it, for this session only.
 #			sam takes its colours from the system theme.
 #	XEN_GEOM	initial emu window size (default 1400x900)
-#	XEN_LOG		where a detached emu's output goes (default $TMPDIR/xen.log)
+#	XEN_LOG		where a detached emu's output is added, with its start and
+#			exit status (default $TMPDIR/xen.log)
 #	XEN_HOSTS	hosts to mount at /n/<host> (ssh + u9fs), so files they
 #			plumb (tools/rplumb) open and save there
 #	INFERNODE_HIDPI	0 draws Xenith in points doubled on a Retina display
@@ -128,4 +129,8 @@ set -- "$emu" -c1 -pheap=512m -pmain=512m -pimage=512m \
 if [ $wait = 1 ]; then
 	exec "$@"
 fi
-nohup "$@" </dev/null >"${XEN_LOG:-${TMPDIR:-/tmp}/xen.log}" 2>&1 &
+# Each instance appends, with when it started and how it ended, so one
+# that dies is not wiped from the log by the next to start.
+log=${XEN_LOG:-${TMPDIR:-/tmp}/xen.log}
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') xen $*" >>"$log"
+nohup sh -c '"$@"; s=$?; echo "=== $(date "+%Y-%m-%d %H:%M:%S") emu exit status $s"' xen "$@" </dev/null >>"$log" 2>&1 &

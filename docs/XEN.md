@@ -127,8 +127,9 @@ the Xenith on your Mac, and saving it saves it on that machine.
 hephaestus$ plumb src/foo.c:42     # opens in Xenith on the Mac
 ```
 
-How it works: ssh carries the Mac's plumber to the remote host
-(`RemoteForward` to `~/.plumb.sock`); the host's `plumb`
+How it works: one long-lived ssh per host, kept up by launchd on the
+Mac, carries the Mac's plumber to the host (`-R` to `~/.plumb.sock`);
+the host's `plumb`
 (`tools/rplumb`, a small 9P client) sends the file's absolute path,
 tagged `host=<name>`, to the `xenith` port; Xenith's `hostplumb` opens
 it under `/n/<name>`, where `xen` has mounted that host's file system
@@ -141,17 +142,24 @@ Setting up a host (say `hephaestus`):
    `sys/src/cmd/unix/u9fs`) into `~/bin`; install `tools/rplumb` as
    `~/bin/plumb`; write the name the Mac ssh's to it as into
    `~/.plumbhost`.
-2. On the host, as root, let a new session replace a dead forward's
-   socket:
+2. On the host, as root, let a new forward replace a dead one's
+   socket (after the Mac sleeps, say):
    `echo 'StreamLocalBindUnlink yes' | sudo tee /etc/ssh/sshd_config.d/plumb.conf`
    then `sudo systemctl reload ssh`.
-3. On the Mac, in `~/.ssh/config` (forwarding only for interactive
-   sessions, so scripted ssh never takes the socket; ssh runs `Match
-   exec` with stdin and stdout on `/dev/null`, hence stderr):
-   ```
-   Match originalhost hephaestus exec "test -t 2"
-     RemoteForward /home/you/.plumb.sock /tmp/ns.you/plumb
-   ```
+3. On the Mac, a launchd agent that holds the forward open,
+   `~/Library/LaunchAgents/com.you.plumbfwd.hephaestus.plist`, running
+   `/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes
+   -o ServerAliveInterval=30 -o ServerAliveCountMax=3
+   -R /home/you/.plumb.sock:/tmp/ns.you/plumb hephaestus` with
+   `RunAtLoad` and `KeepAlive` (and a `ThrottleInterval` of 30, so a
+   host that is down is retried every half minute); load it with
+   `launchctl bootstrap gui/$(id -u) <plist>`. It needs a key that
+   works without the ssh agent.
+
+   Not a `RemoteForward` in `~/.ssh/config` for interactive sessions,
+   as this first did: each new session took the socket from the last
+   (`StreamLocalBindUnlink`) and left it dead when it closed, so one
+   short ssh broke plumbing for every session still open.
 4. On the Mac, in `~/.zshrc`: a fixed plumber name space, and the hosts
    to mount: `export NAMESPACE=/tmp/ns.$USER`,
    `export XEN_HOSTS="hephaestus"`.

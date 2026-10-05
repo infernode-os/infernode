@@ -1,25 +1,54 @@
 #!/bin/sh
-# xen — open host files in a standalone Xenith, Acme-SAC style.
+# xen — open host files in a standalone InferNode editor, Acme-SAC style.
 #
-#	xen [file ...]
+#	xen [-s] [-w] [file ...]
 #
-# Starts an emu whose only program is Xenith: no Lucifer, no window
-# manager, no login. With no window manager Xenith runs Plain over the
-# whole emu window, and its Exit halts the emu (appl/xenith/gui.b,
-# killwins). Host paths are reached through /n/local, which the profile
-# mounts over the host root; Xenith starts in the caller's directory.
+# Starts an emu that runs nothing but the editor: no Lucifer, no login.
+# The emu window is the editor, and leaving the editor halts the emu.
+#
+#	Xenith (default) runs with no window manager, so it is Plain over
+#	the whole emu window and its Exit halts the emu itself
+#	(appl/xenith/gui.b, killwins).
+#
+#	sam (-s) is Tk and needs a window manager: it runs under wm/wm,
+#	and the emu is halted when sam returns (q, or exit on the
+#	command window's menu).
+#
+# Host paths are reached through /n/local, which the profile mounts over
+# the host root; the editor starts in the caller's directory.
+#
+# By default xen returns at once and the editor runs detached. -w waits
+# for the editor to finish instead, so xen can serve as $EDITOR
+# (EDITOR='xen -w') or be awaited by a script.
 #
 # Environment:
 #	INFERNODE_ROOT	tree to run (default: the tree holding this script)
-#	XEN_THEME	Xenith theme (default dark; "plan9" for the classic colours)
+#	XEN_THEME	Xenith theme (default dark; "plan9" for the classic colours).
+#			sam takes its colours from the Lucifer theme.
 #	XEN_GEOM	initial emu window size (default 1400x900)
-#	XEN_LOG		where emu's output goes (default $TMPDIR/xen.log)
+#	XEN_LOG		where a detached emu's output goes (default $TMPDIR/xen.log)
+
+usage() {
+	echo "usage: xen [-s] [-w] [file ...]" >&2
+	exit 2
+}
+
+editor=xenith
+wait=0
+while getopts sw c; do
+	case $c in
+	s)	editor=sam ;;
+	w)	wait=1 ;;
+	*)	usage ;;
+	esac
+done
+shift $((OPTIND - 1))
 
 root=${INFERNODE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 case $(uname -s) in
 Darwin)	emu=$root/emu/MacOSX/o.emu ;;
 Linux)	emu=$root/emu/Linux/o.emu ;;
-*)	echo "xen: unsupported host $(uname -s)" >&2; exit 1 ;;
+*)	echo "xen: unsupported host $(uname -s); on Windows use tools/xen.ps1" >&2; exit 1 ;;
 esac
 if [ ! -x "$emu" ]; then
 	echo "xen: no emulator at $emu (build one first)" >&2
@@ -40,9 +69,17 @@ for f in "$@"; do
 	files="$files $(q "/n/local$f")"
 done
 
-cmd="cd $(q "/n/local$PWD"); xenith -t $(q "${XEN_THEME:-dark}")$files"
-log=${XEN_LOG:-${TMPDIR:-/tmp}/xen.log}
+case $editor in
+xenith)
+	run="xenith -t $(q "${XEN_THEME:-dark}")$files" ;;
+sam)
+	run="wm/wm sh -c $(q "wm/sam$files; echo halt > /dev/sysctl")" ;;
+esac
+cmd="cd $(q "/n/local$PWD"); $run"
 
-nohup "$emu" -c1 -pheap=512m -pmain=512m -pimage=512m \
-	-g"${XEN_GEOM:-1400x900}" -r"$root" \
-	/dis/sh.dis -l -c "$cmd" </dev/null >"$log" 2>&1 &
+set -- "$emu" -c1 -pheap=512m -pmain=512m -pimage=512m \
+	-g"${XEN_GEOM:-1400x900}" -r"$root" /dis/sh.dis -l -c "$cmd"
+if [ $wait = 1 ]; then
+	exec "$@"
+fi
+nohup "$@" </dev/null >"${XEN_LOG:-${TMPDIR:-/tmp}/xen.log}" 2>&1 &

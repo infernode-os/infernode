@@ -111,6 +111,41 @@ xenith-bg-text-0='#1E1E2E'	# body background
 xenith-fg-text-0='#CDD6F4'	# body text
 ```
 
+### Fonts
+
+Xenith reads in Go and Go Mono, the faces Bigelow & Holmes (Lucida's
+designers) drew for the Go project: a humanist sans and a slab-serif
+monospace with the same x-height, so `Font` switches between them
+without the text changing size, and with the characters code confuses
+(`Il1|`, `0O`, `5S`, `8B`) drawn apart. Noto Serif, chosen for an
+x-height that matches theirs, is the serif.
+
+They are set at 20 pixels to the em, which puts the x-height at about
+a quarter of a degree at a desktop's distance: the size above which
+reading speed stops improving, and below which light-on-dark text loses
+most to dark-on-light. [THEME-RESEARCH.md](THEME-RESEARCH.md) has the
+evidence for the faces and the size.
+
+| Font file | Face |
+|---|---|
+| `/fonts/combined/go.20.font` | Go: the default |
+| `/fonts/combined/gomono.20.font` | Go Mono: the fixed-width font, `Font` toggles to it |
+| `/fonts/combined/serif.20.font` | Noto Serif |
+
+Each is also built at 16 and 24 (`go.16.font`, `serif.24.font`, ...).
+`Font` with a file name sets a window's font (`Font
+/fonts/combined/serif.20.font`), and `-f` and `-F` (or the `xenith-font`
+and `xenith-Font` environment variables) set the two defaults:
+
+```sh
+xenith -f /fonts/combined/serif.20.font		# serif by default
+xenith -f /fonts/combined/go.24.font -F /fonts/combined/gomono.24.font	# larger
+```
+
+Characters the faces lack fall back to DejaVu. `tools/gen-text-fonts.py`
+regenerates the bitmaps from the TrueType sources (Go's are in
+`fonts/go`; the script says where to fetch Noto Serif's).
+
 ### Opening host files
 
 `tools/xen file ...` runs Xenith by itself, dark and filling the emu
@@ -226,11 +261,11 @@ echo 'replaceall oldvar	newvar' > /edit/1/ctl    # tab-separated
 # From InferNode
 xenith
 
-# With dark theme
-xenith -t catppuccin
+# With the dark theme
+xenith -t xenith
 
-# With specific font
-xenith -f /fonts/pelm/unicode.9.font
+# With a specific font
+xenith -f /fonts/combined/serif.20.font
 ```
 
 ### Agent Interaction Example

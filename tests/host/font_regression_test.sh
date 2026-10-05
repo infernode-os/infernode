@@ -144,6 +144,25 @@ for fontfile in unicode.14.font unicode.sans.12.font unicode.sans.18.font; do
     fi
 done
 
+# Xenith's reading faces (tools/gen-text-fonts.py): every subfont their
+# manifests name must exist, or the character falls to PJW
+for face in go gomono serif; do
+    for sz in 16 20 24; do
+        fontfile="$face.$sz.font"
+        if [ ! -f "$COMBINED_DIR/$fontfile" ]; then
+            fail "$fontfile missing from fonts/combined/"
+            continue
+        fi
+        missing=$(sed 1d "$COMBINED_DIR/$fontfile" | awk -F'\t' '{print $NF}' | sort -u |
+            while read -r sub; do [ -f "$COMBINED_DIR/$sub" ] || echo "$sub"; done)
+        if [ -z "$missing" ]; then
+            pass "$fontfile: all subfonts present"
+        else
+            fail "$fontfile: missing $(echo $missing)"
+        fi
+    done
+done
+
 # ---------------------------------------------------------------
 # Part 3: Key modules should reference combined fonts
 # ---------------------------------------------------------------

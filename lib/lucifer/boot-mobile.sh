@@ -78,6 +78,13 @@ bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold
 bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.18.font >[2] /dev/null
 bind /fonts/combined/unicode.sans.bold.48.font /fonts/combined/unicode.sans.bold.24.font >[2] /dev/null
 bind /fonts/combined/unicode.48.font /fonts/combined/unicode.14.font >[2] /dev/null
+# Xenith's own faces (Go, Go Mono, Noto Serif at 20) have no mobile
+# sizes yet: the 48 tier stands in for them as for the 14s.
+for s in 16 20 24 {
+	bind /fonts/combined/unicode.sans.48.font /fonts/combined/go.$s.font >[2] /dev/null
+	bind /fonts/combined/unicode.sans.48.font /fonts/combined/serif.$s.font >[2] /dev/null
+	bind /fonts/combined/unicode.48.font /fonts/combined/gomono.$s.font >[2] /dev/null
+}
 
 # Dev-mode toggle: when the Activity passes --no-logon as the last
 # argv, skip wm/logon in boot.sh below. Temporary convenience for

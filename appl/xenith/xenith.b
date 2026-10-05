@@ -188,9 +188,13 @@ mainpid : int;
 fontcache : array of ref Reffont;
 nfontcache : int;
 reffonts : array of ref Reffont;
+# Go and Go Mono (Bigelow & Holmes), a matched pair: the same x-height,
+# so Font switches face without changing apparent size. 20 pixels to the
+# em puts the x-height at about 0.25 degrees at a desktop's distance,
+# where reading speed has levelled off (docs/THEME-RESEARCH.md).
 deffontnames := array[2] of {
-	"/fonts/combined/unicode.sans.14.font",
-	"/fonts/combined/unicode.14.font",
+	"/fonts/combined/go.20.font",
+	"/fonts/combined/gomono.20.font",
 };
 
 # Theme definitions: (env-var-suffix, color-value)

@@ -1,4 +1,4 @@
-# Xenith's colours: the research behind them
+# Xenith's colours and type: the research behind them
 
 Xenith ships two themes made for reading text all day: `glenda`, Plan 9's
 acme to the pixel, the light theme to prefer, and `xenith`, the dark theme.
@@ -6,7 +6,7 @@ This is the evidence they were measured against and the sources for it, so
 that a later change can be argued from the same ground.
 
 The review covered display polarity (dark on light against light on dark),
-luminance and colour contrast, and visual fatigue. Over a hundred sources
+luminance and colour contrast, visual fatigue, and typography. Over a hundred sources
 were checked against PubMed, Crossref or the paper itself; those known only
 from other papers' reference lists are marked so below.
 
@@ -125,6 +125,60 @@ Glenda is preferred because the evidence favours a bright screen for
 reading. Xenith is for the cases above where dark is justified, and for
 those who simply prefer it; the literature cannot show it is better, and on
 present evidence nothing could.
+
+## Type
+
+Strongest first.
+
+1. **Size matters most.** Reading speed is flat across a wide range of
+   sizes and falls steeply below a critical print size, an x-height of
+   about 0.2° of visual angle; 0.25° and above is comfortably fluent
+   (Legge et al. 1985a; Legge & Bigelow 2011). Thresholds rise with age,
+   by about 81% from 20 to 65 (Dobres et al. 2016), and the dark-mode
+   penalty is concentrated at small sizes (Piepenbrock et al. 2014a).
+2. **Heavier type does not close the dark-mode gap.** Thickening strokes
+   had no effect on reading in dark mode (Palmén, Gilbert & Crossland
+   2023, n=459); speed falls at both extremes of stroke weight and is flat
+   between (Bernard et al. 2013). Size, text luminance and a lit room are
+   the levers that work.
+3. **Letterforms matter, modestly.** Humanist sans faces beat square
+   grotesques by 9–11% in glance legibility (Reimer et al. 2014; Dobres
+   et al. 2016). Wider letters and a generous x-height help, until short
+   descenders confuse b/p, d/q (Beier & Larson 2010; Larson & Carter 2016,
+   2°). Letters are recognised one by one more than words by shape
+   (Sheedy et al. 2005), so every glyph must be unambiguous.
+4. **Little or no effect:** serif against sans (Arditi & Cho 2005;
+   Bernard et al. 2003); subpixel rendering (Gugerty et al. 2004; Sheedy
+   et al. 2008); dyslexia fonts (Wery & Diliberto 2017; Kuster et al.
+   2018). Slightly loose letter spacing helps a little (Perea & Gomez
+   2012); spacing beyond Courier's does not (Chung 2002).
+5. **Proportional against monospace for code has never been tested**
+   (Oliveira et al. 2021 found no study). For prose, monospace's advantage
+   near the size threshold is a spacing effect, and proportional type is
+   marginally faster at comfortable sizes (Mansfield, Legge & Bane 1996;
+   Xiong et al. 2018). Pike's case for proportional fonts in acme and the
+   case that code needs monospace are both folklore.
+6. **Readers differ.** Each reader's fastest and slowest fonts differed by
+   35% in speed, and no font was best for everyone (Wallace et al. 2022),
+   so changing font must stay easy.
+
+### What Xenith does
+
+- **Go and Go Mono** (Bigelow & Holmes 2016): a humanist sans and a
+  slab-serif monospace drawn as a pair with the same x-height (0.53 em),
+  so `Font` changes face without changing size; open, wide letters; the
+  confusable characters drawn apart (DIN 1450). They are freely licensed;
+  no published study has evaluated them, and nor has Lucida, Plan 9's
+  face by the same designers (Bigelow 2018).
+- **Noto Serif** for a serif: its x-height (0.536 em) matches Go's, and its
+  letters are wide and low in contrast.
+- **20 pixels to the em**, an x-height of about 10.6 px. On a laptop at
+  2× (about 127 logical pixels per inch) at 50 cm that is about 0.24°; on
+  a desktop monitor at 60–70 cm it is at or above 0.25°. DejaVu at 14,
+  the previous default, was about 0.17°, below the critical print size.
+  16 and 24 are built too.
+- **Regular weight**, since bold does not help in dark mode.
+- **Line height 1.25 em.** A convention, not evidence.
 
 ## Sources
 
@@ -255,6 +309,54 @@ Head-mounted displays (not applicable to monitors):
 - Warchoł. Selenized. https://github.com/jan-warchol/selenized [GL]
 - Budiu (2020). Dark mode vs. light mode: which is better? Nielsen Norman Group. https://www.nngroup.com/articles/dark-mode/ [GL]
 - Catppuccin. https://catppuccin.com/palette [GL; the source of `xenith`'s palette]
+
+### Type
+
+- Legge, Bigelow (2011). Does print size matter for reading? A review of findings from vision science and typography. *Journal of Vision* 11(5):8. https://doi.org/10.1167/11.5.8 [PR]
+- Pelli et al. (2007). Crowding and eccentricity determine reading rate. *Journal of Vision* 7(2):20. https://doi.org/10.1167/7.2.20 [PR]
+- Mansfield, Legge, Bane (1996). Psychophysics of reading XV. Font effects in normal and low vision. *IOVS* 37:1492. PMID 8675391 [PR]
+- Arditi, Cho (2005). Serifs and font legibility. *Vision Research* 45:2926. https://doi.org/10.1016/j.visres.2005.06.013 [PR]
+- Bernard, Chaparro, Mills, Halcomb (2003). Comparing the effects of text size and format on the readibility of computer-displayed Times New Roman and Arial text. *IJHCS* 59:823. https://doi.org/10.1016/S1071-5819(03)00121-6 [PR; 2°]
+- Bernard, Fernandez, Hull, Chaparro (2003). The effects of line length on children and adults' perceived and actual online reading performance. *Proc HFES* 47:1375. https://doi.org/10.1177/154193120304701112 [PR]
+- Bernard, Kumar, Junge, Chung (2013). The effect of letter-stroke boldness on reading speed in central and peripheral vision. *Vision Research* 84:33. https://doi.org/10.1016/j.visres.2013.03.005 [PR]
+- Boyarski, Neuwirth, Forlizzi, Regli (1998). A study of fonts designed for screen display. *CHI '98*, 87. https://doi.org/10.1145/274644.274658 [PR]
+- Sheedy, Subbaram, Zimmerman, Hayes (2005). Text legibility and the letter superiority effect. *Human Factors* 47:797. https://doi.org/10.1518/001872005775570998 [PR]
+- Sheedy, Tai, Subbaram, Gowrisankaran, Hayes (2008). ClearType sub-pixel text rendering: preference, legibility and reading performance. *Displays* 29:138. https://doi.org/10.1016/j.displa.2007.09.016 [PR]
+- Gugerty, Tyrrell, Aten, Edmonds (2004). The effects of subpixel addressing on users' performance and preferences while reading web-like text. *ACM TAP* 1:81. https://doi.org/10.1145/1024083.1024084 [PR]
+- Beier, Larson (2010). Design improvements for frequently misrecognized letters. *Information Design Journal* 18(2). https://doi.org/10.1075/idj.18.2.03bei [PR]
+- Beier, Larson (2013). How does typeface familiarity affect reading performance and reader preference? *Information Design Journal* 20:16. https://doi.org/10.1075/idj.20.1.02bei [PR]
+- Beier, Oderkerk (2019). The effect of age and font on reading ability. *Visible Language* 53(3). https://doi.org/10.34314/vl.v53i3.4654 [PR]
+- Beier et al. (2022). Readability research: an interdisciplinary approach. *Foundations and Trends in HCI* 16:214. https://doi.org/10.1561/1100000089 [NR]
+- Larson, Carter (2016). Sitka: a collaboration between type design and science. In Dyson & Suen (eds), *Digital Fonts and Reading*, World Scientific, 37–53. [PR chapter; 2°]
+- Minakata, Beier (2021). The effect of font width on eye movements during reading. *Applied Ergonomics* 97:103523. https://doi.org/10.1016/j.apergo.2021.103523 [PR]
+- Reimer, Mehler, Dobres, Coughlin et al. (2014). Assessing the impact of typeface design in a text-rich automotive user interface. *Ergonomics* 57:1643. https://doi.org/10.1080/00140139.2014.940000 [PR]
+- Dobres, Reimer, Chahine (2016). The effect of font weight and rendering system on glance-based text legibility. *AutomotiveUI '16*, 91. https://doi.org/10.1145/3003715.3005454 [PR]
+- Chung (2002). The effect of letter spacing on reading speed in central and peripheral vision. *IOVS* 43:1270. PMID 11923275 [PR]
+- Chung (2004). Reading speed benefits from increased vertical word spacing in normal peripheral vision. *Optometry and Vision Science* 81:525. https://doi.org/10.1097/00006324-200407000-00014 [PR; 2°]
+- Chung et al. (2008). Line spacing and reading in age-related macular degeneration [title not recorded]. *Optometry and Vision Science* 85:827. https://doi.org/10.1097/OPX.0b013e31818527ea [PR]
+- Perea, Moret-Tatay, Gómez (2011). The effects of interletter spacing in visual-word recognition. *Acta Psychologica* 137:345. https://doi.org/10.1016/j.actpsy.2011.04.003 [PR; 2°]
+- Perea, Gomez (2012). Increasing interletter spacing facilitates encoding of words. *Psychonomic Bulletin & Review* 19:332. https://doi.org/10.3758/s13423-011-0214-6 [PR]
+- Slattery, Rayner (2013). Effects of intraword and interword spacing on eye movements during reading. *Attention, Perception & Psychophysics* 75:1275. https://doi.org/10.3758/s13414-013-0463-8 [PR]
+- Zorzi et al. (2012). Extra-large letter spacing improves reading in dyslexia. *PNAS* 109:11455. https://doi.org/10.1073/pnas.1205566109 [PR]
+- Sjoblom, Eaton, Stagg (2016). The effects of letter spacing and coloured overlays on reading speed and accuracy in adult dyslexia. *British Journal of Educational Psychology* 86:630. https://doi.org/10.1111/bjep.12127 [PR]
+- Dyson (2004). How physical text layout affects reading from screen. *Behaviour & IT* 23:377. https://doi.org/10.1080/01449290410001715714 [NR]
+- Dyson, Haselgrove (2001). The influence of reading speed and line length on the effectiveness of reading from screen. *IJHCS* 54:585. https://doi.org/10.1006/ijhc.2001.0458 [PR; 2°]
+- Wallace et al. (2022). Towards individuated reading experiences: different fonts increase reading speed for different individuals. *ACM TOCHI* 29:1. https://doi.org/10.1145/3502222 [PR]
+- Wery, Diliberto (2017). The effect of a specialized dyslexia font, OpenDyslexic, on reading rate and accuracy. *Annals of Dyslexia* 67:114. https://doi.org/10.1007/s11881-016-0127-1 [PR]
+- Kuster, van Weerdenburg, Gompel, Bosman (2018). Dyslexie font does not benefit reading in children with or without dyslexia. *Annals of Dyslexia* 68:25. https://doi.org/10.1007/s11881-017-0154-6 [PR]
+- Rello, Baeza-Yates (2013). Good fonts for dyslexia. *ASSETS '13*. https://doi.org/10.1145/2513383.2513447 [PR]
+- Rello, Baeza-Yates (2016). The effect of font type on screen readability by people with dyslexia. *ACM TACCESS* 8:1. https://doi.org/10.1145/2897736 [PR]
+- Xiong, Lorsung, Mansfield, Bigelow, Legge (2018). Fonts designed for macular degeneration: impact on reading. *IOVS* 59:4182. https://doi.org/10.1167/iovs.18-24334 [PR]
+- Legge, Xiong et al. (2026). Assessment of newly designed fonts for visual accessibility. *PLOS One* 21:e0345068. https://doi.org/10.1371/journal.pone.0345068 [PR]
+- Richardson (2022). *The Legibility of Serif and Sans Serif Typefaces*. SpringerBriefs. https://doi.org/10.1007/978-3-030-90984-0 [NR; 2°]
+- Bigelow (2019). Typeface features and legibility research. *Vision Research* 165:162. https://doi.org/10.1016/j.visres.2019.05.003 [NR]
+- Bigelow, Holmes (1986). The design of Lucida: an integrated family of types for electronic literacy. In *Text Processing and Document Manipulation*, Cambridge University Press, 1–17. https://doi.org/10.1017/CBO9780511663130.002 [PR; 2°]
+- Bigelow (2018). Science and history behind the design of Lucida. *TUGboat* 39(3):204. https://www.tug.org/TUGboat/tb39-3/tb123bigelow-lucida.pdf [GL]
+- Tao, Bigelow, Pike (2016). Go fonts. The Go Blog. https://go.dev/blog/go-fonts [GL]
+- Oliveira, Bruno, Madeiral, Castor (2021). Evaluating code readability and legibility: an examination of human-centric studies. arXiv:2110.00785. https://arxiv.org/abs/2110.00785 [SR]
+- Binkley, Davis, Lawrie, Morrell (2009). To camelcase or under_score. *ICPC 2009*. https://doi.org/10.1109/ICPC.2009.5090039 [PR; 2°]
+- Sharif, Maletic (2010). An eye tracking study on camelCase and under_score identifier styles. *ICPC 2010*. https://doi.org/10.1109/ICPC.2010.41 [PR; 2°]
+- Atkinson Hyperlegible: no peer-reviewed evaluation found; claims come from the Braille Institute and its design agency. [GL]
 
 Not verified, cited only inside the papers above: Sloan (1977), Cushman
 (1986), Gould et al. (1987), Creed et al. (1988), Papadopoulos & Goudiras

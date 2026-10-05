@@ -1913,8 +1913,8 @@ usercolinit()
 	tagcols[BACK] = cenv("bg", "tag", 0, tagcols[BACK]);
 	tagcols[HTEXT] = cenv("fg", "tag", 1, tagcols[HTEXT]);
 	tagcols[HIGH] = cenv("bg", "tag", 1, tagcols[HIGH]);
-	colbordercol = cenv("bord", "col", 0, display.black);
-	rowbordercol = cenv("bord", "row", 0, display.black);
+	colbordercol = cenv("bord", "col", 0, colbordercol);
+	rowbordercol = cenv("bord", "row", 0, rowbordercol);
 	tagcols[BORD] = cenv("bord", "tag", 0, tagcols[BORD]);
 	textcols[BORD] = cenv("bord", "text", 0, textcols[BORD]);
 	bgcol = cenv("bg", "col", 0, bgcol);

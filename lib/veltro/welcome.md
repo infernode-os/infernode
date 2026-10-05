@@ -61,7 +61,7 @@ stored in factotum and are not written under `/lib/veltro`.
 Lucia ships with four themes:
 
 - **brimstone** — dark theme (default)
-- **halo** — light theme (Plan 9-inspired)
+- **halo** — light theme
 - **xenith** — dark theme after Xenith's original look
 - **glenda** — Plan 9's own colours: acme, rio and its menus, exactly
 

@@ -995,6 +995,17 @@ renderx(et : ref Text, nil : ref Text)
 
 renderon(w : ref Window)
 {
+	# Markdown is set as a document over its text (Window.docrender)
+	if(ismarkdown(w.body.file.name)){
+		if((err := w.docrender()) != nil){
+			warning(nil, sprint("Render: %s\n", err));
+			return;
+		}
+		w.rendermode = 1;
+		w.settag();
+		return;
+	}
+
 	# Load format module on first use
 	if(formatmod == nil){
 		formatmod = load Format Format->PATH;
@@ -1059,6 +1070,10 @@ renderon(w : ref Window)
 
 renderoff(w : ref Window)
 {
+	if(w.docview){
+		w.docoff();
+		return;
+	}
 	if(w.contentdata == nil)
 		return;
 
@@ -1080,6 +1095,22 @@ renderoff(w : ref Window)
 	w.body.show(0, 0);
 	scrl->scrdraw(w.body);
 	w.settag();
+}
+
+ismarkdown(name : string) : int
+{
+	for(i := len name; i > 0 && name[i-1] != '.' && name[i-1] != '/'; i--)
+		;
+	if(i == 0 || name[i-1] != '.')
+		return 0;
+	ext := "";
+	for(; i < len name; i++){
+		c := name[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		ext[len ext] = c;
+	}
+	return ext == "md" || ext == "markdown";
 }
 
 id(et : ref Text)

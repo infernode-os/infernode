@@ -16,6 +16,7 @@ Xenith : module {
 	textcols, tagcols : array of ref Draw->Image;
 	but2col, but3col, but2colt, but3colt : ref Draw->Image;
 	colbordercol, rowbordercol, modbutcol, bgcol : ref Draw->Image;
+	accentcol : ref Draw->Image;	# a rendered document's headings and links
 
 	xenithctxt : ref Draw->Context;
 	keyboardpid, mousepid, timerpid, fsyspid : int;

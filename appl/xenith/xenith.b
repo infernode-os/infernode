@@ -644,6 +644,20 @@ mousetask()
 						# Image mode: scroll wheel → smooth pan or page navigation
 						if(mouse.buttons & (8|16)){
 							imagescroll(w, mouse.buttons);
+						}else if(w.docview && but){
+							# a document's scroll bar, as acme's: 1 back
+							# and 3 on by the distance from its top, 2 to
+							# that point in the document
+							d := mouse.xy.y - t.scrollr.min.y;
+							case but {
+							1 =>	w.docscroll(-d);
+							3 =>	w.docscroll(d);
+							2 =>
+								if(w.bodyimage != nil && t.scrollr.dy() > 0)
+									w.docscroll(w.bodyimage.r.dy() * d / t.scrollr.dy() - w.imageoffset.y);
+							}
+							while(mouse.buttons)
+								frgetmouse();
 						}
 						bflush();
 						row.qlock.unlock();
@@ -1324,6 +1338,13 @@ imagescroll(w: ref Window, buttons: int)
 {
 	if(w.bodyimage == nil)
 		return;
+	if(w.docview){
+		step := w.body.frame.font.height * 3;
+		if(buttons & 8)
+			step = -step;
+		w.docscroll(step);
+		return;
+	}
 
 	imw := w.bodyimage.r.dx();
 	imh := w.bodyimage.r.dy();
@@ -1391,6 +1412,16 @@ imagescroll(w: ref Window, buttons: int)
 
 imagedrag(w: ref Window)
 {
+	if(w.docview){
+		# drag the document up and down
+		y := mouse.xy.y;
+		while(mouse.buttons & 1){
+			w.docscroll(y - mouse.xy.y);
+			y = mouse.xy.y;
+			frgetmouse();
+		}
+		return;
+	}
 	# Pre-render full page at zoom level (one-time cost)
 	prerendered := w.prerenderzoomed();
 	if(prerendered == nil)
@@ -1652,6 +1683,7 @@ acmecols()
 	textcols[BORD] = display.color(Draw->Yellowgreen);
 	textcols[TEXT] = black;
 	textcols[HTEXT] = black;
+	accentcol = display.color(Draw->Greyblue);
 
 	but2col = display.rgb(16raa, 16r00, 16r00);
 	but3col = display.rgb(16r00, 16r66, 16r00);
@@ -1688,6 +1720,7 @@ palette(th : ref Lucitheme->Theme)
 	colbordercol = display.color(th.border);
 	rowbordercol = display.color(th.border);
 	bgcol = display.color(th.bg);
+	accentcol = display.color(th.accent);
 }
 
 # Take the colours of the named theme; the xenith-* environment

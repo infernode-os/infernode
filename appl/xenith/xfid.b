@@ -595,6 +595,8 @@ Xfid.write(x : self ref Xfid)
 		respond(x, fc, nil);
 		break;
 	QWbody or QWwrsel =>
+		if(w.docview)
+			w.docoff();	# writes show in the text
 		if(w.rendermode != 0 && qid == QWbody){
 			respond(x, fc, "window in render mode");
 			break;

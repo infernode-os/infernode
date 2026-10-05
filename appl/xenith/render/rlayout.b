@@ -216,8 +216,14 @@ face(ls: ref Lstate, w: int): (ref Font, int, int)
 # Render a list of block-level nodes
 renderblocks(ls: ref Lstate, doc: list of ref DocNode)
 {
+	inlist := 0;
 	for(; doc != nil; doc = tl doc){
 		node := hd doc;
+		# a list's items sit together; the list is spaced as a paragraph
+		islist := node.kind == Nbullet || node.kind == Nnumber;
+		if(inlist && !islist)
+			ls.y += ls.lh / 3;
+		inlist = islist;
 		case node.kind {
 		Npara =>
 			renderpara(ls, node);

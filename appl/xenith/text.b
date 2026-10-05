@@ -803,6 +803,31 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 
 	if(alphabet != ALPHA_LATIN)
 		r = transc(r, alphabet);
+	# A rendered document scrolls; anything else goes back to its text
+	if(t.what == Body && t.w != nil && t.w.docview){
+		h := t.frame.r.dy();
+		case(r){
+		Dat->Kscrolldown or Keyboard->Down =>
+			t.w.docscroll(t.frame.font.height * 3);
+			return;
+		Dat->Kscrollup or Keyboard->Up =>
+			t.w.docscroll(-t.frame.font.height * 3);
+			return;
+		Keyboard->Pgdown =>
+			t.w.docscroll(h - t.frame.font.height);
+			return;
+		Keyboard->Pgup =>
+			t.w.docscroll(-(h - t.frame.font.height));
+			return;
+		Keyboard->Home =>
+			t.w.docscroll(-(1<<30));
+			return;
+		Keyboard->End =>
+			t.w.docscroll(1<<30);
+			return;
+		}
+		t.w.docoff();
+	}
 	if (echomode == EM_RAW && t.what == Body) {
 		if (t.w != nil) {
 			s := "a";

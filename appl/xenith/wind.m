@@ -53,6 +53,11 @@ Windowm : module {
 		rendermode : int;	# 0 = raw text, 1 = formatted view (Render command toggle)
 		zoomscale : int;	# zoom percentage: 100 = fit-to-window, 200 = 2x, etc.
 		zoomedcache : ref Draw->Image;	# cached scaled page for fast pan/redraw
+		docview : int;	# 1: the body shows its text set as a document (Render on markdown)
+		docwidth : int;	# the width the document was set for
+		docbg : ref Draw->Image;	# and the colours
+		docfg : ref Draw->Image;
+		docaccent : ref Draw->Image;
 		utflastqid : int;
 		utflastboff : int;
 		utflastq : int;
@@ -94,5 +99,8 @@ Windowm : module {
 		contentcommands : fn(w : self ref Window) : list of ref Renderer->Command;
 		contentcommand : fn(w : self ref Window, cmd, arg : string) : string;
 		asynccontentcommand : fn(w : self ref Window, cmd, arg : string);
+		docrender : fn(w : self ref Window) : string;
+		docoff : fn(w : self ref Window);
+		docscroll : fn(w : self ref Window, dy : int);
 	};
 };

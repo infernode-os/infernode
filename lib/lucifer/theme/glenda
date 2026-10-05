@@ -1,61 +1,65 @@
-# Glenda — Plan 9's own colours, exactly
+# Glenda — Plan 9's colours
+#
+# Acme is the desktop: its tag colour for the bar along the top, its
+# body colour for every zone, its tag border between them. Xenith is
+# acme to the pixel (the xenith-* keys below); the rest of the
+# desktop is laid out of the same palette.
 #
 # Sources: Plan 9's acme (acme.c, iconinit) and rio (data.c, wind.c),
 # libdraw's menuhit.c, and the D* constants of draw.h. allocimagemix
 # lays a quarter of the first colour over the second (a 0x3F mask), so
 # acme's Paleyellow over White is FFFFEA, Palebluegreen over White
-# EAFFFF, and the menus' Palegreen over White EAFFEA.
-#
-# Where Plan 9 has nothing to copy (code blocks, diagrams, the
-# conversation), the colour is a choice from Plan 9's palette, and is
-# marked so below. Everything else is a quotation.
+# EAFFFF, and the menus' Palegreen over White EAFFEA. Every colour here
+# is one of those or a D* constant, or a grey of Plan 9's colour map
+# (multiples of 0x111111).
 
-# Core UI: Lucifer's zones are rio windows on rio's desktop
-bg FFFFFF		# rio window: display->white
-border 777777		# rio desktop (data.c: background)
-windowborder 55AAAA	# rio active window border: DGreygreen
-header 777777		# rio desktop
-accent 55AAAA		# rio active border: DGreygreen
-text 000000		# rio window text: display->black
-text2 666666		# rio darkgrey
-dim 555555		# choice: a Plan 9 grey (0x11 steps) that reads on white and on the desktop grey
-label CCCCCC		# rio selection: cols[HIGH]
+# Core UI
+bg FFFFEA		# acme's body: allocimagemix(DPaleyellow, DWhite)
+border 8888CC		# acme's tag border: DPurpleblue
+windowborder 8888CC	# DPurpleblue
+header EAFFFF		# acme's tag: allocimagemix(DPalebluegreen, DWhite)
+accent 005DBB		# DGreyblue: rio's hold-mode blue
+text 000000
+text2 444444		# colour-map grey
+dim 666666		# rio's darkgrey
+label 99994C		# DYellowgreen: acme's body border
 
-# Conversation zone (choice: acme's tag and body colours)
-human EAFFFF
-veltro FFFFEA
-input FFFFFF		# rio window
+# Conversation zone: your words in acme's tag colour, the agent's in
+# the menus' green, on acme's body
+human EAFFFF		# allocimagemix(DPalebluegreen, DWhite)
+veltro EAFFEA		# allocimagemix(DPalegreen, DWhite)
+input FFFFFF		# a rio window
 cursor 000000		# Plan 9's tick is the text colour
 
 # Status / semantic
-red DD0000		# rio red (data.c)
-green 006600		# acme button 3
-yellow 99994C		# DYellowgreen (choice: Plan 9 has no warning colour; DDarkyellow vanishes on white)
-progbg CCCCCC		# choice
-progfg 000099		# DMedblue (choice)
+red AA0000		# acme's button 2
+green 006600		# acme's button 3
+yellow 99994C		# DYellowgreen
+progbg EEEE9E		# DDarkyellow
+progfg 005DBB		# DGreyblue
 
-# Code blocks (choice: acme's body)
-codebg FFFFEA
+# Code blocks
+codebg FFFFFF		# a rio window, set into acme's body
 
 # Context menu: menuhit.c
 menubg EAFFEA		# allocimagemix(DPalegreen, DWhite)
 menuborder 88CC88	# DMedgreen
 menuhilit 448844	# DDarkgreen
 menutext 000000
-menudim 88CC88		# choice: Plan 9 menus have no disabled items
+menudim 666666		# rio's darkgrey (Plan 9 menus have no disabled items)
 
 # Editor: acme's body
 editbg FFFFEA		# allocimagemix(DPaleyellow, DWhite)
 edittext 000000
 editcursor 000000
-editlineno 99994C	# DYellowgreen (choice: acme has no line numbers)
-editstatus EAFFFF	# acme's tag (choice)
+editlineno 99994C	# DYellowgreen (acme has no line numbers)
+editstatus EAFFFF	# acme's tag
 editstattext 000000
 editscroll 99994C	# acme scroll bar: the body's BORD, DYellowgreen
 editthumb FFFFEA	# acme scroll thumb: the body's BACK
 
-# Diagrams (choice: Plan 9's palette)
-diagbg FFFFFF
+# Diagrams, in Plan 9's palette
+diagbg FFFFEA
 diagnode EAFFFF
 diagborder 8888CC
 diagtext 000000

@@ -117,6 +117,24 @@ as a line
 followed by two unused fields, for programs to lay themselves out again
 (Xenith and Lucifer read it); a program that does not read it keeps
 the layout it made for the window it started in.
+.IP
+The sizes are in the host's points, which on a high-density (Retina)
+display are each two pixels or more, drawn doubled.
+With
+.B INFERNODE_HIDPI
+set (and not
+.BR 0 )
+in the host environment, the screen has the display's own pixels
+instead: a window of 700x400 points is a screen of 1400x800 on a
+Retina display.
+Programs must then size themselves to match, so the program that
+opens the display finds the number of pixels to a point in its
+environment variable
+.BR displayscale ;
+Xenith reads it (see
+.BR tools/xen ),
+the rest of the desktop does not yet, and would come out half size.
+iOS always has the display's own pixels.
 .TP
 .BI \-f font
 Specify the default font for the

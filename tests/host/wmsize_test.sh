@@ -12,6 +12,10 @@
 # is given (#i/draw/new) is the window's size, not the display's, and
 # /dev/wmsize is bound and reports that size.
 #
+# INFERNODE_HIDPI is checked as far as the dummy driver allows: it
+# publishes $displayscale (1 there); on a Retina display the screen has
+# twice the pixels and the scale is 2, checked by hand.
+#
 # Resizing itself needs a real window manager; it was checked by hand on
 # macOS (Xenith and Lucifer laid out again on growing, shrinking and full
 # screen). Needs the SDL GUI emulator: SKIP (77) on a headless build,
@@ -48,4 +52,24 @@ else
     echo "FAIL: /dev/wmsize gave '$*', want 'm $W $H ...'"; fail=1
 fi
 [ $fail = 0 ] || { printf '%s\n' "$out" | sed 's/^/    /'; exit 1; }
-exit 0
+
+# INFERNODE_HIDPI: the display's own pixels, and $displayscale for the
+# program that opened it (1 here: the dummy display has no density);
+# without it, no $displayscale
+scale() {
+    INFERNODE_HIDPI="$1" SDL_VIDEODRIVER=dummy with_timeout 30 "$EMU" -c0 -g${W}x${H} -r"$ROOT" /dis/sh.dis -c \
+        "dd -bs 144 -count 1 -if '#i/draw/new' >[2] /dev/null >/dev/null; echo scale \`{cat /env/displayscale >[2] /dev/null}; echo halt > /dev/sysctl" 2>&1 | grep '^scale'
+}
+got=$(scale 1)
+if [ "$got" = "scale 1" ]; then
+    echo "PASS: INFERNODE_HIDPI sets \$displayscale"
+else
+    echo "FAIL: INFERNODE_HIDPI gave '$got', want 'scale 1'"; fail=1
+fi
+got=$(scale 0)
+if [ "$got" = "scale" ]; then
+    echo "PASS: without INFERNODE_HIDPI there is no \$displayscale"
+else
+    echo "FAIL: without INFERNODE_HIDPI got '$got', want 'scale'"; fail=1
+fi
+exit $fail

@@ -441,6 +441,35 @@ postwmsize(void)
 #endif
 }
 
+/*
+ * Whether the screen has the display's own pixels. iOS always does:
+ * without it the screen is ~393px, not ~1179px, and the mobile boot
+ * binds fonts large to suit. On the desktop it is asked for, by
+ * INFERNODE_HIDPI in the host environment, by programs that size
+ * their own chrome from $displayscale (Xenith, started by tools/xen);
+ * the rest of the desktop still draws at 1x, and with the display's
+ * pixels would come out half size on a Retina screen, so it is not
+ * the default there.
+ */
+static int
+hidpiwanted(void)
+{
+#if defined(__APPLE__) && TARGET_OS_IOS
+	return 1;
+#else
+	char *e;
+
+	e = getenv("INFERNODE_HIDPI");
+	return e != nil && *e != 0 && strcmp(e, "0") != 0;
+#endif
+}
+
+static SDL_WindowFlags
+hidpiflag(void)
+{
+	return hidpiwanted() ? SDL_WINDOW_HIGH_PIXEL_DENSITY : 0;
+}
+
 static void
 init_hidpi(void)
 {
@@ -942,23 +971,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 		sdl_window = SDL_CreateWindow(
 			"InferNode",
 			sdl_width, sdl_height,
-			/* HIGH_PIXEL_DENSITY: without it iOS gives a 1x (logical)
-			 * backing, so the screen is ~393px not ~1179px and the
-			 * mobile fonts render ~3x too large (≈8 chars/line). With
-			 * it, GetWindowSizeInPixels reports real Retina pixels and
-			 * the UI is properly sized + crisp. */
-			/* HIGH_PIXEL_DENSITY is iOS-only. On macOS/Linux it makes
-		 * the Inferno surface report physical Retina pixels, so
-		 * 14-pt fonts render at 14 physical pixels on a 2x display
-		 * (half-size). The mobile boot rebinds 14->32/48 to
-		 * compensate; desktop boots don't, so desktop UI ends up
-		 * tiny. Limiting the flag to iOS preserves the iOS fix
-		 * (a5f38e48) without bleeding small fonts to desktop. */
-		SDL_WINDOW_RESIZABLE
-#if defined(__APPLE__) && TARGET_OS_IOS
-		| SDL_WINDOW_HIGH_PIXEL_DENSITY
-#endif
-		);
+			SDL_WINDOW_RESIZABLE | hidpiflag());
 		if (!sdl_window)
 			snprint(attacherr, sizeof attacherr, "%s", SDL_GetError());
 		else
@@ -1006,6 +1019,16 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 #endif
 
 	sdl_running = 1;
+
+#if !MOBILE_TOUCH
+	/* Pixels per point, for programs that draw at the display's own
+	 * density (see hidpiwanted); set in the opener's environment. */
+	if (hidpiwanted()) {
+		char buf[16];
+		snprint(buf, sizeof buf, "%d", (int)(display_scale + 0.5f));
+		ksetenv("displayscale", buf, 0);
+	}
+#endif
 
 	/* Row stride must match Inferno's memimage layout (wordsperline),
 	 * not sdl_width*4 — see the sdl_stride comment. */
@@ -1337,18 +1360,7 @@ handle_window_creation(void)
 	sdl_window = SDL_CreateWindow(
 		"InferNode",
 		sdl_width, sdl_height,
-		/* HIGH_PIXEL_DENSITY is iOS-only. On macOS/Linux it makes
-		 * the Inferno surface report physical Retina pixels, so
-		 * 14-pt fonts render at 14 physical pixels on a 2x display
-		 * (half-size). The mobile boot rebinds 14->32/48 to
-		 * compensate; desktop boots don't, so desktop UI ends up
-		 * tiny. Limiting the flag to iOS preserves the iOS fix
-		 * (a5f38e48) without bleeding small fonts to desktop. */
-		SDL_WINDOW_RESIZABLE
-#if defined(__APPLE__) && TARGET_OS_IOS
-		| SDL_WINDOW_HIGH_PIXEL_DENSITY
-#endif
-	);
+		SDL_WINDOW_RESIZABLE | hidpiflag());
 	if (!sdl_window) {
 		fprint(2, "draw-sdl3: SDL_CreateWindow failed: %s\n", SDL_GetError());
 		create_window_result = 0;

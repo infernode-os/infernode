@@ -379,18 +379,80 @@ btn(name, text, verb: string)
 
 # ── Panels ─────────────────────────────────────────────────────
 
+# One row per installed theme: a strip of its own colours (background,
+# editor, text, accent) and its name. A click anywhere on the row makes
+# it the system's theme; the active one is outlined in the accent.
 paneltheme()
 {
-	theme_names = readthemes();
-	current := readcurrenttheme();
-	tk->cmd(top, "variable thm " + tk->quote(current));
-	for(i := 0; i < len theme_names; i++)
-		tk->cmd(top, sys->sprint(
-			"radiobutton .content.t%d -text %s -value %s -variable thm" +
-			" -background %s -foreground %s -command {send act theme}; " +
-			"pack .content.t%d -side top -anchor w",
-			i, tk->quote(theme_names[i]), tk->quote(theme_names[i]),
-			c_bg, c_fg, i));
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil){
+		lbl("terr", sys->sprint("cannot load %s: %r", Lucitheme->PATH));
+		return;
+	}
+	cur := lt->current();
+	theme_names = nil;
+	for(l := lt->themes(); l != nil; l = tl l){
+		a := array[len theme_names + 1] of string;
+		a[0:] = theme_names;
+		a[len theme_names] = hd l;
+		theme_names = a;
+	}
+	for(i := 0; i < len theme_names; i++){
+		th := lt->loadtheme(theme_names[i]);
+		if(th == nil)
+			continue;
+		ring := c_bg;
+		if(theme_names[i] == cur)
+			ring = c_accent;
+		w := sys->sprint(".content.t%d", i);
+		tk->cmd(top, sys->sprint("frame %s -background %s -borderwidth 0", w, ring));
+		tk->cmd(top, sys->sprint("frame %s.in -background %s", w, c_bg));
+		# outlined, so a swatch the panel's own colour still shows
+		sw := array[] of {th.bg, th.editbg, th.text, th.accent};
+		tk->cmd(top, sys->sprint("frame %s.in.sw -background %s; pack %s.in.sw -side left", w, c_dim, w));
+		for(j := 0; j < len sw; j++)
+			tk->cmd(top, sys->sprint("frame %s.in.sw.s%d -width 18 -height 18 -background %s;" +
+				" pack %s.in.sw.s%d -side left -padx 1 -pady 1", w, j, col(sw[j] >> 8), w, j));
+		tk->cmd(top, sys->sprint("label %s.in.name -text %s -background %s -foreground %s;" +
+			" pack %s.in.name -side left -padx 8", w, tk->quote(theme_names[i]), c_bg, c_fg, w));
+		tk->cmd(top, sys->sprint("pack %s.in -padx 2 -pady 2 -fill x; pack %s -side top -anchor w -fill x -pady 2", w, w));
+		parts := array[] of {"", ".in", ".in.name", ".in.sw", ".in.sw.s0", ".in.sw.s1", ".in.sw.s2", ".in.sw.s3"};
+		for(k := 0; k < len parts; k++)
+			tk->cmd(top, sys->sprint("bind %s%s <ButtonRelease-1> {send act settheme %d}", w, parts[k], i));
+	}
+	tk->cmd(top, "button .content.tcopy -text {Copy current as new theme} -command {send act themecopy};" +
+		" pack .content.tcopy -side top -anchor w -pady 8");
+	tk->cmd(top, "button .content.tedit -text {Edit current theme} -command {send act themeedit};" +
+		" pack .content.tedit -side top -anchor w");
+}
+
+# A copy of the active theme under a new name, in the theme directory
+# (the user's own, which the profile binds over the system's), to edit.
+copytheme()
+{
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
+		return;
+	cur := lt->current();
+	data := readfile("/lib/lucifer/theme/" + cur);
+	if(data == nil){
+		flashstatus(sys->sprint("cannot read theme %s: %r", cur));
+		return;
+	}
+	name: string;
+	for(n := 1; ; n++){
+		name = sys->sprint("%s-%d", cur, n);
+		if(sys->stat("/lib/lucifer/theme/" + name).t0 < 0)
+			break;
+	}
+	fd := sys->create("/lib/lucifer/theme/" + name, Sys->OWRITE, 8r644);
+	if(fd == nil){
+		flashstatus(sys->sprint("cannot create theme %s: %r", name));
+		return;
+	}
+	b := array of byte data;
+	sys->write(fd, b, len b);
+	flashstatus("new theme " + name + " (a copy of " + cur + "); pick it to use it");
 }
 
 panelllm()
@@ -856,7 +918,18 @@ handleaction(a: string)
 		s := tk->cmd(top, ".cats.lb curselection");
 		if(s != nil && len s > 0 && s[0] >= '0' && s[0] <= '9')
 			buildpanel(int s);
-	"theme" =>	applytheme(tkv("thm"));
+	"settheme" =>
+		if(arg >= 0 && arg < len theme_names){
+			applytheme(theme_names[arg]);
+			buildpanel(CatTheme);
+		}
+	"themecopy" =>
+		copytheme();
+		buildpanel(CatTheme);
+	"themeedit" =>
+		lt := load Lucitheme Lucitheme->PATH;
+		if(lt != nil)
+			openineditor("/lib/lucifer/theme/" + lt->current());
 	"llmmode" =>
 		llm_is_remote = tkv("llmmode") == "remote";
 		buildpanel(CatLLM);
@@ -1034,44 +1107,7 @@ dodisable2fa()
 	setsecresult("2FA disabled. Login is now password-only.");
 }
 
-readthemes(): array of string
-{
-	fd := sys->open("/lib/lucifer/theme", Sys->OREAD);
-	if(fd == nil)
-		return array[] of { "brimstone", "halo" };
 
-	names: list of string;
-	n := 0;
-	for(;;) {
-		(count, dirs) := sys->dirread(fd);
-		if(count <= 0)
-			break;
-		for(i := 0; i < count; i++) {
-			nm := dirs[i].name;
-			if(nm == "current")
-				continue;
-			names = nm :: names;
-			n++;
-		}
-	}
-	if(n == 0)
-		return array[] of { "brimstone", "halo" };
-
-	result := array[n] of string;
-	for(j := n - 1; j >= 0; j--) {
-		result[j] = hd names;
-		names = tl names;
-	}
-	return result;
-}
-
-readcurrenttheme(): string
-{
-	s := readfile("/lib/lucifer/theme/current");
-	if(s == nil)
-		return "brimstone";
-	return strip(s);
-}
 
 readlines(path: string): array of string
 {

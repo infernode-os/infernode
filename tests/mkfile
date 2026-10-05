@@ -27,6 +27,7 @@ TARG=\
 	att_test.dis\
 	smp_test.dis\
 	hid_test.dis\
+	hostplumb_test.dis\
 	exception_test.dis\
 	fltfmt_test.dis\
 	arrayinit_test.dis\

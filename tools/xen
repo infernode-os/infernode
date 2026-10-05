@@ -90,7 +90,15 @@ case $editor in
 xenith)
 	# A plumber first, as Lucifer's boot starts one, so plumbing works
 	# from the outset and Xenith does not have to start its own.
-	run="bind -bc '#splumber' /chan; plumber /usr/inferno/lib/plumbing; xenith -t $(q "${XEN_THEME:-dark}")$files" ;;
+	run="bind -bc '#splumber' /chan; plumber /lib/xen/plumbing; "
+	# With plan9port present, listen on its plumber's xenith port too
+	# (tools/xen.plumbing), so `plumb file` on the host opens the file
+	# here. The host shell kills its reader once the emu is gone.
+	if nine=$(command -v 9p); then
+		host="'$nine' read plumb/xenith & r=\$!; while kill -0 \$PPID 2>/dev/null; do sleep 1; done; kill \$r"
+		run="${run}os sh -c $(q "$host") | hostplumb & "
+	fi
+	run="${run}xenith -t $(q "${XEN_THEME:-dark}")$files" ;;
 sam)
 	run="wm/wm sh -c $(q "wm/sam$files; echo halt > /dev/sysctl")" ;;
 esac

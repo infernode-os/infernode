@@ -418,6 +418,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
 | `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
 | `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
+| `hostplumb_test.b` | hostplumb(1) re-plumbing host messages under `/n/local`; the plumber refusing a message nothing can receive |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

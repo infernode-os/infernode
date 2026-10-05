@@ -1,0 +1,29 @@
+# plan9port plumbing rules: plumbed files and directories go to
+# InferNode's Xenith (tools/xen). Include this from ~/lib/plumbing
+# before `include basic`, which would otherwise send them to acme:
+#
+#	include /path/to/infernode/tools/xen.plumbing
+#	include basic
+#
+# A running xen listens on the xenith port (hostplumb(1)); with none
+# running, the plumber starts one on the file.
+# `xen` must be on the plumber's PATH.
+
+include fileaddr
+
+# existing files, possibly tagged by an address
+type is text
+data matches '([.a-zA-Z¡-￿0-9_/\-@]*[a-zA-Z¡-￿0-9_/\-])('$addr')?'
+arg isfile	$1
+data set	$file
+attr add	addr=$3
+plumb to xenith
+plumb client xen $file
+
+# existing directories
+type is text
+data matches '[.a-zA-Z¡-￿0-9_/\-@]+'
+arg isdir	$0
+data set	$dir
+plumb to xenith
+plumb client xen $dir

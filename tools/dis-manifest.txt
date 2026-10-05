@@ -248,6 +248,7 @@ dis/grid/regstyxlisten.dis
 dis/gunzip.dis
 dis/gzip.dis
 dis/history.dis
+dis/hostplumb.dis
 dis/idea.dis
 dis/import.dis
 dis/install/applylog.dis
@@ -736,6 +737,7 @@ dis/tests/gpu_test.dis
 dis/tests/handshake_fuzz_test.dis
 dis/tests/hello_test.dis
 dis/tests/hid_test.dis
+dis/tests/hostplumb_test.dis
 dis/tests/html_test.dis
 dis/tests/imap_test.dis
 dis/tests/imgload_test.dis

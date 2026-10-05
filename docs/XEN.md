@@ -44,7 +44,8 @@ refused.
   output goes to `$TMPDIR/xen.log`. With `-w` it runs in the
   foreground and returns when the editor is left, so it can be used as
   `EDITOR='xen -w'`.
-- Each invocation is a separate instance.
+- Each `xen` invocation is a separate instance. To open files in one
+  that is already running, plumb them (below).
 - Xenith's tag line cuts a file name at its first space (as Inferno's
   acme does); sam shows such names whole.
 
@@ -56,6 +57,43 @@ refused.
 | `XEN_LOG` | output of a detached instance | `$TMPDIR/xen.log` |
 
 sam's colours follow the Lucifer theme rather than `XEN_THEME`.
+
+## Plumbing
+
+Inside Xenith, plumbing works as in acme: button 3 (Cmd+click) on a file
+name, `name:42`, a directory or `ls(1)` opens it; `plumb` run from a tag
+does the same. `xen` starts a plumber for this, with the rules in
+`lib/xen/plumbing`. sam does not plumb.
+
+**From the host, with plan9port.** A running Xenith also listens on a
+`xenith` port of plan9port's plumber, so `plumb file` in a host terminal
+opens the file in it, as plan9port's acme would. Set it up once:
+
+```sh
+# ~/lib/plumbing (plan9port's rules file)
+include /path/to/infernode/tools/xen.plumbing
+include basic
+```
+
+and run plan9port's `plumber` (from your shell start-up, say). Then:
+
+```sh
+plumb foo.c          # opens in the running Xenith
+plumb foo.c:42       # at line 42
+plumb .              # a directory
+```
+
+With no Xenith running, the plumber starts `xen` on the file (so `xen`
+must be on the plumber's `PATH`). The rules come before `include basic`,
+so plumbed files go to Xenith instead of plan9port's acme; leave the
+include out to keep acme.
+
+How it works: `xen` finds plan9port's `9p` on the host and runs
+`9p read plumb/xenith` through `os(1)`, piping it to `hostplumb(1)`,
+which places host paths under `/n/local` and plumbs each message inside
+InferNode. The host side of that pipe ends when the emulator does.
+Every running Xenith reads the port, so with two running, a plumbed file
+opens in both.
 
 ## For agents
 

@@ -97,6 +97,7 @@ TARG=\
 	gunzip.dis\
 	gzip.dis\
 	history.dis\
+	hostplumb.dis\
 	idea.dis\
 	import.dis\
 	iostats.dis\

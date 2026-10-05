@@ -162,6 +162,23 @@ for face in go gomono serif; do
         fi
     done
 done
+# and the styles Render sets with (go.bold.14.font and so on)
+for face in go.medium go.bold go.italic go.bolditalic; do
+    for sz in 14 16 18 22 28 32 36 44; do
+        fontfile="$face.$sz.font"
+        if [ ! -f "$COMBINED_DIR/$fontfile" ]; then
+            fail "$fontfile missing from fonts/combined/"
+            continue
+        fi
+        missing=$(sed 1d "$COMBINED_DIR/$fontfile" | awk -F'\t' '{print $NF}' | sort -u |
+            while read -r sub; do [ -f "$COMBINED_DIR/$sub" ] || echo "$sub"; done)
+        if [ -z "$missing" ]; then
+            pass "$fontfile: all subfonts present"
+        else
+            fail "$fontfile: missing $(echo $missing)"
+        fi
+    done
+done
 
 # ---------------------------------------------------------------
 # Part 3: Key modules should reference combined fonts

@@ -83,7 +83,6 @@ WmLogon: module
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-IMGPATH:  con "/lib/lucifer/login-screen.png";
 BODYFONT: con "/fonts/combined/unicode.sans.14.font";
 SMALLFONT: con "/fonts/combined/unicode.sans.12.font";
 FIELDW:   con 300;
@@ -155,7 +154,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	outcome = nil;
 
 	# Load brand image once (reloading per-redraw can fail under resource pressure)
-	logo_g = loadpng(IMGPATH);
+	logo_g = loadpng(logopath());
 
 	# Brief delay for display to settle (prevents blank-screen glitch
 	# when the display is still initializing on fast startup)
@@ -1083,6 +1082,23 @@ brandcopyright(): string
 	if(c == nil)
 		return "© 2026 InferNode.io";
 	return c;
+}
+
+# The login picture: the theme's own (login-screen-<theme>.png, the
+# same artwork in the colour of its toolbar logo) if it has one, else
+# Brimstone's.
+logopath(): string
+{
+	path := "/lib/lucifer/login-screen.png";
+	name := rf("/lib/lucifer/theme/current");
+	if(name != nil && name != "brimstone"){
+		tpath := "/lib/lucifer/login-screen-" + name + ".png";
+		if((fd := sys->open(tpath, Sys->OREAD)) != nil){
+			fd = nil;
+			path = tpath;
+		}
+	}
+	return path;
 }
 
 rf(name: string): string

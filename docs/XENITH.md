@@ -88,7 +88,8 @@ session only. `tools/xen` starts Xenith pinned to `xenith`, the dark
 theme: Xenith's original Catppuccin Mocha, corrected against the reading
 research (dark grey behind off-white, every colour read as text at 7:1
 or better, selections bright enough to see with the text on them still
-at body contrast; the file's comments give the numbers and sources).
+at body contrast; [THEME-RESEARCH.md](THEME-RESEARCH.md) gives the
+evidence, the numbers and the sources).
 `glenda` is Plan 9's own colours, acme's to the pixel, and the light
 theme to prefer; `-t plan9` and `-t acme` name it too.
 

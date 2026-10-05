@@ -5,7 +5,8 @@
 # also pins a stand-alone Xenith to it. The xenith-* keys at the end set
 # Xenith's colours by name, so nothing is left to the role mapping.
 #
-# The rules, and where they come from:
+# The rules, and where they come from (docs/THEME-RESEARCH.md has the
+# evidence and the full references):
 #  - Readability comes from luminance contrast, not hue (Legge 1990;
 #    Knoblauch 1991), and it levels off well short of the maximum
 #    (Legge, Rubin & Luebker 1987). So: dark grey, not black, behind

@@ -8,10 +8,16 @@ Xenith : module {
 	M_RBUT : con 4;
 	M_TBS : con 8;
 	M_PLUMB : con 16;
-	M_QUIT : con 32;
-	M_HELP : con 512;	# was 64, conflicts with SDL3 scroll-right
-	M_RESIZE : con 128;
 	M_DOUBLE : con 256;
+	# Quit, help and resize are sent down the mouse channel with the
+	# pointer's own events, so they must not share a bit with any
+	# button: the emulator sends 8 and 16 for the wheel, 32 and 64 for
+	# scrolling left and right (which a trackpad does with every
+	# vertical scroll), and 256 for a double click. M_QUIT was 32, and
+	# scrolling quit the editor.
+	M_QUIT : con 1<<16;
+	M_HELP : con 1<<17;
+	M_RESIZE : con 1<<18;
 
 	textcols, tagcols : array of ref Draw->Image;
 	but2col, but3col, but2colt, but3colt : ref Draw->Image;

@@ -1243,7 +1243,19 @@ isolateenv(): string
 	return nil;
 }
 
-asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: string)
+settoolresult(c: ref Fid, ti: ref ToolInfo, result: string)
+{
+	b := array of byte result;
+	# The writer's fid owns the authoritative result.  ti.result remains the
+	# compatibility fallback for clients that close after writing and reopen
+	# the tool for reading, but concurrent ORDWR clients must never consume
+	# one another's replies.
+	c.data = b;
+	ti.result = b;
+}
+
+asyncexec(srv: ref Styxserver, tag: int, count: int, c: ref Fid,
+	ti: ref ToolInfo, data: string)
 {
 	# The trusted startup manifest needs a restricted namespace in which .ns
 	# remains writable. Finish that one-time probe before model-facing workers
@@ -1261,14 +1273,14 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	}
 	mypid := sys->pctl(Sys->FORKNS, nil);
 	if(mypid < 0) {
-		ti.result = array of byte "error: cannot fork namespace";
+		settoolresult(c, ti, "error: cannot fork namespace");
 		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
 		releasetaskcreate(locked);
 		return;
 	}
 	enverr := isolateenv();
 	if(enverr != nil) {
-		ti.result = array of byte ("error: " + enverr);
+		settoolresult(c, ti, "error: " + enverr);
 		srv.reply(ref Rmsg.Error(tag, "cannot isolate tool environment"));
 		cleanupchan <-= mypid;
 		releasetaskcreate(locked);
@@ -1282,7 +1294,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
-		ti.result = array of byte "error: cannot disable device attachment";
+		settoolresult(c, ti, "error: cannot disable device attachment");
 		srv.reply(ref Rmsg.Error(tag, "cannot disable device attachment"));
 		releasetaskcreate(locked);
 		return;
@@ -1295,7 +1307,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	# (not in the safe list) and the bind would fail silently, leaving
 	# /tool pointing to the parent instance (wrong activity ID).
 	if(mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0) {
-		ti.result = array of byte "error: cannot bind activity tool service";
+		settoolresult(c, ti, "error: cannot bind activity tool service");
 		srv.reply(ref Rmsg.Error(tag, "cannot bind activity tool service"));
 		releasetaskcreate(locked);
 		return;
@@ -1304,7 +1316,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	if(!locked)
 		nserr = applynsrestriction(ti.name);
 	if(nserr != nil) {
-		ti.result = array of byte ("error: namespace restriction failed: " + nserr);
+		settoolresult(c, ti, "error: namespace restriction failed: " + nserr);
 		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
 		cleanupchan <-= mypid;
 		releasetaskcreate(locked);
@@ -1312,7 +1324,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, data: str
 	}
 	result := exectool(ti.name, data);
 	# Assign result before replying so it is visible for subsequent reads.
-	ti.result = array of byte result;
+	settoolresult(c, ti, result);
 	srv.reply(ref Rmsg.Write(tag, count));
 	releasetaskcreate(locked);
 	# Hand this invocation's shadow dirs to the cleanup goroutine.
@@ -2001,9 +2013,13 @@ Serve:
 					Qtool_dir =>
 						srv.read(m);  # directory read via navigator
 					Qtool_ctl or Qtool_run =>
-						if(ti.result == nil)
-							ti.result = array of byte "error: no result (write arguments first)";
-						srv.reply(styxservers->readbytes(m, ti.result));
+						result := c.data;
+						if(result == nil) {
+							if(ti.result == nil)
+								ti.result = array of byte "error: no result (write arguments first)";
+							result = ti.result;
+						}
+						srv.reply(styxservers->readbytes(m, result));
 					Qtool_doc =>
 						doc := gettooldoc(ti.name);
 						srv.reply(styxservers->readbytes(m, array of byte doc));
@@ -2188,7 +2204,7 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 						break;
 					}
-					spawn asyncexec(srv, m.tag, len m.data, ti, data);
+					spawn asyncexec(srv, m.tag, len m.data, c, ti, data);
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				}

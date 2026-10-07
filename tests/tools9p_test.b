@@ -507,6 +507,55 @@ testNoResultBeforeWrite(t: ref T)
 	t.assert(len msg >= 0, "reading before write does not crash the server");
 }
 
+# Each ORDWR fid owns the result of the request written through it.  Keeping
+# only one last-result buffer per tool made batched calls race: after two
+# writes, both fids could read the second call's result.
+testFidScopedResults(t: ref T)
+{
+	if(!hastool()) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	tools := readfile(TOOLMNT + "/tools");
+	if(!strcontains(tools, "read")) {
+		t.skip("read tool is not active");
+		return;
+	}
+
+	path := TOOLMNT + "/read/ctl";
+	a := sys->open(path, Sys->ORDWR);
+	b := sys->open(path, Sys->ORDWR);
+	if(a == nil || b == nil) {
+		t.error("cannot open two read-tool fids");
+		return;
+	}
+
+	ab := array of byte "/lib/veltro/tools/read.txt";
+	bb := array of byte "/lib/veltro/tools/list.txt";
+	if(sys->write(a, ab, len ab) != len ab ||
+	   sys->write(b, bb, len bb) != len bb) {
+		t.error("tool writes failed");
+		return;
+	}
+
+	buf := array[8192] of byte;
+	sys->seek(a, big 0, Sys->SEEKSTART);
+	n := sys->read(a, buf, len buf);
+	ar := "";
+	if(n > 0)
+		ar = string buf[0:n];
+	sys->seek(b, big 0, Sys->SEEKSTART);
+	n = sys->read(b, buf, len buf);
+	br := "";
+	if(n > 0)
+		br = string buf[0:n];
+
+	t.assert(strcontains(ar, "read - Read file contents"),
+		"first fid retains the first request's result");
+	t.assert(strcontains(br, "list - List directory contents"),
+		"second fid retains the second request's result");
+}
+
 # Test 9: /tool/paths is readable (may be empty)
 testPathsReadable(t: ref T)
 {
@@ -621,6 +670,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ReadToolExec",          testReadToolExec);
 	run("ListToolExec",          testListToolExec);
 	run("NoResultBeforeWrite",   testNoResultBeforeWrite);
+	run("FidScopedResults",      testFidScopedResults);
 	run("PathsReadable",         testPathsReadable);
 	run("MetaReadable",          testMetaReadable);
 	run("InactiveToolNotPresent",testInactiveToolNotPresent);

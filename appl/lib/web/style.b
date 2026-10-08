@@ -2713,8 +2713,8 @@ unit(n: real, u: string, ctx: ref Ctx): (int, real)
 	"ic" => return (1, n*ctx.fs);
 	"lh" => return (1, n*ctx.lh);
 	"rlh" => return (1, n*ctx.rootfs*1.2);
-	"vw" or "svw" or "lvw" or "dvw" or "cqw" or "cqi" => return (1, n*real ctx.env.width/100.0);
-	"vh" or "svh" or "lvh" or "dvh" or "cqh" or "cqb" => return (1, n*real ctx.env.height/100.0);
+	"vw" or "svw" or "lvw" or "dvw" or "vi" or "svi" or "lvi" or "dvi" or "cqw" or "cqi" => return (1, n*real ctx.env.width/100.0);	# vi: the inline axis, horizontal here
+	"vh" or "svh" or "lvh" or "dvh" or "vb" or "svb" or "lvb" or "dvb" or "cqh" or "cqb" => return (1, n*real ctx.env.height/100.0);
 	"vmin" or "svmin" or "lvmin" or "dvmin" or "cqmin" =>
 		m := ctx.env.width;
 		if(ctx.env.height < m)

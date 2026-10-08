@@ -1468,23 +1468,33 @@ dotsegs(p: string): string
 		q = p[e:];
 		p = p[0:e];
 	}
-	(nil, segs) := sys->tokenize(p, "/");
+	# RFC 3986 §5.2.4; an empty segment is a segment (a//b stays)
+	if(p == "" || p[0] != '/')
+		p = "/" + p;
 	out: list of string;
-	for(; segs != nil; segs = tl segs)
-		case hd segs {
+	s := 1;
+	for(i := 1; i <= len p; i++) {
+		if(i < len p && p[i] != '/')
+			continue;
+		seg := p[s:i];
+		last := i == len p;
+		s = i + 1;
+		case seg {
 		"." =>
-			;
+			if(last)
+				out = "" :: out;
 		".." =>
 			if(out != nil)
 				out = tl out;
+			if(last)
+				out = "" :: out;
 		* =>
-			out = hd segs :: out;
+			out = seg :: out;
 		}
+	}
 	r := "";
 	for(; out != nil; out = tl out)
 		r = "/" + hd out + r;
-	if(len p > 1 && p[len p - 1] == '/' || len p > 0 && (suffix(p, "/.") || suffix(p, "/..")))
-		r += "/";
 	if(r == "")
 		r = "/";
 	return r + q;

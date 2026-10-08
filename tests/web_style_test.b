@@ -441,7 +441,9 @@ testURLs(t: ref T)
 		("/g", "http://a/g"), ("//g", "http://g"), ("?y", "http://a/b/c/d;p?y"),
 		("g?y", "http://a/b/c/g?y"), ("#s", "http://a/b/c/d;p?q#s"), ("../g", "http://a/b/g"),
 		("../..", "http://a/"), ("../../g", "http://a/g"), ("https://x/y", "https://x/y"),
-		("data:image/png;base64,AA", "data:image/png;base64,AA")}; l != nil; l = tl l) {
+		("data:image/png;base64,AA", "data:image/png;base64,AA"),
+		(".", "http://a/b/c/"), ("..", "http://a/b/"), ("../../../g", "http://a/g"),
+		("g/./h/../i", "http://a/b/c/g/i"), ("/https://x/y", "http://a/https://x/y")}; l != nil; l = tl l) {
 		(r, want) := hd l;
 		t.assertseq(style->resolveurl(b, r), want, r);
 	}

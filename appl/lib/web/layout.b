@@ -11497,18 +11497,39 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	for(l := layers; l != nil; l = tl l)
 		if((hd l).z < 0)
 			paintctx(dst, (hd l).box, (hd l).o, layerclip(inner, hd l), canvasbg);
-	if(rectok(inner)) {
-		oclip := dst.clipr;
-		dst.clipr = inner;
-		paintcontent(dst, b, r, inner, canvasbg);
-		dst.clipr = oclip;
-	}
+	clippedcontent(dst, b, r, inner, clip, canvasbg);
 	for(l = layers; l != nil; l = tl l)
 		if((hd l).z >= 0)
 			paintctx(dst, (hd l).box, (hd l).o, layerclip(inner, hd l), canvasbg);
 	paintoutline(dst, b, r, clip);
 	if(st.translated)
 		intransform--;
+}
+
+# b's content within inner, what clips it.  An overflow clip with
+# rounded corners clips to the padding box's curve (Backgrounds 3
+# §5.3): the content is painted into a layer that comes through it (a
+# card's image under border-radius and overflow: hidden).
+clippedcontent(dst: ref Image, b: ref Box, r, inner, clip: Rect, canvasbg: ref Box)
+{
+	if(!rectok(inner))
+		return;
+	if(!inner.eq(clip) && hasradius(b) && !textmask) {
+		layer := display.newimage(inner, Draw->RGBA32, 0, Draw->Transparent);
+		if(layer != nil) {
+			layer.clipr = inner;
+			paintcontent(layer, b, r, inner, canvasbg);
+			(rtl, rtr, rbr, rbl) := radii(b);
+			pr := Rect((r.min.x + b.bl, r.min.y + b.bt), (r.max.x - b.br, r.max.y - b.bb));
+			roundeddraw(dst, inner, layer, inner.min, rrect(pr, innerradius(rtl, b.bl, b.bt), innerradius(rtr, b.br, b.bt),
+				innerradius(rbr, b.br, b.bb), innerradius(rbl, b.bl, b.bb)));
+			return;
+		}
+	}
+	oclip := dst.clipr;
+	dst.clipr = inner;
+	paintcontent(dst, b, r, inner, canvasbg);
+	dst.clipr = oclip;
 }
 
 intransform := 0;	# painting inside a transformed box: fixed backgrounds attach to it, not the viewport
@@ -12023,12 +12044,7 @@ paintflow(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	if(st.visibility == Style->Vvisible)
 		paintself(dst, b, r, canvasbg);
 	inner := innerclip(b, r, clip);
-	if(rectok(inner)) {
-		oclip := dst.clipr;
-		dst.clipr = inner;
-		paintcontent(dst, b, r, inner, canvasbg);
-		dst.clipr = oclip;
-	}
+	clippedcontent(dst, b, r, inner, clip, canvasbg);
 	paintoutline(dst, b, r, clip);
 }
 

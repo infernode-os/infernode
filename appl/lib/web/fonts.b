@@ -305,10 +305,30 @@ Typeface.kernpair(f: self ref Typeface, a, b: int): real
 
 Typeface.xheight(f: self ref Typeface): real
 {
-	(o, g) := glyph(f, 'x');
-	if(o != nil && (y := o.ymax(g)) > 0)
+	# the first available font's (Values 4 §6.1.1): the first whose
+	# unicode-range has the space (Fonts 4 §5.2), x or no x
+	o := firstface(f);
+	if(o != nil && (g := o.lookup('x')) >= 0 && (y := o.ymax(g)) > 0)
 		return real y * f.size / real o.upem;
+	if(o == nil) {
+		(xo, xg) := glyph(f, 'x');
+		if(xo != nil && (y := xo.ymax(xg)) > 0)
+			return real y * f.size / real xo.upem;
+	}
 	return f.size / 2.0;	# CSS's fallback: 0.5em
+}
+
+firstface(f: ref Typeface): ref OutlineFont->Face
+{
+	for(; f != nil; f = f.next) {
+		if(f.parts != nil) {
+			for(i := 0; i < len f.parts; i++)
+				if(inranges(f.parts[i].ranges, ' '))
+					return f.parts[i].outline;
+		} else if(f.outline != nil)
+			return f.outline;
+	}
+	return nil;
 }
 
 # A string shaped: one slot per glyph drawn.  Each character's face

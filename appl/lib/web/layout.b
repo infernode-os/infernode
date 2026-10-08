@@ -9621,7 +9621,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			tx := ln.x;
 			if(ln.frags != nil && (hd ln.frags).kind == Ftext && (hd ln.frags).text == " " && collapsible((hd ln.frags).box.st))
 				tx = real (hd ln.frags).x;	# a trailing space goes at the line's end: the float may have its room
-			if(!ln.content || real floatwidth(it.box, cw, f.ch) <= real ln.avail - tx + 0.01) {
+			if(!ln.content || real floatwidth(it.box, cw, f.ch) + gluedafter(tl il) <= real ln.avail - tx + 0.01) {
 				# on this line: at its top, beside what is on it already
 				# (CSS 2.2 §9.5.1 rules 4 and 7)
 				oldleft := ln.left;
@@ -9961,6 +9961,25 @@ cjklang(l: string): int
 # inline boxes among them (a float or an absolute takes no room).  It
 # reaches to the farthest right edge: a negative margin at its end
 # does not pull the glyphs before it back in.
+# Inside nowrap text, what follows a float up to the next opportunity
+# is on this line whatever happens: the float has room beside it only
+# if that fits too (float-nowrap-9: the float goes after the line).
+gluedafter(il: list of ref Item): real
+{
+	for(l := il; l != nil; l = tl l)
+		case (hd l).kind {
+		Iword or Ispace =>
+			if((hd l).nowrap)
+				return segwidth(il);
+			return 0.0;
+		Iopen or Iclose =>
+			;
+		* =>
+			return 0.0;
+		}
+	return 0.0;
+}
+
 segwidth(il: list of ref Item): real
 {
 	w := 0.0;

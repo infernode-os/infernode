@@ -217,6 +217,8 @@ numeric(l: ref Lx): ref Tok
 
 identlike(l: ref Lx): ref Tok
 {
+	if((r := urange(l)) != nil)
+		return r;
 	s := name(l);
 	if(peek(l, 0) == '(') {
 		l.i++;
@@ -232,6 +234,45 @@ identlike(l: ref Lx): ref Tok
 		return tok(Kfunction, lower(s));
 	}
 	return tok(Kident, s);
+}
+
+# u+0000-00ff, u+4??: a unicode-range, as one identifier "u+0000-00ff".
+# As numbers and dimensions its digits are lost ("+0131" is 131,
+# "+1E00" is 1, "-00FF" is a dimension of unit "ff").  CSS Syntax now
+# re-reads the tokens' text instead (§7.1); without that text, taken
+# here, and only where it has a digit or "?", so that u+a, u+b (an
+# adjacent-sibling selector) stay as they are.
+urange(l: ref Lx): ref Tok
+{
+	c := peek(l, 0);
+	if(c != 'u' && c != 'U' || peek(l, 1) != '+')
+		return nil;
+	i := l.i + 2;
+	n := 0;
+	digit := 0;
+	while(i < len l.s && n < 6 && (ishex(l.s[i]) || l.s[i] == '?')) {
+		if(isdigit(l.s[i]) || l.s[i] == '?')
+			digit = 1;
+		i++;
+		n++;
+	}
+	if(n == 0)
+		return nil;
+	if(i + 1 < len l.s && l.s[i] == '-' && ishex(l.s[i+1])) {
+		i++;
+		m := 0;
+		while(i < len l.s && m < 6 && ishex(l.s[i])) {
+			if(isdigit(l.s[i]))
+				digit = 1;
+			i++;
+			m++;
+		}
+	}
+	if(!digit || i < len l.s && isname(l.s[i]))
+		return nil;
+	t := tok(Kident, lower(l.s[l.i:i]));
+	l.i = i;
+	return t;
 }
 
 url(l: ref Lx): ref Tok

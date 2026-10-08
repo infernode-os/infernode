@@ -335,7 +335,7 @@ event(e: string)
 		status("Loading " + rest + " ...");
 		tk->cmd(top, ".bar.reload configure -text {✕} -command {send act stop}");
 		tk->cmd(top, "update");
-	"done" =>
+	"done" or "error" =>
 		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
 		tk->cmd(top, ".bar.url delete 0 end");
 		tk->cmd(top, ".bar.url insert 0 " + tk->quote(sess.url));
@@ -349,11 +349,10 @@ event(e: string)
 		scrollto(sess.scroll);
 		rebuildcontrols();
 		redraw();
-		if(sess.pg != nil && sess.pg.errors != nil)
+		if(verb == "error")
+			status("Error: " + rest);	# the page shown says so too (browser.b's errorpage)
+		else if(sess.pg != nil && sess.pg.errors != nil)
 			status(sys->sprint("%s — %d %s failed", title, len sess.pg.errors, plural(len sess.pg.errors, "resource")));
-	"error" =>
-		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
-		status("Error: " + rest);
 	"stopped" =>
 		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
 		status("Stopped");

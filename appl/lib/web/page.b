@@ -75,8 +75,8 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 		(data, ctype, err, final) = webfs(url, method, reqctype, body);
 	else
 		(data, ctype, err, final) = fetchfinal(url);
-	if(err != nil && data == nil)
-		return (nil, err);
+	if(err != nil && len data == 0)
+		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
 	url = final;	# a redirected page's links are relative to where it is
 	svgsrc = nil;	# the previous page's SVG sources
 	charset := param(ctype, "charset");

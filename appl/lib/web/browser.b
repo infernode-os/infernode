@@ -226,12 +226,29 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 		pg = nil;
 		err = "internal error: " + e;
 	}
+	ep: ref Pg;
+	if(pg == nil) {
+		# a page saying so, where the page would have been
+		{
+			(ep, nil) = page->request(errorpage(url, err), "GET", nil, nil, s.width, s.height);
+		} exception {
+		"*" =>
+			ep = nil;
+		}
+	}
 	lock(s);
 	if(g != s.gen) {
 		unlock(s);
 		return;	# superseded or stopped
 	}
 	if(pg == nil) {
+		if(ep != nil) {
+			history(s, s.url, hist);
+			s.pg = ep;
+			s.url = url;	# so that reload tries it again
+			s.title = ep.title;
+			s.scroll = 0;
+		}
 		s.status = "error " + err;
 		unlock(s);
 		event(s, "error " + err);
@@ -322,6 +339,50 @@ refreshcontent(c: string): (int, string)
 isws(c: int): int
 {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+# The page shown for one that could not be fetched.
+errorpage(url, err: string): string
+{
+	h := "<!doctype html><title>Cannot load page</title>" +
+		"<body style='font-family: sans-serif; margin: 2em 3em; color: #333'>" +
+		"<h1 style='font-size: 1.4em; font-weight: normal'>Cannot load this page</h1>" +
+		"<p style='overflow-wrap: anywhere; color: #555'>" + htmlesc(url) + "</p>" +
+		"<p style='overflow-wrap: anywhere'>" + htmlesc(err) + "</p>";
+	if(contains(err, "invalid IP address") || contains(err, "cs: ") || contains(err, "/net/cs"))
+		h += "<p>The host name was not translated to an address: nothing is serving /net/cs " +
+			"(ndb/cs, and on a machine without a host system ndb/dns too).</p>";
+	return "data:text/html;charset=utf-8," + pctenc(h);
+}
+
+htmlesc(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++)
+		case s[i] {
+		'<' => r += "&lt;";
+		'>' => r += "&gt;";
+		'&' => r += "&amp;";
+		'\'' => r += "&#39;";
+		'"' => r += "&quot;";
+		* => r[len r] = s[i];
+		}
+	return r;
+}
+
+# percent-encode all but what a data: URL can carry plainly
+pctenc(s: string): string
+{
+	b := array of byte s;
+	r := "";
+	for(i := 0; i < len b; i++) {
+		c := int b[i];
+		if(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-' || c == '.' || c == ':' || c == ';' || c == '/' || c == '=' || c == ',')
+			r[len r] = c;
+		else
+			r += sys->sprint("%%%.2X", c);
+	}
+	return r;
 }
 
 # Make the element the fragment names the :target, and return its y.

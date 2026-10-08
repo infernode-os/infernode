@@ -303,6 +303,23 @@ testRefresh(t: ref T)
 	t.assertseq(rd("title"), "Page B\n", "B is showing");
 }
 
+# A page that cannot be fetched shows a page saying so, not a blank
+# one; the session keeps its URL to reload, and back leaves it.
+testUnreachable(t: ref T)
+{
+	before := chomp(rd("url"));
+	bad := DIR + "no-such-page.html";
+	e := nav(t, "open " + bad);
+	t.assert(prefix(e, "error "), "an error event: " + e);
+	t.assertseq(rd("url"), bad + "\n", "the URL that failed");
+	t.assertseq(rd("title"), "Cannot load page\n", "the error page is showing");
+	text := rd("text");
+	t.log(text);
+	t.assert(contains(text, "Cannot load this page"), "it says so: " + text);
+	t.assert(contains(text, "no-such-page.html"), "and names the page");
+	t.assertseq(nav(t, "back"), "done " + before, "back to the page before");
+}
+
 testPosted(t: ref T)
 {
 	t.assertseq(postname, "fs", "posted as fs");
@@ -368,6 +385,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Image", testImage);
 	run("Forms", testForms);
 	run("Refresh", testRefresh);
+	run("Unreachable", testUnreachable);
 	run("Posted", testPosted);
 
 	if(testing->summary(passed, failed, skipped) > 0)

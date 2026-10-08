@@ -1360,11 +1360,20 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		r := newbox(Kreplaced, inl, n, st);
 		r.iw = dimattr(b.d.attr(n, "width"), 300);
 		r.ih = dimattr(b.d.attr(n, "height"), 150);
-		if(b.d.attr(n, "width") == nil && b.d.attr(n, "height") == nil && (vb := viewbox(b.d.attr(n, "viewBox"))) != nil && vb[2] > 0.0 && vb[3] > 0.0) {
-			# no size of its own: its ratio is the viewBox's (SVG 2 §8.6),
-			# at the default 300 wide
-			r.iw = 300;
-			r.ih = ir(300.0 * vb[3] / vb[2]);
+		wa := b.d.attr(n, "width");
+		ha := b.d.attr(n, "height");
+		if((wa == nil || ha == nil) && (vb := viewbox(b.d.attr(n, "viewBox"))) != nil && vb[2] > 0.0 && vb[3] > 0.0) {
+			# a size it does not give follows the viewBox's ratio (SVG 2
+			# §8.6): from the one it gives, else at the default 300 wide
+			# (an icon with only height="24" was 300 wide)
+			if(wa == nil && ha != nil)
+				r.iw = ir(real r.ih * vb[2] / vb[3]);
+			else if(ha == nil && wa != nil)
+				r.ih = ir(real r.iw * vb[3] / vb[2]);
+			else {
+				r.iw = 300;
+				r.ih = ir(300.0 * vb[3] / vb[2]);
+			}
 		}
 		return r;
 	}

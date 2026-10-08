@@ -415,6 +415,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
 | `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
+| `fractals_zoombox_test.b` | wm/fractals' own canvas bindings, driven by a synthetic button-1 drag: the zoom rubber-band grows from the press point and is painted |
 | `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler |
 | `jit_bounds_test.b` | Negative and overlarge indices on arrays, strings and slices raise `array bounds error` from compiled code; `tests/host/jit_bounds_test.sh` runs it under `-c0` and `-c1` |
 | `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |

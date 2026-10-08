@@ -9986,6 +9986,14 @@ segwidth(il: list of ref Item): real
 				tailneg += x.w;
 		Ifloat or Iabs =>
 			;
+		Ispace =>
+			if(!x.nowrap)
+				return segend(w, pos, trail, tailneg);
+			# a space in nowrap text is no opportunity: the segment
+			# runs on to the next one ("Eva Marie Saint" whole)
+			pos += x.w;
+			trail = 0.0;
+			prev = nil;
 		* =>
 			return segend(w, pos, trail, tailneg);
 		}

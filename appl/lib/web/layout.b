@@ -11286,9 +11286,78 @@ hasimage(st: ref St): int
 	return 0;
 }
 
+# How far the page scrolls: the root's margin box, or further where its
+# content overflows it (Overflow 3 §2.2, scrollable overflow), as it
+# does when html and body are height: 100%.
 height(root: ref Box): int
 {
-	return root.y + root.h + root.mb;
+	if(root == hroot && laygen == hgen)
+		return hval;
+	h := root.y + root.h + root.mb;
+	if((e := overflowbottom(root, 0)) > h)
+		h = e;
+	(hroot, hgen, hval) = (root, laygen, h);
+	return h;
+}
+
+hroot: ref Box;	# the last answer, until the next lay()
+hgen := -1;
+hval := 0;
+
+# The bottom of b's border box, or of its descendants' if they reach
+# further and b does not clip them; oy is the y of b's parent's border box.
+overflowbottom(b: ref Box, oy: int): int
+{
+	if(b.st.position == Style->Pfixed)
+		return 0;	# placed in the viewport: scrolling does not reach it
+	y := oy + b.y;
+	m := y + b.h;
+	r := Rect((0, y), (b.w, m));
+	if(innerclip(b, r, noclip).max.y != noclip.max.y)
+		return m;
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(isabs(k) || k.kind == Ktext)
+			continue;	# from the pos list of its containing block
+		e: int;
+		if(k.kind == Kinline)
+			e = inlinefloatsbottom(k, y);
+		else if(k.inl)
+			continue;	# in the line boxes
+		else
+			e = overflowbottom(k, y);
+		if(e > m)
+			m = e;
+	}
+	for(pl := b.pos; pl != nil; pl = tl pl)
+		if((e := overflowbottom(hd pl, y)) > m)
+			m = e;
+	for(i = 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		if(y + ln.y + ln.h > m)
+			m = y + ln.y + ln.h;
+		for(j := 0; j < len ln.frags; j++)
+			if(ln.frags[j].kind == Fatomic && (e := overflowbottom(ln.frags[j].box, y)) > m)
+				m = e;
+	}
+	return m;
+}
+
+# floats inside an inline box are placed in its block (y)
+inlinefloatsbottom(b: ref Box, y: int): int
+{
+	m := 0;
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		e := 0;
+		if(k.kind == Kinline)
+			e = inlinefloatsbottom(k, y);
+		else if(isfloat(k) && !isabs(k))
+			e = overflowbottom(k, y);
+		if(e > m)
+			m = e;
+	}
+	return m;
 }
 
 viewport: Rect;	# being painted: what background-attachment: fixed is relative to

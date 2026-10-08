@@ -8017,6 +8017,8 @@ intrinsic1(b: ref Box): (int, int)
 		# a percentage height resolves against a definite containing
 		# block height and transfers through the ratio (Sizing 3 §5.2.1)
 		(w, nil) := replacedsize(b, -1, pcth);
+		if(truereplaced(b) && b != nowidth && (st.width.kind == Style->Lpx && st.width.pct != 0.0 || st.maxwidth.kind == Style->Lpx && st.maxwidth.pct != 0.0))
+			return (ex, w + ex);	# compressible: a percentage width's min-content contribution is zero (Sizing 3 §5.2.2), so an img { width: 100% } does not hold a grid column at its natural width (bbc.com/news); not when measured for a flex item's automatic minimum, its content size (flex-aspect-ratio-img-row-017)
 		return (w + ex, w + ex);
 	}
 	if(st.aspect > 0.0 && st.height.kind == Style->Lpx && st.height.pct == 0.0 && b != noratio) {

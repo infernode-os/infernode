@@ -266,6 +266,9 @@ Style: module
 		mask:	array of ref Bg;	# mask layers (Masking 1 §6): the same shape as background layers
 		svgfill, svgstroke:	string;	# fill and stroke for an inline svg (inherited): none, currentcolor, #rrggbb or url(...); nil when not set
 		dark:	int;	# color-scheme comes out dark (inherited): light-dark() takes its second colour
+		fontvars:	list of (string, real);	# font-variation-settings: (axis tag, value), in order; nil for normal (inherited)
+		stretch:	real;	# font-stretch (font-width), a percentage (inherited)
+		slant:	real;	# font-style: oblique's angle, degrees (inherited)
 
 		new:	fn(): ref St;		# initial values
 	};

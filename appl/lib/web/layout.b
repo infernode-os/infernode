@@ -11295,7 +11295,12 @@ face(st: ref St): ref Typeface
 	for(l := faces[h]; l != nil; l = tl l)
 		if((hd l).t0 == st)
 			return (hd l).t1;
-	f := fonts->face(st.family, st.weight, st.fontstyle != Style->FSnormal, st.fontsize);
+	fstyle := 0;
+	case st.fontstyle {
+	Style->FSitalic =>	fstyle = 1;
+	Style->FSoblique =>	fstyle = 2;
+	}
+	f := fonts->facevar(st.family, st.weight, fstyle, st.slant, st.stretch, st.fontsize, st.fontvars);
 	if(f != nil && st.nokern) {
 		f = ref *f;
 		f.nokern = 1;

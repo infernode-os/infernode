@@ -126,6 +126,12 @@ ahemloaded := 0;
 
 face(families: list of string, weight, italic: int, size: real): ref Typeface
 {
+	return facevar(families, weight, italic, 14.0, 100.0, size, nil);
+}
+
+facevar(families: list of string, weight, style: int, slant, stretch, size: real, vars: list of (string, real)): ref Typeface
+{
+	italic := style != 0;
 	if(size < 1.0)
 		size = 1.0;
 	if(!ahemloaded) {
@@ -140,7 +146,7 @@ face(families: list of string, weight, italic: int, size: real): ref Typeface
 	# the first family this document has downloaded, then what stands
 	# in for the rest
 	for(l := families; l != nil; l = tl l) {
-		parts := webparts(hd l, weight, italic);
+		parts := webparts(hd l, weight, style, slant, stretch, vars);
 		if(parts == nil)
 			continue;
 		# what stands in for the characters this family lacks is part
@@ -561,9 +567,10 @@ Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: re
 
 Web: adt {
 	family:	string;
-	weight:	int;
+	weight:	int;	# for matching: the weight, or the range's own nearest
 	italic:	int;
 	part:	ref Part;
+	desc:	ref Desc;
 };
 
 webfaces: list of ref Web;
@@ -616,7 +623,18 @@ addface(family: string, weight, italic: int, ranges: array of int, data: array o
 	(o, err) := ofont->open(data, "ttf");
 	if(o == nil)
 		return "cannot read the font: " + err;
-	webfaces = ref Web(family, weight, italic, ref Part(o, ranges)) :: webfaces;
+	webfaces = ref Web(family, weight, italic, ref Part(o, ranges), nil) :: webfaces;
+	return nil;
+}
+
+addfacedesc(family: string, d: ref Desc, ranges: array of int, data: array of byte): string
+{
+	w := 400;
+	if(d.wmin > 0)
+		w = d.wmin;
+	if((err := addface(family, w, d.style > 0, ranges, data)) != nil)
+		return err;
+	(hd webfaces).desc = d;
 	return nil;
 }
 
@@ -626,23 +644,53 @@ addface(family: string, weight, italic: int, ranges: array of int, data: array o
 # Every face of that weight and slant comes, one per unicode-range.
 # the faces chosen for a family, weight and style, made once so that
 # the Typeface cache can compare them
-partsmade: list of (string, int, int, array of ref Part);
+partsmade: list of (string, string, array of ref Part);
 
-webparts(family: string, weight, italic: int): array of ref Part
+webparts(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): array of ref Part
 {
+	vk := sys->sprint("%d %d %g %g ", weight, style, slant, stretch);
+	for(vl := vars; vl != nil; vl = tl vl)
+		vk += sys->sprint("%s=%g,", (hd vl).t0, (hd vl).t1);
 	for(pl := partsmade; pl != nil; pl = tl pl) {
-		(pf, pw, pi, pa) := hd pl;
-		if(pf == family && pw == weight && pi == italic)
+		(pf, pv, pa) := hd pl;
+		if(pf == family && pv == vk)
 			return pa;
 	}
-	a := webparts1(family, weight, italic);
+	a := webparts1(family, weight, style, slant, stretch, vars);
 	if(a != nil)
-		partsmade = (family, weight, italic, a) :: partsmade;
+		partsmade = (family, vk, a) :: partsmade;
 	return a;
 }
 
-webparts1(family: string, weight, italic: int): array of ref Part
+# the weight a face is matched by: a range's nearest to the one wanted
+faceweight(w: ref Web, weight: int): int
 {
+	d := w.desc;
+	if(d != nil && d.wmax <= 0) {
+		# auto: a variable face's own wght range
+		for(al := ofont->axes(w.part.outline); al != nil; al = tl al) {
+			(tag, mn, nil, mx) := hd al;
+			if(tag == "wght") {
+				if(real weight < mn)
+					return int mn;
+				if(real weight > mx)
+					return int mx;
+				return weight;
+			}
+		}
+	}
+	if(d == nil || d.wmax <= 0)
+		return w.weight;
+	if(weight < d.wmin)
+		return d.wmin;
+	if(weight > d.wmax)
+		return d.wmax;
+	return weight;
+}
+
+webparts1(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): array of ref Part
+{
+	italic := style != 0;
 	best := -1;
 	bestit := -1;
 	for(l := webfaces; l != nil; l = tl l) {
@@ -650,8 +698,9 @@ webparts1(family: string, weight, italic: int): array of ref Part
 		if(w.family != family)
 			continue;
 		it := w.italic == italic;
-		if(bestit < 0 || it && !bestit || it == bestit && closer(weight, w.weight, best)) {
-			best = w.weight;
+		fw := faceweight(w, weight);
+		if(bestit < 0 || it && !bestit || it == bestit && closer(weight, fw, best)) {
+			best = fw;
 			bestit = it;
 		}
 	}
@@ -660,8 +709,8 @@ webparts1(family: string, weight, italic: int): array of ref Part
 	r: list of ref Part;
 	for(l = webfaces; l != nil; l = tl l) {
 		w := hd l;
-		if(w.family == family && w.weight == best && (w.italic == italic) == bestit)
-			r = varied(w.part, weight) :: r;
+		if(w.family == family && faceweight(w, weight) == best && (w.italic == italic) == bestit)
+			r = varied(w, weight, style, slant, stretch, vars) :: r;
 	}
 	a := array[len r] of ref Part;
 	for(i := 0; r != nil; r = tl r)
@@ -672,12 +721,69 @@ webparts1(family: string, weight, italic: int): array of ref Part
 # A variable face (one with a wght axis) at the weight wanted: one
 # file serves every weight (github.com's Mona Sans, nasa.gov's Inter);
 # without this all of them were drawn at the default instance.
-varied(p: ref Part, weight: int): ref Part
+#
+# The axes take, in order (Fonts 4 §7.2; vary takes the last value an
+# axis is given): the weight, width and slant asked for, each within
+# what the @font-face rule says of the face; the rule's
+# font-variation-settings; the style's.
+varied(w: ref Web, weight, style: int, slant, stretch: real, vars: list of (string, real)): ref Part
 {
-	for(l := ofont->axes(p.outline); l != nil; l = tl l)
-		if((hd l).t0 == "wght")
-			return ref Part(ofont->vary(p.outline, ("wght", real weight) :: nil), p.ranges);
-	return p;
+	p := w.part;
+	axes := ofont->axes(p.outline);
+	if(axes == nil)
+		return p;
+	d := w.desc;
+	values: list of (string, real);
+	for(al := axes; al != nil; al = tl al) {
+		(tag, nil, nil, nil) := hd al;
+		case tag {
+		"wght" =>
+			values = ("wght", real faceweight(w, weight)) :: values;
+		"wdth" =>
+			x := stretch;
+			if(d != nil && d.smax > 0.0) {
+				if(x < d.smin) x = d.smin;
+				if(x > d.smax) x = d.smax;
+			}
+			values = ("wdth", x) :: values;
+		"slnt" =>
+			# oblique's angle, or italic's 14deg where the face has
+			# no ital axis: slnt is the negative of the angle
+			a := 0.0;
+			if(style == 2)
+				a = slant;
+			else if(style == 1 && !hasaxis(axes, "ital"))
+				a = 14.0;
+			if(d != nil && d.style == 2) {
+				if(a < d.amin) a = d.amin;
+				if(a > d.amax) a = d.amax;
+			} else if(d != nil && d.style >= 0)
+				a = 0.0;	# a normal or italic face does not slant by the axis
+			values = ("slnt", -a) :: values;
+		"ital" =>
+			it := 0.0;
+			if(style == 1 && (d == nil || d.style != 0))
+				it = 1.0;
+			values = ("ital", it) :: values;
+		}
+	}
+	if(d != nil)
+		for(dl := d.vars; dl != nil; dl = tl dl)
+			values = hd dl :: values;
+	for(; vars != nil; vars = tl vars)
+		values = hd vars :: values;
+	r: list of (string, real);
+	for(; values != nil; values = tl values)
+		r = hd values :: r;
+	return ref Part(ofont->vary(p.outline, r), p.ranges);
+}
+
+hasaxis(axes: list of (string, real, real, real), tag: string): int
+{
+	for(; axes != nil; axes = tl axes)
+		if((hd axes).t0 == tag)
+			return 1;
+	return 0;
 }
 
 # is weight w a better match for want than the best so far?

@@ -571,6 +571,7 @@ Fontsrc: adt {
 	weight, italic:	int;
 	ranges:	array of int;
 	url:	string;
+	desc:	ref Fonts->Desc;
 };
 
 # Download the faces @font-face rules describe that this document's
@@ -600,7 +601,7 @@ loadfonts(p: ref Pg)
 		f := hd keep;
 		(data, nil, err) := fetched(got, f.url);
 		if(err == nil)
-			err = fm->addface(f.family, f.weight, f.italic, f.ranges, data);
+			err = fm->addfacedesc(f.family, f.desc, f.ranges, data);
 		if(err != nil)
 			p.errors = f.url + ": " + err :: p.errors;
 	}
@@ -627,7 +628,7 @@ fontrules(p: ref Pg, rs: array of ref Css->Rule, base: string, acc: list of ref 
 
 fontface(decls: array of ref Css->Decl, base: string): ref Fontsrc
 {
-	f := ref Fontsrc(nil, 400, 0, nil, nil);
+	f := ref Fontsrc(nil, 400, 0, nil, nil, ref Fonts->Desc(0, 0, 0.0, 0.0, -1, 0.0, 0.0, nil));	# auto: the font's own ranges (Fonts 4 §4)
 	for(i := 0; i < len decls; i++) {
 		d := decls[i];
 		v := d.val;
@@ -645,18 +646,52 @@ fontface(decls: array of ref Css->Decl, base: string): ref Fontsrc
 				}
 			f.family = lower(f.family);
 		"font-weight" =>
-			for(j := 0; j < len v; j++)
-				if(v[j].kind == Css->Knumber) {
-					f.weight = int v[j].n;
-					break;
-				} else if(v[j].kind == Css->Kident) {
-					if(v[j].s == "bold")
-						f.weight = 700;
-					break;
-				}
+			# auto (the font's range), or one or two weights
+			(a, b, auto) := descrange(v, 400.0);
+			if(auto)
+				(f.desc.wmin, f.desc.wmax) = (0, 0);
+			else
+				(f.desc.wmin, f.desc.wmax) = (int a, int b);
+			f.weight = 400;
+			if(!auto)
+				f.weight = int a;
+		"font-stretch" or "font-width" =>
+			(a, b, auto) := descrange(v, 100.0);
+			if(auto)
+				(f.desc.smin, f.desc.smax) = (0.0, 0.0);
+			else
+				(f.desc.smin, f.desc.smax) = (a, b);
 		"font-style" =>
-			if(len v > 0 && v[0].kind == Css->Kident && (v[0].s == "italic" || v[0].s == "oblique"))
-				f.italic = 1;
+			# auto, normal, italic, or oblique [angle [angle]]
+			x := nows(v);
+			if(len x > 0 && x[0].kind == Css->Kident)
+				case lower(x[0].s) {
+				"auto" =>
+					f.desc.style = -1;
+				"normal" =>
+					f.desc.style = 0;
+				"italic" =>
+					f.desc.style = 1;
+					f.italic = 1;
+				"oblique" =>
+					f.desc.style = 2;
+					f.italic = 1;
+					(f.desc.amin, f.desc.amax) = (14.0, 14.0);
+					if(len x >= 2) {
+						f.desc.amin = degrees(x[1]);
+						f.desc.amax = f.desc.amin;
+					}
+					if(len x >= 3)
+						f.desc.amax = degrees(x[2]);
+				}
+		"font-variation-settings" =>
+			x := nows(v);
+			r: list of (string, real);
+			for(j := 0; j + 1 < len x; j += 3)
+				if(x[j].kind == Css->Kstring && x[j+1].kind == Css->Knumber)
+					r = (x[j].s, x[j+1].n) :: r;
+			for(; r != nil; r = tl r)
+				f.desc.vars = hd r :: f.desc.vars;
 		"unicode-range" =>
 			f.ranges = uranges(css->tostring(v));
 		"src" =>
@@ -666,6 +701,74 @@ fontface(decls: array of ref Css->Decl, base: string): ref Fontsrc
 	if(f.family == nil || f.family == "" || f.url == nil)
 		return nil;
 	return f;
+}
+
+# a descriptor's range: auto, one value or two (Fonts 4 §4.5), named
+# weights and widths as numbers
+descrange(v: array of ref Css->Tok, dflt: real): (real, real, int)
+{
+	x := nows(v);
+	n: list of real;
+	for(i := 0; i < len x; i++) {
+		t := x[i];
+		val := -1.0;
+		if(t.kind == Css->Knumber || t.kind == Css->Kpercent)
+			val = t.n;
+		else if(t.kind == Css->Kident)
+			case lower(t.s) {
+			"auto" =>
+				return (0.0, 0.0, 1);
+			"normal" =>	val = dflt;
+			"bold" =>	val = 700.0;
+			"ultra-condensed" =>	val = 50.0;
+			"extra-condensed" =>	val = 62.5;
+			"condensed" =>	val = 75.0;
+			"semi-condensed" =>	val = 87.5;
+			"semi-expanded" =>	val = 112.5;
+			"expanded" =>	val = 125.0;
+			"extra-expanded" =>	val = 150.0;
+			"ultra-expanded" =>	val = 200.0;
+			}
+		if(val >= 0.0)
+			n = val :: n;
+	}
+	case len n {
+	0 =>
+		return (dflt, dflt, 0);
+	1 =>
+		return (hd n, hd n, 0);
+	}
+	(b, a) := (hd n, hd tl n);
+	if(a > b)
+		(a, b) = (b, a);
+	return (a, b, 0);
+}
+
+degrees(t: ref Css->Tok): real
+{
+	if(t.kind != Css->Kdimension)
+		return 14.0;
+	case lower(t.s) {
+	"deg" =>	return t.n;
+	"rad" =>	return t.n * 180.0 / 3.14159265358979;
+	"grad" =>	return t.n * 0.9;
+	"turn" =>	return t.n * 360.0;
+	}
+	return 14.0;
+}
+
+nows(v: array of ref Css->Tok): array of ref Css->Tok
+{
+	n := 0;
+	for(i := 0; i < len v; i++)
+		if(v[i].kind != Css->Kws)
+			n++;
+	r := array[n] of ref Css->Tok;
+	n = 0;
+	for(i = 0; i < len v; i++)
+		if(v[i].kind != Css->Kws)
+			r[n++] = v[i];
+	return r;
 }
 
 # The first url() in src whose format we read; local() faces are not

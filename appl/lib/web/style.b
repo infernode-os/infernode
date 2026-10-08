@@ -1855,7 +1855,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0);
 }
 
 nextsid := 1;
@@ -1873,6 +1873,8 @@ inherit(p: ref St): ref St
 	s.fontsize = p.fontsize;
 	s.weight = p.weight;
 	s.fontstyle = p.fontstyle;
+	s.stretch = p.stretch;
+	s.slant = p.slant;
 	s.smallcaps = p.smallcaps;
 	s.lineheight = p.lineheight;
 	s.align = p.align;
@@ -1881,6 +1883,7 @@ inherit(p: ref St): ref St
 	s.transform = p.transform;
 	s.letterspacing = p.letterspacing;
 	s.nokern = p.nokern;
+	s.fontvars = p.fontvars;
 	s.wordspacing = p.wordspacing;
 	s.whitespace = p.whitespace;
 	s.breakall = p.breakall;
@@ -1933,7 +1936,7 @@ anon(parent: ref St, display: int): ref St
 isinherited(nm: string): int
 {
 	case nm {
-	"color" or "font-family" or "font-size" or "font-weight" or "font-style" or
+	"color" or "font-family" or "font-size" or "font-weight" or "font-style" or "font-stretch" or "font-width" or
 	"font-variant" or "font-variant-caps" or "line-height" or "text-align" or
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
@@ -1943,7 +1946,7 @@ isinherited(nm: string): int
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
 	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "fill" or "stroke" or
-	"font-kerning" or "font-feature-settings" =>
+	"font-kerning" or "font-feature-settings" or "font-variation-settings" =>
 		return 1;
 	}
 	return 0;
@@ -5288,11 +5291,44 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"italic" => st.fontstyle = FSitalic;
 		* =>
 			x := nows(v);
-			if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "oblique")
+			if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "oblique") {
+				# oblique [<angle>]: 14deg unless given (Fonts 4 §3.3)
+				a := 14.0;
+				if(len x >= 2) {
+					(ok, r) := angle(x[1:2], ctx);
+					if(!ok)
+						return 0;
+					a = r * 180.0 / Math->Pi;
+					if(a < -90.0 || a > 90.0)
+						return 0;
+				}
 				st.fontstyle = FSoblique;
-			else
+				st.slant = a;
+			} else
 				return 0;
 		}
+	"font-stretch" or "font-width" =>
+		x := nows(v);
+		if(len x != 1)
+			return 0;
+		w := -1.0;
+		if(x[0].kind == Kpercent && x[0].n >= 0.0)
+			w = x[0].n;
+		else if(x[0].kind == Kident)
+			case lower(x[0].s) {
+			"ultra-condensed" =>	w = 50.0;
+			"extra-condensed" =>	w = 62.5;
+			"condensed" =>	w = 75.0;
+			"semi-condensed" =>	w = 87.5;
+			"normal" =>	w = 100.0;
+			"semi-expanded" =>	w = 112.5;
+			"expanded" =>	w = 125.0;
+			"extra-expanded" =>	w = 150.0;
+			"ultra-expanded" =>	w = 200.0;
+			}
+		if(w < 0.0)
+			return 0;
+		st.stretch = w;
 	"font-variant" or "font-variant-caps" =>
 		case id {
 		"small-caps" or "all-small-caps" => st.smallcaps = 1;
@@ -5372,6 +5408,30 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.letterspacing = sp;
 		else
 			st.wordspacing = sp;
+	"font-variation-settings" =>
+		# normal, or "tag" number, ... (Fonts 4 §7.3); a tag given twice,
+		# the last
+		if(id == "normal") {
+			st.fontvars = nil;
+			return 1;
+		}
+		r: list of (string, real);
+		x := nows(v);
+		for(i := 0; i < len x; ) {
+			if(x[i].kind != Kstring || len x[i].s != 4 || i + 1 >= len x || x[i+1].kind != Knumber)
+				return 0;
+			r = (x[i].s, x[i+1].n) :: r;
+			i += 2;
+			if(i < len x) {
+				if(x[i].kind != Kcomma)
+					return 0;
+				i++;
+			}
+		}
+		fv: list of (string, real);
+		for(; r != nil; r = tl r)
+			fv = hd r :: fv;
+		st.fontvars = fv;
 	"font-kerning" =>
 		case id {
 		"none" => st.nokern = 1;
@@ -6360,7 +6420,10 @@ copyprop(d, s: ref St, nm: string)
 	"font-family" => d.family = s.family;
 	"font-size" => d.fontsize = s.fontsize;
 	"font-weight" => d.weight = s.weight;
-	"font-style" => d.fontstyle = s.fontstyle;
+	"font-style" =>
+		d.fontstyle = s.fontstyle;
+		d.slant = s.slant;
+	"font-stretch" or "font-width" => d.stretch = s.stretch;
 	"font-variant" or "font-variant-caps" => d.smallcaps = s.smallcaps;
 	"line-height" => d.lineheight = s.lineheight;
 	"text-align" => d.align = s.align;
@@ -6369,6 +6432,7 @@ copyprop(d, s: ref St, nm: string)
 	"text-transform" => d.transform = s.transform;
 	"letter-spacing" => d.letterspacing = s.letterspacing;
 	"font-kerning" or "font-feature-settings" => d.nokern = s.nokern;
+	"font-variation-settings" => d.fontvars = s.fontvars;
 	"word-spacing" => d.wordspacing = s.wordspacing;
 	"white-space" or "white-space-collapse" or "text-wrap-mode" => d.whitespace = s.whitespace;
 	"text-wrap" =>

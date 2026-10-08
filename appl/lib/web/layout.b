@@ -12297,9 +12297,40 @@ plainbackground(dst: ref Image, b: ref Box, r: Rect)
 		}
 		fillbox(dst, b, br, bcolor(st, st.bgcolor));	# currentcolor is the box's own colour (currentcolor-001)
 	}
+	if(hasradius(b) && hasimage(st)) {
+		# rounded corners clip the images too (Backgrounds 3 §5.3): drawn
+		# into a layer that comes through the rounded border box
+		(lr, ok) := dst.clipr.clip(r);
+		if(!ok || !rectok(lr))
+			return;
+		layer := display.newimage(lr, Draw->RGBA32, 0, Draw->Transparent);
+		if(layer != nil) {
+			for(i := len st.bg - 1; i >= 0; i--)
+				if(st.bg[i].img != nil)
+					paintbg(layer, b, r, st.bg[i]);
+			(rtl, rtr, rbr, rbl) := radii(b);
+			roundeddraw(dst, lr, layer, lr.min, rrect(r, rtl, rtr, rbr, rbl));
+			return;
+		}
+	}
 	for(i := len st.bg - 1; i >= 0; i--)
 		if(st.bg[i].img != nil)
 			paintbg(dst, b, r, st.bg[i]);
+}
+
+# src drawn into r of dst (sp at r.min) through the path's inside
+roundeddraw(dst: ref Image, r: Rect, src: ref Image, sp: Point, path: ref Path)
+{
+	(lr, ok) := dst.clipr.clip(r);
+	if(!ok || !rectok(lr))
+		return;
+	m := display.newimage(lr, Draw->GREY8, 0, Draw->Black);
+	if(m == nil) {
+		dst.draw(r, src, nil, sp);
+		return;
+	}
+	m.fillpath(path, 1, display.white, (0, 0));
+	dst.gendraw(lr, src, sp.add(lr.min.sub(r.min)), m, lr.min);
 }
 
 # border-image (Backgrounds 3 §6): the image is cut into nine parts by
@@ -13589,7 +13620,16 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 		img := b.img;
 		if(img.r.dx() != cr.dx() || img.r.dy() != cr.dy())
 			img = scale(img, cr.dx(), cr.dy());
-		if(img != nil)
+		if(img == nil)
+			return;
+		if(hasradius(b)) {
+			# clipped to the content box's curve: the corners' radii
+			# less the border and padding (Backgrounds 3 §5.3)
+			(rtl, rtr, rbr, rbl) := radii(b);
+			path := rrect(cr, innerradius(rtl, b.bl + b.pl, b.bt + b.pt), innerradius(rtr, b.br + b.pr, b.bt + b.pt),
+				innerradius(rbr, b.br + b.pr, b.bb + b.pb), innerradius(rbl, b.bl + b.pl, b.bb + b.pb));
+			roundeddraw(dst, cr, img, img.r.min, path);
+		} else
 			dst.draw(cr, img, nil, img.r.min);
 		return;
 	}

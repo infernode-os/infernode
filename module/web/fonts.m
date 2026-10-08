@@ -43,6 +43,10 @@ Fonts: module
 
 	face:	fn(family: list of string, weight, italic: int, size: real): ref Typeface;
 
+	# the face's average character width (OS/2 xAvgCharWidth) and the
+	# width of its bounding box, in pixels; 0 where the font has none
+	xmetrics:	fn(f: ref Typeface): (real, real);
+
 	# @font-face: register a downloaded face (TrueType, OpenType or WOFF;
 	# family lower case) for this module instance's documents.
 	addface:	fn(family: string, weight, italic: int, ranges: array of int, data: array of byte): string;

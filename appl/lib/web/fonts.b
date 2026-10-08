@@ -155,13 +155,30 @@ face(families: list of string, weight, italic: int, size: real): ref Typeface
 		o := parts[0].outline;
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
-		f := ref Typeface(o, size, asc, desc, asc + desc, 0.0, fallback(size), parts, nil, 0);
+		f := ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), parts, nil, 0);
 		f.next = next;
 		f.space = advance(f, ' ');
 		cache[h] = f :: cache[h];
 		return f;
 	}
 	return shipped(families, weight, italic, size);
+}
+
+# line-height: normal, as browsers have it: the ascent and descent
+# each rounded to whole pixels (DejaVu Sans at 13.333px: 12 + 3, not
+# 15.52 rounded to 16)
+normal(asc, desc: real): real
+{
+	return real (int asc + int desc);	# (int rounds)
+}
+
+xmetrics(f: ref Typeface): (real, real)
+{
+	if(f == nil || f.outline == nil || f.outline.upem <= 0)
+		return (0.0, 0.0);
+	(avg, bbox) := f.outline.xmetrics();
+	scale := f.size / real f.outline.upem;
+	return (real avg * scale, real bbox * scale);
 }
 
 shipped(families: list of string, weight, italic: int, size: real): ref Typeface
@@ -190,7 +207,7 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 	if(o != nil) {
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
-		f = ref Typeface(o, size, asc, desc, asc + desc, 0.0, fallback(size), nil, nil, 0);
+		f = ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), nil, nil, 0);
 	} else {
 		# no outline file: the bitmap fallback is the face
 		fb := fallback(size);

@@ -241,12 +241,143 @@ element(b: ref B, n: int): list of ref Box
 		if(hasblock)
 			return splitinline(box, kids);
 	}
+	if(st.display == Style->Dlistitem && kind == Kblock)
+		kids = placemarker(kids);
 	box.kids = fixkids(box, kids);
 	if((kind == Kblock || kind == Kcell) && (fs := b.c.firstletter[n]) != nil)
 		firstletter(box, fs);
 	if(kind == Kblock || kind == Kcell)
 		box.fl = b.c.firstline[n];
 	return box :: nil;
+}
+
+# An outside marker goes on the list item's first line (Lists 3 §3.1):
+# when the item's first in-flow content is a block, the marker goes in
+# the block that holds that line, as browsers place it, not on a line
+# of its own above (li > p).  shiftmarkers puts it back at the item's
+# own edge once laid out.
+placemarker(kids: list of ref Box): list of ref Box
+{
+	if(kids == nil || (hd kids).kind != Kmarker || (hd kids).st.listinside)
+		return kids;
+	m := hd kids;
+	for(l := tl kids; l != nil; l = tl l) {
+		k := hd l;
+		if(isoof(k) || k.kind == Ktext && isblankrun(k.text) && collapsible(k.st))
+			continue;
+		if(!isblocklevel(k))
+			return kids;
+		t := firstlinebox(k);
+		if(t == nil)
+			return kids;
+		a := array[len t.kids + 1] of ref Box;
+		a[0] = m;
+		a[1:] = t.kids;
+		t.kids = a;
+		return tl kids;
+	}
+	return kids;
+}
+
+# the block container whose first line is the first line of k, a block
+# in normal flow, if there is one; not inside a box with a formatting
+# context of its own
+firstlinebox(k: ref Box): ref Box
+{
+	if(k.kind != Kblock || k.inl || isoof(k) || k.st.overflowx != Style->Ovisible || k.st.overflowy != Style->Ovisible)
+		return nil;
+	for(i := 0; i < len k.kids; i++) {
+		j := k.kids[i];
+		if(isoof(j) || j.kind == Ktext && isblankrun(j.text) && collapsible(j.st))
+			continue;
+		if(isblocklevel(j))
+			return firstlinebox(j);
+		return k;
+	}
+	return nil;
+}
+
+# A line holding only an outside marker, in the anonymous block before
+# a list item's first block (one placemarker could not take the marker
+# into: a flex container, a box clipping its overflow), takes no room:
+# the marker belongs on that block's first line.
+markerline(b: ref Box, frags: array of ref Frag): int
+{
+	if(b.node != 0 || b.parent == nil || b.parent.st.display != Style->Dlistitem || len frags == 0)
+		return 0;
+	for(i := 0; i < len frags; i++)
+		if(frags[i].box == nil || frags[i].box.kind != Kmarker || frags[i].box.st.listinside)
+			return 0;
+	return nextblock(b) != nil;
+}
+
+# the in-flow block after b among its parent's children
+nextblock(b: ref Box): ref Box
+{
+	p := b.parent;
+	for(i := 0; i < len p.kids; i++)
+		if(p.kids[i] == b) {
+			for(j := i + 1; j < len p.kids; j++)
+				if(!isoof(p.kids[j]) && isblocklevel(p.kids[j]))
+					return p.kids[j];
+			break;
+		}
+	return nil;
+}
+
+# A marker placemarker moved into a descendant is laid out at that
+# block's edge; it belongs at its own list item's (the horizontal
+# offsets of the blocks between them taken back).
+shiftmarkers(b: ref Box)
+{
+	if(b.st.display == Style->Dlistitem && b.kind == Kblock && b.node != 0 && len b.kids > 0 &&
+	   (a := b.kids[0]).node == 0 && a.lines != nil && len a.lines > 0 && a.lines[0].h == 0 &&
+	   markerline(a, a.lines[0].frags)) {
+		# a marker line of no height: the marker goes to the next
+		# block's first baseline, or its top when it has none
+		nb := nextblock(a);
+		ln := a.lines[0];
+		for(i := 0; i < len ln.frags; i++) {
+			f := ln.frags[i];
+			asc := f.base - f.y;
+			(ok, by) := firstbaseline(nb);
+			if(!ok)
+				by = asc;
+			dy := nb.y - a.y + by - f.base;
+			f.y += dy;
+			f.base += dy;
+		}
+	} else if(b.st.display == Style->Dlistitem && b.kind == Kblock && b.node != 0) {
+		t := b;
+		dx := 0;
+		while(t.lines == nil) {
+			nt: ref Box;
+			for(i := 0; i < len t.kids; i++) {
+				k := t.kids[i];
+				if(!isoof(k) && isblocklevel(k)) {
+					nt = k;
+					break;
+				}
+			}
+			if(nt == nil)
+				break;
+			t = nt;
+			dx += t.x;
+		}
+		if(t != b && t.lines != nil && len t.lines > 0) {
+			ln := t.lines[0];
+			off := (b.bl + b.pl - dx) - (t.bl + t.pl);
+			if(b.st.dirrtl)
+				off = (b.w - b.br - b.pr - dx) - (t.w - t.br - t.pr);
+			for(i := 0; i < len ln.frags; i++) {
+				f := ln.frags[i];
+				if(f.box != nil && f.box.kind == Kmarker && f.box.node == b.node)
+					f.x += off;
+			}
+		}
+	}
+	for(i := 0; i < len b.kids; i++)
+		shiftmarkers(b.kids[i]);	# (absolutely positioned boxes are among their parent's kids too)
 }
 
 # The ::first-line style that applies to the first line of the block
@@ -1302,8 +1433,10 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 				r.text = b.d.attr(n, "placeholder");
 				r.hint = 1;
 			}
-			r.iw = int (st.fontsize * 10.0);	# about 20 characters
-			r.ih = ir(lineheight(st, face(st)));	# a line
+			if(!textfield(b.d, n)) {
+				r.iw = int (st.fontsize * 10.0);	# about 20 characters
+				r.ih = ir(lineheight(st, face(st)));	# a line
+			}	# (a text field is sized by replacedsize, by its size attribute)
 		}
 		return r;
 	Dom->Ttextarea =>
@@ -1569,6 +1702,7 @@ lay(root: ref Box, width, height: int)
 		layabs(l, a, root, Rect((-root.x, -root.y), (width - root.x, height - root.y)));
 	}
 	l.pending = nil;
+	shiftmarkers(root);
 	number(root, 1);
 }
 
@@ -7255,21 +7389,25 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		iw = b.img.r.dx();
 		ih = b.img.r.dy();
 	}
-	if(b.text != nil && b.iw == 0 && b.img == nil && b.node != 0) {
-		# a form control or an image's alt text: size to the text; a
-		# text field to its size attribute (20 characters by default),
-		# as browsers do, whatever it holds
+	if(b.iw == 0 && b.img == nil && b.node != 0 && curdoc != nil &&
+	   curdoc.nodes[b.node].tag == Dom->Tinput && textfield(curdoc, b.node)) {
+		# a text field: its size attribute's characters (20 by
+		# default) whatever it holds, as browsers measure them
 		f := face(b.st);
-		iw = ir(f.width(b.text)) + 2;
+		size := 20;
+		if((sz := curdoc.attr(b.node, "size")) != nil && int sz > 0)
+			size = int sz;
+		iw = fieldwidth(f, size);
 		ih = ir(lineheight(b.st, f));
-		if(curdoc != nil && curdoc.nodes[b.node].tag == Dom->Tinput && textfield(curdoc, b.node)) {
-			size := 20;
-			if((sz := curdoc.attr(b.node, "size")) != nil && int sz > 0)
-				size = int sz;
-			sw := ir(real size * f.width("0")) + 2;
-			if(sw > iw)
-				iw = sw;
-		}
+	} else if(b.text != nil && b.iw == 0 && b.img == nil && b.node != 0) {
+		# a form control or an image's alt text: size to the text (a
+		# button's label exactly, as browsers have it; text a pixel
+		# in from each side otherwise)
+		f := face(b.st);
+		iw = ir(f.width(b.text));
+		if(!isbutton(b))
+			iw += 2;
+		ih = ir(lineheight(b.st, f));
 	}
 	st := b.st;
 	w := -1;
@@ -7580,6 +7718,20 @@ trimsp(s: string): string
 }
 
 # an <input> that takes typed text
+# A text field's content width for size characters, as browsers
+# have it: the font's average character width (OS/2 xAvgCharWidth,
+# whole pixels) each, and the widest glyph's room (head's bounding box)
+# less one average: DejaVu Sans at 13.333px, 20 characters, is 171px.
+fieldwidth(f: ref Typeface, size: int): int
+{
+	(avg, bbox) := fonts->xmetrics(f);
+	if(avg > 0.0 && bbox > 0.0) {
+		a := ir(avg);
+		return a * size + ir(bbox) - a;
+	}
+	return ir(real size * f.width("0")) + 2;
+}
+
 textfield(d: ref Doc, n: int): int
 {
 	case lower(d.attr(n, "type")) {
@@ -7634,6 +7786,10 @@ hasratio(b: ref Box): int
 	case nd.tag {
 	Dom->Tiframe or Dom->Tembed or Dom->Tobject =>
 		return b.img != nil;
+	Dom->Tinput =>
+		return lower(curdoc.attr(b.node, "type")) == "image";	# a control's size is its text's, not a picture's shape
+	Dom->Tselect =>
+		return 0;
 	}
 	return 1;
 }
@@ -9998,6 +10154,10 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			below = d + shift;
 	}
 	h := ir(above + below);
+	if(markerline(b, frags)) {
+		h = 0;	# shiftmarkers puts the marker at the next block's first baseline
+		above = 0.0;
+	}
 	# top- and bottom-aligned things may make the line taller
 	for(sl := subtrees; sl != nil; sl = tl sl) {
 		(nil, sa, sd) := hd sl;
@@ -10903,7 +11063,43 @@ layatomic(l: ref L, k: ref Box, cbw, cbh: int)
 		(ok, by) := lastbaseline(k);
 		if(ok)
 			k.base = k.mt + by;
+	} else if(textcontrol(k)) {
+		# a text field, button or select: its text's, which is centred
+		# in the content box (as painted), as browsers align them
+		f := face(k.st);
+		ch := k.h - vextra(k);
+		k.base = k.mt + k.bt + k.pt + (ch - ir(f.ascent + f.descent)) / 2 + ir(f.ascent);
 	}
+}
+
+# an input of type submit, reset or button
+isbutton(k: ref Box): int
+{
+	if(k.node == 0 || curdoc == nil || curdoc.nodes[k.node].tag != Dom->Tinput)
+		return 0;
+	case lower(curdoc.attr(k.node, "type")) {
+	"submit" or "reset" or "button" =>
+		return 1;
+	}
+	return 0;
+}
+
+# a form control that shows a line of text: a text field, a button, a select
+textcontrol(k: ref Box): int
+{
+	if(k.kind != Kreplaced || k.node == 0 || curdoc == nil)
+		return 0;
+	case curdoc.nodes[k.node].tag {
+	Dom->Tselect =>
+		return 1;
+	Dom->Tinput =>
+		case lower(curdoc.attr(k.node, "type")) {
+		"checkbox" or "radio" or "image" or "range" or "color" or "hidden" or "file" =>
+			return 0;
+		}
+		return 1;
+	}
+	return 0;
 }
 
 firstbaseline(b: ref Box): (int, int)

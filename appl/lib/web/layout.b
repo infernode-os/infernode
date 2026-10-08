@@ -7887,9 +7887,10 @@ aspect(b: ref Box, iw, ih: int): real
 {
 	ratio := b.st.aspect;
 	if(ratio == 0.0 || b.st.aspectauto) {
-		if(b.svg)
-			ratio = b.iratio;
-		else if(iw > 0 && ih > 0 && hasratio(b))
+		if(b.svg) {
+			if(b.iratio > 0.0)
+				ratio = b.iratio;	# a natural ratio; without one, auto's fallback stands (replaced-element-016)
+		} else if(iw > 0 && ih > 0 && hasratio(b))
 			ratio = real iw / real ih;
 	}
 	return ratio;

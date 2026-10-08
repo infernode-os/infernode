@@ -776,7 +776,7 @@ inlinesvg(p: ref Pg, b: ref Box)
 			w := b.w - b.bl - b.br - b.pl - b.pr;
 			h := b.h - b.bt - b.bb - b.pt - b.pb;
 			if(w > 0 && h > 0 && (b.img == nil || b.img.r.dx() != w || b.img.r.dy() != h))
-				b.img = decodeimage(array of byte svgmarkup(p.doc, b.node, w, h), "image/svg+xml", nil);
+				b.img = decodeimage(array of byte svgmarkup(p.doc, b.node, w, h, b.st), "image/svg+xml", nil);
 		}
 	} else if(b.kind == Layout->Kreplaced && b.url != nil && b.img != nil) {
 		# an SVG image: drawn at the size it is shown, not scaled
@@ -802,21 +802,34 @@ inlinesvg(p: ref Pg, b: ref Box)
 	}
 }
 
-svgmarkup(d: ref Doc, n, w, h: int): string
+svgmarkup(d: ref Doc, n, w, h: int, st: ref Style->St): string
 {
 	s := "<svg xmlns=\"http://www.w3.org/2000/svg\"";
 	s += sys->sprint(" width=\"%d\" height=\"%d\"", w, h);
+	# what CSS gives the svg element: its color (currentColor) and a
+	# fill or stroke a stylesheet set, which wins over its attributes
+	# and passes down to what it holds (an icon's svg { fill:
+	# currentColor }); rules aimed at the shapes inside are not seen
+	css := sys->sprint("color:#%.6x", (st.color >> 8) & 16rFFFFFF);
+	if(st.svgfill != nil)
+		css += ";fill:" + st.svgfill;
+	if(st.svgstroke != nil)
+		css += ";stroke:" + st.svgstroke;
 	vb := 0;
 	for(a := d.nodes[n].attrs; a != nil; a = tl a) {
 		(k, v) := hd a;
 		case k {
 		"width" or "height" or "xmlns" =>
 			continue;
+		"style" =>
+			css += ";" + v;	# its own style attribute still has the last word
+			continue;
 		"viewBox" =>
 			vb = 1;
 		}
 		s += " " + k + "=\"" + xmlesc(v) + "\"";
 	}
+	s += " style=\"" + xmlesc(css) + "\"";
 	if(!vb) {
 		# without a viewBox the drawing keeps its own units
 		ow := d.attr(n, "width");

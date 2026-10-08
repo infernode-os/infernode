@@ -1845,7 +1845,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil);
 }
 
 nextsid := 1;
@@ -1900,6 +1900,8 @@ inherit(p: ref St): ref St
 	s.hideempty = p.hideempty;
 	s.accent = p.accent;
 	s.caret = p.caret;
+	s.svgfill = p.svgfill;
+	s.svgstroke = p.svgstroke;
 	s.vars = p.vars;
 	return s;
 }
@@ -1929,7 +1931,7 @@ isinherited(nm: string): int
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
-	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or
+	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "fill" or "stroke" or
 	"font-kerning" or "font-feature-settings" =>
 		return 1;
 	}
@@ -4578,6 +4580,31 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"accent-color" => st.accent = c;
 		"caret-color" => st.caret = c;
 		}
+	"fill" or "stroke" =>
+		# for inline svg, which readsvg draws: kept as it can read it
+		x := nows(v);
+		if(len x != 1)
+			return 0;
+		pv: string;
+		if(x[0].kind == Kident && lower(x[0].s) == "none")
+			pv = "none";
+		else if(x[0].kind == Kident && lower(x[0].s) == "currentcolor")
+			pv = "currentcolor";
+		else if(x[0].kind == Kurl)
+			pv = "url(" + x[0].s + ")";
+		else {
+			(ok, c) := color(x);
+			if(!ok)
+				return 0;
+			if(c == Ccurrent)
+				pv = "currentcolor";
+			else
+				pv = sys->sprint("#%.6x", (c >> 8) & 16rFFFFFF);
+		}
+		if(nm == "fill")
+			st.svgfill = pv;
+		else
+			st.svgstroke = pv;
 	"border-image-source" =>
 		x := nows(v);
 		if(len x != 1)
@@ -6322,6 +6349,8 @@ copyprop(d, s: ref St, nm: string)
 	"appearance" => d.appearance = s.appearance;
 	"accent-color" => d.accent = s.accent;
 	"caret-color" => d.caret = s.caret;
+	"fill" => d.svgfill = s.svgfill;
+	"stroke" => d.svgstroke = s.svgstroke;
 	}
 }
 

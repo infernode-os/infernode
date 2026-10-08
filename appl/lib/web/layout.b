@@ -1703,7 +1703,37 @@ lay(root: ref Box, width, height: int)
 	}
 	l.pending = nil;
 	shiftmarkers(root);
+	stickies(root, 0, height);
 	number(root, 1);
+}
+
+# A sticky box keeps its place in the flow unless that place is above
+# its top inset in the scrollport (Position 3 §3.4); the page is laid
+# out unscrolled, so only a box nearer the top of the page than its
+# inset moves, down, and no further than its containing block's
+# content allows.  A header with top: 0, and a bar with top: 80px under
+# an 80px header, stay where they are (bbc.com/news had its bar 80px
+# low when sticky was taken for relative).
+stickies(b: ref Box, oy, vh: int)
+{
+	y := oy + b.y;
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		st := k.st;
+		if(st.position == Style->Psticky && !k.inl && st.top.kind != Style->Lauto) {
+			t := res(st.top, vh);
+			ky := y + k.y;
+			if(ky < t) {
+				d := t - ky;
+				room := b.h - b.bb - b.pb - (k.y + k.h + k.mb);
+				if(d > room)
+					d = room;
+				if(d > 0)
+					k.y += d;
+			}
+		}
+		stickies(k, y, vh);
+	}
 }
 
 # Give every box its place in tree order (flex items in order-modified
@@ -3581,7 +3611,14 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			# (normal is start for an item with a ratio, Grid 2 §6.2; grid-aspect-ratio-007)
 			imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), aw, ah);
 		} else if(ks.height.pct != 0.0 || ks.minheight.pct != 0.0 || ks.maxheight.pct != 0.0 || heightmatters(k)) {
-			# the area's height is definite for it (Grid 2 §6.6)
+			# the area's height is definite for it (Grid 2 §6.6); a
+			# replaced item of auto width takes its width from the
+			# height that gives it, through its ratio (an svg logo at
+			# height: 100%, width: auto: bbc.com/news)
+			if(k.kind == Kreplaced && ks.width.kind == Style->Lauto) {
+				(rw, nil) := replacedsize(k, aw, ah);
+				k.w = rw + hextra(k);
+			}
 			layblock(l, k, aw, ah, nil, 0, 0);
 		}
 		x := ax + k.ml + crossoff(js, aw, k.w + k.ml + k.mr);
@@ -5266,6 +5303,9 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 			else {
 				mn = k.h + k.mt + k.mb;
 				mx = mn;
+				if(k.kind == Kreplaced && truereplaced(k) && (k.st.height.pct != 0.0 || k.st.maxheight.pct != 0.0) &&
+				   nspan == 1 && a0 < n && t[a0].lo.kind == Tauto)
+					mn = k.mt + k.mb;	# a replaced box with a percentage height: its automatic minimum, which an auto track's base size takes, is zero (compressible, Sizing 3 §5.2.2); a min-content track still takes its height (replaced-element-016)
 			}
 			mn += g.extra;
 			mx += g.extra;
@@ -6925,8 +6965,8 @@ gridspalign(a: ref Abs, k: ref Box, horiz: int): int
 relative(k: ref Box, cbw, cbh: int)
 {
 	st := k.st;
-	if(st.position != Style->Prelative && st.position != Style->Psticky)
-		return;
+	if(st.position != Style->Prelative)
+		return;	# (a sticky box moves only where scrolling would take it past its inset: stickies, after layout)
 	# both left and right set: the one at the containing block's start wins (§9.4.3)
 	rtl := st.dirrtl;
 	if(k.parent != nil)
@@ -10387,7 +10427,7 @@ relativeinlines(frags: array of ref Frag, cbw: int)
 		if(f.kind != Fspan)
 			continue;
 		st := f.box.st;
-		if(st.position != Style->Prelative && st.position != Style->Psticky)
+		if(st.position != Style->Prelative)
 			continue;
 		dx := 0;
 		dy := 0;

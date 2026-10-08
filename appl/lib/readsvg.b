@@ -858,8 +858,8 @@ parse_path_data(d: string): list of ref Segment
 				i = ni;
 				(ary, ni2) := parse_path_number(d, i, n); i = ni2;
 				(angle, ni3) := parse_path_number(d, i, n); i = ni3;
-				(large_arc, ni4) := parse_path_number(d, i, n); i = ni4;
-				(sweep, ni5) := parse_path_number(d, i, n); i = ni5;
+				(large_arc, ni4) := parse_path_flag(d, i, n); i = ni4;
+				(sweep, ni5) := parse_path_flag(d, i, n); i = ni5;
 				(x, ni6) := parse_path_number(d, i, n); i = ni6;
 				(y, ni7) := parse_path_number(d, i, n); i = ni7;
 				if(cmd == 'a') { x += cx; y += cy; }
@@ -915,6 +915,18 @@ parse_path_number(d: string, i, n: int): (real, int)
 		return (0.0, orig);
 
 	return (real d[start:i], i);
+}
+
+# An arc's flag: one character, 0 or 1, so that "a7 7 0 015.6 11.2"
+# is flags 0 and 1, then 5.6 (SVG 2 path grammar, flag)
+parse_path_flag(d: string, i, n: int): (real, int)
+{
+	orig := i;
+	while(i < n && (d[i] == ' ' || d[i] == '\t' || d[i] == '\n' || d[i] == '\r' || d[i] == ','))
+		i++;
+	if(i < n && (d[i] == '0' || d[i] == '1'))
+		return (real (d[i] - '0'), i + 1);
+	return (0.0, orig);
 }
 
 # ==================== Rasterizer ====================

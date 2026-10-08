@@ -13695,19 +13695,51 @@ paintdeco(dst: ref Image, f: ref Frag, o: Point)
 
 boxat(root: ref Box, p: Point): (int, ref Box)
 {
-	return findin(root, p, Point(0, 0));
+	(n, b) := findin(root, p, Point(0, 0));
+	# an anonymous box (a block around inline content, an anonymous
+	# table part) is no element: what was clicked is the element it
+	# belongs to (github.com's file list: grid cells' anonymous blocks)
+	for(k := b; n == 0 && k != nil; k = k.parent)
+		if(k.node != 0) {
+			n = k.node;
+			b = k;
+		}
+	return (n, b);
 }
 
 findin(b: ref Box, p, o: Point): (int, ref Box)
 {
+	st := b.st;
+	if(st.translated && st.tfs == nil)	# drawn moved, so clicked moved (a drawer off-screen by translateX(-100%))
+		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
 	org := r.min;
+	if(clipshit(b) && !p.in(r))
+		return (0, nil);	# what overflows a clipping box is not there to click (an sr-only heading's text)
 	for(pl := b.pos; pl != nil; pl = tl pl) {
 		(n, x) := findin(hd pl, p, org);
 		if(x != nil)
 			return (n, x);
 	}
 	if(b.lines != nil) {
+		# floats are kids of a box whose content is lines, painted over
+		# its backgrounds: looked at first (python.org's network bar is
+		# floated list items holding the links)
+		for(fi := len b.kids - 1; fi >= 0; fi--) {
+			k := b.kids[fi];
+			if(!isfloat(k) || isabs(k))
+				continue;
+			(n, x) := findin(k, p, org);
+			if(x != nil)
+				return (n, x);
+		}
+		# the most specific thing under the point: text or an atomic
+		# box first, else the smallest inline box around it.  An inline
+		# box's span fragment follows its content in the line, so taking
+		# the last fragment that held the point found the outermost box:
+		# a link inside a span was never clicked (news.ycombinator.com,
+		# 2 of its 199 links)
+		span: ref Frag;
 		for(i := 0; i < len b.lines; i++) {
 			ln := b.lines[i];
 			for(k := len ln.frags - 1; k >= 0; k--) {
@@ -13719,21 +13751,50 @@ findin(b: ref Box, p, o: Point): (int, ref Box)
 						return (n, x);
 					continue;
 				}
-				if(p.in(fr))
+				if(!p.in(fr) || !hittable(f.box))
+					continue;
+				if(f.kind != Fspan)
 					return (f.box.node, f.box);
+				if(span == nil || f.w * f.h < span.w * span.h)
+					span = f;
 			}
 		}
-	} else
-		for(i := len b.kids - 1; i >= 0; i--) {
-			if(isabs(b.kids[i]))
-				continue;
-			(n, x) := findin(b.kids[i], p, org);
-			if(x != nil)
-				return (n, x);
-		}
-	if(p.in(r))
+		if(span != nil)
+			return (span.box.node, span.box);
+	} else {
+		# floats first: they are painted over the in-flow blocks beside
+		# them, whose boxes reach across (an infobox's links were taken
+		# for the paragraph beside it)
+		for(pass := 0; pass < 2; pass++)
+			for(i := len b.kids - 1; i >= 0; i--) {
+				k := b.kids[i];
+				if(isabs(k) || isfloat(k) != (pass == 0))
+					continue;
+				(n, x) := findin(k, p, org);
+				if(x != nil)
+					return (n, x);
+			}
+	}
+	if(p.in(r) && hittable(b))
 		return (b.node, b);
 	return (0, nil);
+}
+
+# a box a click can land on: visible, and not pointer-events: none
+# (its descendants may be either way: both properties are inherited
+# and can be set back)
+hittable(b: ref Box): int
+{
+	return b.st.visibility == Style->Vvisible && b.st.pointer;
+}
+
+# a box whose overflow is clipped: nothing of it is hit outside it (the
+# root's and the body's overflow is the viewport's)
+clipshit(b: ref Box): int
+{
+	if(b.parent == nil || b.parent.parent == nil)
+		return 0;
+	return b.st.overflowx != Style->Ovisible || b.st.overflowy != Style->Ovisible;
 }
 
 boxes(root: ref Box, n: int): list of ref Box

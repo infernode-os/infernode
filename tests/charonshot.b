@@ -25,6 +25,8 @@ include "draw.m";
 	draw: Draw;
 	Display, Image, Rect, Point: import draw;
 include "web/dom.m";
+	dom: Dom;
+	Doc: import dom;
 include "web/css.m";
 include "web/style.m";
 include "outlinefont.m";
@@ -61,6 +63,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		"-o" => old = 1;
 		"-d" => dumpboxes = 1;
 		"-b" => dumpboxes = 2;
+		"-c" => dumpboxes = 3;
 		}
 		argv = tl argv;
 	}
@@ -161,6 +164,7 @@ newengine(disp: ref Display, w, h, crop: int, outimg, url: string): string
 	if((ierr := page->init(disp)) != nil)
 		return ierr;
 	layout = load Layout Layout->PATH;
+	dom = load Dom Dom->PATH;
 	layout->init(disp);
 	if(len url > 4 && url[0:4] == "http" && (werr := startwebfs()) != nil)
 		return werr;
@@ -190,6 +194,8 @@ newengine(disp: ref Display, w, h, crop: int, outimg, url: string): string
 		sys->fprint(sys->fildes(2), "%s", layout->dump(p.root));
 	else if(dumpboxes == 2)
 		elementboxes(p);
+	else if(dumpboxes == 3)
+		linkhits(p);
 	t2 := sys->millisec();
 	fd := sys->create(outimg, Sys->OWRITE, 8r644);
 	if(fd == nil)
@@ -265,6 +271,135 @@ elementboxes(p: ref Pg)
 		else
 			sys->fprint(out, "B %s none\n", paths[n]);
 	}
+}
+
+# -c: would a click on each link find it?  For every a[href], a point
+# inside its first piece (its first fragment, if it is inline) is looked
+# up with boxat, as the window's click is, and must lead back to a link.
+# Prints "links <hit>/<total>" and each miss.
+linkhits(p: ref Pg)
+{
+	d := p.doc;
+	out := sys->fildes(1);
+	hit := 0;
+	total := 0;
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || nd.tag != Dom->Ta || !d.hasattr(n, "href"))
+			continue;
+		(ok, r) := firstpiece(p, n);
+		if(!ok || r.dx() <= 0 || r.dy() <= 0 || hidden(p, n))
+			continue;	# not shown: nothing to click
+		pt := Point(r.min.x + r.dx()/2, r.min.y + r.dy()/2);
+		if(clipped(p, n, pt))
+			continue;	# cut off by an ancestor that clips its overflow: not there to click
+		total++;
+		(m, nil) := layout->boxat(p.root, pt);
+		got := 0;
+		for(a := m; a > 1; a = d.nodes[a].parent)
+			if(d.nodes[a].kind == Dom->Element && d.nodes[a].tag == Dom->Ta && d.hasattr(a, "href")) {
+				got = a;
+				break;
+			}
+		if(got == n)
+			hit++;
+		else {
+			what := "nothing";
+			if(m > 0) {
+				e := m;
+				if(d.nodes[e].kind != Dom->Element)
+					e = d.nodes[e].parent;
+				what = d.nodes[e].name + "." + d.attr(e, "class");
+			}
+			if(got != 0)
+				what += " in another link";
+			sys->fprint(out, "miss %d %s at %d,%d -> %s: %s\n", n, d.attr(n, "href"), pt.x, pt.y, what, d.textof(n));
+		}
+	}
+	sys->fprint(out, "links %d/%d\n", hit, total);
+}
+
+# pt is outside some ancestor of n's box that clips its overflow (a
+# collapsed dropdown: height 0, overflow hidden)
+clipped(p: ref Pg, n: int, pt: Point): int
+{
+	l := layout->boxes(p.root, n);
+	if(l == nil)
+		return 0;
+	for(b := (hd l).parent; b != nil && b.parent != nil && b.parent.parent != nil; b = b.parent) {
+		if(b.st.overflowx == Style->Ovisible && b.st.overflowy == Style->Ovisible)
+			continue;
+		x := 0;
+		y := 0;
+		for(a := b; a != nil; a = a.parent) {
+			x += a.x;
+			y += a.y;
+		}
+		if(!pt.in(Rect((x, y), (x + b.w, y + b.h))))
+			return 1;
+	}
+	return 0;
+}
+
+# invisible, or under an ancestor of no opacity: no browser clicks it
+hidden(p: ref Pg, n: int): int
+{
+	l := layout->boxes(p.root, n);
+	if(l == nil)
+		return 1;
+	b := hd l;
+	if(b.st.visibility != Style->Vvisible)
+		return 1;
+	for(; b != nil; b = b.parent)
+		if(b.st.opacity == 0.0)
+			return 1;
+	return 0;
+}
+
+firstpiece(p: ref Pg, n: int): (int, Rect)
+{
+	# a block's own box is its biggest: its pseudo-elements' boxes
+	# carry its node too (a:before { left: -9999px } on python.org)
+	best: Rect;
+	got := 0;
+	for(l := layout->boxes(p.root, n); l != nil; l = tl l) {
+		b := hd l;
+		x := 0;
+		y := 0;
+		for(a := b; a != nil; a = a.parent) {
+			x += a.x;
+			y += a.y;
+		}
+		if(b.kind != Layout->Kinline) {
+			if(!got || b.w * b.h > best.dx() * best.dy())
+				best = Rect((x, y), (x + b.w, y + b.h));
+			got = 1;
+			continue;
+		}
+		for(a = b.parent; a != nil; a = a.parent) {
+			if(a.lines == nil)
+				continue;
+			ax := 0;
+			ay := 0;
+			for(c := a; c != nil; c = c.parent) {
+				ax += c.x;
+				ay += c.y;
+			}
+			for(i := 0; i < len a.lines; i++) {
+				ln := a.lines[i];
+				for(j := 0; j < len ln.frags; j++) {
+					f := ln.frags[j];
+					if(f.box == b && f.w > 0) {
+						if(f.h > 0)	# its own height: a superscript is raised above the line's middle
+							return (1, Rect((ax + f.x, ay + f.y), (ax + f.x + f.w, ay + f.y + f.h)));
+						return (1, Rect((ax + f.x, ay + ln.y), (ax + f.x + f.w, ay + ln.y + ln.h)));
+					}
+				}
+			}
+			break;
+		}
+	}
+	return (got, best);
 }
 
 # An inline box's extent: its fragments in the lines of the block

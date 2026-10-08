@@ -35,6 +35,7 @@ const { chromium } = require('playwright');
 		viewport: { width: +w, height: +h },
 		deviceScaleFactor: 1,
 		javaScriptEnabled: js,
+		colorScheme: 'light',	// as Charon's prefers-color-scheme answers; a dark host theme otherwise leaks in
 	});
 	const page = await ctx.newPage();
 	try {

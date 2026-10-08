@@ -1855,7 +1855,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0);
 }
 
 nextsid := 1;
@@ -1868,6 +1868,7 @@ inherit(p: ref St): ref St
 	if(p == nil)
 		return s;
 	s.color = p.color;
+	s.dark = p.dark;
 	s.family = p.family;
 	s.fontsize = p.fontsize;
 	s.weight = p.weight;
@@ -2037,6 +2038,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		else
 			n = next(d, n, root);
 	}
+	schemedark = -1;
 	return c;
 }
 
@@ -2324,6 +2326,12 @@ cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 	}
 	if(custom != nil)
 		st.vars = setvars(st.vars, custom);
+	# color-scheme, before any colour: light-dark() is resolved with the
+	# element's own (Color Adjust 1 §2.1), not the page's
+	for(i = 0; i < len mds; i++)
+		if(mds[i].decl.name == "color-scheme")
+			st.dark = schemeof(mds[i].decl.val, parent, ctx.env);
+	schemedark = st.dark;
 	# the font first, for em, ex and ch units; a font-size in those
 	# units is the parent's
 	ctx.fs = pfs;
@@ -3133,6 +3141,49 @@ chval(c: (int, real), full: real): real
 	return x;
 }
 
+# Whether a color-scheme value comes out dark: "dark" alone, or with
+# "light" when the user prefers dark; "normal" and "light" do not.
+# A value that is no scheme is ignored, inherited instead.
+schemeof(v: array of ref Tok, parent: ref St, env: ref Env): int
+{
+	light := 0;
+	dark := 0;
+	other := 0;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Css->Kws)
+			continue;
+		if(t.kind != Css->Kident) {
+			other = 1;
+			continue;
+		}
+		case lower(t.s) {
+		"light" =>
+			light = 1;
+		"dark" =>
+			dark = 1;
+		"normal" or "only" =>
+			;
+		"inherit" or "unset" =>
+			if(parent != nil)
+				return parent.dark;
+			return 0;
+		* =>
+			;	# a scheme the page names that is not supported
+		}
+	}
+	if(other) {
+		if(parent != nil)
+			return parent.dark;
+		return 0;
+	}
+	if(dark && light)
+		return env != nil && env.dark;
+	return dark;
+}
+
+schemedark := -1;	# the element being cascaded's, or -1 outside the cascade
+
 colorfn(t: ref Tok): (int, int)
 {
 	case t.s {
@@ -3140,10 +3191,10 @@ colorfn(t: ref Tok): (int, int)
 		args := splitcommas(t.kids);
 		if(len args != 2)
 			return (0, 0);
-		dark := 0;
-		if(lastenv != nil)
+		dark := schemedark;
+		if(dark < 0 && lastenv != nil)
 			dark = lastenv.dark;
-		if(dark)
+		if(dark > 0)
 			return color(hd tl args);
 		return color(hd args);
 	"color-mix" =>

@@ -265,6 +265,7 @@ Style: module
 		bimage:	ref Bimage;	# border-image, nil for none
 		mask:	array of ref Bg;	# mask layers (Masking 1 §6): the same shape as background layers
 		svgfill, svgstroke:	string;	# fill and stroke for an inline svg (inherited): none, currentcolor, #rrggbb or url(...); nil when not set
+		dark:	int;	# color-scheme comes out dark (inherited): light-dark() takes its second colour
 
 		new:	fn(): ref St;		# initial values
 	};

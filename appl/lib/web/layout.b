@@ -11523,7 +11523,7 @@ max(a, b: int): int
 # absolutely positioned descendants all the same)
 layerclip(inner: Rect, l: ref Lyr): Rect
 {
-	(c, nil) := inner.clip(l.clip);
+	c := intersect(inner, l.clip);	# (Rect.clip leaves a rectangle it misses as it was)
 	b := l.box;
 	cr := b.st.cliprect;
 	if(cr != nil && (b.st.position == Style->Pabsolute || b.st.position == Style->Pfixed)) {
@@ -11569,7 +11569,7 @@ innerclip(b: ref Box, r, clip: Rect): Rect
 	   b.parent.st.overflowx == Style->Ovisible && b.parent.st.overflowy == Style->Ovisible)
 		return clip;	# the root's overflow, or the body's when the root's is visible, is the viewport's, not a clip of its own (Overflow 3 §3.3)
 	pr := Rect((r.min.x + b.bl, r.min.y + b.bt), (r.max.x - b.br, r.max.y - b.bb));
-	(c, nil) := clip.clip(pr);
+	c := intersect(clip, pr);
 	return c;
 }
 

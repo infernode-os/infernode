@@ -7,10 +7,76 @@ written so a fresh session can carry on without the previous one's context.  Rea
 state: what is done, how it is judged, how to set up, what is next, and
 what bit last time.
 
-Pull request: https://github.com/infernode-os/infernode/pull/754 (pushing to
-the branch updates it).
+PR #754 was merged on 2026-10-02 with the first session's work; this
+branch carries everything after it and has no pull request yet.
 
-## Where it stands
+## Live-site session, 2026-10-08 (read this first)
+
+The cloud sessions could not reach live sites.  This one ran on a Linux
+host that can (`minipc`; the reference setup below works there as
+written), merged master into the branch (`dde7011b`), and took the live
+pages first, fixing what each comparison showed.  WPT went 10,238 ->
+10,296 (81.0% -> 81.4%) with no regression left standing; the larger
+gain is on real pages:
+
+| Page | layout diff before | after |
+|---|---|---|
+| news.ycombinator.com | 19.1% | 0.9% |
+| bbc.com/news | 32.2% (stories hidden) | 1.9% |
+| python.org | 39.1% | 2.3% |
+| lwn.net | no image | 1.4% |
+| nasa.gov | no image | 19.7% |
+| debian.org | 43.7% | 20.4% |
+| docs.python.org (library/os) | 36.9% | 17.7% |
+| github.com/torvalds/linux | — | 2.8% |
+| Wikipedia (Raspberry Pi) | no image | 11.6% |
+
+What was fixed, each with its commit message giving the detail:
+
+- **Batch-order leaks between pages** (these made WPT results depend on
+  test order): layout's face cache matched on `St.sid`, which layout's
+  own Style instance and page.b's both number from 1; outlinefont's
+  glyph cache quantised sizes to quarter pixels.  `charonbatch` list
+  lines ending `-d` dump that page's box tree, for finding the next one.
+- **Engine:** quirks-mode line height; outside markers on the first
+  line of `li > p` (and at the next block's baseline where they cannot
+  go in); form controls sized as Chromium sizes them (text fields by
+  OS/2 average width and bounding box, border-box buttons, text
+  baselines, rounded line-height: normal); percentage widths truncate
+  (a row of 16.667% floats fits); `position: sticky` placed as an
+  unscrolled browser places it; replaced boxes with percentage widths or
+  max-widths compressible (Sizing 3 §5.2.2), and a compressible minimum
+  in auto grid tracks; CSS masks; `fill`/`stroke` for inline svg and
+  `currentColor`; `env()`; a page that cannot be fetched shows an error
+  page instead of a white window.
+- **Images:** `readwebp.b` and `readjpg.b` rewritten and checked pixel
+  for pixel against libwebp and libjpeg-turbo (42 and 40 vectors,
+  `tests/readwebp_test.b`, `tests/readjpg_test.b`, generators beside
+  the vectors).  Lossy WebP had never decoded (the old code painted
+  grey), and progressive JPEG was refused.  A decoder fault now costs
+  the image, not the page; decoded images are no longer reported as
+  failed resources.
+- **Bare metal:** the white page on the Pi was no name service.
+  etherusb's DHCP records the lease's DNS servers in /net/ndb, the
+  profile starts `ndb/dns -r` and `ndb/cs`, and both work without a site
+  `lib/ndb/local`.  Checked under QEMU virt from a card (an https page
+  fetched); not yet on the board.
+
+Measuring notes from this session:
+
+- `charon-shot.sh` and `boxdiff.py` now give emu a 1024m heap; with
+  the default, a page with a large photograph (nasa.gov) is killed.
+- Chromium lays out a closed `<details>`'s content (content-visibility),
+  and a page with `scrollbar-gutter: stable` is 15px narrower in
+  Chromium: both show up in `boxdiff` and are not Charon bugs.
+- A flex or grid with `display: contents` / `display: inherit` chains
+  (apple.com's nav) still lays out differently from Chromium; a reduced
+  copy did not reproduce reliably.  Unfinished.
+- Next on the live list: Wikipedia main page (26%, mostly sub-pixel
+  list heights), docs.python.org's sidebar, apple.com (hero image size,
+  nav), rust-lang.org, mozilla.org, kernel.org, theguardian.com.
+
+## Where it stands (2026-10-02, before the live-site session)
 
 The engine (`appl/lib/web/`: dom, html, css, style, fonts, layout, page,
 browser, charonfs) renders real pages, and is judged against references,

@@ -29,6 +29,8 @@ include "web/fonts.m";
 include "bidi.m";
 include "bufio.m";
 	bufio: Bufio;
+include "web/wordbreak.m";
+	wordbreak: Wordbreak;
 include "imagefile.m";
 	readsvg: RImagefile;
 	imageremap: Imageremap;
@@ -60,6 +62,7 @@ init(d: ref Display): string
 	css = load Css Css->PATH;
 	style = load Style Style->PATH;
 	fonts = load Fonts Fonts->PATH;
+	wordbreak = load Wordbreak Wordbreak->PATH;	# (without it, Thai breaks only at spaces)
 	bidi = load Bidi Bidi->PATH;
 	if(bidi != nil && bidi->init() != nil)
 		bidi = nil;
@@ -9018,6 +9021,10 @@ text(f: ref Fl, b: ref Box)
 	ls := st.letterspacing;
 	if(collapsesp)
 		s = segbreaks(s, keepnl, cjklang(langof(b.node)));
+	# Thai: between the words a dictionary finds (UAX #14 SA)
+	thai: array of byte;
+	if(wordbreak != nil)
+		thai = wordbreak->breaks(s);
 	i := 0;
 	while(i < len s) {
 		c := s[i];
@@ -9090,6 +9097,8 @@ text(f: ref Fl, b: ref Box)
 		# a word: up to the next space or break opportunity
 		st0 := i;
 		while(i < len s && !isspace(s[i]) && s[i] != 16r200B && !hangsp(s[i])) {
+			if(i > st0 && thai != nil && int thai[i])
+				break;
 			if(i > st0 && (s[i-1] != 16rAD || st.hyphens != 0 && !joinedacross(s, i, st0)) && lbbreak(s[lbbase(s, i-1, st0)], s[i]))
 				break;	# (a soft hyphen is nothing under hyphens: none, or between letters that join)
 			i++;

@@ -122,6 +122,7 @@ TARG=\
 	web_style_test.dis\
 	web_browser_test.dis\
 	web_fonts_test.dis\
+	web_wordbreak_test.dis\
 	bidi_test.dis\
 	brotli_test.dis\
 	readwebp_test.dis\
@@ -216,6 +217,7 @@ SYSMODULES=\
 	web/page.m\
 	web/browser.m\
 	web/charonfs.m\
+	web/wordbreak.m\
 	arg.m\
 	cowfs.m\
 	dial.m\

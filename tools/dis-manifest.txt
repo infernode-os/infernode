@@ -490,6 +490,7 @@ dis/lib/web/html.dis
 dis/lib/web/layout.dis
 dis/lib/web/page.dis
 dis/lib/web/style.dis
+dis/lib/web/wordbreak.dis
 dis/lib/webclient.dis
 dis/lib/winplace.dis
 dis/lib/wirefmt.dis
@@ -861,6 +862,7 @@ dis/tests/wallet_policy_test.dis
 dis/tests/web_browser_test.dis
 dis/tests/web_css_test.dis
 dis/tests/web_fonts_test.dis
+dis/tests/web_wordbreak_test.dis
 dis/tests/web_html_test.dis
 dis/tests/web_style_test.dis
 dis/tests/webclient_test.dis

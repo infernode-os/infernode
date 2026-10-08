@@ -10,6 +10,7 @@ TARG=\
 	page.dis\
 	browser.dis\
 	charonfs.dis\
+	wordbreak.dis\
 
 MODULES=
 
@@ -25,6 +26,7 @@ SYSMODULES=\
 	web/page.m\
 	web/browser.m\
 	web/charonfs.m\
+	web/wordbreak.m\
 	outlinefont.m\
 	draw.m\
 	math.m\

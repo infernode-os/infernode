@@ -1725,6 +1725,19 @@ ir(x: real): int
 	return int x;	# rounds
 }
 
+# A percentage width, truncated: browsers keep the fraction (to 1/64
+# px) and snap only when painting, so six floats of 16.667% fill 1024px;
+# rounded, they make 1026 and the last wraps (python.org's network bar).
+# Truncated, they fit with the remainder to spare.
+floorres(v: Len, basis: int): int
+{
+	f := v.resolve(real basis);
+	w := int f;	# (rounds)
+	if(real w > f)
+		w--;
+	return w;
+}
+
 res(v: Len, basis: int): int
 {
 	return ir(v.resolve(real basis));
@@ -1780,6 +1793,8 @@ specw(b: ref Box, v: Len, cbw: int): int
 		if(cbw < 0 && v.kind == Style->Lpx && v.pct != 0.0)
 			return -1;
 		w := res(v, cbw);
+		if(v.kind == Style->Lpx && v.pct != 0.0)
+			w = floorres(v, cbw);
 		if(!b.st.borderbox)
 			w += hextra(b);
 		return w;

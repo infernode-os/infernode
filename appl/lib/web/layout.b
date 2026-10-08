@@ -5242,6 +5242,15 @@ growtracks(t: array of ref Track, n: int, auto: array of ref Tok, avail: int): a
 # sizes from items spanning one track, then spanning items spread over
 # the intrinsic tracks they cross; leftover space to fr tracks, else to
 # auto tracks.
+# do the tracks a0 to a1 all size their minimum from the items (auto)?
+autolo(t: array of ref Track, a0, a1: int): int
+{
+	for(j := a0; j < a1 && j < len t; j++)
+		if(t[j].lo.kind != Tauto)
+			return 0;
+	return 1;
+}
+
 sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap: int, b: ref Box)
 {
 	n := len t;
@@ -5300,9 +5309,11 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 			mn, mx: int;
 			if(g.empty)
 				mn = mx = 0;
-			else if(cols)
+			else if(cols) {
 				(mn, mx) = contribution(k);
-			else {
+				if(k.st.minwidth.kind == Style->Lauto && isscroller(k) && autolo(t, a0, a1))
+					mn = mgs(k) + hextra(k);	# auto minimums: a scroll container's is zero (§6.6; MDN's homepage mandala held the hero's column to its 560px)
+			} else {
 				mn = k.h + k.mt + k.mb;
 				mx = mn;
 				if(k.kind == Kreplaced && truereplaced(k) && (k.st.height.pct != 0.0 || k.st.maxheight.pct != 0.0) &&
@@ -5384,23 +5395,27 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 		return;
 	}
 	free := real avail - used;
-	# grow tracks with a finite limit toward it
-	if(free > 0.0) {
-		want := 0.0;
+	# grow tracks with a finite limit toward it: the free space shared
+	# equally, each track frozen as it reaches its limit (§12.6), not in
+	# proportion to the room each has (MDN's homepage hero)
+	while(free > 0.001) {
+		nu := 0;
+		step := free;
 		for(i = 0; i < n; i++)
-			if(t[i].hi.kind != Tfr && t[i].limit > t[i].base)
-				want += t[i].limit - t[i].base;
-		if(want > 0.0) {
-			f := 1.0;
-			if(want > free)
-				f = free / want;
-			for(i = 0; i < n; i++)
-				if(t[i].hi.kind != Tfr && t[i].limit > t[i].base) {
-					d := (t[i].limit - t[i].base) * f;
-					t[i].base += d;
-					free -= d;
-				}
-		}
+			if(t[i].hi.kind != Tfr && t[i].limit > t[i].base + 0.001) {
+				nu++;
+				if(t[i].limit - t[i].base < step)
+					step = t[i].limit - t[i].base;
+			}
+		if(nu == 0)
+			break;
+		if(step > free / real nu)
+			step = free / real nu;
+		for(i = 0; i < n; i++)
+			if(t[i].hi.kind != Tfr && t[i].limit > t[i].base + 0.001) {
+				t[i].base += step;
+				free -= step;
+			}
 	}
 	# fr tracks share what is left (§11.7), never below their base
 	sumfr := 0.0;

@@ -14,7 +14,7 @@ implement WebBrowser;
 # Network access is whatever webfs at /mnt/web gives; one is started
 # if none is mounted.
 #
-# Keys (page focused): Up/Down, PgUp/PgDn, space, Home/End scroll;
+# The wheel scrolls; keys (page focused): Up/Down, PgUp/PgDn, space, Home/End scroll;
 # Alt-Left/Right or Backspace go back/forward; Ctrl-L the location;
 # Ctrl-F find; Ctrl-R reload; Escape stop; Ctrl-Q quit.
 #
@@ -234,6 +234,8 @@ buildui()
 		"bind .view.c <Button-1> {send act click %x %y}",
 		"bind .view.c <Motion> {send act hover %x %y}",
 		"bind .view.c <Button-3> {send act menu %X %Y}",
+		"bind .view.c <ButtonPress-4> {send act wheel -1}",
+		"bind .view.c <ButtonPress-5> {send act wheel 1}",
 		"bind .view <Configure> {send act resized}",
 		"menu .ctx",
 		".ctx add command -label {Back} -command {send act back}",
@@ -401,6 +403,8 @@ action(a: string)
 				d = int n * (vh - LINE);
 			scrollto(scroll + d);
 		}
+	"wheel" =>
+		scrollto(scroll + int rest * 2 * LINE);	# the wheel: two lines a notch
 	"click" =>
 		tk->cmd(top, "focus .view.c");
 		(x, y) := xy(rest);

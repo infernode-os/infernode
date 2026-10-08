@@ -8231,6 +8231,8 @@ intrinsic1(b: ref Box): (int, int)
 		}
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
+			if(isabs(k))
+				continue;	# out of flow: no part of its parent's size
 			edges(k, 0);
 			if(b.kind == Kflex && pcth >= 0 && b.st.flexwrap == 0 && stretched(b, k)) {
 				# a stretched item is as tall as the line: its
@@ -8291,6 +8293,8 @@ intrinsic1(b: ref Box): (int, int)
 	} else {
 		for(i := 0; i < len b.kids; i++) {
 			k := b.kids[i];
+			if(isabs(k))
+				continue;	# out of flow: github.com's nav dropdown made each item as wide as itself
 			edges(k, 0);
 			(kmn, kmx) := contribution(k);
 			if(kmn > mn)

@@ -26,6 +26,7 @@ Layout: module
 	# its contents instead (its fallback).
 	Oimage, Odoc: con 1+iota;
 	setobjects:	fn(objs: list of (int, int, string));
+	setenv:	fn(env: ref Style->Env);	# the viewport <picture>'s sources' media queries are matched against
 	# background and list-style images: what a style asks for, and the
 	# decoded images to paint, by absolute URL
 	bgurls:	fn(st: ref Style->St): list of string;

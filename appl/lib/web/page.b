@@ -156,6 +156,7 @@ rebuild(p: ref Pg)
 	usebg(p);
 	old := p.root;
 	layout->setobjects(p.objects);
+	layout->setenv(p.env);
 	p.root = layout->build(p.doc, p.computed);
 	if(old != nil)
 		carryimages(old, p.root);

@@ -7736,6 +7736,13 @@ plainlen(l: Style->Len): int
 # <picture> whose type we decode and that has no media condition
 # (media conditions are left to the <img> fallback, which pages make
 # the small, safe choice), else its own srcset, else src.
+layenv: ref Style->Env;
+
+setenv(env: ref Style->Env)
+{
+	layenv = env;
+}
+
 imgsrc(d: ref Doc, n: int): string
 {
 	p := d.nodes[n].parent;
@@ -7744,8 +7751,9 @@ imgsrc(d: ref Doc, n: int): string
 			nd := d.nodes[c];
 			if(nd.kind != Dom->Element || nd.tag != Dom->Tsource)
 				continue;
-			if(d.hasattr(c, "media") && trimsp(d.attr(c, "media")) != "")
-				continue;
+			if(d.hasattr(c, "media") && trimsp(d.attr(c, "media")) != "" &&
+			   (layenv == nil || !style->mediamatch(css->tokenize(d.attr(c, "media")), layenv)))
+				continue;	# a source for another viewport (apple.com's hero, by width and height)
 			if(d.hasattr(c, "type") && !decodes(d.attr(c, "type")))
 				continue;
 			if((u := srcset(d.attr(c, "srcset"))) != nil)

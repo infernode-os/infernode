@@ -1688,18 +1688,29 @@ lay(root: ref Box, width, height: int)
 	root.x = root.ml;
 	root.y = root.mt;
 	# boxes whose containing block is the viewport, in document order
-	# (pending is newest first; pos lists are kept newest first too)
-	vp: list of ref Abs;
-	for(p := l.pending; p != nil; p = tl p)
-		if((hd p).cb == nil)
-			vp = hd p :: vp;
-	for(; vp != nil; vp = tl vp) {
-		a := hd vp;
-		if(a.icb != nil && a.area == nil)
-			a.area = inlinearea(root, a.icb);
-		if(a.flexsp >= 1 && a.flexsp <= 3 && a.area == nil)
-			a.area = flexarea(root, a.sparent);
-		layabs(l, a, root, Rect((-root.x, -root.y), (width - root.x, height - root.y)));
+	# (pending is newest first; pos lists are kept newest first too),
+	# and then those that laying them out found: a fixed box inside a
+	# fixed box (github.com's header, in its fixed wrapper) was left
+	# unlaid, at 0,0 and no size
+	for(;;) {
+		vp, rest: list of ref Abs;
+		for(p := l.pending; p != nil; p = tl p)
+			if((hd p).cb == nil)
+				vp = hd p :: vp;
+			else
+				rest = hd p :: rest;
+		if(vp == nil)
+			break;
+		for(l.pending = nil; rest != nil; rest = tl rest)
+			l.pending = hd rest :: l.pending;
+		for(; vp != nil; vp = tl vp) {
+			a := hd vp;
+			if(a.icb != nil && a.area == nil)
+				a.area = inlinearea(root, a.icb);
+			if(a.flexsp >= 1 && a.flexsp <= 3 && a.area == nil)
+				a.area = flexarea(root, a.sparent);
+			layabs(l, a, root, Rect((-root.x, -root.y), (width - root.x, height - root.y)));
+		}
 	}
 	l.pending = nil;
 	shiftmarkers(root);

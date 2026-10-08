@@ -114,6 +114,7 @@ void	intrdump(void);
 int	intrpending(void);
 int	getmacaddr(uchar*);
 void	mmunormalnc(uintptr, usize);
+void	mmuguardzero(void);
 extern ulong nspurious;
 ulong	ainc(ulong*);
 /*

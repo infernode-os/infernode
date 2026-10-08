@@ -1,8 +1,8 @@
 #
 # agentlib.m - Shared agent library for Veltro
 #
-# Common functions used by veltro.b (single-shot agent) and repl.b
-# (interactive REPL). Handles LLM session management, prompt building,
+# Common functions used by the Veltro agent loops (veltro.b, lucibridge.b,
+# subagent.b). Handles LLM session management, prompt building,
 # response parsing, and tool execution via the /tool 9P filesystem.
 #
 # NOTE: Include sys.m before including this file (needed for Sys->FD type).

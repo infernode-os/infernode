@@ -227,13 +227,13 @@ run_test() {
 	fi
 }
 
-# ── Test 1: Authenticated mount (no encryption) ──
+# ── Test 1: Authenticated mount with record protection ──
 
 echo ""
-echo "  Test 1: Auth-only mount (no encryption)"
+echo "  Test 1: Authenticated, protected mount"
 
 TEST1_CMDS="
-	mount -C none -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 	cat /mnt/llm/new
 "
 
@@ -243,15 +243,15 @@ if run_test "auth-only" 30 "$TEST1_CMDS"; then
 	info "  Output: $OUTPUT"
 	# /mnt/llm/new should return a session ID (a number)
 	if echo "$OUTPUT" | grep -qE '^[0-9]+$'; then
-		pass "Test 1: Auth-only mount — got session ID: $(echo "$OUTPUT" | grep -oE '^[0-9]+$' | head -1)"
+		pass "Test 1: Protected mount — got session ID: $(echo "$OUTPUT" | grep -oE '^[0-9]+$' | head -1)"
 		passed=$((passed + 1))
 	else
-		fail "Test 1: Auth-only mount — no session ID in output"
+		fail "Test 1: Protected mount — no session ID in output"
 		echo "    Output: $OUTPUT"
 		failed=$((failed + 1))
 	fi
 else
-	fail "Test 1: Auth-only mount — command failed"
+	fail "Test 1: Protected mount — command failed"
 	cat "$ROOT/tests/.test-auth-only.log" 2>/dev/null | sed 's/^/    /'
 	failed=$((failed + 1))
 fi
@@ -259,10 +259,10 @@ fi
 # ── Test 2: Authenticated mount with encryption ──
 
 echo ""
-echo "  Test 2: Auth + encrypted mount (rc4_256 sha1)"
+echo "  Test 2: Auth + encrypted mount (AES-256/SHA-256)"
 
 TEST2_CMDS="
-	mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 	cat /mnt/llm/new
 "
 
@@ -295,7 +295,7 @@ echo "  Test 3: LLM query through encrypted channel"
 #
 # We use a shell script that captures the session ID and uses it.
 TEST3_CMDS="
-	mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+	mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 	id = \`{cat /mnt/llm/new};
 	echo 'Reply with just the word hello' > /mnt/llm/\$id/ask;
 	cat /mnt/llm/\$id/ask
@@ -379,7 +379,7 @@ if [[ "$INTERACTIVE" -eq 1 ]] && [[ "$failed" -eq 0 ]]; then
 
 	# Instance B stays alive while the user interacts (cleanup trap runs on EXIT)
 	"$EMU" -r"$ROOT" /dis/sh.dis -c "
-		mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
+		mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!127.0.0.1!${SERVER_PORT} /mnt/llm;
 		echo 'Connected to Instance B (authenticated + encrypted)';
 		echo 'LLM service mounted at /mnt/llm';
 		sh

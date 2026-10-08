@@ -4,7 +4,7 @@ implement AgentlibTest;
 # agentlib_test.b - Tests for agentlib response parsing
 #
 # Covers parseaction() and stripaction() including the DONE+text case
-# fixed in repl.b (text before DONE must be displayed, not discarded).
+# fixed in the old repl.b (text before DONE must be displayed, not discarded).
 #
 # To run: emu -r. /tests/agentlib_test.dis [-v]
 #
@@ -94,7 +94,7 @@ testParseDoneMarkdown(t: ref T)
 	t.assertseq(args, "", "markdown DONE has empty args");
 }
 
-# Text before DONE — the bug case fixed in repl.b.
+# Text before DONE — the bug case fixed in the old repl.b.
 # parseaction must return DONE (not lose it due to text on prior lines).
 testParseDoneWithText(t: ref T)
 {
@@ -325,7 +325,7 @@ testStripBlankPlusDone(t: ref T)
 testStripHelloVeltroBugPattern(t: ref T)
 {
 	# This is the exact response pattern that triggered the bug where
-	# repl.b discarded text before DONE
+	# the old repl.b discarded text before DONE
 	resp := "[Veltro]Hello! I'm Veltro, running on Inferno OS. What can I help you with?\n\nDONE";
 	result := agentlib->stripaction(resp);
 	t.assert(len result > 0, "regression: greeting text not empty");

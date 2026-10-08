@@ -172,6 +172,8 @@ stdout/stderr stream to the terminal, Ctrl-C exits, no signing/Gatekeeper/Transl
 
 The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` is currently untracked and authored ad-hoc — treat it as the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
 
+To open a file in an editor for the user, run `plumb <file>` (opens it in their running Xenith, starting one if needed), falling back to `tools/xen <file>` (Xenith alone, full-window) if `plumb` fails; `tools/xen -s <file>` for sam. Both return at once; leaving the editor halts that instance. See [docs/XEN.md](docs/XEN.md).
+
 ## Inferno® Shell Differences
 
 The Inferno® shell is rc-style, not POSIX sh:
@@ -399,6 +401,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `edit_test.b` | Edit operations |
 | `xenith_concurrency_test.b` | Xenith concurrent operations |
 | `xenith_exit_test.b` | Xenith exit handling |
+| `xenith_frame_test.b` | Xenith's frame (text layout and drawing) against a simulated screen: insert, delete, select, wrap, tabs, overflow, random edits; the suite is `xenith_framesuite.b` |
 | `sdl3_test.b` | SDL3 GUI backend |
 | `secp256k1_test.b` | secp256k1 curve, ECDSA, recovery |
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
@@ -411,11 +414,23 @@ timeoutTask(ch: chan of int, ms: int)
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
+| `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
 | `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler |
+| `jit_bounds_test.b` | Negative and overlarge indices on arrays, strings and slices raise `array bounds error` from compiled code; `tests/host/jit_bounds_test.sh` runs it under `-c0` and `-c1` |
+| `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
 | `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
 | `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
+| `hostplumb_test.b` | hostplumb(1) re-plumbing host messages under `/n/local`; the plumber refusing a message nothing can receive |
+| `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
+| `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |
+| `tests/host/xenith_agent_test.sh` | The `Agent` window in a headless Xenith: a message sent, the reply shown |
+| `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |
+| `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool) |
+| `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
+
+Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways). They need the SDL GUI emulator and skip on a headless build.
 
 ## Project Structure
 

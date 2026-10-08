@@ -8,9 +8,12 @@ is at 192.168.1.104, the tester at 192.168.1.151, kernels are built under
 addresses at the top of a script to use it elsewhere.
 
 All of them talk to the board through its network console (tcp 17010), one
-session per call, a few seconds each: the console is a non-interactive shell
-in a namespace of its own, so a loop started with `&` dies with its session
-and a redirection that cannot be opened ends the shell.
+session per call, a few seconds each.  The console is a non-interactive shell
+in a namespace of its own, but a process it starts deliberately outlives that
+shell.  A bench tool that holds a long-running process therefore backgrounds
+it, records `$apid`, waits for controlling-socket EOF, and writes `killgrp` to
+that process's `/prog` control file.  Closing the tester now removes exactly
+its process group instead of leaving an unauthenticated test port behind.
 
 ## Kernels
 

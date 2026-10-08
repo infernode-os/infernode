@@ -97,6 +97,7 @@ Term: adt {
 	snarflen:	int;
 	exited:	int;
 	nexttag:	int;
+	originat:	int;	# the last Horigin
 	t:	ref T;
 
 	start:	fn(t: ref T, files: list of string): ref Term;
@@ -110,6 +111,7 @@ Term: adt {
 	unlock:	fn(tm: self ref Term);
 	need:	fn(tm: self ref Term, tag: int, what: string): ref Win;
 	openwin:	fn(tm: self ref Term, tag: int, what: string): ref Win;
+	open:	fn(tm: self ref Term, w: ref Win);
 	sync:	fn(tm: self ref Term);
 	command:	fn(tm: self ref Term, w: ref Win, s: string): string;
 	output:	fn(tm: self ref Term): string;
@@ -126,7 +128,7 @@ Term.start(t: ref T, files: list of string): ref Term
 		t.fatal(sys->sprint("pipe: %r"));
 	spawn engine->run(fds[1], files);
 	fds[1] = nil;
-	tm := ref Term(fds[0], chan of (int, array of byte), nil, 0, 0, nil, 0, 0, 2000, t);
+	tm := ref Term(fds[0], chan of (int, array of byte), nil, 0, 0, nil, 0, 0, 2000, 0, t);
 	spawn reader(fds[0], tm.msgs);
 
 	tm.send(Tversion, pshort(0));
@@ -337,6 +339,7 @@ Term.inmesg(tm: self ref Term, mtype: int, d: array of byte)
 		w.text = w.text[0:p] + w.text[p+n:];
 	Horigin =>
 		tm.openwin(gshort(d, 0), "Horigin");
+		tm.originat = glong(d, 2);
 		tm.unlock();
 	Hunlock =>
 		tm.unlock();
@@ -546,7 +549,10 @@ readfile(name: string): string
 
 SAMPLE: con "one apple\ntwo pears\nthree apples\nfour\n";
 
-# a session with one file holding text, its window open and filled
+# A session with one file holding text, its window open and filled.
+# As in sam, a file named on the command line is only put in the menu;
+# the window is opened the way samterm does when the file is chosen
+# from menu 3.
 session(t: ref T, name, text: string): (ref Term, ref Win)
 {
 	path := DIR + "/" + name;
@@ -555,9 +561,20 @@ session(t: ref T, name, text: string): (ref Term, ref Win)
 	w := tm.byname(path);
 	if(w == nil)
 		t.fatal("file not in the menu");
-	if(!w.open)
-		t.fatal("file's window was not opened");
+	if(w.open)
+		t.fatal("a window was opened before anything asked for one");
+	tm.open(w);
 	return (tm, w);
+}
+
+# menu 3, a file with no window: sweeptext's Tstartfile
+Term.open(tm: self ref Term, w: ref Win)
+{
+	w.open = 1;
+	w.text = "";
+	tm.send(Tstartfile, pvlong(w.tag));
+	tm.locks++;
+	tm.settle();
 }
 
 # the rasp must agree with the file written from it
@@ -576,8 +593,46 @@ testStartup(t: ref T)
 	(tm, w) := session(t, "startup", SAMPLE);
 	t.assertseq(w.text, SAMPLE, "rasp filled from Trequest");
 	t.assertseq(tm.cmd().name, "~~sam~~", "command window has a menu entry");
-	t.assert(tm.output() != "", "load reported in the command window");
+	t.assertseq(tm.output(), " -. " + w.name + "\n", "load reported with the file's menu line");
 	t.assert(!w.dirty, "fresh file is clean");
+	tm.stop();
+}
+
+# sam.c and cmd.c: the files named are read only when first used, and
+# the terminal is sent Hcurrent (which sweeps a window) after a command
+# that reads the current file, or makes another file current
+testLazyCurrent(t: ref T)
+{
+	path := DIR + "/lazy";
+	writefile(path, SAMPLE);
+	tm := Term.start(t, path :: nil);
+	w := tm.byname(path);
+	t.assert(w != nil && !w.open, "in the menu, no window");
+	t.assertseq(tm.output(), "", "nothing read at startup");
+	t.assertseq(tm.command(nil, "2p\n"), " -. " + path + "\ntwo pears\n", "read when first used");
+	t.assert(w.open, "and its window asked for");
+	t.assertseq(w.text, SAMPLE, "with the file in it");
+	tm.stop();
+}
+
+# moveto.c's lookorigin: Torigin p0 ls starts the window ls lines back
+# from p0, so 1 is the start of p0's own line
+testOrigin(t: ref T)
+{
+	(tm, w) := session(t, "origin", SAMPLE);
+	tm.originat = -1;
+	tm.send(Torigin, tsll(w.tag, 14, 1));
+	tm.locks++;
+	tm.settle();
+	t.asserteq(tm.originat, 10, "ls 1: start of the line");
+	tm.send(Torigin, tsll(w.tag, 14, 2));
+	tm.locks++;
+	tm.settle();
+	t.asserteq(tm.originat, 0, "ls 2: the line before");
+	tm.send(Torigin, tsll(w.tag, 10, 1));
+	tm.locks++;
+	tm.settle();
+	t.asserteq(tm.originat, 10, "ls 1 at a line start: that line");
 	tm.stop();
 }
 
@@ -598,6 +653,9 @@ testAddresses(t: ref T)
 	t.assertseq(tm.command(w, "3\n"), "", "an address alone selects");
 	t.asserteq(w.dot0, 20, "dot start after 3");
 	t.asserteq(w.dot1, 33, "dot end after 3");
+	# xec.c's nl_cmd: an empty command selects the next line and prints it
+	tm.command(w, "1\n");
+	t.assertseq(tm.command(w, "\n"), "two pears\n", "newline alone prints the next line");
 	t.assertseq(tm.command(w, "9p\n"), "?address out of range\n", "range error");
 	t.assertseq(tm.command(w, "/nothere/\n"), "?no match for regexp\n", "search error");
 	tm.stop();
@@ -808,6 +866,7 @@ testFiles(t: ref T)
 	writefile(DIR + "/f2", "second\n");
 	tm := Term.start(t, (DIR + "/f1") :: nil);
 	w1 := tm.byname(DIR + "/f1");
+	tm.open(w1);
 	tm.command(w1, "B " + DIR + "/f2\n");
 	w2 := tm.byname(DIR + "/f2");
 	t.assert(w2 != nil && w2.open, "B opens a file");
@@ -852,6 +911,8 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->create(DIR, Sys->OREAD, Sys->DMDIR|8r777);
 
 	run("Startup", testStartup);
+	run("LazyCurrent", testLazyCurrent);
+	run("Origin", testOrigin);
 	run("Addresses", testAddresses);
 	run("Edits", testEdits);
 	run("MultilineText", testMultilineText);

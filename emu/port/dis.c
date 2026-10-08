@@ -23,7 +23,7 @@ struct
 	Atidle*	idletasks;
 } isched;
 
-int	bflag;
+int	bflag = 1;	/* JIT array bounds checks; emu -B clears it */
 int	cflag;
 uvlong	gcbusy;
 uvlong	gcidle;
@@ -1081,6 +1081,51 @@ disfault(void *reg, char *msg)
 	/* cause an exception in the dis prog.  As for error(), but Plan 9 needs reg*/
 	kstrcpy(up->env->errstr, msg, ERRMAX);
 	oslongjmp(reg, up->estack[--up->nerr], 1);
+}
+
+/*
+ * A memory fault at this address is a Limbo nil dereference: Dis's nil
+ * (H) is -1, and a field of a nil ref adt is a small offset from 0.
+ */
+int
+isnilfault(uintptr addr)
+{
+	return addr == ~(uintptr)0 || addr < 512;
+}
+
+/*
+ * A fault in JIT-compiled code, before it becomes the program's
+ * exception; 1 if pc is in the running module's compiled code.  The JIT keeps R.PC only around calls, so at a fault it
+ * still names the last call, and handler() searched the exception
+ * tables at that place, not at the faulting instruction: a nil load
+ * inside a {...} exception block was not caught and the program died
+ * Broken.  The interpreter keeps R.PC current, so -c0 was right and
+ * -c1 was not.  os/arm64/trap.c does the same for bare metal (#753).
+ *
+ * handler() takes R.PC as a return address and looks one byte back,
+ * so R.PC is set just past the faulting instruction: the next word on
+ * the fixed-width ISAs, which keeps it aligned, and one byte on x86.
+ * A fault outside the running module's compiled code (in emu itself,
+ * in a builtin) leaves R.PC alone.
+ */
+int
+jitfault(uintptr pc)
+{
+	Modlink *ml;
+
+	if(up == nil || up->type != Interp)
+		return 0;
+	ml = R.M;
+	if(ml == nil || ml == H || !ml->compiled || ml->m == nil)
+		return 0;
+	if(pc < (uintptr)ml->prog || pc - (uintptr)ml->prog >= ml->m->jitsize)
+		return 0;
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+	R.PC = (Inst*)(pc + 1);
+#else
+	R.PC = (Inst*)(pc + 4);
+#endif
+	return 1;
 }
 
 void

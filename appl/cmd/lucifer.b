@@ -128,6 +128,7 @@ AppSlot: adt {
 	id:     string;
 	owneract: int;		# activity that created this app (immutable after alloc)
 	client: ref Client;
+	pid:	int;		# app's main proc and process group, -1 until it runs
 };
 MAXAPPSLOTS: con 48;
 MAXTOKENPENDING: con 16;
@@ -156,6 +157,7 @@ TaskPres: adt {
 	npendingtokens:	int;
 	rszch:		chan of Rect;		# resize channel for this task's preswmloop
 	preslooppid:	int;			# pid of this task's preswmloop
+	done:		chan of int;		# teardowntask -> joinrelay, reqrelay
 };
 
 MAXTASKPRES: con 32;
@@ -660,6 +662,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	if(actid >= 0)
 		spawn nslistener();
 	spawn globallistener();
+	spawn themewatcher();
 	spawn tileblinker();
 
 	# Main loop (header redraws + quit/resize)
@@ -1237,9 +1240,15 @@ newtaskpres(id: int): ref TaskPres
 	tp.applock <-= 1;
 	tp.rszch = chan of Rect;
 	tp.preslooppid = -1;
+	tp.done = chan of int;
 
-	# Register in global task array
-	if(ntaskpres < MAXTASKPRES) {
+	# Register in global task array, reusing a torn-down task's entry
+	for(i := 0; i < ntaskpres; i++)
+		if(taskpres[i] == nil)
+			break;
+	if(i < ntaskpres)
+		taskpres[i] = tp;
+	else if(ntaskpres < MAXTASKPRES) {
 		taskpres[ntaskpres] = tp;
 		ntaskpres++;
 	}
@@ -1270,18 +1279,105 @@ mountwsys(m: Wmsrv, id: int)
 		sys->fprint(stderr, "lucifer: mount %s: %r\n", dir);
 }
 
-# joinrelay: forward join events from a task's wmsrv to the main preswmloop.
-joinrelay(src, dst: chan of (ref Client, chan of string))
+# joinrelay: forward join events from a task's wmsrv to the main preswmloop,
+# until teardowntask says the task is gone.
+joinrelay(tp: ref TaskPres, dst: chan of (ref Client, chan of string))
 {
-	for(;;)
-		dst <-= <-src;
+	for(;;) alt {
+	j := <-tp.join =>
+		dst <-= j;
+	<-tp.done =>
+		return;
+	}
 }
 
-# reqrelay: forward req events from a task's wmsrv to the main preswmloop.
-reqrelay(src, dst: chan of (ref Client, array of byte, Sys->Rwrite))
+# reqrelay: forward req events from a task's wmsrv to the main preswmloop,
+# until teardowntask says the task is gone.
+reqrelay(tp: ref TaskPres, dst: chan of (ref Client, array of byte, Sys->Rwrite))
 {
-	for(;;)
-		dst <-= <-src;
+	for(;;) alt {
+	r := <-tp.req =>
+		dst <-= r;
+	<-tp.done =>
+		return;
+	}
+}
+
+# teardowntask: end activity id's presentation state when the activity
+# is deleted.  Its apps are asked to exit, then killed; its wmsrv, the
+# relays into preswmloop and the /mnt/wsys/<id> mount go; the TaskPres
+# entry is freed.  Activity 0 is the session's own and never goes.
+# Runs in its own process: wmsrv->stop() waits on the wmsrv, which may
+# be waiting on preswmloop.
+teardowntask(id: int)
+{
+	if(id == 0)
+		return;
+	for(i := 0; i < ntaskpres; i++)
+		if(taskpres[i] != nil && taskpres[i].actid == id)
+			break;
+	if(i == ntaskpres)
+		return;
+	tp := taskpres[i];
+	taskpres[i] = nil;	# no new launches or joins find it
+	if(curtaskpres == tp)
+		curtaskpres = nil;
+
+	# Ask each app to exit as wm/wm's Delete does, give them a moment,
+	# then kill what is left.  Each app runs in its own process group
+	# (launchappns), so killgrp takes only the app.
+	<-tp.applock;
+	pids: list of int;
+	for(si := 0; si < tp.nappslots; si++) {
+		a := tp.appslots[si];
+		if(a == nil)
+			continue;
+		if(a.client != nil)
+			spawn sendctlmsg(a.client.ctl, "exit");
+		if(a.pid > 0)
+			pids = a.pid :: pids;
+	}
+	tp.applock <-= 1;
+	for(t := 0; t < 30 && alive(pids); t++)
+		sys->sleep(100);
+	for(; pids != nil; pids = tl pids)
+		writetofile(sys->sprint("/prog/%d/ctl", hd pids), "killgrp");
+
+	tp.wmsrvmod->stop();
+	tp.done <-= 1;
+	tp.done <-= 1;
+	sys->unmount(nil, "/mnt/wsys/" + string id);
+	sys->remove("/mnt/wsys/" + string id);
+	tp.wmsrvmod = nil;
+}
+
+# actdeleted: whether activity id has been deleted (luciuisrv keeps it,
+# hidden, so its id isn't reused).
+actdeleted(id: int): int
+{
+	st := readfile(sys->sprint("%s/activity/%d/status", mountpt, id));
+	return st != nil && strip(st) == "hidden";
+}
+
+# alive: whether any of pids is still running.
+alive(pids: list of int): int
+{
+	for(; pids != nil; pids = tl pids) {
+		(ok, nil) := sys->stat(sys->sprint("/prog/%d/status", hd pids));
+		if(ok >= 0)
+			return 1;
+	}
+	return 0;
+}
+
+# setslotpid: record app id's main pid in its task's slot.
+setslotpid(tp: ref TaskPres, id: string, pid: int)
+{
+	<-tp.applock;
+	for(i := 0; i < tp.nappslots; i++)
+		if(tp.appslots[i] != nil && tp.appslots[i].id == id)
+			tp.appslots[i].pid = pid;
+	tp.applock <-= 1;
 }
 
 # lookuptaskpres: find the TaskPres for a given activity ID.
@@ -1411,7 +1507,14 @@ preswmloop(scr: ref Screen, zoner: Rect,
 				continue;
 			}
 			cleanupappslot(c);
-			# App disconnected: keep preswmloop running for remaining apps
+			# App disconnected: free its windows and stop its minder in
+			# wmsrv, as wm/wm does; otherwise the minder blocks forever
+			# holding the client and its window images on presscr.
+			c.remove();
+			c.wins = nil;
+			if(c.stop != nil)
+				c.stop <-= 1;
+			# keep preswmloop running for remaining apps
 		} else {
 			s := string data;
 			n := len data;
@@ -1553,6 +1656,16 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			# Remove the tab immediately rather than waiting for the async fd close.
 			if(s == "embedded-exit")
 				cleanupappslot(c);
+			# "!move"/"!size": a frame press asks to move or reshape.  The
+			# zone places its windows itself, so the answer is the window
+			# as it is -- but an answer: the client waits for an image
+			# after any "!" request.
+			if((len s >= 5 && s[0:5] == "!move" || len s >= 5 && s[0:5] == "!size") &&
+			   (existimg := c.image("app")) != nil)
+				c.setimage("app", existimg);
+			# "embedded" (wmlib->embedded): yes, the zone frames and places
+			# its windows, so the client draws no frame of its own.  The OK
+			# below is the answer.
 			# All other req messages ("start ptr", "start kbd", "raise", etc.) — reply OK
 			alt { rc <-= (n, err) => ; * => ; }
 		}
@@ -2199,8 +2312,8 @@ globallistener()
 				if(newtp == nil)
 					sys->fprint(stderr, "lucifer: failed to create task pres for %d\n", newid);
 				else {
-					spawn joinrelay(newtp.join, mainjoin);
-					spawn reqrelay(newtp.req, mainreq);
+					spawn joinrelay(newtp, mainjoin);
+					spawn reqrelay(newtp, mainreq);
 				}
 				# Switch to new activity
 				alt { switchch <-= newid => ; * => ; }
@@ -2232,6 +2345,8 @@ globallistener()
 				delid := strtoint(delrest);
 				if(delid >= 0 && delid == actid)
 					alt { switchch <-= 0 => ; * => ; }
+				if(delid > 0)
+					spawn teardowntask(delid);
 			} else if(!hasprefix(rest, "new ") && !hasprefix(rest, "urgency ")) {
 				# Pure switch event: "activity {id}"
 				newid := strtoint(rest);
@@ -2246,35 +2361,49 @@ globallistener()
 			# Any activity event: signal main loop to reload tiles and redraw
 			alt { uievent <-= 1 => ; * => ; }
 		}
-		if(hasprefix(ev, "theme ")) {
-			# Live theme switch: reload colours, redraw chrome, notify zones
-			reloadtheme();
-			convEvCh <-= ev;
-			ctxEvCh <-= ev;
-			if(lucipres_g != nil)
-				lucipres_g->deliverevent(ev);
-			if(presrender_g != nil)
-				presrender_g->deliverevent(ev);
-			# Push "retheme" down every embedded app's ctl channel.  The
-			# stock tkclient loop routes it (<-top.ctxt.ctl => wmctl) to the
-			# libtk "retheme" command, so ANY Tk app — including ones with no
-			# theme listener of their own (tetris, task, …) and .dis-only apps
-			# (they load the current tkclient at runtime) — refreshes its
-			# colour environment.  Apps that also self-handle theme events are
-			# unaffected (retheme is idempotent).
-			for(tti := 0; tti < ntaskpres; tti++) {
-				ttp := taskpres[tti];
-				if(ttp == nil)
-					continue;
-				<-ttp.applock;
-				for(tai := 0; tai < ttp.nappslots; tai++)
-					if(ttp.appslots[tai] != nil && ttp.appslots[tai].client != nil)
-						alt { ttp.appslots[tai].client.ctl <-= "retheme" => ; * => ; }
-				ttp.applock <-= 1;
-			}
-			alt { uievent <-= 1 => ; * => ; }
-		}
 	}
+}
+
+
+# Live theme switch, whoever wrote /lib/lucifer/theme/current
+# (lucitheme->watch): reload colours, redraw chrome, notify zones
+themewatcher()
+{
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
+		return;
+	c := lt->watch();
+	for(;;)
+		themechanged("theme " + <-c);
+}
+
+themechanged(ev: string)
+{
+	reloadtheme();
+	convEvCh <-= ev;
+	ctxEvCh <-= ev;
+	if(lucipres_g != nil)
+		lucipres_g->deliverevent(ev);
+	if(presrender_g != nil)
+		presrender_g->deliverevent(ev);
+	# Push "retheme" down every embedded app's ctl channel.  The
+	# stock tkclient loop routes it (<-top.ctxt.ctl => wmctl) to the
+	# libtk "retheme" command, so ANY Tk app — including ones with no
+	# theme listener of their own (tetris, task, …) and .dis-only apps
+	# (they load the current tkclient at runtime) — refreshes its
+	# colour environment.  Apps that also self-handle theme events are
+	# unaffected (retheme is idempotent).
+	for(tti := 0; tti < ntaskpres; tti++) {
+		ttp := taskpres[tti];
+		if(ttp == nil)
+			continue;
+		<-ttp.applock;
+		for(tai := 0; tai < ttp.nappslots; tai++)
+			if(ttp.appslots[tai] != nil && ttp.appslots[tai].client != nil)
+				alt { ttp.appslots[tai].client.ctl <-= "retheme" => ; * => ; }
+		ttp.applock <-= 1;
+	}
+	alt { uievent <-= 1 => ; * => ; }
 }
 
 # Toggle blink state for urgency tiles
@@ -3121,12 +3250,18 @@ launchapp(id, dispath, appdata: string, targetact: int)
 	}
 	# Find or create the target task's presentation state
 	tp := lookuptaskpres(targetact);
+	if(tp == nil && actdeleted(targetact)) {
+		# Deleted (teardowntask has been or is being run): don't bring
+		# its presentation state back for a late launch.
+		writeappstatus(id, "dead", targetact);
+		return;
+	}
 	if(tp == nil) {
 		# Activity created by agent spawn or other non-GUI path — create on demand
 		tp = newtaskpres(targetact);
 		if(tp != nil) {
-			spawn joinrelay(tp.join, mainjoin);
-			spawn reqrelay(tp.req, mainreq);
+			spawn joinrelay(tp, mainjoin);
+			spawn reqrelay(tp, mainreq);
 		}
 	}
 	if(tp == nil) {
@@ -3142,7 +3277,7 @@ launchapp(id, dispath, appdata: string, targetact: int)
 		writeappstatus(id, "dead", targetact);
 		return;
 	}
-	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil);
+	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil, -1);
 	tp.nappslots++;
 	tp.applock <-= 1;
 	# Load the GUI app module
@@ -3158,7 +3293,7 @@ launchapp(id, dispath, appdata: string, targetact: int)
 	newctxt := ref Draw->Context(display, presscr, appwm);
 	appargs: list of string;
 	if(appdata != nil && appdata != "") {
-		# Tokenize appdata so multi-flag strings like "-c 1 -t dark -E"
+		# Tokenize appdata so multi-flag strings like "-c 1 -E"
 		# arrive as separate list elements (argopt expects one flag per element).
 		(nil, datatl) := sys->tokenize(appdata, " \t");
 		appargs = dispath :: datatl;
@@ -3188,7 +3323,12 @@ launchapp(id, dispath, appdata: string, targetact: int)
 launchappns(tp: ref TaskPres, guimod: GuiApp,
 	ctxt: ref Draw->Context, args: list of string, id: string)
 {
-	spawn appreaper(tp.actid, id, sys->pctl(0, nil));
+	pid := sys->pctl(0, nil);
+	spawn appreaper(tp.actid, id, pid);
+	# The app's own process group, so ending its activity can kill it
+	# and everything it spawned without touching Lucifer's.
+	sys->pctl(Sys->NEWPGRP, nil);
+	setslotpid(tp, id, pid);
 	# Activity 0 uses the default /chan/wmctl — no FORKNS needed.
 	# Child tasks use /chan/wmctl.N and need FORKNS + bind so apps
 	# find the task's wmsrv at the well-known /chan/wmctl path.

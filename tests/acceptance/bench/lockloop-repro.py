@@ -21,6 +21,7 @@ def held(cmd):
     time.sleep(0.6); c.recv(4096); c.sendall((tok + '\n').encode())
     try: c.recv(4096)
     except socket.timeout: pass
+    cmd += " & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl"
     c.sendall((cmd + '\n').encode()); return c
 def pusher():
     data = b'\xa5' * (256*1024)
@@ -64,6 +65,9 @@ while time.time() - t0 < minutes * 60:
     if m:
         hit = m.group(0); break
 stop.set()
+for c in keep:
+    try: c.close()
+    except Exception: pass
 el = time.time() - t0
 say('%s after %.0f s: %s; pushes %d (%d failed) sessions %d (%d failed)' % ('PANIC' if hit else 'no panic', el, hit or '-', counts['push'], counts['pushfail'], counts['sess'], counts['sessfail']))
 sys.exit(1 if hit else 0)

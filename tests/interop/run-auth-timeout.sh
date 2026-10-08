@@ -51,6 +51,14 @@ trap cleanup EXIT
 
 mkdir -p "$ROOT/tmp" "$ROOT$MNT"
 rm -f "$KEY_HOST" "$IDENTITY_HOST" "$OUT"
+# listen's authenticated command runs as the certificate identity, not the
+# emulator's host owner.  Pre-create this observation file writable so the
+# identity assertion tests setid rather than the host-backed /tmp directory's
+# create permission.
+if [ "$KIND" = listen ]; then
+	: >"$IDENTITY_HOST"
+	chmod 666 "$IDENTITY_HOST"
+fi
 
 cat >"$SERVER_RC" <<EOF
 load std
@@ -84,9 +92,18 @@ def connect():
     s.settimeout(3)
     return s
 
+def auth_version(s):
+    frame = b""
+    while len(frame) < 6:
+        part = s.recv(6 - len(frame))
+        if not part:
+            break
+        frame += part
+    return frame
+
 held = [connect() for _ in range(admitted)]
 for i, s in enumerate(held):
-    frame = s.recv(6)
+    frame = auth_version(s)
     if not frame.startswith(b"0001\n"):
         print(f"FAIL: held client {i} expected auth version frame, got {frame!r}")
         sys.exit(1)
@@ -104,7 +121,7 @@ if data:
 held[0].close()
 time.sleep(1.2)
 replacement = connect()
-frame = replacement.recv(6)
+frame = auth_version(replacement)
 if not frame.startswith(b"0001\n"):
     print(f"FAIL: released pre-auth slot was not reusable: {frame!r}")
     sys.exit(1)

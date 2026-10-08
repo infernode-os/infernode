@@ -9,7 +9,6 @@ TARG=\
 	charonrender.dis\
 	pdfrender.dis\
 	mermaidrender.dis\
-	mdfmt.dis\
 	htmlfmt.dis\
 
 MODULES=\

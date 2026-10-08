@@ -1284,6 +1284,12 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 #
 Netconsport: con "tcp!*!17010";
 Netconsfile: con "/n/dos/netconsole";
+Netconsauthlimit: con 4;
+Netconsauthms: con 15000;
+Netconsauthrate: con 8;
+netconslots: chan of int;
+netconsratewindow := 0;
+netconsratecount := 0;
 
 #
 # The token, and whether the console should run at all.
@@ -1371,18 +1377,49 @@ netconsline(fd: ref Sys->FD): string
 	buf := array[256] of byte;
 	nb := 0;
 	while(nb < len buf){
-		n := sys->read(fd, buf[nb:], len buf - nb);
+		# Read only through the terminator.  A bulk read can also consume the
+		# first shell command when a client sends "token\ncommand\n" in one
+		# TCP segment; there is no way to put those bytes back for sh.
+		n := sys->read(fd, buf[nb:nb+1], 1);
 		if(n <= 0)
 			break;
 		nb += n;
-		s := string buf[0:nb];
-		for(i := 0; i < len s; i++)
-			if(s[i] == '\n' || s[i] == '\r')
-				return s[0:i];
+		if(buf[nb-1] == byte '\n' || buf[nb-1] == byte '\r')
+			return string buf[0:nb-1];
 	}
 	if(nb == 0)
 		return "";
 	return string buf[0:nb];
+}
+
+# Fixed-work comparison over the complete input bound.  The token still
+# crosses the wire in clear; this only removes a timing oracle for online
+# guesses made by a peer that cannot already observe the traffic.
+netconstok(got, want: string): int
+{
+	diff := len got ^ len want;
+	for(i := 0; i < 256; i++){
+		g := w := 0;
+		if(i < len got)
+			g = int got[i];
+		if(i < len want)
+			w = int want[i];
+		diff |= g ^ w;
+	}
+	return diff == 0;
+}
+
+netconsrateallow(): int
+{
+	now := sys->millisec();
+	if(netconsratecount == 0 || now < netconsratewindow || now-netconsratewindow >= 1000){
+		netconsratewindow = now;
+		netconsratecount = 0;
+	}
+	if(netconsratecount >= Netconsauthrate)
+		return 0;
+	netconsratecount++;
+	return 1;
 }
 
 netconsole()
@@ -1398,6 +1435,7 @@ netconsole()
 			Netconsfile);
 		return;
 	}
+	netconslots = chan[Netconsauthlimit] of int;
 
 	(ok, c) := sys->announce(Netconsport);
 	if(ok < 0){
@@ -1436,11 +1474,27 @@ netconsole()
 			sys->print("init: network console open: %r\n");
 			continue;
 		}
-		spawn netshell(fd, tok);
+		remote := slurp(nc.dir + "/remote").t0;
+		alt {
+		netconslots <-= 1 =>
+			# A connection already over the concurrency cap must not spend
+			# the shared attempt budget and starve a peer when a slot opens.
+			if(tok != "" && !netconsrateallow()){
+				<-netconslots;
+				sys->print("init: network console: token rate limit reached from %s\n", remote);
+				sys->fprint(fd, "busy\n");
+				fd = nil;
+			}else
+				spawn netshell(fd, tok, remote);
+		* =>
+			sys->print("init: network console: pre-token limit reached from %s\n", remote);
+			sys->fprint(fd, "busy\n");
+			fd = nil;
+		}
 	}
 }
 
-netshell(fd: ref Sys->FD, tok: string)
+netshell(fd: ref Sys->FD, tok, remote: string)
 {
 	#
 	# Checked before anything else, and before the namespace is
@@ -1448,12 +1502,17 @@ netshell(fd: ref Sys->FD, tok: string)
 	# state of ours at all.
 	#
 	if(tok != ""){
+		cancel := chan[1] of int;
+		spawn netconswatch(cancel, sys->pctl(0, nil), remote);
 		sys->fprint(fd, "token: ");
-		if(netconsline(fd) != tok){
+		line := netconsline(fd);
+		cancel <-= 1;
+		if(!netconstok(line, tok)){
 			sys->fprint(fd, "no\n");
 			return;
 		}
-	}
+	} else
+		<-netconslots;
 
 	#
 	# A private set of file descriptors and a private namespace, so
@@ -1472,6 +1531,31 @@ netshell(fd: ref Sys->FD, tok: string)
 		return;
 	}
 	sh->init(nil, "sh" :: nil);
+}
+
+netconstimer(c: chan of int)
+{
+	# Do not keep the connection alive merely because its watchdog sleeps.
+	sys->pctl(Sys->NEWFD, nil);
+	sys->sleep(Netconsauthms);
+	c <-= 1;
+}
+
+netconswatch(cancel: chan of int, pid: int, remote: string)
+{
+	# Drop the inherited connection before waiting.  The blocked netshell
+	# owns it; killing that process closes it and wakes the peer.
+	sys->pctl(Sys->NEWFD, nil);
+	tmo := chan[1] of int;
+	spawn netconstimer(tmo);
+	alt {
+	<-cancel =>
+		<-netconslots;
+	<-tmo =>
+		<-netconslots;
+		sys->print("init: network console: token timeout from %s\n", remote);
+		killproc(pid);
+	}
 }
 
 #

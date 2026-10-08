@@ -903,7 +903,12 @@ tkdrawrelief(Image *i, Tk *tk, Point o, int color, int rlf)
 		break;	
 	case TKraised:
 		tkbevel(i, o, w, h, bd, l, d);
-		break;	
+		break;
+	case TKsolid:
+		/* one colour all round: a window's frame, in the theme's windowborder */
+		l = tkgc(e, TkCwinborder);
+		tkbevel(i, o, w, h, bd, l, l);
+		break;
 	case TKgroove:
 		t = d;
 		d = l;

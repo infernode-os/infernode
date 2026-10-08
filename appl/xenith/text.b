@@ -553,6 +553,10 @@ Text.insert(t : self ref Text, q0 : int, r : string, n : int, tofile : int, echo
 		else
 			frinsert(t.frame, r, n, q0-t.org);
 	}
+	# a window showing the text as a document (Render) shows the
+	# edit made in another window on the file
+	if(t.what == Body && t.w != nil && t.w.docview)
+		t.w.docrender();
 	if(t.w != nil){
 		c = 'i';
 		if(t.what == Body)
@@ -651,6 +655,8 @@ Text.delete(t : self ref Text, q0 : int, q1 : int, tofile : int)
 		frdelete(t.frame, p0, p1);
 		t.fill();
 	}
+	if(t.what == Body && t.w != nil && t.w.docview)
+		t.w.docrender();
 	if(t.w != nil){
 		c = 'd';
 		if(t.what == Body)
@@ -803,6 +809,31 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 
 	if(alphabet != ALPHA_LATIN)
 		r = transc(r, alphabet);
+	# A rendered document scrolls; anything else goes back to its text
+	if(t.what == Body && t.w != nil && t.w.docview){
+		h := t.frame.r.dy();
+		case(r){
+		Dat->Kscrolldown or Keyboard->Down =>
+			t.w.docscroll(t.frame.font.height * 3);
+			return;
+		Dat->Kscrollup or Keyboard->Up =>
+			t.w.docscroll(-t.frame.font.height * 3);
+			return;
+		Keyboard->Pgdown =>
+			t.w.docscroll(h - t.frame.font.height);
+			return;
+		Keyboard->Pgup =>
+			t.w.docscroll(-(h - t.frame.font.height));
+			return;
+		Keyboard->Home =>
+			t.w.docscroll(-(1<<30));
+			return;
+		Keyboard->End =>
+			t.w.docscroll(1<<30);
+			return;
+		}
+		t.w.docoff();
+	}
 	if (echomode == EM_RAW && t.what == Body) {
 		if (t.w != nil) {
 			s := "a";

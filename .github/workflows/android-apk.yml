@@ -176,6 +176,14 @@ jobs:
             exit 1
           fi
         done
+        # Empty mount roots are dropped by APK packaging unless they carry a
+        # placeholder; a missing /mnt boots to a blank screen.
+        for d in n mnt mnt/llm tmp; do
+          if [ ! -f "$ASSETS/$d/KEEPDIR" ]; then
+            echo "::error::$ASSETS/$d/KEEPDIR missing — mount root would not ship"
+            exit 1
+          fi
+        done
         DIS_COUNT=$(find "$ASSETS/dis" -name '*.dis' | wc -l)
         echo "dis/ files staged: $DIS_COUNT"
         test "$DIS_COUNT" -gt 100 || { echo "::error::suspiciously few .dis files"; exit 1; }

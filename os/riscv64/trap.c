@@ -11,6 +11,8 @@
 #include "io.h"
 #include "ureg.h"
 #include "fns.h"
+#include "interp.h"
+#include "raise.h"
 
 extern char _start[], end[];
 extern char bootstack[], bootstacktop[];
@@ -241,6 +243,24 @@ trap(Ureg *u)
 		probefault[m->machno] = 1;
 		u->pc += inslen(u->pc);
 		return;
+	}
+
+	/*
+	 * A nil dereference in JIT-compiled Dis code is the program's
+	 * "dereference of nil", not a panic: the rule, and why each of its
+	 * conditions is there, is ../arm64/trap.c's.  The JIT relies on the
+	 * hardware fault for nil loads; tests/jit_fault_test.b's NilRef
+	 * case panicked this machine.  Trap entry moved the interrupted
+	 * SIE into SPIE (bit 5); that state is restored first.  R.PC is
+	 * set just past the faulting instruction, as a return address, for
+	 * the handler search (emu/port/dis.c:jitfault says why).
+	 */
+	if((cause == Eloadaccess || cause == Eloadpage || cause == Estoreaccess || cause == Estorepage)
+	&& up != nil && up->type == Interp && u->pc >= (uintptr)end
+	&& (u->tval == ~(u64int)0 || u->tval < 512)){
+		splx((int)((u->status >> 4) & 2));
+		R.PC = (Inst*)(u->pc + inslen(u->pc));
+		disfault(u, exNilref);
 	}
 
 	uartputstr("\n*** unhandled exception ***");

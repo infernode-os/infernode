@@ -26,6 +26,7 @@ way to learn remains reading `appl/cmd/` for small utilities and
 | package | module: `.m` interface + `.b` implementation | Like a header, but typed and checked |
 | `import "x"` | `include "x.m";` then `x = load X X->PATH;` | Loading is explicit and at runtime |
 | `struct` | `adt` | Can carry functions (methods) |
+| `&T{}` / `new(T)` | `ref T` | Zero-filled, like Go; `ref T(a, b, ...)` sets every member |
 | `interface` + type switch | `pick` (tagged union) + `pick` statement | Closed set of variants, not structural |
 | `x := 5` | `x := 5` | Same type-inferring declaration |
 | `func f() (int, error)` | `f(): (int, string)` | Tuples; error is conventionally a string, `nil` = ok |
@@ -86,6 +87,24 @@ init(...)
 idiom silently produces the wrong value. Sign-extend explicitly
 (`if(x > 128) x -= 256;` for a byte). This has caused real bugs
 in this tree.
+
+**`ref T` is zero-filled, but only since this tree fixed it.** A Go
+programmer writes `b := ref Box; b.kind = kind;` expecting the other
+members to be zero, as `&Box{}` would make them, and in InferNode
+they are. They were not in Inferno: the compiler turned the
+initializer-less form into the Dis `new` instruction, which sets
+reference members to `nil` and leaves every `int`, `big`, `real`
+and `byte` holding whatever the recycled heap block last held. The
+paper says as much ("undefined if it occurs within a function"),
+and the garbage differed between `emu -c0` and `emu -c1` because
+their allocation histories differ, which made a layout bug in
+Charon look like a JIT bug. The compiler now emits `newz` for this
+form and the VM zero-fills `new` as well, so both modes agree;
+`tests/refadt_zero_test.b` (driven under both by
+`tests/host/refadt_zero_test.sh`) keeps it that way. If a module
+compiled elsewhere must run on an older emulator, use the full
+positional constructor `ref Box(0, 0, ...)` as Charon's `newbox`
+does.
 
 **No `defer`.** Clean up at exit points, or structure with a
 single return path. Exceptions (`{ ... } exception e { ... }`)

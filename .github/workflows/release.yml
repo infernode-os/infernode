@@ -180,7 +180,7 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
-        for d in dis lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
 
@@ -466,7 +466,7 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Runtime tree into resources/
-        for d in dis lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
         mkdir -p "$STAGE/resources/tmp"
@@ -668,7 +668,7 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
-        for d in dis lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
 
@@ -952,7 +952,7 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Runtime tree into resources/
-        for d in dis lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
         mkdir -p "$STAGE/resources/tmp"
@@ -1156,7 +1156,7 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Runtime tree goes in Contents/Resources/
-        for d in dis lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$RESOURCES/"
         done
         mkdir -p "$RESOURCES/tmp" "$RESOURCES/usr/inferno/secstore" "$RESOURCES/usr/inferno/tmp"
@@ -1179,18 +1179,26 @@ jobs:
           [ -f "$f" ] && cp "$f" "$RESOURCES/"
         done
 
+        # Xenith.app: the same emu, libraries and runtime tree, with its own
+        # Info.plist, launcher, icon and credits (MacOSX/Xenith.app).  It
+        # runs /lib/xen/boot.sh rather than Lucifer's boot.
+        XAPP="Xenith.app"
+        cp -a "$APP" "$XAPP"
+        rm -f "$XAPP/Contents/MacOS/InferNode" "$XAPP/Contents/Resources/InferNode.icns" \
+          "$XAPP/Contents/Resources/Credits.rtf"
+        cp -a MacOSX/Xenith.app/. "$XAPP/"
+
         # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
         # ring-fence rule. Load-bearing — survives source-tree refactor.
-        if find "$APP" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
+        if find "$APP" "$XAPP" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then
           echo "FATAL: testing-only harness files found in release stage:" >&2
-          find "$APP" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
+          find "$APP" "$XAPP" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
           exit 1
         fi
 
-    - name: Sign app bundle
+    - name: Sign app bundles
       run: |
         IDENTITY="Developer ID Application: Synectify, Pte Ltd (TJ448C32Q3)"
-        APP="InferNode.app"
 
         cat > /tmp/emu-entitlements.plist << 'PLIST'
         <?xml version="1.0" encoding="UTF-8"?>
@@ -1207,27 +1215,31 @@ jobs:
         </plist>
         PLIST
 
-        # Sign innermost binaries first — every bundled dylib (SDL3, opus,
-        # libfido2 + cbor/crypto), or notarization rejects the unsigned ones.
-        for dylib in "$APP/Contents/MacOS/"*.dylib; do
-          [ -f "$dylib" ] && codesign --force --options runtime --timestamp \
-            --sign "$IDENTITY" "$dylib"
-        done
-        codesign --force --options runtime --timestamp \
-          --entitlements /tmp/emu-entitlements.plist \
-          --sign "$IDENTITY" "$APP/Contents/MacOS/emu"
-        for tool in "$APP/Contents/MacOS/tools/limbo" "$APP/Contents/MacOS/tools/mk"; do
-          [ -f "$tool" ] && codesign --force --options runtime --timestamp \
-            --sign "$IDENTITY" "$tool"
-        done
-        [ -f "$APP/Contents/MacOS/llm9p" ] && codesign --force --options runtime --timestamp \
-          --sign "$IDENTITY" "$APP/Contents/MacOS/llm9p"
+        # InferNode.app and Xenith.app hold the same binaries; each is
+        # signed as a bundle of its own.
+        for APP in InferNode.app Xenith.app; do
+          # Sign innermost binaries first — every bundled dylib (SDL3, opus,
+          # libfido2 + cbor/crypto), or notarization rejects the unsigned ones.
+          for dylib in "$APP/Contents/MacOS/"*.dylib; do
+            [ -f "$dylib" ] && codesign --force --options runtime --timestamp \
+              --sign "$IDENTITY" "$dylib"
+          done
+          codesign --force --options runtime --timestamp \
+            --entitlements /tmp/emu-entitlements.plist \
+            --sign "$IDENTITY" "$APP/Contents/MacOS/emu"
+          for tool in "$APP/Contents/MacOS/tools/limbo" "$APP/Contents/MacOS/tools/mk"; do
+            [ -f "$tool" ] && codesign --force --options runtime --timestamp \
+              --sign "$IDENTITY" "$tool"
+          done
+          [ -f "$APP/Contents/MacOS/llm9p" ] && codesign --force --options runtime --timestamp \
+            --sign "$IDENTITY" "$APP/Contents/MacOS/llm9p"
 
-        # Sign the entire .app bundle (must be last)
-        codesign --force --options runtime --timestamp \
-          --entitlements /tmp/emu-entitlements.plist \
-          --sign "$IDENTITY" "$APP"
-        codesign -dvv "$APP"
+          # Sign the entire .app bundle (must be last)
+          codesign --force --options runtime --timestamp \
+            --entitlements /tmp/emu-entitlements.plist \
+            --sign "$IDENTITY" "$APP"
+          codesign -dvv "$APP"
+        done
 
     - name: Create and notarize DMG
       env:
@@ -1236,24 +1248,29 @@ jobs:
         APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
       run: |
         VERSION="${{ steps.version.outputs.version }}"
-        DMG="infernode-${VERSION}-macos-arm64.dmg"
+        for name in InferNode Xenith; do
+          lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+          DMG="${lower}-${VERSION}-macos-arm64.dmg"
 
-        hdiutil create -volname "InferNode" \
-          -srcfolder InferNode.app -ov -format UDZO "$DMG"
+          hdiutil create -volname "$name" \
+            -srcfolder "$name.app" -ov -format UDZO "$DMG"
 
-        xcrun notarytool submit "$DMG" \
-          --apple-id "$APPLE_ID" \
-          --team-id "$APPLE_TEAM_ID" \
-          --password "$APPLE_APP_PASSWORD" \
-          --wait --timeout 30m
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait --timeout 30m
 
-        xcrun stapler staple "$DMG"
-        echo "DMG: $(ls -lh $DMG)"
+          xcrun stapler staple "$DMG"
+          echo "DMG: $(ls -lh $DMG)"
+        done
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: infernode-macos-arm64-archive
-        path: infernode-*-macos-arm64.dmg
+        path: |
+          infernode-*-macos-arm64.dmg
+          xenith-*-macos-arm64.dmg
         retention-days: 3
 
   # ─────────────────────────────────────────────
@@ -1385,7 +1402,7 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
-        for d in dis lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts module services locale usr mnt; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
 
@@ -1578,7 +1595,7 @@ jobs:
           Write-Warning "fido2.dll not present — /dev/2fa is a stub in this artifact"
         }
 
-    - name: Build (Windows launcher InferNode.exe)
+    - name: Build (Windows launchers InferNode.exe, Xenith.exe)
       shell: pwsh
       run: |
         & .\emu\Nt\build-launcher.ps1
@@ -1590,6 +1607,7 @@ jobs:
           "emu\Nt\o.emu.exe",          # SDL3 GUI emulator
           "emu\Nt\o.emu.headless.exe", # headless (console) emulator
           "emu\Nt\InferNode.exe",      # Windows-subsystem launcher
+          "emu\Nt\Xenith.exe",         # the same, for Xenith alone
           "emu\Nt\SDL3.dll",           # SDL3 runtime
           "Nt\amd64\bin\limbo.exe",    # Limbo compiler
           "Nt\amd64\bin\mk.exe"        # mk build tool
@@ -1612,7 +1630,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$Stage\Nt\amd64\bin" | Out-Null
           Copy-Item "Nt\amd64\bin\limbo.exe" "$Stage\Nt\amd64\bin\"
           Copy-Item "Nt\amd64\bin\mk.exe"    "$Stage\Nt\amd64\bin\"
-          foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale", "usr", "mnt")) {
+          foreach ($d in @("dis", "acme", "xenith", "lib", "fonts", "module", "services", "locale", "usr", "mnt")) {
             if (Test-Path $d) { Copy-Item -Recurse $d "$Stage\$d" }
           }
           New-Item -ItemType Directory -Force -Path "$Stage\tmp" | Out-Null
@@ -1654,18 +1672,25 @@ jobs:
         # GUI bundle: flat layout matching the launcher's expectations —
         # $STAGE\InferNode.exe invokes %dir%\o.emu.exe with -r ., so launcher +
         # GUI emu + SDL3.dll + runtime tree all live at the bundle's top level.
-        $GUI = "infernode-$VERSION-windows-amd64-gui"
-        Stage-Common $GUI
-        Copy-Item "emu\Nt\InferNode.exe" "$GUI\"
-        Copy-Item "emu\Nt\o.emu.exe"     "$GUI\"
-        Copy-Item "emu\Nt\SDL3.dll"      "$GUI\"
-        # FIDO2 runtime DLLs (present only when libfido2 was linked). The build
-        # script copied them next to o.emu.exe; bundle whichever exist so
-        # /dev/2fa works without a separate libfido2 install.
-        foreach ($dll in @("fido2.dll", "cbor.dll", "libcrypto-3-x64.dll", "zlib1.dll")) {
-          if (Test-Path "emu\Nt\$dll") { Copy-Item "emu\Nt\$dll" "$GUI\" }
+        function Stage-GUI {
+          param([string]$Stage, [string]$Launcher)
+          Stage-Common $Stage
+          Copy-Item "emu\Nt\$Launcher"  "$Stage\"
+          Copy-Item "emu\Nt\o.emu.exe"  "$Stage\"
+          Copy-Item "emu\Nt\SDL3.dll"   "$Stage\"
+          # FIDO2 runtime DLLs (present only when libfido2 was linked). The build
+          # script copied them next to o.emu.exe; bundle whichever exist so
+          # /dev/2fa works without a separate libfido2 install.
+          foreach ($dll in @("fido2.dll", "cbor.dll", "libcrypto-3-x64.dll", "zlib1.dll")) {
+            if (Test-Path "emu\Nt\$dll") { Copy-Item "emu\Nt\$dll" "$Stage\" }
+          }
+          Write-Zip $Stage
         }
-        Write-Zip $GUI
+        Stage-GUI "infernode-$VERSION-windows-amd64-gui" "InferNode.exe"
+
+        # Xenith: the same layout and runtime, with Xenith.exe, which runs
+        # /lib/xen/boot.sh (Xenith alone) rather than Lucifer's boot.
+        Stage-GUI "xenith-$VERSION-windows-amd64" "Xenith.exe"
 
         # Headless bundle: console emulator only, no SDL3. Launch from a
         # console with: o.emu.exe -c1 -r. sh -l
@@ -1677,7 +1702,9 @@ jobs:
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: infernode-windows-amd64
-        path: infernode-*-windows-amd64*.zip
+        path: |
+          infernode-*-windows-amd64*.zip
+          xenith-*-windows-amd64.zip
         retention-days: 3
 
   # ─────────────────────────────────────────────
@@ -1719,7 +1746,7 @@ jobs:
     - name: Generate checksums
       run: |
         cd artifacts
-        sha256sum infernode-* > SHA256SUMS.txt
+        sha256sum infernode-* xenith-* > SHA256SUMS.txt
         cat SHA256SUMS.txt
 
     - name: Install cosign
@@ -1735,7 +1762,7 @@ jobs:
         # explicit --bundle path to produce a single .sigstore file per
         # artefact instead of separate .sig/.pem files.
         cd artifacts
-        for f in infernode-* SHA256SUMS.txt; do
+        for f in infernode-* xenith-* SHA256SUMS.txt; do
           cosign sign-blob --yes --bundle "${f}.sigstore" "$f"
         done
 
@@ -1748,6 +1775,12 @@ jobs:
     - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
       with:
         subject-path: artifacts/infernode-*.zip
+    - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-path: artifacts/xenith-*.dmg
+    - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-path: artifacts/xenith-*.zip
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -1777,6 +1810,13 @@ jobs:
           | Windows | AMD64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-windows-amd64-gui.zip` |
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
 
+          **Xenith**, the text environment on its own, as an app:
+
+          | Platform | Architecture | File |
+          |----------|-------------|------|
+          | macOS | ARM64 (Apple Silicon) | `xenith-${{ steps.version.outputs.version }}-macos-arm64.dmg` |
+          | Windows | AMD64 | `xenith-${{ steps.version.outputs.version }}-windows-amd64.zip` |
+
           ### Quick Start
 
           **macOS (GUI):** Open the DMG, drag InferNode.app to Applications, double-click to launch
@@ -1790,6 +1830,10 @@ jobs:
           **Windows (GUI):** Extract the `-gui` zip, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; the SDL3 GUI emulator and `SDL3.dll` ship in the same zip. Without running `setup-windows.bat` first, Windows SmartScreen silently blocks the unsigned `InferNode.exe` after browser download — see the Code signing section below.
 
           **Windows (headless):** Extract the zip, double-click `setup-windows.bat` to clear Mark-of-the-Web, then from a console run `o.emu.exe -c1 -r. sh -l`.
+
+          **Xenith (macOS):** Open the DMG, drag Xenith.app to Applications, double-click to launch. It shares `~/.infernode` with InferNode.app.
+
+          **Xenith (Windows):** Extract the zip, double-click `setup-windows.bat`, then double-click `Xenith.exe`, or drop files on it to open them (files on C: only).
 
           ### Verification
 

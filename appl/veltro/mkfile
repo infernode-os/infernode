@@ -9,7 +9,7 @@ MAIN=\
     taskboard9p.dis\
     agentlib.dis\
     veltro.dis\
-    repl.dis\
+    veltrosrv.dis\
     tools9p.dis\
     nsconstruct.dis\
     cowfs.dis\
@@ -94,8 +94,8 @@ cowfs.dis: cowfs.b
 subagent.dis: subagent.b subagent.m tool.m
 	limbo $LIMBOFLAGS -gw subagent.b
 
-repl.dis: repl.b agentlib.m
-	limbo $LIMBOFLAGS -gw repl.b
+veltrosrv.dis: veltrosrv.b veltrosrv.m agentlib.m
+	limbo $LIMBOFLAGS -gw veltrosrv.b
 
 mc9p.dis: mc9p.b
 	limbo $LIMBOFLAGS -gw mc9p.b

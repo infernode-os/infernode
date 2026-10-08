@@ -33,7 +33,7 @@
 - Root restriction hides project files (.env, .git, CLAUDE.md, source tree)
 - `/n/local` (host filesystem) hidden via `/n` restriction
 - `/n/speech` auto-detected and preserved for say/hear tools
-- Three entry points: tools9p serveloop, repl init, spawn child
+- Three entry points: tools9p serveloop, veltro init, spawn child
 - tools9p restriction via non-blocking alt on buffered channel (avoids 9P deadlock)
 - Root restriction skips stat() to avoid 9P self-mount deadlock on /tool
 - Subagents use pre-loaded tool modules (not tools9p)

@@ -101,6 +101,15 @@ emu -b ...     # historical — bounds checks; now the default and a no-op
 
 Disable bounds checks only for benchmarking. Production builds should leave them on.
 
+The check compares the index with the length as unsigned, so a negative
+index is out of range like one past the end, which is what the
+interpreter does (`(ulong)i >= a->len`). Until the fix recorded in
+`tests/jit_bounds_test.b` the variable behind these flags, `bflag`, was
+declared zero and nothing set it, so the amd64 and arm64 JITs compiled
+every index unchecked and a negative index read or wrote outside the
+array; the riscv64 JIT always checks and ignores `-B`.
+`tests/host/jit_bounds_test.sh` runs the test under `-c0` and `-c1`.
+
 ## Memory pool option
 
 Pool quanta affect both the interpreter and the JIT:

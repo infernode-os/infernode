@@ -3,55 +3,63 @@ Samtk: module
 
 	PATH:		con "/dis/wm/samtk.dis";
 
+	# button 2, as in samterm/menu.c less plumb and exch (see sam(1))
 	Cut,
 	Paste,
 	Snarf,
 	Look,
-#	Exch,
-	Send,
+	Search,
 	NMENU2: con iota;
-	Search: con Send;
+	Send: con Search;	# the command window's last item
 
+	# button 3, as in samterm/menu.c; the file names follow these
 	New,
 	Zerox,
+	Resize,
 	Close,
 	Write,
 	NMENU3: con iota;
 
-	Unnamed: con "(unnamed)";	# menu label of a file with no name
-
-	None,
-	Some,
-	All: con iota;	# visibility in flayer (`some' may not be used)
-
 	init:		fn(ctxt: ref Context);
 
-	allflayers:	fn(s: string);
+	# layers: samterm's flayer.c
+	newflayer:	fn(tag, tp: int, r: Draw->Rect): ref Flayer;
+	flclose:	fn(fl: ref Flayer);
+	flwhich:	fn(p: Draw->Point): ref Flayer;
+	flupfront:	fn(fl: ref Flayer);
+	flborder:	fn(fl: ref Flayer, wide: int);
+	flresize:	fn(): int;
+	current:	fn(fl: ref Flayer);
+	screenr:	fn(): Draw->Rect;
+
+	# the pointer, while the main loop holds it
+	getr:		fn(): (int, Draw->Rect);
+	getpick:	fn(): (int, Draw->Point);
+	buttonsup:	fn();
+	setcursor:	fn(name: string);
+	lockcursor:	fn();
+
+	menus:		fn();
+	hsetpat:	fn(s: string);
+	settitle:	fn(t: ref Text, s: string);
+	titlectl:	fn(menu: string);
+
 	append:		fn(fls: list of ref Flayer, fl: ref Flayer):
 				list of ref Flayer;
+	dellist:	fn(fls: list of ref Flayer, fl: ref Flayer):
+				list of ref Flayer;
 	buttonselect:	fn(fl: ref Flayer, s: string): int;
-	chanadd:	fn(): int;
-	chandel:	fn(n: int);
 	coord2pos:	fn(t: ref Text, fl: ref Flayer, s: string): int;
+	charofy:	fn(t: ref Text, fl: ref Flayer, y: int): int;
+	scrollp0:	fn(t: ref Text, fl: ref Flayer, but, y: int): int;
 	flclear:	fn(fl: ref Flayer);
 	fldelete:	fn(fl: ref Flayer, l1, l2: int);
 	fldelexcess:	fn(fl: ref Flayer);
 	flinsert:	fn(fl: ref Flayer, l: int, s: string);
-	flraise:	fn(t: ref Text, fl: ref Flayer);
-	focus:		fn(fl: ref Flayer);
-	hsetpat:	fn(s: string);
-	menudel:	fn(pos: int);
-	menuins:	fn(pos: int, s: string);
-	menulabel:	fn(s: string): string;
-	newcur:		fn(t: ref Text, fl: ref Flayer);
-	newflayer:	fn(tag, tp: int): ref Flayer;
 	panic:		fn(s: string);
 	resize:		fn(fl: ref Flayer);
-	scroll:		fn(fl: ref Flayer, s: string): (int, int);
 	setdot:		fn(fl: ref Flayer, l1, l2: int);
 	setscrollbar:	fn(t: ref Text, fl: ref Flayer);
-	settitle:	fn(t: ref Text, s: string);
-	titlectl:	fn(win: int, menu: string);
 	whichmenu:	fn(tag: int): int;
 	whichtext:	fn(tag: int): int;
 };

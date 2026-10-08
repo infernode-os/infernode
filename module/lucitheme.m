@@ -7,6 +7,8 @@
 #
 # Active theme is selected by /lib/lucifer/theme/current
 # which contains a single theme name (e.g. "brimstone").
+# Writing a name there switches every running program that
+# watches it (watch, below), Lucifer or not.
 #
 # Users can create custom themes by adding files to this
 # directory.  Missing keys fall back to Brimstone defaults.
@@ -95,4 +97,28 @@ Lucitheme: module
 
 	# Return built-in Brimstone (dark) defaults.
 	brimstone: fn(): ref Theme;
+
+	# The named theme, keys it lacks taken from Brimstone;
+	# nil if there is no such theme.
+	loadtheme: fn(name: string): ref Theme;
+
+	# The active theme's name ("brimstone" when none is set).
+	current: fn(): string;
+
+	# Make name the active theme, for every program watching:
+	# nil, or the reason it was refused.
+	settheme: fn(name: string): string;
+
+	# A channel on which the active theme's name arrives each time
+	# it changes, from whatever wrote it. The current file is the
+	# whole interface: there is no server to run.
+	watch: fn(): chan of string;
+
+	# The installed themes' names, sorted.
+	themes: fn(): list of string;
+
+	# Every key and colour (RRGGBBAA) the named theme's file sets, in
+	# file order: keys a program defines for itself (Xenith's
+	# xenith-*) as well as the Theme roles above.
+	entries: fn(name: string): list of (string, int);
 };

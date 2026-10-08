@@ -247,7 +247,7 @@ testParseActionsThreeTools(t: ref T)
 # ====================================================================
 
 # Spawn two tool execs concurrently; collect results in order via channels.
-# This mirrors exectools() in repl.b: one chan per tool, spawn + collect.
+# This mirrors exectools() in veltro.b: one chan per tool, spawn + collect.
 testParallelExecPattern(t: ref T)
 {
 	readmod := loadtool("read");

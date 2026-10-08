@@ -2,6 +2,52 @@
 
 All notable changes to InferNode are documented in this file.
 
+## [Unreleased]
+
+### Veltro
+
+- **One agent harness, served as files.** The agent loop was written out
+  twice, in `veltro` and `lucibridge`, and had drifted; it is now one
+  program, `veltrosrv`, which serves a session as a directory at
+  `/mnt/veltro`: `input`, `text` (the conversation, following a turn as it
+  is generated), `log` (the trajectory), `status`, `approve` and `ctl`.
+  The loop is `lucibridge`'s, the one the grinding tuned, moved in
+  unchanged; its goldens pass through the new `lucibridge`, now a client
+  that renders those files into Lucia. `veltro` is a client too, and
+  Xenith gets `Agent`, a window on the agent for work on a project from
+  the editor (`man 4 veltrosrv`, docs/VELTRO.md, docs/XEN.md).
+- **Read-only tool calls run concurrently.** The tool calls of one model
+  response run at once when all are read-only (reads, searches, `spawn`)
+  and one at a time, in the model's order, when any mutates, so a write
+  always precedes the read or compile that follows it. Every call has its
+  own sixty-second bound.
+- **The server restricts its own namespace before it serves**, with the
+  grants it was started with, and mounts only in the client's namespace:
+  the agent's tools cannot see `/mnt/veltro`, so it cannot approve or
+  widen itself. Compaction is `llmsrv`'s alone.
+- **Acme's and Xenith's commands ship.** Each editor binds its own command
+  directory before `/dis` (`acme/dis`, `xenith/dis`: `win`, `adiff`, `Mail`,
+  `Agent` and the rest), as upstream Inferno's acme does. Releases staged a
+  fixed list of top-level directories that never included `acme/` or
+  `xenith/`, so in a shipped tree neither editor could run its tag
+  commands, and Acme had no colour schemes. Every release job stages both
+  now, and the build manifest covers both command directories.
+- `veltro` session names and logs were built with `string c` on a rune,
+  which printed its number; fixed. `-y` answers the approval gate for
+  scripts. `xen` starts the model service the way Lucifer's boot does,
+  through `lib/lucifer/llmsrv.sh`, now one script for both.
+
+### Xenith
+
+- **Xenith ships as an app of its own**, alongside InferNode in every
+  release: `Xenith.app` (a signed, notarized `xenith-<version>-macos-arm64.dmg`)
+  and `Xenith.exe` (`xenith-<version>-windows-amd64.zip`), with their own
+  icon. Each is the same emulator and runtime tree as InferNode, running
+  Xenith alone as `tools/xen` does, and shares `~/.infernode` with it.
+  `xen`, `xen.ps1` and both apps start through one script,
+  `lib/xen/boot.sh` (docs/XEN.md). `xen.ps1` now starts the plumber and the
+  model service, as `xen` does.
+
 ## [0.5.0] - 2026-09-28
 
 InferNode runs on bare metal. This release adds a native kernel for the

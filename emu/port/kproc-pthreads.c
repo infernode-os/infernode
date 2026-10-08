@@ -86,6 +86,18 @@ pexit(char *msg, int t)
 		sem_destroy(&os->sem);
 		free(os);
 	}
+	/*
+	 * Forget p before freeing it. lock() and unlock() count into
+	 * up->nlocks, and free(p) takes the pool lock (as can anything
+	 * pthread_exit allocates through our malloc). With
+	 * up still set they write into p after it is back in the pool;
+	 * another thread that has just been handed that memory sees a
+	 * transient +1 in the high half of a pointer (nlocks is at 0x64
+	 * on amd64), and dereferences an address 4GB out. The kbd kproc
+	 * exits at once when stdin is at EOF (</dev/null), so this raced
+	 * the namespace setup in emuinit about one launch in 700.
+	 */
+	pthread_setspecific(prdakey, nil);
 	free(p);
 	pthread_exit(0);
 }

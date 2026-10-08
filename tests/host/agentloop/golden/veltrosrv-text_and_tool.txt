@@ -1,0 +1,44 @@
+# veltrosrv text_and_tool
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant: Let me look.
+assistant-call call_text_and_tool_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_text_and_tool_0_0:
+  |     1	alpha
+
+== output
+  | == user
+  | SCENARIO:text_and_tool go
+  | == veltro
+  | Let me look.
+  | == veltro
+  | Done looking.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 25 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 12 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 94 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_text_and_tool_0_0:read:{"args"\: "/usr/agentloop/a.txt"}
+  | Let me look.
+  | 
+  | tool read: args {"args": "/usr/agentloop/a.txt"}
+  | tool read: calling with 32 bytes
+  | tool read: done,     1	alpha
+  | 
+  | step 2: writing 53 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 13 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 28 bytes
+  | llm: STOP:end_turn
+  | Done looking.
+  | 
+  | turn done stop=end_turn steps=2

@@ -1,0 +1,43 @@
+# veltrosrv big_output
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_big_output_0_0 read {"args": "\/usr\/agentloop\/big.txt"}
+tool-result call_big_output_0_0:
+  |     1	line 1 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789
+  |     2	line 2 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789
+  |     3	line 3 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789
+  | 
+  | ... (8511 total bytes — full output at <scratch>)
+
+== output
+  | == user
+  | SCENARIO:big_output go
+  | == veltro
+  | Read the big one.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 22 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 80 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_big_output_0_0:read:{"args"\: "/usr/agentloop/big.txt"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/big.txt"}
+  | tool read: calling with 34 bytes
+  | tool read: done,     1	line 1 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456...
+  | step 2: writing 746 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 17 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 32 bytes
+  | llm: STOP:end_turn
+  | Read the big one.
+  | 
+  | turn done stop=end_turn steps=2

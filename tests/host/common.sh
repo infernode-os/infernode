@@ -34,6 +34,17 @@ LIMBO="$BINDIR/limbo"
 
 export ROOT EMUHOST OBJTYPE EMU BINDIR LIMBO
 
+# timeout(1) where there is one; macOS has none, and an emu told to halt
+# exits by itself, bounded then by the CI job's own timeout
+with_timeout() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$@"
+    else
+        shift
+        "$@"
+    fi
+}
+
 emu_timeout_ok() {
     case "$1" in
         0|124|137) return 0 ;;

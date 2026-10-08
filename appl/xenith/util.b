@@ -501,6 +501,43 @@ errorwin(dir : string, ndir : int, incl : array of string, nincl : int) : ref Wi
 	return w;
 }
 
+#
+# Locks the +Errors window for the directory of w's body,
+# after unlocking w; the returned window is locked in its place,
+# with w's owner.
+#
+errorwinforwin(w : ref Window) : ref Window
+{
+	i, nincl, owner : int;
+	incl : array of string;
+	t : ref Text;
+
+	t = w.body;
+	(dir, ndir) := look->dirname(t, nil, 0);
+	if(ndir==1 && dir[0]=='.'){	# sigh
+		dir = nil;
+		ndir = 0;
+	}
+	incl = nil;
+	nincl = w.nincl;
+	if(nincl > 0){
+		incl = array[nincl] of string;
+		for(i=0; i<nincl; i++)
+			incl[i] = w.incl[i];
+	}
+	owner = w.owner;
+	w.unlock();
+	for(;;){
+		w = errorwin(dir, ndir, incl, nincl);
+		w.lock(owner);
+		if(w.col != nil)
+			break;
+		# window deleted too fast
+		w.unlock();
+	}
+	return w;
+}
+
 warning(md : ref Mntdir, s : string)
 {
 	n, q0, owner : int;

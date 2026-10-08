@@ -1,0 +1,25 @@
+# lucibridge two_reads
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_two_reads_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+assistant-call call_two_reads_0_1 read {"args": "\/usr\/agentloop\/b.txt"}
+tool-result call_two_reads_0_0:
+  |     1	alpha
+tool-result call_two_reads_0_1:
+  |     1	beta
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:two_reads go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Read both.
+  | 

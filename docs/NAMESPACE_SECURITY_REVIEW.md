@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Veltro is an agent harness for Inferno OS where **namespace IS the capability system**. The harness (`nsconstruct`, `tools9p`, `lucibridge`, and the `veltro`/`repl`/`spawn` entry points) restricts what each running agent can see; agents themselves are running harness instances with a model and a capability set. See the Terminology section of [appl/veltro/SECURITY.md](../appl/veltro/SECURITY.md) for the full model/harness/agent/subagent distinction.
+Veltro is an agent harness for Inferno OS where **namespace IS the capability system**. The harness (`nsconstruct`, `tools9p`, `veltrosrv`, and the `spawn` entry point) restricts what each running agent can see; agents themselves are running harness instances with a model and a capability set. See the Terminology section of [appl/veltro/SECURITY.md](../appl/veltro/SECURITY.md) for the full model/harness/agent/subagent distinction.
 
 This document compares two approaches for implementing namespace-based security when spawning subagents with restricted capabilities.
 
@@ -18,7 +18,7 @@ We seek expert review on security properties, implementation feasibility, and po
 
 ### 1.1 What is Veltro?
 
-Veltro is an agent harness that runs inside Inferno OS. A *running agent* (a `repl`, `veltro`, `lucibridge`, or `spawn`'d child) drives the harness loop and:
+Veltro is an agent harness that runs inside Inferno OS. A *running agent* (a `veltrosrv` session, started by `veltro`, `lucibridge` or Xenith's `Agent`, or a `spawn`'d child) drives the harness loop and:
 - Receives tasks from users or parent agents
 - Has access to tools (read, write, list, find, search, edit, exec, spawn)
 - Can spawn subagents with **attenuated capabilities**
@@ -667,7 +667,7 @@ The #U device access concern (Section 7) is resolved by:
 
 Three entry points apply restriction:
 - **tools9p serveloop**: FORKNS after mount() completes, via non-blocking alt on buffered channel
-- **repl init**: FORKNS after mount checks, before LLM session
+- **veltro init**: FORKNS after tool discovery, before LLM session
 - **spawn child**: FORKNS in runchild(), with full NEWPGRP/NEWENV/NEWFD/NODEVS sequence
 
 **Restriction policy** (`restrictns()`):

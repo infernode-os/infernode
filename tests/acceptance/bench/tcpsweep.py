@@ -27,7 +27,7 @@ def nstat():
         f = l.split()
         if len(f) >= 2: d[f[0]] = int(f[1])
     return d
-sink = held("load std; listen -A 'tcp!*!8701' {cat > /dev/null}"); time.sleep(2)
+sink = held("load std; listen -A 'tcp!*!8701' {cat > /dev/null} & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl"); time.sleep(2)
 MB = 16; data = b'\xa5' * (1024*1024)
 for conf in sys.argv[1:]:
     if conf != '-':

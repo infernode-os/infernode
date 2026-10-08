@@ -204,6 +204,15 @@ mmuinit(void)
 	}
 
 	/*
+	 * Not the first 2MB, though: that is QEMU's flash, which nothing
+	 * here uses, and mapped it made every nil pointer at a small offset
+	 * a read of flash rather than a fault (#735). The bcm boards keep
+	 * their page zero until the spin table has done its job
+	 * (../bcm/mmu.c, mmuguardzero); this machine has none.
+	 */
+	l2tab[0][0] = 0;
+
+	/*
 	 * And one gigabyte far above all that, as a single level-1 block:
 	 * the one QEMU puts PCI configuration space in (pciecam.c). Most
 	 * of it is a hole. A hole reached through a valid mapping is an
@@ -310,4 +319,10 @@ mmunormalnc(uintptr base, usize len)
 {
 	USED(base);
 	USED(len);
+}
+
+/* page zero was never mapped here (mmuinit) */
+void
+mmuguardzero(void)
+{
 }

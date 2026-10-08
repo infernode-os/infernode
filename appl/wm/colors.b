@@ -34,7 +34,7 @@ init1(ctxt: ref Draw->Context)
 	menuhit = load Menuhit Menuhit->PATH;
 	menu := ref Menu(array[] of {"exit"}, nil, 0);
 
-	w := wmclient->window(ctxt, "clock", Wmclient->Appl);	# Plain?
+	w := wmclient->window(ctxt, "colors", Wmclient->Appl);	# Plain?
 	display = w.display;
 	tmpi = display.newimage(((0,0), (1, 1)), Draw->RGB24, 0, 0);
 

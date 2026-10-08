@@ -16,7 +16,7 @@ QTDIR, QTFILE, QTAPPEND : import Sys;
 DMDIR, DMAPPEND, Qid, ORCLOSE, OTRUNC, OREAD, OWRITE, ORDWR, Dir : import Sys;
 sprint : import sys;
 MAXWELEM, Rerror : import Styx;
-Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QMAX, CHAPPEND : import Dat;
+Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QWerrors,QWxdata,QMAX, CHAPPEND : import Dat;
 TRUE, FALSE : import Dat;
 cxfidalloc, cerr : import dat;
 Mntdir, Fid, Dirtab, Lock, Ref, Smsg0 : import dat;
@@ -68,7 +68,7 @@ dirtab := array[10] of {
 	Dirtab ( nil,		0,			0,			0 ),
 };
 
-dirtabw := array[15] of {
+dirtabw := array[17] of {
 	Dirtab ( ".",		QTDIR,		Qdir,			8r500|DMDIR ),
 	Dirtab ( "addr",		QTFILE,		QWaddr,		8r600 ),
 	Dirtab ( "body",		QTAPPEND,	QWbody,		8r600|DMAPPEND ),
@@ -78,11 +78,13 @@ dirtabw := array[15] of {
 	Dirtab ( "data",		QTFILE,		QWdata,		8r600 ),
 	Dirtab ( "edit",		QTFILE,		QWedit,		8r200 ),
 	Dirtab ( "editout",	QTFILE,		QWeditout,	8r200 ),
+	Dirtab ( "errors",	QTFILE,		QWerrors,		8r200 ),
 	Dirtab ( "event",	QTFILE,		QWevent,		8r600 ),
 	Dirtab ( "image",	QTFILE,		QWimage,		8r600 ),
 	Dirtab ( "rdsel",		QTFILE,		QWrdsel,		8r400 ),
 	Dirtab ( "tag",		QTAPPEND,	QWtag,		8r600|DMAPPEND ),
 	Dirtab ( "wrsel",	QTFILE,		QWwrsel,		8r200 ),
+	Dirtab ( "xdata",	QTFILE,		QWxdata,		8r600 ),
 	Dirtab ( nil, 		0,			0,			0 ),
 };
 

@@ -1,0 +1,26 @@
+# lucibridge big_output
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_big_output_0_0 read {"args": "\/usr\/agentloop\/big.txt"}
+tool-result call_big_output_0_0:
+  |     1	line 1 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789
+  |     2	line 2 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789
+  |     3	line 3 of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789
+  | 
+  | ... (8511 total bytes — full output at <scratch>)
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:big_output go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Read the big one.
+  | 

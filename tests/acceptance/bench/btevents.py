@@ -6,6 +6,7 @@ def session(cmd):
     time.sleep(0.5); c.recv(4096); c.sendall((tok + '\n').encode()); time.sleep(0.5)
     try: c.recv(4096)
     except socket.timeout: pass
+    cmd += " & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl"
     c.sendall((cmd + '\n').encode()); return c
 ev = session('cat /net/bt/event'); events = []
 def reader():

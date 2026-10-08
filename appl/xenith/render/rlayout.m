@@ -12,19 +12,20 @@ Rlayout: module {
 	# Document node types
 	Ntext,          # Inline text run
 	Nbold,          # Bold text
-	Nitalic,        # Italic text (rendered with underline, since we have limited fonts)
+	Nitalic,        # Italic text (underlined where the family has no italic)
 	Ncode,          # Inline code (monospace)
 	Nlink,          # Hyperlink (rendered as underlined text)
 	Npara,          # Paragraph block
 	Nheading,       # Heading block (level in aux)
 	Ncodeblock,     # Code block (monospace, background)
-	Nbullet,        # Bullet list item
-	Nnumber,        # Numbered list item (number in aux)
+	Nbullet,        # Bullet list item (nesting level in aux)
+	Nnumber,        # Numbered list item (number in aux, nesting level in text)
 	Nhrule,         # Horizontal rule
-	Nblockquote,    # Block quote
+	Nblockquote,    # Block quote paragraph (depth of nesting in aux)
 	Nnewline,       # Explicit line break
 	Ntable,         # Table (rows in text, pipe-separated cells, aux=ncols)
-	Nmermaid        # Mermaid diagram (text= is raw mermaid syntax, rendered as image)
+	Nmermaid,       # Mermaid diagram (text= is raw mermaid syntax, rendered as image)
+	Nstrike         # Struck-through text
 		: con iota;
 
 	# Document node: tree of content
@@ -56,6 +57,13 @@ Rlayout: module {
 	# Render a document to an image.
 	# Returns (image, total height used).
 	render: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int);
+
+	# Parse markdown, with the line (from 0) each block starts on.
+	parsemdlines: fn(text: string): (list of ref DocNode, array of int);
+
+	# Render a document, with the y each block starts at: with
+	# parsemdlines, a map between the text's lines and the image.
+	renderat: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int);
 
 	# Extract plain text from a document tree (for AI/body buffer).
 	totext: fn(doc: list of ref DocNode): string;

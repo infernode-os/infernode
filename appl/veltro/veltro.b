@@ -1,25 +1,17 @@
 implement Veltro;
 
 #
-# veltro - Veltro Agent Loop
+# veltro - run the Veltro agent on a task, from the command line
 #
-# A minimal agent where namespace IS the capability system.
+# A client of veltrosrv(4): it starts the harness with the grants given
+# here, writes the task to the session's input and prints the agent's
+# text as it arrives.  What is the command line's stays here: the
+# planning turn for a complex task, intent routing to a persona, the
+# session directory that -r resumes from, and answering the agent's
+# approval requests on the terminal.
 #
-# Design principles:
-#   - Namespace = capability (constructed, not filtered)
-#   - Agent operates freely within its world
-#   - Everything visible is usable
-#
-# Usage:
-#   veltro "task description"
-#   veltro -v "task description"          # verbose mode
-#   veltro -r last                        # resume most recent session
-#   veltro -r <name>                      # resume named session
-#   veltro -r <name> "extra instruction"  # resume + redirect
-#
-# Requires:
-#   - /tool mounted (via tools9p)
-#   - /mnt/llm mounted (LLM interface)
+#	veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] <task>
+#	veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] -r <name> [extra]
 #
 
 include "sys.m";
@@ -32,30 +24,20 @@ include "arg.m";
 include "string.m";
 	str: String;
 
-include "nsconstruct.m";
-	nsconstruct: NsConstruct;
-
 include "agentlib.m";
 	agentlib: AgentLib;
 
-include "audit.m";
-
-include "auditprov.m";
-	ap: AuditProv;
+include "veltrosrv.m";
 
 Veltro: module {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-# Large result: chars of preview to include inline before referring to scratch file
-TRUNC_PREVIEW: con 2000;
-
-# Task complexity threshold: tasks at or above this length trigger a planning turn
+# Tasks at least this long, or with a complexity keyword, get a planning
+# turn before the action loop.
 PLAN_TASK_THRESHOLD: con 80;
 
-# Maximum steps in the agent loop (safety net, primary stop is end_turn from API)
 DEFAULT_MAX_STEPS: con 200;
-MAX_MAX_STEPS: con 1000;
 
 # Session storage: persistent across reboots
 SESSION_BASE: con "/usr/inferno/veltro/sessions";
@@ -72,6 +54,7 @@ THINK_DEFAULT: con 8000;
 # Configuration
 verbose := 0;
 thinkbudget := 0;
+nogate := 0;
 maxsteps := DEFAULT_MAX_STEPS;
 
 # Agent persona: -a <type> layers /lib/veltro/agents/<type>.txt onto the
@@ -79,42 +62,28 @@ maxsteps := DEFAULT_MAX_STEPS;
 # research, explore, plan). Empty = the default Veltro behaviour.
 agenttype := "";
 
-# Agent provenance (INFR-355): the llm session id the current run seals
-# records under; "" until a run starts (and when the install does not
-# audit — ap stays nil then and prov() is a no-op).
-provagent := "";
-provrequired := 0;
-
-# Seal one provenance record for this agent.
-prov(event, msg: string, payload: array of byte)
-{
-	if(ap == nil)
-		return;
-	rc := ap->log("veltro", event, msg, payload);
-	if(provrequired && rc != 0) {
-		sys->fprint(stderr, "veltro: required provenance failed for %s (status %d)\n", event, rc);
-		raise "fail:audit";
-	}
-}
-
-# -m <model>: override the LLM model for this run by writing it to the
-# session's /mnt/llm/<id>/model file (llmsrv routes per-session). Empty = the
-# server's default. Used for multi-model evaluation (gpt-oss vs mistral) without
-# reconfiguring the server.
+# -m <model>: override the LLM model for this run. Empty = the server's
+# default. Used for multi-model evaluation without reconfiguring the server.
 model := "";
 
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
 
+# The agent session: its directory under /mnt/veltro.
+sess := "";
+srvpid := 0;
+
 stderr: ref Sys->FD;
+stdout: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-a type] [-m model] [-p paths] <task>\n");
-	sys->fprint(stderr, "       veltro [-v] [-t] [-a type] [-m model] [-p paths] -r <name> [extra instruction]\n");
+	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
-	sys->fprint(stderr, "  -v          Verbose output\n");
+	sys->fprint(stderr, "  -v          Verbose output (the agent's trajectory)\n");
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
+	sys->fprint(stderr, "  -y          Answer the agent's approval requests yes (no gate)\n");
 	sys->fprint(stderr, "  -a type     Run as agent persona /lib/veltro/agents/<type>.txt (e.g. research)\n");
 	sys->fprint(stderr, "  -m model    Override the LLM model for this run (e.g. mistral-small3.2:24b)\n");
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
@@ -127,42 +96,6 @@ nomod(s: string)
 {
 	sys->fprint(stderr, "veltro: can't load %s: %r\n", s);
 	raise "fail:load";
-}
-
-# Load the persona prompt named by -a from /lib/veltro/agents/<type>.txt.
-# Returns "" when no persona was requested or the file is unreadable; the
-# traversal guard mirrors spawn.b's loadagentprompt.
-loadpersona(): string
-{
-	if(agenttype == "")
-		return "";
-	for(i := 0; i < len agenttype; i++)
-		if(agenttype[i] == '/' || agenttype[i] == '\\')
-			return "";
-	if(agenttype == ".." || agenttype == ".")
-		return "";
-	p := agentlib->readfile("/lib/veltro/agents/" + agenttype + ".txt");
-	if(p == "")
-		sys->fprint(stderr, "veltro: warning: persona '%s' empty or unreadable\n", agenttype);
-	return p;
-}
-
-# Apply the -m model override to a freshly created session by writing the model
-# name to /mnt/llm/<id>/model (llmsrv stores it per-session). No-op when -m was
-# not given.
-setmodel(id: string)
-{
-	if(model == "")
-		return;
-	path := "/mnt/llm/" + id + "/model";
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil) {
-		sys->fprint(stderr, "veltro: warning: cannot set model %s: %r\n", model);
-		return;
-	}
-	sys->fprint(fd, "%s", model);
-	if(verbose)
-		sys->fprint(stderr, "veltro: model set to %s\n", model);
 }
 
 # Deterministic intent classifier: map a task to a specialist persona by its
@@ -193,199 +126,266 @@ classifyintent(task: string): string
 	return "";
 }
 
-init(nil: ref Draw->Context, args: list of string)
+# ---- The harness ----
+
+# Start veltrosrv in a process group of its own, so it can be stopped
+# when this run is over.  It mounts at /mnt/veltro in this namespace.
+# This process stays, so the group has a member to send killgrp to.
+srvstop: chan of int;
+
+srvproc(srv: VeltroSrv, args: list of string, started: chan of int)
 {
-	sys = load Sys Sys->PATH;
-	stderr = sys->fildes(2);
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	{
+		srv->init(nil, args);
+		started <-= pid;
+	} exception e {
+	"fail:*" =>
+		sys->fprint(stderr, "veltro: %s\n", e[5:]);
+		started <-= -1;
+		return;
+	}
+	<-srvstop;
+}
 
-	str = load String String->PATH;
-	if(str == nil)
-		nomod(String->PATH);
+startharness(pathlist: list of string)
+{
+	srv := load VeltroSrv VeltroSrv->PATH;
+	if(srv == nil)
+		nomod(VeltroSrv->PATH);
+	args: list of string;
+	args = "-n" :: string maxsteps :: args;
+	if(verbose)
+		args = "-v" :: args;
+	if(pathlist != nil)
+		args = "-p" :: join(pathlist, ",") :: args;
+	args = "veltrosrv" :: args;
+	started := chan of int;
+	srvstop = chan of int;
+	spawn srvproc(srv, args, started);
+	srvpid = <-started;
+	if(srvpid < 0)
+		raise "fail:cannot start the agent";
 
-	agentlib = load AgentLib AgentLib->PATH;
-	if(agentlib == nil)
-		nomod(AgentLib->PATH);
-	agentlib->init();
+	sid := agentlib->strip(agentlib->readfile("/mnt/veltro/new"));
+	if(sid == "") {
+		sys->fprint(stderr, "veltro: cannot start an agent session\n");
+		raise "fail:no session";
+	}
+	sess = "/mnt/veltro/" + sid;
+}
 
-	arg := load Arg Arg->PATH;
-	if(arg == nil)
-		nomod(Arg->PATH);
-	arg->init(args);
+stopharness()
+{
+	if(sess != "")
+		ctl("close");
+	sys->unmount(nil, "/mnt/veltro");
+	if(srvpid > 0) {
+		fd := sys->open("/prog/" + string srvpid + "/ctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "killgrp");
+	}
+}
 
-	resumename := "";
-	pathlist: list of string;
-	while((o := arg->opt()) != 0)
-		case o {
-		'v' =>	verbose = 1;
-		't' =>	thinkbudget = THINK_DEFAULT;
-		'r' =>	resumename = arg->earg();
-		'a' =>	agenttype = arg->earg();
-		'm' =>	model = arg->earg();
-		'p' =>
-			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
-		* =>	usage();
-		}
-	args = arg->argv();
+ctl(req: string): int
+{
+	fd := sys->open(sess + "/ctl", Sys->OWRITE);
+	if(fd == nil)
+		return -1;
+	b := array of byte req;
+	n := sys->write(fd, b, len b);
+	if(n < 0 && verbose)
+		sys->fprint(stderr, "veltro: ctl %s: %r\n", req);
+	return n;
+}
 
-	agentlib->setverbose(verbose);
+join(l: list of string, sep: string): string
+{
+	s := "";
+	for(; l != nil; l = tl l) {
+		if(s != "")
+			s += sep;
+		s += hd l;
+	}
+	return s;
+}
 
-	# Check required mounts
-	if(!agentlib->pathexists("/tool"))
-		sys->fprint(stderr, "warning: /tool not mounted (run tools9p first)\n");
-	if(!agentlib->pathexists("/mnt/llm"))
-		sys->fprint(stderr, "warning: /mnt/llm not mounted (LLM unavailable)\n");
+# ---- One turn ----
 
-	# Namespace restriction (v3): FORKNS + bind-replace
-	# Load nsconstruct module (must happen while /dis is unrestricted)
-	nsconstruct = load NsConstruct NsConstruct->PATH;
-	if(nsconstruct == nil) {
-		sys->fprint(stderr, "veltro: cannot load namespace confinement: %r\n");
-		raise "fail:namespace";
-	} else {
-		nsconstruct->init();
+# What the agent said in the turn, for the planning step.
+turntext := "";
+curstep := 0;
 
-		# Read tools list before restriction to grant correct capabilities.
-		# exec tool needs sh.dis+cmd/; xenith tool needs /chan.
-		(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
-		xgrant := 0;
-		for(tl2 := toollist; tl2 != nil; tl2 = tl tl2)
-			if(hd tl2 == "xenith") { xgrant = 1; break; }
-
-		# Register -p paths in tools9p store (before FORKNS so trusted control is
-		# reachable). caps.paths drives restrictns; /tool/paths gives observability.
-		if(agentlib->pathexists("/tool"))
-			for(pp := pathlist; pp != nil; pp = tl pp)
-				writefile("/mnt/toolctl/ctl", "bindpath " + hd pp);
-
-		# Write agent name before FORKNS so user process can read it.
-		# /tmp/veltro/ and .ns/ may not exist yet — create them.
-		sys->create("/tmp/veltro", Sys->OREAD, 8r700 | Sys->DMDIR);
-		sys->create("/tmp/veltro/.ns", Sys->OREAD, 8r700 | Sys->DMDIR);
-		{
-			afd := sys->create("/tmp/veltro/.ns/agentname", Sys->OWRITE, 8r644);
-			if(afd != nil) {
-				sys->fprint(afd, "Veltro");
-				afd = nil;
+# Print the agent's text as it streams, and keep what it said.
+textfollow(done: chan of int)
+{
+	fd := sys->open(sess + "/text", Sys->OREAD);
+	if(fd == nil) {
+		done <-= 1;
+		return;
+	}
+	buf := array[8192] of byte;
+	offset := big 0;
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0)
+		offset = d.length;
+	role := "";
+	atline := 1;
+	held := "";
+	for(;;) {
+		n := sys->pread(fd, buf, len buf, offset);
+		if(n <= 0)
+			break;
+		offset += big n;
+		chunk := string buf[0:n];
+		out := "";
+		for(i := 0; i < len chunk; i++) {
+			c := chunk[i];
+			if(held != "" || (atline && c == '=')) {
+				held[len held] = c;
+				if(c == '\n') {
+					if(len held > 3 && held[0:3] == "== ") {
+						(role, nil) = str->splitl(held[3:len held - 1], " ");
+						if(out != "" && out[len out - 1] != '\n')
+							out += "\n";
+					} else
+						out += emit(role, held);
+					held = "";
+					atline = 1;
+				} else if(len held <= 3 && held != "== "[0:len held]) {
+					out += emit(role, held);
+					held = "";
+					atline = 0;
+				}
+				continue;
 			}
+			out += emit(role, chunk[i:i+1]);
+			atline = c == '\n';
 		}
+		if(out != "")
+			sys->fprint(stdout, "%s", out);
+	}
+	if(held != "")
+		sys->fprint(stdout, "%s", emit(role, held));
+	done <-= 1;
+}
 
-		# Preserve only the shared session pointer when restrictns allowlists /env.
-		(envsessionok, nil) := sys->stat("/env/VELTRO_SESSION");
-		if(envsessionok < 0) {
-			efd := sys->create("/env/VELTRO_SESSION", Sys->OWRITE, 8r600);
-			if(efd == nil) {
-				sys->fprint(stderr, "veltro: cannot create session environment slot: %r\n");
-				raise "fail:namespace";
-			}
-		}
-		# Fork namespace so caller is unaffected
-		if(sys->pctl(Sys->FORKNS, nil) < 0) {
-			sys->fprint(stderr, "veltro: cannot fork namespace: %r\n");
-			raise "fail:namespace";
-		}
-		if(sys->pctl(Sys->NODEVS, nil) < 0) {
-			sys->fprint(stderr, "veltro: cannot disable device attachment: %r\n");
-			raise "fail:namespace";
-		}
+emit(role, s: string): string
+{
+	case role {
+	"veltro" =>
+		turntext += s;
+		return s;
+	"note" =>
+		return s;
+	}
+	return "";
+}
 
-		# This loop opens its LLM session by path after restriction. Keep this
-		# internal grant out of the user-supplied bindpath registration above:
-		# /mnt is capability-driven, but /mnt/llm is required for this launcher.
-		for(pl := pathlist; pl != nil; pl = tl pl)
-			if(hd pl == "/mnt/llm")
+# Follow the log: the tool calls, as this command has always shown them,
+# and the session log that -r resumes from.
+logfollow(done: chan of int)
+{
+	fd := sys->open(sess + "/log", Sys->OREAD);
+	if(fd == nil) {
+		done <-= 1;
+		return;
+	}
+	buf := array[8192] of byte;
+	offset := big 0;
+	(ok, d) := sys->fstat(fd);
+	if(ok >= 0)
+		offset = d.length;
+	partial := "";
+	curtool := "";
+	curargs := "";
+	for(;;) {
+		n := sys->pread(fd, buf, len buf, offset);
+		if(n <= 0)
+			break;
+		offset += big n;
+		partial += string buf[0:n];
+		for(;;) {
+			(line, rest) := str->splitl(partial, "\n");
+			if(rest == "")
 				break;
-		if(pl == nil)
-			pathlist = "/mnt/llm" :: pathlist;
-
-		# Agent provenance (INFR-355). Fail-closed under Audit->ONFILE:
-		# an install that requires auditing refuses to run an agent whose
-		# actions cannot be sealed (the secstored authok posture — agent
-		# activity is a high-value event). Without the marker, absence of
-		# /mnt/audit simply disables provenance (loose coupling).
-		auditing := 0;
-		(alogok, nil) := sys->stat("/mnt/audit/log");
-		if(alogok >= 0)
-			auditing = 1;
-		(aonok, nil) := sys->stat(Audit->ONFILE);
-		provrequired = aonok >= 0;
-		if(aonok >= 0 && !auditing) {
-			sys->fprint(stderr, "veltro: this install requires auditing (%s) but /mnt/audit is not mounted\n",
-				Audit->ONFILE);
-			raise "fail:audit";
-		}
-		if(auditing) {
-			ap = load AuditProv AuditProv->PATH;
-			aperr := "cannot load audit provenance module";
-			if(ap != nil)
-				aperr = ap->init();
-			if(aperr != nil) {
-				ap = nil;
-				if(provrequired) {
-					sys->fprint(stderr, "veltro: required provenance unavailable: %s\n", aperr);
-					raise "fail:audit";
-				}
-			}
-			# Dial + handshake the content store BEFORE restrictns: the
-			# session fd survives restriction, so the parent's namespace
-			# needs no network grant on account of auditing. Attach
-			# Optional auditing may degrade to content=unstored; the install
-			# marker makes attachment failure fatal.
-			if(ap != nil) {
-				aerr := ap->attach(nil);
-				if(aerr != nil && provrequired) {
-					sys->fprint(stderr, "veltro: required provenance store unavailable: %s\n", aerr);
-					raise "fail:audit";
-				}
-			}
-			# The append-only sink rides into the restricted namespace.
-			pathlist = "/mnt/audit/log" :: pathlist;
-		}
-
-		parent_caps := ref NsConstruct->Capabilities(
-			toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil
-		, nil);
-
-		# Apply namespace restrictions
-		nserr := nsconstruct->restrictns(parent_caps);
-		if(nserr != nil) {
-			sys->fprint(stderr, "veltro: namespace restriction failed: %s\n", nserr);
-			raise "fail:namespace";
-		} else {
+			partial = rest[1:];
 			if(verbose)
-				sys->fprint(stderr, "veltro: namespace restricted\n");
-			# Emit namespace manifest from the restricted namespace
-			# so stat checks reflect exactly what the agent can see
-			nsconstruct->emitmanifest(parent_caps, "/tmp/veltro/.ns/manifest");
+				sys->fprint(stderr, "veltro: %s\n", line);
+			if(agentlib->hasprefix(line, "step ") && agentlib->contains(line, ": writing ")) {
+				(curstep, nil) = str->toint(line[5:], 10);
+			} else if(agentlib->hasprefix(line, "tool ")) {
+				(nm, rest2) := str->splitl(line[5:], ":");
+				if(agentlib->hasprefix(rest2, ": args ")) {
+					curtool = nm;
+					curargs = rest2[7:];
+					sys->fprint(stdout, "[%s %s]\n", nm, agentlib->truncate(curargs, 80));
+				} else if(agentlib->hasprefix(rest2, ": done, ") && nm == curtool)
+					appendlog(curstep, nm, curargs, rest2[8:]);
+			}
 		}
 	}
+	done <-= 1;
+}
 
-	if(resumename != "") {
-		# Resume mode: remaining args become optional extra instruction
-		extra := "";
-		for(; args != nil; args = tl args) {
-			if(extra != "")
-				extra += " ";
-			extra += hd args;
+# Answer the agent's requests for approval on the terminal.
+approver(done: chan of int)
+{
+	cons := sys->open("/dev/cons", Sys->ORDWR);
+	for(;;) {
+		fd := sys->open(sess + "/approve", Sys->OREAD);
+		if(fd == nil)
+			break;
+		buf := array[8192] of byte;
+		n := sys->read(fd, buf, len buf);
+		fd = nil;
+		if(n <= 0)
+			break;		# the turn is over
+		req := agentlib->strip(string buf[0:n]);
+		(callid, rest) := str->splitl(req, " ");
+		rest = str->drop(rest, " ");
+		answer := "deny";
+		if(cons != nil) {
+			sys->fprint(cons, "veltro: allow %s? [y/N] ", rest);
+			ab := array[64] of byte;
+			an := sys->read(cons, ab, len ab);
+			if(an > 0) {
+				a := str->tolower(agentlib->strip(string ab[0:an]));
+				if(a == "y" || a == "yes")
+					answer = "allow";
+			}
 		}
-		runresume(resumename, extra);
-	} else {
-		if(args == nil)
-			usage();
-		task := "";
-		for(; args != nil; args = tl args) {
-			if(task != "")
-				task += " ";
-			task += hd args;
-		}
-		# Deterministic intent routing: auto-engage a specialist persona when the
-		# request unambiguously signals one and no -a was given explicitly.
-		if(agenttype == "") {
-			agenttype = classifyintent(task);
-			if(verbose && agenttype != "")
-				sys->fprint(stderr, "veltro: intent routing -> %s agent\n", agenttype);
-		}
-		runagent(task);
+		afd := sys->open(sess + "/approve", Sys->OWRITE);
+		if(afd != nil)
+			sys->fprint(afd, "%s %s", answer, callid);
 	}
+	done <-= 1;
+}
+
+# Send one message and return when the agent has finished with it.
+turn(input: string): int
+{
+	turntext = "";
+	curstep = 0;
+	fd := sys->open(sess + "/input", Sys->OWRITE);
+	if(fd == nil) {
+		sys->fprint(stderr, "veltro: cannot open %s/input: %r\n", sess);
+		return -1;
+	}
+	b := array of byte input;
+	if(sys->write(fd, b, len b) != len b) {
+		sys->fprint(stderr, "veltro: %r\n");
+		return -1;
+	}
+	fd = nil;
+	done := chan of int;
+	spawn textfollow(done);
+	spawn logfollow(done);
+	spawn approver(done);
+	<-done;
+	<-done;
+	<-done;
+	return 0;
 }
 
 # ---- Session management ----
@@ -399,7 +399,7 @@ makeslug(task: string): string
 	for(i := 0; i < len lower; i++) {
 		c := lower[i];
 		if((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-			slug += string c;
+			slug[len slug] = c;
 			prevhyph = 0;
 		} else if(c == ' ' || c == '-' || c == '_') {
 			if(!prevhyph && len slug > 0) {
@@ -473,15 +473,13 @@ readfile(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
-	content := "";
-	buf := array[8192] of byte;
-	while((n := sys->read(fd, buf, len buf)) > 0)
-		content += string buf[0:n];
-	fd = nil;
-	return content;
+	buf := array[65536] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
 }
 
-# Write a value to /env/name (Inferno environment variable mechanism)
 setenv(name, val: string)
 {
 	fd := sys->create("/env/" + name, Sys->OWRITE, 8r644);
@@ -490,27 +488,6 @@ setenv(name, val: string)
 	data := array of byte val;
 	sys->write(fd, data, len data);
 	fd = nil;
-}
-
-# Write thinking token budget to the session's thinking file.
-# budget <= 0 means no-op (thinking stays disabled).
-setthinking(llmsessionid: string, budget: int)
-{
-	if(budget <= 0)
-		return;
-	path := "/mnt/llm/" + llmsessionid + "/thinking";
-	fd := sys->open(path, Sys->OWRITE);
-	if(fd == nil) {
-		if(verbose)
-			sys->fprint(stderr, "veltro: cannot open %s: %r\n", path);
-		return;
-	}
-	val := string budget;
-	data := array of byte val;
-	sys->write(fd, data, len data);
-	fd = nil;
-	if(verbose)
-		sys->fprint(stderr, "veltro: thinking budget: %d tokens\n", budget);
 }
 
 # Replace newlines and tabs with spaces (for single-line log entries)
@@ -522,7 +499,7 @@ collapsenl(s: string): string
 		if(c == '\n' || c == '\r' || c == '\t')
 			result += " ";
 		else
-			result += string c;
+			result[len result] = c;
 	}
 	return result;
 }
@@ -558,17 +535,7 @@ appendlog(step: int, tool, toolargs, result: string)
 # Resolve "last" session name from the pointer file
 resolvelast(): string
 {
-	name := readfile(SESSION_BASE + "/last");
-	# Trim whitespace
-	i := 0;
-	while(i < len name && (name[i] == ' ' || name[i] == '\n' || name[i] == '\r'))
-		i++;
-	j := len name;
-	while(j > i && (name[j-1] == ' ' || name[j-1] == '\n' || name[j-1] == '\r'))
-		j--;
-	if(i >= j)
-		return "";
-	return name[i:j];
+	return agentlib->strip(readfile(SESSION_BASE + "/last"));
 }
 
 # Extract the last n lines from log content (oldest-first chronological order)
@@ -679,288 +646,24 @@ shouldplan(task: string): int
 	return 0;
 }
 
-# Run a single planning-only LLM turn.
-# Returns the plan text, or "" if the turn fails or produces nothing useful.
-doplanningturn(llmfd: ref Sys->FD, task: string): string
+# Run a single planning-only turn.  Returns the plan text, or "" if the
+# turn fails or produces nothing useful.  The plan is asked for as plain
+# text rather than through a tool: the say tool is not always provisioned
+# (headless runs, restricted toolsets, persona agents), and mandating a
+# missing tool left the model unable to comply.
+doplanningturn(task: string): string
 {
-	# Ask for the plan as plain text rather than via a specific tool: the
-	# `say` tool is not always provisioned (headless runs, restricted
-	# subagent toolsets, persona agents). Mandating a missing tool left the
-	# model unable to comply — it returned an empty turn that then poisoned
-	# the agentloop conversation. Plain text works for every toolset; the
-	# say fast-path below still fires when say happens to be available.
 	planprompt := "== Task ==\n" + task +
 		"\n\nBefore taking any action, state your plan as 3-5 numbered steps in plain text.\n" +
 		"Do not call any tools yet.";
 
 	if(verbose)
 		sys->fprint(stderr, "veltro: planning turn\n");
-
-	planresponse := agentlib->queryllmfd(llmfd, planprompt);
-	if(planresponse == "")
+	if(turn(planprompt) < 0)
 		return "";
-
 	if(verbose)
-		sys->fprint(stderr, "veltro: plan response: %s\n",
-			agentlib->truncate(planresponse, 500));
-
-	(nil, tools, text) := agentlib->parsellmresponse(planresponse);
-
-	# Prefer say-tool content; fall back to text
-	for(tc := tools; tc != nil; tc = tl tc) {
-		(id, name, args) := hd tc;
-		if(name == "say") {
-			# Acknowledge say so conversation history stays consistent
-			results := (id, "plan noted") :: nil;
-			wire := agentlib->buildtoolresults(results);
-			agentlib->queryllmfd(llmfd, wire);
-			return args;
-		}
-	}
-	return text;
-}
-
-# ---- Context compaction ----
-
-# Threshold: compact when estimated context exceeds 75% of 200K limit
-COMPACT_THRESHOLD: con 150000;
-
-# selfmanagecompaction tells llmsrv that this client drives compaction itself
-# (via checkandcompact, below) by disabling the server-side auto-compaction
-# safety net for this session (INFR-223). Without this, both the server's
-# high-water trigger and veltro's checkandcompact would fire near the same
-# threshold; opting out keeps exactly one authority — the client — for veltro
-# sessions, while the server net stays on by default for clients that don't
-# self-manage (the primary agent, repl, sub-agents).
-selfmanagecompaction(llmsessionid: string)
-{
-	ctlpath := "/mnt/llm/" + llmsessionid + "/ctl";
-	err := writefile(ctlpath, "autocompact 0");
-	if(err != nil && verbose)
-		sys->fprint(stderr, "veltro: could not disable server auto-compact: %s\n", err);
-}
-
-# checkandcompact reads /mnt/llm/N/usage and triggers compaction if needed.
-# The usage file returns "estimated_tokens/context_limit\n".
-# A write to /mnt/llm/N/compact triggers the summarisation LLM call.
-checkandcompact(llmsessionid: string)
-{
-	usagepath := "/mnt/llm/" + llmsessionid + "/usage";
-	s := readfile(usagepath);
-	if(s == "")
-		return;
-	# s is "estimated/limit\n" — extract the numerator
-	n := 0;
-	for(i := 0; i < len s && s[i] >= '0' && s[i] <= '9'; i++)
-		n = n * 10 + (s[i] - '0');
-	if(n < COMPACT_THRESHOLD)
-		return;
-	if(verbose)
-		sys->fprint(stderr, "veltro: context at ~%d tokens, compacting session\n", n);
-	compactpath := "/mnt/llm/" + llmsessionid + "/compact";
-	err := writefile(compactpath, "compact");
-	if(err != nil)
-		sys->fprint(stderr, "veltro: compaction failed: %s\n", err);
-	else if(verbose)
-		sys->fprint(stderr, "veltro: session compacted\n");
-}
-
-# ---- Parallel tool execution ----
-
-# Per-tool timeout: 60 seconds default
-TOOL_TIMEOUT: con 60000;
-
-runtoolchan(tool, args: string, ch: chan of string)
-{
-	ch <-= agentlib->calltool(tool, args);
-}
-
-tooltimer(ch: chan of int, ms: int)
-{
-	sys->sleep(ms);
-	ch <-= 1;
-}
-
-# Execute a single tool call with a timeout.
-# Returns result string, or an error if the tool hangs.
-exectool1(name, args: string): string
-{
-	resultch := chan of string;
-	spawn runtoolchan(name, args, resultch);
-	timeoutch := chan of int;
-	spawn tooltimer(timeoutch, TOOL_TIMEOUT);
-	r := "";
-	alt {
-	r = <-resultch =>
-		;
-	<-timeoutch =>
-		r = sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
-	}
-	return r;
-}
-
-# Execute a list of native tool_use calls in parallel.
-# calls: list of (tool_use_id, name, args) from parsellmresponse.
-# Provenance header stamped at the top of a scratch-spilled tool result so
-# the model can attribute facts to their real source (e.g. the webfetch URL
-# or the file path) instead of citing the opaque scratch path it reads from.
-provenance(name, args: string): string
-{
-	return sys->sprint("SOURCE: %s %s\n\n", name, args);
-}
-
-# Read-cache (dedup of identical read-only tool calls) lives in agentlib now —
-# agentlib->dedup{reset,check,record}; shared with lucibridge.b.
-
-# Returns list of (tool_use_id, content) for buildtoolresults.
-exectools(calls: list of (string, string, string), step: int): list of (string, string)
-{
-	n := 0;
-	i: int;
-	for(cl := calls; cl != nil; cl = tl cl)
-		n++;
-
-	# Single tool: execute with timeout
-	if(n == 1) {
-		(id, name, args) := hd calls;
-		skip := agentlib->dedupcheck(name, args);
-		if(skip != "") {
-			prov("toolres", sys->sprint("agent=%s step=%d tool=%s status=cached",
-				provagent, step + 1, name), array of byte skip);
-			return (id, skip) :: nil;
-		}
-		r := exectool1(name, args);
-		prov("toolres", sys->sprint("agent=%s step=%d tool=%s", provagent, step + 1, name),
-			array of byte r);
-		agentlib->deduprecord(name, args, r, step);
-		if(len r > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(provenance(name, args) + r, step);
-			r = sys->sprint("(output from %s %s written to %s, %d bytes; its first line records the source — cite that, not the scratch path)",
-				name, agentlib->truncate(args, 120), scratchfile, len r);
-		}
-		return (id, r) :: nil;
-	}
-
-	# Multiple tools: one channel per tool for ordered collection
-	channels := array[n] of chan of string;
-	for(i = 0; i < n; i++)
-		channels[i] = chan of string;
-
-	cl2 := calls;
-	for(i = 0; cl2 != nil; i++) {
-		(nil, name, args) := hd cl2;
-		cl2 = tl cl2;
-		spawn runtoolchan(name, args, channels[i]);
-	}
-
-	# Collect results in original order, with per-tool timeout
-	results: list of (string, string);
-	cl3 := calls;
-	for(i = 0; cl3 != nil; i++) {
-		(id, name, args) := hd cl3;
-		cl3 = tl cl3;
-		timeoutch := chan of int;
-		spawn tooltimer(timeoutch, TOOL_TIMEOUT);
-		r := "";
-		alt {
-		r = <-channels[i] =>
-			;
-		<-timeoutch =>
-			r = sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
-		}
-		prov("toolres", sys->sprint("agent=%s step=%d tool=%s", provagent, step + 1, name),
-			array of byte r);
-		agentlib->deduprecord(name, args, r, step);
-		if(len r > AgentLib->STREAM_THRESHOLD) {
-			scratchfile := agentlib->writescratch(provenance(name, args) + r, step * 10 + i);
-			r = sys->sprint("(output from %s %s written to %s, %d bytes; its first line records the source — cite that, not the scratch path)",
-				name, agentlib->truncate(args, 120), scratchfile, len r);
-		}
-		results = (id, r) :: results;
-	}
-
-	# Reverse to restore original order
-	rev: list of (string, string);
-	for(rl := results; rl != nil; rl = tl rl)
-		rev = (hd rl) :: rev;
-	return rev;
-}
-
-# ---- Core action loop (shared by runagent and runresume) ----
-
-agentloop(fd: ref Sys->FD, id, initialprompt: string)
-{
-	agentlib->dedupreset();	# fresh read-cache per run
-	if(verbose)
-		sys->fprint(stderr, "veltro: agentloop start\n");
-
-	prov("prompt", "agent=" + id + " step=0", array of byte initialprompt);
-	response := agentlib->queryllmfd(fd, initialprompt);
-	if(response == "") {
-		sys->fprint(stderr, "veltro: LLM returned empty response\n");
-		prov("agentdone", "agent=" + id + " steps=0 stop=empty", nil);
-		return;
-	}
-	prov("llm", "agent=" + id + " step=0", array of byte response);
-
-	done := 0;
-	step := 0;
-	for(; step < maxsteps; step++) {
-		if(verbose)
-			sys->fprint(stderr, "veltro: step %d\n", step + 1);
-
-		(stopreason, tools, text) := agentlib->parsellmresponse(response);
-
-		if(text != "")
-			sys->print("%s\n", text);
-
-		# Agent is done
-		if(stopreason == "end_turn" || stopreason == "" || tools == nil) {
-			sr := stopreason;
-			if(sr == "")
-				sr = "none";
-			prov("agentdone", sys->sprint("agent=%s steps=%d stop=%s", id, step, sr),
-				array of byte text);
-			done = 1;
-			break;
-		}
-
-		# Display tool invocations
-		for(tc := tools; tc != nil; tc = tl tc) {
-			(nil, name, args) := hd tc;
-			sys->print("[%s %s]\n", name, agentlib->truncate(args, 80));
-			prov("toolcall", sys->sprint("agent=%s step=%d tool=%s", id, step + 1, name),
-				array of byte args);
-		}
-
-		# Execute tools (parallel if multiple)
-		results := exectools(tools, step);
-
-		# Log each result
-		for(rl := results; rl != nil; rl = tl rl) {
-			(nil, result) := hd rl;
-			appendlog(step + 1, "tools", "", agentlib->truncate(result, 200));
-		}
-
-		checkandcompact(id);
-
-		# Submit tool results and get next response
-		wire := agentlib->buildtoolresults(results);
-		response = agentlib->queryllmfd(fd, wire);
-		if(response == "") {
-			sys->fprint(stderr, "veltro: empty response after tool results\n");
-			prov("agentdone", sys->sprint("agent=%s steps=%d stop=empty", id, step + 1), nil);
-			done = 1;
-			break;
-		}
-		prov("llm", sys->sprint("agent=%s step=%d", id, step + 1), array of byte response);
-	}
-
-	if(!done)
-		prov("agentdone", sys->sprint("agent=%s steps=%d stop=max-steps", id, step), nil);
-
-	if(verbose)
-		sys->fprint(stderr, "veltro: agentloop done\n");
+		sys->fprint(stderr, "veltro: plan response: %s\n", agentlib->truncate(turntext, 500));
+	return trimright(turntext);
 }
 
 # ---- New session ----
@@ -985,62 +688,10 @@ runagent(task: string)
 		sys->fprint(stderr, "veltro: session %s\n", slug);
 	}
 
-	# Create LLM session — clone pattern: read /mnt/llm/new returns session ID
-	llmsessionid := agentlib->createsession();
-	if(llmsessionid == "") {
-		sys->fprint(stderr, "veltro: cannot create LLM session\n");
-		return;
-	}
-	setmodel(llmsessionid);
-	if(verbose)
-		sys->fprint(stderr, "veltro: llm session %s\n", llmsessionid);
-
-	# Veltro owns its own compaction policy (checkandcompact) — opt out of the
-	# server-side auto-compaction net so the two don't both trigger.
-	selfmanagecompaction(llmsessionid);
-
-	# Set prefill to keep model in character
-	prefillpath := "/mnt/llm/" + llmsessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
-	setthinking(llmsessionid, thinkbudget);
-
-	# Discover namespace — this IS our capability set
-	ns := agentlib->discovernamespace();
-	if(verbose)
-		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
-
-	# Set system prompt for native tool_use
-	systempath := "/mnt/llm/" + llmsessionid + "/system";
-	sysprompt := agentlib->buildsystemprompt(ns, loadpersona());
-	agentlib->setsystemprompt(systempath, sysprompt);
-
-	# Provenance (INFR-355): seal what this agent is, what it can see,
-	# and what it was asked — before the first model turn.
-	mname := model;
-	if(mname == "")
-		mname = "default";
-	provagent = llmsessionid;
-	prov("agentstart", "agent=" + llmsessionid + " session=" + slug + " model=" + mname, nil);
-	prov("nscaps", "agent=" + llmsessionid, array of byte ns);
-	prov("sysprompt", "agent=" + llmsessionid, array of byte sysprompt);
-	prov("task", "agent=" + llmsessionid, array of byte task);
-
-	# Install tool definitions for native tool_use protocol
-	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
-	agentlib->initsessiontools(llmsessionid, toollist);
-
-	# Open session's ask file
-	askpath := "/mnt/llm/" + llmsessionid + "/ask";
-	llmfd := sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);
-		return;
-	}
-
 	# Optional planning turn for complex tasks
 	plan := "";
 	if(shouldplan(task)) {
-		plan = doplanningturn(llmfd, task);
+		plan = doplanningturn(task);
 		if(verbose && plan != "")
 			sys->fprint(stderr, "veltro: plan:\n%s\n", plan);
 	}
@@ -1048,8 +699,6 @@ runagent(task: string)
 	# Save plan to session directory
 	if(sdir != "" && plan != "")
 		writefile(sdir + "/plan", plan);
-	if(plan != "")
-		prov("plan", "agent=" + llmsessionid, array of byte plan);
 
 	# Assemble initial prompt (system prompt already set separately)
 	prompt: string;
@@ -1060,8 +709,9 @@ runagent(task: string)
 		prompt = "== Task ==\n" + task + "\n\nBegin. Respond with your first tool call or DONE.";
 	}
 
-	agentloop(llmfd, llmsessionid, prompt);
-	agentlib->closesession(llmsessionid);
+	turn(prompt);
+	if(sdir != "")
+		writefile(sdir + "/transcript", readfile(sess + "/text"));
 }
 
 # ---- Resume session ----
@@ -1097,57 +747,101 @@ runresume(name, extra: string)
 	if(extra != "" && verbose)
 		sys->fprint(stderr, "veltro: extra instruction: %s\n", extra);
 
-	# Create new LLM session
-	llmsessionid := agentlib->createsession();
-	if(llmsessionid == "") {
-		sys->fprint(stderr, "veltro: cannot create LLM session\n");
-		return;
-	}
-	setmodel(llmsessionid);
-
-	# Veltro owns its own compaction policy (checkandcompact) — opt out of the
-	# server-side auto-compaction net so the two don't both trigger.
-	selfmanagecompaction(llmsessionid);
-
-	prefillpath := "/mnt/llm/" + llmsessionid + "/prefill";
-	agentlib->setprefillpath(prefillpath, "[Veltro]\n");
-	setthinking(llmsessionid, thinkbudget);
-
-	# Discover namespace and set system prompt for native tool_use
-	ns := agentlib->discovernamespace();
-	if(verbose)
-		sys->fprint(stderr, "veltro: namespace:\n%s\n", ns);
-
-	systempath := "/mnt/llm/" + llmsessionid + "/system";
-	sysprompt := agentlib->buildsystemprompt(ns, loadpersona());
-	agentlib->setsystemprompt(systempath, sysprompt);
-
-	# Provenance (INFR-355): a resumed run is a fresh model conversation —
-	# seal its inputs like a new one.
-	mname := model;
-	if(mname == "")
-		mname = "default";
-	provagent = llmsessionid;
-	prov("agentstart", "agent=" + llmsessionid + " session=" + actualname +
-		" resume=1 model=" + mname, nil);
-	prov("nscaps", "agent=" + llmsessionid, array of byte ns);
-	prov("sysprompt", "agent=" + llmsessionid, array of byte sysprompt);
-	prov("task", "agent=" + llmsessionid, array of byte task);
-
-	# Install tool definitions for native tool_use protocol
-	(nil, toollist) := sys->tokenize(agentlib->readfile("/tool/tools"), "\n");
-	agentlib->initsessiontools(llmsessionid, toollist);
-
-	askpath := "/mnt/llm/" + llmsessionid + "/ask";
-	llmfd := sys->open(askpath, Sys->ORDWR);
-	if(llmfd == nil) {
-		sys->fprint(stderr, "veltro: cannot open %s: %r\n", askpath);
-		return;
-	}
-
 	# Build resume context as the initial prompt
 	prompt := buildresumecontext(task, plan, logcontent, extra);
+	turn(prompt);
+	writefile(sdir + "/transcript", readfile(sess + "/text"));
+}
 
-	agentloop(llmfd, llmsessionid, prompt);
-	agentlib->closesession(llmsessionid);
+init(nil: ref Draw->Context, args: list of string)
+{
+	sys = load Sys Sys->PATH;
+	stderr = sys->fildes(2);
+	stdout = sys->fildes(1);
+
+	str = load String String->PATH;
+	if(str == nil)
+		nomod(String->PATH);
+
+	agentlib = load AgentLib AgentLib->PATH;
+	if(agentlib == nil)
+		nomod(AgentLib->PATH);
+	agentlib->init();
+
+	arg := load Arg Arg->PATH;
+	if(arg == nil)
+		nomod(Arg->PATH);
+	arg->init(args);
+
+	resumename := "";
+	pathlist: list of string;
+	while((o := arg->opt()) != 0)
+		case o {
+		'v' =>	verbose = 1;
+		't' =>	thinkbudget = THINK_DEFAULT;
+		'y' =>	nogate = 1;
+		'r' =>	resumename = arg->earg();
+		'a' =>	agenttype = arg->earg();
+		'm' =>	model = arg->earg();
+		'p' =>
+			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
+		* =>	usage();
+		}
+	args = arg->argv();
+
+	agentlib->setverbose(verbose);
+
+	# Check required mounts
+	if(!agentlib->pathexists("/tool"))
+		sys->fprint(stderr, "warning: /tool not mounted (run tools9p first)\n");
+	if(!agentlib->pathexists("/mnt/llm"))
+		sys->fprint(stderr, "warning: /mnt/llm not mounted (LLM unavailable)\n");
+
+	task := "";
+	extra := "";
+	if(resumename != "") {
+		# Resume mode: remaining args become optional extra instruction
+		for(; args != nil; args = tl args) {
+			if(extra != "")
+				extra += " ";
+			extra += hd args;
+		}
+	} else {
+		if(args == nil)
+			usage();
+		for(; args != nil; args = tl args) {
+			if(task != "")
+				task += " ";
+			task += hd args;
+		}
+		# Deterministic intent routing: auto-engage a specialist persona when the
+		# request unambiguously signals one and no -a was given explicitly.
+		if(agenttype == "") {
+			agenttype = classifyintent(task);
+			if(verbose && agenttype != "")
+				sys->fprint(stderr, "veltro: intent routing -> %s agent\n", agenttype);
+		}
+	}
+
+	startharness(pathlist);
+	if(agenttype != "" && ctl("persona " + agenttype) < 0)
+		sys->fprint(stderr, "veltro: warning: persona '%s' empty or unreadable\n", agenttype);
+	if(model != "" && ctl("model " + model) >= 0 && verbose)
+		sys->fprint(stderr, "veltro: model set to %s\n", model);
+	if(thinkbudget > 0 && ctl("think " + string thinkbudget) >= 0 && verbose)
+		sys->fprint(stderr, "veltro: thinking budget: %d tokens\n", thinkbudget);
+	if(nogate)
+		ctl("gate off");
+
+	{
+		if(resumename != "")
+			runresume(resumename, extra);
+		else
+			runagent(task);
+	} exception e {
+	"fail:*" =>
+		stopharness();
+		raise e;
+	}
+	stopharness();
 }

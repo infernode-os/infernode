@@ -35,13 +35,14 @@ enum
 	clActive	= 0x1E1E1E,	/* hover/pressed background           */
 	clText		= 0xCCCCCC,	/* text    — primary foreground       */
 	clAccent	= 0xE8553A,	/* accent  — selection, indicators    */
-	clDim		= 0x444444	/* dim     — disabled foreground      */
+	clDim		= 0x444444,	/* dim     — disabled foreground      */
+	clWinborder	= 0x1A1A1A	/* windowborder — window frames     */
 };
 
 /* Palette field indices (order matches Palette below). */
 enum
 {
-	PBg, PBorder, PActive, PText, PAccent, PDim,
+	PBg, PBorder, PActive, PText, PAccent, PDim, PWinborder,
 	NPAL,
 	PTransparent = -2	/* special: DTransparent, not a theme colour */
 };
@@ -70,10 +71,11 @@ static char *palkey[NPAL] = {
 	"text",		/* PText   */
 	"accent",	/* PAccent */
 	"dim",		/* PDim    */
+	"windowborder",	/* PWinborder: frames, as wmclient draws them */
 };
 
 static ulong paldflt[NPAL] = {
-	clBg, clBorder, clActive, clText, clAccent, clDim,
+	clBg, clBorder, clActive, clText, clAccent, clDim, clWinborder,
 };
 
 static Coltab coltab[] =
@@ -94,6 +96,7 @@ static Coltab coltab[] =
 	TkCdisablefgnd,		PDim,
 	TkChighlightfgnd,	PAccent,	/* keyboard-focus highlight       */
 	TkCtransparent,		PTransparent,
+	TkCwinborder,		PWinborder,	/* relief solid: window frames   */
 	-1,	0,
 };
 

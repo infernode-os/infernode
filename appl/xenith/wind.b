@@ -18,10 +18,15 @@ imgload : Imgload;
 render : Render;
 asyncio : Asyncio;
 
+include "rlayout.m";
+	rlayout : Rlayout;
+
+framem : Framem;
+
 sprint : import sys;
 FALSE, TRUE, XXX, Astring : import Dat;
 Reffont, reffont, Lock, Ref, button, modbutton, mouse, casync : import dat;
-Point, Rect, Image, Display, Chans : import drawm;
+Point, Rect, Image, Display, Font, Chans : import drawm;
 min, max, error, warning, stralloc, strfree : import utils;
 font, draw : import graph;
 black, white, mainwin, display : import gui;
@@ -48,6 +53,7 @@ init(mods : ref Dat->Mods)
 	look = mods.look;
 	scrl = mods.scroll;
 	xenith = mods.xenith;
+	framem = mods.framem;
 
 	# Load image loader module
 	imgload = load Imgload Imgload->PATH;
@@ -1103,6 +1109,10 @@ Window.drawimage(w: self ref Window)
 {
 	if(w.bodyimage == nil)
 		return;
+	if(w.docview){
+		drawdoc(w);
+		return;
+	}
 
 	r := w.body.all;
 	draw(mainwin, r, w.body.frame.cols[BACK], nil, Point(0, 0));
@@ -1224,4 +1234,236 @@ Window.prerenderzoomed(w: self ref Window): ref Image
 		Rect(Point(0, 0), Point(imw, imh)), dispw, disph);
 	w.zoomedcache = scaled;
 	return scaled;
+}
+
+# ---- Rendered documents ----
+#
+# Render on a markdown file sets the body's text, unsaved edits and
+# all, as a document (rlayout(2): Go and its bold, italic and medium,
+# headings larger, tables ruled) in the window's colours and font
+# family, and shows it in place of the text: the window's width, one
+# pixel to a pixel, scrolled up and down. The text is untouched
+# underneath, so Put saves it; Render again, typing, or a write to the
+# body goes back to it.
+
+Window.docrender(w: self ref Window): string
+{
+	if(rlayout == nil){
+		rlayout = load Rlayout Rlayout->PATH;
+		if(rlayout == nil)
+			return sprint("can't load %s: %r", Rlayout->PATH);
+		rlayout->init(display);
+	}
+	fr := w.body.frame.r;
+	width := fr.dx();
+	if(width <= 0)
+		return "window too narrow";
+	prop := Font.open(display, xenith->fontnames[0]);
+	if(prop == nil)
+		prop = font;
+	code := Font.open(display, xenith->fontnames[1]);
+
+	s := "";
+	nc := w.body.file.buf.nc;
+	if(nc > 0){
+		r := stralloc(nc);
+		w.body.file.buf.read(0, r, 0, nc);
+		s = r.s[0:nc];
+		strfree(r);
+	}
+	entering := !w.docview;
+
+	# code on the tags' colour, links and headings in the theme's accent
+	cols := w.body.frame.cols;
+	accent := xenith->accentcol;
+	if(accent == nil)
+		accent = cols[TEXT];
+	style := ref Rlayout->Style(width, 4, prop, code,
+		cols[TEXT], cols[BACK], accent, tagcols[BACK], 150);
+	im : ref Image;
+	lines, ys : array of int;
+	{
+		doc : list of ref Rlayout->DocNode;
+		(doc, lines) = rlayout->parsemdlines(s);
+		(im, ys) = rlayout->renderat(doc, style);
+	} exception e {
+	"*" =>
+		return "render failed: " + e;
+	}
+	if(im == nil)
+		return sprint("render failed: %r");
+	w.doclines = lines;
+	w.docys = ys;
+	if(entering)	# open on the passage the text was showing
+		w.imageoffset = Point(0, linetoy(w, lineof(w.body, w.body.org)));
+
+	# no text cursor drawn over the document (docoff makes it again)
+	f := w.body.frame;
+	if(f.ticked)
+		framem->frtick(f, framem->frptofchar(f, f.p0), 0);
+	f.tick = nil;
+
+	w.bodyimage = im;
+	w.zoomedcache = nil;
+	w.imagemode = 1;
+	w.docview = 1;
+	w.docwidth = width;
+	w.docbg = cols[BACK];
+	w.docfg = cols[TEXT];
+	w.docaccent = xenith->accentcol;
+	w.drawimage();
+	return nil;
+}
+
+Window.docoff(w: self ref Window)
+{
+	if(!w.docview)
+		return;
+	# the text from the passage the document was showing
+	org := charofline(w.body, ytoline(w, w.imageoffset.y));
+	w.body.frame.b = mainwin;
+	w.docb = nil;
+	w.body.org = org;
+	w.docview = 0;
+	w.imagemode = 0;
+	w.rendermode = 0;
+	w.bodyimage = nil;
+	w.zoomedcache = nil;
+	w.imageoffset = Point(0, 0);
+	w.body.lastsr = Rect((0, 0), (0, 0));
+	framem->frinittick(w.body.frame);
+	framem->frdelete(w.body.frame, 0, w.body.frame.nchars);
+	w.body.redraw(w.body.frame.r, w.body.frame.font, mainwin, -1);
+	w.body.fill();
+	scrdraw(w.body);
+	w.settag();
+}
+
+Window.docscroll(w: self ref Window, dy: int)
+{
+	if(!w.docview)
+		return;
+	w.imageoffset.y += dy;
+	w.drawimage();
+}
+
+# The document from imageoffset.y down, in the body's frame, and the
+# scroll bar's thumb where that is in it; set again first if the
+# window's width or colours have changed since
+drawdoc(w: ref Window)
+{
+	fr := w.body.frame.r;
+	cols := w.body.frame.cols;
+	if(fr.dx() != w.docwidth || cols[BACK] != w.docbg || cols[TEXT] != w.docfg || xenith->accentcol != w.docaccent){
+		w.docwidth = fr.dx();	# once, even if setting it fails
+		w.docbg = cols[BACK];
+		w.docfg = cols[TEXT];
+		w.docaccent = xenith->accentcol;
+		if(w.docrender() == nil)
+			return;
+	}
+	# the text, still kept up to date, draws where it is not seen
+	if(w.docb == nil || !w.docb.r.eq(w.body.all))
+		w.docb = display.newimage(w.body.all, mainwin.chans, 0, Draw->Nofill);
+	if(w.docb != nil)
+		w.body.frame.b = w.docb;
+
+	im := w.bodyimage;
+	h := fr.dy();
+	total := im.r.dy();
+	oy := w.imageoffset.y;
+	if(oy > total - h)
+		oy = total - h;
+	if(oy < 0)
+		oy = 0;
+	w.imageoffset = Point(0, oy);
+
+	draw(mainwin, fr, cols[BACK], nil, Point(0, 0));
+	draw(mainwin, fr, im, nil, Point(im.r.min.x, im.r.min.y + oy));
+
+	sr := w.body.scrollr;
+	if(sr.dy() > 0 && total > 0){
+		y0 := sr.min.y + sr.dy() * oy / total;
+		bot := oy + h;
+		if(bot > total)
+			bot = total;
+		y1 := sr.min.y + sr.dy() * bot / total;
+		if(y1 < y0 + 2)
+			y1 = y0 + 2;
+		draw(mainwin, sr, cols[BORD], nil, Point(0, 0));
+		draw(mainwin, Rect((sr.min.x, y0), (sr.max.x - 1, y1)), cols[BACK], nil, Point(0, 0));
+		draw(mainwin, Rect((sr.max.x - 1, y0), (sr.max.x, y1)), cols[BORD], nil, Point(0, 0));
+	}
+	w.body.lastsr = Rect((0, 0), (0, 0));	# scrdraw redraws for the text
+}
+
+# The line (from 0) holding character q of t
+lineof(t: ref Text, q: int): int
+{
+	n := 0;
+	r := stralloc(4096);
+	for(p := 0; p < q; ){
+		m := min(4096, q - p);
+		t.file.buf.read(p, r, 0, m);
+		for(i := 0; i < m; i++)
+			if(r.s[i] == '\n')
+				n++;
+		p += m;
+	}
+	strfree(r);
+	return n;
+}
+
+# The character that starts line n (from 0) of t
+charofline(t: ref Text, n: int): int
+{
+	if(n <= 0)
+		return 0;
+	nc := t.file.buf.nc;
+	r := stralloc(4096);
+	for(p := 0; p < nc; ){
+		m := min(4096, nc - p);
+		t.file.buf.read(p, r, 0, m);
+		for(i := 0; i < m; i++)
+			if(r.s[i] == '\n' && --n == 0){
+				strfree(r);
+				return p + i + 1;
+			}
+		p += m;
+	}
+	strfree(r);
+	return nc;
+}
+
+# Where line n of the text falls in the document: in the block that
+# holds it, as far down as the line is through the block's lines
+linetoy(w: ref Window, n: int): int
+{
+	(l, y) := (w.doclines, w.docys);
+	if(l == nil || len l == 0 || len y < len l)
+		return 0;
+	k := 0;
+	while(k+1 < len l && l[k+1] <= n)
+		k++;
+	if(n < l[k])
+		return 0;
+	if(k+1 < len l && l[k+1] > l[k])
+		return y[k] + (n - l[k]) * (y[k+1] - y[k]) / (l[k+1] - l[k]);
+	return y[k];
+}
+
+# The line of the text at height y of the document: the inverse
+ytoline(w: ref Window, y: int): int
+{
+	(l, ys) := (w.doclines, w.docys);
+	if(l == nil || len l == 0 || len ys < len l)
+		return 0;
+	k := 0;
+	while(k+1 < len l && ys[k+1] <= y)
+		k++;
+	if(y < ys[k])
+		return l[k];
+	if(k+1 < len l && ys[k+1] > ys[k])
+		return l[k] + (y - ys[k]) * (l[k+1] - l[k]) / (ys[k+1] - ys[k]);
+	return l[k];
 }

@@ -107,8 +107,9 @@ if {~ $narrowed 0} {
 # OFF unless the card asks for it with a file /n/dos/cpulisten, whose
 # contents, if any, are the address to listen on (default tcp!*!rstyx,
 # port 6668). It is started HERE, in the desktop's narrowed namespace,
-# so a remote session has a desktop's powers and no more: no raw card,
-# no pins, no sysctl -- it cannot rewrite the card or stop the machine.
+# so a remote session starts with a desktop's powers. rstyxd narrows it
+# again: /n/dos is unmounted and NODEVS prevents reattaching the raw card,
+# pins or sysctl after the caller's delegated /dev is in place.
 # And before the screen check below, so a headless board gets it too.
 #
 # Two rules it does not bend. It needs this machine's own certificate

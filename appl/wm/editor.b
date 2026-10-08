@@ -2115,22 +2115,14 @@ checkdirty(): int
 
 themelistener()
 {
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
+	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
 		return;
-	buf := array[256] of byte;
-	for(;;) {
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		# INFR-28: reset client-side fid offset so the next read on
-		# this streaming queue starts at 0 (otherwise the kernel
-		# applies the accumulated offset to the server reply and
-		# truncates / EOFs on the third read onward).
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			themech <-= 1;
+	c := lt->watch();
+	for(;;){
+		<-c;
+		themech <-= 1;
 	}
 }
 

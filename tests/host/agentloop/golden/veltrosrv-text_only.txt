@@ -1,0 +1,22 @@
+# veltrosrv text_only
+requests 1
+
+== request 0 (turn 0)
+tools: list read write
+
+== output
+  | == user
+  | SCENARIO:text_only go
+  | == veltro
+  | Hello from the mock.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 21 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 20 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 35 bytes
+  | llm: STOP:end_turn
+  | Hello from the mock.
+  | 
+  | turn done stop=end_turn steps=1

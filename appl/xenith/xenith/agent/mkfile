@@ -1,0 +1,17 @@
+<$ROOT/mkconfig
+
+TARG=\
+	Agent.dis\
+
+MODULES=\
+
+SYSMODULES=\
+	xenithwin.m\
+	arg.m\
+	bufio.m\
+	draw.m\
+	string.m\
+	sys.m\
+
+DISBIN=$ROOT/xenith/dis
+<$ROOT/mkfiles/mkdis

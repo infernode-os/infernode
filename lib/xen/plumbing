@@ -1,0 +1,29 @@
+# plumbing rules for a standalone Xenith (tools/xen)
+#
+# Xenith is the only program on the display, so nothing is started:
+# a message that arrives before Xenith has opened the edit port is
+# refused (hostplumb retries it) rather than starting acme, which would
+# draw over Xenith.
+
+# existing files, possibly tagged by line number
+kind is text
+data matches '([.a-zA-Z0-9_/\-]+[a-zA-Z0-9_/\-])(:(((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$])([,;+\-]((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$]))*))?'
+data isfile	$1
+data set	$file
+attr set	'action=showfile	addr=$3'
+plumb to edit
+
+# existing directories
+kind is text
+data matches '[a-zA-Z¡-￿0-9_./\-]+'
+data isdir	$0
+data set	$dir
+plumb to edit
+
+# .m files are looked up in /module
+kind is text
+data matches '([a-zA-Z0-9]+\.m)(:(((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$])([,;+\-]((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$]))*))?'
+data isfile	/module/$1
+data set	$file
+attr set	'action=showfile	addr=$3'
+plumb to edit

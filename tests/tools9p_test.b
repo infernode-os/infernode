@@ -436,6 +436,53 @@ testReadToolExec(t: ref T)
 	}
 }
 
+# Each caller reads back its own result.  Two fids on one tool's ctl
+# each write their own arguments, then each reads: a result kept per
+# tool, not per fid, hands the first fid the second's (concurrent calls
+# from the agent harness got each other's output).
+testResultPerFid(t: ref T)
+{
+	if(!hastool()) {
+		t.skip("tools9p not mounted at /tool");
+		return;
+	}
+	if(!strcontains(readfile(TOOLMNT + "/tools"), "read")) {
+		t.skip("'read' tool not active in tools9p");
+		return;
+	}
+	f1 := "/lib/veltro/tools/read.txt";
+	f2 := "/lib/veltro/tools/list.txt";
+	want1 := exectool9p("read", f1);
+	want2 := exectool9p("read", f2);
+	t.assert(want1 != want2, "the two files read differently");
+
+	path := TOOLMNT + "/read/ctl";
+	fd1 := sys->open(path, Sys->ORDWR);
+	fd2 := sys->open(path, Sys->ORDWR);
+	if(fd1 == nil || fd2 == nil) {
+		t.fatal(sys->sprint("cannot open %s: %r", path));
+		return;
+	}
+	b1 := array of byte f1;
+	b2 := array of byte f2;
+	t.assert(sys->write(fd1, b1, len b1) == len b1, "write on the first fid");
+	t.assert(sys->write(fd2, b2, len b2) == len b2, "write on the second fid");
+	t.assertseq(readall(fd1), want1, "the first fid reads its own result");
+	t.assertseq(readall(fd2), want2, "the second fid reads its own result");
+}
+
+readall(fd: ref Sys->FD): string
+{
+	s := "";
+	buf := array[8192] of byte;
+	off := big 0;
+	while((n := sys->pread(fd, buf, len buf, off)) > 0) {
+		s += string buf[0:n];
+		off += big n;
+	}
+	return s;
+}
+
 # Test 7: List tool execution via 9P
 testListToolExec(t: ref T)
 {
@@ -619,6 +666,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CtlAddUnknown",         testCtlAddUnknown);
 	run("CtlAliasRemoveAdd",     testCtlAliasRemoveAdd);
 	run("ReadToolExec",          testReadToolExec);
+	run("ResultPerFid",          testResultPerFid);
 	run("ListToolExec",          testListToolExec);
 	run("NoResultBeforeWrite",   testNoResultBeforeWrite);
 	run("PathsReadable",         testPathsReadable);

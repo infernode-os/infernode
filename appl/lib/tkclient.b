@@ -49,8 +49,9 @@ toplevel(ctxt: ref Draw->Context, topconfig: string, title: string, buts: int): 
 {
 	wm := wmlib->connect(ctxt);
 	opts := "";
-	if((buts & Plain) == 0)
-		opts = "-borderwidth 1 -relief raised ";
+	framed := (buts & Plain) == 0 && !wmlib->embedded(wm);
+	if(framed)
+		opts = sys->sprint("-borderwidth %d -relief solid ", Wmlib->Border);
 	top := tk->toplevel(wm.ctxt.display, opts+topconfig);
 	if (top == nil) {
 		sys->fprint(sys->fildes(2), "wmlib: window creation failed (top %ux, i %ux)\n", top, top.image);
@@ -60,6 +61,9 @@ toplevel(ctxt: ref Draw->Context, topconfig: string, title: string, buts: int): 
 	readscreenrect(top);
 	c := titlebar->new(top, buts);
 	titlebar->settitle(top, title);
+	wmlib->setlabel(wm, title);
+	# A press on the frame is the window manager's (wm/wm's framehit):
+	# it alone knows where the window really is on the screen.
 	return (top, c);
 }
 
@@ -215,6 +219,7 @@ recvimage(top: ref Tk->Toplevel, name, reqid: string)
 
 settitle(top: ref Tk->Toplevel, name: string): string
 {
+	wmlib->setlabel(top.ctxt, name);
 	return titlebar->settitle(top, name);
 }
 

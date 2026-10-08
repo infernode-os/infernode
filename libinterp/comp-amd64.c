@@ -367,6 +367,12 @@ bounds(void)
 }
 
 static void
+nilref(void)
+{
+	error(exNilref);
+}
+
+static void
 rdestroy(void)
 {
 	destroy(R.s);
@@ -817,8 +823,11 @@ literal(uvlong imm, int roff)
 }
 
 /*
- * Generate conditional skip over bounds error block.
- * Emits: Jcc <skip> / save R.FP, R.PC / call bounds()
+ * Generate conditional skip over a fault block.
+ * Emits: Jcc <skip> / save R.FP, R.PC / call fn()
+ * where fn is bounds() or nilref(), which raise the exception and
+ * do not return. Jcc is the condition under which the instruction
+ * is in order, so the block is skipped.
  * Uses backpatch for Jcc and fixed 10-byte MOVABS for R.PC
  * to ensure phase consistency between pass 0 and pass 1.
  *
@@ -828,7 +837,7 @@ literal(uvlong imm, int roff)
  * which falls within the handler's [pc1, pc2) range.
  */
 static void
-jnebounds(int cc, Inst *i)
+jnefault(int cc, Inst *i, void (*fn)(void))
 {
 	uchar *patch_loc;
 	uvlong pc;
@@ -845,12 +854,18 @@ jnebounds(int cc, Inst *i)
 #ifdef _WIN32
 	gen_subsp(WINSHADOW_MAIN);			/* 4 bytes */
 #endif
-	bra((uvlong)bounds, Ocall);			/* 5 bytes */
-	/* bounds() does not return (raises exception), but keep ABI-correct */
+	bra((uvlong)fn, Ocall);				/* 5 bytes */
+	/* fn() does not return (raises exception), but keep ABI-correct */
 #ifdef _WIN32
 	gen_addsp(WINSHADOW_MAIN);			/* 4 bytes */
 #endif
 	*patch_loc = code - (patch_loc + 1);		/* backpatch rel8 */
+}
+
+static void
+jnebounds(int cc, Inst *i)
+{
+	jnefault(cc, i, bounds);
 }
 
 /*
@@ -860,6 +875,19 @@ static void
 punt(Inst *i, int m, void (*fn)(void))
 {
 	uvlong pc;
+
+	/*
+	 * R.PC is always written for a real instruction, not only for the
+	 * ops that read it: an op that raises (a big divide by zero, a
+	 * conversion) then leaves R.PC inside this instruction, and the
+	 * exception finds this instruction's handler, as comp-riscv64.c's
+	 * puntop does (and comp-arm64.c's punt).  It was written for WRTPC
+	 * ops only, so a big divide by zero inside a {...} exception block
+	 * was not caught (tests/jit_fault_test.b).  The debug hook's and
+	 * macret's dummy instructions are not real ones.
+	 */
+	if(i >= mod->prog && i < mod->prog + mod->nprog)
+		m |= WRTPC;
 
 	/* Save VM state to R structure */
 	if(m & SRCOP) {
@@ -1446,6 +1474,7 @@ comp(Inst *i)
 {
 	int r;
 	WORD *t, *e;
+	uchar *rune, *done;
 	char buf[64];
 
 	if(0) {
@@ -1913,8 +1942,14 @@ comp(Inst *i)
 		jnebounds(Ojneb, i);
 		if(bflag) {
 			opwst(i, Oldw, RAX);
-			modrm32(0x3b, O(Array, len), RRTMP, RAX);
-			jnebounds(0x72, i);
+			/*
+			 * The index is a sign-extended 64-bit word and
+			 * Array.len a WORD: one unsigned 64-bit compare
+			 * rejects a negative index with an overlarge one,
+			 * as OP(indx)'s (ulong)i >= a->len does.
+			 */
+			modrm(0x3b, O(Array, len), RRTMP, RAX);	/* CMP RAX, len */
+			jnebounds(0x72, i);			/* JB: in range */
 			modrm(Oldw, O(Array, t), RRTMP, RRTA);
 			modrm32(0xf7, O(Type, size), RRTA, 5);
 		} else {
@@ -1948,8 +1983,9 @@ comp(Inst *i)
 		cmpl64(RAX, (uvlong)H);
 		jnebounds(Ojneb, i);
 		if(bflag) {
-			modrm32(0x3b, O(Array, len), RAX, RRTMP);
-			jnebounds(0x72, i);
+			/* unsigned 64-bit, as for IINDX above */
+			modrm(0x3b, O(Array, len), RAX, RRTMP);	/* CMP RRTMP, len */
+			jnebounds(0x72, i);			/* JB: in range */
 		}
 		modrm(Oldw, O(Array, data), RAX, RAX);
 		/* LEA (RAX)(RRTMP*scale), RAX */
@@ -1962,43 +1998,45 @@ comp(Inst *i)
 		modrm(Ostw, i->reg, r, RAX);
 		break;
 	case IINDC:
+		/*
+		 * s[i]. String.len is an int: negative means a rune
+		 * string of -len runes. The index is a sign-extended
+		 * 64-bit word and the (zero-extended) length a non-negative
+		 * 32-bit one, so one unsigned 64-bit compare rejects a
+		 * negative index with an overlarge one, as OP(indc) in
+		 * string.c does. The 386 original compared the index with
+		 * the length and counted its own bytes for the jumps; the
+		 * amd64 port had the operands the other way round and the
+		 * REX prefixes put its counts off by one, which is why
+		 * bflag was never set: every string index faulted.
+		 */
 		opwld(i, Oldw, RAX);
 		mid(i, Oldw, RDI);
+		cmpl64(RAX, (uvlong)H);
+		jnefault(Ojneb, i, nilref);
+		modrm32(Oldw, O(String, len), RAX, RRTA);	/* MOV R10D, len: zero-extends */
+		modrr32(0x85, RRTA, RRTA);			/* TEST R10D, R10D */
+		gen2(Ojltb, 0);					/* JL rune string */
+		rune = code - 1;
 		if(bflag) {
-			modrm32(Oldw, O(String, len), RAX, RRTA);
-			/*
-			 * String.len is int (32-bit): negative means rune string.
-			 * Use 32-bit TEST — a 32-bit load zero-extends to 64 bits,
-			 * so a 64-bit CMP would see negative 32-bit values as positive.
-			 */
-			modrr32(0x85, RRTA, RRTA);	/* TEST R10D, R10D */
-			gen2(Ojltb, 16);
-			modrr32(0x3b, RDI, RRTA);
-			gen2(0x72, 5);
-			bra((uvlong)bounds, Ocall);
-			genb(0x0f);
-			gen2(Omovzxb, (1<<6)|(0<<3)|4);
-			gen2((0<<6)|(RDI<<3)|RAX, O(String, data));
-			gen2(Ojmpb, 11);
-			modrr32(Oneg, RRTA, 3);
-			modrr32(0x3b, RDI, RRTA);
-			gen2(0x73, 0xee);
-			genb(0x0f);
-			gen2(Omovzxw, (1<<6)|(0<<3)|4);
-			gen2((1<<6)|(RDI<<3)|RAX, O(String, data));
-			opwst(i, Ostw, RAX);
-			break;
+			modrr(0x3b, RRTA, RDI);			/* CMP RDI, R10 */
+			jnebounds(0x72, i);			/* JB: in range */
 		}
-		modrm32(Ocmpi, O(String, len), RAX, 7);
-		genb(0);
-		gen2(Ojltb, 7);
-		genb(0x0f);
+		genb(0x0f);					/* MOVZX EAX, byte [RAX+RDI+data] */
 		gen2(Omovzxb, (1<<6)|(0<<3)|4);
 		gen2((0<<6)|(RDI<<3)|RAX, O(String, data));
-		gen2(Ojmpb, 5);
-		genb(0x0f);
+		gen2(Ojmpb, 0);
+		done = code - 1;
+		*rune = code - (rune + 1);
+		modrr32(Oneg, RRTA, 3);				/* NEG R10D: the rune count */
+		if(bflag) {
+			modrr(0x3b, RRTA, RDI);			/* CMP RDI, R10 */
+			jnebounds(0x72, i);			/* JB: in range */
+		}
+		genb(0x0f);					/* MOVZX EAX, word [RAX+RDI*2+data] */
 		gen2(Omovzxw, (1<<6)|(0<<3)|4);
 		gen2((1<<6)|(RDI<<3)|RAX, O(String, data));
+		*done = code - (done + 1);
 		opwst(i, Ostw, RAX);
 		break;
 	case ICASE:

@@ -126,6 +126,12 @@ android {
         debug {
             // Debug APKs are signed with the Android debug keystore by
             // default. Sufficient for adb install on dev devices.
+            // INFERNODE_DEBUG_ID_SUFFIX (e.g. ".debug") lets a debug build
+            // install alongside the Play build on the same device: same id
+            // + different signer would otherwise force an uninstall, which
+            // wipes the Play install's data. Off by default so
+            // `am start -n io.infernode/...` and tools/android-smoke.sh hold.
+            System.getenv("INFERNODE_DEBUG_ID_SUFFIX")?.let { applicationIdSuffix = it }
         }
     }
 }

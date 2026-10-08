@@ -4,8 +4,15 @@ cpu \- execute a remote command
 .SH SYNOPSIS
 .B cpu
 [
+.B -1
+]
+[
 .B -C
 .I alg
+]
+[
+.B -e
+.I exportroot
 ]
 .RI [ net\fB!\fP ] host
 [
@@ -22,7 +29,7 @@ dials
 .B tcp
 if
 .I net
-is not given), exports the local namespace and executes the given
+is not given), exports a deliberately small local namespace and executes the given
 .I command
 on that machine. The local namespace is visible to the
 command in
@@ -33,6 +40,20 @@ If
 is not given, then
 .B /dis/sh
 is run.
+.PP
+Before exporting any caller files, the client uses the version 2 request
+protocol and waits for an acknowledgment from
+.IR rstyxd (8).
+EOF or any other response is a command failure.  This makes a rejected
+transport choice or request observable to scripts instead of looking like a
+successful command that printed nothing.
+The
+.B -1
+option uses the original unacknowledged request protocol for an old server.
+It should be used only for compatibility: that protocol cannot distinguish
+early server rejection from successful empty output.
+The acknowledgment reports that the server accepted and prepared the request;
+it does not report the eventual exit status of the remote program.
 .PP
 The
 .B -C
@@ -52,9 +73,9 @@ asks for no
 after authentication, for a server that offers nothing else;
 a bare-metal InferNode's listener refuses it.
 .PP
-The local
+By default only the local
 .B /dev
-is exported with the rest of the namespace, and the remote
+is exported.  The remote
 .I rstyxd
 binds it over its own, so a graphical command draws on the local screen
 and reads the local mouse and keyboard.
@@ -62,6 +83,19 @@ and reads the local mouse and keyboard.
 binds the draw device into
 .B /dev
 first if it is not already there.
+The
+.B -e
+option explicitly exports
+.I exportroot
+instead; that directory must contain a
+.B dev
+subdirectory.  Use it to construct a narrow tree containing an additional
+service such as
+.BR wmexport (1).
+Exporting
+.B /
+restores the historical behaviour but also delegates the caller's keyring,
+home directory and host mounts, and is unsafe for an untrusted node.
 See
 .B docs/REMOTE-DESKTOP.md
 for using a headless machine's desktop this way.

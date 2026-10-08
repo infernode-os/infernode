@@ -211,6 +211,135 @@ testFromFileInvalidLineIsSkippedNotFatal(t: ref T)
 	t.assert(th != nil, "gettheme survives a line that is not a valid colour");
 }
 
+testXenithShipped(t: ref T)
+{
+	th := lucitheme->loadtheme("xenith");
+	if(!t.assert(th != nil, "the xenith theme is installed"))
+		return;
+	t.asserteq(th.editbg, int 16r1E1E2EFF, "xenith body is Catppuccin base");
+	t.asserteq(th.header, int 16r313244FF, "xenith tags are Catppuccin surface0");
+}
+
+testGlendaShipped(t: ref T)
+{
+	th := lucitheme->loadtheme("glenda");
+	if(!t.assert(th != nil, "the glenda theme is installed"))
+		return;
+	# acme's body and rio's menus, as allocimagemix makes them
+	t.asserteq(th.editbg, int 16rFFFFEAFF, "body: Paleyellow over White");
+	t.asserteq(th.menubg, int 16rEAFFEAFF, "menu: Palegreen over White");
+	t.asserteq(th.menuhilit, int 16r448844FF, "menu highlight: DDarkgreen");
+	t.asserteq(th.border, int 16r8888CCFF, "tag border: DPurpleblue");
+}
+
+testEntries(t: ref T)
+{
+	got := "";
+	n := 0;
+	for(l := lucitheme->entries("glenda"); l != nil; l = tl l){
+		(k, v) := hd l;
+		n++;
+		if(k == "xenith-bg-tag-0" || k == "xenith-bord-tag-0" || k == "xenith-mod-but-0")
+			got += sys->sprint(" %s=%.8ux", k, v);
+	}
+	t.assertseq(got, " xenith-bg-tag-0=eaffffff xenith-bord-tag-0=8888ccff xenith-mod-but-0=000099ff",
+		"a program's own keys come through, in file order");
+	t.assert(n > 60, "every entry, roles and all");
+	t.assert(lucitheme->entries("../glenda") == nil, "a path is not a theme name");
+}
+
+# The tests below run with a fixture bound over THEMEDIR in this
+# process's own name space (forked first), so the tree's current file
+# is never written.
+FIXTURE: con "/tmp/lucitheme_test.fixture";
+
+fixture(): int
+{
+	sys->pctl(Sys->FORKNS, nil);
+	sys->create(FIXTURE, Sys->OREAD, Sys->DMDIR|8r755);
+	writefile(FIXTURE + "/current", "darkone");
+	writefile(FIXTURE + "/darkone", "bg 101010\n");
+	writefile(FIXTURE + "/lightone", "bg F0F0F0\n");
+	return sys->bind(FIXTURE, THEMEDIR, Sys->MREPL);
+}
+
+testThemes(t: ref T)
+{
+	l := lucitheme->themes();
+	s := "";
+	for(; l != nil; l = tl l)
+		s += " " + hd l;
+	t.assertseq(s, " darkone lightone", "installed themes, sorted, current excluded");
+}
+
+testCurrent(t: ref T)
+{
+	t.assertseq(lucitheme->current(), "darkone", "current names the active theme");
+}
+
+testLoadUnknown(t: ref T)
+{
+	t.assert(lucitheme->loadtheme("nosuch") == nil, "no such theme");
+	t.assert(lucitheme->loadtheme("../darkone") == nil, "a path is not a theme name");
+	t.assert(lucitheme->loadtheme("current") == nil, "current is not a theme");
+}
+
+testSetRefused(t: ref T)
+{
+	t.assert(lucitheme->settheme("nosuch") != nil, "no such theme is refused");
+	t.assert(lucitheme->settheme("a/b") != nil, "a path is refused");
+	t.assert(lucitheme->settheme("current") != nil, "current is refused");
+	t.assertseq(lucitheme->current(), "darkone", "a refused switch changes nothing");
+}
+
+testSet(t: ref T)
+{
+	t.assert(lucitheme->settheme("lightone") == nil, "switch to an installed theme");
+	t.assertseq(lucitheme->current(), "lightone", "current follows the switch");
+	t.asserteq(lucitheme->gettheme().bg, int 16rF0F0F0FF, "gettheme loads the new theme");
+	lucitheme->settheme("darkone");
+}
+
+testWatch(t: ref T)
+{
+	# the watcher runs until its process group is killed, so give it
+	# a group of its own: left running it would keep emu up
+	res := chan of string;
+	pidc := chan of int;
+	spawn watchprobe(pidc, res);
+	pid := <-pidc;
+	# whoever writes current, by any means, is seen
+	writefile(THEMEDIR + "current", "lightone");
+	timeout := chan[1] of int;
+	spawn sleeper(timeout, 5000);
+	name := "";
+	alt {
+	name = <-res =>
+		;
+	<-timeout =>
+		;
+	}
+	ctl := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if(ctl != nil)
+		sys->fprint(ctl, "killgrp");
+	lucitheme->settheme("darkone");
+	t.assertseq(name, "lightone", "watch delivers the new name");
+}
+
+watchprobe(pidc: chan of int, res: chan of string)
+{
+	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
+	c := lucitheme->watch();
+	res <-= <-c;
+	<-chan of int;	# stay, so the group can be killed by this pid
+}
+
+sleeper(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -242,6 +371,18 @@ init(nil: ref Draw->Context, args: list of string)
 	run("FromFileHighRedHeader",           testFromFileHighRedHeader);
 	run("FromFileLowRedAccentStillWorks",  testFromFileLowRedAccentStillWorks);
 	run("FromFileInvalidLineIsSkippedNotFatal", testFromFileInvalidLineIsSkippedNotFatal);
+	run("XenithShipped", testXenithShipped);
+	run("GlendaShipped", testGlendaShipped);
+	run("Entries", testEntries);
+
+	if(fixture() < 0)
+		raise sys->sprint("fail:cannot bind the theme fixture: %r");
+	run("Themes", testThemes);
+	run("Current", testCurrent);
+	run("LoadUnknown", testLoadUnknown);
+	run("SetRefused", testSetRefused);
+	run("Set", testSet);
+	run("Watch", testWatch);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

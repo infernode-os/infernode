@@ -1,0 +1,54 @@
+# veltrosrv dup_read
+requests 3
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_dup_read_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_dup_read_0_0:
+  |     1	alpha
+
+== request 2 (turn 2)
+tools: list read write
+assistant-call call_dup_read_1_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_dup_read_1_0:
+  | (skipped: identical `read {"args": "/usr/agentloop/a.txt"}` already ran at step 0 — its output is in your earlier results; use that instead of repeating the call)
+
+== output
+  | == user
+  | SCENARIO:dup_read go
+  | == veltro
+  | Read twice.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 20 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 76 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_dup_read_0_0:read:{"args"\: "/usr/agentloop/a.txt"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/a.txt"}
+  | tool read: calling with 32 bytes
+  | tool read: done,     1	alpha
+  | 
+  | step 2: writing 48 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 76 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_dup_read_1_0:read:{"args"\: "/usr/agentloop/a.txt"}
+  | 
+  | step 3: writing 200 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 11 bytes)
+  | step 3: waiting for LLM response...
+  | step 3: LLM response 26 bytes
+  | llm: STOP:end_turn
+  | Read twice.
+  | 
+  | turn done stop=end_turn steps=3

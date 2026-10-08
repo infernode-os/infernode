@@ -375,10 +375,12 @@ trap(Ureg *u)
 		 * instruction; the handler search (os/port/exception.c) maps
 		 * R.PC back to a Dis instruction, and a stale one is outside
 		 * the exception block, so nothing caught it and the program
-		 * died "Broken". The faulting instruction is exactly where the
-		 * exception happened.
+		 * died "Broken". The search takes R.PC as a return address and
+		 * looks one byte back, so it is set just past the faulting
+		 * instruction, inside the same Dis instruction (as the hosted
+		 * emulator's jitfault does).
 		 */
-		R.PC = (Inst*)u->pc;
+		R.PC = (Inst*)(u->pc + 4);
 		disfault(u, exNilref);
 	}
 

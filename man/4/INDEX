@@ -30,3 +30,4 @@ registry registry
 regquery registry
 scenefs scenefs
 tarfs tarfs
+veltrosrv veltrosrv

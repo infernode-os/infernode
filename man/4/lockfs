@@ -47,8 +47,8 @@ is passed to
 If no
 .B -a
 arguments are given,
-.B "-a none"
-is assumed.
+.B "-a aes_256_cbc -a sha256"
+is assumed, requiring confidentiality and integrity after authentication.
 If the
 .B -A
 option is given, then no authentication

@@ -1249,7 +1249,13 @@ ecom(Src *src, Node *nto, Node *n)
 			break;
 		}
 		if(left->op == Oname && left->decl->store == Dtype){
-			genrawop(src, INEW, mktn(t), nil, nto);
+			/*
+			 * ref T with no initializer: nothing follows to store
+			 * into the members, so the allocation itself must zero
+			 * them.  INEW only sets the pointer slots to H and leaves
+			 * the scalars holding whatever the recycled block held.
+			 */
+			genrawop(src, INEWZ, mktn(t), nil, nto);
 			break;
 		}
 		if(t->kind == Tadt && t->tags != nil){

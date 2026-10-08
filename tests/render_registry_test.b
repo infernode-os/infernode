@@ -91,7 +91,7 @@ testBuiltinRenderers(t: ref T)
 		if(e.name == "Image") hasimg = 1;
 		if(e.name == "Markdown") hasmd = 1;
 		if(e.name == "PDF") haspdf = 1;
-		if(e.name == "HTML") hashtml = 1;
+		if(e.name == "HTML (Charon)") hashtml = 1;
 	}
 	t.assert(hasimg, "Image renderer registered");
 	t.assert(hasmd, "Markdown renderer registered");
@@ -135,7 +135,7 @@ testFindByExtension(t: ref T)
 	t.assert(r4 != nil, "found renderer for .html");
 	if(r4 != nil) {
 		ri := r4->info();
-		t.assertseq(ri.name, "HTML", "html renderer is HTML");
+		t.assertseq(ri.name, "HTML (Charon)", "html renderer is Charon");
 	}
 
 	# Unknown extension should return nil

@@ -21,8 +21,45 @@ holds the files and runs the command language.
 The terminal loads the host as a module and spawns it; no host
 operating system binary is involved.
 .PP
-Each file named on the command line is read into the file menu and the
-first is opened in a window.
+The terminal follows Plan 9's samterm
+.RI ( flayer.c ,
+.IR menu.c ,
+.IR scroll.c
+and the mouse half of
+.IR main.c ).
+Sam is a single window.
+The command window runs across its top fifth; every window on a file is
+a layer inside sam's window, and layers overlap.
+The current layer, the one typing goes to, is in front with a heavy
+border; the others have a thin one.
+Button 1 in a layer that is not current makes it current; in the
+current layer it selects.
+Buttons 2 and 3 act on the current layer wherever they are pressed.
+.PP
+Each layer has a scroll bar at its left showing the part of the file in
+the layer.
+In the current layer's scroll bar, on release, button 1 moves the text
+back as many lines as the pointer is below the top of the bar, button 3
+brings the line beside the pointer to the top, and button 2 moves to
+the place in the file corresponding to the pointer's height.
+.PP
+When a new layer is needed the cursor becomes a box and a rectangle is
+swept out with button 3.
+A click instead of a sweep takes the whole window or, while the command
+window has one layer, the part of it on the clicked side of the command
+window.
+Another button abandons the sweep, and a rectangle no bigger than 100
+by 40 pixels makes no layer.
+When sam's window is resized every layer is scaled with it.
+.PP
+The files named on the command line are put in the file menu; the
+first is the current file, but it is read, and a layer swept for it,
+only when a command first uses it.
+As in sam, after any command that makes another file current or reads
+the current one, the terminal brings that file's layer to the front
+(sweeping one if it has none); while the command window is current, the
+file's layer only comes to the front, and typing stays in the command
+window.
 The command window, listed in the menu as
 .BR ~~sam~~ ,
 takes commands typed at its end; a command runs when its line is ended
@@ -36,7 +73,7 @@ Button 2 in a file window offers
 .BR paste ,
 .BR snarf ,
 .B look
-(search for the literal selected text) and
+(search for the literal selected text) and, once there is one,
 .BI / regexp
 (search again for the last regular expression).
 In the command window the last item is
@@ -44,13 +81,42 @@ In the command window the last item is
 which runs the selected text as a command.
 Button 3 offers
 .B new
-(an unnamed file),
-.B zerox
-(another window on the same file),
+(sweep a layer for an unnamed file),
+.BR zerox ,
+.BR resize ,
 .B close
 and
 .BR write ,
 followed by the file names.
+For
+.BR zerox ,
+.BR resize ,
+.B close
+and
+.B write
+the cursor becomes a bullseye and the layer to act on is chosen with
+button 3;
+.B zerox
+then sweeps another layer on the same file (at most five per file),
+.B resize
+sweeps a new place for the layer, and
+.B close
+closes the layer, or the file if it is its last.
+While the host is busy the commands are shown in parentheses and
+ignored.
+As in sam, each file name is preceded by
+.B \'
+if the file is modified, by
+.BR - ,
+.B +
+or
+.B *
+for no, one or several windows, and by
+.B .
+if it is the current file.
+Choosing a file with no window sweeps one; choosing one with windows
+brings its front layer up, or the next if that one is current.
+Each menu appears with its last choice under the pointer.
 A double click selects a word, a line, or the text between matching
 brackets or quotes.
 The snarf buffer is
@@ -279,6 +345,11 @@ Rob Pike,
 and
 ``Structural Regular Expressions''.
 .SH BUGS
-Pointer-driven window sweeping and the
+Button 2 has no
+.B plumb
+or
 .B exch
-menu item are not implemented; windows are placed by the window manager.
+(Plan 9's
+.BR <rio> )
+items: sam's snarf buffer is already the system's, and the terminal
+protocol has no plumbing message.

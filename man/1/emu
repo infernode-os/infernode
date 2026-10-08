@@ -107,6 +107,43 @@ Define screen width and height in pixels.
 The default values are 640x480 and the minimum values are 64x48.
 Values smaller than the minimum or greater than the
 available display size are ignored.
+With the SDL graphics of the desktop hosts this is the window's initial
+size: the window may be resized (or made full screen), and the screen
+then becomes the window's new size, shown one to one, not scaled.
+Each change is reported on
+.BR /dev/wmsize ,
+as a line
+.BI m " width height"
+followed by two unused fields, for programs to lay themselves out again
+(Xenith and Lucifer read it); a program that does not read it keeps
+the layout it made for the window it started in.
+.IP
+The sizes are in the host's points, which on a high-density (Retina)
+display are each two pixels or more, drawn doubled.
+With
+.B INFERNODE_HIDPI
+set (and not
+.BR 0 )
+in the host environment, the screen has the display's own pixels
+instead: a window of 700x400 points is a screen of 1400x800 on a
+Retina display, on Wayland at 200%, and on X11 at 192 dpi
+.RB ( Xft.dpi
+or
+.BR GDK_SCALE ),
+where the window, which X11 sizes in pixels, is made that much larger.
+Programs must then size themselves to match, so the program that
+opens the display finds the number of pixels to a point in its
+environment variable
+.BR displayscale ;
+Xenith reads it (see
+.BR tools/xen ),
+the rest of the desktop does not yet, and would come out half size.
+A fractional scale is given in quarters:
+.B 1.25
+at 125%,
+.B 1.5
+at 150%; a program reading it as an integer gets its whole part.
+iOS always has the display's own pixels.
 .TP
 .BI \-f font
 Specify the default font for the

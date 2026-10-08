@@ -1,0 +1,44 @@
+# veltrosrv dup_in_batch
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_dup_in_batch_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+assistant-call call_dup_in_batch_0_1 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_dup_in_batch_0_0:
+  |     1	alpha
+tool-result call_dup_in_batch_0_1:
+  | (skipped: identical `read {"args": "/usr/agentloop/a.txt"}` already ran at step 0 — its output is in your earlier results; use that instead of repeating the call)
+
+== output
+  | == user
+  | SCENARIO:dup_in_batch go
+  | == veltro
+  | Same file twice in one batch.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 24 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 146 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_dup_in_batch_0_0:read:{"args"\: "/usr/agentloop/a.txt"}
+  | TOOL:call_dup_in_batch_0_1:read:{"args"\: "/usr/agentloop/a.txt"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/a.txt"}
+  | tool read: calling with 32 bytes
+  | tool read: done,     1	alpha
+  | 
+  | step 2: writing 243 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 29 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 44 bytes
+  | llm: STOP:end_turn
+  | Same file twice in one batch.
+  | 
+  | turn done stop=end_turn steps=2

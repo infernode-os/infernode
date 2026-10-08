@@ -174,14 +174,26 @@ uartgetc(void)
 int
 consuartputc(Queue *q, int c)
 {
+	int held;
+
 	USED(q);
 	if(kbdq == nil)
 		return 0;
 	if(c == '\r')
 		c = '\n';
+	/*
+	 * The echo takes the console lock like any other writer. On
+	 * another core this interrupt lands in the middle of a line being
+	 * printed under it, and the typed byte went out inside the line:
+	 * "fb:   con.sole released to the draw device", typed ".dis" split
+	 * across it (riscvvirt, CI, 2026-10-03). Interrupts are off while
+	 * a core holds it, so this core is never the holder here.
+	 */
+	held = uartlock();
 	if(c == '\n')
 		uartputc('\r');
 	uartputc(c);
+	uartunlock(held);
 	return kbdputc(kbdq, c);
 }
 

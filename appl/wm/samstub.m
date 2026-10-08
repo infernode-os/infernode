@@ -50,7 +50,9 @@ Samstub: module
 	outTsll:	fn(t, m, l1, l2: int);
 
 	cleanout:	fn();
-	close:		fn(win, tag: int);
+	closeup:	fn(fl: ref Flayer);
+	duplicate:	fn(fl: ref Flayer, r: Draw->Rect, close: int);
+	outcmd:		fn();
 	cut:		fn(t: ref Text, fl: ref Flayer);
 	findhole:	fn(t: ref Text): (int, int);
 	grow:		fn(t: ref Text, l1, l2: int);
@@ -59,7 +61,7 @@ Samstub: module
 	keypress:	fn(key: string);
 	look:		fn(t: ref Text, fl: ref Flayer);
 	menuins:	fn(p: int, s: string, t: ref Text, tg: int);
-	newtext:	fn(tag, tp: int): int;
+	newtext:	fn(tag, tp: int, r: Draw->Rect): int;
 	paste:		fn(t: ref Text, fl: ref Flayer);
 	scrollto:	fn(fl: ref Flayer, where: int);
 	sctget:		fn(scts: list of ref Section, p1, p2: int): string;
@@ -73,10 +75,8 @@ Samstub: module
 	setlock:	fn();
 	snarf:		fn(t: ref Text, fl: ref Flayer);
 	startcmdfile:	fn();
-	startfile:	fn(tag: int): int;
-	startnewfile:	fn();
+	sweeptext:	fn(new, tag: int): ref Text;
 	updatefls:	fn(t: ref Text, l: int, s: string);
-	zerox:		fn(t: ref Text);
 
 	Tversion,	# version
 	Tstartcmdfile,	# terminal just opened command frame

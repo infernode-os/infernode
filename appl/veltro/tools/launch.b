@@ -198,21 +198,15 @@ exec(args: string): string
 
 	# Build the create command.
 	# For xenith: pass -c 1 (single-column, fits presentation zone) and -E (embedded flag
-	# so xenith skips killprocs on exit). Also pass -t dark if brimstone theme is active.
+	# so xenith skips killprocs on exit).
 	# For other apps with extradata (e.g. a URL for charon): kill any existing instance
 	# first, then relaunch with data=<extradata> so the app receives the URL as its starturl.
 	# id must match the app's wmsrv registration (derived from .dis name).
 	# label is the user-facing tab name.
 	cmd: string;
 	if(disname == "xenith") {
+		# no -t: Xenith follows the system theme itself
 		xenithargs := "-c 1 -E";
-		theme := readfile("/lib/lucifer/theme/current");
-		if(theme != nil)
-			theme = strip(theme);
-		# Brimstone is the dark theme (and the default when no theme file exists).
-		# Halo and other light themes use xenith's default Acme colour scheme.
-		if(theme == nil || theme == "" || theme == "brimstone")
-			xenithargs += " -t dark";
 		cmd = sys->sprint("create id=%s type=app dis=%s label=%s data=%s",
 			disname, dispath, label, xenithargs);
 	} else if(extradata != "") {

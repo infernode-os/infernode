@@ -228,7 +228,14 @@ cp -a "$ROOT/dis"    "$ASSETS/dis"
 # IMPORTANT: dot-prefixed names (.keep, .gitkeep, etc.) get stripped
 # by aapt during APK packaging, so use a normal name. Same trick for
 # every other Inferno-side bind/mount root that ships empty.
-for d in n phone usr/inferno/secstore usr/inferno/tmp; do
+#
+# mnt is the root for app-authored mounts: msg9p and luciuisrv create
+# /mnt/msg and /mnt/ui themselves, but only one level deep, so /mnt must
+# already exist — without it msg9p fails with `'/mnt' file does not
+# exist` and Lucifer shows a blank screen. /mnt/llm is mounted by plain
+# `mount` in sh/profile, which creates nothing. The desktop tree hides
+# all of this because its gitignored mnt/ accumulates these directories.
+for d in n mnt mnt/llm tmp phone usr/inferno/secstore usr/inferno/tmp; do
     mkdir -p "$ASSETS/$d"
     touch    "$ASSETS/$d/KEEPDIR"
 done

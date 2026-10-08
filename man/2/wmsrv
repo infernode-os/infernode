@@ -18,6 +18,7 @@ init:   fn():
 find:   fn(p: Draw->Point): ref Client;
 top:    fn(): ref Client;
 wsys:   fn(): ref Sys->FD;
+stop:   fn();
 
 Window: adt {
     tag:    string;
@@ -309,6 +310,26 @@ and hides
 from the applications it launches.
 This is rio's
 .BI /dev/wsys/ id /window .
+.PP
+.B Stop
+shuts the window manager down.
+Each client still connected is sent
+.B exit
+on its
+.B ctl
+channel and its buffering process is stopped;
+then the server ends and the file it created in
+.B /chan
+goes.
+A window manager calls
+.B stop
+from a process other than the one reading
+.I join
+and
+.IR req ,
+since
+.B stop
+waits for the server, which may be waiting on those.
 .SH FILES
 .TP 10
 .B /chan/wm

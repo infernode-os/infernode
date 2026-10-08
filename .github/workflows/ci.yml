@@ -199,6 +199,28 @@ jobs:
         chmod +x tests/host/llmsrv_session_capability_test.sh
         ROOT=. tests/host/llmsrv_session_capability_test.sh
 
+    - name: Run agent harness checks
+      run: |
+        # The one agent loop, veltrosrv, through its files and through its
+        # clients, against a scripted model (tests/host/agentloop): the
+        # contract of /mnt/veltro, the veltro command, and what the loop
+        # sends back to the model after each tool call, pinned as golden
+        # files.  lucibridge's scenarios drive it through /mnt/ui as the
+        # grind driver does; a subset here, the full set is
+        # `tests/host/agentloop_characterization_test.sh`.
+        chmod +x tests/host/veltrosrv_test.sh tests/host/veltro_cli_test.sh \
+          tests/host/lucibridge_tool_timeout_test.sh \
+          tests/host/agentloop_characterization_test.sh \
+          tests/host/tools9p_result_test.sh
+        # Concurrent calls to one tool each read their own result.
+        ROOT=. bash tests/host/tools9p_result_test.sh
+        ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
+        ROOT=. bash tests/host/veltrosrv_test.sh
+        ROOT=. bash tests/host/veltro_cli_test.sh
+        ROOT=. FRONTENDS=veltrosrv bash tests/host/agentloop_characterization_test.sh
+        ROOT=. FRONTENDS=lucibridge bash tests/host/agentloop_characterization_test.sh \
+          single_read two_reads write_then_read error_streak say step_cap
+
     - name: Run memdraw rasteriser and fast-path checks
       run: |
         # libmemdraw/aatest.c: exact coverage, fill rules, strokes, and the
@@ -208,6 +230,16 @@ jobs:
         # anti-aliased glyph black under gcc.  The libraries are built
         # above, so a skip (77) here is a failure.
         ROOT=. sh tests/host/aa_test.sh
+
+    - name: Run sh script-execution check
+      run: |
+        # A script without the execute bit must be reported as such,
+        # not as a missing .dis module (what Xenith's B2 showed), and
+        # must not hide a command later on the path. 77 = skip (no emu).
+        chmod +x tests/host/sh_noexec_script_test.sh
+        rc=0
+        ROOT=. bash tests/host/sh_noexec_script_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run dossrv badent alias check
       run: |
@@ -232,6 +264,13 @@ jobs:
         # fixture directory), under a second.
         chmod +x tests/host/pi_firmware_test.sh
         ROOT=. bash tests/host/pi_firmware_test.sh
+        # A wstat's "don't change" fields must change nothing on a
+        # 64-bit host: mv inside InferNode used to leave a host file
+        # mode 777 with a modification time in 2106. 77 = skip (no emu).
+        chmod +x tests/host/wstat_nulldir_test.sh
+        rc=0
+        ROOT=. bash tests/host/wstat_nulldir_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run WPA2 supplicant vector checks
       run: |
@@ -427,6 +466,19 @@ jobs:
       run: |
         chmod +x tests/host/jit_boot_test.sh
         tests/host/jit_boot_test.sh
+
+    - name: Run JIT bounds tests (JIT and interpreter)
+      run: |
+        # A negative or overlarge index must raise "array bounds error"
+        # from compiled code, not read or write outside the array.
+        chmod +x tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
+
+    - name: Run cpu(1) session lifetime test
+      run: |
+        # A cpu session ends when its command does, or when its caller
+        # hangs up, and what it started ends with it (#732).
+        ROOT=. sh tests/host/cpu_session_test.sh
 
     - name: Run JIT type code reuse test
       run: |
@@ -743,6 +795,13 @@ jobs:
         # the #F device would ship as a stub. Same guard as the GUI jobs.
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the amd64 and macOS jobs build it: the
+        # host-side JIT tests below run /dis/sh.dis and /dis/tests
+        export PATH="$ROOT/Linux/arm64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/arm64/bin/limbo"
@@ -838,6 +897,15 @@ jobs:
           echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
         fi
+
+    - name: Run JIT fault and bounds tests (JIT and interpreter)
+      run: |
+        # Gating, unlike the suite above: faults raised from compiled
+        # code must be the interpreter's exceptions, caught by the
+        # handler around them. The arm64 JIT failed both while the
+        # suite's non-gating run hid it.
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -1162,11 +1230,13 @@ jobs:
 
     - name: Run JIT fault tests (JIT and interpreter)
       run: |
-        for c in 1 0; do
-          timeout 300 "$RUNNER_TEMP/emu-rv" -c$c -r . /dis/tests/jit_fault_test.dis -v > jit-fault-c$c.txt 2>&1 < /dev/null || true
-          cat jit-fault-c$c.txt
-          grep -qx PASS jit-fault-c$c.txt && ! grep -q -- '--- FAIL' jit-fault-c$c.txt \
-            || { echo "::error::jit_fault_test failed with -c$c"; exit 1; }
+        for t in jit_fault_test jit_bounds_test; do
+          for c in 1 0; do
+            timeout 300 "$RUNNER_TEMP/emu-rv" -c$c -r . /dis/tests/$t.dis -v > $t-c$c.txt 2>&1 < /dev/null || true
+            cat $t-c$c.txt
+            grep -qx PASS $t-c$c.txt && ! grep -q -- '--- FAIL' $t-c$c.txt \
+              || { echo "::error::$t failed with -c$c"; exit 1; }
+          done
         done
 
     - name: Run JIT boot smoke test
@@ -1349,6 +1419,16 @@ jobs:
         # above, so a skip (77) here is a failure.
         ROOT=. sh tests/host/aa_test.sh
 
+    - name: Run sh script-execution check
+      run: |
+        # A script without the execute bit must be reported as such,
+        # not as a missing .dis module (what Xenith's B2 showed), and
+        # must not hide a command later on the path. 77 = skip (no emu).
+        chmod +x tests/host/sh_noexec_script_test.sh
+        rc=0
+        ROOT=. bash tests/host/sh_noexec_script_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run test suite
       run: |
         # Create /tmp inside Inferno root for tmp_writable test
@@ -1402,6 +1482,15 @@ jobs:
       run: |
         chmod +x verify-port.sh
         ./verify-port.sh
+
+    - name: Run JIT fault and bounds tests (JIT and interpreter)
+      run: |
+        # Gating, unlike the suite above: faults raised from compiled
+        # code must be the interpreter's exceptions, caught by the
+        # handler around them. The arm64 JIT failed both while the
+        # suite's non-gating run hid it.
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_bounds_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |

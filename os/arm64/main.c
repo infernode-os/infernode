@@ -2646,6 +2646,9 @@ kmain(void)
 	 */
 	launchsmp();
 
+	/* the spin table in page zero has done its job (../bcm/mmu.c) */
+	mmuguardzero();
+
 	/*
 	 * After launchsmp, so active.machs says which cores answered;
 	 * before schedinit, because kproc() wants a current process to

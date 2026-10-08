@@ -1,0 +1,46 @@
+# veltrosrv write_then_read
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_write_then_read_0_0 write {"args": "\/usr\/agentloop\/c.txt gamma"}
+assistant-call call_write_then_read_0_1 read {"args": "\/usr\/agentloop\/c.txt"}
+tool-result call_write_then_read_0_0:
+  | wrote 5 bytes to /usr/agentloop/c.txt
+tool-result call_write_then_read_0_1:
+  |     1	gamma
+
+== output
+  | == user
+  | SCENARIO:write_then_read go
+  | == veltro
+  | Wrote and read.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 27 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 159 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_write_then_read_0_0:write:{"args"\: "/usr/agentloop/c.txt gamma"}
+  | TOOL:call_write_then_read_0_1:read:{"args"\: "/usr/agentloop/c.txt"}
+  | 
+  | tool write: args {"args": "/usr/agentloop/c.txt gamma"}
+  | tool write: calling with 38 bytes
+  | tool write: done, wrote 5 bytes to /usr/agentloop/c.txt
+  | tool read: args {"args": "/usr/agentloop/c.txt"}
+  | tool read: calling with 32 bytes
+  | tool read: done,     1	gamma
+  | step 2: writing 121 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 15 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 30 bytes
+  | llm: STOP:end_turn
+  | Wrote and read.
+  | 
+  | turn done stop=end_turn steps=2

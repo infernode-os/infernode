@@ -16,6 +16,12 @@ Wmsrv: module{
 	# nil and %r on error.
 	wsys:	fn(): ref Sys->FD;
 
+	# Shut the window manager down: tell every connected client to exit,
+	# stop their minders and the server; /chan/<name> goes with it.
+	# Blocks until the server takes the request, so don't call it from
+	# the process that services the join and req channels.
+	stop:	fn();
+
 	Window: adt {
 		tag:	string;
 		r:	Draw->Rect;

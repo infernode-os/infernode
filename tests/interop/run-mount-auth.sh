@@ -7,8 +7,8 @@
 #   auth/createsignerkey -a <alg> -f <keyfile>      (writes a signer keyfile)
 #   styxlisten -a aes_256_cbc -a sha256 -k <keyfile> tcp!*!PORT export /lib
 #                                                   (cert-auth + ssl server)
-#   mount -k <keyfile> -C 'aes_256_cbc sha256' tcp!127.0.0.1!PORT /n/remote
-#                                                   (cert-auth + ssl client)
+#   mount -k <keyfile> tcp!127.0.0.1!PORT /n/remote
+#                              (cert-auth + secure default ssl client)
 # then reads a file through the encrypted mount and cmp's it byte-for-byte.
 #
 # Also checks enforcement: an anonymous `mount -A` against the cert-requiring
@@ -54,11 +54,11 @@ for alg in "${ALGS[@]}"; do
 if {auth/createsignerkey -a $alg -f $key mauthowner} {echo KEY-OK} {echo KEY-FAIL; raise 'fail:key'}
 styxlisten -a aes_256_cbc -a sha256 -k $key tcp!*!$port export /lib &
 sleep 2
-if {mount -k $key -C 'aes_256_cbc sha256' tcp!127.0.0.1!$port $mnt} {echo MOUNT-OK} {echo MOUNT-FAIL; raise 'fail:mount'}
+if {mount -k $key tcp!127.0.0.1!$port $mnt} {echo MOUNT-OK} {echo MOUNT-FAIL; raise 'fail:mount'}
 if {cp $mnt$XFER $pulled} {echo COPY-OK} {echo COPY-FAIL; raise 'fail:copy'}
 if {cmp $pulled /lib$XFER} {echo MOUNTAUTH-PASS-$alg} {echo MOUNTAUTH-DIFF-$alg}")"
 	if echo "$out" | grep -q "MOUNTAUTH-PASS-$alg"; then
-		echo "PASS: mount -k over $alg cert auth + ssl + styx (file verified)"
+		echo "PASS: mount -k secure default over $alg cert auth + ssl + styx (file verified)"
 	else
 		echo "FAIL: $alg mount-auth path:"; echo "$out" | grep -vE '^fs:|^$' | sed 's/^/    /'
 		fails=$((fails+1))

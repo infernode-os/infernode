@@ -1,0 +1,39 @@
+# veltrosrv approval_deny
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_approval_deny_0_0 write {"args": "\/dis\/agentloop-probe.txt probe"}
+tool-result call_approval_deny_0_0:
+  | error: /dis/agentloop-probe.txt is not covered by an rw path grant
+
+== output
+  | == user
+  | SCENARIO:approval_deny go
+  | == veltro
+  | Write was handled.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 25 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 92 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_approval_deny_0_0:write:{"args"\: "/dis/agentloop-probe.txt probe"}
+  | 
+  | tool write: args {"args": "/dis/agentloop-probe.txt probe"}
+  | tool write: calling with 42 bytes
+  | tool write: done, error: /dis/agentloop-probe.txt is not covered by an rw path grant
+  | step 2: writing 107 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 18 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 33 bytes
+  | llm: STOP:end_turn
+  | Write was handled.
+  | 
+  | turn done stop=end_turn steps=2

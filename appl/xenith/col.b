@@ -15,7 +15,7 @@ filem : Filem;
 windowm : Windowm;
 
 FALSE, TRUE, XXX : import Dat;
-Border : import Dat;
+Border : import dat;
 mouse, colbutton : import dat;
 Point, Rect, Image : import drawm;
 draw : import graph;

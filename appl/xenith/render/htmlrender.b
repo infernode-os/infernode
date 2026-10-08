@@ -41,8 +41,8 @@ rlayout: Rlayout;
 display: ref Display;
 DocNode: import rlayout;
 
-PROPFONT: con "/fonts/combined/unicode.sans.14.font";
-MONOFONT: con "/fonts/combined/unicode.14.font";
+PROPFONT: con "/fonts/combined/go.14.font";
+MONOFONT: con "/fonts/combined/gomono.14.font";
 
 propfont: ref Font;
 monofont: ref Font;

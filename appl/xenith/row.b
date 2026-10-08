@@ -23,7 +23,8 @@ ecmd : Editcmd;
 ALLLOOPER, ALLTOFILE, ALLMATCHFILE, ALLFILECHECK, ALLELOGTERM, ALLEDITINIT, ALLUPDATE, ALLINCREF, ALLDECREF, FIXINDENT: import Edit;
 sprint : import sys;
 FALSE, TRUE, XXX : import Dat;
-Border, BUFSIZE, Astring : import Dat;
+BUFSIZE, Astring : import Dat;
+Border, Mincolwid : import dat;
 Reffont, reffont, Lock, Ref : import dat;
 row, home, mouse : import dat;
 fontnames, rowbordercol, colbordercol, bgcol: import xenith;
@@ -231,10 +232,10 @@ Row.dragcol(row : self ref Row, c : ref Column)
 	if(i == 0)
 		return;
 	d = row.col[i-1];
-	if(p.x < d.r.min.x+80+Dat->Scrollwid)
-		p.x = d.r.min.x+80+Dat->Scrollwid;
-	if(p.x > c.r.max.x-80-Dat->Scrollwid)
-		p.x = c.r.max.x-80-Dat->Scrollwid;
+	if(p.x < d.r.min.x+Mincolwid+dat->Scrollwid)
+		p.x = d.r.min.x+Mincolwid+dat->Scrollwid;
+	if(p.x > c.r.max.x-Mincolwid-dat->Scrollwid)
+		p.x = c.r.max.x-Mincolwid-dat->Scrollwid;
 	r = d.r;
 	r.max.x = c.r.max.x;
 	draw(mainwin, r, bgcol, nil, (0, 0));
@@ -442,7 +443,10 @@ Row.dump(row : self ref Row, file : string)
 						fontname));
 				}else if(len a == 0){	# don't save unnamed windows 
 					continue;
-				}else if((!w.dirty && utils->access(a)==0) || w.isdir){
+				}else if((!w.dirty && utils->access(a)==0) || w.isdir ||
+				    (w.rendermode && !w.docview && utils->access(a)==0)){
+					# (a formatted view's text is the formatter's,
+					# not the file's: Load reads the file again)
 					dumped = FALSE;
 					t.file.dumpid = w.id;
 					b.puts(sprint("f%11d %11d %11d %11d %11d %s\n", i, w.id,

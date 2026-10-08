@@ -23,6 +23,10 @@ Mermaid: module
 		 mainfont: ref Draw->Font,
 		 monofont: ref Draw->Font);
 
+	# Draw in these colours (any nil keeps the theme's): the page,
+	# node fill, lines and arrows, text. Set after init.
+	colours: fn(bg, fill, line, text: ref Draw->Image);
+
 	# Render a Mermaid syntax string to an image.
 	# width: desired image width in pixels (0 = default 800).
 	# Returns (image, nil) on success, (nil, errmsg) on failure.

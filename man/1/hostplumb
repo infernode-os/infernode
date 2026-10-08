@@ -1,0 +1,88 @@
+.TH HOSTPLUMB 1
+.SH NAME
+hostplumb \- re-plumb messages from the host's plumber
+.SH SYNOPSIS
+.B os
+.B sh -c
+.I '9p read plumb/port'
+.B |
+.B hostplumb
+[
+.B -r
+.I root
+]
+.SH DESCRIPTION
+.I Hostplumb
+reads plumb messages, in the standard format (see
+.IR plumbmsg (2)),
+on its standard input and plumbs each one in the current name space.
+Its usual input is a port of the host's own plumber, read with
+plan9port's
+.I 9p
+command under
+.IR os (1),
+so that a message plumbed on the host is handled here.
+.PP
+Each message is rewritten for this name space before it is sent:
+.IP \(bu
+host paths, in the data and the working directory, are placed under
+.I root
+(default
+.BR /n/local ,
+where the profile mounts the host's file system);
+.IP \(bu
+data that is not an absolute path is joined to the message's
+working directory;
+.IP \(bu
+an
+.B addr
+attribute, which the host's rules set when they have made the data an
+absolute file name, is appended to the data as
+.BI : addr ;
+.IP \(bu
+a message with the attribute
+.BI host= name\f1,
+which
+.B tools/rplumb
+sends from another machine, has its paths placed under
+.BI /n/ name
+instead of
+.IR root ;
+that machine's file system is mounted there (by
+.BR /lib/xen/mounthost ,
+over
+.IR ssh (1)
+with
+.IR u9fs ),
+so a file opened from it is saved back to it;
+.IP \(bu
+the destination and attributes are cleared, so this name space's
+plumbing rules decide where the message goes.
+.PP
+Attributes are read as plan9port writes them: separated by blanks,
+a value with blanks in it quoted.
+.PP
+If the plumber refuses a message because nothing is reading its port
+and no rule starts a reader, as happens when the receiver is still
+starting,
+.I hostplumb
+tries again for up to 15 seconds.
+.I Hostplumb
+exits at the end of its input.
+.SH EXAMPLE
+Open in this Xenith the files plumbed on the host to plan9port's
+.B xenith
+port (as
+.B tools/xen
+arranges):
+.IP
+.EX
+os sh -c '9p read plumb/xenith' | hostplumb &
+.EE
+.SH SOURCE
+.B /appl/cmd/hostplumb.b
+.SH SEE ALSO
+.IR os (1),
+.IR plumb (1),
+.IR plumbmsg (2),
+.IR plumber (8)

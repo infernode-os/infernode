@@ -1,65 +1,81 @@
-# Halo — Lucifer light theme (Plan 9 inspired)
+# Halo — Lucifer light theme
+#
+# A conventional light theme: white surfaces, neutral greys for chrome
+# and lines, soft near-black text, and one blue accent. (Plan 9's own
+# colours are glenda.)
 
 # Core UI
-bg FFFFEA
-border CCCCBB
-windowborder 999988
-header EAFFFF
+bg FFFFFF
+border D6D6D6
+windowborder C4C4C4
+header F0F0F0
 accent 2266CC
-text 333333
-text2 666666
-dim AAAAAA
-label BBBBAA
+text 2B2B2B
+text2 5C5C5C
+dim 8C8C8C
+label BDBDBD
 
 # Conversation zone
-human EEEEDD
-veltro E0F0FF
-input F5F5E0
+human E8F0FC
+veltro F4F4F4
+input FFFFFF
 cursor 2266CC
 
 # Status / semantic
-red CC4444
-green 44AA44
-yellow AA8800
-progbg DDDDCC
+red C0392B
+green 2E7D32
+yellow B07A12
+progbg E6E6E6
 progfg 2266CC
 
 # Code blocks
-codebg EAFFEA
+codebg F5F6F8
 
 # Context menu
-menubg FFFFEA
-menuborder BBBBAA
-menuhilit EEEEDD
-menutext 333333
-menudim 888877
+menubg FFFFFF
+menuborder C8C8C8
+menuhilit E1EBFA
+menutext 2B2B2B
+menudim 9A9A9A
 
 # Editor
-editbg FFFFEA
-edittext 333333
+editbg FFFFFF
+edittext 2B2B2B
 editcursor 2266CC
-editlineno AAAAAA
-editstatus EAFFFF
-editstattext 666666
-editscroll EEEEDD
-editthumb AAAAAA
+editlineno A6A6A6
+editstatus F0F0F0
+editstattext 5C5C5C
+editscroll F0F0F0
+editthumb C4C4C4
 
 # Mermaid diagrams
-diagbg FFFFEA
-diagnode EEEEDD
+diagbg FFFFFF
+diagnode EEF3FB
 diagborder 2266CC
-diagtext 333333
-diagtext2 888877
+diagtext 2B2B2B
+diagtext2 5C5C5C
 diagacc 2266CC
-diaggreen 44AA44
-diagred CC4444
-diagyellow AA8800
-diaggrid CCCCBB
-pie0 4488DD
-pie1 55BB55
-pie2 CCAA33
-pie3 CC5555
-pie4 9966CC
-pie5 44AABB
-pie6 DD8844
-pie7 5599CC
+diaggreen 2E7D32
+diagred C0392B
+diagyellow B07A12
+diaggrid E3E3E3
+pie0 2266CC
+pie1 2E7D32
+pie2 D99A1E
+pie3 C0392B
+pie4 7B4FB0
+pie5 13898A
+pie6 D9622B
+pie7 6B7A8F
+
+# Xenith: quiet chrome, so the accent marks only what it should
+xenith-bord-tag-0 C4C4C4	# tag frame and column button
+xenith-bord-text-0 E3E3E3	# body frame and scroll bar (thumb is the body)
+xenith-bord-col-0 D6D6D6	# between columns
+xenith-bord-row-0 D6D6D6
+xenith-bg-tag-1 E1EBFA		# tag selection
+xenith-bg-text-1 D5E3F8		# body selection
+xenith-fg-text-1 2B2B2B
+xenith-fg-tag-1 2B2B2B
+xenith-mod-but-0 2266CC		# modified: the accent
+xenith-bg-col-0 FFFFFF

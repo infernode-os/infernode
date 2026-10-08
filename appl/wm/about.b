@@ -4,11 +4,12 @@ implement About;
 # About InferNode — Tk version.
 #
 # Shows the InferNode logo, version and project info using the
-# reintegrated Tk toolkit (tkclient + Tk widgets) styled by the brutalist
-# Brimstone defaults. The accent title colour and the dimmed URL lines
-# are read from lucitheme so they track the active theme; everything else
-# inherits the engine defaults, so there are no per-widget colours to
-# maintain.
+# reintegrated Tk toolkit (tkclient + Tk widgets).  Colours come from the
+# active theme: everything inherits Tk's defaults, which are the theme's,
+# except the accent title and separator and the dimmed URL lines, read
+# from lucitheme.  A widget given a colour of its own keeps a private copy
+# of the colours, which Tk's retheme does not touch, so on a theme change
+# the window is built afresh (rebuild) rather than patched.
 #
 
 include "sys.m";
@@ -105,7 +106,10 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	ctl := <-wmctl or
 	ctl = <-top.ctxt.ctl =>
 		tkclient->wmctl(top, ctl);
-		drawlogo();
+		if(ctl == "retheme")
+			rebuild();	# a window manager passing on a theme change
+		else
+			drawlogo();
 
 	key := <-top.ctxt.kbd =>
 		# Ctrl-Q / Del quits; everything else is ignored.
@@ -118,9 +122,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		tk->pointer(top, *p);
 
 	<-themech =>
-		loadtheme();
-		retheme();
-		drawlogo();
+		rebuild();
 	}
 }
 
@@ -166,17 +168,13 @@ build(display: ref Display)
 		ww = r.dx();
 	(bodyf, titlef) := fonts(ww);
 
-	cmds := array[] of {
-		". configure -background #080808",
-		"frame .c -borderwidth 0",
-	};
-	tkcmds(cmds);
+	tkcmds(array[] of {"frame .c -borderwidth 0"});
 
 	# Logo (optional — only if the PNG decodes). Reserve a blank frame the
 	# size of the logo; drawlogo() paints the real colour image over it.
 	if(loadlogo(display))
 		tkcmds(array[] of {
-			sys->sprint("frame .c.logo -width %d -height %d -background #080808",
+			sys->sprint("frame .c.logo -width %d -height %d",
 				logoimg.r.dx(), logoimg.r.dy()),
 			"pack .c.logo -side top -pady 12"});
 
@@ -240,21 +238,25 @@ drawlogo()
 	lh := logoimg.r.dy();
 	ox := fx + (fr.dx() - lw) / 2;
 	oy := fy + (fr.dy() - lh) / 2;
-	top.image.draw(Rect((ox, oy), (ox + lw, oy + lh)), logoimg, nil, logoimg.r.min);
+	# Tk does not clip this: keep it inside the window's frame, which a
+	# window shrunk below the picture's size would otherwise lose
+	dr := Rect((ox, oy), (ox + lw, oy + lh));
+	(cr, ok) := dr.clip(top.image.r.inset(int tk->cmd(top, ". cget -borderwidth")));
+	if(!ok)
+		return;
+	top.image.draw(cr, logoimg, nil, logoimg.r.min.add(cr.min.sub(dr.min)));
 	top.image.flush(Draw->Flushnow);
 }
 
-# Re-apply theme-dependent colours after a live theme change.
-retheme()
+# A theme change: build the window afresh from the new theme -- its
+# colours, and its logo, which is theme-specific -- so it is what a fresh
+# start in that theme would show.
+rebuild()
 {
-	tk->cmd(top, ".c.title configure -foreground " + accentcol);
-	tk->cmd(top, ".c.sep configure -background " + accentcol);
-	for(i := 0; i < len lines; i++){
-		(nil, dim) := lines[i];
-		if(dim)
-			tk->cmd(top, sys->sprint(".c.l%d configure -foreground %s", i, dimcol));
-	}
-	tk->cmd(top, "update");
+	loadtheme();
+	logoimg = nil;
+	tk->cmd(top, "destroy .c");
+	build(top.display);
 }
 
 # Decode the logo PNG into the colour Draw image `logoimg` (blitted onto the
@@ -284,13 +286,15 @@ loadlogo(display: ref Display): int
 	return logoimg != nil;
 }
 
-# The logo file, theme-specific if one exists.
+# The about picture: the theme's own (about-screen-<theme>.png, the
+# same artwork in its colours -- Halo's shows Paradise where
+# Brimstone's shows Hell) if it has one, else Brimstone's.
 logopath(): string
 {
 	path := "/lib/lucifer/about-screen.png";
 	name := rf("/lib/lucifer/theme/current");
 	if(name != nil && name != "brimstone" && name != ""){
-		tpath := "/lib/lucifer/logo-" + name + ".png";
+		tpath := "/lib/lucifer/about-screen-" + name + ".png";
 		if((fd := sys->open(tpath, Sys->OREAD)) != nil){
 			fd = nil;
 			path = tpath;
@@ -310,18 +314,14 @@ tkcmds(cmds: array of string)
 
 themelistener(ch: chan of int)
 {
-	fd := sys->open("/mnt/ui/event", Sys->OREAD);
-	if(fd == nil)
+	# any write of /lib/lucifer/theme/current, Lucifer or not (lucitheme->watch)
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
 		return;
-	buf := array[256] of byte;
+	c := lt->watch();
 	for(;;){
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		ev := string buf[0:n];
-		sys->seek(fd, big 0, Sys->SEEKSTART);
-		if(len ev >= 6 && ev[0:6] == "theme ")
-			ch <-= 1;
+		<-c;
+		ch <-= 1;
 	}
 }
 

@@ -38,7 +38,7 @@ struct
 	Atidle*	idletasks;
 } isched;
 
-int	bflag;
+int	bflag = 1;	/* JIT array bounds checks; emu -B clears it */
 int	cflag;
 uvlong	gcbusy;
 uvlong	gcidle;

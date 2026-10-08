@@ -458,7 +458,7 @@ restrictNsWorker(result: chan of string)
 
 	# Least privilege: with NO /mnt grant in caps.paths, a confined child sees no
 	# /mnt at all — not even /mnt/llm. The model service is NOT granted by mere
-	# existence; an agent that needs it lists /mnt/llm in caps.paths (repl), and a
+	# existence; an agent that needs it lists /mnt/llm in caps.paths (veltro), and a
 	# spawned sub-agent drives the LLM through a pre-opened FD that survives the
 	# restriction. (mntgen would make /mnt/llm *stat* as present in the parent ns;
 	# the root-level restriction is what hides /mnt here.)
@@ -1885,8 +1885,8 @@ pathsExposureWorker(result: chan of string)
 # Test 13: NodevsBlocksDeviceAttach
 # Verifies pctl(NODEVS) blocks attach of devices outside the |esDa kernel
 # allowlist. Runtime ground-truth for the SECURITY.md "NODEVS short-term
-# fix" applied at the three top-level FORKNS sites (repl.b:169,
-# veltro.b:168, tools9p.b:644). Without this gate, a tool or exec
+# fix" applied at the top-level FORKNS sites (veltro.b:168,
+# tools9p.b:644). Without this gate, a tool or exec
 # invocation could sys->bind("#sfactotum", ...) and reach factotum
 # regardless of path-based restriction (kernel gate at
 # emu/port/chan.c:1041-1051).

@@ -9,7 +9,7 @@ def held(cmd):
     try: c.recv(4096)
     except socket.timeout: pass
     c.sendall((cmd + '\n').encode()); return c
-sink = held("load std; listen -A 'tcp!*!8700' {cat > /dev/null}"); time.sleep(2)
+sink = held("load std; listen -A 'tcp!*!8700' {cat > /dev/null} & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl"); time.sleep(2)
 b = Board('192.168.1.104')
 def rxstats():
     return b.sh("echo rxstats > /net/ether0/clone", "cat /net/ether0/stats | grep -i 'rx:'", wait=1.0)

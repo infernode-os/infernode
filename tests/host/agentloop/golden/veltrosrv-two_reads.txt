@@ -1,0 +1,48 @@
+# veltrosrv two_reads
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_two_reads_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+assistant-call call_two_reads_0_1 read {"args": "\/usr\/agentloop\/b.txt"}
+tool-result call_two_reads_0_0:
+  |     1	alpha
+tool-result call_two_reads_0_1:
+  |     1	beta
+
+== output
+  | == user
+  | SCENARIO:two_reads go
+  | == veltro
+  | Read both.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 21 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 140 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_two_reads_0_0:read:{"args"\: "/usr/agentloop/a.txt"}
+  | TOOL:call_two_reads_0_1:read:{"args"\: "/usr/agentloop/b.txt"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/a.txt"}
+  | tool read: calling with 32 bytes
+  | tool read: args {"args": "/usr/agentloop/b.txt"}
+  | tool read: calling with 32 bytes
+  | tool read: done,     1	alpha
+  | 
+  | tool read: done,     1	beta
+  | 
+  | step 2: writing 84 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 10 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 25 bytes
+  | llm: STOP:end_turn
+  | Read both.
+  | 
+  | turn done stop=end_turn steps=2

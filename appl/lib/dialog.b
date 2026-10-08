@@ -147,7 +147,7 @@ getstring_config := array[] of {
 getstring(ctxt: ref Draw->Context, parent: ref Draw->Image, msg: string): string
 {
 	where := localgeom(parent);
-	(t, wmctl) := tkclient->toplevel(ctxt, where + " -borderwidth 2 -relief raised", nil, Tkclient->Popup);
+	(t, wmctl) := tkclient->toplevel(ctxt, where, nil, Tkclient->Popup);
 	f := chan of string;
 	tk->namechan(t, f, "f");
 

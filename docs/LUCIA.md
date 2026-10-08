@@ -48,7 +48,7 @@ Both scripts:
 3. Create the `Main` activity.
 4. Start `speech9p` (TTS/STT, mounted at `/n/speech`).
 5. Start `tools9p` (tool registry at `/tool` with the default capability budget — see below).
-6. Start `lucibridge` (the agent loop) in the background.
+6. Start `lucibridge` (Lucia's client of the agent harness, `veltrosrv`) in the background.
 7. Create a `taskboard` artifact in the presentation zone.
 8. Run `lucifer` (the window owner).
 
@@ -105,7 +105,7 @@ The internal module names use the `luci-` prefix; this is an implementation deta
 | `lucictx.b`     | Context zone implementation; mounts `/tool` for tool discovery. |
 | `lucipres.b`    | Presentation zone implementation; renderer registry and app lifecycle. |
 | `luciuisrv.b`   | 9P server backing `/mnt/ui`. Activities, conversation, presentation, context — all UI state lives here. |
-| `lucibridge.b`  | Agent bridge. Reads user input from `/mnt/ui/activity/N/conversation/input`, runs the Veltro tool loop, writes responses back. |
+| `lucibridge.b`  | Agent bridge. Reads user input from `/mnt/ui/activity/N/conversation/input`, hands it to the agent harness at `/mnt/veltro` (`veltrosrv`, which it starts with the activity's grants), and renders the agent's text, tool activity and approval requests back into `/mnt/ui`. |
 | `lucitheme.b`   | Theme loader and colour lookup. |
 
 ## Filesystem map

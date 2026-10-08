@@ -815,6 +815,7 @@ runexternal(ctxt: ref Context, args: list of ref Listnode, last: int): string
 		pathlist = list of {"/dis", "."};
 
 	err := "";
+	noexec := "";
 	do {
 		path: string;
 		if (hd pathlist != "")
@@ -864,11 +865,18 @@ runexternal(ctxt: ref Context, args: list of ref Listnode, last: int): string
 				if (ok == 0 && (info.mode & Sys->DMDIR) == 0
 						&& (info.mode & 8r111) != 0)
 					return runhashpling(ctxt, fd, path, tl args, last);
+				# a script that may not be run: if nothing later on
+				# the path runs either, say that, not that path.dis
+				# does not exist
+				if (ok == 0 && (info.mode & Sys->DMDIR) == 0 && noexec == nil)
+					noexec = sys->sprint("'%s' is not executable", path);
 			};
 			err = sys->sprint("%r");
 		}
 		pathlist = tl pathlist;
 	} while (pathlist != nil && nonexistent(err));
+	if (noexec != nil && nonexistent(err))
+		err = noexec;
 	diagnostic(ctxt, sys->sprint("%s: %s", progname, err));
 	return err;
 }

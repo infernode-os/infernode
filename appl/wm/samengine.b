@@ -96,6 +96,7 @@ File: adt {
 	nlog:	int;
 	logend:	int;	# changes must not start before here
 	dotedit:	int;	# dot after the command is log edit n; -1: dot0/dot1
+	unread:	int;	# not read yet: sam reads a file when it is first used
 };
 
 # address: a parse tree as in sam's parse.c
@@ -342,12 +343,17 @@ guard(f: ref File, cmd: string)
 
 # The terminal has created its command window and told us its tag.  Give
 # it a menu entry, then open every file named on the command line.
+# The terminal has created its command window and told us its tag:
+# sam's Tstartcmdfile.  Files named on the command line go in the menu
+# unread; the first is current, but no window is opened for it until a
+# command uses it (see execute).
 startup(cmdtag: int)
 {
 	cmdfile = newFile(cmdtag, "~~sam~~");
 	cmdfile.rasp = 1;
 	sendmsg(Hnewname, pshort(cmdtag));
 	bindname(cmdtag, cmdtag);
+	sendmsg(Hcurrent, pshort(cmdtag));
 	movname(cmdfile);
 
 	first: ref File;
@@ -356,10 +362,7 @@ startup(cmdtag: int)
 		if(first == nil)
 			first = f;
 	}
-	if(first != nil){
-		curfile = first;
-		sendmsg(Hcurrent, pshort(first.tag));	# opens its window
-	}
+	curfile = first;
 
 	# Release the lock the terminal took after Tstartcmdfile.
 	sendmsg(Hunlock, nil);
@@ -367,7 +370,7 @@ startup(cmdtag: int)
 
 newFile(tag: int, name: string): ref File
 {
-	return ref File(tag, name, "", 0, 0, 0, 0, 0, 0, nil, nil, 0, 0, nil, 0, -1, -1);
+	return ref File(tag, name, "", 0, 0, 0, 0, 0, 0, nil, nil, 0, 0, nil, 0, -1, -1, 0);
 }
 
 # The terminal opened a fresh window (menu "new"): an unnamed file.
@@ -392,22 +395,36 @@ appendfile(l: list of ref File, f: ref File): list of ref File
 
 # load a named file into the menu (creating an empty one if it does not
 # exist) and return its File.
+# put a named file in the menu, unread, and return its File
 openfile(name: string): ref File
 {
 	f := byname(name);
 	if(f != nil)
 		return f;
-	(text, ok) := loadfile(name);
 	f = newFile(nexttag++, name);
-	f.text = text;
+	f.unread = 1;
 	files = appendfile(files, f);
 	sendmsg(Hnewname, pshort(f.tag));
 	movname(f);
-	if(ok)
-		warn(sys->sprint("%s: #%d\n", name, len text));
-	else
-		warn(sys->sprint("%s: (new file) #0\n", name));
 	return f;
+}
+
+# sam.c's load: read a file when it is first used, saying so with its
+# menu line, as sam's filename does
+fload(f: ref File)
+{
+	if(!f.unread)
+		return;
+	f.unread = 0;
+	warn(menuline(f) + "\n");
+	if(f.name == "")
+		return;
+	(text, ok) := loadfile(f.name);
+	if(!ok)
+		error(sys->sprint("can't open \"%s\": %r", f.name));
+	f.text = text;
+	f.dirty = 0;
+	f.dot0 = f.dot1 = 0;
 }
 
 byname(name: string): ref File
@@ -438,6 +455,11 @@ movname(f: ref File)
 # The terminal opened a frame for this file (in response to Hcurrent).
 # Tell it the file's size and set the origin; the terminal then requests
 # the visible text with Trequest.
+# The terminal swept a window for this file (sam's Tstartfile).  As
+# sam does: the file becomes current, the terminal is told the window
+# is its and that it is current, and the file is read if it has not
+# been.  Then the terminal is given its size and origin, and asks for
+# the text it shows with Trequest.
 openframe(tag: int)
 {
 	f := findfile(tag);
@@ -445,6 +467,15 @@ openframe(tag: int)
 		sys->fprint(logfd, "openframe: no file for tag %d\n", tag);
 		sendmsg(Hunlock, nil);
 		return;
+	}
+	curfile = f;
+	bindname(tag, tag);
+	sendmsg(Hcurrent, pshort(tag));
+	{
+		fload(f);
+	} exception e {
+	"sam:*" =>
+		warn("?" + e[len "sam:":] + "\n");
 	}
 	f.rasp = 1;
 	grow(tag, 0, len f.text);
@@ -477,7 +508,11 @@ serve(tag, pos, cnt: int)
 
 # The terminal asks us to reposition the frame: nlines lines back from
 # pos (0: the start of pos's line).
-setorigin(tag, pos, nlines: int)
+# The terminal asks for the window to start ls lines back from p0:
+# sam's lookorigin (moveto.c).  With ls 1 that is the start of p0's line.
+CHARSHIFT:	con 128;
+
+setorigin(tag, p0, ls: int)
 {
 	f := findfile(tag);
 	if(f == nil){
@@ -485,14 +520,32 @@ setorigin(tag, pos, nlines: int)
 		return;
 	}
 	n := len f.text;
-	if(pos < 0)
-		pos = 0;
-	if(pos > n)
-		pos = n;
-	pos = linestart(f, pos);
-	while(nlines-- > 0 && pos > 0)
-		pos = linestart(f, pos-1);
-	origin(tag, pos);
+	if(p0 > n)
+		p0 = n;
+	if(p0 < 0)
+		p0 = 0;
+	oldp0 := p0;
+	p := p0;
+	nl := 0;
+	c := 0;
+	for(nc := 0; c != -1 && nl < ls && nc < ls*CHARSHIFT; nc++){
+		if(--p < 0)
+			c = -1;
+		else if((c = f.text[p]) == '\n'){
+			nl++;
+			oldp0 = p0-nc;
+		}
+	}
+	if(c == -1)
+		p0 = 0;
+	else if(nl == 0){
+		if(p0 >= CHARSHIFT/2)
+			p0 -= CHARSHIFT/2;
+		else
+			p0 = 0;
+	}else
+		p0 = oldp0;
+	origin(tag, p0);
 }
 
 linestart(f: ref File, p: int): int
@@ -891,20 +944,30 @@ docommand(cmdtext: string)
 
 # Run one parsed command, then apply its changes to every file it
 # touched and show the result.
+# Run one parsed command, then apply its changes to every file it
+# touched and show the result.  As in sam's cmdloop, the terminal is
+# then told the current file (Hcurrent, which brings up or sweeps its
+# window) if it changed or was read by the command; after an error,
+# as in sam's error, it is told regardless.
 execute(cmd: ref Cmd)
 {
 	savecs := cs;
 	saveci := ci;
+	ocurfile := curfile;
+	loaded := curfile != nil && !curfile.unread;
 	for(l := files; l != nil; l = tl l)
 		resetlog(hd l);
+	failed := 0;
 	{
 		cmdexec(curfile, cmd);
 	} exception e {
 	"sam:*" =>
 		for(l = files; l != nil; l = tl l)
 			resetlog(hd l);
-		if(e != MORE)
+		if(e != MORE){
 			warn("?" + e[len "sam:":] + "\n");
+			failed = 1;
+		}
 	}
 	for(l = files; l != nil; l = tl l)
 		commit(hd l);
@@ -914,6 +977,13 @@ execute(cmd: ref Cmd)
 	}
 	if(curfile != nil)
 		tellsetdot(curfile);
+	if(curfile != nil && curfile != cmdfile){
+		if(failed){
+			if(!curfile.unread)
+				sendmsg(Hcurrent, pshort(curfile.tag));
+		}else if(ocurfile != curfile || (!loaded && !curfile.unread))
+			sendmsg(Hcurrent, pshort(curfile.tag));
+	}
 	cs = savecs;
 	ci = saveci;
 	cl = len cs;
@@ -1513,7 +1583,9 @@ cmdexec(f: ref File, cp: ref Cmd)
 	if(f == nil && (cp.addr == nil || cp.addr.typ != '"') &&
 	   strchr("bBnqXY!", cp.cmdc) < 0 && cp.cmdc != CDCMD &&
 	   !(cp.cmdc == 'D' && cp.text != nil))
-		error("no current file — use B file to open one");
+		error("no current file");
+	if(f != nil && f.unread)
+		fload(f);
 	q0, q1: int;
 	i := lookup(cp.cmdc);
 	if(i >= 0 && cmdtab[i].defaddr != aNo){
@@ -1534,6 +1606,8 @@ cmdexec(f: ref File, cp: ref Cmd)
 	}
 	if(f == nil && cp.cmdc == '\n')
 		return;		# an empty line before any file is open
+	if(f != nil && f.unread)
+		fload(f);
 	if(f != nil)
 		curfile = f;
 	case cp.cmdc {
@@ -1639,10 +1713,14 @@ substr(f: ref File, q0, q1: int): string
 
 # a newline on its own: with an address, select it; without, select
 # the line(s) containing dot, or the next line if they already are.
+# sam's nl_cmd.  An address alone selects and brings it into view
+# (moveto); an empty command selects the next line and prints it.
 nlcmd(f: ref File, cp: ref Cmd, q0, q1: int)
 {
 	if(cp.addr != nil){
 		setdot(f, q0, q1);
+		if(f.rasp)
+			moveto(f.tag, q0);
 		return;
 	}
 	(a0, nil) := lineaddr(f, 0, f.dot0, f.dot1, -1);
@@ -1650,6 +1728,7 @@ nlcmd(f: ref File, cp: ref Cmd, q0, q1: int)
 	if(a0 == f.dot0 && b1 == f.dot1)
 		(a0, b1) = lineaddr(f, 1, f.dot0, f.dot1, 1);
 	setdot(f, a0, b1);
+	warn(f.text[a0:b1]);
 }
 
 mtcmd(f: ref File, cp: ref Cmd, q0, q1: int)
@@ -1970,6 +2049,8 @@ filename(f: ref File): string
 }
 
 # b file: make a file current, opening its window.
+# b file: make a file current (sam's b_cmd); its window comes up when
+# the command is done (execute)
 bcmd(arg: string)
 {
 	(nil, names) := sys->tokenize(arg, " \t");
@@ -1980,14 +2061,18 @@ bcmd(arg: string)
 		f := byname(hd names);
 		if(f != nil){
 			curfile = f;
-			sendmsg(Hcurrent, pshort(f.tag));
+			if(f.unread)
+				fload(f);
+			else
+				warn(menuline(f) + "\n");
 			return;
 		}
 	}
-	error("no such file");
+	error("not in menu: \"" + arg + "\"");
 }
 
 # B files: add each file to the menu and make the first current.
+# B files: add each file to the menu and make the first current
 Bcmd(arg: string)
 {
 	(nil, names) := sys->tokenize(arg, " \t");
@@ -2000,7 +2085,7 @@ Bcmd(arg: string)
 			first = f;
 	}
 	curfile = first;
-	sendmsg(Hcurrent, pshort(first.tag));
+	fload(first);
 }
 
 # D files: delete files from the menu, warning once about changes.
@@ -2136,7 +2221,8 @@ warn(s: string)
 	tellsetdot(cmdfile);
 }
 
-# tell the terminal where dot is and scroll it into view.
+# sam's telldot: tell the terminal where dot is.  Only moveto (an
+# address typed alone, look and search) scrolls it into view.
 tellsetdot(f: ref File)
 {
 	if(!f.rasp)
@@ -2146,7 +2232,6 @@ tellsetdot(f: ref File)
 	plongat(b, 2, f.dot0);
 	plongat(b, 6, f.dot1);
 	sendmsg(Hsetdot, b);
-	moveto(f.tag, f.dot0);
 }
 
 sendsetpat()

@@ -124,6 +124,10 @@ test-output.txt
 /phone/
 /n/*
 !/n/.gitkeep
+# rstyxd mounts a cpu(1) caller's namespace here
+!/n/client/
+/n/client/*
+!/n/client/.gitkeep
 # scap(1) writes this beside the image it captured.
 /scap.status
 
@@ -163,6 +167,7 @@ emu/*/o.emu
 emu/*/o.*
 emu/*/InferNode
 emu/*/InferNode.exe
+emu/*/Xenith.exe
 emu/*/SDL3.dll
 
 # Build logs and transient artefacts at repo root
@@ -352,3 +357,7 @@ tools/codex-gate/.venv/
 # files on the card; tools/pi-firmware-manifest.txt pins them by SHA256.
 brcmfmac43455-sdio.*
 cyfmac43455-sdio*
+
+# agentloop_characterization_test.sh scratch (removed when the test exits)
+/usr/agentloop/
+/tests/inferno/.agentloop-char.*

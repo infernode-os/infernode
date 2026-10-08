@@ -145,6 +145,13 @@ menuhit(but: int, mc: ref Mousectl, menu: ref Menu, scr: ref Screen):int
 	i, nitem, nitemdrawn, maxwid, lasti, off, noff, wid, screenitem: int;
 	scrolling: int;
 	r, menur, sc, textr, scrollr: Rect;
+
+	# but is a button's number (1, 2, 3).  Callers that pass the
+	# pointer's buttons instead (lens, clock, scene, view, colours)
+	# give 4 for button 3: watching bit 1<<3 the menu ended at once,
+	# choosing whatever item was under the pointer.
+	if(but == 4)
+		but = 3;
 	b, save, backup: ref Image;
 	pt: Point;
 	item: string;

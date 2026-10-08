@@ -321,6 +321,8 @@ nextline:
 					map = (lhs[i], rhs[i]) :: map;
 				rep = ref Sedcom.Y (ad1, ad2, negfl, 0, map);
 			's' =>
+				if (s == "")
+					fatal("no regular expression: " + linebuf);
 				seof := s[0:1];
 				re: Re;
 				(re, s) = recomp(s);
@@ -479,15 +481,19 @@ Sedcom.command(c: self ref Sedcom)
 	D =>
 		delflag++;
 	CD =>
-		# loose upto \n.
-		(s1, s2) := str->splitl(patsp, "\n");
+		# loose upto \n.  With no newline, D is d (POSIX): this
+		# restarted the cycle on the same pattern space, which hit D
+		# again, forever -- echo abc | sed D never returned.
+		(nil, s2) := str->splitl(patsp, "\n");
 		if (s2 == nil)
-			patsp = s1;
-		else if (len s2 > 1)
-			patsp = s2[1:];
-		else
-			patsp = "";
-		jflag++;
+			delflag++;
+		else {
+			if (len s2 > 1)
+				patsp = s2[1:];
+			else
+				patsp = "";
+			jflag++;
+		}
 	Q =>
 		if (!nflag)
 			fout.puts(patsp + "\n");
@@ -609,7 +615,15 @@ recomp(s :string) : (Re, string)
 {
 	expbuf := "";
 
+	# Each character is taken only after checking there is one: a
+	# pattern with no closing delimiter (s/, s/a, s/x\) ran off the end
+	# of the string, and indexing the empty string killed sed with
+	# "dereference of nil" instead of saying what was wrong.
+	if (s == "")
+		fatal("no regular expression: " + linebuf);
 	seof := s[0]; s = s[1:];
+	if (s == "")
+		fatal(sys->sprint("no closing %c in regular expression: %s", seof, linebuf));
 	if (s[0] == seof)
 		return (nil, s[1:]); # //
 
@@ -619,11 +633,15 @@ recomp(s :string) : (Re, string)
 			fatal("too much text: " + linebuf);
 		if (c == '\\') {
 			expbuf[len expbuf] = c;
+			if (s == "")
+				fatal(sys->sprint("no closing %c in regular expression: %s", seof, linebuf));
 			c = s[0]; s = s[1:];
 			if (c == 'n')
 				c = '\n';
 		}
 		expbuf[len expbuf] = c;
+		if (s == "")
+			fatal(sys->sprint("no closing %c in regular expression: %s", seof, linebuf));
 		c = s[0]; s = s[1:];
 	} while (c != seof);
 
@@ -692,6 +710,14 @@ cmdloop:
 						}
 					}
 					break cmdloop; # unmatched branch => end of script
+				CD =>
+					# D: the next cycle, on what is left of the
+					# pattern space, without reading input.  It
+					# fell to "don't branch" and ran D again on the
+					# remainder instead: N;P;D printed only its
+					# first line.
+					p = l;
+					continue cmdloop;
 				* =>
 					# don't branch.
 				}

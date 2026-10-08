@@ -8,6 +8,7 @@ stderr: ref FD;
 
 include "draw.m";
 draw: Draw;
+Rect: import draw;
 
 include "samterm.m";
 samterm: Samterm;
@@ -504,22 +505,28 @@ bindname(tag, l: int)
 	ctxt.menus[m].text = t;
 }
 
+# Hnewname puts a file in the menu as unmodified; Hmovname keeps its flag
 menuins(m: int, s: string, t: ref Text, tag: int)
+{
+	menuinsm(m, s, t, tag, ' ');
+}
+
+menuinsm(m: int, s: string, t: ref Text, tag, mod: int)
 {
 	newmenus := array [len ctxt.menus+1] of ref Menu;
 	menu := ref Menu(
 		tag,	# tag
 		s,	# name
-		t	# text
+		t,	# text
+		mod	# mod
 	);
 	if (m > 0)
 		newmenus[0:] = ctxt.menus[0:m];
 	newmenus[m] = menu;
 	if (m < len ctxt.menus)
-		newmenus[m+1:] = ctxt.menus[m:];	
+		newmenus[m+1:] = ctxt.menus[m:];
 	ctxt.menus = newmenus;
-
-	samtk->menuins(m, s);
+	ctxt.hit3 = m + Samtk->NMENU3;	# menu3.lasthit
 }
 
 menudel(m: int)
@@ -530,99 +537,77 @@ menudel(m: int)
 	newmenus[0:] = ctxt.menus[0:m];
 	newmenus[m:] = ctxt.menus[m+1:];
 	ctxt.menus = newmenus;
-	samtk->menudel(m);
 }
 
-outcmd() {
-	if(ctxt.work != nil) {
+outcmd()
+{
+	if(ctxt.work != nil && ctxt.work.t != nil) {
 		fl := ctxt.work;
 		outTsll(Tworkfile, fl.tag, fl.dot.first, fl.dot.last);
 	}
 }
 
+# Hclose: close every window of a file
 hclose(m: int)
 {
-	i: int;
-
-	# close every window of a file
-	if((m = whichmenu(m)) < 0) panic("hclose: whichmenu");
-	t := ctxt.menus[m].text;
-	if (t == nil) return;
-	for (fls := t.flayers; fls != nil; fls = tl fls) {
-		fl := hd fls;
-		for (i = 0; i< len ctxt.flayers; i++)
-			if (ctxt.flayers[i] == fl) break;
-		if (i == len ctxt.flayers) panic("hclose: ctxt.flayers");
-		samtk->chandel(i);
-		fl.t = nil;
-	}
-	t.flayers = nil;
-	for (i = 0; i< len ctxt.texts; i++)
-		if (ctxt.texts[i] == ctxt.menus[m].text) break;
-	if (i == len ctxt.texts) panic("hclose: ctxt.texts");
-	ctxt.texts[i:] = ctxt.texts[i+1:];
-	ctxt.texts = ctxt.texts[:len ctxt.texts - 1];
-	ctxt.menus[m].text = nil;
-	ctxt.which = nil;
-	samtk->focus(hd ctxt.cmd.flayers);
+	if ((i := whichmenu(m)) < 0 || (t := ctxt.menus[i].text) == nil)
+		return;
+	for (fls := t.flayers; fls != nil; fls = tl fls)
+		closeup(hd fls);
 }
 
-close(win, tag: int)
+# main.c's closeup: close one window.  The front layer becomes current
+# if this one was; the last window of a file takes its text with it.
+closeup(fl: ref Flayer)
 {
-	nfls: list of ref Flayer;
-
-	if ((m := whichtext(tag)) < 0) panic("close: text");
-	t := ctxt.texts[m];
-	if ((m = whichmenu(tag)) < 0) panic("close: menu");
-	if (len t.flayers == 1) {
-		outTs(Tclose, tag);
-		setlock();
+	if ((m := whichmenu(fl.tag)) < 0)
 		return;
+	if ((i := whichtext(fl.tag)) < 0)
+		return;
+	t := ctxt.texts[i];
+	samtk->flclose(fl);
+	t.flayers = samtk->dellist(t.flayers, fl);
+	if (fl == ctxt.which) {
+		ctxt.which = nil;
+		samtk->current(samtk->flwhich((0, 0)));
 	}
-	fl := ctxt.flayers[win];
-	nfls = nil;
-	for (fls := t.flayers; fls != nil; fls = tl fls)
-		if (hd fls != fl) nfls = hd fls :: nfls;
-	t.flayers = nfls;
-	samtk->chandel(win);
-	fl.t = nil;
-	samtk->settitle(t, ctxt.menus[m].name);
-	ctxt.which = nil;
+	if (fl == ctxt.work)
+		ctxt.work = nil;
+	if (t.flayers == nil) {
+		ctxt.texts[i:] = ctxt.texts[i+1:];
+		ctxt.texts = ctxt.texts[:len ctxt.texts - 1];
+		ctxt.menus[m].text = nil;
+	}
 }
 
 hdelname(m: int)
 {
-	# close LAST window of a file
-	if((m = whichmenu(m)) < 0) panic("hdelname: whichmenu");
-	if (ctxt.menus[m].text != nil) panic("hdelname: text");
-	ctxt.menus[m:] = ctxt.menus[m+1:];
-	ctxt.menus = ctxt.menus[:len ctxt.menus - 1];
-	samtk->menudel(m);
-	ctxt.which = nil;
+	if((m = whichmenu(m)) >= 0)
+		menudel(m);
 }
 
+# the modified flag belongs to the menu entry, window or no
 hdirty(m: int)
 {
-	if((m = whichmenu(m)) < 0) panic("hdirty: whichmenu");
-	if (ctxt.menus[m].text == nil) panic("hdirty: text");
-	ctxt.menus[m].text.state |= Samterm->Dirty;
-	samtk->settitle(ctxt.menus[m].text, ctxt.menus[m].name);
+	if((m = whichmenu(m)) >= 0)
+		ctxt.menus[m].mod = '\'';
 }
 
 hclean(m: int)
 {
-	if((m = whichmenu(m)) < 0) panic("hclean: whichmenu");
-	if (ctxt.menus[m].text == nil) panic("hclean: text");
-	ctxt.menus[m].text.state &= ~Samterm->Dirty;
-	samtk->settitle(ctxt.menus[m].text, ctxt.menus[m].name);
+	if((m = whichmenu(m)) >= 0)
+		ctxt.menus[m].mod = ' ';
 }
 
+# Hmovname: the file's new name, in order; the command window stays first
 movename(tag: int, s: string)
 {
 	i := whichmenu(tag);
-	if (i < 0) panic("movename: whichmenu");
+	if (i < 0)
+		return;
 
 	t := ctxt.menus[i].text;
+	mod := ctxt.menus[i].mod;
 
 	ctxt.menus[i].text = nil;	# suppress panic in menudel
 	menudel(i);
@@ -640,7 +625,7 @@ movename(tag: int, s: string)
 		}
 	}
 	if (t != nil) samtk->settitle(t, s);
-	menuins(i, s, t, tag);
+	menuinsm(i, s, t, tag, mod);
 }
 
 hcheck(t: ref Text)
@@ -658,7 +643,7 @@ hcheck(t: ref Text)
 setlock()
 {
 	ctxt.lock++;
-	samtk->allflayers("cursor -bitmap cursor.wait");
+	samtk->setcursor("cursor.lockarrow");
 }
 
 clrlock()
@@ -668,7 +653,7 @@ clrlock()
 	else
 		fprint(ctxt.logfd, "lock: wasn't locked\n");
 	if (ctxt.lock == 0)
-		samtk->allflayers("cursor -default; update");
+		samtk->setcursor("");
 }
 
 hcut(m, where, howmuch: int)
@@ -750,58 +735,75 @@ hsetdot(m, l1, l2: int)
 	samtk->setdot(hd t.flayers, l1, l2);
 }
 
+# Hcurrent: the host's current file.  Sweep a window for it if it has
+# none.  While the command window is current, the file's window only
+# comes to the front, so typing stays in the command window.
 hcurrent(tag: int)
 {
-	if ((i := whichmenu(tag)) < 0) panic("hcurrent: whichmenu");
-	if (ctxt.menus[i].text == nil) {
-		n := startfile(tag);
-		ctxt.menus[i].text = ctxt.texts[n];
-		if (ctxt.menus[i].name != nil)
-			samtk->settitle(ctxt.texts[n], ctxt.menus[i].name);
-	}
-	ctxt.work = hd ctxt.menus[i].text.flayers;
+	if ((i := whichmenu(tag)) < 0)
+		return;
+	t := ctxt.menus[i].text;
+	cmdcur := ctxt.which != nil && ctxt.which.tag == ctxt.cmd.tag && tag != ctxt.cmd.tag;
+	if (t == nil && (t = sweeptext(0, tag)) == nil)
+		return;
+	lp := hd t.flayers;
+	if (cmdcur) {
+		samtk->flupfront(lp);
+		samtk->flborder(lp, 0);
+		ctxt.work = lp;
+	} else
+		samtk->current(lp);
 }
 
+# Hmoveto: bring p0 into the window unless it is already in the top 9/10
 hmoveto(m, l: int)
 {
-	if((m = whichmenu(m)) < 0) panic("hmoveto: whichmenu");
+	if((m = whichmenu(m)) < 0)
+		return;
 	t := ctxt.menus[m].text;
+	if (t == nil || t.flayers == nil)
+		return;
 	fl := hd t.flayers;
-	if (fl.scope.first <= l &&
-	   (l < fl.scope.last || fl.scope.last == fl.scope.first))
-		return;
-	(n, p) := sctrevcnt(t.sects, l, fl.lines/2);
-#	fprint(ctxt.logfd, "hmoveto: (n, p) = (%d, %d)\n", n, p);
-	if (n < 0) {
-		outTsll(Torigin, t.tag, l, fl.lines/2);
+	nchars := fl.scope.last - fl.scope.first;
+	if (l < fl.scope.first || l - fl.scope.first > nchars*9/10) {
+		outTsll(Torigin, t.tag, l, 2);
 		setlock();
-		return;
 	}
-	scrollto(fl, p);
 }
 
+# The command window: the top fifth, current, as samterm starts.
 startcmdfile()
 {
+	r := samtk->screenr();
+	r.max.y = r.min.y + r.dy()/5;
 	t := ctxt.tag++;
-	n := newtext(t, 1);
+	n := newtext(t, 1, r);
 	ctxt.cmd = ctxt.texts[n];
+	ctxt.which = hd ctxt.cmd.flayers;
 	outTv(Tstartcmdfile, big t);
 }
 
-startnewfile()
+# menu.c's sweeptext: sweep a window, and then ask for a new file
+# (new) or the file tag; nothing if the sweep is no good.
+sweeptext(new, tag: int): ref Text
 {
-	t := ctxt.tag++;
-	n := newtext(t, 0);
-	outTv(Tstartnewfile, big t);
-}
-
-startfile(tag: int): int
-{
-	n := newtext(tag, 0);
+	(ok, r) := samtk->getr();
+	if (!ok)
+		return nil;
+	samtk->current(nil);
+	if (new) {
+		tag = ctxt.tag++;
+		n := newtext(tag, 0, r);
+		outTv(Tstartnewfile, big tag);
+		return ctxt.texts[n];
+	}
+	n := newtext(tag, 0, r);
 	outTv(Tstartfile, big tag);
 	setlock();
-	return n;
+	return ctxt.texts[n];
 }
+
+
 
 horigin(m, l: int)
 {
@@ -834,12 +836,14 @@ scrollto(fl: ref Flayer, where: int)
 		fl.scope.last = h;
 		if (l > 0)
 			outrequest(tag, h, l);
-		else
+		else {
+			# the file ends before the window does
 			if (fl.scope.first > t.nrunes) {
 				fl.scope.first = t.nrunes;
 				fl.scope.last = t.nrunes;
-				samtk->setscrollbar(t, fl);
 			}
+			samtk->setscrollbar(t, fl);
+		}
 	}
 }
 
@@ -1026,13 +1030,13 @@ cleanout()
 	fl.typepoint = -1;
 }
 
-newtext(tag, tp: int): int
+newtext(tag, tp: int, r: Rect): int
 {
 	n := len ctxt.texts;
 	t := ref Text(
 		tag,					# tag
 		0,					# lock
-		samtk->newflayer(tag, tp) :: nil,	# flayers
+		samtk->newflayer(tag, tp, r) :: nil,	# flayers
 		0,					# nrunes
 		nil,					# sects
 		0					# state
@@ -1041,7 +1045,6 @@ newtext(tag, tp: int): int
 	texts[0:] = ctxt.texts;
 	texts[n] = t;
 	ctxt.texts = texts;
-	samtk->newcur(t, hd t.flayers);
 	return n;
 }
 
@@ -1054,6 +1057,8 @@ keypress(key: string)
 	t := ctxt.texts[i];
 
 	if (fl.dot.last != fl.dot.first) {
+		# main.c's type: cut(t, t->front, 1, 1), which saves the text
+		snarf(t, fl);
 		cut(t, fl);
 	}
 
@@ -1160,14 +1165,30 @@ search(nil: ref Text, fl: ref Flayer)
 	setlock();
 }
 
-zerox(t: ref Text)
+# main.c's duplicate: another window on fl's file at r, showing what fl
+# shows; with close, fl goes (menu 3's resize)
+duplicate(fl: ref Flayer, r: Rect, close: int)
 {
-	fl := samtk->newflayer(t.tag, ctxt.cmd == t);
-	t.flayers = fl :: t.flayers;
-	m := whichmenu(t.tag);
-	samtk->settitle(t, ctxt.menus[m].name);
-	samtk->newcur(t, fl);
-	scrollto(fl, 0);
+	if ((i := whichtext(fl.tag)) < 0)
+		return;
+	t := ctxt.texts[i];
+	if (len t.flayers >= Samterm->NL && !close)
+		return;
+	nl := samtk->newflayer(t.tag, t == ctxt.cmd, r);
+	nl.dot = fl.dot;
+	t.flayers = samtk->append(t.flayers, nl);
+	if (close) {
+		samtk->flclose(fl);
+		t.flayers = samtk->dellist(t.flayers, fl);
+		if (fl == ctxt.which)
+			ctxt.which = nil;
+		if (fl == ctxt.work)
+			ctxt.work = nil;
+	}
+	samtk->current(nl);
+	scrollto(nl, fl.scope.first);
+	samtk->setdot(nl, nl.dot.first, nl.dot.last);
+	samtk->lockcursor();
 }
 
 sctget(scts: list of ref Section, p1, p2: int): string

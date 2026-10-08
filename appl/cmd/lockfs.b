@@ -164,7 +164,7 @@ init(nil: ref Draw->Context, argv: list of string)
 		mountpoint = hd tl argv;
 	if (addr != nil) {
 		if (doauth && algs == nil)
-			algs = "none" :: nil;		# XXX is this default a bad idea?
+			algs = "aes_256_cbc" :: "sha256" :: nil;
 		srvrq := chan of (ref Sys->FD, string, Uproc);
 		srvsync := chan of (int, string);
 		spawn listener(addr, srvrq, srvsync, algs);

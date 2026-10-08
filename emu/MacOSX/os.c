@@ -9,6 +9,7 @@
 #include	"fns.h"
 #include	"error.h"
 #include	"interp.h"
+#include	"raise.h"
 
 #undef _POSIX_C_SOURCE 
 #undef getwd
@@ -101,8 +102,36 @@ pexit(char *msg, int t)
     }
     free(e->user);
     free(p->prog);
+    /* forget p before freeing it: lock() counts into up->nlocks (see kproc-pthreads.c:/^pexit) */
+    pthread_setspecific(prdakey, nil);
     free(p);
     pthread_exit(0);
+}
+
+/*
+ * A fault at a nil address is a Limbo nil dereference, the program's
+ * exception "dereference of nil", as on Linux: no register dump, and
+ * R.PC set from the faulting instruction so a {...} exception block
+ * around it catches it under the JIT (see jitfault).  It was reported
+ * as "Segmentation violation"/"Bus error" with a dump, and with R.PC
+ * stale under -c1 no handler matched and the program died Broken.
+ */
+static void
+nilfault(siginfo_t *info, void *context)
+{
+    ucontext_t *uc;
+
+    if(info == nil || !isnilfault((uintptr)info->si_addr))
+        return;
+    uc = (ucontext_t*)context;
+    if(uc != nil) {
+#if defined(__aarch64__)
+        jitfault((uintptr)uc->uc_mcontext->__ss.__pc);
+#elif defined(__x86_64__)
+        jitfault((uintptr)uc->uc_mcontext->__ss.__rip);
+#endif
+    }
+    disfault(nil, exNilref);
 }
 
 void
@@ -110,6 +139,7 @@ trapBUS(int signo, siginfo_t *info, void *context)
 {
     extern REG R;
     USED(signo);
+    nilfault(info, context);
     if(info != nil) {
         fprint(2, "BUS: addr=%p code=%d\n", info->si_addr, info->si_code);
 #if defined(__aarch64__)
@@ -166,6 +196,8 @@ trapUSR1(int signo)
 {
     USED(signo);
     
+    if(up == nil)               /* pexit has already forgotten the proc */
+        return;
     if(up->type != Interp)      /* Used to unblock pending I/O */
         return;
     if(up->intwait == 0)        /* Not posted so its a sync error */
@@ -195,6 +227,7 @@ void
 trapSEGV(int signo, siginfo_t *info, void *context)
 {
     USED(signo);
+    nilfault(info, context);
     if(info != nil) {
         fprint(2, "SEGV: addr=%p code=%d\n", info->si_addr, info->si_code);
 #if defined(__aarch64__)

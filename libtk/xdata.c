@@ -45,6 +45,7 @@ TkStab tkrelief[] =
 	"flat",		TKflat,
 	"groove",	TKgroove,
 	"ridge",	TKridge,
+	"solid",	TKsolid,
 	nil
 };
 

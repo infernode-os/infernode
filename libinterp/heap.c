@@ -480,6 +480,21 @@ heap(Type *t)
 	t->ref++;
 	h->ref = 1;
 	h->color = mutator;
+	/*
+	 * Zero the cell.  The Dis `new` instruction is specified to leave
+	 * non-pointer slots undefined, and that is exactly what happened:
+	 * initmem() rewrites the pointer slots to H, and the scalars between
+	 * them kept whatever the recycled pool block last held.  Limbo's
+	 * `ref T` with no initializer compiled to INEW (it is INEWZ now), so
+	 * every integer member of such an adt was a function of allocation
+	 * history -- which is why the interpreter and the JIT disagreed about
+	 * which of Charon's Box fields were -1, and why a grid column
+	 * collapsed.  Zeroing here makes INEW match INEWZ, as newa() already
+	 * matches newaz(), closing the gap for bytecode from any compiler,
+	 * and no caller can have depended on the garbage.  t->size is the
+	 * exact size handed to poolalloc() above.
+	 */
+	memset(H2D(void*, h), 0, t->size);
 	if(t->np)
 		initmem(t, H2D(void*, h));
 	if(heapmonitor != nil)

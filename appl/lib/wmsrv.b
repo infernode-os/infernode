@@ -15,6 +15,7 @@ include "styxservers.m";
 
 zorder: ref Client;		# top of z-order list, linked by znext.
 allclients: array of ref Client;	# wm()'s clients array, for wsys()
+stopc: chan of int;		# stop() -> wm()
 
 ZR: con Rect((0, 0), (0, 0));
 Iqueue: adt {
@@ -64,6 +65,7 @@ init(name: string): 	(chan of (string, chan of (string, ref Wmcontext)),
 	wmreq := chan of (string, chan of (string, ref Wmcontext));
 	join := chan of (ref Client, chan of string);
 	req := chan of (ref Client, array of byte, Sys->Rwrite);
+	stopc = chan of int;
 	spawn wm(ctlio, wmreq, join, req);
 	return (wmreq, join, req);
 }
@@ -147,6 +149,20 @@ wm(ctlio: ref Sys->FileIO,
 			req <-= (c, nil, nil);
 			delclient(clients, c);
 		}
+	<-stopc =>
+		for(i := 0; i < len clients; i++) {
+			c := clients[i];
+			if(c == nil)
+				continue;
+			alt{
+			c.ctl <-= "exit" => ;
+			* => ;
+			}
+			if(c.stop != nil)
+				c.stop <-= 1;
+		}
+		allclients = nil;
+		return;
 		}  # end alt
 	}  # end for
 }
@@ -319,6 +335,14 @@ addclient(clients: array of ref Client, c: ref Client): array of ref Client
 delclient(clients: array of ref Client, c: ref Client)
 {
 	clients[c.id] = nil;
+}
+
+stop()
+{
+	if(stopc == nil)
+		return;
+	stopc <-= 1;
+	stopc = nil;
 }
 
 senderror(rc: chan of (string, ref Wmcontext), e: string)

@@ -46,5 +46,14 @@ init(nil: ref Draw->Context, nil: list of string)
 	"*" =>
 		sys->print("niltest: CAUGHT %s\n", e);
 	}
+	# the second field: nil is -1, so this is address 7, which faults
+	# only where page zero is not mapped (#735)
+	{
+		x := r.b;
+		sys->print("niltest: OFFSET FAIL: no exception (read %d at address 7)\n", x);
+	} exception e {
+	"*" =>
+		sys->print("niltest: OFFSET CAUGHT %s\n", e);
+	}
 	sys->print("niltest: STILL RUNNING\n");
 }

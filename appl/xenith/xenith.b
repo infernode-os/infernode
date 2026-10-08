@@ -1,6 +1,7 @@
 implement Xenith;
 
 include "common.m";
+include "lucitheme.m";
 
 sys : Sys;
 bufio : Bufio;
@@ -124,6 +125,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		graph->init(mods);
 		dat->init(mods);
 		framem->init(mods);
+		setscale();	# with the display, before anything opens a font
 		regx->init(mods);
 		scrl->init(mods);
 		textm->init(mods);
@@ -187,41 +189,24 @@ mainpid : int;
 fontcache : array of ref Reffont;
 nfontcache : int;
 reffonts : array of ref Reffont;
+# Go and Go Mono (Bigelow & Holmes), a matched pair: the same x-height,
+# so Font switches face without changing apparent size. 14 pixels to the
+# em puts the x-height at about 0.17 degrees on a laptop: above the
+# critical print size of readers into their late sixties, with a margin
+# for light text on dark (docs/THEME-RESEARCH.md). 16 and 18 are built
+# for greater distances.
 deffontnames := array[2] of {
-	"/fonts/combined/unicode.sans.14.font",
-	"/fonts/combined/unicode.14.font",
+	"/fonts/combined/go.14.font",
+	"/fonts/combined/gomono.14.font",
 };
 
 # Theme definitions: (env-var-suffix, color-value)
 # Color values: hex "#RRGGBB" (UPPERCASE!), mixed "#RRGGBB/#RRGGBB", or named
-# Official Catppuccin Mocha palette from https://github.com/catppuccin/catppuccin
-catppuccintheme := array[] of {
-	# Body (text area) colors
-	("bg-text-0", "#1E1E2E"),		# Base - main background
-	("fg-text-0", "#CDD6F4"),		# Text - main foreground
-	("bg-text-1", "#585B70"),		# Surface2 - selection background
-	("fg-text-1", "#CDD6F4"),		# Text - selection foreground
-	("bg-text-2", "#F38BA8"),		# Red - button 2 background
-	("fg-text-2", "#1E1E2E"),		# Base - button 2 text
-	("bg-text-3", "#A6E3A1"),		# Green - button 3 background
-	("fg-text-3", "#1E1E2E"),		# Base - button 3 text
-	("bord-text-0", "#89B4FA"),		# Blue - body border
-	# Tag colors
-	("bg-tag-0", "#313244"),			# Surface0 - tag background
-	("fg-tag-0", "#CDD6F4"),			# Text - tag foreground
-	("bg-tag-1", "#45475A"),			# Surface1 - tag selection
-	("fg-tag-1", "#CDD6F4"),			# Text - tag selection text
-	("bord-tag-0", "#89B4FA"),		# Blue - tag border
-	# Border colors
-	("bord-col-0", "#45475A"),		# Surface1 - column border
-	("bord-row-0", "#45475A"),		# Surface1 - row border
-	# Modifier button
-	("mod-but-0", "#CBA6F7"),		# Mauve - modifier button
-	# Empty space background
-	("bg-col-0", "#181825"),			# Mantle - empty area background
-};
 
-themename : string;
+themename : string;	# -t: this session's own theme, not the system's
+pinned : int;		# a -t theme: the system's switches do not apply
+themenow : string;		# the theme in use ("" for acme's colours)
+lucitheme : Lucitheme;
 
 command : ref Command;
 
@@ -310,8 +295,12 @@ main(argl : list of string)
 	fontcache[0] = reffont;
 
 	colinit();
-	applytheme(themename);
-	usercolinit();
+	lucitheme = load Lucitheme Lucitheme->PATH;
+	pinned = themename != nil;
+	if(!pinned && lucitheme != nil)
+		themename = lucitheme->current();
+	if((e := usetheme(themename)) != nil)
+		warning(nil, e + "\n");
 	iconinit();
 	timerm->timerinit();
 	regx->rxinit();
@@ -380,9 +369,14 @@ main(argl : list of string)
 	spawn keyboardtask();
 	spawn mousetask();
 	spawn waittask();
+	if(!pinned && lucitheme != nil)
+		spawn themewatcher();
 	spawn xfidalloctask();
-	# Run the plumber inside acme, so plumber can start acme clients
-	spawn exec->run(nil, "{bind -bc '#splumber' /chan; plumber > /tmp/plumb.log >[2=1]&}", nil, 0, TRUE, nil, nil, FALSE);
+	# Run the plumber inside acme, so plumber can start acme clients,
+	# unless one is already serving an edit port (Lucifer's boot, xen)
+	(ok, nil) := sys->stat("/chan/plumb.edit");
+	if(ok < 0)
+		spawn exec->run(nil, "{bind -bc '#splumber' /chan; plumber > /tmp/plumb.log >[2=1]&}", nil, 0, TRUE, nil, nil, FALSE);
 	spawn plumbproc();
 
 	# notify(shutdown);
@@ -452,7 +446,8 @@ xenithexit(err: string)
 		# Signal preswmloop via wmsrv so it immediately removes the tab — without
 		# this, the ghost tab persists until GC collects the gui module (which holds
 		# the wmclient fd open while xenith's background goroutines are still alive).
-		# Do NOT call gui->killwins() — it halts emu via /dev/sysctl.
+		# (gui->killwins() exits too, but it is for a xenith with a
+		# window of its own.)
 		gui->signalclose();
 		exit;
 	}
@@ -649,6 +644,20 @@ mousetask()
 						# Image mode: scroll wheel → smooth pan or page navigation
 						if(mouse.buttons & (8|16)){
 							imagescroll(w, mouse.buttons);
+						}else if(w.docview && but){
+							# a document's scroll bar, as acme's: 1 back
+							# and 3 on by the distance from its top, 2 to
+							# that point in the document
+							d := mouse.xy.y - t.scrollr.min.y;
+							case but {
+							1 =>	w.docscroll(-d);
+							3 =>	w.docscroll(d);
+							2 =>
+								if(w.bodyimage != nil && t.scrollr.dy() > 0)
+									w.docscroll(w.bodyimage.r.dy() * d / t.scrollr.dy() - w.imageoffset.y);
+							}
+							while(mouse.buttons)
+								frgetmouse();
 						}
 						bflush();
 						row.qlock.unlock();
@@ -1329,6 +1338,13 @@ imagescroll(w: ref Window, buttons: int)
 {
 	if(w.bodyimage == nil)
 		return;
+	if(w.docview){
+		step := w.body.frame.font.height * 3;
+		if(buttons & 8)
+			step = -step;
+		w.docscroll(step);
+		return;
+	}
 
 	imw := w.bodyimage.r.dx();
 	imh := w.bodyimage.r.dy();
@@ -1396,6 +1412,16 @@ imagescroll(w: ref Window, buttons: int)
 
 imagedrag(w: ref Window)
 {
+	if(w.docview){
+		# drag the document up and down
+		y := mouse.xy.y;
+		while(mouse.buttons & 1){
+			w.docscroll(y - mouse.xy.y);
+			y = mouse.xy.y;
+			frgetmouse();
+		}
+		return;
+	}
 	# Pre-render full page at zoom level (one-time cost)
 	prerendered := w.prerenderzoomed();
 	if(prerendered == nil)
@@ -1486,6 +1512,79 @@ waitproc(pid : int, sync: chan of int)
 			error("bad read in waitproc");
 		status = string buf[0:n];
 		cwait <-= status;
+	}
+}
+
+# With the display's own pixels on a Retina screen (the emu's
+# INFERNODE_HIDPI, which tools/xen sets), $displayscale pixels make a
+# point: draw the chrome that many times larger, and bind each reading
+# face's larger build over its name (go.28.font over go.14.font at 2x;
+# the styles Render sets with, go.bold.44.font over go.bold.22.font),
+# so names keep their size, as the mobile boot does for its fonts. The
+# draw device caches a font by name, so this must come before anything
+# opens one.
+#
+# The scale may be fractional (1.25, 1.5 on a Wayland desktop): each
+# name is bound to the build nearest its size times the scale, which
+# for Go and Go Mono is built at 1.25x and 1.5x as well as 2x
+# (tools/gen-text-fonts.py), and for the rest is the nearest there is.
+# A bind takes the file its source names when it is made, so the
+# sizes go in ascending order: each source is bound over only later.
+setscale()
+{
+	s := real utils->getenv("displayscale");
+	if(s < 1.1)
+		return;
+	if(s > 4.0)
+		s = 4.0;
+	sys->pctl(Sys->FORKNS, nil);	# the binds are Xenith's own
+	dat->Scrollwid = scaled(dat->Scrollwid, s);
+	dat->Scrollgap = scaled(dat->Scrollgap, s);
+	dat->Border = scaled(dat->Border, s);
+	dat->Mincolwid = scaled(dat->Mincolwid, s);
+	framem->FRTICKW = scaled(framem->FRTICKW, s);
+	text := list of {14, 16, 18};
+	styled := list of {14, 16, 18, 22};
+	for(f := list of {"go", "gomono", "serif"}; f != nil; f = tl f)
+		bindnearest(hd f, text, s);
+	for(f = list of {"go.medium", "go.bold", "go.italic", "go.bolditalic"}; f != nil; f = tl f)
+		bindnearest(hd f, styled, s);
+}
+
+scaled(n: int, s: real): int
+{
+	return int (real n * s + 0.5);
+}
+
+# bind over face.z.font, for each z, the face's build nearest z*s
+bindnearest(face: string, sizes: list of int, s: real)
+{
+	for(; sizes != nil; sizes = tl sizes){
+		z := hd sizes;
+		want := real z * s;
+		r := int (want + 0.5);
+		best := 0;
+		# outward from the size wanted, while nearer it than z itself
+		for(k := 0; best == 0 && real k < want - real z; k++){
+			bestd := 0.0;
+			for(c := list of {r-k, r+k}; c != nil; c = tl c){
+				if(hd c <= z)
+					continue;
+				d := real hd c - want;
+				if(d < 0.0)
+					d = -d;
+				if(best != 0 && d >= bestd)
+					continue;
+				(ok, nil) := sys->stat(sprint("/fonts/combined/%s.%d.font", face, hd c));
+				if(ok >= 0){
+					best = hd c;
+					bestd = d;
+				}
+			}
+		}
+		if(best != 0)
+			sys->bind(sprint("/fonts/combined/%s.%d.font", face, best),
+				sprint("/fonts/combined/%s.%d.font", face, z), Sys->MREPL);
 	}
 }
 
@@ -1610,7 +1709,13 @@ colinit()
 {
 	tagcols = array[NCOL] of ref Draw->Image;
 	textcols = array[NCOL] of ref Draw->Image;
+	acmecols();
+}
 
+# acme's own colours, for when there is no theme to be had
+# (glenda, the theme, is these and Plan 9's others)
+acmecols()
+{
 	tagcols[BACK] = display.colormix(Draw->Palebluegreen, Draw->White);
 	tagcols[HIGH] = display.color(Draw->Palegreygreen);
 	tagcols[BORD] = display.color(Draw->Purpleblue);
@@ -1621,16 +1726,183 @@ colinit()
 	textcols[BORD] = display.color(Draw->Yellowgreen);
 	textcols[TEXT] = black;
 	textcols[HTEXT] = black;
+	accentcol = display.color(Draw->Greyblue);
 
 	but2col = display.rgb(16raa, 16r00, 16r00);
 	but3col = display.rgb(16r00, 16r66, 16r00);
 	but2colt = white;
 	but3colt = white;
 	modbutcol =  display.rgb(16r00, 16r00, 16r99);
-	
+
 	colbordercol = display.black;
 	rowbordercol = display.black;
 	bgcol = white;		# Default background for empty areas
+}
+
+# Xenith's colours from a theme's roles (lucitheme(2)): the body is the
+# theme's editor, tags its header, selections its menu highlight, and
+# the button 2/3/modified colours its red, green and yellow. Elements
+# are replaced, not the arrays.
+palette(th : ref Lucitheme->Theme)
+{
+	textcols[BACK] = display.color(th.editbg);
+	textcols[TEXT] = display.color(th.edittext);
+	textcols[HIGH] = display.color(th.menuhilit);
+	textcols[HTEXT] = display.color(th.edittext);
+	textcols[BORD] = display.color(th.accent);
+	tagcols[BACK] = display.color(th.header);
+	tagcols[TEXT] = display.color(th.text);
+	tagcols[HIGH] = display.color(th.menuhilit);
+	tagcols[HTEXT] = display.color(th.text);
+	tagcols[BORD] = display.color(th.accent);
+	but2col = display.color(th.red);
+	but2colt = display.color(th.editbg);
+	but3col = display.color(th.green);
+	but3colt = display.color(th.editbg);
+	modbutcol = display.color(th.yellow);
+	colbordercol = display.color(th.border);
+	rowbordercol = display.color(th.border);
+	bgcol = display.color(th.bg);
+	accentcol = display.color(th.accent);
+}
+
+# Take the colours of the named theme; the xenith-* environment
+# variables still override them, as acme-* do acme's.
+usetheme(name : string) : string
+{
+	case name {
+	"" =>
+		acmecols();
+	"plan9" or "acme" =>
+		return usetheme("glenda");	# Plan 9's own colours
+	"dark" or "catppuccin" or "mocha" =>
+		return usetheme("xenith");	# the old -t names
+	* =>
+		th : ref Lucitheme->Theme;
+		if(lucitheme != nil)
+			th = lucitheme->loadtheme(name);
+		if(th == nil){
+			acmecols();
+			usercolinit();
+			themenow = "";
+			return "no theme " + name;
+		}
+		palette(th);
+		# a theme may set Xenith's colours one by one, by the
+		# names the environment variables use (glenda does, to be
+		# acme's exactly)
+		for(l := lucitheme->entries(name); l != nil; l = tl l){
+			(k, v) := hd l;
+			xenithkey(k, v);
+		}
+	}
+	usercolinit();
+	themenow = name;
+	return nil;
+}
+
+# One of Xenith's colours by its environment variable's name (see
+# usercolinit), as a theme file gives it.
+xenithkey(key : string, v : int)
+{
+	c := display.color(v);
+	case key {
+	"xenith-fg-text-0" =>	textcols[TEXT] = c;
+	"xenith-bg-text-0" =>	textcols[BACK] = c;
+	"xenith-fg-text-1" =>	textcols[HTEXT] = c;
+	"xenith-bg-text-1" =>	textcols[HIGH] = c;
+	"xenith-fg-text-2" =>	but2colt = c;
+	"xenith-bg-text-2" =>	but2col = c;
+	"xenith-fg-text-3" =>	but3colt = c;
+	"xenith-bg-text-3" =>	but3col = c;
+	"xenith-bord-text-0" =>	textcols[BORD] = c;
+	"xenith-fg-tag-0" =>	tagcols[TEXT] = c;
+	"xenith-bg-tag-0" =>	tagcols[BACK] = c;
+	"xenith-fg-tag-1" =>	tagcols[HTEXT] = c;
+	"xenith-bg-tag-1" =>	tagcols[HIGH] = c;
+	"xenith-bord-tag-0" =>	tagcols[BORD] = c;
+	"xenith-mod-but-0" =>	modbutcol = c;
+	"xenith-bord-col-0" =>	colbordercol = c;
+	"xenith-bord-row-0" =>	rowbordercol = c;
+	"xenith-bg-col-0" =>	bgcol = c;
+	}
+}
+
+# Redraw everything in the current colours; the caller holds the row.
+recolour()
+{
+	iconinit();
+	textcolours(row.tag, tagcols);
+	for(i := 0; i < row.ncol; i++){
+		c := row.col[i];
+		textcolours(c.tag, tagcols);
+		for(j := 0; j < c.nw; j++){
+			textcolours(c.w[j].tag, tagcols);
+			textcolours(c.w[j].body, textcols);
+		}
+	}
+	draw(mainwin, mainwin.r, bgcol, nil, mainwin.r.min);
+	scrl->scrresize();
+	row.reshape(mainwin.clipr);
+	bflush();
+}
+
+# a frame keeps its own copy of the colours it was made with
+textcolours(t : ref Text, cols : array of ref Draw->Image)
+{
+	if(t == nil || t.frame == nil)
+		return;
+	for(i := 0; i < NCOL; i++)
+		t.frame.cols[i] = cols[i];
+	if(t.frame.tick != nil)
+		framem->frinittick(t.frame);	# the tick is drawn in them
+}
+
+# Follow the system's theme, whoever switches it (lucitheme->watch).
+themewatcher()
+{
+	c := lucitheme->watch();
+	for(;;){
+		name := <-c;
+		row.qlock.lock();
+		if(name != themenow && usetheme(name) == nil)
+			recolour();
+		row.qlock.unlock();
+	}
+}
+
+# The Theme command (the caller holds the row): the named theme or,
+# with none, the next installed one. A -t session changes only itself;
+# otherwise this is the system's switch, which every watcher follows.
+themecmd(name : string)
+{
+	if(lucitheme == nil){
+		warning(nil, "Theme: no theme module\n");
+		return;
+	}
+	if(name == nil){
+		l := lucitheme->themes();
+		if(l == nil)
+			return;
+		first := hd l;
+		for(; l != nil; l = tl l)
+			if(hd l == themenow)
+				break;
+		if(l == nil || tl l == nil)
+			name = first;
+		else
+			name = hd tl l;
+	}
+	e : string;
+	if(!pinned && (e = lucitheme->settheme(name)) != nil){
+		warning(nil, "Theme: " + e + "\n");
+		return;
+	}
+	if((e = usetheme(name)) != nil){
+		warning(nil, "Theme: " + e + "\n");
+		return;
+	}
+	recolour();
 }
 
 iconinit()
@@ -1640,7 +1912,7 @@ iconinit()
 	if(button != nil)
 		button = modbutton = colbutton = nil;
 
-	r = ((0, 0), (Dat->Scrollwid+2, font.height+1));
+	r = ((0, 0), (dat->Scrollwid+2, font.height+1));
 	button = balloc(r, mainwin.chans, Draw->White);
 	draw(button, r, tagcols[BACK], nil, r.min);
 	r.max.x -= 2;
@@ -1657,12 +1929,13 @@ iconinit()
 	draw(modbutton, r, modbutcol, nil, (0, 0));	# was DMedblue
 
 	r = button.r;
+	# solid, as in Plan 9's acme (Inferno's left a strip of tag colour)
 	colbutton = balloc(r, mainwin.chans, Draw->White);
-	draw(colbutton, r, tagcols[BACK], nil, r.min);
-	r.max.x -= 2;
 	draw(colbutton, r, tagcols[BORD], nil, (0, 0));
 
-	arrowcursor = ref Cursor((-1, -1), (16, 32), arrowbits);
+	# the host's own pointer, as every other InferNode window has;
+	# the box cursor is still Xenith's, for dragging columns and windows
+	arrowcursor = nil;
 	boxcursor = ref Cursor((-7, -7), (16, 32), boxbits);
 
 	graph->cursorswitch(arrowcursor);
@@ -1738,23 +2011,6 @@ cenv(s : string, t : string, but : int, i : ref Image) : ref Image
 	return i;
 }
 
-applytheme(name: string)
-{
-	if (name == nil || name == "" || name == "plan9")
-		return;		# Default theme, no env vars needed
-
-	theme: array of (string, string);
-	case name {
-	"catppuccin" or "dark" or "mocha" =>
-		theme = catppuccintheme;
-	* =>
-		warning(nil, "unknown theme: " + name + "\n");
-		return;
-	}
-
-	for (i := 0; i < len theme; i++)
-		utils->setenv("xenith-" + theme[i].t0, theme[i].t1);
-}
 
 usercolinit()
 {
@@ -1772,8 +2028,8 @@ usercolinit()
 	tagcols[BACK] = cenv("bg", "tag", 0, tagcols[BACK]);
 	tagcols[HTEXT] = cenv("fg", "tag", 1, tagcols[HTEXT]);
 	tagcols[HIGH] = cenv("bg", "tag", 1, tagcols[HIGH]);
-	colbordercol = cenv("bord", "col", 0, display.black);
-	rowbordercol = cenv("bord", "row", 0, display.black);
+	colbordercol = cenv("bord", "col", 0, colbordercol);
+	rowbordercol = cenv("bord", "row", 0, rowbordercol);
 	tagcols[BORD] = cenv("bord", "tag", 0, tagcols[BORD]);
 	textcols[BORD] = cenv("bord", "text", 0, textcols[BORD]);
 	bgcol = cenv("bg", "col", 0, bgcol);

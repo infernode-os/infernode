@@ -55,6 +55,7 @@ enum
 	TKflat,
 	TKgroove,
 	TKridge,
+	TKsolid,		/* one colour: the theme's window border */
 
 	TkArepl		= 0,	/* Bind options */
 	TkAadd,
@@ -394,6 +395,7 @@ enum
 	TkChighlightfgnd,
 	TkCfill,
 	TkCtransparent,
+	TkCwinborder,		/* window frame (relief solid) */
 
 	TkNcolor,
 

@@ -183,6 +183,10 @@ Flags worth knowing:
 - `-pheap`/`-pmain`/`-pimage` — pool sizes; raise if you hit allocation pressure with large LLM contexts.
 - `-r<path>` — Inferno root. Use `-r$PWD` from the repo root to run against the working tree.
 
+### Just the editor
+
+`tools/xen file ...` opens host files in an instance running only Xenith (or `tools/xen -s` for sam), like Acme-SAC. See [docs/XEN.md](docs/XEN.md).
+
 ### macOS: testing the `.app` packaging path
 
 For the rare case when you need to validate the bundle layout, launcher script, or the read-only `Resources/` snapshot semantics — not for code iteration:

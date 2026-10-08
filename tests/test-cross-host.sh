@@ -103,7 +103,7 @@ run_emu() {
 	cat > "$tmpscript" << EMUSCRIPT
 #!/bin/bash
 cd "$ROOT"
-# Use double quotes so inner single quotes (e.g. 'rc4_256 sha1') pass through
+# Use double quotes so the inner quoted transport policy passes through
 exec ./emu/MacOSX/o.emu -r . /dis/sh.dis -c "$cmds"
 EMUSCRIPT
 	chmod +x "$tmpscript"
@@ -297,19 +297,19 @@ else
 	failed=$((failed + 1))
 fi
 
-# ── Test 2: Authenticated mount (no encryption) ──
+# ── Test 2: Authenticated mount with the secure default ──
 
 echo ""
-echo "  Test 2: Auth-only mount (Ed25519, no encryption)"
+echo "  Test 2: Authenticated, protected mount (Ed25519, AES-256/SHA-256)"
 
-OUTPUT=$(run_emu 45 "mount -C none -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; cat /n/remote/dev/sysname" 2>&1) || true
+OUTPUT=$(run_emu 45 "mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; cat /n/remote/dev/sysname" 2>&1) || true
 info "  Output: $OUTPUT"
 
 if [[ -n "$OUTPUT" ]] && ! echo "$OUTPUT" | grep -q "mount:\|Broken"; then
-	pass "Test 2: Auth-only mount — sysname: $(echo "$OUTPUT" | tr -d '\n')"
+	pass "Test 2: Protected mount — sysname: $(echo "$OUTPUT" | tr -d '\n')"
 	passed=$((passed + 1))
 else
-	fail "Test 2: Auth-only mount failed"
+	fail "Test 2: Protected mount failed"
 	echo "    Output: $OUTPUT"
 	# Check server side for errors
 	SERVER_LOG=$(ssh "$REMOTE_HOST" "tmux capture-pane -t infernode-test -p 2>/dev/null" 2>/dev/null)
@@ -320,9 +320,9 @@ fi
 # ── Test 3: Authenticated + encrypted mount ──
 
 echo ""
-echo "  Test 3: Auth + encrypted mount (rc4_256 sha1)"
+echo "  Test 3: Explicit protected mount (AES-256/SHA-256)"
 
-OUTPUT=$(run_emu 45 "mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; cat /n/remote/dev/sysname" 2>&1) || true
+OUTPUT=$(run_emu 45 "mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; cat /n/remote/dev/sysname" 2>&1) || true
 info "  Output: $OUTPUT"
 
 if [[ -n "$OUTPUT" ]] && ! echo "$OUTPUT" | grep -q "mount:\|Broken"; then
@@ -339,7 +339,7 @@ fi
 echo ""
 echo "  Test 4: Read remote files through encrypted channel"
 
-OUTPUT=$(run_emu 45 "mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; cat /n/remote/dev/user" 2>&1) || true
+OUTPUT=$(run_emu 45 "mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; cat /n/remote/dev/user" 2>&1) || true
 info "  Output: $OUTPUT"
 
 if [[ -n "$OUTPUT" ]] && ! echo "$OUTPUT" | grep -q "mount:\|Broken\|cannot"; then
@@ -356,7 +356,7 @@ fi
 echo ""
 echo "  Test 5: List remote directory through encrypted channel"
 
-OUTPUT=$(run_emu 45 "mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; ls /n/remote/dev" 2>&1) || true
+OUTPUT=$(run_emu 45 "mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; ls /n/remote/dev" 2>&1) || true
 info "  Output: $OUTPUT"
 
 if echo "$OUTPUT" | grep -q "sysname"; then
@@ -428,7 +428,7 @@ if [[ "$INTERACTIVE" -eq 1 ]] && [[ "$failed" -eq 0 ]]; then
 	cat > "$TMPSCRIPT" << INTEREOF
 #!/bin/bash
 cd "$ROOT"
-exec ./emu/MacOSX/o.emu -r . /dis/sh.dis -c "mount -C 'rc4_256 sha1' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; echo 'Connected to $REMOTE_HOST (authenticated + encrypted)'; echo 'Remote namespace at /n/remote'; sh"
+exec ./emu/MacOSX/o.emu -r . /dis/sh.dis -c "mount -C 'aes_256_cbc sha256' -k /usr/inferno/keyring/default tcp!${REMOTE_ADDR}!${SERVER_PORT} /n/remote; echo 'Connected to $REMOTE_HOST (authenticated + encrypted)'; echo 'Remote namespace at /n/remote'; sh"
 INTEREOF
 	chmod +x "$TMPSCRIPT"
 	bash "$TMPSCRIPT" || true

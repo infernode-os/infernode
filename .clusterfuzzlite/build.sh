@@ -18,6 +18,8 @@ mkdir -p "$OUT/fuzz_dis_parser_seed_corpus"
 find "$SRC/infernode/dis" -name '*.dis' -size -64k | head -50 | while read -r f; do
     cp "$f" "$OUT/fuzz_dis_parser_seed_corpus/"
 done
+# Regression inputs: malformed modules that once crashed the parser.
+cp "$SRC/infernode/.clusterfuzzlite/regress/dis/"*.dis "$OUT/fuzz_dis_parser_seed_corpus/"
 
 # 9P/Styx message parser fuzz target
 $CC $CFLAGS \

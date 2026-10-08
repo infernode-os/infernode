@@ -2,7 +2,9 @@ implement Format;
 
 #
 # Formatter registry - loads and caches text formatter modules.
-# Matches file extensions to the appropriate formatter (mdfmt, htmlfmt).
+# Matches file extensions to the appropriate formatter (htmlfmt).
+# Markdown has none: Render sets it as a document (rlayout), the one
+# markdown typesetter, shared with Lucifer.
 #
 
 include "sys.m";
@@ -26,7 +28,6 @@ init()
 	entries = nil;
 
 	# Register built-in formatters
-	register("/dis/xenith/render/mdfmt.dis");
 	register("/dis/xenith/render/htmlfmt.dis");
 }
 

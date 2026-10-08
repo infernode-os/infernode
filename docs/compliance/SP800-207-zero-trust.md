@@ -22,7 +22,7 @@ user/host identity.
 |---|------------------------------|---------------------|----------|
 | 1 | All data sources & compute are resources | Everything is a file served over Styx/9P | `doc/styx.ms`; `docs/NAMESPACE.md` |
 | 2 | All communication secured regardless of network location | 9P-over-TLS + native STS transport, **hybrid PQ** (X25519+ML-KEM, DH+ML-KEM) | `docs/compliance/CNSA-2.0.md` §4; `docs/CRYPTO-MODERNIZATION.md` §10 |
-| 3 | Access granted **per-session** | Each agent/process forks its own namespace and is restricted at start of session | `appl/veltro/SECURITY.md` (3 entry points: tools9p/repl/spawn) |
+| 3 | Access granted **per-session** | Each agent/process forks its own namespace and is restricted at start of session | `appl/veltro/SECURITY.md` (3 entry points: tools9p/veltro/spawn) |
 | 4 | Access by **dynamic policy**, least privilege | Capability set → `restrictns(caps)` bind-replace allowlist; child caps ≤ parent caps | `appl/veltro/nsconstruct.b`; `docs/NAMESPACE_SECURITY_REVIEW.md` §11 |
 | 5 | Integrity/posture of assets monitored | `verifyns()` post-restriction audit (positive + negative assertions); formal verification of the kernel primitive | `appl/veltro/SECURITY.md` §Verification; `formal-verification/` |
 | 6 | **Authn/authz strictly enforced before access** | Resource simply **does not exist** in the namespace if not granted — enforcement is structural, not a checkpoint that can be skipped | `docs/NAMESPACE_SECURITY_REVIEW.md` §3.1–3.2 |
@@ -85,8 +85,8 @@ functions verified map directly to the namespace syscalls (`pgrpcpy`, `cmount`,
 ## 5. Residual notes (observability / future hardening)
 
 - **`NODEVS` device-attach gate — applied.** `pctl(NODEVS)` is set at every agent
-  FORKNS site: the spawned child (`spawn.b:1071`) and all three top-level entry points
-  (`veltro.b:169`, `repl.b:170`, `tools9p.b:798`), each right after `FORKNS`. The kernel
+  FORKNS site: the spawned child (`spawn.b:1071`) and both top-level entry points
+  (`veltro.b:169`, `tools9p.b:798`), each right after `FORKNS`. The kernel
   gate (`emu/port/chan.c:1046-1053`) then blocks any `#x` attach outside the `|esDa`
   allowlist, so device-attach cannot bypass path restriction. Locked in by
   `testNodevsBlocksDeviceAttach` in `tests/veltro_security_test.b` (asserts `#p` /

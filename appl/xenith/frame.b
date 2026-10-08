@@ -24,6 +24,7 @@ frame : ref Frame;
 init(mods : ref Dat->Mods)
 {
 	sys = mods.sys;
+	FRTICKW = 3;
 	drawm = mods.draw;
 	xenith = mods.xenith;
 	gui = mods.gui;
@@ -327,7 +328,7 @@ frdelete(f : ref Frame, p0 : int, p1 : int) : int
 	return n - f.nlines;
 }
 
-xfrredraw(f : ref Frame, pt : Point)
+xfrredraw(f : ref Frame, pt : Point, text : ref Image)
 {
 	nb : int;
 
@@ -335,7 +336,7 @@ xfrredraw(f : ref Frame, pt : Point)
 		b := f.box[nb];
 		pt = xfrcklinewrap(f, pt, b);
 		if(!f.noredraw && b.nrune >= 0)
-			graph->stringx(f.b, pt, f.font, b.ptr, f.cols[TEXT]);
+			graph->stringx(f.b, pt, f.font, b.ptr, text);
 		pt.x += b.wid;
 	}
 }
@@ -507,11 +508,14 @@ frinit(f : ref Frame, r : Rect, ft : ref Font, b : ref Image, cols : array of re
 		frinittick(f);
 }
 
+# Also called when the frame's font or colours change, to draw the tick
+# again in them; the caller redraws the frame, tick included.
 frinittick(f : ref Frame)
 {
 	ft : ref Font;
 
 	ft = f.font;
+	f.ticked = 0;
 	f.tick = nil;
 	f.tick = graph->balloc(((0, 0), (FRTICKW, ft.height)), (gui->mainwin).chans, Draw->White);
 	if(f.tick == nil)
@@ -523,8 +527,10 @@ frinittick(f : ref Frame)
 	}
 	# background color
 	draw(f.tick, f.tick.r, f.cols[BACK], nil, (0, 0));
-	# vertical line
-	draw(f.tick, ((FRTICKW/2, 0), (FRTICKW/2+1, ft.height)), f.cols[TEXT], nil, (0, 0));
+	# vertical line, a third of the tick wide
+	lw := (FRTICKW+2)/3;
+	lx := (FRTICKW-lw)/2;
+	draw(f.tick, ((lx, 0), (lx+lw, ft.height)), f.cols[TEXT], nil, (0, 0));
 	# box on each end
 	draw(f.tick, ((0,0),(FRTICKW, FRTICKW)), f.cols[TEXT], nil, (0,0));
 	draw(f.tick,  ((0, ft.height-FRTICKW), (FRTICKW, ft.height)), f.cols[TEXT], nil, (0,0));
@@ -664,7 +670,7 @@ frinsert(f : ref Frame, rp : string, l : int, p0 : int)
 	s, n, n0, nn0, y : int;
 	r : Rect;
 	npts : int;
-	col : ref Image;
+	col, tcol : ref Image;
 
 	if(p0 > f.nchars || l == 0 || f.b == nil)
 		return;
@@ -812,12 +818,15 @@ frinsert(f : ref Frame, rp : string, l : int, p0 : int)
 		}
 	}
 	# insertion can extend the selection, so the condition here is different 
-	if(f.p0<p0 && p0<=f.p1)
+	if(f.p0<p0 && p0<=f.p1){
 		col = f.cols[HIGH];
-	else
+		tcol = f.cols[HTEXT];
+	}else{
 		col = f.cols[BACK];
+		tcol = f.cols[TEXT];
+	}
 	frselectpaint(f, ppt0, ppt1, col);
-	xfrredraw(frame, ppt0);
+	xfrredraw(frame, ppt0, tcol);
 	xfraddbox(f, nn0, frame.nbox);
 	for(n=0; n<frame.nbox; n++)
 		*f.box[nn0+n] = *frame.box[n];

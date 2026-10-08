@@ -15,16 +15,32 @@ include "mermaid.m";
 display: ref Display;
 mermaid_tried := 0;  # lazy-load flag: 0=untried, 1=loaded or failed
 
-# Layout state used during rendering
+# Layout state. Laid out with no image (img nil), a document draws
+# nothing and is only measured: render does that first, to make the
+# image exactly as tall as the document.
 Lstate: adt {
-	img: ref Image;       # Target image
+	img: ref Image;       # Target image, or nil to measure
 	style: ref Style;
 	x: int;               # Current x position
 	y: int;               # Current y position (top of line)
-	lineheight: int;      # Height of current line
-	maxwidth: int;        # Usable width (style.width - 2*margin)
-	indent: int;          # Current left indent (for lists, blockquotes)
+	left: int;            # Left edge of text: the margin, plus any indent
+	right: int;           # Right edge of text
+	m: int;               # Margin, in pixels
+	f: array of ref Font; # Faces text is set in, by Bold|Italic; nil where there is none
+	fb: int;              # f[0] stands in for a bold face: embolden it
+	lh: int;              # Line height
+	asc: int;             # Baseline, below the top of the line
+	maxx: int;            # Rightmost x text has reached (measuring cells)
+	ys: list of int;      # The top of each block laid out, last first
+	mcache: list of (ref DocNode, ref Image);  # Mermaid diagrams, drawn once
 };
+
+# weights and slopes, as indices into Lstate.f
+Bold: con 1;
+Italic: con 2;
+
+scale := 1;	# pixels to the point: $displayscale
+fonts: list of (string, ref Font);	# styled faces opened, nil where there is none
 
 init(d: ref Draw->Display)
 {
@@ -35,162 +51,204 @@ init(d: ref Draw->Display)
 
 render(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int)
 {
+	(img, h, nil) := layout(doc, style);
+	return (img, h);
+}
+
+renderat(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int)
+{
+	(img, nil, ys) := layout(doc, style);
+	return (img, ys);
+}
+
+# The document's image, its height, and the top of each of its blocks
+layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array of int)
+{
 	if(style == nil || style.font == nil)
-		return (nil, 0);
+		return (nil, 0, nil);
 
 	width := style.width;
 	if(width <= 0)
 		width = 800;
+	scale = getscale();
 
-	# First pass: calculate total height needed
-	height := measureheight(doc, style);
+	# Lay out without drawing for the height, then draw
+	ls := newstate(nil, style, width);
+	renderblocks(ls, doc);
+	height := ls.y + ls.m;
 	if(height < style.font.height * 2)
 		height = style.font.height * 2;
 
-	# Add bottom margin
-	height += style.margin;
-
-	# Create target image
 	r := Rect(Point(0, 0), Point(width, height));
 	img := display.newimage(r, drawm->RGB24, 0, drawm->Black);
 	if(img == nil)
-		return (nil, 0);
-
-	# Fill background
+		return (nil, 0, nil);
 	img.draw(r, style.bgcolor, nil, Point(0, 0));
 
-	# Set up layout state
-	ls := ref Lstate(
-		img, style,
-		style.margin,           # x
-		style.margin,           # y
-		style.font.height,      # lineheight
-		width - 2 * style.margin, # maxwidth
-		0                       # indent
-	);
-
-	# Second pass: render
+	mc := ls.mcache;
+	ls = newstate(img, style, width);
+	ls.mcache = mc;
 	renderblocks(ls, doc);
 
-	return (img, ls.y + ls.lineheight);
+	ys := array[len ls.ys] of int;
+	i := len ys;
+	for(l := ls.ys; l != nil; l = tl l)
+		ys[--i] = hd l;
+	return (img, ls.y, ys);
 }
 
-# Measure total height needed for a document
-measureheight(doc: list of ref DocNode, style: ref Style): int
+newstate(img: ref Image, style: ref Style, width: int): ref Lstate
 {
-	h := style.margin;
-	fh := style.font.height;
-	cfh := fh;
-	if(style.codefont != nil)
-		cfh = style.codefont.height;
-	maxw := style.width - 2 * style.margin;
-
-	for(; doc != nil; doc = tl doc){
-		node := hd doc;
-		case node.kind {
-		Npara =>
-			# Estimate paragraph height from wrapped text
-			txt := flattentext(node.children);
-			lines := wrapcount(txt, style.font, maxw);
-			h += lines * fh + fh/2;  # paragraph spacing
-		Nheading =>
-			h += fh * 2;  # heading + spacing
-		Ncodeblock =>
-			txt := "";
-			if(node.text != nil)
-				txt = node.text;
-			else
-				txt = flattentext(node.children);
-			nlines := 1;
-			for(i := 0; i < len txt; i++)
-				if(txt[i] == '\n')
-					nlines++;
-			h += nlines * cfh + fh;  # code lines + padding + spacing
-		Nmermaid =>
-			# Estimate: mermaid diagrams typically render ~300-400px tall
-			# The actual render will determine the real height, but we
-			# need a reasonable estimate for the initial image allocation.
-			# Count lines as a rough proxy for complexity.
-			txt := "";
-			if(node.text != nil)
-				txt = node.text;
-			nlines := 1;
-			for(i := 0; i < len txt; i++)
-				if(txt[i] == '\n')
-					nlines++;
-			mh := nlines * fh * 3;  # ~3x line height per syntax line
-			if(mh < 200)
-				mh = 200;
-			if(mh > 600)
-				mh = 600;
-			h += mh + fh;  # diagram + spacing
-		Nbullet or Nnumber =>
-			txt := flattentext(node.children);
-			lines := wrapcount(txt, style.font, maxw - 24);
-			h += lines * fh + 2;
-		Nhrule =>
-			h += fh;
-		Nblockquote =>
-			txt := flattentext(node.children);
-			lines := wrapcount(txt, style.font, maxw - 20);
-			h += lines * fh + fh/2;
-		Ntable =>
-			nrows := 1;
-			if(node.text != nil)
-				for(ci := 0; ci < len node.text; ci++)
-					if(node.text[ci] == '\n')
-						nrows++;
-			# header row + separator line + data rows + padding
-			h += (nrows + 1) * (fh + 4) + fh/2;
-		* =>
-			h += fh;
-		}
-	}
-	return h;
+	m := px(style.margin);
+	return ref Lstate(img, style, m, m, m, width - m, m,
+		bodyfaces(style.font), 0, style.font.height, style.font.ascent, 0, nil, nil);
 }
 
-# Count lines needed to wrap text at given width
-wrapcount(text: string, font: ref Font, width: int): int
+px(n: int): int
 {
-	if(text == nil || len text == 0)
-		return 1;
-	if(width <= 0)
-		return 1;
-
-	lines := 1;
-	linestart := 0;
-	lastspace := -1;
-
-	for(i := 0; i < len text; i++){
-		c := text[i];
-		if(c == '\n'){
-			lines++;
-			linestart = i + 1;
-			lastspace = -1;
-			continue;
-		}
-		if(c == ' ' || c == '\t')
-			lastspace = i;
-
-		seg := text[linestart:i+1];
-		w := font.width(seg);
-		if(w > width && linestart < i){
-			lines++;
-			if(lastspace > linestart){
-				linestart = lastspace + 1;
-				lastspace = -1;
-			} else
-				linestart = i;
-		}
-	}
-	return lines;
+	return n * scale;
 }
+
+# On a Retina display Xenith sets in pixels, $displayscale to the
+# point, and binds each face's larger build over its name; spacing and
+# rules scale with it.
+getscale(): int
+{
+	fd := sys->open("/env/displayscale", Sys->OREAD);
+	if(fd == nil)
+		return 1;
+	buf := array[8] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 1;
+	s := int string buf[0:n];
+	if(s < 1)
+		return 1;
+	if(s > 4)
+		return 4;
+	return s;
+}
+
+# ---- Faces ----
+#
+# A family's styles are found by name: go.bold.22.font beside
+# go.14.font (tools/gen-text-fonts.py builds Go's; DejaVu has
+# unicode.sans.bold.N.font). Where a style is missing, bold is drawn
+# twice a pixel apart and italic is underlined.
+
+# The stem and size of a font file's name: (/fonts/combined/go, 14)
+# for /fonts/combined/go.14.font, or (nil, 0)
+fontname(f: ref Font): (string, int)
+{
+	name := f.name;
+	if(len name < 6 || name[len name - 5:] != ".font")
+		return (nil, 0);
+	e := len name - 5;
+	i := e;
+	while(i > 0 && name[i-1] >= '0' && name[i-1] <= '9')
+		i--;
+	if(i == e || i < 2 || name[i-1] != '.')
+		return (nil, 0);
+	return (name[0:i-1], int name[i:e]);
+}
+
+# base's family in a style (nil for regular) at a size, or nil
+styledfont(base: ref Font, style: string, size: int): ref Font
+{
+	(stem, nil) := fontname(base);
+	if(stem == nil)
+		return nil;
+	name := stem;
+	if(style != nil)
+		name += "." + style;
+	name += "." + string size + ".font";
+	for(l := fonts; l != nil; l = tl l){
+		(n, f) := hd l;
+		if(n == name)
+			return f;
+	}
+	f := Font.open(display, name);
+	fonts = (name, f) :: fonts;
+	return f;
+}
+
+# The style at size, or the nearest smaller size there is, down to the body's
+sized(base: ref Font, style: string, size: int): ref Font
+{
+	(nil, body) := fontname(base);
+	if(body <= 0)
+		return nil;
+	for(z := size; z >= body; z--)
+		if((f := styledfont(base, style, z)) != nil)
+			return f;
+	return nil;
+}
+
+bodyfaces(f: ref Font): array of ref Font
+{
+	(nil, n) := fontname(f);
+	return array[] of {f, sized(f, "bold", n), sized(f, "italic", n), sized(f, "bolditalic", n)};
+}
+
+# Headings: the first three larger than the body (11/7, 9/7 and 8/7:
+# 22, 18 and 16 over 14) and bold, the fourth bold, the fifth and
+# sixth medium. Returns the faces and whether the first is to be
+# emboldened, for want of a bold one.
+headfaces(base: ref Font, level: int): (array of ref Font, int)
+{
+	(nil, n) := fontname(base);
+	size := n;
+	case level {
+	1 =>	size = (n*11 + 3) / 7;
+	2 =>	size = (n*9 + 3) / 7;
+	3 =>	size = (n*8 + 3) / 7;
+	}
+	bold := sized(base, "bold", size);
+	bi := sized(base, "bolditalic", size);
+	if(level >= 5){
+		if((f := sized(base, "medium", size)) != nil)
+			return (array[] of {f, bold, sized(base, "italic", size), bi}, 0);
+	}
+	if(bold != nil)
+		return (array[] of {bold, bold, bi, bi}, 0);
+	f := sized(base, nil, size);
+	if(f == nil)
+		f = base;
+	return (array[] of {f, nil, nil, nil}, 1);
+}
+
+# The font for text in w (Bold|Italic), whether to embolden it, and
+# whether to underline it, standing in for a missing italic
+face(ls: ref Lstate, w: int): (ref Font, int, int)
+{
+	if((f := ls.f[w]) != nil)
+		return (f, ls.fb, 0);
+	ul := w & Italic;
+	if((f = ls.f[w & Bold]) != nil)
+		return (f, ls.fb, ul);
+	return (ls.f[0], ls.fb | (w & Bold), ul);
+}
+
+# ---- Blocks ----
 
 # Render a list of block-level nodes
 renderblocks(ls: ref Lstate, doc: list of ref DocNode)
 {
+	inlist := 0;
 	for(; doc != nil; doc = tl doc){
 		node := hd doc;
+		ls.ys = ls.y :: ls.ys;
+		# a list's items sit together; the list is spaced as a
+		# paragraph, from what follows and from a list of another kind
+		islist := 0;
+		if(node.kind == Nbullet || node.kind == Nnumber){
+			islist = node.kind;
+			if(node.kind == Nbullet && istask(node))
+				islist = -1;
+		}
+		if(inlist && islist != inlist && (!islist || toplevel(node)))
+			ls.y += ls.lh / 3;
+		inlist = islist;
 		case node.kind {
 		Npara =>
 			renderpara(ls, node);
@@ -220,54 +278,49 @@ renderblocks(ls: ref Lstate, doc: list of ref DocNode)
 # Render a paragraph
 renderpara(ls: ref Lstate, node: ref DocNode)
 {
-	ls.x = ls.style.margin + ls.indent;
-	renderinlines(ls, node.children);
+	ls.x = ls.left;
+	renderinlines(ls, node.children, 0, ls.style.fgcolor, 0);
 	newline(ls);
-	ls.y += ls.style.font.height / 3;  # Paragraph spacing
+	ls.y += ls.lh / 3;  # Paragraph spacing
 }
 
-# Render a heading
+# Render a heading, in the accent colour, nearer the text it heads
+# than the text before it
 renderheading(ls: ref Lstate, node: ref DocNode)
 {
-	ls.y += ls.style.font.height / 3;  # Space before heading
-	ls.x = ls.style.margin + ls.indent;
-
-	font := ls.style.font;
-	# Use link/accent color for headings to distinguish from body text
+	level := node.aux;
 	color := ls.style.linkcolor;
-	if(color == nil)
-		color = ls.style.fgcolor;
+	if(color == nil || level >= 6)
+		color = ls.style.fgcolor;	# the sixth level: medium, in the text's colour
 
-	txt := flattentext(node.children);
-	startx := ls.x;
+	f := ls.f;
+	fb := ls.fb;
+	lh := ls.lh;
+	asc := ls.asc;
+	(ls.f, ls.fb) = headfaces(ls.style.font, level);
+	ls.lh = ls.f[0].height;
+	ls.asc = ls.f[0].ascent;
 
-	if(node.aux <= 1){
-		# H1: faux-bold (double-draw, 1px offset) + full-width rule below text
-		ls.img.text(Point(startx, ls.y), color, Point(0, 0), font, txt);
-		ls.img.text(Point(startx + 1, ls.y), color, Point(0, 0), font, txt);
-		ls.y += font.height;
-		# Full-width rule 2px below the text
-		ry := ls.y + 2;
-		enx := ls.style.margin + ls.maxwidth;
-		ls.img.line(Point(ls.style.margin, ry), Point(enx, ry), drawm->Endsquare, drawm->Endsquare, 1, color, Point(0, 0));
-		ls.y += 4;
-	} else if(node.aux == 2){
-		# H2: faux-bold + short underline spanning the text width
-		ls.img.text(Point(startx, ls.y), color, Point(0, 0), font, txt);
-		ls.img.text(Point(startx + 1, ls.y), color, Point(0, 0), font, txt);
-		ls.y += font.height;
-		# Underline: from startx to startx + text width, 1px below text
-		ry := ls.y + 1;
-		enx := startx + font.width(txt);
-		ls.img.line(Point(startx, ry), Point(enx, ry), drawm->Endsquare, drawm->Endsquare, 0, color, Point(0, 0));
-		ls.y += 3;
-	} else {
-		# H3+: normal text in accent color, no decoration
-		ls.img.text(Point(startx, ls.y), color, Point(0, 0), font, txt);
-		ls.y += font.height;
+	if(level <= 2)
+		ls.y += lh * 2 / 3;
+	else
+		ls.y += lh / 3;
+	ls.x = ls.left;
+	renderinlines(ls, node.children, 0, color, 0);
+	newline(ls);
+	if(level <= 1){
+		# a rule under the first level, across the page
+		ry := ls.y + px(2);
+		fill(ls, Rect(Point(ls.left, ry), Point(ls.right, ry + px(1))), color);
+		ls.y += px(4);
 	}
-	ls.x = ls.style.margin + ls.indent;
-	ls.y += ls.style.font.height / 4;  # Space after heading
+
+	ls.f = f;
+	ls.fb = fb;
+	ls.lh = lh;
+	ls.asc = asc;
+	ls.x = ls.left;
+	ls.y += lh / 4;
 }
 
 # Render a code block
@@ -282,42 +335,61 @@ rendercodeblock(ls: ref Lstate, node: ref DocNode)
 		txt = node.text;
 	else
 		txt = flattentext(node.children);
+	txt = expandtabs(txt, 4);
 
-	# Measure the code block
 	nlines := 1;
 	for(i := 0; i < len txt; i++)
 		if(txt[i] == '\n')
 			nlines++;
 
-	pad := 6;
+	pad := px(6);
 	blockh := nlines * font.height + 2 * pad;
 
-	# Draw background rectangle
-	x0 := ls.style.margin + ls.indent;
-	x1 := ls.style.margin + ls.maxwidth;
-	bgr := Rect(Point(x0, ls.y), Point(x1, ls.y + blockh));
-	ls.img.draw(bgr, ls.style.codebgcolor, nil, Point(0, 0));
-
-	# Render each line
-	ty := ls.y + pad;
-	linestart := 0;
-	for(i = 0; i <= len txt; i++){
-		if(i == len txt || txt[i] == '\n'){
-			line := "";
-			if(i > linestart)
-				line = txt[linestart:i];
-			ls.img.text(Point(x0 + pad, ty), ls.style.fgcolor, Point(0, 0), font, line);
-			ty += font.height;
-			linestart = i + 1;
+	if(ls.img != nil){
+		fill(ls, Rect(Point(ls.left, ls.y), Point(ls.right, ls.y + blockh)), ls.style.codebgcolor);
+		ty := ls.y + pad;
+		linestart := 0;
+		for(i = 0; i <= len txt; i++){
+			if(i == len txt || txt[i] == '\n'){
+				line := "";
+				if(i > linestart)
+					line = txt[linestart:i];
+				ls.img.text(Point(ls.left + pad, ty), ls.style.fgcolor, Point(0, 0), font, line);
+				ty += font.height;
+				linestart = i + 1;
+			}
 		}
 	}
 
-	ls.y += blockh + ls.style.font.height / 3;
-	ls.x = ls.style.margin + ls.indent;
+	ls.y += blockh + ls.lh / 3;
+	ls.x = ls.left;
+}
+
+# Tabs to spaces, to stops every n columns
+expandtabs(s: string, n: int): string
+{
+	t := "";
+	col := 0;
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		if(c == '\t'){
+			do{
+				t[len t] = ' ';
+				col++;
+			}while(col % n != 0);
+			continue;
+		}
+		t[len t] = c;
+		col++;
+		if(c == '\n')
+			col = 0;
+	}
+	return t;
 }
 
 # Render a mermaid diagram inline within markdown.
 # Loads the Mermaid module on first use; falls back to code block on failure.
+# The diagram is drawn once, when the document is measured.
 rendermermaid(ls: ref Lstate, node: ref DocNode)
 {
 	syntax := "";
@@ -328,40 +400,25 @@ rendermermaid(ls: ref Lstate, node: ref DocNode)
 		return;
 	}
 
-	# Lazy-load mermaid module
-	if(!mermaid_tried){
-		mermaid_tried = 1;
-		mermaid = load Mermaid Mermaid->PATH;
-		if(mermaid != nil)
-			mermaid->init(display, ls.style.font, ls.style.codefont);
-	}
-	if(mermaid == nil){
-		# Mermaid not available — fall back to code block
-		rendercodeblock(ls, node);
-		return;
-	}
-
-	# Render the diagram
-	width := ls.maxwidth - ls.indent;
-	if(width <= 0)
-		width = 400;
 	im: ref Image;
-	err: string;
-	{
-		(im, err) = mermaid->render(syntax, width);
-	} exception {
-	"*" =>
-		rendercodeblock(ls, node);
-		return;
+	found := 0;
+	for(l := ls.mcache; l != nil; l = tl l)
+		if((hd l).t0 == node){
+			im = (hd l).t1;
+			found = 1;
+			break;
+		}
+	if(!found){
+		im = drawmermaid(ls, syntax);
+		ls.mcache = (node, im) :: ls.mcache;
 	}
 	if(im == nil){
-		# Render failed — fall back to code block
+		# Mermaid missing, or the diagram failed: show its source
 		rendercodeblock(ls, node);
 		return;
 	}
 
-	# Draw the mermaid image into the layout
-	x0 := ls.style.margin + ls.indent;
+	width := ls.right - ls.left;
 	imr := im.r;
 	imh := imr.max.y - imr.min.y;
 	imw := imr.max.x - imr.min.x;
@@ -371,401 +428,547 @@ rendermermaid(ls: ref Lstate, node: ref DocNode)
 	if(imw < width)
 		xoff = (width - imw) / 2;
 
-	dst := Rect(Point(x0 + xoff, ls.y), Point(x0 + xoff + imw, ls.y + imh));
-	ls.img.draw(dst, im, nil, imr.min);
+	if(ls.img != nil){
+		dst := Rect(Point(ls.left + xoff, ls.y), Point(ls.left + xoff + imw, ls.y + imh));
+		ls.img.draw(dst, im, nil, imr.min);
+	}
 
-	ls.y += imh + ls.style.font.height / 3;
-	ls.x = ls.style.margin + ls.indent;
+	ls.y += imh + ls.lh / 3;
+	ls.x = ls.left;
 }
 
-# Render a bullet list item
+drawmermaid(ls: ref Lstate, syntax: string): ref Image
+{
+	# Lazy-load mermaid module
+	if(!mermaid_tried){
+		mermaid_tried = 1;
+		mermaid = load Mermaid Mermaid->PATH;
+		if(mermaid != nil)
+			mermaid->init(display, ls.style.font, ls.style.codefont);
+	}
+	if(mermaid == nil)
+		return nil;
+
+	width := ls.right - ls.left;
+	if(width <= 0)
+		width = 400;
+	mermaid->colours(ls.style.bgcolor, ls.style.codebgcolor, ls.style.linkcolor, ls.style.fgcolor);
+	im: ref Image;
+	{
+		(im, nil) = mermaid->render(syntax, width);
+	} exception {
+	"*" =>
+		return nil;
+	}
+	return im;
+}
+
+# Render a bullet list item: its level (aux) sets its indent and its
+# mark, a disc, a ring, a square; a task item ([ ] or [x]) is marked
+# with a box, filled when done
 renderbullet(ls: ref Lstate, node: ref DocNode)
 {
-	font := ls.style.font;
-	bulletindent := 20;
-
-	# Draw bullet character
-	bx := ls.style.margin + ls.indent + 6;
-	ls.img.text(Point(bx, ls.y), ls.style.fgcolor, Point(0, 0), font, "•");
-
-	# Render content with indent
-	oldi := ls.indent;
-	ls.indent += bulletindent;
-	ls.x = ls.style.margin + ls.indent;
-	renderinlines(ls, node.children);
-	newline(ls);
-	ls.indent = oldi;
+	level := node.aux;
+	indent := level * px(20);
+	kids := node.children;
+	task := -1;
+	if(kids != nil && (hd kids).kind == Ntext && (t := (hd kids).text) != nil &&
+	    len t >= 3 && t[0] == '[' && t[2] == ']' && (t[1] == ' ' || t[1] == 'x' || t[1] == 'X')){
+		task = t[1] != ' ';
+		rest := pmd_stripws(t[3:]);
+		kids = tl kids;
+		if(len rest > 0)
+			kids = ref DocNode(Ntext, rest, nil, 0) :: kids;
+	}
+	if(ls.img != nil){
+		f := ls.f[0];
+		x := ls.left + indent + px(6);
+		if(task >= 0){
+			sz := f.ascent * 3 / 4;
+			y := ls.y + ls.asc - sz;
+			r := Rect(Point(x, y), Point(x + sz, y + sz));
+			if(task){
+				fill(ls, r, ls.style.linkcolor);
+				# a tick in the page's colour
+				ls.img.line(Point(x + sz/5, y + sz/2), Point(x + sz*2/5, y + sz*3/4),
+					drawm->Endsquare, drawm->Endsquare, (px(1)+1)/2, ls.style.bgcolor, Point(0, 0));
+				ls.img.line(Point(x + sz*2/5, y + sz*3/4), Point(x + sz*4/5, y + sz/4),
+					drawm->Endsquare, drawm->Endsquare, (px(1)+1)/2, ls.style.bgcolor, Point(0, 0));
+			}else{
+				t := px(1);
+				fill(ls, Rect(r.min, Point(r.max.x, r.min.y + t)), ls.style.fgcolor);
+				fill(ls, Rect(Point(r.min.x, r.max.y - t), r.max), ls.style.fgcolor);
+				fill(ls, Rect(r.min, Point(r.min.x + t, r.max.y)), ls.style.fgcolor);
+				fill(ls, Rect(Point(r.max.x - t, r.min.y), r.max), ls.style.fgcolor);
+			}
+		}else{
+			mark := "•";
+			case level % 3 {
+			1 =>	mark = "◦";
+			2 =>	mark = "▪";
+			}
+			ls.img.text(Point(x, ls.y), ls.style.fgcolor, Point(0, 0), f, mark);
+		}
+	}
+	listitem(ls, kids, indent + px(24));
 }
 
-# Render a numbered list item
+istask(node: ref DocNode): int
+{
+	if(node.children == nil || (hd node.children).kind != Ntext)
+		return 0;
+	t := (hd node.children).text;
+	return t != nil && len t >= 3 && t[0] == '[' && t[2] == ']' && (t[1] == ' ' || t[1] == 'x' || t[1] == 'X');
+}
+
+toplevel(node: ref DocNode): int
+{
+	if(node.kind == Nbullet)
+		return node.aux == 0;
+	return node.text == nil || node.text == "0";
+}
+
+# Render a numbered list item; node.text is its level
 rendernumber(ls: ref Lstate, node: ref DocNode)
 {
-	font := ls.style.font;
-	numindent := 24;
+	indent := 0;
+	if(node.text != nil)
+		indent = int node.text * px(24);
+	if(ls.img != nil)
+		ls.img.text(Point(ls.left + indent + px(2), ls.y), ls.style.fgcolor, Point(0, 0), ls.f[0],
+			sys->sprint("%d.", node.aux));
+	listitem(ls, node.children, indent + px(24));
+}
 
-	# Draw number
-	numstr := sys->sprint("%d.", node.aux);
-	nx := ls.style.margin + ls.indent + 2;
-	ls.img.text(Point(nx, ls.y), ls.style.fgcolor, Point(0, 0), font, numstr);
-
-	# Render content with indent
-	oldi := ls.indent;
-	ls.indent += numindent;
-	ls.x = ls.style.margin + ls.indent;
-	renderinlines(ls, node.children);
+listitem(ls: ref Lstate, kids: list of ref DocNode, indent: int)
+{
+	left := ls.left;
+	ls.left += indent;
+	ls.x = ls.left;
+	renderinlines(ls, kids, 0, ls.style.fgcolor, 0);
 	newline(ls);
-	ls.indent = oldi;
+	ls.left = left;
+	ls.x = left;
 }
 
 # Render a horizontal rule
 renderhrule(ls: ref Lstate)
 {
-	ls.y += ls.style.font.height / 3;
-	y := ls.y + ls.style.font.height / 2;
-	x0 := ls.style.margin;
-	x1 := ls.style.margin + ls.maxwidth;
-	ls.img.line(Point(x0, y), Point(x1, y), drawm->Endsquare, drawm->Endsquare, 0, ls.style.fgcolor, Point(0, 0));
-	ls.y += ls.style.font.height;
+	ls.y += ls.lh / 3;
+	y := ls.y + ls.lh / 2;
+	fill(ls, Rect(Point(ls.left, y), Point(ls.right, y + px(1))), ls.style.fgcolor);
+	ls.y += ls.lh;
 }
 
-# Render a blockquote
+# Render a blockquote paragraph: a bar for each level it is nested (aux)
 renderblockquote(ls: ref Lstate, node: ref DocNode)
 {
-	# Draw left border line
-	bx := ls.style.margin + ls.indent + 4;
+	depth := node.aux;
+	if(depth < 1)
+		depth = 1;
 	y0 := ls.y;
 
-	# Render content indented
-	oldi := ls.indent;
-	ls.indent += 16;
-	ls.x = ls.style.margin + ls.indent;
-	renderinlines(ls, node.children);
+	left := ls.left;
+	ls.left += depth * px(16);
+	ls.x = ls.left;
+	renderinlines(ls, node.children, 0, ls.style.fgcolor, 0);
 	newline(ls);
-	y1 := ls.y;
-	ls.indent = oldi;
+	ls.left = left;
+	ls.x = left;
 
-	# Draw the quote bar
-	ls.img.line(Point(bx, y0), Point(bx, y1), drawm->Endsquare, drawm->Endsquare, 1, ls.style.linkcolor, Point(0, 0));
+	for(d := 0; d < depth; d++){
+		bx := ls.left + d * px(16) + px(3);
+		fill(ls, Rect(Point(bx, y0), Point(bx + px(3), ls.y)), ls.style.linkcolor);
+	}
 
-	ls.y += ls.style.font.height / 4;
+	ls.y += ls.lh / 4;
 }
 
-# Render a single table cell with inline bold (**...**) support.
-# cx, y:     top-left corner of the cell's text area.
-# colw:      pixel width of the column (text is clipped at cx+colw-4).
-# cell:      raw cell text (may contain **...**).
-# isheader:  non-zero → accent color + double-draw plain text too.
-rendertablecell(ls: ref Lstate, cx, y, colw: int, cell: string, isheader: int)
-{
-	font := ls.style.font;
-	col := ls.style.fgcolor;
-	if(isheader) {
-		col = ls.style.linkcolor;
-		if(col == nil)
-			col = ls.style.fgcolor;
-	}
-	maxright := cx + colw - 4;
-	x := cx;
-
-	i := 0;
-	n := len cell;
-	while(i < n && x < maxright) {
-		# Check for bold span: **...**
-		if(i + 1 < n && cell[i] == '*' && cell[i+1] == '*') {
-			j := i + 2;
-			while(j + 1 < n && !(cell[j] == '*' && cell[j+1] == '*'))
-				j++;
-			if(j + 1 < n && cell[j] == '*' && cell[j+1] == '*') {
-				# Valid bold span: cell[i+2:j]
-				bold := cell[i+2:j];
-				while(len bold > 0 && x + font.width(bold) + 1 > maxright)
-					bold = bold[:len bold - 1];
-				if(len bold > 0) {
-					ls.img.text(Point(x, y), col, Point(0, 0), font, bold);
-					ls.img.text(Point(x+1, y), col, Point(0, 0), font, bold);
-					x += font.width(bold) + 1;
-				}
-				i = j + 2;
-			} else {
-				# No closing ** — skip the opening * and retry
-				i++;
-			}
-		} else {
-			# Plain text: collect up to the next ** marker
-			j := i;
-			while(j < n) {
-				if(j + 1 < n && cell[j] == '*' && cell[j+1] == '*')
-					break;
-				j++;
-			}
-			plain := cell[i:j];
-			while(len plain > 0 && x + font.width(plain) > maxright)
-				plain = plain[:len plain - 1];
-			if(len plain > 0) {
-				ls.img.text(Point(x, y), col, Point(0, 0), font, plain);
-				if(isheader)
-					ls.img.text(Point(x+1, y), col, Point(0, 0), font, plain);
-				x += font.width(plain);
-			}
-			i = j;
-		}
-	}
-}
-
-# Render a table node.
-# node.text = rows separated by \n; each row has cells separated by |.
-# First row is the header. node.aux = number of columns.
+# Render a table node: node.text is its rows, one a line, cells
+# separated by '|', the header first; node.aux the number of columns;
+# node.children, if any, a text node of each column's alignment
+# (l, c or r).
+#
+# Set as typographers set them (booktabs): columns as wide as their
+# text, a gap between them and no vertical rules; a rule above and
+# below the table, a lighter one under the header, and faint ones
+# between rows. When the table would be wider than the page, columns
+# narrow in proportion to their slack and their cells wrap.
 rendertable(ls: ref Lstate, node: ref DocNode)
 {
 	if(node.text == nil || len node.text == 0)
 		return;
-
-	font := ls.style.font;
 	ncols := node.aux;
 	if(ncols <= 0)
 		ncols = 1;
+	aligns := "";
+	if(node.children != nil && (hd node.children).text != nil)
+		aligns = (hd node.children).text;
 
-	x0 := ls.style.margin + ls.indent;
-	rowh := font.height + 4;
-	colpad := 6;
-	colw := (ls.maxwidth - (ncols + 1) * colpad) / ncols;
-	if(colw < 30)
-		colw = 30;
-
-	# Split text into rows
-	rows := pmd_splitlines(node.text);
-	nrows := len rows;
-
-	ls.y += 2;  # small top margin
-
-	for(ri := 0; ri < nrows; ri++){
-		row := rows[ri];
-		if(pmd_isblank(row))
+	# The cells, as inline text
+	rl: list of array of list of ref DocNode;
+	lines := pmd_splitlines(node.text);
+	for(li := 0; li < len lines; li++){
+		if(pmd_isblank(lines[li]))
 			continue;
+		cs := pmd_splittablerow(lines[li]);
+		row := array[ncols] of list of ref DocNode;
+		for(c := 0; c < ncols && c < len cs; c++)
+			row[c] = pmd_parseinline(pmd_trim(cs[c]));
+		rl = row :: rl;
+	}
+	nrows := len rl;
+	if(nrows == 0)
+		return;
+	rows := array[nrows] of array of list of ref DocNode;
+	for(r := nrows - 1; r >= 0; r--){
+		rows[r] = hd rl;
+		rl = tl rl;
+	}
 
-		# Split row into cells by '|'
-		cells := pmd_splittablerow(row);
+	bodyf := ls.f;
+	bodyfb := ls.fb;
+	(headf, headfb) := headfaces(ls.style.font, 5);	# medium, the body's size
 
-		# Header row background
-		if(ri == 0){
-			bgr := Rect(Point(x0, ls.y), Point(x0 + ls.maxwidth, ls.y + rowh));
-			ls.img.draw(bgr, ls.style.codebgcolor, nil, Point(0, 0));
+	# Each cell's width on one line, and each column's widest line
+	# and widest word
+	cellw := array[nrows] of array of int;
+	nat := array[ncols] of {* => 0};
+	narrow := array[ncols] of {* => 0};
+	for(r = 0; r < nrows; r++){
+		if(r == 0){
+			ls.f = headf;
+			ls.fb = headfb;
+		}else{
+			ls.f = bodyf;
+			ls.fb = bodyfb;
 		}
-
-		# Draw each cell with inline bold support
-		cx := x0 + colpad;
-		for(ci := 0; ci < len cells && ci < ncols; ci++){
-			cell := cells[ci];
-			if(cell == nil)
-				cell = "";
-			cell = pmd_stripws(cell);
-			rendertablecell(ls, cx, ls.y + 2, colw, cell, ri == 0);
-			cx += colw + colpad;
-		}
-
-		ls.y += rowh;
-
-		# Separator line below header row
-		if(ri == 0){
-			ls.img.line(Point(x0, ls.y), Point(x0 + ls.maxwidth, ls.y),
-				drawm->Endsquare, drawm->Endsquare, 0, ls.style.fgcolor, Point(0, 0));
-			ls.y += 2;
+		cellw[r] = array[ncols] of int;
+		for(c := 0; c < ncols; c++){
+			(w, ww) := measurecell(ls, rows[r][c]);
+			cellw[r][c] = w;
+			if(w > nat[c])
+				nat[c] = w;
+			if(ww > narrow[c])
+				narrow[c] = ww;
 		}
 	}
 
-	ls.y += font.height / 3;  # spacing after table
-	ls.x = x0;
+	gap := px(16);
+	colw := fitcolumns(nat, narrow, ls.right - ls.left - (ncols - 1) * gap);
+	tablew := (ncols - 1) * gap;
+	for(c := 0; c < ncols; c++)
+		tablew += colw[c];
+
+	fg := ls.style.fgcolor;
+	heavy := px(2);
+	light := px(1);
+	vpad := px(4);
+	x0 := ls.left;
+	left := ls.left;
+	right := ls.right;
+
+	ls.y += ls.lh / 4;
+	fill(ls, Rect(Point(x0, ls.y), Point(x0 + tablew, ls.y + heavy)), fg);
+	ls.y += heavy;
+	for(r = 0; r < nrows; r++){
+		if(r == 0){
+			ls.f = headf;
+			ls.fb = headfb;
+		}else{
+			ls.f = bodyf;
+			ls.fb = bodyfb;
+		}
+		top := ls.y + vpad;
+		bottom := top + ls.lh;
+		cx := x0;
+		for(c = 0; c < ncols; c++){
+			off := 0;
+			a := 'l';
+			if(c < len aligns)
+				a = aligns[c];
+			if(cellw[r][c] <= colw[c]){
+				if(a == 'r')
+					off = colw[c] - cellw[r][c];
+				else if(a == 'c')
+					off = (colw[c] - cellw[r][c]) / 2;
+			}
+			ls.left = cx;
+			ls.right = cx + colw[c];
+			ls.x = cx + off;
+			ls.y = top;
+			clipr: Rect;
+			if(ls.img != nil){
+				clipr = ls.img.clipr;
+				ls.img.clipr = Rect(Point(cx, clipr.min.y), Point(cx + colw[c], clipr.max.y));
+			}
+			renderinlines(ls, rows[r][c], 0, fg, 0);
+			if(ls.img != nil)
+				ls.img.clipr = clipr;
+			if(ls.y + ls.lh > bottom)
+				bottom = ls.y + ls.lh;
+			cx += colw[c] + gap;
+		}
+		ls.y = bottom + vpad;
+		if(r == 0 && nrows > 1){
+			fill(ls, Rect(Point(x0, ls.y), Point(x0 + tablew, ls.y + light)), fg);
+			ls.y += light;
+		}else if(r > 0 && r < nrows - 1){
+			fill(ls, Rect(Point(x0, ls.y), Point(x0 + tablew, ls.y + light)), ls.style.codebgcolor);
+			ls.y += light;
+		}
+	}
+	fill(ls, Rect(Point(x0, ls.y), Point(x0 + tablew, ls.y + heavy)), fg);
+	ls.y += heavy + ls.lh / 2;
+
+	ls.f = bodyf;
+	ls.fb = bodyfb;
+	ls.left = left;
+	ls.right = right;
+	ls.x = left;
 }
 
-# Split a table row string by '|', returning an array of cell strings.
-# Strips leading and trailing '|'.
+# Column widths for a page avail wide, from each column's widest line
+# (nat) and widest word (narrow). A column narrower than an even share
+# of what is left keeps its width, so short columns never wrap; the
+# rest share the remainder, each getting its widest word and a part of
+# the slack above it in proportion to that slack. If not even that
+# fits, they share by their widest words, and are clipped.
+fitcolumns(nat, narrow: array of int, avail: int): array of int
+{
+	n := len nat;
+	colw := array[n] of {* => -1};
+	left := n;
+	for(changed := 1; changed && left > 0;){
+		changed = 0;
+		share := avail / left;
+		for(c := 0; c < n; c++)
+			if(colw[c] < 0 && nat[c] <= share){
+				colw[c] = nat[c];
+				avail -= nat[c];
+				left--;
+				changed = 1;
+			}
+	}
+	if(left == 0)
+		return colw;
+	sumnat := 0;
+	sumnarrow := 0;
+	for(c := 0; c < n; c++)
+		if(colw[c] < 0){
+			sumnat += nat[c];
+			sumnarrow += narrow[c];
+		}
+	for(c = 0; c < n; c++){
+		if(colw[c] >= 0)
+			continue;
+		if(sumnarrow >= avail){
+			colw[c] = narrow[c];
+			if(avail > 0 && sumnarrow > 0)
+				colw[c] = narrow[c] * avail / sumnarrow;
+			if(colw[c] < px(8))
+				colw[c] = px(8);
+		}else
+			colw[c] = narrow[c] + (avail - sumnarrow) * (nat[c] - narrow[c]) / (sumnat - sumnarrow);
+	}
+	return colw;
+}
+
+# A cell's width set on one line, and the width of its widest word
+measurecell(ls: ref Lstate, cell: list of ref DocNode): (int, int)
+{
+	img := ls.img;
+	x := ls.x;
+	y := ls.y;
+	left := ls.left;
+	right := ls.right;
+
+	ls.img = nil;
+	ls.left = ls.x = 0;
+	ls.right = 1 << 30;
+	renderinlines(ls, cell, 0, ls.style.fgcolor, 0);
+	w := ls.x;
+	ls.x = ls.maxx = 0;
+	ls.right = 1;	# a word a line
+	renderinlines(ls, cell, 0, ls.style.fgcolor, 0);
+	ww := ls.maxx;
+
+	ls.img = img;
+	ls.x = x;
+	ls.y = y;
+	ls.left = left;
+	ls.right = right;
+	return (w, ww);
+}
+
+# Split a table row by '|' into its cells, dropping the outer pipes
 pmd_splittablerow(row: string): array of string
 {
-	# Count separators to size the array
+	row = pmd_trim(row);
+	if(len row > 0 && row[0] == '|')
+		row = row[1:];
+	if(len row > 0 && row[len row - 1] == '|')
+		row = row[:len row - 1];
+
+	# a pipe escaped with a backslash is the cell's, even in code
 	nsep := 0;
 	for(i := 0; i < len row; i++)
-		if(row[i] == '|')
+		if(row[i] == '|' && (i == 0 || row[i-1] != '\\'))
 			nsep++;
-	if(nsep == 0)
-		return array[1] of {row};
-
 	cells := array[nsep + 1] of string;
 	ci := 0;
-	start := 0;
-	j := 0;
-	for(j = 0; j <= len row; j++){
-		if(j == len row || row[j] == '|'){
-			cells[ci++] = row[start:j];
-			start = j + 1;
-		}
+	cell := "";
+	for(j := 0; j <= len row; j++){
+		if(j == len row || (row[j] == '|' && (j == 0 || row[j-1] != '\\'))){
+			cells[ci++] = cell;
+			cell = "";
+		}else if(row[j] == '\\' && j+1 < len row && row[j+1] == '|')
+			;
+		else
+			cell[len cell] = row[j];
 	}
-	# Strip leading empty cell from leading '|'
-	if(ci > 0 && (cells[0] == nil || len pmd_stripws(cells[0]) == 0)){
-		return cells[1:ci];
-	}
-	return cells[0:ci];
+	return cells;
 }
 
-# Render inline nodes (text, bold, italic, code, links) with word wrapping
-renderinlines(ls: ref Lstate, nodes: list of ref DocNode)
+# ---- Inline text ----
+
+# lines drawn with text, as Ul|Strike
+Ul: con 1;
+Strike: con 2;
+
+# Render inline nodes (text, bold, italic, code, links) with word
+# wrapping, in weight w (Bold|Italic), colour color, and lined as ul
+renderinlines(ls: ref Lstate, nodes: list of ref DocNode, w: int, color: ref Image, ul: int)
 {
 	for(; nodes != nil; nodes = tl nodes){
 		node := hd nodes;
 		case node.kind {
 		Ntext =>
-			rendertext(ls, node.text, ls.style.font, ls.style.fgcolor, 0);
+			rendertext(ls, node.text, w, color, ul);
 		Nbold =>
-			# Bold: render twice with 1px offset for faux bold
-			txt := flattentext(node.children);
-			renderbold(ls, txt);
+			renderinlines(ls, node.children, w | Bold, color, ul);
 		Nitalic =>
-			# Italic: render with underline (we lack italic fonts)
-			txt := flattentext(node.children);
-			rendertext(ls, txt, ls.style.font, ls.style.fgcolor, 1);
+			renderinlines(ls, node.children, w | Italic, color, ul);
+		Nstrike =>
+			renderinlines(ls, node.children, w, color, ul | Strike);
 		Ncode =>
-			# Inline code: monospace with background
-			font := ls.style.codefont;
-			if(font == nil)
-				font = ls.style.font;
-			renderinlinecode(ls, node.text, font);
+			renderinlinecode(ls, node.text);
 		Nlink =>
-			txt := flattentext(node.children);
-			rendertext(ls, txt, ls.style.font, ls.style.linkcolor, 1);
+			lc := ls.style.linkcolor;
+			if(lc == nil)
+				lc = color;
+			renderinlines(ls, node.children, w, lc, ul | Ul);
 		Nnewline =>
 			newline(ls);
 		* =>
 			# Recurse for nested structures
 			if(node.children != nil)
-				renderinlines(ls, node.children);
+				renderinlines(ls, node.children, w, color, ul);
 			else if(node.text != nil)
-				rendertext(ls, node.text, ls.style.font, ls.style.fgcolor, 0);
+				rendertext(ls, node.text, w, color, ul);
 		}
 	}
 }
 
-# Render text with word wrapping
-rendertext(ls: ref Lstate, text: string, font: ref Font, color: ref Image, underline: int)
+# Render text with word wrapping, on the line's baseline
+rendertext(ls: ref Lstate, text: string, w: int, color: ref Image, underline: int)
 {
 	if(text == nil || len text == 0)
 		return;
 
-	maxright := ls.style.margin + ls.indent + ls.maxwidth - ls.indent;
+	(font, emb, ul) := face(ls, w);
+	if(emb)
+		emb = px(1);
+	if(ul)
+		underline |= Ul;	# for want of an italic
+	dy := ls.asc - font.ascent;
 
-	# Process word by word
 	i := 0;
 	for(;;){
-		# Skip to next non-space or end
 		wordstart := i;
 		while(i < len text && text[i] != ' ' && text[i] != '\t' && text[i] != '\n')
 			i++;
 
-		word := "";
-		if(i > wordstart)
-			word = text[wordstart:i];
-
-		if(len word > 0){
-			ww := font.width(word);
-			# Check if word fits on current line
-			if(ls.x + ww > maxright && ls.x > ls.style.margin + ls.indent){
+		if(i > wordstart){
+			word := text[wordstart:i];
+			ww := font.width(word) + emb;
+			if(ls.x + ww > ls.right && ls.x > ls.left)
 				newline(ls);
-			}
-			# Draw word — text() takes top of bounding box, not baseline
-			ls.img.text(Point(ls.x, ls.y), color, Point(0, 0), font, word);
-			if(underline){
-				# Underline at 2px below baseline (baseline = ls.y + font.ascent)
-				uy := ls.y + font.ascent + 2;
-				ls.img.line(Point(ls.x, uy), Point(ls.x + ww, uy),
-					drawm->Endsquare, drawm->Endsquare, 0, color, Point(0, 0));
+			if(ls.img != nil){
+				p := Point(ls.x, ls.y + dy);
+				ls.img.text(p, color, Point(0, 0), font, word);
+				if(emb)
+					ls.img.text(p.add(Point(emb, 0)), color, Point(0, 0), font, word);
+				decorate(ls, ls.x, ls.x + ww, font, color, underline);
 			}
 			ls.x += ww;
-		}
-
-		# Handle space / newline after word
-		if(i >= len text)
-			break;
-		if(text[i] == '\n'){
-			newline(ls);
-			i++;
-		} else {
-			# Space - add space width
-			if(ls.x > ls.style.margin + ls.indent)
-				ls.x += font.width(" ");
-			i++;
-		}
-	}
-}
-
-# Render bold text (faux bold: draw twice with 1px x offset)
-renderbold(ls: ref Lstate, text: string)
-{
-	if(text == nil || len text == 0)
-		return;
-
-	font := ls.style.font;
-	color := ls.style.fgcolor;
-	maxright := ls.style.margin + ls.indent + ls.maxwidth - ls.indent;
-
-	i := 0;
-	for(;;){
-		wordstart := i;
-		while(i < len text && text[i] != ' ' && text[i] != '\t' && text[i] != '\n')
-			i++;
-
-		word := "";
-		if(i > wordstart)
-			word = text[wordstart:i];
-
-		if(len word > 0){
-			ww := font.width(word);
-			if(ls.x + ww > maxright && ls.x > ls.style.margin + ls.indent)
-				newline(ls);
-
-			# Draw twice with 1px x offset for faux bold
-			ls.img.text(Point(ls.x, ls.y), color, Point(0, 0), font, word);
-			ls.img.text(Point(ls.x + 1, ls.y), color, Point(0, 0), font, word);
-			ls.x += ww + 1;
+			if(ls.x > ls.maxx)
+				ls.maxx = ls.x;
 		}
 
 		if(i >= len text)
 			break;
-		if(text[i] == '\n'){
+		if(text[i] == '\n')
 			newline(ls);
-			i++;
-		} else {
-			if(ls.x > ls.style.margin + ls.indent)
-				ls.x += font.width(" ");
-			i++;
+		else if(ls.x > ls.left){
+			sw := font.width(" ");
+			if(i + 1 < len text)	# join the words, not the last to what follows
+				decorate(ls, ls.x, ls.x + sw, font, color, underline);
+			ls.x += sw;
 		}
+		i++;
 	}
 }
 
 # Render inline code with background
-renderinlinecode(ls: ref Lstate, text: string, font: ref Font)
+renderinlinecode(ls: ref Lstate, text: string)
 {
 	if(text == nil)
 		return;
+	font := ls.style.codefont;
+	if(font == nil)
+		font = ls.style.font;
 
-	pad := 3;
+	pad := px(3);
 	tw := font.width(text);
-	maxright := ls.style.margin + ls.indent + ls.maxwidth - ls.indent;
-
-	if(ls.x + tw + 2*pad > maxright && ls.x > ls.style.margin + ls.indent)
+	if(ls.x + tw + 2*pad > ls.right && ls.x > ls.left)
 		newline(ls);
 
-	# Draw background
-	bgr := Rect(Point(ls.x, ls.y), Point(ls.x + tw + 2*pad, ls.y + font.height));
-	ls.img.draw(bgr, ls.style.codebgcolor, nil, Point(0, 0));
-
-	# Draw text — text() takes top of bounding box
-	ls.img.text(Point(ls.x + pad, ls.y), ls.style.fgcolor, Point(0, 0), font, text);
-	ls.x += tw + 2*pad + 2;
+	dy := ls.asc - font.ascent;
+	if(ls.img != nil){
+		bgr := Rect(Point(ls.x, ls.y + dy), Point(ls.x + tw + 2*pad, ls.y + dy + font.height));
+		ls.img.draw(bgr, ls.style.codebgcolor, nil, Point(0, 0));
+		ls.img.text(Point(ls.x + pad, ls.y + dy), ls.style.fgcolor, Point(0, 0), font, text);
+	}
+	ls.x += tw + 2*pad;
+	if(ls.x > ls.maxx)
+		ls.maxx = ls.x;
 }
 
 # Move to next line
 newline(ls: ref Lstate)
 {
-	ls.y += ls.style.font.height;
-	ls.x = ls.style.margin + ls.indent;
+	ls.y += ls.lh;
+	ls.x = ls.left;
+}
+
+# The underline (Ul) and strike (Strike) under or through x0 to x1
+decorate(ls: ref Lstate, x0, x1: int, font: ref Font, color: ref Image, lines: int)
+{
+	if(lines & Ul){
+		y := ls.y + ls.asc + px(2);
+		fill(ls, Rect(Point(x0, y), Point(x1, y + px(1))), color);
+	}
+	if(lines & Strike){
+		y := ls.y + ls.asc - font.ascent * 3 / 10;
+		fill(ls, Rect(Point(x0, y), Point(x1, y + px(1))), color);
+	}
+}
+
+fill(ls: ref Lstate, r: Rect, color: ref Image)
+{
+	if(ls.img != nil)
+		ls.img.draw(r, color, nil, Point(0, 0));
 }
 
 # Flatten all inline children to plain text
@@ -787,12 +990,31 @@ flattentext(nodes: list of ref DocNode): string
 # Parse markdown text into a list of DocNode blocks.
 parsemd(text: string): list of ref DocNode
 {
+	(doc, nil) := parsemdlines(text);
+	return doc;
+}
+
+# The blocks of a markdown text, and the line each starts on (from 0)
+parsemdlines(text: string): (list of ref DocNode, array of int)
+{
 	doc: list of ref DocNode;
+	starts: list of int;
 	lines := pmd_splitlines(text);
+	pend := doc;	# the blocks before the line being parsed
+	pendline := 0;
+
+	# the indents of the list items open around the current one,
+	# innermost first: an item's nesting level is its place in them
+	indents: list of int;
 
 	i := 0;
 	nlines := len lines;
 	for(;;){
+		# the blocks the last pass made start on its line
+		for(l := doc; l != pend; l = tl l)
+			starts = pendline :: starts;
+		pend = doc;
+		pendline = i;
 		if(i >= nlines)
 			break;
 		line := lines[i];
@@ -802,6 +1024,30 @@ parsemd(text: string): list of ref DocNode
 			i++;
 			continue;
 		}
+
+		# A list item (- * + or 1. 1)), nested by its indent
+		(mk, ind, nil, nil) := pmd_listmarker(line);
+		if(mk != 0){
+			while(indents != nil && ind < hd indents)
+				indents = tl indents;
+			if(indents == nil || ind > hd indents)
+				indents = ind :: indents;
+			(item, ni) := pmd_parseitem(lines, i, nlines, len indents - 1);
+			doc = item :: doc;
+			i = ni;
+			continue;
+		}
+		inlist := indents != nil;
+		indents = nil;
+
+		# Indented code block: four spaces or a tab, not under a list item
+		if(!inlist && (line[0] == '\t' || (len line >= 4 && line[0:4] == "    "))){
+			(block, ni) := pmd_parseindented(lines, i, nlines);
+			doc = block :: doc;
+			i = ni;
+			continue;
+		}
+		line = pmd_stripws(line);
 
 		# Code block (```)
 		if(len line >= 3 && line[0:3] == "```"){
@@ -832,29 +1078,12 @@ parsemd(text: string): list of ref DocNode
 		}
 
 		# Blockquote (>)
-		if(len line > 0 && line[0] == '>'){
-			(bq, ni) := pmd_parseblockquote(lines, i, nlines);
-			doc = bq :: doc;
+		if(line[0] == '>'){
+			(bqs, ni) := pmd_parseblockquote(lines, i, nlines);
+			for(; bqs != nil; bqs = tl bqs)
+				doc = hd bqs :: doc;
 			i = ni;
 			continue;
-		}
-
-		# Bullet list (- or *)
-		if(len line >= 2 && (line[0] == '-' || line[0] == '*') && line[1] == ' '){
-			(item, ni) := pmd_parsebullet(lines, i, nlines);
-			doc = item :: doc;
-			i = ni;
-			continue;
-		}
-
-		# Numbered list (1. 2. etc)
-		if(len line >= 3 && line[0] >= '0' && line[0] <= '9'){
-			(item, ni) := pmd_parsenumber(lines, i, nlines);
-			if(item != nil){
-				doc = item :: doc;
-				i = ni;
-				continue;
-			}
 		}
 
 		# Table (line contains '|' and next line is a separator)
@@ -867,14 +1096,205 @@ parsemd(text: string): list of ref DocNode
 			}
 		}
 
+		# Setext heading: a line underlined with === (first level) or --- (second)
+		if(i+1 < nlines && (u := pmd_setext(lines[i+1])) != 0){
+			children := pmd_parseinline(pmd_trim(line));
+			doc = ref DocNode(Nheading, nil, children, u) :: doc;
+			i += 2;
+			continue;
+		}
+
 		# Default: paragraph
 		(para, ni) := pmd_parsepara(lines, i, nlines);
 		doc = para :: doc;
 		i = ni;
 	}
 
-	return pmd_reverselist(doc);
+	ln := array[len starts] of int;
+	k := len ln;
+	for(; starts != nil; starts = tl starts)
+		ln[--k] = hd starts;
+	return (pmd_reverselist(doc), ln);
 }
+
+# 1 if line underlines a first-level setext heading (===), 2 a second (---)
+pmd_setext(line: string): int
+{
+	line = pmd_trim(line);
+	if(len line == 0 || (line[0] != '=' && line[0] != '-'))
+		return 0;
+	for(i := 0; i < len line; i++)
+		if(line[i] != line[0])
+			return 0;
+	if(line[0] == '=')
+		return 1;
+	return 2;
+}
+
+# A list item's marker: (kind, indent, where its text starts, number);
+# kind is Nbullet or Nnumber, or 0 if line is not a list item
+pmd_listmarker(line: string): (int, int, int, int)
+{
+	ind := 0;
+	i := 0;
+	for(; i < len line; i++){
+		if(line[i] == ' ')
+			ind++;
+		else if(line[i] == '\t')
+			ind += 4;
+		else
+			break;
+	}
+	if(i >= len line)
+		return (0, 0, 0, 0);
+	c := line[i];
+	if((c == '-' || c == '*' || c == '+') && i+1 < len line && line[i+1] == ' '){
+		if(pmd_ishrule(line[i:]))
+			return (0, 0, 0, 0);
+		return (Nbullet, ind, i+2, 0);
+	}
+	j := i;
+	while(j < len line && line[j] >= '0' && line[j] <= '9')
+		j++;
+	if(j > i && j - i < 10 && j+1 < len line && (line[j] == '.' || line[j] == ')') && line[j+1] == ' ')
+		return (Nnumber, ind, j+2, int line[i:j]);
+	return (0, 0, 0, 0);
+}
+
+# A list item and the lines that continue it: indented lines that are
+# not items themselves. Nbullet: aux is the nesting level. Nnumber:
+# aux is the number, text the nesting level.
+pmd_parseitem(lines: array of string, start, nlines, level: int): (ref DocNode, int)
+{
+	(kind, nil, at, num) := pmd_listmarker(lines[start]);
+	text := lines[start][at:];
+	i := start + 1;
+	while(i < nlines && !pmd_isblank(lines[i]) &&
+	    (lines[i][0] == ' ' || lines[i][0] == '\t')){
+		(k, nil, nil, nil) := pmd_listmarker(lines[i]);
+		if(k != 0)
+			break;
+		text += " " + pmd_stripws(lines[i]);
+		i++;
+	}
+	children := pmd_parseinline(pmd_trim(text));
+	if(kind == Nbullet)
+		return (ref DocNode(Nbullet, nil, children, level), i);
+	return (ref DocNode(Nnumber, string level, children, num), i);
+}
+
+# An indented code block: lines indented four spaces or a tab, and the
+# blank lines between them
+pmd_parseindented(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	code := "";
+	i := start;
+	last := start;
+	for(; i < nlines; i++){
+		line := lines[i];
+		if(pmd_isblank(line)){
+			if(len code > 0)
+				code += "\n";
+			continue;
+		}
+		if(line[0] == '\t')
+			line = line[1:];
+		else if(len line >= 4 && line[0:4] == "    ")
+			line = line[4:];
+		else
+			break;
+		if(i > start)
+			code += "\n";
+		code += line;
+		last = i;
+	}
+	# trailing blank lines are not the code's
+	n := len code;
+	while(n > 0 && code[n-1] == '\n')
+		n--;
+	return (ref DocNode(Ncodeblock, code[0:n], nil, 0), last + 1);
+}
+
+# A block quote: its lines' text, one Nblockquote a paragraph, aux the
+# depth of > marks (> > nests)
+pmd_parseblockquote(lines: array of string, start, nlines: int): (list of ref DocNode, int)
+{
+	out: list of ref DocNode;
+	text := "";
+	depth := 0;
+	i := start;
+	for(; i < nlines; i++){
+		line := pmd_stripws(lines[i]);
+		if(len line == 0 || line[0] != '>')
+			break;
+		d := 0;
+		while(len line > 0 && line[0] == '>'){
+			d++;
+			line = pmd_stripws(line[1:]);
+		}
+		if(pmd_isblank(line) || (d != depth && len text > 0)){
+			if(len text > 0)
+				out = ref DocNode(Nblockquote, nil, pmd_parseinline(text), depth) :: out;
+			text = "";
+			if(pmd_isblank(line))
+				continue;
+		}
+		depth = d;
+		if(len text > 0)
+			text += " ";
+		text += pmd_trim(line);
+	}
+	if(len text > 0)
+		out = ref DocNode(Nblockquote, nil, pmd_parseinline(text), depth) :: out;
+	r: list of ref DocNode;
+	for(; out != nil; out = tl out)
+		r = hd out :: r;
+	return (r, i);
+}
+
+pmd_parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
+{
+	text := "";
+	i := start;
+	while(i < nlines){
+		line := lines[i];
+		if(pmd_isblank(line))
+			break;
+		if(i > start){
+			s := pmd_stripws(line);
+			if(len s > 0 && (s[0] == '#' || s[0] == '>'))
+				break;
+			if(len s >= 3 && s[0:3] == "```")
+				break;
+			if(pmd_ishrule(s) || pmd_setext(s) == 1)
+				break;
+			(k, nil, nil, nil) := pmd_listmarker(line);
+			if(k != 0)
+				break;
+			# Stop at table rows
+			if(pmd_istablerow(line))
+				break;
+		}
+		# two spaces or a backslash at the end of a line break it there
+		sep := " ";
+		n := len text;
+		if(n >= 2 && text[n-2:] == "  "){
+			text = pmd_trim(text);
+			sep = "\n";
+		}else if(n >= 1 && text[n-1] == '\\'){
+			text = text[0:n-1];
+			sep = "\n";
+		}
+		if(len text > 0)
+			text += sep;
+		text += pmd_stripws(line);
+		i++;
+	}
+
+	children := pmd_parseinline(pmd_trim(text));
+	return (ref DocNode(Npara, nil, children, 0), i);
+}
+
 
 pmd_parseheading(line: string): (ref DocNode, int)
 {
@@ -937,103 +1357,9 @@ pmd_parsecodeblock(lines: array of string, start: int): (ref DocNode, int)
 	return (ref DocNode(Ncodeblock, code, nil, 0), i);
 }
 
-pmd_parseblockquote(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	text := "";
-	i := start;
-	while(i < nlines){
-		line := lines[i];
-		if(len line == 0 || line[0] != '>')
-			break;
-		content := "";
-		j := 1;
-		if(j < len line && line[j] == ' ')
-			j++;
-		if(j < len line)
-			content = line[j:];
-		if(len text > 0)
-			text += " ";
-		text += content;
-		i++;
-	}
 
-	children := pmd_parseinline(text);
-	return (ref DocNode(Nblockquote, nil, children, 0), i);
-}
 
-pmd_parsebullet(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	text := lines[start][2:];
-	i := start + 1;
-	while(i < nlines && len lines[i] > 0 && (lines[i][0] == ' ' || lines[i][0] == '\t')){
-		text += " " + pmd_stripws(lines[i]);
-		i++;
-	}
 
-	children := pmd_parseinline(text);
-	return (ref DocNode(Nbullet, nil, children, 0), i);
-}
-
-pmd_parsenumber(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	line := lines[start];
-	i := 0;
-	while(i < len line && line[i] >= '0' && line[i] <= '9')
-		i++;
-	if(i == 0 || i >= len line || line[i] != '.')
-		return (nil, start);
-	num := int line[0:i];
-	i++;
-	if(i < len line && line[i] == ' ')
-		i++;
-
-	text := "";
-	if(i < len line)
-		text = line[i:];
-	j := start + 1;
-	while(j < nlines && len lines[j] > 0 && (lines[j][0] == ' ' || lines[j][0] == '\t')){
-		text += " " + pmd_stripws(lines[j]);
-		j++;
-	}
-
-	children := pmd_parseinline(text);
-	return (ref DocNode(Nnumber, nil, children, num), j);
-}
-
-pmd_parsepara(lines: array of string, start, nlines: int): (ref DocNode, int)
-{
-	text := "";
-	i := start;
-	while(i < nlines){
-		line := lines[i];
-		if(pmd_isblank(line))
-			break;
-		if(i > start){
-			if(len line > 0 && line[0] == '#')
-				break;
-			if(len line >= 3 && line[0:3] == "```")
-				break;
-			if(pmd_ishrule(line))
-				break;
-			if(len line > 0 && line[0] == '>')
-				break;
-			if(len line >= 2 && (line[0] == '-' || line[0] == '*') && line[1] == ' ')
-				break;
-			if(len line >= 3 && line[0] >= '0' && line[0] <= '9' && pmd_hasdotspace(line))
-				break;
-			# Stop at table rows
-			if(pmd_istablerow(line))
-				break;
-		}
-		if(len text > 0)
-			text += " ";
-		text += line;
-		i++;
-	}
-
-	children := pmd_parseinline(text);
-	return (ref DocNode(Npara, nil, children, 0), i);
-}
 
 pmd_parseinline(text: string): list of ref DocNode
 {
@@ -1044,7 +1370,14 @@ pmd_parseinline(text: string): list of ref DocNode
 	while(i < len text){
 		c := text[i];
 
-		# Image: ![alt](url) — render alt text only, no ! prefix
+		# A backslash makes the punctuation after it literal: \* \_ \` \|
+		if(c == '\\' && i+1 < len text && pmd_ispunct(text[i+1])){
+			plain[len plain] = text[i+1];
+			i += 2;
+			continue;
+		}
+
+		# Image: ![alt](url) — its alt text
 		if(c == '!' && i+1 < len text && text[i+1] == '['){
 			if(len plain > 0){
 				nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
@@ -1053,9 +1386,10 @@ pmd_parseinline(text: string): list of ref DocNode
 			(linknode, ni) := pmd_parselink(text, i+1);
 			if(linknode != nil){
 				# Turn link node into plain text (alt text only, no click)
+				# an image shows as its alt text
 				alttxt := flattentext(linknode.children);
 				if(alttxt != nil && len alttxt > 0)
-					nodes = ref DocNode(Ntext, "[image: " + alttxt + "]", nil, 0) :: nodes;
+					nodes = ref DocNode(Ntext, alttxt, nil, 0) :: nodes;
 				i = ni;
 				continue;
 			}
@@ -1072,9 +1406,8 @@ pmd_parseinline(text: string): list of ref DocNode
 			}
 			end := pmd_findclose(text, i+2, "~~");
 			if(end > 0){
-				# Render as plain text — we don't have a strike font
 				inner := text[i+2:end];
-				nodes = ref DocNode(Ntext, inner, nil, 0) :: nodes;
+				nodes = ref DocNode(Nstrike, nil, pmd_parseinline(inner), 0) :: nodes;
 				i = end + 2;
 				continue;
 			}
@@ -1093,8 +1426,7 @@ pmd_parseinline(text: string): list of ref DocNode
 			end := pmd_findclose(text, i+3, "***");
 			if(end > 0){
 				inner := text[i+3:end];
-				# Render as bold (italic+bold combined, no separate font needed)
-				nodes = ref DocNode(Nbold, nil, ref DocNode(Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				nodes = ref DocNode(Nbold, nil, ref DocNode(Nitalic, nil, pmd_parseinline(inner), 0) :: nil, 0) :: nodes;
 				i = end + 3;
 				continue;
 			}
@@ -1114,7 +1446,7 @@ pmd_parseinline(text: string): list of ref DocNode
 			end := pmd_findclose(text, i+2, delim);
 			if(end > 0){
 				inner := text[i+2:end];
-				nodes = ref DocNode(Nbold, nil, ref DocNode(Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				nodes = ref DocNode(Nbold, nil, pmd_parseinline(inner), 0) :: nodes;
 				i = end + 2;
 				continue;
 			}
@@ -1134,7 +1466,7 @@ pmd_parseinline(text: string): list of ref DocNode
 			end := pmd_findclose(text, i+1, delim);
 			if(end > 0){
 				inner := text[i+1:end];
-				nodes = ref DocNode(Nitalic, nil, ref DocNode(Ntext, inner, nil, 0) :: nil, 0) :: nodes;
+				nodes = ref DocNode(Nitalic, nil, pmd_parseinline(inner), 0) :: nodes;
 				i = end + 1;
 				continue;
 			}
@@ -1161,6 +1493,23 @@ pmd_parseinline(text: string): list of ref DocNode
 			continue;
 		}
 
+		# Autolink: <https://...>, <mailto:...>
+		if(c == '<'){
+			end := pmd_findclose(text, i+1, ">");
+			if(end > 0){
+				u := text[i+1:end];
+				if(pmd_isurl(u)){
+					if(len plain > 0){
+						nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
+						plain = "";
+					}
+					nodes = ref DocNode(Nlink, nil, ref DocNode(Ntext, u, nil, 0) :: nil, 0) :: nodes;
+					i = end + 1;
+					continue;
+				}
+			}
+		}
+
 		# Link: [text](url)
 		if(c == '['){
 			if(len plain > 0){
@@ -1185,6 +1534,25 @@ pmd_parseinline(text: string): list of ref DocNode
 	return pmd_reverselist(nodes);
 }
 
+pmd_isurl(u: string): int
+{
+	for(i := 0; i < len u; i++)
+		if(u[i] == ' ' || u[i] == '\t')
+			return 0;
+	for(l := list of {"http://", "https://", "mailto:"}; l != nil; l = tl l)
+		if(len u > len hd l && u[0:len hd l] == hd l)
+			return 1;
+	return 0;
+}
+
+pmd_ispunct(c: int): int
+{
+	for(i := 0; i < len "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"; i++)
+		if(c == "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"[i])
+			return 1;
+	return 0;
+}
+
 pmd_findclose(text: string, start: int, delim: string): int
 {
 	dlen := len delim;
@@ -1197,9 +1565,22 @@ pmd_findclose(text: string, start: int, delim: string): int
 
 pmd_parselink(text: string, start: int): (ref DocNode, int)
 {
+	# the text may hold brackets of its own: [![badge](img)](url)
 	i := start + 1;
-	while(i < len text && text[i] != ']')
-		i++;
+	depth := 0;
+	for(; i < len text; i++){
+		if(text[i] == '\\' && i+1 < len text){
+			i++;
+			continue;
+		}
+		if(text[i] == '[')
+			depth++;
+		else if(text[i] == ']'){
+			if(depth == 0)
+				break;
+			depth--;
+		}
+	}
 	if(i >= len text)
 		return (nil, start + 1);
 
@@ -1217,8 +1598,7 @@ pmd_parselink(text: string, start: int): (ref DocNode, int)
 		return (nil, start + 1);
 	j++;
 
-	children := ref DocNode(Ntext, linktext, nil, 0) :: nil;
-	return (ref DocNode(Nlink, nil, children, 0), j);
+	return (ref DocNode(Nlink, nil, pmd_parseinline(linktext), 0), j);
 }
 
 # Returns 1 if line looks like a table row (contains '|')
@@ -1254,13 +1634,28 @@ pmd_parsetable(lines: array of string, start, nlines: int): (ref DocNode, int)
 	tabletext := "";
 	ncols := 0;
 	first := 1;
+	aligns := "";
 
 	while(i < nlines){
 		line := lines[i];
 		if(!pmd_istablerow(line))
 			break;
-		# Skip separator row
+		# The separator row: each column's alignment, :-- (left),
+		# :-: (centre) or --: (right)
 		if(pmd_istablesep(line)){
+			if(aligns == nil){
+				cs := pmd_splittablerow(line);
+				for(c := 0; c < len cs; c++){
+					t := pmd_trim(cs[c]);
+					a := 'l';
+					if(len t > 0 && t[len t - 1] == ':'){
+						a = 'r';
+						if(t[0] == ':')
+							a = 'c';
+					}
+					aligns[len aligns] = a;
+				}
+			}
 			i++;
 			continue;
 		}
@@ -1279,7 +1674,10 @@ pmd_parsetable(lines: array of string, start, nlines: int): (ref DocNode, int)
 	}
 	if(ncols == 0)
 		ncols = 1;
-	return (ref DocNode(Ntable, tabletext, nil, ncols), i);
+	al: list of ref DocNode;
+	if(aligns != nil)
+		al = ref DocNode(Ntext, aligns, nil, 0) :: nil;
+	return (ref DocNode(Ntable, tabletext, al, ncols), i);
 }
 
 pmd_splitlines(text: string): array of string
@@ -1348,6 +1746,15 @@ pmd_stripws(s: string): string
 	if(i >= len s)
 		return "";
 	return s[i:];
+}
+
+pmd_trim(s: string): string
+{
+	s = pmd_stripws(s);
+	n := len s;
+	while(n > 0 && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\r'))
+		n--;
+	return s[0:n];
 }
 
 pmd_reverselist(l: list of ref DocNode): list of ref DocNode

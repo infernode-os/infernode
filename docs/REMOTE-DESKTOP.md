@@ -30,7 +30,7 @@ every machine and person allowed in.
 | [1. The signer and the certificates](#1-the-signer-and-the-certificates) | 5 min, once | viewer |
 | [2. Turn on the node](#2-turn-on-the-node) | 5 min, once | node |
 | [3. Connect: two ways](#3-connect-two-ways) | 1 min, each time | viewer |
-| [4. End a session cleanly](#4-end-a-session-cleanly) | | viewer |
+| [4. End a session](#4-end-a-session) | | viewer |
 | [5. Adding another person](#5-adding-another-person) | | viewer |
 | [6. How it is protected](#6-how-it-is-protected) | | |
 | [7. When it does not work](#7-when-it-does-not-work) | | |
@@ -67,7 +67,9 @@ Put together: **to show a program's screen somewhere else, give it a
 `/dev` whose drawing files are somewhere else.** That is all `cpu` does:
 
 - `cpu` connects to the node, both sides prove who they are, and it
-  sends the node **your whole namespace** — your files, and your `/dev`.
+  sends the node a small namespace containing **your `/dev` only**.
+  Additional files are delegated only when you explicitly name an export
+  root with `-e`.
 - On the node, a small program, `rstyxd`, puts your namespace at
   `/n/client` and lays **your** `/dev` over the node's own `/dev`.
 - It then runs the command you gave. That command runs on the node's
@@ -86,10 +88,8 @@ The two ways in step 3 differ only in *what* runs on the node:
   yours.
 
 One consequence to remember: inside a session, anything under `/dev` on
-the node is **your** machine's, not the node's. To see where a shell is
-really running, look at something outside `/dev` — `ps` lists the
-processes of the machine it runs on, and on a Raspberry Pi `ls /n/dos`
-lists its SD card.
+the node is **your** machine's, not the node's. The node's writable boot
+mount is deliberately absent, and direct kernel-device attachment is disabled.
 
 ---
 
@@ -249,6 +249,14 @@ the handshake, and everything is slower than local: every change on
 screen crosses the network, several times more slowly over Wi-Fi than
 over a cable.
 
+Current `cpu` waits for `rstyxd` to acknowledge the protected request before
+it exports any local files.  A rejected cipher choice or request is therefore
+a command failure, not an ambiguous successful command with no output.  New
+servers still accept old clients.  When connecting a new client to an old
+server, `cpu -1` selects the original unacknowledged protocol explicitly; do
+not use it as an automatic fallback because its status cannot report early
+server rejection reliably.
+
 ### 3a. The whole desktop, in its own window
 
 Your own desktop is busy drawing itself, so the node's desktop gets **a
@@ -302,9 +310,10 @@ A shell window appears inside it. **In that shell window**, one line at
 a time:
 
 ```
-mkdir /tmp/wmx
-mount {wmexport} /tmp/wmx
-cpu tcp!192.168.1.50 wmimport -w /n/client/tmp/wmx wm/sh &
+mkdir -p /tmp/cpuexport/dev /tmp/cpuexport/wmx
+bind /dev /tmp/cpuexport/dev
+mount {wmexport} /tmp/cpuexport/wmx
+cpu -e /tmp/cpuexport tcp!192.168.1.50 wmimport -w /n/client/wmx wm/sh &
 ```
 
 A new window opens among your own, and the shell in it runs on the
@@ -313,17 +322,18 @@ any program in place of `wm/sh`: `wm/clock`, `acme`, `wm/tetris`.
 
 What each line does:
 
-1. **`mkdir /tmp/wmx`** makes an empty directory to hang something on.
-2. **`mount {wmexport} /tmp/wmx`** runs the stock program `wmexport`,
+1. **`mkdir …; bind /dev …`** builds the exact caller-side tree this
+   session will receive: the display devices plus one window-manager mount.
+2. **`mount {wmexport} /tmp/cpuexport/wmx`** runs the stock program `wmexport`,
    which **serves your window manager as files**: opening
-   `/tmp/wmx/clone` creates a new window in it, and each window's
+   `/tmp/cpuexport/wmx/clone` creates a new window in it, and each window's
    keyboard, mouse and window-control files appear beside it. The
    braces mean "the files served by this command", and `mount` puts
-   them at `/tmp/wmx`. It must be typed in a shell *inside* the window
+   them at `/tmp/cpuexport/wmx`. It must be typed in a shell *inside* the window
    manager — that is where it learns which window manager to serve.
-3. **`cpu … wmimport -w /n/client/tmp/wmx wm/sh &`** runs `wmimport` on
-   the node. Your namespace, including `/tmp/wmx`, arrives there under
-   `/n/client`, so `/n/client/tmp/wmx` is your window manager, seen from
+3. **`cpu -e /tmp/cpuexport … wmimport -w /n/client/wmx wm/sh &`** runs
+   `wmimport` on the node. Only the tree you named arrives under
+   `/n/client`, so `/n/client/wmx` is your window manager, seen from
    the node. `wmimport` asks it for a window through those files and
    runs `wm/sh` in it. The program runs on the node; it draws into a
    window of yours, on your screen (your `/dev/draw`, laid over the
@@ -337,23 +347,28 @@ inside the Lucifer desktop is untested.
 
 ---
 
-## 4. End a session cleanly
+## 4. End a session
 
-**3a:** quit the programs you started, then close the node's window
-manager (its menu, or `exit` in its shell), then close the emulator.
+A session ends when the command you gave `cpu` ends, and everything it
+started on the node ends with it:
 
-**3b:** quit each remote program in its window (for a shell, `exit`)
-before closing your window manager. Closing it, or the emulator, takes
-their windows away, but the programs may keep running on the node, as
-below.
+**3a:** close the node's window manager (its menu, or `exit` in its
+shell). `cpu` returns, and every program you started from that desktop
+stops on the node.
 
-Closing the window alone is not enough today: programs you started in
-the session keep running on the node, as you, after you disconnect, and
-nothing stops them
-([#732](https://github.com/infernode-os/infernode/issues/732)). A
-forgotten demo will quietly use the node's CPU for hours and make
-everything slow, your next session included. Restarting the node clears
-them.
+**3b:** quit the remote program in its window (for a shell, `exit`).
+
+If your side simply goes away instead -- you close the emulator, the
+laptop sleeps, the network drops -- the node notices within a few
+seconds and ends the session the same way, so nothing is left running
+there for nobody.
+
+**Older releases** did neither
+([#732](https://github.com/infernode-os/infernode/issues/732)): `cpu`
+did not return after a one-shot command, and programs from a session
+kept running on the node, as you, after you disconnected, quietly using
+its CPU until it was restarted. On a node running one of those, quit
+what you started before you close anything.
 
 ---
 
@@ -391,9 +406,20 @@ only other way is a new signer and new certificates for everyone.
   ends, which also raises the exchange to ML-KEM-1024) exist, but have
   not yet been verified on a bare-metal node.
 - **A desktop's powers, no more** (bare-metal node). A session can run
-  programs and use the node's files, but has no raw card, no GPIO pins
-  and no `/dev/sysctl`: it cannot rewrite the card or restart the
-  machine. That is what the consoles are for.
+  programs and use ordinary node files, but the server's `/usr` and `/n/dos`
+  mounts are absent and fresh
+  device attachment is disabled after the caller's `/dev` is installed.
+  It therefore has no raw card, GPIO pins or kernel sysctl. The loaded
+  listener key has no backing path in the session, and the server's
+  `/mnt/factotum` and `/tmp/factotum` credential oracles are masked.
+- **The viewer delegates devices, not credentials.** `cpu` exports only
+  `/dev` by default. `-e` is an explicit capability grant; do not use
+  `-e /` with a node you would not trust with your keyring and host mounts.
+- **User identities are the process boundary.** The node retains `/prog`
+  because shells need it to wait for children. Its ordinary owner permissions
+  therefore apply: two certificates with the same Inferno user name are not
+  isolated from each other's processes. Give independent people distinct
+  certificate names, as in section 5.
 - **One host cannot lock others out** by opening many connections: each
   address may hold at most four handshakes in progress (`listen -P`).
 
@@ -410,7 +436,7 @@ only other way is a new signer and new certificates for everyone.
 | The window stays black, and **the node's own monitor** shows a desktop | The viewer's `/dev` had no display in it, so the node's own display showed through. See section 8, `bind -a '#i' /dev`. |
 | A grey window that fills in slowly | Normal over Wi-Fi. If it is very slow, something left on the node is using its CPU (section 4). |
 | `wmexport: no window manager context` (3b) | `mount {wmexport}` was typed in a shell that is not inside a window manager (for example Terminal's `;` prompt). Type it in the shell window inside `wm/wm`. |
-| `wmimport: no wm at /n/client/tmp/wmx` (3b) | The `mount {wmexport} /tmp/wmx` step was skipped or failed, or the path in the `cpu` line differs from the one mounted. |
+| `wmimport: no wm at /n/client/wmx` (3b) | The `mount {wmexport} /tmp/cpuexport/wmx` step was skipped or failed, or `cpu -e /tmp/cpuexport` was omitted. |
 | acme says `can't mount /mnt/acme` | Your certificate's name differs from your user name on the viewer (step 1). |
 | Starting the viewer closes your Lucifer desktop | Section 8. |
 | `boot: /n/dos/cpulisten is set but … missing; NOT starting` | The node's certificate is not at `usr/inferno/keyring/default` on the card. |

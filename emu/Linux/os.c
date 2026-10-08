@@ -69,7 +69,7 @@ trapILL(int signo, siginfo_t *si, void *a)
 static int
 isnilref(siginfo_t *si)
 {
-	return si != 0 && (si->si_addr == (void*)~(uintptr_t)0 || (uintptr_t)si->si_addr < 512);
+	return si != 0 && isnilfault((uintptr)si->si_addr);
 }
 
 /*
@@ -166,27 +166,39 @@ callers(uintptr sp, uintptr fp)
 }
 #endif
 
+/* the faulting PC from a signal's ucontext, or nil where we cannot say */
+static void*
+faultpc(void *a)
+{
+	ucontext_t *uc;
+
+	if(a == nil)
+		return nil;
+	uc = (ucontext_t*)a;
+#if defined(__x86_64__)
+	return (void*)uc->uc_mcontext.gregs[Gregrip];
+#elif defined(__i386__)
+	return (void*)uc->uc_mcontext.gregs[Gregeip];
+#elif defined(__aarch64__)
+	return (void*)uc->uc_mcontext.pc;
+#elif defined(__riscv)
+	return (void*)uc->uc_mcontext.__gregs[0];	/* REG_PC */
+#else
+	USED(uc);
+	return nil;
+#endif
+}
+
 static void
 faultwhere(void *a)
 {
 	ucontext_t *uc;
 	void *pc;
 
-	if(a == nil)
+	pc = faultpc(a);
+	if(pc == nil)
 		return;
 	uc = (ucontext_t*)a;
-#if defined(__x86_64__)
-	pc = (void*)uc->uc_mcontext.gregs[Gregrip];
-#elif defined(__i386__)
-	pc = (void*)uc->uc_mcontext.gregs[Gregeip];
-#elif defined(__aarch64__)
-	pc = (void*)uc->uc_mcontext.pc;
-#elif defined(__riscv)
-	pc = (void*)uc->uc_mcontext.__gregs[0];	/* REG_PC */
-#else
-	USED(uc);
-	return;
-#endif
 	fprint(2, "  PC=%p\n", pc);
 	whereis("PC", pc);
 #if defined(__x86_64__)
@@ -201,9 +213,10 @@ faultwhere(void *a)
 static void
 trapmemref(int signo, siginfo_t *si, void *a)
 {
-	if(isnilref(si))
+	if(isnilref(si)){
+		jitfault((uintptr)faultpc(a));
 		disfault(nil, exNilref);
-	else if(signo == SIGBUS){
+	}else if(signo == SIGBUS){
 		fprint(2, "BUS: addr=%p code=%d\n", si->si_addr, si->si_code);
 		faultwhere(a);
 		sysfault("bad address addr=", si->si_addr);	/* eg, misaligned */
@@ -220,7 +233,14 @@ trapFPE(int signo, siginfo_t *si, void *a)
 	char buf[64];
 
 	USED(signo);
-	USED(a);
+	/*
+	 * x86's integer divide traps on a zero divisor.  In compiled code
+	 * that is the program's "zero divide", as the interpreter raises
+	 * it, at the divide (see jitfault); it was "sys: fp: ..." with a
+	 * stale R.PC, so no handler for "zero divide" matched.
+	 */
+	if(si != nil && si->si_code == FPE_INTDIV && jitfault((uintptr)faultpc(a)))
+		disfault(nil, exZdiv);
 	snprint(buf, sizeof(buf), "sys: fp: exception status=%.4lux pc=%#p", getfsr(), si->si_addr);
 	disfault(nil, buf);
 }
@@ -231,6 +251,9 @@ trapUSR1(int signo)
 	int intwait;
 
 	USED(signo);
+
+	if(up == nil)		/* pexit has already forgotten the proc */
+		return;
 
 	intwait = up->intwait;
 	up->intwait = 0;	/* clear it to let proc continue in osleave */

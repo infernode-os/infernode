@@ -1,0 +1,15 @@
+#!/dis/sh.dis
+# mounthost host — mount host's file system at /n/host, over ssh
+#
+# The host runs u9fs (Plan 9's 9P server for Unix) on ssh's standard
+# input and output: no listener, ssh's own authentication, and u9fs
+# runs as the ssh user. tools/xen runs it for each host in $XEN_HOSTS
+# before Xenith starts, so files plumbed from that host (tools/rplumb)
+# open, and save, there; see docs/XEN.md.
+load std
+if {~ $#* 0} {
+	echo 'usage: mounthost host' >[1=2]
+	raise 'fail:usage'
+}
+h=$1
+mount -A {os ssh -o 'BatchMode=yes' -o 'ConnectTimeout=4' -o 'ClearAllForwardings=yes' $h 'exec bin/u9fs -a none -u $USER -l /dev/null' >[1=0]} /n/$h

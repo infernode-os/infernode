@@ -5,7 +5,7 @@ c = socket.create_connection(('192.168.1.104', 17010), timeout=15); c.settimeout
 time.sleep(0.5); c.recv(4096); c.sendall((tok + '\n').encode()); time.sleep(0.5)
 try: c.recv(4096)
 except socket.timeout: pass
-c.sendall(b"load std; listen -A 'bt!*!spp' {cat >> /tmp/rfin}\n"); time.sleep(3)
+c.sendall(b"load std; listen -A 'bt!*!spp' {cat >> /tmp/rfin} & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl\n"); time.sleep(3)
 r = subprocess.run("timeout 10 rctest -i hci0 -c -P 1 %s" % BD, shell=True, capture_output=True, text=True)
 out = r.stdout + r.stderr
 lines = out.splitlines()

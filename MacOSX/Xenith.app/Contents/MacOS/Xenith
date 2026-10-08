@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# Xenith.app launcher: Xenith alone over the whole window, as tools/xen
+# runs it, from the same runtime tree as InferNode.app.  The bundle root
+# (Contents/Resources/) is read-only; the profile sets up writable
+# overlays from ~/.infernode, which the two apps share.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BUNDLE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+RESOURCES="$BUNDLE_DIR/Resources"
+
+# Refuse to run from a DMG or App Translocation sandbox.
+case "$SCRIPT_DIR" in
+    /Volumes/*|*/AppTranslocation/*)
+        osascript -e 'display dialog "Xenith cannot run from a disk image. Please copy Xenith.app to your hard drive first (e.g. Applications, Desktop, or any folder)." buttons {"OK"} default button "OK" with title "Xenith" with icon caution' 2>/dev/null
+        exit 0
+        ;;
+esac
+
+EMU="$SCRIPT_DIR/emu"
+
+# The display's own pixels on a Retina screen (see tools/xen).
+INFERNODE_HIDPI=${INFERNODE_HIDPI:-1}
+export INFERNODE_HIDPI
+
+# Start in the home directory, through /n/local; the profile (-l) sets up
+# the overlays, then lib/xen/boot.sh starts the plumber, the model and
+# Xenith.  Leaving Xenith halts the emu, and so the app.
+# Quoted for the Inferno shell: '' around it, any ' in it doubled.
+home=$(printf '%s' "$HOME" | sed "s/'/''/g")
+exec "$EMU" -c1 "-pheap=512m" "-pmain=512m" "-pimage=512m" "-g${XEN_GEOM:-1400x900}" "-r$RESOURCES" \
+    /dis/sh.dis -l -c "cd '/n/local$home' >[2] /dev/null; run /lib/xen/boot.sh -t xenith"

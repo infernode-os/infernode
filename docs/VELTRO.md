@@ -15,14 +15,42 @@ Veltro is a Limbo-native agent harness:
 
 Three things the agent sees as files: **the LLM, the tools, the host filesystem**. There is no SDK, no JSON-RPC, no HTTP — everything is read/write on a 9P tree.
 
-## Entry points
+## The harness, and its clients
 
-| Command   | Form                          | Use for                                                               |
-|-----------|-------------------------------|-----------------------------------------------------------------------|
-| `veltro`  | one-shot, `veltro "do X"`     | scripted tasks, batch runs, resumable sessions                        |
-| `repl`    | interactive                   | iterative work; opens a Xenith window if available, terminal otherwise|
-| `spawn`   | inside a tool call            | parallel subagents launched by a parent agent                         |
-| `lucibridge` | embedded in Lucia          | the agent loop driving the [Lucia](LUCIA.md) UI                       |
+The agent loop is one program, `veltrosrv` (see `man 4 veltrosrv`), which
+serves it as files at `/mnt/veltro`. Everything that puts the agent in
+front of a person is a client of those files:
+
+| Client       | Where                        | Use for                                                               |
+|--------------|------------------------------|-----------------------------------------------------------------------|
+| `veltro`     | the command line             | scripted tasks, batch runs, resumable sessions                        |
+| `Agent`      | a Xenith window              | iterative work on a project, from the editor                          |
+| `lucibridge` | Lucia                        | the agent driving the [Lucia](LUCIA.md) UI                            |
+| `sh`         | anywhere                     | `echo` a message to `input`, `cat` the reply from `text`              |
+| `spawn`      | inside a tool call           | parallel subagents launched by a parent agent                         |
+
+A session is a directory: `input` takes a message and starts a turn;
+`text` is the conversation and follows the agent's reply as it is
+generated, ending when the turn is over; `log` is the trajectory;
+`status` says what the agent is doing; `approve` is where it asks before
+a destructive call; `ctl` takes `cancel`, `reset`, `persona`, `model` and
+the rest.
+
+```sh
+; veltrosrv -p /n/local/Users/me/proj
+; id=`{cat /mnt/veltro/new}
+; echo 'what does nsconstruct.b do?' > /mnt/veltro/$id/input
+; cat /mnt/veltro/$id/text
+```
+
+The server restricts its own namespace to the grants it was started
+with before it serves, and the mount exists only in the client's
+namespace, so the agent cannot reach its own `ctl` or `approve`.
+
+The tool calls of one model response run concurrently when they are
+all read-only (reads, searches, `spawn`), and one at a time, in order,
+when any of them mutates, so a write always precedes the read or
+compile that follows it.
 
 ### `veltro` — one-shot
 
@@ -38,6 +66,9 @@ Flags:
 
 - `-v` — verbose tool/LLM logging.
 - `-t` — enable extended thinking (8000-token budget).
+- `-y` — answer the agent's approval requests yes; otherwise a destructive
+  call (an `rm -r` outside `/tmp`, a `bind`, a write under `/dis`) asks on
+  the terminal.
 - `-r name` — resume a persisted session (`last` = most recent).
 - `-p paths` — comma-separated host paths to expose under `/n/local/`.
 - `-a type` — run as a specialist persona from `lib/veltro/agents/<type>.txt`
@@ -46,20 +77,16 @@ Flags:
 
 Sessions persist to `/usr/inferno/veltro/sessions/`. The hard step cap is 200 (the LLM's `end_turn` is the primary stop condition).
 
-### `repl` — interactive
+### `Agent` — in Xenith
 
-```sh
-; repl
-; repl -v
-; repl -n 80      # raise per-turn step cap (default 50, max 100)
-```
-
-Two modes, picked automatically:
-
-- **Xenith mode** (when `/chan` is available) — a window with **Send · Voice · Clear · Reset · Delete** tag buttons. Voice records via `speech9p` and transcribes with the `hear` tool.
-- **Terminal mode** — line-oriented stdin/stdout fallback.
-
-Both establish a persistent LLM session for the duration of the REPL invocation. Each turn injects the current namespace into the system prompt so the agent always knows what tools and paths it actually has.
+Middle-click `Agent` in a tag (or run `Agent -p /n/local/Users/me/proj`).
+The window's body is the conversation: type at its end and middle-click
+**Send**; the reply arrives as it is generated. **Stop** cancels the
+turn, **Reset** starts a new model session, **Allow** and **Deny** answer
+a request for approval shown in the body, **Delete** ends the session.
+With no `-p`, the agent is granted the directory Xenith was started in.
+`Agent` starts `tools9p` and `veltrosrv` itself when they are not running;
+it needs `llmsrv` at `/mnt/llm`.
 
 ### `spawn` (subagents)
 
@@ -193,7 +220,7 @@ System prompts and per-type prompts live in `lib/veltro/`:
 
 | File                          | Role |
 |-------------------------------|------|
-| `lib/veltro/system.txt`       | Default system prompt for `veltro`/`repl`. |
+| `lib/veltro/system.txt`       | Default system prompt for `veltro` and `lucibridge`. |
 | `lib/veltro/meta.txt`         | "Chief of Staff" prompt used by Lucia: never executes, always delegates via `task`. |
 | `lib/veltro/agents/default.txt`  | Subagent baseline. Pre-loaded tools, machine-parseable output, terminate with `DONE`. |
 | `lib/veltro/agents/explore.txt`  | Read-only codebase analysis. No speculation; report file paths and dependencies. |
@@ -233,8 +260,6 @@ Two distinct stores:
 - **`memory` tool** — agent-controlled key/value store. `memory save K V`, `memory load K`, `memory list`, `memory clear`. Persists to `/tmp/veltro/memory/{agentid}/`.
 - **Sessions** — full conversation transcripts for `veltro`, written to `/usr/inferno/veltro/sessions/`. Resume with `veltro -r name` or `veltro -r last`.
 
-`repl` does **not** persist conversations across REPL restarts; use `veltro` for that.
-
 ## Common workflows
 
 ### One-shot scripted task
@@ -246,10 +271,9 @@ Two distinct stores:
 ### Iterative exploration
 
 ```sh
-; repl
-> walk me through how spawn enforces capability attenuation
-> show me where MREPL is used in nsconstruct.b
-> are there tests for this?
+; veltro "walk me through how spawn enforces capability attenuation"
+; veltro -r last "show me where MREPL is used in nsconstruct.b"
+; veltro -r last "are there tests for this?"
 ```
 
 ### Parallel delegation
@@ -282,9 +306,19 @@ answer, and ends with a `SOURCES` list of the `file:line`/URLs it actually read.
 The verify persona *runs* the check, probes edge cases, and ends with a single
 `VERDICT: PASS` / `FAIL` / `PARTIAL` backed by the captured output.
 
+### From the shell
+
+```sh
+; veltrosrv -p $home/proj
+; id=`{cat /mnt/veltro/new}
+; echo 'list the TODOs in main.b' > /mnt/veltro/$id/input
+; cat /mnt/veltro/$id/text          # returns when the turn is over
+; cat /mnt/veltro/$id/log           # what it did
+```
+
 ### Embedded in Lucia
 
-The Lucia launch scripts wire everything up: `tools9p` with the default budget, `lucibridge` as the agent loop, `speech9p` for voice. See [LUCIA.md](LUCIA.md).
+The Lucia launch scripts wire everything up: `tools9p` with the default budget, `lucibridge` as the agent's Lucia client (it starts its own `veltrosrv`), `speech9p` for voice. See [LUCIA.md](LUCIA.md).
 
 ## Hardening checklist
 

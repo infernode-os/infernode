@@ -4,11 +4,18 @@ rcmd \- remote command execution
 .SH SYNOPSIS
 .B rcmd
 [
-.B -C
+.B -1
+] [
+.B -A
+] [
+.B -a
 .I cryptoalg
 ] [
 .B -e
 .I exportpath
+] [
+.B -f
+.I keyfile
 ]
 .I host
 [
@@ -33,6 +40,17 @@ must have enabled the
 service (typically started via
 .IR svc (8)).
 .PP
+The default version 2 request waits for an acknowledgment from
+.IR rstyxd (8)
+before exporting caller files.  A server that rejects the transport or command
+therefore gives the command a failing status instead of an ambiguous empty
+success.  The
+.B -1
+option selects the original unacknowledged protocol for compatibility with an
+old server; its status cannot report early server rejection reliably.
+The acknowledgment covers request acceptance, not the eventual exit status of
+the remote program.
+.PP
 For authentication,
 .I rcmd
 will use the certificate in the file
@@ -44,23 +62,26 @@ if it exists, and otherwise it will use the certificate in
 .BI /usr/ username /keyring/default .
 .PP
 The
-.B -C
+.B -a
 option sets the algorithm
 .I cryptoalg
 to be used following authentication for digesting or encryption.
 See 
 .IR ssl (3)
 for the supported algorithms.
-The default is
-.BR none :
-.IR ssl (3)
-is not used after authentication.
+The default is AES-256-CBC with SHA-256, providing confidentiality and
+integrity after authentication.  The
+.B -A
+option disables authentication and record protection explicitly.
 .PP
 The
 .B -e
-option sets the path to be exported as root from the local machine (defaults to
-.B /
-if not specified).
+option sets the path to be exported as root from the local machine.  By
+default, a private synthetic root containing only the caller's
+.B /dev
+is exported.  Use
+.B -e /
+only when the remote command deliberately needs the caller's full namespace.
 .SH SOURCE
 .B /appl/cmd/rcmd.b
 .SH "SEE ALSO"

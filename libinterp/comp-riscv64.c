@@ -27,9 +27,11 @@
  *   then finds the right handler for it. Every punt stores R.PC too.
  *
  *   Bounds. Array indexing is always checked, as the interpreter
- *   checks it: this JIT does not consult bflag, which nothing in this
- *   tree sets (emu -b is documented as on by default, but bflag starts
- *   at zero), so honouring it would compile every index unchecked.
+ *   checks it: this JIT does not consult bflag. (When it was written
+ *   nothing in this tree set bflag, so honouring it would have
+ *   compiled every index unchecked; bflag now starts at one and emu -B
+ *   clears it, which the amd64 and arm64 JITs honour and this one
+ *   does not.)
  *
  *   Instruction-cache coherence. A hosted build flushes with
  *   segflush(), which asks the kernel to synchronise every hart

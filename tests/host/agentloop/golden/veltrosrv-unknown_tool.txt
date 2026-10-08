@@ -1,0 +1,39 @@
+# veltrosrv unknown_tool
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_unknown_tool_0_0 nosuchtool {"args": "anything"}
+tool-result call_unknown_tool_0_0:
+  | error: tool not found: nosuchtool
+
+== output
+  | == user
+  | SCENARIO:unknown_tool go
+  | == veltro
+  | That tool does not exist.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 24 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 74 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_unknown_tool_0_0:nosuchtool:{"args"\: "anything"}
+  | 
+  | tool nosuchtool: args {"args": "anything"}
+  | tool nosuchtool: calling with 20 bytes
+  | tool nosuchtool: done, error: tool not found: nosuchtool
+  | step 2: writing 73 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 25 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 40 bytes
+  | llm: STOP:end_turn
+  | That tool does not exist.
+  | 
+  | turn done stop=end_turn steps=2

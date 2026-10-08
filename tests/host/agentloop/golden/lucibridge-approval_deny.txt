@@ -1,0 +1,22 @@
+# lucibridge approval_deny
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_approval_deny_0_0 write {"args": "\/dis\/agentloop-probe.txt probe"}
+tool-result call_approval_deny_0_0:
+  | error: /dis/agentloop-probe.txt is not covered by an rw path grant
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:approval_deny go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Write was handled.
+  | 

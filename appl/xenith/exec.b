@@ -22,6 +22,7 @@ asyncio: Asyncio;
 
 Dir, OREAD, OWRITE : import Sys;
 formatmod : Format;
+framem : Framem;
 EVENTSIZE, QWaddr, QWdata, QWevent, Astring, CHAPPEND : import dat;
 Lock, Reffont, Ref, seltext, seq, row : import dat;
 warning, error, skipbl, findbl, stralloc, strfree, strncmp, exec : import utils;
@@ -52,6 +53,7 @@ init(mods : ref Dat->Mods)
 	scrl = mods.scroll;
 	filem = mods.filem;
 	rowm = mods.rowm;
+	framem = mods.framem;
 	windowm = mods.windowm;
 	columnm = mods.columnm;
 	fsys = mods.fsys;
@@ -69,7 +71,7 @@ Exectab : adt {
 	flag2 : int;
 };
 
-F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX : con iota;
+F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME : con iota;
 
 exectab := array[] of {
 	Exectab ( "Alphabet",	F_ALPHABET,	FALSE,	XXX,		XXX		),
@@ -102,6 +104,7 @@ exectab := array[] of {
 	Exectab ( "Snarf",		F_CUT,		FALSE,	TRUE,	FALSE	),
 	Exectab ( "Sort",		F_SORT,		FALSE,	XXX,		XXX		),
 	Exectab ( "Tab",		F_TAB,		FALSE,	XXX,		XXX		),
+	Exectab ( "Theme",		F_THEME,		FALSE,	XXX,		XXX		),
 	Exectab ( "Undo",		F_UNDO,		FALSE,	TRUE,	XXX		),
 	Exectab ( "Zerox",		F_ZEROX,		FALSE,	XXX,		XXX		),
 	Exectab ( nil, 			0,			0,		0,		0		),
@@ -118,6 +121,7 @@ runfun(fun : int, et, t, argt : ref Text, flag1, flag2 : int, arg : string, narg
 		F_EDIT		=> edit(et, argt, arg, narg);
 		F_EXITX		=> exitx();
 		F_FONTX		=> fontx(et, t, argt, arg, narg);
+		F_THEME		=> themex(argt, arg, narg);
 		F_GET 		=> get(et, t, argt, flag1, arg, narg);
 		F_ID 		=> id(et);
 		F_INCL 		=> incl(et, argt, arg, narg);
@@ -713,47 +717,20 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 	}
 	namer = name;
 
-	# If in render mode, temporarily restore raw text for save
-	wasrendered := w.rendermode;
-	saveddata : array of byte;
-	if(wasrendered && w.contentdata != nil){
-		saveddata = w.contentdata;
-		rawstr := string w.contentdata;
-		w.nomark = 1;
-		w.body.delete(0, w.body.file.buf.nc, TRUE);
-		w.body.insert(0, rawstr, len rawstr, TRUE, 0);
-		w.nomark = 0;
-		rawstr = nil;
+	# A formatted view (Render through a text formatter) holds the
+	# formatted text in the buffer and the raw text aside. Save the raw
+	# text, and stay on it: a large file is written in the background
+	# from the buffer itself (putfile), so putting the formatted text
+	# back after starting the save wrote it to the file.
+	if(w.rendermode && !w.docview){
+		if(w.contentdata == nil){
+			warning(nil, sprint("%s not written: the window shows formatted text\n", name));
+			return;
+		}
+		renderoff(w);
 	}
 
 	putfile(f, 0, f.buf.nc, namer);
-
-	# Restore formatted view if was rendered
-	if(wasrendered && saveddata != nil){
-		w.contentdata = saveddata;
-		if(formatmod != nil){
-			(formatter, nil) := formatmod->find(w.body.file.name);
-			if(formatter != nil){
-				rawstr := string saveddata;
-				charwidth := 80;
-				fw := graph->strwidth(w.body.frame.font, "0");
-				if(fw > 0){
-					dx := w.body.frame.r.max.x - w.body.frame.r.min.x;
-					if(dx > 0)
-						charwidth = dx / fw;
-				}
-				if(charwidth < 20)
-					charwidth = 20;
-				formatted := formatter->format(rawstr, charwidth);
-				w.nomark = 1;
-				w.body.delete(0, w.body.file.buf.nc, TRUE);
-				w.body.insert(0, formatted, len formatted, TRUE, 0);
-				w.body.file.mod = FALSE;
-				w.nomark = 0;
-				rawstr = nil;
-			}
-		}
-	}
 
 	name = nil;
 }
@@ -991,6 +968,17 @@ renderx(et : ref Text, nil : ref Text)
 
 renderon(w : ref Window)
 {
+	# Markdown is set as a document over its text (Window.docrender)
+	if(ismarkdown(w.body.file.name)){
+		if((err := w.docrender()) != nil){
+			warning(nil, sprint("Render: %s\n", err));
+			return;
+		}
+		w.rendermode = 1;
+		w.settag();
+		return;
+	}
+
 	# Load format module on first use
 	if(formatmod == nil){
 		formatmod = load Format Format->PATH;
@@ -1055,6 +1043,10 @@ renderon(w : ref Window)
 
 renderoff(w : ref Window)
 {
+	if(w.docview){
+		w.docoff();
+		return;
+	}
 	if(w.contentdata == nil)
 		return;
 
@@ -1076,6 +1068,22 @@ renderoff(w : ref Window)
 	w.body.show(0, 0);
 	scrl->scrdraw(w.body);
 	w.settag();
+}
+
+ismarkdown(name : string) : int
+{
+	for(i := len name; i > 0 && name[i-1] != '.' && name[i-1] != '/'; i--)
+		;
+	if(i == 0 || name[i-1] != '.')
+		return 0;
+	ext := "";
+	for(; i < len name; i++){
+		c := name[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		ext[len ext] = c;
+	}
+	return ext == "md" || ext == "markdown";
 }
 
 id(et : ref Text)
@@ -1240,6 +1248,7 @@ fontx(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 		t.reffont.close();
 		t.reffont = newfont;
 		t.frame.font = newfont.f;
+		framem->frinittick(t.frame);	# the tick is the font's height
 		if(t.w.isdir){
 			t.all.min.x++;	# force recolumnation; disgusting! 
 			for(i=0; i<t.w.ndl; i++){
@@ -1254,6 +1263,18 @@ fontx(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 	}
 	file = nil;
 	flag = nil;
+}
+
+# Theme [name]: that theme, or the next one (xenith->themecmd)
+themex(argt : ref Text, arg : string, narg : int)
+{
+	name : string;
+	(a, na) := findbl(arg, narg);
+	if(a != arg)
+		name = arg[0:narg-na];
+	else
+		(nil, name, nil) = getarg(argt, FALSE, TRUE);
+	xenith->themecmd(name);
 }
 
 incl(et : ref Text, argt : ref Text, arg : string, narg : int)

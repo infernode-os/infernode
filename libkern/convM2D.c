@@ -47,6 +47,22 @@ statcheckbuf(uchar *buf, uint navail)
 
 static char nullstring[] = "";
 
+/*
+ * A wstat leaves mode, atime and mtime alone by sending ~0 in their
+ * 32 bits. Where ulong is wider than that, keep it ~0 in the whole
+ * ulong, or the ~0 and ~0UL tests that look for it never match.
+ */
+static ulong
+gbit32dontcare(uchar *p)
+{
+	ulong v;
+
+	v = GBIT32(p);
+	if(v == 0xFFFFFFFFUL)
+		return ~0UL;
+	return v;
+}
+
 uint
 convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
 {
@@ -71,11 +87,11 @@ convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
 	p += BIT32SZ;
 	d->qid.path = GBIT64(p);
 	p += BIT64SZ;
-	d->mode = GBIT32(p);
+	d->mode = gbit32dontcare(p);
 	p += BIT32SZ;
-	d->atime = GBIT32(p);
+	d->atime = gbit32dontcare(p);
 	p += BIT32SZ;
-	d->mtime = GBIT32(p);
+	d->mtime = gbit32dontcare(p);
 	p += BIT32SZ;
 	d->length = GBIT64(p);
 	p += BIT64SZ;

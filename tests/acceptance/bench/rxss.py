@@ -7,7 +7,7 @@ def held(cmd):
     try: c.recv(4096)
     except socket.timeout: pass
     c.sendall((cmd + '\n').encode()); return c
-sink = held("load std; listen -A 'tcp!*!8700' {cat > /dev/null}"); time.sleep(2)
+sink = held("load std; listen -A 'tcp!*!8700' {cat > /dev/null} & p=$apid; cat > /dev/null; echo killgrp > /prog/$p/ctl"); time.sleep(2)
 MB = 16; data = b'\xa5' * (1024*1024)
 s = socket.create_connection(('192.168.1.104', 8700), timeout=10)
 samples = []

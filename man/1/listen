@@ -103,15 +103,29 @@ or any
 .B -a
 option is given, then
 .I listen
-will allow any algorithm allowed by the local
-.IR ssl (3)
-device.
+will require AES-256-CBC encryption and SHA-256 integrity.  Other policies,
+including the plaintext
+.B none
+algorithm, must be selected explicitly with
+.BR -a .
 If
 .I keyfile
 is specified, then that will be used as the server's certificate;
 otherwise
 .BI /usr/ user /keyring/default
 will be used.
+Unless
+.B -t
+is given, the listener forks its namespace, reads the authentication data once,
+and binds
+.B /dev/null
+over the credential file before it starts accepting commands.  This removes the
+ordinary inherited path while retaining the in-memory authentication state.
+It is defence in depth, not namespace attenuation: a command allowed to
+unmount arbitrary server overlays can reveal the underlying path.  A service
+that runs arbitrary commands must also enter a structurally restricted
+namespace; see
+.IR rstyxd (8).
 .PP
 Authenticated listeners bound pre-authentication resource use before starting
 expensive key exchange.  At most
@@ -124,6 +138,9 @@ of the active exchanges may come from any one remote address (4 by default),
 so that a single host cannot hold every slot with silent connections.
 Connections over any limit are closed before authentication output or
 cryptographic work.
+The global and per-source concurrency checks precede the shared rate check, so
+connections rejected for exceeding either cap do not consume the rate budget
+available to other sources.
 The
 .BR -L ,
 .B -R
@@ -210,7 +227,10 @@ option is given, no authentication or encryption will
 take place; otherwise Inferno authentication and encryption
 will be performed as usual, using
 .I alg
-if given, or a default algorithm otherwise.
+if given, or AES-256-CBC with SHA-256 otherwise.  Thus authenticated
+connections are confidential and integrity-protected by default; use
+.B -A
+when an intentionally unauthenticated plaintext connection is required.
 .I Keyfile
 is used for the certificate if given, otherwise
 .BI /usr/ user /keyring/ addr\fR,\fP

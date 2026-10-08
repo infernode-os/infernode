@@ -1,0 +1,25 @@
+# lucibridge say
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_say_0_0 say {"args": "spoken words"}
+tool-result call_say_0_0:
+  | said
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:say go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text={"args": "spoken words"}
+  | 
+  | msg 3
+  | role=veltro text=Said it.
+  | 

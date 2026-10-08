@@ -107,7 +107,7 @@ filename(ctxt: ref Draw->Context, parent: ref Draw->Image,
 	where := localgeom(parent);
 	if (title == nil)
 		title = "Open";
-	(top, wch) := tkclient->toplevel(ctxt, where+" -bd 1", # -font /fonts/misc/latin1.6x13.font",
+	(top, wch) := tkclient->toplevel(ctxt, where, # -font /fonts/misc/latin1.6x13.font",
 			title, Tkclient->Popup|Tkclient->Resize|Tkclient->OK);
 	(b, colch) := Browser.init(top, ".b", "16w");
 	entrych := chan of string;

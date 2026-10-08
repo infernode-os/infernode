@@ -382,16 +382,7 @@ readfile(f: string): string
 
 getalgs(): list of string
 {
-	sslctl := readfile("#D/clone");
-	if (sslctl == nil) {
-		sslctl = readfile("#D/ssl/clone");
-		if (sslctl == nil)
-			return nil;
-		sslctl = "#D/ssl/" + sslctl;
-	} else
-		sslctl = "#D/" + sslctl;
-	(nil, algs) := sys->tokenize(readfile(sslctl + "/encalgs") + " " + readfile(sslctl + "/hashalgs"), " \t\n");
-	return "none" :: algs;
+	return "aes_256_cbc" :: "sha256" :: nil;
 }
 
 announce(addr: string): (string, ref Sys->Connection)

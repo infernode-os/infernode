@@ -4,7 +4,7 @@ implement ToolUseTest;
 # tooluse_test.b — Integration test for native tool_use protocol
 #
 # Tests the end-to-end plumbing of the new native tool_use code paths
-# added in agentlib.b and repl.b: session creation, tool registration
+# added in agentlib.b: session creation, tool registration
 # via /mnt/llm/{id}/tools, queryllmfd, parsellmresponse, and TOOL_RESULTS
 # write path.
 #

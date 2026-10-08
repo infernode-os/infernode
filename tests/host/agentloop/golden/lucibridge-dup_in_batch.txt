@@ -1,0 +1,25 @@
+# lucibridge dup_in_batch
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_dup_in_batch_0_0 read {"args": "\/usr\/agentloop\/a.txt"}
+assistant-call call_dup_in_batch_0_1 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_dup_in_batch_0_0:
+  |     1	alpha
+tool-result call_dup_in_batch_0_1:
+  | (skipped: identical `read {"args": "/usr/agentloop/a.txt"}` already ran at step 0 — its output is in your earlier results; use that instead of repeating the call)
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:dup_in_batch go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Same file twice in one batch.
+  | 

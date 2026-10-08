@@ -1106,7 +1106,10 @@ ecom(src: Src, nto, n: ref Node): ref Node
 			break;
 		}
 		if(left.op == Oname && left.decl.store == Dtype){
-			genrawop(src, INEW, mktn(t), nil, nto);
+			# ref T with no initializer: nothing follows to store
+			# into the members, so the allocation itself must zero
+			# them.  INEW only sets the pointer slots to H.
+			genrawop(src, INEWZ, mktn(t), nil, nto);
 			break;
 		}
 		if(t.kind == Tadt && t.tags != nil){

@@ -198,7 +198,7 @@ Moptres: adt {
 
 mopt(argv: list of string): (ref Moptres, string)
 {
-	r := ref Moptres(nil, 0, "none", nil, 0, 0);
+	r := ref Moptres(nil, 0, "aes_256_cbc sha256", nil, 0, 0);
 
 	arg->init(argv);
 	while ((opt := arg->opt()) != 0) {

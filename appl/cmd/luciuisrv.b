@@ -1349,20 +1349,6 @@ globalctl(data: string): string
 		pushglobalevent("activity delete " + idstr);
 		return nil;
 	}
-	if(hasprefix(data, "theme ")) {
-		name := data[len "theme ":];
-		if(!validid(name))
-			return "invalid theme name";
-		# Persist theme choice (truncate to avoid stale trailing bytes)
-		fd := sys->open("/lib/lucifer/theme/current", Sys->OWRITE|Sys->OTRUNC);
-		if(fd == nil)
-			return sys->sprint("cannot write theme: %r");
-		b := array of byte name;
-		sys->write(fd, b, len b);
-		# Broadcast so all zones reload colours live
-		pushglobalevent("theme " + name);
-		return nil;
-	}
 	return "unknown ctl command: " + data;
 }
 
@@ -1475,7 +1461,7 @@ presctl(a: ref Activity, data: string): string
 		if(dispath != nil && dispath != "")
 			art.dispath = dispath;
 		# data= is a terminal attribute (value extends to end of string).
-		# Used to pass launch args to GUI apps (e.g. "-c 1 -E -t dark" for xenith).
+		# Used to pass launch args to GUI apps (e.g. "-c 1 -E" for xenith).
 		d := getattr(attrs, "data");
 		if(d != nil && d != "")
 			art.data = d;

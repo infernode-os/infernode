@@ -1,0 +1,86 @@
+# veltrosrv error_streak
+requests 5
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_error_streak_0_0 read {"args": "\/usr\/agentloop\/missing1"}
+tool-result call_error_streak_0_0:
+  | error: cannot open /usr/agentloop/missing1: '/usr/agentloop/missing1' file does not exist
+
+== request 2 (turn 2)
+tools: list read write
+assistant-call call_error_streak_1_0 read {"args": "\/usr\/agentloop\/missing2"}
+tool-result call_error_streak_1_0:
+  | error: cannot open /usr/agentloop/missing2: '/usr/agentloop/missing2' file does not exist
+
+== request 4 (turn 4)
+tools: list read write
+assistant-call call_error_streak_3_0 read {"args": "\/usr\/agentloop\/missing4"}
+tool-result call_error_streak_3_0:
+  | error: cannot open /usr/agentloop/missing4: '/usr/agentloop/missing4' file does not exist
+
+== output
+  | == user
+  | SCENARIO:error_streak go
+  | == note Agent stuck
+  | Tool 'read' has failed 3 consecutive times. Consider intervening or letting it try a different approach.
+  | == veltro
+  | Giving up.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 24 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 83 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_error_streak_0_0:read:{"args"\: "/usr/agentloop/missing1"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/missing1"}
+  | tool read: calling with 35 bytes
+  | tool read: done, error: cannot open /usr/agentloop/missing1: '/usr/agentloop/missing1' file does not exist
+  | step 2: writing 129 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 83 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_error_streak_1_0:read:{"args"\: "/usr/agentloop/missing2"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/missing2"}
+  | tool read: calling with 35 bytes
+  | tool read: done, error: cannot open /usr/agentloop/missing2: '/usr/agentloop/missing2' file does not exist
+  | step 3: writing 129 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 3: waiting for LLM response...
+  | step 3: LLM response 83 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_error_streak_2_0:read:{"args"\: "/usr/agentloop/missing3"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/missing3"}
+  | tool read: calling with 35 bytes
+  | tool read: done, error: cannot open /usr/agentloop/missing3: '/usr/agentloop/missing3' file does not exist
+  | step 4: writing 238 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 4: waiting for LLM response...
+  | step 4: LLM response 83 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_error_streak_3_0:read:{"args"\: "/usr/agentloop/missing4"}
+  | 
+  | tool read: args {"args": "/usr/agentloop/missing4"}
+  | tool read: calling with 35 bytes
+  | tool read: done, error: cannot open /usr/agentloop/missing4: '/usr/agentloop/missing4' file does not exist
+  | step 5: writing 129 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 10 bytes)
+  | step 5: waiting for LLM response...
+  | step 5: LLM response 25 bytes
+  | llm: STOP:end_turn
+  | Giving up.
+  | 
+  | turn done stop=end_turn steps=5

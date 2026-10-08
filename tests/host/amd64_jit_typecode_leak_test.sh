@@ -88,10 +88,20 @@ growth() {
 		sleep 1
 		waited=$((waited + 1))
 	done
+	# An emu that has exited but not been waited for still has a
+	# /proc/<pid>/status, with no VmRSS in it: a reading that comes back
+	# empty is the emu gone, and how it went is the thing to know. Said
+	# on stderr, since stdout is the measurement.
+	alive=no
+	grep -q '^VmRSS:' "/proc/$emupid/status" 2>/dev/null && alive=yes
 	kill -9 "$emupid" 2>/dev/null
 	wait "$emupid" 2>/dev/null
+	status=$?
 	if [ -n "$early" ] && [ -n "$late" ] && [ "$early" -gt 0 ]; then
 		echo $((late - early))
+	else
+		echo "emu $1: early='$early' late='$late'; running at the end: $alive; exit status $status; the end of its output:" >&2
+		tail -20 "$LOG" >&2
 	fi
 }
 

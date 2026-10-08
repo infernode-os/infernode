@@ -148,7 +148,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		arg->usage();
 	arg = nil;
 	if (doauth && algs == nil)
-		algs = getalgs();
+		algs = "aes_256_cbc" :: "sha256" :: nil;
 	if (doauth && algs == nil)
 		error("authentication requested, but no SSL algorithms are available");
 	addr := netmkaddr(hd argv, "tcp", "styx");
@@ -160,9 +160,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		srclock = chan[1] of int;
 		if (keyfile == nil)
 			keyfile = "/usr/" + user() + "/keyring/default";
+		# Keep key masking private to this listener.  Children need the
+		# in-memory Authinfo, never the credential file itself.
+		if(!trusted && sys->pctl(Sys->FORKNS, nil) < 0)
+			error("cannot fork key namespace");
 		authinfo = keyring->readauthinfo(keyfile);
 		if (authinfo == nil)
 			error(sys->sprint("cannot read %s: %r", keyfile));
+		if(!trusted && sys->bind("/dev/null", keyfile, Sys->MREPL) < 0)
+			error(sys->sprint("cannot hide %s: %r", keyfile));
 	}
 
 	(ok, c) := sys->announce(addr);
@@ -204,25 +210,27 @@ listener(c: Sys->Connection, mfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, 
 				sync := chan of int;
 				spawn exportproc(sync, mfd, nil, hostname, dfd);
 				<-sync;
-			} else
-				if(!rateallow()) {
-					if(verbose)
-						sys->fprint(stderr(), "styxlisten: pre-auth rate limit reached\n");
-					nethangup(nc.cfd);
-					dfd = nil;
-					nc.cfd = nil;
-				} else if(!srcacquire(src := srchost(nc.dir))) {
-					if(verbose)
-						sys->fprint(stderr(), "styxlisten: pre-auth limit per source (%d) reached for %s\n", perlimit, src);
-					nethangup(nc.cfd);
-					dfd = nil;
-					nc.cfd = nil;
-				} else
-				alt {
+			} else alt {
 				authslots <-= 1 =>
-					spawn authenticator(dfd, nc.cfd, authinfo, mfd, algs, hostname, src);
+					src := srchost(nc.dir);
+					if(!srcacquire(src)) {
+						<-authslots;
+						if(verbose)
+							sys->fprint(stderr(), "styxlisten: pre-auth limit per source (%d) reached for %s\n", perlimit, src);
+						nethangup(nc.cfd);
+						dfd = nil;
+						nc.cfd = nil;
+					} else if(!rateallow()) {
+						srcrelease(src);
+						<-authslots;
+						if(verbose)
+							sys->fprint(stderr(), "styxlisten: pre-auth rate limit reached\n");
+						nethangup(nc.cfd);
+						dfd = nil;
+						nc.cfd = nil;
+					} else
+						spawn authenticator(dfd, nc.cfd, authinfo, mfd, algs, hostname, src);
 				* =>
-					srcrelease(src);
 					if(verbose)
 						sys->fprint(stderr(), "styxlisten: pre-auth limit reached\n");
 					nethangup(nc.cfd);
@@ -269,6 +277,10 @@ authenticator(dfd, cfd: ref Sys->FD, authinfo: ref Keyring->Authinfo, mfd: ref S
 
 timerproc(c: chan of int, ms: int)
 {
+	# A successful authentication cancels the watcher, but this timer still
+	# sleeps to its deadline.  Do not let that sleeper retain the accepted
+	# socket and delay EOF or consume connection resources.
+	sys->pctl(Sys->NEWFD, nil);
 	sys->sleep(ms);
 	c <-= 1;
 }
@@ -383,7 +395,9 @@ getalgs(): list of string
 	} else
 		sslctl = "#D/" + sslctl;
 	(nil, algs) := sys->tokenize(readfile(sslctl + "/encalgs") + " " + readfile(sslctl + "/hashalgs"), " \t\n");
-	return "none" :: algs;
+	# Keep authenticated transport protected by default.  An operator who
+	# truly wants plaintext must select that policy explicitly.
+	return algs;
 }
 
 stderr(): ref Sys->FD

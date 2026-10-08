@@ -115,6 +115,8 @@ enum
 	MacMFRA,
 	MacRELQ,
 	MacBNDS,
+	MacZDIV,
+	MacNIL,
 	NMACRO
 };
 
@@ -317,11 +319,13 @@ static	void	macfram(void);
 static	void	macmfra(void);
 static	void	macrelq(void);
 static	void	macbounds(void);
+static	void	maczdiv(void);
+static	void	macnil(void);
 static	void	movmem(Inst*);
 static	void	mid(Inst*, int, int);
 static	void	mem(int, long, int, int);
 static	void	memfl(int, long, int, int);
-static	void	bcondbra(int, int);
+static	void	faultif(int, int);
 static	void	bradis(int);
 static	void	bramac(int);
 static	void	blmac(int);
@@ -345,6 +349,8 @@ static struct
 	{ MacMFRA,	macmfra,	"MFRA" },
 	{ MacRELQ,	macrelq,	"RELQ" },
 	{ MacBNDS,	macbounds,	"BNDS" },
+	{ MacZDIV,	maczdiv,	"ZDIV" },
+	{ MacNIL,	macnil,		"NIL" },
 };
 
 /*
@@ -422,6 +428,18 @@ bounds(void)
 	error(exBounds);
 }
 
+static void
+zdiv(void)
+{
+	error(exZdiv);
+}
+
+static void
+nilref(void)
+{
+	error(exNilref);
+}
+
 /*
  * con — load a 64-bit constant into register rd.
  * Always emits exactly 4 instructions for phase consistency.
@@ -436,55 +454,36 @@ con(uvlong val, int rd)
 }
 
 /*
- * bcondbra — emit B.cond to a macro.
+ * faultif — call fault macro macidx if cond holds.
  *
- * ARM64 B.cond has a 19-bit signed immediate (±1MB byte range), but
- * macros sit at the very end of the JIT'd module and large modules
- * (limbo.dis pushes the bounds-check macro past 1MB) can place them
- * out of B.cond reach. When that happens we emit a long-form
- * trampoline:
+ * Always two slots, the same in both passes:
  *
- *     B.<inv_cond> +2     ; skip the unconditional B if !cond
- *     B            target ; 26-bit imm = ±128MB, easily reaches macro
- *     ; fallthrough is the instruction after the B
+ *     B.<inv_cond> +2     ; no fault: skip the call
+ *     BL           macro  ; 26-bit imm = ±128MB, reaches the macros
  *
- * To keep pass 0 (sizing) and pass 1 (emit) layouts in lock-step we
- * always reserve TWO instruction slots for bcondbra. The short-form
- * case pads with a NOP so patch[] / macro[] positions stay valid.
- *
- * Refs: INFR-22.
+ * It is a call, not a branch, so the macro has the link: a PC inside
+ * the faulting Dis instruction, which it stores as R.PC for handler().
+ * This was a B.cond straight to the macro (bcondbra, INFR-22 for its
+ * reach); the macro then raised the error with R.PC still naming the
+ * last call, so handler() looked in the wrong place, and a {...}
+ * exception block around an out-of-range index did not catch it.
  */
 static void
-bcondbra(int cond, int macidx)
+faultif(int cond, int macidx)
 {
 	long off;
 
+	BCOND(cond ^ 1, 2);
 	if(pass == 0) {
-		/* reserve two slots; pass 1 picks short or long form */
-		BCOND(cond, 0);
-		NOP_INSN();
+		BL_IMM(0);
 		return;
 	}
 	off = ((long)(IA(macro, macidx)) - (long)(code + codeoff)) >> 2;
-	if(off <= 0x3FFFF && off >= -0x40000) {
-		/* short form: direct B.cond + NOP padding */
-		BCOND(cond, off);
-		NOP_INSN();
-		return;
-	}
-	/*
-	 * long form: invert condition, fall through to the unconditional
-	 * B when cond is true. The B's offset is one instruction past the
-	 * BCOND we're about to emit, so subtract 1 from `off`.
-	 */
-	BCOND(cond ^ 1, 2);
-	off -= 1;
 	if(off > 0x1FFFFFF || off < -0x2000000) {
-		print("bcondbra long-form overflow: off=%ld macidx=%d\n",
-			off, macidx);
-		urk("bcondbra: branch too far even in long form");
+		print("faultif overflow: off=%ld macidx=%d\n", off, macidx);
+		urk("faultif: branch too far");
 	}
-	B_IMM(off);
+	BL_IMM(off);
 }
 
 /*
@@ -887,6 +886,18 @@ static void
 punt(Inst *i, int m, void (*fn)(void))
 {
 	ulong pc;
+
+	/*
+	 * R.PC is always written for a real instruction, not only for the
+	 * ops that read it: an op that raises (a string index, a slice, a
+	 * conversion) then leaves R.PC inside this instruction, and the
+	 * exception finds this instruction's handler, as comp-riscv64.c's
+	 * puntop does.  It was written for WRTPC ops only, so a string
+	 * index out of range inside a {...} exception block was not caught
+	 * (tests/jit_bounds_test.b).  macret's dummy IRET is not one.
+	 */
+	if(i >= mod->prog && i < mod->prog + mod->nprog)
+		m |= WRTPC;
 
 	if(m & SRCOP) {
 		if(UXSRC(i->add) == SRC(AIMM))
@@ -1613,6 +1624,8 @@ comp(Inst *i)
 	case IDIVW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM32(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA0, RA0, RA1);
 		SXTW(RA0, RA0);
 		opwst(i, Stw, RA0);
@@ -1620,6 +1633,8 @@ comp(Inst *i)
 	case IMODW:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM32(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
 		SXTW(RA0, RA0);
@@ -1648,12 +1663,16 @@ comp(Inst *i)
 	case IDIVB:
 		opwld(i, Ldb, RA1);
 		mid(i, Ldb, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA0, RA0, RA1);
 		opwst(i, Stb, RA0);
 		break;
 	case IMODB:
 		opwld(i, Ldb, RA1);
 		mid(i, Ldb, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
 		opwst(i, Stb, RA0);
@@ -1681,12 +1700,16 @@ comp(Inst *i)
 	case IDIVL:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA0, RA0, RA1);
 		opwst(i, Stw, RA0);
 		break;
 	case IMODL:
 		opwld(i, Ldw, RA1);
 		mid(i, Ldw, RA0);
+		CMP_IMM(RA1, 0);	/* SDIV does not trap */
+		faultif(EQ, MacZDIV);
 		SDIV_REG(RA2, RA0, RA1);
 		MSUB_REG(RA0, RA1, RA2, RA0);
 		opwst(i, Stw, RA0);
@@ -1984,7 +2007,7 @@ comp(Inst *i)
 	case IINDB:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacBNDS);
 		if(bflag)
 			mem(Ldw, O(Array, len), RA0, RA2);
 		mem(Ldw, O(Array, data), RA0, RA0);
@@ -1998,8 +2021,20 @@ comp(Inst *i)
 		}
 		if(UXDST(i->add) == DST(AIMM)) {
 			if(bflag) {
-				CMP_IMM(RA2, i->d.imm);
-				bcondbra(LS, MacBNDS);
+				/*
+				 * CMP (immediate) takes 12 bits: a negative
+				 * or larger literal index (a[-1], a[5000])
+				 * would be encoded into the wrong instruction.
+				 * Sign-extended into a register it compares
+				 * unsigned with the length like any other.
+				 */
+				if(i->d.imm >= 0 && i->d.imm < 4096)
+					CMP_IMM(RA2, i->d.imm);
+				else {
+					con((uvlong)(vlong)i->d.imm, RCON);
+					CMP_REG(RA2, RCON);
+				}
+				faultif(LS, MacBNDS);
 			}
 			{
 				long off = (r > 0) ? ((long)i->d.imm << r) : i->d.imm;
@@ -2015,7 +2050,7 @@ comp(Inst *i)
 			SXTW(RA1, RA1);	/* index is Dis int (32-bit) */
 			if(bflag) {
 				CMP_REG(RA2, RA1);
-				bcondbra(LS, MacBNDS);
+				faultif(LS, MacBNDS);
 			}
 			if(r > 0) {
 				con(r, RCON);
@@ -2028,13 +2063,13 @@ comp(Inst *i)
 	case IINDX:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacBNDS);
 		opwst(i, Ldw, RA1);
 		SXTW(RA1, RA1);	/* index is Dis int (32-bit) */
 		if(bflag) {
 			mem(Ldw, O(Array, len), RA0, RA2);
 			CMP_REG(RA2, RA1);
-			bcondbra(LS, MacBNDS);
+			faultif(LS, MacBNDS);
 		}
 		mem(Ldw, O(Array, t), RA0, RA2);
 		mem(Ldw, O(Array, data), RA0, RA0);
@@ -2051,7 +2086,7 @@ comp(Inst *i)
 	case ITAIL:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldw, O(List, tail), RA0, RA1);
 		goto movp;
 	case IMOVP:
@@ -2060,7 +2095,7 @@ comp(Inst *i)
 	case IHEADP:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldw, OA(List, data), RA0, RA1);
 	movp:
 		CMN_IMM(RA1, 1);
@@ -2082,14 +2117,14 @@ comp(Inst *i)
 	case IHEADF:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldw, OA(List, data), RA0, RA0);
 		opwst(i, Stw, RA0);
 		break;
 	case IHEADB:
 		opwld(i, Ldw, RA0);
 		CMN_IMM(RA0, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		mem(Ldb, OA(List, data), RA0, RA0);
 		opwst(i, Stb, RA0);
 		break;
@@ -2098,7 +2133,7 @@ comp(Inst *i)
 	case IHEADM:
 		opwld(i, Ldw, RA1);
 		CMN_IMM(RA1, 1);
-		bcondbra(EQ, MacBNDS);
+		faultif(EQ, MacNIL);
 		ADD_IMM(RA1, RA1, OA(List, data));
 		movmem(i);
 		break;
@@ -2615,11 +2650,39 @@ macrelq(void)
 	BR_REG(RTA);
 }
 
+/*
+ * The fault macros.  Reached by faultif's BL from inside the faulting
+ * instruction, so X30 is a PC in that instruction: handler() takes
+ * R.PC as a return address, subtracts one and lands inside it.  R.FP
+ * is stored too, as the riscv64 JIT does, so the search starts from
+ * the frame the fault is in.
+ */
+static void
+macfault(void (*fn)(void))
+{
+	mem(Stw, O(REG, FP), RREG, RFP);
+	mem(Stw, O(REG, PC), RREG, 30);	/* R.PC = LR (X30) */
+	con((uvlong)fn, RTA);
+	BLR_REG(RTA);
+	*code++ = 0xD4200000;	/* BRK #0: fn raises, it does not return */
+}
+
 static void
 macbounds(void)
 {
-	con((uvlong)bounds, RTA);
-	BLR_REG(RTA);
+	macfault(bounds);
+}
+
+static void
+maczdiv(void)
+{
+	macfault(zdiv);
+}
+
+static void
+macnil(void)
+{
+	macfault(nilref);
 }
 
 /*

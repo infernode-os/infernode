@@ -4250,6 +4250,8 @@ borderparts(sub: list of string, x: array of ref Tok): list of (string, array of
 			r = (nm, w) :: r;
 		else if(suffix(nm, "-style"))
 			r = (nm, s) :: r;
+		else if(nm == "border-image-source")
+			r = (nm, array[] of {ref Tok(Kident, "none", 0.0, 0, nil)}) :: r;	# reset, never set (Backgrounds 3 §4.4): a function colour was taken for an image
 		else
 			r = (nm, c) :: r;
 	}

@@ -67,6 +67,10 @@ OutlineFont: module {
 		# The glyph's top (yMax), in font units; 0 if unknown (CFF)
 		ymax:	fn(f: self ref Face, gid: int): int;
 
+		# OS/2 xAvgCharWidth and the width of head's bounding box
+		# (xMax - xMin), in font units; 0 where the font has none (CFF)
+		xmetrics:	fn(f: self ref Face): (int, int);
+
 		# Get scaled metrics: (height, ascent, descent) in pixels
 		metrics:	fn(f: self ref Face, size: real): (int, int, int);
 	};

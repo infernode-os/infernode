@@ -77,7 +77,7 @@ GlyphOutline: adt {
 CacheEntry: adt {
 	faceidx:	int;	# face index (different fonts have different GID assignments)
 	gid:	int;
-	qsize:	int;	# quantized size (size * 4, as int)
+	qsize:	int;	# the size in 1/1024 px (sizekey())
 	img:	ref Image;
 	width:	int;	# advance width in pixels
 	ox, oy:	int;	# offset from draw point to image origin
@@ -263,7 +263,7 @@ Face.drawglyph(f: self ref Face, gid: int, size: real,
 		return 0;
 
 	# Check cache
-	qsize := int (size * 4.0 + 0.5);
+	qsize := sizekey(size);
 	ce := cachelookup(fidx, gid, qsize);
 	if(ce != nil){
 		if(ce.img != nil)
@@ -310,7 +310,7 @@ Face.glyphwidth(f: self ref Face, gid: int, size: real): int
 		return 0;
 
 	# Check cache
-	qsize := int (size * 4.0 + 0.5);
+	qsize := sizekey(size);
 	ce := cachelookup(fidx, gid, qsize);
 	if(ce != nil)
 		return ce.width;
@@ -349,6 +349,35 @@ Face.ymax(f: self ref Face, gid: int): int
 	if(off >= fd.glyfoff + fd.locaoffs[gid+1] || off + 10 > len fd.ttfdata)
 		return 0;
 	return geti16be(fd.ttfdata, off + 8);
+}
+
+Face.xmetrics(f: self ref Face): (int, int)
+{
+	fd := getfacedata(f);
+	if(fd == nil || !fd.isttf)
+		return (0, 0);
+	d := fd.ttfdata;
+	avg := 0;
+	bbox := 0;
+	if((o := sfnttable(d, "OS/2")) > 0 && o + 4 <= len d)
+		avg = geti16be(d, o + 2);
+	if((h := sfnttable(d, "head")) > 0 && h + 44 <= len d)
+		bbox = geti16be(d, h + 40) - geti16be(d, h + 36);
+	return (avg, bbox);
+}
+
+# the offset of an sfnt table, 0 if the font has none
+sfnttable(d: array of byte, tag: string): int
+{
+	if(len d < 12)
+		return 0;
+	n := getu16be(d, 4);
+	for(i := 0; i < n && 12 + i*16 + 16 <= len d; i++) {
+		e := 12 + i*16;
+		if(string d[e:e+4] == tag)
+			return getu32be(d, e + 8);
+	}
+	return 0;
 }
 
 Face.kern(f: self ref Face, left, right: int): int
@@ -800,6 +829,15 @@ Face.metrics(f: self ref Face, size: real): (int, int, int)
 }
 
 # ---- Glyph cache ----
+
+# A glyph's cache key: its size to 1/1024 px.  Quarter pixels put
+# 16px and 16.08px (0.67em of 24px) under one key, so a page drew its
+# 16px text with whichever of the two rasters an earlier page had made.
+# (int of a real rounds.)
+sizekey(size: real): int
+{
+	return int (size * 1024.0);
+}
 
 cachehash(faceidx, gid, qsize: int): int
 {

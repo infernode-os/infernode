@@ -8548,6 +8548,12 @@ inlineintrinsic(b: ref Box): (int, int)
 
 # ---- inline formatting (CSS 2.2 §9.4.2, §10.8; CSS Text 3) ----
 
+# How far past the line's end a word may reach and still be on it: a
+# 64th of a pixel, as Chromium's LayoutUnit has it.  Half a pixel kept
+# lines Chromium wraps (docs.python.org's heading, 0.36px over).  The
+# other fits (preserved spaces, hanging) keep their half pixel.
+FITSLACK: con 0.3;
+
 Iword, Ispace, Iopen, Iclose, Iatomic, Ibreak, Ifloat, Iabs: con iota;
 
 Item: adt {
@@ -9676,7 +9682,7 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				ln.content = 1;
 				continue;
 			}
-			if(it.hang != 2 && ln.content && ln.x + segwidth(il) > cutavail(ln) + 0.5 && !endhangs(ln, il) && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
+			if(it.hang != 2 && ln.content && ln.x + segwidth(il) > cutavail(ln) + FITSLACK && !endhangs(ln, il) && (!it.nowrap || spacebefore(ln, it)) && canbreak(ln, it)) {
 				hyphenate(ln);
 				lines = endline(f, ln, x0, first, 0) :: lines;
 				first = 0;

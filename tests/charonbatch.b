@@ -5,7 +5,9 @@ implement CharonBatch;
 #
 #	charonbatch width height list
 #
-# list has a line "url outimg" per page.  Each page is laid out for a
+# list has a line "url outimg" per page, or "url outimg -d" to print
+# the page's box tree on stderr too (to compare a page laid out after
+# others with the same page alone).  Each page is laid out for a
 # width x height viewport and that viewport is written to outimg as an
 # image(6).  One line goes to stdout per page, "ok outimg <ms>" or
 # "fail outimg <reason>", so a driver can resume after a crash or a
@@ -26,6 +28,7 @@ include "web/style.m";
 include "outlinefont.m";
 include "web/fonts.m";
 include "web/layout.m";
+	layout: Layout;
 include "web/page.m";
 	page: Page;
 	Pg: import page;
@@ -74,12 +77,12 @@ init(nil: ref Draw->Context, args: list of string)
 	img := disp.newimage(Rect((0, 0), (w, h)), Draw->XRGB32, 0, Draw->White);
 	while((l := f.gets('\n')) != nil) {
 		(n, fl) := sys->tokenize(l, " \t\n");
-		if(n != 2)
+		if(n != 2 && !(n == 3 && hd tl tl fl == "-d"))
 			continue;
 		url := hd fl;
 		out := hd tl fl;
 		t0 := sys->millisec();
-		e := render(disp, img, url, out, w, h);
+		e := render(disp, img, url, out, w, h, n == 3);
 		if(e != nil)
 			sys->fprint(stdout, "fail %s %s\n", out, e);
 		else
@@ -88,7 +91,7 @@ init(nil: ref Draw->Context, args: list of string)
 	halt();
 }
 
-render(disp: ref Display, img: ref Draw->Image, url, out: string, w, h: int): string
+render(disp: ref Display, img: ref Draw->Image, url, out: string, w, h, dump: int): string
 {
 	{
 		(p, err) := page->open(url, w, h);
@@ -96,6 +99,13 @@ render(disp: ref Display, img: ref Draw->Image, url, out: string, w, h: int): st
 			return err;
 		img.draw(img.r, disp.white, nil, (0, 0));
 		p.paint(img, Point(0, fragscroll(p, url)));
+		if(dump) {
+			if(layout == nil) {
+				layout = load Layout Layout->PATH;
+				layout->init(disp);
+			}
+			sys->fprint(sys->fildes(2), "%s", layout->dump(p.root));
+		}
 		fd := sys->create(out, Sys->OWRITE, 8r644);
 		if(fd == nil)
 			return sys->sprint("create: %r");

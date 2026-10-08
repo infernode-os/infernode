@@ -13878,7 +13878,7 @@ paintdeco(dst: ref Image, f: ref Frag, o: Point)
 
 boxat(root: ref Box, p: Point): (int, ref Box)
 {
-	(n, b) := findin(root, p, Point(0, 0));
+	(n, b, nil) := findin(root, p, Point(0, 0));
 	# an anonymous box (a block around inline content, an anonymous
 	# table part) is no element: what was clicked is the element it
 	# belongs to (github.com's file list: grid cells' anonymous blocks)
@@ -13890,7 +13890,12 @@ boxat(root: ref Box, p: Point): (int, ref Box)
 	return (n, b);
 }
 
-findin(b: ref Box, p, o: Point): (int, ref Box)
+# What is under p in b, and whether it is more than an in-flow block's
+# background: such a hit is weak, and anything painted over it wins,
+# wherever it is in the tree (a float overhanging the end of its own
+# section is over the next section's background: Wikipedia's infobox
+# links were taken for that section).
+findin(b: ref Box, p, o: Point): (int, ref Box, int)
 {
 	st := b.st;
 	if(st.translated && st.tfs == nil)	# drawn moved, so clicked moved (a drawer off-screen by translateX(-100%))
@@ -13898,12 +13903,14 @@ findin(b: ref Box, p, o: Point): (int, ref Box)
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
 	org := r.min;
 	if(clipshit(b) && !p.in(r))
-		return (0, nil);	# what overflows a clipping box is not there to click (an sr-only heading's text)
+		return (0, nil, 0);	# what overflows a clipping box is not there to click (an sr-only heading's text)
 	for(pl := b.pos; pl != nil; pl = tl pl) {
-		(n, x) := findin(hd pl, p, org);
+		(n, x, nil) := findin(hd pl, p, org);
 		if(x != nil)
-			return (n, x);
+			return (n, x, 1);	# positioned: over everything in flow
 	}
+	weak: ref Box;
+	wn := 0;
 	if(b.lines != nil) {
 		# floats are kids of a box whose content is lines, painted over
 		# its backgrounds: looked at first (python.org's network bar is
@@ -13912,9 +13919,11 @@ findin(b: ref Box, p, o: Point): (int, ref Box)
 			k := b.kids[fi];
 			if(!isfloat(k) || isabs(k))
 				continue;
-			(n, x) := findin(k, p, org);
-			if(x != nil)
-				return (n, x);
+			(n, x, strong) := findin(k, p, org);
+			if(x != nil && strong)
+				return (n, x, 1);
+			if(x != nil && weak == nil)
+				(wn, weak) = (n, x);
 		}
 		# the most specific thing under the point: text or an atomic
 		# box first, else the smallest inline box around it.  An inline
@@ -13929,21 +13938,21 @@ findin(b: ref Box, p, o: Point): (int, ref Box)
 				f := ln.frags[k];
 				fr := Rect((org.x + f.x, org.y + f.y), (org.x + f.x + f.w, org.y + f.y + f.h));
 				if(f.kind == Fatomic) {
-					(n, x) := findin(f.box, p, org);
+					(n, x, nil) := findin(f.box, p, org);
 					if(x != nil)
-						return (n, x);
+						return (n, x, 1);
 					continue;
 				}
 				if(!p.in(fr) || !hittable(f.box))
 					continue;
 				if(f.kind != Fspan)
-					return (f.box.node, f.box);
+					return (f.box.node, f.box, 1);
 				if(span == nil || f.w * f.h < span.w * span.h)
 					span = f;
 			}
 		}
 		if(span != nil)
-			return (span.box.node, span.box);
+			return (span.box.node, span.box, 1);
 	} else {
 		# floats first: they are painted over the in-flow blocks beside
 		# them, whose boxes reach across (an infobox's links were taken
@@ -13953,14 +13962,21 @@ findin(b: ref Box, p, o: Point): (int, ref Box)
 				k := b.kids[i];
 				if(isabs(k) || isfloat(k) != (pass == 0))
 					continue;
-				(n, x) := findin(k, p, org);
-				if(x != nil)
-					return (n, x);
+				(n, x, strong) := findin(k, p, org);
+				if(x != nil && strong)
+					return (n, x, 1);
+				if(x != nil && weak == nil)
+					(wn, weak) = (n, x);
 			}
 	}
+	# inside a float, a positioned or an atomic box, its background is
+	# over what is in flow around it, and so is what is on it
+	over := isfloat(b) || ispositioned(b) || b.inl || b.kind == Kreplaced;
+	if(weak != nil)
+		return (wn, weak, over);
 	if(p.in(r) && hittable(b))
-		return (b.node, b);
-	return (0, nil);
+		return (b.node, b, over);
+	return (0, nil, 0);
 }
 
 # a box a click can land on: visible, and not pointer-events: none

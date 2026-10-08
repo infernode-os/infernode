@@ -2000,7 +2000,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		s.idx.env = ref *env;
 	}
 	lastenv = ref *env;	# for light-dark() in colours parsed without a context
-	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
 	m := matcher(d, env);
 	root := d.root();
 	if(root == 0)
@@ -2060,6 +2060,7 @@ Shared: adt {
 	st, before, after, marker:	ref St;
 	firstletter:	ref St;
 	firstline:	ref St;
+	placeholder:	ref St;
 };
 
 # Elements whose style is computed from the same inputs -- parent style,
@@ -2092,6 +2093,7 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 				c.marker[n] = x.marker;
 				c.firstletter[n] = x.firstletter;
 				c.firstline[n] = x.firstline;
+				c.placeholder[n] = x.placeholder;
 				return x.st;
 			}
 	}
@@ -2131,9 +2133,10 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 			fparent = bs;
 		c.firstletter[n] = pseudostyle(pse, "first-letter", fparent, ctx);
 		c.firstline[n] = pseudostyle(pse, "first-line", st, ctx);
+		c.placeholder[n] = pseudostyle(pse, "placeholder", st, ctx);
 	}
 	if(key != nil)
-		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n], c.firstletter[n], c.firstline[n])) :: share[slot];
+		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n], c.firstletter[n], c.firstline[n], c.placeholder[n])) :: share[slot];
 	return st;
 }
 
@@ -2223,7 +2226,7 @@ pseudostyle(pse: list of (string, ref Md), name: string, parent: ref St, ctx: re
 	if(n == 0)
 		return nil;
 	st := cascade(sortmd(mds, n), parent, ctx);
-	if(name != "marker" && name != "first-letter" && name != "first-line" && st.content == nil)
+	if(name != "marker" && name != "first-letter" && name != "first-line" && name != "placeholder" && st.content == nil)
 		return nil;	# content: normal/none generates no box
 	if(st.display == Dnone && name != "marker")
 		return nil;	# not generated: its counters do not count either

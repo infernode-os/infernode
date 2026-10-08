@@ -310,6 +310,7 @@ Style: module
 		before, after, marker:	array of ref St;
 		firstletter:	array of ref St;
 		firstline:	array of ref St;	# ::first-line's, where rules give it one
+		placeholder:	array of ref St;	# ::placeholder's, where rules give it one
 	};
 
 	compute:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env): ref Computed;

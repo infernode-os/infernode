@@ -97,6 +97,20 @@ Ctr: adt {
 	nested:	int;	# inside an ancestor's of the same name: for the subtree only
 };
 
+# How a placeholder is drawn: 1, dimmed as browsers draw one, or the
+# colour ::placeholder gives it (0xRRGGBBAA, its opacity folded in);
+# 0 when that makes it invisible.
+placeholder(b: ref B, n: int): int
+{
+	if(b.c.placeholder == nil || (ps := b.c.placeholder[n]) == nil)
+		return 1;
+	c := ps.color;
+	a := real (c & 255) * ps.opacity;
+	if(a < 0.5)
+		return 0;
+	return c & ~255 | int a;
+}
+
 newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1431,7 +1445,9 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 			r.text = b.d.attr(n, "value");
 			if(r.text == "") {
 				r.text = b.d.attr(n, "placeholder");
-				r.hint = 1;
+				r.hint = placeholder(b, n);
+				if(r.hint == 0)
+					r.text = nil;	# ::placeholder makes it invisible (opacity: 0 until focused)
 			}
 			if(!textfield(b.d, n)) {
 				r.iw = int (st.fontsize * 10.0);	# about 20 characters
@@ -13669,8 +13685,10 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 		# one line, centred in the box, cut off at its edge
 		f := face(b.st);
 		c := b.st.color;
-		if(b.hint)
+		if(b.hint == 1)
 			c = int 16r757575FF;	# a placeholder, as browsers show one
+		else if(b.hint)
+			c = b.hint;	# as ::placeholder colours it
 		y := cr.min.y + (cr.dy() - ir(f.ascent + f.descent)) / 2 + ir(f.ascent);
 		oc := dst.clipr;
 		(cl, ok) := cr.clip(oc);

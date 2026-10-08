@@ -637,7 +637,7 @@ startedit(f: ref Field)
 	if((st.bgcolor & 255) == 255)
 		bg = col(st.bgcolor);
 	opts := sys->sprint(" -font %s -background %s -foreground %s -borderwidth 0 -highlightthickness 0 -relief flat",
-		fontfor(st.fontsize), bg, col(st.color));
+		fontfor(st.fontsize, f.kind == "textarea"), bg, col(st.color));
 	w := ".view.c.edit";
 	if(f.kind == "textarea") {
 		tkc("text " + w + " -wrap word" + opts);
@@ -707,15 +707,19 @@ postselect(f: ref Field)
 	tkc(sys->sprint(".selm post %d %d", scrx + r.min.x, scry + r.max.y - scroll));
 }
 
-# the Tk font nearest the page's size, not larger
-fontfor(px: real): string
+# The Go face nearest the field's size: Tk draws only bitmap fonts,
+# and these are the sizes there are.
+fontfor(px: real, mono: int): string
 {
-	sizes := array[] of {12, 14, 18, 24, 32, 48};
+	sizes := array[] of {14, 16, 18, 20, 21, 22, 24, 27, 28, 32, 36};
 	n := sizes[0];
 	for(i := 0; i < len sizes; i++)
-		if(real sizes[i] <= px + 1.0)
+		if(real sizes[i] - px < px - real n)
 			n = sizes[i];
-	return sys->sprint("/fonts/combined/unicode.sans.%d.font", n);
+	face := "go";
+	if(mono)
+		face = "gomono";
+	return sys->sprint("/fonts/combined/%s.%d.font", face, n);
 }
 
 # Keep the widget being typed into over its field as the page scrolls.

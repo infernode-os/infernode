@@ -124,6 +124,7 @@ TARG=\
 	web_fonts_test.dis\
 	bidi_test.dis\
 	brotli_test.dis\
+	readwebp_test.dis\
 	tls_crypto_test.dis\
 	tls_live_test.dis\
 	tls_protocol_test.dis\

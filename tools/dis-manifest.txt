@@ -797,6 +797,7 @@ dis/tests/pqc_fuzz_test.dis
 dis/tests/pres_launch_test.dis
 dis/tests/publicnet_host_test.dis
 dis/tests/publicnet_test.dis
+dis/tests/readwebp_test.dis
 dis/tests/refadt_zero_test.dis
 dis/tests/regex_test.dis
 dis/tests/render_registry_test.dis

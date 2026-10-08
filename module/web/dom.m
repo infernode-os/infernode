@@ -24,6 +24,11 @@ Dom: module
 	# namespaces
 	HTML, SVG, MathML: con iota;
 
+	# the attribute marking a popover its invoker has opened (:popover-open):
+	# a NUL begins it, which no attribute from markup can (the parser
+	# makes NUL U+FFFD)
+	POPOPEN: con "\u0000popover-open";
+
 	# tags known to the parser; the order matches tagnames in dom.b
 	Tnone, Ta, Tabbr, Taddress, Tapplet, Tarea, Tarticle, Taside, Taudio,
 	Tb, Tbase, Tbasefont, Tbdi, Tbdo, Tbgsound, Tbig, Tblockquote, Tbody,

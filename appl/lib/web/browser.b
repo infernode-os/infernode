@@ -1107,6 +1107,8 @@ Session.click(s: self ref Session, n: int): string
 	d := pg.doc;
 	if(n <= 0 || n >= d.n)
 		return sys->sprint("no node %d", n);
+	if(popovers(s, pg, n))
+		return nil;
 	for(m := n; m > 1; m = d.nodes[m].parent) {
 		nd := d.nodes[m];
 		if(nd.kind != Dom->Element || nd.ns != Dom->HTML)
@@ -1164,6 +1166,78 @@ Session.click(s: self ref Session, n: int): string
 		}
 	}
 	return nil;
+}
+
+# Popovers (HTML §6.12) without a script: a button with popovertarget
+# shows, hides or toggles the element it names; a click outside an open
+# auto popover closes it (light dismiss).  Whether the click was taken.
+popovers(s: ref Session, pg: ref Pg, n: int): int
+{
+	d := pg.doc;
+	changed := 0;
+	invoked := 0;
+	for(m := n; m > 1 && !invoked; m = d.nodes[m].parent) {
+		nd := d.nodes[m];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || (nd.tag != Dom->Tbutton && nd.tag != Dom->Tinput))
+			continue;
+		if((id := d.attr(m, "popovertarget")) == nil || d.hasattr(m, "disabled"))
+			continue;
+		t := byid(d, id);
+		if(t == 0 || !d.hasattr(t, "popover"))
+			continue;
+		open := d.hasattr(t, Dom->POPOPEN);
+		case lower(d.attr(m, "popovertargetaction")) {
+		"show" =>
+			if(!open) {
+				d.setattr(t, Dom->POPOPEN, "");
+				changed = 1;
+			}
+		"hide" =>
+			if(open) {
+				d.delattr(t, Dom->POPOPEN);
+				changed = 1;
+			}
+		* =>
+			if(open)
+				d.delattr(t, Dom->POPOPEN);
+			else
+				d.setattr(t, Dom->POPOPEN, "");
+			changed = 1;
+		}
+		invoked = t;
+	}
+	# light dismiss: open auto popovers the click is not inside
+	for(p := 1; p < d.n; p++) {
+		if(p == invoked || !d.hasattr(p, Dom->POPOPEN) || lower(d.attr(p, "popover")) == "manual")
+			continue;
+		if(inside(d, n, p))
+			continue;
+		d.delattr(p, Dom->POPOPEN);
+		changed = 1;
+	}
+	if(changed) {
+		lock(s);
+		pg.update();
+		unlock(s);
+		event(s, "update");
+	}
+	return invoked != 0;
+}
+
+byid(d: ref Doc, id: string): int
+{
+	for(i := 1; i < d.n; i++)
+		if(d.nodes[i].kind == Dom->Element && d.attr(i, "id") == id)
+			return i;
+	return 0;
+}
+
+inside(d: ref Doc, n, p: int): int
+{
+	for(; n > 0; n = d.nodes[n].parent)
+		if(n == p)
+			return 1;
+	return 0;
 }
 
 # ---- the document, node by node ----

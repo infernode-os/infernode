@@ -39,6 +39,12 @@ listing, plaintext, pre, xmp { font-family: monospace; white-space: pre; }
 dialog { position: absolute; inset-inline: 0; margin: auto; border: solid;
 	padding: 1em; background: Canvas; color: CanvasText; width: fit-content; height: fit-content; }
 dialog[open] { display: block; }
+/* §6.12 the popover attribute: hidden until its invoker opens it */
+[popover] { position: fixed; inset: 0; width: fit-content; height: fit-content;
+	margin: auto; border: solid; padding: 0.25em; overflow: auto;
+	color: CanvasText; background-color: Canvas; }
+[popover]:not(:popover-open):not(dialog[open]) { display: none; }
+dialog:popover-open { display: block; }
 
 /* §15.3.4 phrasing content */
 cite, dfn, em, i, var { font-style: italic; }

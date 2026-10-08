@@ -888,6 +888,9 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"placeholder-shown" =>
 		return (nd.tag == Dom->Tinput || nd.tag == Dom->Ttextarea) &&
 			d.hasattr(n, "placeholder") && d.attr(n, "value") == "";
+	"popover-open" =>
+		# opened by its invoker (browser.b): a mark markup cannot make
+		return d.hasattr(n, "popover") && d.hasattr(n, Dom->POPOPEN);
 	"open" =>
 		return d.hasattr(n, "open");
 	"closed" =>

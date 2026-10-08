@@ -1357,24 +1357,24 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		inl = 0;
 	}
 	if(nd.ns == Dom->SVG && nd.name == "svg") {
+		# an SVG root's intrinsic size (SVG 2 §8.6), as an <img> of one
+		# has it (svgdims): the width and height it gives, a percentage
+		# of the containing block, the viewBox's ratio; with a ratio
+		# alone it fills the containing block's width (CSS 2.2 §10.3.2),
+		# with nothing 300 by 150.  Google's icons, viewBox only, were
+		# 300 square in a 24px button.
 		r := newbox(Kreplaced, inl, n, st);
-		r.iw = dimattr(b.d.attr(n, "width"), 300);
-		r.ih = dimattr(b.d.attr(n, "height"), 150);
+		r.svg = 1;
 		wa := b.d.attr(n, "width");
 		ha := b.d.attr(n, "height");
-		if((wa == nil || ha == nil) && (vb := viewbox(b.d.attr(n, "viewBox"))) != nil && vb[2] > 0.0 && vb[3] > 0.0) {
-			# a size it does not give follows the viewBox's ratio (SVG 2
-			# §8.6): from the one it gives, else at the default 300 wide
-			# (an icon with only height="24" was 300 wide)
-			if(wa == nil && ha != nil)
-				r.iw = ir(real r.ih * vb[2] / vb[3]);
-			else if(ha == nil && wa != nil)
-				r.ih = ir(real r.iw * vb[3] / vb[2]);
-			else {
-				r.iw = 300;
-				r.ih = ir(300.0 * vb[3] / vb[2]);
-			}
-		}
+		r.iw = dimattr(wa, 0);
+		r.ih = dimattr(ha, 0);
+		r.ipw = pctattr(wa);
+		r.iph = pctattr(ha);
+		if((vb := viewbox(b.d.attr(n, "viewBox"))) != nil && vb[2] > 0.0 && vb[3] > 0.0)
+			r.iratio = vb[2] / vb[3];
+		else if(r.iw > 0 && r.ih > 0)
+			r.iratio = real r.iw / real r.ih;
 		return r;
 	}
 	if(nd.ns != Dom->HTML)
@@ -1506,6 +1506,16 @@ dimattr(s: string, dflt: int): int
 		return dflt;
 	return v;
 }
+
+# a dimension attribute's percentage, or 0
+pctattr(s: string): real
+{
+	s = trimsp(s);
+	if(len s < 2 || s[len s - 1] != '%')
+		return 0.0;
+	return real s[0:len s - 1];
+}
+
 
 squash(s: string): string
 {

@@ -3049,12 +3049,20 @@ nothing to detach and nothing is.
 
 **12. The userspace on the card.** `boot-baremetal.sh` starts
 `secstored`, `logon`, `luciuisrv` and `lucifer`. Against the hosted
-`boot.sh` it lacks `ndb/cs` (no name resolution — which is why
-secstore is dialled by number), the plumber, `mntgen`, `llmsrv` (so
-`/mnt/llm` is an empty mount point), `tools9p` at `/tool` (so Veltro
-has no tools), `msg9p`, `wallet9p`, `lucibridge`. Order: `ndb/cs` and
-the plumber first, because everything else assumes them. The mount
-points already exist in the root skeleton.
+`boot.sh` it lacks the plumber, `mntgen`, `llmsrv` (so `/mnt/llm` is an
+empty mount point), `tools9p` at `/tool` (so Veltro has no tools),
+`msg9p`, `wallet9p`, `lucibridge`. The plumber first, because
+everything else assumes it. The mount points already exist in the root
+skeleton.
+*Name service DONE 2026-10-08:* the profile starts `ndb/dns -r` and
+`ndb/cs`; etherusb's DHCP asks for and records the lease's name servers
+in `/net/ndb` (the form `ip/dhcp` writes), `ndb/dns` finds them there
+when no ndb file names this machine, and both fall back to the shipped
+`common`/`inferno`/`dns` files when there is no site `lib/ndb/local`
+(a fresh card has none). Checked under QEMU virt from a card: names
+resolve, and webfs fetches an https page (200, 533 KB). Before this,
+every name failed at once ("invalid IP address") and Charon showed a
+white page for any site.
 
 **13. Throughput.** The ledger stands: 12.4 MB/s through the wire path,
 2.6 MB/s through a Limbo TCP consumer. The levers are still the two

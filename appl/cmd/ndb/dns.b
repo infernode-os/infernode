@@ -376,20 +376,25 @@ dnsdb: ref Db;
 
 readservers(): list of string
 {
-	if(laststat != 0 && now < laststat+2*60)
-		return servers;
+	if(laststat != 0 && now < laststat+2*60 && servers != nil)
+		return servers;	# (none yet is asked again: DHCP may not have answered when this started)
 	laststat = now;
 	if(dnsdb == nil){
 		db := Db.open(dnsfile);
-		if(db == nil){
-			sys->fprint(stderr, "dns: can't open %s: %r\n", dnsfile);
-			return nil;
-		}
+		if(db == nil && dnsfile == "/lib/ndb/local")
+			db = Db.open("/lib/ndb/dns");	# no site file (a fresh card): the shipped root server hints
 		dyndb := Db.open(mntpt+"/ndb");
-		if(dyndb != nil)
+		if(dyndb != nil && db != nil)
 			dnsdb = dyndb.append(db);
+		else if(dyndb != nil)
+			dnsdb = dyndb;	# what DHCP wrote is enough to find the servers
 		else
 			dnsdb = db;
+		if(dnsdb == nil){
+			sys->fprint(stderr, "dns: can't open %s or %s/ndb: %r\n", dnsfile, mntpt);
+			laststat = 0;
+			return nil;
+		}
 	}else{
 		if(!dnsdb.changed())
 			return servers;
@@ -400,6 +405,8 @@ readservers(): list of string
 	dnsdomains = "" :: l;
 	if((l = dblooknet("sys", myname, "dns")) == nil)
 		l = dblook("infernosite", "", "dns");
+	if(l == nil)
+		l = netdns(mntpt+"/ndb");
 	servers = l;
 #	zones := dblook("soa", "", "dom");
 #printlist("zones", zones);
@@ -408,6 +415,28 @@ readservers(): list of string
 	if(debug)
 		printlist("servers", servers);
 	return servers;
+}
+
+# The servers the network named: every dns= in net/ndb, which a DHCP
+# client writes in a block keyed by the address it was given, naming
+# this machine only if the lease did.  So a machine configured by DHCP
+# that is in no ndb file of its own still finds its servers.
+netdns(file: string): list of string
+{
+	fd := sys->open(file, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	t := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		t += string buf[0:n];
+	rl: list of string;
+	for((nil, toks) := sys->tokenize(t, " \t\r\n"); toks != nil; toks = tl toks) {
+		w := hd toks;
+		if(len w > 4 && w[0:4] == "dns=" && !inlist(w[4:], rl))
+			rl = w[4:] :: rl;
+	}
+	return reverse(rl);
 }
 
 printlist(w: string, l: list of string)

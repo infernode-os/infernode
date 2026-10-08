@@ -13541,6 +13541,20 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	(cr, ok) := oclip.clip(r);
 	if(!ok)
 		return;
+	# The bands overlap a little so no seam shows between them; a
+	# translucent colour would be laid on twice there (darker, in
+	# stripes), so with one the bands are copied into a layer, the
+	# later replacing the earlier, and the layer laid on once.
+	out := dst;
+	op := Draw->SoverD;
+	translucent := 0;
+	for(ci := 0; ci < k; ci++)
+		if((cols[ci] & 255) != 255)
+			translucent = 1;
+	if(translucent && (layer := display.newimage(cr, Draw->RGBA32, 0, Draw->Transparent)) != nil) {
+		dst = layer;
+		op = Draw->S;
+	}
 	dst.clipr = cr;
 	if(lin) {
 		# bands perpendicular to the gradient line
@@ -13570,7 +13584,7 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			p.lineto(qx + dy*ext, qy - dx*ext);
 			p.lineto(qx - dy*ext, qy + dx*ext);
 			p.close();
-			dst.fillpath(p, ~0, colorimg(c), (0, 0));
+			dst.fillpathop(p, ~0, colorimg(c), (0, 0), op);
 		}
 	} else {
 		cx := real (r.min.x + r.max.x)/2.0;
@@ -13579,13 +13593,17 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		steps := int rr;
 		if(steps > 256)
 			steps = 256;
-		dst.draw(r, colorimg(cols[k-1]), nil, (0, 0));
+		dst.drawop(r, colorimg(cols[k-1]), nil, (0, 0), op);
 		for(s := steps; s > 0; s--) {
 			t := real s / real steps;
 			p := Path.new();
 			p.ellipse(cx, cy, rr*t, rr*t);
-			dst.fillpath(p, ~0, colorimg(gradcolor(cols, pos, t)), (0, 0));
+			dst.fillpathop(p, ~0, colorimg(gradcolor(cols, pos, t)), (0, 0), op);
 		}
+	}
+	if(dst != out) {
+		out.draw(cr, dst, nil, cr.min);
+		dst = out;
 	}
 	dst.clipr = oclip;
 }
@@ -13600,9 +13618,29 @@ gradcolor(cols: array of int, pos: array of real, t: real): int
 			f := 1.0;
 			if(span > 0.0)
 				f = (t - pos[i-1]) / span;
-			return mix(cols[i-1], cols[i], f);
+			return pmix(cols[i-1], cols[i], f);
 		}
 	return cols[len cols - 1];
+}
+
+# Gradients interpolate premultiplied (Images 3 §3.4.2): toward
+# transparent a colour fades, rather than darkening toward the black
+# that transparent is (vale.rocks's magenta header went murky grey).
+pmix(a, b: int, f: real): int
+{
+	aa := real (a & 255);
+	ba := real (b & 255);
+	al := aa * (1.0 - f) + ba * f;
+	if(al <= 0.0)
+		return 0;
+	r := int al & 255;	# (int rounds)
+	for(sh := 24; sh >= 8; sh -= 8) {
+		x := (real ((a >> sh) & 255) * aa * (1.0 - f) + real ((b >> sh) & 255) * ba * f) / al;
+		if(x > 255.0)
+			x = 255.0;
+		r |= (int x & 255) << sh;
+	}
+	return r;
 }
 
 mix(a, b: int, f: real): int

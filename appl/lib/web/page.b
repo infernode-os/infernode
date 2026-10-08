@@ -717,10 +717,14 @@ loadimages(p: ref Pg, root: ref Box)
 			(data, ctype, err) := fetched(got, b.url);
 			if(err == nil)
 				img = decodeimage(data, ctype, b.url);
-			if(img != nil && (prefix(lower(ctype), "image/svg") || looksvg(data)))
-				svgsrc = (b.url, data) :: svgsrc;
-			else
+			if(img == nil) {
+				if(err == nil)
+					err = "cannot decode " + ctype;
 				p.errors = b.url + ": " + err :: p.errors;
+			} else if(prefix(lower(ctype), "image/svg") || looksvg(data))
+				svgsrc = (b.url, data) :: svgsrc;
+			# (every raster image that decoded was counted a failure here,
+			# with no reason, until the else was given its own test)
 			cache = (b.url, img) :: cache;
 		}
 		if(img != nil) {

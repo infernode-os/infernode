@@ -41,7 +41,7 @@ rm -f "$ROOT/$IMG"
 # group, so give it its own (setsid) and collect its output from a file.
 # The timeout is the backstop for a render that never finishes.
 LOG="$ROOT/.charonshot.$$.log"
-( setsid -w timeout "${CHARONSHOT_TIMEOUT:-60}" "$EMU" -c1 -r"$ROOT" \
+( setsid -w timeout "${CHARONSHOT_TIMEOUT:-60}" "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r"$ROOT" \
 	/dis/tests/charonshot.dis $FLAGS "$W" "/$IMG" "$URL" </dev/null >"$LOG" 2>&1 ) 2>/dev/null || true
 grep -vE '^fs: fsqid|^PERF:|^Killed$' "$LOG" >&2 || true
 rm -f "$LOG" "$ROOT/$IMG.txt"

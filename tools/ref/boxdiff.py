@@ -32,7 +32,7 @@ a = ap.parse_args()
 ch = subprocess.run(['node', os.path.join(ROOT, 'tools/ref/boxes.js'), a.url, str(a.W), str(a.H)],
                     capture_output=True, text=True, timeout=120).stdout
 emu = os.path.join(ROOT, 'emu/Linux/o.emu')
-cr = subprocess.run(['setsid', '-w', 'timeout', '120', emu, '-c1', '-r' + ROOT, '/dis/tests/charonshot.dis',
+cr = subprocess.run(['setsid', '-w', 'timeout', '120', emu, '-c1', '-pheap=1024m', '-pmain=1024m', '-pimage=1024m', '-r' + ROOT, '/dis/tests/charonshot.dis',
                      '-b', '%dx%d' % (a.W, a.H), '/tmp/boxdiff.img', a.url],
                     capture_output=True, text=True).stdout
 corder, c = parse(ch)

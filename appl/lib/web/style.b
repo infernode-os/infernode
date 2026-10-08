@@ -2426,6 +2426,33 @@ subvars(v: array of ref Tok, raw: list of (string, array of ref Tok), vars: ref 
 				out = val[k] :: out;
 			continue;
 		}
+		if(t.kind == Kfunction && t.s == "env") {
+			# environment variables (Environment Variables 1): the
+			# safe-area, titlebar and keyboard insets are none on a
+			# window with nothing over it; any other name takes its
+			# fallback, or makes the value invalid
+			args := trim(t.kids);
+			if(len args == 0 || args[0].kind != Kident)
+				return (0, nil);
+			val: array of ref Tok;
+			nm := lower(args[0].s);
+			if(prefix(nm, "safe-area-") || prefix(nm, "titlebar-area-") || prefix(nm, "keyboard-inset-"))
+				val = array[] of {ref Tok(Kdimension, "px", 0.0, 0, nil)};
+			else {
+				k := 1;
+				while(k < len args && args[k].kind != Kcomma)
+					k++;
+				if(k >= len args)
+					return (0, nil);
+				ok: int;
+				(ok, val) = subvars(trim(args[k+1:]), raw, vars, busy);
+				if(!ok)
+					return (0, nil);
+			}
+			for(k := 0; k < len val; k++)
+				out = val[k] :: out;
+			continue;
+		}
 		if(t.kids != nil && hasvar(t.kids)) {
 			(ok, kids) := subvars(t.kids, raw, vars, busy);
 			if(!ok)
@@ -2445,7 +2472,7 @@ subvars(v: array of ref Tok, raw: list of (string, array of ref Tok), vars: ref 
 hasvar(v: array of ref Tok): int
 {
 	for(i := 0; i < len v; i++) {
-		if(v[i].kind == Kfunction && v[i].s == "var")
+		if(v[i].kind == Kfunction && (v[i].s == "var" || v[i].s == "env"))
 			return 1;
 		if(v[i].kids != nil && hasvar(v[i].kids))
 			return 1;

@@ -923,12 +923,19 @@ decodeimage(data: array of byte, ctype, url: string): ref Image
 	rd := load RImagefile path;
 	if(rd == nil)
 		return nil;
-	rd->init(bufio);
-	(raw, err) := rd->read(bufio->aopen(data));
-	if(raw == nil || err != nil)
+	# a decoder that faults on one image costs that image, not the page
+	{
+		rd->init(bufio);
+		(raw, err) := rd->read(bufio->aopen(data));
+		if(raw == nil || err != nil)
+			return nil;
+		(img, nil) := imageremap->remap(raw, display, 0);
+		return img;
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: %s: %s: %s\n", url, path, e);
 		return nil;
-	(img, nil) := imageremap->remap(raw, display, 0);
-	return img;
+	}
 }
 
 looksvg(data: array of byte): int

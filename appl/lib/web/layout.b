@@ -7154,6 +7154,29 @@ layabs(l: ref L, a: ref Abs, cb: ref Box, pr: Rect)
 				if(k.kind == Ktable && room > cbw)
 					room = cbw;
 				avail = room - k.ml - k.mr;
+			} else if(lauto && rauto) {
+				# aligned in its static position rectangle: the room is
+				# from the rectangle's start to the containing block's
+				# end, or the mirror, or for centre twice the distance
+				# from its centre to the nearer edge (Align 3 §4.3;
+				# position-absolute-center-001)
+				ja := abspalign(st.justifyself);
+				if(a.flexsp == 1 || a.flexsp == 2)
+					ja = flexspalign(a, k, 1);
+				else if(a.sparent.kind == Kgrid)
+					ja = gridspalign(a, k, 1);
+				case ja {
+				Style->ALcenter =>
+					c2 := sr.min.x + sr.max.x;
+					room := c2 - 2*pr.min.x;
+					if(2*pr.max.x - c2 < room)
+						room = 2*pr.max.x - c2;
+					avail = room - k.ml - k.mr;
+				Style->ALend or Style->ALright =>
+					avail = sr.max.x - pr.min.x - k.ml - k.mr;
+				* =>
+					avail = pr.max.x - sr.min.x - k.ml - k.mr;
+				}
 			}
 			w = fit(mn, mx, avail + mgs(k)) - mgs(k);
 		}

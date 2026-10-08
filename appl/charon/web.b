@@ -69,14 +69,16 @@ scroll := 0;
 hilite: Rect;		# the find match, page coordinates
 hiliting := 0;
 findtext := "";
-controls: array of ref Control;	# Tk widgets over the page's form controls
+editing: ref Control;	# the text field being typed into, a Tk widget over it; nil when none
+scrx, scry: int;	# the canvas's origin on the screen, as of the last click
+selpending: ref Field;	# a select pressed on, whose menu the release posts
+layout: Layout;
 hoverurl := "";
 
 Control: adt {
 	f:	ref Field;
 	w:	string;	# widget path
 	x, y:	int;	# page coordinates
-	var:	string;	# check/radio variable
 };
 
 init(ctxt: ref Draw->Context, argv: list of string)
@@ -111,6 +113,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		url = hd argv;
 
 	browser = load Browser Browser->PATH;
+	layout = load Layout Layout->PATH;
 	charonfs = load Charonfs Charonfs->PATH;
 	if(browser == nil || charonfs == nil)
 		fatal(sys->sprint("cannot load the engine: %r"));
@@ -231,7 +234,8 @@ buildui()
 		"pack .status -side bottom -fill x",
 		"pack .view -side top -fill both -expand 1",
 		"pack propagate . 0",
-		"bind .view.c <Button-1> {send act click %x %y}",
+		"bind .view.c <Button-1> {send act click %x %y %X %Y}",
+		"bind .view.c <ButtonRelease-1> {send act release}",
 		"bind .view.c <Motion> {send act hover %x %y}",
 		"bind .view.c <Button-3> {send act menu %X %Y}",
 		"bind .view.c <ButtonPress-4> {send act wheel -1}",
@@ -272,10 +276,9 @@ resized()
 		return;
 	vw = w;
 	vh = h;
-	syncfields();
+	endedit(1);
 	sess.resize(vw, vh);
 	pageimg = nil;
-	rebuildcontrols();
 	redraw();
 }
 
@@ -349,7 +352,7 @@ event(e: string)
 		hiliting = 0;
 		scroll = 0;
 		scrollto(sess.scroll);
-		rebuildcontrols();
+		endedit(0);
 		redraw();
 		if(verb == "error")
 			status("Error: " + rest);	# the page shown says so too (browser.b's errorpage)
@@ -359,7 +362,7 @@ event(e: string)
 		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
 		status("Stopped");
 	"update" =>
-		refreshcontrols();
+		redraw();
 	}
 }
 
@@ -403,16 +406,29 @@ action(a: string)
 				d = int n * (vh - LINE);
 			scrollto(scroll + d);
 		}
+	"release" =>
+		if((f := selpending) != nil) {
+			selpending = nil;
+			postselect(f);
+		}
 	"wheel" =>
 		scrollto(scroll + int rest * 2 * LINE);	# the wheel: two lines a notch
 	"click" =>
 		tk->cmd(top, "focus .view.c");
 		(x, y) := xy(rest);
+		(nil, l) := sys->tokenize(rest, " ");
+		if(len l == 4)	# where the canvas is on the screen, for a menu posted from it
+			(scrx, scry) = (int hd tl tl l - x, int hd tl tl tl l - y);
 		n := sess.nodeat(x, y + scroll);
+		endedit(1);
 		if(n != 0) {
-			syncfields();
-			report(sess.click(n));
-			refreshcontrols();
+			f := fieldat(n);
+			if(f != nil && istext(f.kind))
+				startedit(f);
+			else if(f != nil && f.kind == "select")
+				selpending = f;	# posted when the button comes up: a menu posted on the press goes with the release
+			else
+				report(sess.click(n));
 		}
 	"hover" =>
 		(x, y) := xy(rest);
@@ -424,24 +440,25 @@ action(a: string)
 			else
 				status(sess.title);
 		}
-	"ctl" =>
-		# a form control's own action: click <i> | choose <i> <option>
-		(what, args) := split(rest);
-		(si, sopt) := split(args);
-		i := int si;
-		if(i < 0 || i >= len controls)
-			break;
-		c := controls[i];
-		syncfields();
-		case what {
-		"click" =>
-			report(sess.click(c.f.node));
-		"choose" =>
-			report(sess.set(c.f.node, sopt));
-		"submit" =>
-			report(sess.submit(c.f.form, 0));
+	"submit" =>
+		# Enter in a text field: what was typed, then its form
+		f := editing;
+		endedit(1);
+		if(f != nil && f.f.form != 0)
+			report(sess.submit(f.f.form, 0));
+	"cancel" =>
+		endedit(0);
+	"choose" =>
+		# an option of a select by its place, not its text: send keeps
+		# Tk's quoting, so a value came back as {Dark}
+		(sn, si) := split(rest);
+		if((f := fieldat(int sn)) != nil) {
+			i := int si;
+			for(o := f.options; o != nil && i > 0; o = tl o)
+				i--;
+			if(o != nil)
+				report(sess.set(f.node, (hd o).t0));
 		}
-		refreshcontrols();
 	}
 }
 
@@ -559,166 +576,153 @@ findnext()
 	redraw();
 }
 
-# ---- form controls as Tk widgets ----
+# ---- form controls ----
+#
+# The page draws every control as its CSS has it (the engine knows the
+# fonts, colours, borders and placeholders; a Tk widget over it showed
+# none of them).  A click goes to the session, which checks a box,
+# picks a radio, submits a form or follows a label; a select posts a
+# menu of its options; a text field being typed into is a Tk widget,
+# borderless, in the field's own colours, laid over its padding box
+# until Enter, Escape or a click elsewhere.
 
-rebuildcontrols()
+fieldat(n: int): ref Field
 {
-	for(i := 0; i < len controls; i++)
-		tk->cmd(top, "destroy " + controls[i].w);
-	tk->cmd(top, ".view.c delete ctl");
 	fields := sess.fields();
-	l: list of ref Control;
-	n := 0;
-	for(i = 0; i < len fields; i++) {
-		f := fields[i];
-		if(f.kind == "hidden")
-			continue;
-		(ok, r) := sess.boxof(f.node);
-		if(!ok || r.dx() <= 0 || r.dy() <= 0)
-			continue;
-		w := sys->sprint(".view.c.f%d", n);
-		c := ref Control(f, w, r.min.x, r.min.y, nil);
-		if(!makewidget(c, n))
-			continue;
-		tkc(sys->sprint(".view.c create window %d %d -anchor nw -window %s -width %d -height %d -tags {ctl c%d}",
-			r.min.x, r.min.y - scroll, w, r.dx(), r.dy(), n));
-		l = c :: l;
-		n++;
-	}
-	controls = array[n] of ref Control;
-	for(; l != nil; l = tl l)
-		controls[--n] = hd l;
+	for(i := 0; i < len fields; i++)
+		if(fields[i].node == n)
+			return fields[i];
+	return nil;
 }
 
-makewidget(c: ref Control, i: int): int
+istext(kind: string): int
 {
-	f := c.f;
-	w := c.w;
-	font := " -font /fonts/combined/unicode.sans.12.font";
-	# the page's colours, not the chrome's theme
-	field := " -background white -foreground black -highlightthickness 0";
-	button := " -background #e9e9edff -foreground black -activebackground #d0d0d7ff -activeforeground black";
-	case f.kind {
-	"submit" or "button" or "reset" or "image" =>
-		label := f.value;
-		if(label == "")
-			label = f.kind;
-		tkc(sys->sprint("button %s -text %s -command {send act ctl click %d}%s%s", w, tk->quote(label), i, font, button));
-	"checkbox" or "radio" =>
-		c.var = sys->sprint("v%d", i);
-		cmd := "checkbutton";
-		if(f.kind == "radio")
-			cmd = "radiobutton -value 1";
-		tkc(sys->sprint("%s %s -variable %s -command {send act ctl click %d} -background white -activebackground white -foreground black -selectcolor black -highlightthickness 0",
-			cmd, w, c.var, i));
-		setcheck(c);
-	"select" =>
-		tkc(sys->sprint("menubutton %s -text %s -menu %s.m -relief raised%s%s", w, tk->quote(label(f)), w, font, button));
-		tkc(sys->sprint("menu %s.m", w));
-		k := 0;
-		for(o := f.options; o != nil; o = tl o) {
-			(v, lab, nil) := hd o;
-			tkc(sys->sprint("%s.m add command -label %s -command {send act ctl choose %d %s}",
-				w, tk->quote(lab), i, tk->quote(v)));
-			k++;
+	case kind {
+	"text" or "password" or "search" or "email" or "url" or "tel" or "number" or "textarea" =>
+		return 1;
+	}
+	return 0;
+}
+
+# the node's border box in page coordinates, and the box
+fieldbox(n: int): (int, Rect, ref Layout->Box)
+{
+	pg := sess.pg;
+	if(pg == nil)
+		return (0, Rect((0, 0), (0, 0)), nil);
+	for(l := layout->boxes(pg.root, n); l != nil; l = tl l) {
+		b := hd l;
+		x := 0;
+		y := 0;
+		for(a := b; a != nil; a = a.parent) {
+			x += a.x;
+			y += a.y;
 		}
-	"textarea" =>
-		tkc(sys->sprint("text %s -wrap word%s%s", w, font, field));
-		tkc(sys->sprint("%s insert 1.0 %s", w, tk->quote(f.value)));
-	"file" =>
-		return 0;
-	* =>
+		return (1, Rect((x, y), (x + b.w, y + b.h)), b);
+	}
+	return (0, Rect((0, 0), (0, 0)), nil);
+}
+
+startedit(f: ref Field)
+{
+	(ok, r, b) := fieldbox(f.node);
+	if(!ok)
+		return;
+	# inside the border and padding, as the text is drawn
+	cr := Rect((r.min.x + b.bl + b.pl, r.min.y + b.bt + b.pt), (r.max.x - b.br - b.pr, r.max.y - b.bb - b.pb));
+	if(cr.dx() < 8 || cr.dy() < 8)
+		cr = r;
+	st := b.st;
+	bg := "white";
+	if((st.bgcolor & 255) == 255)
+		bg = col(st.bgcolor);
+	opts := sys->sprint(" -font %s -background %s -foreground %s -borderwidth 0 -highlightthickness 0 -relief flat",
+		fontfor(st.fontsize), bg, col(st.color));
+	w := ".view.c.edit";
+	if(f.kind == "textarea") {
+		tkc("text " + w + " -wrap word" + opts);
+		tkc(w + " insert 1.0 " + tk->quote(f.value));
+	} else {
 		show := "";
 		if(f.kind == "password")
 			show = " -show •";
-		tkc(sys->sprint("entry %s%s%s%s", w, show, font, field));
-		tkc(sys->sprint("%s insert 0 %s", w, tk->quote(f.value)));
-		if(f.form != 0)
-			tkc(sys->sprint("bind %s <Key-\n> {send act ctl submit %d}", w, i));
+		tkc("entry " + w + show + opts);
+		tkc(w + " insert 0 " + tk->quote(f.value));
+		tkc("bind " + w + " <Key-\n> {send act submit}");
 	}
-	return 1;
-}
-
-label(f: ref Field): string
-{
-	for(o := f.options; o != nil; o = tl o)
-		if((hd o).t0 == f.value)
-			return (hd o).t1 + " ▾";
-	return f.value + " ▾";
-}
-
-setcheck(c: ref Control)
-{
-	v := "0";
-	if(c.f.checked)
-		v = "1";
-	tk->cmd(top, sys->sprint("variable %s %s", c.var, v));
-}
-
-# Move the widgets with the page.
-placecontrols()
-{
-	for(i := 0; i < len controls; i++) {
-		c := controls[i];
-		tk->cmd(top, sys->sprint(".view.c coords c%d %d %d", i, c.x, c.y - scroll));
+	tkc("bind " + w + " <Key-\u001b> {send act cancel}");
+	tkc(sys->sprint(".view.c create window %d %d -anchor nw -window %s -width %d -height %d -tags edit",
+		cr.min.x, cr.min.y - scroll, w, cr.dx(), cr.dy()));
+	tkc("focus " + w);
+	editing = ref Control(f, w, cr.min.x, cr.min.y);
+	if(f.kind != "textarea") {
+		# the cursor at the end, the view from the start: set before
+		# the widget had its width, the view scrolled the text away
+		tkc("update");
+		tkc(w + " icursor end");
+		tkc(w + " xview 0");
 	}
+	redraw();
 }
 
-# Typed text goes into the document before anything reads it.
-syncfields()
+# Take what was typed into the page (keep) or drop it, and put the
+# widget away.
+endedit(keep: int)
 {
-	for(i := 0; i < len controls; i++) {
-		c := controls[i];
+	c := editing;
+	if(c == nil)
+		return;
+	editing = nil;
+	if(keep) {
 		v: string;
-		case c.f.kind {
-		"textarea" =>
+		if(c.f.kind == "textarea") {
 			v = tk->cmd(top, c.w + " get 1.0 end");
 			if(len v > 0 && v[len v - 1] == '\n')
 				v = v[0:len v - 1];
-		"text" or "password" or "search" or "email" or "url" or "tel" or "number" or
-		"date" or "time" or "datetime-local" or "month" or "week" or "color" or "range" =>
+		} else
 			v = tk->cmd(top, c.w + " get");
-		* =>
-			continue;
-		}
-		if(v != c.f.value) {
-			sess.set(c.f.node, v);
-			c.f.value = v;
-		}
+		if(v != c.f.value)
+			report(sess.set(c.f.node, v));
 	}
+	tk->cmd(top, ".view.c delete edit");
+	tk->cmd(top, "destroy " + c.w);
+	tk->cmd(top, "focus .view.c");
+	redraw();
 }
 
-# After the session changed fields: their state, and the page.
-refreshcontrols()
+# a select's options as a menu, under it
+postselect(f: ref Field)
 {
-	fields := sess.fields();
-	for(i := 0; i < len controls; i++) {
-		c := controls[i];
-		for(j := 0; j < len fields; j++)
-			if(fields[j].node == c.f.node) {
-				c.f = fields[j];
-				break;
-			}
-		case c.f.kind {
-		"checkbox" or "radio" =>
-			setcheck(c);
-		"select" =>
-			tk->cmd(top, c.w + " configure -text " + tk->quote(label(c.f)));
-		"textarea" =>
-			if(tk->cmd(top, c.w + " get 1.0 end") != c.f.value + "\n") {
-				tk->cmd(top, c.w + " delete 1.0 end");
-				tk->cmd(top, c.w + " insert 1.0 " + tk->quote(c.f.value));
-			}
-		"submit" or "button" or "reset" or "image" or "file" or "hidden" =>
-			;
-		* =>
-			if(tk->cmd(top, c.w + " get") != c.f.value) {
-				tk->cmd(top, c.w + " delete 0 end");
-				tk->cmd(top, c.w + " insert 0 " + tk->quote(c.f.value));
-			}
-		}
+	(ok, r, nil) := fieldbox(f.node);
+	if(!ok)
+		return;
+	tk->cmd(top, "destroy .selm");
+	tkc("menu .selm");
+	i := 0;
+	for(o := f.options; o != nil; o = tl o) {
+		(nil, lab, nil) := hd o;
+		tkc(sys->sprint(".selm add command -label %s -command {send act choose %d %d}",
+			tk->quote(lab), f.node, i++));
 	}
-	redraw();
+	tkc(sys->sprint(".selm post %d %d", scrx + r.min.x, scry + r.max.y - scroll));
+}
+
+# the Tk font nearest the page's size, not larger
+fontfor(px: real): string
+{
+	sizes := array[] of {12, 14, 18, 24, 32, 48};
+	n := sizes[0];
+	for(i := 0; i < len sizes; i++)
+		if(real sizes[i] <= px + 1.0)
+			n = sizes[i];
+	return sys->sprint("/fonts/combined/unicode.sans.%d.font", n);
+}
+
+# Keep the widget being typed into over its field as the page scrolls.
+placecontrols()
+{
+	if(editing != nil)
+		tk->cmd(top, sys->sprint(".view.c coords edit %d %d", editing.x, editing.y - scroll));
 }
 
 # ---- small things ----

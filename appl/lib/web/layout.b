@@ -3607,8 +3607,10 @@ laygrid(l: ref L, b: ref Box, cbw, cbh: int)
 			# its height is its tracks', whatever its properties say (§9.3)
 			imposeh(l, k, ah - k.mt - k.mb, aw, ah);
 		} else if((as == Style->ALnormal && !(ks.aspect > 0.0) || as == Style->ALstretch) && ks.height.kind == Style->Lauto &&
-		   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && k.kind != Kreplaced) {
-			# (normal is start for an item with a ratio, Grid 2 §6.2; grid-aspect-ratio-007)
+		   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto && (k.kind != Kreplaced || checkable(k))) {
+			# (normal is start for an item with a ratio, Grid 2 §6.2; grid-aspect-ratio-007;
+			# a checkbox or radio stretches, an image or a text field does not:
+			# stretch-grid-item-checkbox-input, -text-input-overflow)
 			imposeh(l, k, clamph(k, ah - k.mt - k.mb, ah), aw, ah);
 		} else if(ks.height.pct != 0.0 || ks.minheight.pct != 0.0 || ks.maxheight.pct != 0.0 || heightmatters(k)) {
 			# the area's height is definite for it (Grid 2 §6.6); a
@@ -5560,8 +5562,8 @@ gridw(k: ref Box, aw: int, b: ref Box): int
 	js := ks.justifyself;
 	if(js == Style->ALauto)
 		js = b.st.justifyitems;
-	if((js == Style->ALstretch || js == Style->ALnormal && ks.aspect == 0.0) && ks.ml.kind != Style->Lauto && ks.mr.kind != Style->Lauto && k.kind != Kreplaced)
-		return clampw(k, aw - k.ml - k.mr, aw);	# normal is start for a box with a ratio (Grid 2 §6.2)
+	if((js == Style->ALstretch || js == Style->ALnormal && ks.aspect == 0.0) && ks.ml.kind != Style->Lauto && ks.mr.kind != Style->Lauto && (k.kind != Kreplaced || checkable(k)))
+		return clampw(k, aw - k.ml - k.mr, aw);	# normal is start for a box with a ratio (Grid 2 §6.2); a checkbox or radio stretches as a block does
 	if(k.kind == Kreplaced) {
 		(rw, nil) := replacedsize(k, aw, -1);
 		return clampw(k, rw + hextra(k), aw);
@@ -12489,7 +12491,47 @@ bgclip(st: ref St): int
 radii(b: ref Box): (int, int, int, int)
 {
 	st := b.st;
-	return (res(st.rtl, b.w), res(st.rtr, b.w), res(st.rbr, b.w), res(st.rbl, b.w));
+	r := (res(st.rtl, b.w), res(st.rtr, b.w), res(st.rbr, b.w), res(st.rbl, b.w));
+	if(r.t0 == 0 && r.t1 == 0 && r.t2 == 0 && r.t3 == 0 && (n := nativelook(b)) > 0)
+		return (n, n, n, n);
+	return r;
+}
+
+# A form control drawn as browsers draw their own (appearance: auto):
+# slightly rounded, but only while it has the border the UA sheet gives
+# it, 1px #767676 on every side.  The rounding is not a border-radius in
+# the sheet: browsers drop their own look once a page styles the border
+# or background, and a border-radius would outlive that.  The radius in
+# pixels, 0 when the box is not such a control.
+nativelook(b: ref Box): int
+{
+	st := b.st;
+	if(b.node == 0 || curdoc == nil || !st.appearance)
+		return 0;
+	if(b.bt != 1 || b.br != 1 || b.bb != 1 || b.bl != 1)
+		return 0;
+	grey := int 16r767676FF;
+	if(st.bct != grey || st.bcr != grey || st.bcb != grey || st.bcl != grey ||
+	   st.bst != Style->Bsolid || st.bsr != Style->Bsolid || st.bsb != Style->Bsolid || st.bsl != Style->Bsolid)
+		return 0;
+	nd := curdoc.nodes[b.node];
+	if(nd.ns != Dom->HTML)
+		return 0;
+	case nd.tag {
+	Dom->Tbutton or Dom->Tselect =>
+		return 3;
+	Dom->Ttextarea =>
+		return 2;
+	Dom->Tinput =>
+		case lower(curdoc.attr(b.node, "type")) {
+		"submit" or "reset" or "button" =>
+			return 3;
+		"checkbox" or "radio" or "image" or "hidden" =>
+			return 0;
+		}
+		return 2;
+	}
+	return 0;
 }
 
 hasradius(b: ref Box): int
@@ -13367,6 +13409,66 @@ nows(v: array of ref Tok): array of ref Tok
 	return r;
 }
 
+# an input of type checkbox or radio
+checkable(b: ref Box): int
+{
+	if(b.node == 0 || curdoc == nil || curdoc.nodes[b.node].tag != Dom->Tinput)
+		return 0;
+	t := lower(curdoc.attr(b.node, "type"));
+	return t == "checkbox" || t == "radio";
+}
+
+# A checkbox or radio button as browsers draw one: an outlined square
+# (slightly rounded) or circle, and when checked filled with the accent
+# colour around a white tick or dot.
+paintcheck(dst: ref Image, b: ref Box, r: Rect)
+{
+	if(r.dx() < 4 || r.dy() < 4)
+		return;
+	radio := lower(curdoc.attr(b.node, "type")) == "radio";
+	on := curdoc.hasattr(b.node, "checked");
+	accent := b.st.accent;
+	if(accent == 0 || accent == Style->Ccurrent)
+		accent = int 16r0075FFFF;
+	grey := colorimg(int 16r767676FF);
+	white := colorimg(int 16rFFFFFFFF);
+	fill := colorimg(accent);
+	if(radio) {
+		c := Point((r.min.x + r.max.x) / 2, (r.min.y + r.max.y) / 2);
+		rad := r.dx();
+		if(r.dy() < rad)
+			rad = r.dy();
+		rad = rad / 2 - 1;
+		if(on) {
+			dst.fillellipse(c, rad, rad, fill, (0, 0));
+			dst.fillellipse(c, rad - 1, rad - 1, white, (0, 0));
+			dst.fillellipse(c, rad - 3, rad - 3, fill, (0, 0));
+		} else {
+			dst.fillellipse(c, rad, rad, white, (0, 0));
+			dst.ellipse(c, rad, rad, 0, grey, (0, 0));
+		}
+		return;
+	}
+	if(on) {
+		dst.draw(r.inset(1), fill, nil, (0, 0));
+		dst.draw(Rect((r.min.x + 1, r.min.y), (r.max.x - 1, r.min.y + 1)), fill, nil, (0, 0));
+		dst.draw(Rect((r.min.x + 1, r.max.y - 1), (r.max.x - 1, r.max.y)), fill, nil, (0, 0));
+		dst.draw(Rect((r.min.x, r.min.y + 1), (r.min.x + 1, r.max.y - 1)), fill, nil, (0, 0));
+		dst.draw(Rect((r.max.x - 1, r.min.y + 1), (r.max.x, r.max.y - 1)), fill, nil, (0, 0));
+		# the tick
+		w := r.dx();
+		h := r.dy();
+		p0 := Point(r.min.x + w * 22 / 100, r.min.y + h * 52 / 100);
+		p1 := Point(r.min.x + w * 42 / 100, r.min.y + h * 72 / 100);
+		p2 := Point(r.min.x + w * 78 / 100, r.min.y + h * 30 / 100);
+		dst.line(p0, p1, Draw->Endsquare, Draw->Endsquare, 1, white, (0, 0));
+		dst.line(p1, p2, Draw->Endsquare, Draw->Endsquare, 1, white, (0, 0));
+	} else {
+		dst.draw(r.inset(1), white, nil, (0, 0));
+		dst.border(r, 1, grey, (0, 0));
+	}
+}
+
 paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 {
 	if(textmask)
@@ -13378,6 +13480,10 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 			img = scale(img, cr.dx(), cr.dy());
 		if(img != nil)
 			dst.draw(cr, img, nil, img.r.min);
+		return;
+	}
+	if(checkable(b)) {
+		paintcheck(dst, b, cr);
 		return;
 	}
 	if(b.text != nil) {

@@ -252,6 +252,12 @@ elementboxes(p: ref Pg)
 			for(a := b; a != nil; a = a.parent) {
 				x += a.x;
 				y += a.y;
+				if(a.st != nil && a.st.translated && a.st.tfs == nil) {
+					# moved as drawn, as Chromium's rectangles are (a
+					# translate(-50%) centring read as an offset otherwise)
+					x += int a.st.tx.resolve(real a.w);
+					y += int a.st.ty.resolve(real a.h);
+				}
 			}
 			br := Rect((x, y), (x + b.w, y + b.h));
 			if(b.kind == Layout->Kinline && b.w == 0 && b.h == 0) {

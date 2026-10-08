@@ -1398,11 +1398,22 @@ resolveurl(base, rel: string): string
 {
 	if(rel == nil || base == nil)
 		return rel;
-	# absolute already?
+	# absolute already?  Its path's dot segments go all the same (a
+	# server may refuse a/../b: nasa.gov's fonts came back 406)
 	for(i := 0; i < len rel; i++) {
 		c := rel[i];
-		if(c == ':')
+		if(c == ':') {
+			sch := lower(rel[0:i]);
+			if((sch == "http" || sch == "https" || sch == "file") && index(rel, "/.", 0) >= 0) {
+				(rs, ra, rp, rq) := spliturl(rel);
+				rf := "";
+				if((e := index(rel, "#", 0)) >= 0)
+					rf = rel[e:];	# (spliturl leaves the fragment off)
+				if(rp != "")
+					return rs + ":" + ra + dotsegs(rp) + rq + rf;
+			}
 			return rel;
+		}
 		if(!(isalnum(c) || c == '+' || c == '-' || c == '.'))
 			break;
 	}

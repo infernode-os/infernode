@@ -254,8 +254,55 @@ glyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
 			}
 		} else if(f.outline != nil && (g := f.outline.lookup(c)) >= 0)
 			return (f.outline, g);
+		if(f.next == nil)
+			return scriptglyph(f, c);
 	}
 	return (nil, -1);
+}
+
+# Scripts DejaVu lacks, in outline faces shipped for them, before the
+# bitmap fallback: Thai (Noto Sans Thai, whose marks GPOS places on
+# their bases), which the bitmap font drew with its marks as letters
+# beside them (google.com in Thai)
+SCRIPTDIR: con "/fonts/ttf/noto";
+thaifaces := array[2] of ref OutlineFont->Face;
+thaitried := array[2] of { * => 0 };
+
+scriptglyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
+{
+	if(c < 16r0E00 || c > 16r0E7F)
+		return (nil, -1);
+	b := 0;
+	if(f.outline != nil && contains(tolower(f.outline.name), "bold"))
+		b = 1;
+	if(!thaitried[b]) {
+		thaitried[b] = 1;
+		file := "NotoSansThai-Regular.ttf";
+		if(b)
+			file = "NotoSansThai-Bold.ttf";
+		if((d := readall(SCRIPTDIR + "/" + file)) != nil)
+			(thaifaces[b], nil) = ofont->open(d, "ttf");
+	}
+	if((o := thaifaces[b]) != nil && (g := o.lookup(c)) >= 0)
+		return (o, g);
+	return (nil, -1);
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
+}
+
+tolower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
 }
 
 inranges(r: array of int, c: int): int

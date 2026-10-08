@@ -93,6 +93,7 @@ Style: adt {
 	fill_rule:	int;	# as fillpath's: ~0 non-zero, 1 even-odd
 	cap:		int;	# Draw->Capbutt ...
 	join:		int;	# Draw->Joinmiter ...
+	color:		ref Color;	# the color property: what currentColor is (inherited)
 };
 
 # Gradient stop
@@ -197,7 +198,10 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 			if(t.name == "svg") {
 				canvas = new_canvas(t.attrs);
 				parser.down();
-				render_children(parser, canvas, canvas.transform, default_style());
+				# the root's own fill, stroke, color and style pass down
+				# like any element's (an icon's <svg fill="none"
+				# stroke="currentColor">)
+				render_children(parser, canvas, canvas.transform, parse_style(t.attrs, default_style()));
 				parser.up();
 				return (canvas, "");
 			}
@@ -1119,7 +1123,8 @@ default_style(): ref Style
 		12.0,				# font_size
 		~0,				# fill_rule: nonzero
 		Draw->Capbutt,			# stroke-linecap: butt
-		Draw->Joinmiter			# stroke-linejoin: miter
+		Draw->Joinmiter,		# stroke-linejoin: miter
+		ref Color(0, 0, 0, 255)		# color: black
 	);
 }
 
@@ -1135,21 +1140,26 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 		parent.font_size,
 		parent.fill_rule,
 		parent.cap,
-		parent.join
+		parent.join,
+		parent.color
 	);
 
-	# Parse inline style attribute
+	# the color property first: currentColor in a fill or stroke below,
+	# on this element or in its style, is this element's
+	if((col := attrs.get("color")) != nil && lower(trim(col)) != "currentcolor")
+		s.color = parse_color(col);
 	style_str := attrs.get("style");
 	if(style_str != nil)
-		apply_css_style(s, style_str);
+		css_color(s, style_str);
 
-	# Parse presentation attributes (override style)
+	# presentation attributes, then the style attribute, which wins
+	# over them (SVG 2 §6.4)
 	fill := attrs.get("fill");
 	if(fill != nil) {
 		if(fill == "none")
 			s.fill = nil;
 		else
-			s.fill = parse_color(fill);
+			s.fill = paintof(s, fill);
 	}
 
 	stroke := attrs.get("stroke");
@@ -1157,8 +1167,10 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 		if(stroke == "none")
 			s.stroke = nil;
 		else
-			s.stroke = parse_color(stroke);
+			s.stroke = paintof(s, stroke);
 	}
+	if(style_str != nil)
+		apply_css_style(s, style_str);
 
 	sw := attrs.get("stroke-width");
 	if(sw != nil)
@@ -1232,12 +1244,12 @@ apply_css_style(s: ref Style, css: string)
 			if(value == "none")
 				s.fill = nil;
 			else
-				s.fill = parse_color(value);
+				s.fill = paintof(s, value);
 		"stroke" =>
 			if(value == "none")
 				s.stroke = nil;
 			else
-				s.stroke = parse_color(value);
+				s.stroke = paintof(s, value);
 		"stroke-width" =>
 			s.stroke_width = pd(value, 1.0);
 		"opacity" =>
@@ -1255,6 +1267,25 @@ apply_css_style(s: ref Style, css: string)
 }
 
 # Parse a CSS color value
+# a fill or stroke: currentColor is the color property's value
+paintof(st: ref Style, v: string): ref Color
+{
+	if(lower(trim(v)) == "currentcolor")
+		return st.color;
+	return parse_color(v);
+}
+
+# the color property in a style attribute
+css_color(s: ref Style, css: string)
+{
+	(nil, parts) := sys->tokenize(css, ";");
+	for(p := parts; p != nil; p = tl p) {
+		(name, value) := split_colon(hd p);
+		if(trim(name) == "color" && value != nil && lower(trim(value)) != "currentcolor")
+			s.color = parse_color(trim(value));
+	}
+}
+
 parse_color(s: string): ref Color
 {
 	if(s == nil || len s == 0)
@@ -1586,6 +1617,14 @@ split_semicolons(s: string): list of string
 		}
 	}
 	return parts;
+}
+
+lower(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] >= 'A' && s[i] <= 'Z')
+			s[i] += 'a' - 'A';
+	return s;
 }
 
 split_colon(s: string): (string, string)

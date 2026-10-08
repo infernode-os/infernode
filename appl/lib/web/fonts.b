@@ -661,12 +661,23 @@ webparts1(family: string, weight, italic: int): array of ref Part
 	for(l = webfaces; l != nil; l = tl l) {
 		w := hd l;
 		if(w.family == family && w.weight == best && (w.italic == italic) == bestit)
-			r = w.part :: r;
+			r = varied(w.part, weight) :: r;
 	}
 	a := array[len r] of ref Part;
 	for(i := 0; r != nil; r = tl r)
 		a[i++] = hd r;
 	return a;
+}
+
+# A variable face (one with a wght axis) at the weight wanted: one
+# file serves every weight (github.com's Mona Sans, nasa.gov's Inter);
+# without this all of them were drawn at the default instance.
+varied(p: ref Part, weight: int): ref Part
+{
+	for(l := ofont->axes(p.outline); l != nil; l = tl l)
+		if((hd l).t0 == "wght")
+			return ref Part(ofont->vary(p.outline, ("wght", real weight) :: nil), p.ranges);
+	return p;
 }
 
 # is weight w a better match for want than the best so far?

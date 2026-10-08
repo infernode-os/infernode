@@ -116,6 +116,18 @@ FaceData: adt {
 	nkern:	int;		# and how many
 	gsub:	ref Gsub;	# glyph substitution, or nil
 	gpos:	ref Gsub;	# glyph positioning, or nil (the same shape of table)
+	# variations (OpenType 1.9 fvar, avar, gvar): the axes, and for an
+	# instance (vary) the normalised coordinates, one per axis
+	axes:	array of ref Axis;
+	avaroff:	int;
+	gvaroff:	int;
+	coords:	array of real;	# nil: the default instance
+	varwidths:	array of int;	# advances at coords, -1 not yet worked out
+};
+
+Axis: adt {
+	tag:	string;
+	min, def, max:	real;
 };
 
 # Module state
@@ -203,6 +215,432 @@ getfacedata(f: ref Face): ref FaceData
 	if(idx >= 0 && idx < nfaces)
 		return facetab[idx];
 	return nil;
+}
+
+# ---- variations ----
+
+parsefvar(data: array of byte, off: int): array of ref Axis
+{
+	if(off == 0 || off + 16 > len data)
+		return nil;
+	ao := off + getu16be(data, off + 4);
+	n := getu16be(data, off + 8);
+	sz := getu16be(data, off + 10);
+	if(n == 0 || sz < 20 || ao + n*sz > len data)
+		return nil;
+	a := array[n] of ref Axis;
+	for(i := 0; i < n; i++) {
+		r := ao + i*sz;
+		a[i] = ref Axis(string data[r:r+4], fix1616(data, r+4), fix1616(data, r+8), fix1616(data, r+12));
+	}
+	return a;
+}
+
+fix1616(data: array of byte, off: int): real
+{
+	v := getu32be(data, off);	# an int is 32 bits: negative values come out negative
+	return real v / 65536.0;
+}
+
+axes(f: ref Face): list of (string, real, real, real)
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.axes == nil)
+		return nil;
+	r: list of (string, real, real, real);
+	for(i := len fd.axes - 1; i >= 0; i--)
+		r = (fd.axes[i].tag, fd.axes[i].min, fd.axes[i].def, fd.axes[i].max) :: r;
+	return r;
+}
+
+vary(f: ref Face, values: list of (string, real)): ref Face
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.axes == nil || fd.gvaroff == 0)
+		return f;
+	coords := array[len fd.axes] of { * => 0.0 };
+	any := 0;
+	for(i := 0; i < len fd.axes; i++) {
+		ax := fd.axes[i];
+		v := ax.def;
+		for(l := values; l != nil; l = tl l)
+			if((hd l).t0 == ax.tag)
+				v = (hd l).t1;
+		if(v < ax.min) v = ax.min;
+		if(v > ax.max) v = ax.max;
+		# normalised (OpenType §avar): -1 at min, 0 at default, 1 at max
+		n := 0.0;
+		if(v < ax.def && ax.def > ax.min)
+			n = (v - ax.def) / (ax.def - ax.min);
+		else if(v > ax.def && ax.max > ax.def)
+			n = (v - ax.def) / (ax.max - ax.def);
+		coords[i] = avarmap(fd, i, n);
+		if(coords[i] != 0.0)
+			any = 1;
+	}
+	if(!any)
+		return f;
+	nf := ref *fd;
+	nf.coords = coords;
+	nf.varwidths = array[fd.nglyphs] of { * => -1 };
+	idx := addface(nf);
+	face := ref Face(nf.nglyphs, nf.upem, nf.ascent, nf.descent, nf.fontname, nf.iscid);
+	face.name = nf.fontname + "\t" + string idx;
+	return face;
+}
+
+# avar's piecewise linear map of axis i's normalised value
+avarmap(fd: ref FaceData, axis: int, v: real): real
+{
+	data := fd.ttfdata;
+	o := fd.avaroff;
+	if(o == 0 || o + 8 > len data)
+		return v;
+	n := getu16be(data, o + 6);
+	if(axis >= n)
+		return v;
+	p := o + 8;
+	for(i := 0; i < axis; i++) {
+		if(p + 2 > len data)
+			return v;
+		p += 2 + 4*getu16be(data, p);
+	}
+	cnt := getu16be(data, p);
+	p += 2;
+	if(cnt < 2 || p + 4*cnt > len data)
+		return v;
+	pf := getf2dot14(data, p);
+	pt := getf2dot14(data, p + 2);
+	if(v <= pf)
+		return pt;
+	for(i = 1; i < cnt; i++) {
+		f := getf2dot14(data, p + 4*i);
+		t := getf2dot14(data, p + 4*i + 2);
+		if(v <= f) {
+			if(f == pf)
+				return t;
+			return pt + (t - pt) * (v - pf) / (f - pf);
+		}
+		pf = f;
+		pt = t;
+	}
+	return pt;
+}
+
+# The deltas gvar gives glyph gid's n points and its four phantom
+# points (n, n+1: the origin and the advance) at fd.coords, summed over
+# the tuples that apply, each scaled; points a tuple leaves out are
+# interpolated from those it moves (IUP) along each contour, endpts
+# and the outline's (x, y) given; nil, nil when there are none.
+glyphdeltas(fd: ref FaceData, gid, n: int, endpts, xs, ys: array of int): (array of real, array of real)
+{
+	data := fd.ttfdata;
+	g := fd.gvaroff;
+	if(g == 0 || g + 20 > len data)
+		return (nil, nil);
+	axiscount := getu16be(data, g + 4);
+	nshared := getu16be(data, g + 6);
+	sharedoff := g + getu32be(data, g + 8);
+	glyphcount := getu16be(data, g + 12);
+	flags := getu16be(data, g + 14);
+	arrayoff := g + getu32be(data, g + 16);
+	if(gid >= glyphcount || axiscount != len fd.coords)
+		return (nil, nil);
+	o0, o1: int;
+	if(flags & 1) {
+		o0 = getu32be(data, g + 20 + gid*4);
+		o1 = getu32be(data, g + 20 + (gid+1)*4);
+	} else {
+		o0 = getu16be(data, g + 20 + gid*2) * 2;
+		o1 = getu16be(data, g + 20 + (gid+1)*2) * 2;
+	}
+	if(o1 <= o0)
+		return (nil, nil);
+	gv := arrayoff + o0;
+	if(gv + 4 > len data)
+		return (nil, nil);
+	tcount := getu16be(data, gv);
+	sp := gv + getu16be(data, gv + 2);	# the serialized data
+	np := n + 4;
+	dx := array[np] of { * => 0.0 };
+	dy := array[np] of { * => 0.0 };
+	shared: array of int;
+	if(tcount & 16r8000)
+		(shared, sp) = packedpoints(data, sp);
+	h := gv + 4;
+	moved := 0;
+	for(t := 0; t < (tcount & 16rFFF); t++) {
+		if(h + 4 > len data)
+			break;
+		size := getu16be(data, h);
+		tidx := getu16be(data, h + 2);
+		h += 4;
+		peak := array[axiscount] of real;
+		if(tidx & 16r8000) {
+			for(a := 0; a < axiscount; a++)
+				peak[a] = getf2dot14(data, h + 2*a);
+			h += 2*axiscount;
+		} else {
+			si := tidx & 16rFFF;
+			if(si >= nshared)
+				break;
+			for(a := 0; a < axiscount; a++)
+				peak[a] = getf2dot14(data, sharedoff + (si*axiscount + a)*2);
+		}
+		istart, iend: array of real;
+		if(tidx & 16r4000) {
+			istart = array[axiscount] of real;
+			iend = array[axiscount] of real;
+			for(a := 0; a < axiscount; a++) {
+				istart[a] = getf2dot14(data, h + 2*a);
+				iend[a] = getf2dot14(data, h + 2*(axiscount + a));
+			}
+			h += 4*axiscount;
+		}
+		tdata := sp;
+		sp += size;
+		sc := tuplescalar(fd.coords, peak, istart, iend);
+		if(sc == 0.0)
+			continue;
+		pts := shared;
+		p := tdata;
+		if(tidx & 16r2000)
+			(pts, p) = packedpoints(data, p);
+		cnt := np;
+		if(pts != nil)
+			cnt = len pts;
+		ddx, ddy: array of int;
+		(ddx, p) = packeddeltas(data, p, cnt);
+		(ddy, p) = packeddeltas(data, p, cnt);
+		if(pts == nil) {
+			for(i := 0; i < np; i++) {
+				dx[i] += sc * real ddx[i];
+				dy[i] += sc * real ddy[i];
+			}
+		} else {
+			# the points it names; the rest of each contour inferred
+			tx := array[np] of { * => 0.0 };
+			ty := array[np] of { * => 0.0 };
+			touched := array[np] of { * => 0 };
+			for(i := 0; i < len pts; i++)
+				if(pts[i] < np) {
+					tx[pts[i]] = real ddx[i];
+					ty[pts[i]] = real ddy[i];
+					touched[pts[i]] = 1;
+				}
+			if(endpts != nil && xs != nil) {
+				iup(tx, touched, xs, endpts);
+				iup(ty, touched, ys, endpts);
+			}
+			for(i = 0; i < np; i++) {
+				dx[i] += sc * tx[i];
+				dy[i] += sc * ty[i];
+			}
+		}
+		moved = 1;
+	}
+	if(!moved)
+		return (nil, nil);
+	return (dx, dy);
+}
+
+# a tuple's weight at coords (OpenType gvar, "Algorithm for
+# calculating scalars")
+tuplescalar(coords, peak, istart, iend: array of real): real
+{
+	s := 1.0;
+	for(a := 0; a < len coords; a++) {
+		p := peak[a];
+		if(p == 0.0)
+			continue;
+		v := coords[a];
+		if(v == 0.0)
+			return 0.0;
+		if(istart != nil) {
+			st := istart[a];
+			en := iend[a];
+			if(v < st || v > en)
+				return 0.0;
+			if(v < p) {
+				if(p != st)
+					s *= (v - st) / (p - st);
+			} else if(v > p) {
+				if(en != p)
+					s *= (en - v) / (en - p);
+			}
+		} else {
+			if(v < 0.0 && p > 0.0 || v > 0.0 && p < 0.0)
+				return 0.0;
+			if(v < 0.0 && v < p || v > 0.0 && v > p)
+				continue;	# beyond the peak: its full weight
+			s *= v / p;
+		}
+	}
+	return s;
+}
+
+# packed point numbers: nil means every point
+packedpoints(data: array of byte, p: int): (array of int, int)
+{
+	if(p >= len data)
+		return (nil, p);
+	n := int data[p++];
+	if(n == 0)
+		return (nil, p);
+	if(n & 16r80) {
+		if(p >= len data)
+			return (nil, p);
+		n = (n & 16r7F) << 8 | int data[p++];
+	}
+	r := array[n] of int;
+	last := 0;
+	i := 0;
+	while(i < n && p < len data) {
+		c := int data[p++];
+		run := (c & 16r7F) + 1;
+		for(k := 0; k < run && i < n; k++) {
+			d: int;
+			if(c & 16r80) {
+				if(p + 2 > len data)
+					return (r[0:i], p);
+				d = getu16be(data, p);
+				p += 2;
+			} else {
+				if(p >= len data)
+					return (r[0:i], p);
+				d = int data[p++];
+			}
+			last += d;
+			r[i++] = last;
+		}
+	}
+	return (r[0:i], p);
+}
+
+packeddeltas(data: array of byte, p, n: int): (array of int, int)
+{
+	r := array[n] of { * => 0 };
+	i := 0;
+	while(i < n && p < len data) {
+		c := int data[p++];
+		run := (c & 16r3F) + 1;
+		for(k := 0; k < run && i < n; k++) {
+			if(c & 16r80)
+				r[i] = 0;
+			else if(c & 16r40) {
+				if(p + 2 > len data)
+					return (r, p);
+				r[i] = geti16be(data, p);
+				p += 2;
+			} else {
+				if(p >= len data)
+					return (r, p);
+				r[i] = geti8(data, p);
+				p++;
+			}
+			i++;
+		}
+	}
+	return (r, p);
+}
+
+# Interpolate the deltas of the points a tuple did not name, contour by
+# contour, from the named ones either side (gvar, "Inferred deltas for
+# un-referenced point numbers")
+iup(d: array of real, touched: array of int, c: array of int, endpts: array of int)
+{
+	start := 0;
+	for(ci := 0; ci < len endpts; ci++) {
+		end := endpts[ci];
+		if(end >= len c)
+			break;
+		first := -1;
+		nt := 0;
+		for(i := start; i <= end; i++)
+			if(touched[i]) {
+				if(first < 0)
+					first = i;
+				nt++;
+			}
+		if(nt > 0 && nt < end - start + 1) {
+			if(nt == 1) {
+				for(i = start; i <= end; i++)
+					d[i] = d[first];
+			} else {
+				# walk from each touched point to the next, round the contour
+				p := first;
+				for(;;) {
+					q := p + 1;
+					if(q > end)
+						q = start;
+					while(!touched[q]) {
+						q++;
+						if(q > end)
+							q = start;
+					}
+					# the untouched between p and q
+					k := p + 1;
+					if(k > end)
+						k = start;
+					while(k != q) {
+						d[k] = between(real c[k], real c[p], real c[q], d[p], d[q]);
+						k++;
+						if(k > end)
+							k = start;
+					}
+					p = q;
+					if(p == first)
+						break;
+				}
+			}
+		}
+		start = end + 1;
+	}
+}
+
+between(x, x1, x2, d1, d2: real): real
+{
+	if(x1 == x2) {
+		if(d1 == d2)
+			return d1;
+		return 0.0;
+	}
+	if(x1 > x2) {
+		(x1, x2) = (x2, x1);
+		(d1, d2) = (d2, d1);
+	}
+	if(x <= x1)
+		return d1;
+	if(x >= x2)
+		return d2;
+	return d1 + (x - x1) * (d2 - d1) / (x2 - x1);
+}
+
+# components in a composite glyph
+ncomponents(data: array of byte, off: int): int
+{
+	pos := off + 10;
+	n := 0;
+	for(;;) {
+		if(pos + 4 > len data)
+			break;
+		cf := getu16be(data, pos);
+		pos += 4;
+		if(cf & 16r01)
+			pos += 4;
+		else
+			pos += 2;
+		if(cf & 16r08)
+			pos += 2;
+		else if(cf & 16r40)
+			pos += 4;
+		else if(cf & 16r80)
+			pos += 8;
+		n++;
+		if(!(cf & 16r20))
+			break;
+	}
+	return n;
 }
 
 Face.cidtogid(f: self ref Face, cid: int): int
@@ -331,11 +769,15 @@ Face.advance(f: self ref Face, gid: int, size: real): real
 	fd := getfacedata(f);
 	if(fd == nil || gid < 0 || gid >= fd.nglyphs)
 		return 0.0;
-	if(fd.isttf && fd.ttfwidths != nil)
+	if(fd.isttf && fd.ttfwidths != nil && fd.coords == nil)
 		return real fd.ttfwidths[gid] * size / real fd.upem;
+	if(fd.varwidths != nil && fd.varwidths[gid] >= 0)
+		return real fd.varwidths[gid] * size / real fd.upem;
 	outline := getoutline(fd, gid);
 	if(outline == nil)
 		return 0.0;
+	if(fd.varwidths != nil)
+		fd.varwidths[gid] = outline.width;
 	return real outline.width * size / real fd.upem;
 }
 
@@ -1679,7 +2121,8 @@ parsecff(data: array of byte): (ref FaceData, string)
 		cidmap,
 		0, nil, 0, 0, nil, cffcmap, nil,	# ttfcmap = cffcmap for charcode→GID
 		0, 0,
-		nil, nil		# gsub, gpos
+		nil, nil,		# gsub, gpos
+		nil, 0, 0, nil, nil	# no variations
 	);
 
 	return (fd, nil);
@@ -2200,6 +2643,9 @@ parsettf(data: array of byte): (ref FaceData, string)
 	gsuboff := 0;
 	gposoff := 0;
 	nameoff := 0;
+	fvaroff := 0;
+	avaroff := 0;
+	gvaroff := 0;
 
 	for(i := 0; i < numtables; i++){
 		toff := 12 + i * 16;
@@ -2231,6 +2677,12 @@ parsettf(data: array of byte): (ref FaceData, string)
 			gsuboff = tableoff;
 		"GPOS" =>
 			gposoff = tableoff;
+		"fvar" =>
+			fvaroff = tableoff;
+		"avar" =>
+			avaroff = tableoff;
+		"gvar" =>
+			gvaroff = tableoff;
 		}
 	}
 
@@ -2350,7 +2802,12 @@ parsettf(data: array of byte): (ref FaceData, string)
 		kernpairs,
 		nkern,
 		parsegsub(data, gsuboff, 7),
-		parsegsub(data, gposoff, 9)
+		parsegsub(data, gposoff, 9),
+		parsefvar(data, fvaroff),
+		avaroff,
+		gvaroff,
+		nil,
+		nil
 	);
 
 	return (fd, nil);
@@ -2609,12 +3066,12 @@ getttfglyphrecur(fd: ref FaceData, gid: int, depth: int): ref GlyphOutline
 	ncontours := geti16be(data, off);
 
 	if(ncontours >= 0)
-		return parsesimpleglyph(data, off, ncontours, w);
-	return parsecompositeglyph(fd, data, off, w, depth);
+		return parsesimpleglyph(fd, gid, data, off, ncontours, w);
+	return parsecompositeglyph(fd, gid, data, off, w, depth);
 }
 
 # Parse a simple TrueType glyph
-parsesimpleglyph(data: array of byte, off, ncontours, advwidth: int): ref GlyphOutline
+parsesimpleglyph(fd: ref FaceData, gid: int, data: array of byte, off, ncontours, advwidth: int): ref GlyphOutline
 {
 	if(ncontours == 0)
 		return ref GlyphOutline(nil, advwidth);
@@ -2691,6 +3148,21 @@ parsesimpleglyph(data: array of byte, off, ncontours, advwidth: int): ref GlyphO
 			yval += geti16be(data, pos); pos += 2;
 		}
 		ycoords[i] = yval;
+	}
+
+	# an instance of a variable font: the points moved by its deltas
+	if(fd.coords != nil) {
+		(dx, dy) := glyphdeltas(fd, gid, npoints, endpts, xcoords, ycoords);
+		if(dx != nil) {
+			# the left phantom point is the origin: the outline moves
+			# against it, and the advance is the phantoms' distance
+			d0 := dx[npoints];
+			for(i = 0; i < npoints; i++) {
+				xcoords[i] = int (real xcoords[i] + dx[i] - d0);	# (int rounds)
+				ycoords[i] = int (real ycoords[i] + dy[i]);
+			}
+			advwidth = int (real advwidth + dx[npoints+1] - d0);
+		}
 	}
 
 	# Build PathSeg list from contours
@@ -2785,11 +3257,21 @@ ttfcontourpath(xc, yc, flags: array of int, startpt, endpt: int,
 }
 
 # Parse a composite TrueType glyph
-parsecompositeglyph(fd: ref FaceData, data: array of byte,
+parsecompositeglyph(fd: ref FaceData, gid: int, data: array of byte,
 	off, advwidth, depth: int): ref GlyphOutline
 {
 	pos := off + 10;	# skip header + bbox
 	path: list of ref PathSeg;
+	# an instance: each component's offset is a point the deltas move,
+	# and the four phantom points follow them
+	cdx, cdy: array of real;
+	if(fd.coords != nil) {
+		nc := ncomponents(data, off);
+		(cdx, cdy) = glyphdeltas(fd, gid, nc, nil, nil, nil);
+		if(cdx != nil)
+			advwidth = int (real advwidth + cdx[nc+1] - cdx[nc]);
+	}
+	ci := 0;
 
 	for(;;){
 		if(pos + 4 > len data)
@@ -2835,6 +3317,12 @@ parsecompositeglyph(fd: ref FaceData, data: array of byte,
 			d = getf2dot14(data, pos + 6);
 			pos += 8;
 		}
+
+		if(cdx != nil && ci < len cdx - 4 && cflags & 16r02) {
+			dx += cdx[ci] - cdx[len cdx - 4];
+			dy += cdy[ci];
+		}
+		ci++;
 
 		# Get component glyph outline recursively
 		comp := getttfglyphrecur(fd, glyphidx, depth + 1);

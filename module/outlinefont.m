@@ -16,6 +16,11 @@ OutlineFont: module {
 
 	# Parse font from raw data.  format: "cff" or "ttf"
 	open:	fn(data: array of byte, format: string): (ref Face, string);
+	# A TrueType variable font (fvar, gvar) at the axis values given in
+	# user units, ("wght", 700.0) and the like; the face itself when it
+	# has no axes.  axes() lists them: (tag, min, default, max).
+	vary:	fn(f: ref Face, values: list of (string, real)): ref Face;
+	axes:	fn(f: ref Face): list of (string, real, real, real);
 
 	Face: adt {
 		nglyphs:	int;	# number of glyphs

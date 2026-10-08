@@ -8429,6 +8429,7 @@ inlineintrinsic(b: ref Box): (int, int)
 	prevw: ref Item;	# the word before, with nothing but inline box edges since
 	shy := 0;		# a soft hyphen came between: still one word for the min-content size
 	trail := 0.0;	# the letter spacing after the line's last character so far: trimmed at a line's end
+	edge := 0.0;	# inline box edges since the last opportunity: part of the word that follows
 	for(l := items; l != nil; l = tl l) {
 		it := hd l;
 		case it.kind {
@@ -8439,7 +8440,8 @@ inlineintrinsic(b: ref Box): (int, int)
 			if(it.nowrap || shy || prevw != nil && !wordgap(prevw.box, prevw.text, it, 1))
 				word += w;	# no break between: one unit
 			else
-				word = w;
+				word = edge + w;	# with the padding of a link it starts
+			edge = 0.0;
 			shy = 0;
 			if(word - it.tls > mn)
 				mn = word - it.tls;
@@ -8457,8 +8459,10 @@ inlineintrinsic(b: ref Box): (int, int)
 				word += it.w;
 				if(word > mn)
 					mn = word;
-			} else
+			} else {
 				word = 0.0;
+				edge = 0.0;
+			}
 			if(it.text == " " && collapsible(it.box.st) || hangsep(it.text) && it.box.st.whitespace != Style->Wbreakspaces) {
 				if(content)
 					sp += it.w;	# at the end it hangs
@@ -8471,6 +8475,9 @@ inlineintrinsic(b: ref Box): (int, int)
 		Iopen or Iclose =>
 			line += it.w;
 			word += it.w;
+			edge += it.w;
+			if(word > mn)
+				mn = word;	# a word's closing padding is part of it too
 			if(it.w > 0.0) {
 				content = 1;
 				trail = 0.0;
@@ -8485,6 +8492,7 @@ inlineintrinsic(b: ref Box): (int, int)
 			trail = 0.0;
 			sp = 0.0;
 			word = 0.0;
+			edge = 0.0;
 			content = 1;
 		Ibreak =>
 			if(line - trail > mx)
@@ -8492,6 +8500,7 @@ inlineintrinsic(b: ref Box): (int, int)
 			line = 0.0;
 			trail = 0.0;
 			word = 0.0;
+			edge = 0.0;
 			sp = 0.0;
 			content = 0;
 		Ifloat =>
@@ -9853,7 +9862,7 @@ canbreak(ln: ref Ln, it: ref Item): int
 			return 1;	# a space, a zero-width one
 		return wordgap(f.box, f.text, it, 0);
 	}
-	return 1;
+	return 0;	# nothing but inline box edges before it: no opportunity (a padded link's text went under its padding)
 }
 
 # Do the letters either side of the soft hyphen at i-1 join (Arabic

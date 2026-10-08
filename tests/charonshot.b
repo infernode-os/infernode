@@ -255,8 +255,8 @@ elementboxes(p: ref Pg)
 				if(a.st != nil && a.st.translated && a.st.tfs == nil) {
 					# moved as drawn, as Chromium's rectangles are (a
 					# translate(-50%) centring read as an offset otherwise)
-					x += int a.st.tx.resolve(real a.w);
-					y += int a.st.ty.resolve(real a.h);
+					x += int (a.st.tx.px + a.st.tx.pct * real a.w / 100.0);
+					y += int (a.st.ty.px + a.st.ty.pct * real a.h / 100.0);
 				}
 			}
 			br := Rect((x, y), (x + b.w, y + b.h));

@@ -236,7 +236,7 @@ identlike(l: ref Lx): ref Tok
 	return tok(Kident, s);
 }
 
-# u+0000-00ff, u+4??: a unicode-range, as one identifier "u+0000-00ff".
+# U+0000-00FF, u+4??: a unicode-range, as one identifier, as written.
 # As numbers and dimensions its digits are lost ("+0131" is 131,
 # "+1E00" is 1, "-00FF" is a dimension of unit "ff").  CSS Syntax now
 # re-reads the tokens' text instead (§7.1); without that text, taken
@@ -270,7 +270,7 @@ urange(l: ref Lx): ref Tok
 	}
 	if(!digit || i < len l.s && isname(l.s[i]))
 		return nil;
-	t := tok(Kident, lower(l.s[l.i:i]));
+	t := tok(Kident, l.s[l.i:i]);
 	l.i = i;
 	return t;
 }

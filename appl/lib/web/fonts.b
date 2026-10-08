@@ -644,8 +644,46 @@ addfacedesc(family: string, d: ref Desc, ranges: array of int, data: array of by
 		w = d.wmin;
 	if((err := addface(family, w, d.style > 0, ranges, data)) != nil)
 		return err;
-	(hd webfaces).desc = d;
+	wf := hd webfaces;
+	wf.desc = d;
+	# font-weight auto: the face's own weight, its OS/2 weight class (a
+	# Bold file declared without a weight is bold, not made bolder:
+	# font-synthesis-weight-webfont-bold)
+	if(d.wmax <= 0 && (wc := weightclass(sfntof(data))) > 0)
+		wf.weight = wc;
 	return nil;
+}
+
+# the sfnt inside a WOFF or WOFF2, as addface unpacked it, or the data
+sfntof(data: array of byte): array of byte
+{
+	if(len data >= 4 && string data[0:4] == "wOFF") {
+		(d, nil) := woff(data);
+		return d;
+	}
+	if(len data >= 4 && string data[0:4] == "wOF2" && woff2 != nil) {
+		(d, nil) := woff2->decode(data);
+		return d;
+	}
+	return data;
+}
+
+# OS/2 usWeightClass, or 0
+weightclass(d: array of byte): int
+{
+	if(d == nil || len d < 12)
+		return 0;
+	n := int d[4] << 8 | int d[5];
+	for(i := 0; i < n && 12 + 16*i + 16 <= len d; i++) {
+		t := 12 + 16*i;
+		if(string d[t:t+4] != "OS/2")
+			continue;
+		o := int d[t+8] << 24 | int d[t+9] << 16 | int d[t+10] << 8 | int d[t+11];
+		if(o < 0 || o + 6 > len d)
+			return 0;
+		return int d[o+4] << 8 | int d[o+5];
+	}
+	return 0;
 }
 
 # The faces of a downloaded family for a weight and slant, by the CSS
@@ -718,15 +756,23 @@ webparts1(family: string, weight, style: int, slant, stretch: real, vars: list o
 	if(best < 0)
 		return (nil, 0);
 	r: list of ref Part;
+	sw := best;	# the weight it stands at, for synthetic bold
 	for(l = webfaces; l != nil; l = tl l) {
 		w := hd l;
-		if(w.family == family && faceweight(w, weight) == best && (w.italic == italic) == bestit)
+		if(w.family == family && faceweight(w, weight) == best && (w.italic == italic) == bestit) {
 			r = varied(w, weight, style, slant, stretch, vars) :: r;
+			# a variable face whose weight is its own (auto) is not
+			# made bolder past its range (synthetic-bold-out-of-
+			# capabilities-range); one its rule holds to a weight is
+			# (font-weight-3)
+			if((w.desc == nil || w.desc.wmax <= 0) && hasaxis(ofont->axes(w.part.outline), "wght"))
+				sw = weight;
+		}
 	}
 	a := array[len r] of ref Part;
 	for(i := 0; r != nil; r = tl r)
 		a[i++] = hd r;
-	return (a, best);
+	return (a, sw);
 }
 
 # A variable face (one with a wght axis) at the weight wanted: one

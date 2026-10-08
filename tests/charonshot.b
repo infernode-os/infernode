@@ -247,6 +247,8 @@ elementboxes(p: ref Pg)
 		got := 0;
 		for(l := layout->boxes(p.root, n); l != nil; l = tl l) {
 			b := hd l;
+			if(pseudo(p, n, b))
+				continue;	# ::before, ::after, ::marker: the element's number, not its box
 			x := 0;
 			y := 0;
 			for(a := b; a != nil; a = a.parent) {
@@ -277,6 +279,13 @@ elementboxes(p: ref Pg)
 		else
 			sys->fprint(out, "B %s none\n", paths[n]);
 	}
+}
+
+pseudo(p: ref Pg, n: int, b: ref Layout->Box): int
+{
+	c := p.computed;
+	return b.st != nil && b.st != c.st[n] &&
+		(c.before != nil && b.st == c.before[n] || c.after != nil && b.st == c.after[n] || c.marker != nil && b.st == c.marker[n]);
 }
 
 # -c: would a click on each link find it?  For every a[href], a point
@@ -429,9 +438,13 @@ inlinerect(b: ref Layout->Box): (int, Rect)
 				f := ln.frags[j];
 				if(f.box != b)
 					continue;
-				fr := Rect((ax + f.x, ay + ln.y + f.y), (ax + f.x + f.w, ay + ln.y + f.y + f.h));
-				if(f.h == 0)
+				# a fragment's y is the containing box's, like its x (not
+				# the line's: links in padded headings read 20px low)
+				fr := Rect((ax + f.x, ay + f.y), (ax + f.x + f.w, ay + f.y + f.h));
+				if(f.h == 0) {
+					fr.min.y = ay + ln.y;
 					fr.max.y = ay + ln.y + ln.h;
+				}
 				if(!got)
 					r = fr;
 				else

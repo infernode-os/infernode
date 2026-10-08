@@ -11293,7 +11293,7 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	st := b.st;
 	if(st.opacity == 0.0)
 		return;
-	if(st.opacity < 1.0 && b.kind != Ktext && b != translucent) {
+	if(ownlayer(st) && b.kind != Ktext && b != translucent) {
 		layer(dst, b, o, clip, canvasbg);
 		return;
 	}
@@ -11535,7 +11535,7 @@ zitem(k: ref Box): int
 isctx(k: ref Box): int
 {
 	st := k.st;
-	return k == painted || st.position == Style->Pfixed || st.opacity < 1.0 || st.translated ||
+	return k == painted || st.position == Style->Pfixed || ownlayer(st) || st.translated ||
 		ispositioned(k) && !st.zauto || zitem(k);
 }
 
@@ -11817,7 +11817,7 @@ flowinline(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		k := b.kids[i];
 		if(k.inl || isabs(k) || islayer(k) || isfloat(k))
 			continue;
-		if(k.st.opacity < 1.0) {
+		if(ownlayer(k.st)) {
 			paintctx(dst, k, o, clip, canvasbg);	# a stacking context of its own
 			continue;
 		}
@@ -11846,7 +11846,7 @@ flowinline(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 paintflow(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	st := b.st;
-	if(st.opacity < 1.0) {
+	if(ownlayer(st)) {
 		paintctx(dst, b, o, clip, canvasbg);	# a stacking context of its own
 		return;
 	}
@@ -11907,7 +11907,40 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	translucent = outer;
 	a := int (b.st.opacity * 255.0);
 	mask := display.newimage(Rect((0, 0), (1, 1)), Draw->GREY8, 1, (a << 24) | (a << 16) | (a << 8) | 255);
+	if(hasmask(b.st)) {
+		# the mask layers' alpha, laid out over the border box as
+		# background layers are; an image that is not there masks
+		# all of it (Masking 1 §6.1), so a failed icon shows nothing
+		m := display.newimage(lr, Draw->RGBA32, 0, Draw->Transparent);
+		if(m == nil)
+			return;
+		for(i := len b.st.mask - 1; i >= 0; i--)
+			if(b.st.mask[i].img != nil)
+				paintbg(m, b, r, b.st.mask[i]);
+		if(a < 255) {
+			mo := display.newimage(lr, Draw->RGBA32, 0, Draw->Transparent);
+			if(mo == nil)
+				return;
+			mo.draw(lr, m, mask, lr.min);
+			m = mo;
+		}
+		mask = m;
+	}
 	dst.draw(lr, img, mask, lr.min);
+}
+
+# painted into a layer of its own: translucent, or masked
+ownlayer(st: ref St): int
+{
+	return st.opacity < 1.0 || hasmask(st);
+}
+
+hasmask(st: ref St): int
+{
+	for(i := 0; i < len st.mask; i++)
+		if(st.mask[i].img != nil)
+			return 1;
+	return 0;
 }
 
 # a generous bound on what b paints: its box, its descendants' boxes
@@ -12902,6 +12935,9 @@ bgurls(st: ref St): list of string
 	for(i := 0; i < len st.bg; i++)
 		if(st.bg[i].img != nil && (u := bgurl(st.bg[i].img)) != nil)
 			r = u :: r;
+	for(i = 0; i < len st.mask; i++)
+		if(st.mask[i].img != nil && (mu := bgurl(st.mask[i].img)) != nil)
+			r = mu :: r;
 	if(st.listimage != nil && (lu := bgurl(st.listimage)) != nil)
 		r = lu :: r;
 	if(st.bimage != nil && st.bimage.src != nil && (bu := bgurl(st.bimage.src)) != nil)

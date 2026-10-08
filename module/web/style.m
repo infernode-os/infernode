@@ -263,6 +263,7 @@ Style: module
 		textautospace:	int;	# text-autospace: 0 normal (ideograph-alpha and ideograph-numeric), 1 no-autospace
 		textwrap:	int;	# text-wrap-style: 0 auto, 1 balance, 2 stable, 3 pretty
 		bimage:	ref Bimage;	# border-image, nil for none
+		mask:	array of ref Bg;	# mask layers (Masking 1 §6): the same shape as background layers
 
 		new:	fn(): ref St;		# initial values
 	};

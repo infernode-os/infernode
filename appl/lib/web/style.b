@@ -1845,7 +1845,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil);
 }
 
 nextsid := 1;
@@ -3578,6 +3578,8 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 		return borderparts(sub, x);
 	"background" =>
 		return background(v);
+	"mask" =>
+		return mask(v);
 	"font" =>
 		return font(x);
 	"flex" =>
@@ -3749,7 +3751,7 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 		return nil;	# only the CSS-wide keywords, handled above
 	"border-image" =>
 		return borderimage(x);
-	"transition" or "animation" or "mask" or "text-emphasis" or "offset" or
+	"transition" or "animation" or "text-emphasis" or "offset" or
 	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" or "font-variant" =>
 		return nil;
 	}
@@ -3829,6 +3831,13 @@ alias(nm: string): string
 	"-webkit-box-shadow" => return "box-shadow";
 	"-webkit-border-radius" => return "border-radius";
 	"-webkit-transform" => return "transform";
+	"-webkit-mask" => return "mask";
+	"-webkit-mask-image" => return "mask-image";
+	"-webkit-mask-repeat" => return "mask-repeat";
+	"-webkit-mask-position" => return "mask-position";
+	"-webkit-mask-size" => return "mask-size";
+	"-webkit-mask-origin" => return "mask-origin";
+	"-webkit-mask-clip" => return "mask-clip";
 	}
 	return nm;
 }
@@ -3889,7 +3898,8 @@ shorthand(nm: string): list of string
 			r = allprops[i] :: r;
 		return r;
 	"border-image" => return list of {"border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"};
-	"transition" or "animation" or "mask" or "text-emphasis" or "offset" or
+	"mask" => return list of {"mask-image", "mask-repeat", "mask-position", "mask-size", "mask-origin", "mask-clip"};
+	"transition" or "animation" or "text-emphasis" or "offset" or
 	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" =>
 		return "-x-ignored" :: nil;
 	}
@@ -3905,6 +3915,7 @@ allprops := array[] of {
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
 	"overflow-y", "visibility", "opacity", "transform", "transform-origin", "color", "background-color", "background-image",
+	"mask-image",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
@@ -5079,6 +5090,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	"background-attachment" or "background-origin" or "background-clip" or "background-position-x" or
 	"background-position-y" =>
 		return bglonghand(st, nm, v, ctx);
+	"mask-image" or "mask-repeat" or "mask-position" or "mask-size" or "mask-origin" or "mask-clip" =>
+		return masklonghand(st, nm, v, ctx);
 	"box-shadow" or "text-shadow" =>
 		if(id == "none") {
 			if(nm == "box-shadow")
@@ -5905,6 +5918,65 @@ shadows(v: array of ref Tok, ctx: ref Ctx): array of ref Shadow
 	return a;
 }
 
+# mask-image and the rest: the background longhands' grammar, on the
+# mask layers, whose origin is the border box (Masking 1 §6.6)
+masking := 0;
+
+masklonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
+{
+	saved := st.bg;
+	st.bg = st.mask;
+	masking = 1;
+	ok := bglonghand(st, "background-" + nm[len "mask-":], v, ctx);
+	masking = 0;
+	st.mask = st.bg;
+	st.bg = saved;
+	return ok;
+}
+
+deforigin(): int
+{
+	if(masking)
+		return BOXborder;
+	return BOXpadding;
+}
+
+# The mask shorthand: the background shorthand's layers without a
+# colour or an attachment; mask-mode and mask-composite keywords are
+# accepted and not modelled (alpha and source-over are what icons use).
+mask(v: array of ref Tok): list of (string, array of ref Tok)
+{
+	kept: list of ref Tok;
+	boxes := 0;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Kident)
+			case lower(t.s) {
+			"alpha" or "luminance" or "match-source" or "add" or "subtract" or "intersect" or "exclude" or "no-clip" =>
+				continue;
+			"border-box" or "padding-box" or "content-box" or "fill-box" or "stroke-box" or "view-box" =>
+				boxes = 1;
+			}
+		kept = t :: kept;
+	}
+	r := background(toarray(kept));
+	if(r == nil)
+		return nil;
+	out: list of (string, array of ref Tok);
+	for(; r != nil; r = tl r) {
+		(n, x) := hd r;
+		case n {
+		"background-color" or "background-attachment" =>
+			continue;
+		"background-origin" or "background-clip" =>
+			if(!boxes)
+				x = array[] of {ref Tok(Kident, "border-box", 0.0, 0, nil)};
+		}
+		out = ("mask-" + n[len "background-":], x) :: out;
+	}
+	return out;
+}
+
 bglonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
 {
 	vals := splitcommas(v);
@@ -5921,7 +5993,7 @@ bglonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
 		if(st.bg != nil)
 			nb[k] = ref *st.bg[k % len st.bg];	# the lists set so far repeat
 		else
-			nb[k] = ref Bg(nil, Rrepeat, Rrepeat, px(0.0), px(0.0), kw(Lauto), kw(Lauto), BOXborder, BOXpadding, 0);
+			nb[k] = ref Bg(nil, Rrepeat, Rrepeat, px(0.0), px(0.0), kw(Lauto), kw(Lauto), BOXborder, deforigin(), 0);
 	}
 	st.bg = nb;
 	layers := array[n] of array of ref Tok;
@@ -6156,6 +6228,8 @@ copyprop(d, s: ref St, nm: string)
 	"background-image" or "background-repeat" or "background-position" or "background-size" or
 	"background-attachment" or "background-origin" or "background-clip" =>
 		d.bg = s.bg;
+	"mask-image" or "mask-repeat" or "mask-position" or "mask-size" or "mask-origin" or "mask-clip" =>
+		d.mask = s.mask;
 	"box-shadow" => d.shadows = s.shadows;
 	"text-shadow" => d.textshadows = s.textshadows;
 	"outline-width" => d.outlinew = s.outlinew;

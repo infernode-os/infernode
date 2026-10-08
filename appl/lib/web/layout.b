@@ -13543,17 +13543,22 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		return;
 	# The bands overlap a little so no seam shows between them; a
 	# translucent colour would be laid on twice there (darker, in
-	# stripes), so with one the bands are copied into a layer, the
-	# later replacing the earlier, and the layer laid on once.
+	# stripes).  With one, the colours go opaque into a layer and their
+	# alphas, as opaque greys, into a mask, where overlapping does no
+	# harm, and the layer is laid on once through the mask.
 	out := dst;
-	op := Draw->SoverD;
+	mask: ref Image;
 	translucent := 0;
 	for(ci := 0; ci < k; ci++)
 		if((cols[ci] & 255) != 255)
 			translucent = 1;
-	if(translucent && (layer := display.newimage(cr, Draw->RGBA32, 0, Draw->Transparent)) != nil) {
-		dst = layer;
-		op = Draw->S;
+	if(translucent) {
+		layer := display.newimage(cr, Draw->RGBA32, 0, Draw->Black);
+		mask = display.newimage(cr, Draw->GREY8, 0, Draw->Black);
+		if(layer != nil && mask != nil)
+			dst = layer;
+		else
+			mask = nil;
 	}
 	dst.clipr = cr;
 	if(lin) {
@@ -13584,7 +13589,7 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			p.lineto(qx + dy*ext, qy - dx*ext);
 			p.lineto(qx - dy*ext, qy + dx*ext);
 			p.close();
-			dst.fillpathop(p, ~0, colorimg(c), (0, 0), op);
+			gradband(dst, mask, p, c);
 		}
 	} else {
 		cx := real (r.min.x + r.max.x)/2.0;
@@ -13593,19 +13598,34 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		steps := int rr;
 		if(steps > 256)
 			steps = 256;
-		dst.drawop(r, colorimg(cols[k-1]), nil, (0, 0), op);
+		p := Path.new();
+		p.moveto(real r.min.x, real r.min.y).lineto(real r.max.x, real r.min.y).lineto(real r.max.x, real r.max.y).lineto(real r.min.x, real r.max.y).close();
+		gradband(dst, mask, p, cols[k-1]);
 		for(s := steps; s > 0; s--) {
 			t := real s / real steps;
-			p := Path.new();
+			p = Path.new();
 			p.ellipse(cx, cy, rr*t, rr*t);
-			dst.fillpathop(p, ~0, colorimg(gradcolor(cols, pos, t)), (0, 0), op);
+			gradband(dst, mask, p, gradcolor(cols, pos, t));
 		}
 	}
-	if(dst != out) {
-		out.draw(cr, dst, nil, cr.min);
+	if(mask != nil) {
+		out.draw(cr, dst, mask, cr.min);
 		dst = out;
 	}
 	dst.clipr = oclip;
+}
+
+# one band of a gradient: c, or with a mask c opaque and its alpha into
+# the mask as a grey
+gradband(dst, mask: ref Image, p: ref Path, c: int)
+{
+	if(mask == nil) {
+		dst.fillpath(p, ~0, colorimg(c), (0, 0));
+		return;
+	}
+	a := c & 255;
+	dst.fillpath(p, ~0, colorimg(c | 255), (0, 0));
+	mask.fillpath(p, ~0, colorimg(a << 24 | a << 16 | a << 8 | 255), (0, 0));
 }
 
 gradcolor(cols: array of int, pos: array of real, t: real): int

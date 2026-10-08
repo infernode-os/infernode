@@ -269,6 +269,7 @@ Style: module
 		fontvars:	list of (string, real);	# font-variation-settings: (axis tag, value), in order; nil for normal (inherited)
 		stretch:	real;	# font-stretch (font-width), a percentage (inherited)
 		slant:	real;	# font-style: oblique's angle, degrees (inherited)
+		synth:	int;	# font-synthesis: 1 weight, 2 style (inherited)
 
 		new:	fn(): ref St;		# initial values
 	};

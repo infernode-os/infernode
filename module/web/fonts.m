@@ -25,6 +25,7 @@ Fonts: module
 		parts:	array of ref Part;	# a web family: its faces, by unicode-range
 		next:	cyclic ref Typeface;	# the next family, for what this one lacks
 		nokern:	int;		# kerning off
+		embolden:	int;	# synthetic bold: each glyph drawn again this many pixels to its right
 
 		width:	fn(f: self ref Typeface, s: string): real;
 		has:	fn(f: self ref Typeface, c: int): int;	# a glyph for c, in it or its fallbacks (not the bitmap fallback)
@@ -45,8 +46,10 @@ Fonts: module
 	# the same with what a variable web face's axes take besides the
 	# weight (Fonts 4 §7.2): style (0 normal, 1 italic, 2 oblique) and
 	# oblique's angle in degrees, font-stretch (a percentage), and
-	# font-variation-settings, (axis tag, value), which override them
-	facevar:	fn(family: list of string, weight, style: int, slant, stretch, size: real, vars: list of (string, real)): ref Typeface;
+	# font-variation-settings, (axis tag, value), which override them;
+	# synth, font-synthesis's bits (1 weight, 2 style): a bold the
+	# family has no face heavy enough for is made up
+	facevar:	fn(family: list of string, weight, style: int, slant, stretch, size: real, vars: list of (string, real), synth: int): ref Typeface;
 
 	# what an @font-face rule says of its face (Fonts 4 §4): ranges of
 	# weight and stretch (0, 0 for auto: the font's own), its style

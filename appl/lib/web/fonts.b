@@ -126,10 +126,10 @@ ahemloaded := 0;
 
 face(families: list of string, weight, italic: int, size: real): ref Typeface
 {
-	return facevar(families, weight, italic, 14.0, 100.0, size, nil);
+	return facevar(families, weight, italic, 14.0, 100.0, size, nil, 3);
 }
 
-facevar(families: list of string, weight, style: int, slant, stretch, size: real, vars: list of (string, real)): ref Typeface
+facevar(families: list of string, weight, style: int, slant, stretch, size: real, vars: list of (string, real), synth: int): ref Typeface
 {
 	italic := style != 0;
 	if(size < 1.0)
@@ -146,22 +146,29 @@ facevar(families: list of string, weight, style: int, slant, stretch, size: real
 	# the first family this document has downloaded, then what stands
 	# in for the rest
 	for(l := families; l != nil; l = tl l) {
-		parts := webparts(hd l, weight, style, slant, stretch, vars);
+		(parts, fw) := webparts(hd l, weight, style, slant, stretch, vars);
 		if(parts == nil)
 			continue;
+		# no face heavy enough: a bold made up, as browsers make it (a
+		# pixel's smear per 24 of size, as Skia's fake bold thickens)
+		emb := 0;
+		if(synth & 1 && weight >= 600 && fw <= 500)
+			emb = int (size / 24.0);	# (int rounds)
+		if(synth & 1 && weight >= 600 && fw <= 500 && emb < 1)
+			emb = 1;
 		# what stands in for the characters this family lacks is part
 		# of the face: "Ahem", serif and "Ahem", sans-serif differ
 		next := shipped(tl l, weight, italic, size);
 		h := ((hashstr(hd l) + weight + italic*7 + int (size*4.0)) & 16r7FFFFFFF) % Nfaces;
 		for(cl := cache[h]; cl != nil; cl = tl cl) {
 			c := hd cl;
-			if(c.size == size && c.parts == parts && c.next == next)
+			if(c.size == size && c.parts == parts && c.next == next && c.embolden == emb)
 				return c;
 		}
 		o := parts[0].outline;
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
-		f := ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), parts, nil, 0);
+		f := ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), parts, nil, 0, emb);
 		f.next = next;
 		f.space = advance(f, ' ');
 		cache[h] = f :: cache[h];
@@ -213,7 +220,7 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 	if(o != nil) {
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
-		f = ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), nil, nil, 0);
+		f = ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), nil, nil, 0, 0);
 	} else {
 		# no outline file: the bitmap fallback is the face
 		fb := fallback(size);
@@ -223,7 +230,7 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 			asc = real fb.ascent;
 			desc = real (fb.height - fb.ascent);
 		}
-		f = ref Typeface(nil, size, asc, desc, asc + desc, 0.0, fb, nil, nil, 0);
+		f = ref Typeface(nil, size, asc, desc, asc + desc, 0.0, fb, nil, nil, 0, 0);
 	}
 	f.space = advance(f, ' ');
 	cache[h] = f :: cache[h];
@@ -557,8 +564,11 @@ Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: re
 			if(o == nil)
 				continue;
 		}
-		if(c != ' ' && c != ' ' && c != 16rAD)	# a soft hyphen shows nothing (Text 3 §6.1: not taken as a break)
+		if(c != ' ' && c != ' ' && c != 16rAD) {	# a soft hyphen shows nothing (Text 3 §6.1: not taken as a break)
 			o.drawglyph(g, f.size, dst, Point(int gx, gy), src);
+			for(k := 1; k <= f.embolden; k++)	# synthetic bold: smeared to the right
+				o.drawglyph(g, f.size, dst, Point(int gx + k, gy), src);
+		}
 	}
 	return w;
 }
@@ -644,22 +654,23 @@ addfacedesc(family: string, d: ref Desc, ranges: array of int, data: array of by
 # Every face of that weight and slant comes, one per unicode-range.
 # the faces chosen for a family, weight and style, made once so that
 # the Typeface cache can compare them
-partsmade: list of (string, string, array of ref Part);
+partsmade: list of (string, string, array of ref Part, int);
 
-webparts(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): array of ref Part
+# the faces, and the weight they stand at (for synthetic bold)
+webparts(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): (array of ref Part, int)
 {
 	vk := sys->sprint("%d %d %g %g ", weight, style, slant, stretch);
 	for(vl := vars; vl != nil; vl = tl vl)
 		vk += sys->sprint("%s=%g,", (hd vl).t0, (hd vl).t1);
 	for(pl := partsmade; pl != nil; pl = tl pl) {
-		(pf, pv, pa) := hd pl;
+		(pf, pv, pa, pw) := hd pl;
 		if(pf == family && pv == vk)
-			return pa;
+			return (pa, pw);
 	}
-	a := webparts1(family, weight, style, slant, stretch, vars);
+	(a, w) := webparts1(family, weight, style, slant, stretch, vars);
 	if(a != nil)
-		partsmade = (family, vk, a) :: partsmade;
-	return a;
+		partsmade = (family, vk, a, w) :: partsmade;
+	return (a, w);
 }
 
 # the weight a face is matched by: a range's nearest to the one wanted
@@ -688,7 +699,7 @@ faceweight(w: ref Web, weight: int): int
 	return weight;
 }
 
-webparts1(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): array of ref Part
+webparts1(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): (array of ref Part, int)
 {
 	italic := style != 0;
 	best := -1;
@@ -705,7 +716,7 @@ webparts1(family: string, weight, style: int, slant, stretch: real, vars: list o
 		}
 	}
 	if(best < 0)
-		return nil;
+		return (nil, 0);
 	r: list of ref Part;
 	for(l = webfaces; l != nil; l = tl l) {
 		w := hd l;
@@ -715,7 +726,7 @@ webparts1(family: string, weight, style: int, slant, stretch: real, vars: list o
 	a := array[len r] of ref Part;
 	for(i := 0; r != nil; r = tl r)
 		a[i++] = hd r;
-	return a;
+	return (a, best);
 }
 
 # A variable face (one with a wght axis) at the weight wanted: one

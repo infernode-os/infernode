@@ -11332,7 +11332,7 @@ face(st: ref St): ref Typeface
 	Style->FSitalic =>	fstyle = 1;
 	Style->FSoblique =>	fstyle = 2;
 	}
-	f := fonts->facevar(st.family, st.weight, fstyle, st.slant, st.stretch, st.fontsize, st.fontvars);
+	f := fonts->facevar(st.family, st.weight, fstyle, st.slant, st.stretch, st.fontsize, st.fontvars, st.synth);
 	if(f != nil && st.nokern) {
 		f = ref *f;
 		f.nokern = 1;

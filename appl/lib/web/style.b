@@ -1855,7 +1855,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3);
 }
 
 nextsid := 1;
@@ -1875,6 +1875,7 @@ inherit(p: ref St): ref St
 	s.fontstyle = p.fontstyle;
 	s.stretch = p.stretch;
 	s.slant = p.slant;
+	s.synth = p.synth;
 	s.smallcaps = p.smallcaps;
 	s.lineheight = p.lineheight;
 	s.align = p.align;
@@ -1936,7 +1937,7 @@ anon(parent: ref St, display: int): ref St
 isinherited(nm: string): int
 {
 	case nm {
-	"color" or "font-family" or "font-size" or "font-weight" or "font-style" or "font-stretch" or "font-width" or
+	"color" or "font-family" or "font-size" or "font-weight" or "font-style" or "font-stretch" or "font-width" or "font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" or
 	"font-variant" or "font-variant-caps" or "line-height" or "text-align" or
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
@@ -3848,7 +3849,7 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 	"border-image" =>
 		return borderimage(x);
 	"transition" or "animation" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" or "font-variant" =>
+	"container" or "scroll-margin" or "scroll-padding" or "font-variant" =>
 		return nil;
 	}
 	return nil;
@@ -3996,7 +3997,7 @@ shorthand(nm: string): list of string
 	"border-image" => return list of {"border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"};
 	"mask" => return list of {"mask-image", "mask-repeat", "mask-position", "mask-size", "mask-origin", "mask-clip"};
 	"transition" or "animation" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" =>
+	"container" or "scroll-margin" or "scroll-padding" =>
 		return "-x-ignored" :: nil;
 	}
 	return nil;
@@ -5307,6 +5308,33 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			} else
 				return 0;
 		}
+	"font-synthesis" =>
+		# none, or the kinds a browser may make up (Fonts 4 §5.1)
+		x := nows(v);
+		b := 0;
+		for(i := 0; i < len x; i++) {
+			if(x[i].kind != Kident)
+				return 0;
+			case lower(x[i].s) {
+			"none" =>
+				if(len x != 1)
+					return 0;
+			"weight" =>	b |= 1;
+			"style" =>	b |= 2;
+			"small-caps" or "position" =>	;
+			* =>	return 0;
+			}
+		}
+		st.synth = b;
+	"font-synthesis-weight" or "font-synthesis-style" =>
+		bit := 1;
+		if(nm == "font-synthesis-style")
+			bit = 2;
+		case id {
+		"auto" =>	st.synth |= bit;
+		"none" =>	st.synth &= ~bit;
+		* =>	return 0;
+		}
 	"font-stretch" or "font-width" =>
 		x := nows(v);
 		if(len x != 1)
@@ -6424,6 +6452,7 @@ copyprop(d, s: ref St, nm: string)
 		d.fontstyle = s.fontstyle;
 		d.slant = s.slant;
 	"font-stretch" or "font-width" => d.stretch = s.stretch;
+	"font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" => d.synth = s.synth;
 	"font-variant" or "font-variant-caps" => d.smallcaps = s.smallcaps;
 	"line-height" => d.lineheight = s.lineheight;
 	"text-align" => d.align = s.align;

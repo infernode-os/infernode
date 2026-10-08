@@ -10,6 +10,89 @@ what bit last time.
 PR #754 was merged on 2026-10-02 with the first session's work; this
 branch carries everything after it and has no pull request yet.
 
+## Live-site session, part two: the window, loading, and the pages (2026-10-08, later)
+
+Everything before this had been measured as static pictures; the window
+itself had never been driven.  It was broken in ways no screenshot
+shows, so the first job was the window, tested in a real (headless)
+`wm/wm` session with synthetic input; then loading; then the live pages
+again.  WPT 10,296 -> 10,313, no regression standing.
+
+**The window** (`appl/charon/web.b`):
+
+- Clicks found the outermost inline box under the pointer, not the link
+  inside it: on Hacker News 2 of 199 links took a click.  `layout->boxat`
+  now takes the most specific fragment, looks at floats first, respects
+  clipping, translation, visibility and pointer-events, and treats a
+  bare in-flow block background as a weak hit that anything painted
+  over it beats (Wikipedia's infobox overhangs its section).
+  `charonshot -c` clicks the middle of every visible link and reports
+  `links hit/total`: HN 199/199, python.org 140/140, BBC 57/57,
+  Wikipedia article 1143/1143, GitHub 61/62, go.dev 96/102 (the misses
+  are links Chromium hides too).
+- The wheel was not bound at all; the page height was the root box, so
+  a page whose html and body are `height: 100%` (Wikipedia) could not be
+  scrolled past one screen.  `layout->height` is now the scrollable
+  overflow.
+- Form controls were Tk widgets laid over the page in a fixed font.  The
+  engine now draws every control (Chromium's look, `::placeholder`
+  included); the window only adds a borderless Tk entry, in the field's
+  colours and the nearest Go face, while one is being typed in.
+- Loads: the page shows once its HTML and CSS are laid out, and images
+  fill in as they arrive (Page->begin, Pg.wanted, Pg.install, Pg.frames;
+  a page lock serialises layout and paint, never held across a fetch);
+  webclient keeps connections (six per place, 30s); emu's `truerand`
+  takes the host's generator, which cut the first TLS handshake from
+  4.3s to 0.2s.  Wikipedia article, whole page with images: 11.7s ->
+  about 6s.
+
+**Engine fixes the live pages showed**, each with its commit: overflow
+clips that miss the viewport; `border-radius` clipping images,
+background images and overflow; the `border` shorthand resetting
+border-image (a `rgba()` border drew nothing); nowrap runs measured
+whole, and a float inside one; empty URL path segments; `light-dark()`
+by the element's `color-scheme`; grid auto minimums of scroll
+containers and equal-share maximizing; a fixed box inside a fixed box;
+out-of-flow children in intrinsic widths; abspos room under Align 3; a
+link's padding glued to its word; unicode-range tokenizing; the ex
+unit's first available font; SVG arc flags, gradients, text in glyphs
+and CSS fill on shapes inside inline svg; variable fonts (outlinefont
+reads fvar/avar/gvar; `font-weight`, `font-stretch`, oblique angles,
+`@font-face` ranges and `font-variation-settings` map onto the axes).
+
+Live layout diffs against Chromium at 1280x900 after this (compare.py):
+
+| Page | layout diff |
+|---|---|
+| bbc.com/news | 0.8% |
+| news.ycombinator.com | 0.5% |
+| python.org | 2.1% |
+| wikipedia Plan 9 article | 4.5% |
+| go.dev | 5.1% |
+| rust-lang.org | 5.5% (was 11.0%) |
+| kernel.org | 6.1% |
+| wikipedia main page | 7.7% |
+| theguardian.com | 9.9% |
+| debian.org | 16.5% (was 20.1%) |
+| developer.mozilla.org | 17.6% (was 63.7%) |
+| github.com | 17.8% (header was missing) |
+| apple.com | 17.9% |
+| nasa.gov | 21.7% |
+| docs.python.org library/os | 28.2% (sub-pixel line breaks; h1 wraps in Chromium) |
+
+Testing the window (the recipe the GUI harness skill describes, made
+concrete): `SDL_VIDEODRIVER=dummy emu -g1024x768 /dis/sh.dis -c "wm/wm
+sh /tmp/x.sh"` with a script that does `load std; ndb/cs; wm/charon URL
+&`, then writes `ptr X Y 16` (wheel; over the page, not the status bar),
+`ptr X Y 1`/`0` and `key N` to `/chan/uitest`, and `scap /tmp/x.img`
+(decode with `tools/p9img2png.py`).  A file: page that loads remote
+resources under charonshot needs `ndb/cs; webfs;` first.
+
+Still open: synthetic bold and oblique (`font-synthesis`); SVG text is
+drawn upright under rotation; scripts DejaVu lacks (Wikipedia's
+language list); docs.python.org's sub-pixel wrap differences; the
+Guardian's and GitHub's remaining gradients and glows; `scrollbar-gutter`.
+
 ## Live-site session, 2026-10-08 (read this first)
 
 The cloud sessions could not reach live sites.  This one ran on a Linux

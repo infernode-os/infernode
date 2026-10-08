@@ -64,21 +64,35 @@ Live layout diffs against Chromium at 1280x900 after this (compare.py):
 
 | Page | layout diff |
 |---|---|
-| bbc.com/news | 0.8% |
 | news.ycombinator.com | 0.5% |
+| apple.com | 0.6% (was 17.9%: `<picture>` sources by media query) |
+| bbc.com/news | 0.8% |
+| pantip.com | 1.6% |
 | python.org | 2.1% |
 | wikipedia Plan 9 article | 4.5% |
 | go.dev | 5.1% |
 | rust-lang.org | 5.5% (was 11.0%) |
 | kernel.org | 6.1% |
-| wikipedia main page | 7.7% |
-| theguardian.com | 9.9% |
-| debian.org | 16.5% (was 20.1%) |
-| developer.mozilla.org | 17.6% (was 63.7%) |
-| github.com | 17.8% (header was missing) |
-| apple.com | 17.9% |
-| nasa.gov | 21.7% |
-| docs.python.org library/os | 28.2% (sub-pixel line breaks; h1 wraps in Chromium) |
+| wikipedia main page | 7.4% |
+| theguardian.com | 9.7% |
+| google.com (Thai) | 10.5% (icons were 300px; Thai marks beside letters) |
+| debian.org | 11.4% (was 20.1%) |
+| lwn.net | 12.8% |
+| mozilla.org | 15.6% |
+| developer.mozilla.org | 17.7% (was 63.7%) |
+| github.com | 18.2% (header was missing) |
+| nasa.gov | 22.4% (mostly the hero background) |
+| th.wikipedia.org main page | 24.2% (Thai line breaking: no dictionary) |
+| docs.python.org library/os | 28.1% (the h1 wraps in Chromium by 0.06px) |
+
+Later in the same run: Thai via Noto Sans Thai (`fonts/ttf/noto`, OFL);
+popovers (`popovertarget`, light dismiss); synthetic bold and
+`font-synthesis`; inline SVG sized as an SVG root (a ratio alone fills
+its block); `vi`/`vb` units; translucent gradients premultiplied and
+laid on once; absolute URLs lose dot segments; the x509 trust store
+published whole (a race failed concurrent first TLS handshakes);
+`charonshot -b` reports translated boxes, real inline fragment
+positions and no pseudo-element boxes.
 
 Testing the window (the recipe the GUI harness skill describes, made
 concrete): `SDL_VIDEODRIVER=dummy emu -g1024x768 /dis/sh.dis -c "wm/wm
@@ -88,10 +102,13 @@ sh /tmp/x.sh"` with a script that does `load std; ndb/cs; wm/charon URL
 (decode with `tools/p9img2png.py`).  A file: page that loads remote
 resources under charonshot needs `ndb/cs; webfs;` first.
 
-Still open: synthetic bold and oblique (`font-synthesis`); SVG text is
-drawn upright under rotation; scripts DejaVu lacks (Wikipedia's
-language list); docs.python.org's sub-pixel wrap differences; the
-Guardian's and GitHub's remaining gradients and glows; `scrollbar-gutter`.
+Still open: Thai (and other SA-class scripts') dictionary line
+breaking; synthetic oblique; SVG text is drawn upright under rotation;
+scripts neither DejaVu nor Noto Thai has (Wikipedia's language list);
+docs.python.org's sub-pixel wrap; GitHub's glow gradients;
+`scrollbar-gutter`.  One BUS fault in emu was seen once during a run of
+concurrent font fetches and did not recur in four reruns (the known
+intermittent emu fault, not traced).
 
 ## Live-site session, 2026-10-08 (read this first)
 

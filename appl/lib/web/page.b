@@ -889,7 +889,7 @@ inlinesvg(p: ref Pg, b: ref Box)
 			w := b.w - b.bl - b.br - b.pl - b.pr;
 			h := b.h - b.bt - b.bb - b.pt - b.pb;
 			if(w > 0 && h > 0 && (b.img == nil || b.img.r.dx() != w || b.img.r.dy() != h))
-				b.img = decodeimage(array of byte svgmarkup(p.doc, b.node, w, h, b.st), "image/svg+xml", nil);
+				b.img = decodeimage(array of byte svgmarkup(p.doc, p.computed, b.node, w, h, b.st), "image/svg+xml", nil);
 		}
 	} else if(b.kind == Layout->Kreplaced && b.url != nil && b.img != nil) {
 		# an SVG image: drawn at the size it is shown, not scaled
@@ -952,14 +952,14 @@ carrysvgs(p: ref Pg, imgs: list of (int, ref Image), b: ref Box)
 	}
 }
 
-svgmarkup(d: ref Doc, n, w, h: int, st: ref Style->St): string
+svgmarkup(d: ref Doc, cs: ref Style->Computed, n, w, h: int, st: ref Style->St): string
 {
 	s := "<svg xmlns=\"http://www.w3.org/2000/svg\"";
 	s += sys->sprint(" width=\"%d\" height=\"%d\"", w, h);
 	# what CSS gives the svg element: its color (currentColor) and a
 	# fill or stroke a stylesheet set, which wins over its attributes
 	# and passes down to what it holds (an icon's svg { fill:
-	# currentColor }); rules aimed at the shapes inside are not seen
+	# currentColor }); rules aimed at the shapes inside, below
 	css := sys->sprint("color:#%.6x", (st.color >> 8) & 16rFFFFFF);
 	if(st.svgfill != nil)
 		css += ";fill:" + st.svgfill;
@@ -989,7 +989,7 @@ svgmarkup(d: ref Doc, n, w, h: int, st: ref Style->St): string
 	}
 	s += ">";
 	for(c := d.nodes[n].first; c != 0; c = d.nodes[c].next)
-		s += xmlnode(d, c);
+		s += xmlnode(d, cs, c, st);
 	return s + "</svg>";
 }
 
@@ -1001,21 +1001,45 @@ num(s: string): string
 	return s[0:i];
 }
 
-xmlnode(d: ref Doc, n: int): string
+# An element inside an inline svg, with what the page's style sheets
+# give it that its parent does not have (.logo__text { fill: ... }) as
+# a style that its own style attribute follows.
+xmlnode(d: ref Doc, cs: ref Style->Computed, n: int, pst: ref Style->St): string
 {
 	nd := d.nodes[n];
 	case nd.kind {
 	Dom->Text =>
 		return xmlesc(nd.text);
 	Dom->Element =>
+		st: ref Style->St;
+		if(cs != nil && n < len cs.st)
+			st = cs.st[n];
+		css := "";
+		if(st != nil && pst != nil) {
+			if(st.color != pst.color)
+				css += sys->sprint(";color:#%.6x", (st.color >> 8) & 16rFFFFFF);
+			if(st.svgfill != nil && st.svgfill != pst.svgfill)
+				css += ";fill:" + st.svgfill;
+			if(st.svgstroke != nil && st.svgstroke != pst.svgstroke)
+				css += ";stroke:" + st.svgstroke;
+		}
 		s := "<" + nd.name;
-		for(a := nd.attrs; a != nil; a = tl a)
+		for(a := nd.attrs; a != nil; a = tl a) {
+			if((hd a).t0 == "style" && css != nil) {
+				css += ";" + (hd a).t1;
+				continue;
+			}
 			s += " " + (hd a).t0 + "=\"" + xmlesc((hd a).t1) + "\"";
+		}
+		if(css != nil)
+			s += " style=\"" + xmlesc(css[1:]) + "\"";
+		if(st == nil)
+			st = pst;
 		if(nd.first == 0)
 			return s + "/>";
 		s += ">";
 		for(c := nd.first; c != 0; c = d.nodes[c].next)
-			s += xmlnode(d, c);
+			s += xmlnode(d, cs, c, st);
 		return s + "</" + nd.name + ">";
 	}
 	return "";

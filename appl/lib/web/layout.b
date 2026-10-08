@@ -71,7 +71,7 @@ init(d: ref Display): string
 	if((err = fonts->init(d)) != nil)
 		return err;
 	colors = array[Ncolors] of list of (int, ref Image);
-	faces = array[Nfacecache] of list of (int, ref Typeface);
+	faces = array[Nfacecache] of list of (ref St, ref Typeface);
 	return nil;
 }
 
@@ -1543,6 +1543,10 @@ lay(root: ref Box, width, height: int)
 {
 	if(root.doc != nil)
 		curdoc = root.doc;	# a frame's document may have been built since
+	if(curdoc != facedoc) {
+		faces = array[Nfacecache] of list of (ref St, ref Typeface);	# another page's styles, kept alive by nothing else
+		facedoc = curdoc;
+	}
 	laygen++;
 	l := ref L(width, height, root, nil);
 	edges(root, width);
@@ -9965,6 +9969,14 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		above = 0.0;
 		below = 0.0;
 	}
+	# the line height calculation quirk: in quirks mode a line with no
+	# text takes no strut, nor do the edgeless inline boxes on it, so a
+	# cell holding only an image is the image's height (Quirks §3.3)
+	quirky := curdoc != nil && curdoc.quirks && !linetext(frags);
+	if(quirky) {
+		above = 0.0;
+		below = 0.0;
+	}
 	# An aligned subtree (a top- or bottom-aligned inline box and all
 	# it holds) is placed as one: its extent above and below its
 	# baseline is what touches the line's edge, and what is inside
@@ -9978,6 +9990,8 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 			subtrees = extend(subtrees, anchor, a - shift, d + shift);
 			continue;
 		}
+		if(quirky && f.kind == Fspan && !vedged(f.box))
+			continue;
 		if(a - shift > above)
 			above = a - shift;
 		if(d + shift > below)
@@ -10722,6 +10736,23 @@ visual(f: ref Frag): string
 	return r;
 }
 
+# whether a line holds text: anything but white space collapsed away
+linetext(frags: array of ref Frag): int
+{
+	for(i := 0; i < len frags; i++) {
+		f := frags[i];
+		if(f.kind == Ftext && f.w > 0)
+			return 1;
+	}
+	return 0;
+}
+
+# whether an inline box has a border, padding or margin above or below
+vedged(k: ref Box): int
+{
+	return k.bt != 0 || k.pt != 0 || k.mt != 0 || k.bb != 0 || k.pb != 0 || k.mb != 0;
+}
+
 # A fragment's ascent and descent around its baseline, half-leading
 # included; how far its baseline is shifted down from the line's; and
 # whether it is aligned to the line box instead (VAtop, VAbottom).
@@ -10907,8 +10938,14 @@ lastbaseline(b: ref Box): (int, int)
 
 # ---- caches ----
 
+# Keyed by the style itself.  Its sid only picks the bucket: this
+# module's Style instance numbers the anonymous boxes' styles from 1,
+# as page.b's numbers the elements', so two styles can share a sid
+# and a face found by sid alone was another style's (a ::before line
+# took an earlier page's line height).
 Nfacecache: con 256;
-faces: array of list of (int, ref Typeface);
+faces: array of list of (ref St, ref Typeface);
+facedoc: ref Doc;	# the document the cached styles belong to
 
 face(st: ref St): ref Typeface
 {
@@ -10916,14 +10953,14 @@ face(st: ref St): ref Typeface
 	if(h < 0)
 		h = -h;
 	for(l := faces[h]; l != nil; l = tl l)
-		if((hd l).t0 == st.sid)
+		if((hd l).t0 == st)
 			return (hd l).t1;
 	f := fonts->face(st.family, st.weight, st.fontstyle != Style->FSnormal, st.fontsize);
 	if(f != nil && st.nokern) {
 		f = ref *f;
 		f.nokern = 1;
 	}
-	faces[h] = (st.sid, f) :: faces[h];
+	faces[h] = (st, f) :: faces[h];
 	return f;
 }
 

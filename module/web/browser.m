@@ -8,8 +8,10 @@
 # The Tk front end and /mnt/charon (charonfs) are both clients of one.
 #
 # Navigation is asynchronous: open() starts a load and returns, and
-# the session announces "loading", "done" and "error" events to its
-# listeners.  A newer navigation supersedes one still loading.
+# the session announces "loading <url>", then "shown <url>" once the
+# document is laid out, "update <got> <of>" as its images arrive and
+# it is laid out again with them, and "done <url>" (or "error <msg>")
+# to its listeners.  A newer navigation supersedes one still loading.
 #
 # Form state is the document: setting a field changes its value,
 # checked or selected attribute (or a textarea's text), and the page
@@ -41,7 +43,7 @@ Browser: module
 		pg:	ref Page->Pg;	# nil until something has loaded
 		url:	string;
 		title:	string;
-		status:	string;	# "", "loading <url>", "done", "error <msg>"
+		status:	string;	# "", "loading <url>", "loading images <url>", "done", "error <msg>"
 		back, fwd:	list of string;
 		width, height:	int;
 		scroll:	int;	# where the last navigation asks the view to be (a #fragment)

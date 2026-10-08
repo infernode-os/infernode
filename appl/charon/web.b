@@ -340,30 +340,49 @@ event(e: string)
 		status("Loading " + rest + " ...");
 		tk->cmd(top, ".bar.reload configure -text {✕} -command {send act stop}");
 		tk->cmd(top, "update");
-	"done" or "error" =>
+	"shown" =>
+		# a new page, or a new place in this one; its images still coming
+		shown();
+		if(sess.status != "done")
+			status("Loading images ...");
+	"done" =>
 		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
-		tk->cmd(top, ".bar.url delete 0 end");
-		tk->cmd(top, ".bar.url insert 0 " + tk->quote(sess.url));
+		redraw();
 		title := sess.title;
 		if(title == "")
 			title = sess.url;
-		tkclient->settitle(top, title + " — Charon");
 		status(title);
-		hiliting = 0;
-		scroll = 0;
-		scrollto(sess.scroll);
-		endedit(0);
-		redraw();
-		if(verb == "error")
-			status("Error: " + rest);	# the page shown says so too (browser.b's errorpage)
-		else if(sess.pg != nil && sess.pg.errors != nil)
+		if(sess.pg != nil && sess.pg.errors != nil)
 			status(sys->sprint("%s — %d %s failed", title, len sess.pg.errors, plural(len sess.pg.errors, "resource")));
+	"error" =>
+		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
+		shown();
+		status("Error: " + rest);	# the page shown says so too (browser.b's errorpage)
 	"stopped" =>
 		tk->cmd(top, ".bar.reload configure -text {⟳} -command {send act reload}");
 		status("Stopped");
 	"update" =>
 		redraw();
+		(got, n) := split(rest);
+		if(n != nil && got != n)
+			status(sys->sprint("Loading images ... %s of %s", got, n));
 	}
+}
+
+# The session is showing another page, or another place in it.
+shown()
+{
+	tk->cmd(top, ".bar.url delete 0 end");
+	tk->cmd(top, ".bar.url insert 0 " + tk->quote(sess.url));
+	title := sess.title;
+	if(title == "")
+		title = sess.url;
+	tkclient->settitle(top, title + " — Charon");
+	hiliting = 0;
+	scroll = 0;
+	scrollto(sess.scroll);
+	endedit(0);
+	redraw();
 }
 
 # ---- user actions ----

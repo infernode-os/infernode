@@ -35,8 +35,25 @@ include "web/page.m";
 
 display: ref Display;
 
+# Layout's state is the module's, not a page's: one page lays out or
+# paints at a time, so that a page loading behind the one shown, or
+# images arriving for it, do not lay out under a paint.  Held for the
+# work, never across a fetch.
+plk: chan of int;
+
+plock()
+{
+	plk <-= 1;
+}
+
+punlock()
+{
+	<-plk;
+}
+
 init(d: ref Display): string
 {
+	plk = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
@@ -69,6 +86,23 @@ open(url: string, width, height: int): (ref Pg, string)
 
 request(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
+	(p, err) := begin(url, method, reqctype, body, width, height);
+	if(p == nil)
+		return (nil, err);
+	if((urls := p.wanted()) != nil) {
+		pics: list of ref Pic;
+		for(got := fetchall(urls); got != nil; got = tl got) {
+			g := hd got;
+			pics = picture(g.url, g.data, g.ctype, g.err) :: pics;
+		}
+		p.install(pics);
+	}
+	p.frames();
+	return (p, nil);
+}
+
+begin(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
+{
 	data: array of byte;
 	ctype, err, final: string;
 	if(method == "POST")
@@ -78,10 +112,9 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	if(err != nil && len data == 0)
 		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
 	url = final;	# a redirected page's links are relative to where it is
-	svgsrc = nil;	# the previous page's SVG sources
 	charset := param(ctype, "charset");
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil);
+		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -101,16 +134,144 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 		p.title = squash(d.textof(t));
 	loadsheets(p);
 	loadfonts(p);
-	p.computed = style->compute(d, p.styles, p.env);
 	findobjects(p);
-	layout->setobjects(p.objects);
-	p.root = layout->build(d, p.computed);
-	loadimages(p, p.root);
-	loadbgimages(p);
-	layout->lay(p.root, width, height);
-	inlinesvg(p, p.root);
-	loadframes(p);
+	plock();
+	{
+		p.computed = style->compute(d, p.styles, p.env);
+		rebuild(p);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
 	return (p, nil);
+}
+
+# Build the boxes again from the computed styles, with the images the
+# page has, and lay them out.  Under plk.
+rebuild(p: ref Pg)
+{
+	bgpage = nil;	# its background images, again with any new ones
+	usebg(p);
+	old := p.root;
+	layout->setobjects(p.objects);
+	p.root = layout->build(p.doc, p.computed);
+	if(old != nil)
+		carryimages(old, p.root);
+	applypics(p, p.root);
+	layout->lay(p.root, p.width, p.height);
+	if(old != nil)
+		carrysvgs(p, inlinesvgs(p, old, nil), p.root);	# after: an inline SVG's picture is not its size
+	inlinesvg(p, p.root);
+}
+
+# Layout keeps one table of background images: the page that last
+# painted or laid out's.
+bgpage: ref Pg;
+
+usebg(p: ref Pg)
+{
+	if(bgpage == p)
+		return;
+	layout->clearbgimages();
+	for(l := p.pics; l != nil; l = tl l) {
+		pic := hd l;
+		if(pic.img != nil) {
+			layout->setbgimage(pic.url, pic.img);
+			if(pic.svg != nil)
+				layout->setbgsvg(pic.url, pic.svg);
+		}
+	}
+	bgpage = p;
+}
+
+Pg.wanted(p: self ref Pg): list of string
+{
+	urls: list of string;
+	plock();
+	{
+		curdoc = p.doc;
+		for(l := replacedboxes(p.root, nil); l != nil; l = tl l)
+			urls = (hd l).url :: urls;
+		c := p.computed;
+		for(i := 0; i < len c.st; i++) {
+			if(c.st[i] != nil && c.st[i].display != Style->Dnone)
+				for(lb := layout->bgurls(c.st[i]); lb != nil; lb = tl lb)
+					urls = hd lb :: urls;
+			if(c.before != nil && c.before[i] != nil)
+				for(la := layout->bgurls(c.before[i]); la != nil; la = tl la)
+					urls = hd la :: urls;
+			if(c.after != nil && c.after[i] != nil)
+				for(lc := layout->bgurls(c.after[i]); lc != nil; lc = tl lc)
+					urls = hd lc :: urls;
+		}
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+	r: list of string;
+	for(; urls != nil; urls = tl urls) {
+		u := hd urls;
+		if(u == nil || picof(p, u) != nil)
+			continue;
+		for(t := r; t != nil; t = tl t)
+			if(hd t == u)
+				break;
+		if(t == nil)
+			r = u :: r;
+	}
+	return r;
+}
+
+Pg.install(p: self ref Pg, pics: list of ref Pic)
+{
+	for(; pics != nil; pics = tl pics) {
+		pic := hd pics;
+		if(pic == nil || picof(p, pic.url) != nil)
+			continue;
+		if(pic.err != nil)
+			p.errors = pic.url + ": " + pic.err :: p.errors;
+		p.pics = pic :: p.pics;
+	}
+	plock();
+	{
+		rebuild(p);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+}
+
+Pg.frames(p: self ref Pg)
+{
+	loadframes(p);
+}
+
+picof(p: ref Pg, url: string): ref Pic
+{
+	for(l := p.pics; l != nil; l = tl l)
+		if((hd l).url == url)
+			return hd l;
+	return nil;
+}
+
+# An image fetched, decoded; or why not.
+picture(url: string, data: array of byte, ctype, err: string): ref Pic
+{
+	if(err != nil)
+		return ref Pic(url, nil, nil, err);
+	img := decodeimage(data, ctype, url);
+	if(img == nil)
+		return ref Pic(url, nil, nil, "cannot decode " + ctype);
+	svg: array of byte;
+	if(prefix(lower(ctype), "image/svg") || looksvg(data))
+		svg = data;
+	return ref Pic(url, img, svg, nil);
 }
 
 # ---- nested documents ----
@@ -281,19 +442,31 @@ attached(d: ref Doc, n: int): int
 
 Pg.update(p: self ref Pg)
 {
-	p.computed = style->compute(p.doc, p.styles, p.env);
-	old := p.root;
-	layout->setobjects(p.objects);
-	p.root = layout->build(p.doc, p.computed);
-	carryimages(old, p.root);
-	layout->lay(p.root, p.width, p.height);
-	inlinesvg(p, p.root);
+	plock();
+	{
+		p.computed = style->compute(p.doc, p.styles, p.env);
+		rebuild(p);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
 	loadframes(p);
 }
 
 Pg.paint(p: self ref Pg, dst: ref Image, scroll: Point)
 {
-	layout->paint(p.root, dst, dst.r.min.sub(scroll), dst.r);
+	plock();
+	{
+		usebg(p);
+		layout->paint(p.root, dst, dst.r.min.sub(scroll), dst.r);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
 }
 
 Pg.pageheight(p: self ref Pg): int
@@ -658,86 +831,25 @@ findobjects(p: ref Pg)
 	p.objects = r;
 }
 
-# Background and list-style images the computed styles ask for.
-loadbgimages(p: ref Pg)
-{
-	layout->clearbgimages();
-	urls: list of string;
-	c := p.computed;
-	for(i := 0; i < len c.st; i++) {
-		if(c.st[i] != nil && c.st[i].display != Style->Dnone)
-			for(l := layout->bgurls(c.st[i]); l != nil; l = tl l)
-				urls = hd l :: urls;
-		if(c.before != nil && c.before[i] != nil)
-			for(lb := layout->bgurls(c.before[i]); lb != nil; lb = tl lb)
-				urls = hd lb :: urls;
-		if(c.after != nil && c.after[i] != nil)
-			for(la := layout->bgurls(c.after[i]); la != nil; la = tl la)
-				urls = hd la :: urls;
-	}
-	if(urls == nil)
-		return;
-	got := fetchall(urls);
-	for(; got != nil; got = tl got) {
-		g := hd got;
-		if(g.err != nil) {
-			p.errors = g.url + ": " + g.err :: p.errors;
-			continue;
-		}
-		if((img := decodeimage(g.data, g.ctype, g.url)) != nil) {
-			layout->setbgimage(g.url, img);
-			if(prefix(lower(g.ctype), "image/svg") || looksvg(g.data))
-				layout->setbgsvg(g.url, g.data);
-		}
-	}
-}
-
-# Images for replaced boxes, fetched once per URL.
+# Images for replaced boxes
 curdoc: ref Doc;	# the document whose boxes replacedboxes walks
 
-loadimages(p: ref Pg, root: ref Box)
+# The images the page has, on the boxes that show them.
+applypics(p: ref Pg, root: ref Box)
 {
 	curdoc = p.doc;
-	cache: list of (string, ref Image);
-	boxes := replacedboxes(root, nil);
-	urls: list of string;
-	for(l := boxes; l != nil; l = tl l)
-		urls = (hd l).url :: urls;
-	got := fetchall(urls);
-	for(l = boxes; l != nil; l = tl l) {
+	for(l := replacedboxes(root, nil); l != nil; l = tl l) {
 		b := hd l;
-		img: ref Image;
-		found := 0;
-		for(c := cache; c != nil; c = tl c)
-			if((hd c).t0 == b.url) {
-				img = (hd c).t1;
-				found = 1;
-			}
-		if(!found) {
-			(data, ctype, err) := fetched(got, b.url);
-			if(err == nil)
-				img = decodeimage(data, ctype, b.url);
-			if(img == nil) {
-				if(err == nil)
-					err = "cannot decode " + ctype;
-				p.errors = b.url + ": " + err :: p.errors;
-			} else if(prefix(lower(ctype), "image/svg") || looksvg(data))
-				svgsrc = (b.url, data) :: svgsrc;
-			# (every raster image that decoded was counted a failure here,
-			# with no reason, until the else was given its own test)
-			cache = (b.url, img) :: cache;
-		}
-		if(img != nil) {
-			b.img = img;
-			b.iw = img.r.dx();
-			b.ih = img.r.dy();
-			b.text = nil;
-			for(sl := svgsrc; sl != nil; sl = tl sl)
-				if((hd sl).t0 == b.url) {
-					nd := p.doc.nodes[b.node];
-					svgdims(b, (hd sl).t1, nd.ns == Dom->HTML && (nd.tag == Dom->Tobject || nd.tag == Dom->Tembed));
-					break;
-				}
+		pic := picof(p, b.url);
+		if(pic == nil || pic.img == nil)
+			continue;
+		b.img = pic.img;
+		b.iw = pic.img.r.dx();
+		b.ih = pic.img.r.dy();
+		b.text = nil;
+		if(pic.svg != nil) {
+			nd := p.doc.nodes[b.node];
+			svgdims(b, pic.svg, nd.ns == Dom->HTML && (nd.tag == Dom->Tobject || nd.tag == Dom->Tembed));
 		}
 	}
 }
@@ -769,9 +881,6 @@ svgdims(b: ref Box, data: array of byte, obj: int)
 }
 
 # Inline <svg>: the subtree as markup, rendered at the box's size.
-# SVG images' source, by URL, to draw again at another size
-svgsrc: list of (string, array of byte);
-
 inlinesvg(p: ref Pg, b: ref Box)
 {
 	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0) {
@@ -787,12 +896,9 @@ inlinesvg(p: ref Pg, b: ref Box)
 		w := b.w - b.bl - b.br - b.pl - b.pr;
 		h := b.h - b.bt - b.bb - b.pt - b.pb;
 		if(w > 0 && h > 0 && (b.img.r.dx() != w || b.img.r.dy() != h))
-			for(sl := svgsrc; sl != nil; sl = tl sl)
-				if((hd sl).t0 == b.url) {
-					if((img := decodeimage(layout->svgresize((hd sl).t1, w, h), "image/svg+xml", nil)) != nil)
-						b.img = img;
-					break;
-				}
+			if((pic := picof(p, b.url)) != nil && pic.svg != nil)
+				if((img := decodeimage(layout->svgresize(pic.svg, w, h), "image/svg+xml", nil)) != nil)
+					b.img = img;
 	}
 	for(i := 0; i < len b.kids; i++)
 		inlinesvg(p, b.kids[i]);
@@ -803,6 +909,46 @@ inlinesvg(p: ref Pg, b: ref Box)
 		for(j := 0; j < len ln.frags; j++)
 			if(ln.frags[j].kind == Layout->Fatomic)
 				inlinesvg(p, ln.frags[j].box);
+	}
+}
+
+# Inline <svg>s drawn already, by node, to keep across a rebuild.
+inlinesvgs(p: ref Pg, b: ref Box, acc: list of (int, ref Image)): list of (int, ref Image)
+{
+	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.img != nil && p.doc.nodes[b.node].ns == Dom->SVG)
+		acc = (b.node, b.img) :: acc;
+	for(i := 0; i < len b.kids; i++)
+		acc = inlinesvgs(p, b.kids[i], acc);
+	for(l := b.pos; l != nil; l = tl l)
+		acc = inlinesvgs(p, hd l, acc);
+	for(i = 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++)
+			if(ln.frags[j].kind == Layout->Fatomic)
+				acc = inlinesvgs(p, ln.frags[j].box, acc);
+	}
+	return acc;
+}
+
+carrysvgs(p: ref Pg, imgs: list of (int, ref Image), b: ref Box)
+{
+	if(imgs == nil)
+		return;
+	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.img == nil)
+		for(l := imgs; l != nil; l = tl l)
+			if((hd l).t0 == b.node) {
+				b.img = (hd l).t1;
+				break;
+			}
+	for(i := 0; i < len b.kids; i++)
+		carrysvgs(p, imgs, b.kids[i]);
+	for(pl := b.pos; pl != nil; pl = tl pl)
+		carrysvgs(p, imgs, hd pl);
+	for(i = 0; i < len b.lines; i++) {
+		ln := b.lines[i];
+		for(j := 0; j < len ln.frags; j++)
+			if(ln.frags[j].kind == Layout->Fatomic)
+				carrysvgs(p, imgs, ln.frags[j].box);
 	}
 }
 

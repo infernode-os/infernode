@@ -186,6 +186,7 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 		s.scroll = target(s.pg, frag);
 		s.status = "done";
 		unlock(s);
+		event(s, "shown " + url);
 		event(s, "done " + url);
 		return;
 	}
@@ -220,7 +221,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	pg: ref Pg;
 	err: string;
 	{
-		(pg, err) = page->request(url, method, ctype, body, s.width, s.height);
+		(pg, err) = page->begin(url, method, ctype, body, s.width, s.height);
 	} exception e {
 	"*" =>
 		pg = nil;
@@ -263,11 +264,117 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	s.scroll = 0;
 	if(frag != nil)
 		s.scroll = target(pg, frag);
-	s.status = "done";
 	u := s.url;
+	s.status = "loading images " + u;
+	unlock(s);
+	event(s, "shown " + u);
+	# the page is up; what it shows comes in behind it
+	{
+		images(s, g, pg);
+		pg.frames();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: %s: %s\n", u, e);
+	}
+	lock(s);
+	if(g != s.gen) {
+		unlock(s);
+		return;
+	}
+	s.status = "done";
 	unlock(s);
 	event(s, "done " + u);
 	refresh(s, g, pg);
+}
+
+# Fetch and decode the page's images NFETCH at a time, and lay the page
+# out again with those that have come, at most every BATCHMS, so that
+# it fills in as they arrive.
+NFETCH: con 6;
+BATCHMS: con 250;
+
+images(s: ref Session, g: int, pg: ref Pg)
+{
+	urls := pg.wanted();
+	n := len urls;
+	if(n == 0)
+		return;
+	work := chan[n] of string;
+	for(; urls != nil; urls = tl urls)
+		work <-= hd urls;
+	res := chan of ref Page->Pic;
+	nw := NFETCH;
+	if(nw > n)
+		nw = n;
+	for(i := 0; i < nw; i++)
+		spawn picfetcher(s, g, work, res);
+	tick := chan of int;
+	stop := chan[1] of int;
+	spawn ticker(tick, stop);
+	batch: list of ref Page->Pic;
+	live := 1;
+	for(got := 0; got < n; ) alt {
+	pic := <-res =>
+		got++;
+		if(pic != nil)
+			batch = pic :: batch;
+	<-tick =>
+		if(batch != nil && live) {
+			live = apply(s, g, pg, batch, got, n);
+			batch = nil;
+		}
+	}
+	stop <-= 1;
+	if(batch != nil && live)
+		apply(s, g, pg, batch, n, n);
+}
+
+apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: int): int
+{
+	lock(s);
+	if(g != s.gen) {
+		unlock(s);
+		return 0;
+	}
+	pg.install(batch);
+	unlock(s);
+	event(s, sys->sprint("update %d %d", got, n));
+	return 1;
+}
+
+picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->Pic)
+{
+	for(;;) alt {
+	u := <-work =>
+		if(g != s.gen) {
+			res <-= nil;	# superseded: count it, fetch nothing
+			continue;
+		}
+		pic: ref Page->Pic;
+		{
+			(data, ctype, err) := page->fetch(u);
+			pic = page->picture(u, data, ctype, err);
+		} exception e {
+		"*" =>
+			pic = ref Page->Pic(u, nil, nil, "internal error: " + e);
+		}
+		res <-= pic;
+	* =>
+		return;
+	}
+}
+
+ticker(tick, stop: chan of int)
+{
+	for(;;) {
+		sys->sleep(BATCHMS);
+		alt {
+		<-stop =>
+			return;
+		tick <-= 1 =>
+			;
+		}
+	}
 }
 
 # <meta http-equiv=refresh content="N[; url=U]"> (HTML §4.2.5.3): go to

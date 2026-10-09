@@ -491,8 +491,8 @@ values(l: ref Lx, close: int): (array of ref Tok, int)
 # a 700K sheet.
 own(v: array of ref Tok): array of ref Tok
 {
-	if(len v == 0)
-		return nil;
+	if(v == nil)
+		return nil;	# an empty value is not none: --a: ; is set, to nothing
 	a := array[len v] of ref Tok;
 	a[0:] = v;
 	return a;
@@ -520,7 +520,111 @@ parse(s: string): ref Sheet
 {
 	if(sys == nil)
 		init();
-	return ref Sheet(rules(tokenize(s), 1));
+	t := ref Shared(array[Nshared] of list of (string, ref Tok), array[Nshared] of list of (string, ref Decl),
+		array[Nshared] of list of (string, ref Simple));
+	shared = t;
+	sh := ref Sheet(rules(tokenize(s), 1));
+	if(shared == t)
+		shared = nil;
+	return sh;
+}
+
+# ---- sharing ----
+#
+# A sheet says the same things many times: GitHub's write
+# var(--fgColor-default), 0, auto and the like thousands of times.
+# Parsed values are never changed, so within one parse a declaration
+# the same as one before it is that one, and so are its tokens.  The
+# table lives for the parse; nothing is kept from page to page.  (A
+# parse that starts while another runs takes the table over; the first
+# then shares with the second, or with nothing, and is no less right.)
+
+Nshared: con 4096;
+
+Shared: adt {
+	toks:	array of list of (string, ref Tok);
+	decls:	array of list of (string, ref Decl);
+	simples:	array of list of (string, ref Simple);
+};
+
+shared: ref Shared;
+
+strhash(s: string): int
+{
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = (h*31 + s[i]) & 16r7FFFFFFF;
+	return h % Nshared;
+}
+
+# t, or the token already seen that is the same; and what makes it so
+sharetok(sh: ref Shared, t: ref Tok): (ref Tok, string)
+{
+	k := sys->sprint("%d %.17g %d %s", t.kind, t.n, t.flag, t.s);
+	if(t.kids != nil) {
+		(kids, kk) := sharetoks(sh, t.kids);
+		k += "(" + kk + ")";
+		if(kids != t.kids)
+			t = ref Tok(t.kind, t.s, t.n, t.flag, kids);
+	}
+	h := strhash(k);
+	for(l := sh.toks[h]; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return ((hd l).t1, k);
+	sh.toks[h] = (k, t) :: sh.toks[h];
+	return (t, k);
+}
+
+sharetoks(sh: ref Shared, v: array of ref Tok): (array of ref Tok, string)
+{
+	k := "";
+	a := v;
+	for(i := 0; i < len v; i++) {
+		(t, tk) := sharetok(sh, v[i]);
+		if(t != v[i]) {
+			if(a == v) {
+				a = array[len v] of ref Tok;
+				a[0:] = v;
+			}
+			a[i] = t;
+		}
+		k += tk + "\u0001";
+	}
+	return (a, k);
+}
+
+# a simple selector with no selectors in it; not '&', which is
+# changed in place when its rule's parent is known
+sharesimple(s: ref Simple): ref Simple
+{
+	sh := shared;
+	if(sh == nil || s.sub != nil || s.kind == Spseudo && s.name == "&")
+		return s;
+	k := sys->sprint("%d %d %d %d %d %s\u0001%s", s.kind, s.op, s.icase, s.a, s.b, s.name, s.val);
+	if(s.val == nil)
+		k += "\u0002";	# nil is not ""
+	h := strhash(k);
+	for(l := sh.simples[h]; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return (hd l).t1;
+	sh.simples[h] = (k, s) :: sh.simples[h];
+	return s;
+}
+
+sharedecl(d: ref Decl): ref Decl
+{
+	sh := shared;
+	if(sh == nil)
+		return d;
+	(val, vk) := sharetoks(sh, d.val);
+	k := sys->sprint("%s %d:", d.name, d.important) + vk;
+	h := strhash(k);
+	for(l := sh.decls[h]; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return (hd l).t1;
+	d = ref Decl(d.name, val, d.important);
+	sh.decls[h] = (k, d) :: sh.decls[h];
+	return d;
 }
 
 rules(v: array of ref Tok, top: int): array of ref Rule
@@ -835,7 +939,7 @@ declaration(v: array of ref Tok): ref Decl
 			val = trim(val[0:k]);
 		}
 	}
-	return ref Decl(nm, own(val), imp);
+	return sharedecl(ref Decl(nm, own(val), imp));
 }
 
 # A var() whose arguments are malformed makes the declaration invalid
@@ -1133,7 +1237,7 @@ compound(v: array of ref Tok, i: int, parent: array of ref Sel): (array of ref S
 		}
 		if(pseudo != nil && s.kind != Spseudo)
 			return (nil, i, nil);
-		r = s :: r;
+		r = sharesimple(s) :: r;
 	}
 	return (rev(r), i, pseudo);
 }

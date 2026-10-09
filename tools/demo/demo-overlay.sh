@@ -9,7 +9,7 @@
 # so mnt/vision/0/boxes IS /mnt/vision/0/boxes inside — any process,
 # host or emu or agent, can feed annotations the same way.
 set -u
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="$ROOT/emu/MacOSX/o.emu"
 MEDIA="$ROOT/video-demo-media"
 [ -x "$EMU" ]             || { echo "no emu at $EMU"; exit 1; }

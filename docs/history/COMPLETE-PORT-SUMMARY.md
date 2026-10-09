@@ -40,7 +40,7 @@ cd /path/to/infernode
 ./emu/MacOSX/o.emu -r.
 ```
 
-See [QUICKSTART.md](../QUICKSTART.md) for details.
+See [QUICKSTART.md](../../QUICKSTART.md) for details.
 
 ## For Future Reference
 
@@ -87,4 +87,4 @@ See [QUICKSTART.md](../QUICKSTART.md) for details.
 
 **Date:** January 3, 2026
 
-**Start with:** [DOCUMENTATION-INDEX.md](DOCUMENTATION-INDEX.md)
+**Start with:** [DOCUMENTATION-INDEX.md](../DOCUMENTATION-INDEX.md)

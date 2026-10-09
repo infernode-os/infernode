@@ -1,7 +1,7 @@
 # emu/iOS — the hellaphone iOS target
 
 This directory is the iOS half of InferNode's mobile build (*hellaphone*),
-sitting alongside `emu/Android/`, `emu/MacOSX/`, etc. It will host the
+sitting alongside `emu/Android/`, `emu/MacOSX/`, etc. It hosts the
 iOS platform glue that lets `o.emu` run inside an iOS app. The design
 rationale lives in `docs/IOS.md`; this file tracks status and the
 mechanics of the directory.
@@ -105,7 +105,7 @@ were.
 ## Phase B — the app. In progress.
 
 Sub-phased. B0/B1 run on the simulator (no signing). B3 (device) signs
-under a paid Apple Developer team via a generated Xcode project.
+under a paid Apple Developer team with a development provisioning profile.
 
 **B0 — headless app shell. DONE.** A real iOS `.app` (not a bare binary
 under `simctl spawn`) that boots emu `-c0` and runs the Limbo test
@@ -127,12 +127,12 @@ runner, proving the app-target + libemu + bundled-root mechanics.
   resolves relative to the CWD). A future general fix would bump
   `MAXROOT` in `emu/port/dat.h`.
 
-**B1 — SDL3 GUI (Lucifer). DONE (simulator).** `./build-ios-app.sh --gui`
+**B1 — SDL3 GUI (Lucia). DONE (simulator).** `./build-ios-app.sh --gui`
 builds a GUI `libemu` (GUIBACK=sdl3) linking the iOS SDL3 static lib
 (`build-sdl3-ios.sh` → `~/sdks/SDL3-ios-sim-arm64`), and `main_ios_gui.m`
 lets SDL3 bootstrap UIKit (`SDL_RunApp`); the desktop `sdl3_mainloop`
 coexists with the iOS run loop, so no callback rewrite was needed.
-Lucifer renders through SDL3/Metal. Key fixes: stage the boot's
+Lucia renders through SDL3/Metal. Key fixes: stage the boot's
 mountpoint dirs (`/n /tmp /usr /mnt` — `mount {mntgen} /n` fails without
 them); copy the read-only bundle root to the writable container at launch
 (`umask 0`, chmod writable); and the `wordsperline` texture-stride fix in
@@ -143,15 +143,24 @@ them); copy the read-only bundle root to the writable container at launch
 under the app sandbox — the boot's `os sh` calls fail). Not yet done;
 the GUI runs without it (those calls fail non-fatally).
 
-**B3 — device build + code-signing. In progress.** We have a paid Apple
-Developer team (`TJ448C32Q3`), so iOS signing is available. Build the
-device slice (`IOSSDK=iphoneos` for `build-ios-arm64.sh` +
-`build-sdl3-ios.sh`, then the GUI `libemu`), generate a thin Xcode app
-project from `project.yml` (`xcodegen generate`), and let Xcode automatic
-signing mint the Apple Development cert + profile under the team. Build +
-install to the device with Xcode's Run, or `xcodebuild
--allowProvisioningUpdates` + `xcrun devicectl device install`. Requires
-Developer Mode on the device and the iOS platform component in Xcode.
+**B3 — device build + code-signing. Device builds work.** We have a paid
+Apple Developer team (`TJ448C32Q3`), so iOS signing is available. Build
+the device slice (`IOSSDK=iphoneos ./build-ios-arm64.sh` and
+`IOSSDK=iphoneos ./build-sdl3-ios.sh`), then
+`IOSSDK=iphoneos ./build-ios-app.sh --gui` (or `--device`).
+`build-ios-app.sh` does the device path itself: it finds a development
+provisioning profile for `os.infernode.ios` in the usual profile
+directories (or `IOS_PROFILE`), embeds it, signs with the certificate
+the profile trusts (or `IOS_IDENTITY`), and installs and launches with
+`xcrun devicectl` on the connected device (or `IOS_DEVICE_UDID`). The
+profile itself has to be created first, in Xcode or the developer
+portal. `project.yml` at the repository root is an alternative: an
+xcodegen spec for a thin Xcode app target (`xcodegen generate`, then
+`xcodebuild -allowProvisioningUpdates` + `xcrun devicectl device
+install`). Requires Developer Mode on the device and the iOS platform
+component in Xcode. The device build overwrites the simulator slice in
+`iOS/arm64/lib`; run a plain `./build-ios-arm64.sh` before going back
+to the simulator.
 
 ## Phase C — on-device `/mnt/llm`. Not started.
 

@@ -2,7 +2,7 @@
 
 ## The Platform
 
-Inferno OS running as a native process on macOS ARM64, with a working JIT compiler (`emu -c1`). It boots in milliseconds. The emulator hosts a full Plan 9-style namespace — everything is a file, including AI services.
+Inferno OS running as a native process on macOS, Linux and Windows (with Android and iOS builds), with JIT compilers for AMD64, ARM64 and RISC-V (`emu -c1`). It boots in milliseconds. The emulator hosts a full Plan 9-style namespace — everything is a file, including AI services.
 
 ---
 
@@ -10,11 +10,13 @@ Inferno OS running as a native process on macOS ARM64, with a working JIT compil
 
 **llmsrv** is the native Limbo LLM service. It runs inside the Inferno emulator, self-mounts at `/mnt/llm`, and presents LLM providers (Anthropic API or Ollama/OpenAI-compatible) as a 9P filesystem: write a prompt to `/mnt/llm/{id}/ask`, read the response back. Sessions are cloned from `/mnt/llm/new`. It speaks native Anthropic tool_use protocol — the model gets proper JSON tool schemas and returns structured tool calls, not text it has to parse. For remote LLM access, dial and mount a remote llmsrv via 9P instead of running one locally.
 
-**tools9p** is a 9P file server mounted at `/tool`. It registers tool modules and serves them as a filesystem: `/tool/tools` (what's active), `/tool/paths` (namespace paths), `/tool/ctl` (add/remove tools, bind/unbind paths). This is the unified configuration store — both the GUI and the agent bridge write here.
+**tools9p** is a 9P file server mounted at `/tool`. It registers tool modules and serves them as a filesystem: `/tool/tools` (what's active), `/tool/paths` (namespace paths), `/tool/ctl` (add/remove tools, bind/unbind paths; trusted clients write it as `/mnt/toolctl/ctl`). This is the unified configuration store — both the GUI and the agent harness write here.
 
-**Veltro** (`appl/veltro/veltro.b`) is the CLI harness entry point. You give it a task and a tool set; the running agent forks a restricted namespace, calls tools in a loop via the LLM, and terminates when done. It runs one-shot or as a REPL.
+**veltrosrv** (`appl/veltro/veltrosrv.b`) is the agent loop, served as files at `/mnt/veltro`. It restricts its own namespace to the grants it was started with, calls tools in a loop via the LLM, and re-reads tool and path state at the start of each turn.
 
-**lucibridge** is the GUI-side harness bridge. It runs in the background, connects Lucifer's conversation UI to the LLM, re-reads tool and path state at the start of each agent turn, and handles slash commands (`/bind`, `/unbind`, `/tools +/-name`) for interactive namespace management.
+**Veltro** (`appl/veltro/veltro.b`) is the command-line client of veltrosrv. You give it a task; it prints the agent's reply and terminates when the turn is done. Sessions can be resumed with `-r`.
+
+**lucibridge** is Lucia's client of veltrosrv. It runs in the background, connects Lucia's conversation UI to the agent, and handles slash commands (`/bind`, `/unbind`, `/tools +/-name`) for interactive namespace management.
 
 (See the Terminology section of `appl/veltro/SECURITY.md` for the harness/agent distinction.)
 
@@ -28,11 +30,13 @@ A running agent has tools registered by default:
 |----------|-------|
 | File ops | `read`, `list`, `find`, `search`, `write`, `edit` |
 | Execution | `exec`, `spawn`, `launch` |
-| UI | `xenith`, `present`, `gap`, `ask` |
+| UI | `xenith`, `present`, `gap` |
 | Data | `diff`, `json`, `memory`, `todo` |
-| Net | `http`, `websearch`, `mail` |
+| Net | `http`, `websearch` |
 | VCS | `git` |
 | Vision | `vision`, `gpu` |
+
+Mail is not a tool: mail9p serves it as files at `/mnt/mail`.
 
 The agent calls these via native tool_use. Parallel tool calls work. Subagents (via `spawn`) get their own isolated namespace and LLM session.
 
@@ -51,7 +55,7 @@ The agent cannot see files it wasn't granted. Subagents can only narrow further.
 
 ---
 
-## The GUI (Lucifer)
+## The GUI (Lucia)
 
 A three-zone GUI running on Inferno's native draw stack:
 1. **Conversation zone** — message history, text input
@@ -64,13 +68,13 @@ In the context zone you can:
 - Mount catalog entries (network 9P mounts, local path bindings)
 - See what's currently mounted under "─ Mounted ─"
 
-All of this writes to `/tool/ctl`. lucibridge reads the new state at the start of the next turn.
+All of this writes to `/mnt/toolctl/ctl`. The agent picks up the new state at the start of the next turn.
 
 ---
 
 ## Cross-Host
 
-The same agent stack runs on a Jetson (Linux ARM64) over ZeroTier. 9P mounts work cross-host with Ed25519 authentication and RC4-256 encryption. You can mount a remote Inferno namespace locally or vice versa.
+The same agent stack runs on a Jetson (Linux ARM64) over ZeroTier. 9P mounts work cross-host with Inferno keyring authentication (a hybrid post-quantum STS handshake: ML-KEM-768, or ML-KEM-1024 with ML-DSA-87 keys in CNSA strict mode via `CNSAMODE`) and, by default, `aes_256_cbc sha256` on the link (`mount`, `listen`). You can mount a remote Inferno namespace locally or vice versa.
 
 ---
 

@@ -109,11 +109,11 @@ assert(IS_MOUNTED(child_pgrp, 0, chan0));
 
 | Promela Operation | C Function | Source File |
 |-------------------|------------|-------------|
-| `new_pgrp()` | `newpgrp()` | `emu/port/pgrp.c:8` |
-| `pgrp_copy()` | `pgrpcpy()` | `emu/port/pgrp.c:74` |
-| `mount_chan()` | `cmount()` | `emu/port/chan.c:388` |
-| `unmount_chan()` | `cunmount()` | `emu/port/chan.c:502` |
-| `alloc_channel()` | `newchan()` | `emu/port/chan.c:156` |
+| `new_pgrp()` | `newpgrp()` | `emu/port/pgrp.c:9` |
+| `pgrp_copy()` | `pgrpcpy()` | `emu/port/pgrp.c:75` |
+| `mount_chan()` | `cmount()` | `emu/port/chan.c:506` |
+| `unmount_chan()` | `cunmount()` | `emu/port/chan.c:622` |
+| `alloc_channel()` | `newchan()` | `emu/port/chan.c:157` |
 
 ## Model Parameters
 
@@ -151,6 +151,8 @@ The SPIN model checker has exhaustively explored the state space of the namespac
 2. **Phase 3**: Use CBMC to perform bounded model checking directly on the C code.
 
 3. **Phase 4**: Add ACSL annotations to the C code and use Frama-C for deductive verification.
+
+> Later: Phase 2 ran ([PHASE2-LOCKING-RESULTS.md](PHASE2-LOCKING-RESULTS.md)) and Phase 3 ran ([PHASE3-CBMC-RESULTS.md](PHASE3-CBMC-RESULTS.md)). The Phase 4 that ran was the SPIN race and export-boundary work ([PHASE4-VERIFICATION-RUN.md](PHASE4-VERIFICATION-RUN.md)); no ACSL/Frama-C work is in the tree.
 
 ---
 

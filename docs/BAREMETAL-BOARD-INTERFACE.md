@@ -4,7 +4,7 @@ The native kernel is one kernel and, so far, three machines: a Raspberry
 Pi 3B+ (`os/bcm2837`), a Raspberry Pi 4B (`os/bcm2711`) and QEMU's `virt`
 (`os/virt`). Everything else —
 `os/arm64`, `os/port`, `os/ip`, the libraries — is compiled from the
-same files for both. This document is the contract between the shared
+same files for all three. This document is the contract between the shared
 part and a board directory: exactly what a new `os/<board>` has to
 contain before the kernel links, and what each piece is asked to do.
 
@@ -236,9 +236,10 @@ symbols are this document, in the order the linker found them.
 
 ## Copies that are waiting to be shared
 
-`os/virt` has four files that are the Pi's with the Pi taken out:
+`os/virt` has three files that are the Pi's with the Pi taken out:
 `uart.c` (everything below `consuartputc` is console *policy* and
-identical), most of `clock.c` (the generic timer is architectural),
-`uartpl011.c` (the same part) and `mem.h`. They belong in `os/arm64`
+identical), `uartpl011.c` (the same part) and `mem.h`. (`clock.c` was
+a fourth; the generic timer is architectural and is now the shared
+`os/arm64/clockgt.c`.) They belong in `os/arm64`
 with the pins, the clock rate and the timer routing behind hooks, and a
 third board should do that move rather than make a third copy.

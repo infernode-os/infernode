@@ -2,7 +2,7 @@
 
 > **This document describes the v2 security model (NEWNS + sandbox), which has been replaced by v3 (FORKNS + bind-replace).**
 >
-> **Current documentation: [`appl/veltro/SECURITY.md`](../appl/veltro/SECURITY.md)**
+> **Current documentation: [`appl/veltro/SECURITY.md`](../../appl/veltro/SECURITY.md)**
 >
 > **Design review: [`docs/NAMESPACE_SECURITY_REVIEW.md`](NAMESPACE_SECURITY_REVIEW.md) (Section 11)**
 
@@ -74,4 +74,4 @@ Child (after spawn):
 
 ---
 
-*For the current security model, see [`appl/veltro/SECURITY.md`](../appl/veltro/SECURITY.md).*
+*For the current security model, see [`appl/veltro/SECURITY.md`](../../appl/veltro/SECURITY.md).*

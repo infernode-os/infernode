@@ -21,7 +21,7 @@ DESCRIPTION
 	mount beside the stream (the INFR-277 convention), so anything —
 	an ML service, an agent, a host process, sh — can write
 	detections and they appear on the live video.  The video-overlay
-	crystallisation wires this with transport; demo-overlay.sh feeds
+	crystallisation wires this with transport; tools/demo/demo-overlay.sh feeds
 	a synthetic tracker.
 
 SEE ALSO

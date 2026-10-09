@@ -77,7 +77,7 @@ Make a test clip:  `ffmpeg -f lavfi -i testsrc=size=352x240:rate=25:duration=4 \
 - **MPEG-1 only.** Real-world feeds are H.264/HEVC/AV1 → still want
   host-side decode (an external service feeding raw/JPEG frames over 9P,
   mirroring the connector pattern). Everything downstream of a frame is done.
-  **→ Now under way: see [H264-9P-BRIDGE.md](H264-9P-BRIDGE.md) (Jira epic
+  **→ Now under way: see [H264-9P-BRIDGE.md](../H264-9P-BRIDGE.md) (Jira epic
   INFR-263). Phase 1 — the `tools/vdec` host decode core — is landed and
   validated; it emits the same I420 this render path consumes.**
 - **GOP/B-frame edge:** the spike clips use a single GOP, no B-frames. The

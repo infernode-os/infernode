@@ -63,13 +63,21 @@ startup latency without improving entropy quality.
 
 ## Bare-metal Inferno
 
-On bare-metal Inferno (no host OS), `prng()` is not available and
-`#c/notquiterandom` may fall back to a weaker implementation.  The fallback
-chain in `tls.b` ensures `#c/random` is used in that case.
+On the bare-metal kernels (`os/`), both files come from the board's
+hardware generator, `hwrandom()`, which every board's `random.c` supplies:
 
-If porting `tls.b` to run on bare-metal Inferno, verify that
-`#c/notquiterandom` provides adequate entropy for the target hardware, or
-reverse the priority order so `#c/random` is tried first.
+- `#c/notquiterandom` calls the board's `genrandom()` (`os/port/devcons.c`).
+  It does not pad a short read: it waits until the hardware has produced
+  every byte, printing on the console every few seconds while it waits
+  (e.g. `os/bcm2837/random.c`, `os/virt/random.c`). The board's `prng()`,
+  which libsec calls, delegates to the same `genrandom()`.
+- `#c/random` is `randomread()` (`os/port/random.c`): a 1 KB pool primed
+  from `hwrandom()` at boot and refilled from it by a background kproc.
+  Upstream's clock-jitter producer is still linked but no longer feeds
+  the pool.
+
+So the order in `tls.b` is right on bare metal too: `#c/notquiterandom`
+opens and is backed by the hardware generator.
 
 ## Performance impact
 

@@ -70,7 +70,7 @@ Bootstrap the build tools and install the post-merge git hook:
 
 This hook runs automatically after every `git pull` or `git merge`. It detects which `.m` (interface) and `.b` (source) files changed and rebuilds the affected `.dis` files. Without it, pulling interface changes can leave you with stale `.dis` files that fail at load time with `link typecheck` errors.
 
-### Why are `.dis` files in git?
+### Why are `.dis` files not in git?
 
 Inferno is a self-hosting OS and the `dis/` directory is its runtime, like
 `/usr/bin` on Unix. It holds compiled bytecode, so it is a **build product and
@@ -92,9 +92,9 @@ makes `git pull` do it for you. All four directories matter: `appl/mpeg` and
 A downloaded **release** already contains a built runtime — the packaging job
 builds it before staging, so nothing is required of you there.
 
-Build artifacts in source directories (`appl/**/*.dis`, `tests/**/*.dis`) are **not** tracked — only the runtime tree.
+Build artifacts in source directories (`appl/**/*.dis`, `tests/**/*.dis`) are not tracked either.
 
-The trade-off: tracked `.dis` files can go stale when `.m` interfaces change between commits. The post-merge hook closes that gap automatically.
+Built `.dis` files can still go stale when `.m` interfaces change between commits. The post-merge hook closes that gap automatically.
 
 ## First Steps
 
@@ -123,7 +123,7 @@ After building (see Building section below):
 - **Network**: mntgen, trfs, os
 - **Utilities**: du, wc, grep, ftest, echo
 
-**Note:** The runtime `.dis` files in `dis/` are tracked in git, so basic commands work after clone. If you see `link typecheck` errors, run `./hooks/install.sh` and pull again, or rebuild manually with `mk install` in the affected `appl/` subdirectory.
+**Note:** The runtime `.dis` files in `dis/` are a build product and are not tracked in git, so commands work only after the build step. If you see `link typecheck` errors, run `./hooks/install.sh` and pull again, or rebuild manually with `mk install` in the affected `appl/` subdirectory.
 
 ## Building
 
@@ -145,7 +145,15 @@ This bootstraps the `mk` build tool, compiles all libraries, builds the `limbo` 
 
 Same process as x86_64, but for ARM64 platforms like Jetson or Raspberry Pi.
 
-### macOS ARM64
+### Linux RISC-V (RV64GC)
+
+```bash
+./build-linux-riscv64.sh          # headless only
+```
+
+Runs natively on a riscv64 Linux host or cross-compiles from amd64/arm64; see the script's header for the cross-compiling steps.
+
+### macOS (Apple Silicon or Intel)
 
 ```bash
 ./makemk.sh                       # bootstrap mk (first time only)
@@ -216,4 +224,4 @@ The critical fix for 64-bit platforms was changing pool quanta from 31 to 127 in
 
 ---
 
-**Status: 64-bit Inferno® is working on x86_64 Linux, ARM64 Linux, ARM64 macOS, and x86_64 Windows**
+**Status: 64-bit Inferno® is working on x86_64 Linux, ARM64 Linux, RISC-V Linux, ARM64 and x86_64 macOS, x86_64 Windows, Android and iOS**

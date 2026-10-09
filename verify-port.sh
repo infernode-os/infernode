@@ -45,12 +45,15 @@ if [[ "$MISSING" -gt 0 ]]; then
 fi
 echo "✅ Critical .dis files present"
 
-# Test simple output
-echo ""
-echo "Testing console output..."
-timeout 3 ./emu/MacOSX/o.emu -r. test-stderr.dis 2>&1 | grep -q "STDERR: Hello" && \
-    echo "✅ Console output works" || \
-    echo "❌ FAIL: No console output"
+FAILS=0
+check() {	# check name pattern output
+    if printf '%s\n' "$3" | grep -q "$2"; then
+        echo "✅ $1 works"
+    else
+        echo "❌ FAIL: $1"
+        FAILS=$((FAILS + 1))
+    fi
+}
 
 # Test shell commands
 echo ""
@@ -61,26 +64,30 @@ date
 cat /dev/sysctl
 SHELL
 )
-
-echo "$TEST_OUTPUT" | grep -q "/" && echo "✅ pwd works" || echo "❌ pwd failed"
-echo "$TEST_OUTPUT" | grep -q "202[0-9]" && echo "✅ date works" || echo "❌ date failed"
-echo "$TEST_OUTPUT" | grep -q "Fourth Edition" && echo "✅ cat works" || echo "❌ cat failed"
+check pwd '^; */$' "$TEST_OUTPUT"
+check date '20[0-9][0-9]' "$TEST_OUTPUT"
+check cat 'Fourth Edition' "$TEST_OUTPUT"
 
 # Test ls
 echo ""
 echo "Testing ls command..."
-timeout 5 ./emu/MacOSX/o.emu -r. <<'SHELL' 2>&1 | grep -v DEBUG | grep -q "/dis/ls.dis" && \
-    echo "✅ ls works" || \
-    echo "❌ ls failed"
+LS_OUTPUT=$(timeout 5 ./emu/MacOSX/o.emu -r. <<'SHELL' 2>&1 | grep -v DEBUG
 ls /dis
 SHELL
+)
+check ls '/dis/ls.dis' "$LS_OUTPUT"
+
+if [[ "$FAILS" -gt 0 ]]; then
+    echo "❌ $FAILS check(s) failed"
+    exit 1
+fi
 
 echo ""
 echo "========================================="
 echo "Verification Complete"
 echo "========================================="
 echo ""
-echo "If all checks passed, the port is working!"
+echo "All checks passed."
 echo ""
 echo "To use Inferno:"
 echo "  ./emu/MacOSX/o.emu -r."

@@ -3,7 +3,7 @@
 **Standards:** NIST SP 800-53 Rev 5 (control catalog, FISMA) and NIST SP 800-171 Rev 2
 (CUI protection; the CMMC Level 2 basis).
 **Roadmap row:** Federal / government — SP 800-53 / FISMA and SP 800-171 / CMMC, Tier 1.
-**Tracking:** EPIC 4 — control mapping & evidence ([`../security-epics.md`](../security-epics.md)); program epic [INFR-328].
+**Tracking:** EPIC 4 — control mapping & evidence ([`history/security-epics.md`](../history/security-epics.md)); program epic [INFR-328].
 **Artifact date:** 2026-06-22.
 **Overall status:** **Partial — first pass complete.** All SP 800-53 Rev 5 families are
 mapped to an Inferno-native mechanism with an evidence pointer and an honest status. The
@@ -58,15 +58,15 @@ first; they are the controls a generic Linux/Windows host cannot evidence as cle
 | **SC** System & Comms Protection | Crypto, boundary, transport | Technical | `libsec` (AES-256-GCM, SHA-384/512, full PQC); hybrid TLS + hybrid native STS; namespace boundaries | [`CNSA-2.0.md`](CNSA-2.0.md); `docs/CRYPTO-MODERNIZATION.md` | **Strong** (CNSA-strict params tracked) |
 | **SI** System & Information Integrity | Memory safety, malware, flaws | Technical | Dis VM: type-safe, memory-safe, sandboxed bytecode → eliminates whole CWE classes (no raw pointers, bounds-checked); CodeQL + fuzzing in CI | `doc/dis.ms`; `.github/workflows/security.yml` (CodeQL), `fuzz.yml`; `tests/handshake_fuzz_test.b` | **Strong** (see §5.SI) |
 | **CM** Configuration Management | Baselines, integrity of components | Technical | Reproducible Plan 9 `mk` builds; bytecode built from source in CI and at release, checked against a tracked module manifest; SHA-pinned CI actions | `.github/workflows/verify-dis-build.yml`; `tools/verify-dis-build.sh`; `tools/dis-manifest.txt`; `CLAUDE.md` (dis is a build product) | **Strong** (see §5.CM) |
-| **SR** Supply Chain Risk | Provenance, integrity of artifacts | Technical | SLSA build provenance attestations; cosign keyless (Sigstore) signing; SHA256SUMS; OpenSSF Scorecard | `.github/workflows/release.yml:1257-1288`; `scorecard.yml` | **Strong** (see §5.SR) |
+| **SR** Supply Chain Risk | Provenance, integrity of artifacts | Technical | SLSA build provenance attestations; cosign keyless (Sigstore) signing; SHA256SUMS; OpenSSF Scorecard | `.github/workflows/release.yml:1776-1812`; `scorecard.yml` | **Strong** (see §5.SR) |
 | **CA** Assessment, Auth & Monitoring | Continuous assessment | Technical+Org | Formal verification in CI (TLA+/SPIN/CBMC); CodeQL/Scorecard/fuzz continuous scanning; ring-fence guard | `formal-verification/`; `.github/workflows/` (formal-verification, security, scorecard, fuzz); `CLAUDE.md` (ring-fence) | **Strong (technical)**; assessment process = operator |
-| **RA** Risk Assessment | Vuln scanning, risk | Technical+Org | CodeQL, fuzzing, OpenSSF Scorecard, formal verification feed risk posture; threat models in security docs | `.github/workflows/{security,fuzz,scorecard}.yml`; `docs/NAMESPACE_SECURITY_REVIEW.md` §3 (threat model) | **Partial** (tooling ✅; org RA process = operator) |
+| **RA** Risk Assessment | Vuln scanning, risk | Technical+Org | CodeQL, fuzzing, OpenSSF Scorecard, formal verification feed risk posture; threat models in security docs | `.github/workflows/{security,fuzz,scorecard}.yml`; `docs/history/NAMESPACE_SECURITY_REVIEW.md` §3 (threat model) | **Partial** (tooling ✅; org RA process = operator) |
 | **SA** System & Services Acquisition | SDLC, dev security | Technical+Org | Memory-safe Limbo SDLC; formal-verification methodology; in-tree security review process | `formal-verification/METHODOLOGY.md`; `CONTRIBUTING.md`; `SECURITY.md` | **Partial** |
 | **PT** PII Processing & Transparency | Privacy | Technical+Org | Data-minimizing namespace isolation (agents see only granted data); no telemetry by default | `appl/veltro/SECURITY.md` | **Partial** (privacy *policy* = operator) |
 | **CP** Contingency Planning | Backup, recovery | Operator | Technical support: durable mailbox journal; secstore backup procedure; stateless re-clone of `dis/` tree | `docs/yubikey-2fa-operations.md` §8 (backup); INFR-302 (durable journal) | **Operator** (technical support noted) |
 | **IR** Incident Response | Detection, handling | Operator | Technical support: audit-log evidence (EPIC 2), `nsaudit` config review, security-advisory process | `SECURITY.md`; EPIC 2 | **Operator** |
 | **MA** Maintenance | Controlled maintenance | Operator | Technical support: signed updates (SR), reproducible builds (CM) | release.yml | **Operator** |
-| **MP** Media Protection | Media handling, sanitization | Operator+Technical | Technical support: AES-256-GCM data-at-rest (secstore vault, DK-wrapped); zeroization of key material in `libsec` | `docs/yubikey-2fa-operations.md` §9; `docs/QUANTUM-SAFE-CRYPTO-PLAN.md` §5 (zeroization) | **Partial** |
+| **MP** Media Protection | Media handling, sanitization | Operator+Technical | Technical support: AES-256-GCM data-at-rest (secstore vault, DK-wrapped); zeroization of key material in `libsec` | `docs/yubikey-2fa-operations.md` §9; `docs/history/QUANTUM-SAFE-CRYPTO-PLAN.md` §5 (zeroization) | **Partial** |
 | **PE** Physical & Environmental | Facility, hardware | Operator | Technical support: hardware authenticator (FIDO2) ties logical to physical possession | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) | **Operator** |
 | **PL** Planning | SSP, rules of behavior | Operator | This evidence register + roadmap feed the SSP | `../security-standards-roadmap.md`; this dir | **Operator** |
 | **PS** Personnel Security | Screening, access agreements | Operator | n/a (organizational) | — | **Operator** |
@@ -117,11 +117,11 @@ dispositions, noreturn FPs); tracked, not silent.
 
 ### 5.SR — Supply Chain Risk Management
 The release pipeline (`.github/workflows/release.yml`) produces, for every artifact:
-- **SHA-256 checksums** (`SHA256SUMS.txt`, `:1257-1261`).
-- **Cosign keyless signatures** via Sigstore (`.sigstore` bundles, `:1263-1278`) — verifiable
+- **SHA-256 checksums** (`SHA256SUMS.txt`, `:1776-1780`).
+- **Cosign keyless signatures** via Sigstore (`.sigstore` bundles, `:1782-1797`) — verifiable
   against the OIDC identity of the build, no long-lived signing key to steal.
-- **SLSA build provenance attestations** (`actions/attest-build-provenance`, `:1280-1288`)
-  for the tarball, DMG, and zip — the SLSA-3 provenance the roadmap claims.
+- **SLSA build provenance attestations** (`actions/attest-build-provenance`, `:1799-1812`)
+  for the tarball, DMG, and zip, and the Xenith DMG and zip — the SLSA-3 provenance the roadmap claims.
 - **OpenSSF Scorecard** (`scorecard.yml`) continuous supply-chain posture scoring.
 - **SBOM (SPDX)** generated + validated on every PR/push (`.github/workflows/sbom.yml`,
   syft) **and shipped with every release** — checksummed + cosign-signed (`release.yml`).
@@ -138,8 +138,8 @@ an offline verifier, and emitters on the auth/identity/credential path. This lan
 high-leverage integrity controls — **AU-3/8/9/9(3)/10 Met**, AU-2/12 substantially met —
 which underwrite AU-9 integrity-of-audit, SOC 2, and PCI-10 simultaneously. Evidence:
 [`SP800-92-audit-log.md`](SP800-92-audit-log.md). Honest status: **substantially met** —
-AU-4/5/6/7 operational tooling and the unsigned-tail / factotum-held-key hardening remain
-tracked (INFR-343/355/356).
+AU-4/5/6/7 operational tooling remains open; the unsigned-tail bound, factotum-held
+signing key and agent provenance store are delivered (INFR-343/356/355 closed).
 
 ---
 
@@ -155,9 +155,10 @@ tracked (INFR-343/355/356).
   hard-to-fake controls.
 - **Biggest single lever:** the AU hash-chained audit service (EPIC 2) — turns AU from
   partial to strong and carries SOC 2 / PCI-10 with it.
-- **Recommended tickets:** (a) per-control itemization for AC/IA/SC/AU under [INFR-328];
-  (b) SBOM generation for SR (SLSA L4 push); (c) the AU audit-log service design (EPIC 2,
-  *new code — bring design first*).
+- **Recommended tickets (done):** (a) per-control itemization for AC/IA/SC/AU under
+  [INFR-328] — [`SP800-53-controls.md`](SP800-53-controls.md); (b) SBOM generation for SR —
+  `.github/workflows/sbom.yml`; (c) the AU audit-log service — built
+  ([`audit-log-design.md`](audit-log-design.md)).
 
 ## 7. References
 

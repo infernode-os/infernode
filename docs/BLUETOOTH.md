@@ -1,6 +1,6 @@
 # Bluetooth for InferNode
 
-Status: Proposed — issue [#615](https://github.com/infernode-os/infernode/issues/615). Branch `feat/baremetal-bt`, off `feat/baremetal-pi`.
+Status: Implemented, on `master` — milestones M0–M6 done and M7 in part (see "Milestones"). Proposed in issue [#615](https://github.com/infernode-os/infernode/issues/615), built on branch `feat/baremetal-bt`.
 Board: Raspberry Pi 3B+ (BCM2837, CYW43455 combo radio). Nothing here
 applies to hosted `emu` except where it says so.
 
@@ -10,7 +10,13 @@ tool" asks. The file interface is the design; review it first.
 
 ## What exists, and what does not
 
-**In this tree: nothing.** The one mention is a line in the roadmap of
+**Now in the tree:** `bt9p` (`appl/cmd/bt9p.b`, bt9p(4)), the HCI
+host library `appl/lib/bthci.b` (`module/bthci.m`), a mock controller
+(`appl/lib/btmock.b`, `module/btmock.m`), and the protocol libraries
+the milestones below name. The rest of this section is as written
+before the code.
+
+**In this tree, when this was proposed: nothing.** The one mention is a line in the roadmap of
 [os/bcm2837/README.md](../os/bcm2837/README.md): "Bluetooth is on the
 PL011 the console uses; it would mean the mini-UART for the console
 first." That sentence is correct and is where this document starts.
@@ -128,7 +134,7 @@ side effect; the harness should assert it.
                                                   │     │                   ctl addr status
   PL011  ── PhysUart pl011 ─┐                     │     │ h4 over            scan lescan
                             ├── devuart.c (#t) ───┼──► /dev/eia0 ◄──────── event hci
-  mini   ── PhysUart mini  ─┘   /dev/eia0..1      │     (bttransport.m)     clone N/{ctl,data,...}
+  mini   ── PhysUart mini  ─┘   /dev/eia0..1      │     (-t transport)      clone N/{ctl,data,...}
                   │                               │
              console (kbdq)                       │   factotum ◄── proto=btlink (link keys)
                                                   │
@@ -160,9 +166,9 @@ over several transports (Core Spec Vol 4): H4 over UART (Part A), USB
     bt9p -t '#u/usb/ep3.0' ...       later: a USB dongle over #u, the
                                      kbdusb.b shape
 
-`module/bttransport.m` is a channel of typed packets (command, event,
-ACL, SCO) in each direction; `h4` is the first implementation and is
-the only one this document commits to. The same `bt9p` then serves a
+The transport is a name passed with `-t` (a file such as `/dev/eia0`
+or `/chan/btmock`, or a dial string); there is no transport module.
+H4 is the only framing this document commits to. The same `bt9p` then serves a
 Pi 3, a Pi 4/5 (still UART) or any machine with a dongle. WiFi got no
 such gift; `ether4330.c` is welded to one chip's SDIO protocol.
 
@@ -361,7 +367,7 @@ run: it needs a root shell, which this session does not have.
 answers Reset, Read_Local_Version, Read_BD_ADDR and the vendor
 commands, and emits Inquiry_Result events. Enough to pin command flow
 control, event parsing and the patch-upload state machine in
-`tests/bt_*_test.b` with no hardware at all.
+`tests/bthci_test.b` with no hardware at all.
 
 ## Milestones
 
@@ -534,9 +540,11 @@ being a peripheral.
 
 ## Test plan
 
-- **Limbo unit tests** (`tests/bt_hci_test.b`, `bt_h4_test.b`,
-  `bt_l2cap_test.b`, `bt_hcd_test.b`): framing, flow control, the
-  patch state machine, SDU reassembly, against the mock transport.
+- **Limbo unit tests** (`tests/bthci_test.b`, `l2cap_test.b`,
+  `sdp_test.b`, `rfcomm_test.b`, `att_test.b`, `smp_test.b`,
+  `hid_test.b`): framing, flow control, the patch state machine, SDU
+  reassembly, and the protocol libraries, against the mock transport
+  or with no I/O.
 - **Namespace contract tests** (`tests/inferno/bt_ns_test.sh`): `/net/bt`
   has exactly the files above with the modes above; `ctl` rejects
   malformed verbs with an error, not silence; `hci` is exclusive.

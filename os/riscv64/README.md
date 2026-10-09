@@ -33,7 +33,7 @@ cross build, clean before building for the host again
 
 What says the JIT is right:
 
-- `tests/jittest.b`: 182 opcode cases.
+- `appl/cmd/jittest.b` (installed as `/dis/jittest.dis`): 182 opcode cases.
 - `tests/jit_fault_test.b`: zero divide, bounds, nil, unwinding, and
   which handler catches.
 - `tests/host/jit_boot_test.sh` and `jit_interp_handoff`.
@@ -92,7 +92,10 @@ boots each board.
   `-dtb`. The run uses 5 harts and 2GB. mpfs checks:
   - userspace off the SD card (Cadence SD4HC, `sd4hc.c`);
   - the PHY over MDIO, and DHCP through the GEM (`ethergem.c`);
-  - that the fabric buffer in `/reserved-memory` is not allocated.
+  - that the fabric buffer in `/reserved-memory` is not allocated;
+  - with `BAREMETAL_QEMU_PATCHED=1` and a QEMU carrying
+    `tests/host/qemu/sd-emmc-user-creatable.patch`: userspace off an
+    eMMC, and a file written to it read back.
 
 ## BeagleV-Fire
 

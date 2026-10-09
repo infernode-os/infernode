@@ -8,7 +8,7 @@ with sufficient memory and uninterrupted execution time.
 | Verification | Status | Where Run |
 |-------------|--------|-----------|
 | SPIN (5 models) | **DONE** | CI / any host |
-| CBMC quick (3 harnesses) | **DONE** | CI / any host |
+| CBMC quick (3 kernel harnesses + PQC crypto harnesses) | **DONE** | CI / any host |
 | TLA+ TLC small (11 invariants) | **DONE** | CI / any host (8 min, 4GB) |
 | TLA+ TLC medium | **DONE** (partial) | Jetson Orin AGX (50GB heap, 10h50m) |
 | TLA+ TLC large | **TODO** | Dedicated host (32GB+, ~hours) |

@@ -260,7 +260,7 @@ pre-existing SC-13 gap (`FIPS-140-3-readiness.md`), not introduced here.
 - `appl/cmd/auditfs.b` — the `styxserver` (append + chain + checkpoints + the 5 files). *Core.*
 - `appl/cmd/auditverify.b` — offline verifier (recompute chain, check signatures with public key).
 - `module/audit.m` + `appl/lib/audit.b` — optional thin client (`log(source,event,msg)`).
-- `man/4/auditfs`, `man/1/auditverify` — docs incl. operator guide (time, off-host, fail-closed).
+- `man/4/auditfs` (which also documents `auditverify`) — docs incl. operator guide (time, off-host, fail-closed).
 - `tests/auditchain_test.b` — the pure chain: genesis/extend determinism, tamper detection.
 - `tests/auditverify_test.b` — the adversarial verifier suite: whole-file rewrite, stripped
   signatures/checkpoints, truncation vs anchor, forged checkpoint head, wrong signing key.

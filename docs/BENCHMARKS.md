@@ -12,7 +12,7 @@
 
 ## JIT Compiler Performance
 
-Both AMD64 and ARM64 JIT compilers translate Dis VM bytecode to native machine code at module load time. The AMD64 JIT (`comp-amd64.c`) targets x86-64 with System V ABI on Linux/macOS and Windows x64 ABI on Windows. The ARM64 JIT (`comp-arm64.c`) targets ARMv8-A with AAPCS64 ABI. On macOS, JIT code buffers use `mmap(MAP_JIT)` with `pthread_jit_write_protect_np()` for W^X compliance; Linux uses `mmap(MAP_ANON)`; Windows uses `VirtualAlloc(PAGE_READWRITE)` with `VirtualProtect(PAGE_EXECUTE_READ)` for W^X.
+Both AMD64 and ARM64 JIT compilers translate Dis VM bytecode to native machine code at module load time. The AMD64 JIT (`comp-amd64.c`) targets x86-64 with System V ABI on Linux/macOS and Windows x64 ABI on Windows. The ARM64 JIT (`comp-arm64.c`) targets ARMv8-A with AAPCS64 ABI. On macOS, JIT code buffers use `mmap(MAP_JIT)` with `pthread_jit_write_protect_np()` for W^X compliance; Linux uses `mmap(MAP_ANON)`; Windows uses `VirtualAlloc(PAGE_READWRITE)` with `VirtualProtect(PAGE_EXECUTE_READ)` for W^X. A third JIT, `comp-riscv64.c` (RV64GC), also ships; it has not been benchmarked yet.
 
 ### Cross-Platform Summary
 

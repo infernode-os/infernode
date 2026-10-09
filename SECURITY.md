@@ -25,7 +25,8 @@ to understand the issue and coordinate a fix before any public disclosure.
 The following components are in scope for security reports:
 
 - **Dis VM interpreter and JIT compiler** (`libinterp/`)
-- **Emulator kernel** (`emu/port/`, `emu/MacOSX/`, `emu/Linux/`)
+- **Emulator kernel** (`emu/port/`, `emu/MacOSX/`, `emu/Linux/`, `emu/Nt/`)
+- **Bare-metal kernel** (`os/`)
 - **Cryptography** (`libsec/`, `libmp/`, `libkeyring/`)
 - **9P protocol implementation** (`emu/port/devmnt.c`, `emu/port/exportfs.c`)
 - **Namespace and capability system** (`emu/port/pgrp.c`, `emu/port/devcap.c`)

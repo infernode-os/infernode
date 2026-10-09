@@ -23,7 +23,6 @@ Ed25519 is now the default signature algorithm for all new keys.
 
 **Files modified:**
 - `libkeyring/ed25519alg.c` (new) - Ed25519 implementation
-- `libkeyring/ed25519.c` (new) - Core Ed25519 operations
 - `appl/cmd/auth/signer.b` - Uses Ed25519 by default
 - `appl/cmd/auth/createsignerkey.b` - Ed25519 first in algorithm list
 
@@ -191,9 +190,9 @@ No action needed - Ed25519, SHA-256, and AEAD login are the defaults.
 
 ## Related Documentation
 
-- [QUANTUM-SAFE-CRYPTO-PLAN.md](QUANTUM-SAFE-CRYPTO-PLAN.md) - Full PQ crypto design document
+- [QUANTUM-SAFE-CRYPTO-PLAN.md](history/QUANTUM-SAFE-CRYPTO-PLAN.md) - Full PQ crypto design document
 - [CRYPTO-DEBUGGING-GUIDE.md](CRYPTO-DEBUGGING-GUIDE.md) - Debugging methodology
-- [ELGAMAL-PERFORMANCE.md](ELGAMAL-PERFORMANCE.md) - Detailed performance analysis
+- [ELGAMAL-PERFORMANCE.md](history/ELGAMAL-PERFORMANCE.md) - Detailed performance analysis
 
 ## Commits
 
@@ -397,6 +396,17 @@ native transport.
 **Breaking change:** This is a clean break (consistent with the rest of this
 document). A v2 node refuses to authenticate with a v1 (classical-only)
 node; all nodes must be upgraded together.
+
+**CNSA 2.0 strict mode.** When the host environment variable `CNSAMODE` is
+set (any value other than empty, `0`, or one starting with `n`/`N`), the
+handshake uses ML-KEM-1024 instead of ML-KEM-768 (`cnsamode()` in
+`libinterp/keyring.c`). Every node in the fleet must agree: a 768/1024 pair
+fails the public-key length check, with no fallback. Certificates follow the
+signing key's strength (#304): `createsignerkey` and the other signer sites
+choose SHA-384 for ML-DSA and SLH-DSA keys and SHA-256 for classical keys, and
+record the choice in the certificate's `ha` field, which verifiers re-hash
+from. `tests/cnsa_nodepair_test.sh` runs two CNSA-mode nodes through the
+handshake with ML-DSA-87 certificates.
 
 **Files modified:**
 - `libinterp/keyring.c` — `Keyring_auth` hybrid handshake (ML-KEM exchange,

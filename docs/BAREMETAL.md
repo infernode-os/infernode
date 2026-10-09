@@ -6,7 +6,7 @@ devices. This is the other way of running it — **native**, as the
 operating system itself, with nothing underneath. The kernel boots, brings
 up the hardware, starts the Dis virtual machine, and runs the same Limbo
 bytecode the hosted emulator runs: the same shell, the same Tk, the same
-Lucifer desktop.
+Lucia desktop.
 
 It runs on three machines. Two are below; the third, the **Raspberry Pi
 4B** (`os/bcm2711`), boots to the desktop under QEMU's `raspi4b` and has
@@ -46,7 +46,7 @@ exact contract a new board directory has to meet.
 
 ## 1. How it is put together
 
-    appl/ → dis/            Limbo programs: sh, Tk apps, Lucifer, Veltro…   (identical to hosted)
+    appl/ → dis/            Limbo programs: sh, Tk apps, Lucia, Veltro…     (identical to hosted)
     ───────────────────────────────────────────────────────────────────────
     os/init/                the first Limbo: osinit, USB class drivers
     lib*/                   Dis VM + ARM64 JIT, Tk, draw, crypto, math
@@ -85,7 +85,7 @@ an Inferno system, so `listen`, `styxlisten` and `mount` are how it
 offers and takes services. Nothing about it is degraded.
 
 **With a desktop**: a screen is present, so the same boot goes on to
-`wm/logon` (or straight past it, with `skiplogon`) and the Lucifer
+`wm/logon` (or straight past it, with `skiplogon`) and the Lucia
 desktop. The serial console is *still* a shell with the full namespace —
 the desktop runs in a narrowed copy (section 6) — so a machine with a
 desktop is a headless machine with a desktop as well.
@@ -157,7 +157,7 @@ end of each machine's list.
         -drive file=card.img,if=none,format=raw,id=sd -device virtio-blk-device,drive=sd \
         -device ramfb -device virtio-keyboard-device -device virtio-tablet-device
 
-A window opens on the Lucifer desktop in under a minute, and the terminal
+A window opens on the Lucia desktop in under a minute, and the terminal
 you started QEMU from is the serial console — a root shell, the whole
 time. Leave `skiplogon` out for the login screen.
 
@@ -532,7 +532,7 @@ unit, disks up to 2 TB, no hot removal of the medium.
 | | what it proves | where it runs |
 |-|-|-|
 | `tests/host/baremetal_test.sh`, bcm2837 half (≈260 checks; **CI**) | the Pi kernel against QEMU's `raspi3b`: boot, SMP, JIT, USB hot-plug, the SD controllers, dossrv on FAT16/32, DHCP/TCP over emulated USB Ethernet, framebuffer by screendump, keyboard and mouse by QMP, tryboot, the kernel installing itself | anywhere with QEMU 8.2 or later |
-| …virt half (≈100 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucifer desktop from a card**; and USB on xHCI over PCI — a hub, keyboard, mouse, Ethernet, a disk, an audio device's isochronous stream, hot-plug, MSI | anywhere with QEMU; **CI** |
+| …virt half (≈100 checks) | the same kernel above the drivers, on virtio: GIC, PSCI, preemption on every core, disk read *and written*, DHCP, the console on screen, typed keys, tablet scaling, both virtio transports, **the Lucia desktop from a card**; and USB on xHCI over PCI — a hub, keyboard, mouse, Ethernet, a disk, an audio device's isochronous stream, hot-plug, MSI | anywhere with QEMU; **CI** |
 | `tests/acceptance/*.py` | the *board*, as a peer to standard tools on a Linux tester: RFC 2544-style Ethernet, Bluetooth PTS cases, hostap-style Wi-Fi scenarios, a GPIO loopback jig. See its [README](../tests/acceptance/README.md). | a bench with a Pi on it |
 
 What QEMU cannot show is a long list — caches, DMA coherence, real USB
@@ -559,11 +559,13 @@ unless `BAREMETAL_QEMU_PATCHED=1` says otherwise.
   factotum locations, then enable `NODEVS` before their command.
 - **The network console's token is sent in clear**, and `rootpath net`
   mounts without authentication.
-- **The Ethernet link is assumed up for ever** once bound: no link
-  monitoring, no DHCP lease renewal.
+- **No DHCP lease renewal** (`os/init/etherusb.b`). The link is polled:
+  when it drops the address goes, and when it returns DHCP runs again;
+  the Wi-Fi supplicant stays running and re-joins.
 - **Logon and secstore are exercised only on the board** — the QEMU
   desktop check uses `skiplogon`.
 - **The tryboot firmware handshake and the watchdog's countdown** are
   things QEMU models neither of.
-- Not started: USB storage, the Pi 4, an audio or HDMI acceptance battery.
-- On virt only: no GICv3; KVM untried. USB there is xHCI on the PCI bus and optional (`-device qemu-xhci`).
+- **USB storage** (`diskusb`, section 8) runs only on xHCI machines (virt); a Pi 3 enumerates a USB disk and leaves it alone. **The Pi 4** (`os/bcm2711`) is built and booted under QEMU's `raspi4b` in CI; see [os/bcm2711/README.md](../os/bcm2711/README.md).
+- Not started: an audio or HDMI acceptance battery.
+- On virt only: KVM untried. USB there is xHCI on the PCI bus and optional (`-device qemu-xhci`).

@@ -4,7 +4,9 @@
 (simulator headless proof of life) is implemented and runs** — the
 `-c0` Dis VM, 9P and Veltro execute under the iOS simulator; see
 `emu/iOS/README.md` for the build, the gaps that surfaced, and how to
-run it. Phases B and C below are still ahead.*
+run it. Phase B is under way: the SDL3 GUI app runs on the simulator
+(B1), and device builds are signed and installed by `build-ios-app.sh`
+(B3); `emu/iOS/README.md` has the sub-phase status. Phase C is ahead.*
 
 This is the iOS counterpart to `docs/HELLAPHONE.md` (Android) and the
 Phase 2 referenced in `emu/Android/README.md`. The goal is the same:
@@ -23,7 +25,13 @@ iOS.** iOS ships Apple's BSD-derived libc, the same family macOS uses,
 so the natural ancestor for every iOS platform file is its
 `emu/MacOSX/` equivalent, not the Linux/Android one:
 
-| iOS file (to create) | Fork from | Why |
+As built, `emu/iOS/os.c`, `cmd.c` and `asm-arm64.s` are one-line
+forwards to their `emu/MacOSX/` ancestors, the headers under
+`iOS/arm64/include/` forward to `MacOSX/arm64/include/`, and the build
+is `emu/iOS/mkfile-g` with `mkfile-gui-sdl3` / `mkfile-gui-headless`;
+see `emu/iOS/README.md`. The plan:
+
+| iOS file | Fork from | Why |
 | --- | --- | --- |
 | `emu/iOS/os.c` | `emu/MacOSX/os.c` | Shared Apple libc; already marshals GUI work to the main thread (AppKit → UIKit is the same constraint), uses dispatch queues, handles SIGSEGV-as-Dis-fault the Apple way. |
 | `emu/iOS/cmd.c` | `emu/MacOSX/cmd.c` | Same `getuser`/arg-handling shape; no Bionic `sysconf` substitutions needed. |
@@ -193,7 +201,11 @@ wiring options, and the Full Moon / MLX prior art — is in
 
 ## What this is NOT (yet)
 
-- Not an app you can install today — no Xcode project exists.
+- Not a store app. `build-ios-app.sh` builds the `.app` and installs it
+  on the simulator, or (with `IOSSDK=iphoneos`) signs it with a
+  development profile and installs it on a connected device;
+  `project.yml` at the repository root is an xcodegen spec for the same
+  app.
 - Not JIT-accelerated, and won't be on stock devices — `-c0` is the
   contract.
 - Not on-device inference — `/mnt/llm` retarget is Phase C.

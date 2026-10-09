@@ -62,7 +62,7 @@ LLMCONF
 cp "$ROOT/mkconfig" "$RESOURCES/"
 [ -d "$ROOT/mkfiles" ] && cp -a "$ROOT/mkfiles" "$RESOURCES/"
 
-for f in LICENCE NOTICE TRADEMARK.md README.md QUICKSTART.md \
+for f in LICENSE NOTICE TRADEMARK.md README.md QUICKSTART.md \
          build-macos-sdl3.sh build-macos-headless.sh makemk.sh; do
 	[ -f "$ROOT/$f" ] && cp "$ROOT/$f" "$RESOURCES/"
 done

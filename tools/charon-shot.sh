@@ -2,17 +2,16 @@
 #
 # charon-shot.sh — render a page with Charon headlessly and write a PNG.
 #
-#   usage: tools/charon-shot.sh [-o] [-d] <url-or-file> <out.png> [width[xheight]]
+#   usage: tools/charon-shot.sh [-d] <url-or-file> <out.png> [width[xheight]]
 #
-# -o renders with the old engine; -d prints the box tree.
+# -d prints the box tree.
 #
 # With just a width, the image is cropped to the page length; with
 # widthxheight it is exactly that viewport.
 #
 # A local file is rendered via file://; its path must be inside the
-# InferNode root (emu only sees $ROOT). The render uses Charon's
-# -render mode (lay out once, dump the frame, exit), so no display or
-# window manager is needed.
+# InferNode root (emu only sees $ROOT). The page is laid out once and
+# painted off screen (tests/charonshot), so no window manager is needed.
 #
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

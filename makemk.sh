@@ -8,7 +8,12 @@
 # ROOT should be the root of the Inferno tree
 ROOT=${ROOT:-$(pwd)}
 SYSTARG=${SYSTARG:-MacOSX}
-OBJTYPE=${OBJTYPE:-arm64}
+if [ -z "$OBJTYPE" ]; then
+	case $(uname -m) in
+	x86_64)	OBJTYPE=amd64;;
+	*)	OBJTYPE=arm64;;
+	esac
+fi
 SYSTYPE=posix
 
 # if you have already changed mkconfig from the distribution, we'll use the definitions from that

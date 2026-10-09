@@ -1,106 +1,24 @@
 <$ROOT/mkconfig
 
-TARG=\
-	build.dis\
-	cookiesrv.dis\
-	chutils.dis\
-	ctype.dis\
-	date.dis\
-	event.dis\
-	file.dis\
-	ftp.dis\
-	gui.dis\
-	http.dis\
-	img.dis\
-	jscript.dis\
-	layout.dis\
-	lex.dis\
-	url.dis\
-	web.dis\
+# Charon, the web browser: a window over the engine in appl/lib/web
 
-ICONS=\
-	bookmark.bit\
-	charon.bit\
-	circarrow.bit\
-	conf.bit\
-	down.bit\
-	edit.bit\
-	exit.bit\
-	help.bit\
-	history.bit\
-	home.bit\
-	maxf.bit\
-	minus.bit\
-	plus.bit\
-	redleft.bit\
-	redright.bit\
-	ssloff.bit\
-	sslon.bit\
-	stop.bit\
-	task.bit\
-	up.bit\
+TARG=\
+	charon.dis\
 
 MODULES=\
-	build.m\
-	charon.m\
-	chutils.m\
-	common.m\
-	cookiesrv.m\
-	ctype.m\
-	date.m\
-	event.m\
-	gui.m\
-	img.m\
-	layout.m\
-	lex.m\
-	script.m\
-	transport.m\
-	rgb.inc\
-	ycbcr.inc\
-	url.m\
 
 SYSMODULES=\
-	bufio.m\
-	daytime.m\
-	debug.m\
+	arg.m\
 	draw.m\
-	ecmascript.m\
-	menu.m\
-	sh.m\
-	ssl3.m\
-	string.m\
-	strinttab.m\
+	lucitheme.m\
 	sys.m\
 	tk.m\
+	tkclient.m\
 
-DISBIN=$ROOT/dis/charon
-
-all:V:	charon.dis
+DISBIN=$ROOT/dis/wm
 
 <$ROOT/mkfiles/mkdis
 
-install:V:	$ROOT/dis/charon.dis $ROOT/dis/wm/charon.dis
-
-$ROOT/dis/charon.dis:	charon.dis
-	mkdir -p $ROOT/dis
-	rm -f $target
-	cp charon.dis $target
-
-# the browser people launch is the new engine's (web.b); the old
-# engine stays at /dis/charon.dis for Xenith's render mode until it goes
-$ROOT/dis/wm/charon.dis:	web.dis
-	mkdir -p $ROOT/dis/wm
-	rm -f $target
-	cp web.dis $target
-
-charon.dis:	$MODULES $SYS_MODULE
-
-# the new engine's browser: its interfaces are the web modules'
+# its interfaces are the web modules'
 WEBMODULES=dom.m html.m css.m style.m fonts.m layout.m page.m browser.m charonfs.m
-web.dis:	${WEBMODULES:%=$ROOT/module/web/%}
-
-img.dis:	img.b $MODULES $SYS_MODULE
-	limbo $LIMBOFLAGS -c -gw img.b
-
-nuke:V:
-	rm -f $ROOT/dis/charon.dis $ROOT/dis/wm/charon.dis
+charon.dis:	${WEBMODULES:%=$ROOT/module/web/%}

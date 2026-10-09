@@ -450,6 +450,14 @@ jobs:
         chmod +x tests/host/nhgetl_test.sh
         ROOT=. bash tests/host/nhgetl_test.sh
 
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."
@@ -907,6 +915,14 @@ jobs:
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
 
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
+
     - name: Run wallet and secstore integration tests
       run: |
         echo "Running host-side integration tests..."
@@ -1245,16 +1261,31 @@ jobs:
         EMU="$RUNNER_TEMP/emu-rv" TIMEOUT=600 tests/host/jit_boot_test.sh
 
   # ─────────────────────────────────────────────
-  # macOS ARM64: Build using shipped toolchain
+  # macOS: Build using shipped toolchain, on Apple silicon and on Intel
   # ─────────────────────────────────────────────
-  macos-arm64:
-    name: macOS ARM64 Build & Test
-    runs-on: macos-15
-    timeout-minutes: 30
+  macos:
+    name: macOS ${{ matrix.label }} Build & Test
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: ARM64
+            runner: macos-15
+            backstop: 480
+          # Intel Macs (#786).  macos-15-intel is GitHub's last Intel
+          # macOS image; the job goes when it does.
+          - arch: amd64
+            label: AMD64
+            runner: macos-15-intel
+            backstop: 900  # an i7-8700B: the suite outruns 480s
     env:
       ROOT: ${{ github.workspace }}
+      OBJTYPE: ${{ matrix.arch }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1277,52 +1308,52 @@ jobs:
       run: |
         chmod +x makemk.sh
         ./makemk.sh
-        test -x MacOSX/arm64/bin/mk || { echo "mk build failed"; exit 1; }
+        test -x MacOSX/$OBJTYPE/bin/mk || { echo "mk build failed"; exit 1; }
 
     - name: Build system libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
 
         for dir in lib9 libbio libmp libsec libmath; do
           echo "Building $dir..."
-          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+          (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         done
 
     - name: Build limbo compiler
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd limbo && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
-        test -x MacOSX/arm64/bin/limbo || { echo "limbo not found"; exit 1; }
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd limbo && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
+        test -x MacOSX/$OBJTYPE/bin/limbo || { echo "limbo not found"; exit 1; }
 
     - name: Build libinterp and remaining libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd libinterp && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd libinterp && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         for dir in libkeyring libmemdraw libmemlayer libdraw; do
           echo "Building $dir..."
-          if ! (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install); then
+          if ! (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install); then
             echo "WARNING: $dir build failed (non-fatal for headless build)"
           fi
         done
         # libtk is REQUIRED: the emu links libtk.a (Tk reintegration), even in
         # the headless build.  Build it after libdraw, and fail hard if it does
         # not build (the emu link would fail with 'libtk.a not found').
-        (cd libtk && "$ROOT/MacOSX/arm64/bin/mk" install) || { echo "libtk build failed"; exit 1; }
+        (cd libtk && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || { echo "libtk build failed"; exit 1; }
 
     - name: Build headless emulator
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         cd emu/MacOSX
         # GUIBACK=headless (mkfile-gui-headless) is the maintained headless
         # build — no-op display stubs, but it still links SDL3/opus/fido2 that
         # the shared device objects reference.  The old mkfile-g predates the
         # SDL3 reintegration (SYSLIBS lacked SDL) and no longer links.
-        OBJTYPE=arm64 SYSTARG=MacOSX SHELL=/bin/sh "$ROOT/MacOSX/arm64/bin/mk" GUIBACK=headless
+        SYSTARG=MacOSX SHELL=/bin/sh "$ROOT/MacOSX/$OBJTYPE/bin/mk" GUIBACK=headless
         test -f o.emu || { echo "Headless emulator build failed"; exit 1; }
 
     - name: Compile essential dis files
       run: |
-        LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
+        LIMBO="$ROOT/MacOSX/$OBJTYPE/bin/limbo"
 
         # Verify limbo works
         echo "Using limbo: $LIMBO"
@@ -1334,7 +1365,7 @@ jobs:
         cp emuinit.dis dis/
 
         echo "Compiling sh.b..."
-        (cd appl/cmd/sh && ../../../MacOSX/arm64/bin/limbo -I../../../module -gw sh.b && cp sh.dis ../../../dis/)
+        (cd appl/cmd/sh && ../../../MacOSX/$OBJTYPE/bin/limbo -I../../../module -gw sh.b && cp sh.dis ../../../dis/)
 
         # Core commands
         for cmd in cat ls pwd echo date; do
@@ -1347,7 +1378,7 @@ jobs:
         cd appl/lib
         for f in bufio.b string.b readdir.b arg.b; do
           echo "Compiling lib/$f..."
-          "../../MacOSX/arm64/bin/limbo" -I../../module -gw "$f" || echo "WARNING: $f compilation failed"
+          "../../MacOSX/$OBJTYPE/bin/limbo" -I../../module -gw "$f" || echo "WARNING: $f compilation failed"
         done
         cp bufio.dis string.dis readdir.dis arg.dis ../../dis/lib/ 2>/dev/null || true
         cd "$ROOT"
@@ -1364,12 +1395,12 @@ jobs:
 
     - name: Build runtime tree
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:$PATH"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:$PATH"
         ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |
-        LIMBO="$ROOT/MacOSX/arm64/bin/limbo"
+        LIMBO="$ROOT/MacOSX/$OBJTYPE/bin/limbo"
         mkdir -p dis/lib
 
         # Build testing library
@@ -1445,7 +1476,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge ${{ matrix.backstop }} ] && { echo "Backstop hit (${{ matrix.backstop }}s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -1488,9 +1519,18 @@ jobs:
         # Gating, unlike the suite above: faults raised from compiled
         # code must be the interpreter's exceptions, caught by the
         # handler around them. The arm64 JIT failed both while the
-        # suite's non-gating run hid it.
+        # suite's non-gating run hid it.  On Intel this is the amd64
+        # JIT's only macOS hardware.
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -1534,11 +1574,11 @@ jobs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       if: success()
       with:
-        name: infernode-macos-arm64
+        name: infernode-macos-${{ matrix.arch }}
         path: |
           emu/MacOSX/o.emu
-          MacOSX/arm64/bin/limbo
-          MacOSX/arm64/bin/mk
+          MacOSX/${{ matrix.arch }}/bin/limbo
+          MacOSX/${{ matrix.arch }}/bin/mk
         retention-days: 14
 
   # ─────────────────────────────────────────────

@@ -59,6 +59,9 @@
 enum
 {
 	Netfmac		= 1ULL<<5,	/* the device has an address to read */
+	Netfstatus	= 1ULL<<16,	/* the device reports its link in config */
+	Netslinkup	= 1<<0,		/* config status: the link is up */
+	Cfgstatus	= 6,		/* config offset of status, after the address */
 
 	Rxq		= 0,
 	Txq		= 1,
@@ -84,6 +87,7 @@ struct Ctlr
 	QLock	tlock;		/* one transmitter at a time */
 	Rendez	r;
 	int	work;		/* an interrupt happened */
+	int	cfgchg;		/* ... and it said the configuration changed */
 
 	ulong	nintr, nrx, ntx, nrxdrop, ntxfull, nrefill;
 };
@@ -94,12 +98,40 @@ static void
 netinterrupt(Ureg*, void *a)
 {
 	Ctlr *c;
+	u32int s;
 
 	c = a;
-	if(virtiointr(c->dev) & 1){
+	s = virtiointr(c->dev);
+	if(s & 2)
+		c->cfgchg = 1;
+	if(s & 3){
 		c->nintr++;
 		c->work = 1;
 		wakeup(&c->r);
+	}
+}
+
+/*
+ * The link, as the device reports it (VIRTIO_NET_F_STATUS), into
+ * nif.link, which /net/ether0/stats shows and etherusb -k's link
+ * watcher reads. It was set to 1 once and never changed, so a link
+ * taken down (QEMU's set_link) left the interface configured on a
+ * dead wire, with nothing to notice. A device without the feature is
+ * taken to be always up, as before.
+ */
+static void
+linkupdate(Ctlr *c)
+{
+	uchar st[2];
+	int linkup;
+
+	if((c->dev->features & Netfstatus) == 0)
+		return;
+	virtiocfgread(c->dev, Cfgstatus, st, 2);
+	linkup = (st[0] | st[1]<<8) & Netslinkup;
+	if(linkup != c->edev->nif.link){
+		c->edev->nif.link = linkup;
+		print("ether: virtio-net link %s\n", linkup ? "up" : "down");
 	}
 }
 
@@ -197,6 +229,10 @@ netproc(void *a)
 	for(;;){
 		sleep(&c->r, network, c);
 		c->work = 0;
+		if(c->cfgchg){
+			c->cfgchg = 0;
+			linkupdate(c);
+		}
 
 		posted = 0;
 		while(vqcollect(c->rx, &len, &cookie) >= 0){
@@ -298,7 +334,7 @@ ethervirtiolink(void)
 	e = etherinstance(0);
 	if(e == nil)
 		return;
-	if(virtiostart(c->dev, Netfmac) < 0)
+	if(virtiostart(c->dev, Netfmac|Netfstatus) < 0)
 		return;
 	c->hdrlen = c->dev->legacy ? Hdrlegacy : Hdrmodern;
 	c->rx = virtioqueue(c->dev, Rxq, Nrx);
@@ -322,6 +358,7 @@ ethervirtiolink(void)
 	e->nif.link = 1;
 
 	c->edev = e;
+	linkupdate(c);
 	e->ctlr = c;
 	e->attach = netattach;
 	e->transmit = nettransmit;

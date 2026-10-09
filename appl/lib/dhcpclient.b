@@ -745,8 +745,25 @@ newsession(net: string, ctlifc: ref Sys->FD, device: string, req: ref Bootconf):
 	if(e != nil)
 		return (nil, e);
 	s.mac = mac;
-	if((e = openconv(s)) != nil)
+	if((e = opensession(s)) != nil)
 		return (nil, e);
+	return (s, nil);
+}
+
+#
+# The conversation on the client port, and its reader. A lease's
+# watchdog closes it while it waits and opens it again to talk: the
+# port is a machine's, not an interface's, so a client that held it
+# for the whole lease -- the radio's, on the bench Pi -- refused every
+# other interface's DHCP for as long as the lease ran, and a cable
+# plugged in after boot could not get an address.
+#
+opensession(s: ref Session): string
+{
+	if(s.dfd != nil)
+		return nil;
+	if((e := openconv(s)) != nil)
+		return e;
 	#
 	# Buffered: a reply that lands after this exchange has moved on
 	# must not leave the reader blocked for ever on a send nobody
@@ -756,7 +773,7 @@ newsession(net: string, ctlifc: ref Sys->FD, device: string, req: ref Bootconf):
 	pc := chan of int;
 	spawn reader(s.dfd, s.rc, pc);
 	s.rpid = <-pc;
-	return (s, nil);
+	return nil;
 }
 
 closesession(s: ref Session)
@@ -1557,10 +1574,13 @@ watchdog(s: ref Session, pc: chan of int)
 			t1 = lease / 2;
 		if(t2 <= t1 || t2 >= lease)
 			t2 = (lease * 7) / 8;
+		closesession(s);		# the port is free while the lease runs
 		if(napsecs(s, t1))
 			break;
-		e := "";
-		if(s.conf.serverid != nil)
+		e := opensession(s);
+		if(e != nil)
+			;
+		else if(s.conf.serverid != nil)
 			e = renew(s, s.conf.serverid, 2);
 		else
 			e = "no server identifier";
@@ -1576,9 +1596,11 @@ watchdog(s: ref Session, pc: chan of int)
 			if(e == "DHCPNAK")
 				e = "refused";
 			else{
+				closesession(s);
 				if(napsecs(s, t2 - t1))
 					break;
-				e = renew(s, Bcast, 2);	# rebinding
+				if((e = opensession(s)) == nil)
+					e = renew(s, Bcast, 2);	# rebinding
 				if(e == "DHCPNAK")
 					e = "refused";
 			}
@@ -1596,6 +1618,13 @@ watchdog(s: ref Session, pc: chan of int)
 		for(;;){
 			if(s.halt)
 				break;
+			if((oe := opensession(s)) != nil){
+				notify(s, nil, oe);
+				closesession(s);
+				if(napsecs(s, Retrywait))
+					break;
+				continue;
+			}
 			(c, de) := discover(s);
 			if(de == nil){
 				if(s.ctlifc != nil && (ae := applycfg(s.net, s.ctlifc, c)) != nil){
@@ -1607,6 +1636,7 @@ watchdog(s: ref Session, pc: chan of int)
 				break;
 			}
 			notify(s, nil, de);
+			closesession(s);
 			if(napsecs(s, Retrywait))
 				break;
 		}
@@ -1621,7 +1651,7 @@ watchdog(s: ref Session, pc: chan of int)
 		if(dst == nil)
 			dst = Bcast;
 		(ok, ci) := parsev4(s.conf.ip);
-		if(ok){
+		if(ok && opensession(s) == nil){
 			s.xid = mkxid();
 			sendmsg(s, dst, Release, ci, nil, s.conf.get(Oserverid));
 		}

@@ -134,6 +134,50 @@ nilfault(siginfo_t *info, void *context)
     disfault(nil, exNilref);
 }
 
+#if defined(__x86_64__)
+/*
+ * The amd64 counterpart of the arm64 dumps below: the JIT's own
+ * registers (RLINK=R14 &R, RRFP=RBX, RRMP=R12, RRTA=R10) and where
+ * the PC and the return address on the stack fall.
+ */
+static void
+x86dump(ucontext_t *uc)
+{
+    Dl_info di;
+    void *pc, *ret;
+
+    if(uc == nil)
+        return;
+    pc = (void*)uc->uc_mcontext->__ss.__rip;
+    fprint(2, "  RIP=%p RSP=%p RAX=%p RCX=%p RDX=%p RSI=%p RDI=%p\n",
+        pc,
+        (void*)uc->uc_mcontext->__ss.__rsp,
+        (void*)uc->uc_mcontext->__ss.__rax,
+        (void*)uc->uc_mcontext->__ss.__rcx,
+        (void*)uc->uc_mcontext->__ss.__rdx,
+        (void*)uc->uc_mcontext->__ss.__rsi,
+        (void*)uc->uc_mcontext->__ss.__rdi);
+    fprint(2, "  RLINK(R14)=%p RFP(RBX)=%p RMP(R12)=%p RTA(R10)=%p\n",
+        (void*)uc->uc_mcontext->__ss.__r14,
+        (void*)uc->uc_mcontext->__ss.__rbx,
+        (void*)uc->uc_mcontext->__ss.__r12,
+        (void*)uc->uc_mcontext->__ss.__r10);
+    if(dladdr(pc, &di) == 0)
+        fprint(2, "  PC not in any loaded image (JIT-generated code?)\n");
+    else if(di.dli_sname != nil)
+        fprint(2, "  PC in %s+%#lx\n", di.dli_sname,
+            (ulong)((uintptr)pc - (uintptr)di.dli_saddr));
+    else
+        fprint(2, "  PC in %s+%#lx (no exported symbol; static function)\n",
+            di.dli_fname != nil ? di.dli_fname : "?",
+            (ulong)((uintptr)pc - (uintptr)di.dli_fbase));
+    ret = *(void**)uc->uc_mcontext->__ss.__rsp;
+    if(dladdr(ret, &di) && di.dli_sname != nil)
+        fprint(2, "  [RSP] in %s+%#lx\n", di.dli_sname,
+            (ulong)((uintptr)ret - (uintptr)di.dli_saddr));
+}
+#endif
+
 void
 trapBUS(int signo, siginfo_t *info, void *context)
 {
@@ -183,6 +227,8 @@ trapBUS(int signo, siginfo_t *info, void *context)
                         (ulong)((uintptr)lr - (uintptr)di.dli_saddr));
             }
         }
+#elif defined(__x86_64__)
+        x86dump((ucontext_t*)context);
 #endif
         if(R.M != nil && R.M->m != nil && R.M->m->name != nil)
             fprint(2, "  module=%s compiled=%d R.PC=%p prog=%p\n",
@@ -267,15 +313,30 @@ trapSEGV(int signo, siginfo_t *info, void *context)
                         (ulong)((uintptr)lr - (uintptr)di.dli_saddr));
             }
         }
+#elif defined(__x86_64__)
+        x86dump((ucontext_t*)context);
 #endif
     }
     disfault(nil, "Segmentation violation");
 }
 
 void
-trapFPE(int signo)
+trapFPE(int signo, siginfo_t *info, void *context)
 {
     USED(signo);
+#if defined(__x86_64__)
+    /*
+     * x86's integer divide traps on a zero divisor.  In compiled code
+     * that is the program's "zero divide", raised at the divide, as on
+     * Linux (see emu/Linux/os.c:/^trapFPE).
+     */
+    if(info != nil && info->si_code == FPE_INTDIV && context != nil &&
+       jitfault((uintptr)((ucontext_t*)context)->uc_mcontext->__ss.__rip))
+        disfault(nil, exZdiv);
+#else
+    USED(info);
+    USED(context);
+#endif
     disfault(nil, "Floating point exception");
 }
 
@@ -307,7 +368,7 @@ setsigs(void)
         act.sa_sigaction = trapSEGV;
         act.sa_flags = SA_SIGINFO;
         sigaction(SIGSEGV, &act, nil);
-        act.sa_handler = trapFPE;
+        act.sa_sigaction = trapFPE;
         sigaction(SIGFPE, &act, nil);
         if(signal(SIGINT, SIG_IGN) != SIG_IGN)
             signal(SIGINT, cleanexit);
@@ -408,6 +469,11 @@ segflush(void *va, ulong len)
 #if defined(__aarch64__) || defined(__arm64__)
     if(len)
         sys_icache_invalidate(va, len);
+    return 0;
+#elif defined(__x86_64__)
+    /* x86 instruction fetch is coherent with stores */
+    USED(va);
+    USED(len);
     return 0;
 #else
     kern_return_t   err;

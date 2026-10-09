@@ -15,4 +15,5 @@ Look : module {
 	look3 : fn(t : ref Textm->Text, q0, q1, external : int);
 	plumblook : fn(m : ref Plumbmsg->Msg);
 	plumbshow : fn(m : ref Plumbmsg->Msg);
+	openlink : fn(url : string);
 };

@@ -1,9 +1,9 @@
 #!/bin/bash
-# Verification script for ARM64 64-bit Inferno port
+# Verification script for the 64-bit macOS port (arm64 or amd64)
 # Tests that critical functionality works
 
 echo "========================================="
-echo "ARM64 64-bit Inferno Port Verification"
+echo "64-bit macOS Inferno Port Verification"
 echo "========================================="
 echo ""
 
@@ -17,7 +17,8 @@ fi
 echo "✅ Emulator binary exists"
 
 # Check limbo exists
-if [[ ! -f MacOSX/arm64/bin/limbo ]]; then
+case $(uname -m) in x86_64) objtype=amd64 ;; *) objtype=arm64 ;; esac
+if [[ ! -f MacOSX/${OBJTYPE:-$objtype}/bin/limbo ]]; then
     echo "❌ FAIL: limbo compiler not found"
     exit 1
 fi

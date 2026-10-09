@@ -35,7 +35,6 @@ TARG=\
 	kbddrainer_test.dis\
 	concurrency_test.dis\
 	casel_test.dis\
-	cookiesrv_httponly_test.dis\
 	cowfs_test.dis\
 	cut_test.dis\
 	dhcp_test.dis\
@@ -113,6 +112,7 @@ TARG=\
 	tempfile_test.dis\
 	textwidget_test.dis\
 	tk_test.dis\
+	fractals_zoombox_test.dis\
 	tkimgrender.dis\
 	tkrender.dis\
 	charonshot.dis\
@@ -121,6 +121,7 @@ TARG=\
 	web_css_test.dis\
 	web_style_test.dis\
 	web_browser_test.dis\
+	xenith_htmldoc_test.dis\
 	web_fonts_test.dis\
 	web_wordbreak_test.dis\
 	bidi_test.dis\
@@ -218,6 +219,7 @@ SYSMODULES=\
 	web/browser.m\
 	web/charonfs.m\
 	web/wordbreak.m\
+	htmldoc.m\
 	arg.m\
 	cowfs.m\
 	dial.m\

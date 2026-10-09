@@ -968,9 +968,12 @@ renderx(et : ref Text, nil : ref Text)
 
 renderon(w : ref Window)
 {
-	# Markdown is set as a document over its text (Window.docrender)
-	if(ismarkdown(w.body.file.name)){
+	# Markdown and HTML are set as a document over their text
+	# (Window.docrender): HTML by Charon's engine
+	if(ismarkdown(w.body.file.name) || ishtml(w.body.file.name)){
+		w.dochtml = ishtml(w.body.file.name);
 		if((err := w.docrender()) != nil){
+			w.dochtml = 0;
 			warning(nil, sprint("Render: %s\n", err));
 			return;
 		}
@@ -1072,10 +1075,23 @@ renderoff(w : ref Window)
 
 ismarkdown(name : string) : int
 {
+	ext := extof(name);
+	return ext == "md" || ext == "markdown";
+}
+
+ishtml(name : string) : int
+{
+	ext := extof(name);
+	return ext == "html" || ext == "htm" || ext == "xhtml";
+}
+
+# name's extension, lower case
+extof(name : string) : string
+{
 	for(i := len name; i > 0 && name[i-1] != '.' && name[i-1] != '/'; i--)
 		;
 	if(i == 0 || name[i-1] != '.')
-		return 0;
+		return nil;
 	ext := "";
 	for(; i < len name; i++){
 		c := name[i];
@@ -1083,7 +1099,7 @@ ismarkdown(name : string) : int
 			c += 'a' - 'A';
 		ext[len ext] = c;
 	}
-	return ext == "md" || ext == "markdown";
+	return ext;
 }
 
 id(et : ref Text)

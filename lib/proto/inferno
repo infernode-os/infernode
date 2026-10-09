@@ -296,43 +296,8 @@ appl
 		newtypesets
 		alphabet.proto
 	charon
-		build.b
-		build.m
 		charon.b
-		charon.m
-		chutils.b
-		chutils.m
-		common.m
-		cookiesrv.b
-		cookiesrv.m
-		ctype.b
-		ctype.m
-		date.b
-		date.m
-		event.b
-		event.m
-		file.b
-		ftp.b
-		gui.b
-		gui.m
-		http.b
-		img.b
-		img.m
-		jscript.b
-		layout.b
-		layout.m
-		lex.b
-		lex.m
 		mkfile
-		paginate.b
-		paginate.m
-		rgb.inc
-		script.m
-		transport.m
-		url.b
-		url.m
-		xxx.inc
-		ycbcr.inc
 	cmd
 		9win.b
 		9660srv.b
@@ -1381,9 +1346,6 @@ dis
 	cal.dis
 	cat.dis
 	cd.dis
-	charon
-		+
-	charon.dis
 	chgrp.dis
 	chmod.dis
 	cleanname.dis

@@ -39,6 +39,11 @@ export ROOT EMUHOST OBJTYPE EMU BINDIR LIMBO
 with_timeout() {
     if command -v timeout >/dev/null 2>&1; then
         timeout "$@"
+    elif command -v perl >/dev/null 2>&1; then
+        # macOS has no timeout(1); without one an emu that never
+        # halts held a CI job to its 40-minute limit.  SIGALRM's
+        # status is 142, which emu_timeout_ok does not accept.
+        perl -e 'alarm shift; exec @ARGV or exit 127' "$@"
     else
         shift
         "$@"

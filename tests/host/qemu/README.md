@@ -12,6 +12,8 @@ them, and the harness says which checks depend on one.
 |-|-|-|
 | `hcd-dwc2-halted-channel.patch` | The Raspberry Pi's USB controller model kept servicing a channel after the guest halted it, with whatever the guest had since programmed into that channel. | On `raspi3b`/`raspi4b` with `-device usb-net`, the DHCP OFFER was read by a stale transaction and lost, and every DISCOVER after the first was garbled by a duplicated packet inside the adapter's RNDIS reassembly: an address on two boots in five (#664). `usbdwc.c` halts a bulk IN that has waited 200 ms for nothing, which is what a real controller expects and what makes the model fail. |
 
+| `usbnet-link-status.patch` | The RNDIS adapter (`-device usb-net`) answered OID_GEN_MEDIA_CONNECT_STATUS with "connected" forever: `set_link <id> off` dropped its frames but never changed what it reported. | Nothing to test `etherusb`'s link watcher against: a cable pulled and put back could not be modelled. With the patch, the harness switches the link off and on through QMP and checks the address goes and comes back. |
+
 | `sd-emmc-user-creatable.patch` | The eMMC model could not be created from the command line: only a machine with a soldered eMMC makes one, and none of the RISC-V machines does. | Nothing to test `os/bcm/sdmmc.c`'s MMC path against: the BeagleV-Fire's 16GB eMMC sits on the same Cadence SD4HC as QEMU's icicle-kit card, but QEMU only ever put an SD card there. With the patch, `baremetal_riscv64_test.sh` boots mpfs off a 4GB eMMC (sector mode, EXT_CSD size, 4-bit switch, a write read back). |
 
 To use them by hand: unpack the QEMU version named in the workflow,

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build InferNode for macOS ARM64 (SDL3 GUI mode)
+# Build InferNode for macOS, Apple silicon (arm64) or Intel (amd64), SDL3 GUI mode
 #
 # !!! CRITICAL TODO !!!
 # The emu-hosted Limbo compiler (/dis/limbo.dis) produces BROKEN bytecode on ARM64!
@@ -22,7 +22,12 @@ set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export ROOT
 
-echo "=== InferNode macOS ARM64 Build (SDL3 GUI) ==="
+case $(uname -m) in
+x86_64)	OBJTYPE=amd64 ;;
+*)	OBJTYPE=arm64 ;;
+esac
+
+echo "=== InferNode macOS $OBJTYPE Build (SDL3 GUI) ==="
 echo "ROOT=$ROOT"
 echo ""
 
@@ -36,10 +41,10 @@ fi
 SDL3_VERSION=$(pkg-config --modversion sdl3)
 echo "Found SDL3 version: $SDL3_VERSION"
 
-# Set up environment for macOS ARM64
+# Set up environment for macOS
 export SYSHOST=MacOSX
-export OBJTYPE=arm64
-export PATH="$ROOT/MacOSX/arm64/bin:$PATH"
+export OBJTYPE
+export PATH="$ROOT/MacOSX/$OBJTYPE/bin:$PATH"
 export AWK=awk
 export SHELLNAME=sh
 

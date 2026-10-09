@@ -8,10 +8,16 @@ tools: list read write
 tools: list read write
 assistant-call call_step_cap_0_0 list {"args": "\/usr\/agentloop"}
 tool-result call_step_cap_0_0:
-  | 3 entries:
+  | 9 entries:
   | f       6B a.txt
   | f       5B b.txt
   | f       8K big.txt
+  | f      10B f1.txt
+  | f      10B f2.txt
+  | f      10B f3.txt
+  | f      10B f4.txt
+  | f      10B f5.txt
+  | f      10B f6.txt
 
 == request 2 (turn 2)
 tools: list read write

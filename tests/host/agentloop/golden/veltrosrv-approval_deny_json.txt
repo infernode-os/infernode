@@ -1,0 +1,38 @@
+# veltrosrv approval_deny_json
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_approval_deny_json_0_0 write {"path": "\/dis\/agentloop-probe.txt", "content": "probe"}
+tool-result call_approval_deny_json_0_0:
+  | error: operation denied by operator
+
+== output
+  | == user
+  | SCENARIO:approval_deny_json go
+  | == veltro
+  | Write was handled.
+  | == log
+  | session <llm>, prompt 14058 bytes
+  | step 1: writing 30 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (0 chunks, 0 bytes)
+  | step 1: waiting for LLM response...
+  | step 1: LLM response 112 bytes
+  | llm: STOP:tool_use
+  | TOOL:call_approval_deny_json_0_0:write:{"path"\: "/dis/agentloop-probe.txt", "content"\: "probe"}
+  | 
+  | pretool: awaiting approval for write
+  | pretool: user responded: deny
+  | step 2: writing 81 bytes to LLM
+  | stream: reading /mnt/llm/<llm>/stream
+  | stream: done (1 chunks, 18 bytes)
+  | step 2: waiting for LLM response...
+  | step 2: LLM response 33 bytes
+  | llm: STOP:end_turn
+  | Write was handled.
+  | 
+  | turn done stop=end_turn steps=2

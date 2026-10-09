@@ -1862,16 +1862,89 @@ wifijoin(essid, pass: string)
 		# finishes a handshake; the board showed that plainly, and a
 		# retry that left the first one running reproduced it.
 		#
-		killproc(pid);
-		sys->sleep(2000);
+		if(try < 2){
+			killproc(pid);
+			sys->sleep(2000);
+		}
 	}
+	#
+	# Not joined after three tries: the network is not here (yet).
+	# This gave up for good, so a board that booted away from its
+	# network, or before the router was up, never had Wi-Fi until it
+	# was rebooted. The last supplicant is left running instead -- it
+	# keeps re-joining by itself, at a widening interval -- and the
+	# address is asked for whenever it gets there.
+	#
 	if(!keyed()){
-		sys->print("init: wifi: %s did not authenticate; see %s\n", essid, Wpalog);
-		return;
+		sys->print("init: wifi: %s did not authenticate yet; still trying (see %s)\n", essid, Wpalog);
+		while(!keyed())
+			sys->sleep(10*1000);
 	}
 	sys->print("init: wifi: authenticated to %s\n", essid);
 	sys->sleep(1000);
-	wifiaddr();
+	ifcno := wifiaddr();
+	if(ifcno != nil)
+		wifiwatch(ifcno);
+}
+
+#
+# A re-join after a lost link is new keys; it may be a different
+# network, or the same one after its lease ran out. The address was
+# asked for once, so it went stale. The supplicant writes "group key"
+# each time it finishes a handshake: one more than last time is a
+# re-join, and the address is asked for again.
+#
+wifiwatch(ifcno: string)
+{
+	dhcp := load Command "/dis/ip/dhcp.dis";
+	if(dhcp == nil)
+		return;
+	seen := keycount();
+	for(;;){
+		sys->sleep(10*1000);
+		n := keycount();
+		if(n <= seen){
+			seen = n;	# a supplicant restarted with a new log
+			continue;
+		}
+		seen = n;
+		sys->print("init: wifi: re-joined; asking for an address again\n");
+		dropaddress(ifcno);
+		dhcp->init(nil, "dhcp" :: "/net/ipifc/" + ifcno :: nil);
+		if(hasaddress(ifcno)){
+			(ndb, nil) := slurp("/net/ndb");
+			sys->print("init: wifi: %s\n", ndb);
+		}else
+			sys->print("init: wifi: re-joined but no address\n");
+	}
+}
+
+keycount(): int
+{
+	(log, nil) := slurp(Wpalog);
+	n := 0;
+	for(i := 0; i + 9 <= len log; i++)
+		if(log[i:i+9] == "group key")
+			n++;
+	return n;
+}
+
+# remove whatever addresses the interface has: "\taddr /mask ..." lines of its status
+dropaddress(ifcno: string)
+{
+	(st, nil) := slurp("/net/ipifc/" + ifcno + "/status");
+	ctl := sys->open("/net/ipifc/" + ifcno + "/ctl", Sys->OWRITE);
+	if(ctl == nil)
+		return;
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		l := hd lines;
+		if(l == "" || l[0] != '\t')
+			continue;
+		(nf, f) := sys->tokenize(l, " \t");
+		if(nf >= 2)
+			sys->fprint(ctl, "remove %s %s", hd f, hd tl f);
+	}
 }
 
 Wpalog: con "/tmp/wpa.log";
@@ -1962,28 +2035,28 @@ slurp(name: string): (string, int)
 # the DHCP client, which adds and removes the placeholder address the
 # stack needs before it will send anything.
 #
-wifiaddr()
+wifiaddr(): string
 {
 	c := sys->open("/net/ipifc/clone", Sys->ORDWR);
 	if(c == nil){
 		sys->print("init: wifi: cannot clone an interface: %r\n");
-		return;
+		return nil;
 	}
 	nbuf := array[32] of byte;
 	n := sys->read(c, nbuf, len nbuf);
 	if(n <= 0){
 		sys->print("init: wifi: ipifc clone gave no number\n");
-		return;
+		return nil;
 	}
 	ifcno := string nbuf[0:n];
 	if(sys->fprint(c, "bind ether /net/ether1") < 0){
 		sys->print("init: wifi: bind ether failed: %r\n");
-		return;
+		return nil;
 	}
 	dhcp := load Command "/dis/ip/dhcp.dis";
 	if(dhcp == nil){
 		sys->print("init: wifi: cannot load ip/dhcp: %r\n");
-		return;
+		return nil;
 	}
 	for(try := 0; try < 2; try++){
 		dhcp->init(nil, "dhcp" :: "/net/ipifc/" + ifcno :: nil);
@@ -1994,10 +2067,11 @@ wifiaddr()
 	}
 	if(!hasaddress(ifcno)){
 		sys->print("init: wifi: associated but no address\n");
-		return;
+		return nil;
 	}
 	(ndb, nil) := slurp("/net/ndb");
 	sys->print("init: wifi: %s\n", ndb);
+	return ifcno;
 }
 
 tmpsetup()

@@ -89,15 +89,7 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	(p, err) := begin(url, method, reqctype, body, width, height);
 	if(p == nil)
 		return (nil, err);
-	if((urls := p.wanted()) != nil) {
-		pics: list of ref Pic;
-		for(got := fetchall(urls); got != nil; got = tl got) {
-			g := hd got;
-			pics = picture(g.url, g.data, g.ctype, g.err) :: pics;
-		}
-		p.install(pics);
-	}
-	p.frames();
+	images(p);
 	return (p, nil);
 }
 
@@ -111,7 +103,36 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 		(data, ctype, err, final) = fetchfinal(url);
 	if(err != nil && len data == 0)
 		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
-	url = final;	# a redirected page's links are relative to where it is
+	# a redirected page's links are relative to where it is
+	return (document(data, ctype, final, width, height), nil);
+}
+
+# a document already in hand, as if fetched from url: laid out with
+# every image it wants, and its frames
+parse(data: array of byte, ctype, url: string, width, height: int): ref Pg
+{
+	p := document(data, ctype, url, width, height);
+	images(p);
+	return p;
+}
+
+# every image p wants, then its frames
+images(p: ref Pg)
+{
+	if((urls := p.wanted()) != nil) {
+		pics: list of ref Pic;
+		for(got := fetchall(urls); got != nil; got = tl got) {
+			g := hd got;
+			pics = picture(g.url, g.data, g.ctype, g.err) :: pics;
+		}
+		p.install(pics);
+	}
+	p.frames();
+}
+
+# the document and its style sheets, laid out with no images yet
+document(data: array of byte, ctype, url: string, width, height: int): ref Pg
+{
 	charset := param(ctype, "charset");
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
 		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil);
@@ -145,7 +166,7 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 		raise e;
 	}
 	punlock();
-	return (p, nil);
+	return p;
 }
 
 # Build the boxes again from the computed styles, with the images the

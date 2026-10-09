@@ -53,6 +53,11 @@ Browser: module
 
 		new:	fn(width, height: int): ref Session;
 		open:	fn(s: self ref Session, url: string);
+		# data as the page at url, now: an editor's preview of a
+		# file, or a document a program made.  No history is kept
+		# for a page shown again at the same URL, and the view stays
+		# where it was (scroll is not reset).
+		show:	fn(s: self ref Session, data: array of byte, ctype, url: string): string;
 		goback:	fn(s: self ref Session): string;
 		goforward:	fn(s: self ref Session): string;
 		reload:	fn(s: self ref Session);

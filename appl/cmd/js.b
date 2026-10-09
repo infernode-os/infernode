@@ -1,6 +1,6 @@
 implement Js;
 
-# Most of the code below is copied from /appl/charon/jscript.b
+# Most of the code below was copied from the old Charon engine's jscript.b
 
 include "sys.m";
 	sys : Sys;

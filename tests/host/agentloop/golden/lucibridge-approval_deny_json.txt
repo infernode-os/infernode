@@ -1,0 +1,25 @@
+# lucibridge approval_deny_json
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_approval_deny_json_0_0 write {"path": "\/dis\/agentloop-probe.txt", "content": "probe"}
+tool-result call_approval_deny_json_0_0:
+  | error: operation denied by operator
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:approval_deny_json go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro dtype=dialogue title=Denied options=Allow,Deny text=write {"path": "/dis/agentloop-probe.txt", "content": "probe"}
+  | 
+  | msg 3
+  | role=veltro text=Write was handled.
+  | 

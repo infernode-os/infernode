@@ -988,16 +988,31 @@ jobs:
         retention-days: 3
 
   # ─────────────────────────────────────────────
-  # macOS ARM64: SDL3 GUI emulator + .app bundle
+  # macOS: SDL3 GUI emulator + .app bundle, Apple silicon and Intel
   # ─────────────────────────────────────────────
-  macos-arm64:
-    name: macOS ARM64
-    runs-on: macos-15
+  macos:
+    name: macOS ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: ARM64
+            runner: macos-15
+            homebrew: /opt/homebrew
+          # Intel Macs (#786), for as long as GitHub has an Intel image.
+          - arch: amd64
+            label: AMD64
+            runner: macos-15-intel
+            homebrew: /usr/local
     env:
       ROOT: ${{ github.workspace }}
+      OBJTYPE: ${{ matrix.arch }}
+      HOMEBREW: ${{ matrix.homebrew }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1021,44 +1036,44 @@ jobs:
       run: |
         chmod +x makemk.sh
         ./makemk.sh
-        test -x MacOSX/arm64/bin/mk || { echo "mk build failed"; exit 1; }
+        test -x MacOSX/$OBJTYPE/bin/mk || { echo "mk build failed"; exit 1; }
 
     - name: Build system libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         for dir in lib9 libbio libmp libsec libmath; do
           echo "Building $dir..."
-          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+          (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         done
 
     - name: Build limbo compiler
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd limbo && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
-        test -x MacOSX/arm64/bin/limbo || { echo "limbo not found"; exit 1; }
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd limbo && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
+        test -x MacOSX/$OBJTYPE/bin/limbo || { echo "limbo not found"; exit 1; }
 
     - name: Build libinterp and remaining libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd libinterp && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd libinterp && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         for dir in libfreetype libkeyring libdraw libmemdraw libmemlayer; do
           echo "Building $dir..."
-          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || true
+          (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || true
         done
         # libtk (Tk reintegration): the emu now links libtk.a, so build it
         # after the draw libraries it depends on. The loop above is best-effort
         # (|| true); libtk must succeed or the emu link fails with
         # "no such file or directory: libtk.a".
         echo "Building libtk..."
-        (cd libtk && "$ROOT/MacOSX/arm64/bin/mk" install) || { echo "libtk build failed"; exit 1; }
-        test -f MacOSX/arm64/lib/libtk.a || { echo "libtk.a not produced"; exit 1; }
+        (cd libtk && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || { echo "libtk build failed"; exit 1; }
+        test -f MacOSX/$OBJTYPE/lib/libtk.a || { echo "libtk.a not produced"; exit 1; }
 
     - name: Build SDL3 GUI emulator
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         cd emu/MacOSX
         mk clean 2>/dev/null || true
-        OBJTYPE=arm64 SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=sdl3
+        SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=sdl3
         test -f o.emu || { echo "Emulator build failed"; exit 1; }
 
     - name: Prepare macOS binary
@@ -1083,7 +1098,7 @@ jobs:
         # absent on an end user's Mac and FIDO2 enrollment silently no-ops.
         bundle_homebrew_deps() {
           # $1 = mach-o file in emu/MacOSX/ to rewrite in place.
-          otool -L "$1" | awk '/\/opt\/homebrew\// {print $1}' | while read -r dep; do
+          otool -L "$1" | awk -v p="$HOMEBREW/" 'index($1, p) == 1 {print $1}' | while read -r dep; do
             base=$(basename "$dep")
             if [ ! -f "emu/MacOSX/$base" ]; then
               cp "$dep" "emu/MacOSX/$base"
@@ -1101,8 +1116,8 @@ jobs:
         # HAVE_FIDO2-off regression that shipped 2fa as a dead stub).
         echo "Updated load paths:"
         otool -L emu/MacOSX/InferNode | grep -iE "sdl|fido|cbor|crypto|opus"
-        if otool -L emu/MacOSX/InferNode | grep -q "/opt/homebrew"; then
-          echo "ERROR: InferNode still references absolute /opt/homebrew paths"; exit 1
+        if otool -L emu/MacOSX/InferNode | grep -q "$HOMEBREW/"; then
+          echo "ERROR: InferNode still references absolute $HOMEBREW paths"; exit 1
         fi
         if ! otool -L emu/MacOSX/InferNode | grep -q "@executable_path/libfido2"; then
           echo "ERROR: libfido2 not linked — FIDO2/YubiKey 2fa would ship as a stub"; exit 1
@@ -1142,7 +1157,7 @@ jobs:
 
         # Native tools
         mkdir -p "$MACOS/tools"
-        cp MacOSX/arm64/bin/limbo MacOSX/arm64/bin/mk "$MACOS/tools/"
+        cp MacOSX/$OBJTYPE/bin/limbo MacOSX/$OBJTYPE/bin/mk "$MACOS/tools/"
 
         # Strip debug symbols before signing
         strip "$MACOS/emu" "$MACOS/tools/limbo" "$MACOS/tools/mk"
@@ -1250,7 +1265,7 @@ jobs:
         VERSION="${{ steps.version.outputs.version }}"
         for name in InferNode Xenith; do
           lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
-          DMG="${lower}-${VERSION}-macos-arm64.dmg"
+          DMG="${lower}-${VERSION}-macos-${{ matrix.arch }}.dmg"
 
           hdiutil create -volname "$name" \
             -srcfolder "$name.app" -ov -format UDZO "$DMG"
@@ -1267,23 +1282,38 @@ jobs:
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: infernode-macos-arm64-archive
+        name: infernode-macos-${{ matrix.arch }}-archive
         path: |
-          infernode-*-macos-arm64.dmg
-          xenith-*-macos-arm64.dmg
+          infernode-*-macos-${{ matrix.arch }}.dmg
+          xenith-*-macos-${{ matrix.arch }}.dmg
         retention-days: 3
 
   # ─────────────────────────────────────────────
-  # macOS ARM64 headless: emulator + toolchain tarball (no GUI)
+  # macOS headless: emulator + toolchain tarball (no GUI), both arches
   # ─────────────────────────────────────────────
-  macos-arm64-headless:
-    name: macOS ARM64 headless
-    runs-on: macos-15
+  macos-headless:
+    name: macOS ${{ matrix.label }} headless
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: ARM64
+            runner: macos-15
+            homebrew: /opt/homebrew
+          # Intel Macs (#786), for as long as GitHub has an Intel image.
+          - arch: amd64
+            label: AMD64
+            runner: macos-15-intel
+            homebrew: /usr/local
     env:
       ROOT: ${{ github.workspace }}
+      OBJTYPE: ${{ matrix.arch }}
+      HOMEBREW: ${{ matrix.homebrew }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1310,44 +1340,44 @@ jobs:
       run: |
         chmod +x makemk.sh
         ./makemk.sh
-        test -x MacOSX/arm64/bin/mk || { echo "mk build failed"; exit 1; }
+        test -x MacOSX/$OBJTYPE/bin/mk || { echo "mk build failed"; exit 1; }
 
     - name: Build system libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         for dir in lib9 libbio libmp libsec libmath; do
           echo "Building $dir..."
-          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+          (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         done
 
     - name: Build limbo compiler
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd limbo && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
-        test -x MacOSX/arm64/bin/limbo || { echo "limbo not found"; exit 1; }
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd limbo && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
+        test -x MacOSX/$OBJTYPE/bin/limbo || { echo "limbo not found"; exit 1; }
 
     - name: Build libinterp and remaining libraries
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
-        (cd libinterp && "$ROOT/MacOSX/arm64/bin/mk" install) || exit 1
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd libinterp && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || exit 1
         for dir in libfreetype libkeyring libdraw libmemdraw libmemlayer; do
           echo "Building $dir..."
-          (cd $dir && "$ROOT/MacOSX/arm64/bin/mk" install) || true
+          (cd $dir && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || true
         done
         # libtk (Tk reintegration): the emu now links libtk.a, so build it
         # after the draw libraries it depends on. The loop above is best-effort
         # (|| true); libtk must succeed or the emu link fails with
         # "no such file or directory: libtk.a".
         echo "Building libtk..."
-        (cd libtk && "$ROOT/MacOSX/arm64/bin/mk" install) || { echo "libtk build failed"; exit 1; }
-        test -f MacOSX/arm64/lib/libtk.a || { echo "libtk.a not produced"; exit 1; }
+        (cd libtk && "$ROOT/MacOSX/$OBJTYPE/bin/mk" install) || { echo "libtk build failed"; exit 1; }
+        test -f MacOSX/$OBJTYPE/lib/libtk.a || { echo "libtk.a not produced"; exit 1; }
 
     - name: Build headless emulator
       run: |
-        export PATH="$ROOT/MacOSX/arm64/bin:/usr/bin:/bin"
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
         cd emu/MacOSX
         mk clean 2>/dev/null || true
-        OBJTYPE=arm64 SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=headless
+        SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=headless
         test -f o.emu || { echo "Headless emulator build failed"; exit 1; }
         otool -L o.emu | grep -qi libSDL \
           && echo "note: headless emu links libSDL (will be bundled)" \
@@ -1361,7 +1391,7 @@ jobs:
         # a dead stub. bundle_homebrew_deps pulls in any /opt/homebrew dep
         # (including SDL if the headless link references it).
         bundle_homebrew_deps() {
-          otool -L "$1" | awk '/\/opt\/homebrew\// {print $1}' | while read -r dep; do
+          otool -L "$1" | awk -v p="$HOMEBREW/" 'index($1, p) == 1 {print $1}' | while read -r dep; do
             base=$(basename "$dep")
             if [ ! -f "emu/MacOSX/$base" ]; then
               cp "$dep" "emu/MacOSX/$base"
@@ -1374,8 +1404,8 @@ jobs:
         }
         bundle_homebrew_deps emu/MacOSX/o.emu
         echo "Load paths:"; otool -L emu/MacOSX/o.emu | grep -iE "fido|cbor|crypto|opus" || true
-        if otool -L emu/MacOSX/o.emu | grep -q "/opt/homebrew"; then
-          echo "ERROR: o.emu still references absolute /opt/homebrew paths"; exit 1
+        if otool -L emu/MacOSX/o.emu | grep -q "$HOMEBREW/"; then
+          echo "ERROR: o.emu still references absolute $HOMEBREW paths"; exit 1
         fi
         if ! otool -L emu/MacOSX/o.emu | grep -q "@executable_path/libfido2"; then
           echo "ERROR: libfido2 not linked — /dev/2fa would ship as a stub"; exit 1
@@ -1384,14 +1414,14 @@ jobs:
     - name: Package archive
       run: |
         VERSION="${{ steps.version.outputs.version }}"
-        STAGE="infernode-${VERSION}-macos-arm64"
-        mkdir -p "$STAGE/emu/MacOSX" "$STAGE/MacOSX/arm64/bin"
+        STAGE="infernode-${VERSION}-macos-${{ matrix.arch }}"
+        mkdir -p "$STAGE/emu/MacOSX" "$STAGE/MacOSX/$OBJTYPE/bin"
 
         # Headless emulator + bundled dylibs (libfido2 + cbor/crypto/opus)
         cp emu/MacOSX/o.emu "$STAGE/emu/MacOSX/"
         cp emu/MacOSX/*.dylib "$STAGE/emu/MacOSX/" 2>/dev/null || true
-        cp MacOSX/arm64/bin/limbo MacOSX/arm64/bin/mk "$STAGE/MacOSX/arm64/bin/"
-        strip "$STAGE/emu/MacOSX/o.emu" "$STAGE/MacOSX/arm64/bin/limbo" "$STAGE/MacOSX/arm64/bin/mk" 2>/dev/null || true
+        cp MacOSX/$OBJTYPE/bin/limbo MacOSX/$OBJTYPE/bin/mk "$STAGE/MacOSX/$OBJTYPE/bin/"
+        strip "$STAGE/emu/MacOSX/o.emu" "$STAGE/MacOSX/$OBJTYPE/bin/limbo" "$STAGE/MacOSX/$OBJTYPE/bin/mk" 2>/dev/null || true
 
         # dis/ is not tracked, so the tree must be built before it can be
         # staged -- exactly as emu/*/o.emu already is.  This also checks the
@@ -1454,8 +1484,8 @@ jobs:
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: infernode-macos-arm64-headless-archive
-        path: infernode-*-macos-arm64.tar.gz
+        name: infernode-macos-${{ matrix.arch }}-headless-archive
+        path: infernode-*-macos-${{ matrix.arch }}.tar.gz
         retention-days: 3
 
   # ─────────────────────────────────────────────
@@ -1712,7 +1742,7 @@ jobs:
   # ─────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos-arm64, macos-arm64-headless, windows-amd64]
+    needs: [linux-amd64, linux-amd64-gui, linux-arm64, linux-arm64-gui, macos, macos-headless, windows-amd64]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -1807,6 +1837,8 @@ jobs:
           | Linux | ARM64 (headless) | `infernode-${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
           | macOS | ARM64 (Apple Silicon, SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-macos-arm64.dmg` |
           | macOS | ARM64 (Apple Silicon, headless) | `infernode-${{ steps.version.outputs.version }}-macos-arm64.tar.gz` |
+          | macOS | AMD64 (Intel, SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-macos-amd64.dmg` |
+          | macOS | AMD64 (Intel, headless) | `infernode-${{ steps.version.outputs.version }}-macos-amd64.tar.gz` |
           | Windows | AMD64 (SDL3 GUI) | `infernode-${{ steps.version.outputs.version }}-windows-amd64-gui.zip` |
           | Windows | AMD64 (headless) | `infernode-${{ steps.version.outputs.version }}-windows-amd64.zip` |
 
@@ -1815,6 +1847,7 @@ jobs:
           | Platform | Architecture | File |
           |----------|-------------|------|
           | macOS | ARM64 (Apple Silicon) | `xenith-${{ steps.version.outputs.version }}-macos-arm64.dmg` |
+          | macOS | AMD64 (Intel) | `xenith-${{ steps.version.outputs.version }}-macos-amd64.dmg` |
           | Windows | AMD64 | `xenith-${{ steps.version.outputs.version }}-windows-amd64.zip` |
 
           ### Quick Start

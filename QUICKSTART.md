@@ -21,7 +21,8 @@ cd infernode-*-linux-*
 #   ./setup-desktop.sh --no-icon  # PATH wrapper only (headless/server)
 #   ./setup-desktop.sh --uninstall
 
-# macOS ARM64 (Apple Silicon) — open DMG, drag to Applications, double-click
+# macOS — open the DMG (macos-arm64 for Apple Silicon, macos-amd64 for Intel),
+#   drag to Applications, double-click
 ```
 
 > Match the tarball to your CPU: `amd64` (Intel/AMD) vs `arm64` (Jetson / Raspberry Pi / Apple-Silicon Linux). Running the wrong arch fails with a missing `ld-linux-aarch64.so.1` / loader error.
@@ -42,7 +43,7 @@ cd infernode-*-linux-*
 ./install-sdl3.sh                 # GUI only, one time
 ./build-linux-arm64.sh            # add 'headless' to skip SDL3
 
-# macOS ARM64 (Apple Silicon)
+# macOS, Apple Silicon or Intel (the scripts follow uname -m)
 ./makemk.sh                       # bootstrap mk (one time)
 brew install sdl3 sdl3_ttf        # GUI only
 ./build-macos-sdl3.sh             # or ./build-macos-headless.sh

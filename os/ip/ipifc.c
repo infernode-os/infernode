@@ -606,6 +606,20 @@ ipifcremlifc(Ipifc *ifc, Iplifc *lifc)
 			v6delroute(f, v6allnodesL, v6allnodesLmask, 1);
 	}
 
+	/*
+	 *  Routes cached on this interface are stale now.  A route keeps the
+	 *  interface it last resolved to while that interface's ifcid is
+	 *  unchanged, and ifcid changed only on bind and unbind.  Two
+	 *  interfaces on one network share that network's route (Requals,
+	 *  refcounted), so when one gave up its address the route kept
+	 *  sending the network's traffic out of it: on the bench Pi a cable
+	 *  pulled took Wi-Fi off the network with it, until the cable came
+	 *  back.  Bumped, the route resolves again, to the interface that
+	 *  still has an address there.  Only this interface: bumping every
+	 *  one (every route re-resolved, loopback's included) broke
+	 *  connections to 127.0.0.1.
+	 */
+	ifc->ifcid++;
 	free(lifc);
 	return nil;
 

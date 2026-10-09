@@ -8,7 +8,7 @@ tools: list read write
 tools: list read write
 assistant-call call_approval_deny_0_0 write {"args": "\/dis\/agentloop-probe.txt probe"}
 tool-result call_approval_deny_0_0:
-  | error: /dis/agentloop-probe.txt is not covered by an rw path grant
+  | error: operation denied by operator
 
 == output
   | == user
@@ -25,10 +25,9 @@ tool-result call_approval_deny_0_0:
   | llm: STOP:tool_use
   | TOOL:call_approval_deny_0_0:write:{"args"\: "/dis/agentloop-probe.txt probe"}
   | 
-  | tool write: args {"args": "/dis/agentloop-probe.txt probe"}
-  | tool write: calling with 42 bytes
-  | tool write: done, error: /dis/agentloop-probe.txt is not covered by an rw path grant
-  | step 2: writing 107 bytes to LLM
+  | pretool: awaiting approval for write
+  | pretool: user responded: deny
+  | step 2: writing 76 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (1 chunks, 18 bytes)
   | step 2: waiting for LLM response...

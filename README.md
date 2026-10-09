@@ -20,6 +20,7 @@ InferNode is a modern Inferno® distribution with JIT compilation on AMD64 (14×
 Every tagged release ships signed binaries for macOS, Linux, and Windows on the [latest release page](https://github.com/infernode-os/infernode/releases/latest). No toolchain, no build step — download and run.
 
 - **macOS (Apple Silicon)** — `infernode-*-macos-arm64.dmg`: open, drag to Applications, launch.
+- **macOS (Intel)** — `infernode-*-macos-amd64.dmg`: the same, built and tested on GitHub's Intel macOS runner. Supported for as long as Apple supports Intel Macs and GitHub has Intel runners.
 - **Windows (x86_64)** — `infernode-*-windows-amd64-gui.zip`: extract, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. (Until code-signing lands, the unsigned `InferNode.exe` would otherwise be silently blocked by SmartScreen after browser download — Windows propagates Mark-of-the-Web from the zip to every extracted file. `.bat` files are exempt from that gate, so `setup-windows.bat` runs anyway and its first job is to unblock the rest of the bundle.)
 - **Linux x86_64 (GUI)** — `infernode-*-linux-amd64-gui.tar.gz`: SDL3 is bundled.
 - **Linux ARM64 (GUI)** — `infernode-*-linux-arm64-gui.tar.gz`: for Jetson, Raspberry Pi, etc.
@@ -58,7 +59,7 @@ cd infernode
 ./emu/Linux/o.emu -c1 -r$PWD sh -l
 ```
 
-**macOS (Apple Silicon):**
+**macOS (Apple Silicon or Intel):**
 ```bash
 git clone https://github.com/infernode-os/infernode.git
 cd infernode

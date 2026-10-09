@@ -198,7 +198,7 @@ Drive the window from a shell:
 ; echo submit 1 >/mnt/charon/ctl
 .EE
 .SH SOURCE
-.B /appl/charon/web.b
+.B /appl/charon/charon.b
 .br
 .B /appl/lib/web
 .SH SEE ALSO

@@ -35,8 +35,9 @@ HERE="$ROOT/tests/host/agentloop"
 GOLDEN="$HERE/golden"
 UPDATE=${UPDATE:-0}
 
-SCENARIOS="text_only single_read text_and_tool two_reads dup_read dup_in_batch
-big_output unknown_tool error_streak say write_then_read approval_deny step_cap"
+SCENARIOS="text_only single_read text_and_tool two_reads many_reads dup_read dup_in_batch
+big_output unknown_tool error_streak say write_then_read approval_deny
+approval_deny_json read_write_read step_cap"
 [ $# -gt 0 ] && SCENARIOS="$*"
 
 TOOLS="read list write say"
@@ -83,6 +84,7 @@ rm -r /usr/agentloop >[2] /dev/null
 mkdir -p /usr/agentloop
 echo alpha > /usr/agentloop/a.txt
 echo beta > /usr/agentloop/b.txt
+for i in 1 2 3 4 5 6 { echo content-\$i > /usr/agentloop/f\$i.txt }
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 {
 	echo 'line '^\$i^' of a file large enough to spill to scratch: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789' >> /usr/agentloop/big.txt
 }
@@ -117,7 +119,7 @@ echo 'SCENARIO:$2 go' > /mnt/veltro/\$id/input
 	for i in 1 2 3 4 5 {
 		a=\`{cat /mnt/veltro/\$id/approve}
 		if {! ~ \$#a 0} {
-			echo deny \$a(1) > /mnt/veltro/\$id/approve
+			echo deny \${index 1 \$a} > /mnt/veltro/\$id/approve
 		}
 	}
 } &

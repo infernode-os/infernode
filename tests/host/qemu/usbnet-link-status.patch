@@ -1,0 +1,40 @@
+usb-net: report the link's state in OID_GEN_MEDIA_CONNECT_STATUS
+
+The RNDIS model sets media_state to connected when it is realized and
+never changes it, so `set_link <id> off` drops the frames but the
+adapter still answers OID_GEN_MEDIA_CONNECT_STATUS with "connected". A
+guest that watches the link to notice a cable pulled and put back --
+releasing its address so traffic moves to another interface, and asking
+DHCP again when the cable returns -- has nothing to see.
+
+Give the NIC a link_status_changed that sets media_state from
+nc->link_down, as other NIC models do for their link registers.
+
+Found by the InferNode bare-metal harness: etherusb's link watcher
+polls this OID, and set_link through QMP had no effect on it.
+
+--- a/hw/usb/dev-network.c	2026-10-08 10:09:38.095714981 +0700
++++ b/hw/usb/dev-network.c	2026-10-08 10:09:38.143713063 +0700
+@@ -1334,6 +1334,14 @@
+     return size;
+ }
+ 
++static void usbnet_link_status_changed(NetClientState *nc)
++{
++    USBNetState *s = qemu_get_nic_opaque(nc);
++
++    /* NDIS_MEDIA_STATE_DISCONNECTED (1) while the link is down */
++    s->media_state = nc->link_down ? 1 : 0;
++}
++
+ static void usbnet_cleanup(NetClientState *nc)
+ {
+     USBNetState *s = qemu_get_nic_opaque(nc);
+@@ -1355,6 +1363,7 @@
+     .size = sizeof(NICState),
+     .receive = usbnet_receive,
+     .cleanup = usbnet_cleanup,
++    .link_status_changed = usbnet_link_status_changed,
+ };
+ 
+ static void usb_net_realize(USBDevice *dev, Error **errp)

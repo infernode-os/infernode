@@ -9,14 +9,14 @@ GUISRC=\
 # -DHAVE_FIDO2 when libfido2 is present, else /dev/2fa degrades to stubs.
 # openssl@3 is keg-only so libcrypto.pc (a libfido2 Requires.private) is not on
 # the default path; add the keg dir and fall back to a direct header probe.
-PKGCONFIG_PATH=/opt/homebrew/lib/pkgconfig:/opt/homebrew/opt/openssl@3/lib/pkgconfig
-FIDO2_CFLAGS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; elif test -f /opt/homebrew/include/fido.h; then echo "-DHAVE_FIDO2 -I/opt/homebrew/include"; fi`
-FIDO2_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; elif test -f /opt/homebrew/include/fido.h; then echo "-L/opt/homebrew/lib -lfido2"; fi`
+PKGCONFIG_PATH=$HOMEBREW/lib/pkgconfig:$HOMEBREW/opt/openssl@3/lib/pkgconfig
+FIDO2_CFLAGS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then echo -DHAVE_FIDO2; pkg-config --cflags libfido2; elif test -f $HOMEBREW/include/fido.h; then echo "-DHAVE_FIDO2 -I$HOMEBREW/include"; fi`
+FIDO2_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; if pkg-config --exists libfido2 2>/dev/null; then pkg-config --libs libfido2; elif test -f $HOMEBREW/include/fido.h; then echo "-L$HOMEBREW/lib -lfido2"; fi`
 
 # Device objects shared with the sdl3 config (audio-sdl3, devopus) reference SDL
 # and opus even in headless builds, so provide both to the linker; the display
 # still uses the no-op stubs above.
-SDL3_LIBS=`pkg-config --libs sdl3 2>/dev/null || echo "-L/opt/homebrew/lib -lSDL3"`
-OPUS_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; pkg-config --libs opus 2>/dev/null || echo "-L/opt/homebrew/lib -lopus"`
+SDL3_LIBS=`pkg-config --libs sdl3 2>/dev/null || echo "-L$HOMEBREW/lib -lSDL3"`
+OPUS_LIBS=`export PKG_CONFIG_PATH=$PKGCONFIG_PATH; pkg-config --libs opus 2>/dev/null || echo "-L$HOMEBREW/lib -lopus"`
 GUIFLAGS=$FIDO2_CFLAGS
 GUILIBS=$FIDO2_LIBS $SDL3_LIBS $OPUS_LIBS

@@ -1,6 +1,6 @@
 # Charon's new engine — design sketch
 
-Status: **accepted** (decisions at the end); milestones 1–8 built: the new engine is the browser people launch (`wm/charon`, source `appl/charon/web.b`), the old one remains only for Xenith's render mode until milestone 9.
+Status: **accepted** (decisions at the end); milestones 1–9 built: the new engine is Charon (`wm/charon`, source `appl/charon/charon.b`) and what Xenith's `Render` shows an HTML file with (`appl/xenith/render/htmldoc.b`); the old engine has been removed, and with it JavaScript, until the seam below has a host.
 Owner of the question: what web browser would Bell Labs build?
 
 ## Why a new engine
@@ -224,8 +224,8 @@ The two are not paired by default.
 browser's reach is literally a mount: bind a different `webfs` (or none)
 and the same browser sees a different (or no) network. `webfs` gains what
 a browser needs first: a cookie jar, an HTTP cache, `data:` and `file:`
-URLs, and content decoding. Charon's private HTTP/TLS transport goes when
-the old engine does.
+URLs, and content decoding. Charon's private HTTP/TLS transport went with
+the old engine.
 
 Done (7a): `webfs` fetches concurrently (one slow resource stalls only its
 own readers); keeps one RFC 6265 cookie jar per instance, readable and
@@ -318,7 +318,7 @@ is then removed.
 | 7 | images (PNG, JPEG, GIF, SVG via readsvg, WebP), `data:` URLs | img |
 | 7a | `webfs`: cookie jar, cache, `data:`/`file:`, content decoding; engine fetches only through `/mnt/web` | network |
 | 8 | Tk chrome + canvas viewport + form controls; `/mnt/charon` | interactive |
-| 9 | default switch; old engine removed | everything |
+| 9 | default switch; old engine removed (done) | everything |
 
 ## Decisions (2026-10-01)
 

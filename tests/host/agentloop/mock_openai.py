@@ -22,6 +22,7 @@ FIX = "/usr/agentloop"
 
 
 def tool(name, args):
+    """args: a string (sent as {"args": ...}) or a dict (sent as is)."""
     return {"name": name, "args": args}
 
 
@@ -41,6 +42,12 @@ SCENARIOS = {
     "two_reads": [
         {"tools": [tool("read", FIX + "/a.txt"), tool("read", FIX + "/b.txt")]},
         {"content": "Read both."},
+    ],
+    # Six reads of different files in one batch run concurrently; each
+    # result must be its own file's, not another call's.
+    "many_reads": [
+        {"tools": [tool("read", FIX + "/f%d.txt" % i) for i in range(1, 7)]},
+        {"content": "Read six."},
     ],
     "dup_read": [
         {"tools": [tool("read", FIX + "/a.txt")]},
@@ -92,6 +99,20 @@ SCENARIOS = {
         {"tools": [tool("write", "/dis/agentloop-probe.txt probe")]},
         {"content": "Write was handled."},
     ],
+    # The same, with the tool's own schema as a native model sends it.
+    "approval_deny_json": [
+        {"tools": [tool("write", {"path": "/dis/agentloop-probe.txt",
+                                  "content": "probe"})]},
+        {"content": "Write was handled."},
+    ],
+    # A read, a write to the same file and the read again, in one batch:
+    # the second read must run, not be answered with the first's result.
+    "read_write_read": [
+        {"tools": [tool("read", FIX + "/a.txt"),
+                   tool("write", FIX + "/a.txt omega"),
+                   tool("read", FIX + "/a.txt")]},
+        {"content": "Read, wrote, read."},
+    ],
 }
 
 # Scenarios whose model never stops calling tools: every turn is the same.
@@ -138,7 +159,8 @@ def calls_of(name, turn, r):
             "id": "call_%s_%d_%d" % (name, turn, i),
             "type": "function",
             "function": {"name": t["name"],
-                         "arguments": json.dumps({"args": t["args"]})},
+                         "arguments": json.dumps(t["args"] if isinstance(t["args"], dict)
+                                                else {"args": t["args"]})},
         })
     return out
 

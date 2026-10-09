@@ -101,6 +101,30 @@ Session.open(s: self ref Session, url: string)
 	navigate(s, typed(s, url), "GET", nil, nil, Hnew);
 }
 
+Session.show(s: self ref Session, data: array of byte, ctype, url: string): string
+{
+	if(ctype == nil)
+		ctype = "text/html";
+	pg: ref Pg;
+	{
+		pg = page->parse(data, ctype, url, s.width, s.height);
+	} exception e {
+	"*" =>
+		return "internal error: " + e;
+	}
+	lock(s);
+	s.gen++;	# whatever was loading is superseded
+	if(unfrag(pg.url) != unfrag(s.url))
+		history(s, s.url, Hnew);
+	s.pg = pg;
+	s.url = pg.url;
+	s.title = pg.title;
+	s.status = "done";
+	unlock(s);
+	event(s, "done " + s.url);
+	return nil;
+}
+
 # What the user typed, as a URL.
 typed(s: ref Session, u: string): string
 {

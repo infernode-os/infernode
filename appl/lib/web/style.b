@@ -6267,7 +6267,8 @@ lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
 					t = ref Tok(Kdimension, "px", p, 0, nil);
 				else if(lin && p == 0.0)
 					t = ref Tok(Kpercent, nil, pc, 0, nil);
-			}
+			} else
+				t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));	# (an angle's, say: what is in it, now)
 		} else if(t.kids != nil)
 			t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));
 		r[k] = t;

@@ -35,16 +35,13 @@ correctly and feel instant", not peak arithmetic throughput.
 
 ## 2. What is already in the tree
 
-- **`appl/lib/ecmascript`** (about 8,000 lines of library) plus
-  **`appl/charon/jscript.b`** (3,000 lines). This is the original Inferno
-  ECMAScript engine, of the ES3 era. It compiles source to its own bytecode
-  (`Code`, `pc`), interprets it with boxed `ref Val` values and
-  string-keyed property lookup, and has no ES5 strict mode, accessors or
-  ES2015. It is not a base to grow from. What carries forward is its
-  **`ESHostobj` interface**: get, put, has, delete, call and construct,
-  implemented by a host module. That is the right shape for the host
-  boundary (§4.2). The old engine is retired once the new one runs
-  Charon's pages.
+- **`appl/lib/ecmascript`**, the original Inferno ECMAScript engine: a
+  late-1990s, ES3-era design (its own bytecode, boxed values,
+  string-keyed property lookup). Charon's binding to it went with the old
+  Charon engine; an old `js` command (`appl/cmd/js.b`) and acme's `Jwin`
+  still load it. The new engine starts fresh and takes nothing from it.
+  The new `js` command replaces the old one, and the library is removed
+  once nothing loads it.
 - **`nsconstruct`** (`module/nsconstruct.m`,
   [appl/veltro/SECURITY.md](../appl/veltro/SECURITY.md)). Veltro's proven
   sandbox. `restrictdir(target, allowed, writable)` forks the namespace
@@ -159,7 +156,7 @@ the restricted process group.
 
 ### 4.2 The host interface
 
-The host boundary follows `ESHostobj`, modernised:
+The host boundary is a module the host implements:
 
 ```
 Host: module {

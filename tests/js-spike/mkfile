@@ -6,6 +6,7 @@ TARG=\
 	tiny.dis\
 	loadtest.dis\
 	gctest.dis\
+	spike2.dis\
 
 MODULES=
 

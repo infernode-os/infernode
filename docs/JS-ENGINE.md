@@ -462,11 +462,38 @@ the engine need for it to be fast:
 - **The collector is paced by the scheduler, not by allocation:** a
   thread making cyclic garbage outruns it and exhausts the heap.
 
-So the VM comes first, and each change helps all Limbo code: `IMOVMP`
-compiled in line on every JIT, `ICVTFW`/`ICVTWF` on amd64, and the
-collector paced by allocation. After those, the spike is run again
-and the value representation chosen (§5.1): values holding pointers,
-or pointer-free values over engine-managed object tables.
+Those findings come from values that hold Limbo pointers, with
+JavaScript's objects left to Dis's collector.  Dis is built that way
+for Limbo programs: reference counting so a file or window goes the
+moment nothing refers to it, an idle-time collector for the rare cycle
+(Limbo makes a cyclic type say so), and a small JIT that punts the
+rarer instructions.  JavaScript's heap is nothing like that, which is
+why V8 and QuickJS manage their own.
+
+**So the engine has its own heap, and Dis is not changed** (spike2,
+2026-10-10):
+
+- **Values** are a tag, a handle and a number, with no pointers, so a
+  copy is a plain move.
+- **Objects** are rows of the engine's own arrays.
+- **Locals** live on the engine's value stack.
+- **Collection** is the engine's own mark-and-sweep.
+
+On amd64 the optimised tier is then:
+
+- 1.7–3.2× faster than QuickJS on calls, allocation and floating point;
+- level with it on closures;
+- 1.7–2.5× off it on polymorphic calls and property access;
+- 10× off it on strings, which need their own representation.
+
+Six rounds of half a million cyclic objects take about 165 ms, with
+pauses of 5–6 ms.
+
+The baseline tier is 3–11× off, so it emits each operation's common
+case in line, and specialised code comes early.  §5.1 and §5.4 are
+superseded by this.  One amd64 JIT gap shows: real-to-integer
+conversions are punted where arm64 compiles them in line, which is a
+small separate fix should profiles of Limbo programs justify it.
 
 
 ## 10. Work this needs elsewhere in the system

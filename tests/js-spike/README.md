@@ -10,6 +10,7 @@ JavaScript, measured against QuickJS 2026-06-04 on the same machines.
 | `valrep.b` | what copying a value costs, by how many pointer fields it holds |
 | `tiny.b`, `loadtest.b` | loading a freshly generated module (the JIT translates it at load) |
 | `gctest.b` | the collector's pauses, and whether it keeps up, with cyclic garbage |
+| `spike2.b` | everything again with the engine's own heap: values without pointers, objects as rows of the engine's arrays, its own mark-and-sweep |
 
 The tiers in `spike.b`:
 
@@ -71,11 +72,36 @@ The figures are milliseconds, best of three. The quiet machine is minipc, Linux 
 5. **Generated modules are cheap:** a function per module, translated at load, costs tens of microseconds.
 6. **The collector is paced by the scheduler, not by allocation.** It runs when the system is idle, or for one slice every 256 scheduling rounds, so a thread that keeps allocating cyclic garbage outruns it. JavaScript makes cycles all the time.
 
+## The own heap (spike2), 2026-10-10
+
+Values are a tag, a handle and a number, with no pointers. Objects are rows of the engine's own arrays, and JavaScript locals live on the engine's value stack. A mark-and-sweep runs over the rows when they run out, finding roots in the stack, the globals and the inline caches. Nothing in Dis or the JIT is changed.
+
+Best of three on minipc (amd64), in milliseconds, against the first design:
+
+| Benchmark | QuickJS | own heap: base | own heap: opt | first design: base | first design: opt |
+|---|---|---|---|---|---|
+| prop | 142 | 1,595 | 359 | 5,668 | 689 |
+| call | 134 | 924 | 80 | 3,623 | 84 |
+| closure | 82 | 265 | 79 | 1,012 | 432 |
+| alloc | 258 | 416 | 93 | 2,470 | 666 |
+| poly | 136 | 800 | 231 | 3,200 | 683 |
+| string | 27 | 251 | 269 | 503 | 817 |
+| float | 80 | 533 | 25 | 2,398 | 26 |
+
+**Garbage:** six rounds of 500,000 cyclic objects took 156–178 ms. The worst pause between iterations was 5–6 ms; the worst single collection 9–12 ms. Tables peaked at 1M rows (135 MB) and never grew beyond that. The first design exhausted a 1 GB heap on the same test.
+
+The arm64 JIT (Mac, indicative) gives opt prop 43, call 64, closure 31, alloc 54, poly 97, string 120 and float 21 ms, with the garbage test at 99 ms.
+
+What this says:
+
+- **The own heap is the representation to build on.**
+  - Copies are plain moves.
+  - The optimised tier beats QuickJS on calls, allocation and floating point (1.7×, 2.8× and 3.2×), matches it on closures, and is 1.7–2.5× off on polymorphic calls and property access.
+  - The engine's collector keeps up with cyclic garbage, with pauses of a few milliseconds.
+- **The baseline tier is 3–11× off QuickJS.** Calls into the runtime for every operation are the cost. The baseline compiler should emit each operation's common case in line (the `inl` tier: 2–3× in the first spike), and type-specialised code should come early.
+- **Strings are 10× off.** The engine needs its own string representation, with ropes, byte buffers and a flattening strategy, beyond these tables.
+- **One amd64 JIT gap shows:** real and integer conversions (`ICVTFW`, `ICVTFL` and the rest) are punted to the interpreter on amd64, where arm64 compiles them in line. Most of amd64's opt prop time is `toint32` (`big` of a real) each iteration. The engine can keep conversions out of hot paths. Compiling them in line on amd64, as arm64 does, is a small separate change if profiles of real Limbo programs justify it.
+
 ## What follows
 
-The VM comes first. Each of these changes helps all Limbo code, not only JavaScript:
-
-- **JIT:** compile `IMOVMP` in line, specialised to the type's pointer offsets, on amd64, arm64 and riscv64. Compile `ICVTFW`/`ICVTWF` in line on amd64. Target: `valrep`'s pointer rows near its pointer-free ones.
-- **Collector:** pace collection by bytes allocated, so allocation pressure drives it. Target: `gctest` finishes, with bounded pauses.
-
-Then rerun this spike and choose the value representation: values holding pointers, relying on the faster copy, or pointer-free values whose objects live in engine-managed tables. Then the parser.
+The engine gets its own heap (spike2's design), and Dis and its JIT stay as they are: their reference counting, idle-time cycle collection and punting of rare instructions were designed for Limbo programs, which these benchmarks are not. Next: the parser, then the interpreter and baseline tier over this representation, with the common cases in line.

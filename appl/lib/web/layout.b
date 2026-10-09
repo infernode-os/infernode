@@ -570,6 +570,19 @@ splitinline(box: ref Box, kids: list of ref Box): list of ref Box
 				pieces = p :: pieces;
 				run = nil;
 			}
+			if(box.st.filter != nil || box.st.opacity < 1.0) {
+				# the inline's group effects take in the block it holds
+				# (block-in-inline-float-in-layer-001): the block's own,
+				# then the inline's
+				k.st = ref *k.st;
+				k.st.opacity *= box.st.opacity;
+				if(box.st.filter != nil) {
+					f := array[len k.st.filter + len box.st.filter] of Style->Filt;
+					f[0:] = k.st.filter;
+					f[len k.st.filter:] = box.st.filter;
+					k.st.filter = f;
+				}
+			}
 			r = k :: r;
 		} else
 			run = k :: run;
@@ -14078,8 +14091,80 @@ tokpx(t: ref Css->Tok, basis, fs: real): (int, real)
 		"rem" => return (1, t.n * 16.0);
 		"pt" => return (1, t.n * 4.0 / 3.0);
 		}
+	Css->Kfunction =>
+		if(t.s == "calc") {
+			c := ref Calc(nows(t.kids), 0, basis, fs, 1);
+			v := calcsum(c);
+			if(c.ok && c.i == len c.t)
+				return (1, v);
+		}
 	}
 	return (0, 0.0);
+}
+
+# a calc() of lengths and percentages being worked out, in px
+Calc: adt {
+	t:	array of ref Css->Tok;
+	i:	int;
+	basis, fs:	real;
+	ok:	int;
+};
+
+calcsum(c: ref Calc): real
+{
+	v := calcprod(c);
+	while(c.ok && c.i < len c.t && c.t[c.i].kind == Css->Kdelim && (c.t[c.i].s == "+" || c.t[c.i].s == "-")) {
+		op := c.t[c.i++].s;
+		w := calcprod(c);
+		if(op == "+")
+			v += w;
+		else
+			v -= w;
+	}
+	return v;
+}
+
+calcprod(c: ref Calc): real
+{
+	v := calcterm(c);
+	while(c.ok && c.i < len c.t && c.t[c.i].kind == Css->Kdelim && (c.t[c.i].s == "*" || c.t[c.i].s == "/")) {
+		op := c.t[c.i++].s;
+		w := calcterm(c);
+		if(op == "*")
+			v *= w;
+		else if(w != 0.0)
+			v /= w;
+		else
+			c.ok = 0;
+	}
+	return v;
+}
+
+calcterm(c: ref Calc): real
+{
+	if(c.i >= len c.t) {
+		c.ok = 0;
+		return 0.0;
+	}
+	t := c.t[c.i++];
+	case t.kind {
+	Css->Knumber =>
+		return t.n;
+	Css->Kblock =>
+		if(t.s == "(") {
+			d := ref Calc(nows(t.kids), 0, c.basis, c.fs, 1);
+			v := calcsum(d);
+			if(!d.ok || d.i != len d.t)
+				c.ok = 0;
+			return v;
+		}
+	* =>
+		(ok, v) := tokpx(t, c.basis, c.fs);
+		if(ok)
+			return v;
+	}
+	c.ok = 0;
+	return 0.0;
 }
 
 # one band of a gradient: c, or with a mask c opaque and its alpha into

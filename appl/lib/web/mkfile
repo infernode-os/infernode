@@ -22,6 +22,8 @@ SYSMODULES=\
 	web/fonts.m\
 	web/layout.m\
 	web/page.m\
+	imagefile.m\
+	imgload.m\
 	web/browser.m\
 	web/charonfs.m\
 	outlinefont.m\

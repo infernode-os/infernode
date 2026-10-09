@@ -30,11 +30,15 @@
 - Streaming row-by-row processing to minimize memory footprint
 
 ### Files Modified
-- `appl/xenith/imgload.b` - Core image loading: format dispatch, JPEG, PPM
-- `appl/xenith/imgload.m` - Module interface (ImgProgress, readimagedataprogressive)
-- `appl/xenith/pngload.b` - PNG-specific decoding: streaming, subsampling, Adam7
-- `appl/xenith/pngload.m` - PNG loader module interface
-- `appl/xenith/render/imgrender.b` - Renderer wrapper (PNG, JPEG, PPM magic detection)
+- `appl/lib/imgload.b` - Core image loading: format dispatch for every
+  format the system decodes (PNG, JPEG, GIF, WebP, AVIF, SVG, XBM, PIC,
+  PPM/PGM, Inferno images), PPM itself.  Shared with the browser,
+  wm/view and lib/scene; it was `appl/xenith/imgload.b`.
+- `module/imgload.m` - Module interface (format, isimage, reader,
+  ImgProgress, readimagedataprogressive)
+- `appl/lib/pngload.b` - PNG-specific decoding: streaming, subsampling, Adam7
+- `module/pngload.m` - PNG loader module interface
+- `appl/xenith/render/imgrender.b` - Renderer wrapper (imgload's formats)
 - `appl/xenith/asyncio.b` - Async task management (imagetask, decodetask)
 - `appl/xenith/asyncio.m` - Async message types (ImageData, ImageDecoded, ImageProgress)
 - `appl/xenith/wind.b` - Image display and scaling
@@ -56,7 +60,7 @@ For comparison:
 
 The bottlenecks are:
 1. `appl/lib/inflate.b` - 820 lines of Limbo implementing zlib decompression
-2. PNG filter loops in `imgload.b` - Process every byte of every row
+2. PNG filter loops in `pngload.b` - Process every byte of every row
 
 **Mitigations implemented:**
 - Async loading keeps UI responsive during decode

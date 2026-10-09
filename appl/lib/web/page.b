@@ -13,7 +13,8 @@ include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 include "imagefile.m";
-	imageremap: Imageremap;
+include "imgload.m";
+	imgload: Imgload;
 include "encoding.m";
 	base64: Encoding;
 include "web/dom.m";
@@ -45,7 +46,7 @@ init(d: ref Display): string
 	css = load Css Css->PATH;
 	style = load Style Style->PATH;
 	layout = load Layout Layout->PATH;
-	imageremap = load Imageremap Imageremap->PATH;
+	imgload = load Imgload Imgload->PATH;
 	base64 = load Encoding Encoding->BASE64PATH;
 	if(html == nil || css == nil || style == nil || layout == nil)
 		return sys->sprint("cannot load modules: %r");
@@ -57,8 +58,8 @@ init(d: ref Display): string
 	style->setmetrics(fontmetrics);
 	if((err = layout->init(d)) != nil)
 		return err;
-	if(imageremap != nil)
-		imageremap->init(d);
+	if(imgload != nil)
+		imgload->init(d);
 	return nil;
 }
 
@@ -575,10 +576,13 @@ loadimages(p: ref Pg, root: ref Box)
 			(data, ctype, err) := fetched(got, b.url);
 			if(err == nil)
 				img = decodeimage(data, ctype, b.url);
-			if(img != nil && (prefix(lower(ctype), "image/svg") || looksvg(data)))
+			if(img != nil && issvg(data, ctype, b.url))
 				svgsrc = (b.url, data) :: svgsrc;
-			else
+			else if(img == nil) {
+				if(err == nil)
+					err = "can't decode image";
 				p.errors = b.url + ": " + err :: p.errors;
+			}
 			cache = (b.url, img) :: cache;
 		}
 		if(img != nil) {
@@ -804,41 +808,25 @@ carryimages(old, new: ref Box)
 
 decodeimage(data: array of byte, ctype, url: string): ref Image
 {
-	if(imageremap == nil || len data < 4)
+	if(imgload == nil || len data < 4)
 		return nil;
-	path := "";
-	ct := lower(ctype);
-	if(len data >= 8 && data[0] == byte 16r89 && data[1] == byte 'P' && data[2] == byte 'N' && data[3] == byte 'G')
-		path = RImagefile->READPNGPATH;
-	else if(data[0] == byte 16rFF && data[1] == byte 16rD8)
-		path = RImagefile->READJPGPATH;
-	else if(data[0] == byte 'G' && data[1] == byte 'I' && data[2] == byte 'F')
-		path = RImagefile->READGIFPATH;
-	else if(len data >= 12 && string data[0:4] == "RIFF" && string data[8:12] == "WEBP")
-		path = RImagefile->READWEBPPATH;
-	else if(len data >= 12 && string data[4:8] == "ftyp")
-		path = RImagefile->READAVIFPATH;
-	else if(prefix(ct, "image/svg") || suffix(lower(url), ".svg") || looksvg(data))
-		path = RImagefile->READSVGPATH;
-	if(path == "")
-		return nil;
-	rd := load RImagefile path;
-	if(rd == nil)
-		return nil;
-	rd->init(bufio);
-	(raw, err) := rd->read(bufio->aopen(data));
-	if(raw == nil || err != nil)
-		return nil;
-	(img, nil) := imageremap->remap(raw, display, 0);
+	# The server's word for an SVG, when neither the data nor the URL
+	# gives it: an SVG is text, with no signature to recognise.
+	hint := url;
+	if(prefix(lower(ctype), "image/svg"))
+		hint = "image.svg";
+	(img, nil) := imgload->readimagedata(data, hint);
 	return img;
 }
 
-looksvg(data: array of byte): int
+issvg(data: array of byte, ctype, url: string): int
 {
+	if(prefix(lower(ctype), "image/svg"))
+		return 1;
 	n := len data;
 	if(n > 512)
 		n = 512;
-	return index(string data[0:n], "<svg") >= 0;
+	return imgload->format(data[0:n], url) == "svg";
 }
 
 # ---- fetching ----

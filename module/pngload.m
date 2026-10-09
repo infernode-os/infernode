@@ -1,5 +1,5 @@
 Pngload: module {
-	PATH: con "/dis/xenith/pngload.dis";
+	PATH: con "/dis/lib/pngload.dis";
 
 	init: fn(d: ref Draw->Display);
 

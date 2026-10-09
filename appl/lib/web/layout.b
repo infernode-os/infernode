@@ -9699,10 +9699,11 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 			}
 			while(!ln.content && ln.x + it.w > real ln.avail + 0.01 && movedown(f, ln))
 				;
-			if(!ln.content && ln.x + it.w > real ln.avail && (it.box.st.anywhere || keptall(it)) && len it.text > 1) {
+			if(!ln.content && ln.x + it.w > real ln.avail && (it.box.st.anywhere || keptall(it)) && len it.text > 1 && !it.nowrap) {
 				# (keep-all is relaxed to normal breaking when the line
 				# has no other opportunity, as browsers do: overflow-wrap-normal-keep-all-001)
-				# overflow-wrap: break the word where it must
+				# overflow-wrap: break the word where it must, if the
+				# text wraps at all (Text 3 §5.5)
 				(head, tail) := splitword(it, real ln.avail - ln.x);
 				if(head != nil) {
 					ln.frags = textfrag(ln, head) :: ln.frags;

@@ -11835,7 +11835,7 @@ zitem(k: ref Box): int
 isctx(k: ref Box): int
 {
 	st := k.st;
-	return k == painted || st.position == Style->Pfixed || ownlayer(st) || st.translated ||
+	return k == painted || st.position == Style->Pfixed || ownctx(st) || st.translated ||
 		ispositioned(k) && !st.zauto || zitem(k);
 }
 
@@ -12117,7 +12117,7 @@ flowinline(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		k := b.kids[i];
 		if(k.inl || isabs(k) || islayer(k) || isfloat(k))
 			continue;
-		if(ownlayer(k.st)) {
+		if(ownctx(k.st)) {
 			paintctx(dst, k, o, clip, canvasbg);	# a stacking context of its own
 			continue;
 		}
@@ -12146,7 +12146,7 @@ flowinline(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 paintflow(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	st := b.st;
-	if(ownlayer(st)) {
+	if(ownctx(st)) {
 		paintctx(dst, b, o, clip, canvasbg);	# a stacking context of its own
 		return;
 	}
@@ -12190,16 +12190,26 @@ rectok(r: Rect): int
 layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 {
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
-	(lr, ok) := clip.clip(inkbounds(b, r));
+	# a blur takes in, and spreads out to, three deviations around
+	spread := 0;
+	for(i := 0; i < len b.st.filter; i++)
+		if(b.st.filter[i].op == Style->Fblur)
+			spread += int math->ceil(3.0 * b.st.filter[i].v);
+	(lr, ok) := clip.clip(inkbounds(b, r).inset(-spread));
 	if(!ok || !rectok(lr))
 		return;
-	img := display.newimage(lr, Draw->RGBA32, 0, Draw->Transparent);
+	pr := lr;	# what is painted: what shows, and what blurs into it
+	if(spread > 0)
+		(pr, nil) = clip.inset(-spread).clip(inkbounds(b, r).inset(-spread));
+	img := display.newimage(pr, Draw->RGBA32, 0, Draw->Transparent);
 	if(img == nil)
 		return;
 	outer := translucent;
 	translucent = b;
-	paintctx(img, b, o, lr, canvasbg);
+	paintctx(img, b, o, pr, canvasbg);
 	translucent = outer;
+	if(b.st.filter != nil)
+		filter(img, b.st.filter);
 	a := int (b.st.opacity * 255.0);
 	mask := display.newimage(Rect((0, 0), (1, 1)), Draw->GREY8, 1, (a << 24) | (a << 16) | (a << 8) | 255);
 	if(hasmask(b.st)) {
@@ -12224,10 +12234,239 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	dst.draw(lr, img, mask, lr.min);
 }
 
-# painted into a layer of its own: translucent, or masked
+# painted into a layer of its own: translucent, masked or filtered
 ownlayer(st: ref St): int
 {
-	return st.opacity < 1.0 || hasmask(st);
+	return st.opacity < 1.0 || hasmask(st) || st.filter != nil;
+}
+
+# a stacking context though not positioned: a layer of its own, or
+# isolated, blended, clipped to a path, or contained (Position 3 §3.4,
+# Compositing 1 §3.2, Masking 1 §3, Containment 2 §3)
+ownctx(st: ref St): int
+{
+	return ownlayer(st) || st.ctx != 0 || st.contain & (Style->CTpaint|Style->CTlayout);
+}
+
+# Apply a filter's functions, in order, to img's pixels (Filter
+# Effects 1 §13).  They are premultiplied: a colour function works on
+# the colour without its alpha.
+filter(img: ref Image, fl: array of Style->Filt)
+{
+	r := img.r;
+	w := r.dx();
+	h := r.dy();
+	buf := array[w*h*4] of byte;
+	if(img.readpixels(r, buf) != len buf)
+		return;
+	for(i := 0; i < len fl; i++) {
+		f := fl[i];
+		case f.op {
+		Style->Fblur =>
+			if(f.v > 0.0)
+				blur(buf, w, h, f.v);
+		Style->Fopacity =>
+			a := int (f.v * 256.0);
+			for(k := 0; k < len buf; k++)
+				buf[k] = byte ((int buf[k] * a) >> 8);
+		* =>
+			m := colourmatrix(f);
+			for(k := 0; k < len buf; k += 4) {
+				a := int buf[k];
+				if(a == 0)
+					continue;
+				# bytes: alpha, blue, green, red
+				ra := real a;
+				cr := real buf[k+3] / ra;
+				cg := real buf[k+2] / ra;
+				cb := real buf[k+1] / ra;
+				buf[k+3] = unit8(m[0]*cr + m[1]*cg + m[2]*cb + m[3], ra);
+				buf[k+2] = unit8(m[4]*cr + m[5]*cg + m[6]*cb + m[7], ra);
+				buf[k+1] = unit8(m[8]*cr + m[9]*cg + m[10]*cb + m[11], ra);
+			}
+		}
+	}
+	img.writepixels(r, buf);
+}
+
+# v, a colour from 0 to 1, clamped and premultiplied by alpha a
+unit8(v, a: real): byte
+{
+	if(v < 0.0)
+		v = 0.0;
+	if(v > 1.0)
+		v = 1.0;
+	return byte int (v * a);
+}
+
+# a colour function's 3x4 matrix, rows red, green, blue: three
+# weights and an offset (Filter Effects 1 §13.1, the feColorMatrix
+# and feComponentTransfer each is)
+colourmatrix(f: Style->Filt): array of real
+{
+	v := f.v;
+	case f.op {
+	Style->Fbrightness =>
+		return array[] of {v, 0.0, 0.0, 0.0, 0.0, v, 0.0, 0.0, 0.0, 0.0, v, 0.0};
+	Style->Fcontrast =>
+		c := 0.5 - 0.5*v;
+		return array[] of {v, 0.0, 0.0, c, 0.0, v, 0.0, c, 0.0, 0.0, v, c};
+	Style->Finvert =>
+		s := 1.0 - 2.0*v;
+		return array[] of {s, 0.0, 0.0, v, 0.0, s, 0.0, v, 0.0, 0.0, s, v};
+	Style->Fgrayscale =>
+		g := 1.0 - v;
+		return array[] of {
+			0.2126 + 0.7874*g, 0.7152 - 0.7152*g, 0.0722 - 0.0722*g, 0.0,
+			0.2126 - 0.2126*g, 0.7152 + 0.2848*g, 0.0722 - 0.0722*g, 0.0,
+			0.2126 - 0.2126*g, 0.7152 - 0.7152*g, 0.0722 + 0.9278*g, 0.0};
+	Style->Fsepia =>
+		g := 1.0 - v;
+		return array[] of {
+			0.393 + 0.607*g, 0.769 - 0.769*g, 0.189 - 0.189*g, 0.0,
+			0.349 - 0.349*g, 0.686 + 0.314*g, 0.168 - 0.168*g, 0.0,
+			0.272 - 0.272*g, 0.534 - 0.534*g, 0.131 + 0.869*g, 0.0};
+	Style->Fsaturate =>
+		return array[] of {
+			0.213 + 0.787*v, 0.715 - 0.715*v, 0.072 - 0.072*v, 0.0,
+			0.213 - 0.213*v, 0.715 + 0.285*v, 0.072 - 0.072*v, 0.0,
+			0.213 - 0.213*v, 0.715 - 0.715*v, 0.072 + 0.928*v, 0.0};
+	Style->Fhuerotate =>
+		c := math->cos(v);
+		s := math->sin(v);
+		return array[] of {
+			0.213 + c*0.787 - s*0.213, 0.715 - c*0.715 - s*0.715, 0.072 - c*0.072 + s*0.928, 0.0,
+			0.213 - c*0.213 + s*0.143, 0.715 + c*0.285 + s*0.140, 0.072 - c*0.072 - s*0.283, 0.0,
+			0.213 - c*0.213 - s*0.787, 0.715 - c*0.715 + s*0.715, 0.072 + c*0.928 + s*0.072, 0.0};
+	}
+	return array[] of {1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0};
+}
+
+# A Gaussian blur of standard deviation sigma over w×h premultiplied
+# pixels, transparent beyond them, as three box blurs (which is how
+# browsers draw it: Filter Effects 1 §15.24).  A wide one is blurred
+# at a fraction of the size and scaled back up.
+blur(buf: array of byte, w, h: int, sigma: real)
+{
+	d := 1;
+	if(sigma > 6.0)
+		d = int (sigma / 3.0);
+	sw := (w + d - 1) / d;
+	sh := (h + d - 1) / d;
+	n := sw * sh;
+	ch := array[4] of array of int;
+	for(c := 0; c < 4; c++)
+		ch[c] = array[n] of {* => 0};
+	# down: the mean of each d×d block
+	for(y := 0; y < h; y++) {
+		row := (y / d) * sw;
+		for(x := 0; x < w; x++) {
+			k := (y*w + x) * 4;
+			j := row + x / d;
+			for(c = 0; c < 4; c++)
+				ch[c][j] += int buf[k+c];
+		}
+	}
+	if(d > 1)
+		for(c = 0; c < 4; c++)
+			for(j := 0; j < n; j++)
+				ch[c][j] /= d*d;	# (edge blocks short of pixels count the missing ones as clear)
+	s := sigma / real d;
+	sizes := boxsizes(s);
+	tmp := array[n] of int;
+	for(c = 0; c < 4; c++)
+		for(p := 0; p < 3; p++) {
+			boxpass(ch[c], tmp, sw, sh, sizes[p] / 2, 1);
+			boxpass(tmp, ch[c], sw, sh, sizes[p] / 2, 0);
+		}
+	# up: bilinear between block centres
+	for(y = 0; y < h; y++) {
+		fy := (real y + 0.5) / real d - 0.5;
+		y0 := int math->floor(fy);
+		ty := fy - real y0;
+		y1 := y0 + 1;
+		if(y0 < 0)
+			y0 = 0;
+		if(y1 >= sh)
+			y1 = sh - 1;
+		if(y0 >= sh)
+			y0 = sh - 1;
+		for(x := 0; x < w; x++) {
+			fx := (real x + 0.5) / real d - 0.5;
+			x0 := int math->floor(fx);
+			tx := fx - real x0;
+			x1 := x0 + 1;
+			if(x0 < 0)
+				x0 = 0;
+			if(x1 >= sw)
+				x1 = sw - 1;
+			if(x0 >= sw)
+				x0 = sw - 1;
+			k := (y*w + x) * 4;
+			for(c = 0; c < 4; c++) {
+				a := ch[c];
+				top := real a[y0*sw + x0] * (1.0 - tx) + real a[y0*sw + x1] * tx;
+				bot := real a[y1*sw + x0] * (1.0 - tx) + real a[y1*sw + x1] * tx;
+				v := int (top * (1.0 - ty) + bot * ty);
+				if(v > 255)
+					v = 255;
+				if(v < 0)
+					v = 0;
+				buf[k+c] = byte v;
+			}
+		}
+	}
+	# a colour never exceeds its alpha, premultiplied
+	for(k := 0; k < len buf; k += 4)
+		for(c = 1; c < 4; c++)
+			if(buf[k+c] > buf[k])
+				buf[k+c] = buf[k];
+}
+
+# three box widths whose passes make a Gaussian of deviation s (odd,
+# the narrower ones first)
+boxsizes(s: real): array of int
+{
+	wl := int math->floor(math->sqrt(12.0*s*s/3.0 + 1.0));
+	if(wl % 2 == 0)
+		wl--;
+	if(wl < 1)
+		wl = 1;
+	wu := wl + 2;
+	m := int ((12.0*s*s - 3.0*real (wl*wl) - 12.0*real wl - 9.0) / real (-4*wl - 4));
+	sz := array[3] of int;
+	for(i := 0; i < 3; i++)
+		if(i < m)
+			sz[i] = wl;
+		else
+			sz[i] = wu;
+	return sz;
+}
+
+# one box blur of radius r along rows (horiz) or columns, from src to dst
+boxpass(src, dst: array of int, w, h, r: int, horiz: int)
+{
+	if(r <= 0) {
+		dst[0:] = src;
+		return;
+	}
+	span := 2*r + 1;
+	(lines, along, step, stride) := (h, w, 1, w);
+	if(!horiz)
+		(lines, along, step, stride) = (w, h, w, 1);
+	for(l := 0; l < lines; l++) {
+		base := l * stride;
+		sum := 0;
+		for(i := 0; i < r && i < along; i++)
+			sum += src[base + i*step];
+		for(i = 0; i < along; i++) {
+			if(i + r < along)
+				sum += src[base + (i+r)*step];
+			if(i - r - 1 >= 0)
+				sum -= src[base + (i-r-1)*step];
+			dst[base + i*step] = sum / span;
+		}
+	}
 }
 
 hasmask(st: ref St): int
@@ -12871,6 +13110,13 @@ nz1(x: int): int
 	return x;
 }
 
+maxf(a, b: real): real
+{
+	if(a > b)
+		return a;
+	return b;
+}
+
 minf(a, b: real): real
 {
 	if(b < a)
@@ -12885,16 +13131,19 @@ paintborders(dst: ref Image, b: ref Box, r: Rect)
 		return;
 	if(b.bt == 0 && b.br == 0 && b.bb == 0 && b.bl == 0)
 		return;
-	if(hasradius(b) && b.bt == b.br && b.bt == b.bb && b.bt == b.bl && st.bct == st.bcr && st.bct == st.bcb && st.bct == st.bcl) {
-		# a uniform rounded border: outer path minus inner path
+	c := onesolid(b);
+	if(b.bt == b.br && b.bt == b.bb && b.bt == b.bl && st.bct == st.bcr && st.bct == st.bcb && st.bct == st.bcl)
+		c = st.bct;	# (uniform, in any style: as a solid one)
+	if(hasradius(b) && c != 0) {
+		# a rounded border of one colour: outer path minus inner path,
+		# the inner corners' radii less the widths beside them
 		(rtl, rtr, rbr, rbl) := radii(b);
-		w := b.bt;
 		p := rrect(r, rtl, rtr, rbr, rbl);
-		irect := r.inset(w);
-		if(rectok(irect)) {
-			addrrect(p, irect, nz(rtl-w), nz(rtr-w), nz(rbr-w), nz(rbl-w));
-		}
-		dst.fillpath(p, 1, colorimg(st.bct), (0, 0));
+		irect := Rect((r.min.x + b.bl, r.min.y + b.bt), (r.max.x - b.br, r.max.y - b.bb));
+		if(rectok(irect))
+			addrrect(p, irect, nz(rtl - max(b.bt, b.bl)), nz(rtr - max(b.bt, b.br)), nz(rbr - max(b.bb, b.br)), nz(rbl - max(b.bb, b.bl)));
+		if(visible(c))
+			dst.fillpath(p, 1, colorimg(c), (0, 0));
 		return;
 	}
 	# solid sides are trapezoids, meeting their neighbours on the
@@ -12910,6 +13159,26 @@ paintborders(dst: ref Image, b: ref Box, r: Rect)
 		side(dst, Rect((r.min.x, r.min.y + b.bt), (r.min.x + b.bl, r.max.y - b.bb)), b.bl, st.bcl, st.bsl, 1, 1);
 	if(!trapside(dst, array[] of {Point(x1, y0), Point(x1, y1), Point(ix1, iy1), Point(ix1, iy0)}, b.br, st.bcr, st.bsr, 0))
 		side(dst, Rect((r.max.x - b.br, r.min.y + b.bt), (r.max.x, r.max.y - b.bb)), b.br, st.bcr, st.bsr, 1, 0);
+}
+
+# the one colour of a border whose sides that show are all solid and
+# that colour; 0 if they differ (a transparent colour is not 0: its
+# alpha is)
+onesolid(b: ref Box): int
+{
+	st := b.st;
+	c := 0;
+	ws := array[] of {b.bt, b.br, b.bb, b.bl};
+	cs := array[] of {st.bct, st.bcr, st.bcb, st.bcl};
+	ss := array[] of {st.bst, st.bsr, st.bsb, st.bsl};
+	for(i := 0; i < 4; i++) {
+		if(ws[i] <= 0 || ss[i] == Style->Bnone || ss[i] == Style->Bhidden)
+			continue;
+		if(ss[i] != Style->Bsolid || c != 0 && cs[i] != c)
+			return 0;
+		c = cs[i];
+	}
+	return c;
 }
 
 # A side in a style drawn as one colour, as a polygon; 0 for the
@@ -13503,13 +13772,22 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			}
 			args = tl args;
 		}
-	} else {
+	}
+	# a radial gradient's centre and radii (Images 3 §3.2)
+	(gcx, gcy, grx, gry) := (0.0, 0.0, 0.0, 0.0);
+	if(!lin) {
 		a := nows(hd args);
-		if(len a > 0 && a[0].kind == Css->Kident) {
-			(ok, nil) := style->color(a[0:1]);
-			if(!ok)
-				args = tl args;	# shape and position: drawn centred, circular
-		}
+		isstop := len a > 0;
+		if(isstop)
+			(isstop, nil) = style->color(a[0:1]);
+		ok := 1;
+		if(!isstop) {
+			(ok, gcx, gcy, grx, gry) = radialshape(a, r, b.st.fontsize);
+			args = tl args;
+		} else
+			(nil, gcx, gcy, grx, gry) = radialshape(nil, r, b.st.fontsize);
+		if(!ok)
+			return;	# invalid: no image
 	}
 	# the gradient line's length, for stops given as lengths
 	rad := angle * Math->Pi / 180.0;
@@ -13517,7 +13795,7 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	dy := -math->cos(rad);
 	linelen := math->fabs(real r.dx()*dx) + math->fabs(real r.dy()*dy);
 	if(!lin)
-		linelen = math->sqrt(real (r.dx()*r.dx() + r.dy()*r.dy()))/2.0;
+		linelen = grx;
 	# colour stops
 	n := len args;
 	if(n < 1)
@@ -13627,27 +13905,181 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			gradband(dst, mask, p, c);
 		}
 	} else {
-		cx := real (r.min.x + r.max.x)/2.0;
-		cy := real (r.min.y + r.max.y)/2.0;
-		rr := math->sqrt(real (r.dx()*r.dx() + r.dy()*r.dy()))/2.0;
-		steps := int rr;
+		# ellipses from the last stop in: beyond it, its colour
+		tmax := 1.0;
+		if(pos[k-1] > tmax)
+			tmax = pos[k-1];
+		steps := int (maxf(grx, gry) * tmax);
 		if(steps > 256)
 			steps = 256;
+		if(steps < 1)
+			steps = 1;
 		p := Path.new();
 		p.moveto(real r.min.x, real r.min.y).lineto(real r.max.x, real r.min.y).lineto(real r.max.x, real r.max.y).lineto(real r.min.x, real r.max.y).close();
 		gradband(dst, mask, p, cols[k-1]);
-		for(s := steps; s > 0; s--) {
-			t := real s / real steps;
-			p = Path.new();
-			p.ellipse(cx, cy, rr*t, rr*t);
-			gradband(dst, mask, p, gradcolor(cols, pos, t));
-		}
+		if(grx > 0.0 && gry > 0.0)
+			for(s := steps; s > 0; s--) {
+				t := tmax * real s / real steps;
+				p = Path.new();
+				p.ellipse(gcx, gcy, grx*t, gry*t);
+				gradband(dst, mask, p, gradcolor(cols, pos, t));
+			}
 	}
 	if(mask != nil) {
 		out.draw(cr, dst, mask, cr.min);
 		dst = out;
 	}
 	dst.clipr = oclip;
+}
+
+# A radial gradient's ending shape over r, from its first argument a
+# (nil: the default, an ellipse to the farthest corner, centred):
+# (ok, centre x, y, radius x, y) (Images 3 §3.2.1)
+radialshape(a: array of ref Css->Tok, r: Rect, fs: real): (int, real, real, real, real)
+{
+	w := real r.dx();
+	h := real r.dy();
+	circle := -1;	# not said
+	size := "farthest-corner";
+	lens: list of ref Css->Tok;
+	i := 0;
+	shape:
+	for(; i < len a; i++) {
+		t := a[i];
+		if(t.kind == Css->Kident) {
+			case lower(t.s) {
+			"circle" => circle = 1;
+			"ellipse" => circle = 0;
+			"closest-side" or "farthest-side" or "closest-corner" or "farthest-corner" => size = lower(t.s);
+			"at" => break shape;
+			* => return (0, 0.0, 0.0, 0.0, 0.0);
+			}
+		} else
+			lens = t :: lens;
+	}
+	# at <position>: as background-position, centre by default
+	(cx, cy) := (w/2.0, h/2.0);
+	if(i < len a) {
+		ok: int;
+		(ok, cx, cy) = gradpos(a[i+1:], w, h, fs);
+		if(!ok)
+			return (0, 0.0, 0.0, 0.0, 0.0);
+	}
+	(rx, ry) := (0.0, 0.0);
+	nl := len lens;
+	if(nl > 0) {
+		if(nl > 2 || nl == 1 && circle == 0 || nl == 2 && circle == 1)
+			return (0, 0.0, 0.0, 0.0, 0.0);
+		if(nl == 1) {
+			(ok, v) := tokpx(hd lens, w, fs);
+			if(!ok || (hd lens).kind == Css->Kpercent)
+				return (0, 0.0, 0.0, 0.0, 0.0);	# a circle's size is a length
+			(rx, ry) = (v, v);
+		} else {
+			(ok1, vy) := tokpx(hd lens, h, fs);	# (lens is reversed)
+			(ok2, vx) := tokpx(hd tl lens, w, fs);
+			if(!ok1 || !ok2)
+				return (0, 0.0, 0.0, 0.0, 0.0);
+			(rx, ry) = (vx, vy);
+		}
+		if(rx < 0.0 || ry < 0.0)
+			return (0, 0.0, 0.0, 0.0, 0.0);
+	} else {
+		(sx, sy) := (minf(cx, w - cx), minf(cy, h - cy));	# closest side, each way
+		if(size == "farthest-side" || size == "farthest-corner")
+			(sx, sy) = (maxf(math->fabs(cx), math->fabs(w - cx)), maxf(math->fabs(cy), math->fabs(h - cy)));
+		if(sx < 0.0)
+			sx = 0.0;
+		if(sy < 0.0)
+			sy = 0.0;
+		corner := size == "closest-corner" || size == "farthest-corner";
+		if(circle == 1) {
+			if(corner)
+				rx = math->sqrt(sx*sx + sy*sy);
+			else if(size == "closest-side")
+				rx = minf(sx, sy);
+			else
+				rx = maxf(sx, sy);
+			ry = rx;
+		} else if(corner)
+			(rx, ry) = (sx * math->sqrt(2.0), sy * math->sqrt(2.0));	# the side's shape, through the corner
+		else
+			(rx, ry) = (sx, sy);
+	}
+	return (1, real r.min.x + cx, real r.min.y + cy, rx, ry);
+}
+
+# a gradient's <position> in a w×h box: (ok, x, y)
+gradpos(a: array of ref Css->Tok, w, h, fs: real): (int, real, real)
+{
+	if(len a == 0 || len a > 4)
+		return (0, 0.0, 0.0);
+	x := w/2.0;
+	y := h/2.0;
+	# keywords say which axis; a length or percentage takes the next free one
+	xset := 0;
+	yset := 0;
+	for(i := 0; i < len a; i++) {
+		t := a[i];
+		if(t.kind == Css->Kident) {
+			kw := lower(t.s);
+			off := 0.0;
+			if(i+1 < len a && a[i+1].kind != Css->Kident && len a > 2) {
+				# "right 10px": an offset from that edge
+				ok: int;
+				basis := w;
+				if(kw == "top" || kw == "bottom")
+					basis = h;
+				(ok, off) = tokpx(a[i+1], basis, fs);
+				if(!ok)
+					return (0, 0.0, 0.0);
+				i++;
+			}
+			case kw {
+			"left" => (x, xset) = (off, 1);
+			"right" => (x, xset) = (w - off, 1);
+			"top" => (y, yset) = (off, 1);
+			"bottom" => (y, yset) = (h - off, 1);
+			"center" =>
+				if(!xset && i == 0 && !(len a > 1 && a[1].kind == Css->Kident && (lower(a[1].s) == "left" || lower(a[1].s) == "right")))
+					xset = 1;
+				else
+					yset = 1;
+			* => return (0, 0.0, 0.0);
+			}
+		} else if(!xset) {
+			(ok, v) := tokpx(t, w, fs);
+			if(!ok)
+				return (0, 0.0, 0.0);
+			(x, xset) = (v, 1);
+		} else {
+			(ok, v) := tokpx(t, h, fs);
+			if(!ok)
+				return (0, 0.0, 0.0);
+			(y, yset) = (v, 1);
+		}
+	}
+	return (1, x, y);
+}
+
+# a length or percentage token in px: percentages of basis
+tokpx(t: ref Css->Tok, basis, fs: real): (int, real)
+{
+	case t.kind {
+	Css->Kpercent =>
+		return (1, t.n * basis / 100.0);
+	Css->Knumber =>
+		if(t.n == 0.0)
+			return (1, 0.0);
+	Css->Kdimension =>
+		case t.s {
+		"px" => return (1, t.n);
+		"em" => return (1, t.n * fs);
+		"rem" => return (1, t.n * 16.0);
+		"pt" => return (1, t.n * 4.0 / 3.0);
+		}
+	}
+	return (0, 0.0);
 }
 
 # one band of a gradient: c, or with a mask c opaque and its alpha into

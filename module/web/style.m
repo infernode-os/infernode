@@ -97,6 +97,16 @@ Style: module
 	# one transform function (CSS Transforms 1 §7); for translate the
 	# lengths x and y, for the rest the numbers v (angles in radians)
 	TFtranslate, TFrotate, TFscale, TFskew, TFmatrix: con iota;
+	# filter functions (Filter Effects 1 §5)
+	Fblur, Fbrightness, Fcontrast, Fgrayscale, Fhuerotate, Finvert, Fopacity, Fsaturate, Fsepia: con iota;
+	Filt: adt {
+		op:	int;
+		v:	real;	# blur: the standard deviation, px; hue-rotate: radians; the others: an amount, 1 = 100%
+	};
+
+	# what else makes a box a stacking context (St.ctx)
+	SCisolate, SCblend, SCclippath, SCwillchange: con 1 << iota;
+
 	Tf: adt {
 		kind:	int;
 		v:	array of real;
@@ -270,6 +280,8 @@ Style: module
 		stretch:	real;	# font-stretch (font-width), a percentage (inherited)
 		slant:	real;	# font-style: oblique's angle, degrees (inherited)
 		synth:	int;	# font-synthesis: 1 weight, 2 style (inherited)
+		filter:	array of Filt;	# filter: its functions, in order; nil for none
+		ctx:	int;	# SC bits: isolation, mix-blend-mode, clip-path, will-change making a stacking context
 
 		new:	fn(): ref St;		# initial values
 	};

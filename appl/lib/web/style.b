@@ -1869,7 +1869,7 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0);
 }
 
 nextsid := 1;
@@ -2920,6 +2920,66 @@ angle(v: array of ref Tok, nil: ref Ctx): (int, real)
 	"turn" =>	return (1, t.n * 2.0 * Math->Pi);
 	}
 	return (0, 0.0);
+}
+
+# a filter's functions (Filter Effects 1 §5); nil if it is not one.
+# drop-shadow() and url() are not drawn: such a filter is none
+filters(v: array of ref Tok, ctx: ref Ctx): array of Filt
+{
+	x := nows(v);
+	fl := array[len x] of Filt;
+	for(i := 0; i < len x; i++) {
+		t := x[i];
+		if(t.kind != Kfunction)
+			return nil;
+		args := trim(t.kids);
+		f := Filt(0, 1.0);
+		case t.s {
+		"blur" =>
+			f.op = Fblur;
+			f.v = 0.0;
+			if(len args > 0) {
+				(ok, l) := length(args, ctx);
+				if(!ok || l.kind != Lpx || l.pct != 0.0 || l.px < 0.0)
+					return nil;
+				f.v = l.px;
+			}
+		"hue-rotate" =>
+			f.op = Fhuerotate;
+			f.v = 0.0;
+			if(len args > 0) {
+				ok: int;
+				(ok, f.v) = angle(args, ctx);
+				if(!ok)
+					return nil;
+			}
+		"brightness" or "contrast" or "grayscale" or "invert" or "opacity" or "saturate" or "sepia" =>
+			case t.s {
+			"brightness" => f.op = Fbrightness;
+			"contrast" => f.op = Fcontrast;
+			"grayscale" => f.op = Fgrayscale;
+			"invert" => f.op = Finvert;
+			"opacity" => f.op = Fopacity;
+			"saturate" => f.op = Fsaturate;
+			"sepia" => f.op = Fsepia;
+			}
+			if(len args == 1 && args[0].kind == Knumber && args[0].n >= 0.0)
+				f.v = args[0].n;
+			else if(len args == 1 && args[0].kind == Kpercent && args[0].n >= 0.0)
+				f.v = args[0].n / 100.0;
+			else if(len args != 0)
+				return nil;
+			if(f.op == Fgrayscale || f.op == Finvert || f.op == Fopacity || f.op == Fsepia)
+				if(f.v > 1.0)
+					f.v = 1.0;	# clamped (Filter Effects 1 §13.1)
+		"drop-shadow" =>
+			return nil;
+		* =>
+			return nil;
+		}
+		fl[i] = f;
+	}
+	return fl;
 }
 
 number(v: array of ref Tok, ctx: ref Ctx): (int, real)
@@ -4026,7 +4086,7 @@ allprops := array[] of {
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
 	"overflow-y", "visibility", "opacity", "transform", "transform-origin", "color", "background-color", "background-image",
-	"mask-image",
+	"mask-image", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
@@ -5074,6 +5134,46 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		if(o < 0.0) o = 0.0;
 		if(o > 1.0) o = 1.0;
 		st.opacity = o;
+	"filter" =>
+		if(id == "none") {
+			st.filter = nil;
+			return 1;
+		}
+		fl := filters(v, ctx);
+		if(fl == nil)
+			return 0;
+		st.filter = fl;
+	"isolation" =>
+		case id {
+		"isolate" => st.ctx |= SCisolate;
+		"auto" => st.ctx &= ~SCisolate;
+		* => return 0;
+		}
+	"mix-blend-mode" =>
+		# painted as normal; any other blend groups what is under it
+		if(id == "normal")
+			st.ctx &= ~SCblend;
+		else if(id != nil)
+			st.ctx |= SCblend;
+		else
+			return 0;
+	"clip-path" =>
+		# not clipped (yet), but a stacking context, which is where it is painted
+		if(id == "none")
+			st.ctx &= ~SCclippath;
+		else if(len trim(v) > 0)
+			st.ctx |= SCclippath;
+		else
+			return 0;
+	"will-change" =>
+		# a property that would make a stacking context does (Will Change 1 §3)
+		st.ctx &= ~SCwillchange;
+		for(k := 0; k < len v; k++)
+			if(v[k].kind == Css->Kident)
+				case lower(v[k].s) {
+				"opacity" or "transform" or "filter" or "isolation" or "mix-blend-mode" or "clip-path" or "mask" or "z-index" =>
+					st.ctx |= SCwillchange;
+				}
 	"transform" =>
 		# a list of transform functions (the 2D ones; 3D ones are
 		# taken for their 2D part or ignored).  Translations alone
@@ -6438,6 +6538,11 @@ copyprop(d, s: ref St, nm: string)
 	"overflow-y" => d.overflowy = s.overflowy;
 	"visibility" => d.visibility = s.visibility;
 	"opacity" => d.opacity = s.opacity;
+	"filter" => d.filter = s.filter;
+	"isolation" => d.ctx = d.ctx & ~SCisolate | s.ctx & SCisolate;
+	"mix-blend-mode" => d.ctx = d.ctx & ~SCblend | s.ctx & SCblend;
+	"clip-path" => d.ctx = d.ctx & ~SCclippath | s.ctx & SCclippath;
+	"will-change" => d.ctx = d.ctx & ~SCwillchange | s.ctx & SCwillchange;
 	"transform" =>
 		d.translated = s.translated;
 		d.tx = s.tx;

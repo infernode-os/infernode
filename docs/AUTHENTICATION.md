@@ -74,7 +74,7 @@ flowchart TB
     pw([password]) -- "longhash · r mod p" --> H["H = H(user, password)"]
     H -- "H⁻¹ mod p" --> Hi["Hi (PAK verifier)"]
     pw -- "100 000 × HMAC-SHA-256<br/>salt = \"secstore filekey seed:\" + user" --> Fk["root key<br/>(SGCM2 writes)"]
-    pw -- "secstore3/secstore2: SHA-256(pass)<br/>legacy secstore: SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
+    pw -- "secstore3: SHA-256(pass)<br/>legacy secstore: SHA-1(pass)" --> pwhash["pwhash<br/>(used in PAK)"]
 
     Hi --> diskpak[("&lt;user&gt;/PAK on disk")]
     Fk -.encrypts.-> diskblob[("&lt;user&gt;/factotum<br/>on disk")]
@@ -104,8 +104,8 @@ either side.
 
 | Parameter | Source                          | Notes                                              |
 |-----------|---------------------------------|----------------------------------------------------|
-| `p,q,g,r` | Fixed suite parameters in code  | `secstore3` uses an RFC 5114 2048/256 subgroup set; `secstore2` and legacy `secstore` use the inherited 1024/160 set. |
-| Hash      | `secstore3`/`secstore2`: SHA-256; legacy `secstore`: SHA-1 | Modern suites use SHA-256 for the password hash and transcript confirmation. |
+| `p,q,g,r` | Fixed suite parameters in code  | `secstore3` uses an RFC 5114 2048/256 subgroup set; legacy `secstore` uses the inherited 1024/160 set. |
+| Hash      | `secstore3`: SHA-256; legacy `secstore`: SHA-1 | Modern suites use SHA-256 for the password hash and transcript confirmation. |
 | KDF       | Iterated `h^r mod p`            | ~5 s on a laptop; cached per (user, pwhash).       |
 
 The suite parameters are hard-coded in **client** (`secstore.b`), **server**
@@ -114,8 +114,10 @@ The suite parameters are hard-coded in **client** (`secstore.b`), **server**
 tag.
 
 New accounts default to the `secstore3` verifier format. Clients try
-`secstore3` first, then `secstore2`, then legacy `secstore` when talking to an
-older account or server.
+`secstore3` first, then legacy `secstore` when talking to an older account or
+server; a legacy account is upgraded to `secstore3` at its next login. An
+interim `secstore2` suite (SHA-256 on the 1024/160 group) was retired: nothing
+enrols it, and neither client nor server accepts it.
 
 ### 3.2 Wire transcript
 
@@ -286,9 +288,8 @@ remains only as a legacy fallback for older clients.
 
 ### 4.2 The `PAK` file
 
-Current accounts store `secstore3 <hexHi>` in the `PAK` file. Compatibility
-accounts may store `secstore2 <hexHi>`, and legacy accounts store bare `hexHi`
-with no prefix; the server treats that as the original `secstore` format. The
+Current accounts store `secstore3 <hexHi>` in the `PAK` file. Legacy accounts
+store bare `hexHi` with no prefix; the server treats that as the original `secstore` format. The
 file is writable only by the user who owns the directory (mode `0600`). The
 verifier alone is *not* directly invertible to the password — a brute-force
 attacker who steals the file must compute `H(user, candidate_password)⁻¹ mod p`

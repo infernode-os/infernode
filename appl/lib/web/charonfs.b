@@ -121,8 +121,45 @@ post(spec: string): (string, string)
 	}
 	if(io == nil)
 		return (nil, sys->sprint("file2chan: %r"));
-	spawn poster(io);
+	posted(io, dir + "/" + name);
 	return (name, nil);
+}
+
+postas(spec, name: string): string
+{
+	if(sess == nil)
+		return "not serving";
+	dir := "#s" + spec;
+	(ok, nil) := sys->stat(dir + "/" + name);
+	if(ok >= 0)
+		return dir + "/" + name + ": already posted";
+	io := sys->file2chan(dir, name);
+	if(io == nil)
+		return sys->sprint("file2chan: %r");
+	posted(io, dir + "/" + name);
+	return nil;
+}
+
+postpath: string;
+unposted: chan of int;
+
+posted(io: ref Sys->FileIO, path: string)
+{
+	postpath = path;
+	unposted = chan[1] of int;
+	spawn poster(io, unposted);
+}
+
+unpost()
+{
+	if(postpath == nil)
+		return;
+	sys->remove(postpath);
+	postpath = nil;
+	alt {
+	unposted <-= 1 =>	;
+	* =>	;
+	}
 }
 
 Conn: adt {
@@ -132,10 +169,12 @@ Conn: adt {
 	wq:	chan of (array of byte, Sys->Rwrite);
 };
 
-poster(io: ref Sys->FileIO)
+poster(io: ref Sys->FileIO, quit: chan of int)
 {
 	conns: list of ref Conn;
 	for(;;) alt {
+	<-quit =>
+		return;
 	(nil, count, fid, rc) := <-io.read =>
 		if(rc == nil) {
 			conns = hangup(conns, fid);

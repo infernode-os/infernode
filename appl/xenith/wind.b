@@ -1529,6 +1529,10 @@ Window.webevent(w: self ref Window, e: string)
 		w.settag();
 	"error" =>
 		warning(nil, sprint("%s: %s\n", w.body.file.name, rest));
+	"update" =>
+		# a field changed, here or through the page's files
+		if(w.docview)
+			webfieldchanged(w);
 	}
 }
 
@@ -1809,6 +1813,14 @@ webshowfield(w: ref Window, f: ref Htmldoc->Field)
 	if(f.box.min.y < w.imageoffset.y || f.box.max.y > w.imageoffset.y + h)
 		w.imageoffset.y = f.box.min.y - h / 3;
 	w.drawimage();
+}
+
+# Where the page is posted as files: #sxenith/<id> (see htmldoc.m)
+Window.webposted(w: self ref Window): string
+{
+	if(!w.docweb || htmldoc == nil)
+		return nil;
+	return htmldoc->posted(w.id);
 }
 
 Window.weburl(w: self ref Window): string

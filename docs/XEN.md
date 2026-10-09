@@ -158,6 +158,23 @@ Snarf work on it). The window is named by the page's URL.
 | see the page's text | **Render** (again for the page) |
 | keep the text | **Put /file** |
 
+**The page as files.** A browser window's page is served as Charon's is
+(`man 1 charon`): `url`, `title`, `text`, `links`, `forms`, `ctl` and the
+DOM, one directory per node under `dom/`. It is posted as
+`#sxenith/<id>`, which the window's `web` file names (empty for a window
+that is not browsing), so a script, or an agent granted it, can read the
+page and work it:
+
+```sh
+mount -A `{cat /mnt/xenith/7/web} /n/page
+grep ' q ' /n/page/forms               # form node kind name value
+echo set 31 plan9 > /n/page/ctl
+echo submit 1 > /n/page/ctl            # the window follows
+```
+
+What is done through the files shows in the window, and the posted file
+goes when the window closes.
+
 Pages are fetched through webfs at `/mnt/web`, which Xenith starts if
 nothing is mounted there. A password is drawn masked. There is no
 JavaScript until the engine's script host lands.

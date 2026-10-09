@@ -27,6 +27,7 @@ SYSMODULES=\
 	imagefile.m\
 	imgload.m\
 	htmldoc.m\
+	web/charonfs.m\
 	formatter.m\
 
 DISBIN=$ROOT/dis/xenith/render

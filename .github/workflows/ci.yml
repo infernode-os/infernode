@@ -558,6 +558,13 @@ jobs:
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
 
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the headless jobs build it: the suite
+        # loads /dis/mpeg, /dis/matrix, /dis/xenith/render and the rest
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/amd64/bin/limbo"
@@ -1003,6 +1010,13 @@ jobs:
         # would dead-end with "insert your security key first". This guard is the
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
+
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the headless jobs build it: the suite
+        # loads /dis/mpeg, /dis/matrix, /dis/xenith/render and the rest
+        export PATH="$ROOT/Linux/arm64/bin:$PATH"
+        ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |

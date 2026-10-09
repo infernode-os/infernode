@@ -47,10 +47,21 @@ xenith_inside() {
         echo "echo halt >'#c/sysctl'"
     } > "$_dir/run"
 
+    # Xenith's buffer file (/tmp/[A-Z]<pid>.<user>xenith) is removed
+    # when Xenith closes it, but the script ends by halting the
+    # emulator, so it never does; and nothing here runs the profile,
+    # whose sweep removes such files at login. Xenith has the same pid
+    # in every fresh emulator, so each run's file takes one of the 26
+    # names it tries, and the 27th run cannot start ("can't create temp
+    # file"). Remove the ones this run left.
+    _before=$(ls "$ROOT/tmp" | grep 'xenith$')
     _out=$(SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c0 -g800x600 -r"$ROOT" /dis/sh.dis -c "
 load std
 xenith -l /$_d/dump" 2>&1)
     rm -rf "$_dir"
+    for _f in $(ls "$ROOT/tmp" | grep 'xenith$'); do
+        printf '%s\n' "$_before" | grep -qxF "$_f" || rm -f "$ROOT/tmp/$_f"
+    done
 
     printf '%s\n' "$_out" | grep -E '^(PASS|FAIL|ALL PASS)'
     if printf '%s\n' "$_out" | grep -q '^ALL PASS'; then

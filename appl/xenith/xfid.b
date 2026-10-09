@@ -428,19 +428,26 @@ Xfid.read(x : self ref Xfid)
 		return;
 	}
 	off = int offset(x.fcall);	
+	# A case answering with a string sets str: an empty string is nil
+	# in Limbo, so sbuf alone cannot say an empty answer is due
+	# (reading a text window's image file once hung the reader).
+	str := 0;
 	case(q){
 	QWaddr =>
 		w.body.commit(TRUE);
 		clampaddr(w);
 		sbuf = sprint("%11d %11d ", w.addr.q0, w.addr.q1);
+		str = 1;
 	QWbody =>
 		if(w.rendermode != 0 && w.contentdata != nil){
 			# Serve raw text to 9P clients (AI sees source, not formatted view)
 			sbuf = string w.contentdata;
+			str = 1;
 		} else
 			x.utfread(w.body, 0, w.body.file.buf.nc, QWbody);
 	QWctl =>
 		sbuf = w.ctlprint(1);
+		str = 1;
 	QWevent =>
 		x.eventread(w);
 	QWdata =>
@@ -466,7 +473,9 @@ Xfid.read(x : self ref Xfid)
 			sbuf = w.colorstr;
 		else
 			sbuf = defaultcolorstr();
+		str = 1;
 	QWimage =>
+		str = 1;
 		if(w.imagemode == 0 || w.bodyimage == nil)
 			sbuf = "";
 		else
@@ -492,7 +501,7 @@ Xfid.read(x : self ref Xfid)
 		respond(x, fc, sbuf);
 		sbuf = nil;
 	}
-	if (sbuf != nil) {
+	if (str) {
 		buf = array of byte sbuf;
 		sbuf = nil;
 		n = len buf;

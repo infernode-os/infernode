@@ -55,6 +55,7 @@ SYSMODULES=\
 	formatter.m\
 	html.m\
 	imagefile.m\
+	imgload.m\
 	keyboard.m\
 	lucitheme.m\
 	math.m\

@@ -23,7 +23,7 @@ This document tracks the implementation of multimodal image display in Xenith wi
 
 ### Overview
 Images replace body content entirely when displayed. The tag remains functional.
-Supports PPM (Plan 9 native) and PNG formats.
+Supports every format `imgload` reads (see `module/imgload.m`).
 
 ### Data Structures
 
@@ -49,9 +49,10 @@ New ctl commands:
 
 Uses existing Inferno infrastructure:
 1. Try native Inferno format via `display.open(path)`
-2. Detect format by magic bytes
-3. PNG: Use RImagefile (READPNGPATH) + Imageremap.remap()
-4. PPM: Custom P6 parser (trivial)
+2. Detect format by magic bytes, then by extension (`format`)
+3. PNG: pngload (subsampling large images), or RImagefile (READPNGPATH)
+4. PPM/PGM: Custom parser (trivial)
+5. Everything else: the format's RImagefile + Imageremap.remap()
 
 ### Rendering (wind.b)
 
@@ -105,6 +106,9 @@ echo clearimage > /mnt/xenith/1/ctl
 ### New
 - `appl/xenith/imgload.m` - Module interface
 - `appl/xenith/imgload.b` - Image loader implementation
+
+(Since moved to `module/imgload.m` and `appl/lib/imgload.b`, shared
+with the browser, wm/view and lib/scene.)
 
 ## Build Notes
 

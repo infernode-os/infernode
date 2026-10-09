@@ -106,7 +106,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		editcmd = load Editcmd path(Editcmd->PATH);
 		styxaux = load Styxaux path(Styxaux->PATH);
 		asyncio = load Asyncio path(Asyncio->PATH);
-		imgload = load Imgload path(Imgload->PATH);
+		imgload = load Imgload Imgload->PATH;
 		render = load Render path(Render->PATH);
 
 		mods := ref Dat->Mods(sys, bufio, drawm, styx, styxaux,
@@ -845,7 +845,7 @@ mousetask()
 						# Apply decoded image to window
 						row.qlock.lock();
 						if(msg.err != nil) {
-							warning(nil, sprint("image decode: %s\n", msg.err));
+							warning(nil, sprint("can't load image %s: %s\n", msg.path, msg.err));
 						} else if(msg.image != nil) {
 							w := look->lookid(msg.winid, 0);
 							if(w != nil && w.col != nil) {

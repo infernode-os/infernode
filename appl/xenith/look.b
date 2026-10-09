@@ -17,6 +17,7 @@ columnm : Columnm;
 exec : Exec;
 scrl : Scroll;
 plumbmsg : Plumbmsg;
+imgload : Imgload;
 
 sprint : import sys;
 Point : import draw;
@@ -776,43 +777,13 @@ lookid(id : int, dump : int) : ref Window
 	return nil;
 }
 
-# Check if filename has an image extension (case-insensitive)
-# Retained as fast-path for built-in image formats.
+# Check if filename has the extension of an image format imgload
+# reads (see module/imgload.m), so the two cannot disagree.
 isimage(name: string): int
 {
-	if(name == nil || len name < 4)
-		return 0;
-
-	dot := -1;
-	for(i := len name - 1; i >= 0; i--){
-		if(name[i] == '.'){
-			dot = i;
-			break;
-		}
-		if(name[i] == '/')
-			break;
-	}
-	if(dot < 0)
-		return 0;
-
-	ext := name[dot:];
-	n := len ext;
-
-	if(n == 4){
-		# .png .ppm .pgm .pbm .bit .pic
-		if(ext[0] == '.'){
-			c1 := ext[1]; if(c1 >= 'A' && c1 <= 'Z') c1 += 'a' - 'A';
-			c2 := ext[2]; if(c2 >= 'A' && c2 <= 'Z') c2 += 'a' - 'A';
-			c3 := ext[3]; if(c3 >= 'A' && c3 <= 'Z') c3 += 'a' - 'A';
-			if(c1 == 'p' && c2 == 'n' && c3 == 'g') return 1;
-			if(c1 == 'p' && c2 == 'p' && c3 == 'm') return 1;
-			if(c1 == 'p' && c2 == 'g' && c3 == 'm') return 1;
-			if(c1 == 'p' && c2 == 'b' && c3 == 'm') return 1;
-			if(c1 == 'b' && c2 == 'i' && c3 == 't') return 1;
-			if(c1 == 'p' && c2 == 'i' && c3 == 'c') return 1;
-		}
-	}
-	return 0;
+	if(imgload == nil)
+		imgload = load Imgload Imgload->PATH;
+	return imgload != nil && imgload->isimage(name);
 }
 
 # Check if filename matches any known content type.

@@ -23,6 +23,9 @@ SYSMODULES=\
 	mermaid.m\
 	pdf.m\
 	renderer.m\
+	bufio.m\
+	imagefile.m\
+	imgload.m\
 	htmldoc.m\
 	formatter.m\
 

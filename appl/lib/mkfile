@@ -76,6 +76,8 @@ TARG=\
 	html.dis\
 	imap.dis\
 	imageremap.dis\
+	imgload.dis\
+	pngload.dis\
 	mailparse.dis\
 	inflate.dis\
 	ip.dis\
@@ -240,6 +242,8 @@ SYSMODULES=\
 	html.m\
 	imap.m\
 	imagefile.m\
+	imgload.m\
+	pngload.m\
 	ip.m\
 	ipattr.m\
 	ipints.m\

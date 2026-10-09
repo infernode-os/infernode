@@ -4,8 +4,12 @@ implement RImagefile;
 # WebP image decoder for Inferno
 #
 # Supports:
-#   - VP8L (lossless WebP) - full decoding
-#   - VP8 (lossy WebP) - container parsing and basic decoding
+#   - VP8L (lossless WebP) - decoding, which does not yet follow the
+#     specification closely enough to read files encoders write: the
+#     meta prefix codes, simple codes, predictor, colour transform and
+#     palette (delta coding, pixel bundling) all deviate from it
+#   - VP8 (lossy WebP) - container parsing only: decoding NOT IMPLEMENTED
+#     (read refuses; vp8_decode_frame, behind LOSSYSKETCH, is a sketch)
 #   - VP8X (extended format) with ALPH, ANIM, ANMF chunks
 #   - Animated WebP via readmulti()
 #
@@ -279,6 +283,9 @@ decodeframedata(data: array of byte, width, height: int): (ref Rawimage, string)
 	}
 	return (nil, "unknown frame codec: " + chunkid);
 }
+
+# The lossy decoder below is a sketch, off unless this is set.
+LOSSYSKETCH: con 0;
 
 # ==================== VP8L (Lossless) Decoder ====================
 
@@ -1130,9 +1137,12 @@ decodevp8(data: array of byte, alphadata: array of byte): (array of ref Rawimage
 	if(width == 0 || height == 0)
 		return (nil, "VP8: invalid dimensions");
 
-	# VP8 lossy decoding requires a full DCT-based video codec implementation.
-	# For now, parse the boolean decoder header and decode the prediction modes
-	# and quantization parameters, then perform basic block decoding.
+	# VP8 lossy decoding requires a full DCT-based video codec
+	# implementation, which vp8_decode_frame is not: it fills blocks
+	# from a guessed DC value (and overruns its arrays).  Refuse,
+	# rather than return a picture that is not the image.
+	if(!LOSSYSKETCH)
+		return (nil, "VP8: lossy WebP decoding is not implemented");
 	(argb, err) := vp8_decode_frame(data[10:], first_part_size, width, height);
 	if(err != nil)
 		return (nil, err);

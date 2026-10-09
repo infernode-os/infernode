@@ -18,10 +18,8 @@ init(nil: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
 	fd := sys->open("/mnt/ui/activity/0/conversation/input", Sys->OREAD);
-	if(fd == nil) {
-		sys->print("MSGINJECT: FAIL cannot open activity-0 input: %r\n");
-		return;
-	}
+	if(fd == nil)
+		raise "skip:/mnt/ui/activity/0/conversation/input unavailable (run tests/inferno/msg_inject.sh)";
 	buf := array[16384] of byte;
 	n := sys->read(fd, buf, len buf);	# blocks until msgwatch relays a turn
 	if(n <= 0) {

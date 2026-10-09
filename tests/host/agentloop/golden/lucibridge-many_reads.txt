@@ -1,0 +1,37 @@
+# lucibridge many_reads
+requests 2
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant-call call_many_reads_0_0 read {"args": "\/usr\/agentloop\/f1.txt"}
+assistant-call call_many_reads_0_1 read {"args": "\/usr\/agentloop\/f2.txt"}
+assistant-call call_many_reads_0_2 read {"args": "\/usr\/agentloop\/f3.txt"}
+assistant-call call_many_reads_0_3 read {"args": "\/usr\/agentloop\/f4.txt"}
+assistant-call call_many_reads_0_4 read {"args": "\/usr\/agentloop\/f5.txt"}
+assistant-call call_many_reads_0_5 read {"args": "\/usr\/agentloop\/f6.txt"}
+tool-result call_many_reads_0_0:
+  |     1	content-1
+tool-result call_many_reads_0_1:
+  |     1	content-2
+tool-result call_many_reads_0_2:
+  |     1	content-3
+tool-result call_many_reads_0_3:
+  |     1	content-4
+tool-result call_many_reads_0_4:
+  |     1	content-5
+tool-result call_many_reads_0_5:
+  |     1	content-6
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:many_reads go
+  | 
+  | msg 1
+  | role=veltro text=
+  | 
+  | msg 2
+  | role=veltro text=Read six.
+  | 

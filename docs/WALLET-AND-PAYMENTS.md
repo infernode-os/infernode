@@ -668,24 +668,6 @@ stripe->init(apikey);
 (charges, err) := stripe->recent(10);
 ```
 
-## Dropdown Widget
-
-A new widget added to the toolkit (`module/widget.m`):
-
-```limbo
-dd := Dropdown.mk(rect, items, selectedIndex);
-dd.label = "Network:";    # optional prefix
-dd.draw(screen);
-
-# On click: opens popup overlay with all options
-if(dd.contains(ptr.xy))
-    dd.click(screen, ptrchan);    # blocks until selection
-
-dd.value()    # → selected item string
-```
-
-The popup renders over the parent image, highlights items on hover, and restores the underlying pixels on close.
-
 ## Post-Quantum Readiness
 
 The wallet architecture is designed for future post-quantum signature schemes:
@@ -785,18 +767,15 @@ export ROOT=$PWD
 export PATH=$PWD/MacOSX/arm64/bin:$PATH
 
 # C crypto layer (requires emu rebuild)
-cd libsec && mk install
-cd ../libinterp && rm -f keyring.h keyringif.h && mk keyring.h && mk keyringif.h && mk install
-cd ../emu/MacOSX && mk o.emu && cp o.emu InferNode
+(cd $ROOT/libsec && mk install)
+(cd $ROOT/libinterp && rm -f keyring.h keyringif.h && mk keyring.h && mk keyringif.h && mk install)
+(cd $ROOT/emu/MacOSX && mk o.emu && cp o.emu InferNode)
 
 # Limbo libraries, Veltro server/tools, tests, and GUI apps
-cd appl/lib && mk install
-cd ../veltro && mk install
-cd ../wm && mk install
-cd ../../tests && mk install
-
-# Widget toolkit (if widget.m changed, rebuild all GUI apps)
-limbo -I$ROOT/module -gw -o dis/lib/widget.dis appl/lib/widget.b
+(cd $ROOT/appl/lib && mk install)
+(cd $ROOT/appl/veltro && mk install)
+(cd $ROOT/appl/wm && mk install)
+(cd $ROOT/tests && mk install)
 ```
 
 ## File Index
@@ -824,7 +803,5 @@ limbo -I$ROOT/module -gw -o dis/lib/widget.dis appl/lib/widget.b
 | `appl/wm/wallet.b` | Wallet GUI application |
 | `appl/wm/logon.b` | Login/secstore unlock screen |
 | `appl/cmd/auth/factotum/factotum.b` | Factotum with secstore ctl command |
-| `module/widget.m` | Widget toolkit (includes Dropdown) |
-| `appl/lib/widget.b` | Widget implementation |
 | `lib/sh/profile` | Boot profile (secstored + factotum) |
 | `lib/lucifer/login-screen.png` | Login screen brand image |

@@ -43,7 +43,7 @@ namespace policy*, not as bolted-on subsystems.
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
 | **FIPS 140-3** | Validated crypto module boundary | Consolidate all crypto behind `libsec`/`keyring` as the single validated surface | 2 |
-| **CNSA 2.0** (NSA QR suite) | AES-256, SHA-384/512, ML-KEM, ML-DSA, LMS/XMSS | Signer already has **ML-DSA-65/87, SLH-DSA** (FIPS 204/205); add **ML-KEM** (FIPS 203) for KEX | 0→1 |
+| **CNSA 2.0** (NSA QR suite) | AES-256, SHA-384/512, ML-KEM, ML-DSA, LMS/XMSS | Signer has **ML-DSA-65/87, SLH-DSA** (FIPS 204/205); **ML-KEM** (FIPS 203) in the KEX (ML-KEM-1024 under CNSA mode, INFR-329) | 0→1 |
 | **NIST PQC migration** | Hybrid classical+PQC | Negotiated in factotum/`devssl`, transparent to apps | 1 |
 
 ### Identity & authentication
@@ -87,7 +87,7 @@ namespace policy*, not as bolted-on subsystems.
 ### Audit & assurance
 | Standard | Requires | Inferno-native mechanism | Tier |
 |----------|----------|--------------------------|------|
-| **NIST SP 800-92 + tamper-evident logs** | Complete, integrity-protected audit | One hash-chained append-only 9P log service (`#`-device); Merkle-verifiable. Underwrites SOC 2, FISMA AU, PCI-10 at once | 1 |
+| **NIST SP 800-92 + tamper-evident logs** | Complete, integrity-protected audit | One hash-chained append-only 9P log service (Limbo `auditfs` at `/mnt/audit`); Merkle-verifiable. Underwrites SOC 2, FISMA AU, PCI-10 at once | 1 |
 
 ### AI governance
 | Standard | Requires | Inferno-native mechanism | Tier |

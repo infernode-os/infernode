@@ -13,7 +13,7 @@ negotiated transparently to applications, and falls back cleanly to classical wh
 lacks PQ support. Tested end-to-end including negative cases.
 
 > Distinct from [`CNSA-2.0.md`](CNSA-2.0.md): that artifact tracks whether the *parameter
-> sets* meet CNSA 2.0's Category-5 mandate (open: ML-KEM-1024/ML-DSA-87). **This** standard
+> sets* meet CNSA 2.0's Category-5 mandate (ML-KEM-1024/ML-DSA-87: Met under CNSA-strict mode). **This** standard
 > asks only whether a *hybrid migration* is deployed and transparent — which it is.
 
 ## 1. Requirement → mechanism → evidence
@@ -21,7 +21,7 @@ lacks PQ support. Tested end-to-end including negative cases.
 | Requirement | Mechanism | Evidence | Status |
 |-------------|-----------|----------|--------|
 | Hybrid key exchange over TLS | X25519 **+** ML-KEM-768, `GROUP_X25519MLKEM768` (0x4588); combined secret → HKDF; classical fallback if peer lacks it | `appl/lib/crypt/tls.b:74`; `docs/CRYPTO-MODERNIZATION.md` §8 | ✅ |
-| Hybrid on node-to-node transport | STS v2 handshake: classical DH **+** mutual ML-KEM-768, combined via SHA3-512, transcript-bound | `libinterp/keyring.c` (`Keyring_auth`, `mlkem768_keygen` at `:1847`); `docs/CRYPTO-MODERNIZATION.md` §10 | ✅ |
+| Hybrid on node-to-node transport | STS v2 handshake: classical DH **+** mutual ML-KEM-768, combined via SHA3-512, transcript-bound | `libinterp/keyring.c` (`Keyring_auth`, `mlkem768_keygen` at `:2019`, `mlkem1024_keygen` at `:2017` under CNSA mode); `docs/CRYPTO-MODERNIZATION.md` §10 | ✅ |
 | Transparent to applications | Negotiated in the TLS/STS layer; apps speak unchanged 9P/Styx | `docs/CRYPTO-MODERNIZATION.md` §10 | ✅ |
 | Defense-in-depth (safe unless *both* broken) | Combined classical‖PQ secret | [`CNSA-2.0.md`](CNSA-2.0.md) §4 | ✅ |
 | Graceful fallback / no breakage | Hybrid group preferred but optional; classical path unchanged | `docs/CRYPTO-MODERNIZATION.md` §8 (Backward Compatibility) | ✅ |
@@ -41,8 +41,8 @@ just a passive one.
 ## 3. Disposition
 
 **Met.** Hybrid PQC migration is deployed on every transport, transparent to apps, fallback-
-safe, and adversarially tested. The remaining PQC work is *parameter strictness* for CNSA 2.0
-(ML-KEM-1024 / ML-DSA-87 — INFR-329/330), tracked under [`CNSA-2.0.md`](CNSA-2.0.md), not here.
+safe, and adversarially tested. *Parameter strictness* for CNSA 2.0 (ML-KEM-1024 /
+ML-DSA-87 — INFR-329/330, G1/G2 Closed) is tracked under [`CNSA-2.0.md`](CNSA-2.0.md), not here.
 
 ## 4. References
 

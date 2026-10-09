@@ -48,7 +48,8 @@ space at all.
   Restriction).
 - **Device-attach gate.** Even kernel `#x` device naming is closed off:
   `pctl(NODEVS)` blocks `sys->bind("#U", …)` / `#sfactotum` / `#p`. The kernel gate is at
-  `emu/port/chan.c:1046-1053` (the `"|esDa"` exception allowlist). Applied unconditionally
+  `emu/port/chan.c:1286-1288` in `namec` and `emu/port/devindir.c:23-25` (the `"|esDa"`
+  exception allowlist). Applied unconditionally
   in spawned children (`appl/veltro/tools/spawn.b`).
 - **Truthful environment.** Because denial is by absence, an agent never sees an "access
   denied" on a path it can name — eliminating the probing oracle. (`appl/veltro/SECURITY.md`
@@ -85,16 +86,17 @@ functions verified map directly to the namespace syscalls (`pgrpcpy`, `cmount`,
 ## 5. Residual notes (observability / future hardening)
 
 - **`NODEVS` device-attach gate — applied.** `pctl(NODEVS)` is set at every agent
-  FORKNS site: the spawned child (`spawn.b:1071`) and both top-level entry points
-  (`veltro.b:169`, `tools9p.b:798`), each right after `FORKNS`. The kernel
-  gate (`emu/port/chan.c:1046-1053`) then blocks any `#x` attach outside the `|esDa`
+  FORKNS site: the spawned child (`appl/veltro/tools/spawn.b:1244`), the agent loop
+  (`appl/veltro/veltrosrv.b:1396`, right after `FORKNS`), and each tool worker in
+  `tools9p.b` (`:1295`; `exec` applies its own in `tools/exec.b:315`). The kernel
+  gate (`emu/port/chan.c:1286-1288`) then blocks any `#x` attach outside the `|esDa`
   allowlist, so device-attach cannot bypass path restriction. Locked in by
   `testNodevsBlocksDeviceAttach` in `tests/veltro_security_test.b` (asserts `#p` /
   `#sfactotum` bind fails after `NODEVS`). The only un-gated `FORKNS` is the throwaway
   manifest fork in `tools9p.b`'s `emitmanifestnow()`, whose namespace is discarded and
   which runs no agent code — not a sandbox. (INFR-341 — verified already implemented.)
-- **`nsaudit`** (config-time authority linter) is in progress (`appl/cmd/nsaudit.b`) — a
-  *pre-flight* check that a shipped capability set grants only intended authority. It
+- **`nsaudit`** (config-time authority linter, `appl/cmd/nsaudit.b`; CI runs
+  `tests/host/nsaudit_rules_test.sh` and `nsaudit_profiles_test.sh`) — a *pre-flight* check that a shipped capability set grants only intended authority. It
   strengthens tenet 7 evidence; the namespace remains the enforcer regardless.
 
 ## 6. Disposition
@@ -102,8 +104,8 @@ functions verified map directly to the namespace syscalls (`pgrpcpy`, `cmount`,
 SP 800-207's tenets are satisfied by the default runtime posture, the mechanism is
 documented and tested, and the underlying kernel isolation is formally verified. **Met**
 for the architectural posture. The `NODEVS` device-attach gate is applied at all agent
-sites and test-locked; `nsaudit` (pre-flight config linter) is the remaining
-observability enhancement, not a posture defect.
+sites and test-locked; `nsaudit` (pre-flight config linter) adds observability on top
+and runs in CI.
 
 ## 7. References
 

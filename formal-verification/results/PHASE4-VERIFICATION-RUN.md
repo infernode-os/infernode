@@ -39,6 +39,8 @@ The `namespace_races.pml` model successfully detects real race conditions in the
 
 These are real bugs at the C/emu thread level. They are mitigated by Inferno's cooperative Dis VM scheduling (only one Dis thread at a time), but are genuine hazards for the multi-threaded emu host layer.
 
+> Later: the `kchdir` and `namec` races were fixed in 89db5178 (2026-05-14). Its VM-lock re-acquire for the FORKNS swap was removed in fa93471d (deadlock); see `docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`.
+
 ## CBMC Bounded Model Checking Results
 
 ### Quick Mode (CI)

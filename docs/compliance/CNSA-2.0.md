@@ -62,8 +62,8 @@ implementation and the regression test.
 |------|--------|
 | Requirement | AES with 256-bit keys |
 | Implementation | `libsec/aes.c`, AES-GCM in `libsec/aesgcm.c` (`setupAESGCMstate` accepts `keylen`; 32 = AES-256) — decl `include/libsec.h:53` |
-| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:197`, `:199`. Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
-| Evidence | `tests/tls_crypto_test.b`, `tests/aesgcm`/crypto suite |
+| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA mode restricts to it alone, `:653` (`strictcnsaconfig`). Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
+| Evidence | `tests/tls_crypto_test.b` (AES-GCM NIST vectors), `tests/secstore_crypto_test.b` (SGCM file encryption) |
 | Status | **Met** — AES-256-GCM available and negotiated |
 
 ### 3.2 Hashing — SHA-384 / SHA-512 ✅
@@ -140,7 +140,7 @@ stricter, transition-safe posture.
 
 | ID | CNSA 2.0 requirement | Resolution | Tracking |
 |----|----------------------|------------|----------|
-| **G1** | **ML-KEM-1024** (Cat 5) negotiated key exchange | **Closed.** Both transports select ML-KEM-1024 under CNSA mode (native STS `if(cnsa)` keygen/encaps/decaps, `libinterp/keyring.c:1765`–`2026`; TLS client offers `SecP384r1MLKEM1024`, `appl/lib/crypt/tls.b`). No silent downgrade. Multi-node (`tests/cnsa_nodepair_test.sh`) + OpenSSL-interop (`tests/tls_cnsa_hybrid_test.sh`) verified. | INFR-329 |
+| **G1** | **ML-KEM-1024** (Cat 5) negotiated key exchange | **Closed.** Both transports select ML-KEM-1024 under CNSA mode (native STS `if(cnsa)` keygen/encaps/decaps, `libinterp/keyring.c:1891`–`2177`; TLS client offers `SecP384r1MLKEM1024`, `appl/lib/crypt/tls.b`). No silent downgrade. Multi-node (`tests/cnsa_nodepair_test.sh`) + OpenSSL-interop (`tests/tls_cnsa_hybrid_test.sh`) verified. | INFR-329 |
 | **G2** | **ML-DSA-87** (Cat 5) across all signing surfaces | **Closed.** Under CNSA mode, `createsignerkey` and `auth/signer` (the auth-domain CA, first-run key) default to ML-DSA-87; the native STS / TLS / factotum / X.509 signers are algorithm-agnostic and honor the signer key's algorithm. `createsignerkey -c` selects it in one flag regardless of mode. | INFR-330 |
 | **G3** | LMS/XMSS (SP 800-208) firmware signing | **Resolved — Not Applicable** (§3.5): no firmware / in-system signed-image use case; compensating control is hardware (YubiKey) release signing, with ML-DSA-87 / SLH-DSA available. Accreditor to confirm the determination. | INFR-331 |
 
@@ -152,9 +152,10 @@ changes rather than bundled here. **No code is altered by this evidence artifact
 
 - CNSA 2.0 **algorithm primitives: complete** at Category 5 (FIPS 203/204/205/202; AES-256;
   SHA-384/512) — closes EPIC 3 acceptance item *"algorithm inventory documented."*
-- CNSA 2.0 **strict-mode parameter compliance:** open via G1–G3.
-- Recommended next step for full close-out: schedule G1 + G2 (both small, both use existing
-  Category-5 code paths), then revisit G3 with the accreditor (LMS/XMSS vs. SLH-DSA waiver).
+- CNSA 2.0 **strict-mode parameter compliance:** Met under CNSA-strict mode — G1 and G2
+  Closed, G3 Resolved as Not Applicable (§5).
+- Remaining: the accreditor to confirm the G3 applicability determination (LMS/XMSS vs.
+  SLH-DSA waiver).
 
 ## 7. References
 

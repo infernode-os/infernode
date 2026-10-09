@@ -340,12 +340,14 @@ reference-monitor property claimed in `SP800-53-controls.md`.
 ### 8.4 Honest residuals (do not overlook)
 
 - **Three use-after-free race conditions** in the `emu` host-threading layer (`kchdir` dot
-  race `sysfile.c:153-154`; FORKNS pgrp swap `inferno.c:873`; `namec` slash/dot read
-  `chan.c:1022,1057`) were **found by the SPIN race model** and are documented in
-  `docs/history/formal-verification/TODO-RACE-CONDITIONS.md`. They are mitigated by the Dis VM's
-  cooperative scheduling (one Dis thread at a time) but are genuine at the multi-threaded host
-  layer; the suggested lock fix is recorded. An evaluator must treat these as open TSF-layer
-  findings, not resolved.
+  race, now `sysfile.c:153-156`; FORKNS pgrp swap, now `inferno.c:895`; `namec` slash/dot
+  read, now `chan.c:1260,1297`) were **found by the SPIN race model** and are documented in
+  `docs/history/formal-verification/TODO-RACE-CONDITIONS.md`. Commit 89db5178 (2026-05-14)
+  fixed `kchdir` and `namec` by taking the `pg->ns` lock. Its VM-lock re-acquire around the
+  NEWNS/FORKNS swap was removed in fa93471d because it deadlocked, on the reasoning that the
+  `pg->ns` rwlock covers the race (`docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`);
+  the FORKNS pointer swap itself takes no lock. An evaluator should re-check that reasoning
+  rather than treat the FORKNS finding as resolved.
 - **Bounded verification.** TLA+/TLC and CBMC explore finite state spaces; unbounded proofs
   would require interactive theorem proving (Isabelle/HOL). SPIN models abstract lock
   semantics. See `formal-verification/METHODOLOGY.md` §10 "Threats to Validity".

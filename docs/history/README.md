@@ -74,4 +74,4 @@ is [JIT.md](../JIT.md).
 | [MULTIPLEXED-VIDEO-SPIKE.md](MULTIPLEXED-VIDEO-SPIKE.md) | The video spike; the design of record is [H264-9P-BRIDGE.md](../H264-9P-BRIDGE.md) |
 | [charon-html-css-evaluation.md](charon-html-css-evaluation.md), [CHARON-HANDOFF.md](CHARON-HANDOFF.md) | The old Charon engine's gaps, and the hand-off of its replacement ([CHARON-ENGINE.md](../CHARON-ENGINE.md)) |
 | [formal-verification/VERIFICATION-PLAN.md](formal-verification/VERIFICATION-PLAN.md), [formal-verification/PLAN-namespace-security-verification.md](formal-verification/PLAN-namespace-security-verification.md) | Verification plans; the as-built record is [METHODOLOGY.md](../../formal-verification/METHODOLOGY.md) |
-| [formal-verification/TODO-RACE-CONDITIONS.md](formal-verification/TODO-RACE-CONDITIONS.md) | Three emu races the race model found, fixed in 89db5178 |
+| [formal-verification/TODO-RACE-CONDITIONS.md](formal-verification/TODO-RACE-CONDITIONS.md) | Three emu races the race model found; 89db5178 fixed kchdir and namec, and its FORKNS change was reverted in fa93471d (deadlock) |

@@ -37,35 +37,47 @@ mldsa_power2round(int32 *a1, int32 *a0, int32 a)
 }
 
 /*
- * Decompose: split a into high and low bits.
+ * Decompose (FIPS 204 Algorithm 36): split a into a1*2*gamma2 + a0
+ * with a0 in (-gamma2, gamma2]; where a - a0 = q-1, a1 = 0 and
+ * a0 = a - q.
  * For ML-DSA-65: gamma2 = (q-1)/32 = 261888
  * For ML-DSA-87: gamma2 = (q-1)/32 = 261888
+ *
+ * No division and no branch on a. Signing decomposes values derived
+ * from the secret key (LowBits(w - c*s2), and the hints over c*t0),
+ * and a hardware divide takes time that depends on its operands: the
+ * same leak as CVE-2026-22705 in another implementation. a1 is
+ * a / 2*gamma2 rounded, computed by multiplying by a fixed-point
+ * reciprocal as the reference implementation does. Branching on
+ * gamma2 is fine: it is a public parameter. Only the two gamma2 of
+ * FIPS 204 are handled, (q-1)/88 (ML-DSA-44) and (q-1)/32.
+ *
+ * The wrap at q-1 matters: pinning a0 to -1 there understated |a0|
+ * for every a in the top gamma2-sized window below q-1, so the
+ * signer's ||r0|| < gamma2 - beta rejection check passed signatures
+ * it must reject -- rare data-dependent verify failures (INFR-108).
+ * tests/host/mldsa_decompose_test.sh checks every a against the spec.
  */
 void
 mldsa_decompose(int32 *a1, int32 *a0, int32 a, int32 gamma2)
 {
-	int32 t;
+	int32 r1;
 
 	/* Ensure positive */
 	a += (a >> 31) & MLDSA_Q;
 
-	*a0 = a % (2 * gamma2);
-	if(*a0 > gamma2)
-		*a0 -= 2 * gamma2;
-
-	if(a - *a0 == MLDSA_Q - 1){
-		/* FIPS 204 Alg 36: r1 = 0, r0 = r0 - 1 (i.e. a - q).
-		 * Pinning r0 to -1 here understated |r0| for every a in the
-		 * top gamma2-sized window below q-1, so the signer's
-		 * ||r0|| < gamma2 - beta rejection check passed signatures
-		 * it must reject -- rare data-dependent verify failures
-		 * (INFR-108). */
-		*a1 = 0;
-		*a0 -= 1;
+	r1 = (a + 127) >> 7;
+	if(gamma2 == (MLDSA_Q - 1) / 88){
+		r1 = (r1 * 11275 + (1 << 23)) >> 24;
+		r1 ^= ((43 - r1) >> 31) & r1;	/* 44 is the wrap: 0 */
 	} else {
-		t = a - *a0;
-		*a1 = t / (2 * gamma2);
+		r1 = (r1 * 1025 + (1 << 21)) >> 22;
+		r1 &= 15;			/* 16 is the wrap: 0 */
 	}
+	*a1 = r1;
+	*a0 = a - r1 * 2 * gamma2;
+	/* At the wrap a0 came out near q; take q off */
+	*a0 -= (((MLDSA_Q - 1) / 2 - *a0) >> 31) & MLDSA_Q;
 }
 
 /*

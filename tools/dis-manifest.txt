@@ -1057,3 +1057,9 @@ xenith/dis/rect.dis
 xenith/dis/spout.dis
 xenith/dis/win.dis
 xenith/dis/winm.dis
+dis/tests/alt_nilchan_test.dis
+dis/tests/lock_stress_test.dis
+dis/tests/plan_test.dis
+dis/tests/rfc3339_test.dis
+dis/tests/spawn_exec_test.dis
+dis/tests/spawn_schedule_test.dis

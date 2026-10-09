@@ -58,6 +58,12 @@ TARG=\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	alt_nilchan_test.dis\
+	lock_stress_test.dis\
+	plan_test.dis\
+	rfc3339_test.dis\
+	spawn_exec_test.dis\
+	spawn_schedule_test.dis\
 	imap_test.dis\
 	jit_bounds_test.dis\
 	jit_fault_test.dis\

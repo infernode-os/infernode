@@ -219,8 +219,13 @@ testFind(t: ref T)
 	t.assertseq(rd("find"), "", "no match");
 }
 
+# the draw device's display; nil with none (a headless emu)
+disp: ref Display;
+
 testImage(t: ref T)
 {
+	if(disp == nil)
+		t.skip("no display: nothing is rendered");
 	img := rd("image");
 	t.assert(len img > 60, sys->sprint("image has data (%d bytes)", len img));
 	t.assert(contains(img[0:60], "r8g8b8") || contains(img[0:60], "x8r8g8b8"), "image(6) header: " + img[0:60]);
@@ -355,7 +360,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	sys->pctl(Sys->FORKNS, nil);
-	disp := Display.allocate(nil);
+	disp = Display.allocate(nil);
 	browser = load Browser Browser->PATH;
 	charonfs = load Charonfs Charonfs->PATH;
 	if(browser == nil || charonfs == nil) {

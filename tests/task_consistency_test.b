@@ -147,8 +147,26 @@ startserver(done: chan of int)
 	}
 }
 
+# A scratch tree bound before the root, once: the fake /tool it gets is
+# not a file in the host tree (the emulator's root), left there for
+# later tests to take for a running tools9p.  The runner gives each test
+# its own namespace, so the binding is this test's alone.
+scratched := 0;
+
+scratchroot(t: ref T)
+{
+	if(scratched)
+		return;
+	fix := sys->sprint("/tmp/task_consistency.%d", sys->pctl(0, nil));
+	mkdirp(fix + "/tool");
+	if(sys->bind(fix, "/", Sys->MBEFORE|Sys->MCREATE) < 0)
+		t.fatal(sys->sprint("bind %s before /: %r", fix));
+	scratched = 1;
+}
+
 setup(t: ref T): ToolTask
 {
+	scratchroot(t);
 	mkdirp(UI);
 	mkdirp("/tool");
 	mkdirp("/tmp/veltro/tasks");

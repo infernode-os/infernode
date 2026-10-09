@@ -51,7 +51,7 @@ init(): string
 		return "cannot load String";
 	webclient = load Webclient Webclient->PATH;
 	if(webclient == nil)
-		return "cannot load Webclient";
+		return sys->sprint("cannot load Webclient: %r");
 	err := webclient->init();
 	if(err != nil)
 		return "Webclient init: " + err;

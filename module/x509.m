@@ -127,8 +127,8 @@ X509: module {
 	};
 
 	Validity: adt {
-  		not_before		: int;
-  		not_after		: int;
+  		not_before		: big;	# seconds since the epoch, GMT
+  		not_after		: big;
 
 		tostring: fn(v: self ref Validity, format: string): string;
 	};
@@ -179,8 +179,8 @@ X509: module {
 		version			: int; # OPTIONAL; v2
 		sig			: ref AlgIdentifier;
 		issuer			: ref Name; 
-		this_update		: int;
-		next_update		: int; # OPTIONAL
+		this_update		: big;
+		next_update		: big; # OPTIONAL
 		revoked_certs		: list of ref RevokedCert; # OPTIONAL
 		exts			: list of ref Extension; # OPTIONAL
 
@@ -192,7 +192,7 @@ X509: module {
 
 	RevokedCert: adt {
 		user_cert		: ref Keyring->IPint; # serial_number
-		revoc_date		: int; # OPTIONAL
+		revoc_date		: big; # OPTIONAL
 		exts			: list of ref Extension; # OPTIONAL; CRL entry extensions
 
 		tostring: fn(rc: self ref RevokedCert): string;	
@@ -245,7 +245,7 @@ X509: module {
 		InstructionCode =>
 			oid		: ref ASN1->Oid; # hold instruction code field
 		InvalidityDate =>
-			date		: int;
+			date		: big;
 		CRLDistributionPoint =>
 			ps		: list of ref DistrPoint;
 		IssuingDistributionPoint =>

@@ -736,6 +736,14 @@ testFractalRejectsUnsafeCtl(t: ref T)
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
 		"fractal fill rejects control delimiters");
 
+	# unmounted: whatever an earlier test or wm/fractals left at
+	# /tmp/veltro/fractal is hidden (in this test's own namespace)
+	if((d := sys->stat("/tmp/veltro/fractal")).t0 >= 0) {
+		empty := sys->sprint("/tmp/veltro_more_tools.%d", sys->pctl(0, nil));
+		sys->create(empty, Sys->OREAD, Sys->DMDIR|8r755);
+		if(sys->bind(empty, "/tmp/veltro/fractal", Sys->MREPL) < 0)
+			t.fatal(sys->sprint("hide /tmp/veltro/fractal: %r"));
+	}
 	r = tool->exec("julia -0.4 0.6");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "/tmp/veltro/fractal/ctl"),
 		"valid fractal julia reaches service ctl path when unmounted");

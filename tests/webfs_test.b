@@ -20,6 +20,8 @@ include "draw.m";
 include "dial.m";
 	dial: Dial;
 
+include "sh.m";
+
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -40,12 +42,9 @@ WebfsTest: module
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-WebfsHelper: module
-{
-	init: fn(nil: ref Draw->Context, args: list of string);
-};
 
 SRCFILE: con "/tests/webfs_test.b";
+WEB: con "/tmp/webfs_test.mnt";	# where the test mounts its webfs
 
 # Cloudflare IP for example.com (matches tls_live_test)
 EXAMPLE_IP: con "104.18.26.120";
@@ -167,7 +166,7 @@ testHttpsTls(t: ref T)
 testWebfsHttp(t: ref T)
 {
 	# Check if webfs is mounted
-	fd := sys->open("/mnt/web/clone", Sys->OREAD);
+	fd := sys->open(WEB + "/clone", Sys->OREAD);
 	if(fd == nil) {
 		t.skip("webfs not mounted: " + sys->sprint("%r"));
 		return;
@@ -188,7 +187,7 @@ testWebfsHttp(t: ref T)
 		connid = connid[:i];
 	}
 	t.log("connection id: " + connid);
-	conndir := "/mnt/web/" + connid;
+	conndir := WEB + "/" + connid;
 
 	# Write URL to ctl
 	ctlfd := sys->open(conndir + "/ctl", Sys->OWRITE);
@@ -261,7 +260,7 @@ testWebfsHttp(t: ref T)
 # Test 5: Second webfs clone (tests multiplexing)
 testWebfsClone(t: ref T)
 {
-	fd := sys->open("/mnt/web/clone", Sys->OREAD);
+	fd := sys->open(WEB + "/clone", Sys->OREAD);
 	if(fd == nil) {
 		t.skip("webfs not mounted");
 		return;
@@ -282,14 +281,23 @@ testWebfsClone(t: ref T)
 	t.assert(connid != "1" || connid == "1", "got valid id: " + connid);
 }
 
+# webfs itself, at a mount point of the test's own: not whatever is at
+# /mnt/web, where a plain file left in the tree looks like a server
 startwebfs()
 {
-	helper := load WebfsHelper "/tests/webfs_helper.dis";
-	if(helper == nil) {
-		sys->fprint(sys->fildes(2), "can't load webfs_helper: %r\n");
+	sh := load Sh Sh->PATH;
+	if(sh == nil) {
+		sys->fprint(sys->fildes(2), "can't load sh: %r\n");
 		return;
 	}
-	helper->init(nil, "webfs_helper" :: "/mnt/web" :: nil);
+	sys->create(WEB, Sys->OREAD, Sys->DMDIR|8r755);
+	sh->system(nil, "webfs " + WEB + " &");
+	for(i := 0; i < 50; i++) {
+		if(sys->open(WEB + "/clone", Sys->OREAD) != nil)
+			return;
+		sys->sleep(100);
+	}
+	sys->fprint(sys->fildes(2), "webfs did not start at %s\n", WEB);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -336,9 +344,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("HttpGet", testHttpGet);
 	run("HttpsTls", testHttpsTls);
 
-	# Start webfs in background
-	spawn startwebfs();
-	sys->sleep(1000);
+	startwebfs();
 
 	run("WebfsHttp", testWebfsHttp);
 	run("WebfsClone", testWebfsClone);

@@ -583,7 +583,7 @@ testValidityNotExpired(t: ref T)
 	now := daytime->now();
 	expired := c.is_expired(now);
 	t.asserteq(expired, 0, "ISRG Root X1 should not be expired (expires 2035)");
-	t.log(sys->sprint("validity: %d - %d, now: %d", c.validity.not_before, c.validity.not_after, now));
+	t.log(sys->sprint("validity: %bd - %bd, now: %d", c.validity.not_before, c.validity.not_after, now));
 }
 
 # ============================================================

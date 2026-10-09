@@ -135,6 +135,10 @@ woff2vs(t: ref T, file: string)
 		return;
 	t.asserteq(b.nglyphs, a.nglyphs, "glyphs");
 	t.asserteq(b.ascent, a.ascent, "ascent");
+	if(display == nil) {
+		t.log("no display: the glyphs are not drawn and compared");
+		return;
+	}
 	ia := display.newimage(Rect((0, 0), (80, 80)), Draw->GREY8, 0, Draw->White);
 	ib := display.newimage(Rect((0, 0), (80, 80)), Draw->GREY8, 0, Draw->White);
 	pa := array[80*80] of byte;
@@ -234,6 +238,10 @@ testGPOS(t: ref T)
 		t.asserteq(ok2, 0, "no anchor on V");
 	}
 	# drawn: the dot lands above A's box, not at the origin
+	if(display == nil) {
+		t.log("no display: the mark is not drawn");
+		return;
+	}
 	ia := display.newimage(Rect((0, 0), (120, 120)), Draw->GREY8, 0, Draw->White);
 	f.draw(ia, Point(10, 100), adot, display.black, 0);
 	px := array[120*120] of byte;
@@ -262,6 +270,10 @@ testOTF(t: ref T)
 	t.asserteq(int a.advance(lang, 64.0), 72, "language icon: 576/512 em");
 	t.asserteq(int a.advance(mag, 64.0), 64, "magnifier: 1 em");
 	t.asserteq(a.ascent * 512 / a.upem, 448, "ascent from hhea, in the outlines' units");
+	if(display == nil) {
+		t.log("no display: the icons are not drawn");
+		return;
+	}
 	ia := display.newimage(Rect((0, 0), (100, 100)), Draw->GREY8, 0, Draw->White);
 	ib := display.newimage(Rect((0, 0), (100, 100)), Draw->GREY8, 0, Draw->White);
 	a.drawglyph(lang, 64.0, ia, Point(10, 70), display.black);

@@ -74,7 +74,7 @@ jobs:
   linux-amd64:
     name: Linux AMD64 Build & Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 55
     permissions:
       contents: read
     env:
@@ -321,7 +321,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -329,29 +329,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run wallet and secstore integration tests
@@ -514,7 +505,7 @@ jobs:
   linux-amd64-gui:
     name: Linux AMD64 SDL3 GUI Build & Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -566,6 +557,13 @@ jobs:
         # would dead-end with "insert your security key first". This guard is the
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
+
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the headless jobs build it: the suite
+        # loads /dis/mpeg, /dis/matrix, /dis/xenith/render and the rest
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |
@@ -632,7 +630,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -640,29 +638,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run wallet and secstore integration tests
@@ -767,7 +756,7 @@ jobs:
   linux-arm64:
     name: Linux ARM64 Build & Test
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 55
     permissions:
       contents: read
     env:
@@ -873,7 +862,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -881,29 +870,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run JIT fault and bounds tests (JIT and interpreter)
@@ -978,7 +958,7 @@ jobs:
   linux-arm64-gui:
     name: Linux ARM64 SDL3 GUI Build & Test
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
@@ -1030,6 +1010,13 @@ jobs:
         # would dead-end with "insert your security key first". This guard is the
         # Linux analogue of the macOS HAVE_FIDO2 CI check (INFR-358).
         ldd emu/Linux/o.emu | grep -i libfido2 || { echo "Emulator not linked against libfido2 — /dev/2fa would be a stub"; exit 1; }
+
+    - name: Build runtime tree
+      run: |
+        # the full Dis tree, as the headless jobs build it: the suite
+        # loads /dis/mpeg, /dis/matrix, /dis/xenith/render and the rest
+        export PATH="$ROOT/Linux/arm64/bin:$PATH"
+        ./tools/verify-dis-build.sh
 
     - name: Compile test suite
       run: |
@@ -1096,7 +1083,7 @@ jobs:
         START=$SECONDS
         while kill -0 $EMU_PID 2>/dev/null; do
           grep -q "^Total:" test-output.txt 2>/dev/null && break
-          [ $((SECONDS-START)) -ge 480 ] && { echo "Backstop hit (480s) with no Total: line — possible hang."; break; }
+          [ $((SECONDS-START)) -ge 1500 ] && { echo "Backstop hit (1500s) with no Total: line — possible hang."; break; }
           sleep 2
         done
         kill -9 $EMU_PID 2>/dev/null || true
@@ -1104,29 +1091,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run wallet and secstore integration tests
@@ -1266,7 +1244,7 @@ jobs:
   macos:
     name: macOS ${{ matrix.label }} Build & Test
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 50
+    timeout-minutes: 75
     permissions:
       contents: read
     strategy:
@@ -1276,13 +1254,13 @@ jobs:
           - arch: arm64
             label: ARM64
             runner: macos-15
-            backstop: 480
+            backstop: 1500  # the suite runs interpreted here (no -c1)
           # Intel Macs (#786).  macos-15-intel is GitHub's last Intel
           # macOS image; the job goes when it does.
           - arch: amd64
             label: AMD64
             runner: macos-15-intel
-            backstop: 900  # an i7-8700B: the suite outruns 480s
+            backstop: 1800  # an i7-8700B, interpreted: slower still
     env:
       ROOT: ${{ github.workspace }}
       OBJTYPE: ${{ matrix.arch }}
@@ -1484,29 +1462,20 @@ jobs:
 
         cat test-output.txt
 
-        # Result handling. The old check grepped "^PASS$", which matches the
-        # per-module PASS line every test file emits — so the job could not
-        # actually fail on a test failure, and (with the 60s cap) silently
-        # truncated the suite while still reporting green. Now we key off the
-        # runner's single "Total:" completion line and the per-module
-        # "--- FAIL:" markers.
-        #
-        # TRANSITIONAL: gating is intentionally OFF. The cowfs deadlock that
-        # truncated the suite at ~test 7 of 127 is fixed, so the previously
-        # dark ~110 tests now run; this surfaces their true state in CI before
-        # we enforce it. Do NOT add `exit 1` here until the surfaced failures
-        # are triaged and an explicit skip-list is in place.
-        if grep -q "^Total:" test-output.txt; then
-          grep "^Total:" test-output.txt | tail -1
-          if grep -q "^--- FAIL:" test-output.txt; then
-            echo "::warning::Test suite has failing modules (NON-GATING, transitional):"
-            grep "^--- FAIL:" test-output.txt || true
-          else
-            echo "Test suite: all modules passed."
-          fi
-        else
-          echo "::warning::Runner did not reach a Total: line within the backstop (possible hang). Last test started:"
+        # Gating: the suite must finish (the runner's Total: line) and
+        # fail nothing.  The runner gives each test its own namespace and
+        # a time limit, so one test can neither break the next nor hold
+        # the suite; a test whose environment is absent here skips.
+        if ! grep -q "^Total:" test-output.txt; then
+          echo "::error::The suite did not finish within the backstop. Last test started:"
           grep "^=== RUN" test-output.txt | tail -1 || true
+          exit 1
+        fi
+        grep "^Total:" test-output.txt | tail -1
+        if grep -q "^--- FAIL:" test-output.txt; then
+          echo "::error::Failing tests:"
+          grep "^--- FAIL:" test-output.txt
+          exit 1
         fi
 
     - name: Run port verification

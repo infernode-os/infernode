@@ -42,6 +42,8 @@ Layout: module
 	# src drawn at w by h, as a replaced element's image is (nearest
 	# neighbour); not kept
 	scaleimage:	fn(src: ref Draw->Image, w, h: int): ref Draw->Image;
+	# forget the scalings of src painting has kept: it is no longer shown
+	unscale:	fn(src: ref Draw->Image);
 
 	# box kinds (the formatting a box establishes or takes part in)
 	Kblock, Kinline, Ktext, Kbr, Kreplaced, Kflex, Kgrid, Ktable, Krow, Kcell, Kmarker: con iota;

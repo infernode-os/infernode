@@ -14808,6 +14808,17 @@ scale(src: ref Image, w, h: int): ref Image
 	return d;
 }
 
+unscale(src: ref Image)
+{
+	r: list of (ref Image, int, int, ref Image);
+	for(l := scaled; l != nil; l = tl l)
+		if((hd l).t0 != src)
+			r = hd l :: r;
+	scaled = nil;
+	for(; r != nil; r = tl r)
+		scaled = hd r :: scaled;
+}
+
 scaleimage(src: ref Image, w, h: int): ref Image
 {
 	return scale1(src, w, h);

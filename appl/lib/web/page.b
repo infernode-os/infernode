@@ -41,6 +41,11 @@ display: ref Display;
 # work, never across a fetch.
 plk: chan of int;
 
+# One picture decodes at a time.  Threads share the processor, so
+# decoding several at once is no faster, and each decoder holds its
+# whole image as it works: six at once took GitHub's heap to 123M.
+dlk: chan of int;
+
 plock()
 {
 	plk <-= 1;
@@ -54,6 +59,7 @@ punlock()
 init(d: ref Display): string
 {
 	plk = chan[1] of int;
+	dlk = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
@@ -290,12 +296,34 @@ picture(url: string, data: array of byte, ctype, err: string): ref Pic
 {
 	if(err != nil)
 		return ref Pic(url, nil, nil, err, nil, 0, 0, nil, nil);
+	dlk <-= 1;
+	{
+		pic := picture1(url, data, ctype);
+		<-dlk;
+		return pic;
+	} exception e {
+	"*" =>
+		<-dlk;
+		raise e;
+	}
+}
+
+picture1(url: string, data: array of byte, ctype: string): ref Pic
+{
 	(img, raw) := decodeimage2(data, ctype, url);
 	if(img == nil)
 		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil, 0, 0, nil, nil);
 	if(prefix(lower(ctype), "image/svg") || looksvg(data))
 		return ref Pic(url, img, data, nil, raw, img.r.dx(), img.r.dy(), nil, nil);
-	return ref Pic(url, img, nil, nil, raw, img.r.dx(), img.r.dy(), data, ctype);
+	(nw, nh) := (img.r.dx(), img.r.dy());
+	# no wider than the screen, from the start: pictures wait to be laid
+	# out in batches, several decoding at once, and GitHub's held 100M at
+	# full size.  Layout cuts each to its size (fitimages), and decodes it
+	# again in the rare case it is shown wider.
+	if(raw == nil && display != nil && (sw := display.image.r.dx()) > 0 && nw > sw)
+		if((small := layout->scaleimage(img, sw, (nh*sw + nw-1)/nw)) != nil)
+			img = small;
+	return ref Pic(url, img, nil, nil, raw, nw, nh, data, ctype);
 }
 
 # ---- nested documents ----
@@ -1055,6 +1083,7 @@ fitimages(p: ref Pg, root: ref Box)
 		for(bl = boxes; bl != nil; bl = tl bl)
 			if((hd bl).url == pic.url && (hd bl).img == pic.img)
 				(hd bl).img = img;
+		layout->unscale(pic.img);	# painting kept it, scaled, at the size img now is
 		pic.img = img;
 		if(bgpage == p)
 			layout->setbgimage(pic.url, img);

@@ -482,7 +482,20 @@ values(l: ref Lx, close: int): (array of ref Tok, int)
 		}
 		a[n++] = t;
 	}
-	return (a[0:n], n);
+	return (own(a[0:n]), n);
+}
+
+# v in an array of its own.  A slice keeps the whole array it was cut
+# from: a rule that kept a slice of its sheet's tokens (an @media
+# prelude, a declaration's value) kept every token of the sheet, 18M of
+# a 700K sheet.
+own(v: array of ref Tok): array of ref Tok
+{
+	if(len v == 0)
+		return nil;
+	a := array[len v] of ref Tok;
+	a[0:] = v;
+	return a;
 }
 
 trim(v: array of ref Tok): array of ref Tok
@@ -566,7 +579,7 @@ atrule(v: array of ref Tok, i: int, parent: array of ref Sel): (ref Rule, int)
 	st := i;
 	while(i < len v && v[i].kind != Ksemicolon && !isblock(v[i], "{"))
 		i++;
-	prelude := trim(v[st:i]);
+	prelude := own(trim(v[st:i]));
 	blk: array of ref Tok;
 	hasblk := 0;
 	if(i < len v) {
@@ -822,7 +835,7 @@ declaration(v: array of ref Tok): ref Decl
 			val = trim(val[0:k]);
 		}
 	}
-	return ref Decl(nm, val, imp);
+	return ref Decl(nm, own(val), imp);
 }
 
 # A var() whose arguments are malformed makes the declaration invalid

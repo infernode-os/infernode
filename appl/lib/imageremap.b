@@ -618,6 +618,12 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 		return (im, "");
 	}
 
+	# A display of more than 8 bits shows the colours as they are, not
+	# mapped to the 256 of CMAP8 (and dithered): RGB24, or GREY8 for
+	# grey.  errdiff is for the 8-bit display.
+	if(d.image == nil || d.image.depth > 8)
+		return truecolour(i, d);
+
 	im := d.newimage(i.r, Draw->CMAP8, 0, Draw->Black);
 	dx := i.r.max.x-i.r.min.x;
 	dy := i.r.max.y-i.r.min.y;
@@ -793,5 +799,64 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 		}
 	}
 	im.writepixels(im.r, pic);
+	return (im, "");
+}
+
+truecolour(i: ref RImagefile->Rawimage, d: ref Display): (ref Image, string)
+{
+	case i.chandesc {
+	RImagefile->CY =>
+		if(i.nchans != 1)
+			return (nil, sys->sprint("Y image has %d chans", i.nchans));
+		im := d.newimage(i.r, Draw->GREY8, 0, Draw->Black);
+		if(im == nil)
+			return (nil, sys->sprint("can't allocate GREY8 image: %r"));
+		im.writepixels(im.r, i.chans[0]);
+		return (im, "");
+	RImagefile->CRGB or RImagefile->CRGB1 =>
+		;
+	* =>
+		return (nil, sys->sprint("can't handle chandesc %d", i.chandesc));
+	}
+	im := d.newimage(i.r, Draw->RGB24, 0, Draw->Black);
+	if(im == nil)
+		return (nil, sys->sprint("can't allocate RGB24 image: %r"));
+	# RGB24's bytes in memory are blue, green, red
+	if(i.chandesc == RImagefile->CRGB) {
+		if(i.nchans != 3)
+			return (nil, sys->sprint("RGB image has %d channels", i.nchans));
+		r := i.chans[0];
+		g := i.chans[1];
+		b := i.chans[2];
+		buf := array[3*len r] of byte;
+		k := 0;
+		for(j := 0; j < len r; j++) {
+			buf[k++] = b[j];
+			buf[k++] = g[j];
+			buf[k++] = r[j];
+		}
+		im.writepixels(im.r, buf);
+		return (im, "");
+	}
+	if(i.nchans != 1)
+		return (nil, sys->sprint("can't handle nchans %d", i.nchans));
+	if(i.cmap == nil)
+		return (nil, "image has no color map");
+	# a full map, so an index past the file's own is black, not a fault
+	cm := array[3*256] of {* => byte 0};
+	n := len i.cmap;
+	if(n > len cm)
+		n = len cm;
+	cm[0:] = i.cmap[0:n];
+	pic := i.chans[0];
+	buf := array[3*len pic] of byte;
+	k := 0;
+	for(j := 0; j < len pic; j++) {
+		c := 3*int pic[j];
+		buf[k++] = cm[c+2];
+		buf[k++] = cm[c+1];
+		buf[k++] = cm[c];
+	}
+	im.writepixels(im.r, buf);
 	return (im, "");
 }

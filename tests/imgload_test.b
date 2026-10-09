@@ -13,6 +13,7 @@ implement ImgloadTest;
 # - Xenith's image renderer claims images, and not text that
 #   begins like one
 # - An Inferno image (image(6)) read from bytes
+# - remap keeping colours exact on a display deeper than 8 bits
 # - readpng and readjpg on hand-built minimal files
 #
 
@@ -275,6 +276,56 @@ refused(t: ref T, name, fmt, want: string)
 	t.assert(im == nil, name + " is not decoded");
 	t.assertseq(err, want, name + " error");
 }
+# On a display of more than 8 bits, remap keeps an image's colours:
+# none of these is in CMAP8's 256, so mapped to them (and dithered) it
+# would come back otherwise.
+testRemapTrueColour(t: ref T)
+{
+	needdisplay(t);
+	rm := load Imageremap Imageremap->PATH;
+	if(rm == nil)
+		t.fatal(sys->sprint("load imageremap: %r"));
+	rm->init(display);
+	r := Rect((0, 0), (2, 1));
+
+	rgb := ref RImagefile->Rawimage;
+	rgb.r = r;
+	rgb.nchans = 3;
+	rgb.chandesc = RImagefile->CRGB;
+	rgb.chans = array[] of {
+		array[] of {byte 37, byte 250},
+		array[] of {byte 141, byte 3},
+		array[] of {byte 200, byte 99}};
+	(im, err) := rm->remap(rgb, display, 1);
+	if(im == nil)
+		t.fatal("remap RGB: " + err);
+	near(t, pixel(im, (0, 0)), (37, 141, 200), 0, "RGB, first pixel");
+	near(t, pixel(im, (1, 0)), (250, 3, 99), 0, "RGB, second pixel");
+
+	grey := ref RImagefile->Rawimage;
+	grey.r = r;
+	grey.nchans = 1;
+	grey.chandesc = RImagefile->CY;
+	grey.chans = array[] of {array[] of {byte 77, byte 133}};
+	(im, err) = rm->remap(grey, display, 1);
+	if(im == nil)
+		t.fatal("remap grey: " + err);
+	near(t, pixel(im, (0, 0)), (77, 77, 77), 0, "grey, first pixel");
+	near(t, pixel(im, (1, 0)), (133, 133, 133), 0, "grey, second pixel");
+
+	pal := ref RImagefile->Rawimage;
+	pal.r = r;
+	pal.nchans = 1;
+	pal.chandesc = RImagefile->CRGB1;
+	pal.cmap = array[] of {byte 11, byte 22, byte 33, byte 201, byte 102, byte 53};
+	pal.chans = array[] of {array[] of {byte 1, byte 0}};
+	(im, err) = rm->remap(pal, display, 1);
+	if(im == nil)
+		t.fatal("remap paletted: " + err);
+	near(t, pixel(im, (0, 0)), (201, 102, 53), 0, "paletted, first pixel");
+	near(t, pixel(im, (1, 0)), (11, 22, 33), 0, "paletted, second pixel");
+}
+
 testDecodeSvg(t: ref T)		{ checkfixture(t, "rb.svg", "svg", (255, 0, 0), (0, 0, 255), 0); }
 testDecodePpm(t: ref T)		{ checkfixture(t, "rb.ppm", "ppm", (255, 0, 0), (0, 0, 255), 0); }
 testDecodePgm(t: ref T)		{ checkfixture(t, "wb.pgm", "ppm", (255, 255, 255), (0, 0, 0), 0); }
@@ -841,6 +892,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DecodeXbm", testDecodeXbm);
 	run("DecodePic", testDecodePic);
 	run("DecodeBit", testDecodeBit);
+	run("RemapTrueColour", testRemapTrueColour);
 	run("Unrecognised", testUnrecognised);
 	run("Reader", testReader);
 	run("Renderer", testRenderer);

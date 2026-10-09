@@ -10,19 +10,19 @@
 
 You'll see the `;` prompt. The system works!
 
-→ See [QUICKSTART.md](../QUICKSTART.md) for details
+→ See [QUICKSTART.md](../../QUICKSTART.md) for details
 
 ## For Porters - Critical Information
 
 **Porting to another 64-bit architecture?**
 
-→ Read [LESSONS-LEARNED.md](LESSONS-LEARNED.md) **FIRST**
+→ Read [LESSONS-LEARNED.md](../LESSONS-LEARNED.md) **FIRST**
 
 **Key fix:** Pool quanta must be 127 (not 31) for 64-bit. This single change made everything work.
 
 ## Documentation Navigator
 
-→ See [DOCUMENTATION-INDEX.md](DOCUMENTATION-INDEX.md) for complete navigation
+→ See [DOCUMENTATION-INDEX.md](../DOCUMENTATION-INDEX.md) for complete navigation
 
 Or [COMPLETE-PORT-SUMMARY.md](COMPLETE-PORT-SUMMARY.md) for the full story.
 

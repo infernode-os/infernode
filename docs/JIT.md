@@ -2,7 +2,7 @@
 
 **Purpose:** What the JIT does, when to enable it, and where to look when something goes wrong.
 
-> Looking for benchmark numbers? See [BENCHMARKS.md](BENCHMARKS.md). Looking for ARM64 implementation details? See [PORTING-ARM64.md](PORTING-ARM64.md) and [docs/arm64-jit/](arm64-jit/). This document is the user-facing summary.
+> Looking for benchmark numbers? See [BENCHMARKS.md](BENCHMARKS.md). Looking for ARM64 implementation details? See [PORTING-ARM64.md](PORTING-ARM64.md) and [docs/arm64-jit/](arm64-jit). This document is the user-facing summary.
 
 ## TL;DR
 
@@ -133,7 +133,7 @@ These are the values the [Lucia launch scripts](LUCIA.md#launching) use. Lower v
 | Windows: no speedup from `-c1`                      | Expected — there is no 64-bit Windows JIT yet. Use `-c0` and the interpreter. |
 | Bring-up debugging the JIT itself                   | Use `-c3` or `-c4` for compiler logging; see the `cflag > 3` gates in `comp-arm64.c` and `comp-amd64.c`. |
 
-For deep debug stories — what worked, what didn't, every blind alley — the [arm64-jit/](arm64-jit/) directory has 27 session logs.
+For deep debug stories — what worked, what didn't, every blind alley — the [arm64-jit/](arm64-jit) directory has 27 session logs.
 
 ### Open faults
 
@@ -189,6 +189,6 @@ For every other workload — anything that runs longer than a few milliseconds �
 - [BENCHMARKS.md](BENCHMARKS.md) — full v1/v2 suites, cross-language comparisons.
 - [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) — RAM, binary sizes, startup time.
 - [PORTING-ARM64.md](PORTING-ARM64.md) — what porting the JIT to ARM64 actually involved.
-- [arm64-jit/](arm64-jit/) — opcode coverage, bring-up logs, debug stories.
+- [arm64-jit/](arm64-jit) — opcode coverage, bring-up logs, debug stories.
 - [LESSONS-LEARNED.md](LESSONS-LEARNED.md) — pool-quanta fix and other 64-bit gotchas.
 - [CLAUDE.md §JIT Compiler Availability](../CLAUDE.md#jit-compiler-availability) — native vs. hosted limbo and why it matters.

@@ -46,8 +46,8 @@ small, auditable `libsec`/`keyring` boundary that FIPS 140-3 work (EPIC 6) will 
 validate.
 
 Design rationale and full implementation history:
-[`../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md`](../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md) and
-[`../../docs/CRYPTO-MODERNIZATION.md`](../../docs/CRYPTO-MODERNIZATION.md) §8–10.
+[`../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md`](../QUANTUM-SAFE-CRYPTO-PLAN.md) and
+[`../../docs/CRYPTO-MODERNIZATION.md`](../CRYPTO-MODERNIZATION.md) §8–10.
 
 ---
 
@@ -161,5 +161,5 @@ changes rather than bundled here. **No code is altered by this evidence artifact
 - NSA, *Announcing the Commercial National Security Algorithm Suite 2.0* (CNSA 2.0).
 - NIST FIPS 203 (ML-KEM), 204 (ML-DSA), 205 (SLH-DSA), 202 (SHA-3), 197 (AES), 180 (SHA-2).
 - NIST SP 800-208 (Stateful Hash-Based Signatures: LMS/XMSS).
-- Implementation history: [`../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md`](../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md),
-  [`../../docs/CRYPTO-MODERNIZATION.md`](../../docs/CRYPTO-MODERNIZATION.md).
+- Implementation history: [`../../docs/QUANTUM-SAFE-CRYPTO-PLAN.md`](../QUANTUM-SAFE-CRYPTO-PLAN.md),
+  [`../../docs/CRYPTO-MODERNIZATION.md`](../CRYPTO-MODERNIZATION.md).

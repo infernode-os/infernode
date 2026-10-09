@@ -26,7 +26,7 @@ The Inferno kernel provides **per-process namespaces** that isolate each process
 | 5 | SPIN | exportfs root boundary | **Verified** |
 | CI | GH Actions | Automated verification on push | **Active** |
 
-See [results/](results/) for detailed verification reports.
+See [results/](results) for detailed verification reports.
 
 ## Files
 

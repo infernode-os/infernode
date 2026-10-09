@@ -47,8 +47,6 @@
 | [TESTING.md](TESTING.md) | Testing guide (unit tests, integration tests, CI) |
 | [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) | Performance specifications and benchmarks |
 | [BENCHMARKS.md](BENCHMARKS.md) | Benchmark results (v1, v2, v3 suites) |
-| [SDL3-GUI-PLAN.md](SDL3-GUI-PLAN.md) | SDL3 cross-platform GUI implementation plan |
-| [SDL3-IMPLEMENTATION-STATUS.md](SDL3-IMPLEMENTATION-STATUS.md) | SDL3 implementation status |
 
 ## Wallet & Payments
 
@@ -90,10 +88,8 @@
 | [WINDOWS-BUILD.md](WINDOWS-BUILD.md) | Building and running on Windows (prerequisites, SDL3 GUI, troubleshooting) |
 | [LESSONS-LEARNED.md](LESSONS-LEARNED.md) | **Start here** - Critical fixes and pitfalls for porters |
 | [PORTING-ARM64.md](PORTING-ARM64.md) | ARM64 technical implementation details |
-| [COMPILATION-LOG.md](COMPILATION-LOG.md) | Build process walkthrough |
 | [JETSON-PORT-PLAN.md](JETSON-PORT-PLAN.md) | NVIDIA Jetson porting plan |
 | [JETSON-PORT-ESTIMATE.md](JETSON-PORT-ESTIMATE.md) | Jetson port effort estimate |
-| [COMPLETE-PORT-SUMMARY.md](COMPLETE-PORT-SUMMARY.md) | Port completion summary |
 | [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
 | [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) | The contract between the shared native kernel and a board directory: files, hooks in call order, what the shared drivers call downward |
 | [BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md) | What a port to other hardware should take from the first one |
@@ -106,7 +102,7 @@
 
 ## ARM64 JIT Compiler
 
-Detailed JIT documentation is in `docs/arm64-jit/` (27 files covering implementation, debugging, benchmarks across all platforms).
+[JIT.md](JIT.md) is the reference. Per-platform benchmark results and the Dis opcode analysis are in [arm64-jit/](arm64-jit/).
 
 ## Additional Guides
 
@@ -116,18 +112,18 @@ Detailed JIT documentation is in `docs/arm64-jit/` (27 files covering implementa
 | [SPEECH-ARCHITECTURE.md](SPEECH-ARCHITECTURE.md) | **speech9p architecture** — file tree, three engines (cmd / api / local), TTS/STT data flow, devcmd bridge, Veltro + lucibridge integration, threat surface |
 | [SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md) | Cross-host speech via 9P namespace composition |
 | [RUNNING-ACME.md](RUNNING-ACME.md) | Running the Acme editor |
-| [SONARQUBE_WORK.md](SONARQUBE_WORK.md) | SonarQube static analysis work |
 
 ## Debugging Reference
 
 | Document | Description |
 |----------|-------------|
-| [OUTPUT-ISSUE.md](OUTPUT-ISSUE.md) | Console output debugging |
-| [SHELL-ISSUE.md](SHELL-ISSUE.md) | Shell execution investigation |
-| [HEADLESS-STATUS.md](HEADLESS-STATUS.md) | Headless build details |
 | [TEMPFILE-EXHAUSTION.md](TEMPFILE-EXHAUSTION.md) | Temp file slot exhaustion |
 | [64-bit-alt-structure-fix.md](64-bit-alt-structure-fix.md) | 64-bit alt structure fix |
 | [FONT-RENDERING-DEBUG.md](FONT-RENDERING-DEBUG.md) | Font rendering debugging |
+
+## History
+
+Status reports and debugging logs from the 64-bit port, the SDL3 GUI and early CI bring-up are kept in [history/](history/README.md). They record how things were at the time and are not maintained.
 
 ## Formal Verification
 

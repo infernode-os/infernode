@@ -207,4 +207,4 @@ Ready for production use.
 
 **69 commits documenting the complete journey from broken build to working system.**
 
-Start with [README.md](../README.md) for quick start.
+Start with [README.md](../../README.md) for quick start.

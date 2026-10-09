@@ -1,5 +1,10 @@
 # Veltro Architecture Review: Tool/App Unification
 
+> Status: partly landed. tools9p now serves a directory per tool
+> (`/tool/<name>/` with `ctl`, `run`, `doc`, `schema`) and a top-level
+> `meta/` of audit scalars. There is no per-tool `meta` or `event` file and
+> no app registration protocol (`register`/`unregister`).
+
 ## Current State
 
 Three categories of AI-accessible capabilities exist:
@@ -7,8 +12,8 @@ Three categories of AI-accessible capabilities exist:
 | Category | Examples | Interface | Discovery | Security |
 |----------|----------|-----------|-----------|----------|
 | **Headless tools** | exec, grep, read, write, git | `tool.m` (init/name/doc/exec) | `/tool/tools` listing | Namespace restriction on `/dis/veltro/tools/` |
-| **App-backed tools** | lucishell, edit, charon, fractal | Tool wraps 9P filesystem at `/tmp/veltro/{app}/` | Same `/tool/tools` listing | Tool registration + app must be running |
-| **Lucifer zone apps** | luciconv, lucipres, lucictx | 9P at `/mnt/ui/` | Implicit (always present) | Part of Lucifer lifecycle |
+| **App-backed tools** | shell, edit, charon, fractal | Tool wraps the app's files (`/tmp/veltro/{app}/`, `/mnt/charon`, `/edit`) | Same `/tool/tools` listing | Tool registration + app must be running |
+| **Lucia zone apps** | luciconv, lucipres, lucictx | 9P at `/mnt/ui/` | Implicit (always present) | Part of Lucia lifecycle |
 
 ## What Works Well
 
@@ -16,7 +21,7 @@ Three categories of AI-accessible capabilities exist:
 
 2. **Namespace = capability** is elegant -- `nsconstruct.b`'s shadow-directory approach and the `Capabilities` ADT are architecturally sound. Removing a tool from `/dis/veltro/tools/` makes it invisible to the agent.
 
-3. **9P as the IPC layer** follows Plan 9 philosophy correctly -- edit's filesystem at `/edit/` and lucishell's at `/tmp/veltro/shell/` let the AI read/write files while apps render/react.
+3. **9P as the IPC layer** follows Plan 9 philosophy correctly -- edit's filesystem at `/edit/` and the shell app's (`appl/wm/shell.b`) at `/tmp/veltro/shell/` let the AI read/write files while apps render/react.
 
 4. **tools9p.b as a tool server** is smart -- exposing tools as a synthetic filesystem means the agent interacts with tools through file I/O, the same mechanism used for everything else.
 
@@ -30,11 +35,11 @@ Two architectural patterns do similar things:
 
 ### Problems
 
-1. **Lifecycle coupling** -- The lucishell *tool* only works if the lucishell *app* is running. If the app crashes or hasn't been started, the tool fails opaquely. No clean way for the tool to know the app's state.
+1. **Lifecycle coupling** -- The shell *tool* (`appl/veltro/tools/shell.b`) only works if the shell *app* (`appl/wm/shell.b`) is running. If the app crashes or hasn't been started, the tool fails opaquely. No clean way for the tool to know the app's state.
 
-2. **Duplicated naming/discovery** -- The app lives in `/dis/wm/lucishell.dis`, the tool in `/dis/veltro/tools/lucishell.dis`, and the 9P mount at `/tmp/veltro/shell/`. Three places to know about one thing.
+2. **Duplicated naming/discovery** -- The app lives in `/dis/wm/shell.dis`, the tool in `/dis/veltro/tools/shell.dis`, and the 9P mount at `/tmp/veltro/shell/`. Three places to know about one thing.
 
-3. **Inconsistent filesystem conventions** -- edit mounts at `/mnt/edit` (bound to `/edit/`), lucishell at `/tmp/veltro/shell/`, charon at `/tmp/veltro/browser/`, fractal at `/tmp/veltro/fractal/`. No consistent pattern.
+3. **Inconsistent filesystem conventions** -- edit mounts at `/mnt/edit` (bound to `/edit/`), shell at `/tmp/veltro/shell/`, charon at `/mnt/charon`, fractal at `/tmp/veltro/fractal/`. No consistent pattern.
 
 4. **Wrapper boilerplate** -- Tools like `fractal.b` are essentially `read /tmp/veltro/fractal/ctl` and `write /tmp/veltro/fractal/ctl`. The tool.m wrapper adds indirection without value beyond semantic naming and doc strings.
 
@@ -119,7 +124,7 @@ Or more idiomatically: apps serve file2chan entries directly under `/tool/{name}
 |------|-------------|----------|-------------|
 | **utility** | Headless, stateless, request/response | grep, read, write, exec, git | No |
 | **service** | Headless, stateful, long-running | memory, todo, spawn | Optional |
-| **app** | Has GUI, user-visible, collaborative | edit, lucishell, charon, fractal | Yes |
+| **app** | Has GUI, user-visible, collaborative | edit, shell, charon, fractal | Yes |
 
 The `meta` file carries the type so the AI can distinguish "using edit will show the user something" from "using grep won't." Same calling convention regardless.
 

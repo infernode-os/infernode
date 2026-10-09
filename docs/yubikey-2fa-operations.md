@@ -118,7 +118,7 @@ Limbo modules rebuild to `dis/...` from their source dirs, e.g.:
 ```
 cd appl/wm  && mk $ROOT/dis/wm/logon.dis
 cd appl/lib && mk $ROOT/dis/lib/twofa.dis $ROOT/dis/lib/twofaslot.dis
-cd appl/cmd && limbo -I$ROOT/module -o $ROOT/dis/2fa.dis 2fa.b
+cd appl/cmd && mk $ROOT/dis/2fa.dis
 ```
 
 Launch the desktop:

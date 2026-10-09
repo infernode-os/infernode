@@ -154,10 +154,9 @@ Replace `appl/lib/inflate.b` with native C code in the emu. This would:
 - Benefit the entire system, not just image loading
 - Require changes to `emu/port/` or `libinterp/`
 
-### Priority 2: ARM64 JIT Compiler
-Would improve all Limbo performance including image decode:
-- `libinterp/comp-arm64.c` is currently a stub
-- See IDEAS.md for implementation notes
+### Priority 2: ARM64 JIT Compiler (done)
+`libinterp/comp-arm64.c` is a full JIT (AMD64 and RISC-V have one too);
+run `emu -c1` to use it. See docs/JIT.md.
 
 ### Priority 3: Native PNG Decoder (Alternative)
 If native zlib is too complex, add a dedicated native PNG module:
@@ -167,7 +166,7 @@ If native zlib is too complex, add a dedicated native PNG module:
 
 ### Priority 4: Format Optimization
 - JPEG support added (baseline sequential via readjpg)
-- Consider adding GIF support (readgif exists in appl/lib/)
+- GIF support added (via RImagefile READGIFPATH)
 - Native Inferno image format is already fast (no compression)
 - Pre-convert large PNGs to uncompressed format for faster loading
 
@@ -191,8 +190,8 @@ artificial delays.
 ### Test Commands
 ```sh
 # Start Xenith
-cd /Users/pdfinn/github.com/NERVsystems/infernode/emu/MacOSX
-./o.emu -r../.. sh -l -c 'xenith -t dark'
+# from the repository root
+./emu/MacOSX/o.emu -r$PWD sh -l -c 'xenith -t dark'
 
 # Load test image (in Xenith)
 echo 'image /n/local/tmp/test-rgba-interlaced.png' > /mnt/xenith/1/ctl

@@ -6,7 +6,7 @@
 # Works on all supported platforms:
 #   ARM64 Linux, ARM64 macOS, AMD64 Linux, AMD64 macOS
 #
-# Usage: bash scratchpad/jit_test.sh [--bench] [--stress] [--all]
+# Usage: tools/jit-compare.sh [--bench] [--stress] [--all]
 #   --bench   Run benchmark comparisons (JIT vs interpreter timing)
 #   --stress  Run stress tests (large data, edge cases)
 #   --all     Run everything
@@ -73,7 +73,8 @@ done
 OUT0=$(mktemp)
 OUT1=$(mktemp)
 # Temp file for passing large input via file argument (avoids stdin echo)
-INFILE="$ROOT/scratchpad/.jit_test_input"
+mkdir -p "$ROOT/tmp"
+INFILE="$ROOT/tmp/.jit_test_input"
 trap "rm -f $OUT0 $OUT1 $INFILE" EXIT
 
 run_test() {
@@ -143,7 +144,7 @@ run_test_file() {
     TOTAL=$((TOTAL+1))
 
     printf '%s\n' "$input" > "$INFILE"
-    local infpath="../../scratchpad/.jit_test_input"
+    local infpath="../../tmp/.jit_test_input"
 
     timeout $TIMEOUT_SEC $EMU -c0 $args $infpath >$OUT0 2>/dev/null
     RC0=$?

@@ -13,7 +13,7 @@ tickets (INFR-264…271) point back here.
 ## 1. Why this exists
 
 InferNode needs real-world video feeds (camera, screen-share, media walls). Those
-are H.264/HEVC/AV1. The MPEG-1 spike (`docs/MULTIPLEXED-VIDEO-SPIKE.md`) proved
+are H.264/HEVC/AV1. The MPEG-1 spike (`docs/history/MULTIPLEXED-VIDEO-SPIKE.md`) proved
 the *render* half of the problem by porting Inferno 2e's **pure-Limbo MPEG-1
 decoder that runs inside the Dis VM** and blitting `YCbCr` frames through a
 masked pane. That approach does not extend to modern codecs:
@@ -232,7 +232,7 @@ spike's limitations.)
 | 3b — render `/mnt/video` via mpeg path (`vidplay9p` + Matrix `video-pane`/`video-ctl`) | INFR-268 | ✅ done (player + live wall as crystallisations) |
 | 4 — Rust-native 9P server | INFR-267 | to do |
 | 5 — kernel fold-in (ABI TBD) | INFR-269 | blocked |
-| 6 — live RTSP ingest | INFR-271 | ◑ URL/RTSP core + `vid9p -c` live spawn landed; UDP MPEG-TS validated end-to-end (demo-live.sh); a real `rtsp://` source still unexercised |
+| 6 — live RTSP ingest | INFR-271 | ◑ URL/RTSP core + `vid9p -c` live spawn landed; UDP MPEG-TS validated end-to-end (tools/demo/demo-live.sh); a real `rtsp://` source still unexercised |
 | chore — FFmpeg 7 / version-flexible pin | INFR-270 | to do |
 
 `◑` = partially landed. INFR-265's hardware decode is structurally complete

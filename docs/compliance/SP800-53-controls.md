@@ -60,11 +60,11 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
 | Control | Requirement | Mechanism / evidence | Status |
 |---------|-------------|----------------------|--------|
 | **AU-2** Event Logging | Log defined events | `auditfs` + emitters: `secstored` auth, `2fa` enroll/disable, `factotum` keyadd/keydel. [`SP800-92-audit-log.md`](SP800-92-audit-log.md) §2 | Substantially met |
-| **AU-3** Content of Audit Records | Sufficient record content | Record format `seq time source event hash msg`, server-assigned seq+time. [`appl/cmd/auditfs.b:303` `appendrec`](../../appl/cmd/auditfs.b) | **Met** |
-| **AU-8** Time Stamps | Trustworthy, unforgeable timestamps | Server assigns `daytime->now()` at seal time; writer cannot backdate. [`appl/cmd/auditfs.b:309`](../../appl/cmd/auditfs.b) | **Met** (AU-8(1) time-source authority open) |
+| **AU-3** Content of Audit Records | Sufficient record content | Record format `seq time source event hash msg`, server-assigned seq+time. [`appl/cmd/auditfs.b:478` `appendrec`](../../appl/cmd/auditfs.b) | **Met** |
+| **AU-8** Time Stamps | Trustworthy, unforgeable timestamps | Server assigns `daytime->now()` at seal time; writer cannot backdate. [`appl/cmd/auditfs.b:484`](../../appl/cmd/auditfs.b) | **Met** (AU-8(1) time-source authority open) |
 | **AU-9** Protection of Audit Information | Protect logs from tampering | SHA-256 hash chain (tamper-evident) + namespace access control + external anchor. [`SP800-92-audit-log.md`](SP800-92-audit-log.md); `tests/auditchain_test.b` (tamper/reorder/deletion) | **Met** |
 | **AU-9(3)** Cryptographic Protection | Cryptographic integrity | Hash chain + signed checkpoints. [`SP800-92-audit-log.md`](SP800-92-audit-log.md) | **Met** |
-| **AU-10** Non-Repudiation | Verifiable origin binding | `keyring`-signed checkpoints; `auditverify -k pubkey` verifies offline with no secret. [`appl/cmd/auditverify.b`](../../appl/cmd/auditverify.b) | Substantially met (unsigned-tail; INFR-356) |
+| **AU-10** Non-Repudiation | Verifiable origin binding | Factotum-signed checkpoints (`auditfs` never holds the key); `auditverify -k pubkey` verifies offline with no secret. [`appl/cmd/auditverify.b`](../../appl/cmd/auditverify.b) | Substantially met (unsigned-tail window, bounded by automatic checkpoints; INFR-343/356 closed) |
 | **AU-12** Audit Record Generation | Generate records across components | Emitters at auth/identity/credential chokepoints; one `load Audit` per subsystem. Veltro agent provenance wired (INFR-355): full trajectory sealed, payloads content-addressed via `auditprov(2)`/`ventisrv(8)`. CDS emitters follow the CDS guard itself | Substantially met |
 
 ---
@@ -79,8 +79,9 @@ Every "Met/Substantially" row points at code/test or an evidence artifact.
   save-back — EPIC 1), SC-8 (client-cert mTLS — INFR-344), AC-4 (CDS guard — EPIC 5).
 - **AU core now built:** the tamper-evident audit-log service lands AU-3/8/9/9(3)/10 as
   **Met** and AU-2/12 as substantially met (carries SOC 2 + PCI-10); AU-4/5/6/7 operational
-  tooling and the unsigned-tail / factotum-held-key hardening remain tracked
-  ([`SP800-92-audit-log.md`](SP800-92-audit-log.md); INFR-343/355/356).
+  tooling remains open. The unsigned-tail bound, factotum-held signing key and agent
+  provenance store are delivered (INFR-343/356/355 closed;
+  [`SP800-92-audit-log.md`](SP800-92-audit-log.md) §3).
 - **CMMC L2 framing:** an assessor can stand up the SSP on the "Met" rows immediately and
   schedule the partials/planned against the named tickets.
 

@@ -21,19 +21,20 @@ The Inferno kernel provides **per-process namespaces** that isolate each process
 | 1 | TLA+ | Abstract namespace isolation (non-trivial invariants) | **Verified** (small: exhaustive; medium: 3.17B states, 0 violations) |
 | 1 | SPIN | Namespace isolation with non-atomic operations | **Verified** (5/5 models pass) |
 | 2 | SPIN | Multi-lock locking protocol (per-pgrp, per-mhead) | **Verified** |
-| 3 | CBMC | Real C code verification (pgrpcpy, closepgrp) | **Verified** (quick: 3/3 pass; full pgrpcpy: pending) |
-| 4 | SPIN | Race conditions (pctl/kchdir/namec) | **Verified** (3 real races found) |
+| 3 | CBMC | Real C code verification (pgrpcpy, closepgrp) | **Verified** (quick: 3 kernel + 16 PQC crypto checks; full pgrpcpy: pending) |
+| 4 | SPIN | Race conditions (pctl/kchdir/namec) | **Verified** (3 real races found; `kchdir`/`namec` fixed in 89db5178, see Known Limitations) |
 | 5 | SPIN | exportfs root boundary | **Verified** |
 | CI | GH Actions | Automated verification on push | **Active** |
 
-See [results/](results/) for detailed verification reports.
+See [results/](results) for detailed verification reports.
 
 ## Files
 
 ```
 formal-verification/
 ├── README.md                                  # This file
-├── PLAN-namespace-security-verification.md    # Gap analysis and work plan
+├── METHODOLOGY.md                             # Methodology and threats to validity
+├── REMAINING-RUNS.md                          # Verification runs not yet done
 ├── run-verification.sh                        # TLC model checker script
 ├── tla+/
 │   ├── Namespace.tla                         # Core spec (history vars, namec, kchdir)
@@ -51,17 +52,29 @@ formal-verification/
 │   └── verify-all.sh                         # Run all SPIN models
 ├── cbmc/
 │   ├── stubs.h                               # CBMC stubs for kernel types
+│   ├── os.h, libsec.h, crypto_stubs.h        # Stub headers for the crypto harnesses
 │   ├── harness_pgrpcpy.c                     # pgrpcpy isolation (real code)
 │   ├── harness_pgrpcpy_error.c               # pgrpcpy error path safety
 │   ├── harness_mnthash_bounds.c              # Array bounds harness
 │   ├── harness_overflow_simple.c             # Integer overflow harness
+│   ├── harness_integer_overflow.c            # Integer overflow (not run by verify-all.sh)
 │   ├── harness_refcount.c                    # Reference counting harness
+│   ├── harness_mlkem_ct.c                    # ML-KEM constant-time helpers, FO transform
+│   ├── harness_mldsa_ct.c                    # ML-DSA reduction and polynomial arithmetic
+│   ├── harness_mlkem_ntt.c                   # ML-KEM encode/decode, polynomial identities
 │   └── verify-all.sh                         # CBMC verification script
+├── docs/
+│   └── PHASE2-LOCKING.md                     # Phase 2 locking model design
 └── results/
     ├── VERIFICATION-RESULTS.md               # Phase 1 results
     ├── PHASE2-LOCKING-RESULTS.md             # Phase 2 results
-    └── PHASE3-CBMC-RESULTS.md                # Phase 3 results
+    ├── PHASE3-CBMC-RESULTS.md                # Phase 3 results
+    └── PHASE4-VERIFICATION-RUN.md            # Phase 4 run (races)
 ```
+
+The original work plan and the race-condition list are in
+[`docs/history/formal-verification/`](../docs/history/formal-verification/)
+(`PLAN-namespace-security-verification.md`, `TODO-RACE-CONDITIONS.md`).
 
 ## Quick Start
 
@@ -142,17 +155,17 @@ This says: if a channel was mounted in the parent AFTER the copy, it does NOT ap
 
 | Operation | C Function | Source File | Verified By |
 |-----------|------------|-------------|-------------|
-| `NewPgrp` | `newpgrp()` | `emu/port/pgrp.c:8` | TLA+ |
-| `PgrpCopy` / `ForkWithForkNS` | `pgrpcpy()` | `emu/port/pgrp.c:74` | TLA+, SPIN, CBMC |
+| `NewPgrp` | `newpgrp()` | `emu/port/pgrp.c:9` | TLA+ |
+| `PgrpCopy` / `ForkWithForkNS` | `pgrpcpy()` | `emu/port/pgrp.c:75` | TLA+, SPIN, CBMC |
 | `ClosePgrp` | `closepgrp()` | `emu/port/pgrp.c:23` | TLA+, SPIN |
-| `Mount` | `cmount()` | `emu/port/chan.c:388` | TLA+, SPIN |
-| `Unmount` | `cunmount()` | `emu/port/chan.c:502` | TLA+, SPIN |
-| `NameResolve` | `namec()` | `emu/port/chan.c:997` | TLA+, SPIN (race) |
-| `ChangeDir` | `kchdir()` | `emu/port/sysfile.c:142` | TLA+, SPIN (race) |
-| `ForkWithNewNS` | `Sys_pctl(NEWNS)` | `emu/port/inferno.c:855` | TLA+, SPIN (race) |
-| `ForkWithForkNS` | `Sys_pctl(FORKNS)` | `emu/port/inferno.c:869` | TLA+, SPIN (race) |
-| `findmount` | `findmount()` | `emu/port/chan.c:592` | SPIN |
-| `walk` | `walk()` | `emu/port/chan.c:685` | SPIN (export) |
+| `Mount` | `cmount()` | `emu/port/chan.c:506` | TLA+, SPIN |
+| `Unmount` | `cunmount()` | `emu/port/chan.c:622` | TLA+, SPIN |
+| `NameResolve` | `namec()` | `emu/port/chan.c:1221` | TLA+, SPIN (race) |
+| `ChangeDir` | `kchdir()` | `emu/port/sysfile.c:143` | TLA+, SPIN (race) |
+| `ForkWithNewNS` | `Sys_pctl(NEWNS)` | `emu/port/inferno.c:870` | TLA+, SPIN (race) |
+| `ForkWithForkNS` | `Sys_pctl(FORKNS)` | `emu/port/inferno.c:891` | TLA+, SPIN (race) |
+| `findmount` | `findmount()` | `emu/port/chan.c:731` | SPIN |
+| `walk` | `walk()` | `emu/port/chan.c:856` | SPIN (export) |
 
 ## Trusted Computing Base (TCB)
 
@@ -168,14 +181,14 @@ The verification trusts:
 
 1. **Bounded verification**: TLA+/TLC and CBMC explore finite state spaces. For unbounded proofs, interactive theorem proving (Isabelle/HOL) would be needed.
 2. **Abstraction gap**: SPIN models abstract lock semantics; the real RWlock implementation is not verified at the assembly level.
-3. **Race condition findings**: The `namespace_races.pml` model may report races that are benign under Inferno's cooperative threading model (one Dis thread at a time), but are real at the C/emu level with multiple host threads.
+3. **Race condition findings**: The `namespace_races.pml` model may report races that are benign under Inferno's cooperative threading model (one Dis thread at a time), but are real at the C/emu level with multiple host threads. Of the three found, `kchdir` and `namec` were fixed in 89db5178 (both now take the `pg->ns` lock). That commit's VM-lock re-acquire around the `Sys_pctl` NEWNS/FORKNS swap was removed in fa93471d because it deadlocked; see `docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`.
 4. **`nodevs` exception consistency**: Verified via manual audit — both `namec()` and `devindir.c` use identical exception string `"|esDa"`.
 
 ## CI/CD Integration
 
 Formal verification runs automatically on push/PR via `.github/workflows/formal-verification.yml`:
 - SPIN: Quick mode (safety checks) on every push
-- CBMC: All harnesses on every push
+- CBMC: Quick mode (kernel and PQC crypto harnesses) on every push
 
 ## References
 

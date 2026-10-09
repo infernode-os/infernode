@@ -413,7 +413,7 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 /dis/veltro/tools9p read list; /dis/veltro/veltro 'list the files in /appl/cmd'
 
 # Full tool set (trusted use)
-/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear ask diff json webfetch git memory todo websearch grep; /dis/veltro/veltro -v 'task'
+/dis/veltro/tools9p read list find search write edit exec spawn xenith say hear diff json webfetch git memory todo websearch grep; /dis/veltro/veltro -v 'task'
 
 # Expose a host filesystem path to the agent (-p flag, comma-separated)
 /dis/veltro/tools9p read list find grep; /dis/veltro/veltro -p /n/local/Users/pdfinn/projects 'task'
@@ -429,10 +429,10 @@ Veltro requires tools9p to be started first. The caller chooses which tools to g
 From within an agent session:
 
 ```
-spawn tools=read,list -- list the contents of /n and /tmp
-spawn tools=read,list,find agenttype=explore -- find all .b files under /appl
-spawn tools=read agenttype=plan model=sonnet -- plan a refactor of veltro.b
-spawn tools=exec shellcmds=cat,ls -- inspect only with the named commands
+Spawn -- tools=read,list :: list the contents of /n and /tmp
+Spawn -- tools=read,list,find agenttype=explore :: find all .b files under /appl
+Spawn -- tools=read agenttype=plan model=sonnet :: plan a refactor of veltro.b
+Spawn -- tools=exec shellcmds=cat,ls :: inspect only with the named commands
 ```
 
 Options:

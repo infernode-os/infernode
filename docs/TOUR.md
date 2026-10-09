@@ -28,20 +28,17 @@ From the infernode directory, start the emulator headless:
 ```
 
 `-c1` enables the JIT; `-r$PWD` uses the working tree as the Inferno® root. See
-[QUICKSTART.md](QUICKSTART.md#running-for-development) for the full launch matrix.
+[QUICKSTART.md](../QUICKSTART.md#running-for-development) for the full launch matrix.
 
 Once inside Inferno, at the `;` prompt:
 
 ```sh
-; veltro 'run the tour'
+; /dis/veltro/veltro.dis 'run the tour'
 ```
 
-Or start the REPL and ask for the tour:
-
-```sh
-; repl
-> run the tour
-```
+`veltro` installs under `/dis/veltro/`, which is not on the shell's path, so
+give its full path. It needs `/tool` (tools9p, which `lib/lucifer/boot.sh`
+starts) and `/mnt/llm` mounted, and warns if either is missing.
 
 ## What the Tour Demonstrates
 

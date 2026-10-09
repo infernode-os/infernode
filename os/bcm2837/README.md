@@ -13,7 +13,7 @@ which is what everything under `emu/` does.
 Status, 2026-09-05: **it is a machine.** A Pi 3B+ boots this kernel from
 its SD card to a Tk login screen on HDMI, with a USB keyboard and
 mouse, wired Ethernet configured by DHCP, a writable `/usr` on the
-card, secstore-backed keys, and the Lucifer desktop — and a shell on
+card, secstore-backed keys, and the Lucia desktop — and a shell on
 the serial console the whole time. All four cores schedule. The Dis JIT
 runs on the A53 at 27× the interpreter with bit-identical results.
 Everything below has been exercised on the board, not only in QEMU,
@@ -63,10 +63,10 @@ the end of this file:
   run them
 - the harness types the boot script's namespace lines into a shell
   and tests dossrv on the host, but does not boot a populated card
-  through rootpath, logon and secstore under QEMU's `raspi3b`, and no
-  CI job runs the bare-metal harness at all. (The `virt` half of the
+  through rootpath, logon and secstore under QEMU's `raspi3b`. CI
+  (`.github/workflows/baremetal.yml`) runs the harness. (The `virt` half of the
   harness does boot one, built by `tools/mkcard.py`, through rootpath to
-  the Lucifer desktop -- with `skiplogon`, so logon and secstore are
+  the Lucia desktop -- with `skiplogon`, so logon and secstore are
   still unexercised anywhere but the board. See `os/virt/README.md`.
   The same card has since been booted BY HAND under `raspi3b` with this
   kernel, to the same desktop at 640x480 -- the command is in
@@ -74,16 +74,19 @@ the end of this file:
   ability.)
 - the fixes of 2026-09-05 (below) have run under QEMU only; none has
   been on the board
-- WiFi: the radio identifies itself and runs its firmware on the board
-  (2026-09-06), and frames, scan, join and the supplicant are written,
-  but nothing has associated with an access point. No build machine has
+- WiFi: on the board it joins, keys and re-joins after a drop (see
+  "Stock taken 2026-09-13" under "Next"); a boot flake on first
+  association (~50%) is unexplained. No build machine has
   a radio and QEMU models none, so everything above the firmware upload
   is untested outside a board. The scan does return 5 GHz networks
   (the board saw channels 126 and 134 in a real room) even though the
   escan request names only the fourteen 2.4 GHz chanspecs, so the
   firmware is sweeping more than it is asked to; joining one is a
   different matter, because the join verb bounds a channel at 16
-- touch, USB storage, audio; the Pi 4
+- USB storage on this board: `diskusb` runs only on xHCI machines so
+  far, and a Pi 3 enumerates a USB disk and leaves it alone
+  (docs/BAREMETAL.md, section 8). Touch (`#T`) and audio (`#A`) are in
+  `devtab.c`; the Pi 4 is `os/bcm2711` (its own README)
 
 Regression-tested by `tests/host/baremetal_test.sh`, which builds the
 port, boots it under QEMU's `raspi3b`, and asserts on the result —
@@ -2527,7 +2530,8 @@ rather than believed.
 The port lives on `feat/baremetal-pi`. `master` has no `os/` directory,
 and no workflow in `.github/workflows` runs the harness. Until tier 2
 is done, "it works" means "it worked on one board and one developer's
-QEMU".
+QEMU". *(Since then the port has been merged to `master` (#587), and
+`.github/workflows/baremetal.yml` runs the harness.)*
 
 *Later the same day:* tier 1 was worked through, one branch per item,
 each reviewed adversarially and re-run through the harness before it
@@ -3070,7 +3074,12 @@ named there — a second receive buffer so USB and parsing overlap, and
 the VM on another core — but the second waits on item 2, and the
 number should be re-taken once it lands.
 
-**14. Hardware not started, smallest first.** FT5406 touch via mailbox
+**14. Hardware not started, smallest first.** *(Status: all of these
+have since been started. Touch (`#T`, `os/bcm/devtouch.c`) and audio
+(`#A`, `os/bcm/audiopwm.c`) are in `devtab.c`; WiFi is
+`os/bcm/ether4330.c` plus `ip/wpa`; Bluetooth is `bt9p`
+(`appl/cmd/bt9p.b`, `appl/lib/bthci.b`, bt9p(4)); USB storage is
+`os/init/diskusb.b`. The original list follows.)* FT5406 touch via mailbox
 tag `0x0004000F` (firmware polls the controller; hardware-only, QEMU
 declares the tag and ignores it). A USB storage class driver in Limbo
 over `#u`, the same shape as `etherusb.b`. WiFi: CYW43455 over SDIO on
@@ -3081,7 +3090,8 @@ the console over (below, "The console is on the mini-UART") and the
 PL011 is `/dev/eia0`. The design is `docs/BLUETOOTH.md`, the proposal
 issue #615, the branch `feat/baremetal-bt`.
 
-**15. The next board.** BCM2711 (Pi 4) needs a GIC-400 interrupt
+**15. The next board.** *(Status: the Pi 4 port is `os/bcm2711`; see
+`os/bcm2711/README.md`. The original note follows.)* BCM2711 (Pi 4) needs a GIC-400 interrupt
 controller, xHCI over PCIe (the VL805) and the GENET MAC. The `#u`
 boundary means `etherusb.b`, `kbdusb.b` and `mouseusb.b` carry over
 unchanged above a new host controller driver; XHCI is an open

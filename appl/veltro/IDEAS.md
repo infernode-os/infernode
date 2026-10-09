@@ -150,7 +150,10 @@ Define standard capability profiles:
 
 ### Persistent Tool Server
 
-A system-wide tools9p that runs as a service:
+**Done** for Lucia: `lib/lucifer/boot.sh` starts tools9p at `/tool` with a
+delegation budget (`-b`); child tasks are narrowed through `/tool/provision`.
+
+The original idea, a system-wide tools9p that runs as a service:
 - Started at boot
 - Provides baseline tools to all agents
 - Additional tools granted per-session via namespace overlays

@@ -7,6 +7,11 @@ ones that don't.
 
 ## Current status (2026-05-01)
 
+Since 2026-05-05 (`de3182ca`), `appl/lib/llmclient.b` recovers tool calls
+whose `[TOOL_CALLS]` / `<SPECIAL_66>` marker leaks into content
+(`trytoolcallsarray()` in the fallback text parser). Bare JSON with no
+marker at all is still returned as text.
+
 | Model | Status | Notes |
 |---|---|---|
 | `mistral-small3.2:24b` | Works (with caveat) | Default local model. Mostly clean Ollama tool-call translation. Occasionally drops `[TOOL_CALLS]` markers (~5–10% of follow-up turns), leaking bare JSON or `read[ARGS]{...}` into chat content. Same root cause as Devstral; lower rate. |
@@ -27,9 +32,11 @@ Failure rate observed (rough):
   the first turn; more common after a tool result has been fed back).
 - `devstral:latest`: significantly higher, especially under big prompts.
 
-The right fix is harness-level — see "What would need to change to
-support Devstral", item 3 (bare-JSON detector in `llmclient.b`). It
-benefits every Mistral-family model.
+The fix is harness-level. `llmclient.b` now parses a leaked
+`[TOOL_CALLS]` / `<SPECIAL_66>` array as tool calls, for every
+Mistral-family model. A tool call emitted as bare JSON with no marker is
+not yet detected — see "What would need to change to support Devstral",
+item 3.
 
 ## Devstral
 
@@ -112,7 +119,9 @@ Roughly in order of cost:
    `<tool_call>...</tool_call>` style models) that recognizes
    `{"name": "...", "arguments": ...}` as a tool call when it
    appears as the entire content. Loud workaround; logs every
-   activation so we know how often it fires.
+   activation so we know how often it fires. (The marker-prefixed
+   form is already handled by `trytoolcallsarray()`; this item is
+   the marker-less case.)
 
 4. **Try a different quantization or fine-tune.**
    Some Devstral variants may be more reliable than the default

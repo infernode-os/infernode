@@ -527,8 +527,8 @@ below describes how to set up the keyfile a fresh install needs.
 
 ### Authentication (default — keyring)
 
-`serve-llm.sh` listens with Inferno Ed25519 keyring authentication by
-default. Clients must dial with `mount -k <keyfile>`. On a fresh
+`serve-llm.sh` listens with Inferno keyring authentication by
+default (an Ed25519 signer key, or ML-DSA-87 in CNSA strict mode; see below). Clients must dial with `mount -k <keyfile>`. On a fresh
 install the daemon refuses to start until you generate the signer
 keyfile:
 
@@ -538,7 +538,7 @@ keyfile:
 # clients dial with: mount -k <keyfile> tcp!<host>!5640 /mnt/llm
 ```
 
-`--gen-key` invokes `auth/createsignerkey -a ed25519` inside emu and
+`--gen-key` invokes `auth/createsignerkey -a ed25519` (`-c`, ML-DSA-87, in CNSA mode) inside emu and
 stages the file under `~/.infernode/lib/keyring/`. `serve-profile`
 binds that directory over `/lib/keyring` inside the namespace, so the
 in-emu path is `/lib/keyring/serve-llm`. The keyfile is mode 600 —
@@ -559,6 +559,22 @@ hand-edit `~/.infernode/lib/ndb/llm` to add `keyfile=<path>`).
 The pattern is exercised end-to-end by `tests/test-distributed.sh`,
 which sets up two emulator instances communicating over authenticated,
 encrypted 9P.
+
+### CNSA 2.0 strict mode (`--cnsa`, `--classical`)
+
+CNSA 2.0 strict mode upgrades both crypto layers together:
+
+- session key agreement: ML-KEM-1024 (FIPS 203) instead of ML-KEM-768
+- signer keyfile: ML-DSA-87 (FIPS 204) instead of Ed25519
+
+`serve-llm.sh` reads the mode from the host `CNSAMODE` environment
+variable (on unless unset, `0`, `n` or `N` — the rule `libinterp/keyring.c`
+applies), and `--cnsa` / `--classical` override it. Both ends of a mount
+must agree: a strict listener will not complete a handshake with a
+classical client, and cannot use an Ed25519 keyfile. The keyfile's
+algorithm is chosen by the mode in force when it is generated, so switching
+modes needs a new keyfile from `--gen-key` (it refuses to overwrite an
+existing one; delete the old file first).
 
 ### `--anon-lan`: opting out
 

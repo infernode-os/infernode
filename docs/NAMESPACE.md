@@ -443,7 +443,6 @@ All namespace operations use the 9P protocol:
 ### Profile Location
 
 - Profile: `/lib/sh/profile`
-- Minimal profile: `/lib/sh/profile.minimal`
 - Profile loaded by: `sh -l` (login shell)
 
 ---

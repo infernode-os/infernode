@@ -265,3 +265,36 @@ webfsup(): int
 	(ok, d) := sys->stat("/mnt/web/clone");
 	return ok >= 0 && d.dtype == 'M';
 }
+
+# ---- forms ----
+
+fields(id: int): array of ref Field
+{
+	s := find(id);
+	if(s == nil)
+		return nil;
+	f := s.fields();
+	a := array[len f] of ref Field;
+	for(i := 0; i < len f; i++) {
+		(nil, r) := s.boxof(f[i].node);
+		a[i] = ref Field(f[i].node, f[i].form, f[i].kind, f[i].name,
+			f[i].value, f[i].checked, f[i].options, r);
+	}
+	return a;
+}
+
+setfield(id: int, node: int, value: string): string
+{
+	s := find(id);
+	if(s == nil)
+		return "no page";
+	return s.set(node, value);
+}
+
+submit(id: int, form: int): string
+{
+	s := find(id);
+	if(s == nil)
+		return "no page";
+	return s.submit(form, 0);
+}

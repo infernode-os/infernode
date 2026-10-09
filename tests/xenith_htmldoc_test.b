@@ -243,6 +243,71 @@ testControl(t: ref T)
 	t.assert(waitfor(c, "gone") != nil, "a dropped page's reader is told");
 }
 
+field(t: ref T, id: int, name: string): ref Htmldoc->Field
+{
+	f := htmldoc->fields(id);
+	for(i := 0; i < len f; i++)
+		if(f[i].name == name)
+			return f[i];
+	t.fatal("no field " + name);
+	return nil;
+}
+
+# The page's pixels in r
+pixels(id: int, r: Rect): array of byte
+{
+	im := disp.newimage(Rect((0, 0), (400, 300)), Draw->RGB24, 0, Draw->White);
+	htmldoc->paint(id, im, 0);
+	b := array[r.dx() * r.dy() * 3] of byte;
+	im.readpixels(r, b);
+	return b;
+}
+
+testFields(t: ref T)
+{
+	(c, err) := htmldoc->browse(5, "file://" + DIR + "fields.html", 400, 300);
+	t.assertnil(err, "browse");
+	t.assert(c != nil && waitfor(c, "done") != nil, "it loads");
+	pw := field(t, 5, "pw");
+	t.assertseq(pw.kind, "password", "a password field");
+	t.assertseq(pw.value, "abcdef", "its value");
+	t.assert(pw.box.dx() >= 200 && pw.box.dy() >= 30, sys->sprint("its box, border and padding too: %d by %d", pw.box.dx(), pw.box.dy()));
+	tx := field(t, 5, "t");
+	t.assert(tx.box.min.y >= pw.box.max.y, "the text field below it");
+	s := field(t, 5, "s");
+	t.assertseq(s.value, "b", "the select's selected option");
+
+	# what a password field shows does not depend on what is in it
+	before := pixels(5, pw.box);
+	t.assertnil(htmldoc->setfield(5, pw.node, "ghijkl"), "set the password");
+	t.assertseq(field(t, 5, "pw").value, "ghijkl", "the password's new value");
+	t.assert(same(before, pixels(5, pw.box)), "a password is drawn masked");
+
+	# and a text field's does
+	before = pixels(5, tx.box);
+	t.assertnil(htmldoc->setfield(5, tx.node, "ghijkl"), "set the text");
+	t.assert(!same(before, pixels(5, tx.box)), "a text field shows its text");
+
+	t.assertnil(htmldoc->setfield(5, s.node, "c"), "choose an option");
+	t.assertseq(field(t, 5, "s").value, "c", "the select's new value");
+	htmldoc->drop(5);
+}
+
+testSubmit(t: ref T)
+{
+	(c, err) := htmldoc->browse(6, "file://" + DIR + "search.html", 400, 300);
+	t.assertnil(err, "browse");
+	t.assert(c != nil && waitfor(c, "done") != nil, "it loads");
+	q := field(t, 6, "q");
+	t.assertnil(htmldoc->setfield(6, q.node, "plan 9"), "type");
+	t.assertnil(htmldoc->submit(6, q.form), "submit");
+	t.assert(waitfor(c, "done") != nil, "the result loads");
+	u := htmldoc->url(6);
+	t.assert(contains(u, "result.html?q=plan+9") || contains(u, "result.html?q=plan%209"), "the form's URL with the field: " + u);
+	t.assertseq(htmldoc->title(6), "Result", "the result page");
+	htmldoc->drop(6);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -277,6 +342,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Follow", testFollow);
 	run("History", testHistory);
 	run("Control", testControl);
+	run("Fields", testFields);
+	run("Submit", testSubmit);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

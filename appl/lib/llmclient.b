@@ -600,6 +600,13 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 	status := "";
 	idle_ms := 0;
 	done := 0;
+	# Whether the body is a plain chat.completion object rather than SSE:
+	# -1 not yet known (nothing but whitespace so far), 0 SSE, 1 JSON.
+	# Some OpenAI-shape backends (the local Devstral chat_server.py, vLLM
+	# with streaming off) ignore "stream": true and send one JSON body;
+	# its `data: ` lines would never come, and the reply would be lost.
+	# See tests/llmclient_sse_fallback_test.b.
+	plainjson := -1;
 	while(!done) {
 		alt {
 		rr := <-rch =>
@@ -649,7 +656,9 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 				bodybuf[0:] = old;
 				bodybuf[len old:] = rdata[0:n];
 			}
-			if(in_body) {
+			if(in_body && plainjson < 0)
+				plainjson = _sniffjson(bodybuf);
+			if(in_body && plainjson == 0) {
 				(remaining, ssedone) := _ssedrain_lines(bodybuf, st, req);
 				bodybuf = remaining;
 				if(ssedone)
@@ -669,7 +678,26 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 			}
 		}
 	}
+	if(plainjson == 1)
+		return parseopenairesponse(string bodybuf, req);
 	return _ssebuild_response(st, req);
+}
+
+# Whether a response body is a plain JSON object (1), SSE (0), or not yet
+# known because it holds only whitespace so far (-1).
+_sniffjson(b: array of byte): int
+{
+	for(i := 0; i < len b; i++) {
+		case int b[i] {
+		' ' or '\t' or '\r' or '\n' =>
+			;
+		'{' =>
+			return 1;
+		* =>
+			return 0;
+		}
+	}
+	return -1;
 }
 
 askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string)

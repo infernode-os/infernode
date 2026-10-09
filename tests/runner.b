@@ -7,7 +7,17 @@ implement Runner;
 #   - Limbo tests (*_test.dis in /tests)
 #   - Inferno sh tests (*.sh in /tests/inferno)
 #
-# Usage: runner [-v]
+# Usage: runner [-v] [-t seconds] [name ...]
+#
+# With names, only those tests run (a Limbo test's name is its file's
+# without _test.dis, a script's without _test.sh or .sh).
+#
+# Each test runs in a process of its own, with its own copy of the
+# namespace and environment (pctl FORKNS|FORKENV), so a test that binds,
+# mounts or unmounts leaves the next one the namespace it began with;
+# and in a process group of its own, so that one that runs longer than
+# -t seconds (default 900) is killed, with whatever it started, and
+# counted a failure, rather than stopping the suite.
 #
 # Exit: raises "fail:tests failed" on any failure
 #
@@ -37,6 +47,8 @@ TestModule: module
 };
 
 verbosemode := 0;
+timeout := 900;	# seconds a test may take
+only: list of string;	# if not nil, the tests to run
 ctxt: ref Draw->Context;
 
 # Counts
@@ -69,16 +81,20 @@ init(drawctxt: ref Draw->Context, args: list of string)
 	}
 
 	arg->init(args);
-	arg->setusage("runner [-v]");
+	arg->setusage("runner [-v] [-t seconds] [name ...]");
 
 	while((opt := arg->opt()) != 0) {
 		case opt {
 		'v' =>
 			verbosemode = 1;
+		't' =>
+			timeout = int arg->earg();
 		* =>
 			arg->usage();
 		}
 	}
+
+	only = arg->argv();
 
 	sys->fprint(sys->fildes(2), "=== LIMBO TESTS ===\n");
 	runlimbotests("/tests");
@@ -121,7 +137,7 @@ runlimbotests(dir: string)
 
 	for(i := 0; i < n; i++) {
 		d := dirs[i];
-		if(issuffix(d.name, "_test.dis")) {
+		if(issuffix(d.name, "_test.dis") && wanted(d.name[0:len d.name - 9])) {
 			fullpath := dir + "/" + d.name;
 			runlimbotest(fullpath);
 		}
@@ -163,27 +179,24 @@ runlimbotest(dispath: string)
 	# a clean SKIP, not a FAIL. A bare "fail:..." raise lands in the "fail:*"
 	# arm below and is counted as a failure — which is correct for genuine
 	# setup errors but wrong for "environment absent on this host" (INFR-312).
+	err := isolated(testmod, nil, args);
 	status := "PASS";
-	{
-		testmod->init(ctxt, args);
-	} exception e {
-	"fail:skip" or "skip:*" =>
+	if(err == nil) {
+		limbopassed++;
+	} else if(err == "fail:skip" || hasprefix(err, "skip:")) {
 		status = "SKIP";
 		limboskipped++;
-	"fail:*" =>
+	} else {
 		status = "FAIL";
 		limbofailed++;
-	"*" =>
-		status = "FAIL";
-		limbofailed++;
-		sys->fprint(sys->fildes(2), "    exception: %s\n", e);
+		if(!hasprefix(err, "fail:"))
+			sys->fprint(sys->fildes(2), "    exception: %s\n", err);
 	}
 
 	testmod = nil;
 
 	elapsed := sys->millisec() - start;
 	if(status == "PASS") {
-		limbopassed++;
 		sys->fprint(sys->fildes(2), "--- PASS: %s (%.2fs)\n", name, real elapsed / 1000.0);
 	} else if(status == "SKIP") {
 		sys->fprint(sys->fildes(2), "--- SKIP: %s (%.2fs)\n", name, real elapsed / 1000.0);
@@ -209,7 +222,8 @@ runshtests(dir: string)
 
 	for(i := 0; i < n; i++) {
 		d := dirs[i];
-		if(issuffix(d.name, ".sh") || issuffix(d.name, "_test.sh")) {
+		if(issuffix(d.name, ".sh") && (wanted(d.name[0:len d.name - 3]) ||
+		   issuffix(d.name, "_test.sh") && wanted(d.name[0:len d.name - 8]))) {
 			fullpath := dir + "/" + d.name;
 			runshtest(fullpath);
 		}
@@ -230,7 +244,7 @@ runshtest(scriptpath: string)
 	start := sys->millisec();
 
 	# Run the script via sh->system()
-	err := sh->system(ctxt, scriptpath);
+	err := isolated(nil, scriptpath, nil);
 
 	elapsed := sys->millisec() - start;
 
@@ -272,4 +286,72 @@ hasprefix(s, prefix: string): int
 	if(len s < len prefix)
 		return 0;
 	return s[:len prefix] == prefix;
+}
+
+# Run a test, Limbo (mod) or sh (script), in a process of its own: its
+# own namespace, environment and process group.  The result is nil if it
+# passed, else what it raised or the script's status; or, if it ran out
+# of time, that, its process group killed.
+isolated(mod: TestModule, script: string, args: list of string): string
+{
+	pidc := chan of int;
+	done := chan[1] of string;
+	spawn runtest(mod, script, args, pidc, done);
+	pid := <-pidc;
+	tick := chan[1] of int;
+	spawn timer(tick, timeout);
+	tpid := <-tick;
+	alt {
+	err := <-done =>
+		kill(tpid, "kill");
+		return err;
+	<-tick =>
+		kill(pid, "killgrp");
+		return sys->sprint("fail:timed out after %ds", timeout);
+	}
+}
+
+runtest(mod: TestModule, script: string, args: list of string, pidc: chan of int, done: chan of string)
+{
+	pidc <-= sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->FORKENV, nil);
+	err: string;
+	{
+		if(mod != nil)
+			mod->init(ctxt, args);
+		else
+			err = sh->system(ctxt, script);
+	} exception e {
+	"*" =>
+		err = e;
+		if(err == nil)
+			err = "fail:exception";
+	}
+	if(err == "")
+		err = nil;
+	done <-= err;
+}
+
+timer(tick: chan of int, secs: int)
+{
+	tick <-= sys->pctl(0, nil);
+	sys->sleep(secs * 1000);
+	tick <-= 1;
+}
+
+kill(pid: int, how: string)
+{
+	fd := sys->open(sys->sprint("#p/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "%s", how);
+}
+
+# Whether the test named n is to run
+wanted(n: string): int
+{
+	if(only == nil)
+		return 1;
+	for(l := only; l != nil; l = tl l)
+		if(hd l == n)
+			return 1;
+	return 0;
 }

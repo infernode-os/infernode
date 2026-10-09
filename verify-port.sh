@@ -50,15 +50,33 @@ check() {	# check name pattern output
     if printf '%s\n' "$3" | grep -q "$2"; then
         echo "✅ $1 works"
     else
-        echo "❌ FAIL: $1"
+        echo "❌ FAIL: $1; emu said:"
+        printf '%s\n' "$3" | sed 's/^/    /' | head -20
         FAILS=$((FAILS + 1))
     fi
+}
+
+# Run emu with its shell's input from ours, and print what it says.  It
+# is stopped after 10 seconds if it has not finished: by hand, as macOS
+# has no timeout(1).
+emu() {
+    local in out pid killer
+    in=$(mktemp) out=$(mktemp)
+    cat >"$in"
+    ./emu/MacOSX/o.emu -r. <"$in" >"$out" 2>&1 &
+    pid=$!
+    ( sleep 10; kill -9 "$pid" ) >/dev/null 2>&1 &
+    killer=$!
+    wait "$pid" 2>/dev/null
+    kill "$killer" 2>/dev/null
+    grep -v DEBUG "$out"
+    rm -f "$in" "$out"
 }
 
 # Test shell commands
 echo ""
 echo "Testing shell commands..."
-TEST_OUTPUT=$(timeout 5 ./emu/MacOSX/o.emu -r. <<'SHELL' 2>&1 | grep -v DEBUG
+TEST_OUTPUT=$(emu <<'SHELL'
 pwd
 date
 cat /dev/sysctl
@@ -71,7 +89,7 @@ check cat 'Fourth Edition' "$TEST_OUTPUT"
 # Test ls
 echo ""
 echo "Testing ls command..."
-LS_OUTPUT=$(timeout 5 ./emu/MacOSX/o.emu -r. <<'SHELL' 2>&1 | grep -v DEBUG
+LS_OUTPUT=$(emu <<'SHELL'
 ls /dis
 SHELL
 )

@@ -2145,7 +2145,16 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 		}
 	}
 	st := cascade(sortmd(mds, nmd), parent, ctx);
-	fixup(st, parent, d, n);
+	# the box it is in: past display: contents ancestors, whose boxes
+	# are their children's (BBC's grid items under two of them)
+	bp := parent;
+	for(p := parentel(d, n); p != 0 && bp != nil && bp.display == Dcontents; ) {
+		p = parentel(d, p);
+		bp = nil;
+		if(p != 0)
+			bp = c.st[p];
+	}
+	fixup(st, parent, bp, d, n);
 	if(pse != nil) {
 		c.before[n] = pseudostyle(pse, "before", st, ctx);
 		c.after[n] = pseudostyle(pse, "after", st, ctx);
@@ -2266,7 +2275,7 @@ pseudostyle(pse: list of (string, ref Md), name: string, parent: ref St, ctx: re
 		return nil;	# content: normal/none generates no box
 	if(st.display == Dnone && name != "marker")
 		return nil;	# not generated: its counters do not count either
-	fixup(st, parent, nil, 0);
+	fixup(st, parent, parent, nil, 0);
 	return st;
 }
 
@@ -2632,7 +2641,9 @@ iswide(v: array of ref Tok): string
 }
 
 # Values settled once everything has been applied.
-fixup(st, parent: ref St, d: ref Doc, n: int)
+# boxparent is the style of the element whose box st's box goes in:
+# parent, unless parent is display: contents.
+fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 {
 	if(st.bct == Ccurrent) st.bct = st.color;
 	if(st.bcr == Ccurrent) st.bcr = st.color;
@@ -2661,8 +2672,8 @@ fixup(st, parent: ref St, d: ref Doc, n: int)
 	}
 	if(st.float != Fnone)
 		blockify = 1;
-	if(parent != nil)
-		case parent.display {
+	if(boxparent != nil)
+		case boxparent.display {
 		Dflex or Dinlineflex or Dgrid or Dinlinegrid or Dgridlanes or Dinlinegridlanes =>
 			blockify = 1;
 		}

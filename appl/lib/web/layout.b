@@ -5385,6 +5385,22 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 				(mn, mx) = contribution(k);
 				if(k.st.minwidth.kind == Style->Lauto && isscroller(k) && autolo(t, a0, a1))
 					mn = mgs(k) + hextra(k);	# auto minimums: a scroll container's is zero (§6.6; MDN's homepage mandala held the hero's column to its 560px)
+				else if((k.st.minwidth.kind == Style->Lpx || k.st.minwidth.kind == Style->Lcalc) &&
+				   k.st.width.kind == Style->Lauto && a1 - a0 == 1 && autolo(t, a0, a1) && !issubgrid(k, cols)) {
+					# an auto minimum track takes the item's minimum
+					# contribution: its min-width, where it has one;
+					# only min-width: auto is content-based (§6.6).
+					# One track only: a spanning item's max-content
+					# does not yet raise growth limits here, so a
+					# smaller minimum would leave its tracks short.
+					# BBC's min-width: 0 story held a 1fr column 124px
+					# wide, squeezing the next one by as much
+					m := specw(k, k.st.minwidth, -1);
+					if(m < hextra(k))
+						m = hextra(k);
+					if(m + mgs(k) < mn)
+						mn = m + mgs(k);
+				}
 			} else {
 				mn = k.h + k.mt + k.mb;
 				mx = mn;
@@ -5464,6 +5480,7 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 		for(i = 0; i < n; i++)
 			if(t[i].limit > t[i].base)
 				t[i].base = t[i].limit;
+		frmaxcontent(t, items, cols, gap);
 		return;
 	}
 	free := real avail - used;
@@ -5540,6 +5557,64 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 				if(t[i].hi.kind == Tauto)
 					t[i].base += free / real na;
 	}
+}
+
+# Flexible tracks with no definite space to share (an auto-height
+# grid's fr rows): an fr is the largest of each such track's base size
+# per its flex factor and, for each item that crosses flexible tracks,
+# its max-content contribution less the other tracks it spans, per the
+# flex factors it crosses (Grid §12.7.1).  BBC's minmax(0, 1fr) row was
+# left at 0 and its stories drawn over the row below.
+frmaxcontent(t: array of ref Track, items: array of ref Gi, cols, gap: int)
+{
+	n := len t;
+	fr := 0.0;
+	anyfr := 0;
+	for(i := 0; i < n; i++)
+		if(t[i].hi.kind == Tfr) {
+			anyfr = 1;
+			f := t[i].hi.v;
+			if(f > 1.0)
+				fr = maxr(fr, t[i].base / f);
+			else
+				fr = maxr(fr, t[i].base);
+		}
+	if(!anyfr)
+		return;
+	for(i = 0; i < len items; i++) {
+		g := items[i];
+		if(g.empty)
+			continue;
+		a0 := g.c0;
+		a1 := g.c1;
+		if(!cols) {
+			a0 = g.r0;
+			a1 = g.r1;
+		}
+		flex := 0.0;
+		other := 0.0;
+		for(j := a0; j < a1 && j < n; j++)
+			if(t[j].hi.kind == Tfr)
+				flex += t[j].hi.v;
+			else
+				other += t[j].base;
+		if(flex <= 0.0)
+			continue;
+		other += real (gap * (a1 - a0 - 1));
+		k := g.box;
+		mx: int;
+		if(cols)
+			(nil, mx) = contribution(k);
+		else
+			mx = k.h + k.mt + k.mb;
+		mx += g.extra;
+		if(flex < 1.0)
+			flex = 1.0;
+		fr = maxr(fr, (real mx - other) / flex);
+	}
+	for(i = 0; i < n; i++)
+		if(t[i].hi.kind == Tfr && fr * t[i].hi.v > t[i].base)
+			t[i].base = fr * t[i].hi.v;
 }
 
 # whether an item's size in an axis is automatic (auto, or a

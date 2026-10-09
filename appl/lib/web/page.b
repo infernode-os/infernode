@@ -77,7 +77,12 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 		(data, ctype, err, final) = fetchfinal(url);
 	if(err != nil && data == nil)
 		return (nil, err);
-	url = final;	# a redirected page's links are relative to where it is
+	# a redirected page's links are relative to where it is
+	return (parse(data, ctype, final, width, height), nil);
+}
+
+parse(data: array of byte, ctype, url: string, width, height: int): ref Pg
+{
 	charset := param(ctype, "charset");
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
 		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil);
@@ -107,7 +112,7 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	loadbgimages(p);
 	layout->lay(p.root, width, height);
 	inlinesvg(p, p.root);
-	return (p, nil);
+	return p;
 }
 
 Pg.relayout(p: self ref Pg, width, height: int)

@@ -996,9 +996,8 @@ inlinesvg(p: ref Pg, b: ref Box)
 				b.img = decodeimage(array of byte svgmarkup(p.doc, p.computed, b.node, w, h, b.st), "image/svg+xml", nil);
 		}
 	} else if(b.kind == Layout->Kreplaced && b.url != nil && b.img != nil) {
-		# an SVG image: drawn at the size it is shown, not scaled
-		w := b.w - b.bl - b.br - b.pl - b.pr;
-		h := b.h - b.bt - b.bb - b.pt - b.pb;
+		# an SVG image: drawn at the size it is shown (by object-fit), not scaled
+		(w, h) := layout->objectbox(b);
 		if(w > 0 && h > 0 && (b.img.r.dx() != w || b.img.r.dy() != h))
 			if((pic := picof(p, b.url)) != nil && pic.svg != nil)
 				if((img := decodeimage(layout->svgresize(pic.svg, w, h), "image/svg+xml", nil)) != nil)

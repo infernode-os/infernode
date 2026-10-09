@@ -37,6 +37,8 @@ Layout: module
 	# height (-1 when it has none) and ratio (0 when none) (SVG 2 §8.6)
 	svgresize:	fn(data: array of byte, w, h: int): array of byte;
 	svgintrinsic:	fn(data: array of byte): (int, int, real, real, real);	# width, height, ratio, percentage width, percentage height
+	# a replaced box's image's size in its content box, by object-fit
+	objectbox:	fn(b: ref Box): (int, int);
 
 	# box kinds (the formatting a box establishes or takes part in)
 	Kblock, Kinline, Ktext, Kbr, Kreplaced, Kflex, Kgrid, Ktable, Krow, Kcell, Kmarker: con iota;

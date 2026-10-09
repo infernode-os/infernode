@@ -14404,7 +14404,7 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 		img := b.img;
 		# object-fit: the image's size in the content box, centred
 		# there and cut off at its edges (Images 3 §5.5)
-		(dw, dh) := objectsize(b.st.objectfit, img.r.dx(), img.r.dy(), cr.dx(), cr.dy());
+		(dw, dh) := objectbox(b);
 		dr := Rect((cr.min.x + int (b.st.objx.px + b.st.objx.pct * real (cr.dx() - dw) / 100.0),
 			cr.min.y + int (b.st.objy.px + b.st.objy.pct * real (cr.dy() - dh) / 100.0)), (0, 0));
 		dr.max = dr.min.add(Point(dw, dh));
@@ -14449,6 +14449,34 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 			dst.clipr = oc;
 		}
 	}
+}
+
+objectbox(b: ref Box): (int, int)
+{
+	cw := b.w - b.bl - b.br - b.pl - b.pr;
+	ch := b.h - b.bt - b.bb - b.pt - b.pb;
+	if(b.img == nil)
+		return (cw, ch);
+	# its natural size: an SVG's own, where it has one (it is drawn
+	# again at the size it comes out); what it lacks, the box's
+	(iw, ih) := (b.img.r.dx(), b.img.r.dy());
+	if(b.svg) {
+		(iw, ih) = (b.iw, b.ih);
+		if(iw <= 0 && ih <= 0 && b.iratio > 0.0) {
+			# a ratio only: as big as fits, the box being the default size
+			(iw, ih) = (cw, int (real cw / b.iratio));
+			if(ih > ch)
+				(iw, ih) = (int (real ch * b.iratio), ch);
+		} else if(iw <= 0 && ih > 0 && b.iratio > 0.0)
+			iw = int (real ih * b.iratio);
+		else if(ih <= 0 && iw > 0 && b.iratio > 0.0)
+			ih = int (real iw / b.iratio);
+		if(iw <= 0)
+			iw = cw;
+		if(ih <= 0)
+			ih = ch;
+	}
+	return objectsize(b.st.objectfit, iw, ih, cw, ch);
 }
 
 # an image of iw×ih in a cw×ch box, by object-fit: 0 fill, 1 contain,

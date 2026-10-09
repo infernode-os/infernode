@@ -183,6 +183,7 @@ rebuild(p: ref Pg)
 		carryimages(old, p.root);
 	applypics(p, p.root);
 	layout->lay(p.root, p.width, p.height);
+	fitimages(p, p.root);
 	if(old != nil)
 		carrysvgs(p, inlinesvgs(p, old, nil), p.root);	# after: an inline SVG's picture is not its size
 	inlinesvg(p, p.root);
@@ -288,14 +289,13 @@ picof(p: ref Pg, url: string): ref Pic
 picture(url: string, data: array of byte, ctype, err: string): ref Pic
 {
 	if(err != nil)
-		return ref Pic(url, nil, nil, err, nil);
+		return ref Pic(url, nil, nil, err, nil, 0, 0, nil, nil);
 	(img, raw) := decodeimage2(data, ctype, url);
 	if(img == nil)
-		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil);
-	svg: array of byte;
+		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil, 0, 0, nil, nil);
 	if(prefix(lower(ctype), "image/svg") || looksvg(data))
-		svg = data;
-	return ref Pic(url, img, svg, nil, raw);
+		return ref Pic(url, img, data, nil, raw, img.r.dx(), img.r.dy(), nil, nil);
+	return ref Pic(url, img, nil, nil, raw, img.r.dx(), img.r.dy(), data, ctype);
 }
 
 # ---- nested documents ----
@@ -995,16 +995,99 @@ applypics(p: ref Pg, root: ref Box)
 		if(pic == nil || pic.img == nil)
 			continue;
 		b.img = pic.img;
-		if(pic.raw != nil && b.st.imgorient == 1)
+		b.iw = pic.nw;
+		b.ih = pic.nh;
+		if(pic.raw != nil && b.st.imgorient == 1) {
 			b.img = pic.raw;	# image-orientation: none
-		b.iw = b.img.r.dx();
-		b.ih = b.img.r.dy();
+			b.iw = b.img.r.dx();
+			b.ih = b.img.r.dy();
+		}
 		b.text = nil;
 		if(pic.svg != nil) {
 			nd := p.doc.nodes[b.node];
 			svgdims(b, pic.svg, nd.ns == Dom->HTML && (nd.tag == Dom->Tobject || nd.tag == Dom->Tembed));
 		}
 	}
+}
+
+# Each picture's pixels at the size it is shown, not the size it was
+# stored at: GitHub's 2272x1520 hero, shown at 1012x677, keeps 2.7M of
+# pixels instead of 13.8M.  Boxes keep its natural size (iw, ih); when a
+# relayout shows it larger, it is decoded again from its bytes.  The
+# size is the one painting would scale it to, by the same scaling, so
+# the page looks the same and is not scaled again at each repaint.  An
+# image that is also a background keeps every pixel: a background's
+# natural size is taken from its image.
+fitimages(p: ref Pg, root: ref Box)
+{
+	curdoc = p.doc;
+	boxes := replacedboxes(root, nil);
+	bgs := bgurls(p);
+	for(l := p.pics; l != nil; l = tl l) {
+		pic := hd l;
+		if(pic.img == nil || pic.data == nil || pic.raw != nil || member(pic.url, bgs))
+			continue;
+		(w, h) := (0, 0);
+		for(bl := boxes; bl != nil; bl = tl bl) {
+			b := hd bl;
+			if(b.url != pic.url || b.img == nil)
+				continue;
+			(dw, dh) := layout->objectbox(b);
+			if(dw > 0 && dh > 0 && dw*dh > w*h)
+				(w, h) = (dw, dh);
+		}
+		if(w == 0)
+			continue;	# shown nowhere now: as it is
+		if(w >= pic.nw || h >= pic.nh)
+			(w, h) = (pic.nw, pic.nh);	# all of it
+		img := pic.img;
+		if(img.r.dx() == w && img.r.dy() == h)
+			continue;
+		if(img.r.dx() < w || img.r.dy() < h) {
+			# shown larger than it was kept: from its bytes again
+			if((img = decodeimage(pic.data, pic.ctype, pic.url)) == nil)
+				continue;
+		}
+		if(img.r.dx() != w || img.r.dy() != h)
+			img = layout->scaleimage(img, w, h);
+		if(img == nil)
+			continue;
+		for(bl = boxes; bl != nil; bl = tl bl)
+			if((hd bl).url == pic.url && (hd bl).img == pic.img)
+				(hd bl).img = img;
+		pic.img = img;
+		if(bgpage == p)
+			layout->setbgimage(pic.url, img);
+	}
+}
+
+# the URLs the page's styles use as background images
+bgurls(p: ref Pg): list of string
+{
+	urls: list of string;
+	c := p.computed;
+	if(c == nil)
+		return nil;
+	for(i := 0; i < len c.st; i++) {
+		if(c.st[i] != nil)
+			for(lb := layout->bgurls(c.st[i]); lb != nil; lb = tl lb)
+				urls = hd lb :: urls;
+		if(c.before != nil && c.before[i] != nil)
+			for(la := layout->bgurls(c.before[i]); la != nil; la = tl la)
+				urls = hd la :: urls;
+		if(c.after != nil && c.after[i] != nil)
+			for(lc := layout->bgurls(c.after[i]); lc != nil; lc = tl lc)
+				urls = hd lc :: urls;
+	}
+	return urls;
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
 }
 
 # An SVG image's intrinsic size is its root element's (SVG 2 §8.6):
@@ -1223,17 +1306,17 @@ replacedboxes(b: ref Box, acc: list of ref Box): list of ref Box
 carryimages(old, new: ref Box)
 {
 	curdoc = nil;	# frames' pictures carry over too; loadframes checks their size
-	imgs: list of (string, ref Image);
+	imgs: list of ref Box;
 	for(l := replacedboxes(old, nil); l != nil; l = tl l)
 		if((hd l).img != nil)
-			imgs = ((hd l).url, (hd l).img) :: imgs;
+			imgs = hd l :: imgs;
 	for(l = replacedboxes(new, nil); l != nil; l = tl l)
 		for(i := imgs; i != nil; i = tl i)
-			if((hd i).t0 == (hd l).url) {
+			if((hd i).url == (hd l).url) {
 				b := hd l;
-				b.img = (hd i).t1;
-				b.iw = b.img.r.dx();
-				b.ih = b.img.r.dy();
+				b.img = (hd i).img;
+				b.iw = (hd i).iw;	# its natural size, which its pixels need not be
+				b.ih = (hd i).ih;
 				b.text = nil;
 				break;
 			}

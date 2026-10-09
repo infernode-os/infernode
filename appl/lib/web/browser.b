@@ -380,7 +380,7 @@ picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->
 			pic = page->picture(u, data, ctype, err);
 		} exception e {
 		"*" =>
-			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil);
+			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);
 		}
 		res <-= pic;
 	* =>

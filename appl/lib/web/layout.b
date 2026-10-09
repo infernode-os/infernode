@@ -14739,6 +14739,8 @@ objectbox(b: ref Box): (int, int)
 	# its natural size: an SVG's own, where it has one (it is drawn
 	# again at the size it comes out); what it lacks, the box's
 	(iw, ih) := (b.img.r.dx(), b.img.r.dy());
+	if(!b.svg && b.iw > 0 && b.ih > 0)
+		(iw, ih) = (b.iw, b.ih);	# its pixels may be fewer: it is decoded at the size it is shown
 	if(b.svg) {
 		(iw, ih) = (b.iw, b.ih);
 		if(iw <= 0 && ih <= 0 && b.iratio > 0.0) {
@@ -14804,6 +14806,11 @@ scale(src: ref Image, w, h: int): ref Image
 		scaled = (src, w, h, d) :: scaled;
 	}
 	return d;
+}
+
+scaleimage(src: ref Image, w, h: int): ref Image
+{
+	return scale1(src, w, h);
 }
 
 scale1(src: ref Image, w, h: int): ref Image

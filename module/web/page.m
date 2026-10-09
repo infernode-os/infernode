@@ -47,6 +47,9 @@ Page: module
 		svg:	array of byte;	# an SVG image's source, to draw again at another size
 		err:	string;
 		raw:	ref Draw->Image;	# as stored, when its EXIF orientation turned img; nil if it did not (image-orientation: none)
+		nw, nh:	int;		# its natural size; img may hold fewer pixels, at the size it is shown
+		data:	array of byte;	# a raster image's encoded bytes, to decode again larger
+		ctype:	string;
 	};
 
 	open:	fn(url: string, width, height: int): (ref Pg, string);

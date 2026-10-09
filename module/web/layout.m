@@ -39,6 +39,9 @@ Layout: module
 	svgintrinsic:	fn(data: array of byte): (int, int, real, real, real);	# width, height, ratio, percentage width, percentage height
 	# a replaced box's image's size in its content box, by object-fit
 	objectbox:	fn(b: ref Box): (int, int);
+	# src drawn at w by h, as a replaced element's image is (nearest
+	# neighbour); not kept
+	scaleimage:	fn(src: ref Draw->Image, w, h: int): ref Draw->Image;
 
 	# box kinds (the formatting a box establishes or takes part in)
 	Kblock, Kinline, Ktext, Kbr, Kreplaced, Kflex, Kgrid, Ktable, Krow, Kcell, Kmarker: con iota;

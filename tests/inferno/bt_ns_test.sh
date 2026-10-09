@@ -197,7 +197,10 @@ if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
 }
 
 # An LE scan: one line per device heard, address type, RSSI, the
-# name from its advertising data; EOF when the scan time is up.
+# name from its advertising data; EOF when the scan time is up.  The
+# mock advertises on its tick, so a second was not always time enough
+# to hear all eight on a slow runner (interpreted, on CI's macOS).
+echo scan 3 > $BT/ctl
 le=`{cat $BT/lescan}
 n=`{cat $BT/lescan | wc -l}
 if {! ~ $"n 8} {

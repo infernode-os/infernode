@@ -318,9 +318,11 @@ testParallelTiming(t: ref T)
 	parallel_ms := sys->millisec() - start;
 
 	t.log(sys->sprint("parallel: two %dms goroutines completed in %dms", SLEEP_MS, parallel_ms));
-	# Should complete in < 1.5× one sleep (generous bound for scheduling jitter)
-	t.assert(parallel_ms < SLEEP_MS * 3 / 2,
-		sys->sprint("parallel goroutines: %dms < threshold %dms", parallel_ms, SLEEP_MS * 3 / 2));
+	# One after the other they cannot take less than 2x one sleep: under
+	# that they overlapped.  (1.5x, as it was, failed on CI's slower
+	# runners, scheduling jitter alone taking it past 300ms.)
+	t.assert(parallel_ms < SLEEP_MS * 2,
+		sys->sprint("parallel goroutines: %dms < serial %dms", parallel_ms, SLEEP_MS * 2));
 }
 
 # ====================================================================

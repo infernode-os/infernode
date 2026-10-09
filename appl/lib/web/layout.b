@@ -13799,14 +13799,17 @@ nearest(x: real): int
 	return n;
 }
 
-# linear-gradient() and radial-gradient() backgrounds, as bands of colour
+UNSET: con -1e30;	# a colour stop with no position (yet)
+
+# linear-gradient() and radial-gradient() backgrounds, a pixel at a time
 paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 {
 	t := bg.img;
 	if(t.kind != Css->Kfunction)
 		return;
 	lin := t.s == "linear-gradient" || t.s == "-webkit-linear-gradient" || t.s == "repeating-linear-gradient";
-	if(!lin && t.s != "radial-gradient")
+	repeating := t.s == "repeating-linear-gradient" || t.s == "repeating-radial-gradient";
+	if(!lin && t.s != "radial-gradient" && t.s != "repeating-radial-gradient")
 		return;
 	args := commas(t.kids);
 	if(args == nil)
@@ -13880,7 +13883,7 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		# "yellow 0% 25%" is a band; border-image-repeat-round-003)
 		for(j := 1; j < len a && j <= 2; j++) {
 			cols[k] = c;
-			pos[k] = -1.0;
+			pos[k] = UNSET;
 			if(a[j].kind == Css->Kpercent)
 				pos[k] = a[j].n / 100.0;
 			else if(a[j].kind == Css->Kdimension && a[j].s == "px" && linelen > 0.0)
@@ -13893,7 +13896,7 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		}
 		if(len a == 1) {
 			cols[k] = c;
-			pos[k] = -1.0;
+			pos[k] = UNSET;
 			k++;
 		}
 	}
@@ -13901,17 +13904,21 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		return;
 	cols = cols[0:k];
 	pos = pos[0:k];
-	if(pos[0] < 0.0)
+	if(pos[0] == UNSET)
 		pos[0] = 0.0;
-	if(pos[k-1] < 0.0)
+	if(pos[k-1] == UNSET)
 		pos[k-1] = 1.0;
+	most := pos[0];
 	for(q := 1; q < k; q++)
-		if(pos[q] >= 0.0 && pos[q] < pos[q-1] && pos[q-1] >= 0.0)
-			pos[q] = pos[q-1];	# a stop before the one before it is at it (§3.4.2)
+		if(pos[q] != UNSET) {
+			if(pos[q] < most)
+				pos[q] = most;	# a stop before one before it is at that one (Images 3 §3.5.3)
+			most = pos[q];
+		}
 	for(i := 1; i < k-1; i++)
-		if(pos[i] < 0.0) {
+		if(pos[i] == UNSET) {
 			j := i;
-			while(pos[j] < 0.0)
+			while(pos[j] == UNSET)
 				j++;
 			for(m := i; m < j; m++)
 				pos[m] = pos[i-1] + (pos[j] - pos[i-1]) * real (m - i + 1) / real (j - i + 1);
@@ -13920,63 +13927,101 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	(cr, ok) := oclip.clip(r);
 	if(!ok)
 		return;
-	# The bands overlap a little so no seam shows between them; a
-	# translucent colour would be laid on twice there (darker, in
-	# stripes).  With one, the colours go opaque into a layer and their
-	# alphas, as opaque greys, into a mask, where overlapping does no
-	# harm, and the layer is laid on once through the mask.
-	out := dst;
-	mask: ref Image;
-	translucent := 0;
-	for(ci := 0; ci < k; ci++)
-		if((cols[ci] & 255) != 255)
-			translucent = 1;
-	if(translucent && lin) {
-		layer := display.newimage(cr, Draw->RGBA32, 0, Draw->Black);
-		mask = display.newimage(cr, Draw->GREY8, 0, Draw->Black);
-		if(layer != nil && mask != nil)
-			dst = layer;
-		else
-			mask = nil;
-	}
-	dst.clipr = cr;
+	# each pixel its colour, from how far along the gradient line it
+	# is, or out along the ray
 	if(lin) {
-		# bands perpendicular to the gradient line
-		w := real r.dx();
-		h := real r.dy();
-		glen := linelen;
-		cx := real r.min.x + w/2.0;
-		cy := real r.min.y + h/2.0;
-		steps := int glen;
-		if(steps < 1)
-			steps = 1;
-		if(steps > 512)
-			steps = 512;
-		for(s := 0; s < steps; s++) {
-			t0 := real s / real steps;
-			t1 := real (s+1) / real steps;
-			c := gradcolor(cols, pos, (t0 + t1)/2.0);
-			# the band from t0 to t1 along the line, as a polygon
-			p := Path.new();
-			ext := w + h;
-			px := cx + dx*glen*(t0 - 0.5);
-			py := cy + dy*glen*(t0 - 0.5);
-			qx := cx + dx*glen*(t1 - 0.5) + dx*0.6;
-			qy := cy + dy*glen*(t1 - 0.5) + dy*0.6;
-			p.moveto(px - dy*ext, py + dx*ext);
-			p.lineto(px + dy*ext, py - dx*ext);
-			p.lineto(qx + dy*ext, qy - dx*ext);
-			p.lineto(qx - dy*ext, qy + dx*ext);
-			p.close();
-			gradband(dst, mask, p, c);
-		}
-	} else	# each pixel its colour, from its distance along the ray
-		radialpixels(dst, cr, gcx, gcy, grx, gry, cols, pos);
-	if(mask != nil) {
-		out.draw(cr, dst, mask, cr.min);
-		dst = out;
+		cx := real (r.min.x + r.max.x) / 2.0;
+		cy := real (r.min.y + r.max.y) / 2.0;
+		gradpixels(dst, cr, 1, repeating, cx, cy, dx, dy, linelen, 0.0, cols, pos);
+	} else
+		gradpixels(dst, cr, 0, repeating, gcx, gcy, grx, gry, 0.0, 0.0, cols, pos);
+}
+
+# A gradient over cr, a pixel at a time, through a table of the stops'
+# colours, premultiplied.  Linear: (cx, cy) the box's centre, (ax, ay)
+# the line's direction, l its length.  Radial: (cx, cy) the centre, ax
+# and ay the radii.  t is where a pixel's centre falls: 0 at the first
+# stop's place, 1 at the line's end or on the ending shape.
+gradpixels(dst: ref Image, cr: Rect, lin, repeating: int, cx, cy, ax, ay, l, nil: real, cols: array of int, pos: array of real)
+{
+	w := cr.dx();
+	h := cr.dy();
+	if(w <= 0 || h <= 0)
+		return;
+	img := display.newimage(cr, Draw->RGBA32, 0, Draw->Transparent);
+	if(img == nil)
+		return;
+	np := len pos;
+	# the table spans the stops, and the whole line or ray
+	(tlo, thi) := (0.0, 1.0);
+	if(repeating)
+		(tlo, thi) = (pos[0], pos[np-1]);
+	else {
+		if(pos[0] < tlo)
+			tlo = pos[0];
+		if(pos[np-1] > thi)
+			thi = pos[np-1];
 	}
-	dst.clipr = oclip;
+	span := thi - tlo;
+	buf := array[w*h*4] of byte;
+	if(span <= 0.0 || !lin && (ax <= 0.0 || ay <= 0.0) || lin && l <= 0.0) {
+		# nothing to spread over: the average colour, or the last
+		c := cols[np-1];
+		if(repeating)
+			c = pmix(cols[0], cols[np-1], 0.5);
+		px := premul(c);
+		for(q := 0; q < len buf; q += 4)
+			buf[q:] = px;
+		img.writepixels(cr, buf);
+		dst.draw(cr, img, nil, cr.min);
+		return;
+	}
+	N := 1024;
+	lut := array[4*(N+1)] of byte;
+	for(i := 0; i <= N; i++)
+		lut[4*i:] = premul(gradcolor(cols, pos, tlo + span * real i / real N));
+	f := real N / span;	# table entries per unit of t
+	k := 0;
+	for(y := 0; y < h; y++) {
+		py := real (cr.min.y + y) + 0.5 - cy;
+		for(x := 0; x < w; x++) {
+			px := real (cr.min.x + x) + 0.5 - cx;
+			t: real;
+			if(lin)
+				t = (px*ax + py*ay) / l + 0.5;
+			else {
+				ux := px / ax;
+				uy := py / ay;
+				t = math->sqrt(ux*ux + uy*uy);
+			}
+			t = (t - tlo) * f;
+			if(repeating) {
+				t = math->fmod(t, real N);
+				if(t < 0.0)
+					t += real N;
+			}
+			j := 0;
+			if(t >= real N)
+				j = N;
+			else if(t > 0.0)
+				j = int t;	# (rounds)
+			j *= 4;
+			buf[k] = lut[j];
+			buf[k+1] = lut[j+1];
+			buf[k+2] = lut[j+2];
+			buf[k+3] = lut[j+3];
+			k += 4;
+		}
+	}
+	img.writepixels(cr, buf);
+	dst.draw(cr, img, nil, cr.min);
+}
+
+# a colour as a premultiplied RGBA32 pixel's bytes: alpha, blue, green, red
+premul(c: int): array of byte
+{
+	a := c & 255;
+	return array[] of {byte a, byte (((c >> 8) & 255) * a / 255), byte (((c >> 16) & 255) * a / 255), byte (((c >> 24) & 255) * a / 255)};
 }
 
 # A radial gradient's ending shape over r, from its first argument a
@@ -14199,64 +14244,6 @@ calcterm(c: ref Calc): real
 	}
 	c.ok = 0;
 	return 0.0;
-}
-
-# A radial gradient over cr: each pixel's colour from how far out it
-# is, in rays of the ellipse at (cx, cy) with radii (rx, ry), through a
-# table of the stops' colours, premultiplied
-radialpixels(dst: ref Image, cr: Rect, cx, cy, rx, ry: real, cols: array of int, pos: array of real)
-{
-	w := cr.dx();
-	h := cr.dy();
-	img := display.newimage(cr, Draw->RGBA32, 0, Draw->Transparent);
-	if(img == nil)
-		return;
-	tmax := 1.0;
-	if(pos[len pos - 1] > tmax)
-		tmax = pos[len pos - 1];
-	N := 1024;
-	lut := array[4*(N+1)] of byte;
-	for(i := 0; i <= N; i++) {
-		c := gradcolor(cols, pos, tmax * real i / real N);
-		al := c & 255;
-		lut[4*i] = byte al;
-		lut[4*i+1] = byte (((c >> 8) & 255) * al / 255);
-		lut[4*i+2] = byte (((c >> 16) & 255) * al / 255);
-		lut[4*i+3] = byte (((c >> 24) & 255) * al / 255);
-	}
-	buf := array[w*h*4] of byte;
-	if(rx <= 0.0 || ry <= 0.0) {
-		# degenerate: the last stop's colour everywhere
-		for(k := 0; k < len buf; k += 4)
-			buf[k:] = lut[4*N:4*N+4];
-	} else {
-		sx := real N / (rx * tmax);
-		sy := real N / (ry * tmax);
-		k := 0;
-		NN := real (N*N);
-		for(y := 0; y < h; y++) {
-			dy := (real (cr.min.y + y) + 0.5 - cy) * sy;
-			dy2 := dy*dy;
-			for(x := 0; x < w; x++) {
-				dx := (real (cr.min.x + x) + 0.5 - cx) * sx;
-				d2 := dx*dx + dy2;
-				j := N;
-				if(d2 < NN) {
-					j = int math->sqrt(d2);
-					if(j > N)
-						j = N;
-				}
-				j *= 4;
-				buf[k] = lut[j];
-				buf[k+1] = lut[j+1];
-				buf[k+2] = lut[j+2];
-				buf[k+3] = lut[j+3];
-				k += 4;
-			}
-		}
-	}
-	img.writepixels(cr, buf);
-	dst.draw(cr, img, nil, cr.min);
 }
 
 # one band of a gradient: c, or with a mask c opaque and its alpha into

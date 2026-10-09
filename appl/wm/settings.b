@@ -806,7 +806,7 @@ panelweb()
 		lbl("webis", "Images load with the page.");
 		btn("webi", "Load images only when clicked", "webimages");
 	} else {
-		lbl("webis", "Images load when clicked; Charon's menu loads a whole page's.");
+		lbl("webis", "Images load when clicked.");
 		btn("webi", "Load images with the page", "webimages");
 	}
 	if(webget("fonts") == "web") {
@@ -825,7 +825,7 @@ panelweb()
 	}
 	hdr("weblh", "For a small device");
 	btn("webl", "Light: images when clicked, system fonts, no effects", "weblight");
-	lbl("webnote", "Pages opened from now on follow these; Charon's menu changes them for one window.");
+	lbl("webnote", "Pages opened from now on follow these.");
 }
 
 # ── Snapshots panel ────────────────────────────────────────────

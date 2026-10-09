@@ -360,7 +360,7 @@ picsome(s: ref Session, g: int, pg: ref Pg, urls: list of string)
 		u := hd urls;
 		pic: ref Page->Pic;
 		{
-			(data, ctype, err) := page->fetch(u);
+			(data, ctype, err) := page->fetchimage(u);
 			pic = page->picture(u, data, ctype, err);
 		} exception e {
 		"*" =>
@@ -441,7 +441,7 @@ picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->
 		}
 		pic: ref Page->Pic;
 		{
-			(data, ctype, err) := page->fetch(u);
+			(data, ctype, err) := page->fetchimage(u);
 			pic = page->picture(u, data, ctype, err);
 		} exception e {
 		"*" =>

@@ -46,6 +46,7 @@ Page: module
 		img:	ref Draw->Image;
 		svg:	array of byte;	# an SVG image's source, to draw again at another size
 		err:	string;
+		raw:	ref Draw->Image;	# as stored, when its EXIF orientation turned img; nil if it did not (image-orientation: none)
 	};
 
 	open:	fn(url: string, width, height: int): (ref Pg, string);

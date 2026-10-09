@@ -180,6 +180,8 @@ usebg(p: ref Pg)
 		pic := hd l;
 		if(pic.img != nil) {
 			layout->setbgimage(pic.url, pic.img);
+			if(pic.raw != nil)
+				layout->setbgimage("\u0000raw " + pic.url, pic.raw);	# (layout's RAW)
 			if(pic.svg != nil)
 				layout->setbgsvg(pic.url, pic.svg);
 		}
@@ -265,14 +267,14 @@ picof(p: ref Pg, url: string): ref Pic
 picture(url: string, data: array of byte, ctype, err: string): ref Pic
 {
 	if(err != nil)
-		return ref Pic(url, nil, nil, err);
-	img := decodeimage(data, ctype, url);
+		return ref Pic(url, nil, nil, err, nil);
+	(img, raw) := decodeimage2(data, ctype, url);
 	if(img == nil)
-		return ref Pic(url, nil, nil, "cannot decode " + ctype);
+		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil);
 	svg: array of byte;
 	if(prefix(lower(ctype), "image/svg") || looksvg(data))
 		svg = data;
-	return ref Pic(url, img, svg, nil);
+	return ref Pic(url, img, svg, nil, raw);
 }
 
 # ---- nested documents ----
@@ -948,8 +950,10 @@ applypics(p: ref Pg, root: ref Box)
 		if(pic == nil || pic.img == nil)
 			continue;
 		b.img = pic.img;
-		b.iw = pic.img.r.dx();
-		b.ih = pic.img.r.dy();
+		if(pic.raw != nil && b.st.imgorient == 1)
+			b.img = pic.raw;	# image-orientation: none
+		b.iw = b.img.r.dx();
+		b.ih = b.img.r.dy();
 		b.text = nil;
 		if(pic.svg != nil) {
 			nd := p.doc.nodes[b.node];
@@ -1192,6 +1196,28 @@ carryimages(old, new: ref Box)
 
 decodeimage(data: array of byte, ctype, url: string): ref Image
 {
+	(img, nil) := decodeimage2(data, ctype, url);
+	return img;
+}
+
+# An image decoded, turned as its EXIF orientation says (CSS Images 3
+# §5.3, image-orientation: from-image), and as it was stored if that
+# turned it
+decodeimage2(data: array of byte, ctype, url: string): (ref Image, ref Image)
+{
+	img := decodeimage1(data, ctype, url);
+	if(img == nil)
+		return (nil, nil);
+	o := exiforient(data);
+	if(o <= 1)
+		return (img, nil);
+	if((t := orient(img, o)) == nil)
+		return (img, nil);
+	return (t, img);
+}
+
+decodeimage1(data: array of byte, ctype, url: string): ref Image
+{
 	if(imageremap == nil || len data < 4)
 		return nil;
 	path := "";
@@ -1226,6 +1252,121 @@ decodeimage(data: array of byte, ctype, url: string): ref Image
 		sys->fprint(sys->fildes(2), "charon: %s: %s: %s\n", url, path, e);
 		return nil;
 	}
+}
+
+# a JPEG's or PNG's EXIF orientation, 1 to 8; 1 (as stored) if it has none
+exiforient(d: array of byte): int
+{
+	n := len d;
+	if(n > 4 && d[0] == byte 16rFF && d[1] == byte 16rD8) {
+		i := 2;
+		while(i + 4 <= n && d[i] == byte 16rFF) {
+			m := int d[i+1];
+			if(m == 16rD8 || m == 16r01 || m >= 16rD0 && m <= 16rD7) {
+				i += 2;
+				continue;
+			}
+			if(m == 16rDA || m == 16rD9)
+				break;	# the image itself: no more markers
+			l := (int d[i+2] << 8) | int d[i+3];
+			if(m == 16rE1 && i + 10 <= n && string d[i+4:i+8] == "Exif" && d[i+8] == byte 0 && d[i+9] == byte 0) {
+				e := i + 2 + l;
+				if(e > n)
+					e = n;
+				return tifforient(d[i+10:e]);
+			}
+			i += 2 + l;
+		}
+		return 1;
+	}
+	if(n > 8 && d[0] == byte 16r89 && string d[1:4] == "PNG") {
+		i := 8;
+		while(i + 8 <= n) {
+			l := (int d[i] << 24) | (int d[i+1] << 16) | (int d[i+2] << 8) | int d[i+3];
+			ty := string d[i+4:i+8];
+			if(ty == "IDAT" || l < 0)
+				break;	# after the image data, EXIF is ignored (exif-png)
+			if(ty == "eXIf" && i + 8 + l <= n)
+				return tifforient(d[i+8:i+8+l]);
+			i += 12 + l;
+		}
+	}
+	return 1;
+}
+
+# the orientation tag (274) of a TIFF header's first directory
+tifforient(t: array of byte): int
+{
+	if(len t < 8)
+		return 1;
+	le := t[0] == byte 'I';
+	ifd := tiffu32(t, 4, le);
+	if(ifd < 0 || ifd + 2 > len t)
+		return 1;
+	cnt := tiffu16(t, ifd, le);
+	for(k := 0; k < cnt; k++) {
+		e := ifd + 2 + 12*k;
+		if(e + 12 > len t)
+			break;
+		if(tiffu16(t, e, le) == 16r112) {
+			v := tiffu16(t, e + 8, le);
+			if(v >= 1 && v <= 8)
+				return v;
+			return 1;
+		}
+	}
+	return 1;
+}
+
+tiffu16(t: array of byte, i: int, le: int): int
+{
+	if(le)
+		return int t[i] | (int t[i+1] << 8);
+	return (int t[i] << 8) | int t[i+1];
+}
+
+tiffu32(t: array of byte, i: int, le: int): int
+{
+	if(le)
+		return int t[i] | (int t[i+1] << 8) | (int t[i+2] << 16) | (int t[i+3] << 24);
+	return (int t[i] << 24) | (int t[i+1] << 16) | (int t[i+2] << 8) | int t[i+3];
+}
+
+# img turned and flipped as EXIF orientation o says, to be upright
+orient(img: ref Image, o: int): ref Image
+{
+	if(img.depth % 8 != 0)
+		return nil;
+	bpp := img.depth / 8;
+	(w, h) := (img.r.dx(), img.r.dy());
+	src := array[w*h*bpp] of byte;
+	if(img.readpixels(img.r, src) != len src)
+		return nil;
+	(dw, dh) := (w, h);
+	if(o >= 5)
+		(dw, dh) = (h, w);
+	dst := array[len src] of byte;
+	for(y := 0; y < dh; y++)
+		for(x := 0; x < dw; x++) {
+			(sx, sy) := (x, y);
+			case o {
+			2 => (sx, sy) = (w-1-x, y);
+			3 => (sx, sy) = (w-1-x, h-1-y);
+			4 => (sx, sy) = (x, h-1-y);
+			5 => (sx, sy) = (y, x);
+			6 => (sx, sy) = (y, h-1-x);
+			7 => (sx, sy) = (w-1-y, h-1-x);
+			8 => (sx, sy) = (w-1-y, x);
+			}
+			si := (sy*w + sx) * bpp;
+			di := (y*dw + x) * bpp;
+			dst[di:] = src[si:si+bpp];
+		}
+	t := display.newimage(Rect((0, 0), (dw, dh)), img.chans, 0, Draw->Nofill);
+	if(t == nil)
+		return nil;
+	t.writepixels(t.r, dst);
+	return t;
 }
 
 looksvg(data: array of byte): int

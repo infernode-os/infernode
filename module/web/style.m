@@ -287,6 +287,7 @@ Style: module
 		filter:	array of Filt;	# filter: its functions, in order; nil for none
 		ctx:	int;	# SC bits: isolation, mix-blend-mode, clip-path, will-change making a stacking context
 		objx, objy:	Len;	# object-position: px, and pct of the room left over
+		imgorient:	int;	# image-orientation: 0 from-image, 1 none (inherited)
 
 		new:	fn(): ref St;		# initial values
 	};

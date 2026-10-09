@@ -1872,7 +1872,7 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil));
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0);
 }
 
 nextsid := 1;
@@ -1893,6 +1893,7 @@ inherit(p: ref St): ref St
 	s.stretch = p.stretch;
 	s.slant = p.slant;
 	s.synth = p.synth;
+	s.imgorient = p.imgorient;
 	s.smallcaps = p.smallcaps;
 	s.lineheight = p.lineheight;
 	s.align = p.align;
@@ -1964,7 +1965,7 @@ isinherited(nm: string): int
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
 	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "fill" or "stroke" or
-	"font-kerning" or "font-feature-settings" or "font-variation-settings" =>
+	"font-kerning" or "font-feature-settings" or "font-variation-settings" or "image-orientation" =>
 		return 1;
 	}
 	return 0;
@@ -6086,6 +6087,18 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"scale-down" => st.objectfit = 4;
 		* => return 0;
 		}
+	"image-orientation" =>
+		# from-image, or none; an angle is taken as from-image, as
+		# browsers take it
+		case id {
+		"none" => st.imgorient = 1;
+		"from-image" => st.imgorient = 0;
+		* =>
+			x := nows(v);
+			if(len x == 0 || x[0].kind != Kdimension && !(x[0].kind == Kident && lower(x[0].s) == "flip"))
+				return 0;
+			st.imgorient = 0;
+		}
 	"object-position" =>
 		(ok, ox, oy) := position(nows(v), ctx);
 		if(!ok)
@@ -6838,6 +6851,7 @@ copyprop(d, s: ref St, nm: string)
 	"column-rule-style" => d.colrules = s.colrules;
 	"column-rule-color" => d.colrulec = s.colrulec;
 	"object-fit" => d.objectfit = s.objectfit;
+	"image-orientation" => d.imgorient = s.imgorient;
 	"object-position" =>
 		d.objx = s.objx;
 		d.objy = s.objy;

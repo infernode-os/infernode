@@ -12815,13 +12815,8 @@ paintborderimage(dst: ref Image, b: ref Box, r: Rect): int
 		}
 		if(siw > 0 && sih > 0)
 			img = svgraster(u, svg, siw, sih);
-	} else {
-		for(l := bgimages; l != nil; l = tl l)
-			if((hd l).t0 == u) {
-				img = (hd l).t1;
-				break;
-			}
-	}
+	} else
+		img = urlimage(u, b.st);
 	if(img == nil)
 		return 0;
 	iw := img.r.dx();
@@ -13351,6 +13346,23 @@ setbgimage(url: string, img: ref Image)
 	bgimages = (url, img) :: bgimages;
 }
 
+# the image at u, for a box of style st: as stored, under
+# image-orientation: none, if its EXIF orientation turned it
+urlimage(u: string, st: ref St): ref Image
+{
+	l: list of (string, ref Image);
+	if(st.imgorient == 1)
+		for(l = bgimages; l != nil; l = tl l)
+			if((hd l).t0 == RAW + u)
+				return (hd l).t1;
+	for(l = bgimages; l != nil; l = tl l)
+		if((hd l).t0 == u)
+			return (hd l).t1;
+	return nil;
+}
+
+RAW: con "\u0000raw ";	# the key of an image as stored, before the URL
+
 clearbgimages()
 {
 	bgimages = nil;
@@ -13657,11 +13669,7 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 		u = bgurl(bg.img);
 		if(u == nil)
 			return;
-		for(l := bgimages; l != nil; l = tl l)
-			if((hd l).t0 == u) {
-				img = (hd l).t1;
-				break;
-			}
+		img = urlimage(u, b.st);
 		if(img == nil)
 			return;
 	}

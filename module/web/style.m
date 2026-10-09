@@ -282,6 +282,7 @@ Style: module
 		synth:	int;	# font-synthesis: 1 weight, 2 style (inherited)
 		filter:	array of Filt;	# filter: its functions, in order; nil for none
 		ctx:	int;	# SC bits: isolation, mix-blend-mode, clip-path, will-change making a stacking context
+		objx, objy:	Len;	# object-position: px, and pct of the room left over
 
 		new:	fn(): ref St;		# initial values
 	};

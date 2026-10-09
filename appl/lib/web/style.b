@@ -1869,7 +1869,8 @@ St.new(): ref St
 		0, "auto", 1, 1, 0, Ccurrent,
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
-		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0);
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil));
 }
 
 nextsid := 1;
@@ -4086,7 +4087,7 @@ allprops := array[] of {
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
 	"overflow-y", "visibility", "opacity", "transform", "transform-origin", "color", "background-color", "background-image",
-	"mask-image", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change",
+	"mask-image", "object-fit", "object-position", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
@@ -5997,6 +5998,12 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"scale-down" => st.objectfit = 4;
 		* => return 0;
 		}
+	"object-position" =>
+		(ok, ox, oy) := position(nows(v), ctx);
+		if(!ok)
+			return 0;
+		st.objx = ox;
+		st.objy = oy;
 	"cursor" =>
 		x := nows(v);
 		if(len x > 0 && x[len x - 1].kind == Kident)
@@ -6650,6 +6657,9 @@ copyprop(d, s: ref St, nm: string)
 	"column-rule-style" => d.colrules = s.colrules;
 	"column-rule-color" => d.colrulec = s.colrulec;
 	"object-fit" => d.objectfit = s.objectfit;
+	"object-position" =>
+		d.objx = s.objx;
+		d.objy = s.objy;
 	"cursor" => d.cursor = s.cursor;
 	"pointer-events" => d.pointer = s.pointer;
 	"appearance" => d.appearance = s.appearance;

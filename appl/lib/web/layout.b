@@ -14405,7 +14405,8 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 		# object-fit: the image's size in the content box, centred
 		# there and cut off at its edges (Images 3 §5.5)
 		(dw, dh) := objectsize(b.st.objectfit, img.r.dx(), img.r.dy(), cr.dx(), cr.dy());
-		dr := Rect((cr.min.x + (cr.dx() - dw)/2, cr.min.y + (cr.dy() - dh)/2), (0, 0));
+		dr := Rect((cr.min.x + int (b.st.objx.px + b.st.objx.pct * real (cr.dx() - dw) / 100.0),
+			cr.min.y + int (b.st.objy.px + b.st.objy.pct * real (cr.dy() - dh) / 100.0)), (0, 0));
 		dr.max = dr.min.add(Point(dw, dh));
 		if(img.r.dx() != dw || img.r.dy() != dh)
 			img = scale(img, dw, dh);

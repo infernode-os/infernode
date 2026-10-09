@@ -50,6 +50,8 @@ CharonMod: module
 Maxheight: con 12000;
 dumpboxes := 0;
 
+yscroll := 0;	# -y
+
 init(nil: ref Draw->Context, argv: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -64,11 +66,16 @@ init(nil: ref Draw->Context, argv: list of string)
 		"-d" => dumpboxes = 1;
 		"-b" => dumpboxes = 2;
 		"-c" => dumpboxes = 3;
+		"-y" =>
+			# scrolled down so far, as the window would be
+			argv = tl argv;
+			if(argv != nil)
+				yscroll = int hd argv;
 		}
 		argv = tl argv;
 	}
 	if(len argv != 3) {
-		sys->fprint(stderr, "usage: charonshot [-o] width[xheight] outimg url\n");
+		sys->fprint(stderr, "usage: charonshot [-o] [-d|-b|-c] [-y scroll] width[xheight] outimg url\n");
 		halt();
 		raise "fail:usage";
 	}
@@ -189,6 +196,8 @@ newengine(disp: ref Display, w, h, crop: int, outimg, url: string): string
 	scroll := 0;
 	if(!crop)
 		scroll = fragscroll(p, url);
+	if(yscroll > 0)
+		scroll = yscroll;
 	p.paint(img, Point(0, scroll));
 	if(dumpboxes == 1)
 		sys->fprint(sys->fildes(2), "%s", layout->dump(p.root));

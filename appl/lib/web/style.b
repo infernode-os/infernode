@@ -1872,7 +1872,7 @@ St.new(): ref St
 		nil, 0, 0, UBnormal, 0,
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
-		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0);
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil);
 }
 
 nextsid := 1;
@@ -5248,12 +5248,37 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		else
 			return 0;
 	"clip-path" =>
-		# not clipped (yet), but a stacking context, which is where it is painted
+		# a stacking context; clipped to an inset() rectangle (other
+		# shapes are not clipped yet)
+		st.clipinset = nil;
 		if(id == "none")
 			st.ctx &= ~SCclippath;
-		else if(len trim(v) > 0)
+		else if(len trim(v) > 0) {
 			st.ctx |= SCclippath;
-		else
+			x := nows(v);
+			if(len x >= 1 && x[0].kind == Kfunction && lower(x[0].s) == "inset") {
+				a := nows(x[0].kids);
+				n := 0;
+				ins := array[4] of Len;
+				for(k := 0; k < len a && n < 4; k++) {
+					if(a[k].kind == Kident)
+						break;	# round <radius>: the corners are not rounded
+					(ok, l) := length(a[k:k+1], ctx);
+					if(!ok)
+						return 0;
+					ins[n++] = l;
+				}
+				if(n == 0)
+					return 0;
+				# as margin's one to four values
+				case n {
+				1 => ins[1] = ins[2] = ins[3] = ins[0];
+				2 => (ins[2], ins[3]) = (ins[0], ins[1]);
+				3 => ins[3] = ins[1];
+				}
+				st.clipinset = ins;
+			}
+		} else
 			return 0;
 	"will-change" =>
 		# a property that would make a stacking context does (Will Change 1 §3)
@@ -6742,7 +6767,9 @@ copyprop(d, s: ref St, nm: string)
 	"filter" => d.filter = s.filter;
 	"isolation" => d.ctx = d.ctx & ~SCisolate | s.ctx & SCisolate;
 	"mix-blend-mode" => d.ctx = d.ctx & ~SCblend | s.ctx & SCblend;
-	"clip-path" => d.ctx = d.ctx & ~SCclippath | s.ctx & SCclippath;
+	"clip-path" =>
+		d.ctx = d.ctx & ~SCclippath | s.ctx & SCclippath;
+		d.clipinset = s.clipinset;
 	"will-change" => d.ctx = d.ctx & ~SCwillchange | s.ctx & SCwillchange;
 	"transform" =>
 		d.translated = s.translated;

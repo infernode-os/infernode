@@ -11561,9 +11561,53 @@ paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 		oncanvas = 0;
 	}
 	painted = root;
+	# fixed boxes inside a stacking context below the root are its
+	# layers, not the root's, though the root is their containing block
+	rootorg = origin.add(Point(root.x, root.y));
+	claimed = nil;
+	ctxclip = noclip;
+	claimfixed(root, root);
 	paintctx(dst, root, origin, clip, bgbox);
+	claimed = nil;
 	painted = nil;
 	dst.clipr = oclip;
+}
+
+# A fixed box's stacking context is its nearest ancestor that makes one
+# in the box tree (CSS 2.2 Appendix E), not its containing block's: GitHub's
+# hero text is fixed with z-index 0 inside a clip-path, and the page's
+# frame scrolls up over it.  claimed holds those whose context is not
+# the root; rootorg is the root's border-box origin, theirs to paint at.
+claimed: list of ref Box;
+rootorg: Point;
+
+claimfixed(b: ref Box, ctx: ref Box)
+{
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		if(k.st.position == Style->Pfixed && ctx != painted)
+			claimed = k :: claimed;
+		c := ctx;
+		if(isctx(k))
+			c = k;
+		claimfixed(k, c);
+	}
+	for(i = 0; i < len b.lines; i++)
+		for(j := 0; j < len b.lines[i].frags; j++)
+			if((f := b.lines[i].frags[j]).kind == Fatomic && f.box != nil) {
+				c := ctx;
+				if(isctx(f.box))
+					c = f.box;
+				claimfixed(f.box, c);
+			}
+}
+
+isclaimed(k: ref Box): int
+{
+	for(l := claimed; l != nil; l = tl l)
+		if(hd l == k)
+			return 1;
+	return 0;
 }
 
 # A layer of a stacking context: a positioned box to paint after (or,
@@ -11593,9 +11637,10 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	}
 	if(st.position == Style->Pfixed) {
 		# laid out against the initial containing block; painted
-		# against the viewport, whatever its ancestors clip
+		# against the viewport, whatever its ancestors' overflow clips
+		# (but not their clip-path)
 		o = o.add(scrolled);
-		clip = viewport;
+		clip = intersect(viewport, ctxclip);
 	}
 	if(st.translated) {	# moved as drawn: its place in the flow is unchanged
 		if(st.tfs != nil && b != warped) {
@@ -11606,6 +11651,15 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		intransform++;
 	}
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+	octx := ctxclip;
+	if(st.clipinset != nil) {
+		# clip-path: inset() clips the box and all in it, fixed boxes too
+		ins := st.clipinset;
+		cr := Rect((r.min.x + ir(ins[3].resolve(real b.w)), r.min.y + ir(ins[0].resolve(real b.h))),
+			(r.max.x - ir(ins[1].resolve(real b.w)), r.max.y - ir(ins[2].resolve(real b.h))));
+		clip = intersect(clip, cr);
+		ctxclip = intersect(ctxclip, cr);
+	}
 	# A positioned box with z-index: auto is painted as a layer but is
 	# not a stacking context: its positioned descendants are layers of
 	# the context it is in, collected there (Appendix E).
@@ -11629,9 +11683,12 @@ paintctx(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 		if((hd l).z >= 0)
 			paintctx(dst, (hd l).box, (hd l).o, layerclip(inner, hd l), canvasbg);
 	paintoutline(dst, b, r, clip);
+	ctxclip = octx;
 	if(st.translated)
 		intransform--;
 }
+
+ctxclip := Rect((-NOCLIP, -NOCLIP), (NOCLIP, NOCLIP));	# what the clip-paths of the boxes being painted allow
 
 # b's content within inner, what clips it.  An overflow clip with
 # rounded corners clips to the padding box's curve (Backgrounds 3
@@ -11862,7 +11919,8 @@ translucent: ref Box;	# the box whose opacity layer is being painted (into its o
 collectlayers(b: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of ref Lyr
 {
 	for(pl := revboxes(b.pos); pl != nil; pl = tl pl)
-		acc = addlayer(hd pl, o, clip, acc);
+		if(!isclaimed(hd pl))
+			acc = addlayer(hd pl, o, clip, acc);
 	if(b.lines != nil) {
 		for(i := 0; i < len b.lines; i++) {
 			ln := b.lines[i];
@@ -11880,6 +11938,8 @@ collectlayers(b: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of r
 	}
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
+		if(k.st.position == Style->Pfixed && claimed != nil && isclaimed(k))
+			acc = addlayer(k, rootorg, noclip, acc);	# this context's, where it is in the tree
 		if(isabs(k) || k.inl)
 			continue;	# painted from its containing block's pos list
 		if(islayer(k))

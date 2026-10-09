@@ -1495,6 +1495,10 @@ openintopres(path: string)
 	path = strip(path);
 	if(path == "" || actid_g < 0)
 		return;
+	if(isweburl(path)){
+		openincharon(path);
+		return;
+	}
 	name := plumbbasename(path);
 	label := safeattrtext(name);
 	ext := plumblower(plumbext(path));
@@ -1537,6 +1541,47 @@ openintopres(path: string)
 			mountpt_g, actid_g, id), data);
 	}
 	writetofile(ctlpath, "center id=" + id);
+}
+
+# A web page, in Charon: the running one, told to open it through its
+# session (posted at #scharon/fs, see charonfs(2)), or one started on it.
+# Either way it is brought into view.
+openincharon(url: string)
+{
+	ctlpath := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	done := chan of int;
+	spawn charonopen(url, done);
+	if(!<-done)
+		writetofile(ctlpath, sys->sprint(
+			"create id=charon type=app label=charon dis=/dis/wm/charon.dis data=%s", url));
+	writetofile(ctlpath, "center id=charon");
+}
+
+# Tell a running Charon to open url; 1 if it took it.  In a name space of
+# its own, so the mount touches nothing of lucipres's.
+charonopen(url: string, done: chan of int)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#scharon/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/tmp", Sys->MREPL, nil) < 0){
+		done <-= 0;
+		return;
+	}
+	cfd := sys->open("/tmp/ctl", Sys->OWRITE);
+	b := array of byte ("open " + url);
+	done <-= cfd != nil && sys->write(cfd, b, len b) == len b;
+}
+
+# An http or https URL, as one word of printable characters: it rides in
+# a presentation ctl command, where a space or a newline would end it.
+isweburl(s: string): int
+{
+	if(!(len s > 7 && s[0:7] == "http://") && !(len s > 8 && s[0:8] == "https://"))
+		return 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] <= ' ' || s[i] == 16r7F)
+			return 0;
+	return 1;
 }
 
 plumbbasename(path: string): string

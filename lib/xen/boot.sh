@@ -8,9 +8,10 @@
 # Xenith, so the plumber's /chan is in Xenith's name space.
 load std
 # The plumber first, so plumbing works from the outset and Xenith does
-# not start its own.
+# not start its own: the user's rules (/usr/<user>/lib/plumbing), then
+# /lib/xen/plumbing.
 bind -bc '#splumber' /chan
-plumber /lib/xen/plumbing
+/lib/sh/plumbrules start /lib/xen/plumbing
 # The model, so the Agent window (xenith/dis/Agent) finds /mnt/llm.
 # In the background: a remote /mnt/llm must never hold up the editor.
 {run /lib/lucifer/llmsrv.sh} >[2] /dev/null &

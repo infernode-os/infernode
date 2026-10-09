@@ -40,18 +40,17 @@ if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
 }
 
-# factotum, for the pairing keys: the one already running if there is
-# one, else our own at a mount point of our own.
-FACT=/mnt/factotum
-if {! ftest -f $FACT/ctl} {
-	if {! ftest -f /dis/auth/factotum.dis} {
-		raise 'skip:no factotum'
-	}
-	FACT=$MNT/factotum
-	mkdir -p $FACT
-	auth/factotum -m $FACT
-	sleep 1
+# factotum, for the pairing keys: our own, at a mount point of our own
+# and under a srv name of its own (#sfactotum is one name for the whole
+# emulator).  Not one that seems to be running: a plain file left at
+# /mnt/factotum/ctl looks like one, and the link key would go nowhere.
+if {! ftest -f /dis/auth/factotum.dis} {
+	raise 'skip:no factotum'
 }
+FACT=$MNT/factotum
+mkdir -p $FACT
+auth/factotum -s factotum.bt_ns -m $FACT
+sleep 1
 if {! ftest -f $FACT/ctl} {
 	raise 'fail:factotum did not start'
 }

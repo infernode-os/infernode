@@ -77,7 +77,7 @@ GlyphOutline: adt {
 CacheEntry: adt {
 	faceidx:	int;	# face index (different fonts have different GID assignments)
 	gid:	int;
-	qsize:	int;	# quantized size (size * 4, as int)
+	qsize:	int;	# the size in 1/1024 px (sizekey())
 	img:	ref Image;
 	width:	int;	# advance width in pixels
 	ox, oy:	int;	# offset from draw point to image origin
@@ -114,6 +114,20 @@ FaceData: adt {
 	ttfwidths:	array of int;	# per-glyph advance width (font units)
 	kernpairs:	int;		# 'kern' format 0: offset of the sorted pairs in ttfdata
 	nkern:	int;		# and how many
+	gsub:	ref Gsub;	# glyph substitution, or nil
+	gpos:	ref Gsub;	# glyph positioning, or nil (the same shape of table)
+	# variations (OpenType 1.9 fvar, avar, gvar): the axes, and for an
+	# instance (vary) the normalised coordinates, one per axis
+	axes:	array of ref Axis;
+	avaroff:	int;
+	gvaroff:	int;
+	coords:	array of real;	# nil: the default instance
+	varwidths:	array of int;	# advances at coords, -1 not yet worked out
+};
+
+Axis: adt {
+	tag:	string;
+	min, def, max:	real;
 };
 
 # Module state
@@ -203,6 +217,432 @@ getfacedata(f: ref Face): ref FaceData
 	return nil;
 }
 
+# ---- variations ----
+
+parsefvar(data: array of byte, off: int): array of ref Axis
+{
+	if(off == 0 || off + 16 > len data)
+		return nil;
+	ao := off + getu16be(data, off + 4);
+	n := getu16be(data, off + 8);
+	sz := getu16be(data, off + 10);
+	if(n == 0 || sz < 20 || ao + n*sz > len data)
+		return nil;
+	a := array[n] of ref Axis;
+	for(i := 0; i < n; i++) {
+		r := ao + i*sz;
+		a[i] = ref Axis(string data[r:r+4], fix1616(data, r+4), fix1616(data, r+8), fix1616(data, r+12));
+	}
+	return a;
+}
+
+fix1616(data: array of byte, off: int): real
+{
+	v := getu32be(data, off);	# an int is 32 bits: negative values come out negative
+	return real v / 65536.0;
+}
+
+axes(f: ref Face): list of (string, real, real, real)
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.axes == nil)
+		return nil;
+	r: list of (string, real, real, real);
+	for(i := len fd.axes - 1; i >= 0; i--)
+		r = (fd.axes[i].tag, fd.axes[i].min, fd.axes[i].def, fd.axes[i].max) :: r;
+	return r;
+}
+
+vary(f: ref Face, values: list of (string, real)): ref Face
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.axes == nil || fd.gvaroff == 0)
+		return f;
+	coords := array[len fd.axes] of { * => 0.0 };
+	any := 0;
+	for(i := 0; i < len fd.axes; i++) {
+		ax := fd.axes[i];
+		v := ax.def;
+		for(l := values; l != nil; l = tl l)
+			if((hd l).t0 == ax.tag)
+				v = (hd l).t1;
+		if(v < ax.min) v = ax.min;
+		if(v > ax.max) v = ax.max;
+		# normalised (OpenType §avar): -1 at min, 0 at default, 1 at max
+		n := 0.0;
+		if(v < ax.def && ax.def > ax.min)
+			n = (v - ax.def) / (ax.def - ax.min);
+		else if(v > ax.def && ax.max > ax.def)
+			n = (v - ax.def) / (ax.max - ax.def);
+		coords[i] = avarmap(fd, i, n);
+		if(coords[i] != 0.0)
+			any = 1;
+	}
+	if(!any)
+		return f;
+	nf := ref *fd;
+	nf.coords = coords;
+	nf.varwidths = array[fd.nglyphs] of { * => -1 };
+	idx := addface(nf);
+	face := ref Face(nf.nglyphs, nf.upem, nf.ascent, nf.descent, nf.fontname, nf.iscid);
+	face.name = nf.fontname + "\t" + string idx;
+	return face;
+}
+
+# avar's piecewise linear map of axis i's normalised value
+avarmap(fd: ref FaceData, axis: int, v: real): real
+{
+	data := fd.ttfdata;
+	o := fd.avaroff;
+	if(o == 0 || o + 8 > len data)
+		return v;
+	n := getu16be(data, o + 6);
+	if(axis >= n)
+		return v;
+	p := o + 8;
+	for(i := 0; i < axis; i++) {
+		if(p + 2 > len data)
+			return v;
+		p += 2 + 4*getu16be(data, p);
+	}
+	cnt := getu16be(data, p);
+	p += 2;
+	if(cnt < 2 || p + 4*cnt > len data)
+		return v;
+	pf := getf2dot14(data, p);
+	pt := getf2dot14(data, p + 2);
+	if(v <= pf)
+		return pt;
+	for(i = 1; i < cnt; i++) {
+		f := getf2dot14(data, p + 4*i);
+		t := getf2dot14(data, p + 4*i + 2);
+		if(v <= f) {
+			if(f == pf)
+				return t;
+			return pt + (t - pt) * (v - pf) / (f - pf);
+		}
+		pf = f;
+		pt = t;
+	}
+	return pt;
+}
+
+# The deltas gvar gives glyph gid's n points and its four phantom
+# points (n, n+1: the origin and the advance) at fd.coords, summed over
+# the tuples that apply, each scaled; points a tuple leaves out are
+# interpolated from those it moves (IUP) along each contour, endpts
+# and the outline's (x, y) given; nil, nil when there are none.
+glyphdeltas(fd: ref FaceData, gid, n: int, endpts, xs, ys: array of int): (array of real, array of real)
+{
+	data := fd.ttfdata;
+	g := fd.gvaroff;
+	if(g == 0 || g + 20 > len data)
+		return (nil, nil);
+	axiscount := getu16be(data, g + 4);
+	nshared := getu16be(data, g + 6);
+	sharedoff := g + getu32be(data, g + 8);
+	glyphcount := getu16be(data, g + 12);
+	flags := getu16be(data, g + 14);
+	arrayoff := g + getu32be(data, g + 16);
+	if(gid >= glyphcount || axiscount != len fd.coords)
+		return (nil, nil);
+	o0, o1: int;
+	if(flags & 1) {
+		o0 = getu32be(data, g + 20 + gid*4);
+		o1 = getu32be(data, g + 20 + (gid+1)*4);
+	} else {
+		o0 = getu16be(data, g + 20 + gid*2) * 2;
+		o1 = getu16be(data, g + 20 + (gid+1)*2) * 2;
+	}
+	if(o1 <= o0)
+		return (nil, nil);
+	gv := arrayoff + o0;
+	if(gv + 4 > len data)
+		return (nil, nil);
+	tcount := getu16be(data, gv);
+	sp := gv + getu16be(data, gv + 2);	# the serialized data
+	np := n + 4;
+	dx := array[np] of { * => 0.0 };
+	dy := array[np] of { * => 0.0 };
+	shared: array of int;
+	if(tcount & 16r8000)
+		(shared, sp) = packedpoints(data, sp);
+	h := gv + 4;
+	moved := 0;
+	for(t := 0; t < (tcount & 16rFFF); t++) {
+		if(h + 4 > len data)
+			break;
+		size := getu16be(data, h);
+		tidx := getu16be(data, h + 2);
+		h += 4;
+		peak := array[axiscount] of real;
+		if(tidx & 16r8000) {
+			for(a := 0; a < axiscount; a++)
+				peak[a] = getf2dot14(data, h + 2*a);
+			h += 2*axiscount;
+		} else {
+			si := tidx & 16rFFF;
+			if(si >= nshared)
+				break;
+			for(a := 0; a < axiscount; a++)
+				peak[a] = getf2dot14(data, sharedoff + (si*axiscount + a)*2);
+		}
+		istart, iend: array of real;
+		if(tidx & 16r4000) {
+			istart = array[axiscount] of real;
+			iend = array[axiscount] of real;
+			for(a := 0; a < axiscount; a++) {
+				istart[a] = getf2dot14(data, h + 2*a);
+				iend[a] = getf2dot14(data, h + 2*(axiscount + a));
+			}
+			h += 4*axiscount;
+		}
+		tdata := sp;
+		sp += size;
+		sc := tuplescalar(fd.coords, peak, istart, iend);
+		if(sc == 0.0)
+			continue;
+		pts := shared;
+		p := tdata;
+		if(tidx & 16r2000)
+			(pts, p) = packedpoints(data, p);
+		cnt := np;
+		if(pts != nil)
+			cnt = len pts;
+		ddx, ddy: array of int;
+		(ddx, p) = packeddeltas(data, p, cnt);
+		(ddy, p) = packeddeltas(data, p, cnt);
+		if(pts == nil) {
+			for(i := 0; i < np; i++) {
+				dx[i] += sc * real ddx[i];
+				dy[i] += sc * real ddy[i];
+			}
+		} else {
+			# the points it names; the rest of each contour inferred
+			tx := array[np] of { * => 0.0 };
+			ty := array[np] of { * => 0.0 };
+			touched := array[np] of { * => 0 };
+			for(i := 0; i < len pts; i++)
+				if(pts[i] < np) {
+					tx[pts[i]] = real ddx[i];
+					ty[pts[i]] = real ddy[i];
+					touched[pts[i]] = 1;
+				}
+			if(endpts != nil && xs != nil) {
+				iup(tx, touched, xs, endpts);
+				iup(ty, touched, ys, endpts);
+			}
+			for(i = 0; i < np; i++) {
+				dx[i] += sc * tx[i];
+				dy[i] += sc * ty[i];
+			}
+		}
+		moved = 1;
+	}
+	if(!moved)
+		return (nil, nil);
+	return (dx, dy);
+}
+
+# a tuple's weight at coords (OpenType gvar, "Algorithm for
+# calculating scalars")
+tuplescalar(coords, peak, istart, iend: array of real): real
+{
+	s := 1.0;
+	for(a := 0; a < len coords; a++) {
+		p := peak[a];
+		if(p == 0.0)
+			continue;
+		v := coords[a];
+		if(v == 0.0)
+			return 0.0;
+		if(istart != nil) {
+			st := istart[a];
+			en := iend[a];
+			if(v < st || v > en)
+				return 0.0;
+			if(v < p) {
+				if(p != st)
+					s *= (v - st) / (p - st);
+			} else if(v > p) {
+				if(en != p)
+					s *= (en - v) / (en - p);
+			}
+		} else {
+			if(v < 0.0 && p > 0.0 || v > 0.0 && p < 0.0)
+				return 0.0;
+			if(v < 0.0 && v < p || v > 0.0 && v > p)
+				continue;	# beyond the peak: its full weight
+			s *= v / p;
+		}
+	}
+	return s;
+}
+
+# packed point numbers: nil means every point
+packedpoints(data: array of byte, p: int): (array of int, int)
+{
+	if(p >= len data)
+		return (nil, p);
+	n := int data[p++];
+	if(n == 0)
+		return (nil, p);
+	if(n & 16r80) {
+		if(p >= len data)
+			return (nil, p);
+		n = (n & 16r7F) << 8 | int data[p++];
+	}
+	r := array[n] of int;
+	last := 0;
+	i := 0;
+	while(i < n && p < len data) {
+		c := int data[p++];
+		run := (c & 16r7F) + 1;
+		for(k := 0; k < run && i < n; k++) {
+			d: int;
+			if(c & 16r80) {
+				if(p + 2 > len data)
+					return (r[0:i], p);
+				d = getu16be(data, p);
+				p += 2;
+			} else {
+				if(p >= len data)
+					return (r[0:i], p);
+				d = int data[p++];
+			}
+			last += d;
+			r[i++] = last;
+		}
+	}
+	return (r[0:i], p);
+}
+
+packeddeltas(data: array of byte, p, n: int): (array of int, int)
+{
+	r := array[n] of { * => 0 };
+	i := 0;
+	while(i < n && p < len data) {
+		c := int data[p++];
+		run := (c & 16r3F) + 1;
+		for(k := 0; k < run && i < n; k++) {
+			if(c & 16r80)
+				r[i] = 0;
+			else if(c & 16r40) {
+				if(p + 2 > len data)
+					return (r, p);
+				r[i] = geti16be(data, p);
+				p += 2;
+			} else {
+				if(p >= len data)
+					return (r, p);
+				r[i] = geti8(data, p);
+				p++;
+			}
+			i++;
+		}
+	}
+	return (r, p);
+}
+
+# Interpolate the deltas of the points a tuple did not name, contour by
+# contour, from the named ones either side (gvar, "Inferred deltas for
+# un-referenced point numbers")
+iup(d: array of real, touched: array of int, c: array of int, endpts: array of int)
+{
+	start := 0;
+	for(ci := 0; ci < len endpts; ci++) {
+		end := endpts[ci];
+		if(end >= len c)
+			break;
+		first := -1;
+		nt := 0;
+		for(i := start; i <= end; i++)
+			if(touched[i]) {
+				if(first < 0)
+					first = i;
+				nt++;
+			}
+		if(nt > 0 && nt < end - start + 1) {
+			if(nt == 1) {
+				for(i = start; i <= end; i++)
+					d[i] = d[first];
+			} else {
+				# walk from each touched point to the next, round the contour
+				p := first;
+				for(;;) {
+					q := p + 1;
+					if(q > end)
+						q = start;
+					while(!touched[q]) {
+						q++;
+						if(q > end)
+							q = start;
+					}
+					# the untouched between p and q
+					k := p + 1;
+					if(k > end)
+						k = start;
+					while(k != q) {
+						d[k] = between(real c[k], real c[p], real c[q], d[p], d[q]);
+						k++;
+						if(k > end)
+							k = start;
+					}
+					p = q;
+					if(p == first)
+						break;
+				}
+			}
+		}
+		start = end + 1;
+	}
+}
+
+between(x, x1, x2, d1, d2: real): real
+{
+	if(x1 == x2) {
+		if(d1 == d2)
+			return d1;
+		return 0.0;
+	}
+	if(x1 > x2) {
+		(x1, x2) = (x2, x1);
+		(d1, d2) = (d2, d1);
+	}
+	if(x <= x1)
+		return d1;
+	if(x >= x2)
+		return d2;
+	return d1 + (x - x1) * (d2 - d1) / (x2 - x1);
+}
+
+# components in a composite glyph
+ncomponents(data: array of byte, off: int): int
+{
+	pos := off + 10;
+	n := 0;
+	for(;;) {
+		if(pos + 4 > len data)
+			break;
+		cf := getu16be(data, pos);
+		pos += 4;
+		if(cf & 16r01)
+			pos += 4;
+		else
+			pos += 2;
+		if(cf & 16r08)
+			pos += 2;
+		else if(cf & 16r40)
+			pos += 4;
+		else if(cf & 16r80)
+			pos += 8;
+		n++;
+		if(!(cf & 16r20))
+			break;
+	}
+	return n;
+}
+
 Face.cidtogid(f: self ref Face, cid: int): int
 {
 	fd := getfacedata(f);
@@ -261,7 +701,7 @@ Face.drawglyph(f: self ref Face, gid: int, size: real,
 		return 0;
 
 	# Check cache
-	qsize := int (size * 4.0 + 0.5);
+	qsize := sizekey(size);
 	ce := cachelookup(fidx, gid, qsize);
 	if(ce != nil){
 		if(ce.img != nil)
@@ -308,7 +748,7 @@ Face.glyphwidth(f: self ref Face, gid: int, size: real): int
 		return 0;
 
 	# Check cache
-	qsize := int (size * 4.0 + 0.5);
+	qsize := sizekey(size);
 	ce := cachelookup(fidx, gid, qsize);
 	if(ce != nil)
 		return ce.width;
@@ -329,11 +769,15 @@ Face.advance(f: self ref Face, gid: int, size: real): real
 	fd := getfacedata(f);
 	if(fd == nil || gid < 0 || gid >= fd.nglyphs)
 		return 0.0;
-	if(fd.isttf && fd.ttfwidths != nil)
+	if(fd.isttf && fd.ttfwidths != nil && fd.coords == nil)
 		return real fd.ttfwidths[gid] * size / real fd.upem;
+	if(fd.varwidths != nil && fd.varwidths[gid] >= 0)
+		return real fd.varwidths[gid] * size / real fd.upem;
 	outline := getoutline(fd, gid);
 	if(outline == nil)
 		return 0.0;
+	if(fd.varwidths != nil)
+		fd.varwidths[gid] = outline.width;
 	return real outline.width * size / real fd.upem;
 }
 
@@ -349,11 +793,45 @@ Face.ymax(f: self ref Face, gid: int): int
 	return geti16be(fd.ttfdata, off + 8);
 }
 
+Face.xmetrics(f: self ref Face): (int, int)
+{
+	fd := getfacedata(f);
+	if(fd == nil || !fd.isttf)
+		return (0, 0);
+	d := fd.ttfdata;
+	avg := 0;
+	bbox := 0;
+	if((o := sfnttable(d, "OS/2")) > 0 && o + 4 <= len d)
+		avg = geti16be(d, o + 2);
+	if((h := sfnttable(d, "head")) > 0 && h + 44 <= len d)
+		bbox = geti16be(d, h + 40) - geti16be(d, h + 36);
+	return (avg, bbox);
+}
+
+# the offset of an sfnt table, 0 if the font has none
+sfnttable(d: array of byte, tag: string): int
+{
+	if(len d < 12)
+		return 0;
+	n := getu16be(d, 4);
+	for(i := 0; i < n && 12 + i*16 + 16 <= len d; i++) {
+		e := 12 + i*16;
+		if(string d[e:e+4] == tag)
+			return getu32be(d, e + 8);
+	}
+	return 0;
+}
+
 Face.kern(f: self ref Face, left, right: int): int
 {
 	fd := getfacedata(f);
-	if(fd == nil || fd.nkern == 0 || left < 0 || right < 0)
+	if(fd == nil || left < 0 || right < 0)
 		return 0;
+	if(fd.nkern == 0) {
+		if(fd.gpos != nil)
+			return gposkern(fd, left, right);
+		return 0;
+	}
 	key := (left << 16) | right;
 	d := fd.ttfdata;
 	lo := 0;
@@ -372,6 +850,412 @@ Face.kern(f: self ref Face, left, right: int): int
 	return 0;
 }
 
+# GPOS pair adjustment (lookup type 2): the advance change of left
+# before right, from the kern feature's lookups
+gposkern(fd: ref FaceData, left, right: int): int
+{
+	g := fd.gpos;
+	data := g.data;
+	for(ll := featurelookups(g, "kern"); ll != nil; ll = tl ll) {
+		lk := g.lookups[hd ll];
+		if(lk.kind != 2)
+			continue;
+		for(j := 0; j < len lk.subs; j++) {
+			so := lk.subs[j];
+			if(so + 10 > len data)
+				continue;
+			fmt := getu16be(data, so);
+			ci := coverage(data, so + getu16be(data, so + 2), left);
+			if(ci < 0)
+				continue;
+			vf1 := getu16be(data, so + 4);
+			vf2 := getu16be(data, so + 6);
+			n1 := bits(vf1);
+			n2 := bits(vf2);
+			if(!(vf1 & 4))	# no horizontal advance in this subtable
+				continue;
+			adv := 2 * bits(vf1 & 3);	# XPlacement, YPlacement come before XAdvance
+			if(fmt == 1) {
+				nsets := getu16be(data, so + 8);
+				if(ci >= nsets || so + 10 + ci*2 + 2 > len data)
+					continue;
+				ps := so + getu16be(data, so + 10 + ci*2);
+				if(ps + 2 > len data)
+					continue;
+				npairs := getu16be(data, ps);
+				rec := 2 + 2*(n1 + n2);
+				lo := 0;
+				hi := npairs - 1;
+				while(lo <= hi) {	# sorted by second glyph
+					m := (lo + hi) / 2;
+					r := ps + 2 + m*rec;
+					if(r + rec > len data)
+						break;
+					gid := getu16be(data, r);
+					if(gid == right)
+						return geti16be(data, r + 2 + adv);
+					if(gid < right)
+						lo = m + 1;
+					else
+						hi = m - 1;
+				}
+			} else if(fmt == 2 && so + 16 <= len data) {
+				c1 := classof(data, so + getu16be(data, so + 8), left);
+				c2 := classof(data, so + getu16be(data, so + 10), right);
+				n1c := getu16be(data, so + 12);
+				n2c := getu16be(data, so + 14);
+				if(c1 < 0 || c2 < 0 || c1 >= n1c || c2 >= n2c)
+					continue;
+				rec := 2*(n1 + n2);
+				r := so + 16 + (c1*n2c + c2)*rec;
+				if(r + rec <= len data)
+					return geti16be(data, r + adv);
+			}
+		}
+	}
+	return 0;
+}
+
+bits(v: int): int
+{
+	n := 0;
+	for(; v != 0; v >>= 1)
+		n += v & 1;
+	return n;
+}
+
+# the class of gid in a class definition table, 0 if not listed, -1 if the table is bad
+classof(data: array of byte, off, gid: int): int
+{
+	if(off + 4 > len data)
+		return -1;
+	fmt := getu16be(data, off);
+	if(fmt == 1) {
+		start := getu16be(data, off + 2);
+		n := getu16be(data, off + 4);
+		if(gid < start || gid >= start + n || off + 6 + n*2 > len data)
+			return 0;
+		return getu16be(data, off + 6 + (gid - start)*2);
+	}
+	if(fmt == 2) {
+		n := getu16be(data, off + 2);
+		if(off + 4 + n*6 > len data)
+			return -1;
+		for(i := 0; i < n; i++) {
+			r := off + 4 + i*6;
+			if(gid >= getu16be(data, r) && gid <= getu16be(data, r + 2))
+				return getu16be(data, r + 4);
+		}
+		return 0;
+	}
+	return -1;
+}
+
+# an anchor table's point
+anchor(data: array of byte, off: int): (int, int)
+{
+	if(off + 6 > len data)
+		return (0, 0);
+	return (geti16be(data, off + 2), geti16be(data, off + 4));
+}
+
+Face.markanchor(f: self ref Face, base, mark: int): (int, int, int)
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gpos == nil)
+		return (0, 0, 0);
+	g := fd.gpos;
+	data := g.data;
+	for(ll := featurelookups(g, "mark"); ll != nil; ll = tl ll) {
+		lk := g.lookups[hd ll];
+		if(lk.kind != 4)
+			continue;
+		for(j := 0; j < len lk.subs; j++) {
+			so := lk.subs[j];
+			if(so + 12 > len data || getu16be(data, so) != 1)
+				continue;
+			mi := coverage(data, so + getu16be(data, so + 2), mark);
+			bi := coverage(data, so + getu16be(data, so + 4), base);
+			if(mi < 0 || bi < 0)
+				continue;
+			nclass := getu16be(data, so + 6);
+			ma := so + getu16be(data, so + 8);
+			ba := so + getu16be(data, so + 10);
+			if(ma + 2 + mi*4 + 4 > len data || ba + 2 > len data)
+				continue;
+			if(mi >= getu16be(data, ma))
+				continue;
+			cls := getu16be(data, ma + 2 + mi*4);
+			mao := getu16be(data, ma + 4 + mi*4);
+			if(cls >= nclass || bi >= getu16be(data, ba))
+				continue;
+			r := ba + 2 + (bi*nclass + cls)*2;
+			if(r + 2 > len data)
+				continue;
+			bao := getu16be(data, r);
+			if(bao == 0)
+				continue;
+			(bx, by) := anchor(data, ba + bao);
+			(mx, my) := anchor(data, ma + mao);
+			return (1, bx - mx, by - my);
+		}
+	}
+	return (0, 0, 0);
+}
+
+# ---- GSUB: glyph substitution (OpenType Layout) ----
+
+Gsub: adt {
+	data:	array of byte;
+	lookups:	array of ref Lookup;
+	features:	list of (string, array of int);	# tag, lookup indices
+};
+
+Lookup: adt {
+	kind:	int;		# 1 single, 4 ligature, 0 other (not applied)
+	subs:	array of int;	# subtable offsets, extension lookups resolved
+};
+
+# GSUB and GPOS share a layout: a feature list naming lookups, each
+# of subtables; ext is the lookup type that wraps another (7, 9)
+parsegsub(data: array of byte, off, ext: int): ref Gsub
+{
+	if(off <= 0 || off + 10 > len data)
+		return nil;
+	flist := off + getu16be(data, off + 6);
+	llist := off + getu16be(data, off + 8);
+	if(flist + 2 > len data || llist + 2 > len data)
+		return nil;
+	nl := getu16be(data, llist);
+	if(llist + 2 + nl*2 > len data)
+		return nil;
+	lookups := array[nl] of ref Lookup;
+	for(i := 0; i < nl; i++) {
+		lo := llist + getu16be(data, llist + 2 + i*2);
+		if(lo + 6 > len data) {
+			lookups[i] = ref Lookup(0, nil);
+			continue;
+		}
+		kind := getu16be(data, lo);
+		ns := getu16be(data, lo + 4);
+		if(lo + 6 + ns*2 > len data)
+			ns = 0;
+		subs := array[ns] of int;
+		for(j := 0; j < ns; j++) {
+			so := lo + getu16be(data, lo + 6 + j*2);
+			if(kind == ext && so + 8 <= len data)
+				subs[j] = so + getu32be(data, so + 4);	# an extension: the subtable is elsewhere
+			else
+				subs[j] = so;
+		}
+		if(kind == ext && ns > 0) {
+			so := lo + getu16be(data, lo + 6);
+			if(so + 4 <= len data)
+				kind = getu16be(data, so + 2);
+		}
+		lookups[i] = ref Lookup(kind, subs);
+	}
+	nf := getu16be(data, flist);
+	feats: list of (string, array of int);
+	for(i = 0; i < nf && flist + 2 + i*6 + 6 <= len data; i++) {
+		e := flist + 2 + i*6;
+		tag := string data[e:e+4];
+		fo := flist + getu16be(data, e + 4);
+		if(fo + 4 > len data)
+			continue;
+		cnt := getu16be(data, fo + 2);
+		if(fo + 4 + cnt*2 > len data)
+			continue;
+		li := array[cnt] of int;
+		for(j := 0; j < cnt; j++)
+			li[j] = getu16be(data, fo + 4 + j*2);
+		feats = (tag, li) :: feats;
+	}
+	return ref Gsub(data, lookups, feats);
+}
+
+# the coverage index of gid in the coverage table at off, or -1
+coverage(data: array of byte, off, gid: int): int
+{
+	if(off + 4 > len data)
+		return -1;
+	fmt := getu16be(data, off);
+	n := getu16be(data, off + 2);
+	if(fmt == 1) {
+		if(off + 4 + n*2 > len data)
+			return -1;
+		lo := 0;
+		hi := n - 1;
+		while(lo <= hi) {
+			m := (lo + hi) / 2;
+			g := getu16be(data, off + 4 + m*2);
+			if(g == gid)
+				return m;
+			if(g < gid)
+				lo = m + 1;
+			else
+				hi = m - 1;
+		}
+		return -1;
+	}
+	if(fmt == 2) {
+		if(off + 4 + n*6 > len data)
+			return -1;
+		for(i := 0; i < n; i++) {
+			r := off + 4 + i*6;
+			s := getu16be(data, r);
+			e := getu16be(data, r + 2);
+			if(gid >= s && gid <= e)
+				return getu16be(data, r + 4) + gid - s;
+		}
+	}
+	return -1;
+}
+
+# the lookups a feature names, in index order, without repeats
+featurelookups(g: ref Gsub, feat: string): list of int
+{
+	r: list of int;
+	for(l := g.features; l != nil; l = tl l) {
+		(tag, li) := hd l;
+		if(tag != feat)
+			continue;
+		for(i := 0; i < len li; i++) {
+			for(m := r; m != nil; m = tl m)
+				if(hd m == li[i])
+					break;
+			if(m == nil)
+				r = li[i] :: r;
+		}
+	}
+	a := array[len r] of int;
+	for(i := 0; r != nil; r = tl r)
+		a[i++] = hd r;
+	for(i = 1; i < len a; i++)
+		for(j := i; j > 0 && a[j] < a[j-1]; j--)
+			(a[j], a[j-1]) = (a[j-1], a[j]);
+	s: list of int;
+	for(i = len a - 1; i >= 0; i--)
+		s = a[i] :: s;
+	return s;
+}
+
+Face.hasfeature(f: self ref Face, feat: string): int
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gsub == nil)
+		return 0;
+	for(l := fd.gsub.features; l != nil; l = tl l)
+		if((hd l).t0 == feat)
+			return 1;
+	return 0;
+}
+
+Face.ligatures(f: self ref Face, gids: array of int, feats: list of string): (array of int, array of int)
+{
+	cnt := array[len gids] of {* => 1};
+	fd := getfacedata(f);
+	if(fd == nil || fd.gsub == nil || len gids < 2)
+		return (gids, cnt);
+	g := fd.gsub;
+	for(; feats != nil; feats = tl feats)
+		for(ll := featurelookups(g, hd feats); ll != nil; ll = tl ll) {
+			lk := g.lookups[hd ll];
+			if(lk.kind != 4)
+				continue;
+			for(j := 0; j < len lk.subs; j++)
+				(gids, cnt) = applylig(g.data, lk.subs[j], gids, cnt);
+		}
+	return (gids, cnt);
+}
+
+# a ligature subtable (format 1) over a run of glyphs: at each glyph
+# the first ligature of its set whose components follow is taken
+applylig(data: array of byte, so: int, gids, cnt: array of int): (array of int, array of int)
+{
+	if(so + 6 > len data || getu16be(data, so) != 1)
+		return (gids, cnt);
+	cov := so + getu16be(data, so + 2);
+	nsets := getu16be(data, so + 4);
+	if(so + 6 + nsets*2 > len data)
+		return (gids, cnt);
+	out := array[len gids] of int;
+	ocnt := array[len gids] of int;
+	n := 0;
+	i := 0;
+	while(i < len gids) {
+		ci := coverage(data, cov, gids[i]);
+		if(ci >= 0 && ci < nsets) {
+			seto := so + getu16be(data, so + 6 + ci*2);
+			took := 0;
+			if(seto + 2 <= len data) {
+				nlig := getu16be(data, seto);
+				for(k := 0; k < nlig && seto + 4 + k*2 <= len data; k++) {
+					lo := seto + getu16be(data, seto + 2 + k*2);
+					if(lo + 4 > len data)
+						continue;
+					lig := getu16be(data, lo);
+					nc := getu16be(data, lo + 2);
+					if(nc < 1 || i + nc > len gids || lo + 4 + (nc-1)*2 > len data)
+						continue;
+					ok := 1;
+					for(m := 1; m < nc; m++)
+						if(gids[i+m] != getu16be(data, lo + 4 + (m-1)*2)) {
+							ok = 0;
+							break;
+						}
+					if(ok) {
+						out[n] = lig;
+						ocnt[n] = 0;
+						for(m = 0; m < nc; m++)
+							ocnt[n] += cnt[i + m];
+						n++;
+						i += nc;
+						took = 1;
+						break;
+					}
+				}
+			}
+			if(took)
+				continue;
+		}
+		ocnt[n] = cnt[i];
+		out[n++] = gids[i++];
+	}
+	return (out[0:n], ocnt[0:n]);
+}
+
+Face.subst(f: self ref Face, feat: string, gid: int): int
+{
+	fd := getfacedata(f);
+	if(fd == nil || fd.gsub == nil)
+		return gid;
+	g := fd.gsub;
+	data := g.data;
+	for(ll := featurelookups(g, feat); ll != nil; ll = tl ll) {
+		lk := g.lookups[hd ll];
+		if(lk.kind != 1)
+			continue;
+		for(j := 0; j < len lk.subs; j++) {
+			so := lk.subs[j];
+			if(so + 6 > len data)
+				continue;
+			fmt := getu16be(data, so);
+			ci := coverage(data, so + getu16be(data, so + 2), gid);
+			if(ci < 0)
+				continue;
+			if(fmt == 1)
+				return (gid + getu16be(data, so + 4)) & 16rFFFF;
+			if(fmt == 2) {
+				n := getu16be(data, so + 4);
+				if(ci < n && so + 6 + ci*2 + 2 <= len data)
+					return getu16be(data, so + 6 + ci*2);
+			}
+		}
+	}
+	return gid;
+}
+
 Face.metrics(f: self ref Face, size: real): (int, int, int)
 {
 	fd := getfacedata(f);
@@ -387,6 +1271,15 @@ Face.metrics(f: self ref Face, size: real): (int, int, int)
 }
 
 # ---- Glyph cache ----
+
+# A glyph's cache key: its size to 1/1024 px.  Quarter pixels put
+# 16px and 16.08px (0.67em of 24px) under one key, so a page drew its
+# 16px text with whichever of the two rasters an earlier page had made.
+# (int of a real rounds.)
+sizekey(size: real): int
+{
+	return int (size * 1024.0);
+}
 
 cachehash(faceidx, gid, qsize: int): int
 {
@@ -1011,6 +1904,22 @@ rasterize(path: list of ref PathSeg, scale: real): (ref Image, int, int)
 	}
 	if(n == 0)
 		return (nil, 0, 0);
+	# Light hinting: the glyph's top and bottom edges land on pixel
+	# rows (the baseline, at 0, already does), the outline stretched
+	# linearly between them.  A flat edge is then crisp, as in a
+	# hinted rasteriser, rather than smeared over two rows.
+	sy := 1.0;
+	ty := 0.0;
+	if(maxy - miny > 0.0) {
+		b := math->floor(miny + 0.5);
+		t := math->floor(maxy + 0.5);
+		if(t <= b)
+			t = b + 1.0;
+		sy = (t - b) / (maxy - miny);
+		ty = b - miny*sy;
+		miny = b;
+		maxy = t;
+	}
 	ox := int math->floor(minx) - 1;
 	oy := int math->floor(miny) - 1;
 	w := int math->ceil(maxx) + 1 - ox;
@@ -1019,18 +1928,19 @@ rasterize(path: list of ref PathSeg, scale: real): (ref Image, int, int)
 		return (nil, 0, 0);
 
 	fx := real ox;
-	fy := real oy;
+	fy := real oy - ty;
+	sy *= scale;
 	outline := Path.new();
 	for(p = rpath; p != nil; p = tl p){
 		pick s := hd p {
 		Move =>
-			outline.moveto(s.x*scale - fx, -s.y*scale - fy);
+			outline.moveto(s.x*scale - fx, -s.y*sy - fy);
 		Line =>
-			outline.lineto(s.x*scale - fx, -s.y*scale - fy);
+			outline.lineto(s.x*scale - fx, -s.y*sy - fy);
 		Curve =>
-			outline.curveto(s.x1*scale - fx, -s.y1*scale - fy,
-				s.x2*scale - fx, -s.y2*scale - fy,
-				s.x3*scale - fx, -s.y3*scale - fy);
+			outline.curveto(s.x1*scale - fx, -s.y1*sy - fy,
+				s.x2*scale - fx, -s.y2*sy - fy,
+				s.x3*scale - fx, -s.y3*sy - fy);
 		Close =>
 			outline.close();
 		}
@@ -1210,7 +2120,9 @@ parsecff(data: array of byte): (ref FaceData, string)
 		fdsel,
 		cidmap,
 		0, nil, 0, 0, nil, cffcmap, nil,	# ttfcmap = cffcmap for charcode→GID
-		0, 0
+		0, 0,
+		nil, nil,		# gsub, gpos
+		nil, 0, 0, nil, nil	# no variations
 	);
 
 	return (fd, nil);
@@ -1728,7 +2640,12 @@ parsettf(data: array of byte): (ref FaceData, string)
 	hheaoff := 0;
 	hmtxoff := 0;
 	kernoff := 0;
+	gsuboff := 0;
+	gposoff := 0;
 	nameoff := 0;
+	fvaroff := 0;
+	avaroff := 0;
+	gvaroff := 0;
 
 	for(i := 0; i < numtables; i++){
 		toff := 12 + i * 16;
@@ -1756,6 +2673,16 @@ parsettf(data: array of byte): (ref FaceData, string)
 			nameoff = tableoff;
 		"kern" =>
 			kernoff = tableoff;
+		"GSUB" =>
+			gsuboff = tableoff;
+		"GPOS" =>
+			gposoff = tableoff;
+		"fvar" =>
+			fvaroff = tableoff;
+		"avar" =>
+			avaroff = tableoff;
+		"gvar" =>
+			gvaroff = tableoff;
 		}
 	}
 
@@ -1873,7 +2800,14 @@ parsettf(data: array of byte): (ref FaceData, string)
 		ttfcmap,
 		ttfwidths,
 		kernpairs,
-		nkern
+		nkern,
+		parsegsub(data, gsuboff, 7),
+		parsegsub(data, gposoff, 9),
+		parsefvar(data, fvaroff),
+		avaroff,
+		gvaroff,
+		nil,
+		nil
 	);
 
 	return (fd, nil);
@@ -1884,7 +2818,8 @@ parsettf(data: array of byte): (ref FaceData, string)
 parseotf(data: array of byte): (ref FaceData, string)
 {
 	ntab := getu16be(data, 4);
-	cffoff, cfflen, cmapoff, cmaplen, headoff, hheaoff: int;
+	cffoff, cfflen, cmapoff, cmaplen, headoff, hheaoff, gsuboff, gposoff: int;
+	cffoff = cfflen = cmapoff = cmaplen = headoff = hheaoff = gsuboff = gposoff = 0;
 	for(i := 0; i < ntab; i++) {
 		e := 12 + i*16;
 		if(e + 16 > len data)
@@ -1898,6 +2833,8 @@ parseotf(data: array of byte): (ref FaceData, string)
 		"cmap" =>	(cmapoff, cmaplen) = (off, ln);
 		"head" =>	headoff = off;
 		"hhea" =>	hheaoff = off;
+		"GSUB" =>	gsuboff = off;
+		"GPOS" =>	gposoff = off;
 		}
 	}
 	if(cfflen == 0)
@@ -1905,6 +2842,8 @@ parseotf(data: array of byte): (ref FaceData, string)
 	(fd, err) := parsecff(data[cffoff:cffoff + cfflen]);
 	if(fd == nil)
 		return (nil, err);
+	fd.gsub = parsegsub(data, gsuboff, 7);
+	fd.gpos = parsegsub(data, gposoff, 9);
 	if(cmaplen > 0)
 		fd.ttfcmap = parsettfcmap(data, cmapoff, cmaplen);
 	if(headoff != 0 && hheaoff != 0 && hheaoff + 8 <= len data) {
@@ -2127,12 +3066,12 @@ getttfglyphrecur(fd: ref FaceData, gid: int, depth: int): ref GlyphOutline
 	ncontours := geti16be(data, off);
 
 	if(ncontours >= 0)
-		return parsesimpleglyph(data, off, ncontours, w);
-	return parsecompositeglyph(fd, data, off, w, depth);
+		return parsesimpleglyph(fd, gid, data, off, ncontours, w);
+	return parsecompositeglyph(fd, gid, data, off, w, depth);
 }
 
 # Parse a simple TrueType glyph
-parsesimpleglyph(data: array of byte, off, ncontours, advwidth: int): ref GlyphOutline
+parsesimpleglyph(fd: ref FaceData, gid: int, data: array of byte, off, ncontours, advwidth: int): ref GlyphOutline
 {
 	if(ncontours == 0)
 		return ref GlyphOutline(nil, advwidth);
@@ -2209,6 +3148,21 @@ parsesimpleglyph(data: array of byte, off, ncontours, advwidth: int): ref GlyphO
 			yval += geti16be(data, pos); pos += 2;
 		}
 		ycoords[i] = yval;
+	}
+
+	# an instance of a variable font: the points moved by its deltas
+	if(fd.coords != nil) {
+		(dx, dy) := glyphdeltas(fd, gid, npoints, endpts, xcoords, ycoords);
+		if(dx != nil) {
+			# the left phantom point is the origin: the outline moves
+			# against it, and the advance is the phantoms' distance
+			d0 := dx[npoints];
+			for(i = 0; i < npoints; i++) {
+				xcoords[i] = int (real xcoords[i] + dx[i] - d0);	# (int rounds)
+				ycoords[i] = int (real ycoords[i] + dy[i]);
+			}
+			advwidth = int (real advwidth + dx[npoints+1] - d0);
+		}
 	}
 
 	# Build PathSeg list from contours
@@ -2303,11 +3257,21 @@ ttfcontourpath(xc, yc, flags: array of int, startpt, endpt: int,
 }
 
 # Parse a composite TrueType glyph
-parsecompositeglyph(fd: ref FaceData, data: array of byte,
+parsecompositeglyph(fd: ref FaceData, gid: int, data: array of byte,
 	off, advwidth, depth: int): ref GlyphOutline
 {
 	pos := off + 10;	# skip header + bbox
 	path: list of ref PathSeg;
+	# an instance: each component's offset is a point the deltas move,
+	# and the four phantom points follow them
+	cdx, cdy: array of real;
+	if(fd.coords != nil) {
+		nc := ncomponents(data, off);
+		(cdx, cdy) = glyphdeltas(fd, gid, nc, nil, nil, nil);
+		if(cdx != nil)
+			advwidth = int (real advwidth + cdx[nc+1] - cdx[nc]);
+	}
+	ci := 0;
 
 	for(;;){
 		if(pos + 4 > len data)
@@ -2353,6 +3317,12 @@ parsecompositeglyph(fd: ref FaceData, data: array of byte,
 			d = getf2dot14(data, pos + 6);
 			pos += 8;
 		}
+
+		if(cdx != nil && ci < len cdx - 4 && cflags & 16r02) {
+			dx += cdx[ci] - cdx[len cdx - 4];
+			dy += cdy[ci];
+		}
+		ci++;
 
 		# Get component glyph outline recursively
 		comp := getttfglyphrecur(fd, glyphidx, depth + 1);

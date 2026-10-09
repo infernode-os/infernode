@@ -250,7 +250,7 @@ testDecodePng(t: ref T)		{ checkfixture(t, "rb.png", "png", (255, 0, 0), (0, 0, 
 testDecodeJpeg(t: ref T)	{ checkfixture(t, "rb.jpg", "jpeg", (255, 0, 0), (0, 0, 255), 40); }
 testDecodeGif(t: ref T)		{ checkfixture(t, "rb.gif", "gif", (255, 0, 0), (0, 0, 255), 0); }
 testDecodeWebpLossless(t: ref T)	{ checkfixture(t, "rb.webp", "webp", (255, 0, 0), (0, 0, 255), 0); }
-testDecodeWebpLossy(t: ref T)	{ checkfixture(t, "rbl.webp", "webp", (255, 0, 0), (0, 0, 255), 0); }
+testDecodeWebpLossy(t: ref T)	{ checkfixture(t, "rbl.webp", "webp", (255, 0, 0), (0, 0, 255), 40); }
 
 # AVIF has no decoder yet; it refuses, rather than return a picture
 # that is not the image (it once returned grey).

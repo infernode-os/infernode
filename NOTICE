@@ -15,6 +15,10 @@ redistribution. Specifically:
   - Bigelow & Holmes fonts may be redistributed only as part of an Inferno or
     Plan 9 distribution (see fonts/LICENCE).
   - libmp/ and libsec/ carry the Lucent Public Licence (permissive).
+  - The Thai word list lib/web/thaidict is from ICU, under the Unicode
+    License V3 (see lib/web/thaidict.LICENSE).
+  - The Noto Sans Thai fonts carry the SIL Open Font Licence (see
+    fonts/ttf/noto/OFL.txt).
 
 Parts of the native (bare-metal) kernel under os/ derive from other
 MIT-licensed Plan 9 systems, and each such file names its upstream and that

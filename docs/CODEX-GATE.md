@@ -251,7 +251,7 @@ deliberately).
 
 | key | value | meaning |
 |---|---|---|
-| `backend=` | `codex` | Codex CLI gateway. Boot profiles launch `llmsrv -b openai` for it (`lib/lucifer/boot.sh`, `lib/sh/profile`, `lib/sh/serve-profile` match `openai cli codex`). |
+| `backend=` | `codex` | Codex CLI gateway. Boot profiles launch `llmsrv -b openai` for it (`lib/lucifer/llmsrv.sh`, which `lib/lucifer/boot.sh` runs, `lib/sh/profile` and `lib/sh/serve-profile` match `openai cli codex`). |
 | `url=` | `http://127.0.0.1:11436/v1` | Override port via `CODEX_GATE_PORT` (gate) + `CODEX_GATE_URL` (llmctl). |
 | `model=` | e.g. a model supported by the installed CLI | Passed straight to `codex -m`; leave empty or use `default` to use the CLI's configured default. `llmctl set codex` clears stale model ids when switching backends. |
 

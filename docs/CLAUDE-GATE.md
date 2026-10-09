@@ -152,7 +152,7 @@ serve script unsets it, and the gate refuses to start if it leaks through
 
 | key | value | meaning |
 |---|---|---|
-| `backend=` | `cli` | CLI gateway. Boot profiles launch `llmsrv -b openai` for it (`lib/lucifer/boot.sh`, `lib/sh/profile`, `lib/sh/serve-profile` match `openai cli`). |
+| `backend=` | `cli` | CLI gateway. Boot profiles launch `llmsrv -b openai` for it (`lib/lucifer/llmsrv.sh`, which `lib/lucifer/boot.sh` runs, `lib/sh/profile` and `lib/sh/serve-profile` match `openai cli codex`). |
 | `url=` | `http://127.0.0.1:11435/v1` | Override port via `CLAUDE_GATE_PORT` (gate) + `CLAUDE_GATE_URL` (llmctl). |
 | `model=` | `sonnet` \| `opus` \| `haiku` | Aliases pass straight to the CLI; full `claude-*` ids also work. |
 

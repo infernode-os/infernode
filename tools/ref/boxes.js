@@ -4,8 +4,8 @@
 const { chromium } = require('playwright');
 (async () => {
 	const [url, w, h] = process.argv.slice(2);
-	const b = await chromium.launch({ env: { ...process.env, FONTCONFIG_FILE: require('path').join(__dirname, 'fonts.conf') } });
-	const p = await (await b.newContext({ javaScriptEnabled: false, deviceScaleFactor: 1,
+	const b = await chromium.launch({ args: ['--hide-scrollbars'], env: { ...process.env, FONTCONFIG_FILE: require('path').join(__dirname, 'fonts.conf') } });
+	const p = await (await b.newContext({ javaScriptEnabled: false, deviceScaleFactor: 1, colorScheme: 'light',
 		viewport: { width: +w, height: +h } })).newPage();
 	await p.goto(url, { waitUntil: 'load', timeout: 30000 }).catch(e => {});
 	// a page that navigates (meta refresh) destroys the context: settle, retry

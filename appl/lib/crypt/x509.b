@@ -161,16 +161,21 @@ log(s: string)
 # [private]
 # Load root CA DER files from /lib/certs/
 
+# The store is built whole and then published: it was marked loaded
+# before it was read, so a handshake running beside the first one (two
+# fonts fetched at once) found it partly read and the root missing.  Two
+# first handshakes may both read it; each sees all of it.
 load_trust_store()
 {
 	if(trust_store_loaded)
 		return;
-	trust_store_loaded = 1;
-
+	ts: list of ref TrustedRoot;
 	certdir := "/lib/certs";
 	fd := sys->open(certdir, Sys->OREAD);
-	if(fd == nil)
+	if(fd == nil) {
+		trust_store_loaded = 1;
 		return;
+	}
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -190,9 +195,11 @@ load_trust_store()
 			(cerr, c) := Certificate.decode(s.tobe_signed);
 			if(cerr != "")
 				continue;
-			trust_store = ref TrustedRoot(s, c) :: trust_store;
+			ts = ref TrustedRoot(s, c) :: ts;
 		}
 	}
+	trust_store = ts;
+	trust_store_loaded = 1;
 }
 
 # [private]
@@ -241,12 +248,13 @@ load_crl_store()
 {
 	if(crl_store_loaded)
 		return;
-	crl_store_loaded = 1;
-
+	cs: list of ref CRLEntry;	# built whole, then published, as the trust store
 	crldir := "/lib/crls";
 	fd := sys->open(crldir, Sys->OREAD);
-	if(fd == nil)
+	if(fd == nil) {
+		crl_store_loaded = 1;
 		return;
+	}
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -265,9 +273,11 @@ load_crl_store()
 			(cerr, crl) := CRL.decode(s.tobe_signed);
 			if(cerr != "")
 				continue;
-			crl_store = ref CRLEntry(s, crl) :: crl_store;
+			cs = ref CRLEntry(s, crl) :: cs;
 		}
 	}
+	crl_store = cs;
+	crl_store_loaded = 1;
 }
 
 # [private]

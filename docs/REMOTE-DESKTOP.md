@@ -108,7 +108,7 @@ matter throughout:
   InferNode user name is your Mac login name. So what InferNode calls
   `/usr/alice/keyring` is `~/.infernode/usr/alice/keyring` on the Mac.
   This only happens in a **login shell** (`sh -l`, or a shell inside the
-  Lucifer desktop); a plain `sh` sees the app's own `/usr` instead.
+  Lucia desktop); a plain `sh` sees the app's own `/usr` instead.
 
 **On the node** you need an InferNode that boots and is on a network the
 viewer can reach. For a Raspberry Pi, [BAREMETAL.md](BAREMETAL.md)
@@ -144,7 +144,7 @@ keep apart. Use the node's address on the viewer's network.
 ## 1. The signer and the certificates
 
 Once, on the viewer. Open a login shell in InferNode — the shell in the
-Lucifer desktop, or on a Mac from Terminal:
+Lucia desktop, or on a Mac from Terminal:
 
 ```sh
 /Applications/InferNode.app/Contents/MacOS/emu -c1 -r/Applications/InferNode.app/Contents/Resources sh -l
@@ -343,7 +343,7 @@ What each line does:
 This needs no `bind -a '#i' /dev` on any release: your window manager
 already has the display in `/dev`. It has been checked with the stock
 `wm/wm` as the viewer's window manager; whether it works from a shell
-inside the Lucifer desktop is untested.
+inside the Lucia desktop is untested.
 
 ---
 
@@ -438,7 +438,7 @@ only other way is a new signer and new certificates for everyone.
 | `wmexport: no window manager context` (3b) | `mount {wmexport}` was typed in a shell that is not inside a window manager (for example Terminal's `;` prompt). Type it in the shell window inside `wm/wm`. |
 | `wmimport: no wm at /n/client/wmx` (3b) | The `mount {wmexport} /tmp/cpuexport/wmx` step was skipped or failed, or `cpu -e /tmp/cpuexport` was omitted. |
 | acme says `can't mount /mnt/acme` | Your certificate's name differs from your user name on the viewer (step 1). |
-| Starting the viewer closes your Lucifer desktop | Section 8. |
+| Starting the viewer closes your Lucia desktop | Section 8. |
 | `boot: /n/dos/cpulisten is set but … missing; NOT starting` | The node's certificate is not at `usr/inferno/keyring/default` on the card. |
 
 The node's console (serial, monitor, or network console) logs every
@@ -460,7 +460,7 @@ The steps above assume a release with the fixes from September 2026
   required integrity algorithm`).
 - **`mkauthinfo` ignored its file argument**: write
   `auth/mkauthinfo -k 'key=signer' $user > /usr/$user/keyring/default`.
-- **Starting the viewer's emulator closed your Lucifer desktop** (its
+- **Starting the viewer's emulator closed your Lucia desktop** (its
   login shell stopped the other instance's key server). Quit the
   desktop before starting a viewer.
 - **A bare-metal node without `cpulisten` support** needs its listener

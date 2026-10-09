@@ -121,6 +121,12 @@ tkcvsf2i(Tk *tk, TkCanvas *tkc)
 
 }
 
+static TkEbind cvsbinds[] =
+{
+	{TkButton4P,	"%W yview scroll -1 wheel"},
+	{TkButton5P,	"%W yview scroll 1 wheel"},
+};
+
 char*
 tkcanvas(TkTop *t, char *arg, char **ret)
 {
@@ -160,6 +166,12 @@ tkcanvas(TkTop *t, char *arg, char **ret)
 		e = TkBadwp;
 		goto err;
 	}
+
+	/* the wheel scrolls it (within its scrollregion; an app's own
+	 * binding for the wheel replaces these) */
+	e = tkbindings(t, tk, cvsbinds, nelem(cvsbinds));
+	if(e != nil)
+		goto err;
 
 	tkc->current = tkmkname("current");
 	if(tkc->current == nil) {
@@ -1901,6 +1913,8 @@ tkcvsview(Tk *tk, char *arg, char **val, int nl, int *posn, int min, int max, in
 		tkword(t, arg, buf, buf+sizeof(buf), nil);
 		if(buf[0] == 'p')		/* Pages */
 			amount = amount * nl * 9 /10;
+		else if(buf[0] == 'w')		/* Wheel ticks: a tenth of the view */
+			amount = amount * nl / 10;
 		else if (inc > 0)
 			amount *= inc;
 		else

@@ -618,6 +618,45 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 		return (im, "");
 	}
 
+	# Without dithering asked for, an indexed, true-colour or grey image
+	# keeps its colours (RGBA32, opaque) rather than being mapped to the
+	# 256-colour palette, which loses up to 4 bits a channel: web pages
+	# compare images to CSS colours exactly.
+	if(errdiff == 0 && (i.chandesc == RImagefile->CRGB1 && i.cmap != nil && i.nchans == 1 ||
+	   i.chandesc == RImagefile->CRGB && i.nchans == 3 || i.chandesc == RImagefile->CY && i.nchans == 1)) {
+		im := d.newimage(i.r, Draw->RGBA32, 0, Draw->Transparent);
+		if(im == nil)
+			return (nil, "can't allocate RGBA32 image");
+		npix := (i.r.max.x - i.r.min.x) * (i.r.max.y - i.r.min.y);
+		buf := array[npix * 4] of byte;
+		cm := i.cmap;
+		c0 := i.chans[0];
+		for(j = 0; j < npix; j++) {
+			r, g, b: byte;
+			case i.chandesc {
+			RImagefile->CRGB =>
+				r = c0[j];
+				g = i.chans[1][j];
+				b = i.chans[2][j];
+			RImagefile->CY =>
+				r = g = b = c0[j];
+			* =>
+				v := 3 * int c0[j];
+				if(v + 2 < len cm) {
+					r = cm[v];
+					g = cm[v+1];
+					b = cm[v+2];
+				}
+			}
+			buf[j*4+0] = byte 255;
+			buf[j*4+1] = b;
+			buf[j*4+2] = g;
+			buf[j*4+3] = r;
+		}
+		im.writepixels(im.r, buf);
+		return (im, "");
+	}
+
 	im := d.newimage(i.r, Draw->CMAP8, 0, Draw->Black);
 	dx := i.r.max.x-i.r.min.x;
 	dy := i.r.max.y-i.r.min.y;

@@ -408,10 +408,32 @@ Tk_pointer(void *a)
 	} else
 		target = tkfindfocus(t, f->p.xy.x, f->p.xy.y, 0);
 
+	/*
+	 * A wheel tick (button 4 or 5) is momentary: a press and its
+	 * release, never a button held.  The pointer device sends one
+	 * event per tick with the bit set and none to clear it, so a
+	 * touchpad's stream of ticks, the pointer still, read as one
+	 * button held down: the first tick scrolled and the rest were a
+	 * drag with button 5.
+	 */
+	if((f->p.buttons & (8|16)) != 0 && target != nil) {
+		m = c->mstate;
+		m.x = f->p.xy.x;
+		m.y = f->p.xy.y;
+		for(b = 3; b <= 4; b++)
+			if(f->p.buttons & (1<<b)) {
+				m.b = c->mstate.b | (1<<b);
+				tkdeliver(target, buttonp[b], &m);
+				m.b = c->mstate.b;
+				tkdeliver(target, buttonr[b], &m);
+			}
+		tkupdate(target->env->top);
+	}
+
 	lastb = c->mstate.b;
 	c->mstate.x = f->p.xy.x;
 	c->mstate.y = f->p.xy.y;
-	c->mstate.b = f->p.buttons & 0x1f;		/* Just the buttons */
+	c->mstate.b = f->p.buttons & 0x07;		/* Just the buttons (the wheel's are momentary, above) */
 	m = c->mstate;
 
 	/* XXX if the mouse is being moved with the buttons held down

@@ -33,8 +33,8 @@ populated.
 The convention is security work, not cosmetics: `/mnt` is ours to
 subdivide, so a sub-agent can be granted exactly
 `/mnt/<app>/<sub>` and nothing else, while `/n` remains a small,
-vetted import allowlist. A few older trees predate the convention (migrations tracked as INFR-400..403)
-(`/n/wallet`, `/n/git`); do not copy them for new work. The full
+vetted import allowlist. One older tree predates the convention (migrations tracked as INFR-400..403):
+`/n/wallet` (`git` has moved to `/mnt/git`); do not copy it for new work. The full
 argument, the decision checklist, and the reference tree are in
 [NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md) — read it before
 choosing any mount point.

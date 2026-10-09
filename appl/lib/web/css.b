@@ -217,6 +217,8 @@ numeric(l: ref Lx): ref Tok
 
 identlike(l: ref Lx): ref Tok
 {
+	if((r := urange(l)) != nil)
+		return r;
 	s := name(l);
 	if(peek(l, 0) == '(') {
 		l.i++;
@@ -232,6 +234,45 @@ identlike(l: ref Lx): ref Tok
 		return tok(Kfunction, lower(s));
 	}
 	return tok(Kident, s);
+}
+
+# U+0000-00FF, u+4??: a unicode-range, as one identifier, as written.
+# As numbers and dimensions its digits are lost ("+0131" is 131,
+# "+1E00" is 1, "-00FF" is a dimension of unit "ff").  CSS Syntax now
+# re-reads the tokens' text instead (§7.1); without that text, taken
+# here, and only where it has a digit or "?", so that u+a, u+b (an
+# adjacent-sibling selector) stay as they are.
+urange(l: ref Lx): ref Tok
+{
+	c := peek(l, 0);
+	if(c != 'u' && c != 'U' || peek(l, 1) != '+')
+		return nil;
+	i := l.i + 2;
+	n := 0;
+	digit := 0;
+	while(i < len l.s && n < 6 && (ishex(l.s[i]) || l.s[i] == '?')) {
+		if(isdigit(l.s[i]) || l.s[i] == '?')
+			digit = 1;
+		i++;
+		n++;
+	}
+	if(n == 0)
+		return nil;
+	if(i + 1 < len l.s && l.s[i] == '-' && ishex(l.s[i+1])) {
+		i++;
+		m := 0;
+		while(i < len l.s && m < 6 && ishex(l.s[i])) {
+			if(isdigit(l.s[i]))
+				digit = 1;
+			i++;
+			m++;
+		}
+	}
+	if(!digit || i < len l.s && isname(l.s[i]))
+		return nil;
+	t := tok(Kident, l.s[l.i:i]);
+	l.i = i;
+	return t;
 }
 
 url(l: ref Lx): ref Tok
@@ -441,7 +482,20 @@ values(l: ref Lx, close: int): (array of ref Tok, int)
 		}
 		a[n++] = t;
 	}
-	return (a[0:n], n);
+	return (own(a[0:n]), n);
+}
+
+# v in an array of its own.  A slice keeps the whole array it was cut
+# from: a rule that kept a slice of its sheet's tokens (an @media
+# prelude, a declaration's value) kept every token of the sheet, 18M of
+# a 700K sheet.
+own(v: array of ref Tok): array of ref Tok
+{
+	if(v == nil)
+		return nil;	# an empty value is not none: --a: ; is set, to nothing
+	a := array[len v] of ref Tok;
+	a[0:] = v;
+	return a;
 }
 
 trim(v: array of ref Tok): array of ref Tok
@@ -466,7 +520,111 @@ parse(s: string): ref Sheet
 {
 	if(sys == nil)
 		init();
-	return ref Sheet(rules(tokenize(s), 1));
+	t := ref Shared(array[Nshared] of list of (string, ref Tok), array[Nshared] of list of (string, ref Decl),
+		array[Nshared] of list of (string, ref Simple));
+	shared = t;
+	sh := ref Sheet(rules(tokenize(s), 1));
+	if(shared == t)
+		shared = nil;
+	return sh;
+}
+
+# ---- sharing ----
+#
+# A sheet says the same things many times: GitHub's write
+# var(--fgColor-default), 0, auto and the like thousands of times.
+# Parsed values are never changed, so within one parse a declaration
+# the same as one before it is that one, and so are its tokens.  The
+# table lives for the parse; nothing is kept from page to page.  (A
+# parse that starts while another runs takes the table over; the first
+# then shares with the second, or with nothing, and is no less right.)
+
+Nshared: con 4096;
+
+Shared: adt {
+	toks:	array of list of (string, ref Tok);
+	decls:	array of list of (string, ref Decl);
+	simples:	array of list of (string, ref Simple);
+};
+
+shared: ref Shared;
+
+strhash(s: string): int
+{
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = (h*31 + s[i]) & 16r7FFFFFFF;
+	return h % Nshared;
+}
+
+# t, or the token already seen that is the same; and what makes it so
+sharetok(sh: ref Shared, t: ref Tok): (ref Tok, string)
+{
+	k := sys->sprint("%d %.17g %d %s", t.kind, t.n, t.flag, t.s);
+	if(t.kids != nil) {
+		(kids, kk) := sharetoks(sh, t.kids);
+		k += "(" + kk + ")";
+		if(kids != t.kids)
+			t = ref Tok(t.kind, t.s, t.n, t.flag, kids);
+	}
+	h := strhash(k);
+	for(l := sh.toks[h]; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return ((hd l).t1, k);
+	sh.toks[h] = (k, t) :: sh.toks[h];
+	return (t, k);
+}
+
+sharetoks(sh: ref Shared, v: array of ref Tok): (array of ref Tok, string)
+{
+	k := "";
+	a := v;
+	for(i := 0; i < len v; i++) {
+		(t, tk) := sharetok(sh, v[i]);
+		if(t != v[i]) {
+			if(a == v) {
+				a = array[len v] of ref Tok;
+				a[0:] = v;
+			}
+			a[i] = t;
+		}
+		k += tk + "\u0001";
+	}
+	return (a, k);
+}
+
+# a simple selector with no selectors in it; not '&', which is
+# changed in place when its rule's parent is known
+sharesimple(s: ref Simple): ref Simple
+{
+	sh := shared;
+	if(sh == nil || s.sub != nil || s.kind == Spseudo && s.name == "&")
+		return s;
+	k := sys->sprint("%d %d %d %d %d %s\u0001%s", s.kind, s.op, s.icase, s.a, s.b, s.name, s.val);
+	if(s.val == nil)
+		k += "\u0002";	# nil is not ""
+	h := strhash(k);
+	for(l := sh.simples[h]; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return (hd l).t1;
+	sh.simples[h] = (k, s) :: sh.simples[h];
+	return s;
+}
+
+sharedecl(d: ref Decl): ref Decl
+{
+	sh := shared;
+	if(sh == nil)
+		return d;
+	(val, vk) := sharetoks(sh, d.val);
+	k := sys->sprint("%s %d:", d.name, d.important) + vk;
+	h := strhash(k);
+	for(l := sh.decls[h]; l != nil; l = tl l)
+		if((hd l).t0 == k)
+			return (hd l).t1;
+	d = ref Decl(d.name, val, d.important);
+	sh.decls[h] = (k, d) :: sh.decls[h];
+	return d;
 }
 
 rules(v: array of ref Tok, top: int): array of ref Rule
@@ -525,7 +683,7 @@ atrule(v: array of ref Tok, i: int, parent: array of ref Sel): (ref Rule, int)
 	st := i;
 	while(i < len v && v[i].kind != Ksemicolon && !isblock(v[i], "{"))
 		i++;
-	prelude := trim(v[st:i]);
+	prelude := own(trim(v[st:i]));
 	blk: array of ref Tok;
 	hasblk := 0;
 	if(i < len v) {
@@ -561,9 +719,22 @@ atrule(v: array of ref Tok, i: int, parent: array of ref Sel): (ref Rule, int)
 		else if(names == nil)
 			names = "" :: nil;	# anonymous layer
 		return (ref Rule.Layer(names, sub), i);
-	"scope" or "starting-style" or "document" =>
-		# not modelled: apply the contents unconditionally
+	"scope" =>
+		# @scope (<root>) [to (<limit>)] { rules }: the rules apply to
+		# the root's descendants, as nested rules under :is(root) do;
+		# the limit is not modelled.  Without a root, as a nested rule.
+		if(len prelude > 0 && isblock(prelude[0], "(")) {
+			roots := parsesellist(trim(prelude[0].kids), parent);
+			if(roots == nil)
+				return (nil, i);
+			if(hasblk)
+				sub = revrules(blockrules(roots, blk));
+		}
 		return (ref Rule.Media(nil, sub), i);
+	"starting-style" or "document" =>
+		# @starting-style is the state before a transition (none here);
+		# @document is dead
+		return (nil, i);
 	"import" =>
 		if(hasblk || len prelude == 0)
 			return (nil, i);
@@ -573,8 +744,8 @@ atrule(v: array of ref Tok, i: int, parent: array of ref Sel): (ref Rule, int)
 		Kstring or Kurl =>
 			u = prelude[0].s;
 		Kfunction =>
-			if(prelude[0].s == "url" && len prelude[0].kids > 0)
-				u = prelude[0].kids[0].s;
+			if(prelude[0].s == "url" && len (uk := trim(prelude[0].kids)) > 0)
+				u = uk[0].s;
 		* =>
 			return (nil, i);
 		}
@@ -755,6 +926,8 @@ declaration(v: array of ref Tok): ref Decl
 			if(isblock(val[k], "{"))
 				return nil;	# a nested rule, as in a:hover {...}
 	}
+	if(!validvars(val))
+		return nil;
 	imp := 0;
 	n := len val;
 	if(n >= 2 && val[n-1].kind == Kident && lower(val[n-1].s) == "important") {
@@ -766,7 +939,31 @@ declaration(v: array of ref Tok): ref Decl
 			val = trim(val[0:k]);
 		}
 	}
-	return ref Decl(nm, val, imp);
+	return sharedecl(ref Decl(nm, own(val), imp));
+}
+
+# A var() whose arguments are malformed makes the declaration invalid
+# at parse time (Variables 2 §2.3): it must have an argument, and
+# nothing at the top level of its arguments may be a '!' or a ';'.
+# The name is any <declaration-value>, judged only at computed-value
+# time (variable-declaration-11, variable-reference-07,
+# variable-supports-30)
+validvars(v: array of ref Tok): int
+{
+	for(k := 0; k < len v; k++) {
+		t := v[k];
+		if(t.kind == Kfunction && t.s == "var") {
+			a := trim(t.kids);
+			if(len a == 0)
+				return 0;
+			for(j := 0; j < len a; j++)
+				if(a[j].kind == Ksemicolon || a[j].kind == Kdelim && a[j].s == "!")
+					return 0;
+		}
+		if(t.kids != nil && !validvars(t.kids))
+			return 0;
+	}
+	return 1;
 }
 
 parsedecls(s: string): array of ref Decl
@@ -855,9 +1052,12 @@ complex(v: array of ref Tok, parent: array of ref Sel, relative: int): ref Sel
 	cbs: list of int;
 	i := 0;
 	lead := 0;
-	if(relative && (c := combinator(v[0])) != 0) {
-		lead = c;
-		i = 1;
+	if(relative) {
+		lead = ' ';	# :has(.a .b) is :has(:scope .a .b)
+		if((c := combinator(v[0])) != 0) {
+			lead = c;
+			i = 1;
+		}
 	}
 	comb := lead;
 	pseudo: string;
@@ -912,13 +1112,14 @@ complex(v: array of ref Tok, parent: array of ref Sel, relative: int): ref Sel
 		# resolve '&'
 		isp := ref Simple(Spseudo, "is", 0, nil, 0, 0, 0, parent);
 		if(hasnest) {
+			s.combs[0] = 0;	# '&' says where the parent goes; no implied descendant
 			for(k = 0; k < n; k++)
 				for(j := 0; j < len s.parts[k]; j++)
 					if(s.parts[k][j].kind == Spseudo && s.parts[k][j].name == "&")
 						s.parts[k][j] = isp;
 		} else {
 			# relative: "& <comb> sel"
-			c = s.combs[0];
+			c := s.combs[0];
 			if(c == 0)
 				c = ' ';
 			np := array[n+1] of array of ref Simple;
@@ -1036,7 +1237,7 @@ compound(v: array of ref Tok, i: int, parent: array of ref Sel): (array of ref S
 		}
 		if(pseudo != nil && s.kind != Spseudo)
 			return (nil, i, nil);
-		r = s :: r;
+		r = sharesimple(s) :: r;
 	}
 	return (rev(r), i, pseudo);
 }
@@ -1086,7 +1287,8 @@ attrsel(v: array of ref Tok): ref Simple
 	if(len v == 0)
 		return nil;
 	i := 0;
-	if(len v > 2 && v[1].kind == Kdelim && v[1].s == "|" && (v[0].kind == Kident || v[0].kind == Kdelim))
+	if(len v > 2 && v[1].kind == Kdelim && v[1].s == "|" && (v[0].kind == Kident || v[0].kind == Kdelim) &&
+	   !(v[2].kind == Kdelim && v[2].s == "="))
 		i = 2;	# namespace prefix ignored
 	else if(v[0].kind == Kdelim && v[0].s == "|")
 		i = 1;
@@ -1176,7 +1378,8 @@ pseudofn(t: ref Tok, parent: array of ref Sel): ref Simple
 				return nil;
 		}
 	"lang" or "dir" or "host" or "host-context" or "state" =>
-		;
+		if(len args == 0)
+			return nil;	# nothing to match: invalid (lang-selector-002)
 	* =>
 		return nil;
 	}

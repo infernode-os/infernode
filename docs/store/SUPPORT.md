@@ -11,7 +11,7 @@
 
 InferNode is a 64-bit build of the Inferno® distributed operating system,
 packaged to run on your device. It hosts a namespace-based agent environment,
-a graphical shell (Lucifer), and tools for connecting to language-model and
+a graphical shell (Lucia), and tools for connecting to language-model and
 9P services that you configure.
 
 ## Common questions
@@ -29,5 +29,5 @@ its storage in Android Settings.
 
 ## Reporting a security issue
 
-Please do not file public issues for security vulnerabilities. Email
+Please do not file public issues for security vulnerabilities. Open
 a private GitHub security advisory (github.com/infernode-os/infernode/security/advisories) with details and we will respond.

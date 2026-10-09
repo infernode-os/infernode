@@ -80,8 +80,8 @@ Runnable: module
 
 # ── Categories ─────────────────────────────────────────────────
 
-CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots: con iota;
-NCATS: con 11;
+CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots, CatWeb: con iota;
+NCATS: con 12;
 
 catnames := array[] of {
 	"Theme",
@@ -95,6 +95,7 @@ catnames := array[] of {
 	"Security",
 	"Auditing",
 	"Snapshots",
+	"Web Pages",
 };
 
 # Short aliases for -c <name>: tab-friendly identifiers a launcher can
@@ -112,6 +113,7 @@ catshortnames := array[] of {
 	"security",
 	"audit",
 	"snapshots",
+	"web",
 };
 
 # ── State ──────────────────────────────────────────────────────
@@ -351,6 +353,7 @@ buildpanel(cat: int)
 	CatSecurity =>	panelsecurity();
 	CatAudit =>	panelaudit();
 	CatSnapshots =>	panelsnapshots();
+	CatWeb =>	panelweb();
 	}
 	tk->cmd(top, "update");
 }
@@ -719,6 +722,112 @@ auditstatus(): string
 	return s;
 }
 
+# ── Web pages panel ────────────────────────────────────────────
+# The web engine's settings (page(2)), which Charon and HTML rendered in
+# Xenith both follow: the user's lib/charon/settings, a "name value"
+# line each, as Charon's ctl takes them.  The engine reads the file
+# again when it changes, so a page opened after a change follows it.
+
+websettings := array[] of {
+	("images", "on", "click"),
+	("fonts", "web", "system"),
+	("effects", "on", "off"),
+};
+
+webfile(): string
+{
+	return "/usr/" + eget2("/dev/user") + "/lib/charon/settings";
+}
+
+# a setting's value: as the file has it, or its default
+webget(name: string): string
+{
+	for(l := readlines(webfile()); l != nil && len l > 0; l = l[1:]) {
+		(n, t) := sys->tokenize(l[0], " \t");
+		if(n == 2 && hd t == name)
+			return hd tl t;
+	}
+	for(i := 0; i < len websettings; i++)
+		if(websettings[i].t0 == name)
+			return websettings[i].t1;
+	return nil;
+}
+
+webput(vals: array of string)
+{
+	u := "/usr/" + eget2("/dev/user");
+	mkdirp2(u + "/lib");
+	mkdirp2(u + "/lib/charon");
+	s := "";
+	for(i := 0; i < len websettings; i++)
+		s += websettings[i].t0 + " " + vals[i] + "\n";
+	fd := sys->create(webfile(), Sys->OWRITE, 8r664);
+	b := array of byte s;
+	if(fd == nil || sys->write(fd, b, len b) != len b)
+		flashstatus(sys->sprint("cannot write %s: %r", webfile()));
+	else
+		flashstatus("pages opened from now on follow this");
+}
+
+webcur(): array of string
+{
+	vals := array[len websettings] of string;
+	for(i := 0; i < len websettings; i++)
+		vals[i] = webget(websettings[i].t0);
+	return vals;
+}
+
+webtoggle(name: string)
+{
+	vals := webcur();
+	for(i := 0; i < len websettings; i++)
+		if(websettings[i].t0 == name) {
+			(nil, a, b) := websettings[i];
+			if(vals[i] == a)
+				vals[i] = b;
+			else
+				vals[i] = a;
+		}
+	webput(vals);
+	buildpanel(CatWeb);
+}
+
+# for a small device: images when clicked, the system's fonts, no effects
+weblight()
+{
+	webput(array[] of {"click", "system", "off"});
+	buildpanel(CatWeb);
+}
+
+panelweb()
+{
+	hdr("webh", "Web pages (Charon, and HTML rendered in Xenith)");
+	if(webget("images") == "on") {
+		lbl("webis", "Images load with the page.");
+		btn("webi", "Load images only when clicked", "webimages");
+	} else {
+		lbl("webis", "Images load when clicked.");
+		btn("webi", "Load images with the page", "webimages");
+	}
+	if(webget("fonts") == "web") {
+		lbl("webfs", "Pages use the fonts they bring.");
+		btn("webf", "Use only the system's fonts", "webfonts");
+	} else {
+		lbl("webfs", "Pages use the system's fonts; theirs are not fetched.");
+		btn("webf", "Use the fonts pages bring", "webfonts");
+	}
+	if(webget("effects") == "on") {
+		lbl("webes", "Shadows and filters are drawn.");
+		btn("webe", "Draw no shadows or filters", "webeffects");
+	} else {
+		lbl("webes", "Shadows and filters are not drawn.");
+		btn("webe", "Draw shadows and filters", "webeffects");
+	}
+	hdr("weblh", "For a small device");
+	btn("webl", "Light: images when clicked, system fonts, no effects", "weblight");
+	lbl("webnote", "Pages opened from now on follow these.");
+}
+
 # ── Snapshots panel ────────────────────────────────────────────
 # Daily vac snapshots of the durable /usr into the local venti store
 # (snapd(8)). Enable/disable persist the marker (daemons start at
@@ -972,6 +1081,10 @@ handleaction(a: string)
 	"auditdisable" =>	doauditdisable();
 	"auditck" =>	doauditck();
 	"auditverify" =>	doauditverify();
+	"webimages" =>	webtoggle("images");
+	"webfonts" =>	webtoggle("fonts");
+	"webeffects" =>	webtoggle("effects");
+	"weblight" =>	weblight();
 	"snapenable" =>	dosnapenable();
 	"snapdisable" =>	dosnapdisable();
 	"snapnow" =>	dosnapnow();

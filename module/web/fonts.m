@@ -25,11 +25,14 @@ Fonts: module
 		parts:	array of ref Part;	# a web family: its faces, by unicode-range
 		next:	cyclic ref Typeface;	# the next family, for what this one lacks
 		nokern:	int;		# kerning off
+		embolden:	int;	# synthetic bold: each glyph drawn again this many pixels to its right
 
 		width:	fn(f: self ref Typeface, s: string): real;
+		has:	fn(f: self ref Typeface, c: int): int;	# a glyph for c, in it or its fallbacks (not the bitmap fallback)
+		ligspan:	fn(f: self ref Typeface, a, b: string): int;	# how many characters of b a ligature begun in a takes
 		xheight:	fn(f: self ref Typeface): real;
 		kernpair:	fn(f: self ref Typeface, a, b: int): real;	# px between the characters a and b	# px: the top of "x" (the ex unit)
-		draw:	fn(f: self ref Typeface, dst: ref Draw->Image, p: Draw->Point, s: string, src: ref Draw->Image): real;	# p is on the baseline
+		draw:	fn(f: self ref Typeface, dst: ref Draw->Image, p: Draw->Point, s: string, src: ref Draw->Image, rtl: int): real;	# p is on the baseline; s in logical order, drawn from the right if rtl
 	};
 
 	# one face of a web font family, for the code points in ranges
@@ -40,9 +43,33 @@ Fonts: module
 	};
 
 	face:	fn(family: list of string, weight, italic: int, size: real): ref Typeface;
+	# the same with what a variable web face's axes take besides the
+	# weight (Fonts 4 §7.2): style (0 normal, 1 italic, 2 oblique) and
+	# oblique's angle in degrees, font-stretch (a percentage), and
+	# font-variation-settings, (axis tag, value), which override them;
+	# synth, font-synthesis's bits (1 weight, 2 style): a bold the
+	# family has no face heavy enough for is made up
+	facevar:	fn(family: list of string, weight, style: int, slant, stretch, size: real, vars: list of (string, real), synth: int): ref Typeface;
+
+	# what an @font-face rule says of its face (Fonts 4 §4): ranges of
+	# weight and stretch (0, 0 for auto: the font's own), its style
+	# (-1 auto, 0 normal, 1 italic, 2 oblique amin to amax degrees), and
+	# its font-variation-settings
+	Desc: adt {
+		wmin, wmax:	int;
+		smin, smax:	real;
+		style:	int;
+		amin, amax:	real;
+		vars:	list of (string, real);
+	};
+
+	# the face's average character width (OS/2 xAvgCharWidth) and the
+	# width of its bounding box, in pixels; 0 where the font has none
+	xmetrics:	fn(f: ref Typeface): (real, real);
 
 	# @font-face: register a downloaded face (TrueType, OpenType or WOFF;
 	# family lower case) for this module instance's documents.
 	addface:	fn(family: string, weight, italic: int, ranges: array of int, data: array of byte): string;
+	addfacedesc:	fn(family: string, d: ref Desc, ranges: array of int, data: array of byte): string;
 	clearfaces:	fn();
 };

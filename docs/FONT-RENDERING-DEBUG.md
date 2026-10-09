@@ -106,11 +106,10 @@ If you see smeared text:
 | App | File | Fixed | Note |
 |-----|------|-------|------|
 | lucifer | `appl/cmd/lucifer.b` | early 2026-03 | acb4bcd5 — wrong Vera-Roman path |
-| edit | `appl/wm/edit.b` | 2026-03 | c5c9568a — switched to combined fonts |
-| lucishell | `appl/wm/lucishell.b` | 2026-03 | c5c9568a — switched to combined fonts |
+| edit | `appl/wm/editor.b` (was `edit.b`) | 2026-03 | c5c9568a — switched to combined fonts |
+| shell | `appl/wm/shell.b` (was `lucishell.b`) | 2026-03 | c5c9568a — switched to combined fonts |
 | xenith/acme/pdf/renderers | various | 2026-03 | c5c9568a — switched to combined fonts |
-| charon page text | `appl/charon/layout.b` | 2026-03 | fonts array: all sizes → combined |
-| charon right-click menu | `appl/charon/gui.b` | 2026-03 | menu init: `*default*` → combined |
+| charon page text and menu | `appl/charon/layout.b`, `gui.b` (since deleted) | 2026-03 | fonts → combined; Charon's faces now come from `appl/lib/web/fonts.b`, which falls back to `/fonts/combined/unicode.sans.%d.font` |
 
 ---
 

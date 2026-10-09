@@ -13,7 +13,7 @@
 #     dis\ lib\ fonts\ module\ services\ locale\
 #     tmp\
 #     mkconfig, mkfiles\
-#     LICENCE, NOTICE, TRADEMARK.md, README.md, QUICKSTART.md
+#     LICENSE, NOTICE, TRADEMARK.md, README.md, QUICKSTART.md
 #     build-windows-amd64.ps1, build-windows-sdl3.ps1
 #     dev-bundle-stamp.txt
 #
@@ -86,7 +86,7 @@ if (Test-Path "$ROOT\mkfiles") {
 }
 
 # Docs and legal.
-foreach ($f in @("LICENCE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md")) {
+foreach ($f in @("LICENSE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md")) {
     if (Test-Path "$ROOT\$f") {
         Copy-Item "$ROOT\$f" "$OutDir\"
     }

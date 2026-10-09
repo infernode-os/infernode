@@ -13,12 +13,14 @@ Ed25519 is a high-speed, high-security signature scheme using elliptic curves. T
 ```
 libkeyring/
 ├── ed25519alg.c          # Ed25519 implementation (new)
-├── ED25519-DEBUG-CHECKPOINT.md  # Debug notes
 ├── ED25519-IMPLEMENTATION-GUIDE.md  # This file
 ├── dsaalg.c              # DSA (existing)
 ├── egalg.c               # ElGamal (existing)
 ├── rsaalg.c              # RSA (existing)
+├── mldsaalg.c            # ML-DSA-65/87 (FIPS 204)
+├── slhdsaalg.c           # SLH-DSA (FIPS 205)
 ├── keys.h                # SigAlgVec interface
+├── NOTICE
 └── mkfile                # Build configuration
 
 libinterp/

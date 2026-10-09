@@ -2,7 +2,7 @@
 
 ## Overview
 
-InferNode is Inferno OS running natively on AMD64 and ARM64 (macOS, Linux, Windows). The AI
+InferNode is Inferno OS running natively on AMD64, ARM64 and RISC-V (macOS, Linux, Windows). The AI
 agent stack runs entirely inside the Inferno emulator (`emu`), using Plan 9's "everything is
 a file" model to integrate the LLM API, tool execution, wallet, and GUI through a unified 9P namespace.
 
@@ -18,12 +18,13 @@ Host OS (macOS / Linux / Windows)
 │     └── Inferno namespace (rootfs = project root)
 │           │
 │           ├── /mnt/llm        ← llmsrv (LLM providers as 9P)
+│           ├── /mnt/veltro     ← veltrosrv (the agent loop as 9P)
 │           ├── /mnt/ui         ← luciuisrv (GUI state 9P server)
 │           ├── /n/wallet     ← wallet9p (crypto wallet 9P server)
-│           ├── /tool         ← tools9p (39 tool modules as 9P)
+│           ├── /tool         ← tools9p (44 tool modules as 9P)
 │           ├── /mnt/factotum ← factotum (key agent, secstore-backed)
 │           ├── /n/local/     ← agent-visible host paths (via sys->bind)
-│           ├── /dis/         ← compiled Limbo bytecode (815 modules)
+│           ├── /dis/         ← compiled Limbo bytecode (~1,000 modules; tools/dis-manifest.txt)
 │           ├── /lib/         ← runtime data (fonts, tool docs, resources)
 │           └── /tmp/         ← scratch (writable at /tmp/veltro/scratch/)
 │
@@ -37,16 +38,24 @@ and threat model.
 
 ## Boot Sequence
 
+The GUI boots with `sh -l /lib/lucifer/boot.sh`. The login shell runs
+`lib/sh/profile` first, then `boot.sh`:
+
 ```
-1. secstored starts (TCP port 5356)
+lib/sh/profile:
+1. secstored starts (tcp!127.0.0.1!5356)
 2. factotum starts (with secstore backing if $SECSTORE_PASSWORD set, otherwise empty)
-3. wm/logon displays login screen (skipped if keys already loaded or headless)
+3. llmsrv starts, or a remote /mnt/llm is mounted (per /lib/ndb/llm); speech9p starts
+lib/lucifer/boot.sh:
+4. wm/logon displays login screen (skipped when $skiplogon=1)
    - First boot: password + confirmation → creates secstore account
    - Normal boot: password → PAK auth → keys loaded into factotum
-   - Wrong password: retry or continue without secstore
-   - Escape (double-press): skip with warning
-4. llmsrv, tools9p, wallet9p, lucibridge, lucifer start
-5. System fully operational with all keys (wallet, API, email) available
+   - Skip: continue without secstore
+5. lib/lucifer/llmsrv.sh (re-)starts the LLM service in the background
+6. wallet9p, msg9p (/mnt/msg, with the sms and, if configured, email sources)
+7. luciuisrv (/mnt/ui), activity "Main", tools9p (/tool)
+8. lucibridge -a 0 (starts veltrosrv for activity 0)
+9. plumber (/lib/lucifer/plumbing), then lucifer
 ```
 
 ---
@@ -59,28 +68,41 @@ and threat model.
 - Presents LLM providers (Anthropic API or Ollama/OpenAI-compatible) as a 9P file server
 - Self-mounts at `/mnt/llm`; can also be accessed remotely via 9P dial+mount
 - Session lifecycle: clone from `/mnt/llm/new` → session directory `/mnt/llm/{id}/`
-- Files per session: `ask` (write prompt → read response), `tools` (write tool schemas),
-  `history` (full conversation history)
+- Reading `new` returns an unguessable session token; the session directory is named by
+  it and is not listed in the root (INFR-321). The root also has `models`.
+- Files per session: `ask` (write prompt → read response), `stream`, `model`,
+  `temperature`, `system`, `thinking`, `prefill`, `tools` (write tool schemas),
+  `context` (conversation history), `compact`, `ctl` (`reset` or `close`), `usage`,
+  `maxtokens`, `reasoning`
 - Response format: `STOP:tool_use\nTOOL:<id>:<name>:<args>` or `STOP:end_turn\n<text>`
 - Native `tool_use` protocol: LLM receives proper JSON tool schemas, returns structured tool calls
 
 ### tools9p (`appl/veltro/tools9p.b`)
 
 A harness component: the shared configuration and execution server that running agents
-dispatch tool calls through. Both the GUI (lucictx) and the GUI-side harness bridge
-(lucibridge) interact with it as their common intermediary.
+dispatch tool calls through. The GUI (lucictx), lucibridge and veltrosrv all use it.
 
 Filesystem layout at `/tool`:
 
 ```
 /tool/
 ├── tools       (r)   Newline-separated list of currently active tool names
+├── grantable   (r)   Tools this agent may delegate, with summaries
 ├── help        (rw)  Write tool name → read documentation
 ├── ctl         (rw)  Control: add/remove tools; bindpath/unbindpath paths
+├── provision   (rw)  Child-task provisioning (narrowing only; present with the task tool)
 ├── paths       (r)   Newline-separated list of registered namespace paths
-└── _registry   (r)   Space-separated list of tool names (for spawn validation)
-└── <name>      (rw)  Per-tool file: write args → blocking execute → read result
+├── budget      (r)   Delegation budget: tools that may be handed to child tasks (-b)
+├── activity    (r)   Activity identifier
+├── _registry   (r)   Space-separated list of tool names (for spawn validation)
+├── meta/       (dir) Audit metadata scalars
+└── <name>/     (dir) Per-tool directory: ctl and run (write args → blocking execute →
+                      read result), doc, schema
 ```
+
+The same tree is also bound at `/mnt/toolctl` (`/mnt/toolctl.N` for `/tool.N`).
+Trusted clients (lucictx, lucibridge, veltrosrv) write control commands to
+`/mnt/toolctl/ctl`; agent namespaces do not contain it.
 
 Key design properties:
 - **Pre-loads all tool modules before namespace restriction** — allows `ctl add` without
@@ -88,23 +110,49 @@ Key design properties:
 - **Async tool execution** — `asyncexec()` runs tool in a spawned goroutine; the write()
   call blocks until complete but the serveloop remains responsive to other 9P traffic
 - **Shared server** — tools9p runs in its own Inferno thread and is mounted in the shell's
-  namespace; both lucictx (GUI) and lucibridge (agent bridge) inherit `/tool` from there
+  namespace; lucictx, lucibridge and the veltrosrv it starts inherit `/tool` from there
+
+### veltrosrv (`appl/veltro/veltrosrv.b`)
+
+The agent harness, served as files at `/mnt/veltro` (see `man/4/veltrosrv`). It runs the
+agent loop (model at `/mnt/llm`, tools at `/tool`); every front end is a client of its
+files: `veltro` on the command line, lucibridge for Lucia, Xenith's `Agent` window
+(`appl/xenith/xenith/agent/Agent.b`), or a shell.
+
+```
+/mnt/veltro/
+├── new              read: start a session; returns its id
+└── <id>/
+    ├── ctl          cancel | reset | close | persona | role | brief | model | think |
+    │                maxsteps | gate on|off
+    ├── input        write one user message; starts a turn
+    ├── text         the conversation as the user sees it
+    ├── log          the trajectory, one line per event
+    ├── status       idle | working | blocked | <tool>
+    └── approve      gated calls: read "<callid> <tool> <args>", write allow|deny <callid>
+```
+
+- The serving process forks its namespace and applies `nsconstruct->restrictns()` with the
+  grants given by `-t` and `-p` before it serves; the mount lands only in the caller's
+  namespace, so the agent cannot name its own `ctl` or `approve`
+- On each turn: re-reads `/tool/tools` (calls `initsessiontools()` if the set changed) and
+  `/tool/paths` (rebuilds the system prompt if the paths changed)
 
 ### lucibridge (`appl/cmd/lucibridge.b`)
 
-The GUI-side harness bridge: connects the GUI conversation UI to the LLM and runs the
-agent loop for that session.
+Lucia's client of the agent harness.
 
-- Runs in background, started by Lucifer
-- Reads user input from `/mnt/ui/activity/{id}/conversation/input`
-- On each turn: re-reads `/tool/tools` and `/tool/paths` to pick up GUI-side changes
-- If tool set changed: calls `initsessiontools()` to update the LLM's active tool list
-- If path set changed: calls `applypathchanges()` to bind/unmount paths in its namespace
-- Sends LLM responses and streaming tokens back via `/mnt/ui/activity/{id}/conversation/ctl`
+- Started in the background by `lib/lucifer/boot.sh` (`lucibridge -a 0`)
+- Starts a veltrosrv with the activity's grants, mounted at `/mnt/veltro` in its namespace
+- Reads user input from `/mnt/ui/activity/{id}/conversation/input` and writes it to the
+  session's `input`
+- Renders the agent's text, tool activity and approval requests back into the UI via
+  `/mnt/ui/activity/{id}/conversation/ctl` and the context zone
+- `applypathchanges()` reflects `/tool/paths` into the context zone
 
 ### luciuisrv (`appl/cmd/luciuisrv.b`)
 
-GUI state server — a 9P file server for the three-zone Lucifer UI.
+GUI state server — a 9P file server for the three-zone Lucia UI.
 
 Mounted at `/mnt/ui`. Presents conversation messages, presentation artifacts, and context
 zone state as a filesystem. No draw/display dependency — fully testable headless.
@@ -138,17 +186,18 @@ zone state as a filesystem. No draw/display dependency — fully testable headle
 
 ### Veltro (`appl/veltro/veltro.b`)
 
-CLI agent. One-shot or REPL mode.
+CLI agent: `veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] <task>`, or `-r <name>`
+to resume a saved session.
 
-1. Reads `-p paths` and registers them in tools9p (`bindpath` ctl commands)
-2. Forks namespace (`sys->pctl(FORKNS)`)
-3. Calls `nsconstruct->restrictns()` — reduces namespace to only what the agent needs
-4. Creates an LLM session via `/mnt/llm/new`
-5. Runs `repl.b` loop: prompt → LLM → tool calls → results → repeat
+A client of veltrosrv: it starts the harness with the grants given on the command line,
+writes the task to the session's `input`, prints the agent's text as it arrives, and
+answers approval requests on the terminal. It also does the planning turn for a complex
+task, intent routing to a persona, and session storage under
+`/usr/inferno/veltro/sessions`.
 
 ### nsconstruct (`appl/veltro/nsconstruct.b`)
 
-Namespace restriction engine, called by both tools9p and veltro.
+Namespace restriction engine (`module/nsconstruct.m`), called by tools9p and veltrosrv.
 
 Policy applied after `FORKNS`:
 - `/dis` → reduced to `lib/`, `veltro/` (+ `sh.dis` if `exec` tool active)
@@ -210,20 +259,20 @@ Built-in text editor with 9P IPC for agent integration. Mounts at `/edit/`.
 The Veltro `editor` tool uses this IPC to let agents read, navigate, and modify open
 documents without needing direct Draw access.
 
-### Lucifer GUI (`appl/cmd/lucifer.b`)
+### Lucia GUI (`appl/cmd/lucifer.b`)
 
 Three-zone window: Conversation | Presentation | Context.
 
-Starts the following pipeline:
-1. `luciuisrv` — mounts at `/mnt/ui`
-2. `tools9p` — mounts at `/tool` (with full default tool set)
-3. `lucibridge` — connects conversation input → LLM → conversation output
-4. `lucictx` — renders the context zone (tool toggles, namespace browser)
+`luciuisrv`, `tools9p` and `lucibridge` are started by `lib/lucifer/boot.sh` before
+lucifer, which loads the zone renderers:
+1. `luciconv` — the conversation zone
+2. `lucipres` — the presentation zone (a wmclient app)
+3. `lucictx` — the context zone (tool toggles, namespace browser)
 
 Additional features:
 - **Live theme sync** — theme changes propagate to all running apps in real time
 - **HiDPI fonts** — antialiased combined fonts for Retina/HiDPI displays
-- **App slots** — up to 16 GUI apps (wallet, editor, fractals, etc.) in the presentation zone
+- **App slots** — up to 48 GUI apps (wallet, editor, fractals, etc.) in the presentation zone
 - **Activity tracking** — per-activity event streams, status indicators, tool-call tiles
 
 ---
@@ -238,11 +287,12 @@ User types in Conversation zone
   → luciuisrv stores message, fires "conversation N" event
   → lucifer re-renders conversation zone
   → lucibridge (blocking read on /conversation/input) receives message
-  → lucibridge re-reads /tool/tools, /tool/paths
-  → lucibridge calls LLM via /mnt/llm/{id}/ask
+  → lucibridge writes it to /mnt/veltro/<id>/input
+  → veltrosrv re-reads /tool/tools, /tool/paths
+  → veltrosrv calls LLM via /mnt/llm/<session>/ask
   → LLM returns tool_use or end_turn
-  → lucibridge executes tools (writes to /tool/<name>, reads result)
-  → lucibridge writes response back to /mnt/ui conversation/ctl
+  → veltrosrv executes tools (writes to /tool/<name>, reads result)
+  → lucibridge reads /mnt/veltro/<id>/text and writes it to /mnt/ui conversation/ctl
   → lucifer renders response
 ```
 
@@ -250,10 +300,10 @@ User types in Conversation zone
 
 ```
 User clicks [-] on "diff" in context zone
-  → lucictx writes "remove diff" to /tool/ctl
+  → lucictx writes "remove diff" to /mnt/toolctl/ctl
   → tools9p moves diff from active set to alltools
   → /tool/tools no longer lists "diff"
-  → On next LLM turn: lucibridge re-reads /tool/tools, calls initsessiontools()
+  → On next LLM turn: veltrosrv re-reads /tool/tools, calls initsessiontools()
   → LLM no longer receives diff tool schema
 ```
 
@@ -261,11 +311,10 @@ User clicks [-] on "diff" in context zone
 
 ```
 User browses to /Users/pdfinn/docs, clicks [Bind]
-  → lucictx writes "bindpath /Users/pdfinn/docs" to /tool/ctl
+  → lucictx writes "bindpath /Users/pdfinn/docs" to /mnt/toolctl/ctl
   → tools9p adds path to boundpaths list; /tool/paths now lists it
-  → On next LLM turn: lucibridge reads /tool/paths, calls applypathchanges()
-  → lucibridge: sys->bind("/Users/pdfinn/docs", "/n/local/docs", MBEFORE)
-  → Agent can now read files under /n/local/docs
+  → lucibridge applypathchanges() shows it in the context zone
+  → On next LLM turn: veltrosrv reads /tool/paths and rebuilds the system prompt
 ```
 
 ---
@@ -311,8 +360,9 @@ documented in [DISTRIBUTED-AUTH.md](DISTRIBUTED-AUTH.md).
 | lucictx | `appl/cmd/lucictx.b` | `dis/lucictx.dis` |
 | lucifer | `appl/cmd/lucifer.b` | `dis/lucifer.dis` |
 | luciuisrv | `appl/cmd/luciuisrv.b` | `dis/luciuisrv.dis` |
-| lucitheme | `appl/cmd/lucitheme.b` | `dis/lucitheme.dis` |
+| lucitheme | `appl/lib/lucitheme.b` | `dis/lib/lucitheme.dis` |
 | veltro | `appl/veltro/veltro.b` | `dis/veltro/veltro.dis` |
+| veltrosrv | `appl/veltro/veltrosrv.b` | `dis/veltro/veltrosrv.dis` |
 | nsconstruct | `appl/veltro/nsconstruct.b` | `dis/veltro/nsconstruct.dis` |
 | agentlib | `appl/veltro/agentlib.b` | `dis/veltro/agentlib.dis` |
 | llmsrv | `appl/cmd/llmsrv.b` | `dis/llmsrv.dis` |

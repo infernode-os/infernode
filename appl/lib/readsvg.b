@@ -13,7 +13,8 @@ implement RImagefile;
 #   - Opacity and fill-opacity
 #   - viewBox and viewport sizing
 #   - Text elements (basic positioning)
-#   - Linear and radial gradients (basic)
+#   - Linear and radial gradients: href'd stops, units, gradientTransform,
+#     focal points, spreadMethod, stop-opacity
 #   - Use/defs references
 #   - Style attributes (inline)
 #
@@ -40,6 +41,10 @@ include "imagefile.m";
 include "xml.m";
 	xml: Xml;
 	Item, Attribute, Attributes, Parser: import xml;
+
+include "outlinefont.m";
+	ofont: OutlineFont;
+	Face: import ofont;
 
 # Default canvas size when viewBox is not specified
 DEFAULT_WIDTH:	con 300;
@@ -93,12 +98,21 @@ Style: adt {
 	fill_rule:	int;	# as fillpath's: ~0 non-zero, 1 even-odd
 	cap:		int;	# Draw->Capbutt ...
 	join:		int;	# Draw->Joinmiter ...
+	color:		ref Color;	# the color property: what currentColor is (inherited)
+	fillurl:	string;	# fill: url(#id): the paint server's id
+	strokeurl:	string;
+	family:	int;	# text: Fsans, Fserif, Fmono (inherited)
+	bold:	int;
+	anchor:	int;	# text-anchor: 0 start, 1 middle, 2 end
 };
+
+Fsans, Fserif, Fmono: con iota;
 
 # Gradient stop
 GradStop: adt {
 	offset:	real;
 	color:	ref Color;
+	opacity:	real;
 };
 
 # Gradient definition
@@ -108,9 +122,18 @@ Gradient: adt {
 	x1, y1:	real;
 	x2, y2:	real;
 	cx, cy, r:	real;
+	fx, fy:	real;
 	stops:		list of ref GradStop;
 	transform:	ref Matrix;
+	href:		string;	# the gradient it takes what it does not say from
+	user:		int;	# gradientUnits="userSpaceOnUse"
+	spread:		int;	# Spad, Sreflect, Srepeat
+	set:		int;	# the G* bits of the attributes it gives
+	pct:		int;	# and of those, the percentages
 };
+
+Spad, Sreflect, Srepeat: con iota;
+Gx1, Gy1, Gx2, Gy2, Gcx, Gcy, Gr, Gfx, Gfy, Gunits, Gtransform, Gspread: con 1<<iota;
 
 # SVG rendering context
 Canvas: adt {
@@ -197,7 +220,10 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 			if(t.name == "svg") {
 				canvas = new_canvas(t.attrs);
 				parser.down();
-				render_children(parser, canvas, canvas.transform, default_style());
+				# the root's own fill, stroke, color and style pass down
+				# like any element's (an icon's <svg fill="none"
+				# stroke="currentColor">)
+				render_children(parser, canvas, canvas.transform, parse_style(t.attrs, default_style()));
 				parser.up();
 				return (canvas, "");
 			}
@@ -210,8 +236,9 @@ parse_svg(parser: ref Parser): (ref Canvas, string)
 # Create a new canvas from SVG attributes
 new_canvas(attrs: Attributes): ref Canvas
 {
-	width := parse_length(attrs.get("width"), real DEFAULT_WIDTH);
-	height := parse_length(attrs.get("height"), real DEFAULT_HEIGHT);
+	# a percentage is of a viewport this image has not got: the default
+	width := rootlen(attrs.get("width"), real DEFAULT_WIDTH);
+	height := rootlen(attrs.get("height"), real DEFAULT_HEIGHT);
 
 	c := ref Canvas;
 	# Limbo's conversion rounds: adding 0.5 first made an 8 by 8 SVG 9 by 9
@@ -226,6 +253,15 @@ new_canvas(attrs: Attributes): ref Canvas
 	# transparent where nothing is drawn: a viewer shows it on its own
 	# background, a web page on the page's
 	c.img = display.newimage(Rect((0, 0), (c.width, c.height)), Draw->RGBA32, 0, Draw->Transparent);
+	# the root element's CSS background covers the whole canvas
+	# (aspect-ratio/replaced-element-004)
+	if((rs := attrs.get("style")) != nil) {
+		bg := extract_style_prop(rs, "background-color");
+		if(bg == nil)
+			bg = extract_style_prop(rs, "background");
+		if(bg != nil && (bc := parse_color(bg)) != nil && (bsrc := paint(bc, 1.0)) != nil)
+			c.img.draw(c.img.r, bsrc, nil, (0, 0));
+	}
 
 	c.viewbox_x = 0.0;
 	c.viewbox_y = 0.0;
@@ -246,16 +282,50 @@ new_canvas(attrs: Attributes): ref Canvas
 		}
 	}
 
-	# Compute transform from viewBox to viewport
+	vbw = c.viewbox_w;
+	vbh = c.viewbox_h;
+
+	# Compute transform from viewBox to viewport, as preserveAspectRatio
+	# says (SVG 2 §8.7): none stretches; else one scale, meet (within)
+	# or slice (covering), aligned by xMin/xMid/xMax and YMin/YMid/YMax
 	sx := real c.width / c.viewbox_w;
 	sy := real c.height / c.viewbox_h;
-	# preserveAspectRatio: xMidYMid meet (default)
-	scale := sx;
-	if(sy < scale) scale = sy;
-	tx := (real c.width - c.viewbox_w * scale) / 2.0 - c.viewbox_x * scale;
-	ty := (real c.height - c.viewbox_h * scale) / 2.0 - c.viewbox_y * scale;
-
-	c.transform = ref Matrix(scale, 0.0, tx, 0.0, scale, ty);
+	align := "xMidYMid";
+	slice := 0;
+	par := attrs.get("preserveAspectRatio");
+	if(par != nil) {
+		parts := split_whitespace_comma(par);
+		for(i := 0; i < len parts; i++) {
+			case parts[i] {
+			"none" =>	align = "none";
+			"slice" =>	slice = 1;
+			"meet" =>	slice = 0;
+			* =>
+				if(len parts[i] >= 8 && parts[i][0] == 'x')
+					align = parts[i];
+			}
+		}
+	}
+	if(align == "none")
+		c.transform = ref Matrix(sx, 0.0, -c.viewbox_x * sx, 0.0, sy, -c.viewbox_y * sy);
+	else {
+		scale := sx;
+		if(slice && sy > scale || !slice && sy < scale)
+			scale = sy;
+		ax := 0.5;
+		ay := 0.5;
+		case align[1:4] {
+		"Min" =>	ax = 0.0;
+		"Max" =>	ax = 1.0;
+		}
+		case align[5:8] {
+		"Min" =>	ay = 0.0;
+		"Max" =>	ay = 1.0;
+		}
+		tx := (real c.width - c.viewbox_w * scale) * ax - c.viewbox_x * scale;
+		ty := (real c.height - c.viewbox_h * scale) * ay - c.viewbox_y * scale;
+		c.transform = ref Matrix(scale, 0.0, tx, 0.0, scale, ty);
+	}
 	c.defs = nil;
 
 	return c;
@@ -295,10 +365,23 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 		parser.down();
 		render_children(parser, canvas, xform, style);
 		parser.up();
+	"svg" =>
+		# an svg inside: a viewport of its own at x, y, its viewBox
+		# fitted into it (SVG 2 §8.2, §8.7); sprite sheets are made of them
+		parser.down();
+		render_children(parser, canvas, matrix_multiply(xform, nested_viewport(attrs)), style);
+		parser.up();
 	"defs" =>
 		parser.down();
 		parse_defs(parser, canvas);
 		parser.up();
+	"linearGradient" =>
+		# outside defs too: a paint server wherever it is
+		if((grad := parse_linear_gradient(parser, attrs)) != nil)
+			canvas.defs = grad :: canvas.defs;
+	"radialGradient" =>
+		if((grad := parse_radial_gradient(parser, attrs)) != nil)
+			canvas.defs = grad :: canvas.defs;
 	"rect" =>
 		render_rect(canvas, attrs, xform, style);
 	"circle" =>
@@ -333,6 +416,57 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 		render_children(parser, canvas, xform, style);
 		parser.up();
 	}
+}
+
+# the transform into a nested svg's user space: to its x, y, then its
+# viewBox into width by height as preserveAspectRatio says
+nested_viewport(attrs: Attributes): ref Matrix
+{
+	x := px(attrs.get("x"), 0.0);
+	y := py(attrs.get("y"), 0.0);
+	w := px(attrs.get("width"), vbw);
+	h := py(attrs.get("height"), vbh);
+	vb := attrs.get("viewBox");
+	if(vb == nil)
+		vb = attrs.get("viewbox");
+	if(vb == nil)
+		return ref Matrix(1.0, 0.0, x, 0.0, 1.0, y);
+	parts := split_whitespace_comma(vb);
+	if(len parts < 4 || real parts[2] <= 0.0 || real parts[3] <= 0.0)
+		return ref Matrix(1.0, 0.0, x, 0.0, 1.0, y);
+	(vx, vy, vw, vh) := (real parts[0], real parts[1], real parts[2], real parts[3]);
+	sx := w / vw;
+	sy := h / vh;
+	align := "xMidYMid";
+	slice := 0;
+	if((par := attrs.get("preserveAspectRatio")) != nil) {
+		pp := split_whitespace_comma(par);
+		for(i := 0; i < len pp; i++)
+			case pp[i] {
+			"none" =>	align = "none";
+			"slice" =>	slice = 1;
+			"meet" =>	slice = 0;
+			* =>
+				if(len pp[i] >= 8 && pp[i][0] == 'x')
+					align = pp[i];
+			}
+	}
+	if(align == "none")
+		return ref Matrix(sx, 0.0, x - vx*sx, 0.0, sy, y - vy*sy);
+	sc := sx;
+	if(slice && sy > sc || !slice && sy < sc)
+		sc = sy;
+	ax := 0.5;
+	ay := 0.5;
+	case align[1:4] {
+	"Min" =>	ax = 0.0;
+	"Max" =>	ax = 1.0;
+	}
+	case align[5:8] {
+	"Min" =>	ay = 0.0;
+	"Max" =>	ay = 1.0;
+	}
+	return ref Matrix(sc, 0.0, x + (w - vw*sc)*ax - vx*sc, 0.0, sc, y + (h - vh*sc)*ay - vy*sc);
 }
 
 # Skip an element and its children
@@ -373,16 +507,64 @@ parse_defs(parser: ref Parser, canvas: ref Canvas)
 	}
 }
 
+# A gradient's attributes, those it gives marked in set (and pct)
+gradattrs(grad: ref Gradient, attrs: Attributes)
+{
+	grad.id = attrs.get("id");
+	if((h := attrs.get("xlink:href")) == nil)
+		h = attrs.get("href");
+	if(h != nil && len h > 1 && h[0] == '#')
+		grad.href = h[1:];
+	grad.x2 = 1.0;
+	grad.cx = grad.cy = grad.r = 0.5;
+	names := array[] of {"x1", "y1", "x2", "y2", "cx", "cy", "r", "fx", "fy"};
+	for(k := 0; k < len names; k++) {
+		v := attrs.get(names[k]);
+		if(v == nil)
+			continue;
+		v = trim(v);
+		x := 0.0;
+		if(len v > 0 && v[len v - 1] == '%') {
+			x = real v[0:len v - 1] / 100.0;
+			grad.pct |= 1 << k;
+		} else
+			x = real v;
+		grad.set |= 1 << k;
+		case k {
+		0 => grad.x1 = x;
+		1 => grad.y1 = x;
+		2 => grad.x2 = x;
+		3 => grad.y2 = x;
+		4 => grad.cx = x;
+		5 => grad.cy = x;
+		6 => grad.r = x;
+		7 => grad.fx = x;
+		8 => grad.fy = x;
+		}
+	}
+	if((u := attrs.get("gradientUnits")) != nil) {
+		grad.set |= Gunits;
+		grad.user = trim(u) == "userSpaceOnUse";
+	}
+	if((t := attrs.get("gradientTransform")) != nil) {
+		grad.set |= Gtransform;
+		grad.transform = parse_transform(t);
+	}
+	if((sm := attrs.get("spreadMethod")) != nil) {
+		grad.set |= Gspread;
+		case trim(sm) {
+		"reflect" =>	grad.spread = Sreflect;
+		"repeat" =>	grad.spread = Srepeat;
+		}
+	}
+}
+
 # Parse a linear gradient
 parse_linear_gradient(parser: ref Parser, attrs: Attributes): ref Gradient
 {
 	grad := ref Gradient;
-	grad.id = attrs.get("id");
 	grad.linear = 1;
-	grad.x1 = parse_real(attrs.get("x1"), 0.0);
-	grad.y1 = parse_real(attrs.get("y1"), 0.0);
-	grad.x2 = parse_real(attrs.get("x2"), 1.0);
-	grad.y2 = parse_real(attrs.get("y2"), 0.0);
+	gradattrs(grad, attrs);
 
 	parser.down();
 	grad.stops = parse_gradient_stops(parser);
@@ -395,11 +577,8 @@ parse_linear_gradient(parser: ref Parser, attrs: Attributes): ref Gradient
 parse_radial_gradient(parser: ref Parser, attrs: Attributes): ref Gradient
 {
 	grad := ref Gradient;
-	grad.id = attrs.get("id");
 	grad.linear = 0;
-	grad.cx = parse_real(attrs.get("cx"), 0.5);
-	grad.cy = parse_real(attrs.get("cy"), 0.5);
-	grad.r = parse_real(attrs.get("r"), 0.5);
+	gradattrs(grad, attrs);
 
 	parser.down();
 	grad.stops = parse_gradient_stops(parser);
@@ -438,6 +617,12 @@ parse_gradient_stops(parser: ref Parser): list of ref GradStop
 					stop.color = parse_color(sc);
 				else
 					stop.color = ref Color(0, 0, 0, 255);
+				stop.opacity = 1.0;
+				so := t.attrs.get("stop-opacity");
+				if(so == nil && (st := t.attrs.get("style")) != nil)
+					so = extract_style_prop(st, "stop-opacity");
+				if(so != nil)
+					stop.opacity = real trim(so);
 				stops = stop :: stops;
 			}
 		}
@@ -453,12 +638,12 @@ parse_gradient_stops(parser: ref Parser): list of ref GradStop
 
 render_rect(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	x := parse_length(attrs.get("x"), 0.0);
-	y := parse_length(attrs.get("y"), 0.0);
-	w := parse_length(attrs.get("width"), 0.0);
-	h := parse_length(attrs.get("height"), 0.0);
-	rx := parse_length(attrs.get("rx"), 0.0);
-	ry := parse_length(attrs.get("ry"), 0.0);
+	x := px(attrs.get("x"), 0.0);
+	y := py(attrs.get("y"), 0.0);
+	w := px(attrs.get("width"), 0.0);
+	h := py(attrs.get("height"), 0.0);
+	rx := px(attrs.get("rx"), 0.0);
+	ry := py(attrs.get("ry"), 0.0);
 
 	if(w <= 0.0 || h <= 0.0)
 		return;
@@ -499,9 +684,9 @@ render_rect(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref
 
 render_circle(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	cx := parse_length(attrs.get("cx"), 0.0);
-	cy := parse_length(attrs.get("cy"), 0.0);
-	r := parse_length(attrs.get("r"), 0.0);
+	cx := px(attrs.get("cx"), 0.0);
+	cy := py(attrs.get("cy"), 0.0);
+	r := pd(attrs.get("r"), 0.0);
 	if(r <= 0.0)
 		return;
 
@@ -512,10 +697,10 @@ render_circle(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: r
 
 render_ellipse(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	cx := parse_length(attrs.get("cx"), 0.0);
-	cy := parse_length(attrs.get("cy"), 0.0);
-	rx := parse_length(attrs.get("rx"), 0.0);
-	ry := parse_length(attrs.get("ry"), 0.0);
+	cx := px(attrs.get("cx"), 0.0);
+	cy := py(attrs.get("cy"), 0.0);
+	rx := px(attrs.get("rx"), 0.0);
+	ry := py(attrs.get("ry"), 0.0);
 	if(rx <= 0.0 || ry <= 0.0)
 		return;
 
@@ -543,10 +728,10 @@ make_ellipse_path(cx, cy, rx, ry: real): list of ref Segment
 
 render_line(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	x1 := parse_length(attrs.get("x1"), 0.0);
-	y1 := parse_length(attrs.get("y1"), 0.0);
-	x2 := parse_length(attrs.get("x2"), 0.0);
-	y2 := parse_length(attrs.get("y2"), 0.0);
+	x1 := px(attrs.get("x1"), 0.0);
+	y1 := py(attrs.get("y1"), 0.0);
+	x2 := px(attrs.get("x2"), 0.0);
+	y2 := py(attrs.get("y2"), 0.0);
 
 	segs := ref Segment(SEG_MOVETO, x1, y1, 0.0, 0.0, 0.0, 0.0) ::
 		ref Segment(SEG_LINETO, x2, y2, 0.0, 0.0, 0.0, 0.0) :: nil;
@@ -592,75 +777,167 @@ render_path(canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref
 
 render_text(parser: ref Parser, canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style)
 {
-	# Basic text rendering - draw text as simple pixel blocks
-	# (Full font rendering would require the font subsystem)
+	preserve := attrs.get("xml:space") == "preserve";
 	parser.down();
+	textrun(parser, canvas, attrs, xform, style, (px(attrs.get("x"), 0.0), py(attrs.get("y"), 0.0)), preserve);
+	parser.up();
+}
+
+# The text and tspans inside a text element, drawn from the pen
+# position (x, y) in user space, which each tspan's x and y (and dx,
+# dy) move; the pen after it.
+textrun(parser: ref Parser, canvas: ref Canvas, attrs: Attributes, xform: ref Matrix, style: ref Style, pen: (real, real), preserve: int): (real, real)
+{
 	for(;;) {
 		item := parser.next();
 		if(item == nil)
 			break;
 		pick t := item {
 		Text =>
-			# We have text content - render at position
-			tx := parse_length(attrs.get("x"), 0.0);
-			ty := parse_length(attrs.get("y"), 0.0);
-			render_text_string(canvas, t.ch, tx, ty, xform, style);
+			# the parser trims a text's ends and says so: a space there
+			# separates it from a tspan beside it
+			txt := t.ch;
+			if(t.ws1)
+				txt = " " + txt;
+			if(t.ws2 && t.ch != nil)
+				txt += " ";
+			pen = drawtext(canvas, squashtext(txt, preserve), pen, xform, style);
 		Tag =>
-			if(t.name == "tspan") {
+			if(t.name == "tspan" || t.name == "a") {
+				(x, y) := pen;
+				if((v := t.attrs.get("x")) != nil)
+					x = px(firstnum(v), x);
+				if((v = t.attrs.get("y")) != nil)
+					y = py(firstnum(v), y);
+				if((v = t.attrs.get("dx")) != nil)
+					x += px(firstnum(v), 0.0);
+				if((v = t.attrs.get("dy")) != nil)
+					y += py(firstnum(v), 0.0);
+				ts := parse_style(t.attrs, style);
 				parser.down();
-				for(;;) {
-					inner := parser.next();
-					if(inner == nil)
-						break;
-					pick it := inner {
-					Text =>
-						stx := parse_length(t.attrs.get("x"), parse_length(attrs.get("x"), 0.0));
-						sty := parse_length(t.attrs.get("y"), parse_length(attrs.get("y"), 0.0));
-						render_text_string(canvas, it.ch, stx, sty, xform, style);
-					}
-				}
+				pen = textrun(parser, canvas, t.attrs, xform, ts, (x, y), preserve);
 				parser.up();
 			}
 		}
 	}
-	parser.up();
+	return pen;
 }
 
-render_text_string(canvas: ref Canvas, text: string, tx, ty: real, xform: ref Matrix, style: ref Style)
+# the first of a list of coordinates (one per glyph, of which we take the first)
+firstnum(v: string): string
 {
-	if(text == nil || style.fill == nil)
-		return;
+	p := split_whitespace_comma(v);
+	if(len p == 0)
+		return v;
+	return p[0];
+}
 
-	# Simple bitmap font rendering (5x7 pixel characters)
-	# This provides basic text display for Wikipedia SVGs
+# xml:space default: newlines and tabs are spaces, runs one space,
+# the ends kept (the next run may follow on the same line)
+squashtext(s: string, preserve: int): string
+{
+	r := "";
+	sp := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == '\n' || c == '\r' || c == '\t')
+			c = ' ';
+		if(c == ' ' && !preserve) {
+			if(sp)
+				continue;
+			sp = 1;
+		} else
+			sp = 0;
+		r[len r] = c;
+	}
+	return r;
+}
+
+# the shipped faces: family*2 + bold
+facefiles := array[] of {
+	"DejaVuSans.ttf", "DejaVuSans-Bold.ttf",
+	"DejaVuSerif.ttf", "DejaVuSerif-Bold.ttf",
+	"DejaVuSansMono.ttf", "DejaVuSansMono-Bold.ttf",
+};
+faces: array of ref Face;
+
+textface(st: ref Style): ref Face
+{
+	if(ofont == nil) {
+		ofont = load OutlineFont OutlineFont->PATH;
+		if(ofont == nil)
+			return nil;
+		ofont->init(display);
+		faces = array[len facefiles] of ref Face;
+	}
+	i := st.family*2 + st.bold;
+	if(faces[i] != nil)
+		return faces[i];
+	fd := sys->open("/fonts/ttf/dejavu/" + facefiles[i], Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, dir) := sys->fstat(fd);
+	if(ok < 0)
+		return nil;
+	data := array[int dir.length] of byte;
+	n := 0;
+	while(n < len data && (k := sys->read(fd, data[n:], len data - n)) > 0)
+		n += k;
+	(f, nil) := ofont->open(data[0:n], "ttf");
+	faces[i] = f;
+	return f;
+}
+
+# The text in the outline face its style names, at its font size as
+# the transform scales it, its baseline at the pen (moved for
+# text-anchor); the pen after it.  Rotated and skewed text is drawn
+# upright.
+drawtext(canvas: ref Canvas, text: string, pen: (real, real), xform: ref Matrix, style: ref Style): (real, real)
+{
+	(x, y) := pen;
+	if(text == nil)
+		return pen;
+	f := textface(style);
 	fsize := style.font_size;
 	if(fsize <= 0.0)
 		fsize = 12.0;
-
-	charw := fsize * 0.6;
-	charh := fsize;
-
-	color := style.fill;
-	x := tx;
+	det := xform.a*xform.e - xform.b*xform.d;
+	if(det < 0.0)
+		det = -det;
+	sc := sqrt(det);
+	if(f == nil || sc <= 0.0)
+		return (x + fsize * 0.6 * real len text, y);
+	size := fsize * sc;
+	gids := array[len text] of int;
+	w := 0.0;	# in device pixels
 	for(i := 0; i < len text; i++) {
-		ch := text[i];
-		if(ch == ' ' || ch == '\t') {
-			x += charw;
-			continue;
-		}
-		if(ch == '\n' || ch == '\r')
-			continue;
-
-		# Draw a small filled rect for each character
-		# (approximation - real font rendering would use glyph outlines)
-		segs := ref Segment(SEG_MOVETO, x, ty - charh * 0.8, 0.0, 0.0, 0.0, 0.0) ::
-			ref Segment(SEG_LINETO, x + charw * 0.8, ty - charh * 0.8, 0.0, 0.0, 0.0, 0.0) ::
-			ref Segment(SEG_LINETO, x + charw * 0.8, ty, 0.0, 0.0, 0.0, 0.0) ::
-			ref Segment(SEG_LINETO, x, ty, 0.0, 0.0, 0.0, 0.0) ::
-			ref Segment(SEG_CLOSE, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) :: nil;
-		fill_path_color(canvas, segs, xform, color, style.opacity*style.fill_opacity, ~0);
-		x += charw;
+		c := text[i];
+		if(c == 16rA0)
+			c = ' ';
+		gids[i] = f.lookup(c);
+		if(gids[i] < 0)
+			gids[i] = 0;
+		w += f.advance(gids[i], size);
 	}
+	case style.anchor {
+	1 =>	x -= w / sc / 2.0;
+	2 =>	x -= w / sc;
+	}
+	if(style.fill != nil || style.fillurl != nil) {
+		src: ref Image;
+		if(style.fill != nil)
+			src = paint(style.fill, style.opacity*style.fill_opacity);
+		if(src != nil) {
+			(dx, dy) := transform_point(xform, x, y);
+			gx := dx;
+			for(i = 0; i < len text; i++) {
+				if(text[i] != ' ')
+					f.drawglyph(gids[i], size, canvas.img, Point(int gx, int dy), src);
+				gx += f.advance(gids[i], size);
+			}
+		}
+	}
+	return (x + w / sc, y);
 }
 
 # ==================== SVG Path Parser ====================
@@ -811,8 +1088,8 @@ parse_path_data(d: string): list of ref Segment
 				i = ni;
 				(ary, ni2) := parse_path_number(d, i, n); i = ni2;
 				(angle, ni3) := parse_path_number(d, i, n); i = ni3;
-				(large_arc, ni4) := parse_path_number(d, i, n); i = ni4;
-				(sweep, ni5) := parse_path_number(d, i, n); i = ni5;
+				(large_arc, ni4) := parse_path_flag(d, i, n); i = ni4;
+				(sweep, ni5) := parse_path_flag(d, i, n); i = ni5;
 				(x, ni6) := parse_path_number(d, i, n); i = ni6;
 				(y, ni7) := parse_path_number(d, i, n); i = ni7;
 				if(cmd == 'a') { x += cx; y += cy; }
@@ -870,6 +1147,18 @@ parse_path_number(d: string, i, n: int): (real, int)
 	return (real d[start:i], i);
 }
 
+# An arc's flag: one character, 0 or 1, so that "a7 7 0 015.6 11.2"
+# is flags 0 and 1, then 5.6 (SVG 2 path grammar, flag)
+parse_path_flag(d: string, i, n: int): (real, int)
+{
+	orig := i;
+	while(i < n && (d[i] == ' ' || d[i] == '\t' || d[i] == '\n' || d[i] == '\r' || d[i] == ','))
+		i++;
+	if(i < n && (d[i] == '0' || d[i] == '1'))
+		return (real (d[i] - '0'), i + 1);
+	return (0.0, orig);
+}
+
 # ==================== Rasterizer ====================
 
 # The path, transformed, as a Draw path
@@ -919,6 +1208,10 @@ paint(c: ref Color, opacity: real): ref Image
 
 fill_path(canvas: ref Canvas, path: list of ref Segment, xform: ref Matrix, style: ref Style)
 {
+	if(style.fillurl != nil && (g := gradient(canvas, style.fillurl)) != nil) {
+		gradfill(canvas, path, xform, g, style.opacity*style.fill_opacity, style, 0, 0.0);
+		return;
+	}
 	if(style.fill == nil)
 		return;
 	fill_path_color(canvas, path, xform, style.fill, style.opacity*style.fill_opacity, style.fill_rule);
@@ -934,10 +1227,7 @@ fill_path_color(canvas: ref Canvas, path: list of ref Segment, xform: ref Matrix
 # Stroke a path, the width scaled as the transform scales area
 stroke_path(canvas: ref Canvas, path: list of ref Segment, xform: ref Matrix, style: ref Style)
 {
-	if(style.stroke == nil || style.stroke_width <= 0.0 || path == nil)
-		return;
-	src := paint(style.stroke, style.opacity*style.stroke_opacity);
-	if(src == nil)
+	if(style.stroke_width <= 0.0 || path == nil)
 		return;
 	det := xform.a*xform.e - xform.b*xform.d;
 	if(det < 0.0)
@@ -945,7 +1235,288 @@ stroke_path(canvas: ref Canvas, path: list of ref Segment, xform: ref Matrix, st
 	sw := style.stroke_width * sqrt(det);
 	if(sw <= 0.0)
 		return;
+	if(style.strokeurl != nil && (g := gradient(canvas, style.strokeurl)) != nil) {
+		gradfill(canvas, path, xform, g, style.opacity*style.stroke_opacity, style, 1, sw);
+		return;
+	}
+	if(style.stroke == nil)
+		return;
+	src := paint(style.stroke, style.opacity*style.stroke_opacity);
+	if(src == nil)
+		return;
 	canvas.img.strokepath(topath(path, xform), sw, style.cap, style.join, src, (0, 0));
+}
+
+# ==================== Gradients ====================
+
+# The gradient id names, with what it takes from those it refers to
+# (xlink:href) filled in: their stops when it has none, and each
+# attribute it does not give (SVG 2 §14.2.2).
+gradient(canvas: ref Canvas, id: string): ref Gradient
+{
+	g := findgrad(canvas, id);
+	if(g == nil)
+		return nil;
+	r := ref *g;
+	for(n := 0; r.href != nil && n < 8; n++) {
+		h := findgrad(canvas, r.href);
+		if(h == nil)
+			break;
+		if(r.stops == nil)
+			r.stops = h.stops;
+		for(k := 0; k < 9; k++) {
+			b := 1 << k;
+			if(r.set & b || !(h.set & b))
+				continue;
+			r.set |= b;
+			r.pct = r.pct & ~b | h.pct & b;
+			case k {
+			0 => r.x1 = h.x1;
+			1 => r.y1 = h.y1;
+			2 => r.x2 = h.x2;
+			3 => r.y2 = h.y2;
+			4 => r.cx = h.cx;
+			5 => r.cy = h.cy;
+			6 => r.r = h.r;
+			7 => r.fx = h.fx;
+			8 => r.fy = h.fy;
+			}
+		}
+		if(!(r.set & Gunits) && h.set & Gunits) {
+			r.user = h.user;
+			r.set |= Gunits;
+		}
+		if(!(r.set & Gtransform) && h.set & Gtransform) {
+			r.transform = h.transform;
+			r.set |= Gtransform;
+		}
+		if(!(r.set & Gspread) && h.set & Gspread) {
+			r.spread = h.spread;
+			r.set |= Gspread;
+		}
+		r.href = h.href;
+	}
+	if(r.stops == nil)
+		return nil;	# no stops: nothing is painted (none)
+	if(!(r.set & Gfx))
+		r.fx = r.cx;
+	if(!(r.set & Gfy))
+		r.fy = r.cy;
+	return r;
+}
+
+findgrad(canvas: ref Canvas, id: string): ref Gradient
+{
+	for(l := canvas.defs; l != nil; l = tl l)
+		if((hd l).id == id)
+			return hd l;
+	return nil;
+}
+
+# The path filled (or stroked sw wide) with the gradient: its shape as
+# a mask, the gradient drawn through it, pixel by pixel within the
+# shape's bounds.
+gradfill(canvas: ref Canvas, path: list of ref Segment, xform: ref Matrix, g: ref Gradient, opacity: real, style: ref Style, stroke: int, sw: real)
+{
+	if(path == nil || opacity <= 0.0)
+		return;
+	# the shape's bounding box in user space, control points and all
+	bx0 := 1e30;
+	by0 := 1e30;
+	bx1 := -1e30;
+	by1 := -1e30;
+	for(l := path; l != nil; l = tl l) {
+		sg := hd l;
+		n := 0;
+		case sg.stype {
+		SEG_MOVETO or SEG_LINETO => n = 1;
+		SEG_QUADTO => n = 2;
+		SEG_CUBICTO => n = 3;
+		}
+		pts := array[] of {(sg.x1, sg.y1), (sg.x2, sg.y2), (sg.x3, sg.y3)};
+		for(k := 0; k < n; k++) {
+			(x, y) := pts[k];
+			if(x < bx0) bx0 = x;
+			if(x > bx1) bx1 = x;
+			if(y < by0) by0 = y;
+			if(y > by1) by1 = y;
+		}
+	}
+	if(bx1 < bx0)
+		return;
+	# where it lands on the canvas
+	dx0 := 1e30;
+	dy0 := 1e30;
+	dx1 := -1e30;
+	dy1 := -1e30;
+	corners := array[] of {(bx0, by0), (bx1, by0), (bx0, by1), (bx1, by1)};
+	for(k := 0; k < 4; k++) {
+		(cx, cy) := corners[k];
+		(x, y) := transform_point(xform, cx, cy);
+		if(x < dx0) dx0 = x;
+		if(x > dx1) dx1 = x;
+		if(y < dy0) dy0 = y;
+		if(y > dy1) dy1 = y;
+	}
+	pad := 1.0 + sw;	# a stroke reaches beyond the outline, its miters further
+	(r, ok) := Rect((int floor(dx0 - pad), int floor(dy0 - pad)), (int floor(dx1 + pad) + 1, int floor(dy1 + pad) + 1)).clip(canvas.img.r);
+	if(!ok || r.dx() <= 0 || r.dy() <= 0)
+		return;
+	# device pixel -> gradient space: the inverse of
+	# xform · (the bounding box, for objectBoundingBox) · gradientTransform
+	m := xform;
+	if(!g.user) {
+		bw := bx1 - bx0;
+		bh := by1 - by0;
+		if(bw <= 0.0 || bh <= 0.0)
+			return;	# a box of no area: the gradient is not drawn (§14.2.2)
+		m = matrix_multiply(m, ref Matrix(bw, 0.0, bx0, 0.0, bh, by0));
+	}
+	if(g.transform != nil)
+		m = matrix_multiply(m, g.transform);
+	det := m.a*m.e - m.b*m.d;
+	if(det > -1e-12 && det < 1e-12)
+		return;
+	inv := ref Matrix(m.e/det, -m.b/det, (m.b*m.f - m.c*m.e)/det, -m.d/det, m.a/det, (m.c*m.d - m.a*m.f)/det);
+	# coordinates: user-space percentages are of the viewport
+	(x1, y1, x2, y2) := (gcoord(g, 0, g.x1), gcoord(g, 1, g.y1), gcoord(g, 2, g.x2), gcoord(g, 3, g.y2));
+	(cx, cy, rr, fx, fy) := (gcoord(g, 4, g.cx), gcoord(g, 5, g.cy), gcoord(g, 6, g.r), gcoord(g, 7, g.fx), gcoord(g, 8, g.fy));
+	stops := gradstops(g.stops);
+	w := r.dx();
+	h := r.dy();
+	buf := array[w*h*4] of byte;
+	lx := x2 - x1;
+	ly := y2 - y1;
+	ll := lx*lx + ly*ly;
+	ex := cx - fx;
+	ey := cy - fy;
+	qa := ex*ex + ey*ey - rr*rr;
+	for(py := 0; py < h; py++) {
+		Y := real (r.min.y + py) + 0.5;
+		for(px := 0; px < w; px++) {
+			X := real (r.min.x + px) + 0.5;
+			gx := inv.a*X + inv.b*Y + inv.c;
+			gy := inv.d*X + inv.e*Y + inv.f;
+			t := 0.0;
+			if(g.linear) {
+				if(ll > 0.0)
+					t = ((gx - x1)*lx + (gy - y1)*ly) / ll;
+			} else if(rr > 0.0) {
+				# on the circle about f + t(c - f) of radius t·r
+				ddx := gx - fx;
+				ddy := gy - fy;
+				if(ex*ex + ey*ey < 1e-12)
+					t = sqrt(ddx*ddx + ddy*ddy) / rr;
+				else {
+					qb := -2.0*(ddx*ex + ddy*ey);
+					qc := ddx*ddx + ddy*ddy;
+					if(qa > -1e-12 && qa < 1e-12)
+						t = 1e9;
+					else {
+						disc := qb*qb - 4.0*qa*qc;
+						if(disc < 0.0)
+							disc = 0.0;
+						t = (-qb - sqrt(disc)) / (2.0*qa);
+						t2 := (-qb + sqrt(disc)) / (2.0*qa);
+						if(t2 > t)
+							t = t2;
+					}
+				}
+			} else
+				t = 1.0;
+			case g.spread {
+			Srepeat =>
+				t -= floor(t);
+			Sreflect =>
+				t = t - 2.0*floor(t/2.0);
+				if(t > 1.0)
+					t = 2.0 - t;
+			* =>
+				if(t < 0.0) t = 0.0;
+				if(t > 1.0) t = 1.0;
+			}
+			(cr, cg, cb, ca) := stopcolor(stops, t);
+			a := int (ca * opacity * 255.0);	# (int rounds)
+			if(a > 255) a = 255;
+			if(a < 0) a = 0;
+			o := (py*w + px)*4;
+			buf[o] = byte a;
+			buf[o+1] = byte (cb * a / 255);
+			buf[o+2] = byte (cg * a / 255);
+			buf[o+3] = byte (cr * a / 255);
+		}
+	}
+	gimg := display.newimage(r, Draw->RGBA32, 0, Draw->Transparent);
+	mask := display.newimage(r, Draw->GREY8, 0, Draw->Black);
+	if(gimg == nil || mask == nil)
+		return;
+	gimg.writepixels(r, buf);
+	if(stroke)
+		mask.strokepath(topath(path, xform), sw, style.cap, style.join, display.white, (0, 0));
+	else
+		mask.fillpath(topath(path, xform), style.fill_rule, display.white, (0, 0));
+	canvas.img.gendraw(r, gimg, r.min, mask, r.min);
+}
+
+# a coordinate as given: a fraction of the box, or for userSpaceOnUse
+# a length, a percentage being of the viewport's width, height or (r)
+# its normalised diagonal
+gcoord(g: ref Gradient, k: int, v: real): real
+{
+	if(!g.user || !(g.pct & (1 << k)))
+		return v;
+	case k {
+	0 or 2 or 4 or 7 =>
+		return v * vbw;
+	1 or 3 or 5 or 8 =>
+		return v * vbh;
+	}
+	return v * sqrt((vbw*vbw + vbh*vbh) / 2.0);
+}
+
+# the stops in order, each offset no less than the one before (§14.2.4)
+gradstops(l: list of ref GradStop): array of ref GradStop
+{
+	a := array[len l] of ref GradStop;
+	prev := 0.0;
+	for(i := 0; l != nil; l = tl l) {
+		s := ref *hd l;
+		if(s.offset < 0.0) s.offset = 0.0;
+		if(s.offset > 1.0) s.offset = 1.0;
+		if(s.offset < prev) s.offset = prev;
+		prev = s.offset;
+		a[i++] = s;
+	}
+	return a;
+}
+
+# the colour at t: (r, g, b) 0-255 and alpha 0-1
+stopcolor(s: array of ref GradStop, t: real): (int, int, int, real)
+{
+	if(len s == 0)
+		return (0, 0, 0, 0.0);
+	if(t <= s[0].offset)
+		return stopc(s[0]);
+	for(i := 1; i < len s; i++)
+		if(t <= s[i].offset) {
+			span := s[i].offset - s[i-1].offset;
+			if(span <= 0.0)
+				return stopc(s[i]);
+			f := (t - s[i-1].offset) / span;
+			(r0, g0, b0, a0) := stopc(s[i-1]);
+			(r1, g1, b1, a1) := stopc(s[i]);
+			return (int (real r0 + real (r1 - r0)*f), int (real g0 + real (g1 - g0)*f),
+				int (real b0 + real (b1 - b0)*f), a0 + (a1 - a0)*f);	# (int rounds)
+		}
+	return stopc(s[len s - 1]);
+}
+
+stopc(s: ref GradStop): (int, int, int, real)
+{
+	c := s.color;
+	if(c == nil)
+		return (0, 0, 0, s.opacity);
+	return (c.r, c.g, c.b, real c.a / 255.0 * s.opacity);
 }
 
 # ==================== Transform Functions ====================
@@ -1076,7 +1647,10 @@ default_style(): ref Style
 		12.0,				# font_size
 		~0,				# fill_rule: nonzero
 		Draw->Capbutt,			# stroke-linecap: butt
-		Draw->Joinmiter			# stroke-linejoin: miter
+		Draw->Joinmiter,		# stroke-linejoin: miter
+		ref Color(0, 0, 0, 255),	# color: black
+		nil, nil,			# no paint servers
+		Fsans, 0, 0			# text: sans, normal, start
 	);
 }
 
@@ -1092,34 +1666,38 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 		parent.font_size,
 		parent.fill_rule,
 		parent.cap,
-		parent.join
+		parent.join,
+		parent.color,
+		parent.fillurl,
+		parent.strokeurl,
+		parent.family,
+		parent.bold,
+		parent.anchor
 	);
 
-	# Parse inline style attribute
+	# the color property first: currentColor in a fill or stroke below,
+	# on this element or in its style, is this element's
+	if((col := attrs.get("color")) != nil && lower(trim(col)) != "currentcolor")
+		s.color = parse_color(col);
 	style_str := attrs.get("style");
+	if(style_str != nil)
+		css_color(s, style_str);
+
+	# presentation attributes, then the style attribute, which wins
+	# over them (SVG 2 §6.4)
+	fill := attrs.get("fill");
+	if(fill != nil)
+		setpaint(s, 0, fill);
+
+	stroke := attrs.get("stroke");
+	if(stroke != nil)
+		setpaint(s, 1, stroke);
 	if(style_str != nil)
 		apply_css_style(s, style_str);
 
-	# Parse presentation attributes (override style)
-	fill := attrs.get("fill");
-	if(fill != nil) {
-		if(fill == "none")
-			s.fill = nil;
-		else
-			s.fill = parse_color(fill);
-	}
-
-	stroke := attrs.get("stroke");
-	if(stroke != nil) {
-		if(stroke == "none")
-			s.stroke = nil;
-		else
-			s.stroke = parse_color(stroke);
-	}
-
 	sw := attrs.get("stroke-width");
 	if(sw != nil)
-		s.stroke_width = real sw;
+		s.stroke_width = pd(sw, 1.0);
 
 	op := attrs.get("opacity");
 	if(op != nil)
@@ -1136,6 +1714,12 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 	fs := attrs.get("font-size");
 	if(fs != nil)
 		s.font_size = parse_length(fs, s.font_size);
+	for(tk := 0; tk < len textprops; tk++) {
+		if((tv := attrs.get(textprops[tk])) != nil)
+			settextprop(s, textprops[tk], tv);
+		if(style_str != nil && (sv := extract_style_prop(style_str, textprops[tk])) != nil)
+			settextprop(s, textprops[tk], sv);
+	}
 
 	for(k := 0; k < len strokeprops; k++)
 		if((v := attrs.get(strokeprops[k])) != nil)
@@ -1148,6 +1732,39 @@ parse_style(attrs: Attributes, parent: ref Style): ref Style
 }
 
 strokeprops := array[] of {"fill-rule", "stroke-linecap", "stroke-linejoin"};
+textprops := array[] of {"font-family", "font-weight", "text-anchor"};
+
+settextprop(s: ref Style, name, value: string)
+{
+	value = lower(trim(value));
+	case name {
+	"font-family" =>
+		s.family = Fsans;
+		# the first generic family named, or a face's name that says
+		if(contains(value, "mono") || contains(value, "courier") || contains(value, "consol"))
+			s.family = Fmono;
+		else if(contains(value, "sans") || contains(value, "arial") || contains(value, "helvetica") || contains(value, "verdana"))
+			s.family = Fsans;
+		else if(contains(value, "serif") || contains(value, "times") || contains(value, "georgia"))
+			s.family = Fserif;
+	"font-weight" =>
+		s.bold = value == "bold" || value == "bolder" || len value > 0 && value[0] >= '6' && value[0] <= '9';
+	"text-anchor" =>
+		case value {
+		"middle" =>	s.anchor = 1;
+		"end" =>	s.anchor = 2;
+		* =>	s.anchor = 0;
+		}
+	}
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
+}
 
 setstrokeprop(s: ref Style, name, value: string)
 {
@@ -1186,17 +1803,11 @@ apply_css_style(s: ref Style, css: string)
 
 		case name {
 		"fill" =>
-			if(value == "none")
-				s.fill = nil;
-			else
-				s.fill = parse_color(value);
+			setpaint(s, 0, value);
 		"stroke" =>
-			if(value == "none")
-				s.stroke = nil;
-			else
-				s.stroke = parse_color(value);
+			setpaint(s, 1, value);
 		"stroke-width" =>
-			s.stroke_width = real value;
+			s.stroke_width = pd(value, 1.0);
 		"opacity" =>
 			s.opacity *= real value;
 		"fill-opacity" =>
@@ -1211,7 +1822,61 @@ apply_css_style(s: ref Style, css: string)
 	}
 }
 
+# A fill or stroke: none, a colour, or url(#id) [fallback], a paint
+# server (a gradient) that is drawn with when it is found; when it is
+# not, the fallback colour, or nothing (SVG 2 §13.2).
+setpaint(s: ref Style, stroke: int, v: string)
+{
+	v = trim(v);
+	u: string;
+	c: ref Color;
+	if(lower(v) == "none")
+		c = nil;
+	else if(len v > 4 && lower(v[0:4]) == "url(") {
+		e := 4;
+		while(e < len v && v[e] != ')')
+			e++;
+		u = trim(v[4:e]);
+		if(len u >= 2 && (u[0] == '"' || u[0] == '\''))
+			u = u[1:len u - 1];
+		if(len u > 0 && u[0] == '#')
+			u = u[1:];
+		else
+			u = nil;	# another document's: not here
+		c = ref Color(0, 0, 0, 0);
+		if(e + 1 < len v && (rest := trim(v[e+1:])) != nil && lower(rest) != "none")
+			c = paintof(s, rest);
+	} else
+		c = paintof(s, v);
+	if(stroke) {
+		s.stroke = c;
+		s.strokeurl = u;
+	} else {
+		s.fill = c;
+		s.fillurl = u;
+	}
+}
+
 # Parse a CSS color value
+# a fill or stroke: currentColor is the color property's value
+paintof(st: ref Style, v: string): ref Color
+{
+	if(lower(trim(v)) == "currentcolor")
+		return st.color;
+	return parse_color(v);
+}
+
+# the color property in a style attribute
+css_color(s: ref Style, css: string)
+{
+	(nil, parts) := sys->tokenize(css, ";");
+	for(p := parts; p != nil; p = tl p) {
+		(name, value) := split_colon(hd p);
+		if(trim(name) == "color" && value != nil && lower(trim(value)) != "currentcolor")
+			s.color = parse_color(trim(value));
+	}
+}
+
 parse_color(s: string): ref Color
 {
 	if(s == nil || len s == 0)
@@ -1418,6 +2083,43 @@ unpremul(c, a: int): int
 
 # ==================== Utility Functions ====================
 
+# the viewport's size in user units: what percentages are of
+vbw := real DEFAULT_WIDTH;
+vbh := real DEFAULT_HEIGHT;
+
+rootlen(s: string, dflt: real): real
+{
+	if(s != nil && len s > 0 && s[len s - 1] == '%')
+		return dflt;
+	return parse_length(s, dflt);
+}
+
+# a length in user units: a percentage is of the reference length
+# (SVG 2 §8.9: the viewport's width, its height, or their normalised diagonal)
+plen(s: string, dflt, base: real): real
+{
+	if(s == nil || len s == 0)
+		return dflt;
+	if(s[len s - 1] == '%')
+		return real s[0:len s - 1] * base / 100.0;
+	return parse_length(s, dflt);
+}
+
+px(s: string, dflt: real): real
+{
+	return plen(s, dflt, vbw);
+}
+
+py(s: string, dflt: real): real
+{
+	return plen(s, dflt, vbh);
+}
+
+pd(s: string, dflt: real): real
+{
+	return plen(s, dflt, sqrt((vbw*vbw + vbh*vbh)/2.0));
+}
+
 parse_length(s: string, dflt: real): real
 {
 	if(s == nil || len s == 0)
@@ -1508,6 +2210,14 @@ split_semicolons(s: string): list of string
 	return parts;
 }
 
+lower(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] >= 'A' && s[i] <= 'Z')
+			s[i] += 'a' - 'A';
+	return s;
+}
+
 split_colon(s: string): (string, string)
 {
 	for(i := 0; i < len s; i++) {
@@ -1573,6 +2283,17 @@ if_upper(c, upper, lower: int): int
 }
 
 # Math functions
+# the largest integer not above x (Limbo's int rounds)
+floor(x: real): real
+{
+	if(x > 2e9 || x < -2e9)
+		return x;
+	v := real int x;
+	if(v > x)
+		v -= 1.0;
+	return v;
+}
+
 sqrt(x: real): real
 {
 	if(x <= 0.0)

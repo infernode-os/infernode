@@ -27,4 +27,10 @@ Html: module
 	parsexml:	fn(data: array of byte, charset, url: string): ref Dom->Doc;
 
 	charset:	fn(data: array of byte, transport: string): string;	# the sniffing used by parse
+
+	# A stylesheet's text (CSS Syntax 3 §3.2): from its byte order mark,
+	# else the transport's charset, else its @charset rule, else the
+	# referring element's charset attribute (hint), else the document's
+	# encoding (docs), else UTF-8.
+	cssdecode:	fn(data: array of byte, transport, hint, docs: string): string;
 };

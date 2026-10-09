@@ -170,7 +170,7 @@ The standard developer launch is `emu` invoked directly from a terminal — same
 
 stdout/stderr stream to the terminal, Ctrl-C exits, no signing/Gatekeeper/Translocation in the loop. `/lib/lucifer/boot.sh` is the canonical boot orchestration and is the same script the production macOS `.app` launcher invokes. See [QUICKSTART.md](QUICKSTART.md#running-for-development) for the full table and flag reference.
 
-The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` is currently untracked and authored ad-hoc — treat it as the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
+The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` (and `build-dev-bundle.ps1` on Windows) is the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
 
 To open a file in an editor for the user, run `plumb <file>` (opens it in their running Xenith, starting one if needed), falling back to `tools/xen <file>` (Xenith alone, full-window) if `plumb` fails; `tools/xen -s <file>` for sam. Both return at once; leaving the editor halts that instance. See [docs/XEN.md](docs/XEN.md).
 
@@ -427,7 +427,6 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |
 | `tests/host/xenith_agent_test.sh` | The `Agent` window in a headless Xenith: a message sent, the reply shown |
 | `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, Xenith's image renderer not claiming text that begins like an image |
-| `readwebp_test.b` | The WebP decoder pixel for pixel against libwebp (fixtures and their digests made by `tests/imgload/mkfixtures.py`): lossy, lossy with alpha, lossless, a palette, an animation with a frame disposed of and others blended; what is broken or too large refused |
 | `tests/host/plumbrules_test.sh` | `lib/sh/plumbrules`: the user's plumbing rules read before the defaults (a user rule overrides, the defaults take the rest); `load` replaces them; a rules file that does not parse is refused at load and left out at start |
 | `tests/host/presentation_fileopen_test.sh` | Lucifer's plumbed file-opens: by type into the presentation view, a web URL into Charon (a second one to the running Charon), the Tasks tab with and without a plumber |
 | `tests/host/xenith_browse_test.sh` | Xenith browses: a URL looked at opens a browser window (the page over its text, Back Fwd Reload in the tag); Get goes to the URL in the tag; Back, Fwd and Render; a form typed into (injected click and keys); the page as files (posted where the window's `web` file says, a form submitted through `ctl` shown in the window, unposted when it closes); the same page over HTTP through webfs from a loopback server |
@@ -448,8 +447,11 @@ infernode/
 ├── emu/                 # Emulator source and binaries
 │   ├── MacOSX/          #   macOS emulator (o.emu binary)
 │   ├── Linux/           #   Linux emulator (build with build-linux-*.sh)
+│   ├── Nt/              #   Windows emulator (build-windows-amd64.ps1)
+│   ├── Android/         #   Android platform glue (build-android-*.sh)
+│   ├── iOS/             #   iOS platform glue (build-ios-*.sh)
 │   └── port/            #   Platform-independent emulator source
-├── appl/                # Limbo application source (~700 .b files)
+├── appl/                # Limbo application source (~900 .b files)
 │   ├── cmd/             #   Command-line utilities (incl. mail9p — IMAP/SMTP at /mnt/mail)
 │   ├── lib/             #   Library modules
 │   ├── veltro/          #   Veltro AI agent system
@@ -460,7 +462,10 @@ infernode/
 ├── module/              # Limbo module interfaces (.m files)
 ├── os/                  # NATIVE (bare-metal) kernel: os/arm64 shared AArch64,
 │                        #   os/bcm2837 Raspberry Pi 3B+, os/port portable kernel,
-│                        #   os/ip TCP/IP, os/init the Dis that boots it.
+│                        #   os/ip TCP/IP, os/init the Dis that boots it,
+│                        #   os/bcm drivers the Pi SoCs share, os/bcm2711
+│                        #   Raspberry Pi 4B, os/virt QEMU AArch64 virt,
+│                        #   os/virtio virtio drivers, os/fb framebuffer console.
 │                        #   Built and tested ONLY via tests/host/baremetal_test.sh;
 │                        #   status and roadmap in os/bcm2837/README.md.
 │                        #   RISC-V: os/riscv64 (arch), os/riscvvirt (QEMU virt),
@@ -480,7 +485,7 @@ infernode/
 ├── hooks/               # Git hooks (run ./hooks/install.sh after clone)
 ├── mkfiles/             # Shared mk build rules
 ├── mkconfig             # Build configuration (auto-detects platform)
-├── .github/workflows/   # CI/CD (ci, security, scorecard)
+├── .github/workflows/   # CI/CD (build, test, release, security and more)
 └── build-*.sh           # Platform build scripts
 ```
 
@@ -510,7 +515,7 @@ Two CI guards enforce this, and they are load-bearing:
 genuinely becomes a shippable feature, that decision needs explicit design work
 and the CI guards updated together — never silently.
 
-The subagent trajectory logging added in `appl/veltro/{spawn,subagent}.b`
+The subagent trajectory logging added in `appl/veltro/tools/spawn.b` and `appl/veltro/subagent.b`
 is *not* ring-fenced: it's a general observability improvement to the
 agent stack, useful outside the harness, and ships normally.
 

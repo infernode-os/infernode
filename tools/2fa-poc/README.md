@@ -5,8 +5,9 @@ real YubiKey — the cryptographic foundation for gating InferNode's secstore
 unlock behind a physical second factor, **before** any `emu`/Limbo work.
 
 This is **host-side only**. It does not run inside Inferno. It exercises the same
-libfido2 entry points the future emu bridge (`emu/port/dev2fa.c`) will call on the
-host side of the emulator and relay to Inferno over a `/mnt/2fa` 9P interface.
+libfido2 entry points the emu bridge calls on the host side of the emulator. That
+bridge has since shipped as `emu/port/devtfa.c` (`#F`, configured on macOS, Linux
+and Windows) and reaches Limbo at `/mnt/2fa`. This PoC is superseded by it.
 
 ## What it proves
 
@@ -18,8 +19,8 @@ host side of the emulator and relay to Inferno over a `/mnt/2fa` 9P interface.
 4. **Device-binding** — `R` is uncomputable without the physical key: the
    `hmac-secret` CredRandom never leaves the device.
 5. **KDF mixing** — `filekey = HKDF-SHA256(pwkey ‖ R, "secstore 2fa")`, the
-   `mkfilekey3_2fa` seam from the design doc (§6). Password alone no longer
-   yields the file key.
+   seam from the design doc (§6); it shipped as `mkkek2fa` in
+   `appl/lib/secstore.b`. Password alone no longer yields the file key.
 
 ## Run
 
@@ -50,7 +51,7 @@ remains a valid fallback provider per the design doc.
 
 ## Scope / next
 
-Phase 0 only. Phases 1–4 (emu `dev2fa.c` + `/mnt/2fa`, Limbo `twofa`,
-`secstore.b` `mkfilekey3_2fa`, `logon.b` enroll/unlock UI, mobile-biometric
-provider via the existing `/phone/bio_*` bridge, wallet gating) follow per
-`docs/second-factor-auth.md` §9.
+Phase 0 only. The later phases shipped: `emu/port/devtfa.c` (`#F`),
+`module/twofa.m` and `appl/lib/twofa.b` (`/mnt/2fa`), `appl/cmd/2fa.b`, and
+`mkkek2fa` in `appl/lib/secstore.b`. See `docs/second-factor-auth.md` and
+`docs/yubikey-2fa-operations.md`.

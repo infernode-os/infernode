@@ -466,6 +466,9 @@ needsapproval(s: ref Session, toolname, args: string): int
 		return 0;
 	if(toolname != "exec" && toolname != "write" && toolname != "edit")
 		return 0;
+	# Native tool calls carry JSON ({"path":"/lib/x",...}); judge the
+	# positional form the tool will actually run, as calltool sends it.
+	args = s.al->extracttoolargs(args);
 	if(toolname == "exec") {
 		if(recursiveRmOutsideTmp(s, args))
 			return 1;
@@ -656,12 +659,14 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 				s.llmid, step + 1, name), array of byte dcskip);
 			continue;
 		}
-		# An identical read-only call earlier in this same batch: the
-		# sequential loop answered the repeat from the cache, so this
-		# does too.
+		# An identical read-only call earlier in this same batch, with
+		# no mutating call between them: the sequential loop answered
+		# the repeat from the cache, so this does too.
 		dup := 0;
 		for(tr := torun; tr != nil; tr = tl tr) {
 			(nil, tn, ta) := hd tr;
+			if(!readonlytool(str->tolower(tn)))
+				break;
 			if(str->tolower(tn) == nm && ta == args && readonlytool(nm)) {
 				dup = 1;
 				break;

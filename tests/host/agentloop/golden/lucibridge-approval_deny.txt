@@ -8,7 +8,7 @@ tools: list read write
 tools: list read write
 assistant-call call_approval_deny_0_0 write {"args": "\/dis\/agentloop-probe.txt probe"}
 tool-result call_approval_deny_0_0:
-  | error: /dis/agentloop-probe.txt is not covered by an rw path grant
+  | error: operation denied by operator
 
 == output
   | msg 0
@@ -18,5 +18,8 @@ tool-result call_approval_deny_0_0:
   | role=veltro text=
   | 
   | msg 2
+  | role=veltro dtype=dialogue title=Denied options=Allow,Deny text=write {"args": "/dis/agentloop-probe.txt probe"}
+  | 
+  | msg 3
   | role=veltro text=Write was handled.
   | 

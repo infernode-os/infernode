@@ -8,7 +8,10 @@ This document walks through getting the **Phase 0 proof of life** up on
 real Android hardware via Termux.
 
 If you are looking for the bigger picture, see `INFR-107` and
-`emu/Android/README.md`.
+`emu/Android/README.md`. The installable APK (Phase 1c+, GUI included)
+is built by `build-android-apk.sh` — see `android-app/README.md` and the
+"Android app-sandbox seccomp restrictions" section below. Everything
+from here to "What this is NOT" is about the Termux build only.
 
 ## Why Termux for Phase 0
 
@@ -19,8 +22,8 @@ Dis bytecode — without writing any NDK or JNI code first. If this
 doesn't work, no amount of NDK plumbing will save us, so we want to
 learn that here.
 
-Phase 1 introduces a real `emu/Android/` target with NDK toolchain and
-a proper Android app shell. Phase 0's job is to de-risk that work.
+Phase 1 added a real `emu/Android/` target with NDK toolchain and
+a proper Android app shell. Phase 0's job was to de-risk that work.
 
 ## Prerequisites
 
@@ -371,7 +374,7 @@ EOF
 chmod +x ~/.termux/boot/0-wake-lock
 ```
 
-### What works (Phase 0) / what doesn't
+### What works (Phase 0, Termux) / what doesn't
 
 | Capability | State |
 |---|---|
@@ -382,9 +385,9 @@ chmod +x ~/.termux/boot/0-wake-lock
 | Veltro agent harness | ✓ |
 | `listen` + `exportfs` over TCP | ✓ |
 | Mounting host paths via `#U` | ✓ (confined to `-r` root) |
-| GUI (Lucia / Xenith / SDL3) | ✗ (Phase 1) |
-| On-device LLM via `/mnt/llm` | ✗ (Phase 1) |
-| Standalone APK (no Termux dependency) | ✗ (Phase 1) |
+| GUI (Lucia / Xenith / SDL3) | ✗ on Termux; the APK has it (`build-android-apk.sh --gui sdl3`) |
+| On-device LLM via `/mnt/llm` | ✗ |
+| Standalone APK (no Termux dependency) | ✗ on Termux; see `build-android-apk.sh` |
 | x86 / x86_64 Android emulator (AVD) | ✗ (would need a separate cross-build) |
 
 ## Troubleshooting
@@ -407,7 +410,7 @@ Termux for memory pressure. Close other apps; if the device is very
 old, try a `headless` build only and skip the Limbo applications step.
 
 **SDL3 build fails** — Phase 0 defaults to headless. Do not try the
-SDL3 path on Termux yet; Phase 1 will sort the display backend.
+SDL3 path on Termux; the GUI build is the APK (`build-android-apk.sh`).
 
 **`ls /n/host/sdcard: permission denied`** when running the daemon —
 you have not granted Termux storage access. Run `termux-setup-storage`
@@ -423,12 +426,15 @@ still running.
 
 ## What this is NOT
 
-* It is not an Android app. There is no APK, no Activity, no
-  notification — Termux just runs the binary in a terminal app. Phase
-  1 produces an actual installable app.
-* It is not on-device inference. `/mnt/llm` is not wired to anything
-  useful on the phone yet; that retarget happens in Phase 1.
-* It is not GUI. No Lucia, no Xenith on the phone yet. Headless only.
+The Termux build:
+
+* is not an Android app. There is no APK, no Activity, no
+  notification — Termux just runs the binary in a terminal app. The
+  installable app is the APK path (`build-android-apk.sh`,
+  `.github/workflows/android-apk.yml`; `android-app/README.md`).
+* is not on-device inference. `/mnt/llm` on the phone needs an LLM
+  backend reachable over the network.
+* is not GUI. Headless only; the APK carries Lucia.
 
 ## Android app-sandbox seccomp restrictions
 
@@ -532,7 +538,7 @@ IOSSDK=iphoneos ./build-ios-app.sh --gui
 
 The script signs with the auto-detected provisioning profile, installs
 via `devicectl`, and launches. First-run keyring / writable-root setup
-happens automatically. After a moment Lucifer comes up with the
+happens automatically. After a moment Lucia comes up with the
 Context / Workspace / Chat accordion.
 
 ### What you should see in stderr at boot

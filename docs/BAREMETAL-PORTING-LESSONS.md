@@ -28,8 +28,8 @@ Sort the target's hardware into four kinds and the answer follows.
 |---|---|---|
 | Portable kernel: scheduler, allocator, namespace, devices with no hardware under them, the IP stack, the Dis VM | `os/port`, `os/ip`, `libinterp` and the libraries | always. Section 2 is about the faults found here, and they go wherever the code goes |
 | Architecture: MMU, exception vectors, context switch, cache maintenance, SMP bring-up, the JIT back end | `os/arm64`, `libinterp/comp-*.c` | the target shares the instruction set. A new architecture needs a new directory of the same shape, and a JIT back end or the interpreter alone |
-| SoC blocks: interrupt controller, timers, UARTs, GPIO, SD host, DMA, mailbox, display | `os/bcm2837` | the target has the same block, which is a fact about the silicon vendor's reuse, not about the board's name. Expect the base address and the pin mux to move even then |
-| Devices behind a bus: the Ethernet MAC, the Wi-Fi/Bluetooth combo chip, USB devices | drivers in `os/bcm2837` and `os/port`, protocol in Limbo (`os/init/etherusb.b`, `appl/cmd/bt9p.b`, `wpa.b`) | the same part is fitted, on any bus the target can drive. The Limbo halves travel with no change at all |
+| SoC blocks: interrupt controller, timers, UARTs, GPIO, SD host, DMA, mailbox, display | `os/bcm` (the blocks the Pi SoCs share), plus the board directory (`os/bcm2837`: its interrupt controller, clock and random-number generator) | the target has the same block, which is a fact about the silicon vendor's reuse, not about the board's name. Expect the base address and the pin mux to move even then |
+| Devices behind a bus: the Ethernet MAC, the Wi-Fi/Bluetooth combo chip, USB devices | drivers in `os/bcm` (`ether4330.c`, `usbdwc.c`) and `os/port`, protocol in Limbo (`os/init/etherusb.b`, `appl/cmd/bt9p.b`, `appl/cmd/ip/wpa.b`) | the same part is fitted, on any bus the target can drive. The Limbo halves travel with no change at all |
 
 Two design decisions make the last row cheaper than it looks, and a new
 port should keep them. Device *protocols* live outside the kernel, in

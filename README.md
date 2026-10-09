@@ -103,7 +103,7 @@ Run with `emu -c1` to enable the JIT (Dis bytecode → native code at module loa
 | Linux AMD64 | AMD Ryzen 7 H 255 | **14.2×** | Servers, containers, workstations |
 | macOS ARM64 | Apple M4 | **9.6×** | SDL3 GUI with Metal |
 | Linux ARM64 | Cortex-A78AE (Jetson) | **8.3×** | Jetson AGX, Raspberry Pi 4/5 |
-| Windows AMD64 | Intel / AMD x86_64 | **5.7×** | SDL3 GUI with D3D |
+| Windows AMD64 | AMD Ryzen 7 255 | **13.3×** | SDL3 GUI with D3D |
 | Linux RISC-V 64 | RV64GC | not yet measured | Headless; cross-built and tested under qemu-user in CI. BeagleV-Fire, VisionFive 2 ([os/riscv64/README.md](os/riscv64/README.md)) |
 
 Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Performance envelope: [docs/PERFORMANCE-SPECS.md](docs/PERFORMANCE-SPECS.md).

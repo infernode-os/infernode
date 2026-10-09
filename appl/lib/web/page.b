@@ -82,6 +82,7 @@ init(d: ref Display): string
 		return err;
 	if(imageremap != nil)
 		imageremap->init(d);
+	readsettings();
 	return nil;
 }
 
@@ -101,6 +102,7 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 
 begin(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
+	readsettings();
 	data: array of byte;
 	ctype, err, final: string;
 	if(method == "POST")
@@ -117,6 +119,7 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 # every image it wants, and its frames
 parse(data: array of byte, ctype, url: string, width, height: int): ref Pg
 {
+	readsettings();
 	p := document(data, ctype, url, width, height);
 	images(p);
 	return p;
@@ -141,7 +144,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 {
 	charset := param(ctype, "charset");
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil);
+		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil, nil, 0);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -243,10 +246,13 @@ Pg.wanted(p: self ref Pg): list of string
 		raise e;
 	}
 	punlock();
+	click := !p.allimages && setting("images") == "click";
 	r: list of string;
 	for(; urls != nil; urls = tl urls) {
 		u := hd urls;
 		if(u == nil || picof(p, u) != nil)
+			continue;
+		if(click && !local(u) && !member(u, p.asked))
 			continue;
 		for(t := r; t != nil; t = tl t)
 			if(hd t == u)
@@ -255,6 +261,53 @@ Pg.wanted(p: self ref Pg): list of string
 			r = u :: r;
 	}
 	return r;
+}
+
+Pg.want(p: self ref Pg, n: int): list of string
+{
+	if(p.root == nil || setting("images") != "click")
+		return nil;
+	plock();
+	curdoc = p.doc;
+	boxes := replacedboxes(p.root, nil);
+	# where n's image is: its box's centre.  Pages lay a placeholder
+	# over the picture for their scripts to take away (BBC's), so what
+	# a click there asks for is every image shown at that point.
+	at: Point;
+	found := 0;
+	for(l := boxes; l != nil; l = tl l) {
+		b := hd l;
+		if(b.node == n && b.url != nil && b.img == nil) {
+			at = Point(b.x + b.w/2, b.y + b.h/2);
+			found = 1;
+			break;
+		}
+	}
+	urls: list of string;
+	if(found)
+		for(l = boxes; l != nil; l = tl l) {
+			b := hd l;
+			if(b.url == nil || b.img != nil || picof(p, b.url) != nil || member(b.url, urls))
+				continue;
+			if(at.x >= b.x && at.x < b.x + b.w && at.y >= b.y && at.y < b.y + b.h) {
+				urls = b.url :: urls;
+				if(!member(b.url, p.asked))
+					p.asked = b.url :: p.asked;
+			}
+		}
+	punlock();
+	return urls;
+}
+
+Pg.wantall(p: self ref Pg)
+{
+	p.allimages = 1;
+}
+
+# an image that costs no fetch
+local(u: string): int
+{
+	return prefix(lower(u), "data:") || prefix(lower(u), "file:");
 }
 
 Pg.install(p: self ref Pg, pics: list of ref Pic)
@@ -657,6 +710,8 @@ loadfonts(p: ref Pg)
 {
 	fm := layout->fontmod();
 	fm->clearfaces();
+	if(setting("fonts") == "system")
+		return;	# the faces the system has, nothing fetched
 	srcs: list of ref Fontsrc;
 	for(l := p.styles.sheets; l != nil; l = tl l) {
 		(sh, nil, base) := hd l;
@@ -1017,9 +1072,18 @@ curdoc: ref Doc;	# the document whose boxes replacedboxes walks
 applypics(p: ref Pg, root: ref Box)
 {
 	curdoc = p.doc;
+	click := !p.allimages && setting("images") == "click";
 	for(l := replacedboxes(root, nil); l != nil; l = tl l) {
 		b := hd l;
 		pic := picof(p, b.url);
+		if(pic == nil && click && b.url != nil && !local(b.url)) {
+			# left to be clicked for: its alt text, dimmed and framed
+			# (layout.b's paintreplaced), so there is something to click
+			if(b.text == nil)
+				b.text = "image";
+			b.hint = 1;
+			continue;
+		}
 		if(pic == nil || pic.img == nil)
 			continue;
 		b.img = pic.img;
@@ -1955,4 +2019,131 @@ index(s, t: string): int
 		if(s[i:i+len t] == t)
 			return i;
 	return -1;
+}
+
+# ---- settings (page.m) ----
+
+Setting: adt {
+	name:	string;
+	values:	array of string;	# the first is the default
+	cur:	string;
+};
+
+settab: array of ref Setting;
+setvers := -1;		# the settings file's qid.vers when read; -2 none
+setmtime := 0;
+
+settings0()
+{
+	if(settab != nil)
+		return;
+	settab = array[] of {
+		ref Setting("images", array[] of {"on", "click"}, "on"),
+		ref Setting("fonts", array[] of {"web", "system"}, "web"),
+		ref Setting("effects", array[] of {"on", "off"}, "on"),
+	};
+}
+
+setting(name: string): string
+{
+	settings0();
+	for(i := 0; i < len settab; i++)
+		if(settab[i].name == name)
+			return settab[i].cur;
+	return nil;
+}
+
+set(line: string): string
+{
+	settings0();
+	(n, l) := sys->tokenize(line, " \t\n");
+	if(n != 2)
+		return "usage: name value";
+	name := hd l;
+	v := hd tl l;
+	for(i := 0; i < len settab; i++) {
+		t := settab[i];
+		if(t.name != name)
+			continue;
+		for(j := 0; j < len t.values; j++)
+			if(t.values[j] == v) {
+				t.cur = v;
+				if(name == "effects")
+					layout->seteffects(v == "on");
+				return nil;
+			}
+		vs := t.values[0];
+		for(j = 1; j < len t.values; j++)
+			vs += " | " + t.values[j];
+		return name + ": " + vs;
+	}
+	return "no setting " + name;
+}
+
+settings(): string
+{
+	settings0();
+	s := "";
+	for(i := 0; i < len settab; i++)
+		s += settab[i].name + " " + settab[i].cur + "\n";
+	return s;
+}
+
+settingsfile(): string
+{
+	(d, nil, err) := readfile("/dev/user");
+	if(err != nil || len d == 0)
+		return nil;
+	return "/usr/" + string d + "/" + SETTINGS;
+}
+
+# the file, if it has changed since it was read; a line it gets wrong is
+# passed over, leaving that setting as it was
+readsettings()
+{
+	settings0();
+	f := settingsfile();
+	if(f == nil)
+		return;
+	(ok, dir) := sys->stat(f);
+	if(ok < 0) {
+		setvers = -2;
+		return;
+	}
+	if(dir.qid.vers == setvers && dir.mtime == setmtime)
+		return;
+	setvers = dir.qid.vers;
+	setmtime = dir.mtime;
+	(d, nil, err) := readfile(f);
+	if(err != nil)
+		return;
+	(nil, lines) := sys->tokenize(string d, "\n");
+	for(; lines != nil; lines = tl lines)
+		if(len hd lines > 0 && (hd lines)[0] != '#')
+			set(hd lines);
+}
+
+save(): string
+{
+	f := settingsfile();
+	if(f == nil)
+		return "who is the user?";
+	# /usr/<user>/lib/charon
+	for(i := len "/usr/"; i < len f; i++)
+		if(f[i] == '/' && i > len "/usr/")
+			if(sys->stat(f[0:i]).t0 < 0 && sys->create(f[0:i], Sys->OREAD, Sys->DMDIR|8r775) == nil)
+				return sys->sprint("cannot make %s: %r", f[0:i]);
+	fd := sys->create(f, Sys->OWRITE, 8r664);
+	if(fd == nil)
+		return sys->sprint("cannot write %s: %r", f);
+	b := array of byte settings();
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("cannot write %s: %r", f);
+	fd = nil;
+	(ok, dir) := sys->stat(f);
+	if(ok >= 0) {
+		setvers = dir.qid.vers;
+		setmtime = dir.mtime;
+	}
+	return nil;
 }

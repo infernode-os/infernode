@@ -12284,7 +12284,8 @@ layer(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 	paintctx(img, b, o, pr, canvasbg);
 	translucent = outer;
 	if(b.st.filter != nil)
-		filter(img, b.st.filter);
+		if(!noeffects)
+			filter(img, b.st.filter);
 	a := int (b.st.opacity * 255.0);
 	mask := display.newimage(Rect((0, 0), (1, 1)), Draw->GREY8, 1, (a << 24) | (a << 16) | (a << 8) | 255);
 	if(hasmask(b.st)) {
@@ -12613,6 +12614,8 @@ inkbounds(b: ref Box, r: Rect): Rect
 
 paintshadows(dst: ref Image, b: ref Box, r: Rect)
 {
+	if(noeffects)
+		return;
 	st := b.st;
 	for(i := len st.shadows - 1; i >= 0; i--) {
 		s := st.shadows[i];
@@ -14706,6 +14709,11 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 			dst.draw(vis, img, nil, sp);
 		return;
 	}
+	if(b.url != nil && b.hint == 1 && rectok(cr)) {
+		# an image left to be clicked for: framed, so it can be found
+		c := colorimg(int 16r9E9E9EFF);
+		dst.border(cr, 1, c, cr.min);
+	}
 	if(checkable(b)) {
 		paintcheck(dst, b, cr);
 		return;
@@ -14724,7 +14732,10 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 		(cl, ok) := cr.clip(oc);
 		if(ok) {
 			dst.clipr = cl;
-			f.draw(dst, Point(cr.min.x + 1, y), b.text, colorimg(c), 0);
+			x := cr.min.x + 1;
+			if(b.url != nil && b.hint == 1)
+				x += 4;	# inside its frame
+			f.draw(dst, Point(x, y), b.text, colorimg(c), 0);
 			dst.clipr = oc;
 		}
 	}
@@ -14806,6 +14817,13 @@ scale(src: ref Image, w, h: int): ref Image
 		scaled = (src, w, h, d) :: scaled;
 	}
 	return d;
+}
+
+noeffects := 0;
+
+seteffects(on: int)
+{
+	noeffects = !on;
 }
 
 unscale(src: ref Image)

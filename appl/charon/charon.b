@@ -240,6 +240,12 @@ buildui()
 		".ctx add command -label {Reload} -command {send act reload}",
 		".ctx add command -label {Find...} -command {send act find}",
 		".ctx add separator",
+		".ctx add command -label {Load images on this page} -command {send act loadimages}",
+		".ctx add checkbutton -label {Load images automatically} -variable autoimages -command {send act setting images}",
+		".ctx add checkbutton -label {Web fonts} -variable webfonts -command {send act setting fonts}",
+		".ctx add checkbutton -label {Shadows and filters} -variable effects -command {send act setting effects}",
+		".ctx add command -label {Keep these settings} -command {send act savesettings}",
+		".ctx add separator",
 		".ctx add command -label {Quit} -command {send act quit}",
 	};
 	for(i := 0; i < len cmds; i++) {
@@ -418,7 +424,35 @@ action(a: string)
 	"resized" =>
 		resized();
 	"menu" =>
+		syncmenu();	# the settings may have changed from elsewhere (ctl, the file)
 		tk->cmd(top, ".ctx post " + rest);
+	"loadimages" =>
+		sess.images();
+	"setting" =>
+		# a menu checkbutton: its variable says which way
+		on := tk->cmd(top, "variable " + menuvar(rest)) == "1";
+		v: string;
+		case rest {
+		"images" =>
+			v = "click";
+			if(on)
+				v = "on";
+		"fonts" =>
+			v = "system";
+			if(on)
+				v = "web";
+		"effects" =>
+			v = "off";
+			if(on)
+				v = "on";
+		}
+		report(sess.configure(rest + " " + v));
+		syncmenu();
+	"savesettings" =>
+		if((e := browser->savesettings()) != nil)
+			report(e);
+		else
+			status("Settings kept: every page opens with them");
 	"find" =>
 		status("Find: ");
 		findmode = 1;
@@ -473,6 +507,32 @@ action(a: string)
 		}
 		refreshcontrols();
 	}
+}
+
+# The settings menu's checkbuttons, as the engine has them.
+syncmenu()
+{
+	tk->cmd(top, "variable autoimages " + onoff(browser->setting("images") == "on"));
+	tk->cmd(top, "variable webfonts " + onoff(browser->setting("fonts") == "web"));
+	tk->cmd(top, "variable effects " + onoff(browser->setting("effects") == "on"));
+}
+
+menuvar(setting: string): string
+{
+	case setting {
+	"images" =>
+		return "autoimages";
+	"fonts" =>
+		return "webfonts";
+	}
+	return setting;
+}
+
+onoff(b: int): string
+{
+	if(b)
+		return "1";
+	return "0";
 }
 
 report(err: string)

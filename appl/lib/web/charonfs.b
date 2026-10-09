@@ -30,14 +30,14 @@ include "web/browser.m";
 include "web/charonfs.m";
 
 Qroot, Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent,
-Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren: con iota;
+Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings: con iota;
 
-rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom};
+rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings};
 nodefiles := array[] of {Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren};
 
 names := array[] of {
 	"/", "ctl", "url", "title", "status", "text", "links", "forms", "find", "image", "event",
-	"dom", "", "tag", "attrs", "text", "style", "box", "children",
+	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings",
 };
 
 # an open event file
@@ -440,6 +440,12 @@ ctl(s: string): string
 		sess.resize(num(hd l), num(hd tl l));
 	"scroll" =>
 		sess.scroll = num(arg);
+	"images" or "fonts" or "effects" =>
+		return sess.configure(cmd + " " + arg);
+	"loadimages" =>
+		sess.images();
+	"save" =>
+		return browser->savesettings();
 	* =>
 		return "unknown command " + cmd;
 	}
@@ -464,6 +470,8 @@ contents(t, n: int): array of byte
 		s = browser->fieldstext(sess.fields());
 	Qimage =>
 		return image();
+	Qsettings =>
+		s = browser->settings();
 	Qtag or Qattrs or Qntext or Qstyle or Qbox or Qchildren =>
 		(r, nil) := sess.dom(n, names[t]);
 		s = r;

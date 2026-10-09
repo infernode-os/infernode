@@ -73,7 +73,12 @@ Browser: module
 		set:	fn(s: self ref Session, node: int, value: string): string;
 		submit:	fn(s: self ref Session, form, submitter: int): string;
 		follow:	fn(s: self ref Session, n: int): string;	# links()[n-1]
-		click:	fn(s: self ref Session, node: int): string;	# a link, button or control
+		click:	fn(s: self ref Session, node: int): string;	# a link, button or control; an image not yet loaded (Page's images click)
+		images:	fn(s: self ref Session);	# load every image the page has, whatever the setting
+		# change one of the engine's settings ("images click"), and the
+		# page with it: images on loads what it lacks, fonts loads it
+		# again, effects draws it again
+		configure:	fn(s: self ref Session, line: string): string;
 		nodeat:	fn(s: self ref Session, x, y: int): int;	# page coordinates
 		paint:	fn(s: self ref Session, dst: ref Draw->Image, scroll: Draw->Point);
 		boxof:	fn(s: self ref Session, n: int): (int, Draw->Rect);	# node n's first border box, page coordinates
@@ -82,6 +87,12 @@ Browser: module
 		pageheight:	fn(s: self ref Session): int;
 		dom:	fn(s: self ref Session, n: int, what: string): (string, string);	# tag attrs text style box children
 	};
+
+	# the engine's settings (Page->setting and the rest, for the page
+	# module this one uses)
+	setting:	fn(name: string): string;
+	settings:	fn(): string;
+	savesettings:	fn(): string;
 
 	resolve:	fn(base, rel: string): string;
 	linkstext:	fn(l: array of ref Link): string;	# "n url text" lines

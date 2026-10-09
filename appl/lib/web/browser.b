@@ -353,6 +353,71 @@ images(s: ref Session, g: int, pg: ref Pg)
 		apply(s, g, pg, batch, n, n);
 }
 
+picsome(s: ref Session, g: int, pg: ref Pg, urls: list of string)
+{
+	pics: list of ref Page->Pic;
+	for(; urls != nil; urls = tl urls) {
+		u := hd urls;
+		pic: ref Page->Pic;
+		{
+			(data, ctype, err) := page->fetch(u);
+			pic = page->picture(u, data, ctype, err);
+		} exception e {
+		"*" =>
+			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);
+		}
+		pics = pic :: pics;
+	}
+	apply(s, g, pg, pics, len pics, len pics);
+}
+
+Session.images(s: self ref Session)
+{
+	pg := s.pg;
+	if(pg == nil)
+		return;
+	pg.wantall();
+	spawn images(s, s.gen, pg);
+}
+
+setting(name: string): string
+{
+	return page->setting(name);
+}
+
+Session.configure(s: self ref Session, line: string): string
+{
+	(nil, l) := sys->tokenize(line, " \t\n");
+	if(l == nil)
+		return "usage: name value";
+	was := page->setting(hd l);
+	if((err := page->set(line)) != nil)
+		return err;
+	now := page->setting(hd l);
+	if(now == was || s.pg == nil)
+		return nil;
+	case hd l {
+	"images" =>
+		if(now == "on")
+			spawn images(s, s.gen, s.pg);
+	"fonts" =>
+		s.reload();
+	"effects" =>
+		event(s, "update 0 0");	# drawn again, as it is
+	}
+	return nil;
+}
+
+settings(): string
+{
+	return page->settings();
+}
+
+savesettings(): string
+{
+	return page->save();
+}
+
 apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: int): int
 {
 	lock(s);
@@ -1133,6 +1198,12 @@ Session.click(s: self ref Session, n: int): string
 		return sys->sprint("no node %d", n);
 	if(popovers(s, pg, n))
 		return nil;
+	if((us := pg.want(n)) != nil) {
+		# an image left to be clicked for: this click loads it (and
+		# what is shown with it), and does not follow a link it is in
+		spawn picsome(s, s.gen, pg, us);
+		return nil;
+	}
 	for(m := n; m > 1; m = d.nodes[m].parent) {
 		nd := d.nodes[m];
 		if(nd.kind != Dom->Element || nd.ns != Dom->HTML)

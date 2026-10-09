@@ -27,6 +27,8 @@ Page: module
 		errors:	list of string;	# what could not be fetched, most recent first
 		objects:	list of (int, int, string);	# <object>s that render (see Layout->setobjects)
 		pics:	list of ref Pic;	# the images it has, decoded
+		asked:	list of string;	# images clicked for, with images click
+		allimages:	int;	# every image wanted, whatever the setting
 
 		relayout:	fn(p: self ref Pg, width, height: int);
 		update:	fn(p: self ref Pg);	# restyle and relayout after the document changed
@@ -38,7 +40,27 @@ Page: module
 		wanted:	fn(p: self ref Pg): list of string;
 		install:	fn(p: self ref Pg, pics: list of ref Pic);
 		frames:	fn(p: self ref Pg);	# fetch and draw its <iframe>s
+		# with images click: the URLs of the images shown where node n's
+		# image is (it and any it overlays) that have not come, wanted
+		# from now on; nil if n shows none to get
+		want:	fn(p: self ref Pg, n: int): list of string;
+		wantall:	fn(p: self ref Pg);	# every image wanted, as with images on
 	};
+
+	# The engine's settings, for everything that uses it (Charon,
+	# Xenith's Render), one line each as Charon's ctl takes them:
+	#	images on | click	click: an image loads when clicked; data:
+	#				and file: images, which cost no fetch, always do
+	#	fonts web | system	system: no @font-face fonts are fetched
+	#	effects on | off	off: no shadows or filters are drawn
+	# The user's settings file holds the same lines.  It is read when
+	# the module starts and again when it has changed, so a setting
+	# saved by one program reaches the others.
+	SETTINGS:	con "lib/charon/settings";	# in the user's home, /usr/<user>
+	setting:	fn(name: string): string;
+	set:	fn(line: string): string;	# "name value"; nil, or what is wrong with it
+	settings:	fn(): string;		# every setting, a line each
+	save:	fn(): string;		# the settings, into the user's file
 
 	# an image fetched and decoded; img nil and err set if it failed
 	Pic: adt {

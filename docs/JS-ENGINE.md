@@ -439,25 +439,34 @@ on script (GitHub menus, BBC).
 
 ## 9. The spike: does Dis go fast enough?
 
-A few days, before any engine code. Hand-write in Limbo the code the
-compiler would emit, at baseline and optimised tiers, for:
+Done on 2026-10-09; the method and every figure are in
+[tests/js-spike/README.md](../tests/js-spike/README.md). The decision is
+Dis, for the safety reasons above, and the spike says what the VM and
+the engine need for it to be fast:
 
-| Benchmark | What it measures |
-|---|---|
-| property get/set on a shaped object in a loop | inline-cache hit path |
-| `richards` / `deltablue` | polymorphic calls, object-heavy code |
-| closure creation and calls | allocation and environments |
-| string building and splitting | string representation |
-| allocating 10⁶ small cyclic objects | the Dis cycle collector's pause and throughput |
-| `load` of 1,000 tiny generated modules | runtime codegen cost under the JIT |
+- **Where the JIT is good, the optimised tier is a good target.** On
+  arm64 it is level with QuickJS or within 2.5× of it, and faster on
+  property access, calls and floating point. On amd64 pure arithmetic
+  is 3× faster than QuickJS.
+- **The amd64 JIT punts struct copies that hold pointers** (`IMOVMP`),
+  calling the interpreter's routine for each one, so a value with any
+  pointer in it costs 8× a value without, slower even than
+  interpretation. JavaScript copies values at every assignment,
+  argument and return.
+- **A generic (baseline) tier is 9–39× slower than QuickJS on amd64**,
+  3–13× on arm64. Type-specialised code is needed early, not as the
+  last phase (§5.3, §11).
+- **Strings need the engine's own representation**; Limbo strings used
+  directly are 8–40× slower at this work.
+- **Generated modules are cheap:** 25–35 µs to load and translate one.
+- **The collector is paced by the scheduler, not by allocation:** a
+  thread making cyclic garbage outruns it and exhausts the heap.
 
-Compare with QuickJS on the same machine (minipc, amd64; and the Mac,
-arm64) with `emu -c1`.
-
-**Go:** baseline tier within 2× of QuickJS on the object benchmarks, GC
-pauses under 10 ms for a 50 MB heap, and module load under 1 ms. **No
-go:** any of these 5× off with no clear fix. The spike's code and numbers
-are committed under `tests/js-spike/` whichever way it comes out.
+So the VM comes first, and each change helps all Limbo code: `IMOVMP`
+compiled in line on every JIT, `ICVTFW`/`ICVTWF` on amd64, and the
+collector paced by allocation. After those, the spike is run again
+and the value representation chosen (§5.1): values holding pointers,
+or pointer-free values over engine-managed object tables.
 
 
 ## 10. Work this needs elsewhere in the system

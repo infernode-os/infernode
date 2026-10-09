@@ -1,0 +1,18 @@
+<$ROOT/mkconfig
+
+TARG=\
+	spike.dis\
+	valrep.dis\
+	tiny.dis\
+	loadtest.dis\
+	gctest.dis\
+
+MODULES=
+
+SYSMODULES=\
+	draw.m\
+	sys.m\
+
+DISBIN=$ROOT/dis/tests/js-spike
+
+<$ROOT/mkfiles/mkdis

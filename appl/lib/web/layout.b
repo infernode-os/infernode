@@ -11870,7 +11870,7 @@ collectlayers(b: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of r
 					continue;
 				if(islayer(f.box))
 					acc = addlayer(f.box, o, clip, acc);
-				else if(f.box.st.opacity >= 1.0)
+				else if(!ownctx(f.box.st))
 					acc = collectlayers(f.box, o.add(Point(f.box.x, f.box.y)), clipby(f.box, o, clip), acc);
 			}
 		}
@@ -11882,7 +11882,7 @@ collectlayers(b: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of r
 			continue;	# painted from its containing block's pos list
 		if(islayer(k))
 			acc = addlayer(k, o, clip, acc);
-		else if(k.st.opacity >= 1.0)
+		else if(!ownctx(k.st))
 			acc = collectlayers(k, o.add(Point(k.x, k.y)), clipby(k, o, clip), acc);
 	}
 	return acc;
@@ -11910,7 +11910,7 @@ floatlayers(b: ref Box, o: Point, clip: Rect, acc: list of ref Lyr): list of ref
 		else if(isfloat(k)) {
 			if(islayer(k))
 				acc = addlayer(k, o, clip, acc);
-			else if(k.st.opacity >= 1.0)
+			else if(!ownctx(k.st))
 				acc = collectlayers(k, o.add(Point(k.x, k.y)), clipby(k, o, clip), acc);
 		}
 	}
@@ -12024,7 +12024,7 @@ paintitems(dst: ref Image, b: ref Box, o: Point, clip: Rect, canvasbg: ref Box)
 # contexts of their own
 inflowblock(k: ref Box): int
 {
-	return !k.inl && !isabs(k) && !islayer(k) && !isfloat(k) && k.st.opacity >= 1.0;
+	return !k.inl && !isabs(k) && !islayer(k) && !isfloat(k) && !ownctx(k.st);	# (a stacking context paints itself whole)
 }
 
 kidrect(k: ref Box, o: Point): Rect
@@ -12367,73 +12367,126 @@ blur(buf: array of byte, w, h: int, sigma: real)
 	sw := (w + d - 1) / d;
 	sh := (h + d - 1) / d;
 	n := sw * sh;
-	ch := array[4] of array of int;
-	for(c := 0; c < 4; c++)
-		ch[c] = array[n] of {* => 0};
-	# down: the mean of each d×d block
-	for(y := 0; y < h; y++) {
-		row := (y / d) * sw;
-		for(x := 0; x < w; x++) {
-			k := (y*w + x) * 4;
-			j := row + x / d;
-			for(c = 0; c < 4; c++)
-				ch[c][j] += int buf[k+c];
+	# the channels, each a plane of sw×sh
+	ch := array[4*n] of {* => 0};
+	if(d == 1) {
+		for(j := 0; j < n; j++) {
+			k := 4*j;
+			ch[j] = int buf[k];
+			ch[n+j] = int buf[k+1];
+			ch[2*n+j] = int buf[k+2];
+			ch[3*n+j] = int buf[k+3];
 		}
+	} else {
+		# down: each d×d block's mean, from a 2×2 sample of it (a
+		# blur this wide loses any detail finer than that)
+		q := d / 4;
+		for(by := 0; by < sh; by++)
+			for(bx := 0; bx < sw; bx++) {
+				(a0, a1, a2, a3) := (0, 0, 0, 0);
+				for(sy := 0; sy < 2; sy++) {
+					y := by*d + q + sy*(d/2);
+					if(y >= h)
+						continue;
+					for(sx := 0; sx < 2; sx++) {
+						x := bx*d + q + sx*(d/2);
+						if(x >= w)
+							continue;
+						k := (y*w + x) * 4;
+						a0 += int buf[k];
+						a1 += int buf[k+1];
+						a2 += int buf[k+2];
+						a3 += int buf[k+3];
+					}
+				}
+				j := by*sw + bx;
+				(ch[j], ch[n+j], ch[2*n+j], ch[3*n+j]) = (a0/4, a1/4, a2/4, a3/4);
+			}
 	}
-	if(d > 1)
-		for(c = 0; c < 4; c++)
-			for(j := 0; j < n; j++)
-				ch[c][j] /= d*d;	# (edge blocks short of pixels count the missing ones as clear)
 	s := sigma / real d;
 	sizes := boxsizes(s);
 	tmp := array[n] of int;
-	for(c = 0; c < 4; c++)
+	for(c := 0; c < 4; c++) {
+		plane := ch[c*n:(c+1)*n];
 		for(p := 0; p < 3; p++) {
-			boxpass(ch[c], tmp, sw, sh, sizes[p] / 2, 1);
-			boxpass(tmp, ch[c], sw, sh, sizes[p] / 2, 0);
+			boxpass(plane, tmp, sw, sh, sizes[p] / 2, 1);
+			boxpass(tmp, plane, sw, sh, sizes[p] / 2, 0);
 		}
-	# up: bilinear between block centres
-	for(y = 0; y < h; y++) {
-		fy := (real y + 0.5) / real d - 0.5;
-		y0 := int math->floor(fy);
-		ty := fy - real y0;
-		y1 := y0 + 1;
-		if(y0 < 0)
-			y0 = 0;
-		if(y1 >= sh)
-			y1 = sh - 1;
-		if(y0 >= sh)
-			y0 = sh - 1;
-		for(x := 0; x < w; x++) {
-			fx := (real x + 0.5) / real d - 0.5;
-			x0 := int math->floor(fx);
-			tx := fx - real x0;
-			x1 := x0 + 1;
-			if(x0 < 0)
-				x0 = 0;
-			if(x1 >= sw)
-				x1 = sw - 1;
-			if(x0 >= sw)
-				x0 = sw - 1;
-			k := (y*w + x) * 4;
-			for(c = 0; c < 4; c++) {
-				a := ch[c];
-				top := real a[y0*sw + x0] * (1.0 - tx) + real a[y0*sw + x1] * tx;
-				bot := real a[y1*sw + x0] * (1.0 - tx) + real a[y1*sw + x1] * tx;
-				v := int (top * (1.0 - ty) + bot * ty);
-				if(v > 255)
-					v = 255;
-				if(v < 0)
-					v = 0;
+	}
+	if(d == 1) {
+		for(j := 0; j < n; j++) {
+			a := clamp8(ch[j]);
+			k := 4*j;
+			buf[k] = byte a;
+			for(c = 1; c < 4; c++) {
+				v := clamp8(ch[c*n+j]);
+				if(v > a)
+					v = a;	# a colour never exceeds its alpha, premultiplied
 				buf[k+c] = byte v;
 			}
 		}
+		return;
 	}
-	# a colour never exceeds its alpha, premultiplied
-	for(k := 0; k < len buf; k += 4)
-		for(c = 1; c < 4; c++)
-			if(buf[k+c] > buf[k])
-				buf[k+c] = buf[k];
+	# up: bilinear between block centres, weights in 256ths: each row
+	# of blocks first, then along it
+	xs0 := array[w] of int;
+	xs1 := array[w] of int;
+	xw := array[w] of int;
+	for(x := 0; x < w; x++)
+		(xs0[x], xs1[x], xw[x]) = upsample(x, d, sw);
+	row := array[4*sw] of int;
+	for(y := 0; y < h; y++) {
+		(y0, y1, wy) := upsample(y, d, sh);
+		for(c = 0; c < 4; c++) {
+			o0 := c*n + y0*sw;
+			o1 := c*n + y1*sw;
+			for(bx := 0; bx < sw; bx++)
+				row[c*sw+bx] = ch[o0+bx]*(256-wy) + ch[o1+bx]*wy;
+		}
+		k := y*w*4;
+		for(x = 0; x < w; x++) {
+			(x0, x1, wx) := (xs0[x], xs1[x], xw[x]);
+			a := clamp8((row[x0]*(256-wx) + row[x1]*wx) >> 16);
+			buf[k] = byte a;
+			if(a == 0) {
+				buf[k+1] = buf[k+2] = buf[k+3] = byte 0;
+			} else
+				for(c = 1; c < 4; c++) {
+					o := c*sw;
+					v := clamp8((row[o+x0]*(256-wx) + row[o+x1]*wx) >> 16);
+					if(v > a)
+						v = a;
+					buf[k+c] = byte v;
+				}
+			k += 4;
+		}
+	}
+}
+
+# pixel i of a d-times scaling of m samples: the two samples either
+# side of it and the second's weight, in 256ths
+upsample(i, d, m: int): (int, int, int)
+{
+	f := (real i + 0.5) / real d - 0.5;
+	i0 := int math->floor(f);
+	wt := int ((f - real i0) * 256.0);
+	i1 := i0 + 1;
+	if(i0 < 0)
+		i0 = 0;
+	if(i0 >= m)
+		i0 = m - 1;
+	if(i1 >= m)
+		i1 = m - 1;
+	return (i0, i1, wt);
+}
+
+clamp8(v: int): int
+{
+	if(v < 0)
+		return 0;
+	if(v > 255)
+		return 255;
+	return v;
 }
 
 # three box widths whose passes make a Gaussian of deviation s (odd,

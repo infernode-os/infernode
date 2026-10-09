@@ -538,10 +538,32 @@ loadsheets(p: ref Pg)
 		if(a[i].t1 != nil)
 			urls = a[i].t1 :: urls;
 	got := fetchall(urls);
+	# a sheet linked (or written inline) again is parsed once: the
+	# parsed form is never changed, and each use keeps its own place
+	# in the cascade.  (GitHub links some of its largest sheets five
+	# and six times; parsed each time they took 200M.)
+	parsed: list of (string, ref Css->Sheet);
 	for(i = 0; i < len a; i++) {
 		(text, u, hint) := a[i];
+		key := "\u0000" + text;
+		if(u != nil)
+			key = u + " " + hint;
+		sh: ref Css->Sheet;
+		for(l := parsed; l != nil; l = tl l)
+			if((hd l).t0 == key) {
+				sh = (hd l).t1;
+				break;
+			}
+		if(sh != nil) {
+			if(u == nil)
+				u = d.url;
+			p.styles.add(sh, Style->Author, u);
+			continue;
+		}
 		if(u == nil) {
-			p.styles.add(css->parse(text), Style->Author, d.url);
+			sh = css->parse(text);
+			parsed = (key, sh) :: parsed;
+			p.styles.add(sh, Style->Author, d.url);
 			continue;
 		}
 		(data, ctype, err) := fetched(got, u);
@@ -554,7 +576,9 @@ loadsheets(p: ref Pg)
 			p.errors = u + ": not text/css (" + ctype + ")" :: p.errors;
 			continue;
 		}
-		p.styles.add(css->parse(html->cssdecode(data, param(ctype, "charset"), hint, d.charset)), Style->Author, u);
+		sh = css->parse(html->cssdecode(data, param(ctype, "charset"), hint, d.charset));
+		parsed = (key, sh) :: parsed;
+		p.styles.add(sh, Style->Author, u);
 	}
 	# @import, to a depth of 4
 	for(depth := 0; depth < 4; depth++) {

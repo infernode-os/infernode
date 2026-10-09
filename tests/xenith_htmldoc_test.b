@@ -320,8 +320,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	disp = Display.allocate(nil);
 	if(disp == nil) {
-		sys->fprint(sys->fildes(2), "no display: %r\n");
-		raise "fail:display";
+		raise sys->sprint("skip:no display: %r");
 	}
 	htmldoc = load Htmldoc Htmldoc->PATH;
 	if(htmldoc == nil) {

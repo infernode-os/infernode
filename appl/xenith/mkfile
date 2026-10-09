@@ -73,6 +73,7 @@ MODULES=\
 SYSMODULES=\
 	bufio.m\
 	renderer.m\
+	htmldoc.m\
 	formatter.m\
 	daytime.m\
 	debug.m\

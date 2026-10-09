@@ -2075,7 +2075,7 @@ openpath(path: string)
 
 # Allowed dis path prefixes for GUI app launch from context zone.
 # Must match the whitelist in lucifer.b.
-ALLOWED_DIS_PREFIXES: con "/dis/wm/:/dis/charon/:/dis/xenith/";
+ALLOWED_DIS_PREFIXES: con "/dis/wm/:/dis/xenith/";
 
 # Check if path is a launchable .dis app.  Keep this in step with lucifer.b's
 # validdispath(), which is the execution gate for presentation app loads.
@@ -2084,7 +2084,7 @@ islaunchabledis(path: string): int
 	if(path == nil || len path == 0)
 		return 0;
 	# Check allowed prefixes
-	prefixes := "/dis/wm/" :: "/dis/charon/" :: "/dis/xenith/" :: nil;
+	prefixes := "/dis/wm/" :: "/dis/xenith/" :: nil;
 	ok := 0;
 	for(pl := prefixes; pl != nil; pl = tl pl) {
 		pfx := hd pl;

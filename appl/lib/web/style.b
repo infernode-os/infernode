@@ -211,7 +211,7 @@ Ix: adt {
 buildindex(s: ref Styles, env: ref Env): ref Index
 {
 	ix := ref Ix(ref Index(array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry,
-		array[Nbucket] of list of ref Entry, nil, 0, nil), 0, nil, 0, env);
+		array[Nbucket] of list of ref Entry, nil, 0, nil, nil), 0, nil, 0, env);
 	# layer names first, in order of first appearance, so tiers are known
 	sheets: list of (ref Sheet, int, string);
 	for(l := s.sheets; l != nil; l = tl l)
@@ -290,7 +290,9 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 				tier = Tauthor + lp;
 			}
 			decls := absurls(r.decls, base);
-			for(k := 0; k < len r.sels; k++)
+			for(k := 0; k < len decls && !sibfns; k++)
+				sibfns = hassibfn(decls[k].val);
+			for(k = 0; k < len r.sels; k++)
 				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0));
 			ix.order++;
 		Media =>
@@ -363,8 +365,8 @@ fixurls(v: array of ref Tok, base: string): array of ref Tok
 		t := v[i];
 		if(t.kind == Kurl)
 			t = ref Tok(Kurl, resolveurl(base, t.s), 0.0, 0, nil);
-		else if(t.kind == Kfunction && t.s == "url" && len t.kids > 0 && t.kids[0].kind == Kstring)
-			t = ref Tok(Kurl, resolveurl(base, t.kids[0].s), 0.0, 0, nil);
+		else if(t.kind == Kfunction && t.s == "url" && len (uk := nows(t.kids)) > 0 && uk[0].kind == Kstring)
+			t = ref Tok(Kurl, resolveurl(base, uk[0].s), 0.0, 0, nil);
 		else if(t.kids != nil)
 			t = ref Tok(t.kind, t.s, t.n, t.flag, fixurls(t.kids, base));
 		r[i] = t;
@@ -711,7 +713,7 @@ compound(m: ref M, c: array of ref Simple, n: int): int
 				return 0;
 		Css->Sattr =>
 			# not d.attr() != nil: an empty value is nil in Limbo
-			if(!d.hasattr(n, x.name) || !matchattr(d.attr(n, x.name), x))
+			if(!d.hasattr(n, x.name) || !matchattr(d.attr(n, x.name), x, !d.xml && htmlcaseless(x.name)))
 				return 0;
 		Css->Spseudo =>
 			if(!pseudo(m, x, n))
@@ -721,10 +723,26 @@ compound(m: ref M, c: array of ref Simple, n: int): int
 	return 1;
 }
 
-matchattr(v: string, x: ref Simple): int
+# HTML attributes whose values are compared case-insensitively in
+# HTML documents (Selectors 4 §6.3, the list from HTML §4.17)
+htmlcaseless(nm: string): int
+{
+	case nm {
+	"accept" or "accept-charset" or "align" or "alink" or "axis" or "bgcolor" or "charset" or
+	"checked" or "clear" or "codetype" or "color" or "compact" or "declare" or "defer" or "dir" or
+	"direction" or "disabled" or "enctype" or "face" or "frame" or "hreflang" or "http-equiv" or
+	"lang" or "language" or "link" or "media" or "method" or "multiple" or "nohref" or "noresize" or
+	"noshade" or "nowrap" or "readonly" or "rel" or "rev" or "rules" or "scope" or "scrolling" or
+	"selected" or "shape" or "target" or "text" or "type" or "valign" or "valuetype" or "vlink" =>
+		return 1;
+	}
+	return 0;
+}
+
+matchattr(v: string, x: ref Simple, caseless: int): int
 {
 	want := x.val;
-	if(x.icase) {
+	if(x.icase || caseless) {
 		v = lower(v);
 		want = lower(want);
 	}
@@ -872,6 +890,9 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"placeholder-shown" =>
 		return (nd.tag == Dom->Tinput || nd.tag == Dom->Ttextarea) &&
 			d.hasattr(n, "placeholder") && d.attr(n, "value") == "";
+	"popover-open" =>
+		# opened by its invoker (browser.b): a mark markup cannot make
+		return d.hasattr(n, "popover") && d.hasattr(n, Dom->POPOPEN);
 	"open" =>
 		return d.hasattr(n, "open");
 	"closed" =>
@@ -879,9 +900,15 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"defined" or "valid" or "in-range" or "user-valid" =>
 		return 1;
 	"lang" =>
-		for(p := n; p != 0; p = parentel(d, p))
-			if((l := d.attr(p, "lang")) != nil)
-				return lower(l) == lower(x.val) || prefix(lower(l), lower(x.val) + "-");
+		for(p := n; p != 0; p = parentel(d, p)) {
+			l := d.attr(p, "lang");
+			if(l == nil)
+				l = d.attr(p, "xml:lang");	# XHTML
+			if(l != nil)
+				return langmatch(lower(l), x.val);
+		}
+		if(d.lang != nil)
+			return langmatch(lower(d.lang), x.val);	# the document's, from <meta http-equiv> (lang-selector-006)
 		return 0;
 	"dir" =>
 		return lower(x.val) == "ltr";
@@ -889,6 +916,99 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 		return 0;
 	}
 	return 0;
+}
+
+# :lang(<ranges>): the tag against each comma-separated language range,
+# quoted or not, by extended filtering (Selectors 4 §14.1, RFC 4647
+# §3.3.2): the primary subtags agree (or the range's is *), and the
+# range's remaining subtags appear in order in the tag, skipping tag
+# subtags that are not singletons.
+langmatch(tag, ranges: string): int
+{
+	for(rl := splitlist(ranges); rl != nil; rl = tl rl) {
+		r := lower(trim1(hd rl));
+		if(len r >= 2 && (r[0] == '"' || r[0] == '\''))
+			r = r[1:len r - 1];
+		if(r == "")
+			continue;
+		if(r != "*" && !(r[0] >= 'a' && r[0] <= 'z'))
+			return 0;	# not a language range (BCP 47 starts with a letter): the selector is invalid
+		if(tag == "")
+			continue;	# lang="": no language, matched by nothing
+		rs := subtags(r);
+		ts := subtags(tag);
+		if(rs == nil || ts == nil)
+			continue;
+		if(hd rs != "*" && hd rs != hd ts)
+			continue;
+		rs = tl rs;
+		ts = tl ts;
+		ok := 1;
+		while(rs != nil) {
+			if(hd rs == "*") {
+				rs = tl rs;
+				continue;
+			}
+			if(ts == nil) {
+				ok = 0;
+				break;
+			}
+			if(hd rs == hd ts) {
+				rs = tl rs;
+				ts = tl ts;
+				continue;
+			}
+			if(len hd ts == 1) {
+				ok = 0;	# a singleton: an extension starts here
+				break;
+			}
+			ts = tl ts;
+		}
+		if(ok)
+			return 1;
+	}
+	return 0;
+}
+
+subtags(s: string): list of string
+{
+	r: list of string;
+	st := 0;
+	for(i := 0; i <= len s; i++)
+		if(i == len s || s[i] == '-') {
+			r = s[st:i] :: r;
+			st = i + 1;
+		}
+	o: list of string;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+splitlist(s: string): list of string
+{
+	r: list of string;
+	st := 0;
+	for(i := 0; i <= len s; i++)
+		if(i == len s || s[i] == ',') {
+			r = s[st:i] :: r;
+			st = i + 1;
+		}
+	o: list of string;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+trim1(s: string): string
+{
+	a := 0;
+	b := len s;
+	while(a < b && (s[a] == ' ' || s[a] == '\t' || s[a] == '\n'))
+		a++;
+	while(b > a && (s[b-1] == ' ' || s[b-1] == '\t' || s[b-1] == '\n'))
+		b--;
+	return s[a:b];
 }
 
 anymatch(m: ref M, l: array of ref Sel, n: int): int
@@ -1168,7 +1288,7 @@ cmpfeature(nm, op: string, val: array of ref Tok, env: ref Env): int
 		have := real env.width;
 		if(nm == "height" || nm == "device-height")
 			have = real env.height;
-		(ok, l) := length(val, ref Ctx(16.0, 16.0, env, 0, nil, 400, 0));
+		(ok, l) := length(val, ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0));
 		if(!ok || l.kind != Lpx)
 			return 0;
 		return cmp(have, op, l.px);
@@ -1258,8 +1378,11 @@ supportsdecl(v: array of ref Tok): int
 	nm := lower(v[0].s);
 	if(prefix(nm, "--"))
 		return 1;
+	for(k := 2; k < len v; k++)
+		if(v[k].kind == Kfunction && v[k].s == "var")
+			return css->validvars(v[2:]);	# a var() makes any value valid at parse time, unless it is malformed itself (Variables 1 §3; variable-supports-09)
 	s := St.new();
-	ctx := ref Ctx(16.0, 16.0, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
+	ctx := ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
 	lh := longhands(nm, trim(v[2:]));
 	if(lh == nil)
 		return 0;
@@ -1277,11 +1400,22 @@ resolveurl(base, rel: string): string
 {
 	if(rel == nil || base == nil)
 		return rel;
-	# absolute already?
+	# absolute already?  Its path's dot segments go all the same (a
+	# server may refuse a/../b: nasa.gov's fonts came back 406)
 	for(i := 0; i < len rel; i++) {
 		c := rel[i];
-		if(c == ':')
+		if(c == ':') {
+			sch := lower(rel[0:i]);
+			if((sch == "http" || sch == "https" || sch == "file") && index(rel, "/.", 0) >= 0) {
+				(rs, ra, rp, rq) := spliturl(rel);
+				rf := "";
+				if((e := index(rel, "#", 0)) >= 0)
+					rf = rel[e:];	# (spliturl leaves the fragment off)
+				if(rp != "")
+					return rs + ":" + ra + dotsegs(rp) + rq + rf;
+			}
 			return rel;
+		}
 		if(!(isalnum(c) || c == '+' || c == '-' || c == '.'))
 			break;
 	}
@@ -1350,23 +1484,33 @@ dotsegs(p: string): string
 		q = p[e:];
 		p = p[0:e];
 	}
-	(nil, segs) := sys->tokenize(p, "/");
+	# RFC 3986 §5.2.4; an empty segment is a segment (a//b stays)
+	if(p == "" || p[0] != '/')
+		p = "/" + p;
 	out: list of string;
-	for(; segs != nil; segs = tl segs)
-		case hd segs {
+	s := 1;
+	for(i := 1; i <= len p; i++) {
+		if(i < len p && p[i] != '/')
+			continue;
+		seg := p[s:i];
+		last := i == len p;
+		s = i + 1;
+		case seg {
 		"." =>
-			;
+			if(last)
+				out = "" :: out;
 		".." =>
 			if(out != nil)
 				out = tl out;
+			if(last)
+				out = "" :: out;
 		* =>
-			out = hd segs :: out;
+			out = seg :: out;
 		}
+	}
 	r := "";
 	for(; out != nil; out = tl out)
 		r = "/" + hd out + r;
-	if(len p > 1 && p[len p - 1] == '/' || len p > 0 && (suffix(p, "/.") || suffix(p, "/..")))
-		r += "/";
 	if(r == "")
 		r = "/";
 	return r + q;
@@ -1431,6 +1575,22 @@ trim(v: array of ref Tok): array of ref Tok
 	return v[i:e];
 }
 
+# v split at its commas
+commas(v: array of ref Tok): list of array of ref Tok
+{
+	r: list of array of ref Tok;
+	st := 0;
+	for(i := 0; i <= len v; i++)
+		if(i == len v || v[i].kind == Kcomma) {
+			r = v[st:i] :: r;
+			st = i+1;
+		}
+	o: list of array of ref Tok;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
 # v without whitespace tokens
 nows(v: array of ref Tok): array of ref Tok
 {
@@ -1462,16 +1622,21 @@ splitcommas(v: array of ref Tok): list of array of ref Tok
 		o = hd r :: o;
 	return o;
 }
-# named colours (CSS Color 4 §6.1) and system colours, sorted for binary search
+# named colours (CSS Color 4 §6.1) and system colours, the deprecated ones
+# as the colours they are defined to equal (Appendix A), sorted for binary search
 colornames := array[] of {
 	("accentcolor", int 16r2266CCFF),
 	("accentcolortext", int 16rFFFFFFFF),
+	("activeborder", int 16r767676FF),
+	("activecaption", int 16rFFFFFFFF),
 	("activetext", int 16rFF0000FF),
 	("aliceblue", int 16rF0F8FFFF),
 	("antiquewhite", int 16rFAEBD7FF),
+	("appworkspace", int 16rFFFFFFFF),
 	("aqua", int 16r00FFFFFF),
 	("aquamarine", int 16r7FFFD4FF),
 	("azure", int 16rF0FFFFFF),
+	("background", int 16rFFFFFFFF),
 	("beige", int 16rF5F5DCFF),
 	("bisque", int 16rFFE4C4FF),
 	("black", int 16r000000FF),
@@ -1483,11 +1648,12 @@ colornames := array[] of {
 	("buttonborder", int 16r767676FF),
 	("buttonface", int 16rEFEFEFFF),
 	("buttonhighlight", int 16rEFEFEFFF),
-	("buttonshadow", int 16r767676FF),
+	("buttonshadow", int 16rEFEFEFFF),
 	("buttontext", int 16r000000FF),
 	("cadetblue", int 16r5F9EA0FF),
 	("canvas", int 16rFFFFFFFF),
 	("canvastext", int 16r000000FF),
+	("captiontext", int 16r000000FF),
 	("chartreuse", int 16r7FFF00FF),
 	("chocolate", int 16rD2691EFF),
 	("coral", int 16rFF7F50FF),
@@ -1538,8 +1704,13 @@ colornames := array[] of {
 	("highlighttext", int 16rFFFFFFFF),
 	("honeydew", int 16rF0FFF0FF),
 	("hotpink", int 16rFF69B4FF),
+	("inactiveborder", int 16r767676FF),
+	("inactivecaption", int 16rFFFFFFFF),
+	("inactivecaptiontext", int 16r808080FF),
 	("indianred", int 16rCD5C5CFF),
 	("indigo", int 16r4B0082FF),
+	("infobackground", int 16rFFFFFFFF),
+	("infotext", int 16r000000FF),
 	("ivory", int 16rFFFFF0FF),
 	("khaki", int 16rF0E68CFF),
 	("lavender", int 16rE6E6FAFF),
@@ -1578,6 +1749,8 @@ colornames := array[] of {
 	("mediumspringgreen", int 16r00FA9AFF),
 	("mediumturquoise", int 16r48D1CCFF),
 	("mediumvioletred", int 16rC71585FF),
+	("menu", int 16rFFFFFFFF),
+	("menutext", int 16r000000FF),
 	("midnightblue", int 16r191970FF),
 	("mintcream", int 16rF5FFFAFF),
 	("mistyrose", int 16rFFE4E1FF),
@@ -1608,6 +1781,7 @@ colornames := array[] of {
 	("saddlebrown", int 16r8B4513FF),
 	("salmon", int 16rFA8072FF),
 	("sandybrown", int 16rF4A460FF),
+	("scrollbar", int 16rFFFFFFFF),
 	("seagreen", int 16r2E8B57FF),
 	("seashell", int 16rFFF5EEFF),
 	("selecteditem", int 16r3390FFFF),
@@ -1624,8 +1798,10 @@ colornames := array[] of {
 	("tan", int 16rD2B48CFF),
 	("teal", int 16r008080FF),
 	("thistle", int 16rD8BFD8FF),
+	("threeddarkshadow", int 16r767676FF),
 	("threedface", int 16rEFEFEFFF),
-	("threedhighlight", int 16rEFEFEFFF),
+	("threedhighlight", int 16r767676FF),
+	("threedlightshadow", int 16r767676FF),
 	("threedshadow", int 16r767676FF),
 	("tomato", int 16rFF6347FF),
 	("turquoise", int 16r40E0D0FF),
@@ -1670,7 +1846,7 @@ St.new(): ref St
 		3, Bnone, Ccurrent, 0,
 		"serif" :: nil, 16.0, 400, FSnormal, 0,
 		kw(Lnormal),
-		Astart, Astart,
+		Astart, Aauto,
 		z,
 		TTnone,
 		0.0, 0.0,
@@ -1692,8 +1868,11 @@ St.new(): ref St
 		nogrid, nogrid, nogrid, nogrid, nil,
 		0, 0, 0.0, 0.0, 0, 0,	# border-spacing: 0 (the UA sheet gives <table> 2px)
 		0, a, 3, Bnone, Ccurrent,
-		0, nil, "auto", 1, 1, 0, Ccurrent,
-		nil, 0, 0);
+		0, "auto", 1, 1, 0, Ccurrent,
+		nil, 0, 0, UBnormal, 0,
+		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
+		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
+		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil);
 }
 
 nextsid := 1;
@@ -1706,10 +1885,15 @@ inherit(p: ref St): ref St
 	if(p == nil)
 		return s;
 	s.color = p.color;
+	s.dark = p.dark;
 	s.family = p.family;
 	s.fontsize = p.fontsize;
 	s.weight = p.weight;
 	s.fontstyle = p.fontstyle;
+	s.stretch = p.stretch;
+	s.slant = p.slant;
+	s.synth = p.synth;
+	s.imgorient = p.imgorient;
 	s.smallcaps = p.smallcaps;
 	s.lineheight = p.lineheight;
 	s.align = p.align;
@@ -1718,11 +1902,20 @@ inherit(p: ref St): ref St
 	s.transform = p.transform;
 	s.letterspacing = p.letterspacing;
 	s.nokern = p.nokern;
+	s.fontvars = p.fontvars;
 	s.wordspacing = p.wordspacing;
 	s.whitespace = p.whitespace;
 	s.breakall = p.breakall;
 	s.keepall = p.keepall;
 	s.anywhere = p.anywhere;
+	s.lbmode = p.lbmode;
+	s.wst = p.wst;
+	s.hyphens = p.hyphens;
+	s.hyphenchar = p.hyphenchar;
+	s.textjustify = p.textjustify;
+	s.hangpunct = p.hangpunct;
+	s.textautospace = p.textautospace;
+	s.textwrap = p.textwrap;
 	s.textshadows = p.textshadows;
 	s.dirrtl = p.dirrtl;
 	s.tabsize = p.tabsize;
@@ -1740,6 +1933,8 @@ inherit(p: ref St): ref St
 	s.hideempty = p.hideempty;
 	s.accent = p.accent;
 	s.caret = p.caret;
+	s.svgfill = p.svgfill;
+	s.svgstroke = p.svgstroke;
 	s.vars = p.vars;
 	return s;
 }
@@ -1760,16 +1955,17 @@ anon(parent: ref St, display: int): ref St
 isinherited(nm: string): int
 {
 	case nm {
-	"color" or "font-family" or "font-size" or "font-weight" or "font-style" or
+	"color" or "font-family" or "font-size" or "font-weight" or "font-style" or "font-stretch" or "font-width" or "font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" or
 	"font-variant" or "font-variant-caps" or "line-height" or "text-align" or
 	"text-align-last" or "text-indent" or "text-transform" or "letter-spacing" or
 	"word-spacing" or "white-space" or "white-space-collapse" or "text-wrap" or
-	"text-wrap-mode" or "word-break" or "overflow-wrap" or "word-wrap" or
+	"text-wrap-mode" or "word-break" or "line-break" or "overflow-wrap" or "word-wrap" or "word-space-transform" or
+	"hyphens" or "hyphenate-character" or "text-justify" or "hanging-punctuation" or "text-autospace" or "text-wrap-style" or
 	"text-shadow" or "direction" or "tab-size" or "visibility" or
 	"list-style-type" or "list-style-position" or "list-style-image" or "quotes" or
 	"cursor" or "pointer-events" or "border-collapse" or "border-spacing" or
-	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or
-	"font-kerning" or "font-feature-settings" =>
+	"caption-side" or "empty-cells" or "accent-color" or "caret-color" or "fill" or "stroke" or
+	"font-kerning" or "font-feature-settings" or "font-variation-settings" or "image-orientation" =>
 		return 1;
 	}
 	return 0;
@@ -1780,6 +1976,7 @@ isinherited(nm: string): int
 Ctx: adt {
 	fs:	real;		# font size for em units
 	rootfs:	real;	# for rem units
+	lh:	real;		# line height for lh units
 	env:	ref Env;
 	pct:	int;		# percentages allowed (unused)
 	fam:	list of string;	# the font, for ex and ch units
@@ -1804,6 +2001,13 @@ Md: adt {
 };
 
 lastenv: ref Env;
+mixcur: int;	# what currentcolor is in a color-mix() being applied: the colour so far (the inherited one for 'color')
+
+sameenv(a, b: ref Env): int
+{
+	return a != nil && b != nil && a.width == b.width && a.height == b.height &&
+		a.dark == b.dark && a.print == b.print;
+}
 
 compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 {
@@ -1811,17 +2015,19 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		init();
 	if(env == nil)
 		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
-	if(s.idx == nil || lastenv == nil || lastenv.width != env.width || lastenv.height != env.height ||
-	   lastenv.dark != env.dark || lastenv.print != env.print) {
+	# the index reflects the media queries of one environment: this
+	# document's, not the last one computed (two pages at two widths)
+	if(s.idx == nil || !sameenv(s.idx.env, env)) {
 		s.idx = buildindex(s, env);
-		lastenv = ref *env;
+		s.idx.env = ref *env;
 	}
-	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	lastenv = ref *env;	# for light-dark() in colours parsed without a context
+	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
 	m := matcher(d, env);
 	root := d.root();
 	if(root == 0)
 		return c;
-	ctx := ref Ctx(16.0, 16.0, env, 0, nil, 400, 0);
+	ctx := ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;	# filter for each element's children
 	n := root;
@@ -1839,6 +2045,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 				pf: array of int;
 				if(p != 0)
 					pf = filters[p];
+				(sibdoc, sibnode) = (d, n);
 				st := styleof(m, s.idx, n, ps, ctx, c, share, pf);
 				if(nd.first != 0)
 					filters[n] = childfilter(m, n, pf);
@@ -1854,6 +2061,8 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		else
 			n = next(d, n, root);
 	}
+	(sibdoc, sibnode) = (nil, 0);
+	schemedark = -1;
 	return c;
 }
 
@@ -1873,6 +2082,9 @@ Nshare: con 1024;
 
 Shared: adt {
 	st, before, after, marker:	ref St;
+	firstletter:	ref St;
+	firstline:	ref St;
+	placeholder:	ref St;
 };
 
 # Elements whose style is computed from the same inputs -- parent style,
@@ -1903,6 +2115,9 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 				c.before[n] = x.before;
 				c.after[n] = x.after;
 				c.marker[n] = x.marker;
+				c.firstletter[n] = x.firstletter;
+				c.firstline[n] = x.firstline;
+				c.placeholder[n] = x.placeholder;
 				return x.st;
 			}
 	}
@@ -1930,40 +2145,100 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 		}
 	}
 	st := cascade(sortmd(mds, nmd), parent, ctx);
-	fixup(st, parent, d, n);
+	# the box it is in: past display: contents ancestors, whose boxes
+	# are their children's (BBC's grid items under two of them)
+	bp := parent;
+	for(p := parentel(d, n); p != 0 && bp != nil && bp.display == Dcontents; ) {
+		p = parentel(d, p);
+		bp = nil;
+		if(p != 0)
+			bp = c.st[p];
+	}
+	fixup(st, parent, bp, d, n);
 	if(pse != nil) {
 		c.before[n] = pseudostyle(pse, "before", st, ctx);
 		c.after[n] = pseudostyle(pse, "after", st, ctx);
 		c.marker[n] = pseudostyle(pse, "marker", st, ctx);
+		# the first letter of generated content before the element is
+		# that content's: the pseudo-element inherits from ::before then
+		fparent := st;
+		if((bs := c.before[n]) != nil && len bs.content > 0 && bs.content[0].kind == Kstring)
+			fparent = bs;
+		c.firstletter[n] = pseudostyle(pse, "first-letter", fparent, ctx);
+		c.firstline[n] = pseudostyle(pse, "first-line", st, ctx);
+		c.placeholder[n] = pseudostyle(pse, "placeholder", st, ctx);
 	}
 	if(key != nil)
-		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n])) :: share[slot];
+		share[slot] = (key, ref Shared(st, c.before[n], c.after[n], c.marker[n], c.firstletter[n], c.firstline[n], c.placeholder[n])) :: share[slot];
 	return st;
 }
 
 # The inputs to an element's style, as a string; nil if it must not be
 # shared (the root, whose style also sets rem units).
+# a sheet uses sibling-index() or sibling-count(): siblings' styles
+# may differ though their rules do not, so none are shared
+sibfns := 0;
+
+hassibfn(v: array of ref Tok): int
+{
+	for(i := 0; i < len v; i++)
+		if(v[i].kind == Kfunction && (v[i].s == "sibling-index" || v[i].s == "sibling-count") || v[i].kids != nil && hassibfn(v[i].kids))
+			return 1;
+	return 0;
+}
+
 sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 {
-	if(parent == nil)
+	if(parent == nil || sibfns)
 		return nil;
 	k := string parent.sid;
 	for(; matched != nil; matched = tl matched)
-		k += " " + string (hd matched).order + "." + string (hd matched).sel.spec;
+		k += " " + string (hd matched).order + "." + string (hd matched).sel.spec + (hd matched).sel.pseudo;
 	nd := d.nodes[n];
+	if(nd.tag == Dom->Ttd || nd.tag == Dom->Tth)
+		return nil;	# cellpadding and border come from the table
+	if(rowish(nd.tag) && tablerules(d, n) != nil)
+		return nil;	# so do its rules
 	if(nd.attrs != nil) {
 		k += "|" + nd.name;
 		for(l := nd.attrs; l != nil; l = tl l)
 			case (hd l).t0 {
 			"style" or "width" or "height" or "bgcolor" or "align" or "valign" or "border" or
 			"color" or "face" or "size" or "type" or "background" or "text" or "cellspacing" or
-			"cellpadding" or "hspace" or "vspace" or "nowrap" or "noshade" or "cols" or "rows" =>
+			"cellpadding" or "hspace" or "vspace" or "nowrap" or "noshade" or "cols" or "rows" or "rules" or
+			"start" or "reversed" =>
 				k += "|" + (hd l).t0 + "=" + (hd l).t1;
 			}
-		if(nd.tag == Dom->Ttd || nd.tag == Dom->Tth)
-			return nil;	# cellpadding comes from the table
 	}
 	return k;
+}
+
+# the rules attribute of the table n is in, lower-cased, if it is one
+# of the values that mean something (HTML §15.3.11)
+tablerules(d: ref Doc, n: int): string
+{
+	for(t := d.nodes[n].parent; t != 0; t = d.nodes[t].parent)
+		if(d.nodes[t].tag == Dom->Ttable && d.nodes[t].ns == Dom->HTML)
+			return rulesof(d, t);
+	return nil;
+}
+
+rulesof(d: ref Doc, t: int): string
+{
+	case r := lower(d.attr(t, "rules")) {
+	"none" or "groups" or "rows" or "cols" or "all" =>
+		return r;
+	}
+	return nil;
+}
+
+rowish(tag: int): int
+{
+	case tag {
+	Dom->Ttr or Dom->Tthead or Dom->Ttbody or Dom->Ttfoot or Dom->Tcolgroup or Dom->Tcol =>
+		return 1;
+	}
+	return 0;
 }
 
 idxlayers(idx: ref Index): int
@@ -1996,9 +2271,11 @@ pseudostyle(pse: list of (string, ref Md), name: string, parent: ref St, ctx: re
 	if(n == 0)
 		return nil;
 	st := cascade(sortmd(mds, n), parent, ctx);
-	if(name != "marker" && st.content == nil)
+	if(name != "marker" && name != "first-letter" && name != "first-line" && name != "placeholder" && st.content == nil)
 		return nil;	# content: normal/none generates no box
-	fixup(st, parent, nil, 0);
+	if(st.display == Dnone && name != "marker")
+		return nil;	# not generated: its counters do not count either
+	fixup(st, parent, parent, nil, 0);
 	return st;
 }
 
@@ -2083,6 +2360,7 @@ msort(a, t: array of ref Md)
 
 cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 {
+	curmds = mds;
 	st := inherit(parent);
 	pfs := 16.0;
 	if(parent != nil)
@@ -2096,6 +2374,12 @@ cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 	}
 	if(custom != nil)
 		st.vars = setvars(st.vars, custom);
+	# color-scheme, before any colour: light-dark() is resolved with the
+	# element's own (Color Adjust 1 §2.1), not the page's
+	for(i = 0; i < len mds; i++)
+		if(mds[i].decl.name == "color-scheme")
+			st.dark = schemeof(mds[i].decl.val, parent, ctx.env);
+	schemedark = st.dark;
 	# the font first, for em, ex and ch units; a font-size in those
 	# units is the parent's
 	ctx.fs = pfs;
@@ -2115,6 +2399,12 @@ cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 	ctx.fam = st.family;
 	ctx.weight = st.weight;
 	ctx.italic = st.fontstyle != FSnormal;
+	# then the line height, for lh units (its own lh is the parent's)
+	ctx.lh = lineheightpx(pst);
+	for(i = 0; i < len mds; i++)
+		if(mds[i].decl.name == "line-height")
+			applydecl(st, mds[i].decl, parent, ctx);
+	ctx.lh = lineheightpx(st);
 	for(i = 0; i < len mds; i++) {
 		nm := mds[i].decl.name;
 		if(nm == "font")	# its line-height's em is this element's font size
@@ -2202,6 +2492,33 @@ subvars(v: array of ref Tok, raw: list of (string, array of ref Tok), vars: ref 
 				out = val[k] :: out;
 			continue;
 		}
+		if(t.kind == Kfunction && t.s == "env") {
+			# environment variables (Environment Variables 1): the
+			# safe-area, titlebar and keyboard insets are none on a
+			# window with nothing over it; any other name takes its
+			# fallback, or makes the value invalid
+			args := trim(t.kids);
+			if(len args == 0 || args[0].kind != Kident)
+				return (0, nil);
+			val: array of ref Tok;
+			nm := lower(args[0].s);
+			if(prefix(nm, "safe-area-") || prefix(nm, "titlebar-area-") || prefix(nm, "keyboard-inset-"))
+				val = array[] of {ref Tok(Kdimension, "px", 0.0, 0, nil)};
+			else {
+				k := 1;
+				while(k < len args && args[k].kind != Kcomma)
+					k++;
+				if(k >= len args)
+					return (0, nil);
+				ok: int;
+				(ok, val) = subvars(trim(args[k+1:]), raw, vars, busy);
+				if(!ok)
+					return (0, nil);
+			}
+			for(k := 0; k < len val; k++)
+				out = val[k] :: out;
+			continue;
+		}
 		if(t.kids != nil && hasvar(t.kids)) {
 			(ok, kids) := subvars(t.kids, raw, vars, busy);
 			if(!ok)
@@ -2221,7 +2538,7 @@ subvars(v: array of ref Tok, raw: list of (string, array of ref Tok), vars: ref 
 hasvar(v: array of ref Tok): int
 {
 	for(i := 0; i < len v; i++) {
-		if(v[i].kind == Kfunction && v[i].s == "var")
+		if(v[i].kind == Kfunction && (v[i].s == "var" || v[i].s == "env"))
 			return 1;
 		if(v[i].kids != nil && hasvar(v[i].kids))
 			return 1;
@@ -2231,6 +2548,7 @@ hasvar(v: array of ref Tok): int
 
 applydecl(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx)
 {
+	aliasrtl = st.dirrtl;
 	val := d.val;
 	if(hasvar(val)) {
 		ok: int;
@@ -2238,7 +2556,7 @@ applydecl(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx)
 		if(!ok) {
 			# invalid at computed-value time: as if unset
 			for(l := longhands(d.name, nil); l != nil; l = tl l)
-				wide(st, (hd l).t0, "unset", parent);
+				wide(st, (hd l).t0, "unset", parent, ctx);
 			return;
 		}
 		val = trim(val);
@@ -2252,6 +2570,7 @@ applydecl(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx)
 # One longhand of a shorthand declaration.
 applyonly(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx, only: string)
 {
+	aliasrtl = st.dirrtl;
 	val := d.val;
 	if(hasvar(val)) {
 		ok: int;
@@ -2266,7 +2585,7 @@ applyonly(st: ref St, d: ref Decl, parent: ref St, ctx: ref Ctx, only: string)
 }
 
 # CSS-wide keywords.
-wide(st: ref St, nm, k: string, parent: ref St)
+wide(st: ref St, nm, k: string, parent: ref St, ctx: ref Ctx)
 {
 	src: ref St;
 	case k {
@@ -2274,7 +2593,21 @@ wide(st: ref St, nm, k: string, parent: ref St)
 		src = parent;
 	"initial" =>
 		src = initial;
-	"unset" or "revert" or "revert-layer" =>
+	"revert" =>
+		# the value the UA sheet (or a presentational hint) gave, if any
+		# (Cascade 5 §7.3.1), else as unset
+		for(i := len curmds - 1; i >= 0; i--) {
+			md := curmds[i];
+			if(md.tier < Tauthor && md.decl.name != "all" && setslonghand(md.decl, nm)) {
+				applyonly(st, md.decl, parent, ctx, nm);
+				return;
+			}
+		}
+		if(isinherited(nm))
+			src = parent;
+		else
+			src = initial;
+	"unset" or "revert-layer" =>
 		if(isinherited(nm))
 			src = parent;
 		else
@@ -2283,6 +2616,18 @@ wide(st: ref St, nm, k: string, parent: ref St)
 	if(src == nil)
 		src = initial;
 	copyprop(st, src, nm);
+}
+
+# the declarations of the element being cascaded, for revert
+curmds: array of ref Md;
+
+# does the declaration set the longhand nm?
+setslonghand(d: ref Decl, nm: string): int
+{
+	for(l := longhands(d.name, d.val); l != nil; l = tl l)
+		if((hd l).t0 == nm)
+			return 1;
+	return 0;
 }
 
 iswide(v: array of ref Tok): string
@@ -2296,7 +2641,9 @@ iswide(v: array of ref Tok): string
 }
 
 # Values settled once everything has been applied.
-fixup(st, parent: ref St, d: ref Doc, n: int)
+# boxparent is the style of the element whose box st's box goes in:
+# parent, unless parent is display: contents.
+fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 {
 	if(st.bct == Ccurrent) st.bct = st.color;
 	if(st.bcr == Ccurrent) st.bcr = st.color;
@@ -2325,14 +2672,18 @@ fixup(st, parent: ref St, d: ref Doc, n: int)
 	}
 	if(st.float != Fnone)
 		blockify = 1;
-	if(parent != nil)
-		case parent.display {
-		Dflex or Dinlineflex or Dgrid or Dinlinegrid =>
+	if(boxparent != nil)
+		case boxparent.display {
+		Dflex or Dinlineflex or Dgrid or Dinlinegrid or Dgridlanes or Dinlinegridlanes =>
 			blockify = 1;
 		}
 	if(d != nil && parentel(d, n) == 0)
 		blockify = 1;
-	if(blockify)
+	if(blockify) {
+		case st.display {
+		Dinline or Dinlineblock or Dinlineflex or Dinlinegrid or Dinlinegridlanes =>
+			st.wasinline = 1;
+		}
 		case st.display {
 		Dinline or Dinlineblock or Dtablerowgroup or Dtableheadergroup or
 		Dtablefootergroup or Dtablerow or Dtablecell or Dtablecolumngroup or
@@ -2342,9 +2693,12 @@ fixup(st, parent: ref St, d: ref Doc, n: int)
 			st.display = Dflex;
 		Dinlinegrid =>
 			st.display = Dgrid;
+		Dinlinegridlanes =>
+			st.display = Dgridlanes;
 		Dinlinetable =>
 			st.display = Dtable;
 		}
+	}
 	if(d != nil && parentel(d, n) == 0 && st.display == Dcontents)
 		st.display = Dblock;
 }
@@ -2397,10 +2751,10 @@ unit(n: real, u: string, ctx: ref Ctx): (int, real)
 		}
 		return (1, n*ctx.fs*0.5);
 	"ic" => return (1, n*ctx.fs);
-	"lh" => return (1, n*ctx.fs*1.2);
+	"lh" => return (1, n*ctx.lh);
 	"rlh" => return (1, n*ctx.rootfs*1.2);
-	"vw" or "svw" or "lvw" or "dvw" or "cqw" or "cqi" => return (1, n*real ctx.env.width/100.0);
-	"vh" or "svh" or "lvh" or "dvh" or "cqh" or "cqb" => return (1, n*real ctx.env.height/100.0);
+	"vw" or "svw" or "lvw" or "dvw" or "vi" or "svi" or "lvi" or "dvi" or "cqw" or "cqi" => return (1, n*real ctx.env.width/100.0);	# vi: the inline axis, horizontal here
+	"vh" or "svh" or "lvh" or "dvh" or "vb" or "svb" or "lvb" or "dvb" or "cqh" or "cqb" => return (1, n*real ctx.env.height/100.0);
 	"vmin" or "svmin" or "lvmin" or "dvmin" or "cqmin" =>
 		m := ctx.env.width;
 		if(ctx.env.height < m)
@@ -2422,10 +2776,32 @@ unit(n: real, u: string, ctx: ref Ctx): (int, real)
 }
 
 # calc() and friends (CSS Values 4 §10) as an expression tree.
+# the element being styled, for sibling-index() and sibling-count()
+sibdoc: ref Doc;
+sibnode := 0;
+
 calcexpr(t: ref Tok, ctx: ref Ctx): ref Expr
 {
 	args := splitcommas(t.kids);
 	case t.s {
+	"sibling-index" or "sibling-count" =>
+		# where the element is among its parent's elements, from 1; how
+		# many they are (Values 5 §8.1)
+		if(len t.kids != 0 || sibdoc == nil || sibnode == 0)
+			return nil;
+		(idx, cnt) := (1, 0);
+		p := parentel(sibdoc, sibnode);
+		if(p == 0)
+			return ref Expr('k', 1.0, 0.0, nil);
+		for(c := sibdoc.nodes[p].first; c != 0; c = sibdoc.nodes[c].next)
+			if(sibdoc.nodes[c].kind == Dom->Element) {
+				cnt++;
+				if(c == sibnode)
+					idx = cnt;
+			}
+		if(t.s == "sibling-count")
+			idx = cnt;
+		return ref Expr('k', real idx, 0.0, nil);
 	"calc" or "-webkit-calc" =>
 		if(len args != 1)
 			return nil;
@@ -2577,6 +2953,86 @@ isnum(e: ref Expr): int
 }
 
 # a bare number, possibly computed with calc()
+# an angle, in radians
+angle(v: array of ref Tok, nil: ref Ctx): (int, real)
+{
+	v = trim(v);
+	if(len v != 1)
+		return (0, 0.0);
+	t := v[0];
+	if(t.kind == Knumber && t.n == 0.0)
+		return (1, 0.0);
+	if(t.kind != Kdimension)
+		return (0, 0.0);
+	case t.s {
+	"deg" =>	return (1, t.n * Math->Pi / 180.0);
+	"grad" =>	return (1, t.n * Math->Pi / 200.0);
+	"rad" =>	return (1, t.n);
+	"turn" =>	return (1, t.n * 2.0 * Math->Pi);
+	}
+	return (0, 0.0);
+}
+
+# a filter's functions (Filter Effects 1 §5); nil if it is not one.
+# drop-shadow() and url() are not drawn: such a filter is none
+filters(v: array of ref Tok, ctx: ref Ctx): array of Filt
+{
+	x := nows(v);
+	fl := array[len x] of Filt;
+	for(i := 0; i < len x; i++) {
+		t := x[i];
+		if(t.kind != Kfunction)
+			return nil;
+		args := trim(t.kids);
+		f := Filt(0, 1.0);
+		case t.s {
+		"blur" =>
+			f.op = Fblur;
+			f.v = 0.0;
+			if(len args > 0) {
+				(ok, l) := length(args, ctx);
+				if(!ok || l.kind != Lpx || l.pct != 0.0 || l.px < 0.0)
+					return nil;
+				f.v = l.px;
+			}
+		"hue-rotate" =>
+			f.op = Fhuerotate;
+			f.v = 0.0;
+			if(len args > 0) {
+				ok: int;
+				(ok, f.v) = angle(args, ctx);
+				if(!ok)
+					return nil;
+			}
+		"brightness" or "contrast" or "grayscale" or "invert" or "opacity" or "saturate" or "sepia" =>
+			case t.s {
+			"brightness" => f.op = Fbrightness;
+			"contrast" => f.op = Fcontrast;
+			"grayscale" => f.op = Fgrayscale;
+			"invert" => f.op = Finvert;
+			"opacity" => f.op = Fopacity;
+			"saturate" => f.op = Fsaturate;
+			"sepia" => f.op = Fsepia;
+			}
+			if(len args == 1 && args[0].kind == Knumber && args[0].n >= 0.0)
+				f.v = args[0].n;
+			else if(len args == 1 && args[0].kind == Kpercent && args[0].n >= 0.0)
+				f.v = args[0].n / 100.0;
+			else if(len args != 0)
+				return nil;
+			if(f.op == Fgrayscale || f.op == Finvert || f.op == Fopacity || f.op == Fsepia)
+				if(f.v > 1.0)
+					f.v = 1.0;	# clamped (Filter Effects 1 §13.1)
+		"drop-shadow" =>
+			return nil;
+		* =>
+			return nil;
+		}
+		fl[i] = f;
+	}
+	return fl;
+}
+
 number(v: array of ref Tok, ctx: ref Ctx): (int, real)
 {
 	v = trim(v);
@@ -2599,8 +3055,10 @@ lenauto(v: array of ref Tok, ctx: ref Ctx): (int, Len)
 	v = trim(v);
 	if(len v == 1 && v[0].kind == Kident)
 		case lower(v[0].s) {
-		"auto" or "stretch" or "-webkit-fill-available" or "-moz-available" =>
+		"auto" =>
 			return (1, kw(Lauto));
+		"stretch" or "-webkit-fill-available" or "-moz-available" =>
+			return (1, kw(Lstretch));
 		"min-content" or "-webkit-min-content" =>
 			return (1, kw(Lmin));
 		"max-content" or "-webkit-max-content" =>
@@ -2608,8 +3066,13 @@ lenauto(v: array of ref Tok, ctx: ref Ctx): (int, Len)
 		"fit-content" or "-webkit-fit-content" or "-moz-fit-content" =>
 			return (1, kw(Lfit));
 		}
-	if(len v == 1 && v[0].kind == Kfunction && v[0].s == "fit-content")
+	if(len v == 1 && v[0].kind == Kfunction && v[0].s == "fit-content") {
+		# fit-content(<length-percentage>): the argument in px and pct
+		(ok, l) := length(nows(v[0].kids), ctx);
+		if(ok && l.kind == Lpx)
+			return (1, Len(Lfit, l.px, l.pct, nil));
 		return (1, kw(Lfit));
+	}
 	return length(v, ctx);
 }
 
@@ -2731,6 +3194,26 @@ round(x: real): int
 # from either the legacy comma syntax or the modern space syntax.
 # A channel is (kind, value): Knumber, Kpercent, Kdimension (an angle,
 # converted to degrees) or Kident "none".
+# angles as numbers of degrees, for a calc() in a colour
+anglenums(v: array of ref Tok): array of ref Tok
+{
+	r := array[len v] of ref Tok;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Kdimension)
+			case lower(t.s) {
+			"deg" => t = ref Tok(Knumber, nil, t.n, 0, nil);
+			"rad" => t = ref Tok(Knumber, nil, t.n * 180.0 / Math->Pi, 0, nil);
+			"grad" => t = ref Tok(Knumber, nil, t.n * 0.9, 0, nil);
+			"turn" => t = ref Tok(Knumber, nil, t.n * 360.0, 0, nil);
+			}
+		else if(t.kids != nil)
+			t = ref Tok(t.kind, t.s, t.n, t.flag, anglenums(t.kids));
+		r[i] = t;
+	}
+	return r;
+}
+
 channels(t: ref Tok): (int, array of (int, real), (int, real))
 {
 	v := nows(t.kids);
@@ -2768,7 +3251,9 @@ channels(t: ref Tok): (int, array of (int, real), (int, real))
 				return (0, nil, alpha);
 			c = (Knumber, 0.0);
 		Kfunction =>
-			e := calcexpr(x, ref Ctx(16.0, 16.0, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0));
+			# (an angle in it as its degrees: a hue)
+			x = ref Tok(x.kind, x.s, x.n, x.flag, anglenums(x.kids));
+			e := calcexpr(x, ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0));
 			if(e == nil)
 				return (0, nil, alpha);
 			(nil, p, pc) := fold(e);
@@ -2783,7 +3268,9 @@ channels(t: ref Tok): (int, array of (int, real), (int, real))
 			alpha = c;
 			if(!slash)
 				n++;
-		} else
+		} else if(n >= 4)
+			return (0, nil, alpha);	# too many values
+		else
 			ch[n++] = c;
 	}
 	if(n < 3)
@@ -2808,6 +3295,49 @@ chval(c: (int, real), full: real): real
 	return x;
 }
 
+# Whether a color-scheme value comes out dark: "dark" alone, or with
+# "light" when the user prefers dark; "normal" and "light" do not.
+# A value that is no scheme is ignored, inherited instead.
+schemeof(v: array of ref Tok, parent: ref St, env: ref Env): int
+{
+	light := 0;
+	dark := 0;
+	other := 0;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Css->Kws)
+			continue;
+		if(t.kind != Css->Kident) {
+			other = 1;
+			continue;
+		}
+		case lower(t.s) {
+		"light" =>
+			light = 1;
+		"dark" =>
+			dark = 1;
+		"normal" or "only" =>
+			;
+		"inherit" or "unset" =>
+			if(parent != nil)
+				return parent.dark;
+			return 0;
+		* =>
+			;	# a scheme the page names that is not supported
+		}
+	}
+	if(other) {
+		if(parent != nil)
+			return parent.dark;
+		return 0;
+	}
+	if(dark && light)
+		return env != nil && env.dark;
+	return dark;
+}
+
+schemedark := -1;	# the element being cascaded's, or -1 outside the cascade
+
 colorfn(t: ref Tok): (int, int)
 {
 	case t.s {
@@ -2815,14 +3345,16 @@ colorfn(t: ref Tok): (int, int)
 		args := splitcommas(t.kids);
 		if(len args != 2)
 			return (0, 0);
-		dark := 0;
-		if(lastenv != nil)
+		dark := schemedark;
+		if(dark < 0 && lastenv != nil)
 			dark = lastenv.dark;
-		if(dark)
+		if(dark > 0)
 			return color(hd tl args);
 		return color(hd args);
 	"color-mix" =>
 		return colormix(t);
+	"color" =>
+		return colorspace(t);
 	}
 	(ok, ch, a) := channels(t);
 	if(!ok)
@@ -2846,17 +3378,25 @@ colorfn(t: ref Tok): (int, int)
 		f := 1.0 - w - bk;
 		return (1, rgba(round((r*f+w)*255.0), round((g*f+w)*255.0), round((b*f+w)*255.0), al));
 	"lab" =>
-		return (1, lab2rgb(chval(ch[0], 100.0), chval(ch[1], 125.0), chval(ch[2], 125.0), al));
+		# lightness is clamped to its range (Color 4 §9.2); at the
+		# ends the colour is white or black whatever the chroma
+		l := clampl(chval(ch[0], 100.0), 100.0);
+		return (1, lab2rgb(l, chval(ch[1], 125.0), chval(ch[2], 125.0), al));
 	"lch" =>
-		l := chval(ch[0], 100.0);
+		l := clampl(chval(ch[0], 100.0), 100.0);
 		c := chval(ch[1], 150.0);
+		if(c < 0.0)
+			c = 0.0;
 		h := chval(ch[2], 360.0)*Math->Pi/180.0;
 		return (1, lab2rgb(l, c*math->cos(h), c*math->sin(h), al));
 	"oklab" =>
-		return (1, oklab2rgb(chval(ch[0], 1.0), chval(ch[1], 0.4), chval(ch[2], 0.4), al));
+		l := clampl(chval(ch[0], 1.0), 1.0);
+		return (1, oklab2rgb(l, chval(ch[1], 0.4), chval(ch[2], 0.4), al));
 	"oklch" =>
-		l := chval(ch[0], 1.0);
+		l := clampl(chval(ch[0], 1.0), 1.0);
 		c := chval(ch[1], 0.4);
+		if(c < 0.0)
+			c = 0.0;
 		h := chval(ch[2], 360.0)*Math->Pi/180.0;
 		return (1, oklab2rgb(l, c*math->cos(h), c*math->sin(h), al));
 	}
@@ -2900,6 +3440,23 @@ srgb(x: real): int
 	return clamp(round(x*255.0));
 }
 
+clampl(l, top: real): real
+{
+	if(l < 0.0)
+		return 0.0;
+	if(l > top)
+		return top;
+	return l;
+}
+
+# white or black with the alpha: the ends of the lightness range
+lend(l: real, al: int): int
+{
+	if(l > 0.0)
+		return rgba(255, 255, 255, al);
+	return rgba(0, 0, 0, al);
+}
+
 lab2rgb(l, a, b: real, al: int): int
 {
 	# CIE Lab (D50) -> XYZ -> Bradford to D65 -> linear sRGB
@@ -2909,13 +3466,127 @@ lab2rgb(l, a, b: real, al: int): int
 	x := labf(fx) * 0.3457/0.3585;
 	y := labf(fy);
 	z := labf(fz) * (1.0 - 0.3457 - 0.3585)/0.3585;
-	x65 := 0.9554734527042182*x - 0.023098536874261423*y + 0.0632593086610217*z;
-	y65 := -0.028369706963208136*x + 1.0099954580058226*y + 0.021041398966943008*z;
-	z65 := 0.012314001688319899*x - 0.020507696433477912*y + 1.3303659366080753*z;
+	(x65, y65, z65) := d50to65(x, y, z);
+	return xyz2rgb(x65, y65, z65, al);
+}
+
+# CIE XYZ under D50 adapted to D65 (Bradford)
+d50to65(x, y, z: real): (real, real, real)
+{
+	return (0.9554734527042182*x - 0.023098536874261423*y + 0.0632593086610217*z,
+		-0.028369706963208136*x + 1.0099954580058226*y + 0.021041398966943008*z,
+		0.012314001688319899*x - 0.020507696433477912*y + 1.3303659366080753*z);
+}
+
+# CIE XYZ (D65) to an sRGB pixel
+xyz2rgb(x65, y65, z65: real, al: int): int
+{
 	r := 3.2409699419045226*x65 - 1.537383177570094*y65 - 0.4986107602930034*z65;
 	g := -0.9692436362808796*x65 + 1.8759675015077202*y65 + 0.04155505740717559*z65;
 	bb := 0.05563007969699366*x65 - 0.20397695888897652*y65 + 1.0569715142428786*z65;
-	return (srgb(r) << 24) | (srgb(g) << 16) | (srgb(bb) << 8) | clamp(al);
+	return topixel(r, g, bb, al);
+}
+
+# color(<space> c1 c2 c3 [/ alpha]) (Color 4 §10): the predefined RGB
+# spaces through their transfer functions and matrices to XYZ, then to
+# sRGB; xyz, xyz-d65 and xyz-d50 directly
+colorspace(t: ref Tok): (int, int)
+{
+	v := nows(t.kids);
+	if(len v < 1 || v[0].kind != Kident)
+		return (0, 0);
+	space := lower(v[0].s);
+	(ok, ch, a) := channels(ref Tok(Kfunction, "color", 0.0, 0, v[1:]));
+	if(!ok)
+		return (0, 0);
+	al := alphaof(a);
+	c0 := chval(ch[0], 1.0);
+	c1 := chval(ch[1], 1.0);
+	c2 := chval(ch[2], 1.0);
+	x, y, z: real;
+	case space {
+	"srgb" =>
+		if(ingamut(c0, c1, c2))
+			return (1, rgba(round(c0*255.0), round(c1*255.0), round(c2*255.0), al));
+		return (1, topixel(srgblin(c0), srgblin(c1), srgblin(c2), al));
+	"srgb-linear" =>
+		return (1, topixel(c0, c1, c2, al));
+	"display-p3" or "display-p3-linear" =>
+		(r, g, b) := (srgblin(c0), srgblin(c1), srgblin(c2));
+		if(space == "display-p3-linear")
+			(r, g, b) = (c0, c1, c2);
+		x = 0.4865709486482162*r + 0.26566769316909306*g + 0.1982172852343625*b;
+		y = 0.2289745640697488*r + 0.6917385218365064*g + 0.079286914093745*b;
+		z = 0.04511338185890264*g + 1.043944368900976*b;
+	"a98-rgb" =>
+		(r, g, b) := (gammalin(c0, 563.0/256.0), gammalin(c1, 563.0/256.0), gammalin(c2, 563.0/256.0));
+		x = 0.5766690429101305*r + 0.1855582379065463*g + 0.1882286462349947*b;
+		y = 0.29734497525053605*r + 0.6273635662554661*g + 0.07529145849399788*b;
+		z = 0.02703136138641234*r + 0.07068885253582723*g + 0.9913375368376388*b;
+	"prophoto-rgb" =>
+		(r, g, b) := (prophotolin(c0), prophotolin(c1), prophotolin(c2));
+		(x, y, z) = d50to65(0.7977604896723027*r + 0.13518583717574031*g + 0.0313493495815248*b,
+			0.2880711282292934*r + 0.7118432178101014*g + 0.00008565396060525902*b,
+			0.8251046025104601*b);
+	"rec2020" =>
+		(r, g, b) := (rec2020lin(c0), rec2020lin(c1), rec2020lin(c2));
+		x = 0.6369580483012914*r + 0.14461690358620832*g + 0.1688809751641721*b;
+		y = 0.2627002120112671*r + 0.6779980715188708*g + 0.05930171646986196*b;
+		z = 0.028072693049087428*g + 1.060985057710791*b;
+	"xyz" or "xyz-d65" =>
+		(x, y, z) = (c0, c1, c2);
+	"xyz-d50" =>
+		(x, y, z) = d50to65(c0, c1, c2);
+	* =>
+		return (0, 0);
+	}
+	return (1, xyz2rgb(x, y, z, al));
+}
+
+# the transfer functions, to linear light
+srgblin(v: real): real
+{
+	s := 1.0;
+	if(v < 0.0) {
+		s = -1.0;
+		v = -v;
+	}
+	if(v <= 0.04045)
+		return s*v/12.92;
+	return s*math->pow((v + 0.055)/1.055, 2.4);
+}
+
+gammalin(v, g: real): real
+{
+	if(v < 0.0)
+		return -math->pow(-v, g);
+	return math->pow(v, g);
+}
+
+prophotolin(v: real): real
+{
+	s := 1.0;
+	if(v < 0.0) {
+		s = -1.0;
+		v = -v;
+	}
+	if(v <= 16.0/512.0)
+		return s*v/16.0;
+	return s*math->pow(v, 1.8);
+}
+
+rec2020lin(v: real): real
+{
+	al := 1.09929682680944;
+	be := 0.018053968510807;
+	s := 1.0;
+	if(v < 0.0) {
+		s = -1.0;
+		v = -v;
+	}
+	if(v < be*4.5)
+		return s*v/4.5;
+	return s*math->pow((v + al - 1.0)/al, 1.0/0.45);
 }
 
 labf(t: real): real
@@ -2927,6 +3598,13 @@ labf(t: real): real
 
 oklab2rgb(l, a, b: real, al: int): int
 {
+	# the ends of lightness, and what lies within an epsilon of them
+	# (oklch-009: oklch(100% 110 60) is white; oklab-l-almost-1:
+	# 99.9999% renders as 100%)
+	if(l >= 1.0 - 0.00001)
+		return rgba(255, 255, 255, al);
+	if(l <= 0.00001)
+		return rgba(0, 0, 0, al);
 	l_ := l + 0.3963377774*a + 0.2158037573*b;
 	m_ := l - 0.1055613458*a - 0.0638541728*b;
 	s_ := l - 0.0894841775*a - 1.2914855480*b;
@@ -2936,20 +3614,145 @@ oklab2rgb(l, a, b: real, al: int): int
 	r := 4.0767416621*l3 - 3.3077115913*m3 + 0.2309699292*s3;
 	g := -1.2684380046*l3 + 2.6097574011*m3 - 0.3413193965*s3;
 	bb := -0.0041960863*l3 - 0.7034186147*m3 + 1.7076147010*s3;
-	return (srgb(r) << 24) | (srgb(g) << 16) | (srgb(bb) << 8) | clamp(al);
+	return topixel(r, g, bb, al);
+}
+
+oklab2lin(l, a, b: real): (real, real, real)
+{
+	l_ := l + 0.3963377774*a + 0.2158037573*b;
+	m_ := l - 0.1055613458*a - 0.0638541728*b;
+	s_ := l - 0.0894841775*a - 1.2914855480*b;
+	l3 := l_*l_*l_;
+	m3 := m_*m_*m_;
+	s3 := s_*s_*s_;
+	return (4.0767416621*l3 - 3.3077115913*m3 + 0.2309699292*s3,
+		-1.2684380046*l3 + 2.6097574011*m3 - 0.3413193965*s3,
+		-0.0041960863*l3 - 0.7034186147*m3 + 1.7076147010*s3);
+}
+
+lin2oklab(r, g, b: real): (real, real, real)
+{
+	l := cbrt(0.4122214708*r + 0.5363325363*g + 0.0514459929*b);
+	m := cbrt(0.2119034982*r + 0.6806995451*g + 0.1073969566*b);
+	s := cbrt(0.0883024619*r + 0.2817188376*g + 0.6299787005*b);
+	return (0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
+		1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
+		0.0259040371*l + 0.7827717662*m - 0.8086757660*s);
+}
+
+cbrt(x: real): real
+{
+	if(x < 0.0)
+		return -math->pow(-x, 1.0/3.0);
+	return math->pow(x, 1.0/3.0);
+}
+
+ingamut(r, g, b: real): int
+{
+	return r >= -0.00001 && r <= 1.00001 && g >= -0.00001 && g <= 1.00001 && b >= -0.00001 && b <= 1.00001;
+}
+
+clip01(x: real): real
+{
+	if(x < 0.0)
+		return 0.0;
+	if(x > 1.0)
+		return 1.0;
+	return x;
+}
+
+# Linear sRGB to the pixel.  A colour outside the gamut is mapped into
+# it as Color 4 §13.2 says: white or black at the ends of lightness,
+# else its Oklch chroma is reduced until it fits, or until it is
+# within a just noticeable difference of its clipped self
+# (oklab-l-almost-1, lch-009).
+topixel(r, g, b: real, al: int): int
+{
+	if(!ingamut(r, g, b)) {
+		(l, a, bb) := lin2oklab(r, g, b);
+		if(l >= 1.0)
+			(r, g, b) = (1.0, 1.0, 1.0);
+		else if(l <= 0.0)
+			(r, g, b) = (0.0, 0.0, 0.0);
+		else {
+			# the chroma is bisected to the point where the clipped
+			# colour is just a noticeable difference from the wanted
+			# one, as §13.2.1 says: a search that stops at the first
+			# near-enough step lands differently for inputs that
+			# differ in the sixth figure (xyz-d50-004)
+			c := math->sqrt(a*a + bb*bb);
+			h := math->atan2(bb, a);
+			lo := 0.0;
+			hi := c;
+			loin := 1;
+			(r, g, b) = oklab2lin(l, 0.0, 0.0);
+			for(i := 0; i < 40 && hi - lo > 0.0001; i++) {
+				mid := (lo + hi)/2.0;
+				(mr, mg, mb) := oklab2lin(l, mid*math->cos(h), mid*math->sin(h));
+				if(loin && ingamut(mr, mg, mb)) {
+					lo = mid;
+					(r, g, b) = (mr, mg, mb);
+					continue;
+				}
+				(cr, cg, cb) := (clip01(mr), clip01(mg), clip01(mb));
+				(cl, ca, cbb) := lin2oklab(cr, cg, cb);
+				dl := cl - l;
+				da := ca - mid*math->cos(h);
+				db := cbb - mid*math->sin(h);
+				e := math->sqrt(dl*dl + da*da + db*db);
+				if(e < 0.02) {
+					(r, g, b) = (cr, cg, cb);
+					if(0.02 - e < 0.0001)
+						break;
+					loin = 0;
+					lo = mid;
+				} else
+					hi = mid;
+			}
+		}
+	}
+	return (srgb(r) << 24) | (srgb(g) << 16) | (srgb(b) << 8) | clamp(al);
 }
 
 # color-mix(in <space>, c1 [p1], c2 [p2]): mixed in sRGB whatever the space
 colormix(t: ref Tok): (int, int)
 {
+	(ok, ch) := colormixr(t);
+	if(!ok)
+		return (0, 0);
+	mix := 0;
+	for(i := 0; i < 4; i++)
+		mix |= clamp(round(ch[i])) << (24 - 8*i);
+	return (1, mix);
+}
+
+# the mix's channels unrounded (a, r, g, b in 0..255), so that a mix
+# within a mix loses nothing to rounding
+colormixr(t: ref Tok): (int, array of real)
+{
 	args := splitcommas(t.kids);
 	if(len args != 3)
-		return (0, 0);
+		return (0, nil);
+	# in <space> [<method> hue]
+	sp := CSsrgb;
+	hue := Hshorter;
+	iv := nows(hd args);
+	if(len iv < 2 || iv[0].kind != Kident || lower(iv[0].s) != "in" || iv[1].kind != Kident)
+		return (0, nil);
+	sp = mixspace(lower(iv[1].s));
+	if(sp < 0)
+		return (0, nil);
+	if(len iv == 4 && iv[2].kind == Kident && iv[3].kind == Kident && lower(iv[3].s) == "hue") {
+		hue = huemethod(lower(iv[2].s));
+		if(hue < 0 || !polar(sp))
+			return (0, nil);
+	} else if(len iv != 2)
+		return (0, nil);
 	args = tl args;
 	(ok1, c1, p1) := mixarg(hd args);
 	(ok2, c2, p2) := mixarg(hd tl args);
 	if(!ok1 || !ok2)
-		return (0, 0);
+		return (0, nil);
 	if(p1 < 0.0 && p2 < 0.0) {
 		p1 = 50.0;
 		p2 = 50.0;
@@ -2959,17 +3762,28 @@ colormix(t: ref Tok): (int, int)
 		p2 = 100.0 - p1;
 	tot := p1 + p2;
 	if(tot <= 0.0)
-		return (0, 0);
+		return (0, nil);
 	w := p1/tot;
-	mix := 0;
-	for(sh := 24; sh >= 0; sh -= 8) {
-		x := real ((c1 >> sh) & 255)*w + real ((c2 >> sh) & 255)*(1.0-w);
-		mix |= clamp(round(x)) << sh;
+	ch := array[4] of real;
+	if(sp == CSsrgb)
+		for(i := 0; i < 4; i++)
+			ch[i] = c1[i]*w + c2[i]*(1.0-w);
+	else {
+		(i1, i2) := (0, 0);
+		for(i := 0; i < 4; i++) {
+			i1 |= clamp(round(c1[i])) << (24 - 8*i);
+			i2 |= clamp(round(c2[i])) << (24 - 8*i);
+		}
+		m := spacemix(i1, i2, 1.0 - w, sp, hue);
+		for(i = 0; i < 4; i++)
+			ch[i] = real ((m >> (24 - 8*i)) & 255);
 	}
-	return (1, mix);
+	if(tot < 100.0)
+		ch[3] *= tot / 100.0;	# percentages short of 100% leave it that much more transparent
+	return (1, ch);
 }
 
-mixarg(v: array of ref Tok): (int, int, real)
+mixarg(v: array of ref Tok): (int, array of real, real)
 {
 	v = nows(v);
 	p := -1.0;
@@ -2983,8 +3797,17 @@ mixarg(v: array of ref Tok): (int, int, real)
 			cv = v[1:];
 		}
 	}
+	if(len cv == 1 && cv[0].kind == Kfunction && lower(cv[0].s) == "color-mix") {
+		(ok, ch) := colormixr(cv[0]);
+		return (ok, ch, p);
+	}
 	(ok, c) := color(cv);
-	return (ok, c, p);
+	if(ok && c == Ccurrent)
+		c = mixcur;
+	ch := array[4] of real;
+	for(i := 0; i < 4; i++)
+		ch[i] = real ((c >> (24 - 8*i)) & 255);
+	return (ok, ch, p);
 }
 
 # ---- shorthands ----
@@ -3027,6 +3850,8 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 		return borderparts(sub, x);
 	"background" =>
 		return background(v);
+	"mask" =>
+		return mask(v);
 	"font" =>
 		return font(x);
 	"flex" =>
@@ -3090,6 +3915,8 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 			else
 				return nil;
 		}
+		if(nones + haslh(r, "list-style-type") + haslh(r, "list-style-image") > 2)
+			return nil;	# a none with nothing left for it to be
 		if(nones > 0) {
 			nonev := array[] of {ref Tok(Kident, "none", 0.0, 0, nil)};
 			if(!haslh(r, "list-style-type"))
@@ -3194,16 +4021,39 @@ longhands(nm: string, v: array of ref Tok): list of (string, array of ref Tok)
 		return fill(sub, r);
 	"all" =>
 		return nil;	# only the CSS-wide keywords, handled above
-	"transition" or "animation" or "border-image" or "mask" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" or "font-variant" =>
+	"border-image" =>
+		return borderimage(x);
+	"transition" or "animation" or "text-emphasis" or "offset" or
+	"container" or "scroll-margin" or "scroll-padding" or "font-variant" =>
 		return nil;
 	}
 	return nil;
 }
 
-# properties that are other names for a longhand (writing mode horizontal-tb, ltr)
+# Properties that are other names for a longhand, in writing mode
+# horizontal-tb: the inline ones depend on the direction of the element
+# being styled (aliasrtl, set by whoever applies declarations).
+aliasrtl := 0;
+
 alias(nm: string): string
 {
+	if(aliasrtl)
+		case nm {
+		"margin-inline-start" => return "margin-right";
+		"margin-inline-end" => return "margin-left";
+		"padding-inline-start" => return "padding-right";
+		"padding-inline-end" => return "padding-left";
+		"inset-inline-start" => return "right";
+		"inset-inline-end" => return "left";
+		"border-inline-start" => return "border-right";
+		"border-inline-end" => return "border-left";
+		"border-inline-start-width" => return "border-right-width";
+		"border-inline-end-width" => return "border-left-width";
+		"border-inline-start-color" => return "border-right-color";
+		"border-inline-end-color" => return "border-left-color";
+		"border-inline-start-style" => return "border-right-style";
+		"border-inline-end-style" => return "border-left-style";
+		}
 	case nm {
 	"margin-block-start" => return "margin-top";
 	"margin-block-end" => return "margin-bottom";
@@ -3253,6 +4103,13 @@ alias(nm: string): string
 	"-webkit-box-shadow" => return "box-shadow";
 	"-webkit-border-radius" => return "border-radius";
 	"-webkit-transform" => return "transform";
+	"-webkit-mask" => return "mask";
+	"-webkit-mask-image" => return "mask-image";
+	"-webkit-mask-repeat" => return "mask-repeat";
+	"-webkit-mask-position" => return "mask-position";
+	"-webkit-mask-size" => return "mask-size";
+	"-webkit-mask-origin" => return "mask-origin";
+	"-webkit-mask-clip" => return "mask-clip";
 	}
 	return nm;
 }
@@ -3281,7 +4138,7 @@ shorthand(nm: string): list of string
 	"border-radius" => return list of {"border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"};
 	"border" => return list of {"border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
 		"border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
-		"border-top-color", "border-right-color", "border-bottom-color", "border-left-color"};
+		"border-top-color", "border-right-color", "border-bottom-color", "border-left-color", "border-image-source"};
 	"border-top" => return list of {"border-top-width", "border-top-style", "border-top-color"};
 	"border-right" => return list of {"border-right-width", "border-right-style", "border-right-color"};
 	"border-bottom" => return list of {"border-bottom-width", "border-bottom-style", "border-bottom-color"};
@@ -3312,8 +4169,10 @@ shorthand(nm: string): list of string
 		for(i := len allprops - 1; i >= 0; i--)
 			r = allprops[i] :: r;
 		return r;
-	"transition" or "animation" or "border-image" or "mask" or "text-emphasis" or "offset" or
-	"container" or "scroll-margin" or "scroll-padding" or "font-synthesis" =>
+	"border-image" => return list of {"border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"};
+	"mask" => return list of {"mask-image", "mask-repeat", "mask-position", "mask-size", "mask-origin", "mask-clip"};
+	"transition" or "animation" or "text-emphasis" or "offset" or
+	"container" or "scroll-margin" or "scroll-padding" =>
 		return "-x-ignored" :: nil;
 	}
 	return nil;
@@ -3327,10 +4186,144 @@ allprops := array[] of {
 	"border-left-width", "border-top-style", "border-right-style", "border-bottom-style",
 	"border-left-style", "border-top-color", "border-right-color", "border-bottom-color",
 	"border-left-color", "top", "right", "bottom", "left", "z-index", "overflow-x",
-	"overflow-y", "visibility", "opacity", "color", "background-color", "background-image",
+	"overflow-y", "visibility", "opacity", "transform", "transform-origin", "color", "background-color", "background-image",
+	"mask-image", "object-fit", "object-position", "filter", "isolation", "mix-blend-mode", "clip-path", "will-change",
 	"font-family", "font-size", "font-weight", "font-style", "line-height", "text-align",
 	"text-indent", "text-transform", "white-space", "text-decoration-line", "vertical-align",
 };
+
+# a copy of the box's border-image to change, the initial values
+# where it has none (source none, slice 100%, width 1, outset 0, stretch)
+bimageof(st: ref St): ref Bimage
+{
+	if(st.bimage != nil)
+		return ref *st.bimage;
+	return ref Bimage(nil, array[] of {Len(Lpx, 0.0, 100.0, nil), Len(Lpx, 0.0, 100.0, nil), Len(Lpx, 0.0, 100.0, nil), Len(Lpx, 0.0, 100.0, nil)}, 0,
+		array[] of {Len(Lnum, 1.0, 0.0, nil), Len(Lnum, 1.0, 0.0, nil), Len(Lnum, 1.0, 0.0, nil), Len(Lnum, 1.0, 0.0, nil)},
+		array[] of {px(0.0), px(0.0), px(0.0), px(0.0)}, BIstretch, BIstretch);
+}
+
+# one to four values, in reverse, to top, right, bottom, left
+foursides(vals: list of Len): array of Len
+{
+	n := len vals;
+	if(n < 1 || n > 4)
+		return nil;
+	a := array[n] of Len;
+	for(i := n - 1; i >= 0; i--) {
+		a[i] = hd vals;
+		vals = tl vals;
+	}
+	case n {
+	1 =>	return array[] of {a[0], a[0], a[0], a[0]};
+	2 =>	return array[] of {a[0], a[1], a[0], a[1]};
+	3 =>	return array[] of {a[0], a[1], a[2], a[1]};
+	}
+	return a;
+}
+
+birepeat(t: ref Tok): int
+{
+	if(t.kind != Kident)
+		return -1;
+	case lower(t.s) {
+	"stretch" =>	return BIstretch;
+	"repeat" =>	return BIrepeat;
+	"round" =>	return BIround;
+	"space" =>	return BIspace;
+	}
+	return -1;
+}
+
+# the border-image shorthand: <source> || <slice> [ / <width> | /
+# <width>? / <outset> ]? || <repeat>, every longhand it leaves out
+# taking its initial value
+borderimage(x: array of ref Tok): list of (string, array of ref Tok)
+{
+	none := array[] of {ref Tok(Kident, "none", 0.0, 0, nil)};
+	src := none;
+	slice := array[] of {ref Tok(Kpercent, "", 100.0, 0, nil)};
+	width := array[] of {ref Tok(Knumber, "", 1.0, 0, nil)};
+	outset := array[] of {ref Tok(Knumber, "", 0.0, 0, nil)};
+	rep := array[] of {ref Tok(Kident, "stretch", 0.0, 0, nil)};
+	gotsrc := 0;
+	gotslice := 0;
+	gotrep := 0;
+	i := 0;
+	while(i < len x) {
+		t := x[i];
+		if(t.kind == Kident && (lower(t.s) == "none" || birepeat(t) >= 0)) {
+			if(lower(t.s) == "none") {
+				if(gotsrc)
+					return nil;
+				gotsrc = 1;
+				src = none;
+				i++;
+			} else {
+				if(gotrep)
+					return nil;
+				gotrep = 1;
+				j := i + 1;
+				if(j < len x && birepeat(x[j]) >= 0)
+					j++;
+				rep = x[i:j];
+				i = j;
+			}
+			continue;
+		}
+		if(t.kind == Kurl || t.kind == Kfunction) {
+			if(gotsrc)
+				return nil;
+			gotsrc = 1;
+			src = x[i:i+1];
+			i++;
+			continue;
+		}
+		if(t.kind == Knumber || t.kind == Kpercent || t.kind == Kident && lower(t.s) == "fill") {
+			if(gotslice)
+				return nil;
+			gotslice = 1;
+			j := i;
+			while(j < len x && (x[j].kind == Knumber || x[j].kind == Kpercent || x[j].kind == Kident && lower(x[j].s) == "fill"))
+				j++;
+			slice = x[i:j];
+			i = j;
+			if(i < len x && x[i].kind == Kdelim && x[i].s == "/") {
+				i++;
+				j = i;
+				while(j < len x && !(x[j].kind == Kdelim && x[j].s == "/") && (x[j].kind == Knumber || x[j].kind == Kpercent || x[j].kind == Kdimension || x[j].kind == Kident && lower(x[j].s) == "auto"))
+					j++;
+				if(j > i)
+					width = x[i:j];
+				i = j;
+				if(i < len x && x[i].kind == Kdelim && x[i].s == "/") {
+					i++;
+					j = i;
+					while(j < len x && (x[j].kind == Knumber || x[j].kind == Kdimension))
+						j++;
+					if(j == i)
+						return nil;
+					outset = x[i:j];
+					i = j;
+				}
+			}
+			continue;
+		}
+		return nil;
+	}
+	return ("border-image-source", src) :: ("border-image-slice", slice) :: ("border-image-width", width) ::
+		("border-image-outset", outset) :: ("border-image-repeat", rep) :: nil;
+}
+
+wrapstyle(w: string): int
+{
+	case w {
+	"balance" => return 1;
+	"stable" => return 2;
+	"pretty" => return 3;
+	}
+	return 0;
+}
 
 autov(): array of ref Tok
 {
@@ -3416,8 +4409,8 @@ borderparts(sub: list of string, x: array of ref Tok): list of (string, array of
 		} else if(x[k].kind == Kdimension || (x[k].kind == Knumber && x[k].n == 0.0) ||
 			  (x[k].kind == Kident && (lower(x[k].s) == "thin" || lower(x[k].s) == "medium" || lower(x[k].s) == "thick")) ||
 			  (x[k].kind == Kfunction && (x[k].s == "calc" || x[k].s == "min" || x[k].s == "max" || x[k].s == "clamp"))) {
-			if(w != nil)
-				return nil;
+			if(w != nil || x[k].kind == Kdimension && x[k].n < 0.0)
+				return nil;	# a negative width makes the whole shorthand invalid (border-width-010)
 			w = t;
 		} else {
 			(ok, nil) := color(t);
@@ -3439,6 +4432,8 @@ borderparts(sub: list of string, x: array of ref Tok): list of (string, array of
 			r = (nm, w) :: r;
 		else if(suffix(nm, "-style"))
 			r = (nm, s) :: r;
+		else if(nm == "border-image-source")
+			r = (nm, array[] of {ref Tok(Kident, "none", 0.0, 0, nil)}) :: r;	# reset, never set (Backgrounds 3 §4.4): a function colour was taken for an image
 		else
 			r = (nm, c) :: r;
 	}
@@ -3492,7 +4487,7 @@ background(v: array of ref Tok): list of (string, array of ref Tok)
 				"scroll" or "fixed" or "local" =>
 					latt = t :: latt;
 					continue;
-				"border-box" or "padding-box" or "content-box" or "text" =>
+				"border-box" or "padding-box" or "content-box" or "text" or "border-area" =>
 					boxes = t :: boxes;
 					continue;
 				"left" or "right" or "top" or "bottom" or "center" =>
@@ -3553,10 +4548,11 @@ background(v: array of ref Tok): list of (string, array of ref Tok)
 		}
 		li++;
 	}
-	return ("background-color", col) :: ("background-image", toarray(rev(img))) ::
-		("background-repeat", toarray(rev(rep))) :: ("background-position", toarray(rev(pos))) ::
-		("background-size", toarray(rev(size))) :: ("background-attachment", toarray(rev(att))) ::
-		("background-origin", toarray(rev(org))) :: ("background-clip", toarray(rev(clip))) :: nil;
+	# the lists were built backwards; toarray turns them round
+	return ("background-color", col) :: ("background-image", toarray(img)) ::
+		("background-repeat", toarray(rep)) :: ("background-position", toarray(pos)) ::
+		("background-size", toarray(size)) :: ("background-attachment", toarray(att)) ::
+		("background-origin", toarray(org)) :: ("background-clip", toarray(clip)) :: nil;
 }
 
 rev(l: list of ref Tok): list of ref Tok
@@ -3678,9 +4674,12 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	if(v == nil)
 		return 0;
 	if((w := iswide(v)) != nil) {
-		wide(st, nm, w, parent);
+		wide(st, nm, w, parent, ctx);
 		return 1;
 	}
+	mixcur = st.color;
+	if(nm == "color" && parent != nil)
+		mixcur = parent.color;
 	id := ident(v);
 	case nm {
 	"display" =>
@@ -3722,8 +4721,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		(ok, l) := lenauto(v, ctx);
 		if(!ok && nm == "flex-basis" && id == "content")
 			(ok, l) = (1, kw(Lcontent));
-		if(!ok || l.px < 0.0 && l.kind == Lpx && l.pct == 0.0)
-			return 0;
+		if(!ok || l.kind == Lpx && (l.px < 0.0 && l.pct == 0.0 || l.pct < 0.0 && l.px == 0.0))
+			return 0;	# a negative length or percentage is invalid (height-089)
 		case nm {
 		"width" => st.width = l;
 		"height" => st.height = l;
@@ -3741,18 +4740,30 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.maxheight = l;
 	"aspect-ratio" =>
 		x := nows(v);
-		if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "auto")
+		auto := 0;
+		if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "auto") {
 			x = x[1:];
+			auto = 1;
+		} else if(len x >= 2 && x[len x - 1].kind == Kident && lower(x[len x - 1].s) == "auto") {
+			x = x[0:len x - 1];
+			auto = 1;
+		}
 		if(len x == 0) {
 			st.aspect = 0.0;
+			st.aspectauto = 0;
 			return 1;
 		}
 		if(x[0].kind != Knumber)
 			return 0;
 		r := x[0].n;
-		if(len x >= 3 && x[1].kind == Kdelim && x[1].s == "/" && x[2].kind == Knumber && x[2].n != 0.0)
-			r /= x[2].n;
+		if(len x >= 3 && x[1].kind == Kdelim && x[1].s == "/" && x[2].kind == Knumber) {
+			if(x[2].n == 0.0)
+				r = 0.0;	# a degenerate ratio (0 or infinity) is auto
+			else
+				r /= x[2].n;
+		}
 		st.aspect = r;
+		st.aspectauto = auto;
 	"margin-top" or "margin-right" or "margin-bottom" or "margin-left" =>
 		(ok, l) := lenauto(v, ctx);
 		if(!ok || (l.kind != Lpx && l.kind != Lauto && l.kind != Lcalc))
@@ -3765,8 +4776,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		}
 	"padding-top" or "padding-right" or "padding-bottom" or "padding-left" =>
 		(ok, l) := length(v, ctx);
-		if(!ok || (l.kind == Lpx && l.px < 0.0))
-			return 0;
+		if(!ok || l.kind == Lpx && (l.px < 0.0 && l.pct == 0.0 || l.pct < 0.0 && l.px == 0.0))
+			return 0;	# a negative length or percentage is invalid (padding-top-089); a calc() is clamped
 		case nm {
 		"padding-top" => st.pt = l;
 		"padding-right" => st.pr = l;
@@ -3841,6 +4852,133 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"accent-color" => st.accent = c;
 		"caret-color" => st.caret = c;
 		}
+	"fill" or "stroke" =>
+		# for inline svg, which readsvg draws: kept as it can read it
+		x := nows(v);
+		if(len x != 1)
+			return 0;
+		pv: string;
+		if(x[0].kind == Kident && lower(x[0].s) == "none")
+			pv = "none";
+		else if(x[0].kind == Kident && lower(x[0].s) == "currentcolor")
+			pv = "currentcolor";
+		else if(x[0].kind == Kurl)
+			pv = "url(" + x[0].s + ")";
+		else {
+			(ok, c) := color(x);
+			if(!ok)
+				return 0;
+			if(c == Ccurrent)
+				pv = "currentcolor";
+			else
+				pv = sys->sprint("#%.6x", (c >> 8) & 16rFFFFFF);
+		}
+		if(nm == "fill")
+			st.svgfill = pv;
+		else
+			st.svgstroke = pv;
+	"border-image-source" =>
+		x := nows(v);
+		if(len x != 1)
+			return 0;
+		bi := bimageof(st);
+		if(x[0].kind == Kident && lower(x[0].s) == "none")
+			bi.src = nil;
+		else if(x[0].kind == Kurl || x[0].kind == Kfunction)
+			bi.src = lentoks(x[0:1], ctx)[0];
+		else
+			return 0;
+		st.bimage = bi;
+	"border-image-slice" =>
+		# [<number> | <percentage>]{1,4} && fill?
+		x := nows(v);
+		vals: list of Len;
+		fl := 0;
+		for(k := 0; k < len x; k++) {
+			case x[k].kind {
+			Kident =>
+				if(lower(x[k].s) != "fill" || fl)
+					return 0;
+				fl = 1;
+			Knumber =>
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lpx, x[k].n, 0.0, nil) :: vals;
+			Kpercent =>
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lpx, 0.0, x[k].n, nil) :: vals;
+			* =>
+				return 0;
+			}
+		}
+		a := foursides(vals);
+		if(a == nil)
+			return 0;
+		bi := bimageof(st);
+		bi.slice = a;
+		bi.fill = fl;
+		st.bimage = bi;
+	"border-image-width" =>
+		# [<length-percentage> | <number> | auto]{1,4}
+		x := nows(v);
+		vals: list of Len;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind == Kident && lower(x[k].s) == "auto")
+				vals = kw(Lauto) :: vals;
+			else if(x[k].kind == Knumber) {
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lnum, x[k].n, 0.0, nil) :: vals;
+			} else {
+				(ok, l) := length(x[k:k+1], ctx);
+				if(!ok || l.px < 0.0 || l.pct < 0.0)
+					return 0;
+				vals = l :: vals;
+			}
+		}
+		a := foursides(vals);
+		if(a == nil)
+			return 0;
+		bi := bimageof(st);
+		bi.width = a;
+		st.bimage = bi;
+	"border-image-outset" =>
+		# [<length> | <number>]{1,4}
+		x := nows(v);
+		vals: list of Len;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind == Knumber) {
+				if(x[k].n < 0.0)
+					return 0;
+				vals = Len(Lnum, x[k].n, 0.0, nil) :: vals;
+			} else {
+				(ok, l) := length(x[k:k+1], ctx);
+				if(!ok || l.px < 0.0 || l.pct != 0.0)
+					return 0;
+				vals = l :: vals;
+			}
+		}
+		a := foursides(vals);
+		if(a == nil)
+			return 0;
+		bi := bimageof(st);
+		bi.outset = a;
+		st.bimage = bi;
+	"border-image-repeat" =>
+		x := nows(v);
+		if(len x < 1 || len x > 2)
+			return 0;
+		rx := birepeat(x[0]);
+		ry := rx;
+		if(len x == 2)
+			ry = birepeat(x[1]);
+		if(rx < 0 || ry < 0)
+			return 0;
+		bi := bimageof(st);
+		bi.repx = rx;
+		bi.repy = ry;
+		st.bimage = bi;
 	"outline-offset" =>
 		(ok, l) := length(v, ctx);
 		if(!ok)
@@ -3870,6 +5008,199 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.z = int n;
 			st.zauto = 0;
 		}
+	"margin-trim" =>
+		# none | block | inline | [ block-start || inline-start || block-end || inline-end ] (Box 4 §4)
+		x := nows(v);
+		t := 0;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind != Kident)
+				return 0;
+			case lower(x[k].s) {
+			"none" => t = 0;
+			"block" => t |= 3;
+			"inline" => t |= 12;
+			"block-start" => t |= 1;
+			"block-end" => t |= 2;
+			"inline-start" => t |= 4;
+			"inline-end" => t |= 8;
+			* => return 0;
+			}
+		}
+		st.margintrim = t;
+	"clip" =>
+		# auto | rect(<top>, <right>, <bottom>, <left>), each a length or
+		# auto, commas or spaces between (CSS 2.2 §11.1.2)
+		if(id == "auto") {
+			st.cliprect = nil;
+			return 1;
+		}
+		x := nows(v);
+		if(len x != 1 || x[0].kind != Kfunction || x[0].s != "rect")
+			return 0;
+		a := array[4] of Len;
+		k := 0;
+		args := nows(x[0].kids);
+		for(i := 0; i < len args; i++) {
+			if(args[i].kind == Kcomma)
+				continue;
+			if(k >= 4)
+				return 0;
+			if(args[i].kind == Kident && lower(args[i].s) == "auto")
+				a[k] = kw(Lauto);
+			else {
+				(ok, l) := length(args[i:i+1], ctx);
+				if(!ok || l.kind != Lpx || l.pct != 0.0)
+					return 0;
+				a[k] = l;
+			}
+			k++;
+		}
+		if(k != 4)
+			return 0;
+		st.cliprect = a;
+	"hyphens" =>
+		case id {
+		"none" => st.hyphens = 0;
+		"manual" => st.hyphens = 1;
+		"auto" => st.hyphens = 2;
+		* => return 0;
+		}
+	"text-wrap-style" =>
+		# auto | balance | stable | pretty (Text 4 §6.3)
+		wx := nows(v);
+		if(len wx != 1 || wx[0].kind != Kident)
+			return 0;
+		w := lower(wx[0].s);
+		if(w != "auto" && w != "balance" && w != "stable" && w != "pretty")
+			return 0;
+		st.textwrap = wrapstyle(w);
+	"text-autospace" =>
+		# normal | auto | no-autospace | [ ideograph-alpha || ideograph-numeric ] (Text 4 §8.3)
+		ax := nows(v);
+		if(len ax == 0)
+			return 0;
+		for(k := 0; k < len ax; k++) {
+			if(ax[k].kind != Kident)
+				return 0;
+			case lower(ax[k].s) {
+			"normal" or "auto" or "ideograph-alpha" or "ideograph-numeric" or "punctuation" => st.textautospace = 0;
+			"no-autospace" => st.textautospace = 1;
+			* => return 0;
+			}
+		}
+	"hanging-punctuation" =>
+		# none | [ first || [ force-end | allow-end ] || last ] (Text 3 §5.3)
+		hx := nows(v);
+		hp := 0;
+		for(k := 0; k < len hx; k++) {
+			if(hx[k].kind != Kident)
+				return 0;
+			case lower(hx[k].s) {
+			"none" =>
+				if(len hx != 1)
+					return 0;
+			"first" => hp |= 1;
+			"last" => hp |= 2;
+			"force-end" => hp |= 4;
+			"allow-end" => hp |= 8;
+			* => return 0;
+			}
+		}
+		if((hp & 12) == 12)
+			return 0;
+		st.hangpunct = hp;
+	"text-justify" =>
+		case id {
+		"auto" => st.textjustify = 0;
+		"none" => st.textjustify = 1;
+		"inter-word" => st.textjustify = 2;
+		"inter-character" or "distribute" => st.textjustify = 3;
+		* => return 0;
+		}
+	"hyphenate-character" =>
+		hx := nows(v);
+		if(id == "auto")
+			st.hyphenchar = "\u2010";	# the hyphen, or hyphen-minus where the font has none (hyphenate())
+		else if(len hx == 1 && hx[0].kind == Kstring)
+			st.hyphenchar = hx[0].s;
+		else
+			return 0;
+	"word-space-transform" =>
+		# none | [ space | ideographic-space ] && auto-phrase? (Text 4 §8.3)
+		x := nows(v);
+		t := 0;
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind != Kident)
+				return 0;
+			case lower(x[k].s) {
+			"none" => t = 0;
+			"space" => t = 1;
+			"ideographic-space" => t = 2;
+			"auto-phrase" => ;
+			* => return 0;
+			}
+		}
+		st.wst = t;
+	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-height" or
+	"contain-intrinsic-inline-size" or "contain-intrinsic-block-size" =>
+		# one or two of: none | <length> | auto <length> (Sizing 4 §5.1;
+		# the last remembered size of auto is not kept, so the length stands)
+		x := nows(v);
+		a := kw(Lnone);
+		bv := kw(Lnone);
+		got := 0;
+		for(k := 0; k < len x; k++) {
+			l := kw(Lnone);
+			if(!(x[k].kind == Kident && lower(x[k].s) == "none")) {
+				if(x[k].kind == Kident && lower(x[k].s) == "auto") {
+					k++;
+					if(k >= len x)
+						return 0;
+				}
+				(ok, ll) := length(x[k:k+1], ctx);
+				if(!ok || ll.kind != Lpx || ll.pct != 0.0 || ll.px < 0.0)
+					return 0;
+				l = ll;
+			}
+			if(got == 0)
+				a = l;
+			else if(got == 1)
+				bv = l;
+			else
+				return 0;
+			got++;
+		}
+		if(got == 0 || got == 2 && nm != "contain-intrinsic-size")
+			return 0;
+		if(got == 1)
+			bv = a;
+		case nm {
+		"contain-intrinsic-size" =>
+			st.cisw = a;
+			st.cish = bv;
+		"contain-intrinsic-width" or "contain-intrinsic-inline-size" =>
+			st.cisw = a;
+		"contain-intrinsic-height" or "contain-intrinsic-block-size" =>
+			st.cish = a;
+		}
+	"contain" =>
+		c := 0;
+		for(k := 0; k < len v; k++) {
+			if(v[k].kind != Css->Kident)
+				return 0;
+			case lower(v[k].s) {
+			"none" => ;
+			"strict" => c |= CTpaint|CTlayout|CTsize|CTstyle;
+			"content" => c |= CTpaint|CTlayout|CTstyle;
+			"paint" => c |= CTpaint;
+			"layout" => c |= CTlayout;
+			"size" => c |= CTsize;
+			"inline-size" => c |= CTinlinesize;
+			"style" => c |= CTstyle;
+			* => return 0;
+			}
+		}
+		st.contain = c;
 	"overflow-x" or "overflow-y" =>
 		o: int;
 		case id {
@@ -3904,6 +5235,205 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		if(o < 0.0) o = 0.0;
 		if(o > 1.0) o = 1.0;
 		st.opacity = o;
+	"filter" =>
+		if(id == "none") {
+			st.filter = nil;
+			return 1;
+		}
+		fl := filters(v, ctx);
+		if(fl == nil)
+			return 0;
+		st.filter = fl;
+	"isolation" =>
+		case id {
+		"isolate" => st.ctx |= SCisolate;
+		"auto" => st.ctx &= ~SCisolate;
+		* => return 0;
+		}
+	"mix-blend-mode" =>
+		# painted as normal; any other blend groups what is under it
+		if(id == "normal")
+			st.ctx &= ~SCblend;
+		else if(id != nil)
+			st.ctx |= SCblend;
+		else
+			return 0;
+	"clip-path" =>
+		# a stacking context; clipped to an inset() rectangle (other
+		# shapes are not clipped yet)
+		st.clipinset = nil;
+		if(id == "none")
+			st.ctx &= ~SCclippath;
+		else if(len trim(v) > 0) {
+			st.ctx |= SCclippath;
+			x := nows(v);
+			if(len x >= 1 && x[0].kind == Kfunction && lower(x[0].s) == "inset") {
+				a := nows(x[0].kids);
+				n := 0;
+				ins := array[4] of Len;
+				for(k := 0; k < len a && n < 4; k++) {
+					if(a[k].kind == Kident)
+						break;	# round <radius>: the corners are not rounded
+					(ok, l) := length(a[k:k+1], ctx);
+					if(!ok)
+						return 0;
+					ins[n++] = l;
+				}
+				if(n == 0)
+					return 0;
+				# as margin's one to four values
+				case n {
+				1 => ins[1] = ins[2] = ins[3] = ins[0];
+				2 => (ins[2], ins[3]) = (ins[0], ins[1]);
+				3 => ins[3] = ins[1];
+				}
+				st.clipinset = ins;
+			}
+		} else
+			return 0;
+	"will-change" =>
+		# a property that would make a stacking context does (Will Change 1 §3)
+		st.ctx &= ~SCwillchange;
+		for(k := 0; k < len v; k++)
+			if(v[k].kind == Css->Kident)
+				case lower(v[k].s) {
+				"opacity" or "transform" or "filter" or "isolation" or "mix-blend-mode" or "clip-path" or "mask" or "z-index" =>
+					st.ctx |= SCwillchange;
+				}
+	"transform" =>
+		# a list of transform functions (the 2D ones; 3D ones are
+		# taken for their 2D part or ignored).  Translations alone
+		# are kept as one offset, the general case as the list.
+		if(id == "none") {
+			st.translated = 0;
+			st.tx = st.ty = px(0.0);
+			st.tfs = nil;
+			return 1;
+		}
+		x := nows(v);
+		if(len x == 0)
+			return 0;
+		tfl: list of ref Tf;
+		pure := 1;
+		tx := 0.0;
+		ty := 0.0;
+		ptx := 0.0;
+		pty := 0.0;
+		for(i := 0; i < len x; i++) {
+			t := x[i];
+			if(t.kind != Kfunction)
+				return 0;
+			args := commas(t.kids);
+			n := len args;
+			case t.s {	# function names come lowercased
+			"translate" or "translatex" or "translatey" or "translate3d" =>
+				if(n < 1 || t.s == "translatey" && n > 1 || t.s == "translatex" && n > 1 || t.s == "translate" && n > 2 || t.s == "translate3d" && n != 3)
+					return 0;
+				lx := px(0.0);
+				ly := px(0.0);
+				for(k := 0; k < n && k < 2; k++) {
+					(ok, l) := length(hd args, ctx);
+					args = tl args;
+					if(!ok || l.kind != Lpx)
+						return 0;
+					if(t.s == "translatey" || k == 1)
+						ly = l;
+					else
+						lx = l;
+				}
+				tx += lx.px;
+				ptx += lx.pct;
+				ty += ly.px;
+				pty += ly.pct;
+				tfl = ref Tf(TFtranslate, nil, lx, ly) :: tfl;
+			"rotate" or "rotatez" =>
+				if(n != 1)
+					return 0;
+				(ok, a) := angle(hd args, ctx);
+				if(!ok)
+					return 0;
+				tfl = ref Tf(TFrotate, array[] of {a}, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"scale" or "scalex" or "scaley" or "scale3d" =>
+				if(n < 1 || n > 3)
+					return 0;
+				sx := 1.0;
+				sy := 1.0;
+				(ok, f) := number(hd args, ctx);
+				if(!ok)
+					return 0;
+				if(t.s == "scaley")
+					sy = f;
+				else {
+					sx = f;
+					if(t.s == "scale")
+						sy = f;
+				}
+				if(n > 1 && t.s != "scalex" && t.s != "scaley") {
+					(ok, f) = number(hd tl args, ctx);
+					if(!ok)
+						return 0;
+					sy = f;
+				}
+				tfl = ref Tf(TFscale, array[] of {sx, sy}, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"skew" or "skewx" or "skewy" =>
+				if(n < 1 || n > 2)
+					return 0;
+				ax := 0.0;
+				ay := 0.0;
+				(ok, a) := angle(hd args, ctx);
+				if(!ok)
+					return 0;
+				if(t.s == "skewy")
+					ay = a;
+				else
+					ax = a;
+				if(n > 1 && t.s == "skew") {
+					(ok, a) = angle(hd tl args, ctx);
+					if(!ok)
+						return 0;
+					ay = a;
+				}
+				tfl = ref Tf(TFskew, array[] of {ax, ay}, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"matrix" =>
+				if(n != 6)
+					return 0;
+				m := array[6] of real;
+				for(k := 0; k < 6; k++) {
+					(ok, f) := number(hd args, ctx);
+					args = tl args;
+					if(!ok)
+						return 0;
+					m[k] = f;
+				}
+				tfl = ref Tf(TFmatrix, m, px(0.0), px(0.0)) :: tfl;
+				pure = 0;
+			"rotatex" or "rotatey" or "rotate3d" or "scalez" or "matrix3d" or "perspective" =>
+				;	# no depth here
+			* =>
+				return 0;
+			}
+		}
+		st.translated = 1;
+		st.tx = Len(Lpx, tx, ptx, nil);
+		st.ty = Len(Lpx, ty, pty, nil);
+		st.tfs = nil;
+		if(!pure) {
+			st.tfs = array[len tfl] of ref Tf;
+			for(k := len tfl - 1; tfl != nil; tfl = tl tfl)
+				st.tfs[k--] = hd tfl;
+		}
+	"transform-origin" =>
+		x := nows(v);
+		if(len x == 3)
+			x = x[0:2];	# a z offset: ignored
+		(ok, ox, oy) := position(x, ctx);
+		if(!ok)
+			return 0;
+		st.tox = ox;
+		st.toy = oy;
 	"color" =>
 		(ok, c) := color(v);
 		if(!ok)
@@ -3924,6 +5454,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	"background-attachment" or "background-origin" or "background-clip" or "background-position-x" or
 	"background-position-y" =>
 		return bglonghand(st, nm, v, ctx);
+	"mask-image" or "mask-repeat" or "mask-position" or "mask-size" or "mask-origin" or "mask-clip" =>
+		return masklonghand(st, nm, v, ctx);
 	"box-shadow" or "text-shadow" =>
 		if(id == "none") {
 			if(nm == "box-shadow")
@@ -4000,11 +5532,71 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"italic" => st.fontstyle = FSitalic;
 		* =>
 			x := nows(v);
-			if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "oblique")
+			if(len x >= 1 && x[0].kind == Kident && lower(x[0].s) == "oblique") {
+				# oblique [<angle>]: 14deg unless given (Fonts 4 §3.3)
+				a := 14.0;
+				if(len x >= 2) {
+					(ok, r) := angle(x[1:2], ctx);
+					if(!ok)
+						return 0;
+					a = r * 180.0 / Math->Pi;
+					if(a < -90.0 || a > 90.0)
+						return 0;
+				}
 				st.fontstyle = FSoblique;
-			else
+				st.slant = a;
+			} else
 				return 0;
 		}
+	"font-synthesis" =>
+		# none, or the kinds a browser may make up (Fonts 4 §5.1)
+		x := nows(v);
+		b := 0;
+		for(i := 0; i < len x; i++) {
+			if(x[i].kind != Kident)
+				return 0;
+			case lower(x[i].s) {
+			"none" =>
+				if(len x != 1)
+					return 0;
+			"weight" =>	b |= 1;
+			"style" =>	b |= 2;
+			"small-caps" or "position" =>	;
+			* =>	return 0;
+			}
+		}
+		st.synth = b;
+	"font-synthesis-weight" or "font-synthesis-style" =>
+		bit := 1;
+		if(nm == "font-synthesis-style")
+			bit = 2;
+		case id {
+		"auto" =>	st.synth |= bit;
+		"none" =>	st.synth &= ~bit;
+		* =>	return 0;
+		}
+	"font-stretch" or "font-width" =>
+		x := nows(v);
+		if(len x != 1)
+			return 0;
+		w := -1.0;
+		if(x[0].kind == Kpercent && x[0].n >= 0.0)
+			w = x[0].n;
+		else if(x[0].kind == Kident)
+			case lower(x[0].s) {
+			"ultra-condensed" =>	w = 50.0;
+			"extra-condensed" =>	w = 62.5;
+			"condensed" =>	w = 75.0;
+			"semi-condensed" =>	w = 87.5;
+			"normal" =>	w = 100.0;
+			"semi-expanded" =>	w = 112.5;
+			"expanded" =>	w = 125.0;
+			"extra-expanded" =>	w = 150.0;
+			"ultra-expanded" =>	w = 200.0;
+			}
+		if(w < 0.0)
+			return 0;
+		st.stretch = w;
 	"font-variant" or "font-variant-caps" =>
 		case id {
 		"small-caps" or "all-small-caps" => st.smallcaps = 1;
@@ -4035,6 +5627,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"right" or "-webkit-right" => st.align = Aright;
 		"center" or "-webkit-center" or "-moz-center" or "-internal-center" => st.align = Acenter;
 		"justify" => st.align = Ajustify;
+		"justify-all" =>
+			st.align = Ajustify;
+			st.alignlast = Ajustify;	# the last line too (Text 3 §7.1)
 		"match-parent" =>
 			if(parent != nil)
 				st.align = parent.align;
@@ -4042,7 +5637,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		}
 	"text-align-last" =>
 		case id {
-		"auto" or "start" => st.alignlast = Astart;
+		"auto" => st.alignlast = Aauto;
+		"start" => st.alignlast = Astart;
 		"end" => st.alignlast = Aend;
 		"left" => st.alignlast = Aleft;
 		"right" => st.alignlast = Aright;
@@ -4064,7 +5660,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"uppercase" => st.transform = TTupper;
 		"lowercase" => st.transform = TTlower;
 		"capitalize" => st.transform = TTcap;
-		"full-width" or "full-size-kana" => ;
+		"full-width" => st.transform = TTfull;
+		"full-size-kana" => ;
 		* => return 0;
 		}
 	"letter-spacing" or "word-spacing" =>
@@ -4079,6 +5676,30 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.letterspacing = sp;
 		else
 			st.wordspacing = sp;
+	"font-variation-settings" =>
+		# normal, or "tag" number, ... (Fonts 4 §7.3); a tag given twice,
+		# the last
+		if(id == "normal") {
+			st.fontvars = nil;
+			return 1;
+		}
+		r: list of (string, real);
+		x := nows(v);
+		for(i := 0; i < len x; ) {
+			if(x[i].kind != Kstring || len x[i].s != 4 || i + 1 >= len x || x[i+1].kind != Knumber)
+				return 0;
+			r = (x[i].s, x[i+1].n) :: r;
+			i += 2;
+			if(i < len x) {
+				if(x[i].kind != Kcomma)
+					return 0;
+				i++;
+			}
+		}
+		fv: list of (string, real);
+		for(; r != nil; r = tl r)
+			fv = hd r :: fv;
+		st.fontvars = fv;
 	"font-kerning" =>
 		case id {
 		"none" => st.nokern = 1;
@@ -4111,7 +5732,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				if(nm == "white-space") st.whitespace = Wpre;
 				else st.whitespace = Wprewrap;
 			"nowrap" =>
-				case st.whitespace {
+				if(nm == "white-space")
+					st.whitespace = Wnowrap;	# the shorthand: collapsing too
+				else case st.whitespace {
 				Wprewrap or Wbreakspaces => st.whitespace = Wpre;
 				Wpre => ;
 				* => st.whitespace = Wnowrap;
@@ -4121,6 +5744,8 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 				Wpre => st.whitespace = Wprewrap;
 				Wnowrap => st.whitespace = Wnormal;
 				}
+				if(nm == "text-wrap")
+					st.textwrap = wrapstyle(lower(x[k].s));
 			"pre-wrap" => st.whitespace = Wprewrap;
 			"pre-line" or "preserve-breaks" => st.whitespace = Wpreline;
 			"break-spaces" => st.whitespace = Wbreakspaces;
@@ -4130,16 +5755,38 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		}
 	"word-break" =>
 		case id {
-		"normal" => st.breakall = st.keepall = 0;
-		"break-all" => st.breakall = 1;
-		"keep-all" => st.keepall = 1;
-		"break-word" => st.anywhere = 1;
+		"normal" =>
+			st.keepall = 0;
+			if(st.breakall == 1)
+				st.breakall = 0;	# (line-break: anywhere, 2, is another property's)
+		"break-all" =>
+			if(st.breakall != 2)
+				st.breakall = 1;	# anywhere already breaks everywhere break-all does
+		"manual" => st.keepall = 2;	# no word boundaries found in Thai and the like (Text 4 §5.2; word-break-manual-001)
+		"keep-all" or "auto-phrase" => st.keepall = 1;	# auto-phrase: as keep-all, there being no phrase segmenter (word-break-auto-phrase-001)
+		"break-word" => st.anywhere = 2;	# as overflow-wrap: anywhere (Text 4 §5.2)
+		* => return 0;
+		}
+	"line-break" =>
+		case id {
+		"auto" or "loose" or "normal" or "strict" =>
+			if(st.breakall == 2)
+				st.breakall = 0;
+			st.lbmode = 0;
+			if(id == "loose")
+				st.lbmode = 1;
+			else if(id == "strict")
+				st.lbmode = 2;
+		"anywhere" =>
+			st.breakall = 2;
+			st.lbmode = 0;
 		* => return 0;
 		}
 	"overflow-wrap" =>
 		case id {
 		"normal" => st.anywhere = 0;
-		"break-word" or "anywhere" => st.anywhere = 1;
+		"break-word" => st.anywhere = 1;	# only where a word fails to fit; not counted for min-content
+		"anywhere" => st.anywhere = 2;	# counted for min-content too (Text 4 §5.5)
 		* => return 0;
 		}
 	"text-overflow" =>
@@ -4191,11 +5838,29 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"rtl" => st.dirrtl = 1;
 		* => return 0;
 		}
+	"unicode-bidi" =>
+		case id {
+		"normal" => st.unicodebidi = UBnormal;
+		"embed" => st.unicodebidi = UBembed;
+		"isolate" => st.unicodebidi = UBisolate;
+		"bidi-override" => st.unicodebidi = UBoverride;
+		"isolate-override" => st.unicodebidi = UBisolateoverride;
+		"plaintext" => st.unicodebidi = UBplaintext;
+		* => return 0;
+		}
 	"tab-size" =>
+		# a number of spaces, or a length (kept negated: px)
 		(ok, n) := number(v, ctx);
-		if(!ok)
-			return 0;
-		st.tabsize = n;
+		if(ok) {
+			if(n < 0.0)
+				return 0;
+			st.tabsize = n;
+		} else {
+			(okl, l) := length(v, ctx);
+			if(!okl || l.pct != 0.0 || l.px < 0.0)
+				return 0;
+			st.tabsize = -l.px;
+		}
 	"list-style-type" =>
 		x := trim(v);
 		if(len x != 1)
@@ -4284,14 +5949,19 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		a := alignment(nows(v));
 		if(a < 0)
 			return 0;
+		bit := 0;
 		case nm {
-		"justify-content" => st.justifycontent = a;
-		"align-items" => st.alignitems = a;
-		"align-self" => st.alignself = a;
-		"align-content" => st.aligncontent = a;
-		"justify-items" => st.justifyitems = a;
-		"justify-self" => st.justifyself = a;
+		"justify-content" => st.justifycontent = a; bit = 2;
+		"align-items" => st.alignitems = a; bit = 4;
+		"align-self" => st.alignself = a; bit = 4;
+		"align-content" => st.aligncontent = a; bit = 1;
+		"justify-items" => st.justifyitems = a; bit = 8;
+		"justify-self" => st.justifyself = a; bit = 8;
 		}
+		if(sawsafe)
+			st.safe |= bit;
+		else
+			st.safe &= ~bit;
 	"row-gap" or "column-gap" =>
 		l: Len;
 		if(id == "normal")
@@ -4308,13 +5978,22 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			st.colgap = l;
 	"grid-template-columns" or "grid-template-rows" or "grid-auto-columns" or "grid-auto-rows" =>
 		x := trim(v);
+		sub := 0;
+		if(len x > 0 && x[0].kind == Kident && lower(x[0].s) == "subgrid" && nm[5] == 't') {
+			sub = 1;	# subgrid: what follows names its lines
+			x = trim(x[1:]);
+		}
 		if(id == "none")
 			x = nil;
 		else
 			x = lentoks(x, ctx);
 		case nm {
-		"grid-template-columns" => st.gridcols = x;
-		"grid-template-rows" => st.gridrows = x;
+		"grid-template-columns" =>
+			st.gridcols = x;
+			st.subcols = sub;
+		"grid-template-rows" =>
+			st.gridrows = x;
+			st.subrows = sub;
 		"grid-auto-columns" => st.autocols = x;
 		"grid-auto-rows" => st.autorows = x;
 		}
@@ -4345,6 +6024,40 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			}
 		}
 		st.autoflow = f;
+	"grid-lanes-direction" =>
+		f := 0;
+		x := nows(v);
+		for(k := 0; k < len x; k++) {
+			if(x[k].kind != Kident)
+				return 0;
+			case lower(x[k].s) {
+			"normal" => ;
+			"row" => f |= 1;
+			"column" => f |= 2;
+			"fill-reverse" => f |= 4;
+			"track-reverse" => f |= 8;
+			* => return 0;
+			}
+		}
+		if((f & 3) == 3)
+			return 0;
+		st.lanesdir = f;
+	"grid-lanes-pack" =>
+		case id {
+		"normal" => st.lanespack = 0;
+		"dense" => st.lanespack = 1;
+		* => return 0;
+		}
+	"flow-tolerance" =>
+		case id {
+		"normal" => st.tolerance = kw(Lnormal);
+		"infinite" => st.tolerance = kw(Lnone);
+		* =>
+			(ok, l) := length(v, ctx);
+			if(!ok)
+				return 0;
+			st.tolerance = l;
+		}
 	"grid-row-start" or "grid-row-end" or "grid-column-start" or "grid-column-end" =>
 		(ok, g) := gridline(nows(v));
 		if(!ok)
@@ -4410,11 +6123,24 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 		"scale-down" => st.objectfit = 4;
 		* => return 0;
 		}
-	"transform" =>
-		if(id == "none")
-			st.transformv = nil;
-		else
-			st.transformv = lentoks(trim(v), ctx);
+	"image-orientation" =>
+		# from-image, or none; an angle is taken as from-image, as
+		# browsers take it
+		case id {
+		"none" => st.imgorient = 1;
+		"from-image" => st.imgorient = 0;
+		* =>
+			x := nows(v);
+			if(len x == 0 || x[0].kind != Kdimension && !(x[0].kind == Kident && lower(x[0].s) == "flip"))
+				return 0;
+			st.imgorient = 0;
+		}
+	"object-position" =>
+		(ok, ox, oy) := position(nows(v), ctx);
+		if(!ok)
+			return 0;
+		st.objx = ox;
+		st.objy = oy;
 	"cursor" =>
 		x := nows(v);
 		if(len x > 0 && x[len x - 1].kind == Kident)
@@ -4455,11 +6181,12 @@ display(x: array of ref Tok): int
 		"none" => return Dnone;
 		"contents" => return Dcontents;
 		"block" or "inline" or "run-in" => outer = s;
-		"flow" or "flow-root" or "table" or "flex" or "grid" or "ruby" => inner = s;
+		"flow" or "flow-root" or "table" or "flex" or "grid" or "grid-lanes" or "ruby" => inner = s;
 		"list-item" => li = 1;
 		"inline-block" => return Dinlineblock;
 		"inline-flex" or "-webkit-inline-flex" or "-webkit-inline-box" => return Dinlineflex;
 		"inline-grid" => return Dinlinegrid;
+		"inline-grid-lanes" => return Dinlinegridlanes;
 		"inline-table" => return Dinlinetable;
 		"-webkit-flex" => return Dflex;
 		"-webkit-box" or "-moz-box" => return Dblock;
@@ -4484,6 +6211,7 @@ display(x: array of ref Tok): int
 		"table" => return Dinlinetable;
 		"flex" => return Dinlineflex;
 		"grid" => return Dinlinegrid;
+		"grid-lanes" => return Dinlinegridlanes;
 		}
 	}
 	case inner {
@@ -4491,14 +6219,19 @@ display(x: array of ref Tok): int
 	"table" => return Dtable;
 	"flex" => return Dflex;
 	"grid" => return Dgrid;
+	"grid-lanes" => return Dgridlanes;
 	"ruby" => return Dinline;
 	}
 	return Dblock;
 }
 
+# whether the last alignment value parsed had the "safe" keyword
+sawsafe := 0;
+
 alignment(x: array of ref Tok): int
 {
 	a := -1;
+	sawsafe = 0;
 	for(k := 0; k < len x; k++) {
 		if(x[k].kind != Kident)
 			return -1;
@@ -4515,7 +6248,10 @@ alignment(x: array of ref Tok): int
 		"left" => a = ALleft;
 		"right" => a = ALright;
 		"auto" => a = ALauto;
-		"safe" or "unsafe" or "legacy" => ;
+		"flow-start" => a = ALflowstart;
+		"flow-end" => a = ALflowend;
+		"safe" => sawsafe = 1;
+		"unsafe" or "legacy" => ;
 		* => return -1;
 		}
 	}
@@ -4568,6 +6304,10 @@ lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
 			(ok, p) := unit(t.n, t.s, ctx);
 			if(ok)
 				t = ref Tok(Kdimension, "px", p, 0, nil);
+		} else if(t.kind == Kfunction && (t.s == "sibling-index" || t.s == "sibling-count")) {
+			# the element's, now: the image is drawn without it
+			if((e := calcexpr(t, ctx)) != nil)
+				t = ref Tok(Knumber, nil, e.px, 1, nil);
 		} else if(t.kind == Kfunction && (t.s == "calc" || t.s == "min" || t.s == "max" || t.s == "clamp")) {
 			e := calcexpr(t, ctx);
 			if(e != nil) {
@@ -4576,7 +6316,8 @@ lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
 					t = ref Tok(Kdimension, "px", p, 0, nil);
 				else if(lin && p == 0.0)
 					t = ref Tok(Kpercent, nil, pc, 0, nil);
-			}
+			} else
+				t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));	# (an angle's, say: what is in it, now)
 		} else if(t.kids != nil)
 			t = ref Tok(t.kind, t.s, t.n, t.flag, lentoks(t.kids, ctx));
 		r[k] = t;
@@ -4649,36 +6390,185 @@ shadows(v: array of ref Tok, ctx: ref Ctx): array of ref Shadow
 	return a;
 }
 
+# image-set()'s choice for a screen of one pixel per px: the option at
+# 1x, else the least above it, else the most (Images 4 §2.2); nil if it
+# is not right.  A string is a URL.
+# resolutions as numbers of dppx, for calc()
+resnums(v: array of ref Tok): array of ref Tok
+{
+	r := array[len v] of ref Tok;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Kdimension)
+			case lower(t.s) {
+			"x" or "dppx" => t = ref Tok(Knumber, nil, t.n, 0, nil);
+			"dpi" => t = ref Tok(Knumber, nil, t.n / 96.0, 0, nil);
+			"dpcm" => t = ref Tok(Knumber, nil, t.n * 2.54 / 96.0, 0, nil);
+			}
+		else if(t.kids != nil)
+			t = ref Tok(t.kind, t.s, t.n, t.flag, resnums(t.kids));
+		r[i] = t;
+	}
+	return r;
+}
+
+imageset(t: ref Tok, ctx: ref Ctx): (int, ref Tok)
+{
+	best: ref Tok;
+	bestres := 0.0;
+	for(opts := splitcommas(t.kids); opts != nil; opts = tl opts) {
+		o := nows(hd opts);
+		if(len o == 0)
+			return (0, nil);
+		im := o[0];
+		case im.kind {
+		Kstring =>
+			im = ref Tok(Kurl, im.s, 0.0, 0, nil);
+		Kurl =>
+			;
+		Kfunction =>
+			if(lower(im.s) != "url" && !suffix(lower(im.s), "gradient"))
+				return (0, nil);
+		* =>
+			return (0, nil);
+		}
+		res := 1.0;
+		ok := 1;
+		for(k := 1; k < len o; k++) {
+			x := o[k];
+			if(x.kind == Kfunction && x.s == "calc") {
+				# a resolution worked out: x and dppx are one
+				e := calcexpr(ref Tok(x.kind, x.s, x.n, x.flag, resnums(x.kids)), ctx);
+				if(e == nil)
+					return (0, nil);
+				(lin, v, nil) := fold(e);
+				if(!lin)
+					return (0, nil);
+				res = v;
+			} else if(x.kind == Kdimension) {
+				case lower(x.s) {
+				"x" or "dppx" => res = x.n;
+				"dpi" => res = x.n / 96.0;
+				"dpcm" => res = x.n * 2.54 / 96.0;
+				* => return (0, nil);
+				}
+			} else if(x.kind == Kfunction && lower(x.s) == "type") {
+				ty := "";
+				if(len x.kids > 0 && x.kids[0].kind == Kstring)
+					ty = lower(x.kids[0].s);
+				case ty {
+				"image/png" or "image/jpeg" or "image/gif" or "image/webp" or "image/svg+xml" => ;
+				* => ok = 0;	# a type it cannot draw: not a choice
+				}
+			} else
+				return (0, nil);
+		}
+		if(!ok || res <= 0.0)
+			continue;	# (no image is drawn at no resolution, or less)
+		if(best == nil || bestres < 1.0 && res > bestres || bestres > 1.0 && res >= 1.0 && res < bestres)
+			(best, bestres) = (im, res);
+	}
+	return (1, best);
+}
+
+# mask-image and the rest: the background longhands' grammar, on the
+# mask layers, whose origin is the border box (Masking 1 §6.6)
+masking := 0;
+
+masklonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
+{
+	saved := st.bg;
+	st.bg = st.mask;
+	masking = 1;
+	ok := bglonghand(st, "background-" + nm[len "mask-":], v, ctx);
+	masking = 0;
+	st.mask = st.bg;
+	st.bg = saved;
+	return ok;
+}
+
+deforigin(): int
+{
+	if(masking)
+		return BOXborder;
+	return BOXpadding;
+}
+
+# The mask shorthand: the background shorthand's layers without a
+# colour or an attachment; mask-mode and mask-composite keywords are
+# accepted and not modelled (alpha and source-over are what icons use).
+mask(v: array of ref Tok): list of (string, array of ref Tok)
+{
+	kept: list of ref Tok;
+	boxes := 0;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Kident)
+			case lower(t.s) {
+			"alpha" or "luminance" or "match-source" or "add" or "subtract" or "intersect" or "exclude" or "no-clip" =>
+				continue;
+			"border-box" or "padding-box" or "content-box" or "fill-box" or "stroke-box" or "view-box" =>
+				boxes = 1;
+			}
+		kept = t :: kept;
+	}
+	r := background(toarray(kept));
+	if(r == nil)
+		return nil;
+	out: list of (string, array of ref Tok);
+	for(; r != nil; r = tl r) {
+		(n, x) := hd r;
+		case n {
+		"background-color" or "background-attachment" =>
+			continue;
+		"background-origin" or "background-clip" =>
+			if(!boxes)
+				x = array[] of {ref Tok(Kident, "border-box", 0.0, 0, nil)};
+		}
+		out = ("mask-" + n[len "background-":], x) :: out;
+	}
+	return out;
+}
+
 bglonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
 {
-	layers := splitcommas(v);
-	n := len layers;
-	if(st.bg == nil || len st.bg != n) {
-		nb := array[n] of ref Bg;
-		for(k := 0; k < n; k++) {
-			if(st.bg != nil && k < len st.bg)
-				nb[k] = ref *st.bg[k];
-			else
-				nb[k] = ref Bg(nil, Rrepeat, Rrepeat, px(0.0), px(0.0), kw(Lauto), kw(Lauto), BOXborder, BOXpadding, 0);
-		}
-		st.bg = nb;
-	} else {
-		nb := array[n] of ref Bg;
-		for(k := 0; k < n; k++)
-			nb[k] = ref *st.bg[k];
-		st.bg = nb;
+	vals := splitcommas(v);
+	n := len vals;
+	if(n == 0)
+		return 0;
+	# the image list says how many layers there are; the other lists
+	# are repeated to fill them (Backgrounds 3 §2.3)
+	nl := n;
+	if(nm != "background-image" && st.bg != nil)
+		nl = len st.bg;
+	nb := array[nl] of ref Bg;
+	for(k := 0; k < nl; k++) {
+		if(st.bg != nil)
+			nb[k] = ref *st.bg[k % len st.bg];	# the lists set so far repeat
+		else
+			nb[k] = ref Bg(nil, Rrepeat, Rrepeat, px(0.0), px(0.0), kw(Lauto), kw(Lauto), BOXborder, deforigin(), 0);
 	}
-	k := 0;
-	for(; layers != nil; layers = tl layers) {
-		x := nows(hd layers);
-		b := st.bg[k++];
+	st.bg = nb;
+	layers := array[n] of array of ref Tok;
+	for(k = 0; vals != nil; vals = tl vals)
+		layers[k++] = nows(hd vals);
+	for(k = 0; k < nl; k++) {
+		x := layers[k % n];
+		b := st.bg[k];
 		if(len x == 0)
 			return 0;
 		case nm {
 		"background-image" =>
 			if(x[0].kind == Kident && lower(x[0].s) == "none")
 				b.img = nil;
-			else if(x[0].kind == Kurl || x[0].kind == Kfunction)
+			else if(x[0].kind == Kfunction && (lower(x[0].s) == "image-set" || lower(x[0].s) == "-webkit-image-set")) {
+				(ok, im) := imageset(x[0], ctx);
+				if(!ok)
+					return 0;
+				b.img = nil;	# no choice it can show: none
+				if(im != nil)
+					b.img = lentoks(array[] of {im}, ctx)[0];
+			} else if(x[0].kind == Kurl || x[0].kind == Kfunction)
 				b.img = lentoks(x[0:1], ctx)[0];
 			else
 				return 0;
@@ -4736,8 +6626,11 @@ bglonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
 			"padding-box" => bx = BOXpadding;
 			"content-box" => bx = BOXcontent;
 			"text" => bx = BOXtext;
+			"border-area" => bx = BOXborderarea;
 			* => return 0;
 			}
+			if(nm == "background-origin" && (bx == BOXtext || bx == BOXborderarea))
+				return 0;
 			if(nm == "background-origin")
 				b.origin = bx;
 			else
@@ -4772,8 +6665,10 @@ position(x: array of ref Tok, ctx: ref Ctx): (int, Len, Len)
 		if(t.kind == Kident) {
 			kwd := lower(t.s);
 			off := px(0.0);
-			# an offset after an edge keyword measures from that edge
-			if(k+1 < len x && x[k+1].kind != Kident && kwd != "center") {
+			# an offset after an edge keyword measures from that edge,
+			# in the three- and four-value forms only: "right 10px" is
+			# a horizontal keyword and a vertical length (Backgrounds 3 §3.6)
+			if(len x >= 3 && k+1 < len x && x[k+1].kind != Kident && kwd != "center") {
 				(ok, l) := length(x[k+1:k+2], ctx);
 				if(!ok)
 					return (0, h, v);
@@ -4817,6 +6712,7 @@ position(x: array of ref Tok, ctx: ref Ctx): (int, Len, Len)
 # 'inherit', 'initial' and friends: copy one longhand's computed value.
 copyprop(d, s: ref St, nm: string)
 {
+	aliasrtl = d.dirrtl;
 	case alias(nm) {
 	"display" => d.display = s.display;
 	"position" => d.position = s.position;
@@ -4829,7 +6725,7 @@ copyprop(d, s: ref St, nm: string)
 	"min-height" => d.minheight = s.minheight;
 	"max-width" => d.maxwidth = s.maxwidth;
 	"max-height" => d.maxheight = s.maxheight;
-	"aspect-ratio" => d.aspect = s.aspect;
+	"aspect-ratio" => d.aspect = s.aspect; d.aspectauto = s.aspectauto;
 	"margin-top" => d.mt = s.mt;
 	"margin-right" => d.mr = s.mr;
 	"margin-bottom" => d.mb = s.mb;
@@ -4862,24 +6758,60 @@ copyprop(d, s: ref St, nm: string)
 		d.z = s.z;
 		d.zauto = s.zauto;
 	"overflow-x" => d.overflowx = s.overflowx;
+	"contain" => d.contain = s.contain;
+	"word-space-transform" => d.wst = s.wst;
+	"hyphens" => d.hyphens = s.hyphens;
+	"hyphenate-character" => d.hyphenchar = s.hyphenchar;
+	"text-justify" => d.textjustify = s.textjustify;
+	"hanging-punctuation" => d.hangpunct = s.hangpunct;
+	"text-autospace" => d.textautospace = s.textautospace;
+	"text-wrap-style" => d.textwrap = s.textwrap;
+	"clip" => d.cliprect = s.cliprect;
+	"margin-trim" => d.margintrim = s.margintrim;
+	"contain-intrinsic-size" or "contain-intrinsic-width" or "contain-intrinsic-inline-size" or
+	"contain-intrinsic-height" or "contain-intrinsic-block-size" =>
+		d.cisw = s.cisw;
+		d.cish = s.cish;
 	"overflow-y" => d.overflowy = s.overflowy;
 	"visibility" => d.visibility = s.visibility;
 	"opacity" => d.opacity = s.opacity;
+	"filter" => d.filter = s.filter;
+	"isolation" => d.ctx = d.ctx & ~SCisolate | s.ctx & SCisolate;
+	"mix-blend-mode" => d.ctx = d.ctx & ~SCblend | s.ctx & SCblend;
+	"clip-path" =>
+		d.ctx = d.ctx & ~SCclippath | s.ctx & SCclippath;
+		d.clipinset = s.clipinset;
+	"will-change" => d.ctx = d.ctx & ~SCwillchange | s.ctx & SCwillchange;
+	"transform" =>
+		d.translated = s.translated;
+		d.tx = s.tx;
+		d.ty = s.ty;
+		d.tfs = s.tfs;
+	"transform-origin" =>
+		d.tox = s.tox;
+		d.toy = s.toy;
 	"color" => d.color = s.color;
 	"background-color" => d.bgcolor = s.bgcolor;
 	"background-image" or "background-repeat" or "background-position" or "background-size" or
 	"background-attachment" or "background-origin" or "background-clip" =>
 		d.bg = s.bg;
+	"mask-image" or "mask-repeat" or "mask-position" or "mask-size" or "mask-origin" or "mask-clip" =>
+		d.mask = s.mask;
 	"box-shadow" => d.shadows = s.shadows;
 	"text-shadow" => d.textshadows = s.textshadows;
 	"outline-width" => d.outlinew = s.outlinew;
 	"outline-style" => d.outlines = s.outlines;
 	"outline-color" => d.outlinec = s.outlinec;
 	"outline-offset" => d.outlineoff = s.outlineoff;
+	"border-image-source" or "border-image-slice" or "border-image-width" or "border-image-outset" or "border-image-repeat" => d.bimage = s.bimage;
 	"font-family" => d.family = s.family;
 	"font-size" => d.fontsize = s.fontsize;
 	"font-weight" => d.weight = s.weight;
-	"font-style" => d.fontstyle = s.fontstyle;
+	"font-style" =>
+		d.fontstyle = s.fontstyle;
+		d.slant = s.slant;
+	"font-stretch" or "font-width" => d.stretch = s.stretch;
+	"font-synthesis" or "font-synthesis-weight" or "font-synthesis-style" => d.synth = s.synth;
 	"font-variant" or "font-variant-caps" => d.smallcaps = s.smallcaps;
 	"line-height" => d.lineheight = s.lineheight;
 	"text-align" => d.align = s.align;
@@ -4888,11 +6820,16 @@ copyprop(d, s: ref St, nm: string)
 	"text-transform" => d.transform = s.transform;
 	"letter-spacing" => d.letterspacing = s.letterspacing;
 	"font-kerning" or "font-feature-settings" => d.nokern = s.nokern;
+	"font-variation-settings" => d.fontvars = s.fontvars;
 	"word-spacing" => d.wordspacing = s.wordspacing;
-	"white-space" or "white-space-collapse" or "text-wrap" or "text-wrap-mode" => d.whitespace = s.whitespace;
-	"word-break" =>
+	"white-space" or "white-space-collapse" or "text-wrap-mode" => d.whitespace = s.whitespace;
+	"text-wrap" =>
+		d.whitespace = s.whitespace;
+		d.textwrap = s.textwrap;
+	"word-break" or "line-break" =>
 		d.breakall = s.breakall;
 		d.keepall = s.keepall;
+		d.lbmode = s.lbmode;
 	"overflow-wrap" => d.anywhere = s.anywhere;
 	"text-overflow" => d.ellipsis = s.ellipsis;
 	"text-decoration-line" => d.decoration = s.decoration;
@@ -4902,6 +6839,7 @@ copyprop(d, s: ref St, nm: string)
 		d.valign = s.valign;
 		d.valignlen = s.valignlen;
 	"direction" => d.dirrtl = s.dirrtl;
+	"unicode-bidi" => d.unicodebidi = s.unicodebidi;
 	"tab-size" => d.tabsize = s.tabsize;
 	"list-style-type" => d.liststyle = s.liststyle;
 	"list-style-position" => d.listinside = s.listinside;
@@ -4925,12 +6863,15 @@ copyprop(d, s: ref St, nm: string)
 	"justify-self" => d.justifyself = s.justifyself;
 	"row-gap" => d.rowgap = s.rowgap;
 	"column-gap" => d.colgap = s.colgap;
-	"grid-template-columns" => d.gridcols = s.gridcols;
-	"grid-template-rows" => d.gridrows = s.gridrows;
+	"grid-template-columns" => d.gridcols = s.gridcols; d.subcols = s.subcols;
+	"grid-template-rows" => d.gridrows = s.gridrows; d.subrows = s.subrows;
 	"grid-template-areas" => d.gridareas = s.gridareas;
 	"grid-auto-columns" => d.autocols = s.autocols;
 	"grid-auto-rows" => d.autorows = s.autorows;
 	"grid-auto-flow" => d.autoflow = s.autoflow;
+	"grid-lanes-direction" => d.lanesdir = s.lanesdir;
+	"grid-lanes-pack" => d.lanespack = s.lanespack;
+	"flow-tolerance" => d.tolerance = s.tolerance;
 	"grid-row-start" => d.rowstart = s.rowstart;
 	"grid-row-end" => d.rowend = s.rowend;
 	"grid-column-start" => d.colstart = s.colstart;
@@ -4948,12 +6889,17 @@ copyprop(d, s: ref St, nm: string)
 	"column-rule-style" => d.colrules = s.colrules;
 	"column-rule-color" => d.colrulec = s.colrulec;
 	"object-fit" => d.objectfit = s.objectfit;
-	"transform" => d.transformv = s.transformv;
+	"image-orientation" => d.imgorient = s.imgorient;
+	"object-position" =>
+		d.objx = s.objx;
+		d.objy = s.objy;
 	"cursor" => d.cursor = s.cursor;
 	"pointer-events" => d.pointer = s.pointer;
 	"appearance" => d.appearance = s.appearance;
 	"accent-color" => d.accent = s.accent;
 	"caret-color" => d.caret = s.caret;
+	"fill" => d.svgfill = s.svgfill;
+	"stroke" => d.svgstroke = s.svgstroke;
 	}
 }
 
@@ -4962,9 +6908,29 @@ copyprop(d, s: ref St, nm: string)
 hints(d: ref Doc, n: int): list of ref Decl
 {
 	nd := d.nodes[n];
-	if(nd.ns != Dom->HTML || nd.attrs == nil)
+	if(nd.ns == Dom->SVG && nd.name == "svg" && nd.attrs != nil) {
+		# an outer svg's width and height attributes are its CSS width
+		# and height (SVG 2 §7.2); px or %, as img's
+		p := parentel(d, n);
+		if(p == 0 || d.nodes[p].ns != Dom->SVG) {
+			h := dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
+			if(h == "")
+				return nil;
+			decls := css->parsedecls(h);
+			r: list of ref Decl;
+			for(k := len decls - 1; k >= 0; k--)
+				r = decls[k] :: r;
+			return r;
+		}
+	}
+	if(nd.ns != Dom->HTML)
+		return nil;
+	# a cell's hints come from its table's attributes (cellpadding,
+	# border) whether or not it has any of its own
+	if(nd.attrs == nil && nd.tag != Dom->Ttd && nd.tag != Dom->Tth && !rowish(nd.tag))
 		return nil;
 	s := "";
+	rules := tablerules(d, n);
 	case nd.tag {
 	Dom->Tbody =>
 		s += colorhint(d, n, "bgcolor", "background-color");
@@ -4988,25 +6954,51 @@ hints(d: ref Doc, n: int): list of ref Decl
 		"right" => s += "float:right;";
 		"center" => s += "margin-left:auto;margin-right:auto;";
 		}
+		if(rulesof(d, n) != nil) {
+			# rules= (HTML §15.3.11): the collapsing model, the parts
+			# ruled below; the table's own border hidden unless given
+			s += "border-collapse:collapse;";
+			if(!d.hasattr(n, "border"))
+				s += "border-style:hidden;";
+		}
 	Dom->Ttd or Dom->Tth =>
 		s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
 		s += colorhint(d, n, "bgcolor", "background-color");
 		if(d.hasattr(n, "nowrap"))
 			s += "white-space:nowrap;";
 		s += alignhint(d, n) + valignhint(d, n);
-		# cellpadding of the table
+		# cellpadding of the table; and border=0 on it gives its
+		# cells no border (HTML §15.3.9: only a value above zero does)
 		for(t := d.nodes[n].parent; t != 0; t = d.nodes[t].parent)
 			if(d.nodes[t].tag == Dom->Ttable) {
 				if((cp := d.attr(t, "cellpadding")) != nil)
 					s += sys->sprint("padding:%dpx;", atoi(cp));
+				if(d.hasattr(t, "border") && (tb := d.attr(t, "border")) != "" && atoi(tb) == 0)
+					s += "border-width:0;";
 				break;
 			}
+		# (widths and styles only: the colour stays the table's, inherited)
+		case rules {
+		"cols" => s += "border-left-width:1px;border-left-style:solid;border-right-width:1px;border-right-style:solid;";
+		"all" => s += "border-width:1px;border-style:solid;";
+		"none" => s += "border-style:none;";
+		}
 	Dom->Ttr or Dom->Tthead or Dom->Ttbody or Dom->Ttfoot =>
 		s += colorhint(d, n, "bgcolor", "background-color") + alignhint(d, n) + valignhint(d, n);
 		s += dimhint(d, n, "height", "height");
+		if(nd.tag == Dom->Ttr && (rules == "rows" || rules == "all") ||
+		   nd.tag != Dom->Ttr && rules == "groups")
+			s += "border-top-width:1px;border-top-style:solid;border-bottom-width:1px;border-bottom-style:solid;";
+	Dom->Tcolgroup or Dom->Tcol =>
+		s += dimhint(d, n, "width", "width");	# <col width=40> (HTML §15.3.9; border-image-repeat-002's reference)
+		if(nd.tag == Dom->Tcolgroup && rules == "groups" || rules == "cols" || rules == "all")
+			s += "border-left-width:1px;border-left-style:solid;border-right-width:1px;border-right-style:solid;";
 	Dom->Timg or Dom->Tobject or Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe or Dom->Tembed or Dom->Tinput =>
+		if(nd.tag == Dom->Tiframe && d.hasattr(n, "frameborder") && atoi(d.attr(n, "frameborder")) == 0)
+			s += "border-width:0;";
 		if(nd.tag != Dom->Tinput || lower(d.attr(n, "type")) == "image") {
-			s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
+			if(nd.tag != Dom->Tcanvas)	# a canvas's width and height are its bitmap's: its natural size, not a hint
+				s += dimhint(d, n, "width", "width") + dimhint(d, n, "height", "height");
 			if((h := d.attr(n, "hspace")) != nil)
 				s += sys->sprint("margin-left:%dpx;margin-right:%dpx;", atoi(h), atoi(h));
 			if((v := d.attr(n, "vspace")) != nil)
@@ -5062,6 +7054,18 @@ hints(d: ref Doc, n: int): list of ref Decl
 			"I" => s += "list-style-type:upper-roman;";
 			* => s += "list-style-type:" + lower(t) + ";";
 			}
+		if(nd.tag == Dom->Tol) {
+			# start= and reversed (HTML §15.3.8): the list-item counter
+			# counts from start, or down (to 1, or from start)
+			st := d.attr(n, "start");
+			if(d.hasattr(n, "reversed")) {
+				s += "counter-reset:reversed(list-item)";
+				if(st != nil)
+					s += " " + string (int st + 1);	# (int, not atoi: start may be negative)
+				s += ";";
+			} else if(st != nil)
+				s += sys->sprint("counter-reset:list-item %d;", int st - 1);
+		}
 	Dom->Ttextarea =>
 		if((c := d.attr(n, "cols")) != nil)
 			s += sys->sprint("width:%dch;", atoi(c));
@@ -5192,6 +7196,8 @@ dump(st: ref St): string
 	s += "text-align " + names4[st.align] + "\n";
 	s += "white-space " + names5[st.whitespace] + "\n";
 	s += "opacity " + realstr(st.opacity) + "\n";
+	if(st.translated)
+		s += "transform translate(" + lenstr(st.tx) + ", " + lenstr(st.ty) + ")\n";
 	s += "visibility " + names6[st.visibility] + "\n";
 	if(st.display == Dflex || st.display == Dinlineflex) {
 		s += "flex-direction " + names7[st.flexdir] + "\n";
@@ -5225,6 +7231,7 @@ lenstr(l: Len): string
 	Lmin => return "min-content";
 	Lmax => return "max-content";
 	Lfit => return "fit-content";
+	Lstretch => return "stretch";
 	Lcontent => return "content";
 	Lcalc => return "calc(...)";
 	}
@@ -5243,4 +7250,315 @@ colstr(c: int): string
 	if(c == Ccurrent)
 		return "currentcolor";
 	return sys->sprint("#%.8ux", c);
+}
+
+mixspace(name: string): int
+{
+	case name {
+	"srgb" => return CSsrgb;
+	"srgb-linear" => return CSsrgblinear;
+	"oklab" => return CSoklab;
+	"oklch" => return CSoklch;
+	"lab" => return CSlab;
+	"lch" => return CSlch;
+	"hsl" => return CShsl;
+	"hwb" => return CShwb;
+	"xyz" or "xyz-d65" => return CSxyz;
+	"xyz-d50" => return CSxyzd50;
+	"display-p3" or "a98-rgb" or "prophoto-rgb" or "rec2020" => return CSsrgb;	# (mixed as sRGB)
+	}
+	return -1;
+}
+
+huemethod(name: string): int
+{
+	case name {
+	"shorter" => return Hshorter;
+	"longer" => return Hlonger;
+	"increasing" => return Hincreasing;
+	"decreasing" => return Hdecreasing;
+	}
+	return -1;
+}
+
+polar(sp: int): int
+{
+	return sp == CSoklch || sp == CSlch || sp == CShsl || sp == CShwb;
+}
+
+# Two colours (0xRRGGBBAA) mixed f of the way in a colour space, their
+# alphas premultiplied into the components that are not a hue, the hue
+# going round as asked (Color 4 §12.3, §12.4)
+spacemix(a, b: int, f: real, sp, hue: int): int
+{
+	(a1, a2, a3, aa) := tospace(a, sp);
+	(b1, b2, b3, ba) := tospace(b, sp);
+	hi := -1;	# which component is a hue
+	case sp {
+	CSoklch or CSlch =>
+		hi = 2;
+	CShsl or CShwb =>
+		hi = 0;
+	}
+	ca := array[] of {a1, a2, a3};
+	cb := array[] of {b1, b2, b3};
+	if(hi >= 0) {
+		# a hue that does not matter (a grey's) takes the other's
+		if(ca[hi] == NOHUE && cb[hi] == NOHUE)
+			ca[hi] = cb[hi] = 0.0;
+		else if(ca[hi] == NOHUE)
+			ca[hi] = cb[hi];
+		else if(cb[hi] == NOHUE)
+			cb[hi] = ca[hi];
+		(h1, h2) := (ca[hi], cb[hi]);
+		d := h2 - h1;
+		case hue {
+		Hshorter =>
+			if(d > 180.0)
+				h1 += 360.0;
+			else if(d < -180.0)
+				h2 += 360.0;
+		Hlonger =>
+			if(d > 0.0 && d < 180.0)
+				h1 += 360.0;
+			else if(d > -180.0 && d <= 0.0)
+				h2 += 360.0;
+		Hincreasing =>
+			if(h2 < h1)
+				h2 += 360.0;
+		Hdecreasing =>
+			if(h1 < h2)
+				h1 += 360.0;
+		}
+		(ca[hi], cb[hi]) = (h1, h2);
+	}
+	al := aa + (ba - aa) * f;
+	if(al <= 0.0)
+		return 0;
+	r := array[3] of real;
+	for(i := 0; i < 3; i++) {
+		if(i == hi)
+			r[i] = ca[i] + (cb[i] - ca[i]) * f;
+		else
+			r[i] = (ca[i]*aa + (cb[i]*ba - ca[i]*aa) * f) / al;
+	}
+	return fromspace(r[0], r[1], r[2], al, sp);
+}
+
+NOHUE: con -1e30;	# a hue that is missing (powerless)
+
+# a colour in a space: three components and alpha (0 to 1)
+tospace(c: int, sp: int): (real, real, real, real)
+{
+	r := real ((c >> 24) & 255) / 255.0;
+	g := real ((c >> 16) & 255) / 255.0;
+	b := real ((c >> 8) & 255) / 255.0;
+	al := real (c & 255) / 255.0;
+	case sp {
+	CSsrgb =>
+		return (r, g, b, al);
+	CShsl or CShwb =>
+		mx := fmax(r, fmax(g, b));
+		mn := fmin(r, fmin(g, b));
+		d := mx - mn;
+		h := NOHUE;
+		if(d > 0.0) {
+			if(mx == r)
+				h = 60.0 * math->fmod((g - b) / d, 6.0);
+			else if(mx == g)
+				h = 60.0 * ((b - r) / d + 2.0);
+			else
+				h = 60.0 * ((r - g) / d + 4.0);
+			if(h < 0.0)
+				h += 360.0;
+		}
+		if(sp == CShwb)
+			return (h, mn, 1.0 - mx, al);
+		l := (mx + mn) / 2.0;
+		sat := 0.0;
+		if(d > 0.0)
+			sat = d / (1.0 - math->fabs(2.0*l - 1.0));
+		return (h, sat, l, al);
+	}
+	(lr, lg, lb) := (mlin(r), mlin(g), mlin(b));
+	if(sp == CSsrgblinear)
+		return (lr, lg, lb, al);
+	if(sp == CSoklab || sp == CSoklch) {
+		l := mcbrt(0.4122214708*lr + 0.5363325363*lg + 0.0514459929*lb);
+		m := mcbrt(0.2119034982*lr + 0.6806995451*lg + 0.1073969566*lb);
+		s := mcbrt(0.0883024619*lr + 0.2817188376*lg + 0.6299787005*lb);
+		L := 0.2104542553*l + 0.7936177850*m - 0.0040720468*s;
+		A := 1.9779984951*l - 2.4285922050*m + 0.4505937099*s;
+		B := 0.0259040371*l + 0.7827717662*m - 0.8086757660*s;
+		if(sp == CSoklab)
+			return (L, A, B, al);
+		return lchof(L, A, B, 0.0002, al);
+	}
+	x := 0.4123908*lr + 0.3575843*lg + 0.1804808*lb;
+	y := 0.2126390*lr + 0.7151687*lg + 0.0721923*lb;
+	z := 0.0193308*lr + 0.1191948*lg + 0.9505322*lb;
+	if(sp == CSxyz)
+		return (x, y, z, al);
+	# to D50, by Bradford
+	(x, y, z) = (1.0479298*x + 0.0229469*y - 0.0501923*z, 0.0296278*x + 0.9904344*y - 0.0170738*z, -0.0092430*x + 0.0150552*y + 0.7518743*z);
+	if(sp == CSxyzd50)
+		return (x, y, z, al);
+	fx := mlabf(x / 0.96422);
+	fy := mlabf(y);
+	fz := mlabf(z / 0.82521);
+	L := 116.0*fy - 16.0;
+	A := 500.0*(fx - fy);
+	B := 200.0*(fy - fz);
+	if(sp == CSlab)
+		return (L, A, B, al);
+	return lchof(L, A, B, 0.02, al);
+}
+
+lchof(l, a, b, eps, al: real): (real, real, real, real)
+{
+	c := math->sqrt(a*a + b*b);
+	h := NOHUE;
+	if(c > eps) {
+		h = math->atan2(b, a) * 180.0 / Math->Pi;
+		if(h < 0.0)
+			h += 360.0;
+	}
+	return (l, c, h, al);
+}
+
+# back to sRGB, clipped into its gamut, as 0xRRGGBBAA
+fromspace(c1, c2, c3, al: real, sp: int): int
+{
+	(r, g, b) := (c1, c2, c3);
+	case sp {
+	CSsrgb =>
+		;
+	CShsl or CShwb =>
+		h := math->fmod(c1, 360.0);
+		if(h < 0.0)
+			h += 360.0;
+		if(sp == CShwb) {
+			(w, bk) := (c2, c3);
+			if(w + bk >= 1.0) {
+				gr := w / (w + bk);
+				(r, g, b) = (gr, gr, gr);
+			} else {
+				(r, g, b) = mhslrgb(h, 1.0, 0.5);
+				f := 1.0 - w - bk;
+				(r, g, b) = (r*f + w, g*f + w, b*f + w);
+			}
+		} else
+			(r, g, b) = mhslrgb(h, c2, c3);
+	* =>
+		(lr, lg, lb) := (c1, c2, c3);
+		if(sp == CSoklab || sp == CSoklch) {
+			(L, A, B) := (c1, c2, c3);
+			if(sp == CSoklch)
+				(A, B) = (c2 * math->cos(c3 * Math->Pi / 180.0), c2 * math->sin(c3 * Math->Pi / 180.0));
+			l := L + 0.3963377774*A + 0.2158037573*B;
+			m := L - 0.1055613458*A - 0.0638541728*B;
+			s := L - 0.0894841775*A - 1.2914855480*B;
+			(l, m, s) = (l*l*l, m*m*m, s*s*s);
+			lr = 4.0767416621*l - 3.3077115913*m + 0.2309699292*s;
+			lg = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s;
+			lb = -0.0041960863*l - 0.7034186147*m + 1.7076147010*s;
+		} else if(sp != CSsrgblinear) {
+			(x, y, z) := (c1, c2, c3);
+			if(sp == CSlab || sp == CSlch) {
+				(L, A, B) := (c1, c2, c3);
+				if(sp == CSlch)
+					(A, B) = (c2 * math->cos(c3 * Math->Pi / 180.0), c2 * math->sin(c3 * Math->Pi / 180.0));
+				fy := (L + 16.0) / 116.0;
+				fx := A / 500.0 + fy;
+				fz := fy - B / 200.0;
+				(x, y, z) = (mlabinv(fx) * 0.96422, mlabinv(fy), mlabinv(fz) * 0.82521);
+			}
+			if(sp != CSxyz)	# from D50
+				(x, y, z) = (0.9554734*x - 0.0230985*y + 0.0632593*z, -0.0283697*x + 1.0099955*y + 0.0210414*z, 0.0123140*x - 0.0205077*y + 1.3303659*z);
+			lr = 3.2409699*x - 1.5373832*y - 0.4986108*z;
+			lg = -0.9692436*x + 1.8759675*y + 0.0415551*z;
+			lb = 0.0556301*x - 0.2039770*y + 1.0569715*z;
+		}
+		(r, g, b) = (mgam(lr), mgam(lg), mgam(lb));
+	}
+	return (mbyte8(r) << 24) | (mbyte8(g) << 16) | (mbyte8(b) << 8) | mbyte8(al);
+}
+
+mhslrgb(h, s, l: real): (real, real, real)
+{
+	c := (1.0 - math->fabs(2.0*l - 1.0)) * s;
+	x := c * (1.0 - math->fabs(math->fmod(h / 60.0, 2.0) - 1.0));
+	m := l - c/2.0;
+	(r, g, b) := (0.0, 0.0, 0.0);
+	if(h < 60.0)
+		(r, g, b) = (c, x, 0.0);
+	else if(h < 120.0)
+		(r, g, b) = (x, c, 0.0);
+	else if(h < 180.0)
+		(r, g, b) = (0.0, c, x);
+	else if(h < 240.0)
+		(r, g, b) = (0.0, x, c);
+	else if(h < 300.0)
+		(r, g, b) = (x, 0.0, c);
+	else
+		(r, g, b) = (c, 0.0, x);
+	return (r + m, g + m, b + m);
+}
+
+mbyte8(v: real): int
+{
+	if(v <= 0.0)
+		return 0;
+	if(v >= 1.0)
+		return 255;
+	return int (v * 255.0);	# (rounds)
+}
+
+mlin(c: real): real
+{
+	if(c <= 0.04045)
+		return c / 12.92;
+	return math->pow((c + 0.055) / 1.055, 2.4);
+}
+
+mgam(c: real): real
+{
+	if(c <= 0.0031308)
+		return 12.92 * c;
+	return 1.055 * math->pow(c, 1.0/2.4) - 0.055;
+}
+
+mcbrt(x: real): real
+{
+	if(x < 0.0)
+		return -math->pow(-x, 1.0/3.0);
+	return math->pow(x, 1.0/3.0);
+}
+
+mlabf(t: real): real
+{
+	if(t > 216.0/24389.0)
+		return mcbrt(t);
+	return (24389.0/27.0 * t + 16.0) / 116.0;
+}
+
+mlabinv(f: real): real
+{
+	if(f*f*f > 216.0/24389.0)
+		return f*f*f;
+	return (116.0*f - 16.0) / (24389.0/27.0);
+}
+
+fmax(a, b: real): real
+{
+	if(a > b)
+		return a;
+	return b;
+}
+
+fmin(a, b: real): real
+{
+	if(a < b)
+		return a;
+	return b;
 }

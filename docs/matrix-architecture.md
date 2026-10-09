@@ -774,9 +774,9 @@ no compound conditions). If a use case exceeds it, the escape hatch is
 a service module written in Limbo that implements arbitrary logic.
 
 
-## Future: Marketplace (h402)
+## Future: Marketplace (x402)
 
-InferNode includes a crypto wallet and supports h402 (HTTP 402 Payment
+InferNode includes a crypto wallet and supports x402 (HTTP 402 Payment
 Required) micropayments. This creates the infrastructure for a module
 and composition marketplace without building a marketplace platform.
 
@@ -828,10 +828,10 @@ those questions are resolved. It is not a specification.
 A module or pinned composition is a file. Files are served over 9P.
 9P connections can be gated by payment. Therefore:
 
-- A module author serves `.dis` files from a 9P endpoint with h402
+- A module author serves `.dis` files from a 9P endpoint with x402
   gating.
 - A consumer mounts the remote library. On first access to a paid
-  module, h402 triggers payment from the consumer's wallet.
+  module, x402 triggers payment from the consumer's wallet.
 - The module loads into the consumer's Matrix like any local module.
   The network boundary is invisible.
 
@@ -852,7 +852,7 @@ When these are pinned, they become assets. The marketplace enables:
 
 1. Veltro generates a module or composition in response to a need.
 2. The user (or agent) validates and pins it.
-3. The pinned asset is published (served with h402 gating).
+3. The pinned asset is published (served with x402 gating).
 4. Other agents or users mount and pay for it.
 5. Revenue flows to the publisher's wallet.
 
@@ -867,7 +867,7 @@ any human involvement:
 
 1. Agent A needs a capability (e.g., a signal processing service).
 2. Agent A discovers a published composition via the network.
-3. Agent A's Veltro mounts the remote library, pays via h402.
+3. Agent A's Veltro mounts the remote library, pays via x402.
 4. The service modules load into Agent A's Matrix.
 5. Agent A's own modules read from the service outputs via the namespace.
 
@@ -1036,9 +1036,9 @@ Jetson Orin AGX (demonstrating remote mount). Having a real, non-trivial
 data source from day one prevents the POC from drifting into abstract
 framework-building. The result is immediately useful.
 
-### Marketplace via h402, not a platform
+### Marketplace via x402, not a platform
 
-InferNode already has a wallet and h402. The marketplace emerges from
+InferNode already has a wallet and x402. The marketplace emerges from
 composing existing primitives (9P file serving + payment gating), not
 from building a platform. This follows the Plan 9 philosophy: small,
 composable mechanisms rather than monolithic services.

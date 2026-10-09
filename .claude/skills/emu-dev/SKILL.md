@@ -7,7 +7,7 @@ description: Write C code for the emulator (emu) correctly — the kproc kill pa
 
 The `limbo-dev` skill covers *building* this layer (platform scripts,
 C-library rebuild order); this one covers writing it. The porting
-history is in `docs/LESSONS-LEARNED.md`; read the incumbent code before
+history is in `docs/history/LESSONS-LEARNED.md`; read the incumbent code before
 any of it.
 
 ## Blocking: the kill path only interrupts syscalls

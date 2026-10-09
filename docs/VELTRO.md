@@ -9,7 +9,7 @@
 Veltro is a Limbo-native agent harness:
 
 - Talks to an LLM via the **`/mnt/llm`** 9P filesystem (Anthropic Claude or any OpenAI-compatible backend through `llmsrv`).
-- Calls **40 tools** via the **`/tool`** 9P filesystem, each tool a separate `.dis` module.
+- Calls **44 tools** via the **`/tool`** 9P filesystem, each tool a separate `.dis` module.
 - Runs inside a **restricted namespace** (FORKNS + bind-replace) so an agent only sees the files and capabilities its caller granted.
 - Can **spawn subagents** with strictly narrower namespaces (capability attenuation).
 
@@ -108,24 +108,24 @@ A child can never exceed the parent's capabilities; it can only narrow them furt
 
 ## Tools
 
-Thirty-nine tools live in `appl/veltro/tools/`. Each is a `.dis` module implementing a small interface (`init`, `name`, `doc`, `exec`) defined in [`tool.m`](../appl/veltro/tool.m). Tools are loaded on demand and exposed to the agent through `/tool`.
+Forty-four tools live in `appl/veltro/tools/`. Each is a `.dis` module implementing a small interface (`init`, `name`, `doc`, `exec`) defined in [`tool.m`](../appl/veltro/tool.m). Tools are loaded on demand and exposed to the agent through `/tool`.
 
 | Category       | Tools |
 |----------------|-------|
 | **Files**      | `read`, `write`, `edit`, `list`, `find`, `search`, `grep`, `diff` |
 | **Execution**  | `exec`, `shell`, `launch`, `spawn` |
-| **Code**       | `git`, `json`, `vision`, `editor` |
+| **Code**       | `git`, `json`, `vision`, `editor`, `limbo` |
 | **Web**        | `webfetch`, `websearch`, `browse`, `charon`, `http` |
-| **Comms**      | `say`, `hear` |
+| **Comms**      | `say`, `hear`, `sms`, `dial`, `contacts` |
 | **Persistence**| `memory`, `todo`, `task`, `wiki`, `keyring`, `wallet`, `payfetch` |
-| **UI**         | `xenith`, `present`, `gap`, `man`, `fractal`, `plan` |
+| **UI**         | `xenith`, `present`, `gap`, `man`, `fractal`, `plan`, `matrix`, `window` |
 | **System**     | `mount`, `gpu` |
 
-Run `cat /tool/tools` in a Veltro shell to list whatever tools the running agent actually has — the namespace-restricted view, not the full 40.
+Run `cat /tool/tools` in a Veltro shell to list whatever tools the running agent actually has — the namespace-restricted view, not the full 44.
 
 ## Capabilities and the tool budget
 
-Capabilities are granted at **namespace construction time**, not per call. The `Capabilities` adt in [`nsconstruct.m`](../appl/veltro/nsconstruct.m) names the dimensions:
+Capabilities are granted at **namespace construction time**, not per call. The `Capabilities` adt in [`nsconstruct.m`](../module/nsconstruct.m) names the dimensions:
 
 | Field         | Meaning |
 |---------------|---------|
@@ -150,7 +150,7 @@ When `tools9p` is started, two flags shape what agents see:
 - The `-b` budget is the **maximum a child can be granted**. Subagents can never exceed it.
 - `/tool/grantable` lists that effective budget as `name - summary` records. Agent namespace discovery injects this live catalogue so a coordinator can delegate capabilities it does not hold directly without relying on a hand-maintained prompt list.
 
-The Lucia launch scripts (`run-lucia.sh`, `run-lucia-linux.sh`) show a typical configuration. Edit them to lock down a deployment.
+Lucia's boot script (`lib/lucifer/boot.sh`) shows a typical configuration. Edit it to lock down a deployment.
 
 ## Agentic behaviour
 
@@ -200,7 +200,7 @@ LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
 /mnt/llm/N/compact      # summarise+truncate to free tokens
 ```
 
-Default model: **haiku**. Override with the `LLMConfig` field of `Capabilities`, or by writing to `/mnt/llm/N/model` directly.
+Default model: llmsrv's, which is `claude-sonnet-4-5-20250929` on the Anthropic backend, or the `model=` line of `/lib/ndb/llm` (passed as `llmsrv -M`). Override with the `LLMConfig` field of `Capabilities`, `veltro -m`, or by writing to `/mnt/llm/N/model` directly.
 
 ### Backends
 
@@ -318,13 +318,13 @@ The verify persona *runs* the check, probes edge cases, and ends with a single
 
 ### Embedded in Lucia
 
-The Lucia launch scripts wire everything up: `tools9p` with the default budget, `lucibridge` as the agent's Lucia client (it starts its own `veltrosrv`), `speech9p` for voice. See [LUCIA.md](LUCIA.md).
+`lib/lucifer/boot.sh` wires everything up: `tools9p` with the default budget, `lucibridge` as the agent's Lucia client (it starts its own `veltrosrv`); `lib/sh/profile` starts `speech9p` for voice. See [LUCIA.md](LUCIA.md).
 
 ## Hardening checklist
 
 For deployments where untrusted prompts may reach the agent:
 
-1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `git`, `keyring`, `wallet` from `-b` and the positional tool list in your launch script.
+1. **Trim the tool budget** — remove `exec`, `shell`, `launch`, `spawn`, `git`, `keyring`, `wallet` from `-b` and the positional tool list in `lib/lucifer/boot.sh`.
 2. **Restrict `-p` paths** — only mount what the agent legitimately needs.
 3. **Disable `xenith` and `memory`** in the `Capabilities` you construct.
 4. **Pin `llmconfig.model`** so prompt-injected attempts to switch to a more permissive model can't take effect.
@@ -337,7 +337,7 @@ For deployments where untrusted prompts may reach the agent:
 |---------|--------------|-----|
 | `cannot load module testing.dis` and friends | Stale `.dis` after `git pull` | `./hooks/install.sh` (once); `mk install` in `appl/cmd` and `appl/veltro` |
 | `/mnt/llm: file does not exist` | `llmsrv` not started | Run as `sh -l` so `lib/sh/profile` starts it; check `ANTHROPIC_API_KEY` |
-| Agent says it has tool X but `/tool` doesn't list it | Tool not in the positional list of `tools9p` | Add it to the launch script, or rely on `spawn` (subject to `-b` budget) |
+| Agent says it has tool X but `/tool` doesn't list it | Tool not in the positional list of `tools9p` | Add it to `lib/lucifer/boot.sh`, or rely on `spawn` (subject to `-b` budget) |
 | `tools9p` deadlock on the first tool call | Self-mount race during namespace restriction | Already mitigated; if it recurs, check `nsconstruct.b` hasn't been edited to add a `stat()` on the restricted root |
 | Subagent times out at 5 minutes | Default `spawn` timeout | Pass `timeout=N` (seconds) in the `spawn` call |
 | Memory writes silently lost | Wrong agent id | The `memory` tool keys by sandbox id; confirm with `memory list` |

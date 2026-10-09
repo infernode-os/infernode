@@ -41,6 +41,13 @@ its process group instead of leaving an unauthenticated test port behind.
 | `dlysweep.py`, `tcpsweep.py reg=val ...` | sweep a chip register on a live link (`lan78stats reg`) against burst loss and against TCP throughput, with the sender's retransmission counters |
 | `rxclassify.py`, `rxss.py`, `rxcounters.py`, `rxmeasure.py` | the sender's view of one transfer (`nstat`, `ss -ti`), the board's IP counters, the driver's read and gap histograms |
 
+## The talarm lock loop (#681)
+
+| tool | what it does |
+|---|---|
+| `lockloop-repro.py <label> <minutes> [push] [stream] [sess] [loops] [storm]` | overlaps the start of inbound TCP bursts with console sessions that spawn processes, as often as possible, and times how long the board lasts |
+| `tsleepstorm.b` (`tsleepstorm nthreads ms seconds`) | many Dis threads blocking in `sys->sleep` over and over, each a `tsleep()` taking `talarm.l`: the preemptible side of that race |
+
 ## Bluetooth
 
 | tool | what it does |

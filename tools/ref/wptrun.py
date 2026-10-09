@@ -138,17 +138,28 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
         return super().guess_type(path)
 
     def do_GET(self):
-        # wptserve's ?pipe=status(N): the file, with that status
+        # wptserve's ?pipe=status(N): the file, with that status; and
+        # its FILE.headers sidecars: the file, with those headers
         m = re.search(r'[?&]pipe=status\((\d+)\)', self.path)
-        if not m:
-            return super().do_GET()
         path = self.translate_path(self.path.split('?')[0])
+        hdrs = []
+        if os.path.isfile(path + '.headers'):
+            with open(path + '.headers') as f:
+                hdrs = [l.split(':', 1) for l in f.read().splitlines() if ':' in l]
+        if not m and not hdrs:
+            return super().do_GET()
         try:
             body = open(path, 'rb').read()
         except OSError:
             return self.send_error(404)
-        self.send_response(int(m.group(1)))
-        self.send_header('Content-Type', self.guess_type(path))
+        self.send_response(int(m.group(1)) if m else 200)
+        ctype = self.guess_type(path)
+        for k, v in hdrs:
+            if k.strip().lower() == 'content-type':
+                ctype = v.strip()
+            else:
+                self.send_header(k.strip(), v.strip())
+        self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)

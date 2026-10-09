@@ -24,6 +24,11 @@ Dom: module
 	# namespaces
 	HTML, SVG, MathML: con iota;
 
+	# the attribute marking a popover its invoker has opened (:popover-open):
+	# a NUL begins it, which no attribute from markup can (the parser
+	# makes NUL U+FFFD)
+	POPOPEN: con "\u0000popover-open";
+
 	# tags known to the parser; the order matches tagnames in dom.b
 	Tnone, Ta, Tabbr, Taddress, Tapplet, Tarea, Tarticle, Taside, Taudio,
 	Tb, Tbase, Tbasefont, Tbdi, Tbdo, Tbgsound, Tbig, Tblockquote, Tbody,
@@ -60,6 +65,9 @@ Dom: module
 		gen:	int;		# bumped by every change
 		quirks:	int;		# document is in quirks mode
 		url:	string;		# document address, for resolving references
+		xml:	int;		# parsed as XML (attribute values match case-sensitively)
+		charset:	string;		# the encoding it was decoded from (its stylesheets' default)
+		lang:	string;		# the document's language, from <meta http-equiv=content-language>, for :lang()
 
 		new:	fn(url: string): ref Doc;
 		create:	fn(d: self ref Doc, kind: int, name: string, ns: int): int;

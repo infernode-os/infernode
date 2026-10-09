@@ -326,7 +326,7 @@ ls /tmp/*.pdfi*
 rm ~/tmp/*1.pdfixenith
 rm ~/tmp/*1.pdfiacme
 ```
-See `docs/TEMPFILE-EXHAUSTION.md` for full details.
+See `docs/history/TEMPFILE-EXHAUSTION.md` for full details.
 
 #### Problem: `/n/local` exists but is empty
 **Cause:** trfs didn't start or failed
@@ -443,7 +443,6 @@ All namespace operations use the 9P protocol:
 ### Profile Location
 
 - Profile: `/lib/sh/profile`
-- Minimal profile: `/lib/sh/profile.minimal`
 - Profile loaded by: `sh -l` (login shell)
 
 ---

@@ -10,11 +10,13 @@ TARG=\
 	page.dis\
 	browser.dis\
 	charonfs.dis\
+	wordbreak.dis\
 
 MODULES=
 
 SYSMODULES=\
 	sys.m\
+	bidi.m\
 	web/dom.m\
 	web/html.m\
 	web/css.m\
@@ -26,6 +28,7 @@ SYSMODULES=\
 	imgload.m\
 	web/browser.m\
 	web/charonfs.m\
+	web/wordbreak.m\
 	outlinefont.m\
 	draw.m\
 	math.m\

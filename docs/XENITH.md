@@ -1,6 +1,6 @@
 # Xenith - AI-Native Text Environment
 
-Xenith is InferNode's default graphical user interface, a fork of the Acme editor optimized for AI agents and AI-human collaboration.
+Xenith is InferNode's text environment, a fork of the Acme editor optimized for AI agents and AI-human collaboration. The default GUI is Lucia ([LUCIA.md](LUCIA.md)).
 
 ## Overview
 
@@ -43,7 +43,7 @@ Inferno®'s namespace model provides capability-based security:
 
 ```limbo
 # Agent sees only what you bind:
-sys->bind("/services/llm", "/llm", Sys->MREPL);
+sys->bind("/mnt/llm", "/mnt/llm", Sys->MREPL);
 sys->bind("/tools/safe", "/tools", Sys->MREPL);
 sys->bind("/tmp/scratch", "/scratch", Sys->MCREATE);
 # Nothing else exists from agent's perspective
@@ -173,7 +173,7 @@ keeps your place: the document opens at the passage the text was
 showing, and the text at the passage the document was showing.
 
 The typesetting is `rlayout` (`appl/xenith/render/rlayout.b`), the one
-markdown typesetter, which Lucifer's presentation and conversation
+markdown typesetter, which Lucia's presentation and conversation
 views use too: headings, emphasis, strikethrough, links, nested and
 task lists, quotes, code, tables, and ` ```mermaid ` diagrams, drawn in
 the window's colours.
@@ -200,7 +200,7 @@ window, on files from the host; Exit ends the instance. See [XEN.md](XEN.md).
 
 ### Image Display
 
-Xenith supports inline image display (PNG, PPM formats):
+Xenith supports inline image display (PNG, JPEG, GIF, WebP, AVIF, SVG, XBM, PIC, PPM/PGM and Inferno `.bit` images):
 
 ```bash
 # Load image in window
@@ -283,7 +283,7 @@ echo 'replaceall oldvar	newvar' > /edit/1/ctl    # tab-separated
 | Aspect | Acme | Xenith |
 |--------|------|--------|
 | Colors | Hardcoded pastels | 20+ customizable + dark theme |
-| Images | Text only | PNG/PPM display |
+| Images | Text only | Inline image display (PNG, JPEG, GIF, WebP, AVIF, SVG, ...) |
 | Per-window UI | Standard | Custom color schemes |
 | AI focus | Generic editor | Agent-friendly design |
 | Code size | ~16K lines | ~21K lines |
@@ -296,7 +296,7 @@ echo 'replaceall oldvar	newvar' > /edit/1/ctl    # tab-separated
 | `fsys.b` | 9P filesystem interface |
 | `exec.b` | Command execution |
 | `asyncio.b` | Async I/O primitives |
-| `imgload.b` | Image loading (PNG/PPM) |
+| `appl/lib/imgload.b` | Image loading (shared library; formats listed above) |
 | `wind.b` | Window management |
 | `text.b` | Text editing |
 

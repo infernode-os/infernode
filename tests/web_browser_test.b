@@ -278,6 +278,48 @@ postname: string;
 
 # The posted session, mounted from a separate name space as an agent's
 # tool would: the same session, its own connection.
+# <meta http-equiv=refresh content="0; url=b.html"> goes to B once A has loaded
+testRefresh(t: ref T)
+{
+	ev := sys->open(MNT + "/event", Sys->OREAD);
+	if(ev == nil)
+		t.fatal(sys->sprint("open event: %r"));
+	if((err := wr("ctl", "open " + DIR + "refresh.html")) != nil)
+		t.fatal("ctl: " + err);
+	buf := array[1024] of byte;
+	got: list of string;
+	for(ndone := 0; ndone < 2; ) {
+		n := sys->read(ev, buf, len buf);
+		if(n <= 0)
+			t.fatal("event: eof");
+		e := chomp(string buf[0:n]);
+		if(prefix(e, "done") || prefix(e, "error")) {
+			got = e :: got;
+			ndone++;
+		}
+	}
+	t.assertseq(hd tl got, "done " + DIR + "refresh.html", "the refreshing page loads first");
+	t.assertseq(hd got, "done " + DIR + "b.html", "then the refresh target");
+	t.assertseq(rd("title"), "Page B\n", "B is showing");
+}
+
+# A page that cannot be fetched shows a page saying so, not a blank
+# one; the session keeps its URL to reload, and back leaves it.
+testUnreachable(t: ref T)
+{
+	before := chomp(rd("url"));
+	bad := DIR + "no-such-page.html";
+	e := nav(t, "open " + bad);
+	t.assert(prefix(e, "error "), "an error event: " + e);
+	t.assertseq(rd("url"), bad + "\n", "the URL that failed");
+	t.assertseq(rd("title"), "Cannot load page\n", "the error page is showing");
+	text := rd("text");
+	t.log(text);
+	t.assert(contains(text, "Cannot load this page"), "it says so: " + text);
+	t.assert(contains(text, "no-such-page.html"), "and names the page");
+	t.assertseq(nav(t, "back"), "done " + before, "back to the page before");
+}
+
 testPosted(t: ref T)
 {
 	t.assertseq(postname, "fs", "posted as fs");
@@ -342,6 +384,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Find", testFind);
 	run("Image", testImage);
 	run("Forms", testForms);
+	run("Refresh", testRefresh);
+	run("Unreachable", testUnreachable);
 	run("Posted", testPosted);
 
 	if(testing->summary(passed, failed, skipped) > 0)

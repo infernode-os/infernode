@@ -88,6 +88,8 @@ pic2draw < diagram.pic > /mnt/xenith/1/image
 
 ## Audio as Files
 
+*Done*: speech9p (`appl/veltro/speech9p.b`) serves `/n/speech` with `say` (write text to speak), `hear` (write `start`, read the transcription), `voices` and `ctl`; `lib/sh/profile` starts it. The sketch below is the original idea.
+
 Plan 9 model:
 ```
 /dev/audio      # Write PCM, read from mic
@@ -263,6 +265,8 @@ Each addition follows the pattern:
 
 ## Web Access for AI Agent (web9p)
 
+*Superseded*: web9p was removed (c663b5e2) in favour of webfs (`appl/cmd/webfs.b`), which serves `/mnt/web` with clone-based connections (`clone`, `N/ctl`, `N/body`, ...). The notes below are kept as history.
+
 HTTP as filesystem via 9P. Mount web9p to expose HTTP operations as files:
 
 ```sh
@@ -403,7 +407,7 @@ that progressive updates are imperceptible - images appear to "pop" in fully for
 
 To verify progressive loading actually works, add artificial delays:
 
-1. **In `imgload.b`, in `loadpngsubsampleprogressive()`**, add a 500ms delay after
+1. **In `appl/lib/pngload.b`, in `loadpngsubsampleprogressive()`**, add a 500ms delay after
    sending progress updates:
    ```limbo
    if(progress != nil && png.dstrow - lastprogressrow >= progressinterval){
@@ -444,43 +448,6 @@ decodetask() → progress channel → progressforwarder() → casync → ImagePr
 
 ---
 
-## TODO: ARM64 JIT Compiler
-
-**Priority: High** - Would dramatically improve all Limbo performance.
-
-### Current State
-- `libinterp/comp-arm64.c` is a stub (343 bytes) - returns 0, falls back to interpreter
-- `libinterp/comp-amd64.c` is also a stub (865 bytes)
-- No existing 64-bit JIT in Inferno - MIPS, PowerPC, SPARC JITs are all 32-bit
-- ARM 32-bit JIT exists (`comp-arm.c`, 43KB) - closest reference
-
-### Why It Matters
-- Interpreter overhead is the root cause of slow PNG loading
-- JIT compiles Dis bytecode to native machine code at module load time
-- Estimated 10-100x speedup for CPU-bound Limbo code
-- Benefits ALL Limbo code, not just image loading
-
-### Implementation Scope
-- ~35-40KB of C code (based on other JIT sizes)
-- Map Dis VM operations to ARM64 instructions
-- Handle 64-bit registers (X0-X30)
-- ARM64 instruction encoding (different from ARM32)
-- ARM64 ABI calling conventions
-- 64-bit addressing modes
-
-### Reference Files
-- `libinterp/comp-arm.c` - ARM 32-bit JIT (closest architecturally)
-- `libinterp/comp-386.c` - x86 JIT (most complete/tested)
-- `libinterp/interp.h` - Dis VM structures
-- `libinterp/isa.h` - Dis instruction set
-
-### Benefits Beyond Xenith
-- All Inferno applications run faster
-- ARM64 Linux (Raspberry Pi 4/5) benefits too
-- Makes Inferno competitive on modern hardware
-
----
-
 ## References
 
 - Plan 9 Programmer's Manual: http://man.cat-v.org/plan_9/
@@ -489,4 +456,3 @@ decodetask() → progress channel → progressforwarder() → casync → ImagePr
 - grap language: http://man.cat-v.org/plan_9/1/grap
 - Structural Regular Expressions: http://doc.cat-v.org/bell_labs/structural_regexps/
 - 9P Paper: ../research/
-- ARM64 Instruction Set: https://developer.arm.com/documentation/ddi0596/

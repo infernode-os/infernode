@@ -102,6 +102,7 @@ Css: module
 
 	parse:	fn(s: string): ref Sheet;
 	parsedecls:	fn(s: string): array of ref Decl;	# a style="" attribute
+	validvars:	fn(v: array of ref Tok): int;	# the var() references in a value are well formed
 	parsesels:	fn(s: string): array of ref Sel;	# nil if invalid
 	tokenize:	fn(s: string): array of ref Tok;	# component values
 	tostring:	fn(v: array of ref Tok): string;

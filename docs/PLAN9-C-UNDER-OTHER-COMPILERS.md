@@ -5,7 +5,8 @@ InferNode's C is Plan 9 C: the dialect, the idioms, `waserror`/`nexterror`,
 compilers are not Plan 9's. The hosted emulator is built with whatever the
 host has -- gcc on Linux, Apple clang on macOS, MSVC on Windows -- as
 Inferno has been since Vita Nuova's 4th edition; the bare-metal kernel is
-built with clang (`--target=aarch64-elf`). Charles Forsyth's `7c`/`7a`/`7l`
+built with clang (`--target=aarch64-elf`; the RV64 kernel with
+`--target=riscv64-unknown-elf`). Charles Forsyth's `7c`/`7a`/`7l`
 (Plan 9 for AArch64, mid-2010s, in the 9front tree) is the one compiler
 the dialect was written for on this architecture, and this tree does not
 use it.

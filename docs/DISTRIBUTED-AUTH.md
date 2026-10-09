@@ -182,11 +182,10 @@ For interactive (GUI) clients, see §8 — `wm/logon` currently hard-codes
   continue to work until the host restarts.
 - **An attacker on the overlay can probe `cansecstore`** to enumerate users.
   Treat user names as semi-public.
-- **Online password guessing** is bounded by the per-attempt modexp (~5 s)
-  and network RTT. There is no built-in lockout. A determined attacker with
-  persistent overlay access *can* try a few attempts per minute. Use
-  high-entropy passwords; consider `iptables`/firewall-level rate limiting
-  on port 5356.
+- **Online password guessing** is bounded by the per-attempt modexp (~5 s),
+  network RTT, and secstored's per-account lockout (60 s after 10
+  consecutive failures). Use high-entropy passwords; consider
+  `iptables`/firewall-level rate limiting on port 5356.
 - **A storedir compromise on the server compromises every user.** Encrypt
   the underlying disk; restrict shell access; back up to immutable storage
   so that ransomware can't simultaneously corrupt and exfiltrate.
@@ -430,25 +429,22 @@ flowchart LR
         l1["wm/logon hard-codes<br/>tcp!localhost!5356"]
         l2["No per-key files<br/>(opaque blob)"]
         l3["No password rotation"]
-        l4["No server-side<br/>rate limit"]
         l5["No native replication"]
         l6["No discovery"]
-        l7["No audit log"]
     end
 
     l1 --> tB["Blocks GUI clients in B/D<br/>without an SSH tunnel or<br/>local forwarder"]
     l2 --> tCD["Forces single-writer<br/>discipline in C.2 / D"]
     l3 --> all["Painful in every multi-host topology"]
-    l4 --> tBD["Needs firewall rate limit<br/>in B / D"]
     l5 --> tCD
     l6 --> all
-    l7 --> all
 
     classDef cur fill:#fef9c3,stroke:#a16207
-    class l1,l2,l3,l4,l5,l6,l7 cur
+    class l1,l2,l3,l5,l6 cur
 ```
 
-1. **`wm/logon` hard-codes `tcp!localhost!5356`** (`appl/wm/logon.b:533`).
+1. **`wm/logon` hard-codes `tcp!127.0.0.1!5356`** (`appl/wm/logon.b:788`
+   and `:1015`).
    Topology B with an *interactive* GUI client requires either patching the
    address or running a local secstored that forwards to the remote one.
    Headless `factotum -S` already accepts any address.
@@ -456,21 +452,25 @@ flowchart LR
    data. (§6)
 3. **No password rotation tooling.** Documented manual procedure only;
    automation is on the road map. (AUTHENTICATION.md §9)
-4. **No server-side rate limiting.** Online guessing is bounded only by
-   modexp + RTT. Mitigate at the firewall.
+4. **Per-account rate limiting only.** secstored locks an account for 60 s
+   after 10 consecutive wrong-password attempts (`Maxfail`/`Locksecs` in
+   `appl/cmd/auth/secstored.b`; `tests/host/secstore_lockout_test.sh`).
+   Limiting by source address is left to the firewall.
 5. **No replication protocol.** Topology C.2 and D rely on out-of-band
    filesystem sync. There is no native log-shipping or write-ahead replay.
 6. **No native discovery.** Clients must be configured with the server's
    address. ZeroTier-managed DNS or static `/lib/ndb/local` entries are
    the canonical workarounds.
-7. **No secstore audit log.** secstored logs to stderr (which goes to the
-   emu console) but does not persist authentication attempts to disk.
-   Capture `stderr` if you want a record.
+7. **Secstore auditing needs the audit log set up.** secstored records
+   `authok`, `authfail` and `authlock` events in the tamper-evident audit
+   log (see `docs/compliance/audit-log-design.md`); without it, only the
+   stderr log on the emu console remains.
 8. **Same `(p, q, r, g)` across deployments.** The PAK parameters are
-   compiled in. This is fine cryptographically (they were chosen by Vita
-   Nuova and have stood for two decades) but it does mean every InferNode
-   instance shares the same group, so cross-protocol attacks are a
-   theoretical concern if the parameters are ever found weak.
+   compiled in (`initPAKparams` in `appl/lib/secstore.b`). The default
+   `secstore3` suite uses the 2048-bit group with 256-bit subgroup from
+   RFC 5114 §2.3; the legacy `secstore` suite keeps the 1024-bit Vita Nuova
+   parameters. Either way every InferNode instance shares the same group,
+   so cross-protocol attacks are a theoretical concern if the parameters are ever found weak.
 
 ## 9. Recommended starting point
 

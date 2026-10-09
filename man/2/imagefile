@@ -105,15 +105,12 @@ a
 on which to create the image, and a flag that specifies whether to apply Floyd-Steinberg
 error diffusion code to the result, for smoother rendering of colours at the cost of
 some noise in the image.
-On a display of more than 8 bits the image keeps its colours as they are:
+Without error diffusion asked for, or on a display of more than 8 bits,
+the image keeps its colours as they are:
 it is
-.B RGB24
-(or
-.B GREY8
-for a grey-scale image, and
-.B RGBA32
-for one with transparency), and the flag is ignored;
-only on an 8-bit display are the colours mapped to the 256 of
+.BR RGBA32 ,
+opaque unless the image has transparency;
+only with error diffusion on an 8-bit display are the colours mapped to the 256 of
 .BR CMAP8 .
 .PP
 How to remap is defined by the

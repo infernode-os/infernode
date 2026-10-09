@@ -22,6 +22,7 @@ Ethernet chip, their own `arch*.c` and their own list of devices.
 | `uartpl011.c` | the PL011 as `/dev/eia0` — the Bluetooth radio's line |
 | `gpio.c`, `devgpio.c` | pins, and `#G` |
 | `dma.c` | the DMA engine |
+| `dmamem.c` | memory a device can reach: `busaddr()`, which panics on an address beyond the board's `DMATOP` (a BCM2711's legacy DMA masters see only the first gigabyte) |
 | `sdhost.c`, `emmc.c`, `sdmmc.c` | both SD controllers, and the card protocol over either |
 | `usbdwc.c`, `dwcotg.h` | the DWC2 USB host controller |
 | `audiopwm.c` | the headphone jack: PWM through DMA |
@@ -34,7 +35,8 @@ What is **not** here is what differs between the SoCs: the interrupt
 controller, the peripheral window and interrupt numbers, the timer's
 routing, the random-number generator, and the list of devices. Those
 are the board directory's, and they are most of what a board directory
-is: `os/bcm2711` is about five hundred lines.
+is: `os/bcm2711` is about 2,200 lines, 1,600 of them two drivers from
+9front (`ethergenet.c`, `pcibcm.c`).
 
 A driver here must not name an address or an interrupt number of its
 own. If one needs to know which SoC it is on, that is a sign the

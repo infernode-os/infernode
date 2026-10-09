@@ -153,11 +153,12 @@ is purely at the HTTP/local boundary inside (Option A) or just below
 
 ## Recommended sequencing
 
-1. Decide engine: **llama.cpp** for first signal (build fit), revisit
-   MLX for perf ceiling.
-2. **Option A** spike to prove the round-trip: local OpenAI server +
-   unmodified `llmsrv -b openai` → `/mnt/llm` → Veltro answers a prompt
-   fully offline on a device.
+1. Engine choice (MLX vs llama.cpp) is still open; see "Engine choice"
+   above. MLX via SwiftLM has already been driven through `/mnt/llm`
+   (SwiftLM on Metal; see "Recommended models").
+2. **Option A** round-trip: local OpenAI server + unmodified
+   `llmsrv -b openai` → `/mnt/llm`. Proven with SwiftLM/MLX; what
+   remains is Veltro answering a prompt fully offline on a device.
 3. Benchmark tok/s on target hardware; size the model floor per device.
 4. If the second hop or the extra listener is unacceptable, graduate to
    **Option B** (built-in module + `backend="local"`).

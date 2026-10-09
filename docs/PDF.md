@@ -9,7 +9,7 @@ The implementation spans two modules with no external dependencies:
 
 - **`pdf.b`** (6,300 lines) — PDF parser, content stream interpreter, page
   renderer, text extractor, encryption/decryption
-- **`outlinefont.b`** (2,400 lines) — CFF/Type 2 and TrueType font parser,
+- **`outlinefont.b`** (2,390 lines) — CFF/Type 2 and TrueType font parser,
   charstring interpreter, glyph rasterizer
 
 ## API
@@ -333,21 +333,18 @@ Results are written to `usr/inferno/test-pdfs/results.txt` (one line per PDF).
 
 | File | Lines | Role |
 |------|------:|------|
-| `appl/lib/pdf.b` | 6,326 | PDF parser, renderer, text extractor, encryption |
-| `appl/lib/outlinefont.b` | 2,427 | CFF + TrueType font parser, rasterizer |
+| `appl/lib/pdf.b` | 6,318 | PDF parser, renderer, text extractor, encryption |
+| `appl/lib/outlinefont.b` | 2,388 | CFF + TrueType font parser, rasterizer |
 | `tests/pdf_conformance_test.b` | 598 | Conformance test harness |
 | `tests/pdf_test.b` | 629 | Unit tests |
-| `appl/cmd/fontprobe.b` | 293 | Font inspection tool |
-| `appl/cmd/pdfdiag.b` | 222 | PDF diagnostic tool |
-| `tests/pdf_render_test.b` | 165 | Render integration test |
 | `tests/host/fetch-test-pdfs.sh` | 135 | Corpus fetch script |
 | `tests/host/run-pdf-conformance.sh` | 58 | Test orchestrator |
-| `module/outlinefont.m` | 45 | Font module interface |
+| `module/outlinefont.m` | 57 | Font module interface |
 | `module/pdf.m` | 24 | PDF module interface |
-| **Total** | **10,922** | |
+| **Total** | **10,207** | |
 
-The core implementation is **8,753 lines** of Limbo (pdf.b + outlinefont.b).
-With tests, tools, and shell scripts the full PDF subsystem is **10,922
+The core implementation is **8,706 lines** of Limbo (pdf.b + outlinefont.b).
+With tests, interfaces and shell scripts the full PDF subsystem is **10,207
 lines**.
 
 ## Files
@@ -356,14 +353,11 @@ lines**.
 |------|-------------|
 | `module/pdf.m` | Public API interface |
 | `module/outlinefont.m` | Font module interface |
-| `appl/lib/pdf.b` | PDF implementation (6,326 lines) |
-| `appl/lib/outlinefont.b` | Font implementation (2,427 lines) |
+| `appl/lib/pdf.b` | PDF implementation |
+| `appl/lib/outlinefont.b` | Font implementation |
 | `dis/lib/pdf.dis` | Compiled PDF module |
 | `dis/lib/outlinefont.dis` | Compiled font module |
 | `tests/pdf_conformance_test.b` | Conformance test (discovery-based) |
 | `tests/pdf_test.b` | Unit tests (parsing, object resolution) |
-| `tests/pdf_render_test.b` | Render integration tests |
-| `appl/cmd/pdfdiag.b` | PDF diagnostic/inspection tool |
-| `appl/cmd/fontprobe.b` | Font introspection tool |
 | `tests/host/run-pdf-conformance.sh` | Test orchestrator (per-suite isolation) |
 | `tests/host/fetch-test-pdfs.sh` | Downloads 8 test corpora (~1.8 GB) |

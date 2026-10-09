@@ -618,11 +618,47 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 		return (im, "");
 	}
 
-	# A display of more than 8 bits shows the colours as they are, not
-	# mapped to the 256 of CMAP8 (and dithered): RGB24, or GREY8 for
-	# grey.  errdiff is for the 8-bit display.
-	if(d.image == nil || d.image.depth > 8)
-		return truecolour(i, d);
+	# Without dithering asked for, or on a display of more than 8 bits
+	# (any but an 8-bit one), an indexed, true-colour or grey image keeps
+	# its colours (RGBA32, opaque) rather than being mapped to the
+	# 256-colour palette, which loses up to 4 bits a channel and, with
+	# dithering, speckles a photograph: web pages compare images to CSS
+	# colours exactly.
+	if((errdiff == 0 || d.image == nil || d.image.depth > 8) &&
+	   (i.chandesc == RImagefile->CRGB1 && i.cmap != nil && i.nchans == 1 ||
+	   i.chandesc == RImagefile->CRGB && i.nchans == 3 || i.chandesc == RImagefile->CY && i.nchans == 1)) {
+		im := d.newimage(i.r, Draw->RGBA32, 0, Draw->Transparent);
+		if(im == nil)
+			return (nil, "can't allocate RGBA32 image");
+		npix := (i.r.max.x - i.r.min.x) * (i.r.max.y - i.r.min.y);
+		buf := array[npix * 4] of byte;
+		cm := i.cmap;
+		c0 := i.chans[0];
+		for(j = 0; j < npix; j++) {
+			r, g, b: byte;
+			case i.chandesc {
+			RImagefile->CRGB =>
+				r = c0[j];
+				g = i.chans[1][j];
+				b = i.chans[2][j];
+			RImagefile->CY =>
+				r = g = b = c0[j];
+			* =>
+				v := 3 * int c0[j];
+				if(v + 2 < len cm) {
+					r = cm[v];
+					g = cm[v+1];
+					b = cm[v+2];
+				}
+			}
+			buf[j*4+0] = byte 255;
+			buf[j*4+1] = b;
+			buf[j*4+2] = g;
+			buf[j*4+3] = r;
+		}
+		im.writepixels(im.r, buf);
+		return (im, "");
+	}
 
 	im := d.newimage(i.r, Draw->CMAP8, 0, Draw->Black);
 	dx := i.r.max.x-i.r.min.x;
@@ -799,64 +835,5 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 		}
 	}
 	im.writepixels(im.r, pic);
-	return (im, "");
-}
-
-truecolour(i: ref RImagefile->Rawimage, d: ref Display): (ref Image, string)
-{
-	case i.chandesc {
-	RImagefile->CY =>
-		if(i.nchans != 1)
-			return (nil, sys->sprint("Y image has %d chans", i.nchans));
-		im := d.newimage(i.r, Draw->GREY8, 0, Draw->Black);
-		if(im == nil)
-			return (nil, sys->sprint("can't allocate GREY8 image: %r"));
-		im.writepixels(im.r, i.chans[0]);
-		return (im, "");
-	RImagefile->CRGB or RImagefile->CRGB1 =>
-		;
-	* =>
-		return (nil, sys->sprint("can't handle chandesc %d", i.chandesc));
-	}
-	im := d.newimage(i.r, Draw->RGB24, 0, Draw->Black);
-	if(im == nil)
-		return (nil, sys->sprint("can't allocate RGB24 image: %r"));
-	# RGB24's bytes in memory are blue, green, red
-	if(i.chandesc == RImagefile->CRGB) {
-		if(i.nchans != 3)
-			return (nil, sys->sprint("RGB image has %d channels", i.nchans));
-		r := i.chans[0];
-		g := i.chans[1];
-		b := i.chans[2];
-		buf := array[3*len r] of byte;
-		k := 0;
-		for(j := 0; j < len r; j++) {
-			buf[k++] = b[j];
-			buf[k++] = g[j];
-			buf[k++] = r[j];
-		}
-		im.writepixels(im.r, buf);
-		return (im, "");
-	}
-	if(i.nchans != 1)
-		return (nil, sys->sprint("can't handle nchans %d", i.nchans));
-	if(i.cmap == nil)
-		return (nil, "image has no color map");
-	# a full map, so an index past the file's own is black, not a fault
-	cm := array[3*256] of {* => byte 0};
-	n := len i.cmap;
-	if(n > len cm)
-		n = len cm;
-	cm[0:] = i.cmap[0:n];
-	pic := i.chans[0];
-	buf := array[3*len pic] of byte;
-	k := 0;
-	for(j := 0; j < len pic; j++) {
-		c := 3*int pic[j];
-		buf[k++] = cm[c+2];
-		buf[k++] = cm[c+1];
-		buf[k++] = cm[c];
-	}
-	im.writepixels(im.r, buf);
 	return (im, "");
 }

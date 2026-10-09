@@ -700,12 +700,20 @@ rand(void)
 	return randn;
 }
 
+/*
+ * Seeds for libsec's genrandom (its X9.17 key) and the like.  From the
+ * host's CSPRNG (prngtry, as #c/notquiterandom reads it): #c/random's clock jitter
+ * gives a byte every 80ms or so, and genrandom's first use took 24 of
+ * them, so the first TLS handshake in every process waited 3.9s for
+ * its key exchange (emu runs under an OS here; os/port has its own).
+ */
 ulong
 truerand(void)
 {
 	ulong x;
 
-	randomread(&x, sizeof(x));
+	if(prngtry((uchar*)&x, sizeof(x)) < 0)
+		randomread(&x, sizeof(x));	/* no host source: the slow one */
 	return x;
 }
 

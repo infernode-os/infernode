@@ -16,6 +16,8 @@ include "filter.m";
 	inflate: Filter;
 include "woff2.m";
 	woff2: Woff2;
+include "bidi.m";
+	bidi: Bidi;
 include "web/fonts.m";
 
 # bitmap fallbacks for what the outlines lack (CJK, symbols), by size
@@ -47,6 +49,9 @@ init(d: ref Display): string
 		return sys->sprint("cannot load %s: %r", OutlineFont->PATH);
 	display = d;
 	ofont->init(d);
+	bidi = load Bidi Bidi->PATH;
+	if(bidi != nil && bidi->init() != nil)
+		bidi = nil;
 	loaded = array[len files] of ref OutlineFont->Face;
 	cache = array[Nfaces] of list of ref Typeface;
 	fallbacks = array[len fallbacksizes] of ref Font;
@@ -121,6 +126,12 @@ ahemloaded := 0;
 
 face(families: list of string, weight, italic: int, size: real): ref Typeface
 {
+	return facevar(families, weight, italic, 14.0, 100.0, size, nil, 3);
+}
+
+facevar(families: list of string, weight, style: int, slant, stretch, size: real, vars: list of (string, real), synth: int): ref Typeface
+{
+	italic := style != 0;
 	if(size < 1.0)
 		size = 1.0;
 	if(!ahemloaded) {
@@ -135,25 +146,52 @@ face(families: list of string, weight, italic: int, size: real): ref Typeface
 	# the first family this document has downloaded, then what stands
 	# in for the rest
 	for(l := families; l != nil; l = tl l) {
-		parts := webparts(hd l, weight, italic);
+		(parts, fw) := webparts(hd l, weight, style, slant, stretch, size, vars);
 		if(parts == nil)
 			continue;
+		# no face heavy enough: a bold made up, as browsers make it (a
+		# pixel's smear per 24 of size, as Skia's fake bold thickens)
+		emb := 0;
+		if(synth & 1 && weight >= 600 && fw <= 500)
+			emb = int (size / 24.0);	# (int rounds)
+		if(synth & 1 && weight >= 600 && fw <= 500 && emb < 1)
+			emb = 1;
+		# what stands in for the characters this family lacks is part
+		# of the face: "Ahem", serif and "Ahem", sans-serif differ
+		next := shipped(tl l, weight, italic, size);
 		h := ((hashstr(hd l) + weight + italic*7 + int (size*4.0)) & 16r7FFFFFFF) % Nfaces;
 		for(cl := cache[h]; cl != nil; cl = tl cl) {
 			c := hd cl;
-			if(c.size == size && c.parts == parts)
+			if(c.size == size && c.parts == parts && c.next == next && c.embolden == emb)
 				return c;
 		}
 		o := parts[0].outline;
 		asc := real o.ascent * size / real o.upem;
 		desc := real -o.descent * size / real o.upem;
-		f := ref Typeface(o, size, asc, desc, asc + desc, 0.0, fallback(size), parts, nil, 0);
-		f.next = shipped(tl l, weight, italic, size);
+		f := ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), parts, nil, 0, emb);
+		f.next = next;
 		f.space = advance(f, ' ');
 		cache[h] = f :: cache[h];
 		return f;
 	}
 	return shipped(families, weight, italic, size);
+}
+
+# line-height: normal, as browsers have it: the ascent and descent
+# each rounded to whole pixels (DejaVu Sans at 13.333px: 12 + 3, not
+# 15.52 rounded to 16)
+normal(asc, desc: real): real
+{
+	return real (int asc + int desc);	# (int rounds)
+}
+
+xmetrics(f: ref Typeface): (real, real)
+{
+	if(f == nil || f.outline == nil || f.outline.upem <= 0)
+		return (0.0, 0.0);
+	(avg, bbox) := f.outline.xmetrics();
+	scale := f.size / real f.outline.upem;
+	return (real avg * scale, real bbox * scale);
 }
 
 shipped(families: list of string, weight, italic: int, size: real): ref Typeface
@@ -178,11 +216,22 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 	o := loadface(i);
 	if(o == nil)
 		o = loadface(fam*4);
-	if(o == nil)
-		return nil;
-	asc := real o.ascent * size / real o.upem;
-	desc := real -o.descent * size / real o.upem;
-	f := ref Typeface(o, size, asc, desc, asc + desc, 0.0, fallback(size), nil, nil, 0);
+	f: ref Typeface;
+	if(o != nil) {
+		asc := real o.ascent * size / real o.upem;
+		desc := real -o.descent * size / real o.upem;
+		f = ref Typeface(o, size, asc, desc, normal(asc, desc), 0.0, fallback(size), nil, nil, 0, 0);
+	} else {
+		# no outline file: the bitmap fallback is the face
+		fb := fallback(size);
+		asc := size * 0.8;
+		desc := size * 0.2;
+		if(fb != nil) {
+			asc = real fb.ascent;
+			desc = real (fb.height - fb.ascent);
+		}
+		f = ref Typeface(nil, size, asc, desc, asc + desc, 0.0, fb, nil, nil, 0, 0);
+	}
 	f.space = advance(f, ' ');
 	cache[h] = f :: cache[h];
 	return f;
@@ -192,6 +241,8 @@ shipped(families: list of string, weight, italic: int, size: real): ref Typeface
 # covers it, the next family's, else (nil, -1) for the bitmap fallback.
 glyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
 {
+	if(c == 16rA0)
+		c = ' ';	# a no-break space is as wide as a space (float-nowrap-5)
 	for(; f != nil; f = f.next) {
 		if(f.parts != nil) {
 			for(i := 0; i < len f.parts; i++) {
@@ -201,10 +252,57 @@ glyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
 				if((g := p.outline.lookup(c)) >= 0)
 					return (p.outline, g);
 			}
-		} else if((g := f.outline.lookup(c)) >= 0)
+		} else if(f.outline != nil && (g := f.outline.lookup(c)) >= 0)
 			return (f.outline, g);
+		if(f.next == nil)
+			return scriptglyph(f, c);
 	}
 	return (nil, -1);
+}
+
+# Scripts DejaVu lacks, in outline faces shipped for them, before the
+# bitmap fallback: Thai (Noto Sans Thai, whose marks GPOS places on
+# their bases), which the bitmap font drew with its marks as letters
+# beside them (google.com in Thai)
+SCRIPTDIR: con "/fonts/ttf/noto";
+thaifaces := array[2] of ref OutlineFont->Face;
+thaitried := array[2] of { * => 0 };
+
+scriptglyph(f: ref Typeface, c: int): (ref OutlineFont->Face, int)
+{
+	if(c < 16r0E00 || c > 16r0E7F)
+		return (nil, -1);
+	b := 0;
+	if(f.outline != nil && contains(tolower(f.outline.name), "bold"))
+		b = 1;
+	if(!thaitried[b]) {
+		thaitried[b] = 1;
+		file := "NotoSansThai-Regular.ttf";
+		if(b)
+			file = "NotoSansThai-Bold.ttf";
+		if((d := readall(SCRIPTDIR + "/" + file)) != nil)
+			(thaifaces[b], nil) = ofont->open(d, "ttf");
+	}
+	if((o := thaifaces[b]) != nil && (g := o.lookup(c)) >= 0)
+		return (o, g);
+	return (nil, -1);
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
+}
+
+tolower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
 }
 
 inranges(r: array of int, c: int): int
@@ -219,23 +317,41 @@ inranges(r: array of int, c: int): int
 
 advance(f: ref Typeface, c: int): real
 {
+	if(zerowidth(c))
+		return 0.0;
 	(o, g) := glyph(f, c);
+	return advanceg(f, o, g, c);
+}
+
+# format characters (bidi controls, joiners, the byte-order mark, the
+# soft hyphen): no glyph, no advance
+zerowidth(c: int): int
+{
+	return c >= 16r200B && c <= 16r200F || c >= 16r202A && c <= 16r202E ||
+		c >= 16r2060 && c <= 16r2064 || c >= 16r2066 && c <= 16r2069 || c == 16rFEFF || c == 16rAD;
+}
+
+# the advance of c, its glyph (o, g) already looked up
+advanceg(f: ref Typeface, o: ref OutlineFont->Face, g, c: int): real
+{
 	if(o == nil) {
 		if(f.fallback != nil) {
 			s := "";
 			s[0] = c;
 			return real f.fallback.width(s);
 		}
+		if(f.outline == nil)
+			return f.size / 2.0;
 		return f.outline.advance(0, f.size);
 	}
 	return o.advance(g, f.size);
 }
 
-# kerning between s[i-1] and s[i]: not where either is a space, as
-# browsers shape a word at a time
-kerns(s: string, i: int): int
+# kerning between the characters a and b: not where either is a
+# space, as browsers shape a word at a time
+kernc(a, b: int): int
 {
-	return s[i] != ' ' && s[i] != 16rA0 && s[i-1] != ' ' && s[i-1] != 16rA0;
+	return a != ' ' && a != 16rA0 && b != ' ' && b != 16rA0;
 }
 
 Typeface.kernpair(f: self ref Typeface, a, b: int): real
@@ -249,64 +365,269 @@ Typeface.kernpair(f: self ref Typeface, a, b: int): real
 
 Typeface.xheight(f: self ref Typeface): real
 {
-	(o, g) := glyph(f, 'x');
-	if(o != nil && (y := o.ymax(g)) > 0)
+	# the first available font's (Values 4 §6.1.1): the first whose
+	# unicode-range has the space (Fonts 4 §5.2), x or no x
+	o := firstface(f);
+	if(o != nil && (g := o.lookup('x')) >= 0 && (y := o.ymax(g)) > 0)
 		return real y * f.size / real o.upem;
+	if(o == nil) {
+		(xo, xg) := glyph(f, 'x');
+		if(xo != nil && (y := xo.ymax(xg)) > 0)
+			return real y * f.size / real xo.upem;
+	}
 	return f.size / 2.0;	# CSS's fallback: 0.5em
+}
+
+firstface(f: ref Typeface): ref OutlineFont->Face
+{
+	for(; f != nil; f = f.next) {
+		if(f.parts != nil) {
+			for(i := 0; i < len f.parts; i++)
+				if(inranges(f.parts[i].ranges, ' '))
+					return f.parts[i].outline;
+		} else if(f.outline != nil)
+			return f.outline;
+	}
+	return nil;
+}
+
+# A string shaped: one slot per glyph drawn.  Each character's face
+# and glyph, then the ligatures of the font's liga, clig and rlig
+# features over each run of one face (an icon font's ligature names,
+# fi and fl).  A slot from the bitmap fallback keeps its character.
+Slot: adt {
+	o:	ref OutlineFont->Face;	# nil: the bitmap fallback draws c
+	g:	int;
+	c:	int;		# the character, 0 for a ligature of several
+	n:	int;		# how many characters it stands for
+	at:	int;		# the index of its first character in the string shaped
+};
+
+ligfeats(): list of string
+{
+	return "liga" :: "clig" :: "rlig" :: nil;
+}
+
+hasligs(o: ref OutlineFont->Face): int
+{
+	for(l := ligfeats(); l != nil; l = tl l)
+		if(o.hasfeature(hd l))
+			return 1;
+	return 0;
+}
+
+shape(f: ref Typeface, s: string): array of ref Slot
+{
+	a := array[len s] of ref Slot;
+	slot := array[len s] of int;	# each character's slot, or -1
+	n := 0;
+	for(i := 0; i < len s; i++) {
+		slot[i] = -1;
+		if(zerowidth(s[i]))
+			continue;
+		(o, g) := glyph(f, s[i]);
+		slot[i] = n;
+		a[n++] = ref Slot(o, g, s[i], 1, i);
+	}
+	a = a[0:n];
+	joinforms(s, slot, a);
+	# ligatures, over runs of one outline face
+	for(i = 0; i < n; ) {
+		o := a[i].o;
+		j := i + 1;
+		while(j < n && a[j].o == o)
+			j++;
+		if(o != nil && j - i > 1 && hasligs(o)) {
+			gids := array[j - i] of int;
+			for(k := i; k < j; k++)
+				gids[k - i] = a[k].g;
+			(r, cnt) := o.ligatures(gids, ligfeats());
+			if(len r != len gids) {
+				b := array[n - (j - i) + len r] of ref Slot;
+				b[0:] = a[0:i];
+				for(k = 0; k < len r; k++) {
+					c := 0;
+					if(cnt[k] == 1)
+						c = a[i + k].c;
+					b[i + k] = ref Slot(o, r[k], c, cnt[k], 0);
+				}
+				# each result begins where its first component did
+				at := i;
+				for(k = 0; k < len r; k++) {
+					b[i + k].at = a[at].at;
+					at += cnt[k];
+				}
+				b[i + len r:] = a[j:];
+				a = b;
+				n = len a;
+				j = i + len r;
+			}
+		}
+		i = j;
+	}
+	return a;
+}
+
+# Cursive joining (Unicode chapter 9): each letter takes its initial,
+# medial, final or isolated form by whether its neighbours join to it,
+# through the font's init, medi, fina and isol features.  Transparent
+# characters (marks) are looked past; a zero width joiner at either
+# end stands for a joining neighbour beyond this run (layout puts one
+# there where a run continues across an inline box's edge).
+joinforms(s: string, slot: array of int, a: array of ref Slot)
+{
+	if(bidi == nil)
+		return;
+	jt := array[len s] of int;
+	any := 0;
+	for(i := 0; i < len s; i++) {
+		jt[i] = bidi->joining(s[i]);
+		if(jt[i] != Bidi->JU && jt[i] != Bidi->JT)
+			any = 1;
+	}
+	if(!any)
+		return;
+	for(i = 0; i < len s; i++) {
+		t := jt[i];
+		if(t != Bidi->JD && t != Bidi->JR && t != Bidi->JL || slot[i] < 0 || a[slot[i]].o == nil)
+			continue;
+		prev := Bidi->JU;
+		for(j := i - 1; j >= 0; j--)
+			if(jt[j] != Bidi->JT) {
+				prev = jt[j];
+				break;
+			}
+		next := Bidi->JU;
+		for(j = i + 1; j < len s; j++)
+			if(jt[j] != Bidi->JT) {
+				next = jt[j];
+				break;
+			}
+		before := (t == Bidi->JD || t == Bidi->JR) && (prev == Bidi->JD || prev == Bidi->JL || prev == Bidi->JC);
+		after := (t == Bidi->JD || t == Bidi->JL) && (next == Bidi->JD || next == Bidi->JR || next == Bidi->JC);
+		feat := "isol";
+		if(before && after)
+			feat = "medi";
+		else if(before)
+			feat = "fina";
+		else if(after)
+			feat = "init";
+		k := slot[i];
+		a[k].g = a[k].o.subst(feat, a[k].g);
+	}
+}
+
+# Where each shaped glyph goes: its x, its advance, and its y offset
+# (up), in logical order; the total width.  Pair kerning between
+# glyphs of one face; a combining mark the font attaches to its base
+# sits on the base's anchor and advances nothing.
+positions(f: ref Typeface, a: array of ref Slot): (array of real, array of real, array of real, array of int, real)
+{
+	xs := array[len a] of real;
+	adv := array[len a] of real;
+	ys := array[len a] of real;
+	on := array[len a] of int;	# the base a mark sits on, or -1
+	x := 0.0;
+	po: ref OutlineFont->Face;
+	pg := -1;
+	pc := ' ';
+	base := -1;	# the last glyph that was not a mark
+	for(i := 0; i < len a; i++) {
+		(o, g, c) := (a[i].o, a[i].g, a[i].c);
+		ys[i] = 0.0;
+		on[i] = -1;
+		if(o != nil && base >= 0 && a[base].o == o && bidi != nil && bidi->joining(c) == Bidi->JT) {
+			(ok, dx, dy) := o.markanchor(a[base].g, g);
+			if(ok) {
+				k := f.size / real o.upem;
+				xs[i] = xs[base] + real dx * k;
+				ys[i] = real dy * k;
+				adv[i] = 0.0;
+				on[i] = base;
+				continue;
+			}
+		}
+		if(o != nil && o == po && !f.nokern && kernc(pc, c))
+			x += real o.kern(pg, g) * f.size / real o.upem;
+		(po, pg, pc) = (o, g, c);
+		xs[i] = x;
+		adv[i] = advanceg(f, o, g, c);
+		x += adv[i];
+		base = i;
+	}
+	return (xs, adv, ys, on, x);
+}
+
+Typeface.ligspan(f: self ref Typeface, a, b: string): int
+{
+	if(len a == 0 || len b == 0)
+		return 0;
+	sl := shape(f, a + b);
+	for(i := 0; i < len sl; i++) {
+		end := len a + len b;	# a slot's characters run to the next slot's
+		if(i + 1 < len sl)
+			end = sl[i+1].at;
+		if(sl[i].at < len a && end > len a)
+			return end - len a;
+	}
+	return 0;
+}
+
+Typeface.has(f: self ref Typeface, c: int): int
+{
+	(o, nil) := glyph(f, c);
+	return o != nil;
 }
 
 Typeface.width(f: self ref Typeface, s: string): real
 {
-	w := 0.0;
-	po: ref OutlineFont->Face;
-	pg := -1;
-	for(i := 0; i < len s; i++) {
-		(o, g) := glyph(f, s[i]);
-		if(o != nil && o == po && !f.nokern && kerns(s, i))
-			w += real o.kern(pg, g) * f.size / real o.upem;
-		(po, pg) = (o, g);
-		w += advance(f, s[i]);
-	}
+	(nil, nil, nil, nil, w) := positions(f, shape(f, s));
 	return w;
 }
 
-Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image): real
+Typeface.draw(f: self ref Typeface, dst: ref Image, p: Point, s: string, src: ref Image, rtl: int): real
 {
-	x := real p.x;
-	po: ref OutlineFont->Face;
-	pg := -1;
-	for(i := 0; i < len s; i++) {
-		c := s[i];
-		(o, g) := glyph(f, c);
-		if(o != nil && o == po && !f.nokern && kerns(s, i))
-			x += real o.kern(pg, g) * f.size / real o.upem;	# pair kerning
-		(po, pg) = (o, g);
+	a := shape(f, s);
+	(xs, adv, ys, on, w) := positions(f, a);
+	for(i := 0; i < len a; i++) {
+		(o, g, c) := (a[i].o, a[i].g, a[i].c);
+		gx := real p.x + xs[i];
+		if(rtl) {	# the first glyph at the right end
+			gx = real p.x + w - xs[i] - adv[i];
+			if(on[i] >= 0)	# a mark keeps its offset from its base
+				gx = real p.x + w - xs[on[i]] - adv[on[i]] + xs[i] - xs[on[i]];
+		}
+		gy := p.y - int ys[i];
 		if(o == nil && f.fallback != nil) {
 			t := "";
 			t[0] = c;
 			# bitmap fallback: align its baseline with ours
-			dst.text(Point(int x, p.y - f.fallback.ascent), src, Point(0, 0), f.fallback, t);
-			x += real f.fallback.width(t);
+			dst.text(Point(int gx, gy - f.fallback.ascent), src, Point(0, 0), f.fallback, t);
 			continue;
 		}
 		if(o == nil) {
 			o = f.outline;
 			g = 0;
+			if(o == nil)
+				continue;
 		}
-		if(c != ' ' && c != ' ')
-			o.drawglyph(g, f.size, dst, Point(int x, p.y), src);
-		x += o.advance(g, f.size);
+		if(c != ' ' && c != ' ' && c != 16rAD) {	# a soft hyphen shows nothing (Text 3 §6.1: not taken as a break)
+			o.drawglyph(g, f.size, dst, Point(int gx, gy), src);
+			for(k := 1; k <= f.embolden; k++)	# synthetic bold: smeared to the right
+				o.drawglyph(g, f.size, dst, Point(int gx + k, gy), src);
+		}
 	}
-	return x - real p.x;
+	return w;
 }
 
 # ---- web fonts ----
 
 Web: adt {
 	family:	string;
-	weight:	int;
+	weight:	int;	# for matching: the weight, or the range's own nearest
 	italic:	int;
 	part:	ref Part;
+	desc:	ref Desc;
 };
 
 webfaces: list of ref Web;
@@ -314,7 +635,16 @@ webfaces: list of ref Web;
 clearfaces()
 {
 	webfaces = nil;
+	partsmade = nil;
 	ahemloaded = 0;
+	# the faces made from them go too; the shipped ones stay
+	for(h := 0; h < len cache; h++) {
+		r: list of ref Typeface;
+		for(cl := cache[h]; cl != nil; cl = tl cl)
+			if((hd cl).parts == nil)
+				r = hd cl :: r;
+		cache[h] = r;
+	}
 }
 
 readall(f: string): array of byte
@@ -350,16 +680,127 @@ addface(family: string, weight, italic: int, ranges: array of int, data: array o
 	(o, err) := ofont->open(data, "ttf");
 	if(o == nil)
 		return "cannot read the font: " + err;
-	webfaces = ref Web(family, weight, italic, ref Part(o, ranges)) :: webfaces;
+	webfaces = ref Web(family, weight, italic, ref Part(o, ranges), nil) :: webfaces;
 	return nil;
+}
+
+addfacedesc(family: string, d: ref Desc, ranges: array of int, data: array of byte): string
+{
+	w := 400;
+	if(d.wmin > 0)
+		w = d.wmin;
+	if((err := addface(family, w, d.style > 0, ranges, data)) != nil)
+		return err;
+	wf := hd webfaces;
+	wf.desc = d;
+	# font-weight auto: the face's own weight, its OS/2 weight class (a
+	# Bold file declared without a weight is bold, not made bolder:
+	# font-synthesis-weight-webfont-bold)
+	if(d.wmax <= 0 && (wc := weightclass(sfntof(data))) > 0)
+		wf.weight = wc;
+	return nil;
+}
+
+# the sfnt inside a WOFF or WOFF2, as addface unpacked it, or the data
+sfntof(data: array of byte): array of byte
+{
+	if(len data >= 4 && string data[0:4] == "wOFF") {
+		(d, nil) := woff(data);
+		return d;
+	}
+	if(len data >= 4 && string data[0:4] == "wOF2" && woff2 != nil) {
+		(d, nil) := woff2->decode(data);
+		return d;
+	}
+	return data;
+}
+
+# OS/2 usWeightClass, or 0
+weightclass(d: array of byte): int
+{
+	if(d == nil || len d < 12)
+		return 0;
+	n := int d[4] << 8 | int d[5];
+	for(i := 0; i < n && 12 + 16*i + 16 <= len d; i++) {
+		t := 12 + 16*i;
+		if(string d[t:t+4] != "OS/2")
+			continue;
+		o := int d[t+8] << 24 | int d[t+9] << 16 | int d[t+10] << 8 | int d[t+11];
+		if(o < 0 || o + 6 > len d)
+			return 0;
+		return int d[o+4] << 8 | int d[o+5];
+	}
+	return 0;
 }
 
 # The faces of a downloaded family for a weight and slant, by the CSS
 # font matching rules, simplified: the right slant if there is one,
 # then the nearest weight (heavier first for bold, lighter for light).
 # Every face of that weight and slant comes, one per unicode-range.
-webparts(family: string, weight, italic: int): array of ref Part
+# the faces chosen for a family, weight and style, made once so that
+# the Typeface cache can compare them
+partsmade: list of (string, string, array of ref Part, int);
+
+# the faces, and the weight they stand at (for synthetic bold)
+webparts(family: string, weight, style: int, slant, stretch, size: real, vars: list of (string, real)): (array of ref Part, int)
 {
+	# the optical size follows the font size (font-optical-sizing:
+	# auto, Fonts 4 §7.1), for a family with an opsz axis
+	opsz := 0.0;
+	if(opszfamily(family))
+		opsz = size;
+	vk := sys->sprint("%d %d %g %g %g ", weight, style, slant, stretch, opsz);
+	for(vl := vars; vl != nil; vl = tl vl)
+		vk += sys->sprint("%s=%g,", (hd vl).t0, (hd vl).t1);
+	for(pl := partsmade; pl != nil; pl = tl pl) {
+		(pf, pv, pa, pw) := hd pl;
+		if(pf == family && pv == vk)
+			return (pa, pw);
+	}
+	(a, w) := webparts1(family, weight, style, slant, stretch, opsz, vars);
+	if(a != nil)
+		partsmade = (family, vk, a, w) :: partsmade;
+	return (a, w);
+}
+
+# the weight a face is matched by: a range's nearest to the one wanted
+faceweight(w: ref Web, weight: int): int
+{
+	d := w.desc;
+	if(d != nil && d.wmax <= 0) {
+		# auto: a variable face's own wght range
+		for(al := ofont->axes(w.part.outline); al != nil; al = tl al) {
+			(tag, mn, nil, mx) := hd al;
+			if(tag == "wght") {
+				if(real weight < mn)
+					return int mn;
+				if(real weight > mx)
+					return int mx;
+				return weight;
+			}
+		}
+	}
+	if(d == nil || d.wmax <= 0)
+		return w.weight;
+	if(weight < d.wmin)
+		return d.wmin;
+	if(weight > d.wmax)
+		return d.wmax;
+	return weight;
+}
+
+# does a face of the family have an optical size axis?
+opszfamily(family: string): int
+{
+	for(l := webfaces; l != nil; l = tl l)
+		if((hd l).family == family && hasaxis(ofont->axes((hd l).part.outline), "opsz"))
+			return 1;
+	return 0;
+}
+
+webparts1(family: string, weight, style: int, slant, stretch, opsz: real, vars: list of (string, real)): (array of ref Part, int)
+{
+	italic := style != 0;
 	best := -1;
 	bestit := -1;
 	for(l := webfaces; l != nil; l = tl l) {
@@ -367,23 +808,108 @@ webparts(family: string, weight, italic: int): array of ref Part
 		if(w.family != family)
 			continue;
 		it := w.italic == italic;
-		if(bestit < 0 || it && !bestit || it == bestit && closer(weight, w.weight, best)) {
-			best = w.weight;
+		fw := faceweight(w, weight);
+		if(bestit < 0 || it && !bestit || it == bestit && closer(weight, fw, best)) {
+			best = fw;
 			bestit = it;
 		}
 	}
 	if(best < 0)
-		return nil;
+		return (nil, 0);
 	r: list of ref Part;
+	sw := best;	# the weight it stands at, for synthetic bold
 	for(l = webfaces; l != nil; l = tl l) {
 		w := hd l;
-		if(w.family == family && w.weight == best && (w.italic == italic) == bestit)
-			r = w.part :: r;
+		if(w.family == family && faceweight(w, weight) == best && (w.italic == italic) == bestit) {
+			r = varied(w, weight, style, slant, stretch, opsz, vars) :: r;
+			# a variable face whose weight is its own (auto) is not
+			# made bolder past its range (synthetic-bold-out-of-
+			# capabilities-range); one its rule holds to a weight is
+			# (font-weight-3)
+			if((w.desc == nil || w.desc.wmax <= 0) && hasaxis(ofont->axes(w.part.outline), "wght"))
+				sw = weight;
+		}
 	}
 	a := array[len r] of ref Part;
 	for(i := 0; r != nil; r = tl r)
 		a[i++] = hd r;
-	return a;
+	return (a, sw);
+}
+
+# A variable face (one with a wght axis) at the weight wanted: one
+# file serves every weight (github.com's Mona Sans, nasa.gov's Inter);
+# without this all of them were drawn at the default instance.
+#
+# The axes take, in order (Fonts 4 §7.2; vary takes the last value an
+# axis is given): the weight, width and slant asked for, each within
+# what the @font-face rule says of the face; the rule's
+# font-variation-settings; the style's.
+varied(w: ref Web, weight, style: int, slant, stretch, opsz: real, vars: list of (string, real)): ref Part
+{
+	p := w.part;
+	axes := ofont->axes(p.outline);
+	if(axes == nil)
+		return p;
+	d := w.desc;
+	values: list of (string, real);
+	for(al := axes; al != nil; al = tl al) {
+		(tag, nil, nil, nil) := hd al;
+		case tag {
+		"wght" =>
+			values = ("wght", real faceweight(w, weight)) :: values;
+		"wdth" =>
+			x := stretch;
+			if(d != nil && d.smax > 0.0) {
+				if(x < d.smin) x = d.smin;
+				if(x > d.smax) x = d.smax;
+			}
+			values = ("wdth", x) :: values;
+		"slnt" =>
+			# oblique's angle, or italic's 14deg where the face has
+			# no ital axis: slnt is the negative of the angle
+			a := 0.0;
+			if(style == 2)
+				a = slant;
+			else if(style == 1 && !hasaxis(axes, "ital"))
+				a = 14.0;
+			if(d != nil && d.style == 2) {
+				if(a < d.amin) a = d.amin;
+				if(a > d.amax) a = d.amax;
+			} else if(d != nil && d.style >= 0)
+				a = 0.0;	# a normal or italic face does not slant by the axis
+			values = ("slnt", -a) :: values;
+		"opsz" =>
+			if(opsz > 0.0) {
+				(nil, mn, nil, mx) := hd al;
+				x := opsz;
+				if(x < mn) x = mn;
+				if(x > mx) x = mx;
+				values = ("opsz", x) :: values;
+			}
+		"ital" =>
+			it := 0.0;
+			if(style == 1 && (d == nil || d.style != 0))
+				it = 1.0;
+			values = ("ital", it) :: values;
+		}
+	}
+	if(d != nil)
+		for(dl := d.vars; dl != nil; dl = tl dl)
+			values = hd dl :: values;
+	for(; vars != nil; vars = tl vars)
+		values = hd vars :: values;
+	r: list of (string, real);
+	for(; values != nil; values = tl values)
+		r = hd values :: r;
+	return ref Part(ofont->vary(p.outline, r), p.ranges);
+}
+
+hasaxis(axes: list of (string, real, real, real), tag: string): int
+{
+	for(; axes != nil; axes = tl axes)
+		if((hd axes).t0 == tag)
+			return 1;
+	return 0;
 }
 
 # is weight w a better match for want than the best so far?
@@ -422,6 +948,11 @@ hashstr(s: string): int
 	return h;
 }
 
+# A table's declared uncompressed length is the page's word for how much
+# to allocate: bound it, and the font as a whole.
+MAXTABLE: con 32*1024*1024;
+MAXFONT: con 64*1024*1024;
+
 # WOFF 1.0: the sfnt's tables, each zlib-compressed if that made it
 # smaller; put them back into an sfnt.
 woff(d: array of byte): (array of byte, string)
@@ -443,7 +974,7 @@ woff(d: array of byte): (array of byte, string)
 		clen := be32(d, e+8);
 		olen := be32(d, e+12);
 		sums[i] = be32(d, e+16);
-		if(off < 0 || clen < 0 || off + clen > len d)
+		if(off < 0 || clen < 0 || off + clen > len d || olen < 0 || olen > MAXTABLE)
 			return (nil, "bad WOFF table");
 		t := d[off:off+clen];
 		if(clen < olen) {
@@ -453,6 +984,8 @@ woff(d: array of byte): (array of byte, string)
 		}
 		tabs[i] = t;
 		size += (len t + 3) & ~3;
+		if(size > MAXFONT)
+			return (nil, "WOFF too large");
 	}
 	o := array[size] of {* => byte 0};
 	put32(o, 0, flavor);

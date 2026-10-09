@@ -65,7 +65,7 @@ root and no mtools:
     tools/mkcard.py card.img 192 /dis=dis /lib=lib /fonts=fonts /icons=icons /usr= \
         /rootpath=/tmp/rootpath /skiplogon=/tmp/skiplogon
 
-Booted with a screen, that card comes up in the Lucifer desktop, by the
+Booted with a screen, that card comes up in the Lucia desktop, by the
 road the board takes: `osinit` mounts the FAT partition through `#S` and
 dossrv, `rootpath` unions the card's `dis/`, `lib/`, `fonts/` and
 `icons/` over the kernel's recovery root, and `/lib/sh/profile` runs
@@ -246,7 +246,7 @@ board's. They moved, byte for byte apart from a note at the top:
 
 - `os/bcm2837/devsd.c` → `os/port/devsd.c`. `#S` asks four things of
   whatever is under it; here that is `blkvirtio.c`.
-- `os/bcm2837/screen.c`, `fbcons.c`, `screen.h` → `os/arm64/`. They ask
+- `os/bcm2837/screen.c`, `fbcons.c`, `screen.h` → `os/fb/`. They ask
   a board for an `Fbinfo`; here `../virtio/ramfb.c` makes one.
 
 The calls they make downward were named for the Pi's hardware
@@ -257,8 +257,9 @@ also probed the radio, is `boarddevprobe`.
 
 ## Copies that want to be one file
 
-`uart.c` (everything below `consuartputc`), most of `clock.c`,
-`uartpl011.c` and `mem.h` are the board's with the board taken out. They
+`uart.c` (everything below `consuartputc`), `uartpl011.c` and `mem.h`
+are the board's with the board taken out (`clock.c` was on this list;
+it is now the shared `os/arm64/clockgt.c`). They
 are copies, not moves, because unlike the three above they need a hook
 cut into them first — the pins, the clock rate, the timer routing — and
 the Pi's files were left alone while it is being stabilised. Their home

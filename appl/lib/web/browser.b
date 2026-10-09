@@ -210,6 +210,7 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 		s.scroll = target(s.pg, frag);
 		s.status = "done";
 		unlock(s);
+		event(s, "shown " + url);
 		event(s, "done " + url);
 		return;
 	}
@@ -244,11 +245,21 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	pg: ref Pg;
 	err: string;
 	{
-		(pg, err) = page->request(url, method, ctype, body, s.width, s.height);
+		(pg, err) = page->begin(url, method, ctype, body, s.width, s.height);
 	} exception e {
 	"*" =>
 		pg = nil;
 		err = "internal error: " + e;
+	}
+	ep: ref Pg;
+	if(pg == nil) {
+		# a page saying so, where the page would have been
+		{
+			(ep, nil) = page->request(errorpage(url, err), "GET", nil, nil, s.width, s.height);
+		} exception {
+		"*" =>
+			ep = nil;
+		}
 	}
 	lock(s);
 	if(g != s.gen) {
@@ -256,6 +267,13 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 		return;	# superseded or stopped
 	}
 	if(pg == nil) {
+		if(ep != nil) {
+			history(s, s.url, hist);
+			s.pg = ep;
+			s.url = url;	# so that reload tries it again
+			s.title = ep.title;
+			s.scroll = 0;
+		}
 		s.status = "error " + err;
 		unlock(s);
 		event(s, "error " + err);
@@ -270,10 +288,297 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	s.scroll = 0;
 	if(frag != nil)
 		s.scroll = target(pg, frag);
-	s.status = "done";
 	u := s.url;
+	s.status = "loading images " + u;
+	unlock(s);
+	event(s, "shown " + u);
+	# the page is up; what it shows comes in behind it
+	{
+		images(s, g, pg);
+		pg.frames();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: %s: %s\n", u, e);
+	}
+	lock(s);
+	if(g != s.gen) {
+		unlock(s);
+		return;
+	}
+	s.status = "done";
 	unlock(s);
 	event(s, "done " + u);
+	refresh(s, g, pg);
+}
+
+# Fetch and decode the page's images NFETCH at a time, and lay the page
+# out again with those that have come, at most every BATCHMS, so that
+# it fills in as they arrive.
+NFETCH: con 6;
+BATCHMS: con 250;
+
+images(s: ref Session, g: int, pg: ref Pg)
+{
+	urls := pg.wanted();
+	n := len urls;
+	if(n == 0)
+		return;
+	work := chan[n] of string;
+	for(; urls != nil; urls = tl urls)
+		work <-= hd urls;
+	res := chan of ref Page->Pic;
+	nw := NFETCH;
+	if(nw > n)
+		nw = n;
+	for(i := 0; i < nw; i++)
+		spawn picfetcher(s, g, work, res);
+	tick := chan of int;
+	stop := chan[1] of int;
+	spawn ticker(tick, stop);
+	batch: list of ref Page->Pic;
+	live := 1;
+	for(got := 0; got < n; ) alt {
+	pic := <-res =>
+		got++;
+		if(pic != nil)
+			batch = pic :: batch;
+	<-tick =>
+		if(batch != nil && live) {
+			live = apply(s, g, pg, batch, got, n);
+			batch = nil;
+		}
+	}
+	stop <-= 1;
+	if(batch != nil && live)
+		apply(s, g, pg, batch, n, n);
+}
+
+picsome(s: ref Session, g: int, pg: ref Pg, urls: list of string)
+{
+	pics: list of ref Page->Pic;
+	for(; urls != nil; urls = tl urls) {
+		u := hd urls;
+		pic: ref Page->Pic;
+		{
+			(data, ctype, err) := page->fetch(u);
+			pic = page->picture(u, data, ctype, err);
+		} exception e {
+		"*" =>
+			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);
+		}
+		pics = pic :: pics;
+	}
+	apply(s, g, pg, pics, len pics, len pics);
+}
+
+Session.images(s: self ref Session)
+{
+	pg := s.pg;
+	if(pg == nil)
+		return;
+	pg.wantall();
+	spawn images(s, s.gen, pg);
+}
+
+setting(name: string): string
+{
+	return page->setting(name);
+}
+
+Session.configure(s: self ref Session, line: string): string
+{
+	(nil, l) := sys->tokenize(line, " \t\n");
+	if(l == nil)
+		return "usage: name value";
+	was := page->setting(hd l);
+	if((err := page->set(line)) != nil)
+		return err;
+	now := page->setting(hd l);
+	if(now == was || s.pg == nil)
+		return nil;
+	case hd l {
+	"images" =>
+		if(now == "on")
+			spawn images(s, s.gen, s.pg);
+	"fonts" =>
+		s.reload();
+	"effects" =>
+		event(s, "update 0 0");	# drawn again, as it is
+	}
+	return nil;
+}
+
+settings(): string
+{
+	return page->settings();
+}
+
+savesettings(): string
+{
+	return page->save();
+}
+
+apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: int): int
+{
+	lock(s);
+	if(g != s.gen) {
+		unlock(s);
+		return 0;
+	}
+	pg.install(batch);
+	unlock(s);
+	event(s, sys->sprint("update %d %d", got, n));
+	return 1;
+}
+
+picfetcher(s: ref Session, g: int, work: chan of string, res: chan of ref Page->Pic)
+{
+	for(;;) alt {
+	u := <-work =>
+		if(g != s.gen) {
+			res <-= nil;	# superseded: count it, fetch nothing
+			continue;
+		}
+		pic: ref Page->Pic;
+		{
+			(data, ctype, err) := page->fetch(u);
+			pic = page->picture(u, data, ctype, err);
+		} exception e {
+		"*" =>
+			pic = ref Page->Pic(u, nil, nil, "internal error: " + e, nil, 0, 0, nil, nil);
+		}
+		res <-= pic;
+	* =>
+		return;
+	}
+}
+
+ticker(tick, stop: chan of int)
+{
+	for(;;) {
+		sys->sleep(BATCHMS);
+		alt {
+		<-stop =>
+			return;
+		tick <-= 1 =>
+			;
+		}
+	}
+}
+
+# <meta http-equiv=refresh content="N[; url=U]"> (HTML §4.2.5.3): go to
+# U, or load this page again, after N seconds, unless something else
+# has happened to the session by then.
+refresh(s: ref Session, g: int, pg: ref Pg)
+{
+	d := pg.doc;
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || nd.tag != Dom->Tmeta)
+			continue;
+		if(lower(d.attr(n, "http-equiv")) != "refresh")
+			continue;
+		(secs, u) := refreshcontent(d.attr(n, "content"));
+		if(secs < 0)
+			continue;
+		if(u == "")
+			u = unfrag(pg.url);
+		else
+			u = resolve(pg.url, u);
+		spawn refresher(s, g, u, secs);
+		return;
+	}
+}
+
+refresher(s: ref Session, g: int, url: string, secs: int)
+{
+	if(secs > 0)
+		sys->sleep(secs * 1000);
+	lock(s);
+	live := s.gen == g;
+	unlock(s);
+	if(live)
+		navigate(s, url, "GET", nil, nil, Hnew);
+}
+
+# "5; url=http://x", "0;URL='x'", "3" -> (seconds, url); seconds -1 if unreadable
+refreshcontent(c: string): (int, string)
+{
+	i := 0;
+	while(i < len c && isws(c[i]))
+		i++;
+	j := i;
+	while(j < len c && c[j] >= '0' && c[j] <= '9')
+		j++;
+	if(j == i)
+		return (-1, nil);
+	secs := int c[i:j];
+	while(j < len c && (c[j] >= '0' && c[j] <= '9' || c[j] == '.'))
+		j++;	# a fraction is ignored
+	while(j < len c && (isws(c[j]) || c[j] == ';' || c[j] == ','))
+		j++;
+	if(j >= len c)
+		return (secs, "");
+	u := c[j:];
+	if(len u >= 4 && lower(u[0:3]) == "url") {
+		k := 3;
+		while(k < len u && (isws(u[k]) || u[k] == '='))
+			k++;
+		u = u[k:];
+	}
+	u = trim(u);
+	if(len u >= 2 && (u[0] == '\'' || u[0] == '"') && u[len u - 1] == u[0])
+		u = u[1:len u - 1];
+	return (secs, trim(u));
+}
+
+isws(c: int): int
+{
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+# The page shown for one that could not be fetched.
+errorpage(url, err: string): string
+{
+	h := "<!doctype html><title>Cannot load page</title>" +
+		"<body style='font-family: sans-serif; margin: 2em 3em; color: #333'>" +
+		"<h1 style='font-size: 1.4em; font-weight: normal'>Cannot load this page</h1>" +
+		"<p style='overflow-wrap: anywhere; color: #555'>" + htmlesc(url) + "</p>" +
+		"<p style='overflow-wrap: anywhere'>" + htmlesc(err) + "</p>";
+	if(contains(err, "invalid IP address") || contains(err, "cs: ") || contains(err, "/net/cs"))
+		h += "<p>The host name was not translated to an address: nothing is serving /net/cs " +
+			"(ndb/cs, and on a machine without a host system ndb/dns too).</p>";
+	return "data:text/html;charset=utf-8," + pctenc(h);
+}
+
+htmlesc(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++)
+		case s[i] {
+		'<' => r += "&lt;";
+		'>' => r += "&gt;";
+		'&' => r += "&amp;";
+		'\'' => r += "&#39;";
+		'"' => r += "&quot;";
+		* => r[len r] = s[i];
+		}
+	return r;
+}
+
+# percent-encode all but what a data: URL can carry plainly
+pctenc(s: string): string
+{
+	b := array of byte s;
+	r := "";
+	for(i := 0; i < len b; i++) {
+		c := int b[i];
+		if(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-' || c == '.' || c == ':' || c == ';' || c == '/' || c == '=' || c == ',')
+			r[len r] = c;
+		else
+			r += sys->sprint("%%%.2X", c);
+	}
+	return r;
 }
 
 # Make the element the fragment names the :target, and return its y.
@@ -891,6 +1196,14 @@ Session.click(s: self ref Session, n: int): string
 	d := pg.doc;
 	if(n <= 0 || n >= d.n)
 		return sys->sprint("no node %d", n);
+	if(popovers(s, pg, n))
+		return nil;
+	if((us := pg.want(n)) != nil) {
+		# an image left to be clicked for: this click loads it (and
+		# what is shown with it), and does not follow a link it is in
+		spawn picsome(s, s.gen, pg, us);
+		return nil;
+	}
 	for(m := n; m > 1; m = d.nodes[m].parent) {
 		nd := d.nodes[m];
 		if(nd.kind != Dom->Element || nd.ns != Dom->HTML)
@@ -948,6 +1261,78 @@ Session.click(s: self ref Session, n: int): string
 		}
 	}
 	return nil;
+}
+
+# Popovers (HTML §6.12) without a script: a button with popovertarget
+# shows, hides or toggles the element it names; a click outside an open
+# auto popover closes it (light dismiss).  Whether the click was taken.
+popovers(s: ref Session, pg: ref Pg, n: int): int
+{
+	d := pg.doc;
+	changed := 0;
+	invoked := 0;
+	for(m := n; m > 1 && !invoked; m = d.nodes[m].parent) {
+		nd := d.nodes[m];
+		if(nd.kind != Dom->Element || nd.ns != Dom->HTML || (nd.tag != Dom->Tbutton && nd.tag != Dom->Tinput))
+			continue;
+		if((id := d.attr(m, "popovertarget")) == nil || d.hasattr(m, "disabled"))
+			continue;
+		t := byid(d, id);
+		if(t == 0 || !d.hasattr(t, "popover"))
+			continue;
+		open := d.hasattr(t, Dom->POPOPEN);
+		case lower(d.attr(m, "popovertargetaction")) {
+		"show" =>
+			if(!open) {
+				d.setattr(t, Dom->POPOPEN, "");
+				changed = 1;
+			}
+		"hide" =>
+			if(open) {
+				d.delattr(t, Dom->POPOPEN);
+				changed = 1;
+			}
+		* =>
+			if(open)
+				d.delattr(t, Dom->POPOPEN);
+			else
+				d.setattr(t, Dom->POPOPEN, "");
+			changed = 1;
+		}
+		invoked = t;
+	}
+	# light dismiss: open auto popovers the click is not inside
+	for(p := 1; p < d.n; p++) {
+		if(p == invoked || !d.hasattr(p, Dom->POPOPEN) || lower(d.attr(p, "popover")) == "manual")
+			continue;
+		if(inside(d, n, p))
+			continue;
+		d.delattr(p, Dom->POPOPEN);
+		changed = 1;
+	}
+	if(changed) {
+		lock(s);
+		pg.update();
+		unlock(s);
+		event(s, "update");
+	}
+	return invoked != 0;
+}
+
+byid(d: ref Doc, id: string): int
+{
+	for(i := 1; i < d.n; i++)
+		if(d.nodes[i].kind == Dom->Element && d.attr(i, "id") == id)
+			return i;
+	return 0;
+}
+
+inside(d: ref Doc, n, p: int): int
+{
+	for(; n > 0; n = d.nodes[n].parent)
+		if(n == p)
+			return 1;
+	return 0;
 }
 
 # ---- the document, node by node ----

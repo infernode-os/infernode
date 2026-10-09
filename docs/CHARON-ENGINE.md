@@ -132,8 +132,9 @@ Box: adt {
 Layout is a recursive function from (box, available width) to (height,
 baselines), with one routine per formatting context: block (margin
 collapsing, floats as an exclusion list), inline (line boxes, white-space,
-breaking), flex, grid, table. Positioned boxes are laid out after their
-containing block is sized.
+breaking), flex, grid, grid lanes (Grid 3: tracks in one axis, items
+stacked into the shortest lane in the other), table. Positioned boxes are
+laid out after their containing block is sized.
 
 ### The display list
 
@@ -245,7 +246,7 @@ in `tools/ref` (see its README):
   Charon and compared pixel for pixel, over the CSS directories (CSS2,
   flexbox, grid, selectors, cascade, values, color, backgrounds, text,
   display, position, sizing, box, tables, lists, variables, nesting,
-  fonts): 37.8% at the first run, **46.7%** of 12,626 now.  The count is
+  fonts): 37.8% at the first run, **81.0%** of 12,642 now.  The count is
   strict: the 1,267 tests with any script are left out even when their
   pixels match, since a pass without the script would be luck, and a
   pass where nothing renders is flagged as proving little.
@@ -262,9 +263,11 @@ in `tools/ref` (see its README):
   Chromium's, in document order, which is how most of these were found:
   the first wrong height explains the rest.
 
-Not done yet, and visible in the failures: vertical writing modes, bidi
-reordering, complex-script shaping (Arabic joining, Indic), GPOS kerning
-(the legacy kern table is used), sub-pixel layout, iframes.
+Not done yet, and visible in the failures: vertical writing modes,
+Indic shaping and ligatures across inline box edges (GSUB ligatures and
+Arabic joining within a run are done), GPOS kerning and mark positioning
+(the legacy kern table is used), transforms beyond translation,
+sub-pixel layout, scrolling inside iframes, `revert-layer`.
 
 The live sites reachable from the development sandbox are few (its
 egress policy); the mirror replays whatever has been fetched.
@@ -291,7 +294,9 @@ forever stalls only itself.
 ## Size and speed budget
 
 Targets, to be held to: the engine (html, css, style, layout, paint, font)
-in under 12,000 lines of Limbo; a 100 KB article page parsed, styled and
+in under 12,000 lines of Limbo (it is 24,800 now: tables, grid, grid lanes, web
+fonts and the long tail of CSS cost more than the sketch allowed, and
+the figure is a reminder to cut, not a licence); a 100 KB article page parsed, styled and
 laid out in under 200 ms under the JIT on a 2020 laptop. The old engine
 and its builder are deleted when the new one passes everything they did.
 

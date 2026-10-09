@@ -8,7 +8,7 @@
 >
 > Auth-suite rationale and compatibility policy, including the `secstore3`
 > default, are
-> tracked in [SECSTORE-AUTH-SUITE-PLAN.md](SECSTORE-AUTH-SUITE-PLAN.md).
+> tracked in [SECSTORE-AUTH-SUITE-PLAN.md](history/SECSTORE-AUTH-SUITE-PLAN.md).
 >
 > **Audience.** Operators who need to reason about what is encrypted by what,
 > what an attacker on the wire can or cannot do, and how to deploy the stack
@@ -648,5 +648,5 @@ There is no password reset. The supported flows are:
   `man/2/factotum`, `man/4/factotum`.
 - Companion docs: [DISTRIBUTED-AUTH.md](DISTRIBUTED-AUTH.md) (topologies),
   [WALLET-AND-PAYMENTS.md](WALLET-AND-PAYMENTS.md) (factotum-backed wallet
-  keys), [NAMESPACE_SECURITY_REVIEW.md](NAMESPACE_SECURITY_REVIEW.md)
+  keys), [NAMESPACE_SECURITY_REVIEW.md](history/NAMESPACE_SECURITY_REVIEW.md)
   (capability isolation around `/mnt/factotum`).

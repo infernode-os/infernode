@@ -16,8 +16,9 @@ This document tracks the implementation of multimodal image display in Xenith wi
 - [x] Update mkfile for imgload module
 - [x] Build successfully
 
-### Testing Pending
-- [ ] Runtime test with actual images
+### Testing
+Runtime results (PNG, interlaced PNG, PPM, async loading, cancellation) are
+recorded under "Verified Working" in IMAGE-LOADING.md.
 
 ## Design
 
@@ -74,7 +75,7 @@ Just right-click (B3) on an image file path and it opens in a new window:
 ./images/logo.ppm     # Works with relative paths too
 ```
 
-Supported extensions: `.png`, `.ppm`, `.pgm`, `.pbm`, `.bit`, `.pic`
+Supported extensions (from `appl/lib/imgload.b`): `.png`, `.jpg`, `.jpeg`, `.jpe`, `.gif`, `.webp`, `.avif`, `.svg`, `.xbm`, `.pic`, `.ppm`, `.pgm`, `.bit`
 
 ### Via 9P Interface
 ```sh
@@ -101,7 +102,7 @@ echo clearimage > /mnt/xenith/1/ctl
 - `appl/xenith/fsys.b` - Add "image" to dirtabw
 - `appl/xenith/xfid.b` - QWimage handlers, ctl commands
 - `appl/xenith/look.b` - Auto-detect and open image files
-- `appl/xenith/mkfile` - Build imgload
+- `appl/xenith/mkfile` - imgload.m added as a dependency
 
 ### New
 - `appl/xenith/imgload.m` - Module interface
@@ -121,8 +122,6 @@ Or from the project root:
 ```sh
 PATH=$PWD/MacOSX/arm64/bin:$PATH ROOT=$PWD mk
 ```
-
-The built-in compiler (dis/limbo.dis) has been updated for 64-bit and should work correctly.
 
 ### API Note
 The image loader function is named `readimage()` (not `load()`) because

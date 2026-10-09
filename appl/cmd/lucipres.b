@@ -27,7 +27,7 @@ implement LuciPres;
 # (renderdonech, renderartasync), scroll/zoom/pan state, PDF page
 # navigation, and the AI agent's use of the presentation space
 # (artifact creation, centering, app launching) are all coupled to
-# the current architecture.  See docs/TODO-LUCIPRES-ARCHITECTURE.md.
+# the current architecture.  See docs/history/TODO-LUCIPRES-ARCHITECTURE.md.
 #
 
 include "sys.m";

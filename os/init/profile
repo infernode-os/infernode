@@ -1,10 +1,11 @@
 # The shell profile for a bare-metal InferNode.
 #
 # NOT lib/sh/profile from the hosted tree. That one mounts a host
-# filesystem, starts mntgen and ndb/cs, and wires up telephony -- none of
-# which exists here, and each failure would print at a user who has just
+# filesystem, starts mntgen, and wires up telephony -- none of which
+# exists here, and each failure would print at a user who has just
 # booted a machine and cannot yet tell a missing feature from a broken
-# one.
+# one. Name service is started below, with ndb/dns, which the hosted
+# tree does without because its host resolves names for it.
 #
 # sh reads this only when started with -l, which osinit does.
 
@@ -26,6 +27,14 @@ path=(/dis .)
 # running only the built-in root this line must be silence, not a
 # complaint about a daemon the image never promised.
 auth/secstored &
+
+# Names. ndb/dns asks the name servers the network named in /net/ndb
+# (the Ethernet driver's DHCP, or ip/dhcp's), and ndb/cs translates
+# the names dial is given. Without them every name fails at once with
+# "invalid IP address": a browser shows nothing for any page. They come
+# from the card, so errors are dropped as secstored's are.
+ndb/dns -r >[2] /dev/null
+ndb/cs >[2] /dev/null
 
 # The desktop, when the userspace provides it. Backgrounded for the
 # same reason secstored's errors are dropped: this console must come

@@ -44,6 +44,7 @@ AgentLib: module {
 
 	# Tool execution (9P)
 	calltool: fn(tool, args: string): string;
+	extracttoolargs: fn(inputjson: string): string;
 	writescratch: fn(content: string, step: int): string;
 
 	# Read-cache (dedup): short-circuit identical read-only tool calls in a turn.

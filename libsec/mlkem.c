@@ -357,6 +357,49 @@ ct_cmov(uchar *dst, const uchar *src, int len, uchar b)
 }
 
 /*
+ * Encapsulation key check (FIPS 203 7.2, modulus check):
+ * ByteEncode12(ByteDecode12(ek)) == ek, that is, every 12-bit
+ * coefficient of t-hat is less than q. Decode masks to 12 bits and
+ * the arithmetic wraps, so a key that fails this would otherwise be
+ * used as if it named a different one. ek is public; branching on it
+ * leaks nothing.
+ */
+static int
+ekcheck(const uchar *pk, int k)
+{
+	const uchar *p;
+	u16int c0, c1;
+	int i;
+
+	for(i = 0; i < k * 384; i += 3){
+		p = pk + i;
+		c0 = (u16int)p[0] | ((u16int)(p[1] & 0x0F) << 8);
+		c1 = (u16int)(p[1] >> 4) | ((u16int)p[2] << 4);
+		if(c0 >= MLKEM_Q || c1 >= MLKEM_Q)
+			return -1;
+	}
+	return 0;
+}
+
+/*
+ * Decapsulation key check (FIPS 203 7.3, hash check):
+ * H(ek) stored in dk is the hash of the ek stored in dk. A dk that
+ * fails is corrupt or spliced together, and decapsulating with it
+ * would derive keys from the wrong H(ek).
+ */
+static int
+dkcheck(const uchar *sk, int pklen, int sklen_inner)
+{
+	uchar h[32];
+	int fail;
+
+	sha3_256(sk + sklen_inner, pklen, h);
+	fail = ct_memcmp(h, sk + sklen_inner + pklen, 32);
+	secureZero(h, sizeof(h));
+	return fail ? -1 : 0;
+}
+
+/*
  * ML-KEM.KeyGen: Full key generation.
  * Algorithm 15 in FIPS 203.
  *
@@ -417,6 +460,9 @@ mlkem_encaps_internal(uchar *ct, uchar *ss, const uchar *pk,
 	uchar g_input[64], g_output[64];
 	uchar *Kbar, *r;
 
+	if(ekcheck(pk, k) != 0)
+		return -1;
+
 	/* Random message m */
 	genrandom(m, 32);
 
@@ -473,6 +519,9 @@ mlkem_decaps_internal(uchar *ss, const uchar *ct, const uchar *sk,
 	pk = sk + sklen_inner;
 	hpk = pk + pklen;
 	z = hpk + 32;
+
+	if(dkcheck(sk, pklen, sklen_inner) != 0)
+		return -1;
 
 	/* m' = Decrypt(sk_cpapke, ct) */
 	cpapke_dec(m, ct, sk_cpapke, k, du, dv);
@@ -572,4 +621,34 @@ mlkem1024_decaps(uchar ss[32], const uchar ct[MLKEM1024_CTLEN], const uchar sk[M
 		MLKEM1024_DU, MLKEM1024_DV,
 		MLKEM1024_PKLEN, MLKEM1024_CTLEN,
 		MLKEM1024_K * 384);
+}
+
+/*
+ * Public API: the FIPS 203 input checks on their own, for a caller
+ * that wants to tell a bad key from a failed operation. Encaps and
+ * decaps make them too, and refuse a key that fails.
+ */
+
+int
+mlkem768_checkek(const uchar pk[MLKEM768_PKLEN])
+{
+	return ekcheck(pk, MLKEM768_K);
+}
+
+int
+mlkem768_checkdk(const uchar sk[MLKEM768_SKLEN])
+{
+	return dkcheck(sk, MLKEM768_PKLEN, MLKEM768_K * 384);
+}
+
+int
+mlkem1024_checkek(const uchar pk[MLKEM1024_PKLEN])
+{
+	return ekcheck(pk, MLKEM1024_K);
+}
+
+int
+mlkem1024_checkdk(const uchar sk[MLKEM1024_SKLEN])
+{
+	return dkcheck(sk, MLKEM1024_PKLEN, MLKEM1024_K * 384);
 }

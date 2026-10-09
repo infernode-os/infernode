@@ -55,7 +55,6 @@ SOURCE_FILES="
     appl/wm/logon.b
     appl/wm/fractals.b
     appl/wm/keyring.b
-    appl/charon/layout.b
     appl/lib/mermaid.b
 "
 

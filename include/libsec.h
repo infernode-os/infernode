@@ -376,6 +376,11 @@ int	mlkem768_decaps(uchar *ss, const uchar *ct, const uchar *sk);
 int	mlkem1024_keygen(uchar *pk, uchar *sk);
 int	mlkem1024_encaps(uchar *ct, uchar *ss, const uchar *pk);
 int	mlkem1024_decaps(uchar *ss, const uchar *ct, const uchar *sk);
+/* FIPS 203 7.2/7.3 input checks; 0 if the key passes, -1 if not */
+int	mlkem768_checkek(const uchar *pk);
+int	mlkem768_checkdk(const uchar *sk);
+int	mlkem1024_checkek(const uchar *pk);
+int	mlkem1024_checkdk(const uchar *sk);
 
 /* internal NTT/poly functions used across mlkem_*.c files */
 int16	mlkem_barrett_reduce(int16 a);

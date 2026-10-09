@@ -178,9 +178,20 @@ views use too: headings, emphasis, strikethrough, links, nested and
 task lists, quotes, code, tables, and ` ```mermaid ` diagrams, drawn in
 the window's colours.
 
+`Render` in the tag of an HTML file (`.html`, `.htm`, `.xhtml`) shows
+the page as Charon shows it, set by the same engine (`appl/lib/web`):
+its style sheets, fonts and images are found from the file's directory,
+it keeps its own colours, and button 3 on a link follows it, opening a
+local page in Xenith (rendered) and handing anything else to the
+plumber, so a web page goes to Charon. The text is kept as for
+markdown, but no place is kept: the page opens at its top, and the text
+at its top when you go back. There is no JavaScript.
+A URL opened in Xenith is shown the same way, as an image of the whole
+page (`appl/xenith/render/webrender.b`).
+
 For editing beside a live preview, `Zerox` the window and `Render` one
 of the two: the rendered one sets the text again as you edit in the
-other.
+other. This is how to write a page: unsaved edits show as you type.
 
 ### Opening host files
 

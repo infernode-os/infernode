@@ -64,7 +64,6 @@ check_pair appl/wm/settings.b    dis/wm/settings.dis
 check_pair appl/wm/logon.b       dis/wm/logon.dis
 check_pair appl/wm/fractals.b    dis/wm/fractals.dis
 check_pair appl/wm/keyring.b     dis/wm/keyring.dis
-check_pair appl/charon/layout.b  dis/charon/layout.dis
 check_pair appl/lib/mermaid.b    dis/lib/mermaid.dis
 
 echo ""

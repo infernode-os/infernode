@@ -5,8 +5,8 @@ TARG=\
 	tlayout.dis\
 	imgrender.dis\
 	mdrender.dis\
-	htmlrender.dis\
-	charonrender.dis\
+	htmldoc.dis\
+	webrender.dis\
 	pdfrender.dis\
 	mermaidrender.dis\
 	htmlfmt.dis\
@@ -23,6 +23,7 @@ SYSMODULES=\
 	mermaid.m\
 	pdf.m\
 	renderer.m\
+	htmldoc.m\
 	formatter.m\
 
 DISBIN=$ROOT/dis/xenith/render

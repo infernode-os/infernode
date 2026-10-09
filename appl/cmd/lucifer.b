@@ -3171,7 +3171,6 @@ initallowed()
 {
 	ALLOWED_PREFIXES = array[] of {
 		"/dis/wm/",
-		"/dis/charon/",
 		"/dis/xenith/",
 	};
 }

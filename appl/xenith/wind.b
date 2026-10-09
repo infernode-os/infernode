@@ -20,6 +20,8 @@ asyncio : Asyncio;
 
 include "rlayout.m";
 	rlayout : Rlayout;
+include "htmldoc.m";
+	htmldoc : Htmldoc;
 
 framem : Framem;
 
@@ -330,6 +332,8 @@ Window.close(w : self ref Window)
 			w.asyncsave = nil;
 		}
 		w.dirfree();
+		if(w.dochtml && htmldoc != nil)
+			htmldoc->drop(w.id);
 		w.tag.close();
 		w.body.close();
 		if(dat->activewin == w)
@@ -1248,6 +1252,8 @@ Window.prerenderzoomed(w: self ref Window): ref Image
 
 Window.docrender(w: self ref Window): string
 {
+	if(w.dochtml)
+		return htmlrender(w);
 	if(rlayout == nil){
 		rlayout = load Rlayout Rlayout->PATH;
 		if(rlayout == nil)
@@ -1304,6 +1310,7 @@ Window.docrender(w: self ref Window): string
 	f.tick = nil;
 
 	w.bodyimage = im;
+	w.docheight = im.r.dy();
 	w.zoomedcache = nil;
 	w.imagemode = 1;
 	w.docview = 1;
@@ -1313,6 +1320,91 @@ Window.docrender(w: self ref Window): string
 	w.docaccent = xenith->accentcol;
 	w.drawimage();
 	return nil;
+}
+
+#
+# Render on an HTML file sets its text the same way, as a page laid out
+# by Charon's engine (htmldoc): style sheets, images and links found
+# from the file's directory, the page's own colours, the part in view
+# painted as it scrolls. Links are followed with button 3.
+
+htmlrender(w: ref Window): string
+{
+	if(htmldoc == nil){
+		htmldoc = load Htmldoc Htmldoc->PATH;
+		if(htmldoc == nil)
+			return sprint("can't load %s: %r", Htmldoc->PATH);
+		if((err := htmldoc->init(display)) != nil){
+			htmldoc = nil;
+			return err;
+		}
+	}
+	fr := w.body.frame.r;
+	if(fr.dx() <= 0 || fr.dy() <= 0)
+		return "window too small";
+
+	s := "";
+	nc := w.body.file.buf.nc;
+	if(nc > 0){
+		r := stralloc(nc);
+		w.body.file.buf.read(0, r, 0, nc);
+		s = r.s[0:nc];
+		strfree(r);
+	}
+	name := w.body.file.name;
+	if(name == nil || name[0] != '/')
+		name = xenith->wdir + "/" + name;
+	(h, err) := htmldoc->set(w.id, array of byte s, "file://" + name, fr.dx(), fr.dy());
+	if(err != nil)
+		return "render failed: " + err;
+	if(!w.docview)
+		w.imageoffset = Point(0, 0);
+
+	# no text cursor drawn over the document (docoff makes it again)
+	f := w.body.frame;
+	if(f.ticked)
+		framem->frtick(f, framem->frptofchar(f, f.p0), 0);
+	f.tick = nil;
+
+	w.docpage = nil;
+	w.bodyimage = docpage(w);
+	if(w.bodyimage == nil)
+		return sprint("no image: %r");
+	w.docheight = h;
+	w.doclines = nil;
+	w.docys = nil;
+	w.zoomedcache = nil;
+	w.imagemode = 1;
+	w.docview = 1;
+	cols := w.body.frame.cols;
+	w.docwidth = fr.dx();
+	w.docbg = cols[BACK];
+	w.docfg = cols[TEXT];
+	w.docaccent = xenith->accentcol;
+	w.drawimage();
+	return nil;
+}
+
+# The image an HTML document's part in view is painted on, the size
+# of the body
+docpage(w: ref Window): ref Image
+{
+	fr := w.body.frame.r;
+	r := Rect((0, 0), (fr.dx(), fr.dy()));
+	if(w.docpage == nil || !w.docpage.r.eq(r))
+		w.docpage = display.newimage(r, mainwin.chans, 0, Draw->White);
+	return w.docpage;
+}
+
+# The URL of the link at p on the screen, in an HTML document
+Window.doclink(w: self ref Window, p: Point): string
+{
+	if(!w.docview || !w.dochtml || htmldoc == nil)
+		return nil;
+	fr := w.body.frame.r;
+	if(!p.in(fr))
+		return nil;
+	return htmldoc->linkat(w.id, p.x - fr.min.x, p.y - fr.min.y + w.imageoffset.y);
 }
 
 Window.docoff(w: self ref Window)
@@ -1325,6 +1417,10 @@ Window.docoff(w: self ref Window)
 	w.docb = nil;
 	w.body.org = org;
 	w.docview = 0;
+	if(w.dochtml && htmldoc != nil)
+		htmldoc->drop(w.id);
+	w.dochtml = 0;
+	w.docpage = nil;
 	w.imagemode = 0;
 	w.rendermode = 0;
 	w.bodyimage = nil;
@@ -1370,7 +1466,7 @@ drawdoc(w: ref Window)
 
 	im := w.bodyimage;
 	h := fr.dy();
-	total := im.r.dy();
+	total := w.docheight;
 	oy := w.imageoffset.y;
 	if(oy > total - h)
 		oy = total - h;
@@ -1379,7 +1475,14 @@ drawdoc(w: ref Window)
 	w.imageoffset = Point(0, oy);
 
 	draw(mainwin, fr, cols[BACK], nil, Point(0, 0));
-	draw(mainwin, fr, im, nil, Point(im.r.min.x, im.r.min.y + oy));
+	if(w.dochtml){
+		if((im = docpage(w)) == nil)
+			return;
+		w.bodyimage = im;
+		htmldoc->paint(w.id, im, oy);
+		draw(mainwin, fr, im, nil, im.r.min);
+	}else
+		draw(mainwin, fr, im, nil, Point(im.r.min.x, im.r.min.y + oy));
 
 	sr := w.body.scrollr;
 	if(sr.dy() > 0 && total > 0){

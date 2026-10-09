@@ -6,14 +6,18 @@ include "sys.m";
 include "draw.m";
 
 MsgRegisterTest: module {
-	init: fn(nil: ref Draw->Context, nil: list of string);
+	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
 CTL: con "/mnt/msg/ctl";
 
-init(nil: ref Draw->Context, nil: list of string)
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	# Run directly, it would write its commands into whatever is at
+	# /mnt/msg/ctl, which with no msg9p there is a file in the host tree.
+	if(tl args == nil || hd tl args != "check")
+		raise "skip:helper for tests/inferno/msg_register.sh, which runs it";
 
 	checkreject("register bad/name /tests/msg_badsrc.dis", "unsafe source name");
 	checkreject("register bad /tmp/../tests/msg_badsrc.dis", "unsafe module path");

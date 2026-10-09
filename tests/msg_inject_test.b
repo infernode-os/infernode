@@ -14,20 +14,26 @@ MsgInject: module {
 	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
-init(nil: ref Draw->Context, nil: list of string)
+fail(msg: string)
+{
+	sys->print("MSGINJECT: FAIL %s\n", msg);
+	raise "fail:msginject";
+}
+
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	# Run directly, the read below would wait for a turn that never comes.
+	if(tl args == nil || hd tl args != "msgreader")
+		raise "skip:helper for tests/inferno/msg_inject.sh, which runs it";
+
 	fd := sys->open("/mnt/ui/activity/0/conversation/input", Sys->OREAD);
-	if(fd == nil) {
-		sys->print("MSGINJECT: FAIL cannot open activity-0 input: %r\n");
-		return;
-	}
+	if(fd == nil)
+		fail(sys->sprint("cannot open activity-0 input: %r"));
 	buf := array[16384] of byte;
 	n := sys->read(fd, buf, len buf);	# blocks until msgwatch relays a turn
-	if(n <= 0) {
-		sys->print("MSGINJECT: FAIL empty read\n");
-		return;
-	}
+	if(n <= 0)
+		fail("empty read");
 	s := string buf[0:n];
 	haspolicy := contains(s, "Message Policy");
 	hasmsg := contains(s, "From:") || contains(s, "unread") || contains(s, "Subject");
@@ -36,7 +42,7 @@ init(nil: ref Draw->Context, nil: list of string)
 	if(haspolicy && hasmsg && hasnoautosend)
 		sys->print("MSGINJECT: PASS policy+message injected as one turn, no-auto-send present\n");
 	else
-		sys->print("MSGINJECT: FAIL (policy=%d message=%d no-auto-send=%d)\n", haspolicy, hasmsg, hasnoautosend);
+		fail(sys->sprint("(policy=%d message=%d no-auto-send=%d)", haspolicy, hasmsg, hasnoautosend));
 }
 
 contains(hay, needle: string): int

@@ -8,7 +8,8 @@ path=(/dis .)
 sleep 1
 echo register bad /tests/msg_badsrc.dis > /mnt/msg/ctl
 sleep 1
-/tests/msg_notification_escape_test.dis
+st=ok
+if {! /tests/msg_notification_escape_test.dis check} {st=failed}
 unmount /mnt/msg > /dev/null >[2] /dev/null
-kill msg9p Msg9p Styx MsgBadSrc > /dev/null >[2] /dev/null
+if {! ~ $st ok} {raise 'fail:msg_notification_escape'}
 echo MSGESCAPE DONE

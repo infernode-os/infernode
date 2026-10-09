@@ -8,12 +8,13 @@ include "nsconstruct.m";
 include "sh.m";
 
 WalletCapabilityTest: module {
-	init: fn(nil: ref Draw->Context, nil: list of string);
+	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
 fail(s: string)
 {
 	sys->print("WALLETCAP FAIL: %s\n", s);
+	raise "fail:walletcap";
 }
 
 readfile(path: string): string
@@ -53,9 +54,13 @@ runsrv()
 	mod->init(nil, "wallet9p" :: nil);
 }
 
-init(nil: ref Draw->Context, nil: list of string)
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	# It needs the /n and factotum tests/inferno/wallet_capability.sh
+	# provides.
+	if(tl args == nil || hd tl args != "check")
+		raise "skip:helper for tests/inferno/wallet_capability.sh, which runs it";
 	nsc = load NsConstruct NsConstruct->PATH;
 	if(nsc == nil) {
 		fail("load nsconstruct");

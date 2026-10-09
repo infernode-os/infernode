@@ -248,6 +248,56 @@ testMermaidRenderer(t: ref T)
 	t.asserteq(ri.hastextcontent, 0, "mermaid has no text content");
 }
 
+# The renderers load their engines (the PDF interpreter, the diagram
+# engine, the markdown layout) when they first render, not at init,
+# which Xenith runs for every renderer when it starts: each must still
+# render on its first call.
+RENDERDIR: con "/tests/render";
+
+rendered(t: ref T, file: string, wantname: string)
+{
+	path := RENDERDIR + "/" + file;
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		t.error(sys->sprint("%s: %r", path));
+		return;
+	}
+	buf := array[65536] of byte;
+	n := sys->read(fd, buf, len buf);
+	data := buf[0:n];
+	(r, err) := rendermod->find(data, path);
+	if(r == nil) {
+		t.error(file + ": no renderer: " + err);
+		return;
+	}
+	t.assertseq(r->info().name, wantname, file + " renderer");
+	progress := chan[64] of ref Renderer->RenderProgress;
+	spawn drain(progress);
+	(im, nil, rerr) := r->render(data, path, 400, 300, progress);
+	progress <-= nil;
+	if(im == nil)
+		t.error(file + ": render: " + rerr);
+	else
+		t.assert(im.r.dx() > 0 && im.r.dy() > 0, file + " rendered to an image");
+}
+
+drain(c: chan of ref Renderer->RenderProgress)
+{
+	while(<-c != nil)
+		;
+}
+
+testRenderOnFirstUse(t: ref T)
+{
+	if(rendermod == nil) {
+		t.skip("Render module not available");
+		return;
+	}
+	rendered(t, "doc.md", "Markdown");
+	rendered(t, "flow.mmd", "Mermaid");
+	rendered(t, "square.pdf", "PDF");
+}
+
 testFindWithDataAndHint(t: ref T)
 {
 	if(rendermod == nil) {
@@ -304,6 +354,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RendererInfo", testRendererInfo);
 	run("MermaidRenderer", testMermaidRenderer);
 	run("FindWithDataAndHint", testFindWithDataAndHint);
+	run("RenderOnFirstUse", testRenderOnFirstUse);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

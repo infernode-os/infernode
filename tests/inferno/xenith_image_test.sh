@@ -76,7 +76,7 @@ fn imageof {
 	echo $img
 }
 
-for f in rb.png rb.jpg rb.gif rb.svg rb.ppm wb.pgm bw.xbm rb.pic {
+for f in rb.png rb.jpg rb.gif rb.webp rbl.webp rb.svg rb.ppm wb.pgm bw.xbm rb.pic {
 	look $DIR/$f
 	img=`{imageof $DIR/$f}
 	if {~ $#img 3 && ~ ${index 2 $img} 8 && ~ ${index 3 $img} 8} {
@@ -87,7 +87,7 @@ for f in rb.png rb.jpg rb.gif rb.svg rb.ppm wb.pgm bw.xbm rb.pic {
 }
 
 # No decoder yet: refused, with the reason in +Errors
-for f in rb.avif rbl.webp {
+for f in rb.avif {
 	look $DIR/$f
 	sleep 2
 	errs=`{winof /+Errors}

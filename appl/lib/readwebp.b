@@ -1,16 +1,24 @@
 implement RImagefile;
 
 #
-# WebP: the RIFF container (simple, extended, animated), lossless
-# VP8L (RFC 9649), lossy VP8 key frames (RFC 6386) and the ALPH alpha
-# chunk, decoded as libwebp decodes them, to the pixel: its tables,
-# its edge rules for intra prediction, its loop filter order and its
-# fancy upsampling and fixed-point YUV to RGB.  Checked against
-# libwebp by tests/readwebp_test.b.
+# WebP, as RFC 9649 defines it: the RIFF container; lossless images
+# (VP8L); lossy images (VP8 key frames, RFC 6386) and their alpha
+# (ALPH); and animations, each frame composed onto the canvas.
 #
-# References:
-#	https://www.rfc-editor.org/rfc/rfc9649 (WebP: container, lossless)
-#	https://www.rfc-editor.org/rfc/rfc6386 (VP8)
+# A lossy frame is reconstructed exactly as RFC 6386 specifies.  Its
+# chroma is half the size of its luma, and is brought up to full size
+# and converted to RGB as libwebp does by default (its "fancy"
+# upsampling), so a picture comes out as other browsers show it.
+#
+# An animation is composed as libwebp composes one, pixel for pixel: on
+# a transparent canvas (the background colour is only a hint, and
+# others ignore it too), each frame blended or not as it says, then
+# disposed of or not.  readmulti returns every frame as the whole
+# canvas (as many as MAXANIMPIXELS allows); read returns the first.
+#
+# A file that is not what it claims raises "webp:...", caught at the
+# top and returned as the error; so is any fault decoding it, an array
+# bound overrun by a corrupt file among them.
 #
 
 include "sys.m";
@@ -24,1519 +32,1420 @@ include "bufio.m";
 
 include "imagefile.m";
 
-# packed pixel masks (ARGB in an int)
-RB:	con 16r00FF00FF;
-AG:	con ~RB;
-BLACK:	con ~16r00FFFFFF;	# opaque black, 16rFF000000
+# A decoded frame: channels as Rawimage has them; a is nil if opaque
+Pic: adt {
+	w:	int;
+	h:	int;
+	r:	array of byte;
+	g:	array of byte;
+	b:	array of byte;
+	a:	array of byte;
+};
+
+# The most pixels a frame or a canvas may have, as imgload's limit; and
+# the most an animation's frames may have between them
+MAXPIXELS: con 16*1024*1024;
+MAXANIMPIXELS: con 64*1024*1024;
 
 init(iomod: Bufio)
 {
-	sys = load Sys Sys->PATH;
+	if(sys == nil)
+		sys = load Sys Sys->PATH;
 	bufio = iomod;
 }
 
 read(fd: ref Iobuf): (ref Rawimage, string)
 {
-	(a, err) := readarray(fd, 0);
-	if(a == nil || len a == 0)
+	(a, err) := readfile(fd, 0);
+	if(a == nil)
 		return (nil, err);
 	return (a[0], err);
 }
 
 readmulti(fd: ref Iobuf): (array of ref Rawimage, string)
 {
-	return readarray(fd, 1);
+	return readfile(fd, 1);
 }
 
-readarray(fd: ref Iobuf, multi: int): (array of ref Rawimage, string)
+readfile(fd: ref Iobuf, multi: int): (array of ref Rawimage, string)
 {
 	data := readall(fd);
 	{
-		return (decodefile(data, multi), nil);
+		return (decodefile(data, multi), "");
 	} exception e {
 	"webp:*" =>
-		return (nil, "WebP: " + e[5:]);
+		return (nil, e[5:]);
 	"*" =>
-		return (nil, "WebP: " + e);
+		return (nil, "corrupt image: " + e);
 	}
 }
 
-fail(s: string)
-{
-	raise "webp:" + s;
-}
+# ==================== The container ====================
 
-# ---------------- the container ----------------
-
-Frame: adt {
-	x, y, w, h:	int;
-	dispose:	int;	# the frame's area is cleared after it is shown
-	noblend:	int;	# drawn over the canvas without alpha blending
+Chunk: adt {
+	id:	string;
 	data:	array of byte;
 };
 
-decodefile(data: array of byte, multi: int): array of ref Rawimage
+# The chunks in d[off:end], each padded to an even length
+chunks(d: array of byte, off, end: int): list of ref Chunk
 {
-	if(data == nil || len data < 12 || string data[0:4] != "RIFF" || string data[8:12] != "WEBP")
-		fail("not a WebP file");
-	end := le32(data, 4) + 8;
-	if(end < 12 || end > len data)
-		end = len data;
-	vp8, vp8l, alph: array of byte;
-	cw := 0;
-	ch := 0;
-	frames: list of ref Frame;
-	for(off := 12; off + 8 <= end; ) {
-		id := string data[off:off+4];
-		n := le32(data, off + 4);
-		off += 8;
-		if(n < 0 || off + n > end)
-			n = end - off;
-		body := data[off:off+n];
-		case id {
-		"VP8 " =>
-			vp8 = body;
-		"VP8L" =>
-			vp8l = body;
-		"ALPH" =>
-			alph = body;
-		"VP8X" =>
-			if(n >= 10) {
-				cw = 1 + le24(body, 4);
-				ch = 1 + le24(body, 7);
-			}
-		"ANMF" =>
-			if(n >= 16) {
-				fl := int body[15];
-				frames = ref Frame(2*le24(body, 0), 2*le24(body, 3), 1 + le24(body, 6), 1 + le24(body, 9),
-					fl & 1, (fl >> 1) & 1, body[16:]) :: frames;
-			}
-		}
-		off += n + (n & 1);
+	l: list of ref Chunk;
+	while(off + 8 <= end) {
+		n := le32(d, off+4);
+		s := off + 8;
+		if(n < 0 || n > end - s)
+			n = end - s;	# truncated: take what there is
+		l = ref Chunk(string d[off:off+4], d[s:s+n]) :: l;
+		off = s + n + (n & 1);
 	}
-	if(frames != nil)
-		return animation(revframes(frames), cw, ch, multi);
-	img: ref Rawimage;
-	if(vp8l != nil)
-		img = decodevp8l(vp8l);
-	else if(vp8 != nil)
-		img = decodevp8(vp8, alph);
-	else
-		fail("no image data");
-	return array[1] of {img};
-}
-
-revframes(l: list of ref Frame): array of ref Frame
-{
-	n := 0;
-	for(t := l; t != nil; t = tl t)
-		n++;
-	a := array[n] of ref Frame;
+	r: list of ref Chunk;
 	for(; l != nil; l = tl l)
-		a[--n] = hd l;
-	return a;
+		r = hd l :: r;
+	return r;
 }
 
-# A frame's own chunks: ALPH, then VP8 or VP8L.
-decodeframe(d: array of byte): ref Rawimage
+decodefile(d: array of byte, multi: int): array of ref Rawimage
 {
-	vp8, vp8l, alph: array of byte;
-	for(off := 0; off + 8 <= len d; ) {
-		id := string d[off:off+4];
-		n := le32(d, off + 4);
-		off += 8;
-		if(n < 0 || off + n > len d)
-			n = len d - off;
-		body := d[off:off+n];
-		case id {
-		"VP8 " => vp8 = body;
-		"VP8L" => vp8l = body;
-		"ALPH" => alph = body;
-		}
-		off += n + (n & 1);
-	}
-	if(vp8l != nil)
-		return decodevp8l(vp8l);
-	if(vp8 != nil)
-		return decodevp8(vp8, alph);
-	fail("animation frame without image data");
-	return nil;
-}
+	if(len d < 12 || string d[0:4] != "RIFF" || string d[8:12] != "WEBP")
+		raise "webp:not a WebP file";
+	end := le32(d, 4) + 8;
+	if(end > len d || end < 12)
+		end = len d;
+	cl := chunks(d, 12, end);
+	if(cl == nil)
+		raise "webp:no image data";
+	if((hd cl).id != "VP8X")
+		return array[] of {rawimage(frame(cl))};
 
-# Frames drawn in turn on a canvas that starts transparent, as
-# libwebp's animation decoder draws them (anim_decode.c): a key frame
-# is drawn on a cleared canvas without blending; another is blended,
-# non-premultiplied, over what the last frame left, except where that
-# frame was disposed to the background.  Each result is a copy of the
-# canvas; read() takes the first.
-animation(fr: array of ref Frame, cw, ch, multi: int): array of ref Rawimage
-{
-	if(cw <= 0 || ch <= 0)
-		fail("animation without a canvas");
-	n := len fr;
+	x := (hd cl).data;
+	if(len x < 10)
+		raise "webp:VP8X: chunk too short";
+	animated := int x[0] & 16r02;
+	cw := 1 + le24(x, 4);
+	ch := 1 + le24(x, 7);
+	if(!animated)
+		return array[] of {rawimage(frame(tl cl))};
+	toobig(cw, ch);
+
+	nf := 0;
+	for(l := cl; l != nil; l = tl l)
+		if((hd l).id == "ANMF")
+			nf++;
+	if(nf == 0)
+		raise "webp:animation has no frames";
 	if(!multi)
-		n = 1;
-	out := array[n] of ref Rawimage;
-	canvas := rgba(cw, ch);
-	prevkey := 0;
-	for(i := 0; i < n; i++) {
-		f := fr[i];
-		img := decodeframe(f.data);
-		hasalpha := img.nchans == 4;
-		key := 0;
-		if(i == 0)
-			key = 1;
-		else if((!hasalpha || f.noblend) && f.x == 0 && f.y == 0 && f.w == cw && f.h == ch)
-			key = 1;
-		else if(fr[i-1].dispose && (fullframe(fr[i-1], cw, ch) || prevkey))
-			key = 1;
-		if(key)
-			clearrect(canvas, ref Frame(0, 0, cw, ch, 0, 0, nil));
-		prev: ref Frame;
-		if(i > 0 && fr[i-1].dispose)
-			prev = fr[i-1];
-		drawframe(canvas, img, f, !key && !f.noblend, prev);
-		out[i] = copyraw(canvas);
-		if(f.dispose)
-			clearrect(canvas, f);
-		prevkey = key;
-	}
-	return out;
+		nf = 1;
+	if(nf > MAXANIMPIXELS / (cw*ch))
+		nf = MAXANIMPIXELS / (cw*ch);
+	return animate(cl, cw, ch, nf);
 }
 
-fullframe(f: ref Frame, cw, ch: int): int
+# A frame's image, from its chunks: an optional ALPH, then VP8 or VP8L
+frame(cl: list of ref Chunk): ref Pic
 {
-	return f.w == cw && f.h == ch;
+	alph: array of byte;
+	for(; cl != nil; cl = tl cl) {
+		c := hd cl;
+		case c.id {
+		"ALPH" =>
+			alph = c.data;
+		"VP8 " =>
+			p := vp8(c.data);
+			if(alph != nil)
+				p.a = alpha(alph, p.w, p.h);
+			return p;
+		"VP8L" =>
+			return vp8l(c.data);
+		}
+	}
+	raise "webp:no image data";
 }
 
-rgba(w, h: int): ref Rawimage
+toobig(w, h: int)
+{
+	if(w > MAXPIXELS / h)
+		raise sys->sprint("webp:too large: %dx%d", w, h);
+}
+
+rawimage(p: ref Pic): ref Rawimage
 {
 	raw := ref Rawimage;
-	raw.r = ((0, 0), (w, h));
-	raw.cmap = nil;
+	raw.r = ((0, 0), (p.w, p.h));
 	raw.transp = 0;
-	raw.trindex = byte 0;
-	raw.nchans = 4;
-	raw.chandesc = RImagefile->CRGBA;
-	raw.chans = array[4] of array of byte;
-	for(i := 0; i < 4; i++)
-		raw.chans[i] = array[w*h] of {* => byte 0};
-	raw.fields = 0;
+	if(p.a != nil) {
+		raw.nchans = 4;
+		raw.chandesc = RImagefile->CRGBA;
+		raw.chans = array[] of {p.r, p.g, p.b, p.a};
+	} else {
+		raw.nchans = 3;
+		raw.chandesc = RImagefile->CRGB;
+		raw.chans = array[] of {p.r, p.g, p.b};
+	}
 	return raw;
 }
 
-copyraw(r: ref Rawimage): ref Rawimage
+# ==================== Animation ====================
+
+animate(cl: list of ref Chunk, cw, ch, nf: int): array of ref Rawimage
 {
-	c := ref *r;
-	c.chans = array[len r.chans] of array of byte;
-	for(i := 0; i < len r.chans; i++) {
-		c.chans[i] = array[len r.chans[i]] of byte;
-		c.chans[i][0:] = r.chans[i];
+	n := cw * ch;
+	cr := array[n] of {* => byte 0};
+	cg := array[n] of {* => byte 0};
+	cb := array[n] of {* => byte 0};
+	ca := array[n] of {* => byte 0};
+	out := array[nf] of ref Rawimage;
+	i := 0;
+	# the previous frame: whether it was disposed of, its rectangle,
+	# and whether it was a key frame
+	pdispose := 0;
+	px, py, pw, ph: int;
+	pkey := 0;
+	for(; cl != nil && i < nf; cl = tl cl) {
+		c := hd cl;
+		if(c.id != "ANMF")
+			continue;
+		d := c.data;
+		if(len d < 16)
+			raise "webp:ANMF: chunk too short";
+		fx := 2 * le24(d, 0);
+		fy := 2 * le24(d, 3);
+		fw := 1 + le24(d, 6);
+		fh := 1 + le24(d, 9);
+		duration := le24(d, 12);
+		flags := int d[15];
+		blend := (flags & 2) == 0;
+		p := frame(chunks(d, 16, len d));
+		if(p.w != fw || p.h != fh)
+			raise "webp:ANMF: frame size does not match its image";
+
+		# A key frame, which libwebp draws on a clear canvas without
+		# blending: the first; one that covers the canvas and needs
+		# nothing under it; one after a frame disposed of that covered
+		# the canvas or was itself drawn on a clear one.
+		full := fw == cw && fh == ch;
+		key := i == 0 || full && (p.a == nil || !blend) ||
+			pdispose && (pw == cw && ph == ch || pkey);
+		if(key)
+			fillrect(cr, cg, cb, ca, cw, ch, 0, 0, cw, ch);
+		else if(pdispose)
+			fillrect(cr, cg, cb, ca, cw, ch, px, py, pw, ph);
+		for(y := 0; y < fh && fy + y < ch; y++) {
+			s := y * fw;
+			t := (fy + y) * cw + fx;
+			for(x := 0; x < fw && fx + x < cw; x++) {
+				a := 255;
+				if(p.a != nil)
+					a = int p.a[s];
+				# a pixel not opaque is blended with what is under
+				# it, except where the previous frame was cleared
+				if(blend && !key && a != 255 && !(pdispose &&
+				   fx+x >= px && fx+x < px+pw && fy+y >= py && fy+y < py+ph)) {
+					if(a != 0) {
+						# libwebp's non-premultiplied blend
+						da := (int ca[t] * (256 - a)) >> 8;
+						ba := a + da;
+						scale := big (1<<24) / big ba;
+						cr[t] = byte ((big (int p.r[s] * a + int cr[t] * da) * scale) >> 24);
+						cg[t] = byte ((big (int p.g[s] * a + int cg[t] * da) * scale) >> 24);
+						cb[t] = byte ((big (int p.b[s] * a + int cb[t] * da) * scale) >> 24);
+						ca[t] = byte ba;
+					}
+				} else {
+					cr[t] = p.r[s];
+					cg[t] = p.g[s];
+					cb[t] = p.b[s];
+					ca[t] = byte a;
+				}
+				s++;
+				t++;
+			}
+		}
+		raw := rawimage(ref Pic(cw, ch, copy(cr), copy(cg), copy(cb), copy(ca)));
+		raw.fields = duration;
+		out[i++] = raw;
+		pdispose = flags & 1;
+		(px, py, pw, ph) = (fx, fy, fw, fh);
+		pkey = key;
 	}
+	return out[0:i];
+}
+
+fillrect(r, g, b, a: array of byte, cw, ch, x0, y0, w, h: int)
+{
+	for(y := y0; y < y0 + h && y < ch; y++)
+		for(x := x0; x < x0 + w && x < cw; x++) {
+			i := y * cw + x;
+			r[i] = g[i] = b[i] = a[i] = byte 0;
+		}
+}
+
+copy(a: array of byte): array of byte
+{
+	c := array[len a] of byte;
+	c[0:] = a;
 	return c;
 }
 
-clearrect(c: ref Rawimage, f: ref Frame)
-{
-	cw := c.r.max.x;
-	ch := c.r.max.y;
-	for(y := f.y; y < f.y + f.h && y < ch; y++)
-		for(x := f.x; x < f.x + f.w && x < cw; x++)
-			for(k := 0; k < 4; k++)
-				c.chans[k][y*cw + x] = byte 0;
-}
+# ==================== Alpha (ALPH) ====================
 
-# The frame over the canvas; blend, unless the pixel is opaque or in
-# the rectangle the previous frame disposed of (prev).
-drawframe(c: ref Rawimage, img: ref Rawimage, f: ref Frame, blend: int, prev: ref Frame)
+alpha(d: array of byte, w, h: int): array of byte
 {
-	cw := c.r.max.x;
-	ch := c.r.max.y;
-	iw := img.r.max.x;
-	ih := img.r.max.y;
-	k: int;
-	for(y := 0; y < ih && f.y + y < ch; y++)
-		for(x := 0; x < iw && f.x + x < cw; x++) {
-			s := y*iw + x;
-			cx := f.x + x;
-			cy := f.y + y;
-			d := cy*cw + cx;
-			sa := 255;
-			if(img.nchans == 4)
-				sa = int img.chans[3][s];
-			if(!blend || sa == 255 || prev != nil && cx >= prev.x && cx < prev.x + prev.w && cy >= prev.y && cy < prev.y + prev.h) {
-				for(k = 0; k < 3; k++)
-					c.chans[k][d] = img.chans[k][s];
-				c.chans[3][d] = byte sa;
-				continue;
-			}
-			if(sa == 0)
-				continue;
-			da := int c.chans[3][d];
-			dfa := (da * (256 - sa)) >> 8;
-			ba := sa + dfa;
-			scale := big ((1 << 24) / ba);
-			for(k = 0; k < 3; k++)
-				c.chans[k][d] = byte int (((big (int img.chans[k][s] * sa + int c.chans[k][d] * dfa)) * scale) >> 24);
-			c.chans[3][d] = byte ba;
-		}
-}
-
-# An image from packed ARGB: RGB, or RGBA when any pixel is not opaque.
-fromargb(w, h: int, px: array of int): ref Rawimage
-{
+	if(len d < 1)
+		raise "webp:ALPH: chunk too short";
+	hdr := int d[0];
+	method := hdr & 3;
+	filter := (hdr >> 2) & 3;
 	n := w * h;
-	opaque := 1;
-	for(i := 0; i < n; i++)
-		if(((px[i] >> 24) & 255) != 255) {
-			opaque = 0;
-			break;
-		}
-	raw := ref Rawimage;
-	raw.r = ((0, 0), (w, h));
-	raw.cmap = nil;
-	raw.transp = 0;
-	raw.trindex = byte 0;
-	raw.fields = 0;
-	if(opaque) {
-		raw.nchans = 3;
-		raw.chandesc = RImagefile->CRGB;
-	} else {
-		raw.nchans = 4;
-		raw.chandesc = RImagefile->CRGBA;
+	a := array[n] of {* => byte 255};
+	case method {
+	0 =>
+		m := len d - 1;
+		if(m > n)
+			m = n;
+		a[0:] = d[1:1+m];
+	1 =>
+		b := ref LB(d, 1, len d, 0, 0);
+		argb := vp8lstream(b, w, h);
+		for(i := 0; i < n; i++)
+			a[i] = byte (argb[i] >> 8);
+	* =>
+		raise "webp:ALPH: unknown compression";
 	}
-	raw.chans = array[raw.nchans] of array of byte;
-	r := array[n] of byte;
-	g := array[n] of byte;
-	b := array[n] of byte;
-	raw.chans[0] = r;
-	raw.chans[1] = g;
-	raw.chans[2] = b;
-	for(i = 0; i < n; i++) {
-		p := px[i];
-		r[i] = byte (p >> 16);
-		g[i] = byte (p >> 8);
-		b[i] = byte p;
-	}
-	if(!opaque) {
-		a := array[n] of byte;
-		raw.chans[3] = a;
-		for(i = 0; i < n; i++)
-			a[i] = byte (px[i] >> 24);
-	}
-	return raw;
+	if(filter != 0)
+		unfilter(a, w, h, filter);
+	return a;
 }
 
-# ---------------- VP8L: lossless (RFC 9649) ----------------
+# Undo the alpha plane's filter: each value was stored less its prediction
+unfilter(a: array of byte, w, h, filter: int)
+{
+	for(y := 0; y < h; y++) {
+		r := y * w;
+		for(x := 0; x < w; x++) {
+			pred: int;
+			if(x == 0 && y == 0)
+				pred = 0;
+			else if(y == 0)
+				pred = int a[r+x-1];	# the top row: from the left
+			else if(x == 0)
+				pred = int a[r-w];	# the left column: from above
+			else case filter {
+			1 =>
+				pred = int a[r+x-1];
+			2 =>
+				pred = int a[r+x-w];
+			* =>
+				pred = int a[r+x-1] + int a[r+x-w] - int a[r+x-w-1];
+				if(pred < 0)
+					pred = 0;
+				else if(pred > 255)
+					pred = 255;
+			}
+			a[r+x] = byte (int a[r+x] + pred);
+		}
+	}
+}
 
-# bits are read least significant first
-BR: adt {
+# ==================== Lossless (VP8L) ====================
+
+# The bit reader: least significant bit first
+LB: adt {
 	d:	array of byte;
-	pos:	int;	# the next byte to take
-	acc:	int;	# bits not yet read, lowest first (at most 31)
+	p:	int;	# the next byte
+	e:	int;	# the end of the data
+	v:	int;	# bits not yet read, the next lowest
 	n:	int;	# how many
 };
 
-fill(b: ref BR)
+lbfill(b: ref LB)
 {
 	while(b.n <= 23) {
-		if(b.pos < len b.d)
-			b.acc |= int b.d[b.pos] << b.n;
-		else if(b.pos > len b.d + 64)
-			fail("lossless data truncated");
-		b.pos++;
+		c := 0;
+		if(b.p < b.e)
+			c = int b.d[b.p];
+		else if(b.p > b.e + 8)
+			raise "webp:VP8L: truncated";
+		b.p++;
+		b.v |= c << b.n;
 		b.n += 8;
 	}
 }
 
-readbits(b: ref BR, k: int): int
+rb(b: ref LB, k: int): int
 {
-	if(k == 0)
-		return 0;
 	if(b.n < k)
-		fill(b);
-	v := b.acc & ((1 << k) - 1);
-	b.acc >>= k;
+		lbfill(b);
+	x := b.v & ((1<<k) - 1);
+	b.v >>= k;
 	b.n -= k;
-	return v;
+	return x;
 }
 
-# A prefix code: an 8-bit table for the short codes, the canonical
-# counts for the long ones.
-HT: adt {
-	single:	int;		# the only symbol, which takes no bits; -1 otherwise
-	root:	array of int;	# length<<16 | symbol; -1 where a longer code starts
-	counts:	array of int;	# codes of each length
-	syms:	array of int;	# the symbols in code order
+# A prefix code.  Codes of FASTBITS bits or fewer are looked up in
+# fast (each entry its length<<16 | its symbol); longer ones are
+# decoded canonically from cnt and sym.  A code of one symbol is
+# single, and reads no bits.
+FASTBITS: con 8;
+
+Huff: adt {
+	single:	int;
+	fast:	array of int;
+	cnt:	array of int;
+	sym:	array of int;
 };
 
-ROOTBITS: con 8;
-
-mkht(lens: array of int, n: int): ref HT
+hbuild(lens: array of int): ref Huff
 {
+	cnt := array[16] of {* => 0};
 	nz := 0;
 	last := 0;
-	for(i := 0; i < n; i++)
-		if(lens[i] > 0) {
+	for(i := 0; i < len lens; i++)
+		if(lens[i] != 0) {
+			cnt[lens[i]]++;
 			nz++;
 			last = i;
 		}
 	if(nz == 0)
-		fail("empty prefix code");
+		raise "webp:VP8L: empty prefix code";
 	if(nz == 1)
-		return ref HT(last, nil, nil, nil);
-	counts := array[16] of {* => 0};
-	for(i = 0; i < n; i++)
-		if(lens[i] > 15)
-			fail("prefix code too long");
-		else if(lens[i] > 0)
-			counts[lens[i]]++;
-	offs := array[16] of {* => 0};
-	for(l := 1; l < 15; l++)
-		offs[l+1] = offs[l] + counts[l];
-	syms := array[nz] of int;
-	for(i = 0; i < n; i++)
-		if(lens[i] > 0)
-			syms[offs[lens[i]]++] = i;
-	root := array[1 << ROOTBITS] of {* => -1};
+		return ref Huff(last, nil, nil, nil);
+	left := 1;
+	for(l := 1; l < 16; l++) {
+		left = (left << 1) - cnt[l];
+		if(left < 0)
+			raise "webp:VP8L: prefix code is over-subscribed";
+	}
+	if(left != 0)
+		raise "webp:VP8L: prefix code is incomplete";
+
+	offs := array[16] of int;
+	offs[1] = 0;
+	for(l = 1; l < 15; l++)
+		offs[l+1] = offs[l] + cnt[l];
+	sym := array[nz] of int;
+	for(i = 0; i < len lens; i++)
+		if(lens[i] != 0)
+			sym[offs[lens[i]]++] = i;
+
+	fast := array[1<<FASTBITS] of {* => -1};
 	code := 0;
 	k := 0;
-	for(l = 1; l <= 15; l++) {
-		for(j := 0; j < counts[l]; j++) {
-			s := syms[k++];
-			if(l <= ROOTBITS)
-				for(e := bitrev(code, l); e < (1 << ROOTBITS); e += 1 << l)
-					root[e] = (l << 16) | s;
+	for(l = 1; l <= FASTBITS; l++) {
+		for(j := 0; j < cnt[l]; j++) {
+			rev := 0;
+			for(m := 0; m < l; m++)
+				rev |= ((code >> m) & 1) << (l - 1 - m);
+			for(f := rev; f < len fast; f += 1<<l)
+				fast[f] = (l<<16) | sym[k];
 			code++;
+			k++;
 		}
 		code <<= 1;
 	}
-	return ref HT(-1, root, counts, syms);
+	return ref Huff(-1, fast, cnt, sym);
 }
 
-bitrev(v, n: int): int
-{
-	r := 0;
-	for(i := 0; i < n; i++) {
-		r = (r << 1) | (v & 1);
-		v >>= 1;
-	}
-	return r;
-}
-
-getsym(b: ref BR, h: ref HT): int
+hsym(b: ref LB, h: ref Huff): int
 {
 	if(h.single >= 0)
 		return h.single;
 	if(b.n < 15)
-		fill(b);
-	e := h.root[b.acc & ((1 << ROOTBITS) - 1)];
+		lbfill(b);
+	e := h.fast[b.v & ((1<<FASTBITS) - 1)];
 	if(e >= 0) {
 		l := e >> 16;
-		b.acc >>= l;
+		b.v >>= l;
 		b.n -= l;
 		return e & 16rFFFF;
 	}
-	# longer than the table: a bit at a time (as puff does)
+	# a code longer than FASTBITS: decode it a bit at a time
+	v := b.v;
 	code := 0;
 	first := 0;
-	idx := 0;
-	for(l := 1; l <= 15; l++) {
-		code |= readbits(b, 1);
-		c := h.counts[l];
-		if(code - c < first)
-			return h.syms[idx + code - first];
-		idx += c;
-		first += c;
-		first <<= 1;
+	index := 0;
+	for(l := 1; l < 16; l++) {
+		code |= v & 1;
+		v >>= 1;
+		c := h.cnt[l];
+		if(code - first < c) {
+			b.v >>= l;
+			b.n -= l;
+			return h.sym[index + code - first];
+		}
+		index += c;
+		first = (first + c) << 1;
 		code <<= 1;
 	}
-	fail("bad prefix code");
-	return 0;
+	raise "webp:VP8L: bad prefix code";
 }
 
 clorder := array[] of {17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
 
-readcode(b: ref BR, alphabet: int): ref HT
+readcode(b: ref LB, alphabet: int): ref Huff
 {
 	lens := array[alphabet] of {* => 0};
-	if(readbits(b, 1)) {
+	if(rb(b, 1)) {
 		# simple: one or two symbols
-		ns := readbits(b, 1) + 1;
-		first8 := readbits(b, 1);
-		s0 := readbits(b, 1 + 7*first8);
-		if(s0 >= alphabet)
-			fail("symbol out of range");
-		lens[s0] = 1;
+		ns := rb(b, 1) + 1;
+		s := rb(b, 1 + 7*rb(b, 1));
+		if(s >= alphabet)
+			raise "webp:VP8L: bad prefix code";
+		lens[s] = 1;
 		if(ns == 2) {
-			s1 := readbits(b, 8);
-			if(s1 >= alphabet)
-				fail("symbol out of range");
-			lens[s1] = 1;
+			s = rb(b, 8);
+			if(s >= alphabet)
+				raise "webp:VP8L: bad prefix code";
+			lens[s] = 1;
 		}
-		return mkht(lens, alphabet);
+		return hbuild(lens);
 	}
 	cl := array[19] of {* => 0};
-	nc := readbits(b, 4) + 4;
-	for(i := 0; i < nc; i++)
-		cl[clorder[i]] = readbits(b, 3);
-	clh := mkht(cl, 19);
-	maxsym := alphabet;
-	if(readbits(b, 1)) {
-		lb := 2 + 2*readbits(b, 3);
-		maxsym = 2 + readbits(b, lb);
-		if(maxsym > alphabet)
-			fail("too many code lengths");
+	n := rb(b, 4) + 4;
+	for(i := 0; i < n; i++)
+		cl[clorder[i]] = rb(b, 3);
+	clh := hbuild(cl);
+	max := alphabet;
+	if(rb(b, 1)) {
+		max = 2 + rb(b, 2 + 2*rb(b, 3));
+		if(max > alphabet)
+			raise "webp:VP8L: bad prefix code";
 	}
-	sym := 0;
 	prev := 8;
-	while(sym < alphabet) {
-		if(maxsym-- == 0)
-			break;
-		c := getsym(b, clh);
+	for(s := 0; s < alphabet && max-- > 0; ) {
+		c := hsym(b, clh);
 		if(c < 16) {
-			lens[sym++] = c;
+			lens[s++] = c;
 			if(c != 0)
 				prev = c;
 			continue;
 		}
-		extra := 2;
-		rep := 3;
-		val := prev;
+		rep, v: int;
 		case c {
+		16 =>
+			(rep, v) = (3 + rb(b, 2), prev);
 		17 =>
-			extra = 3;
-			val = 0;
-		18 =>
-			extra = 7;
-			rep = 11;
-			val = 0;
+			(rep, v) = (3 + rb(b, 3), 0);
+		* =>
+			(rep, v) = (11 + rb(b, 7), 0);
 		}
-		rep += readbits(b, extra);
-		if(sym + rep > alphabet)
-			fail("code lengths overrun");
-		for(; rep > 0; rep--)
-			lens[sym++] = val;
+		if(s + rep > alphabet)
+			raise "webp:VP8L: bad prefix code";
+		while(rep-- > 0)
+			lens[s++] = v;
 	}
-	return mkht(lens, alphabet);
+	return hbuild(lens);
 }
 
-Xf: adt {
-	kind:	int;	# 0 predictor, 1 colour, 2 subtract green, 3 colour indexing
+vp8l(d: array of byte): ref Pic
+{
+	if(len d < 5 || int d[0] != 16r2F)
+		raise "webp:VP8L: bad signature";
+	hdr := int d[1] | (int d[2]<<8) | (int d[3]<<16) | (int d[4]<<24);
+	w := (hdr & 16r3FFF) + 1;
+	h := ((hdr >> 14) & 16r3FFF) + 1;
+	hasalpha := (hdr >> 28) & 1;
+	if((hdr >> 29) & 7)
+		raise "webp:VP8L: unknown version";
+	toobig(w, h);
+	argb := vp8lstream(ref LB(d, 5, len d, 0, 0), w, h);
+	n := w * h;
+	p := ref Pic(w, h, array[n] of byte, array[n] of byte, array[n] of byte, nil);
+	for(i := 0; i < n; i++) {
+		c := argb[i];
+		p.r[i] = byte (c >> 16);
+		p.g[i] = byte (c >> 8);
+		p.b[i] = byte c;
+	}
+	if(hasalpha) {
+		p.a = array[n] of byte;
+		for(i = 0; i < n; i++)
+			p.a[i] = byte (argb[i] >> 24);
+	}
+	return p;
+}
+
+Xform: adt {
+	t:	int;
 	bits:	int;
-	xs:	int;	# the image's width where this transform applies
+	w:	int;	# the image's width when the transform was read
 	data:	array of int;
 };
 
-subsample(n, bits: int): int
-{
-	return (n + (1 << bits) - 1) >> bits;
-}
+PREDICT, CROSSCOLOUR, SUBGREEN, INDEX: con iota;
 
-decodevp8l(d: array of byte): ref Rawimage
+# An image stream: its transforms, then its pixels, which the
+# transforms, undone last first, make the image
+vp8lstream(b: ref LB, w, h: int): array of int
 {
-	if(len d < 5 || int d[0] != 16r2F)
-		fail("bad lossless signature");
-	b := ref BR(d, 1, 0, 0);
-	w := readbits(b, 14) + 1;
-	h := readbits(b, 14) + 1;
-	readbits(b, 1);		# alpha_is_used: a hint; the pixels say
-	if(readbits(b, 3) != 0)
-		fail("unknown lossless version");
-	return fromargb(w, h, decodeimage(b, w, h, 1));
-}
-
-# An image stream; level0 is the image itself (with transforms and an
-# entropy image), the rest are the transforms' and entropy images.
-decodeimage(b: ref BR, w, h, level0: int): array of int
-{
-	xfs: list of ref Xf;
-	xs := w;
-	if(level0) {
-		seen := 0;
-		while(readbits(b, 1)) {
-			t := readbits(b, 2);
-			if(seen & (1 << t))
-				fail("transform repeated");
-			seen |= 1 << t;
-			x := ref Xf(t, 0, xs, nil);
-			case t {
-			0 or 1 =>
-				x.bits = readbits(b, 3) + 2;
-				x.data = decodeimage(b, subsample(xs, x.bits), subsample(h, x.bits), 0);
-			3 =>
-				nc := readbits(b, 8) + 1;
-				if(nc > 16)
-					x.bits = 0;
-				else if(nc > 4)
-					x.bits = 1;
-				else if(nc > 2)
-					x.bits = 2;
-				else
-					x.bits = 3;
-				pal := decodeimage(b, nc, 1, 0);
-				x.data = array[256] of {* => 0};
-				x.data[0] = pal[0];
-				for(i := 1; i < nc; i++)
-					x.data[i] = addpx(pal[i], x.data[i-1]);
-				xs = subsample(xs, x.bits);
+	xf: list of ref Xform;
+	seen := 0;
+	xw := w;
+	while(rb(b, 1)) {
+		t := rb(b, 2);
+		if(seen & (1<<t))
+			raise "webp:VP8L: transform repeated";
+		seen |= 1<<t;
+		x := ref Xform(t, 0, xw, nil);
+		case t {
+		PREDICT or CROSSCOLOUR =>
+			x.bits = rb(b, 3) + 2;
+			x.data = vp8limage(b, divup(xw, 1<<x.bits), divup(h, 1<<x.bits), 0);
+		INDEX =>
+			n := rb(b, 8) + 1;
+			if(n > 16)
+				x.bits = 0;
+			else if(n > 4)
+				x.bits = 1;
+			else if(n > 2)
+				x.bits = 2;
+			else
+				x.bits = 3;
+			pal := vp8limage(b, n, 1, 0);
+			x.data = array[256] of {* => 0};	# out of range: transparent black
+			x.data[0] = pal[0];
+			for(i := 1; i < n; i++)
+				x.data[i] = addpix(pal[i], x.data[i-1]);
+			xw = divup(xw, 1<<x.bits);
+		}
+		xf = x :: xf;
+	}
+	pix := vp8limage(b, xw, h, 1);
+	for(; xf != nil; xf = tl xf) {
+		x := hd xf;
+		case x.t {
+		PREDICT =>
+			unpredict(pix, x.w, h, x.bits, x.data);
+		CROSSCOLOUR =>
+			uncross(pix, x.w, h, x.bits, x.data);
+		SUBGREEN =>
+			for(i := 0; i < len pix; i++) {
+				c := pix[i];
+				g := (c >> 8) & 255;
+				pix[i] = (c & int 16rFF00FF00) | ((((c >> 16) + g) & 255) << 16) | ((c + g) & 255);
 			}
-			xfs = x :: xfs;
+		INDEX =>
+			pix = unindex(pix, x.w, h, x.bits, x.data);
 		}
 	}
-	cc := 0;
-	if(readbits(b, 1)) {
-		cc = readbits(b, 4);
-		if(cc < 1 || cc > 11)
-			fail("bad colour cache size");
-	}
-	meta: array of int;
-	mbits := 0;
-	mw := 0;
-	ngroups := 1;
-	if(level0 && readbits(b, 1)) {
-		mbits = readbits(b, 3) + 2;
-		mw = subsample(xs, mbits);
-		mimg := decodeimage(b, mw, subsample(h, mbits), 0);
-		meta = array[len mimg] of int;
-		for(i := 0; i < len mimg; i++) {
-			meta[i] = (mimg[i] >> 8) & 16rFFFF;
-			if(meta[i] >= ngroups)
-				ngroups = meta[i] + 1;
-		}
-	}
-	cachesize := 0;
-	if(cc > 0)
-		cachesize = 1 << cc;
-	groups := array[ngroups * 5] of ref HT;
-	for(g := 0; g < ngroups; g++)
-		for(j := 0; j < 5; j++) {
-			alphabet := 256;
-			if(j == 0)
-				alphabet = 256 + 24 + cachesize;
-			else if(j == 4)
-				alphabet = 40;
-			groups[g*5 + j] = readcode(b, alphabet);
-		}
-	px := decodepixels(b, xs, h, groups, meta, mbits, mw, cc);
-	for(; xfs != nil; xfs = tl xfs)
-		px = inverse(hd xfs, px, h);
-	return px;
+	return pix;
 }
 
-decodepixels(b: ref BR, w, h: int, groups: array of ref HT, meta: array of int, mbits, mw, cc: int): array of int
+# Entropy-coded pixels: the image itself (main), with meta prefix
+# codes; or a transform's, without
+vp8limage(b: ref LB, w, h, main: int): array of int
 {
-	n := w * h;
-	px := array[n] of int;
-	cache: array of int;
-	cmask := 0;
-	cshift := 0;
-	if(cc > 0) {
-		cache = array[1 << cc] of {* => 0};
-		cmask = (1 << cc) - 1;
-		cshift = 32 - cc;
+	cbits := 0;
+	if(rb(b, 1)) {
+		cbits = rb(b, 4);
+		if(cbits < 1 || cbits > 11)
+			raise "webp:VP8L: bad colour cache size";
 	}
-	pos := 0;
+	mbits := 0;
+	ew := 0;
+	ent: array of int;
+	ngroups := 1;
+	if(main && rb(b, 1)) {
+		mbits = rb(b, 3) + 2;
+		ew = divup(w, 1<<mbits);
+		ent = vp8limage(b, ew, divup(h, 1<<mbits), 0);
+		for(i := 0; i < len ent; i++) {
+			g := (ent[i] >> 8) & 16rFFFF;
+			ent[i] = g;
+			if(g >= ngroups)
+				ngroups = g + 1;
+		}
+	}
+	csize := 0;
+	if(cbits)
+		csize = 1<<cbits;
+	groups := array[ngroups] of array of ref Huff;
+	for(i := 0; i < ngroups; i++) {
+		groups[i] = array[5] of ref Huff;
+		groups[i][0] = readcode(b, 256 + 24 + csize);
+		groups[i][1] = readcode(b, 256);
+		groups[i][2] = readcode(b, 256);
+		groups[i][3] = readcode(b, 256);
+		groups[i][4] = readcode(b, 40);
+	}
+
+	n := w * h;
+	pix := array[n] of int;
+	cache: array of int;
+	cshift := 32 - cbits;
+	cmask := csize - 1;
+	if(csize)
+		cache = array[csize] of {* => 0};
+	cached := 0;	# pixels before this are in the cache
+	tmask := (1<<mbits) - 1;
+	gr := groups[0];
+	hg := gr[0];
 	x := 0;
 	y := 0;
-	g := 0;
-	while(pos < n) {
-		if(meta != nil)
-			g = meta[(y >> mbits)*mw + (x >> mbits)] * 5;
-		c := getsym(b, groups[g]);
-		if(c < 256) {
-			r := getsym(b, groups[g+1]);
-			bl := getsym(b, groups[g+2]);
-			a := getsym(b, groups[g+3]);
-			p := (a << 24) | (r << 16) | (c << 8) | bl;
-			px[pos++] = p;
-			if(cache != nil)
-				cache[((p * 16r1E35A7BD) >> cshift) & cmask] = p;
-			if(++x >= w) {
+	for(i = 0; i < n; ) {
+		if(mbits && (x & tmask) == 0) {
+			gr = groups[ent[(y>>mbits)*ew + (x>>mbits)]];
+			hg = gr[0];
+		}
+		s := hsym(b, hg);
+		if(s < 256) {
+			r := hsym(b, gr[1]);
+			bl := hsym(b, gr[2]);
+			a := hsym(b, gr[3]);
+			pix[i++] = (a<<24) | (r<<16) | (s<<8) | bl;
+			if(++x == w) {
 				x = 0;
 				y++;
 			}
-		} else if(c < 280) {
-			ln := copylen(b, c - 256);
-			dc := copylen(b, getsym(b, groups[g+4]));
-			dist := planedist(w, dc);
-			if(dist > pos || pos + ln > n)
-				fail("bad back-reference");
-			for(i := 0; i < ln; i++) {
-				p := px[pos - dist];
-				px[pos++] = p;
-				if(cache != nil)
-					cache[((p * 16r1E35A7BD) >> cshift) & cmask] = p;
+		} else if(s < 256 + 24) {
+			l := prefixval(b, s - 256);
+			dc := prefixval(b, hsym(b, gr[4]));
+			dist: int;
+			if(dc > 120)
+				dist = dc - 120;
+			else {
+				dist = distmap[2*dc-2] + distmap[2*dc-1]*w;
+				if(dist < 1)
+					dist = 1;
 			}
-			x += ln;
-			while(x >= w) {
-				x -= w;
-				y++;
+			if(dist > i || l > n - i)
+				raise "webp:VP8L: bad backward reference";
+			for(j := i - dist; l > 0; l--)
+				pix[i++] = pix[j++];
+			x = i % w;
+			y = i / w;
+			if(mbits && i < n && (x & tmask) != 0) {
+				gr = groups[ent[(y>>mbits)*ew + (x>>mbits)]];
+				hg = gr[0];
 			}
 		} else {
-			k := c - 280;
-			if(cache == nil || k > cmask)
-				fail("bad colour cache index");
-			p := cache[k];
-			px[pos++] = p;
-			cache[((p * 16r1E35A7BD) >> cshift) & cmask] = p;
-			if(++x >= w) {
+			k := s - (256 + 24);
+			if(k >= csize)
+				raise "webp:VP8L: bad colour cache index";
+			while(cached < i) {
+				c := pix[cached++];
+				cache[((16r1E35A7BD * c) >> cshift) & cmask] = c;
+			}
+			pix[i++] = cache[k];
+			if(++x == w) {
 				x = 0;
 				y++;
 			}
 		}
 	}
-	return px;
+	return pix;
 }
 
-copylen(b: ref BR, sym: int): int
+prefixval(b: ref LB, c: int): int
 {
-	if(sym < 4)
-		return sym + 1;
-	eb := (sym - 2) >> 1;
-	return ((2 + (sym & 1)) << eb) + readbits(b, eb) + 1;
+	if(c < 4)
+		return c + 1;
+	eb := (c - 2) >> 1;
+	return ((2 + (c & 1)) << eb) + rb(b, eb) + 1;
 }
 
-planedist(w, c: int): int
+# ARGB arithmetic, a component at a time
+addpix(a, b: int): int
 {
-	if(c > 120)
-		return c - 120;
-	dc := codetoplane[c - 1];
-	d := (dc >> 4)*w + 8 - (dc & 16rF);
-	if(d < 1)
-		d = 1;
-	return d;
+	return (((a & int 16rFF00FF00) + (b & int 16rFF00FF00)) & int 16rFF00FF00) |
+		(((a & 16r00FF00FF) + (b & 16r00FF00FF)) & 16r00FF00FF);
 }
 
-addpx(a, b: int): int
+# (a component at a time, rounding down; the mask after the shift
+# because >> carries the sign)
+pavg(a, b: int): int
 {
-	return (((a & AG) + (b & AG)) & AG) | (((a & RB) + (b & RB)) & RB);
+	return (a & b) + (((a ^ b) >> 1) & 16r7F7F7F7F);
 }
 
-avg2(a, b: int): int
+select(l, t, tlx: int): int
 {
-	return (((a ^ b) >> 1) & 16r7F7F7F7F) + (a & b);
-}
-
-clip255(v: int): int
-{
-	if(v < 0)
-		return 0;
-	if(v > 255)
-		return 255;
-	return v;
-}
-
-select(t, l, c0: int): int
-{
-	s := 0;
+	pl := 0;	# sum |T - TL|: the distance of the estimate from L
+	pt := 0;	# sum |L - TL|
 	for(sh := 0; sh < 32; sh += 8) {
-		a := (t >> sh) & 255;
-		b := (l >> sh) & 255;
-		c := (c0 >> sh) & 255;
-		s += iabs(b - c) - iabs(a - c);
+		c := (tlx >> sh) & 255;
+		d := ((t >> sh) & 255) - c;
+		if(d < 0)
+			d = -d;
+		pl += d;
+		d = ((l >> sh) & 255) - c;
+		if(d < 0)
+			d = -d;
+		pt += d;
 	}
-	if(s <= 0)
-		return t;
-	return l;
+	if(pl < pt)
+		return l;
+	return t;
 }
 
 clampfull(a, b, c: int): int
 {
 	r := 0;
-	for(sh := 0; sh < 32; sh += 8)
-		r |= clip255(((a >> sh) & 255) + ((b >> sh) & 255) - ((c >> sh) & 255)) << sh;
+	for(sh := 0; sh < 32; sh += 8) {
+		v := ((a >> sh) & 255) + ((b >> sh) & 255) - ((c >> sh) & 255);
+		if(v < 0)
+			v = 0;
+		else if(v > 255)
+			v = 255;
+		r |= v << sh;
+	}
 	return r;
 }
 
-clamphalf(a, b, c: int): int
+clamphalf(a, b: int): int
 {
-	ave := avg2(a, b);
 	r := 0;
 	for(sh := 0; sh < 32; sh += 8) {
-		x := (ave >> sh) & 255;
-		r |= clip255(x + (x - ((c >> sh) & 255)) / 2) << sh;
+		x := (a >> sh) & 255;
+		v := x + (x - ((b >> sh) & 255)) / 2;
+		if(v < 0)
+			v = 0;
+		else if(v > 255)
+			v = 255;
+		r |= v << sh;
 	}
 	return r;
 }
 
-iabs(v: int): int
+unpredict(pix: array of int, w, h, bits: int, modes: array of int)
 {
-	if(v < 0)
-		return -v;
-	return v;
+	tw := divup(w, 1<<bits);
+	pix[0] = addpix(pix[0], int 16rFF000000);
+	for(x := 1; x < w; x++)
+		pix[x] = addpix(pix[x], pix[x-1]);
+	for(y := 1; y < h; y++) {
+		r := y * w;
+		pix[r] = addpix(pix[r], pix[r-w]);
+		mrow := (y >> bits) * tw;
+		for(x = 1; x < w; x++) {
+			i := r + x;
+			l := pix[i-1];
+			p: int;
+			case (modes[mrow + (x>>bits)] >> 8) & 15 {
+			1 =>	p = l;
+			2 =>	p = pix[i-w];
+			3 =>	p = pix[i-w+1];
+			4 =>	p = pix[i-w-1];
+			5 =>	p = pavg(pavg(l, pix[i-w+1]), pix[i-w]);
+			6 =>	p = pavg(l, pix[i-w-1]);
+			7 =>	p = pavg(l, pix[i-w]);
+			8 =>	p = pavg(pix[i-w-1], pix[i-w]);
+			9 =>	p = pavg(pix[i-w], pix[i-w+1]);
+			10 =>	p = pavg(pavg(l, pix[i-w-1]), pavg(pix[i-w], pix[i-w+1]));
+			11 =>	p = select(l, pix[i-w], pix[i-w-1]);
+			12 =>	p = clampfull(l, pix[i-w], pix[i-w-1]);
+			13 =>	p = clamphalf(pavg(l, pix[i-w]), pix[i-w-1]);
+			* =>	p = int 16rFF000000;
+			}
+			pix[i] = addpix(pix[i], p);
+		}
+	}
 }
 
-sbyte(v: int): int
+sx8(v: int): int
 {
-	v &= 255;
-	if(v >= 128)
-		return v - 256;
-	return v;
+	return ((v & 255) ^ 128) - 128;
 }
 
-inverse(x: ref Xf, px: array of int, h: int): array of int
+uncross(pix: array of int, w, h, bits: int, data: array of int)
 {
-	w := x.xs;
-	i, y, tw: int;
-	case x.kind {
-	0 =>
-		tw = subsample(w, x.bits);
-		px[0] = addpx(px[0], BLACK);
-		for(i = 1; i < w; i++)
-			px[i] = addpx(px[i], px[i-1]);
-		for(y = 1; y < h; y++) {
-			row := y * w;
-			px[row] = addpx(px[row], px[row - w]);
-			trow := (y >> x.bits) * tw;
-			for(i = 1; i < w; i++) {
-				p := row + i;
-				l := px[p-1];
-				t := px[p-w];
-				pred := 0;
-				case (x.data[trow + (i >> x.bits)] >> 8) & 15 {
-				1 => pred = l;
-				2 => pred = t;
-				3 => pred = px[p-w+1];		# (the rightmost pixel's is this row's first)
-				4 => pred = px[p-w-1];
-				5 => pred = avg2(avg2(l, px[p-w+1]), t);
-				6 => pred = avg2(l, px[p-w-1]);
-				7 => pred = avg2(l, t);
-				8 => pred = avg2(px[p-w-1], t);
-				9 => pred = avg2(t, px[p-w+1]);
-				10 => pred = avg2(avg2(l, px[p-w-1]), avg2(t, px[p-w+1]));
-				11 => pred = select(t, l, px[p-w-1]);
-				12 => pred = clampfull(l, t, px[p-w-1]);
-				13 => pred = clamphalf(l, t, px[p-w-1]);
-				* => pred = BLACK;	# 0, and 14 and 15 as libwebp has them
-				}
-				px[p] = addpx(px[p], pred);
-			}
+	tw := divup(w, 1<<bits);
+	for(y := 0; y < h; y++) {
+		drow := (y >> bits) * tw;
+		for(x := 0; x < w; x++) {
+			e := data[drow + (x>>bits)];
+			i := y*w + x;
+			c := pix[i];
+			g := sx8(c >> 8);
+			r := ((c >> 16) + ((sx8(e) * g) >> 5)) & 255;
+			bl := (c + ((sx8(e >> 8) * g) >> 5) + ((sx8(e >> 16) * sx8(r)) >> 5)) & 255;
+			pix[i] = (c & int 16rFF00FF00) | (r << 16) | bl;
 		}
-		return px;
-	1 =>
-		tw = subsample(w, x.bits);
-		for(y = 0; y < h; y++) {
-			trow := (y >> x.bits) * tw;
-			for(i = 0; i < w; i++) {
-				m := x.data[trow + (i >> x.bits)];
-				p := px[y*w + i];
-				g := sbyte(p >> 8);
-				r := ((p >> 16) + ((sbyte(m) * g) >> 5)) & 255;
-				bl := p + ((sbyte(m >> 8) * g) >> 5);
-				bl = (bl + ((sbyte(m >> 16) * sbyte(r)) >> 5)) & 255;
-				px[y*w + i] = (p & AG) | (r << 16) | bl;
-			}
-		}
-		return px;
-	2 =>
-		for(i = 0; i < len px; i++) {
-			p := px[i];
-			g := (p >> 8) & 255;
-			px[i] = (p & AG) | ((((p >> 16) + g) & 255) << 16) | ((p + g) & 255);
-		}
-		return px;
-	3 =>
-		iw := subsample(w, x.bits);
-		out := array[w*h] of int;
-		bpp := 8 >> x.bits;
-		cmask := (1 << x.bits) - 1;
-		vmask := (1 << bpp) - 1;
-		for(y = 0; y < h; y++)
-			for(i = 0; i < w; i++) {
-				v := (px[y*iw + (i >> x.bits)] >> 8) & 255;
-				if(x.bits > 0)
-					v = (v >> ((i & cmask) * bpp)) & vmask;
-				out[y*w + i] = x.data[v];
-			}
+	}
+}
+
+unindex(pix: array of int, w, h, bits: int, pal: array of int): array of int
+{
+	out := array[w*h] of int;
+	if(bits == 0) {
+		for(i := 0; i < len out; i++)
+			out[i] = pal[(pix[i] >> 8) & 255];
 		return out;
 	}
-	return px;
-}
-
-# ---------------- ALPH ----------------
-
-decodealpha(a: array of byte, w, h: int): array of byte
-{
-	if(len a < 1)
-		fail("empty alpha chunk");
-	method := int a[0] & 3;
-	filter := (int a[0] >> 2) & 3;
-	n := w * h;
-	raw := array[n] of byte;
-	i: int;
-	case method {
-	0 =>
-		if(len a < 1 + n)
-			fail("alpha data truncated");
-		raw[0:] = a[1:1+n];
-	1 =>
-		px := decodeimage(ref BR(a[1:], 0, 0, 0), w, h, 1);
-		for(i = 0; i < n; i++)
-			raw[i] = byte (px[i] >> 8);
-	* =>
-		fail("unknown alpha compression");
-	}
-	out := array[n] of byte;
-	for(y := 0; y < h; y++) {
-		o := y * w;
-		f := filter;
-		if(y == 0 && f != 0)
-			f = 1;	# the first row of every filter is horizontal from 0
-		case f {
-		0 =>
-			out[o:] = raw[o:o+w];
-		1 =>
-			pred := 0;
-			if(y > 0)
-				pred = int out[o - w];
-			for(i = 0; i < w; i++) {
-				pred = (pred + int raw[o+i]) & 255;
-				out[o+i] = byte pred;
-			}
-		2 =>
-			for(i = 0; i < w; i++)
-				out[o+i] = byte (int out[o-w+i] + int raw[o+i]);
-		3 =>
-			top := int out[o-w];
-			tlv := top;
-			left := top;
-			for(i = 0; i < w; i++) {
-				top = int out[o-w+i];
-				left = (int raw[o+i] + clip255(left + top - tlv)) & 255;
-				tlv = top;
-				out[o+i] = byte left;
-			}
+	pw := divup(w, 1<<bits);
+	per := 8 >> bits;	# bits an index takes
+	m := (1<<per) - 1;
+	xm := (1<<bits) - 1;
+	for(y := 0; y < h; y++)
+		for(x := 0; x < w; x++) {
+			g := (pix[y*pw + (x>>bits)] >> 8) & 255;
+			out[y*w + x] = pal[(g >> ((x & xm) * per)) & m];
 		}
-	}
 	return out;
 }
 
-# ---------------- VP8: lossy key frames (RFC 6386) ----------------
+# ==================== Lossy (VP8) ====================
 
-# the boolean decoder (RFC 6386 §7)
+# The boolean decoder (RFC 6386 section 7), as libwebp keeps it: the
+# value's bits below its 8-bit window counted by bits, and the range
+# kept less one.
 BD: adt {
 	d:	array of byte;
-	pos, end:	int;
-	value:	int;	# a 16-bit window
-	range:	int;
-	bc:	int;	# bits shifted out of the window's low byte
+	p:	int;
+	e:	int;
+	v:	int;
+	bits:	int;
+	rng:	int;
 };
 
-bdinit(d: array of byte, off, end: int): ref BD
+bdnew(d: array of byte, p, e: int): ref BD
 {
-	b := ref BD(d, off, end, 0, 255, 0);
-	for(i := 0; i < 2; i++) {
-		b.value <<= 8;
-		if(b.pos < b.end)
-			b.value |= int d[b.pos];
-		b.pos++;
-	}
-	return b;
+	return ref BD(d, p, e, 0, -8, 254);
 }
+
+# norm[r]: the left shift that brings a range r back to [128, 255]
+norm: array of int;
 
 getbit(b: ref BD, prob: int): int
 {
-	split := 1 + (((b.range - 1) * prob) >> 8);
-	bs := split << 8;
-	bit := 0;
-	if(b.value >= bs) {
-		bit = 1;
-		b.range -= split;
-		b.value -= bs;
-	} else
-		b.range = split;
-	while(b.range < 128) {
-		b.value <<= 1;
-		b.range <<= 1;
-		if(++b.bc == 8) {
-			b.bc = 0;
-			if(b.pos < b.end)
-				b.value |= int b.d[b.pos];
-			b.pos++;
-		}
+	if(b.bits < 0) {
+		c := 0;
+		if(b.p < b.e)
+			c = int b.d[b.p];
+		b.p++;
+		b.v = (b.v << 8) | c;
+		b.bits += 8;
 	}
+	split := (b.rng * prob) >> 8;
+	r, bit: int;
+	if((b.v >> b.bits) > split) {
+		r = b.rng - split;
+		b.v -= (split + 1) << b.bits;
+		bit = 1;
+	} else {
+		r = split + 1;
+		bit = 0;
+	}
+	s := norm[r];
+	b.rng = (r << s) - 1;
+	b.bits -= s;
 	return bit;
 }
 
-getvalue(b: ref BD, n: int): int
+getlit(b: ref BD, n: int): int
 {
 	v := 0;
 	while(n-- > 0)
-		v |= getbit(b, 128) << n;
+		v = (v << 1) | getbit(b, 128);
 	return v;
 }
 
+# A value of n bits and a sign, if a flag says it is there
 getsigned(b: ref BD, n: int): int
 {
-	v := getvalue(b, n);
+	if(!getbit(b, 128))
+		return 0;
+	v := getlit(b, n);
 	if(getbit(b, 128))
 		return -v;
 	return v;
 }
 
-# the per-macroblock work buffer, as libwebp lays it out: a 32-byte
-# stride, the luma block with its top row and left column, then the
-# two chroma blocks side by side with theirs
-BPS: con 32;
-YOFF: con BPS + 8;
-UOFF: con YOFF + BPS*16 + BPS;
-VOFF: con UOFF + 16;
-YUVSIZE: con BPS*17 + BPS*9;
+gettree(b: ref BD, t, p: array of int, poff: int): int
+{
+	i := 0;
+	while((i = t[i + getbit(b, p[poff + (i>>1)])]) > 0)
+		;
+	return -i;
+}
 
-# intra modes: 4x4 ones, of which the first four are also the 16x16
-# and chroma modes; then the DC variants for missing edges
-BDC, BTM, BVE, BHE, BRD, BVR, BLD, BVL, BHD, BHU: con iota;
-DCNOTOP: con 4;
-DCNOLEFT: con 5;
-DCNOTOPLEFT: con 6;
+# Prediction modes
+DC_PRED, V_PRED, H_PRED, TM_PRED, B_PRED: con iota;
+B_DC_PRED, B_TM_PRED, B_VE_PRED, B_HE_PRED, B_LD_PRED,
+B_RD_PRED, B_VR_PRED, B_VL_PRED, B_HD_PRED, B_HU_PRED: con iota;
 
-V8: adt {
-	w, h, mbw, mbh:	int;
-	br:	ref BD;		# the first partition: modes
-	parts:	array of ref BD;	# the token partitions
-	proba:	array of int;	# coefficient probabilities [type][band][ctx][11]
-	useskip, skipp:	int;
-	useseg, segupdate, absdelta:	int;
-	segq, segf, segprob:	array of int;
-	ftype, flevel, fsharp, uselfdelta:	int;
-	reflf, modelf:	array of int;
-	dq:	array of int;	# per segment: y1 dc, y1 ac, y2 dc, y2 ac, uv dc, uv ac
-	intrat:	array of int;	# 4x4 mode context along the top, 4 per macroblock
-	intral:	array of int;	# and down the left
-	tnz, tnzdc:	array of int;	# non-zero context along the top
-	lnz, lnzdc:	int;		# and at the left
-	yp, up, vp:	array of byte;	# the planes, whole macroblocks
-	ys, uvs:	int;		# their strides
-	topy, topu, topv:	array of byte;	# each macroblock's bottom row, before filtering
-	b:	array of byte;		# the work buffer
-	finfo:	array of int;	# per macroblock: limit, interior level, hev threshold, inner edges
-	fstr:	array of int;	# per segment and 4x4-ness: the same, precomputed
-	coeffs:	array of int;	# 384: 16 luma, 4 u, 4 v blocks of 16
-	imodes:	array of int;
+kfymodetree := array[] of {-B_PRED, 2, 4, 6, -DC_PRED, -V_PRED, -H_PRED, -TM_PRED};
+kfymodeprob := array[] of {145, 156, 163, 128};
+uvmodetree := array[] of {-DC_PRED, 2, -V_PRED, 4, -H_PRED, -TM_PRED};
+kfuvmodeprob := array[] of {142, 114, 183};
+bmodetree := array[] of {
+	-B_DC_PRED, 2,
+	-B_TM_PRED, 4,
+	-B_VE_PRED, 6,
+	8, 12,
+	-B_HE_PRED, 10,
+	-B_RD_PRED, -B_VR_PRED,
+	-B_LD_PRED, 14,
+	-B_VL_PRED, 16,
+	-B_HD_PRED, -B_HU_PRED,
+};
+# the subblock mode a whole-macroblock luma mode implies, for context
+impliedb := array[] of {B_DC_PRED, B_VE_PRED, B_HE_PRED, B_TM_PRED};
+
+zigzag := array[] of {0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15};
+bands := array[] of {0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0};
+# the probabilities of the extra bits of DCT_CAT3 to DCT_CAT6
+catprob := array[] of {
+	173, 148, 140,
+	176, 155, 140, 135,
+	180, 157, 141, 134, 130,
+	254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129,
+};
+catoff := array[] of {0, 3, 7, 12, 23};
+
+# The decoded frame: the planes, each with a border above and to the
+# left that prediction reads (127 above, 129 to the left), and the
+# luma four columns more to the right, for the pixels above and to the
+# right of the last macroblock in a row
+Frame: adt {
+	w, h:	int;
+	mbw, mbh:	int;
+	y:	array of byte;
+	u:	array of byte;
+	v:	array of byte;
+	ys:	int;	# strides
+	uvs:	int;
+	yo:	int;	# where pixel (0, 0) is
+	uvo:	int;
 };
 
-decodevp8(d: array of byte, alph: array of byte): ref Rawimage
+# Dequantisation factors for a segment
+Quant: adt {
+	y1:	array of int;	# dc, ac
+	y2:	array of int;
+	uv:	array of int;
+};
+
+vp8(d: array of byte): ref Pic
+{
+	if(norm == nil)
+		mktables();
+	f := vp8frame(d);
+	return torgb(f);
+}
+
+vp8frame(d: array of byte): ref Frame
 {
 	if(len d < 10)
-		fail("lossy data too short");
-	bits := int d[0] | (int d[1] << 8) | (int d[2] << 16);
-	if(bits & 1)
-		fail("not a key frame");
-	if(((bits >> 4) & 1) == 0)
-		fail("frame not shown");
-	fps := bits >> 5;
+		raise "webp:VP8: truncated";
+	tag := int d[0] | (int d[1]<<8) | (int d[2]<<16);
+	if(tag & 1)
+		raise "webp:VP8: not a key frame";
+	p0 := tag >> 5;
 	if(int d[3] != 16r9D || int d[4] != 16r01 || int d[5] != 16r2A)
-		fail("bad lossy signature");
-	w := (int d[6] | (int d[7] << 8)) & 16r3FFF;
-	h := (int d[8] | (int d[9] << 8)) & 16r3FFF;
+		raise "webp:VP8: bad start code";
+	w := (int d[6] | (int d[7]<<8)) & 16r3FFF;
+	h := (int d[8] | (int d[9]<<8)) & 16r3FFF;
 	if(w == 0 || h == 0)
-		fail("empty frame");
-	if(10 + fps > len d)
-		fail("first partition truncated");
-	v := ref V8;
-	v.w = w;
-	v.h = h;
-	v.mbw = (w + 15) >> 4;
-	v.mbh = (h + 15) >> 4;
-	v.br = bdinit(d, 10, 10 + fps);
-	header(v, d, 10 + fps);
-	frame(v);
-	if(v.ftype > 0)
-		loopfilter(v);
-	raw := torgb(v);
-	if(alph != nil) {
-		a := decodealpha(alph, w, h);
-		raw.nchans = 4;
-		raw.chandesc = RImagefile->CRGBA;
-		c := array[4] of array of byte;
-		c[0:] = raw.chans[0:3];
-		c[3] = a;
-		raw.chans = c;
-	}
-	return raw;
-}
+		raise "webp:VP8: no size";
+	toobig(w, h);
+	if(10 + p0 > len d)
+		raise "webp:VP8: truncated";
+	b := bdnew(d, 10, 10 + p0);
 
-header(v: ref V8, d: array of byte, poff: int)
-{
-	br := v.br;
-	s, i: int;
-	getbit(br, 128);	# colour space
-	getbit(br, 128);	# clamping (always done)
+	getbit(b, 128);	# colour space
+	getbit(b, 128);	# clamping: we always clamp
 
-	# segments (§9.3)
-	v.segq = array[4] of {* => 0};
-	v.segf = array[4] of {* => 0};
-	v.segprob = array[3] of {* => 255};
-	v.useseg = getbit(br, 128);
-	v.segupdate = 0;
-	v.absdelta = 0;
-	if(v.useseg) {
-		v.segupdate = getbit(br, 128);
-		if(getbit(br, 128)) {
-			v.absdelta = getbit(br, 128);
-			for(s = 0; s < 4; s++)
-				if(getbit(br, 128))
-					v.segq[s] = getsigned(br, 7);
-			for(s = 0; s < 4; s++)
-				if(getbit(br, 128))
-					v.segf[s] = getsigned(br, 6);
+	# segments
+	segon := getbit(b, 128);
+	segmap := 0;
+	segabs := 0;
+	segq := array[4] of {* => 0};
+	seglf := array[4] of {* => 0};
+	segprob := array[3] of {* => 255};
+	if(segon) {
+		segmap = getbit(b, 128);
+		if(getbit(b, 128)) {
+			segabs = getbit(b, 128);
+			for(i := 0; i < 4; i++)
+				segq[i] = getsigned(b, 7);
+			for(i = 0; i < 4; i++)
+				seglf[i] = getsigned(b, 6);
 		}
-		if(v.segupdate)
-			for(s = 0; s < 3; s++)
-				if(getbit(br, 128))
-					v.segprob[s] = getvalue(br, 8);
+		if(segmap)
+			for(i := 0; i < 3; i++)
+				if(getbit(b, 128))
+					segprob[i] = getlit(b, 8);
 	}
 
-	# the loop filter (§9.4)
-	simple := getbit(br, 128);
-	v.flevel = getvalue(br, 6);
-	v.fsharp = getvalue(br, 3);
-	v.reflf = array[4] of {* => 0};
-	v.modelf = array[4] of {* => 0};
-	v.uselfdelta = getbit(br, 128);
-	if(v.uselfdelta && getbit(br, 128)) {
-		for(i = 0; i < 4; i++)
-			if(getbit(br, 128))
-				v.reflf[i] = getsigned(br, 6);
-		for(i = 0; i < 4; i++)
-			if(getbit(br, 128))
-				v.modelf[i] = getsigned(br, 6);
-	}
-	if(v.flevel == 0)
-		v.ftype = 0;
-	else if(simple)
-		v.ftype = 1;
-	else
-		v.ftype = 2;
-
-	# token partitions (§9.5)
-	np := 1 << getvalue(br, 2);
-	v.parts = array[np] of ref BD;
-	sz := poff;
-	start := poff + 3*(np - 1);
-	if(start > len d)
-		fail("partition sizes truncated");
-	for(p := 0; p < np - 1; p++) {
-		psize := int d[sz] | (int d[sz+1] << 8) | (int d[sz+2] << 16);
-		if(start + psize > len d)
-			psize = len d - start;
-		v.parts[p] = bdinit(d, start, start + psize);
-		start += psize;
-		sz += 3;
-	}
-	v.parts[np-1] = bdinit(d, start, len d);
-
-	# quantizers (§9.6)
-	q0 := getvalue(br, 7);
-	dqy1dc := 0;
-	dqy2dc := 0;
-	dqy2ac := 0;
-	dquvdc := 0;
-	dquvac := 0;
-	if(getbit(br, 128)) dqy1dc = getsigned(br, 4);
-	if(getbit(br, 128)) dqy2dc = getsigned(br, 4);
-	if(getbit(br, 128)) dqy2ac = getsigned(br, 4);
-	if(getbit(br, 128)) dquvdc = getsigned(br, 4);
-	if(getbit(br, 128)) dquvac = getsigned(br, 4);
-	v.dq = array[4*6] of int;
-	for(s = 0; s < 4; s++) {
-		q := q0;
-		if(v.useseg) {
-			q = v.segq[s];
-			if(!v.absdelta)
-				q += q0;
-		}
-		m := s * 6;
-		v.dq[m] = dctab[clip(q + dqy1dc, 127)];
-		v.dq[m+1] = actab[clip(q, 127)];
-		v.dq[m+2] = dctab[clip(q + dqy2dc, 127)] * 2;
-		v.dq[m+3] = (actab[clip(q + dqy2ac, 127)] * 101581) >> 16;
-		if(v.dq[m+3] < 8)
-			v.dq[m+3] = 8;
-		v.dq[m+4] = dctab[clip(q + dquvdc, 117)];
-		v.dq[m+5] = actab[clip(q + dquvac, 127)];
-	}
-
-	getbit(br, 128);	# refresh_entropy_probs: one frame, no matter
-
-	# coefficient probabilities (§13.4)
-	v.proba = array[len coeffsproba0] of int;
-	for(i = 0; i < len coeffsproba0; i++) {
-		if(getbit(br, coeffsupdateproba[i]))
-			v.proba[i] = getvalue(br, 8);
-		else
-			v.proba[i] = coeffsproba0[i];
-	}
-	v.useskip = getbit(br, 128);
-	v.skipp = 0;
-	if(v.useskip)
-		v.skipp = getvalue(br, 8);
-
-	# the loop filter's strengths per segment and kind of macroblock
-	v.fstr = array[4*2*4] of {* => 0};
-	if(v.ftype > 0)
-		for(s = 0; s < 4; s++) {
-			base := v.flevel;
-			if(v.useseg) {
-				base = v.segf[s];
-				if(!v.absdelta)
-					base += v.flevel;
-			}
-			for(i4 := 0; i4 <= 1; i4++) {
-				o := (s*2 + i4) * 4;
-				level := base;
-				if(v.uselfdelta) {
-					level += v.reflf[0];
-					if(i4)
-						level += v.modelf[0];
-				}
-				level = clip(level, 63);
-				if(level > 0) {
-					il := level;
-					if(v.fsharp > 0) {
-						if(v.fsharp > 4)
-							il >>= 2;
-						else
-							il >>= 1;
-						if(il > 9 - v.fsharp)
-							il = 9 - v.fsharp;
-					}
-					if(il < 1)
-						il = 1;
-					v.fstr[o] = 2*level + il;
-					v.fstr[o+1] = il;
-					if(level >= 40)
-						v.fstr[o+2] = 2;
-					else if(level >= 15)
-						v.fstr[o+2] = 1;
-				}
-				v.fstr[o+3] = i4;
-			}
-		}
-}
-
-clip(v, m: int): int
-{
-	if(v < 0)
-		return 0;
-	if(v > m)
-		return m;
-	return v;
-}
-
-frame(v: ref V8)
-{
-	v.ys = v.mbw * 16;
-	v.uvs = v.mbw * 8;
-	v.yp = array[v.ys * v.mbh * 16] of byte;
-	v.up = array[v.uvs * v.mbh * 8] of byte;
-	v.vp = array[v.uvs * v.mbh * 8] of byte;
-	v.topy = array[v.mbw * 16] of {* => byte 0};
-	v.topu = array[v.mbw * 8] of {* => byte 0};
-	v.topv = array[v.mbw * 8] of {* => byte 0};
-	v.b = array[YUVSIZE] of {* => byte 0};
-	v.intrat = array[v.mbw * 4] of {* => BDC};
-	v.intral = array[4] of {* => BDC};
-	v.tnz = array[v.mbw] of {* => 0};
-	v.tnzdc = array[v.mbw] of {* => 0};
-	v.finfo = array[v.mbw * v.mbh * 4] of {* => 0};
-	v.coeffs = array[384] of int;
-	v.imodes = array[16] of int;
-	for(mby := 0; mby < v.mbh; mby++) {
-		tok := v.parts[mby & (len v.parts - 1)];
-		v.lnz = 0;
-		v.lnzdc = 0;
+	# the loop filter
+	simple := getbit(b, 128);
+	level := getlit(b, 6);
+	sharp := getlit(b, 3);
+	refdelta := array[4] of {* => 0};
+	modedelta := array[4] of {* => 0};
+	lfdelta := getbit(b, 128);
+	if(lfdelta && getbit(b, 128)) {
 		for(i := 0; i < 4; i++)
-			v.intral[i] = BDC;
-		for(mbx := 0; mbx < v.mbw; mbx++) {
-			(seg, skip, i4, uvmode) := modes(v, mbx);
-			for(i = 0; i < 384; i++)
-				v.coeffs[i] = 0;
-			allzero := 1;
+			refdelta[i] = getsigned(b, 6);
+		for(i = 0; i < 4; i++)
+			modedelta[i] = getsigned(b, 6);
+	}
+
+	# the token partitions
+	np := 1 << getlit(b, 2);
+	parts := array[np] of ref BD;
+	o := 10 + p0;
+	ps := o + 3*(np-1);
+	if(ps > len d)
+		raise "webp:VP8: truncated";
+	for(i := 0; i < np; i++) {
+		n := len d - ps;
+		if(i < np - 1) {
+			n = int d[o] | (int d[o+1]<<8) | (int d[o+2]<<16);
+			o += 3;
+		}
+		if(ps + n > len d)
+			n = len d - ps;	# truncated: the rest decodes as zeros
+		parts[i] = bdnew(d, ps, ps + n);
+		ps += n;
+	}
+
+	# quantisers
+	qi := getlit(b, 7);
+	dy1dc := getsigned(b, 4);
+	dy2dc := getsigned(b, 4);
+	dy2ac := getsigned(b, 4);
+	duvdc := getsigned(b, 4);
+	duvac := getsigned(b, 4);
+	quants := array[4] of ref Quant;
+	for(i = 0; i < 4; i++) {
+		q := qi;
+		if(segon) {
+			q = segq[i];
+			if(!segabs)
+				q += qi;
+		}
+		y2ac := acq[clampq(q + dy2ac)] * 155 / 100;
+		if(y2ac < 8)
+			y2ac = 8;
+		uvdc := dcq[clampq(q + duvdc)];
+		if(uvdc > 132)
+			uvdc = 132;
+		quants[i] = ref Quant(
+			array[] of {dcq[clampq(q + dy1dc)], acq[clampq(q)]},
+			array[] of {dcq[clampq(q + dy2dc)] * 2, y2ac},
+			array[] of {uvdc, acq[clampq(q + duvac)]});
+	}
+
+	getbit(b, 128);	# refresh entropy probabilities: there is one frame
+
+	probs := array[len coeffdefault] of int;
+	probs[0:] = coeffdefault;
+	for(i = 0; i < len probs; i++)
+		if(getbit(b, coeffupdate[i]))
+			probs[i] = getlit(b, 8);
+
+	skipon := getbit(b, 128);
+	skipprob := 0;
+	if(skipon)
+		skipprob = getlit(b, 8);
+
+	# Loop filter strengths, by segment and whether a macroblock is
+	# B_PRED: (limit, interior limit, high edge variance threshold)
+	flim := array[8] of int;
+	filev := array[8] of int;
+	fhev := array[8] of int;
+	for(s := 0; s < 4; s++)
+		for(i4 := 0; i4 < 2; i4++) {
+			l := level;
+			if(segon) {
+				l = seglf[s];
+				if(!segabs)
+					l += level;
+			}
+			if(lfdelta) {
+				l += refdelta[0];
+				if(i4)
+					l += modedelta[0];
+			}
+			if(l > 63)
+				l = 63;
+			else if(l < 0)
+				l = 0;
+			il := l;
+			if(sharp > 0) {
+				if(sharp > 4)
+					il >>= 2;
+				else
+					il >>= 1;
+				if(il > 9 - sharp)
+					il = 9 - sharp;
+			}
+			if(il < 1)
+				il = 1;
+			k := 2*s + i4;
+			flim[k] = 0;
+			if(l > 0)
+				flim[k] = 2*l + il;
+			filev[k] = il;
+			fhev[k] = 0;
+			if(l >= 40)
+				fhev[k] = 2;
+			else if(l >= 15)
+				fhev[k] = 1;
+		}
+
+	mbw := (w + 15) >> 4;
+	mbh := (h + 15) >> 4;
+	ys := mbw*16 + 5;
+	uvs := mbw*8 + 1;
+	f := ref Frame(w, h, mbw, mbh,
+		array[ys * (mbh*16 + 1)] of byte,
+		array[uvs * (mbh*8 + 1)] of byte,
+		array[uvs * (mbh*8 + 1)] of byte,
+		ys, uvs, ys + 1, uvs + 1);
+	for(i = 0; i < ys; i++)
+		f.y[i] = byte 127;
+	for(i = 0; i < uvs; i++)
+		f.u[i] = f.v[i] = byte 127;
+	for(i = 1; i <= mbh*16; i++)
+		f.y[i*ys] = byte 129;
+	for(i = 1; i <= mbh*8; i++)
+		f.u[i*uvs] = f.v[i*uvs] = byte 129;
+
+	# contexts: the subblock modes above and to the left, and whether
+	# the blocks above and to the left had coefficients
+	abmode := array[mbw*4] of {* => B_DC_PRED};
+	lbmode := array[4] of int;
+	anz := array[mbw*9] of {* => 0};	# 4 luma, 2+2 chroma, Y2
+	lnz := array[9] of int;
+	bmodes := array[16] of int;
+	coeffs := array[24*16] of {* => 0};
+	y2 := array[16] of {* => 0};
+	nzs := array[24] of {* => 0};
+
+	# what the loop filter wants of each macroblock: its strength's
+	# index, and whether to filter its inner edges
+	finfo := array[mbw*mbh] of int;
+
+	for(mby := 0; mby < mbh; mby++) {
+		tb := parts[mby & (np-1)];
+		for(i = 0; i < 4; i++)
+			lbmode[i] = B_DC_PRED;
+		for(i = 0; i < 9; i++)
+			lnz[i] = 0;
+		for(mbx := 0; mbx < mbw; mbx++) {
+			# the macroblock's header, from the first partition
+			seg := 0;
+			if(segmap) {
+				if(getbit(b, segprob[0]))
+					seg = 2 + getbit(b, segprob[2]);
+				else
+					seg = getbit(b, segprob[1]);
+			}
+			skip := 0;
+			if(skipon)
+				skip = getbit(b, skipprob);
+			ymode := gettree(b, kfymodetree, kfymodeprob, 0);
+			if(ymode == B_PRED) {
+				for(i = 0; i < 16; i++) {
+					a := abmode[mbx*4 + (i&3)];
+					l := lbmode[i>>2];
+					m := gettree(b, bmodetree, kfbmode, (a*10 + l)*9);
+					bmodes[i] = m;
+					abmode[mbx*4 + (i&3)] = m;
+					lbmode[i>>2] = m;
+				}
+			} else {
+				m := impliedb[ymode];
+				for(i = 0; i < 4; i++)
+					abmode[mbx*4 + i] = lbmode[i] = m;
+			}
+			uvmode := gettree(b, uvmodetree, kfuvmodeprob, 0);
+
+			# its coefficients, from its token partition
+			q := quants[seg];
+			nonzero := 0;
 			if(!skip)
-				allzero = residuals(v, tok, mbx, seg, i4);
+				nonzero = residuals(tb, probs, q, ymode != B_PRED, coeffs, y2, nzs, anz, mbx*9, lnz);
 			else {
-				v.lnz = 0;
-				v.tnz[mbx] = 0;
-				if(!i4) {
-					v.lnzdc = 0;
-					v.tnzdc[mbx] = 0;
+				for(i = 0; i < 8; i++)
+					anz[mbx*9 + i] = lnz[i] = 0;
+				if(ymode != B_PRED)
+					anz[mbx*9 + 8] = lnz[8] = 0;
+			}
+			inner := ymode == B_PRED || nonzero;
+			finfo[mby*mbw + mbx] = (2*seg + (ymode == B_PRED)) | (inner << 3);
+
+			reconstruct(f, mbx, mby, ymode, uvmode, bmodes, coeffs, nzs);
+
+			# leave the coefficients zero for the next
+			for(i = 0; i < 24; i++)
+				if(nzs[i]) {
+					for(j := i*16; j < i*16 + 16; j++)
+						coeffs[j] = 0;
+					nzs[i] = 0;
 				}
+		}
+		# the pixels right of the last macroblock, for the next row's
+		# prediction: its own bottom right pixel, repeated
+		r := f.yo + (mby*16 + 15)*ys + mbw*16;
+		for(i = 0; i < 4; i++)
+			f.y[r+i] = f.y[r-1];
+	}
+
+	if(level > 0)
+		loopfilter(f, simple, finfo, flim, filev, fhev);
+	return f;
+}
+
+clampq(q: int): int
+{
+	if(q < 0)
+		return 0;
+	if(q > 127)
+		return 127;
+	return q;
+}
+
+# A macroblock's coefficients, dequantised, in coeffs (all zero to
+# begin with): sixteen luma blocks, four U, four V.  With a Y2 block
+# (any luma mode but B_PRED), read into y2, its inverse Walsh-Hadamard
+# transform gives the luma blocks' DCs.
+# nzs says of each block: 0, no coefficients; 1, only a DC; 2, more.
+# The result is whether any block has a coefficient.
+residuals(b: ref BD, probs: array of int, q: ref Quant, hasy2: int,
+	coeffs, y2, nzs, anz: array of int, ao: int, lnz: array of int): int
+{
+	first := 0;
+	ytype := 3;
+	if(hasy2) {
+		for(i := 0; i < 16; i++)
+			y2[i] = 0;
+		ctx := anz[ao+8] + lnz[8];
+		n := tokens(b, probs, 1, ctx, q.y2, 0, y2, 0);
+		anz[ao+8] = lnz[8] = n > 0;
+		if(n > 1)
+			iwht(y2, coeffs);
+		else {
+			dc := (y2[0] + 3) >> 3;
+			for(i = 0; i < 16; i++)
+				coeffs[i*16] = dc;
+		}
+		first = 1;
+		ytype = 0;
+	}
+	any := 0;
+	for(y := 0; y < 4; y++) {
+		l := lnz[y];
+		for(x := 0; x < 4; x++) {
+			k := y*4 + x;
+			n := tokens(b, probs, ytype, l + anz[ao+x], q.y1, first, coeffs, k*16);
+			l = n > first;
+			anz[ao+x] = l;
+			if(n > 1)
+				nzs[k] = 2;
+			else if(coeffs[k*16] != 0)
+				nzs[k] = 1;
+			any |= nzs[k];
+		}
+		lnz[y] = l;
+	}
+	for(p := 0; p < 2; p++)
+		for(y = 0; y < 2; y++) {
+			l := lnz[4 + 2*p + y];
+			for(x := 0; x < 2; x++) {
+				k := 16 + 4*p + y*2 + x;
+				a := ao + 4 + 2*p + x;
+				n := tokens(b, probs, 2, l + anz[a], q.uv, 0, coeffs, k*16);
+				l = n > 0;
+				anz[a] = l;
+				if(n > 1)
+					nzs[k] = 2;
+				else if(coeffs[k*16] != 0)
+					nzs[k] = 1;
+				any |= nzs[k];
 			}
-			if(v.ftype > 0) {
-				o := (mby*v.mbw + mbx) * 4;
-				s := (seg*2 + i4) * 4;
-				v.finfo[o:] = v.fstr[s:s+4];
-				if(!allzero)
-					v.finfo[o+3] = 1;
-			}
-			reconstruct(v, mbx, mby, i4, uvmode);
+			lnz[4 + 2*p + y] = l;
 		}
-	}
+	return any != 0;
 }
 
-# a macroblock's segment, skip flag, 4x4-ness and modes (§11)
-modes(v: ref V8, mbx: int): (int, int, int, int)
+# One block's tokens (RFC 6386 section 13), from coefficient n on,
+# dequantised by dq into out[o:o+16]; the result is the index after
+# the last one read, or 16
+tokens(b: ref BD, probs: array of int, typ, ctx: int, dq: array of int, n: int, out: array of int, o: int): int
 {
-	br := v.br;
-	seg := 0;
-	if(v.segupdate) {
-		if(!getbit(br, v.segprob[0]))
-			seg = getbit(br, v.segprob[1]);
-		else
-			seg = getbit(br, v.segprob[2]) + 2;
-	}
-	skip := 0;
-	if(v.useskip)
-		skip = getbit(br, v.skipp);
-	i4 := !getbit(br, 145);
-	t := mbx * 4;
-	if(!i4) {
-		ymode: int;
-		if(getbit(br, 156)) {
-			if(getbit(br, 128))
-				ymode = BTM;
-			else
-				ymode = BHE;
-		} else {
-			if(getbit(br, 163))
-				ymode = BVE;
-			else
-				ymode = BDC;
-		}
-		v.imodes[0] = ymode;
-		for(i := 0; i < 4; i++) {
-			v.intrat[t+i] = ymode;
-			v.intral[i] = ymode;
-		}
-	} else {
-		for(y := 0; y < 4; y++) {
-			ym := v.intral[y];
-			for(x := 0; x < 4; x++) {
-				p := (v.intrat[t+x]*10 + ym) * 9;
-				if(!getbit(br, bmodesproba[p]))
-					ym = BDC;
-				else if(!getbit(br, bmodesproba[p+1]))
-					ym = BTM;
-				else if(!getbit(br, bmodesproba[p+2]))
-					ym = BVE;
-				else if(!getbit(br, bmodesproba[p+3])) {
-					if(!getbit(br, bmodesproba[p+4]))
-						ym = BHE;
-					else if(!getbit(br, bmodesproba[p+5]))
-						ym = BRD;
-					else
-						ym = BVR;
-				} else {
-					if(!getbit(br, bmodesproba[p+6]))
-						ym = BLD;
-					else if(!getbit(br, bmodesproba[p+7]))
-						ym = BVL;
-					else if(!getbit(br, bmodesproba[p+8]))
-						ym = BHD;
-					else
-						ym = BHU;
-				}
-				v.intrat[t+x] = ym;
-				v.imodes[y*4 + x] = ym;
-			}
-			v.intral[y] = ym;
-		}
-	}
-	uvmode: int;
-	if(!getbit(br, 142))
-		uvmode = BDC;
-	else if(!getbit(br, 114))
-		uvmode = BVE;
-	else if(getbit(br, 183))
-		uvmode = BTM;
-	else
-		uvmode = BHE;
-	return (seg, skip, i4, uvmode);
-}
-
-bands := array[] of {0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 0};
-zigzag := array[] of {0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15};
-cat3 := array[] of {173, 148, 140};
-cat4 := array[] of {176, 155, 140, 135};
-cat5 := array[] of {180, 157, 141, 134, 130};
-cat6 := array[] of {254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129};
-
-# where the probabilities for coefficient n of a block of type t, in context ctx, start
-pidx(t, n, ctx: int): int
-{
-	return ((t*8 + bands[n])*3 + ctx) * 11;
-}
-
-largevalue(b: ref BD, pr: array of int, p: int): int
-{
-	if(!getbit(b, pr[p+3])) {
-		if(!getbit(b, pr[p+4]))
-			return 2;
-		return 3 + getbit(b, pr[p+5]);
-	}
-	if(!getbit(b, pr[p+6])) {
-		if(!getbit(b, pr[p+7]))
-			return 5 + getbit(b, 159);
-		v := 7 + 2*getbit(b, 165);
-		return v + getbit(b, 145);
-	}
-	bit1 := getbit(b, pr[p+8]);
-	bit0 := getbit(b, pr[p+9+bit1]);
-	cat := 2*bit1 + bit0;
-	tab: array of int;
-	case cat {
-	0 => tab = cat3;
-	1 => tab = cat4;
-	2 => tab = cat5;
-	* => tab = cat6;
-	}
-	v := 0;
-	for(i := 0; i < len tab; i++)
-		v += v + getbit(b, tab[i]);
-	return v + 3 + (8 << cat);
-}
-
-# One block's coefficients (§13), dequantized, into out at o; returns
-# the position after the last non-zero one.
-coeffs(b: ref BD, pr: array of int, t, ctx, dq0, dq1, n: int, out: array of int, o: int): int
-{
-	p := pidx(t, n, ctx);
-	for(; n < 16; n++) {
-		if(!getbit(b, pr[p]))
-			return n;
-		while(!getbit(b, pr[p+1])) {
-			n++;
-			if(n == 16)
+	base := typ * (8*3*11);
+	p := base + bands[n]*33 + ctx*11;
+	while(n < 16) {
+		if(!getbit(b, probs[p]))
+			return n;	# end of block
+		while(!getbit(b, probs[p+1])) {	# a zero
+			if(++n == 16)
 				return 16;
-			p = pidx(t, n, 0);
+			p = base + bands[n]*33;
 		}
 		v: int;
-		if(!getbit(b, pr[p+2])) {
+		nctx: int;
+		if(!getbit(b, probs[p+2])) {
 			v = 1;
-			p = pidx(t, n+1, 1);
+			nctx = 1;
 		} else {
-			v = largevalue(b, pr, p);
-			p = pidx(t, n+1, 2);
+			if(!getbit(b, probs[p+3])) {
+				if(!getbit(b, probs[p+4]))
+					v = 2;
+				else
+					v = 3 + getbit(b, probs[p+5]);
+			} else if(!getbit(b, probs[p+6])) {
+				if(!getbit(b, probs[p+7]))
+					v = 5 + getbit(b, 159);
+				else {
+					v = 7 + 2*getbit(b, 165);
+					v += getbit(b, 145);
+				}
+			} else {
+				b1 := getbit(b, probs[p+8]);
+				b0 := getbit(b, probs[p+9+b1]);
+				cat := 2*b1 + b0;
+				v = 0;
+				for(i := catoff[cat]; i < catoff[cat+1]; i++)
+					v += v + getbit(b, catprob[i]);
+				v += 3 + (8 << cat);
+			}
+			nctx = 2;
 		}
 		if(getbit(b, 128))
 			v = -v;
-		dq := dq1;
 		if(n == 0)
-			dq = dq0;
-		out[o + zigzag[n]] = v * dq;
+			out[o + zigzag[n]] = v * dq[0];
+		else
+			out[o + zigzag[n]] = v * dq[1];
+		n++;
+		p = base + bands[n]*33 + nctx*11;
 	}
 	return 16;
 }
 
-# A macroblock's residuals (§13); returns whether all were zero.
-residuals(v: ref V8, tok: ref BD, mbx, seg, i4: int): int
+# The inverse Walsh-Hadamard transform: in, the Y2 block; the results
+# are the sixteen luma blocks' DCs
+iwht(in, coeffs: array of int)
 {
-	pr := v.proba;
-	c := v.coeffs;
-	q := seg * 6;
-	nonzero := 0;
-	first := 0;
-	actype := 3;
-	if(!i4) {
-		dc := array[16] of {* => 0};
-		ctx := v.tnzdc[mbx] + v.lnzdc;
-		nz := coeffs(tok, pr, 1, ctx, v.dq[q+2], v.dq[q+3], 0, dc, 0);
-		v.tnzdc[mbx] = v.lnzdc = nz > 0;
-		if(nz > 1)
-			wht(dc, c);
-		else {
-			dc0 := (dc[0] + 3) >> 3;
-			for(i := 0; i < 256; i += 16)
-				c[i] = dc0;
-		}
-		if(nz > 0)
-			nonzero = 1;
-		first = 1;
-		actype = 0;
-	}
-	tnz := v.tnz[mbx] & 16r0F;
-	lnz := v.lnz & 16r0F;
-	for(y := 0; y < 4; y++) {
-		l := lnz & 1;
-		for(x := 0; x < 4; x++) {
-			ctx := l + (tnz & 1);
-			nz := coeffs(tok, pr, actype, ctx, v.dq[q], v.dq[q+1], first, c, (y*4 + x)*16);
-			l = nz > first;
-			if(nz > first)
-				nonzero = 1;
-			tnz = (tnz >> 1) | (l << 7);
-		}
-		tnz >>= 4;
-		lnz = (lnz >> 1) | (l << 7);
-	}
-	otnz := tnz;
-	olnz := lnz >> 4;
-	for(ch := 0; ch < 4; ch += 2) {
-		tnz = v.tnz[mbx] >> (4 + ch);
-		lnz = v.lnz >> (4 + ch);
-		for(y = 0; y < 2; y++) {
-			l := lnz & 1;
-			for(x := 0; x < 2; x++) {
-				ctx := l + (tnz & 1);
-				nz := coeffs(tok, pr, 2, ctx, v.dq[q+4], v.dq[q+5], 0, c, (16 + ch*2 + y*2 + x)*16);
-				l = nz > 0;
-				if(nz > 0)
-					nonzero = 1;
-				tnz = (tnz >> 1) | (l << 3);
-			}
-			tnz >>= 2;
-			lnz = (lnz >> 1) | (l << 5);
-		}
-		otnz |= (tnz << 4) << ch;
-		olnz |= (lnz & 16rF0) << ch;
-	}
-	v.tnz[mbx] = otnz;
-	v.lnz = olnz;
-	return !nonzero;
-}
-
-# the inverse Walsh-Hadamard transform of the luma DCs, into each block's [0]
-wht(in: array of int, out: array of int)
-{
-	tmp := array[16] of int;
+	t := array[16] of int;
 	for(i := 0; i < 4; i++) {
-		a0 := in[0+i] + in[12+i];
-		a1 := in[4+i] + in[8+i];
-		a2 := in[4+i] - in[8+i];
-		a3 := in[0+i] - in[12+i];
-		tmp[0+i] = a0 + a1;
-		tmp[8+i] = a0 - a1;
-		tmp[4+i] = a3 + a2;
-		tmp[12+i] = a3 - a2;
+		a1 := in[i] + in[12+i];
+		b1 := in[4+i] + in[8+i];
+		c1 := in[4+i] - in[8+i];
+		d1 := in[i] - in[12+i];
+		t[i] = a1 + b1;
+		t[4+i] = c1 + d1;
+		t[8+i] = a1 - b1;
+		t[12+i] = d1 - c1;
 	}
-	o := 0;
 	for(i = 0; i < 4; i++) {
-		dc := tmp[0 + i*4] + 3;
-		a0 := dc + tmp[3 + i*4];
-		a1 := tmp[1 + i*4] + tmp[2 + i*4];
-		a2 := tmp[1 + i*4] - tmp[2 + i*4];
-		a3 := dc - tmp[3 + i*4];
-		out[o] = (a0 + a1) >> 3;
-		out[o+16] = (a3 + a2) >> 3;
-		out[o+32] = (a0 - a1) >> 3;
-		out[o+48] = (a3 - a2) >> 3;
-		o += 64;
+		a1 := t[4*i] + t[4*i+3];
+		b1 := t[4*i+1] + t[4*i+2];
+		c1 := t[4*i+1] - t[4*i+2];
+		d1 := t[4*i] - t[4*i+3];
+		coeffs[(4*i)*16] = (a1 + b1 + 3) >> 3;
+		coeffs[(4*i+1)*16] = (c1 + d1 + 3) >> 3;
+		coeffs[(4*i+2)*16] = (a1 - b1 + 3) >> 3;
+		coeffs[(4*i+3)*16] = (d1 - c1 + 3) >> 3;
 	}
 }
 
-mul1(a: int): int
-{
-	return ((a * 20091) >> 16) + a;
-}
-
-mul2(a: int): int
-{
-	return (a * 35468) >> 16;
-}
-
-clip8(v: int): byte
+clip255(v: int): byte
 {
 	if(v < 0)
 		return byte 0;
@@ -1545,675 +1454,835 @@ clip8(v: int): byte
 	return byte v;
 }
 
-# the inverse DCT of the block at c[o], added to the 4x4 pixels at b[d]
-idct(c: array of int, o: int, b: array of byte, d: int)
+# Add a block's residue, the inverse DCT of c[o:o+16], to the
+# prediction at pl[pos], its rows s apart
+idctadd(c: array of int, o: int, nz: int, pl: array of byte, pos, s: int)
 {
-	nz := 0;
-	for(i := 0; i < 16; i++)
-		if(c[o+i] != 0) {
-			nz = 1;
-			break;
-		}
-	if(!nz)
+	if(nz == 0)
 		return;
-	tmp := array[16] of int;
-	t := 0;
-	for(i = 0; i < 4; i++) {
-		in := o + i;
-		a := c[in] + c[in+8];
-		bb := c[in] - c[in+8];
-		cc := mul2(c[in+4]) - mul1(c[in+12]);
-		dd := mul1(c[in+4]) + mul2(c[in+12]);
-		tmp[t] = a + dd;
-		tmp[t+1] = bb + cc;
-		tmp[t+2] = bb - cc;
-		tmp[t+3] = a - dd;
-		t += 4;
+	if(nz == 1) {
+		dc := (c[o] + 4) >> 3;
+		for(y := 0; y < 4; y++) {
+			for(x := 0; x < 4; x++)
+				pl[pos+x] = clip255(int pl[pos+x] + dc);
+			pos += s;
+		}
+		return;
+	}
+	t := array[16] of int;
+	for(i := 0; i < 4; i++) {
+		i0 := c[o+i];
+		i4 := c[o+4+i];
+		i8 := c[o+8+i];
+		i12 := c[o+12+i];
+		a1 := i0 + i8;
+		b1 := i0 - i8;
+		c1 := ((i4 * 35468) >> 16) - (i12 + ((i12 * 20091) >> 16));
+		d1 := (i4 + ((i4 * 20091) >> 16)) + ((i12 * 35468) >> 16);
+		t[i] = a1 + d1;
+		t[12+i] = a1 - d1;
+		t[4+i] = b1 + c1;
+		t[8+i] = b1 - c1;
 	}
 	for(i = 0; i < 4; i++) {
-		dc := tmp[i] + 4;
-		a := dc + tmp[i+8];
-		bb := dc - tmp[i+8];
-		cc := mul2(tmp[i+4]) - mul1(tmp[i+12]);
-		dd := mul1(tmp[i+4]) + mul2(tmp[i+12]);
-		p := d + i*BPS;
-		b[p] = clip8(int b[p] + ((a + dd) >> 3));
-		b[p+1] = clip8(int b[p+1] + ((bb + cc) >> 3));
-		b[p+2] = clip8(int b[p+2] + ((bb - cc) >> 3));
-		b[p+3] = clip8(int b[p+3] + ((a - dd) >> 3));
+		t0 := t[4*i];
+		t1 := t[4*i+1];
+		t2 := t[4*i+2];
+		t3 := t[4*i+3];
+		a1 := t0 + t2;
+		b1 := t0 - t2;
+		c1 := ((t1 * 35468) >> 16) - (t3 + ((t3 * 20091) >> 16));
+		d1 := (t1 + ((t1 * 20091) >> 16)) + ((t3 * 35468) >> 16);
+		pl[pos] = clip255(int pl[pos] + ((a1 + d1 + 4) >> 3));
+		pl[pos+3] = clip255(int pl[pos+3] + ((a1 - d1 + 4) >> 3));
+		pl[pos+1] = clip255(int pl[pos+1] + ((b1 + c1 + 4) >> 3));
+		pl[pos+2] = clip255(int pl[pos+2] + ((b1 - c1 + 4) >> 3));
+		pos += s;
 	}
 }
 
-checkmode(mbx, mby, mode: int): int
+reconstruct(f: ref Frame, mbx, mby, ymode, uvmode: int, bmodes, coeffs, nzs: array of int)
 {
-	if(mode == BDC) {
-		if(mbx == 0) {
-			if(mby == 0)
-				return DCNOTOPLEFT;
-			return DCNOLEFT;
-		}
-		if(mby == 0)
-			return DCNOTOP;
-	}
-	return mode;
-}
-
-reconstruct(v: ref V8, mbx, mby, i4, uvmode: int)
-{
-	b := v.b;
-	j, k, n: int;
-	if(mbx == 0) {
-		for(j = 0; j < 16; j++)
-			b[YOFF + j*BPS - 1] = byte 129;
-		for(j = 0; j < 8; j++) {
-			b[UOFF + j*BPS - 1] = byte 129;
-			b[VOFF + j*BPS - 1] = byte 129;
-		}
-		if(mby > 0) {
-			b[YOFF - 1 - BPS] = byte 129;
-			b[UOFF - 1 - BPS] = byte 129;
-			b[VOFF - 1 - BPS] = byte 129;
-		} else {
-			for(j = 0; j < 16 + 4 + 1; j++)
-				b[YOFF - BPS - 1 + j] = byte 127;
-			for(j = 0; j < 8 + 1; j++) {
-				b[UOFF - BPS - 1 + j] = byte 127;
-				b[VOFF - BPS - 1 + j] = byte 127;
-			}
+	ys := f.ys;
+	yp := f.yo + mby*16*ys + mbx*16;
+	if(ymode == B_PRED) {
+		# above and right of the subblocks on the right: always
+		# from the row above the macroblock
+		tr := yp - ys + 16;
+		for(i := 0; i < 16; i++) {
+			bx := i & 3;
+			by := i >> 2;
+			pos := yp + by*4*ys + bx*4;
+			trp := pos - ys + 4;
+			if(bx == 3)
+				trp = tr;
+			predict4(f.y, pos, ys, trp, bmodes[i]);
+			idctadd(coeffs, i*16, nzs[i], f.y, pos, ys);
 		}
 	} else {
-		# the left samples are the previous macroblock's right columns
-		for(j = -1; j < 16; j++)
-			b[YOFF + j*BPS - 4:] = b[YOFF + j*BPS + 12:YOFF + j*BPS + 16];
-		for(j = -1; j < 8; j++) {
-			b[UOFF + j*BPS - 4:] = b[UOFF + j*BPS + 4:UOFF + j*BPS + 8];
-			b[VOFF + j*BPS - 4:] = b[VOFF + j*BPS + 4:VOFF + j*BPS + 8];
-		}
+		predict(f.y, yp, ys, 16, ymode, mbx, mby);
+		for(i := 0; i < 16; i++)
+			idctadd(coeffs, i*16, nzs[i], f.y, yp + (i>>2)*4*ys + (i&3)*4, ys);
 	}
-	if(mby > 0) {
-		b[YOFF - BPS:] = v.topy[mbx*16:mbx*16 + 16];
-		b[UOFF - BPS:] = v.topu[mbx*8:mbx*8 + 8];
-		b[VOFF - BPS:] = v.topv[mbx*8:mbx*8 + 8];
+	uvs := f.uvs;
+	up := f.uvo + mby*8*uvs + mbx*8;
+	predict(f.u, up, uvs, 8, uvmode, mbx, mby);
+	predict(f.v, up, uvs, 8, uvmode, mbx, mby);
+	for(i := 0; i < 4; i++) {
+		o := up + (i>>1)*4*uvs + (i&1)*4;
+		idctadd(coeffs, (16+i)*16, nzs[16+i], f.u, o, uvs);
+		idctadd(coeffs, (20+i)*16, nzs[20+i], f.v, o, uvs);
 	}
-	c := v.coeffs;
-	if(i4) {
-		tr := YOFF - BPS + 16;
+}
+
+# A whole block's prediction: luma 16x16, or chroma 8x8
+predict(pl: array of byte, p, s, n, mode, mbx, mby: int)
+{
+	case mode {
+	DC_PRED =>
+		sum := 0;
+		shift := 3;
+		if(n == 16)
+			shift = 4;
 		if(mby > 0) {
-			if(mbx >= v.mbw - 1)
-				for(j = 0; j < 4; j++)
-					b[tr + j] = v.topy[mbx*16 + 15];
-			else
-				b[tr:] = v.topy[(mbx+1)*16:(mbx+1)*16 + 4];
+			for(i := 0; i < n; i++)
+				sum += int pl[p - s + i];
+			shift++;
 		}
-		# the blocks down the right take the same pixels above-right
-		for(k = 1; k <= 3; k++)
-			b[tr + 4*k*BPS:] = b[tr:tr+4];
-		for(n = 0; n < 16; n++) {
-			dst := YOFF + (n & 3)*4 + (n >> 2)*4*BPS;
-			pred4(b, dst, v.imodes[n]);
-			idct(c, n*16, b, dst);
+		if(mbx > 0) {
+			for(i := 0; i < n; i++)
+				sum += int pl[p + i*s - 1];
+			shift++;
 		}
-	} else {
-		pred16(b, YOFF, checkmode(mbx, mby, v.imodes[0]));
-		for(n = 0; n < 16; n++)
-			idct(c, n*16, b, YOFF + (n & 3)*4 + (n >> 2)*4*BPS);
-	}
-	m := checkmode(mbx, mby, uvmode);
-	pred8(b, UOFF, m);
-	pred8(b, VOFF, m);
-	for(k = 0; k < 4; k++) {
-		off := (k & 1)*4 + (k >> 1)*4*BPS;
-		idct(c, (16 + k)*16, b, UOFF + off);
-		idct(c, (20 + k)*16, b, VOFF + off);
-	}
-	if(mby < v.mbh - 1) {
-		v.topy[mbx*16:] = b[YOFF + 15*BPS:YOFF + 15*BPS + 16];
-		v.topu[mbx*8:] = b[UOFF + 7*BPS:UOFF + 7*BPS + 8];
-		v.topv[mbx*8:] = b[VOFF + 7*BPS:VOFF + 7*BPS + 8];
-	}
-	yo := mby*16*v.ys + mbx*16;
-	for(j = 0; j < 16; j++)
-		v.yp[yo + j*v.ys:] = b[YOFF + j*BPS:YOFF + j*BPS + 16];
-	uo := mby*8*v.uvs + mbx*8;
-	for(j = 0; j < 8; j++) {
-		v.up[uo + j*v.uvs:] = b[UOFF + j*BPS:UOFF + j*BPS + 8];
-		v.vp[uo + j*v.uvs:] = b[VOFF + j*BPS:VOFF + j*BPS + 8];
-	}
-}
-
-fillblk(b: array of byte, d, size, val: int)
-{
-	for(y := 0; y < size; y++)
-		for(x := 0; x < size; x++)
-			b[d + y*BPS + x] = byte val;
-}
-
-truemotion(b: array of byte, d, size: int)
-{
-	tlv := int b[d - BPS - 1];
-	for(y := 0; y < size; y++) {
-		l := int b[d + y*BPS - 1] - tlv;
-		for(x := 0; x < size; x++)
-			b[d + y*BPS + x] = clip8(int b[d - BPS + x] + l);
+		dc := byte 128;
+		if(mbx > 0 || mby > 0) {
+			shift--;
+			dc = byte ((sum + (1 << (shift-1))) >> shift);
+		}
+		for(y := 0; y < n; y++)
+			for(x := 0; x < n; x++)
+				pl[p + y*s + x] = dc;
+	V_PRED =>
+		for(y := 0; y < n; y++)
+			pl[p + y*s:] = pl[p - s:p - s + n];
+	H_PRED =>
+		for(y := 0; y < n; y++) {
+			l := pl[p + y*s - 1];
+			for(x := 0; x < n; x++)
+				pl[p + y*s + x] = l;
+		}
+	TM_PRED =>
+		tlx := int pl[p - s - 1];
+		for(y := 0; y < n; y++) {
+			l := int pl[p + y*s - 1] - tlx;
+			for(x := 0; x < n; x++)
+				pl[p + y*s + x] = clip255(l + int pl[p - s + x]);
+		}
 	}
 }
 
-pred16(b: array of byte, d, mode: int)
+# A 4x4 subblock's prediction at pl[p]; the four pixels above and to
+# its right are at pl[tr]
+predict4(pl: array of byte, p, s, tr, mode: int)
 {
-	x, y, i, j, dc: int;
+	t := p - s;
+	# above: A[-1] (the corner) to A[7]; left: L[0] to L[3]
+	P := int pl[t-1];
+	A0 := int pl[t];
+	A1 := int pl[t+1];
+	A2 := int pl[t+2];
+	A3 := int pl[t+3];
+	A4 := int pl[tr];
+	A5 := int pl[tr+1];
+	A6 := int pl[tr+2];
+	A7 := int pl[tr+3];
+	L0 := int pl[p-1];
+	L1 := int pl[p+s-1];
+	L2 := int pl[p+2*s-1];
+	L3 := int pl[p+3*s-1];
 	case mode {
-	BTM =>
-		truemotion(b, d, 16);
-	BVE =>
-		for(y = 0; y < 16; y++)
-			b[d + y*BPS:] = b[d - BPS:d - BPS + 16];
-	BHE =>
-		for(y = 0; y < 16; y++)
-			for(x = 0; x < 16; x++)
-				b[d + y*BPS + x] = b[d + y*BPS - 1];
-	DCNOTOP =>
-		dc = 8;
-		for(j = 0; j < 16; j++)
-			dc += int b[d - 1 + j*BPS];
-		fillblk(b, d, 16, dc >> 4);
-	DCNOLEFT =>
-		dc = 8;
-		for(i = 0; i < 16; i++)
-			dc += int b[d + i - BPS];
-		fillblk(b, d, 16, dc >> 4);
-	DCNOTOPLEFT =>
-		fillblk(b, d, 16, 16r80);
-	* =>
-		dc = 16;
-		for(j = 0; j < 16; j++)
-			dc += int b[d - 1 + j*BPS] + int b[d + j - BPS];
-		fillblk(b, d, 16, dc >> 5);
-	}
-}
-
-pred8(b: array of byte, d, mode: int)
-{
-	x, y, i, dc: int;
-	case mode {
-	BTM =>
-		truemotion(b, d, 8);
-	BVE =>
-		for(y = 0; y < 8; y++)
-			b[d + y*BPS:] = b[d - BPS:d - BPS + 8];
-	BHE =>
-		for(y = 0; y < 8; y++)
-			for(x = 0; x < 8; x++)
-				b[d + y*BPS + x] = b[d + y*BPS - 1];
-	DCNOTOP =>
-		dc = 4;
-		for(i = 0; i < 8; i++)
-			dc += int b[d - 1 + i*BPS];
-		fillblk(b, d, 8, dc >> 3);
-	DCNOLEFT =>
-		dc = 4;
-		for(i = 0; i < 8; i++)
-			dc += int b[d + i - BPS];
-		fillblk(b, d, 8, dc >> 3);
-	DCNOTOPLEFT =>
-		fillblk(b, d, 8, 16r80);
-	* =>
-		dc = 8;
-		for(i = 0; i < 8; i++)
-			dc += int b[d + i - BPS] + int b[d - 1 + i*BPS];
-		fillblk(b, d, 8, dc >> 4);
-	}
-}
-
-avg3(a, b, c: int): byte
-{
-	return byte ((a + 2*b + c + 2) >> 2);
-}
-
-avg2b(a, b: int): byte
-{
-	return byte ((a + b + 1) >> 1);
-}
-
-pred4(b: array of byte, d, mode: int)
-{
-	top := d - BPS;
-	A := int b[top];
-	B := int b[top+1];
-	C := int b[top+2];
-	D := int b[top+3];
-	E := int b[top+4];
-	F := int b[top+5];
-	G := int b[top+6];
-	H := int b[top+7];
-	X := int b[top-1];
-	I := int b[d - 1];
-	J := int b[d - 1 + BPS];
-	K := int b[d - 1 + 2*BPS];
-	L := int b[d - 1 + 3*BPS];
-	case mode {
-	BDC =>
-		dc := 4;
-		for(i := 0; i < 4; i++)
-			dc += int b[top + i] + int b[d - 1 + i*BPS];
-		fillblk(b, d, 4, dc >> 3);
-	BTM =>
-		truemotion(b, d, 4);
-	BVE =>
-		r := array[4] of byte;
-		r[0] = avg3(X, A, B);
-		r[1] = avg3(A, B, C);
-		r[2] = avg3(B, C, D);
-		r[3] = avg3(C, D, E);
+	B_DC_PRED =>
+		dc := byte ((A0 + A1 + A2 + A3 + L0 + L1 + L2 + L3 + 4) >> 3);
 		for(y := 0; y < 4; y++)
-			b[d + y*BPS:] = r;
-	BHE =>
-		v0 := avg3(X, I, J);
-		v1 := avg3(I, J, K);
-		v2 := avg3(J, K, L);
-		v3 := avg3(K, L, L);
-		for(x := 0; x < 4; x++) {
-			b[d + x] = v0;
-			b[d + BPS + x] = v1;
-			b[d + 2*BPS + x] = v2;
-			b[d + 3*BPS + x] = v3;
-		}
-	BRD =>
-		put(b, d, 0, 3, avg3(J, K, L));
-		put(b, d, 1, 3, put(b, d, 0, 2, avg3(I, J, K)));
-		put(b, d, 2, 3, put(b, d, 1, 2, put(b, d, 0, 1, avg3(X, I, J))));
-		put(b, d, 3, 3, put(b, d, 2, 2, put(b, d, 1, 1, put(b, d, 0, 0, avg3(A, X, I)))));
-		put(b, d, 3, 2, put(b, d, 2, 1, put(b, d, 1, 0, avg3(B, A, X))));
-		put(b, d, 3, 1, put(b, d, 2, 0, avg3(C, B, A)));
-		put(b, d, 3, 0, avg3(D, C, B));
-	BLD =>
-		put(b, d, 0, 0, avg3(A, B, C));
-		put(b, d, 1, 0, put(b, d, 0, 1, avg3(B, C, D)));
-		put(b, d, 2, 0, put(b, d, 1, 1, put(b, d, 0, 2, avg3(C, D, E))));
-		put(b, d, 3, 0, put(b, d, 2, 1, put(b, d, 1, 2, put(b, d, 0, 3, avg3(D, E, F)))));
-		put(b, d, 3, 1, put(b, d, 2, 2, put(b, d, 1, 3, avg3(E, F, G))));
-		put(b, d, 3, 2, put(b, d, 2, 3, avg3(F, G, H)));
-		put(b, d, 3, 3, avg3(G, H, H));
-	BVR =>
-		put(b, d, 0, 0, put(b, d, 1, 2, avg2b(X, A)));
-		put(b, d, 1, 0, put(b, d, 2, 2, avg2b(A, B)));
-		put(b, d, 2, 0, put(b, d, 3, 2, avg2b(B, C)));
-		put(b, d, 3, 0, avg2b(C, D));
-		put(b, d, 0, 3, avg3(K, J, I));
-		put(b, d, 0, 2, avg3(J, I, X));
-		put(b, d, 0, 1, put(b, d, 1, 3, avg3(I, X, A)));
-		put(b, d, 1, 1, put(b, d, 2, 3, avg3(X, A, B)));
-		put(b, d, 2, 1, put(b, d, 3, 3, avg3(A, B, C)));
-		put(b, d, 3, 1, avg3(B, C, D));
-	BVL =>
-		put(b, d, 0, 0, avg2b(A, B));
-		put(b, d, 1, 0, put(b, d, 0, 2, avg2b(B, C)));
-		put(b, d, 2, 0, put(b, d, 1, 2, avg2b(C, D)));
-		put(b, d, 3, 0, put(b, d, 2, 2, avg2b(D, E)));
-		put(b, d, 0, 1, avg3(A, B, C));
-		put(b, d, 1, 1, put(b, d, 0, 3, avg3(B, C, D)));
-		put(b, d, 2, 1, put(b, d, 1, 3, avg3(C, D, E)));
-		put(b, d, 3, 1, put(b, d, 2, 3, avg3(D, E, F)));
-		put(b, d, 3, 2, avg3(E, F, G));
-		put(b, d, 3, 3, avg3(F, G, H));
-	BHU =>
-		put(b, d, 0, 0, avg2b(I, J));
-		put(b, d, 2, 0, put(b, d, 0, 1, avg2b(J, K)));
-		put(b, d, 2, 1, put(b, d, 0, 2, avg2b(K, L)));
-		put(b, d, 1, 0, avg3(I, J, K));
-		put(b, d, 3, 0, put(b, d, 1, 1, avg3(J, K, L)));
-		put(b, d, 3, 1, put(b, d, 1, 2, avg3(K, L, L)));
-		put(b, d, 3, 2, put(b, d, 2, 2, put(b, d, 0, 3, put(b, d, 1, 3, put(b, d, 2, 3, put(b, d, 3, 3, byte L))))));
-	BHD =>
-		put(b, d, 0, 0, put(b, d, 2, 1, avg2b(I, X)));
-		put(b, d, 0, 1, put(b, d, 2, 2, avg2b(J, I)));
-		put(b, d, 0, 2, put(b, d, 2, 3, avg2b(K, J)));
-		put(b, d, 0, 3, avg2b(L, K));
-		put(b, d, 3, 0, avg3(A, B, C));
-		put(b, d, 2, 0, avg3(X, A, B));
-		put(b, d, 1, 0, put(b, d, 3, 1, avg3(I, X, A)));
-		put(b, d, 1, 1, put(b, d, 3, 2, avg3(J, I, X)));
-		put(b, d, 1, 2, put(b, d, 3, 3, avg3(K, J, I)));
-		put(b, d, 1, 3, avg3(L, K, J));
+			for(x := 0; x < 4; x++)
+				pl[p + y*s + x] = dc;
+	B_TM_PRED =>
+		a := array[] of {A0, A1, A2, A3};
+		l := array[] of {L0, L1, L2, L3};
+		for(y := 0; y < 4; y++)
+			for(x := 0; x < 4; x++)
+				pl[p + y*s + x] = clip255(l[y] + a[x] - P);
+	B_VE_PRED =>
+		v := array[] of {
+			byte avg3(P, A0, A1), byte avg3(A0, A1, A2),
+			byte avg3(A1, A2, A3), byte avg3(A2, A3, A4)};
+		for(y := 0; y < 4; y++)
+			pl[p + y*s:] = v;
+	B_HE_PRED =>
+		h := array[] of {
+			byte avg3(P, L0, L1), byte avg3(L0, L1, L2),
+			byte avg3(L1, L2, L3), byte avg3(L2, L3, L3)};
+		for(y := 0; y < 4; y++)
+			for(x := 0; x < 4; x++)
+				pl[p + y*s + x] = h[y];
+	B_LD_PRED =>
+		e := array[] of {
+			avg3(A0, A1, A2), avg3(A1, A2, A3), avg3(A2, A3, A4),
+			avg3(A3, A4, A5), avg3(A4, A5, A6), avg3(A5, A6, A7),
+			avg3(A6, A7, A7)};
+		for(y := 0; y < 4; y++)
+			for(x := 0; x < 4; x++)
+				pl[p + y*s + x] = byte e[x + y];
+	B_RD_PRED =>
+		# along the edge from the bottom of the left to the right of the top
+		e := array[] of {
+			avg3(L3, L2, L1), avg3(L2, L1, L0), avg3(L1, L0, P),
+			avg3(L0, P, A0), avg3(P, A0, A1), avg3(A0, A1, A2),
+			avg3(A1, A2, A3)};
+		for(y := 0; y < 4; y++)
+			for(x := 0; x < 4; x++)
+				pl[p + y*s + x] = byte e[3 - y + x];
+	B_VR_PRED =>
+		put4(pl, p, s, array[] of {
+			avg2(P, A0), avg2(A0, A1), avg2(A1, A2), avg2(A2, A3),
+			avg3(L0, P, A0), avg3(P, A0, A1), avg3(A0, A1, A2), avg3(A1, A2, A3),
+			avg3(L1, L0, P), avg2(P, A0), avg2(A0, A1), avg2(A1, A2),
+			avg3(L2, L1, L0), avg3(L0, P, A0), avg3(P, A0, A1), avg3(A0, A1, A2)});
+	B_VL_PRED =>
+		put4(pl, p, s, array[] of {
+			avg2(A0, A1), avg2(A1, A2), avg2(A2, A3), avg2(A3, A4),
+			avg3(A0, A1, A2), avg3(A1, A2, A3), avg3(A2, A3, A4), avg3(A3, A4, A5),
+			avg2(A1, A2), avg2(A2, A3), avg2(A3, A4), avg3(A4, A5, A6),
+			avg3(A1, A2, A3), avg3(A2, A3, A4), avg3(A3, A4, A5), avg3(A5, A6, A7)});
+	B_HD_PRED =>
+		put4(pl, p, s, array[] of {
+			avg2(L0, P), avg3(L0, P, A0), avg3(P, A0, A1), avg3(A0, A1, A2),
+			avg2(L1, L0), avg3(L1, L0, P), avg2(L0, P), avg3(L0, P, A0),
+			avg2(L2, L1), avg3(L2, L1, L0), avg2(L1, L0), avg3(L1, L0, P),
+			avg2(L3, L2), avg3(L3, L2, L1), avg2(L2, L1), avg3(L2, L1, L0)});
+	B_HU_PRED =>
+		put4(pl, p, s, array[] of {
+			avg2(L0, L1), avg3(L0, L1, L2), avg2(L1, L2), avg3(L1, L2, L3),
+			avg2(L1, L2), avg3(L1, L2, L3), avg2(L2, L3), avg3(L2, L3, L3),
+			avg2(L2, L3), avg3(L2, L3, L3), L3, L3,
+			L3, L3, L3, L3});
 	}
 }
 
-put(b: array of byte, d, x, y: int, v: byte): byte
+avg2(a, b: int): int
 {
-	b[d + x + y*BPS] = v;
-	return v;
+	return (a + b + 1) >> 1;
 }
 
-# ---- the loop filter (§15), whole frame, macroblocks in order ----
-
-sclip1(v: int): int
+avg3(a, b, c: int): int
 {
-	if(v < -128)
-		return -128;
-	if(v > 127)
-		return 127;
-	return v;
+	return (a + 2*b + c + 2) >> 2;
 }
 
-sclip2(v: int): int
+put4(pl: array of byte, p, s: int, v: array of int)
 {
-	if(v < -16)
-		return -16;
-	if(v > 15)
-		return 15;
-	return v;
+	for(y := 0; y < 4; y++)
+		for(x := 0; x < 4; x++)
+			pl[p + y*s + x] = byte v[y*4 + x];
 }
 
-clip1(v: int): byte
+# The loop filter (RFC 6386 section 15), over the whole frame once it
+# is reconstructed, a macroblock at a time in raster order: its left
+# edge, its inner vertical edges, its top edge, its inner horizontal
+# edges.
+loopfilter(f: ref Frame, simple: int, finfo, flim, filev, fhev: array of int)
 {
-	if(v < 0)
-		return byte 0;
-	if(v > 255)
-		return byte 255;
-	return byte v;
-}
-
-needsfilter(a: array of byte, p, step, t: int): int
-{
-	p1 := int a[p - 2*step];
-	p0 := int a[p - step];
-	q0 := int a[p];
-	q1 := int a[p + step];
-	return 4*iabs(p0 - q0) + iabs(p1 - q1) <= t;
-}
-
-needsfilter2(a: array of byte, p, step, t, it: int): int
-{
-	p3 := int a[p - 4*step];
-	p2 := int a[p - 3*step];
-	p1 := int a[p - 2*step];
-	p0 := int a[p - step];
-	q0 := int a[p];
-	q1 := int a[p + step];
-	q2 := int a[p + 2*step];
-	q3 := int a[p + 3*step];
-	if(4*iabs(p0 - q0) + iabs(p1 - q1) > t)
-		return 0;
-	return iabs(p3 - p2) <= it && iabs(p2 - p1) <= it && iabs(p1 - p0) <= it &&
-		iabs(q3 - q2) <= it && iabs(q2 - q1) <= it && iabs(q1 - q0) <= it;
-}
-
-hev(a: array of byte, p, step, t: int): int
-{
-	p1 := int a[p - 2*step];
-	p0 := int a[p - step];
-	q0 := int a[p];
-	q1 := int a[p + step];
-	return iabs(p1 - p0) > t || iabs(q1 - q0) > t;
-}
-
-dofilter2(a: array of byte, p, step: int)
-{
-	p1 := int a[p - 2*step];
-	p0 := int a[p - step];
-	q0 := int a[p];
-	q1 := int a[p + step];
-	x := 3*(q0 - p0) + sclip1(p1 - q1);
-	a1 := sclip2((x + 4) >> 3);
-	a2 := sclip2((x + 3) >> 3);
-	a[p - step] = clip1(p0 + a2);
-	a[p] = clip1(q0 - a1);
-}
-
-dofilter4(a: array of byte, p, step: int)
-{
-	p1 := int a[p - 2*step];
-	p0 := int a[p - step];
-	q0 := int a[p];
-	q1 := int a[p + step];
-	x := 3*(q0 - p0);
-	a1 := sclip2((x + 4) >> 3);
-	a2 := sclip2((x + 3) >> 3);
-	a3 := (a1 + 1) >> 1;
-	a[p - 2*step] = clip1(p1 + a3);
-	a[p - step] = clip1(p0 + a2);
-	a[p] = clip1(q0 - a1);
-	a[p + step] = clip1(q1 - a3);
-}
-
-dofilter6(a: array of byte, p, step: int)
-{
-	p2 := int a[p - 3*step];
-	p1 := int a[p - 2*step];
-	p0 := int a[p - step];
-	q0 := int a[p];
-	q1 := int a[p + step];
-	q2 := int a[p + 2*step];
-	x := sclip1(3*(q0 - p0) + sclip1(p1 - q1));
-	a1 := (27*x + 63) >> 7;
-	a2 := (18*x + 63) >> 7;
-	a3 := (9*x + 63) >> 7;
-	a[p - 3*step] = clip1(p2 + a3);
-	a[p - 2*step] = clip1(p1 + a2);
-	a[p - step] = clip1(p0 + a1);
-	a[p] = clip1(q0 - a1);
-	a[p + step] = clip1(q1 - a2);
-	a[p + 2*step] = clip1(q2 - a3);
-}
-
-simplefilter(a: array of byte, p, hstride, vstride, thresh: int)
-{
-	t2 := 2*thresh + 1;
-	for(i := 0; i < 16; i++) {
-		q := p + i*vstride;
-		if(needsfilter(a, q, hstride, t2))
-			dofilter2(a, q, hstride);
-	}
-}
-
-# FilterLoop26 (edges: six taps) and FilterLoop24 (inner: four)
-filterloop(a: array of byte, p, hstride, vstride, size, thresh, ithresh, hevt, six: int)
-{
-	t2 := 2*thresh + 1;
-	for(; size > 0; size--) {
-		if(needsfilter2(a, p, hstride, t2, ithresh)) {
-			if(hev(a, p, hstride, hevt))
-				dofilter2(a, p, hstride);
-			else if(six)
-				dofilter6(a, p, hstride);
-			else
-				dofilter4(a, p, hstride);
-		}
-		p += vstride;
-	}
-}
-
-loopfilter(v: ref V8)
-{
-	ys := v.ys;
-	uvs := v.uvs;
-	k: int;
-	for(mby := 0; mby < v.mbh; mby++)
-		for(mbx := 0; mbx < v.mbw; mbx++) {
-			o := (mby*v.mbw + mbx) * 4;
-			limit := v.finfo[o];
-			if(limit == 0)
+	ys := f.ys;
+	uvs := f.uvs;
+	for(mby := 0; mby < f.mbh; mby++)
+		for(mbx := 0; mbx < f.mbw; mbx++) {
+			fi := finfo[mby*f.mbw + mbx];
+			k := fi & 7;
+			inner := fi >> 3;
+			lim := flim[k];
+			if(lim == 0)
 				continue;
-			il := v.finfo[o+1];
-			hevt := v.finfo[o+2];
-			inner := v.finfo[o+3];
-			y := mby*16*ys + mbx*16;
-			if(v.ftype == 1) {
+			il := filev[k];
+			hev := fhev[k];
+			yp := f.yo + mby*16*ys + mbx*16;
+			if(simple) {
 				if(mbx > 0)
-					simplefilter(v.yp, y, 1, ys, limit + 4);
+					simpleedge(f.y, yp, 1, ys, 16, lim + 4);
 				if(inner)
-					for(k = 1; k <= 3; k++)
-						simplefilter(v.yp, y + 4*k, 1, ys, limit);
+					for(x := 4; x < 16; x += 4)
+						simpleedge(f.y, yp + x, 1, ys, 16, lim);
 				if(mby > 0)
-					simplefilter(v.yp, y, ys, 1, limit + 4);
+					simpleedge(f.y, yp, ys, 1, 16, lim + 4);
 				if(inner)
-					for(k = 1; k <= 3; k++)
-						simplefilter(v.yp, y + 4*k*ys, ys, 1, limit);
+					for(y := 4; y < 16; y += 4)
+						simpleedge(f.y, yp + y*ys, ys, 1, 16, lim);
 				continue;
 			}
-			u := mby*8*uvs + mbx*8;
+			up := f.uvo + mby*8*uvs + mbx*8;
 			if(mbx > 0) {
-				filterloop(v.yp, y, 1, ys, 16, limit + 4, il, hevt, 1);
-				filterloop(v.up, u, 1, uvs, 8, limit + 4, il, hevt, 1);
-				filterloop(v.vp, u, 1, uvs, 8, limit + 4, il, hevt, 1);
+				edge(f.y, yp, 1, ys, 16, lim + 4, il, hev, 1);
+				edge(f.u, up, 1, uvs, 8, lim + 4, il, hev, 1);
+				edge(f.v, up, 1, uvs, 8, lim + 4, il, hev, 1);
 			}
 			if(inner) {
-				for(k = 1; k <= 3; k++)
-					filterloop(v.yp, y + 4*k, 1, ys, 16, limit, il, hevt, 0);
-				filterloop(v.up, u + 4, 1, uvs, 8, limit, il, hevt, 0);
-				filterloop(v.vp, u + 4, 1, uvs, 8, limit, il, hevt, 0);
+				for(x := 4; x < 16; x += 4)
+					edge(f.y, yp + x, 1, ys, 16, lim, il, hev, 0);
+				edge(f.u, up + 4, 1, uvs, 8, lim, il, hev, 0);
+				edge(f.v, up + 4, 1, uvs, 8, lim, il, hev, 0);
 			}
 			if(mby > 0) {
-				filterloop(v.yp, y, ys, 1, 16, limit + 4, il, hevt, 1);
-				filterloop(v.up, u, uvs, 1, 8, limit + 4, il, hevt, 1);
-				filterloop(v.vp, u, uvs, 1, 8, limit + 4, il, hevt, 1);
+				edge(f.y, yp, ys, 1, 16, lim + 4, il, hev, 1);
+				edge(f.u, up, uvs, 1, 8, lim + 4, il, hev, 1);
+				edge(f.v, up, uvs, 1, 8, lim + 4, il, hev, 1);
 			}
 			if(inner) {
-				for(k = 1; k <= 3; k++)
-					filterloop(v.yp, y + 4*k*ys, ys, 1, 16, limit, il, hevt, 0);
-				filterloop(v.up, u + 4*uvs, uvs, 1, 8, limit, il, hevt, 0);
-				filterloop(v.vp, u + 4*uvs, uvs, 1, 8, limit, il, hevt, 0);
+				for(y := 4; y < 16; y += 4)
+					edge(f.y, yp + y*ys, ys, 1, 16, lim, il, hev, 0);
+				edge(f.u, up + 4*uvs, uvs, 1, 8, lim, il, hev, 0);
+				edge(f.v, up + 4*uvs, uvs, 1, 8, lim, il, hev, 0);
 			}
 		}
 }
 
-# ---- YUV to RGB: libwebp's fancy upsampling and fixed-point BT.601 ----
+# Clamping, by table, as libwebp does it: abs0[x+255] is |x|;
+# sclip1[x+1020] is x clamped to [-128, 127]; sclip2[x+112] is x
+# clamped to [-16, 15]; clip1[x+255] is x clamped to [0, 255].
+abs0, sclip1, sclip2: array of int;
+clip1: array of byte;
 
-mulhi(v, c: int): int
+# YUV to RGB, as libwebp converts (14-bit fixed point, BT.601); the
+# sums, shifted down 6, are clamped by clip1
+ytab, vrtab, ugtab, vgtab, ubtab: array of int;
+
+# Make the tables, each whole before it is seen, as the module may be
+# shared; norm, the one vp8 looks for, last
+mktables()
 {
-	return (v * c) >> 8;
+	ab := array[511] of int;
+	for(i := -255; i <= 255; i++) {
+		ab[i+255] = i;
+		if(i < 0)
+			ab[i+255] = -i;
+	}
+	s1 := array[2041] of int;
+	for(i = -1020; i <= 1020; i++) {
+		v := i;
+		if(v < -128)
+			v = -128;
+		else if(v > 127)
+			v = 127;
+		s1[i+1020] = v;
+	}
+	s2 := array[225] of int;
+	for(i = -112; i <= 112; i++) {
+		v := i;
+		if(v < -16)
+			v = -16;
+		else if(v > 15)
+			v = 15;
+		s2[i+112] = v;
+	}
+	c1 := array[766] of byte;
+	for(i = -255; i <= 510; i++) {
+		v := i;
+		if(v < 0)
+			v = 0;
+		else if(v > 255)
+			v = 255;
+		c1[i+255] = byte v;
+	}
+	yt := array[256] of int;
+	vr := array[256] of int;
+	ug := array[256] of int;
+	vg := array[256] of int;
+	ub := array[256] of int;
+	for(i = 0; i < 256; i++) {
+		yt[i] = (i * 19077) >> 8;
+		vr[i] = ((i * 26149) >> 8) - 14234;
+		ug[i] = (i * 6419) >> 8;
+		vg[i] = ((i * 13320) >> 8) - 8708;
+		ub[i] = ((i * 33050) >> 8) - 17685;
+	}
+	nm := array[256] of int;
+	for(r := 1; r < 256; r++) {
+		sh := 0;
+		while((r << sh) < 128)
+			sh++;
+		nm[r] = sh;
+	}
+	(abs0, sclip1, sclip2, clip1) = (ab, s1, s2, c1);
+	(ytab, vrtab, ugtab, vgtab, ubtab) = (yt, vr, ug, vg, ub);
+	norm = nm;
 }
 
-yclip8(v: int): byte
+# Filter n pixels along an edge, from pl[pos] on, adv apart; the
+# pixels either side of it are step apart: p3 p2 p1 p0 | q0 q1 q2 q3.
+# The simple filter moves p0 and q0.
+simpleedge(pl: array of byte, pos, step, adv, n, lim: int)
 {
-	if((v & ~16383) == 0)
-		return byte (v >> 6);
-	if(v < 0)
-		return byte 0;
-	return byte 255;
+	for(; n > 0; n--) {
+		p1 := int pl[pos - 2*step];
+		p0 := int pl[pos - step];
+		q0 := int pl[pos];
+		q1 := int pl[pos + step];
+		if(2*abs0[p0 - q0 + 255] + (abs0[p1 - q1 + 255] >> 1) <= lim) {
+			a := 3*(q0 - p0) + sclip1[p1 - q1 + 1020];
+			pl[pos - step] = clip1[p0 + sclip2[((a + 3) >> 3) + 112] + 255];
+			pl[pos] = clip1[q0 - sclip2[((a + 4) >> 3) + 112] + 255];
+		}
+		pos += adv;
+	}
 }
 
-Out: adt {
-	r, g, b:	array of byte;
-};
-
-emit(o: ref Out, i, y, u, v: int)
+# The normal filter: where the edge varies a lot, as the simple one;
+# elsewhere, across a macroblock edge (mb) it moves three pixels each
+# side, and across a subblock's edge two.
+edge(pl: array of byte, pos, step, adv, n, lim, il, hev, mb: int)
 {
-	yy := mulhi(y, 19077);
-	o.r[i] = yclip8(yy + mulhi(v, 26149) - 14234);
-	o.g[i] = yclip8(yy - mulhi(u, 6419) - mulhi(v, 13320) + 8708);
-	o.b[i] = yclip8(yy + mulhi(u, 33050) - 17685);
+	for(; n > 0; n--) {
+		p1 := int pl[pos - 2*step];
+		p0 := int pl[pos - step];
+		q0 := int pl[pos];
+		q1 := int pl[pos + step];
+		if(2*abs0[p0 - q0 + 255] + (abs0[p1 - q1 + 255] >> 1) > lim) {
+			pos += adv;
+			continue;
+		}
+		p3 := int pl[pos - 4*step];
+		p2 := int pl[pos - 3*step];
+		q2 := int pl[pos + 2*step];
+		q3 := int pl[pos + 3*step];
+		if(abs0[p3 - p2 + 255] > il || abs0[p2 - p1 + 255] > il || abs0[p1 - p0 + 255] > il ||
+		   abs0[q3 - q2 + 255] > il || abs0[q2 - q1 + 255] > il || abs0[q1 - q0 + 255] > il) {
+			pos += adv;
+			continue;
+		}
+		if(abs0[p1 - p0 + 255] > hev || abs0[q1 - q0 + 255] > hev) {
+			a := 3*(q0 - p0) + sclip1[p1 - q1 + 1020];
+			pl[pos - step] = clip1[p0 + sclip2[((a + 3) >> 3) + 112] + 255];
+			pl[pos] = clip1[q0 - sclip2[((a + 4) >> 3) + 112] + 255];
+		} else if(mb) {
+			a := sclip1[3*(q0 - p0) + sclip1[p1 - q1 + 1020] + 1020];
+			a1 := (27*a + 63) >> 7;
+			a2 := (18*a + 63) >> 7;
+			a3 := (9*a + 63) >> 7;
+			pl[pos - 3*step] = clip1[p2 + a3 + 255];
+			pl[pos - 2*step] = clip1[p1 + a2 + 255];
+			pl[pos - step] = clip1[p0 + a1 + 255];
+			pl[pos] = clip1[q0 - a1 + 255];
+			pl[pos + step] = clip1[q1 - a2 + 255];
+			pl[pos + 2*step] = clip1[q2 - a3 + 255];
+		} else {
+			a := 3*(q0 - p0);
+			a1 := sclip2[((a + 4) >> 3) + 112];
+			a2 := sclip2[((a + 3) >> 3) + 112];
+			a3 := (a1 + 1) >> 1;
+			pl[pos - 2*step] = clip1[p1 + a3 + 255];
+			pl[pos - step] = clip1[p0 + a2 + 255];
+			pl[pos] = clip1[q0 - a1 + 255];
+			pl[pos + step] = clip1[q1 - a3 + 255];
+		}
+		pos += adv;
+	}
 }
 
-# a pair of output rows (bottom < 0: the top alone), between chroma
-# rows tu (above) and cu
-upsample(v: ref V8, o: ref Out, top, bottom, tu, cu: int)
+torgb(f: ref Frame): ref Pic
 {
-	w := v.w;
-	yp := v.yp;
-	ys := v.ys;
-	up := v.up;
-	vp := v.vp;
-	uvs := v.uvs;
-	ty := top * ys;
-	by := bottom * ys;
-	tpo := top * w;
-	bo := bottom * w;
-	tuo := tu * uvs;
-	cuo := cu * uvs;
+	w := f.w;
+	h := f.h;
+	n := w * h;
+	p := ref Pic(w, h, array[n] of byte, array[n] of byte, array[n] of byte, nil);
+	ch := (h + 1) >> 1;
+	ur := array[w] of int;
+	vr := array[w] of int;
+	o := 0;
+	for(y := 0; y < h; y++) {
+		# the chroma rows nearer and farther from this luma row
+		near, far: int;
+		if(y == 0)
+			near = far = 0;
+		else if(y & 1) {
+			near = (y - 1) >> 1;
+			far = (y + 1) >> 1;
+			if(far >= ch)
+				far = ch - 1;
+		} else {
+			near = y >> 1;
+			far = near - 1;
+		}
+		upline(f.u, f.uvo + near*f.uvs, f.uvo + far*f.uvs, w, ur);
+		upline(f.v, f.uvo + near*f.uvs, f.uvo + far*f.uvs, w, vr);
+		yr := f.yo + y*f.ys;
+		for(x := 0; x < w; x++) {
+			yy := ytab[int f.y[yr + x]];
+			u := ur[x];
+			v := vr[x];
+			p.r[o] = clip1[((yy + vrtab[v]) >> 6) + 255];
+			p.g[o] = clip1[((yy - ugtab[u] - vgtab[v]) >> 6) + 255];
+			p.b[o] = clip1[((yy + ubtab[u]) >> 6) + 255];
+			o++;
+		}
+	}
+	return p;
+}
+
+# A row of chroma brought up to full width and between two rows, the
+# nearer weighted 3 to the farther's 1, both ways
+upline(pl: array of byte, n, fa, w: int, out: array of int)
+{
+	tlx := int pl[n];
+	l := int pl[fa];
+	out[0] = (3*tlx + l + 2) >> 2;
 	last := (w - 1) >> 1;
-	tlu := int up[tuo];
-	tlv := int vp[tuo];
-	lu := int up[cuo];
-	lv := int vp[cuo];
-	emit(o, tpo, int yp[ty], (3*tlu + lu + 2) >> 2, (3*tlv + lv + 2) >> 2);
-	if(bottom >= 0)
-		emit(o, bo, int yp[by], (3*lu + tlu + 2) >> 2, (3*lv + tlv + 2) >> 2);
-	for(x := 1; x <= last; x++) {
-		tu1 := int up[tuo + x];
-		tv1 := int vp[tuo + x];
-		cu1 := int up[cuo + x];
-		cv1 := int vp[cuo + x];
-		au := tlu + tu1 + lu + cu1 + 8;
-		av := tlv + tv1 + lv + cv1 + 8;
-		d12u := (au + 2*(tu1 + lu)) >> 3;
-		d12v := (av + 2*(tv1 + lv)) >> 3;
-		d03u := (au + 2*(tlu + cu1)) >> 3;
-		d03v := (av + 2*(tlv + cv1)) >> 3;
-		emit(o, tpo + 2*x - 1, int yp[ty + 2*x - 1], (d12u + tlu) >> 1, (d12v + tlv) >> 1);
-		emit(o, tpo + 2*x, int yp[ty + 2*x], (d03u + tu1) >> 1, (d03v + tv1) >> 1);
-		if(bottom >= 0) {
-			emit(o, bo + 2*x - 1, int yp[by + 2*x - 1], (d03u + lu) >> 1, (d03v + lv) >> 1);
-			emit(o, bo + 2*x, int yp[by + 2*x], (d12u + cu1) >> 1, (d12v + cv1) >> 1);
-		}
-		tlu = tu1;
-		tlv = tv1;
-		lu = cu1;
-		lv = cv1;
+	for(j := 1; j <= last; j++) {
+		t := int pl[n + j];
+		u := int pl[fa + j];
+		avg := tlx + t + l + u + 8;
+		out[2*j - 1] = (((avg + 2*(t + l)) >> 3) + tlx) >> 1;
+		out[2*j] = (((avg + 2*(tlx + u)) >> 3) + t) >> 1;
+		tlx = t;
+		l = u;
 	}
-	if((w & 1) == 0) {
-		emit(o, tpo + w - 1, int yp[ty + w - 1], (3*tlu + lu + 2) >> 2, (3*tlv + lv + 2) >> 2);
-		if(bottom >= 0)
-			emit(o, bo + w - 1, int yp[by + w - 1], (3*lu + tlu + 2) >> 2, (3*lv + tlv + 2) >> 2);
-	}
+	if((w & 1) == 0)
+		out[w - 1] = (3*tlx + l + 2) >> 2;
 }
 
-torgb(v: ref V8): ref Rawimage
-{
-	n := v.w * v.h;
-	o := ref Out(array[n] of byte, array[n] of byte, array[n] of byte);
-	upsample(v, o, 0, -1, 0, 0);
-	y := 0;
-	for(; y + 2 < v.h; y += 2)
-		upsample(v, o, y + 1, y + 2, y/2, y/2 + 1);
-	if((v.h & 1) == 0)
-		upsample(v, o, v.h - 1, -1, y/2, y/2);
-	raw := ref Rawimage;
-	raw.r = ((0, 0), (v.w, v.h));
-	raw.cmap = nil;
-	raw.transp = 0;
-	raw.trindex = byte 0;
-	raw.nchans = 3;
-	raw.chandesc = RImagefile->CRGB;
-	raw.chans = array[] of {o.r, o.g, o.b};
-	raw.fields = 0;
-	return raw;
-}
+# ==================== Utilities ====================
 
-# ---------------- utilities ----------------
-
-readall(fd: ref Iobuf): array of byte
+divup(n, d: int): int
 {
-	data := array[65536] of byte;
-	n := 0;
-	for(;;) {
-		if(n == len data) {
-			nd := array[2 * len data] of byte;
-			nd[0:] = data;
-			data = nd;
-		}
-		r := fd.read(data[n:], len data - n);
-		if(r <= 0)
-			break;
-		n += r;
-	}
-	if(n == 0)
-		return nil;
-	return data[0:n];
-}
-
-le32(d: array of byte, o: int): int
-{
-	return int d[o] | (int d[o+1] << 8) | (int d[o+2] << 16) | (int d[o+3] << 24);
+	return (n + d - 1) / d;
 }
 
 le24(d: array of byte, o: int): int
 {
-	return int d[o] | (int d[o+1] << 8) | (int d[o+2] << 16);
+	return int d[o] | (int d[o+1]<<8) | (int d[o+2]<<16);
 }
 
-# ---------------- tables, from libwebp ----------------
+le32(d: array of byte, o: int): int
+{
+	return int d[o] | (int d[o+1]<<8) | (int d[o+2]<<16) | (int d[o+3]<<24);
+}
 
-dctab := array[] of {
+readall(fd: ref Iobuf): array of byte
+{
+	buf := array[65536] of byte;
+	n := 0;
+	for(;;) {
+		if(n == len buf) {
+			nb := array[2 * len buf] of byte;
+			nb[0:] = buf;
+			buf = nb;
+		}
+		m := fd.read(buf[n:], len buf - n);
+		if(m <= 0)
+			break;
+		n += m;
+	}
+	return buf[0:n];
+}
+
+# ==================== Tables ====================
+
+coeffupdate := array[] of {
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	176, 246, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	223, 241, 252, 255, 255, 255, 255, 255, 255, 255, 255,
+	249, 253, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 244, 252, 255, 255, 255, 255, 255, 255, 255, 255,
+	234, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 246, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	239, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 248, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	251, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	251, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 254, 253, 255, 254, 255, 255, 255, 255, 255, 255,
+	250, 255, 254, 255, 254, 255, 255, 255, 255, 255, 255,
+	254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	217, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	225, 252, 241, 253, 255, 255, 254, 255, 255, 255, 255,
+	234, 250, 241, 250, 253, 255, 253, 254, 255, 255, 255,
+	255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	223, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	238, 253, 254, 254, 255, 255, 255, 255, 255, 255, 255,
+	255, 248, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	249, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 253, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	247, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	252, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 254, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+	250, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	186, 251, 250, 255, 255, 255, 255, 255, 255, 255, 255,
+	234, 251, 244, 254, 255, 255, 255, 255, 255, 255, 255,
+	251, 251, 243, 253, 254, 255, 254, 255, 255, 255, 255,
+	255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	236, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	251, 253, 253, 254, 254, 255, 255, 255, 255, 255, 255,
+	255, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	248, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	250, 254, 252, 254, 255, 255, 255, 255, 255, 255, 255,
+	248, 254, 249, 253, 255, 255, 255, 255, 255, 255, 255,
+	255, 253, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+	246, 253, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+	252, 254, 251, 254, 254, 255, 255, 255, 255, 255, 255,
+	255, 254, 252, 255, 255, 255, 255, 255, 255, 255, 255,
+	248, 254, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+	253, 255, 254, 254, 255, 255, 255, 255, 255, 255, 255,
+	255, 251, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	245, 251, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	253, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 251, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+	252, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 252, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	249, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 253, 255, 255, 255, 255, 255, 255, 255, 255,
+	250, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+};
+coeffdefault := array[] of {
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	253, 136, 254, 255, 228, 219, 128, 128, 128, 128, 128,
+	189, 129, 242, 255, 227, 213, 255, 219, 128, 128, 128,
+	106, 126, 227, 252, 214, 209, 255, 255, 128, 128, 128,
+	1, 98, 248, 255, 236, 226, 255, 255, 128, 128, 128,
+	181, 133, 238, 254, 221, 234, 255, 154, 128, 128, 128,
+	78, 134, 202, 247, 198, 180, 255, 219, 128, 128, 128,
+	1, 185, 249, 255, 243, 255, 128, 128, 128, 128, 128,
+	184, 150, 247, 255, 236, 224, 128, 128, 128, 128, 128,
+	77, 110, 216, 255, 236, 230, 128, 128, 128, 128, 128,
+	1, 101, 251, 255, 241, 255, 128, 128, 128, 128, 128,
+	170, 139, 241, 252, 236, 209, 255, 255, 128, 128, 128,
+	37, 116, 196, 243, 228, 255, 255, 255, 128, 128, 128,
+	1, 204, 254, 255, 245, 255, 128, 128, 128, 128, 128,
+	207, 160, 250, 255, 238, 128, 128, 128, 128, 128, 128,
+	102, 103, 231, 255, 211, 171, 128, 128, 128, 128, 128,
+	1, 152, 252, 255, 240, 255, 128, 128, 128, 128, 128,
+	177, 135, 243, 255, 234, 225, 128, 128, 128, 128, 128,
+	80, 129, 211, 255, 194, 224, 128, 128, 128, 128, 128,
+	1, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	246, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	255, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	198, 35, 237, 223, 193, 187, 162, 160, 145, 155, 62,
+	131, 45, 198, 221, 172, 176, 220, 157, 252, 221, 1,
+	68, 47, 146, 208, 149, 167, 221, 162, 255, 223, 128,
+	1, 149, 241, 255, 221, 224, 255, 255, 128, 128, 128,
+	184, 141, 234, 253, 222, 220, 255, 199, 128, 128, 128,
+	81, 99, 181, 242, 176, 190, 249, 202, 255, 255, 128,
+	1, 129, 232, 253, 214, 197, 242, 196, 255, 255, 128,
+	99, 121, 210, 250, 201, 198, 255, 202, 128, 128, 128,
+	23, 91, 163, 242, 170, 187, 247, 210, 255, 255, 128,
+	1, 200, 246, 255, 234, 255, 128, 128, 128, 128, 128,
+	109, 178, 241, 255, 231, 245, 255, 255, 128, 128, 128,
+	44, 130, 201, 253, 205, 192, 255, 255, 128, 128, 128,
+	1, 132, 239, 251, 219, 209, 255, 165, 128, 128, 128,
+	94, 136, 225, 251, 218, 190, 255, 255, 128, 128, 128,
+	22, 100, 174, 245, 186, 161, 255, 199, 128, 128, 128,
+	1, 182, 249, 255, 232, 235, 128, 128, 128, 128, 128,
+	124, 143, 241, 255, 227, 234, 128, 128, 128, 128, 128,
+	35, 77, 181, 251, 193, 211, 255, 205, 128, 128, 128,
+	1, 157, 247, 255, 236, 231, 255, 255, 128, 128, 128,
+	121, 141, 235, 255, 225, 227, 255, 255, 128, 128, 128,
+	45, 99, 188, 251, 195, 217, 255, 224, 128, 128, 128,
+	1, 1, 251, 255, 213, 255, 128, 128, 128, 128, 128,
+	203, 1, 248, 255, 255, 128, 128, 128, 128, 128, 128,
+	137, 1, 177, 255, 224, 255, 128, 128, 128, 128, 128,
+	253, 9, 248, 251, 207, 208, 255, 192, 128, 128, 128,
+	175, 13, 224, 243, 193, 185, 249, 198, 255, 255, 128,
+	73, 17, 171, 221, 161, 179, 236, 167, 255, 234, 128,
+	1, 95, 247, 253, 212, 183, 255, 255, 128, 128, 128,
+	239, 90, 244, 250, 211, 209, 255, 255, 128, 128, 128,
+	155, 77, 195, 248, 188, 195, 255, 255, 128, 128, 128,
+	1, 24, 239, 251, 218, 219, 255, 205, 128, 128, 128,
+	201, 51, 219, 255, 196, 186, 128, 128, 128, 128, 128,
+	69, 46, 190, 239, 201, 218, 255, 228, 128, 128, 128,
+	1, 191, 251, 255, 255, 128, 128, 128, 128, 128, 128,
+	223, 165, 249, 255, 213, 255, 128, 128, 128, 128, 128,
+	141, 124, 248, 255, 255, 128, 128, 128, 128, 128, 128,
+	1, 16, 248, 255, 255, 128, 128, 128, 128, 128, 128,
+	190, 36, 230, 255, 236, 255, 128, 128, 128, 128, 128,
+	149, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	1, 226, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	247, 192, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	240, 128, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	1, 134, 252, 255, 255, 128, 128, 128, 128, 128, 128,
+	213, 62, 250, 255, 255, 128, 128, 128, 128, 128, 128,
+	55, 93, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	202, 24, 213, 235, 186, 191, 220, 160, 240, 175, 255,
+	126, 38, 182, 232, 169, 184, 228, 174, 255, 187, 128,
+	61, 46, 138, 219, 151, 178, 240, 170, 255, 216, 128,
+	1, 112, 230, 250, 199, 191, 247, 159, 255, 255, 128,
+	166, 109, 228, 252, 211, 215, 255, 174, 128, 128, 128,
+	39, 77, 162, 232, 172, 180, 245, 178, 255, 255, 128,
+	1, 52, 220, 246, 198, 199, 249, 220, 255, 255, 128,
+	124, 74, 191, 243, 183, 193, 250, 221, 255, 255, 128,
+	24, 71, 130, 219, 154, 170, 243, 182, 255, 255, 128,
+	1, 182, 225, 249, 219, 240, 255, 224, 128, 128, 128,
+	149, 150, 226, 252, 216, 205, 255, 171, 128, 128, 128,
+	28, 108, 170, 242, 183, 194, 254, 223, 255, 255, 128,
+	1, 81, 230, 252, 204, 203, 255, 192, 128, 128, 128,
+	123, 102, 209, 247, 188, 196, 255, 233, 128, 128, 128,
+	20, 95, 153, 243, 164, 173, 255, 203, 128, 128, 128,
+	1, 222, 248, 255, 216, 213, 128, 128, 128, 128, 128,
+	168, 175, 246, 252, 235, 205, 255, 255, 128, 128, 128,
+	47, 116, 215, 255, 211, 212, 255, 255, 128, 128, 128,
+	1, 121, 236, 253, 212, 214, 255, 255, 128, 128, 128,
+	141, 84, 213, 252, 201, 202, 255, 219, 128, 128, 128,
+	42, 80, 160, 240, 162, 185, 255, 205, 128, 128, 128,
+	1, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	244, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+	238, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
+};
+kfbmode := array[] of {
+	231, 120, 48, 89, 115, 113, 120, 152, 112,
+	152, 179, 64, 126, 170, 118, 46, 70, 95,
+	175, 69, 143, 80, 85, 82, 72, 155, 103,
+	56, 58, 10, 171, 218, 189, 17, 13, 152,
+	144, 71, 10, 38, 171, 213, 144, 34, 26,
+	114, 26, 17, 163, 44, 195, 21, 10, 173,
+	121, 24, 80, 195, 26, 62, 44, 64, 85,
+	170, 46, 55, 19, 136, 160, 33, 206, 71,
+	63, 20, 8, 114, 114, 208, 12, 9, 226,
+	81, 40, 11, 96, 182, 84, 29, 16, 36,
+	134, 183, 89, 137, 98, 101, 106, 165, 148,
+	72, 187, 100, 130, 157, 111, 32, 75, 80,
+	66, 102, 167, 99, 74, 62, 40, 234, 128,
+	41, 53, 9, 178, 241, 141, 26, 8, 107,
+	104, 79, 12, 27, 217, 255, 87, 17, 7,
+	74, 43, 26, 146, 73, 166, 49, 23, 157,
+	65, 38, 105, 160, 51, 52, 31, 115, 128,
+	87, 68, 71, 44, 114, 51, 15, 186, 23,
+	47, 41, 14, 110, 182, 183, 21, 17, 194,
+	66, 45, 25, 102, 197, 189, 23, 18, 22,
+	88, 88, 147, 150, 42, 46, 45, 196, 205,
+	43, 97, 183, 117, 85, 38, 35, 179, 61,
+	39, 53, 200, 87, 26, 21, 43, 232, 171,
+	56, 34, 51, 104, 114, 102, 29, 93, 77,
+	107, 54, 32, 26, 51, 1, 81, 43, 31,
+	39, 28, 85, 171, 58, 165, 90, 98, 64,
+	34, 22, 116, 206, 23, 34, 43, 166, 73,
+	68, 25, 106, 22, 64, 171, 36, 225, 114,
+	34, 19, 21, 102, 132, 188, 16, 76, 124,
+	62, 18, 78, 95, 85, 57, 50, 48, 51,
+	193, 101, 35, 159, 215, 111, 89, 46, 111,
+	60, 148, 31, 172, 219, 228, 21, 18, 111,
+	112, 113, 77, 85, 179, 255, 38, 120, 114,
+	40, 42, 1, 196, 245, 209, 10, 25, 109,
+	100, 80, 8, 43, 154, 1, 51, 26, 71,
+	88, 43, 29, 140, 166, 213, 37, 43, 154,
+	61, 63, 30, 155, 67, 45, 68, 1, 209,
+	142, 78, 78, 16, 255, 128, 34, 197, 171,
+	41, 40, 5, 102, 211, 183, 4, 1, 221,
+	51, 50, 17, 168, 209, 192, 23, 25, 82,
+	125, 98, 42, 88, 104, 85, 117, 175, 82,
+	95, 84, 53, 89, 128, 100, 113, 101, 45,
+	75, 79, 123, 47, 51, 128, 81, 171, 1,
+	57, 17, 5, 71, 102, 57, 53, 41, 49,
+	115, 21, 2, 10, 102, 255, 166, 23, 6,
+	38, 33, 13, 121, 57, 73, 26, 1, 85,
+	41, 10, 67, 138, 77, 110, 90, 47, 114,
+	101, 29, 16, 10, 85, 128, 101, 196, 26,
+	57, 18, 10, 102, 102, 213, 34, 20, 43,
+	117, 20, 15, 36, 163, 128, 68, 1, 26,
+	138, 31, 36, 171, 27, 166, 38, 44, 229,
+	67, 87, 58, 169, 82, 115, 26, 59, 179,
+	63, 59, 90, 180, 59, 166, 93, 73, 154,
+	40, 40, 21, 116, 143, 209, 34, 39, 175,
+	57, 46, 22, 24, 128, 1, 54, 17, 37,
+	47, 15, 16, 183, 34, 223, 49, 45, 183,
+	46, 17, 33, 183, 6, 98, 15, 32, 183,
+	65, 32, 73, 115, 28, 128, 23, 128, 205,
+	40, 3, 9, 115, 51, 192, 18, 6, 223,
+	87, 37, 9, 115, 59, 77, 64, 21, 47,
+	104, 55, 44, 218, 9, 54, 53, 130, 226,
+	64, 90, 70, 205, 40, 41, 23, 26, 57,
+	54, 57, 112, 184, 5, 41, 38, 166, 213,
+	30, 34, 26, 133, 152, 116, 10, 32, 134,
+	75, 32, 12, 51, 192, 255, 160, 43, 51,
+	39, 19, 53, 221, 26, 114, 32, 73, 255,
+	31, 9, 65, 234, 2, 15, 1, 118, 73,
+	88, 31, 35, 67, 102, 85, 55, 186, 85,
+	56, 21, 23, 111, 59, 205, 45, 37, 192,
+	55, 38, 70, 124, 73, 102, 1, 34, 98,
+	102, 61, 71, 37, 34, 53, 31, 243, 192,
+	69, 60, 71, 38, 73, 119, 28, 222, 37,
+	68, 45, 128, 34, 1, 47, 11, 245, 171,
+	62, 17, 19, 70, 146, 85, 55, 62, 70,
+	75, 15, 9, 9, 64, 255, 184, 119, 16,
+	37, 43, 37, 154, 100, 163, 85, 160, 1,
+	63, 9, 92, 136, 28, 64, 32, 201, 85,
+	86, 6, 28, 5, 64, 255, 25, 248, 1,
+	56, 8, 17, 132, 137, 255, 55, 116, 128,
+	58, 15, 20, 82, 135, 57, 26, 121, 40,
+	164, 50, 31, 137, 154, 133, 25, 35, 218,
+	51, 103, 44, 131, 131, 123, 31, 6, 158,
+	86, 40, 64, 135, 148, 224, 45, 183, 128,
+	22, 26, 17, 131, 240, 154, 14, 1, 209,
+	83, 12, 13, 54, 192, 255, 68, 47, 28,
+	45, 16, 21, 91, 64, 222, 7, 1, 197,
+	56, 21, 39, 155, 60, 138, 23, 102, 213,
+	85, 26, 85, 85, 128, 128, 32, 146, 171,
+	18, 11, 7, 63, 144, 171, 4, 4, 246,
+	35, 27, 10, 146, 174, 171, 12, 26, 128,
+	190, 80, 35, 99, 180, 80, 126, 54, 45,
+	85, 126, 47, 87, 176, 51, 41, 20, 32,
+	101, 75, 128, 139, 118, 146, 116, 128, 85,
+	56, 41, 15, 176, 236, 85, 37, 9, 62,
+	146, 36, 19, 30, 171, 255, 97, 27, 20,
+	71, 30, 17, 119, 118, 255, 17, 18, 138,
+	101, 38, 60, 138, 55, 70, 43, 26, 142,
+	138, 45, 61, 62, 219, 1, 81, 188, 64,
+	32, 41, 20, 117, 151, 142, 20, 21, 163,
+	112, 19, 12, 61, 195, 128, 48, 4, 24,
+};
+dcq := array[] of {
 	4, 5, 6, 7, 8, 9, 10, 10, 11, 12, 13, 14, 15, 16, 17, 17,
 	18, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 25, 25, 26, 27, 28,
 	29, 30, 31, 32, 33, 34, 35, 36, 37, 37, 38, 39, 40, 41, 42, 43,
@@ -2223,8 +2292,7 @@ dctab := array[] of {
 	91, 93, 95, 96, 98, 100, 101, 102, 104, 106, 108, 110, 112, 114, 116, 118,
 	122, 124, 126, 128, 130, 132, 134, 136, 138, 140, 143, 145, 148, 151, 154, 157,
 };
-
-actab := array[] of {
+acq := array[] of {
 	4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 	20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
 	36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
@@ -2234,212 +2302,20 @@ actab := array[] of {
 	155, 158, 161, 164, 167, 170, 173, 177, 181, 185, 189, 193, 197, 201, 205, 209,
 	213, 217, 221, 225, 229, 234, 239, 245, 249, 254, 259, 264, 269, 274, 279, 284,
 };
-
-coeffsproba0 := array[] of {
-	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
-	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
-	128, 253, 136, 254, 255, 228, 219, 128, 128, 128, 128, 128, 189, 129, 242, 255,
-	227, 213, 255, 219, 128, 128, 128, 106, 126, 227, 252, 214, 209, 255, 255, 128,
-	128, 128, 1, 98, 248, 255, 236, 226, 255, 255, 128, 128, 128, 181, 133, 238,
-	254, 221, 234, 255, 154, 128, 128, 128, 78, 134, 202, 247, 198, 180, 255, 219,
-	128, 128, 128, 1, 185, 249, 255, 243, 255, 128, 128, 128, 128, 128, 184, 150,
-	247, 255, 236, 224, 128, 128, 128, 128, 128, 77, 110, 216, 255, 236, 230, 128,
-	128, 128, 128, 128, 1, 101, 251, 255, 241, 255, 128, 128, 128, 128, 128, 170,
-	139, 241, 252, 236, 209, 255, 255, 128, 128, 128, 37, 116, 196, 243, 228, 255,
-	255, 255, 128, 128, 128, 1, 204, 254, 255, 245, 255, 128, 128, 128, 128, 128,
-	207, 160, 250, 255, 238, 128, 128, 128, 128, 128, 128, 102, 103, 231, 255, 211,
-	171, 128, 128, 128, 128, 128, 1, 152, 252, 255, 240, 255, 128, 128, 128, 128,
-	128, 177, 135, 243, 255, 234, 225, 128, 128, 128, 128, 128, 80, 129, 211, 255,
-	194, 224, 128, 128, 128, 128, 128, 1, 1, 255, 128, 128, 128, 128, 128, 128,
-	128, 128, 246, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128, 255, 128, 128,
-	128, 128, 128, 128, 128, 128, 128, 128, 198, 35, 237, 223, 193, 187, 162, 160,
-	145, 155, 62, 131, 45, 198, 221, 172, 176, 220, 157, 252, 221, 1, 68, 47,
-	146, 208, 149, 167, 221, 162, 255, 223, 128, 1, 149, 241, 255, 221, 224, 255,
-	255, 128, 128, 128, 184, 141, 234, 253, 222, 220, 255, 199, 128, 128, 128, 81,
-	99, 181, 242, 176, 190, 249, 202, 255, 255, 128, 1, 129, 232, 253, 214, 197,
-	242, 196, 255, 255, 128, 99, 121, 210, 250, 201, 198, 255, 202, 128, 128, 128,
-	23, 91, 163, 242, 170, 187, 247, 210, 255, 255, 128, 1, 200, 246, 255, 234,
-	255, 128, 128, 128, 128, 128, 109, 178, 241, 255, 231, 245, 255, 255, 128, 128,
-	128, 44, 130, 201, 253, 205, 192, 255, 255, 128, 128, 128, 1, 132, 239, 251,
-	219, 209, 255, 165, 128, 128, 128, 94, 136, 225, 251, 218, 190, 255, 255, 128,
-	128, 128, 22, 100, 174, 245, 186, 161, 255, 199, 128, 128, 128, 1, 182, 249,
-	255, 232, 235, 128, 128, 128, 128, 128, 124, 143, 241, 255, 227, 234, 128, 128,
-	128, 128, 128, 35, 77, 181, 251, 193, 211, 255, 205, 128, 128, 128, 1, 157,
-	247, 255, 236, 231, 255, 255, 128, 128, 128, 121, 141, 235, 255, 225, 227, 255,
-	255, 128, 128, 128, 45, 99, 188, 251, 195, 217, 255, 224, 128, 128, 128, 1,
-	1, 251, 255, 213, 255, 128, 128, 128, 128, 128, 203, 1, 248, 255, 255, 128,
-	128, 128, 128, 128, 128, 137, 1, 177, 255, 224, 255, 128, 128, 128, 128, 128,
-	253, 9, 248, 251, 207, 208, 255, 192, 128, 128, 128, 175, 13, 224, 243, 193,
-	185, 249, 198, 255, 255, 128, 73, 17, 171, 221, 161, 179, 236, 167, 255, 234,
-	128, 1, 95, 247, 253, 212, 183, 255, 255, 128, 128, 128, 239, 90, 244, 250,
-	211, 209, 255, 255, 128, 128, 128, 155, 77, 195, 248, 188, 195, 255, 255, 128,
-	128, 128, 1, 24, 239, 251, 218, 219, 255, 205, 128, 128, 128, 201, 51, 219,
-	255, 196, 186, 128, 128, 128, 128, 128, 69, 46, 190, 239, 201, 218, 255, 228,
-	128, 128, 128, 1, 191, 251, 255, 255, 128, 128, 128, 128, 128, 128, 223, 165,
-	249, 255, 213, 255, 128, 128, 128, 128, 128, 141, 124, 248, 255, 255, 128, 128,
-	128, 128, 128, 128, 1, 16, 248, 255, 255, 128, 128, 128, 128, 128, 128, 190,
-	36, 230, 255, 236, 255, 128, 128, 128, 128, 128, 149, 1, 255, 128, 128, 128,
-	128, 128, 128, 128, 128, 1, 226, 255, 128, 128, 128, 128, 128, 128, 128, 128,
-	247, 192, 255, 128, 128, 128, 128, 128, 128, 128, 128, 240, 128, 255, 128, 128,
-	128, 128, 128, 128, 128, 128, 1, 134, 252, 255, 255, 128, 128, 128, 128, 128,
-	128, 213, 62, 250, 255, 255, 128, 128, 128, 128, 128, 128, 55, 93, 255, 128,
-	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
-	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
-	128, 128, 128, 128, 128, 128, 128, 128, 202, 24, 213, 235, 186, 191, 220, 160,
-	240, 175, 255, 126, 38, 182, 232, 169, 184, 228, 174, 255, 187, 128, 61, 46,
-	138, 219, 151, 178, 240, 170, 255, 216, 128, 1, 112, 230, 250, 199, 191, 247,
-	159, 255, 255, 128, 166, 109, 228, 252, 211, 215, 255, 174, 128, 128, 128, 39,
-	77, 162, 232, 172, 180, 245, 178, 255, 255, 128, 1, 52, 220, 246, 198, 199,
-	249, 220, 255, 255, 128, 124, 74, 191, 243, 183, 193, 250, 221, 255, 255, 128,
-	24, 71, 130, 219, 154, 170, 243, 182, 255, 255, 128, 1, 182, 225, 249, 219,
-	240, 255, 224, 128, 128, 128, 149, 150, 226, 252, 216, 205, 255, 171, 128, 128,
-	128, 28, 108, 170, 242, 183, 194, 254, 223, 255, 255, 128, 1, 81, 230, 252,
-	204, 203, 255, 192, 128, 128, 128, 123, 102, 209, 247, 188, 196, 255, 233, 128,
-	128, 128, 20, 95, 153, 243, 164, 173, 255, 203, 128, 128, 128, 1, 222, 248,
-	255, 216, 213, 128, 128, 128, 128, 128, 168, 175, 246, 252, 235, 205, 255, 255,
-	128, 128, 128, 47, 116, 215, 255, 211, 212, 255, 255, 128, 128, 128, 1, 121,
-	236, 253, 212, 214, 255, 255, 128, 128, 128, 141, 84, 213, 252, 201, 202, 255,
-	219, 128, 128, 128, 42, 80, 160, 240, 162, 185, 255, 205, 128, 128, 128, 1,
-	1, 255, 128, 128, 128, 128, 128, 128, 128, 128, 244, 1, 255, 128, 128, 128,
-	128, 128, 128, 128, 128, 238, 1, 255, 128, 128, 128, 128, 128, 128, 128, 128,
-};
-
-coeffsupdateproba := array[] of {
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 176, 246, 255, 255, 255, 255, 255, 255, 255, 255, 255, 223, 241, 252, 255,
-	255, 255, 255, 255, 255, 255, 255, 249, 253, 253, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 244, 252, 255, 255, 255, 255, 255, 255, 255, 255, 234, 254, 254,
-	255, 255, 255, 255, 255, 255, 255, 255, 253, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 246, 254, 255, 255, 255, 255, 255, 255, 255, 255, 239, 253,
-	254, 255, 255, 255, 255, 255, 255, 255, 255, 254, 255, 254, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 248, 254, 255, 255, 255, 255, 255, 255, 255, 255, 251,
-	255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255,
-	251, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 254, 255, 254, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 254, 253, 255, 254, 255, 255, 255, 255, 255,
-	255, 250, 255, 254, 255, 254, 255, 255, 255, 255, 255, 255, 254, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 217, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 225, 252, 241, 253, 255, 255, 254, 255, 255, 255, 255, 234, 250,
-	241, 250, 253, 255, 253, 254, 255, 255, 255, 255, 254, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 223, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 238,
-	253, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 248, 254, 255, 255, 255,
-	255, 255, 255, 255, 255, 249, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 253, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 247, 254, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 253, 254, 255,
-	255, 255, 255, 255, 255, 255, 255, 252, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 254,
-	255, 255, 255, 255, 255, 255, 255, 255, 253, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254,
-	253, 255, 255, 255, 255, 255, 255, 255, 255, 250, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	186, 251, 250, 255, 255, 255, 255, 255, 255, 255, 255, 234, 251, 244, 254, 255,
-	255, 255, 255, 255, 255, 255, 251, 251, 243, 253, 254, 255, 254, 255, 255, 255,
-	255, 255, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255, 236, 253, 254, 255,
-	255, 255, 255, 255, 255, 255, 255, 251, 253, 253, 254, 254, 255, 255, 255, 255,
-	255, 255, 255, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 254, 254, 254,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 254,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 248, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 250, 254, 252, 254, 255, 255, 255, 255, 255, 255, 255, 248, 254,
-	249, 253, 255, 255, 255, 255, 255, 255, 255, 255, 253, 253, 255, 255, 255, 255,
-	255, 255, 255, 255, 246, 253, 253, 255, 255, 255, 255, 255, 255, 255, 255, 252,
-	254, 251, 254, 254, 255, 255, 255, 255, 255, 255, 255, 254, 252, 255, 255, 255,
-	255, 255, 255, 255, 255, 248, 254, 253, 255, 255, 255, 255, 255, 255, 255, 255,
-	253, 255, 254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 251, 254, 255, 255,
-	255, 255, 255, 255, 255, 255, 245, 251, 254, 255, 255, 255, 255, 255, 255, 255,
-	255, 253, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 251, 253, 255,
-	255, 255, 255, 255, 255, 255, 255, 252, 253, 254, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 252, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 249, 255, 254, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	253, 255, 255, 255, 255, 255, 255, 255, 255, 250, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 255, 255, 255, 255, 255,
-	255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-};
-
-bmodesproba := array[] of {
-	231, 120, 48, 89, 115, 113, 120, 152, 112, 152, 179, 64, 126, 170, 118, 46,
-	70, 95, 175, 69, 143, 80, 85, 82, 72, 155, 103, 56, 58, 10, 171, 218,
-	189, 17, 13, 152, 114, 26, 17, 163, 44, 195, 21, 10, 173, 121, 24, 80,
-	195, 26, 62, 44, 64, 85, 144, 71, 10, 38, 171, 213, 144, 34, 26, 170,
-	46, 55, 19, 136, 160, 33, 206, 71, 63, 20, 8, 114, 114, 208, 12, 9,
-	226, 81, 40, 11, 96, 182, 84, 29, 16, 36, 134, 183, 89, 137, 98, 101,
-	106, 165, 148, 72, 187, 100, 130, 157, 111, 32, 75, 80, 66, 102, 167, 99,
-	74, 62, 40, 234, 128, 41, 53, 9, 178, 241, 141, 26, 8, 107, 74, 43,
-	26, 146, 73, 166, 49, 23, 157, 65, 38, 105, 160, 51, 52, 31, 115, 128,
-	104, 79, 12, 27, 217, 255, 87, 17, 7, 87, 68, 71, 44, 114, 51, 15,
-	186, 23, 47, 41, 14, 110, 182, 183, 21, 17, 194, 66, 45, 25, 102, 197,
-	189, 23, 18, 22, 88, 88, 147, 150, 42, 46, 45, 196, 205, 43, 97, 183,
-	117, 85, 38, 35, 179, 61, 39, 53, 200, 87, 26, 21, 43, 232, 171, 56,
-	34, 51, 104, 114, 102, 29, 93, 77, 39, 28, 85, 171, 58, 165, 90, 98,
-	64, 34, 22, 116, 206, 23, 34, 43, 166, 73, 107, 54, 32, 26, 51, 1,
-	81, 43, 31, 68, 25, 106, 22, 64, 171, 36, 225, 114, 34, 19, 21, 102,
-	132, 188, 16, 76, 124, 62, 18, 78, 95, 85, 57, 50, 48, 51, 193, 101,
-	35, 159, 215, 111, 89, 46, 111, 60, 148, 31, 172, 219, 228, 21, 18, 111,
-	112, 113, 77, 85, 179, 255, 38, 120, 114, 40, 42, 1, 196, 245, 209, 10,
-	25, 109, 88, 43, 29, 140, 166, 213, 37, 43, 154, 61, 63, 30, 155, 67,
-	45, 68, 1, 209, 100, 80, 8, 43, 154, 1, 51, 26, 71, 142, 78, 78,
-	16, 255, 128, 34, 197, 171, 41, 40, 5, 102, 211, 183, 4, 1, 221, 51,
-	50, 17, 168, 209, 192, 23, 25, 82, 138, 31, 36, 171, 27, 166, 38, 44,
-	229, 67, 87, 58, 169, 82, 115, 26, 59, 179, 63, 59, 90, 180, 59, 166,
-	93, 73, 154, 40, 40, 21, 116, 143, 209, 34, 39, 175, 47, 15, 16, 183,
-	34, 223, 49, 45, 183, 46, 17, 33, 183, 6, 98, 15, 32, 183, 57, 46,
-	22, 24, 128, 1, 54, 17, 37, 65, 32, 73, 115, 28, 128, 23, 128, 205,
-	40, 3, 9, 115, 51, 192, 18, 6, 223, 87, 37, 9, 115, 59, 77, 64,
-	21, 47, 104, 55, 44, 218, 9, 54, 53, 130, 226, 64, 90, 70, 205, 40,
-	41, 23, 26, 57, 54, 57, 112, 184, 5, 41, 38, 166, 213, 30, 34, 26,
-	133, 152, 116, 10, 32, 134, 39, 19, 53, 221, 26, 114, 32, 73, 255, 31,
-	9, 65, 234, 2, 15, 1, 118, 73, 75, 32, 12, 51, 192, 255, 160, 43,
-	51, 88, 31, 35, 67, 102, 85, 55, 186, 85, 56, 21, 23, 111, 59, 205,
-	45, 37, 192, 55, 38, 70, 124, 73, 102, 1, 34, 98, 125, 98, 42, 88,
-	104, 85, 117, 175, 82, 95, 84, 53, 89, 128, 100, 113, 101, 45, 75, 79,
-	123, 47, 51, 128, 81, 171, 1, 57, 17, 5, 71, 102, 57, 53, 41, 49,
-	38, 33, 13, 121, 57, 73, 26, 1, 85, 41, 10, 67, 138, 77, 110, 90,
-	47, 114, 115, 21, 2, 10, 102, 255, 166, 23, 6, 101, 29, 16, 10, 85,
-	128, 101, 196, 26, 57, 18, 10, 102, 102, 213, 34, 20, 43, 117, 20, 15,
-	36, 163, 128, 68, 1, 26, 102, 61, 71, 37, 34, 53, 31, 243, 192, 69,
-	60, 71, 38, 73, 119, 28, 222, 37, 68, 45, 128, 34, 1, 47, 11, 245,
-	171, 62, 17, 19, 70, 146, 85, 55, 62, 70, 37, 43, 37, 154, 100, 163,
-	85, 160, 1, 63, 9, 92, 136, 28, 64, 32, 201, 85, 75, 15, 9, 9,
-	64, 255, 184, 119, 16, 86, 6, 28, 5, 64, 255, 25, 248, 1, 56, 8,
-	17, 132, 137, 255, 55, 116, 128, 58, 15, 20, 82, 135, 57, 26, 121, 40,
-	164, 50, 31, 137, 154, 133, 25, 35, 218, 51, 103, 44, 131, 131, 123, 31,
-	6, 158, 86, 40, 64, 135, 148, 224, 45, 183, 128, 22, 26, 17, 131, 240,
-	154, 14, 1, 209, 45, 16, 21, 91, 64, 222, 7, 1, 197, 56, 21, 39,
-	155, 60, 138, 23, 102, 213, 83, 12, 13, 54, 192, 255, 68, 47, 28, 85,
-	26, 85, 85, 128, 128, 32, 146, 171, 18, 11, 7, 63, 144, 171, 4, 4,
-	246, 35, 27, 10, 146, 174, 171, 12, 26, 128, 190, 80, 35, 99, 180, 80,
-	126, 54, 45, 85, 126, 47, 87, 176, 51, 41, 20, 32, 101, 75, 128, 139,
-	118, 146, 116, 128, 85, 56, 41, 15, 176, 236, 85, 37, 9, 62, 71, 30,
-	17, 119, 118, 255, 17, 18, 138, 101, 38, 60, 138, 55, 70, 43, 26, 142,
-	146, 36, 19, 30, 171, 255, 97, 27, 20, 138, 45, 61, 62, 219, 1, 81,
-	188, 64, 32, 41, 20, 117, 151, 142, 20, 21, 163, 112, 19, 12, 61, 195,
-	128, 48, 4, 24,
-};
-
-codetoplane := array[] of {
-	24, 7, 23, 25, 40, 6, 39, 41, 22, 26, 38, 42, 56, 5, 55, 57,
-	21, 27, 54, 58, 37, 43, 72, 4, 71, 73, 20, 28, 53, 59, 70, 74,
-	36, 44, 88, 69, 75, 52, 60, 3, 87, 89, 19, 29, 86, 90, 35, 45,
-	68, 76, 85, 91, 51, 61, 104, 2, 103, 105, 18, 30, 102, 106, 34, 46,
-	84, 92, 67, 77, 101, 107, 50, 62, 120, 1, 119, 121, 83, 93, 17, 31,
-	100, 108, 66, 78, 118, 122, 33, 47, 117, 123, 49, 63, 99, 109, 82, 94,
-	0, 116, 124, 65, 79, 16, 32, 98, 110, 48, 115, 125, 81, 95, 64, 114,
-	126, 97, 111, 80, 113, 127, 96, 112,
+distmap := array[] of {
+	0, 1, 1, 0, 1, 1, -1, 1, 0, 2, 2, 0, 1, 2, -1, 2,
+	2, 1, -2, 1, 2, 2, -2, 2, 0, 3, 3, 0, 1, 3, -1, 3,
+	3, 1, -3, 1, 2, 3, -2, 3, 3, 2, -3, 2, 0, 4, 4, 0,
+	1, 4, -1, 4, 4, 1, -4, 1, 3, 3, -3, 3, 2, 4, -2, 4,
+	4, 2, -4, 2, 0, 5, 3, 4, -3, 4, 4, 3, -4, 3, 5, 0,
+	1, 5, -1, 5, 5, 1, -5, 1, 2, 5, -2, 5, 5, 2, -5, 2,
+	4, 4, -4, 4, 3, 5, -3, 5, 5, 3, -5, 3, 0, 6, 6, 0,
+	1, 6, -1, 6, 6, 1, -6, 1, 2, 6, -2, 6, 6, 2, -6, 2,
+	4, 5, -4, 5, 5, 4, -5, 4, 3, 6, -3, 6, 6, 3, -6, 3,
+	0, 7, 7, 0, 1, 7, -1, 7, 5, 5, -5, 5, 7, 1, -7, 1,
+	4, 6, -4, 6, 6, 4, -6, 4, 2, 7, -2, 7, 7, 2, -7, 2,
+	3, 7, -3, 7, 7, 3, -7, 3, 5, 6, -5, 6, 6, 5, -6, 5,
+	8, 0, 4, 7, -4, 7, 7, 4, -7, 4, 8, 1, 8, 2, 6, 6,
+	-6, 6, 8, 3, 5, 7, -5, 7, 7, 5, -7, 5, 8, 4, 6, 7,
+	-6, 7, 7, 6, -7, 6, 8, 5, 7, 7, -7, 7, 8, 6, 8, 7,
 };

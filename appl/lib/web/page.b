@@ -111,9 +111,9 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 	data: array of byte;
 	ctype, err, final: string;
 	if(method == "POST")
-		(data, ctype, err, final) = webfs(url, method, reqctype, body);
+		(data, ctype, err, final) = webfs(url, method, reqctype, body, nil);
 	else
-		(data, ctype, err, final) = fetchfinal(url);
+		(data, ctype, err, final) = fetchfinal(url, nil);
 	if(err != nil && len data == 0)
 		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
 	# a redirected page's links are relative to where it is
@@ -135,7 +135,7 @@ images(p: ref Pg)
 {
 	if((urls := p.wanted()) != nil) {
 		pics: list of ref Pic;
-		for(got := fetchall(urls); got != nil; got = tl got) {
+		for(got := fetchall(urls, ACCEPTIMAGE); got != nil; got = tl got) {
 			g := hd got;
 			pics = picture(g.url, g.data, g.ctype, g.err) :: pics;
 		}
@@ -623,7 +623,7 @@ loadsheets(p: ref Pg)
 	for(i = 0; i < len a; i++)
 		if(a[i].t1 != nil)
 			urls = a[i].t1 :: urls;
-	got := fetchall(urls);
+	got := fetchall(urls, nil);
 	# a sheet linked (or written inline) again is parsed once: the
 	# parsed form is never changed, and each use keeps its own place
 	# in the cascade.  (GitHub links some of its largest sheets five
@@ -671,7 +671,7 @@ loadsheets(p: ref Pg)
 		urls = p.styles.imports(p.env);
 		if(urls == nil)
 			break;
-		got = fetchall(urls);
+		got = fetchall(urls, nil);
 		for(; urls != nil; urls = tl urls) {
 			(data, ctype, err) := fetched(got, hd urls);
 			if(err != nil) {
@@ -732,7 +732,7 @@ loadfonts(p: ref Pg)
 			urls = (hd s).url :: urls;
 			keep = hd s :: keep;
 		}
-	got := fetchall(urls);
+	got := fetchall(urls, nil);
 	for(; keep != nil; keep = tl keep) {
 		f := hd keep;
 		(data, nil, err) := fetched(got, f.url);
@@ -1054,7 +1054,7 @@ findobjects(p: ref Pg)
 	ul: list of string;
 	for(l := urls; l != nil; l = tl l)
 		ul = (hd l).t1 :: ul;
-	got := fetchall(ul);
+	got := fetchall(ul, nil);
 	r: list of (int, int, string);
 	for(l = urls; l != nil; l = tl l) {
 		(n, u) := hd l;
@@ -1606,6 +1606,11 @@ issvg(data: array of byte, ctype, url: string): int
 
 NFETCH: con 6;	# fetches at once, as browsers do per host
 
+# What an image fetch says it will take, as browsers do: servers that
+# choose a format by it (image CDNs) send WebP, smaller, rather than
+# JPEG or PNG.  Other fetches send no Accept, which is anything.
+ACCEPTIMAGE: con "image/webp,image/svg+xml,image/*,*/*;q=0.8";
+
 Got: adt {
 	url:	string;
 	data:	array of byte;
@@ -1613,8 +1618,9 @@ Got: adt {
 	err:	string;
 };
 
-# Fetch urls concurrently, each distinct URL once.
-fetchall(urls: list of string): list of ref Got
+# Fetch urls concurrently, each distinct URL once, saying accept (if
+# not nil) is what will do.
+fetchall(urls: list of string, accept: string): list of ref Got
 {
 	todo: list of string;
 	n := 0;
@@ -1640,18 +1646,18 @@ fetchall(urls: list of string): list of ref Got
 	if(nw > n)
 		nw = n;
 	for(i := 0; i < nw; i++)
-		spawn fetcher(work, res);
+		spawn fetcher(work, res, accept);
 	got: list of ref Got;
 	for(i = 0; i < n; i++)
 		got = <-res :: got;
 	return got;
 }
 
-fetcher(work: chan of string, res: chan of ref Got)
+fetcher(work: chan of string, res: chan of ref Got, accept: string)
 {
 	for(;;) alt {
 	u := <-work =>
-		(data, ctype, err) := fetch(u);
+		(data, ctype, err, nil) := fetchfinal(u, accept);
 		res <-= ref Got(u, data, ctype, err);
 	* =>
 		return;
@@ -1668,12 +1674,18 @@ fetched(got: list of ref Got, url: string): (array of byte, string, string)
 
 fetch(url: string): (array of byte, string, string)
 {
-	(data, ctype, err, nil) := fetchfinal(url);
+	(data, ctype, err, nil) := fetchfinal(url, nil);
+	return (data, ctype, err);
+}
+
+fetchimage(url: string): (array of byte, string, string)
+{
+	(data, ctype, err, nil) := fetchfinal(url, ACCEPTIMAGE);
 	return (data, ctype, err);
 }
 
 # fetch, and the URL the resource came from in the end
-fetchfinal(url: string): (array of byte, string, string, string)
+fetchfinal(url, accept: string): (array of byte, string, string, string)
 {
 	(scheme, rest) := splitscheme(url);
 	case scheme {
@@ -1693,7 +1705,7 @@ fetchfinal(url: string): (array of byte, string, string, string)
 		(d, c, e) := dataurl(rest);
 		return (d, c, e, url);
 	"http" or "https" =>
-		return webfs(url, "GET", nil, nil);
+		return webfs(url, "GET", nil, nil, accept);
 	"" =>
 		(d, c, e) := readfile(url);
 		return (d, c, e, url);
@@ -1854,7 +1866,7 @@ hexv(c: int): int
 
 # http and https through webfs (see webfs(4)): clone a connection,
 # write its URL, read its body.
-webfs(url, method, reqctype: string, body: array of byte): (array of byte, string, string, string)
+webfs(url, method, reqctype: string, body: array of byte, accept: string): (array of byte, string, string, string)
 {
 	cfd := sys->open(WEBFS + "/clone", Sys->OREAD);
 	if(cfd == nil)
@@ -1867,6 +1879,8 @@ webfs(url, method, reqctype: string, body: array of byte): (array of byte, strin
 	dir := WEBFS + "/" + id;
 	ctl := sys->open(dir + "/ctl", Sys->OWRITE);
 	if(ctl == nil || sys->fprint(ctl, "url %s", url) < 0)
+		return (nil, nil, sys->sprint("webfs: %r"), url);
+	if(accept != nil && sys->fprint(ctl, "header Accept: %s", accept) < 0)
 		return (nil, nil, sys->sprint("webfs: %r"), url);
 	if(method != "GET") {
 		if(sys->fprint(ctl, "method %s", method) < 0 ||

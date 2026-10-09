@@ -84,5 +84,7 @@ Page: module
 	parse:	fn(data: array of byte, ctype, url: string, width, height: int): ref Pg;
 	picture:	fn(url: string, data: array of byte, ctype, err: string): ref Pic;
 	fetch:	fn(url: string): (array of byte, string, string);	# (data, content type, error)
+	# fetch, saying an image will do: image/webp first, as browsers do
+	fetchimage:	fn(url: string): (array of byte, string, string);
 	decodeimage:	fn(data: array of byte, ctype, url: string): ref Draw->Image;
 };

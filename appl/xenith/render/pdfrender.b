@@ -37,15 +37,23 @@ init(d: ref Display)
 	drawm = load Draw Draw->PATH;
 	display = d;
 	stderr = sys->fildes(2);
+}
 
-	pdf = load PDF PDF->PATH;
-	if(pdf == nil)
-		sys->fprint(stderr, "pdfrender: cannot load PDF module: %r\n");
-	else {
-		err := pdf->init(d);
-		if(err != nil)
-			sys->fprint(stderr, "pdfrender: pdf init: %s\n", err);
-	}
+# The PDF interpreter (and the fonts it opens) is loaded when a PDF is
+# first shown, not when Xenith starts: init runs for every renderer,
+# to learn its extensions.
+loadpdf(): string
+{
+	if(pdf != nil)
+		return nil;
+	p := load PDF PDF->PATH;
+	if(p == nil)
+		return sys->sprint("cannot load PDF module: %r");
+	err := p->init(display);
+	if(err != nil)
+		return "pdf init: " + err;
+	pdf = p;
+	return nil;
 }
 
 info(): ref RenderInfo
@@ -71,9 +79,9 @@ render(data: array of byte, hint: string,
        width, height: int,
        progress: chan of ref RenderProgress): (ref Draw->Image, string, string)
 {
-	if(pdf == nil){
+	if((lerr := loadpdf()) != nil){
 		progress <-= nil;
-		return (nil, nil, "PDF module not available");
+		return (nil, nil, lerr);
 	}
 
 	# Read file from path for parsing

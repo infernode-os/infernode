@@ -57,13 +57,27 @@ init(d: ref Display)
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
-	imageremap = load Imageremap Imageremap->PATH;
-	if(imageremap != nil)
-		imageremap->init(d);
-	pngload = load Pngload Pngload->PATH;
-	if(pngload != nil)
-		pngload->init(d);
 	display = d;
+}
+
+# The colour converter and the PNG decoder, loaded by the first decode
+# rather than by init: a program (Xenith) loads imgload at start, and
+# may never show an image.
+loaded := 0;
+
+loaddecoders()
+{
+	if(loaded)
+		return;
+	# Each set only once initialised: Xenith decodes in several
+	# processes at once, and another may be using them already.
+	ir := load Imageremap Imageremap->PATH;
+	if(ir != nil)
+		ir->init(display);
+	pl := load Pngload Pngload->PATH;
+	if(pl != nil)
+		pl->init(display);
+	(imageremap, pngload, loaded) = (ir, pl, 1);
 }
 
 format(head: array of byte, name: string): string
@@ -258,6 +272,7 @@ readimagedataprogressive(data: array of byte, hint: string,
 # progress asks for none.
 dispatch(fd: ref Iobuf, head: array of byte, hint: string, progress: chan of ref ImgProgress): (ref Image, string)
 {
+	loaddecoders();
 	fmt := format(head, hint);
 	if(fmt == nil) {
 		fd.close();

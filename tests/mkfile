@@ -57,6 +57,7 @@ TARG=\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	readwebp_test.dis\
 	imap_test.dis\
 	jit_bounds_test.dis\
 	jit_fault_test.dis\

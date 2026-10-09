@@ -137,7 +137,7 @@ Human sees everything in Xenith. Agent sees only its constructed namespace.
 
 **Idea**: Expose LLM capabilities as a filesystem resource, following the "everything is a file" principle.
 
-Two patterns are under consideration - both have Plan 9 precedent, and we haven't decided between them:
+Two patterns were considered - both have Plan 9 precedent (see "Settled" below for what was built):
 
 ### Option A: Single Query File (Plan 9 style)
 
@@ -179,7 +179,7 @@ Write a prompt, then read the response from the same file. Simple, follows the `
 
 Separate files for input and output. More explicit, allows concurrent prompt preparation.
 
-**Open question**: Which pattern better fits our use case? Both have Plan 9 precedent. We might prototype both and see what feels right, or find that the answer becomes obvious as we understand agent interaction patterns better.
+**Settled**: neither exactly. The LLM service is `llmsrv` (`appl/cmd/llmsrv.b`), mounted at `/mnt/llm`. It uses clone-style sessions: reading `/mnt/llm/new` allocates session `N`, and `/mnt/llm/N/` holds `ask` (write a prompt, read the response from the same file), `stream`, `model`, `temperature`, `system`, `thinking`, `prefill`, `tools`, `context`, `compact`, `ctl`, `usage` and further per-session files. See `docs/llm-mount.md`.
 
 ## Possible Extensions
 
@@ -193,6 +193,8 @@ Acme is text-only. Ideas for extending beyond text:
    - Leverage existing SDL3 graphics backend
    - Support common formats (PNG, JPEG, etc.)
    - Inline images in text windows, or dedicated image panes
+
+   *Shipped*: renderers in `appl/xenith/render/` (`imgrender.b`, decoding through `appl/lib/imgload.b`; also `pdfrender.b`, `htmldoc.b`, `mermaidrender.b`).
 
 2. **Audio Support**:
    - Playback for generated audio, notifications
@@ -212,6 +214,8 @@ Acme is text-only. Ideas for extending beyond text:
    - Inline rendering: headers become bold/large, code blocks get syntax highlighting, links become clickable
 
    This could be particularly useful for agent explanations, documentation generation, and structured responses. The question is whether to render inline (modifying the text appearance) or in a separate pane (preserving the raw text).
+
+   *Shipped*: `appl/xenith/render/mdrender.b` renders markdown as a visual overlay while the body buffer keeps the original markdown text.
 
    **Key tension**: Xenith serves two audiences with different needs:
    - The LLM works natively in plain text/markdown - that's its medium
@@ -240,27 +244,21 @@ Xenith supports flexible color configuration through themes and environment vari
 
 #### Theme Selection
 
-Use the `-t` flag to select a theme at startup:
+Without `-t`, Xenith uses the system theme (`/lib/lucifer/theme/current`, the same one Lucia uses) and follows it live when it changes. `-t` pins this session to a named theme:
 
 ```
-xenith -t catppuccin    # Dark theme with Catppuccin Mocha palette
-xenith -t dark          # Alias for catppuccin
-xenith -t mocha         # Alias for catppuccin
-xenith -t plan9         # Traditional Plan 9 pastels (default)
-xenith                  # Default theme (plan9)
+xenith                  # system theme, followed live
+xenith -t xenith        # dark theme (Catppuccin Mocha, adjusted)
+xenith -t glenda        # Plan 9's acme colours
+xenith -t dark          # old name: same as xenith (also catppuccin, mocha)
+xenith -t plan9         # old name: same as glenda (also acme)
 ```
+
+The `Theme` command switches theme at runtime: `Theme name` selects one, bare `Theme` steps to the next installed theme. In an unpinned session it changes the system theme, which every watcher follows; in a `-t` session it changes only that session.
 
 #### Available Themes
 
-**plan9** (default): Traditional Acme colors - pale yellow text areas, pale blue-green tags, black text. The classic Plan 9 aesthetic.
-
-**catppuccin**: Dark theme using the [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) palette:
-- Dark backgrounds (#1E1E2E base, #181825 empty areas)
-- Light text (#CDD6F4)
-- Blue accents for borders (#89B4FA)
-- Red for button 2 / cut (#F38BA8)
-- Green for button 3 / look (#A6E3A1)
-- Mauve modifier button (#CBA6F7)
+The themes are the files in `lib/lucifer/theme/` (brimstone, glenda, halo, xenith), shared with Lucia. A theme file may set Xenith's colours individually with the `xenith-*` keys listed below; `glenda` does, to match acme exactly, and `xenith` does too.
 
 #### Environment Variable Configuration
 
@@ -469,7 +467,7 @@ These are things we don't know yet. Good questions to keep in mind.
 3. **Permission escalation**: How does agent request new capabilities? Write to a special file? Special window?
 4. **Session persistence**: Save/restore agent state? What exactly constitutes "state"?
 5. **Multi-agent**: Separate namespaces? Shared windows? How do agents communicate with each other?
-6. **LLM interface pattern**: Which best follows Plan 9 conventions? Does it matter, or will usage patterns make it obvious?
+6. **LLM interface pattern**: Settled — llmsrv at `/mnt/llm` with clone sessions (see "The /llm Filesystem Interface" above).
 7. **Token accounting**: How do we track/limit LLM usage? Is this the agent's concern or the environment's?
 8. **Error presentation**: How should errors from tools/LLM be surfaced? In the agent's window? Separate error log?
 9. **Undo/rollback**: Can we undo agent actions? How far back? What's the model?

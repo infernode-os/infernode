@@ -28,31 +28,25 @@ The agent (Veltro, via `lucibridge`) drives the right- and centre-zones by writi
 
 ## Launching
 
-### macOS / generic
+From the repository root, run the emulator for your platform with the boot script:
 
 ```sh
-./run-lucia.sh
+./emu/MacOSX/o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh   # macOS
+./emu/Linux/o.emu  -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh   # Linux
 ```
 
-### Linux
+Windows uses `.\emu\Nt\o.emu.exe` with `-r%CD%`; see [CLAUDE.md](../CLAUDE.md) and [QUICKSTART.md](../QUICKSTART.md#running-for-development). Add `-g WxH` for a custom window size. The `-p` flags set the memory limits. `sh -l` runs `lib/sh/profile` first, which starts `speech9p` (TTS/STT, mounted at `/n/speech`). `lib/lucifer/boot.sh` then:
 
-```sh
-./run-lucia-linux.sh
-./run-lucia-linux.sh -g 1920x1080      # custom geometry
-```
+1. Runs the login screen (`wm/logon`) unless `skiplogon=1`.
+2. Starts the LLM service in the background (`lib/lucifer/llmsrv.sh`).
+3. Starts `wallet9p` and `msg9p`.
+4. Starts `luciuisrv` (the UI 9P filesystem at `/mnt/ui`) and creates the `Main` activity.
+5. Starts `tools9p` (tool registry at `/tool` with the default capability budget — see below).
+6. Starts `lucibridge` (Lucia's client of the agent harness, `veltrosrv`) in the background.
+7. Creates a `taskboard` artifact in the presentation zone.
+8. Starts the plumber, then runs `lucifer` (the window owner).
 
-Both scripts:
-
-1. Set memory limits: `-pheap=512m -pmain=512m -pimage=512m`.
-2. Start `luciuisrv` (the UI 9P filesystem at `/mnt/ui`).
-3. Create the `Main` activity.
-4. Start `speech9p` (TTS/STT, mounted at `/n/speech`).
-5. Start `tools9p` (tool registry at `/tool` with the default capability budget — see below).
-6. Start `lucibridge` (Lucia's client of the agent harness, `veltrosrv`) in the background.
-7. Create a `taskboard` artifact in the presentation zone.
-8. Run `lucifer` (the window owner).
-
-The LLM backend (`llmsrv`) is started by `lib/sh/profile` from `sh -l`, so the launch script does not start it directly. Set `ANTHROPIC_API_KEY` in the host environment before launching; the profile provisions it into factotum.
+Set `ANTHROPIC_API_KEY` in the host environment before launching; the profile provisions it into factotum.
 
 ### What you need
 
@@ -98,7 +92,7 @@ A small `wmsrv` runs inside `lucifer.b` (the `preswmloop`) so app artifacts get 
 
 The internal module names use the `luci-` prefix; this is an implementation detail and not a user-facing brand.
 
-| File (in `appl/cmd/`) | Role |
+| File (in `appl/cmd/`, except `lucitheme.b` in `appl/lib/`) | Role |
 |-----------------------|------|
 | `lucifer.b`     | Main window owner. Header bar, separators, mouse routing, mini wmsrv for the presentation zone, font and theme loading. |
 | `luciconv.b`    | Conversation zone implementation. |
@@ -122,7 +116,7 @@ Lucia stitches together several 9P services. Once the UI is up, you can `cat` an
 
 ### Activities
 
-An **activity** is a conversation session. The launch script creates `Main` (id `0`); you can add more via:
+An **activity** is a conversation session. The boot script creates `Main` (id `0`); you can add more via:
 
 ```
 ; echo activity create Sidebar > /mnt/ui/ctl
@@ -151,7 +145,7 @@ Click **Voice** in the conversation zone:
 3. On success, the transcribed text is written to `/mnt/ui/activity/N/conversation/input` as a user message.
 4. The agent's reply can optionally be read back by writing it to `/n/speech/say`.
 
-`speech9p` is started by the launch script; it ships with InferNode and runs entirely inside the emulator.
+`speech9p` is started by `lib/sh/profile`; it ships with InferNode and runs entirely inside the emulator.
 
 ## Themes
 
@@ -161,10 +155,12 @@ Themes live in `lib/lucifer/theme/`:
 lib/lucifer/theme/
 ├── current        # one line: name of the active theme
 ├── brimstone      # default dark theme (key/value, hex colours)
-└── halo           # alternate
+├── glenda         # alternate
+├── halo           # alternate
+└── xenith         # alternate
 ```
 
-Theme files are flat `key value` pairs (`#` comments allowed). The launch script writes `brimstone` to `current` if no theme is selected. Custom themes go alongside; `lucitheme.m` defines about 80 colour keys (core UI, conversation, code, editor, mermaid, menu, window chrome). Missing keys fall back to Brimstone defaults — partial themes are fine.
+Theme files are flat `key value` pairs (`#` comments allowed). If `current` is empty or names a theme that cannot be read, `lucitheme` falls back to Brimstone. Custom themes go alongside; `lucitheme.m` defines about 80 colour keys (core UI, conversation, code, editor, mermaid, menu, window chrome). Missing keys fall back to Brimstone defaults — partial themes are fine.
 
 To switch:
 
@@ -175,20 +171,23 @@ echo halo > lib/lucifer/theme/current
 
 ## The default tool budget
 
-`tools9p` is started with these capabilities (see `run-lucia*.sh`):
+`tools9p` is started with these capabilities (see `lib/lucifer/boot.sh`):
 
 ```
--b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,http,
-   git,memory,todo,plan,websearch,mail,keyring,present,gap
+-b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,
+   git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,
+   limbo,sms,dial,contacts
+-p /dis/wm
+read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 ```
 
-The `-b` list is the **delegation budget** — the maximum a parent agent can hand to a `spawn`'d child. The trailing positional args are the tools loaded for the bridge agent itself. To run more locked down, edit the launch script and remove tools.
+The `-b` list is the **delegation budget** — the maximum a parent agent can hand to a `spawn`'d child. The trailing positional args are the tools loaded for the bridge agent itself. To run more locked down, edit `lib/lucifer/boot.sh` and remove tools.
 
 For details on what each tool does and how capability attenuation works, see [VELTRO.md](VELTRO.md) and [appl/veltro/SECURITY.md](../appl/veltro/SECURITY.md).
 
 ## Multiple activities, scripted setup
 
-You can pre-populate Lucia at launch by appending commands to the launch command in `run-lucia*.sh`. Example: open the Veltro tour artifact and a fractal app on startup.
+You can pre-populate Lucia at launch by adding commands to `lib/lucifer/boot.sh` before `lucifer` runs. Example: open the Veltro tour artifact and a fractal app on startup.
 
 ```
 echo 'create id=tour    type=markdown   label=Tour'   > /mnt/ui/activity/0/presentation/ctl
@@ -201,11 +200,11 @@ Anything you can write through `/mnt/ui/...` from a normal shell works at startu
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Blank black window, no header | `lucitheme` failed to load (corrupted `.dis`, missing file). | Rebuild: `cd appl/cmd && mk lucitheme.dis`. See [LUCIA-EVALUATION.md §P0.1](history/LUCIA-EVALUATION.md). |
+| Blank black window, no header | `lucitheme` failed to load (corrupted `.dis`, missing file). | Rebuild: `cd appl/lib && mk install`. (Historical audit: [LUCIA-EVALUATION.md §P0.1](history/LUCIA-EVALUATION.md); the nil check it called for has since been added.) |
 | `ANTHROPIC_API_KEY not set` warning | Host env var missing | `export ANTHROPIC_API_KEY=sk-ant-…` and relaunch. |
 | Voice button does nothing for 30s | `speech9p` not running, or no host audio access | Check `/n/speech` exists; on Linux confirm PulseAudio/PipeWire is reachable from the emulator. |
 | `link typecheck` errors at startup | Stale `.dis` after a `git pull` | `./hooks/install.sh` (one-time) or `cd appl/cmd && mk install`. |
-| Apps fail to launch in the presentation zone | `MAXAPPSLOTS` (16) exhausted | Restart Lucia. Tracked as a known issue in [LUCIA-EVALUATION.md §P0.2](history/LUCIA-EVALUATION.md). |
+| Apps fail to launch in the presentation zone | `MAXAPPSLOTS` (48) exhausted | Close app tabs or restart Lucia. Background: [LUCIA-EVALUATION.md §P0.2](history/LUCIA-EVALUATION.md) (historical audit). |
 | Header shows no activity label | `nslistener` isn't seeing `status`/`label` events | Confirm `luciuisrv` is running: `ps | grep luciuisrv`. |
 
 ## See also

@@ -338,6 +338,17 @@ if not MOCK:
 
     _OPT_FIELDS = {f.name for f in dataclasses.fields(ClaudeAgentOptions)}
 
+    # The CLI reports a response one content block per AssistantMessage, so
+    # the parallel tool calls of one response arrive as several messages.
+    # With the raw stream events the response's end (message_stop) is
+    # known, and its calls go to llmsrv as one batch.  An SDK without them
+    # falls back to a batch per message: correct, one call per round trip.
+    try:
+        from claude_agent_sdk import StreamEvent  # noqa: E402
+    except ImportError:
+        StreamEvent = None
+    COALESCE = StreamEvent is not None and "include_partial_messages" in _OPT_FIELDS
+
     def make_options(**kw):
         dropped = [k for k in kw if k not in _OPT_FIELDS]
         if dropped:
@@ -390,13 +401,26 @@ if not MOCK:
                 setting_sources=[],              # never load host CLAUDE.md etc.
                 strict_mcp_config=True,          # ignore host MCP configs
                 max_turns=100,
+                include_partial_messages=COALESCE,
                 env={"MCP_TOOL_TIMEOUT": str(int(HOLD_TIMEOUT * 1000))},
             )
 
             usage_tokens = 0
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
+            tool_uses = []
+
+            async def flush():
+                nonlocal tool_uses
+                if tool_uses:
+                    text, turn.text_acc = turn.text_acc, ""
+                    await turn.events.put(("tool_calls", tool_uses, text, usage_tokens))
                     tool_uses = []
+
+            async for message in query(prompt=prompt, options=options):
+                if COALESCE and isinstance(message, StreamEvent):
+                    if (message.event or {}).get("type") == "message_stop":
+                        await flush()
+                    continue
+                if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             turn.text_acc += block.text
@@ -409,10 +433,14 @@ if not MOCK:
                                 name = name[len("mcp__nerva__"):]
                             turn.register_tool_use(block.id, name, block.input)
                             tool_uses.append((block.id, name, block.input))
-                    if tool_uses:
-                        text, turn.text_acc = turn.text_acc, ""
-                        await turn.events.put(("tool_calls", tool_uses, text, usage_tokens))
-                elif isinstance(message, ResultMessage):
+                    if not COALESCE:
+                        await flush()
+                    continue
+                # Status notices can arrive mid-response; anything else
+                # follows it, and calls are never held past that.
+                if type(message).__name__ not in ("SystemMessage", "RateLimitEvent"):
+                    await flush()
+                if isinstance(message, ResultMessage):
                     u = getattr(message, "usage", None) or {}
                     usage_tokens = int(u.get("input_tokens", 0)) + int(u.get("output_tokens", 0))
                     text = turn.text_acc or (getattr(message, "result", None) or "")

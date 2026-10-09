@@ -756,6 +756,7 @@ dis/tests/mail_provision_test.dis
 dis/tests/matrix_perfdashboard_test.dis
 dis/tests/matrix_sysmon_test.dis
 dis/tests/matrix_test.dis
+dis/tests/memfs_test.dis
 dis/tests/menu_test.dis
 dis/tests/mldsa_stress_test.dis
 dis/tests/mldsa_test.dis

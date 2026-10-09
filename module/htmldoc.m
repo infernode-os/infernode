@@ -81,4 +81,8 @@ Htmldoc: module
 	# A form submitted, as its submit button would (the page loads in
 	# the background: an event follows).
 	submit:	fn(id: int, form: int): string;
+
+	# Where a browsed page is posted as files (charonfs, as Charon
+	# serves /mnt/charon): #sxenith/<id>, or nil.
+	posted:	fn(id: int): string;
 };

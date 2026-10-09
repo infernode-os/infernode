@@ -57,6 +57,10 @@ Page: module
 	# the module starts and again when it has changed, so a setting
 	# saved by one program reaches the others.
 	SETTINGS:	con "lib/charon/settings";	# in the user's home, /usr/<user>
+
+	# the Layout instance pages are laid out and painted by: what is
+	# where on a page (boxat, boxes) is that instance's to say
+	layoutmod:	fn(): Layout;
 	setting:	fn(name: string): string;
 	set:	fn(line: string): string;	# "name value"; nil, or what is wrong with it
 	settings:	fn(): string;		# every setting, a line each

@@ -15239,7 +15239,19 @@ paintdeco(dst: ref Image, f: ref Frag, o: Point)
 
 boxat(root: ref Box, p: Point): (int, ref Box)
 {
-	(n, b, nil) := findin(root, p, Point(0, 0));
+	# sticky boxes where the last paint showed them: a click on BBC's
+	# header, stuck at the top, was taken for what scrolled under it
+	stickscroll(scrolled.y);
+	n: int;
+	b: ref Box;
+	{
+		(n, b, nil) = findin(root, p, Point(0, 0));
+	} exception e {
+	"*" =>
+		unstick();
+		raise e;
+	}
+	unstick();
 	# an anonymous box (a block around inline content, an anonymous
 	# table part) is no element: what was clicked is the element it
 	# belongs to (github.com's file list: grid cells' anonymous blocks)

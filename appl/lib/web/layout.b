@@ -13809,103 +13809,241 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	t := bg.img;
 	if(t.kind != Css->Kfunction)
 		return;
-	lin := t.s == "linear-gradient" || t.s == "-webkit-linear-gradient" || t.s == "repeating-linear-gradient";
-	repeating := t.s == "repeating-linear-gradient" || t.s == "repeating-radial-gradient";
-	if(!lin && t.s != "radial-gradient" && t.s != "repeating-radial-gradient")
+	kind := -1;
+	case t.s {
+	"linear-gradient" or "-webkit-linear-gradient" or "repeating-linear-gradient" =>
+		kind = Glinear;
+	"radial-gradient" or "repeating-radial-gradient" =>
+		kind = Gradial;
+	"conic-gradient" or "repeating-conic-gradient" =>
+		kind = Gconic;
+	* =>
 		return;
+	}
+	repeating := t.s == "repeating-linear-gradient" || t.s == "repeating-radial-gradient" || t.s == "repeating-conic-gradient";
 	args := commas(t.kids);
 	if(args == nil)
 		return;
-	angle := 180.0;	# to bottom
-	if(lin) {
-		a := nows(hd args);
-		if(len a > 0 && a[0].kind == Css->Kdimension) {
-			case a[0].s {
-			"deg" => angle = a[0].n;
-			"turn" => angle = a[0].n * 360.0;
-			"rad" => angle = a[0].n * 180.0 / Math->Pi;
-			}
-			args = tl args;
-		} else if(len a > 0 && a[0].kind == Css->Kident && lower(a[0].s) == "to") {
-			dir := "";
-			for(k := 1; k < len a; k++)
-				if(a[k].kind == Css->Kident)
-					dir += lower(a[k].s);
-			case dir {
-			"top" => angle = 0.0;
-			"right" => angle = 90.0;
-			"bottom" => angle = 180.0;
-			"left" => angle = 270.0;
-			"topright" or "righttop" => angle = 45.0;
-			"bottomright" or "rightbottom" => angle = 135.0;
-			"bottomleft" or "leftbottom" => angle = 225.0;
-			"topleft" or "lefttop" => angle = 315.0;
-			}
-			args = tl args;
-		}
+	g := ref Grad(nil, nil, nil, Style->CSsrgb, Style->Hshorter);
+	fs := b.st.fontsize;
+	# the first argument, if it is not a colour stop: the direction,
+	# shape or centre, and the colour space ("in oklab")
+	a := nows(hd args);
+	first := 0;
+	if(len a > 0) {
+		(isstop, nil) := style->color(a[0:1]);
+		first = !isstop;
 	}
-	# a radial gradient's centre and radii (Images 3 §3.2)
-	(gcx, gcy, grx, gry) := (0.0, 0.0, 0.0, 0.0);
-	if(!lin) {
-		a := nows(hd args);
-		isstop := len a > 0;
-		if(isstop)
-			(isstop, nil) = style->color(a[0:1]);
-		ok := 1;
-		if(!isstop) {
-			(ok, gcx, gcy, grx, gry) = radialshape(a, r, b.st.fontsize);
-			args = tl args;
-		} else
-			(nil, gcx, gcy, grx, gry) = radialshape(nil, r, b.st.fontsize);
+	ispace := 0;
+	if(first) {
+		ok: int;
+		(ok, a, ispace) = interpspace(a, g);
 		if(!ok)
-			return;	# invalid: no image
+			return;
+		args = tl args;
+	} else
+		a = nil;
+	angle := 180.0;	# to bottom
+	(gcx, gcy, grx, gry) := (0.0, 0.0, 0.0, 0.0);
+	case kind {
+	Glinear =>
+		if(len a == 1 && (a[0].kind == Css->Kdimension || a[0].kind == Css->Knumber && a[0].n == 0.0)) {
+			(ok, v) := angleof(a[0]);
+			if(!ok)
+				return;
+			angle = v;
+		} else if(len a > 1 && a[0].kind == Css->Kident && lower(a[0].s) == "to") {
+			# to a side, or a corner: then the line is at right angles
+			# to the one through the other two corners (Images 3 §3.1.1)
+			(sx, sy) := (0, 0);
+			for(k := 1; k < len a; k++) {
+				if(a[k].kind != Css->Kident)
+					return;
+				case lower(a[k].s) {
+				"left" => sx = -1;
+				"right" => sx = 1;
+				"top" => sy = -1;
+				"bottom" => sy = 1;
+				* => return;
+				}
+			}
+			if(sx == 0 && sy == 0)
+				return;
+			# the direction (sx·h, sy·w), as an angle clockwise from up
+			angle = math->atan2(real (sx * nz1(r.dy())), -real (sy * nz1(r.dx()))) * 180.0 / Math->Pi;
+			if(sy == 0)
+				angle = real (90 * sx);
+			else if(sx == 0)
+				angle = real (90 + 90 * sy);
+		} else if(len a > 0)
+			return;
+	Gradial =>
+		ok := 1;
+		(ok, gcx, gcy, grx, gry) = radialshape(a, r, fs);
+		if(!ok)
+			return;
+	Gconic =>
+		# [from <angle>] [at <position>]
+		gcx = real (r.min.x + r.max.x) / 2.0;
+		gcy = real (r.min.y + r.max.y) / 2.0;
+		angle = 0.0;
+		k := 0;
+		if(k < len a && a[k].kind == Css->Kident && lower(a[k].s) == "from") {
+			if(k+1 >= len a)
+				return;
+			(ok, v) := angleof(a[k+1]);
+			if(!ok)
+				return;
+			angle = v;
+			k += 2;
+		}
+		if(k < len a) {
+			if(a[k].kind != Css->Kident || lower(a[k].s) != "at")
+				return;
+			(ok, x, y) := gradpos(a[k+1:], real r.dx(), real r.dy(), fs);
+			if(!ok)
+				return;
+			(gcx, gcy) = (real r.min.x + x, real r.min.y + y);
+		}
 	}
 	# the gradient line's length, for stops given as lengths
 	rad := angle * Math->Pi / 180.0;
 	dx := math->sin(rad);
 	dy := -math->cos(rad);
 	linelen := math->fabs(real r.dx()*dx) + math->fabs(real r.dy()*dy);
-	if(!lin)
+	if(kind == Gradial)
 		linelen = grx;
-	# colour stops
+	if(!stops(g, args, kind, linelen, fs, ispace))
+		return;
+	oclip := dst.clipr;
+	(cr, ok) := oclip.clip(r);
+	if(!ok)
+		return;
+	# each pixel its colour, from how far along the gradient line it
+	# is, out along the ray, or round from the start angle
+	case kind {
+	Glinear =>
+		cx := real (r.min.x + r.max.x) / 2.0;
+		cy := real (r.min.y + r.max.y) / 2.0;
+		gradpixels(dst, cr, kind, repeating, cx, cy, dx, dy, linelen, g);
+	Gradial =>
+		gradpixels(dst, cr, kind, repeating, gcx, gcy, grx, gry, 0.0, g);
+	Gconic =>
+		gradpixels(dst, cr, kind, repeating, gcx, gcy, rad, 0.0, 0.0, g);
+	}
+}
+
+Glinear, Gradial, Gconic: con iota;
+
+# a gradient's colour stops, where they are (0 to 1 along the line), the
+# hints between them, and how colours mix
+Grad: adt {
+	cols:	array of int;
+	pos:	array of real;
+	hints:	array of real;	# hints[i], before stop i: where the midway colour falls; UNSET none
+	space:	int;
+	hue:	int;
+};
+
+
+# "in <space> [<hue method> hue]" out of a gradient's first argument:
+# (ok, what is left, whether it was there)
+interpspace(a: array of ref Css->Tok, g: ref Grad): (int, array of ref Css->Tok, int)
+{
+	for(i := 0; i < len a; i++) {
+		if(a[i].kind != Css->Kident || lower(a[i].s) != "in")
+			continue;
+		if(i+1 >= len a || a[i+1].kind != Css->Kident)
+			return (0, nil, 0);
+		j := i+2;
+		g.space = style->mixspace(lower(a[i+1].s));
+		if(g.space < 0)
+			return (0, nil, 0);
+		if(j+1 < len a && a[j].kind == Css->Kident && a[j+1].kind == Css->Kident && lower(a[j+1].s) == "hue") {
+			g.hue = style->huemethod(lower(a[j].s));
+			if(!style->polar(g.space) || g.hue < 0)
+				return (0, nil, 0);
+			j += 2;
+		}
+		r := array[len a - (j - i)] of ref Css->Tok;
+		r[0:] = a[0:i];
+		r[i:] = a[j:];
+		return (1, r, 1);
+	}
+	return (1, a, 0);
+}
+
+# an angle token in degrees
+angleof(t: ref Css->Tok): (int, real)
+{
+	if(t.kind == Css->Knumber && t.n == 0.0)
+		return (1, 0.0);
+	if(t.kind != Css->Kdimension)
+		return (0, 0.0);
+	case t.s {
+	"deg" => return (1, t.n);
+	"turn" => return (1, t.n * 360.0);
+	"rad" => return (1, t.n * 180.0 / Math->Pi);
+	"grad" => return (1, t.n * 0.9);
+	}
+	return (0, 0.0);
+}
+
+# A gradient's colour stops and hints, into g, their places made
+# definite (Images 3 §3.5.3); 0 if they are not right.  A conic
+# gradient's are angles; the others' lengths along the line l long.
+stops(g: ref Grad, args: list of array of ref Css->Tok, kind: int, l, fs: real, ispace: int): int
+{
 	n := len args;
 	if(n < 1)
-		return;
+		return 0;
 	cols := array[2*n] of int;
 	pos := array[2*n] of real;
+	hints := array[2*n] of {* => UNSET};
 	k := 0;
+	modern := 0;
 	for(; args != nil; args = tl args) {
 		a := nows(hd args);
 		if(len a == 0)
-			continue;
+			return 0;
 		(ok, c) := style->color(a[0:1]);
-		if(!ok)
+		if(!ok) {
+			# a hint: a place alone, between two stops
+			if(len a != 1 || k == 0 || tl args == nil || hints[k] != UNSET)
+				return 0;
+			(hok, h) := stoppos(a[0], kind, l, fs);
+			if(!hok)
+				return 0;
+			hints[k] = h;
 			continue;
-		# a colour with two positions is two stops (Images 4 §3.4.1:
-		# "yellow 0% 25%" is a band; border-image-repeat-round-003)
-		for(j := 1; j < len a && j <= 2; j++) {
+		}
+		if(a[0].kind == Css->Kfunction)
+			case lower(a[0].s) {
+			"oklab" or "oklch" or "lab" or "lch" or "color" or "hwb" =>
+				modern = 1;
+			}
+		# a colour with two places is two stops (Images 4 §3.4.1)
+		if(len a > 3)
+			return 0;
+		for(j := 1; j < len a; j++) {
+			(pok, p) := stoppos(a[j], kind, l, fs);
+			if(!pok)
+				return 0;
 			cols[k] = c;
-			pos[k] = UNSET;
-			if(a[j].kind == Css->Kpercent)
-				pos[k] = a[j].n / 100.0;
-			else if(a[j].kind == Css->Kdimension && a[j].s == "px" && linelen > 0.0)
-				pos[k] = a[j].n / linelen;
-			else if(a[j].kind == Css->Knumber && a[j].n == 0.0)
-				pos[k] = 0.0;
-			else
-				break;
-			k++;
+			pos[k++] = p;
 		}
 		if(len a == 1) {
 			cols[k] = c;
-			pos[k] = UNSET;
-			k++;
+			pos[k++] = UNSET;
 		}
 	}
 	if(k == 0)
-		return;
+		return 0;
+	if(!ispace && modern)
+		g.space = Style->CSoklab;	# a CSS Color 4 colour among them: they mix in oklab (Color 4 §12.1)
 	cols = cols[0:k];
 	pos = pos[0:k];
+	hints = hints[0:k];
 	if(pos[0] == UNSET)
 		pos[0] = 0.0;
 	if(pos[k-1] == UNSET)
@@ -13914,7 +14052,7 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	for(q := 1; q < k; q++)
 		if(pos[q] != UNSET) {
 			if(pos[q] < most)
-				pos[q] = most;	# a stop before one before it is at that one (Images 3 §3.5.3)
+				pos[q] = most;	# a stop before one before it is at that one
 			most = pos[q];
 		}
 	for(i := 1; i < k-1; i++)
@@ -13925,26 +14063,53 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			for(m := i; m < j; m++)
 				pos[m] = pos[i-1] + (pos[j] - pos[i-1]) * real (m - i + 1) / real (j - i + 1);
 		}
-	oclip := dst.clipr;
-	(cr, ok) := oclip.clip(r);
+	g.cols = cols;
+	g.pos = pos;
+	g.hints = hints;
+	return 1;
+}
+
+# a colour stop's place: along the line, as a fraction of it; round, as one of a turn
+stoppos(t: ref Css->Tok, kind: int, l, fs: real): (int, real)
+{
+	if(kind == Gconic) {
+		if(t.kind == Css->Kpercent)
+			return (1, t.n / 100.0);
+		(ok, v) := angleof(t);
+		if(ok)
+			return (1, v / 360.0);
+		if(t.kind == Css->Kfunction && t.s == "calc") {
+			# a calc of a percentage, say
+			(ok, v) = tokpx(t, 1.0, fs);
+			return (ok, v);
+		}
+		return (0, 0.0);
+	}
+	if(l <= 0.0) {
+		if(t.kind == Css->Kpercent)
+			return (1, t.n / 100.0);
+		(ok, v) := tokpx(t, 0.0, fs);
+		if(!ok)
+			return (0, 0.0);
+		if(v > 0.0)
+			return (1, 1e9);
+		if(v < 0.0)
+			return (1, -1e9);
+		return (1, 0.0);
+	}
+	(ok, v) := tokpx(t, l, fs);
 	if(!ok)
-		return;
-	# each pixel its colour, from how far along the gradient line it
-	# is, or out along the ray
-	if(lin) {
-		cx := real (r.min.x + r.max.x) / 2.0;
-		cy := real (r.min.y + r.max.y) / 2.0;
-		gradpixels(dst, cr, 1, repeating, cx, cy, dx, dy, linelen, 0.0, cols, pos);
-	} else
-		gradpixels(dst, cr, 0, repeating, gcx, gcy, grx, gry, 0.0, 0.0, cols, pos);
+		return (0, 0.0);
+	return (1, v / l);
 }
 
 # A gradient over cr, a pixel at a time, through a table of the stops'
 # colours, premultiplied.  Linear: (cx, cy) the box's centre, (ax, ay)
 # the line's direction, l its length.  Radial: (cx, cy) the centre, ax
-# and ay the radii.  t is where a pixel's centre falls: 0 at the first
-# stop's place, 1 at the line's end or on the ending shape.
-gradpixels(dst: ref Image, cr: Rect, lin, repeating: int, cx, cy, ax, ay, l, nil: real, cols: array of int, pos: array of real)
+# and ay the radii.  Conic: (cx, cy) the centre, ax the start angle in
+# radians.  t is where a pixel's centre falls: 0 at the first stop's
+# place, 1 at the line's end, on the ending shape, or a turn round.
+gradpixels(dst: ref Image, cr: Rect, kind, repeating: int, cx, cy, ax, ay, l: real, g: ref Grad)
 {
 	w := cr.dx();
 	h := cr.dy();
@@ -13953,8 +14118,9 @@ gradpixels(dst: ref Image, cr: Rect, lin, repeating: int, cx, cy, ax, ay, l, nil
 	img := display.newimage(cr, Draw->RGBA32, 0, Draw->Transparent);
 	if(img == nil)
 		return;
+	pos := g.pos;
 	np := len pos;
-	# the table spans the stops, and the whole line or ray
+	# the table spans the stops, and the whole line, ray or turn
 	(tlo, thi) := (0.0, 1.0);
 	if(repeating)
 		(tlo, thi) = (pos[0], pos[np-1]);
@@ -13963,14 +14129,18 @@ gradpixels(dst: ref Image, cr: Rect, lin, repeating: int, cx, cy, ax, ay, l, nil
 			tlo = pos[0];
 		if(pos[np-1] > thi)
 			thi = pos[np-1];
+		if(tlo < -4.0)
+			tlo = -4.0;	# (a stop far off: the colours near enough are what is seen)
+		if(thi > 5.0)
+			thi = 5.0;
 	}
 	span := thi - tlo;
 	buf := array[w*h*4] of byte;
-	if(span <= 0.0 || !lin && (ax <= 0.0 || ay <= 0.0) || lin && l <= 0.0) {
+	if(span <= 0.0 || kind == Gradial && (ax <= 0.0 || ay <= 0.0) || kind == Glinear && l <= 0.0) {
 		# nothing to spread over: the average colour, or the last
-		c := cols[np-1];
+		c := g.cols[np-1];
 		if(repeating)
-			c = pmix(cols[0], cols[np-1], 0.5);
+			c = gradcolor(g, (pos[0] + pos[np-1]) / 2.0);
 		px := premul(c);
 		for(q := 0; q < len buf; q += 4)
 			buf[q:] = px;
@@ -13979,22 +14149,34 @@ gradpixels(dst: ref Image, cr: Rect, lin, repeating: int, cx, cy, ax, ay, l, nil
 		return;
 	}
 	N := 1024;
+	if(span > 1.0)
+		N = int (1024.0 * span);
+	if(N > 8192)
+		N = 8192;
 	lut := array[4*(N+1)] of byte;
 	for(i := 0; i <= N; i++)
-		lut[4*i:] = premul(gradcolor(cols, pos, tlo + span * real i / real N));
+		lut[4*i:] = premul(gradcolor(g, tlo + span * real i / real N));
 	f := real N / span;	# table entries per unit of t
 	k := 0;
+	TWOPI := 2.0 * Math->Pi;
 	for(y := 0; y < h; y++) {
 		py := real (cr.min.y + y) + 0.5 - cy;
 		for(x := 0; x < w; x++) {
 			px := real (cr.min.x + x) + 0.5 - cx;
 			t: real;
-			if(lin)
+			case kind {
+			Glinear =>
 				t = (px*ax + py*ay) / l + 0.5;
-			else {
+			Gradial =>
 				ux := px / ax;
 				uy := py / ay;
 				t = math->sqrt(ux*ux + uy*uy);
+			* =>
+				a := math->atan2(px, -py) - ax;	# clockwise from up, less the start
+				a = math->fmod(a, TWOPI);
+				if(a < 0.0)
+					a += TWOPI;
+				t = a / TWOPI;
 			}
 			t = (t - tlo) * f;
 			if(repeating) {
@@ -14183,6 +14365,8 @@ tokpx(t: ref Css->Tok, basis, fs: real): (int, real)
 	return (0, 0.0);
 }
 
+INF: con 1e30;	# calc()'s infinity, near enough
+
 # a calc() of lengths and percentages being worked out, in px
 Calc: adt {
 	t:	array of ref Css->Tok;
@@ -14215,8 +14399,10 @@ calcprod(c: ref Calc): real
 			v *= w;
 		else if(w != 0.0)
 			v /= w;
-		else
-			c.ok = 0;
+		else if(v > 0.0)
+			v = INF;	# x/0 is infinite (Values 4 §10.9)
+		else if(v < 0.0)
+			v = -INF;
 	}
 	return v;
 }
@@ -14231,6 +14417,13 @@ calcterm(c: ref Calc): real
 	case t.kind {
 	Css->Knumber =>
 		return t.n;
+	Css->Kident =>
+		case lower(t.s) {
+		"infinity" => return INF;
+		"-infinity" => return -INF;
+		"pi" => return Math->Pi;
+		"e" => return 2.718281828459045;
+		}
 	Css->Kblock =>
 		if(t.s == "(") {
 			d := ref Calc(nows(t.kids), 0, c.basis, c.fs, 1);
@@ -14261,8 +14454,12 @@ gradband(dst, mask: ref Image, p: ref Path, c: int)
 	mask.fillpath(p, ~0, colorimg(a << 24 | a << 16 | a << 8 | 255), (0, 0));
 }
 
-gradcolor(cols: array of int, pos: array of real, t: real): int
+# the colour at t along a gradient: between the stops either side,
+# bent by a hint between them, mixed in the gradient's colour space
+gradcolor(g: ref Grad, t: real): int
 {
+	cols := g.cols;
+	pos := g.pos;
 	if(t <= pos[0])
 		return cols[0];
 	for(i := 1; i < len cols; i++)
@@ -14271,7 +14468,21 @@ gradcolor(cols: array of int, pos: array of real, t: real): int
 			f := 1.0;
 			if(span > 0.0)
 				f = (t - pos[i-1]) / span;
-			return pmix(cols[i-1], cols[i], f);
+			if(g.hints[i] != UNSET) {
+				# the hint is where the colours mix half and half (Images 4 §3.5.3)
+				h := 0.5;
+				if(span > 0.0)
+					h = (g.hints[i] - pos[i-1]) / span;
+				if(h <= 0.0)
+					f = 1.0;
+				else if(h >= 1.0)
+					f = 0.0;
+				else
+					f = math->pow(f, math->log(0.5) / math->log(h));
+			}
+			if(g.space == Style->CSsrgb)
+				return pmix(cols[i-1], cols[i], f);
+			return style->spacemix(cols[i-1], cols[i], f, g.space, g.hue);
 		}
 	return cols[len cols - 1];
 }

@@ -290,7 +290,9 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 				tier = Tauthor + lp;
 			}
 			decls := absurls(r.decls, base);
-			for(k := 0; k < len r.sels; k++)
+			for(k := 0; k < len decls && !sibfns; k++)
+				sibfns = hassibfn(decls[k].val);
+			for(k = 0; k < len r.sels; k++)
 				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0));
 			ix.order++;
 		Media =>
@@ -2042,6 +2044,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 				pf: array of int;
 				if(p != 0)
 					pf = filters[p];
+				(sibdoc, sibnode) = (d, n);
 				st := styleof(m, s.idx, n, ps, ctx, c, share, pf);
 				if(nd.first != 0)
 					filters[n] = childfilter(m, n, pf);
@@ -2057,6 +2060,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		else
 			n = next(d, n, root);
 	}
+	(sibdoc, sibnode) = (nil, 0);
 	schemedark = -1;
 	return c;
 }
@@ -2161,9 +2165,21 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 
 # The inputs to an element's style, as a string; nil if it must not be
 # shared (the root, whose style also sets rem units).
+# a sheet uses sibling-index() or sibling-count(): siblings' styles
+# may differ though their rules do not, so none are shared
+sibfns := 0;
+
+hassibfn(v: array of ref Tok): int
+{
+	for(i := 0; i < len v; i++)
+		if(v[i].kind == Kfunction && (v[i].s == "sibling-index" || v[i].s == "sibling-count") || v[i].kids != nil && hassibfn(v[i].kids))
+			return 1;
+	return 0;
+}
+
 sharekey(d: ref Doc, n: int, parent: ref St, matched: list of ref Entry): string
 {
-	if(parent == nil)
+	if(parent == nil || sibfns)
 		return nil;
 	k := string parent.sid;
 	for(; matched != nil; matched = tl matched)
@@ -2748,10 +2764,32 @@ unit(n: real, u: string, ctx: ref Ctx): (int, real)
 }
 
 # calc() and friends (CSS Values 4 §10) as an expression tree.
+# the element being styled, for sibling-index() and sibling-count()
+sibdoc: ref Doc;
+sibnode := 0;
+
 calcexpr(t: ref Tok, ctx: ref Ctx): ref Expr
 {
 	args := splitcommas(t.kids);
 	case t.s {
+	"sibling-index" or "sibling-count" =>
+		# where the element is among its parent's elements, from 1; how
+		# many they are (Values 5 §8.1)
+		if(len t.kids != 0 || sibdoc == nil || sibnode == 0)
+			return nil;
+		(idx, cnt) := (1, 0);
+		p := parentel(sibdoc, sibnode);
+		if(p == 0)
+			return ref Expr('k', 1.0, 0.0, nil);
+		for(c := sibdoc.nodes[p].first; c != 0; c = sibdoc.nodes[c].next)
+			if(sibdoc.nodes[c].kind == Dom->Element) {
+				cnt++;
+				if(c == sibnode)
+					idx = cnt;
+			}
+		if(t.s == "sibling-count")
+			idx = cnt;
+		return ref Expr('k', real idx, 0.0, nil);
 	"calc" or "-webkit-calc" =>
 		if(len args != 1)
 			return nil;
@@ -3144,6 +3182,26 @@ round(x: real): int
 # from either the legacy comma syntax or the modern space syntax.
 # A channel is (kind, value): Knumber, Kpercent, Kdimension (an angle,
 # converted to degrees) or Kident "none".
+# angles as numbers of degrees, for a calc() in a colour
+anglenums(v: array of ref Tok): array of ref Tok
+{
+	r := array[len v] of ref Tok;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Kdimension)
+			case lower(t.s) {
+			"deg" => t = ref Tok(Knumber, nil, t.n, 0, nil);
+			"rad" => t = ref Tok(Knumber, nil, t.n * 180.0 / Math->Pi, 0, nil);
+			"grad" => t = ref Tok(Knumber, nil, t.n * 0.9, 0, nil);
+			"turn" => t = ref Tok(Knumber, nil, t.n * 360.0, 0, nil);
+			}
+		else if(t.kids != nil)
+			t = ref Tok(t.kind, t.s, t.n, t.flag, anglenums(t.kids));
+		r[i] = t;
+	}
+	return r;
+}
+
 channels(t: ref Tok): (int, array of (int, real), (int, real))
 {
 	v := nows(t.kids);
@@ -3181,6 +3239,8 @@ channels(t: ref Tok): (int, array of (int, real), (int, real))
 				return (0, nil, alpha);
 			c = (Knumber, 0.0);
 		Kfunction =>
+			# (an angle in it as its degrees: a hue)
+			x = ref Tok(x.kind, x.s, x.n, x.flag, anglenums(x.kids));
 			e := calcexpr(x, ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0));
 			if(e == nil)
 				return (0, nil, alpha);
@@ -3661,6 +3721,21 @@ colormixr(t: ref Tok): (int, array of real)
 	args := splitcommas(t.kids);
 	if(len args != 3)
 		return (0, nil);
+	# in <space> [<method> hue]
+	sp := CSsrgb;
+	hue := Hshorter;
+	iv := nows(hd args);
+	if(len iv < 2 || iv[0].kind != Kident || lower(iv[0].s) != "in" || iv[1].kind != Kident)
+		return (0, nil);
+	sp = mixspace(lower(iv[1].s));
+	if(sp < 0)
+		return (0, nil);
+	if(len iv == 4 && iv[2].kind == Kident && iv[3].kind == Kident && lower(iv[3].s) == "hue") {
+		hue = huemethod(lower(iv[2].s));
+		if(hue < 0 || !polar(sp))
+			return (0, nil);
+	} else if(len iv != 2)
+		return (0, nil);
 	args = tl args;
 	(ok1, c1, p1) := mixarg(hd args);
 	(ok2, c2, p2) := mixarg(hd tl args);
@@ -3678,8 +3753,21 @@ colormixr(t: ref Tok): (int, array of real)
 		return (0, nil);
 	w := p1/tot;
 	ch := array[4] of real;
-	for(i := 0; i < 4; i++)
-		ch[i] = c1[i]*w + c2[i]*(1.0-w);
+	if(sp == CSsrgb)
+		for(i := 0; i < 4; i++)
+			ch[i] = c1[i]*w + c2[i]*(1.0-w);
+	else {
+		(i1, i2) := (0, 0);
+		for(i := 0; i < 4; i++) {
+			i1 |= clamp(round(c1[i])) << (24 - 8*i);
+			i2 |= clamp(round(c2[i])) << (24 - 8*i);
+		}
+		m := spacemix(i1, i2, 1.0 - w, sp, hue);
+		for(i = 0; i < 4; i++)
+			ch[i] = real ((m >> (24 - 8*i)) & 255);
+	}
+	if(tot < 100.0)
+		ch[3] *= tot / 100.0;	# percentages short of 100% leave it that much more transparent
 	return (1, ch);
 }
 
@@ -6167,6 +6255,10 @@ lentoks(v: array of ref Tok, ctx: ref Ctx): array of ref Tok
 			(ok, p) := unit(t.n, t.s, ctx);
 			if(ok)
 				t = ref Tok(Kdimension, "px", p, 0, nil);
+		} else if(t.kind == Kfunction && (t.s == "sibling-index" || t.s == "sibling-count")) {
+			# the element's, now: the image is drawn without it
+			if((e := calcexpr(t, ctx)) != nil)
+				t = ref Tok(Knumber, nil, e.px, 1, nil);
 		} else if(t.kind == Kfunction && (t.s == "calc" || t.s == "min" || t.s == "max" || t.s == "clamp")) {
 			e := calcexpr(t, ctx);
 			if(e != nil) {
@@ -6246,6 +6338,87 @@ shadows(v: array of ref Tok, ctx: ref Ctx): array of ref Shadow
 		a[i++] = s;
 	}
 	return a;
+}
+
+# image-set()'s choice for a screen of one pixel per px: the option at
+# 1x, else the least above it, else the most (Images 4 §2.2); nil if it
+# is not right.  A string is a URL.
+# resolutions as numbers of dppx, for calc()
+resnums(v: array of ref Tok): array of ref Tok
+{
+	r := array[len v] of ref Tok;
+	for(i := 0; i < len v; i++) {
+		t := v[i];
+		if(t.kind == Kdimension)
+			case lower(t.s) {
+			"x" or "dppx" => t = ref Tok(Knumber, nil, t.n, 0, nil);
+			"dpi" => t = ref Tok(Knumber, nil, t.n / 96.0, 0, nil);
+			"dpcm" => t = ref Tok(Knumber, nil, t.n * 2.54 / 96.0, 0, nil);
+			}
+		else if(t.kids != nil)
+			t = ref Tok(t.kind, t.s, t.n, t.flag, resnums(t.kids));
+		r[i] = t;
+	}
+	return r;
+}
+
+imageset(t: ref Tok, ctx: ref Ctx): (int, ref Tok)
+{
+	best: ref Tok;
+	bestres := 0.0;
+	for(opts := splitcommas(t.kids); opts != nil; opts = tl opts) {
+		o := nows(hd opts);
+		if(len o == 0)
+			return (0, nil);
+		im := o[0];
+		case im.kind {
+		Kstring =>
+			im = ref Tok(Kurl, im.s, 0.0, 0, nil);
+		Kurl =>
+			;
+		Kfunction =>
+			if(lower(im.s) != "url" && !suffix(lower(im.s), "gradient"))
+				return (0, nil);
+		* =>
+			return (0, nil);
+		}
+		res := 1.0;
+		ok := 1;
+		for(k := 1; k < len o; k++) {
+			x := o[k];
+			if(x.kind == Kfunction && x.s == "calc") {
+				# a resolution worked out: x and dppx are one
+				e := calcexpr(ref Tok(x.kind, x.s, x.n, x.flag, resnums(x.kids)), ctx);
+				if(e == nil)
+					return (0, nil);
+				(lin, v, nil) := fold(e);
+				if(!lin)
+					return (0, nil);
+				res = v;
+			} else if(x.kind == Kdimension) {
+				case lower(x.s) {
+				"x" or "dppx" => res = x.n;
+				"dpi" => res = x.n / 96.0;
+				"dpcm" => res = x.n * 2.54 / 96.0;
+				* => return (0, nil);
+				}
+			} else if(x.kind == Kfunction && lower(x.s) == "type") {
+				ty := "";
+				if(len x.kids > 0 && x.kids[0].kind == Kstring)
+					ty = lower(x.kids[0].s);
+				case ty {
+				"image/png" or "image/jpeg" or "image/gif" or "image/webp" or "image/svg+xml" => ;
+				* => ok = 0;	# a type it cannot draw: not a choice
+				}
+			} else
+				return (0, nil);
+		}
+		if(!ok || res <= 0.0)
+			continue;	# (no image is drawn at no resolution, or less)
+		if(best == nil || bestres < 1.0 && res > bestres || bestres > 1.0 && res >= 1.0 && res < bestres)
+			(best, bestres) = (im, res);
+	}
+	return (1, best);
 }
 
 # mask-image and the rest: the background longhands' grammar, on the
@@ -6338,7 +6511,14 @@ bglonghand(st: ref St, nm: string, v: array of ref Tok, ctx: ref Ctx): int
 		"background-image" =>
 			if(x[0].kind == Kident && lower(x[0].s) == "none")
 				b.img = nil;
-			else if(x[0].kind == Kurl || x[0].kind == Kfunction)
+			else if(x[0].kind == Kfunction && (lower(x[0].s) == "image-set" || lower(x[0].s) == "-webkit-image-set")) {
+				(ok, im) := imageset(x[0], ctx);
+				if(!ok)
+					return 0;
+				b.img = nil;	# no choice it can show: none
+				if(im != nil)
+					b.img = lentoks(array[] of {im}, ctx)[0];
+			} else if(x[0].kind == Kurl || x[0].kind == Kfunction)
 				b.img = lentoks(x[0:1], ctx)[0];
 			else
 				return 0;
@@ -7017,4 +7197,315 @@ colstr(c: int): string
 	if(c == Ccurrent)
 		return "currentcolor";
 	return sys->sprint("#%.8ux", c);
+}
+
+mixspace(name: string): int
+{
+	case name {
+	"srgb" => return CSsrgb;
+	"srgb-linear" => return CSsrgblinear;
+	"oklab" => return CSoklab;
+	"oklch" => return CSoklch;
+	"lab" => return CSlab;
+	"lch" => return CSlch;
+	"hsl" => return CShsl;
+	"hwb" => return CShwb;
+	"xyz" or "xyz-d65" => return CSxyz;
+	"xyz-d50" => return CSxyzd50;
+	"display-p3" or "a98-rgb" or "prophoto-rgb" or "rec2020" => return CSsrgb;	# (mixed as sRGB)
+	}
+	return -1;
+}
+
+huemethod(name: string): int
+{
+	case name {
+	"shorter" => return Hshorter;
+	"longer" => return Hlonger;
+	"increasing" => return Hincreasing;
+	"decreasing" => return Hdecreasing;
+	}
+	return -1;
+}
+
+polar(sp: int): int
+{
+	return sp == CSoklch || sp == CSlch || sp == CShsl || sp == CShwb;
+}
+
+# Two colours (0xRRGGBBAA) mixed f of the way in a colour space, their
+# alphas premultiplied into the components that are not a hue, the hue
+# going round as asked (Color 4 §12.3, §12.4)
+spacemix(a, b: int, f: real, sp, hue: int): int
+{
+	(a1, a2, a3, aa) := tospace(a, sp);
+	(b1, b2, b3, ba) := tospace(b, sp);
+	hi := -1;	# which component is a hue
+	case sp {
+	CSoklch or CSlch =>
+		hi = 2;
+	CShsl or CShwb =>
+		hi = 0;
+	}
+	ca := array[] of {a1, a2, a3};
+	cb := array[] of {b1, b2, b3};
+	if(hi >= 0) {
+		# a hue that does not matter (a grey's) takes the other's
+		if(ca[hi] == NOHUE && cb[hi] == NOHUE)
+			ca[hi] = cb[hi] = 0.0;
+		else if(ca[hi] == NOHUE)
+			ca[hi] = cb[hi];
+		else if(cb[hi] == NOHUE)
+			cb[hi] = ca[hi];
+		(h1, h2) := (ca[hi], cb[hi]);
+		d := h2 - h1;
+		case hue {
+		Hshorter =>
+			if(d > 180.0)
+				h1 += 360.0;
+			else if(d < -180.0)
+				h2 += 360.0;
+		Hlonger =>
+			if(d > 0.0 && d < 180.0)
+				h1 += 360.0;
+			else if(d > -180.0 && d <= 0.0)
+				h2 += 360.0;
+		Hincreasing =>
+			if(h2 < h1)
+				h2 += 360.0;
+		Hdecreasing =>
+			if(h1 < h2)
+				h1 += 360.0;
+		}
+		(ca[hi], cb[hi]) = (h1, h2);
+	}
+	al := aa + (ba - aa) * f;
+	if(al <= 0.0)
+		return 0;
+	r := array[3] of real;
+	for(i := 0; i < 3; i++) {
+		if(i == hi)
+			r[i] = ca[i] + (cb[i] - ca[i]) * f;
+		else
+			r[i] = (ca[i]*aa + (cb[i]*ba - ca[i]*aa) * f) / al;
+	}
+	return fromspace(r[0], r[1], r[2], al, sp);
+}
+
+NOHUE: con -1e30;	# a hue that is missing (powerless)
+
+# a colour in a space: three components and alpha (0 to 1)
+tospace(c: int, sp: int): (real, real, real, real)
+{
+	r := real ((c >> 24) & 255) / 255.0;
+	g := real ((c >> 16) & 255) / 255.0;
+	b := real ((c >> 8) & 255) / 255.0;
+	al := real (c & 255) / 255.0;
+	case sp {
+	CSsrgb =>
+		return (r, g, b, al);
+	CShsl or CShwb =>
+		mx := fmax(r, fmax(g, b));
+		mn := fmin(r, fmin(g, b));
+		d := mx - mn;
+		h := NOHUE;
+		if(d > 0.0) {
+			if(mx == r)
+				h = 60.0 * math->fmod((g - b) / d, 6.0);
+			else if(mx == g)
+				h = 60.0 * ((b - r) / d + 2.0);
+			else
+				h = 60.0 * ((r - g) / d + 4.0);
+			if(h < 0.0)
+				h += 360.0;
+		}
+		if(sp == CShwb)
+			return (h, mn, 1.0 - mx, al);
+		l := (mx + mn) / 2.0;
+		sat := 0.0;
+		if(d > 0.0)
+			sat = d / (1.0 - math->fabs(2.0*l - 1.0));
+		return (h, sat, l, al);
+	}
+	(lr, lg, lb) := (mlin(r), mlin(g), mlin(b));
+	if(sp == CSsrgblinear)
+		return (lr, lg, lb, al);
+	if(sp == CSoklab || sp == CSoklch) {
+		l := mcbrt(0.4122214708*lr + 0.5363325363*lg + 0.0514459929*lb);
+		m := mcbrt(0.2119034982*lr + 0.6806995451*lg + 0.1073969566*lb);
+		s := mcbrt(0.0883024619*lr + 0.2817188376*lg + 0.6299787005*lb);
+		L := 0.2104542553*l + 0.7936177850*m - 0.0040720468*s;
+		A := 1.9779984951*l - 2.4285922050*m + 0.4505937099*s;
+		B := 0.0259040371*l + 0.7827717662*m - 0.8086757660*s;
+		if(sp == CSoklab)
+			return (L, A, B, al);
+		return lchof(L, A, B, 0.0002, al);
+	}
+	x := 0.4123908*lr + 0.3575843*lg + 0.1804808*lb;
+	y := 0.2126390*lr + 0.7151687*lg + 0.0721923*lb;
+	z := 0.0193308*lr + 0.1191948*lg + 0.9505322*lb;
+	if(sp == CSxyz)
+		return (x, y, z, al);
+	# to D50, by Bradford
+	(x, y, z) = (1.0479298*x + 0.0229469*y - 0.0501923*z, 0.0296278*x + 0.9904344*y - 0.0170738*z, -0.0092430*x + 0.0150552*y + 0.7518743*z);
+	if(sp == CSxyzd50)
+		return (x, y, z, al);
+	fx := mlabf(x / 0.96422);
+	fy := mlabf(y);
+	fz := mlabf(z / 0.82521);
+	L := 116.0*fy - 16.0;
+	A := 500.0*(fx - fy);
+	B := 200.0*(fy - fz);
+	if(sp == CSlab)
+		return (L, A, B, al);
+	return lchof(L, A, B, 0.02, al);
+}
+
+lchof(l, a, b, eps, al: real): (real, real, real, real)
+{
+	c := math->sqrt(a*a + b*b);
+	h := NOHUE;
+	if(c > eps) {
+		h = math->atan2(b, a) * 180.0 / Math->Pi;
+		if(h < 0.0)
+			h += 360.0;
+	}
+	return (l, c, h, al);
+}
+
+# back to sRGB, clipped into its gamut, as 0xRRGGBBAA
+fromspace(c1, c2, c3, al: real, sp: int): int
+{
+	(r, g, b) := (c1, c2, c3);
+	case sp {
+	CSsrgb =>
+		;
+	CShsl or CShwb =>
+		h := math->fmod(c1, 360.0);
+		if(h < 0.0)
+			h += 360.0;
+		if(sp == CShwb) {
+			(w, bk) := (c2, c3);
+			if(w + bk >= 1.0) {
+				gr := w / (w + bk);
+				(r, g, b) = (gr, gr, gr);
+			} else {
+				(r, g, b) = mhslrgb(h, 1.0, 0.5);
+				f := 1.0 - w - bk;
+				(r, g, b) = (r*f + w, g*f + w, b*f + w);
+			}
+		} else
+			(r, g, b) = mhslrgb(h, c2, c3);
+	* =>
+		(lr, lg, lb) := (c1, c2, c3);
+		if(sp == CSoklab || sp == CSoklch) {
+			(L, A, B) := (c1, c2, c3);
+			if(sp == CSoklch)
+				(A, B) = (c2 * math->cos(c3 * Math->Pi / 180.0), c2 * math->sin(c3 * Math->Pi / 180.0));
+			l := L + 0.3963377774*A + 0.2158037573*B;
+			m := L - 0.1055613458*A - 0.0638541728*B;
+			s := L - 0.0894841775*A - 1.2914855480*B;
+			(l, m, s) = (l*l*l, m*m*m, s*s*s);
+			lr = 4.0767416621*l - 3.3077115913*m + 0.2309699292*s;
+			lg = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s;
+			lb = -0.0041960863*l - 0.7034186147*m + 1.7076147010*s;
+		} else if(sp != CSsrgblinear) {
+			(x, y, z) := (c1, c2, c3);
+			if(sp == CSlab || sp == CSlch) {
+				(L, A, B) := (c1, c2, c3);
+				if(sp == CSlch)
+					(A, B) = (c2 * math->cos(c3 * Math->Pi / 180.0), c2 * math->sin(c3 * Math->Pi / 180.0));
+				fy := (L + 16.0) / 116.0;
+				fx := A / 500.0 + fy;
+				fz := fy - B / 200.0;
+				(x, y, z) = (mlabinv(fx) * 0.96422, mlabinv(fy), mlabinv(fz) * 0.82521);
+			}
+			if(sp != CSxyz)	# from D50
+				(x, y, z) = (0.9554734*x - 0.0230985*y + 0.0632593*z, -0.0283697*x + 1.0099955*y + 0.0210414*z, 0.0123140*x - 0.0205077*y + 1.3303659*z);
+			lr = 3.2409699*x - 1.5373832*y - 0.4986108*z;
+			lg = -0.9692436*x + 1.8759675*y + 0.0415551*z;
+			lb = 0.0556301*x - 0.2039770*y + 1.0569715*z;
+		}
+		(r, g, b) = (mgam(lr), mgam(lg), mgam(lb));
+	}
+	return (mbyte8(r) << 24) | (mbyte8(g) << 16) | (mbyte8(b) << 8) | mbyte8(al);
+}
+
+mhslrgb(h, s, l: real): (real, real, real)
+{
+	c := (1.0 - math->fabs(2.0*l - 1.0)) * s;
+	x := c * (1.0 - math->fabs(math->fmod(h / 60.0, 2.0) - 1.0));
+	m := l - c/2.0;
+	(r, g, b) := (0.0, 0.0, 0.0);
+	if(h < 60.0)
+		(r, g, b) = (c, x, 0.0);
+	else if(h < 120.0)
+		(r, g, b) = (x, c, 0.0);
+	else if(h < 180.0)
+		(r, g, b) = (0.0, c, x);
+	else if(h < 240.0)
+		(r, g, b) = (0.0, x, c);
+	else if(h < 300.0)
+		(r, g, b) = (x, 0.0, c);
+	else
+		(r, g, b) = (c, 0.0, x);
+	return (r + m, g + m, b + m);
+}
+
+mbyte8(v: real): int
+{
+	if(v <= 0.0)
+		return 0;
+	if(v >= 1.0)
+		return 255;
+	return int (v * 255.0);	# (rounds)
+}
+
+mlin(c: real): real
+{
+	if(c <= 0.04045)
+		return c / 12.92;
+	return math->pow((c + 0.055) / 1.055, 2.4);
+}
+
+mgam(c: real): real
+{
+	if(c <= 0.0031308)
+		return 12.92 * c;
+	return 1.055 * math->pow(c, 1.0/2.4) - 0.055;
+}
+
+mcbrt(x: real): real
+{
+	if(x < 0.0)
+		return -math->pow(-x, 1.0/3.0);
+	return math->pow(x, 1.0/3.0);
+}
+
+mlabf(t: real): real
+{
+	if(t > 216.0/24389.0)
+		return mcbrt(t);
+	return (24389.0/27.0 * t + 16.0) / 116.0;
+}
+
+mlabinv(f: real): real
+{
+	if(f*f*f > 216.0/24389.0)
+		return f*f*f;
+	return (116.0*f - 16.0) / (24389.0/27.0);
+}
+
+fmax(a, b: real): real
+{
+	if(a > b)
+		return a;
+	return b;
+}
+
+fmin(a, b: real): real
+{
+	if(a < b)
+		return a;
+	return b;
 }

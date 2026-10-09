@@ -107,6 +107,10 @@ Style: module
 	# what else makes a box a stacking context (St.ctx)
 	SCisolate, SCblend, SCclippath, SCwillchange: con 1 << iota;
 
+	# the colour spaces colours mix in (Color 4 §12), and how a hue goes round
+	CSsrgb, CSsrgblinear, CSoklab, CSoklch, CSlab, CSlch, CShsl, CShwb, CSxyz, CSxyzd50: con iota;
+	Hshorter, Hlonger, Hincreasing, Hdecreasing: con iota;
+
 	Tf: adt {
 		kind:	int;
 		v:	array of real;
@@ -335,6 +339,13 @@ Style: module
 	mediamatch:	fn(q: array of ref Css->Tok, env: ref Env): int;
 	supports:	fn(cond: array of ref Css->Tok): int;
 	color:	fn(v: array of ref Css->Tok): (int, int);	# (ok, RGBA)
+	# two colours mixed f of the way in a colour space, a hue going round
+	# as asked; a space's and a hue method's names (-1 unknown); whether
+	# a space has a hue
+	spacemix:	fn(a, b: int, f: real, space, hue: int): int;
+	mixspace:	fn(name: string): int;
+	huemethod:	fn(name: string): int;
+	polar:	fn(space: int): int;
 	dump:	fn(st: ref St): string;	# "property value" lines
 	resolveurl:	fn(base, rel: string): string;	# RFC 3986 reference resolution
 	anon:	fn(parent: ref St, display: int): ref St;	# an anonymous box's style

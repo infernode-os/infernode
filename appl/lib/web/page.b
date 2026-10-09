@@ -2039,6 +2039,11 @@ index(s, t: string): int
 	return -1;
 }
 
+layoutmod(): Layout
+{
+	return layout;
+}
+
 # ---- settings (page.m) ----
 
 Setting: adt {

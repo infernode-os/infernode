@@ -427,6 +427,8 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |
 | `tests/host/xenith_agent_test.sh` | The `Agent` window in a headless Xenith: a message sent, the reply shown |
 | `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, Xenith's image renderer not claiming text that begins like an image |
+| `tests/host/plumbrules_test.sh` | `lib/sh/plumbrules`: the user's plumbing rules read before the defaults (a user rule overrides, the defaults take the rest); `load` replaces them; a rules file that does not parse is refused at load and left out at start |
+| `tests/host/presentation_fileopen_test.sh` | Lucifer's plumbed file-opens: by type into the presentation view, a web URL into Charon (a second one to the running Charon), the Tasks tab with and without a plumber |
 | `tests/host/xenith_browse_test.sh` | Xenith browses: a URL looked at opens a browser window (the page over its text, Back Fwd Reload in the tag); Get goes to the URL in the tag; Back, Fwd and Render; the same page over HTTP through webfs from a loopback server |
 | `tests/host/xenith_image_test.sh` | Xenith opens every image format as an image through a look (B3) at its name; formats with no decoder are refused with a reason; text still opens as text |
 | `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |

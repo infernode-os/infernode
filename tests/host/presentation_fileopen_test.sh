@@ -14,6 +14,7 @@
 #      artifacts, non-media must go to the editor (b8a0b260 / 97b48ee3 /
 #      f2187a09).
 #   3. The plumber or its lucipres consumer not coming up at all.
+#   4. A web URL plumbed on the desktop not reaching Charon.
 #
 # Boots the full Lucifer GUI headless (SDL dummy driver, skiplogon) and
 # asserts the /mnt/ui presentation namespace contract — deterministic, no
@@ -86,6 +87,19 @@ plumb -t text /lib/legal/calderalic.pdf
 sleep 2
 plumb -t text /mkconfig
 sleep 2
+plumb -t text http://127.0.0.1:WEBPORT/index.html
+sleep 4
+echo R_WEB_BEGIN
+cat /mnt/ui/activity/0/presentation/charon/type
+cat /mnt/ui/activity/0/presentation/charon/dispath
+plumb -t text http://127.0.0.1:WEBPORT/page2.html
+sleep 4
+mkdir -p /tmp/prestest-charon
+mount -A '"'"'#scharon/fs'"'"' /tmp/prestest-charon
+echo CHARONURL `{cat /tmp/prestest-charon/url}
+unmount /tmp/prestest-charon
+echo CHARONS; ls /mnt/ui/activity/0/presentation | grep charon
+echo R_WEB_END
 echo R_PDF_BEGIN
 cat /mnt/ui/activity/0/presentation/plumb-1/type
 echo R_PDF_END
@@ -97,7 +111,17 @@ ls /mnt/ui/activity/0/presentation
 echo R_ARTS2_END
 echo PROBE_DONE
 '
-boot_probe normal "" "$DRIVER1"
+# Web pages for Charon, served on the loopback
+WEBPORT=0
+if command -v python3 >/dev/null 2>&1; then
+    WEBLOG=$(mktemp)
+    python3 -u -m http.server --bind 127.0.0.1 --directory "$ROOT/tests/xenith/html" 0 >"$WEBLOG" 2>&1 &
+    WEBPID=$!
+    for i in $(seq 50); do grep -q port "$WEBLOG" && break; sleep 0.1; done
+    WEBPORT=$(sed -n 's/.* port \([0-9][0-9]*\).*/\1/p' "$WEBLOG" | head -1)
+fi
+boot_probe normal "" "${DRIVER1//WEBPORT/$WEBPORT}"
+[ -n "$WEBPID" ] && kill "$WEBPID" 2>/dev/null
 
 if ! grep -q 'PROBE_DONE' <<<"$OUTPUT"; then
     skip "Lucifer did not boot in time (harness/timing)"
@@ -118,6 +142,15 @@ else
     section R_CFG_BEGIN R_CFG_END | grep -q 'app' \
         && pass "plumbed non-media -> editor (type=app)" \
         || fail "plumbed non-media routed wrong (expected type=app)"
+    section R_WEB_BEGIN R_WEB_END | grep -q '/dis/wm/charon.dis' \
+        && pass "plumbed web URL -> Charon in the presentation view" \
+        || fail "plumbed web URL did not open Charon"
+    section R_WEB_BEGIN R_WEB_END | grep -q "CHARONURL http://127.0.0.1:$WEBPORT/page2.html" \
+        && pass "a second URL goes to the running Charon (through #scharon/fs)" \
+        || fail "the running Charon was not sent the second URL"
+    [ "$(section CHARONS R_WEB_END | grep -c 'presentation/charon')" = 1 ] \
+        && pass "one Charon, not another started" \
+        || fail "more than one Charon in the presentation view"
     section R_ARTS2_BEGIN R_ARTS2_END | grep -q 'presentation/tasks' \
         && pass "Tasks survives opening files" \
         || fail "Tasks vanished after opening files"

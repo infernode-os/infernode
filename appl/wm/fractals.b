@@ -503,9 +503,13 @@ buildui()
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
 		"bind .top.frac <Button-1> {send act b1down %x %y}",
-		# Inferno Tk has no <B1-Motion>; bind plain <Motion> — the
-		# handler only draws while a B1 drag is in progress (b1start set).
-		"bind .top.frac <Motion> {send act b1drag %x %y}",
+		# A drag arrives as one Motion|Button1 event.  Bind it exactly:
+		# with only plain <Motion> bound, nothing matches it exactly, so
+		# Tk falls back to partial matches and fires <Button-1> as well —
+		# b1down on every move reset the box's corner to the cursor and
+		# the rubber-band never grew past a point.  An exact match stops
+		# the partial ones.
+		"bind .top.frac <Motion-Button-1> {send act b1drag %x %y}",
 		"bind .top.frac <ButtonRelease-1> {send act b1up %x %y}",
 		"bind .top.frac <Button-2> {send act b2 %x %y}",
 		"bind .top.frac <Button-3> {send act menu %X %Y}",

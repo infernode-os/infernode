@@ -828,6 +828,7 @@ dis/tests/tempfile_test.dis
 dis/tests/testing/testing_test.dis
 dis/tests/textwidget_test.dis
 dis/tests/tk_test.dis
+dis/tests/fractals_zoombox_test.dis
 dis/tests/tkimgrender.dis
 dis/tests/tkrender.dis
 dis/tests/tls_crypto_test.dis

@@ -618,11 +618,14 @@ remap(i: ref RImagefile->Rawimage, d: ref Display, errdiff: int): (ref Image, st
 		return (im, "");
 	}
 
-	# Without dithering asked for, an indexed, true-colour or grey image
-	# keeps its colours (RGBA32, opaque) rather than being mapped to the
-	# 256-colour palette, which loses up to 4 bits a channel: web pages
-	# compare images to CSS colours exactly.
-	if(errdiff == 0 && (i.chandesc == RImagefile->CRGB1 && i.cmap != nil && i.nchans == 1 ||
+	# Without dithering asked for, or on a display of more than 8 bits
+	# (any but an 8-bit one), an indexed, true-colour or grey image keeps
+	# its colours (RGBA32, opaque) rather than being mapped to the
+	# 256-colour palette, which loses up to 4 bits a channel and, with
+	# dithering, speckles a photograph: web pages compare images to CSS
+	# colours exactly.
+	if((errdiff == 0 || d.image == nil || d.image.depth > 8) &&
+	   (i.chandesc == RImagefile->CRGB1 && i.cmap != nil && i.nchans == 1 ||
 	   i.chandesc == RImagefile->CRGB && i.nchans == 3 || i.chandesc == RImagefile->CY && i.nchans == 1)) {
 		im := d.newimage(i.r, Draw->RGBA32, 0, Draw->Transparent);
 		if(im == nil)

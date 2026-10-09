@@ -85,7 +85,11 @@ randbytes(buf: array of byte, seed: int)
 
 #
 # ML-KEM-768: Encaps with random public keys
-# Must not crash; may return nil or produce some output
+# Must not crash. Random bytes almost never make a valid key (each
+# 12-bit coefficient is below q with probability 3329/4096, and there
+# are 768), so the FIPS 203 modulus check refuses them with "bad
+# encryption key"; that is the expected outcome, anything else raised
+# is a crash.
 #
 testMLKEM768FuzzEncaps(t: ref T)
 {
@@ -93,24 +97,26 @@ testMLKEM768FuzzEncaps(t: ref T)
 	t.log(sys->sprint("ML-KEM-768 fuzz encaps: %d random public keys", ITERS));
 
 	crashes := 0;
+	refused := 0;
 	for(iter := 0; iter < ITERS; iter++) {
 		fake_pk := array [1184] of byte;
 		randbytes(fake_pk, iter * 7 + 13);
 
 		{
 			(ct, nil) := kr->mlkem768_encaps(fake_pk);
-			# Either nil return or some output is acceptable
-			# The key property: no crash
 			if(ct != nil)
 				t.log(sys->sprint("iter %d: encaps with random pk produced output (len ct=%d)", iter, len ct));
-		} exception {
+		} exception e {
+		"bad encryption key" =>
+			refused++;
 		"*" =>
 			crashes++;
-			t.error(sys->sprint("iter %d: encaps with random pk crashed", iter));
+			t.error(sys->sprint("iter %d: encaps with random pk crashed: %s", iter, e));
 		}
 	}
 
 	t.asserteq(crashes, 0, "no crashes from random public keys");
+	t.assert(refused > 0, "random public keys refused by the modulus check");
 }
 
 #

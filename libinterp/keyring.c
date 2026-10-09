@@ -4146,6 +4146,8 @@ Keyring_mlkem768_encaps(void *fp)
 
 	if(f->pk == H || f->pk->len != MLKEM768_PKLEN)
 		error(exBadKey);
+	if(mlkem768_checkek(f->pk->data) != 0)
+		error(exBadKey);
 
 	if(mlkem768_encaps(ct, ss, f->pk->data) != 0){
 		secureZero(ct, sizeof(ct));
@@ -4173,6 +4175,8 @@ Keyring_mlkem768_decaps(void *fp)
 	if(f->sk == H || f->sk->len != MLKEM768_SKLEN)
 		error(exBadKey);
 	if(f->ct == H || f->ct->len != MLKEM768_CTLEN)
+		error(exBadKey);
+	if(mlkem768_checkdk(f->sk->data) != 0)
 		error(exBadKey);
 
 	if(mlkem768_decaps(ss, f->ct->data, f->sk->data) != 0){
@@ -4221,6 +4225,8 @@ Keyring_mlkem1024_encaps(void *fp)
 
 	if(f->pk == H || f->pk->len != MLKEM1024_PKLEN)
 		error(exBadKey);
+	if(mlkem1024_checkek(f->pk->data) != 0)
+		error(exBadKey);
 
 	if(mlkem1024_encaps(ct, ss, f->pk->data) != 0){
 		secureZero(ct, sizeof(ct));
@@ -4248,6 +4254,8 @@ Keyring_mlkem1024_decaps(void *fp)
 	if(f->sk == H || f->sk->len != MLKEM1024_SKLEN)
 		error(exBadKey);
 	if(f->ct == H || f->ct->len != MLKEM1024_CTLEN)
+		error(exBadKey);
+	if(mlkem1024_checkdk(f->sk->data) != 0)
 		error(exBadKey);
 
 	if(mlkem1024_decaps(ss, f->ct->data, f->sk->data) != 0){

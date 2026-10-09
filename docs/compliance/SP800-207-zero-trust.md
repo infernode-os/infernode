@@ -23,9 +23,9 @@ user/host identity.
 | 1 | All data sources & compute are resources | Everything is a file served over Styx/9P | `doc/styx.ms`; `docs/NAMESPACE.md` |
 | 2 | All communication secured regardless of network location | 9P-over-TLS + native STS transport, **hybrid PQ** (X25519+ML-KEM, DH+ML-KEM) | `docs/compliance/CNSA-2.0.md` §4; `docs/CRYPTO-MODERNIZATION.md` §10 |
 | 3 | Access granted **per-session** | Each agent/process forks its own namespace and is restricted at start of session | `appl/veltro/SECURITY.md` (3 entry points: tools9p/veltro/spawn) |
-| 4 | Access by **dynamic policy**, least privilege | Capability set → `restrictns(caps)` bind-replace allowlist; child caps ≤ parent caps | `appl/veltro/nsconstruct.b`; `docs/NAMESPACE_SECURITY_REVIEW.md` §11 |
+| 4 | Access by **dynamic policy**, least privilege | Capability set → `restrictns(caps)` bind-replace allowlist; child caps ≤ parent caps | `appl/veltro/nsconstruct.b`; `docs/history/NAMESPACE_SECURITY_REVIEW.md` §11 |
 | 5 | Integrity/posture of assets monitored | `verifyns()` post-restriction audit (positive + negative assertions); formal verification of the kernel primitive | `appl/veltro/SECURITY.md` §Verification; `formal-verification/` |
-| 6 | **Authn/authz strictly enforced before access** | Resource simply **does not exist** in the namespace if not granted — enforcement is structural, not a checkpoint that can be skipped | `docs/NAMESPACE_SECURITY_REVIEW.md` §3.1–3.2 |
+| 6 | **Authn/authz strictly enforced before access** | Resource simply **does not exist** in the namespace if not granted — enforcement is structural, not a checkpoint that can be skipped | `docs/history/NAMESPACE_SECURITY_REVIEW.md` §3.1–3.2 |
 | 7 | Collect state to improve posture | `emitauditlog()` records namespace operations; subagent trajectory logging | `appl/veltro/SECURITY.md` (Security Properties: "Auditable") |
 
 ---
@@ -41,10 +41,10 @@ space at all.
 - **Default-deny by replacement.** `restrictdir(target, allowed)` builds a shadow
   directory of only the allowed items and bind-replaces (`MREPL`) the target. Everything
   not on the allowlist becomes *invisible*, not *forbidden*. (`appl/veltro/nsconstruct.b`;
-  model in `docs/NAMESPACE_SECURITY_REVIEW.md` §11.1.)
+  model in `docs/history/NAMESPACE_SECURITY_REVIEW.md` §11.1.)
 - **Capability attenuation.** A child forks an already-restricted namespace and can only
   narrow it further — the invariant *child caps ≤ parent caps* holds structurally, not by
-  check (`docs/NAMESPACE_SECURITY_REVIEW.md` §1.2; `appl/veltro/SECURITY.md` §Two-Level
+  check (`docs/history/NAMESPACE_SECURITY_REVIEW.md` §1.2; `appl/veltro/SECURITY.md` §Two-Level
   Restriction).
 - **Device-attach gate.** Even kernel `#x` device naming is closed off:
   `pctl(NODEVS)` blocks `sys->bind("#U", …)` / `#sfactotum` / `#p`. The kernel gate is at
@@ -108,7 +108,7 @@ observability enhancement, not a posture defect.
 ## 7. References
 
 - NIST SP 800-207, *Zero Trust Architecture*.
-- `docs/NAMESPACE.md`, `docs/NAMESPACE-LAYOUT.md`, `docs/NAMESPACE_SECURITY_REVIEW.md`.
+- `docs/NAMESPACE.md`, `docs/NAMESPACE-LAYOUT.md`, `docs/history/NAMESPACE_SECURITY_REVIEW.md`.
 - `appl/veltro/SECURITY.md` (v3 namespace security model).
 - `formal-verification/README.md` and `formal-verification/results/`.
 - Pike et al., *The Use of Name Spaces in Plan 9*.

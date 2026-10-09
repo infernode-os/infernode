@@ -3,7 +3,7 @@
 > **STATUS: APPROVED → BUILT.** This design was approved and implemented; it is
 > retained as the design rationale of record. For the as-built evidence (per-control
 > status, `file:line` citations, tests), see the companion evidence artifact
-> [`SP800-92-audit-log.md`](SP800-92-audit-log.md). The service is a Limbo Styx server
+> [`SP800-92-audit-log.md`](../compliance/SP800-92-audit-log.md). The service is a Limbo Styx server
 > (no new C device), honors Plan 9/Inferno minimalism, uses 9P, and uses **no JSON**.
 
 **Standard:** NIST SP 800-92 (Log Management) + SP 800-53 **AU** family (esp. AU-9
@@ -57,7 +57,7 @@ a future requirement needs kernel-level write mediation below the Dis VM; noted,
 The service is **placed by namespace**: bind `/mnt/audit/log` into the namespaces that may
 *emit* (login, factotum, CDS guard, veltro), and keep `chain`/`head` where auditors read.
 A restricted agent that has no `/mnt/audit` binding cannot even name the log — consistent
-with the Zero-Trust posture ([`SP800-207-zero-trust.md`](SP800-207-zero-trust.md)).
+with the Zero-Trust posture ([`SP800-207-zero-trust.md`](../compliance/SP800-207-zero-trust.md)).
 
 ## 4. Record format (line-oriented text — NO JSON)
 

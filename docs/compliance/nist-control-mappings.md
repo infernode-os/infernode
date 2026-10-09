@@ -98,7 +98,7 @@ and the four-family itemization in
 | **SI-3** / 3.14.2 | Malicious-code protection | Application layer is type-/memory-safe Dis bytecode; modules type-checked at load | By construction | `libinterp/`; `CLAUDE.md` (link typecheck) | FPT_TDC.1 | Eliminates whole CWE classes for ~700 Limbo apps |
 | **SI-7** / 3.14.x | Software/firmware/information integrity | bytecode built from source at release and checked against a tracked module manifest; hash-chained audit | By construction | `.github/workflows/verify-dis-build.yml`; `tools/verify-dis-build.sh`; `tools/dis-manifest.txt` | FPT_TST | |
 | **SI-16** | Memory protection | No raw pointers; bounds-checked arrays in Dis VM | By construction | `libinterp/` | FPT_TDC.1 | C TCB (emu/libsec) is *not* memory-safe — covered by CodeQL/fuzz/formal only |
-| **SI (TCB race residual)** | Integrity of the TSF itself | Namespace primitives formally verified; **3 emu-host UAF races open** | Partial | `formal-verification/TODO-RACE-CONDITIONS.md` | FPT_SEP.1 | **gap (F-1)** — formally confirmed defects |
+| **SI (TCB race residual)** | Integrity of the TSF itself | Namespace primitives formally verified; **3 emu-host UAF races open** | Partial | `docs/history/formal-verification/TODO-RACE-CONDITIONS.md` | FPT_SEP.1 | **gap (F-1)** — formally confirmed defects |
 
 ## 6. Configuration Management (CM) — SP 800-53 / 800-171 §3.4
 
@@ -146,7 +146,7 @@ action). **None of these is presented as met.**
 
 | ID | Gap | Affected controls | Type | Existing tracking |
 |----|-----|-------------------|------|-------------------|
-| **F-1** | Three formally-confirmed use-after-free races in the `emu` host-threading layer (`kchdir`, FORKNS swap, `namec`) | AC-25, SC-39, SI (TSF integrity) | Defect (TSF) | `formal-verification/TODO-RACE-CONDITIONS.md` — **no Jira ticket found** |
+| **F-1** | Three formally-confirmed use-after-free races in the `emu` host-threading layer (`kchdir`, FORKNS swap, `namec`) | AC-25, SC-39, SI (TSF integrity) | Defect (TSF) | `docs/history/formal-verification/TODO-RACE-CONDITIONS.md` — **no Jira ticket found** |
 | **F-2** | Cryptographic module not FIPS 140-2/140-3 CMVP validated | SC-13, IA-7 | Validation | `FIPS-140-3-readiness.md` (readiness only) |
 | **F-3** | No NIST ACVP/CAVP known-answer validation for ML-KEM/ML-DSA/SLH-DSA (round-trip + CBMC only); pending external cryptographic audit | SC-13 (KAT/ACVP) | Validation / assurance | **no dedicated ticket found** |
 | **F-4** | AU-4/5/6/7 operational tooling and broad privileged-op coverage incomplete | AU-6, AC-6(9), AU-12 | Coverage | INFR-343 (partial) |

@@ -16,7 +16,7 @@ You'll see the `;` prompt. The system works!
 
 **Porting to another 64-bit architecture?**
 
-→ Read [LESSONS-LEARNED.md](../LESSONS-LEARNED.md) **FIRST**
+→ Read [LESSONS-LEARNED.md](LESSONS-LEARNED.md) **FIRST**
 
 **Key fix:** Pool quanta must be 127 (not 31) for 64-bit. This single change made everything work.
 

@@ -2,7 +2,7 @@
 
 **Purpose:** What the JIT does, when to enable it, and where to look when something goes wrong.
 
-> Looking for benchmark numbers? See [BENCHMARKS.md](BENCHMARKS.md). Looking for ARM64 implementation details? See [PORTING-ARM64.md](PORTING-ARM64.md) and [docs/arm64-jit/](arm64-jit). This document is the user-facing summary.
+> Looking for benchmark numbers? See [BENCHMARKS.md](BENCHMARKS.md). Looking for ARM64 implementation details? See [PORTING-ARM64.md](history/PORTING-ARM64.md) and [docs/arm64-jit/](arm64-jit). This document is the user-facing summary.
 
 ## TL;DR
 
@@ -86,7 +86,7 @@ ARM64 (`comp-arm64.c`):
 - **16 opcodes (~9 %)** punted to the interpreter (complex string ops, some 64-bit float conversions, send/receive, etc.).
 - All other opcodes are a compile-time error in the JIT — a deliberate conservative choice that surfaces unhandled instructions immediately.
 
-For the full opcode-by-opcode breakdown, see [arm64-jit/OPCODE-ANALYSIS.md](arm64-jit/OPCODE-ANALYSIS.md) and [arm64-jit/OPCODE-DETAILED-ANALYSIS.md](arm64-jit/OPCODE-DETAILED-ANALYSIS.md).
+For the full opcode-by-opcode breakdown, see [arm64-jit/OPCODE-ANALYSIS.md](history/arm64-jit/OPCODE-ANALYSIS.md) and [arm64-jit/OPCODE-DETAILED-ANALYSIS.md](history/arm64-jit/OPCODE-DETAILED-ANALYSIS.md).
 
 AMD64 has comparable coverage; see `libinterp/comp-amd64.c`.
 
@@ -120,7 +120,7 @@ emu -p heap=512m -p main=512m -p image=512m ...
 
 These are the values the [Lucia launch scripts](LUCIA.md#launching) use. Lower values are fine for a shell or batch tasks; the GUI wants the larger pool because it allocates `Image`s.
 
-> 🔑 **The 64-bit fix.** Pool quanta must be 127 on 64-bit (not 31 as on 32-bit) — the single change in `emu/port/alloc.c` that made the 64-bit port work. See [LESSONS-LEARNED.md](LESSONS-LEARNED.md) for the story.
+> 🔑 **The 64-bit fix.** Pool quanta must be 127 on 64-bit (not 31 as on 32-bit) — the single change in `emu/port/alloc.c` that made the 64-bit port work. See [LESSONS-LEARNED.md](history/LESSONS-LEARNED.md) for the story.
 
 ## Diagnosing JIT issues
 
@@ -188,7 +188,7 @@ For every other workload — anything that runs longer than a few milliseconds �
 
 - [BENCHMARKS.md](BENCHMARKS.md) — full v1/v2 suites, cross-language comparisons.
 - [PERFORMANCE-SPECS.md](PERFORMANCE-SPECS.md) — RAM, binary sizes, startup time.
-- [PORTING-ARM64.md](PORTING-ARM64.md) — what porting the JIT to ARM64 actually involved.
+- [PORTING-ARM64.md](history/PORTING-ARM64.md) — what porting the JIT to ARM64 actually involved.
 - [arm64-jit/](arm64-jit) — opcode coverage, bring-up logs, debug stories.
-- [LESSONS-LEARNED.md](LESSONS-LEARNED.md) — pool-quanta fix and other 64-bit gotchas.
+- [LESSONS-LEARNED.md](history/LESSONS-LEARNED.md) — pool-quanta fix and other 64-bit gotchas.
 - [CLAUDE.md §JIT Compiler Availability](../CLAUDE.md#jit-compiler-availability) — native vs. hosted limbo and why it matters.

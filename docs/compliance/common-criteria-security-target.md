@@ -342,7 +342,7 @@ reference-monitor property claimed in `SP800-53-controls.md`.
 - **Three use-after-free race conditions** in the `emu` host-threading layer (`kchdir` dot
   race `sysfile.c:153-154`; FORKNS pgrp swap `inferno.c:873`; `namec` slash/dot read
   `chan.c:1022,1057`) were **found by the SPIN race model** and are documented in
-  `formal-verification/TODO-RACE-CONDITIONS.md`. They are mitigated by the Dis VM's
+  `docs/history/formal-verification/TODO-RACE-CONDITIONS.md`. They are mitigated by the Dis VM's
   cooperative scheduling (one Dis thread at a time) but are genuine at the multi-threaded host
   layer; the suggested lock fix is recorded. An evaluator must treat these as open TSF-layer
   findings, not resolved.

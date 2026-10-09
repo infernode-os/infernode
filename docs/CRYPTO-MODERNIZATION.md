@@ -191,9 +191,9 @@ No action needed - Ed25519, SHA-256, and AEAD login are the defaults.
 
 ## Related Documentation
 
-- [QUANTUM-SAFE-CRYPTO-PLAN.md](QUANTUM-SAFE-CRYPTO-PLAN.md) - Full PQ crypto design document
+- [QUANTUM-SAFE-CRYPTO-PLAN.md](history/QUANTUM-SAFE-CRYPTO-PLAN.md) - Full PQ crypto design document
 - [CRYPTO-DEBUGGING-GUIDE.md](CRYPTO-DEBUGGING-GUIDE.md) - Debugging methodology
-- [ELGAMAL-PERFORMANCE.md](ELGAMAL-PERFORMANCE.md) - Detailed performance analysis
+- [ELGAMAL-PERFORMANCE.md](history/ELGAMAL-PERFORMANCE.md) - Detailed performance analysis
 
 ## Commits
 

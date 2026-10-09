@@ -4,7 +4,7 @@
 Modules.
 **Roadmap row:** Cryptographic foundation — FIPS 140-3, Tier 2 ("Consolidate all crypto
 behind `libsec`/`keyring` as the single validated surface").
-**Tracking:** EPIC 6 — FIPS 140-3 readiness ([`../security-epics.md`](../security-epics.md)); program epic [INFR-328].
+**Tracking:** EPIC 6 — FIPS 140-3 readiness ([`history/security-epics.md`](../history/security-epics.md)); program epic [INFR-328].
 **Artifact date:** 2026-06-22.
 **Overall status:** **Readiness / gap analysis — not validated (Tier 2).** This is an honest
 pre-validation assessment, not a compliance claim. FIPS 140-3 validation is an expensive,
@@ -27,7 +27,7 @@ validated surface" — is therefore a *consolidation-and-instrumentation* job, n
 | Single, well-defined module boundary | All primitives in `libsec/`; one Keyring bridge | `libsec/`; `docs/CRYPTO-MODERNIZATION.md` §Architecture |
 | Approved algorithms available | AES-256-GCM, SHA-2 (256/384/512), SHA-3/SHAKE, ML-KEM, ML-DSA, SLH-DSA, HMAC | [`CNSA-2.0.md`](CNSA-2.0.md) |
 | Known-answer test material exists | NIST KAT vectors implemented as test suites | `tests/{mlkem,mldsa,slhdsa,sha3}_test.b`, `tests/tls_crypto_test.b` |
-| Sensitive-data zeroization | `secureZero()` clears key material / intermediates | `libsec/mlkem.c:174,277,385,400,435-437` (and PQC primitives per `docs/QUANTUM-SAFE-CRYPTO-PLAN.md` §5) |
+| Sensitive-data zeroization | `secureZero()` clears key material / intermediates | `libsec/mlkem.c:174,277,385,400,435-437` (and PQC primitives per `docs/history/QUANTUM-SAFE-CRYPTO-PLAN.md` §5) |
 | Memory-safe callers | Dis VM applications cannot corrupt module memory | `doc/dis.ms`; [`SP800-53-171-mapping.md`](SP800-53-171-mapping.md) §5.SI |
 | Small, analyzable TCB | Formal verification of adjacent kernel primitives | `formal-verification/` |
 

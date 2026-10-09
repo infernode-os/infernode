@@ -47,4 +47,4 @@ safe, and adversarially tested. The remaining PQC work is *parameter strictness*
 ## 4. References
 
 - NIST IR 8547 (transition to PQC); `draft-ietf-tls-ecdhe-mlkem`; CNSA 2.0 transition guidance.
-- `docs/CRYPTO-MODERNIZATION.md` §8, §10; `docs/QUANTUM-SAFE-CRYPTO-PLAN.md`; [`CNSA-2.0.md`](CNSA-2.0.md).
+- `docs/CRYPTO-MODERNIZATION.md` §8, §10; `docs/history/QUANTUM-SAFE-CRYPTO-PLAN.md`; [`CNSA-2.0.md`](CNSA-2.0.md).

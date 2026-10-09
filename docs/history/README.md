@@ -53,3 +53,25 @@ is [JIT.md](../JIT.md).
 | [CURRENT-CI-STATUS.md](CURRENT-CI-STATUS.md), [CI-STATUS.md](CI-STATUS.md), [CI-FINAL-STATUS.md](CI-FINAL-STATUS.md), [CI-SUCCESS.md](CI-SUCCESS.md), [CI-WORKING.md](CI-WORKING.md) | Status reports |
 | [ACTIONS-BLOCKED.md](ACTIONS-BLOCKED.md) | GitHub Actions blocked on the account |
 | [SONARQUBE_WORK.md](SONARQUBE_WORK.md) | Clearing the SonarQube backlog |
+
+## Plans, evaluations and reviews since overtaken
+
+| Document | |
+|----------|-|
+| [LESSONS-LEARNED.md](LESSONS-LEARNED.md) | The 64-bit port's retrospective, including the pool-quanta fix |
+| [PORTING-ARM64.md](PORTING-ARM64.md), [64-bit-alt-structure-fix.md](64-bit-alt-structure-fix.md), [TEMPFILE-EXHAUSTION.md](TEMPFILE-EXHAUSTION.md), [NETWORK-CAPABILITIES.md](NETWORK-CAPABILITIES.md), [RECOMMENDED-ADDITIONS.md](RECOMMENDED-ADDITIONS.md), [RUNNING-ACME.md](RUNNING-ACME.md) | Notes from the port's first weeks |
+| [JETSON-PORT-ESTIMATE.md](JETSON-PORT-ESTIMATE.md), [JETSON-PORT-PLAN.md](JETSON-PORT-PLAN.md) | The Linux ARM64 port, before and during |
+| [arm64-jit/OPCODE-ANALYSIS.md](arm64-jit/OPCODE-ANALYSIS.md), [arm64-jit/OPCODE-DETAILED-ANALYSIS.md](arm64-jit/OPCODE-DETAILED-ANALYSIS.md), [arm64-jit/README-OPCODE-ANALYSIS.md](arm64-jit/README-OPCODE-ANALYSIS.md), [arm64-jit/OPCODE-QUICK-REFERENCE.txt](arm64-jit/OPCODE-QUICK-REFERENCE.txt), [arm64-jit/OPCODE-ANALYSIS-SUMMARY.txt](arm64-jit/OPCODE-ANALYSIS-SUMMARY.txt) | February 2026 opcode coverage of `comp-arm64.c`, since rewritten |
+| [QUANTUM-SAFE-CRYPTO-PLAN.md](QUANTUM-SAFE-CRYPTO-PLAN.md), [ELGAMAL-PERFORMANCE.md](ELGAMAL-PERFORMANCE.md), [ED25519-DEBUG-CHECKPOINT.md](ED25519-DEBUG-CHECKPOINT.md) | Cryptography plans and debugging; the as-built record is in [compliance/](../compliance/README.md) |
+| [SECSTORE-AUTH-SUITE-PLAN.md](SECSTORE-AUTH-SUITE-PLAN.md) | The secstore3 plan, before secstore2 was retired |
+| [VELTRO_NAMESPACE_SECURITY.md](VELTRO_NAMESPACE_SECURITY.md), [NAMESPACE_SECURITY_REVIEW.md](NAMESPACE_SECURITY_REVIEW.md) | The v2 agent namespace model and the review that led to v3 ([appl/veltro/SECURITY.md](../../appl/veltro/SECURITY.md)) |
+| [veltro-message-layer-plan.md](veltro-message-layer-plan.md) | The message-layer plan; it shipped as msg9p ([MESSAGE-INTEGRATION.md](../MESSAGE-INTEGRATION.md)) |
+| [SP800-92-audit-log-DESIGN.md](SP800-92-audit-log-DESIGN.md), [security-epics.md](security-epics.md) | The audit-log proposal and the security epics as drafted for Jira |
+| [GPL-LICENSE-AUDIT.md](GPL-LICENSE-AUDIT.md) | The copyleft audit, resolved May 2026 |
+| [MODEL-EVAL-2026-05-01.md](MODEL-EVAL-2026-05-01.md) | A local-model evaluation |
+| [LUCIA-EVALUATION.md](LUCIA-EVALUATION.md), [fractal-app-evaluation.md](fractal-app-evaluation.md) | March 2026 readiness evaluations |
+| [TODO-LUCIPRES-ARCHITECTURE.md](TODO-LUCIPRES-ARCHITECTURE.md) | The presentation-rendering split, reverted on 2026-07-05 |
+| [MULTIPLEXED-VIDEO-SPIKE.md](MULTIPLEXED-VIDEO-SPIKE.md) | The video spike; the design of record is [H264-9P-BRIDGE.md](../H264-9P-BRIDGE.md) |
+| [charon-html-css-evaluation.md](charon-html-css-evaluation.md), [CHARON-HANDOFF.md](CHARON-HANDOFF.md) | The old Charon engine's gaps, and the hand-off of its replacement ([CHARON-ENGINE.md](../CHARON-ENGINE.md)) |
+| [formal-verification/VERIFICATION-PLAN.md](formal-verification/VERIFICATION-PLAN.md), [formal-verification/PLAN-namespace-security-verification.md](formal-verification/PLAN-namespace-security-verification.md) | Verification plans; the as-built record is [METHODOLOGY.md](../../formal-verification/METHODOLOGY.md) |
+| [formal-verification/TODO-RACE-CONDITIONS.md](formal-verification/TODO-RACE-CONDITIONS.md) | Three emu races the race model found, fixed in 89db5178 |

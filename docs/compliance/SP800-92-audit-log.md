@@ -5,7 +5,7 @@
 & monitoring) and **PCI-DSS Req 10** (track & monitor access).
 **Tier:** 1. **Program epic:** [INFR-328]. **Implementation stories:** INFR-343.
 **Date:** 2026-06-26; residuals re-reviewed 2026-08-23. **Supersedes the design** in
-[`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md) (approved → built).
+[`SP800-92-audit-log-DESIGN.md`](../history/SP800-92-audit-log-DESIGN.md) (approved → built).
 
 **Overall family status: Substantially met.** The integrity and non-repudiation
 core — the hard, high-leverage part of the family — is implemented, evidenced, and
@@ -89,7 +89,7 @@ Merged to `main` in **PR #292**.
 The full design rationale — why Plan 9/Inferno deliberately have no logging *daemon*,
 why a hash chain over a forward-secure MAC, why namespace placement instead of mode
 bits for read-protection — is in
-[`SP800-92-audit-log-DESIGN.md`](SP800-92-audit-log-DESIGN.md),
+[`SP800-92-audit-log-DESIGN.md`](../history/SP800-92-audit-log-DESIGN.md),
 [`plan9-logging-rationale.md`](plan9-logging-rationale.md), and
 [`audit-log-prior-art.md`](audit-log-prior-art.md). The one-line CISO answer: *audit
 integrity is a property we can prove (recompute the chain; verify the signature with a

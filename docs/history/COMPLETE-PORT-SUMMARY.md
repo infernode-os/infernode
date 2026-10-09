@@ -45,13 +45,13 @@ See [QUICKSTART.md](../../QUICKSTART.md) for details.
 ## For Future Reference
 
 **Porting to another 64-bit architecture?**
-→ Read [LESSONS-LEARNED.md](../LESSONS-LEARNED.md)
+→ Read [LESSONS-LEARNED.md](LESSONS-LEARNED.md)
 
 **Want to understand the technical details?**
-→ Read [PORTING-ARM64.md](../PORTING-ARM64.md)
+→ Read [PORTING-ARM64.md](PORTING-ARM64.md)
 
 **Having issues?**
-→ Check [LESSONS-LEARNED.md](../LESSONS-LEARNED.md) "Red Flags" section
+→ Check [LESSONS-LEARNED.md](LESSONS-LEARNED.md) "Red Flags" section
 
 ## Key Lessons
 

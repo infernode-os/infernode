@@ -326,7 +326,7 @@ ls /tmp/*.pdfi*
 rm ~/tmp/*1.pdfixenith
 rm ~/tmp/*1.pdfiacme
 ```
-See `docs/TEMPFILE-EXHAUSTION.md` for full details.
+See `docs/history/TEMPFILE-EXHAUSTION.md` for full details.
 
 #### Problem: `/n/local` exists but is empty
 **Cause:** trfs didn't start or failed

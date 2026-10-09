@@ -172,7 +172,7 @@ The `--slice-formula` flag was critical for tractability. Without it, CBMC gener
 
 3. **Export boundary is verified**: The `exportfs` root boundary cannot be escaped via `walk("..")` sequences, including mount point confusion scenarios.
 
-4. **Three real race conditions documented**: The race model provides formal evidence for three use-after-free hazards in the emu host threading layer. See [`TODO-RACE-CONDITIONS.md`](../TODO-RACE-CONDITIONS.md) for details and suggested fixes.
+4. **Three real race conditions documented**: The race model provides formal evidence for three use-after-free hazards in the emu host threading layer. See [`TODO-RACE-CONDITIONS.md`](../../docs/history/formal-verification/TODO-RACE-CONDITIONS.md) for details and suggested fixes.
 
 5. **CBMC confirms implementation properties**: Array bounds (MOUNTH macro), integer overflow (fd allocation), and reference counting are verified on actual C code paths. The pgrpcpy namespace isolation function is verified at the production MNTHASH=32 configuration with 3,310 properties per MNTLOG level (9,930 total across 3 configurations), all passing with sound unwinding assertions.
 

@@ -31,12 +31,9 @@
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, layer diagram, and component overview |
 | [decisions/0001-rooted-agent-capabilities.md](decisions/0001-rooted-agent-capabilities.md) | Proposed decision: rooted 9P filesystem capabilities and atomic agent delegation |
-| [LUCIFER-EVALUATION.md](LUCIFER-EVALUATION.md) | Lucifer GUI production readiness evaluation (P0/P1/P2 issues) |
-| [evaluations/fractal-app-evaluation.md](evaluations/fractal-app-evaluation.md) | Fractal app production readiness evaluation |
 | [architecture-review-veltro-unification.md](architecture-review-veltro-unification.md) | Veltro architecture review |
 | [matrix-architecture.md](matrix-architecture.md) | Matrix compositional module runtime — modules, compositions, the library, 9P control namespace, and the Lucifer GUI control surface |
 | [9p-data-conventions.md](9p-data-conventions.md) | Data conventions for 9P file servers — text records, hierarchy as schema, ctl files, `/mnt` placement, the no-JSON argument |
-| [RECOMMENDED-ADDITIONS.md](RECOMMENDED-ADDITIONS.md) | Recommended feature additions |
 
 ## For Developers
 
@@ -68,17 +65,13 @@
 | [SECURITY.md](../SECURITY.md) | Security vulnerability reporting policy |
 | [SECURITY.md (Veltro)](../appl/veltro/SECURITY.md) | Veltro agent namespace security model (v3) |
 | [InferNode Escape Room](https://github.com/infernode-os/infernode-escape-room) | External live adversarial-model protocol and campaign harness for testing namespace containment |
-| [NAMESPACE_SECURITY_REVIEW.md](NAMESPACE_SECURITY_REVIEW.md) | Namespace security deep analysis |
-| [VELTRO_NAMESPACE_SECURITY.md](VELTRO_NAMESPACE_SECURITY.md) | Veltro namespace security details |
 
 ## Cryptography
 
 | Document | Description |
 |----------|-------------|
 | [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md) | Ed25519 signatures, SHA-256, key sizes |
-| [QUANTUM-SAFE-CRYPTO-PLAN.md](QUANTUM-SAFE-CRYPTO-PLAN.md) | ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205) |
 | [CRYPTO-DEBUGGING-GUIDE.md](CRYPTO-DEBUGGING-GUIDE.md) | Debugging cryptographic code |
-| [ELGAMAL-PERFORMANCE.md](ELGAMAL-PERFORMANCE.md) | ElGamal optimization |
 | [TLS-ENTROPY.md](TLS-ENTROPY.md) | TLS entropy configuration |
 
 ## Porting Guide
@@ -86,10 +79,6 @@
 | Document | Description |
 |----------|-------------|
 | [WINDOWS-BUILD.md](WINDOWS-BUILD.md) | Building and running on Windows (prerequisites, SDL3 GUI, troubleshooting) |
-| [LESSONS-LEARNED.md](LESSONS-LEARNED.md) | **Start here** - Critical fixes and pitfalls for porters |
-| [PORTING-ARM64.md](PORTING-ARM64.md) | ARM64 technical implementation details |
-| [JETSON-PORT-PLAN.md](JETSON-PORT-PLAN.md) | NVIDIA Jetson porting plan |
-| [JETSON-PORT-ESTIMATE.md](JETSON-PORT-ESTIMATE.md) | Jetson port effort estimate |
 | [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
 | [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) | The contract between the shared native kernel and a board directory: files, hooks in call order, what the shared drivers call downward |
 | [BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md) | What a port to other hardware should take from the first one |
@@ -102,7 +91,7 @@
 
 ## ARM64 JIT Compiler
 
-[JIT.md](JIT.md) is the reference. Per-platform benchmark results and the Dis opcode analysis are in [arm64-jit/](arm64-jit/).
+[JIT.md](JIT.md) is the reference. Per-platform benchmark results and the Dis opcode analysis are in [arm64-jit/](arm64-jit).
 
 ## Additional Guides
 
@@ -111,14 +100,11 @@
 | [PDF.md](PDF.md) | PDF support documentation |
 | [SPEECH-ARCHITECTURE.md](SPEECH-ARCHITECTURE.md) | **speech9p architecture** — file tree, three engines (cmd / api / local), TTS/STT data flow, devcmd bridge, Veltro + lucibridge integration, threat surface |
 | [SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md) | Cross-host speech via 9P namespace composition |
-| [RUNNING-ACME.md](RUNNING-ACME.md) | Running the Acme editor |
 
 ## Debugging Reference
 
 | Document | Description |
 |----------|-------------|
-| [TEMPFILE-EXHAUSTION.md](TEMPFILE-EXHAUSTION.md) | Temp file slot exhaustion |
-| [64-bit-alt-structure-fix.md](64-bit-alt-structure-fix.md) | 64-bit alt structure fix |
 | [FONT-RENDERING-DEBUG.md](FONT-RENDERING-DEBUG.md) | Font rendering debugging |
 
 ## History
@@ -131,7 +117,7 @@ See [formal-verification/README.md](../formal-verification/README.md) for TLA+, 
 
 ## The Key 64-bit Fix
 
-Pool quanta must be 127 for 64-bit (not 31 as for 32-bit). This single change in `emu/port/alloc.c` was the critical breakthrough that made the entire port work. See [LESSONS-LEARNED.md](LESSONS-LEARNED.md) for the full story.
+Pool quanta must be 127 for 64-bit (not 31 as for 32-bit). This single change in `emu/port/alloc.c` was the critical breakthrough that made the entire port work. See [LESSONS-LEARNED.md](history/LESSONS-LEARNED.md) for the full story.
 
 ## External References
 

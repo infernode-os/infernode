@@ -13,7 +13,7 @@ tickets (INFR-264…271) point back here.
 ## 1. Why this exists
 
 InferNode needs real-world video feeds (camera, screen-share, media walls). Those
-are H.264/HEVC/AV1. The MPEG-1 spike (`docs/MULTIPLEXED-VIDEO-SPIKE.md`) proved
+are H.264/HEVC/AV1. The MPEG-1 spike (`docs/history/MULTIPLEXED-VIDEO-SPIKE.md`) proved
 the *render* half of the problem by porting Inferno 2e's **pure-Limbo MPEG-1
 decoder that runs inside the Dis VM** and blitting `YCbCr` frames through a
 masked pane. That approach does not extend to modern codecs:

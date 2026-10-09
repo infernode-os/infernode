@@ -873,5 +873,5 @@ switch on Intel macs where the cmd path is broken (§10.3).
 - Manual page: `man/4/speech`.
 - Companion docs: [SPEECH-REMOTE-AUDIO.md](SPEECH-REMOTE-AUDIO.md)
   (cross-host audio composition), [ARCHITECTURE.md](ARCHITECTURE.md)
-  (where speech9p sits in the system), [NAMESPACE_SECURITY_REVIEW.md](NAMESPACE_SECURITY_REVIEW.md)
+  (where speech9p sits in the system), [NAMESPACE_SECURITY_REVIEW.md](history/NAMESPACE_SECURITY_REVIEW.md)
   (agent namespace policy).

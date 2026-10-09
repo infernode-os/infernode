@@ -458,7 +458,7 @@ For `harness_modification_independence`:
 ### 7.2 Real Kernel Bugs (confirmed by formal methods)
 
 Three use-after-free race conditions documented in
-`TODO-RACE-CONDITIONS.md`:
+`docs/history/formal-verification/TODO-RACE-CONDITIONS.md`:
 
 1. **kchdir dot race** — `cclose(pg->dot); pg->dot = c;` without lock
    (`sysfile.c:153-154`)

@@ -3,7 +3,7 @@
 **Standards:** NIST SP 800-53 Rev 5 (control catalog, FISMA) and NIST SP 800-171 Rev 2
 (CUI protection; the CMMC Level 2 basis).
 **Roadmap row:** Federal / government — SP 800-53 / FISMA and SP 800-171 / CMMC, Tier 1.
-**Tracking:** EPIC 4 — control mapping & evidence ([`../security-epics.md`](../security-epics.md)); program epic [INFR-328].
+**Tracking:** EPIC 4 — control mapping & evidence ([`history/security-epics.md`](../history/security-epics.md)); program epic [INFR-328].
 **Artifact date:** 2026-06-22.
 **Overall status:** **Partial — first pass complete.** All SP 800-53 Rev 5 families are
 mapped to an Inferno-native mechanism with an evidence pointer and an honest status. The
@@ -60,13 +60,13 @@ first; they are the controls a generic Linux/Windows host cannot evidence as cle
 | **CM** Configuration Management | Baselines, integrity of components | Technical | Reproducible Plan 9 `mk` builds; bytecode built from source in CI and at release, checked against a tracked module manifest; SHA-pinned CI actions | `.github/workflows/verify-dis-build.yml`; `tools/verify-dis-build.sh`; `tools/dis-manifest.txt`; `CLAUDE.md` (dis is a build product) | **Strong** (see §5.CM) |
 | **SR** Supply Chain Risk | Provenance, integrity of artifacts | Technical | SLSA build provenance attestations; cosign keyless (Sigstore) signing; SHA256SUMS; OpenSSF Scorecard | `.github/workflows/release.yml:1257-1288`; `scorecard.yml` | **Strong** (see §5.SR) |
 | **CA** Assessment, Auth & Monitoring | Continuous assessment | Technical+Org | Formal verification in CI (TLA+/SPIN/CBMC); CodeQL/Scorecard/fuzz continuous scanning; ring-fence guard | `formal-verification/`; `.github/workflows/` (formal-verification, security, scorecard, fuzz); `CLAUDE.md` (ring-fence) | **Strong (technical)**; assessment process = operator |
-| **RA** Risk Assessment | Vuln scanning, risk | Technical+Org | CodeQL, fuzzing, OpenSSF Scorecard, formal verification feed risk posture; threat models in security docs | `.github/workflows/{security,fuzz,scorecard}.yml`; `docs/NAMESPACE_SECURITY_REVIEW.md` §3 (threat model) | **Partial** (tooling ✅; org RA process = operator) |
+| **RA** Risk Assessment | Vuln scanning, risk | Technical+Org | CodeQL, fuzzing, OpenSSF Scorecard, formal verification feed risk posture; threat models in security docs | `.github/workflows/{security,fuzz,scorecard}.yml`; `docs/history/NAMESPACE_SECURITY_REVIEW.md` §3 (threat model) | **Partial** (tooling ✅; org RA process = operator) |
 | **SA** System & Services Acquisition | SDLC, dev security | Technical+Org | Memory-safe Limbo SDLC; formal-verification methodology; in-tree security review process | `formal-verification/METHODOLOGY.md`; `CONTRIBUTING.md`; `SECURITY.md` | **Partial** |
 | **PT** PII Processing & Transparency | Privacy | Technical+Org | Data-minimizing namespace isolation (agents see only granted data); no telemetry by default | `appl/veltro/SECURITY.md` | **Partial** (privacy *policy* = operator) |
 | **CP** Contingency Planning | Backup, recovery | Operator | Technical support: durable mailbox journal; secstore backup procedure; stateless re-clone of `dis/` tree | `docs/yubikey-2fa-operations.md` §8 (backup); INFR-302 (durable journal) | **Operator** (technical support noted) |
 | **IR** Incident Response | Detection, handling | Operator | Technical support: audit-log evidence (EPIC 2), `nsaudit` config review, security-advisory process | `SECURITY.md`; EPIC 2 | **Operator** |
 | **MA** Maintenance | Controlled maintenance | Operator | Technical support: signed updates (SR), reproducible builds (CM) | release.yml | **Operator** |
-| **MP** Media Protection | Media handling, sanitization | Operator+Technical | Technical support: AES-256-GCM data-at-rest (secstore vault, DK-wrapped); zeroization of key material in `libsec` | `docs/yubikey-2fa-operations.md` §9; `docs/QUANTUM-SAFE-CRYPTO-PLAN.md` §5 (zeroization) | **Partial** |
+| **MP** Media Protection | Media handling, sanitization | Operator+Technical | Technical support: AES-256-GCM data-at-rest (secstore vault, DK-wrapped); zeroization of key material in `libsec` | `docs/yubikey-2fa-operations.md` §9; `docs/history/QUANTUM-SAFE-CRYPTO-PLAN.md` §5 (zeroization) | **Partial** |
 | **PE** Physical & Environmental | Facility, hardware | Operator | Technical support: hardware authenticator (FIDO2) ties logical to physical possession | [`SP800-63B-AAL3.md`](SP800-63B-AAL3.md) | **Operator** |
 | **PL** Planning | SSP, rules of behavior | Operator | This evidence register + roadmap feed the SSP | `../security-standards-roadmap.md`; this dir | **Operator** |
 | **PS** Personnel Security | Screening, access agreements | Operator | n/a (organizational) | — | **Operator** |

@@ -2,7 +2,7 @@
 
 **Status:** Complete — All phases implemented (FIPS 203, 204, 205)
 **Date:** 2026-03-05
-**Predecessor:** [CRYPTO-MODERNIZATION.md](CRYPTO-MODERNIZATION.md) (Phases 1-5 complete)
+**Predecessor:** [CRYPTO-MODERNIZATION.md](../CRYPTO-MODERNIZATION.md) (Phases 1-5 complete)
 
 ### Implementation Status
 
@@ -30,7 +30,7 @@ the native Inferno auth protocol (`Keyring->auth`) + the `ssl` device, which
 was classical-DH-only. Phase 8 makes that handshake hybrid (mutual ML-KEM-768
 combined with DH via SHA3-512), so native 9P/Styx sessions are now
 quantum-safe end-to-end. See
-[CRYPTO-MODERNIZATION.md §10](CRYPTO-MODERNIZATION.md#10-native-transport-hybrid-key-agreement-9p--styx).
+[CRYPTO-MODERNIZATION.md §10](../CRYPTO-MODERNIZATION.md#10-native-transport-hybrid-key-agreement-9p--styx).
 
 ## 1. Motivation
 

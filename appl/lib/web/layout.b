@@ -2264,9 +2264,9 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	}
 	cx := ox + b.bl + b.pl;	# content box, in fc
 	cy := oy + b.bt + b.pt;
-	passtop := !bfc && b.bt == 0 && b.pt == 0;
-	passbot := !bfc && b.bb == 0 && b.pb == 0 && sh < 0;
-	passempty := !bfc && b.bb == 0 && b.pb == 0 && sh <= 0;	# margins may collapse through it if nothing is in it: a height of zero or auto (§8.3.1)
+	passtop := !bfc && b.bt == 0 && b.pt == 0 && nopad(b.st.pt);
+	passbot := !bfc && b.bb == 0 && b.pb == 0 && nopad(b.st.pb) && sh < 0;
+	passempty := !bfc && b.bb == 0 && b.pb == 0 && nopad(b.st.pb) && sh <= 0;	# margins may collapse through it if nothing is in it: a height of zero or auto (§8.3.1)
 	mnh := b.st.minheight;
 	mhhold := passbot && !(mnh.kind == Style->Lauto || mnh.kind == Style->Lpx && mnh.px == 0.0 && mnh.pct == 0.0);
 	if(mhhold)
@@ -8566,6 +8566,14 @@ stretched(b, k: ref Box): int
 
 # a box's horizontal margins together, negative ones and all (auto
 # ones are 0 here); they are part of what it contributes to a parent
+# whether a padding is none at all: any, however small, keeps margins
+# from collapsing through (CSS 2.2 §8.3.1), though it rounds to no
+# pixels.  Wikipedia's page container has padding-top: 0.05px for that.
+nopad(v: Style->Len): int
+{
+	return v.kind != Style->Lpx || v.px == 0.0;	# a percentage is what it resolves to (b.pt), which may be none
+}
+
 mgs(b: ref Box): int
 {
 	return b.ml + b.mr;

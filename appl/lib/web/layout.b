@@ -1773,6 +1773,7 @@ lay(root: ref Box, width, height: int)
 	}
 	l.pending = nil;
 	shiftmarkers(root);
+	stuck = nil;
 	stickies(root, 0, height);
 	number(root, 1);
 }
@@ -1792,18 +1793,55 @@ stickies(b: ref Box, oy, vh: int)
 		st := k.st;
 		if(st.position == Style->Psticky && !k.inl && st.top.kind != Style->Lauto) {
 			t := res(st.top, vh);
+			fy := k.y;
+			room := b.h - b.bb - b.pb - (k.y + k.h + k.mb);
 			ky := y + k.y;
 			if(ky < t) {
 				d := t - ky;
-				room := b.h - b.bb - b.pb - (k.y + k.h + k.mb);
 				if(d > room)
 					d = room;
 				if(d > 0)
 					k.y += d;
 			}
+			stuck = ref Stuck(k, fy, k.y, y, room, t) :: stuck;
 		}
 		stickies(k, y, vh);
 	}
+}
+
+# Sticky boxes, for painting: as the page scrolls each keeps its top
+# inset in the viewport, within its containing block (Position 3
+# §3.4).  BBC's header (sticky, top 0) scrolled away, but for its
+# menu button.  Painting moves them for its scroll position and puts
+# them back after, so layout and hit-testing see the unscrolled page.
+Stuck: adt {
+	box:	ref Box;
+	flowy:	int;	# its y in the flow
+	laidy:	int;	# its y as laid out (unscrolled)
+	py:	int;	# its parent's border box's y on the page
+	room:	int;	# how far down its containing block lets it go
+	top:	int;	# its top inset
+};
+
+stuck: list of ref Stuck;
+
+stickscroll(sy: int)
+{
+	for(l := stuck; l != nil; l = tl l) {
+		s := hd l;
+		d := sy + s.top - (s.py + s.flowy);
+		if(d > s.room)
+			d = s.room;
+		if(d < 0)
+			d = 0;
+		s.box.y = s.flowy + d;
+	}
+}
+
+unstick()
+{
+	for(l := stuck; l != nil; l = tl l)
+		(hd l).box.y = (hd l).laidy;
 }
 
 # Give every box its place in tree order (flex items in order-modified
@@ -11650,7 +11688,15 @@ paint(root: ref Box, dst: ref Image, origin: Point, clip: Rect)
 	claimed = nil;
 	ctxclip = noclip;
 	claimfixed(root, root);
-	paintctx(dst, root, origin, clip, bgbox);
+	stickscroll(scrolled.y);
+	{
+		paintctx(dst, root, origin, clip, bgbox);
+	} exception e {
+	"*" =>
+		unstick();
+		raise e;
+	}
+	unstick();
 	claimed = nil;
 	painted = nil;
 	dst.clipr = oclip;

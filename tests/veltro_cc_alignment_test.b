@@ -428,9 +428,12 @@ testSystemTxtTodoMandate(t: ref T)
 	}
 	# The CC-style emphasis ("non-trivial", "EXTREMELY helpful") was
 	# deliberately dropped when the prompt was reworked for small-model
-	# reliability (5ce3fea0, b781e9f5). The surviving mandate is the
-	# planning-discipline line.
-	t.assert(agentlib->contains(content, "use plan or todo BEFORE acting"),
+	# reliability (5ce3fea0, b781e9f5). The planning-discipline line then
+	# moved into the complexity-gated <complex_tasks> section (dc27c235a),
+	# where it is step 1 for multi-step work; trivial requests are exempt.
+	t.assert(agentlib->contains(content, "<complex_tasks>"),
+		"Fix1: system.txt has the <complex_tasks> section");
+	t.assert(agentlib->contains(content, "Use plan (or todo) to record the steps before acting"),
 		"Fix1: system.txt mandates plan/todo before acting");
 	t.assert(!agentlib->contains(content, "3+ steps"),
 		"Fix1: old '3+ steps' threshold removed");

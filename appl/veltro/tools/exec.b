@@ -70,18 +70,10 @@ name(): string
 doc(): string
 {
 	return "Exec - Run a program in the Inferno namespace\n\n" +
-		"For GUI/WM programs, Exec launches them in the presentation zone\n" +
-		"automatically. All three forms work (no wm/wm wrapper, no & suffix):\n" +
-		"  Exec wm/clock            (short name)\n" +
-		"  Exec /dis/wm/clock       (absolute path, .dis optional)\n" +
-		"  Exec /dis/wm/clock.dis   (full path)\n\n" +
-		"Available draw-based GUI apps (these work):\n" +
-		"  clock, bounce, coffee, colors, date, view, rt, lens\n\n" +
-		"IMPORTANT GUI launch rules:\n" +
-		"  - Do NOT wrap with 'wm/wm' (wrong: 'exec wm/wm wm/clock')\n" +
-		"  - Do NOT add '&' — background launch is handled automatically\n\n" +
-		"Apps that do NOT work (require Tk, which is not available):\n" +
-		"  task, edit, about, tetris, sh, ftree — do not attempt these\n\n" +
+		"GUI/WM programs (wm/clock, /dis/wm/clock, /dis/wm/clock.dis) are\n" +
+		"not run by Exec: use the launch tool, which puts them in the\n" +
+		"presentation zone (e.g. 'launch clock'). Exec refuses them with an\n" +
+		"error naming the launch call to make.\n\n" +
 		"For non-GUI programs:\n" +
 		"  Exec /dis/bind.dis -a /mnt/foo /n/bar\n" +
 		"  Exec /dis/veltro/tools/someprogram.dis args\n\n" +
@@ -93,7 +85,7 @@ doc(): string
 		"IMPORTANT: Inferno shell syntax, not POSIX:\n" +
 		"  - No &&, ||; use ; to sequence\n" +
 		"  - Single quotes for strings\n\n" +
-		"Returns program output (CLI), or 'launched ... in presentation zone' (GUI).\n" +
+		"Returns program output.\n" +
 		"Default timeout: 5 seconds (max 30s).";
 }
 
@@ -101,11 +93,11 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"exec\"," +
-		"\"description\":\"Run a program inside the Inferno namespace via the shell. Inferno rc-style syntax (no && or ||; sequence with ;). For GUI/wm apps, do NOT add & or wrap in wm/wm \\u2014 launch handles the presentation zone.\"," +
+		"\"description\":\"Run a program inside the Inferno namespace via the shell. Inferno rc-style syntax (no && or ||; sequence with ;). GUI/wm apps are not run here \\u2014 use the launch tool for the presentation zone.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. 'wm/clock' or '/dis/bind.dis -a /mnt/foo /n/bar'.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. '/dis/bind.dis -a /mnt/foo /n/bar'.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -158,12 +150,12 @@ exec(args: string): string
 	# Inferno's sh uses single quotes for literal strings, not double quotes
 	cmd = convertquotes(cmd);
 
-	# For GUI programs in /dis/wm/, route to the presentation zone.
+	# GUI programs in /dis/wm/ are refused with a pointer to launch.
 	# Detects /dis/wm/ programs three ways:
 	#   1. Full .dis path:  exec /dis/wm/clock.dis
 	#   2. Absolute no-ext: exec /dis/wm/clock    → tries /dis/wm/clock.dis
 	#   3. Short name:      exec wm/clock          → tries /dis/wm/clock.dis
-	# Only /dis/wm/* programs are routed to pres zone; CLI tools fall through.
+	# Only /dis/wm/* programs are refused; CLI tools fall through.
 	if(len cmd > 0) {
 		firstword := cmd;
 		for(i := 0; i < len firstword; i++) {
@@ -196,19 +188,16 @@ exec(args: string): string
 		   dispath[len dispath - 10:] == "xenith.dis") {
 			return "error: use 'launch xenith' — exec cannot target the presentation zone for xenith";
 		}
-		# Only route /dis/wm/* apps to presentation zone (wmclient apps)
+		# /dis/wm/* apps are wmclient GUI programs: they belong in the
+		# presentation zone, which only the launch tool reaches (through
+		# /mnt/ui's presentation/ctl).  exec has no display to give them.
+		# It used to drop the path in /n/pres-launch or
+		# /tmp/veltro/pres-launch for lucifer to poll, but nothing has read
+		# either since lucifer's unified tab model (48174e2fb), so exec
+		# reported a launch that never happened.
 		if(len dispath > 8 && dispath[0:8] == "/dis/wm/") {
-			# Try /n/pres-launch (file2chan, if lucifer exported it).
-			# Fall back to /tmp/veltro/pres-launch which lucifer polls every 200ms.
-			pfd := sys->open("/n/pres-launch", Sys->OWRITE);
-			if(pfd == nil)
-				pfd = sys->create("/tmp/veltro/pres-launch", Sys->OWRITE, 8r644);
-			if(pfd != nil) {
-				data := array of byte dispath;
-				sys->write(pfd, data, len data);
-				pfd = nil;
-				return "launched " + dispath + " in presentation zone";
-			}
+			appname := dispath[8:len dispath - 4];
+			return "error: use 'launch " + appname + "' — exec cannot open GUI apps; launch puts them in the presentation zone";
 		}
 	}
 

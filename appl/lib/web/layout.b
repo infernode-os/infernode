@@ -9003,7 +9003,7 @@ text(f: ref Fl, b: ref Box)
 	}
 	lbmode = st.lbmode;
 	lbcjk = cjklang(langof(b.node));
-	lbkeepall = st.keepall;
+	lbkeepall = st.keepall == 1;
 	fc := face(st);
 	s := b.text;
 	if(st.transform != Style->TTnone)
@@ -9023,7 +9023,7 @@ text(f: ref Fl, b: ref Box)
 		s = segbreaks(s, keepnl, cjklang(langof(b.node)));
 	# Thai: between the words a dictionary finds (UAX #14 SA)
 	thai: array of byte;
-	if(wordbreak != nil)
+	if(wordbreak != nil && st.keepall != 2)
 		thai = wordbreak->breaks(s);
 	i := 0;
 	while(i < len s) {
@@ -10043,7 +10043,7 @@ wordgap(pbox: ref Box, ptext: string, it: ref Item, min: int): int
 	lbmode = it.box.st.lbmode;
 	lbcjk = cjklang(langof(it.box.node));
 	lbbreakall = it.box.st.breakall == 1 || pbox.st.breakall == 1;
-	lbkeepall = it.box.st.keepall || pbox.st.keepall;
+	lbkeepall = it.box.st.keepall == 1 || pbox.st.keepall == 1;
 	r := lbbreak(ptext[len ptext - 1], it.text[0]);
 	lbbreakall = 0;
 	lbkeepall = 0;
@@ -10053,7 +10053,7 @@ wordgap(pbox: ref Box, ptext: string, it: ref Item, min: int): int
 # a word kept whole by keep-all that normal breaking would split
 keptall(it: ref Item): int
 {
-	if(!it.box.st.keepall || bidi == nil)
+	if(it.box.st.keepall != 1 || bidi == nil)
 		return 0;
 	for(i := 1; i < len it.text; i++)
 		if(cjkletter(bidi->lbclass(it.text[i-1])) && cjkletter(bidi->lbclass(it.text[i])))

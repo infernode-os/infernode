@@ -177,7 +177,7 @@ Style: module
 		wordspacing:	real;
 		whitespace:	int;
 		breakall:	int;	# word-break: break-all
-		keepall:	int;
+		keepall:	int;	# word-break: keep-all 1, manual 2
 		anywhere:	int;	# overflow-wrap: anywhere / break-word
 		ellipsis:	int;	# text-overflow: ellipsis (not inherited)
 		decoration:	int;	# TDunder etc. (not inherited; propagated by layout)

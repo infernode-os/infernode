@@ -2264,9 +2264,9 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	}
 	cx := ox + b.bl + b.pl;	# content box, in fc
 	cy := oy + b.bt + b.pt;
-	passtop := !bfc && b.bt == 0 && b.pt == 0;
-	passbot := !bfc && b.bb == 0 && b.pb == 0 && sh < 0;
-	passempty := !bfc && b.bb == 0 && b.pb == 0 && sh <= 0;	# margins may collapse through it if nothing is in it: a height of zero or auto (§8.3.1)
+	passtop := !bfc && b.bt == 0 && b.pt == 0 && nopad(b.st.pt);
+	passbot := !bfc && b.bb == 0 && b.pb == 0 && nopad(b.st.pb) && sh < 0;
+	passempty := !bfc && b.bb == 0 && b.pb == 0 && nopad(b.st.pb) && sh <= 0;	# margins may collapse through it if nothing is in it: a height of zero or auto (§8.3.1)
 	mnh := b.st.minheight;
 	mhhold := passbot && !(mnh.kind == Style->Lauto || mnh.kind == Style->Lpx && mnh.px == 0.0 && mnh.pct == 0.0);
 	if(mhhold)
@@ -8566,6 +8566,14 @@ stretched(b, k: ref Box): int
 
 # a box's horizontal margins together, negative ones and all (auto
 # ones are 0 here); they are part of what it contributes to a parent
+# whether a padding is none at all: any, however small, keeps margins
+# from collapsing through (CSS 2.2 §8.3.1), though it rounds to no
+# pixels.  Wikipedia's page container has padding-top: 0.05px for that.
+nopad(v: Style->Len): int
+{
+	return v.kind != Style->Lpx || v.px == 0.0;	# a percentage is what it resolves to (b.pt), which may be none
+}
+
 mgs(b: ref Box): int
 {
 	return b.ml + b.mr;
@@ -9256,7 +9264,7 @@ text(f: ref Fl, b: ref Box)
 			f.space = 0;
 			continue;
 		}
-		w := fc.width(word) + ls * real len word;
+		w := tw(fc, word, ls) + ls * real len word;
 		if(st.breakall && !nowrap) {
 			# break-all: letters break like ideographs, but punctuation
 			# keeps its rules (Text 4 §5.2: no break before a full stop);
@@ -9266,7 +9274,7 @@ text(f: ref Fl, b: ref Box)
 			for(k := 1; k <= len word; k++)
 				if(k == len word || st.breakall == 2 || lbbreak(word[k-1], word[k])) {
 					ch := word[k0:k];
-					emit(f, ref Item(Iword, ch, fc.width(ch) + ls * real len ch, b, fc, 0, f.deco, f.decocolor, 0, 0, 0.0, 0));
+					emit(f, ref Item(Iword, ch, tw(fc, ch, ls) + ls * real len ch, b, fc, 0, f.deco, f.decocolor, 0, 0, 0.0, 0));
 					k0 = k;
 				}
 			lbbreakall = 0;
@@ -9420,9 +9428,9 @@ hangpass(items: list of ref Item): list of ref Item
 		if(len first.text > 1) {
 			fmark = ref *first;
 			fmark.text = first.text[0:1];
-			fmark.w = fmark.face.width(fmark.text) + fmark.box.st.letterspacing;
+			fmark.w = tw(fmark.face, fmark.text, fmark.box.st.letterspacing) + fmark.box.st.letterspacing;
 			first.text = first.text[1:];
-			first.w = first.face.width(first.text) + first.box.st.letterspacing * real len first.text;
+			first.w = tw(first.face, first.text, first.box.st.letterspacing) + first.box.st.letterspacing * real len first.text;
 			fmark.hang = 1;
 		} else
 			first.hang = 1;
@@ -9432,9 +9440,9 @@ hangpass(items: list of ref Item): list of ref Item
 		if(n > 1) {
 			lmark = ref *last;
 			lmark.text = last.text[n-1:];
-			lmark.w = lmark.face.width(lmark.text) + lmark.box.st.letterspacing;
+			lmark.w = tw(lmark.face, lmark.text, lmark.box.st.letterspacing) + lmark.box.st.letterspacing;
 			last.text = last.text[0:n-1];
-			last.w = last.face.width(last.text) + last.box.st.letterspacing * real (n - 1);
+			last.w = tw(last.face, last.text, last.box.st.letterspacing) + last.box.st.letterspacing * real (n - 1);
 			lmark.hang = 2;
 			lmark.nowrap = 1;
 		} else {
@@ -10830,7 +10838,7 @@ rewidth(it: ref Item)
 	for(i := 0; i < len it.text; i++)
 		if(it.text[i] != 16r200D)
 			n++;
-	it.w = it.face.width(it.text) + it.box.st.letterspacing * real n;
+	it.w = tw(it.face, it.text, it.box.st.letterspacing) + it.box.st.letterspacing * real n;
 }
 
 bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
@@ -11415,6 +11423,8 @@ layatomic(l: ref L, k: ref Box, cbw, cbh: int)
 		(ok, by) := firstbaseline(k);
 		if(ok)
 			k.base = k.mt + by;
+		else if(k.kind != Ktable && (fi := firstitem(k)) != nil)
+			k.base = k.mt + fi.y + fi.h;	# none: its first item's border-box bottom (Flexbox §8.5): Wikipedia's ⋮ button, an icon in an inline-flex label, made its line 3px too tall when taken from the label's own bottom
 	} else if(k.kind != Kreplaced && k.st.overflowy == Style->Ovisible) {
 		(ok, by) := lastbaseline(k);
 		if(ok)
@@ -11456,6 +11466,15 @@ textcontrol(k: ref Box): int
 		return 1;
 	}
 	return 0;
+}
+
+# a flex or grid container's first item in the flow, in its order
+firstitem(b: ref Box): ref Box
+{
+	for(i := 0; i < len b.kids; i++)
+		if(!isoof(b.kids[i]))
+			return b.kids[i];
+	return nil;
 }
 
 firstbaseline(b: ref Box): (int, int)
@@ -15192,14 +15211,40 @@ drawtext(dst: ref Image, fc: ref Typeface, p: Point, s: string, c: ref Image, ls
 		fc.draw(dst, p, s, c, rtl);
 		return;
 	}
-	# spaced out: one character at a time, the last one leftmost if rtl
+	# spaced out: one character at a time, the last one leftmost if
+	# rtl, kerned against the next as tw measures it
 	x := real p.x;
 	for(i := 0; i < len s; i++) {
 		k := i;
 		if(rtl)
 			k = len s - 1 - i;
 		x += fc.draw(dst, Point(int x, p.y), s[k:k+1], c, rtl) + ls;
+		if(i + 1 < len s && !fc.nokern) {
+			if(rtl)
+				x += fc.kernpair(s[k-1], s[k]);
+			else
+				x += fc.kernpair(s[k], s[k+1]);
+		}
 	}
+}
+
+# The width of s as drawn: shaped, or, with letter-spacing ls, a
+# character at a time (no ligatures, as browsers draw spaced-out text,
+# CSS Text 3 §8.2) and kerned, as drawtext draws it.  Measured shaped
+# and drawn unkerned, GitHub's "Tools and" lost its space to the
+# T-o kern its first word did not get.  The spacing itself is the
+# caller's to add.
+tw(fc: ref Typeface, s: string, ls: real): real
+{
+	if(ls == 0.0 || len s <= 1)
+		return fc.width(s);
+	w := 0.0;
+	for(i := 0; i < len s; i++) {
+		w += fc.width(s[i:i+1]);
+		if(i + 1 < len s && !fc.nokern)
+			w += fc.kernpair(s[i], s[i+1]);
+	}
+	return w;
 }
 
 paintdeco(dst: ref Image, f: ref Frag, o: Point)
@@ -15239,7 +15284,19 @@ paintdeco(dst: ref Image, f: ref Frag, o: Point)
 
 boxat(root: ref Box, p: Point): (int, ref Box)
 {
-	(n, b, nil) := findin(root, p, Point(0, 0));
+	# sticky boxes where the last paint showed them: a click on BBC's
+	# header, stuck at the top, was taken for what scrolled under it
+	stickscroll(scrolled.y);
+	n: int;
+	b: ref Box;
+	{
+		(n, b, nil) = findin(root, p, Point(0, 0));
+	} exception e {
+	"*" =>
+		unstick();
+		raise e;
+	}
+	unstick();
 	# an anonymous box (a block around inline content, an anonymous
 	# table part) is no element: what was clicked is the element it
 	# belongs to (github.com's file list: grid cells' anonymous blocks)

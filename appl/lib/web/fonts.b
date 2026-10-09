@@ -146,7 +146,7 @@ facevar(families: list of string, weight, style: int, slant, stretch, size: real
 	# the first family this document has downloaded, then what stands
 	# in for the rest
 	for(l := families; l != nil; l = tl l) {
-		(parts, fw) := webparts(hd l, weight, style, slant, stretch, vars);
+		(parts, fw) := webparts(hd l, weight, style, slant, stretch, size, vars);
 		if(parts == nil)
 			continue;
 		# no face heavy enough: a bold made up, as browsers make it (a
@@ -742,9 +742,14 @@ weightclass(d: array of byte): int
 partsmade: list of (string, string, array of ref Part, int);
 
 # the faces, and the weight they stand at (for synthetic bold)
-webparts(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): (array of ref Part, int)
+webparts(family: string, weight, style: int, slant, stretch, size: real, vars: list of (string, real)): (array of ref Part, int)
 {
-	vk := sys->sprint("%d %d %g %g ", weight, style, slant, stretch);
+	# the optical size follows the font size (font-optical-sizing:
+	# auto, Fonts 4 §7.1), for a family with an opsz axis
+	opsz := 0.0;
+	if(opszfamily(family))
+		opsz = size;
+	vk := sys->sprint("%d %d %g %g %g ", weight, style, slant, stretch, opsz);
 	for(vl := vars; vl != nil; vl = tl vl)
 		vk += sys->sprint("%s=%g,", (hd vl).t0, (hd vl).t1);
 	for(pl := partsmade; pl != nil; pl = tl pl) {
@@ -752,7 +757,7 @@ webparts(family: string, weight, style: int, slant, stretch: real, vars: list of
 		if(pf == family && pv == vk)
 			return (pa, pw);
 	}
-	(a, w) := webparts1(family, weight, style, slant, stretch, vars);
+	(a, w) := webparts1(family, weight, style, slant, stretch, opsz, vars);
 	if(a != nil)
 		partsmade = (family, vk, a, w) :: partsmade;
 	return (a, w);
@@ -784,7 +789,16 @@ faceweight(w: ref Web, weight: int): int
 	return weight;
 }
 
-webparts1(family: string, weight, style: int, slant, stretch: real, vars: list of (string, real)): (array of ref Part, int)
+# does a face of the family have an optical size axis?
+opszfamily(family: string): int
+{
+	for(l := webfaces; l != nil; l = tl l)
+		if((hd l).family == family && hasaxis(ofont->axes((hd l).part.outline), "opsz"))
+			return 1;
+	return 0;
+}
+
+webparts1(family: string, weight, style: int, slant, stretch, opsz: real, vars: list of (string, real)): (array of ref Part, int)
 {
 	italic := style != 0;
 	best := -1;
@@ -807,7 +821,7 @@ webparts1(family: string, weight, style: int, slant, stretch: real, vars: list o
 	for(l = webfaces; l != nil; l = tl l) {
 		w := hd l;
 		if(w.family == family && faceweight(w, weight) == best && (w.italic == italic) == bestit) {
-			r = varied(w, weight, style, slant, stretch, vars) :: r;
+			r = varied(w, weight, style, slant, stretch, opsz, vars) :: r;
 			# a variable face whose weight is its own (auto) is not
 			# made bolder past its range (synthetic-bold-out-of-
 			# capabilities-range); one its rule holds to a weight is
@@ -830,7 +844,7 @@ webparts1(family: string, weight, style: int, slant, stretch: real, vars: list o
 # axis is given): the weight, width and slant asked for, each within
 # what the @font-face rule says of the face; the rule's
 # font-variation-settings; the style's.
-varied(w: ref Web, weight, style: int, slant, stretch: real, vars: list of (string, real)): ref Part
+varied(w: ref Web, weight, style: int, slant, stretch, opsz: real, vars: list of (string, real)): ref Part
 {
 	p := w.part;
 	axes := ofont->axes(p.outline);
@@ -864,6 +878,14 @@ varied(w: ref Web, weight, style: int, slant, stretch: real, vars: list of (stri
 			} else if(d != nil && d.style >= 0)
 				a = 0.0;	# a normal or italic face does not slant by the axis
 			values = ("slnt", -a) :: values;
+		"opsz" =>
+			if(opsz > 0.0) {
+				(nil, mn, nil, mx) := hd al;
+				x := opsz;
+				if(x < mn) x = mn;
+				if(x > mx) x = mx;
+				values = ("opsz", x) :: values;
+			}
 		"ital" =>
 			it := 0.0;
 			if(style == 1 && (d == nil || d.style != 0))

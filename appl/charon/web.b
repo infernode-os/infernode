@@ -140,6 +140,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	act := chan[16] of string;
 	tk->namechan(top, act, "act");
 	buildui();
+	themech := chan[1] of int;
+	spawn themelistener(themech);
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 	tk->cmd(top, "update");
@@ -161,6 +163,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		tk->pointer(top, *p);
 	a := <-act =>
 		action(a);
+	<-themech =>
+		retheme();
 	e := <-ev =>
 		event(e);
 	}
@@ -205,17 +209,12 @@ fatal(s: string)
 
 buildui()
 {
-	th := theme();
-	bg := col(th.bg);
-	fg := col(th.text);
-	ebg := col(th.editbg);
 	cmds := array[] of {
-		". configure -background " + bg,
-		"frame .bar -background " + bg,
+		"frame .bar",
 		"button .bar.back -text {◀} -command {send act back}",
 		"button .bar.fwd -text {▶} -command {send act forward}",
 		"button .bar.reload -text {⟳} -command {send act reload}",
-		"entry .bar.url -background " + ebg + " -foreground " + col(th.edittext),
+		"entry .bar.url",
 		"bind .bar.url <Key-\n> {send act go}",
 		"pack .bar.back .bar.fwd .bar.reload -side left",
 		"pack .bar.url -side left -fill x -expand 1",
@@ -226,7 +225,7 @@ buildui()
 		".view.c create image 0 0 -anchor nw -image page -tags pageitem",
 		"pack .view.sb -side right -fill y",
 		"pack .view.c -side left -fill both -expand 1",
-		"label .status -anchor w -background " + col(th.editstatus) + " -foreground " + col(th.editstattext),
+		"label .status -anchor w",
 		"pack .bar -side top -fill x",
 		"pack .status -side bottom -fill x",
 		"pack .view -side top -fill both -expand 1",
@@ -248,8 +247,42 @@ buildui()
 		if(e != nil && e[0] == '!')
 			sys->fprint(stderr, "web: tk: %s: %s\n", cmds[i], e);
 	}
+	colours();
+}
+
+# The chrome in the theme's colours; the page keeps its own.
+colours()
+{
+	th := theme();
+	bg := col(th.bg);
+	fg := col(th.text);
+	tk->cmd(top, ". configure -background " + bg);
+	tk->cmd(top, ".bar configure -background " + bg);
 	for(l := ".bar.back" :: ".bar.fwd" :: ".bar.reload" :: nil; l != nil; l = tl l)
 		tk->cmd(top, hd l + " configure -background " + bg + " -foreground " + fg + " -borderwidth 0");
+	tk->cmd(top, ".bar.url configure -background " + col(th.editbg) + " -foreground " + col(th.edittext));
+	tk->cmd(top, ".status configure -background " + col(th.editstatus) + " -foreground " + col(th.editstattext));
+}
+
+# A theme switch, by whoever writes /lib/lucifer/theme/current
+themelistener(ch: chan of int)
+{
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt == nil)
+		return;
+	c := lt->watch();
+	for(;;){
+		<-c;
+		ch <-= 1;
+	}
+}
+
+retheme()
+{
+	# the widgets' default colours (scroll bar, menu), then ours
+	tkclient->wmctl(top, "retheme");
+	colours();
+	tk->cmd(top, "update");
 }
 
 viewsize(): (int, int)

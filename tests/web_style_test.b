@@ -87,6 +87,11 @@ px(l: Len): real
 	return l.px;
 }
 
+suffix(s, e: string): int
+{
+	return len s >= len e && s[len s - len e:] == e;
+}
+
 col(c: int): string
 {
 	return sys->sprint("%.8ux", c);
@@ -259,6 +264,10 @@ testColors(t: ref T)
 	}
 	(ok, nil) := style->color(css->tokenize("rgb(1 2)"));
 	t.assert(!ok, "too few channels");
+	(ok, nil) = style->color(css->tokenize("rgb(0 0 0 0 0)"));
+	t.assert(!ok, "too many channels");
+	(ok, nil) = style->color(css->tokenize("rgba(0, 0, 0, .5, 1)"));
+	t.assert(!ok, "too many channels, legacy");
 }
 
 testMedia(t: ref T)
@@ -277,12 +286,14 @@ testMedia(t: ref T)
 testSelectors(t: ref T)
 {
 	p := page("<style>.p:has(> .c) { color: green } li:nth-child(2n+1) { color: green }" +
+		"#out:has(.a .b) { color: red } #in:has(.a .b) { color: green }" +
 		":is(#x, #y) > b { color: green } a[href$='.pdf' i] { color: green } p:not(.n) + p { color: green }" +
 		"input:checked { color: green } div:empty { color: green } .q:first-of-type { color: green }" +
 		".nest { color: red; & > .k { color: green } }</style>" +
 		"<div class=p id=h><span class=c>x</span></div><ul><li id=l1>1<li id=l2>2<li id=l3>3</ul>" +
 		"<div id=y><b id=yb>b</b></div><a id=pdf href=a.PDF>p</a><p>1</p><p id=sib>2</p>" +
 		"<input id=cb type=checkbox checked><div id=em></div><span class=q id=q1></span>" +
+		"<div class=a><div id=out><div class=b></div></div></div><div id=in><div class=a><div class=b></div></div></div>" +
 		"<div class=nest><i class=k id=k>k</i></div>");
 	t.assertseq(col(st(p, "h").color), "008000ff", ":has(> .c)");
 	t.assertseq(col(st(p, "l1").color), "008000ff", "nth-child odd 1");
@@ -295,6 +306,42 @@ testSelectors(t: ref T)
 	t.assertseq(col(st(p, "em").color), "008000ff", ":empty");
 	t.assertseq(col(st(p, "q1").color), "008000ff", ":first-of-type");
 	t.assertseq(col(st(p, "k").color), "008000ff", "nesting");
+	t.assertseq(col(st(p, "in").color), "008000ff", ":has() with a descendant combinator");
+	t.assert(col(st(p, "out").color) != "ff0000ff", ":has() anchors at the element");
+	# HTML compares some attribute values without case (type, dir, ...), others with
+	p = page("<style>input[type=text] { color: green } div[dir=RTL] { color: green } span[title=Hi] { color: red }</style>" +
+		"<input id=t type=TEXT><div id=d dir=rtl></div><span id=s title=hi></span>");
+	t.assertseq(col(st(p, "t").color), "008000ff", "[type=text] matches type=TEXT");
+	t.assertseq(col(st(p, "d").color), "008000ff", "[dir=RTL] matches dir=rtl");
+	t.assertseq(col(st(p, "s").color), "000000ff", "[title=Hi] does not match title=hi");
+}
+
+testBackgrounds(t: ref T)
+{
+	p := page("<style>#a { background-image: url(a.png), url(b.png); background-size: cover; background-repeat: no-repeat, repeat-x }" +
+		"#b { background-size: 10px; background-image: url(c.png), url(d.png) }</style><p id=a>a<p id=b>b");
+	a := st(p, "a");
+	t.asserteq(len a.bg, 2, "the image list sets the layer count");
+	t.assert(a.bg[1].img != nil, "second image kept");
+	t.asserteq(a.bg[1].sizex.kind, Style->Lcontent, "size repeats over the layers");
+	t.asserteq(a.bg[1].rx, Style->Rrepeat, "second repeat");
+	t.asserteq(a.bg[1].ry, Style->Rnorepeat, "second repeat-x");
+	b := st(p, "b");
+	t.asserteq(len b.bg, 2, "image after size");
+	t.assert(b.bg[0].img != nil && b.bg[1].img != nil, "both images");
+	t.asserteq(b.bg[1].sizex.kind, Style->Lpx, "earlier size kept for both");
+	p = page("<div id=g style='background: linear-gradient(green, green) 25px 10px / 30px 40px no-repeat round, red'></div>");
+	g := st(p, "g");
+	# the colour is the last layer's, whose image is none: two layers
+	t.assert(len g.bg == 2 && g.bg[0].img != nil && g.bg[0].img.kind == Css->Kfunction && g.bg[1].img == nil && col(g.bgcolor) == "ff0000ff",
+		sys->sprint("a gradient layer and the colour: %d layers, colour %s", len g.bg, col(g.bgcolor)));
+	t.assert(px(g.bg[0].posx) == 25.0 && px(g.bg[0].posy) == 10.0, sys->sprint("gradient position %g %g", px(g.bg[0].posx), px(g.bg[0].posy)));
+	t.assert(px(g.bg[0].sizex) == 30.0 && px(g.bg[0].sizey) == 40.0, sys->sprint("gradient size %g %g", px(g.bg[0].sizex), px(g.bg[0].sizey)));
+	t.assert(g.bg[0].rx == Style->Rnorepeat && g.bg[0].ry == Style->Rround, "no-repeat round");
+	p = page("<div id=u style='background: url(a.png) 25px 10px / 30px 40px no-repeat, url(b.png)'></div><div id=v style='background: linear-gradient(green, green) 25px 10px'></div>");
+	u := st(p, "u");
+	t.assert(len u.bg == 2 && suffix(u.bg[0].img.s, "a.png") && px(u.bg[0].posx) == 25.0 && px(u.bg[0].sizey) == 40.0, sys->sprint("two layers in order, position and size: %d layers, first %s, %g %g", len u.bg, u.bg[0].img.s, px(u.bg[0].posx), px(u.bg[0].sizey)));
+	t.assert(px(st(p, "v").bg[0].posx) == 25.0, sys->sprint("gradient alone position %g", px(st(p, "v").bg[0].posx)));
 }
 
 testHints(t: ref T)
@@ -315,11 +362,54 @@ testHints(t: ref T)
 	t.assert(f.fontsize == 24.0, "font size=5");
 	p = page("<style>p { color: green }</style><p id=p style='color: red' bgcolor=red>x");
 	t.assertseq(col(st(p, "p").color), "ff0000ff", "style attribute beats sheet");
+	p = page("<table border=0 cellpadding=0 cellspacing=0><tr><td id=z>x</table>");
+	z := st(p, "z");
+	t.assert(px(z.pt) == 0.0 && px(z.pl) == 0.0, sys->sprint("cellpadding=0 beats the UA padding: %g", px(z.pt)));
+	t.assert(z.bt == 0 && z.bl == 0, sys->sprint("border=0: no cell border: %d", z.bt));
+	p = page("<p dir=rtl id=r>x<bdo dir=ltr id=o>y</bdo><span id=s style='unicode-bidi: embed'>z</span></p>");
+	t.assert(st(p, "r").dirrtl && st(p, "r").unicodebidi == Style->UBisolate, "dir=rtl: direction and isolation");
+	t.assert(!st(p, "o").dirrtl && st(p, "o").unicodebidi == Style->UBisolateoverride,
+		sys->sprint("bdo overrides: rtl %d ub %d", st(p, "o").dirrtl, st(p, "o").unicodebidi));
+	t.asserteq(st(p, "s").unicodebidi, Style->UBembed, "unicode-bidi: embed");
+	p = page("<style>p { margin: 0; color: red } #r { margin-top: revert; color: revert } .f { align-content: safe center; justify-content: unsafe end }</style><p id=r>x<div class=f id=f></div>");
+	t.assert(px(st(p, "r").mt) == 16.0, sys->sprint("margin: revert restores the UA margin: %g", px(st(p, "r").mt)));
+	t.assertseq(col(st(p, "r").color), "000000ff", "color: revert with no UA value is unset (inherited)");
+	t.asserteq(st(p, "f").safe, 1, "safe recorded for align-content only");
+	t.asserteq(st(p, "f").aligncontent, Style->ALcenter, "safe center is center");
+	p = page("<div id=a style='transform: translateX(100%)'></div><div id=b style='transform: translate(10px, 2em) rotate(45deg)'></div><div id=c style='transform: none'></div>");
+	t.assert(st(p, "a").translated && st(p, "a").tx.pct == 100.0 && st(p, "a").ty.px == 0.0, "translateX(100%): a percentage of the box's width");
+	t.assert(st(p, "b").translated && px(st(p, "b").tx) == 10.0 && px(st(p, "b").ty) == 32.0, sys->sprint("translate(10px, 2em) with a rotate: %g %g", px(st(p, "b").tx), px(st(p, "b").ty)));
+	t.assert(!st(p, "c").translated, "transform: none");
+}
+
+testLanes(t: ref T)
+{
+	p := page("<div id=a style='display: grid-lanes; grid-lanes-direction: row fill-reverse; grid-lanes-pack: dense; flow-tolerance: 20%; align-items: flow-end'></div>" +
+		"<div id=b style='display: inline grid-lanes; flow-tolerance: infinite; grid-lanes-direction: column track-reverse'></div>" +
+		"<div id=c style='display: inline-grid-lanes; grid-lanes-direction: row column'></div>");
+	a := st(p, "a");
+	t.asserteq(a.display, Style->Dgridlanes, "display: grid-lanes");
+	t.asserteq(a.lanesdir, 1 | 4, "grid-lanes-direction: row fill-reverse");
+	t.asserteq(a.lanespack, 1, "grid-lanes-pack: dense");
+	t.assert(a.tolerance.kind == Style->Lpx && a.tolerance.pct == 20.0, "flow-tolerance: 20%");
+	t.asserteq(a.alignitems, Style->ALflowend, "align-items: flow-end");
+	b := st(p, "b");
+	t.asserteq(b.display, Style->Dinlinegridlanes, "display: inline grid-lanes");
+	t.asserteq(b.tolerance.kind, Style->Lnone, "flow-tolerance: infinite");
+	t.asserteq(b.lanesdir, 2 | 8, "grid-lanes-direction: column track-reverse");
+	c := st(p, "c");
+	t.asserteq(c.display, Style->Dinlinegridlanes, "display: inline-grid-lanes");
+	t.asserteq(c.lanesdir, 0, "grid-lanes-direction: row column is invalid, so normal");
+	t.asserteq(c.tolerance.kind, Style->Lnormal, "flow-tolerance initial: normal");
 }
 
 testPseudo(t: ref T)
 {
-	p := page("<style>#q::before { content: '<'; color: green } #q::after { content: none } #r::after { content: attr(x) }</style><p id=q>q<p id=r x=1>r");
+	p := page("<style>#q::before { content: '<'; color: green } #q::after { content: none } #r::after { content: attr(x) } #r::first-letter { font-size: 40px } #r:first-line { color: red }</style><p id=q>q<p id=r x=1>r");
+	r := p.d.find(1, Dom->Tp);
+	r = p.d.nodes[r].next;
+	t.assert(p.c.firstletter[r] != nil && p.c.firstletter[r].fontsize == 40.0, "::first-letter style computed without content");
+	t.assert(p.c.firstletter[p.d.find(1, Dom->Tp)] == nil, "no ::first-letter rule, no style");
 	q := p.d.find(1, Dom->Tp);
 	t.assert(p.c.before[q] != nil, "::before generated");
 	t.assertseq(col(p.c.before[q].color), "008000ff", "::before style");
@@ -351,7 +441,10 @@ testURLs(t: ref T)
 		("/g", "http://a/g"), ("//g", "http://g"), ("?y", "http://a/b/c/d;p?y"),
 		("g?y", "http://a/b/c/g?y"), ("#s", "http://a/b/c/d;p?q#s"), ("../g", "http://a/b/g"),
 		("../..", "http://a/"), ("../../g", "http://a/g"), ("https://x/y", "https://x/y"),
-		("data:image/png;base64,AA", "data:image/png;base64,AA")}; l != nil; l = tl l) {
+		("data:image/png;base64,AA", "data:image/png;base64,AA"),
+		(".", "http://a/b/c/"), ("..", "http://a/b/"), ("../../../g", "http://a/g"),
+		("g/./h/../i", "http://a/b/c/g/i"), ("/https://x/y", "http://a/https://x/y"),
+		("https://x/a/../b/./c#f", "https://x/b/c#f"), ("https://x/.well-known/y", "https://x/.well-known/y")}; l != nil; l = tl l) {
 		(r, want) := hd l;
 		t.assertseq(style->resolveurl(b, r), want, r);
 	}
@@ -391,6 +484,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Colors", testColors);
 	run("Media", testMedia);
 	run("Selectors", testSelectors);
+	run("Backgrounds", testBackgrounds);
+	run("GridLanes", testLanes);
 	run("Hints", testHints);
 	run("Pseudo", testPseudo);
 	run("Dump", testDump);

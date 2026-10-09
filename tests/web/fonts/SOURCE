@@ -10,3 +10,8 @@ FASubset.otf: Font Awesome 7 Free Solid (fa-solid-900, SIL Open Font
 Licence 1.1, https://fontawesome.com), cut to two icons, U+F1AB
 (language) and U+F002 (magnifying glass), with fontTools: an OpenType
 font with CFF outlines.  FASubset.woff2 is the same font as WOFF2.
+marks.ttf: made with fontTools (tools/bidi has no part in it): boxes for A, V and a
+combining dot above (U+0307), a GPOS mark anchor putting the dot on A at
+(300, 750) and a GPOS kern pair A V of -100, for web_fonts_test.
+liga.ttf: made with fontTools: f, i and the ligatures f+i (600 units) and
+f+f+i (1100), through GSUB liga, for web_fonts_test.

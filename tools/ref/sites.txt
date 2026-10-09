@@ -1,0 +1,15 @@
+# The live sites Charon's layout is checked on (tools/ref/compare.py
+# --sizes standard), as served by tools/ref/mirror.py on port 8780.
+http://127.0.0.1:8780/github.com/
+http://127.0.0.1:8780/www.bbc.com/news
+http://127.0.0.1:8780/en.wikipedia.org/wiki/Main_Page
+http://127.0.0.1:8780/www.theguardian.com/international
+http://127.0.0.1:8780/developer.mozilla.org/en-US/
+http://127.0.0.1:8780/www.mozilla.org/en-US/
+http://127.0.0.1:8780/www.nasa.gov/
+http://127.0.0.1:8780/docs.python.org/3/library/os.html
+http://127.0.0.1:8780/lwn.net/
+http://127.0.0.1:8780/www.debian.org/
+http://127.0.0.1:8780/th.wikipedia.org/wiki/%E0%B8%AB%E0%B8%99%E0%B9%89%E0%B8%B2%E0%B8%AB%E0%B8%A5%E0%B8%B1%E0%B8%81
+http://127.0.0.1:8780/pantip.com/
+http://127.0.0.1:8780/www.google.com/

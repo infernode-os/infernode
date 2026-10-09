@@ -450,66 +450,17 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, pub
 		addr = paddr;
 	}
 
-	fd: ref Sys->FD;
 	if(ishttps) {
 		err := loadtls();
 		if(err != nil)
 			return (nil, err);
-		c := dial->dial(addr, nil);
-		if(c == nil)
-			return (nil, sys->sprint("dial %s: %r", addr));
-		cfg := tls->defaultconfig();
-		cfg.servername = host;
-		(conn, terr) := tls->client(c.dfd, cfg);
-		if(terr != nil)
-			return (nil, "tls: " + terr);
-		# Use TLS conn's read/write directly
-		return dotlsrequest(conn, method, u, host, hdrs, body);
-	} else {
-		c := dial->dial(addr, nil);
-		if(c == nil)
-			return (nil, sys->sprint("dial %s: %r", addr));
-		fd = c.dfd;
 	}
-
-	return dofdrequest(fd, method, u, host, hdrs, body);
+	return linkrequest(method, u, host, addr, ishttps, hdrs, body);
 }
 
 publicaddr(host, port: string): (string, string)
 {
 	return publicnet->dialaddr(host, port);
-}
-
-# [private]
-dotlsrequest(conn: ref Conn, method: string, u: ref ParsedUrl, host: string,
-	hdrs: list of Header, body: array of byte): (ref Response, string)
-{
-	req := buildrequest(method, u, host, hdrs, body);
-	reqbytes := array of byte req;
-	if(conn.write(reqbytes, len reqbytes) != len reqbytes)
-		return (nil, "write failed");
-	if(body != nil && len body > 0) {
-		if(conn.write(body, len body) != len body)
-			return (nil, "write body failed");
-	}
-
-	return readtlsresponse(conn);
-}
-
-# [private]
-dofdrequest(fd: ref Sys->FD, method: string, u: ref ParsedUrl, host: string,
-	hdrs: list of Header, body: array of byte): (ref Response, string)
-{
-	req := buildrequest(method, u, host, hdrs, body);
-	reqbytes := array of byte req;
-	if(sys->write(fd, reqbytes, len reqbytes) != len reqbytes)
-		return (nil, "write failed");
-	if(body != nil && len body > 0) {
-		if(sys->write(fd, body, len body) != len body)
-			return (nil, "write body failed");
-	}
-
-	return readfdresponse(fd);
 }
 
 # [private]
@@ -524,7 +475,6 @@ buildrequest(method: string, u: ref ParsedUrl, host: string,
 
 	req := method + " " + path + " HTTP/1.1\r\n";
 	req += "Host: " + host + "\r\n";
-	req += "Connection: close\r\n";
 	ua := "Infernode/1.0";
 	for(h := hdrs; h != nil; h = tl h)
 		if(str->tolower((hd h).name) == "user-agent")
@@ -545,163 +495,293 @@ buildrequest(method: string, u: ref ParsedUrl, host: string,
 	return req;
 }
 
-# [private]
-# Read HTTP response from a TLS connection
-readtlsresponse(conn: ref Conn): (ref Response, string)
+# ---- connections ----
+#
+# A connection whose response had a known length is kept for the next
+# request to the same place (RFC 9112 §9.3, persistence): a page's
+# style sheets and images come from a few hosts, and a new connection
+# for each costs a TCP and a TLS handshake.  One request at a time on
+# each; a kept connection the server has since closed answers nothing,
+# and a GET is sent again on a new one.
+
+Link: adt {
+	key:	string;	# where it goes: the address, and the TLS server name
+	tls:	ref Conn;
+	fd:	ref Sys->FD;
+	buf:	array of byte;
+	p, n:	int;	# buf[p:n] read and not yet taken
+	idle:	int;	# sys->millisec() when it was put back
+	reused:	int;
+
+	read:	fn(l: self ref Link, a: array of byte): int;
+	write:	fn(l: self ref Link, a: array of byte): int;
+	getc:	fn(l: self ref Link): int;
+	close:	fn(l: self ref Link);
+};
+
+MAXIDLE: con 6;		# kept for each place, as many as fetch at once
+MAXPOOL: con 32;	# kept at all
+IDLEMS: con 30*1000;	# not reused after; servers close idle connections
+
+pool: list of ref Link;
+poollk: chan of int;
+
+Link.read(l: self ref Link, a: array of byte): int
 {
-	# Read headers
-	hbuf := array [32768] of byte;
-	hlen := 0;
-	headersdone := 0;
-	while(!headersdone && hlen < len hbuf) {
-		n := conn.read(hbuf[hlen:], 1);
-		if(n <= 0)
-			break;
-		hlen += n;
-		if(hlen >= 4 && hbuf[hlen-4] == byte '\r' && hbuf[hlen-3] == byte '\n'
-		   && hbuf[hlen-2] == byte '\r' && hbuf[hlen-1] == byte '\n')
-			headersdone = 1;
+	if(l.p < l.n) {
+		m := l.n - l.p;
+		if(m > len a)
+			m = len a;
+		a[0:] = l.buf[l.p:l.p+m];
+		l.p += m;
+		return m;
 	}
+	if(l.tls != nil)
+		return l.tls.read(a, len a);
+	return sys->read(l.fd, a, len a);
+}
 
-	if(!headersdone && hlen == 0)
-		return (nil, "empty response");
-
-	hdrstr := string hbuf[:hlen];
-	(resp, bodystart, err) := parseresponse(hdrstr);
-	if(err != nil)
-		return (nil, err);
-
-	# Read body
-	clen := resp.hdrval("Content-Length");
-	te := resp.hdrval("Transfer-Encoding");
-
-	if(te != nil && str->tolower(te) == "chunked") {
-		# Read chunked body via TLS
-		(bdata, berr) := readchunked_tls(conn);
-		if(berr != nil)
-			return (nil, berr);
-		resp.body = bdata;
-	} else if(clen != nil) {
-		nbytes := int clen;
-		if(nbytes > MAXBODY)
-			nbytes = MAXBODY;
-		if(nbytes > 0) {
-			resp.body = array [nbytes] of byte;
-			off := 0;
-			# Copy any body data already read in header buffer
-			if(bodystart < len hdrstr) {
-				extra := array of byte hdrstr[bodystart:];
-				ncopy := len extra;
-				if(ncopy > nbytes)
-					ncopy = nbytes;
-				for(ci := 0; ci < ncopy; ci++)
-					resp.body[ci] = extra[ci];
-				off = ncopy;
-			}
-			while(off < nbytes) {
-				n := conn.read(resp.body[off:], nbytes - off);
-				if(n <= 0)
-					break;
-				off += n;
-			}
-			if(off < nbytes)
-				resp.body = resp.body[:off];
-		}
-	} else {
-		# Read until close
-		chunks: list of array of byte;
-		total := 0;
-		rbuf := array [16384] of byte;
-		done := 0;
-		while(!done && total < MAXBODY) {
-			n := conn.read(rbuf, len rbuf);
-			if(n <= 0)
-				done = 1;
-			else {
-				chunk := array [n] of byte;
-				chunk[:] = rbuf[:n];
-				chunks = chunk :: chunks;
-				total += n;
-			}
-		}
-		resp.body = concatchunks(chunks, total);
+Link.getc(l: self ref Link): int
+{
+	if(l.p >= l.n) {
+		l.p = l.n = 0;
+		m: int;
+		if(l.tls != nil)
+			m = l.tls.read(l.buf, len l.buf);
+		else
+			m = sys->read(l.fd, l.buf, len l.buf);
+		if(m <= 0)
+			return -1;
+		l.n = m;
 	}
+	return int l.buf[l.p++];
+}
 
-	return (resp, nil);
+Link.write(l: self ref Link, a: array of byte): int
+{
+	if(len a == 0)
+		return 0;
+	if(l.tls != nil)
+		return l.tls.write(a, len a);
+	return sys->write(l.fd, a, len a);
+}
+
+Link.close(l: self ref Link)
+{
+	if(l.tls != nil)
+		l.tls.close();
+	l.tls = nil;
+	l.fd = nil;
+}
+
+lockpool()
+{
+	if(poollk == nil)
+		poollk = chan[1] of int;	# (init runs once, before any request)
+	poollk <-= 1;
+}
+
+# A kept connection to key, or nil.
+takelink(key: string): ref Link
+{
+	lockpool();
+	now := sys->millisec();
+	l: ref Link;
+	keep: list of ref Link;
+	for(pl := pool; pl != nil; pl = tl pl) {
+		k := hd pl;
+		if(now - k.idle > IDLEMS)
+			continue;	# dropped, and closed when collected
+		if(l == nil && k.key == key)
+			l = k;
+		else
+			keep = k :: keep;
+	}
+	pool = keep;
+	<-poollk;
+	return l;
+}
+
+putlink(l: ref Link)
+{
+	l.idle = sys->millisec();
+	lockpool();
+	n := 0;
+	t := 0;
+	for(pl := pool; pl != nil; pl = tl pl) {
+		t++;
+		if((hd pl).key == l.key)
+			n++;
+	}
+	if(n < MAXIDLE && t < MAXPOOL) {
+		pool = l :: pool;
+		l = nil;
+	}
+	<-poollk;
+	if(l != nil)
+		l.close();
+}
+
+newlink(key, addr, host: string, ishttps: int): (ref Link, string)
+{
+	c := dial->dial(addr, nil);
+	if(c == nil)
+		return (nil, sys->sprint("dial %s: %r", addr));
+	l := ref Link(key, nil, c.dfd, array[16384] of byte, 0, 0, 0, 0);
+	if(ishttps) {
+		cfg := tls->defaultconfig();
+		cfg.servername = host;
+		(conn, terr) := tls->client(c.dfd, cfg);
+		if(terr != nil)
+			return (nil, "tls: " + terr);
+		l.tls = conn;
+	}
+	return (l, nil);
 }
 
 # [private]
-# Read HTTP response from a plain FD
-readfdresponse(fd: ref Sys->FD): (ref Response, string)
+linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
+	hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	# Read headers
-	hbuf := array [32768] of byte;
-	hlen := 0;
-	headersdone := 0;
-	while(!headersdone && hlen < len hbuf) {
-		n := sys->read(fd, hbuf[hlen:], 1);
+	req := array of byte buildrequest(method, u, host, hdrs, body);
+	key := addr;
+	if(ishttps)
+		key = "tls!" + addr + "!" + host;
+	for(try := 0; ; try++) {
+		l: ref Link;
+		if(try == 0)
+			l = takelink(key);
+		if(l != nil)
+			l.reused = 1;
+		else {
+			err: string;
+			(l, err) = newlink(key, addr, host, ishttps);
+			if(l == nil)
+				return (nil, err);
+		}
+		again := l.reused && try == 0 && (method == "GET" || method == "HEAD");
+		if(l.write(req) != len req || body != nil && l.write(body) != len body) {
+			l.close();
+			if(again)
+				continue;
+			return (nil, "write failed");
+		}
+		(resp, keep, err) := readresponse(l, method);
+		if(resp == nil) {
+			l.close();
+			if(again && err == "empty response")
+				continue;	# it had been closed at the other end
+			return (nil, err);
+		}
+		if(keep)
+			putlink(l);
+		else
+			l.close();
+		return (resp, nil);
+	}
+}
+
+# [private]
+# The response to a request: its header, and its body as the header
+# frames it.  Whether the connection can carry another request after.
+readresponse(l: ref Link, method: string): (ref Response, int, string)
+{
+	resp: ref Response;
+	for(;;) {
+		(hdr, herr) := readheader(l);
+		if(herr != nil)
+			return (nil, 0, herr);
+		err: string;
+		(resp, nil, err) = parseresponse(hdr);
+		if(err != nil)
+			return (nil, 0, err);
+		if(resp.statuscode < 100 || resp.statuscode >= 200 || resp.statuscode == 101)
+			break;
+		# 1xx: an interim response; the real one follows
+	}
+	keep := 1;
+	conn := str->tolower(resp.hdrval("Connection"));
+	if(str->prefix("HTTP/1.0", resp.status))
+		keep = conn == "keep-alive";
+	else if(contains(conn, "close"))
+		keep = 0;
+	clen := resp.hdrval("Content-Length");
+	te := str->tolower(resp.hdrval("Transfer-Encoding"));
+	code := resp.statuscode;
+	if(method == "HEAD" || code == 204 || code == 304 || code < 200)
+		return (resp, keep, nil);
+	if(te != nil && contains(te, "chunked")) {
+		ok: int;
+		(resp.body, ok) = readchunked(l);
+		return (resp, keep && ok, nil);
+	}
+	if(clen != nil) {
+		nbytes := int clen;
+		if(nbytes > MAXBODY) {
+			nbytes = MAXBODY;
+			keep = 0;
+		}
+		if(nbytes <= 0)
+			return (resp, keep, nil);
+		resp.body = array[nbytes] of byte;
+		off := 0;
+		while(off < nbytes) {
+			n := l.read(resp.body[off:]);
+			if(n <= 0)
+				break;
+			off += n;
+		}
+		if(off < nbytes) {
+			resp.body = resp.body[:off];
+			keep = 0;
+		}
+		return (resp, keep, nil);
+	}
+	# the body runs to the end of the connection
+	chunks: list of array of byte;
+	total := 0;
+	rbuf := array[16384] of byte;
+	while(total < MAXBODY) {
+		n := l.read(rbuf);
 		if(n <= 0)
 			break;
-		hlen += n;
-		if(hlen >= 4 && hbuf[hlen-4] == byte '\r' && hbuf[hlen-3] == byte '\n'
-		   && hbuf[hlen-2] == byte '\r' && hbuf[hlen-1] == byte '\n')
-			headersdone = 1;
+		chunk := array[n] of byte;
+		chunk[0:] = rbuf[:n];
+		chunks = chunk :: chunks;
+		total += n;
 	}
+	resp.body = concatchunks(chunks, total);
+	return (resp, 0, nil);
+}
 
-	if(!headersdone && hlen == 0)
+# [private]
+# Up to and including the blank line that ends a header.
+readheader(l: ref Link): (string, string)
+{
+	hbuf := array[65536] of byte;
+	hlen := 0;
+	while(hlen < len hbuf) {
+		c := l.getc();
+		if(c < 0)
+			break;
+		hbuf[hlen++] = byte c;
+		if(hlen >= 4 && c == '\n' && hbuf[hlen-2] == byte '\r' && hbuf[hlen-3] == byte '\n' && hbuf[hlen-4] == byte '\r')
+			return (string hbuf[:hlen], nil);
+	}
+	if(hlen == 0)
 		return (nil, "empty response");
+	if(hlen == len hbuf)
+		return (nil, "response header too long");
+	return (string hbuf[:hlen], nil);	# as much as came, as before
+}
 
-	hdrstr := string hbuf[:hlen];
-	(resp, nil, err) := parseresponse(hdrstr);
-	if(err != nil)
-		return (nil, err);
-
-	# Read body
-	clen := resp.hdrval("Content-Length");
-	te := resp.hdrval("Transfer-Encoding");
-
-	if(te != nil && str->tolower(te) == "chunked") {
-		(bdata, berr) := readchunked_fd(fd);
-		if(berr != nil)
-			return (nil, berr);
-		resp.body = bdata;
-	} else if(clen != nil) {
-		nbytes := int clen;
-		if(nbytes > MAXBODY)
-			nbytes = MAXBODY;
-		if(nbytes > 0) {
-			resp.body = array [nbytes] of byte;
-			off := 0;
-			while(off < nbytes) {
-				n := sys->read(fd, resp.body[off:], nbytes - off);
-				if(n <= 0)
-					break;
-				off += n;
-			}
-			if(off < nbytes)
-				resp.body = resp.body[:off];
-		}
-	} else {
-		# Read until close
-		chunks: list of array of byte;
-		total := 0;
-		rbuf := array [16384] of byte;
-		done := 0;
-		while(!done && total < MAXBODY) {
-			n := sys->read(fd, rbuf, len rbuf);
-			if(n <= 0)
-				done = 1;
-			else {
-				chunk := array [n] of byte;
-				chunk[:] = rbuf[:n];
-				chunks = chunk :: chunks;
-				total += n;
-			}
-		}
-		resp.body = concatchunks(chunks, total);
-	}
-
-	return (resp, nil);
+# [private]
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
 }
 
 # [private]
@@ -767,101 +847,64 @@ splitheader(line: string): (string, string)
 }
 
 # [private]
-readchunked_tls(conn: ref Conn): (array of byte, string)
+# A chunked body (RFC 9112 §7.1), and whether it ended as it should:
+# the last chunk and the trailer section read, so that the connection
+# is at the next response.
+readchunked(l: ref Link): (array of byte, int)
 {
 	chunks: list of array of byte;
 	total := 0;
-	linebuf := array [64] of byte;
-
 	for(;;) {
-		# Read chunk size line
-		llen := 0;
-		while(llen < len linebuf) {
-			n := conn.read(linebuf[llen:], 1);
-			if(n <= 0)
-				break;
-			llen++;
-			if(llen >= 2 && linebuf[llen-2] == byte '\r' && linebuf[llen-1] == byte '\n')
-				break;
-		}
-		if(llen < 2)
-			break;
-		sizestr := string linebuf[:llen-2];
-		chunksize := hexval(sizestr);
+		line := readline(l);
+		if(line == nil)
+			return (concatchunks(chunks, total), 0);
+		chunksize := hexval(line);
 		if(chunksize <= 0)
 			break;
-		if(total + chunksize > MAXBODY)
+		trunc := 0;
+		if(total + chunksize > MAXBODY) {
 			chunksize = MAXBODY - total;
-
+			trunc = 1;
+		}
 		chunk := array [chunksize] of byte;
 		off := 0;
 		while(off < chunksize) {
-			n := conn.read(chunk[off:], chunksize - off);
+			n := l.read(chunk[off:]);
 			if(n <= 0)
 				break;
 			off += n;
 		}
-		if(off < chunksize)
-			chunk = chunk[:off];
-		chunks = chunk :: chunks;
+		chunks = chunk[:off] :: chunks;
 		total += off;
-
-		# Read trailing \r\n
-		conn.read(linebuf[:2], 2);
-
-		if(total >= MAXBODY)
+		if(off < chunksize || trunc)
+			return (concatchunks(chunks, total), 0);
+		readline(l);	# the CRLF after the data
+	}
+	# the trailer section, to its blank line
+	for(;;) {
+		line := readline(l);
+		if(line == nil)
+			return (concatchunks(chunks, total), 0);
+		if(line == "\r\n" || line == "\n")
 			break;
 	}
-
-	return (concatchunks(chunks, total), nil);
+	return (concatchunks(chunks, total), 1);
 }
 
 # [private]
-readchunked_fd(fd: ref Sys->FD): (array of byte, string)
+# A line, with its end; nil at the end of the connection.
+readline(l: ref Link): string
 {
-	chunks: list of array of byte;
-	total := 0;
-	linebuf := array [64] of byte;
-
-	for(;;) {
-		llen := 0;
-		while(llen < len linebuf) {
-			n := sys->read(fd, linebuf[llen:], 1);
-			if(n <= 0)
-				break;
-			llen++;
-			if(llen >= 2 && linebuf[llen-2] == byte '\r' && linebuf[llen-1] == byte '\n')
-				break;
-		}
-		if(llen < 2)
-			break;
-		sizestr := string linebuf[:llen-2];
-		chunksize := hexval(sizestr);
-		if(chunksize <= 0)
-			break;
-		if(total + chunksize > MAXBODY)
-			chunksize = MAXBODY - total;
-
-		chunk := array [chunksize] of byte;
-		off := 0;
-		while(off < chunksize) {
-			n := sys->read(fd, chunk[off:], chunksize - off);
-			if(n <= 0)
-				break;
-			off += n;
-		}
-		if(off < chunksize)
-			chunk = chunk[:off];
-		chunks = chunk :: chunks;
-		total += off;
-
-		sys->read(fd, linebuf[:2], 2);
-
-		if(total >= MAXBODY)
-			break;
+	s := "";
+	while(len s < 8192) {
+		c := l.getc();
+		if(c < 0)
+			return nil;
+		s[len s] = c;
+		if(c == '\n')
+			return s;
 	}
-
-	return (concatchunks(chunks, total), nil);
+	return s;
 }
 
 # [private]

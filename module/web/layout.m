@@ -20,17 +20,32 @@ Layout: module
 	PATH:	con "/dis/lib/web/layout.dis";
 
 	init:	fn(d: ref Draw->Display): string;
-	fontmod:	fn(): Fonts;
+	fontmod:	fn(): Fonts;	# the Fonts instance layout measures with, for @font-face
 	# What each <object>'s data turned out to be, told to build before
 	# it runs: (node, Oimage or Odoc, url).  An <object> not listed shows
 	# its contents instead (its fallback).
 	Oimage, Odoc: con 1+iota;
-	setobjects:	fn(objs: list of (int, int, string));	# the Fonts instance layout measures with, for @font-face
+	setobjects:	fn(objs: list of (int, int, string));
+	setenv:	fn(env: ref Style->Env);	# the viewport <picture>'s sources' media queries are matched against
 	# background and list-style images: what a style asks for, and the
 	# decoded images to paint, by absolute URL
 	bgurls:	fn(st: ref Style->St): list of string;
 	setbgimage:	fn(url: string, img: ref Draw->Image);
+	setbgsvg:	fn(url: string, data: array of byte);	# an SVG's source: drawn again at each size it is shown
 	clearbgimages:	fn();
+	# an SVG's root element resized to w by h; its intrinsic width and
+	# height (-1 when it has none) and ratio (0 when none) (SVG 2 §8.6)
+	svgresize:	fn(data: array of byte, w, h: int): array of byte;
+	svgintrinsic:	fn(data: array of byte): (int, int, real, real, real);	# width, height, ratio, percentage width, percentage height
+	# a replaced box's image's size in its content box, by object-fit
+	objectbox:	fn(b: ref Box): (int, int);
+	# src drawn at w by h, as a replaced element's image is (nearest
+	# neighbour); not kept
+	scaleimage:	fn(src: ref Draw->Image, w, h: int): ref Draw->Image;
+	# forget the scalings of src painting has kept: it is no longer shown
+	unscale:	fn(src: ref Draw->Image);
+	# whether shadows and filters are drawn (Page's effects setting)
+	seteffects:	fn(on: int);
 
 	# box kinds (the formatting a box establishes or takes part in)
 	Kblock, Kinline, Ktext, Kbr, Kreplaced, Kflex, Kgrid, Ktable, Krow, Kcell, Kmarker: con iota;
@@ -49,16 +64,51 @@ Layout: module
 		text:	string;		# Ktext, Kmarker
 		lines:	cyclic array of ref Line;	# a block container with inline content
 		iw, ih:	int;		# replaced: intrinsic size (0 if unknown)
+		svg:	int;		# replaced: the intrinsic size is an SVG root's (SVG 2 §8.6): iw, ih 0 where it has none, iratio its ratio (0 none), ipw, iph percentage dimensions (0 none)
+		iratio:	real;
+		ipw, iph:	real;
 		img:	ref Draw->Image;	# replaced: content, set by whoever loads url
 		url:	string;		# replaced: what to load (absolute)
 		parent:	cyclic ref Box;
 		pos:	cyclic list of ref Box;	# absolutely positioned boxes this one contains
 		hint:	int;		# replaced: text is a placeholder, drawn dimmed
+		imn, imx:	int;	# min- and max-content widths, cached during one layout
+		iex:	int;		# the horizontal edges they include
+		igen:	int;		# the layout they were measured in (0: none)
+		seq:	int;		# position in tree order once laid out, for painting
+		# a subgrid: the tracks, line names and gap of its parent's axis it spans, set by the parent each layout
+		subcw, subrh:	array of int;
+		subcnames, subrnames:	array of list of string;
+		subcgap, subrgap:	int;
+		doc:	ref Dom->Doc;	# the root box's document (nil elsewhere)
+		tb:	ref Tb;		# a table's collapsed borders, once laid out
+		clip:	int;		# content clipped to the border box (a cell crossing a collapsed column)
+		fl:	ref Style->St;	# ::first-line's style, if rules give the element one
+	};
+
+	# one border of a table's collapsed model: what won at a grid
+	# line segment (CSS 2.2 §17.6.2)
+	Bd: adt {
+		w:	int;
+		style:	int;
+		color:	int;
+		origin:	int;	# 0 cell, 1 row, 2 row group, 3 column, 4 column group, 5 table
+	};
+
+	# a table's collapsed borders: the grid lines' positions in its
+	# border box and the border at each segment of them
+	Tb: adt {
+		ncols, nrows:	int;
+		cols, rows:	array of int;	# ncols+1, nrows+1 line positions
+		v:	array of ref Bd;	# vertical segments: row r, line c at r*(ncols+1) + c
+		h:	array of ref Bd;	# horizontal segments: line r, column c at r*ncols + c
+		rtl:	int;		# the columns run right to left: logical column c is the (ncols-1-c)th from the left
 	};
 
 	Line: adt {
 		y, h, base:	int;	# relative to the containing box's border box
 		frags:	cyclic array of ref Frag;
+		fl:	ref Style->St;	# the ::first-line style that applies to it, if any
 	};
 
 	# fragment kinds
@@ -74,6 +124,9 @@ Layout: module
 		first, last:	int;	# Fspan: this is the box's first/last fragment
 		deco:	int;		# Ftext: text-decoration lines, as propagated
 		decocolor:	int;
+		level:	int;		# bidi embedding level (odd: right to left)
+		tls:	int;		# Ftext: the letter spacing after its last character, trimmed at a line's end
+		hang:	int;		# Ftext: hanging punctuation, 1 an opening mark at the first line's start, 2 a closing one at the last line's end
 	};
 
 	build:	fn(d: ref Dom->Doc, c: ref Style->Computed): ref Box;

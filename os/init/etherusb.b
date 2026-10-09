@@ -992,6 +992,7 @@ ifcup(first: int, ifcno: string): int
 	ipaddr = addr;
 	ipmask = mask;
 	sys->print("etherusb: %s mask %s on ipifc %s\n", addr, mask, ifcno);
+	writendb(addr, mask, gw);
 
 	if(gw != ""){
 		r := sys->open("/net/iproute", Sys->ORDWR);
@@ -1250,6 +1251,7 @@ Odmsgtype:	con 53;
 Odserverid:	con 54;
 Odparams:	con 55;
 Odntp:		con 42;		# NTP servers, in preference order
+Oddns:		con 6;		# DNS servers, in preference order
 
 #
 # A public time server, by address, because this machine has no
@@ -1326,8 +1328,9 @@ dhcpopts(p: array of byte, off: int, kind: int, reqaddr, srvid: array of byte): 
 		off += 4;
 	}
 
-	p[off++] = byte Odparams; p[off++] = byte 2;
+	p[off++] = byte Odparams; p[off++] = byte 4;
 	p[off++] = byte Odmask; p[off++] = byte Odrouter;
+	p[off++] = byte Oddns; p[off++] = byte Odntp;
 
 	p[off++] = byte Odend;
 	return off;
@@ -1364,6 +1367,43 @@ dhcpopt(p: array of byte, n, want: int): array of byte
 # Ask the network what this machine is called. Returns
 # (address, mask, gateway), all nil if nobody answered.
 #
+#
+# What the rest of the system reads: net/ndb, in the form ip/dhcp's
+# client writes (dhcpclient.b): a block keyed by the address, its name
+# servers and time server indented under it. Best effort: an address
+# and a route are the configuration, and a failure here is only a
+# machine that resolves no names.
+#
+dnsservers: list of string;
+
+writendb(addr, mask, gw: string)
+{
+	s := sys->sprint("ip=%s ipmask=%s", addr, mask);
+	if(gw != "")
+		s += sys->sprint(" ipgw=%s", gw);
+	s += "\n";
+	for(l := dnsservers; l != nil; l = tl l)
+		s += sys->sprint("\tdns=%s\n", hd l);
+	if(ntpserver != "")
+		s += sys->sprint("\tntp=%s\n", ntpserver);
+	fd := sys->open("/net/ndb", Sys->OWRITE|Sys->OTRUNC);
+	if(fd == nil)
+		fd = sys->open("/net/ndb", Sys->OWRITE);
+	b := array of byte s;
+	if(fd == nil || sys->write(fd, b, len b) != len b)
+		sys->print("etherusb: cannot write /net/ndb: %r\n");
+	else if(dnsservers != nil)
+		sys->print("etherusb: name servers %s\n", hd dnsservers);
+}
+
+revstr(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
 dhcp(): (string, string, string)
 {
 	c := sys->open("/net/udp/clone", Sys->ORDWR);
@@ -1472,6 +1512,17 @@ dhcp(): (string, string, string)
 			ntp = dotted(nt, 0);
 		else
 			ntp = gw;
+		#
+		# The name servers, for net/ndb: ndb/dns reads them there.
+		# Without them the machine can dial an address and nothing
+		# else, and a browser shows nothing for every page it is
+		# asked for.
+		#
+		dnsservers = nil;
+		dn := dhcpopt(ack, len ack, Oddns);
+		for(di := 0; dn != nil && di + 4 <= len dn; di += 4)
+			dnsservers = dotted(dn, di) :: dnsservers;
+		dnsservers = revstr(dnsservers);
 		sys->print("etherusb: DHCP gave %s mask %s\n", addr, mask);
 		ntpserver = ntp;
 		dhcpdone(rpid);

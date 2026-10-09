@@ -3,7 +3,10 @@
 #
 #	ctl	write: open <url> | back | forward | reload | stop |
 #		  follow <n> | click <node> | set <node> <value> |
-#		  submit <form> [<node>] | size <w>x<h> | width <w> | scroll <y>
+#		  submit <form> [<node>] | size <w>x<h> | width <w> | scroll <y> |
+#		  images on|click | fonts web|system | effects on|off (page(2)'s
+#		  settings) | loadimages (every image on this page) |
+#		  save (the settings, as the user's defaults)
 #	url	the current URL
 #	title	the document's title
 #	status	loading <url> | done | error <msg>
@@ -17,6 +20,7 @@
 #		  "error <msg>", "stopped", or "update" (a form changed),
 #		  from when it was opened; reads block
 #	dom/<n>/	tag attrs text style box children
+#	settings	the engine's settings, a line each, as ctl takes them
 #
 # A file's contents are taken when it is opened, so a reader sees one
 # page even if another loads while it reads.

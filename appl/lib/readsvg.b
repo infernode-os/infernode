@@ -364,6 +364,12 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 		parser.down();
 		render_children(parser, canvas, xform, style);
 		parser.up();
+	"svg" =>
+		# an svg inside: a viewport of its own at x, y, its viewBox
+		# fitted into it (SVG 2 §8.2, §8.7); sprite sheets are made of them
+		parser.down();
+		render_children(parser, canvas, matrix_multiply(xform, nested_viewport(attrs)), style);
+		parser.up();
 	"defs" =>
 		parser.down();
 		parse_defs(parser, canvas);
@@ -409,6 +415,57 @@ render_element(parser: ref Parser, canvas: ref Canvas, name: string, attrs: Attr
 		render_children(parser, canvas, xform, style);
 		parser.up();
 	}
+}
+
+# the transform into a nested svg's user space: to its x, y, then its
+# viewBox into width by height as preserveAspectRatio says
+nested_viewport(attrs: Attributes): ref Matrix
+{
+	x := px(attrs.get("x"), 0.0);
+	y := py(attrs.get("y"), 0.0);
+	w := px(attrs.get("width"), vbw);
+	h := py(attrs.get("height"), vbh);
+	vb := attrs.get("viewBox");
+	if(vb == nil)
+		vb = attrs.get("viewbox");
+	if(vb == nil)
+		return ref Matrix(1.0, 0.0, x, 0.0, 1.0, y);
+	parts := split_whitespace_comma(vb);
+	if(len parts < 4 || real parts[2] <= 0.0 || real parts[3] <= 0.0)
+		return ref Matrix(1.0, 0.0, x, 0.0, 1.0, y);
+	(vx, vy, vw, vh) := (real parts[0], real parts[1], real parts[2], real parts[3]);
+	sx := w / vw;
+	sy := h / vh;
+	align := "xMidYMid";
+	slice := 0;
+	if((par := attrs.get("preserveAspectRatio")) != nil) {
+		pp := split_whitespace_comma(par);
+		for(i := 0; i < len pp; i++)
+			case pp[i] {
+			"none" =>	align = "none";
+			"slice" =>	slice = 1;
+			"meet" =>	slice = 0;
+			* =>
+				if(len pp[i] >= 8 && pp[i][0] == 'x')
+					align = pp[i];
+			}
+	}
+	if(align == "none")
+		return ref Matrix(sx, 0.0, x - vx*sx, 0.0, sy, y - vy*sy);
+	sc := sx;
+	if(slice && sy > sc || !slice && sy < sc)
+		sc = sy;
+	ax := 0.5;
+	ay := 0.5;
+	case align[1:4] {
+	"Min" =>	ax = 0.0;
+	"Max" =>	ax = 1.0;
+	}
+	case align[5:8] {
+	"Min" =>	ay = 0.0;
+	"Max" =>	ay = 1.0;
+	}
+	return ref Matrix(sc, 0.0, x + (w - vw*sc)*ax - vx*sc, 0.0, sc, y + (h - vh*sc)*ay - vy*sc);
 }
 
 # Skip an element and its children

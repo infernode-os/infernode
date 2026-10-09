@@ -496,6 +496,8 @@ Window.settag1(w : self ref Window)
 	}
 	if(w.isdir)
 		new += " Get";
+	if(w.docweb)
+		new += " Back Fwd Reload";
 	l := len w.body.file.name;
 	if(l >= 2 && w.body.file.name[l-2: ] == ".b")
 		new += " Limbo";
@@ -1328,17 +1330,25 @@ Window.docrender(w: self ref Window): string
 # from the file's directory, the page's own colours, the part in view
 # painted as it scrolls. Links are followed with button 3.
 
+loadhtmldoc(): string
+{
+	if(htmldoc != nil)
+		return nil;
+	h := load Htmldoc Htmldoc->PATH;
+	if(h == nil)
+		return sprint("can't load %s: %r", Htmldoc->PATH);
+	if((err := h->init(display)) != nil)
+		return err;
+	htmldoc = h;
+	return nil;
+}
+
 htmlrender(w: ref Window): string
 {
-	if(htmldoc == nil){
-		htmldoc = load Htmldoc Htmldoc->PATH;
-		if(htmldoc == nil)
-			return sprint("can't load %s: %r", Htmldoc->PATH);
-		if((err := htmldoc->init(display)) != nil){
-			htmldoc = nil;
-			return err;
-		}
-	}
+	if(w.docweb)
+		return webresize(w);
+	if((lerr := loadhtmldoc()) != nil)
+		return lerr;
 	fr := w.body.frame.r;
 	if(fr.dx() <= 0 || fr.dy() <= 0)
 		return "window too small";
@@ -1417,9 +1427,10 @@ Window.docoff(w: self ref Window)
 	w.docb = nil;
 	w.body.org = org;
 	w.docview = 0;
-	if(w.dochtml && htmldoc != nil)
+	if(w.dochtml && !w.docweb && htmldoc != nil)
 		htmldoc->drop(w.id);
-	w.dochtml = 0;
+	if(!w.docweb)
+		w.dochtml = 0;
 	w.docpage = nil;
 	w.imagemode = 0;
 	w.rendermode = 0;
@@ -1441,6 +1452,166 @@ Window.docscroll(w: self ref Window, dy: int)
 		return;
 	w.imageoffset.y += dy;
 	w.drawimage();
+}
+
+#
+# A URL opened in Xenith is browsed: the window is a browser window,
+# its page a browser(2) session held by htmldoc under the window's id.
+# The window is named by the page's URL and its text is the page's
+# (for Look, search and selection; Render shows it), the page drawn
+# over it as Render draws an HTML file.  Links are followed in the
+# window, and Back, Fwd and Reload in its tag go through what it has
+# shown.  Loading happens in the background: the page's events come
+# back through casync (webwatch) to webevent.
+
+Window.browse(w: self ref Window, url: string): string
+{
+	if((err := loadhtmldoc()) != nil)
+		return err;
+	fr := w.body.frame.r;
+	if(fr.dx() <= 0 || fr.dy() <= 0)
+		return "window too small";
+	(c, berr) := htmldoc->browse(w.id, url, fr.dx(), fr.dy());
+	if(berr != nil)
+		return berr;
+	if(c != nil)
+		spawn webwatch(w.id, c);
+	w.docweb = 1;
+	w.dochtml = 1;
+	w.filemenu = FALSE;
+	if(!w.docview){
+		# until the first page arrives
+		draw(mainwin, fr, w.body.frame.cols[BACK], nil, Point(0, 0));
+		mainwin.text(fr.min.add(Point(10, 10)), w.body.frame.cols[TEXT], Point(0, 0), font, "Loading " + url);
+	}
+	return nil;
+}
+
+# The page's events, to the main loop, until htmldoc drops the page
+webwatch(winid: int, c: chan of string)
+{
+	for(;;){
+		e := <-c;
+		if(e == "gone")
+			return;
+		casync <-= ref AsyncMsg.WebEvent(winid, e);
+	}
+}
+
+Window.webevent(w: self ref Window, e: string)
+{
+	if(!w.docweb || htmldoc == nil)
+		return;
+	(verb, rest) := (e, "");
+	for(i := 0; i < len e; i++)
+		if(e[i] == ' '){
+			(verb, rest) = (e[0:i], e[i+1:]);
+			break;
+		}
+	case verb {
+	"done" =>
+		# the page's URL names the window and its text is the window's
+		u := htmldoc->url(w.id);
+		if(u != nil && u != w.body.file.name)
+			w.setname(u, len u);
+		t := htmldoc->text(w.id);
+		w.nomark = 1;
+		w.body.delete(0, w.body.file.buf.nc, TRUE);
+		w.body.insert(0, t, len t, TRUE, 0);
+		w.nomark = 0;
+		w.body.file.mod = FALSE;
+		w.dirty = FALSE;
+		w.imageoffset = Point(0, htmldoc->scroll(w.id));
+		if(w.rendermode || !w.docview)
+			w.webview();
+		w.settag();
+	"error" =>
+		warning(nil, sprint("%s: %s\n", w.body.file.name, rest));
+	}
+}
+
+# The page over the window's text
+Window.webview(w: self ref Window): string
+{
+	if(htmldoc == nil)
+		return "no page";
+	fr := w.body.frame.r;
+	htmldoc->resize(w.id, fr.dx(), fr.dy());
+
+	# no text cursor drawn over the document (docoff makes it again)
+	f := w.body.frame;
+	if(f.ticked)
+		framem->frtick(f, framem->frptofchar(f, f.p0), 0);
+	f.tick = nil;
+
+	w.docpage = nil;
+	w.bodyimage = docpage(w);
+	if(w.bodyimage == nil)
+		return sprint("no image: %r");
+	w.docheight = htmldoc->height(w.id);
+	w.doclines = nil;
+	w.docys = nil;
+	w.zoomedcache = nil;
+	w.imagemode = 1;
+	w.docview = 1;
+	w.rendermode = 1;
+	cols := w.body.frame.cols;
+	w.docwidth = fr.dx();
+	w.docbg = cols[BACK];
+	w.docfg = cols[TEXT];
+	w.docaccent = xenith->accentcol;
+	w.drawimage();
+	return nil;
+}
+
+# The window's width changed: the page laid out again
+webresize(w: ref Window): string
+{
+	fr := w.body.frame.r;
+	if(fr.dx() <= 0 || fr.dy() <= 0)
+		return "window too small";
+	htmldoc->resize(w.id, fr.dx(), fr.dy());
+	w.docheight = htmldoc->height(w.id);
+	w.docpage = nil;
+	return nil;
+}
+
+# A click at p on the screen: a link followed, a button pressed, a box
+# checked.  0 if nothing there takes one.
+Window.webclick(w: self ref Window, p: Point): int
+{
+	if(!w.docview || !w.docweb || htmldoc == nil)
+		return 0;
+	fr := w.body.frame.r;
+	if(!p.in(fr))
+		return 0;
+	(hit, err) := htmldoc->click(w.id, p.x - fr.min.x, p.y - fr.min.y + w.imageoffset.y);
+	if(err != nil)
+		warning(nil, sprint("%s: %s\n", w.body.file.name, err));
+	else if(hit)
+		w.drawimage();	# a box checked shows at once
+	return hit;
+}
+
+Window.weburl(w: self ref Window): string
+{
+	if(!w.docweb || htmldoc == nil)
+		return nil;
+	return htmldoc->url(w.id);
+}
+
+# Back, Fwd, Reload and Stop in a browser window's tag; Get is Reload
+Window.webcmd(w: self ref Window, cmd: string): string
+{
+	if(!w.docweb || htmldoc == nil)
+		return "not a web page";
+	case cmd {
+	"Back" =>	return htmldoc->back(w.id);
+	"Fwd" =>	return htmldoc->forward(w.id);
+	"Reload" or "Get" =>	return htmldoc->reload(w.id);
+	"Stop" =>	return htmldoc->stop(w.id);
+	}
+	return "unknown command " + cmd;
 }
 
 # The document from imageoffset.y down, in the body's frame, and the

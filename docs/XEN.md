@@ -138,6 +138,27 @@ ends it. `xen` starts the model service the way Lucifer's boot does
 server and the agent harness itself. See `man 4 veltrosrv` and
 [VELTRO.md](VELTRO.md).
 
+## Browsing
+
+Right-click (button 3) a URL (`https://`, `http://` or `file://`) and
+Xenith opens it in a browser window: the page drawn by Charon's engine
+over the window's text, which is the page's text (so Look, search and
+Snarf work on it). The window is named by the page's URL.
+
+| To | Do |
+|---|---|
+| follow a link, press a button, check a box | button 3 on it, or a button 1 click |
+| scroll | the wheel, the scroll bar, or drag with button 1 |
+| go back or forward | **Back**, **Fwd** in the tag |
+| reload | **Reload** or **Get** |
+| go to another URL | edit the name at the start of the tag, then **Get** |
+| see the page's text | **Render** (again for the page) |
+| keep the text | **Put /file** |
+
+Pages are fetched through webfs at `/mnt/web`, which Xenith starts if
+nothing is mounted there. Typing into a form's text fields is not done
+yet, and there is no JavaScript until the engine's script host lands.
+
 ## Plumbing
 
 Inside Xenith, plumbing works as in acme: button 3 (Cmd+click) on a file

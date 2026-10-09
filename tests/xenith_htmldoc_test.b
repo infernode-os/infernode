@@ -155,6 +155,94 @@ testWindows(t: ref T)
 	t.assert(contains(htmldoc->text(1), "Edited"), "and the other is not");
 }
 
+# The next event from c starting with what, others skipped; nil after
+# five seconds
+waitfor(c: chan of string, what: string): string
+{
+	tick := chan of int;
+	spawn timer(tick, 5000);
+	for(;;) alt {
+	e := <-c =>
+		if(len e >= len what && e[0:len what] == what)
+			return e;
+	<-tick =>
+		return nil;
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>	;
+	* =>	;
+	}
+}
+
+PAGE2: con "file://" + DIR + "page2.html#top";
+ev: chan of string;
+
+testBrowse(t: ref T)
+{
+	err: string;
+	(ev, err) = htmldoc->browse(3, URL, 400, 300);
+	t.assertnil(err, "browse");
+	if(ev == nil)
+		t.fatal("no event channel for a new page");
+	t.assert(waitfor(ev, "done") != nil, "the page loads");
+	t.assertseq(htmldoc->url(3), URL, "its URL");
+	t.assertseq(htmldoc->title(3), "Index", "its title");
+	t.assert(htmldoc->height(3) >= 150, "its height");
+	t.assert(contains(htmldoc->text(3), "Hello from the index."), "its text");
+}
+
+testFollow(t: ref T)
+{
+	(hit, err) := htmldoc->click(3, 300, 250);
+	t.asserteq(hit, 0, "nothing on the page there");
+	t.assertnil(err, "and no error");
+	(hit, err) = htmldoc->click(3, 10, 110);
+	t.asserteq(hit, 1, "a click on the link");
+	t.assertnil(err, "follows it");
+	t.assert(waitfor(ev, "done") != nil, "the next page loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "the link's page");
+	t.assertseq(htmldoc->title(3), "Page two", "its title");
+}
+
+testHistory(t: ref T)
+{
+	t.assertnil(htmldoc->back(3), "Back");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), URL, "Back is the first page");
+	t.assertnil(htmldoc->forward(3), "Fwd");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "Fwd is the second again");
+	t.assertnil(htmldoc->reload(3), "Reload");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "the same page");
+	t.assertseq(htmldoc->forward(3), "no next page", "Fwd at the end of the history");
+	(nil, err) := htmldoc->browse(3, URL, 400, 300);
+	t.assertnil(err, "browse again in the same window");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertnil(htmldoc->back(3), "and Back has where it was");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "the page before");
+}
+
+testControl(t: ref T)
+{
+	(c, err) := htmldoc->browse(4, "file://" + DIR + "form.html", 400, 300);
+	t.assertnil(err, "browse a form");
+	t.assert(c != nil && waitfor(c, "done") != nil, "it loads");
+	(hit, cerr) := htmldoc->click(4, 5, 5);
+	t.asserteq(hit, 1, "a click on the checkbox acts");
+	t.assertnil(cerr, "without error");
+	(hit, nil) = htmldoc->click(4, 10, 50);
+	t.asserteq(hit, 0, "a click on plain text does nothing");
+	htmldoc->drop(4);
+	t.assert(waitfor(c, "gone") != nil, "a dropped page's reader is told");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -185,6 +273,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Link", testLink);
 	run("Edited", testEdited);
 	run("Windows", testWindows);
+	run("Browse", testBrowse);
+	run("Follow", testFollow);
+	run("History", testHistory);
+	run("Control", testControl);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -746,8 +746,13 @@ mousetask()
 						t.commit(TRUE);
 					if(mouse.buttons & 1){
 						if(w != nil && w.imagemode && t.what == Body){
-							# Drag to pan in image mode body
+							# Drag to pan in image mode body; in a
+							# browser window a click that does not
+							# drag clicks the page
+							p0 := mouse.xy;
 							imagedrag(w);
+							if(w.docweb && mouse.xy.eq(p0))
+								w.webclick(p0);
 						} else {
 							t.select(0);
 							if(w != nil)
@@ -770,9 +775,15 @@ mousetask()
 						}
 					}else if(mouse.buttons & 4){
 						if(w != nil && w.imagemode && t.what == Body){
-							# a link in an HTML document is followed;
-							# otherwise no look in image mode body
-							if((u := w.doclink(mouse.xy)) != nil){
+							# a link in an HTML document is followed
+							# (in a browser window, a click on the
+							# page); otherwise no look in image mode
+							if(w.docweb){
+								p0 := mouse.xy;
+								while(mouse.buttons)
+									frgetmouse();
+								w.webclick(p0);
+							}else if((u := w.doclink(mouse.xy)) != nil){
 								while(mouse.buttons)
 									frgetmouse();
 								look->openlink(u);
@@ -889,6 +900,14 @@ mousetask()
 							row.qlock.unlock();
 							spawn rendertask(msg.winid, msg.path, msg.data);
 						}
+					WebEvent =>
+						# A browser window's page loaded, failed or stopped
+						row.qlock.lock();
+						w := look->lookid(msg.winid, 0);
+						if(w != nil && w.col != nil)
+							w.webevent(msg.event);
+						bflush();
+						row.qlock.unlock();
 					ContentDecoded =>
 						# Apply rendered content to window
 						row.qlock.lock();

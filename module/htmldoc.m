@@ -4,7 +4,9 @@
 # A window's HTML is a page held here under the window's id, so
 # Xenith need not include the engine's interfaces: Render on an HTML
 # file sets its text (unsaved edits too) as a page and paints the part
-# in view; Render opening a URL takes the whole page as an image.
+# in view; a URL opened in Xenith is browsed, the window a browser
+# window: links followed in it, back and forward through what it has
+# shown.
 #
 Htmldoc: module
 {
@@ -28,4 +30,32 @@ Htmldoc: module
 
 	# Forget id's page.
 	drop:	fn(id: int);
+
+	# Browse: id's page becomes the one at url, fetched in the
+	# background (http: and https: through webfs at /mnt/web, which is
+	# started if nothing is mounted there), keeping what id showed
+	# before in its history.  The first call for id returns a channel
+	# of the page's events, "loading url", "done url", "error message"
+	# and "stopped", which the caller reads until it drops the page;
+	# later calls return nil.
+	browse:	fn(id: int, url: string, width, height: int): (chan of string, string);
+
+	# What is at x, y (page coordinates) clicked: a link followed, a
+	# button pressed, a box checked.  0 if nothing there takes a click.
+	click:	fn(id: int, x, y: int): (int, string);
+
+	back:	fn(id: int): string;
+	forward:	fn(id: int): string;
+	reload:	fn(id: int): string;
+	stop:	fn(id: int): string;
+
+	# id's page: its URL, its title, its height laid out, and where
+	# its last navigation asks the view to be (a #fragment's y).
+	url:	fn(id: int): string;
+	title:	fn(id: int): string;
+	height:	fn(id: int): int;
+	scroll:	fn(id: int): int;
+
+	# Lay id's page out again, width wide.
+	resize:	fn(id: int, width, height: int);
 };

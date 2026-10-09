@@ -10,6 +10,72 @@ what bit last time.
 PR #754 was merged on 2026-10-02 with the first session's work; this
 branch carries everything after it and has no pull request yet.
 
+## Live-site session, part three: Thai, filters, gradients, images (2026-10-09)
+
+css-images is now in the WPT checkout (`git sparse-checkout add
+/css/css-images` in `~/wpt`, and in `tmp/wptdirs`): it passed 129 of
+407 when added and 338 now.  The whole run is 10,691 of 13,049
+(baseline `tmp/wpt-r112.txt`); without css-images the old set went
+10,335 -> 10,353.  No regression stands except four
+`gradient-longer-hue-lch-00[3467]`, which passed only because test and
+reference were wrong alike: their reference mixes a midpoint with
+`color-mix()`, whose result Charon keeps as 8-bit sRGB, clipped, so the
+two halves of the gradient bend differently from one long one.
+
+- **Thai lines break between words.**  `appl/lib/web/wordbreak.b` is
+  ICU's ThaiBreakEngine (longest match, three words of lookahead, a
+  non-word joined to the word before, the elision and repetition marks),
+  over ICU's word list `lib/web/thaidict` (Unicode License V3,
+  `thaidict.LICENSE`, in NOTICE).  It agrees with `Intl.Segmenter` on all
+  3,958 Thai runs of the Thai Wikipedia article on Thailand.
+  `word-break: manual` turns it off.  Thai Wikipedia 24.2% -> 10.5%.
+- **filter** (blur and the colour functions; not drop-shadow or url),
+  painted in the box's layer; a wide blur is done at a fraction of the
+  size.  isolation, mix-blend-mode (drawn as normal), clip-path (not
+  clipped), will-change, filter and paint/layout containment make
+  stacking contexts; one in flow is painted whole and once (the parent
+  painted a filtered box's background unfiltered too).
+- **Gradients** are drawn a pixel at a time from a table of the stops
+  (within 1/255 of Chromium, seven times faster than nested ellipses):
+  radial shape, size and position; conic and the repeating kinds;
+  negative stop places (they were taken as unset); calc() places,
+  infinities included; hints; corner directions at right angles to the
+  other diagonal; `in <space> [<method> hue]` (sRGB, linear, XYZ,
+  Lab/LCH, OKLab/OKLCH, HSL, HWB; oklab when a stop is a Color 4 colour).
+  `color-mix()` mixes in its space (`style->spacemix`).
+- **Images**: object-fit and object-position are drawn (they were parsed
+  and ignored), SVG images rendered at the fitted size; EXIF orientation
+  (JPEG APP1, PNG eXIf before IDAT) turns images upright, and
+  `image-orientation: none` keeps them as stored (Pic.raw, and layout's
+  bgimages under a "\0raw " key); `image-set()` picks its 1x choice, or
+  none.
+- Fonts: a variable font's opsz follows the font size (MDN's Inter:
+  17.7% -> 9.5%).  Text: overflow-wrap does not break nowrap text
+  (GitHub's "Pricin/g").  Borders: a rounded border of one colour with
+  unequal widths keeps its curves.  Flex: align-content shares are
+  exact, each line's place rounded.  Values: sibling-index(),
+  sibling-count(); angles in a calc() in hsl() and the like.
+
+| Page | layout diff, was -> now |
+|---|---|
+| github.com | 18.2% -> 7.5% |
+| mozilla.org | 15.6% -> 8.2% |
+| developer.mozilla.org | 17.7% -> 9.5% |
+| nasa.gov | 22.4% -> 14.4% (the rest is mostly the scrollbar gutter below) |
+| debian.org | 11.4% -> 6.7% |
+| th.wikipedia.org main page | 24.2% -> 10.5% |
+| google.com (Thai) | 10.5% -> 7.3% |
+
+The reference rig is unfair to pages whose root has `overflow-y:
+scroll` (NASA, MDN): headless Chromium reserves a 15px gutter even with
+`--hide-scrollbars`, so its viewport is 1265px; Charon's window scrolls
+outside the page and should not copy that.  The reference also failed
+once to load NASA's hero image (60% diff that run): rerun before
+believing a jump.
+
+minipc's ZeroTier address dropped mid-session; `minipc-lan`
+(192.168.1.148:2222) reached it, with `rsync -e "ssh -p 2222"`.
+
 ## Live-site session, part two: the window, loading, and the pages (2026-10-08, later)
 
 Everything before this had been measured as static pictures; the window

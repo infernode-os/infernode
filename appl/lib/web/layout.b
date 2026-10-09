@@ -13931,7 +13931,7 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	for(ci := 0; ci < k; ci++)
 		if((cols[ci] & 255) != 255)
 			translucent = 1;
-	if(translucent) {
+	if(translucent && lin) {
 		layer := display.newimage(cr, Draw->RGBA32, 0, Draw->Black);
 		mask = display.newimage(cr, Draw->GREY8, 0, Draw->Black);
 		if(layer != nil && mask != nil)
@@ -13970,27 +13970,8 @@ paintgradient(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 			p.close();
 			gradband(dst, mask, p, c);
 		}
-	} else {
-		# ellipses from the last stop in: beyond it, its colour
-		tmax := 1.0;
-		if(pos[k-1] > tmax)
-			tmax = pos[k-1];
-		steps := int (maxf(grx, gry) * tmax);
-		if(steps > 256)
-			steps = 256;
-		if(steps < 1)
-			steps = 1;
-		p := Path.new();
-		p.moveto(real r.min.x, real r.min.y).lineto(real r.max.x, real r.min.y).lineto(real r.max.x, real r.max.y).lineto(real r.min.x, real r.max.y).close();
-		gradband(dst, mask, p, cols[k-1]);
-		if(grx > 0.0 && gry > 0.0)
-			for(s := steps; s > 0; s--) {
-				t := tmax * real s / real steps;
-				p = Path.new();
-				p.ellipse(gcx, gcy, grx*t, gry*t);
-				gradband(dst, mask, p, gradcolor(cols, pos, t));
-			}
-	}
+	} else	# each pixel its colour, from its distance along the ray
+		radialpixels(dst, cr, gcx, gcy, grx, gry, cols, pos);
 	if(mask != nil) {
 		out.draw(cr, dst, mask, cr.min);
 		dst = out;
@@ -14218,6 +14199,64 @@ calcterm(c: ref Calc): real
 	}
 	c.ok = 0;
 	return 0.0;
+}
+
+# A radial gradient over cr: each pixel's colour from how far out it
+# is, in rays of the ellipse at (cx, cy) with radii (rx, ry), through a
+# table of the stops' colours, premultiplied
+radialpixels(dst: ref Image, cr: Rect, cx, cy, rx, ry: real, cols: array of int, pos: array of real)
+{
+	w := cr.dx();
+	h := cr.dy();
+	img := display.newimage(cr, Draw->RGBA32, 0, Draw->Transparent);
+	if(img == nil)
+		return;
+	tmax := 1.0;
+	if(pos[len pos - 1] > tmax)
+		tmax = pos[len pos - 1];
+	N := 1024;
+	lut := array[4*(N+1)] of byte;
+	for(i := 0; i <= N; i++) {
+		c := gradcolor(cols, pos, tmax * real i / real N);
+		al := c & 255;
+		lut[4*i] = byte al;
+		lut[4*i+1] = byte (((c >> 8) & 255) * al / 255);
+		lut[4*i+2] = byte (((c >> 16) & 255) * al / 255);
+		lut[4*i+3] = byte (((c >> 24) & 255) * al / 255);
+	}
+	buf := array[w*h*4] of byte;
+	if(rx <= 0.0 || ry <= 0.0) {
+		# degenerate: the last stop's colour everywhere
+		for(k := 0; k < len buf; k += 4)
+			buf[k:] = lut[4*N:4*N+4];
+	} else {
+		sx := real N / (rx * tmax);
+		sy := real N / (ry * tmax);
+		k := 0;
+		NN := real (N*N);
+		for(y := 0; y < h; y++) {
+			dy := (real (cr.min.y + y) + 0.5 - cy) * sy;
+			dy2 := dy*dy;
+			for(x := 0; x < w; x++) {
+				dx := (real (cr.min.x + x) + 0.5 - cx) * sx;
+				d2 := dx*dx + dy2;
+				j := N;
+				if(d2 < NN) {
+					j = int math->sqrt(d2);
+					if(j > N)
+						j = N;
+				}
+				j *= 4;
+				buf[k] = lut[j];
+				buf[k+1] = lut[j+1];
+				buf[k+2] = lut[j+2];
+				buf[k+3] = lut[j+3];
+				k += 4;
+			}
+		}
+	}
+	img.writepixels(cr, buf);
+	dst.draw(cr, img, nil, cr.min);
 }
 
 # one band of a gradient: c, or with a mask c opaque and its alpha into

@@ -118,5 +118,6 @@ Windowm : module {
 		webcmd : fn(w : self ref Window, cmd : string) : string;
 		weburl : fn(w : self ref Window) : string;
 		webkey : fn(w : self ref Window, r : int);
+		webposted : fn(w : self ref Window) : string;
 	};
 };

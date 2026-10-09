@@ -22,6 +22,8 @@ include "web/browser.m";
 	browser: Browser;
 	Session: import browser;
 
+include "web/charonfs.m";
+
 include "htmldoc.m";
 
 Command: module
@@ -33,7 +35,11 @@ Held: adt {
 	id:	int;
 	s:	ref Session;
 	ev:	chan of string;	# a browsed page's events, nil for one set
+	fs:	Charonfs;	# a browsed page's files, posted
+	path:	string;	# where: #sxenith/<id>
 };
+
+display: ref Display;
 pages: list of ref Held;
 inited := 0;
 
@@ -48,6 +54,7 @@ init(d: ref Display): string
 		return sys->sprint("cannot load %s: %r", Browser->PATH);
 	if((err := browser->init(d)) != nil)
 		return err;
+	display = d;
 	inited = 1;
 	return nil;
 }
@@ -59,7 +66,7 @@ set(id: int, data: array of byte, url: string, width, height: int): (int, string
 	s := find(id);
 	if(s == nil) {
 		s = Session.new(width, height);
-		pages = ref Held(id, s, nil) :: pages;
+		pages = ref Held(id, s, nil, nil, nil) :: pages;
 	} else if(s.width != width || s.height != height)
 		s.resize(width, height);
 	if((err := s.show(data, "text/html", url)) != nil)
@@ -98,6 +105,8 @@ drop(id: int)
 		if(p.id != id)
 			l = p :: l;
 		else if(p.ev != nil){
+			if(p.fs != nil)
+				p.fs->unpost();
 			# whoever reads the page's events stops
 			p.s.unlisten(p.ev);
 			p.s.stop();
@@ -131,7 +140,9 @@ browse(id: int, url: string, width, height: int): (chan of string, string)
 	if(s == nil) {
 		s = Session.new(width, height);
 		c = s.listen();
-		pages = ref Held(id, s, c) :: pages;
+		h := ref Held(id, s, c, nil, nil);
+		pages = h :: pages;
+		postpage(h);
 	} else if(s.width != width || s.height != height)
 		s.resize(width, height);
 	s.open(url);
@@ -297,4 +308,34 @@ submit(id: int, form: int): string
 	if(s == nil)
 		return "no page";
 	return s.submit(form, 0);
+}
+
+# ---- the page as files ----
+#
+# A browsed page is served as Charon's is (charonfs: url, title, text,
+# links, forms, ctl, dom/, ...), by a charonfs of its own, posted as
+# #sxenith/<id> so that a process in another name space (a script, an
+# agent granted it) can mount it.  Xenith's window file web names it.
+
+postpage(h: ref Held)
+{
+	fs := load Charonfs Charonfs->PATH;
+	if(fs == nil || fs->init() != nil || fs->serve(browser, h.s, display, nil) != nil)
+		return;
+	# two Xenith in one emu number their windows alike
+	name := string h.id;
+	for(i := 1; i < 32 && fs->postas("xenith", name) != nil; i++)
+		name = sys->sprint("%d.%d", h.id, i);
+	if(i == 32)
+		return;
+	h.fs = fs;
+	h.path = "#sxenith/" + name;
+}
+
+posted(id: int): string
+{
+	for(l := pages; l != nil; l = tl l)
+		if((hd l).id == id)
+			return (hd l).path;
+	return nil;
 }

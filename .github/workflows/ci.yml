@@ -450,6 +450,14 @@ jobs:
         chmod +x tests/host/nhgetl_test.sh
         ROOT=. bash tests/host/nhgetl_test.sh
 
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
+
     - name: Run JIT correctness tests
       run: |
         echo "Running JIT correctness tests (-c1)..."
@@ -906,6 +914,14 @@ jobs:
         # suite's non-gating run hid it.
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |
@@ -1507,6 +1523,14 @@ jobs:
         # JIT's only macOS hardware.
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+
+    - name: Run ML-DSA decompose test
+      run: |
+        # Decompose sees values derived from the signing key, so it must
+        # not divide (a hardware divide's time depends on its operands;
+        # cf. CVE-2026-22705). Whether a compiler emits one is per
+        # architecture, hence on every runner. Host C, no emulator.
+        ROOT=. bash tests/host/mldsa_decompose_test.sh
 
     - name: Run wallet and secstore integration tests
       run: |

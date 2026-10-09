@@ -14402,19 +14402,28 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 	cr := Rect((r.min.x + b.bl + b.pl, r.min.y + b.bt + b.pt), (r.max.x - b.br - b.pr, r.max.y - b.bb - b.pb));
 	if(b.img != nil) {
 		img := b.img;
-		if(img.r.dx() != cr.dx() || img.r.dy() != cr.dy())
-			img = scale(img, cr.dx(), cr.dy());
+		# object-fit: the image's size in the content box, centred
+		# there and cut off at its edges (Images 3 §5.5)
+		(dw, dh) := objectsize(b.st.objectfit, img.r.dx(), img.r.dy(), cr.dx(), cr.dy());
+		dr := Rect((cr.min.x + (cr.dx() - dw)/2, cr.min.y + (cr.dy() - dh)/2), (0, 0));
+		dr.max = dr.min.add(Point(dw, dh));
+		if(img.r.dx() != dw || img.r.dy() != dh)
+			img = scale(img, dw, dh);
 		if(img == nil)
 			return;
+		(vis, ok) := cr.clip(dr);
+		if(!ok || !rectok(vis))
+			return;
+		sp := img.r.min.add(vis.min.sub(dr.min));
 		if(hasradius(b)) {
 			# clipped to the content box's curve: the corners' radii
 			# less the border and padding (Backgrounds 3 §5.3)
 			(rtl, rtr, rbr, rbl) := radii(b);
 			path := rrect(cr, innerradius(rtl, b.bl + b.pl, b.bt + b.pt), innerradius(rtr, b.br + b.pr, b.bt + b.pt),
 				innerradius(rbr, b.br + b.pr, b.bb + b.pb), innerradius(rbl, b.bl + b.pl, b.bb + b.pb));
-			roundeddraw(dst, cr, img, img.r.min, path);
+			roundeddraw(dst, vis, img, sp, path);
 		} else
-			dst.draw(cr, img, nil, img.r.min);
+			dst.draw(vis, img, nil, sp);
 		return;
 	}
 	if(checkable(b)) {
@@ -14439,6 +14448,25 @@ paintreplaced(dst: ref Image, b: ref Box, r: Rect)
 			dst.clipr = oc;
 		}
 	}
+}
+
+# an image of iw×ih in a cw×ch box, by object-fit: 0 fill, 1 contain,
+# 2 cover, 3 none, 4 scale-down
+objectsize(fit, iw, ih, cw, ch: int): (int, int)
+{
+	if(fit == 0 || iw <= 0 || ih <= 0)
+		return (cw, ch);
+	if(fit == 3 || fit == 4 && iw <= cw && ih <= ch)
+		return (iw, ih);
+	sx := real cw / real iw;
+	sy := real ch / real ih;
+	sc := sx;
+	if(fit == 2) {
+		if(sy > sc)
+			sc = sy;
+	} else if(sy < sc)
+		sc = sy;
+	return (nz1(int (real iw * sc)), nz1(int (real ih * sc)));
 }
 
 # Nearest-neighbour scaling, for images drawn at other than their

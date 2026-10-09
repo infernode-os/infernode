@@ -404,6 +404,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `xenith_frame_test.b` | Xenith's frame (text layout and drawing) against a simulated screen: insert, delete, select, wrap, tabs, overflow, random edits; the suite is `xenith_framesuite.b` |
 | `sdl3_test.b` | SDL3 GUI backend |
 | `secp256k1_test.b` | secp256k1 curve, ECDSA, recovery |
+| `tests/host/mldsa_decompose_test.sh` | ML-DSA Decompose against FIPS 204 Algorithm 36 on every input, and no divide instruction in it (it sees secret-derived values; cf. CVE-2026-22705) |
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
 | `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
 | `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |

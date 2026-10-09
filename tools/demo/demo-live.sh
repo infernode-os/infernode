@@ -13,7 +13,7 @@
 # sets it), sized in seconds, not bytes: 480x270 at 10 fps is about 117 MB
 # a feed, but 1280x720 at 25 fps would be 2 GB, more than the Dis heap.
 set -u
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="$ROOT/emu/MacOSX/o.emu"
 VDEC="$ROOT/tools/vdec/target/release/vdec"
 

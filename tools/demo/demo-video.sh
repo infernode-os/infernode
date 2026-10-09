@@ -22,7 +22,7 @@
 #   ../tools/vdec/target/release/vdec clipB.mp4 --y4m clipB.y4m --quiet
 #   ../tools/vdec/target/release/vdec clipC.mp4 --y4m clipC.y4m --quiet
 set -u
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="$ROOT/emu/MacOSX/o.emu"
 VDEC="$ROOT/tools/vdec/target/release/vdec"
 MEDIA="$ROOT/video-demo-media"

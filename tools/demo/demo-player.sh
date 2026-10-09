@@ -9,7 +9,7 @@
 #
 # Media: video-demo-media/clipC.y4m (see demo-video.sh header to regenerate).
 set -u
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EMU="$ROOT/emu/MacOSX/o.emu"
 MEDIA="$ROOT/video-demo-media"
 

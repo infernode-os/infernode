@@ -13,7 +13,7 @@ If you're new to the project:
 2. Read the [Design Principles](docs/DESIGN-PRINCIPLES.md) — how design works here,
    and why (this is the one document that will save you the most time)
 3. Browse [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a system overview
-4. Try the [Interactive Tour](RUN_TOUR.md) to explore features hands-on
+4. Try the [Interactive Tour](docs/TOUR.md) to explore features hands-on
 5. Look at issues labeled **good first issue** for approachable tasks
 
 ## Design Principles

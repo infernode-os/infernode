@@ -17,7 +17,7 @@
 #     mount {vid9p -c vdec rtsp://camera/stream --y4m -} /mnt/video
 #     mount {vid9p -c vdec udp://127.0.0.1:5005 --y4m -} /mnt/videob
 #     wm/matrix /lib/matrix/compositions/video-live
-# (demo-live.sh is that, self-contained, with two simulated feeds)
+# (tools/demo/demo-live.sh is that, self-contained, with two simulated feeds)
 
 layout hsplit 50 50
 left  vsplit 85 15

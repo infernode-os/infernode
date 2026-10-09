@@ -28,7 +28,7 @@ From the infernode directory, start the emulator headless:
 ```
 
 `-c1` enables the JIT; `-r$PWD` uses the working tree as the Inferno® root. See
-[QUICKSTART.md](QUICKSTART.md#running-for-development) for the full launch matrix.
+[QUICKSTART.md](../QUICKSTART.md#running-for-development) for the full launch matrix.
 
 Once inside Inferno, at the `;` prompt:
 

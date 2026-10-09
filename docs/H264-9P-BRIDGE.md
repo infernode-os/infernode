@@ -232,7 +232,7 @@ spike's limitations.)
 | 3b — render `/mnt/video` via mpeg path (`vidplay9p` + Matrix `video-pane`/`video-ctl`) | INFR-268 | ✅ done (player + live wall as crystallisations) |
 | 4 — Rust-native 9P server | INFR-267 | to do |
 | 5 — kernel fold-in (ABI TBD) | INFR-269 | blocked |
-| 6 — live RTSP ingest | INFR-271 | ◑ URL/RTSP core + `vid9p -c` live spawn landed; UDP MPEG-TS validated end-to-end (demo-live.sh); a real `rtsp://` source still unexercised |
+| 6 — live RTSP ingest | INFR-271 | ◑ URL/RTSP core + `vid9p -c` live spawn landed; UDP MPEG-TS validated end-to-end (tools/demo/demo-live.sh); a real `rtsp://` source still unexercised |
 | chore — FFmpeg 7 / version-flexible pin | INFR-270 | to do |
 
 `◑` = partially landed. INFR-265's hardware decode is structurally complete

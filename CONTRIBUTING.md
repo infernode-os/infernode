@@ -346,7 +346,7 @@ conventions — is [docs/INFERNO-SHELL.md](docs/INFERNO-SHELL.md).
 
 By contributing, you agree that your contributions will be licensed under the
 same terms as the project. InferNode uses a dual-license scheme — see
-[LICENCE](LICENCE) for details. The kernel and libraries are under permissive
+[LICENSE](LICENSE) for details. The kernel and libraries are under permissive
 terms (Lucent Public License / MIT-style); the VM library and applications are
 LGPL/GPL.
 

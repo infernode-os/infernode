@@ -253,7 +253,26 @@ openlink(url : string)
 		if(m.send() >= 0)
 			return;
 	}
+	# nothing takes it (a standalone Xenith has no browser to plumb
+	# to): a web page is browsed in Xenith
+	if(isurl(url)){
+		openurl(url);
+		return;
+	}
 	warning(nil, sys->sprint("nothing to open %s with\n", url));
+}
+
+# A browser window on url (cleanname would fold its //)
+openurl(url : string)
+{
+	e : Expand;
+	e.q0 = e.q1 = 0;
+	e.ar = nil;
+	e.name = url;
+	e.bname = url;
+	e.jump = TRUE;
+	e.a0 = e.a1 = 0;
+	openfile(nil, e);
 }
 
 ishtmlname(s : string) : int
@@ -383,7 +402,7 @@ isurl(s : string) : int
 {
 	if(len s >= 8 && s[0:8] == "https://")
 		return TRUE;
-	if(len s >= 7 && s[0:7] == "http://")
+	if(len s >= 7 && (s[0:7] == "http://" || s[0:7] == "file://"))
 		return TRUE;
 	return FALSE;
 }
@@ -860,11 +879,10 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		t = w.body;
 		w.setname(e.name, len e.name);
 
-		# Check if this is a URL — route through content pipeline
-		# (asyncio contenttask fetches via webclient, then webrender
-		# sets HTML with Charon's engine, as image + extracted text)
+		# A URL is browsed: the window a browser window (Window.browse)
 		if(isurl(e.bname)){
-			err := w.loadcontent(e.bname);
+			# a browser window
+			err := w.browse(e.bname);
 			if(err != nil)
 				warning(nil, sprint("can't load URL %s: %s\n", e.bname, err));
 		}

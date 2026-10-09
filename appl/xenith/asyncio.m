@@ -46,6 +46,9 @@ Asyncio: module {
 				path: string;   # File path
 				data: array of byte;  # Raw file bytes
 				err: string;    # nil on success
+		WebEvent =>
+				winid: int;     # Window ID of a browser window
+				event: string;  # its page's event (htmldoc.m: browse)
 		ContentDecoded =>
 				winid: int;     # Window ID
 				path: string;   # File path (for display in tag)

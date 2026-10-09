@@ -71,10 +71,11 @@ Exectab : adt {
 	flag2 : int;
 };
 
-F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME : con iota;
+F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB : con iota;
 
 exectab := array[] of {
 	Exectab ( "Alphabet",	F_ALPHABET,	FALSE,	XXX,		XXX		),
+	Exectab ( "Back",		F_WEB,		FALSE,	0,		XXX		),
 	Exectab ( "Cut",		F_CUT,		TRUE,	TRUE,	TRUE	),
 	Exectab ( "Del",			F_DEL,		FALSE,	FALSE,	XXX		),
 	Exectab ( "Delcol",		F_DELCOL,	FALSE,	XXX,		XXX		),
@@ -83,6 +84,7 @@ exectab := array[] of {
 	Exectab ( "Edit",		F_EDIT,		FALSE,	XXX,		XXX		),
 	Exectab ( "Exit",		F_EXITX,		FALSE,	XXX,		XXX		),
 	Exectab ( "Font",		F_FONTX,		FALSE,	XXX,		XXX		),
+	Exectab ( "Fwd",		F_WEB,		FALSE,	1,		XXX		),
 	Exectab ( "Get",			F_GET,		FALSE,	TRUE,	XXX		),
 	Exectab ( "ID",			F_ID,		FALSE,	XXX,		XXX		),
 	Exectab ( "Incl",		F_INCL,		FALSE,	XXX,		XXX		),
@@ -100,9 +102,11 @@ exectab := array[] of {
 	Exectab ( "Putall",		F_PUTALL,	FALSE,	XXX,		XXX		),
 	Exectab ( "Render",		F_RENDER,	FALSE,	XXX,		XXX		),
 	Exectab ( "Redo",		F_UNDO,		FALSE,	FALSE,	XXX		),
+	Exectab ( "Reload",		F_WEB,		FALSE,	2,		XXX		),
 	Exectab ( "Send",		F_SEND,		TRUE,	XXX,		XXX		),
 	Exectab ( "Snarf",		F_CUT,		FALSE,	TRUE,	FALSE	),
 	Exectab ( "Sort",		F_SORT,		FALSE,	XXX,		XXX		),
+	Exectab ( "Stop",		F_WEB,		FALSE,	3,		XXX		),
 	Exectab ( "Tab",		F_TAB,		FALSE,	XXX,		XXX		),
 	Exectab ( "Theme",		F_THEME,		FALSE,	XXX,		XXX		),
 	Exectab ( "Undo",		F_UNDO,		FALSE,	TRUE,	XXX		),
@@ -142,6 +146,7 @@ runfun(fun : int, et, t, argt : ref Text, flag1, flag2 : int, arg : string, narg
 		F_SORT		=> sort(et);
 		F_TAB		=> tab(et, argt, arg, narg);
 		F_ZEROX		=> zerox(et, t);
+		F_WEB		=> webx(et, flag1);
 		*			=> error("bad case in runfun()");
 	}
 }	
@@ -521,6 +526,29 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	if(flag1)
 		if(et==nil || et.w==nil)
 			return;
+	# In a browser window Get goes to the URL given, or named in the
+	# tag, or reloads the page there.
+	if(et.w.docweb){
+		w = et.w;
+		u := "";
+		if(narg > 0)
+			u = arg[0:narg];
+		else{
+			(nil, r, n) = getarg(argt, FALSE, TRUE);
+			if(r != nil)
+				u = r[0:n];
+		}
+		if(u == nil)
+			u = w.body.file.name;
+		err : string;
+		if(u == nil || u == w.weburl())
+			err = w.webcmd("Reload");
+		else
+			err = w.browse(u);
+		if(err != nil)
+			warning(nil, sprint("Get: %s\n", err));
+		return;
+	}
 	# Clear render mode before reloading file
 	if(et.w.rendermode != 0)
 		renderoff(et.w);
@@ -709,6 +737,11 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 		return;
 	w = et.w;
 	f := w.body.file;
+	# a web page is written only to a file named for it
+	if(w.docweb && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
+		warning(nil, sprint("%s is a web page: Put /file writes its text\n", f.name));
+		return;
+	}
 
 	name = getname(w.body, argt, arg, narg, TRUE);
 	if(name == nil){
@@ -955,6 +988,18 @@ putall()
 	}
 }
 
+# Back, Fwd, Reload and Stop: a browser window's (Window.browse)
+webx(et : ref Text, which : int)
+{
+	if(et==nil || et.w==nil)
+		return;
+	cmd := array[] of {"Back", "Fwd", "Reload", "Stop"};
+	if(which < 0 || which >= len cmd)
+		return;
+	if((err := et.w.webcmd(cmd[which])) != nil)
+		warning(nil, sprint("%s: %s\n", cmd[which], err));
+}
+
 renderx(et : ref Text, nil : ref Text)
 {
 	if(et==nil || et.w==nil)
@@ -968,6 +1013,14 @@ renderx(et : ref Text, nil : ref Text)
 
 renderon(w : ref Window)
 {
+	# a browser window's page, over its text again
+	if(w.docweb){
+		if((err := w.webview()) != nil)
+			warning(nil, sprint("Render: %s\n", err));
+		w.settag();
+		return;
+	}
+
 	# Markdown and HTML are set as a document over their text
 	# (Window.docrender): HTML by Charon's engine
 	if(ismarkdown(w.body.file.name) || ishtml(w.body.file.name)){

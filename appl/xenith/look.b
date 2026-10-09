@@ -196,6 +196,12 @@ plumblook(m : ref Msg)
 		return;
 	e.ar = nil;
 	e.name = string m.data;
+	# a URL plumbed to Xenith (a user's rule can send them here) is
+	# browsed; cleanname would fold its //
+	if(isurl(e.name)){
+		openurl(e.name);
+		return;
+	}
 	if(e.name[0] != '/' && m.dir != nil)
 		e.name = m.dir + "/" + e.name;
 	(e.name, nil) = cleanname(e.name, len e.name);

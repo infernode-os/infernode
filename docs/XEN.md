@@ -148,6 +148,9 @@ Snarf work on it). The window is named by the page's URL.
 | To | Do |
 |---|---|
 | follow a link, press a button, check a box | button 3 on it, or a button 1 click |
+| fill in a form | click a field (a ring shows it has the keyboard) and type; Backspace, ^U to empty it, **Tab** to the next field, **Esc** to leave it |
+| choose in a select | click it, then Up and Down, or a letter; a click again takes the next option |
+| submit a form | Return in one of its fields, or click its submit button |
 | scroll | the wheel, the scroll bar, or drag with button 1 |
 | go back or forward | **Back**, **Fwd** in the tag |
 | reload | **Reload** or **Get** |
@@ -155,16 +158,60 @@ Snarf work on it). The window is named by the page's URL.
 | see the page's text | **Render** (again for the page) |
 | keep the text | **Put /file** |
 
+**The page as files.** A browser window's page is served as Charon's is
+(`man 1 charon`): `url`, `title`, `text`, `links`, `forms`, `ctl` and the
+DOM, one directory per node under `dom/`. It is posted as
+`#sxenith/<id>`, which the window's `web` file names (empty for a window
+that is not browsing), so a script, or an agent granted it, can read the
+page and work it:
+
+```sh
+mount -A `{cat /mnt/xenith/7/web} /n/page
+grep ' q ' /n/page/forms               # form node kind name value
+echo set 31 plan9 > /n/page/ctl
+echo submit 1 > /n/page/ctl            # the window follows
+```
+
+What is done through the files shows in the window, and the posted file
+goes when the window closes.
+
 Pages are fetched through webfs at `/mnt/web`, which Xenith starts if
-nothing is mounted there. Typing into a form's text fields is not done
-yet, and there is no JavaScript until the engine's script host lands.
+nothing is mounted there. A password is drawn masked. There is no
+JavaScript until the engine's script host lands.
 
 ## Plumbing
 
 Inside Xenith, plumbing works as in acme: button 3 (Cmd+click) on a file
 name, `name:42`, a directory or `ls(1)` opens it; `plumb` run from a tag
-does the same. `xen` starts a plumber for this, with the rules in
-`lib/xen/plumbing`. sam does not plumb.
+does the same. `xen` starts a plumber for this (`lib/sh/plumbrules`):
+your own rules first, then the defaults in `lib/xen/plumbing`. sam does
+not plumb.
+
+**Your rules.** The plumber reads `/usr/inferno/lib/plumbing` (kept in
+`~/.infernode/usr/inferno/lib/plumbing`; a user with a home of their own
+has `/usr/<name>/lib/plumbing`) before the defaults, and the first rule
+that fires wins, so a rule there overrides a default and anything it
+does not take goes on to them. The file starts as a commented template;
+`plumbing.inferno` beside it is the rule set Inferno shipped, to copy
+from. After editing, load the rules into the running plumber:
+
+```sh
+/lib/sh/plumbrules load /lib/xen/plumbing      # standalone Xenith
+/lib/sh/plumbrules load /lib/lucifer/plumbing  # the desktop
+```
+
+A rule that does not parse is reported and changes nothing: `load`
+keeps the rules the plumber had, and at boot the defaults are used
+alone. The defaults send web pages to Charon on the desktop and leave
+them to Xenith standalone; a rule such as
+
+```
+kind is text
+data matches 'https?://[^ ]+'
+plumb to edit
+```
+
+sends them to Xenith on the desktop too.
 
 **From the host, with plan9port.** A running Xenith also listens on a
 `xenith` port of plan9port's plumber, so `plumb file` in a host terminal

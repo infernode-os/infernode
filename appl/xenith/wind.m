@@ -63,6 +63,7 @@ Windowm : module {
 		docys : array of int;	# and its top in the document
 		dochtml : int;	# the document is HTML, set by Charon's engine (htmldoc)
 		docweb : int;	# and browsed: a URL's page, the window a browser window
+		webfield : int;	# the form field that has the keyboard (its node), or 0
 		docheight : int;	# the document's height
 		docpage : ref Draw->Image;	# an HTML document's part in view
 		utflastqid : int;
@@ -116,5 +117,7 @@ Windowm : module {
 		webclick : fn(w : self ref Window, p : Draw->Point) : int;
 		webcmd : fn(w : self ref Window, cmd : string) : string;
 		weburl : fn(w : self ref Window) : string;
+		webkey : fn(w : self ref Window, r : int);
+		webposted : fn(w : self ref Window) : string;
 	};
 };

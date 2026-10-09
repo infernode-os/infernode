@@ -31,7 +31,7 @@ Smsg0 : import Dat;
 TRUE, FALSE, XXX, BUFSIZE, MAXRPC : import Dat;
 EM_NORMAL, EM_RAW, EM_MASK : import Dat;
 Qdir, Qcons, Qlabel, Qindex, Qeditout : import Dat;
-QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel, QWerrors, QWxdata : import Dat;
+QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel, QWerrors, QWxdata, QWweb : import Dat;
 seq, cxfidfree, ccons, Lock, Ref, Range, Mntdir, ConsMsg, Astring : import dat;
 error, warning, max, min, stralloc, strfree, strncmp : import utils;
 address : import regx;
@@ -474,6 +474,12 @@ Xfid.read(x : self ref Xfid)
 		else
 			sbuf = defaultcolorstr();
 		str = 1;
+	QWweb =>
+		# a browser window's page, posted as files (charonfs)
+		str = 1;
+		sbuf = w.webposted();
+		if(sbuf != nil)
+			sbuf += "\n";
 	QWimage =>
 		str = 1;
 		if(w.imagemode == 0 || w.bodyimage == nil)

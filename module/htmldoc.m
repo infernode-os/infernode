@@ -12,6 +12,18 @@ Htmldoc: module
 {
 	PATH:	con "/dis/xenith/render/htmldoc.dis";
 
+	# A form control on a browsed page (browser(2)'s Field, with its box)
+	Field: adt {
+		node:	int;
+		form:	int;	# 1.. in document order; 0 for one in no form
+		kind:	string;	# text, password, checkbox, radio, submit, select, textarea, ...
+		name:	string;
+		value:	string;
+		checked:	int;
+		options:	list of (string, string, int);	# select: (value, label, selected)
+		box:	Draw->Rect;	# page coordinates
+	};
+
 	init:	fn(d: ref Draw->Display): string;
 
 	# Set id's page to data, as the document at url (relative links,
@@ -58,4 +70,19 @@ Htmldoc: module
 
 	# Lay id's page out again, width wide.
 	resize:	fn(id: int, width, height: int);
+
+	# id's page's form controls, in document order.
+	fields:	fn(id: int): array of ref Field;
+
+	# A control's value set (a select's: an option's value), the page
+	# laid out again with it.
+	setfield:	fn(id: int, node: int, value: string): string;
+
+	# A form submitted, as its submit button would (the page loads in
+	# the background: an event follows).
+	submit:	fn(id: int, form: int): string;
+
+	# Where a browsed page is posted as files (charonfs, as Charon
+	# serves /mnt/charon): #sxenith/<id>, or nil.
+	posted:	fn(id: int): string;
 };

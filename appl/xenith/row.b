@@ -330,7 +330,10 @@ Row.typex(row : self ref Row, r : int, p : Point) : ref Text
 			t.typex(r, 0);
 		else{
 			w.lock('K');
-			w.typex(t, r);
+			if(t.what == Textm->Body && w.docweb && w.webfield != 0)
+				w.webkey(r);	# a form field on the page has the keyboard
+			else
+				w.typex(t, r);
 # TAG If we typed in the tag, might need to make it
 # bigger to show text.  \n causes tag to expand.
 			if(t.what == Tag){

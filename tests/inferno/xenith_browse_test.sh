@@ -4,7 +4,12 @@
 # the page's URL, its text the page's, the page drawn over it, Back Fwd
 # Reload in its tag.  Get goes to the URL named in the tag (the tag is
 # the address bar); Back and Fwd go through what the window has shown;
-# Render shows the page's text and the page again.  The pages are
+# Render shows the page's text and the page again; a form's field
+# clicked takes the keyboard, and Return submits it (the click and the
+# keys injected through #m/pointer and #c/keyboard).  A window's page is
+# served as files, as Charon's is: its web file names where it is
+# posted, and a form filled in and submitted there shows in the window.
+# The pages are
 # file: URLs (tests/xenith/html), so no network is needed.
 #
 # Prerequisites:
@@ -155,6 +160,111 @@ if {! ~ $#img 0} {
 	pass 'and Render again the page'
 } {
 	fail 'Render did not bring the page back'
+}
+
+# A form: a click in its field (which fills the page) gives it the
+# keyboard, typing fills it in, Return submits it
+SEARCH=file:///tests/xenith/html/search.html
+id=`{cat $XENITH/new/ctl}
+id=${index 1 $id}
+echo -n $SEARCH > $XENITH/$id/body
+n=`{echo -n $SEARCH | wc -c}
+echo 'ML0 '^$n > $XENITH/$id/event
+echo clean > $XENITH/$id/ctl
+echo delete > $XENITH/$id/ctl
+f=()
+for i in 1 2 3 4 5 {
+	if {~ $#f 0} {
+		f=`{winof $SEARCH}
+		sleep 1
+	}
+}
+if {~ $#f 0} {
+	fail 'the form page did not open'
+} {
+	echo growfull > $XENITH/$f/ctl
+	sleep 1
+	echo -n 'm400 400 1' > '#m/pointer'
+	echo -n 'm400 400 0' > '#m/pointer'
+	sleep 1
+	echo -n 'plan9' > '#c/keyboard'
+	sleep 1
+	echo > '#c/keyboard'
+	if {waitbody $f 'The results page'} {
+		pass 'a form field typed into and submitted with Return'
+	} {
+		fail 'the form was not submitted'
+	}
+	r=`{winof 'file:///tests/xenith/html/result.html?q=plan9'}
+	if {~ $r $f} {
+		pass 'with what was typed: result.html?q=plan9'
+	} {
+		fail 'the result window:' `{grep result $XENITH/index}
+	}
+}
+
+# The page as files: posted where the window's web file says
+id=`{cat $XENITH/new/ctl}
+id=${index 1 $id}
+web=`{cat $XENITH/$id/web}
+if {~ $#web 0} {
+	pass 'a window that is not browsing has no page files'
+} {
+	fail 'a text window names page files:' $web
+}
+echo -n $SEARCH > $XENITH/$id/body
+n=`{echo -n $SEARCH | wc -c}
+echo 'ML0 '^$n > $XENITH/$id/event
+echo clean > $XENITH/$id/ctl
+echo delete > $XENITH/$id/ctl
+g=()
+for i in 1 2 3 4 5 {
+	if {~ $#g 0} {
+		g=`{winof $SEARCH}
+		sleep 1
+	}
+}
+web=`{cat $XENITH/$g/web}
+if {~ $web '#sxenith/'^$g} {
+	pass 'a browser window''s page is posted:' $web
+} {
+	fail 'the web file:' $web
+}
+mkdir -p /tmp/xenith_browse_page
+if {mount -A $web /tmp/xenith_browse_page} {
+	u=`{cat /tmp/xenith_browse_page/url}
+	if {~ $u $SEARCH} {
+		pass 'mounted, its url is the window''s page'
+	} {
+		fail 'url:' $u
+	}
+	# forms: form node kind name value
+	f=`{grep ' q ' /tmp/xenith_browse_page/forms}
+	node=${index 2 $f}
+	echo set $node files > /tmp/xenith_browse_page/ctl
+	echo submit 1 > /tmp/xenith_browse_page/ctl
+	if {waitbody $g 'The results page'} {
+		r=`{winof 'file:///tests/xenith/html/result.html?q=files'}
+		if {~ $r $g} {
+			pass 'a form filled in and submitted through ctl shows in the window'
+		} {
+			fail 'the window after the form:' `{grep result $XENITH/index}
+		}
+	} {
+		fail 'the form submitted through ctl did not reach the window'
+	}
+	unmount /tmp/xenith_browse_page
+} {
+	fail 'cannot mount' $web
+}
+# (a window the user opened is closed as the user would: a 9P client
+# may delete only windows it made)
+execute $g Delete
+sleep 1
+if {ftest -e $web} {
+	fail 'the page is still posted after its window closed'
+} {
+	pass 'and taken away when the window closes'
 }
 
 # Over HTTP, through webfs (which Xenith starts): the same page, served

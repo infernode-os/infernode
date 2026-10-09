@@ -11,7 +11,7 @@
 
 **64-bit Inferno® OS for embedded systems, servers, and AI agents.**
 
-InferNode is a modern Inferno® distribution with JIT compilation on AMD64 (14×) and ARM64 (9×), namespace-isolated AI agents (Veltro), an optional SDL3 GUI (Lucia + Xenith), and a complete Plan 9-inspired environment — all in under 30 MB of RAM.
+InferNode is a modern Inferno® distribution with JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, namespace-isolated AI agents (Veltro), an optional SDL3 GUI (Lucia + Xenith), and a complete Plan 9-inspired environment — all in under 30 MB of RAM.
 
 ## Quick Start
 
@@ -85,7 +85,7 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 ## Highlights
 
 - **Lightweight** — 15–30 MB RAM, 2-second startup, ~10 MB on disk.
-- **JIT compiled** — native code generation on AMD64 and ARM64; interpreter fallback everywhere.
+- **JIT compiled** — native code generation on AMD64, ARM64 and RISC-V; interpreter fallback everywhere.
 - **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 39 tool modules, LLM integration via 9P, and formally verified containment.
 - **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
 - **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucifer) or by agents through `/mnt/matrix/ctl`.
@@ -164,7 +164,7 @@ InferNode is MIT-licensed and free to use. [Sponsorship](https://github.com/spon
 
 ## About
 
-InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64 and ARM64, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
+InferNode extends the MIT-licensed Inferno® OS with JIT compilers for AMD64, ARM64 and RISC-V, the Veltro AI agent system with formally verified namespace isolation, a cryptocurrency wallet with the x402 payment protocol, quantum-safe cryptography, a Go-to-Dis compiler, and an optional SDL3 GUI (Lucia + Xenith). It targets embedded systems, servers, and AI agent applications where a lightweight footprint and capability-based security matter.
 
 ## Acknowledgements
 

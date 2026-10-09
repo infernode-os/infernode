@@ -170,7 +170,7 @@ The standard developer launch is `emu` invoked directly from a terminal — same
 
 stdout/stderr stream to the terminal, Ctrl-C exits, no signing/Gatekeeper/Translocation in the loop. `/lib/lucifer/boot.sh` is the canonical boot orchestration and is the same script the production macOS `.app` launcher invokes. See [QUICKSTART.md](QUICKSTART.md#running-for-development) for the full table and flag reference.
 
-The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` is currently untracked and authored ad-hoc — treat it as the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
+The `.app` bundle path (`./build-dev-bundle.sh` then `open …`) is reserved for testing packaging itself, not for code iteration. `build-dev-bundle.sh` (and `build-dev-bundle.ps1` on Windows) is the local equivalent of `.github/workflows/release.yml` minus codesign/notarize/strip.
 
 To open a file in an editor for the user, run `plumb <file>` (opens it in their running Xenith, starting one if needed), falling back to `tools/xen <file>` (Xenith alone, full-window) if `plumb` fails; `tools/xen -s <file>` for sam. Both return at once; leaving the editor halts that instance. See [docs/XEN.md](docs/XEN.md).
 

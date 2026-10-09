@@ -332,11 +332,15 @@ memfs(maxsz : int, tc : chan of ref Tmsg, srv : ref Styxserver, sync: chan of in
 			srv.reply(ref Rmsg.Stat(tm.tag, fileinfo(mf)));
 		Remove =>
 			(err, c, mf) := fidtomf(srv, qhash, tm.fid);
+			# a remove clunks the fid even when it fails: the fid of a
+			# file someone else removed first was kept here, and the
+			# kernel, which counts it clunked, got "fid in use" on reuse
+			if (c != nil)
+				srv.chanfree(c);
 			if (err != nil) {
 				srv.reply(ref Rmsg.Error(tm.tag, err));
 				continue;
 			}
-			srv.chanfree(c);
 			parent := mf.parent;
 			if (!modeok(OWRITE, parent.perm, c.uname, parent.owner))
 				err = Styxlib->Eperm;

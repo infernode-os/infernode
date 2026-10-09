@@ -148,6 +148,9 @@ Snarf work on it). The window is named by the page's URL.
 | To | Do |
 |---|---|
 | follow a link, press a button, check a box | button 3 on it, or a button 1 click |
+| fill in a form | click a field (a ring shows it has the keyboard) and type; Backspace, ^U to empty it, **Tab** to the next field, **Esc** to leave it |
+| choose in a select | click it, then Up and Down, or a letter; a click again takes the next option |
+| submit a form | Return in one of its fields, or click its submit button |
 | scroll | the wheel, the scroll bar, or drag with button 1 |
 | go back or forward | **Back**, **Fwd** in the tag |
 | reload | **Reload** or **Get** |
@@ -156,8 +159,8 @@ Snarf work on it). The window is named by the page's URL.
 | keep the text | **Put /file** |
 
 Pages are fetched through webfs at `/mnt/web`, which Xenith starts if
-nothing is mounted there. Typing into a form's text fields is not done
-yet, and there is no JavaScript until the engine's script host lands.
+nothing is mounted there. A password is drawn masked. There is no
+JavaScript until the engine's script host lands.
 
 ## Plumbing
 

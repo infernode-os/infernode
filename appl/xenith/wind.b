@@ -21,6 +21,7 @@ asyncio : Asyncio;
 include "rlayout.m";
 	rlayout : Rlayout;
 include "htmldoc.m";
+include "keyboard.m";
 	htmldoc : Htmldoc;
 
 framem : Framem;
@@ -1510,6 +1511,7 @@ Window.webevent(w: self ref Window, e: string)
 		}
 	case verb {
 	"done" =>
+		w.webfield = 0;
 		# the page's URL names the window and its text is the window's
 		u := htmldoc->url(w.id);
 		if(u != nil && u != w.body.file.name)
@@ -1585,12 +1587,228 @@ Window.webclick(w: self ref Window, p: Point): int
 	fr := w.body.frame.r;
 	if(!p.in(fr))
 		return 0;
-	(hit, err) := htmldoc->click(w.id, p.x - fr.min.x, p.y - fr.min.y + w.imageoffset.y);
+	pp := Point(p.x - fr.min.x, p.y - fr.min.y + w.imageoffset.y);
+
+	# a field typed into takes the keyboard; a select clicked again
+	# takes its next option
+	if((f := webfieldat(w, pp)) != nil){
+		if(f.kind == "select" && w.webfield == f.node)
+			webselect(w, f, 1);
+		w.webfield = f.node;
+		w.drawimage();
+		return 1;
+	}
+	if(w.webfield != 0){
+		w.webfield = 0;
+		w.drawimage();
+	}
+	(hit, err) := htmldoc->click(w.id, pp.x, pp.y);
 	if(err != nil)
 		warning(nil, sprint("%s: %s\n", w.body.file.name, err));
 	else if(hit)
 		w.drawimage();	# a box checked shows at once
 	return hit;
+}
+
+# ---- form fields ----
+#
+# A click on a field typed into (text, password, a textarea, ...) or a
+# select gives it the keyboard, shown by a ring around it; the window's
+# keys then go to it (Row.typex): text keys and Backspace edit it, ^U
+# empties it, Return submits its form (a newline in a textarea), Tab
+# goes to the next such field, Esc lets the keyboard go.  In a select,
+# Up and Down choose the option before and after, a letter the next
+# whose label starts with it, and a click the next.  Each change is the
+# page's (htmldoc->setfield), laid out again with it.
+
+typedinto(kind: string): int
+{
+	case kind {
+	"" or "text" or "password" or "search" or "email" or "url" or "tel" or "number" or "textarea" or "select" =>
+		return 1;
+	}
+	return 0;
+}
+
+# The field typed into whose box holds p (page coordinates)
+webfieldat(w: ref Window, p: Point): ref Htmldoc->Field
+{
+	f := htmldoc->fields(w.id);
+	for(i := 0; i < len f; i++)
+		if(typedinto(f[i].kind) && p.in(f[i].box))
+			return f[i];
+	return nil;
+}
+
+webfocused(w: ref Window): ref Htmldoc->Field
+{
+	f := htmldoc->fields(w.id);
+	for(i := 0; i < len f; i++)
+		if(f[i].node == w.webfield)
+			return f[i];
+	return nil;
+}
+
+# A ring around the field with the keyboard
+webring(w: ref Window, fr: Rect, oy: int)
+{
+	f := webfocused(w);
+	if(f == nil)
+		return;
+	r := f.box.addpt(Point(fr.min.x, fr.min.y - oy)).inset(-2);
+	col := xenith->accentcol;
+	if(col == nil)
+		col = w.body.frame.cols[TEXT];
+	oc := mainwin.clipr;
+	mainwin.clipr = fr;
+	mainwin.border(r, 2, col, Point(0, 0));
+	mainwin.clipr = oc;
+}
+
+# A select's option by, or the next whose label starts with c
+webselect(w: ref Window, f: ref Htmldoc->Field, by: int)
+{
+	n := len f.options;
+	if(n == 0)
+		return;
+	opts := array[n] of (string, string, int);
+	cur := 0;
+	i := 0;
+	for(l := f.options; l != nil; l = tl l){
+		opts[i] = hd l;
+		if(opts[i].t2)
+			cur = i;
+		i++;
+	}
+	j := cur + by;
+	if(j < 0)
+		j = 0;
+	if(j >= n)
+		j = n - 1;
+	if(by > 0 && cur == n - 1)
+		j = 0;	# a click past the last comes round
+	if(j != cur)
+		htmldoc->setfield(w.id, f.node, opts[j].t0);
+}
+
+webselectletter(w: ref Window, f: ref Htmldoc->Field, c: int)
+{
+	n := len f.options;
+	opts := array[n] of (string, string, int);
+	cur := 0;
+	i := 0;
+	for(l := f.options; l != nil; l = tl l){
+		opts[i] = hd l;
+		if(opts[i].t2)
+			cur = i;
+		i++;
+	}
+	c = lowerrune(c);
+	for(k := 1; k <= n; k++){
+		o := opts[(cur + k) % n];
+		if(len o.t1 > 0 && lowerrune(o.t1[0]) == c){
+			htmldoc->setfield(w.id, f.node, o.t0);
+			return;
+		}
+	}
+}
+
+lowerrune(c: int): int
+{
+	if(c >= 'A' && c <= 'Z')
+		c += 'a' - 'A';
+	return c;
+}
+
+Window.webkey(w: self ref Window, r: int)
+{
+	if(htmldoc == nil)
+		return;
+	f := webfocused(w);
+	if(f == nil){
+		w.webfield = 0;
+		return;
+	}
+	case r {
+	Keyboard->Esc =>
+		w.webfield = 0;
+		w.drawimage();
+		return;
+	'\t' =>
+		# the next field typed into, round to the first
+		a := htmldoc->fields(w.id);
+		first, next: ref Htmldoc->Field;
+		seen := 0;
+		for(i := 0; i < len a; i++){
+			if(!typedinto(a[i].kind))
+				continue;
+			if(first == nil)
+				first = a[i];
+			if(seen && next == nil)
+				next = a[i];
+			if(a[i].node == f.node)
+				seen = 1;
+		}
+		if(next == nil)
+			next = first;
+		w.webfield = next.node;
+		webshowfield(w, next);
+		return;
+	'\n' =>
+		if(f.kind != "textarea"){
+			w.webfield = 0;
+			if(f.form == 0)
+				w.drawimage();
+			else if((err := htmldoc->submit(w.id, f.form)) != nil)
+				warning(nil, sprint("%s: %s\n", w.body.file.name, err));
+			return;
+		}
+	}
+	if(f.kind == "select"){
+		case r {
+		Keyboard->Up =>	webselect(w, f, -1);
+		Keyboard->Down =>	webselect(w, f, 1);
+		* =>
+			if(r > ' ' && r < Keyboard->Spec)
+				webselectletter(w, f, r);
+		}
+		webfieldchanged(w);
+		return;
+	}
+	v := f.value;
+	case r {
+	'\b' =>
+		if(len v > 0)
+			v = v[0:len v - 1];
+	16r15 =>	# ^U
+		v = "";
+	* =>
+		if(r == '\n' || (r >= ' ' && r != 16r7F && r < Keyboard->Spec))
+			v[len v] = r;
+		else
+			return;
+	}
+	if((err := htmldoc->setfield(w.id, f.node, v)) != nil){
+		warning(nil, sprint("%s: %s\n", w.body.file.name, err));
+		return;
+	}
+	webfieldchanged(w);
+}
+
+# The page laid out again with a field changed
+webfieldchanged(w: ref Window)
+{
+	w.docheight = htmldoc->height(w.id);
+	w.drawimage();
+}
+
+# A field brought into view
+webshowfield(w: ref Window, f: ref Htmldoc->Field)
+{
+	h := w.body.frame.r.dy();
+	if(f.box.min.y < w.imageoffset.y || f.box.max.y > w.imageoffset.y + h)
+		w.imageoffset.y = f.box.min.y - h / 3;
+	w.drawimage();
 }
 
 Window.weburl(w: self ref Window): string
@@ -1652,6 +1870,8 @@ drawdoc(w: ref Window)
 		w.bodyimage = im;
 		htmldoc->paint(w.id, im, oy);
 		draw(mainwin, fr, im, nil, im.r.min);
+		if(w.docweb && w.webfield != 0)
+			webring(w, fr, oy);
 	}else
 		draw(mainwin, fr, im, nil, Point(im.r.min.x, im.r.min.y + oy));
 

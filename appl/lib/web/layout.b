@@ -675,6 +675,14 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 			r.ih = 27;
 		* =>
 			r.text = b.d.attr(n, "value");
+			if(t == "password" && r.text != "") {
+				# drawn masked: a page painted (Xenith, a
+				# screenshot) never shows what was typed
+				m := "";
+				for(i := 0; i < len r.text; i++)
+					m[i] = '•';
+				r.text = m;
+			}
 			if(r.text == "") {
 				r.text = b.d.attr(n, "placeholder");
 				r.hint = 1;

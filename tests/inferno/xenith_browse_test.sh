@@ -4,7 +4,9 @@
 # the page's URL, its text the page's, the page drawn over it, Back Fwd
 # Reload in its tag.  Get goes to the URL named in the tag (the tag is
 # the address bar); Back and Fwd go through what the window has shown;
-# Render shows the page's text and the page again.  The pages are
+# Render shows the page's text and the page again; a form's field
+# clicked takes the keyboard, and Return submits it (the click and the
+# keys injected through #m/pointer and #c/keyboard).  The pages are
 # file: URLs (tests/xenith/html), so no network is needed.
 #
 # Prerequisites:
@@ -155,6 +157,47 @@ if {! ~ $#img 0} {
 	pass 'and Render again the page'
 } {
 	fail 'Render did not bring the page back'
+}
+
+# A form: a click in its field (which fills the page) gives it the
+# keyboard, typing fills it in, Return submits it
+SEARCH=file:///tests/xenith/html/search.html
+id=`{cat $XENITH/new/ctl}
+id=${index 1 $id}
+echo -n $SEARCH > $XENITH/$id/body
+n=`{echo -n $SEARCH | wc -c}
+echo 'ML0 '^$n > $XENITH/$id/event
+echo clean > $XENITH/$id/ctl
+echo delete > $XENITH/$id/ctl
+f=()
+for i in 1 2 3 4 5 {
+	if {~ $#f 0} {
+		f=`{winof $SEARCH}
+		sleep 1
+	}
+}
+if {~ $#f 0} {
+	fail 'the form page did not open'
+} {
+	echo growfull > $XENITH/$f/ctl
+	sleep 1
+	echo -n 'm400 400 1' > '#m/pointer'
+	echo -n 'm400 400 0' > '#m/pointer'
+	sleep 1
+	echo -n 'plan9' > '#c/keyboard'
+	sleep 1
+	echo > '#c/keyboard'
+	if {waitbody $f 'The results page'} {
+		pass 'a form field typed into and submitted with Return'
+	} {
+		fail 'the form was not submitted'
+	}
+	r=`{winof 'file:///tests/xenith/html/result.html?q=plan9'}
+	if {~ $r $f} {
+		pass 'with what was typed: result.html?q=plan9'
+	} {
+		fail 'the result window:' `{grep result $XENITH/index}
+	}
 }
 
 # Over HTTP, through webfs (which Xenith starts): the same page, served

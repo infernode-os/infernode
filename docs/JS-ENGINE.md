@@ -364,19 +364,77 @@ group that reads the filtered `/mnt/web` and sends its result on
 `fetches`; nothing blocks the realm thread.
 
 
-## 8. Language level and conformance
+## 8. Language level, the measured subset, and conformance
 
-Live sites in 2026 ship ES2020+ syntax untranspiled: optional chaining,
-`async`/`await`, classes with private fields, modules. The parser targets
-the current specification from the start; a page that fails to parse runs
-none of its script. Built-ins follow test262: core objects, Promise,
-RegExp, Map/Set, typed arrays and Proxy first, then Intl last. That is a
-large piece, and a subset with an `en`/`th` locale covers most real use.
+### 8.1 What live sites use (measured 2026-10-09)
 
-Scoreboard: test262 pass count, kept per directory as WPT is for Charon,
-run on minipc, with no regressions accepted silently. Acceptance: the
-live-site set Charon already measures, plus pages whose layout depends on
-script (GitHub menus, BBC).
+Thirty sites were loaded in Chromium on minipc with JavaScript on, every
+built-in and Web API wrapped in a counting Proxy before any page script
+ran, and every script the page ran (inline ones included) saved and
+parsed. Bot walls and challenges were excluded (NYT, Stack Overflow,
+npm, Reddit, CNN, IMDb), as was one site that never finished loading.
+That left 20 sites with scripts, plus two (LWN, Debian) that run none.
+The sites were GitHub (home and a repository), BBC News, the Guardian,
+English and Thai Wikipedia, Google, YouTube, Amazon, MDN, mozilla.org,
+NASA, Python docs, Pantip, Apple, Microsoft, Hacker News, Lazada,
+Medium and Booking.
+
+**Syntax.** It cannot be subset: one construct the parser does not know
+and that whole script runs nothing. Every site with scripts uses ES2015
+syntax (arrows, `let`/`const`, classes, templates, destructuring,
+spread). Most use 2017 to 2020: `async`/`await` on 18 of 23,
+optional chaining on 17, object spread on 15, `??` on 13. Ten need
+ES2022, with class fields and private names on nine. The less common
+constructs still appear: generators on 9, direct `eval` on 13, modules
+and `import()` on 5, `with` on one. The parser has to accept current
+ECMAScript from the first day.
+
+**Built-ins.** 273 distinct built-in methods were called anywhere; 100
+of them by half the sites or more. The core is the expected one:
+String, Array, Object, RegExp, JSON, Math, Map/Set, WeakMap, Promise,
+Date and Symbol, with `Proxy` on 10 of 20 and `Reflect.construct` on
+11. Used by two sites or fewer: WeakRef, FinalizationRegistry, and
+most of Intl.
+
+**Web APIs.** 1,308 distinct APIs were called anywhere, 163 of them by
+half the sites. The head is DOM querying and mutation, events,
+attributes and classList, inline style, timers, localStorage and
+sessionStorage, cookies, URL and URLSearchParams, fetch and
+XMLHttpRequest, history, matchMedia, getComputedStyle,
+getBoundingClientRect, requestAnimationFrame and requestIdleCallback,
+IntersectionObserver, the Performance timing APIs, and `crypto`. Used
+by two sites or fewer: IndexedDB, Web Workers, WebRTC, speech,
+notifications, the file system APIs, OffscreenCanvas, Web Animations,
+and canvas 2D.
+
+**Coverage.** Each site calls a long tail of its own, so "every API a
+site calls" is a poor target: implementing APIs in order of how many
+sites use them, the median site has 60% of what it calls after 250 APIs,
+83% after 500 and 97% after 1,000. Much of the tail is analytics and
+feature detection that fails harmlessly. The measure that matters is
+whether the page works, which is the live-site acceptance below.
+
+### 8.2 A minimum viable engine
+
+From the measurements:
+
+- the full current syntax;
+- the core built-ins above, plus Proxy and Reflect;
+- the head of the Web API list: about 250 DOM, event, storage, network,
+  timer and observer APIs;
+- the interpreter tier only.
+
+Most page script runs once, at load. The compiled tiers (§5.3) wait
+until profiles of real pages show where time goes.
+
+### 8.3 Conformance
+
+Scoreboard: test262 pass count, kept per directory as WPT is for
+Charon, run on minipc, with no regressions accepted silently. test262's
+feature flags let unimplemented features (Intl, WeakRef, Atomics) be
+skipped explicitly rather than counted as failures. Acceptance: the
+live-site set Charon already measures, plus pages whose layout depends
+on script (GitHub menus, BBC).
 
 
 ## 9. The spike: does Dis go fast enough?
@@ -421,14 +479,17 @@ are committed under `tests/js-spike/` whichever way it comes out.
 
 1. Spike (§9). Decide A versus B′.
 2. Parser to an AST for current ECMAScript; the test262 parse tests pass.
-3. Interpreter tier and core built-ins; the `js` command; `/mnt/js`.
+3. Interpreter tier and the measured core built-ins (§8.2); the `js`
+   command; `/mnt/js`.
 4. The realm sandbox: namespace construction, the origin filter, webfs
    sessions. **Charon runs scripts in a realm only from here on, never
    unsandboxed.**
-5. The DOM binding in Charon via shaped host classes; the event loop;
-   retire `appl/lib/ecmascript`.
-6. Baseline Dis tier, verifier, differential fuzzing.
-7. Optimised tier, guided by the live-site profile.
+5. The DOM binding in Charon via shaped host classes, for the head of
+   the measured Web API list (§8.1); the event loop; retire
+   `appl/lib/ecmascript`. This is the minimum viable engine.
+6. Baseline Dis tier, verifier, differential fuzzing, when profiles of
+   real pages call for them.
+7. Optimised tier, guided by the same profiles.
 
 
 ## 12. Decisions needed

@@ -241,7 +241,8 @@ new_canvas(attrs: Attributes): ref Canvas
 	height := rootlen(attrs.get("height"), real DEFAULT_HEIGHT);
 
 	c := ref Canvas;
-	c.width = int width;	# to the nearest: Limbo's int rounds
+	# Limbo's conversion rounds: adding 0.5 first made an 8 by 8 SVG 9 by 9
+	c.width = int width;
 	c.height = int height;
 	if(c.width <= 0) c.width = DEFAULT_WIDTH;
 	if(c.height <= 0) c.height = DEFAULT_HEIGHT;
@@ -1196,7 +1197,7 @@ paint(c: ref Color, opacity: real): ref Image
 		opacity = 0.0;
 	if(opacity > 1.0)
 		opacity = 1.0;
-	a := int (real c.a * opacity + 0.5);
+	a := int (real c.a * opacity);
 	if(a <= 0)
 		return nil;
 	if(a > 255)

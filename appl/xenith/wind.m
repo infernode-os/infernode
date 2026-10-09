@@ -62,6 +62,8 @@ Windowm : module {
 		doclines : array of int;	# each block's first line in the text
 		docys : array of int;	# and its top in the document
 		dochtml : int;	# the document is HTML, set by Charon's engine (htmldoc)
+		docweb : int;	# and browsed: a URL's page, the window a browser window
+		webfield : int;	# the form field that has the keyboard (its node), or 0
 		docheight : int;	# the document's height
 		docpage : ref Draw->Image;	# an HTML document's part in view
 		utflastqid : int;
@@ -109,5 +111,13 @@ Windowm : module {
 		doclink : fn(w : self ref Window, p : Draw->Point) : string;
 		docoff : fn(w : self ref Window);
 		docscroll : fn(w : self ref Window, dy : int);
+		browse : fn(w : self ref Window, url : string) : string;
+		webevent : fn(w : self ref Window, e : string);
+		webview : fn(w : self ref Window) : string;
+		webclick : fn(w : self ref Window, p : Draw->Point) : int;
+		webcmd : fn(w : self ref Window, cmd : string) : string;
+		weburl : fn(w : self ref Window) : string;
+		webkey : fn(w : self ref Window, r : int);
+		webposted : fn(w : self ref Window) : string;
 	};
 };

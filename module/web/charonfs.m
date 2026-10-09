@@ -36,5 +36,12 @@ Charonfs: module
 	# Post the session as #s<spec>/fs (or fs.N if that is taken) so a
 	# process in another name space can mount it; returns the name.
 	post:	fn(spec: string): (string, string);
+	# Post it as #s<spec>/<name>, a name of the caller's (Xenith posts
+	# each browser window's page as #sxenith/<window id>); an error if
+	# that is taken.
+	postas:	fn(spec, name: string): string;
+	# Take the posted file away.  Connections made through it stay
+	# until their clients hang up.
+	unpost:	fn();
 	SPEC:	con "charon";
 };

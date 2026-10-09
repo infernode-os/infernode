@@ -1,8 +1,8 @@
 implement Renderer;
 
 #
-# Image renderer - wraps Xenith's imgload module to conform to the
-# Renderer interface.  Handles PNG, JPEG, PPM, PGM, PBM, BIT, PIC formats.
+# Image renderer - wraps imgload (module/imgload.m) to conform to the
+# Renderer interface.  The formats are imgload's.
 #
 # This is the reference renderer implementation: it delegates all
 # actual decoding to imgload and adapts the progress/result types.
@@ -17,23 +17,9 @@ include "draw.m";
 
 include "renderer.m";
 
-# We load imgload dynamically to avoid a hard compile-time dependency.
-# This keeps the renderer self-contained and loadable from anywhere.
-Imgload: module {
-	PATH: con "/dis/xenith/imgload.dis";
-
-	ImgProgress: adt {
-		image: ref Draw->Image;
-		rowsdone: int;
-		rowstotal: int;
-	};
-
-	init: fn(d: ref Draw->Display);
-	readimage: fn(path: string): (ref Draw->Image, string);
-	readimagedata: fn(data: array of byte, hint: string): (ref Draw->Image, string);
-	readimagedataprogressive: fn(data: array of byte, hint: string,
-	                             progress: chan of ref ImgProgress): (ref Draw->Image, string);
-};
+include "bufio.m";
+include "imagefile.m";
+include "imgload.m";
 
 imgload: Imgload;
 display: ref Display;
@@ -53,39 +39,33 @@ info(): ref RenderInfo
 {
 	return ref RenderInfo(
 		"Image",
-		".png .ppm .pgm .pbm .bit .pic .jpg .jpeg .JPG .JPEG",
+		exts(),
 		0  # Images have no text content
 	);
 }
 
+exts(): string
+{
+	if(imgload == nil)
+		return nil;
+	return imgload->extensions();
+}
+
 canrender(data: array of byte, hint: string): int
 {
-	if(data == nil || len data < 8)
+	if(data == nil || len data < 4 || imgload == nil)
 		return 0;
-
-	# PNG magic: 137 80 78 71 13 10 26 10
-	if(data[0] == byte 137 && data[1] == byte 80 &&
-	   data[2] == byte 78 && data[3] == byte 71 &&
-	   data[4] == byte 13 && data[5] == byte 10 &&
-	   data[6] == byte 26 && data[7] == byte 10)
+	n := len data;
+	if(n > 512)
+		n = 512;
+	# A binary signature is proof; the text formats (SVG, PPM, XBM,
+	# PIC) begin like other text, so they also need the name to agree.
+	case imgload->format(data[0:n], nil) {
+	"png" or "jpeg" or "gif" or "webp" or "avif" or "bit" =>
 		return 100;
-
-	# JPEG magic: FF D8 FF
-	if(data[0] == byte 16rFF && data[1] == byte 16rD8 &&
-	   data[2] == byte 16rFF)
-		return 100;
-
-	# PPM/PGM/PBM magic: P3, P5, P6
-	if(data[0] == byte 'P'){
-		c := int data[1];
-		if(c == '3' || c == '5' || c == '6')
-			return 90;
 	}
-
-	# JPEG magic: FF D8 FF
-	if(len data >= 3 && int data[0] == 16rFF && int data[1] == 16rD8 && int data[2] == 16rFF)
-		return 95;
-
+	if(imgload->isimage(hint) && imgload->format(data[0:n], hint) != nil)
+		return 90;
 	return 0;
 }
 

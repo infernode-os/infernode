@@ -155,6 +155,159 @@ testWindows(t: ref T)
 	t.assert(contains(htmldoc->text(1), "Edited"), "and the other is not");
 }
 
+# The next event from c starting with what, others skipped; nil after
+# five seconds
+waitfor(c: chan of string, what: string): string
+{
+	tick := chan of int;
+	spawn timer(tick, 5000);
+	for(;;) alt {
+	e := <-c =>
+		if(len e >= len what && e[0:len what] == what)
+			return e;
+	<-tick =>
+		return nil;
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>	;
+	* =>	;
+	}
+}
+
+PAGE2: con "file://" + DIR + "page2.html#top";
+ev: chan of string;
+
+testBrowse(t: ref T)
+{
+	err: string;
+	(ev, err) = htmldoc->browse(3, URL, 400, 300);
+	t.assertnil(err, "browse");
+	if(ev == nil)
+		t.fatal("no event channel for a new page");
+	t.assert(waitfor(ev, "done") != nil, "the page loads");
+	t.assertseq(htmldoc->url(3), URL, "its URL");
+	t.assertseq(htmldoc->title(3), "Index", "its title");
+	t.assert(htmldoc->height(3) >= 150, "its height");
+	t.assert(contains(htmldoc->text(3), "Hello from the index."), "its text");
+}
+
+testFollow(t: ref T)
+{
+	(hit, err) := htmldoc->click(3, 300, 250);
+	t.asserteq(hit, 0, "nothing on the page there");
+	t.assertnil(err, "and no error");
+	(hit, err) = htmldoc->click(3, 10, 110);
+	t.asserteq(hit, 1, "a click on the link");
+	t.assertnil(err, "follows it");
+	t.assert(waitfor(ev, "done") != nil, "the next page loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "the link's page");
+	t.assertseq(htmldoc->title(3), "Page two", "its title");
+}
+
+testHistory(t: ref T)
+{
+	t.assertnil(htmldoc->back(3), "Back");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), URL, "Back is the first page");
+	t.assertnil(htmldoc->forward(3), "Fwd");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "Fwd is the second again");
+	t.assertnil(htmldoc->reload(3), "Reload");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "the same page");
+	t.assertseq(htmldoc->forward(3), "no next page", "Fwd at the end of the history");
+	(nil, err) := htmldoc->browse(3, URL, 400, 300);
+	t.assertnil(err, "browse again in the same window");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertnil(htmldoc->back(3), "and Back has where it was");
+	t.assert(waitfor(ev, "done") != nil, "loads");
+	t.assertseq(htmldoc->url(3), PAGE2, "the page before");
+}
+
+testControl(t: ref T)
+{
+	(c, err) := htmldoc->browse(4, "file://" + DIR + "form.html", 400, 300);
+	t.assertnil(err, "browse a form");
+	t.assert(c != nil && waitfor(c, "done") != nil, "it loads");
+	(hit, cerr) := htmldoc->click(4, 5, 5);
+	t.asserteq(hit, 1, "a click on the checkbox acts");
+	t.assertnil(cerr, "without error");
+	(hit, nil) = htmldoc->click(4, 10, 50);
+	t.asserteq(hit, 0, "a click on plain text does nothing");
+	htmldoc->drop(4);
+	t.assert(waitfor(c, "gone") != nil, "a dropped page's reader is told");
+}
+
+field(t: ref T, id: int, name: string): ref Htmldoc->Field
+{
+	f := htmldoc->fields(id);
+	for(i := 0; i < len f; i++)
+		if(f[i].name == name)
+			return f[i];
+	t.fatal("no field " + name);
+	return nil;
+}
+
+# The page's pixels in r
+pixels(id: int, r: Rect): array of byte
+{
+	im := disp.newimage(Rect((0, 0), (400, 300)), Draw->RGB24, 0, Draw->White);
+	htmldoc->paint(id, im, 0);
+	b := array[r.dx() * r.dy() * 3] of byte;
+	im.readpixels(r, b);
+	return b;
+}
+
+testFields(t: ref T)
+{
+	(c, err) := htmldoc->browse(5, "file://" + DIR + "fields.html", 400, 300);
+	t.assertnil(err, "browse");
+	t.assert(c != nil && waitfor(c, "done") != nil, "it loads");
+	pw := field(t, 5, "pw");
+	t.assertseq(pw.kind, "password", "a password field");
+	t.assertseq(pw.value, "abcdef", "its value");
+	t.assert(pw.box.dx() >= 200 && pw.box.dy() >= 30, sys->sprint("its box, border and padding too: %d by %d", pw.box.dx(), pw.box.dy()));
+	tx := field(t, 5, "t");
+	t.assert(tx.box.min.y >= pw.box.max.y, "the text field below it");
+	s := field(t, 5, "s");
+	t.assertseq(s.value, "b", "the select's selected option");
+
+	# what a password field shows does not depend on what is in it
+	before := pixels(5, pw.box);
+	t.assertnil(htmldoc->setfield(5, pw.node, "ghijkl"), "set the password");
+	t.assertseq(field(t, 5, "pw").value, "ghijkl", "the password's new value");
+	t.assert(same(before, pixels(5, pw.box)), "a password is drawn masked");
+
+	# and a text field's does
+	before = pixels(5, tx.box);
+	t.assertnil(htmldoc->setfield(5, tx.node, "ghijkl"), "set the text");
+	t.assert(!same(before, pixels(5, tx.box)), "a text field shows its text");
+
+	t.assertnil(htmldoc->setfield(5, s.node, "c"), "choose an option");
+	t.assertseq(field(t, 5, "s").value, "c", "the select's new value");
+	htmldoc->drop(5);
+}
+
+testSubmit(t: ref T)
+{
+	(c, err) := htmldoc->browse(6, "file://" + DIR + "search.html", 400, 300);
+	t.assertnil(err, "browse");
+	t.assert(c != nil && waitfor(c, "done") != nil, "it loads");
+	q := field(t, 6, "q");
+	t.assertnil(htmldoc->setfield(6, q.node, "plan 9"), "type");
+	t.assertnil(htmldoc->submit(6, q.form), "submit");
+	t.assert(waitfor(c, "done") != nil, "the result loads");
+	u := htmldoc->url(6);
+	t.assert(contains(u, "result.html?q=plan+9") || contains(u, "result.html?q=plan%209"), "the form's URL with the field: " + u);
+	t.assertseq(htmldoc->title(6), "Result", "the result page");
+	htmldoc->drop(6);
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -185,6 +338,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Link", testLink);
 	run("Edited", testEdited);
 	run("Windows", testWindows);
+	run("Browse", testBrowse);
+	run("Follow", testFollow);
+	run("History", testHistory);
+	run("Control", testControl);
+	run("Fields", testFields);
+	run("Submit", testSubmit);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

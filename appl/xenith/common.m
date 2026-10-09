@@ -28,6 +28,7 @@ include "edit.m";
 include "elog.m";
 include "ecmd.m";
 include "styxaux.m";
+include "imagefile.m";
 include "imgload.m";
 include "renderer.m";
 include "render.m";

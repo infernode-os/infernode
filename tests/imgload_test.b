@@ -1,23 +1,27 @@
 implement ImgloadTest;
 
 #
-# Image loading tests
+# Image loading tests: imgload (module/imgload.m), the one loader
+# Xenith, the browser, wm/view and lib/scene share, and the decoders
+# under it.
 #
 # Tests:
-# - PNG magic detection
-# - JPEG magic detection
-# - PPM magic detection
-# - Unknown format rejection
-# - readpng module loads and decodes a minimal PNG
-# - readjpg module loads and decodes a minimal JPEG
-# - imageremap module loads
-# - Format-specific error messages
+# - Format detection from the data, then the name
+# - Which names are images (what Xenith opens as one)
+# - Every format decoded from a file, its pixels checked
+#   (fixtures in /tests/imgload, made by mkfixtures.py there)
+# - Xenith's image renderer claims images, and not text that
+#   begins like one
+# - An Inferno image (image(6)) read from bytes
+# - readpng and readjpg on hand-built minimal files
 #
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+	draw: Draw;
+	Display, Image, Point, Rect: import draw;
 
 include "bufio.m";
 	bufio: Bufio;
@@ -27,6 +31,11 @@ include "imagefile.m";
 	imageremap: Imageremap;
 	readpng: RImagefile;
 	readjpg: RImagefile;
+
+include "imgload.m";
+	imgload: Imgload;
+
+include "renderer.m";
 
 include "testing.m";
 	testing: Testing;
@@ -42,6 +51,9 @@ failed := 0;
 skipped := 0;
 
 SRCFILE: con "/tests/imgload_test.b";
+FIXTURES: con "/tests/imgload";
+
+display: ref Display;
 
 run(name: string, testfn: ref fn(t: ref T))
 {
@@ -65,92 +77,269 @@ run(name: string, testfn: ref fn(t: ref T))
 		failed++;
 }
 
-# --- Magic byte detection tests ---
+# --- Format detection ---
 
-# Test PNG magic detection (137 80 78 71 13 10 26 10)
-testPngMagic(t: ref T)
+bytes(l: list of int): array of byte
 {
-	pngmagic := array[] of {byte 137, byte 80, byte 78, byte 71,
-	                         byte 13, byte 10, byte 26, byte 10};
-	t.assert(ispng(pngmagic), "valid PNG magic should be detected");
-
-	# Invalid magic
-	notpng := array[] of {byte 0, byte 0, byte 0, byte 0,
-	                       byte 0, byte 0, byte 0, byte 0};
-	t.assert(!ispng(notpng), "zeroes should not match PNG magic");
-
-	# JPEG bytes should not match PNG
-	jpgbytes := array[] of {byte 16rFF, byte 16rD8, byte 16rFF, byte 16rE0,
-	                         byte 0, byte 0, byte 0, byte 0};
-	t.assert(!ispng(jpgbytes), "JPEG magic should not match PNG");
+	a := array[len l] of byte;
+	for(i := 0; l != nil; l = tl l)
+		a[i++] = byte hd l;
+	return a;
 }
 
-# Test JPEG magic detection (FF D8 FF)
-testJpegMagic(t: ref T)
+testFormatMagic(t: ref T)
 {
-	# JFIF JPEG
-	jfif := array[] of {byte 16rFF, byte 16rD8, byte 16rFF, byte 16rE0};
-	t.assert(isjpeg(jfif), "JFIF JPEG magic should be detected");
-
-	# EXIF JPEG
-	exif := array[] of {byte 16rFF, byte 16rD8, byte 16rFF, byte 16rE1};
-	t.assert(isjpeg(exif), "EXIF JPEG magic should be detected");
-
-	# Raw JPEG (just SOI + marker)
-	rawjpg := array[] of {byte 16rFF, byte 16rD8, byte 16rFF, byte 16rDB};
-	t.assert(isjpeg(rawjpg), "raw JPEG magic should be detected");
-
-	# Not JPEG
-	notjpg := array[] of {byte 16rFF, byte 16rD9, byte 16rFF, byte 16rE0};
-	t.assert(!isjpeg(notjpg), "FF D9 should not match JPEG magic");
-
-	# PNG should not match JPEG
-	pngbytes := array[] of {byte 137, byte 80, byte 78, byte 71};
-	t.assert(!isjpeg(pngbytes), "PNG magic should not match JPEG");
+	t.assertseq(imgload->format(bytes(137 :: 'P' :: 'N' :: 'G' :: 13 :: 10 :: 26 :: 10 :: nil), nil), "png", "PNG signature");
+	t.assertseq(imgload->format(bytes(16rFF :: 16rD8 :: 16rFF :: 16rE0 :: nil), nil), "jpeg", "JFIF");
+	t.assertseq(imgload->format(bytes(16rFF :: 16rD8 :: 16rFF :: 16rE1 :: nil), nil), "jpeg", "EXIF JPEG");
+	t.assertnil(imgload->format(bytes(16rFF :: 16rD9 :: 16rFF :: 16rE0 :: nil), nil), "FF D9 is not JPEG");
+	t.assertseq(imgload->format(array of byte "GIF89a\u0001\u0000", nil), "gif", "GIF89a");
+	t.assertseq(imgload->format(array of byte "RIFF\u0000\u0000\u0000\u0000WEBPVP8 ", nil), "webp", "WebP");
+	t.assertnil(imgload->format(array of byte "RIFF\u0000\u0000\u0000\u0000WAVEfmt ", nil), "a WAV file is not WebP");
+	t.assertseq(imgload->format(array of byte "P6\n8 8\n255\n", nil), "ppm", "P6");
+	t.assertseq(imgload->format(array of byte "P5\n8 8\n255\n", nil), "ppm", "P5 (PGM)");
+	t.assertseq(imgload->format(array of byte "compressed\n", nil), "bit", "compressed Inferno image");
+	t.assertnil(imgload->format(array of byte "XYZ\u0000\u0000\u0000\u0000\u0000", nil), "unknown bytes");
 }
 
-# Test PPM magic detection
-testPpmMagic(t: ref T)
+# ISO BMFF is AVIF only when a brand says so: an MP4 is not an image.
+testFormatAvif(t: ref T)
 {
-	p6 := array[] of {byte 'P', byte '6'};
-	t.assert(isppm(p6), "P6 magic should be detected as PPM");
-
-	p3 := array[] of {byte 'P', byte '3'};
-	t.assert(isppm(p3), "P3 magic should be detected as PPM");
-
-	# P5 is PGM, not PPM we handle, but it's worth noting
-	notp := array[] of {byte 'X', byte '6'};
-	t.assert(!isppm(notp), "X6 should not match PPM magic");
+	avif := array of byte "\u0000\u0000\u0000\u001cftypavif\u0000\u0000\u0000\u0000avifmif1miaf";
+	t.assertseq(imgload->format(avif, nil), "avif", "major brand avif");
+	compat := array of byte "\u0000\u0000\u0000\u001cftypmif1\u0000\u0000\u0000\u0000mif1avifmiaf";
+	t.assertseq(imgload->format(compat, nil), "avif", "compatible brand avif");
+	mp4 := array of byte "\u0000\u0000\u0000\u0018ftypisom\u0000\u0000\u0002\u0000isomiso2";
+	t.assertnil(imgload->format(mp4, nil), "an MP4 is not AVIF");
+	t.assertnil(imgload->format(mp4, "clip.mp4"), "nor by its name");
 }
 
-# Test format dispatch logic
-testFormatDispatch(t: ref T)
+# SVG is text: an SVG document is one whose first element is <svg, which
+# an HTML page with an inline <svg is not.
+testFormatSvg(t: ref T)
 {
-	# PNG data should be identified as PNG
-	pngdata := array[8] of byte;
-	pngmagic := array[] of {byte 137, byte 80, byte 78, byte 71,
-	                         byte 13, byte 10, byte 26, byte 10};
-	pngdata[0:] = pngmagic;
-	t.assertseq(detectformat(pngdata), "png", "PNG data should be detected");
+	t.assertseq(imgload->format(array of byte "<svg xmlns=\"http://www.w3.org/2000/svg\"/>", nil), "svg", "bare <svg");
+	prolog := "\ufeff<?xml version=\"1.0\"?>\n<!-- a <comment> -->\n<!DOCTYPE svg>\n<svg width=\"8\">";
+	t.assertseq(imgload->format(array of byte prolog, nil), "svg", "after a BOM, declaration, comment and doctype");
+	html := array of byte "<!DOCTYPE html>\n<html><body><svg width=\"8\"></svg></body></html>";
+	t.assertnil(imgload->format(html, nil), "an HTML page with an inline <svg");
+	t.assertnil(imgload->format(html, "page.html"), "nor by its name");
+	t.assertseq(imgload->format(array of byte "<g/>", "x.svg"), "svg", "a .svg name with no <svg up front");
+}
 
-	# JPEG data should be identified as JPEG
-	jpgdata := array[8] of byte;
-	jpgdata[0] = byte 16rFF;
-	jpgdata[1] = byte 16rD8;
-	jpgdata[2] = byte 16rFF;
-	jpgdata[3] = byte 16rE0;
-	t.assertseq(detectformat(jpgdata), "jpeg", "JPEG data should be detected");
+testFormatByName(t: ref T)
+{
+	text := array of byte "some text";
+	t.assertseq(imgload->format(text, "/a/b.svg"), "svg", ".svg");
+	t.assertseq(imgload->format(text, "/a/B.JPEG"), "jpeg", ".JPEG, any case");
+	t.assertseq(imgload->format(text, "x.pgm"), "ppm", ".pgm");
+	t.assertnil(imgload->format(text, "x.txt"), ".txt");
+	t.assertnil(imgload->format(text, "a.png/readme"), "a directory's extension");
+	t.assertnil(imgload->format(text, nil), "no name");
+	# the data wins over the name
+	t.assertseq(imgload->format(array of byte "GIF87a", "x.png"), "gif", "GIF data named .png");
+}
 
-	# PPM data should be identified as PPM
-	ppmdata := array[8] of byte;
-	ppmdata[0] = byte 'P';
-	ppmdata[1] = byte '6';
-	t.assertseq(detectformat(ppmdata), "ppm", "PPM P6 data should be detected");
+# isimage is what Xenith's look asks before it opens a file as an image.
+testIsimage(t: ref T)
+{
+	yes := "a.png" :: "/x/a.jpg" :: "a.JPG" :: "a.jpeg" :: "a.jpe" :: "a.gif" :: "a.webp" ::
+		"a.avif" :: "a.svg" :: "a.SVG" :: "a.xbm" :: "a.pic" :: "a.ppm" :: "a.pgm" :: "a.bit" :: nil;
+	for(; yes != nil; yes = tl yes)
+		t.assert(imgload->isimage(hd yes), hd yes + " is an image");
+	no := "a.txt" :: "a.b" :: "a.pdf" :: "a.pbm" :: "png" :: "a.png/b" :: "a." :: "" :: nil;
+	for(; no != nil; no = tl no)
+		t.assert(!imgload->isimage(hd no), hd no + " is not an image");
+	exts := imgload->extensions();
+	for(l := ".png" :: ".jpg" :: ".svg" :: ".webp" :: ".avif" :: ".bit" :: nil; l != nil; l = tl l)
+		t.assert(contains(" " + exts + " ", " " + hd l + " "), "extensions() lists " + hd l);
+}
 
-	# Unknown data
-	unkdata := array[] of {byte 'X', byte 'Y', byte 'Z', byte 0,
-	                        byte 0, byte 0, byte 0, byte 0};
-	t.assertseq(detectformat(unkdata), "unknown", "random bytes should be unknown");
+contains(s, sub: string): int
+{
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
+}
+
+# --- Every format, decoded ---
+
+# Decoding makes images, which needs a draw device (the GUI emulator;
+# SDL_VIDEODRIVER=dummy will do).
+needdisplay(t: ref T)
+{
+	if(display == nil)
+		t.skip("no /dev/draw");
+}
+
+# The pixel at p, as (r, g, b), whatever the image's channels.
+pixel(im: ref Image, p: Point): (int, int, int)
+{
+	one := display.newimage(Rect((0, 0), (1, 1)), Draw->RGB24, 0, Draw->Black);
+	one.draw(one.r, im, nil, p);
+	buf := array[3] of byte;
+	one.readpixels(one.r, buf);
+	return (int buf[2], int buf[1], int buf[0]);
+}
+
+near(t: ref T, got: (int, int, int), want: (int, int, int), tol: int, what: string)
+{
+	(r, g, b) := got;
+	(wr, wg, wb) := want;
+	if(abs(r - wr) > tol || abs(g - wg) > tol || abs(b - wb) > tol)
+		t.error(sys->sprint("%s: pixel (%d,%d,%d), want (%d,%d,%d)", what, r, g, b, wr, wg, wb));
+}
+
+abs(x: int): int
+{
+	if(x < 0)
+		return -x;
+	return x;
+}
+
+# Read a fixture both ways (by path, and as bytes as Xenith and the
+# browser do), and check its size and its two halves.
+checkfixture(t: ref T, name, fmt: string, top, bottom: (int, int, int), tol: int)
+{
+	needdisplay(t);
+	path := FIXTURES + "/" + name;
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil) {
+		t.error(sys->sprint("%s: %r", path));
+		return;
+	}
+	head := array[512] of byte;
+	n := sys->read(fd, head, len head);
+	t.assertseq(imgload->format(head[0:n], path), fmt, name + " format");
+
+	(im, err) := imgload->readimage(path);
+	if(im == nil) {
+		t.error(name + ": readimage: " + err);
+		return;
+	}
+	t.asserteq(im.r.dx(), 8, name + " width");
+	t.asserteq(im.r.dy(), 8, name + " height");
+	near(t, pixel(im, im.r.min.add((3, 1))), top, tol, name + " top half");
+	near(t, pixel(im, im.r.min.add((3, 6))), bottom, tol, name + " bottom half");
+
+	data := readfile(path);
+	(im, err) = imgload->readimagedata(data, path);
+	if(im == nil)
+		t.error(name + ": readimagedata: " + err);
+	else
+		near(t, pixel(im, im.r.min.add((3, 6))), bottom, tol, name + " from bytes");
+}
+
+readfile(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, d) := sys->fstat(fd);
+	if(ok < 0)
+		return nil;
+	buf := array[int d.length] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n < 0)
+		return nil;
+	return buf[0:n];
+}
+
+testDecodePng(t: ref T)		{ checkfixture(t, "rb.png", "png", (255, 0, 0), (0, 0, 255), 0); }
+testDecodeJpeg(t: ref T)	{ checkfixture(t, "rb.jpg", "jpeg", (255, 0, 0), (0, 0, 255), 40); }
+testDecodeGif(t: ref T)		{ checkfixture(t, "rb.gif", "gif", (255, 0, 0), (0, 0, 255), 0); }
+testDecodeWebpLossless(t: ref T)	{ checkfixture(t, "rb.webp", "webp", (255, 0, 0), (0, 0, 255), 0); }
+testDecodeWebpLossy(t: ref T)	{ checkfixture(t, "rbl.webp", "webp", (255, 0, 0), (0, 0, 255), 40); }
+
+# AVIF has no decoder yet; it refuses, rather than return a picture
+# that is not the image (it once returned grey).
+testDecodeAvif(t: ref T)	{ refused(t, "rb.avif", "avif", "AVIF: AV1 image decoding is not implemented"); }
+
+refused(t: ref T, name, fmt, want: string)
+{
+	needdisplay(t);
+	path := FIXTURES + "/" + name;
+	data := readfile(path);
+	n := len data;
+	if(n > 512)
+		n = 512;
+	t.assertseq(imgload->format(data[0:n], path), fmt, name + " format");
+	(im, err) := imgload->readimage(path);
+	t.assert(im == nil, name + " is not decoded");
+	t.assertseq(err, want, name + " error");
+}
+testDecodeSvg(t: ref T)		{ checkfixture(t, "rb.svg", "svg", (255, 0, 0), (0, 0, 255), 0); }
+testDecodePpm(t: ref T)		{ checkfixture(t, "rb.ppm", "ppm", (255, 0, 0), (0, 0, 255), 0); }
+testDecodePgm(t: ref T)		{ checkfixture(t, "wb.pgm", "ppm", (255, 255, 255), (0, 0, 0), 0); }
+testDecodeXbm(t: ref T)		{ checkfixture(t, "bw.xbm", "xbm", (0, 0, 0), (255, 255, 255), 0); }
+testDecodePic(t: ref T)		{ checkfixture(t, "rb.pic", "pic", (255, 0, 0), (0, 0, 255), 0); }
+
+# An Inferno image arrives at Xenith as bytes: the draw device reads
+# it through a pipe.
+testDecodeBit(t: ref T)
+{
+	needdisplay(t);
+	src := display.newimage(Rect((0, 0), (8, 8)), Draw->RGB24, 0, Draw->Blue);
+	src.draw(Rect((0, 0), (8, 4)), display.color(Draw->Red), nil, (0, 0));
+	path := "/tmp/imgload_test.bit";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.fatal(sys->sprint("create %s: %r", path));
+	if(display.writeimage(fd, src) < 0)
+		t.fatal(sys->sprint("writeimage: %r"));
+	fd = nil;
+	data := readfile(path);
+	sys->remove(path);
+	(im, err) := imgload->readimagedata(data, "x.bit");
+	if(im == nil)
+		t.fatal("readimagedata: " + err);
+	t.asserteq(im.r.dx(), 8, "width");
+	near(t, pixel(im, (3, 1)), (255, 0, 0), 0, "top half");
+	near(t, pixel(im, (3, 6)), (0, 0, 255), 0, "bottom half");
+}
+
+testUnrecognised(t: ref T)
+{
+	needdisplay(t);
+	(im, err) := imgload->readimagedata(array of byte "just some text here", "notes.txt");
+	t.assert(im == nil, "text is not an image");
+	t.assertseq(err, "unrecognized image format", "error");
+	(im, err) = imgload->readimagedata(array of byte "GIF89a broken", "x.gif");
+	t.assert(im == nil, "a truncated GIF");
+	t.assert(err != nil && err[0:4] == "GIF:", "error names the format: " + err);
+}
+
+testReader(t: ref T)
+{
+	(rd, err) := imgload->reader("gif");
+	t.assert(rd != nil, "a GIF decoder: " + err);
+	(rd2, nil) := imgload->reader("gif");
+	t.assert(rd2 != rd, "a fresh decoder each time");
+	(rd, err) = imgload->reader("ppm");
+	t.assert(rd == nil && err != nil, "PPM is read by imgload itself");
+}
+
+# --- Xenith's image renderer ---
+
+testRenderer(t: ref T)
+{
+	needdisplay(t);
+	r := load Renderer "/dis/xenith/render/imgrender.dis";
+	if(r == nil)
+		t.skip(sys->sprint("imgrender: %r"));
+	r->init(display);
+	ri := r->info();
+	t.assert(contains(" " + ri.extensions + " ", " .svg "), "it claims .svg");
+	t.assert(contains(" " + ri.extensions + " ", " .webp "), "it claims .webp");
+	png := readfile(FIXTURES + "/rb.png");
+	svg := readfile(FIXTURES + "/rb.svg");
+	t.asserteq(r->canrender(png, nil), 100, "PNG data, no name");
+	t.asserteq(r->canrender(svg, "rb.svg"), 90, "an SVG named so");
+	t.asserteq(r->canrender(array of byte "#define X 1\n#define Y 2\n", "x.h"), 0, "a C header is not an XBM");
+	t.asserteq(r->canrender(array of byte "P3 is the plan\n", "notes.txt"), 0, "text starting P3 is not a PPM");
+	html := array of byte "<!DOCTYPE html><html><svg></svg></html>";
+	t.asserteq(r->canrender(html, "page.html"), 0, "an HTML page with inline SVG");
 }
 
 # --- Module loading tests ---
@@ -334,49 +523,6 @@ testJpegInvalidData(t: ref T)
 }
 
 # --- Test data construction ---
-
-# PNG magic bytes helper
-ispng(buf: array of byte): int
-{
-	pngmagic := array[] of {byte 137, byte 80, byte 78, byte 71,
-	                         byte 13, byte 10, byte 26, byte 10};
-	if(len buf < 8)
-		return 0;
-	for(i := 0; i < 8; i++)
-		if(buf[i] != pngmagic[i])
-			return 0;
-	return 1;
-}
-
-# JPEG magic bytes helper
-isjpeg(buf: array of byte): int
-{
-	if(len buf < 3)
-		return 0;
-	return buf[0] == byte 16rFF && buf[1] == byte 16rD8 && buf[2] == byte 16rFF;
-}
-
-# PPM magic bytes helper
-isppm(buf: array of byte): int
-{
-	if(len buf < 2)
-		return 0;
-	if(buf[0] != byte 'P')
-		return 0;
-	return buf[1] == byte '3' || buf[1] == byte '6';
-}
-
-# Format detection (mirrors imgload.b dispatch logic)
-detectformat(buf: array of byte): string
-{
-	if(len buf >= 8 && ispng(buf))
-		return "png";
-	if(len buf >= 3 && isjpeg(buf))
-		return "jpeg";
-	if(len buf >= 2 && isppm(buf))
-		return "ppm";
-	return "unknown";
-}
 
 # Build a CRC32 table and compute CRC for PNG chunks
 crctable: array of int;
@@ -646,8 +792,16 @@ putbe32(buf: array of byte, off, val: int)
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
 	testing = load Testing Testing->PATH;
+	imgload = load Imgload Imgload->PATH;
+	if(imgload == nil) {
+		sys->fprint(sys->fildes(2), "cannot load %s: %r\n", Imgload->PATH);
+		raise "fail:cannot load imgload";
+	}
+	display = Display.allocate(nil);
+	imgload->init(display);
 
 	if(testing == nil){
 		sys->fprint(sys->fildes(2), "cannot load testing module: %r\n");
@@ -662,10 +816,28 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	# Magic byte detection tests
-	run("PngMagic", testPngMagic);
-	run("JpegMagic", testJpegMagic);
-	run("PpmMagic", testPpmMagic);
-	run("FormatDispatch", testFormatDispatch);
+	run("FormatMagic", testFormatMagic);
+	run("FormatAvif", testFormatAvif);
+	run("FormatSvg", testFormatSvg);
+	run("FormatByName", testFormatByName);
+	run("Isimage", testIsimage);
+
+	# Every format through imgload
+	run("DecodePng", testDecodePng);
+	run("DecodeJpeg", testDecodeJpeg);
+	run("DecodeGif", testDecodeGif);
+	run("DecodeWebpLossless", testDecodeWebpLossless);
+	run("DecodeWebpLossy", testDecodeWebpLossy);
+	run("DecodeAvif", testDecodeAvif);
+	run("DecodeSvg", testDecodeSvg);
+	run("DecodePpm", testDecodePpm);
+	run("DecodePgm", testDecodePgm);
+	run("DecodeXbm", testDecodeXbm);
+	run("DecodePic", testDecodePic);
+	run("DecodeBit", testDecodeBit);
+	run("Unrecognised", testUnrecognised);
+	run("Reader", testReader);
+	run("Renderer", testRenderer);
 
 	# Module loading tests
 	run("ReadpngLoads", testReadpngLoads);

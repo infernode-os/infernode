@@ -97,12 +97,13 @@ testSGCM2UserBinding(t: ref T)
 
 testVerifierFormats(t: ref T)
 {
-	formatted := secstore->formatverifier("secstore2", "deadbeef");
-	(ver, hexHi) := secstore->parseverifier(formatted);
-	t.assertseq(ver, "secstore2", "parseverifier keeps secstore2 prefix");
-	t.assertseq(hexHi, "deadbeef", "parseverifier keeps secstore2 verifier body");
+	# secstore2 is retired (the client never offers it, nothing
+	# enrols it): a verifier claiming it is refused, not trusted
+	(ver, hexHi) := secstore->parseverifier("secstore2 deadbeef");
+	t.assertnil(ver, "parseverifier refuses a retired secstore2 verifier");
+	t.assertnil(hexHi, "and returns no verifier body for it");
 
-	formatted = secstore->formatverifier("secstore3", "feedface");
+	formatted := secstore->formatverifier("secstore3", "feedface");
 	(ver, hexHi) = secstore->parseverifier(formatted);
 	t.assertseq(ver, "secstore3", "parseverifier keeps secstore3 prefix");
 	t.assertseq(hexHi, "feedface", "parseverifier keeps secstore3 verifier body");

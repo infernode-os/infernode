@@ -185,6 +185,21 @@ at
 .BR /mnt/web ,
 starting one if none is mounted, so what it can reach, and with which
 cookies, is that mount.
+.SS Xenith
+A browser window in Xenith (a URL opened there) is the same session,
+served the same way: each window's page is posted as
+.BI #sxenith/ id
+.RI ( id
+the window's), and the window's file
+.B web
+names it:
+.IP
+.EX
+mount -A `{cat /mnt/xenith/7/web} /n/page
+.EE
+.PP
+A page loaded, a field set or a form submitted through the files shows
+in the window.  The posted file goes when the window closes.
 .SH EXAMPLE
 Drive the window from a shell:
 .IP
@@ -203,6 +218,8 @@ Drive the window from a shell:
 .B /appl/lib/web
 .SH SEE ALSO
 .IR webfs (4),
+.B /docs/XEN.md
+(Xenith's browser windows),
 .B /docs/CHARON-ENGINE.md
 .SH BUGS
 No JavaScript, frames, text selection, bookmarks or HTTP cache yet.

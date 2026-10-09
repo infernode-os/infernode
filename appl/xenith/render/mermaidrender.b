@@ -29,17 +29,28 @@ init(d: ref Display)
 	sys = load Sys Sys->PATH;
 	drawm = load Draw Draw->PATH;
 	display = d;
+}
 
-	propfont = Font.open(d, PROPFONT);
-	monofont = Font.open(d, MONOFONT);
+# The diagram engine and its fonts are loaded when a diagram is first
+# shown, not when Xenith starts: init runs for every renderer, to
+# learn its extensions.
+loadmermaid(): int
+{
+	if(mermaid != nil)
+		return 1;
+	propfont = Font.open(display, PROPFONT);
+	monofont = Font.open(display, MONOFONT);
 	if(propfont == nil)
-		propfont = Font.open(d, "*default*");
+		propfont = Font.open(display, "*default*");
 	if(monofont == nil)
 		monofont = propfont;
 
-	mermaid = load Mermaid Mermaid->PATH;
-	if(mermaid != nil)
-		mermaid->init(d, propfont, monofont);
+	m := load Mermaid Mermaid->PATH;
+	if(m == nil)
+		return 0;
+	m->init(display, propfont, monofont);
+	mermaid = m;
+	return 1;
 }
 
 info(): ref RenderInfo
@@ -87,7 +98,7 @@ render(data: array of byte, hint: string,
        width, height: int,
        progress: chan of ref RenderProgress): (ref Draw->Image, string, string)
 {
-	if(mermaid == nil) {
+	if(!loadmermaid()) {
 		progress <-= nil;
 		return (nil, nil, "mermaid module not available");
 	}

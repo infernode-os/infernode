@@ -63,8 +63,7 @@ Secstored: module
 };
 
 VERSION1: con "secstore";
-VERSION2: con "secstore2";
-VERSION3: con "secstore3";
+VERSION3: con "secstore3";	# secstore2 retired: the client never offers it
 Maxfilesize: con 128*1024;
 Maxmsg: con 4096;
 
@@ -739,14 +738,14 @@ pakparams(version: string): ref PAKparams
 	initPAKparams();
 	if(version == VERSION3)
 		return pak3;
-	if(version == VERSION1 || version == VERSION2)
+	if(version == VERSION1)
 		return paklegacy;
 	return nil;
 }
 
 hashis256(version: string): int
 {
-	return version == VERSION2 || version == VERSION3;
+	return version == VERSION3;
 }
 
 exponentbits(version: string): int
@@ -853,7 +852,7 @@ readverifier(user: string): (string, string)
 	if(nf >= 2){
 		version := hd flds;
 		hexHi := hd tl flds;
-		if(version == VERSION1 || version == VERSION2 || version == VERSION3)
+		if(version == VERSION1 || version == VERSION3)
 			return (version, hexHi);
 	}
 	return (nil, nil);

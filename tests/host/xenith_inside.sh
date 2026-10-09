@@ -9,6 +9,9 @@
 # Xenith cannot run here (no emu, a headless build, Xenith not built),
 # and 1 otherwise, printing the rest of the output.
 #
+# Set XENITH_INSIDE_NET=1 to give Xenith the network (#I at /net and
+# ndb/cs, as the profile does), for a script that reaches a server.
+#
 # Xenith forks its namespace, so only commands it runs itself see
 # /mnt/xenith. It is handed a dump file whose one external-command
 # entry ("e", re-run on load as Acme does) runs the script, reporting
@@ -47,10 +50,27 @@ xenith_inside() {
         echo "echo halt >'#c/sysctl'"
     } > "$_dir/run"
 
+    # Xenith's buffer file (/tmp/[A-Z]<pid>.<user>xenith) is removed
+    # when Xenith closes it, but the script ends by halting the
+    # emulator, so it never does; and nothing here runs the profile,
+    # whose sweep removes such files at login. Xenith has the same pid
+    # in every fresh emulator, so each run's file takes one of the 26
+    # names it tries, and the 27th run cannot start ("can't create temp
+    # file"). Remove the ones this run left.
+    _before=$(ls "$ROOT/tmp" | grep 'xenith$')
+    # XENITH_INSIDE_NET=1: the network, as the profile sets it up
+    _net=
+    if [ -n "$XENITH_INSIDE_NET" ]; then
+        _net="bind -a '#I' /net; ndb/cs;"
+    fi
     _out=$(SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c0 -g800x600 -r"$ROOT" /dis/sh.dis -c "
 load std
+$_net
 xenith -l /$_d/dump" 2>&1)
     rm -rf "$_dir"
+    for _f in $(ls "$ROOT/tmp" | grep 'xenith$'); do
+        printf '%s\n' "$_before" | grep -qxF "$_f" || rm -f "$ROOT/tmp/$_f"
+    done
 
     printf '%s\n' "$_out" | grep -E '^(PASS|FAIL|ALL PASS)'
     if printf '%s\n' "$_out" | grep -q '^ALL PASS'; then

@@ -96,10 +96,13 @@ sleep 1
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno
-# plumber matches /lib/lucifer/plumbing and forwards to the 'presentation'
-# port; lucipres consumes it (plumbreceiver) and opens each file as the
-# right artifact.  This is the shared path for every picker: the ftree file
-# tree, the context panel, an agent, or the `plumb` command.
+# plumber matches the user's rules (/usr/<user>/lib/plumbing) and then
+# /lib/lucifer/plumbing, and forwards to the 'presentation' port; lucipres
+# consumes it (plumbreceiver) and opens each file as the right artifact,
+# and a web page in Charon.  This is the shared path for every picker: the
+# ftree file tree, the context panel, an agent, or the `plumb` command.
+# lib/sh/plumbrules starts it, falling back to the defaults alone if the
+# user's rules do not parse.
 #
 # The plumber publishes /chan/plumb.* via file2chan, which needs /chan on
 # the srv device (#s); emu leaves /chan as the snarf device (#^).  Bind a
@@ -114,8 +117,7 @@ echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentat
 # consumer must never gate lucipres's init (see lucipres plumbreceiver).
 if {! ~ $noplumber 1} {
 	bind -bc '#splumber' /chan
-	plumber /lib/lucifer/plumbing &
-	sleep 1
+	/lib/sh/plumbrules start /lib/lucifer/plumbing
 }{
 	echo 'boot: noplumber=1 — plumber not started (pickers use the /mnt/ui fallback)'
 }

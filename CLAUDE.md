@@ -426,13 +426,18 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |
 | `tests/host/xenith_agent_test.sh` | The `Agent` window in a headless Xenith: a message sent, the reply shown |
+| `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, Xenith's image renderer not claiming text that begins like an image |
+| `tests/host/plumbrules_test.sh` | `lib/sh/plumbrules`: the user's plumbing rules read before the defaults (a user rule overrides, the defaults take the rest); `load` replaces them; a rules file that does not parse is refused at load and left out at start |
+| `tests/host/presentation_fileopen_test.sh` | Lucifer's plumbed file-opens: by type into the presentation view, a web URL into Charon (a second one to the running Charon), the Tasks tab with and without a plumber |
+| `tests/host/xenith_browse_test.sh` | Xenith browses: a URL looked at opens a browser window (the page over its text, Back Fwd Reload in the tag); Get goes to the URL in the tag; Back, Fwd and Render; a form typed into (injected click and keys); the page as files (posted where the window's `web` file says, a form submitted through `ctl` shown in the window, unposted when it closes); the same page over HTTP through webfs from a loopback server |
+| `tests/host/xenith_image_test.sh` | Xenith opens every image format as an image through a look (B3) at its name; formats with no decoder are refused with a reason; text still opens as text |
 | `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |
 | `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool) |
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 
-Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways). They need the SDL GUI emulator and skip on a headless build.
+Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). They need the SDL GUI emulator and skip on a headless build.
 
 ## Project Structure
 

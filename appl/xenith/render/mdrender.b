@@ -41,17 +41,26 @@ init(d: ref Draw->Display)
 	sys = load Sys Sys->PATH;
 	drawm = load Draw Draw->PATH;
 	display = d;
+}
 
-	rlayout = load Rlayout Rlayout->PATH;
+# The layout engine and its fonts are loaded when a document is first
+# shown, not when Xenith starts: init runs for every renderer, to
+# learn its extensions.
+loadlayout()
+{
 	if(rlayout != nil)
-		rlayout->init(d);
-
-	propfont = Font.open(d, PROPFONT);
-	monofont = Font.open(d, MONOFONT);
+		return;
+	propfont = Font.open(display, PROPFONT);
+	monofont = Font.open(display, MONOFONT);
 	if(propfont == nil)
-		propfont = Font.open(d, "*default*");
+		propfont = Font.open(display, "*default*");
 	if(monofont == nil)
 		monofont = propfont;
+
+	r := load Rlayout Rlayout->PATH;
+	if(r != nil)
+		r->init(display);
+	rlayout = r;
 }
 
 info(): ref RenderInfo
@@ -73,6 +82,7 @@ render(data: array of byte, hint: string,
        width, height: int,
        progress: chan of ref RenderProgress): (ref Draw->Image, string, string)
 {
+	loadlayout();
 	if(rlayout == nil)
 		return (nil, nil, "layout module not available");
 	if(propfont == nil)

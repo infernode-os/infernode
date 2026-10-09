@@ -14,6 +14,8 @@ include "bufio.m";
 	Iobuf: import bufio;
 include "imagefile.m";
 	imageremap: Imageremap;
+include "imgload.m";
+	imgload: Imgload;
 include "encoding.m";
 	base64: Encoding;
 include "web/dom.m";
@@ -68,6 +70,7 @@ init(d: ref Display): string
 	css = load Css Css->PATH;
 	style = load Style Style->PATH;
 	layout = load Layout Layout->PATH;
+	imgload = load Imgload Imgload->PATH;
 	imageremap = load Imageremap Imageremap->PATH;
 	base64 = load Encoding Encoding->BASE64PATH;
 	if(html == nil || css == nil || style == nil || layout == nil)
@@ -82,6 +85,8 @@ init(d: ref Display): string
 		return err;
 	if(imageremap != nil)
 		imageremap->init(d);
+	if(imgload != nil)
+		imgload->init(d);
 	readsettings();
 	return nil;
 }
@@ -366,7 +371,7 @@ picture1(url: string, data: array of byte, ctype: string): ref Pic
 	(img, raw) := decodeimage2(data, ctype, url);
 	if(img == nil)
 		return ref Pic(url, nil, nil, "cannot decode " + ctype, nil, 0, 0, nil, nil);
-	if(prefix(lower(ctype), "image/svg") || looksvg(data))
+	if(issvg(data, ctype, url))
 		return ref Pic(url, img, data, nil, raw, img.r.dx(), img.r.dy(), nil, nil);
 	(nw, nh) := (img.r.dx(), img.r.dy());
 	# no wider than the screen, from the start: pictures wait to be laid
@@ -1439,30 +1444,27 @@ decodeimage2(data: array of byte, ctype, url: string): (ref Image, ref Image)
 
 decodeimage1(data: array of byte, ctype, url: string): ref Image
 {
-	if(imageremap == nil || len data < 4)
+	if(imgload == nil || len data < 4)
 		return nil;
-	path := "";
-	ct := lower(ctype);
-	if(len data >= 8 && data[0] == byte 16r89 && data[1] == byte 'P' && data[2] == byte 'N' && data[3] == byte 'G')
-		path = RImagefile->READPNGPATH;
-	else if(data[0] == byte 16rFF && data[1] == byte 16rD8)
-		path = RImagefile->READJPGPATH;
-	else if(data[0] == byte 'G' && data[1] == byte 'I' && data[2] == byte 'F')
-		path = RImagefile->READGIFPATH;
-	else if(len data >= 12 && string data[0:4] == "RIFF" && string data[8:12] == "WEBP")
-		path = RImagefile->READWEBPPATH;
-	else if(len data >= 12 && string data[4:8] == "ftyp")
-		path = RImagefile->READAVIFPATH;
-	else if(prefix(ct, "image/svg") || suffix(lower(url), ".svg") || looksvg(data))
-		path = RImagefile->READSVGPATH;
-	if(path == "")
+	# which format, and its decoder: the system's one place for that
+	# (imgload).  The server's word for an SVG counts when neither the
+	# data nor the URL gives it: an SVG has no signature to recognise.
+	hint := url;
+	if(prefix(lower(ctype), "image/svg"))
+		hint = "image.svg";
+	n := len data;
+	if(n > 512)
+		n = 512;
+	fmt := imgload->format(data[0:n], hint);
+	if(fmt == nil)
 		return nil;
-	rd := load RImagefile path;
-	if(rd == nil)
-		return nil;
+	(rd, nil) := imgload->reader(fmt);
+	if(rd == nil || imageremap == nil) {
+		(img, nil) := imgload->readimagedata(data, hint);	# formats it reads itself (PPM)
+		return img;
+	}
 	# a decoder that faults on one image costs that image, not the page
 	{
-		rd->init(bufio);
 		(raw, err) := rd->read(bufio->aopen(data));
 		if(raw == nil || err != nil)
 			return nil;
@@ -1470,7 +1472,7 @@ decodeimage1(data: array of byte, ctype, url: string): ref Image
 		return img;
 	} exception e {
 	"*" =>
-		sys->fprint(sys->fildes(2), "charon: %s: %s: %s\n", url, path, e);
+		sys->fprint(sys->fildes(2), "charon: %s: %s: %s\n", url, fmt, e);
 		return nil;
 	}
 }
@@ -1590,12 +1592,14 @@ orient(img: ref Image, o: int): ref Image
 	return t;
 }
 
-looksvg(data: array of byte): int
+issvg(data: array of byte, ctype, url: string): int
 {
+	if(prefix(lower(ctype), "image/svg"))
+		return 1;
 	n := len data;
 	if(n > 512)
 		n = 512;
-	return index(string data[0:n], "<svg") >= 0;
+	return imgload->format(data[0:n], url) == "svg";
 }
 
 # ---- fetching ----

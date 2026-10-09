@@ -17,6 +17,7 @@ columnm : Columnm;
 exec : Exec;
 scrl : Scroll;
 plumbmsg : Plumbmsg;
+imgload : Imgload;
 
 sprint : import sys;
 Point : import draw;
@@ -195,6 +196,12 @@ plumblook(m : ref Msg)
 		return;
 	e.ar = nil;
 	e.name = string m.data;
+	# a URL plumbed to Xenith (a user's rule can send them here) is
+	# browsed; cleanname would fold its //
+	if(isurl(e.name)){
+		openurl(e.name);
+		return;
+	}
 	if(e.name[0] != '/' && m.dir != nil)
 		e.name = m.dir + "/" + e.name;
 	(e.name, nil) = cleanname(e.name, len e.name);
@@ -252,7 +259,26 @@ openlink(url : string)
 		if(m.send() >= 0)
 			return;
 	}
+	# nothing takes it (a standalone Xenith has no browser to plumb
+	# to): a web page is browsed in Xenith
+	if(isurl(url)){
+		openurl(url);
+		return;
+	}
 	warning(nil, sys->sprint("nothing to open %s with\n", url));
+}
+
+# A browser window on url (cleanname would fold its //)
+openurl(url : string)
+{
+	e : Expand;
+	e.q0 = e.q1 = 0;
+	e.ar = nil;
+	e.name = url;
+	e.bname = url;
+	e.jump = TRUE;
+	e.a0 = e.a1 = 0;
+	openfile(nil, e);
 }
 
 ishtmlname(s : string) : int
@@ -382,7 +408,7 @@ isurl(s : string) : int
 {
 	if(len s >= 8 && s[0:8] == "https://")
 		return TRUE;
-	if(len s >= 7 && s[0:7] == "http://")
+	if(len s >= 7 && (s[0:7] == "http://" || s[0:7] == "file://"))
 		return TRUE;
 	return FALSE;
 }
@@ -776,43 +802,13 @@ lookid(id : int, dump : int) : ref Window
 	return nil;
 }
 
-# Check if filename has an image extension (case-insensitive)
-# Retained as fast-path for built-in image formats.
+# Check if filename has the extension of an image format imgload
+# reads (see module/imgload.m), so the two cannot disagree.
 isimage(name: string): int
 {
-	if(name == nil || len name < 4)
-		return 0;
-
-	dot := -1;
-	for(i := len name - 1; i >= 0; i--){
-		if(name[i] == '.'){
-			dot = i;
-			break;
-		}
-		if(name[i] == '/')
-			break;
-	}
-	if(dot < 0)
-		return 0;
-
-	ext := name[dot:];
-	n := len ext;
-
-	if(n == 4){
-		# .png .ppm .pgm .pbm .bit .pic
-		if(ext[0] == '.'){
-			c1 := ext[1]; if(c1 >= 'A' && c1 <= 'Z') c1 += 'a' - 'A';
-			c2 := ext[2]; if(c2 >= 'A' && c2 <= 'Z') c2 += 'a' - 'A';
-			c3 := ext[3]; if(c3 >= 'A' && c3 <= 'Z') c3 += 'a' - 'A';
-			if(c1 == 'p' && c2 == 'n' && c3 == 'g') return 1;
-			if(c1 == 'p' && c2 == 'p' && c3 == 'm') return 1;
-			if(c1 == 'p' && c2 == 'g' && c3 == 'm') return 1;
-			if(c1 == 'p' && c2 == 'b' && c3 == 'm') return 1;
-			if(c1 == 'b' && c2 == 'i' && c3 == 't') return 1;
-			if(c1 == 'p' && c2 == 'i' && c3 == 'c') return 1;
-		}
-	}
-	return 0;
+	if(imgload == nil)
+		imgload = load Imgload Imgload->PATH;
+	return imgload != nil && imgload->isimage(name);
 }
 
 # Check if filename matches any known content type.
@@ -889,11 +885,10 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		t = w.body;
 		w.setname(e.name, len e.name);
 
-		# Check if this is a URL — route through content pipeline
-		# (asyncio contenttask fetches via webclient, then webrender
-		# sets HTML with Charon's engine, as image + extracted text)
+		# A URL is browsed: the window a browser window (Window.browse)
 		if(isurl(e.bname)){
-			err := w.loadcontent(e.bname);
+			# a browser window
+			err := w.browse(e.bname);
 			if(err != nil)
 				warning(nil, sprint("can't load URL %s: %s\n", e.bname, err));
 		}

@@ -109,6 +109,17 @@ if {~ $emuhost MacOSX Linux Nt}{
 		mkdir -p $infhome/usr/inferno/keyring
 	}
 
+	# Plumbing rules: the user's file is read first, then the system's
+	# defaults (lib/sh/plumbrules). It used to be seeded with Inferno's
+	# whole rule set, which, read first, would take every message from
+	# the defaults (files to acme, web pages to a charon outside Lucifer).
+	# A copy never edited becomes the commented template; the old rules
+	# stay beside it as plumbing.inferno. An edited copy is the user's.
+	if {cmp -s $infhome/usr/inferno/lib/plumbing /usr/inferno/lib/plumbing.inferno >[2] /dev/null} {
+		cp $infhome/usr/inferno/lib/plumbing $infhome/usr/inferno/lib/plumbing.inferno
+		cp /usr/inferno/lib/plumbing $infhome/usr/inferno/lib/plumbing
+	}
+
 	# Writable overlay mounts. /usr is bound WHOLE: names present on the
 	# durable side win, creates land durable, and anything only in the
 	# system tree (e.g. the pristine skeleton, the testnode fixture)

@@ -61,6 +61,9 @@ Windowm : module {
 		docb : ref Draw->Image;	# where the body's text draws meanwhile, unseen
 		doclines : array of int;	# each block's first line in the text
 		docys : array of int;	# and its top in the document
+		dochtml : int;	# the document is HTML, set by Charon's engine (htmldoc)
+		docheight : int;	# the document's height
+		docpage : ref Draw->Image;	# an HTML document's part in view
 		utflastqid : int;
 		utflastboff : int;
 		utflastq : int;
@@ -103,6 +106,7 @@ Windowm : module {
 		contentcommand : fn(w : self ref Window, cmd, arg : string) : string;
 		asynccontentcommand : fn(w : self ref Window, cmd, arg : string);
 		docrender : fn(w : self ref Window) : string;
+		doclink : fn(w : self ref Window, p : Draw->Point) : string;
 		docoff : fn(w : self ref Window);
 		docscroll : fn(w : self ref Window, dy : int);
 	};

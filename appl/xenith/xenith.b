@@ -654,7 +654,7 @@ mousetask()
 							3 =>	w.docscroll(d);
 							2 =>
 								if(w.bodyimage != nil && t.scrollr.dy() > 0)
-									w.docscroll(w.bodyimage.r.dy() * d / t.scrollr.dy() - w.imageoffset.y);
+									w.docscroll(w.docheight * d / t.scrollr.dy() - w.imageoffset.y);
 							}
 							while(mouse.buttons)
 								frgetmouse();
@@ -770,8 +770,13 @@ mousetask()
 						}
 					}else if(mouse.buttons & 4){
 						if(w != nil && w.imagemode && t.what == Body){
-							# No text look in image mode body
-							;
+							# a link in an HTML document is followed;
+							# otherwise no look in image mode body
+							if((u := w.doclink(mouse.xy)) != nil){
+								while(mouse.buttons)
+									frgetmouse();
+								look->openlink(u);
+							}
 						} else {
 							(ok, q0, q1) = t.select3(q0, q1);
 							if(ok){

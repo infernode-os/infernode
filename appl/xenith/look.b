@@ -215,6 +215,62 @@ plumblook(m : ref Msg)
 	}
 }
 
+# A link followed in an HTML document: a local page opens here, set as
+# a document as the one it came from; anything else goes to the
+# plumber (a web page to Charon).
+openlink(url : string)
+{
+	if(len url > 7 && url[0:7] == "file://"){
+		path := url[7:];
+		for(i := 0; i < len path; i++)
+			if(path[i] == '#' || path[i] == '?'){
+				path = path[0:i];
+				break;
+			}
+		m := ref Msg;
+		m.src = "xenith";
+		m.kind = "text";
+		m.data = array of byte path;
+		plumblook(m);
+		w := lookfile(path, len path);
+		if(w != nil && !w.docview && ishtmlname(path)){
+			w.dochtml = 1;
+			if(w.docrender() == nil){
+				w.rendermode = 1;
+				w.settag();
+			}else
+				w.dochtml = 0;
+		}
+		return;
+	}
+	if(dat->plumbed){
+		m := ref Msg;
+		m.src = "xenith";
+		m.dir = xenith->wdir;
+		m.kind = "text";
+		m.data = array of byte url;
+		if(m.send() >= 0)
+			return;
+	}
+	warning(nil, sys->sprint("nothing to open %s with\n", url));
+}
+
+ishtmlname(s : string) : int
+{
+	for(i := len s - 1; i >= 0 && s[i] != '/'; i--)
+		if(s[i] == '.'){
+			e := "";
+			for(j := i+1; j < len s; j++){
+				c := s[j];
+				if(c >= 'A' && c <= 'Z')
+					c += 'a' - 'A';
+				e[len e] = c;
+			}
+			return e == "html" || e == "htm" || e == "xhtml";
+		}
+	return 0;
+}
+
 plumbshow(m : ref Msg)
 {
 	{
@@ -834,8 +890,8 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		w.setname(e.name, len e.name);
 
 		# Check if this is a URL — route through content pipeline
-		# (asyncio contenttask fetches via webclient, then htmlrender
-		# detects HTML and renders to image + extracted text)
+		# (asyncio contenttask fetches via webclient, then webrender
+		# sets HTML with Charon's engine, as image + extracted text)
 		if(isurl(e.bname)){
 			err := w.loadcontent(e.bname);
 			if(err != nil)

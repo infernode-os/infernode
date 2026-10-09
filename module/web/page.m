@@ -37,6 +37,8 @@ Page: module
 	open:	fn(url: string, width, height: int): (ref Pg, string);
 	# a form submission: method "GET" or "POST", body sent with ctype
 	request:	fn(url, method, ctype: string, body: array of byte, width, height: int): (ref Pg, string);
+	# a document already in hand, as if fetched from url with content type ctype
+	parse:	fn(data: array of byte, ctype, url: string, width, height: int): ref Pg;
 	fetch:	fn(url: string): (array of byte, string, string);	# (data, content type, error)
 	decodeimage:	fn(data: array of byte, ctype, url: string): ref Draw->Image;
 };

@@ -2833,38 +2833,40 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	# align-content: distribute extra cross space among lines (§9.4.15)
 	ac := st.aligncontent;
 	free := containercross - crosssum;
-	off := 0;
-	between := 0;
+	# the shares are fractions of a pixel, laid out exactly and each
+	# line's place rounded, so no error builds up (align-content-004)
+	roff := 0.0;
+	between := 0.0;
 	if(len la > 1 || wrap) {
 		case ac {
 		Style->ALnormal or Style->ALstretch =>
 			if(free > 0 && len la > 0) {
-				per := free / len la;
-				for(i = 0; i < len la; i++)
-					la[i].cross += per;
+				for(i = len la - 1; i >= 0; i--)
+					la[i].cross += int (real free * real (i+1) / real len la) - int (real free * real i / real len la);
 			}
 		Style->ALend or Style->ALflowend =>
-			off = free;
+			roff = real free;
 		Style->ALcenter =>
-			off = free/2;
+			roff = real free / 2.0;
 		Style->ALbetween =>
 			if(len la > 1)
-				between = free / (len la - 1);
+				between = real free / real (len la - 1);
 		Style->ALaround =>
-			between = free / nz1(len la);
-			off = between/2;
+			between = real free / real nz1(len la);
+			roff = between / 2.0;
 		Style->ALevenly =>
-			between = free / (len la + 1);
-			off = between;
+			between = real free / real (len la + 1);
+			roff = between;
 		}
-		if(between < 0)
-			between = 0;
+		if(between < 0.0)
+			between = 0.0;
 	}
-	cpos := off;
+	rpos := roff;
 	for(i = 0; i < len la; i++) {
-		la[i].pos = cpos;
-		cpos += la[i].cross + gapcross + between;
+		la[i].pos = int math->floor(rpos + 0.5);
+		rpos += real (la[i].cross + gapcross) + between;
 	}
+	off := int math->floor(roff + 0.5);
 	# wrap-reverse: the lines run from the cross end (§5.2); so do
 	# they in a column container whose direction is rtl, whose cross
 	# start is the right; both at once cancel
@@ -2990,7 +2992,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 					al = Style->ALstart;
 			}
 			lc := ln.cross;
-			cpos = 0;
+			cpos := 0;
 			if(row) {
 				if(al == Style->ALstretch && ks.height.kind == Style->Lauto &&
 				   ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto) {

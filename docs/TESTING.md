@@ -65,7 +65,7 @@ Run inside the Inferno emulator. All compiled to `dis/tests/*.dis`.
 | Test | What it covers | Requires |
 |------|----------------|----------|
 | `luciuisrv_test` | All luciuisrv ctl commands: conversation, presentation, context, events | nothing (loads server in-process) |
-| `lucifer_flicker_test` | Lucifer rendering regression | nothing |
+| `lucifer_flicker_test` | Lucia rendering regression | nothing |
 | `pres_launch_test` | Presentation zone launch and render | nothing |
 
 ### Networking / Crypto
@@ -192,15 +192,14 @@ Shell scripts run inside Inferno. Invoked by `tests/runner.b` or manually.
 | `lucifer.sh` | luciuisrv ctl commands end-to-end | nothing |
 | `lucibridge.sh` | lucibridge startup and session init | `/mnt/llm` |
 | `lucibridge_tools.sh` | lucibridge tool_use round-trip | `/mnt/llm` |
-| `lucifer_presentation_test.rc` | Inject artifacts into running Lucifer session | running Lucifer |
-| `veltro_tool_test.rc` | Tool execution via Veltro (19 tool tests) | tools9p |
+| `lucifer_presentation_test.rc` | Inject artifacts into running Lucia session | running Lucia |
 
 ---
 
 ## Test Runner
 
 `tests/runner.b` (compiled to `dis/tests/runner.dis`) runs all `*_test.dis` files in
-`dis/tests/` plus all `*.sh` scripts in `tests/inferno/`. It reports total counts.
+`/tests` plus all `*.sh` scripts in `/tests/inferno`. It reports total counts.
 
 ```sh
 # Run all tests
@@ -217,14 +216,14 @@ cat tests/runner.b
 
 ## What Is NOT Automated
 
-The following require manual verification or a running full Lucifer session:
+The following require manual verification or a running full Lucia session:
 
 1. **End-to-end LLM agent turns** — full veltro session: prompt → tool calls → response.
    The `tooluse_test` covers the protocol, but a complete multi-turn agent session with
    real tool use requires llmsrv and a user prompt.
 
 2. **GUI rendering** — partially automated, contrary to what this section used
-   to say. Headless harnesses exist and run in CI: full Lucifer boots under
+   to say. Headless harnesses exist and run in CI: full Lucia boots under
    `SDL_VIDEODRIVER=dummy` with a `/mnt/ui` driver script
    (`tests/host/presentation_fileopen_test.sh`), Tk command lists render
    off-screen to PNG (`tools/tk-snapshot.sh`, `tests/tkrender.b`,
@@ -235,7 +234,7 @@ The following require manual verification or a running full Lucifer session:
 
 3. **Context zone → lucibridge sync** — the full chain "user clicks [-] on tool → lucictx
    writes to /tool/ctl → lucibridge picks up change on next turn → LLM loses schema"
-   requires a running Lucifer + lucibridge + llmsrv. The individual pieces are tested
+   requires a running Lucia + lucibridge + llmsrv. The individual pieces are tested
    (luciuisrv_test, pathmanage_test, tooluse_test) but the end-to-end chain is not.
 
 4. **Cross-host 9P** — requires the Jetson to be reachable over ZeroTier.

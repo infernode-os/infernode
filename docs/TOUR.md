@@ -33,15 +33,12 @@ From the infernode directory, start the emulator headless:
 Once inside Inferno, at the `;` prompt:
 
 ```sh
-; veltro 'run the tour'
+; /dis/veltro/veltro.dis 'run the tour'
 ```
 
-Or start the REPL and ask for the tour:
-
-```sh
-; repl
-> run the tour
-```
+`veltro` installs under `/dis/veltro/`, which is not on the shell's path, so
+give its full path. It needs `/tool` (tools9p, which `lib/lucifer/boot.sh`
+starts) and `/mnt/llm` mounted, and warns if either is missing.
 
 ## What the Tour Demonstrates
 

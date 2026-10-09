@@ -445,8 +445,11 @@ infernode/
 ├── emu/                 # Emulator source and binaries
 │   ├── MacOSX/          #   macOS emulator (o.emu binary)
 │   ├── Linux/           #   Linux emulator (build with build-linux-*.sh)
+│   ├── Nt/              #   Windows emulator (build-windows-amd64.ps1)
+│   ├── Android/         #   Android platform glue (build-android-*.sh)
+│   ├── iOS/             #   iOS platform glue (build-ios-*.sh)
 │   └── port/            #   Platform-independent emulator source
-├── appl/                # Limbo application source (~700 .b files)
+├── appl/                # Limbo application source (~900 .b files)
 │   ├── cmd/             #   Command-line utilities (incl. mail9p — IMAP/SMTP at /mnt/mail)
 │   ├── lib/             #   Library modules
 │   ├── veltro/          #   Veltro AI agent system
@@ -457,7 +460,10 @@ infernode/
 ├── module/              # Limbo module interfaces (.m files)
 ├── os/                  # NATIVE (bare-metal) kernel: os/arm64 shared AArch64,
 │                        #   os/bcm2837 Raspberry Pi 3B+, os/port portable kernel,
-│                        #   os/ip TCP/IP, os/init the Dis that boots it.
+│                        #   os/ip TCP/IP, os/init the Dis that boots it,
+│                        #   os/bcm drivers the Pi SoCs share, os/bcm2711
+│                        #   Raspberry Pi 4B, os/virt QEMU AArch64 virt,
+│                        #   os/virtio virtio drivers, os/fb framebuffer console.
 │                        #   Built and tested ONLY via tests/host/baremetal_test.sh;
 │                        #   status and roadmap in os/bcm2837/README.md.
 │                        #   RISC-V: os/riscv64 (arch), os/riscvvirt (QEMU virt),
@@ -477,7 +483,7 @@ infernode/
 ├── hooks/               # Git hooks (run ./hooks/install.sh after clone)
 ├── mkfiles/             # Shared mk build rules
 ├── mkconfig             # Build configuration (auto-detects platform)
-├── .github/workflows/   # CI/CD (ci, security, scorecard)
+├── .github/workflows/   # CI/CD (build, test, release, security and more)
 └── build-*.sh           # Platform build scripts
 ```
 
@@ -507,7 +513,7 @@ Two CI guards enforce this, and they are load-bearing:
 genuinely becomes a shippable feature, that decision needs explicit design work
 and the CI guards updated together — never silently.
 
-The subagent trajectory logging added in `appl/veltro/{spawn,subagent}.b`
+The subagent trajectory logging added in `appl/veltro/tools/spawn.b` and `appl/veltro/subagent.b`
 is *not* ring-fenced: it's a general observability improvement to the
 agent stack, useful outside the harness, and ships normally.
 

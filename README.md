@@ -39,7 +39,7 @@ cd infernode-*-linux-*-gui
 
 > Pick the tarball that matches your CPU: `amd64` for Intel/AMD, `arm64` for Jetson / Raspberry Pi / Apple-Silicon Linux. The wrong arch fails with `ld-linux-aarch64.so.1: No such file` (or similar).
 
-Every release asset is published with a cosign bundle (`.pem` + `.sig`) and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
+Every release asset is published with a cosign `.sigstore` bundle and a signed `SHA256SUMS.txt`; container images carry SLSA build provenance. See [Releases](https://github.com/infernode-os/infernode/releases) for the full history.
 
 Code signing for Windows builds is provided by the [SignPath Foundation](https://signpath.org/) — a non-profit that signs open-source releases with certificates issued by SSL.com. Signed Windows binaries get verified Publisher metadata and Microsoft SmartScreen reputation; without signing, browser-downloaded zips carry a Mark-of-the-Web tag that Windows propagates to every extracted file and SmartScreen then silently blocks (handled in the meantime by `setup-windows.bat`, which clears the tag from the bundle on first run — see the Windows install bullet above).
 
@@ -86,13 +86,13 @@ stdout/stderr stream to the terminal; Ctrl-C exits. `-c1` enables the JIT; `-r$P
 
 - **Lightweight** — 15–30 MB RAM, 2-second startup, ~10 MB on disk.
 - **JIT compiled** — native code generation on AMD64, ARM64 and RISC-V; interpreter fallback everywhere.
-- **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 39 tool modules, LLM integration via 9P, and formally verified containment.
+- **AI agents** — namespace-isolated [Veltro](appl/veltro/SECURITY.md) agents with 44 tool modules, LLM integration via 9P, and formally verified containment.
 - **GUI (optional)** — three-zone tiling UI (Lucia) and an AI-native text environment ([Xenith](docs/XENITH.md)), rendered via SDL3 (Metal / Vulkan / D3D).
-- **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucifer) or by agents through `/mnt/matrix/ctl`.
+- **Matrix** — compositional module runtime: Limbo `.dis` modules loaded against mounted 9P namespaces, arranged from a [text composition file](docs/matrix-architecture.md), drivable by hand (clickable picker + right-click menu in Lucia) or by agents through `/mnt/matrix/ctl`.
 - **Payments** — native cryptocurrency wallet with [x402](docs/WALLET-AND-PAYMENTS.md) payment protocol, ERC-20 tokens, and budget-enforced agent spending with a trusted approval queue. Signing is cross-validated against go-ethereum; see the [security model](docs/WALLET-AND-PAYMENTS.md#status-and-security-model).
 - **Formally verified** — namespace isolation proven in TLA+ (3.17B states), SPIN, and CBMC.
 - **Quantum-safe crypto** — ML-KEM, ML-DSA, SLH-DSA (FIPS 203/204/205).
-- **Complete** — 800+ Limbo source files, a full shell, TCP/IP, 9P, and 815 compiled utilities.
+- **Complete** — 1,100+ Limbo source files, a full shell, TCP/IP, 9P, and over 1,000 compiled Dis modules.
 
 ## Platforms
 
@@ -112,7 +112,7 @@ Speedups are v1 suite (6 benchmarks, best-of-3). Full data: [docs/BENCHMARKS.md]
 
 InferNode also runs *native*, with nothing underneath it: the kernel boots the
 board, brings up the hardware, starts the Dis VM, and runs the same bytecode the
-hosted emulator runs — the same shell, the same Tk, the same Lucifer desktop. A
+hosted emulator runs — the same shell, the same Tk, the same Lucia desktop. A
 recovery root (shell, file utilities, `dossrv`, the USB and Ethernet drivers) is
 compiled into the kernel image; the rest of userspace comes off the SD card at
 boot. The machine decides how to boot by one question — is there a screen? With
@@ -135,9 +135,9 @@ supported way to build the kernel (it needs `clang`, `ld.lld`, `llvm-objcopy`,
 BAREMETAL_BUILD_DIR=/tmp/bm ./tests/host/baremetal_test.sh
 ```
 
-CI builds, boots and tests both machines on every pull request that touches the
-kernel. Full manual — running it, the card image, the QEMU flags that fail
-silently, what controls it: [docs/BAREMETAL.md](docs/BAREMETAL.md).
+CI builds, boots and tests QEMU `virt`, the Pi 3B+ and Pi 4B models, and both
+RISC-V machines on every pull request that touches the kernel. Full manual —
+running it, the card image, the QEMU flags that fail silently, what controls it: [docs/BAREMETAL.md](docs/BAREMETAL.md).
 
 ## Documentation
 

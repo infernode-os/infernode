@@ -21,22 +21,12 @@ text console — no GUI, no agent, no LLM.
 ```sh
 cd infernode/emu/MacOSX
 ./o.emu -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r../.. \
-  sh -l -c "wm/logon; \
-    llmsrv &; sleep 1; \
-    /dis/veltro/wallet9p.dis &; sleep 1; \
-    luciuisrv; \
-    echo activity create Main > /mnt/ui/ctl; sleep 1; \
-    /dis/veltro/tools9p -v -m /tool \
-      -b read,list,find,search,grep,write,edit,editor,exec,launch,spawn,diff,json,fractal,webfetch,git,say,memory,todo,plan,websearch,mail,keyring,present,gap \
-      -p /dis/wm read list find present say hear task memory gap keyring editor shell; \
-    lucibridge -a 0 -v -s &; sleep 1; \
-    echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl; \
-    lucifer"
+  sh -l /lib/lucifer/boot.sh
 ```
 
-This is equivalent to what the app bundle does via `lib/sh/profile` and
-`lib/lucifer/boot.sh`, but laid out explicitly so you can see and modify
-each step.
+`lib/lucifer/boot.sh` is the canonical boot sequence, and the same script
+the app bundle runs. Read it to see or modify each step; the table below
+summarises it.
 
 ### Breaking Down the Command
 
@@ -44,28 +34,30 @@ each step.
 
 | Flag | Purpose |
 |------|---------|
-| `-c1` | Enable JIT compilation (ARM64 or AMD64). Use `-c0` for interpreter only. |
+| `-c1` | Enable JIT compilation (ARM64, AMD64 or RISC-V). Use `-c0` for interpreter only. |
 | `-pheap=1024m` | Heap pool size (memory for Limbo allocations) |
 | `-pmain=1024m` | Main pool size (memory for kernel data structures) |
 | `-pimage=1024m` | Image pool size (memory for draw images/GUI) |
 | `-r../..` | Inferno root directory. Points to the project checkout. The path is concatenated directly to `-r` with no space. |
 
-**Boot sequence (inside `sh -l -c "..."`):**
+**Boot sequence (`lib/lucifer/boot.sh`):**
 
 The `-l` flag loads `lib/sh/profile` which sets up networking, the host
 filesystem mount (`trfs`), the `~/.infernode` writable overlay, secstored,
-and factotum. Then `-c` runs the quoted command string:
+and factotum. Then `boot.sh` runs, in order:
 
 | Step | Command | Purpose |
 |------|---------|---------|
 | 1 | `wm/logon` | Login screen. Creates secstore account on first run, unlocks and loads keys on subsequent runs. Blocks until the user enters their password. |
-| 2 | `llmsrv &` | LLM 9P file server. Mounts at `/mnt/llm`. Reads config from `lib/ndb/llm` (via profile). The `&` backgrounds it. |
+| 2 | `run /lib/lucifer/llmsrv.sh` (backgrounded) | (Re-)starts the LLM service from `/lib/ndb/llm`: a local `llmsrv` at `/mnt/llm`, or a remote `/mnt/llm` mounted over 9P. |
 | 3 | `wallet9p &` | Cryptocurrency wallet 9P server. Mounts at `/n/wallet`; enforces budget and approval policy on all payments. |
+| 3a | `msg9p &` | Message layer at `/mnt/msg`; registers the sms source, and email when `/lib/veltro/sources/email.conf` exists. |
 | 4 | `luciuisrv` | UI 9P server. Creates the `/mnt/ui` namespace that lucifer, lucipres, luciconv, and lucibridge all communicate through. This is the hub. |
 | 5 | `echo activity create Main > /mnt/ui/ctl` | Creates the default "Main" activity (task/conversation). |
 | 6 | `tools9p -v -m /tool -b ... -p ...` | Veltro tool server. `-b` lists built-in tool modules. `-p` lists tools available to the agent as "passive" (invocable). Mounts at `/tool`. |
-| 7 | `lucibridge -a 0 -v -s &` | Agent bridge. Connects the conversation zone to the LLM. `-a 0` targets activity 0, `-v` verbose, `-s` enables speech. |
+| 7 | `lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &` | Agent bridge. Connects the conversation zone to the LLM. `-a 0` targets activity 0, `-v` verbose, `-s` enables speech. |
 | 8 | `echo 'create id=tasks ...' > /mnt/ui/...` | Creates the Tasks taskboard tab in the presentation zone. |
+| 8a | `plumber /lib/lucifer/plumbing &` | Routes file-opens to the presentation view (skipped when `$noplumber` is 1). |
 | 9 | `lucifer` | Main GUI. Blocks until the user exits. When lucifer returns, emu shuts down. |
 
 **Important:** Commands are separated by `;` not `&&`. The Inferno shell
@@ -94,7 +86,7 @@ Key log messages to look for:
 | `logon: loaded N keys from secstore` | Secstore unlocked successfully, N keys restored |
 | `logon: secstore has no factotum file` | No saved keys (first run or read failure) |
 | `factotum: secstore configured` | Save-back to secstore is active |
-| `lucibridge: ready` | Agent is connected and waiting for input |
+| `lucibridge: ready — activity N, session S, ...` | Agent is connected and waiting for input (`-v` only; boot.sh sends lucibridge's stderr to `/tmp/lucibridge.log`) |
 | `lucibridge: llm configured but not ready` | LLM service failed to start |
 | `tools9p: warning: cannot load tool X` | A tool's .dis file is missing (rebuild needed) |
 
@@ -277,6 +269,12 @@ cd tests && mk install
 - Native tools: `MacOSX/arm64/bin/mk`, `MacOSX/arm64/bin/limbo`
 - JIT: ARM64 JIT with `-c1`
 
+### macOS (Intel)
+
+- Same build scripts; they select `amd64` from `uname -m`
+- Native tools: `MacOSX/amd64/bin/mk`, `MacOSX/amd64/bin/limbo`
+- JIT: AMD64 JIT with `-c1`
+
 ### Linux (AMD64)
 
 - Build: `./build-linux-amd64.sh`
@@ -289,3 +287,9 @@ cd tests && mk install
 - Build: `./build-linux-arm64.sh`
 - Native tools: `Linux/arm64/bin/mk`, `Linux/arm64/bin/limbo`
 - JIT: ARM64 JIT with `-c1`
+
+### Linux (RISC-V, RV64GC)
+
+- Build: `./build-linux-riscv64.sh` (headless only; native or cross-compiled)
+- Native tools: `Linux/riscv64/bin/mk`, `Linux/riscv64/bin/limbo`
+- JIT: RISC-V JIT with `-c1`

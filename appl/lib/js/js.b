@@ -59,6 +59,7 @@ include "jsdate.b";
 include "jsproxy.b";
 include "jsbigint.b";
 include "jstyped.b";
+include "jsiter.b";
 
 output: ref fn(s: string);
 

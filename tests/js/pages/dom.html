@@ -180,6 +180,16 @@ test('style sheets', () => {
 	check('a new style', s2.textContent, '#box { padding: 1px }');
 	s2.remove();
 });
+test('geometry', () => {
+	const m = new DOMMatrix('matrix(1, 0, 0, 1, 10, 20)');
+	check('matrix e f', [m.e, m.f], [10, 20]);
+	const t = new DOMMatrix().translate(5, 6).scale(2);
+	check('translate scale', t.toString(), 'matrix(2, 0, 0, 2, 5, 6)');
+	const p = t.transformPoint({x: 1, y: 1});
+	check('transformPoint', [p.x, p.y], [7, 8]);
+	check('inverse', t.inverse().multiply(t).isIdentity, true);
+	check('none', new DOMMatrix('none').isIdentity, true);
+});
 test('forms', () => {
 	const f = document.getElementById('f');
 	check('elements', f.elements.length, 5);

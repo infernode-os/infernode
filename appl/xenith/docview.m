@@ -65,8 +65,10 @@ Docview: module {
 	# Render: the document, or its text
 	render:	fn(w: ref Windowm->Window): string;
 
-	# Done with it: the window shows its text again
+	# Done with it: the window shows its text again; or, for a window
+	# going away, just let go
 	close:	fn(w: ref Windowm->Window);
+	release:	fn(w: ref Windowm->Window);
 
 	# The document is in the window (not its text)
 	shown:	fn(w: ref Windowm->Window): int;
@@ -86,6 +88,7 @@ Docview: module {
 	button2:	fn(w: ref Windowm->Window): (string, int);
 	button3:	fn(w: ref Windowm->Window): (string, string);
 	wheel:	fn(w: ref Windowm->Window, buttons: int);
+	scrollclick:	fn(w: ref Windowm->Window, but: int, y: int);
 
 	# Zoom+ Zoom- Zoom n, Fit, Fit page, Page n, NextPage, PrevPage,
 	# and the engine's own: 1 if it was one

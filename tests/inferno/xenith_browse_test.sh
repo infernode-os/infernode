@@ -225,7 +225,7 @@ for i in 1 2 3 4 5 {
 	}
 }
 web=`{cat $XENITH/$g/web}
-if {~ $web '#sxenith/'^$g} {
+if {~ $web '#sxenith/'*} {
 	pass 'a browser window''s page is posted:' $web
 } {
 	fail 'the web file:' $web

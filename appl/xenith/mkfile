@@ -34,6 +34,7 @@ TARG=\
 	render.dis\
 	format.dis\
 	docreg.dis\
+	docview.dis\
 
 ICONS=\
 	abcde.bit\
@@ -67,6 +68,7 @@ MODULES=\
 	styxaux.m\
 	render.m\
 	format.m\
+	docview.m\
 
 SYSMODULES=\
 	bufio.m\

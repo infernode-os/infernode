@@ -17,7 +17,7 @@ columnm : Columnm;
 exec : Exec;
 scrl : Scroll;
 plumbmsg : Plumbmsg;
-imgload : Imgload;
+docview : Docview;
 
 sprint : import sys;
 Point : import draw;
@@ -50,6 +50,7 @@ init(mods : ref Dat->Mods)
 	exec = mods.exec;
 	scrl = mods.scroll;
 	plumbmsg = mods.plumbmsg;
+	docview = mods.docview;
 }
 
 nuntitled : int;
@@ -240,14 +241,8 @@ openlink(url : string)
 		m.data = array of byte path;
 		plumblook(m);
 		w := lookfile(path, len path);
-		if(w != nil && !w.docview && ishtmlname(path)){
-			w.dochtml = 1;
-			if(w.docrender() == nil){
-				w.rendermode = 1;
-				w.settag();
-			}else
-				w.dochtml = 0;
-		}
+		if(w != nil && !docview->shown(w) && ishtmlname(path))
+			docview->render(w);
 		return;
 	}
 	if(dat->plumbed){
@@ -266,6 +261,29 @@ openlink(url : string)
 		return;
 	}
 	warning(nil, sys->sprint("nothing to open %s with\n", url));
+}
+
+# A word on a document's drawing looked at (button 3): plumbed, from
+# the document's directory; if nothing takes it, found in the document
+lookword(w : ref Window, word : string)
+{
+	if(dat->plumbed){
+		m := ref Msg;
+		m.src = "xenith";
+		m.dir = xenith->wdir;
+		name := w.body.file.name;
+		for(i := len name - 1; i > 0; i--)
+			if(name[i] == '/'){
+				m.dir = name[0:i];
+				break;
+			}
+		m.kind = "text";
+		m.data = array of byte word;
+		if(m.send() >= 0)
+			return;
+	}
+	if((err := docview->find(w, word)) != nil)
+		warning(nil, sprint("%s: %s\n", word, err));
 }
 
 # A browser window on url (cleanname would fold its //)
@@ -851,63 +869,6 @@ lookid(id : int, dump : int) : ref Window
 	return nil;
 }
 
-# Check if filename has the extension of an image format imgload
-# reads (see module/imgload.m), so the two cannot disagree.
-isimage(name: string): int
-{
-	if(imgload == nil)
-		imgload = load Imgload Imgload->PATH;
-	return imgload != nil && imgload->isimage(name);
-}
-
-# Check if filename matches any known content type.
-# Checks built-in image types and content types loadable
-# through the renderer pipeline (markdown, HTML, etc.).
-iscontent(name: string): int
-{
-	if(isimage(name))
-		return 1;
-	return isrenderable(name);
-}
-
-# Check if filename has a renderer-supported extension.
-# This is the local fast-path; the Render registry also
-# checks dynamically when loaded via Mods.
-isrenderable(name: string): int
-{
-	if(name == nil || len name < 4)
-		return 0;
-
-	dot := -1;
-	for(i := len name - 1; i >= 0; i--){
-		if(name[i] == '.'){
-			dot = i;
-			break;
-		}
-		if(name[i] == '/')
-			break;
-	}
-	if(dot < 0)
-		return 0;
-
-	ext := name[dot:];
-	# Lowercase
-	lext := "";
-	for(i = 0; i < len ext; i++){
-		c := ext[i];
-		if(c >= 'A' && c <= 'Z')
-			c += 'a' - 'A';
-		lext[len lext] = c;
-	}
-
-	# Supported content renderer extensions (text formats handled by Render command)
-	case lext {
-	".pdf" =>
-		return 1;
-	}
-	return 0;
-}
-
 openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 {
 	r : Range;
@@ -925,6 +886,15 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		t = w.body;
 		if(!t.col.safe && t.frame.maxlines==0) # window is obscured by full-column window
 			t.col.grow(t.col.w[0], 1, 1);
+		# a PDF or an image open as text (Render off) is shown as
+		# itself again; one never shown (opened before it was
+		# known for one) is shown
+		if(e.name != nil && !w.dirty && !docview->shown(w)){
+			if(w.doc != nil && docview->readonly(w))
+				docview->render(w);
+			else if(w.doc == nil && (k := docview->kind(e.bname)) != nil && k.class == Docreg->Binary)
+				docview->open(w, e.bname, k);
+		}
 	}
 	else{
 		ow = nil;
@@ -934,29 +904,16 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		t = w.body;
 		w.setname(e.name, len e.name);
 
-		# A URL is browsed: the window a browser window (Window.browse)
+		# a URL is browsed, the window a browser window; a PDF or an
+		# image shown as the document it is (docview(2))
 		if(isurl(e.bname)){
-			# a browser window
-			err := w.browse(e.bname);
-			if(err != nil)
+			if((err := docview->browse(w, e.bname)) != nil)
 				warning(nil, sprint("can't load URL %s: %s\n", e.bname, err));
-		}
-		# Check if this is renderable content (image, PDF, etc.)
-		else if(iscontent(e.bname)){
-			# Use renderer pipeline for all content types;
-			# falls back to legacy image path for built-in formats
-			if(isimage(e.bname)){
-				err := w.loadimage(e.bname);
-				if(err != nil)
-					warning(nil, sprint("can't load image %s: %s\n", e.bname, err));
-			} else {
-				err := w.loadcontent(e.bname);
-				if(err != nil)
-					warning(nil, sprint("can't load content %s: %s\n", e.bname, err));
-			}
-		} else {
+		}else if((k := docview->kind(e.bname)) != nil && k.class == Docreg->Binary){
+			if((err := docview->open(w, e.bname, k)) != nil)
+				warning(nil, sprint("can't show %s: %s\n", e.bname, err));
+		}else
 			t.loadx(0, e.bname, 1);
-		}
 
 		t.file.mod = FALSE;
 		t.w.dirty = FALSE;

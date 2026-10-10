@@ -9,6 +9,7 @@ xenith : Xenith;
 dat : Dat;
 utils : Utils;
 look : Look;
+docview : Docview;
 windowm : Windowm;
 xfidm : Xfidm;
 
@@ -40,6 +41,7 @@ init(mods : ref Dat->Mods)
 	dat = mods.dat;
 	utils = mods.utils;
 	look = mods.look;
+	docview = mods.docview;
 	windowm = mods.windowm;
 	xfidm = mods.xfidm;
 }

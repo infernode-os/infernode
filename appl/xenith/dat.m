@@ -34,6 +34,7 @@ Dat : module {
 		editlog: Editlog;
 		editcmd: Editcmd;
 		asyncio: Asyncio;
+		docview: Docview;
 	};
 
 	SZSHORT : con 2;

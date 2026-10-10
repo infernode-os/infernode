@@ -479,7 +479,7 @@ ctl(s: string): string
 		sess.resize(num(hd l), num(hd tl l));
 	"scroll" =>
 		sess.scroll = num(arg);
-	"images" or "fonts" or "effects" =>
+	"images" or "fonts" or "effects" or "scripts" =>
 		return sess.configure(cmd + " " + arg);
 	"loadimages" =>
 		sess.images();

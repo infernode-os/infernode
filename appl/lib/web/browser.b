@@ -426,6 +426,8 @@ Session.configure(s: self ref Session, line: string): string
 		s.reload();
 	"effects" =>
 		event(s, "update 0 0");	# drawn again, as it is
+	"scripts" =>
+		s.reload();	# its scripts run, or the page as it is without them
 	}
 	return nil;
 }
@@ -1143,10 +1145,32 @@ Session.nodeat(s: self ref Session, x, y: int): int
 
 Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point)
 {
-	lock(s);
+	# a page's script may hold the lock for seconds: the window keeps
+	# what it shows rather than wait (the realm says "update" when done)
+	if(realmof(s) != nil) {
+		if(!trylock(s, 100))
+			return;
+	} else
+		lock(s);
 	if(s.pg != nil)
 		s.pg.paint(dst, scroll);
 	unlock(s);
+}
+
+# the lock, if it can be had within ms milliseconds
+trylock(s: ref Session, ms: int): int
+{
+	for(t := 0; ; t += 10) {
+		alt {
+		s.lk <-= 1 =>
+			return 1;
+		* =>
+			;
+		}
+		if(t >= ms)
+			return 0;
+		sys->sleep(10);
+	}
 }
 
 Session.boxof(s: self ref Session, n: int): (int, Draw->Rect)

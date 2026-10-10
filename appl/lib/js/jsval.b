@@ -187,7 +187,10 @@ concat(a, b: int): int
 	return h;
 }
 
-Strmax: con (1 << 30) - 1;
+# A string's longest: 64M characters (128 MB).  Browsers allow more (2^29
+# or 2^30), but a realm shares emu's heap, and a request for gigabytes
+# there takes emu down, not only the script.
+Strmax: con (1 << 26) - 1;
 
 # ---- property keys ----
 #

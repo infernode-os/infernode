@@ -11,7 +11,7 @@ Jsparse: module
 	PATH:	con "/dis/lib/js/jsparse.dis";
 
 	# Func flags
-	Fgen, Fasync, Farrow, Fexpr, Fdecl, Fmethod, Fstrict, Fsimple: con 1 << iota;
+	Fgen, Fasync, Farrow, Fexpr, Fdecl, Fmethod, Fstrict, Fsimple, Flazy: con 1 << iota;
 	# Var kinds
 	Kvar, Klet, Kconst, Kusing, Kawaitusing: con iota;
 	# Prop and Method kinds
@@ -74,8 +74,14 @@ Jsparse: module
 		Func =>
 			id:	ref Node;
 			params:	array of ref Node;
-			body:	array of ref Node;	# an arrow's expression body: one Return
+			body:	array of ref Node;	# an arrow's expression body: one Return; nil if Flazy
 			flags:	int;
+			# Flazy: the body was parsed, then let go, to be parsed again
+			# from bodypos when the function is first called; free are the
+			# names its body mentions ("%this", "%super", "%newtarget",
+			# "%arguments": those of the functions around it)
+			bodypos:	int;
+			free:	list of string;
 		Class =>
 			id, super:	ref Node;
 			body:	array of ref Node;	# Methods
@@ -189,6 +195,10 @@ Jsparse: module
 	init:	fn();
 	# the program in src: (tree, nil), or (nil, "line:col: message")
 	parse:	fn(src: string, ismod, strict: int): (ref Node, string);
+	# a source this long or longer has its nested functions parsed lazily
+	setlazy:	fn(minlen: int);
+	# a lazy function's body (Func.bodypos in src; flags, its Func.flags)
+	parsebody:	fn(src: string, pos, flags, ismod: int): (array of ref Node, string);
 
 	# eval code: what its caller allows (Enewtarget...), and the private names around it
 	Enewtarget, Esuperprop, Esupercall, Efield: con 1 << iota;

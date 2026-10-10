@@ -59,6 +59,10 @@ Js: module
 	profile:	fn(ms: int);
 	profiled:	fn(n: int): string;
 
+	# a source this long or longer has its nested functions compiled when
+	# first called (and their trees let go once parsed); 0: every source
+	lazy:	fn(minlen: int);
+
 	# give the realm test262's host object, $262
 	test262:	fn();
 

@@ -145,6 +145,8 @@ callv(f, this: V, a, n: int, nt: V): V
 		pick d := odata[h] {
 		Func =>
 			c := d.code;
+			if(c.lazy != nil)
+				lazycompile(c);
 			if(c.flags & Cctor && nt.t == Tundef)
 				typeerr("class constructor " + c.name + " cannot be invoked without 'new'");
 			if(c.flags & (Cgen|Casync))
@@ -707,6 +709,8 @@ loop(entry: int): V
 				pick d := odata[f.x] {
 				Func =>
 					c := d.code;
+					if(c.lazy != nil)
+						lazycompile(c);
 					if((c.flags & (Cgen|Casync|Cctor)) == 0) {
 						frames[nframe-1].pc = pc + 6;
 						nb := base + code.nregs;

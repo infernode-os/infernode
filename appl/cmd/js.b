@@ -3,14 +3,15 @@ implement Jscmd;
 #
 # js - run JavaScript.
 #
-#	js [-p] [-m] [-t] [-g n] [-e source] [file ...]
+#	js [-p] [-m] [-t] [-g n] [-L n] [-e source] [file ...]
 #
 # Each file (a module with -m), then each -e source, runs in turn in one
 # realm.  -p prints each completion value.  With no file and no source,
 # js reads and runs what is typed, a statement at a time, printing each
 # value: a statement that is not yet complete continues on the next line.
 # -t says how long each took; -g n collects garbage after every n
-# allocations, to test the engine.
+# allocations, and -L n compiles a source's nested functions lazily if it
+# is n characters or longer, to test the engine.
 #
 
 include "sys.m";
@@ -84,6 +85,12 @@ init(nil: ref Draw->Context, args: list of string)
 				usage();
 			js->stress(int hd args);
 			continue;
+		"-L" =>
+			args = tl args;
+			if(args == nil)
+				usage();
+			js->lazy(int hd args);
+			continue;
 		"-e" =>
 			args = tl args;
 			if(args == nil)
@@ -117,7 +124,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-g n] [-e source] [file ...]\n");
+	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-g n] [-L n] [-e source] [file ...]\n");
 	raise "fail:usage";
 }
 
@@ -191,16 +198,19 @@ readfile(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	buf := array[0] of byte;
-	b := array[65536] of byte;
+	buf := array[65536] of byte;
+	n := 0;
 	for(;;) {
-		n := sys->read(fd, b, len b);
-		if(n <= 0)
+		if(n == len buf) {
+			nb := array[2 * len buf] of byte;
+			nb[0:] = buf;
+			buf = nb;
+		}
+		k := sys->read(fd, buf[n:], len buf - n);
+		if(k <= 0)
 			break;
-		nb := array[len buf + n] of byte;
-		nb[0:] = buf;
-		nb[len buf:] = b[0:n];
-		buf = nb;
+		n += k;
 	}
+	buf = buf[0:n];
 	return jslex->utf16(buf);
 }

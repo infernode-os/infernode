@@ -13,6 +13,16 @@
 
 Rthis, Rfn, Rnewtarget, Renv, Rarg0: con iota;
 
+# a function parsed lazily (Jsparse->Flazy): what compiling it needs
+Lazy: adt {
+	node:	ref Node.Func;	# its parameters and where its body is
+	fs:	ref CScope;	# its scope, from the compile it was found in
+	fnscope:	ref CScope;	# the nearest non-arrow function's scope (for an arrow)
+	parent:	ref CFunc;	# the function it is in
+	extra:	int;
+	ismod:	int;
+};
+
 # an object literal whose keys are all known: its objects share a shape
 # made the first time, and are filled slot by slot
 Lit: adt {
@@ -205,6 +215,7 @@ Code: adt {
 	src:	string;	# the function's text, for toString, if not whole[spos:send]
 	spos, send:	int;
 	lits:	array of ref Lit;	# object literals' keys, and the shape made from them
+	lazy:	ref Lazy;	# not yet compiled: how to, when first called
 	pos:	array of int;	# by pc: source position (for messages), or nil
 	whole:	string;	# the source those positions are in
 	file:	string;

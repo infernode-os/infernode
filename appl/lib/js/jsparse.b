@@ -48,6 +48,13 @@ P: adt {
 	inclassfield:	int;
 	instaticblock:	int;
 	sawstrict:	int;	# the last directive prologue had "use strict"
+	# lazy functions
+	lazy:	int;		# nested functions' bodies are let go
+	fdepth:	int;		# functions being parsed
+	fkinds:	list of int;	# theirs, innermost first: 1 an arrow
+	lroot:	int;		# the fdepth of the function whose body will be let go, or 0
+	lnames:	list of string;	# the names its body mentions
+	leval:	int;		# it has a direct eval: not let go
 };
 
 init()
@@ -71,7 +78,8 @@ parseeval0(src: string, ismod, strict, ctx: int, privnames: list of string, isev
 {
 	if(sys == nil)
 		init();
-	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 0, 0, -1, -1, ismod, 0, 0, 0);
+	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 0, 0, -1, -1, ismod, 0, 0, 0,
+		!iseval && len src >= lazymin, 0, nil, 0, nil, 0);
 	{
 		if(iseval && (ctx & Efield))
 			p.inclassfield = 1;
@@ -90,6 +98,126 @@ parseeval0(src: string, ismod, strict, ctx: int, privnames: list of string, isev
 		if(msg != nil)
 			return (nil, where(src, at) + ": " + msg);
 		return (prog, nil);
+	} exception e {
+	"parse:*" =>
+		return (nil, e[6:]);
+	}
+}
+
+# ---- lazy functions ----
+#
+# In a large source, a function nested in another is parsed whole (so
+# that its errors are found) but its tree is let go: what is kept is
+# where its body begins and the names the body mentions, which the
+# compiler takes to be captured from around it.  The body is parsed
+# again when the function is first called.
+
+lazymin := 512 * 1024;
+
+setlazy(n: int)
+{
+	lazymin = n;
+}
+
+# a function's body begins
+lazyenter(p: ref P, arrow: int)
+{
+	p.fdepth++;
+	p.fkinds = arrow :: p.fkinds;
+	if(p.lazy && p.lroot == 0 && p.fdepth >= 2) {
+		p.lroot = p.fdepth;
+		p.lnames = nil;
+		p.leval = 0;
+	}
+}
+
+# and ends: a lazy root's body is let go
+lazyleave(p: ref P, f: ref Node.Func)
+{
+	if(p.lroot != 0 && p.lroot == p.fdepth) {
+		p.lroot = 0;
+		if(!p.leval) {
+			f.free = dedup(p.lnames);
+			f.body = nil;
+			f.flags |= Flazy;
+		}
+		p.lnames = nil;
+	}
+	p.fdepth--;
+	if(p.fkinds != nil)
+		p.fkinds = tl p.fkinds;
+}
+
+lazyname(p: ref P, s: string)
+{
+	if(p.lroot == 0)
+		return;
+	p.lnames = s :: p.lnames;
+	if(s == "eval")
+		p.leval = 1;
+}
+
+# this, super, new.target or arguments here belong to the functions
+# around the lazy root: every function from the innermost out to the
+# root is an arrow
+lazyouter(p: ref P): int
+{
+	if(p.lroot == 0)
+		return 0;
+	l := p.fkinds;
+	for(d := p.fdepth; d >= p.lroot && l != nil; d--) {
+		if(!hd l)
+			return 0;
+		l = tl l;
+	}
+	return 1;
+}
+
+dedup(l: list of string): list of string
+{
+	tab := array[211] of list of string;
+	r: list of string;
+	for(; l != nil; l = tl l) {
+		s := hd l;
+		h := 0;
+		for(i := 0; i < len s; i++)
+			h = (h * 31 + s[i]) & 16r7FFFFFF;
+		b := h % len tab;
+		for(m := tab[b]; m != nil; m = tl m)
+			if(hd m == s)
+				break;
+		if(m == nil) {
+			tab[b] = s :: tab[b];
+			r = s :: r;
+		}
+	}
+	return r;
+}
+
+parsebody(src: string, pos, flags, ismod: int): (array of ref Node, string)
+{
+	if(sys == nil)
+		init();
+	strict := (flags & Fstrict) != 0;
+	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 1, 0, -1, -1, 0, 0, 0, 0,
+		len src >= lazymin, 1, (flags & Farrow) :: nil, 0, nil, 0);
+	p.gen = flags & Fgen;
+	p.async = flags & Fasync;
+	p.l.pos = pos;
+	{
+		next(p);
+		body: array of ref Node;
+		if(flags & Fexpr) {
+			bpos := p.t.pos;
+			e := assign(p, 0);
+			body = array[1] of ref Node;
+			body[0] = ref Node.Return(bpos, p.prevend, e);
+		} else {
+			expect(p, "{");
+			body = stmtlist(p, 0, 1);
+			expect(p, "}");
+		}
+		return (body, nil);
 	} exception e {
 	"parse:*" =>
 		return (nil, e[6:]);
@@ -257,6 +385,11 @@ ident(p: ref P, binding: int): ref Node
 	if(p.inclassfield && s == "arguments")
 		fail(p, t.pos, "'arguments' in a class field");
 	next(p);
+	if(p.lroot) {
+		lazyname(p, s);
+		if(s == "arguments" && lazyouter(p))
+			lazyname(p, "%arguments");
+	}
 	return ref Node.Ident(t.pos, t.end, s);
 }
 
@@ -268,6 +401,7 @@ propname(p: ref P, privok: int): (ref Node, int)
 	case t.kind {
 	Tident =>
 		next(p);
+		lazyname(p, t.s);	# (a shorthand property is a reference)
 		return (ref Node.Ident(t.pos, t.end, t.s), 0);
 	Tstr =>
 		next(p);
@@ -286,6 +420,7 @@ propname(p: ref P, privok: int): (ref Node, int)
 		if(!privok)
 			fail(p, t.pos, "private name outside a class");
 		next(p);
+		lazyname(p, "#" + t.s);
 		return (ref Node.Private(t.pos, t.end, t.s), 0);
 	Tpunct =>
 		if(t.s == "[") {
@@ -924,6 +1059,8 @@ funcrest(p: ref P, at: int, id: ref Node, flags: int): ref Node
 	(params, simple) := formals(p);
 	if(simple)
 		flags |= Fsimple;
+	bodypos := p.t.pos;
+	lazyenter(p, 0);
 	expect(p, "{");
 	body := stmtlist(p, 0, 1);
 	expect(p, "}");
@@ -937,7 +1074,9 @@ funcrest(p: ref P, at: int, id: ref Node, flags: int): ref Node
 		dupparams(p, params);
 	end := p.prevend;
 	restore(p, saved);
-	return ref Node.Func(at, end, id, params, body, flags);
+	f := ref Node.Func(at, end, id, params, body, flags, bodypos, nil);
+	lazyleave(p, f);
+	return f;
 }
 
 # the context of an enclosing function, back (keeping the lexer's place)
@@ -1082,6 +1221,8 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 	if(simple)
 		flags |= Fsimple;
 	body: array of ref Node;
+	bodypos := p.t.pos;
+	lazyenter(p, 1);
 	if(is(p, "{")) {
 		next(p);
 		body = stmtlist(p, 0, 1);
@@ -1103,7 +1244,9 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 	dupparams(p, params);
 	end := p.prevend;
 	restore(p, saved);
-	return ref Node.Func(at, end, nil, params, body, flags);
+	f := ref Node.Func(at, end, nil, params, body, flags, bodypos, nil);
+	lazyleave(p, f);
+	return f;
 }
 
 # ---- classes ----
@@ -1706,6 +1849,7 @@ binary(p: ref P, minprec, noin: int): ref Node
 		next(p);
 		if(!iskw(p, "in") || noin)
 			fail(p, t.pos, "private name outside in");
+		lazyname(p, "#" + t.s);
 		left = ref Node.Private(t.pos, t.end, t.s);
 	} else
 		left = unary(p);
@@ -2175,6 +2319,7 @@ dotname(p: ref P): ref Node
 	}
 	if(t.kind == Tprivate) {
 		next(p);
+		lazyname(p, "#" + t.s);
 		return ref Node.Private(t.pos, t.end, t.s);
 	}
 	fail(p, t.pos, "expected a property name after ., found " + desc(t));
@@ -2207,6 +2352,8 @@ newexpr(p: ref P): ref Node
 		if(!iskw(p, "target"))
 			fail(p, p.t.pos, "expected new.target");
 		next(p);
+		if(lazyouter(p))
+			lazyname(p, "%newtarget");
 		return ref Node.Meta(pos, p.prevend, "new", "target");
 	}
 	cpos := p.t.pos;
@@ -2235,6 +2382,8 @@ superexpr(p: ref P): ref Node
 	next(p);
 	if(!is(p, "(") && !is(p, ".") && !is(p, "["))
 		fail(p, p.t.pos, "super must be called or have a property taken");
+	if(lazyouter(p))
+		lazyname(p, "%super");
 	return ref Node.Super(pos, p.prevend);
 }
 
@@ -2323,6 +2472,8 @@ primary(p: ref P): ref Node
 			case t.s {
 			"this" =>
 				next(p);
+				if(lazyouter(p))
+					lazyname(p, "%this");
 				return ref Node.This(pos, t.end);
 			"null" =>
 				next(p);

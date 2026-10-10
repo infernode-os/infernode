@@ -36,6 +36,7 @@ CScope: adt {
 	nslots:	int;
 	nbinds:	int;
 	tab:	array of list of ref Bind;	# binds by name's hash, once there are many
+	fnscope:	ref CScope;	# a function's: the nearest non-arrow function scope (its own, if not an arrow)
 };
 
 CFunc: adt {
@@ -147,7 +148,7 @@ sget(k: int): ref CScope
 
 newscope(kind: int, parent: ref CScope, fid: int, strict: int): ref CScope
 {
-	return ref CScope(kind, parent, fid, nil, 0, 0, 0, strict, -1, 0, 0, nil);
+	return ref CScope(kind, parent, fid, nil, 0, 0, 0, strict, -1, 0, 0, nil, nil);
 }
 
 # a scope of a minified bundle can have thousands of names, each looked
@@ -236,6 +237,42 @@ ref1(s: ref CScope, fid: int, name: string)
 			if(s.fid != fid || dyn)
 				capture(s, b);
 			return;
+		}
+	}
+}
+
+# A lazy function's body is not there: every name it mentions that is
+# bound outside it is taken to be captured (more than may be, never
+# fewer), and an arrow's this, super, new.target and arguments are its
+# surroundings'.
+lazyrefs(f: ref Node.Func, fs: ref CScope, r: ref R1)
+{
+	arrow := (f.flags & Jsparse->Farrow) != 0;
+	for(l := f.free; l != nil; l = tl l) {
+		n := hd l;
+		case n {
+		"%this" =>
+			if(arrow)
+				thisref1(r);
+		"%super" =>
+			if(arrow) {
+				thisref1(r);
+				superref1(r);
+			}
+		"%newtarget" =>
+			if(arrow)
+				pseudo1(r, "%newtarget", Bnewtarget);
+		"%arguments" =>
+			if(arrow)
+				argsref1(r);
+		* =>
+			for(s := fs.parent; s != nil; s = s.parent) {
+				b := findlocal(s, n);
+				if(b != nil) {
+					capture(s, b);
+					break;
+				}
+			}
 		}
 	}
 }
@@ -936,10 +973,20 @@ func1(f: ref Node.Func, r: ref R1)
 		r2.fnscope = r.fnscope;
 		r2.inarrowof = 1;
 	}
+	fs.fnscope = r2.fnscope;
 	walklist1(f.params, r2);
+	if(f.flags & Jsparse->Flazy) {
+		lazyrefs(f, fs, r2);
+		return;
+	}
 	walklist1(f.body, r2);
-	# a sloppy function with simple parameters and an arguments object: the
-	# parameters live where the object can alias them
+	func1tail(f, fs, strict);
+}
+
+# a sloppy function with simple parameters and an arguments object: the
+# parameters live where the object can alias them
+func1tail(f: ref Node.Func, fs: ref CScope, strict: int)
+{
 	ab := findlocal(fs, "arguments");
 	if(ab != nil && ab.kind == Barguments && !strict && (f.flags & Jsparse->Farrow) == 0 && simpleparams(f.params))
 		for(l := fs.binds; l != nil; l = tl l)
@@ -1695,7 +1742,13 @@ addfunc(f: ref Node.Func): int
 
 addfuncx(f: ref Node.Func, extra: int): int
 {
-	c := compilefunc(f, cs, cs.src, extra);
+	c: ref Code;
+	if(f.flags & Jsparse->Flazy) {
+		c = lazystub(f, extra);
+		if(extra)
+			lazycompile(c);	# (a class's constructor is changed after it is made)
+	} else
+		c = compilefunc(f, cs, cs.src, extra);
 	# its text is the source's, not a copy (a bundle's functions nest
 	# deep: copies would be the source over again at each level)
 	c.src = nil;
@@ -1705,6 +1758,93 @@ addfuncx(f: ref Node.Func, extra: int): int
 	}
 	cs.funcs = c :: cs.funcs;
 	return cs.nfunc++;
+}
+
+# ---- lazy functions ----
+
+# a lazy function's code before it is compiled: what a closure of it
+# needs (its name, length and kind), and how to compile it
+lazystub(f: ref Node.Func, extra: int): ref Code
+{
+	fs := sget(skey(f, Sfunc));
+	if(fs == nil)
+		compileerr(f.pos, "internal: no scope for lazy function");
+	flags := extra;
+	if((f.flags & Jsparse->Fstrict) || fs.strict)
+		flags |= Cstrict;
+	if(f.flags & Jsparse->Farrow)
+		flags |= Carrow;
+	if(f.flags & Jsparse->Fgen)
+		flags |= Cgen;
+	if(f.flags & Jsparse->Fasync)
+		flags |= Casync;
+	if(f.flags & Jsparse->Fmethod)
+		flags |= Cmethod;
+	flen := len f.params;
+	for(i := 0; i < len f.params; i++) {
+		t := tagof f.params[i];
+		if(t == tagof Node.AssignPat || t == tagof Node.Rest) {
+			flen = i;
+			break;
+		}
+	}
+	c := ref Code;
+	if(f.id != nil)
+		c.name = idname(f.id);
+	c.flen = flen;
+	c.flags = flags;
+	c.whole = cs.src;
+	fnscope := fs.fnscope;
+	ismod := 0;
+	for(p := cs; p != nil; p = p.parent)
+		if(p.flags & Cmodule)
+			ismod = 1;
+	c.lazy = ref Lazy(f, fs, fnscope, cs, extra, ismod);
+	return c;
+}
+
+# compile a lazy function, in place, the first time it is called
+lazycompile(c: ref Code)
+{
+	l := c.lazy;
+	f := l.node;
+	(body, err) := jsparse->parsebody(c.whole, f.bodypos, f.flags, l.ismod);
+	if(err != nil)
+		throwerr(SyntaxError, err);
+	nf := ref Node.Func(f.pos, f.end, f.id, f.params, body, f.flags & ~Jsparse->Flazy, f.bodypos, nil);
+	savedmap := scopemap;
+	scopemap = array[(f.end - f.pos) / 16 + 101] of list of (int, ref CScope);
+	{
+		fs := l.fs;
+		sput(skey(nf, Sfunc), fs);
+		strict := (nf.flags & Jsparse->Fstrict) != 0 || fs.strict;
+		hoistbody(fs, body, strict, 1);
+		r := ref R1(fs, fs.fid, fs, 0, strict);
+		if(nf.flags & Jsparse->Farrow) {
+			r.fnscope = l.fnscope;
+			r.inarrowof = 1;
+		}
+		walklist1(body, r);
+		func1tail(nf, fs, strict);
+		file := c.file;
+		spos := c.spos;
+		send := c.send;
+		nc := compilebody(nf, fs, l.parent, c.whole, nf.flags, l.extra);
+		*c = *nc;
+		c.src = nil;
+		c.file = file;
+		c.spos = spos;
+		c.send = send;
+		if(file != nil)
+			for(i := 0; i < len c.funcs; i++)
+				setfile(c.funcs[i], file);
+		c.lazy = nil;
+	} exception e {
+	"*" =>
+		scopemap = savedmap;
+		raise e;
+	}
+	scopemap = savedmap;
 }
 
 # the function declarations of a body, made at its start
@@ -1835,7 +1975,8 @@ listawait(a: array of ref Node): int
 compilemodule(prog: ref Node.Program, src: string, modid: int): ref Code
 {
 	scopemap = array[len src / 16 + 1021] of list of (int, ref CScope);
-	nfid = 1;
+	if(nfid < 1)
+		nfid = 1;	# (never reset: a lazy function compiled later must not share an id)
 	top := newscope(Smodule, nil, 0, 1);
 	body := modulebody(prog.body);
 	hoistbody(top, body, 1, 0);
@@ -1878,7 +2019,7 @@ compilemodule(prog: ref Node.Program, src: string, modid: int): ref Code
 		(hd l).captured = 1;
 	r := ref R1(top, 0, nil, 0, 1);
 	walklist1(prog.body, r);
-	f := ref Node.Func(0, len src, nil, array[0] of ref Node, prog.body, 0);
+	f := ref Node.Func(0, len src, nil, array[0] of ref Node, prog.body, 0, 0, nil);
 	saved := cs;
 	cs = newcfunc(nil, f, top, src);
 	cs.flags = Cmodule | Cstrict;
@@ -1956,7 +2097,8 @@ exportstmt(x: ref Node.Export)
 compilescript(prog: ref Node.Program, src: string, iseval, evalstrict: int): ref Code
 {
 	scopemap = array[len src / 16 + 1021] of list of (int, ref CScope);
-	nfid = 1;
+	if(nfid < 1)
+		nfid = 1;	# (never reset: a lazy function compiled later must not share an id)
 	strict := prog.strict || evalstrict;
 	kind := Sscript;
 	if(iseval)
@@ -1974,7 +2116,7 @@ compilescript(prog: ref Node.Program, src: string, iseval, evalstrict: int): ref
 	} else
 		hoistlexonly(top, prog.body);
 	walklist1(prog.body, r);
-	f := ref Node.Func(0, len src, nil, array[0] of ref Node, prog.body, 0);
+	f := ref Node.Func(0, len src, nil, array[0] of ref Node, prog.body, 0, 0, nil);
 	saved := cs;
 	cs = newcfunc(nil, f, top, src);
 	cs.flags = Cscript;
@@ -4487,7 +4629,7 @@ fieldsfn(c: ref Node.Class, s: ref CScope, ctor, proto, static: int)
 			if((m.kind != Jsparse->Pfield && m.kind != Jsparse->Pblock) || m.static != static)
 				continue;
 			fs := sget(skey(c.body[i], Sfunc));
-			ffn := ref Node.Func(m.pos, m.end, nil, array[0] of ref Node, nil, Jsparse->Fmethod | Jsparse->Fstrict);
+			ffn := ref Node.Func(m.pos, m.end, nil, array[0] of ref Node, nil, Jsparse->Fmethod | Jsparse->Fstrict, 0, nil);
 			if(m.kind == Jsparse->Pblock) {
 				pick b := m.value {
 				Block =>

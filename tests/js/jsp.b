@@ -59,16 +59,19 @@ readfile(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	buf := array[0] of byte;
-	b := array[65536] of byte;
+	buf := array[65536] of byte;
+	n := 0;
 	for(;;) {
-		n := sys->read(fd, b, len b);
-		if(n <= 0)
+		if(n == len buf) {
+			nb := array[2 * len buf] of byte;
+			nb[0:] = buf;
+			buf = nb;
+		}
+		k := sys->read(fd, buf[n:], len buf - n);
+		if(k <= 0)
 			break;
-		nb := array[len buf + n] of byte;
-		nb[0:] = buf;
-		nb[len buf:] = b[0:n];
-		buf = nb;
+		n += k;
 	}
+	buf = buf[0:n];
 	return jslex->utf16(buf);
 }

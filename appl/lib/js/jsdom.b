@@ -260,20 +260,24 @@ readsrc(path: string): (string, string)
 	return (jslex->utf16(readfd(fd)), nil);
 }
 
+# all of a file (the buffer doubles: a script of megabytes is read in
+# linear time, not copied again at every block)
 readfd(fd: ref Sys->FD): array of byte
 {
-	buf := array[0] of byte;
-	b := array[65536] of byte;
+	buf := array[65536] of byte;
+	n := 0;
 	for(;;) {
-		n := sys->read(fd, b, len b);
-		if(n <= 0)
+		if(n == len buf) {
+			nb := array[2 * len buf] of byte;
+			nb[0:] = buf;
+			buf = nb;
+		}
+		k := sys->read(fd, buf[n:], len buf - n);
+		if(k <= 0)
 			break;
-		nb := array[len buf + n] of byte;
-		nb[0:] = buf;
-		nb[len buf:] = b[0:n];
-		buf = nb;
+		n += k;
 	}
-	return buf;
+	return buf[0:n];
 }
 
 # ---- strings ----

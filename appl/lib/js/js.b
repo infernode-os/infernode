@@ -284,6 +284,11 @@ firstpc(c: ref Code, l: list of ref Sample): int
 	return 0;
 }
 
+lazy(minlen: int)
+{
+	jsparse->setlazy(minlen);
+}
+
 stress(n: int)
 {
 	gcstress = n;

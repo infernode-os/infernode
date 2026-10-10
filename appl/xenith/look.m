@@ -9,6 +9,8 @@ Look : module {
 	lookfile : fn(s : string, n : int) : ref Windowm->Window;
 	dirname : fn(t : ref Textm->Text, r : string, n : int) : (string, int);
 	cleanname : fn(s : string, n : int) : (string, int);
+	tagquote : fn(s : string) : string;
+	tagname : fn(s : string) : (string, int);
 	new : fn(et, t, argt : ref Textm->Text, flag1, flag2 : int, arg : string, narg : int);
 	expand : fn(t : ref Textm->Text, q0, q1 : int) : (int, Dat->Expand);
 	search : fn(t : ref Textm->Text, r : string, n : int) : int;

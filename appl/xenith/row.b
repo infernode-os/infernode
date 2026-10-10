@@ -682,14 +682,13 @@ Row.loadx(row : self ref Row, file : string, initing : int)
 				r = l[5*12:len l];
 				nr = len r;
 				ns = -1;
-				for(n=0; n<nr; n++){
-					if(r[n] == '/')
-						ns = n;
-					if(r[n] == ' ')
-						break;
-				}
+				name : string;
+				(name, n) = look->tagname(r);
+				for(m := 0; m < len name; m++)
+					if(name[m] == '/')
+						ns = m;
 				if(dumpid == 0)
-					w.setname(r, n);
+					w.setname(name, len name);
 				for(; n<nr; n++)
 					if(r[n] == '|')
 						break;

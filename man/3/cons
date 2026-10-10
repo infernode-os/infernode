@@ -8,6 +8,7 @@ cons \- console device
 .B /dev/cons
 .B /dev/consctl
 .B /dev/drivers
+.B /dev/hostopen
 .B /dev/jit
 .B /dev/keyboard
 .B /dev/klog
@@ -105,6 +106,20 @@ file returns the underlying tokens produced by the keyboard hardware as they
 are produced; in the emulation environment, it is like an always-raw
 .B cons
 file.
+.PP
+The
+.B hostopen
+file returns, one to a read, the host paths of files the host has asked
+this emulator to open, each ending in a newline: on macOS a document
+opened with the application (Finder's Open With, a file dropped on its
+Dock icon), and on every host with a display, a file dropped on the
+emulator's window. A read blocks until there is one. What to open a file
+in is left to the reader;
+.IR hostplumb (1)
+.B -p
+plumbs each, as the standalone Xenith's boot does. Paths the host gives
+while nothing reads are kept until about 16K bytes of them are waiting,
+then dropped.
 .PP
 The
 .B null

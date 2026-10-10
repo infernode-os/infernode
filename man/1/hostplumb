@@ -11,6 +11,13 @@ hostplumb \- re-plumb messages from the host's plumber
 .B -r
 .I root
 ]
+.br
+.B hostplumb -p
+[
+.B -r
+.I root
+]
+.B < /dev/hostopen
 .SH DESCRIPTION
 .I Hostplumb
 reads plumb messages, in the standard format (see
@@ -62,6 +69,27 @@ plumbing rules decide where the message goes.
 Attributes are read as plan9port writes them: separated by blanks,
 a value with blanks in it quoted.
 .PP
+With
+.BR -p ,
+the input is plain host paths instead, one to a line, as
+.B /dev/hostopen
+(see
+.IR cons (3))
+gives the files the host has asked to have opened; each is plumbed as
+text from source
+.BR hostopen ,
+so rules can take the whole data as the path, under
+.IR root .
+A Windows path on
+.BR C: ,
+the drive mounted at
+.BR /n/local ,
+is made a Unix one; a path on another drive, or one that is not
+absolute, is reported and skipped.
+.PP
+If the plumber is not there yet,
+.I hostplumb
+waits for it for up to 15 seconds.
 If the plumber refuses a message because nothing is reading its port
 and no rule starts a reader, as happens when the receiver is still
 starting,
@@ -83,6 +111,7 @@ os sh -c '9p read plumb/xenith' | hostplumb &
 .B /appl/cmd/hostplumb.b
 .SH SEE ALSO
 .IR os (1),
+.IR cons (3),
 .IR plumb (1),
 .IR plumbmsg (2),
 .IR plumber (8)

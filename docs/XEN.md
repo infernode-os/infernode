@@ -88,8 +88,11 @@ configuration are the same in any. Files dropped on `Xenith.exe` (or
 opened with it) are opened in the new instance, on C: only; on Linux,
 `xenith file ...` opens them, and the tarball's `setup-desktop.sh` adds
 Xenith to the app menu (files opened with it from there open in it) and
-puts `xenith` on the PATH; on macOS, open files by plumbing them (below)
-or from Xenith itself.
+puts `xenith` on the PATH. On macOS, Finder opens files and folders in
+`Xenith.app`: Open With, or a drop on its Dock icon, opens them in the
+running Xenith or starts one. A file dropped on Xenith's window opens in
+it on every host. The emulator hands each path to `/dev/hostopen`
+(`cons(3)`), and `lib/xen/boot.sh` plumbs it (`hostplumb -p`).
 
 `xen`, `xen.ps1` and the apps start the same way, through
 `lib/xen/boot.sh`: a plumber, the model service, then Xenith with the
@@ -113,8 +116,10 @@ icon is `MacOSX/Xenith.png`, from which `Xenith.icns` and
   while a Xenith is reading the host plumber (below) are plumbed to it
   instead. Without files, or with `-s` or `-w`, `xen` always starts
   one.
-- Xenith's tag line cuts a file name at its first space (as Inferno's
-  acme does); sam shows such names whole.
+- A file name with a blank in it is quoted in Xenith's tag
+  (`'/Users/me/my notes.txt'`, a quote in it doubled), as plan9port's
+  acme does, and a name selected and looked at (B3) may have blanks in
+  it; Inferno's acme cut such a name at its first blank.
 
 | Variable | Meaning | Default |
 |---|---|---|

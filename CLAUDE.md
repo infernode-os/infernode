@@ -438,7 +438,7 @@ timeoutTask(ch: chan of int, ms: int)
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 
-Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). They need the SDL GUI emulator and skip on a headless build.
+Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_blankname_test.sh`: a file name with a blank in it, quoted in the tag and Put to the right file; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). They need the SDL GUI emulator and skip on a headless build.
 
 ## Project Structure
 

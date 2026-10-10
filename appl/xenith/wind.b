@@ -427,9 +427,7 @@ Window.cleartag(w : self ref Window)
 	n = w.tag.file.buf.nc;
 	r = utils->stralloc(n);
 	w.tag.file.buf.read(0, r, 0, n);
-	for(i=0; i<n; i++)
-		if(r.s[i]==' ' || r.s[i]=='\t')
-			break;
+	(nil, i) = look->tagname(r.s[0:n]);
 	for(; i<n; i++)
 		if(r.s[i] == '|')
 			break;
@@ -474,18 +472,18 @@ Window.settag1(w : self ref Window)
 		w.commit(w.tag);	# check file name; also can now modify tag
 	old = utils->stralloc(w.tag.file.buf.nc);
 	w.tag.file.buf.read(0, old, 0, w.tag.file.buf.nc);
-	for(ii=0; ii<w.tag.file.buf.nc; ii++)
-		if(old.s[ii]==' ' || old.s[ii]=='\t')
-			break;
-	if(old.s[0:ii] != w.body.file.name){
+	oname : string;
+	(oname, ii) = look->tagname(old.s[0:w.tag.file.buf.nc]);
+	qname := look->tagquote(w.body.file.name);
+	if(oname != w.body.file.name || old.s[0:ii] != qname){
 		w.tag.delete(0, ii, TRUE);
-		w.tag.insert(0, w.body.file.name, len w.body.file.name, TRUE, 0);
+		w.tag.insert(0, qname, len qname, TRUE, 0);
 		strfree(old);
 		old = nil;
 		old = utils->stralloc(w.tag.file.buf.nc);
 		w.tag.file.buf.read(0, old, 0, w.tag.file.buf.nc);
 	}
-	new = w.body.file.name + " Del Snarf";
+	new = qname + " Del Snarf";
 	if(w.filemenu){
 		if(w.body.file.delta.nc>0 || w.body.ncache)
 			new += " Undo";
@@ -578,15 +576,14 @@ Window.commit(w : self ref Window, t : ref Text)
 		return;
 	r = utils->stralloc(w.tag.file.buf.nc);
 	w.tag.file.buf.read(0, r, 0, w.tag.file.buf.nc);
-	for(i=0; i<w.tag.file.buf.nc; i++)
-		if(r.s[i]==' ' || r.s[i]=='\t')
-			break;
-	if(r.s[0:i] != w.body.file.name){
+	name : string;
+	(name, i) = look->tagname(r.s[0:w.tag.file.buf.nc]);
+	if(name != w.body.file.name){
 		dat->seq++;
 		w.body.file.mark();
 		w.body.file.mod = TRUE;
 		w.dirty = TRUE;
-		w.setname(r.s, i);
+		w.setname(name, len name);
 		w.settag();
 	}
 	utils->strfree(r);

@@ -295,6 +295,22 @@ if {ftest -s /tmp/xenith_browse.port} {
 	echo 'SKIP: no HTTP server (python3)'
 }
 
+# Nothing went wrong on the way: a browser window's tag was set before
+# its page was open, and asked the engine not yet there for its commands
+# ("openfile: ... module not loaded", on the first page of a session)
+errs=()
+for w in `{ls -p $XENITH | grep '^[0-9]'} {
+	n=`{cat $XENITH/$w/tag}
+	if {~ ${index 1 $n} *+Errors} {
+		errs=($errs `{grep 'module not loaded' $XENITH/$w/body})
+	}
+}
+if {~ $#errs 0} {
+	pass 'nothing called an engine not yet loaded'
+} {
+	fail 'errors:' $errs
+}
+
 if {~ $failed 1} {
 	raise 'fail:tests failed'
 }

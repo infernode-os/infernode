@@ -1400,8 +1400,11 @@ commands(w: ref Window): string
 		return nil;
 	s := "";
 	if(d.web){
-		for(l := d.eng->commands(d.h); d.h >= 0 && l != nil; l = tl l)
-			s += " " + hd l;
+		# no engine until the page is open (Charon, loaded for the first
+		# page, takes a while): the tag is set before then
+		if(d.h >= 0)
+			for(l := d.eng->commands(d.h); l != nil; l = tl l)
+				s += " " + hd l;
 		return s;
 	}
 	s = " Zoom+ Zoom- Fit";

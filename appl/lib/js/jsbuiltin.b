@@ -153,6 +153,7 @@ realminit()
 	typedinit();
 	iterhelpersinit();
 	disposeinit();
+	selfhostedinit();
 	reflectinit();
 	generatorinit();
 }
@@ -1603,4 +1604,79 @@ global_unescape(nil: V, a, n: int, nil: V, nil: int): V
 		r[len r] = c;
 	}
 	return strv(r);
+}
+
+# ---- built-ins written in JavaScript ----
+#
+# Those whose steps await are easier written as async functions.  They
+# are compiled when the realm is made and installed as built-ins.
+
+selfhost(src: string): V
+{
+	(prog, err) := jsparse->parse(src, 0, 1);
+	if(err != nil)
+		throwerr(SyntaxError, "self-hosted: " + err);
+	pick p := prog {
+	Program =>
+		c := compilescript(p, src, 0, 1);
+		keepcode(c);
+		return runcode(c);
+	}
+	return undef;
+}
+
+fromasyncsrc := "(async function fromAsync(asyncItems, mapfn = undefined, thisArg = undefined) {\n" +
+	"  const C = this;\n" +
+	"  const mapping = mapfn !== undefined;\n" +
+	"  if (mapping && typeof mapfn !== 'function') throw new TypeError('Array.fromAsync: mapfn is not callable');\n" +
+	"  const isCtor = (f) => { try { Reflect.construct(String, [], f); return true; } catch (e) { return false; } };\n" +
+	"  const usingAsync = asyncItems == null ? undefined : asyncItems[Symbol.asyncIterator];\n" +
+	"  let usingSync = undefined;\n" +
+	"  if (usingAsync == null && asyncItems != null) usingSync = asyncItems[Symbol.iterator];\n" +
+	"  if (usingAsync != null || usingSync != null) {\n" +
+	"    const A = isCtor(C) ? new C() : [];\n" +
+	"    let iter, next, async = usingAsync != null;\n" +
+	"    iter = async ? usingAsync.call(asyncItems) : usingSync.call(asyncItems);\n" +
+	"    if (Object(iter) !== iter) throw new TypeError('Array.fromAsync: iterator is not an object');\n" +
+	"    next = iter.next;\n" +
+	"    let k = 0;\n" +
+	"    for (;;) {\n" +
+	"      if (k >= 9007199254740991) { const e = new TypeError('Array.fromAsync: too many items'); if (typeof iter.return === 'function') await iter.return(); throw e; }\n" +
+	"      let r = next.call(iter);\n" +
+	"      if (async) r = await r;\n" +
+	"      if (Object(r) !== r) throw new TypeError('Array.fromAsync: iterator result is not an object');\n" +
+	"      if (r.done) { A.length = k; return A; }\n" +
+	"      let v = r.value;\n" +
+	"      try {\n" +
+	"        if (!async) v = await v;\n" +
+	"        if (mapping) { v = mapfn.call(thisArg, v, k); v = await v; }\n" +
+	"        Object.defineProperty(A, k, {value: v, writable: true, enumerable: true, configurable: true});\n" +
+	"      } catch (e) {\n" +
+	"        const ret = iter.return;\n" +
+	"        if (ret != null) { const rr = ret.call(iter); if (async) await rr; }\n" +
+	"        throw e;\n" +
+	"      }\n" +
+	"      k++;\n" +
+	"    }\n" +
+	"  }\n" +
+	"  const arrayLike = Object(asyncItems);\n" +
+	"  const len = Math.min(Math.max(Math.trunc(Number(arrayLike.length)) || 0, 0), 9007199254740991);\n" +
+	"  const A = isCtor(C) ? new C(len) : new Array(len);\n" +
+	"  for (let k = 0; k < len; k++) {\n" +
+	"    let v = await arrayLike[k];\n" +
+	"    if (mapping) v = await mapfn.call(thisArg, v, k);\n" +
+	"    Object.defineProperty(A, k, {value: v, writable: true, enumerable: true, configurable: true});\n" +
+	"  }\n" +
+	"  A.length = len;\n" +
+	"  return A;\n" +
+	"})";
+
+selfhostedinit()
+{
+	f := selfhost(fromasyncsrc);
+	pick d := odata[f.x] {
+	Func =>
+		d.code.src = "function fromAsync() { [native code] }";
+	}
+	defown(iarrctor, intern("fromAsync"), Awrite|Aconf, f);
 }

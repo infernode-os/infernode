@@ -1263,6 +1263,8 @@ directeval(a, n: int, flags: int): V
 	pick p := prog {
 	Program =>
 		c := compilescript(p, src, 1, strictcaller);
+		setfile(c, code.file);
+		setmodid(c, code.modid);
 		c.flags |= Ceval;
 		if(strictcaller || p.strict)
 			c.flags |= Cstrict;

@@ -497,7 +497,7 @@ runrealm1(src: string, m: ref Meta): (int, string)
 	if(has(m.flags, "module"))
 		(nil, e) = js->evalmodule(src, curpath);
 	else
-		(nil, e) = js->evalscript(src, "test");
+		(nil, e) = js->evalscript(src, curpath);
 	js->shutdown();
 	if(m.negphase == "runtime" || m.negphase == "resolution") {
 		if(e == nil)

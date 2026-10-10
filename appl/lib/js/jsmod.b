@@ -127,6 +127,8 @@ loadmodule(url, src: string): ref Mod
 	m := modbyurl(url);
 	if(m != nil)
 		return m;
+	if(len url > 5 && url[len url-5:] == ".json")
+		src = "export default " + jsonmodulesource(src) + ";";
 	(prog, err) := jsparse->parse(src, 1, 1);
 	if(err != nil)
 		throwerr(SyntaxError, url + ": " + err);
@@ -145,7 +147,7 @@ loadmodule(url, src: string): ref Mod
 	pick p := prog {
 	Program =>
 		m.code = compilemodule(p, src, id);
-		m.code.file = url;
+		setfile(m.code, url);
 		setmodid(m.code, id);
 		m.async = (m.code.flags & Casync) != 0;
 		entries(m, p.body);
@@ -166,6 +168,18 @@ loadmodule(url, src: string): ref Mod
 		m.resolved = (spec, dep.id) :: m.resolved;
 	}
 	return m;
+}
+
+# a JSON module's source, as an expression the module exports: checked as JSON first
+jsonmodulesource(src: string): string
+{
+	p := ref Jp(src, 0);
+	jsonws(p);
+	jsonvalue(p);
+	jsonws(p);
+	if(p.i < len src)
+		jsonerr(p);
+	return "JSON.parse(" + jsonquote(src) + ")";
 }
 
 revstrs(l: list of string): list of string

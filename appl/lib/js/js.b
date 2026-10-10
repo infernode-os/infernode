@@ -165,7 +165,7 @@ evalscript(src, name: string): (string, string)
 		pick p := prog {
 		Program =>
 			c := compilescript(p, src, 0, 0);
-			c.file = name;
+			setfile(c, name);
 			keepcode(c);
 			v := runcode(c);
 			r := display(v);
@@ -212,6 +212,14 @@ evalmodule(src, url: string): (string, string)
 		return (nil, ex);
 	}
 	return (nil, nil);
+}
+
+# the file a script's code (and its functions') came from: import() resolves against it
+setfile(c: ref Code, name: string)
+{
+	c.file = name;
+	for(i := 0; i < len c.funcs; i++)
+		setfile(c.funcs[i], name);
 }
 
 # a script's code, kept for its template objects' sake while it may run again

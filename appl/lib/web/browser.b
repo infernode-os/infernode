@@ -2248,12 +2248,14 @@ hselect(id, root: int, sel: string, all: int): (int, list of int)
 	return (1, l);
 }
 
-hparse(id: int, markup: string): ref Doc
+hparse(id: int, markup: string, whole: int): ref Doc
 {
 	r := realmbyid(id);
 	url := "";
 	if(r != nil)
 		url = r.pg.url;
+	if(whole)
+		return html->parsestring(markup, url);
 	return html->parsestring("<!DOCTYPE html><body>" + markup, url);
 }
 

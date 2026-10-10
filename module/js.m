@@ -92,7 +92,7 @@ Js: module
 		match:	ref fn(id, n: int, sel: string, scope: int): int;	# scope: what :scope is, 0 the root
 		select:	ref fn(id, root: int, sel: string, all: int): (int, list of int);
 		# markup parsed as the body of a document of its own
-		parse:	ref fn(id: int, markup: string): ref Dom->Doc;
+		parse:	ref fn(id: int, markup: string, whole: int): ref Dom->Doc;	# whole: a document, not a body's content
 		viewport:	ref fn(id: int): (int, int, int, int);	# width, height, scroll x, scroll y
 		# called unlocked
 		navigate:	ref fn(id: int, url: string, replace: int);

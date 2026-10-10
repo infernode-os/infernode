@@ -377,7 +377,7 @@ domnatives(): int
 	method(o, "descendants", 3, dn_descendants);
 	method(o, "match", 3, dn_match);
 	method(o, "select", 3, dn_select);
-	method(o, "parse", 1, dn_parse);
+	method(o, "parse", 2, dn_parse);
 	method(o, "markup", 2, dn_markup);
 	method(o, "box", 1, dn_box);
 	method(o, "computed", 2, dn_computed);
@@ -681,12 +681,28 @@ dn_select(nil: V, a, n: int, nil: V, nil: int): V
 
 # markup parsed into new nodes of the document, not in the tree: an
 # array of the top ones
+# the nodes of a body's content; whole, a document's [html, head, body],
+# the html element without its children
 dn_parse(nil: V, a, n: int, nil: V, nil: int): V
 {
 	s := jsarg(a, n, 0);
-	src := pgh.parse(pgh.id, s);
+	whole := truthy(arg(a, n, 1));
+	src := pgh.parse(pgh.id, s, whole);
 	if(src == nil)
 		return objv(arrayof(array[0] of V));
+	if(whole) {
+		v := array[3] of {* => inum(0)};
+		if((h := src.find(1, Dom->Thtml)) != 0) {
+			y := pgd.create(src.nodes[h].kind, src.nodes[h].name, src.nodes[h].ns);
+			pgd.nodes[y].attrs = src.nodes[h].attrs;
+			v[0] = inum(y);
+		}
+		if((hn := src.find(1, Dom->Thead)) != 0)
+			v[1] = inum(copynode(src, hn));
+		if((b := src.find(1, Dom->Tbody)) != 0)
+			v[2] = inum(copynode(src, b));
+		return objv(arrayof(v));
+	}
 	body := src.find(1, Dom->Tbody);
 	r: list of int;
 	k := 0;

@@ -189,6 +189,13 @@ test('custom property', () => {
 	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
 	d.remove();
 });
+test('DOMParser', () => {
+	const d = new DOMParser().parseFromString('<!DOCTYPE html><html lang="fr"><head><title>T1</title></head><body class="b"><p>x</p></body></html>', 'text/html');
+	check('title', d.title, 'T1');
+	check('head', d.head.children.length, 1);
+	check('body', d.body.innerHTML, '<p>x</p>');
+	check('attributes', [d.documentElement.getAttribute('lang'), d.body.className], ['fr', 'b']);
+});
 test('toStringTag', () => {
 	check('element', Object.prototype.toString.call(document.body), '[object HTMLBodyElement]');
 	check('window', Object.prototype.toString.call(window), '[object Window]');

@@ -213,6 +213,12 @@ Code: adt {
 	ictfrom:	array of ref Shape;
 	ictto:	array of ref Shape;
 	icchain:	array of list of (ref Shape, int);
+	# a getprop's cache of a property found on a prototype: the receiver's
+	# shape, then the objects up to the holder (handle, shape, gen), the
+	# holder last, and its slot
+	icpfrom:	array of ref Shape;
+	icpchain:	array of list of (int, ref Shape, int);
+	icpslot:	array of int;
 	tmpls:	array of (array of string, array of string);
 	tmplcache:	array of int;	# the template objects, made once per site
 	regexps:	array of (string, string);

@@ -110,6 +110,11 @@ testLazy(t: ref T)
 		"const p2 = {}; Object.defineProperty(p2, 'x', {value: 9, writable: false}); function Q() { this.x = 5; } Q.prototype = p2; const q = new Q(); " +
 		"[a.y, b.y, c.y, Object.keys(a), Object.keys(b), q.x, Object.keys(q).length].join(';')"), "2;30;40;x,y;x,_y;9;0",
 		"adding properties, cached, follows changes to the prototypes");
+	t.assertseq(ev(js, "(() => { function A() {} A.prototype.m = function () { return 'A'; }; function B() {} B.prototype = Object.create(A.prototype); " +
+		"const b = new B(); const out = []; for (let i = 0; i < 12; i++) { if (i == 3) B.prototype.m = function () { return 'B'; }; " +
+		"if (i == 5) delete B.prototype.m; if (i == 7) Object.setPrototypeOf(b, {m() { return 'C'; }}); " +
+		"if (i == 9) Object.defineProperty(Object.getPrototypeOf(b), 'm', {get() { return () => 'G'; }}); if (i == 11) b.m = () => 'own'; out.push(b.m()); } return out.join(''); })()"),
+		"AAABBAACCGGG", "a property found on a prototype, cached, follows changes to the chain");
 	js->shutdown();
 }
 

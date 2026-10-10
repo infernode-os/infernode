@@ -754,6 +754,25 @@ loop(entry: int): V
 				safepoint(pc);
 			if(!isctor(f))
 				typeerr(show(f) + " is not a constructor");
+			if(okind[f.x] == Kfunc) {
+				# an ordinary function: its frame, as a call's, this a new
+				# object of its prototype (Oret gives this back)
+				pick d := odata[f.x] {
+				Func =>
+					c := d.code;
+					if(c.lazy != nil)
+						lazycompile(c);
+					if((c.flags & (Cgen|Casync|Cderived|Cclassfields)) == 0) {
+						this := objv(newobj(Kord, protofromctor(f, iobjproto)));
+						frames[nframe-1].pc = pc + 5;
+						nb := base + code.nregs;
+						setupframe(f.x, d, c, nb, this, a, n, f);
+						pushframe(Frame(c, nb, 0, dst, 1, nil, 0));
+						resume();
+						continue;
+					}
+				}
+			}
 			v := callv(f, undef, a, n, f);
 			vs[dst] = v;
 			sp = base + code.nregs;
@@ -1343,6 +1362,10 @@ getpropic(o: V, a: int, ic: int): V
 		k := okind[h];
 		if(k == Kord || k == Kfunc || k == Knative || k == Karray || k == Kerror) {
 			sh := oshape[h];
+			# found on a prototype last time, which is as it was
+			if(code.icpfrom != nil && code.icpfrom[ic] == sh && (k == Kord || k == Karray) &&
+			   (holder := protocached(h, code.icpchain[ic])) >= 0)
+				return oslots[holder][code.icpslot[ic]];
 			slot := slotof(sh, a);
 			if(slot >= 0 && (sh.attrs[slot] & Aacc) == 0) {
 				code.ics[ic] = sh;
@@ -1350,10 +1373,60 @@ getpropic(o: V, a: int, ic: int): V
 				code.icgen[ic] = sh.gen;
 				return oslots[h][slot];
 			}
+			if(slot < 0 && (k == Kord || k == Karray) && a != alength && !isidx(a) && atomidx[a] < 0.0)
+				cacheproto(h, a, ic);
 		}
 		return get(h, a, o);
 	}
 	return getv(o, a);
+}
+
+# the holder of a property a getprop found on a prototype of h, if the
+# objects up to it are those cached, as they were; else -1
+protocached(h: int, l: list of (int, ref Shape, int)): int
+{
+	p := h;
+	for(; l != nil; l = tl l) {
+		p = oproto[p];
+		(x, s, gen) := hd l;
+		if(p != x || oshape[p] != s || s.gen != gen)
+			return -1;
+	}
+	return p;
+}
+
+# cache where up h's prototypes a is, if it is a data property there and
+# the objects on the way are plain ones without it
+cacheproto(h, a, ic: int)
+{
+	l: list of (int, ref Shape, int);
+	n := 0;
+	for(p := oproto[h]; p >= 0; p = oproto[p]) {
+		k := okind[p];
+		if(k != Kord && k != Karray && k != Kfunc || oflags[p] & Oidxprops || ++n > 8)
+			return;
+		sh := oshape[p];
+		l = (p, sh, sh.gen) :: l;
+		slot := slotof(sh, a);
+		if(slot >= 0) {
+			if(sh.attrs[slot] & Aacc)
+				return;
+			r: list of (int, ref Shape, int);
+			for(; l != nil; l = tl l)
+				r = hd l :: r;
+			if(code.icpfrom == nil) {
+				code.icpfrom = array[len code.ics] of ref Shape;
+				code.icpchain = array[len code.ics] of list of (int, ref Shape, int);
+				code.icpslot = array[len code.ics] of int;
+			}
+			code.icpfrom[ic] = oshape[h];
+			code.icpchain[ic] = r;
+			code.icpslot[ic] = slot;
+			return;
+		}
+		if(k == Kfunc)
+			return;	# (its own properties may not all be in its shape yet)
+	}
 }
 
 setpropic(o: V, a: int, v: V, ic: int)

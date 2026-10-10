@@ -26,6 +26,7 @@ jitok := -1;		# 1 ready, 0 cannot, -1 not tried
 jitseq := 0;
 jitdir: string;
 jitst: ref Jitst;
+jitlast: ref Code;	# whose arrays jitst has
 jitcompiled := 0;	# functions compiled, for -t
 
 # Js->jit: when to compile (calls and loop iterations), -1 for never
@@ -75,19 +76,27 @@ jithot(c: ref Code)
 # run compiled code from pc, which jitent says is compiled; the pc to go on from
 jitrun(c: ref Code, pc: int, base: int): int
 {
+	# (each assigned only when it has changed: an assignment counts a
+	# reference, a comparison does not)
 	st := jitst;
-	st.vs = vs;
 	st.base = base;
-	st.consts = c.consts;
-	st.oshape = oshape;
-	st.oslots = oslots;
-	st.ics = c.ics;
-	st.icslot = c.icslot;
-	st.icgen = c.icgen;
-	st.okind = okind;
-	st.onelem = onelem;
-	st.oelems = oelems;
-	st.oproto = oproto;
+	if(jitlast != c) {
+		jitlast = c;
+		st.consts = c.consts;
+		st.ics = c.ics;
+		st.icslot = c.icslot;
+		st.icgen = c.icgen;
+	}
+	if(st.vs != vs)
+		st.vs = vs;
+	if(st.oshape != oshape) {
+		st.oshape = oshape;
+		st.oslots = oslots;
+		st.okind = okind;
+		st.onelem = onelem;
+		st.oelems = oelems;
+		st.oproto = oproto;
+	}
 	return c.jit->run(st, pc);
 }
 
@@ -307,9 +316,9 @@ jitcompile(c: ref Code): int
 	g := ref Gen(array[256] of ref Dis->Inst, 0, nil, nil);
 	# the prologue: st's fields into the frame, the registers' addresses,
 	# then the case on pc
-	gemit(g, Dis->IMOVP, IND, ind(Fst, 0), MNONE, 0, FP, Fvs);
+	gemit(g, Dis->IMOVW, IND, ind(Fst, 0), MNONE, 0, FP, Fvs);
 	gemit(g, Dis->IMOVW, IND, ind(Fst, 8), MNONE, 0, FP, Fbase);
-	gemit(g, Dis->IMOVP, IND, ind(Fst, 16), MNONE, 0, FP, Fk);
+	gemit(g, Dis->IMOVW, IND, ind(Fst, 16), MNONE, 0, FP, Fk);
 	for(f := 0; f < 9; f++)
 		gemit(g, Dis->IMOVW, IND, ind(Fst, 24 + 8 * f), MNONE, 0, FP, stslot[f]);
 	gemit(g, Dis->IINDX, FP, Fvs, MFP, Fbp, FP, Fbase);
@@ -641,8 +650,9 @@ jitcompile(c: ref Code): int
 	m.entry = -1;
 	m.entryt = -1;
 	m.inst = g.ins[0:g.n];
-	# the module data's type, then run's frame: st, vs and consts are pointers
-	m.types = array[] of {ref Dis->Type(m.dsize, 0, nil), ref Dis->Type(Fsize, 2, array[] of {byte 0, byte 16r98})};
+	# the module data's type, then run's frame: st is its one pointer (the
+	# arrays it holds are kept as words)
+	m.types = array[] of {ref Dis->Type(m.dsize, 0, nil), ref Dis->Type(Fsize, 2, array[] of {byte 0, byte 16r80})};
 	m.data = ref Disdata.Words((Dis->DEFW << 4), len words, 0, words) :: nil;
 	m.links = array[] of {ref Dis->Link(0, 1, jitsig, "run")};
 	b := dis->writeobj(m);

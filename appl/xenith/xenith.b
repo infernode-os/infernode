@@ -840,6 +840,13 @@ mousetask()
 							msg.eng->close(msg.h);
 						bflush();
 						row.qlock.unlock();
+					DocText =>
+						row.qlock.lock();
+						w := look->lookid(msg.winid, 0);
+						if(w != nil && w.col != nil)
+							docview->texted(w, msg.gen, msg.text);
+						bflush();
+						row.qlock.unlock();
 					DocPainted =>
 						row.qlock.lock();
 						w := look->lookid(msg.winid, 0);

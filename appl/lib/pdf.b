@@ -126,6 +126,8 @@ PdfDoc: adt {
 	pages: array of ref PdfObj;	# the page tree's leaves in order, as its Kids name them (references, not
 				# the pages, which are resolved when wanted); nil until wanted
 	objstms: list of ref ObjStm;	# the object streams last decompressed, newest first
+	fontlock: chan of int;	# fonts are loaded one at a time (a document is drawn
+				# and its text read by different procs)
 };
 
 # An object stream, decompressed, and where each object in it starts
@@ -190,6 +192,8 @@ colorcache: list of ref ColorCacheEntry;
 # Font paths
 
 
+inflatelock: chan of int;	# filtermod loaded and initialised once
+
 init(d: ref Display): string
 {
 	sys = load Sys Sys->PATH;
@@ -200,6 +204,8 @@ init(d: ref Display): string
 		return "cannot load system modules";
 	display = d;
 	colorcache = nil;
+	if(inflatelock == nil)
+		inflatelock = chan[1] of int;
 
 	outlinefont = load OutlineFont OutlineFont->PATH;
 	if(outlinefont != nil)
@@ -2078,7 +2084,21 @@ fontload(doc: ref PdfDoc, fm: ref PdfFont)
 {
 	if(fm.loaded)
 		return;
-	fm.loaded = 1;
+	doc.fontlock <-= 1;
+	if(!fm.loaded){
+		{
+			fontload1(doc, fm);
+		} exception {
+		"*" =>
+			;
+		}
+		fm.loaded = 1;	# only now: another proc may be drawing the font
+	}
+	<-doc.fontlock;
+}
+
+fontload1(doc: ref PdfDoc, fm: ref PdfFont)
+{
 	if(fm.kind == Ftype3 || outlinefont == nil)
 		return;
 	df := fm.fontobj;
@@ -4259,7 +4279,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 		cursor = oldtrailer;
 	}
 
-	doc := ref PdfDoc(data, xref, trailer, nobjs, nil, 0, 0, 0, nil, nil, -1, nil, nil, nil, nil);
+	doc := ref PdfDoc(data, xref, trailer, nobjs, nil, 0, 0, 0, nil, nil, -1, nil, nil, nil, nil, chan[1] of int);
 	return (doc, nil);
 }
 
@@ -5310,11 +5330,18 @@ tiffunpredict(data: array of byte, columns, colors, bpc: int): array of byte
 
 inflate(data: array of byte): (array of byte, string)
 {
-	filtermod = load Filter Filter->INFLATEPATH;
+	# loaded and initialised once: init builds the module's Huffman
+	# tables, and a page is drawn and its document's text read by
+	# different procs, each inflating
+	inflatelock <-= 1;
+	if(filtermod == nil){
+		filtermod = load Filter Filter->INFLATEPATH;
+		if(filtermod != nil)
+			filtermod->init();
+	}
+	<-inflatelock;
 	if(filtermod == nil)
 		return (nil, sys->sprint("cannot load inflate: %r"));
-
-	filtermod->init();
 	rqchan := filtermod->start("z");
 
 	rq := <-rqchan;

@@ -108,6 +108,7 @@ Docview: module {
 
 	# Results from the work done off the main loop
 	opened:	fn(w: ref Windowm->Window, gen: int, eng: Docengine, h: int, text: string, err: string);
+	texted:	fn(w: ref Windowm->Window, gen: int, text: string);
 	painted:	fn(w: ref Windowm->Window, gen: int, n, scale: int, im: ref Draw->Image, err: string);
 	event:	fn(w: ref Windowm->Window, gen: int, e: string);
 };

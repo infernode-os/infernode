@@ -197,20 +197,39 @@ newdoc(name: string, k: ref Kind): ref Doc
 opener(winid, gen: int, k: ref Kind, data: array of byte, name: string, st: ref Docengine->Style)
 {
 	h := -1;
-	text: string;
 	(eng, err) := docreg->engine(k);
 	if(eng != nil){
 		{
 			(h, err) = eng->open(data, name, st);
-			if(h >= 0 && k.class == Docreg->Binary)
-				text = eng->text(h);
 		} exception e {
 		"*" =>
 			if(err == nil)
 				err = e;
 		}
 	}
-	send(ref AsyncMsg.DocOpened(winid, gen, eng, h, text, err));
+	# shown first; a binary document's text (all its pages') after
+	send(ref AsyncMsg.DocOpened(winid, gen, eng, h, nil, err));
+	if(h >= 0 && k.class == Docreg->Binary){
+		text: string;
+		{
+			text = eng->text(h);
+		} exception {
+		"*" =>
+			;
+		}
+		send(ref AsyncMsg.DocText(winid, gen, text));
+	}
+}
+
+# A binary document's text, read after it was shown, as the window's
+texted(w: ref Window, gen: int, text: string)
+{
+	d := w.doc;
+	if(d == nil || d.gen != gen || d.h < 0 || flowing(d))
+		return;
+	settext(w, text);
+	if(d.shown)
+		draw(w);
 }
 
 send(m: ref AsyncMsg)

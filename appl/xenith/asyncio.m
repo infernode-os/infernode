@@ -30,6 +30,10 @@ Asyncio: module {
 				h: int;         # the engine's handle, or -1
 				text: string;   # a binary document's text
 				err: string;
+		DocText =>
+				winid: int;
+				gen: int;
+				text: string;   # a binary document's text, read after it is shown
 		DocPainted =>
 				winid: int;
 				gen: int;

@@ -96,6 +96,16 @@ fn loaded {
 	}
 }
 
+# Wait for a binary document's text, read after it is shown: hastext id
+fn hastext {
+	a := $*
+	wid := ${index 1 $a}
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		b=`{read 16 < $XENITH/$wid/body}
+		if {~ $#b 0} {sleep 1}
+	}
+}
+
 # ---- a PDF ----
 
 PDF=/tmp/xenith_doc_test.pdf
@@ -122,6 +132,7 @@ s=`{attr $id sheets}
 if {! ~ $#s 0 && ! ~ $s 0} {ok 'its pages are its sheets:' $s} {bad 'sheets:' $s}
 check 'fitted to the window''s width' `{attr $id fit} width
 
+hastext $id
 b=`{read 16 < $W/body}
 check 'its body is its text, not its bytes' $"b '240 West Center'
 t=`{read 16 < $W/doc/text}
@@ -149,6 +160,7 @@ check 'doc/ctl render shows the document again' `{attr $id shown} 1
 
 echo get > $W/ctl
 loaded $id
+hastext $id
 check 'Get opens it again as the document it is' `{attr $id kind} pdf
 b=`{read 16 < $W/body}
 check 'and its body is still its text' $"b '240 West Center'

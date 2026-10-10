@@ -420,6 +420,7 @@ domnatives(): int
 	method(o, "children", 2, dn_children);
 	method(o, "descendants", 3, dn_descendants);
 	method(o, "match", 3, dn_match);
+	method(o, "attachshadow", 2, dn_attachshadow);
 	method(o, "select", 3, dn_select);
 	method(o, "parse", 2, dn_parse);
 	method(o, "markup", 2, dn_markup);
@@ -695,6 +696,17 @@ lowerascii(s: string): string
 }
 
 # 1, 0, or -1 if not a valid selector
+# host's shadow root is fragment root: style and layout use the flat tree
+dn_attachshadow(nil: V, a, n: int, nil: V, nil: int): V
+{
+	host := nodearg(a, n, 0);
+	root := nodearg(a, n, 1);
+	if(pgd.nodes[host].kind != Dom->Element || pgd.nodes[root].kind != Dom->Document)
+		typeerr("not a host and a shadow root");
+	pgd.attachshadow(host, root);
+	return undef;
+}
+
 dn_match(nil: V, a, n: int, nil: V, nil: int): V
 {
 	x := nodearg(a, n, 0);

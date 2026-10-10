@@ -85,6 +85,7 @@ B: adt {
 	c:	ref Computed;
 	counters:	list of ref Ctr;	# the counters in scope, innermost first
 	qdepth:	int;		# quotes open (CSS 2.2 §12.3.2)
+	f:	ref Dom->Flat;	# with shadow roots, the flat tree, whose children are boxed
 };
 
 # A counter instance (CSS Lists 3 §4).  Its scope is the element that
@@ -127,7 +128,7 @@ build(d: ref Doc, c: ref Computed): ref Box
 	root := d.root();
 	if(root == 0 || c.st[root] == nil)
 		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
-	b := ref B(d, c, nil, 0);
+	b := ref B(d, c, nil, 0, dom->flat(d));
 	l := element(b, root);
 	if(l == nil) {
 		# display: none on the root: nothing, not even its background
@@ -540,7 +541,10 @@ firsttext(box: ref Box): (ref Box, int)
 children(b: ref B, n: int, st: ref St): list of ref Box
 {
 	r: list of ref Box;
-	for(c := b.d.nodes[n].first; c != 0; c = b.d.nodes[c].next) {
+	c := b.d.nodes[n].first;
+	if(b.f != nil)
+		c = b.f.first[n];
+	for(; c != 0; c = nextkid(b, c)) {
 		cn := b.d.nodes[c];
 		case cn.kind {
 		Dom->Text =>
@@ -553,6 +557,13 @@ children(b: ref B, n: int, st: ref St): list of ref Box
 		}
 	}
 	return rev(r);
+}
+
+nextkid(b: ref B, c: int): int
+{
+	if(b.f != nil)
+		return b.f.next[c];
+	return b.d.nodes[c].next;
 }
 
 splitinline(box: ref Box, kids: list of ref Box): list of ref Box

@@ -2037,23 +2037,43 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	ctx := ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;	# filter for each element's children
+	# with shadow roots, the flat tree: a node inherits from its parent
+	# there, selectors match in its own tree, and the rules are its tree's
+	f := dom->flat(d);
+	scopes: list of (int, ref Index, array of list of (string, ref Shared));
+	if(f != nil)
+		scopes = scopeindexes(d, f, s, env);
 	n := root;
 	while(n != 0) {
 		nd := d.nodes[n];
 		skip := 0;
 		if(nd.kind == Dom->Element) {
 			p := parentel(d, n);
+			pp := p;
+			idx := s.idx;
+			sh := share;
+			if(f != nil) {
+				pp = f.parent[n];
+				if(pp != 0 && d.nodes[pp].kind != Dom->Element)
+					pp = 0;
+				if(f.scope[n] != 1)
+					for(sl := scopes; sl != nil; sl = tl sl)
+						if((hd sl).t0 == f.scope[n]) {
+							(nil, idx, sh) = hd sl;
+							break;
+						}
+			}
 			ps: ref St;
-			if(p != 0)
-				ps = c.st[p];
-			if(p != 0 && ps == nil)
+			if(pp != 0)
+				ps = c.st[pp];
+			if(pp != 0 && ps == nil)
 				skip = 1;	# inside display: none
 			else {
 				pf: array of int;
 				if(p != 0)
 					pf = filters[p];
 				(sibdoc, sibnode) = (d, n);
-				st := styleof(m, s.idx, n, ps, ctx, c, share, pf);
+				st := styleof(m, idx, n, ps, ctx, c, sh, pf);
 				if(nd.first != 0)
 					filters[n] = childfilter(m, n, pf);
 				c.st[n] = st;
@@ -2063,7 +2083,12 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 					skip = 1;
 			}
 		}
-		if(skip || nd.kind != Dom->Element)
+		if(f != nil) {
+			if(skip || nd.kind != Dom->Element)
+				n = flatnextskip(f, n, root);
+			else
+				n = flatnext(f, n, root);
+		} else if(skip || nd.kind != Dom->Element)
 			n = nextskip(d, n, root);
 		else
 			n = next(d, n, root);
@@ -2071,6 +2096,81 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	(sibdoc, sibnode) = (nil, 0);
 	schemedark = -1;
 	return c;
+}
+
+# the next node in the flat tree after n, inside top (or skipping what is
+# under n)
+flatnext(f: ref Dom->Flat, n, top: int): int
+{
+	if(f.first[n] != 0)
+		return f.first[n];
+	return flatnextskip(f, n, top);
+}
+
+flatnextskip(f: ref Dom->Flat, n, top: int): int
+{
+	while(n != top && n != 0) {
+		if(f.next[n] != 0)
+			return f.next[n];
+		n = f.parent[n];
+	}
+	return 0;
+}
+
+# a shadow tree's rules: the user agent's and the user's, and the tree's
+# own style sheets (its <style> elements); kept while the sheets' text is
+# the same
+Scoped: adt {
+	root:	int;
+	text:	string;
+	idx:	ref Index;
+	doc:	ref Doc;
+};
+scoped: list of ref Scoped;
+
+scopeindexes(d: ref Doc, f: ref Dom->Flat, s: ref Styles, env: ref Env): list of (int, ref Index, array of list of (string, ref Shared))
+{
+	r: list of (int, ref Index, array of list of (string, ref Shared));
+	keep: list of ref Scoped;
+	for(l := f.roots; l != nil; l = tl l) {
+		(nil, root) := hd l;
+		if(root <= 0 || root >= d.n)
+			continue;
+		texts: list of string;
+		text := "";
+		for(c := d.nodes[root].first; c != 0; c = dom->within(d, c, root))
+			if(d.nodes[c].kind == Dom->Element && d.nodes[c].name == "style") {
+				t := d.textof(c);
+				texts = t :: texts;
+				text += t + "\n\u0000";
+			}
+		sc: ref Scoped;
+		for(k := scoped; k != nil; k = tl k)
+			if((hd k).root == root && (hd k).doc == d && (hd k).text == text && sameenv((hd k).idx.env, env))
+				sc = hd k;
+		if(sc == nil) {
+			ss := Styles.new();
+			# s.sheets is reversed: added back in order
+			base: list of (ref Css->Sheet, int, string);
+			for(sl := s.sheets; sl != nil; sl = tl sl)
+				if((hd sl).t1 != Author)
+					base = hd sl :: base;
+			for(; base != nil; base = tl base)
+				ss.add((hd base).t0, (hd base).t1, (hd base).t2);
+			rt: list of string;
+			for(; texts != nil; texts = tl texts)
+				rt = hd texts :: rt;
+			for(; rt != nil; rt = tl rt)
+				ss.add(css->parse(hd rt), Author, d.url);
+			idx := buildindex(ss, env);
+			idx.env = ref *env;
+			sc = ref Scoped(root, text, idx, d);
+		}
+		keep = sc :: keep;
+		r = (root, sc.idx, array[Nshare] of list of (string, ref Shared)) :: r;
+	}
+	scoped = keep;
+	return r;
 }
 
 nextskip(d: ref Doc, n, top: int): int

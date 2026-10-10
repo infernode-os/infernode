@@ -189,6 +189,28 @@ test('custom property', () => {
 	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
 	d.remove();
 });
+test('shadow DOM', () => {
+	const st = document.createElement('style');
+	st.textContent = '.sdp { color: rgb(255, 0, 0); }';
+	document.head.appendChild(st);
+	const host = document.createElement('div');
+	host.innerHTML = '<div slot=t class=sdl>T</div><div class=sdu slot=nowhere>U</div>';
+	document.body.appendChild(host);
+	const sr = host.attachShadow({mode: 'open'});
+	sr.innerHTML = '<style>.sdp { color: rgb(0, 0, 255); }</style><div class=sdp><slot name=t></slot></div>';
+	const outside = document.createElement('p');
+	outside.className = 'sdp';
+	document.body.appendChild(outside);
+	check('shadow rules inside', getComputedStyle(sr.querySelector('.sdp')).color, 'rgb(0, 0, 255)');
+	check('document rules outside', getComputedStyle(outside).color, 'rgb(255, 0, 0)');
+	check('slotted inherits from the slot', getComputedStyle(host.querySelector('.sdl')).color, 'rgb(0, 0, 255)');
+	check('slotted laid out', host.querySelector('.sdl').getBoundingClientRect().width > 0, true);
+	check('unslotted not', host.querySelector('.sdu').getBoundingClientRect().width, 0);
+	check('a second root', (() => { try { host.attachShadow({mode: 'open'}); return 'no'; } catch (e) { return e.name; } })(), 'NotSupportedError');
+	host.remove();
+	outside.remove();
+	st.remove();
+});
 test('clock', () => {
 	check('this year', new Date().getFullYear() >= 2026, true);
 	check('now', Math.abs(Date.now() - performance.timeOrigin - performance.now()) < 2000, true);

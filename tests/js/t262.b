@@ -39,6 +39,15 @@ failfd: ref Sys->FD;
 verbose := 0;
 npass := 0;
 nfail := 0;
+nskip := 0;
+
+# proposals no browser ships: not tests of this parser
+skipped := array[] of {
+	"decorators",
+	"import-defer",
+	"source-phase-imports",
+	"source-phase-imports-module-source",
+};
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -70,7 +79,7 @@ init(nil: ref Draw->Context, args: list of string)
 		for(l = revstats(featfail); l != nil; l = tl l)
 			sys->print("  %-40s %5d\n", (hd l).name, (hd l).fail);
 	}
-	sys->print("\ntotal %d passed, %d failed (%.1f%%)\n", npass, nfail, 100.0 * real npass / real (npass + nfail));
+	sys->print("\ntotal %d passed, %d failed (%.1f%%), %d skipped\n", npass, nfail, 100.0 * real npass / real (npass + nfail), nskip);
 }
 
 revstats(l: list of ref Stat): list of ref Stat
@@ -253,6 +262,11 @@ test(path, top: string)
 	if(src == nil)
 		return;
 	m := meta(src);
+	for(i := 0; i < len skipped; i++)
+		if(has(m.features, skipped[i])) {
+			nskip++;
+			return;
+		}
 	ismod := has(m.flags, "module");
 	ok := 1;
 	why := "";

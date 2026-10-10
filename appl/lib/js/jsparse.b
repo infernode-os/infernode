@@ -41,6 +41,7 @@ P: adt {
 	toplevelawait:	int;	# module top level: await is an operator
 	inclassfield:	int;
 	instaticblock:	int;
+	sawstrict:	int;	# the last directive prologue had "use strict"
 };
 
 init()
@@ -54,7 +55,7 @@ parse(src: string, ismod, strict: int): (ref Node, string)
 {
 	if(sys == nil)
 		init();
-	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 0, 0, -1, -1, ismod, 0, 0);
+	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 0, 0, -1, -1, ismod, 0, 0, 0);
 	{
 		next(p);
 		body := stmtlist(p, 1, 1);
@@ -278,6 +279,7 @@ stmtlist(p: ref P, top: int, dirs: int): array of ref Node
 {
 	l: list of ref Node;
 	prologue := dirs;
+	usestrict := 0;
 	while(p.t.kind != Teof && !is(p, "}")) {
 		if(prologue) {
 			if(p.t.kind == Tstr) {
@@ -291,6 +293,7 @@ stmtlist(p: ref P, top: int, dirs: int): array of ref Node
 							raw := p.l.src[st.pos+1:st.end-1];
 							x.directive = raw;
 							if(raw == "use strict") {
+								usestrict = 1;
 								if(!p.strict)
 									checkoctals(p, l);
 								p.strict = 1;
@@ -308,6 +311,8 @@ stmtlist(p: ref P, top: int, dirs: int): array of ref Node
 		}
 		l = stmtitem(p, top) :: l;
 	}
+	if(dirs)
+		p.sawstrict = usestrict;
 	return rev(l);
 }
 
@@ -362,7 +367,7 @@ stmtitem(p: ref P, top: int): ref Node
 			return exportdecl(p);
 		}
 	}
-	return stmt(p, 0);
+	return stmt(p, 1);
 }
 
 # whether a let here begins a declaration (else it is an identifier)
@@ -502,7 +507,7 @@ stmt(p: ref P, labelled: int): ref Node
 	Ident =>
 		if(is(p, ":") && e.end == p.prevend && t.kind == Tident) {
 			next(p);
-			body := stmt(p, 1);
+			body := stmt(p, labelled);
 			return ref Node.Labeled(pos, p.prevend, id.name, body);
 		}
 	}
@@ -811,12 +816,11 @@ funcrest(p: ref P, at: int, id: ref Node, flags: int): ref Node
 	if(simple)
 		flags |= Fsimple;
 	expect(p, "{");
-	outerstrict := p.strict;
 	body := stmtlist(p, 0, 1);
 	expect(p, "}");
 	if(p.strict) {
 		flags |= Fstrict;
-		if(!outerstrict && !simple)
+		if(p.sawstrict && !simple)
 			fail(p, at, "\"use strict\" in a function with non-simple parameters");
 		strictparams(p, id, params);
 	}
@@ -970,7 +974,6 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 	if(simple)
 		flags |= Fsimple;
 	body: array of ref Node;
-	outerstrict := p.strict;
 	if(is(p, "{")) {
 		next(p);
 		body = stmtlist(p, 0, 1);
@@ -981,10 +984,11 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 		body = array[1] of ref Node;
 		body[0] = ref Node.Return(bpos, p.prevend, e);
 		flags |= Fexpr;
+		p.sawstrict = 0;
 	}
 	if(p.strict) {
 		flags |= Fstrict;
-		if(!outerstrict && !simple)
+		if(p.sawstrict && !simple)
 			fail(p, at, "\"use strict\" in a function with non-simple parameters");
 		strictparams(p, nil, params);
 	}
@@ -1673,13 +1677,22 @@ unary(p: ref P): ref Node
 		"delete" or "void" or "typeof" =>
 			next(p);
 			arg := unary(p);
+			darg := arg;
+			for(;;) {
+				pick pa := darg {
+				Paren =>
+					darg = pa.e;
+					continue;
+				}
+				break;
+			}
 			if(t.s == "delete" && p.strict)
-				pick a := arg {
+				pick a := darg {
 				Ident =>
 					fail(p, pos, "delete of a name in strict code");
 				}
 			if(t.s == "delete")
-				pick a := arg {
+				pick a := darg {
 				Member =>
 					pick pr := a.prop {
 					Private =>

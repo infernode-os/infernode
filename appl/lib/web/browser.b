@@ -210,6 +210,11 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 {
 	if(url == "about:blank")
 		url = "data:text/html,";
+	# (the page's realm may be stuck holding the lock: it goes first,
+	# unless only the view moves within the page, which keeps it)
+	if(!(s.pg != nil && method == "GET" && hist != Hreload &&
+	   fragment(url) != nil && unfrag(url) == unfrag(s.url)))
+		endrealm(s);
 	lock(s);
 	s.gen++;
 	g := s.gen;
@@ -230,7 +235,6 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 	}
 	s.status = "loading " + url;
 	unlock(s);
-	endrealm(s);
 	event(s, "loading " + url);
 	spawn loader(s, g, url, method, ctype, body, hist);
 }
@@ -1592,6 +1596,7 @@ Realm: adt {
 	reqs:	chan of ref Req;
 	pid:	int;		# its process, whose group it leads
 	locked:	int;		# it holds the session's lock
+	since:	int;		# since when (sys->millisec)
 	laidout:	int;	# the document's generation when last laid out
 	sels:	list of (string, array of ref Css->Sel);	# selectors parsed, most recent first
 };
@@ -1633,13 +1638,33 @@ startrealm(s: ref Session, g: int, pg: ref Pg)
 	if(page->setting("scripts") != "on" || !hasscripts(pg.doc))
 		return;
 	realmlk <-= 1;
-	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, pg.doc.gen, nil);
+	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, nil);
 	realms = r :: realms;
 	<-realmlk;
 	pidc := chan of int;
 	spawn realmhelper(r);
 	spawn realmrun(r, pidc);
 	r.pid = <-pidc;
+	spawn watchdog(r);
+}
+
+# A task that runs too long (a script in an endless loop) holds the
+# session's lock, and nothing else can draw the page: the realm is
+# killed and the page stays as it was.
+Maxtask: con 10000;
+
+watchdog(r: ref Realm)
+{
+	for(;;) {
+		sys->sleep(1000);
+		if(realmbyid(r.id) == nil)
+			return;
+		if(r.locked && sys->millisec() - r.since > Maxtask) {
+			sys->fprint(sys->fildes(2), "charon: scripts: %s: a script ran for %d seconds and was stopped\n", r.pg.url, Maxtask / 1000);
+			endrealm(r.s);
+			return;
+		}
+	}
 }
 
 realmrun(r: ref Realm, pidc: chan of int)
@@ -1888,6 +1913,7 @@ hlock(id: int)
 	if(r == nil)
 		raise "fail:realm gone";
 	lock(r.s);
+	r.since = sys->millisec();
 	r.locked = 1;
 }
 

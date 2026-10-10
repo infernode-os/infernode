@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>confine</title>
+<script>
+const out = [];
+async function main() {
+	const tries = [['same directory', 'basic.html', true], ['outside', 'file:///lib/sh/profile', false],
+		['prog', 'file:///prog/1/status', false], ['dev', 'file:///dev/sysname', false], ['root', 'file:///NOTICE', false]];
+	for (const [name, url, want] of tries) {
+		let ok;
+		try { const r = await fetch(url); await r.text(); ok = r.ok; } catch (e) { ok = false; }
+		out.push(name + (ok === want ? ' ok' : ' WRONG'));
+	}
+	document.title = out.join(', ');
+	console.log(document.title);
+}
+main();
+</script>

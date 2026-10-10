@@ -32,6 +32,7 @@ State: adt {
 	text:	string;
 	lines:	array of int;	# each block's first line in the text
 	ys:	array of int;	# and its top in the document
+	words:	array of Rlayout->Word;	# the words drawn, where
 };
 
 display: ref Display;
@@ -64,7 +65,7 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 		return (-1, err);
 	if(data == nil && (data = readfile(name)) == nil)
 		return (-1, sys->sprint("cannot read %s: %r", name));
-	s := ref State(string data, st, nil, nil, nil, nil);
+	s := ref State(string data, st, nil, nil, nil, nil, nil);
 	if((err = set(s)) != nil)
 		return (-1, err);
 	return (add(s), nil);
@@ -101,12 +102,13 @@ set(s: ref State): string
 		st.fg, st.bg, st.accent, st.codebg, 150);
 	{
 		(doc, lines) := rlayout->parsemdlines(s.src);
-		(im, ys) := rlayout->renderat(doc, rs);
+		(im, ys, words) := rlayout->renderwords(doc, rs);
 		if(im == nil)
 			return sys->sprint("render failed: %r");
 		s.im = im;
 		s.lines = lines;
 		s.ys = ys;
+		s.words = words;
 		s.text = rlayout->totext(doc);
 	} exception e {
 	"*" =>
@@ -174,20 +176,44 @@ sheettext(h: int, n: int): string
 	return text(h);
 }
 
-runs(nil: int, nil: int): array of Run
+runs(h: int, n: int): array of Run
 {
-	return nil;
+	s := get(h);
+	if(s == nil || n != 0)
+		return nil;
+	r := array[len s.words] of Run;
+	for(i := 0; i < len r; i++)
+		r[i] = Run(s.words[i].text, s.words[i].r);
+	return r;
 }
 
-links(nil: int): array of Link
+links(h: int): array of Link
 {
-	return nil;
+	s := get(h);
+	if(s == nil)
+		return nil;
+	l: list of ref Link;
+	for(i := 0; i < len s.words; i++)
+		if((u := s.words[i].link) != nil)
+			l = ref Link(0, s.words[i].r, u) :: l;
+	a := array[len l] of Link;
+	for(i = len a; l != nil; l = tl l)
+		a[--i] = *hd l;
+	return a;
 }
 
 # Where line l of the text falls in the document: in the block that
 # holds it, as far down as the line is through the block's lines
-linkat(nil: int, nil: int, nil: Point): string
+linkat(h: int, n: int, p: Point): string
 {
+	s := get(h);
+	if(s == nil || n != 0)
+		return nil;
+	for(i := 0; i < len s.words; i++){
+		w := s.words[i];
+		if(w.link != nil && p.in(w.r))
+			return w.link;
+	}
 	return nil;
 }
 

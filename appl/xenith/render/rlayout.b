@@ -33,6 +33,8 @@ Lstate: adt {
 	maxx: int;            # Rightmost x text has reached (measuring cells)
 	ys: list of int;      # The top of each block laid out, last first
 	mcache: list of (ref DocNode, ref Image);  # Mermaid diagrams, drawn once
+	words: list of ref Word;	# the words drawn, where, last first
+	href: string;		# the link being set, or nil
 };
 
 # weights and slopes, as indices into Lstate.f
@@ -51,21 +53,28 @@ init(d: ref Draw->Display)
 
 render(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int)
 {
-	(img, h, nil) := layout(doc, style);
+	(img, h, nil, nil) := layout(doc, style);
 	return (img, h);
 }
 
 renderat(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int)
 {
-	(img, nil, ys) := layout(doc, style);
+	(img, nil, ys, nil) := layout(doc, style);
 	return (img, ys);
 }
 
-# The document's image, its height, and the top of each of its blocks
-layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array of int)
+renderwords(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int, array of Word)
+{
+	(img, nil, ys, words) := layout(doc, style);
+	return (img, ys, words);
+}
+
+# The document's image, its height, the top of each of its blocks, and
+# the words drawn on it, where
+layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array of int, array of Word)
 {
 	if(style == nil || style.font == nil)
-		return (nil, 0, nil);
+		return (nil, 0, nil, nil);
 
 	width := style.width;
 	if(width <= 0)
@@ -82,7 +91,7 @@ layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array
 	r := Rect(Point(0, 0), Point(width, height));
 	img := display.newimage(r, drawm->RGB24, 0, drawm->Black);
 	if(img == nil)
-		return (nil, 0, nil);
+		return (nil, 0, nil, nil);
 	img.draw(r, style.bgcolor, nil, Point(0, 0));
 
 	mc := ls.mcache;
@@ -94,14 +103,18 @@ layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array
 	i := len ys;
 	for(l := ls.ys; l != nil; l = tl l)
 		ys[--i] = hd l;
-	return (img, ls.y, ys);
+	words := array[len ls.words] of Word;
+	i = len words;
+	for(wl := ls.words; wl != nil; wl = tl wl)
+		words[--i] = *hd wl;
+	return (img, ls.y, ys, words);
 }
 
 newstate(img: ref Image, style: ref Style, width: int): ref Lstate
 {
 	m := px(style.margin);
 	return ref Lstate(img, style, m, m, m, width - m, m,
-		bodyfaces(style.font), 0, style.font.height, style.font.ascent, 0, nil, nil);
+		bodyfaces(style.font), 0, style.font.height, style.font.ascent, 0, nil, nil, nil, nil);
 }
 
 px(n: int): int
@@ -355,6 +368,7 @@ rendercodeblock(ls: ref Lstate, node: ref DocNode)
 				if(i > linestart)
 					line = txt[linestart:i];
 				ls.img.text(Point(ls.left + pad, ty), ls.style.fgcolor, Point(0, 0), font, line);
+				drewline(ls, line, font, Point(ls.left + pad, ty));
 				ty += font.height;
 				linestart = i + 1;
 			}
@@ -857,7 +871,10 @@ renderinlines(ls: ref Lstate, nodes: list of ref DocNode, w: int, color: ref Ima
 			lc := ls.style.linkcolor;
 			if(lc == nil)
 				lc = color;
+			oh := ls.href;
+			ls.href = node.text;
 			renderinlines(ls, node.children, w, lc, ul | Ul);
+			ls.href = oh;
 		Nnewline =>
 			newline(ls);
 		* =>
@@ -897,6 +914,7 @@ rendertext(ls: ref Lstate, text: string, w: int, color: ref Image, underline: in
 			if(ls.img != nil){
 				p := Point(ls.x, ls.y + dy);
 				ls.img.text(p, color, Point(0, 0), font, word);
+				drew(ls, word, Rect(p, p.add(Point(ww, font.height))));
 				if(emb)
 					ls.img.text(p.add(Point(emb, 0)), color, Point(0, 0), font, word);
 				decorate(ls, ls.x, ls.x + ww, font, color, underline);
@@ -920,6 +938,34 @@ rendertext(ls: ref Lstate, text: string, w: int, color: ref Image, underline: in
 	}
 }
 
+# A word drawn at r, kept with the link it is part of
+drew(ls: ref Lstate, word: string, r: Rect)
+{
+	ls.words = ref Word(word, r, ls.href) :: ls.words;
+}
+
+# The words of a line of code drawn at p, each where it is
+drewline(ls: ref Lstate, line: string, font: ref Font, p: Point)
+{
+	x := p.x;
+	i := 0;
+	while(i < len line){
+		while(i < len line && (line[i] == ' ' || line[i] == '\t')){
+			x += font.width(line[i:i+1]);
+			i++;
+		}
+		j := i;
+		while(j < len line && line[j] != ' ' && line[j] != '\t')
+			j++;
+		if(j > i){
+			ww := font.width(line[i:j]);
+			drew(ls, line[i:j], Rect((x, p.y), (x + ww, p.y + font.height)));
+			x += ww;
+		}
+		i = j;
+	}
+}
+
 # Render inline code with background
 renderinlinecode(ls: ref Lstate, text: string)
 {
@@ -939,6 +985,7 @@ renderinlinecode(ls: ref Lstate, text: string)
 		bgr := Rect(Point(ls.x, ls.y + dy), Point(ls.x + tw + 2*pad, ls.y + dy + font.height));
 		ls.img.draw(bgr, ls.style.codebgcolor, nil, Point(0, 0));
 		ls.img.text(Point(ls.x + pad, ls.y + dy), ls.style.fgcolor, Point(0, 0), font, text);
+		drew(ls, text, bgr);
 	}
 	ls.x += tw + 2*pad;
 	if(ls.x > ls.maxx)
@@ -977,7 +1024,7 @@ flattentext(nodes: list of ref DocNode): string
 	s := "";
 	for(; nodes != nil; nodes = tl nodes){
 		node := hd nodes;
-		if(node.text != nil)
+		if(node.text != nil && node.kind != Nlink)	# a link's text is its target
 			s += node.text;
 		if(node.children != nil)
 			s += flattentext(node.children);
@@ -1503,7 +1550,7 @@ pmd_parseinline(text: string): list of ref DocNode
 						nodes = ref DocNode(Ntext, plain, nil, 0) :: nodes;
 						plain = "";
 					}
-					nodes = ref DocNode(Nlink, nil, ref DocNode(Ntext, u, nil, 0) :: nil, 0) :: nodes;
+					nodes = ref DocNode(Nlink, u, ref DocNode(Ntext, u, nil, 0) :: nil, 0) :: nodes;
 					i = end + 1;
 					continue;
 				}
@@ -1598,7 +1645,8 @@ pmd_parselink(text: string, start: int): (ref DocNode, int)
 		return (nil, start + 1);
 	j++;
 
-	return (ref DocNode(Nlink, nil, pmd_parseinline(linktext), 0), j);
+	# the link's target kept (its text is its children)
+	return (ref DocNode(Nlink, text[i:j-1], pmd_parseinline(linktext), 0), j);
 }
 
 # Returns 1 if line looks like a table row (contains '|')

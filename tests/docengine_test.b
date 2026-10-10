@@ -263,11 +263,44 @@ testMarkdown(t: ref T)
 	(nil, y5) := e->lineto(h, 5);
 	t.assert(y5 > y0, "a later line of the text is set further down");
 	t.asserteq(e->lineat(h, 0, y5), 5, "and the line set there is that line");
+	runs := e->runs(h, 0);
+	t.assert(len runs >= 7, sys->sprint("its words, where they are drawn (got %d)", len runs));
+	t.assertseq(runs[0].text, "Title", "the first word is the heading's");
 	t.assertnil(e->restyle(h, style(300)), "set again to a new width");
 	t.asserteq(e->sheetsize(h, 0).x, 300, "to that width");
 	t.assert(docreg->loaded() != nil && !contains(docreg->loaded(), "/dis/xenith/doc/webdoc.dis"),
 		"Markdown does not load the HTML engine (nor Charon's)");
 	e->close(h);
+}
+
+testMarkdownLinks(t: ref T)
+{
+	needdisplay(t);
+	src := "Some text and [a link](http://example.com/x) here, and <http://example.com/bare> too.\n";
+	(e, h) := openfile(t, "markdown", "/x/links.md", array of byte src, style(600));
+	runs := e->runs(h, 0);
+	link: ref Docengine->Run;
+	for(i := 0; i < len runs; i++)
+		if(runs[i].text == "link")
+			link = ref runs[i];
+	if(link == nil)
+		t.fatal("the link's words are not among the words drawn");
+	c := link.r.min.add(link.r.max).div(2);
+	t.assertseq(e->linkat(h, 0, c), "http://example.com/x", "the link's target, from a point on its words");
+	t.assertnil(e->linkat(h, 0, Point(1, 1)), "no link where there is none");
+	l := e->links(h);
+	t.asserteq(len l, 3, "its links: two words of one, one of an autolink");
+	txt := e->text(h);
+	t.assert(txt != nil && !contains2(txt, "http://example.com/xa link"), "the text as set has the link's words, not its target run into them");
+	e->close(h);
+}
+
+contains2(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
 }
 
 testMermaid(t: ref T)
@@ -325,6 +358,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PdfApart", testPdfApart);
 	run("Image", testImage);
 	run("Markdown", testMarkdown);
+	run("MarkdownLinks", testMarkdownLinks);
 	run("Mermaid", testMermaid);
 	run("Html", testHtml);
 

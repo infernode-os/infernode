@@ -509,7 +509,7 @@ Data: adt {
 	Prim =>
 		v:	V;		# Boolean, Number, String, Symbol, BigInt wrappers; Date's time value
 	Error =>
-		stack:	string;
+		trace:	list of (ref Code, int);	# where it was made: (code, pc), innermost first
 	Env =>
 		scope:	ref Scope;	# the names, for eval and with; nil for a function's plain closure env
 		withobj:	int;	# a with statement's object, or -1

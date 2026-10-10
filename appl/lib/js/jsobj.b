@@ -26,7 +26,7 @@ newerror(kind: int, msg: string): int
 	h := newobj(Kerror, ierrorprotos[kind]);
 	if(msg != nil)
 		defown(h, amessage, Awrite | Aconf, strv(msg));
-	odata[h] = ref Data.Error(nil);
+	odata[h] = ref Data.Error(errtrace());
 	return h;
 }
 

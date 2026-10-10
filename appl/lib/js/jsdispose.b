@@ -51,7 +51,7 @@ disposeinit()
 suppressed(err, supp: V): int
 {
 	h := newobj(Kerror, isupperrproto);
-	odata[h] = ref Data.Error(nil);
+	odata[h] = ref Data.Error(errtrace());
 	defown(h, intern("error"), Awrite|Aconf, err);
 	defown(h, intern("suppressed"), Awrite|Aconf, supp);
 	return h;
@@ -62,7 +62,7 @@ suppressedctor(nil: V, a, n: int, nt: V, f: int): V
 	if(nt.t == Tundef)
 		nt = objv(f);
 	h := newobj(Kerror, protofromctor(nt, isupperrproto));
-	odata[h] = ref Data.Error(nil);
+	odata[h] = ref Data.Error(errtrace());
 	sp0 := sp;
 	push(objv(h));
 	msg := arg(a, n, 2);

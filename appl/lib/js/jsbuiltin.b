@@ -1071,6 +1071,7 @@ errorinit()
 	value(ierrorproto, "message", strv(""));
 	method(ierrorproto, "toString", 0, errproto_tostring);
 	method(ierrorctors[Error], "isError", 1, error_iserror);
+	accessor(ierrorproto, intern("stack"), "stack", errproto_stack, errproto_setstack);
 	method(ierrorctors[Error], "captureStackTrace", 1, error_capturestacktrace);
 	for(k := EvalError; k <= AggregateError; k++) {
 		p := keep(newobj(Kord, ierrorproto));
@@ -1084,6 +1085,92 @@ errorinit()
 		value(p, "name", strv(errornames[k]));
 		value(p, "message", strv(""));
 	}
+}
+
+# ---- where an error was made ----
+
+Maxtrace: con 10;
+
+errtrace(): list of (ref Code, int)
+{
+	r: list of (ref Code, int);
+	n := 0;
+	for(i := nframe - 1; i >= 0 && n < Maxtrace; i--) {
+		c := frames[i].code;
+		if(c == nil)
+			continue;
+		p := frames[i].pc;
+		if(i == nframe - 1 && c == code)
+			p = pc;	# the running frame's own
+		r = (c, p) :: r;
+		n++;
+	}
+	# innermost first
+	t: list of (ref Code, int);
+	for(; r != nil; r = tl r)
+		t = hd r :: t;
+	return t;
+}
+
+# "file:line:col" for code's pc
+codeplace(c: ref Code, pc: int): string
+{
+	file := c.file;
+	if(file == nil)
+		file = "<anonymous>";
+	if(c.pos == nil || len c.pos == 0)
+		return file;
+	if(pc > 0)
+		pc--;
+	if(pc >= len c.pos)
+		pc = len c.pos - 1;
+	p := c.pos[pc];
+	s := c.whole;
+	line := 1;
+	col := 1;
+	if(p > len s)
+		p = len s;
+	for(i := 0; i < p; i++)
+		if(s[i] == '\n') {
+			line++;
+			col = 1;
+		} else
+			col++;
+	return file + ":" + string line + ":" + string col;
+}
+
+tracetext(t: list of (ref Code, int)): string
+{
+	s := "";
+	for(; t != nil; t = tl t) {
+		(c, pc) := hd t;
+		name := c.name;
+		if(name == nil || name == "")
+			s += "\n    at " + codeplace(c, pc);
+		else
+			s += "\n    at " + name + " (" + codeplace(c, pc) + ")";
+	}
+	return s;
+}
+
+# get Error.prototype.stack: the error's text and where it was made
+errproto_stack(this: V, nil, nil: int, nil: V, nil: int): V
+{
+	if(this.t != Tobj)
+		return undef;
+	pick d := odata[this.x] {
+	Error =>
+		return strv(errtext(this) + tracetext(d.trace));
+	}
+	return undef;
+}
+
+errproto_setstack(this: V, a, n: int, nil: V, nil: int): V
+{
+	if(this.t != Tobj)
+		typeerr("set Error.prototype.stack called on non-object");
+	defown(this.x, intern("stack"), Awrite|Aconf, arg(a, n, 0));
+	return undef;
 }
 
 # Error.isError (ES2026)
@@ -1107,7 +1194,7 @@ error_capturestacktrace(nil: V, a, n: int, nil: V, nil: int): V
 	"js:throw" =>
 		;
 	}
-	defown(o.x, intern("stack"), Awrite|Aconf, strv(s));
+	defown(o.x, intern("stack"), Awrite|Aconf, strv(s + tracetext(errtrace())));
 	return undef;
 }
 
@@ -1137,7 +1224,7 @@ errorctor(nil: V, a, n: int, nt: V, f: int): V
 	if(nt.t == Tundef)
 		nt = objv(f);
 	h := newobj(Kerror, protofromctor(nt, ierrorprotos[kind]));
-	odata[h] = ref Data.Error(nil);
+	odata[h] = ref Data.Error(errtrace());
 	sp0 := sp;
 	push(objv(h));
 	mi := 0;

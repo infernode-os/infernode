@@ -1528,6 +1528,7 @@ finish(id: ref Node, flen, nformal: int): ref Code
 	c.nregs = cs.nregs + 1;
 	c.ops = cs.ops[0:cs.nops];
 	c.pos = cs.pos[0:cs.nops];
+	c.whole = cs.src;
 	c.consts = revv(cs.consts);
 	c.funcs = revcode(cs.funcs);
 	hl := cs.handlers;

@@ -882,9 +882,11 @@ dn_eval(nil: V, a, n: int, nil: V, nil: int): V
 {
 	src := tostring(arg(a, n, 0));
 	name := tostring(arg(a, n, 1));
+	t0 := sys->millisec();
 	(prog, err) := jsparse->parse(src, 0, 0);
+	t1 := sys->millisec();
 	if(err != nil)
-		return objv(arrayof(array[] of {inum(1), objv(newerror(SyntaxError, name + ":" + err))}));
+		return objv(arrayof(array[] of {inum(1), objv(newerror(SyntaxError, name + ":" + err + near(src, err)))}));
 	sp0 := sp;
 	nf := nframe;
 	{
@@ -893,7 +895,9 @@ dn_eval(nil: V, a, n: int, nil: V, nil: int): V
 			c := compilescript(p, src, 0, 0);
 			setfile(c, fromjs(name));
 			keepcode(c);
+			t2 := sys->millisec();
 			v := runcode(c);
+			slow(name, len src, t0, t1, t2);
 			sp = sp0;
 			return objv(arrayof(array[] of {inum(0), v}));
 		}
@@ -904,6 +908,45 @@ dn_eval(nil: V, a, n: int, nil: V, nil: int): V
 		return objv(arrayof(array[] of {inum(1), thrown}));
 	}
 	return undef;
+}
+
+Slowms: con 1000;
+
+# a script that took long, said so with where the time went
+slow(name: string, size, t0, t1, t2: int)
+{
+	t3 := sys->millisec();
+	if(t3 - t0 >= Slowms)
+		pageconsole(sys->sprint("slow script %s (%d characters): parse %d ms, compile %d ms, run %d ms",
+			name, size, t1 - t0, t2 - t1, t3 - t2));
+}
+
+# the text around a parse error's "line:col: ..."
+near(src, err: string): string
+{
+	(n, l) := sys->tokenize(err, ":");
+	if(n < 2)
+		return "";
+	line := int hd l;
+	col := int hd tl l;
+	p := 0;
+	for(i := 1; i < line && p < len src; p++)
+		if(src[p] == '\n')
+			i++;
+	p += col - 1;
+	if(p < 0 || p > len src)
+		return "";
+	a := p - 40;
+	if(a < 0)
+		a = 0;
+	b := p + 40;
+	if(b > len src)
+		b = len src;
+	t := src[a:b];
+	for(i = 0; i < len t; i++)
+		if(t[i] == '\n' || t[i] == '\t')
+			t[i] = ' ';
+	return " near «" + t + "»";
 }
 
 dn_evalmodule(nil: V, a, n: int, nil: V, nil: int): V

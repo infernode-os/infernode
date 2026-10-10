@@ -193,6 +193,7 @@ Code: adt {
 	flags:	int;
 	src:	string;	# the function's text, for toString
 	pos:	array of int;	# by pc: source position (for messages), or nil
+	whole:	string;	# the source those positions are in
 	file:	string;
 	allreg:	int;	# Cextra: the register given every argument, as an array
 	paramnames:	array of int;	# atoms, by formal parameter (simple ones), for mapped arguments

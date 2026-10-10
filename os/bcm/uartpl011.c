@@ -86,6 +86,25 @@ pnp(void)
 	return &pl011uart;
 }
 
+/*
+ * Input on (0) or held (1): held is the receive interrupts masked, so
+ * the FIFO fills and, with Crrtsen, RTS drops by itself. The mask is
+ * shared with kick's transmit bit, so it changes under the same lock.
+ */
+static void
+rxhold(Uart *uart, int on)
+{
+	ilock(&uart->tlock);
+	uart->rxheld = on;
+	if(on){
+		uart->nhold++;
+		R(uart, Imsc) &= ~(Imrx | Imrt);
+	}else
+		R(uart, Imsc) |= Imrx | Imrt;
+	coherence();
+	iunlock(&uart->tlock);
+}
+
 static void
 interrupt(Ureg*, void *arg)
 {
@@ -97,6 +116,16 @@ interrupt(Ureg*, void *arg)
 	nintr++;
 	mis = R(uart, Mis);
 	while((R(uart, Fr) & Rxfe) == 0){
+		/*
+		 * The stage is full: leave the rest in the FIFO. With
+		 * hardware flow control its filling drops RTS and the far
+		 * end waits; uartclock resumes input once it has moved
+		 * the stage on. Read on, and it would be dropped (berr).
+		 */
+		if(uart->modem && !uartroom(uart)){
+			rxhold(uart, 1);
+			break;
+		}
 		d = R(uart, Dr);
 		nrx++;
 		if(d & Rxerrors){
@@ -153,6 +182,7 @@ uarton(Uart *uart, int ie)
 		cr |= Crrtsen | Crctsen;
 	R(uart, Cr) = cr;
 	coherence();
+	uart->rxheld = 0;
 	if(ie)
 		R(uart, Imsc) = Imrx | Imrt | Imrxerr;
 }
@@ -381,7 +411,7 @@ status(Uart *uart, void *buf, long n, long offset)
 		"dev(%d) type(%d) framing(%d) overruns(%d) parity(%d) "
 		"berr(%d) serr(%d) freq(%lud) clock(%s) cts(%d)\n"
 		"fr(0x%ux) cr(0x%ux) imsc(0x%ux) ris(0x%ux) ibrd(%ud) fbrd(%ud) intrs(%lud) rx(%lud) tx(%lud)\n"
-		"staged(%lud) read(%lud) clocks(%lud) qlen(%d) enabled(%d)\n",
+		"staged(%lud) read(%lud) clocks(%lud) qlen(%d) enabled(%d) held(%lud%s)\n",
 		uart->baud, uart->hup_dcd, uart->dsr, uart->hup_dsr,
 		uart->bits, uart->modem, uart->parity, uart->cts, uart->stop,
 		uart->dev, uart->type, uart->ferr, uart->oerr, uart->perr,
@@ -390,7 +420,8 @@ status(Uart *uart, void *buf, long n, long offset)
 		(R(uart, Fr) & Frcts) != 0,
 		R(uart, Fr), R(uart, Cr), R(uart, Imsc), R(uart, Ris), R(uart, Ibrd), R(uart, Fbrd),
 		nintr, nrx, ntx,
-		uart->nstaged, uart->nread, uart->nclock, uart->iq != nil ? qlen(uart->iq) : -1, uart->enabled);
+		uart->nstaged, uart->nread, uart->nclock, uart->iq != nil ? qlen(uart->iq) : -1, uart->enabled,
+		uart->nhold, uart->rxheld ? ", now" : "");
 	n = readstr(offset, buf, n, p);
 	free(p);
 	return n;
@@ -438,4 +469,5 @@ PhysUart pl011physuart = {
 	.status		= status,
 	.getc		= getc,
 	.putc		= putc,
+	.rxhold		= rxhold,
 };

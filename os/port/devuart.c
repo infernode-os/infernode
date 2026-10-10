@@ -684,6 +684,42 @@ uartrecv(Uart *p,  char ch)
 }
 
 /*
+ *  move staged input to the queue. A queue that is full refuses it;
+ *  under hardware flow control it stays staged, and the stage filling
+ *  is what stops the line (rxhold), so nothing is lost. Without flow
+ *  control there is no one to tell, and it is dropped as it always was.
+ *  Returns whether it was taken (or dropped).
+ */
+static int
+stagein(Uart *p, uchar *a, int n)
+{
+	if(qproduce(p->iq, a, n) < 0){
+		if(p->modem && p->phys->rxhold != nil)
+			return 0;
+		(*p->phys->rts)(p, 0);
+		p->serr += n;
+		return 1;
+	}
+	p->nstaged += n;
+	return 1;
+}
+
+/*
+ *  room in the stage for a FIFO's worth: the receive interrupt asks
+ *  before it takes a character, uartclock before it resumes input
+ */
+int
+uartroom(Uart *p)
+{
+	long used;
+
+	used = p->iw - p->ir;
+	if(used < 0)
+		used += Stagesize;
+	return Stagesize - 1 - used >= 64;
+}
+
+/*
  *  we save up input characters till clock time to reduce
  *  per character interrupt overhead.
  */
@@ -700,20 +736,18 @@ uartclock(void)
 		if(p->iw != p->ir){
 			iw = p->iw;
 			if(iw < p->ir){
-				if(qproduce(p->iq, p->ir, p->ie-p->ir) < 0)
-					(*p->phys->rts)(p, 0);
-				else
-					p->nstaged += p->ie-p->ir;
-				p->ir = p->istage;
+				if(stagein(p, p->ir, p->ie-p->ir))
+					p->ir = p->istage;
 			}
 			if(iw > p->ir){
-				if(qproduce(p->iq, p->ir, iw-p->ir) < 0)
-					(*p->phys->rts)(p, 0);
-				else
-					p->nstaged += iw-p->ir;
+				if(stagein(p, p->ir, iw-p->ir))
+					p->ir = iw;
 			}
-			p->ir = iw;
 		}
+
+		/* input held in the hardware: take it again once there is room */
+		if(p->rxheld && p->phys->rxhold != nil && uartroom(p))
+			(*p->phys->rxhold)(p, 0);
 
 		/* hang up if requested */
 		if(p->dohup){

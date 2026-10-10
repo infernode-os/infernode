@@ -27,10 +27,12 @@ MAXREAD: con 64*1024*1024;
 State: adt {
 	doc:	ref Doc;
 	sizes:	array of Point;
-	text:	string;
-	texts:	array of string;
-	runs:	array of array of Run;
+	texts:	array of string;	# each page's text
+	runs:	array of array of Run;	# the pages' words, kept for the last NRUNS asked for
+	ranked:	list of int;	# those pages, latest first
 };
+
+NRUNS: con 32;
 
 display: ref Display;
 docs: array of ref State;
@@ -81,7 +83,7 @@ open(data: array of byte, name: string, nil: ref Style): (int, string)
 			(w, h) = (612.0, 792.0);
 		sizes[i] = Point(int (w + 0.5), int (h + 0.5));
 	}
-	return (add(ref State(doc, sizes, nil, array[n] of string, array[n] of array of Run)), nil);
+	return (add(ref State(doc, sizes, array[n] of string, array[n] of array of Run, nil)), nil);
 }
 
 close(h: int)
@@ -122,12 +124,18 @@ paint(h: int, n: int, scale: int, dst: ref Image, r: Rect, org: Point): string
 	s := get(h);
 	if(s == nil || n < 0 || n >= len s.sizes)
 		return "no such page";
-	dpi := (72 * scale + 50) / 100;
-	if(dpi < 1)
-		dpi = 1;
 	im: ref Image;
 	err: string;
 	{
+		if(r.eq(dst.r) && org.eq((0, 0))){
+			# the whole page onto an image of its own: drawn there
+			if((err = s.doc.paint(n+1, real scale / 100.0, dst)) != nil && !prefix("render warning", err))
+				return "render: " + err;
+			return nil;
+		}
+		dpi := (72 * scale + 50) / 100;
+		if(dpi < 1)
+			dpi = 1;
 		(im, err) = s.doc.renderpage(n+1, dpi);
 	} exception e {
 	"*" =>
@@ -139,20 +147,29 @@ paint(h: int, n: int, scale: int, dst: ref Image, r: Rect, org: Point): string
 	return nil;
 }
 
+# The document's text: its pages', each extracted once and kept (a
+# search reads them), joined
 text(h: int): string
 {
 	s := get(h);
 	if(s == nil)
 		return nil;
-	if(s.text == nil){
-		{
-			s.text = s.doc.extractall();
-		} exception {
-		"*" =>
-			s.text = "";
-		}
+	parts := array[len s.sizes] of array of byte;
+	total := 0;
+	for(n := 0; n < len s.sizes; n++){
+		t := sheettext(h, n);
+		if(n > 0)
+			t = "\n\n--- Page " + string (n+1) + " ---\n\n" + t;
+		parts[n] = array of byte t;
+		total += len parts[n];
 	}
-	return s.text;
+	b := array[total] of byte;
+	o := 0;
+	for(n = 0; n < len parts; n++){
+		b[o:] = parts[n];
+		o += len parts[n];
+	}
+	return string b;
 }
 
 sheettext(h: int, n: int): string
@@ -195,6 +212,19 @@ runs(h: int, n: int): array of Run
 			a[i++] = Run(w, r);
 		}
 		s.runs[n] = a;
+		# a few pages' words kept: a document's are many
+		keep: list of int;
+		nk := 1;
+		for(rl := s.ranked; rl != nil; rl = tl rl)
+			if(nk < NRUNS){
+				keep = hd rl :: keep;
+				nk++;
+			} else
+				s.runs[hd rl] = nil;
+		s.ranked = nil;
+		for(; keep != nil; keep = tl keep)
+			s.ranked = hd keep :: s.ranked;
+		s.ranked = n :: s.ranked;
 	}
 	return s.runs[n];
 }
@@ -294,4 +324,9 @@ readfile(path: string): array of byte
 		t += m;
 	}
 	return b;
+}
+
+prefix(p, s: string): int
+{
+	return len s >= len p && s[0:len p] == p;
 }

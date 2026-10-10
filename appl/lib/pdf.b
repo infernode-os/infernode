@@ -39,6 +39,9 @@ include "outlinefont.m";
 include "keyring.m";
 	keyring: Keyring;
 
+include "pdfenc.m";
+	pdfenc: Pdfenc;
+
 # ---- PDF internal types ----
 
 Onull, Obool, Oint, Oreal, Ostring, Oname,
@@ -62,7 +65,7 @@ DictEntry: adt {
 XrefEntry: adt {
 	offset: int;
 	gen: int;
-	inuse: int;
+	inuse: int;	# 1 in use, 2 in an object stream, 0 free, -1 no entry
 };
 
 CMapEntry: adt {
@@ -71,18 +74,44 @@ CMapEntry: adt {
 	unicode: int;
 };
 
+# A font as a resource dictionary names it
 FontMapEntry: adt {
 	name: string;
-	twobyte: int;
-	entries: list of ref CMapEntry;
+	f: ref PdfFont;
+};
+
+# A font, made once a document (by its object), its face when first drawn
+PdfFont: adt {
+	kind: int;		# Fsimple, Fcid, Ftype3
+	basefont: string;	# without a subset's tag
+	fontobj: ref PdfObj;
+	cidfont: ref PdfObj;	# a Type0's descendant
+	twobyte: int;		# codes are two bytes
+	cidmap: list of ref CMapEntry;	# an embedded CMap's codes to CIDs (nil: identity)
+	codespace: array of (int, int, int);	# its codespace ranges: bytes, lo, hi
+	entries: list of ref CMapEntry;	# ToUnicode
+	names: array of string;	# a simple font's glyph name by code (nil: the font's own)
+	code2uni: array of int;	# and their Unicode values, -1 none
+	widths: array of int;	# by code, or a CID font's by CID; -1: dw
+	dw: int;		# the default width (1/1000 of the size)
+	loaded: int;		# fontload done
 	face: ref OutlineFont->Face;
-	dw: int;		# default glyph width (CID units, 1/1000 em)
-	gwidths: array of int;	# per-GID widths, -1 means use dw
+	embedded: ref OutlineFont->Face;	# the document's own, closed with it
+	ttf: int;		# face is TrueType (glyphs by Unicode, not by name)
+	subst: int;		# face stands in for a font not embedded
+	hs: real;		# a substitute narrowed to the PDF's widths
+	code2gid: array of int;	# a simple font's glyphs (FALLBACK+g: the fallback face's)
+	cid2gid: array of int;	# CIDToGIDMap (nil: identity)
+	fmatrix: array of real;	# Type 3
+	charprocs: ref PdfObj;
+	t3res: ref PdfObj;
+	t3procs: array of array of byte;	# glyph content streams, by code, as decompressed
+	t3widths: array of real;
 };
 
 PdfDoc: adt {
 	data: array of byte;
-	xref: array of ref XrefEntry;
+	xref: array of XrefEntry;
 	trailer: ref PdfObj;
 	nobjs: int;
 	enckey: array of byte;	# file encryption key (nil = not encrypted)
@@ -92,7 +121,22 @@ PdfDoc: adt {
 	encstmf: string;	# stream crypt filter name
 	encstrf: string;	# string crypt filter name
 	encobjnum: int;		# /Encrypt dict object number (never decrypt)
+	fonts: list of (int, ref PdfFont);	# by object number
+	deffont: ref PdfFont;
+	pages: array of ref PdfObj;	# the page tree's leaves in order, as its Kids name them (references, not
+				# the pages, which are resolved when wanted); nil until wanted
+	objstms: list of ref ObjStm;	# the object streams last decompressed, newest first
+	fontlock: chan of int;	# fonts are loaded one at a time (a document is drawn
+				# and its text read by different procs)
 };
+
+# An object stream, decompressed, and where each object in it starts
+ObjStm: adt {
+	num:	int;
+	data:	array of byte;
+	offsets:	array of int;
+};
+NOBJSTM: con 4;
 
 # ---- Graphics state types ----
 
@@ -119,6 +163,8 @@ GState: adt {
 	strokecscomps: int;        # stroke color space component count
 	clipmask: ref Image;       # GREY8 clip mask (nil = no clip, white = visible)
 	smask: ref Image;          # GREY8 soft mask from ExtGState SMask (nil = none)
+	cliprect: Rect;            # the clip's bounds on the image (text is clipped to it)
+	textclip: ref Image;       # GREY8: the glyphs shown to clip by (Tr 4-7) until ET
 };
 
 PathSeg: adt {
@@ -144,11 +190,9 @@ display: ref Display;
 colorcache: list of ref ColorCacheEntry;
 
 # Font paths
-SANSFONT: con "/fonts/combined/unicode.sans.14.font";
-MONOFONT: con "/fonts/combined/unicode.14.font";
 
-sansfont: ref Font;
-monofont: ref Font;
+
+inflatelock: chan of int;	# filtermod loaded and initialised once
 
 init(d: ref Display): string
 {
@@ -160,19 +204,13 @@ init(d: ref Display): string
 		return "cannot load system modules";
 	display = d;
 	colorcache = nil;
+	if(inflatelock == nil)
+		inflatelock = chan[1] of int;
 
 	outlinefont = load OutlineFont OutlineFont->PATH;
 	if(outlinefont != nil)
 		outlinefont->init(d);
 
-	if(d != nil){
-		sansfont = Font.open(d, SANSFONT);
-		monofont = Font.open(d, MONOFONT);
-		if(sansfont == nil)
-			sansfont = Font.open(d, "*default*");
-		if(monofont == nil)
-			monofont = sansfont;
-	}
 	return nil;
 }
 
@@ -245,8 +283,14 @@ getdoc(idx: int): ref PdfDoc
 
 Doc.close(d: self ref Doc)
 {
-	if(doctab != nil && d.idx >= 0 && d.idx < ndocs)
+	if(doctab != nil && d.idx >= 0 && d.idx < ndocs){
+		pdoc := doctab[d.idx];
+		if(pdoc != nil)
+			for(l := pdoc.fonts; l != nil; l = tl l)
+				if((hd l).t1.embedded != nil)
+					(hd l).t1.embedded.close();
 		doctab[d.idx] = nil;
+	}
 	d.idx = -1;
 }
 
@@ -280,6 +324,19 @@ Doc.renderpage(d: self ref Doc, page, dpi: int): (ref Image, string)
 	if(pobj == nil)
 		return (nil, sys->sprint("page %d not found", page));
 	return renderpage(pdoc, pobj, dpi);
+}
+
+Doc.paint(d: self ref Doc, page: int, zoom: real, dst: ref Image): string
+{
+	pdoc := getdoc(d.idx);
+	if(pdoc == nil)
+		return "no document";
+	if(display == nil || dst == nil)
+		return "no display";
+	pobj := getpageobj(pdoc, page);
+	if(pobj == nil)
+		return sys->sprint("page %d not found", page);
+	return renderto(pdoc, pobj, dst, zoom);
 }
 
 Doc.extracttext(d: self ref Doc, page: int): string
@@ -341,7 +398,7 @@ Doc.words(d: self ref Doc, page: int): list of (string, Rect)
 		return nil;
 	words: list of (string, Rect);
 	{
-		words = contentwords(data, fontmap, ph);
+		words = contentwords(pdoc, data, fontmap, ph);
 	} exception {
 	"*" =>
 		;
@@ -524,91 +581,61 @@ lenlistobj(l: list of ref PdfObj): int
 
 countpages(doc: ref PdfDoc): int
 {
-	root := dictget(doc.trailer.dval, "Root");
-	if(root == nil) return 0;
-	root = resolve(doc, root);
-	if(root == nil) return 0;
+	return len pageindex(doc);
+}
+
+# The page tree's leaves, in order, found once: a document's pages are
+# then each a lookup, not a walk of the tree (which made opening a
+# document of n pages, asking each its size, take n*n steps).
+pageindex(doc: ref PdfDoc): array of ref PdfObj
+{
+	if(doc.pages != nil)
+		return doc.pages;
+	root := resolve(doc, dictget(doc.trailer.dval, "Root"));
+	if(root == nil)
+		return doc.pages = array[0] of ref PdfObj;
 	pages := dictget(root.dval, "Pages");
-	if(pages == nil) return 0;
-	pages = resolve(doc, pages);
-	if(pages == nil) return 0;
-	return countpagenode(doc, pages, 0);
+	l: list of ref PdfObj;
+	n := 0;
+	(l, n) = pageleaves(doc, pages, l, n, 0);
+	a := array[n] of ref PdfObj;
+	for(; l != nil; l = tl l)
+		a[--n] = hd l;
+	return doc.pages = a;
+}
+
+# the leaves under the node r names (a reference, or the node itself);
+# a page is kept as its reference, a few bytes rather than its dictionary
+pageleaves(doc: ref PdfDoc, r: ref PdfObj, l: list of ref PdfObj, n, depth: int): (list of ref PdfObj, int)
+{
+	node := resolve(doc, r);
+	if(node == nil || depth > MAXPAGEDEPTH)
+		return (l, n);
+	typ := "";
+	if((t := dictget(node.dval, "Type")) != nil && t.kind == Oname)
+		typ = t.sval;
+	if(typ == "Page")
+		return (r :: l, n + 1);
+	if(typ == "Pages"){
+		kids := dictget(node.dval, "Kids");
+		if(kids != nil)
+			kids = resolve(doc, kids);
+		if(kids != nil && kids.kind == Oarray)
+			for(k := kids.aval; k != nil; k = tl k)
+				(l, n) = pageleaves(doc, hd k, l, n, depth + 1);
+	}
+	return (l, n);
 }
 
 MAXPAGEDEPTH: con 64;
 
-countpagenode(doc: ref PdfDoc, node: ref PdfObj, depth: int): int
-{
-	if(node == nil || depth > MAXPAGEDEPTH) return 0;
-	typobj := dictget(node.dval, "Type");
-	typ := "";
-	if(typobj != nil && typobj.kind == Oname)
-		typ = typobj.sval;
-	if(typ == "Page")
-		return 1;
-	if(typ == "Pages"){
-		count := 0;
-		kids := dictget(node.dval, "Kids");
-		if(kids != nil && kids.kind == Oarray){
-			for(k := kids.aval; k != nil; k = tl k){
-				child := resolve(doc, hd k);
-				if(child != nil)
-					count += countpagenode(doc, child, depth + 1);
-			}
-		}
-		return count;
-	}
-	return 0;
-}
-
 # Get the Nth page object (1-indexed)
 getpageobj(doc: ref PdfDoc, page: int): ref PdfObj
 {
-	root := dictget(doc.trailer.dval, "Root");
-	if(root == nil) return nil;
-	root = resolve(doc, root);
-	if(root == nil) return nil;
-	pages := dictget(root.dval, "Pages");
-	if(pages == nil) return nil;
-	pages = resolve(doc, pages);
-	if(pages == nil) return nil;
-
-	(pobj, nil) := findpage(doc, pages, page, 0, 0);
-	return pobj;
-}
-
-# Find page by number, returns (page obj, count so far)
-findpage(doc: ref PdfDoc, node: ref PdfObj, target, sofar, depth: int): (ref PdfObj, int)
-{
-	if(node == nil || depth > MAXPAGEDEPTH)
-		return (nil, sofar);
-	typobj := dictget(node.dval, "Type");
-	typ := "";
-	if(typobj != nil && typobj.kind == Oname)
-		typ = typobj.sval;
-
-	if(typ == "Page"){
-		sofar++;
-		if(sofar == target)
-			return (node, sofar);
-		return (nil, sofar);
-	}
-
-	if(typ == "Pages"){
-		kids := dictget(node.dval, "Kids");
-		if(kids != nil && kids.kind == Oarray){
-			for(k := kids.aval; k != nil; k = tl k){
-				child := resolve(doc, hd k);
-				if(child == nil)
-					continue;
-				(pobj, ns) := findpage(doc, child, target, sofar, depth + 1);
-				if(pobj != nil)
-					return (pobj, ns);
-				sofar = ns;
-			}
-		}
-	}
-	return (nil, sofar);
+	p := pageindex(doc);
+	if(page < 1 || page > len p)
+		return nil;
+	return resolve(doc, p[page-1]);
 }
 
 # Get MediaBox (or CropBox) dimensions in points.
@@ -708,21 +735,22 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 		drawm->RGB24, 0, drawm->White);
 	if(img == nil)
 		return (nil, "cannot allocate page image");
+	return (img, renderto(doc, page, img, real pixw / pw));
+}
 
-	# Initialize graphics state
+# The page drawn onto img at scale pixels to the point, its top left at
+# img.r.min.
+renderto(doc: ref PdfDoc, page: ref PdfObj, img: ref Image, scale: real): string
+{
+	img.draw(img.r, display.white, nil, Point(0, 0));
 	gs := newgstate();
-	scale := real pixw / pw;
-	# PDF coordinate system: origin bottom-left, y-up
-	# Screen: origin top-left, y-down
-	# CTM transforms PDF coords -> pixel coords:
-	# x_pixel = x_pdf * scale
-	# y_pixel = pixh - y_pdf * scale
-	gs.ctm[0] = scale;    # a
-	gs.ctm[1] = 0.0;      # b
-	gs.ctm[2] = 0.0;      # c
-	gs.ctm[3] = -scale;   # d (flip y)
-	gs.ctm[4] = 0.0;      # e
-	gs.ctm[5] = real pixh; # f
+	# PDF space (origin bottom left, y up) to the image (top left, y down)
+	gs.ctm[0] = scale;
+	gs.ctm[1] = 0.0;
+	gs.ctm[2] = 0.0;
+	gs.ctm[3] = -scale;
+	gs.ctm[4] = real img.r.min.x;
+	gs.ctm[5] = real img.r.max.y;
 
 	# Get page resources (walk parent chain)
 	resources := getresources(doc, page);
@@ -733,11 +761,11 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	# Get content streams
 	contents := dictget(page.dval, "Contents");
 	if(contents == nil){
-		return (img, nil);  # blank page
+		return nil;  # blank page
 	}
 	contents = resolve(doc, contents);
 	if(contents == nil){
-		return (img, nil);
+		return nil;
 	}
 
 	# Collect content stream data
@@ -768,16 +796,16 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	}
 
 	if(csdata == nil || len csdata == 0){
-		return (img, nil);
+		return nil;
 	}
 	# Execute content stream (exception-safe: return partial render on error)
 	{
 		execcontentstream(doc, img, csdata, gs, resources, fontmap, 0);
 	} exception e {
 	"*" =>
-		return (img, "render warning: " + e);
+		return "render warning: " + e;
 	}
-	return (img, nil);
+	return nil;
 }
 
 newgstate(): ref GState
@@ -810,7 +838,9 @@ newgstate(): ref GState
 		3,                # fillcscomps (default RGB)
 		3,                # strokecscomps (default RGB)
 		nil,              # clipmask (no clip)
-		nil               # smask (no soft mask)
+		nil,              # smask (no soft mask)
+		Rect((-NOCLIP, -NOCLIP), (NOCLIP, NOCLIP)),
+		nil               # textclip
 	);
 }
 
@@ -843,7 +873,9 @@ copygstate(gs: ref GState): ref GState
 		gs.fillcscomps,
 		gs.strokecscomps,
 		gs.clipmask,     # shared ref — copy-on-write at W/W*
-		gs.smask         # shared ref from ExtGState
+		gs.smask,        # shared ref from ExtGState
+		gs.cliprect,
+		gs.textclip
 	);
 }
 
@@ -940,11 +972,19 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					gs.miterlimit = ngs.miterlimit;
 					gs.fontname = ngs.fontname;
 					gs.fontsize = ngs.fontsize;
+					curfont = fontmaplookup(fontmap, gs.fontname);
+					gs.charspace = ngs.charspace;
+					gs.wordspace = ngs.wordspace;
+					gs.hscale = ngs.hscale;
+					gs.leading = ngs.leading;
+					gs.rise = ngs.rise;
+					gs.rendermode = ngs.rendermode;
 					gs.ctm[0:] = ngs.ctm;
 					gs.fillcscomps = ngs.fillcscomps;
 					gs.strokecscomps = ngs.strokecscomps;
 					gs.alpha = ngs.alpha;
 					gs.clipmask = ngs.clipmask;
+					gs.cliprect = ngs.cliprect;
 					gs.smask = ngs.smask;
 				}
 			"cm" =>
@@ -1083,6 +1123,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					evenodd := 0;
 					if(op == "W*") evenodd = 1;
 					gs.clipmask = buildclipmask(img, gs, path, evenodd);
+					gs.cliprect = clipbounds(gs, path);
 				}
 
 			# ---- Color operators ----
@@ -1181,7 +1222,13 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				gs.tm[4] = 0.0; gs.tm[5] = 0.0;
 				gs.tlm[0:] = gs.tm;
 			"ET" =>
-				;
+				# the glyphs shown to clip by (Tr 4-7) are the clip
+				if(gs.textclip != nil){
+					if(gs.clipmask != nil)
+						intersectmask(gs.textclip, gs.clipmask);
+					gs.clipmask = gs.textclip;
+					gs.textclip = nil;
+				}
 			"Td" =>
 				if(lenlist(operands) >= 2){
 					(ty, tx, nil) := pop2(operands);
@@ -1258,20 +1305,11 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(stroperands != nil){
 					s := hd stroperands;
 					stroperands = nil;
-					if(curfont != nil && curfont.face != nil)
-						rendertextraw(img, gs, s, curfont);
-					else {
-						if(curfont != nil)
-							s = decodecidstr(s, curfont);
-						rendertext(img, gs, s);
-					}
+					showtext(doc, img, gs, s, fontof(curfont), resources, depth);
 				}
 			"TJ" =>
 				if(tjarraypos >= 0){
-					if(curfont != nil && curfont.face != nil)
-						rendertjraw(img, gs, data, tjarraypos, curfont);
-					else
-						rendertjbitmap(img, gs, data, tjarraypos, curfont);
+					showtj(doc, img, gs, data, tjarraypos, fontof(curfont), resources, depth);
 					tjarraypos = -1;
 				}
 			"'" =>
@@ -1282,13 +1320,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(stroperands != nil){
 					s := hd stroperands;
 					stroperands = nil;
-					if(curfont != nil && curfont.face != nil)
-						rendertextraw(img, gs, s, curfont);
-					else {
-						if(curfont != nil)
-							s = decodecidstr(s, curfont);
-						rendertext(img, gs, s);
-					}
+					showtext(doc, img, gs, s, fontof(curfont), resources, depth);
 				}
 			"\"" =>
 				# set word/char space, newline, show
@@ -1304,13 +1336,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				if(stroperands != nil){
 					s := hd stroperands;
 					stroperands = nil;
-					if(curfont != nil && curfont.face != nil)
-						rendertextraw(img, gs, s, curfont);
-					else {
-						if(curfont != nil)
-							s = decodecidstr(s, curfont);
-						rendertext(img, gs, s);
-					}
+					showtext(doc, img, gs, s, fontof(curfont), resources, depth);
 				}
 
 			# ---- XObject rendering ----
@@ -1368,575 +1394,920 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 
 # ---- Text rendering ----
 
-rendertext(img: ref Image, gs: ref GState, text: string)
+NOCLIP: con 1<<30;
+
+# The clip's bounds on the image after clipping to path: exactly the
+# clip when it is a rectangle, as most are.
+clipbounds(gs: ref GState, path: list of ref PathSeg): Rect
 {
-	if(text == nil || len text == 0)
-		return;
-	if(gs.rendermode == 3)  # invisible
-		return;
-
-	# Strip control characters (newlines, etc.) and expand ligatures
-	{
-		clean := "";
-		for(ci := 0; ci < len text; ci++)
-			if(text[ci] >= 16r20)
-				clean[len clean] = text[ci];
-		text = clean;
-		if(len text == 0)
-			return;
+	pts := flattenpath(reversepath(path), gs.ctm);
+	if(pts == nil || len pts == 0)
+		return gs.cliprect;
+	r := Rect(pts[0], pts[0]);
+	for(i := 1; i < len pts; i++){
+		p := pts[i];
+		if(p.x < r.min.x) r.min.x = p.x;
+		if(p.y < r.min.y) r.min.y = p.y;
+		if(p.x > r.max.x) r.max.x = p.x;
+		if(p.y > r.max.y) r.max.y = p.y;
 	}
-	text = expandligatures(text);
-
-	font := pickfont(gs.fontname);
-	if(font == nil)
-		return;
-
-	(fr, fg, fb) := gs.fillcolor;
-
-	# Text rendering matrix = Tm * CTM
-	trm := matmul(gs.tm, gs.ctm);
-
-	# Compute x-axis scale for advance and rotation detection
-	xscale_trm := math->sqrt(trm[0]*trm[0] + trm[1]*trm[1]);
-
-	# Detect 90-degree rotation
-	rotated90 := 0;
-	if(xscale_trm > 0.001){
-		cosangle := trm[0] / xscale_trm;
-		if(cosangle < 0.0) cosangle = -cosangle;
-		if(cosangle < 0.3){
-			if(trm[1] < 0.0)
-				rotated90 = -1;
-			else
-				rotated90 = 1;
-		}
-	}
-
-	# Compute target pixel size from the text rendering matrix
-	yscale := math->sqrt(trm[2]*trm[2] + trm[3]*trm[3]);
-	pixsize := gs.fontsize * yscale;
-	if(pixsize < 1.0) pixsize = real font.height;
-
-	scale := pixsize / real font.height;
-
-	# Bitmap text dimensions at native font size
-	bw := font.width(text);
-	bh := font.height;
-	if(bw <= 0) return;
-
-	# Target dimensions on page
-	tgtw := int(real bw * scale + 0.5);
-	tgth := int(pixsize + 0.5);
-	if(tgtw <= 0) tgtw = 1;
-	if(tgth <= 0) tgth = 1;
-
-	# Page position (text rendering matrix gives baseline position)
-	px := int (trm[4] + 0.5);
-	py := int (trm[5] + 0.5);
-	# Adjust baseline to top-left for drawing
-	desty := py - tgth * 3 / 4;
-	destx := px;
-
-	if(rotated90 != 0){
-		# Rotated text: render to mask, scale+rotate, composite
-		tmpmask := display.newimage(
-			Rect(Point(0,0), Point(bw, bh)),
-			drawm->GREY8, 0, drawm->Black);
-		if(tmpmask != nil){
-			white := display.newimage(
-				Rect(Point(0,0), Point(1,1)),
-				drawm->GREY8, 1, drawm->White);
-			if(white != nil){
-				tmpmask.text(Point(0, 0), white, Point(0,0), font, text);
-				maskdata := array[bw * bh] of byte;
-				tmpmask.readpixels(tmpmask.r, maskdata);
-
-				rw := tgth;
-				rh := tgtw;
-				rpix := array[rw * rh] of byte;
-				rbw := real bw;
-				rbh := real bh;
-				rtgtw := real tgtw;
-				rtgth := real tgth;
-
-				for(ry := 0; ry < rh; ry++){
-					for(rx := 0; rx < rw; rx++){
-						fx, fy: real;
-						if(rotated90 == -1){
-							fx = (real(rh - 1 - ry) + 0.5) * rbw / rtgtw - 0.5;
-							fy = (real(rx) + 0.5) * rbh / rtgth - 0.5;
-						} else {
-							fx = (real(ry) + 0.5) * rbw / rtgtw - 0.5;
-							fy = (real(rw - 1 - rx) + 0.5) * rbh / rtgth - 0.5;
-						}
-						x0 := int fx;
-						if(x0 < 0) x0 = 0;
-						x1 := x0 + 1;
-						if(x1 >= bw) x1 = bw - 1;
-						xf := fx - real x0;
-						if(xf < 0.0) xf = 0.0;
-						y0 := int fy;
-						if(y0 < 0) y0 = 0;
-						y1 := y0 + 1;
-						if(y1 >= bh) y1 = bh - 1;
-						yf := fy - real y0;
-						if(yf < 0.0) yf = 0.0;
-
-						a00 := real(int maskdata[y0 * bw + x0]);
-						a10 := real(int maskdata[y0 * bw + x1]);
-						a01 := real(int maskdata[y1 * bw + x0]);
-						a11 := real(int maskdata[y1 * bw + x1]);
-						atop := a00 + xf * (a10 - a00);
-						abot := a01 + xf * (a11 - a01);
-						rpix[ry * rw + rx] = byte (int (atop + yf * (abot - atop) + 0.5));
-					}
-				}
-
-				rmask := display.newimage(
-					Rect(Point(0,0), Point(rw, rh)),
-					drawm->GREY8, 0, drawm->Black);
-				if(rmask != nil){
-					rmask.writepixels(rmask.r, rpix);
-					rdestx, rdesty: int;
-					if(rotated90 == -1){
-						rdestx = px - rw * 3 / 4;
-						rdesty = py - rh;
-					} else {
-						rdestx = px - rw / 4;
-						rdesty = py;
-					}
-					colimg := getcolor(fr, fg, fb);
-					if(colimg != nil)
-						img.draw(Rect(Point(rdestx, rdesty),
-							Point(rdestx + rw, rdesty + rh)),
-							colimg, rmask, Point(0, 0));
-				}
-			}
-		}
-	} else if(scale < 1.5){
-		# Small text — render directly at bitmap size
-		colimg := getcolor(fr, fg, fb);
-		if(colimg == nil) return;
-		img.text(Point(destx, desty), colimg, Point(0,0), font, text);
-	} else {
-		# Scaled text: render to mask, scale up, composite
-		# Create temp GREY8 image for text mask
-		tmpmask := display.newimage(
-			Rect(Point(0,0), Point(bw, bh)),
-			drawm->GREY8, 0, drawm->Black);
-		if(tmpmask == nil) return;
-		white := display.newimage(
-			Rect(Point(0,0), Point(1,1)),
-			drawm->GREY8, 1, drawm->White);
-		if(white == nil) return;
-
-		# Draw text as white-on-black into mask
-		tmpmask.text(Point(0, 0), white, Point(0,0), font, text);
-
-		# Read mask pixels
-		maskdata := array[bw * bh] of byte;
-		tmpmask.readpixels(tmpmask.r, maskdata);
-
-		# Clip destination to page bounds
-		cx0 := destx; cy0 := desty;
-		cx1 := destx + tgtw; cy1 := desty + tgth;
-		if(cx0 < img.r.min.x) cx0 = img.r.min.x;
-		if(cy0 < img.r.min.y) cy0 = img.r.min.y;
-		if(cx1 > img.r.max.x) cx1 = img.r.max.x;
-		if(cy1 > img.r.max.y) cy1 = img.r.max.y;
-		if(cx1 <= cx0 || cy1 <= cy0) return;
-
-		cdw := cx1 - cx0;
-		rowbuf := array[cdw * 3] of byte;
-		dstbuf := array[cdw * 3] of byte;
-		rbw := real bw;
-		rbh := real bh;
-		rtgtw := real tgtw;
-		rtgth := real tgth;
-
-		for(dy := cy0; dy < cy1; dy++){
-			rr := Rect(Point(cx0, dy), Point(cx1, dy + 1));
-			img.readpixels(rr, dstbuf);
-
-			# Bilinear: map target y to float source y
-			fy := (real(dy - desty) + 0.5) * rbh / rtgth - 0.5;
-			y0 := int fy;
-			if(y0 < 0) y0 = 0;
-			y1 := y0 + 1;
-			if(y1 >= bh) y1 = bh - 1;
-			yf := fy - real y0;
-			if(yf < 0.0) yf = 0.0;
-
-			for(dx := cx0; dx < cx1; dx++){
-				di := (dx - cx0) * 3;
-
-				# Bilinear: map target x to float source x
-				fx := (real(dx - destx) + 0.5) * rbw / rtgtw - 0.5;
-				x0 := int fx;
-				if(x0 < 0) x0 = 0;
-				x1 := x0 + 1;
-				if(x1 >= bw) x1 = bw - 1;
-				xf := fx - real x0;
-				if(xf < 0.0) xf = 0.0;
-
-				# Bilinear interpolation of 4 nearest mask pixels
-				a00 := real(int maskdata[y0 * bw + x0]);
-				a10 := real(int maskdata[y0 * bw + x1]);
-				a01 := real(int maskdata[y1 * bw + x0]);
-				a11 := real(int maskdata[y1 * bw + x1]);
-				atop := a00 + xf * (a10 - a00);
-				abot := a01 + xf * (a11 - a01);
-				a := int (atop + yf * (abot - atop) + 0.5);
-				if(a == 0){
-					rowbuf[di] = dstbuf[di];
-					rowbuf[di+1] = dstbuf[di+1];
-					rowbuf[di+2] = dstbuf[di+2];
-				} else if(a >= 255){
-					# Inferno RGB24: B, G, R in memory
-					rowbuf[di] = byte fb;
-					rowbuf[di+1] = byte fg;
-					rowbuf[di+2] = byte fr;
-				} else {
-					ia := 255 - a;
-					db := int dstbuf[di];
-					dg := int dstbuf[di+1];
-					dr := int dstbuf[di+2];
-					rowbuf[di] = byte ((fb*a + db*ia) / 255);
-					rowbuf[di+1] = byte ((fg*a + dg*ia) / 255);
-					rowbuf[di+2] = byte ((fr*a + dr*ia) / 255);
-				}
-			}
-			img.writepixels(rr, rowbuf);
-		}
-	}
-
-	# Advance text matrix
-	pixel_adv := real bw * scale;
-	if(xscale_trm > 0.001){
-		tx := pixel_adv / xscale_trm;
-		gs.tm[4] += tx * gs.tm[0];
-		gs.tm[5] += tx * gs.tm[1];
-	}
+	(c, ok) := r.clip(gs.cliprect);
+	if(!ok)
+		return Rect((0, 0), (0, 0));
+	return c;
 }
 
-# Render a TJ array using bitmap fonts (fallback when outline face is nil)
-# Handles string segments and kerning adjustments individually.
-rendertjbitmap(img: ref Image, gs: ref GState, data: array of byte,
-	arraypos: int, curfont: ref FontMapEntry)
+# ---- Text ----
+#
+# Every glyph is drawn from an outline (outlinefont(2)) through the
+# text rendering matrix, at the device's resolution, placed by the
+# PDF's own widths: a font embedded is drawn as itself, one not
+# embedded by a face of its kind with the same metrics (TeX Gyre
+# Termes, Heros and Cursor for Times, Helvetica and Courier), fitted
+# to the PDF's widths.  A Type 3 font's glyphs are content streams.
+
+# Show a string of character codes in fm, advancing the text matrix.
+showtext(doc: ref PdfDoc, img: ref Image, gs: ref GState, s: string, fm: ref PdfFont,
+	resources: ref PdfObj, depth: int)
 {
-	pos := arraypos + 1;	# skip '['
+	if(s == nil)
+		return;
+	if(fm == nil)
+		fm = deffont(doc);
+	fontload(doc, fm);
+	mode := gs.rendermode;
+	visible := mode != 3 && mode != 7 && gs.alpha >= 0.004 && img != nil;
+	colimg: ref Image;
+	if(visible){
+		(r, g, b) := gs.fillcolor;
+		if(mode == 1 || mode == 5)
+			(r, g, b) = gs.strokecolor;
+		colimg = textcolor(r, g, b, gs.alpha);
+		if(colimg == nil)
+			visible = 0;
+	}
+	tfs := gs.fontsize;
+	th := gs.hscale / 100.0;
+	ctm := gs.ctm;
+	tm := gs.tm;
+	# text space to device, without the translation
+	a := tm[0]*ctm[0] + tm[1]*ctm[2];
+	b := tm[0]*ctm[1] + tm[1]*ctm[3];
+	c := tm[2]*ctm[0] + tm[3]*ctm[2];
+	d := tm[2]*ctm[1] + tm[3]*ctm[3];
+	# modes 4-7 add the glyphs to the clip, at ET
+	clipping := mode >= 4 && img != nil && display != nil && fm.kind != Ftype3;
+	if(clipping && gs.textclip == nil){
+		gs.textclip = display.newimage(img.r, drawm->GREY8, 0, drawm->Black);
+		if(gs.textclip == nil)
+			clipping = 0;
+	}
+	m := array[4] of real;
+	clipr: Rect;
+	clipped := 0;
+	if(visible){
+		(cr, ok) := img.clipr.clip(gs.cliprect);
+		if(!ok)
+			visible = 0;
+		else if(!cr.eq(img.clipr)){
+			clipr = img.clipr;
+			img.clipr = cr;
+			clipped = 1;
+		}
+	}
+	for(i := 0; i < len s; ){
+		(code, step) := nextcode(fm, s, i);
+		i += step;
+		cid := code;
+		if(fm.cidmap != nil)
+			cid = cmapcid(fm.cidmap, code);
+		if(visible && fm.kind == Ftype3)
+			type3glyph(doc, img, gs, fm, code, resources, depth);
+		else if(visible || clipping){
+			(face, gid, hs) := glyphof(fm, code, cid);
+			if(face != nil && gid > 0){
+				ox := tm[4] + gs.rise*tm[2];
+				oy := tm[5] + gs.rise*tm[3];
+				k := tfs / real face.upem;
+				m[0] = a*th*hs*k;
+				m[1] = b*th*hs*k;
+				m[2] = c*k;
+				m[3] = d*k;
+				x := ox*ctm[0] + oy*ctm[2] + ctm[4];
+				y := ox*ctm[1] + oy*ctm[3] + ctm[5];
+				if(visible)
+					face.drawglyphm(gid, m, img, x, y, colimg);
+				if(clipping)
+					face.drawglyphm(gid, m, gs.textclip, x, y, display.white);
+			}
+		}
+		tx := (codewidth(fm, cid)*tfs + gs.charspace) * th;
+		if(step == 1 && code == 32)
+			tx += gs.wordspace * th;
+		tm[4] += tx*tm[0];
+		tm[5] += tx*tm[1];
+	}
+	if(clipped)
+		img.clipr = clipr;
+}
+
+# A TJ array: strings shown, numbers moving the text back (thousandths
+# of the font size).
+showtj(doc: ref PdfDoc, img: ref Image, gs: ref GState, data: array of byte, pos: int,
+	fm: ref PdfFont, resources: ref PdfObj, depth: int)
+{
+	pos++;	# skip '['
 	while(pos < len data){
 		pos = skipws(data, pos);
-		if(pos >= len data) break;
+		if(pos >= len data)
+			break;
 		c := int data[pos];
 		if(c == ']')
 			break;
 		if(c == '(' || c == '<'){
 			s: string;
-			newpos: int;
 			if(c == '(')
-				(s, newpos) = readlitstr(data, pos);
+				(s, pos) = readlitstr(data, pos);
 			else
-				(s, newpos) = readhexstr(data, pos);
-			# Decode through ToUnicode CMap if available
-			if(curfont != nil)
-				s = decodecidstr(s, curfont);
-			rendertext(img, gs, s);
-			pos = newpos;
+				(s, pos) = readhexstr(data, pos);
+			showtext(doc, img, gs, s, fm, resources, depth);
 			continue;
 		}
 		if((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.'){
-			(val, newpos) := readreal(data, pos);
-			# TJ kerning: move text position by -val/1000 * fontSize
-			tx := -(val / 1000.0 * gs.fontsize) * gs.hscale / 100.0;
+			val: real;
+			(val, pos) = readreal(data, pos);
+			tx := -val / 1000.0 * gs.fontsize * gs.hscale / 100.0;
 			gs.tm[4] += tx * gs.tm[0];
 			gs.tm[5] += tx * gs.tm[1];
-			pos = newpos;
 			continue;
 		}
 		pos++;
 	}
 }
 
-# Render text using embedded outline font (raw character codes → GIDs)
-rendertextraw(img: ref Image, gs: ref GState, rawtext: string, fm: ref FontMapEntry)
+# a Type 3 glyph: its content stream, through the font matrix
+type3glyph(doc: ref PdfDoc, img: ref Image, gs: ref GState, fm: ref PdfFont, code: int,
+	resources: ref PdfObj, depth: int)
 {
-	if(rawtext == nil || len rawtext == 0)
+	if(depth > 6 || code < 0 || code > 255 || fm.t3procs == nil)
 		return;
-	if(gs.rendermode == 3)
+	if(fm.t3procs[code] == nil){
+		name := fm.names[code];
+		if(name == nil || fm.charprocs == nil)
+			return;
+		p := resolve(doc, dictget(fm.charprocs.dval, name));
+		if(p == nil || p.kind != Ostream)
+			return;
+		(data, nil) := decompressstream(p);
+		if(data == nil)
+			data = array[0] of byte;
+		fm.t3procs[code] = data;
+	}
+	data := fm.t3procs[code];
+	if(len data == 0)
 		return;
+	g := copygstate(gs);
+	th := gs.hscale / 100.0;
+	ts := array[] of {gs.fontsize*th, 0.0, 0.0, gs.fontsize, 0.0, gs.rise};
+	g.ctm[0:] = matmul(fm.fmatrix, matmul(ts, matmul(gs.tm, gs.ctm)));
+	res := fm.t3res;
+	if(res == nil)
+		res = resources;
+	{
+		execcontentstream(doc, img, data, g, res, buildfontmapres(doc, res), depth + 1);
+	} exception {
+	"*" =>
+		;
+	}
+}
 
+textcolor(r, g, b: int, alpha: real): ref Image
+{
+	if(alpha >= 0.999)
+		return getcolor(r, g, b);
+	a := int (alpha * 255.0 + 0.5);
+	rgba := drawm->setalpha((r << 24) | (g << 16) | (b << 8) | 16rFF, a);
+	return display.newimage(Rect(Point(0,0), Point(1,1)), drawm->RGBA32, 1, rgba);
+}
+
+# A code's advance, in text space at font size 1.
+codewidth(fm: ref PdfFont, code: int): real
+{
+	if(fm.kind == Ftype3){
+		if(fm.t3widths != nil && code >= 0 && code < len fm.t3widths)
+			return fm.t3widths[code] * fm.fmatrix[0];
+		return 0.0;
+	}
+	w := -1;
+	if(fm.widths != nil && code >= 0 && code < len fm.widths)
+		w = fm.widths[code];
+	if(w < 0)
+		w = fm.dw;
+	return real w / 1000.0;
+}
+
+# The face and glyph for a code, and how much the glyph is narrowed
+# to fit the PDF's width (a substitute face).
+glyphof(fm: ref PdfFont, code, cid: int): (ref OutlineFont->Face, int, real)
+{
+	if(fm.kind == Fsimple){
+		if(fm.code2gid == nil || code < 0 || code > 255)
+			return (nil, 0, 1.0);
+		g := fm.code2gid[code];
+		if(g >= FALLBACK)
+			return (substface(SUBSTFALLBACK), g - FALLBACK, fm.hs);
+		return (fm.face, g, fm.hs);
+	}
+	# CID
 	face := fm.face;
 	if(face == nil)
-		return;
+		return (nil, 0, 1.0);
+	if(fm.subst){
+		u := unicodeof(fm, code);
+		g := face.lookup(u);
+		if(g < 0){
+			fb := substface(SUBSTFALLBACK);
+			if(fb != nil && (g = fb.lookup(u)) > 0)
+				return (fb, g, 1.0);
+			return (nil, 0, 1.0);
+		}
+		return (face, g, 1.0);
+	}
+	if(face.iscid)
+		return (face, face.cidtogid(cid), 1.0);
+	if(fm.cid2gid != nil){
+		if(cid < len fm.cid2gid)
+			return (face, fm.cid2gid[cid], 1.0);
+		return (face, 0, 1.0);
+	}
+	return (face, cid, 1.0);	# a program not CID-keyed: CIDs are GIDs
+}
 
-	(fr, fg, fb) := gs.fillcolor;
-	colimg := getcolor(fr, fg, fb);
-	if(colimg == nil)
-		return;
+# The code at s[i], and how many bytes it is: the codespace range it
+# falls in (shortest first), else one or two bytes by the font.
+nextcode(fm: ref PdfFont, s: string, i: int): (int, int)
+{
+	if(fm.codespace != nil){
+		c := 0;
+		for(n := 1; n <= 4 && i + n <= len s; n++){
+			c = c<<8 | (s[i+n-1] & 16rFF);
+			for(k := 0; k < len fm.codespace; k++){
+				(nb, lo, hi) := fm.codespace[k];
+				if(nb == n && inrange(c, lo, hi, n))
+					return (c, n);
+			}
+		}
+		# in no range: one byte
+		return (s[i] & 16rFF, 1);
+	}
+	if(fm.twobyte && i + 1 < len s)
+		return ((s[i] & 16rFF)<<8 | (s[i+1] & 16rFF), 2);
+	return (s[i] & 16rFF, 1);
+}
 
-	# Text rendering matrix = Tm * CTM
-	trm := matmul(gs.tm, gs.ctm);
+# a codespace range holds a code if each of its bytes is within the
+# range's bytes in that place
+inrange(c, lo, hi, n: int): int
+{
+	for(k := 0; k < n; k++){
+		b := (c >> (8*k)) & 16rFF;
+		if(b < ((lo >> (8*k)) & 16rFF) || b > ((hi >> (8*k)) & 16rFF))
+			return 0;
+	}
+	return 1;
+}
 
-	# Effective font size in pixels:
-	# fontsize (from Tf) scaled by the vertical scale of Tm*CTM
-	yscale := math->sqrt(trm[2]*trm[2] + trm[3]*trm[3]);
-	pixsize := gs.fontsize * yscale;
-	if(pixsize < 1.0)
-		return;
+# A CID from an embedded CMap's ranges.
+cmapcid(m: list of ref CMapEntry, code: int): int
+{
+	for(; m != nil; m = tl m)
+		if(code >= (hd m).lo && code <= (hd m).hi)
+			return (hd m).unicode + code - (hd m).lo;
+	return code;
+}
 
-	# Detect rotation
-	xscale_trm := math->sqrt(trm[0]*trm[0] + trm[1]*trm[1]);
-	rotated90 := 0;
-	if(xscale_trm > 0.001){
-		cosangle := trm[0] / xscale_trm;
-		if(cosangle < 0.0) cosangle = -cosangle;
-		if(cosangle < 0.3){
-			if(trm[1] < 0.0)
-				rotated90 = -1;
-			else
-				rotated90 = 1;
+# An embedded CMap (a Type0 font's Encoding): whether its codes are
+# two bytes (its codespacerange), and its cidrange and cidchar
+# mappings, as CMapEntries whose unicode is the CID.
+parseencoding(text: string): (array of (int, int, int), list of ref CMapEntry)
+{
+	cs: list of (int, int, int);
+	ncs := 0;
+	i: int;
+	for(p := 0; (i = strindexfrom(text, "begincodespacerange", p)) >= 0; ){
+		e := strindexfrom(text, "endcodespacerange", i);
+		if(e < 0)
+			e = len text;
+		q := i + 19;
+		for(;;){
+			while(q < e && text[q] != '<')
+				q++;
+			if(q >= e)
+				break;
+			k := q + 1;
+			while(k < e && text[k] != '>')
+				k++;
+			nb := (k - q) / 2;
+			(lo, q1) := cmaphex(text, q);
+			if(q1 < 0 || q1 > e) break;
+			(hi, q2) := cmaphex(text, q1);
+			if(q2 < 0 || q2 > e) break;
+			cs = (nb, lo, hi) :: cs;
+			ncs++;
+			q = q2;
+		}
+		p = e;
+	}
+	codespace: array of (int, int, int);
+	if(ncs > 0){
+		codespace = array[ncs] of (int, int, int);
+		for(; cs != nil; cs = tl cs)
+			codespace[--ncs] = hd cs;
+	}
+	m: list of ref CMapEntry;
+	for(p = 0; (i = strindexfrom(text, "begincidrange", p)) >= 0; ){
+		e := strindexfrom(text, "endcidrange", i);
+		if(e < 0)
+			e = len text;
+		q := i + 13;
+		for(;;){
+			(lo, q1) := cmaphex(text, q);
+			if(q1 < 0 || q1 > e) break;
+			(hi, q2) := cmaphex(text, q1);
+			if(q2 < 0 || q2 > e) break;
+			(c, q3) := cmapint(text, q2);
+			if(q3 < 0 || q3 > e) break;
+			m = ref CMapEntry(lo, hi, c) :: m;
+			q = q3;
+		}
+		p = e;
+	}
+	for(p = 0; (i = strindexfrom(text, "begincidchar", p)) >= 0; ){
+		e := strindexfrom(text, "endcidchar", i);
+		if(e < 0)
+			e = len text;
+		q := i + 12;
+		for(;;){
+			(lo, q1) := cmaphex(text, q);
+			if(q1 < 0 || q1 > e) break;
+			(c, q2) := cmapint(text, q1);
+			if(q2 < 0 || q2 > e) break;
+			m = ref CMapEntry(lo, lo, c) :: m;
+			q = q2;
+		}
+		p = e;
+	}
+	return (codespace, m);
+}
+
+# a <hex> code after blanks, or -1
+cmaphex(s: string, p: int): (int, int)
+{
+	while(p < len s && (s[p] == ' ' || s[p] == '\t' || s[p] == '\r' || s[p] == '\n'))
+		p++;
+	if(p >= len s || s[p] != '<')
+		return (0, -1);
+	return parsecmaphex(s, p);
+}
+
+cmapint(s: string, p: int): (int, int)
+{
+	while(p < len s && (s[p] == ' ' || s[p] == '\t' || s[p] == '\r' || s[p] == '\n'))
+		p++;
+	if(p >= len s || s[p] < '0' || s[p] > '9')
+		return (0, -1);
+	v := 0;
+	while(p < len s && s[p] >= '0' && s[p] <= '9')
+		v = v*10 + s[p++] - '0';
+	return (v, p);
+}
+
+strindex(s, t: string): int
+{
+	return strindexfrom(s, t, 0);
+}
+
+strindexfrom(s, t: string, from: int): int
+{
+	for(i := from; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return i;
+	return -1;
+}
+
+# The Unicode value of a code, as the font says: ToUnicode, else the
+# encoding's glyph names, else the code.
+unicodeof(fm: ref PdfFont, code: int): int
+{
+	if(fm.entries != nil){
+		for(e := fm.entries; e != nil; e = tl e)
+			if(code >= (hd e).lo && code <= (hd e).hi)
+				return (hd e).unicode + code - (hd e).lo;
+	}
+	if(fm.code2uni != nil && code >= 0 && code < len fm.code2uni && fm.code2uni[code] > 0)
+		return fm.code2uni[code];
+	return code;
+}
+
+# ---- Fonts ----
+
+Fsimple, Fcid, Ftype3: con iota;
+FALLBACK: con 1<<24;	# code2gid: a glyph of the fallback face
+
+# The faces standing in for fonts not embedded: serif, sans, mono, each
+# regular, bold, italic, bold italic; and one for everything else (the
+# Symbol and ZapfDingbats fonts, and characters the others lack).
+SUBSTSERIF, SUBSTSANS, SUBSTMONO: con iota*4;
+SUBSTFALLBACK: con 12;
+substfiles := array[] of {
+	"texgyre/texgyretermes-regular.otf", "texgyre/texgyretermes-bold.otf",
+	"texgyre/texgyretermes-italic.otf", "texgyre/texgyretermes-bolditalic.otf",
+	"texgyre/texgyreheros-regular.otf", "texgyre/texgyreheros-bold.otf",
+	"texgyre/texgyreheros-italic.otf", "texgyre/texgyreheros-bolditalic.otf",
+	"texgyre/texgyrecursor-regular.otf", "texgyre/texgyrecursor-bold.otf",
+	"texgyre/texgyrecursor-italic.otf", "texgyre/texgyrecursor-bolditalic.otf",
+	"ttf/dejavu/DejaVuSans.ttf",
+};
+substfaces: array of ref OutlineFont->Face;
+
+substface(i: int): ref OutlineFont->Face
+{
+	if(outlinefont == nil)
+		return nil;
+	if(substfaces == nil)
+		substfaces = array[len substfiles] of ref OutlineFont->Face;
+	if(substfaces[i] == nil){
+		data := readfontfile("/fonts/" + substfiles[i]);
+		if(data != nil)
+			(substfaces[i], nil) = outlinefont->open(data, "ttf");
+		if(substfaces[i] == nil && i != SUBSTFALLBACK)
+			substfaces[i] = substface(SUBSTFALLBACK);
+	}
+	return substfaces[i];
+}
+
+readfontfile(path: string): array of byte
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, dir) := sys->fstat(fd);
+	if(ok != 0 || dir.length <= big 0 || dir.length > big (16*1024*1024))
+		return nil;
+	data := array[int dir.length] of byte;
+	for(n := 0; n < len data; ){
+		r := sys->read(fd, data[n:], len data - n);
+		if(r <= 0)
+			return nil;
+		n += r;
+	}
+	return data;
+}
+
+# the face for a font not embedded, by its name and descriptor's flags
+substfor(basefont: string, flags: int): int
+{
+	n := "";
+	for(i := 0; i < len basefont; i++){
+		c := basefont[i];
+		if(c >= 'A' && c <= 'Z')
+			c += 'a' - 'A';
+		if(c != ' ' && c != '-' && c != '_' && c != ',')
+			n[len n] = c;
+	}
+	if(contains(n, "symbol") || contains(n, "dingbat") || contains(n, "wingding"))
+		return SUBSTFALLBACK;
+	fam := SUBSTSANS;
+	if(flags & 1 || contains(n, "courier") || contains(n, "mono") || contains(n, "consol") ||
+	   contains(n, "typewriter") || contains(n, "fixed") || contains(n, "lucidaconsole"))
+		fam = SUBSTMONO;
+	else if(!contains(n, "sans") && (flags & 2 || contains(n, "times") || contains(n, "roman") ||
+	   contains(n, "serif") || contains(n, "georgia") || contains(n, "garamond") ||
+	   contains(n, "palatino") || contains(n, "bookman") || contains(n, "minion") ||
+	   contains(n, "cambria") || contains(n, "century") || contains(n, "baskerville") ||
+	   contains(n, "bodoni") || contains(n, "schoolbook") || contains(n, "cmr")))
+		fam = SUBSTSERIF;
+	style := 0;
+	if(flags & (1<<18) || contains(n, "bold") || contains(n, "black") || contains(n, "heavy") ||
+	   contains(n, "demi") || contains(n, "semibold"))
+		style |= 1;
+	if(flags & 64 || contains(n, "italic") || contains(n, "oblique") || contains(n, "slant"))
+		style |= 2;
+	return fam + style;
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
+}
+
+# A font from its dictionary, as far as can be known without its
+# program: the kind, codes, encoding, widths, ToUnicode.  The face is
+# loaded when the first glyph is wanted (fontload).
+newfont(doc: ref PdfDoc, fontobj: ref PdfObj): ref PdfFont
+{
+	fm := ref PdfFont;
+	fm.kind = Fsimple;
+	fm.dw = 0;
+	fm.hs = 1.0;
+	fm.basefont = "Helvetica";
+	fm.fontobj = fontobj;
+	if(fontobj == nil){
+		fm.widths = array[256] of { * => -1 };
+		fm.names = encnames("StandardEncoding");
+		fm.code2uni = namesunicode(fm.names);
+		return fm;
+	}
+	subtype := nameof(doc, dictget(fontobj.dval, "Subtype"));
+	bf := nameof(doc, dictget(fontobj.dval, "BaseFont"));
+	if(bf != nil){
+		if(len bf > 7 && bf[6] == '+')
+			bf = bf[7:];
+		fm.basefont = bf;
+	}
+
+	# ToUnicode
+	tu := resolve(doc, dictget(fontobj.dval, "ToUnicode"));
+	if(tu != nil && tu.kind == Ostream){
+		(cmapdata, derr) := decompressstream(tu);
+		if(cmapdata != nil && derr == nil){
+			(tb, ent) := parsecmap(string2(cmapdata));
+			if(tb && subtype == "Type0")
+				fm.twobyte = 1;
+			fm.entries = ent;
 		}
 	}
 
-	slen := len rawtext;
-
-	if(rotated90 != 0){
-		# Rotated outline text: render glyphs to horizontal mask, rotate, composite
-		(gmh, gasc, gdesc) := face.metrics(pixsize);
-		if(gmh <= 0) gmh = gasc - gdesc;
-		if(gmh <= 0) gmh = int(pixsize * 1.5);
-		if(gasc <= 0) gasc = int(pixsize);
-
-		# Estimate mask width from character count
-		nchars := slen;
-		if(fm.twobyte) nchars = slen / 2;
-		estw := nchars * int(pixsize) + 8;
-		if(estw < 64) estw = 64;
-
-		# Save initial position for page placement
-		inittrm := matmul(gs.tm, gs.ctm);
-
-		white := display.newimage(
-			Rect(Point(0,0), Point(1,1)),
-			drawm->GREY8, 1, drawm->White);
-		hmask := display.newimage(
-			Rect(Point(0,0), Point(estw, gmh)),
-			drawm->GREY8, 0, drawm->Black);
-
-		if(white != nil && hmask != nil){
-			# Render glyphs to horizontal mask and advance text matrix
-			xoff := 0;
-			i := 0;
-			while(i < slen){
-				gid := 0;
-				if(fm.twobyte){
-					if(i + 1 >= slen) break;
-					gid = (rawtext[i] << 8) | (rawtext[i+1] & 16rFF);
-					i += 2;
-				} else {
-					gid = rawtext[i] & 16rFF;
-					i++;
-				}
-				if(gid == 0) continue;
-
-				cid := gid;
-				if(face.iscid){
-					gid = face.cidtogid(cid);
-					if(gid < 0){
-						gw := fm.dw;
-						if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
-							gw = fm.gwidths[cid];
-						tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
-						xoff += int(real gw / 1000.0 * pixsize + 0.5);
-						gs.tm[4] += tx * gs.tm[0];
-						gs.tm[5] += tx * gs.tm[1];
-						continue;
-					}
-				} else {
-					gid = face.chartogid(cid);
-					if(gid < 0) gid = cid;
-				}
-
-				# Render glyph to horizontal mask
-				adv := face.drawglyph(gid, pixsize, hmask, Point(xoff, gasc), white);
-				xoff += adv;
-
-				# Advance text matrix
-				gw := fm.dw;
-				if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
-					gw = fm.gwidths[cid];
-				tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
-				gs.tm[4] += tx * gs.tm[0];
-				gs.tm[5] += tx * gs.tm[1];
-			}
-
-			# Rotate mask and composite onto page
-			actualw := xoff;
-			if(actualw > 0){
-				hpix := array[estw * gmh] of byte;
-				hmask.readpixels(hmask.r, hpix);
-
-				rmw := gmh;
-				rmh := actualw;
-				rpix := array[rmw * rmh] of byte;
-
-				for(ry := 0; ry < rmh; ry++){
-					for(rx := 0; rx < rmw; rx++){
-						hx, hy: int;
-						if(rotated90 == -1){
-							hx = actualw - 1 - ry;
-							hy = rx;
-						} else {
-							hx = ry;
-							hy = gmh - 1 - rx;
-						}
-						if(hx >= 0 && hx < estw && hy >= 0 && hy < gmh)
-							rpix[ry * rmw + rx] = hpix[hy * estw + hx];
-					}
-				}
-
-				rmask := display.newimage(
-					Rect(Point(0,0), Point(rmw, rmh)),
-					drawm->GREY8, 0, drawm->Black);
-				if(rmask != nil){
-					rmask.writepixels(rmask.r, rpix);
-
-					ipx := int(inittrm[4] + 0.5);
-					ipy := int(inittrm[5] + 0.5);
-					rdx, rdy: int;
-					if(rotated90 == -1){
-						rdx = ipx - rmw * 3 / 4;
-						rdy = ipy - rmh;
-					} else {
-						rdx = ipx - rmw / 4;
-						rdy = ipy;
-					}
-
-					rr := Rect(Point(rdx, rdy),
-						Point(rdx + rmw, rdy + rmh));
-					img.draw(rr, colimg, rmask, Point(0, 0));
-				}
-			}
-		} else {
-			# Allocation failed — still advance text matrix
-			i := 0;
-			while(i < slen){
-				gid := 0;
-				if(fm.twobyte){
-					if(i + 1 >= slen) break;
-					gid = (rawtext[i] << 8) | (rawtext[i+1] & 16rFF);
-					i += 2;
-				} else {
-					gid = rawtext[i] & 16rFF;
-					i++;
-				}
-				if(gid == 0) continue;
-				cid := gid;
-				gw := fm.dw;
-				if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
-					gw = fm.gwidths[cid];
-				tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
-				gs.tm[4] += tx * gs.tm[0];
-				gs.tm[5] += tx * gs.tm[1];
-			}
+	case subtype {
+	"Type0" =>
+		fm.kind = Fcid;
+		fm.twobyte = 1;
+		fm.dw = 1000;
+		cf := fontobj;
+		desc := resolve(doc, dictget(fontobj.dval, "DescendantFonts"));
+		if(desc != nil && desc.kind == Oarray && desc.aval != nil)
+			cf = resolve(doc, hd desc.aval);
+		if(cf == nil)
+			cf = fontobj;
+		fm.cidfont = cf;
+		enc := resolve(doc, dictget(fontobj.dval, "Encoding"));
+		if(enc != nil && enc.kind == Ostream){
+			(cm, nil) := decompressstream(enc);
+			if(cm != nil)
+				(fm.codespace, fm.cidmap) = parseencoding(string2(cm));
 		}
-		return;
+		dwo := resolve(doc, dictget(cf.dval, "DW"));
+		if(dwo != nil && (dwo.kind == Oint || dwo.kind == Oreal))
+			fm.dw = numof(dwo);
+		wo := resolve(doc, dictget(cf.dval, "W"));
+		if(wo != nil && wo.kind == Oarray)
+			fm.widths = parsepdfwidths(resolveall(doc, wo.aval), fm.dw);
+		return fm;
+	"Type3" =>
+		fm.kind = Ftype3;
+		fm.fmatrix = array[] of {0.001, 0.0, 0.0, 0.001, 0.0, 0.0};
+		mo := resolve(doc, dictget(fontobj.dval, "FontMatrix"));
+		if(mo != nil && mo.kind == Oarray && lenlistobj(mo.aval) == 6){
+			i := 0;
+			for(l := mo.aval; l != nil; l = tl l)
+				fm.fmatrix[i++] = numreal(resolve(doc, hd l));
+		}
+		fm.charprocs = resolve(doc, dictget(fontobj.dval, "CharProcs"));
+		fm.t3res = resolve(doc, dictget(fontobj.dval, "Resources"));
+		fm.t3procs = array[256] of array of byte;
+		fm.t3widths = array[256] of { * => 0.0 };
+		(fc, wl) := firstwidths(doc, fontobj);
+		for(; wl != nil && fc < 256; wl = tl wl){
+			if(fc >= 0)
+				fm.t3widths[fc] = numreal(resolve(doc, hd wl));
+			fc++;
+		}
+		fm.names = simplenames(doc, fontobj, nil);
+		fm.code2uni = namesunicode(fm.names);
+		return fm;
 	}
 
-	# Render each glyph (non-rotated path)
-	i := 0;
-	while(i < slen){
-		gid := 0;
-		if(fm.twobyte){
-			if(i + 1 >= slen) break;
-			gid = (rawtext[i] << 8) | (rawtext[i+1] & 16rFF);
-			i += 2;
-		} else {
-			gid = rawtext[i] & 16rFF;
-			i++;
-		}
-		if(gid == 0) continue;
+	# simple: Type1, MMType1, TrueType
+	fm.widths = array[256] of { * => -1 };
+	(fc, wl) := firstwidths(doc, fontobj);
+	for(; wl != nil && fc < 256; wl = tl wl){
+		if(fc >= 0)
+			fm.widths[fc] = numof(resolve(doc, hd wl));
+		fc++;
+	}
+	fd := resolve(doc, dictget(fontobj.dval, "FontDescriptor"));
+	if(fd != nil){
+		mw := resolve(doc, dictget(fd.dval, "MissingWidth"));
+		if(mw != nil)
+			fm.dw = numof(mw);
+	}
+	base: array of string;
+	case substfor(fm.basefont, 0) {
+	SUBSTFALLBACK =>
+		if(contains(lower(fm.basefont), "dingbat"))
+			base = encnames("ZapfDingbats");
+		else if(contains(lower(fm.basefont), "symbol"))
+			base = encnames("Symbol");
+	}
+	fm.names = simplenames(doc, fontobj, base);
+	fm.code2uni = namesunicode(fm.names);
+	return fm;
+}
 
-		# Map character code to GID
-		cid := gid;
-		if(face.iscid){
-			# CID-keyed: CID → GID via charset
-			gid = face.cidtogid(cid);
-			if(gid < 0){
-				# Still advance text position using PDF widths
-				gw := fm.dw;
-				if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
-					gw = fm.gwidths[cid];
-				tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
-				gs.tm[4] += tx * gs.tm[0];
-				gs.tm[5] += tx * gs.tm[1];
+# The glyph name for each code of a simple font: the Encoding (a name,
+# or a dictionary of a BaseEncoding and Differences), over base (the
+# font's own encoding, when known; nil entries where only the font
+# program knows).
+simplenames(doc: ref PdfDoc, fontobj: ref PdfObj, base: array of string): array of string
+{
+	names := array[256] of string;
+	if(base != nil)
+		names[0:] = base;
+	enc := resolve(doc, dictget(fontobj.dval, "Encoding"));
+	if(enc == nil)
+		return names;
+	if(enc.kind == Oname){
+		if((e := encnames(enc.sval)) != nil)
+			names[0:] = e;
+		return names;
+	}
+	if(enc.kind != Odict)
+		return names;
+	be := nameof(doc, dictget(enc.dval, "BaseEncoding"));
+	if(be != nil && (e := encnames(be)) != nil)
+		names[0:] = e;
+	diffs := resolve(doc, dictget(enc.dval, "Differences"));
+	if(diffs != nil && diffs.kind == Oarray){
+		c := 0;
+		for(l := diffs.aval; l != nil; l = tl l){
+			o := resolve(doc, hd l);
+			if(o == nil)
 				continue;
+			if(o.kind == Oint)
+				c = o.ival;
+			else if(o.kind == Oname){
+				if(c >= 0 && c < 256)
+					names[c] = o.sval;
+				c++;
 			}
-		} else {
-			# Non-CID: charcode → GID via cmap (TrueType) or identity (CFF)
-			gid = face.chartogid(cid);
-			if(gid < 0) gid = cid;
 		}
+	}
+	return names;
+}
 
-		# Current baseline position in pixels (recompute each glyph since tm changes)
-		curtrm := matmul(gs.tm, gs.ctm);
-		px := int (curtrm[4] + 0.5);
-		py := int (curtrm[5] + 0.5);
+encnames(name: string): array of string
+{
+	if(pdfenc == nil){
+		pdfenc = load Pdfenc Pdfenc->PATH;
+		if(pdfenc == nil)
+			return nil;
+	}
+	return pdfenc->encoding(name);
+}
 
-		# Render glyph
-		face.drawglyph(gid, pixsize, img, Point(px, py), colimg);
+namesunicode(names: array of string): array of int
+{
+	if(names == nil || pdfenc == nil && encnames("StandardEncoding") == nil)
+		return nil;
+	u := array[len names] of int;
+	for(i := 0; i < len names; i++)
+		u[i] = pdfenc->unicode(names[i]);
+	return u;
+}
 
-		# Get glyph width from PDF W array (in 1/1000 text units)
-		# W array is indexed by CID, not GID
-		gw := fm.dw;
-		if(fm.gwidths != nil && cid < len fm.gwidths && fm.gwidths[cid] >= 0)
-			gw = fm.gwidths[cid];
+# The face and the glyph for each code, made the first time the font
+# is drawn or measured.
+fontload(doc: ref PdfDoc, fm: ref PdfFont)
+{
+	if(fm.loaded)
+		return;
+	doc.fontlock <-= 1;
+	if(!fm.loaded){
+		{
+			fontload1(doc, fm);
+		} exception {
+		"*" =>
+			;
+		}
+		fm.loaded = 1;	# only now: another proc may be drawing the font
+	}
+	<-doc.fontlock;
+}
 
-		# Advance text matrix
-		# tx = (w/1000 * Tfs + Tc) * Th/100
-		tx := (real gw / 1000.0 * gs.fontsize + gs.charspace) * gs.hscale / 100.0;
-		gs.tm[4] += tx * gs.tm[0];
-		gs.tm[5] += tx * gs.tm[1];
+fontload1(doc: ref PdfDoc, fm: ref PdfFont)
+{
+	if(fm.kind == Ftype3 || outlinefont == nil)
+		return;
+	df := fm.fontobj;
+	if(fm.cidfont != nil)
+		df = fm.cidfont;
+	flags := 0;
+	fdesc: ref PdfObj;
+	if(df != nil)
+		fdesc = resolve(doc, dictget(df.dval, "FontDescriptor"));
+	if(fdesc != nil){
+		flags = dictgetintres(doc, fdesc.dval, "Flags");
+		(fm.face, fm.ttf) = embeddedface(doc, fdesc);
+	}
+	if(fm.face != nil)
+		fm.embedded = fm.face;
+	else {
+		fm.face = substface(substfor(fm.basefont, flags));
+		fm.subst = 1;
+	}
+	if(fm.face == nil)
+		return;
+
+	if(fm.kind == Fcid){
+		cg := resolve(doc, dictget(fm.cidfont.dval, "CIDToGIDMap"));
+		if(cg != nil && cg.kind == Ostream){
+			(m, nil) := decompressstream(cg);
+			if(m != nil){
+				fm.cid2gid = array[len m / 2] of int;
+				for(i := 0; i < len fm.cid2gid; i++)
+					fm.cid2gid[i] = int m[2*i] << 8 | int m[2*i+1];
+			}
+		}
+		return;
+	}
+
+	face := fm.face;
+	symbolic := (flags & 4) != 0 && (flags & 32) == 0;
+	fm.code2gid = array[256] of { * => 0 };
+	fb := substface(SUBSTFALLBACK);
+	for(c := 0; c < 256; c++){
+		name := fm.names[c];
+		g := -1;
+		if(!fm.subst && !fm.ttf){
+			# Type 1, CFF: by name, else the font's own encoding
+			if(name != nil)
+				g = face.namedgid(name);
+			if(g < 0)
+				g = face.lookup(c);
+		} else if(!fm.subst){
+			# TrueType: by name through Unicode, unless symbolic
+			if(name != nil && !symbolic)
+				g = face.lookup(fm.code2uni[c]);
+			if(g <= 0)
+				g = face.lookup(16rF000 + c);
+			if(g <= 0)
+				g = face.lookup(c);
+			if(g <= 0 && name != nil)
+				g = face.namedgid(name);
+		} else {
+			u := c;
+			if(fm.code2uni != nil && fm.code2uni[c] > 0)
+				u = fm.code2uni[c];
+			else if(fm.entries != nil)
+				u = unicodeof(fm, c);
+			else if(name == nil && c < 32)
+				u = -1;
+			g = face.lookup(u);
+			if(g <= 0 && fb != nil && fb != face && (g = fb.lookup(u)) > 0)
+				g += FALLBACK;
+		}
+		if(g < 0)
+			g = 0;
+		fm.code2gid[c] = g;
+	}
+	# the widths the PDF does not give, from the face; a substitute
+	# narrowed when the font it stands for is narrower
+	pw := sw := 0.0;
+	for(c = 0; c < 256; c++){
+		g := fm.code2gid[c];
+		f := face;
+		if(g >= FALLBACK){
+			f = fb;
+			g -= FALLBACK;
+		}
+		if(g <= 0)
+			continue;
+		adv := f.advance(g, 1000.0);
+		if(fm.widths[c] < 0 && fm.dw == 0)
+			fm.widths[c] = int (adv + 0.5);
+		else if(fm.subst && f == face && fm.widths[c] > 0 && adv > 0.0 && c > 32){
+			pw += real fm.widths[c];
+			sw += adv;
+		}
+	}
+	if(sw > 0.0 && pw < 0.95*sw){
+		fm.hs = pw / sw;
+		if(fm.hs < 0.6)
+			fm.hs = 0.6;
 	}
 }
 
-# Process a TJ array for outline fonts: render each string segment
-# and apply kerning adjustments to the text matrix between them.
-# This avoids flattening the array into a single byte string which
-# would misalign two-byte character reads.
-rendertjraw(img: ref Image, gs: ref GState, data: array of byte, arraypos: int, fm: ref FontMapEntry)
+# The font program a descriptor embeds: FontFile (Type 1), FontFile2
+# (TrueType), FontFile3 (CFF, or OpenType); and whether it is TrueType.
+embeddedface(doc: ref PdfDoc, fdesc: ref PdfObj): (ref OutlineFont->Face, int)
 {
-	pos := arraypos + 1;	# skip '['
-	while(pos < len data){
-		pos = skipws(data, pos);
-		if(pos >= len data) break;
-		c := int data[pos];
-		if(c == ']')
-			break;
-		if(c == '('){
-			(s, newpos) := readlitstr(data, pos);
-			rendertextraw(img, gs, s, fm);
-			pos = newpos;
-			continue;
-		}
-		if(c == '<'){
-			(s, newpos) := readhexstr(data, pos);
-			rendertextraw(img, gs, s, fm);
-			pos = newpos;
-			continue;
-		}
-		if((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.'){
-			(val, newpos) := readreal(data, pos);
-			# TJ kerning: move text position by -val/1000 * fontSize
-			tx := -(val / 1000.0 * gs.fontsize) * gs.hscale / 100.0;
-			gs.tm[4] += tx * gs.tm[0];
-			gs.tm[5] += tx * gs.tm[1];
-			pos = newpos;
-			continue;
-		}
-		pos++;
+	fmt := "t1";
+	ff := dictget(fdesc.dval, "FontFile");
+	if(ff == nil){
+		ff = dictget(fdesc.dval, "FontFile2");
+		fmt = "ttf";
 	}
+	if(ff == nil){
+		ff = dictget(fdesc.dval, "FontFile3");
+		fmt = "cff";
+	}
+	ff = resolve(doc, ff);
+	if(ff == nil || ff.kind != Ostream)
+		return (nil, 0);
+	if(fmt == "cff" && nameof(doc, dictget(ff.dval, "Subtype")) == "OpenType")
+		fmt = "ttf";
+	(data, err) := decompressstream(ff);
+	if(data == nil || err != nil)
+		return (nil, 0);
+	if(fmt == "cff" && len data > 4 && string data[0:4] == "OTTO")
+		fmt = "ttf";
+	(f, nil) := outlinefont->open(data, fmt);
+	if(f == nil && fmt == "t1" && len data > 4 && (string data[0:4] == "OTTO" || int data[0] == 1))
+		(f, nil) = outlinefont->open(data, "cff");
+	return (f, fmt == "ttf" && f != nil && f.glyphname(1) == nil);
+}
+
+# The font a page uses without naming one it has: Helvetica.
+deffont(doc: ref PdfDoc): ref PdfFont
+{
+	if(doc.deffont == nil)
+		doc.deffont = newfont(doc, nil);
+	return doc.deffont;
+}
+
+firstwidths(doc: ref PdfDoc, fontobj: ref PdfObj): (int, list of ref PdfObj)
+{
+	w := resolve(doc, dictget(fontobj.dval, "Widths"));
+	if(w == nil || w.kind != Oarray)
+		return (0, nil);
+	return (dictgetintres(doc, fontobj.dval, "FirstChar"), w.aval);
+}
+
+nameof(doc: ref PdfDoc, o: ref PdfObj): string
+{
+	o = resolve(doc, o);
+	if(o == nil || o.kind != Oname)
+		return nil;
+	return o.sval;
+}
+
+numof(o: ref PdfObj): int
+{
+	if(o == nil)
+		return 0;
+	if(o.kind == Oint)
+		return o.ival;
+	if(o.kind == Oreal)
+		return int o.rval;
+	return 0;
+}
+
+numreal(o: ref PdfObj): real
+{
+	if(o == nil)
+		return 0.0;
+	if(o.kind == Oint)
+		return real o.ival;
+	if(o.kind == Oreal)
+		return o.rval;
+	return 0.0;
+}
+
+resolveall(doc: ref PdfDoc, l: list of ref PdfObj): list of ref PdfObj
+{
+	r: list of ref PdfObj;
+	for(; l != nil; l = tl l)
+		r = resolve(doc, hd l) :: r;
+	o: list of ref PdfObj;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+lower(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++)
+		r[len r] = tolower(s[i]);
+	return r;
+}
+
+string2(d: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len d; i++)
+		s[len s] = int d[i];
+	return s;
+}
+
+tolower(c: int): int
+{
+	if(c >= 'A' && c <= 'Z')
+		return c - 'A' + 'a';
+	return c;
 }
 
 # Skip past a TJ array [...] without parsing contents.
@@ -1966,53 +2337,6 @@ skiptjarray(data: array of byte, pos: int): int
 		pos++;
 	}
 	return pos;
-}
-
-# Expand typographic characters that the bitmap font may lack
-# to ASCII equivalents. DejaVu covers the full FB00 block
-# (fi/fl/ffi/ffl ligatures U+FB01-04 all present), so only
-# truly obscure ligatures need substitution.
-expandligatures(s: string): string
-{
-	# Quick check: if all chars are basic Latin, skip
-	needswork := 0;
-	for(i := 0; i < len s; i++)
-		if(s[i] > 16r7E){ needswork = 1; break; }
-	if(!needswork)
-		return s;
-
-	out := "";
-	for(i = 0; i < len s; i++){
-		c := s[i];
-		out[len out] = c;
-	}
-	return out;
-}
-
-pickfont(name: string): ref Font
-{
-	if(name == nil)
-		return sansfont;
-	# Check for monospace indicators
-	for(i := 0; i < len name; i++){
-		if(i + 4 <= len name){
-			sub := "";
-			for(j := i; j < i + 7 && j < len name; j++)
-				sub += sys->sprint("%c", tolower(name[j]));
-			if(len sub >= 4 && sub[0:4] == "mono")
-				return monofont;
-			if(len sub >= 7 && sub[0:7] == "courier")
-				return monofont;
-		}
-	}
-	return sansfont;
-}
-
-tolower(c: int): int
-{
-	if(c >= 'A' && c <= 'Z')
-		return c - 'A' + 'a';
-	return c;
 }
 
 # ---- Path rendering ----
@@ -2506,25 +2830,29 @@ buildclipmask(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd
 			mask.fillpoly(pts, wind, white, Point(0,0));
 	}
 
-	# If existing clipmask, intersect: read both masks row by row, take min
-	if(gs.clipmask != nil){
-		w := img.r.dx();
-		h := img.r.dy();
-		oldbuf := array[w] of byte;
-		newbuf := array[w] of byte;
-		for(y := img.r.min.y; y < img.r.min.y + h; y++){
-			rr := Rect(Point(img.r.min.x, y), Point(img.r.max.x, y + 1));
-			gs.clipmask.readpixels(rr, oldbuf);
-			mask.readpixels(rr, newbuf);
-			for(x := 0; x < w; x++){
-				if(int oldbuf[x] < int newbuf[x])
-					newbuf[x] = oldbuf[x];
-			}
-			mask.writepixels(rr, newbuf);
-		}
-	}
+	# If existing clipmask, intersect
+	if(gs.clipmask != nil)
+		intersectmask(mask, gs.clipmask);
 
 	return mask;
+}
+
+# mask made the intersection of itself and old (each pixel the less)
+intersectmask(mask, old: ref Image)
+{
+	w := mask.r.dx();
+	oldbuf := array[w] of byte;
+	newbuf := array[w] of byte;
+	for(y := mask.r.min.y; y < mask.r.max.y; y++){
+		rr := Rect(Point(mask.r.min.x, y), Point(mask.r.max.x, y + 1));
+		old.readpixels(rr, oldbuf);
+		mask.readpixels(rr, newbuf);
+		for(x := 0; x < w; x++){
+			if(int oldbuf[x] < int newbuf[x])
+				newbuf[x] = oldbuf[x];
+		}
+		mask.writepixels(rr, newbuf);
+	}
 }
 
 # Transform a point through CTM
@@ -3165,21 +3493,10 @@ renderimgxobj(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 	if(sdata == nil || derr != nil)
 		return;
 
-	# Check if this is JPEG data (DCTDecode filter)
+	# JPEG data (DCTDecode the last filter)
 	isjpeg := 0;
-	filterobj := dictget(xobj.dval, "Filter");
-	if(filterobj != nil){
-		fname := "";
-		if(filterobj.kind == Oname)
-			fname = filterobj.sval;
-		else if(filterobj.kind == Oarray && filterobj.aval != nil){
-			ff := hd filterobj.aval;
-			if(ff != nil && ff.kind == Oname)
-				fname = ff.sval;
-		}
-		if(fname == "DCTDecode")
-			isjpeg = 1;
-	}
+	if((fname := streamfilter(xobj)) == "DCTDecode" || fname == "DCT")
+		isjpeg = 1;
 
 	if(isjpeg){
 		# Decode JPEG via readjpg module
@@ -3781,6 +4098,7 @@ restoregs(gs, saved: ref GState)
 	gs.strokecscomps = saved.strokecscomps;
 	gs.clipmask = saved.clipmask;
 	gs.smask = saved.smask;
+	gs.cliprect = saved.cliprect;
 }
 
 # ---- Operand stack helpers ----
@@ -3866,7 +4184,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 
 	# Parse the most recent xref (traditional or stream)
 	trailer: ref PdfObj;
-	xref: array of ref XrefEntry;
+	xref: array of XrefEntry;
 	nobjs := 0;
 	xerr, xserr: string;
 
@@ -3945,7 +4263,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 
 		# Grow xref if older section is larger
 		if(oldnobjs > len xref){
-			newxref := array[oldnobjs] of ref XrefEntry;
+			newxref := array[oldnobjs] of { * => XrefEntry(0, 0, -1) };
 			newxref[0:] = xref;
 			xref = newxref;
 			if(oldnobjs > nobjs)
@@ -3954,14 +4272,14 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 
 		# Merge: only fill slots that are nil in current xref
 		for(i := 0; i < len oldxref; i++){
-			if(i < len xref && xref[i] == nil)
+			if(i < len xref && xref[i].inuse < 0)
 				xref[i] = oldxref[i];
 		}
 
 		cursor = oldtrailer;
 	}
 
-	doc := ref PdfDoc(data, xref, trailer, nobjs, nil, 0, 0, 0, nil, nil, -1);
+	doc := ref PdfDoc(data, xref, trailer, nobjs, nil, 0, 0, 0, nil, nil, -1, nil, nil, nil, nil, chan[1] of int);
 	return (doc, nil);
 }
 
@@ -4020,7 +4338,7 @@ scanforxref(data: array of byte): int
 	return -1;
 }
 
-parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, string)
+parsexref(data: array of byte, offset: int): (array of XrefEntry, int, int, string)
 {
 	pos := skipws(data, offset);
 	if(pos + 4 > len data)
@@ -4033,7 +4351,7 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 	pos = skipws(data, pos);
 
 	maxobj := 0;
-	entries: list of (int, int, array of ref XrefEntry);
+	entries: list of (int, int, array of XrefEntry);
 
 	for(;;){
 		if(pos >= len data)
@@ -4059,7 +4377,7 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 		if(startobj + count > maxobj)
 			maxobj = startobj + count;
 
-		sect := array[count] of ref XrefEntry;
+		sect := array[count] of { * => XrefEntry(0, 0, -1) };
 		for(i := 0; i < count; i++){
 			(eoff, p3) := readint(data, pos);
 			pos = skipws(data, p3);
@@ -4072,12 +4390,12 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 				pos++;
 			}
 			pos = skipws(data, pos);
-			sect[i] = ref XrefEntry(eoff, egen, inuse);
+			sect[i] = XrefEntry(eoff, egen, inuse);
 		}
 		entries = (startobj, count, sect) :: entries;
 	}
 
-	xref := array[maxobj] of ref XrefEntry;
+	xref := array[maxobj] of { * => XrefEntry(0, 0, -1) };
 	for(; entries != nil; entries = tl entries){
 		(sobj, cnt, sect) := hd entries;
 		for(i := 0; i < cnt; i++)
@@ -4092,7 +4410,7 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 	return (xref, maxobj, trailerpos, nil);
 }
 
-parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int, ref PdfObj, string)
+parsexrefstream(data: array of byte, offset: int): (array of XrefEntry, int, ref PdfObj, string)
 {
 	pos := skipws(data, offset);
 	(nil, p1) := readint(data, pos);
@@ -4176,7 +4494,7 @@ parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int,
 	if(sdata == nil)
 		return (nil, 0, nil, "cannot decompress xref stream: " + derr);
 
-	xref := array[size] of ref XrefEntry;
+	xref := array[size] of { * => XrefEntry(0, 0, -1) };
 	dpos := 0;
 	for(sl := subsections; sl != nil; sl = tl sl){
 		(startobj, count) := hd sl;
@@ -4197,10 +4515,10 @@ parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int,
 			if(objnum >= size) break;
 
 			case ftype {
-			0 => xref[objnum] = ref XrefEntry(0, f2, 0);
-			1 => xref[objnum] = ref XrefEntry(f1, f2, 1);
-			2 => xref[objnum] = ref XrefEntry(f1, f2, 2);
-			* => xref[objnum] = ref XrefEntry(0, 0, 0);
+			0 => xref[objnum] = XrefEntry(0, f2, 0);
+			1 => xref[objnum] = XrefEntry(f1, f2, 1);
+			2 => xref[objnum] = XrefEntry(f1, f2, 2);
+			* => xref[objnum] = XrefEntry(0, 0, 0);
 			}
 		}
 	}
@@ -4219,7 +4537,7 @@ readfield(data: array of byte, pos, width: int): int
 
 # Hybrid xref: if trailer has /XRefStm, parse the xref stream
 # and merge its entries (type 2 ObjStm refs) into the xref table.
-mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of ref XrefEntry, nobjs: int): (array of ref XrefEntry, int)
+mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of XrefEntry, nobjs: int): (array of XrefEntry, int)
 {
 	xsobj := dictget(trailer.dval, "XRefStm");
 	if(xsobj == nil || xsobj.kind != Oint)
@@ -4234,7 +4552,7 @@ mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of ref Xre
 
 	# Grow xref if stream section is larger
 	if(snobjs > len xref){
-		newxref := array[snobjs] of ref XrefEntry;
+		newxref := array[snobjs] of { * => XrefEntry(0, 0, -1) };
 		newxref[0:] = xref;
 		xref = newxref;
 		if(snobjs > nobjs)
@@ -4243,7 +4561,7 @@ mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of ref Xre
 
 	# Merge: only fill nil slots (traditional entries take precedence)
 	for(i := 0; i < len sxref; i++){
-		if(i < len xref && xref[i] == nil)
+		if(i < len xref && xref[i].inuse < 0)
 			xref[i] = sxref[i];
 	}
 
@@ -4332,8 +4650,9 @@ parsestreamdata(data: array of byte, pos: int,
 	}
 	if(pos + slen > len data) slen = len data - pos;
 
-	streamdata := array[slen] of byte;
-	streamdata[0:] = data[pos:pos+slen];
+	# a slice of the file's data, not a copy: the data is kept anyway
+	# (decryption and every filter make new arrays)
+	streamdata := data[pos:pos+slen];
 	pos += slen;
 
 	pos = skipws(data, pos);
@@ -4531,7 +4850,7 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 		return nil;
 
 	entry := doc.xref[objnum];
-	if(entry == nil || entry.inuse == 0) return nil;
+	if(entry.inuse <= 0) return nil;
 
 	if(entry.inuse == 2)
 		return resolveobjstm(doc, entry.offset, entry.gen);
@@ -4556,9 +4875,12 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 
 resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 {
+	for(l := doc.objstms; l != nil; l = tl l)
+		if((hd l).num == stmnum)
+			return objstmobj(hd l, idx);
 	if(stmnum < 0 || stmnum >= doc.nobjs) return nil;
 	stmentry := doc.xref[stmnum];
-	if(stmentry == nil || stmentry.inuse != 1) return nil;
+	if(stmentry.inuse != 1) return nil;
 
 	offset := stmentry.offset;
 	if(offset >= len doc.data) return nil;
@@ -4596,12 +4918,28 @@ resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 		spos = sp2;
 		offsets[i] = first + ooff;
 	}
+	# kept: the objects of a stream are wanted together
+	os := ref ObjStm(stmnum, sdata, offsets);
+	keep := os :: nil;
+	k := 1;
+	for(l = doc.objstms; l != nil && k < NOBJSTM; l = tl l){
+		keep = hd l :: keep;
+		k++;
+	}
+	doc.objstms = nil;
+	for(; keep != nil; keep = tl keep)
+		doc.objstms = hd keep :: doc.objstms;
+	return objstmobj(os, idx);
+}
 
-	if(idx >= n) return nil;
-	opos := offsets[idx];
-	if(opos >= len sdata) return nil;
-
-	(parsed, nil, nil) := parseobj(sdata, opos);
+objstmobj(os: ref ObjStm, idx: int): ref PdfObj
+{
+	if(idx < 0 || idx >= len os.offsets)
+		return nil;
+	opos := os.offsets[idx];
+	if(opos >= len os.data)
+		return nil;
+	(parsed, nil, nil) := parseobj(os.data, opos);
 	return parsed;
 }
 
@@ -4619,78 +4957,270 @@ skipwsbytes(data: array of byte, pos: int): int
 
 # ---- Stream decompression ----
 
+# A stream's data through its filters, in order, each with its
+# DecodeParms.  An image codec's data (DCT, JPX, CCITT, JBIG2) is
+# left for the image decoder: streamfilter() names the last filter.
 decompressstream(obj: ref PdfObj): (array of byte, string)
 {
 	if(obj == nil || obj.kind != Ostream)
 		return (nil, "not a stream");
-	raw := obj.stream;
-	if(raw == nil)
+	data := obj.stream;
+	if(data == nil)
 		return (nil, "empty stream");
 
-	filterobj := dictget(obj.dval, "Filter");
-	if(filterobj == nil)
-		return (raw, nil);
+	filters := filterlist(dictget(obj.dval, "Filter"));
+	if(filters == nil)
+		filters = filterlist(dictget(obj.dval, "F"));
+	parms: list of ref PdfObj;
+	dp := dictget(obj.dval, "DecodeParms");
+	if(dp == nil)
+		dp = dictget(obj.dval, "DP");
+	if(dp != nil && dp.kind == Oarray)
+		parms = dp.aval;
+	else if(dp != nil)
+		parms = dp :: nil;
 
-	filtername := "";
-	if(filterobj.kind == Oname)
-		filtername = filterobj.sval;
-	else if(filterobj.kind == Oarray && filterobj.aval != nil){
-		first := hd filterobj.aval;
-		if(first != nil && first.kind == Oname)
-			filtername = first.sval;
-	}
-
-	data: array of byte;
 	derr: string;
-	if(filtername == "FlateDecode" || filtername == "Fl")
-		(data, derr) = inflate(raw);
-	else if(filtername == "ASCIIHexDecode")
-		(data, derr) = asciihexdecode(raw);
-	else if(filtername == "DCTDecode")
-		return (raw, nil);  # raw JPEG bytes — decoded at image rendering time
-	else
-		return (raw, nil);
-
-	if(data == nil)
-		return (nil, derr);
-
-	# Apply PNG/TIFF predictor if specified in DecodeParms
-	dpobj := dictget(obj.dval, "DecodeParms");
-	if(dpobj == nil && filterobj.kind == Oarray){
-		# For filter arrays, DecodeParms might also be an array
-		dpobj2 := dictget(obj.dval, "DP");
-		if(dpobj2 != nil)
-			dpobj = dpobj2;
-	}
-	if(dpobj != nil && dpobj.kind == Oarray && dpobj.aval != nil)
-		dpobj = hd dpobj.aval;
-	if(dpobj != nil && dpobj.kind == Odict){
-		predictor := dictgetint(dpobj.dval, "Predictor");
-		if(predictor >= 10){
-			columns := dictgetint(dpobj.dval, "Columns");
-			if(columns <= 0) columns = 1;
-			colors := dictgetint(dpobj.dval, "Colors");
-			if(colors <= 0) colors = 1;
-			bpc := dictgetint(dpobj.dval, "BitsPerComponent");
-			if(bpc <= 0) bpc = 8;
-			(data, derr) = pngunpredict(data, columns, colors, bpc);
-			if(data == nil)
-				return (nil, derr);
-		} else if(predictor == 2){
-			columns := dictgetint(dpobj.dval, "Columns");
-			if(columns <= 0) columns = 1;
-			colors := dictgetint(dpobj.dval, "Colors");
-			if(colors <= 0) colors = 1;
-			bpc := dictgetint(dpobj.dval, "BitsPerComponent");
-			if(bpc <= 0) bpc = 8;
-			data = tiffunpredict(data, columns, colors, bpc);
+	for(; filters != nil; filters = tl filters){
+		parm: ref PdfObj;
+		if(parms != nil){
+			parm = hd parms;
+			parms = tl parms;
 		}
+		case hd filters {
+		"FlateDecode" or "Fl" =>
+			(data, derr) = inflate(data);
+		"LZWDecode" or "LZW" =>
+			early := 1;
+			if(parm != nil && parm.kind == Odict && dictget(parm.dval, "EarlyChange") != nil)
+				early = dictgetint(parm.dval, "EarlyChange");
+			(data, derr) = lzwdecode(data, early);
+		"ASCIIHexDecode" or "AHx" =>
+			(data, derr) = asciihexdecode(data);
+		"ASCII85Decode" or "A85" =>
+			(data, derr) = ascii85decode(data);
+		"RunLengthDecode" or "RL" =>
+			(data, derr) = runlengthdecode(data);
+		* =>
+			return (data, nil);	# an image codec's, or unknown
+		}
+		if(data == nil)
+			return (nil, derr);
+		(data, derr) = unpredict(data, parm);
+		if(data == nil)
+			return (nil, derr);
 	}
-
 	return (data, nil);
 }
 
-# PNG un-predictor: handles predictor types 10-14 (per-row filter byte)
+filterlist(f: ref PdfObj): list of string
+{
+	if(f == nil)
+		return nil;
+	if(f.kind == Oname)
+		return f.sval :: nil;
+	if(f.kind != Oarray)
+		return nil;
+	r: list of string;
+	for(l := f.aval; l != nil; l = tl l)
+		if((hd l).kind == Oname)
+			r = (hd l).sval :: r;
+	o: list of string;
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
+}
+
+# the last filter a stream names: the codec its data is left in
+streamfilter(obj: ref PdfObj): string
+{
+	last: string;
+	for(l := filterlist(dictget(obj.dval, "Filter")); l != nil; l = tl l)
+		last = hd l;
+	return last;
+}
+
+# PNG and TIFF predictors (DecodeParms Predictor)
+unpredict(data: array of byte, dp: ref PdfObj): (array of byte, string)
+{
+	if(dp == nil || dp.kind != Odict)
+		return (data, nil);
+	predictor := dictgetint(dp.dval, "Predictor");
+	if(predictor < 2)
+		return (data, nil);
+	columns := dictgetint(dp.dval, "Columns");
+	if(columns <= 0) columns = 1;
+	colors := dictgetint(dp.dval, "Colors");
+	if(colors <= 0) colors = 1;
+	bpc := dictgetint(dp.dval, "BitsPerComponent");
+	if(bpc <= 0) bpc = 8;
+	if(predictor >= 10)
+		return pngunpredict(data, columns, colors, bpc);
+	if(predictor == 2)
+		return (tiffunpredict(data, columns, colors, bpc), nil);
+	return (data, nil);
+}
+
+# ASCII85Decode: groups of five base-85 digits for four bytes, z for
+# four zeros, ~> the end
+ascii85decode(data: array of byte): (array of byte, string)
+{
+	out := array[len data * 4 / 5 + 4] of byte;
+	n := 0;
+	v := 0;
+	k := 0;
+	for(i := 0; i < len data; i++){
+		c := int data[i];
+		if(c == '~')
+			break;
+		if(isws(c))
+			continue;
+		if(c == 'z' && k == 0){
+			if(n + 4 > len out)
+				out = grow(out, n + 4);
+			out[n:] = array[4] of { * => byte 0 };
+			n += 4;
+			continue;
+		}
+		if(c < '!' || c > 'u')
+			return (nil, "bad ASCII85 data");
+		v = v*85 + c - '!';
+		if(++k == 5){
+			if(n + 4 > len out)
+				out = grow(out, n + 4);
+			out[n++] = byte (v >> 24);
+			out[n++] = byte (v >> 16);
+			out[n++] = byte (v >> 8);
+			out[n++] = byte v;
+			v = k = 0;
+		}
+	}
+	if(k > 1){
+		# a partial group: padded with u, one byte fewer than its digits
+		for(j := k; j < 5; j++)
+			v = v*85 + 84;
+		if(n + 4 > len out)
+			out = grow(out, n + 4);
+		for(j = 0; j < k - 1; j++)
+			out[n++] = byte (v >> (24 - 8*j));
+	}
+	return (out[0:n], nil);
+}
+
+grow(a: array of byte, need: int): array of byte
+{
+	n := len a * 2;
+	if(n < need)
+		n = need;
+	b := array[n] of byte;
+	b[0:] = a;
+	return b;
+}
+
+# RunLengthDecode: a length byte, then that many plus one bytes (0-127),
+# or one byte repeated 257 less it times (129-255); 128 ends it
+runlengthdecode(data: array of byte): (array of byte, string)
+{
+	out := array[len data * 2] of byte;
+	n := 0;
+	for(i := 0; i < len data; ){
+		l := int data[i++];
+		if(l == 128)
+			break;
+		if(l < 128){
+			m := l + 1;
+			if(i + m > len data)
+				m = len data - i;
+			if(n + m > len out)
+				out = grow(out, n + m);
+			out[n:] = data[i:i+m];
+			n += m;
+			i += m;
+		} else {
+			if(i >= len data)
+				break;
+			m := 257 - l;
+			if(n + m > len out)
+				out = grow(out, n + m);
+			for(j := 0; j < m; j++)
+				out[n++] = data[i];
+			i++;
+		}
+	}
+	return (out[0:n], nil);
+}
+
+# LZWDecode: 9- to 12-bit codes, MSB first; 256 clears, 257 ends;
+# early (EarlyChange 1, the default) widens a code early
+lzwdecode(data: array of byte, early: int): (array of byte, string)
+{
+	prefix := array[4096] of int;
+	suffix := array[4096] of byte;
+	length := array[4096] of int;
+	for(c := 0; c < 256; c++){
+		prefix[c] = -1;
+		suffix[c] = byte c;
+		length[c] = 1;
+	}
+	out := array[len data * 3 + 16] of byte;
+	n := 0;
+	next := 258;
+	width := 9;
+	prev := -1;
+	bits := 0;
+	nbits := 0;
+	for(i := 0; ; ){
+		while(nbits < width && i < len data){
+			bits = (bits << 8) | int data[i++];
+			nbits += 8;
+		}
+		if(nbits < width)
+			break;
+		code := (bits >> (nbits - width)) & ((1 << width) - 1);
+		nbits -= width;
+		bits &= (1 << nbits) - 1;
+		if(code == 256){
+			next = 258;
+			width = 9;
+			prev = -1;
+			continue;
+		}
+		if(code == 257)
+			break;
+		if(code > next || (code == next && prev < 0))
+			return (out[0:n], nil);	# corrupt: what there is
+		# the string for code (or prev's plus its own first byte)
+		ncode := code;
+		if(code == next)
+			ncode = prev;
+		l := length[ncode];
+		tot := l;
+		if(code == next)
+			tot++;
+		if(n + tot > len out)
+			out = grow(out, n + tot);
+		p := ncode;
+		for(j := l - 1; j >= 0; j--){
+			out[n + j] = suffix[p];
+			p = prefix[p];
+		}
+		if(code == next)
+			out[n + l] = out[n];
+		first := out[n];
+		n += tot;
+		if(prev >= 0 && next < 4096){
+			prefix[next] = prev;
+			suffix[next] = first;
+			length[next] = length[prev] + 1;
+			next++;
+		}
+		prev = code;
+		if(next + early >= (1 << width) && width < 12)
+			width++;
+	}
+	return (out[0:n], nil);
+}
+
 pngunpredict(data: array of byte, columns, colors, bpc: int): (array of byte, string)
 {
 	# Row width in bytes (the actual data, not including the filter byte)
@@ -4800,11 +5330,18 @@ tiffunpredict(data: array of byte, columns, colors, bpc: int): array of byte
 
 inflate(data: array of byte): (array of byte, string)
 {
-	filtermod = load Filter Filter->INFLATEPATH;
+	# loaded and initialised once: init builds the module's Huffman
+	# tables, and a page is drawn and its document's text read by
+	# different procs, each inflating
+	inflatelock <-= 1;
+	if(filtermod == nil){
+		filtermod = load Filter Filter->INFLATEPATH;
+		if(filtermod != nil)
+			filtermod->init();
+	}
+	<-inflatelock;
 	if(filtermod == nil)
 		return (nil, sys->sprint("cannot load inflate: %r"));
-
-	filtermod->init();
 	rqchan := filtermod->start("z");
 
 	rq := <-rqchan;
@@ -4877,59 +5414,42 @@ asciihexdecode(data: array of byte): (array of byte, string)
 
 extracttext(doc: ref PdfDoc): (string, string)
 {
-	root := dictget(doc.trailer.dval, "Root");
-	if(root == nil) return (nil, "no Root in trailer");
-	root = resolve(doc, root);
-	if(root == nil) return (nil, "cannot resolve Root");
-
-	pages := dictget(root.dval, "Pages");
-	if(pages == nil) return (nil, "no Pages in catalog");
-	pages = resolve(doc, pages);
-	if(pages == nil) return (nil, "cannot resolve Pages");
-
-	text := "";
-	pagenum := 0;
-	(text, pagenum) = extractpages(doc, pages, text, pagenum);
-	if(pagenum == 0)
+	pages := pageindex(doc);
+	if(len pages == 0)
 		return (nil, "no pages found");
-	return (text, nil);
-}
-
-extractpages(doc: ref PdfDoc, node: ref PdfObj,
-	text: string, pagenum: int): (string, int)
-{
-	if(node == nil)
-		return (text, pagenum);
-
-	typobj := dictget(node.dval, "Type");
-	typ := "";
-	if(typobj != nil && typobj.kind == Oname)
-		typ = typobj.sval;
-
-	if(typ == "Pages"){
-		kids := dictget(node.dval, "Kids");
-		if(kids != nil && kids.kind == Oarray){
-			for(k := kids.aval; k != nil; k = tl k){
-				child := resolve(doc, hd k);
-				if(child != nil)
-					(text, pagenum) = extractpages(doc, child, text, pagenum);
+	# each page's text as UTF-8, joined once at the end: adding to one
+	# string page by page copies the whole of it each time
+	parts := array[len pages] of array of byte;
+	total := 0;
+	for(i := 0; i < len pages; i++){
+		t := "";
+		if(i > 0)
+			t = "\n\n--- Page " + string (i+1) + " ---\n\n";
+		page := resolve(doc, pages[i]);
+		if(page == nil)
+			continue;
+		contents := dictget(page.dval, "Contents");
+		if(contents != nil){
+			{
+				pt := extractpagetext_cs(doc, contents, buildfontmap(doc, page));
+				if(pt != nil)
+					t += pt;
+			} exception {
+			"*" =>
+				;
 			}
 		}
-	} else if(typ == "Page"){
-		pagenum++;
-		if(len text > 0) text += "\n\n";
-		if(pagenum > 1)
-			text += "--- Page " + string pagenum + " ---\n\n";
-
-		fontmap := buildfontmap(doc, node);
-		contents := dictget(node.dval, "Contents");
-		if(contents != nil){
-			pagetext := extractpagetext_cs(doc, contents, fontmap);
-			if(pagetext != nil)
-				text += pagetext;
-		}
+		parts[i] = array of byte t;
+		total += len parts[i];
 	}
-	return (text, pagenum);
+	b := array[total] of byte;
+	n := 0;
+	for(i = 0; i < len parts; i++){
+		b[n:] = parts[i];
+		n += len parts[i];
+		parts[i] = nil;
+	}
+	return (string b, nil);
 }
 
 # Extract text for a single page (public API)
@@ -5084,7 +5604,7 @@ parsecontentstream_text(data: array of byte, fontmap: list of ref FontMapEntry):
 # points high: the text state (matrices, font, size, spacing) followed
 # as the renderer follows it, each word measured as the renderer
 # measures the text it draws. Newest first.
-contentwords(data: array of byte, fontmap: list of ref FontMapEntry, ph: real): list of (string, Rect)
+contentwords(doc: ref PdfDoc, data: array of byte, fontmap: list of ref FontMapEntry, ph: real): list of (string, Rect)
 {
 	words: list of (string, Rect);
 	ctm := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
@@ -5096,9 +5616,9 @@ contentwords(data: array of byte, fontmap: list of ref FontMapEntry, ph: real): 
 	tc := 0.0;
 	tw := 0.0;
 	th := 1.0;
-	fontname := "";
 	curfont: ref FontMapEntry;
 	operands: list of string;
+	tjpos := -1;
 	pos := 0;
 
 	while(pos < len data){
@@ -5119,9 +5639,8 @@ contentwords(data: array of byte, fontmap: list of ref FontMapEntry, ph: real): 
 			continue;
 		}
 		if(c == '['){
-			(st, np) := readtjarray(data, pos, curfont);
-			operands = ("\0" + st) :: operands;	# decoded already
-			pos = np;
+			tjpos = pos;
+			pos = skiptjarray(data, pos);
 			continue;
 		}
 		if(c == '<'){
@@ -5196,8 +5715,7 @@ contentwords(data: array of byte, fontmap: list of ref FontMapEntry, ph: real): 
 		"Tf" =>
 			if(operands != nil && tl operands != nil){
 				fs = real hd operands;
-				fontname = hd tl operands;
-				curfont = fontmaplookup(fontmap, fontname);
+				curfont = fontmaplookup(fontmap, hd tl operands);
 			}
 		"Tj" or "'" or "\"" or "TJ" =>
 			if(op == "\"" && len nums >= 2){
@@ -5208,14 +5726,20 @@ contentwords(data: array of byte, fontmap: list of ref FontMapEntry, ph: real): 
 				tlm = matmul(array[] of {1.0, 0.0, 0.0, 1.0, 0.0, -lead}, tlm);
 				tm = copym(tlm);
 			}
-			if(operands != nil){
-				st := hd operands;
-				if(len st > 0 && st[0] == 0)
-					st = st[1:];
-				else if(curfont != nil)
-					st = decodecidstr(st, curfont);
+			items: list of (string, real);
+			if(op == "TJ"){
+				if(tjpos >= 0)
+					items = tjitems(data, tjpos);
+				tjpos = -1;
+			} else if(operands != nil)
+				items = (hd operands, 0.0) :: nil;
+			if(items != nil){
+				f := fontof(curfont);
+				if(f == nil)
+					f = deffont(doc);
+				fontload(doc, f);
 				adv: real;
-				(words, adv) = showwords(words, cleanpdftext(st), pickfont(fontname), fs, tc, tw, th, matmul(tm, ctm), ph);
+				(words, adv) = showwords(words, f, items, fs, tc, tw, th, matmul(tm, ctm), ph);
 				tm = matmul(array[] of {1.0, 0.0, 0.0, 1.0, adv, 0.0}, tm);
 			}
 		"BI" =>
@@ -5227,34 +5751,90 @@ contentwords(data: array of byte, fontmap: list of ref FontMapEntry, ph: real): 
 }
 
 # The words of text shown at trm (text space to page, y up), each
-# with its box on the page (y down); and how far the text advances
-showwords(words: list of (string, Rect), text: string, font: ref Font, fs, tc, tw, th: real,
-	trm: array of real, ph: real): (list of (string, Rect), real)
+# with its box on the page (y down), measured by the widths the
+# renderer advances by; and how far the text advances.  The items are
+# a TJ array's strings, each with the adjustment before it.
+showwords(words: list of (string, Rect), f: ref PdfFont, items: list of (string, real),
+	fs, tc, tw, th: real, trm: array of real, ph: real): (list of (string, Rect), real)
 {
-	if(font == nil || font.height <= 0)
-		return (words, 0.0);
-	fh := real font.height;
 	x := 0.0;
 	w := "";
 	x0 := 0.0;
-	for(i := 0; i < len text; i++){
-		ch := text[i:i+1];
-		a := (real font.width(ch) / fh * fs + tc) * th;
-		if(text[i] == ' '){
-			a += tw * th;
-			if(w != "")
-				words = (w, wordbox(trm, x0, x, fs, ph)) :: words;
+	for(; items != nil; items = tl items){
+		(text, kern) := hd items;
+		k := -kern / 1000.0 * fs * th;
+		if(k > 0.2 * fs && w != ""){
+			words = (w, wordbox(trm, x0, x, fs, ph)) :: words;
 			w = "";
-		}else{
-			if(w == "")
-				x0 = x;
-			w += ch;
 		}
-		x += a;
+		x += k;
+		for(i := 0; i < len text; ){
+			(code, step) := nextcode(f, text, i);
+			i += step;
+			cid := code;
+			if(f.cidmap != nil)
+				cid = cmapcid(f.cidmap, code);
+			a := (codewidth(f, cid) * fs + tc) * th;
+			if(step == 1 && code == 32)
+				a += tw * th;
+			u := unicodeof(f, code);
+			if(u <= 32 || u == 16rA0){
+				if(w != "")
+					words = (w, wordbox(trm, x0, x, fs, ph)) :: words;
+				w = "";
+			} else {
+				if(w == "")
+					x0 = x;
+				if(u >= 16rFB00 && u <= 16rFB06)
+					w += ligatures[u - 16rFB00];
+				else
+					w[len w] = u;
+			}
+			x += a;
+		}
 	}
 	if(w != "")
 		words = (w, wordbox(trm, x0, x, fs, ph)) :: words;
 	return (words, x);
+}
+
+ligatures := array[] of {"ff", "fi", "fl", "ffi", "ffl", "ft", "st"};
+
+# A TJ array's strings, each with the number before it (0 if none),
+# and one more for a number at the end.
+tjitems(data: array of byte, pos: int): list of (string, real)
+{
+	r: list of (string, real);
+	kern := 0.0;
+	pos++;
+	while(pos < len data){
+		pos = skipws(data, pos);
+		if(pos >= len data)
+			break;
+		c := int data[pos];
+		if(c == ']')
+			break;
+		if(c == '(' || c == '<'){
+			s: string;
+			if(c == '(')
+				(s, pos) = readlitstr(data, pos);
+			else
+				(s, pos) = readhexstr(data, pos);
+			r = (s, kern) :: r;
+			kern = 0.0;
+		} else if((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.'){
+			v: real;
+			(v, pos) = readreal(data, pos);
+			kern += v;
+		} else
+			pos++;
+	}
+	if(kern != 0.0)
+		r = ("", kern) :: r;
+	o: list of (string, real);
+	for(; r != nil; r = tl r)
+		o = hd r :: o;
+	return o;
 }
 
 # The box, on the page, of text space x0..x1 by the font's height
@@ -5603,57 +6183,12 @@ parsecmaphex(s: string, pos: int): (int, int)
 	return (val, pos);
 }
 
-# Generate CMap entries for MacRoman encoding (bytes 0x80-0xFF → Unicode)
-macromancmap(): list of ref CMapEntry
-{
-	# MacRoman byte → Unicode codepoint for 0x80-0xFF
-	# Entries where MacRoman differs from Latin-1
-	tab := array[] of {
-		(16r80, 16r00C4), (16r81, 16r00C5), (16r82, 16r00C7), (16r83, 16r00C9),
-		(16r84, 16r00D1), (16r85, 16r00D6), (16r86, 16r00DC), (16r87, 16r00E1),
-		(16r88, 16r00E0), (16r89, 16r00E2), (16r8A, 16r00E4), (16r8B, 16r00E3),
-		(16r8C, 16r00E5), (16r8D, 16r00E7), (16r8E, 16r00E9), (16r8F, 16r00E8),
-		(16r90, 16r00EA), (16r91, 16r00EB), (16r92, 16r00ED), (16r93, 16r00EC),
-		(16r94, 16r00EE), (16r95, 16r00EF), (16r96, 16r00F1), (16r97, 16r00F3),
-		(16r98, 16r00F2), (16r99, 16r00F4), (16r9A, 16r00F6), (16r9B, 16r00F5),
-		(16r9C, 16r00FA), (16r9D, 16r00F9), (16r9E, 16r00FB), (16r9F, 16r00FC),
-		(16rA0, 16r2020), (16rA1, 16r00B0), (16rA2, 16r00A2), (16rA3, 16r00A3),
-		(16rA4, 16r00A7), (16rA5, 16r2022), (16rA6, 16r00B6), (16rA7, 16r00DF),
-		(16rA8, 16r00AE), (16rA9, 16r00A9), (16rAA, 16r2122), (16rAB, 16r00B4),
-		(16rAC, 16r00A8), (16rAD, 16r2260), (16rAE, 16r00C6), (16rAF, 16r00D8),
-		(16rB0, 16r221E), (16rB1, 16r00B1), (16rB2, 16r2264), (16rB3, 16r2265),
-		(16rB4, 16r00A5), (16rB5, 16r00B5), (16rB6, 16r2202), (16rB7, 16r2211),
-		(16rB8, 16r220F), (16rB9, 16r03C0), (16rBA, 16r222B), (16rBB, 16r00AA),
-		(16rBC, 16r00BA), (16rBD, 16r03A9), (16rBE, 16r00E6), (16rBF, 16r00F8),
-		(16rC0, 16r00BF), (16rC1, 16r00A1), (16rC2, 16r00AC), (16rC3, 16r221A),
-		(16rC4, 16r0192), (16rC5, 16r2248), (16rC6, 16r2206), (16rC7, 16r00AB),
-		(16rC8, 16r00BB), (16rC9, 16r2026), (16rCA, 16r00A0), (16rCB, 16r00C0),
-		(16rCC, 16r00C3), (16rCD, 16r00D5), (16rCE, 16r0152), (16rCF, 16r0153),
-		(16rD0, 16r2013), (16rD1, 16r2014), (16rD2, 16r201C), (16rD3, 16r201D),
-		(16rD4, 16r2018), (16rD5, 16r2019), (16rD6, 16r00F7), (16rD7, 16r25CA),
-		(16rD8, 16r00FF), (16rD9, 16r0178), (16rDA, 16r2044), (16rDB, 16r20AC),
-		(16rDC, 16r2039), (16rDD, 16r203A), (16rDE, 16rFB01), (16rDF, 16rFB02),
-		(16rE0, 16r2021), (16rE1, 16r00B7), (16rE2, 16r201A), (16rE3, 16r201E),
-		(16rE4, 16r2030), (16rE5, 16r00C2), (16rE6, 16r00CA), (16rE7, 16r00C1),
-		(16rE8, 16r00CB), (16rE9, 16r00C8), (16rEA, 16r00CD), (16rEB, 16r00CE),
-		(16rEC, 16r00CF), (16rED, 16r00CC), (16rEE, 16r00D3), (16rEF, 16r00D4),
-		(16rF0, 16rF8FF), (16rF1, 16r00D2), (16rF2, 16r00DA), (16rF3, 16r00DB),
-		(16rF4, 16r00D9), (16rF5, 16r0131), (16rF6, 16r02C6), (16rF7, 16r02DC),
-		(16rF8, 16r00AF), (16rF9, 16r02D8), (16rFA, 16r02D9), (16rFB, 16r02DA),
-		(16rFC, 16r00B8), (16rFD, 16r02DD), (16rFE, 16r02DB), (16rFF, 16r02C7)
-	};
-	entries: list of ref CMapEntry;
-	for(i := 0; i < len tab; i++)
-		entries = ref CMapEntry(tab[i].t0, tab[i].t0, tab[i].t1) :: entries;
-	return entries;
-}
-
 buildfontmap(doc: ref PdfDoc, page: ref PdfObj): list of ref FontMapEntry
 {
 	return buildfontmapres(doc, getresources(doc, page));
 }
 
-# Build font map from a resources dict (used by both page and form XObjects)
+# The fonts a resource dictionary names, each made once a document
 buildfontmapres(doc: ref PdfDoc, resources: ref PdfObj): list of ref FontMapEntry
 {
 	if(resources == nil) return nil;
@@ -5667,172 +6202,60 @@ buildfontmapres(doc: ref PdfDoc, resources: ref PdfObj): list of ref FontMapEntr
 	fontmap: list of ref FontMapEntry;
 	for(fl := fonts.dval; fl != nil; fl = tl fl){
 		de := hd fl;
-		fontname := de.key;
-		fontobj := resolve(doc, de.val);
-		if(fontobj == nil) continue;
-
-		twobyte := 0;
-		fentries: list of ref CMapEntry;
-		face: ref OutlineFont->Face;
-		dw := 1000;
-		gwidths: array of int;
-
-		enc := dictget(fontobj.dval, "Encoding");
-		if(enc != nil){
-			enc = resolve(doc, enc);
-			if(enc != nil && enc.kind == Oname && enc.sval == "Identity-H")
-				twobyte = 1;
-		}
-
-		tounicode := dictget(fontobj.dval, "ToUnicode");
-		if(tounicode != nil){
-			tounicode = resolve(doc, tounicode);
-			if(tounicode != nil && tounicode.kind == Ostream){
-				(cmapdata, derr) := decompressstream(tounicode);
-				if(cmapdata != nil && derr == nil){
-					cmaptext := "";
-					for(i := 0; i < len cmapdata; i++)
-						cmaptext[len cmaptext] = int cmapdata[i];
-					(tb, ent) := parsecmap(cmaptext);
-					if(tb) twobyte = 1;
-					fentries = ent;
+		f: ref PdfFont;
+		num := -1;
+		if(de.val != nil && de.val.kind == Oref){
+			num = de.val.ival;
+			for(l := doc.fonts; l != nil; l = tl l)
+				if((hd l).t0 == num){
+					f = (hd l).t1;
+					break;
 				}
-			}
 		}
-
-		# MacRomanEncoding fallback: generate CMap entries for fonts
-		# that lack ToUnicode but specify MacRomanEncoding
-		if(fentries == nil && enc != nil && enc.kind == Oname
-		   && enc.sval == "MacRomanEncoding")
-			fentries = macromancmap();
-
-		# Extract embedded font data
-		if(outlinefont != nil)
-			(face, dw, gwidths) = extractembeddedfont(doc, fontobj);
-
-		fontmap = ref FontMapEntry(fontname, twobyte, fentries, face, dw, gwidths) :: fontmap;
+		if(f == nil){
+			fontobj := resolve(doc, de.val);
+			if(fontobj == nil || fontobj.kind != Odict)
+				continue;
+			f = newfont(doc, fontobj);
+			if(num >= 0)
+				doc.fonts = (num, f) :: doc.fonts;
+		}
+		fontmap = ref FontMapEntry(de.key, f) :: fontmap;
 	}
 	return fontmap;
 }
 
-# Extract embedded CFF font from a PDF font object.
-# Walks: Font → DescendantFonts[0] → FontDescriptor → FontFile3
-# Also extracts W (widths) and DW (default width) from CIDFont dict.
-extractembeddedfont(doc: ref PdfDoc, fontobj: ref PdfObj): (ref OutlineFont->Face, int, array of int)
+fontof(e: ref FontMapEntry): ref PdfFont
 {
-	dw := 1000;
-	gwidths: array of int;
-
-	# For Type0 (CID) fonts, go through DescendantFonts
-	cidfont := fontobj;
-	descendants := dictget(fontobj.dval, "DescendantFonts");
-	if(descendants != nil){
-		descendants = resolve(doc, descendants);
-		if(descendants != nil && descendants.kind == Oarray && descendants.aval != nil){
-			cidfont = resolve(doc, hd descendants.aval);
-			if(cidfont == nil)
-				cidfont = fontobj;
-		}
-	}
-
-	# Extract DW (default width)
-	dwobj := dictget(cidfont.dval, "DW");
-	if(dwobj != nil){
-		dwobj = resolve(doc, dwobj);
-		if(dwobj != nil && dwobj.kind == Oint)
-			dw = dwobj.ival;
-	}
-
-	# Extract W (widths array) — CIDFont format
-	wobj := dictget(cidfont.dval, "W");
-	if(wobj != nil){
-		wobj = resolve(doc, wobj);
-		if(wobj != nil && wobj.kind == Oarray)
-			gwidths = parsepdfwidths(wobj.aval, dw);
-	}
-
-	# Extract /Widths + /FirstChar — simple font format (TrueType, Type1)
-	if(gwidths == nil){
-		warr := dictget(fontobj.dval, "Widths");
-		if(warr != nil){
-			warr = resolve(doc, warr);
-			firstchar := dictgetintres(doc, fontobj.dval, "FirstChar");
-			if(warr != nil && warr.kind == Oarray){
-				nw := lenlistobj(warr.aval);
-				maxchar := firstchar + nw;
-				if(maxchar > 0){
-					gwidths = array[maxchar] of { * => -1 };
-					ci := firstchar;
-					for(wl := warr.aval; wl != nil; wl = tl wl){
-						wo := resolve(doc, hd wl);
-						if(wo != nil && ci < maxchar){
-							if(wo.kind == Oint)
-								gwidths[ci] = wo.ival;
-							else if(wo.kind == Oreal)
-								gwidths[ci] = int wo.rval;
-						}
-						ci++;
-					}
-				}
-			}
-		}
-	}
-
-	# Get FontDescriptor
-	fdesc := dictget(cidfont.dval, "FontDescriptor");
-	if(fdesc == nil)
-		fdesc = dictget(fontobj.dval, "FontDescriptor");
-	if(fdesc == nil)
-		return (nil, dw, gwidths);
-	fdesc = resolve(doc, fdesc);
-	if(fdesc == nil)
-		return (nil, dw, gwidths);
-
-	# Try FontFile3 (CFF), then FontFile2 (TrueType)
-	ff := dictget(fdesc.dval, "FontFile3");
-	fftype := "cff";
-	if(ff == nil){
-		ff = dictget(fdesc.dval, "FontFile2");
-		fftype = "ttf";
-	}
-	if(ff == nil)
-		return (nil, dw, gwidths);
-	ff = resolve(doc, ff);
-	if(ff == nil || ff.kind != Ostream)
-		return (nil, dw, gwidths);
-
-	# Decompress and parse
-	(fontdata, ferr) := decompressstream(ff);
-	if(fontdata == nil || ferr != nil)
-		return (nil, dw, gwidths);
-
-	(f, oerr) := outlinefont->open(fontdata, fftype);
-	if(f == nil){
-		if(oerr != nil)
-			;	# suppress unused warning
-		return (nil, dw, gwidths);
-	}
-
-	return (f, dw, gwidths);
+	if(e == nil)
+		return nil;
+	return e.f;
 }
 
 # Parse the PDF W (widths) array into a per-GID width array.
 # W array format: [cid_start [w1 w2 ...]] or [cid_start cid_end w]
 parsepdfwidths(wlist: list of ref PdfObj, dw: int): array of int
 {
-	# First pass: find max GID
+	# the largest CID named: c [w ...] or c1 c2 w
 	maxgid := 0;
-	wl := wlist;
-	for(; wl != nil; wl = tl wl){
+	for(wl := wlist; wl != nil; wl = tl wl){
 		o := hd wl;
-		if(o.kind == Oint && o.ival > maxgid)
-			maxgid = o.ival;
-		if(o.kind == Oarray){
-			for(al := o.aval; al != nil; al = tl al)
-				;
+		if(o.kind != Oint || tl wl == nil)
+			continue;
+		n := hd tl wl;
+		last := o.ival;
+		if(n.kind == Oarray)
+			last += lenlistobj(n.aval);
+		else if(n.kind == Oint){
+			last = n.ival;
+			if(tl tl wl != nil)
+				wl = tl wl;
 		}
+		if(last > maxgid)
+			maxgid = last;
+		wl = tl wl;
 	}
-	maxgid += 256;	# conservative padding
+	maxgid++;
 	if(maxgid > 65536)
 		maxgid = 65536;
 
@@ -5897,32 +6320,22 @@ cmaplookup(entries: list of ref CMapEntry, cid: int): int
 	return cid;
 }
 
-decodecidstr(s: string, fm: ref FontMapEntry): string
+decodecidstr(s: string, e: ref FontMapEntry): string
 {
-	if(fm == nil || fm.entries == nil)
+	if(e == nil || e.f == nil)
 		return s;
-	if(fm.twobyte){
-		out := "";
-		slen := len s;
-		i := 0;
-		while(i + 1 < slen){
-			cid := (s[i] << 8) | (s[i+1] & 16rFF);
-			i += 2;
-			if(cid == 0) continue;
-			uni := cmaplookup(fm.entries, cid);
-			if(uni > 0) out[len out] = uni;
-		}
-		return out;
-	}
-	# Single-byte font with ToUnicode CMap
+	fm := e.f;
+	if(fm.entries == nil && fm.code2uni == nil)
+		return s;
 	out := "";
-	for(i := 0; i < len s; i++){
-		code := s[i] & 16rFF;
-		uni := cmaplookup(fm.entries, code);
+	for(i := 0; i < len s; ){
+		(code, n) := nextcode(fm, s, i);
+		i += n;
+		if(n > 1 && code == 0)
+			continue;
+		uni := unicodeof(fm, code);
 		if(uni > 0)
 			out[len out] = uni;
-		else
-			out[len out] = code;
 	}
 	return out;
 }
@@ -6217,7 +6630,7 @@ resolvenocrypt(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 	if(objnum < 0 || objnum >= doc.nobjs) return nil;
 
 	entry := doc.xref[objnum];
-	if(entry == nil || entry.inuse == 0) return nil;
+	if(entry.inuse <= 0) return nil;
 
 	# Handle objects stored in ObjStm (compressed object streams)
 	if(entry.inuse == 2)
@@ -6247,7 +6660,7 @@ resolveobjstmnocrypt(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 {
 	if(stmnum < 0 || stmnum >= doc.nobjs) return nil;
 	stmentry := doc.xref[stmnum];
-	if(stmentry == nil || stmentry.inuse != 1) return nil;
+	if(stmentry.inuse != 1) return nil;
 
 	offset := stmentry.offset;
 	if(offset >= len doc.data) return nil;

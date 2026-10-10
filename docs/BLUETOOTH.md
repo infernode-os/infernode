@@ -429,7 +429,10 @@ uploaded the 323 records of `BCM4345C0.hcd`; the controller came back
 as `BCM43455 37.4MHz Raspberry Pi 3+-0190`, HCI 5.0, Cypress. Its
 address after the patch is the patch's default `43:45:c0:00:1f:ac`;
 a `bdaddr` verb (Broadcom `Write_BD_ADDR`) for the board's own is
-still to write. `baud` above 115200 has not been tried on silicon.
+still to write. `baud 3000000` was first tried on silicon 2026-10-10:
+it works, and needed the PL011 to hold input in its FIFO when the
+kernel's stage is full (the stage dropped most of a 3 Mbaud stream);
+L2CAP then runs at 1.1 Mbit/s against 94 kbit/s at 115200.
 Also found on the way: the firmware's mailbox reply word trails its
 mailbox reply, so `#G/gpio/128/level` reported *refused* for writes
 that took effect; `mboxcall` now waits for it.

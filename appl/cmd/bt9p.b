@@ -262,6 +262,7 @@ factdir := "/mnt/factotum";
 firmware := "";			# a .hcd to upload on up
 uploaded := 0;			# records sent by the last up, or -1 if the upload failed
 baud := 0;			# what the transport was last told, 0 if never
+Rombaud: con 115200;		# a Broadcom controller's rate out of reset, and its patch's
 
 # a parked read on a streaming file, and what it will get
 Sub: adt {
@@ -1616,10 +1617,23 @@ bringup(r: ref Ctlres): string
 			r.uploaded = -1;
 			return err;
 		}
-		# the controller has rebooted into the patch: start again
+		# the controller has rebooted into the patch, and a reboot
+		# puts its UART back at the ROM's 115200: a second "up"
+		# after "baud" would otherwise talk on at the old rate to a
+		# controller that no longer hears it
+		if(baud > Rombaud){
+			err = transportbaud(Rombaud);
+			if(err != nil)
+				return err;
+		}
 		(nil, err) = must("reset after patch", Bthci->Reset, nil);
 		if(err != nil)
 			return "no controller after the patch: " + err;
+		if(baud > Rombaud){
+			err = setbaud(r, baud);
+			if(err != nil)
+				return err;
+		}
 		(ret, err) = must("read local version", Bthci->ReadLocalVersion, nil);
 		if(err != nil)
 			return err;
@@ -1741,12 +1755,21 @@ setbaud(r: ref Ctlres, n: int): string
 	(nil, err) := must("update baud rate", Bthci->BcmUpdateBaudrate, p);
 	if(err != nil)
 		return err;
+	err = transportbaud(n);
+	if(err != nil)
+		return err;
+	r.baud = n;
+	return nil;
+}
+
+# the host's side of a rate change: the serial port's own
+transportbaud(n: int): string
+{
 	fd := sys->open(transportname + "ctl", Sys->OWRITE);
 	if(fd == nil)
 		return sys->sprint("%sctl: %r", transportname);
 	if(sys->fprint(fd, "b%d", n) < 0)
 		return sys->sprint("%sctl: b%d: %r", transportname, n);
-	r.baud = n;
 	return nil;
 }
 

@@ -674,7 +674,12 @@ once (`-J 0`) passes exactly what the interpreter passes.
 | `%` and `===` (300,000) | 109 ms | 9 ms |
 
 Calls still go through the interpreter, so code made of calls gains
-little; that, and strings, are next.
+little; that, and strings, are next.  Making a call from compiled code
+through the engine's callv, which runs the callee in a loop of its own,
+was tried and is slower than leaving the call to the interpreter, whose
+calls push a frame (a million calls in a loop: 305 ms interpreted with
+the loop compiled around them, 467 ms called from compiled code): calls
+from compiled code have to push frames as the interpreter does.
 
 Profiles of real pages (prof(1) around `jspage -k`) moved work into the
 interpreter too: a shape's many transitions are hashed (objects used as

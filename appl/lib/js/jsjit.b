@@ -56,7 +56,7 @@ jitinit(): int
 	if(ok < 0)
 		return 0;
 	jitdir = sys->sprint("/tmp/.jsjit.%d", sys->pctl(0, nil));
-	jitst = ref Jitst(vs, 0, nil);
+	jitst = ref Jitst(vs, 0, nil, nil, nil, nil, nil, nil);
 	jitok = 1;
 	return 1;
 }
@@ -79,6 +79,11 @@ jitrun(c: ref Code, pc: int, base: int): int
 	st.vs = vs;
 	st.base = base;
 	st.consts = c.consts;
+	st.oshape = oshape;
+	st.oslots = oslots;
+	st.ics = c.ics;
+	st.icslot = c.icslot;
+	st.icgen = c.icgen;
 	return c.jit->run(st, pc);
 }
 
@@ -96,7 +101,23 @@ Fc: con 120;
 Ff1: con 128;	# reals
 Ff2: con 136;
 Ft: con 144;	# a word
-Fregs: con 152;	# then each register's address, computed on entry
+# st's arrays for the inline caches, as words: no reference is counted,
+# and none need be, as st holds them and nothing is freed while
+# compiled code runs
+Fos: con 152;	# oshape
+Foslots: con 160;
+Fics: con 168;
+Ficslot: con 176;
+Ficgen: con 184;
+Fp1: con 192;	# addresses, and pointers as words
+Fp2: con 200;
+Fsh: con 208;
+Fsh2: con 216;
+Ft2: con 224;
+Ft3: con 232;
+Frow: con 240;
+Fregs: con 248;	# then each register's address, computed on entry
+Shgen: con 48;	# Shape.gen
 Fret: con 32;	# where run's result goes (through)
 Vsize: con 24;	# a V: t at 0, x at 8, n at 16
 
@@ -149,8 +170,10 @@ opregs(ops: array of int, pc: int): list of int
 	case ops[pc] {
 	Oundef or Onull or Otrue or Ofalse or Oempty or Oint or Oconst or Ojt or Ojf or Ochktdz =>
 		return ops[pc+1] :: nil;
-	Omove or Oinc or Odec or Otonumeric or Onot or Oneg =>
+	Omove or Oinc or Odec or Otonumeric or Onot or Oneg or Ogetprop =>
 		return ops[pc+1] :: ops[pc+2] :: nil;
+	Osetprop =>
+		return ops[pc+1] :: ops[pc+3] :: nil;
 	Oadd or Osub or Omul or Odiv or Olt or Ole or Ogt or Oge =>
 		return ops[pc+1] :: ops[pc+2] :: ops[pc+3] :: nil;
 	}
@@ -196,6 +219,29 @@ gret(g: ref Gen, pc: int)
 	gemit(g, Dis->IRET, XXX, 0, MNONE, 0, XXX, 0);
 }
 
+# Fp2 = the address of the slot inline cache ic says the property of the
+# object (its value at slot a) is in, or leave to the interpreter at pc
+gicslot(g: ref Gen, a, ic, pc: int)
+{
+	gemit(g, Dis->IMOVW, IND, ind(a, 8), MNONE, 0, FP, Ft);	# the object
+	gemit(g, Dis->IINDX, FP, Fos, MFP, Fp1, FP, Ft);
+	gemit(g, Dis->IMOVW, IND, ind(Fp1, 0), MNONE, 0, FP, Fsh);	# its shape
+	gemit(g, Dis->IMOVW, IMM, ic, MNONE, 0, FP, Ft2);
+	gemit(g, Dis->IINDX, FP, Fics, MFP, Fp2, FP, Ft2);
+	gemit(g, Dis->IMOVW, IND, ind(Fp2, 0), MNONE, 0, FP, Fsh2);	# the one cached
+	i := gemit(g, Dis->IBNEW, FP, Fsh, MFP, Fsh2, IMM, 0);
+	g.exits = (i, pc) :: g.exits;
+	gemit(g, Dis->IINDX, FP, Ficgen, MFP, Fp2, FP, Ft2);
+	gemit(g, Dis->IMOVW, IND, ind(Fp2, 0), MNONE, 0, FP, Ft3);	# its gen then
+	i = gemit(g, Dis->IBNEW, IND, ind(Fsh, Shgen), MFP, Ft3, IMM, 0);
+	g.exits = (i, pc) :: g.exits;
+	gemit(g, Dis->IINDX, FP, Ficslot, MFP, Fp2, FP, Ft2);
+	gemit(g, Dis->IMOVW, IND, ind(Fp2, 0), MNONE, 0, FP, Ft3);	# the slot
+	gemit(g, Dis->IINDX, FP, Foslots, MFP, Fp1, FP, Ft);
+	gemit(g, Dis->IMOVW, IND, ind(Fp1, 0), MNONE, 0, FP, Frow);	# the object's slots
+	gemit(g, Dis->IINDX, FP, Frow, MFP, Fp2, FP, Ft3);
+}
+
 Immmax: con 1 << 29;
 
 # whether the operation at pc is one compiled code has
@@ -204,7 +250,8 @@ jitable(ops: array of int, pc: int): int
 	case ops[pc] {
 	Oundef or Onull or Otrue or Ofalse or Oempty or Oconst or Omove or
 	Oadd or Osub or Omul or Odiv or Olt or Ole or Ogt or Oge or
-	Oinc or Odec or Ojmp or Ojt or Ojf or Otonumeric or Ochktdz or Onot or Oneg =>
+	Oinc or Odec or Ojmp or Ojt or Ojf or Otonumeric or Ochktdz or Onot or Oneg or
+	Ogetprop or Osetprop =>
 		return 1;
 	Oint =>
 		n := ops[pc+2];
@@ -248,6 +295,8 @@ jitcompile(c: ref Code): int
 	gemit(g, Dis->IMOVP, IND, ind(Fst, 0), MNONE, 0, FP, Fvs);
 	gemit(g, Dis->IMOVW, IND, ind(Fst, 8), MNONE, 0, FP, Fbase);
 	gemit(g, Dis->IMOVP, IND, ind(Fst, 16), MNONE, 0, FP, Fk);
+	for(f := 0; f < 5; f++)
+		gemit(g, Dis->IMOVW, IND, ind(Fst, 24 + 8 * f), MNONE, 0, FP, Fos + 8 * f);
 	for(r := 0; r < maxr; r++)
 		if(rslot[r] != 0)
 			greg(g, r, rslot[r]);
@@ -369,6 +418,22 @@ jitcompile(c: ref Code): int
 			gemit(g, Dis->IADDF, FP, Ff2, MFP, Ff1, FP, Ff1);
 			d := greg(g, ops[pc+1], Fc);
 			gsetnum(g, d, Ff1);
+		Ogetprop or Osetprop =>
+			# an inline cache's hit: the object's shape is the one
+			# cached, at the same gen; the property is in that slot
+			oreg := ops[pc+2];
+			if(op == Osetprop)
+				oreg = ops[pc+1];
+			a := greg(g, oreg, Fa);
+			gneedtag(g, a, Tobj, pc);
+			gicslot(g, a, ops[pc+4], pc);
+			if(op == Ogetprop) {
+				d := greg(g, ops[pc+1], Fc);
+				gemit(g, Dis->IMOVM, IND, ind(Fp2, 0), MIMM, Vsize, IND, ind(d, 0));
+			} else {
+				v := greg(g, ops[pc+3], Fc);
+				gemit(g, Dis->IMOVM, IND, ind(v, 0), MIMM, Vsize, IND, ind(Fp2, 0));
+			}
 		Ojmp =>
 			gjmp(g, Dis->IJMP, XXX, 0, MNONE, 0, ops[pc+1]);
 			continue;

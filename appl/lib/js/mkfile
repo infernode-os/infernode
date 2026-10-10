@@ -31,3 +31,4 @@ jsre.dis:	jsrx.b
 
 # js.dis is one module from several fragments
 js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsarray.b jsstring.b jscoll.b jsregexp.b jsdate.b jsproxy.b jsbigint.b jstyped.b jsiter.b jsdispose.b jsmod.b jsdom.b jsjit.b jsjit.m
+jsjitt.dis:	jsjit.m

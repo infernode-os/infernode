@@ -119,6 +119,10 @@ testJit(t: ref T)
 		"let s = ''; for (let i = 0; i < 5; i++) s = s + i; s",
 		"let o = 0; for (let i = 0; i < 6; i = i + 1.5) o = o - i; o",
 		"let n = 0, u; for (let i = 0; i < 3; i++) { u = i > 1 ? undefined : i; n = n + (u === undefined); } n",
+		"const p = {x: 1, y: 2}; let s = 0; for (let i = 0; i < 50; i++) { p.x = p.x + p.y; s = s + p.x; } s",
+		"const a = [{v: 1}, {w: 2, v: 3}]; let s = 0; for (let i = 0; i < 40; i++) { const o = a[i & 1]; s = s + o.v; } s",
+		"const q = {g: 1}; let s = 0; for (let i = 0; i < 30; i++) { if (i == 10) delete q.g; if (i == 20) q.g = 5; s = s + (q.g || 0); } s",
+		"let s = 0; for (let i = 0; i < 30; i++) { const o = i < 15 ? {k: i} : {get k() { return 2; }}; s = s + o.k; } s",
 	};
 	for(i := 0; i < len src; i++) {
 		js := realm(t);

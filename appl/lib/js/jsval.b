@@ -575,15 +575,7 @@ Data: adt {
 # property, or grows large, gets a shape of its own that it changes in
 # place (a dictionary).
 
-Shape: adt {
-	keys:	array of int;
-	attrs:	array of int;
-	n:	int;
-	index:	array of list of (int, int);	# key to slot, when n is large
-	trans:	list of (int, int, ref Shape);	# (key, attributes, shape)
-	owned:	int;
-	gen:	int;	# an owned shape's changes: an inline cache of one holds its gen too
-};
+# Shape is in jsjit.m, shared with compiled code
 
 rootshape: ref Shape;
 

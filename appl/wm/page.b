@@ -531,7 +531,7 @@ viewcmd(cmd, arg: string)
 
 menu(t: list of string)
 {
-	tkcmd("destroy .m");
+	tk->cmd(top, "destroy .m");	# the last one, if any
 	tkcmd("menu .m");
 	item(".m", "next page", "next");
 	item(".m", "previous page", "prev");

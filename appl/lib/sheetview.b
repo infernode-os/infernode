@@ -303,12 +303,17 @@ View.layout(v: self ref View)
 {
 	if(v.h < 0)
 		return;
-	# the place kept, as a fraction of the column; the first layout
-	# keeps org as it was set (a document opened again where it was)
-	had := v.colh > 0;
-	frac := 0;
-	if(had)
-		frac = v.org.y * 1000 / v.colh;
+	# the place kept: the sheet at the top of the view and how far
+	# into it, at scale 100 (a fraction of the column drifted with
+	# rounding); the first layout keeps org as it was set (a document
+	# opened again where it was)
+	had := v.colh > 0 && len v.tops > 0;
+	at, into, oldscale: int;
+	if(had){
+		at = v.sheetat(v.org.y);
+		into = (v.org.y - v.tops[at]) * 100;
+		oldscale = v.scale;
+	}
 	if(v.flowing()){
 		if(v.vw != v.r.dx() || restyled(v)){
 			v.styled = v.style;
@@ -326,8 +331,8 @@ View.layout(v: self ref View)
 	v.vw = v.r.dx();
 	v.vh = v.r.dy();
 	stack(v);
-	if(had && v.colh > 0)
-		v.org.y = frac * v.colh / 1000;
+	if(had && at < len v.tops && oldscale > 0)
+		v.org.y = v.tops[at] + into / oldscale * v.scale / 100;
 }
 
 restyled(v: ref View): int

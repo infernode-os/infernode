@@ -65,6 +65,9 @@ skipped := array[] of {
 	"iterator-includes",
 	"Iterator.prototype.join",
 	"import-bytes",
+	"await-dictionary",
+	"error-stack-accessor",
+	"immutable-arraybuffer",
 };
 
 init(nil: ref Draw->Context, args: list of string)

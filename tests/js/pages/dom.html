@@ -180,6 +180,15 @@ test('style sheets', () => {
 	check('a new style', s2.textContent, '#box { padding: 1px }');
 	s2.remove();
 });
+test('custom property', () => {
+	const d = document.createElement('div');
+	d.style.setProperty('--gap', '12px');
+	document.body.appendChild(d);
+	check('computed --gap', getComputedStyle(d).getPropertyValue('--gap').trim(), '12px');
+	d.style.color = 'blue';
+	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
+	d.remove();
+});
 test('geometry', () => {
 	const m = new DOMMatrix('matrix(1, 0, 0, 1, 10, 20)');
 	check('matrix e f', [m.e, m.f], [10, 20]);

@@ -18,6 +18,7 @@ include "web/html.m";
 	html: Html;
 include "web/style.m";
 	style: Style;
+	Vars: import style;
 include "outlinefont.m";
 include "web/fonts.m";
 include "web/layout.m";
@@ -2101,13 +2102,76 @@ hcomputed(id, n: int, prop: string): string
 	c := r.pg.computed;
 	if(c == nil || n <= 0 || n >= len c.st || c.st[n] == nil)
 		return "";
+	if(prefix(prop, "--"))
+		return css->tostring(c.st[n].vars.get(prop));
 	(nil, lines) := sys->tokenize(style->dump(c.st[n]), "\n");
 	for(; lines != nil; lines = tl lines) {
 		ln := hd lines;
 		if(prefix(ln, prop + " "))
-			return ln[len prop + 1:];
+			return cssrgb(ln[len prop + 1:]);
 	}
 	return "";
+}
+
+# The dump writes colours #rrggbbaa; a computed value serializes them
+# rgb(r, g, b), or rgba() when not opaque (CSSOM §6.7.2).
+cssrgb(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; ) {
+		if(s[i] == '#' && i+9 <= len s && (i+9 == len s || s[i+9] == ' ') && ishex(s[i+1:i+9])) {
+			v := array[4] of int;
+			for(k := 0; k < 4; k++)
+				v[k] = hexval(s[i+1+2*k:i+3+2*k]);
+			if(v[3] == 255)
+				r += sys->sprint("rgb(%d, %d, %d)", v[0], v[1], v[2]);
+			else
+				r += sys->sprint("rgba(%d, %d, %d, %s)", v[0], v[1], v[2], alphastr(v[3]));
+			i += 9;
+		} else
+			r[len r] = s[i++];
+	}
+	return r;
+}
+
+ishex(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(!(s[i] >= '0' && s[i] <= '9' || s[i] >= 'a' && s[i] <= 'f' || s[i] >= 'A' && s[i] <= 'F'))
+			return 0;
+	return 1;
+}
+
+hexval(s: string): int
+{
+	v := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c >= 'a')
+			c -= 'a' - 10;
+		else if(c >= 'A')
+			c -= 'A' - 10;
+		else
+			c -= '0';
+		v = v*16 + c;
+	}
+	return v;
+}
+
+# the shortest decimal that rounds back to this alpha byte
+alphastr(a: int): string
+{
+	if(a == 0)
+		return "0";
+	for(p := 1; p <= 3; p++) {
+		t := sys->sprint("%.*f", p, real a / 255.0);
+		if(int (real t * 255.0 + 0.5) == a) {
+			while(t[len t - 1] == '0')
+				t = t[0:len t - 1];
+			return t;
+		}
+	}
+	return sys->sprint("%.3f", real a / 255.0);
 }
 
 hmedia(id: int, query: string): int

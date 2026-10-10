@@ -422,6 +422,7 @@ domnatives(): int
 	method(o, "match", 3, dn_match);
 	method(o, "attachshadow", 2, dn_attachshadow);
 	method(o, "adopt", 2, dn_adopt);
+	method(o, "shadowroots", 0, dn_shadowroots);
 	method(o, "select", 3, dn_select);
 	method(o, "parse", 2, dn_parse);
 	method(o, "markup", 2, dn_markup);
@@ -706,6 +707,26 @@ dn_attachshadow(nil: V, a, n: int, nil: V, nil: int): V
 		typeerr("not a host and a shadow root");
 	pgd.attachshadow(host, root);
 	return undef;
+}
+
+# the document's shadow roots as the page came (declarative ones):
+# [host, root, mode, ...]
+dn_shadowroots(nil: V, nil, nil: int, nil: V, nil: int): V
+{
+	r: list of V;
+	k := 0;
+	for(l := pgd.shadows; l != nil; l = tl l) {
+		(h, s) := hd l;
+		r = strv(tojs(pgd.attr(s, "mode"))) :: inum(s) :: inum(h) :: r;
+		k += 3;
+	}
+	v := array[k] of V;
+	for(i := 0; r != nil; r = tl r)
+		v[i++] = hd r;
+	# (r was built backwards in threes: put each three in order)
+	for(i = 0; i + 2 < k; i += 3)
+		(v[i], v[i+2]) = (v[i+2], v[i]);
+	return objv(arrayof(v));
 }
 
 # the text of the style sheets root (a shadow root, or the document) has adopted

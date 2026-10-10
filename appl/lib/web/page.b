@@ -167,6 +167,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	}
 	if((t := d.find(1, Dom->Ttitle)) != 0)
 		p.title = squash(d.textof(t));
+	declarative(d);
 	loadsheets(p);
 	loadfonts(p);
 	findobjects(p);
@@ -600,6 +601,43 @@ Pg.pageheight(p: self ref Pg): int
 }
 
 # <style> and <link rel=stylesheet>, in document order, then @imports.
+# declarative shadow roots (HTML §4.12.3.1): a <template shadowrootmode>
+# makes its parent a shadow host, its content the root (the mode kept as
+# the root's attribute, for the page's script), and is gone
+declarative(d: ref Dom->Doc)
+{
+	tpls: list of int;
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind == Dom->Element && nd.tag == Dom->Ttemplate && nd.ns == Dom->HTML && d.hasattr(n, "shadowrootmode"))
+			tpls = n :: tpls;
+	}
+	# inner ones first: a template's content may hold another host's
+	for(; tpls != nil; tpls = tl tpls) {
+		t := hd tpls;
+		mode := lower(d.attr(t, "shadowrootmode"));
+		host := d.nodes[t].parent;
+		if(mode != "open" && mode != "closed" || host == 0 || d.nodes[host].kind != Dom->Element || hosts(d, host))
+			continue;
+		root := d.create(Dom->Document, "#document-fragment", Dom->HTML);
+		d.setattr(root, "mode", mode);
+		while((c := d.nodes[t].first) != 0) {
+			d.remove(c);
+			d.append(root, c);
+		}
+		d.remove(t);
+		d.attachshadow(host, root);
+	}
+}
+
+hosts(d: ref Dom->Doc, n: int): int
+{
+	for(l := d.shadows; l != nil; l = tl l)
+		if((hd l).t0 == n)
+			return 1;
+	return 0;
+}
+
 loadsheets(p: ref Pg)
 {
 	a := sheetsof(p);

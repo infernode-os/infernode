@@ -4,6 +4,7 @@
 <style>.hid { display: none } #box { width: 200px; height: 50px; }</style>
 </head>
 <body class="a b" data-foo-bar="baz">
+<dsd-card id=dsdc><template shadowrootmode="open"><style>:host{display:block} b{color:rgb(0,128,0)}</style><b>S</b><slot></slot></template>L</dsd-card>
 <div id="main"><p class="x">one</p><p class="x y">two</p><span>three</span><!-- c --></div>
 <form id="f" action="/search"><input name="q" value="hi"><input type="checkbox" name="c" checked><select name="s"><option>a</option><option value="B" selected>b</option></select><textarea name="t">text</textarea><button id="btn">go</button></form>
 <a id="link" href="page.html?x=1#frag">link</a>
@@ -269,6 +270,13 @@ test('adoptedStyleSheets', () => {
 	check('and taken away', getComputedStyle(e).color, 'rgb(0, 0, 0)');
 	h.remove();
 	e.remove();
+});
+test('declarative shadow root', () => {
+	const c = document.getElementById('dsdc');
+	check('its shadow root', c.shadowRoot !== null && c.shadowRoot.mode, 'open');
+	check('its rules', getComputedStyle(c.shadowRoot.querySelector('b')).color, 'rgb(0, 128, 0)');
+	check('its :host', getComputedStyle(c).display, 'block');
+	check('the template gone', c.innerHTML, 'L');
 });
 test('clock', () => {
 	check('this year', new Date().getFullYear() >= 2026, true);

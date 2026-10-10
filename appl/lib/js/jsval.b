@@ -772,8 +772,8 @@ getownprop(h, k: int): (int, V, int)
 		}
 		if((oflags[h] & Oidxprops) == 0)
 			return (0, undef, 0);
-	} else if(okind[h] == Ktyped && atomidx[k] >= 0.0)
-		return (0, undef, 0);
+	} else if(okind[h] == Ktyped && istakey(k))
+		return typedgetownk(h, k);
 	sh := oshape[h];
 	slot := slotof(sh, k);
 	if(slot < 0) {

@@ -150,6 +150,7 @@ realminit()
 	dateinit();
 	proxyinit();
 	bigintinit();
+	typedinit();
 	reflectinit();
 	generatorinit();
 }

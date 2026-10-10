@@ -58,6 +58,7 @@ include "jsregexp.b";
 include "jsdate.b";
 include "jsproxy.b";
 include "jsbigint.b";
+include "jstyped.b";
 
 output: ref fn(s: string);
 

@@ -1455,14 +1455,6 @@ oplen(op: int): int
 
 # ---- stubs for what comes later: proxies, typed arrays, BigInt, modules, regexps ----
 
-typedgetown(nil, nil: int): (int, V, int) { return (0, undef, 0); }
-typedlen(nil: int): int { return 0; }
-typedvariable(nil: int): int { return 0; }
-typeddefine(nil, nil: int, nil: ref Desc): int { return 0; }
-typedhas(nil, nil: int): int { return 0; }
-typedget(nil, nil: int): V { return undef; }
-typedset(nil, nil: int, nil: V) { }
-
 modnsgetown(nil, nil: int): (int, ref Desc) { return (0, nil); }
 modnsdefine(nil, nil: int, nil: ref Desc): int { return 0; }
 modnsdelete(nil, nil: int): int { return 0; }

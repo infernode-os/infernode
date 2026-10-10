@@ -231,7 +231,7 @@ defineown(h, k: int, d: ref Desc): int
 			}
 		}
 	Ktyped =>
-		if(isidx(k) || atomidx[k] >= 0.0)
+		if(istakey(k))
 			return typeddefine(h, k, d);
 	Kmodns =>
 		return modnsdefine(h, k, d);
@@ -450,7 +450,7 @@ hasprop(h, k: int): int
 		Kproxy =>
 			return proxyhas(h, k);
 		Ktyped =>
-			if(isidx(k) || atomidx[k] >= 0.0)
+			if(istakey(k))
 				return typedhas(h, k);
 		}
 		(found, nil) := getown(h, k);
@@ -489,7 +489,7 @@ get(h, k: int, recv: V): V
 		Kproxy =>
 			return proxyget(h, k, recv);
 		Ktyped =>
-			if(isidx(k) || atomidx[k] >= 0.0)
+			if(istakey(k))
 				return typedget(h, k);
 		}
 		(found, d) := getown(h, k);
@@ -545,7 +545,7 @@ set(h, k: int, v: V, recv: V): int
 	Kproxy =>
 		return proxyset(h, k, v, recv);
 	Ktyped =>
-		if(isidx(k) || atomidx[k] >= 0.0) {
+		if(istakey(k)) {
 			if(recv.t == Tobj && recv.x == h) {
 				typedset(h, k, v);
 				return 1;
@@ -642,7 +642,7 @@ delete(h, k: int): int
 	Kargs =>
 		return argsdelete(h, k);
 	Ktyped =>
-		if(isidx(k) || atomidx[k] >= 0.0)
+		if(istakey(k))
 			return !typedhas(h, k);
 	Kmodns =>
 		return modnsdelete(h, k);

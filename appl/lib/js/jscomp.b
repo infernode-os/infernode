@@ -4518,6 +4518,7 @@ classexpr(c: ref Node.Class, r: int)
 		cname = idname(c.id);
 	if(ctor != nil) {
 		fidx = addfuncflags(ctor, Cctor | Cderived * derived | Cclassfields);
+		(hd cs.funcs).name = cname;	# the class's name, not "constructor"
 	} else {
 		fidx = defaultctor(derived, c);
 	}
@@ -4587,8 +4588,6 @@ classexpr(c: ref Node.Class, r: int)
 	}
 	leavescope(s);
 	freeto(t0);
-	if(cname == nil)
-		;
 }
 
 # compile the field initialisers (static: and static blocks) as one method,

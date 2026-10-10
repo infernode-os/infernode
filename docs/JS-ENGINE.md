@@ -666,7 +666,8 @@ compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
   of BBC's front page from a loopback HTTP server, its subresources over
   TLS from the real hosts: a freed string read in `indc`, faults in
   `markheap`, `destroy`, `movp` and `irecv`, or the VM token held for
-  good; three runs in four, within seconds.  The interpreter (`-c0`)
+  good; three runs in four, within seconds, with the page's scripts off
+  as well as on, so not the engine's doing.  The interpreter (`-c0`)
   ran it seven times cleanly, and the same page loaded from bbc.com did
   not fail.  Running the engine, Charon's modules, webfs and all of
   `/dis/lib` interpreted under `-c1` did not reliably stop it, so which

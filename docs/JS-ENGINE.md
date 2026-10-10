@@ -692,6 +692,24 @@ once (`-J 0`) passes exactly what the interpreter passes.
 | closure variable (1,000,000) | 144 ms | 15 ms |
 | `%` and `===` (300,000) | 109 ms | 9 ms |
 
+**Verifier and fuzzing.**  Each module made is checked before it is
+loaded: a forward data flow over its instructions keeps what each frame
+slot holds, and every instruction must be one the generator makes with
+operands of the kinds it takes (addresses only of an engine array's
+element, made by INDX, which Dis bounds-checks, or of the frame's
+registers below their count; st's fields as their types; jumps within
+the code).  A module refused is not loaded.  A test spoils modules four
+ways and checks each is refused.  The verifier earned its place at once:
+in a test262 run it refused 920 modules, all from a generator whose
+operations runto() patches while its parameters run, which the compiler
+had walked out of step; that is fixed.  `tests/js/jsfuzz` makes random
+programs over what compiled code has in line and what makes it leave,
+runs each interpreted and compiled, and compares: 20,000 programs, no
+difference; a subtraction made an addition in the compiler shows in 5
+programs of 500.  Its first run also found a Limbo compiler bug: an
+inlined function's string result corrupting the heap (under `-c0` too),
+now being looked into.
+
 Calls still go through the interpreter, so code made of calls gains
 little; that, and strings, are next.  Making a call from compiled code
 through the engine's callv, which runs the callee in a loop of its own,

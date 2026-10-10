@@ -208,6 +208,11 @@ Code: adt {
 	icproto:	array of int;	# the holder, for a property found on the prototype, or -1
 	icgen:	array of int;	# the shape's gen when cached (an owned shape changes in place)
 	icref:	array of ref V;	# a global lexical binding's cell, for a global name's cache
+	# a setprop's cache of adding the property: the shape before, the shape
+	# after, and the prototypes' shapes and gens then (made when first needed)
+	ictfrom:	array of ref Shape;
+	ictto:	array of ref Shape;
+	icchain:	array of list of (ref Shape, int);
 	tmpls:	array of (array of string, array of string);
 	tmplcache:	array of int;	# the template objects, made once per site
 	regexps:	array of (string, string);

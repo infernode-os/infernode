@@ -104,6 +104,12 @@ testLazy(t: ref T)
 	t.assertseq(ev(js, "function g() { var arguments = 5; return (() => (() => arguments)())(); } g(1)"), "5", "a variable named arguments, through arrows");
 	t.assertseq(ev(js, "function h() { return (function () { return (() => arguments[0])(); })(9) + arguments[0]; } h(1)"), "10", "an arrow's arguments are its function's");
 	t.assertseq(ev(js, "class A { constructor() {} }; const B = class { static name = 'own' }; A.name + B.name"), "Aown", "class names");
+	t.assertseq(ev(js, "function P(x) { this.x = x; this.y = x + 1; } const a = new P(1); " +
+		"Object.defineProperty(P.prototype, 'y', {set(v) { this._y = v * 10; }, get() { return this._y; }, configurable: true}); " +
+		"const b = new P(2); Object.freeze(P.prototype); const c = new P(3); " +
+		"const p2 = {}; Object.defineProperty(p2, 'x', {value: 9, writable: false}); function Q() { this.x = 5; } Q.prototype = p2; const q = new Q(); " +
+		"[a.y, b.y, c.y, Object.keys(a), Object.keys(b), q.x, Object.keys(q).length].join(';')"), "2;30;40;x,y;x,_y;9;0",
+		"adding properties, cached, follows changes to the prototypes");
 	js->shutdown();
 }
 

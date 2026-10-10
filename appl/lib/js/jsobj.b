@@ -575,6 +575,13 @@ set(h, k: int, v: V, recv: V): int
 					oslots[h][slot] = v;
 					return 1;
 				}
+				# a new property of a plain object (this.x = x in a
+				# constructor): nothing up its prototypes, plain objects
+				# and arrays all, has the key, so it is simply made
+				if(slot < 0 && okind[h] == Kord && (oflags[h] & Oext) && k != alength && newpropok(h, k)) {
+					addprop(h, k, Adefault, v);
+					return 1;
+				}
 			}
 		}
 	}
@@ -606,6 +613,20 @@ set(h, k: int, v: V, recv: V): int
 	if(d.set.t != Tobj)
 		return 0;
 	call(d.set, recv, array[] of {v});
+	return 1;
+}
+
+# whether no prototype of h has an own property k, all being plain
+# objects or arrays (whose own properties their shapes and elements hold)
+newpropok(h, k: int): int
+{
+	n := 0;
+	for(p := oproto[h]; p >= 0; p = oproto[p]) {
+		if(okind[p] != Kord && okind[p] != Karray || oflags[p] & Oidxprops || ++n > 32)
+			return 0;
+		if(slotof(oshape[p], k) >= 0)
+			return 0;
+	}
 	return 1;
 }
 

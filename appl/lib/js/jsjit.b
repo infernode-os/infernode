@@ -124,7 +124,8 @@ Fokind: con 248;	# st's object arrays, as words too
 Fonelem: con 256;
 Foelems: con 264;
 Foproto: con 272;
-Fregs: con 280;	# then each register's address, computed on entry
+Fbp: con 280;	# &vs[base]: register r is at r*Vsize from it
+Fsize: con 288;
 Shgen: con 48;	# Shape.gen
 # where st's fields from oshape on go in the frame
 stslot := array[] of {Fos, Foslots, Fics, Ficslot, Ficgen, Fokind, Fonelem, Foelems, Foproto};
@@ -134,7 +135,6 @@ Vsize: con 24;	# a V: t at 0, x at 8, n at 16
 Gen: adt {
 	ins:	array of ref Dis->Inst;
 	n:	int;
-	rslot:	array of int;	# by register: the frame slot holding its address, or 0
 	fix:	list of (int, int);	# (instruction, op pc): its dst is that operation's start
 	exits:	list of (int, int);	# (instruction, op pc): its dst is a return of that pc
 };
@@ -158,44 +158,28 @@ MNONE: con Dis->AXNON;
 MIMM: con Dis->AXIMM;
 MFP: con Dis->AXINF;
 
+# an indirect operand: off from the address in the frame at slot, or,
+# for a register's handle (greg), off into that register
 ind(slot, off: int): int
 {
+	if(slot < 0)
+		return (Fbp << 16) | ((-slot - 1) * Vsize + off);
 	return (slot << 16) | off;
 }
 
-# the frame slot holding &vs[base + r] (computed on entry), or slot after
-# computing it there
+# register r's handle for ind(): it is Vsize*r from &vs[base], which the
+# prologue puts at Fbp; past the reach of an operand's offset, its address
+# is computed into slot
 greg(g: ref Gen, r, slot: int): int
 {
-	if(r < len g.rslot && g.rslot[r] != 0)
-		return g.rslot[r];
+	if(r < Maxreg)
+		return -(r + 1);
 	gemit(g, Dis->IADDW, IMM, r, MFP, Fbase, FP, slot);
 	gemit(g, Dis->IINDX, FP, Fvs, MFP, slot, FP, slot);
 	return slot;
 }
 
-# the registers an operation compiled reads or writes
-opregs(ops: array of int, pc: int): list of int
-{
-	case ops[pc] {
-	Oundef or Onull or Otrue or Ofalse or Oempty or Oint or Oconst or Ojt or Ojf or Ochktdz =>
-		return ops[pc+1] :: nil;
-	Omove or Oinc or Odec or Otonumeric or Onot or Oneg or Ogetprop =>
-		return ops[pc+1] :: ops[pc+2] :: nil;
-	Osetprop =>
-		return ops[pc+1] :: ops[pc+3] :: nil;
-	Oadd or Osub or Omul or Odiv or Olt or Ole or Ogt or Oge or Ogetelem or Osetelem or Oseq or Osne or
-	Omod or Oband or Obor or Obxor or Oshr =>
-		return ops[pc+1] :: ops[pc+2] :: ops[pc+3] :: nil;
-	Ogetenv or Ogetenvc =>
-		return ops[pc+1] :: Renv :: nil;
-	Osetenv or Osetenvc =>
-		return ops[pc+3] :: Renv :: nil;
-	}
-	return nil;
-}
-
-Maxrslots: con 256;
+Maxreg: con (65536 - Vsize) / Vsize;
 
 # the value at slot = (t, x, 0.0)
 gsetv(g: ref Gen, slot, t, x: int)
@@ -320,21 +304,7 @@ jitcompile(c: ref Code): int
 		}
 	if(ncomp == 0)
 		return 0;
-	# the registers in use get their addresses computed on entry
-	maxr := 0;
-	for(pc = 0; pc < len ops; pc += oplen(ops[pc]))
-		if(ent[pc] != byte 0)
-			for(rl := opregs(ops, pc); rl != nil; rl = tl rl)
-				if(hd rl + 1 > maxr)
-					maxr = hd rl + 1;
-	rslot := array[maxr] of {* => 0};
-	nslot := 0;
-	for(pc = 0; pc < len ops; pc += oplen(ops[pc]))
-		if(ent[pc] != byte 0)
-			for(rl2 := opregs(ops, pc); rl2 != nil; rl2 = tl rl2)
-				if(rslot[hd rl2] == 0 && nslot < Maxrslots)
-					rslot[hd rl2] = Fregs + 8 * nslot++;
-	g := ref Gen(array[256] of ref Dis->Inst, 0, nil, nil, nil);
+	g := ref Gen(array[256] of ref Dis->Inst, 0, nil, nil);
 	# the prologue: st's fields into the frame, the registers' addresses,
 	# then the case on pc
 	gemit(g, Dis->IMOVP, IND, ind(Fst, 0), MNONE, 0, FP, Fvs);
@@ -342,10 +312,7 @@ jitcompile(c: ref Code): int
 	gemit(g, Dis->IMOVP, IND, ind(Fst, 16), MNONE, 0, FP, Fk);
 	for(f := 0; f < 9; f++)
 		gemit(g, Dis->IMOVW, IND, ind(Fst, 24 + 8 * f), MNONE, 0, FP, stslot[f]);
-	for(r := 0; r < maxr; r++)
-		if(rslot[r] != 0)
-			greg(g, r, rslot[r]);
-	g.rslot = rslot;
+	gemit(g, Dis->IINDX, FP, Fvs, MFP, Fbp, FP, Fbase);
 	gemit(g, Dis->ICASE, FP, Fpc, MNONE, 0, Dis->AMP, 0);
 	for(pc = 0; pc < len ops; pc += oplen(ops[pc])) {
 		start[pc] = g.n;
@@ -675,7 +642,7 @@ jitcompile(c: ref Code): int
 	m.entryt = -1;
 	m.inst = g.ins[0:g.n];
 	# the module data's type, then run's frame: st, vs and consts are pointers
-	m.types = array[] of {ref Dis->Type(m.dsize, 0, nil), ref Dis->Type(Fregs + 8 * nslot, 2, array[] of {byte 0, byte 16r98})};
+	m.types = array[] of {ref Dis->Type(m.dsize, 0, nil), ref Dis->Type(Fsize, 2, array[] of {byte 0, byte 16r98})};
 	m.data = ref Disdata.Words((Dis->DEFW << 4), len words, 0, words) :: nil;
 	m.links = array[] of {ref Dis->Link(0, 1, jitsig, "run")};
 	b := dis->writeobj(m);

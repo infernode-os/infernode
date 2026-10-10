@@ -1370,6 +1370,40 @@ setpropic(o: V, a: int, v: V, ic: int)
 				code.icgen[ic] = sh.gen;
 				return;
 			}
+			if(slot < 0 && (oflags[h] & Oext) && !sh.owned) {
+				# adding the property: as last time from this shape, if
+				# the prototypes are as they were
+				if(code.ictfrom != nil && code.ictfrom[ic] == sh && chainis(h, code.icchain[ic])) {
+					t := code.ictto[ic];
+					oshape[h] = t;
+					slot = t.n - 1;
+					s := oslots[h];
+					if(s == nil || slot >= len s) {
+						ns := array[2 * slot + 4] of V;
+						if(s != nil)
+							ns[0:] = s;
+						oslots[h] = ns;
+						s = ns;
+					}
+					s[slot] = v;
+					return;
+				}
+				if(a != alength && !isidx(a) && atomidx[a] < 0.0 && newpropok(h, a)) {
+					addprop(h, a, Adefault, v);
+					t := oshape[h];
+					if(!t.owned && t.n == sh.n + 1 && t.keys[t.n-1] == a && (t.attrs[t.n-1] & (Awrite|Aacc)) == Awrite) {
+						if(code.ictfrom == nil) {
+							code.ictfrom = array[len code.ics] of ref Shape;
+							code.ictto = array[len code.ics] of ref Shape;
+							code.icchain = array[len code.ics] of list of (ref Shape, int);
+						}
+						code.ictfrom[ic] = sh;
+						code.ictto[ic] = t;
+						code.icchain[ic] = chainof(h);
+					}
+					return;
+				}
+			}
 		}
 		if(!set(h, a, v, o) && (code.flags & Cstrict))
 			typeerr("cannot assign to read only property '" + keystr(a) + "' of " + show(o));
@@ -1378,6 +1412,32 @@ setpropic(o: V, a: int, v: V, ic: int)
 	if(o.t == Tundef || o.t == Tnull)
 		typeerr("cannot set properties of " + show(o) + " (setting '" + keystr(a) + "')");
 	setv(o, a, v, code.flags & Cstrict);
+}
+
+# the shapes (and gens) of h's prototypes, innermost first, for a cache
+# that holds while they are as they are
+chainof(h: int): list of (ref Shape, int)
+{
+	r: list of (ref Shape, int);
+	for(p := oproto[h]; p >= 0; p = oproto[p])
+		r = (oshape[p], oshape[p].gen) :: r;
+	l: list of (ref Shape, int);
+	for(; r != nil; r = tl r)
+		l = hd r :: l;
+	return l;
+}
+
+chainis(h: int, l: list of (ref Shape, int)): int
+{
+	for(p := oproto[h]; p >= 0; p = oproto[p]) {
+		if(l == nil)
+			return 0;
+		(s, gen) := hd l;
+		if(oshape[p] != s || s.gen != gen)
+			return 0;
+		l = tl l;
+	}
+	return l == nil;
 }
 
 getelem(o, kv: V): V

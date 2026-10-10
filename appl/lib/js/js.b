@@ -175,10 +175,18 @@ profile(ms: int)
 	}
 }
 
+tasksince := 0;		# when the task running began (sys->millisec), or 0
+longtask: ref fn(s: string);	# told where a long task spends its time
+
 sampler(ms: int)
 {
+	reported := 0;
 	while(profms == ms) {
 		sys->sleep(ms);
+		if(tasksince != 0 && sys->millisec() - tasksince > 8000 && reported != tasksince && longtask != nil) {
+			reported = tasksince;
+			longtask(profiled(20));
+		}
 		if(nsamples < 200000) {
 			samples = ref Sample(code, pc, lastnative, collecting) :: samples;
 			nsamples++;

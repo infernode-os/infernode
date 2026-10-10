@@ -76,8 +76,10 @@ page(h: ref Js->Host): string
 		return err;
 	if(h.stress > 0)
 		stress(h.stress);
-	if(h.profile > 0)
+	if(h.profile > 0) {
+		longtask = longreport;
 		profile(h.profile);
+	}
 	h.lock(h.id);
 	{
 		f := selfhost(src);
@@ -123,6 +125,11 @@ page(h: ref Js->Host): string
 	}
 }
 
+longreport(s: string)
+{
+	pageconsole("a task has run 8 seconds:\n" + s);
+}
+
 strnil(s: string): V
 {
 	if(s == nil)
@@ -139,6 +146,7 @@ hook(name: string, args: array of V): int
 	h.lock(h.id);
 	gen := pgd.gen;
 	r := 0;
+	tasksince = sys->millisec();
 	sp0 := sp;
 	nf := nframe;
 	{
@@ -165,6 +173,7 @@ hook(name: string, args: array of V): int
 		nframe = nf;
 		pageconsole("internal error: " + e + where);
 	}
+	tasksince = 0;
 	h.unlock(h.id);
 	for(l := rev(pgpending); l != nil; l = tl l)
 		pick p := hd l {

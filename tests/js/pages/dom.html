@@ -207,6 +207,24 @@ test('shadow DOM', () => {
 	check('slotted laid out', host.querySelector('.sdl').getBoundingClientRect().width > 0, true);
 	check('unslotted not', host.querySelector('.sdu').getBoundingClientRect().width, 0);
 	check('a second root', (() => { try { host.attachShadow({mode: 'open'}); return 'no'; } catch (e) { return e.name; } })(), 'NotSupportedError');
+	// events: up through the slot and the shadow root to the host, the
+	// target retargeted outside
+	const seen = [];
+	const inner = sr.querySelector('.sdp');
+	inner.addEventListener('click', (e) => seen.push('inner:' + (e.target === host.querySelector('.sdl'))));
+	sr.addEventListener('click', (e) => seen.push('root'));
+	host.addEventListener('click', (e) => seen.push('host:' + (e.target === host.querySelector('.sdl')) + ':' + e.eventPhase));
+	document.body.addEventListener('click', (e) => seen.push('body:' + (e.target === host.querySelector('.sdl'))));
+	host.querySelector('.sdl').dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
+	check('slotted event path', seen.join(' '), 'inner:true root host:true:3 body:true');
+	seen.length = 0;
+	inner.dispatchEvent(new MouseEvent('click', {bubbles: true, composed: true}));
+	check('shadow event retargeted', seen.join(' '), 'inner:false root host:false:2 body:false');
+	const evs = [];
+	document.body.addEventListener('xx', (e) => evs.push(e.target === host ? 'host' : 'other'));
+	inner.dispatchEvent(new Event('xx', {bubbles: true, composed: true}));
+	inner.dispatchEvent(new Event('xx', {bubbles: true}));
+	check('composed crosses, not composed stays', evs.join(), 'host');
 	host.remove();
 	outside.remove();
 	st.remove();

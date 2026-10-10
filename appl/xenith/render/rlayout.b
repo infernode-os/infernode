@@ -1032,7 +1032,7 @@ flattentext(nodes: list of ref DocNode): string
 	return s;
 }
 
-# ---- Markdown Parser (shared with mdrender and external callers) ----
+# ---- Markdown Parser (shared with mddoc and external callers) ----
 
 # Parse markdown text into a list of DocNode blocks.
 parsemd(text: string): list of ref DocNode

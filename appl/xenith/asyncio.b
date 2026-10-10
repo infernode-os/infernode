@@ -18,7 +18,7 @@ nextopid: int;
 CHUNKSIZE: con 8*1024;
 
 # Max content to load into heap — files larger than this get a header-only read
-# (renderers like pdfrender stream directly from the file path)
+# (a document engine reads the file itself: docengine(2))
 MAXCONTENTLOAD: con 4*1024*1024;
 
 init(mods: ref Dat->Mods)

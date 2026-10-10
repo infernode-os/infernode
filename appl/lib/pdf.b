@@ -3852,7 +3852,7 @@ readreal(data: array of byte, pos: int): (real, int)
 	return (real s, pos);
 }
 
-# ---- PDF Parser (extracted from pdfrender.b) ----
+# ---- PDF Parser ----
 
 parsepdf(data: array of byte): (ref PdfDoc, string)
 {

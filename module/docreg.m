@@ -35,4 +35,9 @@ Docreg: module
 
 	# The engines loaded so far, by path
 	loaded:	fn(): list of string;
+
+	# A document drawn whole, as one image: its first sheet, a flowing
+	# one set to s.width, a picture scaled to s.width (if not 0). For a
+	# program that shows documents as pictures (the presentation view).
+	picture:	fn(name: string, data: array of byte, s: ref Docengine->Style): (ref Draw->Image, string);
 };

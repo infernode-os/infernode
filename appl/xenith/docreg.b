@@ -9,6 +9,8 @@ include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+	draw: Draw;
+	Display, Image, Point, Rect: import draw;
 
 include "bufio.m";
 	bufio: Bufio;
@@ -18,7 +20,7 @@ include "docengine.m";
 
 include "docreg.m";
 
-display: ref Draw->Display;
+display: ref Display;
 kinds: list of ref Kind;
 
 Loaded: adt {
@@ -31,6 +33,7 @@ lock: chan of int;
 init(d: ref Draw->Display)
 {
 	sys = load Sys Sys->PATH;
+	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
 	display = d;
 	lock = chan[1] of int;
@@ -92,6 +95,98 @@ loaded(): list of string
 	for(l := engines; l != nil; l = tl l)
 		r = (hd l).path :: r;
 	return r;
+}
+
+picture(name: string, data: array of byte, st: ref Docengine->Style): (ref Image, string)
+{
+	head := data;
+	if(len head > 16)
+		head = head[0:16];
+	k := kind(name, head);
+	if(k == nil)
+		return (nil, name + ": not a document");
+	(e, err) := engine(k);
+	if(e == nil)
+		return (nil, err);
+	h: int;
+	(h, err) = e->open(data, name, st);
+	if(h < 0)
+		return (nil, err);
+	im: ref Image;
+	{
+		sz := e->sheetsize(h, 0);
+		if(sz.x <= 0 || sz.y <= 0)
+			err = "empty";
+		else if((im = display.newimage(Rect((0, 0), sz), Draw->RGB24, 0, Draw->White)) == nil)
+			err = sys->sprint("no image: %r");
+		else
+			err = e->paint(h, 0, 100, im, im.r, Point(0, 0));
+	} exception x {
+	"*" =>
+		err = x;
+	}
+	e->close(h);
+	if(err != nil)
+		return (nil, err);
+	# a picture made the width asked for; a flowing document was set to it
+	if(k.class == Binary && st != nil && st.width > 0 && st.width != im.r.dx()){
+		w := st.width;
+		h := im.r.dy() * w / im.r.dx();
+		if(h < 1)
+			h = 1;
+		im = scale(im, Point(w, h));
+	}
+	return (im, nil);
+}
+
+# im scaled to sz: each new pixel the average of those it covers (or
+# the one it falls in, made larger)
+scale(im: ref Image, sz: Point): ref Image
+{
+	iw := im.r.dx();
+	ih := im.r.dy();
+	out := display.newimage(Rect((0, 0), sz), Draw->RGB24, 0, Draw->White);
+	if(out == nil)
+		return im;
+	row := array[iw * 3] of byte;
+	orow := array[sz.x * 3] of byte;
+	acc := array[sz.x * 3] of int;
+	cnt := array[sz.x] of int;
+	for(oy := 0; oy < sz.y; oy++){
+		y0 := oy * ih / sz.y;
+		y1 := (oy + 1) * ih / sz.y;
+		if(y1 <= y0)
+			y1 = y0 + 1;
+		for(i := 0; i < len acc; i++)
+			acc[i] = 0;
+		for(i = 0; i < len cnt; i++)
+			cnt[i] = 0;
+		for(y := y0; y < y1 && y < ih; y++){
+			im.readpixels(Rect((im.r.min.x, im.r.min.y + y), (im.r.max.x, im.r.min.y + y + 1)), row);
+			for(ox := 0; ox < sz.x; ox++){
+				x0 := ox * iw / sz.x;
+				x1 := (ox + 1) * iw / sz.x;
+				if(x1 <= x0)
+					x1 = x0 + 1;
+				for(x := x0; x < x1 && x < iw; x++){
+					acc[ox*3] += int row[x*3];
+					acc[ox*3+1] += int row[x*3+1];
+					acc[ox*3+2] += int row[x*3+2];
+					cnt[ox]++;
+				}
+			}
+		}
+		for(ox := 0; ox < sz.x; ox++){
+			c := cnt[ox];
+			if(c < 1)
+				c = 1;
+			orow[ox*3] = byte (acc[ox*3] / c);
+			orow[ox*3+1] = byte (acc[ox*3+1] / c);
+			orow[ox*3+2] = byte (acc[ox*3+2] / c);
+		}
+		out.writepixels(Rect((0, oy), (sz.x, oy + 1)), orow);
+	}
+	return out;
 }
 
 # The extension of a file name, with its dot, in lower case

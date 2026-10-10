@@ -193,7 +193,7 @@ tagname(tag: int): string
 
 Doc.new(url: string): ref Doc
 {
-	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil);
+	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil);
 	d.create(Document, "#document", HTML);
 	return d;
 }
@@ -221,6 +221,26 @@ Doc.attachshadow(d: self ref Doc, host, root: int)
 			return;
 	d.shadows = (host, root) :: d.shadows;
 	d.gen++;
+}
+
+Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
+{
+	r: list of (int, array of string);
+	for(l := d.adopted; l != nil; l = tl l)
+		if((hd l).t0 != root)
+			r = hd l :: r;
+	if(len sheets > 0)
+		r = (root, sheets) :: r;
+	d.adopted = r;
+	d.gen++;
+}
+
+Doc.adoptedof(d: self ref Doc, root: int): array of string
+{
+	for(l := d.adopted; l != nil; l = tl l)
+		if((hd l).t0 == root)
+			return (hd l).t1;
+	return nil;
 }
 
 # ---- the flat tree ----

@@ -2235,6 +2235,12 @@ scopeindexes(d: ref Doc, f: ref Dom->Flat, s: ref Styles, env: ref Env): list of
 				texts = t :: texts;
 				text += t + "\n\u0000";
 			}
+		# then its adopted sheets (CSSOM §6.1.1: after the tree's own)
+		ad := d.adoptedof(root);
+		for(i := 0; i < len ad; i++) {
+			texts = ad[i] :: texts;
+			text += ad[i] + "\n\u0001";
+		}
 		sc: ref Scoped;
 		for(k := scoped; k != nil; k = tl k)
 			if((hd k).root == root && (hd k).doc == d && (hd k).text == text && sameenv((hd k).idx.env, env))

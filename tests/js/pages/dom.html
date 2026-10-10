@@ -246,6 +246,30 @@ test(':host', () => {
 	h.remove();
 	st.remove();
 });
+test('adoptedStyleSheets', () => {
+	const sheet = new CSSStyleSheet();
+	sheet.replaceSync('p { color: rgb(4, 5, 6); } :host { display: block; }');
+	const h = document.createElement('x-adopt');
+	document.body.appendChild(h);
+	const sr = h.attachShadow({mode: 'open'});
+	sr.innerHTML = '<p>a</p>';
+	sr.adoptedStyleSheets = [sheet];
+	check('adopted in the shadow tree', getComputedStyle(sr.querySelector('p')).color, 'rgb(4, 5, 6)');
+	check('adopted :host', getComputedStyle(h).display, 'block');
+	sheet.replaceSync('p { color: rgb(7, 8, 9); }');
+	check('a replaced sheet', getComputedStyle(sr.querySelector('p')).color, 'rgb(7, 8, 9)');
+	const s2 = new CSSStyleSheet();
+	s2.replaceSync('.adoc { color: rgb(1, 1, 1); }');
+	document.adoptedStyleSheets.push(s2);
+	const e = document.createElement('div');
+	e.className = 'adoc';
+	document.body.appendChild(e);
+	check('pushed onto the document', getComputedStyle(e).color, 'rgb(1, 1, 1)');
+	document.adoptedStyleSheets = [];
+	check('and taken away', getComputedStyle(e).color, 'rgb(0, 0, 0)');
+	h.remove();
+	e.remove();
+});
 test('clock', () => {
 	check('this year', new Date().getFullYear() >= 2026, true);
 	check('now', Math.abs(Date.now() - performance.timeOrigin - performance.now()) < 2000, true);

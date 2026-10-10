@@ -421,6 +421,7 @@ domnatives(): int
 	method(o, "descendants", 3, dn_descendants);
 	method(o, "match", 3, dn_match);
 	method(o, "attachshadow", 2, dn_attachshadow);
+	method(o, "adopt", 2, dn_adopt);
 	method(o, "select", 3, dn_select);
 	method(o, "parse", 2, dn_parse);
 	method(o, "markup", 2, dn_markup);
@@ -704,6 +705,21 @@ dn_attachshadow(nil: V, a, n: int, nil: V, nil: int): V
 	if(pgd.nodes[host].kind != Dom->Element || pgd.nodes[root].kind != Dom->Document)
 		typeerr("not a host and a shadow root");
 	pgd.attachshadow(host, root);
+	return undef;
+}
+
+# the text of the style sheets root (a shadow root, or the document) has adopted
+dn_adopt(nil: V, a, n: int, nil: V, nil: int): V
+{
+	root := nodearg(a, n, 0);
+	l := arg(a, n, 1);
+	if(l.t != Tobj)
+		typeerr("not an array");
+	k := int lengthof(l);
+	t := array[k] of string;
+	for(i := 0; i < k; i++)
+		t[i] = fromjs(tostring(getidx(l, real i)));
+	pgd.adopt(root, t);
 	return undef;
 }
 

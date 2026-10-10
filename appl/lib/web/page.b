@@ -660,6 +660,10 @@ sheetsof(p: ref Pg): array of (string, string, string)
 			sheets = (nil, style->resolveurl(d.url, href), d.attr(n, "charset")) :: sheets;
 		}
 	}
+	# the document's adopted sheets, after its own
+	ad := d.adoptedof(1);
+	for(k := 0; k < len ad; k++)
+		sheets = (ad[k], nil, nil) :: sheets;
 	a := array[len sheets] of (string, string, string);
 	for(i := len a - 1; i >= 0; i--) {
 		a[i] = hd sheets;

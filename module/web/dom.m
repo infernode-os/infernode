@@ -69,6 +69,7 @@ Dom: module
 		charset:	string;		# the encoding it was decoded from (its stylesheets' default)
 		lang:	string;		# the document's language, from <meta http-equiv=content-language>, for :lang()
 		shadows:	list of (int, int);	# (host, shadow root): the root a node of kind Document
+		adopted:	list of (int, array of string);	# (root, its adopted style sheets' text): 1, the document
 
 		new:	fn(url: string): ref Doc;
 		create:	fn(d: self ref Doc, kind: int, name: string, ns: int): int;
@@ -79,6 +80,8 @@ Dom: module
 		delattr:	fn(d: self ref Doc, n: int, name: string);
 		settext:	fn(d: self ref Doc, n: int, s: string);
 		attachshadow:	fn(d: self ref Doc, host, root: int);
+		adopt:	fn(d: self ref Doc, root: int, sheets: array of string);
+		adoptedof:	fn(d: self ref Doc, root: int): array of string;
 
 		attr:	fn(d: self ref Doc, n: int, name: string): string;	# "" if absent or empty: see hasattr
 		hasattr:	fn(d: self ref Doc, n: int, name: string): int;

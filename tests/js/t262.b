@@ -51,6 +51,7 @@ runmode := 0;
 timeout := 10000;
 gcevery := 0;	# -g n: collect after every n objects made
 lazymin := -1;	# -L n: compile functions lazily in sources this long
+jitn := -2;	# -J n: compile functions to Dis after n calls and loop iterations
 npass := 0;
 nfail := 0;
 nskip := 0;
@@ -102,6 +103,9 @@ init(nil: ref Draw->Context, args: list of string)
 		"-L" =>
 			args = tl args;
 			lazymin = int hd args;
+		"-J" =>
+			args = tl args;
+			jitn = int hd args;
 		"-f" =>
 			args = tl args;
 			failfd = sys->create(hd args, Sys->OWRITE, 8r644);
@@ -519,6 +523,8 @@ runrealm1(src: string, m: ref Meta): (int, string)
 		js->stress(gcevery);
 	if(lazymin >= 0)
 		js->lazy(lazymin);
+	if(jitn != -2)
+		js->jit(jitn);
 	e: string;
 	if(has(m.flags, "module"))
 		(nil, e) = js->evalmodule(src, curpath);

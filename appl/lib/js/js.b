@@ -53,6 +53,10 @@ include "web/originfs.m";
 	originfs: Originfs;
 
 
+include "dis.m";
+	dis: Dis;
+include "jsjit.m";
+
 include "jsval.b";
 include "jsobj.b";
 include "jsops.b";
@@ -72,6 +76,7 @@ include "jsiter.b";
 include "jsdispose.b";
 include "jsmod.b";
 include "jsdom.b";
+include "jsjit.b";
 
 output: ref fn(s: string);
 

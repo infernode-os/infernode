@@ -225,4 +225,9 @@ Code: adt {
 	evalctx:	int;	# eval code: what its caller allowed (Jsparse->Enewtarget...)
 	evalprivs:	list of string;	# and the private names around it
 	marked:	int;	# the collection that last marked it
+	# the compiled tier (jsjit.b)
+	jitn:	int;	# calls and loop iterations, toward compiling it
+	jitstate:	int;	# 0 not compiled, 1 compiled, -1 not to be
+	jit:	Jitcode;
+	jitent:	array of byte;	# by pc: 1 where an operation is compiled
 };

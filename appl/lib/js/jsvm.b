@@ -369,6 +369,11 @@ loop(entry: int): V
 {
 	for(;;) {
 		op := ops[pc];
+		if(code.jitent != nil && code.jitent[pc] != byte 0) {
+			# compiled: it runs to an operation it leaves to this loop
+			pc = jitrun(code, pc, base);
+			op = ops[pc];
+		}
 		case op {
 		Oundef =>
 			vs[base+ops[pc+1]] = undef;
@@ -657,8 +662,12 @@ loop(entry: int): V
 			pc += 3;
 		Ojmp =>
 			t := ops[pc+1];
-			if(t <= pc && gcwanted)
-				safepoint(t);
+			if(t <= pc) {
+				if(gcwanted)
+					safepoint(t);
+				if(code.jitstate == 0)
+					jithot(code);
+			}
 			pc = t;
 		Ojt =>
 			cv := vs[base+ops[pc+1]];

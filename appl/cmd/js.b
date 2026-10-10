@@ -3,7 +3,7 @@ implement Jscmd;
 #
 # js - run JavaScript.
 #
-#	js [-p] [-m] [-t] [-g n] [-L n] [-e source] [file ...]
+#	js [-p] [-m] [-t] [-g n] [-L n] [-J n] [-e source] [file ...]
 #
 # Each file (a module with -m), then each -e source, runs in turn in one
 # realm.  -p prints each completion value.  With no file and no source,
@@ -91,6 +91,12 @@ init(nil: ref Draw->Context, args: list of string)
 				usage();
 			js->lazy(int hd args);
 			continue;
+		"-J" =>
+			args = tl args;
+			if(args == nil)
+				usage();
+			js->jit(int hd args);
+			continue;
 		"-e" =>
 			args = tl args;
 			if(args == nil)
@@ -124,7 +130,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-g n] [-L n] [-e source] [file ...]\n");
+	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-g n] [-L n] [-J n] [-e source] [file ...]\n");
 	raise "fail:usage";
 }
 

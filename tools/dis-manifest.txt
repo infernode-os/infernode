@@ -339,6 +339,7 @@ dis/lib/js/jscheck.dis
 dis/lib/js/jsparse.dis
 dis/lib/js/jsre.dis
 dis/lib/js/js.dis
+dis/lib/js/jsjitt.dis
 dis/lib/encoding/base16.dis
 dis/lib/encoding/base32.dis
 dis/lib/encoding/base32a.dis

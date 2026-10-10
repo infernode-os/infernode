@@ -107,6 +107,31 @@ testLazy(t: ref T)
 	js->shutdown();
 }
 
+# loops compiled to Dis from their first iteration, against what the
+# interpreter makes of them
+testJit(t: ref T)
+{
+	src := array[] of {
+		"let s = 0; for (let i = 0; i < 100; i++) s = s + i * 2; s",
+		"let t = 0; for (let k = 0; k < 4; k++) { let x = -k; if (!(x < 0)) t = t + 1; else t = t - x; } t",
+		"let a = 1.5; for (let i = 0; i < 200; i++) a = a / 1.001 - 0.0001; a.toFixed(9)",
+		"let c = 0; for (let i = 0; i < 10; i++) { c = c + (NaN < i) + (i <= NaN) + (i >= 5); } c",
+		"let s = ''; for (let i = 0; i < 5; i++) s = s + i; s",
+		"let o = 0; for (let i = 0; i < 6; i = i + 1.5) o = o - i; o",
+		"let n = 0, u; for (let i = 0; i < 3; i++) { u = i > 1 ? undefined : i; n = n + (u === undefined); } n",
+	};
+	for(i := 0; i < len src; i++) {
+		js := realm(t);
+		js->jit(-1);
+		want := ev(js, src[i]);
+		js->shutdown();
+		js = realm(t);
+		js->jit(0);
+		t.assertseq(ev(js, src[i]), want, "compiled as interpreted: " + src[i]);
+		js->shutdown();
+	}
+}
+
 testErrors(t: ref T)
 {
 	js := realm(t);
@@ -194,6 +219,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Values", testValues);
 	run("Control", testControl);
 	run("Lazy", testLazy);
+	run("Jit", testJit);
 	run("Errors", testErrors);
 	run("Jobs", testJobs);
 	run("HostFunctions", testHostFunctions);

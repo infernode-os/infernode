@@ -62,6 +62,7 @@ Js: module
 	# a source this long or longer has its nested functions compiled when
 	# first called (and their trees let go once parsed); 0: every source
 	lazy:	fn(minlen: int);
+	jit:	fn(n: int);	# compile a function after n calls and loop iterations; -1 never
 
 	# give the realm test262's host object, $262
 	test262:	fn();

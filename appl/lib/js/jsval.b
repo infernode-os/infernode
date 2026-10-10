@@ -14,11 +14,7 @@
 
 Tundef, Tnull, Tbool, Tnum, Tstr, Tsym, Tobj, Tbig, Tempty, Tacc, Timport: con iota;
 
-V: adt {
-	t:	int;
-	x:	int;		# Tbool: 0 or 1; Tstr: string handle; Tsym: atom; Tobj: object handle; Tacc: getter or -1
-	n:	real;		# Tnum; Tacc: the setter's handle, or -1
-};
+# V, a value, is in jsjit.m, shared with compiled code
 
 undef, null, vtrue, vfalse, empty: V;
 nan, inf: real;

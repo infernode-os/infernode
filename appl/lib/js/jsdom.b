@@ -146,9 +146,17 @@ hook(name: string, args: array of V): int
 		nframe = nf;
 		pageconsole("uncaught " + showexc(thrown));
 	"*" =>
+		where := tracetext(errtrace());
+		if(failcode != nil) {
+			op := "?";
+			if(failpc >= 0 && failpc < len failcode.ops && failcode.ops[failpc] >= 0 && failcode.ops[failpc] < len opnames)
+				op = opnames[failcode.ops[failpc]];
+			where = " (op " + op + " in " + failcode.name + " at " + codeplace(failcode, failpc + 1) + "; last native " + lastnative + ")" + where;
+		}
+		failcode = nil;
 		sp = sp0;
 		nframe = nf;
-		pageconsole("internal error: " + e);
+		pageconsole("internal error: " + e + where);
 	}
 	h.unlock(h.id);
 	for(l := rev(pgpending); l != nil; l = tl l)

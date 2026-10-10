@@ -83,6 +83,16 @@ testValues(t: ref T)
 	js->shutdown();
 }
 
+testControl(t: ref T)
+{
+	js := realm(t);
+	t.assertseq(ev(js, "let i = 0; for (;;) { i++; switch (i) { case 1: continue; case 2: break; } if (i == 2) break; } i"), "2", "continue in a switch goes to the loop");
+	t.assertseq(ev(js, "let j = 0; for (;;) try { j++; switch (j) { case 1: continue; default: break; } break; } catch (e) {} j"), "2", "and from inside a try");
+	t.assertseq(ev(js, "let k = 0; out: for (;;) { switch (k++) { case 0: continue out; case 1: break out; } } k"), "2", "labelled");
+	t.assertseq(ev(js, "let s = ''; for (const c of 'abc') { switch (c) { case 'b': continue; } s += c; } s"), "ac", "in a for-of");
+	js->shutdown();
+}
+
 testErrors(t: ref T)
 {
 	js := realm(t);
@@ -168,6 +178,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 	run("Values", testValues);
+	run("Control", testControl);
 	run("Errors", testErrors);
 	run("Jobs", testJobs);
 	run("HostFunctions", testHostFunctions);

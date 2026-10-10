@@ -26,6 +26,9 @@ Frame: adt {
 
 frames: array of Frame;
 nframe := 0;
+lastnative: string;	# the native function called last, for a report of an internal error
+failcode: ref Code;	# where an internal error happened: the code and pc running
+failpc := 0;
 Maxframes: con 10000;
 
 # the running frame's state, kept in globals for the loop
@@ -113,6 +116,7 @@ callv(f, this: V, a, n: int, nt: V): V
 		Native =>
 			if(sp < a + n)
 				sp = a + n;
+			lastnative = d.name;
 			return d.f(this, a, n, nt, h);
 		}
 	Kbound =>
@@ -254,6 +258,14 @@ runfrom(how: int): V
 				}
 				raise e;
 			}
+		"*" =>
+			# not the language's: where it happened is kept for the report
+			if(failcode == nil) {
+				failcode = code;
+				failpc = pc;
+			}
+			pc = spc; base = sbase; code = scode; ops = sops;
+			raise e;
 		}
 	}
 }

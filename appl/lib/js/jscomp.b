@@ -2330,12 +2330,11 @@ breakto(name: string, iscont: int, nil: int)
 	lab: ref Label;
 	for(l := cs.labels; l != nil; l = tl l) {
 		x := hd l;
+		# (isloop: 1 a loop, 3 a switch, which only break leaves)
 		if(name == nil) {
-			if(x.isloop || !iscont && x.names == nil && x.isloop == 2)
+			if(x.isloop == 1 || !iscont && x.isloop == 3)
 				lab = x;
-			else if(!iscont && x.isloop == 3)
-				lab = x;
-		} else if(hasname(x.names, name) && (!iscont || x.isloop))
+		} else if(hasname(x.names, name) && (!iscont || x.isloop == 1))
 			lab = x;
 		if(lab != nil)
 			break;

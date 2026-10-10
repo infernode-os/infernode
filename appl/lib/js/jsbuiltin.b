@@ -1124,6 +1124,8 @@ codeplace(c: ref Code, pc: int): string
 		pc--;
 	if(pc >= len c.pos)
 		pc = len c.pos - 1;
+	if(pc < 0)
+		pc = 0;
 	p := c.pos[pc];
 	s := c.whole;
 	line := 1;

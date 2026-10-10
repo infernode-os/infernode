@@ -386,6 +386,8 @@ domnatives(): int
 	method(o, "random", 1, dn_random);
 	method(o, "gen", 0, dn_gen);
 	method(o, "storeload", 1, dn_storeload);
+	method(o, "jar", 0, dn_jar);
+	method(o, "jaradd", 1, dn_jaradd);
 	method(o, "storesave", 2, dn_storesave);
 	method(o, "drain", 0, dn_drain);
 	value(o, "url", strv(tojs(pgh.url)));
@@ -898,6 +900,34 @@ dn_drain(nil: V, nil, nil: int, nil: V, nil: int): V
 {
 	runjobs();
 	return undef;
+}
+
+# webfs's cookie jar, for document.cookie: its lines, or null if there
+# is no webfs (the page's own cookies are chosen from them by the prelude)
+dn_jar(nil: V, nil, nil: int, nil: V, nil: int): V
+{
+	fd := sys->open(Webfs + "/cookies", Sys->OREAD);
+	if(fd == nil)
+		return null;
+	return strv(jslex->utf16(readfd(fd)));
+}
+
+dn_jaradd(nil: V, a, n: int, nil: V, nil: int): V
+{
+	line := jarg(a, n, 0);
+	for(i := 0; i < len line; i++)
+		if(line[i] == '\n')
+			return bool(0);
+	fd := sys->open(Webfs + "/cookies", Sys->OWRITE);
+	if(fd == nil)
+		return bool(0);
+	b := utf8bytes(line);
+	return bool(sys->write(fd, b, len b) == len b);
+}
+
+jarg(a, n, i: int): string
+{
+	return jsarg(a, n, i);
 }
 
 # the origin's storage, granted at /mnt/store if this origin has any:

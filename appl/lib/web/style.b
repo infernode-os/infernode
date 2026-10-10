@@ -540,11 +540,12 @@ M: adt {
 	classes:	array of list of string;	# per node, lazily
 	index:	array of int;	# per node: 1-based index among element siblings, lazily
 	count:	array of int;	# per node: number of element children, lazily (+1)
+	scope:	int;	# what :scope matches; 0, the root
 };
 
 matcher(d: ref Doc, env: ref Env): ref M
 {
-	return ref M(d, env, array[d.n] of list of string, array[d.n] of {* => 0}, array[d.n] of {* => 0});
+	return ref M(d, env, array[d.n] of list of string, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0);
 }
 
 # n's position among its element siblings, from the previous sibling's
@@ -575,13 +576,15 @@ elcount(m: ref M, parent: int): int
 	return k;
 }
 
-match(d: ref Doc, n: int, sel: ref Sel, env: ref Env): int
+match(d: ref Doc, n: int, sel: ref Sel, env: ref Env, scope: int): int
 {
 	if(sys == nil)
 		init();
 	if(env == nil)
 		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
-	return matchsel(matcher(d, env), sel, n);
+	m := matcher(d, env);
+	m.scope = scope;
+	return matchsel(m, sel, n);
 }
 
 classesof(m: ref M, n: int): list of string
@@ -776,7 +779,11 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	d := m.d;
 	nd := d.nodes[n];
 	case x.name {
-	"root" or "scope" =>
+	"scope" =>
+		if(m.scope > 0)
+			return n == m.scope;
+		return parentel(d, n) == 0;
+	"root" =>
 		return parentel(d, n) == 0;
 	"is" or "where" =>
 		for(i := 0; i < len x.sub; i++)

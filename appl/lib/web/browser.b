@@ -2199,18 +2199,18 @@ sels(r: ref Realm, sel: string): array of ref Css->Sel
 	return a;
 }
 
-matchsels(r: ref Realm, n: int, a: array of ref Css->Sel): int
+matchsels(r: ref Realm, n: int, a: array of ref Css->Sel, scope: int): int
 {
 	d := r.pg.doc;
 	if(d.nodes[n].kind != Dom->Element)
 		return 0;
 	for(i := 0; i < len a; i++)
-		if(style->match(d, n, a[i], r.pg.env))
+		if(style->match(d, n, a[i], r.pg.env, scope))
 			return 1;
 	return 0;
 }
 
-hmatch(id, n: int, sel: string): int
+hmatch(id, n: int, sel: string, scope: int): int
 {
 	r := realmbyid(id);
 	if(r == nil || n <= 0 || n >= r.pg.doc.n)
@@ -2218,7 +2218,9 @@ hmatch(id, n: int, sel: string): int
 	a := sels(r, sel);
 	if(a == nil)
 		return -1;
-	return matchsels(r, n, a);
+	if(scope < 0 || scope >= r.pg.doc.n || r.pg.doc.nodes[scope].kind != Dom->Element)
+		scope = 0;
+	return matchsels(r, n, a, scope);
 }
 
 hselect(id, root: int, sel: string, all: int): (int, list of int)
@@ -2230,9 +2232,12 @@ hselect(id, root: int, sel: string, all: int): (int, list of int)
 	if(a == nil)
 		return (-1, nil);
 	d := r.pg.doc;
+	scope := root;
+	if(d.nodes[root].kind != Dom->Element)
+		scope = 0;
 	found: list of int;
 	for(n := d.nodes[root].first; n != 0; n = nextin(d, n, root))
-		if(matchsels(r, n, a)) {
+		if(matchsels(r, n, a, scope)) {
 			if(!all)
 				return (1, n :: nil);
 			found = n :: found;

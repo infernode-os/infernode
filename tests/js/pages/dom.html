@@ -189,6 +189,15 @@ test('custom property', () => {
 	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
 	d.remove();
 });
+test(':scope', () => {
+	const a = document.createElement('div');
+	a.innerHTML = '<div class=sc><div class=sc>x</div></div>';
+	document.body.appendChild(a);
+	check('child of scope', a.querySelectorAll(':scope > .sc').length, 1);
+	check('matches scope', a.matches(':scope'), true);
+	check('closest scope', a.firstChild.firstChild.closest(':scope.sc') === a.firstChild.firstChild, true);
+	a.remove();
+});
 test('user timing', () => {
 	performance.mark('m1');
 	check('measure from navigationStart', performance.measure('nav', 'navigationStart', 'm1').startTime, 0);

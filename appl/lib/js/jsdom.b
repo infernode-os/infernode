@@ -375,7 +375,7 @@ domnatives(): int
 	method(o, "remove", 1, dn_remove);
 	method(o, "children", 2, dn_children);
 	method(o, "descendants", 3, dn_descendants);
-	method(o, "match", 2, dn_match);
+	method(o, "match", 3, dn_match);
 	method(o, "select", 3, dn_select);
 	method(o, "parse", 1, dn_parse);
 	method(o, "markup", 2, dn_markup);
@@ -654,7 +654,10 @@ lowerascii(s: string): string
 dn_match(nil: V, a, n: int, nil: V, nil: int): V
 {
 	x := nodearg(a, n, 0);
-	return inum(pgh.match(pgh.id, x, jsarg(a, n, 1)));
+	scope := 0;
+	if((sv := arg(a, n, 2)).t == Tnum)
+		scope = int sv.n;
+	return inum(pgh.match(pgh.id, x, jsarg(a, n, 1), scope));
 }
 
 # all: an array of nodes; else the first, or 0; null if not a valid selector

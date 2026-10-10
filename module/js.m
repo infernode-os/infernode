@@ -89,7 +89,7 @@ Js: module
 		media:	ref fn(id: int, query: string): int;	# a media query matches
 		# selectors: whether node n matches (-1: not a valid selector);
 		# the elements under root that match, in document order (one if not all)
-		match:	ref fn(id, n: int, sel: string): int;
+		match:	ref fn(id, n: int, sel: string, scope: int): int;	# scope: what :scope is, 0 the root
 		select:	ref fn(id, root: int, sel: string, all: int): (int, list of int);
 		# markup parsed as the body of a document of its own
 		parse:	ref fn(id: int, markup: string): ref Dom->Doc;

@@ -23,6 +23,7 @@ Genstate: adt {
 	promise:	int;	# an async function's promise
 	genobj:	int;	# the generator object
 	queue:	list of ref Asyncreq;	# an async generator's requests
+	raw:	int;		# out is an iterator result already (yield*)
 };
 
 Asyncreq: adt {
@@ -92,7 +93,7 @@ globalcodes: array of ref Code;
 startgen(h: int, d: ref Data.Func, this: V, a, n: int): V
 {
 	c := d.code;
-	g := ref Genstate(Gstart, c, h, nil, 0, -1, -1, undef, 0, undef, (c.flags & Casync) != 0, -1, -1, nil);
+	g := ref Genstate(Gstart, c, h, nil, 0, -1, -1, undef, 0, undef, (c.flags & Casync) != 0, -1, -1, nil, 0);
 	# the frame's registers, set up as for a call, then saved
 	nb := sp;
 	if(nb < a + n)
@@ -273,6 +274,8 @@ genresume(gv: V, mode: int, v: V, name: string): V
 	sp = sp0;
 	if(g.state == Gdone)
 		return iterresult(g.result, 1);
+	if(g.raw)
+		return g.out;
 	return iterresult(g.out, 0);
 }
 
@@ -869,46 +872,48 @@ iterclose(it: V)
 		typeerr("iterator result is not an object");
 }
 
-# yield*'s throw: res = inner.throw(v), done into the register after res's mode
-yieldstarthrow(resr, itr: int)
+# yield*'s step: the inner iterator's next, throw or return (by mode) with v;
+# done and res: the result's done, and (done) its value or (not) the result itself
+ystep(resr, doner, itr: int, mode, v: V, async: int)
 {
 	it := vs[base+itr];
-	v := vs[base+resr-2];	# (the value register precedes: see the compiler's layout)
-	v = vs[base+lastresume];
-	th := getmethod(it, athrow);
-	if(th.t == Tundef) {
-		# no throw: close it, then it is a protocol error
-		iterclose(it);
-		typeerr("the iterator does not have a 'throw' method");
+	m := int mode.n;
+	r: V;
+	case m {
+	Rnext =>
+		r = call(vs[base+itr+1], it, array[] of {v});
+	Rthrow =>
+		th := getmethod(it, athrow);
+		if(th.t == Tundef) {
+			# no throw: close it, then it is a protocol error
+			if(async) {
+				ret := getmethod(it, areturn);
+				if(ret.t != Tundef)
+					call(ret, it, nil);
+			} else
+				iterclose(it);
+			typeerr("the iterator does not have a 'throw' method");
+		}
+		r = call(th, it, array[] of {v});
+	* =>
+		ret := getmethod(it, areturn);
+		if(ret.t == Tundef) {
+			vs[base+resr] = v;
+			vs[base+doner] = vtrue;
+			return;
+		}
+		r = call(ret, it, array[] of {v});
 	}
-	r := call(th, it, array[] of {v});
-	if(r.t != Tobj)
-		typeerr("iterator result is not an object");
-	setyieldres(resr, r);
-}
-
-yieldstarreturn(resr, itr, vr: int)
-{
-	it := vs[base+itr];
-	v := vs[base+vr];
-	ret := getmethod(it, areturn);
-	if(ret.t == Tundef) {
-		vs[base+resr] = v;
-		vs[base+resr+1] = vtrue;
+	if(async) {
+		# the result is awaited by the code that follows
+		vs[base+resr] = r;
+		vs[base+doner] = vfalse;
 		return;
 	}
-	r := call(ret, it, array[] of {v});
 	if(r.t != Tobj)
-		typeerr("iterator result is not an object");
-	setyieldres(resr, r);
-}
-
-lastresume := 0;
-
-setyieldres(resr: int, r: V)
-{
+		typeerr("iterator result " + show(r) + " is not an object");
 	d := truthy(getv(r, adone));
-	vs[base+resr+1] = bool(d);
+	vs[base+doner] = bool(d);
 	if(d)
 		vs[base+resr] = getv(r, avalue);
 	else
@@ -1429,20 +1434,20 @@ oplen(op: int): int
 	Ojt or Ojf or Ojnullish or Ojnnullish or Ojundef or Ojnundef or Othrowerr or Oclosure or
 	Oarrpush or Oarrspread or Osetproto or Osethome or Otemplate or Oregexp or Oforin or
 	Oargs or Orest or Otokey or Otostr or Oyield or Oawait or Ospreadobj or Onewprivate or
-	Oiterthrow or Oneg or Opos or Otonumeric or Onot or Obnot or Otypeof or Oinc or Odec or
+	Oneg or Opos or Otonumeric or Onot or Obnot or Otypeof or Oinc or Odec or
 	Oitercall or Oitreturn or Ojempty =>
 		return 3;
 	Ogetenv or Osetenv or Ogetglobal or Ocallname or Ogetelem or Osetelem or Odelprop or
 	Odelelem or Oin or Odefdata or Odefdataa or Ocopyprops or Osetfnname or Ogetiter or
 	Oiternext or Oforinnext or Oconcat or Oyieldraw or Ogetpriv or Osetpriv or Odefpriv or
-	Ohaspriv or Oimport or Oiterreturn or Onewspread or
+	Ohaspriv or Oimport or Onewspread or
 	Oadd or Osub or Omul or Odiv or Omod or Oexp or Oshl or Oshr or Oushr or Oband or Obor or Obxor or
 	Oeq or One or Oseq or Osne or Olt or Ole or Ogt or Oge or Oinstof =>
 		return 4;
 	Ogetenvc or Osetenvc or Ogetprop or Osetprop or Ocallspread or Onew or Odefacc or
 	Oclass or Odefmethod or Oprivmethod or Ogetsuper or Osetsuper or Osupercallspread or Oiterres =>
 		return 5;
-	Ocall or Oeval or Osupercall =>
+	Ocall or Oeval or Osupercall or Oystep =>
 		return 6;
 	}
 	return 1;

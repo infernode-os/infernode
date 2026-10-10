@@ -128,6 +128,7 @@ Oiterres,	# r r r r	value, done from an iterator result r3 (TypeError if not an 
 Oitreturn,	# r r		r1 = the iterator's return() result, or empty if it has none (or is exhausted)
 Ojempty,	# r j
 Ochkobj,	# r		TypeError if r is not an object
+Oystep,		# r r r r r	yield*: res, done, the iterator, the mode, what was sent
 Onop: con iota;
 
 # Code flags

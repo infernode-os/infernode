@@ -933,11 +933,13 @@ loop(entry: int): V
 				g.resumereg = ops[pc+1];
 				g.modereg = ops[pc+2];
 				g.out = vs[base+ops[pc+3]];
+				g.raw = (code.flags & Casync) == 0;
 				pc += 4;
 			} else {
 				g.resumereg = ops[pc+1];
 				g.modereg = -1;
 				g.out = vs[base+ops[pc+2]];
+				g.raw = 0;
 				pc += 3;
 			}
 			g.awaiting = op == Oawait;
@@ -1026,14 +1028,6 @@ loop(entry: int): V
 			frames[nframe-1].pc = pc;
 			vs[base+ops[pc+1]] = dynimport(vs[base+ops[pc+2]], vs[base+ops[pc+3]]);
 			pc += 4;
-		Oiterthrow =>
-			frames[nframe-1].pc = pc;
-			pc += 3;
-			yieldstarthrow(ops[pc-2], ops[pc-1]);
-		Oiterreturn =>
-			frames[nframe-1].pc = pc;
-			pc += 4;
-			yieldstarreturn(ops[pc-3], ops[pc-2], ops[pc-1]);
 		Olineno =>
 			pc += 2;
 		Oitercall =>
@@ -1071,6 +1065,9 @@ loop(entry: int): V
 				pc = ops[pc+2];
 			else
 				pc += 3;
+		Oystep =>
+			ystep(ops[pc+1], ops[pc+2], ops[pc+3], vs[base+ops[pc+4]], vs[base+ops[pc+5]], code.flags & Casync);
+			pc += 6;
 		Ochkobj =>
 			if(vs[base+ops[pc+1]].t != Tobj)
 				typeerr("iterator result is not an object");

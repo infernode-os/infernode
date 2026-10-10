@@ -887,6 +887,21 @@ func1(f: ref Node.Func, r: ref R1)
 	}
 	walklist1(f.params, r2);
 	walklist1(f.body, r2);
+	# a sloppy function with simple parameters and an arguments object: the
+	# parameters live where the object can alias them
+	ab := findlocal(fs, "arguments");
+	if(ab != nil && ab.kind == Barguments && !strict && (f.flags & Jsparse->Farrow) == 0 && simpleparams(f.params))
+		for(l := fs.binds; l != nil; l = tl l)
+			if((hd l).kind == Bparam)
+				capture(fs, hd l);
+}
+
+simpleparams(params: array of ref Node): int
+{
+	for(i := 0; i < len params; i++)
+		if(tagof params[i] != tagof Node.Ident)
+			return 0;
+	return 1;
 }
 
 class1(c: ref Node.Class, r: ref R1)
@@ -1277,12 +1292,12 @@ constassign(name: string)
 # ---- functions ----
 
 # compile a function's tree to its code
-compilefunc(f: ref Node.Func, parent: ref CFunc, src: string): ref Code
+compilefunc(f: ref Node.Func, parent: ref CFunc, src: string, extra: int): ref Code
 {
 	fs := sget(skey(f, Sfunc));
 	if(fs == nil)
 		compileerr(f.pos, "internal: no scope for function");
-	return compilebody(f, fs, parent, src, f.flags);
+	return compilebody(f, fs, parent, src, f.flags, extra);
 }
 
 newcfunc(parent: ref CFunc, f: ref Node.Func, fs: ref CScope, src: string): ref CFunc
@@ -1300,7 +1315,7 @@ newcfunc(parent: ref CFunc, f: ref Node.Func, fs: ref CScope, src: string): ref 
 	return c;
 }
 
-compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pflags: int): ref Code
+compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pflags, extra: int): ref Code
 {
 	saved := cs;
 	savedscope := cscope;
@@ -1319,6 +1334,7 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 		flags |= Casync;
 	if(pflags & Jsparse->Fmethod)
 		flags |= Cmethod;
+	flags |= extra;
 	cs.flags = flags;
 	nformal := 0;
 	flen := -1;
@@ -1443,10 +1459,17 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 		stmts(f.body);
 		t := tmp();
 		e1(Oundef, t);
+		derivedthis();
 		e1(Oret, t);
 	}
 	leavescope(fs);
 	code := finish(f.id, flen, nformal);
+	code.paramnames = array[len f.params] of {* => -1};
+	for(i = 0; i < len f.params; i++)
+		pick p := f.params[i] {
+		Ident =>
+			code.paramnames[i] = intern(p.name);
+		}
 	cs = saved;
 	cscope = savedscope;
 	envdepth = savedenv;
@@ -1569,10 +1592,15 @@ revcode(l: list of ref Code): array of ref Code
 # a nested function's template; returns its index
 addfunc(f: ref Node.Func): int
 {
+	return addfuncx(f, 0);
+}
+
+addfuncx(f: ref Node.Func, extra: int): int
+{
 	src := "";
 	if(f.end <= len cs.src && f.pos <= f.end)
 		src = cs.src[f.pos:f.end];
-	c := compilefunc(f, cs, cs.src);
+	c := compilefunc(f, cs, cs.src, extra);
 	c.src = src;
 	cs.funcs = c :: cs.funcs;
 	return cs.nfunc++;
@@ -2093,6 +2121,24 @@ jumpout(lab: ref Label, iscont: int)
 		lab.breaks = j :: lab.breaks;
 }
 
+# a derived constructor whose this an arrow may have bound: the frame's from the binding
+derivedthis()
+{
+	if((cs.flags & Cderived) == 0 || cs.flags & Carrow)
+		return;
+	(how, nil, slot, b) := lookup("%this");
+	if(how == Lenv)
+		e3(Ogetenv, Rthis, envdepthof(b), slot);
+	else if(how == Lreg && b.reg != Rthis)
+		e2(Omove, Rthis, b.reg);
+}
+
+envdepthof(nil: ref Bind): int
+{
+	(nil, depth, nil, nil) := lookup("%this");
+	return depth;
+}
+
 # IteratorClose (or AsyncIteratorClose) for a normal completion
 closeiter(it, async: int)
 {
@@ -2131,6 +2177,7 @@ retthrough(t: int)
 	for(l := cs.labels; l != nil; l = tl l)
 		if((hd l).iterreg >= 0)
 			closeiter((hd l).iterreg, (hd l).iterasync);
+	derivedthis();
 	e1(Oret, t);
 }
 
@@ -2777,11 +2824,16 @@ thisinto(r: int)
 			return;
 		}
 	}
-	e2(Omove, r, Rthis);
-	if(cs.flags & Cderived)
+	if(cs.flags & Cderived) {
+		(how, nil, nil, nil) := lookup("%this");
+		if(how == Lenv || how == Lreg)
+			getname("%this", r, 0);
+		else
+			e2(Omove, r, Rthis);
 		e1(Ochkthis, r);
-	else if(cs.flags & (Cscript|Ceval))
-		;
+		return;
+	}
+	e2(Omove, r, Rthis);
 }
 
 newtargetinto(r: int)
@@ -3128,7 +3180,7 @@ assign(x: ref Node.Assign, r: int)
 				else
 					litkey(t.prop, k);
 				gexpr(x.value, r);
-				e2(Osetsuper, k, r);
+				superset(k, r);
 				return;
 			}
 			o := tmp();
@@ -3178,18 +3230,18 @@ assign(x: ref Node.Assign, r: int)
 				e2(Otokey, k, k);
 			} else
 				litkey(t.prop, k);
-			e2(Ogetsuper, r, k);
+			superget(r, k);
 			if(logic) {
 				j := logicjump(x.op, r);
 				gexpr(x.value, r);
-				e2(Osetsuper, k, r);
+				superset(k, r);
 				patch(j);
 				return;
 			}
 			b := tmp();
 			gexpr(x.value, b);
 			e3(op, r, r, b);
-			e2(Osetsuper, k, r);
+			superset(k, r);
 			return;
 		}
 		o := tmp();
@@ -3272,11 +3324,11 @@ update(x: ref Node.Update, r: int)
 				e2(Otokey, k, k);
 			} else
 				litkey(t.prop, k);
-			e2(Ogetsuper, r, k);
+			superget(r, k);
 			e2(Otonumeric, r, r);
 			n := tmp();
 			e2(op, n, r);
-			e2(Osetsuper, k, n);
+			superset(k, n);
 			if(x.prefix)
 				e2(Omove, r, n);
 			return;
@@ -3332,7 +3384,7 @@ cmember(x: ref Node.Member, r: int, this: int)
 			e2(Otokey, k, k);
 		} else
 			litkey(x.prop, k);
-		e2(Ogetsuper, r, k);
+		superget(r, k);
 		if(this >= 0)
 			thisinto(this);
 		return;
@@ -3531,13 +3583,15 @@ supercall(x: ref Node.Call, r: int)
 	if(hasspread(x.args)) {
 		a := tmp();
 		spreadargs(x.args, a);
-		e2(Osupercallspread, r, a);
+		(fr, ntr) := supercallregs();
+		e4(Osupercallspread, r, a, fr, ntr);
 	} else {
 		n := len x.args;
 		args := tmps(n);
 		for(i := 0; i < n; i++)
 			gexpr(x.args[i], args + i);
-		e3(Osupercall, r, args, n);
+		(fr, ntr) := supercallregs();
+		e5(Osupercall, r, args, n, fr, ntr);
 	}
 	# this is now bound: in the frame, and where arrows and eval see it
 	(how, nil, nil, nil) := lookup("%this");
@@ -3572,38 +3626,83 @@ yieldstar(x: ref Node.Yield, r: int)
 	mode := tmp();
 	e2(Oint, mode, 0);
 	e1(Oundef, r);
-	top := here();
 	res := tmp();
 	done := tmp();
-	# per resume mode: next, throw or return on the inner iterator
-	e2(Oint, done, 0);
-	e3(Oseq, done, mode, done);
-	j1 := ejump(Ojf, done);
-	e3(Oiternext, res, done, it);	# (the value sent is passed in r by the VM)
-	jn := ejump(Ojmp, 0);
-	patch(j1);
-	e2(Oint, done, 1);
-	e3(Oseq, done, mode, done);
-	j2 := ejump(Ojf, done);
-	e2(Oiterthrow, res, it);
-	jt := ejump(Ojmp, 0);
-	patch(j2);
-	e3(Oiterreturn, res, it, r);
-	patch(jn);
-	patch(jt);
-	# res holds the inner result's value; the VM leaves done in done
+	top := here();
+	# per resume mode: the inner next, throw or return, with what was sent
+	emit(Oystep);
+	emit(res);
+	emit(done);
+	emit(it);
+	emit(mode);
+	emit(r);
+	if(async) {
+		e2(Oawait, res, res);
+		e4(Oiterres, res, done, res, it);
+	}
 	jd := ejump(Ojt, done);
 	e3(Oyieldraw, r, mode, res);
 	jumpto(Ojmp, 0, top);
 	patch(jd);
-	e2(Omove, r, res);
 	# a return that finished the inner iterator returns from here
 	e2(Oint, done, 2);
 	e3(Oseq, done, mode, done);
 	jr := ejump(Ojf, done);
-	retthrough(r);
+	if(async)
+		e2(Oawait, res, res);
+	retthrough(res);
 	patch(jr);
+	e2(Omove, r, res);
 	freeto(t0);
+}
+
+# the function (for its home object) and this for super.x
+superregs(): (int, int)
+{
+	thisr := tmp();
+	thisinto(thisr);
+	if(cs.flags & (Carrow|Ceval)) {
+		fr := tmp();
+		calleeinto(fr);
+		return (fr, thisr);
+	}
+	return (Rfn, thisr);
+}
+
+calleeinto(r: int)
+{
+	(how, nil, nil, nil) := lookup("%callee");
+	if(how == Lenv || how == Lreg)
+		getname("%callee", r, 0);
+	else if(how == Ldyn)
+		e2(Ogetname, r, intern("%callee"));
+	else
+		e1(Oundef, r);
+}
+
+superget(r, k: int)
+{
+	(fr, thisr) := superregs();
+	e4(Ogetsuper, r, k, fr, thisr);
+}
+
+superset(k, v: int)
+{
+	(fr, thisr) := superregs();
+	e4(Osetsuper, k, v, fr, thisr);
+}
+
+# the constructor (whose prototype is the super constructor) and new.target for super()
+supercallregs(): (int, int)
+{
+	if(cs.flags & (Carrow|Ceval)) {
+		fr := tmp();
+		calleeinto(fr);
+		ntr := tmp();
+		newtargetinto(ntr);
+		return (fr, ntr);
+	}
+	return (Rfn, Rnewtarget);
 }
 
 # ---- classes ----
@@ -3772,7 +3871,7 @@ fieldsfn(c: ref Node.Class, s: ref CScope, ctor, proto, static: int)
 				ffn.body[0] = ref Node.Return(m.pos, m.end, val);
 			}
 			saved := cs;
-			code := compilebody(ffn, fs, cs, cs.src, ffn.flags);
+			code := compilebody(ffn, fs, cs, cs.src, ffn.flags, 0);
 			code.flags |= Cmethod;
 			if(static)
 				code.flags |= Cstatic;
@@ -3822,7 +3921,7 @@ fieldsfn(c: ref Node.Class, s: ref CScope, ctor, proto, static: int)
 
 addfuncflags(f: ref Node.Func, flags: int): int
 {
-	i := addfunc(f);
+	i := addfuncx(f, flags);
 	c := hd cs.funcs;
 	c.flags |= flags;
 	if((flags & Cderived) == 0)

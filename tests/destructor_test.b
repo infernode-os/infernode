@@ -176,6 +176,32 @@ testDropListCell(t: ref T)
 		t.assert(after - before < Slack, sys->sprint("heap grew by %d across %d tl drops", after - before, Iters));
 }
 
+# A chain longer than destroy() recurses: freeing its head must free
+# all of it, not the first 64 links with the rest left for the
+# collector (which a busy VM runs every 256 scheduling rounds).
+Link: adt {
+	next:	cyclic ref Link;
+	data:	array of byte;
+};
+
+Chainlen: con 4000;
+Chains: con 100;	# 400MB of links through the heap
+
+testDropDeepChain(t: ref T)
+{
+	before := heapinuse();
+	for(i := 0; i < Chains; i++) {
+		l: ref Link;
+		for(j := 0; j < Chainlen; j++)
+			l = ref Link(l, array[1024] of byte);
+		l = nil;
+	}
+	after := heapinuse();
+	t.log(sys->sprint("heap in use: before %d after %d", before, after));
+	if(before >= 0 && after >= 0)
+		t.assert(after - before < Slack, sys->sprint("heap grew by %d across %d chains of %d", after - before, Chains, Chainlen));
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -192,6 +218,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DropByAssignment", testDropByAssignment);
 	run("DropOnReturn", testDropOnReturn);
 	run("DropListCell", testDropListCell);
+	run("DropDeepChain", testDropDeepChain);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

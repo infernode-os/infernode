@@ -147,6 +147,15 @@ str(h: int): string
 	return r;
 }
 
+# the code point at s[i], and how many code units it takes
+cpat(s: string, i: int): (int, int)
+{
+	c := s[i];
+	if(c >= 16rD800 && c <= 16rDBFF && i + 1 < len s && s[i+1] >= 16rDC00 && s[i+1] <= 16rDFFF)
+		return (16r10000 + ((c - 16rD800) << 10) + (s[i+1] - 16rDC00), 2);
+	return (c, 1);
+}
+
 vstr(v: V): string
 {
 	return str(v.x);
@@ -894,6 +903,8 @@ ownkeys(h: int): array of int
 		strs = alength :: strs;
 	for(i = 0; i < sh.n; i++) {
 		k := sh.keys[i];
+		if(k >= 0 && atomsym[k] == byte 2)
+			continue;	# a private name: never a key
 		ix := keyindex(k);
 		if(ix >= 0.0)
 			idx = (ix, k) :: idx;

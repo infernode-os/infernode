@@ -13,7 +13,10 @@ implement Js;
 #	jscomp.b	the compiler
 #	jsvm.b		the interpreter
 #	jsrt.b		generators, promises, iteration, eval
-#	jsbuiltin.b	the realm's built-in objects
+#	jsbuiltin.b	the realm's intrinsics; Object, Function, errors, Symbol, Boolean, globals
+#	jsarray.b	Array
+#	jsstring.b	String, Number, Math, JSON
+#	jscoll.b	Map, Set, weak collections, Promise, Reflect, iterators, generators
 #
 
 include "sys.m";
@@ -41,7 +44,9 @@ include "jscomp.b";
 include "jsvm.b";
 include "jsrt.b";
 include "jsbuiltin.b";
-include "jsstubs.b";
+include "jsarray.b";
+include "jsstring.b";
+include "jscoll.b";
 
 output: ref fn(s: string);
 

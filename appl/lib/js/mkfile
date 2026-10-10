@@ -21,4 +21,4 @@ DISBIN=$ROOT/dis/lib/js
 <$ROOT/mkfiles/mkdis
 
 # js.dis is one module from several fragments
-js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsstubs.b
+js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsarray.b jsstring.b jscoll.b

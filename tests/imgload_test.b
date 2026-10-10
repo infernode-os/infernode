@@ -36,7 +36,8 @@ include "imagefile.m";
 include "imgload.m";
 	imgload: Imgload;
 
-include "renderer.m";
+include "docengine.m";
+include "docreg.m";
 
 include "testing.m";
 	testing: Testing;
@@ -371,26 +372,27 @@ testReader(t: ref T)
 	t.assert(rd == nil && err != nil, "PPM is read by imgload itself");
 }
 
-# --- Xenith's image renderer ---
+# --- Xenith's document kinds (docreg(2)): which files are images ---
 
-testRenderer(t: ref T)
+isimagekind(k: ref Docreg->Kind): int
 {
-	needdisplay(t);
-	r := load Renderer "/dis/xenith/render/imgrender.dis";
-	if(r == nil)
-		t.skip(sys->sprint("imgrender: %r"));
-	r->init(display);
-	ri := r->info();
-	t.assert(contains(" " + ri.extensions + " ", " .svg "), "it claims .svg");
-	t.assert(contains(" " + ri.extensions + " ", " .webp "), "it claims .webp");
+	return k != nil && k.name == "image";
+}
+
+testKinds(t: ref T)
+{
+	reg := load Docreg Docreg->PATH;
+	if(reg == nil)
+		t.skip(sys->sprint("docreg: %r"));
+	reg->init(display);
+	t.assert(isimagekind(reg->kind("x.svg", nil)), "an .svg is an image");
+	t.assert(isimagekind(reg->kind("x.webp", nil)), "a .webp is an image");
 	png := readfile(FIXTURES + "/rb.png");
-	svg := readfile(FIXTURES + "/rb.svg");
-	t.asserteq(r->canrender(png, nil), 100, "PNG data, no name");
-	t.asserteq(r->canrender(svg, "rb.svg"), 90, "an SVG named so");
-	t.asserteq(r->canrender(array of byte "#define X 1\n#define Y 2\n", "x.h"), 0, "a C header is not an XBM");
-	t.asserteq(r->canrender(array of byte "P3 is the plan\n", "notes.txt"), 0, "text starting P3 is not a PPM");
-	html := array of byte "<!DOCTYPE html><html><svg></svg></html>";
-	t.asserteq(r->canrender(html, "page.html"), 0, "an HTML page with inline SVG");
+	t.assert(isimagekind(reg->kind("noname", png[0:16])), "PNG data, no name");
+	t.assert(reg->kind("x.h", array of byte "#define X 1\n#define Y 2\n") == nil, "a C header is not an XBM");
+	t.assert(reg->kind("notes.txt", array of byte "P3 is the plan\n") == nil, "text starting P3 is not a PPM");
+	k := reg->kind("page.html", array of byte "<!DOCTYPE html><html><svg></svg></html>");
+	t.assert(k != nil && k.name == "html", "an HTML page with inline SVG is HTML");
 }
 
 # --- Module loading tests ---
@@ -889,7 +891,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RemapTrueColour", testRemapTrueColour);
 	run("Unrecognised", testUnrecognised);
 	run("Reader", testReader);
-	run("Renderer", testRenderer);
+	run("Kinds", testKinds);
 
 	# Module loading tests
 	run("ReadpngLoads", testReadpngLoads);

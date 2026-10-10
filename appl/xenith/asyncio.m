@@ -22,45 +22,25 @@ Asyncio: module {
 			Error =>
 				opid: int;
 				err: string;
-			ImageData =>
-				opid: int;
-				winid: int;     # Window ID for the image
-				path: string;   # Image path (for display in tag)
-				data: array of byte;  # Raw image bytes
-				err: string;    # nil on success
-		ImageDecoded =>
-				winid: int;     # Window ID for the image
-				path: string;   # Image path (for display in tag)
-				image: ref Draw->Image;  # Decoded image (nil on error)
-				err: string;    # nil on success
-		ImageProgress =>
-				winid: int;     # Window ID for the image
-				path: string;   # Image path
-				image: ref Draw->Image;  # Image being decoded (partial content)
-				rowsdone: int;  # Rows decoded so far
-				rowstotal: int; # Total rows
-		# Content rendering messages (renderer-based pipeline)
-		ContentData =>
-				opid: int;
-				winid: int;     # Window ID
-				path: string;   # File path
-				data: array of byte;  # Raw file bytes
-				err: string;    # nil on success
-		WebEvent =>
-				winid: int;     # Window ID of a browser window
-				event: string;  # its page's event (htmldoc.m: browse)
-		ContentDecoded =>
-				winid: int;     # Window ID
-				path: string;   # File path (for display in tag)
-				image: ref Draw->Image;  # Rendered image (nil on error)
-				text: string;   # Extracted text content (nil if none)
-				err: string;    # nil on success
-		ContentProgress =>
-				winid: int;     # Window ID
-				path: string;   # File path
-				image: ref Draw->Image;  # Partial render
-				done: int;      # Units completed
-				total: int;     # Total units
+		# a window's document (docview(2)), from work off the main loop
+		DocOpened =>
+				winid: int;
+				gen: int;       # which opening of the window's document
+				eng: Docengine;
+				h: int;         # the engine's handle, or -1
+				text: string;   # a binary document's text
+				err: string;
+		DocPainted =>
+				winid: int;
+				gen: int;
+				n: int;         # the sheet
+				scale: int;
+				image: ref Draw->Image;
+				err: string;
+		DocEvent =>
+				winid: int;
+				gen: int;
+				event: string;  # docengine(2): events
 		TextData =>
 				opid: int;      # Operation ID
 				winid: int;     # Window ID for the text
@@ -113,12 +93,6 @@ Asyncio: module {
 
 	# Start async file read - returns operation handle
 	asyncload: fn(path: string, q0: int): ref AsyncOp;
-
-	# Start async image load - returns operation handle
-	asyncloadimage: fn(path: string, winid: int): ref AsyncOp;
-
-	# Start async content load (for renderer pipeline) - returns operation handle
-	asyncloadcontent: fn(path: string, winid: int): ref AsyncOp;
 
 	# Start async text file load - returns operation handle
 	asyncloadtext: fn(path: string, q0: int, winid: int): ref AsyncOp;

@@ -43,6 +43,8 @@ disk diskblocks
 diskblocks diskblocks
 tempfile diskblocks
 dividers dividers
+docengine docengine
+docreg docengine
 draw draw-0intro
 draw-intro draw-0intro
 context draw-context

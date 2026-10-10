@@ -1,0 +1,40 @@
+<$ROOT/mkconfig
+
+# Document engines (docengine(2)), loaded by docreg the first time a
+# document of their kind is opened: see /lib/xenith/doctypes.
+
+TARG=\
+	pdfdoc.dis\
+	imgdoc.dis\
+	mddoc.dis\
+	mmddoc.dis\
+	webdoc.dis\
+
+SYSMODULES=\
+	sys.m\
+	draw.m\
+	docengine.m\
+	pdf.m\
+	imgload.m\
+	imagefile.m\
+	bufio.m\
+	mermaid.m\
+	htmldoc.m\
+	rlayout.m\
+	keyboard.m\
+
+MODULES=\
+
+DISBIN=$ROOT/dis/xenith/doc
+
+all:V:	$TARG
+
+<$ROOT/mkfiles/mkdis
+
+install:V:	$BINTARG
+
+nuke:V:
+	rm -f *.dis *.sbl
+
+clean:V:
+	rm -f *.dis *.sbl

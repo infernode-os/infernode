@@ -34,6 +34,7 @@ Dat : module {
 		editlog: Editlog;
 		editcmd: Editcmd;
 		asyncio: Asyncio;
+		docview: Docview;
 	};
 
 	SZSHORT : con 2;
@@ -45,7 +46,7 @@ Dat : module {
 
 	EM_NORMAL, EM_RAW, EM_MASK : con iota;
 
-	Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QWerrors,QWxdata,QWweb,QMAX : con iota;
+	Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QWerrors,QWxdata,QWweb,QWdoc,QWdocctl,QWdoctext,QWdoclinks,QWdocfind,QMAX : con iota;
 
 	Blockincr : con 256;
 	Maxblock : con 8*1024;

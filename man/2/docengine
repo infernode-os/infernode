@@ -1,0 +1,197 @@
+.TH DOCENGINE 2
+.SH NAME
+docengine, docreg \- documents for Xenith's document view
+.SH SYNOPSIS
+.EX
+include "docengine.m";
+include "docreg.m";
+docreg := load Docreg Docreg->PATH;
+
+Docreg: module {
+	Binary, Source: con iota;
+	Kind: adt {
+		name:   string;
+		class:  int;
+		engine: string;
+		exts:   list of string;
+		magic:  list of array of byte;
+	};
+	init:    fn(d: ref Draw->Display);
+	kind:    fn(name: string, head: array of byte): ref Kind;
+	kindof:  fn(name: string): ref Kind;
+	engine:  fn(k: ref Kind): (Docengine, string);
+	loaded:  fn(): list of string;
+	picture: fn(name: string, data: array of byte,
+	            s: ref Docengine->Style): (ref Draw->Image, string);
+};
+
+Docengine: module {
+	Style: adt {
+		width:   int;
+		font, codefont: ref Draw->Font;
+		fg, bg, accent, codebg: ref Draw->Image;
+	};
+	Run:  adt { text: string; r: Draw->Rect; };
+	Link: adt { sheet: int; r: Draw->Rect; url: string; };
+
+	init:      fn(d: ref Draw->Display): string;
+	open:      fn(data: array of byte, name: string,
+	              s: ref Style): (int, string);
+	close:     fn(h: int);
+	nsheets:   fn(h: int): int;
+	sheetsize: fn(h: int, n: int): Draw->Point;
+	restyle:   fn(h: int, s: ref Style): string;
+	scalable:  fn(h: int): int;
+	paint:     fn(h: int, n: int, scale: int, dst: ref Draw->Image,
+	              r: Draw->Rect, org: Draw->Point): string;
+	text:      fn(h: int): string;
+	sheettext: fn(h: int, n: int): string;
+	runs:      fn(h: int, n: int): array of Run;
+	links:     fn(h: int): array of Link;
+	linkat:    fn(h: int, n: int, p: Draw->Point): string;
+	lineto:    fn(h: int, l: int): (int, int);
+	lineat:    fn(h: int, n: int, y: int): int;
+	commands:  fn(h: int): list of string;
+	command:   fn(h: int, cmd, arg: string): string;
+	events:    fn(h: int): chan of string;
+	name:      fn(h: int): string;
+	click:     fn(h: int, n: int, p: Draw->Point): string;
+	key:       fn(h: int, r: int): string;
+	files:     fn(h: int): string;
+};
+.EE
+.SH DESCRIPTION
+A document is a file shown as it is meant to be seen: a PDF, an image,
+a Mermaid diagram, Markdown or HTML set for reading, a web page.
+Xenith's window shows every kind with one view; the document itself is
+held by an engine, a module that knows one kind.
+.PP
+.B Docreg
+knows the kinds. They are a table,
+.BR /lib/xenith/doctypes ,
+one kind a line: its name;
+.B binary
+(always shown as the document, the window's text being the document's
+text, read-only) or
+.B source
+(the window's text is the file's, and Render shows the document); the
+engine's module path; the file name extensions, with their dots; and
+.BI magic= bytes
+the file begins with,
+.BI \e x NN
+for a byte by its value.
+.I Kind
+gives the kind of a file by its extension, or failing that by its first
+bytes
+.IR head ,
+or nil if it is to be shown as text.
+.I Kindof
+gives the kind of a name.
+.I Engine
+loads a kind's engine the first time it is asked for, initialises it,
+and keeps it; reading the table loads nothing.
+.I Loaded
+lists the engines loaded.
+.I Picture
+draws a document whole as one image (its first sheet; a flowing
+document set to
+.IB s .width\f1,
+a picture scaled to it), for a program that shows documents as
+pictures, such as Lucifer's presentation view.
+.PP
+An engine holds documents of its kind as sessions named by a handle,
+.I h .
+Its dependencies (the PDF interpreter, the typesetter, Charon's engine)
+it loads when it opens its first document.
+.I Open
+makes a document from its bytes and its
+.I name
+(a path or a URL; with
+.I data
+nil the engine reads the file or fetches the URL), set in
+.IR s .
+A document is a column of sheets: a PDF's pages, or one sheet for a
+picture or for a flowing document laid out to
+.IB s .width\f1.
+.I Sheetsize
+is a sheet's size at scale 100;
+.I restyle
+sets a flowing document again for a new width or colours.
+.I Paint
+draws sheet
+.I n
+at
+.I scale
+(percent) into the rectangle
+.I r
+of
+.IR dst ,
+the point
+.I org
+of the scaled sheet at
+.IB r .min\f1;
+an engine for which
+.I scalable
+is 1 paints sharp at any scale, one for which it is 0 at 100 only, and
+the view scales what it paints.
+.PP
+.I Text
+is the document's text: extracted from a binary document, as set from a
+source one.
+.I Runs
+are the words on a sheet as drawn, with their boxes at scale 100, for
+hitting a word with the mouse and marking what a search finds; nil if
+the engine cannot tell.
+.I Links
+and
+.I linkat
+are the document's links.
+.I Lineto
+and
+.I lineat
+map a source document's lines to where they are set and back, so a
+window keeps its place going from its text to the document.
+.I Commands
+are the engine's own, beyond the view's (zoom, fit, paging), and
+.I command
+does one.
+.PP
+A document that changes by itself or takes the mouse and the keyboard,
+a web page, has
+.IR events :
+a channel giving
+.BI done " y
+(loaded; its name, text and size may have changed;
+.I y
+is where its last navigation asks the view to be),
+.B update
+(laid out again) and
+.BI error " msg\f1.
+.I Name
+is what it shows now.
+.I Click
+and
+.I key
+return nil if they were not taken, or what the view is to do:
+.B paint
+(paint again),
+.B layout
+(its size changed too) or
+.BI show " y0 y1
+(bring that part into view).
+.I Files
+is where the document is served as files, or nil.
+.SH FILES
+.B /lib/xenith/doctypes
+.br
+.B /dis/xenith/doc/*.dis
+\- the engines: pdfdoc, imgdoc, mddoc, mmddoc, webdoc
+.SH SOURCE
+.B /appl/xenith/docreg.b
+.br
+.B /appl/xenith/doc/*.b
+.br
+.B /appl/xenith/docview.b
+\- the view
+.SH SEE ALSO
+.B docs/xenith-documents.md

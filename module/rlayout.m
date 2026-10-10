@@ -65,6 +65,17 @@ Rlayout: module {
 	# parsemdlines, a map between the text's lines and the image.
 	renderat: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int);
 
+	# A word as drawn: where, and the link it is part of (or nil)
+	Word: adt {
+		text: string;
+		r: Draw->Rect;
+		link: string;
+	};
+
+	# Render a document, with the y each block starts at and the words
+	# drawn, where: for hit-testing and showing what a search found.
+	renderwords: fn(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array of int, array of Word);
+
 	# Extract plain text from a document tree (for AI/body buffer).
 	totext: fn(doc: list of ref DocNode): string;
 };

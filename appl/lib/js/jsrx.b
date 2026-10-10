@@ -229,6 +229,7 @@ gen(c: ref C, e: ref Re, fl: int)
 			cemit(c, fl);
 		}
 	Class =>
+		expandstrprops(x.set);
 		if(hasstrings(x.set) && !x.neg) {
 			genstrings(c, x.set, fl);
 			return;
@@ -301,6 +302,22 @@ genrepeat(c: ref C, x: ref Re.Repeat, fl: int)
 		c.code[s1] = out;
 		c.code[s2] = body;
 	}
+}
+
+# \p{RGI_Emoji} and the like, in a v-mode class: their strings
+expandstrprops(s: ref Set)
+{
+	for(i := 0; i < len s.items; i++)
+		pick it := s.items[i] {
+		Prop =>
+			if(it.value == nil && !it.neg) {
+				strs := propstrings(it.name);
+				if(strs != nil)
+					s.items[i] = ref Item.Strs(strs);
+			}
+		Nested =>
+			expandstrprops(it.set);
+		}
 }
 
 hasstrings(s: ref Set): int
@@ -688,95 +705,320 @@ samechars(s: string, a, b, l, fl, u: int): int
 # Canonicalize (§22.2.2.7.3): simple case folding (u, v) or upper case (otherwise)
 canon(c, u: int): int
 {
-	if(u)
-		return fold(c);
 	if(c < 128) {
+		if(u) {
+			if(c >= 'A' && c <= 'Z')
+				return c + 32;
+			return c;
+		}
 		if(c >= 'a' && c <= 'z')
 			return c - 32;
 		return c;
 	}
-	up := upper1(c);
+	loaduni();
+	if(u)
+		return fold(c);
+	up := mapone(uppermap, c);
 	if(up < 128)
 		return c;	# a non-ASCII character does not become ASCII
 	return up;
 }
 
-# simple case folding, for the common scripts
 fold(c: int): int
 {
-	if(c >= 'A' && c <= 'Z')
-		return c + 32;
-	if(c < 128)
-		return c;
-	case c {
-	16rB5 => return 16r3BC;
-	16r17F => return 's';
-	16r212A => return 'k';
-	16r212B => return 16rE5;
-	16r1E9E => return 16rDF;
-	16r3C2 => return 16r3C3;
-	16r3D0 => return 16r3B2;
-	16r3D1 => return 16r3B8;
-	16r3D5 => return 16r3C6;
-	16r3D6 => return 16r3C0;
-	16r3F0 => return 16r3BA;
-	16r3F1 => return 16r3C1;
-	16r3F5 => return 16r3B5;
-	16r1FBE => return 16r3B9;
-	16r345 => return 16r3B9;
-	}
-	l := lower1(c);
-	if(l != c)
-		return l;
+	loaduni();
+	return lookupmap(foldmap, c, c);
+}
+
+# c's full mapping when it is one character, else c
+mapone(m: array of list of (int, array of int), c: int): int
+{
+	for(l := m[c % len m]; l != nil; l = tl l)
+		if((hd l).t0 == c) {
+			t := (hd l).t1;
+			if(len t == 1)
+				return t[0];
+			return c;
+		}
 	return c;
 }
 
 lower1(c: int): int
 {
-	if(c >= 16rC0 && c <= 16rDE && c != 16rD7)
-		return c + 32;
-	if(c >= 16r391 && c <= 16r3AB && c != 16r3A2)
-		return c + 32;
-	if(c >= 16r410 && c <= 16r42F)
-		return c + 32;
-	if(c >= 16r400 && c <= 16r40F)
-		return c + 80;
-	if(c >= 16r100 && c <= 16r17F && (c & 1) == 0 && c != 16r130 && c != 16r138)
-		return c + 1;
-	if(c >= 16r10400 && c <= 16r10427)
-		return c + 40;
-	if(c >= 16rFF21 && c <= 16rFF3A)
-		return c + 32;
-	if(c >= 16r24B6 && c <= 16r24CF)
-		return c + 26;
-	return c;
+	loaduni();
+	return mapone(lowermap, c);
 }
 
 upper1(c: int): int
 {
-	if(c >= 'a' && c <= 'z')
-		return c - 32;
-	if(c >= 16rE0 && c <= 16rFE && c != 16rF7)
-		return c - 32;
-	if(c == 16rFF)
-		return 16r178;
-	if(c == 16rB5)
-		return 16r39C;
-	if(c >= 16r3B1 && c <= 16r3CB && c != 16r3C2)
-		return c - 32;
-	if(c == 16r3C2)
-		return 16r3A3;
-	if(c >= 16r430 && c <= 16r44F)
-		return c - 32;
-	if(c >= 16r450 && c <= 16r45F)
-		return c - 80;
-	if(c >= 16r100 && c <= 16r17F && (c & 1) == 1 && c != 16r131 && c != 16r149 && c != 16r17F)
-		return c - 1;
-	if(c == 16r17F)
-		return 'S';
-	if(c >= 16rFF41 && c <= 16rFF5A)
-		return c - 32;
-	return c;
+	loaduni();
+	return mapone(uppermap, c);
+}
+
+# ---- the Unicode data, from /lib/js/unicode, read on first use ----
+
+Unipath: con "/lib/js/unicode";
+
+uniloaded := 0;
+props: array of list of (string, array of int);	# name to ranges (first, last pairs)
+strprops: list of (string, array of string);
+unialias: list of (string, string);
+foldmap: array of list of (int, int);
+uppermap, lowermap: array of list of (int, array of int);
+
+loaduni()
+{
+	if(uniloaded)
+		return;
+	uniloaded = 1;
+	props = array[257] of list of (string, array of int);
+	foldmap = array[1031] of list of (int, int);
+	uppermap = array[1031] of list of (int, array of int);
+	lowermap = array[1031] of list of (int, array of int);
+	fd := sys->open(Unipath, Sys->OREAD);
+	if(fd == nil)
+		return;
+	buf := array[0] of byte;
+	b := array[65536] of byte;
+	for(;;) {
+		n := sys->read(fd, b, len b);
+		if(n <= 0)
+			break;
+		nb := array[len buf + n] of byte;
+		nb[0:] = buf;
+		nb[len buf:] = b[0:n];
+		buf = nb;
+	}
+	st := 0;
+	for(i := 0; i < len buf; i++)
+		if(buf[i] == byte '\n') {
+			uniline(string buf[st:i]);
+			st = i + 1;
+		}
+}
+
+uniline(ln: string)
+{
+	if(len ln < 2 || ln[0] == '#')
+		return;
+	(nil, f) := sys->tokenize(ln, " ");
+	if(f == nil)
+		return;
+	kind := hd f;
+	f = tl f;
+	case kind {
+	"p" =>
+		name := hd f;
+		f = tl f;
+		r := array[2 * len f] of int;
+		k := 0;
+		for(; f != nil; f = tl f) {
+			(a, e) := hexrange(hd f);
+			r[k++] = a;
+			r[k++] = e;
+		}
+		h := strhash0(name) % len props;
+		props[h] = (name, r[0:k]) :: props[h];
+	"s" =>
+		name := hd f;
+		f = tl f;
+		a := array[len f] of string;
+		k := 0;
+		for(; f != nil; f = tl f) {
+			(nil, cps) := sys->tokenize(hd f, ".");
+			t := "";
+			for(; cps != nil; cps = tl cps)
+				t = putcp(t, hexval1(hd cps));
+			a[k++] = t;
+		}
+		strprops = (name, a) :: strprops;
+	"a" =>
+		unialias = (hd f, hd tl f) :: unialias;
+	"f" =>
+		c := hexval1(hd f);
+		t := hexval1(hd tl f);
+		foldmap[c % len foldmap] = (c, t) :: foldmap[c % len foldmap];
+	"u" or "l" =>
+		c := hexval1(hd f);
+		f = tl f;
+		t := array[len f] of int;
+		k := 0;
+		for(; f != nil; f = tl f)
+			t[k++] = hexval1(hd f);
+		if(kind == "u")
+			uppermap[c % len uppermap] = (c, t) :: uppermap[c % len uppermap];
+		else
+			lowermap[c % len lowermap] = (c, t) :: lowermap[c % len lowermap];
+	}
+}
+
+lookupmap(m: array of list of (int, int), c, dflt: int): int
+{
+	for(l := m[c % len m]; l != nil; l = tl l)
+		if((hd l).t0 == c)
+			return (hd l).t1;
+	return dflt;
+}
+
+strhash0(s: string): int
+{
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = h * 31 + s[i];
+	return h & 16r7FFFFFFF;
+}
+
+hexval1(s: string): int
+{
+	v := 0;
+	for(i := 0; i < len s; i++)
+		v = v * 16 + hexval(s[i]);
+	return v;
+}
+
+hexrange(s: string): (int, int)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '-')
+			return (hexval1(s[0:i]), hexval1(s[i+1:]));
+	v := hexval1(s);
+	return (v, v);
+}
+
+unialiasof(n: string): string
+{
+	for(l := unialias; l != nil; l = tl l)
+		if((hd l).t0 == n)
+			return (hd l).t1;
+	return n;
+}
+
+propranges(name: string): array of int
+{
+	loaduni();
+	name = unialiasof(name);
+	for(l := props[strhash0(name) % len props]; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	return nil;
+}
+
+inpairs(t: array of int, c: int): int
+{
+	lo := 0;
+	hi := len t / 2;
+	while(lo < hi) {
+		m := (lo + hi) / 2;
+		if(c < t[2*m])
+			hi = m;
+		else if(c > t[2*m+1])
+			lo = m + 1;
+		else
+			return 1;
+	}
+	return 0;
+}
+
+# the strings of a property of strings, or nil
+propstrings(name: string): array of string
+{
+	loaduni();
+	for(l := strprops; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	return nil;
+}
+
+# a property's ranges by \p's name and value
+propkey(name, value: string): string
+{
+	if(value != nil) {
+		case name {
+		"General_Category" or "gc" =>
+			return "gc=" + value;
+		"Script" or "sc" =>
+			return "sc=" + value;
+		"Script_Extensions" or "scx" =>
+			return "scx=" + value;
+		}
+		return nil;
+	}
+	if(propranges("gc=" + name) != nil)
+		return "gc=" + name;
+	return name;
+}
+
+propmatch(name, value: string, c: int): int
+{
+	k := propkey(name, value);
+	if(k == nil)
+		return 0;
+	t := propranges(k);
+	if(t == nil)
+		return 0;
+	return inpairs(t, c);
+}
+
+# full case mapping of s (§22.1.3.28-29), with the final sigma rule
+casemap(s: string, up: int): string
+{
+	loaduni();
+	m := lowermap;
+	if(up)
+		m = uppermap;
+	r := "";
+	for(i := 0; i < len s; ) {
+		(c, w) := cpat0(s, i, 1);
+		mapped := 0;
+		if(!up && c == 16r3A3 && finalsigma(s, i)) {
+			r[len r] = 16r3C2;
+			mapped = 1;
+		}
+		if(!mapped)
+			for(l := m[c % len m]; l != nil; l = tl l)
+				if((hd l).t0 == c) {
+					t := (hd l).t1;
+					for(k := 0; k < len t; k++)
+						r = putcp(r, t[k]);
+					mapped = 1;
+					break;
+				}
+		if(!mapped)
+			r = putcp(r, c);
+		i += w;
+	}
+	return r;
+}
+
+# Final_Sigma: a cased letter before (skipping case-ignorables), none after
+finalsigma(s: string, i: int): int
+{
+	cased := propranges("Cased");
+	ign := propranges("Case_Ignorable");
+	if(cased == nil || ign == nil)
+		return 0;
+	before := 0;
+	for(j := i - 1; j >= 0; j--) {
+		c := s[j];
+		if(c >= 16rDC00 && c <= 16rDFFF && j > 0 && s[j-1] >= 16rD800 && s[j-1] <= 16rDBFF) {
+			c = 16r10000 + ((s[j-1] - 16rD800) << 10) + (c - 16rDC00);
+			j--;
+		}
+		if(inpairs(ign, c))
+			continue;
+		before = inpairs(cased, c);
+		break;
+	}
+	if(!before)
+		return 0;
+	for(j = i + 1; j < len s; ) {
+		(c, w) := cpat0(s, j, 1);
+		j += w;
+		if(inpairs(ign, c))
+			continue;
+		return !inpairs(cased, c);
+	}
+	return 1;
 }
 
 # whether c is in the set (with fl's case-insensitivity)
@@ -869,73 +1111,3 @@ escmatch(kind, c, fl, u: int): int
 	return 0;
 }
 
-# Unicode properties, for the common ones; the full tables are to come
-propmatch(name, value: string, c: int): int
-{
-	if(value != nil) {
-		case name {
-		"General_Category" or "gc" =>
-			return gcmatch(value, c);
-		"Script" or "sc" or "Script_Extensions" or "scx" =>
-			return scmatch(value, c);
-		}
-		return 0;
-	}
-	case name {
-	"Any" => return 1;
-	"ASCII" => return c < 128;
-	"Assigned" => return c < 16r30000;
-	"ASCII_Hex_Digit" or "AHex" => return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F';
-	"Alphabetic" or "Alpha" => return gcmatch("L", c) || gcmatch("Nl", c);
-	"Uppercase" or "Upper" => return gcmatch("Lu", c);
-	"Lowercase" or "Lower" => return gcmatch("Ll", c);
-	"White_Space" or "space" => return isspace(c) && c != 16rFEFF || c == 16r85;
-	"ID_Start" or "IDS" => return jslex->isidstart(c) && c != '$' && c != '_';
-	"ID_Continue" or "IDC" => return jslex->isidpart(c) && c != '$';
-	}
-	return gcmatch(name, c);
-}
-
-gcmatch(v: string, c: int): int
-{
-	case v {
-	"L" or "Letter" =>
-		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c > 127 && jslex->isidstart(c) && !gcmatch("Nl", c);
-	"Lu" or "Uppercase_Letter" =>
-		return c >= 'A' && c <= 'Z' || c > 127 && lower1(c) != c;
-	"Ll" or "Lowercase_Letter" =>
-		return c >= 'a' && c <= 'z' || c > 127 && upper1(c) != c;
-	"N" or "Number" or "Nd" or "Decimal_Number" or "digit" =>
-		return c >= '0' && c <= '9' || c >= 16r660 && c <= 16r669 || c >= 16r966 && c <= 16r96F || c >= 16rFF10 && c <= 16rFF19;
-	"Nl" or "Letter_Number" =>
-		return c >= 16r2160 && c <= 16r2188 || c >= 16r16EE && c <= 16r16F0 || c == 16r3007;
-	"P" or "Punctuation" or "punct" =>
-		return c < 128 && (c >= '!' && c <= '/' || c >= ':' && c <= '@' || c >= '[' && c <= '`' || c >= '{' && c <= '~') && c != '$' && c != '+' && c != '<' && c != '=' && c != '>' && c != '^' && c != '`' && c != '|' && c != '~';
-	"Zs" or "Space_Separator" =>
-		return c == ' ' || c == 16rA0 || c == 16r1680 || c >= 16r2000 && c <= 16r200A || c == 16r202F || c == 16r205F || c == 16r3000;
-	"Cc" or "Control" or "cntrl" =>
-		return c < 32 || c >= 127 && c < 160;
-	}
-	return 0;
-}
-
-scmatch(v: string, c: int): int
-{
-	case v {
-	"Latin" or "Latn" =>
-		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 16rC0 && c <= 16r24F && c != 16rD7 && c != 16rF7;
-	"Greek" or "Grek" =>
-		return c >= 16r370 && c <= 16r3FF && c != 16r37E && c != 16r387;
-	"Cyrillic" or "Cyrl" =>
-		return c >= 16r400 && c <= 16r52F;
-	"Han" or "Hani" =>
-		return c >= 16r4E00 && c <= 16r9FFF || c >= 16r3400 && c <= 16r4DBF;
-	"Arabic" or "Arab" =>
-		return c >= 16r600 && c <= 16r6FF && c != 16r60C && c != 16r61B && c != 16r61F && c != 16r640;
-	"Hebrew" or "Hebr" =>
-		return c >= 16r591 && c <= 16r5F4;
-	"Thai" =>
-		return c >= 16rE01 && c <= 16rE5B && c != 16rE3F;
-	}
-	return 0;
-}

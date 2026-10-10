@@ -105,4 +105,7 @@ Jsre: module
 	# captures' [start, end) positions, by group (-1: did not take
 	# part), or nil for none
 	exec:	fn(p: ref Pattern, s: string, start: int, sticky: int): array of int;
+
+	# s in upper (or lower) case, by Unicode's full mappings
+	casemap:	fn(s: string, upper: int): string;
 };

@@ -656,12 +656,12 @@ str_substr(this: V, a, n: int, nil: V, nil: int): V
 
 str_tolowercase(this: V, nil, nil: int, nil: V, nil: int): V
 {
-	return strv(tolower(thisstr(this, "toLowerCase")));
+	return strv(jsre->casemap(thisstr(this, "toLowerCase"), 0));
 }
 
 str_touppercase(this: V, nil, nil: int, nil: V, nil: int): V
 {
-	return strv(toupper(thisstr(this, "toUpperCase")));
+	return strv(jsre->casemap(thisstr(this, "toUpperCase"), 1));
 }
 
 str_tostring(this: V, nil, nil: int, nil: V, nil: int): V

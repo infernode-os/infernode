@@ -60,6 +60,7 @@ TARG=\
 	imgload_test.dis\
 	docengine_test.dis\
 	pdfrender.dis\
+	pdftext_test.dis\
 	alt_nilchan_test.dis\
 	lock_stress_test.dis\
 	plan_test.dis\

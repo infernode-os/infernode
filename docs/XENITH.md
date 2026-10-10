@@ -179,9 +179,7 @@ column, and:
 - **zooms** it: `Zoom+`, `Zoom-`, `Zoom n` (percent), `Fit` (a page's
   width to the window: a PDF opens so) and `Fit page` (a whole page in
   view: an image opens so). A PDF page is painted again at the scale,
-  sharp, while the old painting is shown scaled meanwhile; below 250%
-  it is painted at twice the scale and averaged down, so small type
-  stays evenly spaced;
+  sharp, while the old painting is shown scaled meanwhile;
 - goes to a page: `Page n`, `NextPage`, `PrevPage`;
 - lets the **text on the drawing** be used, where the document knows
   where it drew it (PDF, Markdown): button 1 clicked without moving

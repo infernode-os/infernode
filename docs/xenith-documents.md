@@ -117,9 +117,10 @@ same engines.
   (a whole sheet in view: the default for a picture). Zoom keeps the
   middle of the top of the view where it was. While a sheet is painted
   again at the new scale, the old painting is shown scaled, so zooming
-  never waits. A PDF page below 250% is painted at twice the scale and
-  averaged down: the interpreter places glyphs on whole pixels, and at
-  a low resolution type is unevenly spaced. A flowing document zoomed
+  never waits. A PDF page is painted once, at its scale, onto the
+  view's image (`Doc.paint`): glyphs are placed to a quarter pixel and
+  smoothed at that resolution, so small type is evenly spaced without
+  painting more pixels than are shown. A flowing document zoomed
   is set again to the window's width at that scale, and scaled.
 - **Paging**: `Page n`, `NextPage`, `PrevPage` scroll to a sheet.
 - **Cache**: the painted sheets in and near view, at the current

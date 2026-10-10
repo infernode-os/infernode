@@ -392,6 +392,7 @@ dis/lib/oldauth.dis
 dis/lib/outlinefont.dis
 dis/lib/parseman.dis
 dis/lib/pdf.dis
+dis/lib/pdfenc.dis
 dis/lib/plumbing.dis
 dis/lib/plumbmsg.dis
 dis/lib/pngload.dis
@@ -782,6 +783,8 @@ dis/tests/outlinefont_test.dis
 dis/tests/pathmanage_test.dis
 dis/tests/pdf_conformance_test.dis
 dis/tests/pdf_test.dis
+dis/tests/pdfrender.dis
+dis/tests/pdftext_test.dis
 dis/tests/pqauth_test.dis
 dis/tests/pqc_fuzz_test.dis
 dis/tests/pres_launch_test.dis

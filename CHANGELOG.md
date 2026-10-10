@@ -37,10 +37,25 @@ All notable changes to InferNode are documented in this file.
   longer loads every renderer, twice, when it starts. Lucifer's
   presentation view draws documents through the same engines; the old
   render registry and renderers are gone.
-- PDF pages below 250% are painted at twice the scale and averaged
-  down: the interpreter places glyphs on whole pixels, and small type
-  was unevenly spaced. Each PDF window keeps its own page (they shared
-  one).
+- Each PDF window keeps its own page (they shared one).
+- **PDF text as it was set.** Every glyph is drawn from its outline at
+  the screen's resolution, placed by the PDF's own widths to a quarter
+  pixel; no bitmap fonts. Embedded Type 1 fonts are drawn (they were
+  replaced by a sans bitmap, as every font not embedded was); a font
+  not embedded is drawn by a face with its metrics (TeX Gyre Termes,
+  Heros, Cursor for Times, Helvetica, Courier). Glyphs are found as
+  the spec says (encodings, Differences, CMaps of mixed code lengths,
+  CIDToGIDMap); word spacing, rise, horizontal scale and text render
+  modes are applied; Type 3 glyphs are drawn; text at any angle is
+  rasterised as itself. Against Poppler, over 62 pages chosen by font
+  kind, the difference falls by a third, and no page is worse.
+- **PDF pages painted once, at their scale**, onto the view's own
+  image: no longer at twice the scale and averaged down. Fourteen pages
+  of a paper are first painted in 1.7 s, not 6.3 s, with an image pool
+  of 9 MB, not 35 MB.
+- **PDF streams through every filter they name**, and LZW, ASCII85
+  and RunLength decoded: a font program in ASCII85 and Flate was cut
+  short, and its font replaced.
 
 ### Platforms and releases
 

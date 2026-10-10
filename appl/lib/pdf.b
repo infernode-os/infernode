@@ -150,6 +150,7 @@ GState: adt {
 	strokecscomps: int;        # stroke color space component count
 	clipmask: ref Image;       # GREY8 clip mask (nil = no clip, white = visible)
 	smask: ref Image;          # GREY8 soft mask from ExtGState SMask (nil = none)
+	cliprect: Rect;            # the clip's bounds on the image (text is clipped to it)
 };
 
 PathSeg: adt {
@@ -849,7 +850,8 @@ newgstate(): ref GState
 		3,                # fillcscomps (default RGB)
 		3,                # strokecscomps (default RGB)
 		nil,              # clipmask (no clip)
-		nil               # smask (no soft mask)
+		nil,              # smask (no soft mask)
+		Rect((-NOCLIP, -NOCLIP), (NOCLIP, NOCLIP))
 	);
 }
 
@@ -882,7 +884,8 @@ copygstate(gs: ref GState): ref GState
 		gs.fillcscomps,
 		gs.strokecscomps,
 		gs.clipmask,     # shared ref — copy-on-write at W/W*
-		gs.smask         # shared ref from ExtGState
+		gs.smask,        # shared ref from ExtGState
+		gs.cliprect
 	);
 }
 
@@ -991,6 +994,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					gs.strokecscomps = ngs.strokecscomps;
 					gs.alpha = ngs.alpha;
 					gs.clipmask = ngs.clipmask;
+					gs.cliprect = ngs.cliprect;
 					gs.smask = ngs.smask;
 				}
 			"cm" =>
@@ -1129,6 +1133,7 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 					evenodd := 0;
 					if(op == "W*") evenodd = 1;
 					gs.clipmask = buildclipmask(img, gs, path, evenodd);
+					gs.cliprect = clipbounds(gs, path);
 				}
 
 			# ---- Color operators ----
@@ -1393,6 +1398,29 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 
 # ---- Text rendering ----
 
+NOCLIP: con 1<<30;
+
+# The clip's bounds on the image after clipping to path: exactly the
+# clip when it is a rectangle, as most are.
+clipbounds(gs: ref GState, path: list of ref PathSeg): Rect
+{
+	pts := flattenpath(reversepath(path), gs.ctm);
+	if(pts == nil || len pts == 0)
+		return gs.cliprect;
+	r := Rect(pts[0], pts[0]);
+	for(i := 1; i < len pts; i++){
+		p := pts[i];
+		if(p.x < r.min.x) r.min.x = p.x;
+		if(p.y < r.min.y) r.min.y = p.y;
+		if(p.x > r.max.x) r.max.x = p.x;
+		if(p.y > r.max.y) r.max.y = p.y;
+	}
+	(c, ok) := r.clip(gs.cliprect);
+	if(!ok)
+		return Rect((0, 0), (0, 0));
+	return c;
+}
+
 # ---- Text ----
 #
 # Every glyph is drawn from an outline (outlinefont(2)) through the
@@ -1432,6 +1460,18 @@ showtext(doc: ref PdfDoc, img: ref Image, gs: ref GState, s: string, fm: ref Pdf
 	c := tm[2]*ctm[0] + tm[3]*ctm[2];
 	d := tm[2]*ctm[1] + tm[3]*ctm[3];
 	m := array[4] of real;
+	clipr: Rect;
+	clipped := 0;
+	if(visible){
+		(cr, ok) := img.clipr.clip(gs.cliprect);
+		if(!ok)
+			visible = 0;
+		else if(!cr.eq(img.clipr)){
+			clipr = img.clipr;
+			img.clipr = cr;
+			clipped = 1;
+		}
+	}
 	for(i := 0; i < len s; ){
 		(code, step) := nextcode(fm, s, i);
 		i += step;
@@ -1463,6 +1503,8 @@ showtext(doc: ref PdfDoc, img: ref Image, gs: ref GState, s: string, fm: ref Pdf
 		tm[4] += tx*tm[0];
 		tm[5] += tx*tm[1];
 	}
+	if(clipped)
+		img.clipr = clipr;
 }
 
 # A TJ array: strings shown, numbers moving the text back (thousandths
@@ -4033,6 +4075,7 @@ restoregs(gs, saved: ref GState)
 	gs.strokecscomps = saved.strokecscomps;
 	gs.clipmask = saved.clipmask;
 	gs.smask = saved.smask;
+	gs.cliprect = saved.cliprect;
 }
 
 # ---- Operand stack helpers ----

@@ -53,6 +53,7 @@ include "web/originfs.m";
 	originfs: Originfs;
 
 
+include "draw.m";
 include "dis.m";
 	dis: Dis;
 include "jsjit.m";

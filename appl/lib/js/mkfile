@@ -21,6 +21,7 @@ SYSMODULES=\
 	web/dom.m\
 	web/originfs.m\
 	dis.m\
+	draw.m\
 
 DISBIN=$ROOT/dis/lib/js
 

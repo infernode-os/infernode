@@ -45,6 +45,15 @@ Fetched: adt {
 };
 
 Prelude: con "/lib/js/dom.js";
+
+# memfs(4), the page's /tmp
+Memfs: module
+{
+	PATH:	con "/dis/memfs.dis";
+	init:	fn(nil: ref Draw->Context, args: list of string);
+};
+memfs: Memfs;
+Memfsmax: con 64 * 1024 * 1024;
 Intlsrc: con "/lib/js/intl.js";
 
 page(h: ref Js->Host): string
@@ -66,6 +75,9 @@ page(h: ref Js->Host): string
 		keyring = load Keyring Keyring->PATH;
 	if(originfs == nil)
 		originfs = load Originfs Originfs->PATH;
+	if(memfs == nil)
+		memfs = load Memfs Memfs->PATH;
+	jitinit();	# its template is read from /dis, which the realm will not have
 	if(originfs == nil)
 		return sys->sprint("cannot load %s: %r", Originfs->PATH);
 	jsparse->parse("/(?:)/u; class C { #x; m() { return this.#x; } }", 0, 0);	# its checker and the regular expressions
@@ -255,6 +267,16 @@ confine(grants: list of (string, string, int), origin: string): string
 			flag |= Sys->MCREATE;
 		if(sys->bind(src, shadow + dst, flag) < 0)
 			return sys->sprint("confine: bind %s %s: %r", src, dst);
+	}
+	# a /tmp of its own, in memory, where the compiled tier writes the
+	# modules it makes (jsjit.b); without it nothing is compiled
+	if(memfs != nil && mkdirs(shadow + "/tmp") == 0) {
+		{
+			memfs->init(nil, "memfs" :: "-m" :: string Memfsmax :: shadow + "/tmp" :: nil);
+		} exception {
+		"*" =>
+			;
+		}
 	}
 	if(sys->bind(shadow, "/", Sys->MREPL|Sys->MREADONLY) < 0)
 		return sys->sprint("confine: bind %s /: %r", shadow);

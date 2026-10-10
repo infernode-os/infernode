@@ -1,0 +1,15 @@
+<$ROOT/mkconfig
+
+TARG=\
+	t262.dis\
+	jsp.dis\
+
+SYSMODULES=\
+	sys.m\
+	draw.m\
+	readdir.m\
+	jsparse.m\
+
+DISBIN=$ROOT/dis/tests/js
+
+<$ROOT/mkfiles/mkdis

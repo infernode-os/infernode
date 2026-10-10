@@ -1,0 +1,14 @@
+<$ROOT/mkconfig
+
+TARG=\
+	jslex.dis\
+	jsparse.dis\
+
+SYSMODULES=\
+	sys.m\
+	jslex.m\
+	jsparse.m\
+
+DISBIN=$ROOT/dis/lib/js
+
+<$ROOT/mkfiles/mkdis

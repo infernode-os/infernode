@@ -1,6 +1,7 @@
 <$ROOT/mkconfig
 
 DIRS=\
+	js\
 	testing\
 
 TARG=\

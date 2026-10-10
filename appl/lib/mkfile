@@ -6,6 +6,7 @@ DIRS=\
 	crypt\
 	ecmascript\
 	encoding\
+	js\
 	git\
 	ida\
 	spki\

@@ -149,7 +149,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 {
 	charset := param(ctype, "charset");
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil, nil, 0);
+		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil, nil, 0, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -554,6 +554,7 @@ Pg.update(p: self ref Pg)
 {
 	plock();
 	{
+		resheet(p);
 		p.computed = style->compute(p.doc, p.styles, p.env);
 		rebuild(p);
 	} exception e {
@@ -569,6 +570,7 @@ Pg.restyle(p: self ref Pg)
 {
 	plock();
 	{
+		resheet(p);
 		p.computed = style->compute(p.doc, p.styles, p.env);
 	} exception e {
 	"*" =>
@@ -600,9 +602,40 @@ Pg.pageheight(p: self ref Pg): int
 # <style> and <link rel=stylesheet>, in document order, then @imports.
 loadsheets(p: ref Pg)
 {
+	a := sheetsof(p);
+	applysheets(p, a);
+	p.sheetlist = a;
+}
+
+# the sheets again, if the document's are not those last read: a script
+# added, removed or rewrote a <style>, or linked a sheet (CSS-in-JS does
+# it all the time).  Under plk.
+resheet(p: ref Pg)
+{
+	a := sheetsof(p);
+	if(samesheets(a, p.sheetlist))
+		return;
+	p.styles = Styles.new();
+	applysheets(p, a);
+	p.sheetlist = a;
+}
+
+samesheets(a, b: array of (string, string, string)): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i].t0 != b[i].t0 || a[i].t1 != b[i].t1 || a[i].t2 != b[i].t2)
+			return 0;
+	return 1;
+}
+
+# the document's sheets in document order: (inline text, nil, nil) or
+# (nil, url, the link's charset attribute); a shadow tree's are its own
+# (Style->compute reads them)
+sheetsof(p: ref Pg): array of (string, string, string)
+{
 	d := p.doc;
-	# the sheets in document order: (inline text, nil, nil) or (nil, url,
-	# the link's charset attribute)
 	sheets: list of (string, string, string);
 	for(n := 1; n < d.n; n++) {
 		nd := d.nodes[n];
@@ -610,14 +643,14 @@ loadsheets(p: ref Pg)
 			continue;
 		case nd.tag {
 		Dom->Tstyle =>
-			if(!style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
+			if(!indoc(d, n) || !style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
 				continue;
 			sheets = (d.textof(n), nil, nil) :: sheets;
 		Dom->Tlink =>
 			rel := " " + lower(d.attr(n, "rel")) + " ";
 			if(index(rel, " stylesheet ") < 0 || index(rel, " alternate ") >= 0)
 				continue;
-			if(d.hasattr(n, "disabled"))
+			if(d.hasattr(n, "disabled") || !indoc(d, n))
 				continue;
 			if(!style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
 				continue;
@@ -632,16 +665,43 @@ loadsheets(p: ref Pg)
 		a[i] = hd sheets;
 		sheets = tl sheets;
 	}
+	return a;
+}
+
+# whether n is in the document (not removed, nor in a shadow tree or
+# another fragment)
+cached(c: list of (string, ref Css->Sheet), key: string): int
+{
+	for(; c != nil; c = tl c)
+		if((hd c).t0 == key)
+			return 1;
+	return 0;
+}
+
+indoc(d: ref Dom->Doc, n: int): int
+{
+	for(; n != 0; n = d.nodes[n].parent)
+		if(n == 1)
+			return 1;
+	return 0;
+}
+
+applysheets(p: ref Pg, a: array of (string, string, string))
+{
+	d := p.doc;
+	i: int;
 	urls: list of string;
 	for(i = 0; i < len a; i++)
-		if(a[i].t1 != nil)
+		if(a[i].t1 != nil && !cached(p.sheetcache, a[i].t1 + " " + a[i].t2))
 			urls = a[i].t1 :: urls;
-	got := fetchall(urls, nil);
+	got: list of ref Got;
+	if(urls != nil)
+		got = fetchall(urls, nil);
 	# a sheet linked (or written inline) again is parsed once: the
 	# parsed form is never changed, and each use keeps its own place
 	# in the cascade.  (GitHub links some of its largest sheets five
 	# and six times; parsed each time they took 200M.)
-	parsed: list of (string, ref Css->Sheet);
+	parsed := p.sheetcache;
 	for(i = 0; i < len a; i++) {
 		(text, u, hint) := a[i];
 		key := "\u0000" + text;
@@ -679,6 +739,18 @@ loadsheets(p: ref Pg)
 		parsed = (key, sh) :: parsed;
 		p.styles.add(sh, Style->Author, u);
 	}
+	# kept: what these sheets are (a <style> rewritten many times leaves
+	# only its last text)
+	keep: list of (string, ref Css->Sheet);
+	for(l := parsed; l != nil; l = tl l) {
+		(k, nil) := hd l;
+		for(j := 0; j < len a; j++)
+			if(a[j].t1 == nil && k == "\u0000" + a[j].t0 || a[j].t1 != nil && k == a[j].t1 + " " + a[j].t2) {
+				keep = hd l :: keep;
+				break;
+			}
+	}
+	p.sheetcache = keep;
 	# @import, to a depth of 4
 	for(depth := 0; depth < 4; depth++) {
 		urls = p.styles.imports(p.env);

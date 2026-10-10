@@ -29,6 +29,8 @@ Page: module
 		pics:	list of ref Pic;	# the images it has, decoded
 		asked:	list of string;	# images clicked for, with images click
 		allimages:	int;	# every image wanted, whatever the setting
+		sheetlist:	array of (string, string, string);	# its sheets as last read: (inline text, nil, nil) or (nil, url, charset)
+		sheetcache:	list of (string, ref Css->Sheet);	# parsed, by text or url
 
 		relayout:	fn(p: self ref Pg, width, height: int);
 		update:	fn(p: self ref Pg);	# restyle and relayout after the document changed

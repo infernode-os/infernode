@@ -241,4 +241,6 @@ Code: adt {
 	jitstate:	int;	# 0 not compiled, 1 compiled, -1 not to be
 	jit:	Jitcode;
 	jitent:	array of byte;	# by pc: 1 where an operation is compiled
+	calltarget:	array of int;	# by pc: the function a call there last called (a handle), for inlining
+	jitsites:	ref Jitsites;	# the inline caches of the functions it has in line
 };

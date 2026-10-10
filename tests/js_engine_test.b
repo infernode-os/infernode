@@ -154,6 +154,38 @@ testJit(t: ref T)
 	}
 }
 
+# calls compiled with the function in line (compiled after two
+# iterations, so the interpreter has seen what each call calls): two
+# methods on one object's caches, a callee leaving midway (an operand of
+# another type) and going on in a frame of its own, sloppy this given a
+# primitive, too few arguments, a return in the middle, closures, and
+# the function called changed in the loop
+testJitInline(t: ref T)
+{
+	src := array[] of {
+		"const o = {a: 1, b: 10, ga() { return this.a; }, gb() { return this.b; }}; let s = 0; for (let i = 0; i < 40; i++) s = s + o.ga() * 3 + o.gb(); s",
+		"function add(x, y) { return x + y; } let s = 0; for (let i = 0; i < 40; i++) s = add(s, i == 30 ? 'z' : i); s",
+		"function th() { return this === undefined ? 'u' : typeof this; } let r = ''; for (let i = 0; i < 6; i++) r = r + th() + th.call(i) + th.call({}); r",
+		"'use strict'; function th() { return this === undefined ? 'u' : typeof this; } let r = ''; for (let i = 0; i < 6; i++) r = r + th() + th.call(i); r",
+		"function m(x, y) { return y === undefined ? x : x - y; } let s = 0; for (let i = 0; i < 30; i++) s = s + m(i) + m(i, 1); s",
+		"function ab(x) { if (x < 0) return -x; return x * 2; } let s = 0; for (let i = -20; i < 20; i++) s = s + ab(i); s",
+		"let c = 0; const inc = (d) => { c = c + d; return c; }; let s = 0; for (let i = 0; i < 30; i++) s = s + inc(i & 3); s + c",
+		"let f = function (x) { return x + 1; }; let s = 0; for (let i = 0; i < 40; i++) { if (i == 20) f = function (x) { return x * 2; }; s = s + f(i); } s",
+		"function g(o) { return o.k; } const a = [{k: 1}, {j: 0, k: 2}, {k: 's'}]; let s = ''; for (let i = 0; i < 30; i++) s = s + g(a[i % 3]); s",
+		"function setx(o, v) { o.x = v; return v; } const p = {x: 0}; let s = 0; for (let i = 0; i < 30; i++) s = s + setx(p, i) + p.x; s",
+	};
+	for(i := 0; i < len src; i++) {
+		js := realm(t);
+		js->jit(-1);
+		want := ev(js, src[i]);
+		js->shutdown();
+		js = realm(t);
+		js->jit(2);
+		t.assertseq(ev(js, src[i]), want, "inlined as interpreted: " + src[i]);
+		js->shutdown();
+	}
+}
+
 # the verifier refuses a module made wrong (a test spoils each one so), and
 # the code runs as interpreted
 testJitVerify(t: ref T)
@@ -275,6 +307,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Control", testControl);
 	run("Lazy", testLazy);
 	run("Jit", testJit);
+	run("JitInline", testJitInline);
 	run("JitVerify", testJitVerify);
 	run("Errors", testErrors);
 	run("Jobs", testJobs);

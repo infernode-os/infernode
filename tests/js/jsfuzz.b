@@ -3,8 +3,9 @@ implement Jsfuzz;
 #
 # jsfuzz - differential testing of the compiled tier (docs/JS-ENGINE.md
 # §11, phase 6): random programs, each run in a realm that interprets
-# and one that compiles every function at its first loop, their results
-# compared.
+# and one that compiles every function early in its first loop (after
+# two iterations: the interpreter has then seen the calls the loop makes,
+# which compiled code may have in line), their results compared.
 #
 #	jsfuzz [-n count] [-s seed] [-v] [-p]
 #
@@ -12,8 +13,9 @@ implement Jsfuzz;
 # makes it leave to the interpreter: numbers (NaN, -0, past 32 bits),
 # strings, booleans, null and undefined mixed in; arithmetic, %,
 # bitwise operators and comparisons; property and element reads and
-# writes, holes, a shape changed in the loop; closures; a value's type
-# changed in the loop.  A difference prints the seed and the program;
+# writes, holes, a shape changed in the loop; closures; calls of small
+# functions and methods with arguments of every kind, and this in sloppy
+# code; a value's type changed in the loop.  A difference prints the seed and the program;
 # the exit status is failure if there was one.  -p prints the programs
 # and runs none; -v says each case as it starts.
 #
@@ -55,6 +57,9 @@ pick1(a: array of string): string
 	return r;
 }
 
+params := 0;	# the parameters a function's leaves may be, in one's body
+pnames := array[] of {"x", "y"};
+
 lits := array[] of {"0", "1", "-1", "2", "3", "7", "0.5", "-0", "NaN", "Infinity", "2147483647", "-2147483648",
 	"4294967296", "1e20", "'a'", "'3'", "''", "true", "false", "null", "undefined", "1.5", "-7", "100"};
 binops := array[] of {"+", "-", "*", "/", "%", "&", "|", "^", ">>", "<", "<=", ">", ">=", "===", "!==", "==", "!="};
@@ -64,9 +69,13 @@ expr(d: int): string
 {
 	if(d <= 0)
 		return leaf();
-	case rand(10) {
+	case rand(12) {
 	0 or 1 or 2 =>
 		return leaf();
+	10 =>
+		return "o.m(" + expr(d-1) + ")";
+	11 =>
+		return "h(" + expr(d-1) + ")";
 	3 or 4 or 5 =>
 		return "(" + expr(d-1) + " " + pick1(binops) + " " + expr(d-1) + ")";
 	6 =>
@@ -82,6 +91,8 @@ expr(d: int): string
 
 leaf(): string
 {
+	if(params > 0 && rand(3) == 0)
+		return pnames[rand(params)];
 	case rand(9) {
 	0 or 1 =>
 		return pick1(lits);
@@ -140,6 +151,10 @@ program(): string
 		b += "'use strict';\n";
 	b += "const show = (x) => Object.is(x, -0) ? '-0' : typeof x === 'object' && x !== null ? 'obj' : String(x);\n";
 	b += "const out = []; let s = ''; let k = 0;\n";
+	# the loop's counter: its own, or one the functions see too
+	outer := rand(2);
+	if(outer)
+		b += "let i = 0;\n";
 	b += "const vals = [" + pick1(lits);
 	for(i := 0; i < 5; i++)
 		b += ", " + pick1(lits);
@@ -148,10 +163,19 @@ program(): string
 	b += "const arr = [" + pick1(lits) + ", " + pick1(lits) + ", , " + pick1(lits) + ", " + pick1(lits) + "];\n";
 	for(i = 0; i < nvars; i++)
 		b += "let v" + string i + " = " + pick1(lits) + ";\n";
+	params = 2;
 	b += "function f(x, y) { return " + expr(2) + "; }\n";
+	params = 1;
 	b += "const g = (x) => " + expr(1) + ";\n";
+	params = 1;
+	b += "function h(x) { return (this === x) ? 1 : " + expr(1) + "; }\n";
+	b += "o.m = function (x) { return " + expr(1) + " + this.b; };\n";
+	params = 0;
 	n := 5 + rand(40);
-	b += "for (let i = 0; i < " + string n + "; i++) {\n";
+	if(outer)
+		b += "for (i = 0; i < " + string n + "; i++) {\n";
+	else
+		b += "for (let i = 0; i < " + string n + "; i++) {\n";
 	ns := 1 + rand(6);
 	for(i = 0; i < ns; i++)
 		b += "\t" + stmt(2) + "\n";
@@ -214,7 +238,7 @@ init(nil: ref Draw->Context, args: list of string)
 		if(verbose)
 			sys->fprint(sys->fildes(2), "case %d seed %d\n", t, seed + t * 7919);
 		a := run(src, -1);
-		b := run(src, 0);
+		b := run(src, 2);
 		if(a != b) {
 			bad++;
 			sys->print("DIFFERENT seed %d (case %d):\ninterpreted: %s\ncompiled:    %s\n%s\n\n", seed + t * 7919, t, a, b, src);

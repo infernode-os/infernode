@@ -35,6 +35,18 @@ Jitst: adt {
 	onelem:	array of int;	# the elements in use
 	oelems:	array of array of V;	# its elements
 	oproto:	array of int;	# its prototype (an environment's: the one around it)
+	inl:	array of V;	# the registers of a function inlined at a call
+	# by call compiled with its function in line (Jitsites)
+	sics:	array of array of ref Shape;
+	sicslot:	array of array of int;
+	sicgen:	array of array of int;
+};
+
+# the inline caches of the functions a compiled code has in line, by site
+Jitsites: adt {
+	ics:	array of array of ref Shape;
+	icslot:	array of array of int;
+	icgen:	array of array of int;
 };
 
 # run the code from pc, an operation compiled; return the pc of the first

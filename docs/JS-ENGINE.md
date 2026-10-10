@@ -710,23 +710,44 @@ programs of 500.  Its first run also found a Limbo compiler bug: an
 inlined function's string result corrupting the heap (under `-c0` too),
 now being looked into.
 
-Calls still go through the interpreter, so code made of calls gains
-little; that, and strings, are next.  Making a call from compiled code
-through the engine's callv, which runs the callee in a loop of its own,
-was tried and is slower than leaving the call to the interpreter, whose
-calls push a frame (a million calls in a loop: 305 ms interpreted with
-the loop compiled around them, 467 ms called from compiled code): calls
-from compiled code have to push frames as the interpreter does.  That
-was tried too: compiled code asked the engine (through a function
-reference) to push the callee's frame, called the callee's compiled run
-directly, and its return asked the engine to pop the frame.  It is
-correct (exceptions and the interpreter taking over a callee midway
-work, since frames stay the engine's), and still slower: 357 ms against
-245 interpreted, as each call is three calls between Dis modules, which
-cost more on this VM than the interpreter's own call.  A compiled call
-has to stay inside one module: the callee compiled into its caller's
-module (inlined, or as another function of it), the frame pushed by
-compiled code itself.
+Calls from compiled code were the next thing.  Making one through the
+engine's callv, which runs the callee in a loop of its own, was tried
+and is slower than leaving the call to the interpreter, whose calls push
+a frame (a million calls in a loop: 305 ms interpreted with the loop
+compiled around them, 467 ms called from compiled code).  Pushing frames
+as the interpreter does was tried too: compiled code asked the engine
+(through a function reference) to push the callee's frame, called the
+callee's compiled run directly, and its return asked the engine to pop
+the frame.  It is correct, and still slower, 357 ms against 245
+interpreted, as each call is three calls between Dis modules, which cost
+more on this VM than the interpreter's own call.  A compiled call has to
+stay inside one module.
+
+So a small function is compiled into its caller, in line.  The
+interpreter notes at each call site of a function not yet compiled what
+it called there (Code.calltarget).  A call whose function calls nothing,
+has at most 256 operations all compiled, and is not a generator, async
+or a class constructor, gets that function's code at the call: guarded
+by the function being the same object (else the interpreter makes the
+call), the arguments moved into registers of the callee's own (st.inl),
+this given as the call would give it (an object as it is; anything else
+in sloppy code is the interpreter's), its constants put in line, its
+property reads and writes on its own inline caches, and its return a
+move to the call's register.  Where the callee meets an operation or an
+operand compiled code does not have, jitrun gives it the frame the call
+would have made, with its registers, and the interpreter goes on in the
+callee at that operation.  So inlined code still never throws or calls.
+
+| Loop of 1,000,000 calls (arm64 JIT) | interpreted | compiled |
+|---|---|---|
+| `f(a, b) { return a + b; }` | 291 ms | 86 ms |
+
+The fuzzer's programs now call functions and methods with arguments of
+every kind, and use this in sloppy code; it is compiled after two
+iterations, so the interpreter has seen the calls first.  Faults planted
+in the inlining (an argument lost when the callee is given its frame,
+the sloppy-this guard left out, every site using one function's inline
+caches) each show as differences.
 
 Profiles of real pages (prof(1) around `jspage -k`) moved work into the
 interpreter too: a shape's many transitions are hashed (objects used as

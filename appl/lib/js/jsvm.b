@@ -721,6 +721,12 @@ loop(entry: int): V
 					if(c.lazy != nil)
 						lazycompile(c);
 					if((c.flags & (Cgen|Casync|Cctor)) == 0) {
+						if(code.jitstate == 0 && code.jitn > 0) {
+							# the target, for the compiled tier to inline
+							if(code.calltarget == nil)
+								code.calltarget = array[len ops] of {* => 0};
+							code.calltarget[pc] = f.x;
+						}
 						frames[nframe-1].pc = pc + 6;
 						nb := base + code.nregs;
 						setupframe(f.x, d, c, nb, this, a, n, undef);

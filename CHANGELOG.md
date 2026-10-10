@@ -53,6 +53,18 @@ All notable changes to InferNode are documented in this file.
   image: no longer at twice the scale and averaged down. Fourteen pages
   of a paper are first painted in 1.7 s, not 6.3 s, with an image pool
   of 9 MB, not 35 MB.
+- **Long and large PDFs open at once.** Pages are indexed once a
+  document, not found by walking the page tree (opening asked every
+  page its size, so 1310 pages took 15.8 s; now 0.3 s, and 20000 pages
+  0.3 s); a document's text is joined once (the PDF reference's 2.5
+  million characters ran out of memory); object streams are kept, not
+  decompressed for each object; cross-reference entries are values,
+  streams and CFF glyphs slices, not copies (the reference opens in
+  40 MB of heap, not 76; a page in a 16 MB CID font is drawn in 17 MB,
+  not 63). Xenith shows a document before its text is read, finds the
+  visible pages by halving rather than scanning, searches pages' text
+  and works out where on a page only when it is shown (the reference:
+  8.7 s to 0.14 s), and keeps the words of only 32 pages.
 - **PDF streams through every filter they name**, and LZW, ASCII85
   and RunLength decoded: a font program in ASCII85 and Flate was cut
   short, and its font replaced.

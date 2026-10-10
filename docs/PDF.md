@@ -312,6 +312,34 @@ for the lifetime of the process.
 Always call `doc.close()` when done — it nils the `doctab` slot, allowing
 the GC to free the raw data, xref, and object graph immediately.
 
+### Large Documents
+
+The file is held in memory whole (streams are slices of it, not
+copies); objects are parsed when they are wanted and not kept. What a
+document keeps beyond its bytes is small and bounded:
+
+- the cross-reference table, one value per object (12 bytes);
+- the page index, the page tree's leaves found once, each kept as its
+  reference, so a page is a lookup and opening a document asks each
+  page its size in linear time;
+- the last four object streams decompressed;
+- its fonts, by object, their programs parsed when first drawn (a CFF
+  font's glyphs are slices of its program, not copies).
+
+Measured with Xenith's engine (`/dis/xenith/doc/pdfdoc.dis`, JIT):
+
+| Document | Pages | File | Open | Heap open | Its text |
+|---|---:|---:|---:|---:|---:|
+| 1000-page test document | 1,000 | 0.4 MB | 29 ms | 5.7 MB | 98 ms |
+| iText's 20,000-page document | 20,000 | 5.5 MB | 0.3 s | 10 MB | 1.3 s |
+| The PDF reference (334,103 objects) | 1,310 | 32 MB | 0.3 s | 40 MB | 1.6 s, 2.5 M characters |
+| A page in a 16 MB CID font | 1 | 16 MB | 32 ms | 16 MB, 17 MB drawn | |
+
+A page paints in milliseconds at any position in these. Xenith shows a
+document as soon as it is open and fills its body with the text after;
+it keeps paintings only of the pages in and next to view, and the
+words of the last 32 pages asked for. pdfdoc reads files of up to 64 MB.
+
 ### Font Caching
 
 A document's fonts are made once, by object number, when a page first

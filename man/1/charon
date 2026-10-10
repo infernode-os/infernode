@@ -26,7 +26,21 @@ media and feature queries, colour level 4) and laid out by block, inline,
 float, positioned, flex, grid and table formatting.
 Text is set in TrueType faces (DejaVu) at any size, weight and slant;
 images may be PNG, JPEG, GIF, WebP, AVIF or SVG.
-There is no script engine.
+A page's scripts run when the
+.B scripts
+setting is
+.B on
+(it is
+.B off
+by default; the setting is a line of the user's
+.BR lib/charon/settings ,
+as Charon's other engine settings are).
+Each page's scripts run in a realm of their own (see
+.IR js (1)),
+on a process confined to a namespace holding only the network and, for a
+.B file:
+page, its directory; the document they change is the one shown.
+A script that runs thirty seconds is stopped.
 .PP
 The window is a location bar with back, forward and reload (stop, while
 loading) buttons, the page, and a status line that shows the URL of the
@@ -222,4 +236,6 @@ Drive the window from a shell:
 (Xenith's browser windows),
 .B /docs/CHARON-ENGINE.md
 .SH BUGS
-No JavaScript, frames, text selection, bookmarks or HTTP cache yet.
+No frames, text selection, bookmarks or HTTP cache yet.
+Scripts' storage and cookies last as long as the page; shadow DOM is
+not shown; there is no canvas, media or workers.

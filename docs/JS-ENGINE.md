@@ -707,8 +707,12 @@ programs over what compiled code has in line and what makes it leave,
 runs each interpreted and compiled, and compares: 20,000 programs, no
 difference; a subtraction made an addition in the compiler shows in 5
 programs of 500.  Its first run also found a Limbo compiler bug: an
-inlined function's string result corrupting the heap (under `-c0` too),
-now being looked into.
+inlined call's temporary argument freed before its element was read,
+corrupting the heap under `-c0` too (fixed in PR #830).  Running more
+programs per process then found the emulator abandoning to the
+collector everything more than 64 levels into a structure whose last
+reference dropped, so each realm made and shut down kept most of its
+heap until the emulator idled (fixed in PR #829).
 
 Calls from compiled code were the next thing.  Making one through the
 engine's callv, which runs the callee in a loop of its own, was tried
@@ -773,8 +777,13 @@ compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
   engine tests for NaN with `math->isnan` before ordered comparisons.
 - The Limbo compiler's inliner writes a small function's result into
   the destination while building it, so `v = f(v)` can read a field it
-  has already written.  Such functions in the engine have a local, which
-  stops inlining.
+  has already written; and it freed a temporary argument before the
+  element taken from it was read.  Such functions in the engine have a
+  local, which stops inlining.  Both are fixed in PR #830; the locals
+  can go once it is merged.
+- `destroy()` abandoned a structure's blocks past 64 levels to the
+  collector, which a busy VM runs seldom: a realm made and dropped in a
+  loop kept most of its heap.  Fixed in PR #829.
 - A module implementing two interfaces (`implement A, B`) breaks its
   function references (`invalid mframe`), so the page interface is part
   of `Js`.

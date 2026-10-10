@@ -47,7 +47,9 @@ Docview: module {
 		offb:	ref Draw->Image;	# where the body's text draws meanwhile, unseen
 		word:	string;		# a word selected on the drawing
 		wordat:	(int, Draw->Rect);
-		found:	list of (int, Draw->Rect);	# what a search found
+		findstr:	string;		# what a search is for, in lower case
+		found:	list of int;	# the sheets whose text has it (where on them is
+					# worked out as they are drawn)
 	};
 
 	init:	fn(mods: ref Dat->Mods);

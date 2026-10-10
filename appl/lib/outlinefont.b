@@ -885,8 +885,26 @@ cffstd(sid: int): string
 Face.close(f: self ref Face)
 {
 	idx := getfaceidx(f);
-	if(idx >= 0 && idx < nfaces)
-		facetab[idx] = nil;
+	if(idx < 0 || idx >= nfaces)
+		return;
+	facetab[idx] = nil;
+	# its glyphs out of the cache: nothing will draw them again
+	if(cachetab == nil)
+		return;
+	for(h := 0; h < len cachetab; h++){
+		keep: list of ref CacheEntry;
+		for(l := cachetab[h]; l != nil; l = tl l){
+			ce := hd l;
+			if(ce.faceidx != idx)
+				keep = ce :: keep;
+			else {
+				ncached--;
+				if(ce.img != nil)
+					cachepix -= ce.img.r.dx() * ce.img.r.dy();
+			}
+		}
+		cachetab[h] = keep;
+	}
 }
 
 Face.glyphwidth(f: self ref Face, gid: int, size: real): int

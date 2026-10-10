@@ -610,11 +610,18 @@ setlayout(w: ref Window, d: ref Doc)
 # The sheet at y in the column (the last whose top is at or above it)
 sheetat(d: ref Doc, y: int): int
 {
-	n := 0;
-	for(i := 0; i < len d.tops; i++)
-		if(d.tops[i] <= y + GAP)
-			n = i;
-	return n;
+	# the tops rise down the column: halve it (a document of twenty
+	# thousand pages is drawn on every scroll)
+	lo := 0;
+	hi := len d.tops - 1;
+	while(lo < hi){
+		m := (lo + hi + 1) / 2;
+		if(d.tops[m] <= y + GAP)
+			lo = m;
+		else
+			hi = m - 1;
+	}
+	return lo;
 }
 
 # Where sheet n is on the screen
@@ -678,7 +685,7 @@ draw(w: ref Window)
 	oclip := mainwin.clipr;
 	mainwin.clipr = fr;
 	mainwin.draw(fr, cols[BACK], nil, Point(0, 0));
-	for(n := 0; n < len d.sizes; n++){
+	for(n := sheetat(d, d.org.y); n < len d.sizes; n++){
 		sr := sheetrect(w, d, n);
 		if(sr.max.y <= fr.min.y)
 			continue;
@@ -789,10 +796,47 @@ marks(w: ref Window, d: ref Doc)
 		(n, r) := d.wordat;
 		mark(w, d, n, r, col);
 	}
-	for(l := d.found; l != nil; l = tl l){
-		(n, r) := hd l;
-		mark(w, d, n, r, col);
+	if(d.found == nil)
+		return;
+	# what was found on the sheets in view
+	fr := w.body.frame.r;
+	for(n := sheetat(d, d.org.y); n < len d.sizes; n++){
+		sr := sheetrect(w, d, n);
+		if(sr.min.y >= fr.max.y)
+			break;
+		if(sr.max.y > fr.min.y && isfound(d, n))
+			for(rl := foundon(d, n); rl != nil; rl = tl rl)
+				mark(w, d, n, hd rl, col);
 	}
+}
+
+isfound(d: ref Doc, n: int): int
+{
+	for(l := d.found; l != nil; l = tl l)
+		if(hd l == n)
+			return 1;
+		else if(hd l > n)
+			return 0;
+	return 0;
+}
+
+# Where on sheet n the search's string is: the words that have it
+# (or a phrase's first word), at scale 100
+foundon(d: ref Doc, n: int): list of Rect
+{
+	runs := d.eng->runs(d.h, n);
+	r: list of Rect;
+	for(i := len runs - 1; i >= 0; i--)
+		if(contains(lower(runs[i].text), d.findstr))
+			r = runs[i].r :: r;
+	if(r == nil){
+		(nil, f) := sys->tokenize(d.findstr, " \t");
+		if(f != nil)
+			for(i = len runs - 1; i >= 0; i--)
+				if(contains(lower(runs[i].text), hd f))
+					r = runs[i].r :: r;
+	}
+	return r;
 }
 
 mark(w: ref Window, d: ref Doc, n: int, r: Rect, col: ref Image)
@@ -846,9 +890,11 @@ requestpaint(w: ref Window)
 	fr := w.body.frame.r;
 	first := -1;
 	last := -1;
-	for(n := 0; n < len d.sizes; n++){
+	for(n := sheetat(d, d.org.y); n < len d.sizes; n++){
 		sr := sheetrect(w, d, n);
-		if(sr.max.y <= fr.min.y || sr.min.y >= fr.max.y)
+		if(sr.min.y >= fr.max.y)
+			break;
+		if(sr.max.y <= fr.min.y)
 			continue;
 		if(first < 0)
 			first = n;
@@ -1103,10 +1149,13 @@ result(w: ref Window, d: ref Doc, res: string)
 # The sheet and the point on it (scale 100) under p on the screen
 at(w: ref Window, d: ref Doc, p: Point): (int, Point)
 {
-	for(n := 0; n < len d.sizes; n++){
+	fr := w.body.frame.r;
+	for(n := sheetat(d, d.org.y + p.y - fr.min.y); n >= 0 && n < len d.sizes; n--){
 		sr := sheetrect(w, d, n);
 		if(p.in(sr))
 			return (n, p.sub(sr.min).mul(100).div(d.scale));
+		if(sr.max.y < p.y)
+			break;
 	}
 	return (-1, Point(0, 0));
 }
@@ -1445,37 +1494,41 @@ linksread(w: ref Window): string
 	return s;
 }
 
-# s found on the drawing, marked; nil, or why not
+# s found on the drawing, marked; nil, or why not.  The sheets that
+# have it are found by their text; where on them, by their words, only
+# for a sheet shown (a document's words are many, its text is at hand).
 find(w: ref Window, s: string): string
 {
 	d := w.doc;
 	if(d == nil || d.h < 0)
 		return "no document";
 	d.found = nil;
+	d.findstr = nil;
 	if(s == nil){
 		draw(w);
 		return nil;
 	}
 	ls := lower(s);
-	first := -1;
-	for(n := 0; n < len d.sizes; n++){
-		runs := d.eng->runs(d.h, n);
-		for(i := 0; i < len runs; i++)
-			if(contains(lower(runs[i].text), ls)){
-				d.found = (n, runs[i].r) :: d.found;
-				if(first < 0)
-					first = n;
-			}
+	f: list of int;
+	for(n := len d.sizes - 1; n >= 0; n--){
+		t := d.eng->sheettext(d.h, n);
+		if(t == nil){
+			# an engine without a sheet's text: its words
+			runs := d.eng->runs(d.h, n);
+			for(i := 0; i < len runs; i++)
+				t += runs[i].text + " ";
+		}
+		if(contains(lower(t), ls))
+			f = n :: f;
 	}
-	# in the order found
-	f: list of (int, Rect);
-	for(l := d.found; l != nil; l = tl l)
-		f = hd l :: f;
-	d.found = f;
-	if(d.found == nil)
+	if(f == nil)
 		return "not found";
-	(fsheet, frect) := hd d.found;
-	y := d.tops[fsheet] + frect.min.y * d.scale / 100;
+	d.found = f;
+	d.findstr = ls;
+	n = hd f;
+	y := d.tops[n];
+	if((rl := foundon(d, n)) != nil)
+		y += (hd rl).min.y * d.scale / 100;
 	h := w.body.frame.r.dy();
 	if(y < d.org.y || y > d.org.y + h)
 		d.org.y = y - h / 3;
@@ -1483,15 +1536,28 @@ find(w: ref Window, s: string): string
 	return nil;
 }
 
+# Where the search's string is, one place a line: sheet x0 y0 x1 y1,
+# for the first MAXFOUND sheets that have it; then each further sheet
+# that has it, by its number alone (where on a sheet takes reading
+# its words, and a long document's are many).
+MAXFOUND: con 100;
+
 foundread(w: ref Window): string
 {
 	d := w.doc;
 	if(d == nil)
 		return nil;
 	s := "";
+	k := 0;
 	for(l := d.found; l != nil; l = tl l){
-		(n, r) := hd l;
-		s += sprint("%d %d %d %d %d\n", n + 1, r.min.x, r.min.y, r.max.x, r.max.y);
+		if(k++ >= MAXFOUND){
+			s += sprint("%d\n", hd l + 1);
+			continue;
+		}
+		for(rl := foundon(d, hd l); rl != nil; rl = tl rl){
+			r := hd rl;
+			s += sprint("%d %d %d %d %d\n", hd l + 1, r.min.x, r.min.y, r.max.x, r.max.y);
+		}
 	}
 	return s;
 }

@@ -156,6 +156,8 @@ for a window showing text):
 	links	one link a line: sheet x0 y0 x1 y1 url (scale 100)
 	find	write a string; read where it was found, one a line:
 			sheet x0 y0 x1 y1
+		for the first 100 sheets that have it, then each further
+		sheet that has it, by its number alone
 ```
 
 `image` names the document shown and its first sheet's size. A

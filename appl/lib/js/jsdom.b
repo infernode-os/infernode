@@ -250,46 +250,64 @@ readfd(fd: ref Sys->FD): array of byte
 	return buf;
 }
 
-# ---- strings: the document's are Unicode, the engine's UTF-16 ----
+# ---- strings ----
+#
+# Dis strings hold 16-bit characters, so the engine's UTF-16 strings
+# and the document's are the same thing: a character past the BMP is a
+# surrogate pair in both.  Only bytes for the network need converting.
 
 tojs(s: string): string
 {
-	for(i := 0; i < len s; i++)
-		if(s[i] > 16rFFFF)
-			break;
-	if(i == len s)
-		return s;
-	r := s[0:i];
-	for(; i < len s; i++) {
-		c := s[i];
-		if(c > 16rFFFF) {
-			c -= 16r10000;
-			r[len r] = 16rD800 + (c >> 10);
-			r[len r] = 16rDC00 + (c & 16r3FF);
-		} else
-			r[len r] = c;
-	}
-	return r;
+	return s;
 }
 
 fromjs(s: string): string
 {
-	for(i := 0; i < len s; i++)
-		if(s[i] >= 16rD800 && s[i] <= 16rDFFF)
-			break;
-	if(i == len s)
-		return s;
-	r := s[0:i];
-	for(; i < len s; i++) {
+	return s;
+}
+
+# UTF-16 as UTF-8 (a lone surrogate as U+FFFD)
+utf8bytes(s: string): array of byte
+{
+	n := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c < 16r80)
+			n++;
+		else if(c < 16r800)
+			n += 2;
+		else if(c >= 16rD800 && c <= 16rDBFF && i + 1 < len s && s[i+1] >= 16rDC00 && s[i+1] <= 16rDFFF) {
+			n += 4;
+			i++;
+		} else
+			n += 3;
+	}
+	b := array[n] of byte;
+	k := 0;
+	for(i = 0; i < len s; i++) {
 		c := s[i];
 		if(c >= 16rD800 && c <= 16rDBFF && i + 1 < len s && s[i+1] >= 16rDC00 && s[i+1] <= 16rDFFF) {
 			c = 16r10000 + ((c - 16rD800) << 10) + (s[i+1] - 16rDC00);
 			i++;
 		} else if(c >= 16rD800 && c <= 16rDFFF)
 			c = 16rFFFD;
-		r[len r] = c;
+		if(c < 16r80)
+			b[k++] = byte c;
+		else if(c < 16r800) {
+			b[k++] = byte (16rC0 | (c >> 6));
+			b[k++] = byte (16r80 | (c & 16r3F));
+		} else if(c < 16r10000) {
+			b[k++] = byte (16rE0 | (c >> 12));
+			b[k++] = byte (16r80 | ((c >> 6) & 16r3F));
+			b[k++] = byte (16r80 | (c & 16r3F));
+		} else {
+			b[k++] = byte (16rF0 | (c >> 18));
+			b[k++] = byte (16r80 | ((c >> 12) & 16r3F));
+			b[k++] = byte (16r80 | ((c >> 6) & 16r3F));
+			b[k++] = byte (16r80 | (c & 16r3F));
+		}
 	}
-	return r;
+	return b;
 }
 
 jsarg(a, n, i: int): string
@@ -959,7 +977,7 @@ dn_fetch(nil: V, a, n: int, nil: V, nil: int): V
 	hdr := jsarg(a, n, 3);
 	body: array of byte;
 	if(arg(a, n, 4).t == Tstr)
-		body = array of byte jsarg(a, n, 4);
+		body = utf8bytes(jsarg(a, n, 4));
 	spawn fetcher(fetchc, id, method, url, hdr, body);
 	return undef;
 }

@@ -243,7 +243,6 @@ SYSMODULES=\
 	dis.m\
 	draw.m\
 	scene.m\
-	ecmascript.m\
 	web/dom.m\
 	js.m\
 	jslex.m\

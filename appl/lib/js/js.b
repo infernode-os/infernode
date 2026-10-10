@@ -146,6 +146,7 @@ resetstate()
 	mods = nil;
 	nmod = 0;
 	loader = nil;
+	hostfns = nil;
 }
 
 setoutput(out: ref fn(s: string))
@@ -219,6 +220,82 @@ evalmodule(src, url: string): (string, string)
 		return (nil, ex);
 	}
 	return (nil, nil);
+}
+
+# ---- the host's functions ----
+
+hostfns: array of ref fn(args: array of string): string;
+
+deffn(path: string, f: ref fn(args: array of string): string)
+{
+	idx := len hostfns;
+	nf := array[idx + 1] of ref fn(args: array of string): string;
+	nf[0:] = hostfns;
+	nf[idx] = f;
+	hostfns = nf;
+	(o, name) := pathobj(path, 1);
+	h := nativefn(name, 0, hostcall);
+	setcap(h, array[] of {num(real idx)});
+	defown(o, intern(name), Awrite|Aconf, objv(h));
+}
+
+# the object path's last name is in, and that name; objects on the way
+# made if make is set, else -1 if one is missing
+pathobj(path: string, make: int): (int, string)
+{
+	o := iglobal;
+	for(;;) {
+		for(i := 0; i < len path; i++)
+			if(path[i] == '.')
+				break;
+		if(i == len path)
+			return (o, path);
+		k := intern(path[0:i]);
+		v := get(o, k, objv(o));
+		if(v.t != Tobj) {
+			if(!make)
+				return (-1, nil);
+			v = objv(newplain());
+			defown(o, k, Awrite|Aconf, v);
+		}
+		o = v.x;
+		path = path[i+1:];
+	}
+}
+
+hostcall(nil: V, a, n: int, nil: V, f: int): V
+{
+	idx := int capof(f, 0).n;
+	args := array[n] of string;
+	for(i := 0; i < n; i++)
+		args[i] = fromjs(tostring(vs[a+i]));
+	return strv(tojs(hostfns[idx](args)));
+}
+
+callfn(path: string, args: array of string): (string, string)
+{
+	sp0 := sp;
+	nf := nframe;
+	{
+		(o, name) := pathobj(path, 0);
+		if(o < 0)
+			return (nil, nil);
+		fv := get(o, intern(name), objv(o));
+		if(fv.t != Tobj || (oflags[fv.x] & Ocallable) == 0)
+			return (nil, nil);
+		va := array[len args] of V;
+		for(i := 0; i < len args; i++)
+			va[i] = strv(tojs(args[i]));
+		r := display(call(fv, objv(o), va));
+		runjobs();
+		sp = sp0;
+		return (r, nil);
+	} exception {
+	"js:throw" =>
+		sp = sp0;
+		nframe = nf;
+		return (nil, showexc(thrown));
+	}
 }
 
 # the file a script's code (and its functions') came from: import() resolves against it

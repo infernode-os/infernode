@@ -40,6 +40,16 @@ Js: module
 	# where print and console output go (the default: standard output)
 	setoutput:	fn(out: ref fn(s: string));
 
+	# a host's function, given to the realm's scripts at path from the
+	# global object ("print", "System.readUrl"; objects are made as
+	# needed): it gets its arguments as strings and returns a string
+	deffn:	fn(path: string, f: ref fn(args: array of string): string);
+
+	# call the function path names, with string arguments, then run
+	# the jobs: (its value shown as evalscript shows it, nil), or (nil,
+	# the exception); (nil, nil) if there is no function there
+	callfn:	fn(path: string, args: array of string): (string, string);
+
 	# give the realm test262's host object, $262
 	test262:	fn();
 

@@ -511,6 +511,8 @@ getv(v: V, k: int): V
 {
 	if(v.t == Tobj)
 		return get(v.x, k, v);
+	if(v.t == Tundef || v.t == Tnull)
+		typeerr("cannot read properties of " + show(v) + " (reading '" + keystr(k) + "')");
 	h := protoof(v);
 	if(v.t == Tstr) {
 		if(isidx(k)) {

@@ -662,18 +662,20 @@ compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
   once, under collection stress).
 - `sprint`'s precision is capped at 20, so `%.*f` cannot format
   `toFixed(100)`; the engine formats exact decimals itself.
-- emu with the JIT (`-c1`; arm64, Apple Silicon macOS; not yet tried on
-  amd64) corrupts its heap loading a copy
-  of BBC's front page from a loopback HTTP server, its subresources over
-  TLS from the real hosts: a freed string read in `indc`, faults in
+- emu with the JIT (`-c1`) corrupted its heap loading a copy of BBC's
+  front page from a loopback HTTP server, its subresources over TLS
+  from the real hosts: a freed string read in `indc`, faults in
   `markheap`, `destroy`, `movp` and `irecv`, or the VM token held for
-  good; three runs in four, within seconds, with the page's scripts off
-  as well as on, so not the engine's doing.  The interpreter (`-c0`)
-  ran it seven times cleanly, and the same page loaded from bbc.com did
-  not fail.  Running the engine, Charon's modules, webfs and all of
-  `/dis/lib` interpreted under `-c1` did not reliably stop it, so which
-  compiled code is at fault is not known yet.  Not to be confused with
-  the GoDis gate's flake, which is amd64 (Linux CI) and faults under
-  `-c0` as well as `-c1`: the two may share a cause (the namespace races
-  of INFR-373), or not.
+  good; three runs in four, with the page's scripts off as well as on.
+  Fixed (branch `fix/arm64-jit-heap`): `xec()` released the Modlink a
+  compiled module's last return had left pending (`retpending`,
+  `libinterp/xec.c`) before loading the Prog's registers.  Destroying
+  that Modlink closes the file descriptors in its module data with the
+  VM released (`freeFD`), and `release()` saves `R` as the running
+  Prog's registers: the previous Prog's, still in `R`, became this
+  Prog's, and two Progs ran on one stack.  Only compiled modules defer
+  the release, so the interpreter never did it; the code is shared, so
+  every JIT architecture did.  It is not the GoDis gate's flake (amd64
+  Linux), which faults under `-c0` as well as `-c1`; that one may still
+  be the namespace races of INFR-373.
 

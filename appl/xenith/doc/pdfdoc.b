@@ -81,7 +81,7 @@ open(data: array of byte, name: string, nil: ref Style): (int, string)
 		(w, h) := doc.pagesize(i+1);
 		if(w <= 0.0 || h <= 0.0)
 			(w, h) = (612.0, 792.0);
-		sizes[i] = Point(int (w + 0.5), int (h + 0.5));
+		sizes[i] = Point(int w, int h);	# int of a real rounds
 	}
 	return (add(ref State(doc, sizes, array[n] of string, array[n] of array of Run, nil)), nil);
 }

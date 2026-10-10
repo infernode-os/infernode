@@ -59,6 +59,11 @@ skipped := array[] of {
 	"source-phase-imports-module-source",
 	"Temporal",
 	"ShadowRealm",
+	"joint-iteration",
+	"iterator-chunking",
+	"iterator-includes",
+	"Iterator.prototype.join",
+	"import-bytes",
 };
 
 init(nil: ref Draw->Context, args: list of string)

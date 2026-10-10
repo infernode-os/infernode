@@ -90,6 +90,8 @@ testControl(t: ref T)
 	t.assertseq(ev(js, "let j = 0; for (;;) try { j++; switch (j) { case 1: continue; default: break; } break; } catch (e) {} j"), "2", "and from inside a try");
 	t.assertseq(ev(js, "let k = 0; out: for (;;) { switch (k++) { case 0: continue out; case 1: break out; } } k"), "2", "labelled");
 	t.assertseq(ev(js, "let s = ''; for (const c of 'abc') { switch (c) { case 'b': continue; } s += c; } s"), "ac", "in a for-of");
+	t.assertseq(ev(js, "(function e(t) { for (let e of [1, 2]) {} return typeof e; })(0)"), "function", "a function expression's own name");
+	t.assertseq(ev(js, "(function e() { e = 1; return typeof e; })()"), "function", "assigned in sloppy code");
 	js->shutdown();
 }
 

@@ -1273,6 +1273,8 @@ setname(name: string, r: int, init: int)
 	Lreg =>
 		if(!init)
 			assigncheck(b, name, r);
+		if(b.kind == Bfnself && !init)
+			return;	# (sloppy: the assignment is ignored)
 		if(x != r)
 			e2(Omove, x, r);
 	Lenv =>
@@ -1407,6 +1409,12 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 	cs.nregs = cs.tmp;
 	# bindings
 	cscope = fs.parent;
+	# a named function expression's name, if nothing captures it, is the
+	# function's own register
+	if(fs.parent != nil && fs.parent.kind == Sfnname && !fs.parent.needsenv)
+		for(l0 := fs.parent.binds; l0 != nil; l0 = tl l0)
+			if((hd l0).kind == Bfnself && !(hd l0).captured)
+				(hd l0).reg = Rfn;
 	argsb := findlocal(fs, "arguments");
 	needall := 0;
 	if(argsb != nil && argsb.kind == Barguments && (pflags & Jsparse->Farrow) == 0)

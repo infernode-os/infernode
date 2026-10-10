@@ -1,0 +1,52 @@
+#!/bin/sh
+
+# Xenith launcher for Linux: Xenith alone over the whole window, as
+# tools/xen runs it, from the same runtime tree as the InferNode release.
+# Self-contained: finds the emulator and resources relative to this script.
+#
+#	xenith [file ...]
+#
+# Files named (or opened with it from the desktop, xenith.desktop's %F)
+# are opened in it. It starts in the directory it was run from, through
+# /n/local, which the profile mounts over the host root; leaving Xenith
+# halts the emu. Settings, keys and the model are in ~/.infernode, shared
+# with InferNode.
+#
+# Environment, as for tools/xen: XEN_THEME (default xenith), XEN_GEOM
+# (default 1400x900), INFERNODE_HIDPI.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+EMU="$SCRIPT_DIR/bin/emu"
+RESOURCES="$SCRIPT_DIR/resources"
+
+if [ ! -x "$EMU" ]; then
+    echo "Error: emulator not found at $EMU" >&2
+    echo "This launcher expects the Xenith release layout." >&2
+    exit 1
+fi
+
+# Belt-and-suspenders: emu has RPATH=$ORIGIN for libSDL3, but set
+# LD_LIBRARY_PATH as fallback in case patchelf wasn't applied.
+export LD_LIBRARY_PATH="$SCRIPT_DIR/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# The display's own pixels on a HiDPI screen (see tools/xen).
+INFERNODE_HIDPI=${INFERNODE_HIDPI:-1}
+export INFERNODE_HIDPI
+
+# Quote for the Inferno shell: wrap in '' and double any embedded '.
+q() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
+files=
+for f in "$@"; do
+    case $f in
+    /*) ;;
+    *)  f=$PWD/$f ;;
+    esac
+    files="$files $(q "/n/local$f")"
+done
+
+exec "$EMU" -c1 -pheap=512m -pmain=512m -pimage=512m "-g${XEN_GEOM:-1400x900}" "-r$RESOURCES" \
+    /dis/sh.dis -l -c "cd $(q "/n/local$PWD") >[2] /dev/null; run /lib/xen/boot.sh -t $(q "${XEN_THEME:-xenith}")$files"

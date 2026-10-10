@@ -3,7 +3,7 @@
 #
 # A plumber and the model, the way Lucifer's boot starts them, then
 # Xenith over the whole emu window; leaving Xenith halts the emu.  The
-# one entry point for tools/xen, tools/xen.ps1, Xenith.app and
+# one entry point for tools/xen, tools/xen.ps1, Xenith.app, Linux/xenith and
 # Xenith.exe, run after the profile (sh -l) in the shell that runs
 # Xenith, so the plumber's /chan is in Xenith's name space.
 load std

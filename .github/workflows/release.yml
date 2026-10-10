@@ -495,10 +495,24 @@ jobs:
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
+        # Xenith: the same layout and runtime, with its own launcher,
+        # desktop entry and icon; ./xenith runs /lib/xen/boot.sh (Xenith
+        # alone) rather than Lucifer's boot.
+        XSTAGE="xenith-${VERSION}-linux-amd64"
+        cp -a "$STAGE" "$XSTAGE"
+        rm -f "$XSTAGE/infernode" "$XSTAGE/infernode.desktop" "$XSTAGE/infernode.png"
+        cp Linux/xenith Linux/xenith.desktop "$XSTAGE/"
+        chmod +x "$XSTAGE/xenith"
+        cp MacOSX/Xenith.png "$XSTAGE/xenith.png"
+        tar czf "${XSTAGE}.tar.gz" -C "$XSTAGE" .
+        echo "Archive: $(ls -lh ${XSTAGE}.tar.gz)"
+
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: infernode-linux-amd64-gui-archive
-        path: infernode-*-linux-amd64-gui.tar.gz
+        path: |
+          infernode-*-linux-amd64-gui.tar.gz
+          xenith-*-linux-amd64.tar.gz
         retention-days: 3
 
   # ─────────────────────────────────────────────
@@ -981,10 +995,24 @@ jobs:
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
+        # Xenith: the same layout and runtime, with its own launcher,
+        # desktop entry and icon; ./xenith runs /lib/xen/boot.sh (Xenith
+        # alone) rather than Lucifer's boot.
+        XSTAGE="xenith-${VERSION}-linux-arm64"
+        cp -a "$STAGE" "$XSTAGE"
+        rm -f "$XSTAGE/infernode" "$XSTAGE/infernode.desktop" "$XSTAGE/infernode.png"
+        cp Linux/xenith Linux/xenith.desktop "$XSTAGE/"
+        chmod +x "$XSTAGE/xenith"
+        cp MacOSX/Xenith.png "$XSTAGE/xenith.png"
+        tar czf "${XSTAGE}.tar.gz" -C "$XSTAGE" .
+        echo "Archive: $(ls -lh ${XSTAGE}.tar.gz)"
+
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: infernode-linux-arm64-gui-archive
-        path: infernode-*-linux-arm64-gui.tar.gz
+        path: |
+          infernode-*-linux-arm64-gui.tar.gz
+          xenith-*-linux-arm64.tar.gz
         retention-days: 3
 
   # ─────────────────────────────────────────────
@@ -1811,6 +1839,9 @@ jobs:
     - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
       with:
         subject-path: artifacts/xenith-*.zip
+    - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-path: artifacts/xenith-*.tar.gz
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -1846,6 +1877,8 @@ jobs:
 
           | Platform | Architecture | File |
           |----------|-------------|------|
+          | Linux | AMD64 | `xenith-${{ steps.version.outputs.version }}-linux-amd64.tar.gz` |
+          | Linux | ARM64 | `xenith-${{ steps.version.outputs.version }}-linux-arm64.tar.gz` |
           | macOS | ARM64 (Apple Silicon) | `xenith-${{ steps.version.outputs.version }}-macos-arm64.dmg` |
           | macOS | AMD64 (Intel) | `xenith-${{ steps.version.outputs.version }}-macos-amd64.dmg` |
           | Windows | AMD64 | `xenith-${{ steps.version.outputs.version }}-windows-amd64.zip` |
@@ -1863,6 +1896,8 @@ jobs:
           **Windows (GUI):** Extract the `-gui` zip, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. The launcher embeds an icon and version metadata; the SDL3 GUI emulator and `SDL3.dll` ship in the same zip. Without running `setup-windows.bat` first, Windows SmartScreen silently blocks the unsigned `InferNode.exe` after browser download — see the Code signing section below.
 
           **Windows (headless):** Extract the zip, double-click `setup-windows.bat` to clear Mark-of-the-Web, then from a console run `o.emu.exe -c1 -r. sh -l`.
+
+          **Xenith (Linux):** Extract, then `./xenith [file ...]`. `./setup-desktop.sh` adds it to the app menu (files open with it) and puts `xenith` on your PATH. It shares `~/.infernode` with InferNode.
 
           **Xenith (macOS):** Open the DMG, drag Xenith.app to Applications, double-click to launch. It shares `~/.infernode` with InferNode.app.
 

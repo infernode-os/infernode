@@ -4,6 +4,15 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Platforms and releases
+
+- **Xenith for Linux**: `xenith-<version>-linux-amd64.tar.gz` and
+  `-linux-arm64.tar.gz`, the Linux GUI release's emulator and runtime with
+  its own launcher (`./xenith [file ...]`), desktop entry and icon, as
+  `Xenith.app` and `Xenith.exe` are for macOS and Windows. Its
+  `setup-desktop.sh` adds Xenith to the app menu, opening the files it is
+  given, and puts `xenith` on the PATH.
+
 ## [0.6.0] - 2026-10-10
 
 This release ships Intel Macs their own DMG and headless tarball, and

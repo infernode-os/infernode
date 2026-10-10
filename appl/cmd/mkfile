@@ -244,6 +244,9 @@ SYSMODULES=\
 	draw.m\
 	scene.m\
 	ecmascript.m\
+	js.m\
+	jslex.m\
+	jsparse.m\
 	encoding.m\
 	env.m\
 	factotum.m\

@@ -1669,7 +1669,8 @@ bigadd(a, b: V): V
 {
 	if(a.t != Tbig || b.t != Tbig)
 		typeerr("cannot mix BigInt and other types, use explicit conversions");
-	return V(Tbig, newstr(decadd(str(a.x), str(b.x))), 0.0);
+	h := newstr(decadd(str(a.x), str(b.x)));
+	return V(Tbig, h, 0.0);
 }
 
 decadd(a, b: string): string

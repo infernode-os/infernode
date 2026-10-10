@@ -843,11 +843,14 @@ tostrh(v: V): int
 	return atomsh[aundefined];
 }
 
+# (a local, so the compiler does not inline it: its inliner writes the
+# result into the caller's v = tostrv(v) before reading v for tostrh)
 tostrv(v: V): V
 {
 	if(v.t == Tstr)
 		return v;
-	return V(Tstr, tostrh(v), 0.0);
+	h := tostrh(v);
+	return V(Tstr, h, 0.0);
 }
 
 toobject(v: V): int

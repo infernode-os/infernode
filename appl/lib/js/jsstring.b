@@ -1815,18 +1815,15 @@ serialize(st: ref Jstate, k: int, holder: V): (int, string)
 	if(st.replacer.t != Tundef)
 		v = call(st.replacer, holder, array[] of {keyval(k), v});
 	if(v.t == Tobj) {
-		if(okind[v.x] == Kprim)
-			pick d := odata[v.x] {
-			Prim =>
-				case d.v.t {
-				Tnum => v = num(tonumber(v));
-				Tstr => v = tostrv(v);
-				Tbool => v = d.v;
-				Tbig => v = d.v;
-				}
-			}
-		else if(israwjson(v))
-			return (1, tostring(getv(v, intern("rawJSON"))));
+		pt := primtype(v);
+		case pt {
+		Tnum => v = num(tonumber(v));
+		Tstr => v = tostrv(v);
+		Tbool or Tbig => v = primof(v);
+		* =>
+			if(israwjson(v))
+				return (1, tostring(getv(v, intern("rawJSON"))));
+		}
 	}
 	case v.t {
 	Tnull => return (1, "null");
@@ -1854,6 +1851,26 @@ serialize(st: ref Jstate, k: int, holder: V): (int, string)
 		}
 	}
 	return (0, nil);
+}
+
+# a wrapper object's primitive type, or -1
+primtype(v: V): int
+{
+	if(v.t == Tobj && okind[v.x] == Kprim)
+		pick d := odata[v.x] {
+		Prim =>
+			return d.v.t;
+		}
+	return -1;
+}
+
+primof(v: V): V
+{
+	pick d := odata[v.x] {
+	Prim =>
+		return d.v;
+	}
+	return undef;
 }
 
 jsonquote(s: string): string

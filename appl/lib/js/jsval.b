@@ -840,8 +840,16 @@ defown(h, k, attrs: int, v: V)
 		oslots[h][slot] = v;
 		return;
 	}
-	if(isidx(k) && attrs != Adefault && keyidx(k) < onelem[h] + 1 && (oflags[h] & Oidxprops) == 0)
+	if(isidx(k) && attrs != Adefault && keyidx(k) < onelem[h] + 1 && (oflags[h] & Oidxprops) == 0) {
 		spill(h);
+		slot = slotof(oshape[h], k);
+		if(slot >= 0) {
+			sh := ownshape(h);
+			sh.attrs[slot] = attrs;
+			oslots[h][slot] = v;
+			return;
+		}
+	}
 	addprop(h, k, attrs, v);
 	if(okind[h] == Karray && keyindex(k) >= 0.0)
 		arraygrew(h, k);

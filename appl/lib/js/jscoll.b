@@ -166,6 +166,8 @@ mapput(d: ref Data.Map, k, v: V)
 		if(d.size < d.n / 2)
 			compactmap(d);
 		if(d.n == len d.keys) {
+			if(2 * d.n > Maxrows)
+				throwerr(RangeError, "out of memory: collection too large");
 			nk := array[2 * d.n] of V;
 			nk[0:] = d.keys;
 			d.keys = nk;

@@ -1036,6 +1036,8 @@ funcproto_tostring(this: V, nil, nil: int, nil: V, nil: int): V
 			Func =>
 				if(d.code.src != nil)
 					return strv(d.code.src);
+				if(d.code.send > d.code.spos && d.code.send <= len d.code.whole)
+					return strv(d.code.whole[d.code.spos:d.code.send]);
 			}
 			return strv("function () { [native code] }");
 		Knative =>

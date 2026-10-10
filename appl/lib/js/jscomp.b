@@ -1651,11 +1651,14 @@ addfunc(f: ref Node.Func): int
 
 addfuncx(f: ref Node.Func, extra: int): int
 {
-	src := "";
-	if(f.end <= len cs.src && f.pos <= f.end)
-		src = cs.src[f.pos:f.end];
 	c := compilefunc(f, cs, cs.src, extra);
-	c.src = src;
+	# its text is the source's, not a copy (a bundle's functions nest
+	# deep: copies would be the source over again at each level)
+	c.src = nil;
+	if(f.end <= len cs.src && f.pos <= f.end) {
+		c.spos = f.pos;
+		c.send = f.end;
+	}
 	cs.funcs = c :: cs.funcs;
 	return cs.nfunc++;
 }

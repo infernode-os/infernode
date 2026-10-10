@@ -191,7 +191,8 @@ Code: adt {
 	tmplcache:	array of int;	# the template objects, made once per site
 	regexps:	array of (string, string);
 	flags:	int;
-	src:	string;	# the function's text, for toString
+	src:	string;	# the function's text, for toString, if not whole[spos:send]
+	spos, send:	int;
 	pos:	array of int;	# by pc: source position (for messages), or nil
 	whole:	string;	# the source those positions are in
 	file:	string;

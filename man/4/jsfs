@@ -1,0 +1,95 @@
+.TH JSFS 4
+.SH NAME
+jsfs \- JavaScript realms as files
+.SH SYNOPSIS
+.B jsfs
+[
+.B -D
+] [
+.B -m
+.I mountpoint
+]
+.SH DESCRIPTION
+.I Jsfs
+serves JavaScript realms of the engine
+(see
+.IR js (1))
+as files, by default at
+.BR /mnt/js .
+Each realm is a global object with its own built-ins, heap and jobs,
+running on a process of its own: a script that runs long holds only
+its realm, and
+.B kill
+ends it whatever it is doing.
+.B -D
+traces the Styx messages.
+.SH FILESYSTEM
+.TF N/console
+.TP
+.B clone
+Reading it makes a realm and gives its number,
+.IR N ,
+and a newline.
+.TP
+.IB N /ctl
+Reading gives
+.BI "realm " N\f1.
+Writing a line controls the realm:
+.B kill
+ends it and removes its directory;
+.BI "stress " n
+collects its garbage after every
+.I n
+allocations (0, as usual), to test the engine;
+.BI "profile " ms
+samples where it is every
+.I ms
+milliseconds (0 stops).
+An unknown verb is an error.
+.TP
+.IB N /eval
+Writing a script runs it; the write returns when it has run, and any
+promise jobs it queued.
+Reading gives the last script's value, as
+.IR js (1)
+prints it, or
+.BI "error: " exception\f1.
+Its mode is 600: it is authority to run code in the realm.
+.TP
+.IB N /console
+What the realm's scripts printed
+.RB ( print ,
+.BR console.log ),
+a line each; reads are by offset, and it grows.
+.TP
+.IB N /status
+.B idle
+or
+.BR running ,
+then
+.BI "scripts " n\f1,
+the number run, and
+.BI "error " text
+for the last that threw.
+.TP
+.IB N /profile
+While profiling: where the time went, by function, a line each.
+.PD
+.PP
+A realm cannot import modules: that would read files in the server's
+namespace on a client's behalf.
+.SH EXAMPLE
+.EX
+; n=`{cat /mnt/js/clone}
+; echo '[1, 2, 3].map(x => x * 2)' > /mnt/js/$n/eval
+; cat /mnt/js/$n/eval
+2,4,6
+; echo kill > /mnt/js/$n/ctl
+.EE
+.SH SOURCE
+.B /appl/cmd/jsfs.b
+.br
+.B /appl/lib/js
+.SH SEE ALSO
+.IR js (1),
+.IR charon (1)

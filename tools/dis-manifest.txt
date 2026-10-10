@@ -271,6 +271,7 @@ dis/jitcrash.dis
 dis/jitshift.dis
 dis/jittest.dis
 dis/js.dis
+dis/jsfs.dis
 dis/kill.dis
 dis/ktrans.dis
 dis/lan78stats.dis

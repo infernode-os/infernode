@@ -102,6 +102,7 @@ TARG=\
 	import.dis\
 	iostats.dis\
 	js.dis\
+	jsfs.dis\
 	kill.dis\
 	lan78stats.dis\
 	ktrans.dis\

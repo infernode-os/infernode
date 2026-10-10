@@ -4,27 +4,41 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
-### Veltro
+## [0.6.0] - 2026-10-10
 
-- **One agent harness, served as files.** The agent loop was written out
-  twice, in `veltro` and `lucibridge`, and had drifted; it is now one
-  program, `veltrosrv`, which serves a session as a directory at
-  `/mnt/veltro`: `input`, `text` (the conversation, following a turn as it
-  is generated), `log` (the trajectory), `status`, `approve` and `ctl`.
-  The loop is `lucibridge`'s, the one the grinding tuned, moved in
-  unchanged; its goldens pass through the new `lucibridge`, now a client
-  that renders those files into Lucia. `veltro` is a client too, and
-  Xenith gets `Agent`, a window on the agent for work on a project from
-  the editor (`man 4 veltrosrv`, docs/VELTRO.md, docs/XEN.md).
-- **Read-only tool calls run concurrently.** The tool calls of one model
-  response run at once when all are read-only (reads, searches, `spawn`)
-  and one at a time, in the model's order, when any mutates, so a write
-  always precedes the read or compile that follows it. Every call has its
-  own sixty-second bound.
-- **The server restricts its own namespace before it serves**, with the
-  grants it was started with, and mounts only in the client's namespace:
-  the agent's tools cannot see `/mnt/veltro`, so it cannot approve or
-  widen itself. Compaction is `llmsrv`'s alone.
+This release ships Intel Macs their own DMG and headless tarball, and
+Xenith as an app of its own, `Xenith.app` and `Xenith.exe`, beside
+InferNode in every release. Charon has a new engine,
+written for this tree, at 81.9% of the WPT reftests. The agent loop is one
+program, `veltrosrv`, served as files. A headless node lends its desktop
+to another InferNode's screen through stock `cpu(1)`; the screen is the
+window, resizable, with one window frame for every app; `wm/sam` edits;
+and `scene` draws 2-D situations as files. Bringing the amd64 JIT to
+macOS found two bugs it had on every host; see Dis VM and JITs. Security
+covers a mode-777 rename on 64-bit hosts, an approval bypass in the agent
+loop, and two post-quantum fixes.
+
+### Platforms and releases
+
+- **Intel Macs** (#791): `infernode-<version>-macos-amd64.dmg` and
+  `xenith-<version>-macos-amd64.dmg`, signed and notarized as the arm64
+  ones are, and a `-macos-amd64.tar.gz` headless build. Built and tested
+  natively on GitHub's `macos-15-intel` runner; no universal binary. The
+  build scripts, `makemk.sh` and the emu mkfile take `OBJTYPE` from
+  `uname -m` and the Homebrew prefix from it. JIT memory on macOS now
+  comes from the near-text allocator Linux uses, and an integer divide by
+  zero in compiled code is `zero divide`. A GP fault on spawn, found only
+  on real Intel hardware (Rosetta hid it), came from an `aligned(16)`
+  `FPU` struct the pool allocator could not honour.
+- **Xenith ships as an app of its own**, alongside InferNode in every
+  release: `Xenith.app` (a signed, notarized `xenith-<version>-macos-<arch>.dmg`)
+  and `Xenith.exe` (`xenith-<version>-windows-amd64.zip`), with their own
+  icon (#784). Each is the same emulator and runtime tree as InferNode,
+  running Xenith alone as `tools/xen` does, and shares `~/.infernode` with
+  it. `Xenith.exe` opens the files on its command line (Open With, or
+  dropped on it). `xen`, `xen.ps1` and both apps start through one script,
+  `lib/xen/boot.sh` (docs/XEN.md). `xen.ps1` now starts the plumber and
+  the model service, as `xen` does.
 - **Acme's and Xenith's commands ship.** Each editor binds its own command
   directory before `/dis` (`acme/dis`, `xenith/dis`: `win`, `adiff`, `Mail`,
   `Agent` and the rest), as upstream Inferno's acme does. Releases staged a
@@ -32,21 +46,310 @@ All notable changes to InferNode are documented in this file.
   `xenith/`, so in a shipped tree neither editor could run its tag
   commands, and Acme had no colour schemes. Every release job stages both
   now, and the build manifest covers both command directories.
+- **Android boots to Lucifer again** (#768). Android 0.2.0 showed a blank
+  screen: APK packaging drops empty directories and `/mnt` was not on the
+  placeholder list, so `msg9p` and `luciuisrv` could not mount. `mnt`,
+  `mnt/llm` and `tmp` are staged now, and both the APK and the release
+  workflow fail if a mount root is missing. Debug builds use the package
+  ID `io.infernode.debug`, so they install beside the Play build.
+- **The macOS and Windows headless builds get a memory screen**, as Linux
+  has (#744).
+
+### Charon
+
+- **A new engine** (#754, #811, #815): an HTML5 parser (WHATWG tree
+  construction, run against html5lib's 1,478 cases), the CSS cascade and
+  selectors, box layout with flex, grid (subgrid, auto placement), tables,
+  floats and sticky and fixed positioning, TrueType, WOFF and WOFF2 fonts,
+  and Brotli. 10,693 of 13,049 WPT reftests pass (81.9%), and layout is
+  compared against Chromium on live sites at five widths. Also: CSS
+  filters, linear, radial and conic gradients, `clip-path: inset()`,
+  `object-fit`, bidi (UAX #9), Thai line breaking from a dictionary,
+  variable fonts, progressive loading, and a keep-alive connection pool.
+  `appl/charon` is now the browser window alone, `wm/charon`.
+- **Its session is files**, `charonfs` at `/mnt/charon` (`url`, `title`,
+  `text`, `links`, `forms`, `ctl`, the DOM under `dom/`), posted as
+  `#scharon/fs`.
+- **Settings** (#811) in one file, `lib/charon/settings` in the user's
+  home, which Charon and Xenith's HTML rendering both follow:
+  `images on|click`, `fonts web|system` and `effects on|off`, through
+  Charon's menu, its `ctl`, and a Web Pages panel in Settings with a Light
+  preset for small devices. Form controls are drawn by the page, not Tk
+  widgets over it.
+- **Memory** (#811): GitHub at 1400×860 went from 615 to 273 MB of emu
+  RSS. A style sheet linked several times is parsed once, rules no longer
+  keep their sheet's tokens alive, and images are decoded at the size
+  shown.
+- **Images**: a JPEG decoder (baseline and progressive, CMYK) and a WebP
+  decoder (lossless, lossy and alpha), both matching libwebp or the
+  reference fixtures to the pixel (#811, #812); the faster of the two WebP
+  decoders the tree briefly had is the one kept (#812). Image fetches send
+  `Accept: image/webp,…` as browsers do, so image CDNs send WebP (#812).
+- Charon follows a theme switch (#794). On the desktop, a web URL plumbed
+  goes to Charon, to the running one if there is one (#806).
+
+### Xenith
+
+- **Xenith browses** (#805, #807, #808). B3 on an `http:`, `https:` or
+  `file:` URL opens a browser window on the same engine: links, Back, Fwd,
+  Reload, and the tag as the address bar (edit the name, then Get). The
+  window's text is the page's text, so Look, search and Snarf work on it.
+  Form fields take the keyboard. Each browser window's page is served as
+  files, as Charon's is, at the path its new `web` window file names.
+- **Render sets HTML with Charon's engine** (#797) and markdown in real
+  faces (#774): Go Medium, Bold, Italic and Bold Italic, sized headings,
+  and tables laid out booktabs-style with their alignment markers. Render
+  on a `.md` file shows the typeset document in place of the text; the
+  buffer stays untouched. The old HTML engine and `charonrender` are gone.
+- **One image loader** (#801) for Xenith, the browser, `wm/view` and
+  `scene`: PNG, JPEG, GIF, SVG, XBM, PIC, PPM, PGM, Inferno images and
+  WebP, identified from the data and then the name. Xenith opened a
+  `.jpg` as text before. Images keep their colours on displays deeper
+  than 8 bits instead of being dithered to 256 (#813).
+- **`tools/xen` and plumbing from the host** (#770, #772): open host files
+  in an InferNode running only Xenith (or sam, `-s`); plan9port's `plumb`
+  on the Mac opens files in it through `hostplumb(1)`, and so does `plumb`
+  on a remote host reached by ssh, with that host's files mounted over
+  `u9fs` so edits save back. On Linux (#778): a Wayland title bar through
+  libdecor, HiDPI on X11, and fractional scales (1.25x, 1.5x) with Go
+  built to match. With `INFERNODE_HIDPI` set, the desktop emu draws in the
+  display's own pixels.
+- **From canonical Acme** (#780): the `xdata` and `errors` window files,
+  and the `dirty`, `menu` and `nomenu` ctl messages.
+- **Fixes**: scrolling on a trackpad quit Xenith and Acme, because the
+  quit signal shared a button bit with scrolling left (#779). Exit under a
+  window manager closed the whole emulator (#764). `u` written to the
+  `edit` file undid nothing, and a short event written to `event` killed a
+  worker and hung the writer (#789). Text inserted inside a selection was
+  drawn in the wrong colour (#787). A Mac trackpad's fingers were taken as
+  touch gestures, so every scroll arrived twice (#772). The PDF, diagram
+  and markdown engines load on first use, not at startup (#802).
+
+### Veltro
+
+- **One agent harness, served as files** (#781). The agent loop was
+  written out twice, in `veltro` and `lucibridge`, and had drifted; it is
+  now one program, `veltrosrv`, which serves a session as a directory at
+  `/mnt/veltro`: `input`, `text` (the conversation, following a turn as it
+  is generated), `log` (the trajectory), `status`, `approve` and `ctl`.
+  The loop is `lucibridge`'s, the one the grinding tuned, moved in
+  unchanged; its goldens pass through the new `lucibridge`, now a client
+  that renders those files into Lucia. `veltro` is a client too, and
+  Xenith gets `Agent`, a window on the agent for work on a project from
+  the editor (`man 4 veltrosrv`, docs/VELTRO.md, docs/XEN.md). The
+  interactive `repl` is gone.
+- **Read-only tool calls run concurrently.** The tool calls of one model
+  response run at once when all are read-only (reads, searches, `spawn`)
+  and one at a time, in the model's order, when any mutates, so a write
+  always precedes the read or compile that follows it. Every call has its
+  own sixty-second bound. A read repeated after a write in the same batch
+  no longer gets the result from before the write (#798).
+- **The server restricts its own namespace before it serves**, with the
+  grants it was started with, and mounts only in the client's namespace:
+  the agent's tools cannot see `/mnt/veltro`, so it cannot approve or
+  widen itself. Compaction is `llmsrv`'s alone.
+- **A `window` tool** (#743) saves a picture of one of the activity's own
+  windows into the agent's scratch area, from the new per-window tree
+  `wmsrv` serves (`<id>/window`, mounted per activity at `/mnt/wsys`); no
+  other activity's windows are nameable.
+- `exec` refuses GUI apps and points to `launch`; it had reported them
+  launched into a presentation zone nothing read (#814). `claude-gate`
+  sends one response's tool calls to `llmsrv` as one batch (#799).
 - `veltro` session names and logs were built with `string c` on a rune,
   which printed its number; fixed. `-y` answers the approval gate for
   scripts. `xen` starts the model service the way Lucifer's boot does,
   through `lib/lucifer/llmsrv.sh`, now one script for both.
 
-### Xenith
+### Remote desktop
 
-- **Xenith ships as an app of its own**, alongside InferNode in every
-  release: `Xenith.app` (a signed, notarized `xenith-<version>-macos-arm64.dmg`)
-  and `Xenith.exe` (`xenith-<version>-windows-amd64.zip`), with their own
-  icon. Each is the same emulator and runtime tree as InferNode, running
-  Xenith alone as `tools/xen` does, and shares `~/.infernode` with it.
-  `xen`, `xen.ps1` and both apps start through one script,
-  `lib/xen/boot.sh` (docs/XEN.md). `xen.ps1` now starts the plumber and the
-  model service, as `xen` does.
+- **A headless node's desktop on another InferNode's screen** (#730,
+  docs/REMOTE-DESKTOP.md): the viewer runs `cpu tcp!node wm/wm wm/sh`, and
+  the node's programs draw on the viewer. On a bare-metal card the
+  listener starts only if `/n/dos/cpulisten` exists, only with a
+  certificate, and after the boot has narrowed its namespace.
+- **`cpu(1)` works out of the box**: it bound `#d` for the draw device
+  where this tree's is `#i`, and its default algorithm was `none`, so
+  keystrokes went in clear after authentication. The default is now
+  `aes_256_cbc sha256`. A session ends with its command or with its caller
+  and takes what it started with it (#759); a refused request is reported
+  as a failure (#783).
+- **A second InferNode no longer kills the first** (#728): every login
+  shell on macOS and Linux killed whatever held port 5356, which could
+  only be the user's running InferNode. A display that hangs up no longer
+  panics the node drawing on it (#727). API keys in the host environment
+  reached factotum at login again; every hosted login also printed
+  `sh: null list in concatenation` (#742).
+
+### Window system and graphics
+
+- **The screen is the window** (#771): a resized or full-screen window
+  used to be the fixed screen scaled into it with black margins. The SDL
+  backend now shows the window's size of a display-sized buffer 1:1 and
+  reports each resize on `/dev/wmsize`, which Xenith and Lucifer lay
+  themselves out to. Touch platforms are unchanged.
+- **One window frame for every app; `wm/wm` follows rio** (#763): a 4px
+  frame in the theme's `windowborder` colour; buttons 1 and 2 on the
+  border reshape, button 3 moves; button 3 on the background opens rio's
+  menu (New, Resize, Move, Delete, Hide); click to focus. Hidden windows
+  are listed by their labels (#766). Button-3 menus in several apps closed
+  at once because they passed a button mask for a button number.
+- **One anti-aliased rasteriser, in the draw device** (#745), with exact
+  integer coverage, so hosted, headless and bare-metal draw identical
+  pixels. `line`, `poly`, `bezier` and ellipse outlines are smooth; paths
+  are filled and stroked through new protocol messages (`Path`,
+  `Image.fillpath`, `Image.strokepath`); existing `.dis` files run
+  unchanged. Four private rasterisers are gone, and Tk's `-width`,
+  `-smooth`, `-capstyle` and canvas arcs are right. Both kernels share
+  one draw device; the emulator gains `/dev/screen`.
+- Anti-aliased glyphs rendered black under GCC, which made dark themes
+  unreadable on Linux builds (#750).
+- **Lucifer**: ending a task tears down its apps, window manager and
+  mounts. Ending one only hid it, and its apps kept running out of
+  sight; every closed app also left a process behind (#767).
+- **Themes** (#770, #773, #765): live switching moved below Lucifer, so
+  every program follows a switch from any writer; new `glenda` (Plan 9's
+  own colours) and `xenith` themes; Halo is a conventional light theme;
+  the login screen and About show each theme's own picture.
+
+### Applications
+
+- **`wm/sam` edits** (#751, #777): sam's command language, from Plan 9's
+  sources (addresses, `x y g v X Y`, `{}` blocks, undo), and the terminal
+  takes input. One window with overlapping layers, swept out with button
+  3, as in Plan 9.
+- **Scene** (#744): 2-D situation graphics as files. `scenefs` serves a
+  live scene that producers write to and agents block on; recording is
+  `cat /mnt/scene/changes`, playback is `scenereplay`; `wm/scene` is the
+  viewer, and it replaces `geo-map`.
+- **Video** (#746, #749): about 37% of a core for a 720p feed in Matrix
+  down to about 16%: `vid9p` reads each frame straight into its array,
+  YCbCr conversion is a C builtin (`$I420`) where available, and frame
+  ticks keep to a deadline. A followed live edge moves with each frame.
+- Matrix windows can be moved and resized under `wm/wm` (#752). The
+  fractals zoom box is drawn while dragging (#793). Tetris keeps its high
+  scores in the player's home (#741). Wheel scrolling in Tk canvases and
+  listboxes, and a touchpad's stream of ticks scrolls (#811).
+
+### Dis VM and JITs
+
+- **Two amd64 JIT bugs, on every host** (#791): `maccolr` set `nprop`
+  with a 64-bit store, zeroing the next global (on macOS the collector's
+  sweep pointer, so every program beyond `echo` crashed), and `compile()`
+  did not clear `patch[]`, so stale memory intermittently gave
+  "compile failed". Both may have contributed to the earlier
+  nondeterministic amd64 failures; that is not established.
+- **The amd64 and arm64 JITs checked no array bounds** (#756): the flag
+  that gates the checks was never set, so out-of-range indices read and
+  wrote outside the array. The amd64 string index check was also wrong.
+- **Faults in compiled code reach the handler around them** (#758):
+  `R.PC` was stale on the fault paths, so a `{...} exception` block that
+  caught under the interpreter did not under the JIT. arm64 zero divide
+  raises `zero divide` (it returned 0). The riscv64 kernel panicked on any
+  JIT fault; on the arm64 kernel a nil dereference in JIT code is now the
+  program's exception, not a panic (#753).
+- **`ref T` with no initializer zero-fills its scalars** (#755), in the
+  compiler and in `heap()`, under both engines; they held whatever the
+  recycled block held.
+- **A startup SEGV, about one launch in 150** (#762): `pexit` freed its
+  Proc while `up` still named it, so the lock count was written into
+  freed memory.
+- `memfs` frees the fid of a failed remove, which left the next walk with
+  "fid in use" (#800).
+
+### Bare metal
+
+- **Authenticated connections on the native kernel** (#726): none had
+  ever worked. The handshake's ML-KEM buffers, 9,440 bytes, sat on a
+  16 KB kernel stack and overran it; they are on the heap now.
+- **Hot plugging** (#792): a cable pulled and put back, a cable plugged in
+  after boot, and a Wi-Fi network left and returned to now each bring the
+  interface back, tested on the board. Routes follow an address that
+  goes, and the DHCP watchdog no longer holds UDP 68 for the whole lease.
+- **Page zero is unmapped after boot** on the Pi 3, Pi 4 and `virt`
+  (#760), so a nil pointer faults instead of reading the firmware stub.
+- The ICMPv6 unreachable reply leaked the interface's read lock, which
+  hung DHCP on Wi-Fi and could take the wired interface down (#722).
+  `sed` crashed on an unclosed pattern and hung on `D` (#775).
+
+### Security
+
+- **Renaming a host file made it world-writable** (#790). On 64-bit
+  Linux and macOS, `mv` inside InferNode (and Xenith, and agents) left a
+  host file mode 777 with a 2106 modification time, and `chmod` set that
+  time: a wstat's "don't change" fields were not recognised. Windows was
+  not affected.
+- **An agent's write could skip approval** (#798). Approval judged a
+  native tool call's JSON arguments as if they were the positional form,
+  so a `write` or `exec` that needed the operator's approval went to the
+  tool unasked. The golden test had pinned the bypass; it now records the
+  denial.
+- **ML-DSA signing timing** (#795): Decompose divided by `2*gamma2` on
+  values derived from the secret key, the leak reported as CVE-2026-22705
+  in another implementation. It now uses the reference fixed-point
+  reciprocal; signatures are unchanged.
+- **ML-KEM input checks** (#796): the FIPS 203 modulus check on the
+  encapsulation key and hash check on the decapsulation key; a key that
+  fails is refused.
+- **Authenticated listeners hardened** (#731, #769): per-source pre-auth
+  limits (`-P`, default 4) so one host cannot hold every slot; secure
+  listeners refuse `none` and incomplete cipher/digest configurations;
+  `rstyxd` sessions get a reduced namespace, and `cpu` and `rcmd` export a
+  synthetic `/dev` unless given `-e`. The bare-metal network console can
+  be kept to one interface (#739), and wired-only is the documented
+  posture.
+- **X.509 times after 2038** wrapped, and GeneralizedTime was ignored, so
+  certificates under the SSL.com roots failed to validate (#814).
+- `secstored` refuses `secstore2` verifiers, as the client already did
+  (#803); no release wrote one.
+
+### Other fixes
+
+- `sh` reports a script without the execute bit as not executable, not as
+  a missing `.dis` (#788).
+- `llmclient`: a backend answering a streaming request with one JSON body
+  got an empty reply (#814). `spawn`'s `at=` and `every=` past about 24.8
+  days overflowed and are refused (#814).
+- Plumbing reads the user's rules first, then the system's defaults; a
+  user file that does not parse never leaves the system without plumbing
+  (#806). The plumber refuses a message nothing can receive (#770).
+
+### Tests
+
+- **The suite gates CI on every platform, and passes on all of them**
+  (#814). Each test runs in its own namespace and process group with a
+  time limit; tests no longer write into the source tree; about 70
+  modules that failed on every platform pass.
+- New: `jit_bounds_test`, `jit_fault_test` under both engines,
+  `refadt_zero_test`, `mldsa_decompose_test.sh` (no divide instruction in
+  Decompose at any optimisation level), `wstat_nulldir_test`, the
+  agent-loop characterization goldens, Xenith's 9P interface inside a
+  headless Xenith, frame tests on a simulated screen, `sam_test`,
+  `aa_test.sh`, and `cpu_session_test.sh`.
+
+### Documentation
+
+- docs/REMOTE-DESKTOP.md, docs/XEN.md, docs/scene-design.md,
+  docs/draw-geometry.md, docs/CHARON-ENGINE.md, and man pages for
+  `veltrosrv(4)`, `hostplumb(1)`, `scenefs(4)`, `i420(2)` and more.
+- The repository root is tidied and about 100 documents corrected against
+  the tree; superseded reports moved to `docs/history/` (#810).
+
+### Known limitations
+
+- **The Intel and Xenith release legs run for the first time with this
+  tag**: release jobs run only on a tag, so the Intel DMGs' signing and
+  notarization were not exercised before. The DMG's real minimum macOS
+  version is unchecked. Intel support lasts as long as GitHub has an
+  Intel macOS image (#791).
+- **Charon runs no JavaScript.** The old engine's was removed with it
+  (#797); a script host is proposed in docs/JS-ENGINE.md. In Xenith, a
+  form field has no caret (typing goes at the end), and in click-to-load
+  mode a browser window cannot load an image on click.
+- **Bare metal**: the listener hardening (#769) and the page-zero change
+  (#760) were verified under QEMU; their board runs are not recorded in
+  their PRs. `claude-gate`'s batching (#799) merged without a live run.
+- `xen.ps1` on Windows is untested (#770); the resizable screen was not
+  run on Linux or Windows (#771).
 
 ## [0.5.0] - 2026-09-28
 

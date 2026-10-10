@@ -312,9 +312,19 @@ expandstrprops(s: ref Set)
 		Prop =>
 			if(it.value == nil && !it.neg) {
 				strs := propstrings(it.name);
-				if(strs != nil)
+				if(strs != nil) {
 					s.items[i] = ref Item.Strs(strs);
+					continue;
+				}
 			}
+			# a property's ranges, found now rather than for each character
+			k := propkey(it.name, it.value);
+			r: array of int;
+			if(k != nil)
+				r = propranges(k);
+			if(r == nil)
+				r = array[0] of int;
+			s.items[i] = ref Item.Ranges(it.neg, r);
 		Nested =>
 			expandstrprops(it.set);
 		}
@@ -1085,6 +1095,15 @@ itemmatch(it: ref Item, c, fl, u, flags: int): int
 			if(len x.strs[i] == 1 && (x.strs[i][0] == c || (fl & Ficase) && canon(x.strs[i][0], u) == canon(c, u)))
 				return 1;
 		return 0;
+	Ranges =>
+		r := inpairs(x.r, c);
+		if(!r && (fl & Ficase)) {
+			cc := canon(c, u);
+			r = inpairs(x.r, cc) || inpairs(x.r, lower1(c)) || inpairs(x.r, upper1(c));
+		}
+		if(x.neg)
+			return !r;
+		return r;
 	}
 	return 0;
 }

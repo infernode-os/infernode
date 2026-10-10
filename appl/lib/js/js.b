@@ -28,6 +28,10 @@ include "math.m";
 include "daytime.m";
 	daytime: Daytime;
 
+include "keyring.m";
+	keyring: Keyring;
+	IPint: import keyring;
+
 include "jslex.m";
 	jslex: Jslex;
 
@@ -53,6 +57,7 @@ include "jscoll.b";
 include "jsregexp.b";
 include "jsdate.b";
 include "jsproxy.b";
+include "jsbigint.b";
 
 output: ref fn(s: string);
 

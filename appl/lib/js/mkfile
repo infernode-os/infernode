@@ -11,6 +11,7 @@ SYSMODULES=\
 	sys.m\
 	math.m\
 	daytime.m\
+	keyring.m\
 	jslex.m\
 	jsparse.m\
 	jscheck.m\
@@ -24,4 +25,4 @@ DISBIN=$ROOT/dis/lib/js
 jsre.dis:	jsrx.b
 
 # js.dis is one module from several fragments
-js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsarray.b jsstring.b jscoll.b jsregexp.b jsdate.b jsproxy.b
+js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsarray.b jsstring.b jscoll.b jsregexp.b jsdate.b jsproxy.b jsbigint.b

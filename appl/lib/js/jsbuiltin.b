@@ -149,6 +149,7 @@ realminit()
 	regexpinit();
 	dateinit();
 	proxyinit();
+	bigintinit();
 	reflectinit();
 	generatorinit();
 }

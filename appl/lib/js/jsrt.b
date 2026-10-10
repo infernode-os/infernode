@@ -1720,12 +1720,3 @@ usub(a, b: string): string
 	return o[k:];
 }
 
-bigarith(op: int, a, b: V): V
-{
-	case op {
-	Osub =>
-		return bigadd(a, bigneg(b));
-	}
-	typeerr("this BigInt operation is not supported yet");
-	return undef;
-}

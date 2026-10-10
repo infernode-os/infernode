@@ -819,7 +819,7 @@ numberctor(nil: V, a, n: int, nt: V, nil: int): V
 	if(n > 0) {
 		p := tonumeric(vs[a]);
 		if(p.t == Tbig)
-			x = real str(p.x);
+			x = bignum(p);
 		else
 			x = p.n;
 	}

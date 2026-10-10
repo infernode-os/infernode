@@ -75,6 +75,9 @@ Jsre: module
 			set:	ref Set;
 		Strs =>
 			strs:	array of string;	# \q{...}
+		Ranges =>
+			neg:	int;
+			r:	array of int;	# a property's code points, as first, last pairs (made by compile)
 		}
 	};
 

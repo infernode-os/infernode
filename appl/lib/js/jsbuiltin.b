@@ -1070,6 +1070,8 @@ errorinit()
 	value(ierrorproto, "name", strv("Error"));
 	value(ierrorproto, "message", strv(""));
 	method(ierrorproto, "toString", 0, errproto_tostring);
+	method(ierrorctors[Error], "isError", 1, error_iserror);
+	method(ierrorctors[Error], "captureStackTrace", 1, error_capturestacktrace);
 	for(k := EvalError; k <= AggregateError; k++) {
 		p := keep(newobj(Kord, ierrorproto));
 		ierrorprotos[k] = p;
@@ -1082,6 +1084,43 @@ errorinit()
 		value(p, "name", strv(errornames[k]));
 		value(p, "message", strv(""));
 	}
+}
+
+# Error.isError (ES2026)
+error_iserror(nil: V, a, n: int, nil: V, nil: int): V
+{
+	v := arg(a, n, 0);
+	return bool(v.t == Tobj && okind[v.x] == Kerror);
+}
+
+# Error.captureStackTrace(o): as V8 has it, which libraries test for and
+# call; the stack is what this engine knows of one, the error's text
+error_capturestacktrace(nil: V, a, n: int, nil: V, nil: int): V
+{
+	o := arg(a, n, 0);
+	if(o.t != Tobj)
+		typeerr("Error.captureStackTrace called on non-object");
+	s := "Error";
+	{
+		s = errtext(o);
+	} exception {
+	"js:throw" =>
+		;
+	}
+	defown(o.x, intern("stack"), Awrite|Aconf, strv(s));
+	return undef;
+}
+
+errtext(o: V): string
+{
+	nv := getv(o, aname);
+	mv := getv(o, amessage);
+	name := "Error";
+	if(nv.t != Tundef)
+		name = tostring(nv);
+	if(mv.t == Tundef || tostring(mv) == "")
+		return name;
+	return name + ": " + tostring(mv);
 }
 
 errorkind(f: int): int

@@ -313,7 +313,7 @@ bysymbol(this: V, a, n: int, sym: int, name: string): (int, V)
 	if(this.t == Tundef || this.t == Tnull)
 		typeerr("String.prototype." + name + " called on " + show(this));
 	r := arg(a, n, 0);
-	if(r.t != Tundef && r.t != Tnull) {
+	if(r.t == Tobj) {	# (a primitive's is not asked for: ES2025)
 		m := getmethod(r, sym);
 		if(m.t != Tundef) {
 			args := array[n] of V;
@@ -504,7 +504,9 @@ replace(this: V, a, n: int, all: int, name: string): V
 			if(strindex(tostring(fl), "g", 0) < 0)
 				typeerr("replaceAll must be called with a global RegExp");
 		}
-		m := getmethod(sv, asymreplace);
+		m := undef;
+		if(sv.t == Tobj)
+			m = getmethod(sv, asymreplace);
 		if(m.t != Tundef)
 			return call(m, sv, array[] of {this, rv});
 	}
@@ -574,7 +576,7 @@ str_split(this: V, a, n: int, nil: V, nil: int): V
 		typeerr("String.prototype.split called on " + show(this));
 	sepv := arg(a, n, 0);
 	limv := arg(a, n, 1);
-	if(sepv.t != Tundef && sepv.t != Tnull) {
+	if(sepv.t == Tobj) {
 		m := getmethod(sepv, asymsplit);
 		if(m.t != Tundef)
 			return call(m, sepv, array[] of {this, limv});

@@ -339,7 +339,9 @@ BATCHMS: con 250;
 
 images(s: ref Session, g: int, pg: ref Pg)
 {
+	lock(s);
 	urls := pg.wanted();
+	unlock(s);
 	n := len urls;
 	if(n == 0)
 		return;
@@ -1234,7 +1236,10 @@ Session.click(s: self ref Session, n: int): string
 	}
 	if(popovers(s, pg, n))
 		return nil;
-	if((us := pg.want(n)) != nil) {
+	lock(s);
+	us := pg.want(n);
+	unlock(s);
+	if(us != nil) {
 		# an image left to be clicked for: this click loads it (and
 		# what is shown with it), and does not follow a link it is in
 		spawn picsome(s, s.gen, pg, us);
@@ -1856,16 +1861,6 @@ realmhelper(r: ref Realm)
 		Quit =>
 			return;
 		Changed =>
-			lock(s);
-			if(s.pg == r.pg) {
-				laidout(r);
-				t := doctitle(r.pg.doc);
-				if(t != r.pg.title) {
-					r.pg.title = t;
-					s.title = t;
-				}
-			}
-			unlock(s);
 			event(s, "update");
 		Navigate =>
 			hist := Hnew;
@@ -1922,6 +1917,16 @@ hunlock(id: int)
 	r := realmbyid(id);
 	if(r == nil)
 		raise "fail:realm gone";
+	# whoever takes the lock next finds the page laid out as the
+	# document now is
+	if(r.s.pg == r.pg && r.pg.doc.gen != r.laidout) {
+		laidout(r);
+		t := doctitle(r.pg.doc);
+		if(t != r.pg.title) {
+			r.pg.title = t;
+			r.s.title = t;
+		}
+	}
 	r.locked = 0;
 	unlock(r.s);
 }

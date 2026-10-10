@@ -90,6 +90,14 @@ typedinit()
 		defown(pr, intern("BYTES_PER_ELEMENT"), 0, num(real tysize[t]));
 	}
 
+	# Uint8Array to and from base64 and hex (ES2026 §23.3)
+	method(tyctor[Tu8], "fromBase64", 1, u8_frombase64);
+	method(tyctor[Tu8], "fromHex", 1, u8_fromhex);
+	method(typroto[Tu8], "toBase64", 0, u8_tobase64);
+	method(typroto[Tu8], "toHex", 0, u8_tohex);
+	method(typroto[Tu8], "setFromBase64", 1, u8_setfrombase64);
+	method(typroto[Tu8], "setFromHex", 1, u8_setfromhex);
+
 	idataviewproto = keep(newobj(Kord, iobjproto));
 	ctor("DataView", 1, dataviewctor, idataviewproto);
 	p = idataviewproto;
@@ -1570,4 +1578,338 @@ dvproto_set(this: V, a, n: int, nil: V, f: int): V
 		throwerr(RangeError, "offset is outside the bounds of the DataView");
 	setraw(bufof(t).b, t.off + int idx, ty, v, little);
 	return undef;
+}
+
+# ---- Uint8Array and base64, hex (ES2026 §23.3) ----
+
+b64chars := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+b64urlchars := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+# ValidateUint8Array
+validu8(v: V, name: string): ref Data.Typed
+{
+	if(v.t != Tobj || okind[v.x] != Ktyped || tadata(v.x).ty != Tu8)
+		typeerr("Uint8Array.prototype." + name + " called on incompatible receiver " + show(v));
+	return tadata(v.x);
+}
+
+# GetUint8ArrayBytes
+u8bytes(t: ref Data.Typed, name: string): array of byte
+{
+	l := talength(t);
+	if(l < 0)
+		typeerr(name + ": the typed array is detached or out of bounds");
+	return bufof(t).b[t.off:t.off+l];
+}
+
+# GetOptionsObject
+optsobj(v: V): V
+{
+	if(v.t == Tundef)
+		return undef;
+	if(v.t != Tobj)
+		typeerr("options must be an object");
+	return v;
+}
+
+optget(o: V, k: string): V
+{
+	if(o.t == Tundef)
+		return undef;
+	return getv(o, intern(k));
+}
+
+b64alphabet(o: V): int
+{
+	v := optget(o, "alphabet");
+	if(v.t == Tundef)
+		return 0;
+	if(v.t == Tstr)
+		case str(v.x) {
+		"base64" =>
+			return 0;
+		"base64url" =>
+			return 1;
+		}
+	typeerr("alphabet must be \"base64\" or \"base64url\"");
+	return 0;
+}
+
+Loose, Strict, Stopbefore: con iota;
+
+lastchunk(o: V): int
+{
+	v := optget(o, "lastChunkHandling");
+	if(v.t == Tundef)
+		return Loose;
+	if(v.t == Tstr)
+		case str(v.x) {
+		"loose" =>
+			return Loose;
+		"strict" =>
+			return Strict;
+		"stop-before-partial" =>
+			return Stopbefore;
+		}
+	typeerr("lastChunkHandling must be \"loose\", \"strict\" or \"stop-before-partial\"");
+	return 0;
+}
+
+isb64ws(c: int): int
+{
+	return c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' ';
+}
+
+skipws(s: string, i: int): int
+{
+	while(i < len s && isb64ws(s[i]))
+		i++;
+	return i;
+}
+
+b64val(c: int): int
+{
+	if(c >= 'A' && c <= 'Z')
+		return c - 'A';
+	if(c >= 'a' && c <= 'z')
+		return c - 'a' + 26;
+	if(c >= '0' && c <= '9')
+		return c - '0' + 52;
+	if(c == '+')
+		return 62;
+	if(c == '/')
+		return 63;
+	return -1;
+}
+
+# DecodeBase64Chunk: the bytes, or nil if extra bits were set and must not be
+decodechunk(chunk: array of int, n, strict: int): (array of byte, int)
+{
+	for(k := n; k < 4; k++)
+		chunk[k] = 0;
+	v := (chunk[0] << 18) | (chunk[1] << 12) | (chunk[2] << 6) | chunk[3];
+	b := array[] of {byte (v >> 16), byte (v >> 8), byte v};
+	case n {
+	2 =>
+		if(strict && b[1] != byte 0)
+			return (nil, 1);
+		return (b[0:1], 0);
+	3 =>
+		if(strict && b[2] != byte 0)
+			return (nil, 1);
+		return (b[0:2], 0);
+	}
+	return (b, 0);
+}
+
+# FromBase64: (characters read, the bytes, whether it ended in a SyntaxError)
+frombase64(s: string, url, last, maxlen: int): (int, array of byte, int)
+{
+	out := array[len s * 3 / 4 + 3] of byte;
+	nout := 0;
+	if(maxlen == 0)
+		return (0, out[0:0], 0);
+	read := 0;
+	chunk := array[4] of int;
+	nc := 0;
+	i := 0;
+	for(;;) {
+		i = skipws(s, i);
+		if(i == len s) {
+			if(nc > 0) {
+				if(last == Stopbefore)
+					return (read, out[0:nout], 0);
+				if(last == Strict || nc == 1)
+					return (read, out[0:nout], 1);
+				(b, nil) := decodechunk(chunk, nc, 0);
+				out[nout:] = b;
+				nout += len b;
+			}
+			return (len s, out[0:nout], 0);
+		}
+		c := s[i++];
+		if(c == '=') {
+			if(nc < 2)
+				return (read, out[0:nout], 1);
+			i = skipws(s, i);
+			if(nc == 2) {
+				if(i == len s) {
+					if(last == Stopbefore)
+						return (read, out[0:nout], 0);
+					return (read, out[0:nout], 1);
+				}
+				if(s[i] == '=')
+					i = skipws(s, i + 1);
+			}
+			if(i < len s)
+				return (read, out[0:nout], 1);
+			(b, bad) := decodechunk(chunk, nc, last == Strict);
+			if(bad)
+				return (read, out[0:nout], 1);
+			out[nout:] = b;
+			nout += len b;
+			return (len s, out[0:nout], 0);
+		}
+		if(url) {
+			if(c == '+' || c == '/')
+				return (read, out[0:nout], 1);
+			if(c == '-')
+				c = '+';
+			else if(c == '_')
+				c = '/';
+		}
+		v := b64val(c);
+		if(v < 0)
+			return (read, out[0:nout], 1);
+		rem := maxlen - nout;
+		if(rem == 1 && nc == 2 || rem == 2 && nc == 3)
+			return (read, out[0:nout], 0);
+		chunk[nc++] = v;
+		if(nc == 4) {
+			(b, nil) := decodechunk(chunk, 4, 0);
+			out[nout:] = b;
+			nout += 3;
+			nc = 0;
+			read = i;
+			if(nout == maxlen)
+				return (read, out[0:nout], 0);
+		}
+	}
+}
+
+# FromHex: (characters read, the bytes, whether it ended in a SyntaxError)
+fromhex(s: string, maxlen: int): (int, array of byte, int)
+{
+	if(len s % 2 != 0)
+		return (0, nil, 1);
+	out := array[len s / 2] of byte;
+	nout := 0;
+	read := 0;
+	while(read < len s && nout < maxlen) {
+		h := hexv(s[read]);
+		l := hexv(s[read+1]);
+		if(h < 0 || l < 0)
+			return (read, out[0:nout], 1);
+		read += 2;
+		out[nout++] = byte (h * 16 + l);
+	}
+	return (read, out[0:nout], 0);
+}
+
+u8from(b: array of byte): V
+{
+	h := newta(Tu8, len b, typroto[Tu8]);
+	bufof(tadata(h)).b[0:] = b;
+	return objv(h);
+}
+
+u8_frombase64(nil: V, a, n: int, nil: V, nil: int): V
+{
+	sv := arg(a, n, 0);
+	if(sv.t != Tstr)
+		typeerr("Uint8Array.fromBase64: the input must be a string");
+	o := optsobj(arg(a, n, 1));
+	url := b64alphabet(o);
+	last := lastchunk(o);
+	(nil, b, bad) := frombase64(str(sv.x), url, last, 16r7FFFFFFF);
+	if(bad)
+		throwerr(SyntaxError, "Uint8Array.fromBase64: the input is not base64");
+	return u8from(b);
+}
+
+u8_fromhex(nil: V, a, n: int, nil: V, nil: int): V
+{
+	sv := arg(a, n, 0);
+	if(sv.t != Tstr)
+		typeerr("Uint8Array.fromHex: the input must be a string");
+	(nil, b, bad) := fromhex(str(sv.x), 16r7FFFFFFF);
+	if(bad)
+		throwerr(SyntaxError, "Uint8Array.fromHex: the input is not hexadecimal");
+	return u8from(b);
+}
+
+u8_tobase64(this: V, a, n: int, nil: V, nil: int): V
+{
+	t := validu8(this, "toBase64");
+	o := optsobj(arg(a, n, 0));
+	url := b64alphabet(o);
+	omit := truthy(optget(o, "omitPadding"));
+	b := u8bytes(t, "Uint8Array.prototype.toBase64");
+	alpha := b64chars;
+	if(url)
+		alpha = b64urlchars;
+	r := "";
+	for(i := 0; i < len b; i += 3) {
+		v := int b[i] << 16;
+		if(i + 1 < len b)
+			v |= int b[i+1] << 8;
+		if(i + 2 < len b)
+			v |= int b[i+2];
+		r[len r] = alpha[(v >> 18) & 63];
+		r[len r] = alpha[(v >> 12) & 63];
+		if(i + 1 < len b)
+			r[len r] = alpha[(v >> 6) & 63];
+		else if(!omit)
+			r[len r] = '=';
+		if(i + 2 < len b)
+			r[len r] = alpha[v & 63];
+		else if(!omit)
+			r[len r] = '=';
+	}
+	return strv(r);
+}
+
+u8_tohex(this: V, nil, nil: int, nil: V, nil: int): V
+{
+	t := validu8(this, "toHex");
+	b := u8bytes(t, "Uint8Array.prototype.toHex");
+	r := "";
+	for(i := 0; i < len b; i++) {
+		r[len r] = "0123456789abcdef"[int b[i] >> 4];
+		r[len r] = "0123456789abcdef"[int b[i] & 15];
+	}
+	return strv(r);
+}
+
+readwritten(read, written: int): V
+{
+	o := newplain();
+	defown(o, intern("read"), Awrite|Aenum|Aconf, num(real read));
+	defown(o, intern("written"), Awrite|Aenum|Aconf, num(real written));
+	return objv(o);
+}
+
+u8_setfrombase64(this: V, a, n: int, nil: V, nil: int): V
+{
+	t := validu8(this, "setFromBase64");
+	sv := arg(a, n, 0);
+	if(sv.t != Tstr)
+		typeerr("Uint8Array.prototype.setFromBase64: the input must be a string");
+	o := optsobj(arg(a, n, 1));
+	url := b64alphabet(o);
+	last := lastchunk(o);
+	l := talength(t);
+	if(l < 0)
+		typeerr("Uint8Array.prototype.setFromBase64: the typed array is detached or out of bounds");
+	(read, b, bad) := frombase64(str(sv.x), url, last, l);
+	bufof(t).b[t.off:] = b;
+	if(bad)
+		throwerr(SyntaxError, "Uint8Array.prototype.setFromBase64: the input is not base64");
+	return readwritten(read, len b);
+}
+
+u8_setfromhex(this: V, a, n: int, nil: V, nil: int): V
+{
+	t := validu8(this, "setFromHex");
+	sv := arg(a, n, 0);
+	if(sv.t != Tstr)
+		typeerr("Uint8Array.prototype.setFromHex: the input must be a string");
+	l := talength(t);
+	if(l < 0)
+		typeerr("Uint8Array.prototype.setFromHex: the typed array is detached or out of bounds");
+	(read, b, bad) := fromhex(str(sv.x), l);
+	bufof(t).b[t.off:] = b;
+	if(bad)
+		throwerr(SyntaxError, "Uint8Array.prototype.setFromHex: the input is not hexadecimal");
+	return readwritten(read, len b);
 }

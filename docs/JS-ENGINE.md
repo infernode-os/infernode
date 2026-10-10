@@ -568,6 +568,7 @@ small separate fix should profiles of Limbo programs justify it.
 | `jsobj.b` | The object internal methods, conversions, comparisons |
 | `jsops.b`, `jscomp.b` | Register bytecode and the compiler that makes it |
 | `jsvm.b` | The interpreter |
+| `jsjit.b`, `jsjit.m`, `jsjitt.b` | The compiled tier: a hot function made into a Dis module (`Dis->writeobj`) the JIT compiles |
 | `jsrt.b` | Generators, async functions, promises and jobs, iteration, eval |
 | `jsbuiltin.b` and the rest | The built-ins: Object to Date, typed arrays, Proxy, BigInt, iterator helpers, modules, explicit resource management |
 | `tests/js/t262.b` | test262, for parsing or (`-r`) running, each test in a fresh realm |
@@ -647,8 +648,43 @@ a JSON attribute).
 ### Speed
 
 The interpreter is 10-50x slower than QuickJS on the spike's benchmarks
-(calls are the worst).  That is what §9 predicted for an interpreter;
-the baseline tier is the answer, guided by profiles of real pages.
+(calls are the worst).  That is what §9 predicted for an interpreter.
+
+**The compiled tier (phase 6, begun 2026-10-10).**  A function that has
+looped a thousand times is translated to a Dis module of its own
+(`Dis->writeobj`, written to `/tmp` and loaded; a page's realm has a
+`/tmp` of its own in memory), which the JIT compiles like any Limbo
+module.  Its `run(st, pc)` enters at any operation through a case on
+pc and runs in line: constants and moves, number arithmetic and
+comparisons (NaN tested before an ordered branch), `%` and the bitwise
+operators on 32-bit integers, increments, `===`, branches on booleans,
+property reads and writes on an inline cache's hit, array elements, and
+closure variables.  At anything else, or operands of another type, it
+returns that operation's pc and the interpreter does it.  Compiled code
+so never throws, allocates, calls or changes frames, and nothing else in
+the engine knows of it.  test262 run with every function compiled at
+once (`-J 0`) passes exactly what the interpreter passes.
+
+| Loop (Apple M-series, arm64 JIT) | interpreted | compiled |
+|---|---|---|
+| counter, multiply, add (3,000,000) | 469 ms | 38 ms |
+| object property read and write (1,000,000) | 215 ms | 50 ms |
+| array elements (300,000) | 73 ms | 14 ms |
+| closure variable (1,000,000) | 144 ms | 15 ms |
+| `%` and `===` (300,000) | 109 ms | 9 ms |
+
+Calls still go through the interpreter, so code made of calls gains
+little; that, and strings, are next.
+
+Profiles of real pages (prof(1) around `jspage -k`) moved work into the
+interpreter too: a shape's many transitions are hashed (objects used as
+maps: 216 ms to 33), adding a property is cached at the site with the
+prototypes' shapes, a property found on a prototype is cached likewise,
+`new` pushes a frame instead of running a nested loop (a loop making
+objects by a method: 565 ms to 250), for-of over an array makes no
+result objects, and a plain descriptor is read from its shape.  Google
+Tag Manager's scripts on NASA's page ran 10.6 s and 7.0 s under the
+profiler before, 1.6 s and 2.5 s after.
 
 Compiling a 430 KB bundle takes 100 ms; parsing it 200 ms.  Lazy
 compilation took YouTube's 10.9 MB of script from 6.8 s to parse and

@@ -18,6 +18,21 @@ All notable changes to InferNode are documented in this file.
   as the About box does (they said 0.2.0), and name InferNode.io as their
   company. The macOS About box links to github.com/infernode-os/infernode.
 
+### Xenith
+
+- **Finder opens files in Xenith.app**: Open With, or a file or folder
+  dropped on its Dock icon, opens in the running Xenith or starts one,
+  and a file dropped on Xenith's window opens in it on every host. The
+  emulator gives each path to a new `/dev/hostopen` (`cons(3)`);
+  `hostplumb -p` plumbs it, as `lib/xen/boot.sh` does. `Xenith.app`
+  declares the document types, as an alternate handler that never takes
+  over a file type.
+- **File names with blanks**, as Finder hands many, are quoted in the
+  tag as plan9port's acme quotes them, and read back whole. Before, a
+  change to the tag renamed such a window to the part before the blank,
+  and Put wrote that file. A selected name looked at (B3) may have
+  blanks in it.
+
 ## [0.6.0] - 2026-10-10
 
 This release ships Intel Macs their own DMG and headless tarball, and

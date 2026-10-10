@@ -555,22 +555,20 @@ dirname(t : ref Text, r : string, n : int) : (string, int)
 			raise "e";
 		if(n>=1 &&  r[0]=='/')
 			raise "e";
-		b = stralloc(nt+n+1);
+		b = stralloc(nt);
 		t.w.tag.file.buf.read(0, b, 0, nt);
+		(name, nil) := tagname(b.s[0:nt]);
 		slash = -1;
-		for(m=0; m<nt; m++){
-			c = b.s[m];
+		for(m=0; m<len name; m++){
+			c = name[m];
 			if(c == '/')
 				slash = m;
-			if(c==' ' || c=='\t')
-				break;
 		}
 		if(slash < 0)
 			raise "e";
-		for (i := 0; i < n; i++)
-			b.s[slash+1+i] = r[i];
+		s := name[0:slash+1] + r[0:n];
 		r = nil;
-		return cleanname(b.s, slash+1+n);
+		return cleanname(s, len s);
 	}
 	exception{
 		* =>
@@ -582,6 +580,54 @@ dirname(t : ref Text, r : string, n : int) : (string, int)
 	return (nil, 0);
 }
 
+# A file name as a tag shows it: quoted, as plan9port's acme quotes it,
+# when it has a blank in it or begins with a quote, any quote in it
+# doubled; otherwise as it is. Unquoted, the tag would take a name with
+# a blank in it to end at the blank, and rename the window to that.
+tagquote(s : string) : string
+{
+	need := s != nil && s[0] == '\'';
+	for(i := 0; i < len s && !need; i++)
+		if(s[i] == ' ' || s[i] == '\t')
+			need = 1;
+	if(!need)
+		return s;
+	q := "'";
+	for(j := 0; j < len s; j++){
+		if(s[j] == '\'')
+			q[len q] = '\'';
+		q[len q] = s[j];
+	}
+	q[len q] = '\'';
+	return q;
+}
+
+# The file name at the start of tag text s, unquoted, and the index of
+# the first character after it. A quote with no closing one (being
+# typed) is taken as part of a name that ends at a blank.
+tagname(s : string) : (string, int)
+{
+	if(s != nil && s[0] == '\''){
+		n := "";
+		for(i := 1; i < len s; i++){
+			if(s[i] != '\''){
+				n[len n] = s[i];
+				continue;
+			}
+			if(i+1 < len s && s[i+1] == '\''){
+				n[len n] = '\'';
+				i++;
+				continue;
+			}
+			return (n, i+1);
+		}
+	}
+	for(j := 0; j < len s; j++)
+		if(s[j] == ' ' || s[j] == '\t')
+			break;
+	return (s[0:j], j);
+}
+
 expandfile(t : ref Text, q0 : int, q1 : int, e : Expand) : (int, Expand)
 {
 	i, n, nname, colon : int;
@@ -591,6 +637,9 @@ expandfile(t : ref Text, q0 : int, q1 : int, e : Expand) : (int, Expand)
 	w : ref Window;
 
 	amax = q1;
+	# a name selected, not expanded from a click, may have blanks in
+	# it, as in plan9port's acme
+	selected := q1 > q0;
 	if(q1 == q0){
 		colon = -1;
 		while(q1<t.file.buf.nc && isfilec(c=t.readc(q1))){
@@ -673,7 +722,7 @@ expandfile(t : ref Text, q0 : int, q1 : int, e : Expand) : (int, Expand)
 		if(nname == -1)
 			nname = n;
 		for(i=0; i<nname; i++)
-			if(!isfilec(r.s[i])) {
+			if(!isfilec(r.s[i]) && !(selected && r.s[i] == ' ')) {
 				strfree(r);
 				r = nil;
 				return (FALSE, e);

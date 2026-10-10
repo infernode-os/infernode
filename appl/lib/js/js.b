@@ -111,6 +111,7 @@ resetstate()
 	nofree = 0;
 	objsince = 0;
 	gcwanted = 0;
+	gcstress = 0;
 	gcobjlimit = 100000;
 	gcstrlimit = 200000;
 	nmark = 0;
@@ -147,6 +148,15 @@ resetstate()
 	nmod = 0;
 	loader = nil;
 	hostfns = nil;
+}
+
+stress(n: int)
+{
+	gcstress = n;
+	if(n > 0) {
+		gcobjlimit = n;
+		gcstrlimit = n;
+	}
 }
 
 setoutput(out: ref fn(s: string))

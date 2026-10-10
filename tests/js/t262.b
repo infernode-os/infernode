@@ -3,7 +3,7 @@ implement T262;
 #
 # t262 - test262's syntax tests against the parser.
 #
-#	t262 [-v] [-r] [-t ms] [-f failures] dir...
+#	t262 [-v] [-r] [-t ms] [-g n] [-f failures] dir...
 #
 # Each test's front matter says what is expected: negative phase parse
 # (an early error) means the source must be refused; anything else must
@@ -48,6 +48,7 @@ failfd: ref Sys->FD;
 verbose := 0;
 runmode := 0;
 timeout := 10000;
+gcevery := 0;	# -g n: collect after every n objects made
 npass := 0;
 nfail := 0;
 nskip := 0;
@@ -91,6 +92,9 @@ init(nil: ref Draw->Context, args: list of string)
 		"-t" =>
 			args = tl args;
 			timeout = int hd args;
+		"-g" =>
+			args = tl args;
+			gcevery = int hd args;
 		"-f" =>
 			args = tl args;
 			failfd = sys->create(hd args, Sys->OWRITE, 8r644);
@@ -502,6 +506,8 @@ runrealm1(src: string, m: ref Meta): (int, string)
 	output = "";
 	js->setoutput(capture);
 	js->test262();
+	if(gcevery > 0)
+		js->stress(gcevery);
 	e: string;
 	if(has(m.flags, "module"))
 		(nil, e) = js->evalmodule(src, curpath);

@@ -50,6 +50,10 @@ Js: module
 	# the exception); (nil, nil) if there is no function there
 	callfn:	fn(path: string, args: array of string): (string, string);
 
+	# collect the realm's garbage after every n objects or strings made
+	# (0: as usual), to find a value the collector cannot see
+	stress:	fn(n: int);
+
 	# give the realm test262's host object, $262
 	test262:	fn();
 

@@ -414,6 +414,7 @@ ofree: array of int;
 nofree := 0;
 objsince := 0;
 gcwanted := 0;
+gcstress := 0;	# collect after this many objects or strings, to find what is not a root
 gcobjlimit := 100000;
 gcstrlimit := 200000;
 
@@ -1124,6 +1125,10 @@ collect()
 	gcstrlimit = nstr - nsfree;
 	if(gcstrlimit < 200000)
 		gcstrlimit = 200000;
+	if(gcstress > 0) {
+		gcobjlimit = gcstress;
+		gcstrlimit = gcstress;
+	}
 	objsince = 0;
 	strsince = 0;
 	gcwanted = 0;

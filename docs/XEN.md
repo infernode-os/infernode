@@ -23,12 +23,25 @@ button 3.
 
 ## Setup
 
-Build the tree first (emulator and `dis/`; see
-[QUICKSTART.md](../QUICKSTART.md)). Then put `xen` on your PATH:
+Every release ships `xen`, with nothing to build:
+
+| Release | `xen` | Plumbing rules |
+|---|---|---|
+| `Xenith.app` (macOS) | `Xenith.app/Contents/Resources/tools/xen` | `tools/xen.plumbing` beside it |
+| Linux GUI and Xenith tarballs | `tools/xen` | `tools/xen.plumbing` |
+| Windows zips | `tools\xen.ps1` | (no host plumbing) |
+
+Each runs the release it came in. Put it on your PATH, from a release
+or from a built source tree (emulator and `dis/`; see
+[QUICKSTART.md](../QUICKSTART.md)):
 
 ```sh
-ln -s /path/to/infernode/tools/xen ~/bin/xen
+ln -s /Applications/Xenith.app/Contents/Resources/tools/xen ~/bin/xen
+ln -s /path/to/infernode/tools/xen ~/bin/xen          # or a source tree
 ```
+
+Link a release, or a tree that stays on a branch you trust, not a
+checkout you switch around in: `xen` is your editor.
 
 On macOS, with `Xenith.app` installed (in `/Applications` or
 `~/Applications`; `XEN_APP` names another), `xen` runs the app's own
@@ -39,8 +52,9 @@ script follows the link back to the tree it lives in. To run a tree,
 app or no app, set `INFERNODE_ROOT`.
 
 On Windows use `tools\xen.ps1` (`-Sam`, `-Wait` in place of `-s`, `-w`).
-Only `C:` is mounted inside InferNode, so files on other drives are
-refused.
+It runs the tree it is in, a source tree or an unpacked release zip, or
+the unpacked Xenith zip that `XEN_APP` names. Only `C:` is mounted
+inside InferNode, so files on other drives are refused.
 
 Verified on macOS, and on Linux (INFR-522): natively under Wayland
 (Weston at scale 1 and 2, windowed and full screen) and under X11 at
@@ -104,8 +118,8 @@ icon is `MacOSX/Xenith.png`, from which `Xenith.icns` and
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `INFERNODE_ROOT` | tree to run | macOS: `Xenith.app`'s, if installed; otherwise the tree holding the script |
-| `XEN_APP` | the `Xenith.app` to run on macOS | `/Applications/Xenith.app`, then `~/Applications/Xenith.app` |
+| `INFERNODE_ROOT` | tree to run | macOS: a `Xenith.app`'s (`XEN_APP`), if there is one; otherwise the tree holding the script, a source tree or a release |
+| `XEN_APP` | the `Xenith.app` to run on macOS; on Windows, an unpacked Xenith zip | macOS: the app `xen` is in, then `/Applications/Xenith.app`, then `~/Applications/Xenith.app` |
 | `XEN_THEME` | the session's theme: any installed theme; `glenda` is Plan 9's acme | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
 | `XEN_LOG` | where a detached instance's output is added, between a line marking its start and one giving the emu's exit status | `$TMPDIR/xen.log` |

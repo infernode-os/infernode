@@ -91,4 +91,19 @@ Docengine: module
 	# and paging are the view's).
 	commands:	fn(h: int): list of string;
 	command:	fn(h: int, cmd, arg: string): string;
+
+	# A document that changes by itself or takes the mouse and the
+	# keyboard (a web page). events gives what happens to it: "done"
+	# (loaded; name, text and sizes may have changed), "update" (laid
+	# out again), "error msg"; nil if it never changes by itself. name
+	# is what it shows now (a page's URL). click and key return nil
+	# if they were not taken, else what the view is to do: "paint"
+	# (paint again), "layout" (its size changed too), "show y0 y1"
+	# (bring that part of sheet 0 into view). files is where the
+	# document is served as files, or nil.
+	events:	fn(h: int): chan of string;
+	name:	fn(h: int): string;
+	click:	fn(h: int, n: int, p: Draw->Point): string;
+	key:	fn(h: int, r: int): string;
+	files:	fn(h: int): string;
 };

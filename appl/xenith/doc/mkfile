@@ -21,6 +21,7 @@ SYSMODULES=\
 	mermaid.m\
 	htmldoc.m\
 	rlayout.m\
+	keyboard.m\
 
 MODULES=\
 

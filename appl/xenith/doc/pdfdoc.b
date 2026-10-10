@@ -206,6 +206,31 @@ command(nil: int, cmd, nil: string): string
 	return "unknown command " + cmd;
 }
 
+events(nil: int): chan of string
+{
+	return nil;
+}
+
+name(nil: int): string
+{
+	return nil;
+}
+
+click(nil: int, nil: int, nil: Point): string
+{
+	return nil;
+}
+
+key(nil: int, nil: int): string
+{
+	return nil;
+}
+
+files(nil: int): string
+{
+	return nil;
+}
+
 add(s: ref State): int
 {
 	for(i := 0; i < len docs; i++)

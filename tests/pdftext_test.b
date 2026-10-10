@@ -132,6 +132,22 @@ testStandardMetrics(t: ref T)
 	near(t, w[1].t1.max.x, 162, "World ends");	# 130.7 + 31.3
 }
 
+# A font the page's resources do not have is drawn and measured as
+# Helvetica, without error.
+testMissingFont(t: ref T)
+{
+	doc := open(t, mkpdf("BT /F9 12 Tf 100 700 Td (Hello World) Tj ET", "", HELVETICA :: nil));
+	w := words(doc);
+	if(len w != 2)
+		t.fatal(sys->sprint("%d words, want 2", len w));
+	near(t, w[1].t1.min.x, 130, "World starts");
+	if(display == nil)
+		return;
+	(im, err) := doc.renderpage(1, 72);
+	if(im == nil || err != nil)
+		t.error("render: " + err);
+}
+
 # Widths the PDF gives are the advances, whatever the face's.
 testWidths(t: ref T)
 {
@@ -350,6 +366,7 @@ init(nil: ref Draw->Context, args: list of string)
 	pdf->init(display);
 
 	run("StandardMetrics", testStandardMetrics);
+	run("MissingFont", testMissingFont);
 	run("Widths", testWidths);
 	run("WordSpacing", testWordSpacing);
 	run("KernInWord", testKernInWord);

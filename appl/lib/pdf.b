@@ -1929,6 +1929,7 @@ newfont(doc: ref PdfDoc, fontobj: ref PdfObj): ref PdfFont
 	fm.basefont = "Helvetica";
 	fm.fontobj = fontobj;
 	if(fontobj == nil){
+		fm.widths = array[256] of { * => -1 };
 		fm.names = encnames("StandardEncoding");
 		fm.code2uni = namesunicode(fm.names);
 		return fm;

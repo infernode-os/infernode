@@ -123,6 +123,13 @@ testJit(t: ref T)
 		"const a = [{v: 1}, {w: 2, v: 3}]; let s = 0; for (let i = 0; i < 40; i++) { const o = a[i & 1]; s = s + o.v; } s",
 		"const q = {g: 1}; let s = 0; for (let i = 0; i < 30; i++) { if (i == 10) delete q.g; if (i == 20) q.g = 5; s = s + (q.g || 0); } s",
 		"let s = 0; for (let i = 0; i < 30; i++) { const o = i < 15 ? {k: i} : {get k() { return 2; }}; s = s + o.k; } s",
+		"const xs = [0, 1, -1, 7, -7, 3.5, 2147483647, -2147483648, 2147483648, 4294967295, NaN, Infinity, -0, 1e20, 0.5]; const out = []; " +
+			"for (let i = 0; i < xs.length; i++) for (let j = 0; j < xs.length; j++) { const a = xs[i], b = xs[j]; " +
+			"out.push(a % b, a & b, a | b, a ^ b, a >> b, a === b, a !== b, Object.is(a % b, -0), a < b, a >= b, a * b, a - b); } out.join()",
+		"const a = []; for (let i = 0; i < 20; i++) a.push(i); a[25] = 1; let s = 0; for (let k = 0; k < 3; k++) for (let i = -1; i < 30; i++) { if (i < 20) a[i] = (a[i] | 0) + 1; s = s + (a[i] === undefined ? 1000 : a[i]); } s",
+		"let c = 0; const f = () => { for (let i = 0; i < 50; i++) c = c + 1; }; f(); f(); c",
+		"const args = (function () { return arguments; })(1, 2, 3); let s = 0; for (let i = 0; i < 9; i++) s = s + args[i % 3]; s",
+		"const o = {a: 1}; const arr = ['x', 'y', o, o, 'x']; let n = 0; for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) n = n + (arr[i] === arr[j]); n",
 	};
 	for(i := 0; i < len src; i++) {
 		js := realm(t);

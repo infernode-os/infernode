@@ -56,7 +56,7 @@ jitinit(): int
 	if(ok < 0)
 		return 0;
 	jitdir = sys->sprint("/tmp/.jsjit.%d", sys->pctl(0, nil));
-	jitst = ref Jitst(vs, 0, nil, nil, nil, nil, nil, nil);
+	jitst = ref Jitst(vs, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
 	jitok = 1;
 	return 1;
 }
@@ -84,6 +84,10 @@ jitrun(c: ref Code, pc: int, base: int): int
 	st.ics = c.ics;
 	st.icslot = c.icslot;
 	st.icgen = c.icgen;
+	st.okind = okind;
+	st.onelem = onelem;
+	st.oelems = oelems;
+	st.oproto = oproto;
 	return c.jit->run(st, pc);
 }
 
@@ -116,8 +120,14 @@ Fsh2: con 216;
 Ft2: con 224;
 Ft3: con 232;
 Frow: con 240;
-Fregs: con 248;	# then each register's address, computed on entry
+Fokind: con 248;	# st's object arrays, as words too
+Fonelem: con 256;
+Foelems: con 264;
+Foproto: con 272;
+Fregs: con 280;	# then each register's address, computed on entry
 Shgen: con 48;	# Shape.gen
+# where st's fields from oshape on go in the frame
+stslot := array[] of {Fos, Foslots, Fics, Ficslot, Ficgen, Fokind, Fonelem, Foelems, Foproto};
 Fret: con 32;	# where run's result goes (through)
 Vsize: con 24;	# a V: t at 0, x at 8, n at 16
 
@@ -174,8 +184,13 @@ opregs(ops: array of int, pc: int): list of int
 		return ops[pc+1] :: ops[pc+2] :: nil;
 	Osetprop =>
 		return ops[pc+1] :: ops[pc+3] :: nil;
-	Oadd or Osub or Omul or Odiv or Olt or Ole or Ogt or Oge =>
+	Oadd or Osub or Omul or Odiv or Olt or Ole or Ogt or Oge or Ogetelem or Osetelem or Oseq or Osne or
+	Omod or Oband or Obor or Obxor or Oshr =>
 		return ops[pc+1] :: ops[pc+2] :: ops[pc+3] :: nil;
+	Ogetenv or Ogetenvc =>
+		return ops[pc+1] :: Renv :: nil;
+	Osetenv or Osetenvc =>
+		return ops[pc+3] :: Renv :: nil;
 	}
 	return nil;
 }
@@ -242,6 +257,35 @@ gicslot(g: ref Gen, a, ic, pc: int)
 	gemit(g, Dis->IINDX, FP, Frow, MFP, Fp2, FP, Ft3);
 }
 
+# leave to the interpreter at pc if s op m (one of the branches); for a
+# real compared with an immediate, real is set and m is a whole number
+# converted to a real in Ff2 first
+gexitif(g: ref Gen, op, smode, src, mmode, mid, pc, real0: int)
+{
+	if(real0) {
+		gemit(g, Dis->ICVTWF, IMM, mid, MNONE, 0, FP, Ff2);
+		mmode = MFP;
+		mid = Ff2;
+	}
+	i := gemit(g, op, smode, src, mmode, mid, IMM, 0);
+	g.exits = (i, pc) :: g.exits;
+}
+
+# the word at fp w = the number at slot as a 32-bit integer, or leave to
+# the interpreter at pc if it is not one
+gint32(g: ref Gen, slot, w, pc: int)
+{
+	gemit(g, Dis->IMOVF, IND, ind(slot, 16), MNONE, 0, FP, Ff1);
+	gemit(g, Dis->ICVTFW, FP, Ff1, MNONE, 0, FP, w);
+	gemit(g, Dis->ICVTWF, FP, w, MNONE, 0, FP, Ff2);
+	gexitif(g, Dis->IBNEF, FP, Ff2, MFP, Ff1, pc, 0);	# not whole (or NaN, or past a word)
+	# within 32 bits: -2^31 <= w < 2^31, tested as w >> 31 being 0 or -1
+	gemit(g, Dis->ISHRW, IMM, 31, MFP, w, FP, Ft3);
+	gemit(g, Dis->IADDW, IMM, 1, MFP, Ft3, FP, Ft3);
+	gexitif(g, Dis->IBLTW, FP, Ft3, MIMM, 0, pc, 0);
+	gexitif(g, Dis->IBGTW, FP, Ft3, MIMM, 1, pc, 0);
+}
+
 Immmax: con 1 << 29;
 
 # whether the operation at pc is one compiled code has
@@ -251,7 +295,8 @@ jitable(ops: array of int, pc: int): int
 	Oundef or Onull or Otrue or Ofalse or Oempty or Oconst or Omove or
 	Oadd or Osub or Omul or Odiv or Olt or Ole or Ogt or Oge or
 	Oinc or Odec or Ojmp or Ojt or Ojf or Otonumeric or Ochktdz or Onot or Oneg or
-	Ogetprop or Osetprop =>
+	Ogetprop or Osetprop or Ogetelem or Osetelem or Ogetenv or Ogetenvc or Osetenv or Osetenvc or
+	Oseq or Osne or Omod or Oband or Obor or Obxor or Oshr =>
 		return 1;
 	Oint =>
 		n := ops[pc+2];
@@ -295,8 +340,8 @@ jitcompile(c: ref Code): int
 	gemit(g, Dis->IMOVP, IND, ind(Fst, 0), MNONE, 0, FP, Fvs);
 	gemit(g, Dis->IMOVW, IND, ind(Fst, 8), MNONE, 0, FP, Fbase);
 	gemit(g, Dis->IMOVP, IND, ind(Fst, 16), MNONE, 0, FP, Fk);
-	for(f := 0; f < 5; f++)
-		gemit(g, Dis->IMOVW, IND, ind(Fst, 24 + 8 * f), MNONE, 0, FP, Fos + 8 * f);
+	for(f := 0; f < 9; f++)
+		gemit(g, Dis->IMOVW, IND, ind(Fst, 24 + 8 * f), MNONE, 0, FP, stslot[f]);
 	for(r := 0; r < maxr; r++)
 		if(rslot[r] != 0)
 			greg(g, r, rslot[r]);
@@ -434,6 +479,145 @@ jitcompile(c: ref Code): int
 				v := greg(g, ops[pc+3], Fc);
 				gemit(g, Dis->IMOVM, IND, ind(v, 0), MIMM, Vsize, IND, ind(Fp2, 0));
 			}
+		Ogetelem or Osetelem =>
+			# an element in use, by an integer index, not a hole
+			oreg := ops[pc+2];
+			kreg := ops[pc+3];
+			if(op == Osetelem) {
+				oreg = ops[pc+1];
+				kreg = ops[pc+2];
+			}
+			a := greg(g, oreg, Fa);
+			gneedtag(g, a, Tobj, pc);
+			b := greg(g, kreg, Fb);
+			gneedtag(g, b, Tnum, pc);
+			gemit(g, Dis->IMOVW, IND, ind(a, 8), MNONE, 0, FP, Ft);	# the object
+			gexitif(g, Dis->IBLTF, IND, ind(b, 16), MIMM, 0, pc, 1);	# (x < 0: below)
+			gemit(g, Dis->IMOVF, IND, ind(b, 16), MNONE, 0, FP, Ff1);
+			gemit(g, Dis->ICVTFW, FP, Ff1, MNONE, 0, FP, Ft2);
+			gemit(g, Dis->ICVTWF, FP, Ft2, MNONE, 0, FP, Ff2);
+			gexitif(g, Dis->IBNEF, FP, Ff2, MFP, Ff1, pc, 0);	# not an integer, or NaN
+			gexitif(g, Dis->IBLTW, FP, Ft2, MIMM, 0, pc, 0);
+			gemit(g, Dis->IINDX, FP, Fonelem, MFP, Fp1, FP, Ft);
+			gemit(g, Dis->IMOVW, IND, ind(Fp1, 0), MNONE, 0, FP, Ft3);
+			gexitif(g, Dis->IBGEW, FP, Ft2, MFP, Ft3, pc, 0);	# past the elements in use
+			gemit(g, Dis->IINDX, FP, Fokind, MFP, Fp1, FP, Ft);
+			gemit(g, Dis->IMOVW, IND, ind(Fp1, 0), MNONE, 0, FP, Ft3);	# its kind
+			if(op == Ogetelem)
+				gexitif(g, Dis->IBEQW, FP, Ft3, MIMM, Kargs, pc, 0);
+			else {
+				ok := gemit(g, Dis->IBEQW, FP, Ft3, MIMM, Karray, IMM, 0);
+				gexitif(g, Dis->IBNEW, FP, Ft3, MIMM, Kord, pc, 0);
+				g.ins[ok].dst = g.n;
+			}
+			gemit(g, Dis->IINDX, FP, Foelems, MFP, Fp1, FP, Ft);
+			gemit(g, Dis->IMOVW, IND, ind(Fp1, 0), MNONE, 0, FP, Frow);	# its elements
+			gemit(g, Dis->IINDX, FP, Frow, MFP, Fp2, FP, Ft2);
+			gexitif(g, Dis->IBEQW, IND, ind(Fp2, 0), MIMM, Tempty, pc, 0);
+			if(op == Ogetelem) {
+				d := greg(g, ops[pc+1], Fc);
+				gemit(g, Dis->IMOVM, IND, ind(Fp2, 0), MIMM, Vsize, IND, ind(d, 0));
+			} else {
+				v := greg(g, ops[pc+3], Fc);
+				gemit(g, Dis->IMOVM, IND, ind(v, 0), MIMM, Vsize, IND, ind(Fp2, 0));
+			}
+		Ogetenv or Ogetenvc or Osetenv or Osetenvc =>
+			# slot n2 of the environment n1 out
+			depth := ops[pc+2];
+			slot := ops[pc+3];
+			if(op == Osetenv || op == Osetenvc) {
+				depth = ops[pc+1];
+				slot = ops[pc+2];
+			}
+			e := greg(g, Renv, Fa);
+			gemit(g, Dis->IMOVW, IND, ind(e, 8), MNONE, 0, FP, Ft);
+			for(k := 0; k < depth; k++) {
+				gemit(g, Dis->IINDX, FP, Foproto, MFP, Fp1, FP, Ft);
+				gemit(g, Dis->IMOVW, IND, ind(Fp1, 0), MNONE, 0, FP, Ft);
+			}
+			gemit(g, Dis->IINDX, FP, Foslots, MFP, Fp1, FP, Ft);
+			gemit(g, Dis->IMOVW, IND, ind(Fp1, 0), MNONE, 0, FP, Frow);
+			gemit(g, Dis->IMOVW, IMM, slot, MNONE, 0, FP, Ft2);
+			gemit(g, Dis->IINDX, FP, Frow, MFP, Fp2, FP, Ft2);
+			# an imported binding, or (checked) one not yet initialised
+			if(op == Ogetenv || op == Ogetenvc)
+				gexitif(g, Dis->IBEQW, IND, ind(Fp2, 0), MIMM, Timport, pc, 0);
+			if(op == Ogetenvc || op == Osetenvc)
+				gexitif(g, Dis->IBEQW, IND, ind(Fp2, 0), MIMM, Tempty, pc, 0);
+			if(op == Ogetenv || op == Ogetenvc) {
+				d := greg(g, ops[pc+1], Fc);
+				gemit(g, Dis->IMOVM, IND, ind(Fp2, 0), MIMM, Vsize, IND, ind(d, 0));
+			} else {
+				v := greg(g, ops[pc+3], Fc);
+				gemit(g, Dis->IMOVM, IND, ind(v, 0), MIMM, Vsize, IND, ind(Fp2, 0));
+			}
+		Oseq or Osne =>
+			# numbers, or values of one type compared by their word; strings
+			# and BigInts are the interpreter's
+			a := greg(g, ops[pc+2], Fa);
+			b := greg(g, ops[pc+3], Fb);
+			gemit(g, Dis->IMOVW, IND, ind(a, 0), MNONE, 0, FP, Ft);
+			gemit(g, Dis->IMOVW, IND, ind(b, 0), MNONE, 0, FP, Ft2);
+			notnum := gemit(g, Dis->IBNEW, FP, Ft, MIMM, Tnum, IMM, 0);
+			bnotnum := gemit(g, Dis->IBNEW, FP, Ft2, MIMM, Tnum, IMM, 0);	# -> false
+			gemit(g, Dis->IMOVF, IND, ind(a, 16), MNONE, 0, FP, Ff1);
+			gemit(g, Dis->IMOVF, IND, ind(b, 16), MNONE, 0, FP, Ff2);
+			nan1 := gemit(g, Dis->IBNEF, FP, Ff1, MFP, Ff1, IMM, 0);	# -> false
+			nan2 := gemit(g, Dis->IBNEF, FP, Ff2, MFP, Ff2, IMM, 0);
+			numeq := gemit(g, Dis->IBEQF, FP, Ff1, MFP, Ff2, IMM, 0);	# -> true
+			jfalse1 := gemit(g, Dis->IJMP, XXX, 0, MNONE, 0, IMM, 0);
+			# a not a number
+			g.ins[notnum].dst = g.n;
+			difft := gemit(g, Dis->IBNEW, FP, Ft, MFP, Ft2, IMM, 0);	# -> false
+			gexitif(g, Dis->IBEQW, FP, Ft, MIMM, Tstr, pc, 0);
+			gexitif(g, Dis->IBEQW, FP, Ft, MIMM, Tbig, pc, 0);
+			gemit(g, Dis->IMOVW, IND, ind(a, 8), MNONE, 0, FP, Ft);
+			gemit(g, Dis->IMOVW, IND, ind(b, 8), MNONE, 0, FP, Ft2);
+			wordeq := gemit(g, Dis->IBEQW, FP, Ft, MFP, Ft2, IMM, 0);	# -> true
+			# false
+			falseat := g.n;
+			g.ins[bnotnum].dst = falseat;
+			g.ins[nan1].dst = falseat;
+			g.ins[nan2].dst = falseat;
+			g.ins[jfalse1].dst = falseat;
+			g.ins[difft].dst = falseat;
+			d := greg(g, ops[pc+1], Fc);
+			gsetv(g, d, Tbool, op == Osne);
+			jend := gemit(g, Dis->IJMP, XXX, 0, MNONE, 0, IMM, 0);
+			trueat := g.n;
+			g.ins[numeq].dst = trueat;
+			g.ins[wordeq].dst = trueat;
+			d = greg(g, ops[pc+1], Fc);
+			gsetv(g, d, Tbool, op == Oseq);
+			g.ins[jend].dst = g.n;
+		Omod or Oband or Obor or Obxor or Oshr =>
+			# on 32-bit integers (and for %, a whole number by a positive one,
+			# where the remainder's sign cannot matter)
+			a := greg(g, ops[pc+2], Fa);
+			gneedtag(g, a, Tnum, pc);
+			b := greg(g, ops[pc+3], Fb);
+			gneedtag(g, b, Tnum, pc);
+			gint32(g, a, Ft, pc);
+			gint32(g, b, Ft2, pc);
+			case op {
+			Omod =>
+				# (a zero dividend may be -0, whose remainder is -0)
+				gexitif(g, Dis->IBLEW, FP, Ft, MIMM, 0, pc, 0);
+				gexitif(g, Dis->IBLEW, FP, Ft2, MIMM, 0, pc, 0);
+				gemit(g, Dis->IMODW, FP, Ft2, MFP, Ft, FP, Ft);	# d = m % s
+			Oband =>
+				gemit(g, Dis->IANDW, FP, Ft2, MFP, Ft, FP, Ft);
+			Obor =>
+				gemit(g, Dis->IORW, FP, Ft2, MFP, Ft, FP, Ft);
+			Obxor =>
+				gemit(g, Dis->IXORW, FP, Ft2, MFP, Ft, FP, Ft);
+			Oshr =>
+				gemit(g, Dis->IANDW, IMM, 31, MNONE, 0, FP, Ft2);
+				gemit(g, Dis->ISHRW, FP, Ft2, MFP, Ft, FP, Ft);	# d = m >> s
+			}
+			gemit(g, Dis->ICVTWF, FP, Ft, MNONE, 0, FP, Ff1);
+			d := greg(g, ops[pc+1], Fc);
+			gsetnum(g, d, Ff1);
 		Ojmp =>
 			gjmp(g, Dis->IJMP, XXX, 0, MNONE, 0, ops[pc+1]);
 			continue;

@@ -29,6 +29,10 @@ Jitst: adt {
 	ics:	array of ref Shape;	# the code's inline caches: the shape seen,
 	icslot:	array of int;	# the slot it had the property in,
 	icgen:	array of int;	# and the shape's gen then
+	okind:	array of int;	# by object: its kind
+	onelem:	array of int;	# the elements in use
+	oelems:	array of array of V;	# its elements
+	oproto:	array of int;	# its prototype (an environment's: the one around it)
 };
 
 # run the code from pc, an operation compiled; return the pc of the first

@@ -20,5 +20,7 @@ DISBIN=$ROOT/dis/lib/js
 
 <$ROOT/mkfiles/mkdis
 
+jsre.dis:	jsrx.b
+
 # js.dis is one module from several fragments
-js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsarray.b jsstring.b jscoll.b
+js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsarray.b jsstring.b jscoll.b jsregexp.b

@@ -1485,23 +1485,6 @@ Reprog: adt {
 	x:	int;
 };
 
-regexpcreate(pat, flags: string): int
-{
-	(p, err) := jsre->parse(pat, jsreflags(flags));
-	if(err != nil)
-		throwerr(SyntaxError, err);
-	h := newobj(Kregexp, iregexpproto);
-	odata[h] = ref Data.Regexp(p, pat, flags, nil);
-	addprop(h, alastindex, Awrite, num(0.0));
-	return h;
-}
-
-jsreflags(s: string): int
-{
-	(f, nil) := jsre->parseflags(s);
-	return f;
-}
-
 # BigInt: a decimal string row (sign and digits)
 strbig(s: string): (int, V)
 {

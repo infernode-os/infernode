@@ -83,10 +83,26 @@ Jsre: module
 		flags:	int;
 		ngroups:	int;
 		names:	array of string;	# by capture number; names[0] unused
+		prog:	ref Prog;	# compiled when first matched
+	};
+
+	# a compiled pattern (see jsrx.b)
+	Prog: adt {
+		code:	array of int;
+		sets:	array of (int, ref Set);
+		names:	array of array of int;
+		nslot:	int;
+		nreg:	int;
+		u:	int;
+		flags:	int;
 	};
 
 	init:	fn();
 	# the flags in s, or an error
 	parseflags:	fn(s: string): (int, string);
 	parse:	fn(pat: string, flags: int): (ref Pattern, string);
+	# a match of p in s at start, or (unless sticky) after it: the
+	# captures' [start, end) positions, by group (-1: did not take
+	# part), or nil for none
+	exec:	fn(p: ref Pattern, s: string, start: int, sticky: int): array of int;
 };

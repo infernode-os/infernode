@@ -47,6 +47,7 @@ include "jsbuiltin.b";
 include "jsarray.b";
 include "jsstring.b";
 include "jscoll.b";
+include "jsregexp.b";
 
 output: ref fn(s: string);
 

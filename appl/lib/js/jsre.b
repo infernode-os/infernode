@@ -77,7 +77,7 @@ parse(pat: string, flags: int): (ref Pattern, string)
 				fail(r, "unmatched )");
 			fail(r, "unexpected " + quote(r.s[r.pos]));
 		}
-		return (ref Pattern(re, flags, r.ngroups, r.names), nil);
+		return (ref Pattern(re, flags, r.ngroups, r.names, nil), nil);
 	} exception e {
 	"re:*" =>
 		return (nil, "invalid regular expression: /" + pat + "/: " + e[3:]);
@@ -1077,6 +1077,8 @@ isreservedpunct(c: int): int
 	}
 	return 0;
 }
+
+include "jsrx.b";
 
 # ---- property names ----
 

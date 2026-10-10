@@ -189,6 +189,10 @@ test('custom property', () => {
 	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
 	d.remove();
 });
+test('clock', () => {
+	check('this year', new Date().getFullYear() >= 2026, true);
+	check('now', Math.abs(Date.now() - performance.timeOrigin - performance.now()) < 2000, true);
+});
 test('DOMParser', () => {
 	const d = new DOMParser().parseFromString('<!DOCTYPE html><html lang="fr"><head><title>T1</title></head><body class="b"><p>x</p></body></html>', 'text/html');
 	check('title', d.title, 'T1');

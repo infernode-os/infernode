@@ -280,9 +280,20 @@ clockbase := -1.0;
 now(): real
 {
 	if(clockbase < 0.0) {
-		if(daytime == nil)
-			daytime = load Daytime Daytime->PATH;
-		clockbase = real daytime->now() * 1000.0 - real sys->millisec();
+		# /dev/time's microseconds; daytime's seconds without it
+		us := big 0;
+		if((fd := sys->open("/dev/time", Sys->OREAD)) != nil) {
+			b := array[32] of byte;
+			if((k := sys->read(fd, b, len b)) > 0)
+				us = big string b[0:k];
+		}
+		ms := real us / 1000.0;
+		if(us <= big 0) {
+			if(daytime == nil)
+				daytime = load Daytime Daytime->PATH;
+			ms = real daytime->now() * 1000.0;
+		}
+		clockbase = ms - real sys->millisec();
 	}
 	return clockbase + real sys->millisec();
 }

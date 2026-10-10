@@ -59,6 +59,9 @@ page(h: ref Js->Host): string
 	# confined namespace will not have
 	if(daytime == nil)
 		daytime = load Daytime Daytime->PATH;
+	# the clock and the time zone, which are /dev/time and /locale
+	now();
+	daytime->local(daytime->now());
 	if(keyring == nil)
 		keyring = load Keyring Keyring->PATH;
 	jsparse->parse("/(?:)/u; class C { #x; m() { return this.#x; } }", 0, 0);	# its checker and the regular expressions

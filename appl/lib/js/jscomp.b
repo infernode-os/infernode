@@ -4043,7 +4043,7 @@ yieldstar(x: ref Node.Yield, r: int)
 	emit(r);
 	if(async) {
 		e2(Oawait, res, res);
-		e4(Oiterres, res, done, res, it);
+		e4(Oiterres, res, done, res, -1);
 	}
 	jd := ejump(Ojt, done);
 	e3(Oyieldraw, r, mode, res);

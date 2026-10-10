@@ -1121,7 +1121,9 @@ loop(entry: int): V
 			if(r.t != Tobj)
 				typeerr("iterator result " + show(r) + " is not an object");
 			done := truthy(getv(r, adone));
-			if(done) {
+			if(ops[pc+4] < 0)	# yield*: the value either way
+				vs[base+ops[pc+1]] = getv(r, avalue);
+			else if(done) {
 				vs[base+ops[pc+4]+1] = undef;
 				vs[base+ops[pc+1]] = undef;
 			} else

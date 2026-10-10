@@ -1681,7 +1681,7 @@ realmrun(r: ref Realm, pidc: chan of int)
 		if(pjs == nil)
 			err = sys->sprint("cannot load %s: %r", Js->PATH);
 		else {
-			h := ref Js->Host(r.id, r.pg.doc, r.pg.url, r.events, grants(r.pg.url),
+			h := ref Js->Host(r.id, stressn(), r.pg.doc, r.pg.url, r.events, grants(r.pg.url),
 				hlock, hunlock, hchanged, hbox, hcomputed, hmedia, hmatch, hselect, hparse,
 				hviewport, hnavigate, hscroll, hconsole);
 			err = pjs->page(h);
@@ -1693,6 +1693,19 @@ realmrun(r: ref Realm, pidc: chan of int)
 	if(err != nil)
 		sys->fprint(sys->fildes(2), "charon: scripts: %s: %s\n", r.pg.url, err);
 	dropealm(r);
+}
+
+# /env/jsstress, for testing the engine: its collector runs every n allocations
+stressn(): int
+{
+	fd := sys->open("/env/jsstress", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[16] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	return int string buf[0:n];
 }
 
 # what a page's realm may reach: the network, and a file: page's directory

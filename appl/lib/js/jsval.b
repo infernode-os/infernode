@@ -419,7 +419,7 @@ gcstress := 0;	# collect after this many objects or strings, to find what is not
 # an object the collector freed is used: under stress, said where
 freeduse(what: string)
 {
-	sys->fprint(sys->fildes(2), "js: freed object used: %s%s\n", what, tracetext(errtrace()));
+	sys->fprint(sys->fildes(2), "js: freed object used: %s (last native %s, %d frames, %d collections)%s\n", what, lastnative, nframe, ncollect, tracetext(errtrace()));
 	raise "js: freed object used";
 }
 gcobjlimit := 100000;
@@ -1088,6 +1088,8 @@ collect()
 			marko(oproto[h]);
 		s := oslots[h];
 		n := oshape[h].n;
+		if(okind[h] == Kenv && s != nil)
+			n = len s;	# an environment's slots are named by its scope, not a shape
 		for(i = 0; i < n; i++)
 			markv(s[i]);
 		e := oelems[h];
@@ -1165,7 +1167,10 @@ markdata(d: ref Data)
 	Prim =>
 		markv(x.v);
 	Env =>
-		marko(x.withobj);
+		if(x.withobj < -1)
+			marko(-2 - x.withobj);	# eval's vars
+		else
+			marko(x.withobj);
 	Map =>
 		for(i := 0; i < x.n; i++) {
 			markv(x.keys[i]);

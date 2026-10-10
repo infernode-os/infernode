@@ -62,6 +62,7 @@ Js: module
 
 	Host: adt {
 		id:	int;		# the host's name for the page, given to each function
+		stress:	int;		# collect after every stress allocations (0: as usual), to test the engine
 		doc:	ref Dom->Doc;
 		url:	string;		# the document's address
 		events:	chan of ref Event;	# from the host; Quit ends the page

@@ -74,6 +74,8 @@ page(h: ref Js->Host): string
 	setoutput(pageconsole);
 	if((err = confine(h.grants)) != nil)
 		return err;
+	if(h.stress > 0)
+		stress(h.stress);
 	h.lock(h.id);
 	{
 		f := selfhost(src);
@@ -137,6 +139,7 @@ hook(name: string, args: array of V): int
 	nf := nframe;
 	{
 		f := getv(objv(pghooks), intern(name));
+		lastnative = "hook " + name;
 		if(f.t == Tobj)
 			r = truthy(call(f, objv(pghooks), args));
 		runjobs();

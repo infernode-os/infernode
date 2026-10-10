@@ -18,6 +18,7 @@ SYSMODULES=\
 	jsre.m\
 	js.m\
 	web/dom.m\
+	web/originfs.m\
 
 DISBIN=$ROOT/dis/lib/js
 

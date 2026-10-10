@@ -313,6 +313,15 @@ because that data is not in the realm's namespace. This requires a
 change to webfs itself: **per-attach sessions** (an attach name selects
 a jar), so that the filter is thin and webfs keeps one implementation.
 
+*As built (originfs(4), 2026-10-10):* the filter is a 9P server the
+realm starts while confining itself, in the realm's process group but
+its own name space, mounted at the realm's `/mnt/web`. It applies CORS
+(preflights included), Opaque Response Blocking for no-cors requests,
+the forbidden request headers, and cookie scoping over webfs's one jar
+(only the page's host's cookies, never HttpOnly ones). Per-origin jars
+in `/mnt/store`, and so webfs's per-attach sessions, are not done:
+cookies are scoped, not partitioned. SameSite and CSP are not applied.
+
 ### 6.3 Threats and the mechanism that answers each
 
 | Threat | Mechanism | Strength |
@@ -567,6 +576,7 @@ small separate fix should profiles of Limbo programs justify it.
 | `appl/lib/js/jsdom.b` | A web page's realm (`Js->page`): confinement, the DOM's natives over Charon's `Dom->Doc`, the event loop, fetching through webfs |
 | `lib/js/dom.js` | The DOM and the window in JavaScript over those natives: nodes, elements and the HTML element classes, events, selectors, forms, style and style sheets, geometry, URL, fetch and XMLHttpRequest (with CORS), timers, storage, cookies, observers, custom elements, import maps |
 | `lib/js/intl.js` | Intl, run before the DOM prelude: number, date, plural, relative-time and list formats, collation, segmentation; English words, a few locales' separators, no time zone database |
+| `appl/lib/web/originfs.b` | originfs(4): the origin filter a page's realm sees as `/mnt/web` |
 | `appl/cmd/jsfs.b` | jsfs(4): realms as files at `/mnt/js` (clone, ctl, status, console, eval, profile) |
 | `appl/lib/web/browser.b` | Charon's side: a realm per page with scripts, the host functions (layout, selectors, parsing), clicks and form input through the realm, a watchdog |
 | `tests/js/jspage.b`, `tests/js/pages/` | A page loaded headlessly with scripts on; `dom.html` checks 188 behaviours, `confine.html` the namespace, `storage.html` what lasts |
@@ -619,10 +629,14 @@ RFC 6265 filters it.  A cross-origin fetch is CORS's: the page's Origin
 sent, a preflight when it is needed, the response readable only when the
 server allows it, no-cors responses opaque.
 
-Gaps, in order: the realm sees the whole of webfs, cookie jar included
-(no origin filter yet, §6.2: scripts cannot name files, so this matters
-only for an engine bug); POST forms from script; shadow DOM is not
-shown; no canvas, media or workers.
+The realm's `/mnt/web` is originfs(4), not webfs: CORS, Opaque Response
+Blocking, cookie scoping and the forbidden headers are enforced outside
+the realm (§6.2); `tests/host/originfs_test.sh` checks them, directly
+and from a page.
+
+Gaps, in order: cookies scoped but not partitioned, no SameSite or CSP;
+POST forms from script; shadow DOM is not shown; no canvas, media or
+workers.
 
 Measured on nineteen large sites (2026-10-10): GitHub, YouTube,
 Wikipedia, Google, Amazon, MDN, Mozilla, NASA, the Python docs, Pantip,

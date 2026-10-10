@@ -478,6 +478,7 @@ dis/lib/web/dom.dis
 dis/lib/web/fonts.dis
 dis/lib/web/html.dis
 dis/lib/web/layout.dis
+dis/lib/web/originfs.dis
 dis/lib/web/page.dis
 dis/lib/web/style.dis
 dis/lib/web/wordbreak.dis
@@ -780,6 +781,7 @@ dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/opus_test.dis
+dis/tests/originfs_test.dis
 dis/tests/outlinefont_test.dis
 dis/tests/pathmanage_test.dis
 dis/tests/pdf_conformance_test.dis

@@ -64,6 +64,10 @@ page(h: ref Js->Host): string
 	daytime->local(daytime->now());
 	if(keyring == nil)
 		keyring = load Keyring Keyring->PATH;
+	if(originfs == nil)
+		originfs = load Originfs Originfs->PATH;
+	if(originfs == nil)
+		return sys->sprint("cannot load %s: %r", Originfs->PATH);
 	jsparse->parse("/(?:)/u; class C { #x; m() { return this.#x; } }", 0, 0);	# its checker and the regular expressions
 	(src, rerr) := readsrc(Prelude);
 	if(rerr != nil)
@@ -79,7 +83,7 @@ page(h: ref Js->Host): string
 	fetchc = chan of ref Fetched;
 	setloader(pageloader);
 	setoutput(pageconsole);
-	if((err = confine(h.grants)) != nil)
+	if((err = confine(h.grants, originfs->origin(h.url))) != nil)
 		return err;
 	if(h.stress > 0)
 		stress(h.stress);
@@ -215,9 +219,11 @@ pageconsole(s: string)
 # A new process group and namespace holding only the grants, bound into
 # an empty tree (/tmp/.js/<pid>, which the host removes when the page is
 # gone) that then replaces the root; no file descriptors but standard
-# error; no devices.
+# error; no devices.  webfs is not granted as it is: the realm gets an
+# origin filter in front of it (originfs.b, §6.2), in its process group,
+# so it ends with the page.
 
-confine(grants: list of (string, string, int)): string
+confine(grants: list of (string, string, int), origin: string): string
 {
 	pid := sys->pctl(Sys->NEWPGRP|Sys->FORKNS|Sys->NEWENV, nil);
 	top := "/tmp/.js";
@@ -229,6 +235,19 @@ confine(grants: list of (string, string, int)): string
 		(dst, src, rw) := hd l;
 		if(mkdirs(shadow + dst) < 0)
 			return sys->sprint("confine: %s: %r", dst);
+		if(dst == Webfs) {
+			p := array[2] of ref Sys->FD;
+			if(sys->pipe(p) < 0)
+				return sys->sprint("confine: pipe: %r");
+			ready := chan of string;
+			spawn originfs->serve(p[1], origin, src, ready);
+			if((e := <-ready) != nil)
+				return "confine: " + e;
+			p[1] = nil;
+			if(sys->mount(p[0], nil, shadow + dst, Sys->MREPL, nil) < 0)
+				return sys->sprint("confine: mount the origin filter: %r");
+			continue;
+		}
 		flag := Sys->MREPL;
 		if(!rw)
 			flag |= Sys->MREADONLY;
@@ -1325,11 +1344,13 @@ webfsget(f: ref Fetched, method, hdr: string, body: array of byte)
 	}
 	# the header lines, and "cookies off" for a request that must not carry
 	# the jar's (a script's cross-origin request without credentials)
+	# and the request's mode and credentials, for the origin filter
 	(nil, hl) := sys->tokenize(hdr, "\n");
 	for(; hl != nil; hl = tl hl)
-		if(hd hl == "cookies off") {
-			if(sys->fprint(ctl, "cookies off") < 0) {
-				f.err = sys->sprint("webfs: cookies off: %r");
+		if(hd hl == "cookies off" || len hd hl > 5 && (hd hl)[0:5] == "mode " ||
+		   len hd hl > 12 && (hd hl)[0:12] == "credentials ") {
+			if(sys->fprint(ctl, "%s", hd hl) < 0) {
+				f.err = sys->sprint("webfs: %s: %r", hd hl);
 				return;
 			}
 		} else if(sys->fprint(ctl, "header %s", hd hl) < 0) {

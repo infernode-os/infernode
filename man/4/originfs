@@ -1,0 +1,145 @@
+.TH ORIGINFS 4
+.SH NAME
+originfs \- webfs as one origin's web page may use it
+.SH SYNOPSIS
+.EX
+include "web/originfs.m";
+originfs := load Originfs Originfs->PATH;
+
+serve:  fn(fd: ref Sys->FD, origin: string, webfs: string,
+           ready: chan of string);
+origin: fn(url: string): string;
+.EE
+.SH DESCRIPTION
+A web page's JavaScript realm (see
+.IR js (1)
+and
+.IR charon (1))
+does not see
+.IR webfs (4).
+While it confines itself it starts
+.I originfs
+in front of webfs and mounts it at
+.BR /mnt/web .
+Nothing else of the network is in the realm's name space, so what
+.I originfs
+does not let through, neither a script nor a bug in the engine can reach.
+.PP
+.I Serve
+answers 9P on
+.IR fd ,
+for a page of the given
+.IR origin ,
+using the webfs mounted at
+.IR webfs .
+It forks its own name space and keeps none of its caller's file
+descriptors, then sends
+.B nil
+on
+.I ready
+(or why it could not start) and serves until
+.I fd
+hangs up.
+.I Origin
+gives a URL's origin as the Fetch standard serializes it:
+.IB scheme :// host\f1,
+with the port only when it is not the scheme's;
+.B null
+for a URL that is not
+.B http
+or
+.BR https .
+.SH FILES
+.TF N/contenttype
+.TP
+.B clone
+Reading it makes a request directory and gives its number.
+.TP
+.B cookies
+The cookies of webfs's jar this origin's documents may see, in webfs's
+form: those whose domain matches the page's host, never HttpOnly ones,
+Secure ones only for an
+.B https
+page.  Writing a line in the same form sets a cookie for the page's
+host, or for a domain above it that is not a top-level one; an HttpOnly
+cookie, another site's, or a Secure one from an
+.B http
+page is refused.
+.TP
+.IB N /ctl
+Written before the request is made:
+.BI url " url"
+(http or https only),
+.BI method " method"
+(GET, HEAD, POST, PUT, DELETE, PATCH or OPTIONS),
+.BI header " Name: value"
+(the Fetch standard's forbidden request headers, such as Cookie,
+Origin, Host and Referer, are dropped),
+.BI mode " mode"
+.RB ( cors ,
+the default,
+.B no-cors
+or
+.BR same-origin ),
+and
+.BI credentials " c"
+.RB ( omit ,
+.BR same-origin ,
+the default, or
+.BR include ).
+.TP
+.IB N /postbody
+The request body.
+.TP
+.IB N /body\fR,\fP " status" "\fR,\fP url" "\fR,\fP contenttype" "\fR,\fP header"
+The response, as
+.IR webfs (4)
+gives it, once
+.I originfs
+has let it through; reading one makes the request.  A response withheld
+has an empty body and header and a
+.B status
+of
+.BI error: " why"\f1.
+.SH RULES
+A request to the page's own origin goes as it is.  Cookies go when the
+credentials are
+.BR include ,
+or
+.B same-origin
+and the request is to the page's origin.
+.PP
+A cross-origin
+.B cors
+request carries the page's Origin, is preceded by a preflight when its
+method or headers are not CORS-safelisted, and is given back only if
+the response's Access-Control-Allow-Origin names the page's origin (or
+is
+.B *
+for a request without credentials, and Access-Control-Allow-Credentials
+is
+.B true
+for one with them).  Only the safelisted response headers and those
+Access-Control-Expose-Headers names are given.
+.PP
+A cross-origin
+.B no-cors
+request (a classic script the page loads) must use GET, HEAD or POST,
+and is given back unless it is HTML, XML or JSON, by its content type or
+by how its body begins, as Opaque Response Blocking has it: a page may
+run another site's script, not read another site's documents.  Only its
+Content-Type header is given.
+.PP
+A
+.B same-origin
+request to another origin fails.  A redirect is judged by where it ends.
+.SH SOURCE
+.B /appl/lib/web/originfs.b
+.SH SEE ALSO
+.IR js (1),
+.IR charon (1),
+.IR webfs (4)
+.SH BUGS
+SameSite is not applied: webfs's jar does not keep it.  Cookies are not
+partitioned by the page that embeds a request.  Content-Security-Policy
+is not applied.

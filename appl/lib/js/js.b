@@ -49,6 +49,9 @@ include "web/dom.m";
 	dom: Dom;
 	Doc: import dom;
 
+include "web/originfs.m";
+	originfs: Originfs;
+
 
 include "jsval.b";
 include "jsobj.b";

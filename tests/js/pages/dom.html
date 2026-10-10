@@ -189,6 +189,10 @@ test('custom property', () => {
 	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
 	d.remove();
 });
+test('toStringTag', () => {
+	check('element', Object.prototype.toString.call(document.body), '[object HTMLBodyElement]');
+	check('window', Object.prototype.toString.call(window), '[object Window]');
+});
 test(':scope', () => {
 	const a = document.createElement('div');
 	a.innerHTML = '<div class=sc><div class=sc>x</div></div>';

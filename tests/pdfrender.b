@@ -77,6 +77,8 @@ init(nil: ref Draw->Context, args: list of string)
 			raise "fail:render";
 		}
 		im = r;
+		if(rerr != nil && i == 0)
+			sys->fprint(stderr, "pdfrender: page %d: %s\n", page, rerr);
 		if(best < 0 || t < best)
 			best = t;
 	}

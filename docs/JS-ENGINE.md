@@ -635,9 +635,28 @@ Blocking, cookie scoping and the forbidden headers are enforced outside
 the realm (§6.2); `tests/host/originfs_test.sh` checks them, directly
 and from a page.
 
+Shadow DOM is rendered (2026-10-10).  The document keeps its shadow
+roots; `Dom->flat` makes the flat tree (a host's children are its shadow
+root's, a slot's its assigned light nodes or its fallback) as index
+arrays once a pass, and style walks it for inheritance and layout boxes
+it, while selectors match in each tree's own structure.  A shadow tree's
+rules are the user agent's and its own (`<style>` elements, then adopted
+sheets), the document's do not reach in; `:host`, `:host()` and
+`::slotted()` apply below the document's rules, as an inner context's
+do.  Events cross the boundary with retargeting; slots have
+`assignedNodes`, `assignedElements`, `assignedSlot` and `slotchange`;
+declarative shadow roots are attached when the page is parsed.  A
+document without shadow roots builds no flat tree: restyle and relayout
+of Wikipedia, the Python docs, BBC and GitHub measure the same as before
+within the noise.  Reddit, built of web components, went from 9 lines of
+text to its whole feed.  Style sheets a script adds or changes now apply
+(they were read once, at load).
+
 Gaps, in order: cookies scoped but not partitioned, no SameSite or CSP;
-POST forms from script; shadow DOM is not shown; no canvas, media or
-workers.
+Web Workers (MSN needs them); a shadow tree's linked sheets and
+`:host-context`; inline elements' getBoundingClientRect (empty: their
+geometry is in the line fragments); POST forms from script; no canvas or
+media.
 
 Measured on nineteen large sites (2026-10-10): GitHub, YouTube,
 Wikipedia, Google, Amazon, MDN, Mozilla, NASA, the Python docs, Pantip,

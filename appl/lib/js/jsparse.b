@@ -357,17 +357,83 @@ stmtitem(p: ref P, top: int): ref Node
 		"import" =>
 			n := peek(p);
 			if(!(n.kind == Tpunct && (n.s == "(" || n.s == "."))) {
-				if(!p.ismod || !top)
+				if(!p.ismod || top != 1)
 					fail(p, t.pos, "import declaration outside a module's top level");
 				return importdecl(p);
 			}
 		"export" =>
-			if(!p.ismod || !top)
+			if(!p.ismod || top != 1)
 				fail(p, t.pos, "export declaration outside a module's top level");
 			return exportdecl(p);
+		"using" =>
+			if(usingstart(p, 0)) {
+				usingplace(p, top, t.pos);
+				return vardecl(p, Kusing, 1);
+			}
+		"await" =>
+			if(awaitusingstart(p, 0)) {
+				usingplace(p, top, t.pos);
+				pos := t.pos;
+				next(p);
+				d := vardecl(p, Kawaitusing, 1);
+				d.pos = pos;
+				return d;
+			}
 		}
 	}
 	return stmt(p, 1);
+}
+
+# whether using here begins a declaration: using x, on one line;
+# forhead: in a for's head, where using of is the name using
+usingstart(p: ref P, forhead: int): int
+{
+	n := peek(p);
+	if(n.kind != Tident || n.nlb)
+		return 0;
+	if(!n.esc && (n.s == "in" || n.s == "instanceof"))
+		return 0;
+	if(forhead && !n.esc && n.s == "of") {
+		# for (using of = e;;) declares of; for (using of e) iterates e
+		save := p.l.pos;
+		p.l.next(0);
+		n2 := p.l.next(0);
+		p.l.pos = save;
+		p.l.err = nil;
+		return n2.kind == Tpunct && (n2.s == "=" || n2.s == ";" || n2.s == ",");
+	}
+	return 1;
+}
+
+# whether await here begins await using x, on one line, where await is an operator
+awaitusingstart(p: ref P, nil: int): int
+{
+	if(!p.async && !p.toplevelawait)
+		return 0;
+	save := p.l.pos;
+	n1 := p.l.next(0);
+	n2 := p.l.next(0);
+	p.l.pos = save;
+	if(p.l.err != nil) {
+		p.l.err = nil;
+		return 0;
+	}
+	if(n1.kind != Tident || n1.esc || n1.s != "using" || n1.nlb)
+		return 0;
+	if(n2.kind != Tident || n2.nlb)
+		return 0;
+	if(!n2.esc && (n2.s == "in" || n2.s == "instanceof"))
+		return 0;
+	return 1;
+}
+
+# using declarations are not at a script's top level, nor directly in a case
+usingplace(p: ref P, top, at: int)
+{
+	if(top == 1 && !p.ismod)
+		fail(p, at, "using declaration at a script's top level");
+	if(top == 2)
+		fail(p, at, "using declaration in a case clause");
 }
 
 # whether a let here begins a declaration (else it is an identifier)
@@ -557,13 +623,16 @@ vardecls(p: ref P, kind: int, noin: int, needinit: int): array of ref Node
 		Ident =>
 			if(kind != Kvar && x.name == "let")
 				fail(p, pos, "let cannot name a lexical binding");
+		* =>
+			if(kind == Kusing || kind == Kawaitusing)
+				fail(p, pos, "a using declaration binds names, not patterns");
 		}
 		init: ref Node;
 		if(eat(p, "="))
 			init = assign(p, noin);
 		else if(needinit) {
-			if(kind == Kconst)
-				fail(p, p.t.pos, "const without an initialiser");
+			if(kind != Kvar && kind != Klet)
+				fail(p, p.t.pos, "declaration without an initialiser");
 			pick x := id {
 			Ident =>
 				;
@@ -616,6 +685,11 @@ forstmt(p: ref P): ref Node
 			n := peek(p);
 			if(n.kind == Tpunct && (n.s == "[" || n.s == "{") || n.kind == Tident && !(n.s == "in" && !n.esc) && !(n.s == "of" && !n.esc))
 				kind = Klet;
+		} else if(iskw(p, "using") && usingstart(p, 1))
+			kind = Kusing;
+		else if(iskw(p, "await") && awaitusingstart(p, 1)) {
+			kind = Kawaitusing;
+			next(p);
 		}
 		if(kind >= 0) {
 			next(p);
@@ -625,6 +699,8 @@ forstmt(p: ref P): ref Node
 				isof := iskw(p, "of");
 				if(len decls != 1)
 					fail(p, ipos, "for-in/of with more than one binding");
+				if(!isof && (kind == Kusing || kind == Kawaitusing))
+					fail(p, ipos, "for-in with a using declaration");
 				if(declinit(decls[0]) != nil) {
 					# Annex B.3.5: for (var x = e in o) in sloppy code
 					if(isof || p.strict || kind != Kvar || !simpleident(decls[0]))
@@ -636,8 +712,8 @@ forstmt(p: ref P): ref Node
 				fail(p, p.t.pos, "for await needs of");
 			for(i := 0; i < len decls; i++)
 				if(declinit(decls[i]) == nil) {
-					if(kind == Kconst)
-						fail(p, decls[i].pos, "const without an initialiser");
+					if(kind != Kvar && kind != Klet)
+						fail(p, decls[i].pos, "declaration without an initialiser");
 					pick x := decls[i] {
 					Decl =>
 						pick y := x.id {
@@ -744,7 +820,7 @@ switchstmt(p: ref P): ref Node
 		expect(p, ":");
 		body: list of ref Node;
 		while(!iskw(p, "case") && !iskw(p, "default") && !is(p, "}") && p.t.kind != Teof)
-			body = stmtitem(p, 0) :: body;
+			body = stmtitem(p, 2) :: body;
 		cases = ref Node.Case(cpos, p.prevend, test, rev(body)) :: cases;
 	}
 	return ref Node.Switch(pos, p.prevend, disc, rev(cases));
@@ -783,13 +859,16 @@ function(p: ref P, decl, async, at: int): ref Node
 		# its rules; an expression's in its own, under the function's
 		og := p.gen;
 		oa := p.async;
+		osb := p.instaticblock;
 		if(!decl) {
 			p.gen = gen;
 			p.async = async;
+			p.instaticblock = 0;
 		}
 		id = ident(p, 1);
 		p.gen = og;
 		p.async = oa;
+		p.instaticblock = osb;
 	} else if(decl)
 		fail(p, p.t.pos, "function declaration without a name");
 	flags := 0;
@@ -958,8 +1037,7 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 	p.gen = 0;
 	p.infunc = 1;
 	p.toplevelawait = 0;
-	if(async)
-		p.instaticblock = 0;
+	p.instaticblock = 0;
 	simple := 1;
 	for(i := 0; i < len params; i++)
 		pick x := params[i] {
@@ -1072,7 +1150,7 @@ member(p: ref P): ref Node
 		gen = 1;
 	if(!async && !gen && (iskw(p, "get") || iskw(p, "set"))) {
 		n := peek(p);
-		if(!(n.kind == Tpunct && (n.s == "(" || n.s == "=" || n.s == ";" || n.s == "}"))) {
+		if(!(n.kind == Tpunct && (n.s == "(" || n.s == "=" || n.s == ";" || n.s == "}" || n.s == "*" && n.nlb))) {
 			if(p.t.s == "get")
 				kind = Pget;
 			else

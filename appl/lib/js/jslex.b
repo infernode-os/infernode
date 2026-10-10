@@ -688,9 +688,8 @@ templ(l: ref Lex, st: int): ref Tok
 			(e, nil, ok) := escape(l, 1);
 			if(!ok) {
 				bad = 1;
-				# skip what the escape would have been, to the next sensible point
-				if(l.pos < rs + 2)
-					l.pos = rs + 2;
+				# what follows \ and its letter is read again as template text
+				l.pos = rs + 2;
 			} else if(e >= 0)
 				v[len v] = e;
 			for(i := rs; i < l.pos && i < n; i++)

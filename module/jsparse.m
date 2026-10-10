@@ -13,7 +13,7 @@ Jsparse: module
 	# Func flags
 	Fgen, Fasync, Farrow, Fexpr, Fdecl, Fmethod, Fstrict, Fsimple: con 1 << iota;
 	# Var kinds
-	Kvar, Klet, Kconst: con iota;
+	Kvar, Klet, Kconst, Kusing, Kawaitusing: con iota;
 	# Prop and Method kinds
 	Pinit, Pget, Pset, Pmethod, Pctor, Pfield, Pblock: con iota;
 	# Import specifier kinds

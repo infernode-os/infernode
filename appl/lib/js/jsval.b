@@ -321,8 +321,13 @@ strkey(s: string): int
 strhkey(h: int): int
 {
 	a := satom[h];
-	if(a >= 0)
+	if(a >= 0) {
+		# an interned "2" is the index 2, not an atom
+		ix := atomidx[a];
+		if(ix >= 0.0 && ix <= real Idxmax)
+			return idxkey(int ix);
 		return a;
+	}
 	s := str(h);
 	(isi, ix) := canonidx(s);
 	if(isi && ix <= real Idxmax)

@@ -1465,7 +1465,7 @@ oplen(op: int): int
 		return 5;
 	Ocall or Oeval or Osupercall or Oystep =>
 		return 6;
-	Onewdisp or Othisdyn =>
+	Onewdisp or Othisdyn or Ogenret =>
 		return 2;
 	Omodinit =>
 		return 1;

@@ -2549,9 +2549,14 @@ forinstmt(n: ref Node, left, right, body: ref Node, isof, isawait: int)
 	jumpto(Ojmp, 0, top);
 	# the handler: close, then rethrow
 	if(isof) {
-		hr := tmp();
-		cs.handlers = Handler(hstart, hend, here(), hr, Hcatch, 0) :: cs.handlers;
+		hr := tmps(2);
+		cs.handlers = Handler(hstart, hend, here(), hr, Hclose, 0) :: cs.handlers;
 		popenvs(lab.scopedepth);
+		# a generator's return closes the iterator (its errors count), then goes on
+		jnr := ejump(Ojf, hr + 1);
+		closeiter(it, isawait);
+		e1(Ogenret, hr);
+		patch(jnr);
 		if(isawait) {
 			# AsyncIteratorClose for a throw: return() and its await, their errors dropped
 			t := tmp();
@@ -2974,8 +2979,14 @@ destructure(p: ref Node, v: int, binding: int)
 		patch(j);
 		jend := ejump(Ojmp, 0);
 		# an exception: close (unless the iterator threw), rethrow
-		hr := tmp();
-		cs.handlers = Handler(hstart, hend, here(), hr, Hcatch, 0) :: cs.handlers;
+		hr := tmps(2);
+		cs.handlers = Handler(hstart, hend, here(), hr, Hclose, 0) :: cs.handlers;
+		jnr := ejump(Ojf, hr + 1);
+		j = ejump(Ojt, done);
+		e1(Oiterclose, it);
+		patch(j);
+		e1(Ogenret, hr);
+		patch(jnr);
 		j = ejump(Ojt, done);
 		e1(Oiterdone, it);
 		patch(j);

@@ -250,6 +250,11 @@ runfrom(how: int): V
 		"js:throw" =>
 			if(!unwind(entry)) {
 				pc = spc; base = sbase; code = scode; ops = sops;
+				if(genreturning) {
+					# a generator's return, through to its end
+					genreturning = 0;
+					return genretval;
+				}
 				raise e;
 			}
 		}
@@ -285,6 +290,19 @@ unwind(entry: int): int
 				# a generator's return passes catch handlers by
 				if(genreturning && hh.kind == Hcatch)
 					continue;
+				if(hh.kind == Hclose) {
+					if(genreturning) {
+						genreturning = 0;
+						vs[f.base+hh.reg] = genretval;
+						vs[f.base+hh.reg+1] = vtrue;
+					} else {
+						vs[f.base+hh.reg] = thrown;
+						vs[f.base+hh.reg+1] = vfalse;
+					}
+					frames[nframe-1].pc = hh.target;
+					resume();
+					return 1;
+				}
 				if(genreturning) {
 					# into the finally block, its completion a return: past its "throw" code
 					genreturning = 0;
@@ -1056,6 +1074,10 @@ loop(entry: int): V
 		Oimportmeta =>
 			vs[base+ops[pc+1]] = importmeta(code);
 			pc += 2;
+		Ogenret =>
+			genretval = vs[base+ops[pc+1]];
+			genreturning = 1;
+			raise "js:throw";
 		Othisdyn =>
 			(found, e, slot, nil) := dynfind(intern("%this"));
 			if(found && slot >= 0)

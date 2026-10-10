@@ -136,6 +136,7 @@ Odiscall,	# r r		r1 = call the resource's dispose method
 Oaccum,		# r r		r1 = r2 if r1 is empty, else a SuppressedError(r2, r1)
 Omodinit,	#		a module's stop between instantiation and evaluation
 Othisdyn,	# r		eval code's this: a %this binding around it, else the frame's
+Ogenret,	# r		go on returning r from a generator (after an Hclose handler)
 Onop: con iota;
 
 # Code flags
@@ -143,7 +144,7 @@ Cstrict, Carrow, Cgen, Casync, Cmethod, Cctor, Cderived, Cargs, Cmapped, Cextra,
 Cclassfields, Cscript, Ceval, Cmodule, Cstatic, Cgetter, Csetter, Cnoctor, Cindirect: con 1 << iota;
 
 # exception handlers
-Hcatch, Hfinally: con iota;
+Hcatch, Hfinally, Hclose: con iota;	# Hclose: catches throws and a generator's return (reg+1 says which)
 
 Handler: adt {
 	start, end:	int;	# [start, end) of the code

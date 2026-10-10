@@ -197,8 +197,6 @@ atlinestart(l: ref Lex): int
 	return 1;
 }
 
-punct3 := array[] of {">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??="};
-punct2 := array[] of {"=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "**"};
 
 Lex.next(l: self ref Lex, regexok: int): ref Tok
 {
@@ -214,7 +212,7 @@ Lex.next(l: self ref Lex, regexok: int): ref Tok
 	}
 	c := s[st];
 	t: ref Tok;
-	if(isidstart(cpat(s, st).t0) || c == '\\')
+	if(isasciiidstart(c) || c >= 16r80 && isidstart(cpat(s, st).t0) || c == '\\')
 		t = ident(l, Tident);
 	else if(c == '#')
 		t = private(l);
@@ -244,36 +242,154 @@ punct(l: ref Lex): ref Tok
 	s := l.src;
 	st := l.pos;
 	n := len s;
-	if(st + 4 <= n && s[st:st+4] == ">>>=") {
-		l.pos += 4;
-		return ptok(st, l.pos, ">>>=");
-	}
-	if(st + 3 <= n) {
-		p := s[st:st+3];
-		for(i := 0; i < len punct3; i++)
-			if(p == punct3[i]) {
-				l.pos += 3;
-				return ptok(st, l.pos, p);
-			}
-	}
-	if(st + 2 <= n) {
-		p := s[st:st+2];
-		for(i := 0; i < len punct2; i++)
-			if(p == punct2[i]) {
-				if(p == "?." && st + 2 < n && isdigit(s[st+2]))
-					break;	# a ? then a number: c?.5:d
-				l.pos += 2;
-				return ptok(st, l.pos, p);
-			}
-	}
 	c := s[st];
+	c1 := 0;
+	if(st + 1 < n)
+		c1 = s[st+1];
+	c2 := 0;
+	if(st + 2 < n)
+		c2 = s[st+2];
+	c3 := 0;
+	if(st + 3 < n)
+		c3 = s[st+3];
+	# the longest punctuator that begins here, by its characters (the
+	# strings are constants: no slice of the source is made)
+	p: string;
 	case c {
-	'{' or '}' or '(' or ')' or '[' or ']' or ';' or ',' or '<' or '>' or '+' or '-' or
-	'*' or '/' or '%' or '&' or '|' or '^' or '!' or '~' or '?' or ':' or '=' or '.' or '@' =>
-		l.pos++;
-		return ptok(st, l.pos, s[st:st+1]);
+	'{' => p = "{";
+	'}' => p = "}";
+	'(' => p = "(";
+	')' => p = ")";
+	'[' => p = "[";
+	']' => p = "]";
+	';' => p = ";";
+	',' => p = ",";
+	'~' => p = "~";
+	':' => p = ":";
+	'@' => p = "@";
+	'.' =>
+		if(c1 == '.' && c2 == '.')
+			p = "...";
+		else
+			p = ".";
+	'<' =>
+		if(c1 == '<' && c2 == '=')
+			p = "<<=";
+		else if(c1 == '<')
+			p = "<<";
+		else if(c1 == '=')
+			p = "<=";
+		else
+			p = "<";
+	'>' =>
+		if(c1 == '>' && c2 == '>' && c3 == '=')
+			p = ">>>=";
+		else if(c1 == '>' && c2 == '>')
+			p = ">>>";
+		else if(c1 == '>' && c2 == '=')
+			p = ">>=";
+		else if(c1 == '>')
+			p = ">>";
+		else if(c1 == '=')
+			p = ">=";
+		else
+			p = ">";
+	'=' =>
+		if(c1 == '=' && c2 == '=')
+			p = "===";
+		else if(c1 == '=')
+			p = "==";
+		else if(c1 == '>')
+			p = "=>";
+		else
+			p = "=";
+	'!' =>
+		if(c1 == '=' && c2 == '=')
+			p = "!==";
+		else if(c1 == '=')
+			p = "!=";
+		else
+			p = "!";
+	'+' =>
+		if(c1 == '+')
+			p = "++";
+		else if(c1 == '=')
+			p = "+=";
+		else
+			p = "+";
+	'-' =>
+		if(c1 == '-')
+			p = "--";
+		else if(c1 == '=')
+			p = "-=";
+		else
+			p = "-";
+	'*' =>
+		if(c1 == '*' && c2 == '=')
+			p = "**=";
+		else if(c1 == '*')
+			p = "**";
+		else if(c1 == '=')
+			p = "*=";
+		else
+			p = "*";
+	'/' =>
+		if(c1 == '=')
+			p = "/=";
+		else
+			p = "/";
+	'%' =>
+		if(c1 == '=')
+			p = "%=";
+		else
+			p = "%";
+	'&' =>
+		if(c1 == '&' && c2 == '=')
+			p = "&&=";
+		else if(c1 == '&')
+			p = "&&";
+		else if(c1 == '=')
+			p = "&=";
+		else
+			p = "&";
+	'|' =>
+		if(c1 == '|' && c2 == '=')
+			p = "||=";
+		else if(c1 == '|')
+			p = "||";
+		else if(c1 == '=')
+			p = "|=";
+		else
+			p = "|";
+	'^' =>
+		if(c1 == '=')
+			p = "^=";
+		else
+			p = "^";
+	'?' =>
+		if(c1 == '?' && c2 == '=')
+			p = "??=";
+		else if(c1 == '?')
+			p = "??";
+		else if(c1 == '.' && !isdigit(c2))
+			p = "?.";	# (a ? then a number is c?.5:d)
+		else
+			p = "?";
+	* =>
+		return error(l, st, sys->sprint("unexpected character U+%04X", c));
 	}
-	return error(l, st, sys->sprint("unexpected character U+%04X", c));
+	l.pos += len p;
+	return ptok(st, l.pos, p);
+}
+
+isasciiidstart(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '$';
+}
+
+isasciiidpart(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '$';
 }
 
 ptok(st, end: int, p: string): ref Tok
@@ -286,6 +402,18 @@ identname(l: ref Lex): (string, int, int)
 {
 	s := l.src;
 	n := len s;
+	# the usual name: ASCII letters, digits, _ and $, taken as a slice
+	st := l.pos;
+	i := st;
+	if(i < n && isasciiidstart(s[i])) {
+		i++;
+		while(i < n && isasciiidpart(s[i]))
+			i++;
+		if(i == n || s[i] < 16r80 && s[i] != '\\') {
+			l.pos = i;
+			return (s[st:i], 0, 1);
+		}
+	}
 	name := "";
 	esc := 0;
 	first := 1;

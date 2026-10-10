@@ -1,8 +1,10 @@
 # A JavaScript engine for InferNode
 
-Status: phases 2 and 3 are built (§13): the parser and the interpreter
-tier with the built-ins, on branch feat/js-engine.  The sandbox, the
-DOM binding and the compiled tiers are to come.
+Status (§13): the parser, the interpreter tier with the built-ins, the
+`js` command, the realm sandbox and the DOM binding in Charon are built,
+on branch feat/js-engine; Charon runs pages' scripts with `scripts on`.
+`/mnt/js`, the origin filter and webfs sessions, lazy compilation and
+the compiled tiers are to come.
 
 This is InferNode's script engine, not Charon's. Charon is its first and
 largest user. The same engine should serve a `js` command beside `sh`,
@@ -561,6 +563,15 @@ small separate fix should profiles of Limbo programs justify it.
 | `jsbuiltin.b` and the rest | The built-ins: Object to Date, typed arrays, Proxy, BigInt, iterator helpers, modules, explicit resource management |
 | `tests/js/t262.b` | test262, for parsing or (`-r`) running, each test in a fresh realm |
 | `tests/js/jsrun.b` | Run scripts in a realm; `$262.disasm(f)` shows a function's bytecode |
+| `appl/cmd/js.b` | js(1): files, `-e`, modules, a read-eval-print loop; `-t` timings, `-g n` collection stress |
+| `appl/lib/js/jsdom.b` | A web page's realm (`Js->page`): confinement, the DOM's natives over Charon's `Dom->Doc`, the event loop, fetching through webfs |
+| `lib/js/dom.js` | The DOM and the window in JavaScript over those natives: nodes, elements and the HTML element classes, events, selectors, forms, style and style sheets, URL, fetch and XMLHttpRequest, timers, storage, observers, custom elements, import maps |
+| `appl/lib/web/browser.b` | Charon's side: a realm per page with scripts, the host functions (layout, selectors, parsing), clicks and form input through the realm, a watchdog |
+| `tests/js/jspage.b`, `tests/js/pages/` | A page loaded headlessly with scripts on; `dom.html` checks 163 behaviours, `confine.html` the namespace |
+| `tests/js_engine_test.b` | The host interface: values, errors, control flow, jobs, host functions, realms apart |
+
+`appl/lib/ecmascript`, the old interpreter, is retired: Jwin (Acme's and
+Xenith's scripted window) uses `Js->deffn` and `Js->callfn`.
 
 The design is §9's: the engine's own heap, Dis and its JIT unchanged.
 The interpreter runs script-to-script calls in one loop without Limbo
@@ -572,19 +583,45 @@ points.
 ### Conformance (test262, 2026-10-10)
 
 - Parsing (`test/language`, `test/annexB/language`): all tests pass.
-- Running `test/language`: 94.7% of the tests run (the early-error tests
+- Running `test/language`: 98.3% (18638 of 18968; the early-error tests
   are counted by the parser's run).
-- Running `test/built-ins`: see the latest run in the branch's commits.
+- Running `test/built-ins`: 99.0% (17605 of 17791).
+- `t262 -g 16` runs them with a collection every sixteen allocations,
+  which is how the collector's missing roots were found.
 
 Skipped: proposals no browser ships (decorators, import defer and source
 phase imports, Temporal, ShadowRealm, the iterator proposals in
-progress), Atomics and SharedArrayBuffer, cross-realm tests.
+progress, await dictionaries, the error stack accessor, immutable array
+buffers), Atomics and SharedArrayBuffer, cross-realm tests.
+
+### Web pages
+
+A page's realm is a process that confines itself before running
+anything: a new process group, a namespace of only its grants (webfs,
+`/lib/js`, a `file:` page's own directory), no descriptors but standard
+error, no devices.  `tests/js/pages/confine.html` checks that it can
+read nothing else.  The document is Charon's own `Dom->Doc`, shared;
+each task holds the session's lock, and the page is laid out again
+before the lock is let go.  A script that runs 30 seconds is stopped.
+
+Gaps, in order: storage and cookies last as long as the page (no
+`/mnt/store` yet); the realm sees the whole of webfs, cookie jar
+included (no origin filter yet, §6.2: scripts cannot name files, so this
+matters only for an engine bug); POST forms from script; shadow DOM is
+not shown; no canvas, media or workers.
+
+Measured on twenty large sites: Wikipedia, Google, Mozilla and Hacker
+News run their scripts cleanly; the largest bundles (YouTube's 10.9 MB)
+need lazy compilation, as V8 does it: parsing alone holds about 90 bytes
+of tree per character of source.
 
 ### Speed
 
 The interpreter is 10-50x slower than QuickJS on the spike's benchmarks
 (calls are the worst).  That is what §9 predicted for an interpreter;
 the baseline tier is the answer, guided by profiles of real pages.
+
+Compiling a 430 KB bundle takes 100 ms; parsing it 200 ms.
 
 ### Toolchain bugs found on the way (reported, not fixed here)
 
@@ -598,4 +635,12 @@ the baseline tier is the answer, guided by profiles of real pages.
   the destination while building it, so `v = f(v)` can read a field it
   has already written.  Such functions in the engine have a local, which
   stops inlining.
+- A module implementing two interfaces (`implement A, B`) breaks its
+  function references (`invalid mframe`), so the page interface is part
+  of `Js`.
+- Dis strings hold 16-bit characters (`Rune` is `ushort`, whatever
+  `Runemax` says), so a character past the BMP assigned into one is
+  cut to 16 bits; the engine keeps UTF-16 as it is.
+- emu faults in `poolfree` after an allocation the arena refuses (seen
+  once, under collection stress).
 

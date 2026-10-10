@@ -727,18 +727,15 @@ compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
   once, under collection stress).
 - `sprint`'s precision is capped at 20, so `%.*f` cannot format
   `toFixed(100)`; the engine formats exact decimals itself.
-- emu with the JIT (`-c1`; arm64, Apple Silicon macOS; not yet tried on
-  amd64) corrupts its heap loading a copy
-  of BBC's front page from a loopback HTTP server, its subresources over
-  TLS from the real hosts: a freed string read in `indc`, faults in
-  `markheap`, `destroy`, `movp` and `irecv`, or the VM token held for
-  good; three runs in four, within seconds, with the page's scripts off
-  as well as on, so not the engine's doing.  The interpreter (`-c0`)
-  ran it seven times cleanly, and the same page loaded from bbc.com did
-  not fail.  Running the engine, Charon's modules, webfs and all of
-  `/dis/lib` interpreted under `-c1` did not reliably stop it, so which
-  compiled code is at fault is not known yet.  Not to be confused with
-  the GoDis gate's flake, which is amd64 (Linux CI) and faults under
-  `-c0` as well as `-c1`: the two may share a cause (the namespace races
-  of INFR-373), or not.
+- emu with the JIT corrupted its heap loading a page that opens many TLS
+  connections at once (a loopback copy of BBC's front page: three runs
+  in four, within seconds, with scripts off as well as on).  Found and
+  fixed (libinterp/xec.c): xec() released a compiled module's pending
+  Modlink before loading the next Prog's registers, and when that
+  release closed a file it released the VM, which saved the previous
+  Prog's registers as the next one's: two Progs on one stack.  Only
+  compiled modules defer the release, so `-c1` only, on every JIT
+  (verified on arm64; amd64 has the same code).  Reproducer after: 8 of
+  8 clean; tests/jit_unload_test.b has a deterministic case.  It is not
+  the GoDis gate's flake, which faults under `-c0` too.
 

@@ -14,6 +14,7 @@ attr cfg
 cfg cfg
 record cfg
 scene scene
+sheetview sheetview
 tuple cfg
 command command
 btos convcs

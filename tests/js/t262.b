@@ -20,6 +20,9 @@ include "draw.m";
 include "readdir.m";
 	readdir: Readdir;
 
+include "jslex.m";
+	jslex: Jslex;
+
 include "jsparse.m";
 	jsparse: Jsparse;
 
@@ -53,6 +56,7 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	readdir = load Readdir Readdir->PATH;
+	jslex = load Jslex Jslex->PATH;
 	jsparse = load Jsparse Jsparse->PATH;
 	if(jsparse == nil) {
 		sys->fprint(sys->fildes(2), "t262: cannot load %s: %r\n", Jsparse->PATH);
@@ -136,7 +140,7 @@ readfile(path: string): string
 		nb[len buf:] = b[0:n];
 		buf = nb;
 	}
-	return string buf;
+	return jslex->utf16(buf);
 }
 
 # the front matter's text between /*--- and ---*/

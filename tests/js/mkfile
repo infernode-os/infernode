@@ -8,6 +8,7 @@ SYSMODULES=\
 	sys.m\
 	draw.m\
 	readdir.m\
+	jslex.m\
 	jsparse.m\
 
 DISBIN=$ROOT/dis/tests/js

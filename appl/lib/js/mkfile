@@ -3,11 +3,13 @@
 TARG=\
 	jslex.dis\
 	jsparse.dis\
+	jscheck.dis\
 
 SYSMODULES=\
 	sys.m\
 	jslex.m\
 	jsparse.m\
+	jscheck.m\
 
 DISBIN=$ROOT/dis/lib/js
 

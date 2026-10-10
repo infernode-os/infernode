@@ -27,6 +27,9 @@ include "jslex.m";
 
 include "jsparse.m";
 
+include "jscheck.m";
+	jscheck: Jscheck;
+
 P: adt {
 	l:	ref Lex;
 	t:	ref Tok;	# the current token
@@ -62,6 +65,15 @@ parse(src: string, ismod, strict: int): (ref Node, string)
 		if(p.t.kind != Teof)
 			fail(p, p.t.pos, "unexpected " + desc(p.t));
 		prog := ref Node.Program(0, len src, body, ismod, p.strict);
+		if(jscheck == nil) {
+			jscheck = load Jscheck Jscheck->PATH;
+			if(jscheck == nil)
+				return (nil, sys->sprint("cannot load %s: %r", Jscheck->PATH));
+			jscheck->init();
+		}
+		(at, msg) := jscheck->check(prog);
+		if(msg != nil)
+			return (nil, where(src, at) + ": " + msg);
 		return (prog, nil);
 	} exception e {
 	"parse:*" =>
@@ -546,6 +558,9 @@ stmt(p: ref P, labelled: int): ref Node
 		"function" =>
 			if(!labelled || p.strict)
 				fail(p, pos, "function declaration in statement position");
+			n := peek(p);
+			if(n.kind == Tpunct && n.s == "*")
+				fail(p, pos, "labelled generator declaration");
 			return function(p, 1, 0, pos);
 		"class" or "const" =>
 			fail(p, pos, "declaration in statement position");
@@ -1920,7 +1935,7 @@ topattern(p: ref P, e: ref Node, binding: int, pos: int): ref Node
 				v := topattern(p, q.value, binding, pos);
 				pr[i] = ref Node.Prop(q.pos, q.end, q.key, v, Pinit, q.computed, q.shorthand);
 			Spread =>
-				if(i != len x.props - 1)
+				if(i != len x.props - 1 || trailingcomma(p, q.end, x.end))
 					fail(p, q.pos, "a rest property must be last");
 				a := topattern(p, q.arg, binding, pos);
 				if(tagof a != tagof Node.Ident && tagof a != tagof Node.Member)
@@ -1967,8 +1982,13 @@ arrowparams(p: ref P, e: ref Node): (array of ref Node, int)
 	Call =>
 		pick c := x.callee {
 		Ident =>
-			if(c.name != "async" || x.optional)
+			if(c.name != "async" || x.optional || p.l.src[c.pos:c.end] != "async")
 				fail(p, e.pos, "unexpected =>");
+			for(k := c.end; k < x.end && p.l.src[k] != '('; k++)
+				if(jslex->islt(p.l.src[k]))
+					fail(p, k, "line break after async");
+			if(len x.args > 0 && tagof x.args[len x.args - 1] == tagof Node.Spread && trailingcomma(p, x.args[len x.args - 1].end, x.end))
+				fail(p, x.args[len x.args - 1].pos, "a rest parameter must be last");
 		* =>
 			fail(p, e.pos, "unexpected =>");
 		}
@@ -2007,7 +2027,50 @@ arrowparams(p: ref P, e: ref Node): (array of ref Node, int)
 			fail(p, at, sys->sprint("'%s' is reserved in strict code", nm));
 	}
 	p.async = os;
+	if(async)
+		for(i = 0; i < len items; i++)
+			noawait(p, items[i]);
 	return (params, async);
+}
+
+# no await as a name in an async arrow's parameters, nor in the
+# parameters of arrows within them (parsed before they were known to be async)
+noawait(p: ref P, n: ref Node)
+{
+	if(n == nil)
+		return;
+	pick x := n {
+	Ident =>
+		if(x.name == "await")
+			fail(p, x.pos, "'await' in async arrow parameters");
+	Func =>
+		if(x.flags & Farrow)
+			for(i := 0; i < len x.params; i++)
+				noawait(p, x.params[i]);
+	Paren => noawait(p, x.e);
+	Seq => for(i := 0; i < len x.exprs; i++) noawait(p, x.exprs[i]);
+	Assign => noawait(p, x.target); noawait(p, x.value);
+	AssignPat => noawait(p, x.target); noawait(p, x.dflt);
+	Spread => noawait(p, x.arg);
+	Rest => noawait(p, x.arg);
+	Array => for(i := 0; i < len x.elems; i++) noawait(p, x.elems[i]);
+	ArrayPat => for(i := 0; i < len x.elems; i++) noawait(p, x.elems[i]);
+	Object => for(i := 0; i < len x.props; i++) noawait(p, x.props[i]);
+	ObjectPat => for(i := 0; i < len x.props; i++) noawait(p, x.props[i]);
+	Prop =>
+		if(x.computed)
+			noawait(p, x.key);
+		noawait(p, x.value);
+	Binary => noawait(p, x.l); noawait(p, x.r);
+	Logical => noawait(p, x.l); noawait(p, x.r);
+	Unary => noawait(p, x.arg);
+	Cond => noawait(p, x.test); noawait(p, x.cons); noawait(p, x.els);
+	Call => noawait(p, x.callee); for(i := 0; i < len x.args; i++) noawait(p, x.args[i]);
+	Member =>
+		noawait(p, x.obj);
+		if(x.computed)
+			noawait(p, x.prop);
+	}
 }
 
 # ---- left-hand side: member, call, new, optional chains ----

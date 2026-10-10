@@ -11,6 +11,9 @@ include "sys.m";
 
 include "draw.m";
 
+include "jslex.m";
+	jslex: Jslex;
+
 include "jsparse.m";
 	jsparse: Jsparse;
 
@@ -22,6 +25,7 @@ Jsp: module
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	jslex = load Jslex Jslex->PATH;
 	jsparse = load Jsparse Jsparse->PATH;
 	jsparse->init();
 	ismod := 0;
@@ -66,5 +70,5 @@ readfile(path: string): string
 		nb[len buf:] = b[0:n];
 		buf = nb;
 	}
-	return string buf;
+	return jslex->utf16(buf);
 }

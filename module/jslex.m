@@ -48,5 +48,8 @@ Jslex: module
 	init:	fn();
 	isidstart:	fn(c: int): int;
 	isidpart:	fn(c: int): int;
+	islt:	fn(c: int): int;
+	# UTF-8 source to the UTF-16 JavaScript reads (Dis strings hold only 16-bit characters)
+	utf16:	fn(b: array of byte): string;
 	reserved:	fn(s: string): int;	# a reserved word in all code (§12.7.2)
 };

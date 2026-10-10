@@ -154,6 +154,31 @@ testJit(t: ref T)
 	}
 }
 
+# the verifier refuses a module made wrong (a test spoils each one so), and
+# the code runs as interpreted
+testJitVerify(t: ref T)
+{
+	src := "let s = 0; const o = {x: 1}; for (let i = 0; i < 50; i++) { s = s + i * 2; o.x = o.x + 1; } s + o.x";
+	js := realm(t);
+	js->jit(0);
+	want := ev(js, src);
+	(nc, nr) := js->jitstats();
+	t.assert(nc > 0 && nr == 0, sys->sprint("compiled and passed: %d, %d", nc, nr));
+	js->shutdown();
+	for(l := "reg" :: "op" :: "jump" :: "deref" :: nil; l != nil; l = tl l) {
+		fd := sys->create("/env/jsjitcorrupt", Sys->OWRITE, 8r644);
+		sys->fprint(fd, "%s", hd l);
+		fd = nil;
+		js = realm(t);
+		js->jit(0);
+		t.assertseq(ev(js, src), want, hd l + ": the same, interpreted");
+		(nc, nr) = js->jitstats();
+		t.assert(nr > 0 && nc == 0, sys->sprint("%s: refused (%d compiled, %d refused)", hd l, nc, nr));
+		js->shutdown();
+	}
+	sys->remove("/env/jsjitcorrupt");
+}
+
 testErrors(t: ref T)
 {
 	js := realm(t);
@@ -242,6 +267,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Control", testControl);
 	run("Lazy", testLazy);
 	run("Jit", testJit);
+	run("JitVerify", testJitVerify);
 	run("Errors", testErrors);
 	run("Jobs", testJobs);
 	run("HostFunctions", testHostFunctions);

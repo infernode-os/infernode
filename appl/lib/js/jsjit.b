@@ -28,11 +28,19 @@ jitdir: string;
 jitst: ref Jitst;
 jitlast: ref Code;	# whose arrays jitst has
 jitcompiled := 0;	# functions compiled, for -t
+jitrejected := 0;	# made and not passed by the verifier
+jitdebug := 0;
+jitcorrupt: string;
 
 # Js->jit: when to compile (calls and loop iterations), -1 for never
 jit(n: int)
 {
 	jitthreshold = n;
+}
+
+jitstats(): (int, int)
+{
+	return (jitcompiled, jitrejected);
 }
 
 jitinit(): int
@@ -56,6 +64,15 @@ jitinit(): int
 	(ok, nil) := sys->stat("/tmp");
 	if(ok < 0)
 		return 0;
+	(dbg, nil) := sys->stat("/env/jsjitdebug");
+	jitdebug = dbg >= 0;
+	# a test's: each module made is spoilt so, for the verifier to refuse
+	if((fd := sys->open("/env/jsjitcorrupt", Sys->OREAD)) != nil) {
+		b := array[32] of byte;
+		k := sys->read(fd, b, len b);
+		if(k > 0)
+			jitcorrupt = string b[0:k];
+	}
 	jitdir = sys->sprint("/tmp/.jsjit.%d", sys->pctl(0, nil));
 	jitst = ref Jitst(vs, 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil);
 	jitok = 1;
@@ -655,6 +672,14 @@ jitcompile(c: ref Code): int
 	m.types = array[] of {ref Dis->Type(m.dsize, 0, nil), ref Dis->Type(Fsize, 2, array[] of {byte 0, byte 16r80})};
 	m.data = ref Disdata.Words((Dis->DEFW << 4), len words, 0, words) :: nil;
 	m.links = array[] of {ref Dis->Link(0, 1, jitsig, "run")};
+	if(jitcorrupt != nil)
+		spoil(m, c.nregs, jitcorrupt);
+	if((verr := jitverify(m, c.nregs)) != nil) {
+		jitrejected++;
+		if(jitdebug)
+			sys->fprint(sys->fildes(2), "js: compiled %s rejected: %s\n", c.name, verr);
+		return 0;
+	}
 	b := dis->writeobj(m);
 	path := sys->sprint("%s.%d.dis", jitdir, jitseq++);
 	fd := sys->create(path, Sys->OWRITE, 8r600);
@@ -674,4 +699,403 @@ jitcompile(c: ref Code): int
 	c.jitstate = 1;
 	jitcompiled++;
 	return 1;
+}
+
+# ---- the verifier ----
+#
+# A module made is checked before it is loaded (docs/JS-ENGINE.md §6.3:
+# the code generator is the trusted base).  A forward data flow over its
+# instructions keeps what each frame slot holds; every instruction must
+# be one the generator makes, with operands of the kinds it takes:
+# addresses only of an engine array's element (made by INDX, which Dis
+# bounds-checks) or of the frame's registers (below its count), read and
+# written at a V's fields or as a whole V; st's fields as their types;
+# jumps and the case table's targets within the code.  A slot that holds
+# different kinds on two ways in is unusable.  Not passing, the function
+# is not compiled.
+
+Ktop, Kint, Kreal, Kpst, Kret, Karrv, Karri, Karrs, Karra, Kev, Kei, Kes, Kea, Kshp, Kregs: con iota;
+
+# st's fields at 0, 8, ...: what each is
+stkinds := array[] of {Karrv, Kint, Karrv, Karrs, Karra, Karrs, Karri, Karri, Karri, Karri, Karra, Karri};
+
+Vst: adt {
+	m:	ref Dis->Mod;
+	nregs:	int;
+	err:	string;
+};
+
+jitverify(m: ref Dis->Mod, nregs: int): string
+{
+	n := len m.inst;
+	nslot := Fsize / 8;
+	if(len m.types < 2 || m.types[1].size != Fsize)
+		return "frame";
+	words: array of int;
+	for(dl := m.data; dl != nil; dl = tl dl)
+		pick w := hd dl {
+		Words =>
+			if(w.off == 0)
+				words = w.words;
+		}
+	if(words == nil || len words < 2 || words[0] * 3 + 2 != len words)
+		return "case table";
+	for(i := 1; i + 2 < len words; i += 3)
+		if(words[i+2] < 0 || words[i+2] >= n)
+			return "case target";
+	if(words[len words - 1] < 0 || words[len words - 1] >= n)
+		return "case default";
+	v := ref Vst(m, nregs, nil);
+	ins := array[n] of array of int;	# the kinds in each slot, coming in
+	entry := array[nslot] of {* => Ktop};
+	entry[Fst/8] = Kpst;
+	entry[Fpc/8] = Kint;
+	entry[Fret/8] = Kret;
+	ins[0] = entry;
+	work := 0 :: nil;
+	steps := 0;
+	while(work != nil) {
+		pc := hd work;
+		work = tl work;
+		if(++steps > 64 * n + 1024)
+			return "no fixed point";
+		st := array[nslot] of int;
+		st[0:] = ins[pc];
+		(succ, err) := vstep(v, m.inst[pc], st, words);
+		if(err != nil)
+			return sys->sprint("%d: %s", pc, err);
+		if(succ == nil && m.inst[pc].op != Dis->IRET && m.inst[pc].op != Dis->IJMP && m.inst[pc].op != Dis->ICASE) {
+			if(pc + 1 >= n)
+				return sys->sprint("%d: runs off the end", pc);
+			succ = pc + 1 :: nil;
+		} else if(isbranch(m.inst[pc].op)) {
+			if(pc + 1 >= n)
+				return sys->sprint("%d: runs off the end", pc);
+			succ = pc + 1 :: succ;
+		}
+		for(; succ != nil; succ = tl succ) {
+			t := hd succ;
+			if(t < 0 || t >= n)
+				return sys->sprint("%d: target %d", pc, t);
+			if(ins[t] == nil) {
+				ins[t] = array[nslot] of int;
+				ins[t][0:] = st;
+				work = t :: work;
+			} else {
+				changed := 0;
+				for(k := 0; k < nslot; k++)
+					if(ins[t][k] != st[k] && ins[t][k] != Ktop) {
+						ins[t][k] = Ktop;
+						changed = 1;
+					}
+				if(changed)
+					work = t :: work;
+			}
+		}
+	}
+	return nil;
+}
+
+isbranch(op: int): int
+{
+	return op >= Dis->IBEQB && op <= Dis->IBGEC;
+}
+
+isfbranch(op: int): int
+{
+	return op >= Dis->IBEQF && op <= Dis->IBGEF;
+}
+
+# check one instruction against the kinds in st, update st; the targets
+# beyond the next instruction
+vstep(v: ref Vst, in: ref Dis->Inst, st: array of int, words: array of int): (list of int, string)
+{
+	sm := (in.addr >> 3) & 7;
+	dm := in.addr & 7;
+	mm := in.addr & Dis->ARM;
+	case in.op {
+	Dis->IMOVW =>
+		(k, e) := vread(v, st, sm, in.src, 'w');
+		if(e != nil)
+			return (nil, e);
+		return (nil, vwrite(v, st, dm, in.dst, k, 'w'));
+	Dis->IMOVF =>
+		(nil, e) := vread(v, st, sm, in.src, 'f');
+		if(e != nil)
+			return (nil, e);
+		return (nil, vwrite(v, st, dm, in.dst, Kreal, 'f'));
+	Dis->IMOVM =>
+		if(mm != Dis->AXIMM || in.mid != Vsize)
+			return (nil, "movm of other than a V");
+		(nil, e) := vread(v, st, sm, in.src, 'm');
+		if(e != nil)
+			return (nil, e);
+		return (nil, vwrite(v, st, dm, in.dst, Ktop, 'm'));
+	Dis->ICVTWF =>
+		(k, e) := vread(v, st, sm, in.src, 'w');
+		if(e != nil || k != Kint)
+			return (nil, "cvtwf of " + kindname(k) + e);
+		return (nil, vwrite(v, st, dm, in.dst, Kreal, 'f'));
+	Dis->ICVTFW =>
+		(nil, e) := vread(v, st, sm, in.src, 'f');
+		if(e != nil)
+			return (nil, e);
+		return (nil, vwrite(v, st, dm, in.dst, Kint, 'w'));
+	Dis->IADDW or Dis->ISUBW or Dis->IMULW or Dis->IANDW or Dis->IORW or Dis->IXORW or Dis->ISHRW or Dis->IMODW =>
+		(k, e) := vread(v, st, sm, in.src, 'w');
+		if(e != nil || k != Kint)
+			return (nil, "word arithmetic on " + kindname(k) + e);
+		if(mm == Dis->AXINF) {
+			if(slotkind(st, in.mid) != Kint)
+				return (nil, "word arithmetic on " + kindname(slotkind(st, in.mid)));
+		} else if(mm == Dis->AXNON) {
+			if(dm != Dis->AFP || slotkind(st, in.dst) != Kint)
+				return (nil, "word arithmetic into other than a word");
+		} else if(mm != Dis->AXIMM)
+			return (nil, "middle operand");
+		if(dm != Dis->AFP)
+			return (nil, "word arithmetic into memory");
+		return (nil, vwrite(v, st, dm, in.dst, Kint, 'w'));
+	Dis->IADDF or Dis->ISUBF or Dis->IMULF or Dis->IDIVF or Dis->INEGF =>
+		(nil, e) := vread(v, st, sm, in.src, 'f');
+		if(e != nil)
+			return (nil, e);
+		if(in.op != Dis->INEGF) {
+			if(mm == Dis->AXINF) {
+				if(slotkind(st, in.mid) != Kreal)
+					return (nil, "real arithmetic on " + kindname(slotkind(st, in.mid)));
+			} else if(mm != Dis->AXNON || dm != Dis->AFP || slotkind(st, in.dst) != Kreal)
+				return (nil, "real arithmetic operands");
+		}
+		return (nil, vwrite(v, st, dm, in.dst, Kreal, 'f'));
+	Dis->IINDX =>
+		if(sm != Dis->AFP || mm != Dis->AXINF)
+			return (nil, "indx operands");
+		ak := slotkind(st, in.src);
+		ik := Kint;
+		if(dm == Dis->AFP)
+			ik = slotkind(st, in.dst);
+		else if(dm != Dis->AIMM)
+			return (nil, "indx index");
+		if(ik != Kint)
+			return (nil, "indx by " + kindname(ik));
+		r: int;
+		case ak {
+		Karrv =>
+			r = Kev;
+			if(in.src == Fvs && in.mid == Fbp && dm == Dis->AFP && in.dst == Fbase)
+				r = Kregs;	# the frame's registers: &vs[base]
+		Karri =>
+			r = Kei;
+		Karrs =>
+			r = Kes;
+		Karra =>
+			r = Kea;
+		* =>
+			return (nil, "indx of " + kindname(ak));
+		}
+		return (nil, vwrite(v, st, Dis->AFP, in.mid, r, 'w'));
+	Dis->ICASE =>
+		if(sm != Dis->AFP || slotkind(st, in.src) != Kint || dm != Dis->AMP || in.dst != 0)
+			return (nil, "case operands");
+		l: list of int;
+		for(i := 1; i + 2 < len words; i += 3)
+			l = words[i+2] :: l;
+		return (words[len words - 1] :: l, nil);
+	Dis->IJMP =>
+		if(dm != Dis->AIMM)
+			return (nil, "jmp target");
+		return (in.dst :: nil, nil);
+	Dis->IRET =>
+		return (nil, nil);
+	* =>
+		if(!isbranch(in.op))
+			return (nil, "opcode " + dis->op2s(in.op));
+		acc := 'w';
+		if(isfbranch(in.op))
+			acc = 'f';
+		(k1, e) := vread(v, st, sm, in.src, acc);
+		if(e != nil)
+			return (nil, e);
+		k2 := Kint;
+		case mm {
+		Dis->AXINF =>
+			k2 = slotkind(st, in.mid);
+			if(acc == 'f' && k2 != Kreal)
+				return (nil, "real branch on " + kindname(k2));
+		Dis->AXIMM =>
+			if(acc == 'f')
+				return (nil, "real branch on an immediate");
+		* =>
+			return (nil, "branch operand");
+		}
+		if(acc == 'w' && !(k1 == Kint && k2 == Kint || k1 == Kshp && k2 == Kshp))
+			return (nil, "branch on " + kindname(k1) + " and " + kindname(k2));
+		if(dm != Dis->AIMM)
+			return (nil, "branch target");
+		return (in.dst :: nil, nil);
+	}
+}
+
+slotkind(st: array of int, off: int): int
+{
+	if(off < 0 || off % 8 != 0 || off / 8 >= len st)
+		return Ktop;
+	return st[off/8];
+}
+
+# what an operand read gives (acc: 'w' a word, 'f' a real, 'm' a whole V)
+vread(v: ref Vst, st: array of int, mode, val, acc: int): (int, string)
+{
+	case mode {
+	Dis->AIMM =>
+		if(acc != 'w')
+			return (Ktop, "immediate");
+		return (Kint, nil);
+	Dis->AFP =>
+		if(acc == 'm')
+			return (Ktop, "a whole V from the frame");
+		k := slotkind(st, val);
+		if(k == Ktop || k == Kret)
+			return (Ktop, sys->sprint("slot %d unknown", val));
+		if(acc == 'f' && k != Kreal || acc == 'w' && k == Kreal)
+			return (Ktop, sys->sprint("slot %d is %s", val, kindname(k)));
+		return (k, nil);
+	Dis->AIND|Dis->AFP =>
+		outer := (val >> 16) & 16rFFFF;
+		inner := val & 16rFFFF;
+		k := slotkind(st, outer);
+		case k {
+		Kpst =>
+			if(acc != 'w' || inner % 8 != 0 || inner / 8 >= len stkinds)
+				return (Ktop, "st field");
+			return (stkinds[inner/8], nil);
+		Kev or Kregs =>
+			f := inner;
+			if(k == Kregs) {
+				if(inner / Vsize >= v.nregs)
+					return (Ktop, sys->sprint("register %d of %d", inner / Vsize, v.nregs));
+				f = inner % Vsize;
+			} else if(inner >= Vsize)
+				return (Ktop, "past a V");
+			case acc {
+			'w' =>
+				if(f != 0 && f != 8)
+					return (Ktop, "a V's word");
+				return (Kint, nil);
+			'f' =>
+				if(f != 16)
+					return (Ktop, "a V's real");
+				return (Kreal, nil);
+			* =>
+				if(f != 0)
+					return (Ktop, "a V not at its start");
+				return (Ktop, nil);
+			}
+		Kei =>
+			if(acc != 'w' || inner != 0)
+				return (Ktop, "an int element");
+			return (Kint, nil);
+		Kes =>
+			if(acc != 'w' || inner != 0)
+				return (Ktop, "a shape element");
+			return (Kshp, nil);
+		Kea =>
+			if(acc != 'w' || inner != 0)
+				return (Ktop, "an array element");
+			return (Karrv, nil);
+		Kshp =>
+			if(acc != 'w' || inner != Shgen)
+				return (Ktop, "a shape's field");
+			return (Kint, nil);
+		}
+		return (Ktop, "through " + kindname(k));
+	}
+	return (Ktop, "operand mode");
+}
+
+vwrite(v: ref Vst, st: array of int, mode, val, kind, acc: int): string
+{
+	case mode {
+	Dis->AFP =>
+		if(acc == 'm')
+			return "a whole V into the frame";
+		if(val < Fst || val % 8 != 0 || val / 8 >= len st || val == Fst)
+			return sys->sprint("slot %d", val);
+		st[val/8] = kind;
+		return nil;
+	Dis->AIND|Dis->AFP =>
+		outer := (val >> 16) & 16rFFFF;
+		inner := val & 16rFFFF;
+		k := slotkind(st, outer);
+		case k {
+		Kret =>
+			if(acc != 'w' || inner != 0 || kind != Kint)
+				return "the result";
+			return nil;
+		Kev or Kregs =>
+			f := inner;
+			if(k == Kregs) {
+				if(inner / Vsize >= v.nregs)
+					return sys->sprint("register %d of %d", inner / Vsize, v.nregs);
+				f = inner % Vsize;
+			} else if(inner >= Vsize)
+				return "past a V";
+			case acc {
+			'w' =>
+				if(f != 0 && f != 8 || kind != Kint)
+					return "a V's word";
+			'f' =>
+				if(f != 16)
+					return "a V's real";
+			* =>
+				if(f != 0)
+					return "a V not at its start";
+			}
+			return nil;
+		}
+		return "into " + kindname(k);
+	}
+	return "destination mode";
+}
+
+kindname(k: int): string
+{
+	names := array[] of {"unknown", "word", "real", "st", "result", "V array", "int array", "shape array",
+		"array array", "V", "int", "shape slot", "array slot", "shape", "registers"};
+	if(k < 0 || k >= len names)
+		return "?";
+	return names[k];
+}
+
+# spoil m as a test asks (/env/jsjitcorrupt), at the first place it can
+spoil(m: ref Dis->Mod, nregs: int, how: string)
+{
+	for(i := 0; i < len m.inst; i++) {
+		in := m.inst[i];
+		case how {
+		"reg" =>
+			# a register past the frame's
+			if((in.addr & 7) == (Dis->AIND|Dis->AFP) && ((in.dst >> 16) & 16rFFFF) == Fbp) {
+				in.dst = (Fbp << 16) | (nregs * Vsize);
+				return;
+			}
+		"op" =>
+			if(in.op == Dis->IMOVM) {
+				in.op = Dis->IMOVP;
+				return;
+			}
+		"jump" =>
+			if(in.op == Dis->IJMP) {
+				in.dst = len m.inst + 5;
+				return;
+			}
+		"deref" =>
+			# through a word as though an address
+			if(in.op == Dis->IMOVM && ((in.addr >> 3) & 7) == (Dis->AIND|Dis->AFP)) {
+				in.src = (Ft << 16) | 0;
+				return;
+			}
+		}
+	}
 }

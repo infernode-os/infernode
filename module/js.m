@@ -63,6 +63,7 @@ Js: module
 	# first called (and their trees let go once parsed); 0: every source
 	lazy:	fn(minlen: int);
 	jit:	fn(n: int);	# compile a function after n calls and loop iterations; -1 never
+	jitstats:	fn(): (int, int);	# functions compiled, and made but refused by the verifier
 
 	# give the realm test262's host object, $262
 	test262:	fn();

@@ -245,52 +245,6 @@ varlist(body: array of ref Node, top: int, acc: list of ref Name): list of ref N
 	return acc;
 }
 
-# the vars of for-of heads within s (which a catch parameter may not share, Annex B.3.4)
-forofvars(s: ref Node, acc: list of ref Name): list of ref Name
-{
-	if(s == nil)
-		return acc;
-	pick x := s {
-	ForOf =>
-		pick v := x.left {
-		Var =>
-			if(v.kind == Kvar)
-				acc = bound(x.left, acc);
-		}
-		acc = forofvars(x.body, acc);
-	Block =>
-		for(i := 0; i < len x.body; i++)
-			acc = forofvars(x.body[i], acc);
-	If =>
-		acc = forofvars(x.cons, acc);
-		acc = forofvars(x.els, acc);
-	While =>
-		acc = forofvars(x.body, acc);
-	DoWhile =>
-		acc = forofvars(x.body, acc);
-	For =>
-		acc = forofvars(x.body, acc);
-	ForIn =>
-		acc = forofvars(x.body, acc);
-	With =>
-		acc = forofvars(x.body, acc);
-	Labeled =>
-		acc = forofvars(x.body, acc);
-	Switch =>
-		for(i := 0; i < len x.cases; i++)
-			pick c := x.cases[i] {
-			Case =>
-				for(j := 0; j < len c.body; j++)
-					acc = forofvars(c.body[j], acc);
-			}
-	Try =>
-		acc = forofvars(x.block, acc);
-		acc = forofvars(x.handler, acc);
-		acc = forofvars(x.final, acc);
-	}
-	return acc;
-}
-
 find(l: list of ref Name, s: string): ref Name
 {
 	for(; l != nil; l = tl l)
@@ -564,7 +518,6 @@ walk(n: ref Node, c: ref Ctx)
 			Block =>
 				disjoint(pn, lexnames(h.body, 0));
 			}
-			disjoint(pn, forofvars(x.handler, nil));
 			walk(x.param, c);
 		}
 		walk(x.handler, c);

@@ -30,6 +30,9 @@ include "jsparse.m";
 include "jscheck.m";
 	jscheck: Jscheck;
 
+include "jsre.m";
+	jsre: Jsre;
+
 P: adt {
 	l:	ref Lex;
 	t:	ref Tok;	# the current token
@@ -2288,6 +2291,18 @@ primary(p: ref P): ref Node
 				fail(p, p.l.errpos, p.l.err);
 			r.nlb = t.nlb;
 			p.t = r;
+			# a pattern's errors are early errors
+			if(jsre == nil) {
+				jsre = load Jsre Jsre->PATH;
+				if(jsre == nil)
+					fail(p, pos, sys->sprint("cannot load %s: %r", Jsre->PATH));
+				jsre->init();
+			}
+			(rf, ferr) := jsre->parseflags(r.flags);
+			if(ferr == nil)
+				(nil, ferr) = jsre->parse(r.s, rf);
+			if(ferr != nil)
+				fail(p, pos, ferr);
 			next(p);
 			return ref Node.Regex(pos, r.end, r.s, r.flags);
 		}

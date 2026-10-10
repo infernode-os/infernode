@@ -126,6 +126,8 @@ skip(l: ref Lex): int
 	s := l.src;
 	n := len s;
 	nl := 0;
+	# --> begins a comment where only white space and comments precede it on its line
+	startline := l.pos == 0 || atlinestart(l);
 	while(l.pos < n) {
 		c := s[l.pos];
 		if(isws(c)) {
@@ -170,7 +172,7 @@ skip(l: ref Lex): int
 					l.pos++;
 				continue;
 			}
-			if(c == '-' && (nl || l.pos == 0 || atlinestart(l)) && l.pos + 2 < n && s[l.pos+1] == '-' && s[l.pos+2] == '>') {
+			if(c == '-' && (nl || startline) && l.pos + 2 < n && s[l.pos+1] == '-' && s[l.pos+2] == '>') {
 				while(l.pos < n && !islt(s[l.pos]))
 					l.pos++;
 				continue;

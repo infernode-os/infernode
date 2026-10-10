@@ -1231,6 +1231,16 @@ jobs:
           "$XAPP/Contents/Resources/Credits.rtf"
         cp -a MacOSX/Xenith.app/. "$XAPP/"
 
+        # Both apps carry the release's version, as Finder's Get Info and
+        # the About box show it: the tag's, less any pre-release suffix,
+        # which CFBundleVersion does not allow.
+        PLISTVER="${VERSION%%-*}"
+        for A in "$APP" "$XAPP"; do
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $PLISTVER" \
+            -c "Set :CFBundleVersion $PLISTVER" "$A/Contents/Info.plist"
+          echo "$A: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$A/Contents/Info.plist")"
+        done
+
         # CI guard: refuse to ship testing-only harness files. See CLAUDE.md
         # ring-fence rule. Load-bearing — survives source-tree refactor.
         if find "$APP" "$XAPP" \( -name 'serve-agent*' -o -path '*agent-harness*' \) -print -quit | grep -q .; then

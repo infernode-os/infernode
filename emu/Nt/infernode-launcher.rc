@@ -8,6 +8,11 @@
 
 #include <windows.h>
 
+// LVERNUM and LVERSTR, the release's version: launcher-version.h is
+// written by build-launcher.ps1 from include/version.h, which the
+// release stamps with its tag.
+#include "launcher-version.h"
+
 // IDI_APPLICATION must be the FIRST icon in the resource script - Windows
 // uses the lowest-ordinal icon as the file's representative icon in
 // Explorer thumbnails and shortcuts.
@@ -16,8 +21,8 @@
 // Version info: lets the file properties dialog show product / company /
 // description fields. Mostly cosmetic but expected for a release binary.
 1 VERSIONINFO
-FILEVERSION     0,2,0,0
-PRODUCTVERSION  0,2,0,0
+FILEVERSION     LVERNUM
+PRODUCTVERSION  LVERNUM
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -30,12 +35,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "InferNode.io"
             VALUE "FileDescription",  "InferNode - Inferno OS distribution"
-            VALUE "FileVersion",      "0.2.0"
+            VALUE "FileVersion",      LVERSTR
             VALUE "InternalName",     "InferNode"
             VALUE "LegalCopyright",   "Copyright 2026 The InferNode Authors. MIT License."
             VALUE "OriginalFilename", "InferNode.exe"
             VALUE "ProductName",      "InferNode"
-            VALUE "ProductVersion",   "0.2.0"
+            VALUE "ProductVersion",   LVERSTR
         END
     END
     BLOCK "VarFileInfo"

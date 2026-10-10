@@ -28,11 +28,11 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName",      "Synectify"
+            VALUE "CompanyName",      "InferNode.io"
             VALUE "FileDescription",  "Xenith - the InferNode text environment"
             VALUE "FileVersion",      "0.2.0"
             VALUE "InternalName",     "Xenith"
-            VALUE "LegalCopyright",   "Copyright (c) Synectify and contributors"
+            VALUE "LegalCopyright",   "Copyright 2026 The InferNode Authors. MIT License."
             VALUE "OriginalFilename", "Xenith.exe"
             VALUE "ProductName",      "Xenith"
             VALUE "ProductVersion",   "0.2.0"

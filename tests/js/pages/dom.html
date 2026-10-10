@@ -318,6 +318,11 @@ atest('slots', async () => {
 	check('slotchange on a child added', changes.join(), 'c');
 	h.remove();
 });
+test('attributes by name', () => {
+	check('named', document.body.attributes['data-foo-bar'].value, 'baz');
+	check('not enumerated', Object.keys(document.body.attributes).includes('class'), false);
+	check('length is the length', typeof document.body.attributes.length, 'number');
+});
 test('clock', () => {
 	check('this year', new Date().getFullYear() >= 2026, true);
 	check('now', Math.abs(Date.now() - performance.timeOrigin - performance.now()) < 2000, true);

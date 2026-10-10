@@ -1195,12 +1195,45 @@ button1(w: ref Window)
 		result(w, d, res);
 		return;
 	}
-	(word, r) := wordat(d, n, p);
+	(word, r, k) := wordat(d, n, p);
 	d.word = word;
 	d.wordat = (n, r);
-	draw(w);
 	if(word != nil)
-		w.body.file.curtext = w.body;
+		selectword(w, d, n, k, word);
+	draw(w);
+}
+
+# The word clicked on the drawing selected in the window's text too,
+# so Snarf, Look and the rest take it: the occurrence of it whose
+# place among its kind matches its place among the words drawn (the
+# text and the drawing go in the same order)
+selectword(w: ref Window, d: ref Doc, n, k: int, word: string)
+{
+	nth := 0;
+	for(m := 0; m <= n; m++){
+		runs := d.eng->runs(d.h, m);
+		last := len runs;
+		if(m == n)
+			last = k;
+		for(i := 0; i < last; i++)
+			if(runs[i].text == word)
+				nth++;
+	}
+	text := bodytext(w);
+	q := -1;
+	for(i := 0; i + len word <= len text; i++)
+		if(text[i:i+len word] == word){
+			q = i;
+			if(nth-- == 0)
+				break;
+		}
+	if(q < 0)
+		return;
+	w.body.q0 = q;
+	w.body.q1 = q + len word;
+	w.body.file.curtext = w.body;
+	dat->seltext = w.body;
+	dat->argtext = w.body;
 }
 
 # Button 2: the word there, to be executed
@@ -1215,7 +1248,7 @@ button2(w: ref Window): (string, int)
 	(n, p) := at(w, d, p0);
 	if(n < 0)
 		return (nil, 0);
-	(word, nil) := wordat(d, n, p);
+	(word, nil, nil) := wordat(d, n, p);
 	return (word, word != nil);
 }
 
@@ -1239,18 +1272,19 @@ button3(w: ref Window): (string, string)
 	}
 	if((u := d.eng->linkat(d.h, n, p)) != nil)
 		return (u, nil);
-	(word, nil) := wordat(d, n, p);
+	(word, nil, nil) := wordat(d, n, p);
 	return (nil, word);
 }
 
-# The word at p on sheet n, and where it is, from the engine's runs
-wordat(d: ref Doc, n: int, p: Point): (string, Rect)
+# The word at p on sheet n, where it is, and which of the sheet's
+# words it is, from the engine's runs
+wordat(d: ref Doc, n: int, p: Point): (string, Rect, int)
 {
 	runs := d.eng->runs(d.h, n);
 	for(i := 0; i < len runs; i++)
 		if(p.in(runs[i].r))
-			return (runs[i].text, runs[i].r);
-	return (nil, Rect((0, 0), (0, 0)));
+			return (runs[i].text, runs[i].r, i);
+	return (nil, Rect((0, 0), (0, 0)), -1);
 }
 
 # ---- commands ----

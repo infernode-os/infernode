@@ -160,6 +160,32 @@ f=`{cat $W/doc/find}
 if {~ ${index 1 $f} 1} {ok 'doc/find finds a word on the page:' $f} {bad 'doc/find:' $f}
 if {echo nosuchwordanywhere > $W/doc/find} {bad 'a word not there was found'} {ok 'a word not there is not found'}
 
+# a word clicked on the drawing is selected in the window's text too:
+# where West is on the screen, from doc/find (on the page, at scale 100)
+# and doc/ctl (the scale, where the view is), clicked through
+# /dev/pointer
+load expr
+echo Center > $W/doc/find
+f=`{cat $W/doc/find}
+sc=`{attr $id scale}
+scr=`{attr $id screen}
+view=`{attr $id view}
+col=`{attr $id column}
+vw=${index 3 $view}
+colw=${index 1 $col}
+sw=${expr 612 $sc x 100 /}
+x=${expr ${index 1 $scr} $colw $sw - 2 / +}
+if {ntest ${expr $colw $vw '<'}} {x=${expr $x $vw $colw - 2 / +}} {x=${expr $x ${index 1 $view} -}}
+y=${expr ${index 2 $scr} 12 + ${index 2 $view} -}
+cx=${expr $x ${index 2 $f} ${index 4 $f} + 2 / $sc x 100 / +}
+cy=${expr $y ${index 3 $f} ${index 5 $f} + 2 / $sc x 100 / +}
+echo m $cx $cy 0 > /dev/pointer
+echo m $cx $cy 1 > /dev/pointer
+echo m $cx $cy 0 > /dev/pointer
+sleep 1
+sel=`{cat $W/rdsel}
+check 'a word clicked on the drawing is selected in the text' $"sel Center
+
 # ---- a file open as text, plumbed: shown as the document ----
 
 PDF2=/tmp/xenith_doc_test2.pdf

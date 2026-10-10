@@ -951,7 +951,7 @@ num_tofixed(this: V, a, n: int, nil: V, nil: int): V
 	neg := x < 0.0;
 	if(neg)
 		x = -x;
-	s := roundhalfup(sys->sprint("%.*f", f, x), sys->sprint("%.*f", f + 30, x), f);
+	s := fixeddigits(x, f);
 	if(neg && x != 0.0 && !allzero(s))
 		s = "-" + s;
 	return strv(s);
@@ -971,8 +971,8 @@ allzero(s: string): int
 roundhalfup(short, long: string, f: int): string
 {
 	p := strindex(long, ".", 0);
-	if(p < 0)
-		return short;
+	if(p < 0 || p + 1 + f > len long)
+		return short;	# (printf gives no more than its own precision)
 	rest := long[p+1+f:];
 	if(len rest == 0 || rest[0] != '5')
 		return short;
@@ -1029,8 +1029,11 @@ num_toexponential(this: V, a, n: int, nil: V, nil: int): V
 		s += expsuffix(e);
 	} else {
 		f := int fd;
-		s = sys->sprint("%.*e", f, x);
-		s = fixexp(roundexp(s, x, f));
+		(d, e) := precdigits(x, f + 1);
+		s = d[0:1];
+		if(f > 0)
+			s += "." + d[1:];
+		s += expsuffix(e);
 	}
 	if(neg)
 		s = "-" + s;
@@ -1123,8 +1126,7 @@ num_toprecision(this: V, a, n: int, nil: V, nil: int): V
 				s[len s] = '0';
 		}
 	} else {
-		es := roundexp(sys->sprint("%.*e", ip - 1, x), x, ip - 1);
-		(d, e) := splitexp(es);
+		(d, e) := precdigits(x, ip);
 		if(e < -6 || e >= ip) {
 			s = d[0:1];
 			if(ip > 1)
@@ -1144,6 +1146,85 @@ num_toprecision(this: V, a, n: int, nil: V, nil: int): V
 	if(neg)
 		s = "-" + s;
 	return strv(s);
+}
+
+# ---- exact decimal forms (printf gives no more than 20 places) ----
+
+# x * 10^k, rounded half up to an integer (x finite, not negative)
+scaledround(x: real, k: int): ref IPint
+{
+	ip();
+	bits := math->realbits64(x);
+	ex := int ((bits >> 52) & big 16r7FF);
+	m := bits & ((big 1 << 52) - big 1);
+	e: int;
+	if(ex == 0)
+		e = -1074;
+	else {
+		m |= big 1 << 52;
+		e = ex - 1075;
+	}
+	num := IPint.strtoip(string m, 10);
+	den := IPint.inttoip(1);
+	if(e >= 0)
+		num = num.shl(e);
+	else
+		den = den.shl(-e);
+	if(k >= 0)
+		num = num.mul(pow10ip(k));
+	else
+		den = den.mul(pow10ip(-k));
+	(q, nil) := num.shl(1).add(den).div(den.shl(1));
+	return q;
+}
+
+pow10ip(k: int): ref IPint
+{
+	r := IPint.inttoip(1);
+	ten := IPint.inttoip(10);
+	for(i := 0; i < k; i++)
+		r = r.mul(ten);
+	return r;
+}
+
+# x to f places
+fixeddigits(x: real, f: int): string
+{
+	d := scaledround(x, f).iptostr(10);
+	while(len d < f + 1)
+		d = "0" + d;
+	if(f == 0)
+		return d;
+	return d[0:len d - f] + "." + d[len d - f:];
+}
+
+# x's first p significant digits (rounded half up) and its decimal exponent
+precdigits(x: real, p: int): (string, int)
+{
+	if(x == 0.0) {
+		d := "";
+		for(i := 0; i < p; i++)
+			d[len d] = '0';
+		return (d, 0);
+	}
+	e := int math->floor(math->log10(x));
+	for(tries := 0; tries < 4; tries++) {
+		d := scaledround(x, p - 1 - e).iptostr(10);
+		if(len d > p)
+			e++;		# rounded up to the next power of ten, or e was low
+		else if(len d < p)
+			e--;
+		else {
+			# a value just under a power of ten may round up to it at
+			# this exponent while having p digits at the one below
+			d1 := scaledround(x, p - e).iptostr(10);
+			if(len d1 == p)
+				return (d1, e - 1);
+			return (d, e);
+		}
+	}
+	d := scaledround(x, p - 1 - e).iptostr(10);
+	return (d[0:p], e);
 }
 
 # ---- Math ----

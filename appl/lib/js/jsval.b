@@ -1473,7 +1473,10 @@ strnum(s: string): real
 	if(i != len s)
 		return nan;
 	st = 0;
-	return decimal(s);
+	v := decimal(s);
+	if(v == 0.0 && s[0] == '-')
+		return -0.0;	# (the conversion loses zero's sign)
+	return v;
 }
 
 digitval(c: int): int

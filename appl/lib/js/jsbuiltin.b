@@ -147,6 +147,7 @@ realminit()
 	collectionsinit();
 	promiseinit();
 	regexpinit();
+	dateinit();
 	reflectinit();
 	generatorinit();
 }

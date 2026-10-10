@@ -25,6 +25,9 @@ include "sys.m";
 include "math.m";
 	math: Math;
 
+include "daytime.m";
+	daytime: Daytime;
+
 include "jslex.m";
 	jslex: Jslex;
 
@@ -48,6 +51,7 @@ include "jsarray.b";
 include "jsstring.b";
 include "jscoll.b";
 include "jsregexp.b";
+include "jsdate.b";
 
 output: ref fn(s: string);
 

@@ -823,6 +823,7 @@ dis/tests/taskparse_test.dis
 dis/tests/tcp_test.dis
 dis/tests/tempfile_test.dis
 dis/tests/js/jsp.dis
+dis/tests/js/jspage.dis
 dis/tests/js/jsrun.dis
 dis/tests/js/t262.dis
 dis/tests/testing/testing_test.dis

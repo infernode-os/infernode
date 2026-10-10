@@ -53,6 +53,8 @@ Page: module
 	#				and file: images, which cost no fetch, always do
 	#	fonts web | system	system: no @font-face fonts are fetched
 	#	effects on | off	off: no shadows or filters are drawn
+	#	scripts on | off	on: a page's scripts run, each page's in a
+	#				realm confined to the network (Browser; jsdom.m)
 	# The user's settings file holds the same lines.  It is read when
 	# the module starts and again when it has changed, so a setting
 	# saved by one program reaches the others.

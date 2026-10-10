@@ -29,6 +29,7 @@ SYSMODULES=\
 	web/browser.m\
 	web/charonfs.m\
 	web/wordbreak.m\
+	js.m\
 	outlinefont.m\
 	draw.m\
 	math.m\

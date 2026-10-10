@@ -2059,6 +2059,7 @@ settings0()
 		ref Setting("images", array[] of {"on", "click"}, "on"),
 		ref Setting("fonts", array[] of {"web", "system"}, "web"),
 		ref Setting("effects", array[] of {"on", "off"}, "on"),
+		ref Setting("scripts", array[] of {"on", "off"}, "off"),
 	};
 }
 

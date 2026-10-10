@@ -17,6 +17,7 @@ include "draw.m";
 include "jslex.m";
 	jslex: Jslex;
 
+include "web/dom.m";
 include "js.m";
 	js: Js;
 

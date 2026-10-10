@@ -17,6 +17,7 @@ implement Js;
 #	jsarray.b	Array
 #	jsstring.b	String, Number, Math, JSON
 #	jscoll.b	Map, Set, weak collections, Promise, Reflect, iterators, generators
+#	jsdom.b		a web page's realm: the DOM's natives, the event loop, fetching
 #
 
 include "sys.m";
@@ -44,6 +45,11 @@ include "jsre.m";
 
 include "js.m";
 
+include "web/dom.m";
+	dom: Dom;
+	Doc: import dom;
+
+
 include "jsval.b";
 include "jsobj.b";
 include "jsops.b";
@@ -62,6 +68,7 @@ include "jstyped.b";
 include "jsiter.b";
 include "jsdispose.b";
 include "jsmod.b";
+include "jsdom.b";
 
 output: ref fn(s: string);
 

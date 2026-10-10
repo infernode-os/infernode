@@ -26,6 +26,7 @@ include "jslex.m";
 include "jsparse.m";
 	jsparse: Jsparse;
 
+include "web/dom.m";
 include "js.m";
 	js: Js;
 

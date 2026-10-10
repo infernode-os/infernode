@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><title>start</title>
+<script>
+console.log('head script ran', typeof document, document.readyState);
+document.title = 'from script';
+</script></head>
+<body>
+<p id="p1">Hello</p>
+<ul id="list"></ul>
+<script>
+const ul = document.getElementById('list');
+for (const w of ['one', 'two', 'three']) {
+	const li = document.createElement('li');
+	li.textContent = w;
+	ul.appendChild(li);
+}
+document.querySelector('#p1').textContent += ', world';
+document.addEventListener('DOMContentLoaded', () => console.log('DOMContentLoaded', document.readyState));
+window.addEventListener('load', () => { console.log('load'); document.body.appendChild(document.createTextNode('loaded')); });
+setTimeout(() => { document.getElementById('p1').classList.add('x'); console.log('timer', document.getElementById('p1').className); }, 50);
+</script>
+</body></html>

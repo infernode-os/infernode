@@ -4,6 +4,7 @@ TARG=\
 	t262.dis\
 	jsp.dis\
 	jsrun.dis\
+	jspage.dis\
 
 SYSMODULES=\
 	sys.m\
@@ -12,6 +13,14 @@ SYSMODULES=\
 	jslex.m\
 	jsparse.m\
 	js.m\
+	web/dom.m\
+	web/css.m\
+	web/style.m\
+	outlinefont.m\
+	web/fonts.m\
+	web/layout.m\
+	web/page.m\
+	web/browser.m\
 
 DISBIN=$ROOT/dis/tests/js
 

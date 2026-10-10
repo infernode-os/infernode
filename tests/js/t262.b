@@ -29,6 +29,7 @@ include "jslex.m";
 include "jsparse.m";
 	jsparse: Jsparse;
 
+include "web/dom.m";
 include "js.m";
 
 T262: module

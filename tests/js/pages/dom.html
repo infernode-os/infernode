@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>dom</title>
+<meta name="description" content="checks">
+<style>.hid { display: none } #box { width: 200px; height: 50px; }</style>
+</head>
+<body class="a b" data-foo-bar="baz">
+<div id="main"><p class="x">one</p><p class="x y">two</p><span>three</span><!-- c --></div>
+<form id="f" action="/search"><input name="q" value="hi"><input type="checkbox" name="c" checked><select name="s"><option>a</option><option value="B" selected>b</option></select><textarea name="t">text</textarea><button id="btn">go</button></form>
+<a id="link" href="page.html?x=1#frag">link</a>
+<div id="box">box</div>
+<template id="tpl"><li class="item">tpl</li></template>
+<button id="clickme" onclick="window.clicked = (window.clicked || 0) + 1">click</button>
+<script>
+const results = [];
+let fails = 0;
+function check(name, got, want) {
+	const ok = Object.is(got, want) || (typeof want === 'object' && JSON.stringify(got) === JSON.stringify(want));
+	if (!ok) { fails++; console.log('FAIL ' + name + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want)); }
+	results.push(ok);
+}
+function test(name, f) { console.log('group ' + name); try { f(); } catch (e) { fails++; results.push(false); console.log('FAIL ' + name + ': threw ' + e + (e && e.stack ? '\n' + e.stack : '')); } }
+
+test('basics', () => {
+	check('nodeType', document.nodeType, 9);
+	check('documentElement', document.documentElement.tagName, 'HTML');
+	check('head', document.head.localName, 'head');
+	check('body', document.body.nodeName, 'BODY');
+	check('title', document.title, 'dom');
+	check('lang', document.documentElement.lang, 'en');
+	check('readyState', document.readyState, 'loading');
+	check('URL', document.URL.endsWith('/tests/js/pages/dom.html'), true);
+	check('currentScript', document.currentScript.tagName, 'SCRIPT');
+	check('window', window === globalThis && self === window && window.window === window, true);
+	check('instanceof', document.body instanceof HTMLBodyElement && document.body instanceof HTMLElement && document.body instanceof Element && document.body instanceof Node && document.body instanceof EventTarget, true);
+	check('doc instanceof', document instanceof Document && document instanceof HTMLDocument, true);
+	check('identity', document.getElementById('main') === document.querySelector('#main'), true);
+});
+test('traversal', () => {
+	const main = document.getElementById('main');
+	check('children', main.children.length, 3);
+	check('childNodes', main.childNodes.length, 4);
+	check('firstElementChild', main.firstElementChild.textContent, 'one');
+	check('lastChild', main.lastChild.nodeType, 8);
+	check('lastChild data', main.lastChild.data, ' c ');
+	check('nextSibling', main.firstChild.nextSibling.className, 'x y');
+	check('parentNode', main.firstChild.parentNode === main, true);
+	check('parentElement', document.documentElement.parentElement, null);
+	check('ownerDocument', main.ownerDocument === document, true);
+	check('contains', document.body.contains(main.firstChild), true);
+	check('textContent', main.textContent, 'onetwothree');
+	check('isConnected', main.isConnected, true);
+	check('compareDocumentPosition', main.firstChild.compareDocumentPosition(main.lastChild) & 4, 4);
+});
+test('selectors', () => {
+	check('qsa', document.querySelectorAll('p.x').length, 2);
+	check('qsa y', document.querySelectorAll('.x.y').length, 1);
+	check('qs descendant', document.querySelector('#main > span').textContent, 'three');
+	check('getElementsByClassName', document.getElementsByClassName('x').length, 2);
+	check('getElementsByTagName', document.getElementsByTagName('p').length, 2);
+	check('getElementsByName', document.getElementsByName('q').length, 1);
+	check('matches', document.querySelector('p').matches('#main p'), true);
+	check('closest', document.querySelector('span').closest('div').id, 'main');
+	let threw = false;
+	try { document.querySelector('##'); } catch (e) { threw = e instanceof DOMException && e.name === 'SyntaxError'; }
+	check('bad selector', threw, true);
+	check('qs none', document.querySelector('.nothing'), null);
+	check('forEach', (() => { let n = 0; document.querySelectorAll('p').forEach(() => n++); return n; })(), 2);
+	check('spread', [...document.querySelectorAll('p')].length, 2);
+});
+test('attributes', () => {
+	const b = document.body;
+	check('getAttribute', b.getAttribute('class'), 'a b');
+	check('className', b.className, 'a b');
+	check('classList', b.classList.contains('b'), true);
+	b.classList.add('c');
+	check('classList add', b.className, 'a b c');
+	b.classList.remove('a');
+	check('classList remove', b.className, 'b c');
+	check('toggle', b.classList.toggle('d'), true);
+	check('toggle off', b.classList.toggle('d'), false);
+	check('dataset', b.dataset.fooBar, 'baz');
+	b.dataset.newThing = '1';
+	check('dataset set', b.getAttribute('data-new-thing'), '1');
+	check('hasAttribute', b.hasAttribute('data-foo-bar'), true);
+	b.removeAttribute('data-new-thing');
+	check('removeAttribute', b.getAttribute('data-new-thing'), null);
+	check('id', document.getElementById('main').id, 'main');
+	check('attributes', document.getElementById('main').attributes.length, 1);
+	check('attributes name', document.getElementById('main').attributes[0].name, 'id');
+	check('toggleAttribute', b.toggleAttribute('hidden'), true);
+	b.toggleAttribute('hidden');
+	check('getAttributeNames', document.getElementById('main').getAttributeNames(), ['id']);
+});
+test('mutation', () => {
+	const main = document.getElementById('main');
+	const d = document.createElement('div');
+	d.id = 'made';
+	d.textContent = 'made';
+	main.appendChild(d);
+	check('appended', document.getElementById('made') === d, true);
+	check('lastElementChild', main.lastElementChild === d, true);
+	const t = document.createTextNode('T');
+	main.insertBefore(t, main.firstChild);
+	check('insertBefore', main.firstChild === t, true);
+	main.removeChild(t);
+	check('removeChild', main.firstChild.nodeName, 'P');
+	d.remove();
+	check('remove', document.getElementById('made'), null);
+	const f = document.createDocumentFragment();
+	f.appendChild(document.createElement('i'));
+	f.appendChild(document.createElement('b'));
+	main.appendChild(f);
+	check('fragment', main.children.length, 5);
+	check('fragment emptied', f.childNodes.length, 0);
+	main.lastElementChild.replaceWith('text');
+	check('replaceWith', main.lastChild.nodeType, 3);
+	main.lastChild.remove();
+	main.lastElementChild.remove();
+	main.append('x', document.createElement('u'));
+	check('append', main.lastChild.nodeName, 'U');
+	main.lastChild.remove(); main.lastChild.remove();
+	const c = main.cloneNode(true);
+	check('cloneNode', c.children.length, 3);
+	check('clone detached', c.parentNode, null);
+	check('clone id', c.id, 'main');
+	let threw = '';
+	try { main.appendChild(document.body); } catch (e) { threw = e.name; }
+	check('hierarchy', threw, 'HierarchyRequestError');
+});
+test('innerHTML', () => {
+	const d = document.createElement('div');
+	d.innerHTML = '<p class="q">a<b>b</b></p><!--c-->&amp;';
+	check('parsed', d.children.length, 1);
+	check('child', d.querySelector('b').textContent, 'b');
+	check('serialized', d.innerHTML, '<p class="q">a<b>b</b></p><!--c-->&amp;');
+	check('outerHTML', d.firstChild.outerHTML, '<p class="q">a<b>b</b></p>');
+	d.insertAdjacentHTML('beforeend', '<i>i</i>');
+	check('insertAdjacentHTML', d.lastChild.localName, 'i');
+	check('void', (() => { const e = document.createElement('div'); e.innerHTML = '<br><img src=x>'; return e.innerHTML; })(), '<br><img src="x">');
+	const tpl = document.getElementById('tpl');
+	check('template content', tpl.content.querySelector('.item').textContent, 'tpl');
+	const li = tpl.content.cloneNode(true);
+	check('template clone', li.firstChild.localName, 'li');
+});
+test('style', () => {
+	const box = document.getElementById('box');
+	box.style.color = 'red';
+	check('style get', box.style.color, 'red');
+	check('style attr', box.getAttribute('style'), 'color: red;');
+	box.style.setProperty('background-color', 'blue');
+	check('cssText', box.style.cssText, 'color: red; background-color: blue;');
+	check('camel', box.style.backgroundColor, 'blue');
+	box.style.removeProperty('color');
+	check('removed', box.style.color, '');
+	box.style.cssText = '';
+	check('cleared', box.hasAttribute('style'), false);
+	check('computed display', getComputedStyle(document.querySelector('template')).display !== undefined, true);
+});
+test('forms', () => {
+	const f = document.getElementById('f');
+	check('elements', f.elements.length, 5);
+	const q = f.elements.q || f.querySelector('[name=q]');
+	check('value', q.value, 'hi');
+	q.value = 'there';
+	check('value set', q.value, 'there');
+	check('checkbox', f.querySelector('[type=checkbox]').checked, true);
+	check('select value', f.querySelector('select').value, 'B');
+	check('selectedIndex', f.querySelector('select').selectedIndex, 1);
+	check('textarea', f.querySelector('textarea').value, 'text');
+	check('action', f.action.endsWith('/search'), true);
+	check('method', f.method, 'get');
+	check('FormData', [...new FormData(f)].map(([k, v]) => k + '=' + v).join('&'), 'q=there&c=on&s=B&t=text');
+	check('button type', document.getElementById('btn').type, 'submit');
+	check('form of control', q.form === f, true);
+});
+test('links and URLs', () => {
+	const a = document.getElementById('link');
+	check('href', a.href.endsWith('/tests/js/pages/page.html?x=1#frag'), true);
+	check('getAttribute href', a.getAttribute('href'), 'page.html?x=1#frag');
+	check('hash', a.hash, '#frag');
+	check('search', a.search, '?x=1');
+	const u = new URL('https://user@Example.COM:443/a/./b/../c?x=1&y=2#h');
+	check('URL href', u.href, 'https://user@example.com/a/c?x=1&y=2#h');
+	check('URL host', u.host, 'example.com');
+	check('URL params', u.searchParams.get('y'), '2');
+	u.searchParams.append('z', 'a b');
+	check('URL append', u.search, '?x=1&y=2&z=a+b');
+	check('URL relative', new URL('../d?q', 'http://h/a/b/c').href, 'http://h/a/d?q');
+	check('URL port', new URL('http://h:8080/').port, '8080');
+	check('URL origin', new URL('https://a.b/c').origin, 'https://a.b');
+	check('URL data', new URL('data:text/plain,hi').pathname, 'text/plain,hi');
+	let threw = false;
+	try { new URL('nope'); } catch (e) { threw = e instanceof TypeError; }
+	check('URL invalid', threw, true);
+	check('URLSearchParams', new URLSearchParams({a: '1', b: 'x y'}).toString(), 'a=1&b=x+y');
+	check('URLSearchParams parse', new URLSearchParams('?a=1&a=2&b=%20').getAll('a'), ['1', '2']);
+	check('location', location.pathname, '/tests/js/pages/dom.html');
+	check('location protocol', location.protocol, 'file:');
+	check('encodeURIComponent', encodeURIComponent('a b&'), 'a%20b%26');
+});
+test('events', () => {
+	const main = document.getElementById('main');
+	const p = main.querySelector('p');
+	const order = [];
+	main.addEventListener('ping', (e) => order.push('capture main ' + e.eventPhase), true);
+	main.addEventListener('ping', (e) => order.push('bubble main ' + e.eventPhase));
+	p.addEventListener('ping', (e) => { order.push('target ' + e.eventPhase); });
+	document.addEventListener('ping', (e) => order.push('doc'));
+	window.addEventListener('ping', (e) => order.push('window'));
+	p.dispatchEvent(new Event('ping', {bubbles: true}));
+	check('order', order, ['capture main 1', 'target 2', 'bubble main 3', 'doc', 'window']);
+	let n = 0;
+	const h = () => n++;
+	p.addEventListener('x', h, {once: true});
+	p.dispatchEvent(new Event('x'));
+	p.dispatchEvent(new Event('x'));
+	check('once', n, 1);
+	p.addEventListener('y', h);
+	p.removeEventListener('y', h);
+	p.dispatchEvent(new Event('y'));
+	check('removed', n, 1);
+	const ev = new CustomEvent('z', {detail: {k: 1}, cancelable: true});
+	p.addEventListener('z', (e) => e.preventDefault());
+	check('prevented', p.dispatchEvent(ev), false);
+	check('detail', ev.detail.k, 1);
+	check('defaultPrevented', ev.defaultPrevented, true);
+	let stopped = true;
+	p.addEventListener('s', (e) => e.stopPropagation());
+	main.addEventListener('s', () => { stopped = false; });
+	p.dispatchEvent(new Event('s', {bubbles: true}));
+	check('stopPropagation', stopped, true);
+	let target = null;
+	main.onclick = (e) => { target = e.target; };
+	p.click();
+	check('onclick', target === p, true);
+	main.onclick = null;
+	document.getElementById('clickme').click();
+	check('inline handler', window.clicked, 1);
+	check('handler property', typeof document.getElementById('clickme').onclick, 'function');
+	const ac = new AbortController();
+	let m = 0;
+	p.addEventListener('q', () => m++, {signal: ac.signal});
+	ac.abort();
+	p.dispatchEvent(new Event('q'));
+	check('signal', m, 0);
+});
+test('window', () => {
+	check('innerWidth', innerWidth, 1024);
+	check('navigator', typeof navigator.userAgent, 'string');
+	check('localStorage', (localStorage.setItem('k', 'v'), localStorage.getItem('k')), 'v');
+	check('localStorage prop', localStorage.k, 'v');
+	localStorage.removeItem('k');
+	check('localStorage removed', localStorage.getItem('k'), null);
+	document.cookie = 'a=1';
+	document.cookie = 'b=2; path=/';
+	check('cookie', document.cookie, 'a=1; b=2');
+	check('btoa', btoa('hello'), 'aGVsbG8=');
+	check('atob', atob('aGVsbG8='), 'hello');
+	check('TextEncoder', [...new TextEncoder().encode('é')], [195, 169]);
+	check('TextDecoder', new TextDecoder().decode(new Uint8Array([226, 130, 172])), '€');
+	check('performance', typeof performance.now(), 'number');
+	check('crypto', crypto.getRandomValues(new Uint8Array(8)).length, 8);
+	check('uuid', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(crypto.randomUUID()), true);
+	check('matchMedia', typeof matchMedia('(min-width: 100px)').matches, 'boolean');
+	check('structuredClone', structuredClone({a: [1, {b: 2}]}).a[1].b, 2);
+	check('getComputedStyle', typeof getComputedStyle(document.body).getPropertyValue('display'), 'string');
+	check('history', (history.replaceState({s: 1}, '', '?q=2'), location.search), '?q=2');
+	check('history state', history.state.s, 1);
+	check('rect', typeof document.getElementById('box').getBoundingClientRect().width, 'number');
+});
+test('mutation observer', () => {
+	const main = document.getElementById('main');
+	window.records = null;
+	const mo = new MutationObserver((recs) => { window.records = recs; });
+	mo.observe(main, {childList: true, attributes: true, subtree: true});
+	main.appendChild(document.createElement('em'));
+	main.setAttribute('title', 't');
+	check('async', window.records, null);
+	queueMicrotask(() => {
+		check('records', window.records && window.records.length, 2);
+		check('record type', window.records && window.records[0].type, 'childList');
+		mo.disconnect();
+		main.lastChild.remove();
+	});
+});
+test('custom elements', () => {
+	class MyEl extends HTMLElement {
+		connectedCallback() { this.textContent = 'connected'; }
+		static get observedAttributes() { return ['v']; }
+		attributeChangedCallback(n, o, v) { this.dataset.seen = v; }
+	}
+	customElements.define('my-el', MyEl);
+	const e = document.createElement('my-el');
+	check('ctor', e instanceof MyEl, true);
+	document.body.appendChild(e);
+	check('connected', e.textContent, 'connected');
+	e.setAttribute('v', '7');
+	check('attributeChanged', e.dataset.seen, '7');
+	const f = new MyEl();
+	check('new', f.localName, 'my-el');
+	e.remove();
+});
+test('timers and promises', () => {
+	window.order = [];
+	setTimeout(() => window.order.push('timeout'), 0);
+	Promise.resolve().then(() => window.order.push('micro'));
+	queueMicrotask(() => window.order.push('qm'));
+	window.order.push('sync');
+	const id = setInterval(() => { window.ticks = (window.ticks || 0) + 1; if (window.ticks === 3) clearInterval(id); }, 10);
+	requestAnimationFrame((t) => { window.raf = typeof t; });
+});
+document.addEventListener('DOMContentLoaded', () => {
+	check('DOMContentLoaded readyState', document.readyState, 'interactive');
+	check('later script ran', window.later, true);
+});
+window.addEventListener('load', () => {
+	check('load readyState', document.readyState, 'complete');
+	setTimeout(() => {
+		check('order', window.order, ['sync', 'micro', 'qm', 'timeout']);
+		check('interval', window.ticks, 3);
+		check('raf', window.raf, 'number');
+		document.title = (fails ? 'FAIL ' + fails : 'PASS') + ' ' + results.length;
+		console.log(document.title);
+	}, 200);
+});
+</script>
+<script>window.later = true;</script>
+</body></html>

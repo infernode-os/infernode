@@ -75,8 +75,13 @@ init(nil: ref Draw->Context, args: list of string)
 	if(root == "/")
 		root = "";
 
-	if(plumbmsg->init(1, nil, 0) < 0)
-		fail(sys->sprint("cannot connect to the plumber: %r"));
+	# the plumber may still be starting (tools/xen runs this before
+	# lib/xen/boot.sh starts it): retry a while
+	for(n := 0; plumbmsg->init(1, nil, 0) < 0; n++){
+		if(n == Retries)
+			fail(sys->sprint("cannot connect to the plumber: %r"));
+		sys->sleep(Retrywait);
+	}
 
 	in := bufio->fopen(sys->fildes(0), Bufio->OREAD);
 	while((m := readmsg(in)) != nil){

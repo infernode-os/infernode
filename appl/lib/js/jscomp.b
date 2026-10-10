@@ -71,6 +71,9 @@ CFunc: adt {
 	src:	string;
 	curpos:	int;
 	disps:	list of (int, int);	# using scopes: (disposal stack register, async)
+	evalctx0:	int;	# eval code: its caller's context
+	evalprivs0:	list of string;
+	inparams:	int;	# emitting the parameters' code
 };
 
 # where an optional chain's short circuits jump
@@ -1432,6 +1435,7 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 		}
 	}
 	# destructuring and default parameters
+	cs.inparams = 1;
 	for(i = 0; i < len f.params; i++) {
 		pick p := f.params[i] {
 		Ident =>
@@ -1445,6 +1449,7 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 			bindpattern(f.params[i], Rarg0 + i, 1);
 		}
 	}
+	cs.inparams = 0;
 	# function declarations
 	hoistfuncs(f.body);
 	if(flags & Cgen || flags & Casync && (flags & Cgen) == 0 && 0)
@@ -1886,8 +1891,11 @@ compilescript(prog: ref Node.Program, src: string, iseval, evalstrict: int): ref
 	cs.flags = Cscript;
 	if(strict)
 		cs.flags |= Cstrict;
-	if(iseval)
+	if(iseval) {
 		cs.flags |= Ceval;
+		cs.evalctx0 = evalctxin;
+		cs.evalprivs0 = evalprivsin;
+	}
 	cs.tmp = Rarg0;
 	cs.nregs = Rarg0;
 	cscope = nil;
@@ -1921,12 +1929,18 @@ compilescript(prog: ref Node.Program, src: string, iseval, evalstrict: int): ref
 	e1(Oret, result);
 	leavescope(top);
 	code := finish(nil, 0, 0);
+	code.evalctx = evalctxin;
+	code.evalprivs = evalprivsin;
 	cs = saved;
 	return code;
 }
 
 # the register a script's statements leave their values in (the completion value), or -1
 completion := -1;
+
+# the context the eval code being compiled inherits
+evalctxin := 0;
+evalprivsin: list of string;
 
 hoistlexonly(s: ref CScope, body: array of ref Node)
 {
@@ -3151,7 +3165,7 @@ thisinto(r: int)
 			return;
 		}
 		if(how == Ldyn) {
-			e2(Ogetname, r, intern("%this"));
+			e1(Othisdyn, r);
 			e1(Ochkthis, r);
 			return;
 		}
@@ -3842,6 +3856,14 @@ ccall(x: ref Node.Call, r: int)
 			flags := 0;
 			if(cs.flags & Cstrict)
 				flags |= 1;
+			(ctx, privs) := evalcontext();
+			flags |= ctx << 1;
+			if(privs != nil) {
+				ps := "";
+				for(; privs != nil; privs = tl privs)
+					ps += " " + hd privs;
+				flags |= (kstr(ps) + 1) << 8;
+			}
 			emit(Oeval);
 			emit(r);
 			emit(f);
@@ -3852,6 +3874,41 @@ ccall(x: ref Node.Call, r: int)
 		}
 	}
 	callargs(x, r, f, this);
+}
+
+# what a direct eval here may use: new.target, super, the private names around it
+evalcontext(): (int, list of string)
+{
+	ctx := 0;
+	c := cs;
+	while(c != nil && (c.flags & Carrow))
+		c = c.parent;
+	if(c != nil && (c.flags & (Cscript|Cmodule)) == 0) {
+		if(c.flags & Ceval)
+			ctx |= c.evalctx0;
+		else {
+			ctx |= Jsparse->Enewtarget;
+			if(c.flags & Cmethod)
+				ctx |= Jsparse->Esuperprop;
+			if(c.flags & Cctor && c.flags & Cderived)
+				ctx |= Jsparse->Esupercall;
+			if(c.flags & Cgetter)
+				ctx |= Jsparse->Efield;
+		}
+	}
+	# in parameters: eval's var arguments would clash with the function's own
+	# (its arguments object, or a parameter of that name; an arrow has neither)
+	if(cs.inparams && ((cs.flags & Carrow) == 0 || lastparam(cs.node.params, "arguments") >= 0))
+		ctx |= 32;
+	privs: list of string;
+	for(s := cscope; s != nil; s = s.parent)
+		for(l := s.binds; l != nil; l = tl l)
+			if((hd l).kind == Bpriv)
+				privs = (hd l).name[1:] :: privs;
+	if(cs.flags & Ceval)
+		for(pl := cs.evalprivs0; pl != nil; pl = tl pl)
+			privs = hd pl :: privs;
+	return (ctx, privs);
 }
 
 hasspread(a: array of ref Node): int
@@ -4203,7 +4260,12 @@ fieldsfn(c: ref Node.Class, s: ref CScope, ctor, proto, static: int)
 				ffn.body[0] = ref Node.Return(m.pos, m.end, val);
 			}
 			saved := cs;
-			code := compilebody(ffn, fs, cs, cs.src, ffn.flags, 0);
+			fx := 0;
+			if(m.kind == Jsparse->Pfield)
+				fx = Cgetter;
+			if(static)
+				fx |= Cstatic;
+			code := compilebody(ffn, fs, cs, cs.src, ffn.flags, fx);
 			code.flags |= Cmethod;
 			if(static)
 				code.flags |= Cstatic;

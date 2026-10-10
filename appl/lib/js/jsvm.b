@@ -1056,6 +1056,13 @@ loop(entry: int): V
 		Oimportmeta =>
 			vs[base+ops[pc+1]] = importmeta(code);
 			pc += 2;
+		Othisdyn =>
+			(found, e, slot, nil) := dynfind(intern("%this"));
+			if(found && slot >= 0)
+				vs[base+ops[pc+1]] = oslots[e][slot];
+			else
+				vs[base+ops[pc+1]] = vs[base+Rthis];
+			pc += 2;
 		Omodinit =>
 			# a module's instantiation is done: stop here until it is evaluated
 			f := frames[nframe-1];

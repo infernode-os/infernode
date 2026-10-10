@@ -55,12 +55,19 @@ init()
 
 check(prog: ref Node): (int, string)
 {
+	return checkeval(prog, 0, nil);
+}
+
+checkeval(prog: ref Node, ctx: int, privnames: list of string): (int, string)
+{
 	if(sys == nil)
 		init();
 	{
 		pick p := prog {
 		Program =>
-			c := ref Ctx(p.strict, 0, 0, 0, nil, 0, 0, nil);
+			c := ref Ctx(p.strict, (ctx & Jsparse->Esuperprop) != 0, (ctx & Jsparse->Esupercall) != 0, (ctx & Jsparse->Enewtarget) != 0, nil, 0, 0, nil);
+			if(privnames != nil)
+				c.privs = ref Privs(privnames) :: nil;
 			if(p.ismod)
 				moduletop(p.body);
 			else

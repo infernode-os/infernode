@@ -1256,13 +1256,32 @@ directeval(a, n: int, flags: int): V
 	if(x.t != Tstr)
 		return x;
 	strictcaller := flags & 1;
+	ctx := (flags >> 1) & 16r7F;
+	privs: list of string;
+	if(flags >> 8) {
+		(nil, privs) = sys->tokenize(str(code.consts[(flags >> 8) - 1].x), " ");
+	}
+	if(code.flags & Ceval) {
+		ctx |= code.evalctx;
+		for(pl := code.evalprivs; pl != nil; pl = tl pl)
+			privs = hd pl :: privs;
+	}
 	src := str(x.x);
-	(prog, err) := jsparse->parse(src, 0, strictcaller);
+	(prog, err) := jsparse->parseeval(src, strictcaller, ctx, privs);
 	if(err != nil)
 		throwerr(SyntaxError, err);
 	pick p := prog {
 	Program =>
+		# in parameters, a sloppy eval may not declare var arguments
+		if((ctx & 32) && !strictcaller && !p.strict)
+			for(nl := varlist1(p.body, nil); nl != nil; nl = tl nl)
+				if(hd nl == "arguments")
+					throwerr(SyntaxError, "eval in parameters cannot declare 'arguments'");
+		evalctxin = ctx & 31;
+		evalprivsin = privs;
 		c := compilescript(p, src, 1, strictcaller);
+		evalctxin = 0;
+		evalprivsin = nil;
 		setfile(c, code.file);
 		setmodid(c, code.modid);
 		c.flags |= Ceval;
@@ -1446,7 +1465,7 @@ oplen(op: int): int
 		return 5;
 	Ocall or Oeval or Osupercall or Oystep =>
 		return 6;
-	Onewdisp =>
+	Onewdisp or Othisdyn =>
 		return 2;
 	Omodinit =>
 		return 1;

@@ -59,10 +59,22 @@ init()
 
 parse(src: string, ismod, strict: int): (ref Node, string)
 {
+	return parseeval0(src, ismod, strict, 0, nil, 0);
+}
+
+parseeval(src: string, strict, ctx: int, privnames: list of string): (ref Node, string)
+{
+	return parseeval0(src, 0, strict, ctx, privnames, 1);
+}
+
+parseeval0(src: string, ismod, strict, ctx: int, privnames: list of string, iseval: int): (ref Node, string)
+{
 	if(sys == nil)
 		init();
 	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 0, 0, -1, -1, ismod, 0, 0, 0);
 	{
+		if(iseval && (ctx & Efield))
+			p.inclassfield = 1;
 		next(p);
 		body := stmtlist(p, 1, 1);
 		if(p.t.kind != Teof)
@@ -74,7 +86,7 @@ parse(src: string, ismod, strict: int): (ref Node, string)
 				return (nil, sys->sprint("cannot load %s: %r", Jscheck->PATH));
 			jscheck->init();
 		}
-		(at, msg) := jscheck->check(prog);
+		(at, msg) := jscheck->checkeval(prog, ctx, privnames);
 		if(msg != nil)
 			return (nil, where(src, at) + ": " + msg);
 		return (prog, nil);

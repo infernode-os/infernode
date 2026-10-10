@@ -189,4 +189,8 @@ Jsparse: module
 	init:	fn();
 	# the program in src: (tree, nil), or (nil, "line:col: message")
 	parse:	fn(src: string, ismod, strict: int): (ref Node, string);
+
+	# eval code: what its caller allows (Enewtarget...), and the private names around it
+	Enewtarget, Esuperprop, Esupercall, Efield: con 1 << iota;
+	parseeval:	fn(src: string, strict, ctx: int, privnames: list of string): (ref Node, string);
 };

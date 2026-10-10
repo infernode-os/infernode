@@ -11,4 +11,6 @@ Jscheck: module
 	init:	fn();
 	# nil if the program is valid, else (where, what)
 	check:	fn(prog: ref Jsparse->Node): (int, string);
+	# eval code's: with what its caller allows (Jsparse->Enewtarget...) and its private names
+	checkeval:	fn(prog: ref Jsparse->Node, ctx: int, privnames: list of string): (int, string);
 };

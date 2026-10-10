@@ -313,6 +313,7 @@ Dis: module
 
 	init:		fn();
 	loadobj:	fn(file: string): (ref Mod, string);
+	writeobj:	fn(m: ref Mod): array of byte;	# loadobj's inverse: the object file m is
 	op2s:	fn(op: int): string;
 	inst2s:	fn(ins: ref Inst): string;
 	src:		fn(file: string): string;

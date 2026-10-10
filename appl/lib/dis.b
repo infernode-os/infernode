@@ -607,3 +607,195 @@ src(disf: string): string
 		return s;
 	return nil;
 }
+
+# ---- writing an object file (loadobj's inverse; dis(6)) ----
+
+Obuf: adt {
+	b:	array of byte;
+	n:	int;
+};
+
+obyte(o: ref Obuf, v: int)
+{
+	if(o.n >= len o.b) {
+		nb := array[2 * len o.b] of byte;
+		nb[0:] = o.b[0:o.n];
+		o.b = nb;
+	}
+	o.b[o.n++] = byte v;
+}
+
+obytes(o: ref Obuf, a: array of byte)
+{
+	for(i := 0; i < len a; i++)
+		obyte(o, int a[i]);
+}
+
+# an operand: one, two or four bytes, signed, as operand() reads them
+oop(o: ref Obuf, v: int)
+{
+	if(v >= -64 && v <= 63)
+		obyte(o, v & 16r7F);
+	else if(v >= -8192 && v <= 8191) {
+		obyte(o, 16r80 | ((v >> 8) & 16r3F));
+		obyte(o, v & 16rFF);
+	} else {
+		obyte(o, 16rC0 | ((v >> 24) & 16r3F));
+		obyte(o, (v >> 16) & 16rFF);
+		obyte(o, (v >> 8) & 16rFF);
+		obyte(o, v & 16rFF);
+	}
+}
+
+oword(o: ref Obuf, v: int)
+{
+	obyte(o, (v >> 24) & 16rFF);
+	obyte(o, (v >> 16) & 16rFF);
+	obyte(o, (v >> 8) & 16rFF);
+	obyte(o, v & 16rFF);
+}
+
+obig(o: ref Obuf, v: big)
+{
+	oword(o, int (v >> 32));
+	oword(o, int v);
+}
+
+ostr(o: ref Obuf, s: string)
+{
+	obytes(o, array of byte s);
+	obyte(o, 0);
+}
+
+# an instruction's src or dst: one operand, or two for an indirection
+oaddr(o: ref Obuf, mode, v: int)
+{
+	case mode {
+	AFP or AMP or AIMM =>
+		oop(o, v);
+	AIND|AFP or AIND|AMP =>
+		# (the halves are 16 bits each: an outer offset past 32767
+		# makes v negative)
+		oop(o, (v >> 16) & 16rFFFF);
+		oop(o, v & 16rFFFF);
+	}
+}
+
+writeobj(m: ref Mod): array of byte
+{
+	o := ref Obuf(array[4096] of byte, 0);
+	if(m.sign != nil) {
+		oop(o, SMAGIC);
+		oop(o, len m.sign);
+		obytes(o, m.sign);
+	}
+	oop(o, XMAGIC);
+	rt := m.rt & ~(HASLDT|HASEXCEPT);
+	if(m.imports != nil)
+		rt |= HASLDT;
+	if(m.handlers != nil)
+		rt |= HASEXCEPT;
+	oop(o, rt);
+	oop(o, m.ssize);
+	oop(o, len m.inst);
+	oop(o, m.dsize);
+	oop(o, len m.types);
+	oop(o, len m.links);
+	oop(o, m.entry);
+	oop(o, m.entryt);
+	for(i := 0; i < len m.inst; i++) {
+		in := m.inst[i];
+		obyte(o, in.op);
+		obyte(o, in.addr);
+		case in.addr & ARM {
+		AXIMM or AXINF or AXINM =>
+			oop(o, in.mid);
+		}
+		oaddr(o, (in.addr >> 3) & 7, in.src);
+		oaddr(o, in.addr & 7, in.dst);
+	}
+	for(i = 0; i < len m.types; i++) {
+		t := m.types[i];
+		oop(o, i);
+		oop(o, t.size);
+		oop(o, len t.map);
+		obytes(o, t.map);
+	}
+	for(dl := m.data; dl != nil; dl = tl dl) {
+		d := hd dl;
+		kind := d.op >> 4;
+		if(d.n > 0 && d.n < DMAX)
+			obyte(o, (kind << 4) | d.n);
+		else {
+			obyte(o, kind << 4);
+			oop(o, d.n);
+		}
+		oop(o, d.off);
+		pick dd := d {
+		Bytes =>
+			obytes(o, dd.bytes);
+		Words =>
+			for(j := 0; j < len dd.words; j++)
+				oword(o, dd.words[j]);
+		String =>
+			obytes(o, array of byte dd.str);
+		Reals =>
+			if(math == nil)
+				raise "dis: writeobj: reals need the math module";
+			for(j := 0; j < len dd.reals; j++)
+				obig(o, math->realbits64(dd.reals[j]));
+		Array =>
+			oword(o, dd.typex);
+			oword(o, dd.length);
+		Aindex =>
+			oword(o, dd.index);
+		Bigs =>
+			for(j := 0; j < len dd.bigs; j++)
+				obig(o, dd.bigs[j]);
+		}
+	}
+	obyte(o, 0);
+	ostr(o, m.name);
+	for(i = 0; i < len m.links; i++) {
+		l := m.links[i];
+		oop(o, l.pc);
+		oop(o, l.desc);
+		oword(o, l.sig);
+		ostr(o, l.name);
+	}
+	if(m.imports != nil) {
+		oop(o, len m.imports);
+		for(i = 0; i < len m.imports; i++) {
+			oop(o, len m.imports[i]);
+			for(j := 0; j < len m.imports[i]; j++) {
+				oword(o, m.imports[i][j].sig);
+				ostr(o, m.imports[i][j].name);
+			}
+		}
+		obyte(o, 0);
+	}
+	if(m.handlers != nil) {
+		oop(o, len m.handlers);
+		for(i = 0; i < len m.handlers; i++) {
+			h := m.handlers[i];
+			oop(o, h.eoff);
+			oop(o, h.pc1);
+			oop(o, h.pc2);
+			t := -1;
+			for(j := 0; j < len m.types; j++)
+				if(m.types[j] == h.t)
+					t = j;
+			oop(o, t);
+			n := len h.etab - 1;
+			oop(o, (h.ne << 16) | n);
+			for(j = 0; j < n; j++) {
+				ostr(o, h.etab[j].s);
+				oop(o, h.etab[j].pc);
+			}
+			oop(o, h.etab[n].pc);
+		}
+		obyte(o, 0);
+	}
+	ostr(o, m.srcpath);
+	return o.b[0:o.n];
+}

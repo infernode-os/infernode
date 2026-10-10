@@ -6,6 +6,8 @@ DIRS=\
 
 TARG=\
 	authnode.dis\
+	diswrite_test.dis\
+	gentmpl.dis\
 	originfs_test.dis\
 	9p_export_test.dis\
 	auditchain_test.dis\

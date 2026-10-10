@@ -33,6 +33,8 @@ CScope: adt {
 	strict:	int;
 	rt:	int;		# its Scope in the code's scopes, once emitted
 	nslots:	int;
+	nbinds:	int;
+	tab:	array of list of ref Bind;	# binds by name's hash, once there are many
 };
 
 CFunc: adt {
@@ -142,15 +144,49 @@ sget(k: int): ref CScope
 
 newscope(kind: int, parent: ref CScope, fid: int, strict: int): ref CScope
 {
-	return ref CScope(kind, parent, fid, nil, 0, 0, 0, strict, -1, 0);
+	return ref CScope(kind, parent, fid, nil, 0, 0, 0, strict, -1, 0, 0, nil);
 }
+
+# a scope of a minified bundle can have thousands of names, each looked
+# up at every reference: past Tabmin they are hashed
+Tabmin: con 16;
 
 findlocal(s: ref CScope, name: string): ref Bind
 {
-	for(l := s.binds; l != nil; l = tl l)
+	l := s.binds;
+	if(s.tab != nil)
+		l = s.tab[namehash(name) % len s.tab];
+	for(; l != nil; l = tl l)
 		if((hd l).name == name)
 			return hd l;
 	return nil;
+}
+
+namehash(s: string): int
+{
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = h * 31 + s[i];
+	return h & 16r7FFFFFFF;
+}
+
+addbind(s: ref CScope, b: ref Bind)
+{
+	s.binds = b :: s.binds;
+	s.nbinds++;
+	if(s.tab == nil && s.nbinds < Tabmin)
+		return;
+	if(s.tab == nil || s.nbinds > 2 * len s.tab) {
+		t := array[4 * s.nbinds + 1] of list of ref Bind;
+		for(l := s.binds; l != nil; l = tl l) {
+			k := namehash((hd l).name) % len t;
+			t[k] = hd l :: t[k];
+		}
+		s.tab = t;
+		return;
+	}
+	k := namehash(b.name) % len s.tab;
+	s.tab[k] = b :: s.tab[k];
 }
 
 declare(s: ref CScope, name: string, kind: int): ref Bind
@@ -163,7 +199,7 @@ declare(s: ref CScope, name: string, kind: int): ref Bind
 		return b;
 	}
 	b = ref Bind(name, kind, 0, -1, -1, 0);
-	s.binds = b :: s.binds;
+	addbind(s, b);
 	return b;
 }
 
@@ -1751,7 +1787,7 @@ listawait(a: array of ref Node): int
 # (Omodinit, where the loader links its imports), then its body
 compilemodule(prog: ref Node.Program, src: string, modid: int): ref Code
 {
-	scopemap = array[1021] of list of (int, ref CScope);
+	scopemap = array[len src / 16 + 1021] of list of (int, ref CScope);
 	nfid = 1;
 	top := newscope(Smodule, nil, 0, 1);
 	body := modulebody(prog.body);
@@ -1872,7 +1908,7 @@ exportstmt(x: ref Node.Export)
 # the code for a script; evalcode: direct eval's (strict: and in strict code)
 compilescript(prog: ref Node.Program, src: string, iseval, evalstrict: int): ref Code
 {
-	scopemap = array[1021] of list of (int, ref CScope);
+	scopemap = array[len src / 16 + 1021] of list of (int, ref CScope);
 	nfid = 1;
 	strict := prog.strict || evalstrict;
 	kind := Sscript;
@@ -1912,6 +1948,8 @@ compilescript(prog: ref Node.Program, src: string, iseval, evalstrict: int): ref
 		cs.decls = g :: cs.decls;
 		e1(Oglobalinit, cs.ndecl++);
 		top.binds = nil;	# all of them are global, or the caller's
+		top.tab = nil;
+		top.nbinds = 0;
 		top.needsenv = 0;
 		if(iseval) {
 			top.kind = Seval;

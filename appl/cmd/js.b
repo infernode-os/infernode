@@ -3,12 +3,13 @@ implement Jscmd;
 #
 # js - run JavaScript.
 #
-#	js [-p] [-m] [-e source] [file ...]
+#	js [-p] [-m] [-t] [-e source] [file ...]
 #
 # Each file (a module with -m), then each -e source, runs in turn in one
 # realm.  -p prints each completion value.  With no file and no source,
 # js reads and runs what is typed, a statement at a time, printing each
 # value: a statement that is not yet complete continues on the next line.
+# -t says how long each took.
 #
 
 include "sys.m";
@@ -69,6 +70,9 @@ init(nil: ref Draw->Context, args: list of string)
 		"-m" =>
 			ismod = 1;
 			continue;
+		"-t" =>
+			timing = 1;
+			continue;
 		"-e" =>
 			args = tl args;
 			if(args == nil)
@@ -98,17 +102,24 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: js [-p] [-m] [-e source] [file ...]\n");
+	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-e source] [file ...]\n");
 	raise "fail:usage";
 }
+
+timing := 0;
 
 run(src, name: string, ismod, show: int): int
 {
 	r, e: string;
+	t0 := sys->millisec();
+	{
 	if(ismod)
 		(r, e) = js->evalmodule(src, name);
 	else
 		(r, e) = js->evalscript(src, name);
+	}
+	if(timing)
+		sys->fprint(stderr, "%s: %d ms\n", name, sys->millisec() - t0);
 	if(e != nil) {
 		sys->fprint(stderr, "%s\n", e);
 		return 0;

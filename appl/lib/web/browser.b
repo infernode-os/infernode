@@ -1656,7 +1656,7 @@ startrealm(s: ref Session, g: int, pg: ref Pg)
 # A task that runs too long (a script in an endless loop) holds the
 # session's lock, and nothing else can draw the page: the realm is
 # killed and the page stays as it was.
-Maxtask: con 10000;
+Maxtask: con 30000;
 
 watchdog(r: ref Realm)
 {

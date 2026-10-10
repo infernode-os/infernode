@@ -679,7 +679,17 @@ through the engine's callv, which runs the callee in a loop of its own,
 was tried and is slower than leaving the call to the interpreter, whose
 calls push a frame (a million calls in a loop: 305 ms interpreted with
 the loop compiled around them, 467 ms called from compiled code): calls
-from compiled code have to push frames as the interpreter does.
+from compiled code have to push frames as the interpreter does.  That
+was tried too: compiled code asked the engine (through a function
+reference) to push the callee's frame, called the callee's compiled run
+directly, and its return asked the engine to pop the frame.  It is
+correct (exceptions and the interpreter taking over a callee midway
+work, since frames stay the engine's), and still slower: 357 ms against
+245 interpreted, as each call is three calls between Dis modules, which
+cost more on this VM than the interpreter's own call.  A compiled call
+has to stay inside one module: the callee compiled into its caller's
+module (inlined, or as another function of it), the frame pushed by
+compiled code itself.
 
 Profiles of real pages (prof(1) around `jspage -k`) moved work into the
 interpreter too: a shape's many transitions are hashed (objects used as

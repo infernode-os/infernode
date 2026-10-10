@@ -1070,12 +1070,33 @@ complex(v: array of ref Tok, parent: array of ref Sel, relative: int): ref Sel
 		if(pseudo != nil)
 			return nil;	# nothing may follow a pseudo-element
 		cp: array of ref Simple;
+		pseudoargs = nil;
 		(cp, i, pseudo) = compound(v, i, parent);
 		if(cp == nil && pseudo == nil)
 			return nil;
 		for(k := 0; k < len cp; k++)
 			if(cp[k].kind == Spseudo && cp[k].name == "&")
 				hasnest = 1;
+		if(pseudo == "slotted") {
+			# A::slotted(B) (CSS Scoping §3.2.2): B a light node, A the
+			# slot it is assigned to, joined by an 'S' combinator
+			args := trim(pseudoargs);
+			if(len args == 0)
+				return nil;
+			(b, j, bp) := compound(args, 0, nil);
+			if(b == nil || bp != nil || j < len args)
+				return nil;
+			if(cp == nil)
+				cp = array[] of {ref Simple(Suniversal, "*", 0, nil, 0, 0, 0, nil)};
+			cps = b :: cp :: cps;
+			cbs = 'S' :: comb :: cbs;
+			pseudo = nil;
+			while(i < len v && v[i].kind == Kws)
+				i++;
+			if(i < len v)
+				return nil;	# (::slotted(B)::before and the like, not done)
+			break;
+		}
 		cps = cp :: cps;
 		cbs = comb :: cbs;
 		# combinator
@@ -1143,6 +1164,8 @@ complex(v: array of ref Tok, parent: array of ref Sel, relative: int): ref Sel
 	return s;
 }
 
+pseudoargs: array of ref Tok;	# a functional pseudo-element's (::slotted(...)), from compound
+
 # A compound selector at v[i]: (simples, next index, pseudo-element).
 compound(v: array of ref Tok, i: int, parent: array of ref Sel): (array of ref Simple, int, string)
 {
@@ -1185,6 +1208,8 @@ compound(v: array of ref Tok, i: int, parent: array of ref Sel): (array of ref S
 				if(pt.kind != Kident && pt.kind != Kfunction)
 					return (nil, i, nil);
 				pseudo = lower(pt.s);
+				if(pt.kind == Kfunction)
+					pseudoargs = pt.kids;
 				continue;
 			}
 			i++;

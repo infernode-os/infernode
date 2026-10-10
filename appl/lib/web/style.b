@@ -543,11 +543,12 @@ M: adt {
 	scope:	int;	# what :scope matches; 0, the root
 	host:	int;	# matching a shadow tree's rules: its host (featureless but for :host), and
 	sroot:	int;	# its root
+	flat:	ref Dom->Flat;	# the flat tree, if there are shadow roots (for ::slotted)
 };
 
 matcher(d: ref Doc, env: ref Env): ref M
 {
-	return ref M(d, env, array[d.n] of list of string, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0);
+	return ref M(d, env, array[d.n] of list of string, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil);
 }
 
 # n's parent element for a selector of a shadow tree: past the tree's
@@ -720,6 +721,13 @@ matchfrom(m: ref M, s: ref Sel, k, n, anchor: int): int
 				return 1;
 	'>' =>
 		if((p := parentelm(m, n)) != 0)
+			return matchfrom(m, s, k-1, p, anchor);
+	'S' =>
+		# ::slotted: from a light node to the slot of this shadow tree it is in
+		if(m.flat == nil || m.sroot == 0 || d.nodes[n].parent != m.host)
+			return 0;	# (a light child of the host: not a slot's fallback content)
+		p := m.flat.parent[n];
+		if(p != 0 && d.nodes[p].kind == Dom->Element && d.nodes[p].name == "slot" && m.flat.scope[p] == m.sroot)
 			return matchfrom(m, s, k-1, p, anchor);
 	'+' =>
 		if((p := prevel(d, n)) != 0)
@@ -2081,6 +2089,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	# with shadow roots, the flat tree: a node inherits from its parent
 	# there, selectors match in its own tree, and the rules are its tree's
 	f := dom->flat(d);
+	m.flat = f;
 	scopes: list of (int, ref Index, array of list of (string, ref Shared));
 	if(f != nil)
 		scopes = scopeindexes(d, f, s, env);
@@ -2111,6 +2120,8 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 							m.host = (hd rl).t0;
 				}
 				extra = hostrules(m, f, scopes, n);
+				for(sl2 := slottedrules(m, f, scopes, n); sl2 != nil; sl2 = tl sl2)
+					extra = hd sl2 :: extra;
 			}
 			ps: ref St;
 			if(pp != 0)
@@ -2198,6 +2209,44 @@ hostrules(m: ref M, f: ref Dom->Flat, scopes: list of (int, ref Index, array of 
 			if(last[i].kind == Css->Spseudo && last[i].name == "host")
 				ishost = 1;
 		if(ishost && matchsel(m, e.sel, n)) {
+			ne := ref *e;
+			if(ne.tier >= Tauthor)
+				ne.tier = Thost;
+			l = ne :: l;
+		}
+	}
+	(m.host, m.sroot) = (h, r);
+	return l;
+}
+
+# the ::slotted rules of the shadow tree whose host n is a light child of,
+# about n: as :host rules, below the document's
+slottedrules(m: ref M, f: ref Dom->Flat, scopes: list of (int, ref Index, array of list of (string, ref Shared)), n: int): list of ref Entry
+{
+	host := m.d.nodes[n].parent;
+	if(host == 0)
+		return nil;
+	root := 0;
+	for(rl := f.roots; rl != nil; rl = tl rl)
+		if((hd rl).t0 == host)
+			root = (hd rl).t1;
+	if(root == 0 || f.parent[n] == host)
+		return nil;	# (not a shadow host, or n is in no slot)
+	idx: ref Index;
+	for(sl := scopes; sl != nil; sl = tl sl)
+		if((hd sl).t0 == root)
+			idx = (hd sl).t1;
+	if(idx == nil)
+		return nil;
+	(h, r) := (m.host, m.sroot);
+	(m.host, m.sroot) = (host, root);
+	l: list of ref Entry;
+	for(cl := candidates(m, idx, n); cl != nil; cl = tl cl) {
+		e := hd cl;
+		k := len e.sel.combs - 1;
+		if(k < 1 || e.sel.combs[k] != 'S')
+			continue;
+		if(matchsel(m, e.sel, n)) {
 			ne := ref *e;
 			if(ne.tier >= Tauthor)
 				ne.tier = Thost;

@@ -278,6 +278,19 @@ test('declarative shadow root', () => {
 	check('its :host', getComputedStyle(c).display, 'block');
 	check('the template gone', c.innerHTML, 'L');
 });
+test('::slotted', () => {
+	const h = document.createElement('div');
+	h.innerHTML = '<span class=sl1 slot=a>a</span><span class=sl2>b</span><span class=sl3 slot=nowhere>c</span>';
+	document.body.appendChild(h);
+	const sr = h.attachShadow({mode: 'open'});
+	sr.innerHTML = '<style>::slotted(span) { margin-left: 4px; } slot[name=a]::slotted(.sl1) { margin-right: 6px; } span { margin-top: 9px; }</style>' +
+		'<slot name=a></slot><slot><span class=fb>fallback</span></slot>';
+	check('::slotted(span)', getComputedStyle(h.querySelector('.sl2')).marginLeft, '4px');
+	check('slot[name=a]::slotted(.sl1)', getComputedStyle(h.querySelector('.sl1')).marginRight, '6px');
+	check('not the other slot', getComputedStyle(h.querySelector('.sl2')).marginRight, '0px');
+	check('the shadow tree\'s span rule not on light nodes', getComputedStyle(h.querySelector('.sl1')).marginTop, '0px');
+	h.remove();
+});
 test('clock', () => {
 	check('this year', new Date().getFullYear() >= 2026, true);
 	check('now', Math.abs(Date.now() - performance.timeOrigin - performance.now()) < 2000, true);

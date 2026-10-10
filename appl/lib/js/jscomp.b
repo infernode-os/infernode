@@ -9,9 +9,9 @@
 # could change what a name means, it is looked up by name at run time.
 #
 
-Bvar, Blet, Bconst, Bclass, Bfunc, Bparam, Bcatch, Bfnself, Bpriv, Bthis, Bnewtarget, Bcallee, Barguments, Bhome: con iota;
+Bvar, Blet, Bconst, Bclass, Bfunc, Bparam, Bcatch, Bfnself, Bpriv, Bthis, Bnewtarget, Bcallee, Barguments, Bhome, Bimport: con iota;
 
-Sfunc, Sblock, Sscript, Seval, Swith, Sclass, Sfnname, Scatch, Sfor, Sswitch: con iota;
+Sfunc, Sblock, Sscript, Seval, Swith, Sclass, Sfnname, Scatch, Sfor, Sswitch, Smodule: con iota;
 
 Bind: adt {
 	name:	string;
@@ -167,7 +167,7 @@ declare(s: ref CScope, name: string, kind: int): ref Bind
 # the function scope a var goes to
 varscope(s: ref CScope): ref CScope
 {
-	while(s.kind != Sfunc && s.kind != Sscript && s.kind != Seval)
+	while(s.kind != Sfunc && s.kind != Sscript && s.kind != Seval && s.kind != Smodule)
 		s = s.parent;
 	return s;
 }
@@ -1143,7 +1143,7 @@ leavescope(s: ref CScope)
 
 istdz(b: ref Bind): int
 {
-	return b.kind == Blet || b.kind == Bconst || b.kind == Bclass;
+	return b.kind == Blet || b.kind == Bconst || b.kind == Bclass || b.kind == Bimport;
 }
 
 revbinds(l: list of ref Bind): list of ref Bind
@@ -1234,7 +1234,7 @@ setname(name: string, r: int, init: int)
 			e2(Omove, x, r);
 	Lenv =>
 		if(!init) {
-			if(b.kind == Bconst || b.kind == Bclass && 0) {
+			if(b.kind == Bconst || b.kind == Bimport) {
 				e4(Ogetenvc, tmpscratch(), x, slot, intern(name));
 				constassign(name);
 				return;
@@ -1630,6 +1630,232 @@ hoistfuncs(body: array of ref Node)
 	}
 }
 
+# ---- modules ----
+
+# a module's statements with exported declarations unwrapped (for hoisting)
+modulebody(body: array of ref Node): array of ref Node
+{
+	r := array[len body] of ref Node;
+	for(i := 0; i < len body; i++) {
+		r[i] = body[i];
+		pick x := body[i] {
+		Export =>
+			if(x.decl != nil) {
+				if(!x.default)
+					r[i] = x.decl;
+				else
+					pick d := x.decl {
+					Func =>
+						if(d.flags & Jsparse->Fdecl && d.id != nil)
+							r[i] = x.decl;
+					Class =>
+						if(d.decl && d.id != nil)
+							r[i] = x.decl;
+					}
+			}
+		}
+	}
+	return r;
+}
+
+# whether a module's top level awaits (then it is evaluated as an async function)
+toplevelawait(n: ref Node): int
+{
+	if(n == nil)
+		return 0;
+	pick x := n {
+	Await =>
+		return 1;
+	ForOf =>
+		if(x.await)
+			return 1;
+		return toplevelawait(x.left) || toplevelawait(x.right) || toplevelawait(x.body);
+	Func =>
+		return 0;
+	Class =>
+		return 0;
+	Expr => return toplevelawait(x.e);
+	Var =>
+		for(i := 0; i < len x.decls; i++)
+			if(toplevelawait(x.decls[i]))
+				return 1;
+	Decl => return toplevelawait(x.init) || toplevelawait(x.id);
+	Block => return listawait(x.body);
+	If => return toplevelawait(x.test) || toplevelawait(x.cons) || toplevelawait(x.els);
+	While => return toplevelawait(x.test) || toplevelawait(x.body);
+	DoWhile => return toplevelawait(x.test) || toplevelawait(x.body);
+	For => return toplevelawait(x.init) || toplevelawait(x.test) || toplevelawait(x.update) || toplevelawait(x.body);
+	ForIn => return toplevelawait(x.right) || toplevelawait(x.body);
+	Try => return toplevelawait(x.block) || toplevelawait(x.handler) || toplevelawait(x.final);
+	Switch =>
+		if(toplevelawait(x.disc))
+			return 1;
+		for(i := 0; i < len x.cases; i++)
+			pick c := x.cases[i] {
+			Case =>
+				if(toplevelawait(c.test) || listawait(c.body))
+					return 1;
+			}
+	Labeled => return toplevelawait(x.body);
+	Return => return toplevelawait(x.arg);
+	Throw => return toplevelawait(x.arg);
+	Export => return toplevelawait(x.decl);
+	Unary => return toplevelawait(x.arg);
+	Update => return toplevelawait(x.arg);
+	Binary => return toplevelawait(x.l) || toplevelawait(x.r);
+	Logical => return toplevelawait(x.l) || toplevelawait(x.r);
+	Assign => return toplevelawait(x.target) || toplevelawait(x.value);
+	Cond => return toplevelawait(x.test) || toplevelawait(x.cons) || toplevelawait(x.els);
+	Call => return toplevelawait(x.callee) || listawait(x.args);
+	New => return toplevelawait(x.callee) || listawait(x.args);
+	Member => return toplevelawait(x.obj) || x.computed && toplevelawait(x.prop);
+	Chain => return toplevelawait(x.e);
+	Seq => return listawait(x.exprs);
+	Paren => return toplevelawait(x.e);
+	Array => return listawait(x.elems);
+	Object => return listawait(x.props);
+	Prop => return x.computed && toplevelawait(x.key) || toplevelawait(x.value);
+	Spread => return toplevelawait(x.arg);
+	Template => return listawait(x.exprs);
+	Tagged => return toplevelawait(x.tag) || toplevelawait(x.quasi);
+	Yield => return toplevelawait(x.arg);
+	ImportCall => return toplevelawait(x.source) || toplevelawait(x.options);
+	AssignPat => return toplevelawait(x.target) || toplevelawait(x.dflt);
+	ArrayPat => return listawait(x.elems);
+	ObjectPat => return listawait(x.props);
+	Rest => return toplevelawait(x.arg);
+	}
+	return 0;
+}
+
+listawait(a: array of ref Node): int
+{
+	for(i := 0; i < len a; i++)
+		if(toplevelawait(a[i]))
+			return 1;
+	return 0;
+}
+
+# a module's code: its environment and function declarations, a stop
+# (Omodinit, where the loader links its imports), then its body
+compilemodule(prog: ref Node.Program, src: string, modid: int): ref Code
+{
+	scopemap = array[1021] of list of (int, ref CScope);
+	nfid = 1;
+	top := newscope(Smodule, nil, 0, 1);
+	body := modulebody(prog.body);
+	hoistbody(top, body, 1, 0);
+	for(i := 0; i < len body; i++) {
+		pick f := body[i] {
+		Func =>
+			# in a module, functions are lexical (but made at the start)
+			;
+		}
+	}
+	for(i = 0; i < len prog.body; i++) {
+		pick x := prog.body[i] {
+		Import =>
+			for(j := 0; j < len x.specs; j++)
+				pick sp := x.specs[j] {
+				ImportSpec =>
+					b := declare(top, sp.local, Bimport);
+					b.kind = Bimport;
+					if(sp.kind == Jsparse->Inamespace)
+						b.kind = Bconst;
+				}
+		Export =>
+			if(x.default && x.decl != nil && body[i] == prog.body[i]) {
+				# an expression, or an anonymous function or class
+				anonfn := 0;
+				pick d := x.decl {
+				Func =>
+					anonfn = (d.flags & Jsparse->Fdecl) != 0;
+				}
+				if(anonfn)
+					declare(top, "*default*", Bfunc);
+				else
+					declare(top, "*default*", Blet);
+			}
+		}
+	}
+	top.named = 1;
+	top.needsenv = 1;
+	for(l := top.binds; l != nil; l = tl l)
+		(hd l).captured = 1;
+	r := ref R1(top, 0, nil, 0, 1);
+	walklist1(prog.body, r);
+	f := ref Node.Func(0, len src, nil, array[0] of ref Node, prog.body, 0);
+	saved := cs;
+	cs = newcfunc(nil, f, top, src);
+	cs.flags = Cmodule | Cstrict;
+	if(listawait(prog.body))
+		cs.flags |= Casync;
+	cs.tmp = Rarg0;
+	cs.nregs = Rarg0;
+	cscope = nil;
+	envdepth = 0;
+	completion = -1;
+	enterscope(top);
+	hoistfuncs(body);
+	# an anonymous default function is made now too
+	for(i = 0; i < len prog.body; i++)
+		pick x := prog.body[i] {
+		Export =>
+			if(x.default && x.decl != nil)
+				pick d := x.decl {
+				Func =>
+					if(d.flags & Jsparse->Fdecl && d.id == nil) {
+						t := tmp();
+						e2(Oclosure, t, addfunc(d));
+						k := tmp();
+						e2(Oconst, k, kstr("default"));
+						e3(Osetfnname, t, k, 0);
+						setname("*default*", t, 1);
+						freeto(t);
+					}
+				}
+		}
+	cs.nlocal = cs.tmp;
+	emit(Omodinit);
+	usingstmts(prog.body);
+	t := tmp();
+	e1(Oundef, t);
+	e1(Oret, t);
+	leavescope(top);
+	code := finish(nil, 0, 0);
+	code.modid = modid;
+	cs = saved;
+	return code;
+}
+
+exportstmt(x: ref Node.Export)
+{
+	if(x.decl == nil)
+		return;	# export { ... } and export * : the loader's
+	if(!x.default) {
+		stmt(x.decl);
+		return;
+	}
+	pick d := x.decl {
+	Func =>
+		if(d.flags & Jsparse->Fdecl)
+			return;	# made at the start
+	Class =>
+		if(d.decl && d.id != nil) {
+			stmt(x.decl);
+			return;
+		}
+	}
+	t := tmp();
+	gexpr(x.decl, t);
+	if(isanonfn(x.decl)) {
+		k := tmp();
+		e2(Oconst, k, kstr("default"));
+		e3(Osetfnname, t, k, 0);
+	}
+	setname("*default*", t, 1);
+}
+
 # ---- scripts and eval ----
 
 # the code for a script; evalcode: direct eval's (strict: and in strict code)
@@ -1796,7 +2022,7 @@ stmt(n: ref Node)
 	Func =>
 		if(x.flags & Jsparse->Fdecl) {
 			# made at the start of its scope; Annex B copies a block's to the var
-			if(x.id != nil && cscope.kind != Sfunc && cscope.kind != Sscript && cscope.kind != Seval) {
+			if(x.id != nil && cscope.kind != Sfunc && cscope.kind != Sscript && cscope.kind != Seval && cscope.kind != Smodule) {
 				fsc := varscopeof(cscope);
 				name := idname(x.id);
 				vb := findlocal(fsc, name);
@@ -1913,9 +2139,9 @@ stmt(n: ref Node)
 		envdepth--;
 		cscope = s.parent;
 	Export =>
-		compileerr(n.pos, "modules are not supported yet");
+		exportstmt(x);
 	Import =>
-		compileerr(n.pos, "modules are not supported yet");
+		;
 	* =>
 		compileerr(n.pos, "internal: unexpected statement");
 	}
@@ -1924,7 +2150,7 @@ stmt(n: ref Node)
 
 varscopeof(s: ref CScope): ref CScope
 {
-	while(s.kind != Sfunc && s.kind != Sscript && s.kind != Seval)
+	while(s.kind != Sfunc && s.kind != Sscript && s.kind != Seval && s.kind != Smodule)
 		s = s.parent;
 	return s;
 }

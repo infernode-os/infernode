@@ -301,7 +301,7 @@ test(path, top: string)
 	ok := 1;
 	why := "";
 	if(runmode) {
-		if(ismod || m.negparse || has(m.features, "cross-realm") || has(m.features, "Atomics") || has(m.features, "SharedArrayBuffer") || has(m.flags, "CanBlockIsTrue")) {
+		if(m.negparse || has(m.features, "cross-realm") || has(m.features, "Atomics") || has(m.features, "SharedArrayBuffer") || has(m.flags, "CanBlockIsTrue")) {
 			nskip++;
 			return;
 		}
@@ -397,8 +397,11 @@ capture(s: string)
 	output += s + "\n";
 }
 
+curpath: string;
+
 runtest(path, src: string, m: ref Meta): (int, string)
 {
+	curpath = path;
 	dir := harnessdir(path);
 	pre := "";
 	if(!has(m.flags, "raw")) {
@@ -410,7 +413,7 @@ runtest(path, src: string, m: ref Meta): (int, string)
 			pre += harnessfile(dir, hd l) + "\n";
 	}
 	variants: list of int;
-	if(has(m.flags, "raw") || has(m.flags, "noStrict"))
+	if(has(m.flags, "raw") || has(m.flags, "noStrict") || has(m.flags, "module"))
 		variants = 0 :: nil;
 	else if(has(m.flags, "onlyStrict"))
 		variants = 1 :: nil;
@@ -490,9 +493,13 @@ runrealm1(src: string, m: ref Meta): (int, string)
 	output = "";
 	js->setoutput(capture);
 	js->test262();
-	(nil, e) := js->evalscript(src, "test");
+	e: string;
+	if(has(m.flags, "module"))
+		(nil, e) = js->evalmodule(src, curpath);
+	else
+		(nil, e) = js->evalscript(src, "test");
 	js->shutdown();
-	if(m.negphase == "runtime") {
+	if(m.negphase == "runtime" || m.negphase == "resolution") {
 		if(e == nil)
 			return (0, "ran, should have thrown " + m.negtype);
 		if(len e < len m.negtype || e[0:len m.negtype] != m.negtype)

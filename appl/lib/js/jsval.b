@@ -12,7 +12,7 @@
 # held where the collector looks (the value stack, or an object).
 #
 
-Tundef, Tnull, Tbool, Tnum, Tstr, Tsym, Tobj, Tbig, Tempty, Tacc: con iota;
+Tundef, Tnull, Tbool, Tnum, Tstr, Tsym, Tobj, Tbig, Tempty, Tacc, Timport: con iota;
 
 V: adt {
 	t:	int;
@@ -892,6 +892,8 @@ ownkeys(h: int): array of int
 {
 	if(okind[h] == Kproxy)
 		return proxyownkeys(h);
+	if(okind[h] == Kmodns)
+		return modnsownkeys(h);
 	extra := 0;	# a String object's characters, a typed array's elements
 	if(okind[h] == Kprim)
 		pick d := odata[h] {
@@ -1016,6 +1018,8 @@ markv(v: V)
 			marko(int v.n);
 	Tbig =>
 		marks(v.x);	# a BigInt is its decimal digits, as a string row
+	Timport =>
+		marko(v.x);	# a module import: the exporting module's environment
 	}
 }
 

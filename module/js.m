@@ -17,6 +17,13 @@ Js: module
 	# a string, nil) or (nil, the uncaught exception shown as a string)
 	evalscript:	fn(src, name: string): (string, string);
 
+	# run a module (and those it imports), then the jobs: as evalscript
+	evalmodule:	fn(src, url: string): (string, string);
+
+	# how modules are found: from a referrer's URL and a specifier, the
+	# module's URL and source, or an error (the default: files)
+	setloader:	fn(l: ref fn(referrer, specifier: string): (string, string, string));
+
 	# where print and console output go (the default: standard output)
 	setoutput:	fn(out: ref fn(s: string));
 

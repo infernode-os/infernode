@@ -368,11 +368,16 @@ loop(entry: int): V
 			pc += 2;
 		Ogetenv =>
 			e := envat(ops[pc+2]);
-			vs[base+ops[pc+1]] = oslots[e][ops[pc+3]];
+			v := oslots[e][ops[pc+3]];
+			if(v.t == Timport)
+				v = oslots[v.x][int v.n];
+			vs[base+ops[pc+1]] = v;
 			pc += 4;
 		Ogetenvc =>
 			e := envat(ops[pc+2]);
 			v := oslots[e][ops[pc+3]];
+			if(v.t == Timport)
+				v = oslots[v.x][int v.n];
 			if(v.t == Tempty)
 				tdzerr(ops[pc+4]);
 			vs[base+ops[pc+1]] = v;
@@ -1049,7 +1054,26 @@ loop(entry: int): V
 			vs[base+Renv] = objv(e);
 			pc += 2;
 		Oimportmeta =>
-			throwerr(SyntaxError, "import.meta outside a module");
+			vs[base+ops[pc+1]] = importmeta(code);
+			pc += 2;
+		Omodinit =>
+			# a module's instantiation is done: stop here until it is evaluated
+			f := frames[nframe-1];
+			g := f.gen;
+			pc += 1;
+			g.resumereg = -1;
+			g.modereg = -1;
+			g.out = undef;
+			g.raw = 0;
+			g.awaiting = 0;
+			g.pc = pc;
+			n := code.nregs;
+			if(g.regs == nil || len g.regs < n)
+				g.regs = array[n] of V;
+			g.regs[0:] = vs[base:base+n];
+			g.state = Gsuspended;
+			nframe--;
+			return undef;
 		Oimport =>
 			frames[nframe-1].pc = pc;
 			vs[base+ops[pc+1]] = dynimport(vs[base+ops[pc+2]], vs[base+ops[pc+3]]);
@@ -1993,6 +2017,8 @@ getdyn(a: int, typeofop: int): V
 	if(found) {
 		if(slot >= 0) {
 			v := oslots[e][slot];
+			if(v.t == Timport)
+				v = oslots[v.x][int v.n];
 			if(v.t == Tempty)
 				tdzerr(a);
 			return v;

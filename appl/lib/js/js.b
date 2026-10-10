@@ -61,6 +61,7 @@ include "jsbigint.b";
 include "jstyped.b";
 include "jsiter.b";
 include "jsdispose.b";
+include "jsmod.b";
 
 output: ref fn(s: string);
 
@@ -135,6 +136,9 @@ resetstate()
 	pendinglabels = nil;
 	envdepth = 0;
 	output = nil;
+	mods = nil;
+	nmod = 0;
+	loader = nil;
 }
 
 setoutput(out: ref fn(s: string))
@@ -183,6 +187,31 @@ evalscript(src, name: string): (string, string)
 		return (nil, ex);
 	}
 	return (nil, "internal: not a program");
+}
+
+evalmodule(src, url: string): (string, string)
+{
+	sp0 := sp;
+	nf := nframe;
+	{
+		runmodule(src, url);
+		runjobs();
+		sp = sp0;
+		return ("undefined", nil);
+	} exception e {
+	"js:throw" =>
+		sp = sp0;
+		nframe = nf;
+		ex := showexc(thrown);
+		{
+			runjobs();
+		} exception {
+		"js:throw" =>
+			;
+		}
+		return (nil, ex);
+	}
+	return (nil, nil);
 }
 
 # a script's code, kept for its template objects' sake while it may run again

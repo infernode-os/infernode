@@ -134,6 +134,7 @@ Oaddres,	# r r n		add a resource to the stack; n: 1 await using
 Odisnext,	# r r j		pop a resource into r1 (or jump when none are left)
 Odiscall,	# r r		r1 = call the resource's dispose method
 Oaccum,		# r r		r1 = r2 if r1 is empty, else a SuppressedError(r2, r1)
+Omodinit,	#		a module's stop between instantiation and evaluation
 Onop: con iota;
 
 # Code flags
@@ -193,5 +194,6 @@ Code: adt {
 	file:	string;
 	allreg:	int;	# Cextra: the register given every argument, as an array
 	paramnames:	array of int;	# atoms, by formal parameter (simple ones), for mapped arguments
+	modid:	int;	# a module's code: its module, else 0
 	marked:	int;	# the collection that last marked it
 };

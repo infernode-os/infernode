@@ -84,6 +84,7 @@ markroots()
 			markv(*(hd gl).t1);
 	for(rl := rootstk; rl != nil; rl = tl rl)
 		markv(hd rl);
+	markmods();
 }
 
 rootstk: list of V;		# values Limbo code holds across calls back into script
@@ -1411,12 +1412,6 @@ evalvarinit(g: ref Gdecl, c: ref Code)
 	}
 }
 
-dynimport(nil, nil: V): V
-{
-	p := newpromise(ipromisector);
-	rejectpromise(p, objv(newerror(TypeError, "modules are not supported yet")));
-	return objv(p);
-}
 
 # ---- instruction lengths (for scans of code) ----
 
@@ -1451,6 +1446,8 @@ oplen(op: int): int
 		return 6;
 	Onewdisp =>
 		return 2;
+	Omodinit =>
+		return 1;
 	Odiscall or Oaccum =>
 		return 3;
 	Oaddres or Odisnext =>
@@ -1460,10 +1457,6 @@ oplen(op: int): int
 }
 
 # ---- stubs for what comes later: proxies, typed arrays, BigInt, modules, regexps ----
-
-modnsgetown(nil, nil: int): (int, ref Desc) { return (0, nil); }
-modnsdefine(nil, nil: int, nil: ref Desc): int { return 0; }
-modnsdelete(nil, nil: int): int { return 0; }
 
 Reprog: adt {
 	x:	int;

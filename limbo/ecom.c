@@ -953,6 +953,15 @@ ecom(Src *src, Node *nto, Node *n)
 			else if(left->op != Oname || tupaliased(left, right))
 				right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 		}
+		/*
+		 * an inlined call yields Oif or Ocomma, whose tuple results
+		 * are built straight into the destination one member at a
+		 * time: v = f(v) would then read members already written
+		 */
+		else if((right->op == Oif || right->op == Ocomma)
+		&& (right->ty->kind == Ttuple || right->ty->kind == Tadt || right->ty->kind == Tadtpick)
+		&& (left->op != Oname || tupaliased(left, right)))
+			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 
 		/*
 		 * think carefully about types here
@@ -1462,7 +1471,13 @@ eacom(Node *n, Node *reg, Node *t)
 		tn = n->left->left;
 		ecom(&n->left->src, nil, n->left);
 		n = eacom(n->right, reg, t);
-		tfree(tn);
+		/*
+		 * n may address into tn (an inlined call's argument,
+		 * e.g. tn[i] for f(array[] of {...}) with f(a) = a[i]);
+		 * freeing tn here would nil it, releasing the array,
+		 * before the caller uses n.  Hold it to the statement's end.
+		 */
+		tfreelater(tn);
 		return n;
 	}
 

@@ -9,7 +9,13 @@
 #
 # The profile mounts only C:\ at /n/local, so files must be on C:.
 #
-# Environment: INFERNODE_ROOT, XEN_THEME, XEN_GEOM, XEN_LOG, as for tools/xen.
+# It runs a source tree (emu\Nt\o.emu.exe) or a release (o.emu.exe at its
+# top): XEN_APP, an unpacked Xenith (or InferNode GUI) zip, if set;
+# otherwise the tree holding this script, so the xen.ps1 in a release's
+# tools runs that release.
+#
+# Environment: INFERNODE_ROOT, XEN_APP, XEN_THEME, XEN_GEOM, XEN_LOG, as
+# for tools/xen.
 
 param(
 	[switch]$Sam,
@@ -17,10 +23,13 @@ param(
 	[Parameter(ValueFromRemainingArguments = $true)][string[]]$Files
 )
 
-$root = if ($env:INFERNODE_ROOT) { $env:INFERNODE_ROOT } else { Split-Path -Parent $PSScriptRoot }
+$root = if ($env:INFERNODE_ROOT) { $env:INFERNODE_ROOT }
+	elseif ($env:XEN_APP) { $env:XEN_APP }
+	else { Split-Path -Parent $PSScriptRoot }
 $emu = Join-Path $root 'emu\Nt\o.emu.exe'
+if (-not (Test-Path $emu)) { $emu = Join-Path $root 'o.emu.exe' }
 if (-not (Test-Path $emu)) {
-	Write-Error "xen: no emulator at $emu (build one first)"
+	Write-Error "xen: no emulator in $root (build one first, or set XEN_APP to an unpacked Xenith zip)"
 	exit 1
 }
 

@@ -249,6 +249,7 @@ fprint'
 emu/Nt/emu-config.c
 emu/Nt/emu-gui-config.c
 emu/Nt/SDL3.dll
+emu/Nt/launcher-version.h
 limbo/incpath.h
 utils/mk/rootpath.h
 SDL3-dev/

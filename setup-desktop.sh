@@ -9,8 +9,9 @@
 # The canonical entry is the shipped infernode.desktop; this script only
 # rewrites its relative Exec/Icon to the absolute install path (which is not
 # known until extraction). It auto-detects GUI (./infernode, Terminal=false)
-# vs headless (./infernode-headless, Terminal=true), so the SAME script ships
-# in every Linux release. Nothing in the release folder is modified.
+# vs headless (./infernode-headless, Terminal=true) vs the Xenith release
+# (./xenith, installed as `xenith`), so the SAME script ships in every Linux
+# release. Nothing in the release folder is modified.
 #
 # Usage:
 #   ./setup-desktop.sh                 install icon (if GUI) + PATH symlink
@@ -63,19 +64,23 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-DESKTOP_ID="infernode"
-DEST_DESKTOP="$APPS_DIR/$DESKTOP_ID.desktop"
-LINK="$BINDIR/infernode"
-
 # ── Detect which launcher this release ships ───────────────────────
+DESKTOP_ID="infernode"; APP_NAME="InferNode"
 if [ -x "$ROOT/infernode" ]; then
     EXEC="$ROOT/infernode"; TERMINAL="false"
 elif [ -x "$ROOT/infernode-headless" ]; then
     EXEC="$ROOT/infernode-headless"; TERMINAL="true"
+elif [ -x "$ROOT/xenith" ]; then
+    # Xenith starts in the directory it is run from, so its entry has no
+    # Path= (the desktop starts it in the home directory).
+    EXEC="$ROOT/xenith"; TERMINAL="false"; DESKTOP_ID="xenith"; APP_NAME="Xenith"
 else
-    fail "No infernode launcher in $ROOT (expected ./infernode or ./infernode-headless)"
+    fail "No launcher in $ROOT (expected ./infernode, ./infernode-headless or ./xenith)"
 fi
+
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+DEST_DESKTOP="$APPS_DIR/$DESKTOP_ID.desktop"
+LINK="$BINDIR/$DESKTOP_ID"
 
 # ── Uninstall ──────────────────────────────────────────────────────
 if [ "$DO_UNINSTALL" -eq 1 ]; then
@@ -95,20 +100,21 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
     exit 0
 fi
 
-printf "\n${BOLD}InferNode Setup — Desktop & PATH${RESET}\n\n"
+printf "\n${BOLD}%s Setup — Desktop & PATH${RESET}\n\n" "$APP_NAME"
 
 # ── Desktop entry (reuse the shipped infernode.desktop as template) ─
 if [ "$DO_ICON" -eq 1 ]; then
-    ICON="$DESKTOP_ID"; [ -f "$ROOT/infernode.png" ] && ICON="$ROOT/infernode.png"
+    ICON="$DESKTOP_ID"; [ -f "$ROOT/$DESKTOP_ID.png" ] && ICON="$ROOT/$DESKTOP_ID.png"
     mkdir -p "$APPS_DIR"
-    SRC="$ROOT/infernode.desktop"
+    SRC="$ROOT/$DESKTOP_ID.desktop"
     if [ -f "$SRC" ]; then
-        # Rewrite only the install-specific fields; keep Name/Comment/Categories.
-        sed -e "s|^Exec=.*|Exec=$EXEC|" \
+        # Rewrite only the install-specific fields; keep Name/Comment/Categories
+        # and Exec's field codes (Xenith's %F, the files opened with it).
+        sed -e "s|^Exec=[^ ]*|Exec=$EXEC|" \
             -e "s|^Icon=.*|Icon=$ICON|" \
             -e "s|^Terminal=.*|Terminal=$TERMINAL|" \
             "$SRC" > "$DEST_DESKTOP"
-        grep -q '^Path=' "$DEST_DESKTOP" || printf 'Path=%s\n' "$ROOT" >> "$DEST_DESKTOP"
+        [ "$DESKTOP_ID" = xenith ] || grep -q '^Path=' "$DEST_DESKTOP" || printf 'Path=%s\n' "$ROOT" >> "$DEST_DESKTOP"
     else
         # Headless tarballs may ship no .desktop; synthesise a minimal one.
         cat > "$DEST_DESKTOP" <<EOF
@@ -152,7 +158,7 @@ EOF
         chmod 0755 "$LINK"
         ok "Installed launcher wrapper: $LINK -> $EXEC"
         case ":$PATH:" in
-            *":$BINDIR:"*) info "Run from anywhere with: infernode" ;;
+            *":$BINDIR:"*) info "Run from anywhere with: $DESKTOP_ID" ;;
             *) warn "$BINDIR is not on PATH. Add it:"; printf "    echo 'export PATH=\"%s:\$PATH\"' >> ~/.profile && . ~/.profile\n" "$BINDIR" ;;
         esac
     fi

@@ -1621,6 +1621,27 @@ jobs:
           exit 1
         }
 
+    - name: Launchers carry the release's version
+      shell: powershell
+      run: |
+        # InferNode.exe and Xenith.exe take their version (Properties >
+        # Details) from include/version.h, which the release stamps with
+        # its tag; stamp one here as the release does and check both.
+        (Get-Content include\version.h) -replace 'InferNode 0.1', 'InferNode 9.8.7 build ci' | Set-Content include\version.h
+        & .\emu\Nt\build-launcher.ps1
+        if ($LASTEXITCODE -ne 0) { Write-Error "launcher build failed"; exit 1 }
+        foreach ($exe in @('InferNode.exe', 'Xenith.exe')) {
+          $v = (Get-Item "emu\Nt\$exe").VersionInfo
+          Write-Host "$exe : $($v.ProductVersion) / $($v.FileVersion) / $($v.CompanyName)"
+          if ($v.ProductVersion -ne '9.8.7' -or $v.FileVersion -ne '9.8.7' -or
+              $v.FileMajorPart -ne 9 -or $v.FileMinorPart -ne 8 -or $v.FileBuildPart -ne 7 -or
+              $v.CompanyName -ne 'InferNode.io') {
+            Write-Error "$exe has the wrong version info"
+            exit 1
+          }
+        }
+        git checkout -- include\version.h
+
     - name: Run test suite (informational on Windows)
       shell: powershell
       # Windows-specific test-infrastructure issue: the test runner dies

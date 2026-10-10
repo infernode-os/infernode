@@ -22,29 +22,6 @@ Asyncio: module {
 			Error =>
 				opid: int;
 				err: string;
-		# a window's document (docview(2)), from work off the main loop
-		DocOpened =>
-				winid: int;
-				gen: int;       # which opening of the window's document
-				eng: Docengine;
-				h: int;         # the engine's handle, or -1
-				text: string;   # a binary document's text
-				err: string;
-		DocText =>
-				winid: int;
-				gen: int;
-				text: string;   # a binary document's text, read after it is shown
-		DocPainted =>
-				winid: int;
-				gen: int;
-				n: int;         # the sheet
-				scale: int;
-				image: ref Draw->Image;
-				err: string;
-		DocEvent =>
-				winid: int;
-				gen: int;
-				event: string;  # docengine(2): events
 		TextData =>
 				opid: int;      # Operation ID
 				winid: int;     # Window ID for the text

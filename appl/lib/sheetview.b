@@ -127,7 +127,9 @@ View.close(v: self ref View)
 
 View.handle(v: self ref View, e: ref Ev): ref Note
 {
-	if(e == nil || e.v != v || e.gen != v.gen){
+	if(e == nil)
+		return nil;
+	if(e.v != v || e.gen != v.gen){
 		pick o := e {
 		Opened =>
 			if(o.eng != nil && o.h >= 0)
@@ -299,8 +301,11 @@ View.layout(v: self ref View)
 {
 	if(v.h < 0)
 		return;
+	# the place kept, as a fraction of the column; the first layout
+	# keeps org as it was set (a document opened again where it was)
+	had := v.colh > 0;
 	frac := 0;
-	if(v.colh > 0)
+	if(had)
 		frac = v.org.y * 1000 / v.colh;
 	if(v.flowing()){
 		if(v.vw != v.r.dx() || restyled(v)){
@@ -319,7 +324,7 @@ View.layout(v: self ref View)
 	v.vw = v.r.dx();
 	v.vh = v.r.dy();
 	stack(v);
-	if(v.colh > 0)
+	if(had && v.colh > 0)
 		v.org.y = frac * v.colh / 1000;
 }
 

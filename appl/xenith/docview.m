@@ -2,54 +2,22 @@
 # Docview - a window's document: the one view for every kind
 #
 # A document (a PDF, an image, a Mermaid diagram, Markdown or HTML set
-# for reading, a web page) is held by its engine (docengine(2)); the
-# window's view stacks its sheets in a column, scrolls it, zooms it
-# (painted again at the scale, the old painting scaled meanwhile) and
-# pans it. See docs/xenith-documents.md.
+# for reading, a web page) is held by its engine (docengine(2)) and
+# shown by the view every program that shows documents shares
+# (sheetview(2)), in the window's body.  This module is Xenith's side:
+# the window's text, its tag, its doc/ files, the mouse and keys.  See
+# docs/xenith-documents.md.
 #
 
 Docview: module {
 	PATH: con "/dis/xenith/docview.dis";
 
-	Fitnone, Fitwidth, Fitpage: con iota;
-
-	# A sheet painted at a scale
-	Painted: adt {
-		n:	int;
-		scale:	int;
-		im:	ref Draw->Image;
-	};
-
 	# A window's document
 	Doc: adt {
-		kind:	ref Docreg->Kind;
-		eng:	Docengine;
-		h:	int;		# the engine's handle; -1 while it opens
-		name:	string;		# what was opened: a path or a URL
-		web:	int;		# a page browsed: a browser window
-		err:	string;		# why it could not be shown
+		v:	ref Sheetview->View;
 		shown:	int;		# the document (not its text) is in the window
-		gen:	int;		# changes with what is shown; work for another is dropped
-		scale:	int;		# percent of the sheets' size at 100
-		fit:	int;		# Fitwidth or Fitpage: the scale follows the window
-		org:	Draw->Point;	# the view's top left, in the column
-		sizes:	array of Draw->Point;	# the sheets, at scale 100
-		tops:	array of int;	# each sheet's top in the column, at scale
-		colw:	int;		# the column's width and height, at scale
-		colh:	int;
-		cache:	list of ref Painted;
-		painting:	int;	# a sheet is being painted
-		vw:	int;		# the view's size the scale and layout were set for
-		vh:	int;
-		bg:	ref Draw->Image;	# the colours a flowing document was set in
-		fg:	ref Draw->Image;
-		accent:	ref Draw->Image;
 		offb:	ref Draw->Image;	# where the body's text draws meanwhile, unseen
-		word:	string;		# a word selected on the drawing
-		wordat:	(int, Draw->Rect);
-		findstr:	string;		# what a search is for, in lower case
-		found:	list of int;	# the sheets whose text has it (where on them is
-					# worked out as they are drawn)
+		line:	int;		# a source document's line to open at, or -1
 	};
 
 	init:	fn(mods: ref Dat->Mods);
@@ -106,9 +74,8 @@ Docview: module {
 	foundread:	fn(w: ref Windowm->Window): string;
 	filesof:	fn(w: ref Windowm->Window): string;
 
-	# Results from the work done off the main loop
-	opened:	fn(w: ref Windowm->Window, gen: int, eng: Docengine, h: int, text: string, err: string);
-	texted:	fn(w: ref Windowm->Window, gen: int, text: string);
-	painted:	fn(w: ref Windowm->Window, gen: int, n, scale: int, im: ref Draw->Image, err: string);
-	event:	fn(w: ref Windowm->Window, gen: int, e: string);
+	# The views' work done off the main loop arrives on events(), to
+	# be handed to handle() on it
+	events:	fn(): chan of ref Sheetview->Ev;
+	handle:	fn(e: ref Sheetview->Ev);
 };

@@ -447,7 +447,7 @@ Row.dump(row : self ref Row, file : string)
 					continue;
 				}else if((!w.dirty && utils->access(a)==0) || w.isdir ||
 				    (w.rendermode && utils->access(a)==0) ||
-				    (docview->readonly(w) && !w.doc.web && utils->access(a)==0)){
+				    (docview->readonly(w) && !w.doc.v.web && utils->access(a)==0)){
 					# (a formatted view's text is the formatter's, a
 					# PDF's or an image's the document's, not the
 					# file's: Load reads the file again)

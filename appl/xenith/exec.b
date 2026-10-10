@@ -513,7 +513,7 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 			return;
 	# In a browser window Get goes to the URL given, or named in the
 	# tag, or reloads the page there.
-	if(et.w.doc != nil && et.w.doc.web){
+	if(et.w.doc != nil && et.w.doc.v.web){
 		w = et.w;
 		u := "";
 		if(narg > 0)
@@ -526,7 +526,7 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 		if(u == nil)
 			u = w.body.file.name;
 		err : string;
-		if(u == nil || u == w.doc.name)
+		if(u == nil || u == w.doc.v.name)
 			(nil, err) = docview->command(w, "Reload", nil);
 		else
 			err = docview->browse(w, u);
@@ -748,7 +748,7 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 	# it is shown with: its text is written only to a file named
 	if(docview->readonly(w) && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
 		what := "a document";
-		if(w.doc.web)
+		if(w.doc.v.web)
 			what = "a web page";
 		warning(nil, sprint("%s is %s: Put /file writes its text\n", f.name, what));
 		return;

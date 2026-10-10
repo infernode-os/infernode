@@ -223,9 +223,13 @@ allnamed(s: ref CScope)
 # a function's declarations, into its top scope
 hoistfunc(fs: ref CScope, f: ref Node.Func, strict: int)
 {
+	# parameters with defaults or patterns are initialised in order, uninitialised before
+	pk := Bparam;
+	if(!simpleparams(f.params))
+		pk = Blet;
 	for(i := 0; i < len f.params; i++)
 		for(l := patnames(f.params[i], nil); l != nil; l = tl l)
-			declare(fs, hd l, Bparam);
+			declare(fs, hd l, pk);
 	hoistbody(fs, f.body, strict, 1);
 }
 
@@ -1380,7 +1384,7 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 		cs.flags = flags;
 	}
 	# simple parameters keep their argument registers when not captured
-	if(!fs.named)
+	if(!fs.named && simpleparams(f.params))
 		for(i = 0; i < len f.params; i++)
 			pick p := f.params[i] {
 			Ident =>
@@ -1402,7 +1406,7 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 		}
 	}
 	# parameters
-	for(i = 0; i < len f.params; i++) {
+	for(i = 0; i < len f.params && simpleparams(f.params); i++) {
 		pick p := f.params[i] {
 		Ident =>
 			b := findlocal(fs, p.name);
@@ -1439,7 +1443,8 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 	for(i = 0; i < len f.params; i++) {
 		pick p := f.params[i] {
 		Ident =>
-			;
+			if(!simpleparams(f.params))
+				setname(p.name, Rarg0 + i, 1);
 		Rest =>
 			t := tmp();
 			e2(Orest, t, i);
@@ -2266,7 +2271,7 @@ isanonfn(e: ref Node): int
 	Class =>
 		return x.id == nil;
 	Paren =>
-		return 0;
+		return isanonfn(x.e);	# (f) is still an anonymous function definition; (0, f) is not
 	}
 	return 0;
 }

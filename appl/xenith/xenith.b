@@ -761,10 +761,8 @@ mousetask()
 						if(w != nil && docview->shown(w) && t.what == Body){
 							# the word there executed
 							(word, ok) := docview->button2(w);
-							if(ok){
-								(dir, n) := look->dirname(t, nil, 0);
-								spawn exec->run(w, word, dir, n, TRUE, nil, nil, FALSE);
-							}
+							if(ok)
+								exec->executeword(t, word);
 						} else {
 							(ok, argt, q0, q1) = t.select2(q0, q1);
 							if(ok)

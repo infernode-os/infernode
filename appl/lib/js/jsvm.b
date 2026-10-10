@@ -187,8 +187,6 @@ setupframe(h: int, d: ref Data.Func, c: ref Code, nb: int, this: V, a, n: int, n
 			vs[nb+Rarg0+i] = all[i];
 		for(i = n; i < np; i++)
 			vs[nb+Rarg0+i] = undef;
-		for(i = Rarg0 + np; i < c.nregs; i++)
-			vs[nb+i] = undef;
 		vs[nb+c.allreg] = objv(arrayof(all));
 	} else {
 		i: int;
@@ -197,8 +195,7 @@ setupframe(h: int, d: ref Data.Func, c: ref Code, nb: int, this: V, a, n: int, n
 				vs[nb+Rarg0+i] = vs[a+i];
 		for(i = n; i < np; i++)
 			vs[nb+Rarg0+i] = undef;
-		for(i = Rarg0 + np; i < c.nregs; i++)
-			vs[nb+i] = undef;
+		# the other registers are written before they are read
 	}
 	vs[nb+Rthis] = this;
 	vs[nb+Rfn] = objv(h);

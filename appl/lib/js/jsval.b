@@ -1041,7 +1041,8 @@ marks(h: int)
 
 marko(h: int)
 {
-	if(h < 0 || omark[h] != byte 0)
+	# (a register not yet written may hold a stale handle: a freed row is skipped)
+	if(h < 0 || h >= nobj || omark[h] != byte 0 || okind[h] == Kfree)
 		return;
 	omark[h] = byte 1;
 	if(nmark == len markstk) {

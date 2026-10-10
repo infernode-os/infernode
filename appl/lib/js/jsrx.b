@@ -14,7 +14,8 @@
 #
 
 Xchar, Xany, Xset, Xsplit, Xjmp, Xsave, Xbol, Xeol, Xword, Xnotword, Xback, Xbackname,
-Xlook, Xmatch, Xclear, Xsetc, Xcmin, Xcmax, Xmark, Xprog, Xinc, Xfail: con iota;
+Xlook, Xmatch, Xclear, Xsetc, Xcmin, Xcmax, Xmark, Xprog, Xinc, Xfail,
+Xrep: con iota;	# Xrep min max greedy kind arg fl: a one-character atom repeated (kind 0 char, 1 any, 2 set)
 
 # flag bits carried by character instructions
 Ficase, Fmulti, Fdotall, Fback: con 1 << iota;
@@ -258,6 +259,33 @@ genrepeat(c: ref C, x: ref Re.Repeat, fl: int)
 		gen(c, x.e, fl);
 		return;
 	}
+	# a single character, repeated: one instruction, backtracking a character at a time
+	kind := -1;
+	arg := 0;
+	pick a := x.e {
+	Char =>
+		kind = 0;
+		arg = a.c;
+	Any =>
+		kind = 1;
+	Class =>
+		expandstrprops(a.set);
+		if(!hasstrings(a.set) || a.neg) {
+			c.sets = (a.neg, a.set) :: c.sets;
+			kind = 2;
+			arg = c.nset++;
+		}
+	}
+	if(kind >= 0) {
+		cemit(c, Xrep);
+		cemit(c, x.min);
+		cemit(c, x.max);
+		cemit(c, x.greedy);
+		cemit(c, kind);
+		cemit(c, arg);
+		cemit(c, fl);
+		return;
+	}
 	rc := newreg(c);
 	rp := newreg(c);
 	(glo, ghi) := groupspan(x.e);
@@ -423,15 +451,19 @@ M: adt {
 	steps:	int;
 };
 
-Ychoice, Yundo: con iota;
+Ychoice, Yundo, Yrep, Ylazy: con iota;
 
-push3(m: ref M, a, b, c: int)
+# a record on the stack: kind and three words
+push4(m: ref M, k, a, b, c: int)
 {
-	if(m.sp + 3 > len m.stk) {
+	if(m.sp + 4 > len m.stk) {
+		if(len m.stk > 64*1024*1024)
+			raise "re:backtracking stack exhausted";
 		n := array[2 * len m.stk + 64] of int;
 		n[0:] = m.stk[0:m.sp];
 		m.stk = n;
 	}
+	m.stk[m.sp++] = k;
 	m.stk[m.sp++] = a;
 	m.stk[m.sp++] = b;
 	m.stk[m.sp++] = c;
@@ -439,8 +471,46 @@ push3(m: ref M, a, b, c: int)
 
 setslot(m: ref M, i, v: int)
 {
-	push3(m, Yundo, i, m.slots[i]);
+	push4(m, Yundo, i, m.slots[i], 0);
 	m.slots[i] = v;
+}
+
+# one character of a repeated atom at pos: the next position, or -1
+match1(m: ref M, kind, arg, fl, pos: int): int
+{
+	(ch, npos) := readch(m, pos, fl);
+	if(npos < 0)
+		return -1;
+	case kind {
+	0 =>
+		if(ch == arg || (fl & Ficase) && canon(ch, m.p.u) == canon(arg, m.p.u))
+			return npos;
+	1 =>
+		if((fl & Fdotall) || !islt(ch))
+			return npos;
+	2 =>
+		(neg, set) := m.p.sets[arg];
+		in := setmatch(set, ch, fl, m.p.u, m.p.flags);
+		if(neg)
+			in = !in;
+		if(in)
+			return npos;
+	}
+	return -1;
+}
+
+# the position one character back from pos, against the direction fl reads in
+back1(m: ref M, pos, fl: int): int
+{
+	s := m.s;
+	if(fl & Fback) {
+		if(m.p.u && pos < len s && s[pos] >= 16rD800 && s[pos] <= 16rDBFF && pos + 1 < len s && s[pos+1] >= 16rDC00 && s[pos+1] <= 16rDFFF)
+			return pos + 2;
+		return pos + 1;
+	}
+	if(m.p.u && pos >= 2 && s[pos-1] >= 16rDC00 && s[pos-1] <= 16rDFFF && s[pos-2] >= 16rD800 && s[pos-2] <= 16rDBFF)
+		return pos - 2;
+	return pos - 1;
 }
 
 # exec: a match at start or (unless sticky) after it: the capture positions, or nil
@@ -516,7 +586,7 @@ run(m: ref M, pc, pos, nil: int): int
 					ok = 0;
 			}
 		Xsplit =>
-			push3(m, Ychoice, code[pc+2], pos);
+			push4(m, Ychoice, code[pc+2], pos, 0);
 			pc = code[pc+1];
 		Xjmp =>
 			pc = code[pc+1];
@@ -638,6 +708,46 @@ run(m: ref M, pc, pos, nil: int): int
 			r := m.p.nslot + code[pc+1];
 			setslot(m, r, m.slots[r] + 1);
 			pc += 2;
+		Xrep =>
+			mn := code[pc+1];
+			mx := code[pc+2];
+			kind := code[pc+4];
+			arg := code[pc+5];
+			fl := code[pc+6];
+			k := 0;
+			if(code[pc+3]) {
+				# greedy: all it can, then give back one at a time
+				while(mx < 0 || k < mx) {
+					np := match1(m, kind, arg, fl, pos);
+					if(np < 0)
+						break;
+					pos = np;
+					k++;
+				}
+				if(k < mn)
+					ok = 0;
+				else {
+					if(k > mn)
+						push4(m, Yrep, pc, pos, k);
+					pc += 7;
+				}
+			} else {
+				# lazy: the least, then one more at a time
+				while(k < mn) {
+					np := match1(m, kind, arg, fl, pos);
+					if(np < 0)
+						break;
+					pos = np;
+					k++;
+				}
+				if(k < mn)
+					ok = 0;
+				else {
+					if(mx < 0 || k < mx)
+						push4(m, Ylazy, pc, pos, k);
+					pc += 7;
+				}
+			}
 		Xfail =>
 			ok = 0;
 		* =>
@@ -649,14 +759,38 @@ run(m: ref M, pc, pos, nil: int): int
 		for(;;) {
 			if(m.sp <= base)
 				return 0;
-			m.sp -= 3;
+			m.sp -= 4;
 			kind := m.stk[m.sp];
-			if(kind == Yundo) {
+			case kind {
+			Yundo =>
 				m.slots[m.stk[m.sp+1]] = m.stk[m.sp+2];
 				continue;
+			Yrep =>
+				rpc := m.stk[m.sp+1];
+				rpos := back1(m, m.stk[m.sp+2], code[rpc+6]);
+				k := m.stk[m.sp+3] - 1;
+				if(k > code[rpc+1])
+					push4(m, Yrep, rpc, rpos, k);
+				pc = rpc + 7;
+				pos = rpos;
+			Ylazy =>
+				rpc := m.stk[m.sp+1];
+				k := m.stk[m.sp+3];
+				mx := code[rpc+2];
+				if(mx >= 0 && k >= mx)
+					continue;
+				np := match1(m, code[rpc+4], code[rpc+5], code[rpc+6], m.stk[m.sp+2]);
+				if(np < 0)
+					continue;
+				k++;
+				if(mx < 0 || k < mx)
+					push4(m, Ylazy, rpc, np, k);
+				pc = rpc + 7;
+				pos = np;
+			* =>
+				pc = m.stk[m.sp+1];
+				pos = m.stk[m.sp+2];
 			}
-			pc = m.stk[m.sp+1];
-			pos = m.stk[m.sp+2];
 			break;
 		}
 		if(++m.steps > 50000000)

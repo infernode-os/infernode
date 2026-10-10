@@ -215,7 +215,13 @@ rxbuiltinexec(r: V, sv: V): V
 			setv(r, alastindex, num(0.0), 1);
 		return null;
 	}
-	caps := jsre->exec(d.pat, s, int li, sticky);
+	caps: array of int;
+	{
+		caps = jsre->exec(d.pat, s, int li, sticky);
+	} exception e {
+	"re:*" =>
+		throwerr(RangeError, "regular expression too complex: " + e[3:]);
+	}
 	if(caps == nil) {
 		if(global || sticky)
 			setv(r, alastindex, num(0.0), 1);

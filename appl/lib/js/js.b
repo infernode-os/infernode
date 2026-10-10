@@ -284,6 +284,7 @@ test262()
 	value(h, "global", objv(iglobal));
 	method(h, "evalScript", 1, t262_evalscript);
 	method(h, "gc", 0, t262_gc);
+	method(h, "disasm", 1, t262_disasm);
 	method(h, "createRealm", 0, t262_createrealm);
 	method(h, "detachArrayBuffer", 1, t262_detach);
 	dda := nativefn("IsHTMLDDA", 0, t262_dda);
@@ -292,6 +293,44 @@ test262()
 	agent := newplain();
 	value(h, "agent", objv(agent));
 }
+
+t262_disasm(nil: V, a, n: int, nil: V, nil: int): V
+{
+	f := arg(a, n, 0);
+	if(f.t != Tobj || okind[f.x] != Kfunc)
+		typeerr("disasm: not a script function");
+	pick d := odata[f.x] {
+	Func =>
+		return strv(disasm(d.code));
+	}
+	return undef;
+}
+
+disasm(c: ref Code): string
+{
+	r := sys->sprint("%s nregs %d nparams %d flags %ux\n", c.name, c.nregs, c.nparams, c.flags);
+	for(i := 0; i < len c.ops; ) {
+		op := c.ops[i];
+		l := oplen(op);
+		nm := "?";
+		if(op >= 0 && op < len opnames)
+			nm = opnames[op];
+		r += sys->sprint("%4d %s", i, nm);
+		for(k := 1; k < l && i + k < len c.ops; k++)
+			r += sys->sprint(" %d", c.ops[i+k]);
+		r += "\n";
+		i += l;
+	}
+	for(i = 0; i < len c.handlers; i++) {
+		h := c.handlers[i];
+		r += sys->sprint("handler [%d,%d) -> %d reg %d kind %d\n", h.start, h.end, h.target, h.reg, h.kind);
+	}
+	return r;
+}
+
+opnames := array[] of {
+	"undef", "null", "true", "false", "empty", "int", "const", "move", "chktdz", "chkthis", "getenv", "getenvc", "setenv", "setenvc", "pushenv", "popenv", "copyenv", "getglobal", "typeofglobal", "setglobal", "initglobal", "delglobal", "globalinit", "getname", "typeofname", "setname", "initname", "delname", "callname", "getprop", "setprop", "getelem", "setelem", "delprop", "delelem", "in", "add", "sub", "mul", "div", "mod", "exp", "shl", "shr", "ushr", "band", "bor", "bxor", "eq", "ne", "seq", "sne", "lt", "le", "gt", "ge", "instof", "neg", "pos", "tonumeric", "not", "bnot", "typeof", "inc", "dec", "jmp", "jt", "jf", "jnullish", "jnnullish", "jundef", "jnundef", "call", "callspread", "new", "newspread", "supercall", "supercallspread", "eval", "ret", "throw", "throwerr", "closure", "newobj", "newarr", "arrpush", "arrhole", "arrspread", "defdata", "defdataa", "defacc", "setproto", "copyprops", "setfnname", "sethome", "template", "regexp", "getiter", "iternext", "iterclose", "forin", "forinnext", "args", "rest", "reqobj", "tokey", "tostr", "concat", "yield", "yieldraw", "await", "genstart", "class", "defmethod", "getsuper", "setsuper", "newprivate", "getpriv", "setpriv", "defpriv", "haspriv", "privmethod", "initfields", "debugger", "pushwith", "importmeta", "import", "spreadobj", "iterdone", "lineno", "home", "finish", "logicnot", "iterthrow", "iterreturn", "asynciter", "itercall", "iterres", "itreturn", "jempty", "chkobj", "ystep", "nop",
+};
 
 t262_evalscript(nil: V, a, n: int, nil: V, nil: int): V
 {

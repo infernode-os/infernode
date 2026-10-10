@@ -1320,6 +1320,10 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 	saved := cs;
 	savedscope := cscope;
 	savedenv := envdepth;
+	savedcompletion := completion;
+	savedlabels := pendinglabels;
+	completion = -1;
+	pendinglabels = nil;
 	cs = newcfunc(parent, f, fs, src);
 	envdepth = 0;
 	strict := (pflags & Jsparse->Fstrict) != 0 || fs.strict;
@@ -1473,6 +1477,8 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 	cs = saved;
 	cscope = savedscope;
 	envdepth = savedenv;
+	completion = savedcompletion;
+	pendinglabels = savedlabels;
 	return code;
 }
 

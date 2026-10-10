@@ -40,6 +40,7 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "jsrun: %s\n", err);
 		raise "fail:init";
 	}
+	js->test262();
 	show := 0;
 	failed := 0;
 	for(args = tl args; args != nil; args = tl args) {

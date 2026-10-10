@@ -38,11 +38,27 @@ PathSeg: adt {
 	}
 };
 
-# CFF INDEX data
+# CFF INDEX data: the items are slices of the font's data, made when
+# asked for (a CID font has tens of thousands, and a copy of each
+# doubled what the font took)
 CffIndex: adt {
 	count:	int;
-	data:	array of array of byte;
+	buf:	array of byte;
+	offs:	array of int;	# item i is buf[offs[i]:offs[i+1]]
+
+	item:	fn(x: self ref CffIndex, i: int): array of byte;
 };
+
+CffIndex.item(x: self ref CffIndex, i: int): array of byte
+{
+	if(i < 0 || i >= x.count)
+		return nil;
+	s := x.offs[i];
+	e := x.offs[i+1];
+	if(s < 0 || e > len x.buf || s > e)
+		return nil;
+	return x.buf[s:e];
+}
 
 # CFF top-level DICT values
 CffTopDict: adt {
@@ -803,7 +819,7 @@ sidname(fd: ref FaceData, sid: int): string
 	sid -= NCFFSTD;
 	if(fd.strings == nil || sid >= fd.strings.count)
 		return nil;
-	return string fd.strings.data[sid];
+	return string fd.strings.item(sid);
 }
 
 Face.namedgid(f: self ref Face, name: string): int
@@ -1468,7 +1484,7 @@ getoutline(fd: ref FaceData, gid: int): ref GlyphOutline
 	if(fd.charstrings == nil || gid < 0 || gid >= fd.charstrings.count)
 		return nil;
 
-	csdata := fd.charstrings.data[gid];
+	csdata := fd.charstrings.item(gid);
 	if(csdata == nil || len csdata == 0)
 		return ref GlyphOutline(nil, 0);
 
@@ -1964,7 +1980,7 @@ interpcharstring(csdata: array of byte, gsubrs, lsubrs: ref CffIndex,
 					if(calldepth < MAXCALLSTACK){
 						callstack[calldepth] = (data, pos);
 						calldepth++;
-						data = lsubrs.data[subridx];
+						data = lsubrs.item(subridx);
 						pos = 0;
 					}
 				}
@@ -1980,7 +1996,7 @@ interpcharstring(csdata: array of byte, gsubrs, lsubrs: ref CffIndex,
 					if(calldepth < MAXCALLSTACK){
 						callstack[calldepth] = (data, pos);
 						calldepth++;
-						data = gsubrs.data[subridx];
+						data = gsubrs.item(subridx);
 						pos = 0;
 					}
 				}
@@ -2740,8 +2756,8 @@ parsecff(data: array of byte): (ref FaceData, string)
 	pos = np1;
 
 	fontname := "";
-	if(nameidx.count > 0 && nameidx.data[0] != nil)
-		fontname = string nameidx.data[0];
+	if(nameidx.count > 0 && nameidx.item(0) != nil)
+		fontname = string nameidx.item(0);
 
 	# Top DICT INDEX
 	(tdidx, np2, terr) := parseindex(data, pos);
@@ -2753,7 +2769,7 @@ parsecff(data: array of byte): (ref FaceData, string)
 		return (nil, "no Top DICT");
 
 	# Parse Top DICT
-	td := parsetopdict(tdidx.data[0]);
+	td := parsetopdict(tdidx.item(0));
 	td.fontname = fontname;
 
 	# String INDEX: the glyph names beyond the standard strings
@@ -2817,7 +2833,7 @@ parsecff(data: array of byte): (ref FaceData, string)
 				fdprivate = array[fdcount] of ref CffPrivateDict;
 				fdlsubrs = array[fdcount] of ref CffIndex;
 				for(i := 0; i < fdcount; i++){
-					fdict := parsetopdict(fdaidx.data[i]);
+					fdict := parsetopdict(fdaidx.item(i));
 					if(fdict.private_size > 0 && fdict.private_off > 0 &&
 					   fdict.private_off + fdict.private_size <= len data){
 						fpdata := data[fdict.private_off:fdict.private_off + fdict.private_size];
@@ -2904,7 +2920,7 @@ parseindex(data: array of byte, offset: int): (ref CffIndex, int, string)
 	pos += 2;
 
 	if(count == 0)
-		return (ref CffIndex(0, nil), pos, nil);
+		return (ref CffIndex(0, nil, nil), pos, nil);
 
 	if(pos >= len data)
 		return (nil, 0, "truncated INDEX offSize");
@@ -2930,20 +2946,10 @@ parseindex(data: array of byte, offset: int): (ref CffIndex, int, string)
 	datastart := pos - 1;	# offsets are 1-based in CFF
 	endpos := datastart + offsets[count];
 
-	items := array[count] of array of byte;
-	for(i = 0; i < count; i++){
-		start := datastart + offsets[i];
-		end := datastart + offsets[i + 1];
-		if(start < 0 || end > len data || start > end){
-			items[i] = nil;
-			continue;
-		}
-		item := array[end - start] of byte;
-		item[0:] = data[start:end];
-		items[i] = item;
-	}
+	for(i = 0; i <= count; i++)
+		offsets[i] += datastart;
 
-	return (ref CffIndex(count, items), endpos, nil);
+	return (ref CffIndex(count, data, offsets), endpos, nil);
 }
 
 # Parse CFF Top DICT

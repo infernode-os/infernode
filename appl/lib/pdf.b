@@ -65,7 +65,7 @@ DictEntry: adt {
 XrefEntry: adt {
 	offset: int;
 	gen: int;
-	inuse: int;
+	inuse: int;	# 1 in use, 2 in an object stream, 0 free, -1 no entry
 };
 
 CMapEntry: adt {
@@ -111,7 +111,7 @@ PdfFont: adt {
 
 PdfDoc: adt {
 	data: array of byte;
-	xref: array of ref XrefEntry;
+	xref: array of XrefEntry;
 	trailer: ref PdfObj;
 	nobjs: int;
 	enckey: array of byte;	# file encryption key (nil = not encrypted)
@@ -123,7 +123,18 @@ PdfDoc: adt {
 	encobjnum: int;		# /Encrypt dict object number (never decrypt)
 	fonts: list of (int, ref PdfFont);	# by object number
 	deffont: ref PdfFont;
+	pages: array of ref PdfObj;	# the page tree's leaves in order, as its Kids name them (references, not
+				# the pages, which are resolved when wanted); nil until wanted
+	objstms: list of ref ObjStm;	# the object streams last decompressed, newest first
 };
+
+# An object stream, decompressed, and where each object in it starts
+ObjStm: adt {
+	num:	int;
+	data:	array of byte;
+	offsets:	array of int;
+};
+NOBJSTM: con 4;
 
 # ---- Graphics state types ----
 
@@ -564,91 +575,61 @@ lenlistobj(l: list of ref PdfObj): int
 
 countpages(doc: ref PdfDoc): int
 {
-	root := dictget(doc.trailer.dval, "Root");
-	if(root == nil) return 0;
-	root = resolve(doc, root);
-	if(root == nil) return 0;
+	return len pageindex(doc);
+}
+
+# The page tree's leaves, in order, found once: a document's pages are
+# then each a lookup, not a walk of the tree (which made opening a
+# document of n pages, asking each its size, take n*n steps).
+pageindex(doc: ref PdfDoc): array of ref PdfObj
+{
+	if(doc.pages != nil)
+		return doc.pages;
+	root := resolve(doc, dictget(doc.trailer.dval, "Root"));
+	if(root == nil)
+		return doc.pages = array[0] of ref PdfObj;
 	pages := dictget(root.dval, "Pages");
-	if(pages == nil) return 0;
-	pages = resolve(doc, pages);
-	if(pages == nil) return 0;
-	return countpagenode(doc, pages, 0);
+	l: list of ref PdfObj;
+	n := 0;
+	(l, n) = pageleaves(doc, pages, l, n, 0);
+	a := array[n] of ref PdfObj;
+	for(; l != nil; l = tl l)
+		a[--n] = hd l;
+	return doc.pages = a;
+}
+
+# the leaves under the node r names (a reference, or the node itself);
+# a page is kept as its reference, a few bytes rather than its dictionary
+pageleaves(doc: ref PdfDoc, r: ref PdfObj, l: list of ref PdfObj, n, depth: int): (list of ref PdfObj, int)
+{
+	node := resolve(doc, r);
+	if(node == nil || depth > MAXPAGEDEPTH)
+		return (l, n);
+	typ := "";
+	if((t := dictget(node.dval, "Type")) != nil && t.kind == Oname)
+		typ = t.sval;
+	if(typ == "Page")
+		return (r :: l, n + 1);
+	if(typ == "Pages"){
+		kids := dictget(node.dval, "Kids");
+		if(kids != nil)
+			kids = resolve(doc, kids);
+		if(kids != nil && kids.kind == Oarray)
+			for(k := kids.aval; k != nil; k = tl k)
+				(l, n) = pageleaves(doc, hd k, l, n, depth + 1);
+	}
+	return (l, n);
 }
 
 MAXPAGEDEPTH: con 64;
 
-countpagenode(doc: ref PdfDoc, node: ref PdfObj, depth: int): int
-{
-	if(node == nil || depth > MAXPAGEDEPTH) return 0;
-	typobj := dictget(node.dval, "Type");
-	typ := "";
-	if(typobj != nil && typobj.kind == Oname)
-		typ = typobj.sval;
-	if(typ == "Page")
-		return 1;
-	if(typ == "Pages"){
-		count := 0;
-		kids := dictget(node.dval, "Kids");
-		if(kids != nil && kids.kind == Oarray){
-			for(k := kids.aval; k != nil; k = tl k){
-				child := resolve(doc, hd k);
-				if(child != nil)
-					count += countpagenode(doc, child, depth + 1);
-			}
-		}
-		return count;
-	}
-	return 0;
-}
-
 # Get the Nth page object (1-indexed)
 getpageobj(doc: ref PdfDoc, page: int): ref PdfObj
 {
-	root := dictget(doc.trailer.dval, "Root");
-	if(root == nil) return nil;
-	root = resolve(doc, root);
-	if(root == nil) return nil;
-	pages := dictget(root.dval, "Pages");
-	if(pages == nil) return nil;
-	pages = resolve(doc, pages);
-	if(pages == nil) return nil;
-
-	(pobj, nil) := findpage(doc, pages, page, 0, 0);
-	return pobj;
-}
-
-# Find page by number, returns (page obj, count so far)
-findpage(doc: ref PdfDoc, node: ref PdfObj, target, sofar, depth: int): (ref PdfObj, int)
-{
-	if(node == nil || depth > MAXPAGEDEPTH)
-		return (nil, sofar);
-	typobj := dictget(node.dval, "Type");
-	typ := "";
-	if(typobj != nil && typobj.kind == Oname)
-		typ = typobj.sval;
-
-	if(typ == "Page"){
-		sofar++;
-		if(sofar == target)
-			return (node, sofar);
-		return (nil, sofar);
-	}
-
-	if(typ == "Pages"){
-		kids := dictget(node.dval, "Kids");
-		if(kids != nil && kids.kind == Oarray){
-			for(k := kids.aval; k != nil; k = tl k){
-				child := resolve(doc, hd k);
-				if(child == nil)
-					continue;
-				(pobj, ns) := findpage(doc, child, target, sofar, depth + 1);
-				if(pobj != nil)
-					return (pobj, ns);
-				sofar = ns;
-			}
-		}
-	}
-	return (nil, sofar);
+	p := pageindex(doc);
+	if(page < 1 || page > len p)
+		return nil;
+	return resolve(doc, p[page-1]);
 }
 
 # Get MediaBox (or CropBox) dimensions in points.
@@ -4183,7 +4164,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 
 	# Parse the most recent xref (traditional or stream)
 	trailer: ref PdfObj;
-	xref: array of ref XrefEntry;
+	xref: array of XrefEntry;
 	nobjs := 0;
 	xerr, xserr: string;
 
@@ -4262,7 +4243,7 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 
 		# Grow xref if older section is larger
 		if(oldnobjs > len xref){
-			newxref := array[oldnobjs] of ref XrefEntry;
+			newxref := array[oldnobjs] of { * => XrefEntry(0, 0, -1) };
 			newxref[0:] = xref;
 			xref = newxref;
 			if(oldnobjs > nobjs)
@@ -4271,14 +4252,14 @@ parsepdf(data: array of byte): (ref PdfDoc, string)
 
 		# Merge: only fill slots that are nil in current xref
 		for(i := 0; i < len oldxref; i++){
-			if(i < len xref && xref[i] == nil)
+			if(i < len xref && xref[i].inuse < 0)
 				xref[i] = oldxref[i];
 		}
 
 		cursor = oldtrailer;
 	}
 
-	doc := ref PdfDoc(data, xref, trailer, nobjs, nil, 0, 0, 0, nil, nil, -1, nil, nil);
+	doc := ref PdfDoc(data, xref, trailer, nobjs, nil, 0, 0, 0, nil, nil, -1, nil, nil, nil, nil);
 	return (doc, nil);
 }
 
@@ -4337,7 +4318,7 @@ scanforxref(data: array of byte): int
 	return -1;
 }
 
-parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, string)
+parsexref(data: array of byte, offset: int): (array of XrefEntry, int, int, string)
 {
 	pos := skipws(data, offset);
 	if(pos + 4 > len data)
@@ -4350,7 +4331,7 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 	pos = skipws(data, pos);
 
 	maxobj := 0;
-	entries: list of (int, int, array of ref XrefEntry);
+	entries: list of (int, int, array of XrefEntry);
 
 	for(;;){
 		if(pos >= len data)
@@ -4376,7 +4357,7 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 		if(startobj + count > maxobj)
 			maxobj = startobj + count;
 
-		sect := array[count] of ref XrefEntry;
+		sect := array[count] of { * => XrefEntry(0, 0, -1) };
 		for(i := 0; i < count; i++){
 			(eoff, p3) := readint(data, pos);
 			pos = skipws(data, p3);
@@ -4389,12 +4370,12 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 				pos++;
 			}
 			pos = skipws(data, pos);
-			sect[i] = ref XrefEntry(eoff, egen, inuse);
+			sect[i] = XrefEntry(eoff, egen, inuse);
 		}
 		entries = (startobj, count, sect) :: entries;
 	}
 
-	xref := array[maxobj] of ref XrefEntry;
+	xref := array[maxobj] of { * => XrefEntry(0, 0, -1) };
 	for(; entries != nil; entries = tl entries){
 		(sobj, cnt, sect) := hd entries;
 		for(i := 0; i < cnt; i++)
@@ -4409,7 +4390,7 @@ parsexref(data: array of byte, offset: int): (array of ref XrefEntry, int, int, 
 	return (xref, maxobj, trailerpos, nil);
 }
 
-parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int, ref PdfObj, string)
+parsexrefstream(data: array of byte, offset: int): (array of XrefEntry, int, ref PdfObj, string)
 {
 	pos := skipws(data, offset);
 	(nil, p1) := readint(data, pos);
@@ -4493,7 +4474,7 @@ parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int,
 	if(sdata == nil)
 		return (nil, 0, nil, "cannot decompress xref stream: " + derr);
 
-	xref := array[size] of ref XrefEntry;
+	xref := array[size] of { * => XrefEntry(0, 0, -1) };
 	dpos := 0;
 	for(sl := subsections; sl != nil; sl = tl sl){
 		(startobj, count) := hd sl;
@@ -4514,10 +4495,10 @@ parsexrefstream(data: array of byte, offset: int): (array of ref XrefEntry, int,
 			if(objnum >= size) break;
 
 			case ftype {
-			0 => xref[objnum] = ref XrefEntry(0, f2, 0);
-			1 => xref[objnum] = ref XrefEntry(f1, f2, 1);
-			2 => xref[objnum] = ref XrefEntry(f1, f2, 2);
-			* => xref[objnum] = ref XrefEntry(0, 0, 0);
+			0 => xref[objnum] = XrefEntry(0, f2, 0);
+			1 => xref[objnum] = XrefEntry(f1, f2, 1);
+			2 => xref[objnum] = XrefEntry(f1, f2, 2);
+			* => xref[objnum] = XrefEntry(0, 0, 0);
 			}
 		}
 	}
@@ -4536,7 +4517,7 @@ readfield(data: array of byte, pos, width: int): int
 
 # Hybrid xref: if trailer has /XRefStm, parse the xref stream
 # and merge its entries (type 2 ObjStm refs) into the xref table.
-mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of ref XrefEntry, nobjs: int): (array of ref XrefEntry, int)
+mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of XrefEntry, nobjs: int): (array of XrefEntry, int)
 {
 	xsobj := dictget(trailer.dval, "XRefStm");
 	if(xsobj == nil || xsobj.kind != Oint)
@@ -4551,7 +4532,7 @@ mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of ref Xre
 
 	# Grow xref if stream section is larger
 	if(snobjs > len xref){
-		newxref := array[snobjs] of ref XrefEntry;
+		newxref := array[snobjs] of { * => XrefEntry(0, 0, -1) };
 		newxref[0:] = xref;
 		xref = newxref;
 		if(snobjs > nobjs)
@@ -4560,7 +4541,7 @@ mergehybridxref(data: array of byte, trailer: ref PdfObj, xref: array of ref Xre
 
 	# Merge: only fill nil slots (traditional entries take precedence)
 	for(i := 0; i < len sxref; i++){
-		if(i < len xref && xref[i] == nil)
+		if(i < len xref && xref[i].inuse < 0)
 			xref[i] = sxref[i];
 	}
 
@@ -4649,8 +4630,9 @@ parsestreamdata(data: array of byte, pos: int,
 	}
 	if(pos + slen > len data) slen = len data - pos;
 
-	streamdata := array[slen] of byte;
-	streamdata[0:] = data[pos:pos+slen];
+	# a slice of the file's data, not a copy: the data is kept anyway
+	# (decryption and every filter make new arrays)
+	streamdata := data[pos:pos+slen];
 	pos += slen;
 
 	pos = skipws(data, pos);
@@ -4848,7 +4830,7 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 		return nil;
 
 	entry := doc.xref[objnum];
-	if(entry == nil || entry.inuse == 0) return nil;
+	if(entry.inuse <= 0) return nil;
 
 	if(entry.inuse == 2)
 		return resolveobjstm(doc, entry.offset, entry.gen);
@@ -4873,9 +4855,12 @@ resolve(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 
 resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 {
+	for(l := doc.objstms; l != nil; l = tl l)
+		if((hd l).num == stmnum)
+			return objstmobj(hd l, idx);
 	if(stmnum < 0 || stmnum >= doc.nobjs) return nil;
 	stmentry := doc.xref[stmnum];
-	if(stmentry == nil || stmentry.inuse != 1) return nil;
+	if(stmentry.inuse != 1) return nil;
 
 	offset := stmentry.offset;
 	if(offset >= len doc.data) return nil;
@@ -4913,12 +4898,28 @@ resolveobjstm(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 		spos = sp2;
 		offsets[i] = first + ooff;
 	}
+	# kept: the objects of a stream are wanted together
+	os := ref ObjStm(stmnum, sdata, offsets);
+	keep := os :: nil;
+	k := 1;
+	for(l = doc.objstms; l != nil && k < NOBJSTM; l = tl l){
+		keep = hd l :: keep;
+		k++;
+	}
+	doc.objstms = nil;
+	for(; keep != nil; keep = tl keep)
+		doc.objstms = hd keep :: doc.objstms;
+	return objstmobj(os, idx);
+}
 
-	if(idx >= n) return nil;
-	opos := offsets[idx];
-	if(opos >= len sdata) return nil;
-
-	(parsed, nil, nil) := parseobj(sdata, opos);
+objstmobj(os: ref ObjStm, idx: int): ref PdfObj
+{
+	if(idx < 0 || idx >= len os.offsets)
+		return nil;
+	opos := os.offsets[idx];
+	if(opos >= len os.data)
+		return nil;
+	(parsed, nil, nil) := parseobj(os.data, opos);
 	return parsed;
 }
 
@@ -5386,59 +5387,42 @@ asciihexdecode(data: array of byte): (array of byte, string)
 
 extracttext(doc: ref PdfDoc): (string, string)
 {
-	root := dictget(doc.trailer.dval, "Root");
-	if(root == nil) return (nil, "no Root in trailer");
-	root = resolve(doc, root);
-	if(root == nil) return (nil, "cannot resolve Root");
-
-	pages := dictget(root.dval, "Pages");
-	if(pages == nil) return (nil, "no Pages in catalog");
-	pages = resolve(doc, pages);
-	if(pages == nil) return (nil, "cannot resolve Pages");
-
-	text := "";
-	pagenum := 0;
-	(text, pagenum) = extractpages(doc, pages, text, pagenum);
-	if(pagenum == 0)
+	pages := pageindex(doc);
+	if(len pages == 0)
 		return (nil, "no pages found");
-	return (text, nil);
-}
-
-extractpages(doc: ref PdfDoc, node: ref PdfObj,
-	text: string, pagenum: int): (string, int)
-{
-	if(node == nil)
-		return (text, pagenum);
-
-	typobj := dictget(node.dval, "Type");
-	typ := "";
-	if(typobj != nil && typobj.kind == Oname)
-		typ = typobj.sval;
-
-	if(typ == "Pages"){
-		kids := dictget(node.dval, "Kids");
-		if(kids != nil && kids.kind == Oarray){
-			for(k := kids.aval; k != nil; k = tl k){
-				child := resolve(doc, hd k);
-				if(child != nil)
-					(text, pagenum) = extractpages(doc, child, text, pagenum);
+	# each page's text as UTF-8, joined once at the end: adding to one
+	# string page by page copies the whole of it each time
+	parts := array[len pages] of array of byte;
+	total := 0;
+	for(i := 0; i < len pages; i++){
+		t := "";
+		if(i > 0)
+			t = "\n\n--- Page " + string (i+1) + " ---\n\n";
+		page := resolve(doc, pages[i]);
+		if(page == nil)
+			continue;
+		contents := dictget(page.dval, "Contents");
+		if(contents != nil){
+			{
+				pt := extractpagetext_cs(doc, contents, buildfontmap(doc, page));
+				if(pt != nil)
+					t += pt;
+			} exception {
+			"*" =>
+				;
 			}
 		}
-	} else if(typ == "Page"){
-		pagenum++;
-		if(len text > 0) text += "\n\n";
-		if(pagenum > 1)
-			text += "--- Page " + string pagenum + " ---\n\n";
-
-		fontmap := buildfontmap(doc, node);
-		contents := dictget(node.dval, "Contents");
-		if(contents != nil){
-			pagetext := extractpagetext_cs(doc, contents, fontmap);
-			if(pagetext != nil)
-				text += pagetext;
-		}
+		parts[i] = array of byte t;
+		total += len parts[i];
 	}
-	return (text, pagenum);
+	b := array[total] of byte;
+	n := 0;
+	for(i = 0; i < len parts; i++){
+		b[n:] = parts[i];
+		n += len parts[i];
+		parts[i] = nil;
+	}
+	return (string b, nil);
 }
 
 # Extract text for a single page (public API)
@@ -6619,7 +6603,7 @@ resolvenocrypt(doc: ref PdfDoc, obj: ref PdfObj): ref PdfObj
 	if(objnum < 0 || objnum >= doc.nobjs) return nil;
 
 	entry := doc.xref[objnum];
-	if(entry == nil || entry.inuse == 0) return nil;
+	if(entry.inuse <= 0) return nil;
 
 	# Handle objects stored in ObjStm (compressed object streams)
 	if(entry.inuse == 2)
@@ -6649,7 +6633,7 @@ resolveobjstmnocrypt(doc: ref PdfDoc, stmnum, idx: int): ref PdfObj
 {
 	if(stmnum < 0 || stmnum >= doc.nobjs) return nil;
 	stmentry := doc.xref[stmnum];
-	if(stmentry == nil || stmentry.inuse != 1) return nil;
+	if(stmentry.inuse != 1) return nil;
 
 	offset := stmentry.offset;
 	if(offset >= len doc.data) return nil;

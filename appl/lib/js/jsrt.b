@@ -193,6 +193,10 @@ runto(g: ref Genstate, stop: int): V
 {
 	# put a temporary suspension at the stop: the loop yields when it meets Ogenstart
 	c := g.code;
+	# (not compiled meanwhile: its operations are not its own until restored)
+	js := c.jitstate;
+	if(js == 0)
+		c.jitstate = -1;
 	saved := c.ops[stop];
 	c.ops[stop] = Oyield;
 	ins := array[3] of int;
@@ -205,10 +209,14 @@ runto(g: ref Genstate, stop: int): V
 	"*" =>
 		c.ops[stop:] = ins;
 		c.ops[stop] = saved;
+		if(js == 0)
+			c.jitstate = 0;
 		raise e;
 	}
 	c.ops[stop:] = ins;
 	c.ops[stop] = saved;
+	if(js == 0)
+		c.jitstate = 0;
 	g.pc = stop + 1;
 	g.resumereg = -1;
 	g.state = Gstart;

@@ -165,6 +165,14 @@ testJitVerify(t: ref T)
 	(nc, nr) := js->jitstats();
 	t.assert(nc > 0 && nr == 0, sys->sprint("compiled and passed: %d, %d", nc, nr));
 	js->shutdown();
+	# a generator's parameters run with its operations patched (runto):
+	# it is not compiled then
+	js = realm(t);
+	js->jit(0);
+	t.assertseq(ev(js, "function* g([...[, a]]) { let s = 0; for (let i = 0; i < 9; i++) s = s + i; yield s + a; } g([1, 2, 3]).next().value"), "38", "a generator's patterned parameters");
+	(nc, nr) = js->jitstats();
+	t.assert(nr == 0, sys->sprint("none refused: %d", nr));
+	js->shutdown();
 	for(l := "reg" :: "op" :: "jump" :: "deref" :: nil; l != nil; l = tl l) {
 		fd := sys->create("/env/jsjitcorrupt", Sys->OWRITE, 8r644);
 		sys->fprint(fd, "%s", hd l);

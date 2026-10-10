@@ -5,14 +5,20 @@ TARG=\
 	jsparse.dis\
 	jscheck.dis\
 	jsre.dis\
+	js.dis\
 
 SYSMODULES=\
 	sys.m\
+	math.m\
 	jslex.m\
 	jsparse.m\
 	jscheck.m\
 	jsre.m\
+	js.m\
 
 DISBIN=$ROOT/dis/lib/js
 
 <$ROOT/mkfiles/mkdis
+
+# js.dis is one module from several fragments
+js.dis:	jsval.b jsobj.b jsops.b jscomp.b jsvm.b jsrt.b jsbuiltin.b jsstubs.b

@@ -338,6 +338,7 @@ dis/lib/js/jslex.dis
 dis/lib/js/jscheck.dis
 dis/lib/js/jsparse.dis
 dis/lib/js/jsre.dis
+dis/lib/js/js.dis
 dis/lib/encoding/base16.dis
 dis/lib/encoding/base32.dis
 dis/lib/encoding/base32a.dis
@@ -822,6 +823,7 @@ dis/tests/taskparse_test.dis
 dis/tests/tcp_test.dis
 dis/tests/tempfile_test.dis
 dis/tests/js/jsp.dis
+dis/tests/js/jsrun.dis
 dis/tests/js/t262.dis
 dis/tests/testing/testing_test.dis
 dis/tests/textwidget_test.dis

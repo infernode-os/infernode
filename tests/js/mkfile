@@ -3,6 +3,7 @@
 TARG=\
 	t262.dis\
 	jsp.dis\
+	jsrun.dis\
 
 SYSMODULES=\
 	sys.m\
@@ -10,6 +11,7 @@ SYSMODULES=\
 	readdir.m\
 	jslex.m\
 	jsparse.m\
+	js.m\
 
 DISBIN=$ROOT/dis/tests/js
 

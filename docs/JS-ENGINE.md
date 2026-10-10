@@ -662,7 +662,8 @@ compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
   once, under collection stress).
 - `sprint`'s precision is capped at 20, so `%.*f` cannot format
   `toFixed(100)`; the engine formats exact decimals itself.
-- emu with the JIT (`-c1`, arm64 macOS) corrupts its heap loading a copy
+- emu with the JIT (`-c1`; arm64, Apple Silicon macOS; not yet tried on
+  amd64) corrupts its heap loading a copy
   of BBC's front page from a loopback HTTP server, its subresources over
   TLS from the real hosts: a freed string read in `indc`, faults in
   `markheap`, `destroy`, `movp` and `irecv`, or the VM token held for
@@ -671,5 +672,8 @@ compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
   ran it seven times cleanly, and the same page loaded from bbc.com did
   not fail.  Running the engine, Charon's modules, webfs and all of
   `/dis/lib` interpreted under `-c1` did not reliably stop it, so which
-  compiled code is at fault is not known yet.
+  compiled code is at fault is not known yet.  Not to be confused with
+  the GoDis gate's flake, which is amd64 (Linux CI) and faults under
+  `-c0` as well as `-c1`: the two may share a cause (the namespace races
+  of INFR-373), or not.
 

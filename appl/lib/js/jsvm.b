@@ -105,6 +105,8 @@ construct(f: V, args: array of V, nt: V): V
 # with n arguments at vs[a]
 callv(f, this: V, a, n: int, nt: V): V
 {
+	if(gcstress && f.t == Tobj && okind[f.x] == Kfree)
+		freeduse("call");
 	if(f.t != Tobj || (oflags[f.x] & Ocallable) == 0)
 		typeerr(show(f) + " is not a function");
 	h := f.x;

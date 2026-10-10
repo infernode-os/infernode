@@ -470,6 +470,8 @@ hasown(h, k: int): int
 
 get(h, k: int, recv: V): V
 {
+	if(gcstress && okind[h] == Kfree)
+		freeduse("get " + keystr(k));
 	for(;;) {
 		case okind[h] {
 		Kord or Karray or Kfunc or Knative or Kerror =>
@@ -543,6 +545,8 @@ protoof(v: V): int
 # [[Set]]: whether it succeeded
 set(h, k: int, v: V, recv: V): int
 {
+	if(gcstress && okind[h] == Kfree)
+		freeduse("set " + keystr(k));
 	case okind[h] {
 	Kproxy =>
 		return proxyset(h, k, v, recv);

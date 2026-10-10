@@ -3,13 +3,14 @@ implement Jscmd;
 #
 # js - run JavaScript.
 #
-#	js [-p] [-m] [-t] [-e source] [file ...]
+#	js [-p] [-m] [-t] [-g n] [-e source] [file ...]
 #
 # Each file (a module with -m), then each -e source, runs in turn in one
 # realm.  -p prints each completion value.  With no file and no source,
 # js reads and runs what is typed, a statement at a time, printing each
 # value: a statement that is not yet complete continues on the next line.
-# -t says how long each took.
+# -t says how long each took; -g n collects garbage after every n
+# allocations, to test the engine.
 #
 
 include "sys.m";
@@ -73,6 +74,12 @@ init(nil: ref Draw->Context, args: list of string)
 		"-t" =>
 			timing = 1;
 			continue;
+		"-g" =>
+			args = tl args;
+			if(args == nil)
+				usage();
+			js->stress(int hd args);
+			continue;
 		"-e" =>
 			args = tl args;
 			if(args == nil)
@@ -102,7 +109,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 usage()
 {
-	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-e source] [file ...]\n");
+	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-g n] [-e source] [file ...]\n");
 	raise "fail:usage";
 }
 

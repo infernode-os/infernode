@@ -395,7 +395,7 @@ instantiate(m: ref Mod)
 	# run the code to its stop: the environment, the function declarations
 	c := m.code;
 	dummy := newobj(Kord, -1);
-	g := ref Genstate(Gstart, c, dummy, nil, 0, -1, -1, undef, 0, undef, m.async, -1, -1, nil, 0);
+	g := ref Genstate(Gstart, c, dummy, nil, 0, -1, -1, undef, 0, undef, m.async, -1, -1, nil, 0, 0);
 	m.g = g;
 	nb := sp;
 	need := nb + c.nregs + 8;
@@ -472,9 +472,7 @@ evaluatemodule(m: ref Mod)
 			pr := newpromise(ipromisector);
 			m.promise = pr;
 			g.promise = pr;
-			gens = (g.fnh, g) :: gens;
 			asyncstep(g, Rnext, undef);
-			gens = dropgen(gens, g);
 		} else
 			resumegen(g, Rnext, undef, -1);
 	} exception e {
@@ -485,11 +483,6 @@ evaluatemodule(m: ref Mod)
 		raise e;
 	}
 	m.status = Mstatus_evaluated;
-}
-
-dropgen(l: list of (int, ref Genstate), g: ref Genstate): list of (int, ref Genstate)
-{
-	return l;
 }
 
 revres(l: list of (string, int)): list of (string, int)

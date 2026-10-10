@@ -415,6 +415,13 @@ nofree := 0;
 objsince := 0;
 gcwanted := 0;
 gcstress := 0;	# collect after this many objects or strings, to find what is not a root
+
+# an object the collector freed is used: under stress, said where
+freeduse(what: string)
+{
+	sys->fprint(sys->fildes(2), "js: freed object used: %s%s\n", what, tracetext(errtrace()));
+	raise "js: freed object used";
+}
 gcobjlimit := 100000;
 gcstrlimit := 200000;
 
@@ -1108,7 +1115,9 @@ collect()
 			oelems[h] = nil;
 			odata[h] = nil;
 		}
-	for(h = nobj - 1; h >= 0; h--)
+	# (under stress the rows freed are not used again, so that a use of
+	# one finds it free)
+	for(h = nobj - 1; h >= 0 && gcstress == 0; h--)
 		if(okind[h] == Kfree)
 			ofree[nofree++] = h;
 	nsfree = 0;

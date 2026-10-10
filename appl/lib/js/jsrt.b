@@ -24,6 +24,7 @@ Genstate: adt {
 	genobj:	int;	# the generator object
 	queue:	list of ref Asyncreq;	# an async generator's requests
 	raw:	int;		# out is an iterator result already (yield*)
+	id:	int;		# while suspended at an await, its name in gens
 };
 
 Asyncreq: adt {
@@ -75,6 +76,8 @@ markroots()
 		markjob(hd l);
 	for(l = jobstail; l != nil; l = tl l)
 		markjob(hd l);
+	for(l = running; l != nil; l = tl l)
+		markjob(hd l);
 	markv(thrown);
 	markv(genretval);
 	for(i = 0; i < len globalcodes; i++)
@@ -84,6 +87,8 @@ markroots()
 			markv(*(hd gl).t1);
 	for(rl := rootstk; rl != nil; rl = tl rl)
 		markv(hd rl);
+	for(gl2 := gens; gl2 != nil; gl2 = tl gl2)
+		markgen((hd gl2).t1);
 	markmods();
 }
 
@@ -94,7 +99,7 @@ globalcodes: array of ref Code;
 startgen(h: int, d: ref Data.Func, this: V, a, n: int): V
 {
 	c := d.code;
-	g := ref Genstate(Gstart, c, h, nil, 0, -1, -1, undef, 0, undef, (c.flags & Casync) != 0, -1, -1, nil, 0);
+	g := ref Genstate(Gstart, c, h, nil, 0, -1, -1, undef, 0, undef, (c.flags & Casync) != 0, -1, -1, nil, 0, 0);
 	# the frame's registers, set up as for a call, then saved
 	nb := sp;
 	if(nb < a + n)
@@ -314,17 +319,28 @@ asyncstep(g: ref Genstate, mode: int, v: V)
 # Await: resume g with the value's settlement
 awaitvalue(g: ref Genstate, v: V)
 {
+	# each suspension has a name of its own: two calls of one async
+	# function may be waiting at once.  It is among the roots before
+	# anything runs that may collect (a thenable's then getter).
+	g.id = ++genids;
+	gens = (g.id, g) :: gens;
+	sp0 := sp;
+	push(v);
 	p := promiseresolve(ipromisector, v);
+	push(objv(p));
 	onfulfil := nativefn("", 1, asyncfulfilled);
+	push(objv(onfulfil));
 	onreject := nativefn("", 1, asyncrejected);
-	setcap(onfulfil, array[] of {objv(g.fnh)});
-	setcap(onreject, array[] of {objv(g.fnh)});
-	gens = (g.fnh, g) :: gens;
+	push(objv(onreject));
+	setcap(onfulfil, array[] of {num(real g.id)});
+	setcap(onreject, array[] of {num(real g.id)});
 	performthen(p, objv(onfulfil), objv(onreject), -1);
+	sp = sp0;
 }
 
-# suspended async functions, by function object (the job holds the function)
+# suspended async functions, by id: roots, as their registers are only here
 gens: list of (int, ref Genstate);
+genids := 0;
 
 asyncfulfilled(nil: V, a, n: int, nil: V, f: int): V
 {
@@ -352,12 +368,12 @@ asyncrejected(nil: V, a, n: int, nil: V, f: int): V
 
 takegen(f: int): ref Genstate
 {
-	fv := capof(f, 0);
+	id := int capof(f, 0).n;
 	g: ref Genstate;
 	r: list of (int, ref Genstate);
 	for(l := gens; l != nil; l = tl l) {
 		(h, x) := hd l;
-		if(g == nil && h == fv.x && x.state == Gsuspended)
+		if(g == nil && h == id && x.state == Gsuspended)
 			g = x;
 		else
 			r = hd l :: r;
@@ -557,6 +573,7 @@ markjob(j: ref Job)
 }
 
 njobs := 0;
+running: list of ref Job;	# the jobs running, innermost first
 Maxjobs: con 1000000;
 
 enqueue(j: ref Job)
@@ -584,12 +601,17 @@ runjobs()
 		jobs = tl jobs;
 		njobs--;
 		sp0 := sp;
+		running = j :: running;	# out of the queue, but its values are still roots
 		{
 			runjob(j);
 		} exception e {
 		"js:throw" =>
 			reportuncaught(thrown);
+		"*" =>
+			running = tl running;
+			raise e;
 		}
+		running = tl running;
 		sp = sp0;
 		if(gcwanted && nframe == 0)
 			collect();

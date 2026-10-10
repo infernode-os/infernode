@@ -128,6 +128,7 @@ resetstate()
 	genreturning = 0;
 	jobs = nil;
 	jobstail = nil;
+	running = nil;
 	njobs = 0;
 	gens = nil;
 	rootstk = nil;

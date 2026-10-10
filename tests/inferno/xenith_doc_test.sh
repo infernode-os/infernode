@@ -155,6 +155,11 @@ check 'and its body is still its text' $"b '240 West Center'
 
 if {echo nonsense > $W/doc/ctl} {bad 'a bad doc ctl was taken'} {ok 'a bad doc ctl is refused'}
 
+echo Caldera > $W/doc/find
+f=`{cat $W/doc/find}
+if {~ ${index 1 $f} 1} {ok 'doc/find finds a word on the page:' $f} {bad 'doc/find:' $f}
+if {echo nosuchwordanywhere > $W/doc/find} {bad 'a word not there was found'} {ok 'a word not there is not found'}
+
 # ---- a file open as text, plumbed: shown as the document ----
 
 PDF2=/tmp/xenith_doc_test2.pdf

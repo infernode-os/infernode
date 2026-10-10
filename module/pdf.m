@@ -20,5 +20,8 @@ PDF: module {
 		extracttext: fn(d: self ref Doc, page: int): string;
 		extractall:  fn(d: self ref Doc): string;
 		dumppage:    fn(d: self ref Doc, page: int): string;
+		# the words on a page, each with its box at 72 dpi from the
+		# page's top left (where the page's text is drawn)
+		words:       fn(d: self ref Doc, page: int): list of (string, Draw->Rect);
 	};
 };

@@ -171,9 +171,32 @@ sheettext(h: int, n: int): string
 	return s.texts[n];
 }
 
-runs(nil: int, nil: int): array of Run
+# The words on a page and where they are drawn (pdf(2) follows the
+# page's text state as it renders it)
+runs(h: int, n: int): array of Run
 {
-	return nil;
+	s := get(h);
+	if(s == nil || n < 0 || n >= len s.sizes)
+		return nil;
+	if(s.runs[n] == nil){
+		l: list of (string, Rect);
+		{
+			l = s.doc.words(n+1);
+		} exception {
+		"*" =>
+			l = nil;
+		}
+		k := 0;
+		for(t := l; t != nil; t = tl t)
+			k++;
+		a := array[k] of Run;
+		for(i := 0; l != nil; l = tl l){
+			(w, r) := hd l;
+			a[i++] = Run(w, r);
+		}
+		s.runs[n] = a;
+	}
+	return s.runs[n];
 }
 
 links(nil: int): array of Link

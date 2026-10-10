@@ -190,6 +190,33 @@ testPdf(t: ref T)
 	t.asserteq(e->nsheets(h), 0, "a closed document has no sheets");
 }
 
+testPdfWords(t: ref T)
+{
+	needdisplay(t);
+	(e, h) := openfile(t, "pdf", "/lib/legal/calderalic.pdf", nil, nil);
+	sz := e->sheetsize(h, 0);
+	runs := e->runs(h, 0);
+	t.assert(len runs > 50, sys->sprint("a page's words, where they are drawn (got %d)", len runs));
+	found := 0;
+	for(i := 0; i < len runs; i++){
+		r := runs[i].r;
+		if(r.min.x < 0 || r.min.y < 0 || r.max.x > sz.x + 2 || r.max.y > sz.y + 2 || r.dx() <= 0 || r.dy() <= 0){
+			t.error(sys->sprint("word %q at %d %d %d %d: not on the page", runs[i].text, r.min.x, r.min.y, r.max.x, r.max.y));
+			break;
+		}
+		if(runs[i].text == "West")
+			found = i;
+	}
+	t.assert(found > 0, "the word West is one of them");
+	if(found > 0){
+		# the address line, 240 West Center Street, near the top left
+		r := runs[found].r;
+		t.assert(r.min.y < sz.y / 4 && r.min.x < sz.x / 2, sys->sprint("West is near the top left (at %d %d)", r.min.x, r.min.y));
+		t.assert(runs[found-1].text == "240" && runs[found-1].r.max.x <= r.min.x + 2, "after 240, to its left");
+	}
+	e->close(h);
+}
+
 testPdfApart(t: ref T)
 {
 	needdisplay(t);
@@ -294,6 +321,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Kinds", testKinds);
 	run("Lazy", testLazy);
 	run("Pdf", testPdf);
+	run("PdfWords", testPdfWords);
 	run("PdfApart", testPdfApart);
 	run("Image", testImage);
 	run("Markdown", testMarkdown);

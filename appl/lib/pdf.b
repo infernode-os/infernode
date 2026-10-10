@@ -302,6 +302,57 @@ Doc.extractall(d: self ref Doc): string
 	return text;
 }
 
+Doc.words(d: self ref Doc, page: int): list of (string, Rect)
+{
+	pdoc := getdoc(d.idx);
+	if(pdoc == nil)
+		return nil;
+	pobj := getpageobj(pdoc, page);
+	if(pobj == nil)
+		return nil;
+	(nil, ph) := getmediabox(pdoc, pobj);
+	fontmap := buildfontmap(pdoc, pobj);
+	contents := dictget(pobj.dval, "Contents");
+	if(contents == nil)
+		return nil;
+	contents = resolve(pdoc, contents);
+	if(contents == nil)
+		return nil;
+	streams: list of ref PdfObj;
+	if(contents.kind == Oarray){
+		for(a := contents.aval; a != nil; a = tl a)
+			if((st := resolve(pdoc, hd a)) != nil)
+				streams = st :: streams;
+	}else if(contents.kind == Ostream)
+		streams = contents :: nil;
+	# the streams in order, as one content stream
+	data: array of byte;
+	for(; streams != nil; streams = tl streams){
+		(sd, nil) := decompressstream(hd streams);
+		if(sd == nil)
+			continue;
+		nd := array[len sd + 1 + len data] of byte;
+		nd[0:] = sd;
+		nd[len sd] = byte '\n';
+		nd[len sd + 1:] = data;
+		data = nd;
+	}
+	if(data == nil)
+		return nil;
+	words: list of (string, Rect);
+	{
+		words = contentwords(data, fontmap, ph);
+	} exception {
+	"*" =>
+		;
+	}
+	# in the order shown
+	r: list of (string, Rect);
+	for(; words != nil; words = tl words)
+		r = hd words :: r;
+	return r;
+}
+
 Doc.dumppage(d: self ref Doc, page: int): string
 {
 	pdoc := getdoc(d.idx);
@@ -5027,6 +5078,223 @@ parsecontentstream_text(data: array of byte, fontmap: list of ref FontMapEntry):
 		pos++;
 	}
 	return text;
+}
+
+# The words a content stream shows, with their boxes on a page ph
+# points high: the text state (matrices, font, size, spacing) followed
+# as the renderer follows it, each word measured as the renderer
+# measures the text it draws. Newest first.
+contentwords(data: array of byte, fontmap: list of ref FontMapEntry, ph: real): list of (string, Rect)
+{
+	words: list of (string, Rect);
+	ctm := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+	stack: list of array of real;
+	tm := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+	tlm := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+	fs := 0.0;
+	lead := 0.0;
+	tc := 0.0;
+	tw := 0.0;
+	th := 1.0;
+	fontname := "";
+	curfont: ref FontMapEntry;
+	operands: list of string;
+	pos := 0;
+
+	while(pos < len data){
+		pos = skipws(data, pos);
+		if(pos >= len data)
+			break;
+		c := int data[pos];
+		if(c == '('){
+			(st, np) := readlitstr(data, pos);
+			operands = st :: operands;
+			pos = np;
+			continue;
+		}
+		if(c == '<' && (pos+1 >= len data || int data[pos+1] != '<')){
+			(st, np) := readhexstr(data, pos);
+			operands = st :: operands;
+			pos = np;
+			continue;
+		}
+		if(c == '['){
+			(st, np) := readtjarray(data, pos, curfont);
+			operands = ("\0" + st) :: operands;	# decoded already
+			pos = np;
+			continue;
+		}
+		if(c == '<'){
+			pos = skipdict(data, pos);
+			continue;
+		}
+		if(c == '/'){
+			(tok, np) := readcsname(data, pos);
+			operands = tok :: operands;
+			pos = np;
+			continue;
+		}
+		if((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.'){
+			(tok, np) := readtoken(data, pos);
+			operands = tok :: operands;
+			pos = np;
+			continue;
+		}
+		if(c == '%'){
+			while(pos < len data && int data[pos] != '\n')
+				pos++;
+			continue;
+		}
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '\'' || c == '"' || c == '*')){
+			pos++;
+			continue;
+		}
+		(op, np) := readtoken(data, pos);
+		pos = np;
+		nums := numargs(operands);
+		case op {
+		"q" =>
+			stack = copym(ctm) :: stack;
+		"Q" =>
+			if(stack != nil){
+				ctm = hd stack;
+				stack = tl stack;
+			}
+		"cm" =>
+			if(len nums == 6)
+				ctm = matmul(nums, ctm);
+		"BT" =>
+			tm = array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+			tlm = copym(tm);
+		"Tm" =>
+			if(len nums == 6){
+				tm = nums;
+				tlm = copym(tm);
+			}
+		"Td" or "TD" =>
+			if(len nums == 2){
+				if(op == "TD")
+					lead = -nums[1];
+				tlm = matmul(array[] of {1.0, 0.0, 0.0, 1.0, nums[0], nums[1]}, tlm);
+				tm = copym(tlm);
+			}
+		"T*" =>
+			tlm = matmul(array[] of {1.0, 0.0, 0.0, 1.0, 0.0, -lead}, tlm);
+			tm = copym(tlm);
+		"TL" =>
+			if(len nums == 1)
+				lead = nums[0];
+		"Tc" =>
+			if(len nums == 1)
+				tc = nums[0];
+		"Tw" =>
+			if(len nums == 1)
+				tw = nums[0];
+		"Tz" =>
+			if(len nums == 1)
+				th = nums[0] / 100.0;
+		"Tf" =>
+			if(operands != nil && tl operands != nil){
+				fs = real hd operands;
+				fontname = hd tl operands;
+				curfont = fontmaplookup(fontmap, fontname);
+			}
+		"Tj" or "'" or "\"" or "TJ" =>
+			if(op == "\"" && len nums >= 2){
+				tw = nums[0];
+				tc = nums[1];
+			}
+			if(op == "'" || op == "\""){
+				tlm = matmul(array[] of {1.0, 0.0, 0.0, 1.0, 0.0, -lead}, tlm);
+				tm = copym(tlm);
+			}
+			if(operands != nil){
+				st := hd operands;
+				if(len st > 0 && st[0] == 0)
+					st = st[1:];
+				else if(curfont != nil)
+					st = decodecidstr(st, curfont);
+				adv: real;
+				(words, adv) = showwords(words, cleanpdftext(st), pickfont(fontname), fs, tc, tw, th, matmul(tm, ctm), ph);
+				tm = matmul(array[] of {1.0, 0.0, 0.0, 1.0, adv, 0.0}, tm);
+			}
+		"BI" =>
+			pos = skipinlineimage(data, pos);
+		}
+		operands = nil;
+	}
+	return words;
+}
+
+# The words of text shown at trm (text space to page, y up), each
+# with its box on the page (y down); and how far the text advances
+showwords(words: list of (string, Rect), text: string, font: ref Font, fs, tc, tw, th: real,
+	trm: array of real, ph: real): (list of (string, Rect), real)
+{
+	if(font == nil || font.height <= 0)
+		return (words, 0.0);
+	fh := real font.height;
+	x := 0.0;
+	w := "";
+	x0 := 0.0;
+	for(i := 0; i < len text; i++){
+		ch := text[i:i+1];
+		a := (real font.width(ch) / fh * fs + tc) * th;
+		if(text[i] == ' '){
+			a += tw * th;
+			if(w != "")
+				words = (w, wordbox(trm, x0, x, fs, ph)) :: words;
+			w = "";
+		}else{
+			if(w == "")
+				x0 = x;
+			w += ch;
+		}
+		x += a;
+	}
+	if(w != "")
+		words = (w, wordbox(trm, x0, x, fs, ph)) :: words;
+	return (words, x);
+}
+
+# The box, on the page, of text space x0..x1 by the font's height
+wordbox(trm: array of real, x0, x1, fs, ph: real): Rect
+{
+	ys := array[] of {-0.22 * fs, 0.88 * fs};
+	xs := array[] of {x0, x1};
+	minx := 1.0e9;
+	miny := 1.0e9;
+	maxx := -1.0e9;
+	maxy := -1.0e9;
+	for(i := 0; i < 2; i++)
+		for(j := 0; j < 2; j++){
+			px := xs[i]*trm[0] + ys[j]*trm[2] + trm[4];
+			py := ph - (xs[i]*trm[1] + ys[j]*trm[3] + trm[5]);
+			if(px < minx) minx = px;
+			if(px > maxx) maxx = px;
+			if(py < miny) miny = py;
+			if(py > maxy) maxy = py;
+		}
+	return Rect((int minx, int miny), (int (maxx + 0.5), int (maxy + 0.5)));
+}
+
+# The numeric operands, in order (operands are newest first)
+numargs(l: list of string): array of real
+{
+	n := 0;
+	for(t := l; t != nil; t = tl t)
+		n++;
+	a := array[n] of real;
+	for(i := n - 1; l != nil; l = tl l)
+		a[i--] = real hd l;
+	return a;
+}
+
+copym(m: array of real): array of real
+{
+	r := array[6] of real;
+	r[0:] = m;
+	return r;
 }
 
 # ---- Content stream reading helpers ----

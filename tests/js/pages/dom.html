@@ -189,6 +189,10 @@ test('custom property', () => {
 	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
 	d.remove();
 });
+test('user timing', () => {
+	performance.mark('m1');
+	check('measure from navigationStart', performance.measure('nav', 'navigationStart', 'm1').startTime, 0);
+});
 test('intl', () => {
 	check('number', (1234567.5).toLocaleString('en-US'), '1,234,567.5');
 	check('currency', new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(9.5), '$9.50');

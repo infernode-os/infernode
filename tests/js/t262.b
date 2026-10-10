@@ -46,6 +46,7 @@ stats: list of ref Stat;
 featfail: list of ref Stat;
 failfd: ref Sys->FD;
 verbose := 0;
+showpaths := 0;	# each test's path before it runs: which one took the emulator down
 runmode := 0;
 timeout := 10000;
 gcevery := 0;	# -g n: collect after every n objects made
@@ -88,6 +89,8 @@ init(nil: ref Draw->Context, args: list of string)
 		case hd args {
 		"-v" =>
 			verbose = 1;
+		"-p" =>
+			showpaths = 1;
 		"-r" =>
 			runmode = 1;
 		"-t" =>
@@ -451,6 +454,8 @@ runtest(path, src: string, m: ref Meta): (int, string)
 # run a script in a fresh realm, in a thread of its own, with a time limit
 runone(src: string, m: ref Meta, path: string): (int, string)
 {
+	if(showpaths)
+		sys->fprint(sys->fildes(2), "RUN %s\n", path);
 	c := chan of (int, string);
 	pidc := chan of int;
 	spawn runrealm(src, m, path, c, pidc);

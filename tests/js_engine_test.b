@@ -95,6 +95,18 @@ testControl(t: ref T)
 	js->shutdown();
 }
 
+# every function compiled when first called, as a large script's are
+testLazy(t: ref T)
+{
+	js := realm(t);
+	js->lazy(0);
+	t.assertseq(ev(js, "(function () { function m(f) { return function () { return f.apply(this, arguments); }; } function bz() { return 1; } function bj() { return m(function () { return (function () { return (function () { return bz(arguments); })(); })(); }).apply(null, arguments); } return bj(); })()"), "1", "a function's own arguments, inside one whose arguments are used");
+	t.assertseq(ev(js, "function g() { var arguments = 5; return (() => (() => arguments)())(); } g(1)"), "5", "a variable named arguments, through arrows");
+	t.assertseq(ev(js, "function h() { return (function () { return (() => arguments[0])(); })(9) + arguments[0]; } h(1)"), "10", "an arrow's arguments are its function's");
+	t.assertseq(ev(js, "class A { constructor() {} }; const B = class { static name = 'own' }; A.name + B.name"), "Aown", "class names");
+	js->shutdown();
+}
+
 testErrors(t: ref T)
 {
 	js := realm(t);
@@ -181,6 +193,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 	run("Values", testValues);
 	run("Control", testControl);
+	run("Lazy", testLazy);
 	run("Errors", testErrors);
 	run("Jobs", testJobs);
 	run("HostFunctions", testHostFunctions);

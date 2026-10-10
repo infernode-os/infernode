@@ -269,7 +269,12 @@ lazyrefs(f: ref Node.Func, fs: ref CScope, r: ref R1)
 			for(s := fs.parent; s != nil; s = s.parent) {
 				b := findlocal(s, n);
 				if(b != nil) {
-					capture(s, b);
+					# an arguments object is captured through
+					# %arguments: whether an outer one is declared
+					# yet depends on the order of the source, and
+					# that one may be compiled already
+					if(b.kind != Barguments)
+						capture(s, b);
 					break;
 				}
 			}
@@ -729,9 +734,12 @@ walk1(n: ref Node, r: ref R1)
 	Export =>
 		walk1(x.decl, r);
 	Ident =>
-		ref1(r.s, r.fid, x.name);
+		# the function's own arguments first, so that the name is not
+		# taken for an outer function's (captured, after that one is
+		# compiled, when this one is lazy)
 		if(x.name == "arguments")
 			argsref1(r);
+		ref1(r.s, r.fid, x.name);
 	This =>
 		thisref1(r);
 	Super =>

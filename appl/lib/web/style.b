@@ -541,11 +541,50 @@ M: adt {
 	index:	array of int;	# per node: 1-based index among element siblings, lazily
 	count:	array of int;	# per node: number of element children, lazily (+1)
 	scope:	int;	# what :scope matches; 0, the root
+	host:	int;	# matching a shadow tree's rules: its host (featureless but for :host), and
+	sroot:	int;	# its root
 };
 
 matcher(d: ref Doc, env: ref Env): ref M
 {
-	return ref M(d, env, array[d.n] of list of string, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0);
+	return ref M(d, env, array[d.n] of list of string, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0);
+}
+
+# n's parent element for a selector of a shadow tree: past the tree's
+# top, its host, and nothing past that
+parentelm(m: ref M, n: int): int
+{
+	if(n == m.host && m.host != 0)
+		return 0;
+	p := parentel(m.d, n);
+	if(p == 0 && m.host != 0 && m.d.nodes[n].parent == m.sroot)
+		return m.host;
+	return p;
+}
+
+# a compound at the shadow host, seen from its tree: only :host and
+# :host(<compound>) can match it (CSS Scoping §3.1.1)
+hostcompound(m: ref M, c: array of ref Simple, n: int): int
+{
+	if(len c == 0)
+		return 0;
+	for(i := 0; i < len c; i++) {
+		x := c[i];
+		if(x.kind != Css->Spseudo || x.name != "host")
+			return 0;
+		if(x.sub != nil) {
+			# matched in the host's own tree
+			(h, r) := (m.host, m.sroot);
+			(m.host, m.sroot) = (0, 0);
+			ok := 0;
+			for(k := 0; k < len x.sub && !ok; k++)
+				ok = matchsel(m, x.sub[k], n);
+			(m.host, m.sroot) = (h, r);
+			if(!ok)
+				return 0;
+		}
+	}
+	return 1;
 }
 
 # n's position among its element siblings, from the previous sibling's
@@ -676,11 +715,11 @@ matchfrom(m: ref M, s: ref Sel, k, n, anchor: int): int
 	}
 	case c {
 	' ' =>
-		for(p := parentel(d, n); p != 0; p = parentel(d, p))
+		for(p := parentelm(m, n); p != 0; p = parentelm(m, p))
 			if(matchfrom(m, s, k-1, p, anchor))
 				return 1;
 	'>' =>
-		if((p := parentel(d, n)) != 0)
+		if((p := parentelm(m, n)) != 0)
 			return matchfrom(m, s, k-1, p, anchor);
 	'+' =>
 		if((p := prevel(d, n)) != 0)
@@ -695,6 +734,8 @@ matchfrom(m: ref M, s: ref Sel, k, n, anchor: int): int
 
 compound(m: ref M, c: array of ref Simple, n: int): int
 {
+	if(m.host != 0 && n == m.host)
+		return hostcompound(m, c, n);
 	d := m.d;
 	nd := d.nodes[n];
 	for(i := 0; i < len c; i++) {
@@ -2052,16 +2093,24 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 			pp := p;
 			idx := s.idx;
 			sh := share;
+			extra: list of ref Entry;
 			if(f != nil) {
 				pp = f.parent[n];
 				if(pp != 0 && d.nodes[pp].kind != Dom->Element)
 					pp = 0;
-				if(f.scope[n] != 1)
+				(m.host, m.sroot) = (0, 0);
+				if(f.scope[n] != 1) {
 					for(sl := scopes; sl != nil; sl = tl sl)
 						if((hd sl).t0 == f.scope[n]) {
 							(nil, idx, sh) = hd sl;
 							break;
 						}
+					m.sroot = f.scope[n];
+					for(rl := f.roots; rl != nil; rl = tl rl)
+						if((hd rl).t1 == m.sroot)
+							m.host = (hd rl).t0;
+				}
+				extra = hostrules(m, f, scopes, n);
 			}
 			ps: ref St;
 			if(pp != 0)
@@ -2073,7 +2122,9 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 				if(p != 0)
 					pf = filters[p];
 				(sibdoc, sibnode) = (d, n);
-				st := styleof(m, idx, n, ps, ctx, c, sh, pf);
+				if(extra != nil)
+					sh = array[Nshare] of list of (string, ref Shared);	# (not shared: it has its own)
+				st := styleof(m, idx, n, ps, ctx, c, sh, pf, extra);
 				if(nd.first != 0)
 					filters[n] = childfilter(m, n, pf);
 				c.st[n] = st;
@@ -2115,6 +2166,46 @@ flatnextskip(f: ref Dom->Flat, n, top: int): int
 		n = f.parent[n];
 	}
 	return 0;
+}
+
+# the rules of n's shadow tree, if it is a host, that are about it (:host,
+# :host(...)): below the document's author rules whatever their
+# specificity, as an inner tree's are (CSS Cascade 5 §6.1, context)
+Thost: con Thints - 1;
+
+hostrules(m: ref M, f: ref Dom->Flat, scopes: list of (int, ref Index, array of list of (string, ref Shared)), n: int): list of ref Entry
+{
+	root := 0;
+	for(rl := f.roots; rl != nil; rl = tl rl)
+		if((hd rl).t0 == n)
+			root = (hd rl).t1;
+	if(root == 0)
+		return nil;
+	idx: ref Index;
+	for(sl := scopes; sl != nil; sl = tl sl)
+		if((hd sl).t0 == root)
+			idx = (hd sl).t1;
+	if(idx == nil)
+		return nil;
+	(h, r) := (m.host, m.sroot);
+	(m.host, m.sroot) = (n, root);
+	l: list of ref Entry;
+	for(el := idx.other; el != nil; el = tl el) {
+		e := hd el;
+		last := e.sel.parts[len e.sel.parts - 1];
+		ishost := 0;
+		for(i := 0; i < len last; i++)
+			if(last[i].kind == Css->Spseudo && last[i].name == "host")
+				ishost = 1;
+		if(ishost && matchsel(m, e.sel, n)) {
+			ne := ref *e;
+			if(ne.tier >= Tauthor)
+				ne.tier = Thost;
+			l = ne :: l;
+		}
+	}
+	(m.host, m.sroot) = (h, r);
+	return l;
 }
 
 # a shadow tree's rules: the user agent's and the user's, and the tree's
@@ -2197,7 +2288,7 @@ Shared: adt {
 # Elements whose style is computed from the same inputs -- parent style,
 # matched rules, style attribute, presentational attributes -- share
 # one St: siblings in a list or a table row cascade once between them.
-styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref Computed, share: array of list of (string, ref Shared), filter: array of int): ref St
+styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref Computed, share: array of list of (string, ref Shared), filter: array of int, extra: list of ref Entry): ref St
 {
 	d := m.d;
 	mds: list of ref Md;
@@ -2212,6 +2303,8 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 		if(matchsel(m, e.sel, n))
 			matched = e :: matched;
 	}
+	for(; extra != nil; extra = tl extra)
+		matched = hd extra :: matched;
 	key := sharekey(d, n, parent, matched);
 	slot := 0;
 	if(key != nil) {

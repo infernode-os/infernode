@@ -2104,14 +2104,43 @@ hcomputed(id, n: int, prop: string): string
 		return "";
 	if(prefix(prop, "--"))
 		return css->tostring(c.st[n].vars.get(prop));
+	# a side's margin, padding or border width: one of the dump's four
+	# (top, right, bottom, left)
+	short := prop;
+	side := -1;
+	for(i := 0; i < len sides; i++) {
+		(pre, post) := (sides[i].t0, sides[i].t1);
+		if(prefix(prop, pre) && len prop > len pre + len post && prop[len prop - len post:] == post) {
+			for(k := 0; k < 4; k++)
+				if(prop[len pre:len prop - len post] == sidenames[k]) {
+					short = sides[i].t2;
+					side = k;
+				}
+		}
+	}
 	(nil, lines) := sys->tokenize(style->dump(c.st[n]), "\n");
 	for(; lines != nil; lines = tl lines) {
 		ln := hd lines;
-		if(prefix(ln, prop + " "))
-			return cssrgb(ln[len prop + 1:]);
+		if(prefix(ln, short + " ")) {
+			v := ln[len short + 1:];
+			if(side < 0)
+				return cssrgb(v);
+			(nv, vl) := sys->tokenize(v, " ");
+			if(nv != 4)
+				return "";
+			for(k := 0; k < side; k++)
+				vl = tl vl;
+			x := hd vl;
+			if(short == "border-width")
+				x += "px";
+			return x;
+		}
 	}
 	return "";
 }
+
+sidenames := array[] of {"top", "right", "bottom", "left"};
+sides := array[] of {("margin-", "", "margin"), ("padding-", "", "padding"), ("border-", "-width", "border-width")};
 
 # The dump writes colours #rrggbbaa; a computed value serializes them
 # rgb(r, g, b), or rgba() when not opaque (CSSOM §6.7.2).

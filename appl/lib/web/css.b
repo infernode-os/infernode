@@ -1377,7 +1377,12 @@ pseudofn(t: ref Tok, parent: array of ref Sel): ref Simple
 			if(s.sub == nil)
 				return nil;
 		}
-	"lang" or "dir" or "host" or "host-context" or "state" =>
+	"host" or "host-context" =>
+		# :host(<compound>)
+		s.sub = parsesellist(trim(args), nil);
+		if(s.sub == nil)
+			return nil;
+	"lang" or "dir" or "state" =>
 		if(len args == 0)
 			return nil;	# nothing to match: invalid (lang-selector-002)
 	* =>

@@ -229,6 +229,23 @@ test('shadow DOM', () => {
 	outside.remove();
 	st.remove();
 });
+test(':host', () => {
+	const st = document.createElement('style');
+	st.textContent = 'x-hostt.over { margin-left: 7px; }';
+	document.head.appendChild(st);
+	const h = document.createElement('x-hostt');
+	h.className = 'dark over';
+	document.body.appendChild(h);
+	const sr = h.attachShadow({mode: 'open'});
+	sr.innerHTML = '<style>:host { display: block; margin-left: 3px; padding-left: 2px; } :host(.dark) p { color: rgb(1, 2, 3); } :host(.light) p { color: rgb(9, 9, 9); } p:host { color: red; }</style><p>in</p>';
+	const cs = getComputedStyle(h);
+	check(':host display', cs.display, 'block');
+	check(':host padding', cs.paddingLeft, '2px');
+	check('the document over :host', cs.marginLeft, '7px');
+	check(':host(.dark) as an ancestor', getComputedStyle(sr.querySelector('p')).color, 'rgb(1, 2, 3)');
+	h.remove();
+	st.remove();
+});
 test('clock', () => {
 	check('this year', new Date().getFullYear() >= 2026, true);
 	check('now', Math.abs(Date.now() - performance.timeOrigin - performance.now()) < 2000, true);

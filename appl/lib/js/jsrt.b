@@ -1455,20 +1455,6 @@ oplen(op: int): int
 
 # ---- stubs for what comes later: proxies, typed arrays, BigInt, modules, regexps ----
 
-proxyownkeys(nil: int): array of int { typeerr("Proxy is not supported yet"); return nil; }
-proxygetproto(nil: int): int { typeerr("Proxy is not supported yet"); return -1; }
-proxysetproto(nil, nil: int): int { typeerr("Proxy is not supported yet"); return 0; }
-proxyisext(nil: int): int { typeerr("Proxy is not supported yet"); return 0; }
-proxypreventext(nil: int): int { typeerr("Proxy is not supported yet"); return 0; }
-proxygetown(nil, nil: int): (int, ref Desc) { typeerr("Proxy is not supported yet"); return (0, nil); }
-proxydefine(nil, nil: int, nil: ref Desc): int { typeerr("Proxy is not supported yet"); return 0; }
-proxyhas(nil, nil: int): int { typeerr("Proxy is not supported yet"); return 0; }
-proxyget(nil, nil: int, nil: V): V { typeerr("Proxy is not supported yet"); return undef; }
-proxyset(nil, nil: int, nil, nil: V): int { typeerr("Proxy is not supported yet"); return 0; }
-proxydelete(nil, nil: int): int { typeerr("Proxy is not supported yet"); return 0; }
-proxycall(nil: int, nil: V, nil, nil: int): V { typeerr("Proxy is not supported yet"); return undef; }
-proxyconstruct(nil, nil, nil: int, nil: V): V { typeerr("Proxy is not supported yet"); return undef; }
-
 typedgetown(nil, nil: int): (int, V, int) { return (0, undef, 0); }
 typedlen(nil: int): int { return 0; }
 typedvariable(nil: int): int { return 0; }

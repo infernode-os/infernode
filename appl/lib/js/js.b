@@ -52,6 +52,7 @@ include "jsstring.b";
 include "jscoll.b";
 include "jsregexp.b";
 include "jsdate.b";
+include "jsproxy.b";
 
 output: ref fn(s: string);
 

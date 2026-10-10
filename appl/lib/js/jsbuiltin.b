@@ -148,6 +148,7 @@ realminit()
 	promiseinit();
 	regexpinit();
 	dateinit();
+	proxyinit();
 	reflectinit();
 	generatorinit();
 }

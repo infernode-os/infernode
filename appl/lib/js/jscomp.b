@@ -3945,15 +3945,19 @@ defaultctor(derived: int, c: ref Node.Class): int
 	code.flen = 0;
 	code.nparams = 0;
 	code.nregs = Rarg0 + 4;
-	code.ops = array[] of {Oundef, Rarg0, Oret, Rarg0};
-	code.pos = array[len code.ops] of {* => c.pos};
 	code.flags = Cstrict | Cctor | Cclassfields | Cnoctor;
-	if(derived)
-		code.flags |= Cderived;
+	code.allreg = -1;
+	if(derived) {
+		# constructor(...args) { super(...args); }
+		code.flags |= Cderived | Cextra;
+		code.allreg = Rarg0;
+		code.ops = array[] of {Orest, Rarg0+1, 0, Osupercallspread, Rarg0+2, Rarg0+1, Rfn, Rnewtarget, Oret, Rarg0+2};
+	} else
+		code.ops = array[] of {Oundef, Rarg0, Oret, Rarg0};
+	code.pos = array[len code.ops] of {* => c.pos};
 	code.src = "";
 	if(c.end <= len cs.src)
 		code.src = cs.src[c.pos:c.end];
-	code.allreg = -1;
 	code.funcs = array[0] of ref Code;
 	cs.funcs = code :: cs.funcs;
 	return cs.nfunc++;

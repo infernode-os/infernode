@@ -2,7 +2,7 @@
 #
 # page_test.sh — wm/page (appl/wm/page.b) on a PDF of three pages, under
 # wm/wm with the SDL dummy driver, driven by keys
-# (tests/inferno/page_test.sh): the page shown written as an image on
+# (tests/inferno/page_keys.sh): the page shown written as an image on
 # page 1, on page 2, and turned right.  The images are the pages as
 # drawn: page 2 is not page 1, and turned it is as wide as it was tall.
 #
@@ -24,7 +24,7 @@ mkdir -p "$ROOT/tmp"
 rm -f "$ROOT"/tmp/page-1.bit "$ROOT"/tmp/page-2.bit "$ROOT"/tmp/page-r.bit
 cd "$ROOT"
 SDL_VIDEODRIVER=dummy with_timeout 90 "$EMU" -c1 -pheap=512m -pimage=512m -g1000x800 -r"$ROOT" \
-	/dis/sh.dis -c "wm/wm sh /tests/inferno/page_test.sh" </dev/null >/dev/null 2>&1 || true
+	/dis/sh.dis -c "wm/wm sh /tests/inferno/page_keys.sh" </dev/null >/dev/null 2>&1 || true
 
 failed=0
 ok() { echo "PASS: $*"; }

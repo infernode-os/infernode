@@ -2,7 +2,8 @@
 #
 # wm/page driven by keys (/chan/uitest, under wm/wm): the page shown
 # written as an image (W) on page 1, on page 2 (n), and turned right (r);
-# tests/host/page_test.sh checks the images.
+# tests/host/page_test.sh runs it under wm/wm and checks the images
+# (it is not a test the runner runs alone).
 #
 load std
 

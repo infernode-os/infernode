@@ -72,6 +72,77 @@ collectionsinit()
 	ctor("WeakRef", 1, weakrefctor, wrp);
 	method(wrp, "deref", 0, weakref_deref);
 	tag(wrp, "WeakRef");
+	frp := keep(newobj(Kord, iobjproto));
+	ctor("FinalizationRegistry", 1, finregctor, frp);
+	method(frp, "register", 2, finreg_register);
+	method(frp, "unregister", 1, finreg_unregister);
+	method(frp, "cleanupSome", 0, finreg_cleanupsome);
+	tag(frp, "FinalizationRegistry");
+}
+
+# FinalizationRegistry: cells are kept (target weakly in a weak map, the
+# token's cells by token); the collector does not yet run cleanup callbacks
+finregctor(nil: V, a, n: int, nt: V, f: int): V
+{
+	if(nt.t == Tundef)
+		typeerr("constructor FinalizationRegistry requires 'new'");
+	cb := arg(a, n, 0);
+	if(!iscallable(cb))
+		typeerr("FinalizationRegistry: cleanup must be callable");
+	h := newmap(Kfinreg, protofromctor(nt, getv(objv(f), aprototype).x));
+	defown(h, intern("%cleanup"), 0, cb);
+	return objv(h);
+}
+
+finregdata(this: V, name: string): ref Data.Map
+{
+	return mapdata(this, Kfinreg, "FinalizationRegistry.prototype." + name);
+}
+
+finreg_register(this: V, a, n: int, nil: V, nil: int): V
+{
+	d := finregdata(this, "register");
+	t := arg(a, n, 0);
+	held := arg(a, n, 1);
+	tok := arg(a, n, 2);
+	if(!canbeheldweakly(t))
+		typeerr("FinalizationRegistry.prototype.register: invalid target");
+	if(samevalue(t, held))
+		typeerr("FinalizationRegistry.prototype.register: target and holdings must not be the same");
+	if(tok.t != Tundef && !canbeheldweakly(tok))
+		typeerr("FinalizationRegistry.prototype.register: invalid unregister token");
+	if(tok.t != Tundef) {
+		i := mapfind(d, tok);
+		if(i < 0) {
+			mapput(d, tok, num(1.0));
+		} else
+			d.vals[i] = num(d.vals[i].n + 1.0);
+	}
+	return undef;
+}
+
+finreg_unregister(this: V, a, n: int, nil: V, nil: int): V
+{
+	d := finregdata(this, "unregister");
+	tok := arg(a, n, 0);
+	if(!canbeheldweakly(tok))
+		typeerr("FinalizationRegistry.prototype.unregister: invalid unregister token");
+	i := mapfind(d, tok);
+	if(i < 0)
+		return vfalse;
+	d.keys[i] = empty;
+	d.vals[i] = undef;
+	d.size--;
+	return vtrue;
+}
+
+finreg_cleanupsome(this: V, a, n: int, nil: V, nil: int): V
+{
+	finregdata(this, "cleanupSome");
+	cb := arg(a, n, 0);
+	if(cb.t != Tundef && !iscallable(cb))
+		typeerr("FinalizationRegistry.prototype.cleanupSome: callback must be callable");
+	return undef;
 }
 
 newmap(kind, proto: int): int

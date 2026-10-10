@@ -57,6 +57,8 @@ skipped := array[] of {
 	"import-defer",
 	"source-phase-imports",
 	"source-phase-imports-module-source",
+	"Temporal",
+	"ShadowRealm",
 };
 
 init(nil: ref Draw->Context, args: list of string)

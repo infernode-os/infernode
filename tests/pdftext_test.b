@@ -6,7 +6,7 @@ implement PdftextTest;
 # (its metrics), Widths, word spacing, TJ kerning inside a word, an
 # Encoding's Differences, streams through chains of filters (ASCII85,
 # RunLength, ASCIIHex, LZW), where the ink of a word lands, text cut
-# by a clipping rectangle, a Type 3
+# by a clipping rectangle, text as the clip (render mode 7), a Type 3
 # glyph, and an embedded Type 1 font whose glyphs come from a
 # subroutine and a seac.
 #
@@ -234,6 +234,27 @@ testClip(t: ref T)
 	t.assert(x1 >= 236, sys->sprint("ink to %d, not up to the clip at 240", x1));
 }
 
+# Text in render mode 7 draws nothing and becomes the clip: the page
+# filled after it is filled only inside H (40 points at x 100, its
+# baseline at 600; H is 79 to 643 units across, 0 to 718 up: pixels
+# 103 to 126, 163 to 192 at 72 dpi).
+testTextClip(t: ref T)
+{
+	if(display == nil)
+		t.skip("no display");
+	c := "BT /F1 40 Tf 7 Tr 100 600 Td (H) Tj ET 0 0 0 rg 0 0 612 792 re f";
+	(im, err) := open(t, mkpdf(c, "", HELVETICA :: nil)).renderpage(1, 72);
+	if(im == nil)
+		t.fatal("render: " + err);
+	(x0, y0, x1, y1) := inkbox(im);
+	t.log(sys->sprint("ink %d %d %d %d", x0, y0, x1, y1));
+	near(t, x0, 103, "H's left");
+	near(t, x1, 126, "H's right");
+	near(t, y0, 163, "H's top");
+	near(t, y1, 192, "the baseline");
+	t.assert(!dark(im, 116, 170), "between H's stems, above the bar");
+}
+
 # the box of the pixels darker than mid-grey
 inkbox(im: ref Image): (int, int, int, int)
 {
@@ -336,6 +357,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Filters", testFilters);
 	run("Ink", testInk);
 	run("Clip", testClip);
+	run("TextClip", testTextClip);
 	run("Type3", testType3);
 	run("Type1", testType1);
 

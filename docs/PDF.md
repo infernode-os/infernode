@@ -128,8 +128,9 @@ own widths. No bitmap fonts are used.
 - **CID fonts**: Identity and embedded CMaps (codespace ranges of one
   to four bytes, cidrange, cidchar), CIDToGIDMap, W and DW.
 - **Type 3** glyphs run their content streams through the font matrix.
-- **Text state**: Tc, Tw, Tz, TL, Ts, Tr (fill, stroke, invisible),
-  fill opacity, the clip; `Q` restores the font and text state.
+- **Text state**: Tc, Tw, Tz, TL, Ts, Tr (fill, stroke, invisible, and
+  modes 4 to 7, the glyphs becoming the clip at ET), fill opacity, the
+  clip; `Q` restores the font and text state.
 - ToUnicode CMaps (bfchar, bfrange) and, without one, the encoding's
   glyph names, for text extraction and `words`.
 - Fonts are made once a document, by object, and their programs parsed
@@ -177,9 +178,7 @@ own widths. No bitmap fonts are used.
 - **CCITTFax filter** — streams using it are silently skipped (blank areas).
 - **Text and clipping** — text is clipped to the clip path's bounds:
   exactly for a rectangle (the usual clip), to its bounding box for
-  another shape. Text render modes 4 to 7 (adding glyphs to the clip
-  path) draw as their filling modes; the clip they would make is not
-  made.
+  another shape.
 - **Annotations and forms** — AcroForm fields, widget annotations, and
   digital signatures are ignored.
 - **JavaScript and actions** — no execution environment for embedded scripts.

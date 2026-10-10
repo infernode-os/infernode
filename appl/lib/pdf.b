@@ -151,6 +151,7 @@ GState: adt {
 	clipmask: ref Image;       # GREY8 clip mask (nil = no clip, white = visible)
 	smask: ref Image;          # GREY8 soft mask from ExtGState SMask (nil = none)
 	cliprect: Rect;            # the clip's bounds on the image (text is clipped to it)
+	textclip: ref Image;       # GREY8: the glyphs shown to clip by (Tr 4-7) until ET
 };
 
 PathSeg: adt {
@@ -851,7 +852,8 @@ newgstate(): ref GState
 		3,                # strokecscomps (default RGB)
 		nil,              # clipmask (no clip)
 		nil,              # smask (no soft mask)
-		Rect((-NOCLIP, -NOCLIP), (NOCLIP, NOCLIP))
+		Rect((-NOCLIP, -NOCLIP), (NOCLIP, NOCLIP)),
+		nil               # textclip
 	);
 }
 
@@ -885,7 +887,8 @@ copygstate(gs: ref GState): ref GState
 		gs.strokecscomps,
 		gs.clipmask,     # shared ref — copy-on-write at W/W*
 		gs.smask,        # shared ref from ExtGState
-		gs.cliprect
+		gs.cliprect,
+		gs.textclip
 	);
 }
 
@@ -1232,7 +1235,13 @@ execcontentstream(doc: ref PdfDoc, img: ref Image, data: array of byte,
 				gs.tm[4] = 0.0; gs.tm[5] = 0.0;
 				gs.tlm[0:] = gs.tm;
 			"ET" =>
-				;
+				# the glyphs shown to clip by (Tr 4-7) are the clip
+				if(gs.textclip != nil){
+					if(gs.clipmask != nil)
+						intersectmask(gs.textclip, gs.clipmask);
+					gs.clipmask = gs.textclip;
+					gs.textclip = nil;
+				}
 			"Td" =>
 				if(lenlist(operands) >= 2){
 					(ty, tx, nil) := pop2(operands);
@@ -1459,6 +1468,13 @@ showtext(doc: ref PdfDoc, img: ref Image, gs: ref GState, s: string, fm: ref Pdf
 	b := tm[0]*ctm[1] + tm[1]*ctm[3];
 	c := tm[2]*ctm[0] + tm[3]*ctm[2];
 	d := tm[2]*ctm[1] + tm[3]*ctm[3];
+	# modes 4-7 add the glyphs to the clip, at ET
+	clipping := mode >= 4 && img != nil && display != nil && fm.kind != Ftype3;
+	if(clipping && gs.textclip == nil){
+		gs.textclip = display.newimage(img.r, drawm->GREY8, 0, drawm->Black);
+		if(gs.textclip == nil)
+			clipping = 0;
+	}
 	m := array[4] of real;
 	clipr: Rect;
 	clipped := 0;
@@ -1478,23 +1494,24 @@ showtext(doc: ref PdfDoc, img: ref Image, gs: ref GState, s: string, fm: ref Pdf
 		cid := code;
 		if(fm.cidmap != nil)
 			cid = cmapcid(fm.cidmap, code);
-		if(visible){
-			if(fm.kind == Ftype3)
-				type3glyph(doc, img, gs, fm, code, resources, depth);
-			else {
-				(face, gid, hs) := glyphof(fm, code, cid);
-				if(face != nil && gid > 0){
-					ox := tm[4] + gs.rise*tm[2];
-					oy := tm[5] + gs.rise*tm[3];
-					k := tfs / real face.upem;
-					m[0] = a*th*hs*k;
-					m[1] = b*th*hs*k;
-					m[2] = c*k;
-					m[3] = d*k;
-					face.drawglyphm(gid, m, img,
-						ox*ctm[0] + oy*ctm[2] + ctm[4],
-						ox*ctm[1] + oy*ctm[3] + ctm[5], colimg);
-				}
+		if(visible && fm.kind == Ftype3)
+			type3glyph(doc, img, gs, fm, code, resources, depth);
+		else if(visible || clipping){
+			(face, gid, hs) := glyphof(fm, code, cid);
+			if(face != nil && gid > 0){
+				ox := tm[4] + gs.rise*tm[2];
+				oy := tm[5] + gs.rise*tm[3];
+				k := tfs / real face.upem;
+				m[0] = a*th*hs*k;
+				m[1] = b*th*hs*k;
+				m[2] = c*k;
+				m[3] = d*k;
+				x := ox*ctm[0] + oy*ctm[2] + ctm[4];
+				y := ox*ctm[1] + oy*ctm[3] + ctm[5];
+				if(visible)
+					face.drawglyphm(gid, m, img, x, y, colimg);
+				if(clipping)
+					face.drawglyphm(gid, m, gs.textclip, x, y, display.white);
 			}
 		}
 		tx := (codewidth(fm, cid)*tfs + gs.charspace) * th;
@@ -2811,25 +2828,29 @@ buildclipmask(img: ref Image, gs: ref GState, path: list of ref PathSeg, evenodd
 			mask.fillpoly(pts, wind, white, Point(0,0));
 	}
 
-	# If existing clipmask, intersect: read both masks row by row, take min
-	if(gs.clipmask != nil){
-		w := img.r.dx();
-		h := img.r.dy();
-		oldbuf := array[w] of byte;
-		newbuf := array[w] of byte;
-		for(y := img.r.min.y; y < img.r.min.y + h; y++){
-			rr := Rect(Point(img.r.min.x, y), Point(img.r.max.x, y + 1));
-			gs.clipmask.readpixels(rr, oldbuf);
-			mask.readpixels(rr, newbuf);
-			for(x := 0; x < w; x++){
-				if(int oldbuf[x] < int newbuf[x])
-					newbuf[x] = oldbuf[x];
-			}
-			mask.writepixels(rr, newbuf);
-		}
-	}
+	# If existing clipmask, intersect
+	if(gs.clipmask != nil)
+		intersectmask(mask, gs.clipmask);
 
 	return mask;
+}
+
+# mask made the intersection of itself and old (each pixel the less)
+intersectmask(mask, old: ref Image)
+{
+	w := mask.r.dx();
+	oldbuf := array[w] of byte;
+	newbuf := array[w] of byte;
+	for(y := mask.r.min.y; y < mask.r.max.y; y++){
+		rr := Rect(Point(mask.r.min.x, y), Point(mask.r.max.x, y + 1));
+		old.readpixels(rr, oldbuf);
+		mask.readpixels(rr, newbuf);
+		for(x := 0; x < w; x++){
+			if(int oldbuf[x] < int newbuf[x])
+				newbuf[x] = oldbuf[x];
+		}
+		mask.writepixels(rr, newbuf);
+	}
 }
 
 # Transform a point through CTM

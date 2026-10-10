@@ -46,8 +46,8 @@ All notable changes to InferNode are documented in this file.
   Heros, Cursor for Times, Helvetica, Courier). Glyphs are found as
   the spec says (encodings, Differences, CMaps of mixed code lengths,
   CIDToGIDMap); word spacing, rise, horizontal scale and text render
-  modes are applied; Type 3 glyphs are drawn; text at any angle is
-  rasterised as itself. Against Poppler, over 62 pages chosen by font
+  modes are applied, text as a clip among them; text is clipped; Type 3
+  glyphs are drawn; text at any angle is rasterised as itself. Against Poppler, over 62 pages chosen by font
   kind, the difference falls by a third, and no page is worse.
 - **PDF pages painted once, at their scale**, onto the view's own
   image: no longer at twice the scale and averaged down. Fourteen pages

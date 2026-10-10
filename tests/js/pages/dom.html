@@ -189,6 +189,12 @@ test('custom property', () => {
 	check('computed colour', getComputedStyle(d).color, 'rgb(0, 0, 255)');
 	d.remove();
 });
+test('intl', () => {
+	check('number', (1234567.5).toLocaleString('en-US'), '1,234,567.5');
+	check('currency', new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(9.5), '$9.50');
+	check('date', new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeZone: 'UTC'}).format(Date.UTC(2026, 0, 2)), 'Jan 2, 2026');
+	check('callable', Intl.NumberFormat() instanceof Intl.NumberFormat, true);
+});
 test('geometry', () => {
 	const m = new DOMMatrix('matrix(1, 0, 0, 1, 10, 20)');
 	check('matrix e f', [m.e, m.f], [10, 20]);

@@ -45,6 +45,7 @@ Fetched: adt {
 };
 
 Prelude: con "/lib/js/dom.js";
+Intlsrc: con "/lib/js/intl.js";
 
 page(h: ref Js->Host): string
 {
@@ -64,6 +65,9 @@ page(h: ref Js->Host): string
 	(src, rerr) := readsrc(Prelude);
 	if(rerr != nil)
 		return rerr;
+	(isrc, ierr) := readsrc(Intlsrc);
+	if(ierr != nil)
+		return ierr;
 	pgh = h;
 	pgd = h.doc;
 	pgt0 = sys->millisec();
@@ -82,6 +86,7 @@ page(h: ref Js->Host): string
 	}
 	h.lock(h.id);
 	{
+		call(selfhost(isrc), undef, nil);
 		f := selfhost(src);
 		hk := call(f, undef, array[] of {objv(domnatives())});
 		if(hk.t != Tobj)

@@ -1292,9 +1292,16 @@ webfsget(f: ref Fetched, method, hdr: string, body: array of byte)
 		f.err = sys->sprint("webfs: %r");
 		return;
 	}
+	# the header lines, and "cookies off" for a request that must not carry
+	# the jar's (a script's cross-origin request without credentials)
 	(nil, hl) := sys->tokenize(hdr, "\n");
 	for(; hl != nil; hl = tl hl)
-		if(sys->fprint(ctl, "header %s", hd hl) < 0) {
+		if(hd hl == "cookies off") {
+			if(sys->fprint(ctl, "cookies off") < 0) {
+				f.err = sys->sprint("webfs: cookies off: %r");
+				return;
+			}
+		} else if(sys->fprint(ctl, "header %s", hd hl) < 0) {
 			f.err = sys->sprint("webfs: header: %r");
 			return;
 		}

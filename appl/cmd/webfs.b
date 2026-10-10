@@ -104,6 +104,7 @@ ConnState: adt {
 	fetching:    int;               # a fetch for gen is running
 	pending:     list of ref Tmsg;  # waiting for it, newest first
 	nopen:       int;               # open fids on its files
+	nocookies:   int;               # "cookies off": the jar is neither sent nor filled
 };
 
 # Connections nobody has open are kept, so that a client may write ctl
@@ -233,7 +234,7 @@ init(nil: ref Draw->Context, args: list of string)
 newconn(): ref ConnState
 {
 	id := nextid++;
-	c := ref ConnState(id, "", "GET", nil, nil, nil, "", 0, "", 0, 0, nil, 0);
+	c := ref ConnState(id, "", "GET", nil, nil, nil, "", 0, "", 0, 0, nil, 0, 0);
 
 	# Grow pool if needed
 	if(nconns >= len conns) {
@@ -330,16 +331,19 @@ needfetch(c: ref ConnState, m: ref Tmsg): int
 		hdrs = Header("User-Agent", useragent) :: hdrs;
 	if(!has_ae)
 		hdrs = Header("Accept-Encoding", "gzip, deflate, br") :: hdrs;
-	spawn fetcher(c, c.gen, c.method, c.url, hdrs, c.postdata);
+	j := jar;
+	if(c.nocookies)
+		j = nil;
+	spawn fetcher(c, c.gen, c.method, c.url, hdrs, c.postdata, j);
 	return 1;
 }
 
-fetcher(c: ref ConnState, gen: int, method, url: string, hdrs: list of Header, body: array of byte)
+fetcher(c: ref ConnState, gen: int, method, url: string, hdrs: list of Header, body: array of byte, j: ref Jar)
 {
 	resp: ref Response;
 	err: string;
 	{
-		(resp, err) = webclient->requestjar(method, url, hdrs, body, jar);
+		(resp, err) = webclient->requestjar(method, url, hdrs, body, j);
 	} exception e {
 	"*" =>
 		resp = nil;
@@ -677,11 +681,18 @@ connctl(c: ref ConnState, data: string): string
 	if(hasprefix(data, "method ")) {
 		m := toupper(data[len "method ":]);
 		case m {
-		"GET" or "POST" or "PUT" or "DELETE" or "HEAD" or "PATCH" =>
+		"GET" or "POST" or "PUT" or "DELETE" or "HEAD" or "PATCH" or "OPTIONS" =>
 			c.method = m;
 		* =>
 			return "invalid method: " + m;
 		}
+		c.fetched = 0;
+		c.gen++;
+		vers++;
+		return nil;
+	}
+	if(data == "cookies off" || data == "cookies on") {
+		c.nocookies = data == "cookies off";
 		c.fetched = 0;
 		c.gen++;
 		vers++;

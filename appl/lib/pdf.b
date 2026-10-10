@@ -307,6 +307,19 @@ Doc.renderpage(d: self ref Doc, page, dpi: int): (ref Image, string)
 	return renderpage(pdoc, pobj, dpi);
 }
 
+Doc.paint(d: self ref Doc, page: int, zoom: real, dst: ref Image): string
+{
+	pdoc := getdoc(d.idx);
+	if(pdoc == nil)
+		return "no document";
+	if(display == nil || dst == nil)
+		return "no display";
+	pobj := getpageobj(pdoc, page);
+	if(pobj == nil)
+		return sys->sprint("page %d not found", page);
+	return renderto(pdoc, pobj, dst, zoom);
+}
+
 Doc.extracttext(d: self ref Doc, page: int): string
 {
 	pdoc := getdoc(d.idx);
@@ -733,21 +746,22 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 		drawm->RGB24, 0, drawm->White);
 	if(img == nil)
 		return (nil, "cannot allocate page image");
+	return (img, renderto(doc, page, img, real pixw / pw));
+}
 
-	# Initialize graphics state
+# The page drawn onto img at scale pixels to the point, its top left at
+# img.r.min.
+renderto(doc: ref PdfDoc, page: ref PdfObj, img: ref Image, scale: real): string
+{
+	img.draw(img.r, display.white, nil, Point(0, 0));
 	gs := newgstate();
-	scale := real pixw / pw;
-	# PDF coordinate system: origin bottom-left, y-up
-	# Screen: origin top-left, y-down
-	# CTM transforms PDF coords -> pixel coords:
-	# x_pixel = x_pdf * scale
-	# y_pixel = pixh - y_pdf * scale
-	gs.ctm[0] = scale;    # a
-	gs.ctm[1] = 0.0;      # b
-	gs.ctm[2] = 0.0;      # c
-	gs.ctm[3] = -scale;   # d (flip y)
-	gs.ctm[4] = 0.0;      # e
-	gs.ctm[5] = real pixh; # f
+	# PDF space (origin bottom left, y up) to the image (top left, y down)
+	gs.ctm[0] = scale;
+	gs.ctm[1] = 0.0;
+	gs.ctm[2] = 0.0;
+	gs.ctm[3] = -scale;
+	gs.ctm[4] = real img.r.min.x;
+	gs.ctm[5] = real img.r.max.y;
 
 	# Get page resources (walk parent chain)
 	resources := getresources(doc, page);
@@ -758,11 +772,11 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	# Get content streams
 	contents := dictget(page.dval, "Contents");
 	if(contents == nil){
-		return (img, nil);  # blank page
+		return nil;  # blank page
 	}
 	contents = resolve(doc, contents);
 	if(contents == nil){
-		return (img, nil);
+		return nil;
 	}
 
 	# Collect content stream data
@@ -793,16 +807,16 @@ renderpage(doc: ref PdfDoc, page: ref PdfObj, dpi: int): (ref Image, string)
 	}
 
 	if(csdata == nil || len csdata == 0){
-		return (img, nil);
+		return nil;
 	}
 	# Execute content stream (exception-safe: return partial render on error)
 	{
 		execcontentstream(doc, img, csdata, gs, resources, fontmap, 0);
 	} exception e {
 	"*" =>
-		return (img, "render warning: " + e);
+		return "render warning: " + e;
 	}
-	return (img, nil);
+	return nil;
 }
 
 newgstate(): ref GState

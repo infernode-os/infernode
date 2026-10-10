@@ -122,12 +122,18 @@ paint(h: int, n: int, scale: int, dst: ref Image, r: Rect, org: Point): string
 	s := get(h);
 	if(s == nil || n < 0 || n >= len s.sizes)
 		return "no such page";
-	dpi := (72 * scale + 50) / 100;
-	if(dpi < 1)
-		dpi = 1;
 	im: ref Image;
 	err: string;
 	{
+		if(r.eq(dst.r) && org.eq((0, 0))){
+			# the whole page onto an image of its own: drawn there
+			if((err = s.doc.paint(n+1, real scale / 100.0, dst)) != nil && !prefix("render warning", err))
+				return "render: " + err;
+			return nil;
+		}
+		dpi := (72 * scale + 50) / 100;
+		if(dpi < 1)
+			dpi = 1;
 		(im, err) = s.doc.renderpage(n+1, dpi);
 	} exception e {
 	"*" =>
@@ -294,4 +300,9 @@ readfile(path: string): array of byte
 		t += m;
 	}
 	return b;
+}
+
+prefix(p, s: string): int
+{
+	return len s >= len p && s[0:len p] == p;
 }

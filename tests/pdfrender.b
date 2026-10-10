@@ -6,8 +6,10 @@ implement Pdfrender;
 # Page (from 1) of a PDF rendered by pdf(2) at dpi, written as an
 # Inferno image, with the time it took: for measuring the renderer
 # against a reference (Poppler's pdftoppm) and against itself. With
-# -n, rendered reps times and the fastest time given. Prints
-#	pages N size WxH ms T
+# -n, rendered reps times: the first time and the fastest given. Prints
+#	pages N size WxH ms T first F
+# and each memory pool's use afterwards and its high water mark
+# (#c/memory: main, heap, image), in kilobytes.
 #
 
 include "sys.m";
@@ -67,6 +69,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:open";
 	}
 	best := -1;
+	first := -1;
 	im: ref Image;
 	for(i := 0; i < reps; i++){
 		t0 := sys->millisec();
@@ -81,6 +84,8 @@ init(nil: ref Draw->Context, args: list of string)
 			sys->fprint(stderr, "pdfrender: page %d: %s\n", page, rerr);
 		if(best < 0 || t < best)
 			best = t;
+		if(first < 0)
+			first = t;
 	}
 	fd := sys->create(out, Sys->OWRITE, 8r644);
 	if(fd == nil){
@@ -91,7 +96,18 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(stderr, "pdfrender: writeimage: %r\n");
 		raise "fail:write";
 	}
-	sys->print("pages %d size %dx%d ms %d\n", doc.pagecount(), im.r.dx(), im.r.dy(), best);
+	sys->print("pages %d size %dx%d ms %d first %d\n", doc.pagecount(), im.r.dx(), im.r.dy(), best, first);
+	mem := readfile("#c/memory");
+	if(mem != nil){
+		(nil, lines) := sys->tokenize(string mem, "\n");
+		for(; lines != nil; lines = tl lines){
+			(nil, f) := sys->tokenize(hd lines, " \t");
+			# cursize maxsize highwater nalloc nfree nbrk ... name
+			if(len f >= 8)
+				sys->print("pool %s now %d high %d\n", hd tl tl tl tl tl tl tl f,
+					int hd f / 1024, int hd tl tl f / 1024);
+		}
+	}
 }
 
 readfile(path: string): array of byte
@@ -99,16 +115,15 @@ readfile(path: string): array of byte
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return nil;
-	(ok, d) := sys->fstat(fd);
-	if(ok != 0)
-		return nil;
-	n := int d.length;
-	b := array[n] of byte;
-	for(t := 0; t < n; ){
-		m := sys->read(fd, b[t:], n - t);
-		if(m <= 0)
-			return nil;
-		t += m;
+	b := array[0] of byte;
+	buf := array[65536] of byte;
+	while((m := sys->read(fd, buf, len buf)) > 0){
+		nb := array[len b + m] of byte;
+		nb[0:] = b;
+		nb[len b:] = buf[0:m];
+		b = nb;
 	}
+	if(len b == 0)
+		return nil;
 	return b;
 }

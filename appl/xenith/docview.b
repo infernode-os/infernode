@@ -900,21 +900,13 @@ painter(winid, gen: int, eng: Docengine, h, n, scale, scalable: int, size: Point
 	im: ref Image;
 	{
 		if(scalable){
-			# below 250%, painted at twice the scale and averaged
-			# down: text set at a low resolution is badly spaced
-			# (the PDF interpreter places glyphs on whole pixels)
-			f := 1;
-			if(scale < 250 && 2*sz.x <= MAXDIM && 2*sz.y <= MAXDIM)
-				f = 2;
-			hi := display.newimage(Rect((0, 0), sz.mul(f)), Draw->RGB24, 0, Draw->White);
-			if(hi == nil)
+			# painted at the scale: the engine places and smooths
+			# what it draws at the image's resolution
+			im = display.newimage(Rect((0, 0), sz), Draw->RGB24, 0, Draw->White);
+			if(im == nil)
 				err = sprint("no image: %r");
-			else if((err = eng->paint(h, n, scale * f, hi, hi.r, Point(0, 0))) == nil){
-				if(f == 1)
-					im = hi;
-				else
-					im = shrink(hi, f);
-			}
+			else
+				err = eng->paint(h, n, scale, im, im.r, Point(0, 0));
 		}else{
 			full := display.newimage(Rect((0, 0), size), mainwin.chans, 0, Draw->White);
 			if(full == nil)
@@ -946,47 +938,6 @@ painted(w: ref Window, gen: int, n, scale: int, im: ref Image, err: string)
 	d.cache = ref Painted(n, scale, im) :: d.cache;
 	if(d.shown)
 		draw(w);
-}
-
-# im (RGB24) made f times smaller, each pixel the average of the f*f
-# it covers
-shrink(im: ref Image, f: int): ref Image
-{
-	iw := im.r.dx();
-	ih := im.r.dy();
-	ow := iw / f;
-	oh := ih / f;
-	if(ow <= 0 || oh <= 0)
-		return nil;
-	out := display.newimage(Rect((0, 0), (ow, oh)), Draw->RGB24, 0, Draw->White);
-	if(out == nil)
-		return nil;
-	rows := array[f * iw * 3] of byte;
-	outrow := array[ow * 3] of byte;
-	acc := array[ow * 3] of int;
-	ff := f * f;
-	for(oy := 0; oy < oh; oy++){
-		im.readpixels(Rect((im.r.min.x, im.r.min.y + oy*f), (im.r.max.x, im.r.min.y + oy*f + f)), rows);
-		for(i := 0; i < len acc; i++)
-			acc[i] = 0;
-		for(r := 0; r < f; r++){
-			b := r * iw * 3;
-			for(ox := 0; ox < ow; ox++){
-				p := b + ox * f * 3;
-				a := ox * 3;
-				for(c := 0; c < f; c++){
-					acc[a] += int rows[p];
-					acc[a+1] += int rows[p+1];
-					acc[a+2] += int rows[p+2];
-					p += 3;
-				}
-			}
-		}
-		for(i = 0; i < len acc; i++)
-			outrow[i] = byte (acc[i] / ff);
-		out.writepixels(Rect((0, oy), (ow, oy + 1)), outrow);
-	}
-	return out;
 }
 
 # im scaled to sz, averaging the pixels each new one covers (smooth,

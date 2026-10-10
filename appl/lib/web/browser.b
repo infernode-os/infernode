@@ -1710,6 +1710,84 @@ envint(path: string): int
 	return int string buf[0:n];
 }
 
+# The origin's storage (localStorage): a directory of the user's of its
+# own, made when first wanted, which only that origin's realms are given
+Storeroot: con "lib/charon/store";
+
+storedir(url: string): string
+{
+	o := originname(url);
+	if(o == nil)
+		return nil;
+	fd := sys->open("/dev/user", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	d := "/usr/" + string buf[0:n] + "/" + Storeroot + "/" + o;
+	(ok, nil) := sys->stat(d);
+	if(ok < 0 && mkdirp(d) < 0)
+		return nil;
+	return d;
+}
+
+# an origin as a file name: scheme_host_port, nothing a path can misuse
+originname(url: string): string
+{
+	sch := lower(scheme(url));
+	if(sch == "file")
+		return "file";
+	if(sch != "http" && sch != "https")
+		return nil;
+	rest := url[len sch + 1:];
+	if(!prefix(rest, "//"))
+		return nil;
+	rest = rest[2:];
+	for(i := 0; i < len rest && rest[i] != '/' && rest[i] != '?' && rest[i] != '#'; i++)
+		;
+	auth := lower(rest[0:i]);
+	for(j := len auth - 1; j >= 0 && auth[j] != '@'; j--)
+		;
+	auth = auth[j+1:];
+	port := "80";
+	if(sch == "https")
+		port = "443";
+	for(k := len auth - 1; k >= 0 && auth[k] >= '0' && auth[k] <= '9'; k--)
+		;
+	if(k >= 0 && k < len auth - 1 && auth[k] == ':') {
+		port = auth[k+1:];
+		auth = auth[0:k];
+	}
+	name := sch + "_";
+	for(k = 0; k < len auth; k++) {
+		c := auth[k];
+		if(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '.')
+			name[len name] = c;
+		else
+			name[len name] = '_';
+	}
+	if(name == sch + "_" || prefix(name[len sch + 1:], "."))
+		return nil;
+	return name + "_" + port;
+}
+
+mkdirp(d: string): int
+{
+	(ok, nil) := sys->stat(d);
+	if(ok >= 0)
+		return 0;
+	for(i := len d - 1; i > 0 && d[i] != '/'; i--)
+		;
+	if(i > 0 && mkdirp(d[0:i]) < 0)
+		return -1;
+	fd := sys->create(d, Sys->OREAD, Sys->DMDIR|8r700);
+	if(fd == nil)
+		return -1;
+	return 0;
+}
+
 # what a page's realm may reach: the network, and a file: page's directory
 grants(url: string): list of (string, string, int)
 {
@@ -1720,6 +1798,8 @@ grants(url: string): list of (string, string, int)
 	(ok, nil) = sys->stat("/lib/js");
 	if(ok >= 0)
 		g = ("/lib/js", "/lib/js", 0) :: g;
+	if((sd := storedir(url)) != nil)
+		g = ("/mnt/store", sd, 1) :: g;
 	if(lower(scheme(url)) == "file") {
 		p := url[5:];
 		if(prefix(p, "//")) {

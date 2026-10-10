@@ -1,0 +1,8 @@
+<!DOCTYPE html><title>storage</title>
+<script>
+const n = localStorage.getItem('visits');
+localStorage.setItem('visits', String((+n || 0) + 1));
+localStorage.setItem('tricky', 'a\tb\nc\\d');
+document.title = n === null ? 'first' : 'again ' + n + ' ' + JSON.stringify(localStorage.getItem('tricky'));
+console.log(document.title);
+</script>

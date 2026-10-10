@@ -224,6 +224,8 @@ confine(grants: list of (string, string, int)): string
 		flag := Sys->MREPL;
 		if(!rw)
 			flag |= Sys->MREADONLY;
+		else
+			flag |= Sys->MCREATE;
 		if(sys->bind(src, shadow + dst, flag) < 0)
 			return sys->sprint("confine: bind %s %s: %r", src, dst);
 	}
@@ -383,6 +385,8 @@ domnatives(): int
 	method(o, "evalmodule", 2, dn_evalmodule);
 	method(o, "random", 1, dn_random);
 	method(o, "gen", 0, dn_gen);
+	method(o, "storeload", 1, dn_storeload);
+	method(o, "storesave", 2, dn_storesave);
 	method(o, "drain", 0, dn_drain);
 	value(o, "url", strv(tojs(pgh.url)));
 	return o;
@@ -895,6 +899,53 @@ dn_drain(nil: V, nil, nil: int, nil: V, nil: int): V
 	runjobs();
 	return undef;
 }
+
+# the origin's storage, granted at /mnt/store if this origin has any:
+# a file's text, or null if there is no store
+Store: con "/mnt/store";
+
+storefile(name: string): string
+{
+	for(i := 0; i < len name; i++)
+		if(!(name[i] >= 'a' && name[i] <= 'z'))
+			typeerr("bad store name");
+	return Store + "/" + name;
+}
+
+dn_storeload(nil: V, a, n: int, nil: V, nil: int): V
+{
+	(ok, nil) := sys->stat(Store);
+	if(ok < 0)
+		return null;
+	fd := sys->open(storefile(jsarg(a, n, 0)), Sys->OREAD);
+	if(fd == nil)
+		return strv("");
+	return strv(jslex->utf16(readfd(fd)));
+}
+
+dn_storesave(nil: V, a, n: int, nil: V, nil: int): V
+{
+	(ok, nil) := sys->stat(Store);
+	if(ok < 0)
+		return bool(0);
+	f := storefile(jsarg(a, n, 0));
+	b := utf8bytes(jsarg(a, n, 1));
+	if(len b > Storemax)
+		throwerr(RangeError, "QuotaExceededError: the origin's storage is full");
+	tmp := f + ".new";
+	fd := sys->create(tmp, Sys->OWRITE, 8r600);
+	if(fd == nil || sys->write(fd, b, len b) != len b)
+		return bool(0);
+	fd = nil;
+	sys->remove(f);
+	d := sys->nulldir;
+	d.name = f[len Store + 1:];
+	if(sys->wstat(tmp, d) < 0)
+		return bool(0);
+	return bool(1);
+}
+
+Storemax: con 5*1024*1024;	# a browser's usual localStorage quota
 
 dn_gen(nil: V, nil, nil: int, nil: V, nil: int): V
 {

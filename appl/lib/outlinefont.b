@@ -2175,6 +2175,7 @@ parset1(data: array of byte): (ref FaceData, string)
 		(n, p) := t1int(priv, si + 6);
 		if(n > 0 && n < 65536)
 			subrs = array[n] of array of byte;
+		(nil, p) = t1tok(priv, p);	# array
 		for(;;){
 			tok: string;
 			(tok, p) = t1tok(priv, p);

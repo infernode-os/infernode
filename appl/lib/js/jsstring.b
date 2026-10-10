@@ -1580,7 +1580,13 @@ jsonerr(p: ref Jp)
 {
 	if(p.i >= len p.s)
 		throwerr(SyntaxError, "unexpected end of JSON input");
-	throwerr(SyntaxError, sys->sprint("unexpected character in JSON at position %d", p.i));
+	a := p.i - 20;
+	if(a < 0)
+		a = 0;
+	e := p.i + 20;
+	if(e > len p.s)
+		e = len p.s;
+	throwerr(SyntaxError, sys->sprint("unexpected character %#q in JSON at position %d (near «%s»)", p.s[p.i:p.i+1], p.i, p.s[a:e]));
 }
 
 jsonws(p: ref Jp)

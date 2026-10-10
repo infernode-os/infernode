@@ -21,8 +21,17 @@
 # for the editor to finish instead, so xen can serve as $EDITOR
 # (EDITOR='xen -w') or be awaited by a script.
 #
+# On macOS, with Xenith.app installed, xen runs the app's own emu and
+# runtime tree, the signed release, rather than a development tree;
+# INFERNODE_ROOT runs a tree instead. Files given while a Xenith is
+# listening to the host's plumber are plumbed to it rather than opened
+# in another instance.
+#
 # Environment:
-#	INFERNODE_ROOT	tree to run (default: the tree holding this script)
+#	INFERNODE_ROOT	tree to run (default on macOS: Xenith.app, in
+#			/Applications or ~/Applications, if installed;
+#			otherwise the tree holding this script)
+#	XEN_APP		the Xenith.app to run, if not one of those
 #	XEN_THEME	the session's theme (default xenith): any installed theme
 #			(/lib/lucifer/theme); glenda (or plan9) is Plan 9's acme. Xenith's
 #			Theme command switches it, for this session only.
@@ -62,7 +71,19 @@ while [ -L "$self" ]; do
 done
 root=${INFERNODE_ROOT:-$(cd "$(dirname "$self")/.." && pwd)}
 case $(uname -s) in
-Darwin)	emu=$root/emu/MacOSX/o.emu ;;
+Darwin)
+	emu=$root/emu/MacOSX/o.emu
+	# The installed app's emu and tree, unless a tree was asked for.
+	# Run from inside the bundle, the emu is Xenith to the Dock.
+	if [ -z "$INFERNODE_ROOT" ]; then
+		for app in "$XEN_APP" /Applications/Xenith.app "$HOME/Applications/Xenith.app"; do
+			if [ -n "$app" ] && [ -x "$app/Contents/MacOS/emu" ]; then
+				emu=$app/Contents/MacOS/emu
+				root=$app/Contents/Resources
+				break
+			fi
+		done
+	fi ;;
 Linux)	emu=$root/emu/Linux/o.emu ;;
 *)	echo "xen: unsupported host $(uname -s); on Windows use tools/xen.ps1" >&2; exit 1 ;;
 esac
@@ -71,9 +92,10 @@ if [ ! -x "$emu" ]; then
 	exit 1
 fi
 # A headless emu runs the editor on an offscreen display and shows no
-# window at all. Refuse it, when the binary still has symbols to tell.
+# window at all. Refuse it, when the binary still has symbols to tell:
+# its own (sdl3_mainloop) or, stripped as a release is, its SDL imports.
 syms=$(nm "$emu" 2>/dev/null)
-if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q sdl3_mainloop; then
+if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q -e sdl3_mainloop -e SDL_CreateWindow; then
 	echo "xen: $emu is a headless build and cannot open a window;" >&2
 	echo "xen: build the GUI emulator (./build-macos-sdl3.sh or ./build-linux-*.sh) in $root" >&2
 	exit 1
@@ -83,6 +105,29 @@ fi
 q() {
 	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
 }
+
+# A Xenith already reading the host plumber's xenith port (below) takes
+# the files, new ones too, addressed to it. With none reading, the
+# plumber's own fallback runs xen, which starts one here. One is reading
+# while a bridge of its still has its 9p under it (9p rewrites its own
+# arguments, so look for the shell).
+reading() {
+	for b in $(pgrep -u "$(id -u)" -f 'read plumb/xenith &'); do
+		pgrep -P "$b" -f '9p read plumb' >/dev/null && return 0
+	done
+	return 1
+}
+if [ $editor = xenith ] && [ $wait = 0 ] && [ $# -gt 0 ] &&
+   plumb=$(command -v plumb) && command -v 9p >/dev/null && reading; then
+	for f in "$@"; do
+		case $f in
+		/*)	;;
+		*)	f=$PWD/$f ;;
+		esac
+		"$plumb" -s xen -d xenith -w "$PWD" "$f" || exit
+	done
+	exit 0
+fi
 
 files=
 for f in "$@"; do
@@ -99,10 +144,12 @@ xenith)
 	# With plan9port present, listen on its plumber's xenith port too
 	# (tools/xen.plumbing), so `plumb file` on the host opens the file
 	# here. The host shell kills its reader once the emu is gone.
-	# hostplumb waits for the plumber, which boot.sh starts below.
+	# It starts once boot.sh (below) has started the plumber: a hostplumb
+	# older than its own wait for the plumber (an installed app's) gives
+	# up at once.
 	if nine=$(command -v 9p); then
 		host="'$nine' read plumb/xenith & r=\$!; while kill -0 \$PPID 2>/dev/null; do sleep 1; done; kill \$r"
-		run="${run}os sh -c $(q "$host") | hostplumb & "
+		run="${run}load std; {while {! ftest -e /chan/plumb.input} {sleep 1}; os sh -c $(q "$host") | hostplumb} & "
 	fi
 	# Hosts whose files may be plumbed here (tools/rplumb): mounted at
 	# /n/<host> now, since Xenith keeps the name space it starts with.

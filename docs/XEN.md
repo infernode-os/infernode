@@ -30,8 +30,13 @@ Build the tree first (emulator and `dis/`; see
 ln -s /path/to/infernode/tools/xen ~/bin/xen
 ```
 
-The script follows the link back to the tree it lives in. To run a
-different tree, set `INFERNODE_ROOT`.
+On macOS, with `Xenith.app` installed (in `/Applications` or
+`~/Applications`; `XEN_APP` names another), `xen` runs the app's own
+emulator and runtime tree, the signed release, so the editor does not
+change with whatever a development tree has checked out or half-built,
+and the window is Xenith to the Dock. Otherwise, and on Linux, the
+script follows the link back to the tree it lives in. To run a tree,
+app or no app, set `INFERNODE_ROOT`.
 
 On Windows use `tools\xen.ps1` (`-Sam`, `-Wait` in place of `-s`, `-w`).
 Only `C:` is mounted inside InferNode, so files on other drives are
@@ -85,14 +90,17 @@ icon is `MacOSX/Xenith.png`, from which `Xenith.icns` and
   output goes to `$TMPDIR/xen.log`. With `-w` it runs in the
   foreground and returns when the editor is left, so it can be used as
   `EDITOR='xen -w'`.
-- Each `xen` invocation is a separate instance. To open files in one
-  that is already running, plumb them (below).
+- Each `xen` invocation is a separate instance, except that files given
+  while a Xenith is reading the host plumber (below) are plumbed to it
+  instead. Without files, or with `-s` or `-w`, `xen` always starts
+  one.
 - Xenith's tag line cuts a file name at its first space (as Inferno's
   acme does); sam shows such names whole.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `INFERNODE_ROOT` | tree to run | the tree holding the script |
+| `INFERNODE_ROOT` | tree to run | macOS: `Xenith.app`'s, if installed; otherwise the tree holding the script |
+| `XEN_APP` | the `Xenith.app` to run on macOS | `/Applications/Xenith.app`, then `~/Applications/Xenith.app` |
 | `XEN_THEME` | the session's theme: any installed theme; `glenda` is Plan 9's acme | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
 | `XEN_LOG` | where a detached instance's output is added, between a line marking its start and one giving the emu's exit status | `$TMPDIR/xen.log` |

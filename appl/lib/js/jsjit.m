@@ -18,6 +18,8 @@ Shape: adt {
 	trans:	list of (int, int, ref Shape);	# (key, attributes, shape)
 	owned:	int;
 	gen:	int;	# an owned shape's changes: an inline cache of one holds its gen too
+	ntrans:	int;	# transitions in trans
+	transtab:	array of list of (int, int, ref Shape);	# trans by key, when there are many
 };
 
 Jitst: adt {

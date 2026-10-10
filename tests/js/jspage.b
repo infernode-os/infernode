@@ -4,10 +4,11 @@ implement Jspage;
 # jspage - a page loaded in a browsing session with its scripts on,
 # and its text printed once they have run.
 #
-#	jspage [-w ms] [-d] [-c node] url
+#	jspage [-w ms] [-d] [-k] [-c node] url
 #
 # -w: how long to let the page's scripts run after it is shown (1000 ms);
-# -c: click node first; -d: print the document tree, not its text.
+# -c: click node first; -d: print the document tree, not its text;
+# -k: return, not halt the emulator (for prof(1) around it).
 # Console output goes to standard error.
 #
 
@@ -47,6 +48,7 @@ init(nil: ref Draw->Context, args: list of string)
 	wait := 1000;
 	dump := 0;
 	click := 0;
+	keep := 0;
 	for(args = tl args; args != nil && len hd args > 1 && (hd args)[0] == '-'; args = tl args)
 		case hd args {
 		"-w" =>
@@ -54,15 +56,17 @@ init(nil: ref Draw->Context, args: list of string)
 			wait = int hd args;
 		"-d" =>
 			dump = 1;
+		"-k" =>
+			keep = 1;
 		"-c" =>
 			args = tl args;
 			click = int hd args;
 		* =>
-			sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-c node] url\n");
+			sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-c node] url\n");
 			raise "fail:usage";
 		}
 	if(args == nil) {
-		sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-c node] url\n");
+		sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-c node] url\n");
 		raise "fail:usage";
 	}
 	url := hd args;
@@ -104,7 +108,8 @@ init(nil: ref Draw->Context, args: list of string)
 	s.stop();
 	s.open("about:blank");
 	sys->sleep(100);
-	halt();
+	if(!keep)
+		halt();
 }
 
 startwebfs()

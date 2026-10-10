@@ -584,7 +584,7 @@ Dictmin: con 64;		# shapes that grow this large become dictionaries
 
 shapeinit()
 {
-	rootshape = ref Shape(array[0] of int, array[0] of int, 0, nil, nil, 0, 0);
+	rootshape = ref Shape(array[0] of int, array[0] of int, 0, nil, nil, 0, 0, 0, nil);
 }
 
 keyhash(k: int, n: int): int
@@ -645,7 +645,10 @@ addkey(sh: ref Shape, k, attrs: int): ref Shape
 			reindex(sh);
 		return sh;
 	}
-	for(l := sh.trans; l != nil; l = tl l) {
+	l := sh.trans;
+	if(sh.transtab != nil)
+		l = sh.transtab[keyhash(k, len sh.transtab)];
+	for(; l != nil; l = tl l) {
 		(tk, ta, ts) := hd l;
 		if(tk == k && ta == attrs)
 			return ts;
@@ -657,11 +660,35 @@ addkey(sh: ref Shape, k, attrs: int): ref Shape
 	na := array[n] of int;
 	na[0:] = sh.attrs[0:sh.n];
 	na[sh.n] = attrs;
-	ns := ref Shape(nk, na, n, nil, nil, n >= Dictmin, 0);
+	ns := ref Shape(nk, na, n, nil, nil, n >= Dictmin, 0, 0, nil);
 	reindex(ns);
 	if(!ns.owned)
-		sh.trans = (k, attrs, ns) :: sh.trans;
+		addtrans(sh, k, attrs, ns);
 	return ns;
+}
+
+# a transition from sh; many (a shape objects used as maps all start from)
+# are hashed too, as a list is searched in full for each new key
+Transmin: con 8;
+
+addtrans(sh: ref Shape, k, attrs: int, ns: ref Shape)
+{
+	sh.trans = (k, attrs, ns) :: sh.trans;
+	sh.ntrans++;
+	if(sh.ntrans <= Transmin)
+		return;
+	if(sh.transtab == nil || sh.ntrans > 2 * len sh.transtab) {
+		t := array[4 * sh.ntrans] of list of (int, int, ref Shape);
+		for(l := sh.trans; l != nil; l = tl l) {
+			(tk, nil, nil) := hd l;
+			b := keyhash(tk, len t);
+			t[b] = hd l :: t[b];
+		}
+		sh.transtab = t;
+		return;
+	}
+	b := keyhash(k, len sh.transtab);
+	sh.transtab[b] = (k, attrs, ns) :: sh.transtab[b];
 }
 
 # give h a shape of its own
@@ -670,7 +697,7 @@ ownshape(h: int): ref Shape
 	sh := oshape[h];
 	if(sh.owned)
 		return sh;
-	ns := ref Shape(sh.keys[0:sh.n], sh.attrs[0:sh.n], sh.n, nil, nil, 1, 0);
+	ns := ref Shape(sh.keys[0:sh.n], sh.attrs[0:sh.n], sh.n, nil, nil, 1, 0, 0, nil);
 	ns.keys = array[sh.n + 4] of int;
 	ns.keys[0:] = sh.keys[0:sh.n];
 	ns.attrs = array[sh.n + 4] of int;

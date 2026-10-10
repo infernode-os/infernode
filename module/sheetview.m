@@ -91,9 +91,11 @@ Sheetview: module {
 
 		# the view
 		scale:	int;		# percent of the sheets' size at 100
+		rot:	int;		# quarter turns clockwise (not a flowing document)
+		dir:	int;		# the way it last moved: 1 down, -1 up (read ahead so)
 		fit:	int;		# Fitwidth, Fitpage: the scale follows the rectangle
 		org:	Draw->Point;	# the view's top left, in the column
-		sizes:	array of Draw->Point;	# the sheets, at scale 100
+		sizes:	array of Draw->Point;	# the sheets, at scale 100, as the engine has them (unturned)
 		tops:	array of int;	# each sheet's top in the column, at scale
 		colw, colh:	int;	# the column's size, at scale
 		cache:	list of ref Painted;
@@ -123,9 +125,11 @@ Sheetview: module {
 		zoom:	fn(v: self ref View, scale: int);
 		setfit:	fn(v: self ref View, fit: int);
 		gotosheet:	fn(v: self ref View, n: int);
+		rotate:	fn(v: self ref View, quarters: int);	# clockwise
+		size:	fn(v: self ref View, n: int): Draw->Point;	# sheet n at 100, turned
 		sheetat:	fn(v: self ref View, y: int): int;	# at y in the column
 		sheetrect:	fn(v: self ref View, n: int): Draw->Rect;	# on dst
-		at:	fn(v: self ref View, p: Draw->Point): (int, Draw->Point);	# the sheet and point (scale 100) under p
+		at:	fn(v: self ref View, p: Draw->Point): (int, Draw->Point);	# the sheet and point (the engine's, scale 100) under p
 
 		# the words drawn, where the engine knows them
 		wordof:	fn(v: self ref View, n: int, p: Draw->Point): (string, Draw->Rect, int);

@@ -212,10 +212,11 @@ maxdim(v: ref View): int
 {
 	m := 1;
 	for(i := 0; i < len v.sizes; i++){
-		if(v.sizes[i].x > m)
-			m = v.sizes[i].x;
-		if(v.sizes[i].y > m && !v.flowing())
-			m = v.sizes[i].y;
+		sz := v.size(i);
+		if(sz.x > m)
+			m = sz.x;
+		if(sz.y > m && !v.flowing())
+			m = sz.y;
 	}
 	return m;
 }
@@ -242,8 +243,8 @@ fitscale(v: ref View, vw, vh: int): int
 		return v.scale;
 	maxw := 1;
 	for(i := 0; i < len v.sizes; i++)
-		if(v.sizes[i].x > maxw)
-			maxw = v.sizes[i].x;
+		if(v.size(i).x > maxw)
+			maxw = v.size(i).x;
 	vw -= 2*GAP;
 	vh -= 2*GAP;
 	if(vw < 10)
@@ -252,7 +253,7 @@ fitscale(v: ref View, vw, vh: int): int
 		vh = 10;
 	s := vw * 100 / maxw;
 	if(v.fit == Fitpage){
-		first := v.sizes[0];
+		first := v.size(0);
 		if(first.y > 0 && vh * 100 / first.y < s)
 			s = vh * 100 / first.y;
 	}
@@ -270,9 +271,10 @@ stack(v: ref View)
 	y := pad;
 	w := 0;
 	for(i := 0; i < n; i++){
+		sz := v.size(i);
 		v.tops[i] = y;
-		y += v.sizes[i].y * v.scale / 100 + pad;
-		if((sw := v.sizes[i].x * v.scale / 100) > w)
+		y += sz.y * v.scale / 100 + pad;
+		if((sw := sz.x * v.scale / 100) > w)
 			w = sw;
 	}
 	v.colw = w + 2*pad;
@@ -361,8 +363,9 @@ View.sheetat(v: self ref View, y: int): int
 View.sheetrect(v: self ref View, n: int): Rect
 {
 	fr := v.r;
-	sw := v.sizes[n].x * v.scale / 100;
-	sh := v.sizes[n].y * v.scale / 100;
+	sz := v.size(n);
+	sw := sz.x * v.scale / 100;
+	sh := sz.y * v.scale / 100;
 	x := (v.colw - sw) / 2;
 	if(v.colw < fr.dx())
 		x += (fr.dx() - v.colw) / 2;
@@ -446,7 +449,7 @@ paintsheet(v: ref View, n: int, sr, fr: Rect)
 		return;
 	dst := v.dst;
 	scalable := v.eng->scalable(v.h);
-	if(!scalable && v.scale == 100){
+	if(!scalable && v.scale == 100 && v.rot == 0){
 		# straight onto dst
 		if(v.eng->paint(v.h, n, 100, dst, vis, vis.min.sub(sr.min)) != nil)
 			blank(dst, vis);
@@ -568,6 +571,7 @@ mark(v: ref View, n: int, r: Rect, col: ref Image)
 		return;
 	sr := v.sheetrect(n);
 	s := v.scale;
+	r = turnrect(v, n, r);
 	rr := Rect(r.min.mul(s).div(100), r.max.mul(s).div(100)).addpt(sr.min).inset(-1);
 	v.dst.border(rr, 2, col, Point(0, 0));
 }
@@ -581,7 +585,7 @@ requestpaint(v: ref View)
 	if(v.h < 0 || v.painting)
 		return;
 	scalable := v.eng->scalable(v.h);
-	if(!scalable && (v.scale == 100 || v.flowing()))
+	if(!scalable && (v.scale == 100 && v.rot == 0 || v.flowing()))
 		return;
 	first := -1;
 	last := -1;
@@ -597,15 +601,29 @@ requestpaint(v: ref View)
 	}
 	if(first < 0)
 		return;
-	prune(v, first - 1, last + 1);
-	for(n = first; n <= last + 1 && n < len v.sizes; n++){
-		if(cached(v, n, v.scale) != nil)
+	# the sheets in view, then the next the way it is going
+	ahead := last + 1;
+	if(v.dir < 0)
+		ahead = first - 1;
+	lo := first;
+	hi := last;
+	if(ahead < lo)
+		lo = ahead;
+	if(ahead > hi)
+		hi = ahead;
+	prune(v, lo, hi);
+	for(n = first; n <= last + 1; n++){
+		m := n;
+		if(n > last)
+			m = ahead;
+		if(m < 0 || m >= len v.sizes || cached(v, m, v.scale) != nil)
 			continue;
-		sz := Point(v.sizes[n].x * v.scale / 100, v.sizes[n].y * v.scale / 100);
+		sz := v.size(m);
+		sz = Point(sz.x * v.scale / 100, sz.y * v.scale / 100);
 		if(sz.x <= 0 || sz.y <= 0 || sz.x > MAXDIM || sz.y > MAXDIM)
 			continue;
 		v.painting = 1;
-		spawn painter(v, v.gen, v.dst.display, v.dst.chans, v.eng, v.h, n, v.scale, scalable, v.sizes[n]);
+		spawn painter(v, v.gen, v.dst.display, v.dst.chans, v.eng, v.h, m, v.scale, scalable, v.sizes[m], v.rot);
 		return;
 	}
 }
@@ -634,7 +652,7 @@ otherkept(l: list of ref Painted, n: int): int
 	return 0;
 }
 
-painter(v: ref View, gen: int, disp: ref Display, chans: Draw->Chans, eng: Docengine, h, n, scale, scalable: int, size: Point)
+painter(v: ref View, gen: int, disp: ref Display, chans: Draw->Chans, eng: Docengine, h, n, scale, scalable: int, size: Point, rot: int)
 {
 	err: string;
 	sz := Point(size.x * scale / 100, size.y * scale / 100);
@@ -655,6 +673,8 @@ painter(v: ref View, gen: int, disp: ref Display, chans: Draw->Chans, eng: Docen
 			else if((err = eng->paint(h, n, 100, full, full.r, Point(0, 0))) == nil)
 				im = boxscale(full, sz);
 		}
+		if(im != nil && err == nil && rot != 0)
+			im = turn(im, rot);
 	} exception e {
 	"*" =>
 		err = "paint: " + e;
@@ -731,15 +751,130 @@ boxscale(im: ref Image, sz: Point): ref Image
 	return out;
 }
 
+# im turned q quarter turns clockwise, as RGB24
+turn(im: ref Image, q: int): ref Image
+{
+	disp := im.display;
+	src := im;
+	if(!src.chans.eq(Draw->RGB24)){
+		src = disp.newimage(im.r, Draw->RGB24, 0, Draw->Nofill);
+		if(src == nil)
+			return im;
+		src.draw(src.r, im, nil, im.r.min);
+	}
+	w := src.r.dx();
+	h := src.r.dy();
+	ow := w;
+	oh := h;
+	if(q & 1)
+		(ow, oh) = (h, w);
+	out := disp.newimage(Rect((0, 0), (ow, oh)), Draw->RGB24, 0, Draw->Nofill);
+	if(out == nil)
+		return im;
+	b := array[w * h * 3] of byte;
+	src.readpixels(src.r, b);
+	o := array[ow * oh * 3] of byte;
+	for(y := 0; y < h; y++){
+		for(x := 0; x < w; x++){
+			# where (x, y) goes
+			tx, ty: int;
+			case q {
+			1 =>	(tx, ty) = (h - 1 - y, x);
+			2 =>	(tx, ty) = (w - 1 - x, h - 1 - y);
+			* =>	(tx, ty) = (y, w - 1 - x);
+			}
+			i := (y*w + x) * 3;
+			j := (ty*ow + tx) * 3;
+			o[j] = b[i];
+			o[j+1] = b[i+1];
+			o[j+2] = b[i+2];
+		}
+	}
+	out.writepixels(out.r, o);
+	return out;
+}
+
+# A point on sheet n, turned (scale 100), as the engine has it, and
+# the engine's point (or rectangle) turned
+unturn(v: ref View, n: int, p: Point): Point
+{
+	w := v.sizes[n].x;
+	h := v.sizes[n].y;
+	case v.rot {
+	1 =>	return Point(p.y, h - p.x);
+	2 =>	return Point(w - p.x, h - p.y);
+	3 =>	return Point(w - p.y, p.x);
+	}
+	return p;
+}
+
+turnpt(v: ref View, n: int, p: Point): Point
+{
+	w := v.sizes[n].x;
+	h := v.sizes[n].y;
+	case v.rot {
+	1 =>	return Point(h - p.y, p.x);
+	2 =>	return Point(w - p.x, h - p.y);
+	3 =>	return Point(p.y, w - p.x);
+	}
+	return p;
+}
+
+turnrect(v: ref View, n: int, r: Rect): Rect
+{
+	if(v.rot == 0)
+		return r;
+	a := turnpt(v, n, r.min);
+	b := turnpt(v, n, r.max);
+	return Rect((min(a.x, b.x), min(a.y, b.y)), (max(a.x, b.x), max(a.y, b.y)));
+}
+
+min(a, b: int): int
+{
+	if(a < b)
+		return a;
+	return b;
+}
+
+max(a, b: int): int
+{
+	if(a > b)
+		return a;
+	return b;
+}
+
+# Sheet n's size at scale 100, turned
+View.size(v: self ref View, n: int): Point
+{
+	sz := v.sizes[n];
+	if(v.rot & 1)
+		return Point(sz.y, sz.x);
+	return sz;
+}
+
+View.rotate(v: self ref View, q: int)
+{
+	if(v.flowing())
+		return;
+	v.rot = (v.rot + q) & 3;
+	v.cache = nil;
+	v.word = nil;
+	v.vw = v.vh = 0;	# laid out again, where it was
+}
+
 # ---- moving about ----
 
 View.scroll(v: self ref View, dy: int)
 {
-	v.org.y += dy;
+	v.pan(Point(v.org.x, v.org.y + dy));
 }
 
 View.pan(v: self ref View, org: Point)
 {
+	if(org.y > v.org.y)
+		v.dir = 1;
+	else if(org.y < v.org.y)
+		v.dir = -1;
 	v.org = org;
 }
 
@@ -784,7 +919,7 @@ View.gotosheet(v: self ref View, n: int)
 		n = len v.tops - 1;
 	if(n < 0)
 		return;
-	v.org.y = v.tops[n] - GAP;
+	v.pan(Point(v.org.x, v.tops[n] - GAP));
 }
 
 # The sheet and the point on it (scale 100) under p on dst
@@ -795,7 +930,7 @@ View.at(v: self ref View, p: Point): (int, Point)
 	for(n := v.sheetat(v.org.y + p.y - v.r.min.y); n >= 0 && n < len v.sizes; n--){
 		sr := v.sheetrect(n);
 		if(p.in(sr))
-			return (n, p.sub(sr.min).mul(100).div(v.scale));
+			return (n, unturn(v, n, p.sub(sr.min).mul(100).div(v.scale)));
 		if(sr.max.y < p.y)
 			break;
 	}
@@ -879,7 +1014,7 @@ View.find(v: self ref View, s: string): string
 	n = hd f;
 	y := v.tops[n];
 	if((rl := v.foundon(n)) != nil)
-		y += (hd rl).min.y * v.scale / 100;
+		y += turnrect(v, n, hd rl).min.y * v.scale / 100;
 	h := v.r.dy();
 	if(y < v.org.y || y > v.org.y + h)
 		v.org.y = y - h / 3;

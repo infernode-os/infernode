@@ -877,6 +877,42 @@ iterstep(it, next: V): (V, int)
 {
 	if(next.t == Tundef)
 		return (undef, 1);
+	# an array iterator with the built-in next (captured when the
+	# iteration began, as the spec has it): stepped here, with no result
+	# object made
+	if(next.t == Tobj && next.x == iarriternext && it.t == Tobj && okind[it.x] == Kiter && oproto[it.x] >= 0) {
+		pick d := odata[it.x] {
+		Iter =>
+			if(d.kind <= Ientries) {
+				if(d.done)
+					return (undef, 1);
+				o := d.target;
+				l: real;
+				if(o.t == Tobj && okind[o.x] == Ktyped)
+					l = real typedlen(o.x);
+				else
+					l = lengthof(o);
+				i := d.i;
+				if(real i >= l) {
+					d.done = 1;
+					d.target = undef;
+					return (undef, 1);
+				}
+				d.i = i + 1;
+				case d.kind {
+				Ikeys =>
+					return (num(real i), 0);
+				Ivalues =>
+					if(o.t == Tobj && i < onelem[o.x] && okind[o.x] == Karray && oelems[o.x][i].t != Tempty)
+						return (oelems[o.x][i], 0);
+					return (getidx(o, real i), 0);
+				* =>
+					v := getidx(o, real i);
+					return (objv(arrayof(array[] of {num(real i), v})), 0);
+				}
+			}
+		}
+	}
 	r := call(next, it, nil);
 	if(r.t != Tobj)
 		typeerr("iterator result " + show(r) + " is not an object");

@@ -325,11 +325,93 @@ object_create(nil: V, a, n: int, nil: V, nil: int): V
 	return objv(h);
 }
 
+# a descriptor object's field k, if it can be read without running code
+# or looking far: (1, value) for an own data property, (0, undef) for one
+# nothing up the prototypes (plain objects all) has; -1 otherwise
+plainfield(o, k: int): (int, V)
+{
+	sh := oshape[o];
+	slot := slotof(sh, k);
+	if(slot >= 0) {
+		if(sh.attrs[slot] & Aacc)
+			return (-1, undef);
+		return (1, oslots[o][slot]);
+	}
+	for(p := oproto[o]; p >= 0; p = oproto[p]) {
+		if(okind[p] != Kord || slotof(oshape[p], k) >= 0)
+			return (-1, undef);
+	}
+	return (0, undef);
+}
+
+# ToPropertyDescriptor of a plain object (an object literal, nearly
+# always): its fields by plainfield, or nil to do it the long way
+todescplain(o: int): ref Desc
+{
+	if(okind[o] != Kord)
+		return nil;
+	d := ref Desc(0, undef, undef, undef, 0);
+	(h, v) := plainfield(o, aenumerable);
+	if(h < 0)
+		return nil;
+	if(h) {
+		d.has |= Henum;
+		if(truthy(v))
+			d.attrs |= Aenum;
+	}
+	(h, v) = plainfield(o, aconfigurable);
+	if(h < 0)
+		return nil;
+	if(h) {
+		d.has |= Hconf;
+		if(truthy(v))
+			d.attrs |= Aconf;
+	}
+	(h, v) = plainfield(o, avalue);
+	if(h < 0)
+		return nil;
+	if(h) {
+		d.has |= Hvalue;
+		d.value = v;
+	}
+	(h, v) = plainfield(o, awritable);
+	if(h < 0)
+		return nil;
+	if(h) {
+		d.has |= Hwrite;
+		if(truthy(v))
+			d.attrs |= Awrite;
+	}
+	(h, v) = plainfield(o, aget);
+	if(h < 0)
+		return nil;
+	if(h) {
+		if(v.t != Tundef && !iscallable(v))
+			typeerr("getter must be a function: " + show(v));
+		d.has |= Hget;
+		d.get = v;
+	}
+	(h, v) = plainfield(o, aset);
+	if(h < 0)
+		return nil;
+	if(h) {
+		if(v.t != Tundef && !iscallable(v))
+			typeerr("setter must be a function: " + show(v));
+		d.has |= Hset;
+		d.set = v;
+	}
+	if(isaccdesc(d) && isdatadesc(d))
+		typeerr("invalid property descriptor: cannot both specify accessors and a value or writable attribute");
+	return d;
+}
+
 # ToPropertyDescriptor
 todesc(v: V): ref Desc
 {
 	if(v.t != Tobj)
 		typeerr("property description must be an object: " + show(v));
+	if((pd := todescplain(v.x)) != nil)
+		return pd;
 	d := ref Desc(0, undef, undef, undef, 0);
 	o := v.x;
 	if(hasprop(o, aenumerable)) {

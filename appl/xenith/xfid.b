@@ -32,7 +32,7 @@ Smsg0 : import Dat;
 TRUE, FALSE, XXX, BUFSIZE, MAXRPC : import Dat;
 EM_NORMAL, EM_RAW, EM_MASK : import Dat;
 Qdir, Qcons, Qlabel, Qindex, Qeditout : import Dat;
-QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel, QWerrors, QWxdata, QWweb : import Dat;
+QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel, QWerrors, QWxdata, QWweb, QWdocctl, QWdoctext, QWdoclinks, QWdocfind : import Dat;
 seq, cxfidfree, ccons, Lock, Ref, Range, Mntdir, ConsMsg, Astring : import dat;
 error, warning, max, min, stralloc, strfree, strncmp : import utils;
 address : import regx;
@@ -482,6 +482,18 @@ Xfid.read(x : self ref Xfid)
 		sbuf = docview->filesof(w);
 		if(sbuf != nil)
 			sbuf += "\n";
+	QWdocctl =>
+		str = 1;
+		sbuf = docview->ctlread(w);
+	QWdoctext =>
+		str = 1;
+		sbuf = docview->textread(w);
+	QWdoclinks =>
+		str = 1;
+		sbuf = docview->linksread(w);
+	QWdocfind =>
+		str = 1;
+		sbuf = docview->foundread(w);
 	QWimage =>
 		# the document shown: its name and its first sheet's size
 		str = 1;
@@ -645,6 +657,20 @@ Xfid.write(x : self ref Xfid)
 		bodytag = 1;
 	QWctl =>
 		x.ctlwrite(w);
+	QWdocctl or QWdocfind =>
+		nb := sys->utfbytes(data(x.fcall), count(x.fcall));
+		s := string data(x.fcall)[0:nb];
+		while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' '))
+			s = s[0:len s - 1];
+		err: string;
+		if(qid == QWdocctl){
+			for((nil, l) := sys->tokenize(s, "\n"); l != nil && err == nil; l = tl l)
+				err = docview->ctlwrite(w, hd l);
+		}else
+			err = docview->find(w, s);
+		bflush();
+		fc.count = count(x.fcall);
+		respond(x, fc, err);
 	QWdata =>
 		t = w.body;
 		w.commit(t);

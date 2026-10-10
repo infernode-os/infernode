@@ -1396,8 +1396,13 @@ ctlread(w: ref Window): string
 ctlwrite(w: ref Window, s: string): string
 {
 	d := w.doc;
-	if(d == nil)
+	if(d == nil){
+		# a window showing its text: render shows the file as the
+		# document it is
+		if(s == "render")
+			return render(w);
 		return "no document";
+	}
 	(nil, l) := sys->tokenize(s, " \t\n");
 	if(l == nil)
 		return nil;

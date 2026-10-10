@@ -1,6 +1,8 @@
 # A JavaScript engine for InferNode
 
-Status: proposal, for decision before any code. Nothing here is built.
+Status: phases 2 and 3 are built (§13): the parser and the interpreter
+tier with the built-ins, on branch feat/js-engine.  The sandbox, the
+DOM binding and the compiled tiers are to come.
 
 This is InferNode's script engine, not Charon's. Charon is its first and
 largest user. The same engine should serve a `js` command beside `sh`,
@@ -538,3 +540,62 @@ small separate fix should profiles of Limbo programs justify it.
    a Jira issue for review, per the project rule.
 4. **webfs sessions**: change webfs (preferred), or run one webfs per
    origin.
+
+
+## 13. Status
+
+### What is built
+
+| File | What it is |
+|---|---|
+| `appl/lib/js/jslex.b`, `jsparse.b` | Tokens and the grammar, to an ESTree-shaped tree (`module/jsparse.m`), scripts and modules |
+| `appl/lib/js/jscheck.b` | The early errors that need the whole tree |
+| `appl/lib/js/jsre.b`, `jsrx.b` | Regular expressions: patterns parsed in all three modes, compiled to a backtracking machine |
+| `lib/js/unicode` | Unicode 17 property and case data, read when first needed |
+| `appl/lib/js/js.b` | The engine: one module made of included fragments; each loaded instance is a realm |
+| `jsval.b` | Values (tag, int, real: no Limbo pointers), strings, property keys, shapes, the collector |
+| `jsobj.b` | The object internal methods, conversions, comparisons |
+| `jsops.b`, `jscomp.b` | Register bytecode and the compiler that makes it |
+| `jsvm.b` | The interpreter |
+| `jsrt.b` | Generators, async functions, promises and jobs, iteration, eval |
+| `jsbuiltin.b` and the rest | The built-ins: Object to Date, typed arrays, Proxy, BigInt, iterator helpers, modules, explicit resource management |
+| `tests/js/t262.b` | test262, for parsing or (`-r`) running, each test in a fresh realm |
+| `tests/js/jsrun.b` | Run scripts in a realm; `$262.disasm(f)` shows a function's bytecode |
+
+The design is §9's: the engine's own heap, Dis and its JIT unchanged.
+The interpreter runs script-to-script calls in one loop without Limbo
+recursion; a thrown value is a Limbo exception unwound through each
+code's handler table; generators and async functions suspend by saving
+their registers; the collector runs only at the interpreter's safe
+points.
+
+### Conformance (test262, 2026-10-10)
+
+- Parsing (`test/language`, `test/annexB/language`): all tests pass.
+- Running `test/language`: 94.7% of the tests run (the early-error tests
+  are counted by the parser's run).
+- Running `test/built-ins`: see the latest run in the branch's commits.
+
+Skipped: proposals no browser ships (decorators, import defer and source
+phase imports, Temporal, ShadowRealm, the iterator proposals in
+progress), Atomics and SharedArrayBuffer, cross-realm tests.
+
+### Speed
+
+The interpreter is 10-50x slower than QuickJS on the spike's benchmarks
+(calls are the worst).  That is what §9 predicted for an interpreter;
+the baseline tier is the answer, guided by profiles of real pages.
+
+### Toolchain bugs found on the way (reported, not fixed here)
+
+- `libmath/dtoa.c` (every Limbo string-to-real conversion) does not
+  return, or returns a wrong value, for some subnormal inputs
+  (`2.5e-310`, `4.94e-324`, `1e-320`), outside the emulator too.
+- The Limbo compiler folds `x != x` to 0, and branches on the inverse of
+  an ordered real comparison: both are wrong when a value is NaN.  The
+  engine tests for NaN with `math->isnan` before ordered comparisons.
+- The Limbo compiler's inliner writes a small function's result into
+  the destination while building it, so `v = f(v)` can read a field it
+  has already written.  Such functions in the engine have a local, which
+  stops inlining.
+

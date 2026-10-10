@@ -992,7 +992,9 @@ sortvalues(o: V, l: real, skipholes: int): array of V
 	for(k := 0.0; k < l; k += 1.0) {
 		if(skipholes && !hasidx(o, k))
 			continue;
-		vals = getidx(o, k) :: vals;
+		v := getidx(o, k);
+		push(v);	# a root while later getters run (the caller resets the stack)
+		vals = v :: vals;
 		n++;
 	}
 	a := array[n] of V;

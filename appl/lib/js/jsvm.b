@@ -82,6 +82,8 @@ pushframe(f: Frame)
 call(f, this: V, args: array of V): V
 {
 	sp0 := sp;
+	push(f);	# the function and its receiver are roots while it runs, as the arguments are
+	push(this);
 	a := sp;
 	for(i := 0; i < len args; i++)
 		push(args[i]);
@@ -93,6 +95,8 @@ call(f, this: V, args: array of V): V
 construct(f: V, args: array of V, nt: V): V
 {
 	sp0 := sp;
+	push(f);
+	push(nt);
 	a := sp;
 	for(i := 0; i < len args; i++)
 		push(args[i]);

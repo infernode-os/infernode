@@ -338,6 +338,8 @@ adsstep(st: int)
 {
 	stack := oelems[st][0].x;
 	pr := oelems[st][1].x;
+	sp0 := sp;
+	push(objv(st));	# (the state, and each record taken off the stack, are roots while it runs)
 	for(;;) {
 		if(onelem[stack] == 0) {
 			err := oelems[st][2];
@@ -345,6 +347,7 @@ adsstep(st: int)
 				rejectpromise(pr, err);
 			else
 				resolvepromise(pr, undef);
+			sp = sp0;
 			return;
 		}
 		n := onelem[stack];
@@ -352,6 +355,7 @@ adsstep(st: int)
 		oelems[stack][n-1] = empty;
 		onelem[stack] = n - 1;
 		oalen[stack] = real (n - 1);
+		push(rec);
 		v := oelems[rec.x][0];
 		m := oelems[rec.x][1];
 		awaited := truthy(oelems[rec.x][2]);
@@ -373,6 +377,7 @@ adsstep(st: int)
 		setcap(onf, array[] of {objv(st)});
 		setcap(onr, array[] of {objv(st)});
 		performthen(p, objv(onf), objv(onr), -1);
+		sp = sp0;
 		return;
 	}
 }
@@ -412,14 +417,19 @@ iterproto_dispose(this: V, nil, nil: int, nil: V, nil: int): V
 asynciterproto_dispose(this: V, nil, nil: int, nil: V, nil: int): V
 {
 	pr := newpromise(ipromisector);
+	sp0 := sp;
+	push(objv(pr));
 	{
 		ret := getmethod(this, areturn);
 		if(ret.t == Tundef)
 			resolvepromise(pr, undef);
 		else {
 			r := call(ret, this, array[] of {undef});
+			push(r);
 			p := promiseresolve(ipromisector, r);
+			push(objv(p));
 			u := nativefn("", 0, returnundefined);
+			push(objv(u));
 			(res, rej) := resolvingfns(pr);
 			performthencap(p, objv(u), undef, pr, objv(res), objv(rej));
 		}
@@ -427,6 +437,7 @@ asynciterproto_dispose(this: V, nil, nil: int, nil: V, nil: int): V
 	"js:throw" =>
 		rejectpromise(pr, thrown);
 	}
+	sp = sp0;
 	return objv(pr);
 }
 

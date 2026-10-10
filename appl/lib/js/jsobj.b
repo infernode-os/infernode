@@ -763,7 +763,10 @@ tointorinf(v: V): real
 		return 0.0;
 	if(x == inf || x == -inf)
 		return x;
-	return trunc(x);
+	r := trunc(x);
+	if(r == 0.0)
+		return 0.0;	# not -0: the result is a mathematical integer
+	return r;
 }
 
 trunc(x: real): real

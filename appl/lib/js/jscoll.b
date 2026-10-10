@@ -1025,6 +1025,10 @@ promise_try(this: V, a, n: int, nil: V, nil: int): V
 	if(this.t != Tobj)
 		typeerr("Promise.try called on non-object");
 	(p, res, rej) := newcapability(this);
+	sp0 := sp;
+	push(p);
+	push(res);
+	push(rej);
 	f := arg(a, n, 0);
 	{
 		r: V;
@@ -1034,11 +1038,17 @@ promise_try(this: V, a, n: int, nil: V, nil: int): V
 			r = call(f, undef, args);
 		} else
 			r = call(f, undef, nil);
+		# a promise of this constructor's is the result as it is
+		if(ispromise(r) && getv(r, aconstructor).t == Tobj && getv(r, aconstructor).x == this.x) {
+			sp = sp0;
+			return r;
+		}
 		call(res, undef, array[] of {r});
 	} exception e {
 	"js:throw" =>
 		call(rej, undef, array[] of {thrown});
 	}
+	sp = sp0;
 	return p;
 }
 

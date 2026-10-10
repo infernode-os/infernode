@@ -450,7 +450,10 @@ object_getownpropertydescriptor(nil: V, a, n: int, nil: V, nil: int): V
 object_getownpropertydescriptors(nil: V, a, n: int, nil: V, nil: int): V
 {
 	h := toobject(arg(a, n, 0));
+	sp0 := sp;
+	push(objv(h));
 	r := newplain();
+	push(objv(r));
 	ks := ownkeys(h);
 	for(i := 0; i < len ks; i++) {
 		if(isprivkey(ks[i]))
@@ -459,6 +462,7 @@ object_getownpropertydescriptors(nil: V, a, n: int, nil: V, nil: int): V
 		if(found)
 			createdata(r, ks[i], fromdesc(d));
 	}
+	sp = sp0;
 	return objv(r);
 }
 

@@ -1356,12 +1356,16 @@ taproto_sort(this: V, a, n: int, nil: V, nil: int): V
 		typeerr("the comparison function must be either a function or undefined");
 	(t, l) := validta(this, "%TypedArray%.prototype.sort");
 	vals := array[l] of V;
-	for(i := 0; i < l; i++)
+	sp0 := sp;
+	for(i := 0; i < l; i++) {
 		vals[i] = taget(t, i);
+		push(vals[i]);	# (BigInts are rows: roots while the comparison runs)
+	}
 	tasortvals(vals, f);
 	nl := talength(t);
 	for(i = 0; i < l && i < nl; i++)
 		taset(t, i, vals[i]);
+	sp = sp0;
 	return this;
 }
 
@@ -1427,8 +1431,10 @@ taproto_tosorted(this: V, a, n: int, nil: V, nil: int): V
 	sp0 := sp;
 	push(objv(h));
 	vals := array[l] of V;
-	for(i := 0; i < l; i++)
+	for(i := 0; i < l; i++) {
 		vals[i] = taget(t, i);
+		push(vals[i]);
+	}
 	tasortvals(vals, f);
 	nt := tadata(h);
 	for(i = 0; i < l; i++)
@@ -1448,13 +1454,19 @@ taproto_with(this: V, a, n: int, nil: V, nil: int): V
 	if(validindex(this.x, at) < 0)
 		throwerr(RangeError, "invalid typed array index");
 	h := newta(t.ty, l, typroto[t.ty]);
+	sp0 := sp;
+	push(objv(h));
 	nt := tadata(h);
+	cl := talength(t);	# a coercion may have shrunk the buffer: what is gone reads as undefined
 	for(i := 0; i < l; i++) {
 		if(i == int at)
 			taset(nt, i, v);
-		else
+		else if(i < cl)
 			taset(nt, i, taget(t, i));
+		else
+			taset(nt, i, tanum(t.ty, undef));
 	}
+	sp = sp0;
 	return objv(h);
 }
 

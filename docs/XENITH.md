@@ -163,58 +163,84 @@ below and under the header. Where a family lacks a style (DejaVu has
 bold but no italic built), bold is drawn twice a pixel apart and italic
 is underlined.
 
-### Render
+### Documents
 
-`Render` in the tag of a markdown file (`.md`, `.markdown`) shows the
-text typeset; `Render` again shows the markdown. The text itself is
-never changed: `Put` saves it, programs reading the body over 9P see
-it, and typing or a write to the body goes back to it. Each switch
-keeps your place: the document opens at the passage the text was
-showing, and the text at the passage the document was showing.
+A PDF, an image, a Mermaid diagram, Markdown and HTML set for reading,
+and a web page are **documents**, all shown one way (see
+[xenith-documents.md](xenith-documents.md) for the design). The
+window's view stacks a document's sheets (a PDF's pages; one sheet for
+a picture, or for a flowing document set to the window's width) in a
+column, and:
 
-The typesetting is `rlayout` (`appl/xenith/render/rlayout.b`), the one
-markdown typesetter, which Lucia's presentation and conversation
-views use too: headings, emphasis, strikethrough, links, nested and
-task lists, quotes, code, tables, and ` ```mermaid ` diagrams, drawn in
-the window's colours.
+- **scrolls** it with the wheel, the scroll bar (as Acme's: 1 back, 3
+  on, 2 to a place) and Page Up/Down, Home and End, smoothly across
+  page boundaries; button 1 **drags** it in both directions (grab and
+  pan);
+- **zooms** it: `Zoom+`, `Zoom-`, `Zoom n` (percent), `Fit` (a page's
+  width to the window: a PDF opens so) and `Fit page` (a whole page in
+  view: an image opens so). A PDF page is painted again at the scale,
+  sharp, while the old painting is shown scaled meanwhile; below 250%
+  it is painted at twice the scale and averaged down, so small type
+  stays evenly spaced;
+- goes to a page: `Page n`, `NextPage`, `PrevPage`;
+- lets the **text on the drawing** be used, where the document knows
+  where it drew it (PDF, Markdown): button 1 clicked without moving
+  selects the word there, button 2 executes it, button 3 follows the
+  link there or looks the word up (plumbed; if nothing takes it, found
+  in the document and marked).
 
-`Render` in the tag of an HTML file (`.html`, `.htm`, `.xhtml`) shows
-the page as Charon shows it, set by the same engine (`appl/lib/web`):
-its style sheets, fonts and images are found from the file's directory,
-it keeps its own colours, and button 3 on a link follows it, opening a
-local page in Xenith (rendered) and handing anything else to the
-plumber, so a web page goes to Charon. The text is kept as for
-markdown, but no place is kept: the page opens at its top, and the text
-at its top when you go back. There is no JavaScript.
-A URL opened in Xenith is shown the same way, as an image of the whole
-page (`appl/xenith/render/webrender.b`).
+**Binary documents** (PDF, images) open as documents however they are
+opened: plumbed, looked at, named on Xenith's command line, by Get, by
+Load. The window's body is the document's text (a PDF's extracted
+text), read-only: typing and writes to it are refused, and `Put` writes
+it only to a file named (`Put /tmp/report.txt`), never over the PDF.
+`Render` shows that text instead of the document, and back.
 
-For editing beside a live preview, `Zerox` the window and `Render` one
-of the two: the rendered one sets the text again as you edit in the
-other. This is how to write a page: unsaved edits show as you type.
+**Source documents** (Markdown, HTML, Mermaid) open as their text;
+`Render` sets the text, unsaved edits and all, as the document, and
+`Render` again goes back. The text is never changed: `Put` saves it,
+programs reading the body see it, and typing goes back to it. Each
+switch keeps your place in Markdown. For editing beside a live
+preview, `Zerox` the window and `Render` one of the two: it is set
+again as you edit in the other.
+
+Markdown and Mermaid are set by `rlayout` (`appl/xenith/render/rlayout.b`),
+the one typesetter, which Lucifer's presentation view uses too:
+headings, emphasis, links, lists, quotes, code, tables and Mermaid
+diagrams, in the window's colours. HTML is laid out by Charon's engine
+(`appl/lib/web`), with its style sheets, fonts and images from the
+file's directory and its own colours; there is no JavaScript. A URL
+opened in Xenith is browsed (see [XEN.md](XEN.md#browsing)).
+
+Nothing is loaded for a kind of document until one is opened: the
+kinds are a table, `/lib/xenith/doctypes`, and each kind's engine
+(`appl/xenith/doc/`) loads its own dependencies (the PDF interpreter,
+`rlayout`, `mermaid`, Charon's engine) when it opens its first
+document. Markdown and Mermaid never load Charon.
+
+Every window's document is also its files, `/mnt/xenith/<id>/doc/`:
+
+```
+ctl	read: kind, class, name, shown, sheets, sheet, scale, fit,
+	view (x y w h), screen (where the view is), column (w h);
+	write: sheet n, scale n, fit [page], scroll dy, render, text,
+	or any of the view's or the document's commands
+text	the document's text
+links	one link a line: sheet x0 y0 x1 y1 url
+find	write a string; read where it was found: sheet x0 y0 x1 y1
+```
+
+```sh
+echo 'image /path/to/diagram.png' > /mnt/xenith/1/ctl	# show a file as a document
+cat /mnt/xenith/1/image		# its name and size: /path/to/diagram.png 800 600
+echo 'scale 200' > /mnt/xenith/1/doc/ctl
+echo clearimage > /mnt/xenith/1/ctl	# back to text
+```
 
 ### Opening host files
 
 `tools/xen file ...` runs Xenith by itself, dark and filling the emu
 window, on files from the host; Exit ends the instance. See [XEN.md](XEN.md).
-
-### Image Display
-
-Xenith supports inline image display (PNG, JPEG, GIF, WebP, AVIF, SVG, XBM, PIC, PPM/PGM and Inferno `.bit` images):
-
-```bash
-# Load image in window
-echo 'image /path/to/diagram.png' > /mnt/xenith/1/ctl
-
-# Query image info
-cat /mnt/xenith/1/image
-# Returns: /path/to/diagram.png 800 600
-
-# Clear image, return to text
-echo 'clearimage' > /mnt/xenith/1/ctl
-```
-
-Useful for AI-generated visualizations, charts, and diagrams.
 
 ### Event Streams
 
@@ -381,7 +407,7 @@ Xenith inherits Acme's interaction model. These resources explain the fundamenta
 
 - `appl/xenith/DESIGN.md` - Detailed design rationale
 - `appl/xenith/IDEAS.md` - Feature roadmap
-- `appl/xenith/IMAGE.md` - Image implementation details
+- [xenith-documents.md](xenith-documents.md) - Documents: the one view, the engines, the namespace
 
 ## License
 

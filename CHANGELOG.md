@@ -4,6 +4,44 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Documents
+
+- **One document model in Xenith.** A PDF, an image, a Mermaid
+  diagram, Markdown and HTML set for reading, and a web page are all
+  shown by one view: a column of sheets (a PDF's pages), scrolled
+  smoothly across page boundaries, dragged in both directions, zoomed
+  (`Zoom+`, `Zoom-`, `Zoom n`, `Fit`, `Fit page`) with PDF pages
+  painted again sharp at the scale while the old painting is shown
+  scaled, and paged (`Page n`, `NextPage`, `PrevPage`). It replaces
+  image mode, Render's document view and browser windows' drawing
+  (docs/xenith-documents.md).
+- **A PDF opens as a PDF however it is opened.** Named on Xenith's
+  command line (`xen file.pdf`, and the plumber starting `xen` when no
+  Xenith listens), by Get, by Load, or plumbed to a window already
+  open on it, a PDF showed its source; only a new window opened by a
+  look or a plumb rendered. Every way now decides by the file's kind.
+- **A PDF's or an image's text is read-only.** The body is the
+  document's text, for Look, search, Snarf and agents; typing and
+  writes are refused, and Put writes it only to a file named.
+- **Text on the drawing.** In a PDF or Markdown, a click selects the
+  word there, button 2 executes it, button 3 follows the link there or
+  looks the word up; a search marks what it finds.
+- **Documents as files.** `/mnt/xenith/<id>/doc/`: `ctl` (what it is,
+  where the view is; zoom, fit, sheet, Render), `text`, `links`,
+  `find`.
+- **Loaded only when needed.** The kinds of document are a table,
+  `/lib/xenith/doctypes`; each kind's engine is loaded the first time a
+  document of the kind is opened, and loads its own dependencies then.
+  Markdown and Mermaid are set by `rlayout` and never load Charon;
+  browser windows and HTML files share one Charon engine. Xenith no
+  longer loads every renderer, twice, when it starts. Lucifer's
+  presentation view draws documents through the same engines; the old
+  render registry and renderers are gone.
+- PDF pages below 250% are painted at twice the scale and averaged
+  down: the interpreter places glyphs on whole pixels, and small type
+  was unevenly spaced. Each PDF window keeps its own page (they shared
+  one).
+
 ### Platforms and releases
 
 - **Xenith for Linux**: `xenith-<version>-linux-amd64.tar.gz` and

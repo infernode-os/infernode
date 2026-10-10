@@ -173,9 +173,11 @@ server and the agent harness itself. See `man 4 veltrosrv` and
 ## Browsing
 
 Right-click (button 3) a URL (`https://`, `http://` or `file://`) and
-Xenith opens it in a browser window: the page drawn by Charon's engine
+Xenith opens it in a browser window: a document (see
+[XENITH.md](XENITH.md#documents)), the page laid out by Charon's engine,
 over the window's text, which is the page's text (so Look, search and
-Snarf work on it). The window is named by the page's URL.
+Snarf work on it). The window is named by the page's URL. Browser
+windows and HTML files set by Render share one Charon engine.
 
 | To | Do |
 |---|---|
@@ -192,10 +194,10 @@ Snarf work on it). The window is named by the page's URL.
 
 **The page as files.** A browser window's page is served as Charon's is
 (`man 1 charon`): `url`, `title`, `text`, `links`, `forms`, `ctl` and the
-DOM, one directory per node under `dom/`. It is posted as
-`#sxenith/<id>`, which the window's `web` file names (empty for a window
-that is not browsing), so a script, or an agent granted it, can read the
-page and work it:
+DOM, one directory per node under `dom/`. It is posted under
+`#sxenith/`, at the path the window's `web` file names (empty for a
+window that is not browsing), so a script, or an agent granted it, can
+read the page and work it:
 
 ```sh
 mount -A `{cat /mnt/xenith/7/web} /n/page

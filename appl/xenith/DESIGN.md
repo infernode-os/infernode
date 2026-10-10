@@ -194,7 +194,7 @@ Acme is text-only. Ideas for extending beyond text:
    - Support common formats (PNG, JPEG, etc.)
    - Inline images in text windows, or dedicated image panes
 
-   *Shipped*: renderers in `appl/xenith/render/` (`imgrender.b`, decoding through `appl/lib/imgload.b`; also `pdfrender.b`, `htmldoc.b`, `mermaidrender.b`).
+   *Shipped*: images, PDF, Mermaid, Markdown and HTML are documents, shown by one view, their engines in `appl/xenith/doc/` loaded when first needed ([docs/xenith-documents.md](../../docs/xenith-documents.md)).
 
 2. **Audio Support**:
    - Playback for generated audio, notifications
@@ -215,7 +215,7 @@ Acme is text-only. Ideas for extending beyond text:
 
    This could be particularly useful for agent explanations, documentation generation, and structured responses. The question is whether to render inline (modifying the text appearance) or in a separate pane (preserving the raw text).
 
-   *Shipped*: `appl/xenith/render/mdrender.b` renders markdown as a visual overlay while the body buffer keeps the original markdown text.
+   *Shipped*: Render sets Markdown as a document (`appl/xenith/doc/mddoc.b`, through `rlayout`) while the body keeps the original markdown text.
 
    **Key tension**: Xenith serves two audiences with different needs:
    - The LLM works natively in plain text/markdown - that's its medium

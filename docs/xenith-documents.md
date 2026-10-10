@@ -1,6 +1,7 @@
 # Xenith documents: one model for every rendered file
 
-Status: design, being built (feat/docmodel).
+Status: built (feat/docmodel, #823). This page is the design and what
+was built; user documentation is in [XENITH.md](XENITH.md#documents).
 
 ## The problem
 
@@ -56,42 +57,24 @@ what it is.
 
 ## Engines, loaded only when needed
 
-```
-module/docengine.m
+The interface is `module/docengine.m`. An engine holds documents of one
+kind as sessions named by a handle:
 
-Docengine: module {
-	Style: adt {			# what a flowing document is set in
-		width:	int;		# the width to set it to, in pixels
-		font, codefont:	ref Draw->Font;
-		fg, bg, accent, codebg:	ref Draw->Image;
-	};
-	Run: adt {			# a word as drawn, for hit-testing
-		text:	string;
-		r:	Draw->Rect;	# on its sheet, at scale 100
-	};
-
-	init:	fn(d: ref Draw->Display): string;
-	open:	fn(data: array of byte, name: string, s: ref Style): (int, string);
-	close:	fn(h: int);
-
-	nsheets:	fn(h: int): int;
-	sheetsize:	fn(h: int, n: int): Draw->Point;	# at scale 100
-	restyle:	fn(h: int, s: ref Style): string;	# a new width or colours
-	paint:	fn(h: int, n: int, scale: int, dst: ref Draw->Image,
-			r: Draw->Rect, org: Draw->Point): string;
-
-	text:	fn(h: int): string;
-	runs:	fn(h: int, n: int): array of Run;	# nil: cannot tell
-	linkat:	fn(h: int, n: int, p: Draw->Point): string;
-	commands:	fn(h: int): list of string;	# beyond the view's own
-	command:	fn(h: int, cmd, arg: string): string;
-};
-```
-
-`paint` draws sheet `n` at `scale` (percent of its size at 100), the
-point `org` of the scaled sheet at `r.min` of `dst`. A vector document
-(PDF, Markdown, a diagram) is painted at the scale asked for, so text
-stays sharp when zoomed; an image is scaled.
+- `open` (bytes and name, or a URL; a style: the width a flowing
+  document is set to, the window's fonts and colours), `close`;
+- `nsheets`, `sheetsize` (at scale 100), `restyle` (a new width or
+  colours), `scalable` (paints sharp at any scale, or at 100 and the
+  view scales), `paint` (a sheet at a scale, the part from a point,
+  into a rectangle of an image);
+- `text`, `sheettext`; `runs` (the words as drawn, for hit-testing
+  and marking what a search found), `links`, `linkat`; `lineto` and
+  `lineat` (a source document's lines and where they are set, so a
+  window keeps its place);
+- `commands`, `command` (beyond the view's own);
+- for a document that changes by itself or takes input (a web page):
+  `events` (a channel: `done y`, `update`, `error msg`), `name` (its
+  URL now), `click` and `key` (what the view is to do: `paint`,
+  `layout`, `show y0 y1`), and `files` (where it is served as files).
 
 Engines:
 
@@ -106,21 +89,23 @@ Engines:
 Markdown and Mermaid never load Charon: `rlayout` is the common
 typesetter, and Charon is used for HTML only.
 
-The **registry** is a table, not a set of loaded modules:
-`/lib/xenith/doctypes`, one line to a kind —
+The **registry** (`module/docreg.m`) is a table, not a set of loaded
+modules: `/lib/xenith/doctypes`, one kind a line, its name, class,
+engine, extensions and `magic=` prefixes —
 
 ```
-# engine			kind	extensions		magic
-/dis/xenith/doc/pdfdoc.dis	binary	.pdf			%PDF-
-/dis/xenith/doc/imgdoc.dis	binary	.png .jpg .jpeg .gif .webp .bmp .ppm .pgm .pbm .xbm .pic
-/dis/xenith/doc/mddoc.dis	source	.md .markdown
-/dis/xenith/doc/mmddoc.dis	source	.mmd .mermaid
-/dis/xenith/doc/htmldoc.dis	source	.html .htm
+pdf	binary	/dis/xenith/doc/pdfdoc.dis	.pdf	magic=%PDF-
+image	binary	/dis/xenith/doc/imgdoc.dis	.png .jpg ... .bit	magic=\x89PNG ...
+markdown	source	/dis/xenith/doc/mddoc.dis	.md .markdown
+mermaid	source	/dis/xenith/doc/mmddoc.dis	.mmd .mermaid
+html	source	/dis/xenith/doc/webdoc.dis	.html .htm
 ```
 
 Reading it loads nothing; an engine is loaded the first time a
 document of its kind is opened, and its own dependencies when it
-opens one. One registry serves Xenith.
+opens one. One registry serves Xenith. `picture` draws a document
+whole as one image, for Lucifer's presentation view, which uses the
+same engines.
 
 ## The view
 
@@ -128,11 +113,14 @@ opens one. One registry serves Xenith.
   across sheet boundaries; Page Up/Down a screenful. Button 1 drags
   the document in both directions (grab and pan), as now.
 - **Zoom**: `Zoom+`, `Zoom-`, `Zoom n` (percent), `Fit` (the widest
-  sheet to the window's width: the default for documents) and `Page`
-  (a whole sheet in view: the default for pictures). Zoom keeps the
-  point under the pointer, or the top of the view, where it was.
-  While a sheet is painted again at the new scale, the old painting
-  is shown scaled, so zooming never waits.
+  sheet to the window's width: the default for a PDF) and `Fit page`
+  (a whole sheet in view: the default for a picture). Zoom keeps the
+  middle of the top of the view where it was. While a sheet is painted
+  again at the new scale, the old painting is shown scaled, so zooming
+  never waits. A PDF page below 250% is painted at twice the scale and
+  averaged down: the interpreter places glyphs on whole pixels, and at
+  a low resolution type is unevenly spaced. A flowing document zoomed
+  is set again to the window's width at that scale, and scaled.
 - **Paging**: `Page n`, `NextPage`, `PrevPage` scroll to a sheet.
 - **Cache**: the painted sheets in and near view, at the current
   scale; others are dropped as they leave.
@@ -143,31 +131,33 @@ opens one. One registry serves Xenith.
 
 ## The namespace
 
-Every window with a document has a directory `doc` beside its other
-files:
+Every window has a directory `doc` beside its other files (empty files
+for a window showing text):
 
 ```
 /mnt/xenith/<id>/doc/
 	ctl	read: the state, one attribute a line —
 			kind pdf
-			class binary
+			class binary		(binary, source or web)
 			name /usr/me/report.pdf
+			shown 1			(the document, not its text, is shown)
 			sheets 12
 			sheet 3			(the sheet at the top of the view)
 			scale 150
-			view 0 1840 1200 900	(x y w h of the view, at that scale)
+			fit width		(width, page or none)
+			view 0 1840 1200 900	(x y w h of the view, in the column)
+			screen 16 59 1200 887	(where the view is on the screen)
+			column 1224 14000	(the column's size, at the scale)
 		write: commands, one a line —
-			sheet n | scale n | fit | page | scroll dy |
-			render | text	(a source document: show it, or its text)
-	text	the document's text (extracted, or as set), read-only
+			sheet n | scale n | fit [page] | scroll dy |
+			render | text | the view's and the engine's commands
+	text	the document's text, read-only
 	links	one link a line: sheet x0 y0 x1 y1 url (scale 100)
-	find	write a string; read its matches, one a line:
+	find	write a string; read where it was found, one a line:
 			sheet x0 y0 x1 y1
-	sheets/<n>/size	w h at scale 100
-	sheets/<n>/text	that sheet's text
 ```
 
-`image` keeps its meaning (the rendered image's path and size). A
+`image` names the document shown and its first sheet's size. A
 browser window's `web` file still names the page's own file tree
 (charonfs), which serves a page in more detail than `doc` does.
 
@@ -177,3 +167,7 @@ browser window's `web` file still names the page's own file tree
   is grab and pan, which is kept. A word is selected by a click.
 - A source document's offsets are not mapped to its text's: a word
   selected on the drawing is a word, not a position in the source.
+- HTML is not hit-tested word by word: Charon's display list has no
+  text offsets yet. Links are (`linkat`), and so is a click on a page.
+- An image is zoomed by scaling in software (the draw device has no
+  scaling); the result is kept for each zoom level.

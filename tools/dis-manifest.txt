@@ -706,6 +706,7 @@ dis/tests/destructor_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
+dis/tests/docengine_test.dis
 dis/tests/edit_test.dis
 dis/tests/editor_test.dis
 dis/tests/ethcrypto_test.dis
@@ -999,6 +1000,12 @@ dis/xenith/buff.dis
 dis/xenith/col.dis
 dis/xenith/dat.dis
 dis/xenith/disk.dis
+dis/xenith/doc/imgdoc.dis
+dis/xenith/doc/mddoc.dis
+dis/xenith/doc/mmddoc.dis
+dis/xenith/doc/pdfdoc.dis
+dis/xenith/doc/webdoc.dis
+dis/xenith/docreg.dis
 dis/xenith/ecmd.dis
 dis/xenith/edit.dis
 dis/xenith/elog.dis

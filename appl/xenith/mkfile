@@ -3,6 +3,7 @@
 DIRS=\
 	xenith\
 	render\
+	doc\
 
 TARG=\
 	xenith.dis\
@@ -32,6 +33,7 @@ TARG=\
 	styxaux.dis\
 	render.dis\
 	format.dis\
+	docreg.dis\
 
 ICONS=\
 	abcde.bit\
@@ -68,6 +70,8 @@ MODULES=\
 
 SYSMODULES=\
 	bufio.m\
+	docengine.m\
+	docreg.m\
 	renderer.m\
 	htmldoc.m\
 	formatter.m\

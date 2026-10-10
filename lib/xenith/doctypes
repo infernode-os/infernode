@@ -1,0 +1,14 @@
+# The kinds of document Xenith shows as documents (docreg(2)).
+#
+# One kind a line: its name; binary (shown as the document, its body
+# the document's text, read-only) or source (its body the file's text,
+# Render showing the document); the engine that holds it (docengine(2),
+# loaded the first time a document of the kind is opened); then the
+# file name extensions, and magic=bytes the file begins with, which
+# also find it under another name.
+
+pdf	binary	/dis/xenith/doc/pdfdoc.dis	.pdf	magic=%PDF-
+image	binary	/dis/xenith/doc/imgdoc.dis	.png .jpg .jpeg .jpe .gif .webp .avif .svg .xbm .pic .ppm .pgm .bit	magic=\x89PNG magic=\xff\xd8\xff magic=GIF8
+markdown	source	/dis/xenith/doc/mddoc.dis	.md .markdown
+mermaid	source	/dis/xenith/doc/mmddoc.dis	.mmd .mermaid
+html	source	/dis/xenith/doc/webdoc.dis	.html .htm

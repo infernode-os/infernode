@@ -58,6 +58,7 @@ TARG=\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	docengine_test.dis\
 	alt_nilchan_test.dis\
 	lock_stress_test.dis\
 	plan_test.dis\
@@ -261,6 +262,8 @@ SYSMODULES=\
 	readdir.m\
 	regex.m\
 	renderer.m\
+	docengine.m\
+	docreg.m\
 	security.m\
 	sh.m\
 	sort.m\

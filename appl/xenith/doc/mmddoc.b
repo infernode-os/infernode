@@ -76,7 +76,9 @@ set(s: ref State): string
 	if(s.style != nil){
 		if(s.style.width > 0)
 			width = s.style.width;
-		mermaid->colours(s.style.bg, nil, s.style.fg, s.style.fg);
+		# as a diagram in Markdown is drawn: nodes on the code
+		# background, lines in the accent
+		mermaid->colours(s.style.bg, s.style.codebg, s.style.accent, s.style.fg);
 	}
 	im: ref Image;
 	err: string;

@@ -1389,6 +1389,7 @@ ctlread(w: ref Window): string
 		fit = "page";
 	s += sprint("shown %d\nsheets %d\nsheet %d\nscale %d\nfit %s\n", d.shown, len d.sizes, sheetat(d, d.org.y) + 1, d.scale, fit);
 	s += sprint("view %d %d %d %d\n", d.org.x, d.org.y, fr.dx(), fr.dy());
+	s += sprint("screen %d %d %d %d\n", fr.min.x, fr.min.y, fr.max.x, fr.max.y);
 	s += sprint("column %d %d\n", d.colw, d.colh);
 	return s;
 }

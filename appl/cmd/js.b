@@ -107,8 +107,10 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	if(!ran)
 		repl();
-	if(profiling)
+	if(profiling) {
+		js->profile(0);
 		sys->fprint(stderr, "%s", js->profiled(25));
+	}
 	if(failed)
 		raise "fail:errors";
 }

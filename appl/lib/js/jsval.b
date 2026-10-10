@@ -583,6 +583,7 @@ Shape: adt {
 	index:	array of list of (int, int);	# key to slot, when n is large
 	trans:	list of (int, int, ref Shape);	# (key, attributes, shape)
 	owned:	int;
+	gen:	int;	# an owned shape's changes: an inline cache of one holds its gen too
 };
 
 rootshape: ref Shape;
@@ -592,7 +593,7 @@ Dictmin: con 64;		# shapes that grow this large become dictionaries
 
 shapeinit()
 {
-	rootshape = ref Shape(array[0] of int, array[0] of int, 0, nil, nil, 0);
+	rootshape = ref Shape(array[0] of int, array[0] of int, 0, nil, nil, 0, 0);
 }
 
 keyhash(k: int, n: int): int
@@ -643,6 +644,7 @@ addkey(sh: ref Shape, k, attrs: int): ref Shape
 		sh.keys[sh.n] = k;
 		sh.attrs[sh.n] = attrs;
 		sh.n++;
+		sh.gen++;
 		if(sh.index != nil) {
 			b := keyhash(k, len sh.index);
 			sh.index[b] = (k, sh.n - 1) :: sh.index[b];
@@ -664,7 +666,7 @@ addkey(sh: ref Shape, k, attrs: int): ref Shape
 	na := array[n] of int;
 	na[0:] = sh.attrs[0:sh.n];
 	na[sh.n] = attrs;
-	ns := ref Shape(nk, na, n, nil, nil, n >= Dictmin);
+	ns := ref Shape(nk, na, n, nil, nil, n >= Dictmin, 0);
 	reindex(ns);
 	if(!ns.owned)
 		sh.trans = (k, attrs, ns) :: sh.trans;
@@ -677,7 +679,7 @@ ownshape(h: int): ref Shape
 	sh := oshape[h];
 	if(sh.owned)
 		return sh;
-	ns := ref Shape(sh.keys[0:sh.n], sh.attrs[0:sh.n], sh.n, nil, nil, 1);
+	ns := ref Shape(sh.keys[0:sh.n], sh.attrs[0:sh.n], sh.n, nil, nil, 1, 0);
 	ns.keys = array[sh.n + 4] of int;
 	ns.keys[0:] = sh.keys[0:sh.n];
 	ns.attrs = array[sh.n + 4] of int;
@@ -849,6 +851,7 @@ defown(h, k, attrs: int, v: V)
 		if(sh.attrs[slot] != attrs) {
 			sh = ownshape(h);
 			sh.attrs[slot] = attrs;
+			sh.gen++;
 		}
 		oslots[h][slot] = v;
 		return;
@@ -859,6 +862,7 @@ defown(h, k, attrs: int, v: V)
 		if(slot >= 0) {
 			sh := ownshape(h);
 			sh.attrs[slot] = attrs;
+			sh.gen++;
 			oslots[h][slot] = v;
 			return;
 		}
@@ -896,6 +900,7 @@ removeown(h, k: int)
 		s[i] = s[i+1];
 	}
 	sh.n--;
+	sh.gen++;
 	s[sh.n] = undef;
 	reindex(sh);
 }

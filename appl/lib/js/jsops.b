@@ -13,6 +13,13 @@
 
 Rthis, Rfn, Rnewtarget, Renv, Rarg0: con iota;
 
+# an object literal whose keys are all known: its objects share a shape
+# made the first time, and are filled slot by slot
+Lit: adt {
+	keys:	array of int;
+	shape:	ref Shape;
+};
+
 Oundef,		# r
 Onull,		# r
 Otrue,		# r
@@ -137,6 +144,8 @@ Oaccum,		# r r		r1 = r2 if r1 is empty, else a SuppressedError(r2, r1)
 Omodinit,	#		a module's stop between instantiation and evaluation
 Othisdyn,	# r		eval code's this: a %this binding around it, else the frame's
 Ogenret,	# r		go on returning r from a generator (after an Hclose handler)
+Onewlit,	# r n		a new object with literal n's keys (code.lits[n]) and their slots
+Oslot,		# r n r		slot n of r1 = r3 (a literal being filled)
 Onop: con iota;
 
 # Code flags
@@ -187,12 +196,15 @@ Code: adt {
 	ics:	array of ref Shape;
 	icslot:	array of int;
 	icproto:	array of int;	# the holder, for a property found on the prototype, or -1
+	icgen:	array of int;	# the shape's gen when cached (an owned shape changes in place)
+	icref:	array of ref V;	# a global lexical binding's cell, for a global name's cache
 	tmpls:	array of (array of string, array of string);
 	tmplcache:	array of int;	# the template objects, made once per site
 	regexps:	array of (string, string);
 	flags:	int;
 	src:	string;	# the function's text, for toString, if not whole[spos:send]
 	spos, send:	int;
+	lits:	array of ref Lit;	# object literals' keys, and the shape made from them
 	pos:	array of int;	# by pc: source position (for messages), or nil
 	whole:	string;	# the source those positions are in
 	file:	string;

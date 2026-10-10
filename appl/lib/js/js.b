@@ -134,6 +134,7 @@ resetstate()
 	rootstk = nil;
 	globalcodes = nil;
 	glex = nil;
+	glexgen = 0;
 	glexconst = nil;
 	glexconsts = nil;
 	symregistry = nil;
@@ -607,7 +608,7 @@ disasm(c: ref Code): string
 }
 
 opnames := array[] of {
-	"undef", "null", "true", "false", "empty", "int", "const", "move", "chktdz", "chkthis", "getenv", "getenvc", "setenv", "setenvc", "pushenv", "popenv", "copyenv", "getglobal", "typeofglobal", "setglobal", "initglobal", "delglobal", "globalinit", "getname", "typeofname", "setname", "initname", "delname", "callname", "getprop", "setprop", "getelem", "setelem", "delprop", "delelem", "in", "add", "sub", "mul", "div", "mod", "exp", "shl", "shr", "ushr", "band", "bor", "bxor", "eq", "ne", "seq", "sne", "lt", "le", "gt", "ge", "instof", "neg", "pos", "tonumeric", "not", "bnot", "typeof", "inc", "dec", "jmp", "jt", "jf", "jnullish", "jnnullish", "jundef", "jnundef", "call", "callspread", "new", "newspread", "supercall", "supercallspread", "eval", "ret", "throw", "throwerr", "closure", "newobj", "newarr", "arrpush", "arrhole", "arrspread", "defdata", "defdataa", "defacc", "setproto", "copyprops", "setfnname", "sethome", "template", "regexp", "getiter", "iternext", "iterclose", "forin", "forinnext", "args", "rest", "reqobj", "tokey", "tostr", "concat", "yield", "yieldraw", "await", "genstart", "class", "defmethod", "getsuper", "setsuper", "newprivate", "getpriv", "setpriv", "defpriv", "haspriv", "privmethod", "initfields", "debugger", "pushwith", "importmeta", "import", "spreadobj", "iterdone", "lineno", "home", "finish", "logicnot", "iterthrow", "iterreturn", "asynciter", "itercall", "iterres", "itreturn", "jempty", "chkobj", "ystep", "nop",
+	"undef", "null", "true", "false", "empty", "int", "const", "move", "chktdz", "chkthis", "getenv", "getenvc", "setenv", "setenvc", "pushenv", "popenv", "copyenv", "getglobal", "typeofglobal", "setglobal", "initglobal", "delglobal", "globalinit", "getname", "typeofname", "setname", "initname", "delname", "callname", "getprop", "setprop", "getelem", "setelem", "delprop", "delelem", "in", "add", "sub", "mul", "div", "mod", "exp", "shl", "shr", "ushr", "band", "bor", "bxor", "eq", "ne", "seq", "sne", "lt", "le", "gt", "ge", "instof", "neg", "pos", "tonumeric", "not", "bnot", "typeof", "inc", "dec", "jmp", "jt", "jf", "jnullish", "jnnullish", "jundef", "jnundef", "call", "callspread", "new", "newspread", "supercall", "supercallspread", "eval", "ret", "throw", "throwerr", "closure", "newobj", "newarr", "arrpush", "arrhole", "arrspread", "defdata", "defdataa", "defacc", "setproto", "copyprops", "setfnname", "sethome", "template", "regexp", "getiter", "iternext", "iterclose", "forin", "forinnext", "args", "rest", "reqobj", "tokey", "tostr", "concat", "yield", "yieldraw", "await", "genstart", "class", "defmethod", "getsuper", "setsuper", "newprivate", "getpriv", "setpriv", "defpriv", "haspriv", "privmethod", "initfields", "debugger", "pushwith", "importmeta", "import", "spreadobj", "iterdone", "lineno", "home", "finish", "logicnot", "iterthrow", "iterreturn", "asynciter", "itercall", "iterres", "itreturn", "jempty", "chkobj", "ystep", "newdisp", "addres", "disnext", "discall", "accum", "modinit", "thisdyn", "genret", "newlit", "slot", "nop",
 };
 
 t262_evalscript(nil: V, a, n: int, nil: V, nil: int): V

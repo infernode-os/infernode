@@ -279,11 +279,12 @@ runfrom(how: int): V
 # load the frame on top into the loop's globals
 resume()
 {
-	f := frames[nframe-1];
-	code = f.code;
+	# (fields read in place: a copy of the frame would count its references)
+	k := nframe - 1;
+	code = frames[k].code;
 	ops = code.ops;
-	base = f.base;
-	pc = f.pc;
+	base = frames[k].base;
+	pc = frames[k].pc;
 	sp = base + code.nregs;
 }
 
@@ -446,7 +447,13 @@ loop(entry: int): V
 			vs[base+Renv] = objv(n);
 			pc += 1;
 		Ogetglobal =>
-			vs[base+ops[pc+1]] = getglobal(ops[pc+2], 0);
+			ic := ops[pc+3];
+			if((r := code.icref[ic]) != nil && r.t != Tempty)
+				vs[base+ops[pc+1]] = *r;
+			else if(code.ics[ic] == oshape[iglobal] && code.icgen[ic] == oshape[iglobal].gen && code.icproto[ic] == glexgen)
+				vs[base+ops[pc+1]] = oslots[iglobal][code.icslot[ic]];
+			else
+				vs[base+ops[pc+1]] = getglobalic(ops[pc+2], ic);
 			pc += 4;
 		Otypeofglobal =>
 			vs[base+ops[pc+1]] = getglobal(ops[pc+2], 1);
@@ -486,7 +493,7 @@ loop(entry: int): V
 		Ogetprop =>
 			o := vs[base+ops[pc+2]];
 			ic := ops[pc+4];
-			if(o.t == Tobj && code.ics[ic] == oshape[o.x])
+			if(o.t == Tobj && code.ics[ic] == oshape[o.x] && code.icgen[ic] == oshape[o.x].gen)
 				vs[base+ops[pc+1]] = oslots[o.x][code.icslot[ic]];
 			else
 				vs[base+ops[pc+1]] = getpropic(o, ops[pc+3], ic);
@@ -494,7 +501,7 @@ loop(entry: int): V
 		Osetprop =>
 			o := vs[base+ops[pc+1]];
 			ic := ops[pc+4];
-			if(o.t == Tobj && code.ics[ic] == oshape[o.x])
+			if(o.t == Tobj && code.ics[ic] == oshape[o.x] && code.icgen[ic] == oshape[o.x].gen)
 				oslots[o.x][code.icslot[ic]] = vs[base+ops[pc+3]];
 			else
 				setpropic(o, ops[pc+2], vs[base+ops[pc+3]], ic);
@@ -801,28 +808,30 @@ loop(entry: int): V
 			pc += 6;
 		Oret =>
 			v := vs[base+ops[pc+1]];
-			f := frames[nframe-1];
-			if(f.construct) {
+			k := nframe - 1;
+			if(frames[k].construct) {
 				if(v.t != Tobj) {
-					if(f.construct == 2 && v.t != Tundef)
+					if(frames[k].construct == 2 && v.t != Tundef)
 						typeerr("derived constructors may only return object or undefined");
 					v = vs[base+Rthis];
 					if(v.t == Tempty)
 						throwerr(ReferenceError, "must call super constructor before returning from a derived constructor");
 				}
 			}
-			if(f.gen != nil) {
-				f.gen.state = Gdone;
+			if((g := frames[k].gen) != nil) {
+				g.state = Gdone;
 				nframe--;
-				f.gen.result = v;
+				g.result = v;
 				return v;
 			}
+			fentry := frames[k].entry;
+			fdst := frames[k].dst;
 			nframe--;
-			if(f.entry || nframe - 1 < entry)
+			if(fentry || nframe - 1 < entry)
 				return v;
 			resume();
-			if(f.dst >= 0)
-				vs[f.dst] = v;
+			if(fdst >= 0)
+				vs[fdst] = v;
 		Othrow =>
 			throwv(vs[base+ops[pc+1]]);
 		Othrowerr =>
@@ -848,6 +857,22 @@ loop(entry: int): V
 			frames[nframe-1].pc = pc;
 			spreadinto(h, vs[base+ops[pc+2]]);
 			pc += 3;
+		Onewlit =>
+			h := newobj(Kord, iobjproto);
+			l := code.lits[ops[pc+2]];
+			if(l.shape == nil) {
+				sh := rootshape;
+				for(i := 0; i < len l.keys; i++)
+					sh = addkey(sh, l.keys[i], Adefault);
+				l.shape = sh;
+			}
+			oshape[h] = l.shape;
+			oslots[h] = array[len l.keys] of V;
+			vs[base+ops[pc+1]] = objv(h);
+			pc += 3;
+		Oslot =>
+			oslots[vs[base+ops[pc+1]].x][ops[pc+2]] = vs[base+ops[pc+3]];
+			pc += 4;
 		Odefdata =>
 			o := vs[base+ops[pc+1]];
 			createdataorthrow(o.x, tokey(vs[base+ops[pc+2]]), vs[base+ops[pc+3]]);
@@ -1307,10 +1332,9 @@ getpropic(o: V, a: int, ic: int): V
 			sh := oshape[h];
 			slot := slotof(sh, a);
 			if(slot >= 0 && (sh.attrs[slot] & Aacc) == 0) {
-				if(!sh.owned) {
-					code.ics[ic] = sh;
-					code.icslot[ic] = slot;
-				}
+				code.ics[ic] = sh;
+				code.icslot[ic] = slot;
+				code.icgen[ic] = sh.gen;
 				return oslots[h][slot];
 			}
 		}
@@ -1328,10 +1352,9 @@ setpropic(o: V, a: int, v: V, ic: int)
 			slot := slotof(sh, a);
 			if(slot >= 0 && (sh.attrs[slot] & (Awrite|Aacc)) == Awrite) {
 				oslots[h][slot] = v;
-				if(!sh.owned) {
-					code.ics[ic] = sh;
-					code.icslot[ic] = slot;
-				}
+				code.ics[ic] = sh;
+				code.icslot[ic] = slot;
+				code.icgen[ic] = sh.gen;
 				return;
 			}
 		}
@@ -1856,6 +1879,7 @@ glexfind(a: int): ref V
 
 glexadd(a: int, v: V): ref V
 {
+	glexgen++;
 	r := ref v;
 	b := a % len glex;
 	glex[b] = (a, r) :: glex[b];
@@ -1874,6 +1898,32 @@ isglexconst(a: int): int
 }
 
 glexconsts: list of int;
+
+glexgen := 0;	# global lexical bindings made: a global name's cache of the global object holds it
+
+# a global name's value, filling its cache: a lexical binding's cell
+# (always that, once there), or a data property of the global object's
+getglobalic(a, ic: int): V
+{
+	r := glexfind(a);
+	if(r != nil) {
+		code.icref[ic] = r;
+		if(r.t == Tempty)
+			tdzerr(a);
+		return *r;
+	}
+	g := iglobal;
+	sh := oshape[g];
+	slot := slotof(sh, a);
+	if(slot >= 0 && (sh.attrs[slot] & Aacc) == 0) {
+		code.ics[ic] = sh;
+		code.icslot[ic] = slot;
+		code.icgen[ic] = sh.gen;
+		code.icproto[ic] = glexgen;
+		return oslots[g][slot];
+	}
+	return getglobal(a, 0);
+}
 
 getglobal(a: int, typeofop: int): V
 {

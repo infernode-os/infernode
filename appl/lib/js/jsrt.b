@@ -1489,6 +1489,10 @@ oplen(op: int): int
 		return 6;
 	Onewdisp or Othisdyn or Ogenret =>
 		return 2;
+	Onewlit =>
+		return 3;
+	Oslot =>
+		return 4;
 	Omodinit =>
 		return 1;
 	Odiscall or Oaccum =>

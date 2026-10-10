@@ -20,6 +20,7 @@ Bind: adt {
 	reg:	int;		# a register, or -1
 	slot:	int;		# an environment slot, or -1
 	annexb:	int;	# a block function's var twin (Annex B.3.3)
+	declend:	int;	# a let, const or class: where its declaration ends, past which it is initialised; -1 unknown
 };
 
 CScope: adt {
@@ -64,6 +65,8 @@ CFunc: adt {
 	ntmpl:	int;
 	regexps:	list of (string, string);
 	nregexp:	int;
+	lits:	list of ref Lit;
+	nlit:	int;
 	nregs:	int;
 	tmp:	int;		# the next free temporary
 	nlocal:	int;	# registers below this are bindings
@@ -198,7 +201,7 @@ declare(s: ref CScope, name: string, kind: int): ref Bind
 			b.kind = Bfunc;
 		return b;
 	}
-	b = ref Bind(name, kind, 0, -1, -1, 0);
+	b = ref Bind(name, kind, 0, -1, -1, 0, -1);
 	addbind(s, b);
 	return b;
 }
@@ -675,6 +678,8 @@ walk1(n: ref Node, r: ref R1)
 	Var =>
 		for(i := 0; i < len x.decls; i++)
 			walk1(x.decls[i], r);
+		if(x.kind != Kvar)
+			declended(r.s, patnames(n, nil), x.end);
 	Decl =>
 		walk1(x.id, r);
 		walk1(x.init, r);
@@ -682,6 +687,8 @@ walk1(n: ref Node, r: ref R1)
 		func1(x, r);
 	Class =>
 		class1(x, r);
+		if(x.decl && x.id != nil)
+			declended(r.s, idname(x.id) :: nil, x.end);
 	Export =>
 		walk1(x.decl, r);
 	Ident =>
@@ -1208,6 +1215,29 @@ lista(l: list of int): array of int
 	return a;
 }
 
+# A lexical binding read or written, in its own function, at a place
+# after its declaration has run needs no TDZ check: textual order is
+# execution order there, but in a switch, whose cases may jump past a
+# declaration to a later use.
+declended(s: ref CScope, names: list of string, end: int)
+{
+	if(s.kind == Sswitch)
+		return;
+	for(; names != nil; names = tl names) {
+		b := findlocal(s, hd names);
+		if(b != nil && b.declend < 0 && istdz(b))
+			b.declend = end;
+	}
+}
+
+curref := -1;	# where the name being compiled is referred to, or -1
+
+# a register binding that needs no check at the reference being compiled
+pastdecl(b: ref Bind): int
+{
+	return curref >= 0 && b.declend >= 0 && curref >= b.declend;
+}
+
 # ---- names ----
 
 Lreg, Lenv, Lglobal, Ldyn: con iota;
@@ -1241,11 +1271,9 @@ getname(name: string, r: int, typeofop: int)
 	(how, x, slot, b) := lookup(name);
 	case how {
 	Lreg =>
-		if(b.kind == Barguments && 0)
-			;
 		if(x != r)
 			e2(Omove, r, x);
-		if(istdz(b))
+		if(istdz(b) && !pastdecl(b))
 			e2(Ochktdz, r, intern(name));
 	Lenv =>
 		if(istdz(b))
@@ -1271,7 +1299,7 @@ setname(name: string, r: int, init: int)
 	(how, x, slot, b) := lookup(name);
 	case how {
 	Lreg =>
-		if(!init)
+		if(!init && !(pastdecl(b) && b.kind != Bconst && b.kind != Bimport))
 			assigncheck(b, name, r);
 		if(b.kind == Bfnself && !init)
 			return;	# (sloppy: the assignment is ignored)
@@ -1598,6 +1626,8 @@ finish(id: ref Node, flen, nformal: int): ref Code
 	c.ics = array[cs.nic] of ref Shape;
 	c.icslot = array[cs.nic] of int;
 	c.icproto = array[cs.nic] of int;
+	c.icgen = array[cs.nic] of int;
+	c.icref = array[cs.nic] of ref V;
 	tl0 := cs.tmpls;
 	c.tmpls = array[len tl0] of (array of string, array of string);
 	for(i = len c.tmpls - 1; i >= 0; i--) {
@@ -1610,6 +1640,12 @@ finish(id: ref Node, flen, nformal: int): ref Code
 	for(i = len c.regexps - 1; i >= 0; i--) {
 		c.regexps[i] = hd rl;
 		rl = tl rl;
+	}
+	ll := cs.lits;
+	c.lits = array[len ll] of ref Lit;
+	for(i = len c.lits - 1; i >= 0; i--) {
+		c.lits[i] = hd ll;
+		ll = tl ll;
 	}
 	c.flags = cs.flags;
 	c.src = cs.src;
@@ -3123,8 +3159,11 @@ expr(e: ref Node, r: int)
 	Ident =>
 		if(x.name == "undefined" && lookupisglobal("undefined"))
 			e1(Oundef, r);
-		else
+		else {
+			curref = x.pos;
 			getname(x.name, r, 0);
+			curref = -1;
+		}
 	This =>
 		thisinto(r);
 	Template =>
@@ -3318,8 +3357,66 @@ arraylit(x: ref Node.Array, r: int)
 	}
 }
 
+# the atoms of a literal's keys, if all are plain names, distinct and
+# not array indices or __proto__ (whose objects can share a shape)
+litkeys(x: ref Node.Object): array of int
+{
+	n := len x.props;
+	if(n == 0 || n > 32)
+		return nil;
+	keys := array[n] of int;
+	for(i := 0; i < n; i++) {
+		pick p := x.props[i] {
+		Prop =>
+			if(p.kind != Jsparse->Pinit || p.computed)
+				return nil;
+			name: string;
+			pick k := p.key {
+			Ident =>
+				name = k.name;
+			Str =>
+				name = k.s;
+			* =>
+				return nil;
+			}
+			if(name == "__proto__" && !p.shorthand)
+				return nil;
+			(isi, nil) := canonidx(name);
+			if(isi)
+				return nil;
+			keys[i] = intern(name);
+			for(j := 0; j < i; j++)
+				if(keys[j] == keys[i])
+					return nil;
+		* =>
+			return nil;
+		}
+	}
+	return keys;
+}
+
 objectlit(x: ref Node.Object, r: int)
 {
+	if((keys := litkeys(x)) != nil) {
+		e2(Onewlit, r, cs.nlit++);
+		cs.lits = ref Lit(keys, nil) :: cs.lits;
+		v := tmp();
+		k := -1;
+		for(i := 0; i < len x.props; i++)
+			pick p := x.props[i] {
+			Prop =>
+				cs.curpos = p.pos;
+				gexpr(p.value, v);
+				if(isanonfn(p.value)) {
+					if(k < 0)
+						k = tmp();
+					litkey(p.key, k);
+					e3(Osetfnname, v, k, 0);
+				}
+				e3(Oslot, r, i, v);
+			}
+		return;
+	}
 	e1(Onewobj, r);
 	k := tmp();
 	v := tmp();
@@ -3556,11 +3653,57 @@ binary(x: ref Node.Binary, r: int)
 		e3(Oin, r, k, o);
 		return;
 	}
-	a := tmp();
-	gexpr(x.l, a);
-	b := tmp();
-	gexpr(x.r, b);
+	# a local operand is used where it is, when nothing after it could change it
+	a: int;
+	if(pureexpr(x.r))
+		a = opreg(x.l);
+	else {
+		a = tmp();
+		gexpr(x.l, a);
+	}
+	b := opreg(x.r);
 	e3(binop(x.op), r, a, b);
+}
+
+# an expression whose evaluation has no effects: a name, a literal, this
+pureexpr(e: ref Node): int
+{
+	pick x := e {
+	Ident =>
+		return 1;
+	Num =>
+		return 1;
+	Str =>
+		return 1;
+	Bool =>
+		return 1;
+	Null =>
+		return 1;
+	This =>
+		return 1;
+	Paren =>
+		return pureexpr(x.e);
+	}
+	return 0;
+}
+
+# the register an operand's value is in: a local's own, if it needs no
+# check where it is used, else a new temporary it is put in
+opreg(e: ref Node): int
+{
+	pick x := unparen(e) {
+	Ident =>
+		(how, xr, nil, bd) := lookup(x.name);
+		curref = x.pos;
+		if(how == Lreg && xr >= 0 && (!istdz(bd) || pastdecl(bd))) {
+			curref = -1;
+			return xr;
+		}
+		curref = -1;
+	}
+	t := tmp();
+	gexpr(e, t);
+	return t;
 }
 
 logical(x: ref Node.Logical, r: int)
@@ -3582,7 +3725,9 @@ assign(x: ref Node.Assign, r: int)
 		pick t := x.target {
 		Ident =>
 			namedexpr(x.value, r, t.name);
+			curref = t.pos;
 			setname(t.name, r, 0);
+			curref = -1;
 		Member =>
 			if(tagof t.obj == tagof Node.Super) {
 				k := tmp();
@@ -3621,18 +3766,34 @@ assign(x: ref Node.Assign, r: int)
 		op = binop(x.op[0:len x.op - 1]);
 	pick t := unparen(x.target) {
 	Ident =>
+		curref = t.pos;
+		(how, xr, nil, bd) := lookup(t.name);
+		if(!logic && how == Lreg && (!istdz(bd) || pastdecl(bd)) && bd.kind != Bconst && bd.kind != Bimport && bd.kind != Bfnself && pureexpr(x.value)) {
+			# a local and an operand evaluation cannot change: in place
+			curref = -1;
+			b := opreg(x.value);
+			e3(op, xr, xr, b);
+			if(r != xr)
+				e2(Omove, r, xr);
+			return;
+		}
 		getname(t.name, r, 0);
+		curref = -1;
 		if(logic) {
 			j := logicjump(x.op, r);
 			namedexpr(x.value, r, t.name);
+			curref = t.pos;
 			setname(t.name, r, 0);
+			curref = -1;
 			patch(j);
 			return;
 		}
 		b := tmp();
 		gexpr(x.value, b);
 		e3(op, r, r, b);
+		curref = t.pos;
 		setname(t.name, r, 0);
+		curref = -1;
 	Member =>
 		if(tagof t.obj == tagof Node.Super) {
 			k := tmp();
@@ -3717,6 +3878,21 @@ update(x: ref Node.Update, r: int)
 		op = Odec;
 	pick t := unparen(x.arg) {
 	Ident =>
+		curref = t.pos;
+		(how, xr, nil, bd) := lookup(t.name);
+		if(how == Lreg && (!istdz(bd) || pastdecl(bd)) && bd.kind != Bconst && bd.kind != Bimport && bd.kind != Bfnself) {
+			curref = -1;
+			if(x.prefix) {
+				e2(Otonumeric, xr, xr);
+				e2(op, xr, xr);
+				if(r != xr)
+					e2(Omove, r, xr);
+			} else {
+				e2(Otonumeric, r, xr);
+				e2(op, xr, r);
+			}
+			return;
+		}
 		getname(t.name, r, 0);
 		e2(Otonumeric, r, r);
 		if(x.prefix) {
@@ -3727,6 +3903,7 @@ update(x: ref Node.Update, r: int)
 			e2(op, n, r);
 			setname(t.name, n, 0);
 		}
+		curref = -1;
 	Member =>
 		if(tagof t.obj == tagof Node.Super) {
 			k := tmp();

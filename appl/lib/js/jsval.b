@@ -45,9 +45,12 @@ isobj(v: V): int
 	return v.t == Tobj;
 }
 
+# (not x != x: the Limbo compiler folds that to 0, and turns ordered
+# comparisons into their inverse for branches, which is wrong for a NaN;
+# so a NaN is tested for before any ordered comparison that may meet one)
 isnan(x: real): int
 {
-	return x != x;
+	return math->isnan(x);
 }
 
 valinit()
@@ -95,6 +98,8 @@ newstrrow(): int
 		return sfree[--nsfree];
 	if(nstr == len sflat) {
 		n := 2 * nstr;
+		if(n > Maxrows)
+			throwerr(RangeError, "out of memory: too many strings");
 		a := array[n] of string; a[0:] = sflat; sflat = a;
 		b := array[n] of int; b[0:] = sleft; sleft = b;
 		b = array[n] of int; b[0:] = sright; sright = b;
@@ -423,9 +428,14 @@ objinit()
 	ofree = array[n] of int;
 }
 
+# a realm's budget: the rows it may hold (docs/JS-ENGINE.md §10, per-realm accounting)
+Maxrows := 4*1024*1024;
+
 objgrow()
 {
 	n := 2 * len okind;
+	if(n > Maxrows)
+		throwerr(RangeError, "out of memory: too many objects");
 	a := array[n] of int; a[0:] = okind; okind = a;
 	a = array[n] of int; a[0:] = oflags; oflags = a;
 	s := array[n] of ref Shape; s[0:] = oshape; oshape = s;

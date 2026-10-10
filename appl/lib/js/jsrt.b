@@ -552,8 +552,17 @@ markjob(j: ref Job)
 	}
 }
 
+njobs := 0;
+Maxjobs: con 1000000;
+
 enqueue(j: ref Job)
 {
+	if(++njobs > Maxjobs) {
+		njobs = 0;
+		jobs = nil;
+		jobstail = nil;
+		throwerr(RangeError, "out of memory: too many pending jobs");
+	}
 	jobstail = j :: jobstail;
 }
 
@@ -569,6 +578,7 @@ runjobs()
 		}
 		j := hd jobs;
 		jobs = tl jobs;
+		njobs--;
 		sp0 := sp;
 		{
 			runjob(j);
@@ -1412,14 +1422,15 @@ oplen(op: int): int
 		return 1;
 	Oundef or Onull or Otrue or Ofalse or Oempty or Ochkthis or Opushenv or Oglobalinit or
 	Ojmp or Oret or Othrow or Onewobj or Onewarr or Oarrhole or Oiterclose or Oreqobj or
-	Opushwith or Oimportmeta or Oiterdone or Olineno or Ohome or Ofinish or Oasynciter =>
+	Opushwith or Oimportmeta or Oiterdone or Olineno or Ohome or Ofinish or Oasynciter or Ochkobj =>
 		return 2;
 	Oint or Oconst or Omove or Ochktdz or Otypeofglobal or Osetglobal or Oinitglobal or
 	Odelglobal or Ogetname or Otypeofname or Osetname or Oinitname or Odelname or
 	Ojt or Ojf or Ojnullish or Ojnnullish or Ojundef or Ojnundef or Othrowerr or Oclosure or
 	Oarrpush or Oarrspread or Osetproto or Osethome or Otemplate or Oregexp or Oforin or
 	Oargs or Orest or Otokey or Otostr or Oyield or Oawait or Ospreadobj or Onewprivate or
-	Oiterthrow or Oneg or Opos or Otonumeric or Onot or Obnot or Otypeof or Oinc or Odec =>
+	Oiterthrow or Oneg or Opos or Otonumeric or Onot or Obnot or Otypeof or Oinc or Odec or
+	Oitercall or Oitreturn or Ojempty =>
 		return 3;
 	Ogetenv or Osetenv or Ogetglobal or Ocallname or Ogetelem or Osetelem or Odelprop or
 	Odelelem or Oin or Odefdata or Odefdataa or Ocopyprops or Osetfnname or Ogetiter or
@@ -1429,7 +1440,7 @@ oplen(op: int): int
 	Oeq or One or Oseq or Osne or Olt or Ole or Ogt or Oge or Oinstof =>
 		return 4;
 	Ogetenvc or Osetenvc or Ogetprop or Osetprop or Ocallspread or Onew or Odefacc or
-	Oclass or Odefmethod or Oprivmethod or Ogetsuper or Osetsuper or Osupercallspread =>
+	Oclass or Odefmethod or Oprivmethod or Ogetsuper or Osetsuper or Osupercallspread or Oiterres =>
 		return 5;
 	Ocall or Oeval or Osupercall =>
 		return 6;

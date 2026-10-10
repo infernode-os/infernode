@@ -87,6 +87,7 @@ Label: adt {
 	scopedepth:	int;	# environments pushed at its start (popped on the way out)
 	findepth:	int;	# finally blocks around it
 	iterreg:	int;	# a for-of's iterator, closed on break, or -1
+	iterasync:	int;	# a for await's: closing awaits
 };
 
 # a finally block between a jump and its target: the jump goes through it
@@ -1997,7 +1998,7 @@ pendinglabels: list of string;
 
 newlabel(isloop: int, nil: ref Node): ref Label
 {
-	l := ref Label(pendinglabels, isloop, nil, nil, -1, envdepth, len cs.finally, -1);
+	l := ref Label(pendinglabels, isloop, nil, nil, -1, envdepth, len cs.finally, -1, 0);
 	pendinglabels = nil;
 	cs.labels = l :: cs.labels;
 	return l;
@@ -2079,17 +2080,33 @@ jumpout(lab: ref Label, iscont: int)
 		x := hd l;
 		if(x == lab) {
 			if(!iscont && x.iterreg >= 0)
-				e1(Oiterclose, x.iterreg);
+				closeiter(x.iterreg, x.iterasync);
 			break;
 		}
 		if(x.iterreg >= 0)
-			e1(Oiterclose, x.iterreg);
+			closeiter(x.iterreg, x.iterasync);
 	}
 	j := ejump(Ojmp, 0);
 	if(iscont)
 		lab.conts = j :: lab.conts;
 	else
 		lab.breaks = j :: lab.breaks;
+}
+
+# IteratorClose (or AsyncIteratorClose) for a normal completion
+closeiter(it, async: int)
+{
+	if(!async) {
+		e1(Oiterclose, it);
+		return;
+	}
+	t := tmp();
+	e2(Oitreturn, t, it);
+	je := ejump(Ojempty, t);
+	e2(Oawait, t, t);
+	e1(Ochkobj, t);
+	patch(je);
+	freeto(t);
 }
 
 popenvs(depth: int)
@@ -2113,7 +2130,7 @@ retthrough(t: int)
 	# close the iterators of for-of loops being left
 	for(l := cs.labels; l != nil; l = tl l)
 		if((hd l).iterreg >= 0)
-			e1(Oiterclose, (hd l).iterreg);
+			closeiter((hd l).iterreg, (hd l).iterasync);
 	e1(Oret, t);
 }
 
@@ -2181,6 +2198,7 @@ forinstmt(n: ref Node, left, right, body: ref Node, isof, isawait: int)
 	if(isof) {
 		e3(Ogetiter, it, obj, isawait);
 		lab.iterreg = it;
+		lab.iterasync = isawait;
 	} else {
 		e2(Oforin, it, obj);
 	}
@@ -2190,9 +2208,13 @@ forinstmt(n: ref Node, left, right, body: ref Node, isof, isawait: int)
 	done := -1;
 	if(isof) {
 		d := tmp();
-		e3(Oiternext, val, d, it);
-		if(isawait)
-			;
+		if(isawait) {
+			# next(), awaited, then its done and value
+			e2(Oitercall, val, it);
+			e2(Oawait, val, val);
+			e4(Oiterres, val, d, val, it);
+		} else
+			e3(Oiternext, val, d, it);
 		done = ejump(Ojt, d);
 	} else {
 		emit(Oforinnext);
@@ -2232,7 +2254,21 @@ forinstmt(n: ref Node, left, right, body: ref Node, isof, isawait: int)
 		hr := tmp();
 		cs.handlers = Handler(hstart, hend, here(), hr, Hcatch, 0) :: cs.handlers;
 		popenvs(lab.scopedepth);
-		e1(Oiterdone, it);	# (IteratorClose for a throw completion: errors from return are dropped)
+		if(isawait) {
+			# AsyncIteratorClose for a throw: return() and its await, their errors dropped
+			t := tmp();
+			cstart := here();
+			e2(Oitreturn, t, it);
+			je := ejump(Ojempty, t);
+			e2(Oawait, t, t);
+			patch(je);
+			cend := here();
+			jt := ejump(Ojmp, 0);
+			ignored := tmp();
+			cs.handlers = Handler(cstart, cend, here(), ignored, Hcatch, 0) :: cs.handlers;
+			patch(jt);
+		} else
+			e1(Oiterdone, it);	# (IteratorClose for a throw completion: errors from return are dropped)
 		e1(Othrow, hr);
 	}
 	patch(done);

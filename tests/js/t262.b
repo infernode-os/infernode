@@ -3,11 +3,14 @@ implement T262;
 #
 # t262 - test262's syntax tests against the parser.
 #
-#	t262 [-v] [-f failures] dir...
+#	t262 [-v] [-r] [-t ms] [-f failures] dir...
 #
 # Each test's front matter says what is expected: negative phase parse
 # (an early error) means the source must be refused; anything else must
-# parse.  A test is run as sloppy and as strict code unless its flags
+# parse.  With -r the tests are run, each in a realm of its own, with
+# test262's harness: they must finish without an exception (or, for a
+# negative runtime test, with the one named), and an async test must
+# report that it completed.  A test is run as sloppy and as strict code unless its flags
 # say otherwise (onlyStrict, noStrict, raw), and as a module if its
 # flags say module.  Fixtures (_FIXTURE in the name) are not tests.
 #
@@ -26,6 +29,8 @@ include "jslex.m";
 include "jsparse.m";
 	jsparse: Jsparse;
 
+include "js.m";
+
 T262: module
 {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -40,6 +45,8 @@ stats: list of ref Stat;
 featfail: list of ref Stat;
 failfd: ref Sys->FD;
 verbose := 0;
+runmode := 0;
+timeout := 10000;
 npass := 0;
 nfail := 0;
 nskip := 0;
@@ -68,6 +75,11 @@ init(nil: ref Draw->Context, args: list of string)
 		case hd args {
 		"-v" =>
 			verbose = 1;
+		"-r" =>
+			runmode = 1;
+		"-t" =>
+			args = tl args;
+			timeout = int hd args;
 		"-f" =>
 			args = tl args;
 			failfd = sys->create(hd args, Sys->OWRITE, 8r644);
@@ -205,13 +217,16 @@ words(s: string): list of string
 
 Meta: adt {
 	negparse:	int;
+	negphase:	string;
+	negtype:	string;
 	flags:	list of string;
 	features:	list of string;
+	includes:	list of string;
 };
 
 meta(src: string): ref Meta
 {
-	m := ref Meta(0, nil, nil);
+	m := ref Meta(0, nil, nil, nil, nil, nil);
 	fm := frontmatter(src);
 	key := "";
 	innegative := 0;
@@ -235,18 +250,27 @@ meta(src: string): ref Meta
 						m.flags = words(v);
 					"features" =>
 						m.features = words(v);
+					"includes" =>
+						m.includes = words(v);
 					}
 					break;
 				}
 			continue;
 		}
-		if(innegative && len t > 6 && t[0:6] == "phase:" && trim(t[6:]) == "parse")
-			m.negparse = 1;
+		if(innegative && len t > 6 && t[0:6] == "phase:") {
+			m.negphase = trim(t[6:]);
+			if(m.negphase == "parse")
+				m.negparse = 1;
+		}
+		if(innegative && len t > 5 && t[0:5] == "type:")
+			m.negtype = trim(t[5:]);
 		if(len t > 2 && t[0:2] == "- ") {
 			if(key == "features")
 				m.features = trim(t[2:]) :: m.features;
 			else if(key == "flags")
 				m.flags = trim(t[2:]) :: m.flags;
+			else if(key == "includes")
+				m.includes = trim(t[2:]) :: m.includes;
 		}
 	}
 	return m;
@@ -272,6 +296,35 @@ test(path, top: string)
 			return;
 		}
 	ismod := has(m.flags, "module");
+	ok := 1;
+	why := "";
+	if(runmode) {
+		if(ismod || m.negparse || has(m.features, "cross-realm") || has(m.features, "Atomics") || has(m.features, "SharedArrayBuffer") || has(m.flags, "CanBlockIsTrue")) {
+			nskip++;
+			return;
+		}
+		(ok, why) = runtest(path, src, m);
+	} else
+		(ok, why) = parsetest(src, m, ismod);
+	group := groupof(path, top);
+	st := stat(group);
+	if(ok) {
+		st.pass++;
+		npass++;
+	} else {
+		st.fail++;
+		nfail++;
+		for(f := m.features; f != nil; f = tl f)
+			feat(hd f).fail++;
+		if(failfd != nil)
+			sys->fprint(failfd, "%s: %s\n", path, why);
+		if(verbose)
+			sys->print("FAIL %s: %s\n", path, why);
+	}
+}
+
+parsetest(src: string, m: ref Meta, ismod: int): (int, string)
+{
 	ok := 1;
 	why := "";
 	variants: list of int;	# 0 sloppy, 1 strict
@@ -308,21 +361,160 @@ test(path, top: string)
 		if(!ok)
 			break;
 	}
-	group := groupof(path, top);
-	st := stat(group);
-	if(ok) {
-		st.pass++;
-		npass++;
-	} else {
-		st.fail++;
-		nfail++;
-		for(f := m.features; f != nil; f = tl f)
-			feat(hd f).fail++;
-		if(failfd != nil)
-			sys->fprint(failfd, "%s: %s\n", path, why);
-		if(verbose)
-			sys->print("FAIL %s: %s\n", path, why);
+	return (ok, why);
+}
+
+# ---- running ----
+
+harness := array[] of {"sta.js", "assert.js"};
+harnesscache: list of (string, string);
+
+harnessfile(dir, name: string): string
+{
+	for(l := harnesscache; l != nil; l = tl l)
+		if((hd l).t0 == name)
+			return (hd l).t1;
+	s := readfile(dir + "/" + name);
+	harnesscache = (name, s) :: harnesscache;
+	return s;
+}
+
+# the harness directory for a test: .../test/x/y.js -> .../harness
+harnessdir(path: string): string
+{
+	for(i := len path - 6; i >= 0; i--)
+		if(path[i:i+6] == "/test/")
+			return path[0:i] + "/harness";
+	return "harness";
+}
+
+output: string;
+
+capture(s: string)
+{
+	output += s + "\n";
+}
+
+runtest(path, src: string, m: ref Meta): (int, string)
+{
+	dir := harnessdir(path);
+	pre := "";
+	if(!has(m.flags, "raw")) {
+		for(i := 0; i < len harness; i++)
+			pre += harnessfile(dir, harness[i]) + "\n";
+		if(has(m.flags, "async"))
+			pre += harnessfile(dir, "doneprintHandle.js") + "\n";
+		for(l := m.includes; l != nil; l = tl l)
+			pre += harnessfile(dir, hd l) + "\n";
 	}
+	variants: list of int;
+	if(has(m.flags, "raw") || has(m.flags, "noStrict"))
+		variants = 0 :: nil;
+	else if(has(m.flags, "onlyStrict"))
+		variants = 1 :: nil;
+	else
+		variants = 0 :: 1 :: nil;
+	for(; variants != nil; variants = tl variants) {
+		strict := hd variants;
+		s := pre + src;
+		if(strict)
+			s = "\"use strict\";\n" + s;
+		(ok, why) := runone(s, m, path);
+		if(!ok)
+			return (0, sprintv(strict) + why);
+	}
+	return (1, nil);
+}
+
+# run a script in a fresh realm, in a thread of its own, with a time limit
+runone(src: string, m: ref Meta, path: string): (int, string)
+{
+	c := chan of (int, string);
+	pidc := chan of int;
+	spawn runrealm(src, m, path, c, pidc);
+	pid := <-pidc;
+	tc := chan of int;
+	spawn timer(tc, timeout);
+	tpid := <-tc;
+	alt {
+	r := <-c =>
+		kill(tpid);
+		return r;
+	<-tc =>
+		kill(pid);
+		js = nil;	# its state is the killed thread's: start a new instance
+		return (0, "timed out");
+	}
+}
+
+timer(c: chan of int, ms: int)
+{
+	c <-= sys->pctl(0, nil);
+	sys->sleep(ms);
+	c <-= 1;
+}
+
+kill(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
+runrealm(src: string, m: ref Meta, nil: string, c: chan of (int, string), pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	r: (int, string);
+	{
+		r = runrealm1(src, m);
+	} exception e {
+	"*" =>
+		r = (0, "engine broke: " + e);
+	}
+	c <-= r;
+}
+
+js: Js;
+
+runrealm1(src: string, m: ref Meta): (int, string)
+{
+	if(js == nil)
+		js = load Js Js->PATH;
+	if(js == nil)
+		return (0, sys->sprint("cannot load %s: %r", Js->PATH));
+	err := js->init();
+	if(err != nil)
+		return (0, err);
+	output = "";
+	js->setoutput(capture);
+	js->test262();
+	(nil, e) := js->evalscript(src, "test");
+	js->shutdown();
+	if(m.negphase == "runtime") {
+		if(e == nil)
+			return (0, "ran, should have thrown " + m.negtype);
+		if(len e < len m.negtype || e[0:len m.negtype] != m.negtype)
+			return (0, "threw " + e + ", not " + m.negtype);
+		return (1, nil);
+	}
+	if(e != nil)
+		return (0, e);
+	if(has(m.flags, "async")) {
+		if(contains(output, "Test262:AsyncTestComplete"))
+			return (1, nil);
+		if(contains(output, "Test262:AsyncTestFailure"))
+			return (0, oneline(output));
+		return (0, "async test did not complete");
+	}
+	return (1, nil);
+}
+
+oneline(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			return s[0:i];
+	return s;
 }
 
 sprintv(strict: int): string

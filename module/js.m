@@ -19,4 +19,11 @@ Js: module
 
 	# where print and console output go (the default: standard output)
 	setoutput:	fn(out: ref fn(s: string));
+
+	# give the realm test262's host object, $262
+	test262:	fn();
+
+	# end the realm, freeing what it holds (its functions refer back to
+	# the module instance, so it would otherwise wait for the collector)
+	shutdown:	fn();
 };

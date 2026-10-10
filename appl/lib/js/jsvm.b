@@ -519,7 +519,9 @@ loop(entry: int): V
 			b := vs[base+ops[pc+3]];
 			r: int;
 			if(a.t == Tnum && b.t == Tnum) {
-				case op {
+				if(isnan(a.n) || isnan(b.n))
+					r = 0;
+				else case op {
 				Olt => r = a.n < b.n;
 				Ole => r = a.n <= b.n;
 				Ogt => r = a.n > b.n;
@@ -1033,6 +1035,45 @@ loop(entry: int): V
 			pc += 4;
 			yieldstarreturn(ops[pc-3], ops[pc-2], ops[pc-1]);
 		Olineno =>
+			pc += 2;
+		Oitercall =>
+			it := ops[pc+2];
+			next := vs[base+it+1];
+			if(next.t == Tundef)
+				typeerr("iterator is exhausted");
+			vs[base+ops[pc+1]] = call(next, vs[base+it], nil);
+			pc += 3;
+		Oiterres =>
+			r := vs[base+ops[pc+3]];
+			if(r.t != Tobj)
+				typeerr("iterator result " + show(r) + " is not an object");
+			done := truthy(getv(r, adone));
+			if(done) {
+				vs[base+ops[pc+4]+1] = undef;
+				vs[base+ops[pc+1]] = undef;
+			} else
+				vs[base+ops[pc+1]] = getv(r, avalue);
+			vs[base+ops[pc+2]] = bool(done);
+			pc += 5;
+		Oitreturn =>
+			it := ops[pc+2];
+			r := empty;
+			if(vs[base+it+1].t != Tundef) {
+				vs[base+it+1] = undef;
+				ret := getmethod(vs[base+it], areturn);
+				if(ret.t != Tundef)
+					r = call(ret, vs[base+it], nil);
+			}
+			vs[base+ops[pc+1]] = r;
+			pc += 3;
+		Ojempty =>
+			if(vs[base+ops[pc+1]].t == Tempty)
+				pc = ops[pc+2];
+			else
+				pc += 3;
+		Ochkobj =>
+			if(vs[base+ops[pc+1]].t != Tobj)
+				typeerr("iterator result is not an object");
 			pc += 2;
 		* =>
 			throwerr(Error, sys->sprint("internal: bad opcode %d at %d", op, pc));

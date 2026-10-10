@@ -62,6 +62,7 @@ init(): string
 	jslex->init();
 	jsparse->init();
 	jsre->init();
+	resetstate();
 	valinit();
 	strinit();
 	atominit();
@@ -75,6 +76,51 @@ init(): string
 		return "making the realm: " + showexc(thrown);
 	}
 	return nil;
+}
+
+# a module instance may be made a fresh realm again: everything starts over
+resetstate()
+{
+	nstr = 0;
+	nsfree = 0;
+	strsince = 0;
+	natom = 0;
+	nobj = 0;
+	nofree = 0;
+	objsince = 0;
+	gcwanted = 0;
+	gcobjlimit = 100000;
+	gcstrlimit = 200000;
+	nmark = 0;
+	ncollect = 0;
+	nintr = 0;
+	intr = nil;
+	sp = 0;
+	nframe = 0;
+	pc = 0;
+	base = 0;
+	ops = nil;
+	code = nil;
+	thrown = V(0, 0, 0.0);
+	genreturning = 0;
+	jobs = nil;
+	jobstail = nil;
+	njobs = 0;
+	gens = nil;
+	rootstk = nil;
+	globalcodes = nil;
+	glex = nil;
+	glexconst = nil;
+	glexconsts = nil;
+	symregistry = nil;
+	joining = nil;
+	mapiterators = 0;
+	cs = nil;
+	cscope = nil;
+	completion = -1;
+	pendinglabels = nil;
+	envdepth = 0;
+	output = nil;
 }
 
 setoutput(out: ref fn(s: string))
@@ -183,6 +229,117 @@ showexc(v: V): string
 		return "uncaught " + show(v);
 	}
 	return "uncaught exception";
+}
+
+shutdown()
+{
+	okind = nil;
+	oflags = nil;
+	oshape = nil;
+	oproto = nil;
+	oslots = nil;
+	oelems = nil;
+	onelem = nil;
+	oalen = nil;
+	odata = nil;
+	omark = nil;
+	ofree = nil;
+	sflat = nil;
+	sleft = nil;
+	sright = nil;
+	slen = nil;
+	satom = nil;
+	smark = nil;
+	sfree = nil;
+	atomstr = nil;
+	atomsh = nil;
+	atomsym = nil;
+	atomidx = nil;
+	atomhash = nil;
+	vs = nil;
+	frames = nil;
+	jobs = nil;
+	jobstail = nil;
+	njobs = 0;
+	gens = nil;
+	globalcodes = nil;
+	glex = nil;
+	code = nil;
+	ops = nil;
+	cs = nil;
+	cscope = nil;
+	scopemap = nil;
+	rootshape = nil;
+	output = nil;
+	intr = nil;
+	markstk = nil;
+	rootstk = nil;
+}
+
+test262()
+{
+	h := newplain();
+	keep(h);
+	defown(iglobal, intern("$262"), Awrite|Aconf, objv(h));
+	value(h, "global", objv(iglobal));
+	method(h, "evalScript", 1, t262_evalscript);
+	method(h, "gc", 0, t262_gc);
+	method(h, "createRealm", 0, t262_createrealm);
+	method(h, "detachArrayBuffer", 1, t262_detach);
+	dda := nativefn("IsHTMLDDA", 0, t262_dda);
+	oflags[dda] |= Ohtmldda;
+	value(h, "IsHTMLDDA", objv(dda));
+	agent := newplain();
+	value(h, "agent", objv(agent));
+}
+
+t262_evalscript(nil: V, a, n: int, nil: V, nil: int): V
+{
+	src := tostring(arg(a, n, 0));
+	(prog, err) := jsparse->parse(src, 0, 0);
+	if(err != nil)
+		throwerr(SyntaxError, err);
+	pick p := prog {
+	Program =>
+		c := compilescript(p, src, 0, 0);
+		keepcode(c);
+		return runcode(c);
+	}
+	return undef;
+}
+
+t262_gc(nil: V, nil, nil: int, nil: V, nil: int): V
+{
+	gcwanted = 1;
+	return undef;
+}
+
+t262_createrealm(nil: V, nil, nil: int, nil: V, nil: int): V
+{
+	typeerr("$262.createRealm is not supported");
+	return undef;
+}
+
+t262_detach(nil: V, a, n: int, nil: V, nil: int): V
+{
+	detachbuffer(arg(a, n, 0));
+	return null;
+}
+
+t262_dda(nil: V, nil, nil: int, nil: V, nil: int): V
+{
+	return null;
+}
+
+detachbuffer(v: V)
+{
+	if(v.t != Tobj || okind[v.x] != Kabuf)
+		typeerr("not an ArrayBuffer");
+	pick d := odata[v.x] {
+	Abuf =>
+		d.b = nil;
+		d.detached = 1;
+	}
 }
 
 reportuncaught(v: V)

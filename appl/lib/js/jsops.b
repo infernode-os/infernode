@@ -123,6 +123,11 @@ Ologicnot,	# reserved
 Oiterthrow,	# r r		call the iterator's throw
 Oiterreturn,	# r r r		call the iterator's return
 Oasynciter,	# r		wrap a sync iterator for for-await
+Oitercall,	# r r		r1 = the iterator's next() (r2, its next in r2+1)
+Oiterres,	# r r r r	value, done from an iterator result r3 (TypeError if not an object); r4 the iterator, marked exhausted when done
+Oitreturn,	# r r		r1 = the iterator's return() result, or empty if it has none (or is exhausted)
+Ojempty,	# r j
+Ochkobj,	# r		TypeError if r is not an object
 Onop: con iota;
 
 # Code flags

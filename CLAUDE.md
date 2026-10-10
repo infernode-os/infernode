@@ -435,6 +435,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |
 | `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool) |
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
+| `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

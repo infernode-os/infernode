@@ -36,10 +36,11 @@ static void *
 emu_thread(void *arg)
 {
 	(void)arg;
-	/* The bundle root path (~180 chars) overflows emu's rootdir buffer
-	 * (MAXROOT = 5*KNAMELEN = 140), so chdir there and pass "-r ." — a
-	 * 1-char root that devfs-posix resolves relative to the CWD. emu
-	 * never chdir()s afterward, so the CWD stays put. */
+	/* The bundle root path (~180 chars) overflowed emu's rootdir buffer
+	 * when MAXROOT was 140, so chdir there and pass "-r ." — a 1-char
+	 * root that devfs-posix resolves relative to the CWD. MAXROOT is
+	 * 1024 now; kept, as it costs nothing. emu never chdir()s
+	 * afterward, so the CWD stays put. */
 	if (chdir(g_root) != 0)
 		fprintf(stderr, "InferNode: chdir(%s) failed: %s\n",
 				g_root, strerror(errno));

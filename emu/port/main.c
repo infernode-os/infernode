@@ -26,6 +26,21 @@ extern	int	mflag;
 	ulong	displaychan;
 char *cputype;
 
+/*
+ * The root, from -r, $INFERNO or $ROOT. Cut short to fit, it would
+ * name some other directory, or none, and fail far from here.
+ */
+static void
+setroot(char *p)
+{
+	if(strlen(p) >= sizeof(rootdir)){
+		fprint(2, "emu: root path is %d bytes, more than %d: %s\n",
+			(int)strlen(p), (int)sizeof(rootdir)-1, p);
+		exits("root");
+	}
+	strcpy(rootdir, p);
+}
+
 static void
 usage(void)
 {
@@ -162,7 +177,7 @@ option(int argc, char *argv[], void (*badusage)(void))
 		tkfont = EARGF(badusage());
 		break;
 	case 'r':		/* Set inferno root */
-		strecpy(rootdir, rootdir+sizeof(rootdir), EARGF(badusage()));
+		setroot(EARGF(badusage()));
 		break;
 	case '7':		/* use 7 bit colormap in X */
 		xtblbit = 1;
@@ -256,7 +271,7 @@ emu_run(int argc, char *argv[])
 	savestartup(argc, argv);
 	/* set default root now, so either $EMU or -r can override it later */
 	if((p = getenv("INFERNO")) != nil || (p = getenv("ROOT")) != nil)
-		strecpy(rootdir, rootdir+sizeof(rootdir), p);
+		setroot(p);
 	opt = getenv("EMU");
 	if(opt != nil && *opt != '\0') {
 		enva[0] = "emu";
@@ -339,8 +354,13 @@ emuinit(void *imod)
 	kopen("#c/cons", OWRITE);
 	kopen("#c/cons", OWRITE);
 
-	/* the setid cannot precede the bind of #U */
-	kbind("#U", "/", MAFTER|MCREATE);
+	/*
+	 * the setid cannot precede the bind of #U. Without the root,
+	 * nothing after this can be loaded, and the failure would only
+	 * show as /dis/emuinit.dis missing: say what is wrong with it.
+	 */
+	if(kbind("#U", "/", MAFTER|MCREATE) < 0)
+		panic("cannot use root %s: %s", rootdir, up->env->errstr);
 	setid(eve, 0);
 	kbind("#^", "/dev", MBEFORE);	/* snarf */
 	kbind("#^", "/chan", MBEFORE);

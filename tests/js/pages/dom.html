@@ -19,6 +19,7 @@ function check(name, got, want) {
 	if (!ok) { fails++; console.log('FAIL ' + name + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want)); }
 	results.push(ok);
 }
+function atest(name, f) { console.log('group ' + name); f().catch((e) => { fails++; results.push(false); console.log('FAIL ' + name + ': threw ' + e + (e && e.stack ? '\n' + e.stack : '')); }); }
 function test(name, f) { console.log('group ' + name); try { f(); } catch (e) { fails++; results.push(false); console.log('FAIL ' + name + ': threw ' + e + (e && e.stack ? '\n' + e.stack : '')); } }
 
 test('basics', () => {
@@ -289,6 +290,32 @@ test('::slotted', () => {
 	check('slot[name=a]::slotted(.sl1)', getComputedStyle(h.querySelector('.sl1')).marginRight, '6px');
 	check('not the other slot', getComputedStyle(h.querySelector('.sl2')).marginRight, '0px');
 	check('the shadow tree\'s span rule not on light nodes', getComputedStyle(h.querySelector('.sl1')).marginTop, '0px');
+	h.remove();
+});
+atest('slots', async () => {
+	const h = document.createElement('div');
+	h.innerHTML = '<b slot=a>B</b>text<i>I</i>';
+	document.body.appendChild(h);
+	const sr = h.attachShadow({mode: 'open'});
+	const changes = [];
+	sr.addEventListener('slotchange', (e) => changes.push(e.target.name || 'default'));
+	sr.innerHTML = '<slot name=a></slot><slot></slot><slot name=c><u>fb</u></slot>';
+	const [sa, sd, sc] = sr.querySelectorAll('slot');
+	check('assignedNodes', sa.assignedNodes().map((n) => n.nodeName).join(), 'B');
+	check('the default slot', sd.assignedNodes().map((n) => n.nodeName).join(), '#text,I');
+	check('assignedElements', sd.assignedElements().map((n) => n.nodeName).join(), 'I');
+	check('flattened fallback', sc.assignedNodes({flatten: true}).map((n) => n.nodeName).join(), 'U');
+	check('assignedSlot', h.querySelector('b').assignedSlot === sa, true);
+	await Promise.resolve();
+	await Promise.resolve();
+	check('slotchange at first', changes.sort().join(), 'a,default');
+	changes.length = 0;
+	const e = document.createElement('em');
+	e.slot = 'c';
+	h.appendChild(e);
+	await Promise.resolve();
+	await Promise.resolve();
+	check('slotchange on a child added', changes.join(), 'c');
 	h.remove();
 });
 test('clock', () => {

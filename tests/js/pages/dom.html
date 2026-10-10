@@ -136,6 +136,12 @@ test('innerHTML', () => {
 	check('outerHTML', d.firstChild.outerHTML, '<p class="q">a<b>b</b></p>');
 	d.insertAdjacentHTML('beforeend', '<i>i</i>');
 	check('insertAdjacentHTML', d.lastChild.localName, 'i');
+	const sc = document.createElement('script');
+	sc.innerHTML = 'for (var i = 0; i<t; i++) x = a > b;';
+	check('script innerHTML is text', sc.text, 'for (var i = 0; i<t; i++) x = a > b;');
+	const ta = document.createElement('textarea');
+	ta.innerHTML = '<b>&amp;</b>';
+	check('textarea innerHTML', ta.value, '<b>&</b>');
 	check('void', (() => { const e = document.createElement('div'); e.innerHTML = '<br><img src=x>'; return e.innerHTML; })(), '<br><img src="x">');
 	const tpl = document.getElementById('tpl');
 	check('template content', tpl.content.querySelector('.item').textContent, 'tpl');

@@ -828,6 +828,7 @@ dis/tests/task_consistency_test.dis
 dis/tests/taskparse_test.dis
 dis/tests/tcp_test.dis
 dis/tests/tempfile_test.dis
+dis/tests/js/jsfuzz.dis
 dis/tests/js/jsp.dis
 dis/tests/js/jspage.dis
 dis/tests/js/jsrun.dis

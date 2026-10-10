@@ -5,6 +5,7 @@ TARG=\
 	jsp.dis\
 	jsrun.dis\
 	jspage.dis\
+	jsfuzz.dis\
 
 SYSMODULES=\
 	sys.m\

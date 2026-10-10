@@ -501,6 +501,26 @@ loop(entry: int): V
 				Osub => vs[base+ops[pc+1]] = V(Tnum, 0, x - y);
 				Omul => vs[base+ops[pc+1]] = V(Tnum, 0, x * y);
 				Odiv => vs[base+ops[pc+1]] = V(Tnum, 0, x / y);
+				Oband or Obor or Obxor or Oshl or Oshr =>
+					# small integers, as they nearly always are
+					if(x >= -2147483648.0 && x <= 2147483647.0 && y >= -2147483648.0 && y <= 2147483647.0) {
+						xi := int x;
+						yi := int y;
+						if(real xi == x && real yi == y) {
+							r: int;
+							case op {
+							Oband => r = xi & yi;
+							Obor => r = xi | yi;
+							Obxor => r = xi ^ yi;
+							Oshl => r = xi << (yi & 31);
+							* => r = xi >> (yi & 31);
+							}
+							vs[base+ops[pc+1]] = V(Tnum, 0, real r);
+							pc += 4;
+							continue;
+						}
+					}
+					vs[base+ops[pc+1]] = arith(op, a, b);
 				* => vs[base+ops[pc+1]] = arith(op, a, b);
 				}
 			} else
@@ -594,7 +614,8 @@ loop(entry: int): V
 				safepoint(t);
 			pc = t;
 		Ojt =>
-			if(truthy(vs[base+ops[pc+1]])) {
+			cv := vs[base+ops[pc+1]];
+			if(cv.t == Tbool && cv.x || cv.t != Tbool && truthy(cv)) {
 				t := ops[pc+2];
 				if(t <= pc && gcwanted)
 					safepoint(t);
@@ -602,7 +623,8 @@ loop(entry: int): V
 			} else
 				pc += 3;
 		Ojf =>
-			if(!truthy(vs[base+ops[pc+1]]))
+			cv := vs[base+ops[pc+1]];
+			if(cv.t == Tbool && !cv.x || cv.t != Tbool && !truthy(cv))
 				pc = ops[pc+2];
 			else
 				pc += 3;

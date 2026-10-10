@@ -274,14 +274,17 @@ setdate(this: V, t: real)
 	}
 }
 
+# the epoch's millisecond at sys->millisec() == 0, fixed once (so the clock is monotonic)
+clockbase := -1.0;
+
 now(): real
 {
-	if(daytime == nil)
-		daytime = load Daytime Daytime->PATH;
-	# milliseconds: daytime gives seconds; refine with the millisecond clock's phase
-	s := real daytime->now();
-	ms := real (sys->millisec() % 1000);
-	return s * 1000.0 + ms;
+	if(clockbase < 0.0) {
+		if(daytime == nil)
+			daytime = load Daytime Daytime->PATH;
+		clockbase = real daytime->now() * 1000.0 - real sys->millisec();
+	}
+	return clockbase + real sys->millisec();
 }
 
 datector(nil: V, a, n: int, nt: V, f: int): V

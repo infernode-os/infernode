@@ -227,21 +227,22 @@ runfrom(how: int): V
 	sops := ops;
 	entry := nframe - 1;
 	resume();
+	if(how) {
+		# throw (or return) at the frame's current place, before running
+		if(how == 2)
+			genreturning = 1;
+		pc--;	# the resumption point is past the yield or await: it is what throws
+		if(!unwind(entry)) {
+			pc = spc; base = sbase; code = scode; ops = sops;
+			if(genreturning) {
+				genreturning = 0;
+				return genretval;
+			}
+			raise "js:throw";
+		}
+	}
 	for(;;) {
 		{
-			if(how) {
-				if(how == 2)
-					genreturning = 1;
-				how = 0;
-				if(!unwind(entry)) {
-					if(genreturning) {
-						genreturning = 0;
-						pc = spc; base = sbase; code = scode; ops = sops;
-						return genretval;
-					}
-					raise "js:throw";
-				}
-			}
 			v := loop(entry);
 			pc = spc; base = sbase; code = scode; ops = sops;
 			return v;
@@ -284,18 +285,17 @@ unwind(entry: int): int
 				# a generator's return passes catch handlers by
 				if(genreturning && hh.kind == Hcatch)
 					continue;
-				if(genreturning)
-					vs[f.base+hh.reg] = genretval;
-				else
-					vs[f.base+hh.reg] = thrown;
-				frames[nframe-1].pc = hh.target;
-				resume();
 				if(genreturning) {
-					# the finally block's completion: a return
+					# into the finally block, its completion a return: past its "throw" code
 					genreturning = 0;
 					vs[f.base+hh.reg] = genretval;
-					pendingreturn(f.base, hh.reg);
+					vs[f.base+hh.reg-1] = num(2.0);
+					frames[nframe-1].pc = hh.target + 3;
+				} else {
+					vs[f.base+hh.reg] = thrown;
+					frames[nframe-1].pc = hh.target;
 				}
+				resume();
 				return 1;
 			}
 		}

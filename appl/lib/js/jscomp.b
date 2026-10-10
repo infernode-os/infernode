@@ -2392,6 +2392,8 @@ trystmt(n: ref Node, x: ref Node.Try)
 	fin: ref Fin;
 	if(x.final != nil) {
 		fin = ref Fin(nil, 0, tmp(), tmp(), nil, 0, envdepth, -1);
+		if(cs.flags & Cgen)
+			fin.retseen = 1;	# a generator's return() may come through
 		cs.finally = fin :: cs.finally;
 	}
 	if(completion >= 0)
@@ -2429,8 +2431,8 @@ trystmt(n: ref Node, x: ref Node.Try)
 		jf := ejump(Ojmp, 0);
 		# a throw from the try or catch: code 1
 		cs.handlers = Handler(start, end, here(), fin.val, Hfinally, 0) :: cs.handlers;
+		e2(Oint, fin.reg, 1);	# (first: a generator's return enters after it, with 2)
 		e2(Omove, Renv, envsave);
-		e2(Oint, fin.reg, 1);
 		patch(jf);
 		for(jl := fin.jumps; jl != nil; jl = tl jl)
 			patch((hd jl).t0);
@@ -2492,6 +2494,8 @@ usingstmts(body: array of ref Node)
 	e1(Onewdisp, ds);
 	cs.disps = (ds, async) :: cs.disps;
 	fin := ref Fin(nil, 0, tmp(), tmp(), nil, 0, envdepth, -1);
+	if(cs.flags & Cgen)
+		fin.retseen = 1;
 	cs.finally = fin :: cs.finally;
 	start := here();
 	envsave := tmp();
@@ -2503,8 +2507,8 @@ usingstmts(body: array of ref Node)
 	e2(Oint, fin.reg, 0);
 	jf := ejump(Ojmp, 0);
 	cs.handlers = Handler(start, end, here(), fin.val, Hfinally, 0) :: cs.handlers;
-	e2(Omove, Renv, envsave);
 	e2(Oint, fin.reg, 1);
+	e2(Omove, Renv, envsave);
 	patch(jf);
 	for(jl := fin.jumps; jl != nil; jl = tl jl)
 		patch((hd jl).t0);

@@ -152,6 +152,7 @@ realminit()
 	bigintinit();
 	typedinit();
 	iterhelpersinit();
+	disposeinit();
 	reflectinit();
 	generatorinit();
 }

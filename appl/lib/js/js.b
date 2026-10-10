@@ -60,6 +60,7 @@ include "jsproxy.b";
 include "jsbigint.b";
 include "jstyped.b";
 include "jsiter.b";
+include "jsdispose.b";
 
 output: ref fn(s: string);
 

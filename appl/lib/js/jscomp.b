@@ -70,6 +70,7 @@ CFunc: adt {
 	allreg:	int;
 	src:	string;
 	curpos:	int;
+	disps:	list of (int, int);	# using scopes: (disposal stack register, async)
 };
 
 # where an optional chain's short circuits jump
@@ -1460,7 +1461,7 @@ compilebody(f: ref Node.Func, fs: ref CScope, parent: ref CFunc, src: string, pf
 			e1(Oret, t);
 		}
 	} else {
-		stmts(f.body);
+		usingstmts(f.body);
 		t := tmp();
 		e1(Oundef, t);
 		derivedthis();
@@ -1822,7 +1823,7 @@ stmt(n: ref Node)
 		s := sget(skey(n, Sblock));
 		enterscope(s);
 		hoistfuncs(x.body);
-		stmts(x.body);
+		usingstmts(x.body);
 		leavescope(s);
 	Empty or Debugger =>
 		;
@@ -1992,6 +1993,10 @@ vardecl(x: ref Node.Var)
 					namedexpr(d.init, t, idname(d.id));
 				else
 					gexpr(d.init, t);
+				if((x.kind == Kusing || x.kind == Kawaitusing) && cs.disps != nil) {
+					(ds, nil) := hd cs.disps;
+					e3(Oaddres, ds, t, x.kind == Kawaitusing);
+				}
 				bindpattern(d.id, t, x.kind != Kvar);
 			}
 			freeto(t0);
@@ -2461,6 +2466,97 @@ trystmt(n: ref Node, x: ref Node.Try)
 	}
 	for(l := toend; l != nil; l = tl l)
 		patch(hd l);
+	freeto(t0);
+}
+
+# statements that may declare using resources: they are disposed of,
+# last first, however the statements end (§14.2.3, DisposeResources)
+usingstmts(body: array of ref Node)
+{
+	async := 0;
+	has := 0;
+	for(i := 0; i < len body; i++)
+		pick v := body[i] {
+		Var =>
+			if(v.kind == Kusing)
+				has = 1;
+			if(v.kind == Kawaitusing)
+				has = async = 1;
+		}
+	if(!has) {
+		stmts(body);
+		return;
+	}
+	t0 := cs.tmp;
+	ds := tmp();
+	e1(Onewdisp, ds);
+	cs.disps = (ds, async) :: cs.disps;
+	fin := ref Fin(nil, 0, tmp(), tmp(), nil, 0, envdepth, -1);
+	cs.finally = fin :: cs.finally;
+	start := here();
+	envsave := tmp();
+	e2(Omove, envsave, Renv);
+	stmts(body);
+	end := here();
+	cs.finally = tl cs.finally;
+	cs.disps = tl cs.disps;
+	e2(Oint, fin.reg, 0);
+	jf := ejump(Ojmp, 0);
+	cs.handlers = Handler(start, end, here(), fin.val, Hfinally, 0) :: cs.handlers;
+	e2(Omove, Renv, envsave);
+	e2(Oint, fin.reg, 1);
+	patch(jf);
+	for(jl := fin.jumps; jl != nil; jl = tl jl)
+		patch((hd jl).t0);
+	# err: the throw being completed, or empty
+	err := tmp();
+	t := tmp();
+	e1(Oempty, err);
+	e2(Oint, t, 1);
+	e3(Oseq, t, fin.reg, t);
+	j := ejump(Ojf, t);
+	e2(Omove, err, fin.val);
+	patch(j);
+	# each resource, last first: dispose, collecting errors
+	rec := tmp();
+	res := tmp();
+	top := here();
+	emit(Odisnext);
+	emit(rec);
+	emit(ds);
+	emit(-1);
+	done := cs.nops - 1;
+	hs := here();
+	e2(Odiscall, res, rec);
+	if(async)
+		e2(Oawait, res, res);
+	he := here();
+	jok := ejump(Ojmp, 0);
+	ex := tmp();
+	cs.handlers = Handler(hs, he, here(), ex, Hcatch, 0) :: cs.handlers;
+	e2(Oaccum, err, ex);
+	patch(jok);
+	jumpto(Ojmp, 0, top);
+	patch(done);
+	# an error (the original throw, or one from disposal) is thrown
+	j = ejump(Ojempty, err);
+	e1(Othrow, err);
+	patch(j);
+	if(fin.retseen) {
+		e2(Oint, t, 2);
+		e3(Oseq, t, fin.reg, t);
+		j = ejump(Ojf, t);
+		retthrough(fin.val);
+		patch(j);
+	}
+	for(tl0 := fin.targets; tl0 != nil; tl0 = tl tl0) {
+		(code, lab, iscont) := hd tl0;
+		e2(Oint, t, code);
+		e3(Oseq, t, fin.reg, t);
+		j = ejump(Ojf, t);
+		jumpout(lab, iscont);
+		patch(j);
+	}
 	freeto(t0);
 }
 

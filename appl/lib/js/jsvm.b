@@ -1072,6 +1072,43 @@ loop(entry: int): V
 		Oystep =>
 			ystep(ops[pc+1], ops[pc+2], ops[pc+3], vs[base+ops[pc+4]], vs[base+ops[pc+5]], code.flags & Casync);
 			pc += 6;
+		Onewdisp =>
+			vs[base+ops[pc+1]] = objv(newarray(0));
+			pc += 2;
+		Oaddres =>
+			addresource(vs[base+ops[pc+1]].x, vs[base+ops[pc+2]], ops[pc+3]);
+			pc += 4;
+		Odisnext =>
+			h := vs[base+ops[pc+2]].x;
+			n := onelem[h];
+			if(n == 0)
+				pc = ops[pc+3];
+			else {
+				vs[base+ops[pc+1]] = oelems[h][n-1];
+				oelems[h][n-1] = empty;
+				onelem[h] = n - 1;
+				oalen[h] = real (n - 1);
+				pc += 4;
+			}
+		Odiscall =>
+			rec := vs[base+ops[pc+2]].x;
+			v := oelems[rec][0];
+			m := oelems[rec][1];
+			r := undef;
+			if(m.t != Tundef)
+				r = call(m, v, nil);
+			if(oelems[rec][2].t == Tbool && oelems[rec][2].x == 0)
+				r = undef;	# a sync method's result is not awaited
+			vs[base+ops[pc+1]] = r;
+			pc += 3;
+		Oaccum =>
+			e := vs[base+ops[pc+1]];
+			x := vs[base+ops[pc+2]];
+			if(e.t == Tempty)
+				vs[base+ops[pc+1]] = x;
+			else
+				vs[base+ops[pc+1]] = objv(suppressed(x, e));
+			pc += 3;
 		Ochkobj =>
 			if(vs[base+ops[pc+1]].t != Tobj)
 				typeerr("iterator result is not an object");

@@ -1449,6 +1449,12 @@ oplen(op: int): int
 		return 5;
 	Ocall or Oeval or Osupercall or Oystep =>
 		return 6;
+	Onewdisp =>
+		return 2;
+	Odiscall or Oaccum =>
+		return 3;
+	Oaddres or Odisnext =>
+		return 4;
 	}
 	return 1;
 }

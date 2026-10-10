@@ -270,10 +270,14 @@ resume()
 unwind(entry: int): int
 {
 	frames[nframe-1].pc = pc;
+	top := 1;
 	while(nframe - 1 >= entry) {
 		f := frames[nframe-1];
 		c := f.code;
 		p := f.pc;
+		if(!top)
+			p--;	# a caller's pc is past its call: the call is what threw
+		top = 0;
 		for(i := 0; i < len c.handlers; i++) {
 			hh := c.handlers[i];
 			if(p >= hh.start && p < hh.end) {

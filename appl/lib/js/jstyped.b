@@ -8,6 +8,10 @@
 #
 
 Ti8, Tu8, Tu8c, Ti16, Tu16, Ti32, Tu32, Tf16, Tf32, Tf64, Tbi64, Tbu64: con iota;
+
+# A buffer's largest: 128 MB (browsers allow gigabytes; a realm shares
+# emu's heap, and a refused allocation there takes emu down)
+Bufmax: con 1 << 27;
 tysize := array[] of {1, 1, 1, 2, 2, 4, 4, 2, 4, 8, 8, 8};
 tyname := array[] of {"Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
 	"Int32Array", "Uint32Array", "Float16Array", "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"};
@@ -130,7 +134,7 @@ abufdata(v: V): ref Data.Abuf
 
 newabuf(n: int, maxlen: int, proto: int): int
 {
-	if(n < 0 || n > 1 << 30)
+	if(n < 0 || n > Bufmax)
 		throwerr(RangeError, "array buffer allocation failed");
 	h := newobj(Kabuf, proto);
 	odata[h] = ref Data.Abuf(array[n] of {* => byte 0}, 0, maxlen);
@@ -154,7 +158,7 @@ abufctor(nil: V, a, n: int, nt: V, nil: int): V
 		}
 	}
 	proto := protofromctor(nt, iabufproto);
-	if(l > real (1 << 30))
+	if(l > real Bufmax || maxlen > Bufmax)
 		throwerr(RangeError, "array buffer allocation failed");
 	return objv(newabuf(int l, maxlen, proto));
 }
@@ -653,7 +657,7 @@ tyof(f: int): int
 # AllocateTypedArray (with a new buffer of n elements)
 newta(ty, n: int, proto: int): int
 {
-	if(real n * real tysize[ty] > real (1 << 30))
+	if(real n * real tysize[ty] > real Bufmax)
 		throwerr(RangeError, "invalid typed array length: " + string n);
 	b := newabuf(n * tysize[ty], -1, iabufproto);
 	h := newobj(Ktyped, proto);

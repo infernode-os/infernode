@@ -2479,6 +2479,12 @@ vardecl(x: ref Node.Var)
 # an anonymous function or class given a name by where it is (NamedEvaluation)
 namedexpr(e: ref Node, r: int, name: string)
 {
+	if(isanonclass(e)) {
+		# named as it is made, so that a static name field or method wins
+		classname = name;
+		gexpr(e, r);
+		return;
+	}
 	if(isanonfn(e)) {
 		gexpr(e, r);
 		k := kstr(name);
@@ -2489,6 +2495,19 @@ namedexpr(e: ref Node, r: int, name: string)
 		return;
 	}
 	gexpr(e, r);
+}
+
+classname: string;	# the name a class expression is given by where it is
+
+isanonclass(e: ref Node): int
+{
+	pick x := e {
+	Class =>
+		return x.id == nil;
+	Paren =>
+		return isanonclass(x.e);
+	}
+	return 0;
 }
 
 isanonfn(e: ref Node): int
@@ -4482,6 +4501,10 @@ supercallregs(): (int, int)
 
 classexpr(c: ref Node.Class, r: int)
 {
+	cname := classname;
+	classname = nil;
+	if(c.id != nil)
+		cname = idname(c.id);
 	t0 := cs.tmp;
 	sup := tmp();
 	if(c.super != nil) {
@@ -4513,14 +4536,11 @@ classexpr(c: ref Node.Class, r: int)
 		}
 	derived := c.super != nil;
 	fidx: int;
-	cname := "";
-	if(c.id != nil)
-		cname = idname(c.id);
 	if(ctor != nil) {
 		fidx = addfuncflags(ctor, Cctor | Cderived * derived | Cclassfields);
 		(hd cs.funcs).name = cname;	# the class's name, not "constructor"
 	} else {
-		fidx = defaultctor(derived, c);
+		fidx = defaultctor(derived, c, cname);
 	}
 	proto := tmp();
 	e4(Oclass, r, proto, sup, fidx);
@@ -4707,12 +4727,10 @@ addfuncflags(f: ref Node.Func, flags: int): int
 }
 
 # constructor(...args) { super(...args); } or constructor() {}
-defaultctor(derived: int, c: ref Node.Class): int
+defaultctor(derived: int, c: ref Node.Class, cname: string): int
 {
 	code := ref Code;
-	code.name = "";
-	if(c.id != nil)
-		code.name = idname(c.id);
+	code.name = cname;
 	code.flen = 0;
 	code.nparams = 0;
 	code.nregs = Rarg0 + 4;

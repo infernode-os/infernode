@@ -74,6 +74,10 @@ init(nil: ref Draw->Context, args: list of string)
 		"-t" =>
 			timing = 1;
 			continue;
+		"-P" =>
+			profiling = 1;
+			js->profile(5);
+			continue;
 		"-g" =>
 			args = tl args;
 			if(args == nil)
@@ -103,6 +107,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	if(!ran)
 		repl();
+	if(profiling)
+		sys->fprint(stderr, "%s", js->profiled(25));
 	if(failed)
 		raise "fail:errors";
 }
@@ -114,6 +120,7 @@ usage()
 }
 
 timing := 0;
+profiling := 0;
 
 run(src, name: string, ismod, show: int): int
 {

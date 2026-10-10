@@ -565,6 +565,19 @@ Pg.update(p: self ref Pg)
 	loadframes(p);
 }
 
+Pg.restyle(p: self ref Pg)
+{
+	plock();
+	{
+		p.computed = style->compute(p.doc, p.styles, p.env);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+}
+
 Pg.paint(p: self ref Pg, dst: ref Image, scroll: Point)
 {
 	plock();

@@ -54,6 +54,11 @@ Js: module
 	# (0: as usual), to find a value the collector cannot see
 	stress:	fn(n: int);
 
+	# sample where the realm is every ms milliseconds (0: stop), and the
+	# places most often found, a line each: "count place [native]"
+	profile:	fn(ms: int);
+	profiled:	fn(n: int): string;
+
 	# give the realm test262's host object, $262
 	test262:	fn();
 
@@ -63,6 +68,7 @@ Js: module
 	Host: adt {
 		id:	int;		# the host's name for the page, given to each function
 		stress:	int;		# collect after every stress allocations (0: as usual), to test the engine
+		profile:	int;	# sample every profile ms and say where the time went (0: no)
 		doc:	ref Dom->Doc;
 		url:	string;		# the document's address
 		events:	chan of ref Event;	# from the host; Quit ends the page

@@ -1063,6 +1063,7 @@ marko(h: int)
 
 collect()
 {
+	collecting = 1;
 	ncollect++;
 	for(h := 0; h < nobj; h++)
 		omark[h] = byte 0;
@@ -1143,6 +1144,7 @@ collect()
 	objsince = 0;
 	strsince = 0;
 	gcwanted = 0;
+	collecting = 0;
 }
 
 markdata(d: ref Data)

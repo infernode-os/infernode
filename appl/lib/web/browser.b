@@ -1603,6 +1603,7 @@ Realm: adt {
 	locked:	int;		# it holds the session's lock
 	since:	int;		# since when (sys->millisec)
 	laidout:	int;	# the document's generation when last laid out
+	styled:	int;	# when last styled
 	sels:	list of (string, array of ref Css->Sel);	# selectors parsed, most recent first
 };
 
@@ -1643,7 +1644,7 @@ startrealm(s: ref Session, g: int, pg: ref Pg)
 	if(page->setting("scripts") != "on" || !hasscripts(pg.doc))
 		return;
 	realmlk <-= 1;
-	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, nil);
+	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil);
 	realms = r :: realms;
 	<-realmlk;
 	pidc := chan of int;
@@ -1681,7 +1682,7 @@ realmrun(r: ref Realm, pidc: chan of int)
 		if(pjs == nil)
 			err = sys->sprint("cannot load %s: %r", Js->PATH);
 		else {
-			h := ref Js->Host(r.id, stressn(), r.pg.doc, r.pg.url, r.events, grants(r.pg.url),
+			h := ref Js->Host(r.id, envint("/env/jsstress"), envint("/env/jsprofile"), r.pg.doc, r.pg.url, r.events, grants(r.pg.url),
 				hlock, hunlock, hchanged, hbox, hcomputed, hmedia, hmatch, hselect, hparse,
 				hviewport, hnavigate, hscroll, hconsole);
 			err = pjs->page(h);
@@ -1695,10 +1696,11 @@ realmrun(r: ref Realm, pidc: chan of int)
 	dropealm(r);
 }
 
-# /env/jsstress, for testing the engine: its collector runs every n allocations
-stressn(): int
+# for testing the engine: /env/jsstress, its collector runs every n
+# allocations; /env/jsprofile, where the time goes, sampled every n ms
+envint(path: string): int
 {
-	fd := sys->open("/env/jsstress", Sys->OREAD);
+	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return 0;
 	buf := array[16] of byte;
@@ -1911,6 +1913,22 @@ laidout(r: ref Realm)
 		sys->fprint(sys->fildes(2), "charon: laying out after a script: %s\n", e);
 	}
 	r.laidout = d.gen;
+	r.styled = d.gen;
+}
+
+# the document's computed styles as it now is (the lock held)
+styled(r: ref Realm)
+{
+	d := r.pg.doc;
+	if(d.gen == r.styled || d.gen == r.laidout)
+		return;
+	{
+		r.pg.restyle();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: styling after a script: %s\n", e);
+	}
+	r.styled = d.gen;
 }
 
 # The Host functions: they run on the realm's thread, in its namespace.
@@ -1975,7 +1993,7 @@ hcomputed(id, n: int, prop: string): string
 	r := realmbyid(id);
 	if(r == nil)
 		return "";
-	laidout(r);
+	styled(r);
 	c := r.pg.computed;
 	if(c == nil || n <= 0 || n >= len c.st || c.st[n] == nil)
 		return "";

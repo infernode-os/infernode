@@ -76,6 +76,8 @@ page(h: ref Js->Host): string
 		return err;
 	if(h.stress > 0)
 		stress(h.stress);
+	if(h.profile > 0)
+		profile(h.profile);
 	h.lock(h.id);
 	{
 		f := selfhost(src);
@@ -90,6 +92,8 @@ page(h: ref Js->Host): string
 	}
 	h.unlock(h.id);
 	hook("start", nil);
+	if(h.profile > 0)
+		pageconsole("profile of the load:\n" + profiled(30));
 	for(;;) alt {
 	e := <-h.events =>
 		pick ev := e {

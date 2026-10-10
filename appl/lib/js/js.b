@@ -151,6 +151,130 @@ resetstate()
 	hostfns = nil;
 }
 
+# ---- the sampling profiler ----
+
+Sample: adt {
+	code:	ref Code;
+	pc:	int;
+	native:	string;
+	gc:	int;		# collecting
+};
+
+profms := 0;
+samples: list of ref Sample;
+nsamples := 0;
+collecting := 0;
+
+profile(ms: int)
+{
+	profms = ms;
+	if(ms > 0) {
+		samples = nil;
+		nsamples = 0;
+		spawn sampler(ms);
+	}
+}
+
+sampler(ms: int)
+{
+	while(profms == ms) {
+		sys->sleep(ms);
+		if(nsamples < 200000) {
+			samples = ref Sample(code, pc, lastnative, collecting) :: samples;
+			nsamples++;
+		}
+	}
+}
+
+profiled(n: int): string
+{
+	# by function, then by line within the hottest
+	byfn: list of (ref Code, int);
+	gcs := 0;
+	natives: list of (string, int);
+	for(l := samples; l != nil; l = tl l) {
+		s := hd l;
+		if(s.gc) {
+			gcs++;
+			continue;
+		}
+		natives = bump(natives, s.native);
+		for(f := byfn; f != nil; f = tl f)
+			if((hd f).t0 == s.code)
+				break;
+		if(f == nil)
+			byfn = (s.code, 1) :: byfn;
+		else {
+			r: list of (ref Code, int);
+			for(f = byfn; f != nil; f = tl f)
+				if((hd f).t0 == s.code)
+					r = ((hd f).t0, (hd f).t1 + 1) :: r;
+				else
+					r = hd f :: r;
+			byfn = r;
+		}
+	}
+	out := sys->sprint("%d samples, %d collecting\n", nsamples, gcs);
+	for(i := 0; i < n && byfn != nil; i++) {
+		best := hd byfn;
+		for(f := tl byfn; f != nil; f = tl f)
+			if((hd f).t1 > best.t1)
+				best = hd f;
+		r: list of (ref Code, int);
+		for(f = byfn; f != nil; f = tl f)
+			if((hd f).t0 != best.t0)
+				r = hd f :: r;
+		byfn = r;
+		(c, k) := best;
+		name := "?";
+		place := "";
+		if(c != nil) {
+			name = c.name;
+			if(name == nil || name == "")
+				name = "<anonymous>";
+			place = codeplace(c, firstpc(c, samples));
+		}
+		out += sys->sprint("%6d %s %s\n", k, name, place);
+	}
+	for(i = 0; i < 5 && natives != nil; i++) {
+		best := hd natives;
+		for(nl := tl natives; nl != nil; nl = tl nl)
+			if((hd nl).t1 > best.t1)
+				best = hd nl;
+		r: list of (string, int);
+		for(nl = natives; nl != nil; nl = tl nl)
+			if((hd nl).t0 != best.t0)
+				r = hd nl :: r;
+		natives = r;
+		out += sys->sprint("  native last called %s: %d\n", best.t0, best.t1);
+	}
+	return out;
+}
+
+bump(l: list of (string, int), s: string): list of (string, int)
+{
+	r: list of (string, int);
+	found := 0;
+	for(; l != nil; l = tl l)
+		if((hd l).t0 == s) {
+			r = (s, (hd l).t1 + 1) :: r;
+			found = 1;
+		} else
+			r = hd l :: r;
+	if(!found)
+		r = (s, 1) :: r;
+	return r;
+}
+
+# a pc of c's that was sampled, for its place
+firstpc(c: ref Code, l: list of ref Sample): int
+{
+	for(; l != nil; l = tl l)
+		if((hd l).code == c)
+			return (hd l).pc + 1;
+	return 0;
+}
+
 stress(n: int)
 {
 	gcstress = n;

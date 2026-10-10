@@ -23,15 +23,18 @@
 #
 # On macOS, with Xenith.app installed, xen runs the app's own emu and
 # runtime tree, the signed release, rather than a development tree;
-# INFERNODE_ROOT runs a tree instead. Files given while a Xenith is
-# listening to the host's plumber are plumbed to it rather than opened
-# in another instance.
+# INFERNODE_ROOT runs a tree instead. Releases ship xen too, in
+# Xenith.app (Contents/Resources/tools) and the Linux GUI tarball
+# (tools), and there it runs the release it came in. Files given while
+# a Xenith is listening to the host's plumber are plumbed to it rather
+# than opened in another instance.
 #
 # Environment:
-#	INFERNODE_ROOT	tree to run (default on macOS: Xenith.app, in
-#			/Applications or ~/Applications, if installed;
-#			otherwise the tree holding this script)
-#	XEN_APP		the Xenith.app to run, if not one of those
+#	INFERNODE_ROOT	tree to run (default on macOS: the Xenith.app this
+#			script is in, or one in /Applications or
+#			~/Applications; otherwise the tree holding this
+#			script, a source tree or a Linux release)
+#	XEN_APP		the Xenith.app to run (macOS), before any of those
 #	XEN_THEME	the session's theme (default xenith): any installed theme
 #			(/lib/lucifer/theme); glenda (or plan9) is Plan 9's acme. Xenith's
 #			Theme command switches it, for this session only.
@@ -73,10 +76,13 @@ root=${INFERNODE_ROOT:-$(cd "$(dirname "$self")/.." && pwd)}
 case $(uname -s) in
 Darwin)
 	emu=$root/emu/MacOSX/o.emu
-	# The installed app's emu and tree, unless a tree was asked for.
-	# Run from inside the bundle, the emu is Xenith to the Dock.
+	# An app's emu and tree, unless a tree was asked for: XEN_APP, the
+	# app this script came in (Contents/Resources/tools/xen), or one
+	# installed. Run from inside the bundle, the emu is Xenith to the Dock.
 	if [ -z "$INFERNODE_ROOT" ]; then
-		for app in "$XEN_APP" /Applications/Xenith.app "$HOME/Applications/Xenith.app"; do
+		own=
+		[ -x "$root/../MacOS/emu" ] && own=$(cd "$root/../.." && pwd)
+		for app in "$XEN_APP" "$own" /Applications/Xenith.app "$HOME/Applications/Xenith.app"; do
 			if [ -n "$app" ] && [ -x "$app/Contents/MacOS/emu" ]; then
 				emu=$app/Contents/MacOS/emu
 				root=$app/Contents/Resources
@@ -84,7 +90,16 @@ Darwin)
 			fi
 		done
 	fi ;;
-Linux)	emu=$root/emu/Linux/o.emu ;;
+Linux)
+	emu=$root/emu/Linux/o.emu
+	# A release tarball (tools/xen beside bin and resources): its emu,
+	# with the libraries beside it, and its tree.
+	if [ -x "$root/bin/emu" ] && [ -d "$root/resources" ]; then
+		emu=$root/bin/emu
+		LD_LIBRARY_PATH=$root/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+		export LD_LIBRARY_PATH
+		root=$root/resources
+	fi ;;
 *)	echo "xen: unsupported host $(uname -s); on Windows use tools/xen.ps1" >&2; exit 1 ;;
 esac
 if [ ! -x "$emu" ]; then

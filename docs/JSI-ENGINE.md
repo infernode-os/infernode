@@ -59,10 +59,30 @@ from the realm's queue.  An async built-in (`AsyncDisposableStack.prototype.disp
 `Array.fromAsync`) is Limbo code run as an async function's coroutine,
 so it awaits as a script does.
 
-**Memory** is Dis's: objects are freed by reference counting, cycles by
-the collector.  A realm is cyclic from the start (prototypes and their
-constructors), so `shutdown` walks it from its roots and clears every
-object, and reference counting frees the rest at once.
+**Memory.**  Objects are Dis's, freed by reference counting when the
+last reference goes; but a page's garbage is cyclic (a DOM node holding
+a closure holding the node), and Dis's own collector marks one step per
+pass, so a thread that keeps allocating fills the heap before it has
+freed anything.  jsi therefore collects its own objects (`jsigc.b`):
+every `Obj` is entered in a registry when made, and at a safe point (a
+statement boundary, a loop's back edge, between jobs) when the count
+since the last collection passes a threshold (twice what survived the
+last one, at least 64K), the realm is marked from its roots (the realm's
+prototypes and globals, the frames, Envs and values the interpreter
+holds, the stacks of each coroutine, the job queue, modules, resources
+being disposed of) and what is unmarked is cleared: slots, elements, Env
+and data cut, so reference counting frees the rest at once.  Marking
+never runs inside a native (`natdepth`), so a native need not root what
+it holds in locals; the interpreter roots its own temporaries on a
+value stack.  `js -g n` collects after every `n` objects to shake out a
+missing root.  `shutdown` is the same walk with no roots.
+
+**Nested functions are compiled when first called** when the source is
+16 KB or more (the parser's `Flazy`, `-L n` to change the threshold):
+the compiler notes the names a function body uses free, so the scopes
+around it keep those captured, and compiles the body against the saved
+scope chain on the first call, as a direct eval's body is.  A page's
+bundles are mostly functions never called.
 
 The other engine (§13 of JS-ENGINE.md) compiles to register bytecode,
 keeps its values out of Limbo's heap in arrays of its own, collects them
@@ -110,12 +130,19 @@ What jsi fails, by kind:
 
 - **Tail calls** (34 tests): calls in tail position are not reused; deep
   recursion meets the call depth limit.
-- **Proxies observed through `with`**: the order of a proxy's traps
-  when it is a `with` object, in a few compound cases.
+- **Proxies observed through `with`** (5): the order of a proxy's traps
+  when it is a `with` object, in compound cases.
+- **Module evaluation order** (6): sibling async modules evaluated in
+  turn rather than in parallel, and the order of a cycle's errors.
 - **`$262.createRealm`** and Atomics: one realm per engine instance, no
   shared memory, as in the other engine (skipped there too).
 - **`String.prototype.normalize`** returns its string (both engines).
-- **`JSON.parse`'s source text access** (the reviver's third argument).
+- A few async generator corner cases (`yield*` with a throwing `value`
+  getter), `arguments.callee.caller`.
+
+The runs were made under `-g` as well (a collection after every
+object, over `statements/` and `expressions/`), which is how the
+collector's missing roots were found.
 
 Bugs found and fixed while bringing jsi up that the other engine shares
 are fixed in the shared code: a template's raw text keeps CR as LF after
@@ -123,17 +150,31 @@ a backslash (`jslex`), and t262 matches a runtime error's type without
 the "uncaught " prefix.
 
 
-## 4. What is not there
+## 4. Web pages
 
-- **Web pages.**  `Js->page`, the DOM binding Charon uses
-  (`appl/lib/js/jsdom.b`), says "not supported yet".  It is the largest
-  piece of work left before jsi could replace the other engine in
-  Charon; the DOM itself is JavaScript (`lib/js/dom.js`) over a small
-  set of natives, so most of it would carry over.
-- `js -P` (profile), `-g` (collection stress) and `-J` (the compiled
-  tier) are accepted and do nothing.  `-L` sets the parser's lazy
-  threshold, but jsi parses such a function's body as soon as it
-  compiles the code around it, so nothing is saved yet.
+`Js->page` (`jsidom.b`) is the other engine's page binding
+(`appl/lib/js/jsdom.b`) over jsi: the same DOM in JavaScript
+(`lib/js/dom.js`, `intl.js`) over natives that name nodes by their
+index in `Dom->Doc`, the same event loop (timers, microtasks, fetch
+replies), confinement (a new process group, a namespace of nothing but
+what the page was granted, `/mnt/web` for its origin), fetching through
+webfs, and module graphs prefetched.  Charon loads the engine named by
+`/env/jsengine` (`tests/js/jspage -I` sets it to jsi), so a page runs
+under either engine unchanged.
+
+What a page turns on, measured on the same machine (amd64, loaded):
+
+| | appl/lib/js | jsi |
+|---|---|---|
+| `dom.html` (the DOM's own tests) | 224/224 | 224/224 |
+| seven bundles (jQuery, React, ReactDOM, lodash, moment, d3, three), compile | — | 76 ms (1375 before lazy compilation) |
+| the same page, the script's own work (`performance.now` to `performance.now`) | 636 ms | 754 ms |
+| `three.min.js` alone, load and run | 484 ms | 479 ms |
+| `d3.min.js` alone | 451 ms | 387 ms |
+| `gc.html` (1.2M dropped DOM/closure cycles) | 88 MB high water | 121 MB, 4.3 s |
+
+`js -P` prints the collector's counts; `-J` (the compiled tier) is
+accepted and does nothing.
 
 
 ## 5. Files
@@ -148,6 +189,8 @@ the "uncaught " prefix.
 | `jsigen.b` | Generators, async functions and generators, promises, jobs |
 | `jsibuiltin.b` | The realm; Object, Function, Symbol, errors, globals |
 | `jsiarray.b`, `jsistring.b`, `jsicoll.b`, `jsiregexp.b`, `jsidate.b`, `jsibig.b`, `jsityped.b` | Array; String, Number, Math, JSON; Map, Set, weak collections, Promise, Reflect, Proxy, iterator helpers; RegExp; Date; BigInt; ArrayBuffer, typed arrays, DataView |
+| `jsigc.b` | The realm's collector: the registry, the roots, mark and sweep |
+| `jsidom.b` | `Js->page`: the DOM natives, the page's event loop, confinement, fetch, module loading |
 | `jsimod.b` | Modules: linking, namespaces, top-level await, dynamic import |
 | `jsidispose.b` | `using`, `await using`, DisposableStack, AsyncDisposableStack, SuppressedError; async built-ins |
 | `tests/jsi-spike/` | The measurements the design was chosen by (object layout and size) |

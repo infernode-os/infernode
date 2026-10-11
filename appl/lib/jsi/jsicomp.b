@@ -36,7 +36,7 @@ Nimportmeta, Nimportcall, Npat, Ppatarr, Ppatobj, Pprop, Prest, Prestobj, Pdefau
 Nblock, Nseqs, Ncompl, Nif, Nwhile, Ndo, Nfor, Nforin, Nforof, Nreturn, Nbreak, Ncontinue,
 Nthrow, Ntry, Nswitch, Ncase, Nlabeled, Nwith, Nempty,
 Nmkenv, Nframe2env, Nmkargs, Nmkrest, Nholes, Ndeclvar, Ndeclfn, Nglobalinst, Ndyndeclvar,
-Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Ncvreset, Nkeepcv, Nchaincall, Nlast: con iota;
+Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Ncvreset, Nkeepcv, Nchaincall, Nsuperacc, Nlast: con iota;
 
 op, na, nb, nc, nd, ne, npos: array of int;
 nn := 0;
@@ -2204,11 +2204,11 @@ unary(x: ref Node.Unary): int
 		pick m := a {
 		Member =>
 			if(issuper(m.obj)) {
-				# delete super.x: a ReferenceError, after the key
+				# delete super.x: a ReferenceError, after this (which may be uninitialised) and the key
 				k := 0;
 				if(m.computed)
 					k = expr(m.prop);
-				return e2(Ncomma, addkidsa(array[] of {k, e1(Nthrow, e2(Nnew, varref("ReferenceError", Mget, 0), 0))}), 2);
+				return e2(Ncomma, addkidsa(array[] of {thisref(), k, e1(Nthrow, e2(Nnew, varref("ReferenceError", Mget, 0), 0))}), 3);
 			}
 			if(m.optional) {
 				# delete a?.b
@@ -2383,16 +2383,10 @@ assign(x: ref Node.Assign): int
 			else
 				k = propatom(tt.prop);
 			si := superinfo();
-			g := e3(Nsuperget, k, kn, si);
-			if(logical >= 0) {
-				lo := Nand;
-				if(logical == 1)
-					lo = Nor;
-				else if(logical == 2)
-					lo = Nnullish;
-				return e2(lo, g, e4(Nsuperset, k, kn, expr(x.value), si));
-			}
-			return e4(Nsuperset, k, kn, e2(binop(opname), g, expr(x.value)), si);
+			# the key and the base once: Nsuperset reads the property and leaves it on the stack
+			if(logical >= 0)
+				return e4(Nsuperset, k, kn, e2(Nsuperacc, expr(x.value), 1 + logical), si);
+			return e4(Nsuperset, k, kn, e1(Nsuperacc, e2(binop(opname), e0(Nacc), expr(x.value))), si);
 		}
 		o := expr(tt.obj);
 		pick pr := tt.prop {

@@ -333,6 +333,8 @@ put(o: ref Obj, k: int, v: V, recv: V): int
 	for(;;) {
 		if(p.cls == Cproxy)
 			return pxset(p, k, v, recv);
+		if(p.cls == Cns)
+			return 0;	# a namespace's [[Set]] is always false
 		if(p.cls == Ctyped && !issym(k)) {
 			(isnum, x) := canonnum(atomstr[k]);
 			if(isnum) {
@@ -892,6 +894,8 @@ hasprop(o: ref Obj, k: int): int
 	for(;;) {
 		if(o.cls == Cproxy)
 			return pxhas(o, k);
+		if(o.cls == Cns)
+			return nshas(o, k);	# without reading the binding: it may be uninitialised
 		if(o.cls == Ctyped && !issym(k)) {
 			(isnum, x) := canonnum(atomstr[k]);
 			if(isnum)

@@ -4264,7 +4264,7 @@ superset(n: int)
 	Super =>
 		inf = s;
 	}
-	# the value of an update (super.x++, super.x += v) is on the stack: take it before pushing
+	# the value of an update (super.x++) is on the stack: take it before pushing
 	acc := op[nc[n]] == Nacc;
 	v := undef;
 	if(acc)
@@ -4281,12 +4281,36 @@ superset(n: int)
 	push(kv);
 	base := superbase(inf);
 	pop();
-	if(k < 0)
-		k = tokey(kv);
-	if(!acc) {
+	if(op[nc[n]] == Nsuperacc) {
+		# super[k] op= v: the property read (its key made first, as GetValue does), the
+		# operation applied to it over the stack; a logical one may keep the old value
+		if(k < 0)
+			k = tokey(kv);
+		if(base == nil)
+			throwtype("Cannot read properties of null");
+		cur := get(base, k, this);
+		short := 0;
+		case nb[nc[n]] {
+		1 =>	short = !tobool(cur);	# &&=
+		2 =>	short = tobool(cur);	# ||=
+		3 =>	short = cur.t != Tundef && cur.t != Tnull;	# ??=
+		}
+		if(short) {
+			pop();
+			setr(cur);
+			return;
+		}
+		push(cur);
+		ev(na[nc[n]]);
+		v = regv();
+		pop();
+	} else if(!acc) {
 		ev(nc[n]);
 		v = regv();
-	}
+		if(k < 0)
+			k = tokey(kv);	# after the value: ToPropertyKey is PutValue's
+	} else if(k < 0)
+		k = tokey(kv);
 	this = vstk[vsp-1];
 	pop();
 	if(base == nil)

@@ -835,6 +835,13 @@ nsgetown(o: ref Obj, k: int): (int, V, int)
 	return (1, nsvalue(m, name), Awrite|Aenum);
 }
 
+nshas(o: ref Obj, k: int): int
+{
+	if(atomsym[k] != nil)
+		return slotof(o.sh, k) >= 0;
+	return isnsname(nsmod(o), atomstr[k]);
+}
+
 nsdefine(o: ref Obj, k: int, d: ref Desc): int
 {
 	if(atomsym[k] != nil) {

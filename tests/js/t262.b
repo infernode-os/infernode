@@ -70,6 +70,7 @@ skipped := array[] of {
 	"iterator-includes",
 	"Iterator.prototype.join",
 	"import-bytes",
+	"import-text",
 	"await-dictionary",
 	"error-stack-accessor",
 	"immutable-arraybuffer",

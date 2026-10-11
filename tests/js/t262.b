@@ -3,7 +3,7 @@ implement T262;
 #
 # t262 - test262's syntax tests against the parser.
 #
-#	t262 [-v] [-r] [-t ms] [-g n] [-L n] [-f failures] dir...
+#	t262 [-v] [-r] [-I | -E engine] [-t ms] [-g n] [-L n] [-f failures] dir...
 #
 # Each test's front matter says what is expected: negative phase parse
 # (an early error) means the source must be refused; anything else must
@@ -109,6 +109,11 @@ init(nil: ref Draw->Context, args: list of string)
 		"-f" =>
 			args = tl args;
 			failfd = sys->create(hd args, Sys->OWRITE, 8r644);
+		"-I" =>
+			engine = "/dis/lib/jsi/jsi.dis";
+		"-E" =>
+			args = tl args;
+			engine = hd args;
 		}
 	for(; args != nil; args = tl args)
 		walk(hd args, hd args);
@@ -506,13 +511,14 @@ runrealm(src: string, m: ref Meta, nil: string, c: chan of (int, string), pidc: 
 }
 
 js: Js;
+engine := Js->PATH;	# -I: the interpreter, appl/lib/jsi; -E: another engine
 
 runrealm1(src: string, m: ref Meta): (int, string)
 {
 	if(js == nil)
-		js = load Js Js->PATH;
+		js = load Js engine;
 	if(js == nil)
-		return (0, sys->sprint("cannot load %s: %r", Js->PATH));
+		return (0, sys->sprint("cannot load %s: %r", engine));
 	err := js->init();
 	if(err != nil)
 		return (0, err);

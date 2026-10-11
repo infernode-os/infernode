@@ -3,8 +3,11 @@ implement Jscmd;
 #
 # js - run JavaScript.
 #
-#	js [-p] [-m] [-t] [-g n] [-L n] [-J n] [-e source] [file ...]
+#	js [-I | -E engine] [-p] [-m] [-t] [-g n] [-L n] [-J n] [-e source] [file ...]
 #
+# -I runs the scripts with the interpreter (appl/lib/jsi) in place of
+# the compiling engine (appl/lib/js); -E names another engine's module,
+# one that implements js.m.
 # Each file (a module with -m), then each -e source, runs in turn in one
 # realm.  -p prints each completion value.  With no file and no source,
 # js reads and runs what is typed, a statement at a time, printing each
@@ -47,7 +50,25 @@ init(nil: ref Draw->Context, args: list of string)
 	bufio = load Bufio Bufio->PATH;
 	jslex = load Jslex Jslex->PATH;
 	jsparse = load Jsparse Jsparse->PATH;
-	js = load Js Js->PATH;
+	# the engine is chosen before the realm is made
+	engine := Js->PATH;
+	rest: list of string;
+	for(al := tl args; al != nil; al = tl al) {
+		case hd al {
+		"-I" =>
+			engine = "/dis/lib/jsi/jsi.dis";
+			continue;
+		"-E" =>
+			if(tl al == nil)
+				usage();
+			al = tl al;
+			engine = hd al;
+			continue;
+		}
+		rest = hd al :: rest;
+	}
+	args = hd args :: rev(rest);
+	js = load Js engine;
 	if(js == nil || jslex == nil || jsparse == nil || bufio == nil) {
 		sys->fprint(stderr, "js: cannot load the engine: %r\n");
 		raise "fail:load";
@@ -128,9 +149,17 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:errors";
 }
 
+rev(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
 usage()
 {
-	sys->fprint(stderr, "usage: js [-p] [-m] [-t] [-g n] [-L n] [-J n] [-e source] [file ...]\n");
+	sys->fprint(stderr, "usage: js [-I | -E engine] [-p] [-m] [-t] [-g n] [-L n] [-J n] [-e source] [file ...]\n");
 	raise "fail:usage";
 }
 

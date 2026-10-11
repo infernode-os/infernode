@@ -6,6 +6,7 @@ DIRS=\
 	crypt\
 	encoding\
 	js\
+	jsi\
 	git\
 	ida\
 	spki\

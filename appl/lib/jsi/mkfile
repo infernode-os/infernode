@@ -1,0 +1,24 @@
+<$ROOT/mkconfig
+
+TARG=\
+	jsi.dis\
+
+SYSMODULES=\
+	sys.m\
+	math.m\
+	daytime.m\
+	keyring.m\
+	jslex.m\
+	jsparse.m\
+	jscheck.m\
+	jsre.m\
+	js.m\
+	web/dom.m\
+	draw.m\
+
+DISBIN=$ROOT/dis/lib/jsi
+
+<$ROOT/mkfiles/mkdis
+
+# jsi.dis is one module from several fragments
+jsi.dis:	jsival.b jsiobj.b jsicomp.b jsieval.b jsigen.b jsibuiltin.b jsiarray.b jsistring.b jsicoll.b jsiregexp.b jsidate.b jsibig.b jsityped.b jsimod.b jsistub.b

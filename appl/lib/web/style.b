@@ -35,6 +35,8 @@ uasheet: ref Sheet;
 
 init(): string
 {
+	if(ilock == nil)
+		ilock = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	bufio = load Bufio Bufio->PATH;
 	math = load Math Math->PATH;
@@ -198,7 +200,7 @@ addimport(u: string, sh: ref Sheet)
 	imported = (u, sh) :: imported;
 }
 
-Nbucket: con 512;
+Nbucket: con 8191;	# (a bucket holds every key that hashes there: candidates take only their own key's, by Entry.key)
 
 Ix: adt {
 	idx:	ref Index;
@@ -211,7 +213,7 @@ Ix: adt {
 buildindex(s: ref Styles, env: ref Env): ref Index
 {
 	ix := ref Ix(ref Index(array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry,
-		array[Nbucket] of list of ref Entry, nil, 0, nil, nil), 0, nil, 0, env);
+		array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry, nil, 0, nil, nil), 0, nil, 0, env);
 	# layer names first, in order of first appearance, so tiers are known
 	sheets: list of (ref Sheet, int, string);
 	for(l := s.sheets; l != nil; l = tl l)
@@ -293,7 +295,7 @@ indexrules(ix: ref Ix, rs: array of ref Rule, origin: int, layer, base: string, 
 			for(k := 0; k < len decls && !sibfns; k++)
 				sibfns = hassibfn(decls[k].val);
 			for(k = 0; k < len r.sels; k++)
-				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0));
+				addentry(ix.idx, ref Entry(r.sels[k], decls, tier, ix.order, ancbits(r.sels[k]), 0, nil));
 			ix.order++;
 		Media =>
 			if(mediamatch(r.cond, ix.env))
@@ -410,6 +412,7 @@ addentry(idx: ref Index, e: ref Entry)
 		case x.kind {
 		Css->Sid =>
 			h := strhash(x.name, Nbucket);
+			e.key = x.name;
 			idx.id[h] = e :: idx.id[h];
 			return;
 		Css->Stype =>
@@ -419,13 +422,53 @@ addentry(idx: ref Index, e: ref Entry)
 	for(i = 0; i < len last; i++)
 		if(last[i].kind == Css->Sclass) {
 			h := strhash(last[i].name, Nbucket);
+			e.key = last[i].name;
 			idx.class[h] = e :: idx.class[h];
 			return;
 		}
 	if(tag != nil) {
 		h := strhash(tag, Nbucket);
+		e.key = tag;
 		idx.tag[h] = e :: idx.tag[h];
 		return;
+	}
+	# a :where() or :is() of one selector: its subject's key is ours
+	for(i = 0; i < len last; i++) {
+		x := last[i];
+		if(x.kind == Css->Spseudo && (x.name == "is" || x.name == "where") && len x.sub == 1 && x.sub[0].pseudo == nil) {
+			b := x.sub[0];
+			(k, v) := keyof(b.parts[len b.parts - 1]);
+			h := strhash(v, Nbucket);
+			case k {
+			Css->Sid =>
+				e.key = v;
+				idx.id[h] = e :: idx.id[h];
+				return;
+			Css->Sclass =>
+				e.key = v;
+				idx.class[h] = e :: idx.class[h];
+				return;
+			Css->Stype =>
+				e.key = v;
+				idx.tag[h] = e :: idx.tag[h];
+				return;
+			}
+		}
+	}
+	# an attribute it must have, or the root it must be
+	for(i = 0; i < len last; i++) {
+		x := last[i];
+		k: string;
+		if(x.kind == Css->Sattr)
+			k = lower(x.name);
+		else if(x.kind == Css->Spseudo && x.name == "root")
+			k = ":root";
+		if(k != nil) {
+			h := strhash(k, Nbucket);
+			e.key = k;
+			idx.attr[h] = e :: idx.attr[h];
+			return;
+		}
 	}
 	idx.other = e :: idx.other;
 }
@@ -538,6 +581,7 @@ M: adt {
 	d:	ref Doc;
 	env:	ref Env;
 	classes:	array of list of string;	# per node, lazily
+	cls:	array of array of int;	# per node, lazily: its classes interned
 	index:	array of int;	# per node: 1-based index among element siblings, lazily
 	count:	array of int;	# per node: number of element children, lazily (+1)
 	scope:	int;	# what :scope matches; 0, the root
@@ -548,7 +592,7 @@ M: adt {
 
 matcher(d: ref Doc, env: ref Env): ref M
 {
-	return ref M(d, env, array[d.n] of list of string, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil);
+	return ref M(d, env, array[d.n] of list of string, array[d.n] of array of int, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil);
 }
 
 # n's parent element for a selector of a shadow tree: past the tree's
@@ -557,7 +601,10 @@ parentelm(m: ref M, n: int): int
 {
 	if(n == m.host && m.host != 0)
 		return 0;
-	p := parentel(m.d, n);
+	d := m.d;
+	p := d.nodes[n].parent;
+	if(p != 0 && d.nodes[p].kind != Dom->Element)
+		p = 0;
 	if(p == 0 && m.host != 0 && m.d.nodes[n].parent == m.sroot)
 		return m.host;
 	return p;
@@ -666,6 +713,69 @@ classesof(m: ref M, n: int): list of string
 		m.classes[n] = c;
 	}
 	return c;
+}
+
+# Class names as numbers: a selector's class is compared with an
+# element's as an integer, not a string (the commonest test in matching;
+# a class selector keeps its number in its a, which classes do not use).
+# The table is the module's, so locked: two pages may be styled at once.
+itab: array of list of (string, int);
+nitab := 0;
+ilock: chan of int;
+
+intern(s: string): int
+{
+	ilock <-= 1;
+	if(itab == nil)
+		itab = array[4093] of list of (string, int);
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = h * 31 + s[i];
+	h = (h & 16r7FFFFFFF) % len itab;
+	for(l := itab[h]; l != nil; l = tl l)
+		if((hd l).t0 == s) {
+			<-ilock;
+			return (hd l).t1;
+		}
+	id := ++nitab;
+	itab[h] = (s, id) :: itab[h];
+	<-ilock;
+	return id;
+}
+
+clsof(m: ref M, n: int): array of int
+{
+	if(n >= len m.cls) {
+		a := array[m.d.n] of array of int;
+		a[0:] = m.cls;
+		m.cls = a;
+	}
+	c := m.cls[n];
+	if(c == nil) {
+		k := 0;
+		for(l := classesof(m, n); l != nil; l = tl l)
+			k++;
+		c = array[k] of int;
+		k = 0;
+		for(l = classesof(m, n); l != nil; l = tl l)
+			c[k++] = intern(hd l);
+		m.cls[n] = c;
+	}
+	return c;
+}
+
+hasclassx(m: ref M, n: int, x: ref Simple): int
+{
+	id := x.a;
+	if(id == 0) {
+		id = intern(x.name);
+		x.a = id;
+	}
+	c := clsof(m, n);
+	for(i := 0; i < len c; i++)
+		if(c[i] == id)
+			return 1;
+	return 0;
 }
 
 hasclass(m: ref M, n: int, cl: string): int
@@ -780,7 +890,7 @@ compound(m: ref M, c: array of ref Simple, n: int): int
 			if(d.attr(n, "id") != x.name)
 				return 0;
 		Css->Sclass =>
-			if(!hasclass(m, n, x.name))
+			if(!hasclassx(m, n, x))
 				return 0;
 		Css->Sattr =>
 			# not d.attr() != nil: an empty value is nil in Limbo
@@ -2676,19 +2786,28 @@ candidates(m: ref M, idx: ref Index, n: int): list of ref Entry
 	nm := nd.name;
 	if(nd.ns != Dom->HTML)
 		nm = lower(nm);
-	r = appendmatching(idx.tag[strhash(nm, Nbucket)], r);
+	r = appendmatching(idx.tag[strhash(nm, Nbucket)], r, nm);
 	if((id := d.attr(n, "id")) != nil)
-		r = appendmatching(idx.id[strhash(id, Nbucket)], r);
+		r = appendmatching(idx.id[strhash(id, Nbucket)], r, id);
 	for(cl := classesof(m, n); cl != nil; cl = tl cl)
 		if(hd cl != "")
-			r = appendmatching(idx.class[strhash(hd cl, Nbucket)], r);
+			r = appendmatching(idx.class[strhash(hd cl, Nbucket)], r, hd cl);
+	for(al := nd.attrs; al != nil; al = tl al) {
+		an := lower((hd al).t0);
+		r = appendmatching(idx.attr[strhash(an, Nbucket)], r, an);
+	}
+	if(parentel(d, n) == 0)
+		r = appendmatching(idx.attr[strhash(":root", Nbucket)], r, ":root");
 	return r;
 }
 
-appendmatching(l, r: list of ref Entry): list of ref Entry
+# the entries of bucket l indexed by key (or by several keys), not yet in r
+appendmatching(l, r: list of ref Entry, key: string): list of ref Entry
 {
 	for(; l != nil; l = tl l) {
 		e := hd l;
+		if(e.key != nil && e.key != key)
+			continue;
 		if(e.mark != candgen) {
 			e.mark = candgen;
 			r = e :: r;

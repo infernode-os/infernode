@@ -311,6 +311,7 @@ Style: module
 	};
 	Index: adt {
 		id, class, tag:	array of list of ref Entry;	# hashed
+		attr:	array of list of ref Entry;	# by an attribute's name, lower case; ":root" for :root
 		other:	list of ref Entry;
 		n:	int;
 		layers:	list of string;
@@ -323,6 +324,7 @@ Style: module
 		order:	int;
 		anc:	array of int;	# Bloom bits an element's ancestors must have
 		mark:	int;	# candidate-gathering generation
+		key:	string;	# the id, class or tag it is indexed by; nil if several (or none)
 	};
 
 	# Computed styles for d's elements, indexed by node; before[n] and

@@ -126,7 +126,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# UI test driver: synthetic input via /chan/uitest, so interaction
 	# is scriptable and CI-testable (tests/host).  Writes, one command
-	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal).
+	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal)  |
+	# "text STRING".
 	# Events enter the exact channels the real devices feed.
 	uitest := sys->file2chan("/chan", "uitest");
 	if(uitest != nil)
@@ -971,8 +972,15 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 			ptr <-= ref Draw->Pointer(b, (x, y), sys->millisec());
 		} else if(n >= 2 && hd toks == "key")
 			fakekbd <-= hd tl toks;
-		else
-			err = "usage: ptr X Y BUTTONS | key RUNE";
+		else if(n >= 2 && hd toks == "text"){
+			# the rest of the line, a rune at a time, as typed
+			t := string data;
+			if(t[len t - 1] == '\n')
+				t = t[0:len t - 1];
+			for(i := len "text "; i < len t; i++)
+				fakekbd <-= string t[i];
+		} else
+			err = "usage: ptr X Y BUTTONS | key RUNE | text STRING";
 		if(err != "")
 			wc <-= (0, err);
 		else

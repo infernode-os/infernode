@@ -134,6 +134,10 @@ All notable changes to InferNode are documented in this file.
   never moves now chooses New, as rio's does; any other button cancels.
   `tests/host/wm_test.sh` drives the menu, the frame and focus and
   checks where they leave the windows.
+- **`/chan/uitest` types text** (`text STRING`), and is documented in
+  `wm(1)`. `tests/host/page_test.sh` now drives wm/page through paging,
+  the wheel, a drag, the button-3 menu, fit, zoom, turning, two files
+  and standard input.
 
 ## [0.6.0] - 2026-10-10
 

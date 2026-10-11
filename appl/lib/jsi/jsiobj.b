@@ -236,6 +236,12 @@ get(o: ref Obj, k: int, recv: V): V
 	for(;;) {
 		if(o.cls == Cproxy)
 			return pxget(o, k, recv);
+		if(o.cls == Ctyped && !issym(k)) {
+			# a numeric key is the typed array's own, found or not: never the prototype's
+			(isnum, x) := canonnum(atomstr[k]);
+			if(isnum)
+				return typedgetnum(o, x);
+		}
 		(found, v, at) := getown(o, k);
 		if(found) {
 			if(at & Aacc)

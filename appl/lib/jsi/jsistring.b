@@ -505,7 +505,7 @@ strregexpish(id: int, this: V, args: array of V): V
 	NSPreplace or NSPreplaceall => sym = a_symreplace;
 	NSPsplit => sym = a_symsplit;
 	}
-	if(rx.t != Tundef && rx.t != Tnull) {
+	if(rx.t == Tobj) {	# a primitive's Symbol.match (and the rest) is not looked up
 		if(id == NSPreplaceall || id == NSPmatchall) {
 			if(isregexpv(rx)) {
 				fl := getv(rx.o, a_flags);
@@ -583,9 +583,9 @@ strregexpish(id: int, this: V, args: array of V): V
 			else
 				r += substitution(pat, s, pos, nil, undef, repl);
 			end = pos + len pat;
-			if(!all)
+			if(!all || pos + adv > len s)
 				break;
-			pos = strindex(s, pat, pos + adv);
+			pos = strindex(s, pat, pos + adv);	# an empty pattern matches at the end too
 		}
 		if(end < len s)
 			r += s[end:];

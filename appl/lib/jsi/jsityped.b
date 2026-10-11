@@ -485,12 +485,12 @@ typedctor(f: ref Obj, args: array of V, nt: ref Obj): V
 	}
 	if(nt == nil)
 		throwtype("Constructor " + tyname[ty] + " requires 'new'");
-	proto := protofromctor(nt, typroto[ty]);
 	first := arg(args, 0);
 	if(first.t != Tobj) {
-		l := toindex(first);
-		return objv(newta(ty, l, proto));
+		l := toindex(first);	# before the prototype is got
+		return objv(newta(ty, l, protofromctor(nt, typroto[ty])));
 	}
+	proto := protofromctor(nt, typroto[ty]);
 	o: ref Obj;
 	case first.o.cls {
 	Ctyped =>
@@ -543,6 +543,8 @@ typedctor(f: ref Obj, args: array of V, nt: ref Obj): V
 			vals = iterlistm(first, using);
 		else {
 			ln := lengthof(first.o);
+			if(ln * real tysize[ty] > real Bufmax)
+				throwerr(ERange, "Invalid typed array length: " + string ln);
 			vals = array[int ln] of V;
 			for(i := 0; i < len vals; i++)
 				vals[i] = getidx(first.o, i, first);
@@ -1277,6 +1279,13 @@ thista(this: V, name: string): ref Data.Typed
 # %TypedArray%.prototype's methods that work on the elements
 taproto(id: int, this: V, args: array of V): V
 {
+	if(id == NTAPsort || id == NTAPtosorted) {
+		f := arg(args, 0);
+		if(f.t != Tundef && !iscallable(f))
+			throwtype("The comparison function must be either a function or undefined");
+	}
+	if(id == NTAPsubarray)	# works on a detached or out-of-bounds array: its constructor says no
+		return tasubarray(this, thista(this, "subarray"), args);
 	(t, l) := validta(this, "%TypedArray%.prototype method");
 	o := this.o;
 	case id {
@@ -1286,6 +1295,8 @@ taproto(id: int, this: V, args: array of V): V
 			k += real l;
 		if(k < 0.0 || k >= real l)
 			return undef;
+		if(k == 0.0)
+			k = 0.0;	# at(-0) is at(0)
 		return typedgetnum(o, k);
 	NTAPcopywithin =>
 		rl := real l;
@@ -1516,11 +1527,10 @@ taproto(id: int, this: V, args: array of V): V
 				rb := bufof(rtd).b;
 				src := t.off + int k * sz;
 				cnt := (int final - int k) * sz;
-				if(cnt > 0) {
-					tmp := array[cnt] of byte;
-					tmp[0:] = b[src:src+cnt];
-					rb[rtd.off:] = tmp;
-				}
+				# byte by byte, forward: a result over the source's own bytes sees what it wrote
+				dst := rtd.off;
+				for(i := 0; i < cnt; i++)
+					rb[dst + i] = b[src + i];
 			} else {
 				j := 0;
 				for(i := int k; i < int final; i++)
@@ -1530,6 +1540,8 @@ taproto(id: int, this: V, args: array of V): V
 		return r;
 	NTAPsort or NTAPtosorted =>
 		f := arg(args, 0);
+		if(f.t != Tundef && !iscallable(f))
+			throwtype("The comparison function must be either a function or undefined");
 		vals := array[l] of V;
 		for(i := 0; i < l; i++)
 			vals[i] = taget(t, i);
@@ -1566,6 +1578,8 @@ taproto(id: int, this: V, args: array of V): V
 		at := rel;
 		if(rel < 0.0)
 			at = real l + rel;
+		if(at == 0.0)
+			at = 0.0;	# with(-0, v) is with(0, v)
 		v := tanum(t.kind, arg(args, 1));
 		if(validindex(o, at) < 0)
 			throwerr(ERange, "Invalid typed array index");

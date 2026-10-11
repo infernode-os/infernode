@@ -593,19 +593,19 @@ code's handler table; generators and async functions suspend by saving
 their registers; the collector runs only at the interpreter's safe
 points.
 
-A script of 512K characters or more is compiled lazily, as V8 does it:
+A script of 16K characters or more is compiled lazily, as V8 does it:
 the parser keeps a nested function's extent and the names it mentions,
 not its body, and the function is parsed and compiled when first
 called.  Every name it mentions that is bound outside is taken as
 captured.
 
-### Conformance (test262, 2026-10-10)
+### Conformance (test262, 2026-10-11)
 
 - Parsing (`test/language`, `test/annexB/language`): all tests pass.
 - Running `test/language`: 98.3% (18652 of 18968; the early-error tests
   are counted by the parser's run), the same with every function
   compiled lazily (`-L 0`).
-- Running `test/built-ins`: 99.1% (17623 of 17791).
+- Running `test/built-ins`: 99.1% (17625 of 17791).
 - `t262 -g 16` runs them with a collection every sixteen allocations,
   which is how the collector's missing roots were found.
 

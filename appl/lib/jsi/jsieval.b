@@ -1257,8 +1257,12 @@ ev2(n: int)
 	Ndyndeclvar =>
 		dyndeclvar(na[n]);
 	Ndyndeclfn =>
-		ev(nb[n]);
-		dyndeclfn(na[n], regv());
+		if(nc[n])
+			dyndeclfn(na[n], undef, 1);
+		else {
+			ev(nb[n]);
+			dyndeclfn(na[n], regv(), 0);
+		}
 	Nvar =>
 		throwerr(EError, "internal: unresolved name " + kstr[ne[n]]);
 	* =>
@@ -1581,13 +1585,30 @@ forofiter1(n: int, it, next: V, inf: ref Info.Loop, benv: ref Env)
 		env = benv;
 		if(ctl) {
 			if(!loopctl(nd[n])) {
-				iterclose(it, 0);
+				iterclosectl(it, 0);
 				return;
 			}
 		}
 		if(gcwanted)
 			gcpoint();
 	}
+}
+
+# close the iterator a loop is leaving by break, continue or return: the
+# control state is the loop's, not the return method's, so it is kept aside
+iterclosectl(it: V, async: int)
+{
+	sctl := ctl;
+	sid := ctlid;
+	sv := regv();
+	ctl = 0;
+	if(async)
+		asynciterclose(it);
+	else
+		iterclose(it, 0);
+	ctl = sctl;
+	ctlid = sid;
+	setr(sv);
 }
 
 # ---- switch, try ----
@@ -2080,7 +2101,9 @@ dyndeclvar(a: int)
 	}
 }
 
-dyndeclfn(a: int, f: V)
+# a function declared by sloppy direct eval: in the nearest variable scope; chk
+# only checks that it can be (all of an eval's are checked before any is made)
+dyndeclfn(a: int, f: V, chk: int)
 {
 	for(e := env; e != nil; e = e.up) {
 		if(e.with)
@@ -2089,10 +2112,13 @@ dyndeclfn(a: int, f: V)
 			names := e.sci.names;
 			for(i := 0; i < len names; i++)
 				if(names[i] == a) {
-					e.v[i] = f;
+					if(!chk)
+						e.v[i] = f;
 					return;
 				}
 			if(e.sci.evalvars) {
+				if(chk)
+					return;
 				s := slotof(e.obj.sh, a);
 				if(s >= 0)
 					e.obj.slots[s] = f;
@@ -2112,6 +2138,12 @@ dyndeclfn(a: int, f: V)
 	if(slot >= 0)
 		throwerr(ESyntax, "Identifier '" + atomstr[a] + "' has already been declared");
 	(found, nil, at) := getown(global, a);
+	if(found && (at & Aconf) == 0 && (at & (Awrite|Aenum|Aacc)) != (Awrite|Aenum))
+		throwtype("Cannot redefine global function " + atomstr[a]);
+	if(!found && !isextensible(global))
+		throwtype("Cannot define global function " + atomstr[a]);
+	if(chk)
+		return;
 	if(!found || (at & Aconf))
 		defineorthrow(global, a, ref Desc(Dvalue|Dwrite|Denum|Dconf, f, Adefault, nil, nil));
 	else
@@ -2171,23 +2203,29 @@ globalinst(n: int)
 	}
 	if(inf.lexs != nil)
 		glexepoch++;
+	# eval code's are deletable; a script's are not
+	at := Awrite|Aenum;
+	if(nb[n])
+		at |= Aconf;
 	for(fl = inf.fns; fl != nil; fl = tl fl) {
 		(name, fnode) := hd fl;
 		a := intern(name);
 		ev(fnode);
 		f := regv();
-		(found, nil, at) := getown(global, a);
-		if(!found || (at & Aconf))
-			defineorthrow(global, a, ref Desc(Dvalue|Dwrite|Denum|Dconf, f, Awrite|Aenum, nil, nil));
+		(found, nil, oat) := getown(global, a);
+		if(!found || (oat & Aconf))
+			defineorthrow(global, a, ref Desc(Dvalue|Dwrite|Denum|Dconf, f, at, nil, nil));
 		else
 			defineorthrow(global, a, ref Desc(Dvalue, f, 0, nil, nil));
-		markglobalvar(a);
+		if(!nb[n])
+			markglobalvar(a);
 	}
 	for(vl = inf.vars; vl != nil; vl = tl vl) {
 		a := intern(hd vl);
 		if(!hasown(global, a))
-			defineorthrow(global, a, ref Desc(Dvalue|Dwrite|Denum|Dconf, undef, Awrite|Aenum, nil, nil));
-		markglobalvar(a);
+			defineorthrow(global, a, ref Desc(Dvalue|Dwrite|Denum|Dconf, undef, at, nil, nil));
+		if(!nb[n])
+			markglobalvar(a);
 	}
 }
 

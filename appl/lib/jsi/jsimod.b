@@ -689,6 +689,7 @@ runmodulebody(m: ref Module)
 		g.f.fun = c.fun;
 		g.code = c;
 		g.kind = Kasync;
+		g.ismod = 1;
 		g.cap = newcap();
 		g.fr = array[c.nframe] of V;
 		g.env = m.env;

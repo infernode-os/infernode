@@ -24,6 +24,7 @@ Msg: adt {
 Gen: adt {
 	state:	int;
 	kind:	int;
+	ismod:	int;	# a module's body: its Env is made, its prologue run, at instantiation
 	f:	ref Obj;
 	code:	ref Code;
 	fr:	array of V;
@@ -255,7 +256,7 @@ coro(g: ref Gen, d: int)
 					else if(t != Tobj)
 						fr[0] = objv(toobj(fr[0]));
 				}
-				if(c.prologue >= 0)
+				if(c.prologue >= 0 && !g.ismod)
 					ev(c.prologue);
 			}
 			ev(c.body);
@@ -702,7 +703,7 @@ forawait1(n: int, it, next: V, inf: ref Info.Loop, benv: ref Env)
 		env = benv;
 		if(ctl) {
 			if(!loopctl(nd[n])) {
-				asynciterclose(it);
+				iterclosectl(it, 1);
 				return;
 			}
 		}

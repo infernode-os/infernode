@@ -1231,6 +1231,7 @@ stmts(body: array of ref Node): int
 }
 
 compl := 0;	# script and eval code keep the value of the last expression statement
+evaltop: ref Scope;	# eval code's top-level lexical scope: its function declarations are the variable scope's, not Annex B's
 
 # in script and eval code, a statement whose completion is never empty starts out undefined
 # (UpdateEmpty(..., undefined)); the evaluator keeps the value in cv
@@ -1273,7 +1274,7 @@ stmt2(n: ref Node): int
 	Func =>
 		# hoisted; Annex B: in a sloppy block, the var gets the function's value here
 		if(x.id != nil && !cu.fs.strict && cu.sc.kind != Sfunc && cu.sc.kind != Sglobal && cu.sc.kind != Seval &&
-		   (x.flags & (Jsparse->Fgen|Jsparse->Fasync)) == 0) {
+		   cu.sc != evaltop && (x.flags & (Jsparse->Fgen|Jsparse->Fasync)) == 0) {
 			nm := idname(x.id);
 			vb := annexbvar(nm);
 			if(vb != nil) {
@@ -1607,9 +1608,11 @@ forinof(left, right, body: ref Node, isof, await, pos: int): int
 	if(decl && kind != Kvar) {
 		s = openscope(Sfor);
 		patnames(target, s, Blet);
-		if(kind == Kconst || kind == Kusing || kind == Kawaitusing)
-			for(l := s.binds; l != nil; l = tl l)
+		for(l := s.binds; l != nil; l = tl l) {
+			if(kind == Kconst || kind == Kusing || kind == Kawaitusing)
 				(hd l).kind = Bconst;
+			(hd l).declend = 16r7fffffff;	# never initialised here: every read is checked
+		}
 	}
 	obj := expr(right);
 	if(s != nil) {
@@ -1621,9 +1624,8 @@ forinof(left, right, body: ref Node, isof, await, pos: int): int
 		if(kind == Kconst || kind == Kusing || kind == Kawaitusing)
 			for(l := s.binds; l != nil; l = tl l)
 				(hd l).kind = Bconst;
-		# the TDZ scope only needs to exist if something captured its names
-		if(olds.needenv)
-			obj = emit(Nblock, obj, 0, -1, 1, addinfo(ref Info.Scope(olds.nenv, olds.sci)));
+		# the TDZ scope: its env if something captured its names, its slots holed
+		obj = scoped(olds, obj, nil, pos);
 	}
 	init := -1;
 	pick v := left {
@@ -3558,12 +3560,24 @@ compileglobal(prog: ref Node.Program, code: ref Code, fs: ref Fs, iseval: int)
 		# an indirect eval's lexical names: a scope of its own
 		ls := openscope(Sblock);
 		lexdecls(prog.body, ls, 1);
+		# function names are not lexical here: they are the global object's
+		nb: list of ref Bind;
+		for(l = ls.binds; l != nil; l = tl l)
+			if((hd l).kind == Bfunc) {
+				m := ment((hd l).name, 0);
+				if(m != nil && m.binds != nil && hd m.binds == hd l)
+					m.binds = tl m.binds;
+			} else
+				nb = hd l :: nb;
+		ls.binds = nb;
+		evaltop = ls;
 		compl = 1;
 		b := stmts(prog.body);
 		compl = 0;
+		evaltop = nil;
 		closescope(ls);
 		b = scoped(ls, b, nil, 0);
-		inst := e1(Nglobalinst, addinfo(ref Info.Ginst(vars, fns, nil)));
+		inst := emit(Nglobalinst, addinfo(ref Info.Ginst(vars, fns, nil)), 1, 0, 0, 0);
 		code.body = e2(Nseqs, addkidsa(array[] of {inst, b}), 2);
 	} else {
 		compl = 1;
@@ -3682,14 +3696,22 @@ compileevalbody(prog: ref Node.Program, code: ref Code, fs: ref Fs, ev: ref Info
 			} else
 				nb = hd l :: nb;
 		ls.binds = nb;
+		evaltop = ls;
 		compl = 1;
 		b := stmts(prog.body);
 		compl = 0;
+		evaltop = nil;
 		closescope(ls);
 		b = scoped(ls, b, nil, 0);
 		closescope(s);
 		dl: list of int;
 		ndl := 0;
+		# every function checked before any is declared, then the vars, then the functions
+		for(fl := fns; fl != nil; fl = tl fl) {
+			(nm, nil) := hd fl;
+			dl = e3(Ndyndeclfn, intern(nm), -1, 1) :: dl;
+			ndl++;
+		}
 		for(vl := vars; vl != nil; vl = tl vl) {
 			dl = e1(Ndyndeclvar, intern(hd vl)) :: dl;
 			ndl++;

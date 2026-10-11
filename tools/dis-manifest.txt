@@ -740,6 +740,7 @@ dis/tests/intsem_test.dis
 dis/tests/jit_bounds_test.dis
 dis/tests/jit_fault_test.dis
 dis/tests/jit_test.dis
+dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/jit_unload_test.dis
 dis/tests/json_test.dis

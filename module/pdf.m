@@ -26,5 +26,9 @@ PDF: module {
 		# the words on a page, each with its box at 72 dpi from the
 		# page's top left (where the page's text is drawn)
 		words:       fn(d: self ref Doc, page: int): list of (string, Draw->Rect);
+		# the page's links, each with its box at 72 dpi from the page's
+		# top left, as words are, and where it goes: a URI, or
+		# "#page=N" for a page of this document
+		links:       fn(d: self ref Doc, page: int): list of (Draw->Rect, string);
 	};
 };

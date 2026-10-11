@@ -145,7 +145,11 @@ the engine cannot tell.
 .I Links
 and
 .I linkat
-are the document's links.
+are the document's links, their boxes at scale 100: a URL, or
+.BI #page= n
+for page
+.I n
+of the document (a PDF's GoTo and destinations, named ones too).
 .I Lineto
 and
 .I lineat

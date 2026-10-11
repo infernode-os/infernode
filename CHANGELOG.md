@@ -6,6 +6,24 @@ All notable changes to InferNode are documented in this file.
 
 ### Documents
 
+- **A PDF's links work**, in Xenith and in wm/page. pdf(2) reads a
+  page's link annotations: a URI, or a page of the document (GoTo, a
+  destination, a named destination through the catalog's Dests or its
+  name tree). In Xenith, button 3 on a link to a page goes there, and on
+  a web address opens it in a browser window in Xenith, as a Markdown or
+  HTML file's links now do too: what is opened in Xenith stays in
+  Xenith (it went to the plumber, and left a standalone Xenith only
+  when nothing took it). In wm/page, button 1 clicked without moving
+  follows a link: a page of the document, or the plumber. `doc/links`
+  lists a PDF's links.
+- **HTML scrolls as smoothly as a PDF.** A flowing document is painted
+  off screen into a band round the view; a scroll copies from it and
+  paints only the strip it exposes, where a web page used to be laid
+  out again, box by box, at every step. The view is no longer filled
+  with its background before a sheet is painted, which showed it blank
+  mid-paint. A scroll step of a 60 KB page at 1400x1000 went from
+  8-13 ms to about 1 ms; Markdown from 3 ms to under 1.
+
 - **wm/page shows documents**: PDFs, images, Markdown, Mermaid and
   HTML in a window of their own, through the view Xenith uses: several
   files read as one, standard input, pages turned, find, go to a page,
@@ -101,6 +119,13 @@ All notable changes to InferNode are documented in this file.
 
 ### Xenith
 
+- **A document shown beside its text is set again on Put**, or when
+  its `doc/ctl` is written `refresh` (from the unsaved text, for
+  scripts), not at each edit. Each keystroke used to lay the page out
+  again from the file's committed text, which did not yet hold what was
+  being typed: the shown window flickered and kept the old text, and an
+  HTML page took half a second a key. The old drawing now stays until
+  the new one is ready.
 - **Finder opens files in Xenith.app**: Open With, or a file or folder
   dropped on its Dock icon, opens in the running Xenith or starts one,
   and a file dropped on Xenith's window opens in it on every host. The

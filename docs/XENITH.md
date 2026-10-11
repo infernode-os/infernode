@@ -184,8 +184,9 @@ column, and:
 - lets the **text on the drawing** be used, where the document knows
   where it drew it (PDF, Markdown): button 1 clicked without moving
   selects the word there, button 2 executes it, button 3 follows the
-  link there or looks the word up (plumbed; if nothing takes it, found
-  in the document and marked).
+  link there (a page of the document goes to that page, a web address
+  opens a browser window in Xenith) or looks the word up (plumbed; if
+  nothing takes it, found in the document and marked).
 
 **Binary documents** (PDF, images) open as documents however they are
 opened: plumbed, looked at, named on Xenith's command line, by Get, by
@@ -198,9 +199,12 @@ it only to a file named (`Put /tmp/report.txt`), never over the PDF.
 `Render` sets the text, unsaved edits and all, as the document, and
 `Render` again goes back. The text is never changed: `Put` saves it,
 programs reading the body see it, and typing goes back to it. Each
-switch keeps your place in Markdown. For editing beside a live
-preview, `Zerox` the window and `Render` one of the two: it is set
-again as you edit in the other.
+switch keeps your place in Markdown. For editing beside the document,
+`Zerox` the window and `Render` one of the two: it is set again each
+time the file is `Put`, from either window, or when its `doc/ctl` is
+written `refresh` (from the unsaved text). It is not set again at each
+edit: a page is laid out again whole, which for HTML takes a good part
+of a second. The old drawing stays until the new one is ready.
 
 Markdown and Mermaid are set by `rlayout` (`appl/xenith/render/rlayout.b`),
 the one typesetter, which Lucifer's presentation view uses too:

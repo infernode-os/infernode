@@ -217,6 +217,34 @@ testPdfWords(t: ref T)
 	e->close(h);
 }
 
+# tests/page/links.pdf: on page 1 (400x500), a link to a URI, one to
+# page 2 by its destination, one by a named destination
+testPdfLinks(t: ref T)
+{
+	needdisplay(t);
+	(e, h) := openfile(t, "pdf", "/tests/page/links.pdf", nil, nil);
+	l := e->links(h);
+	t.asserteq(len l, 3, "the page's three links");
+	if(len l == 3){
+		t.assertseq(l[0].url, "http://example.com/", "a URI link goes to its URI");
+		t.assertseq(l[1].url, "#page=2", "a destination goes to its page");
+		t.assertseq(l[2].url, "#page=2", "a named destination, through the name tree, to its page");
+		r := l[0].r;
+		t.assert(r.min.x == 50 && r.min.y == 160 && r.max.x == 250 && r.max.y == 200,
+			sys->sprint("a link's box from the page's top left, as drawn (got %d %d %d %d)", r.min.x, r.min.y, r.max.x, r.max.y));
+		t.asserteq(l[1].sheet, 0, "on page 1");
+	}
+	t.assertseq(e->linkat(h, 0, Point(100, 180)), "http://example.com/", "the link at a point in it");
+	t.assertseq(e->linkat(h, 0, Point(100, 280)), "#page=2", "the link to page 2 at a point in it");
+	t.assertnil(e->linkat(h, 0, Point(300, 180)), "no link beside it");
+	t.assertnil(e->linkat(h, 1, Point(100, 180)), "none on page 2");
+	e->close(h);
+	# a PDF with no links has none
+	(e, h) = openfile(t, "pdf", "/tests/page/three.pdf", nil, nil);
+	t.asserteq(len e->links(h), 0, "a PDF without links has none");
+	e->close(h);
+}
+
 testPdfApart(t: ref T)
 {
 	needdisplay(t);
@@ -355,6 +383,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Lazy", testLazy);
 	run("Pdf", testPdf);
 	run("PdfWords", testPdfWords);
+	run("PdfLinks", testPdfLinks);
 	run("PdfApart", testPdfApart);
 	run("Image", testImage);
 	run("Markdown", testMarkdown);

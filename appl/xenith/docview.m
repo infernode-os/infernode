@@ -18,6 +18,7 @@ Docview: module {
 		shown:	int;		# the document (not its text) is in the window
 		offb:	ref Draw->Image;	# where the body's text draws meanwhile, unseen
 		line:	int;		# a source document's line to open at, or -1
+		next:	ref Sheetview->View;	# being set again (refresh), shown when open
 	};
 
 	init:	fn(mods: ref Dat->Mods);
@@ -49,7 +50,9 @@ Docview: module {
 	draw:	fn(w: ref Windowm->Window);
 	scroll:	fn(w: ref Windowm->Window, dy: int);
 	key:	fn(w: ref Windowm->Window, r: int): int;
-	textchanged:	fn(w: ref Windowm->Window);
+	# A source document shown set again from the window's text
+	# (Put, doc/ctl refresh); the drawing stays until the new one is open
+	refresh:	fn(w: ref Windowm->Window): string;
 
 	# The mouse on the document: button 1 drags it (grab and pan),
 	# or clicked selects the word there; button 2 executes the word;

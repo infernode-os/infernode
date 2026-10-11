@@ -105,15 +105,33 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	return (p, nil);
 }
 
+# where a page's time goes (/env/pagetime): each phase of its load,
+# said on standard error as it ends
+ptime := 0;
+pt0 := 0;
+
+phase(what: string)
+{
+	if(!ptime)
+		return;
+	t := sys->millisec();
+	sys->fprint(sys->fildes(2), "page: %s %d ms\n", what, t - pt0);
+	pt0 = t;
+}
+
 begin(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
 	readsettings();
+	(pok, nil) := sys->stat("/env/pagetime");
+	ptime = pok >= 0;
+	pt0 = sys->millisec();
 	data: array of byte;
 	ctype, err, final: string;
 	if(method == "POST")
 		(data, ctype, err, final) = webfs(url, method, reqctype, body, nil);
 	else
 		(data, ctype, err, final) = fetchfinal(url, nil);
+	phase(sys->sprint("fetched (%d bytes)", len data));
 	if(err != nil && len data == 0)
 		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
 	# a redirected page's links are relative to where it is
@@ -135,13 +153,18 @@ images(p: ref Pg)
 {
 	if((urls := p.wanted()) != nil) {
 		pics: list of ref Pic;
-		for(got := fetchall(urls, ACCEPTIMAGE); got != nil; got = tl got) {
+		got := fetchall(urls, ACCEPTIMAGE);
+		phase(sys->sprint("images fetched (%d)", len got));
+		for(; got != nil; got = tl got) {
 			g := hd got;
 			pics = picture(g.url, g.data, g.ctype, g.err) :: pics;
 		}
+		phase("images decoded");
 		p.install(pics);
+		phase("images placed");
 	}
 	p.frames();
+	phase("frames");
 }
 
 # the document and its style sheets, laid out with no images yet
@@ -160,6 +183,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	else
 		p.doc = html->parse(data, charset, url);
 	d := p.doc;
+	phase(sys->sprint("parsed (%d nodes)", d.n));
 	# <base href>
 	if((b := d.find(1, Dom->Tbase)) != 0 && (h := d.attr(b, "href")) != nil) {
 		d.url = style->resolveurl(url, h);
@@ -169,12 +193,17 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 		p.title = squash(d.textof(t));
 	declarative(d);
 	loadsheets(p);
+	phase("style sheets");
 	loadfonts(p);
+	phase("fonts");
 	findobjects(p);
+	phase("objects");
 	plock();
 	{
 		p.computed = style->compute(d, p.styles, p.env);
+		phase("styles computed");
 		rebuild(p);
+		phase("laid out");
 	} exception e {
 	"*" =>
 		punlock();

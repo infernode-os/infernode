@@ -579,9 +579,43 @@ Typeface.has(f: self ref Typeface, c: int): int
 	return o != nil;
 }
 
+# Widths measured, by typeface and string: layout measures the same
+# words again and again (each pass of a flex or grid container, each
+# intrinsic size), and shaping one is most of a page's layout time.  A
+# typeface's faces (parts) and kerning are part of the key, as a web
+# font that comes changes them.
+Wcache: adt {
+	f:	ref Typeface;
+	s:	string;
+	w:	real;
+	parts:	array of ref Part;
+	nokern:	int;
+};
+Wbuckets: con 8192;
+Wmax: con 65536;
+wcache: array of list of ref Wcache;
+nwcache := 0;
+
 Typeface.width(f: self ref Typeface, s: string): real
 {
+	h := 0;
+	for(i := 0; i < len s; i++)
+		h = h * 31 + s[i];
+	h = (h & 16r7FFFFFFF) % Wbuckets;
+	if(wcache == nil)
+		wcache = array[Wbuckets] of list of ref Wcache;
+	for(l := wcache[h]; l != nil; l = tl l) {
+		e := hd l;
+		if(e.f == f && e.s == s && e.parts == f.parts && e.nokern == f.nokern)
+			return e.w;
+	}
 	(nil, nil, nil, nil, w) := positions(f, shape(f, s));
+	if(nwcache >= Wmax) {
+		wcache = array[Wbuckets] of list of ref Wcache;
+		nwcache = 0;
+	}
+	wcache[h] = ref Wcache(f, s, w, f.parts, f.nokern) :: wcache[h];
+	nwcache++;
 	return w;
 }
 

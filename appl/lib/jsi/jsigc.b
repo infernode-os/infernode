@@ -90,7 +90,7 @@ gcinit()
 gcnew(o: ref Obj)
 {
 	if(ngcreg == len gcreg) {
-		a := array[2 * ngcreg] of ref Obj;
+		a := array[2 * ngcreg + 4096] of ref Obj;
 		a[0:] = gcreg;
 		gcreg = a;
 	}

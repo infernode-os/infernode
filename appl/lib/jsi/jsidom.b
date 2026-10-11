@@ -192,8 +192,8 @@ pagescript(src, name: string): V
 
 timereport(): string
 {
-	return sys->sprint("time: prelude %d ms; %d scripts, %d characters: parse %d ms, compile %d ms, run %d ms; lazy compiles %d, %d ms; querySelector %d, %d ms; boxes %d, %d ms; computed styles %d, %d ms; %d tasks, busy %d ms, last ended at %d ms",
-		tprelude, nscripts, scriptchars, tparse, tcompile, trun, nlazy, tlazy, nselect, tselect, nbox, tbox, ncomputed, tcomputed, ntasks, tbusy, tlastbusy);
+	return sys->sprint("time: prelude %d ms; %d scripts, %d characters: parse %d ms, compile %d ms, run %d ms; lazy compiles %d, %d ms; querySelector %d, %d ms; boxes %d, %d ms; computed styles %d, %d ms; %d tasks, busy %d ms, last ended at %d ms; collections %d, %d ms, %d live",
+		tprelude, nscripts, scriptchars, tparse, tcompile, trun, nlazy, tlazy, nselect, tselect, nbox, tbox, ncomputed, tcomputed, ntasks, tbusy, tlastbusy, gcruns, gcms, gclive);
 }
 
 strnil(s: string): V

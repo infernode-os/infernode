@@ -431,6 +431,13 @@ shutdown()
 		}
 	}
 	teardown();
+	# and what was not reachable: the garbage since the last collection,
+	# cycles reference counting cannot free, which the registry still lists
+	for(i := 0; i < ngcreg; i++)
+		if(gcreg[i] != nil)
+			clearobj(gcreg[i]);
+	gcreg = nil;
+	ngcreg = 0;
 	livegens = nil;
 	global = nil;
 	globalthis = undef;

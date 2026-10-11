@@ -119,6 +119,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Xenith
 
+- **A file opened for the plumber no longer races the window files.**
+  Xenith handled a plumbed message without holding the row, which every
+  other change to its windows holds; acme's threads never ran at once,
+  Xenith's procs do. A plumbed open beside a 9P request (a window
+  deleted through `/mnt/xenith`, say) could corrupt a frame and stop
+  Xenith with `bad assert in read`. `xenith_doc_test` now runs with a
+  plumber, as a session has one.
+
 - **A document shown beside its text is set again on Put**, or when
   its `doc/ctl` is written `refresh` (from the unsaved text, for
   scripts), not at each edit. Each keystroke used to lay the page out

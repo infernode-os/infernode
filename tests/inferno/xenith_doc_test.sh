@@ -14,7 +14,9 @@
 #	is not set again at each edit, but on Put and doc/ctl refresh;
 #	an image looked at is a document of one sheet its size;
 #	a PDF's links listed in doc/links, button 3 on one to a page goes
-#	to it, on one to a URI browses it in a window of Xenith's.
+#	to it, on one to a URI browses it in a window of Xenith's and does
+#	not plumb it (when a plumber runs); refresh after typing that is
+#	not yet committed.
 #
 # Prerequisites:
 #   - Xenith must be running
@@ -266,6 +268,17 @@ if {~ $s0 $s1} {bad 'button 3 on a link to page 2 left the sheet at' $s1} {ok 'b
 tolink 360
 b3 `{pt 150 360}
 check 'and on a named destination' `{attr $lid sheet} $s1
+# with a plumber whose rules take web addresses (the host test starts
+# one, tests/xenith/plumbing), what reaches its port web is kept: a link
+# clicked in Xenith opens there and is not plumbed away
+PLUMBED=/tmp/xenith_doc_plumbed
+rm -f $PLUMBED
+if {ftest -e /chan/plumb.web} {
+	# a reader the plumber knows of (it sends only to a started port)
+	plumb -s web -d plumb start
+	{ cat /chan/plumb.web > $PLUMBED >[2] /dev/null } &
+	sleep 1
+}
 tolink 180
 b3 `{pt 150 180}
 uid=()
@@ -277,6 +290,11 @@ for i in 1 2 3 4 5 {
 }
 if {~ $#uid 0} {bad 'button 3 on a link to a URI opened no window in Xenith'} {ok 'button 3 on a link to a URI browses it in a window of Xenith''s'}
 check 'and the PDF stays on its page' `{attr $lid sheet} $s0
+if {ftest -e /chan/plumb.web} {
+	p=`{cat $PLUMBED}
+	if {~ $#p 0} {ok 'and it is not sent to the plumber, which would take it'} {bad 'a link clicked in Xenith was plumbed:' $p}
+}
+rm -f $PLUMBED
 
 # ---- a file open as text, plumbed: shown as the document ----
 
@@ -390,6 +408,30 @@ for kind in md html {
 		t=`{cat $XENITH/$bid/doc/text}
 		if {~ $"t *Unsaved*} {ok $kind^': doc/ctl refresh sets it from the unsaved text'} {bad $kind^': refresh:' $"t}
 		check $kind^': still shown' `{attr $bid shown} 1
+		# typed into the twin, not committed (held in its cache, so not
+		# in the body's length): refresh takes it too.  The twin's body
+		# is where its document would be: render it to learn where.
+		echo render > $XENITH/$aid/doc/ctl
+		loaded $aid
+		scr=`{attr $aid screen}
+		echo text > $XENITH/$aid/doc/ctl
+		echo -n '$' > $XENITH/$aid/addr
+		echo 'dot=addr' > $XENITH/$aid/ctl
+		sleep 1
+		n0=${index 3 `{cat $XENITH/$aid/ctl}}
+		echo m ${expr ${index 1 $scr} 20 +} ${expr ${index 2 $scr} 10 +} 0 > /dev/pointer
+		sleep 1
+		echo -n ' Typed' > /dev/keyboard
+		sleep 2
+		n1=${index 3 `{cat $XENITH/$aid/ctl}}
+		# (a Markdown body commits the first rune; the rest stay cached)
+		if {ntest ${expr $n1 $n0 3 + '<'}} {ok $kind^': typing is held uncommitted'} {bad $kind^': typing was committed:' $n0 '->' $n1}
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Typed*} {bad $kind^': typing set the document again'} {ok $kind^': typing in its twin does not set the document again'}
+		echo refresh > $XENITH/$bid/doc/ctl
+		hasdoctext $bid Typed
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Typed*} {ok $kind^': refresh takes typing not yet committed'} {bad $kind^': refresh after typing:' $"t}
 		echo ' Saved' >> $XENITH/$aid/body
 		sleep 2
 		t=`{cat $XENITH/$bid/doc/text}

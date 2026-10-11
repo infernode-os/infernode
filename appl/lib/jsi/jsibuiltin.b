@@ -1292,7 +1292,7 @@ fntostring(f: ref Obj): string
 }
 
 # the Function constructor and its kin: the source made into a function
-dynfunction(id: int, args: array of V, nil: ref Obj): ref Obj
+dynfunction(id: int, args: array of V, nt: ref Obj): ref Obj
 {
 	params := "";
 	for(i := 0; i < len args - 1; i++) {
@@ -1357,6 +1357,13 @@ dynfunction(id: int, args: array of V, nil: ref Obj): ref Obj
 		v := rununitexpr(c);
 		if(v.t != Tobj)
 			throwerr(EError, "Function constructor made no function");
+		# new on a subclass: the function's prototype is the subclass's
+		if(nt != nil) {
+			dflt := v.o.sh.proto;
+			pr := protofromctor(nt, dflt);
+			if(pr != dflt)
+				setproto(v.o, pr);
+		}
 		return v.o;
 	}
 	return nil;

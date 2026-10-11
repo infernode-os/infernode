@@ -136,6 +136,8 @@ setlength(o: ref Obj, n: real)
 # ArraySpeciesCreate
 speciescreate(o: ref Obj, n: real): ref Obj
 {
+	if(n == 0.0)
+		n = 0.0;	# the constructor is given +0, never -0
 	if(!isarray(objv(o)))
 		return arraycreate(n);
 	c := getv(o, a_constructor);
@@ -467,7 +469,7 @@ natarray(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 		x := arg(args, 0);
 		for(i := k; i >= 0.0; i -= 1.0)
 			if(hasidx(o, i) && stricteq(gidx(o, i, recv), x))
-				return numv(i);
+				return numv(i + 0.0);	# not -0
 		return intv(-1);
 	NAPjoin =>
 		return strv(arrjoin(o, arg(args, 0)));

@@ -1043,7 +1043,8 @@ ownkeys(o: ref Obj): array of int
 		r[j++] = a_length;
 	for(i = 0; i < sh.n; i++) {
 		k := sh.keys[i];
-		if(k >= 0 && atomidx[k] == -1 && atomsym[k] == nil)
+		# a String wrapper's length can be in its shape too
+		if(k >= 0 && atomidx[k] == -1 && atomsym[k] == nil && !(extra && k == a_length))
 			r[j++] = k;
 	}
 	for(i = 0; i < sh.n; i++) {

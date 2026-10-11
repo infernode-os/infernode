@@ -1347,6 +1347,8 @@ sumprecise(items: V): V
 		return V(Tnum, 0, inf, nil, nil);
 	if(neginf)
 		return V(Tnum, 0, -inf, nil, nil);
+	if(c == 0.0)
+		return V(Tnum, 0, s, nil, nil);	# s + +0 would lose a -0 sum
 	return V(Tnum, 0, s + c, nil, nil);
 }
 
@@ -1557,7 +1559,7 @@ jsonnumber(p: ref Jp): V
 			jsonerr(p);
 	}
 	t := s[st:p.i];
-	if(isint && len t < 10)
+	if(isint && len t < 10 && t != "-0")
 		return numv(real int t);
 	x := decimal(t);
 	if(x == 0.0 && t[0] == '-')

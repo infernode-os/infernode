@@ -417,6 +417,11 @@ markroots()
 			markv((hd rsl).v);
 			mark((hd rsl).m);
 		}
+	for(dl = disposing; dl != nil; dl = tl dl)
+		for(rsl2 := (hd dl).res; rsl2 != nil; rsl2 = tl rsl2) {
+			markv((hd rsl2).v);
+			mark((hd rsl2).m);
+		}
 	mark(pghooks);
 }
 

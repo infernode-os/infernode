@@ -160,6 +160,8 @@ resetstate()
 	cururl = nil;
 	lazyunit = nil;
 	lazyunitsc = nil;
+	disposing = nil;
+	dscopes = nil;
 }
 
 setoutput(out: ref fn(s: string))

@@ -1530,6 +1530,7 @@ forstmt(x: ref Node.For): int
 	inf := loopinfo(0);
 	s: ref Scope;
 	lexical := 0;
+	using := 0;	# for (using x = ...;;): the resource disposed of when the loop ends
 	if(x.init != nil) {
 		pick v := x.init {
 		Var =>
@@ -1538,6 +1539,10 @@ forstmt(x: ref Node.For): int
 				lexdecl(x.init, s, 0);
 				lexical = 1;
 			}
+			if(v.kind == Kusing)
+				using = 1;
+			else if(v.kind == Kawaitusing)
+				using = 2;
 		}
 	}
 	init := -1;
@@ -1569,6 +1574,8 @@ forstmt(x: ref Node.For): int
 			}
 		}
 		r = emit(Nfor, init, test, upd, body, inf);
+		if(using)
+			r = emit(Nusingscope, r, using == 2, 0, 0, 0);
 		return scoped(s, r, nil, x.pos);
 	}
 	return emit(Nfor, init, test, upd, body, inf);

@@ -179,8 +179,25 @@ usingblock(n: int)
 		raise pexs;
 }
 
-# dispose of resources, last added first; the error to throw (Thole: none)
+# dispose of resources, last added first; the error to throw (Thole: none).
+# The resources are roots while they are disposed of (an await may collect).
+disposing: list of ref Dscope;
+
 disposeall(res: list of ref Res, err: V, async: int): V
+{
+	disposing = ref Dscope(res, async) :: disposing;
+	{
+		err = disposeall1(res, err, async);
+	} exception {
+	"*" =>
+		disposing = tl disposing;
+		raise;
+	}
+	disposing = tl disposing;
+	return err;
+}
+
+disposeall1(res: list of ref Res, err: V, async: int): V
 {
 	needawait := 0;
 	hasawaited := 0;

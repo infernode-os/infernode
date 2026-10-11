@@ -1823,7 +1823,7 @@ jobs:
       # Named infernode-*-sbom.spdx.json so the checksum, cosign-signing and
       # release-upload steps below cover it automatically (no extra wiring).
       # Same pinned action proven CI-verifiable in sbom.yml.
-      uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       with:
         path: .
         format: spdx-json

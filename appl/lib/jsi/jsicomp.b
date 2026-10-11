@@ -36,7 +36,7 @@ Nimportmeta, Nimportcall, Npat, Ppatarr, Ppatobj, Pprop, Prest, Prestobj, Pdefau
 Nblock, Nseqs, Ncompl, Nif, Nwhile, Ndo, Nfor, Nforin, Nforof, Nreturn, Nbreak, Ncontinue,
 Nthrow, Ntry, Nswitch, Ncase, Nlabeled, Nwith, Nempty,
 Nmkenv, Nframe2env, Nmkargs, Nmkrest, Nholes, Ndeclvar, Ndeclfn, Nglobalinst, Ndyndeclvar,
-Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Nlast: con iota;
+Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Ncvreset, Nkeepcv, Nlast: con iota;
 
 op, na, nb, nc, nd, ne, npos: array of int;
 nn := 0;
@@ -644,9 +644,11 @@ fixvar(i: int)
 		return;
 	}
 	b := cu.binds[bid];
-	# a with, or variables a sloppy eval may add, between here and the binding: look it up by name
-	for(s := from; s != nil && s != b.sc; s = s.up)
-		if(s.kind == Swith || s.evalvars && !s.closed && 0 || s.evalvars) {
+	# a with, or variables a sloppy eval may add, between here and the binding: look it up
+	# by name (this and the other specials cannot be shadowed so)
+	special := name == "this" || name[0] == '%';
+	for(s := from; !special && s != nil && s != b.sc; s = s.up)
+		if(s.kind == Swith || s.evalvars) {
 			setdyn(i, mode, val, name);
 			return;
 		}
@@ -735,6 +737,9 @@ needtdz(b: ref Bind, from: ref Scope, pos: int): int
 	case b.kind {
 	Blet or Bconst or Bclass or Bcinner =>
 		;
+	Bparam =>
+		# only a complex parameter list's names have a declend
+		return pos < b.declend;
 	Bthis =>
 		return (b.sc.fs.code.flags & Cderived) != 0;
 	* =>
@@ -755,7 +760,7 @@ envdepth(from, dst: ref Scope): int
 {
 	d := 0;
 	for(s := from; s != nil && s != dst; s = s.up)
-		if(s.needenv)
+		if(s.needenv || s.kind == Swith)	# a with's object has an Env of its own
 			d++;
 	return d;
 }
@@ -781,8 +786,11 @@ setdyn(i, mode, val: int, name: string)
 fixglobal(i: int, from: ref Scope, mode, val: int, name: string)
 {
 	strict := from.fs.strict;
+	# this and the other specials are never a with object's or an eval's var: only
+	# direct eval code needs to find them in the function around it
+	special := name == "this" || name[0] == '%';
 	for(s := from; s != nil; s = s.up)
-		if(s.kind == Swith || s.evalvars || s.kind == Seval && s.dyn) {
+		if(s.kind == Seval && s.dyn || !special && (s.kind == Swith || s.evalvars)) {
 			setdyn(i, mode, val, name);
 			return;
 		}
@@ -1201,7 +1209,34 @@ stmts(body: array of ref Node): int
 
 compl := 0;	# script and eval code keep the value of the last expression statement
 
+# in script and eval code, a statement whose completion is never empty starts out undefined
+# (UpdateEmpty(..., undefined)); the evaluator keeps the value in cv
 stmt(n: ref Node): int
+{
+	if(compl && nonempty(n)) {
+		r := stmt2(n);
+		return e2(Nseqs, addkidsa(array[] of {e0(Ncvreset), r}), 2);
+	}
+	return stmt2(n);
+}
+
+nonempty(n: ref Node): int
+{
+	pick x := n {
+	If => return 1;
+	While => return 1;
+	DoWhile => return 1;
+	For => return 1;
+	ForIn => return 1;
+	ForOf => return 1;
+	Switch => return 1;
+	With => return 1;
+	Try => return 1;
+	}
+	return 0;
+}
+
+stmt2(n: ref Node): int
 {
 	curpos = n.pos;
 	pick x := n {
@@ -1635,8 +1670,13 @@ trystmt(x: ref Node.Try): int
 			h = stmt1(x.handler);
 	}
 	f := -1;
-	if(x.final != nil)
+	if(compl && h >= 0)
+		h = e2(Nseqs, addkidsa(array[] of {e0(Ncvreset), h}), 2);
+	if(x.final != nil) {
 		f = stmt1(x.final);
+		if(compl)
+			f = e1(Nkeepcv, f);	# a finally completing normally leaves the value as it was
+	}
 	return emit(Ntry, b, param, h, f, inf);
 }
 
@@ -2603,20 +2643,22 @@ objlit(x: ref Node.Object): int
 				}
 			Jsparse->Pmethod =>
 				fl := 2;
-				if(p.computed)
-					l = e3(Npropc, expr(p.key), methodexpr(p.value), fl | 1) :: l;
-				else {
+				if(p.computed) {
+					kn := expr(p.key);
+					l = e3(Npropc, kn, methodexpr1(p.value, nil, p.pos), fl | 1) :: l;
+				} else {
 					a := litkeyatom(p.key);
-					l = e3(Nprop, a, methodexpr1(p.value, atomstr[a]), fl) :: l;
+					l = e3(Nprop, a, methodexpr1(p.value, atomstr[a], p.pos), fl) :: l;
 				}
 			Jsparse->Pget or Jsparse->Pset =>
 				o := Npropget;
 				if(p.kind == Jsparse->Pset)
 					o = Npropset;
-				if(p.computed)
-					l = e3(o, -1, methodexpr(p.value), expr(p.key)) :: l;
-				else
-					l = e3(o, litkeyatom(p.key), methodexpr(p.value), 0) :: l;
+				if(p.computed) {
+					kn := expr(p.key);
+					l = e3(o, -1, methodexpr1(p.value, nil, p.pos), kn) :: l;
+				} else
+					l = e3(o, litkeyatom(p.key), methodexpr1(p.value, nil, p.pos), 0) :: l;
 			}
 			k++;
 		Spread =>
@@ -2627,18 +2669,45 @@ objlit(x: ref Node.Object): int
 	return e2(Nobject, addkids(l, k), k);
 }
 
-methodexpr(n: ref Node): int
-{
-	return methodexpr1(n, nil);
-}
-
-methodexpr1(n: ref Node, name: string): int
+# a method; its source text starts at start (with its get, set, async or *), not its name
+methodexpr1(n: ref Node, name: string, start: int): int
 {
 	pick f := n {
 	Func =>
+		methodstart = start;
 		return funcexpr1(f, name, Cmethod, nil);
 	}
 	return expr(n);
+}
+
+methodstart := -1;
+
+# where a class member's method definition starts: after any static
+memberstart(m: ref Node.Method): int
+{
+	pos := m.pos;
+	if(!m.static)
+		return pos;
+	src := cu.src.s;
+	if(pos + 6 > len src || src[pos:pos+6] != "static")
+		return pos;
+	pos += 6;
+	while(pos < len src) {
+		c := src[pos];
+		if(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 16rA0 || c == 16rFEFF || c == 16r2028 || c == 16r2029 || c >= 16r2000 && c <= 16r200A || c == 16r1680 || c == 16r202F || c == 16r205F || c == 16r3000 || c == 16rB || c == 16rC)
+			pos++;
+		else if(c == '/' && pos + 1 < len src && src[pos+1] == '*') {
+			e := pos + 2;
+			while(e + 1 < len src && !(src[e] == '*' && src[e+1] == '/'))
+				e++;
+			pos = e + 2;
+		} else if(c == '/' && pos + 1 < len src && src[pos+1] == '/') {
+			while(pos < len src && src[pos] != '\n' && src[pos] != '\r' && src[pos] != 16r2028 && src[pos] != 16r2029)
+				pos++;
+		} else
+			break;
+	}
+	return pos;
 }
 
 # ---- functions ----
@@ -2677,6 +2746,10 @@ compilefunc(f: ref Node.Func, name: string, extra: int, nil: ref Info.Class): in
 	code.src = cu.src;
 	code.spos = f.pos;
 	code.send = f.end;
+	if(methodstart >= 0) {
+		code.spos = methodstart;
+		methodstart = -1;
+	}
 	code.fields = -1;
 	ci := addcode(code);
 	if(f.flags & Jsparse->Flazy) {
@@ -2739,10 +2812,12 @@ funcbody(f: ref Node.Func, code: ref Code)
 	length := 0;
 	seendefault := 0;
 	for(i = 0; i < len f.params; i++) {
+		before := s.binds;
 		pick p := f.params[i] {
 		Ident =>
 			b := declare(s, p.name, Bparam, 0);
-			if(b.argpos < 0 || b.kind == Bparam)
+			# among complex parameters a simple one is bound in order too (it has a TDZ)
+			if(simple && (b.argpos < 0 || b.kind == Bparam))
 				b.argpos = 1 + i;
 			if(!seendefault)
 				length++;
@@ -2757,9 +2832,17 @@ funcbody(f: ref Node.Func, code: ref Code)
 			if(!seendefault)
 				length++;
 		}
+		if(!simple) {
+			# a parameter's names are in their TDZ until the parameter is bound
+			end := f.bodypos;
+			if(i + 1 < len f.params)
+				end = f.params[i + 1].pos;
+			for(l := s.binds; l != before; l = tl l)
+				(hd l).declend = end;
+		}
 	}
 	# a duplicate simple parameter: the last one wins (its argpos); the earlier are not mapped
-	for(i = 0; i < len f.params; i++)
+	for(i = 0; simple && i < len f.params; i++)
 		pick p := f.params[i] {
 		Ident =>
 			for(l := s.binds; l != nil; l = tl l)
@@ -2792,10 +2875,6 @@ funcbody(f: ref Node.Func, code: ref Code)
 		for(i = 0; i < len f.params; i++) {
 			p := f.params[i];
 			pick r := p {
-			Ident =>
-				# a simple name among complex ones still has its argument slot; parameters
-				# with expressions have a TDZ, which this does not keep
-				;
 			Rest =>
 				pinit = e2(Nmkrest, i, pattern(r.arg, Minit)) :: pinit;
 				np++;
@@ -2809,9 +2888,6 @@ funcbody(f: ref Node.Func, code: ref Code)
 	}
 	fnodes := hoistfuncs(f.body);
 	body := usingwrap(f.body, stmts(f.body));
-	if(code.flags & Cgen|Casync) {
-		;
-	}
 	closescope(s);
 	code.nframe = fs.nframe;
 	# the prologue: the env, what goes in it, arguments, then the parameters and the functions
@@ -2858,6 +2934,22 @@ funcbody(f: ref Node.Func, code: ref Code)
 		mapped := !fs.strict && simple;
 		pro = e2(Nmkargs, mapped, bindwrite(fs.args, s)) :: pro;
 		npro++;
+	}
+	# complex parameters start in their TDZ (captured ones do in their Env)
+	if(!simple) {
+		ph: list of int;
+		nph := 0;
+		for(l := s.binds; l != nil; l = tl l) {
+			b := hd l;
+			if(!b.captured && b.kind == Bparam && b.argpos < 0) {
+				ph = b.slot :: ph;
+				nph++;
+			}
+		}
+		if(nph > 0) {
+			pro = e2(Nholes, addkids(ph, nph), nph) :: pro;
+			npro++;
+		}
 	}
 	# simple parameters that were captured were copied; the others are in place
 	for(; pinit != nil; pinit = tl pinit) {
@@ -2994,8 +3086,12 @@ classexpr1(c: ref Node.Class, name: string): int
 	fl := Cctor | Cclassctor | Cmethod;
 	if(derived)
 		fl |= Cderived;
-	if(ctor != nil)
+	if(ctor != nil) {
 		inf.ctor = compilefunc(ctor, name, fl, inf);
+		# a class's source text is the class's
+		codes[inf.ctor].spos = c.pos;
+		codes[inf.ctor].send = c.end;
+	}
 	else
 		inf.ctor = defaultctor(derived, name, c);
 	codes[inf.ctor].name = name;
@@ -3028,6 +3124,7 @@ classexpr1(c: ref Node.Class, name: string): int
 					nmx: string;
 					if(mb.key >= 0)
 						nmx = atomstr[mb.key];
+					methodstart = memberstart(m);
 					mb.val = funcexpr1(f, nmx, Cmethod, inf);
 				}
 			}

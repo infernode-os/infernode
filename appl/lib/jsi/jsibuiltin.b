@@ -447,7 +447,7 @@ NAGnext, NAGreturn, NAGthrow, NAFSnext, NAFSreturn, NAFSthrow, NIterself, NSymbo
 NSyPvalueof, NSyPdescription, NBoolean, NBPtostring, NBPvalueof, NErrtostring, NErrcapture, NErriserror,
 Nevalfn, NisFinite, NisNaN, NparseFloat, NparseInt, NdecodeURI, NdecodeURIComponent,
 NencodeURI, NencodeURIComponent, Nescape, Nunescape, Nprint, Nconsolelog, Nbound,
-Npromisecapexec, Npromiseresolvefn, Npxcall, Nhostfn, Nmemstat, Nimportjob, NError, Ncorelast: con iota;
+Npromisecapexec, Npromiseresolvefn, Npxcall, Nhostfn, Nmemstat, Nimportjob, NError, Ncorelast: con 1 + iota;
 # NError .. NError+7 are the error constructors
 Ncoreend: con NError + 8;
 

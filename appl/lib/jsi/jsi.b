@@ -140,7 +140,7 @@ resetstate()
 	protoepoch = 0;
 	glexepoch = 0;
 	nobjhash = 0;
-	arrayitermod = 0;
+	arrayvalues = arrayiternextfn = nil;
 	joining = nil;
 	hostfns = nil;
 	loader = nil;

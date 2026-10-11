@@ -66,6 +66,7 @@ arrayinit()
 	vals := defmethod(p, "values", NAPvalues, 0);
 	defmethod(p, "with", NAPwith, 2);
 	defprop(p, a_symiterator, objv(vals), Awrite|Aconf);
+	arrayvalues = vals;
 	u := newobj(Cplain, nil);
 	for(l := array[] of {"at", "copyWithin", "entries", "fill", "find", "findIndex", "findLast", "findLastIndex",
 		"flat", "flatMap", "includes", "keys", "toReversed", "toSorted", "toSpliced", "values"} ; ; ) {
@@ -74,7 +75,7 @@ arrayinit()
 		break;
 	}
 	defprop(p, a_symunscopables, objv(u), Aconf);
-	defmethod(arrayiterproto, "next", NAInext, 0);
+	arrayiternextfn = defmethod(arrayiterproto, "next", NAInext, 0);
 	defprop(arrayiterproto, a_symtostringtag, strv("Array Iterator"), Aconf);
 }
 

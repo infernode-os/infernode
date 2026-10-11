@@ -285,6 +285,10 @@ ev(n: int)
 	Ncompl =>
 		ev(na[n]);
 		cv = regv();
+	Ncvreset =>
+		cv = undef;
+	Nkeepcv =>
+		keepcv(n);
 	Nreturn =>
 		if(na[n] >= 0)
 			ev(na[n]);
@@ -1264,7 +1268,7 @@ newenv(n: int, sci: ref Sci, up: ref Env): ref Env
 	if(sci != nil)
 		for(i := 0; i < n; i++)
 			case sci.kinds[i] {
-			Blet or Bconst or Bclass or Bcinner =>
+			Blet or Bconst or Bclass or Bcinner or Bparam =>
 				v[i].t = Thole;
 			}
 	e := ref Env(v, up, sci, nil, 0);
@@ -1830,6 +1834,16 @@ dynget(a, istypeof: int)
 		if(v.t == Thole)
 			tdzerror(atomstr[a]);
 		setr(v);
+		return;
+	}
+	# direct eval code outside any function: this is the global this
+	nm := atomstr[a];
+	if(nm == "this") {
+		setr(globalthis);
+		return;
+	}
+	if(nm != nil && nm[0] == '%') {
+		rt = Tundef;
 		return;
 	}
 	globalget1(a, istypeof);
@@ -3361,10 +3375,10 @@ bindpat(p: int)
 				key = tokey(regv());
 			}
 			used = key :: used;
+			# a property target's reference is evaluated before the value is got
+			pre := prepref(nc[c]);
 			x := getvalue(v, key);
-			push(x);
-			bindpat(nc[c]);
-			pop();
+			bindtarget(nc[c], x, pre);
 		}
 	Pdefault =>
 		v := vstk[vsp-1];
@@ -3382,8 +3396,12 @@ bindpat(p: int)
 	Phole =>
 		;
 	* =>
-		# a target: a set node reading the stack's top
-		ev(p);
+		# a target: a set node reading the stack's top, or a property's reference made first
+		x := vstk[vsp-1];
+		if(prepref(p))
+			bindtarget(p, x, 1);
+		else
+			ev(p);
 	}
 }
 
@@ -3437,6 +3455,12 @@ bindarriter(p, from: int, it: V)
 	{
 		for(i := from; i < cnt; i++) {
 			c := kids[k + i];
+			# a property target's reference is evaluated before the iterator is stepped
+			pre := 0;
+			if(op[c] == Prest)
+				pre = prepref(na[c]);
+			else
+				pre = prepref(c);
 			if(op[c] == Prest) {
 				r := newarray(0);
 				while(!done) {
@@ -3451,9 +3475,7 @@ bindarriter(p, from: int, it: V)
 					}
 					apush(r, getv(x.o, a_value));
 				}
-				push(objv(r));
-				bindpat(na[c]);
-				pop();
+				bindtarget(na[c], objv(r), pre);
 				return;
 			}
 			x := undef;
@@ -3475,9 +3497,7 @@ bindarriter(p, from: int, it: V)
 					}
 				}
 			}
-			push(x);
-			bindpat(c);
-			pop();
+			bindtarget(c, x, pre);
 		}
 	} exception {
 	"JS" =>
@@ -3488,6 +3508,103 @@ bindarriter(p, from: int, it: V)
 	}
 	if(!done)
 		iterclose(it, 0);
+}
+
+# a destructuring assignment's property target (perhaps with a default): its reference
+# (base and key) evaluated now, onto the stack, for bindtarget to store to; 0 if it is not one
+prepref(c: int): int
+{
+	t := c;
+	if(op[t] == Pdefault)
+		t = na[t];
+	case op[t] {
+	Nset =>
+		ev(na[t]);
+		pushr();
+		push(undef);
+	Nsetelem =>
+		ev(na[t]);
+		pushr();
+		ev(nb[t]);
+		pushr();
+	Nprivset =>
+		ev(na[t]);
+		pushr();
+		ev(nb[t]);
+		push(intv(symatom(ro)));
+	Nsuperset =>
+		inf: ref Info.Super;
+		pick si := infos[nd[t]] {
+		Super =>
+			inf = si;
+		}
+		ev(inf.this);
+		pushr();
+		k := na[t];
+		if(k < 0) {
+			ev(nb[t]);
+			k = tokey(regv());
+		}
+		push(intv(k));
+		base := superbase(inf);
+		if(base == nil)
+			push(nullv);
+		else
+			push(objv(base));
+	* =>
+		return 0;
+	}
+	return 1;
+}
+
+# bind or assign x to the pattern element c; pre: its reference was made by prepref
+bindtarget(c: int, x: V, pre: int)
+{
+	if(!pre) {
+		push(x);
+		bindpat(c);
+		pop();
+		return;
+	}
+	t := c;
+	if(op[t] == Pdefault) {
+		t = na[t];
+		if(x.t == Tundef) {
+			ev(nb[c]);
+			x = regv();
+		}
+	}
+	case op[t] {
+	Nsuperset =>
+		this := vstk[vsp-3];
+		k := vstk[vsp-2].i;
+		base := vstk[vsp-1];
+		pop();
+		pop();
+		pop();
+		if(base.t != Tobj)
+			throwtype("Cannot set properties of null");
+		if(!put(base.o, k, x, this))
+			throwtype("Cannot assign to read only property '" + keyname(k) + "' of object");
+		return;
+	}
+	base := vstk[vsp-2];
+	kv := vstk[vsp-1];
+	pop();
+	pop();
+	case op[t] {
+	Nprivset =>
+		privset(base, kv.i, x);
+		return;
+	Nset =>
+		if(base.t == Tundef || base.t == Tnull)
+			throwtype(sys->sprint("Cannot set properties of %s (setting '%s')", typename(base), atomstr[nb[t]]));
+		setvalue(base, nb[t], x, nd[t]);
+	* =>
+		if(base.t == Tundef || base.t == Tnull)
+			throwtype(sys->sprint("Cannot set properties of %s (setting '%s')", typename(base), showkey(kv)));
+		setvalue(base, tokey(kv), x, nd[t]);
+	}
 }
 
 # ---- classes ----
@@ -3836,6 +3953,11 @@ superset(n: int)
 	Super =>
 		inf = s;
 	}
+	# the value of an update (super.x++, super.x += v) is on the stack: take it before pushing
+	acc := op[nc[n]] == Nacc;
+	v := undef;
+	if(acc)
+		v = vstk[vsp-1];
 	ev(inf.this);
 	this := regv();
 	push(this);
@@ -3850,8 +3972,10 @@ superset(n: int)
 	pop();
 	if(k < 0)
 		k = tokey(kv);
-	ev(nc[n]);
-	v := regv();
+	if(!acc) {
+		ev(nc[n]);
+		v = regv();
+	}
 	this = vstk[vsp-1];
 	pop();
 	if(base == nil)
@@ -3866,14 +3990,30 @@ superset(n: int)
 # whether iterating array o by index is what its iterator would do
 arrayiterplain(o: ref Obj): int
 {
-	if(o.sh.proto != arrproto || arrayitermod)
+	if(o.sh.proto != arrproto)
 		return 0;
 	if(o.sh.n > 0 && slotof(o.sh, a_symiterator) >= 0)
 		return 0;
-	return 1;
+	return isslot(arrproto, a_symiterator, arrayvalues) && isslot(arrayiterproto, a_next, arrayiternextfn);
 }
 
-arrayitermod := 0;	# Array.prototype[Symbol.iterator] or %ArrayIteratorPrototype%.next were changed
+# the original array iteration: iterating an array need not call anything
+arrayvalues, arrayiternextfn: ref Obj;
+
+# whether o's own k is the data property f
+isslot(o: ref Obj, k: int, f: ref Obj): int
+{
+	s := slotof(o.sh, k);
+	return s >= 0 && (o.sh.attrs[s] & Aacc) == 0 && o.slots[s].t == Tobj && o.slots[s].o == f;
+}
+
+keepcv(n: int)
+{
+	scv := cv;
+	ev(na[n]);
+	if(ctl == 0)
+		cv = scv;
+}
 
 # GetIterator: an iterator object (as a value); async: 1 for an async one
 getiterator(v: V, async: int): V

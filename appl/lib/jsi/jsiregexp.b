@@ -88,6 +88,7 @@ rxcache: ref Hmap;
 newregexp(pat, flags: string): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Cregexp;
 	o.sh = emptyshape(regexpproto);
 	o.flags = Fext;
@@ -105,6 +106,7 @@ newregexp(pat, flags: string): ref Obj
 	}
 	rxinit(o, strv(pat), strv(flags));
 	h := ref Obj;
+	gcnew(h);
 	h.data = o.data;
 	hset(rxcache, key, objv(h));
 	return o;

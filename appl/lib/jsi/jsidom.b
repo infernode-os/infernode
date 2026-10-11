@@ -119,6 +119,7 @@ page1(h: ref Js->Host): string
 	tp0 := sys->millisec();
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		call1(pagescript(isrc, Intlsrc), undef, nil);
 		f := pagescript(src, Prelude);
@@ -130,6 +131,7 @@ page1(h: ref Js->Host): string
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		h.unlock(h.id);
 		return "the DOM prelude: " + showexc(thrown);
 	}
@@ -212,6 +214,7 @@ hook(name: string, args: array of V): int
 	t0 := sys->millisec();
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		f := getv(pghooks, intern(name));
 		if(f.t == Tobj)
@@ -219,18 +222,22 @@ hook(name: string, args: array of V): int
 		jerr := runjobs();
 		if(jerr != nil)
 			pageconsole(jerr);
+		gcpoint();
 	} exception e {
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		pageconsole("uncaught " + showexc(thrown));
 	"JSgenret" or "JSopt" or "JSkill" or "JSnoclose" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		pageconsole("internal error: stray " + e);
 	"*" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		pageconsole("internal error: " + e);
 	}
 	ntasks++;
@@ -1094,6 +1101,7 @@ dneval(args: array of V): V
 		return objv(mkarray(array[] of {intv(1), objv(mkerror(ESyntax, sys->sprint("%s:%d: %s", name, pos, msg)))}));
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		pick p := prog {
 		Program =>
@@ -1116,6 +1124,7 @@ dneval(args: array of V): V
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		return objv(mkarray(array[] of {intv(1), thrown}));
 	}
 	return undef;
@@ -1166,6 +1175,7 @@ dnevalmodule(args: array of V): V
 	url := sarg(args, 1);
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		runmodule(src, url);
 		return objv(mkarray(array[] of {intv(0), undef}));
@@ -1173,6 +1183,7 @@ dnevalmodule(args: array of V): V
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		return objv(mkarray(array[] of {intv(1), thrown}));
 	}
 	return undef;
@@ -1346,6 +1357,7 @@ modresolve(referrer, spec: string): (string, string)
 {
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		f := getv(pghooks, intern("resolve"));
 		u := call1(f, objv(pghooks), array[] of {strv(referrer), strv(spec)});
@@ -1356,6 +1368,7 @@ modresolve(referrer, spec: string): (string, string)
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		return (nil, "cannot resolve module " + spec + ": " + showexc(thrown));
 	}
 }

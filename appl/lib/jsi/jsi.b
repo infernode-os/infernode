@@ -31,6 +31,7 @@ implement Js;
 #	jsityped.b	ArrayBuffer, the typed arrays, DataView
 #	jsimod.b	modules
 #	jsidispose.b	using, DisposableStack, SuppressedError; async built-ins
+#	jsigc.b	the realm's collector: cycles freed
 #	jsidom.b	a web page's realm: the DOM's natives, the event loop, confinement, fetching
 #
 
@@ -85,6 +86,7 @@ include "jsibig.b";
 include "jsityped.b";
 include "jsimod.b";
 include "jsidispose.b";
+include "jsigc.b";
 include "jsidom.b";
 
 output: ref fn(s: string);
@@ -105,6 +107,7 @@ init(): string
 	jscheck->init();
 	jsre->init();
 	resetstate();
+	gcinit();
 	valinit();
 	atominit();
 	shapeinit();
@@ -113,6 +116,7 @@ init(): string
 	atomsinit();
 	vstk = array[64] of V;
 	vsp = 0;
+	gchold++;
 	{
 		realminit();
 	} exception e {
@@ -121,6 +125,7 @@ init(): string
 	"*" =>
 		return "making the realm: " + e;
 	}
+	gchold--;
 	return nil;
 }
 
@@ -160,17 +165,13 @@ setoutput(out: ref fn(s: string))
 	output = out;
 }
 
-stress(nil: int)
-{
-}
-
 profile(nil: int)
 {
 }
 
 profiled(nil: int): string
 {
-	return "";
+	return gcreport();
 }
 
 lazy(minlen: int)
@@ -199,6 +200,7 @@ evalscript(src, name: string): (string, string)
 		return (nil, sys->sprint("SyntaxError: %s:%d: %s", name, pos, msg));
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		pick p := prog {
 		Program =>
@@ -214,12 +216,14 @@ evalscript(src, name: string): (string, string)
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		ex := showexc(thrown);
 		runjobsquiet();
 		return (nil, ex);
 	"JSgenret" or "JSopt" or "JSkill" or "JSnoclose" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		return (nil, "internal: stray " + e);
 	}
 	return (nil, "internal: not a program");
@@ -229,6 +233,7 @@ runjobsquiet()
 {
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	while(pending()) {
 		{
 			runjob();
@@ -236,6 +241,7 @@ runjobsquiet()
 		"JS" =>
 			depth = sdepth;
 			vsp = svsp;
+			rootreset(snroot);
 		}
 	}
 }
@@ -244,6 +250,7 @@ evalmodule(src, url: string): (string, string)
 {
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		runmodule(src, url);
 		runjobsquiet();
@@ -252,6 +259,7 @@ evalmodule(src, url: string): (string, string)
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		ex := showexc(thrown);
 		runjobsquiet();
 		return (nil, ex);
@@ -323,6 +331,7 @@ callfn(path: string, args: array of string): (string, string)
 {
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	{
 		(o, name) := pathobj(path, 0);
 		if(o == nil)
@@ -340,6 +349,7 @@ callfn(path: string, args: array of string): (string, string)
 	"JS" =>
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		return (nil, showexc(thrown));
 	}
 }
@@ -404,6 +414,7 @@ detachbuffer(v: V)
 
 shutdown()
 {
+	gchold++;
 	# stop the coroutines still waiting to be resumed
 	for(l := livegens; l != nil; l = tl l) {
 		g := hd l;

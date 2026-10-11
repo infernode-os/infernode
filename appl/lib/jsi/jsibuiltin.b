@@ -130,6 +130,7 @@ symregistry: ref Hmap;
 mknative(id: int, name: string, nargs: int): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Cfunc;
 	o.sh = emptyshape(funcproto);
 	o.flags = Fext;
@@ -193,11 +194,13 @@ defctor(name: string, id, nargs: int, proto: ref Obj): ref Obj
 realminit()
 {
 	objproto = ref Obj;
+	gcnew(objproto);
 	objproto.cls = Cplain;
 	objproto.sh = rootshape;
 	objproto.flags = Fext;
 	emptyshape(objproto);
 	funcproto = ref Obj;
+	gcnew(funcproto);
 	funcproto.cls = Cfunc;
 	funcproto.sh = emptyshape(objproto);
 	funcproto.flags = Fext;
@@ -236,6 +239,7 @@ realminit()
 
 	throwerfn = mknative(Nthrower, "", 0);
 	notcallable = ref Obj;
+	gcnew(notcallable);
 	preventext(throwerfn);
 	s := slotof(throwerfn.sh, a_length);
 	setattrs(throwerfn, s, 0);
@@ -454,6 +458,24 @@ Npromisecapexec, Npromiseresolvefn, Npxcall, Nhostfn, Nmemstat, Nimportjob, NErr
 Ncoreend: con NError + 8;
 
 callnative(f: ref Obj, this: V, args: array of V, nt: ref Obj): V
+{
+	natdepth++;
+	natlocal++;
+	r: V;
+	{
+		r = callnative1(f, this, args, nt);
+	} exception {
+	"*" =>
+		natdepth--;
+		natlocal--;
+		raise;
+	}
+	natdepth--;
+	natlocal--;
+	return r;
+}
+
+callnative1(f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 {
 	id := f.fun.native;
 	if(id < Ncoreend)
@@ -1250,6 +1272,7 @@ bindfn(target: ref Obj, this: V, args: array of V): ref Obj
 	else
 		ba = array[0] of V;
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Cfunc;
 	o.sh = emptyshape(getprotoof(target));
 	o.flags = Fext;

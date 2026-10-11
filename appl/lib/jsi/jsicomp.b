@@ -101,6 +101,7 @@ Env: adt {
 	sci:	ref Sci;
 	obj:	ref Obj;	# a with's object, or the variables eval added
 	with:	int;
+	gcm:	int;	# marked in this collection (jsigc.b)
 };
 
 # what dynamic lookups need of a scope at run time

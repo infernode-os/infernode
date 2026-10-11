@@ -751,6 +751,7 @@ namespace(m: ref Module): ref Obj
 	if(m.ns != nil)
 		return m.ns;
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Cns;
 	o.sh = rootshape;
 	o.flags = 0;
@@ -918,7 +919,7 @@ dynimport(spec, opts: V, referrer: string): V
 		}
 		f := mknative(Nimportjob, "", 0);
 		f.data = ref Data.Native(objv(cap.promise), strv(s), 0, nil);
-		f.env = ref Env(nil, nil, nil, objv0(strv(referrer)), 0);
+		f.env = ref Env(nil, nil, nil, objv0(strv(referrer)), 0, 0);
 		enqueue(ref Job.Call(f, array[0] of V));
 	} exception {
 	"JS" =>
@@ -931,6 +932,7 @@ dynimport(spec, opts: V, referrer: string): V
 objv0(v: V): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.cls = -1;
 	o.data = ref Data.Prim(v);
 	return o;

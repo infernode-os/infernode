@@ -135,6 +135,7 @@ usingblock(n: int)
 	sargc := argc;
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	err := V(Thole, 0, 0.0, nil, nil);
 	pexs: string;
 	{
@@ -148,6 +149,7 @@ usingblock(n: int)
 		argc = sargc;
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		err = thrown;
 	"JSkill" =>
 		raise e;
@@ -159,6 +161,7 @@ usingblock(n: int)
 		argc = sargc;
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		pexs = e;
 	}
 	dscopes = tl dscopes;

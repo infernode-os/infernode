@@ -271,6 +271,8 @@ ev(n: int)
 			ev(kids[k]);
 			if(ctl)
 				return;
+			if(gcwanted)
+				gcpoint();
 		}
 	Nif =>
 		ev(na[n]);
@@ -879,11 +881,13 @@ ev2(n: int)
 		chaincall(n);
 	Nchain =>
 		svsp := vsp;
+		snroot := nroot;
 		{
 			ev(na[n]);
 		} exception {
 		"JSopt" =>
 			vsp = svsp;
+			rootreset(snroot);
 			rt = Tundef;
 		}
 	Nmemop =>
@@ -1026,7 +1030,9 @@ ev2(n: int)
 	Nnew =>
 		ev(na[n]);
 		c := regv();
+		push(c);
 		args := evargs(nb[n], nc[n], nd[n]);
+		pop();
 		if(c.t != Tobj || !isctor(c.o))
 			throwtype(calleename(na[n]) + " is not a constructor");
 		setr(construct(c.o, args, c.o));
@@ -1221,7 +1227,7 @@ ev2(n: int)
 		ev(na[n]);
 		o := toobj(regv());
 		senv := env;
-		env = ref Env(nil, env, nil, o, 1);
+		env = ref Env(nil, env, nil, o, 1, 0);
 		ev(nb[n]);
 		env = senv;
 	Nempty =>
@@ -1284,7 +1290,7 @@ newenv(n: int, sci: ref Sci, up: ref Env): ref Env
 			Blet or Bconst or Bclass or Bcinner or Bparam =>
 				v[i].t = Thole;
 			}
-	e := ref Env(v, up, sci, nil, 0);
+	e := ref Env(v, up, sci, nil, 0, 0);
 	if(sci != nil && sci.evalvars)
 		e.obj = newobj(Cplain, nil);
 	return e;
@@ -1369,6 +1375,8 @@ forloop(n: int)
 			periter();
 		if(upd >= 0)
 			ev(upd);
+		if(gcwanted)
+			gcpoint();
 	}
 }
 
@@ -1377,7 +1385,7 @@ periter()
 {
 	v := array[len env.v] of V;
 	v[0:] = env.v;
-	env = ref Env(v, env.up, env.sci, nil, 0);
+	env = ref Env(v, env.up, env.sci, nil, 0, 0);
 }
 
 whileloop(n: int)
@@ -1395,6 +1403,8 @@ whileloop(n: int)
 		ev(body);
 		if(ctl && !loopctl(inf))
 			break;
+		if(gcwanted)
+			gcpoint();
 	}
 }
 
@@ -1410,6 +1420,8 @@ doloop(n: int)
 		ev(test);
 		if(!truthy())
 			break;
+		if(gcwanted)
+			gcpoint();
 	}
 }
 
@@ -1435,6 +1447,7 @@ forin(n: int)
 		inf = li;
 	}
 	benv := env;
+	push(objv(o));
 	# the keys: own enumerable ones, then the prototypes', skipping shadowed and deleted ones
 	visited := newhmap();
 	for(p := o; p != nil; p = getprotoof(p)) {
@@ -1454,12 +1467,18 @@ forin(n: int)
 			forbind(n, inf, benv);
 			ev(nc[n]);
 			env = benv;
-			if(ctl && !loopctl(nd[n]))
+			if(ctl && !loopctl(nd[n])) {
+				pop();
 				return;
+			}
+			if(gcwanted)
+				gcpoint();
 		}
 	}
+	pop();
 }
 
+# (what is iterated is a root while the body runs)
 forof(n: int)
 {
 	inf: ref Info.Loop;
@@ -1469,6 +1488,13 @@ forof(n: int)
 	}
 	ev(na[n]);
 	v := regv();
+	push(v);
+	forof1(n, v, inf);
+	pop();
+}
+
+forof1(n: int, v: V, inf: ref Info.Loop)
+{
 	benv := env;
 	if(inf.await) {
 		forawait(n, v, inf, benv);
@@ -1518,13 +1544,26 @@ forof(n: int)
 forofiter(n: int, it: V, inf: ref Info.Loop, benv: ref Env)
 {
 	next := getvalue(it, a_next);
+	push(it);	# roots while the body runs
+	push(next);
+	forofiter1(n, it, next, inf, benv);
+	pop();
+	pop();
+}
+
+forofiter1(n: int, it, next: V, inf: ref Info.Loop, benv: ref Env)
+{
 	for(;;) {
 		r := call1(next, it, nil);
 		if(r.t != Tobj)
 			throwtype("Iterator result " + showv(r) + " is not an object");
-		if(tobool(getv(r.o, a_done)))
+		push(r);
+		if(tobool(getv(r.o, a_done))) {
+			pop();
 			return;
+		}
 		setr(getv(r.o, a_value));
+		pop();
 		{
 			forbind(n, inf, benv);
 			ev(nc[n]);
@@ -1546,6 +1585,8 @@ forofiter(n: int, it: V, inf: ref Info.Loop, benv: ref Env)
 				return;
 			}
 		}
+		if(gcwanted)
+			gcpoint();
 	}
 }
 
@@ -1601,6 +1642,7 @@ evtry(n: int)
 	sargc := argc;
 	sdepth := depth;
 	svsp := vsp;
+	snroot := nroot;
 	pending := 0;	# 1: a thrown value, 2: another of the engine's own (a generator's return)
 	pex: V;
 	pexs: string;
@@ -1615,6 +1657,7 @@ evtry(n: int)
 		argc = sargc;
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		ctl = 0;
 		if(nc[n] >= 0) {
 			# the catch clause, which may throw in its turn
@@ -1634,6 +1677,7 @@ evtry(n: int)
 				argc = sargc;
 				depth = sdepth;
 				vsp = svsp;
+				rootreset(snroot);
 				ctl = 0;
 				pending = 1;
 				pex = thrown;
@@ -1645,6 +1689,7 @@ evtry(n: int)
 				argc = sargc;
 				depth = sdepth;
 				vsp = svsp;
+				rootreset(snroot);
 				pending = 2;
 				pexs = e2;
 			}
@@ -1662,6 +1707,7 @@ evtry(n: int)
 		argc = sargc;
 		depth = sdepth;
 		vsp = svsp;
+		rootreset(snroot);
 		pending = 2;
 		pexs = e;
 	}
@@ -2296,6 +2342,7 @@ protoblocks(o: ref Obj, k: int): int
 shapebox(sh: ref Shape): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.cls = -1;
 	o.data = ref Data.Shape(sh);
 	return o;
@@ -2670,11 +2717,13 @@ chaincall(n: int)
 {
 	c := na[n];
 	svsp := vsp;
+	snroot := nroot;
 	{
 		ev(c);
 	} exception {
 	"JSopt" =>
 		vsp = svsp;
+		rootreset(snroot);
 		if(ne[c] & Fopt)
 			raise "JSopt";	# (a?.b)?.(): the call is optional too
 		argsthrow(nc[c], nd[c], ne[c], "undefined is not a function");
@@ -2788,6 +2837,7 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 			nfr[0].t = Tobj;
 			nfr[0].o = dst;
 		}
+		rootpush(nfr, f);
 		for(i := 0; i < k; i++) {
 			ev(kids[ks + i]);
 			s := 1 + i;
@@ -2806,6 +2856,7 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 				nfr[s].i = ri;
 			}
 		}
+		rootpop();
 		runcode(f, c, nfr, k, nil);
 		return;
 	}
@@ -2813,6 +2864,7 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 		# natives take their arguments as an array
 		args := array[k] of V;
 		push(V(tt, 0, 0.0, nil, dst));
+		rootpush(args, f);
 		for(i := 0; i < k; i++) {
 			ev(kids[ks + i]);
 			args[i] = regv();
@@ -2820,6 +2872,7 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 		this := vstk[vsp-1];
 		pop();
 		setr(callnative(f, this, args, nil));
+		rootpop();
 		return;
 	}
 	push(V(tt, 0, 0.0, nil, dst));
@@ -2834,10 +2887,12 @@ evargs(ks, k, flags: int): array of V
 {
 	if((flags & Fspr) == 0) {
 		args := array[k] of V;
+		rootpush(args, nil);
 		for(i := 0; i < k; i++) {
 			ev(kids[ks + i]);
 			args[i] = regv();
 		}
+		rootpop();
 		return args;
 	}
 	l: list of V;
@@ -2872,6 +2927,12 @@ runcode(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
 		depth--;
 		throwerr(ERange, "Maximum call stack size exceeded");
 	}
+	if(nroot == len rootfr)
+		rootgrow();
+	rootfr[nroot] = nfr;
+	rootobj[nroot] = f;
+	rootenv[nroot] = env;
+	nroot++;
 	sfr := fr;
 	senv := env;
 	sfn := curfn;
@@ -2904,6 +2965,10 @@ runcode(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
 	newt = snt;
 	argc = sargc;
 	depth--;
+	nroot--;
+	rootfr[nroot] = nil;
+	rootobj[nroot] = nil;
+	rootenv[nroot] = nil;
 }
 
 # [[Call]]: f(this, args), the result returned
@@ -3025,6 +3090,14 @@ mkrest(from: int): ref Obj
 
 construct(f: ref Obj, args: array of V, nt: ref Obj): V
 {
+	rootpush(args, f);
+	r := construct1(f, args, nt);
+	rootpop();
+	return r;
+}
+
+construct1(f: ref Obj, args: array of V, nt: ref Obj): V
+{
 	if(f.cls == Cproxy)
 		return pxconstruct(f, args, nt);
 	fnv := f.fun;
@@ -3048,7 +3121,9 @@ construct(f: ref Obj, args: array of V, nt: ref Obj): V
 			if(parent == nil || !isctor(parent))
 				throwtype("Super constructor is not a constructor");
 			r := construct(parent, args, nt);
+			push(r);
 			initfields(f, r.o);
+			pop();
 			return r;
 		}
 		nfr := mkframe(c, holev, args);
@@ -3064,8 +3139,11 @@ construct(f: ref Obj, args: array of V, nt: ref Obj): V
 	}
 	proto := protofromctor(nt, objproto);
 	this := newobj(Cplain, proto);
-	if(c.flags & Cclassctor)
+	if(c.flags & Cclassctor) {
+		push(objv(this));
 		initfields(f, this);
+		pop();
+	}
 	if(c.body < 0)
 		return objv(this);
 	nfr := mkframe(c, objv(this), args);
@@ -3084,6 +3162,12 @@ runcode2(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
 		depth--;
 		throwerr(ERange, "Maximum call stack size exceeded");
 	}
+	if(nroot == len rootfr)
+		rootgrow();
+	rootfr[nroot] = nfr;
+	rootobj[nroot] = f;
+	rootenv[nroot] = env;
+	nroot++;
 	sfr := fr;
 	senv := env;
 	sfn := curfn;
@@ -3113,6 +3197,10 @@ runcode2(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
 	newt = snt;
 	argc = sargc;
 	depth--;
+	nroot--;
+	rootfr[nroot] = nil;
+	rootobj[nroot] = nil;
+	rootenv[nroot] = nil;
 }
 
 supercall(n: int)
@@ -3146,6 +3234,7 @@ supercall(n: int)
 closure(c: ref Code, e: ref Env): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Cfunc;
 	o.fun = c.fun;
 	o.env = e;
@@ -3590,11 +3679,21 @@ bindarr(p: int, v: V)
 	bindarriter(p, 0, it);
 }
 
+# (the iterator is a root while the targets, which may run script, are bound)
 bindarriter(p, from: int, it: V)
+{
+	next := getvalue(it, a_next);
+	push(it);
+	push(next);
+	bindarriter1(p, from, it, next);
+	pop();
+	pop();
+}
+
+bindarriter1(p, from: int, it, next: V)
 {
 	k := na[p];
 	cnt := nb[p];
-	next := getvalue(it, a_next);
 	done := 0;
 	{
 		for(i := from; i < cnt; i++) {
@@ -3613,9 +3712,13 @@ bindarriter(p, from: int, it: V)
 					x := call1(next, it, nil);
 					if(x.t != Tobj)
 						throwtype("Iterator result is not an object");
-					if(tobool(getv(x.o, a_done)))
+					push(x);
+					if(tobool(getv(x.o, a_done))) {
+						pop();
 						break;
+					}
 					apush(r, getv(x.o, a_value));
+					pop();
 					done = 0;
 				}
 				bindtarget(na[c], objv(r), pre);
@@ -3628,10 +3731,12 @@ bindarriter(p, from: int, it: V)
 				r := call1(next, it, nil);
 				if(r.t != Tobj)
 					throwtype("Iterator result is not an object");
+				push(r);
 				if(!tobool(getv(r.o, a_done))) {
 					x = getv(r.o, a_value);
 					done = 0;
 				}
+				pop();
 			}
 			bindtarget(c, x, pre);
 		}
@@ -3797,6 +3902,9 @@ mkclass(n: int)
 	}
 	addprop(f, a_prototype, 0, objv(proto));
 	addprop(proto, a_constructor, Awrite|Aconf, objv(f));
+	# the class and its methods are roots while its members are made and its static parts run
+	svsp := vsp;
+	push(objv(f));
 	fields: list of ref Field;
 	statics: list of ref Field;
 	for(i := 0; i < len inf.members; i++) {
@@ -3828,6 +3936,7 @@ mkclass(n: int)
 		}
 		ev(m.val);
 		mf := ro;
+		push(objv(mf));
 		sethome(mf, home);
 		if(privk >= 0) {
 			# private methods and accessors
@@ -3902,6 +4011,8 @@ mkclass(n: int)
 			continue;
 		definefield(f, fld, v);
 	}
+	while(vsp > svsp)
+		pop();
 	env = senv;
 	setr(objv(f));
 }
@@ -4163,9 +4274,12 @@ isslot(o: ref Obj, k: int, f: ref Obj): int
 	return s >= 0 && (o.sh.attrs[s] & Aacc) == 0 && o.slots[s].t == Tobj && o.slots[s].o == f;
 }
 
+# a finally: completing normally it leaves the try's value; abruptly (a break), the
+# value is its own, or undefined (UpdateEmpty), never the try's
 keepcv(n: int)
 {
 	scv := cv;
+	cv = undef;
 	ev(na[n]);
 	if(ctl == 0)
 		cv = scv;
@@ -4268,6 +4382,7 @@ rununit(c: ref Code, this: V, e: ref Env): V
 	fr = nfr;
 	env = e;
 	cv = undef;
+	rootpush(nfr, nil);
 	{
 		if(c.prologue >= 0)
 			ev(c.prologue);
@@ -4281,9 +4396,11 @@ rununit(c: ref Code, this: V, e: ref Env): V
 		argc = sargc;
 		cv = scv;
 		ctl = 0;
+		rootpop();
 		raise;
 	}
 	ctl = 0;
+	rootpop();
 	r := cv;
 	fr = sfr;
 	env = senv;
@@ -4348,6 +4465,7 @@ runevalcode(c: ref Code): V
 	scv := cv;
 	fr = nfr;
 	cv = undef;
+	rootpush(nfr, nil);
 	{
 		if(c.prologue >= 0)
 			ev(c.prologue);
@@ -4357,9 +4475,11 @@ runevalcode(c: ref Code): V
 		fr = sfr;
 		env = senv;
 		cv = scv;
+		rootpop();
 		raise;
 	}
 	ctl = 0;
+	rootpop();
 	r := cv;
 	fr = sfr;
 	env = senv;

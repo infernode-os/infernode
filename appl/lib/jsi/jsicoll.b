@@ -1019,6 +1019,7 @@ mkproxy(t, h: V): ref Obj
 	if(t.t != Tobj || h.t != Tobj)
 		throwtype("Cannot create proxy with a non-object as target or handler");
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Cproxy;
 	o.sh = rootshape;
 	o.flags = Fext;
@@ -1467,6 +1468,7 @@ mkhelper(kind: int, h: ref Helper): V
 {
 	o := newobj(Citer, iterhelperproto);
 	key := ref Obj;
+	gcnew(key);
 	o.data = ref Data.Iter(kind, nil, undef, 0, 0, key);
 	helpers = (key, h) :: helpers;
 	return objv(o);
@@ -1499,6 +1501,7 @@ natiter(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 			return it;
 		w := newobj(Citer, wrapforvalidproto);
 		key := ref Obj;
+		gcnew(key);
 		w.data = ref Data.Iter(0, nil, undef, 0, 0, key);
 		helpers = (key, ref Helper(it, next, undef, 0.0, 0.0, undef, undef, 0, nil, 0, 0)) :: helpers;
 		return objv(w);

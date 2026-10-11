@@ -730,6 +730,7 @@ ordinarydefine(o: ref Obj, k: int, d: ref Desc): int
 newacc(g, s: ref Obj): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Cacc;
 	o.data = ref Data.Acc(g, s);
 	return o;
@@ -1766,6 +1767,7 @@ arg(args: array of V, i: int): V
 newarray(n: int): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.sh = emptyshape(arrproto);
 	o.cls = Carray;
 	o.flags = Fext;
@@ -1779,6 +1781,7 @@ newarray(n: int): ref Obj
 mkarray(a: array of V): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.sh = emptyshape(arrproto);
 	o.cls = Carray;
 	o.flags = Fext;

@@ -468,6 +468,7 @@ keyname(k: int): string
 newsym(desc: string, hasdesc: int): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Csym;
 	d := ref Data.Sym(desc, hasdesc, 0, 0);
 	o.data = d;
@@ -625,6 +626,7 @@ reshape(o: ref Obj)
 newobj(cls: int, proto: ref Obj): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.sh = emptyshape(proto);
 	o.cls = cls;
 	o.flags = Fext;
@@ -634,6 +636,7 @@ newobj(cls: int, proto: ref Obj): ref Obj
 plainobj(): ref Obj
 {
 	o := ref Obj;
+	gcnew(o);
 	o.sh = emptyshape(objproto);
 	o.flags = Fext;
 	return o;
@@ -781,6 +784,7 @@ concat(a, b: V): V
 		}
 	}
 	o := ref Obj;
+	gcnew(o);
 	o.cls = Crope;
 	d := ref Data.Rope(array[8] of string, array[8] of int, 0, nil, 0);
 	o.data = d;

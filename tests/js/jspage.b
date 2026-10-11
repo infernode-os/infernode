@@ -4,13 +4,14 @@ implement Jspage;
 # jspage - a page loaded in a browsing session with its scripts on,
 # and its text printed once they have run.
 #
-#	jspage [-I] [-w ms] [-d] [-k] [-n] [-q] [-c node] url
+#	jspage [-I] [-m] [-w ms] [-d] [-k] [-n] [-q] [-c node] url
 #
 # -w: how long to let the page's scripts run after it is shown (1000 ms);
 # -c: click node first; -d: print the document tree, not its text;
 # -k: return, not halt the emulator (for prof(1) around it); -n: scripts
 # off; -q: print neither text nor title, only how long the page took to
-# be shown; -I: run the scripts with the interpreter (appl/lib/jsi).
+# be shown; -I: run the scripts with the interpreter (appl/lib/jsi); -m:
+# print the emulator's memory pools (/dev/memory) before halting.
 # Console output goes to standard error.
 #
 
@@ -60,10 +61,13 @@ init(nil: ref Draw->Context, args: list of string)
 	keep := 0;
 	noscripts := 0;
 	quiet := 0;
+	showmem := 0;
 	for(args = tl args; args != nil && len hd args > 1 && (hd args)[0] == '-'; args = tl args)
 		case hd args {
 		"-I" =>
 			setenv("/env/jsengine", "/dis/lib/jsi/jsi.dis");
+		"-m" =>
+			showmem = 1;
 		"-w" =>
 			args = tl args;
 			wait = int hd args;
@@ -79,11 +83,11 @@ init(nil: ref Draw->Context, args: list of string)
 			args = tl args;
 			click = int hd args;
 		* =>
-			sys->fprint(stderr, "usage: jspage [-I] [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
+			sys->fprint(stderr, "usage: jspage [-I] [-m] [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
 			raise "fail:usage";
 		}
 	if(args == nil) {
-		sys->fprint(stderr, "usage: jspage [-I] [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
+		sys->fprint(stderr, "usage: jspage [-I] [-m] [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
 		raise "fail:usage";
 	}
 	url := hd args;
@@ -133,6 +137,15 @@ init(nil: ref Draw->Context, args: list of string)
 	s.stop();
 	s.open("about:blank");
 	sys->sleep(1500);	# (the page's realm says where its time went as it ends)
+	if(showmem) {
+		fd := sys->open("/dev/memory", Sys->OREAD);
+		if(fd != nil) {
+			b := array[1024] of byte;
+			n := sys->read(fd, b, len b);
+			if(n > 0)
+				sys->fprint(stderr, "%s", string b[0:n]);
+		}
+	}
 	if(!keep)
 		halt();
 }

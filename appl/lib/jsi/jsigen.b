@@ -42,6 +42,14 @@ Gen: adt {
 	nat:	int;	# an async built-in run as a coroutine (asyncnative)
 	nthis:	V;
 	natargs:	array of V;
+	# the coroutine's state while parked, for the collector (jsigc.b)
+	vstk:	array of V;
+	vsp:	int;
+	rootfr:	array of array of V;
+	rootobj:	array of ref Obj;
+	rootenv:	array of ref Env;
+	nroot:	int;
+	gcm:	int;
 };
 
 # an async generator's request
@@ -150,6 +158,12 @@ resume(g: ref Gen, kind: int, v: V): ref Msg
 	svsp := vsp;
 	sgen := curgen;
 	scv := cv;
+	srootfr := rootfr;
+	srootobj := rootobj;
+	srootenv := rootenv;
+	snroot := nroot;
+	snatlocal := natlocal;
+	resumers = ref Saved(fr, env, curfn, newt, vstk, rootfr, rootobj, rootenv, nroot, cv, curgen) :: resumers;
 	g.state = Grunning;
 	if(!g.started) {
 		g.started = 1;
@@ -160,6 +174,7 @@ resume(g: ref Gen, kind: int, v: V): ref Msg
 	}
 	g.tocoro <-= ref Msg(kind, v);
 	r := <-g.fromcoro;
+	resumers = tl resumers;
 	fr = sfr;
 	env = senv;
 	curfn = sfn;
@@ -168,6 +183,11 @@ resume(g: ref Gen, kind: int, v: V): ref Msg
 	depth = sdepth;
 	vstk = svstk;
 	vsp = svsp;
+	rootfr = srootfr;
+	rootobj = srootobj;
+	rootenv = srootenv;
+	nroot = snroot;
+	natlocal = snatlocal;
 	curgen = sgen;
 	cv = scv;
 	ctl = 0;
@@ -202,6 +222,12 @@ coro(g: ref Gen, d: int)
 	depth = d;
 	vstk = array[16] of V;
 	vsp = 0;
+	rootfr = array[64] of array of V;
+	rootobj = array[64] of ref Obj;
+	rootenv = array[64] of ref Env;
+	nroot = 0;
+	rootpush(g.fr, g.f);
+	natlocal = 0;
 	curgen = g;
 	ctl = 0;
 	r: ref Msg;
@@ -213,9 +239,13 @@ coro(g: ref Gen, d: int)
 			g.retv = m.v;
 			raise "JSgenret";
 		}
-		if(g.nat > 0)
+		if(g.nat > 0) {
+			natdepth++;
+			natlocal++;
 			r = ref Msg(Mdone, natasync(g));
-		else {
+			natdepth--;
+			natlocal--;
+		} else {
 			c := g.code;
 			if(g.kind == Kasync) {
 				if((c.flags & (Cstrict|Carrow)) == 0) {
@@ -237,13 +267,16 @@ coro(g: ref Gen, d: int)
 		}
 	} exception e {
 	"JS" =>
+		natdepth -= natlocal;
 		r = ref Msg(Merror, thrown);
 	"JSgenret" =>
+		natdepth -= natlocal;
 		r = ref Msg(Mdone, g.retv);
 	"JSkill" =>
 		return;
 	"*" =>
 		# the engine broke: say so to whoever is waiting
+		natdepth -= natlocal;
 		r = ref Msg(Merror, objv(mkerror(EError, "internal error in generator: " + e)));
 	}
 	g.fromcoro <-= r;
@@ -264,10 +297,27 @@ coyield(kind: int, v: V): V
 	svstk := vstk;
 	svsp := vsp;
 	scv := cv;
+	srootfr := rootfr;
+	srootobj := rootobj;
+	srootenv := rootenv;
+	snroot := nroot;
+	snatlocal := natlocal;
+	g.fr = fr;
+	g.env = env;
+	g.f = curfn;
+	g.nt = newt;
+	g.vstk = vstk;
+	g.vsp = vsp;
+	g.rootfr = rootfr;
+	g.rootobj = rootobj;
+	g.rootenv = rootenv;
+	g.nroot = nroot;
+	natdepth -= natlocal;
 	g.fromcoro <-= ref Msg(kind, v);
 	m := <-g.tocoro;
 	if(m == nil)
 		raise "JSkill";
+	natdepth += snatlocal;
 	fr = sfr;
 	env = senv;
 	curfn = sfn;
@@ -276,6 +326,11 @@ coyield(kind: int, v: V): V
 	depth = sdepth;
 	vstk = svstk;
 	vsp = svsp;
+	rootfr = srootfr;
+	rootobj = srootobj;
+	rootenv = srootenv;
+	nroot = snroot;
+	natlocal = snatlocal;
 	curgen = g;
 	cv = scv;
 	case m.kind {
@@ -306,8 +361,13 @@ genyieldstar(v: V): V
 	async := g.kind == Kasyncgen;
 	it := getiterator(v, async);
 	next := getvalue(it, a_next);
+	push(it);	# roots across the yields
+	push(next);
+	base := vsp;
 	received := Msg(Mnext, undef);
 	for(;;) {
+		while(vsp > base)
+			pop();
 		r: V;
 		case received.kind {
 		Mnext =>
@@ -337,12 +397,16 @@ genyieldstar(v: V): V
 			r = await(r);
 		if(r.t != Tobj)
 			throwtype("Iterator result " + showv(r) + " is not an object");
+		push(r);	# a root while its done and value are read, which may run script
 		if(tobool(getv(r.o, a_done))) {
 			x := getv(r.o, a_value);
 			if(received.kind == Mreturn) {
 				g.retv = x;
 				raise "JSgenret";
 			}
+			pop();
+			pop();
+			pop();
 			return x;
 		}
 		{
@@ -596,13 +660,26 @@ forawait(n: int, v: V, inf: ref Info.Loop, benv: ref Env)
 {
 	it := getiterator(v, 1);
 	next := getvalue(it, a_next);
+	push(it);	# roots across the awaits
+	push(next);
+	forawait1(n, it, next, inf, benv);
+	pop();
+	pop();
+}
+
+forawait1(n: int, it, next: V, inf: ref Info.Loop, benv: ref Env)
+{
 	for(;;) {
 		r := await(call1(next, it, nil));
 		if(r.t != Tobj)
 			throwtype("Iterator result " + showv(r) + " is not an object");
-		if(tobool(getv(r.o, a_done)))
+		push(r);
+		if(tobool(getv(r.o, a_done))) {
+			pop();
 			return;
+		}
 		setr(getv(r.o, a_value));
+		pop();
 		{
 			forbind(n, inf, benv);
 			ev(nc[n]);
@@ -880,6 +957,7 @@ runjob()
 		return;
 	j := hd jobs;
 	jobs = tl jobs;
+	curjob = j;
 	pick x := j {
 	Reaction =>
 		rc := x.r;
@@ -943,6 +1021,8 @@ runjobs(): string
 	while(pending()) {
 		{
 			runjob();
+			curjob = nil;
+			gcpoint();
 		} exception {
 		"JS" =>
 			if(err == nil)

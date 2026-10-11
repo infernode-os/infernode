@@ -9414,48 +9414,26 @@ text(f: ref Fl, b: ref Box)
 			}
 		return;
 	}
-	lbmode = st.lbmode;
-	lbcjk = cjklang(langof(b.node));
-	lbkeepall = st.keepall == 1;
 	fc := face(st);
-	s := b.text;
-	if(st.transform != Style->TTnone)
-		s = transform(s, st.transform, f.space, langof(b.node));
-	# a carriage return is a space in every respect (CSS Text 3 §4.1)
-	for(k := 0; k < len s; k++)
-		if(s[k] == '\r') {
-			s = crtospace(s);
-			break;
-		}
-	ws := st.whitespace;
-	collapsesp := ws == Style->Wnormal || ws == Style->Wnowrap || ws == Style->Wpreline;
-	keepnl := !(ws == Style->Wnormal || ws == Style->Wnowrap);
-	nowrap := ws == Style->Wnowrap || ws == Style->Wpre;
-	ls := st.letterspacing;
-	if(collapsesp)
-		s = segbreaks(s, keepnl, cjklang(langof(b.node)));
-	# Thai: between the words a dictionary finds (UAX #14 SA)
-	thai: array of byte;
-	if(wordbreak != nil && st.keepall != 2)
-		thai = wordbreak->breaks(s);
-	i := 0;
-	while(i < len s) {
-		c := s[i];
-		if(c == '\n' && keepnl) {
-			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0, 0, 0, 0.0, 0));
-			f.space = 1;
-			i++;
-			continue;
-		}
-		if(isspace(c) && collapsesp) {
-			i0 := i;
-			nl := 0;
-			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl)) {
-				if(s[i] == '\n')
-					nl = 1;
-				i++;
-			}
-			if(f.space && !nowrap) {
+	lang := langof(b.node);
+	# its words, spaces and breaks: the same each layout for the same
+	# text in the same style, so kept, by node (but not when text-
+	# transform makes them depend on what came before)
+	segs: list of ref Seg;
+	ok := 0;
+	cache := st.transform == Style->TTnone && b.node > 0;
+	if(cache)
+		(ok, segs) = cachedsegs(b, st, fc, lang);
+	if(!ok) {
+		segs = textsegs(b, st, fc, lang, f.space);
+		if(cache)
+			keepsegs(b, st, fc, lang, segs);
+	}
+	for(; segs != nil; segs = tl segs) {
+		g := hd segs;
+		if(g.collapse) {
+			# a run of collapsible white space
+			if(f.space && !g.it.nowrap) {
 				# collapsed into a space before it: a break opportunity is
 				# decided on the text before collapsing (Text 3 §4.1.1), so
 				# that space may break if this one could
@@ -9468,12 +9446,80 @@ text(f: ref Fl, b: ref Box)
 				}
 			}
 			if(!f.space) {
-				if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
-					emit(f, ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-				else
-					emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
+				emit(f, segitem(g, b, fc, f));
 				f.space = 1;
 			}
+			continue;
+		}
+		emit(f, segitem(g, b, fc, f));
+		f.space = g.space;
+	}
+}
+
+# What text() makes of a text run before what came before it is known:
+# an item, or (collapse) a run of collapsible white space, the space it
+# leaves if not collapsed into one before it.  The items are patterns,
+# without the box, face and decoration they are emitted with.
+Seg: adt {
+	it:	ref Item;
+	collapse:	int;
+	space:	int;	# what Fl.space is after it
+	deco:	int;	# it takes the flow's decoration
+};
+
+segitem(g: ref Seg, b: ref Box, fc: ref Typeface, f: ref Fl): ref Item
+{
+	it := ref *g.it;
+	it.box = b;
+	it.face = fc;
+	if(g.deco)
+		(it.deco, it.decocolor) = (f.deco, f.decocolor);
+	return it;
+}
+
+# the segments of b's text; space0, whether what came before ended with
+# a collapsible space, matters only to text-transform
+textsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string, space0: int): list of ref Seg
+{
+	lbmode = st.lbmode;
+	lbcjk = cjklang(lang);
+	lbkeepall = st.keepall == 1;
+	r: list of ref Seg;	# reversed
+	s := b.text;
+	if(st.transform != Style->TTnone)
+		s = transform(s, st.transform, space0, lang);
+	# a carriage return is a space in every respect (CSS Text 3 §4.1)
+	for(k := 0; k < len s; k++)
+		if(s[k] == '\r') {
+			s = crtospace(s);
+			break;
+		}
+	ws := st.whitespace;
+	collapsesp := ws == Style->Wnormal || ws == Style->Wnowrap || ws == Style->Wpreline;
+	keepnl := !(ws == Style->Wnormal || ws == Style->Wnowrap);
+	nowrap := ws == Style->Wnowrap || ws == Style->Wpre;
+	ls := st.letterspacing;
+	if(collapsesp)
+		s = segbreaks(s, keepnl, cjklang(lang));
+	# Thai: between the words a dictionary finds (UAX #14 SA)
+	thai: array of byte;
+	if(wordbreak != nil && st.keepall != 2)
+		thai = wordbreak->breaks(s);
+	i := 0;
+	while(i < len s) {
+		c := s[i];
+		if(c == '\n' && keepnl) {
+			r = ref Seg(ref Item(Ibreak, nil, 0.0, nil, nil, 0, 0, 0, 0, 0, 0.0, 0), 0, 1, 0) :: r;
+			i++;
+			continue;
+		}
+		if(isspace(c) && collapsesp) {
+			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl))
+				i++;
+			if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
+				r = ref Seg(ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 1, 1, 1) :: r;
+			else
+				r = ref Seg(ref Item(Ispace, " ", fc.space + st.wordspacing + ls, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 1, 1, 1) :: r;
 			continue;
 		}
 		if(c == ' ' && st.transform == Style->TTfull)
@@ -9495,15 +9541,13 @@ text(f: ref Fl, b: ref Box)
 				t[0] = c;
 				w = fc.width(t);
 			}
-			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-			f.space = 0;
+			r = ref Seg(ref Item(Ispace, t, w, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 			i++;
 			continue;
 		}
 		if(c == 16r200B) {
 			# a zero-width space: a break opportunity that shows nothing
-			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-			f.space = 0;
+			r = ref Seg(ref Item(Ispace, "", 0.0, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 			i++;
 			continue;
 		}
@@ -9529,8 +9573,7 @@ text(f: ref Fl, b: ref Box)
 			# nothing but soft hyphens: a break opportunity that shows
 			# nothing and, unlike a zero-width space, does not come
 			# between the letters around it for shaping
-			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-			f.space = 0;
+			r = ref Seg(ref Item(Ispace, "\u00AD", 0.0, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 			continue;
 		}
 		w := tw(fc, word, ls) + ls * real len word;
@@ -9540,19 +9583,73 @@ text(f: ref Fl, b: ref Box)
 			# anywhere: every character
 			lbbreakall = st.breakall == 1;
 			k0 := 0;
-			for(k := 1; k <= len word; k++)
+			for(k = 1; k <= len word; k++)
 				if(k == len word || st.breakall == 2 || lbbreak(word[k-1], word[k])) {
 					ch := word[k0:k];
-					emit(f, ref Item(Iword, ch, tw(fc, ch, ls) + ls * real len ch, b, fc, 0, f.deco, f.decocolor, 0, 0, 0.0, 0));
+					r = ref Seg(ref Item(Iword, ch, tw(fc, ch, ls) + ls * real len ch, nil, nil, 0, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 					k0 = k;
 				}
 			lbbreakall = 0;
 		} else
-			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-		f.space = 0;
+			r = ref Seg(ref Item(Iword, word, w, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 		if(s[i-1] == 16rAD && st.hyphens != 0)	# the soft hyphen it ended with: a break opportunity whose hyphen shows only at a line's end
-			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
+			r = ref Seg(ref Item(Ispace, "\u00AD", 0.0, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 	}
+	segs: list of ref Seg;
+	for(; r != nil; r = tl r)
+		segs = hd r :: segs;
+	return segs;
+}
+
+# Segments kept by text node: a run's are good while its text, style,
+# face and language are what they were (across layouts: a page laid out
+# again after a script's change has most of its text as it was).  Some
+# nodes make more than one run (::first-letter), each kept.
+Tseg: adt {
+	text:	string;
+	st:	ref St;
+	fc:	ref Typeface;
+	lang:	string;
+	segs:	list of ref Seg;
+};
+tsegs: array of list of ref Tseg;
+tsegdoc: ref Doc;
+
+cachedsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string): (int, list of ref Seg)
+{
+	if(tsegdoc != curdoc || b.node >= len tsegs)
+		return (0, nil);
+	for(l := tsegs[b.node]; l != nil; l = tl l) {
+		t := hd l;
+		if(t.st == st && t.fc == fc && t.lang == lang && t.text == b.text)
+			return (1, t.segs);
+	}
+	return (0, nil);
+}
+
+keepsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string, segs: list of ref Seg)
+{
+	if(curdoc == nil)
+		return;
+	if(tsegdoc != curdoc) {
+		tsegs = nil;
+		tsegdoc = curdoc;
+	}
+	if(b.node >= len tsegs) {
+		n := array[curdoc.n + curdoc.n/4 + 16] of list of ref Tseg;
+		if(tsegs != nil)
+			n[0:] = tsegs;
+		tsegs = n;
+	}
+	# (no more than a few: a run whose style keeps changing)
+	keep: list of ref Tseg;
+	k := 0;
+	for(l := tsegs[b.node]; l != nil && k < 3; l = tl l)
+		if((hd l).text == b.text || k < 1) {
+			keep = hd l :: keep;
+			k++;
+		}
+	tsegs[b.node] = ref Tseg(b.text, st, fc, lang, segs) :: keep;
 }
 
 # word-space-transform (Text 4 §8.3): a zero-width space (a <wbr> is

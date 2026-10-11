@@ -446,15 +446,45 @@ hasanchors(idx: ref Index, s: ref Sel)
 		if(!found)
 			continue;
 		if(rest == nil) {
-			idx.hashas = 2;
-			return;
+			# a compound of :is() or :where() alone: its selectors'
+			# subjects are the elements (a :has() alone, any element)
+			for(i = 0; i < len c; i++) {
+				x := c[i];
+				if(!simplehas(x))
+					continue;
+				if(x.name != "is" && x.name != "where") {
+					idx.hashas = 2;
+					return;
+				}
+				for(j := 0; j < len x.sub; j++) {
+					b := x.sub[j];
+					bl := b.parts[len b.parts - 1];
+					br: list of ref Simple;
+					for(k2 := 0; k2 < len bl; k2++)
+						if(!simplehas(bl[k2]))
+							br = bl[k2] :: br;
+					if(br == nil) {
+						idx.hashas = 2;
+						return;
+					}
+					idx.hasanchors = listsimple(br) :: idx.hasanchors;
+				}
+			}
+			continue;
 		}
-		a := array[len c] of ref Simple;
-		n := 0;
-		for(; rest != nil; rest = tl rest)
-			a[n++] = hd rest;
-		idx.hasanchors = a[0:n] :: idx.hasanchors;
+		idx.hasanchors = listsimple(rest) :: idx.hasanchors;
 	}
+}
+
+listsimple(l: list of ref Simple): array of ref Simple
+{
+	n := 0;
+	for(t := l; t != nil; t = tl t)
+		n++;
+	a := array[n] of ref Simple;
+	for(n = 0; l != nil; l = tl l)
+		a[n++] = hd l;
+	return a;
 }
 
 addentry(idx: ref Index, e: ref Entry)

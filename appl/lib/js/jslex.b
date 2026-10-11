@@ -398,6 +398,41 @@ ptok(st, end: int, p: string): ref Tok
 }
 
 # an identifier name from l.pos; \u escapes decoded (and noted)
+# Names met, by hash of their characters: a source's names are few and
+# met again and again, and each slice of the source would be a string of
+# its own (an allocation for every name: 9% of a bundle parse's
+# allocations).  The table is the module's; a name is never changed.
+Ntab: con 8192;
+ntab: array of list of string;
+nntab := 0;
+
+name1(s: string, st, e: int): string
+{
+	h := 0;
+	for(i := st; i < e; i++)
+		h = h * 31 + s[i];
+	h = (h & 16r7FFFFFFF) % Ntab;
+	if(ntab == nil || nntab > 4 * Ntab) {
+		ntab = array[Ntab] of list of string;
+		nntab = 0;
+	}
+	n := e - st;
+Next:
+	for(l := ntab[h]; l != nil; l = tl l) {
+		c := hd l;
+		if(len c != n)
+			continue;
+		for(k := 0; k < n; k++)
+			if(c[k] != s[st+k])
+				continue Next;
+		return c;
+	}
+	c := s[st:e];
+	ntab[h] = c :: ntab[h];
+	nntab++;
+	return c;
+}
+
 identname(l: ref Lex): (string, int, int)
 {
 	s := l.src;
@@ -411,7 +446,7 @@ identname(l: ref Lex): (string, int, int)
 			i++;
 		if(i == n || s[i] < 16r80 && s[i] != '\\') {
 			l.pos = i;
-			return (s[st:i], 0, 1);
+			return (name1(s, st, i), 0, 1);
 		}
 	}
 	name := "";

@@ -108,6 +108,7 @@ TARG=\
 	interrupt_test.dis\
 	concurrent_auth_test.dis\
 	handshake_fuzz_test.dis\
+	limbo_inline_test.dis\
 	refadt_zero_test.dis\
 	regex_test.dis\
 	runner.dis\

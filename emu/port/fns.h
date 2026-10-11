@@ -115,6 +115,7 @@ Cmdtab*		lookupcmd(Cmdbuf*, Cmdtab*, int);
 Block*	mem2bl(uchar*, int);
 int		memusehigh(void);
 int		memlow(void);
+int		memlowpass(int);
 void		mkqid(Qid*, vlong, ulong, int);
 Qid	mkuqid(Chan*, Uqid*);
 Chan*		mntauth(Chan*, char*);

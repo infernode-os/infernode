@@ -108,6 +108,27 @@ memlow(void)
 	return heapmem->cursize > (heapmem->maxsize)/2;
 }
 
+/*
+ * Whether the scheduler's pass n should run the collector because the
+ * heap is filling: every pass past three quarters of it, one pass in
+ * eight past half.  Every pass past half had the collector marking the
+ * whole heap again and again while a large program ran, three quarters
+ * of the CPU on a web page with a 400 MB JavaScript realm.
+ */
+int
+memlowpass(int n)
+{
+	ulong cur, max;
+
+	cur = heapmem->cursize;
+	max = heapmem->maxsize;
+	if(cur > max/4*3)
+		return 1;
+	if(cur > max/2)
+		return (n & 7) == 0;
+	return 0;
+}
+
 int
 poolsetsize(char *s, int size)
 {

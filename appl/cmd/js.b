@@ -147,8 +147,10 @@ run(src, name: string, ismod, show: int): int
 	else
 		(r, e) = js->evalscript(src, name);
 	}
-	if(timing)
-		sys->fprint(stderr, "%s: %d ms\n", name, sys->millisec() - t0);
+	if(timing) {
+		(nc, nr) := js->jitstats();
+		sys->fprint(stderr, "%s: %d ms; %d functions compiled, %d refused\n", name, sys->millisec() - t0, nc, nr);
+	}
 	if(e != nil) {
 		sys->fprint(stderr, "%s\n", e);
 		return 0;

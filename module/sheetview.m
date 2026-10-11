@@ -106,6 +106,12 @@ Sheetview: module {
 		wordat:	(int, Draw->Rect);
 		findstr:	string;	# what a search is for, in lower case
 		found:	list of int;	# the sheets whose text has it
+		# a flowing document painted off dst: the view and half a view
+		# above and below (band, of sheet bandn, bandr in the sheet at
+		# scale), so a scroll copies, and paints only what it exposes
+		band, spare:	ref Draw->Image;
+		bandn:	int;
+		bandr:	Draw->Rect;
 
 		# opened from data (or, nil, the file or URL name); a page
 		# browsed is web.  The engine is loaded and the document

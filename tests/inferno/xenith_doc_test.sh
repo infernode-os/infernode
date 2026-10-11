@@ -10,9 +10,9 @@
 #	a file plumbed to a window already open on it as text is shown;
 #	Markdown opens as text and Render shows it set (doc/ctl, doc/text),
 #	Render again goes back to the text;
-#	an image looked at is a document of one sheet its size;
-#	a PDF's links listed in doc/links, button 3 on one to a page goes
-#	to it, on one to a URI browses it in a window of Xenith's.
+#	a source document (Markdown, HTML) shown beside its text (Zerox)
+#	is not set again at each edit, but on Put and doc/ctl refresh;
+#	an image looked at is a document of one sheet its size.
 #
 # Prerequisites:
 #   - Xenith must be running
@@ -316,6 +316,92 @@ check 'its body is still its source' $"b '# Heading One'
 echo text > $M/doc/ctl
 c=`{cat $M/doc/ctl}
 check 'Render again goes back to the text' $#c 0
+
+# ---- a source document shown beside its text (Zerox): set again ----
+# ---- on Put and on doc/ctl refresh, not at each edit ----
+
+# Execute a word in a window's tag, as B2 does (lower-case events are
+# the tag's): tagexec id word
+fn tagexec {
+	a := $*
+	wid := ${index 1 $a}
+	word := ${index 2 $a}
+	echo -n ' '^$word >> $XENITH/$wid/tag
+	n=`{cat $XENITH/$wid/tag | wc -c}
+	w=`{echo -n $word | wc -c}
+	echo 'Mx'^${expr $n $w -}^' '^$n > $XENITH/$wid/event
+}
+
+# Wait until a window's doc/text has a string: hasdoctext id string
+fn hasdoctext {
+	a := $*
+	wid := ${index 1 $a}
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		t=`{cat $XENITH/$wid/doc/text}
+		if {! ~ $"t *^${index 2 $a}^*} {sleep 1}
+	}
+}
+
+# the other window on a file: other file id
+fn other {
+	a := $*
+	for o in `{winof ${index 1 $a}} {
+		if {! ~ $o ${index 2 $a}} {echo $o}
+	}
+}
+
+for kind in md html {
+	SRC=/tmp/xenith_doc_refresh.$kind
+	if {~ $kind md} {
+		echo '# First' > $SRC
+	} {
+		echo '<p>First</p>' > $SRC
+	}
+	look $SRC
+	aid=()
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {~ $#aid 0} {
+			aid=`{winof xenith_doc_refresh.$kind}
+			if {~ $#aid 0} {sleep 1}
+		}
+	}
+	tagexec $aid Zerox
+	bid=()
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {~ $#bid 0} {
+			bid=`{other xenith_doc_refresh.$kind $aid}
+			if {~ $#bid 0} {sleep 1}
+		}
+	}
+	if {~ $#bid 0} {
+		bad $kind^': Zerox made no second window'
+	} {
+		echo render > $XENITH/$bid/doc/ctl
+		loaded $bid
+		hasdoctext $bid First
+		echo ' Unsaved' >> $XENITH/$aid/body
+		sleep 3
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again'} {ok $kind^': an edit in its twin does not set the document again'}
+		echo refresh > $XENITH/$bid/doc/ctl
+		hasdoctext $bid Unsaved
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Unsaved*} {ok $kind^': doc/ctl refresh sets it from the unsaved text'} {bad $kind^': refresh:' $"t}
+		check $kind^': still shown' `{attr $bid shown} 1
+		echo ' Saved' >> $XENITH/$aid/body
+		sleep 2
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Saved*} {bad $kind^': an edit set the document again'} {}
+		echo put > $XENITH/$aid/ctl
+		hasdoctext $bid Saved
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Saved*} {ok $kind^': Put in its twin sets the document again'} {bad $kind^': after Put:' $"t}
+		f=`{cat $SRC}
+		if {~ $"f *Saved*} {ok $kind^': and the file was written'} {bad $kind^': file:' $"f}
+	}
+	rm -f $SRC
+}
+if {echo refresh > $M/doc/ctl} {bad 'refresh on a window showing text was taken'} {ok 'refresh on a window showing its text is refused'}
 
 # ---- an image ----
 

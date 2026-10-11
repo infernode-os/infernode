@@ -571,6 +571,12 @@ shutdown()
 	# for the collector to find (a busy emulator seldom runs it)
 	jitst = nil;
 	jitlast = nil;
+	# a host's functions: a realm's own (a page's loader) would make it
+	# a cycle only the collector frees
+	loader = nil;
+	prefetcher = nil;
+	longtask = nil;
+	hostfns = nil;
 	dis = nil;
 	jitok = -1;
 }

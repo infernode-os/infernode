@@ -1812,7 +1812,24 @@ lazystub(f: ref Node.Func, extra: int): ref Code
 }
 
 # compile a lazy function, in place, the first time it is called
+tlazy := 0;	# ms in lazycompile, for /env/jstime
+nlazy := 0;
+
 lazycompile(c: ref Code)
+{
+	lt0 := sys->millisec();
+	{
+		lazycompile1(c);
+	} exception e {
+	"*" =>
+		tlazy += sys->millisec() - lt0;
+		raise e;
+	}
+	tlazy += sys->millisec() - lt0;
+	nlazy++;
+}
+
+lazycompile1(c: ref Code)
 {
 	l := c.lazy;
 	f := l.node;

@@ -35,6 +35,9 @@ Mod: adt {
 mods: array of ref Mod;
 nmod := 0;
 loader: ref fn(referrer, specifier: string): (string, string, string);
+# a host's: start fetching these imports of referrer, all at once, before
+# the loader asks for them one by one (a page's modules over the network)
+prefetcher: ref fn(referrer: string, specifiers: list of string);
 
 setloader(l: ref fn(referrer, specifier: string): (string, string, string))
 {
@@ -129,7 +132,12 @@ loadmodule(url, src: string): ref Mod
 		return m;
 	if(len url > 5 && url[len url-5:] == ".json")
 		src = "export default " + jsonmodulesource(src) + ";";
+	mt0 := sys->millisec();
 	(prog, err) := jsparse->parse(src, 1, 1);
+	mt1 := sys->millisec();
+	tparse += mt1 - mt0;
+	nscripts++;
+	scriptchars += len src;
 	if(err != nil)
 		throwerr(SyntaxError, url + ": " + err);
 	if(nmod == 0) {
@@ -147,11 +155,14 @@ loadmodule(url, src: string): ref Mod
 	pick p := prog {
 	Program =>
 		m.code = compilemodule(p, src, id);
+		tcompile += sys->millisec() - mt1;
 		setfile(m.code, url);
 		setmodid(m.code, id);
 		m.async = (m.code.flags & Casync) != 0;
 		entries(m, p.body);
 	}
+	if(prefetcher != nil && m.requested != nil)
+		prefetcher(url, revstrs(m.requested));
 	for(l := revstrs(m.requested); l != nil; l = tl l) {
 		spec := hd l;
 		if(lookupres(m, spec) >= 0)

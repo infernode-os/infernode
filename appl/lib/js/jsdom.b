@@ -19,6 +19,10 @@ pgh: ref Js->Host;
 pgd: ref Dom->Doc;
 pghooks := -1;		# the prelude's hooks object
 pgt0 := 0;		# when the page started, for performance.now()
+# where a page's time went (/env/jstime): the preludes, its scripts
+# (parsed, compiled, run), every task, and when the last one ended
+jstime := 0;
+tprelude, nscripts, scriptchars, tparse, tcompile, trun, tbusy, ntasks, tlastbusy, treported, nselect, tselect: int;
 pgpending: list of ref Pending;	# what a task asked of the host, done when it ends
 timerc: chan of int;
 fetchc: chan of ref Fetched;
@@ -94,6 +98,10 @@ page1(h: ref Js->Host): string
 	if(memfs == nil)
 		memfs = load Memfs Memfs->PATH;
 	jitinit();	# its template is read from /dis, which the realm will not have
+	(jt, nil) := sys->stat("/env/jstime");
+	jstime = jt >= 0;
+	tprelude = nscripts = scriptchars = tparse = tcompile = trun = tbusy = ntasks = tlastbusy = treported = nselect = tselect = 0;
+	tlazy = nlazy = 0;
 	if(originfs == nil)
 		return sys->sprint("cannot load %s: %r", Originfs->PATH);
 	jsparse->parse("/(?:)/u; class C { #x; m() { return this.#x; } }", 0, 0);	# its checker and the regular expressions
@@ -110,6 +118,9 @@ page1(h: ref Js->Host): string
 	timerc = chan of int;
 	fetchc = chan of ref Fetched;
 	setloader(pageloader);
+	prefetcher = pagemodprefetch;
+	modfetches = nil;
+	modlk = chan[1] of int;
 	setoutput(pageconsole);
 	if((err = confine(h.grants, originfs->origin(h.url))) != nil)
 		return err;
@@ -120,6 +131,7 @@ page1(h: ref Js->Host): string
 		profile(h.profile);
 	}
 	h.lock(h.id);
+	tp0 := sys->millisec();
 	{
 		call(selfhost(isrc), undef, nil);
 		f := selfhost(src);
@@ -132,6 +144,7 @@ page1(h: ref Js->Host): string
 		h.unlock(h.id);
 		return "the DOM prelude: " + showexc(thrown);
 	}
+	tprelude = sys->millisec() - tp0;
 	h.unlock(h.id);
 	hook("start", nil);
 	if(h.profile > 0)
@@ -140,6 +153,8 @@ page1(h: ref Js->Host): string
 	e := <-h.events =>
 		pick ev := e {
 		Quit =>
+			if(jstime)
+				pageconsole(timereport());
 			return nil;
 		Click =>
 			ev.reply <-= hook("event", array[] of {strv("click"), num(real ev.node), num(real ev.x), num(real ev.y), undef});
@@ -163,6 +178,12 @@ page1(h: ref Js->Host): string
 		hook("fetched", array[] of {num(real f.id), num(real f.status), strv(f.statustext),
 			strv(tojs(f.url)), strv(f.header), body, strnil(f.err)});
 	}
+}
+
+timereport(): string
+{
+	return sys->sprint("time: prelude %d ms; %d scripts, %d characters: parse %d ms, compile %d ms, run %d ms; lazy compiles %d, %d ms; querySelector %d, %d ms; %d tasks, busy %d ms, last ended at %d ms",
+		tprelude, nscripts, scriptchars, tparse, tcompile, trun, nlazy, tlazy, nselect, tselect, ntasks, tbusy, tlastbusy);
 }
 
 longreport(s: string)
@@ -213,8 +234,17 @@ hook(name: string, args: array of V): int
 		nframe = nf;
 		pageconsole("internal error: " + e + where);
 	}
+	ntasks++;
+	tbusy += sys->millisec() - tasksince;
+	tlastbusy = sys->millisec() - pgt0;
 	tasksince = 0;
 	h.unlock(h.id);
+	if(jstime && tlastbusy - treported >= 2000) {
+		# (as it goes: the last said is where the time went, though
+		# the page be closed in the middle of a task)
+		treported = tlastbusy;
+		pageconsole(timereport());
+	}
 	for(l := rev(pgpending); l != nil; l = tl l)
 		pick p := hd l {
 		Navigate =>
@@ -774,7 +804,10 @@ dn_select(nil: V, a, n: int, nil: V, nil: int): V
 {
 	x := nodearg(a, n, 0);
 	all := truthy(arg(a, n, 2));
+	st0 := sys->millisec();
 	(ok, l) := pgh.select(pgh.id, x, jsarg(a, n, 1), all);
+	nselect++;
+	tselect += sys->millisec() - st0;
 	if(ok < 0)
 		return null;
 	if(!all) {
@@ -1139,6 +1172,12 @@ dn_eval(nil: V, a, n: int, nil: V, nil: int): V
 			keepcode(c);
 			t2 := sys->millisec();
 			v := runcode(c);
+			t3 := sys->millisec();
+			nscripts++;
+			scriptchars += len src;
+			tparse += t1 - t0;
+			tcompile += t2 - t1;
+			trun += t3 - t2;
 			slow(name, len src, t0, t1, t2);
 			sp = sp0;
 			return objv(arrayof(array[] of {inum(0), v}));
@@ -1211,20 +1250,196 @@ dn_evalmodule(nil: V, a, n: int, nil: V, nil: int): V
 }
 
 # a module's URL from its referrer's and the specifier, and its source
-pageloader(referrer, spec: string): (string, string, string)
+# A module's imports are fetched all at once, as a browser fetches a
+# module graph: when a module is parsed (pagemodprefetch, through its
+# resolve hook), and before that, when its source comes, by a scan of it
+# for static imports with relative or absolute URLs (in the fetching
+# thread).  The loader takes each from here, so the graph comes in about
+# the time of its deepest path, not the sum of its fetches.
+Modfetch: adt {
+	done:	chan of int;
+	f:	ref Fetched;
+	got:	int;
+};
+modfetches: list of (string, ref Modfetch);
+modlk: chan of int;
+
+modfetchof(url: string): ref Modfetch
 {
-	url := spec;
+	modlk <-= 1;
+	for(l := modfetches; l != nil; l = tl l)
+		if((hd l).t0 == url) {
+			<-modlk;
+			return (hd l).t1;
+		}
+	<-modlk;
+	return nil;
+}
+
+# start fetching url unless it is already
+modstart(url: string)
+{
+	modlk <-= 1;
+	for(l := modfetches; l != nil; l = tl l)
+		if((hd l).t0 == url) {
+			<-modlk;
+			return;
+		}
+	mf := ref Modfetch(chan[1] of int, nil, 0);
+	modfetches = (url, mf) :: modfetches;
+	<-modlk;
+	spawn modfetcher(mf, url);
+}
+
+pagemodprefetch(referrer: string, specs: list of string)
+{
+	for(; specs != nil; specs = tl specs) {
+		(url, err) := modresolve(referrer, hd specs);
+		if(err == nil)
+			modstart(url);
+	}
+}
+
+modfetcher(mf: ref Modfetch, url: string)
+{
+	{
+		mf.f = webget(0, "GET", url, nil, nil);
+		if(mf.f.err == nil && mf.f.status >= 200 && mf.f.status < 300)
+			for(l := staticimports(string mf.f.body); l != nil; l = tl l)
+				if((u := urljoin(mf.f.url, hd l)) != nil)
+					modstart(u);
+	} exception e {
+	"*" =>
+		mf.f = ref Fetched(0, 0, "", url, "", "", nil, e);
+	}
+	mf.done <-= 1;
+}
+
+# the specifiers a module's static imports name by URL (from "x",
+# import "x"): a scan of the text, which may find one in a string or a
+# comment too, costing no more than a fetch never used
+staticimports(s: string): list of string
+{
+	l: list of string;
+	n := len s;
+	for(i := 0; i + 6 < n; i++) {
+		k := 0;
+		if(s[i] == 'f' && s[i:i+4] == "from")
+			k = 4;
+		else if(s[i] == 'i' && s[i:i+6] == "import")
+			k = 6;
+		else
+			continue;
+		if(i > 0 && isidchar(s[i-1]))
+			continue;
+		j := i + k;
+		while(j < n && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r'))
+			j++;
+		if(j >= n || s[j] != '"' && s[j] != '\'')
+			continue;
+		q := s[j];
+		e := j + 1;
+		while(e < n && s[e] != q && s[e] != '\n' && e - j < 1024)
+			e++;
+		if(e >= n || s[e] != q)
+			continue;
+		spec := s[j+1:e];
+		if(len spec > 0 && (spec[0] == '.' || spec[0] == '/' || len spec > 7 && (spec[0:7] == "http://" || spec[0:8] == "https://")))
+			l = spec :: l;
+		i = e;
+	}
+	return l;
+}
+
+isidchar(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '$' || c >= 16r80;
+}
+
+# rel against base, for an http(s) base: absolute, scheme-relative,
+# root-relative and path-relative references (with . and ..); nil if
+# it is none of them
+urljoin(base, rel: string): string
+{
+	if(len rel > 7 && rel[0:7] == "http://" || len rel > 8 && rel[0:8] == "https://")
+		return rel;
+	(scheme, rest) := urlscheme(base);
+	if(scheme != "http" && scheme != "https" || len rest < 2 || rest[0:2] != "//")
+		return nil;
+	# authority, path
+	e := 2;
+	while(e < len rest && rest[e] != '/' && rest[e] != '?' && rest[e] != '#')
+		e++;
+	auth := rest[2:e];
+	path := rest[e:];
+	for(k := 0; k < len path; k++)
+		if(path[k] == '?' || path[k] == '#') {
+			path = path[0:k];
+			break;
+		}
+	if(len rel > 1 && rel[0:2] == "//")
+		return scheme + ":" + rel;
+	np: string;
+	if(len rel > 0 && rel[0] == '/')
+		np = rel;
+	else {
+		d := len path;
+		while(d > 0 && path[d-1] != '/')
+			d--;
+		np = path[0:d] + rel;
+		if(np == "" || np[0] != '/')
+			np = "/" + np;
+	}
+	# remove . and .. segments
+	(nil, segs) := sys->tokenize(np, "/");
+	out: list of string;
+	for(; segs != nil; segs = tl segs)
+		case hd segs {
+		"." =>
+			;
+		".." =>
+			if(out != nil)
+				out = tl out;
+		* =>
+			out = hd segs :: out;
+		}
+	r := "";
+	for(; out != nil; out = tl out)
+		r = "/" + hd out + r;
+	if(r == "" || np[len np - 1] == '/')
+		r += "/";
+	return scheme + "://" + auth + r;
+}
+
+# a module specifier, as the page's resolve hook has it
+modresolve(referrer, spec: string): (string, string)
+{
 	{
 		f := getv(objv(pghooks), intern("resolve"));
 		u := call(f, objv(pghooks), array[] of {strv(tojs(referrer)), strv(tojs(spec))});
 		if(u.t != Tstr)
-			return (nil, nil, "cannot resolve module " + spec);
-		url = fromjs(str(u.x));
+			return (nil, "cannot resolve module " + spec);
+		return (fromjs(str(u.x)), nil);
 	} exception {
 	"js:throw" =>
-		return (nil, nil, "cannot resolve module " + spec + ": " + showexc(thrown));
+		return (nil, "cannot resolve module " + spec + ": " + showexc(thrown));
 	}
-	f := webget(0, "GET", url, nil, nil);
+}
+
+pageloader(referrer, spec: string): (string, string, string)
+{
+	(url, rerr) := modresolve(referrer, spec);
+	if(rerr != nil)
+		return (nil, nil, rerr);
+	f: ref Fetched;
+	if((mf := modfetchof(url)) != nil) {
+		if(!mf.got) {
+			<-mf.done;
+			mf.got = 1;
+		}
+		f = mf.f;
+	} else
+		f = webget(0, "GET", url, nil, nil);
 	if(f.err != nil)
 		return (nil, nil, "cannot load module " + spec + ": " + f.err);
 	if(f.status != 200 && f.status != 0)

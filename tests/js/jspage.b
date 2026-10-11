@@ -4,11 +4,13 @@ implement Jspage;
 # jspage - a page loaded in a browsing session with its scripts on,
 # and its text printed once they have run.
 #
-#	jspage [-w ms] [-d] [-k] [-c node] url
+#	jspage [-w ms] [-d] [-k] [-n] [-q] [-c node] url
 #
 # -w: how long to let the page's scripts run after it is shown (1000 ms);
 # -c: click node first; -d: print the document tree, not its text;
-# -k: return, not halt the emulator (for prof(1) around it).
+# -k: return, not halt the emulator (for prof(1) around it); -n: scripts
+# off; -q: print neither text nor title, only how long the page took to
+# be shown.
 # Console output goes to standard error.
 #
 
@@ -49,6 +51,8 @@ init(nil: ref Draw->Context, args: list of string)
 	dump := 0;
 	click := 0;
 	keep := 0;
+	noscripts := 0;
+	quiet := 0;
 	for(args = tl args; args != nil && len hd args > 1 && (hd args)[0] == '-'; args = tl args)
 		case hd args {
 		"-w" =>
@@ -58,15 +62,19 @@ init(nil: ref Draw->Context, args: list of string)
 			dump = 1;
 		"-k" =>
 			keep = 1;
+		"-n" =>
+			noscripts = 1;
+		"-q" =>
+			quiet = 1;
 		"-c" =>
 			args = tl args;
 			click = int hd args;
 		* =>
-			sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-c node] url\n");
+			sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
 			raise "fail:usage";
 		}
 	if(args == nil) {
-		sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-c node] url\n");
+		sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
 		raise "fail:usage";
 	}
 	url := hd args;
@@ -83,8 +91,12 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	startwebfs();
 	s := Session.new(1024, 768);
-	s.configure("scripts on");
+	if(noscripts)
+		s.configure("scripts off");
+	else
+		s.configure("scripts on");
 	ev := s.listen();
+	t0 := sys->millisec();
 	s.open(url);
 	for(;;) {
 		e := <-ev;
@@ -94,20 +106,24 @@ init(nil: ref Draw->Context, args: list of string)
 			break;
 		}
 	}
+	sys->fprint(stderr, "jspage: shown in %d ms\n", sys->millisec() - t0);
 	sys->sleep(wait);
 	if(click) {
 		if((err := s.click(click)) != nil)
 			sys->fprint(stderr, "jspage: click: %s\n", err);
 		sys->sleep(wait);
 	}
-	if(dump)
+	if(quiet)
+		;
+	else if(dump)
 		sys->print("%s", s.pg.doc.dump());
 	else
 		sys->print("%s\n", s.text());
-	sys->print("title: %s\n", s.pg.title);
+	if(!quiet)
+		sys->print("title: %s\n", s.pg.title);
 	s.stop();
 	s.open("about:blank");
-	sys->sleep(100);
+	sys->sleep(1500);	# (the page's realm says where its time went as it ends)
 	if(!keep)
 		halt();
 }

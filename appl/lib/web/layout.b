@@ -10771,9 +10771,11 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	# baseline is what touches the line's edge, and what is inside
 	# keeps its place relative to it (CSS 2.2 §10.8.1).
 	subtrees: list of (ref Box, real, real);	# (box, above, below)
+	fms := array[len frags] of Fm;	# each fragment's metrics, for placing it below
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift, nil, anchor) := fragmetrics(f, b, sf);
+		fms[i] = fragmetrics(f, b, sf);
+		(a, d, shift, nil, anchor) := fms[i];
 		f.base = ir(shift);
 		if(anchor != nil) {
 			subtrees = extend(subtrees, anchor, a - shift, d + shift);
@@ -10803,7 +10805,7 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		line.fl = firstlinest(b);
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift, va, anchor) := fragmetrics(f, b, sf);
+		(nil, nil, shift, va, anchor) := fms[i];
 		fb := real line.base + shift;
 		if(anchor != nil) {
 			(sa, sd) := extent(subtrees, anchor);
@@ -11588,6 +11590,8 @@ extent(l: list of (ref Box, real, real), k: ref Box): (real, real)
 
 # the fifth value is the top- or bottom-aligned inline box the fragment
 # is in (or is), with shift then relative to that box's baseline
+Fm: type (real, real, real, int, ref Box);	# fragmetrics': above, below, shift, vertical-align, anchor
+
 fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int, ref Box)
 {
 	st := f.box.st;

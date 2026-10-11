@@ -95,20 +95,22 @@ itself, and compiles hot functions to Dis modules the JIT compiles.
 build's container, the JIT on, `emu -c1`), the median of three runs, in
 ms:
 
-| | appl/lib/js, interpreted (`-J -1`) | appl/lib/js (default: compiled tier) | jsi |
-|---|---|---|---|
-| prop: one object's property read and written | 3367 | 2896 | **2368** |
-| call: a small function called | 3795 | 3453 | **3338** |
-| closure: closures made and called | 2782 | 3143 | **2572** |
-| alloc: small objects made, linked, walked | 1736 | 1934 | **1659** |
-| poly: one call site, three classes | 8957 | 6763 | **2901** |
-| string: a string built, then split | 1435 | 1519 | **559** |
-| float: floating-point arithmetic | 2076 | **1667** | 1931 |
+| | appl/lib/js (default: compiled tier) | jsi |
+|---|---|---|
+| prop: one object's property read and written | 3080 | **2590** |
+| call: a small function called | **3447** | 4086 |
+| closure: closures made and called | 3085 | **2884** |
+| alloc: small objects made, linked, walked | 2178 | **1922** |
+| poly: one call site, three classes | 6750 | **3239** |
+| string: a string built, then split | 1510 | **612** |
+| float: floating-point arithmetic | **1860** | 2144 |
 
-jsi is ahead on five of the seven and level on calls, and well ahead
-where the work is property lookup through prototypes (`poly`, 2.3x) and
-strings (2.7x); the compiled tier wins `float`, a loop it turns wholly
-into native code.  The runs shared the machine with a test262 run.
+jsi is ahead on five of the seven, and well ahead where the work is
+property lookup through prototypes (`poly`, 2.1x) and strings (2.5x);
+the compiled tier wins `float`, a loop it turns wholly into native code,
+and `call` by 18%: a call now roots its frame and arguments for the
+collector, which costs it what it had gained before the collector came.
+The runs shared the machine with a test262 run.
 
 These are amd64 numbers.  On amd64 the compiled tier gives little,
 because the amd64 JIT punts some of the instructions its code relies on;
@@ -123,7 +125,7 @@ test262 (`t262 -r -I`, the same skip list as the other engine):
 
 | | appl/lib/js (JS-ENGINE.md §13) | jsi |
 |---|---|---|
-| `test/language` | 98.3% (18652 of 18968) | LANGUAGE |
+| `test/language` | 98.3% (18652 of 18968) | **99.7%** (18904 of 18962) |
 | `test/built-ins` | 99.1% (17623 of 17791) | BUILTINS |
 
 What jsi fails, by kind:

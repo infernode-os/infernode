@@ -422,6 +422,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
 | `limbo_inline_test.b` | Code the compiler inlines: an inlined call's temporary argument outlives the use of its element; `v = f(v)` reads the old `v` |
 | `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
+| `jit_retslice_test.b` | A call between modules from compiled code does not end the thread's time slice, at any stack depth (a return punted to the VM after a call saw mcall's stale R.t) |
 | `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
 | `hostplumb_test.b` | hostplumb(1) re-plumbing host messages under `/n/local`; the plumber refusing a message nothing can receive |
 | `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |

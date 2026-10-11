@@ -818,6 +818,16 @@ OP(ret)
 	Frame *f;
 	Modlink *m;
 
+	/*
+	 * R.t says whether compiled code must leave for the interpreter
+	 * when this returns (the JITs punt a return here and test it
+	 * after).  It is set below only when it must; left as it was,
+	 * it is whatever the last punted instruction said: OP(mcall)
+	 * sets it on every call between modules, so a return punted
+	 * after one (from a frame in a stack extension, say) left
+	 * compiled code for the scheduler every time.
+	 */
+	R.t = 0;
 	f = (Frame*)R.FP;
 	R.FP = f->fp;
 	if(R.FP == nil) {

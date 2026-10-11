@@ -49,15 +49,21 @@ sets the scale to
 of the pages' size.
 .PP
 Button 1 drags the pages in both directions; the wheel scrolls them.
-Button 3 is the menu: the next and previous page, zoom in and out,
-fit width or page, turn right or left,
+As in Plan 9's
+.IR page ,
+button 2 raises a menu of operations: the next and previous page, zoom
+in and out, fit width or page, turn right or left,
 .BR find... ,
 .BR "go to page..." ,
 .B "write page..."
 (the page shown, at the scale shown, as an image file, see
 .IR image (6)),
-the pages near the one shown and the files, and
+and
 .BR exit .
+Button 3 raises a menu of the pages to choose from: those near the one
+shown (marked
+.BR * ),
+the first and the last, and, with several files, the files.
 A status line names the file, the page and the scale.
 .PP
 Keys:

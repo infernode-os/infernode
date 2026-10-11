@@ -175,7 +175,9 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		# a resize reaches a packed widget, not the toplevel
 		"bind .p <Configure> {send act resized}",
 		"bind .p <ButtonRelease-1> {send act up %x %y}",
-		"bind .p <ButtonPress-3> {send act menu %X %Y}",
+		# as Plan 9's page: button 2 the operations, button 3 the pages
+		"bind .p <ButtonPress-2> {send act menu %X %Y}",
+		"bind .p <ButtonPress-3> {send act pages %X %Y}",
 		"bind .p <ButtonPress-4> {send act wheel -1}",
 		"bind .p <ButtonPress-5> {send act wheel 1}",
 		"bind .e <Key-\n> {send act promptdone}",
@@ -236,6 +238,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			}
 		"menu" =>
 			menu(t);
+		"pages" =>
+			pagesmenu(t);
 		"promptdone" =>
 			s := tkcmd(".e get");
 			endprompt();
@@ -296,10 +300,13 @@ setview(v: ref View)
 	v.bg = bgcol;
 	v.mark = markcol;
 	if(font == nil)
-		font = Font.open(display, "*default*");
+		font = openfont("/fonts/combined/go.14.font");
 	v.font = font;
-	if(style == nil)
-		style = ref Docengine->Style(0, font, font, display.black, display.white, markcol, display.white);
+	if(style == nil){
+		# Xenith's faces: a flowing document reads as it does there
+		code := openfont("/fonts/combined/gomono.14.font");
+		style = ref Docengine->Style(0, font, code, display.black, display.white, markcol, display.white);
+	}
 	v.style = style;
 }
 
@@ -527,7 +534,9 @@ viewcmd(cmd, arg: string)
 	redraw();
 }
 
-# ---- the menu ----
+# ---- the menus ----
+# As Plan 9's page: button 2 raises the operations, button 3 the pages
+# to choose from.  Each is posted where the button went down.
 
 menu(t: list of string)
 {
@@ -546,9 +555,50 @@ menu(t: list of string)
 	item(".m", "find...", "find");
 	item(".m", "go to page...", "goto");
 	item(".m", "write page...", "write");
-	pagesmenu();
 	tkcmd(".m add separator");
 	item(".m", "exit", "exit");
+	post(t);
+}
+
+# The pages near the one shown, the first and last, and the files
+pagesmenu(t: list of string)
+{
+	tk->cmd(top, "destroy .m");
+	tkcmd("menu .m");
+	v := view();
+	if(v != nil && len v.sizes > 0){
+		n := len v.sizes;
+		at := v.sheetat(v.org.y);
+		lo := at - 8;
+		hi := at + 8;
+		if(lo < 0)
+			lo = 0;
+		if(hi >= n)
+			hi = n - 1;
+		if(lo > 0)
+			item(".m", "1", "sheet 0");
+		for(i := lo; i <= hi; i++){
+			label := string (i + 1);
+			if(i == at)
+				label += "  *";
+			item(".m", label, sprint("sheet %d", i));
+		}
+		if(hi < n - 1)
+			item(".m", string n, sprint("sheet %d", n - 1));
+	}
+	if(len parts > 1){
+		tkcmd("menu .m.f");
+		for(i := 0; i < len parts; i++)
+			item(".m.f", sprint("%d  %s", i + 1, parts[i].name), sprint("part %d", i));
+		if(v != nil && len v.sizes > 0)
+			tkcmd(".m add separator");
+		tkcmd(".m add cascade -label files -menu .m.f");
+	}
+	post(t);
+}
+
+post(t: list of string)
+{
 	x := "40";
 	y := "40";
 	if(t != nil && tl t != nil && tl tl t != nil){
@@ -556,40 +606,6 @@ menu(t: list of string)
 		y = hd tl tl t;
 	}
 	tkcmd(".m post " + x + " " + y);
-}
-
-# The pages near the one shown, the first and last, and the files
-pagesmenu()
-{
-	v := view();
-	if(len parts > 1){
-		tkcmd("menu .m.f");
-		for(i := 0; i < len parts; i++)
-			item(".m.f", sprint("%d  %s", i + 1, parts[i].name), sprint("part %d", i));
-		tkcmd(".m add cascade -label files -menu .m.f");
-	}
-	if(v == nil || len v.sizes < 2)
-		return;
-	tkcmd("menu .m.p");
-	n := len v.sizes;
-	at := v.sheetat(v.org.y);
-	lo := at - 8;
-	hi := at + 8;
-	if(lo < 0)
-		lo = 0;
-	if(hi >= n)
-		hi = n - 1;
-	if(lo > 0)
-		item(".m.p", "1", "sheet 0");
-	for(i := lo; i <= hi; i++){
-		label := string (i + 1);
-		if(i == at)
-			label += "  *";
-		item(".m.p", label, sprint("sheet %d", i));
-	}
-	if(hi < n - 1)
-		item(".m.p", string n, sprint("sheet %d", n - 1));
-	tkcmd(".m add cascade -label pages -menu .m.p");
 }
 
 item(m, label, verb: string)
@@ -667,6 +683,14 @@ writepage(v: ref View, file: string): string
 }
 
 # ---- little things ----
+
+openfont(name: string): ref Font
+{
+	f := Font.open(display, name);
+	if(f == nil)
+		f = Font.open(display, "*default*");
+	return f;
+}
 
 tkcmd(s: string): string
 {

@@ -37,6 +37,8 @@ ipof(o: ref Obj): ref IPint
 
 bigval(i: ref IPint): V
 {
+	if(i.bits() == 1 && i.iptoint() == 0)
+		i = IPint.inttoip(0);	# there is no -0n (neg only flips the sign)
 	o := ref Obj;
 	o.cls = Cbigint;
 	o.data = ref Data.Big(i);

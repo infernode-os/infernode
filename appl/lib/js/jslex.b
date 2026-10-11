@@ -909,8 +909,15 @@ templ(l: ref Lex, st: int): ref Tok
 				l.pos = rs + 2;
 			} else if(e >= 0)
 				v = putcp(v, e);
-			for(i := rs; i < l.pos && i < n; i++)
-				raw[len raw] = s[i];
+			for(i := rs; i < l.pos && i < n; i++) {
+				# CR and CRLF are LF in raw too, after a backslash as anywhere
+				if(s[i] == '\r') {
+					if(i + 1 < l.pos && s[i+1] == '\n')
+						continue;
+					raw[len raw] = '\n';
+				} else
+					raw[len raw] = s[i];
+			}
 			continue;
 		}
 		if(c == '\r') {

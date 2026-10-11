@@ -117,6 +117,7 @@ ev(n: int)
 		rt = Tundef;
 	Nnull =>
 		rt = Tnull;
+		ro = nil;
 	Ntrue =>
 		rt = Tbool;
 		ri = 1;
@@ -679,9 +680,10 @@ binv(o: int, a, b: V): V
 	return undef;
 }
 
+# a key for an error message: no user code is run to show it
 showkey(v: V): string
 {
-	if(v.t == Tsym)
+	if(v.t == Tsym || v.t == Tobj)
 		return showv(v);
 	return tostr(v);
 }
@@ -714,8 +716,10 @@ numericop(o: int, a, b: V): V
 	Nushr =>
 		u := touint32(na);
 		s := toint32(nb) & 31;
-		r := u / math->pow(2.0, real s);
-		return numv(math->floor(r));
+		r := math->floor(u / math->pow(2.0, real s));
+		if(r == 0.0)
+			return intv(0);	# not -0: -0 >>> 0 is +0
+		return numv(r);
 	* =>
 		ia := toint32(na);
 		ib := toint32(nb);
@@ -864,6 +868,8 @@ ev2(n: int)
 		ev(na[n]);
 		if(rt == Tundef || rt == Tnull)
 			raise "JSopt";
+	Nchaincall =>
+		chaincall(n);
 	Nchain =>
 		svsp := vsp;
 		{
@@ -1820,10 +1826,11 @@ dynget(a, istypeof: int)
 		return;
 	}
 	if(o != nil) {
-		if(o.cls != Cproxy && !hasprop(o, a)) {
-			# gone since it was found (a getter on the chain removed it)
-			if(!e.with)
-				;
+		# GetBindingValue asks again: gone since it was found (Symbol.unscopables' getter
+		# deleted it), it reads as undefined (a with is sloppy code)
+		if(!hasprop(o, a)) {
+			rt = Tundef;
+			return;
 		}
 		setr(get(o, a, objv(o)));
 		return;
@@ -2543,12 +2550,49 @@ incv(v: V, delta: int): V
 
 updvar(n: int)
 {
+	if(op[na[n]] == Ndyn && op[nb[n]] == Nsetdyn) {
+		dynupd(n);
+		return;
+	}
 	ev(na[n]);
 	old := tonumeric(regv());
 	nv := incv(old, nc[n]);
 	push(nv);
 	ev(nb[n]);
 	pop();
+	if(nd[n])
+		setr(old);
+	else
+		setr(nv);
+}
+
+# x++ found by name (in a with, or among an eval's vars): the reference is resolved once,
+# so a getter that deletes the property still has the update stored back to its object
+dynupd(n: int)
+{
+	a := na[na[n]];
+	strict := nc[nb[n]];
+	(e, s, o) := dynfind(a);
+	old: V;
+	if(e != nil) {
+		old = e.v[s];
+		if(old.t == Thole)
+			tdzerror(atomstr[a]);
+	} else if(o != nil)
+		old = get(o, a, objv(o));
+	else {
+		dynget(a, 0);
+		old = regv();
+	}
+	old = tonumeric(old);
+	nv := incv(old, nc[n]);
+	if(o != nil) {
+		if(strict == 1 && !hasprop(o, a))
+			throwerr(ERef, atomstr[a] + " is not defined");
+		if(!put(o, a, nv, objv(o)) && strict == 1)
+			throwtype("Cannot assign to read only property '" + atomstr[a] + "'");
+	} else
+		dynset(a, nv, strict);
 	if(nd[n])
 		setr(old);
 	else
@@ -2592,6 +2636,22 @@ calleename(n: int): string
 		return "(local)";
 	}
 	return "expression";
+}
+
+# (a?.b)(): the call of a parenthesised chain, which calls undefined when it short-circuits
+chaincall(n: int)
+{
+	c := na[n];
+	svsp := vsp;
+	{
+		ev(c);
+	} exception {
+	"JSopt" =>
+		vsp = svsp;
+		if(ne[c] & Fopt)
+			raise "JSopt";	# (a?.b)?.(): the call is optional too
+		argsthrow(nc[c], nd[c], ne[c], "undefined is not a function");
+	}
 }
 
 # a call of what is not a function: the arguments are evaluated before it is refused
@@ -3330,16 +3390,55 @@ tmplobj(i: int): ref Obj
 }
 
 # a cooked string that is nil because it is empty, not because it is invalid
+# a nil cooked string is "" or undefined (an escape that is not valid): the raw text says which
 iscookedempty(t: ref Info.Tmpl, j: int): int
 {
-	return len t.raws[j] == 0 || !hasbadescape(t.raws[j]);
+	return !hasbadescape(t.raws[j]);
 }
 
+# whether a template's raw text has an escape a tagged template cooks to undefined
 hasbadescape(raw: string): int
 {
-	for(i := 0; i < len raw; i++)
-		if(raw[i] == '\\')
+	n := len raw;
+	for(i := 0; i < n; i++) {
+		if(raw[i] != '\\')
+			continue;
+		i++;
+		if(i >= n)
 			return 1;
+		c := raw[i];
+		case c {
+		'0' =>
+			if(i + 1 < n && raw[i+1] >= '0' && raw[i+1] <= '9')
+				return 1;
+		'1' to '9' =>
+			return 1;
+		'x' =>
+			if(i + 2 >= n || hexval(raw[i+1]) < 0 || hexval(raw[i+2]) < 0)
+				return 1;
+			i += 2;
+		'u' =>
+			if(i + 1 < n && raw[i+1] == '{') {
+				j := i + 2;
+				v := 0;
+				for(; j < n && hexval(raw[j]) >= 0; j++) {
+					v = v * 16 + hexval(raw[j]);
+					if(v > 16r10FFFF)
+						return 1;
+				}
+				if(j == i + 2 || j >= n || raw[j] != '}')
+					return 1;
+				i = j;
+			} else {
+				if(i + 4 >= n)
+					return 1;
+				for(k := 1; k <= 4; k++)
+					if(hexval(raw[i+k]) < 0)
+						return 1;
+				i += 4;
+			}
+		}
+	}
 	return 0;
 }
 

@@ -36,7 +36,7 @@ Nimportmeta, Nimportcall, Npat, Ppatarr, Ppatobj, Pprop, Prest, Prestobj, Pdefau
 Nblock, Nseqs, Ncompl, Nif, Nwhile, Ndo, Nfor, Nforin, Nforof, Nreturn, Nbreak, Ncontinue,
 Nthrow, Ntry, Nswitch, Ncase, Nlabeled, Nwith, Nempty,
 Nmkenv, Nframe2env, Nmkargs, Nmkrest, Nholes, Ndeclvar, Ndeclfn, Nglobalinst, Ndyndeclvar,
-Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Ncvreset, Nkeepcv, Nlast: con iota;
+Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Ncvreset, Nkeepcv, Nchaincall, Nlast: con iota;
 
 op, na, nb, nc, nd, ne, npos: array of int;
 nn := 0;
@@ -2442,6 +2442,13 @@ callexpr(x: ref Node.Call, nil: int): int
 			# (a.b)() keeps its this; (0, a.b)() does not
 			c = p.e;
 			continue;
+		Chain =>
+			# (a?.b)() keeps its this too, but a short circuit calls undefined
+			pick m := p.e {
+			Member =>
+				r := callexpr(ref Node.Call(x.pos, x.end, p.e, x.args, x.optional), 0);
+				return e1(Nchaincall, r);
+			}
 		}
 		break;
 	}

@@ -558,6 +558,9 @@ runrealm1(src: string, m: ref Meta): (int, string)
 	if(m.negphase == "runtime" || m.negphase == "resolution") {
 		if(e == nil)
 			return (0, "ran, should have thrown " + m.negtype);
+		# an error with no name of its own is shown as "uncaught " and its toString
+		if(len e > 9 && e[0:9] == "uncaught ")
+			e = e[9:];
 		if(len e < len m.negtype || e[0:len m.negtype] != m.negtype)
 			return (0, "threw " + e + ", not " + m.negtype);
 		return (1, nil);

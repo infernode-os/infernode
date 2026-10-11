@@ -975,7 +975,7 @@ natreflect(id: int, f: ref Obj, nil: V, args: array of V, nt: ref Obj): V
 		p := arg(args, 1);
 		if(p.t != Tobj && p.t != Tnull)
 			throwtype("Object prototype may only be an Object or null: " + showv(p));
-		return boolv(setprotoof(o, p.o));
+		return boolv(setprotoof(o, objornil(p)));
 	NProxy =>
 		if(nt == nil)
 			throwtype("Constructor Proxy requires 'new'");
@@ -1065,7 +1065,10 @@ pxsetproto(p: ref Obj, v: ref Obj): int
 	(t, h, trap) := pxtrap(p, "setPrototypeOf");
 	if(trap == nil)
 		return setprotoof(t, v);
-	r := tobool(call(trap, objv(h), array[] of {objv(t), objv(v)}));
+	vv := nullv;
+	if(v != nil)
+		vv = objv(v);
+	r := tobool(call(trap, objv(h), array[] of {objv(t), vv}));
 	if(!r)
 		return 0;
 	if(isextensible(t))

@@ -541,7 +541,7 @@ natcore(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 		p := arg(args, 0);
 		if(p.t != Tobj && p.t != Tnull)
 			throwtype("Object prototype may only be an Object or null: " + showv(p));
-		o := newobj(Cplain, p.o);
+		o := newobj(Cplain, objornil(p));
 		if(len args > 1 && args[1].t != Tundef)
 			defprops(o, args[1]);
 		return objv(o);
@@ -657,7 +657,7 @@ natcore(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 			throwtype("Object prototype may only be an Object or null: " + showv(p));
 		if(o.t != Tobj)
 			return o;
-		if(!setprotoof(o.o, p.o))
+		if(!setprotoof(o.o, objornil(p)))
 			throwtype("Cyclic __proto__ value, or the object is not extensible");
 		return o;
 	NOPhasown =>
@@ -718,7 +718,7 @@ natcore(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 		p := arg(args, 0);
 		if(p.t != Tobj && p.t != Tnull || this.t != Tobj)
 			return undef;
-		if(!setprotoof(this.o, p.o))
+		if(!setprotoof(this.o, objornil(p)))
 			throwtype("Cyclic __proto__ value");
 		return undef;
 	NFunction or NGeneratorFunction or NAsyncFunction or NAsyncGeneratorFunction =>

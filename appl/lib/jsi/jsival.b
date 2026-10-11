@@ -302,6 +302,14 @@ numof(v: V): real
 	return v.n;
 }
 
+# a value's object, nil for anything else (null's o may be left over in the registers)
+objornil(v: V): ref Obj
+{
+	if(v.t == Tobj)
+		return v.o;
+	return nil;
+}
+
 iscallable(v: V): int
 {
 	return v.t == Tobj && v.o.fun != nil;

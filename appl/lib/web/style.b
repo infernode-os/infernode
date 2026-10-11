@@ -616,14 +616,33 @@ elcount(m: ref M, parent: int): int
 	return k;
 }
 
+# The matcher match() last made, and the document's gen then: a page's
+# querySelectorAll asks of every element in turn, and a matcher's caches
+# are as long as the document, so one made per element made a query's
+# time the square of the document's size (GitHub's home page: 711
+# queries, 18.7 s).  Any change to the document bumps its gen.
+lastm: ref M;
+lastgen := -1;
+defenv: ref Env;
+
 match(d: ref Doc, n: int, sel: ref Sel, env: ref Env, scope: int): int
 {
 	if(sys == nil)
 		init();
-	if(env == nil)
-		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
-	m := matcher(d, env);
+	if(env == nil) {
+		if(defenv == nil)
+			defenv = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+		env = defenv;
+	}
+	m := lastm;
+	if(m == nil || m.d != d || m.env != env || lastgen != d.gen || len m.index < d.n) {
+		m = matcher(d, env);
+		lastm = m;
+		lastgen = d.gen;
+	}
 	m.scope = scope;
+	m.host = m.sroot = 0;
+	m.flat = nil;
 	return matchsel(m, sel, n);
 }
 

@@ -429,6 +429,9 @@ arith(n: int)
 	Nint =>
 		rt = Tint;
 		ri = na[r];
+	Nnum =>
+		rt = Tnum;
+		rn = knum[na[r]];
 	Nlocal =>
 		s := na[r];
 		t := fr[s].t;

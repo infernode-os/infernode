@@ -702,16 +702,22 @@ natpromise(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 	NPtry =>
 		if(this.t != Tobj)
 			throwtype("Promise.try called on non-object");
-		cap := newcapof(this);
+		# a callback's promise of this constructor is returned as it is (PromiseResolve)
 		fnv := arg(args, 0);
+		rest: array of V;
+		if(len args > 1)
+			rest = args[1:];
+		r: V;
 		{
-			r := call1(fnv, undef, args[1:]);
-			call(cap.resolve, undef, array[] of {r});
+			r = call1(fnv, undef, rest);
 		} exception {
 		"JS" =>
-			call(cap.reject, undef, array[] of {thrown});
+			ex := thrown;
+			cap := newcapof(this);
+			call(cap.reject, undef, array[] of {ex});
+			return objv(cap.promise);
 		}
-		return objv(cap.promise);
+		return objv(promiseresolve(this.o, r));
 	NPPthen =>
 		p := thispromise(this);
 		c := speciesctor(p, promisector);
@@ -1562,8 +1568,18 @@ natiter(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 				return iterresult(undef, 1);
 			d.done = 1;
 			if(d.kind == HKconcat) {
-				if(h.inner.t == Tobj)
-					iterclose(h.inner, 0);
+				# the helper is running while its iterator closes: return again is refused
+				if(h.inner.t == Tobj) {
+					h.running = 1;
+					{
+						iterclose(h.inner, 0);
+					} exception {
+					"JS" =>
+						h.running = 0;
+						raise;
+					}
+					h.running = 0;
+				}
 				return iterresult(undef, 1);
 			}
 			if(d.kind == HKflatmap && h.inner.t == Tobj) {
@@ -1605,7 +1621,8 @@ natiter(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 			throwerr(ERange, showv(fnv) + " must be positive");
 		}
 		x = tointeger(V(Tnum, 0, x, nil, nil));
-		if(x < 0.0) {
+		# a limit is a safe integer, or infinity
+		if(x < 0.0 || x > 9007199254740991.0 && x != inf) {
 			iterclose(this, 1);
 			throwerr(ERange, showv(fnv) + " must be positive");
 		}

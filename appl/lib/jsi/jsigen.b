@@ -705,7 +705,7 @@ resolvingfns(p: ref Obj): (ref Obj, ref Obj)
 
 resolvecap(cap: ref Cap, v: V)
 {
-	if(cap.promise != nil && cap.resolve != nil) {
+	if(cap.promise != nil && cap.resolve != nil && cap.resolve.data != nil) {
 		pick d := cap.resolve.data {
 		Resolver =>
 			if(!d.done.v) {
@@ -720,7 +720,7 @@ resolvecap(cap: ref Cap, v: V)
 
 rejectcap(cap: ref Cap, v: V)
 {
-	if(cap.promise != nil && cap.reject != nil) {
+	if(cap.promise != nil && cap.reject != nil && cap.reject.data != nil) {
 		pick d := cap.reject.data {
 		Resolver =>
 			if(!d.done.v) {

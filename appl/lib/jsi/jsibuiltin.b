@@ -122,6 +122,7 @@ genfuncproto, asyncfuncproto, asyncgenfuncproto, genproto, asyncgenproto: ref Ob
 iterproto, asynciterproto, arrayiterproto, asyncfromsyncproto: ref Obj;
 promiseproto, regexpproto, dateproto, mapproto, setprotoobj, weakmapproto, weaksetproto: ref Obj;
 throwerfn, evalfn: ref Obj;
+notcallable: ref Obj;	# a capability's resolve or reject that was given, but is no function
 objectctor, functionctor, arrayctor: ref Obj;
 symregistry: ref Hmap;
 
@@ -234,6 +235,7 @@ realminit()
 	symregistry = newhmap();
 
 	throwerfn = mknative(Nthrower, "", 0);
+	notcallable = ref Obj;
 	preventext(throwerfn);
 	s := slotof(throwerfn.sh, a_length);
 	setattrs(throwerfn, s, 0);
@@ -919,9 +921,9 @@ natcore(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 			if(r.t != Tundef && r.t != Tobj || j.t != Tundef && j.t != Tobj) {
 				# not functions: kept so the caller can say so
 				if(r.t != Tundef && r.t != Tobj)
-					d.cap.resolve = throwerfn;
+					d.cap.resolve = notcallable;
 				if(j.t != Tundef && j.t != Tobj)
-					d.cap.reject = throwerfn;
+					d.cap.reject = notcallable;
 			}
 		}
 		return undef;

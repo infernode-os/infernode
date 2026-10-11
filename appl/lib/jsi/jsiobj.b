@@ -1526,6 +1526,17 @@ toindex(v: V): int
 	return int x;
 }
 
+# ToIndex, as a real: any safe integer
+toindexreal(v: V): real
+{
+	if(v.t == Tundef)
+		return 0.0;
+	x := tointeger(v);
+	if(x < 0.0 || x > 9007199254740991.0)
+		throwerr(ERange, "Invalid index");
+	return x;
+}
+
 lengthof(o: ref Obj): real
 {
 	if(o.cls == Carray)
@@ -1862,7 +1873,18 @@ protofromctor(nt: ref Obj, dflt: ref Obj): ref Obj
 	p := getv(nt, a_prototype);
 	if(p.t == Tobj)
 		return p.o;
-	# the realm of nt: one realm per engine instance, so ours
+	# the realm of nt (GetFunctionRealm): one realm per engine instance, so ours,
+	# unless it is a revoked proxy
+	for(f := nt; f != nil && f.cls == Cproxy; ) {
+		pick d := f.data {
+		Proxy =>
+			if(d.handler == nil)
+				throwtype("Cannot get the realm of a proxy that has been revoked");
+			f = d.target;
+		* =>
+			f = nil;
+		}
+	}
 	return dflt;
 }
 

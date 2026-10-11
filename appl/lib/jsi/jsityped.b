@@ -936,21 +936,22 @@ nattyped(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 	NArrayBuffer =>
 		if(nt == nil)
 			throwtype("Constructor ArrayBuffer requires 'new'");
-		l := toindex(arg(args, 0));
-		maxlen := -1;
+		# a length too large to allocate fails after the prototype is got
+		lr := toindexreal(arg(args, 0));
+		maxr := -1.0;
 		opts := arg(args, 1);
 		if(opts.t == Tobj) {
 			m := getv(opts.o, intern("maxByteLength"));
 			if(m.t != Tundef) {
-				maxlen = toindex(m);
-				if(l > maxlen)
+				maxr = toindexreal(m);
+				if(lr > maxr)
 					throwerr(ERange, "Invalid array buffer max length");
 			}
 		}
 		proto := protofromctor(nt, abufproto);
-		if(l > Bufmax || maxlen > Bufmax)
+		if(lr > real Bufmax || maxr > real Bufmax)
 			throwerr(ERange, "Array buffer allocation failed");
-		return objv(newbuf(l, maxlen, proto));
+		return objv(newbuf(int lr, int maxr, proto));
 	NABspecies =>
 		return this;
 	NABisview =>

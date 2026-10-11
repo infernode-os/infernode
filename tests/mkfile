@@ -77,6 +77,7 @@ TARG=\
 	jit_fault_test.dis\
 	jit_unload_helper.dis\
 	jit_unload_test.dis\
+	jit_retslice_test.dis\
 	jit_test.dis\
 	js_engine_test.dis\
 	json_test.dis\

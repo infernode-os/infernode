@@ -153,8 +153,10 @@ page1(h: ref Js->Host): string
 	e := <-h.events =>
 		pick ev := e {
 		Quit =>
-			if(jstime)
+			if(jstime) {
 				pageconsole(timereport());
+				pageconsole(memreport());
+			}
 			return nil;
 		Click =>
 			ev.reply <-= hook("event", array[] of {strv("click"), num(real ev.node), num(real ev.x), num(real ev.y), undef});
@@ -178,6 +180,50 @@ page1(h: ref Js->Host): string
 		hook("fetched", array[] of {num(real f.id), num(real f.status), strv(f.statustext),
 			strv(tojs(f.url)), strv(f.header), body, strnil(f.err)});
 	}
+}
+
+# what the realm holds, roughly (for /env/jstime): objects and their
+# slots and elements, strings, compiled code and its source
+memreport(): string
+{
+	nslots := big 0;
+	nelems := big 0;
+	live := 0;
+	for(i := 0; i < nobj; i++) {
+		if(i < len oslots && oslots[i] != nil) {
+			nslots += big len oslots[i];
+			live++;
+		}
+		if(i < len oelems && oelems[i] != nil)
+			nelems += big len oelems[i];
+	}
+	nchars := big 0;
+	nlive := 0;
+	for(i = 0; i < nstr && i < len sflat; i++)
+		if(sflat[i] != nil) {
+			nchars += big len sflat[i];
+			nlive++;
+		}
+	(ncode, nops, nconst, nsrc) := (0, big 0, big 0, big 0);
+	for(i = 0; i < len globalcodes; i++)
+		(ncode, nops, nconst) = codesize(globalcodes[i], ncode, nops, nconst);
+	for(i = 0; i < len globalcodes; i++)
+		if(globalcodes[i].whole != nil)
+			nsrc += big len globalcodes[i].whole;
+	return sys->sprint("memory: %d objects (%d with slots): %bd slots, %bd elements (%bd MB); %d strings, %bd characters; %d functions, %bd operations, %bd constants; %bd characters of source",
+		nobj, live, nslots, nelems, (nslots + nelems) * big 24 / big (1024*1024), nlive, nchars, ncode, nops, nconst, nsrc);
+}
+
+codesize(c: ref Code, n: int, ops, consts: big): (int, big, big)
+{
+	if(c == nil)
+		return (n, ops, consts);
+	n++;
+	ops += big len c.ops;
+	consts += big len c.consts;
+	for(i := 0; i < len c.funcs; i++)
+		(n, ops, consts) = codesize(c.funcs[i], n, ops, consts);
+	return (n, ops, consts);
 }
 
 timereport(): string
@@ -243,7 +289,7 @@ hook(name: string, args: array of V): int
 		# (as it goes: the last said is where the time went, though
 		# the page be closed in the middle of a task)
 		treported = tlastbusy;
-		r := timereport();
+		r := timereport() + "\n" + memreport();
 		if(pgh.profile > 0)
 			r += "\n" + profiled(25);
 		pageconsole(r);

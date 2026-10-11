@@ -21,6 +21,7 @@ Lazy: adt {
 	parent:	ref CFunc;	# the function it is in
 	extra:	int;
 	ismod:	int;
+	tab:	ref Jsparse->Lazytab;	# its source's functions let go, to pass over (Jsparse->parsebody)
 };
 
 # an object literal whose keys are all known: its objects share a shape

@@ -55,6 +55,9 @@ P: adt {
 	lroot:	int;		# the fdepth of the function whose body will be let go, or 0
 	lnames:	list of string;	# the names its body mentions
 	leval:	int;		# it has a direct eval: not let go
+	tab:	ref Lazytab;	# the functions let go in this source (Lazytab)
+	lheads:	list of list of string;	# lnames as each function inside the root began
+	lspec:	list of int;	# what of Sthis... escapes each function, innermost first
 };
 
 init()
@@ -79,7 +82,10 @@ parseeval0(src: string, ismod, strict, ctx: int, privnames: list of string, isev
 	if(sys == nil)
 		init();
 	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 0, 0, -1, -1, ismod, 0, 0, 0,
-		!iseval && len src >= lazymin, 0, nil, 0, nil, 0);
+		!iseval && len src >= lazymin, 0, nil, 0, nil, 0, nil, nil, nil);
+	if(p.lazy)
+		p.tab = ref Lazytab(src, array[1021] of list of ref Lazyfn);
+	lasttab = p.tab;
 	{
 		if(iseval && (ctx & Efield))
 			p.inclassfield = 1;
@@ -124,16 +130,95 @@ lazyenter(p: ref P, arrow: int)
 {
 	p.fdepth++;
 	p.fkinds = arrow :: p.fkinds;
+	p.lspec = 0 :: p.lspec;
 	if(p.lazy && p.lroot == 0 && p.fdepth >= 2) {
 		p.lroot = p.fdepth;
 		p.lnames = nil;
 		p.leval = 0;
 	}
+	if(p.lroot != 0)
+		p.lheads = p.lnames :: p.lheads;
 }
 
-# and ends: a lazy root's body is let go
+# Sthis... used here: it escapes each function out from the innermost
+# while they are arrows (a non-arrow function has its own)
+lazyspecial(p: ref P, bit: int)
+{
+	fk := p.fkinds;
+	r: list of int;
+	l := p.lspec;
+	for(; l != nil && fk != nil && hd fk; l = tl l) {
+		r = (hd l | bit) :: r;
+		fk = tl fk;
+	}
+	for(; r != nil; r = tl r)
+		l = hd r :: l;
+	p.lspec = l;
+}
+
+# A function's body ended at end: what it lets a later parse pass over.
+# Kept for the lazy root's own functions alone: the parse of the root's
+# body (when it is called) passes over them, and the parse of each of
+# theirs keeps theirs; a body is parsed twice at most, not once for each
+# function around it, and the names kept are each function's once.
+lazyrecord(p: ref P, bodypos, end, expr: int)
+{
+	if(p.tab == nil || p.lroot == 0 || p.lheads == nil || p.fdepth != p.lroot + 1)
+		return;
+	head := hd p.lheads;
+	names: list of string;
+	for(l := p.lnames; l != head && l != nil; l = tl l) {
+		if(hd l == "eval")
+			return;	# (its body is kept, not let go: parsed again)
+		names = hd l :: names;
+	}
+	e := ref Lazyfn(bodypos, end, dedup(names), hd p.lspec, p.strict, p.sawstrict, expr);
+	h := bodypos % len p.tab.t;
+	p.tab.t[h] = e :: p.tab.t[h];
+}
+
+lazyfound(p: ref P, bodypos: int): ref Lazyfn
+{
+	if(p.tab == nil || p.lroot == 0)
+		return nil;
+	for(l := p.tab.t[bodypos % len p.tab.t]; l != nil; l = tl l)
+		if((hd l).bodypos == bodypos)
+			return hd l;
+	return nil;
+}
+
+# pass over a body e records: its names and what it takes from around
+# it are noted as if it had been parsed, and the lexer goes on after it
+lazyskip(p: ref P, e: ref Lazyfn)
+{
+	for(l := e.names; l != nil; l = tl l)
+		lazyname(p, hd l);
+	if(e.specials != 0) {
+		lazyspecial(p, e.specials);
+		if(lazyouter(p)) {
+			if(e.specials & Sthis)
+				lazyname(p, "%this");
+			if(e.specials & Sarguments)
+				lazyname(p, "%arguments");
+			if(e.specials & Ssuper)
+				lazyname(p, "%super");
+			if(e.specials & Snewtarget)
+				lazyname(p, "%newtarget");
+		}
+	}
+	p.strict = e.strict;
+	p.sawstrict = e.sawstrict;
+	p.t.end = e.end;	# (the token next() takes for the previous one's end)
+	p.l.pos = e.end;
+	next(p);
+}
+
 lazyleave(p: ref P, f: ref Node.Func)
 {
+	if(p.lroot != 0 && p.lheads != nil)
+		p.lheads = tl p.lheads;
+	if(p.lspec != nil)
+		p.lspec = tl p.lspec;
 	if(p.lroot != 0 && p.lroot == p.fdepth) {
 		p.lroot = 0;
 		if(!p.leval) {
@@ -194,13 +279,22 @@ dedup(l: list of string): list of string
 	return r;
 }
 
-parsebody(src: string, pos, flags, ismod: int): (array of ref Node, string)
+lasttab: ref Lazytab;
+
+lazytab(): ref Lazytab
+{
+	return lasttab;
+}
+
+parsebody(src: string, pos, flags, ismod: int, tab: ref Lazytab): (array of ref Node, string)
 {
 	if(sys == nil)
 		init();
 	strict := (flags & Fstrict) != 0;
+	if(tab != nil && tab.src != src)
+		tab = nil;	# (another source's: of no use here)
 	p := ref P(Lex.new(src, ismod), nil, 0, ismod, strict || ismod, 0, 0, 1, 0, -1, -1, 0, 0, 0, 0,
-		len src >= lazymin, 1, (flags & Farrow) :: nil, 0, nil, 0);
+		len src >= lazymin, 1, (flags & Farrow) :: nil, 0, nil, 0, tab, nil, 0 :: nil);
 	p.gen = flags & Fgen;
 	p.async = flags & Fasync;
 	p.l.pos = pos;
@@ -387,6 +481,8 @@ ident(p: ref P, binding: int): ref Node
 	next(p);
 	if(p.lroot) {
 		lazyname(p, s);
+		if(s == "arguments")
+			lazyspecial(p, Sarguments);
 		if(s == "arguments" && lazyouter(p))
 			lazyname(p, "%arguments");
 	}
@@ -1061,9 +1157,16 @@ funcrest(p: ref P, at: int, id: ref Node, flags: int): ref Node
 		flags |= Fsimple;
 	bodypos := p.t.pos;
 	lazyenter(p, 0);
-	expect(p, "{");
-	body := stmtlist(p, 0, 1);
-	expect(p, "}");
+	body: array of ref Node;
+	skipped: ref Lazyfn;
+	if(is(p, "{") && (skipped = lazyfound(p, bodypos)) != nil)
+		lazyskip(p, skipped);
+	else {
+		expect(p, "{");
+		body = stmtlist(p, 0, 1);
+		expect(p, "}");
+		lazyrecord(p, bodypos, p.prevend, 0);
+	}
 	if(p.strict) {
 		flags |= Fstrict;
 		if(p.sawstrict && !simple)
@@ -1075,8 +1178,27 @@ funcrest(p: ref P, at: int, id: ref Node, flags: int): ref Node
 	end := p.prevend;
 	restore(p, saved);
 	f := ref Node.Func(at, end, id, params, body, flags, bodypos, nil);
+	if(skipped != nil)
+		lazyfn(f, skipped);
 	lazyleave(p, f);
 	return f;
+}
+
+# a function whose body was passed over: lazy, as a lazy root is
+lazyfn(f: ref Node.Func, e: ref Lazyfn)
+{
+	names := e.names;
+	if(e.specials & Sthis)
+		names = "%this" :: names;
+	if(e.specials & Sarguments)
+		names = "%arguments" :: names;
+	if(e.specials & Ssuper)
+		names = "%super" :: names;
+	if(e.specials & Snewtarget)
+		names = "%newtarget" :: names;
+	f.free = dedup(names);
+	f.body = nil;
+	f.flags |= Flazy;
 }
 
 # the context of an enclosing function, back (keeping the lexer's place)
@@ -1223,10 +1345,16 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 	body: array of ref Node;
 	bodypos := p.t.pos;
 	lazyenter(p, 1);
-	if(is(p, "{")) {
+	skipped := lazyfound(p, bodypos);
+	if(skipped != nil) {
+		lazyskip(p, skipped);
+		if(skipped.expr)
+			flags |= Fexpr;
+	} else if(is(p, "{")) {
 		next(p);
 		body = stmtlist(p, 0, 1);
 		expect(p, "}");
+		lazyrecord(p, bodypos, p.prevend, 0);
 	} else {
 		bpos := p.t.pos;
 		e := assign(p, noin);
@@ -1234,6 +1362,7 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 		body[0] = ref Node.Return(bpos, p.prevend, e);
 		flags |= Fexpr;
 		p.sawstrict = 0;
+		lazyrecord(p, bodypos, p.prevend, 1);
 	}
 	if(p.strict) {
 		flags |= Fstrict;
@@ -1245,6 +1374,8 @@ arrow(p: ref P, at: int, params: array of ref Node, async, noin: int): ref Node
 	end := p.prevend;
 	restore(p, saved);
 	f := ref Node.Func(at, end, nil, params, body, flags, bodypos, nil);
+	if(skipped != nil)
+		lazyfn(f, skipped);
 	lazyleave(p, f);
 	return f;
 }
@@ -2352,6 +2483,7 @@ newexpr(p: ref P): ref Node
 		if(!iskw(p, "target"))
 			fail(p, p.t.pos, "expected new.target");
 		next(p);
+		lazyspecial(p, Snewtarget);
 		if(lazyouter(p))
 			lazyname(p, "%newtarget");
 		return ref Node.Meta(pos, p.prevend, "new", "target");
@@ -2382,6 +2514,7 @@ superexpr(p: ref P): ref Node
 	next(p);
 	if(!is(p, "(") && !is(p, ".") && !is(p, "["))
 		fail(p, p.t.pos, "super must be called or have a property taken");
+	lazyspecial(p, Ssuper);
 	if(lazyouter(p))
 		lazyname(p, "%super");
 	return ref Node.Super(pos, p.prevend);
@@ -2472,6 +2605,7 @@ primary(p: ref P): ref Node
 			case t.s {
 			"this" =>
 				next(p);
+				lazyspecial(p, Sthis);
 				if(lazyouter(p))
 					lazyname(p, "%this");
 				return ref Node.This(pos, t.end);

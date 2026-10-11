@@ -197,8 +197,27 @@ Jsparse: module
 	parse:	fn(src: string, ismod, strict: int): (ref Node, string);
 	# a source this long or longer has its nested functions parsed lazily
 	setlazy:	fn(minlen: int);
-	# a lazy function's body (Func.bodypos in src; flags, its Func.flags)
-	parsebody:	fn(src: string, pos, flags, ismod: int): (array of ref Node, string);
+	# The functions a parse of a lazy source let go, by where each body
+	# begins: where it ends, the names it mentions, what of this,
+	# arguments, super and new.target it takes from around it, whether
+	# it made itself strict.  A later parse of the same source (a lazy
+	# function's body) passes over the bodies here rather than parsing
+	# them again.
+	Lazyfn: adt {
+		bodypos, end:	int;
+		names:	list of string;
+		specials:	int;	# Sthis... it takes from around it
+		strict, sawstrict, expr:	int;
+	};
+	Lazytab: adt {
+		src:	string;	# the source it is of
+		t:	array of list of ref Lazyfn;
+	};
+	Sthis, Sarguments, Ssuper, Snewtarget: con 1 << iota;
+	lazytab:	fn(): ref Lazytab;	# the last parse's (nil if it let none go)
+	# a lazy function's body (Func.bodypos in src; flags, its Func.flags),
+	# with the source's table (nil, none)
+	parsebody:	fn(src: string, pos, flags, ismod: int, tab: ref Lazytab): (array of ref Node, string);
 
 	# eval code: what its caller allows (Enewtarget...), and the private names around it
 	Enewtarget, Esuperprop, Esupercall, Efield: con 1 << iota;

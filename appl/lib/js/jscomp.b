@@ -1705,6 +1705,13 @@ finish(id: ref Node, flen, nformal: int): ref Code
 	c.flags = cs.flags;
 	c.src = cs.src;
 	c.allreg = cs.allreg;
+	# What made it is let go: the lazy functions in it keep this CFunc
+	# (Lazy.parent, for its flags), and through it the function's whole
+	# tree and every list emitting it built (GitHub's home page: 400 MB
+	# of 540 the realm's heap held)
+	cs.node = nil;
+	(cs.ops, cs.pos, cs.consts, cs.funcs, cs.handlers, cs.scopes, cs.decls) = (nil, nil, nil, nil, nil, nil, nil);
+	(cs.tmpls, cs.regexps, cs.lits, cs.labels, cs.finally) = (nil, nil, nil, nil, nil);
 	return c;
 }
 
@@ -1807,7 +1814,7 @@ lazystub(f: ref Node.Func, extra: int): ref Code
 	for(p := cs; p != nil; p = p.parent)
 		if(p.flags & Cmodule)
 			ismod = 1;
-	c.lazy = ref Lazy(f, fs, fnscope, cs, extra, ismod);
+	c.lazy = ref Lazy(f, fs, fnscope, cs, extra, ismod, curtab);
 	return c;
 }
 
@@ -1829,13 +1836,28 @@ lazycompile(c: ref Code)
 	nlazy++;
 }
 
+# the functions the parse of the source being compiled let go (Lazy.tab):
+# the parse just before, if it was of this source
+curtab: ref Jsparse->Lazytab;
+
+sourcetab(src: string)
+{
+	curtab = jsparse->lazytab();
+	if(curtab != nil && curtab.src != src)
+		curtab = nil;
+}
+
 lazycompile1(c: ref Code)
 {
 	l := c.lazy;
 	f := l.node;
-	(body, err) := jsparse->parsebody(c.whole, f.bodypos, f.flags, l.ismod);
-	if(err != nil)
+	savedtab := curtab;
+	curtab = l.tab;
+	(body, err) := jsparse->parsebody(c.whole, f.bodypos, f.flags, l.ismod, l.tab);
+	if(err != nil) {
+		curtab = savedtab;
 		throwerr(SyntaxError, err);
+	}
 	nf := ref Node.Func(f.pos, f.end, f.id, f.params, body, f.flags & ~Jsparse->Flazy, f.bodypos, nil);
 	savedmap := scopemap;
 	scopemap = array[(f.end - f.pos) / 16 + 101] of list of (int, ref CScope);
@@ -1870,9 +1892,11 @@ lazycompile1(c: ref Code)
 	} exception e {
 	"*" =>
 		scopemap = savedmap;
+		curtab = savedtab;
 		raise e;
 	}
 	scopemap = savedmap;
+	curtab = savedtab;
 }
 
 # the function declarations of a body, made at its start
@@ -2002,6 +2026,7 @@ listawait(a: array of ref Node): int
 # (Omodinit, where the loader links its imports), then its body
 compilemodule(prog: ref Node.Program, src: string, modid: int): ref Code
 {
+	sourcetab(src);
 	scopemap = array[len src / 16 + 1021] of list of (int, ref CScope);
 	if(nfid < 1)
 		nfid = 1;	# (never reset: a lazy function compiled later must not share an id)
@@ -2124,6 +2149,7 @@ exportstmt(x: ref Node.Export)
 # the code for a script; evalcode: direct eval's (strict: and in strict code)
 compilescript(prog: ref Node.Program, src: string, iseval, evalstrict: int): ref Code
 {
+	sourcetab(src);
 	scopemap = array[len src / 16 + 1021] of list of (int, ref CScope);
 	if(nfid < 1)
 		nfid = 1;	# (never reset: a lazy function compiled later must not share an id)

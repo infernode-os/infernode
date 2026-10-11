@@ -767,6 +767,34 @@ Compiling a 430 KB bundle takes 100 ms; parsing it 200 ms.  Lazy
 compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
 980 MB to 3.7 s and 252 MB, and the whole page from 1.4 GB to 387 MB.
 
+### Pages: where the time went (2026-10-11)
+
+Timing whole pages (`jspage -q`, with scripts off and on; `/env/jstime`
+has a page's realm say where its time went, `/env/pagetime` Charon's
+phases) showed most of a slow page's time outside the engine, in the
+browser's handling of what scripts do.  In order of what they cost:
+
+| Fix | Measured |
+|---|---|
+| `style->match` made a matcher, with caches the length of the document, for every element a querySelectorAll asked of | GitHub: 711 queries, 18.7 s → 911 queries, 160 ms |
+| A box laid out again in one layout with the same inputs is not laid out again (flex items were laid out several times, multiplied by nesting) | GitHub repository page layout 8.9 s → 2.2 s; 90 pages render to the same pixels |
+| getComputedStyle computes one element from its ancestors, not the document | Apple: 155 calls, 8.5 s → 123 ms |
+| A script's changes restyle the subtrees they can affect (`Doc.changed`, `style->restyle`), checked element by element against a whole restyle (`/env/stylecheck`) on nine sites | Apple's 34 restylings 8.5 s → 3.5 s |
+| Rule index takes only an element's own keys and indexes attribute selectors; compounds' tag, id and class bits test an ancestor before it is tried; custom properties in one table | GitHub's styling 870 ms → 315 ms |
+| A module's imports fetched together, scanned for from its source as it comes | GitHub's 80 module scripts no longer fetched one at a time inside a task |
+| Lazy compilation from 16 KB (was 512 KB); a lazily compiled function passes over its own functions' bodies (parsed once already) rather than parsing them again | Lazada's 7,400 lazy compiles 3.1 s → 1.3 s |
+| A realm frees itself when it ends: compiled-tier state, lazy functions' compile records and page realms' loaders were cycles only the collector freed | 3.4 MB per compiling realm kept until the emulator idled |
+| Emulator: a slice ended on every call between modules after a punted return (stale `R.t`, PR #831); `destroy` abandoned deep structures to the collector (PR #829); `up` a thread-local variable | 2.6 s → 0.6 s on one benchmark; per-realm leak gone; 8% on allocation-heavy code |
+
+GitHub's home page was shown in 44–69 s with scripts on, its scripts
+busy for 23.5 s; now 12–14 s and 2–5 s (the rest is the network and
+Charon's own layout).  What remains, largest first: geometry queries
+after a change still lay the page out again whole (no incremental
+layout); parsing big bundles (1–2.5 s on BBC, YouTube, NASA); running
+code that runs once (the compiled tier is for loops); and a realm's
+heap, 300–500 MB on the heaviest pages, mostly compile-time structures
+and many small allocations.
+
 ### Toolchain bugs found on the way (reported, not fixed here)
 
 - `libmath/dtoa.c` (every Limbo string-to-real conversion) does not

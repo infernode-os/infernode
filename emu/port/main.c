@@ -33,12 +33,15 @@ char *cputype;
 static void
 setroot(char *p)
 {
-	if(strlen(p) >= sizeof(rootdir)){
+	int n;
+
+	n = strlen(p);
+	if(n >= sizeof(rootdir)){
 		fprint(2, "emu: root path is %d bytes, more than %d: %s\n",
-			(int)strlen(p), (int)sizeof(rootdir)-1, p);
+			n, (int)sizeof(rootdir)-1, p);
 		exits("root");
 	}
-	strcpy(rootdir, p);
+	strecpy(rootdir, rootdir+sizeof(rootdir), p);	/* bounded, though n fits */
 }
 
 static void

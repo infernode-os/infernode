@@ -453,7 +453,27 @@ natasync(g: ref Gen): V
 }
 
 # Array.fromAsync
+# what it makes and holds across its awaits (the array, the iterator and its
+# next, a source made an object) is pushed on the coroutine's value stack, a
+# root while it is parked
 fromasync(this: V, args: array of V): V
+{
+	base := vsp;
+	r: V;
+	{
+		r = fromasync1(this, args);
+	} exception {
+	"*" =>
+		while(vsp > base)
+			pop();
+		raise;
+	}
+	while(vsp > base)
+		pop();
+	return r;
+}
+
+fromasync1(this: V, args: array of V): V
 {
 	items := arg(args, 0);
 	mapfn := arg(args, 1);
@@ -471,6 +491,7 @@ fromasync(this: V, args: array of V): V
 			a = construct(this.o, nil, this.o).o;
 		else
 			a = newarray(0);
+		pushobj(a);
 		it: V;
 		if(am != nil) {
 			it = call(am, items, nil);
@@ -482,7 +503,9 @@ fromasync(this: V, args: array of V): V
 				throwtype("Result of the Symbol.iterator method is not an object");
 			it = objv(asyncfromsync(sit));
 		}
+		push(it);
 		next := getvalue(it, a_next);
+		push(next);
 		k := 0.0;
 		for(;;) {
 			r := await(call1(next, it, nil));
@@ -512,12 +535,14 @@ fromasync(this: V, args: array of V): V
 		}
 	}
 	src := toobj(items);
+	pushobj(src);
 	n := lengthof(src);
 	a: ref Obj;
 	if(usector)
 		a = construct(this.o, array[] of {numv(n)}, this.o).o;
 	else
 		a = arraycreate(n);
+	pushobj(a);
 	for(k := 0.0; k < n; k += 1.0) {
 		v := await(gidx(src, k, objv(src)));
 		if(mapfn.t != Tundef)

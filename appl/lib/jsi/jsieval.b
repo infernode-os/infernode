@@ -258,7 +258,7 @@ ev(n: int)
 		if(rt != Tobj || ro.fun == nil) {
 			if(nd[n] & Fopt && (rt == Tundef || rt == Tnull))
 				raise "JSopt";
-			notfunc(na[n]);
+			notfunc(n);
 		}
 		callf(ro, Tundef, nil, nb[n], nc[n], nd[n]);
 	Ncallm =>
@@ -1969,10 +1969,20 @@ dyndeclvar(a: int)
 		if(e.with)
 			continue;
 		if(e.sci != nil && e.sci.isfunc) {
+			# a var may not be declared over a function's top-level lexical name, nor
+			# (from its parameters) over a parameter when they have expressions
 			names := e.sci.names;
 			for(i := 0; i < len names; i++)
-				if(names[i] == a)
+				if(names[i] == a) {
+					case e.sci.kinds[i] {
+					Blet or Bconst or Bclass =>
+						throwerr(ESyntax, "Identifier '" + atomstr[a] + "' has already been declared");
+					Bparam =>
+						if(e.sci.isfunc == 2)
+							throwerr(ESyntax, "Identifier '" + atomstr[a] + "' has already been declared");
+					}
 					return;
+				}
 			if(e.sci.evalvars) {
 				if(!hasown(e.obj, a))
 					addprop(e.obj, a, Awrite|Aenum|Aconf, undef);
@@ -2584,9 +2594,16 @@ calleename(n: int): string
 	return "expression";
 }
 
+# a call of what is not a function: the arguments are evaluated before it is refused
 notfunc(n: int)
 {
-	throwtype(calleename(n) + " is not a function");
+	argsthrow(nb[n], nc[n], nd[n], calleename(na[n]) + " is not a function");
+}
+
+argsthrow(ks, k, flags: int, msg: string)
+{
+	evargs(ks, k, flags);
+	throwtype(msg);
 }
 
 # o.m(args): the method found through the cache when it can be
@@ -2613,12 +2630,12 @@ callm(n: int)
 			if(rt != Tobj || ro.fun == nil) {
 				if(ne[n] & Fopt && (rt == Tundef || rt == Tnull))
 					raise "JSopt";
-				throwtype(calleename(na[n]) + "." + atomstr[nb[n]] + " is not a function");
+				argsthrow(nc[n], nd[n], ne[n], calleename(na[n]) + "." + atomstr[nb[n]] + " is not a function");
 			}
 			f = ro;
 		}
 		if(f.fun == nil)
-			throwtype(calleename(na[n]) + "." + atomstr[nb[n]] + " is not a function");
+			argsthrow(nc[n], nd[n], ne[n], calleename(na[n]) + "." + atomstr[nb[n]] + " is not a function");
 		callf(f, Tobj, o, nc[n], nd[n], ne[n]);
 		return;
 	}
@@ -2629,7 +2646,7 @@ callm(n: int)
 	if(f.t != Tobj || f.o.fun == nil) {
 		if(ne[n] & Fopt && (f.t == Tundef || f.t == Tnull))
 			raise "JSopt";
-		throwtype(showv(this) + "." + atomstr[nb[n]] + " is not a function");
+		argsthrow(nc[n], nd[n], ne[n], showv(this) + "." + atomstr[nb[n]] + " is not a function");
 	}
 	callval(f, this, nc[n], nd[n], ne[n]);
 }
@@ -2650,7 +2667,7 @@ callelem(n: int)
 	if(f.t != Tobj || f.o.fun == nil) {
 		if(ne[n] & Fopt && (f.t == Tundef || f.t == Tnull))
 			raise "JSopt";
-		throwtype(showv(this) + "[" + keyname(k) + "] is not a function");
+		argsthrow(nc[n], nd[n], ne[n], showv(this) + "[" + keyname(k) + "] is not a function");
 	}
 	callval(f, this, nc[n], nd[n], ne[n]);
 }
@@ -2660,7 +2677,7 @@ callval(f, this: V, ks, k, flags: int)
 	if(f.t != Tobj || f.o.fun == nil) {
 		if(flags & Fopt && (f.t == Tundef || f.t == Tnull))
 			raise "JSopt";
-		throwtype(showv(f) + " is not a function");
+		argsthrow(ks, k, flags, showv(f) + " is not a function");
 	}
 	if(this.t == Tobj)
 		callf(f.o, Tobj, this.o, ks, k, flags);
@@ -3465,37 +3482,29 @@ bindarriter(p, from: int, it: V)
 			if(op[c] == Prest) {
 				r := newarray(0);
 				while(!done) {
+					# a step that throws leaves the iterator done: it is not closed
+					done = 1;
 					x := call1(next, it, nil);
-					if(x.t != Tobj) {
-						done = 1;
+					if(x.t != Tobj)
 						throwtype("Iterator result is not an object");
-					}
-					if(tobool(getv(x.o, a_done))) {
-						done = 1;
+					if(tobool(getv(x.o, a_done)))
 						break;
-					}
 					apush(r, getv(x.o, a_value));
+					done = 0;
 				}
 				bindtarget(na[c], objv(r), pre);
 				return;
 			}
 			x := undef;
 			if(!done) {
+				# a step that throws leaves the iterator done: it is not closed
+				done = 1;
 				r := call1(next, it, nil);
-				if(r.t != Tobj) {
-					done = 1;
+				if(r.t != Tobj)
 					throwtype("Iterator result is not an object");
-				}
-				if(tobool(getv(r.o, a_done)))
-					done = 1;
-				else {
-					{
-						x = getv(r.o, a_value);
-					} exception {
-					"JS" =>
-						done = 1;
-						raise;
-					}
+				if(!tobool(getv(r.o, a_done))) {
+					x = getv(r.o, a_value);
+					done = 0;
 				}
 			}
 			bindtarget(c, x, pre);
@@ -3506,6 +3515,13 @@ bindarriter(p, from: int, it: V)
 		if(!done)
 			iterclose(it, 1);
 		throwv(ex);
+	"JSkill" =>
+		raise;
+	"JS*" =>
+		# a generator's return: the iterator is closed, and an error closing it is thrown
+		if(!done)
+			iterclose(it, 0);
+		raise;
 	}
 	if(!done)
 		iterclose(it, 0);
@@ -3703,10 +3719,9 @@ mkclass(n: int)
 				fld.meth = mf;
 			}
 			pname = pname;
-			if(m.static) {
-				addprivmethod(f, fld);
-				statics = mergepriv(statics, fld);
-			} else
+			if(m.static)
+				statics = mergepriv(statics, fld);	# added once a getter has met its setter
+			else
 				fields = mergepriv(fields, fld);
 			continue;
 		}
@@ -3748,7 +3763,10 @@ mkclass(n: int)
 		ev(inf.nameset);
 		pop();
 	}
-	# static fields and blocks, in order, with this the class
+	# the static private methods, then the static fields and blocks, in order, with this the class
+	for(l = revfields(statics); l != nil; l = tl l)
+		if((hd l).ismethod)
+			addprivmethod(f, hd l);
 	for(l = revfields(statics); l != nil; l = tl l) {
 		fld := hd l;
 		if(fld.ismethod)
@@ -3809,6 +3827,8 @@ initfields(f: ref Obj, o: ref Obj)
 definefield(o: ref Obj, fld: ref Field, v: V)
 {
 	if(fld.priv >= 0) {
+		if(v.t == Tobj && v.o.fun != nil && isanonfield(fld))
+			setfnname(v.o, fld.priv, nil);
 		privadd(o, fld.priv, v);
 		return;
 	}
@@ -3817,9 +3837,10 @@ definefield(o: ref Obj, fld: ref Field, v: V)
 	createdatathrow(o, fld.key, v);
 }
 
-isanonfield(nil: ref Field): int
+# whether the field's initialiser is an anonymous function or class, to be named after it
+isanonfield(fld: ref Field): int
 {
-	return 0;
+	return fld.meth != nil && fld.meth.fun != nil && fld.meth.fun.code != nil && (fld.meth.fun.code.flags & Canonfield);
 }
 
 # ---- private names: properties keyed by a private symbol, out of sight of everything else ----
@@ -3876,15 +3897,15 @@ privadd(o: ref Obj, k: int, v: V)
 {
 	if(slotof(o.sh, k) >= 0)
 		throwtype("Cannot initialize " + atomstr[k] + " twice on the same object");
-	if(o.cls == Cproxy || !privok(o)) {
-		;
-	}
+	privok(o);
 	privaddslot(o, k, Awrite, v);
 }
 
-privok(nil: ref Obj): int
+# a non-extensible object cannot gain private elements (a proxy is not asked)
+privok(o: ref Obj)
 {
-	return 1;
+	if(o.cls != Cproxy && (o.flags & Fext) == 0)
+		throwtype("Cannot add private elements to a non-extensible object");
 }
 
 # a private slot: added even to a non-extensible object
@@ -3902,6 +3923,7 @@ addprivmethod(o: ref Obj, fld: ref Field)
 {
 	if(slotof(o.sh, fld.priv) >= 0)
 		throwtype("Cannot initialize private methods of class twice on the same object");
+	privok(o);
 	if(fld.meth != nil)
 		privaddslot(o, fld.priv, 0, objv(fld.meth));
 	else

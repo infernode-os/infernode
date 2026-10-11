@@ -64,7 +64,7 @@ Fspr, Fopt, Fobjopt: con 1 << iota;
 
 # Code flags
 Cstrict, Carrow, Cgen, Casync, Cmethod, Cctor, Cderived, Cclassctor, Csimple, Cgetter,
-Csetter, Cstatic, Cfield, Cscript, Ceval, Cmodule, Cdyn, Cnoproto: con 1 << iota;
+Csetter, Cstatic, Cfield, Cscript, Ceval, Cmodule, Cdyn, Cnoproto, Canonfield: con 1 << iota;
 
 Code: adt {
 	name:	string;
@@ -108,7 +108,7 @@ Sci: adt {
 	names:	array of int;	# atoms, by env slot
 	kinds:	array of int;
 	evalvars:	int;	# sloppy eval may add variables here (an object in Env.obj)
-	isfunc:	int;
+	isfunc:	int;	# a variable scope: 2 for the parameters of a function with expressions in them
 };
 
 Info: adt {
@@ -200,6 +200,7 @@ Scope: adt {
 	closed:	int;
 	sci:	ref Sci;
 	modid:	int;	# a module's top scope: its module's id + 1
+	cplxparams:	int;	# a function's scope, its parameters having expressions
 };
 
 Fs: adt {
@@ -536,7 +537,10 @@ placebinds(s: ref Scope)
 			}
 		}
 		# a variable scope: a function's, or strict eval code's (sloppy eval's vars are its caller's)
-		s.sci = ref Sci(names, kinds, s.evalvars, s.kind == Sfunc || s.kind == Seval && s.fs.strict);
+		isfunc := s.kind == Sfunc || s.kind == Seval && s.fs.strict;
+		if(isfunc && s.cplxparams)
+			isfunc = 2;
+		s.sci = ref Sci(names, kinds, s.evalvars, isfunc);
 	}
 	for(l = binds; l != nil; l = tl l) {
 		b := hd l;
@@ -1348,7 +1352,7 @@ stmt2(n: ref Node): int
 					return stmt(x.decl);
 				Class =>
 					if(d.id == nil)
-						return varref("*default*", Minit, classexpr(d));
+						return varref("*default*", Minit, classexpr1(d, "default"));
 					return stmt(x.decl);
 				* =>
 					v := namedexpr(x.decl, "default");
@@ -1984,7 +1988,14 @@ expr(n: ref Node): int
 	Update =>
 		return update(x);
 	Binary =>
-		return binary(x.op, expr(x.l), expr(x.r), x);
+		if(x.op == "in") {
+			pick p := x.l {
+			Private =>
+				return e2(Nprivin, privref(p.name), expr(x.r));
+			}
+		}
+		l := expr(x.l);
+		return binary(x.op, l, expr(x.r), x);
 	Logical =>
 		o := Nand;
 		case x.op {
@@ -2117,14 +2128,8 @@ binop(s: string): int
 	return -1;
 }
 
-binary(o: string, l, r: int, x: ref Node.Binary): int
+binary(o: string, l, r: int, nil: ref Node.Binary): int
 {
-	if(o == "in") {
-		pick p := x.l {
-		Private =>
-			return e2(Nprivin, privref(p.name), r);
-		}
-	}
 	return e2(binop(o), l, r);
 }
 
@@ -2293,6 +2298,9 @@ assign(x: ref Node.Assign): int
 	if(x.op == "=") {
 		pick tt := t {
 		Ident =>
+			# (f) = function(){} does not name the function: (f) is not an identifier reference
+			if(t != x.target)
+				return varref(tt.name, Mset, expr(x.value));
 			return varref(tt.name, Mset, namedexpr(x.value, tt.name));
 		Member =>
 			strict := cu.fs.strict;
@@ -2867,18 +2875,22 @@ funcbody(f: ref Node.Func, code: ref Code)
 				}
 		}
 	code.length = length;
-	# var names, then the body's lexical names (a separate scope in the spec; one here)
-	hoistvars(f.body, s, 1);
-	if(fs.args != nil && fs.args.kind != Bargs)
-		fs.args = nil;	# a parameter or var named arguments shadows it
+	if(simple) {
+		# var names, then the body's lexical names (a separate scope in the spec; one here)
+		hoistvars(f.body, s, 1);
+		if(fs.args != nil && fs.args.kind != Bargs)
+			fs.args = nil;	# a parameter or var named arguments shadows it
+	}
 	if(fs.args != nil) {
 		for(l := s.binds; l != nil; l = tl l)
 			if((hd l).name == "arguments" && hd l != fs.args)
 				fs.args = nil;
 	}
-	lexdecls(f.body, s, 1);
-	if(fs.args != nil && fs.args.kind != Bargs)
-		fs.args = nil;
+	if(simple) {
+		lexdecls(f.body, s, 1);
+		if(fs.args != nil && fs.args.kind != Bargs)
+			fs.args = nil;
+	}
 	# the parameters' initialisation
 	pinit: list of int;
 	np := 0;
@@ -2899,8 +2911,44 @@ funcbody(f: ref Node.Func, code: ref Code)
 		}
 		fs.inparams = 0;
 	}
+	# with expressions in the parameters, the body's names are in a scope of their own,
+	# which a closure in the parameters cannot see (§10.2.11 step 28); a var named as a
+	# parameter (or arguments) starts with its value
+	bs := s;
+	copies: list of int;
+	ncopy := 0;
+	if(!simple) {
+		s.cplxparams = 1;
+		bs = openscope(Sfunc);
+		fs.sc = bs;
+		hoistvars(f.body, bs, 1);
+		lexdecls(f.body, bs, 1);
+		curpos = f.bodypos;
+		for(l := bs.binds; l != nil; l = tl l) {
+			b := hd l;
+			if(b.kind != Bvar)
+				continue;
+			for(pl := s.binds; pl != nil; pl = tl pl) {
+				pb := hd pl;
+				if(pb.name == b.name && (pb.kind == Bparam || pb.kind == Bargs && pb == fs.args)) {
+					pb.used = 1;
+					rd := emit(Nvar, pb.id, bs.id, Mget, 0, addstr(b.name));
+					copies = emit(Nvar, b.id, bs.id, Minit, rd, addstr(b.name)) :: copies;
+					ncopy++;
+				}
+			}
+		}
+	}
 	fnodes := hoistfuncs(f.body);
 	body := usingwrap(f.body, stmts(f.body));
+	if(bs != s) {
+		if(ncopy > 0)
+			body = e2(Nseqs, addkids(body :: copies, ncopy + 1), ncopy + 1);
+		closescope(bs);
+		body = scoped(bs, body, fnodes, f.bodypos);
+		fnodes = nil;
+		fs.sc = s;
+	}
 	closescope(s);
 	code.nframe = fs.nframe;
 	# the prologue: the env, what goes in it, arguments, then the parameters and the functions
@@ -3134,8 +3182,9 @@ classexpr1(c: ref Node.Class, name: string): int
 			} else {
 				pick f := m.value {
 				Func =>
+					# an accessor is named when it is defined ("get id")
 					nmx: string;
-					if(mb.key >= 0)
+					if(mb.key >= 0 && m.kind != Jsparse->Pget && m.kind != Jsparse->Pset)
 						nmx = atomstr[mb.key];
 					methodstart = memberstart(m);
 					mb.val = funcexpr1(f, nmx, Cmethod, inf);
@@ -3168,6 +3217,11 @@ classexpr1(c: ref Node.Class, name: string): int
 			ent = e3(Nsetenv, 0, b.slot, mk) :: ent;
 		else
 			ent = e2(Nsetlocal, b.slot, mk) :: ent;
+		ne++;
+	}
+	# the class's own name is in its TDZ until the class is made (class x extends x)
+	if(inner != nil && !inner.captured) {
+		ent = e2(Nholes, addkids(inner.slot :: nil, 1), 1) :: ent;
 		ne++;
 	}
 	if(ne > 0)
@@ -3218,14 +3272,12 @@ compilefieldfn(f: ref Node.Func, name: string, isfield: int): int
 	code.send = f.end;
 	code.fields = -1;
 	ci := addcode(code);
-	# an anonymous function in a field's initialiser is named after the field
+	# an anonymous function in a field's initialiser is named after the field (definefield)
 	if(isfield && len f.body == 1) {
 		pick r := f.body[0] {
 		Return =>
-			if(r.arg != nil && isanonfn(r.arg) && name != nil) {
-				fs := ref Fs;
-				;
-			}
+			if(r.arg != nil && isanonfn(r.arg))
+				code.flags |= Canonfield;
 		}
 	}
 	funcbody(f, code);

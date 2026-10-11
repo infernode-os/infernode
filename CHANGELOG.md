@@ -134,6 +134,13 @@ All notable changes to InferNode are documented in this file.
   never moves now chooses New, as rio's does; any other button cancels.
   `tests/host/wm_test.sh` drives the menu, the frame and focus and
   checks where they leave the windows.
+- **A theme switch reaches wm/wm's windows.** Xenith's Theme (or
+  Settings, or a write to `/lib/lucifer/theme/current`) changed only
+  the program that made it under a standalone wm/wm: Lucifer tells the
+  windows it hosts, but wm/wm at the top watched nothing. It now
+  watches the theme and passes `retheme` to every window, hidden ones
+  too, and its menu (and every `menuhit` menu) takes the theme's menu
+  colours as it opens instead of fixed greens.
 - **One job per mouse button, as in Plan 9.** wm/page's operations
   (paging, zoom, fit, turning, find, go to, write) move to button 2, and
   button 3 lists the pages and files to choose from, as Plan 9's page

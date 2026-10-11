@@ -138,6 +138,15 @@ scroll bar, mouse loops and keys.
   the next one the way the view last moved (painted ahead); others are
   dropped as they leave. A view laid out again (a resize, a new fit)
   keeps the sheet at its top and its place in it.
+- **Band**: a flowing document (Markdown, HTML, a page browsed) is
+  painted off screen into a band of the view and half a view above and
+  below. A scroll within it is a copy; one past it moves the band,
+  keeping what it held and painting only the strip exposed. Painting a
+  web page is laying it out again box by box, so this is what makes it
+  scroll as smoothly as a PDF. The band is dropped when the page
+  changes (laid out again, an update, a click or key it took). The
+  view is never filled before its sheets are drawn: only the gaps
+  round them are, so it is never shown blank mid-paint.
 - **Text on the drawing**, where the engine gives runs: button 1
   clicked without moving selects the word under the pointer (Snarf
   copies it); button 2 executes it; button 3 looks at it, or follows

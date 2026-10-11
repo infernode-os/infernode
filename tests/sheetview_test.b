@@ -294,6 +294,85 @@ testDirection(t: ref T)
 	v.close();
 }
 
+# A long web page (an HTML file), drawn on an image 500 by 400
+htmlview(t: ref T): ref View
+{
+	if(display == nil)
+		t.skip("no display");
+	page := "<html><body>";
+	for(i := 0; i < 60; i++)
+		page += sprint("<h2>Part %d</h2><p>Some words in part %d, enough of them to wrap onto a second line in a view five hundred wide.</p>", i, i);
+	page += "</body></html>";
+	c := chan[16] of ref Ev;
+	v := sheetview->new(docreg->kindof("html"), "long.html", c);
+	v.dst = display.newimage(Rect((0, 0), (500, 400)), Draw->RGB24, 0, Draw->Black);
+	v.r = v.dst.r;
+	v.bg = display.color(int 16r808080FF);
+	v.style = ref Docengine->Style(0, nil, nil, nil, nil, nil, nil);
+	v.open(array of byte page, "long.html");
+	if(!until(v, "opened"))
+		t.fatal("not opened: " + v.err);
+	return v;
+}
+
+# Whether r of a and of b are the same pixels
+same(a, b: ref Image, r: Rect): int
+{
+	ba := array[r.dx() * 3] of byte;
+	bb := array[r.dx() * 3] of byte;
+	for(y := r.min.y; y < r.max.y; y++){
+		a.readpixels(Rect((r.min.x, y), (r.max.x, y+1)), ba);
+		b.readpixels(Rect((r.min.x, y), (r.max.x, y+1)), bb);
+		for(i := 0; i < len ba; i++)
+			if(ba[i] != bb[i])
+				return 0;
+	}
+	return 1;
+}
+
+# What the view shows of its one sheet, painted by the engine at once
+direct(v: ref View): ref Image
+{
+	im := display.newimage(v.dst.r, Draw->RGB24, 0, Draw->White);
+	sr := v.sheetrect(0);
+	(vis, nil) := sr.clip(v.r);
+	v.eng->paint(v.h, 0, 100, im, vis, vis.min.sub(sr.min));
+	return im;
+}
+
+# A flowing document is painted off the image, into a band round the
+# view: a scroll within it paints nothing, one past it paints only
+# what it exposes, and what is shown is what the engine paints
+testBand(t: ref T)
+{
+	v := htmlview(t);
+	v.draw();
+	b := v.band;
+	t.assert(b != nil, "a band painted");
+	if(b == nil)
+		t.fatal("no band");
+	t.assert(v.bandr.min.y <= 0 && v.bandr.max.y >= 400 - Sheetview->GAP, "it holds the view");
+	v.scroll(40);
+	v.draw();
+	t.assert(v.band == b, "a scroll within it paints nothing");
+	sr := v.sheetrect(0);
+	(vis, nil) := sr.clip(v.r);
+	t.assert(same(v.dst, direct(v), vis), "what is shown is the page");
+	old := v.bandr;
+	for(i := 0; i < 8; i++){
+		v.scroll(60);
+		v.draw();
+	}
+	t.assert(v.band != b, "a scroll past it moves it");
+	t.assert(v.bandr.min.y > old.min.y && v.bandr.min.y < old.max.y, sys->sprint("keeping what it held (%d..%d, was %d..%d)", v.bandr.min.y, v.bandr.max.y, old.min.y, old.max.y));
+	sr = v.sheetrect(0);
+	(vis, nil) = sr.clip(v.r);
+	t.assert(same(v.dst, direct(v), vis), "what is shown after it moved is the page");
+	v.result("paint");
+	t.assert(v.band == nil, "a page changed by a click or key is painted again");
+	v.close();
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -325,6 +404,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Turn", testTurn);
 	run("KeepPlace", testKeepPlace);
 	run("Direction", testDirection);
+	run("Band", testBand);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

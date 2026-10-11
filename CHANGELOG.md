@@ -6,6 +6,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Documents
 
+- **HTML scrolls as smoothly as a PDF.** A flowing document is painted
+  off screen into a band round the view; a scroll copies from it and
+  paints only the strip it exposes, where a web page used to be laid
+  out again, box by box, at every step. The view is no longer filled
+  with its background before a sheet is painted, which showed it blank
+  mid-paint. A scroll step of a 60 KB page at 1400x1000 went from
+  8-13 ms to about 1 ms; Markdown from 3 ms to under 1.
+
 - **wm/page shows documents**: PDFs, images, Markdown, Mermaid and
   HTML in a window of their own, through the view Xenith uses: several
   files read as one, standard input, pages turned, find, go to a page,

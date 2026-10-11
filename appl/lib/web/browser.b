@@ -2100,12 +2100,27 @@ hcomputed(id, n: int, prop: string): string
 	r := realmbyid(id);
 	if(r == nil)
 		return "";
-	styled(r);
-	c := r.pg.computed;
-	if(c == nil || n <= 0 || n >= len c.st || c.st[n] == nil)
+	d := r.pg.doc;
+	if(n <= 0 || n >= d.n)
+		return "";
+	st: ref Style->St;
+	if(d.gen == r.styled || d.gen == r.laidout) {
+		c := r.pg.computed;
+		if(c != nil && n < len c.st)
+			st = c.st[n];
+	} else {
+		# changed since: this element's alone, not the document's
+		{
+			st = r.pg.stylefor(n);
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: styling after a script: %s\n", e);
+		}
+	}
+	if(st == nil)
 		return "";
 	if(prefix(prop, "--"))
-		return css->tostring(c.st[n].vars.get(prop));
+		return css->tostring(st.vars.get(prop));
 	# a side's margin, padding or border width: one of the dump's four
 	# (top, right, bottom, left)
 	short := prop;
@@ -2120,7 +2135,7 @@ hcomputed(id, n: int, prop: string): string
 				}
 		}
 	}
-	(nil, lines) := sys->tokenize(style->dump(c.st[n]), "\n");
+	(nil, lines) := sys->tokenize(style->dump(st), "\n");
 	for(; lines != nil; lines = tl lines) {
 		ln := hd lines;
 		if(prefix(ln, short + " ")) {

@@ -35,6 +35,7 @@ Page: module
 		relayout:	fn(p: self ref Pg, width, height: int);
 		update:	fn(p: self ref Pg);	# restyle and relayout after the document changed
 		restyle:	fn(p: self ref Pg);	# restyle only (computed styles for a script), the layout as it was
+		stylefor:	fn(p: self ref Pg, n: int): ref Style->St;	# element n's computed style as the document now is (its sheets read again), restyling nothing else
 		target:	fn(p: self ref Pg, fragment: string): int;	# make the element a #fragment names the :target; its y
 		paint:	fn(p: self ref Pg, dst: ref Draw->Image, scroll: Draw->Point);
 		pageheight:	fn(p: self ref Pg): int;

@@ -583,10 +583,14 @@ attached(d: ref Doc, n: int): int
 Pg.update(p: self ref Pg)
 {
 	plock();
+	pt0 = sys->millisec();
 	{
 		resheet(p);
+		phase("update: sheets");
 		p.computed = style->compute(p.doc, p.styles, p.env);
+		phase(sys->sprint("update: styles (%d nodes, %d sheets)", p.doc.n, len p.sheetlist));
 		rebuild(p);
+		phase("update: laid out");
 	} exception e {
 	"*" =>
 		punlock();
@@ -608,6 +612,22 @@ Pg.restyle(p: self ref Pg)
 		raise e;
 	}
 	punlock();
+}
+
+Pg.stylefor(p: self ref Pg, n: int): ref Style->St
+{
+	st: ref Style->St;
+	plock();
+	{
+		resheet(p);
+		st = style->element(p.doc, p.styles, p.env, n);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+	return st;
 }
 
 Pg.paint(p: self ref Pg, dst: ref Image, scroll: Point)

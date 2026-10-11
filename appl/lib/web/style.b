@@ -998,7 +998,67 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 # §3.3.2): the primary subtags agree (or the range's is *), and the
 # range's remaining subtags appear in order in the tag, skipping tag
 # subtags that are not singletons.
+# langmatch's answers, by tag and ranges: a page's :lang() rules are
+# asked of every element, and the few tags and ranges a page has are
+# parsed once
+Lmatch: adt {
+	tag, ranges:	string;
+	r:	int;
+};
+lmcache: array of list of ref Lmatch;
+nlmcache := 0;
+
+# style attributes parsed, by text and document: a page's scripts set
+# them, and every computation of its styles read each again (Apple's
+# home page: 200 ms a time, from 9 for the same document as it came)
+Sattr: adt {
+	text, base:	string;
+	decls:	array of ref Decl;
+};
+sacache: array of list of ref Sattr;
+nsacache := 0;
+
+styleattr(text, base: string): array of ref Decl
+{
+	if(sacache == nil || nsacache > 8192) {
+		sacache = array[1021] of list of ref Sattr;
+		nsacache = 0;
+	}
+	h := len text;
+	for(i := 0; i < len text; i++)
+		h = h * 31 + text[i];
+	h = (h & 16r7FFFFFFF) % len sacache;
+	for(l := sacache[h]; l != nil; l = tl l)
+		if((hd l).text == text && (hd l).base == base)
+			return (hd l).decls;
+	decls := absurls(css->parsedecls(text), base);	# relative to the document
+	sacache[h] = ref Sattr(text, base, decls) :: sacache[h];
+	nsacache++;
+	return decls;
+}
+
 langmatch(tag, ranges: string): int
+{
+	if(lmcache == nil || nlmcache > 4096) {
+		lmcache = array[257] of list of ref Lmatch;
+		nlmcache = 0;
+	}
+	h := len tag * 31 + len ranges;
+	for(i := 0; i < len ranges; i++)
+		h = h * 7 + ranges[i];
+	for(i = 0; i < len tag; i++)
+		h = h * 7 + tag[i];
+	h = (h & 16r7FFFFFFF) % len lmcache;
+	for(l := lmcache[h]; l != nil; l = tl l)
+		if((hd l).tag == tag && (hd l).ranges == ranges)
+			return (hd l).r;
+	r := langmatch1(tag, ranges);
+	lmcache[h] = ref Lmatch(tag, ranges, r) :: lmcache[h];
+	nlmcache++;
+	return r;
+}
+
+langmatch1(tag, ranges: string): int
 {
 	for(rl := splitlist(ranges); rl != nil; rl = tl rl) {
 		r := lower(trim1(hd rl));
@@ -2179,6 +2239,58 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	return c;
 }
 
+# One element's computed style, as compute would give it, from its
+# ancestors' alone: a script asking for one after changing the document
+# (getComputedStyle) need not wait for the whole document's (Apple's
+# home page: 155 asked, 55 ms each).  nil inside display: none.  With
+# shadow trees (rules and inheritance by the flat tree), the whole.
+element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
+{
+	if(sys == nil)
+		init();
+	if(env == nil)
+		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+	if(n <= 0 || n >= d.n || d.nodes[n].kind != Dom->Element)
+		return nil;
+	if(dom->flat(d) != nil)
+		return compute(d, s, env).st[n];
+	if(s.idx == nil || !sameenv(s.idx.env, env)) {
+		s.idx = buildindex(s, env);
+		s.idx.env = ref *env;
+	}
+	lastenv = ref *env;
+	root := d.root();
+	chain: list of int;
+	for(p := n; p != 0; p = parentel(d, p))
+		chain = p :: chain;
+	if(chain == nil || hd chain != root)
+		return nil;	# not in the document's tree
+	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+	m := matcher(d, env);
+	ctx := ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0);
+	share := array[Nshare] of list of (string, ref Shared);
+	ps: ref St;
+	pf: array of int;
+	st: ref St;
+	for(; chain != nil; chain = tl chain) {
+		k := hd chain;
+		(sibdoc, sibnode) = (d, k);
+		st = styleof(m, s.idx, k, ps, ctx, c, share, pf, nil);
+		c.st[k] = st;
+		if(k == root)
+			ctx.rootfs = st.fontsize;
+		if(st.display == Dnone && k != n) {
+			st = nil;
+			break;
+		}
+		pf = childfilter(m, k, pf);
+		ps = st;
+	}
+	(sibdoc, sibnode) = (nil, 0);
+	schemedark = -1;
+	return st;
+}
+
 # the next node in the flat tree after n, inside top (or skipping what is
 # under n)
 flatnext(f: ref Dom->Flat, n, top: int): int
@@ -2412,7 +2524,7 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 		nmd++;
 	}
 	if((sa := d.attr(n, "style")) != nil) {
-		decls := absurls(css->parsedecls(sa), d.url);	# relative to the document
+		decls := styleattr(sa, d.url);
 		for(k := 0; k < len decls; k++) {
 			mds = ref Md(tierof(unlayered, decls[k].important, unlayered), Tstyleattr, k, decls[k]) :: mds;
 			nmd++;

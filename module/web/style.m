@@ -337,6 +337,7 @@ Style: module
 	};
 
 	compute:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env): ref Computed;
+	element:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env, n: int): ref St;	# compute's st[n], from n's ancestors alone
 	match:	fn(d: ref Dom->Doc, n: int, sel: ref Css->Sel, env: ref Env, scope: int): int;	# scope: the :scope element, or 0 for the root
 	mediamatch:	fn(q: array of ref Css->Tok, env: ref Env): int;
 	supports:	fn(cond: array of ref Css->Tok): int;

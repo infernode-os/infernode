@@ -108,6 +108,8 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	sys->fprint(stderr, "jspage: shown in %d ms\n", sys->millisec() - t0);
 	sys->sleep(wait);
+	if(quiet)
+		sys->fprint(stderr, "jspage: memory:\n%s%s", memory(), readall("#%/memgc"));
 	if(click) {
 		if((err := s.click(click)) != nil)
 			sys->fprint(stderr, "jspage: click: %s\n", err);
@@ -150,4 +152,21 @@ halt()
 	fd := sys->open("#c/sysctl", Sys->OWRITE);
 	if(fd != nil)
 		sys->fprint(fd, "halt");
+}
+
+memory(): string
+{
+	return readall("/dev/memory");
+}
+
+readall(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
 }

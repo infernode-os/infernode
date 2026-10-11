@@ -226,14 +226,20 @@ rebuild(p: ref Pg)
 	layout->setobjects(p.objects);
 	layout->setenv(p.env);
 	p.root = layout->build(p.doc, p.computed);
+	phase("rebuild: boxes built");
 	if(old != nil)
 		carryimages(old, p.root);
 	applypics(p, p.root);
+	phase("rebuild: images");
 	layout->lay(p.root, p.width, p.height);
+	phase("rebuild: laid out");
 	fitimages(p, p.root);
+	phase("rebuild: images fitted");
 	if(old != nil)
 		carrysvgs(p, inlinesvgs(p, old, nil), p.root);	# after: an inline SVG's picture is not its size
+	phase("rebuild: svgs carried");
 	inlinesvg(p, p.root);
+	phase("rebuild: inline svgs");
 }
 
 # Layout keeps one table of background images: the page that last

@@ -123,6 +123,18 @@ All notable changes to InferNode are documented in this file.
   A root too long is now refused, naming its length, and one that cannot
   be used stops emu naming it and why.
 
+### Window system
+
+- **New from wm/wm's menu takes the first time.** A button-3 click that
+  never moved chose nothing, though New is the item under the pointer,
+  and once New was chosen the sweep waited for a release the menu had
+  already had, so a press that came with no motion before it (as a
+  trackpad sends) was lost and the cross never swept. Resize, Move,
+  Delete and Hide waited the same way for their gunsight. A click that
+  never moves now chooses New, as rio's does; any other button cancels.
+  `tests/host/wm_test.sh` drives the menu, the frame and focus and
+  checks where they leave the windows.
+
 ## [0.6.0] - 2026-10-10
 
 This release ships Intel Macs their own DMG and headless tarball, and

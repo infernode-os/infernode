@@ -158,6 +158,8 @@ resetstate()
 	modules = nil;
 	nmods = 0;
 	cururl = nil;
+	lazyunit = nil;
+	lazyunitsc = nil;
 }
 
 setoutput(out: ref fn(s: string))

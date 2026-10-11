@@ -2827,6 +2827,8 @@ callval(f, this: V, ks, k, flags: int)
 callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 {
 	c := f.fun.code;
+	if(c != nil && c.lazy != nil)
+		compilelazy(c);
 	if(c != nil && (c.flags & (Cgen|Casync|Cclassctor)) == 0 && (flags & Fspr) == 0) {
 		npos := c.npos;
 		extra := k - npos;
@@ -2983,6 +2985,8 @@ callobj(f: ref Obj, this: V, args: array of V): V
 	if(fnv.native > 0)
 		return callnative(f, this, args, nil);
 	c := fnv.code;
+	if(c.lazy != nil)
+		compilelazy(c);
 	if(c.flags & Cclassctor)
 		throwtype("Class constructor " + c.name + " cannot be invoked without 'new'");
 	if(c.flags & (Cgen|Casync))
@@ -3114,6 +3118,8 @@ construct1(f: ref Obj, args: array of V, nt: ref Obj): V
 		return construct(b.target, a, nt);
 	}
 	c := fnv.code;
+	if(c.lazy != nil)
+		compilelazy(c);
 	if(c.flags & Cderived) {
 		if(c.body < 0) {
 			# the default constructor: super(...args)

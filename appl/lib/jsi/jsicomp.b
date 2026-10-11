@@ -82,6 +82,22 @@ Code: adt {
 	thisnode:	int;	# a derived constructor's: reading this at its end
 	paramenv:	array of int;	# by argument: the env slot of a captured simple parameter, or -1
 	dupparams:	array of int;	# by argument: 1 if a later parameter has its name (not mapped)
+	lazy:	ref Lazy;	# a body not yet compiled: it is when the function is first called
+};
+
+# A function the parser left unparsed (Flazy: a nested function in a source
+# of lazymin characters or more): its body is parsed and compiled when it is
+# first called, against the scopes it was declared in, kept here.  The names
+# its body mentions (f.free) were marked captured when the scopes were open,
+# so the bindings it may reach are in Envs.
+Lazy: adt {
+	f:	ref Node.Func;
+	sc:	ref Scope;
+	src:	ref Srcref;
+	ismod:	int;
+	script:	int;
+	evalctx:	int;
+	lexnames:	list of (string, int);
 };
 
 Srcref: adt {
@@ -2780,14 +2796,125 @@ compilefunc(f: ref Node.Func, name: string, extra: int, nil: ref Info.Class): in
 	code.fields = -1;
 	ci := addcode(code);
 	if(f.flags & Jsparse->Flazy) {
-		# the parser kept only where the body is: parse it now
-		(body, err) := jsparse->parsebody(cu.src.s, f.bodypos, f.flags, cu.ismod);
-		if(err != nil)
-			cerror(f.pos, err);
-		f = ref Node.Func(f.pos, f.end, f.id, f.params, body, f.flags & ~Jsparse->Flazy, f.bodypos, f.free);
+		# the parser kept only where the body is: it is compiled when first called.
+		# What it may reach is marked captured now, while the scopes are open.
+		for(l := f.free; l != nil; l = tl l) {
+			nm := hd l;
+			if(nm[0] == '%') {
+				for(fs := cu.fs; fs != nil; fs = fs.up) {
+					forcespecial(fs);
+					if(!fs.arrow)
+						break;
+				}
+				continue;
+			}
+			b := lookup(nm);
+			if(b != nil)
+				b.captured = 1;
+		}
+		code.length = paramlength(f.params);
+		code.lazy = ref Lazy(f, cu.sc, cu.src, cu.ismod, cu.script, cu.evalctx, cu.lexnames);
+		code.body = -1;
+		code.prologue = -1;
+		return ci;
 	}
 	funcbody(f, code);
 	return ci;
+}
+
+# the length property: the parameters before the first with a default, or the rest
+paramlength(params: array of ref Node): int
+{
+	n := 0;
+	for(i := 0; i < len params; i++) {
+		pick p := params[i] {
+		Rest =>
+			return n;
+		AssignPat =>
+			return n;
+		}
+		n++;
+	}
+	return n;
+}
+
+# a lazy function called for the first time: its body parsed and compiled now.
+# The unit the last one was compiled in is kept: siblings (the functions of
+# one scope, as a bundle's are) share it, its names registered once.
+lazyunit: ref Unit;
+lazyunitsc: ref Scope;
+
+compilelazy(c: ref Code)
+{
+	lz := c.lazy;
+	c.lazy = nil;
+	saved := cu;
+	u := lazyunit;
+	if(u == nil || lazyunitsc != lz.sc || u.src != lz.src) {
+		u = newunit(lz.src.s);
+		u.src = lz.src;
+		u.ismod = lz.ismod;
+		u.script = lz.script;
+		u.evalctx = lz.evalctx;
+		u.lexnames = lz.lexnames;
+		cu = u;
+		registerchain(lz.sc);
+		lazyunit = u;
+		lazyunitsc = lz.sc;
+	}
+	cu = u;
+	cu.start = nn;
+	err: string;
+	{
+		cu.fs = lz.sc.fs;
+		cu.sc = lz.sc;
+		f := lz.f;
+		(body, perr) := jsparse->parsebody(lz.src.s, f.bodypos, f.flags, lz.ismod);
+		if(perr != nil)
+			cerror(f.pos, perr);
+		nf := ref Node.Func(f.pos, f.end, f.id, f.params, body, f.flags & ~Jsparse->Flazy, f.bodypos, f.free);
+		methodstart = -1;
+		funcbody(nf, c);
+		fixup();
+	} exception {
+	"JScompile" =>
+		err = cu.err;
+		lazyunit = nil;	# its names half registered
+	}
+	cu = saved;
+	if(err != nil)
+		throwerr(ESyntax, err);
+}
+
+# the scopes around some code compiled on its own (eval code, a lazy function),
+# outermost first, their names visible to this unit
+registerchain(top: ref Scope)
+{
+	chain: list of ref Scope;
+	for(sc := top; sc != nil; sc = sc.up)
+		chain = sc :: chain;
+	for(; chain != nil; chain = tl chain) {
+		sc = hd chain;
+		for(l := revbinds(sc.binds); l != nil; l = tl l) {
+			b := hd l;
+			b.id = cu.nbind;
+			if(cu.nbind == len cu.binds) {
+				a := array[2 * cu.nbind] of ref Bind;
+				a[0:] = cu.binds;
+				cu.binds = a;
+			}
+			cu.binds[cu.nbind++] = b;
+			m := ment(b.name, 1);
+			m.binds = b :: m.binds;
+		}
+		sc.id = cu.nscope;
+		if(cu.nscope == len cu.scopes) {
+			a := array[2 * cu.nscope] of ref Scope;
+			a[0:] = cu.scopes;
+			cu.scopes = a;
+		}
+		cu.scopes[cu.nscope++] = sc;
+	}
 }
 
 # a function's scope, parameters and body
@@ -3501,31 +3628,7 @@ compileevalscope(prog: ref Node.Program, code: ref Code, fs: ref Fs, s: ref Scop
 compileevalbody(prog: ref Node.Program, code: ref Code, fs: ref Fs, ev: ref Info.Eval)
 {
 	# the caller's scope chain, outermost first, its names visible
-	chain: list of ref Scope;
-	for(sc := ev.sc; sc != nil; sc = sc.up)
-		chain = sc :: chain;
-	for(; chain != nil; chain = tl chain) {
-		sc = hd chain;
-		for(l := revbinds(sc.binds); l != nil; l = tl l) {
-			b := hd l;
-			b.id = cu.nbind;
-			if(cu.nbind == len cu.binds) {
-				a := array[2 * cu.nbind] of ref Bind;
-				a[0:] = cu.binds;
-				cu.binds = a;
-			}
-			cu.binds[cu.nbind++] = b;
-			m := ment(b.name, 1);
-			m.binds = b :: m.binds;
-		}
-		sc.id = cu.nscope;
-		if(cu.nscope == len cu.scopes) {
-			a := array[2 * cu.nscope] of ref Scope;
-			a[0:] = cu.scopes;
-			cu.scopes = a;
-		}
-		cu.scopes[cu.nscope++] = sc;
-	}
+	registerchain(ev.sc);
 	# the eval code's own frame, as a function of its own; the caller's function is its outer one
 	fs.up = ev.sc.fs;
 	cu.fs = fs;

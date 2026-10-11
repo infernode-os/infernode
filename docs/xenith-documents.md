@@ -141,7 +141,10 @@ scroll bar, mouse loops and keys.
 - **Text on the drawing**, where the engine gives runs: button 1
   clicked without moving selects the word under the pointer (Snarf
   copies it); button 2 executes it; button 3 looks at it, or follows
-  the link there. Search highlights its matches on the drawing.
+  the link there: to a page of the document (a PDF's GoTo, its named
+  destinations), that page; to the web, a browser window in Xenith
+  (what is opened in Xenith stays in Xenith); anything else, plumbed.
+  Search highlights its matches on the drawing.
 
 ## wm/page
 
@@ -151,8 +154,9 @@ from one file into the next, only the file shown held open. Button 1
 drags, the wheel scrolls; as in Plan 9's page, button 2 raises the
 operations (paging, zoom, fit, turning, find, go to a page, write the
 page shown as an image) and button 3 the pages near the one shown and
-the files to choose from; keys do the same. A flowing document is set
-in Xenith's faces.
+the files to choose from; keys do the same. Button 1 clicked without
+moving on a link follows it: a page of the document, or the plumber for
+anything else. A flowing document is set in Xenith's faces.
 
 ## The namespace
 

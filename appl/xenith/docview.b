@@ -654,7 +654,13 @@ button3(w: ref Window): (string, string)
 			noted(w, v.result(res));
 		return (nil, nil);
 	}
-	if((u := v.eng->linkat(v.h, n, p)) != nil)
+	# a link to a page of the document is followed here
+	(u, followed) := v.linkat(n, p);
+	if(followed){
+		draw(w);
+		return (nil, nil);
+	}
+	if(u != nil)
 		return (u, nil);
 	(word, nil, nil) := v.wordof(n, p);
 	return (nil, word);

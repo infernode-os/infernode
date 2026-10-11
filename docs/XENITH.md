@@ -184,8 +184,9 @@ column, and:
 - lets the **text on the drawing** be used, where the document knows
   where it drew it (PDF, Markdown): button 1 clicked without moving
   selects the word there, button 2 executes it, button 3 follows the
-  link there or looks the word up (plumbed; if nothing takes it, found
-  in the document and marked).
+  link there (a page of the document goes to that page, a web address
+  opens a browser window in Xenith) or looks the word up (plumbed; if
+  nothing takes it, found in the document and marked).
 
 **Binary documents** (PDF, images) open as documents however they are
 opened: plumbed, looked at, named on Xenith's command line, by Get, by

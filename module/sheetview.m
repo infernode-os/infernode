@@ -134,6 +134,10 @@ Sheetview: module {
 		# the words drawn, where the engine knows them
 		wordof:	fn(v: self ref View, n: int, p: Draw->Point): (string, Draw->Rect, int);
 		select:	fn(v: self ref View, n: int, word: string, r: Draw->Rect);
+		# the link at p on sheet n: one to a page of the document
+		# ("#page=N") is followed here, and gives (nil, 1); one
+		# elsewhere is given back, for the caller to open; (nil, 0) is none
+		linkat:	fn(v: self ref View, n: int, p: Draw->Point): (string, int);
 		find:	fn(v: self ref View, s: string): string;
 		foundon:	fn(v: self ref View, n: int): list of Draw->Rect;
 

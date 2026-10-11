@@ -49,6 +49,10 @@ sets the scale to
 of the pages' size.
 .PP
 Button 1 drags the pages in both directions; the wheel scrolls them.
+Button 1 clicked without moving on a link follows it: to a page of the
+document, that page; to anything else (a web address), the plumber
+(see
+.IR plumber (8)).
 As in Plan 9's
 .IR page ,
 button 2 raises a menu of operations: the next and previous page, zoom

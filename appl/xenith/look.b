@@ -223,9 +223,9 @@ plumblook(m : ref Msg)
 	}
 }
 
-# A link followed in an HTML document: a local page opens here, set as
-# a document as the one it came from; anything else goes to the
-# plumber (a web page to Charon).
+# A link followed on a document (a PDF's, Markdown's, an HTML file's):
+# a local page opens here, set as a document as the one it came from;
+# a web page is browsed in a window here; anything else is plumbed.
 openlink(url : string)
 {
 	if(len url > 7 && url[0:7] == "file://"){
@@ -245,6 +245,13 @@ openlink(url : string)
 			docview->render(w);
 		return;
 	}
+	# a web page is browsed in Xenith: what is opened in Xenith stays
+	# in Xenith (docs/xenith-documents.md)
+	if(isurl(url)){
+		openurl(url);
+		return;
+	}
+	# anything else (mail, a scheme Xenith does not know) is plumbed
 	if(dat->plumbed){
 		m := ref Msg;
 		m.src = "xenith";
@@ -253,12 +260,6 @@ openlink(url : string)
 		m.data = array of byte url;
 		if(m.send() >= 0)
 			return;
-	}
-	# nothing takes it (a standalone Xenith has no browser to plumb
-	# to): a web page is browsed in Xenith
-	if(isurl(url)){
-		openurl(url);
-		return;
 	}
 	warning(nil, sys->sprint("nothing to open %s with\n", url));
 }

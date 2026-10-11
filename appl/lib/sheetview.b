@@ -982,6 +982,26 @@ View.wordof(v: self ref View, n: int, p: Point): (string, Rect, int)
 	return (nil, Rect((0, 0), (0, 0)), -1);
 }
 
+View.linkat(v: self ref View, n: int, p: Point): (string, int)
+{
+	if(v.h < 0)
+		return (nil, 0);
+	u := v.eng->linkat(v.h, n, p);
+	if(u == nil)
+		return (nil, 0);
+	if(len u > 6 && u[0:6] == "#page="){
+		pg := int u[6:];
+		if(pg >= 1 && pg <= len v.sizes){
+			v.dir = 1;
+			if(pg - 1 < n)
+				v.dir = -1;
+			v.gotosheet(pg - 1);
+		}
+		return (nil, 1);
+	}
+	return (u, 0);
+}
+
 View.select(v: self ref View, n: int, word: string, r: Rect)
 {
 	v.word = word;

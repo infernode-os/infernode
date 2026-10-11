@@ -6,6 +6,17 @@ All notable changes to InferNode are documented in this file.
 
 ### Documents
 
+- **A PDF's links work**, in Xenith and in wm/page. pdf(2) reads a
+  page's link annotations: a URI, or a page of the document (GoTo, a
+  destination, a named destination through the catalog's Dests or its
+  name tree). In Xenith, button 3 on a link to a page goes there, and on
+  a web address opens it in a browser window in Xenith, as a Markdown or
+  HTML file's links now do too: what is opened in Xenith stays in
+  Xenith (it went to the plumber, and left a standalone Xenith only
+  when nothing took it). In wm/page, button 1 clicked without moving
+  follows a link: a page of the document, or the plumber. `doc/links`
+  lists a PDF's links.
+
 - **wm/page shows documents**: PDFs, images, Markdown, Mermaid and
   HTML in a window of their own, through the view Xenith uses: several
   files read as one, standard input, pages turned, find, go to a page,

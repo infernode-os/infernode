@@ -10,7 +10,9 @@
 #	a file plumbed to a window already open on it as text is shown;
 #	Markdown opens as text and Render shows it set (doc/ctl, doc/text),
 #	Render again goes back to the text;
-#	an image looked at is a document of one sheet its size.
+#	an image looked at is a document of one sheet its size;
+#	a PDF's links listed in doc/links, button 3 on one to a page goes
+#	to it, on one to a URI browses it in a window of Xenith's.
 #
 # Prerequisites:
 #   - Xenith must be running
@@ -212,6 +214,67 @@ sleep 2
 check 'a word executed on the drawing leaves the document shown' `{attr $id shown} 1
 echo scale 120 > $W/doc/ctl
 check 'and the window still answers' `{attr $id scale} 120
+
+# ---- a PDF's links ----
+# tests/page/links.pdf: on page 1 (400x500) a link to a URI, one to
+# page 2 by its destination, one by a named destination
+
+look /tests/page/links.pdf
+lid=()
+for i in 1 2 3 4 5 6 7 8 9 10 {
+	if {~ $#lid 0} {
+		lid=`{winof links.pdf}
+		if {~ $#lid 0} {sleep 1}
+	}
+}
+loaded $lid
+L=$XENITH/$lid
+links=${split '
+' "{cat $L/doc/links}}
+check 'doc/links lists a PDF''s links' $#links 3
+check 'a link to a URI' ${index 1 $links} '1 50 160 250 200 http://example.com/'
+check 'a link to a page' ${index 2 $links} '1 50 260 250 300 #page=2'
+check 'a named destination, to its page' ${index 3 $links} '1 50 340 250 380 #page=2'
+
+# where a point on page 1 (at scale 100) is on the screen: pt x y
+fn pt {
+	a := $*
+	sc=`{attr $lid scale}
+	scr=`{attr $lid screen}
+	view=`{attr $lid view}
+	col=`{attr $lid column}
+	vw=${index 3 $view}
+	colw=${index 1 $col}
+	sw=${expr 400 $sc x 100 /}
+	x=${expr ${index 1 $scr} $colw $sw - 2 / +}
+	if {ntest ${expr $colw $vw '<'}} {x=${expr $x $vw $colw - 2 / +}} {x=${expr $x ${index 1 $view} -}}
+	y=${expr ${index 2 $scr} 12 + ${index 2 $view} -}
+	echo ${expr $x ${index 1 $a} $sc x 100 / +} ${expr $y ${index 2 $a} $sc x 100 / +}
+}
+fn b3 { a := $*; echo m $a 0 > /dev/pointer; echo m $a 4 > /dev/pointer; echo m $a 0 > /dev/pointer; sleep 2 }
+
+# the window is short: at scale 100, scrolled to a link (at y on page 1)
+fn tolink { echo sheet 1 > $L/doc/ctl; echo scroll ${expr $1 50 -} > $L/doc/ctl }
+echo scale 100 > $L/doc/ctl
+tolink 280
+s0=`{attr $lid sheet}
+b3 `{pt 150 280}
+s1=`{attr $lid sheet}
+if {~ $s0 $s1} {bad 'button 3 on a link to page 2 left the sheet at' $s1} {ok 'button 3 on a link to a page goes to it: sheet' $s0 '->' $s1}
+tolink 360
+b3 `{pt 150 360}
+check 'and on a named destination' `{attr $lid sheet} $s1
+tolink 180
+b3 `{pt 150 180}
+uid=()
+for i in 1 2 3 4 5 {
+	if {~ $#uid 0} {
+		uid=`{winof example.com}
+		if {~ $#uid 0} {sleep 1}
+	}
+}
+if {~ $#uid 0} {bad 'button 3 on a link to a URI opened no window in Xenith'} {ok 'button 3 on a link to a URI browses it in a window of Xenith''s'}
+check 'and the PDF stays on its page' `{attr $lid sheet} $s0
 
 # ---- a file open as text, plumbed: shown as the document ----
 

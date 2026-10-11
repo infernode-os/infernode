@@ -745,7 +745,7 @@ Face.drawglyphm(f: self ref Face, gid: int, m: array of real,
 		return;
 	# the origin to a quarter pixel; upright text on a whole row
 	ix := int math->floor(x);
-	px := int ((x - real ix) * 4.0 + 0.5);
+	px := int ((x - real ix) * 4.0);	# int of a real rounds: the nearest quarter
 	if(px == 4){
 		ix++;
 		px = 0;
@@ -756,7 +756,7 @@ Face.drawglyphm(f: self ref Face, gid: int, m: array of real,
 		py = 0;
 	} else {
 		iy = int math->floor(y);
-		py = int ((y - real iy) * 4.0 + 0.5);
+		py = int ((y - real iy) * 4.0);
 		if(py == 4){
 			iy++;
 			py = 0;
@@ -2192,7 +2192,7 @@ parset1(data: array of byte): (ref FaceData, string)
 	fd.fontname = t1name(clear);
 	(fm, nfm) := t1nums(clear, "/FontMatrix", 6);
 	if(nfm == 6 && fm[0] > 0.0)
-		fd.upem = int (1.0/fm[0] + 0.5);
+		fd.upem = int (1.0/fm[0]);	# rounds
 	(bb, nbb) := t1nums(clear, "/FontBBox", 4);
 	if(nbb == 4 && bb[3] > bb[1]){
 		fd.ascent = int bb[3];
@@ -2469,7 +2469,7 @@ t1outline(fd: ref FaceData, gid: int): ref GlyphOutline
 	t1run(s, fd.t1cs[gid]);
 	if(s.open)
 		s.path = ref PathSeg.Close :: s.path;
-	return ref GlyphOutline(s.path, int (s.width + 0.5));
+	return ref GlyphOutline(s.path, int s.width);
 }
 
 t1state(fd: ref FaceData, ox, oy: real): ref T1state

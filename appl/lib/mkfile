@@ -169,6 +169,7 @@ TARG=\
 	web.dis\
 	outlinefont.dis\
 	pdfenc.dis\
+	sheetview.dis\
 	pdf.dis\
 	webclient.dis\
 	winplace.dis\
@@ -269,6 +270,7 @@ SYSMODULES=\
 	menu.m\
 	outlinefont.m\
 	pdfenc.m\
+	sheetview.m\
 	pdf.m\
 	menuhit.m\
 	midi.m\

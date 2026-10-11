@@ -29,6 +29,7 @@ TARG=\
 	matrix.dis\
 	shell.dis\
 	view.dis\
+	page.dis\
 	wm.dis\
 	sam.dis\
 	samtk.dis\

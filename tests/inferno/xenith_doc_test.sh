@@ -198,6 +198,21 @@ sleep 1
 sel=`{cat $W/rdsel}
 check 'a word clicked on the drawing is selected in the text' $"sel Center
 
+# button 2 on a word on the drawing executes it (here Center, no such
+# command): the window held while the command runs and let go after, so
+# it is there, as it was, however many times (it was let go once too
+# often, and freed while shown: Xenith hung)
+for i in 1 2 3 {
+	echo m $cx $cy 0 > /dev/pointer
+	echo m $cx $cy 2 > /dev/pointer
+	echo m $cx $cy 0 > /dev/pointer
+	sleep 1
+}
+sleep 2
+check 'a word executed on the drawing leaves the document shown' `{attr $id shown} 1
+echo scale 120 > $W/doc/ctl
+check 'and the window still answers' `{attr $id scale} 120
+
 # ---- a file open as text, plumbed: shown as the document ----
 
 PDF2=/tmp/xenith_doc_test2.pdf

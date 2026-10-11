@@ -5,6 +5,7 @@ include "workdir.m";
 include "draw.m";
 include "docengine.m";
 include "docreg.m";
+include "sheetview.m";
 include "styx.m";
 include "xenith.m";
 include "dat.m";

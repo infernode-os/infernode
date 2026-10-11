@@ -13,6 +13,7 @@ include "sys.m";
 include "draw.m";
 include "docengine.m";
 include "docreg.m";
+include "sheetview.m";
 
 # Xenith's module interfaces, as appl/xenith/common.m includes them,
 # so that Graph's init matches the suite's

@@ -35,6 +35,7 @@ editcmd: Editcmd;
 styxaux: Styxaux;
 asyncio: Asyncio;
 docview: Docview;
+docevc: chan of ref Sheetview->Ev;
 
 sprint : import sys;
 BACK, HIGH, BORD, TEXT, HTEXT, NCOL : import Framem;
@@ -143,6 +144,7 @@ init(ctxt : ref Draw->Context, argl : list of string)
 		editcmd->init(mods);
 		asyncio->init(mods);
 		docview->init(mods);
+		docevc = docview->events();
 
 		utils->debuginit();
 	
@@ -759,10 +761,8 @@ mousetask()
 						if(w != nil && docview->shown(w) && t.what == Body){
 							# the word there executed
 							(word, ok) := docview->button2(w);
-							if(ok){
-								(dir, n) := look->dirname(t, nil, 0);
-								spawn exec->run(w, word, dir, n, TRUE, nil, nil, FALSE);
-							}
+							if(ok)
+								exec->executeword(t, word);
 						} else {
 							(ok, argt, q0, q1) = t.select2(q0, q1);
 							if(ok)
@@ -812,6 +812,12 @@ mousetask()
 					}
 				}
 				bflush();
+			dev := <-docevc =>
+				# a document's work, done off the main loop (docview(2))
+				row.qlock.lock();
+				docview->handle(dev);
+				bflush();
+				row.qlock.unlock();
 			amsg := <-casync =>
 				# Handle async I/O results
 				pick msg := amsg {
@@ -830,36 +836,6 @@ mousetask()
 					Error =>
 						row.qlock.lock();
 						warning(nil, sprint("async read error: %s\n", msg.err));
-						row.qlock.unlock();
-					DocOpened =>
-						row.qlock.lock();
-						w := look->lookid(msg.winid, 0);
-						if(w != nil && w.col != nil)
-							docview->opened(w, msg.gen, msg.eng, msg.h, msg.text, msg.err);
-						else if(msg.eng != nil && msg.h >= 0)
-							msg.eng->close(msg.h);
-						bflush();
-						row.qlock.unlock();
-					DocText =>
-						row.qlock.lock();
-						w := look->lookid(msg.winid, 0);
-						if(w != nil && w.col != nil)
-							docview->texted(w, msg.gen, msg.text);
-						bflush();
-						row.qlock.unlock();
-					DocPainted =>
-						row.qlock.lock();
-						w := look->lookid(msg.winid, 0);
-						if(w != nil && w.col != nil)
-							docview->painted(w, msg.gen, msg.n, msg.scale, msg.image, msg.err);
-						bflush();
-						row.qlock.unlock();
-					DocEvent =>
-						row.qlock.lock();
-						w := look->lookid(msg.winid, 0);
-						if(w != nil && w.col != nil)
-							docview->event(w, msg.gen, msg.event);
-						bflush();
 						row.qlock.unlock();
 					TextData =>
 						# Insert text chunk into file buffer

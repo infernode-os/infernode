@@ -109,6 +109,15 @@ same engines.
 
 ## The view
 
+The view is a library, `sheetview(2)` (`module/sheetview.m`), which
+Xenith and `wm/page` share: it lays out, scales, paints (off the
+caller's thread), draws into a rectangle of an image, hit-tests,
+searches and does the view's commands, and never calls its caller. Its
+work comes back as events on the caller's channel, handled on the
+caller's thread, with a note of what the caller is to do. Xenith's
+`docview` keeps what is Xenith's: the window's text, tag, `doc/` files,
+scroll bar, mouse loops and keys.
+
 - **Scroll**: the wheel and the scroll bar move the column smoothly,
   across sheet boundaries; Page Up/Down a screenful. Button 1 drags
   the document in both directions (grab and pan), as now.
@@ -123,12 +132,25 @@ same engines.
   painting more pixels than are shown. A flowing document zoomed
   is set again to the window's width at that scale, and scaled.
 - **Paging**: `Page n`, `NextPage`, `PrevPage` scroll to a sheet.
-- **Cache**: the painted sheets in and near view, at the current
-  scale; others are dropped as they leave.
+- **Turning**: the sheets turned by quarter turns (`rotate`), each
+  turned once as it is painted; points and words mapped through it.
+- **Cache**: the painted sheets in view, at the current scale, and
+  the next one the way the view last moved (painted ahead); others are
+  dropped as they leave. A view laid out again (a resize, a new fit)
+  keeps the sheet at its top and its place in it.
 - **Text on the drawing**, where the engine gives runs: button 1
   clicked without moving selects the word under the pointer (Snarf
   copies it); button 2 executes it; button 3 looks at it, or follows
   the link there. Search highlights its matches on the drawing.
+
+## wm/page
+
+`page(1)` shows documents in a window of their own, through the same
+view: the files named (or standard input) as one document, paging on
+from one file into the next, only the file shown held open. Button 1
+drags, the wheel scrolls, button 3 is a Tk menu (paging, zoom, fit,
+turning, find, go to a page, write the page shown as an image, the
+pages near the one shown, the files); keys do the same.
 
 ## The namespace
 

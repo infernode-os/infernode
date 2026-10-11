@@ -35,6 +35,7 @@ include "sys.m";
 include "draw.m";
 include "docengine.m";
 include "docreg.m";
+include "sheetview.m";
 	drawm: Draw;
 	Point, Rect, Image, Font, Chans: import drawm;
 

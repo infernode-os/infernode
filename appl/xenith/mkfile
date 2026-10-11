@@ -72,6 +72,7 @@ SYSMODULES=\
 	bufio.m\
 	docengine.m\
 	docreg.m\
+	sheetview.m\
 	htmldoc.m\
 	formatter.m\
 	daytime.m\

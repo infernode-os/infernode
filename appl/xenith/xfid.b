@@ -498,9 +498,9 @@ Xfid.read(x : self ref Xfid)
 		# the document shown: its name and its first sheet's size
 		str = 1;
 		sbuf = "";
-		if(docview->shown(w) && w.doc.h >= 0 && len w.doc.sizes > 0)
-			sbuf = sprint("%s %d %d\n", w.doc.name,
-				w.doc.sizes[0].x, w.doc.sizes[0].y);
+		if(docview->shown(w) && w.doc.v.h >= 0 && len w.doc.v.sizes > 0)
+			sbuf = sprint("%s %d %d\n", w.doc.v.name,
+				w.doc.v.sizes[0].x, w.doc.v.sizes[0].y);
 	QWrdsel =>
 		sys->seek(w.rdselfd, big off, 0);
 		n = count(x.fcall);

@@ -262,26 +262,10 @@ execute(t : ref Text, aq0 : int, aq1 : int, external : int, argt : ref Text)
 		return;
 	}
 
-	# The view's commands on a document: Zoom+, Zoom-, Zoom n, Fit,
-	# Fit page, Page n, NextPage, PrevPage, and the engine's own
-	if(t.w != nil && t.w.doc != nil){
-		(nil, words) := sys->tokenize(r.s[0:q1-q0], " \t\n");
-		if(words != nil){
-			darg := "";
-			for(l := tl words; l != nil; l = tl l){
-				if(darg != "")
-					darg += " ";
-				darg += hd l;
-			}
-			(isdoc, derr) := docview->command(t.w, hd words, darg);
-			if(isdoc){
-				if(derr != nil)
-					warning(nil, sprint("%s: %s\n", hd words, derr));
-				strfree(r);
-				r = nil;
-				return;
-			}
-		}
+	if(doccommand(t.w, r.s[0:q1-q0])){
+		strfree(r);
+		r = nil;
+		return;
 	}
 
 	(dir, n) = dirname(t, nil, 0);
@@ -293,6 +277,60 @@ execute(t : ref Text, aq0 : int, aq1 : int, external : int, argt : ref Text)
 	if(t.w != nil)
 		t.w.refx.inc();
 	spawn run(t.w, r.s, dir, n, TRUE, aa, a, FALSE);
+}
+
+# The view's commands on a document: Zoom+, Zoom-, Zoom n, Fit, Fit
+# page, Page n, NextPage, PrevPage, and the engine's own; 1 if s was one
+doccommand(w : ref Window, s : string) : int
+{
+	if(w == nil || w.doc == nil)
+		return 0;
+	(nil, words) := sys->tokenize(s, " \t\n");
+	if(words == nil)
+		return 0;
+	darg := "";
+	for(l := tl words; l != nil; l = tl l){
+		if(darg != "")
+			darg += " ";
+		darg += hd l;
+	}
+	(isdoc, derr) := docview->command(w, hd words, darg);
+	if(isdoc && derr != nil)
+		warning(nil, sprint("%s: %s\n", hd words, derr));
+	return isdoc;
+}
+
+# A word button 2 chose where there is no text to address (a word on a
+# document's drawing), executed as execute does: a built-in, a document's
+# command, else a command run.  run lets go of the window when it is
+# done, so it is held for it here.
+executeword(t : ref Text, s : string)
+{
+	if(s == nil)
+		return;
+	e := lookup(s, len s);
+	if(e >= 0){
+		if(exectab[e].mark && seltext!=nil)
+		if(seltext.what == Body){
+			seq++;
+			seltext.w.body.file.mark();
+		}
+		(a, n) := skipbl(s, len s);
+		(a, n) = findbl(a, n);
+		(a, n) = skipbl(a, n);
+		runfun(exectab[e].fun, t, seltext, nil, exectab[e].flag1, exectab[e].flag2, a, n);
+		return;
+	}
+	if(doccommand(t.w, s))
+		return;
+	(dir, n) := dirname(t, nil, 0);
+	if(n==1 && dir[0]=='.'){	# sigh 
+		dir = nil;
+		n = 0;
+	}
+	if(t.w != nil)
+		t.w.refx.inc();
+	spawn run(t.w, s, dir, n, TRUE, nil, nil, FALSE);
 }
 
 printarg(argt : ref Text, q0 : int, q1 : int) : string
@@ -513,7 +551,7 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 			return;
 	# In a browser window Get goes to the URL given, or named in the
 	# tag, or reloads the page there.
-	if(et.w.doc != nil && et.w.doc.web){
+	if(et.w.doc != nil && et.w.doc.v.web){
 		w = et.w;
 		u := "";
 		if(narg > 0)
@@ -526,7 +564,7 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 		if(u == nil)
 			u = w.body.file.name;
 		err : string;
-		if(u == nil || u == w.doc.name)
+		if(u == nil || u == w.doc.v.name)
 			(nil, err) = docview->command(w, "Reload", nil);
 		else
 			err = docview->browse(w, u);
@@ -748,7 +786,7 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 	# it is shown with: its text is written only to a file named
 	if(docview->readonly(w) && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
 		what := "a document";
-		if(w.doc.web)
+		if(w.doc.v.web)
 			what = "a web page";
 		warning(nil, sprint("%s is %s: Put /file writes its text\n", f.name, what));
 		return;

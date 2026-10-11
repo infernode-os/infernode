@@ -6,6 +6,22 @@ All notable changes to InferNode are documented in this file.
 
 ### Documents
 
+- **wm/page shows documents**: PDFs, images, Markdown, Mermaid and
+  HTML in a window of their own, through the view Xenith uses: several
+  files read as one, standard input, pages turned, find, go to a page,
+  write the page shown as an image, a Tk menu with the pages and files
+  (`page(1)`). Only the file shown is held open.
+- **The document view is a library**, `sheetview(2)`, shared by Xenith
+  and wm/page. It turns sheets (once, as each is painted), paints the
+  next sheet the way the view is going, and keeps its place to the
+  pixel when laid out again. A document opened again in Xenith keeps
+  its place, as it was meant to.
+- **PDF paths, strokes and shadings drawn where and as they are**:
+  Limbo's `int` of a real rounds, and adding a half first had moved
+  every path half a pixel, drawn hairlines three pixels wide, and
+  turned full-white shadings black; pages were a point too big. Against
+  Poppler the difference falls by another 28%.
+
 - **One document model in Xenith.** A PDF, an image, a Mermaid
   diagram, Markdown and HTML set for reading, and a web page are all
   shown by one view: a column of sheets (a PDF's pages), scrolled

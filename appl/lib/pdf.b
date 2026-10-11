@@ -1585,7 +1585,7 @@ textcolor(r, g, b: int, alpha: real): ref Image
 {
 	if(alpha >= 0.999)
 		return getcolor(r, g, b);
-	a := int (alpha * 255.0 + 0.5);
+	a := int (alpha * 255.0);	# int of a real rounds
 	rgba := drawm->setalpha((r << 24) | (g << 16) | (b << 8) | 16rFF, a);
 	return display.newimage(Rect(Point(0,0), Point(1,1)), drawm->RGBA32, 1, rgba);
 }
@@ -2187,7 +2187,7 @@ fontload1(doc: ref PdfDoc, fm: ref PdfFont)
 			continue;
 		adv := f.advance(g, 1000.0);
 		if(fm.widths[c] < 0 && fm.dw == 0)
-			fm.widths[c] = int (adv + 0.5);
+			fm.widths[c] = int adv;
 		else if(fm.subst && f == face && fm.widths[c] > 0 && adv > 0.0 && c > 32){
 			pw += real fm.widths[c];
 			sw += adv;
@@ -2573,7 +2573,7 @@ strokepath(img: ref Image, gs: ref GState, path: list of ref PathSeg)
 
 	# Compute line width in pixels
 	sx := math->sqrt(gs.ctm[0]*gs.ctm[0] + gs.ctm[1]*gs.ctm[1]);
-	radius := int (gs.linewidth * sx / 2.0 + 0.5);
+	radius := int (gs.linewidth * sx / 2.0);	# rounds
 	if(radius < 0) radius = 0;
 
 	# Map line cap
@@ -2860,7 +2860,7 @@ xformpt(x, y: real, ctm: array of real): (int, int)
 {
 	px := x * ctm[0] + y * ctm[2] + ctm[4];
 	py := x * ctm[1] + y * ctm[3] + ctm[5];
-	return (int (px + 0.5), int (py + 0.5));
+	return (int px, int py);	# int of a real rounds (+0.5 moved every point half a pixel)
 }
 
 # Flatten a cubic bezier to polyline points via subdivision
@@ -2893,7 +2893,7 @@ subdividebezier(x0, y0, x1, y1, x2, y2, x3, y3: real,
 	d3 := math->fabs((x2 - x3) * dy - (y2 - y3) * dx);
 
 	if((d2 + d3) * (d2 + d3) <= FLAT_THRESH * (dx*dx + dy*dy) || depth > 8){
-		return Point(int (x3 + 0.5), int (y3 + 0.5)) :: nil;
+		return Point(int x3, int y3) :: nil;
 	}
 
 	# Subdivide at t=0.5
@@ -3007,7 +3007,7 @@ resolvecscomps(doc: ref PdfDoc, csname: string, resources: ref PdfObj): int
 
 clampcolor(v: real): int
 {
-	i := int (v * 255.0 + 0.5);
+	i := int (v * 255.0);	# rounds
 	if(i < 0) i = 0;
 	if(i > 255) i = 255;
 	return i;
@@ -3360,14 +3360,14 @@ renderaxialsh(doc: ref PdfDoc, img: ref Image, gs: ref GState,
 				db := int dstbuf[di];
 				dg := int dstbuf[di+1];
 				dr := int dstbuf[di+2];
-				rowbuf[di] = byte ((int(b + 0.5) * ca + db * ia) / 255);
-				rowbuf[di+1] = byte ((int(g + 0.5) * ca + dg * ia) / 255);
-				rowbuf[di+2] = byte ((int(r + 0.5) * ca + dr * ia) / 255);
+				rowbuf[di] = byte ((int b * ca + db * ia) / 255);
+				rowbuf[di+1] = byte ((int g * ca + dg * ia) / 255);
+				rowbuf[di+2] = byte ((int r * ca + dr * ia) / 255);
 			} else {
 				# Inferno RGB24 stores bytes as B, G, R in memory
-				rowbuf[di] = byte int (b + 0.5);
-				rowbuf[di+1] = byte int (g + 0.5);
-				rowbuf[di+2] = byte int (r + 0.5);
+				rowbuf[di] = byte int b;	# int of a real rounds: 255.5 made 256, black
+				rowbuf[di+1] = byte int g;
+				rowbuf[di+2] = byte int r;
 			}
 		}
 		img.writepixels(rr, rowbuf);
@@ -5855,7 +5855,7 @@ wordbox(trm: array of real, x0, x1, fs, ph: real): Rect
 			if(py < miny) miny = py;
 			if(py > maxy) maxy = py;
 		}
-	return Rect((int minx, int miny), (int (maxx + 0.5), int (maxy + 0.5)));
+	return Rect((int math->floor(minx), int math->floor(miny)), (int math->ceil(maxx), int math->ceil(maxy)));
 }
 
 # The numeric operands, in order (operands are newest first)

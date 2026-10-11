@@ -177,7 +177,7 @@ testPdf(t: ref T)
 	(e, h) := openfile(t, "pdf", "/tests/render/square.pdf", nil, nil);
 	t.assert(e->nsheets(h) >= 1, "a PDF has its pages as sheets");
 	sz := e->sheetsize(h, 0);
-	t.assert(sz.x > 100 && sz.y > 100, sys->sprint("a page's size at scale 100 is its size in points (got %d %d)", sz.x, sz.y));
+	t.assert(sz.x == 100 && sz.y == 100, sys->sprint("a page's size at scale 100 is its size in points, 100 (got %d %d)", sz.x, sz.y));
 	t.asserteq(e->scalable(h), 1, "a PDF paints sharp at any scale");
 	im := painted(t, e, h, 0, 100, "PDF at 100");
 	t.assert(someink(im), "a page is painted");

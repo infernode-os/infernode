@@ -9082,6 +9082,10 @@ lbkeepall := 0;	# word-break: keep-all: no break between the letters of Chinese,
 
 lbbreak(a, b: int): int
 {
+	# two ASCII letters or digits (AL, NU): no break, unless break-all;
+	# most of a page's text, each pair two calls of lbclass otherwise
+	if(!lbbreakall && asciialnum(a) && asciialnum(b))
+		return 0;
 	if(bidi == nil)
 		return isideo(a) || isideo(b);
 	ca := bidi->lbclass(a);
@@ -9168,11 +9172,16 @@ viewbox(s: string): array of real
 # nothing breaks after one, LB8a)
 lbbase(s: string, i, st0: int): int
 {
-	if(bidi == nil)
-		return i;
+	if(bidi == nil || s[i] >= ' ' && s[i] < 16r7F)
+		return i;	# (printable ASCII: no combining mark, no control, class CM)
 	while(i > st0 && bidi->lbclass(s[i]) == Bidi->LBCM)
 		i--;
 	return i;
+}
+
+asciialnum(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9';
 }
 
 # the classes a line breaks beside: ideographs, emoji, Hangul (CJ as
@@ -9236,18 +9245,48 @@ transform(s: string, t: int, first: int, lang: string): string
 }
 
 # the content language of node n: the nearest lang attribute, lower-cased
+# n's language, by its lang (or xml:lang) or its nearest ancestor's;
+# each node's kept for the layout (asked for each text run, several
+# times: Wikipedia's 10,000 nodes, a walk up the tree each)
+langs: array of string;
+langgen := 0;	# the layout langs is for
+langdoc: ref Doc;
+
 langof(n: int): string
 {
 	if(curdoc == nil)
 		return nil;
-	for(p := n; p != 0; p = curdoc.nodes[p].parent) {
-		l := curdoc.attr(p, "lang");
-		if(l == nil)
-			l = curdoc.attr(p, "xml:lang");
-		if(l != nil)
-			return lower(l);
+	if(langgen != laygen || langdoc != curdoc || len langs < curdoc.n) {
+		langs = array[curdoc.n] of string;
+		langgen = laygen;
+		langdoc = curdoc;
 	}
-	return nil;
+	return langof1(n);
+}
+
+Nolang: con " ";	# known to have none
+
+langof1(n: int): string
+{
+	if(n <= 0 || n >= len langs)
+		return nil;
+	if((l := langs[n]) != nil) {
+		if(l == Nolang)
+			return nil;
+		return l;
+	}
+	l = curdoc.attr(n, "lang");
+	if(l == nil)
+		l = curdoc.attr(n, "xml:lang");
+	if(l != nil)
+		l = lower(l);
+	else if((p := curdoc.nodes[n].parent) != 0)
+		l = langof1(p);
+	if(l == nil)
+		langs[n] = Nolang;
+	else
+		langs[n] = l;
+	return l;
 }
 
 # East Asian Width F, W or H (not A), and not Hangul: the characters a
@@ -11759,7 +11798,7 @@ lastbaseline(b: ref Box): (int, int)
 # as page.b's numbers the elements', so two styles can share a sid
 # and a face found by sid alone was another style's (a ::before line
 # took an earlier page's line height).
-Nfacecache: con 256;
+Nfacecache: con 4096;	# (styles, not faces: Wikipedia has thousands)
 faces: array of list of (ref St, ref Typeface);
 facedoc: ref Doc;	# the document the cached styles belong to
 

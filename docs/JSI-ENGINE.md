@@ -119,31 +119,35 @@ itself, and compiles hot functions to Dis modules the JIT compiles.
 ## 2. Speed
 
 `tests/js-spike/bench.js`, the spike's seven patterns, on amd64 (this
-build's container, the JIT on, `emu -c1`), the median of three runs, in
-ms:
+build's container, the JIT on, `emu -c1`, the machine otherwise idle),
+the median of three runs, in ms:
 
 | | appl/lib/js (default: compiled tier) | jsi |
 |---|---|---|
-| prop: one object's property read and written | 3080 | **2590** |
-| call: a small function called | **3447** | 4086 |
-| closure: closures made and called | 3085 | **2884** |
-| alloc: small objects made, linked, walked | 2178 | **1922** |
-| poly: one call site, three classes | 6750 | **3239** |
-| string: a string built, then split | 1510 | **612** |
-| float: floating-point arithmetic | **1860** | 2144 |
+| prop: one object's property read and written | 2990 | **2683** |
+| call: a small function called | 3450 | **2638** |
+| closure: closures made and called | 3027 | **1969** |
+| alloc: small objects made, linked, walked | 2228 | **1250** |
+| poly: one call site, three classes | 7180 | **2812** |
+| string: a string built, then split | 1663 | **606** |
+| float: floating-point arithmetic | 1711 | **1454** |
 
-jsi is ahead on five of the seven, and well ahead where the work is
-property lookup through prototypes (`poly`, 2.1x) and strings (2.5x);
-the compiled tier wins `float`, a loop it turns wholly into native code,
-and `call` by 18%: a call now roots its frame and arguments for the
-collector, which costs it what it had gained before the collector came.
-The runs shared the machine with a test262 run.
+`tests/js-spike/ops.js` times 69 everyday operations one at a time.
+jsi is ahead on 56 (2 to 9 times on string methods, `slice`, `indexOf`,
+`JSON`, `Object.entries`, spreads, `for…of`), level on 4, and behind on
+9: a method call (1.8x: a call's floor cost in jsi is about 420 ns, the
+compiled tier's method calls less), `super` calls, `Set` operations and
+promise chains (1.3 to 1.4x), and `push`, a closure call, `call`,
+`includes`, `try` (within 1.2x).
 
-These are amd64 numbers.  On amd64 the compiled tier gives little,
-because the amd64 JIT punts some of the instructions its code relies on;
-JS-ENGINE.md reports it 5 to 12 times faster than its own interpreter on
-arm64 loops.  The decision should wait for the same table on an Apple
-Silicon machine.
+A page (§4) is the measure that counts: on the bundles page the two
+engines are level.
+
+These are amd64 numbers.  The amd64 JIT punts the instructions §1
+describes; the arm64 JIT compiles more of them, and JS-ENGINE.md
+reports its compiled tier 5 to 12 times faster than its own interpreter
+on arm64 loops.  The decision should wait for the same tables on an
+Apple Silicon machine.
 
 
 ## 3. Conformance
@@ -152,8 +156,8 @@ test262 (`t262 -r -I`, the same skip list as the other engine):
 
 | | appl/lib/js (JS-ENGINE.md §13) | jsi |
 |---|---|---|
-| `test/language` | 98.3% (18652 of 18968) | **99.7%** (18904 of 18962) |
-| `test/built-ins` | 99.1% (17623 of 17791) | **99.8%** (17760 of 17791) |
+| `test/language` | 98.3% (18652 of 18968) | **99.7%** (18907 of 18962) |
+| `test/built-ins` | 99.1% (17623 of 17791) | **99.8%** (17761 of 17791) |
 
 What jsi fails, by kind:
 
@@ -197,16 +201,28 @@ webfs, and module graphs prefetched.  Charon loads the engine named by
 `/env/jsengine` (`tests/js/jspage -I` sets it to jsi), so a page runs
 under either engine unchanged.
 
-What a page turns on, measured on the same machine (amd64, loaded):
+What a page turns on, measured on the same machine (amd64, idle; the
+bundles page is seven libraries — jQuery, React, ReactDOM, lodash,
+moment, d3, three — and a script using each; medians of seven runs,
+alternating engines; `tests/js/jspage` with `/env/jstime`):
 
 | | appl/lib/js | jsi |
 |---|---|---|
 | `dom.html` (the DOM's own tests) | 224/224 | 224/224 |
-| seven bundles (jQuery, React, ReactDOM, lodash, moment, d3, three), compile | — | 76 ms (1375 before lazy compilation) |
-| the same page, the script's own work (`performance.now` to `performance.now`) | 636 ms | 754 ms |
-| `three.min.js` alone, load and run | 484 ms | 479 ms |
-| `d3.min.js` alone | 451 ms | 387 ms |
-| `gc.html` (1.2M dropped DOM/closure cycles) | 88 MB high water | 121 MB, 4.3 s |
+| bundles page: the whole page's script time (busy) | 2071 ms | **2039 ms** |
+| — the DOM prelude | 258 ms | **177 ms** |
+| — parsing (the shared parser) | 782 ms | 843 ms |
+| — compiling | 113 ms | **90 ms** |
+| — functions compiled when first called | 446 ms | **427 ms** |
+| — running | 692 ms | 718 ms |
+| bundles page: heap high water | 150 MB | **86 MB** |
+| gc.html (DOM nodes and closures made and dropped, 120 times 300): heap high water | **371 MB** | 438 MB |
+
+Both engines leave the heap where it started once a page is closed.
+Most of gc.html's high water is the DOM prelude's: `lib/js/dom.js`
+keeps a wrapper for every node a page has touched, with its listeners,
+so neither engine can free a removed node (about 209,000 objects stay
+live on that page).
 
 `js -P` prints the collector's counts; `-J` (the compiled tier) is
 accepted and does nothing.

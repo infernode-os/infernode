@@ -60,13 +60,20 @@ sleep 1;	write drag
 key $Home
 key 32 32;	write space	# space: a screen on, twice
 
-# button 3 held: the menu, released on its first item, next page
+# button 2 held: the operations, released on the first, next page
+key $Home
+ptr $x $y 2
+sleep 1
+ptr ${expr $x 30 +} ${expr $y 10 +} 2
+ptr ${expr $x 30 +} ${expr $y 10 +} 0
+sleep 1;	write menu
+# button 3 held: the pages, released on the third (items are 18 apart)
 key $Home
 ptr $x $y 4
 sleep 1
-ptr ${expr $x 30 +} ${expr $y 10 +} 4
-ptr ${expr $x 30 +} ${expr $y 10 +} 0
-sleep 1;	write menu
+ptr ${expr $x 30 +} ${expr $y 46 +} 4
+ptr ${expr $x 30 +} ${expr $y 46 +} 0
+sleep 1;	write pages
 
 key 113				# q: quit
 sleep 2
@@ -85,6 +92,18 @@ sleep 2
 cat /tests/page/three.pdf | wm/page &
 sleep 6
 write stdin
+key 113
+sleep 2
+
+# Markdown and HTML: each shown, as a sheet of its own
+wm/page /tests/render/doc.md &
+sleep 6
+write md
+key 113
+sleep 2
+wm/page /tests/charon/browser/form.html &
+sleep 6
+write html
 key 113
 sleep 2
 

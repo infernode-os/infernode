@@ -148,9 +148,11 @@ scroll bar, mouse loops and keys.
 `page(1)` shows documents in a window of their own, through the same
 view: the files named (or standard input) as one document, paging on
 from one file into the next, only the file shown held open. Button 1
-drags, the wheel scrolls, button 3 is a Tk menu (paging, zoom, fit,
-turning, find, go to a page, write the page shown as an image, the
-pages near the one shown, the files); keys do the same.
+drags, the wheel scrolls; as in Plan 9's page, button 2 raises the
+operations (paging, zoom, fit, turning, find, go to a page, write the
+page shown as an image) and button 3 the pages near the one shown and
+the files to choose from; keys do the same. A flowing document is set
+in Xenith's faces.
 
 ## The namespace
 

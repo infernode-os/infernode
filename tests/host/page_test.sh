@@ -6,8 +6,9 @@
 # step.  Pages are told apart by their images: page 1, 2 and 3 differ,
 # and a step that should show page 2 writes page 2's image byte for byte.
 # Scale and turning show in an image's size.  Covers paging (n, p, Home,
-# End, go to, space), the wheel, a drag, the button-3 menu, fit, zoom,
-# turning, two files read as one, standard input, and quitting.
+# End, go to, space), the wheel, a drag, the button-2 and button-3
+# menus, fit, zoom, turning, two files read as one, standard input,
+# quitting, and Markdown and HTML shown.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -44,7 +45,7 @@ size() {
 width() { size "$1" | cut -d' ' -f1; }
 height() { size "$1" | cut -d' ' -f2; }
 
-for n in 1 n p end home g2 fw fp zin zout r rl l wheel drag space menu two-n3 two-p two-end stdin; do
+for n in 1 n p end home g2 fw fp zin zout r rl l wheel drag space menu pages two-n3 two-p two-end stdin md html; do
 	[ -s "$(img $n)" ] || bad "no image written at step $n"
 done
 [ $failed = 0 ] || { sed -n '/^R /!p' "$LOG" | head -20; exit 1; }
@@ -68,7 +69,8 @@ shows g2 n "go to page 2"
 shows wheel n "the wheel scrolls on to page 2"
 shows drag n "a drag with button 1 pans on to page 2"
 shows space n "space twice: a screen on, to page 2"
-shows menu n "the button-3 menu's next page"
+shows menu n "the button-2 menu's next page"
+shows pages end "the button-3 menu's page 3"
 shows rl 1 "turned right and back: as it was"
 shows zout fw "zoomed in and out: as it was"
 shows two-n3 1 "two files: n past the first's last page is the second's first"
@@ -88,6 +90,14 @@ for t in r l; do
 	fi
 done
 if same r l; then bad "turned right and turned left are the same image"; else ok "turned right and left differ"; fi
+
+for t in md html; do
+	if [ "$(width $t)" -gt 300 ] && [ "$(height $t)" -gt 20 ] && ! same $t 1; then
+		ok "$t shown: $(size $t)"
+	else
+		bad "$t: $(size $t)"
+	fi
+done
 
 if grep -q '^R quit *$' "$LOG"; then ok "q: the window is gone"; else bad "q: windows left: $(grep '^R quit' "$LOG")"; fi
 grep -q '^R done' "$LOG" || bad "the driver did not finish"

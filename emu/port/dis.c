@@ -1185,7 +1185,7 @@ vmachine(void *a)
 			up->env = &up->defenv;
 		}
 		if(isched.runhd != nil)
-		if((++gccounter&0xFF) == 0 || memlow()) {
+		if((++gccounter&0xFF) == 0 || memlowpass(gccounter)) {
 			gcbusy++;
 			up->type = BusyGC;
 			pushrun(up->prog);

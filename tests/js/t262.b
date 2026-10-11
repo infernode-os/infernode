@@ -223,7 +223,7 @@ lines(s: string): list of string
 	l: list of string;
 	st := 0;
 	for(i := 0; i < len s; i++)
-		if(s[i] == '\n') {
+		if(s[i] == '\n' || s[i] == '\r') {	# a few tests are written with CR line ends
 			l = s[st:i] :: l;
 			st = i + 1;
 		}

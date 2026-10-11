@@ -240,8 +240,11 @@ rebuild(p: ref Pg)
 	phase("rebuild: laid out");
 	fitimages(p, p.root);
 	phase("rebuild: images fitted");
-	if(old != nil)
-		carrysvgs(p, inlinesvgs(p, old, nil), p.root);	# after: an inline SVG's picture is not its size
+	if(old != nil) {
+		svgs := array[p.doc.n] of ref Image;
+		if(inlinesvgs(p, old, svgs))
+			carrysvgs(p, svgs, p.root);	# after: an inline SVG's picture is not its size
+	}
 	phase("rebuild: svgs carried");
 	inlinesvg(p, p.root);
 	phase("rebuild: inline svgs");
@@ -1472,7 +1475,7 @@ inlinesvg(p: ref Pg, b: ref Box)
 		(w, h) := layout->objectbox(b);
 		if(w > 0 && h > 0 && (b.img.r.dx() != w || b.img.r.dy() != h))
 			if((pic := picof(p, b.url)) != nil && pic.svg != nil)
-				if((img := decodeimage(layout->svgresize(pic.svg, w, h), "image/svg+xml", nil)) != nil)
+				if((img := svgsized(pic, w, h)) != nil)
 					b.img = img;
 	}
 	for(i := 0; i < len b.kids; i++)
@@ -1487,34 +1490,66 @@ inlinesvg(p: ref Pg, b: ref Box)
 	}
 }
 
-# Inline <svg>s drawn already, by node, to keep across a rebuild.
-inlinesvgs(p: ref Pg, b: ref Box, acc: list of (int, ref Image)): list of (int, ref Image)
+# An SVG image drawn at w by h: each size drawn kept, as each rebuild
+# starts again from its natural size (go.dev's icons and logos, drawn
+# again at every rebuild: 100 ms each)
+Sized: adt {
+	pic:	ref Pic;
+	w, h:	int;
+	img:	ref Image;
+};
+sized: list of ref Sized;
+Nsized: con 256;
+
+svgsized(pic: ref Pic, w, h: int): ref Image
 {
-	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.img != nil && p.doc.nodes[b.node].ns == Dom->SVG)
-		acc = (b.node, b.img) :: acc;
+	for(l := sized; l != nil; l = tl l)
+		if((hd l).pic == pic && (hd l).w == w && (hd l).h == h)
+			return (hd l).img;
+	img := decodeimage(layout->svgresize(pic.svg, w, h), "image/svg+xml", nil);
+	if(img == nil)
+		return nil;
+	# newest first, the oldest let go
+	keep: list of ref Sized;
+	n := 1;
+	for(l = sized; l != nil && n < Nsized; l = tl l) {
+		keep = hd l :: keep;
+		n++;
+	}
+	sized = nil;
+	for(; keep != nil; keep = tl keep)
+		sized = hd keep :: sized;
+	sized = ref Sized(pic, w, h, img) :: sized;
+	return img;
+}
+
+# Inline <svg>s drawn already, by node, to keep across a rebuild (by
+# node: a box looked each up in a list, go.dev's icons 34 ms a rebuild);
+# whether there are any
+inlinesvgs(p: ref Pg, b: ref Box, imgs: array of ref Image): int
+{
+	any := 0;
+	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.node < len imgs && b.img != nil && p.doc.nodes[b.node].ns == Dom->SVG) {
+		imgs[b.node] = b.img;
+		any = 1;
+	}
 	for(i := 0; i < len b.kids; i++)
-		acc = inlinesvgs(p, b.kids[i], acc);
+		any |= inlinesvgs(p, b.kids[i], imgs);
 	for(l := b.pos; l != nil; l = tl l)
-		acc = inlinesvgs(p, hd l, acc);
+		any |= inlinesvgs(p, hd l, imgs);
 	for(i = 0; i < len b.lines; i++) {
 		ln := b.lines[i];
 		for(j := 0; j < len ln.frags; j++)
 			if(ln.frags[j].kind == Layout->Fatomic)
-				acc = inlinesvgs(p, ln.frags[j].box, acc);
+				any |= inlinesvgs(p, ln.frags[j].box, imgs);
 	}
-	return acc;
+	return any;
 }
 
-carrysvgs(p: ref Pg, imgs: list of (int, ref Image), b: ref Box)
+carrysvgs(p: ref Pg, imgs: array of ref Image, b: ref Box)
 {
-	if(imgs == nil)
-		return;
-	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.img == nil)
-		for(l := imgs; l != nil; l = tl l)
-			if((hd l).t0 == b.node) {
-				b.img = (hd l).t1;
-				break;
-			}
+	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.node < len imgs && b.img == nil)
+		b.img = imgs[b.node];
 	for(i := 0; i < len b.kids; i++)
 		carrysvgs(p, imgs, b.kids[i]);
 	for(pl := b.pos; pl != nil; pl = tl pl)

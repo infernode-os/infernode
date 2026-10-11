@@ -40,6 +40,7 @@ View: adt {
 	size:     fn(v: self ref View, n: int): Draw->Point;
 	at:       fn(v: self ref View, p: Draw->Point): (int, Draw->Point);
 	wordof:   fn(v: self ref View, n: int, p: Draw->Point): (string, Draw->Rect, int);
+	linkat:   fn(v: self ref View, n: int, p: Draw->Point): (string, int);
 	select:   fn(v: self ref View, n: int, word: string, r: Draw->Rect);
 	find:     fn(v: self ref View, s: string): string;
 	foundon:  fn(v: self ref View, n: int): list of Draw->Rect;
@@ -153,6 +154,14 @@ the view and the place in it.
 .PP
 .I Wordof
 is the word the engine drew at a point,
+.I linkat
+the link there: one to a page of the document
+.RB ( #page= \fIn\fP)
+is followed, giving
+.BR "(nil, 1)" ;
+any other is given back for the caller to open, and
+.B "(nil, 0)"
+is none;
 .I select
 marks one,
 .I find

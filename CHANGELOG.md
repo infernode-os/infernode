@@ -149,6 +149,14 @@ All notable changes to InferNode are documented in this file.
   never moves now chooses New, as rio's does; any other button cancels.
   `tests/host/wm_test.sh` drives the menu, the frame and focus and
   checks where they leave the windows.
+- **One job per mouse button, as in Plan 9.** wm/page's operations
+  (paging, zoom, fit, turning, find, go to, write) move to button 2, and
+  button 3 lists the pages and files to choose from, as Plan 9's page
+  does; wm/sh's edit menu was already on button 2 and wm/wm's window
+  menu on 3. The convention is written down in
+  `docs/DESIGN-PRINCIPLES.md`. wm/page sets Markdown and HTML in
+  Xenith's faces (Go and Go Mono); it used the default font, which has
+  no em dash.
 - **`/chan/uitest` types text** (`text STRING`), and is documented in
   `wm(1)`. `tests/host/page_test.sh` now drives wm/page through paging,
   the wheel, a drag, the button-3 menu, fit, zoom, turning, two files

@@ -505,7 +505,7 @@ keyof(c: array of ref Simple): (int, string)
 # the bits they require; if the element's filter lacks any, the selector
 # cannot match and is skipped without walking the tree.
 
-Nbloom: con 256;	# bits
+Nbloom: con 2048;	# bits (with 256, GitHub's deep pages styled in 516 ms, not 432)
 
 ancbits(s: ref Sel): array of int
 {
@@ -582,6 +582,7 @@ M: adt {
 	env:	ref Env;
 	classes:	array of list of string;	# per node, lazily
 	cls:	array of array of int;	# per node, lazily: its classes interned
+	sig:	array of big;	# per node, lazily: its own tag, id and classes as bits (bit 0: computed)
 	index:	array of int;	# per node: 1-based index among element siblings, lazily
 	count:	array of int;	# per node: number of element children, lazily (+1)
 	scope:	int;	# what :scope matches; 0, the root
@@ -592,7 +593,7 @@ M: adt {
 
 matcher(d: ref Doc, env: ref Env): ref M
 {
-	return ref M(d, env, array[d.n] of list of string, array[d.n] of array of int, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil);
+	return ref M(d, env, array[d.n] of list of string, array[d.n] of array of int, array[d.n] of big, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil);
 }
 
 # n's parent element for a selector of a shadow tree: past the tree's
@@ -817,8 +818,67 @@ matchsel(m: ref M, s: ref Sel, n: int): int
 
 # Does compound k (and everything to its left) match at n?  anchor is
 # the :has() anchor for relative selectors, else 0.
+# A compound's tag, id and classes, and a node's own, as bits of a
+# word: a node whose bits lack one of a compound's cannot match it, which
+# is found before the compound is tried.  A descendant combinator tries
+# its compound at each ancestor in turn (GitHub's pages: 2.9 million a
+# styling, nearly all failing).
+featbit(s: string): big
+{
+	return big 1 << (strhash(s, 63) + 1);
+}
+
+selmasks(s: ref Sel): array of big
+{
+	a := array[len s.parts] of big;
+	for(k := 0; k < len s.parts; k++) {
+		mk := big 0;
+		c := s.parts[k];
+		for(i := 0; i < len c; i++)
+			case c[i].kind {
+			Css->Stype =>
+				mk |= featbit("t" + c[i].name);
+			Css->Sid =>
+				mk |= featbit("#" + c[i].name);
+			Css->Sclass =>
+				mk |= featbit("." + c[i].name);
+			}
+		a[k] = mk;
+	}
+	s.masks = a;
+	return a;
+}
+
+nodesig(m: ref M, n: int): big
+{
+	if(n >= len m.sig) {
+		a := array[m.d.n] of big;
+		a[0:] = m.sig;
+		m.sig = a;
+	}
+	if((sg := m.sig[n]) != big 0)
+		return sg;
+	d := m.d;
+	nd := d.nodes[n];
+	nm := nd.name;
+	if(nd.ns != Dom->HTML)
+		nm = lower(nm);	# as compound compares it
+	sg = big 1 | featbit("t" + nm);
+	if((id := d.attr(n, "id")) != nil)
+		sg |= featbit("#" + id);
+	for(cl := classesof(m, n); cl != nil; cl = tl cl)
+		sg |= featbit("." + hd cl);
+	m.sig[n] = sg;
+	return sg;
+}
+
 matchfrom(m: ref M, s: ref Sel, k, n, anchor: int): int
 {
+	masks := s.masks;
+	if(masks == nil)
+		masks = selmasks(s);
+	if((mk := masks[k]) != big 0 && (nodesig(m, n) & mk) != mk)
+		return 0;
 	if(!compound(m, s.parts[k], n))
 		return 0;
 	d := m.d;
@@ -2591,14 +2651,7 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 	pse: list of (string, ref Md);
 	nmd := 0;
 	unlayered := Tauthor + idxlayers(idx);
-	matched: list of ref Entry;
-	for(cl := candidates(m, idx, n); cl != nil; cl = tl cl) {
-		e := hd cl;
-		if(e.anc != nil && !bloomok(filter, e.anc))
-			continue;
-		if(matchsel(m, e.sel, n))
-			matched = e :: matched;
-	}
+	matched := matchedof(m, idx, n, filter);
 	for(; extra != nil; extra = tl extra)
 		matched = hd extra :: matched;
 	key := sharekey(d, n, parent, matched);
@@ -2617,7 +2670,7 @@ styleof(m: ref M, idx: ref Index, n: int, parent: ref St, ctx: ref Ctx, c: ref C
 				return x.st;
 			}
 	}
-	for(cl = matched; cl != nil; cl = tl cl) {
+	for(cl := matched; cl != nil; cl = tl cl) {
 		e := hd cl;
 		for(k := 0; k < len e.decls; k++) {
 			md := ref Md(tierof(e.tier, e.decls[k].important, unlayered), e.sel.spec, e.order<<10 | (k & 1023), e.decls[k]);
@@ -2798,6 +2851,48 @@ candidates(m: ref M, idx: ref Index, n: int): list of ref Entry
 	}
 	if(parentel(d, n) == 0)
 		r = appendmatching(idx.attr[strhash(":root", Nbucket)], r, ":root");
+	return r;
+}
+
+# The rules that match n, straight from its buckets (as candidates gives
+# them, but with no list made of those that do not match: hundreds an
+# element, on some pages)
+matchedof(m: ref M, idx: ref Index, n: int, filter: array of int): list of ref Entry
+{
+	d := m.d;
+	candgen++;
+	r := trybucket(m, idx.other, nil, n, filter, nil);
+	nd := d.nodes[n];
+	nm := nd.name;
+	if(nd.ns != Dom->HTML)
+		nm = lower(nm);
+	r = trybucket(m, idx.tag[strhash(nm, Nbucket)], nm, n, filter, r);
+	if((id := d.attr(n, "id")) != nil)
+		r = trybucket(m, idx.id[strhash(id, Nbucket)], id, n, filter, r);
+	for(cl := classesof(m, n); cl != nil; cl = tl cl)
+		if(hd cl != "")
+			r = trybucket(m, idx.class[strhash(hd cl, Nbucket)], hd cl, n, filter, r);
+	for(al := nd.attrs; al != nil; al = tl al) {
+		an := lower((hd al).t0);
+		r = trybucket(m, idx.attr[strhash(an, Nbucket)], an, n, filter, r);
+	}
+	if(parentel(d, n) == 0)
+		r = trybucket(m, idx.attr[strhash(":root", Nbucket)], ":root", n, filter, r);
+	return r;
+}
+
+trybucket(m: ref M, l: list of ref Entry, key: string, n: int, filter: array of int, r: list of ref Entry): list of ref Entry
+{
+	for(; l != nil; l = tl l) {
+		e := hd l;
+		if(key != nil && e.key != nil && e.key != key || e.mark == candgen)
+			continue;
+		e.mark = candgen;
+		if(e.anc != nil && !bloomok(filter, e.anc))
+			continue;
+		if(matchsel(m, e.sel, n))
+			r = e :: r;
+	}
 	return r;
 }
 

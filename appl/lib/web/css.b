@@ -1122,7 +1122,7 @@ complex(v: array of ref Tok, parent: array of ref Sel, relative: int): ref Sel
 	if(cps == nil)
 		return nil;
 	n := len cps;
-	s := ref Sel(array[n] of array of ref Simple, array[n] of int, 0, pseudo);
+	s := ref Sel(array[n] of array of ref Simple, array[n] of int, 0, pseudo, nil);
 	for(k := n-1; k >= 0; k--) {
 		s.parts[k] = hd cps;
 		s.combs[k] = hd cbs;

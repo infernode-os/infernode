@@ -157,6 +157,60 @@ testRestyle(t: ref T)
 	t.assert(prev.st[byid(d, "p1")] != nil && prev.st[byid(d, "p1")].color == int 16rFF0000FF, "the :has() came to be on p's section");
 }
 
+# style->restyle when a parent gains and loses children: the children
+# whose matching depends on their siblings (+, ~, :nth-child,
+# :last-child, :only-child, :nth-last-child) restyled as compute has them
+testRestyleKids(t: ref T)
+{
+	sheets := array[] of {
+		"li:last-child{color:red} li:only-child{margin:3px}",
+		"li:nth-child(2n){color:red} li+li{margin-left:2px} li~.z{padding:1px}",
+		"li:nth-last-child(2){color:red} li:first-child{margin:4px}",
+		"",
+	};
+	for(sh := 0; sh < len sheets; sh++) {
+		src := "<style>" + sheets[sh] + "</style><body><ul id=u><li>1<li class=z>2<li>3</ul><ol id=o></ol>";
+		d := html->parsestring(src, "http://example.com/dir/page.html");
+		s := Styles.new();
+		for(n := 1; n < d.n; n++)
+			if(d.nodes[n].kind == Dom->Element && d.nodes[n].tag == Dom->Tstyle)
+				s.add(css->parse(d.textof(n)), Style->Author, d.url);
+		prev := style->compute(d, s, env);
+		u := byid(d, "u");
+		steps := array[] of {"append", "insert first", "remove middle", "remove last", "into empty", "second into it"};
+		for(i := 0; i < len steps; i++) {
+			case i {
+			0 =>
+				el(d, u, "li", nil);
+			1 =>
+				k := d.create(Dom->Element, "li", 0);
+				d.insert(u, k, d.nodes[u].first);
+			2 =>
+				d.remove(d.nodes[d.nodes[d.nodes[u].first].next].next);
+			3 =>
+				d.remove(d.nodes[u].last);
+			4 =>
+				el(d, byid(d, "o"), "li", nil);
+			5 =>
+				el(d, byid(d, "o"), "li", "class" :: "z" :: nil);
+			}
+			r := style->restyle(d, s, env, prev);
+			w := style->compute(d, s, env);
+			bad := 0;
+			for(n = 1; n < d.n; n++) {
+				(a, b) := (r.st[n], w.st[n]);
+				if(a == nil && b == nil)
+					continue;
+				if(a == nil || b == nil || style->dump(a) != style->dump(b))
+					if(bad++ == 0)
+						t.error(sys->sprint("sheet %d, %s: element %d (%s) restyled differs", sh, steps[i], n, d.nodes[n].name));
+			}
+			t.asserteq(bad, 0, sys->sprint("sheet %d, %s: elements that differ", sh, steps[i]));
+			prev = w;
+		}
+	}
+}
+
 # a new element under parent, with attributes (name, value, ...)
 el(d: ref Doc, parent: int, name: string, attrs: list of string): int
 {
@@ -609,6 +663,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("URLs", testURLs);
 	run("Element", testElement);
 	run("Restyle", testRestyle);
+	run("RestyleKids", testRestyleKids);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

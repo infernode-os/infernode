@@ -319,6 +319,7 @@ Style: module
 		hashas:	int;	# a rule uses :has(), whose element's style follows its descendants
 		hasanchors:	list of array of ref Css->Simple;	# what an element must match for a :has() of a rule's to be on it (its compound, less the :has)
 		hasup:	int;	# a rule's subject is a :has() alone that looks down: any ancestor of a change may be its element
+		sibs:	int;	# how rules depend on siblings: Sibafter, Sibnext, Sibbefore bits (restyle)
 	};
 	Entry: adt {
 		sel:	ref Css->Sel;

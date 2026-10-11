@@ -193,7 +193,7 @@ tagname(tag: int): string
 
 Doc.new(url: string): ref Doc
 {
-	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil, nil, -1);
+	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil, nil, -1, nil);
 	d.create(Document, "#document", HTML);
 	return d;
 }
@@ -224,10 +224,25 @@ changed(d: ref Doc, n: int)
 		return;
 	if(n <= 0 || ++d.nchanged > Changedmax) {
 		d.changed = nil;
+		d.kids = nil;
 		d.nchanged = -1;
 		return;
 	}
 	d.changed = n :: d.changed;
+}
+
+# parent's children changed at at (Doc.kids)
+kidschanged(d: ref Doc, parent, at: int)
+{
+	if(d.nchanged < 0)
+		return;
+	if(++d.nchanged > Changedmax) {
+		d.changed = nil;
+		d.kids = nil;
+		d.nchanged = -1;
+		return;
+	}
+	d.kids = (parent, at) :: d.kids;
 }
 
 # n and the siblings after it, which can match by it (+, ~)
@@ -420,7 +435,8 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 		d.remove(child);
 	if(d.nodes[parent].first == 0)
 		changedfrom(d, parent);	# (:empty no longer)
-	changed(d, parent);
+	changed(d, child);
+	kidschanged(d, parent, child);
 	p := d.nodes[parent];
 	c := d.nodes[child];
 	c.parent = parent;
@@ -450,7 +466,7 @@ Doc.remove(d: self ref Doc, child: int)
 	c := d.nodes[child];
 	if(c.parent == 0)
 		return;
-	changed(d, c.parent);
+	kidschanged(d, c.parent, c.next);
 	changed(d, child);	# (out of the tree: its styles go)
 	if(c.prev == 0 && c.next == 0)
 		changedfrom(d, c.parent);	# (:empty now)
@@ -470,9 +486,18 @@ Doc.remove(d: self ref Doc, child: int)
 Doc.setattr(d: self ref Doc, n: int, name, val: string)
 {
 	nd := d.nodes[n];
+	# the value it has already: nothing changes (scripts set the same
+	# class or attribute again and again; each was a restyle, of the
+	# whole document when it was <html>'s)
+	for(l := nd.attrs; l != nil; l = tl l)
+		if((hd l).t0 == name) {
+			if((hd l).t1 == val)
+				return;
+			break;
+		}
 	r: list of (string, string);
 	found := 0;
-	for(l := nd.attrs; l != nil; l = tl l) {
+	for(l = nd.attrs; l != nil; l = tl l) {
 		(k, v) := hd l;
 		if(k == name) {
 			v = val;
@@ -491,8 +516,12 @@ Doc.setattr(d: self ref Doc, n: int, name, val: string)
 Doc.delattr(d: self ref Doc, n: int, name: string)
 {
 	nd := d.nodes[n];
+	for(l := nd.attrs; l != nil && (hd l).t0 != name; l = tl l)
+		;
+	if(l == nil)
+		return;	# it has none: nothing changes
 	r: list of (string, string);
-	for(l := nd.attrs; l != nil; l = tl l)
+	for(l = nd.attrs; l != nil; l = tl l)
 		if((hd l).t0 != name)
 			r = hd l :: r;
 	for(nd.attrs = nil; r != nil; r = tl r)

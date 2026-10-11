@@ -75,6 +75,11 @@ Dom: module
 		# nchanged -1, everything
 		changed:	list of int;
 		nchanged:	int;
+		# and the parents whose children were added or taken away, with
+		# where (the child added; the one after the child taken away, 0
+		# at the end): their other children may match otherwise (+, ~,
+		# :nth-child, :last-child), which restyle knows whether rules ask
+		kids:	list of (int, int);
 
 		new:	fn(url: string): ref Doc;
 		create:	fn(d: self ref Doc, kind: int, name: string, ns: int): int;

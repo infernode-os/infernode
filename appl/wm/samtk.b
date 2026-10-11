@@ -89,6 +89,15 @@ init(c: ref Context)
 	tkclient = load Tkclient Tkclient->PATH;
 	tkclient->init();
 
+	themecols();
+
+	# both loaders of Samtk call init; the window is made once
+	if (ctxt.top == nil)
+		mktop();
+}
+
+themecols()
+{
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if (lucitheme != nil) {
 		th := lucitheme->gettheme();
@@ -97,10 +106,30 @@ init(c: ref Context)
 		screenbg = col(th.bg);
 		red = col(th.red);
 	}
+}
 
-	# both loaders of Samtk call init; the window is made once
-	if (ctxt.top == nil)
-		mktop();
+# a theme switched: the colours again, and every layer in them
+retheme(t: ref Tk->Toplevel)
+{
+	themecols();
+	tk->cmd(t, ".c configure -background " + screenbg);
+	for (i := 0; i < len ctxt.flayers; i++) {
+		fl := ctxt.flayers[i];
+		if (fl == nil || fl.t == nil)
+			continue;
+		c := cols(fl);
+		tkcmds(t, array[] of {
+			fl.w[0:len fl.w - 2] + " configure -background " + c[BORD],
+			fl.w + ".s configure -background " + c[BORD],
+			fl.w + ".g configure -background " + c[BACK],
+			fl.w + ".t configure -background " + c[BACK] + " -foreground " + c[TEXT]
+				+ " -selectbackground " + c[HIGH] + " -selectforeground " + c[TEXT],
+		});
+		flborder(fl, fl == ctxt.which);
+		if ((n := whichtext(fl.tag)) >= 0)
+			setscrollbar(ctxt.texts[n], fl);
+	}
+	tk->cmd(t, "update");
 }
 
 # sam's one window
@@ -1079,6 +1108,8 @@ pump(t: ref Tk->Toplevel)
 	c := <-t.ctxt.ctl or
 	c = <-t.wreq =>
 		tkclient->wmctl(t, c);
+		if (c == "retheme")
+			retheme(t);
 	}
 }
 

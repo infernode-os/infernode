@@ -817,9 +817,11 @@ changecol(TkEnv *e, int setcol, int col, ulong rgba)
 {
 	if (setcol) {
 		e->set |= (1<<col);
+		e->own |= (1<<col);
 	} else {
 		rgba = 0;
 		e->set &= ~(1<<col);
+		e->own &= ~(1<<col);
 	}
 	e->colors[col] = rgba;
 	return rgba;

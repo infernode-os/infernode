@@ -797,6 +797,11 @@ mousetask()
 					break;
 				}
 			m = <- cplumb =>
+				# a file opened for the plumber changes the row as a
+				# click does, so it holds the row as a click does: this
+				# runs beside the 9P server's procs (acme's threads
+				# never ran at once; these do)
+				row.qlock.lock();
 				if (m.kind == "text") {
 					attrs := plumbmsg->string2attrs(m.attr);
 					(found, act) := plumbmsg->lookup(attrs, "action");
@@ -812,6 +817,7 @@ mousetask()
 					}
 				}
 				bflush();
+				row.qlock.unlock();
 			dev := <-docevc =>
 				# a document's work, done off the main loop (docview(2))
 				row.qlock.lock();

@@ -22,7 +22,7 @@ pgt0 := 0;		# when the page started, for performance.now()
 # where a page's time went (/env/jstime): the preludes, its scripts
 # (parsed, compiled, run), every task, and when the last one ended
 jstime := 0;
-tprelude, nscripts, scriptchars, tparse, tcompile, trun, tbusy, ntasks, tlastbusy, treported, nselect, tselect: int;
+tprelude, nscripts, scriptchars, tparse, tcompile, trun, tbusy, ntasks, tlastbusy, treported, nselect, tselect, nbox, tbox, ncomputed, tcomputed: int;
 pgpending: list of ref Pending;	# what a task asked of the host, done when it ends
 timerc: chan of int;
 fetchc: chan of ref Fetched;
@@ -100,7 +100,7 @@ page1(h: ref Js->Host): string
 	jitinit();	# its template is read from /dis, which the realm will not have
 	(jt, nil) := sys->stat("/env/jstime");
 	jstime = jt >= 0;
-	tprelude = nscripts = scriptchars = tparse = tcompile = trun = tbusy = ntasks = tlastbusy = treported = nselect = tselect = 0;
+	tprelude = nscripts = scriptchars = tparse = tcompile = trun = tbusy = ntasks = tlastbusy = treported = nselect = tselect = nbox = tbox = ncomputed = tcomputed = 0;
 	tlazy = nlazy = 0;
 	if(originfs == nil)
 		return sys->sprint("cannot load %s: %r", Originfs->PATH);
@@ -182,8 +182,8 @@ page1(h: ref Js->Host): string
 
 timereport(): string
 {
-	return sys->sprint("time: prelude %d ms; %d scripts, %d characters: parse %d ms, compile %d ms, run %d ms; lazy compiles %d, %d ms; querySelector %d, %d ms; %d tasks, busy %d ms, last ended at %d ms",
-		tprelude, nscripts, scriptchars, tparse, tcompile, trun, nlazy, tlazy, nselect, tselect, ntasks, tbusy, tlastbusy);
+	return sys->sprint("time: prelude %d ms; %d scripts, %d characters: parse %d ms, compile %d ms, run %d ms; lazy compiles %d, %d ms; querySelector %d, %d ms; boxes %d, %d ms; computed styles %d, %d ms; %d tasks, busy %d ms, last ended at %d ms",
+		tprelude, nscripts, scriptchars, tparse, tcompile, trun, nlazy, tlazy, nselect, tselect, nbox, tbox, ncomputed, tcomputed, ntasks, tbusy, tlastbusy);
 }
 
 longreport(s: string)
@@ -243,7 +243,10 @@ hook(name: string, args: array of V): int
 		# (as it goes: the last said is where the time went, though
 		# the page be closed in the middle of a task)
 		treported = tlastbusy;
-		pageconsole(timereport());
+		r := timereport();
+		if(pgh.profile > 0)
+			r += "\n" + profiled(25);
+		pageconsole(r);
 	}
 	for(l := rev(pgpending); l != nil; l = tl l)
 		pick p := hd l {
@@ -1005,14 +1008,21 @@ needesc(c: int): int
 dn_box(nil: V, a, n: int, nil: V, nil: int): V
 {
 	x := nodearg(a, n, 0);
+	bt0 := sys->millisec();
 	(shown, bx, by, bw, bh) := pgh.box(pgh.id, x);
+	nbox++;
+	tbox += sys->millisec() - bt0;
 	return objv(arrayof(array[] of {inum(shown), inum(bx), inum(by), inum(bw), inum(bh)}));
 }
 
 dn_computed(nil: V, a, n: int, nil: V, nil: int): V
 {
 	x := nodearg(a, n, 0);
-	return strv(tojs(pgh.computed(pgh.id, x, jsarg(a, n, 1))));
+	ct0 := sys->millisec();
+	cv := pgh.computed(pgh.id, x, jsarg(a, n, 1));
+	ncomputed++;
+	tcomputed += sys->millisec() - ct0;
+	return strv(tojs(cv));
 }
 
 dn_media(nil: V, a, n: int, nil: V, nil: int): V

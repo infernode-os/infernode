@@ -524,8 +524,26 @@ showexc(v: V): string
 	return "uncaught exception";
 }
 
+# A lazy function's code holds what compiling it needs, which holds
+# the code again (its compile's function list): a cycle only the
+# collector frees, so a realm with lazy functions waited for an idle
+# emulator to go.  Dropped when the realm is.
+unlazy(c: ref Code)
+{
+	if(c == nil)
+		return;
+	c.lazy = nil;
+	for(i := 0; i < len c.funcs; i++)
+		unlazy(c.funcs[i]);
+}
+
 shutdown()
 {
+	for(i := 0; i < len globalcodes; i++)
+		unlazy(globalcodes[i]);
+	for(i = 0; i < nmod && i < len mods; i++)
+		if(mods[i] != nil)
+			unlazy(mods[i].code);
 	okind = nil;
 	oflags = nil;
 	oshape = nil;

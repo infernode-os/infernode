@@ -112,7 +112,7 @@ parseeval0(src: string, ismod, strict, ctx: int, privnames: list of string, isev
 # compiler takes to be captured from around it.  The body is parsed
 # again when the function is first called.
 
-lazymin := 512 * 1024;
+lazymin := 16 * 1024;	# (measured: a 429 KB bundle compiles in 219 ms, not 496; a 212 KB one in 68 ms, not 180)
 
 setlazy(n: int)
 {

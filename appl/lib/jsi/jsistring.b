@@ -1356,17 +1356,17 @@ natjson(id: int, nil: ref Obj, nil: V, args: array of V, nil: ref Obj): V
 	case id {
 	NJparse =>
 		s := strarg(args, 0);
-		p := ref Jp(s, 0);
+		rev := arg(args, 1);
+		p := ref Jp(s, 0, iscallable(rev), nil);
 		jsonws(p);
 		v := jsonvalue(p);
 		jsonws(p);
 		if(p.i < len s)
 			jsonerr(p);
-		rev := arg(args, 1);
-		if(iscallable(rev)) {
+		if(p.keep) {
 			root := plainobj();
 			createdata(root, intern(""), v);
-			return internalize(root, intern(""), rev.o);
+			return internalize(root, intern(""), rev.o, p.last);
 		}
 		return v;
 	NJstringify =>
@@ -1375,7 +1375,7 @@ natjson(id: int, nil: ref Obj, nil: V, args: array of V, nil: ref Obj): V
 		s := strarg(args, 0);
 		if(s == "" || isjsonws(s[0]) || isjsonws(s[len s - 1]))
 			throwerr(ESyntax, "Invalid value for JSON.rawJSON");
-		p := ref Jp(s, 0);
+		p := ref Jp(s, 0, 0, nil);
 		v := jsonvalue(p);
 		if(p.i < len s || v.t == Tobj)
 			throwerr(ESyntax, "Invalid value for JSON.rawJSON");
@@ -1400,6 +1400,16 @@ isjsonws(c: int): int
 Jp: adt {
 	s:	string;
 	i:	int;
+	keep:	int;	# record what was parsed, for a reviver's context (JSON.parse source text access)
+	last:	ref Jrec;	# the record of the value just parsed
+};
+
+# a parsed value: a primitive's source text, an array's elements, an object's properties
+Jrec: adt {
+	v:	V;
+	src:	string;
+	elems:	array of ref Jrec;
+	props:	list of (int, ref Jrec);
 };
 
 jsonerr(p: ref Jp)
@@ -1421,13 +1431,17 @@ jsonvalue(p: ref Jp): V
 	if(p.i >= len p.s)
 		jsonerr(p);
 	c := p.s[p.i];
+	start := p.i;
 	case c {
 	'{' =>
 		p.i++;
 		o := plainobj();
+		props: list of (int, ref Jrec);
 		jsonws(p);
 		if(p.i < len p.s && p.s[p.i] == '}') {
 			p.i++;
+			if(p.keep)
+				p.last = ref Jrec(objv(o), nil, nil, nil);
 			return objv(o);
 		}
 		for(;;) {
@@ -1441,6 +1455,8 @@ jsonvalue(p: ref Jp): V
 			p.i++;
 			v := jsonvalue(p);
 			a := intern(k);
+			if(p.keep)
+				props = (a, p.last) :: props;	# the last of a repeated key is found first
 			if(atomidx[a] == -1 && !o.sh.dict && slotof(o.sh, a) < 0)
 				addprop(o, a, Adefault, v);
 			else
@@ -1454,6 +1470,8 @@ jsonvalue(p: ref Jp): V
 			}
 			if(p.s[p.i] == '}') {
 				p.i++;
+				if(p.keep)
+					p.last = ref Jrec(objv(o), nil, nil, props);
 				return objv(o);
 			}
 			jsonerr(p);
@@ -1461,13 +1479,21 @@ jsonvalue(p: ref Jp): V
 	'[' =>
 		p.i++;
 		a := newarray(0);
+		elems: list of ref Jrec;
+		n := 0;
 		jsonws(p);
 		if(p.i < len p.s && p.s[p.i] == ']') {
 			p.i++;
+			if(p.keep)
+				p.last = ref Jrec(objv(a), nil, array[0] of ref Jrec, nil);
 			return objv(a);
 		}
 		for(;;) {
 			apush(a, jsonvalue(p));
+			if(p.keep) {
+				elems = p.last :: elems;
+				n++;
+			}
 			jsonws(p);
 			if(p.i >= len p.s)
 				jsonerr(p);
@@ -1477,33 +1503,60 @@ jsonvalue(p: ref Jp): V
 			}
 			if(p.s[p.i] == ']') {
 				p.i++;
+				if(p.keep) {
+					ea := array[n] of ref Jrec;
+					for(i := n - 1; i >= 0; i--) {
+						ea[i] = hd elems;
+						elems = tl elems;
+					}
+					p.last = ref Jrec(objv(a), nil, ea, nil);
+				}
 				return objv(a);
 			}
 			jsonerr(p);
 		}
 	'"' =>
-		return strv(jsonstring(p));
+		return jsonprim(p, strv(jsonstring(p)), start);
 	't' =>
 		if(p.i + 4 <= len p.s && p.s[p.i:p.i+4] == "true") {
 			p.i += 4;
-			return truev;
+			return jsonprim(p, truev, start);
 		}
 	'f' =>
 		if(p.i + 5 <= len p.s && p.s[p.i:p.i+5] == "false") {
 			p.i += 5;
-			return falsev;
+			return jsonprim(p, falsev, start);
 		}
 	'n' =>
 		if(p.i + 4 <= len p.s && p.s[p.i:p.i+4] == "null") {
 			p.i += 4;
-			return nullv;
+			return jsonprim(p, nullv, start);
 		}
 	* =>
 		if(c == '-' || c >= '0' && c <= '9')
-			return jsonnumber(p);
+			return jsonprim(p, jsonnumber(p), start);
 	}
 	jsonerr(p);
 	return undef;
+}
+
+jsonprim(p: ref Jp, v: V, start: int): V
+{
+	if(p.keep)
+		p.last = ref Jrec(v, p.s[start:p.i], nil, nil);
+	return v;
+}
+
+jrecprop(r: ref Jrec, k: int): ref Jrec
+{
+	if(r == nil)
+		return nil;
+	for(l := r.props; l != nil; l = tl l) {
+		(a, c) := hd l;
+		if(a == k)
+			return c;
+	}
+	return nil;
 }
 
 jsonnumber(p: ref Jp): V
@@ -1621,16 +1674,22 @@ jsonstring(p: ref Jp): string
 	}
 }
 
-internalize(holder: ref Obj, k: int, rev: ref Obj): V
+# the reviver over holder[k]; rec is what the parser made of it, if it is still that
+internalize(holder: ref Obj, k: int, rev: ref Obj, rec: ref Jrec): V
 {
 	v := get(holder, k, objv(holder));
+	if(rec != nil && !samevalue(rec.v, v))
+		rec = nil;	# changed by the reviver: no source text, and its parts are not it either
 	if(v.t == Tobj) {
 		o := v.o;
 		if(isarray(v)) {
 			n := lengthof(o);
 			for(i := 0.0; i < n; i += 1.0) {
 				kk := realkey(i);
-				nv := internalize(o, kk, rev);
+				c: ref Jrec;
+				if(rec != nil && rec.elems != nil && i < real len rec.elems)
+					c = rec.elems[int i];
+				nv := internalize(o, kk, rev, c);
 				if(nv.t == Tundef)
 					deleteprop(o, kk);
 				else
@@ -1639,7 +1698,7 @@ internalize(holder: ref Obj, k: int, rev: ref Obj): V
 		} else {
 			keys := enumkeys(o);
 			for(i := 0; i < len keys; i++) {
-				nv := internalize(o, keys[i], rev);
+				nv := internalize(o, keys[i], rev, jrecprop(rec, keys[i]));
 				if(nv.t == Tundef)
 					deleteprop(o, keys[i]);
 				else
@@ -1647,7 +1706,10 @@ internalize(holder: ref Obj, k: int, rev: ref Obj): V
 			}
 		}
 	}
-	return call(rev, objv(holder), array[] of {keyv(k), v});
+	ctx := plainobj();
+	if(rec != nil && v.t != Tobj)
+		createdata(ctx, intern("source"), strv(rec.src));
+	return call(rev, objv(holder), array[] of {keyv(k), v, objv(ctx)});
 }
 
 Jst: adt {

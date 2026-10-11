@@ -46,6 +46,7 @@ stats: list of ref Stat;
 featfail: list of ref Stat;
 failfd: ref Sys->FD;
 verbose := 0;
+listed: list of string;	# -l: the tests named in a file
 showpaths := 0;	# each test's path before it runs: which one took the emulator down
 runmode := 0;
 timeout := 10000;
@@ -114,7 +115,24 @@ init(nil: ref Draw->Context, args: list of string)
 		"-E" =>
 			args = tl args;
 			engine = hd args;
+		"-l" =>
+			# the tests named in a file, one path a line
+			args = tl args;
+			lst := readfile(hd args);
+			if(lst == nil) {
+				sys->fprint(sys->fildes(2), "t262: cannot read %s: %r\n", hd args);
+				raise "fail:list";
+			}
+			s := 0;
+			for(i := 0; i <= len lst; i++)
+				if(i == len lst || lst[i] == '\n') {
+					if(i > s)
+						listed = lst[s:i] :: listed;
+					s = i + 1;
+				}
 		}
+	for(; listed != nil; listed = tl listed)
+		args = hd listed :: args;
 	for(; args != nil; args = tl args)
 		walk(hd args, hd args);
 	for(l := revstats(stats); l != nil; l = tl l) {

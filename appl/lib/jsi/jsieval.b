@@ -1878,9 +1878,10 @@ dynset(a: int, v: V, strict: int)
 	}
 	(slot, isconst) := glexfind(atomstr[a]);
 	if(slot >= 0) {
-		if(glexv[slot].t == Thole)
+		# strict 2: the declaration's own initialisation
+		if(glexv[slot].t == Thole && strict != 2)
 			tdzerror(atomstr[a]);
-		if(isconst)
+		if(isconst && strict != 2)
 			throwtype("Assignment to constant variable.");
 		glexv[slot] = v;
 		setr(v);

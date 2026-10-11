@@ -139,6 +139,7 @@ Info: adt {
 		sc:	ref Scope;
 		strict:	int;
 		ctx:	int;
+		paramargs:	int;	# in parameters, where a var arguments would clash
 	Tmpl =>
 		cooked:	array of string;	# nil entries: undefined
 		raws:	array of string;
@@ -213,6 +214,7 @@ Fs: adt {
 	gen, async:	int;
 	this, nt, home, args, fname, ctor:	ref Bind;
 	method:	int;
+	inparams:	int;	# compiling the parameters' initialisation
 };
 
 Ment: adt {
@@ -2462,7 +2464,16 @@ callexpr(x: ref Node.Call, nil: int): int
 				}
 				(ks, k, fl) := args(x.args);
 				callee := varref("eval", Mcall, 0);
-				inf := addinfo(ref Info.Eval(cu.sc, fs.strict, evalctx(fs)));
+				# in parameters a sloppy eval may not declare var arguments: it would clash with
+				# the function's arguments object, or an arrow's parameter of that name
+				pa := 0;
+				if(fs.inparams) {
+					pa = !fs.arrow;
+					for(l := fs.sc.binds; l != nil; l = tl l)
+						if((hd l).name == "arguments" && (hd l).kind == Bparam)
+							pa = 1;
+				}
+				inf := addinfo(ref Info.Eval(cu.sc, fs.strict, evalctx(fs), pa));
 				return emit(Neval, callee, ks, k, fl, inf);
 			}
 		}
@@ -2872,6 +2883,7 @@ funcbody(f: ref Node.Func, code: ref Code)
 	pinit: list of int;
 	np := 0;
 	if(!simple) {
+		fs.inparams = 1;
 		for(i = 0; i < len f.params; i++) {
 			p := f.params[i];
 			pick r := p {
@@ -2885,6 +2897,7 @@ funcbody(f: ref Node.Func, code: ref Code)
 				np++;
 			}
 		}
+		fs.inparams = 0;
 	}
 	fnodes := hoistfuncs(f.body);
 	body := usingwrap(f.body, stmts(f.body));
@@ -3466,8 +3479,17 @@ compileevalbody(prog: ref Node.Program, code: ref Code, fs: ref Fs, ev: ref Info
 		vs := openscope(Sblock);
 		hoistvars(prog.body, vs, 1);
 		vars: list of string;
-		for(l := vs.binds; l != nil; l = tl l)
+		for(l := vs.binds; l != nil; l = tl l) {
 			vars = (hd l).name :: vars;
+			if(ev.paramargs && (hd l).name == "arguments")
+				cerror(0, "eval in parameters cannot declare 'arguments'");
+		}
+		for(j := 0; ev.paramargs && j < len prog.body; j++)
+			pick f := prog.body[j] {
+			Func =>
+				if(f.id != nil && idname(f.id) == "arguments")
+					cerror(0, "eval in parameters cannot declare 'arguments'");
+			}
 		closescopenames(vs);
 		cu.sc = s;
 		ls := openscope(Sblock);

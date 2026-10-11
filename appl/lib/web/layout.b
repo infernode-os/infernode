@@ -1712,7 +1712,9 @@ contentheightof(l: ref L, k: ref Box, cw: int): int
 {
 	outer := asauto;
 	asauto = k;
+	measuring++;
 	layblock(l, k, cw, -1, nil, 0, 0);
+	measuring--;
 	asauto = outer;
 	if(k.st.aspect > 0.0 && k.kind != Kreplaced) {
 		# an aspect ratio gives an auto height from the width
@@ -1727,7 +1729,7 @@ contentheightof(l: ref L, k: ref Box, cw: int): int
 # content would come out differently for knowing it
 imposeh(l: ref L, k: ref Box, h, cbw, cbh: int)
 {
-	if(heightmatters(k)) {	# even when h is what it had: it is definite now
+	if(!measuring && heightmatters(k)) {	# even when h is what it had: it is definite now
 		outer := imposed;
 		outerh := imposedh;
 		imposed = k;
@@ -1742,6 +1744,19 @@ imposeh(l: ref L, k: ref Box, h, cbw, cbh: int)
 seethrough(o: int): int
 {
 	return o == Style->Ovisible || o == Style->Oclip;
+}
+
+# whether a row flex container's item k is stretched to its line's cross size
+flexstretched(k: ref Box, st: ref Style->St): int
+{
+	ks := k.st;
+	al := ks.alignself;
+	if(al == Style->ALauto)
+		al = st.alignitems;
+	if(al == Style->ALnormal)
+		al = Style->ALstretch;
+	return al == Style->ALstretch && ks.height.kind == Style->Lauto &&
+		ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto;
 }
 
 # Would b's content come out differently if its height were known?
@@ -2266,8 +2281,31 @@ Memo: adt {
 	r1, r2:	Margin;
 	r3:	int;
 	abs:	list of ref Abs;	# the absolutely positioned boxes it left pending
+	hgen:	int;		# the layout hc is from
+	hc:	list of ref Hmemo;	# heights it came out at, newest first, for measuring
 };
 memos: array of ref Memo;
+
+# Measuring: laying a box out only for the height it comes out at, its
+# insides to be laid out again before anything reads them (a flex item
+# measured before it is stretched; a column item's content height).  A
+# box measured before at the same constraints gives its height from
+# Memo.hc without being laid out, and imposeh gives a box its height
+# without laying it out again, since only the height is read.  A box
+# laid out while measuring may so hold boxes laid out for other
+# constraints, so its Memo does not stand for it.  What reads the
+# insides of what it lays out (an atomic inline's baseline, a table
+# cell's) is never measuring.  Each nesting of flex containers laid
+# out each item twice, and those inside it twice for each of those
+# (github.com: 85,000 block layouts for 2,900 nodes).
+measuring := 0;
+Hmemo: adt {
+	w, cbw, cbh, ox, oy, flags, imph, pcth:	int;
+	h:	int;
+	r1, r2:	Margin;
+	r3:	int;
+};
+Nhmemo: con 4;
 nmemo := 0;
 abseq := 0;	# Abs records made, for knowing those a layout leaves
 
@@ -2315,6 +2353,15 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		}
 		return (m.r1, m.r2, m.r3);
 	}
+	if(measuring && m != nil && m.hgen == laygen)
+		for(hl := m.hc; hl != nil; hl = tl hl) {
+			e := hd hl;
+			if(e.w == b.w && e.cbw == cbw && e.cbh == cbh && e.ox == ox && e.oy == oy &&
+			   e.flags == flags && e.imph == imph && e.pcth == pcth) {
+				b.h = e.h;
+				return (e.r1, e.r2, e.r3);
+			}
+		}
 	seq0 := abseq;
 	(r1, r2, r3) := layblock1(l, b, cbw, cbh, fc, ox, oy);
 	abs: list of ref Abs;
@@ -2339,6 +2386,28 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	m.h = b.h;
 	(m.r1, m.r2, m.r3) = (r1, r2, r3);
 	m.abs = abs;
+	if(measuring)
+		m.gen = -1;
+	# the height, for measuring
+	if(m.hgen != laygen) {
+		m.hgen = laygen;
+		m.hc = nil;
+	}
+	e := ref Hmemo(b.w, cbw, cbh, ox, oy, flags, imph, pcth, b.h, r1, r2, r3);
+	nl: list of ref Hmemo;
+	n := 1;
+	for(ol := m.hc; ol != nil && n < Nhmemo; ol = tl ol) {
+		x := hd ol;
+		if(x.w != e.w || x.cbw != cbw || x.cbh != cbh || x.ox != ox || x.oy != oy ||
+		   x.flags != flags || x.imph != imph || x.pcth != pcth) {
+			nl = x :: nl;
+			n++;
+		}
+	}
+	rest: list of ref Hmemo;
+	for(; nl != nil; nl = tl nl)
+		rest = hd nl :: rest;
+	m.hc = e :: rest;
 	return (r1, r2, r3);
 }
 
@@ -2952,7 +3021,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				hch := -1;
 				if(ch >= 0 && !wrap)
 					hch = ch;
+				# only measured when it will be stretched, and so laid out again
+				m0 := flexstretched(k, st) && heightmatters(k);
+				measuring += m0;
 				layblock(l, k, cw, hch, nil, 0, 0);
+				measuring -= m0;
 				fi.cross = k.h + k.mt + k.mb;
 			} else {
 				k.w = flexcrossw(k, b, cw);
@@ -6654,6 +6727,21 @@ tableabs(l: ref L, t, b: ref Box)
 }
 
 laytable(l: ref L, b: ref Box, cbw, cbh: int)
+{
+	# its cells' baselines are read from their insides (measuring)
+	outerm := measuring;
+	measuring = 0;
+	{
+		laytable1(l, b, cbw, cbh);
+	} exception e {
+	"*" =>
+		measuring = outerm;
+		raise e;
+	}
+	measuring = outerm;
+}
+
+laytable1(l: ref L, b: ref Box, cbw, cbh: int)
 {
 	st := b.st;
 	tableabs(l, b, b);
@@ -11539,6 +11627,21 @@ vshift(st: ref St, va: int, a, d: real, parent: ref Typeface): real
 
 # Lay out an atomic inline (inline-block, inline replaced, inline flex...).
 layatomic(l: ref L, k: ref Box, cbw, cbh: int)
+{
+	# its baseline is read from its insides (measuring)
+	outerm := measuring;
+	measuring = 0;
+	{
+		layatomic1(l, k, cbw, cbh);
+	} exception e {
+	"*" =>
+		measuring = outerm;
+		raise e;
+	}
+	measuring = outerm;
+}
+
+layatomic1(l: ref L, k: ref Box, cbw, cbh: int)
 {
 	edges(k, cbw);
 	w := specw(k, k.st.width, cbw);

@@ -258,6 +258,21 @@ requests.
 .TP
 .B /chan/wmrect
 File holding current screen rectangle.
+.TP
+.B /chan/uitest
+Synthetic input, for tests.
+Each write is one of
+.BI ptr " x y buttons"\fR,
+a pointer event;
+.BI key " rune"\fR,
+a key, the rune in decimal; or
+.BI text " string"\fR,
+the rest of the line typed a rune at a time.
+They go where the pointer and keyboard would.
+A read lists the windows, topmost first, one a line:
+.I id
+and the window's rectangle,
+.IR "minx miny maxx maxy" .
 .SH SOURCE
 .B /appl/wm/wm.b
 .SH "SEE ALSO"

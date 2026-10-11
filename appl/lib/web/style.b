@@ -2804,54 +2804,76 @@ cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 
 # Settle this element's custom properties: winners in order, then var()
 # among them resolved, with cycles making the property invalid.
+# An element's custom properties: one table made from its parent's, not
+# one per property (a page's root declares hundreds), and the element's
+# own looked up by hash, as each may refer to the others
+Raw: adt {
+	tab:	array of list of (string, array of ref Tok);
+};
+
 setvars(parent: ref Vars, custom: list of (string, array of ref Tok)): ref Vars
 {
 	# custom is in reverse cascade order: the first of each name wins
-	raw: list of (string, array of ref Tok);
+	raw := ref Raw(array[Nvars] of list of (string, array of ref Tok));
+	names: list of (string, array of ref Tok);
 	for(l := custom; l != nil; l = tl l) {
+		h := strhash((hd l).t0, Nvars);
 		seen := 0;
-		for(r := raw; r != nil; r = tl r)
-			if((hd r).t0 == (hd l).t0)
+		for(r := raw.tab[h]; r != nil; r = tl r)
+			if((hd r).t0 == (hd l).t0) {
 				seen = 1;
-		if(!seen)
-			raw = hd l :: raw;
+				break;
+			}
+		if(!seen) {
+			raw.tab[h] = hd l :: raw.tab[h];
+			names = hd l :: names;
+		}
 	}
-	v := parent;
-	for(r := raw; r != nil; r = tl r) {
+	v := ref Vars(array[Nvars] of list of (string, array of ref Tok));
+	if(parent != nil)
+		v.tab[0:] = parent.tab;
+	for(r := names; r != nil; r = tl r) {
 		(nm, val) := hd r;
+		sv := val;
+		set := 0;
 		if(len val == 1 && val[0].kind == Kident) {
 			case lower(val[0].s) {
 			"initial" =>
-				v = varset(v, nm, nil);
-				continue;
+				sv = nil;
+				set = 1;
 			"inherit" or "unset" or "revert" or "revert-layer" =>
-				v = varset(v, nm, parent.get(nm));
-				continue;
+				sv = parent.get(nm);
+				set = 1;
 			}
 		}
-		(ok, sv) := subvars(val, raw, parent, nm :: nil);
-		if(!ok)
-			sv = nil;
-		v = varset(v, nm, sv);
+		if(!set) {
+			ok: int;
+			(ok, sv) = subvars(val, raw, parent, nm :: nil);
+			if(!ok)
+				sv = nil;
+		}
+		h := strhash(nm, Nvars);
+		v.tab[h] = (nm, sv) :: v.tab[h];
 	}
 	return v;
 }
 
-lookvar(nm: string, raw: list of (string, array of ref Tok), parent: ref Vars, busy: list of string): (int, array of ref Tok)
+lookvar(nm: string, raw: ref Raw, parent: ref Vars, busy: list of string): (int, array of ref Tok)
 {
 	for(b := busy; b != nil; b = tl b)
 		if(hd b == nm)
 			return (0, nil);	# cycle
-	for(r := raw; r != nil; r = tl r)
-		if((hd r).t0 == nm)
-			return subvars((hd r).t1, raw, parent, nm :: busy);
+	if(raw != nil)
+		for(r := raw.tab[strhash(nm, Nvars)]; r != nil; r = tl r)
+			if((hd r).t0 == nm)
+				return subvars((hd r).t1, raw, parent, nm :: busy);
 	v := parent.get(nm);
 	return (v != nil, v);
 }
 
 # Substitute var() in v.  raw are this element's unresolved custom
 # properties (nil after cascade), parent the inherited ones.
-subvars(v: array of ref Tok, raw: list of (string, array of ref Tok), vars: ref Vars, busy: list of string): (int, array of ref Tok)
+subvars(v: array of ref Tok, raw: ref Raw, vars: ref Vars, busy: list of string): (int, array of ref Tok)
 {
 	if(!hasvar(v))
 		return (1, v);

@@ -524,14 +524,15 @@ rxiternext(this: V): V
 			d.done = 1;
 			return iterresult(undef, 1);
 		}
-		if((d.kind & 1) == 0) {
+		flags := d.kind - 30;	# bit 0: global; bit 1: unicode
+		if((flags & 1) == 0) {
 			d.done = 1;
 			return iterresult(m, 0);
 		}
 		ms := tostrv(getvalue(m, idxatom(0)));
 		if(strlenv(ms) == 0) {
 			li := tolength(getv(d.o, a_lastIndex));
-			setprop(d.o, a_lastIndex, numv(advance(d.v.s, li, (d.kind & 2) != 0)), 1);
+			setprop(d.o, a_lastIndex, numv(advance(d.v.s, li, (flags & 2) != 0)), 1);
 		}
 		return iterresult(m, 0);
 	}

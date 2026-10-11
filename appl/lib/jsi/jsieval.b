@@ -2896,8 +2896,9 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 				nfr[s].i = ri;
 			}
 		}
+		# the frame stays rooted through the call: runcode1 does not root it again
+		runcode1(f, c, nfr, k, nil);
 		rootpop();
-		runcode(f, c, nfr, k, nil);
 		return;
 	}
 	if(f.fun.native > 0 && (flags & Fspr) == 0) {
@@ -2963,16 +2964,26 @@ evargs(ks, k, flags: int): array of V
 # run code c as the function f, its frame made
 runcode(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
 {
-	if(++depth > maxdepth) {
-		depth--;
-		throwerr(ERange, "Maximum call stack size exceeded");
-	}
 	if(nroot == len rootfr)
 		rootgrow();
 	rootfr[nroot] = nfr;
 	rootobj[nroot] = f;
 	rootenv[nroot] = env;
 	nroot++;
+	runcode1(f, c, nfr, nargs, nt);
+	nroot--;
+	rootfr[nroot] = nil;
+	rootobj[nroot] = nil;
+	rootenv[nroot] = nil;
+}
+
+# runcode for a caller that has rooted nfr, f and its env itself
+runcode1(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
+{
+	if(++depth > maxdepth) {
+		depth--;
+		throwerr(ERange, "Maximum call stack size exceeded");
+	}
 	sfr := fr;
 	senv := env;
 	sfn := curfn;
@@ -3005,10 +3016,6 @@ runcode(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
 	newt = snt;
 	argc = sargc;
 	depth--;
-	nroot--;
-	rootfr[nroot] = nil;
-	rootobj[nroot] = nil;
-	rootenv[nroot] = nil;
 }
 
 # [[Call]]: f(this, args), the result returned

@@ -220,6 +220,11 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 # page has, and lay them out.  Under plk.
 rebuild(p: ref Pg)
 {
+	# styles as the document now is: its scripts may have changed it
+	# since (the page is laid out when painted, not after each of their
+	# tasks), and an image coming in builds it again
+	if(p.computed == nil || p.doc.nchanged != 0 || len p.computed.st < p.doc.n)
+		styleagain(p);
 	bgpage = nil;	# its background images, again with any new ones
 	usebg(p);
 	old := p.root;

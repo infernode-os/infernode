@@ -318,6 +318,7 @@ Style: module
 		env:	ref Env;	# the environment whose media queries it reflects
 		hashas:	int;	# a rule uses :has(), whose element's style follows its descendants
 		hasanchors:	list of array of ref Css->Simple;	# what an element must match for a :has() of a rule's to be on it (its compound, less the :has)
+		hasup:	int;	# a rule's subject is a :has() alone that looks down: any ancestor of a change may be its element
 	};
 	Entry: adt {
 		sel:	ref Css->Sel;

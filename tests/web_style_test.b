@@ -97,6 +97,84 @@ col(c: int): string
 	return sys->sprint("%.8ux", c);
 }
 
+# style->restyle after each change is what the whole computed again
+# gives, element by element: a :has() alone on a rule's subject, one with
+# a compound, and shadow trees (slots assigned and not, a host taken out)
+testRestyle(t: ref T)
+{
+	src := "<style>.box :has(.mark){color:red} .card:has(> .on){border:1px solid} div{margin:1px} " +
+		":is(.box:has(.mark) .card) span{font-weight:bold}</style>" +
+		"<body><div class=box><section><p id=p1>x</p></section><div class=card id=card><span>s</span></div>" +
+		"<x-host id=h><b slot=a id=b1>B</b><i id=i1>I</i></x-host></div>";
+	d := html->parsestring(src, "http://example.com/dir/page.html");
+	# its shadow root, as a script attaches one
+	sr := d.create(Dom->Document, "#document-fragment", 0);
+	sty := el(d, sr, "style", nil);
+	tx := d.create(Dom->Text, nil, 0);
+	d.settext(tx, ":host{display:block} ::slotted(b){color:green} .in{padding:2px} .box{color:blue}");
+	d.append(sty, tx);
+	el(d, el(d, sr, "div", "class" :: "in" :: nil), "slot", "name" :: "a" :: nil);
+	el(d, el(d, sr, "slot", nil), "u", nil);
+	d.attachshadow(byid(d, "h"), sr);
+	s := Styles.new();
+	for(n := 1; n < d.n; n++)
+		if(d.nodes[n].kind == Dom->Element && d.nodes[n].tag == Dom->Tstyle && d.nodes[n].parent != 0 &&
+		   d.nodes[d.nodes[n].parent].kind == Dom->Element)
+			s.add(css->parse(d.textof(n)), Style->Author, d.url);
+	t.assert(d.shadows != nil, "a shadow root");
+	prev := style->compute(d, s, env);
+	steps := array[] of {"class on p", "child of card", "slot elsewhere", "attribute of slotted", "host out"};
+	for(i := 0; i < len steps; i++) {
+		case i {
+		0 =>
+			d.setattr(byid(d, "p1"), "class", "mark");
+		1 =>
+			k := d.create(Dom->Element, "span", 0);
+			d.setattr(k, "class", "on");
+			d.append(byid(d, "card"), k);
+		2 =>
+			d.setattr(byid(d, "i1"), "slot", "nowhere");
+		3 =>
+			d.setattr(byid(d, "b1"), "class", "x");
+		4 =>
+			d.remove(byid(d, "h"));
+		}
+		r := style->restyle(d, s, env, prev);
+		w := style->compute(d, s, env);
+		bad := 0;
+		for(n = 1; n < d.n; n++) {
+			(a, b) := (r.st[n], w.st[n]);
+			if(a == nil && b == nil)
+				continue;
+			if(a == nil || b == nil || style->dump(a) != style->dump(b)) {
+				if(bad++ == 0)
+					t.error(sys->sprint("%s: element %d (%s) restyled differs", steps[i], n, d.nodes[n].name));
+			}
+		}
+		t.asserteq(bad, 0, steps[i] + ": elements that differ");
+		prev = w;
+	}
+	t.assert(prev.st[byid(d, "p1")] != nil && prev.st[byid(d, "p1")].color == int 16rFF0000FF, "the :has() came to be on p's section");
+}
+
+# a new element under parent, with attributes (name, value, ...)
+el(d: ref Doc, parent: int, name: string, attrs: list of string): int
+{
+	k := d.create(Dom->Element, name, 0);
+	for(; attrs != nil && tl attrs != nil; attrs = tl tl attrs)
+		d.setattr(k, hd attrs, hd tl attrs);
+	d.append(parent, k);
+	return k;
+}
+
+byid(d: ref Doc, id: string): int
+{
+	for(n := 1; n < d.n; n++)
+		if(d.attr(n, "id") == id)
+			return n;
+	return 0;
+}
+
 # style->element: one element's style from its ancestors alone is what
 # the whole document's computation gives it, for every element
 testElement(t: ref T)
@@ -530,6 +608,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Dump", testDump);
 	run("URLs", testURLs);
 	run("Element", testElement);
+	run("Restyle", testRestyle);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

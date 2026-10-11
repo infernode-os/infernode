@@ -625,9 +625,18 @@ Pg.stylefor(p: self ref Pg, n: int): ref Style->St
 	st: ref Style->St;
 	plock();
 	{
-		if(resheet(p))
-			p.computed = nil;	# (the next styling is of the whole, with these sheets)
-		st = style->element(p.doc, p.styles, p.env, n);
+		if(p.doc.shadows != nil && p.computed != nil) {
+			# with shadow trees one element's style is the whole's
+			# (style->element): the page's own brought up to date, as
+			# its next update would, by restyling what changed
+			styleagain(p);
+			if(n > 0 && n < len p.computed.st)
+				st = p.computed.st[n];
+		} else {
+			if(resheet(p))
+				p.computed = nil;	# (the next styling is of the whole, with these sheets)
+			st = style->element(p.doc, p.styles, p.env, n);
+		}
 	} exception e {
 	"*" =>
 		punlock();

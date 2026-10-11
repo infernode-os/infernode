@@ -434,6 +434,11 @@ protoof(v: V): ref Obj
 	return nil;
 }
 
+# a store past the elements by more than a little keeps the array dense while it
+# at most doubles it and stays below this: x[2**31-2] = v makes a sparse array,
+# not a two gigabyte one (an element is 40 bytes: a jump past a million is sparse)
+Maxjump: con 1<<20;
+
 # an index set on an ordinary array, quickly when it can: 1 if done
 setelem(o: ref Obj, i: int, v: V): int
 {
@@ -450,7 +455,7 @@ setelem(o: ref Obj, i: int, v: V): int
 			o.alen = i + 1;
 		return 1;
 	}
-	if(i > len o.elems + 1024 && i > 2 * len o.elems)
+	if(i > len o.elems + 1024 && (i > 2 * len o.elems || i >= Maxjump))
 		return 0;
 	if(protohasidx(o))
 		return 0;
@@ -559,7 +564,7 @@ defineown(o: ref Obj, k: int, d: ref Desc): int
 					}
 					if((o.flags & Fext) == 0)
 						return 0;
-					if(i <= len o.elems + 1024 || i <= 2 * len o.elems) {
+					if(i <= len o.elems + 1024 || i <= 2 * len o.elems && i < Maxjump) {
 						growelems(o, i + 1);
 						o.elems[i] = d.v;
 						if(d.has & Dvalue)

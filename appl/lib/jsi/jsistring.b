@@ -1312,34 +1312,20 @@ sumprecise(items: V): V
 		}
 		vals = numof(v) :: vals;
 	}
-	s := -0.0;
-	c := 0.0;
 	posinf := 0;
 	neginf := 0;
 	isn := 0;
-	r: list of real;
-	for(; vals != nil; vals = tl vals)
-		r = hd vals :: r;
-	for(; r != nil; r = tl r) {
-		x := hd r;
-		if(isnan(x)) {
+	finite: list of real;
+	for(; vals != nil; vals = tl vals) {
+		x := hd vals;
+		if(isnan(x))
 			isn = 1;
-			continue;
-		}
-		if(x == inf) {
+		else if(x == inf)
 			posinf = 1;
-			continue;
-		}
-		if(x == -inf) {
+		else if(x == -inf)
 			neginf = 1;
-			continue;
-		}
-		t := s + x;
-		if(math->fabs(s) >= math->fabs(x))
-			c += (s - t) + x;
 		else
-			c += (x - t) + s;
-		s = t;
+			finite = x :: finite;
 	}
 	if(isn || posinf && neginf)
 		return V(Tnum, 0, nan, nil, nil);
@@ -1347,9 +1333,7 @@ sumprecise(items: V): V
 		return V(Tnum, 0, inf, nil, nil);
 	if(neginf)
 		return V(Tnum, 0, -inf, nil, nil);
-	if(c == 0.0)
-		return V(Tnum, 0, s, nil, nil);	# s + +0 would lose a -0 sum
-	return V(Tnum, 0, s + c, nil, nil);
+	return V(Tnum, 0, sumexact(finite), nil, nil);
 }
 
 # ---- JSON ----

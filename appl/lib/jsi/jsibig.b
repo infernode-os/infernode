@@ -393,14 +393,82 @@ numbig(x: real): V
 	return bigval(realtoip(x));
 }
 
+# the exact sum of finite doubles, rounded once (Math.sumPrecise): each is an
+# integer multiple of 2**-1074, so the sum is a big integer of those
+sumexact(vals: list of real): real
+{
+	kr();
+	s := IPint.inttoip(0);
+	allnegzero := 1;
+	for(; vals != nil; vals = tl vals) {
+		x := hd vals;
+		if(x == 0.0) {
+			if(math->realbits64(x) >= big 0)
+				allnegzero = 0;
+			continue;
+		}
+		allnegzero = 0;
+		neg := x < 0.0;
+		if(neg)
+			x = -x;
+		bits := math->realbits64(x);
+		ex := int ((bits >> 52) & big 16r7FF);
+		m := bits & ((big 1 << 52) - big 1);
+		e := 0;
+		if(ex != 0) {
+			m |= big 1 << 52;
+			e = ex - 1;
+		}
+		t := IPint.strtoip(string m, 10);
+		if(e > 0)
+			t = t.shl(e);
+		if(neg)
+			t = t.neg();
+		s = s.add(t);
+	}
+	zero := IPint.inttoip(0);
+	if(s.eq(zero)) {
+		if(allnegzero)
+			return -0.0;
+		return 0.0;
+	}
+	neg := s.cmp(zero) < 0;
+	if(neg)
+		s = s.neg();
+	nb := s.bits();
+	r: real;
+	if(nb <= 53)
+		r = math->scalbn(real big s.iptostr(10), -1074);
+	else {
+		# the top 54 bits, the rest a sticky bit; round to 53, half to even
+		sh := nb - 54;
+		t := s.shr(sh);
+		sticky := !t.shl(sh).eq(s);
+		top := big t.iptostr(10);
+		mant := top >> 1;
+		if((top & big 1) != big 0 && (sticky || (mant & big 1) != big 0))
+			mant++;
+		r = math->scalbn(real mant, sh + 1 - 1074);
+	}
+	if(neg)
+		r = -r;
+	return r;
+}
+
 bigwrap(x: ref IPint, bits: int, signed: int): V
 {
 	if(bits == 0)
 		return bigfromint(0);
 	m := IPint.inttoip(1).shl(bits);
-	r := x.mod(m);
-	if(r.cmp(IPint.inttoip(0)) < 0)
-		r = r.add(m);
+	zero := IPint.inttoip(0);
+	r: ref IPint;
+	if(x.cmp(zero) < 0) {
+		# over the magnitude: a negative IPint's remainder of zero is still negative
+		r = x.neg().mod(m);
+		if(!r.eq(zero))
+			r = m.sub(r);
+	} else
+		r = x.mod(m);
 	if(signed) {
 		half := IPint.inttoip(1).shl(bits - 1);
 		if(r.cmp(half) >= 0)

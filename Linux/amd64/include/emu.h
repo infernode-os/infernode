@@ -30,11 +30,19 @@ static __inline Proc *getup(void) {
 	);
 	return *(Proc **)((uintptr)p & ~(KSTACK - 1));
 }
-#else
-extern	Proc*	getup(void);
-#endif
-
 #define	up	(getup())
+#else
+/*
+ * The current process, in a thread-local variable: up is read on every
+ * lock and unlock (and so every heap allocation) and every waserror, and
+ * a call to pthread_getspecific each time was a sixth of the CPU a Limbo
+ * program allocating hard spent.  kproc-pthreads.c sets it wherever it
+ * sets the thread's key.
+ */
+extern	__thread Proc *machup;
+extern	Proc*	getup(void);
+#define	up	machup
+#endif
 
 typedef sigjmp_buf osjmpbuf;
 #define	ossetjmp(buf)	sigsetjmp(buf, 1)

@@ -6,8 +6,16 @@
  * Linux arm64 version
  */
 
+/*
+ * The current process, in a thread-local variable: up is read on every
+ * lock and unlock (and so every heap allocation) and every waserror, and
+ * a call to pthread_getspecific each time was a sixth of the CPU a Limbo
+ * program allocating hard spent.  kproc-pthreads.c sets it wherever it
+ * sets the thread's key.
+ */
+extern __thread Proc *machup;
 extern Proc *getup(void);
-#define	up	(getup())
+#define	up	machup
 
 /*
  * This structure must agree with FPsave and FPrestore asm routines

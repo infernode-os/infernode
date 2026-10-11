@@ -148,6 +148,9 @@ loadmodule(url, src: string): ref Module
 		m.code = c;
 		m.async = (c.flags & Casync) != 0;
 	}
+	# a host may start fetching what the module imports all at once
+	if(prefetcher != nil && m.requested != nil)
+		prefetcher(url, revstrs(m.requested));
 	for(l := revstrs(m.requested); l != nil; l = tl l) {
 		spec := hd l;
 		if(lookupres(m, spec) != nil)
@@ -165,6 +168,8 @@ loadmodule(url, src: string): ref Module
 	}
 	return m;
 }
+
+prefetcher: ref fn(referrer: string, specifiers: list of string);
 
 revstrs(l: list of string): list of string
 {

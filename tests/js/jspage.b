@@ -4,13 +4,13 @@ implement Jspage;
 # jspage - a page loaded in a browsing session with its scripts on,
 # and its text printed once they have run.
 #
-#	jspage [-w ms] [-d] [-k] [-n] [-q] [-c node] url
+#	jspage [-I] [-w ms] [-d] [-k] [-n] [-q] [-c node] url
 #
 # -w: how long to let the page's scripts run after it is shown (1000 ms);
 # -c: click node first; -d: print the document tree, not its text;
 # -k: return, not halt the emulator (for prof(1) around it); -n: scripts
 # off; -q: print neither text nor title, only how long the page took to
-# be shown.
+# be shown; -I: run the scripts with the interpreter (appl/lib/jsi).
 # Console output goes to standard error.
 #
 
@@ -37,6 +37,13 @@ Jspage: module
 	init:	fn(nil: ref Draw->Context, args: list of string);
 };
 
+setenv(path, v: string)
+{
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd != nil)
+		sys->fprint(fd, "%s", v);
+}
+
 Command: module
 {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -55,6 +62,8 @@ init(nil: ref Draw->Context, args: list of string)
 	quiet := 0;
 	for(args = tl args; args != nil && len hd args > 1 && (hd args)[0] == '-'; args = tl args)
 		case hd args {
+		"-I" =>
+			setenv("/env/jsengine", "/dis/lib/jsi/jsi.dis");
 		"-w" =>
 			args = tl args;
 			wait = int hd args;
@@ -70,11 +79,11 @@ init(nil: ref Draw->Context, args: list of string)
 			args = tl args;
 			click = int hd args;
 		* =>
-			sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
+			sys->fprint(stderr, "usage: jspage [-I] [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
 			raise "fail:usage";
 		}
 	if(args == nil) {
-		sys->fprint(stderr, "usage: jspage [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
+		sys->fprint(stderr, "usage: jspage [-I] [-w ms] [-d] [-k] [-n] [-q] [-c node] url\n");
 		raise "fail:usage";
 	}
 	url := hd args;

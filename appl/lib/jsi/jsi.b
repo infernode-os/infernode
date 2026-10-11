@@ -31,6 +31,7 @@ implement Js;
 #	jsityped.b	ArrayBuffer, the typed arrays, DataView
 #	jsimod.b	modules
 #	jsidispose.b	using, DisposableStack, SuppressedError; async built-ins
+#	jsidom.b	a web page's realm: the DOM's natives, the event loop, confinement, fetching
 #
 
 include "sys.m";
@@ -62,6 +63,10 @@ include "jsre.m";
 include "draw.m";
 
 include "web/dom.m";
+	dom: Dom;
+	Doc: import dom;
+include "web/originfs.m";
+	originfs: Originfs;
 
 include "js.m";
 
@@ -80,6 +85,7 @@ include "jsibig.b";
 include "jsityped.b";
 include "jsimod.b";
 include "jsidispose.b";
+include "jsidom.b";
 
 output: ref fn(s: string);
 
@@ -395,10 +401,6 @@ detachbuffer(v: V)
 }
 
 # a web page's realm: not yet
-page(nil: ref Host): string
-{
-	return "jsi: web pages are not supported yet";
-}
 
 shutdown()
 {

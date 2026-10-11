@@ -21,4 +21,4 @@ DISBIN=$ROOT/dis/lib/jsi
 <$ROOT/mkfiles/mkdis
 
 # jsi.dis is one module from several fragments
-jsi.dis:	jsival.b jsiobj.b jsicomp.b jsieval.b jsigen.b jsibuiltin.b jsiarray.b jsistring.b jsicoll.b jsiregexp.b jsidate.b jsibig.b jsityped.b jsimod.b jsidispose.b
+jsi.dis:	jsival.b jsiobj.b jsicomp.b jsieval.b jsigen.b jsibuiltin.b jsiarray.b jsistring.b jsicoll.b jsiregexp.b jsidate.b jsibig.b jsityped.b jsimod.b jsidispose.b jsidom.b

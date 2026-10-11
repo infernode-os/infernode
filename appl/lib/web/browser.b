@@ -1705,9 +1705,13 @@ realmrun(r: ref Realm, pidc: chan of int)
 	pidc <-= sys->pctl(0, nil);
 	err: string;
 	{
-		pjs := load Js Js->PATH;
+		# /env/jsengine names another engine's module (appl/lib/jsi: /dis/lib/jsi/jsi.dis)
+		enginepath := envstr("/env/jsengine");
+		if(enginepath == nil)
+			enginepath = Js->PATH;
+		pjs := load Js enginepath;
 		if(pjs == nil)
-			err = sys->sprint("cannot load %s: %r", Js->PATH);
+			err = sys->sprint("cannot load %s: %r", enginepath);
 		else {
 			h := ref Js->Host(r.id, envint("/env/jsstress"), envint("/env/jsprofile"), r.pg.doc, r.pg.url, r.events, grants(r.pg.url),
 				hlock, hunlock, hchanged, hbox, hcomputed, hmedia, hmatch, hselect, hparse,
@@ -1727,14 +1731,22 @@ realmrun(r: ref Realm, pidc: chan of int)
 # allocations; /env/jsprofile, where the time goes, sampled every n ms
 envint(path: string): int
 {
+	return int envstr(path);
+}
+
+envstr(path: string): string
+{
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return 0;
-	buf := array[16] of byte;
+		return nil;
+	buf := array[128] of byte;
 	n := sys->read(fd, buf, len buf);
 	if(n <= 0)
-		return 0;
-	return int string buf[0:n];
+		return nil;
+	s := string buf[0:n];
+	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' '))
+		s = s[0:len s - 1];
+	return s;
 }
 
 # The origin's storage (localStorage): a directory of the user's of its

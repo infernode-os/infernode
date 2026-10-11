@@ -484,6 +484,8 @@ callnative(f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 		return nattyped(id, f, this, args, nt);
 	if(id < Ndisposebase)
 		return natbig(id, f, this, args, nt);
+	if(id >= Ndombase)
+		return natdom(id, args);
 	if(id >= N262evalscript)
 		return nat262(id, args);
 	return natdispose(id, f, this, args, nt);
@@ -502,6 +504,7 @@ Ndatebase: con 650;
 Ntypedbase: con 750;
 Nbigbase: con 850;
 Ndisposebase: con 880;
+Ndombase: con 1000;
 
 natcore(id: int, f: ref Obj, this: V, args: array of V, nt: ref Obj): V
 {

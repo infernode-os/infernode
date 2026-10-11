@@ -818,8 +818,12 @@ ev2(n: int)
 	Nglobal =>
 		globalget(n);
 	Nsetglobal =>
-		ev(nb[n]);
-		globalset(n);
+		if(nc[n] == 1 && (global.sh != icsh[n] || icep[n] != glexepoch))
+			globalsetstrict(n);
+		else {
+			ev(nb[n]);
+			globalset(n);
+		}
 	Nglex =>
 		s := na[n];
 		if(glexstate[s] == 0) {
@@ -1741,6 +1745,19 @@ globalget1(a, istypeof: int)
 		throwerr(ERef, atomstr[a] + " is not defined");
 	}
 	setr(get(global, a, objv(global)));
+}
+
+# strict code: a name that did not resolve when the assignment began is an error,
+# even if the value's evaluation made it
+globalsetstrict(n: int)
+{
+	a := na[n];
+	(slot, nil) := glexfind(atomstr[a]);
+	resolved := slot >= 0 || hasprop(global, a);
+	ev(nb[n]);
+	if(!resolved)
+		throwerr(ERef, atomstr[a] + " is not defined");
+	globalset(n);
 }
 
 globalset(n: int)

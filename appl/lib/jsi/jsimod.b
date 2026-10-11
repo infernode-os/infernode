@@ -390,7 +390,7 @@ compilemodule(prog: ref Node.Program, src: string, m: ref Module): (ref Code, st
 							fnodes = appendi(fnodes, varref("*default*", Minit, funcexpr(d, "default")));
 					}
 			}
-		body := stmts(prog.body);
+		body := usingwrap(prog.body, stmts(prog.body));
 		closescope(s);
 		m.sc = s;
 		pro: list of int;

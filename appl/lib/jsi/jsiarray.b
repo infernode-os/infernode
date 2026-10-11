@@ -1074,11 +1074,9 @@ arrayfrom(this: V, args: array of V): V
 }
 
 # Array.fromAsync: not yet
-arrayfromasync(nil: V, nil: array of V): V
+arrayfromasync(this: V, args: array of V): V
 {
-	cap := newcap();
-	rejectcap(cap, objv(mkerror(EType, "Array.fromAsync is not supported yet")));
-	return objv(cap.promise);
+	return asyncnative(Xfromasync, this, args);
 }
 
 # ---- the array iterator ----

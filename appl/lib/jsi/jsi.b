@@ -30,7 +30,7 @@ implement Js;
 #	jsibig.b	BigInt
 #	jsityped.b	ArrayBuffer, the typed arrays, DataView
 #	jsimod.b	modules
-#	jsistub.b	what is still to come
+#	jsidispose.b	using, DisposableStack, SuppressedError; async built-ins
 #
 
 include "sys.m";
@@ -79,7 +79,7 @@ include "jsidate.b";
 include "jsibig.b";
 include "jsityped.b";
 include "jsimod.b";
-include "jsistub.b";
+include "jsidispose.b";
 
 output: ref fn(s: string);
 

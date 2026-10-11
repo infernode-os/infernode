@@ -39,6 +39,9 @@ Gen: adt {
 	awaiting:	int;
 	obj:	ref Obj;
 	depth:	int;
+	nat:	int;	# an async built-in run as a coroutine (asyncnative)
+	nthis:	V;
+	natargs:	array of V;
 };
 
 # an async generator's request
@@ -49,7 +52,7 @@ Areq: adt {
 };
 
 curgen: ref Gen;
-livegens: list of ref Gen;	# coroutines started and not finished, dst be stopped at shutdown
+livegens: list of ref Gen;	# coroutines started and not finished, to be stopped at shutdown
 
 callgen(f: ref Obj, c: ref Code, this: V, args: array of V): V
 {
@@ -210,24 +213,28 @@ coro(g: ref Gen, d: int)
 			g.retv = m.v;
 			raise "JSgenret";
 		}
-		c := g.code;
-		if(g.kind == Kasync) {
-			if((c.flags & (Cstrict|Carrow)) == 0) {
-				t := fr[0].t;
-				if(t == Tundef || t == Tnull)
-					fr[0] = globalthis;
-				else if(t != Tobj)
-					fr[0] = objv(toobj(fr[0]));
+		if(g.nat > 0)
+			r = ref Msg(Mdone, natasync(g));
+		else {
+			c := g.code;
+			if(g.kind == Kasync) {
+				if((c.flags & (Cstrict|Carrow)) == 0) {
+					t := fr[0].t;
+					if(t == Tundef || t == Tnull)
+						fr[0] = globalthis;
+					else if(t != Tobj)
+						fr[0] = objv(toobj(fr[0]));
+				}
+				if(c.prologue >= 0)
+					ev(c.prologue);
 			}
-			if(c.prologue >= 0)
-				ev(c.prologue);
+			ev(c.body);
+			v := undef;
+			if(ctl == Cret)
+				v = regv();
+			ctl = 0;
+			r = ref Msg(Mdone, v);
 		}
-		ev(c.body);
-		v := undef;
-		if(ctl == Cret)
-			v = regv();
-		ctl = 0;
-		r = ref Msg(Mdone, v);
 	} exception e {
 	"JS" =>
 		r = ref Msg(Merror, thrown);
@@ -856,7 +863,7 @@ Job: adt {
 };
 
 jobs: list of ref Job;
-jobstail: list of ref Job;	# jobs dst come, newest first: moved dst jobs when it runs dry
+jobstail: list of ref Job;	# jobs to come, newest first: moved to jobs when it runs dry
 
 enqueue(j: ref Job)
 {

@@ -36,7 +36,7 @@ Nimportmeta, Nimportcall, Npat, Ppatarr, Ppatobj, Pprop, Prest, Prestobj, Pdefau
 Nblock, Nseqs, Ncompl, Nif, Nwhile, Ndo, Nfor, Nforin, Nforof, Nreturn, Nbreak, Ncontinue,
 Nthrow, Ntry, Nswitch, Ncase, Nlabeled, Nwith, Nempty,
 Nmkenv, Nframe2env, Nmkargs, Nmkrest, Nholes, Ndeclvar, Ndeclfn, Nglobalinst, Ndyndeclvar,
-Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nlast: con iota;
+Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Nlast: con iota;
 
 op, na, nb, nc, nd, ne, npos: array of int;
 nn := 0;
@@ -1060,9 +1060,33 @@ block(body: array of ref Node, pos: int): int
 	s := openscope(Sblock);
 	lexdecls(body, s, 0);
 	fnodes := hoistfuncs(body);
-	b := stmts(body);
+	b := usingwrap(body, stmts(body));
 	closescope(s);
 	return scoped(s, b, fnodes, pos);
+}
+
+# the using declarations directly in a statement list: 0 none, 1 using, 2 await using
+hasusing(body: array of ref Node): int
+{
+	u := 0;
+	for(i := 0; i < len body; i++)
+		pick x := body[i] {
+		Var =>
+			if(x.kind == Kawaitusing)
+				u = 2;
+			else if(x.kind == Kusing && u == 0)
+				u = 1;
+		}
+	return u;
+}
+
+# a statement list with using declarations disposes of its resources however it ends
+usingwrap(body: array of ref Node, b: int): int
+{
+	u := hasusing(body);
+	if(u == 0)
+		return b;
+	return emit(Nusingscope, b, u == 2, 0, 0, 0);
 }
 
 haslex(body: array of ref Node): int
@@ -1550,6 +1574,14 @@ forinof(left, right, body: ref Node, isof, await, pos: int): int
 		mode = Minit;
 	tgt := pattern(target, mode);
 	b := stmt1(body);
+	if(kind == Kusing || kind == Kawaitusing) {
+		# each iteration's value is a resource, disposed of when the iteration ends
+		pick t := target {
+		Ident =>
+			u := emit(Nusing, varref(t.name, Mget, 0), kind == Kawaitusing, 0, 0, 0);
+			b = emit(Nusingscope, e2(Nseqs, addkidsa(array[] of {u, b}), 2), kind == Kawaitusing, 0, 0, 0);
+		}
+	}
 	pick li := infos[inf] {
 	Loop =>
 		li.await = await;
@@ -1569,7 +1601,6 @@ forinof(left, right, body: ref Node, isof, await, pos: int): int
 				li.sci = s.sci;
 			}
 		}
-		# for-of with using declarations
 		r = emit(o, obj, tgt, b, inf, kind);
 	} else
 		r = emit(o, obj, tgt, b, inf, kind);
@@ -1647,7 +1678,7 @@ switchstmt(x: ref Node.Switch): int
 			n++;
 		}
 	closescope(s);
-	sw := emit(Nswitch, d, addkids(l, n), n, 0, 0);
+	sw := usingwrap(body, emit(Nswitch, d, addkids(l, n), n, 0, 0));
 	return scoped(s, sw, fnodes, x.pos);
 }
 
@@ -2777,7 +2808,7 @@ funcbody(f: ref Node.Func, code: ref Code)
 		}
 	}
 	fnodes := hoistfuncs(f.body);
-	body := stmts(f.body);
+	body := usingwrap(f.body, stmts(f.body));
 	if(code.flags & Cgen|Casync) {
 		;
 	}
@@ -3169,7 +3200,7 @@ compileglobal(prog: ref Node.Program, code: ref Code, fs: ref Fs, iseval: int)
 		return;
 	}
 	# var names and functions, for GlobalDeclarationInstantiation
-	vs := openscope(Sblock);	# a scratch scope dst collect names
+	vs := openscope(Sblock);	# a scratch scope to collect names
 	hoistvars(prog.body, vs, 1);
 	vars: list of string;
 	for(l := vs.binds; l != nil; l = tl l)

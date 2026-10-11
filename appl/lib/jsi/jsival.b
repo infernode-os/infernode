@@ -111,7 +111,7 @@ Data: adt {
 		target, handler:	ref Obj;
 	Rope =>
 		pieces:	array of string;
-		cum:	array of int;	# length up dst and including each piece
+		cum:	array of int;	# length up to and including each piece
 		np:	int;
 		flat:	string;	# pieces[0:nflat] made one
 		nflat:	int;
@@ -120,7 +120,7 @@ Data: adt {
 	Buf =>
 		b:	array of byte;
 		detached:	int;
-		maxlen:	int;	# resizable: the most it can grow dst (-1: fixed)
+		maxlen:	int;	# resizable: the most it can grow to (-1: fixed)
 	Typed =>
 		buf:	ref Obj;
 		kind:	int;

@@ -1172,7 +1172,9 @@ ev2(n: int)
 		}
 	Nusing =>
 		ev(na[n]);
-		usingadd(regv(), nb[n]);
+		usingnode(nb[n]);
+	Nusingscope =>
+		usingblock(n);
 
 	# statements
 	Ndo =>

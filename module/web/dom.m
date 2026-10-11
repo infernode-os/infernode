@@ -70,6 +70,11 @@ Dom: module
 		lang:	string;		# the document's language, from <meta http-equiv=content-language>, for :lang()
 		shadows:	list of (int, int);	# (host, shadow root): the root a node of kind Document
 		adopted:	list of (int, array of string);	# (root, its adopted style sheets' text): 1, the document
+		# what changed since whoever restyles it last took the list
+		# (style->restyle): nodes whose subtrees' styles may differ;
+		# nchanged -1, everything
+		changed:	list of int;
+		nchanged:	int;
 
 		new:	fn(url: string): ref Doc;
 		create:	fn(d: self ref Doc, kind: int, name: string, ns: int): int;

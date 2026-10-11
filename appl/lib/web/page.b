@@ -109,6 +109,7 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 # said on standard error as it ends
 ptime := 0;
 pt0 := 0;
+stylecheck := 0;	# /env/stylecheck: each restyle checked against the whole computed again
 
 phase(what: string)
 {
@@ -124,6 +125,8 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 	readsettings();
 	(pok, nil) := sys->stat("/env/pagetime");
 	ptime = pok >= 0;
+	(sck, nil) := sys->stat("/env/stylecheck");
+	stylecheck = sck >= 0;
 	pt0 = sys->millisec();
 	data: array of byte;
 	ctype, err, final: string;
@@ -585,9 +588,7 @@ Pg.update(p: self ref Pg)
 	plock();
 	pt0 = sys->millisec();
 	{
-		resheet(p);
-		phase("update: sheets");
-		p.computed = style->compute(p.doc, p.styles, p.env);
+		styleagain(p);
 		phase(sys->sprint("update: styles (%d nodes, %d sheets)", p.doc.n, len p.sheetlist));
 		rebuild(p);
 		phase("update: laid out");
@@ -604,8 +605,7 @@ Pg.restyle(p: self ref Pg)
 {
 	plock();
 	{
-		resheet(p);
-		p.computed = style->compute(p.doc, p.styles, p.env);
+		styleagain(p);
 	} exception e {
 	"*" =>
 		punlock();
@@ -619,7 +619,8 @@ Pg.stylefor(p: self ref Pg, n: int): ref Style->St
 	st: ref Style->St;
 	plock();
 	{
-		resheet(p);
+		if(resheet(p))
+			p.computed = nil;	# (the next styling is of the whole, with these sheets)
 		st = style->element(p.doc, p.styles, p.env, n);
 	} exception e {
 	"*" =>
@@ -697,14 +698,59 @@ loadsheets(p: ref Pg)
 # the sheets again, if the document's are not those last read: a script
 # added, removed or rewrote a <style>, or linked a sheet (CSS-in-JS does
 # it all the time).  Under plk.
-resheet(p: ref Pg)
+# the page's sheets as its document now has them; whether they changed
+resheet(p: ref Pg): int
 {
 	a := sheetsof(p);
 	if(samesheets(a, p.sheetlist))
-		return;
+		return 0;
 	p.styles = Styles.new();
 	applysheets(p, a);
 	p.sheetlist = a;
+	return 1;
+}
+
+# the document's styles after a script's changes: only what changed
+# (style->restyle), unless the sheets did
+styleagain(p: ref Pg)
+{
+	if(resheet(p) || p.computed == nil)
+		p.computed = style->compute(p.doc, p.styles, p.env);
+	else {
+		p.computed = style->restyle(p.doc, p.styles, p.env, p.computed);
+		if(stylecheck) {
+			# a test's: the whole computed again, element by element
+			c := style->compute(p.doc, p.styles, p.env);
+			bad := 0;
+			first := 0;
+			for(i := 1; i < p.doc.n; i++) {
+				(a, b) := (c.st[i], p.computed.st[i]);
+				if(a == nil && b == nil)
+					continue;
+				if(a == nil || b == nil || style->dump(a) != style->dump(b)) {
+					if(bad++ == 0) {
+						first = i;
+						da, db: string;
+						if(a != nil) da = style->dump(a);
+						if(b != nil) db = style->dump(b);
+						(nil, la) := sys->tokenize(da, "\n");
+						(nil, lb) := sys->tokenize(db, "\n");
+						while(la != nil && lb != nil && hd la == hd lb) {
+							la = tl la;
+							lb = tl lb;
+						}
+						wa, wb: string;
+						if(la != nil) wa = hd la;
+						if(lb != nil) wb = hd lb;
+						sys->fprint(sys->fildes(2), "page: restyle differs at %d <%s class=%q>: whole %q, restyled %q\n",
+							i, p.doc.nodes[i].name, p.doc.attr(i, "class"), wa, wb);
+					}
+				}
+			}
+			sys->fprint(sys->fildes(2), "page: restyle checked: %d of %d differ (first %d)\n", bad, p.doc.n, first);
+			p.computed = c;
+		}
+	}
 }
 
 samesheets(a, b: array of (string, string, string)): int

@@ -193,7 +193,7 @@ tagname(tag: int): string
 
 Doc.new(url: string): ref Doc
 {
-	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil);
+	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil, nil, -1);
 	d.create(Document, "#document", HTML);
 	return d;
 }
@@ -214,6 +214,35 @@ Doc.create(d: self ref Doc, kind: int, name: string, ns: int): int
 	return n;
 }
 
+# Note that n's subtree may style differently (n and what is under it).
+# :has(), which looks further, style->restyle answers itself.
+Changedmax: con 512;
+
+changed(d: ref Doc, n: int)
+{
+	if(d.nchanged < 0)
+		return;
+	if(n <= 0 || ++d.nchanged > Changedmax) {
+		d.changed = nil;
+		d.nchanged = -1;
+		return;
+	}
+	d.changed = n :: d.changed;
+}
+
+# n and the siblings after it, which can match by it (+, ~)
+changedfrom(d: ref Doc, n: int)
+{
+	k := 0;
+	for(s := n; s != 0; s = d.nodes[s].next)
+		if(++k > 50) {
+			changed(d, d.nodes[n].parent);
+			return;
+		}
+	for(s = n; s != 0; s = d.nodes[s].next)
+		changed(d, s);
+}
+
 Doc.attachshadow(d: self ref Doc, host, root: int)
 {
 	for(l := d.shadows; l != nil; l = tl l)
@@ -221,6 +250,7 @@ Doc.attachshadow(d: self ref Doc, host, root: int)
 			return;
 	d.shadows = (host, root) :: d.shadows;
 	d.gen++;
+	changed(d, 0);
 }
 
 Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
@@ -233,6 +263,7 @@ Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
 		r = (root, sheets) :: r;
 	d.adopted = r;
 	d.gen++;
+	changed(d, 0);
 }
 
 Doc.adoptedof(d: self ref Doc, root: int): array of string
@@ -387,6 +418,9 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 			return;
 	if(d.nodes[child].parent != 0)
 		d.remove(child);
+	if(d.nodes[parent].first == 0)
+		changedfrom(d, parent);	# (:empty no longer)
+	changed(d, parent);
 	p := d.nodes[parent];
 	c := d.nodes[child];
 	c.parent = parent;
@@ -416,6 +450,10 @@ Doc.remove(d: self ref Doc, child: int)
 	c := d.nodes[child];
 	if(c.parent == 0)
 		return;
+	changed(d, c.parent);
+	changed(d, child);	# (out of the tree: its styles go)
+	if(c.prev == 0 && c.next == 0)
+		changedfrom(d, c.parent);	# (:empty now)
 	p := d.nodes[c.parent];
 	if(c.prev != 0)
 		d.nodes[c.prev].next = c.next;
@@ -447,6 +485,7 @@ Doc.setattr(d: self ref Doc, n: int, name, val: string)
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	changedfrom(d, n);
 }
 
 Doc.delattr(d: self ref Doc, n: int, name: string)
@@ -459,12 +498,16 @@ Doc.delattr(d: self ref Doc, n: int, name: string)
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	changedfrom(d, n);
 }
 
 Doc.settext(d: self ref Doc, n: int, s: string)
 {
+	old := d.nodes[n].text;
 	d.nodes[n].text = s;
 	d.gen++;
+	if((p := d.nodes[n].parent) != 0 && (old == "") != (s == ""))
+		changedfrom(d, p);	# (:empty)
 }
 
 Doc.attr(d: self ref Doc, n: int, name: string): string

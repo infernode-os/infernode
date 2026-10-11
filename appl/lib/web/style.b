@@ -38,6 +38,8 @@ init(): string
 	if(ilock == nil)
 		ilock = chan[1] of int;
 	sys = load Sys Sys->PATH;
+	(sck, nil) := sys->stat("/env/stylecheck");
+	stylecheck = sck >= 0;
 	bufio = load Bufio Bufio->PATH;
 	math = load Math Math->PATH;
 	dom = load Dom Dom->PATH;
@@ -213,7 +215,7 @@ Ix: adt {
 buildindex(s: ref Styles, env: ref Env): ref Index
 {
 	ix := ref Ix(ref Index(array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry,
-		array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry, nil, 0, nil, nil), 0, nil, 0, env);
+		array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry, nil, 0, nil, nil, 0, nil), 0, nil, 0, env);
 	# layer names first, in order of first appearance, so tiers are known
 	sheets: list of (ref Sheet, int, string);
 	for(l := s.sheets; l != nil; l = tl l)
@@ -376,8 +378,91 @@ fixurls(v: array of ref Tok, base: string): array of ref Tok
 	return r;
 }
 
+# whether a selector uses :has(), anywhere in it
+selhas(s: ref Sel): int
+{
+	for(k := 0; k < len s.parts; k++)
+		for(i := 0; i < len s.parts[k]; i++) {
+			x := s.parts[k][i];
+			if(x.kind == Css->Spseudo && x.name == "has")
+				return 1;
+			for(j := 0; j < len x.sub; j++)
+				if(selhas(x.sub[j]))
+					return 1;
+		}
+	return 0;
+}
+
+# whether x is :has() or holds one (in :not(), :is(), ...)
+simplehas(x: ref Simple): int
+{
+	if(x.kind != Css->Spseudo)
+		return 0;
+	if(x.name == "has")
+		return 1;
+	for(j := 0; j < len x.sub; j++)
+		if(selhas(x.sub[j]))
+			return 1;
+	return 0;
+}
+
+# a :has() in x is on the element x is matched against: in :not(),
+# :is() and the like, only in the subject of each selector in it
+hasonsubject(x: ref Simple): int
+{
+	if(x.name == "has")
+		return 1;
+	for(j := 0; j < len x.sub; j++) {
+		b := x.sub[j];
+		for(k := 0; k < len b.parts; k++)
+			for(i := 0; i < len b.parts[k]; i++) {
+				y := b.parts[k][i];
+				if(simplehas(y) && (k != len b.parts - 1 || !hasonsubject(y)))
+					return 0;
+			}
+	}
+	return 1;
+}
+
+# Where a rule's :has() is: the compounds with one, less it, kept as the
+# elements whose :has() a change can turn (restyle); a :has() elsewhere
+# (deeper in another selector), or a compound of nothing else, makes
+# everything restyle.
+hasanchors(idx: ref Index, s: ref Sel)
+{
+	for(k := 0; k < len s.parts; k++) {
+		c := s.parts[k];
+		rest: list of ref Simple;
+		found := 0;
+		for(i := 0; i < len c; i++)
+			if(simplehas(c[i])) {
+				found = 1;
+				if(!hasonsubject(c[i])) {
+					idx.hashas = 2;
+					return;
+				}
+			} else
+				rest = c[i] :: rest;
+		if(!found)
+			continue;
+		if(rest == nil) {
+			idx.hashas = 2;
+			return;
+		}
+		a := array[len c] of ref Simple;
+		n := 0;
+		for(; rest != nil; rest = tl rest)
+			a[n++] = hd rest;
+		idx.hasanchors = a[0:n] :: idx.hasanchors;
+	}
+}
+
 addentry(idx: ref Index, e: ref Entry)
 {
+	if(idx.hashas != 2 && selhas(e.sel)) {
+		idx.hashas = 1;
+		hasanchors(idx, e.sel);
+	}
 	parts := e.sel.parts;
 	last := parts[len parts - 1];
 	# a compound that is only :is()/:where() whose every branch names a
@@ -2406,7 +2491,185 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	}
 	(sibdoc, sibnode) = (nil, 0);
 	schemedark = -1;
+	d.changed = nil;
+	d.nchanged = 0;
 	return c;
+}
+
+# A document's styles again after scripts changed it: prev, with the
+# subtrees it says changed (Doc.changed) styled again, rather than the
+# whole document (Apple's home page restyled 33 times as it loaded, 260
+# ms each).  The whole, where that cannot be known so: no earlier
+# styles, too much changed, shadow trees, a rule with :has(), another
+# environment, or the root among the changed.
+restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Computed
+{
+	if(sys == nil)
+		init();
+	if(env == nil)
+		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+	root := d.root();
+	if(prev == nil || d.nchanged < 0 || root == 0 || s.idx == nil || !sameenv(s.idx.env, env) ||
+	   s.idx.hashas == 2 || d.shadows != nil || root >= len prev.st || prev.st[root] == nil)
+		return whole(d, s, env, sys->sprint("changed %d, :has %d, shadows %d", d.nchanged, s.idx != nil && s.idx.hashas == 2, d.shadows != nil));
+	m := matcher(d, env);
+	changes := d.changed;
+	if(s.idx.hashas) {
+		# a :has() a change could turn is on one of its ancestors or
+		# their earlier siblings: those that can be one's element are
+		# restyled too, with what follows them
+		for(l := d.changed; l != nil; l = tl l)
+			for(a := hd l; a != 0; a = d.nodes[a].parent) {
+				if(d.nodes[a].kind == Dom->Document)
+					break;
+				for(b := a; b != 0; b = d.nodes[b].prev)
+					if(d.nodes[b].kind == Dom->Element && hasanchor(m, s.idx, b)) {
+						if(b == root || d.nodes[b].parent == 0 || d.nodes[d.nodes[b].parent].kind == Dom->Document)
+							return whole(d, s, env, ":has() at the root");
+						changes = d.nodes[b].parent :: changes;
+					}
+			}
+	}
+	# the changed subtrees, less those inside another
+	roots, outs: list of int;
+	for(l := changes; l != nil; l = tl l) {
+		r := hd l;
+		if(r == root || d.nodes[r].kind == Dom->Document)
+			return whole(d, s, env, "the root changed");
+		if(d.nodes[r].kind != Dom->Element)
+			continue;
+		if(!inthetree(d, r)) {
+			if(r < len prev.st)
+				outs = r :: outs;	# taken out: no styles, as compute gives it
+			continue;
+		}
+		inside := 0;
+		for(o := changes; o != nil && !inside; o = tl o)
+			if(hd o != r && d.nodes[hd o].kind == Dom->Element && isancestor(d, hd o, r))
+				inside = 1;
+		for(o = roots; o != nil && !inside; o = tl o)
+			if(hd o == r)
+				inside = 1;
+		if(!inside)
+			roots = r :: roots;
+	}
+	d.changed = nil;
+	d.nchanged = 0;
+	lastenv = ref *env;
+	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
+		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
+	ctx := ref Ctx(16.0, c.st[root].fontsize, 19.2, env, 0, nil, 400, 0);
+	share := array[Nshare] of list of (string, ref Shared);
+	filters := array[d.n] of array of int;
+	for(; outs != nil; outs = tl outs)
+		unstyle(d, c, hd outs, hd outs);
+	for(; roots != nil; roots = tl roots) {
+		r := hd roots;
+		p := parentel(d, r);
+		if(p == 0)
+			continue;
+		# the ancestors' filter, root down
+		chain: list of int;
+		for(a := p; a != 0; a = parentel(d, a))
+			chain = a :: chain;
+		f: array of int;
+		for(; chain != nil; chain = tl chain)
+			f = childfilter(m, hd chain, f);
+		filters[p] = f;
+		if(c.st[p] == nil || c.st[p].display == Dnone) {
+			unstyle(d, c, r, r);	# inside display: none
+			continue;
+		}
+		n := r;
+		while(n != 0) {
+			nd := d.nodes[n];
+			skip := 0;
+			if(nd.kind == Dom->Element) {
+				pp := parentel(d, n);
+				ps := c.st[pp];
+				(c.before[n], c.after[n], c.marker[n], c.firstletter[n], c.firstline[n], c.placeholder[n]) = (nil, nil, nil, nil, nil, nil);
+				if(ps == nil) {
+					unstyle(d, c, n, n);
+					skip = 1;
+				} else {
+					(sibdoc, sibnode) = (d, n);
+					st := styleof(m, s.idx, n, ps, ctx, c, share, filters[pp], nil);
+					if(nd.first != 0)
+						filters[n] = childfilter(m, n, filters[pp]);
+					c.st[n] = st;
+					if(st.display == Dnone) {
+						for(k := nd.first; k != 0; k = d.nodes[k].next)
+							unstyle(d, c, k, k);
+						skip = 1;
+					}
+				}
+			}
+			if(skip || nd.kind != Dom->Element)
+				n = nextskip(d, n, r);
+			else
+				n = next(d, n, r);
+		}
+	}
+	(sibdoc, sibnode) = (nil, 0);
+	schemedark = -1;
+	return c;
+}
+
+# restyle's answer when it cannot restyle less: all, and (for a test,
+# /env/stylecheck) why
+stylecheck := 0;	# /env/stylecheck, read at init (a page's realm, which restyles, has no /env)
+
+whole(d: ref Doc, s: ref Styles, env: ref Env, why: string): ref Computed
+{
+	if(stylecheck)
+		sys->fprint(sys->fildes(2), "style: restyled all: %s\n", why);
+	return compute(d, s, env);
+}
+
+# whether n can be the element of one of idx's :has()
+hasanchor(m: ref M, idx: ref Index, n: int): int
+{
+	for(l := idx.hasanchors; l != nil; l = tl l)
+		if(compound(m, hd l, n))
+			return 1;
+	return 0;
+}
+
+grow(a: array of ref St, n: int): array of ref St
+{
+	b := array[n] of ref St;
+	if(len a > n)
+		b[0:] = a[0:n];
+	else
+		b[0:] = a;
+	return b;
+}
+
+# n is in the document's tree, not a node taken out of it
+inthetree(d: ref Doc, n: int): int
+{
+	for(; n != 0; n = d.nodes[n].parent)
+		if(d.nodes[n].kind == Dom->Document)
+			return n == 1;
+	return 0;
+}
+
+isancestor(d: ref Doc, a, n: int): int
+{
+	for(n = d.nodes[n].parent; n != 0; n = d.nodes[n].parent)
+		if(n == a)
+			return 1;
+	return 0;
+}
+
+# n and what is under it have no styles (as in display: none)
+unstyle(d: ref Doc, c: ref Computed, n, top: int)
+{
+	while(n != 0) {
+		if(n < len c.st)
+			(c.st[n], c.before[n], c.after[n], c.marker[n], c.firstletter[n], c.firstline[n], c.placeholder[n]) = (nil, nil, nil, nil, nil, nil, nil);
+		n = next(d, n, top);
+	}
 }
 
 # One element's computed style, as compute would give it, from its
@@ -2422,8 +2685,13 @@ element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
 		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
 	if(n <= 0 || n >= d.n || d.nodes[n].kind != Dom->Element)
 		return nil;
-	if(dom->flat(d) != nil)
-		return compute(d, s, env).st[n];
+	if(dom->flat(d) != nil) {
+		# (what changed is the page's restyle's to take, not this one's)
+		(ch, nch) := (d.changed, d.nchanged);
+		st := compute(d, s, env).st[n];
+		(d.changed, d.nchanged) = (ch, nch);
+		return st;
+	}
 	if(s.idx == nil || !sameenv(s.idx.env, env)) {
 		s.idx = buildindex(s, env);
 		s.idx.env = ref *env;

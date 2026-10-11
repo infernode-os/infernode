@@ -67,6 +67,10 @@ for f in LICENSE NOTICE TRADEMARK.md README.md QUICKSTART.md \
 	[ -f "$ROOT/$f" ] && cp "$ROOT/$f" "$RESOURCES/"
 done
 
+# xen and its plumbing, as the release ships them (docs/XEN.md).
+mkdir -p "$RESOURCES/tools"
+cp "$ROOT/tools/xen" "$ROOT/tools/xen.plumbing" "$ROOT/tools/rplumb" "$RESOURCES/tools/"
+
 # Surface the build provenance — useful when comparing dev vs prod runs.
 SHA=$(git -C "$ROOT" rev-parse --short=8 HEAD 2>/dev/null || echo unknown)
 echo "Built from $ROOT @ $SHA at $(date -Iseconds)" > "$RESOURCES/dev-bundle-stamp.txt"

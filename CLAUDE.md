@@ -426,7 +426,9 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |
 | `tests/host/xenith_agent_test.sh` | The `Agent` window in a headless Xenith: a message sent, the reply shown |
-| `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, Xenith's image renderer not claiming text that begins like an image |
+| `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, the document registry not taking text that begins like an image for one |
+| `docengine_test.b` | The document registry and engines (`module/docreg.m`, `module/docengine.m`): kinds by name and magic, no engine loaded until a document of its kind is opened (and Markdown never loading Charon), each engine's sheets, painting and text, a PDF sharp at scale 200, a PDF's words where they are drawn, Markdown's words and links, documents kept apart |
+| `tests/host/xenith_doc_test.sh` | A window's document through its files (`doc/`): a PDF shown as a document (read-only body, Put refused, zoom, fit, sheet, Render, Get, find), a window open on it as text shown, Markdown set by Render, an image |
 | `tests/host/plumbrules_test.sh` | `lib/sh/plumbrules`: the user's plumbing rules read before the defaults (a user rule overrides, the defaults take the rest); `load` replaces them; a rules file that does not parse is refused at load and left out at start |
 | `tests/host/charon_accept_test.sh` | What Charon's engine sends as Accept: an image fetch `image/webp` first, as browsers do, so image CDNs send WebP; a page or style sheet fetch none |
 | `tests/host/presentation_fileopen_test.sh` | Lucifer's plumbed file-opens: by type into the presentation view, a web URL into Charon (a second one to the running Charon), the Tasks tab with and without a plumber |
@@ -439,7 +441,7 @@ timeoutTask(ch: chan of int, ms: int)
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 
-Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). They need the SDL GUI emulator and skip on a headless build.
+Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_blankname_test.sh`: a file name with a blank in it, quoted in the tag and Put to the right file; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). They need the SDL GUI emulator and skip on a headless build.
 
 ## Project Structure
 

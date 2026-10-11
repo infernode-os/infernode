@@ -423,6 +423,11 @@ jobs:
         cp setup-desktop.sh "$STAGE/"
         chmod +x "$STAGE/setup-desktop.sh"
 
+        # xen, Xenith alone on host files, and its plumbing (docs/XEN.md):
+        # tools/xen finds the emu and tree beside it.
+        mkdir -p "$STAGE/tools"
+        cp tools/xen tools/xen.plumbing tools/rplumb "$STAGE/tools/"
+
         # Docs and legal
         for f in LICENSE NOTICE TRADEMARK.md README.md QUICKSTART.md; do
           [ -f "$f" ] && cp "$f" "$STAGE/"
@@ -925,6 +930,11 @@ jobs:
         cp setup-desktop.sh "$STAGE/"
         chmod +x "$STAGE/setup-desktop.sh"
 
+        # xen, Xenith alone on host files, and its plumbing (docs/XEN.md):
+        # tools/xen finds the emu and tree beside it.
+        mkdir -p "$STAGE/tools"
+        cp tools/xen tools/xen.plumbing tools/rplumb "$STAGE/tools/"
+
         # Docs and legal
         for f in LICENSE NOTICE TRADEMARK.md README.md QUICKSTART.md; do
           [ -f "$f" ] && cp "$f" "$STAGE/"
@@ -1221,6 +1231,11 @@ jobs:
                  build-macos-sdl3.sh build-macos-headless.sh makemk.sh; do
           [ -f "$f" ] && cp "$f" "$RESOURCES/"
         done
+
+        # xen, Xenith alone on host files, and its plumbing (docs/XEN.md):
+        # Resources/tools/xen runs the app it is in.
+        mkdir -p "$RESOURCES/tools"
+        cp tools/xen tools/xen.plumbing tools/rplumb "$RESOURCES/tools/"
 
         # Xenith.app: the same emu, libraries and runtime tree, with its own
         # Info.plist, launcher, icon and credits (MacOSX/Xenith.app).  It
@@ -1746,6 +1761,10 @@ jobs:
           Copy-Item "emu\Nt\$Launcher"  "$Stage\"
           Copy-Item "emu\Nt\o.emu.exe"  "$Stage\"
           Copy-Item "emu\Nt\SDL3.dll"   "$Stage\"
+          # xen.ps1, Xenith alone on host files (docs/XEN.md); it runs the
+          # release it is in.
+          New-Item -ItemType Directory -Force -Path "$Stage\tools" | Out-Null
+          Copy-Item "tools\xen.ps1" "$Stage\tools\"
           # FIDO2 runtime DLLs (present only when libfido2 was linked). The build
           # script copied them next to o.emu.exe; bundle whichever exist so
           # /dev/2fa works without a separate libfido2 install.

@@ -12,6 +12,14 @@ implement JitUnloadTest;
 # unmapped memory, "PC not in any loaded image". libinterp/xec.c's
 # OP(ret) now holds the release until control is back in C.
 #
+# PendingReleaseClosesFile: the held release happens at the start of
+# the next xec(), which may be another thread's.  Releasing the module
+# closes the files in its data, and closing a file releases the VM,
+# which saves R as the running thread's registers; xec() did that
+# before it had loaded them, and the thread it was starting took the
+# previous thread's registers and ran on that thread's stack.  Here
+# that thread is replier(): it never replies, or emu faults.
+#
 # Meaningful under the JIT (emu -c1); it passes under the interpreter
 # too, which never had the bug.
 #
@@ -34,6 +42,7 @@ JitUnloadHelper: module
 {
 	PATH:	con "/dis/tests/jit_unload_helper.dis";
 	hold:	fn(ms: int): int;
+	holdfile:	fn(ms: int): int;
 	pad:	fn(a: int): int;
 };
 
@@ -104,6 +113,36 @@ testLastReferenceReturn(t: ref T)
 	}
 }
 
+replier(go, reply: chan of int)
+{
+	n := <-go;
+	reply <-= n + 1;
+}
+
+testPendingReleaseClosesFile(t: ref T)
+{
+	for(i := 0; i < 20; i++){
+		g = loadhelper();
+		if(g == nil)
+			t.fatal(sys->sprint("cannot load %s or %s: %r", HELPERS, JitUnloadHelper->PATH));
+		done := chan of int;
+		go := chan of int;
+		reply := chan of int;
+		spawn replier(go, reply);
+		spawn dropper(10, done);
+		r := g->holdfile(60);
+		# the helper's release is pending now; nothing may return
+		# through OP(ret) before replier runs, or it happens here
+		<-done;
+		go <-= i;
+		n := <-reply;
+		t.asserteq(r, 61, sys->sprint("round %d: holdfile returned", i));
+		t.asserteq(n, i+1, sys->sprint("round %d: replier's answer", i));
+		if(g != nil)
+			t.error(sys->sprint("round %d: the dropper did not run first", i));
+	}
+}
+
 # the ordinary case beside it: the caller keeps its reference
 testHeldReferenceReturn(t: ref T)
 {
@@ -129,6 +168,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("LastReferenceReturn", testLastReferenceReturn);
 	run("HeldReferenceReturn", testHeldReferenceReturn);
+	run("PendingReleaseClosesFile", testPendingReleaseClosesFile);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

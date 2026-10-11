@@ -16,6 +16,7 @@ columnm : Columnm;
 rowm : Rowm;
 scrl : Scroll;
 look : Look;
+docview : Docview;
 exec : Exec;
 windowm : Windowm;
 fsys : Fsys;
@@ -31,7 +32,7 @@ Smsg0 : import Dat;
 TRUE, FALSE, XXX, BUFSIZE, MAXRPC : import Dat;
 EM_NORMAL, EM_RAW, EM_MASK : import Dat;
 Qdir, Qcons, Qlabel, Qindex, Qeditout : import Dat;
-QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel, QWerrors, QWxdata, QWweb : import Dat;
+QWaddr, QWcolors, QWdata, QWevent, QWconsctl, QWctl, QWbody, QWedit, QWeditout, QWimage, QWtag, QWrdsel, QWwrsel, QWerrors, QWxdata, QWweb, QWdocctl, QWdoctext, QWdoclinks, QWdocfind : import Dat;
 seq, cxfidfree, ccons, Lock, Ref, Range, Mntdir, ConsMsg, Astring : import dat;
 error, warning, max, min, stralloc, strfree, strncmp : import utils;
 address : import regx;
@@ -65,6 +66,7 @@ init(mods : ref Dat->Mods)
 	rowm = mods.rowm;
 	scrl = mods.scroll;
 	look = mods.look;
+	docview = mods.docview;
 	exec = mods.exec;
 	windowm = mods.windowm;
 	fsys = mods.fsys;
@@ -477,16 +479,28 @@ Xfid.read(x : self ref Xfid)
 	QWweb =>
 		# a browser window's page, posted as files (charonfs)
 		str = 1;
-		sbuf = w.webposted();
+		sbuf = docview->filesof(w);
 		if(sbuf != nil)
 			sbuf += "\n";
-	QWimage =>
+	QWdocctl =>
 		str = 1;
-		if(w.imagemode == 0 || w.bodyimage == nil)
-			sbuf = "";
-		else
-			sbuf = sprint("%s %d %d\n", w.imagepath,
-				w.bodyimage.r.dx(), w.bodyimage.r.dy());
+		sbuf = docview->ctlread(w);
+	QWdoctext =>
+		str = 1;
+		sbuf = docview->textread(w);
+	QWdoclinks =>
+		str = 1;
+		sbuf = docview->linksread(w);
+	QWdocfind =>
+		str = 1;
+		sbuf = docview->foundread(w);
+	QWimage =>
+		# the document shown: its name and its first sheet's size
+		str = 1;
+		sbuf = "";
+		if(docview->shown(w) && w.doc.h >= 0 && len w.doc.sizes > 0)
+			sbuf = sprint("%s %d %d\n", w.doc.name,
+				w.doc.sizes[0].x, w.doc.sizes[0].y);
 	QWrdsel =>
 		sys->seek(w.rdselfd, big off, 0);
 		n = count(x.fcall);
@@ -629,8 +643,12 @@ Xfid.write(x : self ref Xfid)
 		t = w.body;
 		bodytag = 1;
 	QWbody or QWwrsel =>
-		if(w.docview)
-			w.docoff();	# writes show in the text
+		if(docview->readonly(w)){
+			respond(x, fc, "the window's text is its document's: read-only");
+			break;
+		}
+		if(docview->shown(w))
+			docview->render(w);	# writes show in the text
 		if(w.rendermode != 0 && qid == QWbody){
 			respond(x, fc, "window in render mode");
 			break;
@@ -639,6 +657,20 @@ Xfid.write(x : self ref Xfid)
 		bodytag = 1;
 	QWctl =>
 		x.ctlwrite(w);
+	QWdocctl or QWdocfind =>
+		nb := sys->utfbytes(data(x.fcall), count(x.fcall));
+		s := string data(x.fcall)[0:nb];
+		while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' '))
+			s = s[0:len s - 1];
+		err: string;
+		if(qid == QWdocctl){
+			for((nil, l) := sys->tokenize(s, "\n"); l != nil && err == nil; l = tl l)
+				err = docview->ctlwrite(w, hd l);
+		}else
+			err = docview->find(w, s);
+		bflush();
+		fc.count = count(x.fcall);
+		respond(x, fc, err);
 	QWdata =>
 		t = w.body;
 		w.commit(t);
@@ -902,6 +934,15 @@ ctlcmd2(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 	return (FALSE, 0, nil, FALSE);
 }
 
+# The file at path shown in w as the document it is (docview(2))
+showdoc(w: ref Window, path: string): string
+{
+	k := docview->kind(path);
+	if(k == nil)
+		return path + ": not a document Xenith shows";
+	return docview->open(w, path, k);
+}
+
 # Helper for ctlwrite: handles image and layout commands
 ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 {
@@ -916,13 +957,13 @@ ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		if(q <= 0)
 			return (TRUE, 0, Ebadctl, FALSE);
 		path := pp[0:q];
-		err := w.loadimage(path);
+		err := showdoc(w, path);
 		if(err != nil)
 			return (TRUE, 0, err, FALSE);
 		return (TRUE, m + q + 1, nil, FALSE);
 	}
 	if(strncmp(p, "clearimage", 10) == 0){	# return to text mode
-		w.clearimage();
+		docview->close(w);
 		return (TRUE, 10, nil, FALSE);
 	}
 	if(strncmp(p, "content ", 8) == 0){	# load and render content (renderer pipeline)
@@ -932,13 +973,13 @@ ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		if(q <= 0)
 			return (TRUE, 0, Ebadctl, FALSE);
 		path := pp[0:q];
-		err := w.loadcontent(path);
+		err := showdoc(w, path);
 		if(err != nil)
 			return (TRUE, 0, err, FALSE);
 		return (TRUE, m + q + 1, nil, FALSE);
 	}
 	if(strncmp(p, "clearcontent", 12) == 0){	# return to text mode (alias)
-		w.clearimage();
+		docview->close(w);
 		return (TRUE, 12, nil, FALSE);
 	}
 	if(strncmp(p, "contentcmd ", 11) == 0){	# execute renderer command
@@ -959,7 +1000,9 @@ ctlcmd3(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 			cmd = cmdstr;
 			arg = nil;
 		}
-		err := w.contentcommand(cmd, arg);
+		(isdoc, err) := docview->command(w, cmd, arg);
+		if(!isdoc)
+			err = "no document";
 		if(err != nil)
 			return (TRUE, 0, err, FALSE);
 		return (TRUE, m + q + 1, nil, FALSE);
@@ -1643,7 +1686,7 @@ Xfid.imagewrite(x: self ref Xfid, w: ref Window)
 		return;
 	}
 
-	err := w.loadimage(r);
+	err := showdoc(w, r);
 	if(err != nil){
 		respond(x, fc, err);
 		return;

@@ -2417,9 +2417,17 @@ macret(void)
 	CBZ_X(RA3, 0);
 	linterp = code - 1;
 
-	/* Compiled: call destroy, jump to lr */
-	BLR_REG(RA0);
+	/*
+	 * Compiled: call destroy, jump to lr.  R.SP comes down to the
+	 * frame before destroy runs, as OP(ret) does it, on all three
+	 * paths here.  destroy can release the VM (closing a file in
+	 * freeFD), and the collector on another thread then walks this
+	 * Prog's frames up to R.SP (gc.c, rootset): left above, it walks
+	 * the frame being destroyed and marks the cells already freed
+	 * out of it, writing into the pool's free blocks.
+	 */
 	mem(Stw, O(REG, SP), RREG, RFP);
+	BLR_REG(RA0);
 	mem(Ldw, O(Frame, lr), RFP, RA1);
 	mem(Ldw, O(Frame, fp), RFP, RFP);
 	mem(Stw, O(REG, FP), RREG, RFP);
@@ -2427,8 +2435,8 @@ macret(void)
 
 	/* Not compiled: return to interpreter */
 	PATCH_BCOND(linterp);
-	BLR_REG(RA0);
 	mem(Stw, O(REG, SP), RREG, RFP);
+	BLR_REG(RA0);
 	mem(Ldw, O(Frame, lr), RFP, RA1);
 	mem(Ldw, O(Frame, fp), RFP, RFP);
 	mem(Stw, O(REG, PC), RREG, RA1);
@@ -2450,8 +2458,8 @@ macret(void)
 	mem(Ldw, O(Frame, lr), RFP, RA1);
 	CBZ_X(RA1, 0);
 	nolrlab = code - 1;
-	BLR_REG(RA0);
 	mem(Stw, O(REG, SP), RREG, RFP);
+	BLR_REG(RA0);
 	mem(Ldw, O(Frame, lr), RFP, RA1);
 	mem(Ldw, O(Frame, fp), RFP, RFP);
 	mem(Stw, O(REG, FP), RREG, RFP);

@@ -9,6 +9,7 @@ xenith : Xenith;
 dat : Dat;
 utils : Utils;
 look : Look;
+docview : Docview;
 windowm : Windowm;
 xfidm : Xfidm;
 
@@ -16,7 +17,7 @@ QTDIR, QTFILE, QTAPPEND : import Sys;
 DMDIR, DMAPPEND, Qid, ORCLOSE, OTRUNC, OREAD, OWRITE, ORDWR, Dir : import Sys;
 sprint : import sys;
 MAXWELEM, Rerror : import Styx;
-Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QWerrors,QWxdata,QWweb,QMAX, CHAPPEND : import Dat;
+Qdir,Qxenith,Qcons,Qconsctl,Qdraw,Qeditout,Qindex,Qlabel,Qnew,QWaddr,QWbody,QWconsctl,QWctl,QWcolors,QWdata,QWedit,QWeditout,QWevent,QWimage,QWrdsel,QWwrsel,QWtag,QWerrors,QWxdata,QWweb,QWdoc,QWdocctl,QWdoctext,QWdoclinks,QWdocfind,QMAX, CHAPPEND : import Dat;
 TRUE, FALSE : import Dat;
 cxfidalloc, cerr : import dat;
 Mntdir, Fid, Dirtab, Lock, Ref, Smsg0 : import dat;
@@ -40,6 +41,7 @@ init(mods : ref Dat->Mods)
 	dat = mods.dat;
 	utils = mods.utils;
 	look = mods.look;
+	docview = mods.docview;
 	windowm = mods.windowm;
 	xfidm = mods.xfidm;
 }
@@ -68,7 +70,7 @@ dirtab := array[10] of {
 	Dirtab ( nil,		0,			0,			0 ),
 };
 
-dirtabw := array[18] of {
+dirtabw := array[19] of {
 	Dirtab ( ".",		QTDIR,		Qdir,			8r500|DMDIR ),
 	Dirtab ( "addr",		QTFILE,		QWaddr,		8r600 ),
 	Dirtab ( "body",		QTAPPEND,	QWbody,		8r600|DMAPPEND ),
@@ -76,6 +78,7 @@ dirtabw := array[18] of {
 	Dirtab ( "consctl",	QTFILE,		QWconsctl,	8r200 ),
 	Dirtab ( "ctl",		QTFILE,		QWctl,		8r600 ),
 	Dirtab ( "data",		QTFILE,		QWdata,		8r600 ),
+	Dirtab ( "doc",		QTDIR,		QWdoc,		8r500|DMDIR ),
 	Dirtab ( "edit",		QTFILE,		QWedit,		8r200 ),
 	Dirtab ( "editout",	QTFILE,		QWeditout,	8r200 ),
 	Dirtab ( "errors",	QTFILE,		QWerrors,		8r200 ),
@@ -86,6 +89,16 @@ dirtabw := array[18] of {
 	Dirtab ( "web",		QTFILE,		QWweb,		8r400 ),
 	Dirtab ( "wrsel",	QTFILE,		QWwrsel,		8r200 ),
 	Dirtab ( "xdata",	QTFILE,		QWxdata,		8r600 ),
+	Dirtab ( nil, 		0,			0,			0 ),
+};
+
+# a window's document (docview(2)), as files
+dirtabdoc := array[6] of {
+	Dirtab ( ".",		QTDIR,		QWdoc,		8r500|DMDIR ),
+	Dirtab ( "ctl",		QTFILE,		QWdocctl,		8r600 ),
+	Dirtab ( "find",		QTFILE,		QWdocfind,		8r600 ),
+	Dirtab ( "links",		QTFILE,		QWdoclinks,		8r400 ),
+	Dirtab ( "text",		QTFILE,		QWdoctext,		8r400 ),
 	Dirtab ( nil, 		0,			0,			0 ),
 };
 
@@ -463,6 +476,17 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 			}
 
 			name := names[i];
+			if(name == ".." && id != 0 && FILE(q) == QWdoc){
+				# up from a window's doc directory to the window's
+				path = Qdir;
+				qtype = QTDIR;
+				dir = dirtabw;
+				q.qtype = qtype;
+				q.vers = 0;
+				q.path = big QID(id, path);
+				wqids = q :: wqids;
+				continue;
+			}
 			if(name == ".."){
 				path = Qdir;
 				qtype = QTDIR;
@@ -546,6 +570,8 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 
 				if(id == 0)
 					d = dirtab;
+				else if(FILE(q) == QWdoc)
+					d = dirtabdoc;
 				else
 					d = dirtabw;
 				k := 1;	# skip '.'
@@ -705,7 +731,9 @@ fsysread(x : ref Xfid, f : ref Fid) : ref Xfid
 		b = array[messagesize] of byte;
 		id = WIN(f.qid);
 		n = 0;
-		if(id > 0)
+		if(id > 0 && FILE(f.qid) == QWdoc)
+			d = dirtabdoc;
+		else if(id > 0)
 			d = dirtabw;
 		else
 			d = dirtab;

@@ -19,6 +19,7 @@ columnm : Columnm;
 fsys : Fsys;
 editm: Edit;
 asyncio: Asyncio;
+docview : Docview;
 
 Dir, OREAD, OWRITE : import Sys;
 formatmod : Format;
@@ -59,6 +60,7 @@ init(mods : ref Dat->Mods)
 	fsys = mods.fsys;
 	editm = mods.edit;
 	asyncio = mods.asyncio;
+	docview = mods.docview;
 
 	snarfbuf = bufferm->newbuffer();
 }
@@ -260,41 +262,24 @@ execute(t : ref Text, aq0 : int, aq1 : int, external : int, argt : ref Text)
 		return;
 	}
 
-	# Check if this is a zoom or renderer command for image mode windows
-	if(t.w != nil && t.w.imagemode){
-		(cs, cn) := skipbl(r.s, q1-q0);
-		(nil, cn) = findbl(cs, cn);
-		cn = len cs - cn;
-		cmdstr := cs[0:cn];
-		# Zoom commands are handled locally (no re-render needed)
-		if(cmdstr == "Zoom+"){
-			if(t.w.zoomscale < 400)
-				t.w.zoomscale += 25;
-			t.w.drawimage();
-			strfree(r);
-			r = nil;
-			return;
-		}
-		if(cmdstr == "Zoom-"){
-			if(t.w.zoomscale > 100)
-				t.w.zoomscale -= 25;
-			t.w.imageoffset.x = 0;
-			t.w.imageoffset.y = 0;
-			t.w.drawimage();
-			strfree(r);
-			r = nil;
-			return;
-		}
-		# Renderer commands (NextPage, PrevPage, etc.) — async re-render
-		if(t.w.contentrenderer != nil){
-			cmds := t.w.contentrenderer->commands();
-			for(; cmds != nil; cmds = tl cmds){
-				if((hd cmds).name == cmdstr){
-					t.w.asynccontentcommand(cmdstr, nil);
-					strfree(r);
-					r = nil;
-					return;
-				}
+	# The view's commands on a document: Zoom+, Zoom-, Zoom n, Fit,
+	# Fit page, Page n, NextPage, PrevPage, and the engine's own
+	if(t.w != nil && t.w.doc != nil){
+		(nil, words) := sys->tokenize(r.s[0:q1-q0], " \t\n");
+		if(words != nil){
+			darg := "";
+			for(l := tl words; l != nil; l = tl l){
+				if(darg != "")
+					darg += " ";
+				darg += hd l;
+			}
+			(isdoc, derr) := docview->command(t.w, hd words, darg);
+			if(isdoc){
+				if(derr != nil)
+					warning(nil, sprint("%s: %s\n", hd words, derr));
+				strfree(r);
+				r = nil;
+				return;
 			}
 		}
 	}
@@ -528,7 +513,7 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 			return;
 	# In a browser window Get goes to the URL given, or named in the
 	# tag, or reloads the page there.
-	if(et.w.docweb){
+	if(et.w.doc != nil && et.w.doc.web){
 		w = et.w;
 		u := "";
 		if(narg > 0)
@@ -541,13 +526,25 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 		if(u == nil)
 			u = w.body.file.name;
 		err : string;
-		if(u == nil || u == w.weburl())
-			err = w.webcmd("Reload");
+		if(u == nil || u == w.doc.name)
+			(nil, err) = docview->command(w, "Reload", nil);
 		else
-			err = w.browse(u);
+			err = docview->browse(w, u);
 		if(err != nil)
 			warning(nil, sprint("Get: %s\n", err));
 		return;
+	}
+	# A document's file is opened again as what it is (its kind found
+	# again from its name and first bytes)
+	if(et.w.doc != nil && narg == 0 && getarg(argt, FALSE, TRUE).t1 == nil){
+		w = et.w;
+		name = w.body.file.name;
+		if((k := docview->kind(name)) != nil && k.class == Docreg->Binary){
+			if((err := docview->open(w, name, k)) != nil)
+				warning(nil, sprint("Get: %s\n", err));
+			return;
+		}
+		docview->close(w);
 	}
 	# Clear render mode before reloading file
 	if(et.w.rendermode != 0)
@@ -577,6 +574,16 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 		u.w.dirfree();
 	}
 	samename := r[0:n] == t.file.name;
+	# a PDF or an image is shown as the document it is
+	if((k := docview->kind(name)) != nil && k.class == Docreg->Binary){
+		if(!samename)
+			w.setname(name, len name);
+		if((err := docview->open(w, name, k)) != nil)
+			warning(nil, sprint("Get: %s\n", err));
+		return;
+	}
+	if(w.doc != nil)
+		docview->close(w);
 	t.loadx(0, name, samename);
 	if(samename){
 		t.file.mod = FALSE;
@@ -737,9 +744,13 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 		return;
 	w = et.w;
 	f := w.body.file;
-	# a web page is written only to a file named for it
-	if(w.docweb && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
-		warning(nil, sprint("%s is a web page: Put /file writes its text\n", f.name));
+	# a web page, a PDF or an image is not written over with the text
+	# it is shown with: its text is written only to a file named
+	if(docview->readonly(w) && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
+		what := "a document";
+		if(w.doc.web)
+			what = "a web page";
+		warning(nil, sprint("%s is %s: Put /file writes its text\n", f.name, what));
 		return;
 	}
 
@@ -755,7 +766,7 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 	# text, and stay on it: a large file is written in the background
 	# from the buffer itself (putfile), so putting the formatted text
 	# back after starting the save wrote it to the file.
-	if(w.rendermode && !w.docview){
+	if(w.rendermode){
 		if(w.contentdata == nil){
 			warning(nil, sprint("%s not written: the window shows formatted text\n", name));
 			return;
@@ -996,7 +1007,10 @@ webx(et : ref Text, which : int)
 	cmd := array[] of {"Back", "Fwd", "Reload", "Stop"};
 	if(which < 0 || which >= len cmd)
 		return;
-	if((err := et.w.webcmd(cmd[which])) != nil)
+	(isdoc, err) := docview->command(et.w, cmd[which], nil);
+	if(!isdoc)
+		err = "not a web page";
+	if(err != nil)
 		warning(nil, sprint("%s: %s\n", cmd[which], err));
 }
 
@@ -1013,24 +1027,11 @@ renderx(et : ref Text, nil : ref Text)
 
 renderon(w : ref Window)
 {
-	# a browser window's page, over its text again
-	if(w.docweb){
-		if((err := w.webview()) != nil)
+	# a document (a page browsed, a PDF, an image, Markdown, HTML,
+	# Mermaid) shown, or shown again (docview(2))
+	if(w.doc != nil || docview->kind(w.body.file.name) != nil){
+		if((err := docview->render(w)) != nil)
 			warning(nil, sprint("Render: %s\n", err));
-		w.settag();
-		return;
-	}
-
-	# Markdown and HTML are set as a document over their text
-	# (Window.docrender): HTML by Charon's engine
-	if(ismarkdown(w.body.file.name) || ishtml(w.body.file.name)){
-		w.dochtml = ishtml(w.body.file.name);
-		if((err := w.docrender()) != nil){
-			w.dochtml = 0;
-			warning(nil, sprint("Render: %s\n", err));
-			return;
-		}
-		w.rendermode = 1;
 		w.settag();
 		return;
 	}
@@ -1099,8 +1100,9 @@ renderon(w : ref Window)
 
 renderoff(w : ref Window)
 {
-	if(w.docview){
-		w.docoff();
+	if(w.doc != nil){
+		if(docview->shown(w))
+			docview->render(w);
 		return;
 	}
 	if(w.contentdata == nil)
@@ -1126,34 +1128,7 @@ renderoff(w : ref Window)
 	w.settag();
 }
 
-ismarkdown(name : string) : int
-{
-	ext := extof(name);
-	return ext == "md" || ext == "markdown";
-}
-
-ishtml(name : string) : int
-{
-	ext := extof(name);
-	return ext == "html" || ext == "htm" || ext == "xhtml";
-}
-
 # name's extension, lower case
-extof(name : string) : string
-{
-	for(i := len name; i > 0 && name[i-1] != '.' && name[i-1] != '/'; i--)
-		;
-	if(i == 0 || name[i-1] != '.')
-		return nil;
-	ext := "";
-	for(; i < len name; i++){
-		c := name[i];
-		if(c >= 'A' && c <= 'Z')
-			c += 'a' - 'A';
-		ext[len ext] = c;
-	}
-	return ext;
-}
 
 id(et : ref Text)
 {

@@ -12,6 +12,10 @@ load std
 # /lib/xen/plumbing.
 bind -bc '#splumber' /chan
 /lib/sh/plumbrules start /lib/xen/plumbing
+# Files the host asks to have opened, a document opened with the app
+# (Finder's Open With, the Dock icon) or a file dropped on the window,
+# arrive on /dev/hostopen (cons(3)) and are plumbed like any other.
+if {ftest -e /dev/hostopen} {hostplumb -p < /dev/hostopen &}
 # The model, so the Agent window (xenith/dis/Agent) finds /mnt/llm.
 # In the background: a remote /mnt/llm must never hold up the editor.
 {run /lib/lucifer/llmsrv.sh} >[2] /dev/null &

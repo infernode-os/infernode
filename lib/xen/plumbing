@@ -5,6 +5,24 @@
 # refused (hostplumb retries it) rather than starting acme, which would
 # draw over Xenith.
 
+# a file the host asked to have opened (Finder's Open With, the Dock
+# icon, a file dropped on the window; hostplumb -p): the whole data is
+# the path, spaces and all
+src is hostopen
+kind is text
+data matches '.+'
+data isfile	$0
+data set	$file
+attr set	'action=showfile'
+plumb to edit
+
+src is hostopen
+kind is text
+data matches '.+'
+data isdir	$0
+data set	$dir
+plumb to edit
+
 # existing files, possibly tagged by line number
 kind is text
 data matches '([.a-zA-Z0-9_/\-]+[a-zA-Z0-9_/\-])(:(((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$])([,;+\-]((#?[0-9]+)|(/[A-Za-z0-9_\^]+/?)|[.$]))*))?'

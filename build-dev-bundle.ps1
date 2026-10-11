@@ -92,6 +92,10 @@ foreach ($f in @("LICENSE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.m
     }
 }
 
+# xen.ps1, as the release ships it (docs/XEN.md).
+New-Item -ItemType Directory -Force -Path "$OutDir\tools" | Out-Null
+Copy-Item "$ROOT\tools\xen.ps1" "$OutDir\tools\"
+
 # Build scripts so the user can rebuild from the bundle.
 foreach ($f in @("build-windows-amd64.ps1", "build-windows-sdl3.ps1")) {
     if (Test-Path "$ROOT\$f") {

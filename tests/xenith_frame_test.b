@@ -11,6 +11,8 @@ include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+include "docengine.m";
+include "docreg.m";
 
 # Xenith's module interfaces, as appl/xenith/common.m includes them,
 # so that Graph's init matches the suite's
@@ -44,11 +46,10 @@ include "../appl/xenith/ecmd.m";
 include "../appl/xenith/styxaux.m";
 include "imagefile.m";
 include "imgload.m";
-include "renderer.m";
-include "../appl/xenith/render.m";
 include "formatter.m";
 include "../appl/xenith/format.m";
 include "../appl/xenith/asyncio.m";
+include "../appl/xenith/docview.m";
 
 XenithFrameTest: module
 {

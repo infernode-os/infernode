@@ -168,6 +168,7 @@ TARG=\
 	watchvars.dis\
 	web.dis\
 	outlinefont.dis\
+	pdfenc.dis\
 	pdf.dis\
 	webclient.dis\
 	winplace.dis\
@@ -267,6 +268,7 @@ SYSMODULES=\
 	memfs.m\
 	menu.m\
 	outlinefont.m\
+	pdfenc.m\
 	pdf.m\
 	menuhit.m\
 	midi.m\

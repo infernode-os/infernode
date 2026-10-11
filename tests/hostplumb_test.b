@@ -225,6 +225,30 @@ testBadHost(t: ref T)
 	t.assertseq(string m.data, "/n/local/a/after", "the bad message is skipped, the next delivered");
 }
 
+testPlain(t: ref T)
+{
+	# -p: plain host paths, as the emulator's /dev/hostopen gives them;
+	# a line that is not an absolute path is skipped
+	spawn hostplumb("-p" :: nil, array of byte "/Users/me/my file.c\nrelative\n/Users/me/dir\n" :: nil);
+	m := next(t);
+	t.assertseq(string m.data, "/n/local/Users/me/my file.c", "a path, spaces and all, under /n/local");
+	t.assertseq(m.src, "hostopen", "from hostopen, so rules can take the whole data");
+	t.assertseq(m.dst, "edit", "routed by this namespace's rules");
+	m = next(t);
+	t.assertseq(string m.data, "/n/local/Users/me/dir", "the relative line skipped, the next delivered");
+}
+
+testPlainWindows(t: ref T)
+{
+	# a file dropped on the window on Windows: C: is /n/local; another
+	# drive is not mounted, so it is skipped
+	spawn hostplumb("-p" :: nil, array of byte "C:\\Users\\me\\f.c\r\nD:\\x.c\nc:/a/b\n" :: nil);
+	m := next(t);
+	t.assertseq(string m.data, "/n/local/Users/me/f.c", "C:\\ made /n/local/");
+	m = next(t);
+	t.assertseq(string m.data, "/n/local/a/b", "D: skipped; c:/ taken too");
+}
+
 testSeveral(t: ref T)
 {
 	spawn hostplumb(nil, hostmsg("/a", "", "/a/one") :: hostmsg("/a", "addr=3", "/a/two") :: nil);
@@ -277,6 +301,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("OtherHost", testOtherHost);
 	run("BadHost", testBadHost);
 	run("Several", testSeveral);
+	run("Plain", testPlain);
+	run("PlainWindows", testPlainWindows);
 
 	# the plumber's processes would keep the emulator up
 	killplumber();

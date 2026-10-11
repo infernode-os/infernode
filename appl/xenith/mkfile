@@ -3,6 +3,7 @@
 DIRS=\
 	xenith\
 	render\
+	doc\
 
 TARG=\
 	xenith.dis\
@@ -30,8 +31,9 @@ TARG=\
 	ecmd.dis\
 	elog.dis\
 	styxaux.dis\
-	render.dis\
 	format.dis\
+	docreg.dis\
+	docview.dis\
 
 ICONS=\
 	abcde.bit\
@@ -63,12 +65,13 @@ MODULES=\
 	elog.m\
 	ecmd.m\
 	styxaux.m\
-	render.m\
 	format.m\
+	docview.m\
 
 SYSMODULES=\
 	bufio.m\
-	renderer.m\
+	docengine.m\
+	docreg.m\
 	htmldoc.m\
 	formatter.m\
 	daytime.m\

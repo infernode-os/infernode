@@ -1888,8 +1888,21 @@ xec(Prog *p)
 {
 	int op;
 
-	retrelease();
+	/*
+	 * R is p's before the pending Modlink is released, not after.
+	 * Destroying it destroys its module data, and a file descriptor
+	 * there closes with the VM released (freeFD), and release()
+	 * saves R as the running Prog's registers (isave): p's, since p
+	 * is the head of the run queue. With retrelease() first, R still
+	 * held the previous Prog's registers, which became p's, and p
+	 * resumed on another Prog's stack, in its module, with its PC:
+	 * two Progs running one stack, strings freed under their users,
+	 * the heap's free tree corrupted. Only compiled modules defer
+	 * their release, so only -c1 did it (a page load opening many
+	 * TLS connections at once, docs/JS-ENGINE.md).
+	 */
 	R = p->R;
+	retrelease();
 	R.MP = R.M->MP;
 	R.IC = p->quanta;
 

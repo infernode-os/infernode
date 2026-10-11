@@ -3,12 +3,7 @@
 TARG=\
 	rlayout.dis\
 	tlayout.dis\
-	imgrender.dis\
-	mdrender.dis\
 	htmldoc.dis\
-	webrender.dis\
-	pdfrender.dis\
-	mermaidrender.dis\
 	htmlfmt.dis\
 
 MODULES=\
@@ -22,7 +17,6 @@ SYSMODULES=\
 	filter.m\
 	mermaid.m\
 	pdf.m\
-	renderer.m\
 	bufio.m\
 	imagefile.m\
 	imgload.m\

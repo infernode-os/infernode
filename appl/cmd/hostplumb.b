@@ -14,6 +14,11 @@ implement Hostplumb;
 # host's file system is mounted (tools/xen does it, before Xenith starts,
 # for the hosts named in $XEN_HOSTS).
 #
+# With -p it reads plain host paths instead, one to a line: files the
+# host asked this InferNode to open (the emulator's /dev/hostopen, fed
+# by Finder's Open With and files dropped on the window). A Windows
+# path on C:, the drive mounted at /n/local, is made a Unix one.
+#
 
 include "sys.m";
 	sys: Sys;
@@ -61,10 +66,13 @@ init(nil: ref Draw->Context, args: list of string)
 		fail(sys->sprint("cannot load %s: %r", Arg->PATH));
 
 	root := "/n/local";
+	plain := 0;
 	arg->init(args);
-	arg->setusage("hostplumb [-r root]");
+	arg->setusage("hostplumb [-p] [-r root]");
 	while((c := arg->opt()) != 0)
 		case c {
+		'p' =>
+			plain = 1;
 		'r' =>
 			root = arg->earg();
 		* =>
@@ -84,6 +92,14 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	in := bufio->fopen(sys->fildes(0), Bufio->OREAD);
+	if(plain){
+		while((s := in.gets('\n')) != nil){
+			p := hostpath(s);
+			if(p != nil)
+				send(local(ref Msg("hostopen", nil, "/", "text", nil, array of byte p), root));
+		}
+		return;
+	}
 	while((m := readmsg(in)) != nil){
 		r := root;
 		(ok, host) := attr(m.attr, "host");
@@ -94,17 +110,46 @@ init(nil: ref Draw->Context, args: list of string)
 			}
 			r = "/n/" + host;
 		}
-		m = local(m, r);
-		# the receiver may still be starting (a message can arrive as
-		# soon as the host's plumber sees this reader): retry a while
-		for(i := 0; m.send() < 0; i++){
-			if(i == Retries){
-				sys->fprint(stderr, "hostplumb: plumb %s: %r\n", string m.data);
-				break;
-			}
-			sys->sleep(Retrywait);
-		}
+		send(local(m, r));
 	}
+}
+
+# the receiver may still be starting (a message can arrive as soon as
+# the host's plumber sees this reader): retry a while
+send(m: ref Msg)
+{
+	for(i := 0; m.send() < 0; i++){
+		if(i == Retries){
+			sys->fprint(stderr, "hostplumb: plumb %s: %r\n", string m.data);
+			return;
+		}
+		sys->sleep(Retrywait);
+	}
+}
+
+# one line of -p: an absolute host path, a Windows one on C: made a
+# Unix one; nil for anything else
+hostpath(s: string): string
+{
+	while(s != nil && (s[len s - 1] == '\n' || s[len s - 1] == '\r'))
+		s = s[0:len s - 1];
+	if(s == nil)
+		return nil;
+	if(len s >= 3 && s[1] == ':' && (s[2] == '\\' || s[2] == '/')){
+		if(s[0] != 'C' && s[0] != 'c'){
+			sys->fprint(stderr, "hostplumb: %s is not on C:, the drive at /n/local\n", s);
+			return nil;
+		}
+		s = s[2:];
+		for(i := 0; i < len s; i++)
+			if(s[i] == '\\')
+				s[i] = '/';
+	}
+	if(s[0] != '/'){
+		sys->fprint(stderr, "hostplumb: %s is not an absolute path\n", s);
+		return nil;
+	}
+	return s;
 }
 
 # An attribute of a message from plan9port's plumber, whose attributes
@@ -176,8 +221,11 @@ local(m: ref Msg, root: string): ref Msg
 	dir := m.dir;
 	if(dir != nil && dir[0] == '/')
 		dir = root + dir;
+	src := "hostplumb";
+	if(m.src == "hostopen")
+		src = m.src;
 	# no destination or attributes: this namespace's rules decide
-	return ref Msg("hostplumb", nil, dir, m.kind, nil, array of byte data);
+	return ref Msg(src, nil, dir, m.kind, nil, array of byte data);
 }
 
 fail(s: string)

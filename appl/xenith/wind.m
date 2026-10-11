@@ -42,30 +42,9 @@ Windowm : module {
 		dumpdir : string;
 		dumpid : int;
 		colorstr : string;	# per-window color overrides, nil = use global
-		imagemode : int;	# 0 = text mode, 1 = image/content mode
-		bodyimage : ref Draw->Image;	# rendered content for display
-		imagepath : string;	# path to current content
-		imageoffset : Draw->Point;	# pan offset for large images
-		contentdata : array of byte;	# raw content bytes (for renderer commands / render mode)
-		contentrenderer : Renderer;	# active renderer module (nil = legacy image path)
-		rendering : int;	# 1 while async render in progress (debounce)
-		pendingcmd : string;	# deferred command during rendering (latest wins)
-		rendermode : int;	# 0 = raw text, 1 = formatted view (Render command toggle)
-		zoomscale : int;	# zoom percentage: 100 = fit-to-window, 200 = 2x, etc.
-		zoomedcache : ref Draw->Image;	# cached scaled page for fast pan/redraw
-		docview : int;	# 1: the body shows its text set as a document (Render on markdown)
-		docwidth : int;	# the width the document was set for
-		docbg : ref Draw->Image;	# and the colours
-		docfg : ref Draw->Image;
-		docaccent : ref Draw->Image;
-		docb : ref Draw->Image;	# where the body's text draws meanwhile, unseen
-		doclines : array of int;	# each block's first line in the text
-		docys : array of int;	# and its top in the document
-		dochtml : int;	# the document is HTML, set by Charon's engine (htmldoc)
-		docweb : int;	# and browsed: a URL's page, the window a browser window
-		webfield : int;	# the form field that has the keyboard (its node), or 0
-		docheight : int;	# the document's height
-		docpage : ref Draw->Image;	# an HTML document's part in view
+		rendermode : int;	# 0 = raw text, 1 = formatted view (Render on other text)
+		contentdata : array of byte;	# the raw text while formatted
+		doc : ref Docview->Doc;	# the window's document (docview(2)), or nil
 		utflastqid : int;
 		utflastboff : int;
 		utflastq : int;
@@ -99,25 +78,5 @@ Windowm : module {
 		cleartag : fn(w : self ref Window);
 		ctlprint : fn(w : self ref Window, fonts : int) : string;
 		applycolors : fn(w : self ref Window);
-		loadimage : fn(w : self ref Window, path : string) : string;
-		loadcontent : fn(w : self ref Window, path : string) : string;
-		clearimage : fn(w : self ref Window);
-		drawimage : fn(w : self ref Window);
-		prerenderzoomed : fn(w : self ref Window) : ref Draw->Image;
-		contentcommands : fn(w : self ref Window) : list of ref Renderer->Command;
-		contentcommand : fn(w : self ref Window, cmd, arg : string) : string;
-		asynccontentcommand : fn(w : self ref Window, cmd, arg : string);
-		docrender : fn(w : self ref Window) : string;
-		doclink : fn(w : self ref Window, p : Draw->Point) : string;
-		docoff : fn(w : self ref Window);
-		docscroll : fn(w : self ref Window, dy : int);
-		browse : fn(w : self ref Window, url : string) : string;
-		webevent : fn(w : self ref Window, e : string);
-		webview : fn(w : self ref Window) : string;
-		webclick : fn(w : self ref Window, p : Draw->Point) : int;
-		webcmd : fn(w : self ref Window, cmd : string) : string;
-		weburl : fn(w : self ref Window) : string;
-		webkey : fn(w : self ref Window, r : int);
-		webposted : fn(w : self ref Window) : string;
 	};
 };

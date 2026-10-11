@@ -31,10 +31,25 @@ struct PhysUart
 	void	(*power)(Uart*, int);
 	int	(*getc)(Uart*);	/* polling versions, for iprint, rdb */
 	void	(*putc)(Uart*, int);
+	/*
+	 * Stop (1) or resume (0) taking input from the hardware. With
+	 * hardware flow control on, input the stage has no room for is
+	 * left in the FIFO, whose filling drops RTS; uartclock resumes
+	 * once it has moved the stage on. nil: the stage overflows into
+	 * berr, as it always did.
+	 */
+	void	(*rxhold)(Uart*, int);
 };
 
 enum {
-	Stagesize=	1024
+	/*
+	 * Input is staged at interrupt time and moved to the queue every
+	 * 22 ms (uartclock): 3 Mbaud is 6600 bytes in that time, which a
+	 * 1024-byte stage dropped most of. With rxhold
+	 * nothing is dropped whatever the size; the size is what keeps
+	 * the line running at its rate rather than stopping each tick.
+	 */
+	Stagesize=	8192
 };
 
 /*
@@ -90,6 +105,8 @@ struct Uart
 	int	drain;
 
 	int	modem;			/* hardware flow control on */
+	int	rxheld;			/* input left in the hardware: the stage is full */
+	ulong	nhold;			/* times input was held */
 	int	xonoff;			/* software flow control on */
 	int	blocked;
 	int	cts, dsr, dcd, dcdts;	/* keep track of modem status */
@@ -106,4 +123,5 @@ extern PhysUart*	physuart[];
 extern int	uartctl(Uart*, char*);
 extern void	uartkick(void*);
 extern void	uartrecv(Uart*, char);
+extern int	uartroom(Uart*);
 extern int	uartstageoutput(Uart*);

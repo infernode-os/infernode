@@ -17,7 +17,7 @@ columnm : Columnm;
 exec : Exec;
 scrl : Scroll;
 plumbmsg : Plumbmsg;
-imgload : Imgload;
+docview : Docview;
 
 sprint : import sys;
 Point : import draw;
@@ -50,6 +50,7 @@ init(mods : ref Dat->Mods)
 	exec = mods.exec;
 	scrl = mods.scroll;
 	plumbmsg = mods.plumbmsg;
+	docview = mods.docview;
 }
 
 nuntitled : int;
@@ -240,14 +241,8 @@ openlink(url : string)
 		m.data = array of byte path;
 		plumblook(m);
 		w := lookfile(path, len path);
-		if(w != nil && !w.docview && ishtmlname(path)){
-			w.dochtml = 1;
-			if(w.docrender() == nil){
-				w.rendermode = 1;
-				w.settag();
-			}else
-				w.dochtml = 0;
-		}
+		if(w != nil && !docview->shown(w) && ishtmlname(path))
+			docview->render(w);
 		return;
 	}
 	if(dat->plumbed){
@@ -266,6 +261,29 @@ openlink(url : string)
 		return;
 	}
 	warning(nil, sys->sprint("nothing to open %s with\n", url));
+}
+
+# A word on a document's drawing looked at (button 3): plumbed, from
+# the document's directory; if nothing takes it, found in the document
+lookword(w : ref Window, word : string)
+{
+	if(dat->plumbed){
+		m := ref Msg;
+		m.src = "xenith";
+		m.dir = xenith->wdir;
+		name := w.body.file.name;
+		for(i := len name - 1; i > 0; i--)
+			if(name[i] == '/'){
+				m.dir = name[0:i];
+				break;
+			}
+		m.kind = "text";
+		m.data = array of byte word;
+		if(m.send() >= 0)
+			return;
+	}
+	if((err := docview->find(w, word)) != nil)
+		warning(nil, sprint("%s: %s\n", word, err));
 }
 
 # A browser window on url (cleanname would fold its //)
@@ -555,22 +573,20 @@ dirname(t : ref Text, r : string, n : int) : (string, int)
 			raise "e";
 		if(n>=1 &&  r[0]=='/')
 			raise "e";
-		b = stralloc(nt+n+1);
+		b = stralloc(nt);
 		t.w.tag.file.buf.read(0, b, 0, nt);
+		(name, nil) := tagname(b.s[0:nt]);
 		slash = -1;
-		for(m=0; m<nt; m++){
-			c = b.s[m];
+		for(m=0; m<len name; m++){
+			c = name[m];
 			if(c == '/')
 				slash = m;
-			if(c==' ' || c=='\t')
-				break;
 		}
 		if(slash < 0)
 			raise "e";
-		for (i := 0; i < n; i++)
-			b.s[slash+1+i] = r[i];
+		s := name[0:slash+1] + r[0:n];
 		r = nil;
-		return cleanname(b.s, slash+1+n);
+		return cleanname(s, len s);
 	}
 	exception{
 		* =>
@@ -582,6 +598,54 @@ dirname(t : ref Text, r : string, n : int) : (string, int)
 	return (nil, 0);
 }
 
+# A file name as a tag shows it: quoted, as plan9port's acme quotes it,
+# when it has a blank in it or begins with a quote, any quote in it
+# doubled; otherwise as it is. Unquoted, the tag would take a name with
+# a blank in it to end at the blank, and rename the window to that.
+tagquote(s : string) : string
+{
+	need := s != nil && s[0] == '\'';
+	for(i := 0; i < len s && !need; i++)
+		if(s[i] == ' ' || s[i] == '\t')
+			need = 1;
+	if(!need)
+		return s;
+	q := "'";
+	for(j := 0; j < len s; j++){
+		if(s[j] == '\'')
+			q[len q] = '\'';
+		q[len q] = s[j];
+	}
+	q[len q] = '\'';
+	return q;
+}
+
+# The file name at the start of tag text s, unquoted, and the index of
+# the first character after it. A quote with no closing one (being
+# typed) is taken as part of a name that ends at a blank.
+tagname(s : string) : (string, int)
+{
+	if(s != nil && s[0] == '\''){
+		n := "";
+		for(i := 1; i < len s; i++){
+			if(s[i] != '\''){
+				n[len n] = s[i];
+				continue;
+			}
+			if(i+1 < len s && s[i+1] == '\''){
+				n[len n] = '\'';
+				i++;
+				continue;
+			}
+			return (n, i+1);
+		}
+	}
+	for(j := 0; j < len s; j++)
+		if(s[j] == ' ' || s[j] == '\t')
+			break;
+	return (s[0:j], j);
+}
+
 expandfile(t : ref Text, q0 : int, q1 : int, e : Expand) : (int, Expand)
 {
 	i, n, nname, colon : int;
@@ -591,6 +655,9 @@ expandfile(t : ref Text, q0 : int, q1 : int, e : Expand) : (int, Expand)
 	w : ref Window;
 
 	amax = q1;
+	# a name selected, not expanded from a click, may have blanks in
+	# it, as in plan9port's acme
+	selected := q1 > q0;
 	if(q1 == q0){
 		colon = -1;
 		while(q1<t.file.buf.nc && isfilec(c=t.readc(q1))){
@@ -673,7 +740,7 @@ expandfile(t : ref Text, q0 : int, q1 : int, e : Expand) : (int, Expand)
 		if(nname == -1)
 			nname = n;
 		for(i=0; i<nname; i++)
-			if(!isfilec(r.s[i])) {
+			if(!isfilec(r.s[i]) && !(selected && r.s[i] == ' ')) {
 				strfree(r);
 				r = nil;
 				return (FALSE, e);
@@ -802,63 +869,6 @@ lookid(id : int, dump : int) : ref Window
 	return nil;
 }
 
-# Check if filename has the extension of an image format imgload
-# reads (see module/imgload.m), so the two cannot disagree.
-isimage(name: string): int
-{
-	if(imgload == nil)
-		imgload = load Imgload Imgload->PATH;
-	return imgload != nil && imgload->isimage(name);
-}
-
-# Check if filename matches any known content type.
-# Checks built-in image types and content types loadable
-# through the renderer pipeline (markdown, HTML, etc.).
-iscontent(name: string): int
-{
-	if(isimage(name))
-		return 1;
-	return isrenderable(name);
-}
-
-# Check if filename has a renderer-supported extension.
-# This is the local fast-path; the Render registry also
-# checks dynamically when loaded via Mods.
-isrenderable(name: string): int
-{
-	if(name == nil || len name < 4)
-		return 0;
-
-	dot := -1;
-	for(i := len name - 1; i >= 0; i--){
-		if(name[i] == '.'){
-			dot = i;
-			break;
-		}
-		if(name[i] == '/')
-			break;
-	}
-	if(dot < 0)
-		return 0;
-
-	ext := name[dot:];
-	# Lowercase
-	lext := "";
-	for(i = 0; i < len ext; i++){
-		c := ext[i];
-		if(c >= 'A' && c <= 'Z')
-			c += 'a' - 'A';
-		lext[len lext] = c;
-	}
-
-	# Supported content renderer extensions (text formats handled by Render command)
-	case lext {
-	".pdf" =>
-		return 1;
-	}
-	return 0;
-}
-
 openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 {
 	r : Range;
@@ -876,6 +886,15 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		t = w.body;
 		if(!t.col.safe && t.frame.maxlines==0) # window is obscured by full-column window
 			t.col.grow(t.col.w[0], 1, 1);
+		# a PDF or an image open as text (Render off) is shown as
+		# itself again; one never shown (opened before it was
+		# known for one) is shown
+		if(e.name != nil && !w.dirty && !docview->shown(w)){
+			if(w.doc != nil && docview->readonly(w))
+				docview->render(w);
+			else if(w.doc == nil && (k := docview->kind(e.bname)) != nil && k.class == Docreg->Binary)
+				docview->open(w, e.bname, k);
+		}
 	}
 	else{
 		ow = nil;
@@ -885,29 +904,16 @@ openfile(t : ref Text, e : Expand) : (ref Window, Expand)
 		t = w.body;
 		w.setname(e.name, len e.name);
 
-		# A URL is browsed: the window a browser window (Window.browse)
+		# a URL is browsed, the window a browser window; a PDF or an
+		# image shown as the document it is (docview(2))
 		if(isurl(e.bname)){
-			# a browser window
-			err := w.browse(e.bname);
-			if(err != nil)
+			if((err := docview->browse(w, e.bname)) != nil)
 				warning(nil, sprint("can't load URL %s: %s\n", e.bname, err));
-		}
-		# Check if this is renderable content (image, PDF, etc.)
-		else if(iscontent(e.bname)){
-			# Use renderer pipeline for all content types;
-			# falls back to legacy image path for built-in formats
-			if(isimage(e.bname)){
-				err := w.loadimage(e.bname);
-				if(err != nil)
-					warning(nil, sprint("can't load image %s: %s\n", e.bname, err));
-			} else {
-				err := w.loadcontent(e.bname);
-				if(err != nil)
-					warning(nil, sprint("can't load content %s: %s\n", e.bname, err));
-			}
-		} else {
+		}else if((k := docview->kind(e.bname)) != nil && k.class == Docreg->Binary){
+			if((err := docview->open(w, e.bname, k)) != nil)
+				warning(nil, sprint("can't show %s: %s\n", e.bname, err));
+		}else
 			t.loadx(0, e.bname, 1);
-		}
 
 		t.file.mod = FALSE;
 		t.w.dirty = FALSE;

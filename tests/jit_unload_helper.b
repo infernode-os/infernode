@@ -7,6 +7,9 @@ implement JitUnloadHelper;
 # declines a module of fewer than 128 instructions (its compile()'s
 # overflow check compares a size it has already rounded up), so pad()
 # is there to make it longer than that. Nothing calls it.
+#
+# holdfile() is hold() with a file open in the module's data, so that
+# releasing the module closes it, and closing a file releases the VM.
 
 include "sys.m";
 	sys: Sys;
@@ -15,13 +18,25 @@ JitUnloadHelper: module
 {
 	PATH:	con "/dis/tests/jit_unload_helper.dis";
 	hold:	fn(ms: int): int;
+	holdfile:	fn(ms: int): int;
 	pad:	fn(a: int): int;
 };
+
+keep: ref Sys->FD;
 
 hold(ms: int): int
 {
 	if(sys == nil)
 		sys = load Sys Sys->PATH;
+	sys->sleep(ms);
+	return ms + 1;
+}
+
+holdfile(ms: int): int
+{
+	if(sys == nil)
+		sys = load Sys Sys->PATH;
+	keep = sys->open("/dev/null", Sys->OREAD);
 	sys->sleep(ms);
 	return ms + 1;
 }

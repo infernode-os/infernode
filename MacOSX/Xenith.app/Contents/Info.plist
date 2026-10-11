@@ -26,6 +26,23 @@
 	<string>Copyright 2026 The InferNode Authors. MIT License.</string>
 	<key>CFBundleGetInfoString</key>
 	<string>Xenith 0.1 - the InferNode text environment</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.text</string>
+				<string>public.data</string>
+				<string>public.folder</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>LSMinimumSystemVersion</key>

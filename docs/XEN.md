@@ -23,12 +23,25 @@ button 3.
 
 ## Setup
 
-Build the tree first (emulator and `dis/`; see
-[QUICKSTART.md](../QUICKSTART.md)). Then put `xen` on your PATH:
+Every release ships `xen`, with nothing to build:
+
+| Release | `xen` | Plumbing rules |
+|---|---|---|
+| `Xenith.app` (macOS) | `Xenith.app/Contents/Resources/tools/xen` | `tools/xen.plumbing` beside it |
+| Linux GUI and Xenith tarballs | `tools/xen` | `tools/xen.plumbing` |
+| Windows zips | `tools\xen.ps1` | (no host plumbing) |
+
+Each runs the release it came in. Put it on your PATH, from a release
+or from a built source tree (emulator and `dis/`; see
+[QUICKSTART.md](../QUICKSTART.md)):
 
 ```sh
-ln -s /path/to/infernode/tools/xen ~/bin/xen
+ln -s /Applications/Xenith.app/Contents/Resources/tools/xen ~/bin/xen
+ln -s /path/to/infernode/tools/xen ~/bin/xen          # or a source tree
 ```
+
+Link a release, or a tree that stays on a branch you trust, not a
+checkout you switch around in: `xen` is your editor.
 
 On macOS, with `Xenith.app` installed (in `/Applications` or
 `~/Applications`; `XEN_APP` names another), `xen` runs the app's own
@@ -39,8 +52,9 @@ script follows the link back to the tree it lives in. To run a tree,
 app or no app, set `INFERNODE_ROOT`.
 
 On Windows use `tools\xen.ps1` (`-Sam`, `-Wait` in place of `-s`, `-w`).
-Only `C:` is mounted inside InferNode, so files on other drives are
-refused.
+It runs the tree it is in, a source tree or an unpacked release zip, or
+the unpacked Xenith zip that `XEN_APP` names. Only `C:` is mounted
+inside InferNode, so files on other drives are refused.
 
 Verified on macOS, and on Linux (INFR-522): natively under Wayland
 (Weston at scale 1 and 2, windowed and full screen) and under X11 at
@@ -74,8 +88,11 @@ configuration are the same in any. Files dropped on `Xenith.exe` (or
 opened with it) are opened in the new instance, on C: only; on Linux,
 `xenith file ...` opens them, and the tarball's `setup-desktop.sh` adds
 Xenith to the app menu (files opened with it from there open in it) and
-puts `xenith` on the PATH; on macOS, open files by plumbing them (below)
-or from Xenith itself.
+puts `xenith` on the PATH. On macOS, Finder opens files and folders in
+`Xenith.app`: Open With, or a drop on its Dock icon, opens them in the
+running Xenith or starts one. A file dropped on Xenith's window opens in
+it on every host. The emulator hands each path to `/dev/hostopen`
+(`cons(3)`), and `lib/xen/boot.sh` plumbs it (`hostplumb -p`).
 
 `xen`, `xen.ps1` and the apps start the same way, through
 `lib/xen/boot.sh`: a plumber, the model service, then Xenith with the
@@ -99,13 +116,15 @@ icon is `MacOSX/Xenith.png`, from which `Xenith.icns` and
   while a Xenith is reading the host plumber (below) are plumbed to it
   instead. Without files, or with `-s` or `-w`, `xen` always starts
   one.
-- Xenith's tag line cuts a file name at its first space (as Inferno's
-  acme does); sam shows such names whole.
+- A file name with a blank in it is quoted in Xenith's tag
+  (`'/Users/me/my notes.txt'`, a quote in it doubled), as plan9port's
+  acme does, and a name selected and looked at (B3) may have blanks in
+  it; Inferno's acme cut such a name at its first blank.
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `INFERNODE_ROOT` | tree to run | macOS: `Xenith.app`'s, if installed; otherwise the tree holding the script |
-| `XEN_APP` | the `Xenith.app` to run on macOS | `/Applications/Xenith.app`, then `~/Applications/Xenith.app` |
+| `INFERNODE_ROOT` | tree to run | macOS: a `Xenith.app`'s (`XEN_APP`), if there is one; otherwise the tree holding the script, a source tree or a release |
+| `XEN_APP` | the `Xenith.app` to run on macOS; on Windows, an unpacked Xenith zip | macOS: the app `xen` is in, then `/Applications/Xenith.app`, then `~/Applications/Xenith.app` |
 | `XEN_THEME` | the session's theme: any installed theme; `glenda` is Plan 9's acme | `xenith` |
 | `XEN_GEOM` | initial window size | `1400x900` |
 | `XEN_LOG` | where a detached instance's output is added, between a line marking its start and one giving the emu's exit status | `$TMPDIR/xen.log` |
@@ -154,9 +173,11 @@ server and the agent harness itself. See `man 4 veltrosrv` and
 ## Browsing
 
 Right-click (button 3) a URL (`https://`, `http://` or `file://`) and
-Xenith opens it in a browser window: the page drawn by Charon's engine
+Xenith opens it in a browser window: a document (see
+[XENITH.md](XENITH.md#documents)), the page laid out by Charon's engine,
 over the window's text, which is the page's text (so Look, search and
-Snarf work on it). The window is named by the page's URL.
+Snarf work on it). The window is named by the page's URL. Browser
+windows and HTML files set by Render share one Charon engine.
 
 | To | Do |
 |---|---|
@@ -173,10 +194,10 @@ Snarf work on it). The window is named by the page's URL.
 
 **The page as files.** A browser window's page is served as Charon's is
 (`man 1 charon`): `url`, `title`, `text`, `links`, `forms`, `ctl` and the
-DOM, one directory per node under `dom/`. It is posted as
-`#sxenith/<id>`, which the window's `web` file names (empty for a window
-that is not browsing), so a script, or an agent granted it, can read the
-page and work it:
+DOM, one directory per node under `dom/`. It is posted under
+`#sxenith/`, at the path the window's `web` file names (empty for a
+window that is not browsing), so a script, or an agent granted it, can
+read the page and work it:
 
 ```sh
 mount -A `{cat /mnt/xenith/7/web} /n/page

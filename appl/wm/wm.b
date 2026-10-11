@@ -18,6 +18,7 @@ include "winplace.m";
 include "menuhit.m";
 	menuhit: Menuhit;
 	Menu, Mousectl: import menuhit;
+include "lucitheme.m";
 
 Wm: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -88,6 +89,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	buts := Wmclient->Appl;
 	if(ctxt.wm == nil)
 		buts = Wmclient->Plain;
+	# A theme switched by anyone (Xenith's Theme, Settings, a write to
+	# /lib/lucifer/theme/current) reaches the windows.  Under Lucifer
+	# it sends "retheme" itself; at the top, wm/wm watches.
+	themec := chan of string;
+	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil)
+		themec = lucitheme->watch();
 	win := wmclient->window(ctxt, "Wm", buts);
 	wmwin = win;
 	wmclient->win.reshape(((0, 0), (100, 100)));
@@ -154,17 +161,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		}
 		if(c == "retheme"){
 			# a live theme switch (Lucifer sends it to the apps it
-			# hosts, wm/wm among them): pass it on to every window
-			# here, hidden ones too, so their frames follow
-			for(z := wmsrv->top(); z != nil; z = z.znext)
-				spawn tellctl(z.ctl, c);
-			for(hl := hidden; hl != nil; hl = tl hl)
-				spawn tellctl((hd hl).ctl, c);
+			# hosts, wm/wm among them)
+			retheme();
 		}
 
 		wmclient->win.wmctl(c);
 		if(win.image != screen.image)
 			reshaped(win);
+	<-themec =>
+		retheme();
 	<-exitc =>
 		wmclient->win.wmctl("exit");
 	c := <-wmctxt.kbd or
@@ -1112,6 +1117,16 @@ sweepout(ptr: chan of ref Pointer, buttons: int): Rect
 	if(!ok || r.dx() < Minwidth || r.dy() < Minheight)
 		return none;
 	return r;
+}
+
+# A theme switch: pass it on to every window, hidden ones too, so
+# their frames and colours follow.  The menu reads the theme as it opens.
+retheme()
+{
+	for(z := wmsrv->top(); z != nil; z = z.znext)
+		spawn tellctl(z.ctl, "retheme");
+	for(hl := hidden; hl != nil; hl = tl hl)
+		spawn tellctl((hd hl).ctl, "retheme");
 }
 
 tellexit(c: ref Client)

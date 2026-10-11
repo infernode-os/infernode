@@ -93,5 +93,18 @@ menu 900 100 154
 click 600 400 1
 show delete-cancel
 
+# a theme switched (as Xenith's Theme does): the windows' frames and
+# the menu follow.  The host gives /lib/lucifer/theme as a copy.
+scap /tmp/wm-theme-0.img
+echo -n halo > /lib/lucifer/theme/current
+sleep 3
+scap /tmp/wm-theme-1.img
+ptr 900 100 4
+sleep 1
+scap /tmp/wm-theme-menu.img
+ptr 990 790 4
+ptr 990 790 0
+show theme
+
 echo R done
 echo halt > '#c/sysctl'

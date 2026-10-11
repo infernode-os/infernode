@@ -64,7 +64,7 @@ Fspr, Fopt, Fobjopt: con 1 << iota;
 
 # Code flags
 Cstrict, Carrow, Cgen, Casync, Cmethod, Cctor, Cderived, Cclassctor, Csimple, Cgetter,
-Csetter, Cstatic, Cfield, Cscript, Ceval, Cmodule, Cdyn, Cnoproto, Canonfield: con 1 << iota;
+Csetter, Cstatic, Cfield, Cscript, Ceval, Cmodule, Cdyn, Cnoproto, Canonfield, Cnopool, Cnothis: con 1 << iota;
 
 Code: adt {
 	name:	string;
@@ -83,6 +83,7 @@ Code: adt {
 	paramenv:	array of int;	# by argument: the env slot of a captured simple parameter, or -1
 	dupparams:	array of int;	# by argument: 1 if a later parameter has its name (not mapped)
 	lazy:	ref Lazy;	# a body not yet compiled: it is when the function is first called
+	spare:	array of V;	# a frame a call returned, cleared, for the next call (not with Cnopool)
 };
 
 # A function the parser left unparsed (Flazy: a nested function in a source
@@ -3131,6 +3132,8 @@ funcbody(f: ref Node.Func, code: ref Code)
 		code.thisnode = varref1(fs.this, s);
 	if(fs.args != nil && fs.args.used) {
 		mapped := !fs.strict && simple;
+		if(mapped)
+			code.flags |= Cnopool;	# the arguments object keeps the frame
 		pro = e2(Nmkargs, mapped, bindwrite(fs.args, s)) :: pro;
 		npro++;
 	}
@@ -3182,6 +3185,10 @@ funcbody(f: ref Node.Func, code: ref Code)
 		npro++;
 	}
 	code.nframe = fs.nframe;
+	# nothing reads this (no this, no direct eval, no arrow taking it): a sloppy
+	# call need not make it the global object
+	if(fs.this != nil && !fs.this.used && !fs.this.captured && !s.dyn)
+		code.flags |= Cnothis;
 	if(npro > 0)
 		code.prologue = e2(Nseqs, addkids(pro, npro), npro);
 	else

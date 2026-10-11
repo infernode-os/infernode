@@ -526,6 +526,20 @@ arith(n: int)
 		}
 		return;
 	}
+	if(lt == Tnum && rt == Tnum) {
+		# straight from the registers: every real moved costs under the amd64 JIT
+		case op[n] {
+		Nadd =>
+			rn = ln + rn;
+			return;
+		Nsub =>
+			rn = ln - rn;
+			return;
+		Nmul =>
+			rn = ln * rn;
+			return;
+		}
+	}
 	if(rt == Tnum || rt == Tint) {
 		x, y: real;
 		if(lt == Tint)
@@ -2862,44 +2876,127 @@ callval(f, this: V, ks, k, flags: int)
 }
 
 # call f with this (an object or undefined) and the arguments the nodes in kids give
+# A call of a JavaScript function from a call node, the arguments evaluated
+# straight into its frame.  Everything is in line: under the JIT each pointer
+# moved (a parameter, a save, a restore, a pointer slot of the frame released)
+# costs a reference count up and down, and they were most of a call's time.
+# The caller's env is restored from the root entry that holds it; newt is saved
+# only when it is not nil already.  Natives and the rest go to callf2.
 callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 {
 	c := f.fun.code;
-	if(c != nil && c.lazy != nil)
-		compilelazy(c);
-	if(c != nil && (c.flags & (Cgen|Casync|Cclassctor)) == 0 && (flags & Fspr) == 0) {
-		npos := c.npos;
-		extra := k - npos;
-		if(extra < 0)
-			extra = 0;
-		nfr := array[c.nframe + extra] of V;
-		if(tt == Tobj) {
-			nfr[0].t = Tobj;
-			nfr[0].o = dst;
+	if(c == nil || (c.flags & (Cgen|Casync|Cclassctor)) != 0 || (flags & Fspr) != 0 || c.lazy != nil) {
+		callf2(f, tt, dst, ks, k, flags);
+		return;
+	}
+	npos := c.npos;
+	nfr := c.spare;
+	if(k <= npos && nfr != nil)
+		c.spare = nil;
+	else if(k > npos)
+		nfr = array[c.nframe + k - npos] of V;
+	else
+		nfr = array[c.nframe] of V;
+	if(tt == Tobj) {
+		nfr[0].t = Tobj;
+		nfr[0].o = dst;
+	}
+	# rooted from here: the frame while its arguments are made, then the
+	# caller's env, which is restored from here
+	if(nroot == len rootfr)
+		rootgrow();
+	e := nroot++;
+	rootfr[e] = nfr;
+	rootobj[e] = f;
+	rootenv[e] = env;
+	for(i := 0; i < k; i++) {
+		ev(kids[ks + i]);
+		s := 1 + i;
+		if(i >= npos)
+			s = c.nframe + i - npos;
+		t := rt;
+		nfr[s].t = t;
+		if(t <= Tint)
+			nfr[s].i = ri;
+		else if(t == Tnum)
+			nfr[s].n = rn;
+		else if(t == Tstr)
+			nfr[s].s = rs;
+		else {
+			nfr[s].o = ro;
+			nfr[s].i = ri;
 		}
-		rootpush(nfr, f);
-		for(i := 0; i < k; i++) {
-			ev(kids[ks + i]);
-			s := 1 + i;
-			if(i >= npos)
-				s = c.nframe + i - npos;
-			t := rt;
-			nfr[s].t = t;
-			if(t <= Tint)
-				nfr[s].i = ri;
-			else if(t == Tnum)
-				nfr[s].n = rn;
-			else if(t == Tstr)
-				nfr[s].s = rs;
-			else {
-				nfr[s].o = ro;
-				nfr[s].i = ri;
+	}
+	if(++depth > maxdepth) {
+		depth--;
+		throwerr(ERange, "Maximum call stack size exceeded");
+	}
+	sfr := fr;
+	sfn := curfn;
+	fr = nfr;
+	env = f.env;
+	curfn = f;
+	sargc := argc;
+	argc = k;
+	ntset := newt != nil;
+	snt: ref Obj;
+	if(ntset) {
+		snt = newt;
+		newt = nil;
+	}
+	if((c.flags & (Cstrict|Carrow|Cnothis)) == 0) {
+		t := nfr[0].t;
+		if(t != Tobj) {
+			if(t == Tundef || t == Tnull)
+				nfr[0] = globalthis;
+			else
+				nfr[0] = objv(toobj(nfr[0]));
+		}
+	}
+	if(c.prologue >= 0)
+		ev(c.prologue);
+	ev(c.body);
+	if(ctl == Cret)
+		ctl = 0;
+	else
+		rt = Tundef;
+	fr = sfr;
+	curfn = sfn;
+	env = rootenv[e];
+	if(ntset)
+		newt = snt;
+	argc = sargc;
+	depth--;
+	nroot--;
+	rootfr[nroot] = nil;
+	rootobj[nroot] = nil;
+	rootenv[nroot] = nil;
+	# the frame for the next call: only the slots holding a pointer need clearing
+	if((c.flags & Cnopool) == 0 && len nfr == c.nframe) {
+		for(i = 0; i < len nfr; i++) {
+			t := nfr[i].t;
+			nfr[i].t = 0;
+			nfr[i].i = 0;
+			if(t >= Tstr) {
+				nfr[i].s = nil;
+				nfr[i].o = nil;
 			}
 		}
-		# the frame stays rooted through the call: runcode1 does not root it again
-		runcode1(f, c, nfr, k, nil);
-		rootpop();
-		return;
+		c.spare = nfr;
+	}
+}
+
+# callf's other cases: a lazy body, a generator or async function, a class
+# constructor, spread arguments, natives
+callf2(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
+{
+	c := f.fun.code;
+	if(c != nil && c.lazy != nil) {
+		compilelazy(c);
+		if((c.flags & (Cgen|Casync|Cclassctor)) == 0 && (flags & Fspr) == 0) {
+			callf(f, tt, dst, ks, k, flags);
+			return;
+		}
 	}
 	if(f.fun.native > 0 && (flags & Fspr) == 0) {
 		# natives take their arguments as an array
@@ -2922,6 +3019,7 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 	pop();
 	setr(callobj(f, this, args));
 }
+
 
 # the argument list the nodes give, spreading what is spread
 evargs(ks, k, flags: int): array of V
@@ -2994,7 +3092,7 @@ runcode1(f: ref Obj, c: ref Code, nfr: array of V, nargs: int, nt: ref Obj)
 	curfn = f;
 	newt = nt;
 	argc = nargs;
-	if((c.flags & (Cstrict|Carrow)) == 0) {
+	if((c.flags & (Cstrict|Carrow|Cnothis)) == 0) {
 		t := nfr[0].t;
 		if(t != Tobj) {
 			if(t == Tundef || t == Tnull)

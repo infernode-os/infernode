@@ -56,7 +56,23 @@ memfs: Memfs;
 Memfsmax: con 64 * 1024 * 1024;
 Intlsrc: con "/lib/js/intl.js";
 
+# run the page's realm until it closes, then free it: a realm left to
+# the collector waits for the emulator to be idle
 page(h: ref Js->Host): string
+{
+	err: string;
+	{
+		err = page1(h);
+	} exception e {
+	"*" =>
+		shutdown();
+		raise e;
+	}
+	shutdown();
+	return err;
+}
+
+page1(h: ref Js->Host): string
 {
 	err := init();
 	if(err != nil)

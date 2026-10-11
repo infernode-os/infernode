@@ -567,6 +567,12 @@ shutdown()
 	intr = nil;
 	markstk = nil;
 	rootstk = nil;
+	# the compiled tier's: jitst would otherwise keep the whole realm
+	# for the collector to find (a busy emulator seldom runs it)
+	jitst = nil;
+	jitlast = nil;
+	dis = nil;
+	jitok = -1;
 }
 
 test262()

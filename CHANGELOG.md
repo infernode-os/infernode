@@ -6,6 +6,16 @@ All notable changes to InferNode are documented in this file.
 
 ### Documents
 
+- **A PDF's links work**, in Xenith and in wm/page. pdf(2) reads a
+  page's link annotations: a URI, or a page of the document (GoTo, a
+  destination, a named destination through the catalog's Dests or its
+  name tree). In Xenith, button 3 on a link to a page goes there, and on
+  a web address opens it in a browser window in Xenith, as a Markdown or
+  HTML file's links now do too: what is opened in Xenith stays in
+  Xenith (it went to the plumber, and left a standalone Xenith only
+  when nothing took it). In wm/page, button 1 clicked without moving
+  follows a link: a page of the document, or the plumber. `doc/links`
+  lists a PDF's links.
 - **HTML scrolls as smoothly as a PDF.** A flowing document is painted
   off screen into a band round the view; a scroll copies from it and
   paints only the strip it exposes, where a web page used to be laid
@@ -149,6 +159,13 @@ All notable changes to InferNode are documented in this file.
   never moves now chooses New, as rio's does; any other button cancels.
   `tests/host/wm_test.sh` drives the menu, the frame and focus and
   checks where they leave the windows.
+- **A theme switch reaches wm/wm's windows.** Xenith's Theme (or
+  Settings, or a write to `/lib/lucifer/theme/current`) changed only
+  the program that made it under a standalone wm/wm: Lucifer tells the
+  windows it hosts, but wm/wm at the top watched nothing. It now
+  watches the theme and passes `retheme` to every window, hidden ones
+  too, and its menu (and every `menuhit` menu) takes the theme's menu
+  colours as it opens instead of fixed greens.
 - **One job per mouse button, as in Plan 9.** wm/page's operations
   (paging, zoom, fit, turning, find, go to, write) move to button 2, and
   button 3 lists the pages and files to choose from, as Plan 9's page

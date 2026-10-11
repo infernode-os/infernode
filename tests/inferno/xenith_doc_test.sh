@@ -12,7 +12,9 @@
 #	Render again goes back to the text;
 #	a source document (Markdown, HTML) shown beside its text (Zerox)
 #	is not set again at each edit, but on Put and doc/ctl refresh;
-#	an image looked at is a document of one sheet its size.
+#	an image looked at is a document of one sheet its size;
+#	a PDF's links listed in doc/links, button 3 on one to a page goes
+#	to it, on one to a URI browses it in a window of Xenith's.
 #
 # Prerequisites:
 #   - Xenith must be running

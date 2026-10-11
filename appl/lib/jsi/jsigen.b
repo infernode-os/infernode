@@ -149,22 +149,14 @@ resume(g: ref Gen, kind: int, v: V): ref Msg
 {
 	if(g.state == Grunning)
 		throwtype("Generator is already running");
-	sfr := fr;
-	senv := env;
-	sfn := curfn;
-	snt := newt;
+	# the resumer's state, saved once: a root while the coroutine runs, and
+	# restored from here (each pointer kept in a local too would cost twice)
+	sv := ref Saved(fr, env, curfn, newt, vstk, rootfr, rootobj, rootenv, nroot, cv, curgen);
 	sargc := argc;
 	sdepth := depth;
-	svstk := vstk;
 	svsp := vsp;
-	sgen := curgen;
-	scv := cv;
-	srootfr := rootfr;
-	srootobj := rootobj;
-	srootenv := rootenv;
-	snroot := nroot;
 	snatlocal := natlocal;
-	resumers = ref Saved(fr, env, curfn, newt, vstk, rootfr, rootobj, rootenv, nroot, cv, curgen) :: resumers;
+	resumers = sv :: resumers;
 	g.state = Grunning;
 	if(!g.started) {
 		g.started = 1;
@@ -176,21 +168,21 @@ resume(g: ref Gen, kind: int, v: V): ref Msg
 	g.tocoro <-= ref Msg(kind, v);
 	r := <-g.fromcoro;
 	resumers = tl resumers;
-	fr = sfr;
-	env = senv;
-	curfn = sfn;
-	newt = snt;
+	fr = sv.fr;
+	env = sv.env;
+	curfn = sv.curfn;
+	newt = sv.newt;
 	argc = sargc;
 	depth = sdepth;
-	vstk = svstk;
+	vstk = sv.vstk;
 	vsp = svsp;
-	rootfr = srootfr;
-	rootobj = srootobj;
-	rootenv = srootenv;
-	nroot = snroot;
+	rootfr = sv.rootfr;
+	rootobj = sv.rootobj;
+	rootenv = sv.rootenv;
+	nroot = sv.nroot;
 	natlocal = snatlocal;
-	curgen = sgen;
-	cv = scv;
+	curgen = sv.gen;
+	cv = sv.cv;
 	ctl = 0;
 	if(r.kind == Mdone || r.kind == Merror) {
 		g.state = Gdone;
@@ -498,11 +490,27 @@ thisgen(this: V, kind: int): ref Gen
 	return nil;
 }
 
+# {value, done}, made with the shape kept for it (iterators make one per step)
+iterresultsh: ref Shape;
+
 iterresult(v: V, done: int): V
 {
-	o := plainobj();
-	addprop(o, a_value, Adefault, v);
-	addprop(o, a_done, Adefault, boolv(done));
+	sh := iterresultsh;
+	if(sh == nil || sh.proto != objproto) {
+		o := plainobj();
+		addprop(o, a_value, Adefault, v);
+		addprop(o, a_done, Adefault, boolv(done));
+		iterresultsh = o.sh;
+		return objv(o);
+	}
+	o := ref Obj;
+	gcnew(o);
+	o.sh = sh;
+	o.flags = Fext;
+	o.slots = array[2] of V;
+	o.slots[0] = v;
+	o.slots[1].t = Tbool;
+	o.slots[1].i = done;
 	return objv(o);
 }
 

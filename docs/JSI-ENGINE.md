@@ -39,6 +39,33 @@ and `ctlid`; a JavaScript exception is the Limbo exception `"JS"` with
 the value in `thrown`, and each catch site restores the interpreter's
 state.
 
+**What the JIT makes dear.**  On amd64 the JIT compiles a pointer move as
+two calls (the new value's reference count up, the old one's down) and
+does not compile at all a move of a whole adt holding pointers (`movmp`:
+any `V` passed, returned, or assigned whole) or any real arithmetic;
+each of those goes back to the interpreter.  A Dis call costs about 7
+ns; a JS call written the obvious way cost 600 ns, nearly all of it
+pointer moves.  So the hot paths are written against that:
+
+- values go through the registers field by field (`t` says which
+  field), never as a whole `V`;
+- a JS call (`calljs`), from a call node, from `new`, from a built-in's
+  callback or a class field's initialiser, is one function in line:
+  arguments straight into a frame kept per `Code` for the next call, the
+  caller's env restored from the root entry that already holds it,
+  `newt` saved only when it is not nil; natives and the rare cases are
+  in other functions so its frame has few pointer slots;
+- the natives page code calls most (`push`, `Math.floor`, `ceil`,
+  `abs`, `max`, `min`) are done from the registers at the call;
+- an object literal of plain keys keeps its shape on its node; `{value,
+  done}` is made from a kept shape; `for…of` over a generator resumes
+  it without making the `{value, done}` object `next` would;
+- a shape counts its index keys, so a store past an array's end no
+  longer scans the prototypes' keys.
+
+`tests/js-spike/ops.js` measures some sixty such operations under either
+engine.
+
 **Values** are `V { t, i, n, s, o }`: undefined, null, booleans, int32
 (the fast path for every arithmetic and comparison operator), doubles,
 strings, ropes (append-only piece buffers, flattened when read),

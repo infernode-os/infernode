@@ -161,6 +161,7 @@ resetstate()
 	lazyunit = nil;
 	lazyunitsc = nil;
 	lazychain = nil;
+	iterresultsh = nil;
 	disposing = nil;
 	dscopes = nil;
 }

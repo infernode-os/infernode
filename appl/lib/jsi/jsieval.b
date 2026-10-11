@@ -471,6 +471,40 @@ ev(n: int)
 	}
 }
 
+# a property read of the registers' value, by node n's inline cache (as Nget's)
+getic(n: int)
+{
+	if(rt != Tobj) {
+		getprim(n);
+		return;
+	}
+	if(ro.sh == icsh[n]) {
+		if(icobj[n] == nil)
+			th = ro;
+		else if(icep[n] == protoepoch)
+			th = icobj[n];
+		else {
+			getslow(n, ro);
+			return;
+		}
+		s := icslot[n];
+		t := th.slots[s].t;
+		rt = t;
+		if(t <= Tint)
+			ri = th.slots[s].i;
+		else if(t == Tnum)
+			rn = th.slots[s].n;
+		else if(t == Tstr)
+			rs = th.slots[s].s;
+		else {
+			ro = th.slots[s].o;
+			ri = th.slots[s].i;
+		}
+		return;
+	}
+	getslow(n, ro);
+}
+
 # scratch for ev, live only between two of its own calls
 tenv: ref Env;
 th: ref Obj;
@@ -963,8 +997,7 @@ ev2(n: int)
 		ev(na[n]);
 		if(rt == Tundef || rt == Tnull)
 			raise "JSopt";
-		v := regv();
-		setr(getvalue(v, nb[n]));
+		getic(n);
 	Ngetelemopt =>
 		ev(na[n]);
 		if(rt == Tundef || rt == Tnull)
@@ -1716,6 +1749,15 @@ forofiter(n: int, it: V, inf: ref Info.Loop, benv: ref Env)
 
 forofiter1(n: int, it, next: V, inf: ref Info.Loop, benv: ref Env)
 {
+	if(next.t == Tobj && next.o.fun != nil && next.o.fun.native == NGnext && it.t == Tobj && it.o.cls == Cgenobj) {
+		pick d := it.o.data {
+		Gen =>
+			if(d.g.kind == Kgen) {
+				forofgen(n, it, d.g, inf, benv);
+				return;
+			}
+		}
+	}
 	for(;;) {
 		r := call1(next, it, nil);
 		if(r.t != Tobj)
@@ -1768,6 +1810,63 @@ iterclosectl(it: V, async: int)
 	ctl = sctl;
 	ctlid = sid;
 	setr(sv);
+}
+
+# for-of over a generator whose next is the intrinsic one: resumed directly,
+# the value taken from its message; the {value, done} object next would make
+# cannot be seen, so it is not made
+forofgen(n: int, it: V, g: ref Gen, inf: ref Info.Loop, benv: ref Env)
+{
+	for(;;) {
+		if(g.state == Gdone)
+			return;
+		r := resume(g, Mnext, undef);
+		case r.kind {
+		Myield =>
+			setr(r.v);
+		Mdone =>
+			return;
+		Merror =>
+			throwv(r.v);
+		Myieldraw =>
+			# a result passed on by yield*: read as next's caller would
+			x := r.v;
+			if(x.t != Tobj)
+				throwtype("Iterator result " + showv(x) + " is not an object");
+			push(x);
+			if(tobool(getv(x.o, a_done))) {
+				pop();
+				return;
+			}
+			setr(getv(x.o, a_value));
+			pop();
+		* =>
+			throwtype("generator: unexpected await");
+		}
+		{
+			forbind(n, inf, benv);
+			ev(nc[n]);
+		} exception {
+		"JS" =>
+			env = benv;
+			ex := thrown;
+			iterclose(it, 1);
+			throwv(ex);
+		"JS*" =>
+			env = benv;
+			iterclose(it, 0);
+			raise;
+		}
+		env = benv;
+		if(ctl) {
+			if(!loopctl(nd[n])) {
+				iterclosectl(it, 0);
+				return;
+			}
+		}
+		if(gcwanted)
+			gcpoint();
+	}
 }
 
 # ---- switch, try ----
@@ -3034,7 +3133,7 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 		callf2(f, tt, dst, ks, k, flags);
 		return;
 	}
-	calljs(f, c, tt, dst, ks, k, 0);
+	calljs(f, c, tt, dst, ks, k, 0, nil);
 }
 
 # new f(args) from a new node: a constructor that is an ordinary function or a
@@ -3056,7 +3155,7 @@ newf(n: int)
 					ok = 0;	# bound, and the rest: construct
 				}
 			if(ok) {
-				calljs(f, c, Tundef, nil, nb[n], nc[n], 1);
+				calljs(f, c, Tundef, nil, nb[n], nc[n], 1, nil);
 				return;
 			}
 		}
@@ -3076,8 +3175,10 @@ newf(n: int)
 # frame released) costs a reference count up and down, and they were most of
 # a call's time.  The caller's env is restored from the root entry that holds
 # it; newt is saved only when it is not nil already.
-calljs(f: ref Obj, c: ref Code, tt: int, dst: ref Obj, ks, k, isnew: int)
+calljs(f: ref Obj, c: ref Code, tt: int, dst: ref Obj, ks, k, isnew: int, args: array of V)
 {
+	if(args != nil)
+		k = len args;
 	npos := c.npos;
 	nfr := c.spare;
 	if(k <= npos && nfr != nil)
@@ -3098,6 +3199,26 @@ calljs(f: ref Obj, c: ref Code, tt: int, dst: ref Obj, ks, k, isnew: int)
 	rootfr[e] = nfr;
 	rootobj[e] = f;
 	rootenv[e] = env;
+	if(args != nil) {
+		# from a built-in: the arguments copied field by field
+		for(i := 0; i < k; i++) {
+			s := 1 + i;
+			if(i >= npos)
+				s = c.nframe + i - npos;
+			t := args[i].t;
+			nfr[s].t = t;
+			if(t <= Tint)
+				nfr[s].i = args[i].i;
+			else if(t == Tnum)
+				nfr[s].n = args[i].n;
+			else if(t == Tstr)
+				nfr[s].s = args[i].s;
+			else {
+				nfr[s].o = args[i].o;
+				nfr[s].i = args[i].i;
+			}
+		}
+	} else
 	for(i := 0; i < k; i++) {
 		ev(kids[ks + i]);
 		s := 1 + i;
@@ -3178,7 +3299,7 @@ calljs(f: ref Obj, c: ref Code, tt: int, dst: ref Obj, ks, k, isnew: int)
 	rootenv[nroot] = nil;
 	# the frame for the next call: only the slots holding a pointer need clearing
 	if((c.flags & Cnopool) == 0 && len nfr == c.nframe) {
-		for(i = 0; i < len nfr; i++) {
+		for(i := 0; i < len nfr; i++) {
 			t := nfr[i].t;
 			nfr[i].t = 0;
 			nfr[i].i = 0;
@@ -3445,6 +3566,11 @@ callobj(f: ref Obj, this: V, args: array of V): V
 		throwtype("Class constructor " + c.name + " cannot be invoked without 'new'");
 	if(c.flags & (Cgen|Casync))
 		return callgen(f, c, this, args);
+	if(this.t == Tobj || this.t == Tundef) {
+		# the callbacks of map, filter, sort, then and the rest: in line
+		calljs(f, c, this.t, this.o, 0, 0, 0, args);
+		return regv();
+	}
 	nfr := mkframe(c, this, args);
 	runcode(f, c, nfr, len args, nil);
 	return regv();
@@ -3831,6 +3957,17 @@ arraylit(n: int)
 			v := regv();
 			if(v.t == Tobj && v.o.cls == Carray && arrayiterplain(v.o)) {
 				src := v.o;
+				if((src.flags & Fslow) == 0 && src.alen <= len src.elems && !protohasidx(src)) {
+					# its elements as one slice, holes read as undefined
+					m := src.alen;
+					growelems(a, a.alen + m);
+					a.elems[a.alen:] = src.elems[0:m];
+					for(j := a.alen; j < a.alen + m; j++)
+						if(a.elems[j].t == Thole)
+							a.elems[j].t = Tundef;
+					a.alen += m;
+					continue;
+				}
 				for(j := 0; j < src.alen; j++)
 					apush(a, getidx(src, j, v));
 				continue;
@@ -4595,8 +4732,14 @@ initfields(f: ref Obj, o: ref Obj)
 				addprivmethod(o, fld);
 				continue;
 			}
-			v := call(fld.meth, objv(o), nil);
-			definefield(o, fld, v);
+			# an initialiser is a function of no arguments run with this: in line
+			m := fld.meth;
+			c := m.fun.code;
+			if(c != nil && c.lazy == nil && (c.flags & (Cgen|Casync|Cclassctor)) == 0 && m.cls != Cproxy)
+				calljs(m, c, Tobj, o, 0, 0, 0, nil);
+			else
+				setr(call(m, objv(o), nil));
+			definefield(o, fld, regv());
 		}
 	}
 }
@@ -4905,6 +5048,13 @@ iterlist(v: V): array of V
 	if(v.t == Tobj && v.o.cls == Carray && arrayiterplain(v.o)) {
 		o := v.o;
 		a := array[o.alen] of V;
+		if((o.flags & Fslow) == 0 && o.alen <= len o.elems && !protohasidx(o)) {
+			a[0:] = o.elems[0:o.alen];
+			for(i := 0; i < len a; i++)
+				if(a[i].t == Thole)
+					a[i].t = Tundef;
+			return a;
+		}
 		for(i := 0; i < o.alen; i++)
 			a[i] = getidx(o, i, v);
 		return a;

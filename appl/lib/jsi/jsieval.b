@@ -3703,7 +3703,7 @@ bindtarget(c: int, x: V, pre: int)
 		pop();
 		if(base.t != Tobj)
 			throwtype("Cannot set properties of null");
-		if(!put(base.o, k, x, this))
+		if(!put(base.o, k, x, this) && strictcode())
 			throwtype("Cannot assign to read only property '" + keyname(k) + "' of object");
 		return;
 	}
@@ -3982,6 +3982,7 @@ privset(v: V, k: int, x: V)
 			if(a.set == nil)
 				throwtype("'" + atomstr[k] + "' was defined without a setter");
 			call(a.set, v, array[] of {x});
+			setr(x);	# the assignment's value, not the setter's
 			return;
 		}
 	}
@@ -4033,6 +4034,12 @@ addprivmethod(o: ref Obj, fld: ref Field)
 }
 
 # ---- super ----
+
+# whether the running function is strict code (super's stores fail silently in sloppy code)
+strictcode(): int
+{
+	return curfn != nil && curfn.fun != nil && curfn.fun.code != nil && (curfn.fun.code.flags & Cstrict) != 0;
+}
 
 superbase(inf: ref Info.Super): ref Obj
 {
@@ -4105,7 +4112,7 @@ superset(n: int)
 	pop();
 	if(base == nil)
 		throwtype("Cannot set properties of null");
-	if(!put(base, k, v, this))
+	if(!put(base, k, v, this) && strictcode())
 		throwtype("Cannot assign to read only property '" + keyname(k) + "' of object");
 	setr(v);
 }

@@ -222,13 +222,60 @@ changed(d: ref Doc, n: int)
 {
 	if(d.nchanged < 0)
 		return;
-	if(n <= 0 || ++d.nchanged > Changedmax) {
-		d.changed = nil;
-		d.kids = nil;
-		d.nchanged = -1;
+	if(n <= 0) {
+		overflow(d);
+		return;
+	}
+	if(d.changed != nil && hd d.changed == n)
+		return;	# (as it was just now)
+	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
+		overflow(d);
 		return;
 	}
 	d.changed = n :: d.changed;
+}
+
+overflow(d: ref Doc)
+{
+	d.changed = nil;
+	d.kids = nil;
+	d.nchanged = -1;
+}
+
+# the journal with each node once (a node changed again and again, as a
+# script animating one element does, filled it, and the restyle was of
+# the whole); how many entries it then has
+compact(d: ref Doc): int
+{
+	seen := array[d.n] of byte;
+	r: list of int;
+	k := 0;
+	for(l := d.changed; l != nil; l = tl l)
+		if((hd l) < len seen && seen[hd l] == byte 0) {
+			seen[hd l] = byte 1;
+			r = hd l :: r;
+			k++;
+		}
+	d.changed = nil;
+	for(; r != nil; r = tl r)
+		d.changed = hd r :: d.changed;
+	kp: list of (int, int);
+	kr: list of (int, int);
+	for(kl := d.kids; kl != nil; kl = tl kl) {
+		(p, at) := hd kl;
+		dup := 0;
+		for(o := kr; o != nil && !dup; o = tl o)
+			dup = (hd o).t0 == p && (hd o).t1 == at;
+		if(!dup) {
+			kr = hd kl :: kr;
+			k++;
+		}
+	}
+	for(; kr != nil; kr = tl kr)
+		kp = hd kr :: kp;
+	d.kids = kp;
+	d.nchanged = k;
+	return k;
 }
 
 # parent's children changed at at (Doc.kids)
@@ -236,10 +283,8 @@ kidschanged(d: ref Doc, parent, at: int)
 {
 	if(d.nchanged < 0)
 		return;
-	if(++d.nchanged > Changedmax) {
-		d.changed = nil;
-		d.kids = nil;
-		d.nchanged = -1;
+	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
+		overflow(d);
 		return;
 	}
 	d.kids = (parent, at) :: d.kids;

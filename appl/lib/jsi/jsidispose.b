@@ -102,6 +102,7 @@ syncwrap(m: ref Obj): ref Obj
 Dscope: adt {
 	res:	list of ref Res;
 	async:	int;
+	err:	V;	# while being disposed of: the error so far (a root across the awaits)
 };
 
 dscopes: list of ref Dscope;
@@ -126,7 +127,7 @@ usingnode(async: int)
 # a block with using declarations: its resources disposed of when it ends, however it ends
 usingblock(n: int)
 {
-	ds := ref Dscope(nil, nb[n]);
+	ds := ref Dscope(nil, nb[n], undef);
 	dscopes = ds :: dscopes;
 	sfr := fr;
 	senv := env;
@@ -185,9 +186,10 @@ disposing: list of ref Dscope;
 
 disposeall(res: list of ref Res, err: V, async: int): V
 {
-	disposing = ref Dscope(res, async) :: disposing;
+	ds := ref Dscope(res, async, err);
+	disposing = ds :: disposing;
 	{
-		err = disposeall1(res, err, async);
+		err = disposeall1(ds);
 	} exception {
 	"*" =>
 		disposing = tl disposing;
@@ -197,11 +199,12 @@ disposeall(res: list of ref Res, err: V, async: int): V
 	return err;
 }
 
-disposeall1(res: list of ref Res, err: V, async: int): V
+disposeall1(ds: ref Dscope): V
 {
 	needawait := 0;
 	hasawaited := 0;
-	for(; res != nil; res = tl res) {
+	async := ds.async;
+	for(res := ds.res; res != nil; res = tl res) {
 		r := hd res;
 		if(!r.awaited && needawait && !hasawaited) {
 			await(undef);
@@ -219,15 +222,15 @@ disposeall1(res: list of ref Res, err: V, async: int): V
 			}
 		} exception {
 		"JS" =>
-			if(err.t == Thole)
-				err = thrown;
+			if(ds.err.t == Thole)
+				ds.err = thrown;
 			else
-				err = objv(suppressed(thrown, err));
+				ds.err = objv(suppressed(thrown, ds.err));
 		}
 	}
 	if(async && needawait && !hasawaited)
 		await(undef);
-	return err;
+	return ds.err;
 }
 
 suppressed(err, supp: V): ref Obj

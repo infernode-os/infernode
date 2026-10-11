@@ -172,10 +172,21 @@ markv(v: V)
 
 markvs(a: array of V)
 {
-	if(a != nil)
-		for(i := 0; i < len a; i++)
-			if(a[i].t >= Trope)
-				mark(a[i].o);
+	if(a == nil)
+		return;
+	for(i := 0; i < len a; i++)
+		if(a[i].t >= Trope) {
+			o := a[i].o;	# mark(o), in line: this is most of the marking
+			if(o != nil && (o.flags & Fmark) == 0) {
+				o.flags |= Fmark;
+				if(nm == len mstk) {
+					b := array[2 * nm] of ref Obj;
+					b[0:] = mstk;
+					mstk = b;
+				}
+				mstk[nm++] = o;
+			}
+		}
 }
 
 markenv(e: ref Env)
@@ -417,11 +428,13 @@ markroots()
 			markv((hd rsl).v);
 			mark((hd rsl).m);
 		}
-	for(dl = disposing; dl != nil; dl = tl dl)
+	for(dl = disposing; dl != nil; dl = tl dl) {
+		markv((hd dl).err);
 		for(rsl2 := (hd dl).res; rsl2 != nil; rsl2 = tl rsl2) {
 			markv((hd rsl2).v);
 			mark((hd rsl2).m);
 		}
+	}
 	mark(pghooks);
 }
 
@@ -531,9 +544,7 @@ trace()
 		}
 		if(nm == 0)
 			break;
-		o := mstk[--nm];
-		mstk[nm] = nil;
-		markobj(o);
+		markobj(mstk[--nm]);	# (the stack is cleared once, when tracing ends)
 	}
 }
 
@@ -552,14 +563,18 @@ gccollect()
 	markroots();
 	if(gcdebug) sys->fprint(sys->fildes(2), "gc: trace\n");
 	trace();
+	for(i := 0; i < len mstk; i++)
+		mstk[i] = nil;
 	if(gcdebug) sys->fprint(sys->fildes(2), "gc: sweep %d\n", ngcreg);
 	# sweep: the registry kept to what survived; the rest cleared
 	j := 0;
-	for(i := 0; i < ngcreg; i++) {
+	for(i = 0; i < ngcreg; i++) {
 		o := gcreg[i];
 		if(o.flags & Fmark) {
 			o.flags &= ~Fmark;
-			gcreg[j++] = o;
+			if(j != i)
+				gcreg[j] = o;
+			j++;
 			continue;
 		}
 		if(gcdebug && o.cls == Ctyped)

@@ -82,6 +82,19 @@ pushr()
 	vstk[s].o = ro;
 }
 
+# an object onto the stack, field by field
+pushobj(o: ref Obj)
+{
+	if(vsp == len vstk) {
+		a := array[2 * vsp] of V;
+		a[0:] = vstk;
+		vstk = a;
+	}
+	s := vsp++;
+	vstk[s].t = Tobj;
+	vstk[s].o = o;
+}
+
 # the stack's top into the registers, field by field (setr(vstk[vsp-1]) copies a
 # whole value, which the amd64 JIT does not compile)
 topr()
@@ -1008,6 +1021,24 @@ ev2(n: int)
 			throwtype("Cannot use 'in' operator to search for a private field in a non-object");
 		rt = Tbool;
 		ri = privhas(ro, k);
+	Nargdflt =>
+		s := na[n];
+		t := fr[s].t;
+		if(t == Tundef) {
+			ev(nb[n]);
+			return;
+		}
+		rt = t;
+		if(t <= Tint)
+			ri = fr[s].i;
+		else if(t == Tnum)
+			rn = fr[s].n;
+		else if(t == Tstr)
+			rs = fr[s].s;
+		else {
+			ro = fr[s].o;
+			ri = fr[s].i;
+		}
 	Nnullish =>
 		ev(na[n]);
 		if(rt == Tundef || rt == Tnull)
@@ -1112,14 +1143,7 @@ ev2(n: int)
 	Neval =>
 		directeval(n);
 	Nnew =>
-		ev(na[n]);
-		c := regv();
-		push(c);
-		args := evargs(nb[n], nc[n], nd[n]);
-		pop();
-		if(c.t != Tobj || !isctor(c.o))
-			throwtype(calleename(na[n]) + " is not a constructor");
-		setr(construct(c.o, args, c.o));
+		newf(n);
 	Nfunc =>
 		rt = Tobj;
 		ro = closure(codes[na[n]], env);
@@ -3010,6 +3034,50 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 		callf2(f, tt, dst, ks, k, flags);
 		return;
 	}
+	calljs(f, c, tt, dst, ks, k, 0);
+}
+
+# new f(args) from a new node: a constructor that is an ordinary function or a
+# base class with a constructor of its own is run in line as a call is, its
+# this made once the arguments are; anything else as construct does it
+newf(n: int)
+{
+	ev(na[n]);
+	if(rt == Tobj && (nd[n] & Fspr) == 0) {
+		f := ro;
+		if(f.fun != nil && (f.flags & Fctor) && f.cls != Cproxy && f.fun.native == 0) {
+			c := f.fun.code;
+			ok := c != nil && c.lazy == nil && (c.flags & (Cgen|Casync|Cderived)) == 0 && c.body >= 0;
+			if(ok && f.data != nil)
+				pick d := f.data {
+				Func =>
+					;
+				* =>
+					ok = 0;	# bound, and the rest: construct
+				}
+			if(ok) {
+				calljs(f, c, Tundef, nil, nb[n], nc[n], 1);
+				return;
+			}
+		}
+	}
+	c := regv();
+	push(c);
+	args := evargs(nb[n], nc[n], nd[n]);
+	pop();
+	if(c.t != Tobj || !isctor(c.o))
+		throwtype(calleename(na[n]) + " is not a constructor");
+	setr(construct(c.o, args, c.o));
+}
+
+# A call of a JavaScript function (isnew: a construction) with its arguments
+# evaluated straight into its frame.  Everything is in line: under the JIT
+# each pointer moved (a parameter, a save, a restore, a pointer slot of the
+# frame released) costs a reference count up and down, and they were most of
+# a call's time.  The caller's env is restored from the root entry that holds
+# it; newt is saved only when it is not nil already.
+calljs(f: ref Obj, c: ref Code, tt: int, dst: ref Obj, ks, k, isnew: int)
+{
 	npos := c.npos;
 	nfr := c.spare;
 	if(k <= npos && nfr != nil)
@@ -3048,6 +3116,15 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 			nfr[s].i = ri;
 		}
 	}
+	this: ref Obj;
+	if(isnew) {
+		# OrdinaryCreateFromConstructor, after the arguments; then the fields
+		this = newobj(Cplain, protofromctor(f, objproto));
+		nfr[0].t = Tobj;
+		nfr[0].o = this;
+		if(c.flags & Cclassctor)
+			initfields(f, this);
+	}
 	if(++depth > maxdepth) {
 		depth--;
 		throwerr(ERange, "Maximum call stack size exceeded");
@@ -3059,11 +3136,13 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 	curfn = f;
 	sargc := argc;
 	argc = k;
-	ntset := newt != nil;
+	ntset := newt != nil || isnew;
 	snt: ref Obj;
 	if(ntset) {
 		snt = newt;
 		newt = nil;
+		if(isnew)
+			newt = f;
 	}
 	if((c.flags & (Cstrict|Carrow|Cnothis)) == 0) {
 		t := nfr[0].t;
@@ -3081,6 +3160,11 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 		ctl = 0;
 	else
 		rt = Tundef;
+	if(isnew && rt != Tobj) {
+		# a constructor's result is this unless it returned an object
+		rt = Tobj;
+		ro = this;
+	}
 	fr = sfr;
 	curfn = sfn;
 	env = rootenv[e];
@@ -3772,12 +3856,55 @@ arraylit(n: int)
 
 objectlit(n: int)
 {
+	k := na[n];
+	cnt := nb[n];
+	sh := icsh[n];
+	if(sh != nil && sh.proto == objproto) {
+		# a literal of plain keys made before: its shape is known, each
+		# value goes to its slot from the registers
+		o := ref Obj;
+		gcnew(o);
+		o.sh = sh;
+		o.flags = Fext;
+		o.slots = array[cnt] of V;
+		pushobj(o);
+		for(i := 0; i < cnt; i++) {
+			p := kids[k + i];
+			ev(nb[p]);
+			if(nc[p] & 2)
+				sethome(ro, o);
+			t := rt;
+			o.slots[i].t = t;
+			if(t <= Tint)
+				o.slots[i].i = ri;
+			else if(t == Tnum)
+				o.slots[i].n = rn;
+			else if(t == Tstr)
+				o.slots[i].s = rs;
+			else {
+				o.slots[i].o = ro;
+				o.slots[i].i = ri;
+			}
+		}
+		pop();
+		rt = Tobj;
+		ro = o;
+		return;
+	}
+	objectlit1(n);
+}
+
+# a literal the first time, or one that is not only plain keys: property by
+# property; a literal of distinct plain keys keeps its shape for next time
+objectlit1(n: int)
+{
 	o := plainobj();
 	if(nb[n] > 0)
 		o.slots = array[nb[n]] of V;
 	push(objv(o));
 	k := na[n];
 	cnt := nb[n];
+	plain := 1;
 	for(i := 0; i < cnt; i++) {
 		p := kids[k + i];
 		case op[p] {
@@ -3787,11 +3914,13 @@ objectlit(n: int)
 			if(nc[p] & 2)
 				sethome(v.o, o);
 			a := na[p];
-			if(o.sh.dict || slotof(o.sh, a) >= 0 || atomidx[a] != -1)
+			if(o.sh.dict || slotof(o.sh, a) >= 0 || atomidx[a] != -1) {
+				plain = 0;
 				createdatathrow(o, a, v);
-			else
+			} else
 				addprop(o, a, Adefault, v);
 		Npropc =>
+			plain = 0;
 			ev(na[p]);
 			kv := tokey(regv());
 			push(intv(kv));
@@ -3804,6 +3933,7 @@ objectlit(n: int)
 				setfnname(v.o, kv, nil);
 			createdatathrow(o, kv, v);
 		Npropget or Npropset =>
+			plain = 0;
 			kv := na[p];
 			if(kv < 0) {
 				ev(nc[p]);
@@ -3820,9 +3950,11 @@ objectlit(n: int)
 				defineown(o, kv, ref Desc(Dset|Denum|Dconf, undef, Aenum|Aconf, nil, f));
 			}
 		Npropspread =>
+			plain = 0;
 			ev(na[p]);
 			copydata(o, regv(), nil);
 		Nproto =>
+			plain = 0;
 			ev(na[p]);
 			if(rt == Tobj)
 				setproto(o, ro);
@@ -3831,7 +3963,10 @@ objectlit(n: int)
 		}
 	}
 	pop();
-	setr(objv(o));
+	if(plain && !o.sh.dict && o.sh.n == cnt && o.sh.proto == objproto)
+		icsh[n] = o.sh;
+	rt = Tobj;
+	ro = o;
 }
 
 # CopyDataProperties: the own enumerable properties of v onto o, but not those excluded

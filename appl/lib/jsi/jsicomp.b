@@ -36,7 +36,7 @@ Nimportmeta, Nimportcall, Npat, Ppatarr, Ppatobj, Pprop, Prest, Prestobj, Pdefau
 Nblock, Nseqs, Ncompl, Nif, Nwhile, Ndo, Nfor, Nforin, Nforof, Nreturn, Nbreak, Ncontinue,
 Nthrow, Ntry, Nswitch, Ncase, Nlabeled, Nwith, Nempty,
 Nmkenv, Nframe2env, Nmkargs, Nmkrest, Nholes, Ndeclvar, Ndeclfn, Nglobalinst, Ndyndeclvar,
-Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Ncvreset, Nkeepcv, Nchaincall, Nsuperacc, Nlast: con iota;
+Ndyndeclfn, Nsetfnname, Nnewtarget, Nusing, Nbigint, Nnewpriv, Noptchk, Nimportget, Nusingscope, Ncvreset, Nkeepcv, Nchaincall, Nsuperacc, Nargdflt, Nlast: con iota;
 
 op, na, nb, nc, nd, ne, npos: array of int;
 nn := 0;
@@ -3090,9 +3090,25 @@ funcbody(f: ref Node.Func, code: ref Code)
 		fs.inparams = 1;
 		for(i = 0; i < len f.params; i++) {
 			p := f.params[i];
+			curpos = p.pos;
 			pick r := p {
 			Rest =>
 				pinit = e2(Nmkrest, i, pattern(r.arg, Minit)) :: pinit;
+				np++;
+			Ident =>
+				# a name: initialised straight from its argument
+				pinit = varref(r.name, Minit, e1(Nlocal, 1 + i)) :: pinit;
+				np++;
+			AssignPat =>
+				pick id := r.target {
+				Ident =>
+					# name = default: the argument, or the default if it is undefined
+					dv := namedexpr(r.dflt, id.name);
+					curpos = p.pos;
+					pinit = varref(id.name, Minit, e2(Nargdflt, 1 + i, dv)) :: pinit;
+				* =>
+					pinit = e2(Npat, e1(Nlocal, 1 + i), pattern(p, Minit)) :: pinit;
+				}
 				np++;
 			* =>
 				# the argument, then the pattern

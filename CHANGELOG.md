@@ -98,6 +98,15 @@ All notable changes to InferNode are documented in this file.
   and Put wrote that file. A selected name looked at (B3) may have
   blanks in it.
 
+### Emulator
+
+- **A root path as long as the host allows** (up to 1023 bytes, was
+  139). A longer `-r`, `$INFERNO` or `$ROOT` was cut short without a
+  word, and emu stopped at `loading "/dis/emuinit.dis": '/dis' file does
+  not exist`, as it did for a root that was missing or not a directory.
+  A root too long is now refused, naming its length, and one that cannot
+  be used stops emu naming it and why.
+
 ## [0.6.0] - 2026-10-10
 
 This release ships Intel Macs their own DMG and headless tarball, and

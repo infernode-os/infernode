@@ -10,7 +10,13 @@
 #	a file plumbed to a window already open on it as text is shown;
 #	Markdown opens as text and Render shows it set (doc/ctl, doc/text),
 #	Render again goes back to the text;
-#	an image looked at is a document of one sheet its size.
+#	a source document (Markdown, HTML) shown beside its text (Zerox)
+#	is not set again at each edit, but on Put and doc/ctl refresh;
+#	an image looked at is a document of one sheet its size;
+#	a PDF's links listed in doc/links, button 3 on one to a page goes
+#	to it, on one to a URI browses it in a window of Xenith's and does
+#	not plumb it (when a plumber runs); refresh after typing that is
+#	not yet committed.
 #
 # Prerequisites:
 #   - Xenith must be running
@@ -213,6 +219,83 @@ check 'a word executed on the drawing leaves the document shown' `{attr $id show
 echo scale 120 > $W/doc/ctl
 check 'and the window still answers' `{attr $id scale} 120
 
+# ---- a PDF's links ----
+# tests/page/links.pdf: on page 1 (400x500) a link to a URI, one to
+# page 2 by its destination, one by a named destination
+
+look /tests/page/links.pdf
+lid=()
+for i in 1 2 3 4 5 6 7 8 9 10 {
+	if {~ $#lid 0} {
+		lid=`{winof links.pdf}
+		if {~ $#lid 0} {sleep 1}
+	}
+}
+loaded $lid
+L=$XENITH/$lid
+links=${split '
+' "{cat $L/doc/links}}
+check 'doc/links lists a PDF''s links' $#links 3
+check 'a link to a URI' ${index 1 $links} '1 50 160 250 200 http://example.com/'
+check 'a link to a page' ${index 2 $links} '1 50 260 250 300 #page=2'
+check 'a named destination, to its page' ${index 3 $links} '1 50 340 250 380 #page=2'
+
+# where a point on page 1 (at scale 100) is on the screen: pt x y
+fn pt {
+	a := $*
+	sc=`{attr $lid scale}
+	scr=`{attr $lid screen}
+	view=`{attr $lid view}
+	col=`{attr $lid column}
+	vw=${index 3 $view}
+	colw=${index 1 $col}
+	sw=${expr 400 $sc x 100 /}
+	x=${expr ${index 1 $scr} $colw $sw - 2 / +}
+	if {ntest ${expr $colw $vw '<'}} {x=${expr $x $vw $colw - 2 / +}} {x=${expr $x ${index 1 $view} -}}
+	y=${expr ${index 2 $scr} 12 + ${index 2 $view} -}
+	echo ${expr $x ${index 1 $a} $sc x 100 / +} ${expr $y ${index 2 $a} $sc x 100 / +}
+}
+fn b3 { a := $*; echo m $a 0 > /dev/pointer; echo m $a 4 > /dev/pointer; echo m $a 0 > /dev/pointer; sleep 2 }
+
+# the window is short: at scale 100, scrolled to a link (at y on page 1)
+fn tolink { echo sheet 1 > $L/doc/ctl; echo scroll ${expr $1 50 -} > $L/doc/ctl }
+echo scale 100 > $L/doc/ctl
+tolink 280
+s0=`{attr $lid sheet}
+b3 `{pt 150 280}
+s1=`{attr $lid sheet}
+if {~ $s0 $s1} {bad 'button 3 on a link to page 2 left the sheet at' $s1} {ok 'button 3 on a link to a page goes to it: sheet' $s0 '->' $s1}
+tolink 360
+b3 `{pt 150 360}
+check 'and on a named destination' `{attr $lid sheet} $s1
+# with a plumber whose rules take web addresses (the host test starts
+# one, tests/xenith/plumbing), what reaches its port web is kept: a link
+# clicked in Xenith opens there and is not plumbed away
+PLUMBED=/tmp/xenith_doc_plumbed
+rm -f $PLUMBED
+if {ftest -e /chan/plumb.web} {
+	# a reader the plumber knows of (it sends only to a started port)
+	plumb -s web -d plumb start
+	{ cat /chan/plumb.web > $PLUMBED >[2] /dev/null } &
+	sleep 1
+}
+tolink 180
+b3 `{pt 150 180}
+uid=()
+for i in 1 2 3 4 5 {
+	if {~ $#uid 0} {
+		uid=`{winof example.com}
+		if {~ $#uid 0} {sleep 1}
+	}
+}
+if {~ $#uid 0} {bad 'button 3 on a link to a URI opened no window in Xenith'} {ok 'button 3 on a link to a URI browses it in a window of Xenith''s'}
+check 'and the PDF stays on its page' `{attr $lid sheet} $s0
+if {ftest -e /chan/plumb.web} {
+	p=`{cat $PLUMBED}
+	if {~ $#p 0} {ok 'and it is not sent to the plumber, which would take it'} {bad 'a link clicked in Xenith was plumbed:' $p}
+}
+rm -f $PLUMBED
+
 # ---- a file open as text, plumbed: shown as the document ----
 
 PDF2=/tmp/xenith_doc_test2.pdf
@@ -253,6 +336,116 @@ check 'its body is still its source' $"b '# Heading One'
 echo text > $M/doc/ctl
 c=`{cat $M/doc/ctl}
 check 'Render again goes back to the text' $#c 0
+
+# ---- a source document shown beside its text (Zerox): set again ----
+# ---- on Put and on doc/ctl refresh, not at each edit ----
+
+# Execute a word in a window's tag, as B2 does (lower-case events are
+# the tag's): tagexec id word
+fn tagexec {
+	a := $*
+	wid := ${index 1 $a}
+	word := ${index 2 $a}
+	echo -n ' '^$word >> $XENITH/$wid/tag
+	n=`{cat $XENITH/$wid/tag | wc -c}
+	w=`{echo -n $word | wc -c}
+	echo 'Mx'^${expr $n $w -}^' '^$n > $XENITH/$wid/event
+}
+
+# Wait until a window's doc/text has a string: hasdoctext id string
+fn hasdoctext {
+	a := $*
+	wid := ${index 1 $a}
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		t=`{cat $XENITH/$wid/doc/text}
+		if {! ~ $"t *^${index 2 $a}^*} {sleep 1}
+	}
+}
+
+# the other window on a file: other file id
+fn other {
+	a := $*
+	for o in `{winof ${index 1 $a}} {
+		if {! ~ $o ${index 2 $a}} {echo $o}
+	}
+}
+
+for kind in md html {
+	SRC=/tmp/xenith_doc_refresh.$kind
+	if {~ $kind md} {
+		echo '# First' > $SRC
+	} {
+		echo '<p>First</p>' > $SRC
+	}
+	look $SRC
+	aid=()
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {~ $#aid 0} {
+			aid=`{winof xenith_doc_refresh.$kind}
+			if {~ $#aid 0} {sleep 1}
+		}
+	}
+	tagexec $aid Zerox
+	bid=()
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {~ $#bid 0} {
+			bid=`{other xenith_doc_refresh.$kind $aid}
+			if {~ $#bid 0} {sleep 1}
+		}
+	}
+	if {~ $#bid 0} {
+		bad $kind^': Zerox made no second window'
+	} {
+		echo render > $XENITH/$bid/doc/ctl
+		loaded $bid
+		hasdoctext $bid First
+		echo ' Unsaved' >> $XENITH/$aid/body
+		sleep 3
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again'} {ok $kind^': an edit in its twin does not set the document again'}
+		echo refresh > $XENITH/$bid/doc/ctl
+		hasdoctext $bid Unsaved
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Unsaved*} {ok $kind^': doc/ctl refresh sets it from the unsaved text'} {bad $kind^': refresh:' $"t}
+		check $kind^': still shown' `{attr $bid shown} 1
+		# typed into the twin, not committed (held in its cache, so not
+		# in the body's length): refresh takes it too.  The twin's body
+		# is where its document would be: render it to learn where.
+		echo render > $XENITH/$aid/doc/ctl
+		loaded $aid
+		scr=`{attr $aid screen}
+		echo text > $XENITH/$aid/doc/ctl
+		echo -n '$' > $XENITH/$aid/addr
+		echo 'dot=addr' > $XENITH/$aid/ctl
+		sleep 1
+		n0=${index 3 `{cat $XENITH/$aid/ctl}}
+		echo m ${expr ${index 1 $scr} 20 +} ${expr ${index 2 $scr} 10 +} 0 > /dev/pointer
+		sleep 1
+		echo -n ' Typed' > /dev/keyboard
+		sleep 2
+		n1=${index 3 `{cat $XENITH/$aid/ctl}}
+		# (a Markdown body commits the first rune; the rest stay cached)
+		if {ntest ${expr $n1 $n0 3 + '<'}} {ok $kind^': typing is held uncommitted'} {bad $kind^': typing was committed:' $n0 '->' $n1}
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Typed*} {bad $kind^': typing set the document again'} {ok $kind^': typing in its twin does not set the document again'}
+		echo refresh > $XENITH/$bid/doc/ctl
+		hasdoctext $bid Typed
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Typed*} {ok $kind^': refresh takes typing not yet committed'} {bad $kind^': refresh after typing:' $"t}
+		echo ' Saved' >> $XENITH/$aid/body
+		sleep 2
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Saved*} {bad $kind^': an edit set the document again'} {}
+		echo put > $XENITH/$aid/ctl
+		hasdoctext $bid Saved
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Saved*} {ok $kind^': Put in its twin sets the document again'} {bad $kind^': after Put:' $"t}
+		f=`{cat $SRC}
+		if {~ $"f *Saved*} {ok $kind^': and the file was written'} {bad $kind^': file:' $"f}
+	}
+	rm -f $SRC
+}
+if {echo refresh > $M/doc/ctl} {bad 'refresh on a window showing text was taken'} {ok 'refresh on a window showing its text is refused'}
 
 # ---- an image ----
 

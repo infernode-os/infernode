@@ -44,6 +44,7 @@ State: adt {
 	ev:	chan of string;	# a page browsed's events, for the view
 	field:	int;		# the form field with the keyboard (its node), or 0
 	accent:	ref Image;
+	scratch:	ref Image;	# paint's, kept for the next of its size
 };
 
 VIEWH: con 600;
@@ -99,7 +100,7 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 	}
 	if(accent == nil)
 		accent = display.color(Draw->Blue);
-	s := ref State(data, name, width, 0, 0, nil, 0, accent);
+	s := ref State(data, name, width, 0, 0, nil, 0, accent, nil);
 	h := add(s);
 	if(data == nil && isurl(name)){
 		# browsed: fetched in the background, the events tell
@@ -222,9 +223,16 @@ paint(h: int, n: int, nil: int, dst: ref Image, r: Rect, org: Point): string
 	s := get(h);
 	if(s == nil || n != 0)
 		return "no such sheet";
-	im := display.newimage(Rect((0, 0), (r.dx(), r.dy())), dst.chans, 0, Draw->White);
-	if(im == nil)
-		return sys->sprint("no image: %r");
+	# laid out into an image of r's size, kept for the next of that
+	# size (a view scrolled asks for the same strips again and again)
+	im := s.scratch;
+	if(im == nil || !im.r.size().eq(r.size()) || im.chans.desc != dst.chans.desc){
+		im = display.newimage(Rect((0, 0), (r.dx(), r.dy())), dst.chans, 0, Draw->White);
+		if(im == nil)
+			return sys->sprint("no image: %r");
+		s.scratch = im;
+	}else
+		im.draw(im.r, display.white, nil, Point(0, 0));
 	htmldoc->paint(h, im, org.y);
 	if(s.field != 0 && (f := focused(h, s)) != nil)
 		im.border(f.box.subpt(Point(0, org.y)).inset(-2), 2, s.accent, Point(0, 0));

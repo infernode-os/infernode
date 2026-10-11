@@ -410,6 +410,192 @@ Doc.words(d: self ref Doc, page: int): list of (string, Rect)
 	return r;
 }
 
+Doc.links(d: self ref Doc, page: int): list of (Rect, string)
+{
+	pdoc := getdoc(d.idx);
+	if(pdoc == nil)
+		return nil;
+	pobj := getpageobj(pdoc, page);
+	if(pobj == nil)
+		return nil;
+	l: list of (Rect, string);
+	{
+		l = pagelinks(pdoc, pobj);
+	} exception {
+	"*" =>
+		l = nil;
+	}
+	return l;
+}
+
+# ---- Links ----
+
+MAXLINKS: con 2000;	# on one page
+
+# The page's link annotations: each box, from the top left as the page
+# is drawn (renderto: PDF y up, the box's height the page's), and where
+# it goes
+pagelinks(doc: ref PdfDoc, page: ref PdfObj): list of (Rect, string)
+{
+	annots := resolve(doc, dictget(page.dval, "Annots"));
+	if(annots == nil || annots.kind != Oarray)
+		return nil;
+	(nil, ph) := getmediabox(doc, page);
+	l: list of (Rect, string);
+	n := 0;
+	for(a := annots.aval; a != nil && n < MAXLINKS; a = tl a){
+		an := resolve(doc, hd a);
+		if(an == nil || an.kind != Odict)
+			continue;
+		st := dictget(an.dval, "Subtype");
+		if(st == nil || st.kind != Oname || st.sval != "Link")
+			continue;
+		(ok, b) := numbers(doc, resolve(doc, dictget(an.dval, "Rect")), 4);
+		if(!ok)
+			continue;
+		goes: string;
+		if((act := resolve(doc, dictget(an.dval, "A"))) != nil && act.kind == Odict)
+			goes = actionto(doc, act);
+		else if((dest := dictget(an.dval, "Dest")) != nil)
+			goes = destto(doc, dest, 0);
+		if(goes == nil)
+			continue;
+		x0 := b[0];
+		x1 := b[2];
+		if(x0 > x1)
+			(x0, x1) = (x1, x0);
+		y0 := b[1];
+		y1 := b[3];
+		if(y0 > y1)
+			(y0, y1) = (y1, y0);
+		l = (Rect((int x0, int (ph - y1)), (int x1, int (ph - y0))), goes) :: l;
+		n++;
+	}
+	r: list of (Rect, string);
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+# Where an action goes: a URI, or a page of this document (GoTo)
+actionto(doc: ref PdfDoc, act: ref PdfObj): string
+{
+	s := dictget(act.dval, "S");
+	if(s == nil || s.kind != Oname)
+		return nil;
+	case s.sval {
+	"URI" =>
+		u := resolve(doc, dictget(act.dval, "URI"));
+		if(u != nil && u.kind == Ostring && u.sval != nil)
+			return u.sval;
+	"GoTo" =>
+		return destto(doc, dictget(act.dval, "D"), 0);
+	}
+	return nil;
+}
+
+# A destination's page, as "#page=N": an array [page ...], a name or
+# string looked up among the document's named destinations, or a
+# dictionary with the array as D
+destto(doc: ref PdfDoc, dest: ref PdfObj, depth: int): string
+{
+	if(depth > 4)
+		return nil;
+	dest = resolve(doc, dest);
+	if(dest == nil)
+		return nil;
+	case dest.kind {
+	Oarray =>
+		if(dest.aval == nil)
+			return nil;
+		if((n := pagenumber(doc, hd dest.aval)) > 0)
+			return "#page=" + string n;
+	Oname or Ostring =>
+		return destto(doc, nameddest(doc, dest.sval), depth + 1);
+	Odict =>
+		return destto(doc, dictget(dest.dval, "D"), depth + 1);
+	}
+	return nil;
+}
+
+# A page, by its reference (or, as some writers give it, its index)
+pagenumber(doc: ref PdfDoc, o: ref PdfObj): int
+{
+	if(o == nil)
+		return 0;
+	if(o.kind == Oint)
+		return o.ival + 1;
+	if(o.kind != Oref)
+		return 0;
+	p := pageindex(doc);
+	for(i := 0; i < len p; i++)
+		if(p[i] != nil && p[i].kind == Oref && p[i].ival == o.ival)
+			return i + 1;
+	return 0;
+}
+
+# A named destination: the catalog's Dests (PDF 1.1), or its Names'
+# Dests name tree
+nameddest(doc: ref PdfDoc, name: string): ref PdfObj
+{
+	root := resolve(doc, dictget(doc.trailer.dval, "Root"));
+	if(root == nil || root.kind != Odict)
+		return nil;
+	if((dests := resolve(doc, dictget(root.dval, "Dests"))) != nil && dests.kind == Odict)
+		if((d := dictget(dests.dval, name)) != nil)
+			return d;
+	names := resolve(doc, dictget(root.dval, "Names"));
+	if(names == nil || names.kind != Odict)
+		return nil;
+	return nametree(doc, resolve(doc, dictget(names.dval, "Dests")), name, 0);
+}
+
+nametree(doc: ref PdfDoc, node: ref PdfObj, name: string, depth: int): ref PdfObj
+{
+	if(node == nil || node.kind != Odict || depth > 32)
+		return nil;
+	if((lim := resolve(doc, dictget(node.dval, "Limits"))) != nil && lim.kind == Oarray &&
+	   lim.aval != nil && tl lim.aval != nil){
+		lo := resolve(doc, hd lim.aval);
+		hi := resolve(doc, hd tl lim.aval);
+		if(lo != nil && hi != nil && (name < lo.sval || name > hi.sval))
+			return nil;
+	}
+	if((nl := resolve(doc, dictget(node.dval, "Names"))) != nil && nl.kind == Oarray)
+		for(a := nl.aval; a != nil && tl a != nil; a = tl tl a){
+			k := resolve(doc, hd a);
+			if(k != nil && k.sval == name)
+				return hd tl a;
+		}
+	if((kids := resolve(doc, dictget(node.dval, "Kids"))) != nil && kids.kind == Oarray)
+		for(kl := kids.aval; kl != nil; kl = tl kl)
+			if((r := nametree(doc, resolve(doc, hd kl), name, depth + 1)) != nil)
+				return r;
+	return nil;
+}
+
+# n numbers from an array
+numbers(doc: ref PdfDoc, o: ref PdfObj, n: int): (int, array of real)
+{
+	v := array[n] of { * => 0.0 };
+	if(o == nil || o.kind != Oarray)
+		return (0, v);
+	i := 0;
+	for(l := o.aval; l != nil && i < n; l = tl l){
+		e := resolve(doc, hd l);
+		if(e == nil)
+			return (0, v);
+		if(e.kind == Oint)
+			v[i] = real e.ival;
+		else if(e.kind == Oreal)
+			v[i] = e.rval;
+		else
+			return (0, v);
+		i++;
+	}
+	return (i == n, v);
+}
+
 Doc.dumppage(d: self ref Doc, page: int): string
 {
 	pdoc := getdoc(d.idx);

@@ -814,6 +814,12 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 
 	putfile(f, 0, f.buf.nc, namer);
 
+	# a window showing the file as its document shows what was written
+	if(namer == f.name)
+		for(i := 0; i < f.ntext; i++)
+			if((u := f.text[i].w) != nil && docview->shown(u) && !docview->readonly(u))
+				docview->refresh(u);
+
 	name = nil;
 }
 

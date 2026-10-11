@@ -43,8 +43,10 @@ Two kinds of file:
 
 - **Source documents** — Markdown, HTML, Mermaid. The body is the
   file's text, editable; Render shows the document or the text; Put
-  saves the text. The document is set again from the text when it
-  changes.
+  saves the text. A document shown is set again from the text when
+  the file is Put (from any window on it, a Zerox'd twin say) or
+  `doc/ctl` is written `refresh`, not at each edit; the old drawing
+  stays until the new one is open.
 - **Binary documents** — PDF, images. Always shown as the document.
   The body holds the document's text (extracted), read-only, so Look,
   search, Snarf and an agent reading `body` work as they do now; Put
@@ -138,19 +140,34 @@ scroll bar, mouse loops and keys.
   the next one the way the view last moved (painted ahead); others are
   dropped as they leave. A view laid out again (a resize, a new fit)
   keeps the sheet at its top and its place in it.
+- **Band**: a flowing document (Markdown, HTML, a page browsed) is
+  painted off screen into a band of the view and half a view above and
+  below. A scroll within it is a copy; one past it moves the band,
+  keeping what it held and painting only the strip exposed. Painting a
+  web page is laying it out again box by box, so this is what makes it
+  scroll as smoothly as a PDF. The band is dropped when the page
+  changes (laid out again, an update, a click or key it took). The
+  view is never filled before its sheets are drawn: only the gaps
+  round them are, so it is never shown blank mid-paint.
 - **Text on the drawing**, where the engine gives runs: button 1
   clicked without moving selects the word under the pointer (Snarf
   copies it); button 2 executes it; button 3 looks at it, or follows
-  the link there. Search highlights its matches on the drawing.
+  the link there: to a page of the document (a PDF's GoTo, its named
+  destinations), that page; to the web, a browser window in Xenith
+  (what is opened in Xenith stays in Xenith); anything else, plumbed.
+  Search highlights its matches on the drawing.
 
 ## wm/page
 
 `page(1)` shows documents in a window of their own, through the same
 view: the files named (or standard input) as one document, paging on
 from one file into the next, only the file shown held open. Button 1
-drags, the wheel scrolls, button 3 is a Tk menu (paging, zoom, fit,
-turning, find, go to a page, write the page shown as an image, the
-pages near the one shown, the files); keys do the same.
+drags, the wheel scrolls; as in Plan 9's page, button 2 raises the
+operations (paging, zoom, fit, turning, find, go to a page, write the
+page shown as an image) and button 3 the pages near the one shown and
+the files to choose from; keys do the same. Button 1 clicked without
+moving on a link follows it: a page of the document, or the plumber for
+anything else. A flowing document is set in Xenith's faces.
 
 ## The namespace
 
@@ -173,7 +190,9 @@ for a window showing text):
 			column 1224 14000	(the column's size, at the scale)
 		write: commands, one a line —
 			sheet n | scale n | fit [page] | scroll dy |
-			render | text | the view's and the engine's commands
+			render | text | refresh (a source document set again
+			from the window's text, unsaved edits and all) |
+			the view's and the engine's commands
 	text	the document's text, read-only
 	links	one link a line: sheet x0 y0 x1 y1 url (scale 100)
 	find	write a string; read where it was found, one a line:

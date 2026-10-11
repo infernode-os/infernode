@@ -30,6 +30,7 @@ State: adt {
 	texts:	array of string;	# each page's text
 	runs:	array of array of Run;	# the pages' words, kept for the last NRUNS asked for
 	ranked:	list of int;	# those pages, latest first
+	links:	array of array of Link;	# each page's, once asked for
 };
 
 NRUNS: con 32;
@@ -83,7 +84,7 @@ open(data: array of byte, name: string, nil: ref Style): (int, string)
 			(w, h) = (612.0, 792.0);
 		sizes[i] = Point(int w, int h);	# int of a real rounds
 	}
-	return (add(ref State(doc, sizes, array[n] of string, array[n] of array of Run, nil)), nil);
+	return (add(ref State(doc, sizes, array[n] of string, array[n] of array of Run, nil, array[n] of array of Link)), nil);
 }
 
 close(h: int)
@@ -229,14 +230,61 @@ runs(h: int, n: int): array of Run
 	return s.runs[n];
 }
 
-links(nil: int): array of Link
+# The document's links: a URI, or "#page=N" for one of its pages
+links(h: int): array of Link
 {
+	s := get(h);
+	if(s == nil)
+		return nil;
+	l: list of Link;
+	k := 0;
+	for(n := len s.sizes - 1; n >= 0; n--){
+		a := pagelinks(s, n);
+		for(i := len a - 1; i >= 0; i--){
+			l = a[i] :: l;
+			k++;
+		}
+	}
+	r := array[k] of Link;
+	for(i := 0; l != nil; l = tl l)
+		r[i++] = hd l;
+	return r;
+}
+
+# The link at p on page n; the last drawn if they overlap
+linkat(h: int, n: int, p: Point): string
+{
+	s := get(h);
+	if(s == nil || n < 0 || n >= len s.sizes)
+		return nil;
+	a := pagelinks(s, n);
+	for(i := len a - 1; i >= 0; i--)
+		if(p.in(a[i].r))
+			return a[i].url;
 	return nil;
 }
 
-linkat(nil: int, nil: int, nil: Point): string
+pagelinks(s: ref State, n: int): array of Link
 {
-	return nil;
+	if(s.links[n] == nil){
+		l: list of (Rect, string);
+		{
+			l = s.doc.links(n+1);
+		} exception {
+		"*" =>
+			l = nil;
+		}
+		k := 0;
+		for(t := l; t != nil; t = tl t)
+			k++;
+		a := array[k] of Link;
+		for(i := 0; l != nil; l = tl l){
+			(r, u) := hd l;
+			a[i++] = Link(n, r, u);
+		}
+		s.links[n] = a;
+	}
+	return s.links[n];
 }
 
 lineto(nil: int, nil: int): (int, int)

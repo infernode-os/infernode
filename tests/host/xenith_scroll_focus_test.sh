@@ -156,9 +156,11 @@ check "gui.b sends events to dat->cmouse" \
 check "xenith.b receives from dat->cmouse in mousetask" \
     "grep -q '<-dat->cmouse' '$XENITH_FILE'"
 
-# Test 20: wmclient passes through scroll wheel events
-check "wmclient passes through scroll wheel events (buttons 8|16)" \
-    "grep -q 'p.buttons & (8|16)' '$WMCLIENT_FILE'"
+# Test 20: wmclient passes scroll wheel events (buttons 8|16) to the app.
+# Since wm/wm took over frame presses (72ba5ab88), Window.pointer keeps
+# no event at all: it must return 0, so the wheel always reaches the app.
+check "wmclient passes every pointer event, wheel included, to the app" \
+    "awk '/^Window.pointer\\(/,/^}/' '$WMCLIENT_FILE' | grep -q 'return 0;' && ! awk '/^Window.pointer\\(/,/^}/' '$WMCLIENT_FILE' | grep -q 'return 1'"
 
 echo ""
 echo "=== Results ==="

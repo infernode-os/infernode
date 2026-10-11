@@ -18,6 +18,7 @@ include "winplace.m";
 include "menuhit.m";
 	menuhit: Menuhit;
 	Menu, Mousectl: import menuhit;
+include "lucitheme.m";
 
 Wm: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -88,6 +89,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	buts := Wmclient->Appl;
 	if(ctxt.wm == nil)
 		buts = Wmclient->Plain;
+	# A theme switched by anyone (Xenith's Theme, Settings, a write to
+	# /lib/lucifer/theme/current) reaches the windows.  Under Lucifer
+	# it sends "retheme" itself; at the top, wm/wm watches.
+	themec := chan of string;
+	if(ctxt.wm == nil && (lucitheme := load Lucitheme Lucitheme->PATH) != nil)
+		themec = lucitheme->watch();
 	win := wmclient->window(ctxt, "Wm", buts);
 	wmwin = win;
 	wmclient->win.reshape(((0, 0), (100, 100)));
@@ -126,7 +133,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# UI test driver: synthetic input via /chan/uitest, so interaction
 	# is scriptable and CI-testable (tests/host).  Writes, one command
-	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal).
+	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal)  |
+	# "text STRING".
 	# Events enter the exact channels the real devices feed.
 	uitest := sys->file2chan("/chan", "uitest");
 	if(uitest != nil)
@@ -153,17 +161,15 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		}
 		if(c == "retheme"){
 			# a live theme switch (Lucifer sends it to the apps it
-			# hosts, wm/wm among them): pass it on to every window
-			# here, hidden ones too, so their frames follow
-			for(z := wmsrv->top(); z != nil; z = z.znext)
-				spawn tellctl(z.ctl, c);
-			for(hl := hidden; hl != nil; hl = tl hl)
-				spawn tellctl((hd hl).ctl, c);
+			# hosts, wm/wm among them)
+			retheme();
 		}
 
 		wmclient->win.wmctl(c);
 		if(win.image != screen.image)
 			reshaped(win);
+	<-themec =>
+		retheme();
 	<-exitc =>
 		wmclient->win.wmctl("exit");
 	c := <-wmctxt.kbd or
@@ -971,8 +977,15 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 			ptr <-= ref Draw->Pointer(b, (x, y), sys->millisec());
 		} else if(n >= 2 && hd toks == "key")
 			fakekbd <-= hd tl toks;
-		else
-			err = "usage: ptr X Y BUTTONS | key RUNE";
+		else if(n >= 2 && hd toks == "text"){
+			# the rest of the line, a rune at a time, as typed
+			t := string data;
+			if(t[len t - 1] == '\n')
+				t = t[0:len t - 1];
+			for(i := len "text "; i < len t; i++)
+				fakekbd <-= string t[i];
+		} else
+			err = "usage: ptr X Y BUTTONS | key RUNE | text STRING";
 		if(err != "")
 			wc <-= (0, err);
 		else
@@ -983,7 +996,9 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 # ---- rio's button-3 menu: New, Resize, Move, Delete, Hide, and the
 # hidden windows.  As in rio, an operation that needs a window asks for
 # one: the cursor becomes a gunsight and button 3 chooses it (any other
-# button cancels).  Returns whether the button is still down.
+# button cancels).  A click that never moves chooses the item under the
+# pointer, New, as rio's does: it only changes the cursor, and any button
+# but 3 cancels.  Returns whether the button is still down.
 
 Rnew, Rresize, Rmove, Rdelete, Rhide: con iota;
 menu3 := array[] of {"New", "Resize", "Move", "Delete", "Hide"};
@@ -997,30 +1012,26 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 		items[i++] = clientlabel(hd hl);
 	mc := ref Mousectl(wmctxt.ptr, p.buttons, p.xy, p.msec);
 	n := menuhit->menuhit(3, mc, ref Menu(items, nil, 0), nil);
-	# a click that never moved chooses nothing: the menu opens under
-	# the pointer, and a bare click must not start anything
-	if(mc.xy.eq(p.xy))
-		n = -1;
 	held := mc.buttons != 0;
 	if(n < 0)
 		return held;
 	ptr := wmctxt.ptr;
 	case n {
 	Rnew =>
-		r := sweepout(ptr);
+		r := sweepout(ptr, mc.buttons);
 		if(!r.eq(Rect((0, 0), (0, 0)))){
 			sweptr = r;
 			spawn command(clientctxt, "wm/sh" :: nil, nil);
 		}
 	Rresize =>
-		(c, nil) := pointto(ptr, 1);
+		(c, nil) := pointto(ptr, 1, mc.buttons);
 		if(c != nil){
-			r := sweepout(ptr);
+			r := sweepout(ptr, 0);
 			if(!r.eq(Rect((0, 0), (0, 0))))
 				tellreshape(c, ".", r);
 		}
 	Rmove =>
-		(c, at) := pointto(ptr, 0);
+		(c, at) := pointto(ptr, 0, mc.buttons);
 		if(c != nil && (w := c.window(".")) != nil){
 			c.top();
 			setcursor(boxcursor);
@@ -1030,11 +1041,11 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 			setcursor(nil);
 		}
 	Rdelete =>
-		(c, nil) := pointto(ptr, 1);
+		(c, nil) := pointto(ptr, 1, mc.buttons);
 		if(c != nil)
 			spawn tellexit(c);
 	Rhide =>
-		(c, nil) := pointto(ptr, 1);
+		(c, nil) := pointto(ptr, 1, mc.buttons);
 		if(c != nil)
 			hide(c);
 	* =>
@@ -1049,13 +1060,15 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 
 # rio's pointto: the gunsight, then button 3 on a window chooses it
 # (with release, the release must be on the same window).  Returns the
-# window, and where it was pressed.
-pointto(ptr: chan of ref Pointer, release: int): (ref Client, Point)
+# window, and where it was pressed.  Buttons are those still down when
+# it is called: the menu has usually had the release already, and the
+# next event may be the press that chooses, with no motion before it.
+pointto(ptr: chan of ref Pointer, release, buttons: int): (ref Client, Point)
 {
 	setcursor(sightcursor);
+	while(buttons != 0)
+		buttons = (<-ptr).buttons;
 	p := <-ptr;
-	while(p.buttons != 0)
-		p = <-ptr;
 	while(p.buttons == 0)
 		p = <-ptr;
 	at := p.xy;
@@ -1076,14 +1089,15 @@ pointto(ptr: chan of ref Pointer, release: int): (ref Client, Point)
 }
 
 # rio's sweep: the cross, then a button-3 drag sweeps out a rectangle.
-# Too small, or any other button, and there is none.
-sweepout(ptr: chan of ref Pointer): Rect
+# Too small, or any other button, and there is none.  Buttons are
+# those still down when it is called, as for pointto.
+sweepout(ptr: chan of ref Pointer, buttons: int): Rect
 {
 	none := Rect((0, 0), (0, 0));
 	setcursor(crosscursor);
+	while(buttons != 0)
+		buttons = (<-ptr).buttons;
 	p := <-ptr;
-	while(p.buttons != 0)
-		p = <-ptr;
 	while(p.buttons == 0)
 		p = <-ptr;
 	r := Rect(p.xy, p.xy);
@@ -1103,6 +1117,16 @@ sweepout(ptr: chan of ref Pointer): Rect
 	if(!ok || r.dx() < Minwidth || r.dy() < Minheight)
 		return none;
 	return r;
+}
+
+# A theme switch: pass it on to every window, hidden ones too, so
+# their frames and colours follow.  The menu reads the theme as it opens.
+retheme()
+{
+	for(z := wmsrv->top(); z != nil; z = z.znext)
+		spawn tellctl(z.ctl, "retheme");
+	for(hl := hidden; hl != nil; hl = tl hl)
+		spawn tellctl((hd hl).ctl, "retheme");
 }
 
 tellexit(c: ref Client)

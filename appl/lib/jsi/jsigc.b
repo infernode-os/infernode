@@ -82,7 +82,7 @@ gcinit()
 	nroot = 0;
 	resumers = nil;
 	curjob = nil;
-	deadshape = ref Shape(nil, nil, 0, nil, 1, nil, nil, nil, 0, nil);
+	deadshape = ref Shape(nil, nil, 0, nil, 1, nil, nil, nil, 0, nil, 0);
 	(ok, nil) := sys->stat("/env/jsgcdebug");
 	gcdebug = ok >= 0;
 }

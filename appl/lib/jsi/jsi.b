@@ -160,6 +160,7 @@ resetstate()
 	cururl = nil;
 	lazyunit = nil;
 	lazyunitsc = nil;
+	lazychain = nil;
 	disposing = nil;
 	dscopes = nil;
 }

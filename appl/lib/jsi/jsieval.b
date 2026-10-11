@@ -82,6 +82,25 @@ pushr()
 	vstk[s].o = ro;
 }
 
+# the stack's top into the registers, field by field (setr(vstk[vsp-1]) copies a
+# whole value, which the amd64 JIT does not compile)
+topr()
+{
+	s := vsp - 1;
+	t := vstk[s].t;
+	rt = t;
+	if(t <= Tint)
+		ri = vstk[s].i;
+	else if(t == Tnum)
+		rn = vstk[s].n;
+	else if(t == Tstr)
+		rs = vstk[s].s;
+	else {
+		ro = vstk[s].o;
+		ri = vstk[s].i;
+	}
+}
+
 pop()
 {
 	vsp--;
@@ -185,6 +204,80 @@ ev(n: int)
 		for(d := na[n]; d > 0; d--)
 			tenv = tenv.up;
 		s := nb[n];
+		t := rt;
+		tenv.v[s].t = t;
+		if(t <= Tint)
+			tenv.v[s].i = ri;
+		else if(t == Tnum)
+			tenv.v[s].n = rn;
+		else if(t == Tstr)
+			tenv.v[s].s = rs;
+		else {
+			tenv.v[s].o = ro;
+			tenv.v[s].i = ri;
+		}
+	# the same with a TDZ check (a let or const read where it may not be set yet:
+	# from a closure, most of all), field by field as the others are
+	Nlocalchk =>
+		s := na[n];
+		t := fr[s].t;
+		if(t == Thole)
+			tdzerror(kstr[nb[n]]);
+		rt = t;
+		if(t <= Tint)
+			ri = fr[s].i;
+		else if(t == Tnum)
+			rn = fr[s].n;
+		else if(t == Tstr)
+			rs = fr[s].s;
+		else {
+			ro = fr[s].o;
+			ri = fr[s].i;
+		}
+	Nsetlocalchk =>
+		ev(nb[n]);
+		s := na[n];
+		if(fr[s].t == Thole)
+			tdzerror(kstr[nc[n]]);
+		t := rt;
+		fr[s].t = t;
+		if(t <= Tint)
+			fr[s].i = ri;
+		else if(t == Tnum)
+			fr[s].n = rn;
+		else if(t == Tstr)
+			fr[s].s = rs;
+		else {
+			fr[s].o = ro;
+			fr[s].i = ri;
+		}
+	Nenvchk =>
+		tenv = env;
+		for(d := na[n]; d > 0; d--)
+			tenv = tenv.up;
+		s := nb[n];
+		t := tenv.v[s].t;
+		if(t == Thole)
+			tdzerror(kstr[nc[n]]);
+		rt = t;
+		if(t <= Tint)
+			ri = tenv.v[s].i;
+		else if(t == Tnum)
+			rn = tenv.v[s].n;
+		else if(t == Tstr)
+			rs = tenv.v[s].s;
+		else {
+			ro = tenv.v[s].o;
+			ri = tenv.v[s].i;
+		}
+	Nsetenvchk =>
+		ev(nc[n]);
+		tenv = env;
+		for(d := na[n]; d > 0; d--)
+			tenv = tenv.up;
+		s := nb[n];
+		if(tenv.v[s].t == Thole)
+			tdzerror(kstr[nd[n]]);
 		t := rt;
 		tenv.v[s].t = t;
 		if(t <= Tint)
@@ -808,29 +901,6 @@ ev2(n: int)
 		o.flags |= Fpriv;
 		rt = Tsym;
 		ro = o;
-	Nlocalchk =>
-		s := na[n];
-		if(fr[s].t == Thole)
-			tdzerror(kstr[nb[n]]);
-		setr(fr[s]);
-	Nsetlocalchk =>
-		ev(nb[n]);
-		s := na[n];
-		if(fr[s].t == Thole)
-			tdzerror(kstr[nc[n]]);
-		fr[s] = regv();
-	Nenvchk =>
-		e := envat(na[n]);
-		v := e.v[nb[n]];
-		if(v.t == Thole)
-			tdzerror(kstr[nc[n]]);
-		setr(v);
-	Nsetenvchk =>
-		ev(nc[n]);
-		e := envat(na[n]);
-		if(e.v[nb[n]].t == Thole)
-			tdzerror(kstr[nd[n]]);
-		e.v[nb[n]] = regv();
 	Nglobal =>
 		globalget(n);
 	Nsetglobal =>
@@ -1183,7 +1253,7 @@ ev2(n: int)
 		ev(na[n]);
 		pushr();
 		bindpat(nb[n]);
-		setr(vstk[vsp-1]);
+		topr();
 		pop();
 	Nnewtarget =>
 		case na[n] {
@@ -1466,6 +1536,38 @@ forin(n: int)
 	}
 	benv := env;
 	push(objv(o));
+	if(protosilent(o)) {
+		# the prototypes give no key (the usual case): the own keys, with no
+		# set of those seen, a plain object's enumerability read from its shape
+		keys := ownkeys(o);
+		for(i := 0; i < len keys; i++) {
+			k := keys[i];
+			if(atomsym[k] != nil)
+				continue;
+			if(o.cls == Cplain) {
+				sl := slotof(o.sh, k);
+				if(sl < 0 || (o.sh.attrs[sl] & Aenum) == 0)
+					continue;
+			} else {
+				d := getowndesc(o, k);
+				if(d == nil || (d.attrs & Aenum) == 0)
+					continue;
+			}
+			rt = Tstr;
+			rs = atomstr[k];
+			forbind(n, inf, benv);
+			ev(nc[n]);
+			env = benv;
+			if(ctl && !loopctl(nd[n])) {
+				pop();
+				return;
+			}
+			if(gcwanted)
+				gcpoint();
+		}
+		pop();
+		return;
+	}
 	# the keys: own enumerable ones, then the prototypes', skipping shadowed and deleted ones
 	visited := newhmap();
 	for(p := o; p != nil; p = getprotoof(p)) {
@@ -1494,6 +1596,25 @@ forin(n: int)
 		}
 	}
 	pop();
+}
+
+# whether o's prototypes are ordinary objects with no enumerable string key,
+# so a for-in over o sees only o's own keys
+protosilent(o: ref Obj): int
+{
+	if(o.cls == Cproxy)
+		return 0;
+	for(p := o.sh.proto; p != nil; p = p.sh.proto) {
+		if(p.cls != Cplain && !(p.cls == Carray && p.alen == 0 && (p.flags & Fslow) == 0))
+			return 0;
+		sh := p.sh;
+		for(i := 0; i < sh.n; i++) {
+			k := sh.keys[i];
+			if(k >= 0 && (sh.attrs[i] & Aenum) && atomsym[k] == nil)
+				return 0;
+		}
+	}
+	return 1;
 }
 
 # (what is iterated is a root while the body runs)
@@ -2986,6 +3107,110 @@ callf(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 	}
 }
 
+# A few natives that page code calls all the time, done here from the
+# registers: the arguments array, this, and a whole value passed in and
+# returned each cost under the JIT more than the work.  0 if this is not one
+# of them (nothing evaluated); once an argument is evaluated it is done here,
+# by the native itself if the fast case no longer holds.
+fastnative(f: ref Obj, tt: int, dst: ref Obj, ks, k: int): int
+{
+	case f.fun.native {
+	NAPpush =>
+		if(k != 1 || tt != Tobj || dst.cls != Carray)
+			return 0;
+		ev(kids[ks]);
+		o := dst;
+		if(dense(o) && (o.flags & (Fext|Ffrozenlen)) == Fext && !protohasidx(o)) {
+			i := o.alen;
+			if(o.elems == nil || i >= len o.elems)
+				growelems(o, i + 1);
+			t := rt;
+			o.elems[i].t = t;
+			if(t <= Tint)
+				o.elems[i].i = ri;
+			else if(t == Tnum)
+				o.elems[i].n = rn;
+			else if(t == Tstr)
+				o.elems[i].s = rs;
+			else {
+				o.elems[i].o = ro;
+				o.elems[i].i = ri;
+			}
+			o.alen = i + 1;
+			rt = Tint;
+			ri = i + 1;
+			return 1;
+		}
+		setr(callnative(f, objv(o), array[] of {regv()}, nil));
+		return 1;
+	NMfloor or NMceil or NMabs =>
+		if(k != 1)
+			return 0;
+		ev(kids[ks]);
+		if(rt == Tint) {
+			if(f.fun.native == NMabs && ri < 0) {
+				if(ri == int 16r80000000) {
+					rt = Tnum;
+					rn = 2147483648.0;
+				} else
+					ri = -ri;
+			}
+			return 1;
+		}
+		# (isnan first: Limbo's real comparisons branch on the opposite, which a NaN passes)
+		if(rt == Tnum && !isnan(rn) && rn >= -1073741824.0 && rn < 1073741824.0 && rn != 0.0) {
+			x := rn;
+			case f.fun.native {
+			NMfloor =>
+				i := int x;	# rounded: the floor is it or one less
+				if(real i > x)
+					i--;
+				rt = Tint;
+				ri = i;
+			NMceil =>
+				i := int x;
+				if(real i < x)
+					i++;
+				if(i == 0)	# ceil of (-1, 0) is -0
+					rn = -0.0;
+				else {
+					rt = Tint;
+					ri = i;
+				}
+			NMabs =>
+				if(x < 0.0)
+					rn = -x;
+			}
+			return 1;
+		}
+		setr(callnative(f, undef, array[] of {regv()}, nil));
+		return 1;
+	NMmax or NMmin =>
+		if(k != 2)
+			return 0;
+		ev(kids[ks]);
+		at := rt;
+		ai := ri;
+		if(at != Tint) {
+			a := regv();
+			push(a);
+			ev(kids[ks + 1]);
+			pop();
+			setr(callnative(f, undef, array[] of {a, regv()}, nil));
+			return 1;
+		}
+		ev(kids[ks + 1]);
+		if(rt == Tint) {
+			if(f.fun.native == NMmax && ai > ri || f.fun.native == NMmin && ai < ri)
+				ri = ai;
+			return 1;
+		}
+		setr(callnative(f, undef, array[] of {intv(ai), regv()}, nil));
+		return 1;
+	}
+	return 0;
+}
+
 # callf's other cases: a lazy body, a generator or async function, a class
 # constructor, spread arguments, natives
 callf2(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
@@ -2999,6 +3224,8 @@ callf2(f: ref Obj, tt: int, dst: ref Obj, ks, k, flags: int)
 		}
 	}
 	if(f.fun.native > 0 && (flags & Fspr) == 0) {
+		if(k <= 2 && fastnative(f, tt, dst, ks, k))
+			return;
 		# natives take their arguments as an array
 		args := array[k] of V;
 		push(V(tt, 0, 0.0, nil, dst));
@@ -3740,6 +3967,8 @@ bindpat(p: int)
 			throwtype("Cannot destructure '" + tostr(v) + "' as it is " + typename(v) + ".");
 		k := na[p];
 		cnt := nb[p];
+		# the keys taken are only wanted by a rest element, which is last
+		hasrest := cnt > 0 && op[kids[k + cnt - 1]] == Prestobj;
 		used: list of int;
 		for(i := 0; i < cnt; i++) {
 			c := kids[k + i];
@@ -3756,20 +3985,42 @@ bindpat(p: int)
 				ev(nb[c]);
 				key = tokey(regv());
 			}
-			used = key :: used;
+			if(hasrest)
+				used = key :: used;
 			# a property target's reference is evaluated before the value is got
 			pre := prepref(nc[c]);
+			if(!pre && v.t == Tobj && v.o.cls == Cplain) {
+				# an own data property of a plain object, into the registers and
+				# onto the stack field by field: no whole value copied
+				o := v.o;
+				sl := slotof(o.sh, key);
+				if(sl >= 0 && (o.sh.attrs[sl] & Aacc) == 0) {
+					t := o.slots[sl].t;
+					rt = t;
+					if(t <= Tint)
+						ri = o.slots[sl].i;
+					else if(t == Tnum)
+						rn = o.slots[sl].n;
+					else if(t == Tstr)
+						rs = o.slots[sl].s;
+					else {
+						ro = o.slots[sl].o;
+						ri = o.slots[sl].i;
+					}
+				} else
+					setr(get(o, key, v));
+				pushr();
+				bindpat(nc[c]);
+				pop();
+				continue;
+			}
 			x := getvalue(v, key);
 			bindtarget(nc[c], x, pre);
 		}
 	Pdefault =>
-		v := vstk[vsp-1];
-		if(v.t == Tundef) {
+		if(vstk[vsp-1].t == Tundef) {
 			ev(nb[p]);
-			d := regv();
-			if(d.t == Tobj && d.o.fun != nil && iscompanon(nb[p]))
-				;
-			push(d);
+			pushr();
 			bindpat(na[p]);
 			pop();
 			return;
@@ -3779,11 +4030,16 @@ bindpat(p: int)
 		;
 	* =>
 		# a target: a set node reading the stack's top, or a property's reference made first
-		x := vstk[vsp-1];
-		if(prepref(p))
-			bindtarget(p, x, 1);
-		else
+		case op[p] {
+		Nset or Nsetelem or Nprivset or Nsuperset =>
+			x := vstk[vsp-1];
+			if(prepref(p))
+				bindtarget(p, x, 1);
+			else
+				ev(p);
+		* =>
 			ev(p);
+		}
 	}
 }
 

@@ -60,6 +60,7 @@ Shape: adt {
 	ts:	array of ref Shape;
 	nt:	int;
 	kid:	ref Shape;	# a prototype's (whose shape is its own): the empty shape of objects it is the prototype of
+	nidx:	int;	# keys that are array indices it has had (not lessened by a delete): 0, none
 };
 
 # a property descriptor, as defineProperty takes it
@@ -492,7 +493,7 @@ protoepoch := 0;	# changes when a prototype's shape does
 
 shapeinit()
 {
-	rootshape = ref Shape(nil, nil, 0, nil, 0, nil, nil, nil, 0, nil);
+	rootshape = ref Shape(nil, nil, 0, nil, 0, nil, nil, nil, 0, nil, 0);
 }
 
 emptyshape(proto: ref Obj): ref Shape
@@ -505,7 +506,7 @@ emptyshape(proto: ref Obj): ref Shape
 		if(!sh.dict)
 			dictify(proto);
 		sh = proto.sh;
-		sh.kid = ref Shape(nil, nil, 0, proto, 0, nil, nil, nil, 0, nil);
+		sh.kid = ref Shape(nil, nil, 0, proto, 0, nil, nil, nil, 0, nil, 0);
 		proto.flags |= Fproto;
 	}
 	return sh.kid;
@@ -570,7 +571,9 @@ addkey(sh: ref Shape, k, attrs: int): ref Shape
 	if(n > 0)
 		at[0:] = sh.attrs[0:n];
 	at[n] = attrs;
-	ns := ref Shape(keys, at, n + 1, sh.proto, 0, nil, nil, nil, 0, nil);
+	ns := ref Shape(keys, at, n + 1, sh.proto, 0, nil, nil, nil, 0, nil, sh.nidx);
+	if(k >= 0 && atomidx[k] != -1)
+		ns.nidx++;
 	if(n + 1 > 8)
 		reindex(ns);
 	if(sh.nt < 64) {
@@ -608,7 +611,7 @@ dictify(o: ref Obj)
 		keys[0:] = sh.keys[0:n];
 		at[0:] = sh.attrs[0:n];
 	}
-	ns := ref Shape(keys, at, n, sh.proto, 1, nil, nil, nil, 0, sh.kid);
+	ns := ref Shape(keys, at, n, sh.proto, 1, nil, nil, nil, 0, sh.kid, sh.nidx);
 	reindex(ns);
 	o.sh = ns;
 }
@@ -617,7 +620,7 @@ dictify(o: ref Obj)
 reshape(o: ref Obj)
 {
 	sh := o.sh;
-	ns := ref Shape(sh.keys, sh.attrs, sh.n, sh.proto, 1, sh.index, nil, nil, 0, sh.kid);
+	ns := ref Shape(sh.keys, sh.attrs, sh.n, sh.proto, 1, sh.index, nil, nil, 0, sh.kid, sh.nidx);
 	o.sh = ns;
 	if(o.flags & Fproto)
 		protoepoch++;
@@ -659,6 +662,8 @@ addprop(o: ref Obj, k, attrs: int, v: V)
 		sh.keys[n] = k;
 		sh.attrs[n] = attrs;
 		sh.n = n + 1;
+		if(k >= 0 && atomidx[k] != -1)
+			sh.nidx++;
 		if(sh.index != nil && 2 * sh.n <= len sh.index) {
 			m := len sh.index - 1;
 			h := (k * 7) & m;
@@ -741,7 +746,7 @@ setproto(o: ref Obj, p: ref Obj)
 			keys[0:] = sh.keys[0:n];
 			at[0:] = sh.attrs[0:n];
 		}
-		ns := ref Shape(keys, at, n, p, 1, nil, nil, nil, 0, sh.kid);
+		ns := ref Shape(keys, at, n, p, 1, nil, nil, nil, 0, sh.kid, sh.nidx);
 		reindex(ns);
 		o.sh = ns;
 	}

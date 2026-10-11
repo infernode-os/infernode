@@ -94,6 +94,7 @@ page1(h: ref Js->Host): string
 		return sys->sprint("cannot load %s: %r", Originfs->PATH);
 	(jt, nil) := sys->stat("/env/jstime");
 	jstime = jt >= 0;
+	nlazy = tlazy = 0;
 	tprelude = nscripts = scriptchars = tparse = tcompile = trun = tbusy = ntasks = tlastbusy = treported = nselect = tselect = nbox = tbox = ncomputed = tcomputed = 0;
 	jsparse->parse("/(?:)/u; class C { #x; m() { return this.#x; } }", 0, 0);	# its checker and the regular expressions
 	(src, rerr) := readsrc(Prelude);
@@ -191,8 +192,8 @@ pagescript(src, name: string): V
 
 timereport(): string
 {
-	return sys->sprint("time: prelude %d ms; %d scripts, %d characters: parse %d ms, compile %d ms, run %d ms; querySelector %d, %d ms; boxes %d, %d ms; computed styles %d, %d ms; %d tasks, busy %d ms, last ended at %d ms",
-		tprelude, nscripts, scriptchars, tparse, tcompile, trun, nselect, tselect, nbox, tbox, ncomputed, tcomputed, ntasks, tbusy, tlastbusy);
+	return sys->sprint("time: prelude %d ms; %d scripts, %d characters: parse %d ms, compile %d ms, run %d ms; lazy compiles %d, %d ms; querySelector %d, %d ms; boxes %d, %d ms; computed styles %d, %d ms; %d tasks, busy %d ms, last ended at %d ms",
+		tprelude, nscripts, scriptchars, tparse, tcompile, trun, nlazy, tlazy, nselect, tselect, nbox, tbox, ncomputed, tcomputed, ntasks, tbusy, tlastbusy);
 }
 
 strnil(s: string): V

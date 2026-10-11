@@ -476,7 +476,7 @@ newunit(src: string): ref Unit
 	u.src = ref Srcref(src, cururl);
 	u.binds = array[64] of ref Bind;
 	u.scopes = array[16] of ref Scope;
-	u.names = array[256] of list of ref Ment;
+	u.names = array[1024] of list of ref Ment;
 	u.start = nn;
 	return u;
 }
@@ -2847,26 +2847,38 @@ paramlength(params: array of ref Node): int
 # one scope, as a bundle's are) share it, its names registered once.
 lazyunit: ref Unit;
 lazyunitsc: ref Scope;
+nlazy, tlazy: int;	# how many were compiled, and in how long (a page's time report)
 
 compilelazy(c: ref Code)
+{
+	t0 := sys->millisec();
+	compilelazy1(c);
+	nlazy++;
+	tlazy += sys->millisec() - t0;
+}
+
+compilelazy1(c: ref Code)
 {
 	lz := c.lazy;
 	c.lazy = nil;
 	saved := cu;
 	u := lazyunit;
-	if(u == nil || lazyunitsc != lz.sc || u.src != lz.src) {
+	if(u == nil || u.src != lz.src) {
 		u = newunit(lz.src.s);
 		u.src = lz.src;
 		u.ismod = lz.ismod;
 		u.script = lz.script;
 		u.evalctx = lz.evalctx;
 		u.lexnames = lz.lexnames;
-		cu = u;
-		registerchain(lz.sc);
 		lazyunit = u;
-		lazyunitsc = lz.sc;
+		lazyunitsc = nil;
+		lazychain = nil;
 	}
 	cu = u;
+	if(lazyunitsc != lz.sc) {
+		rechain(lz.sc);
+		lazyunitsc = lz.sc;
+	}
 	cu.start = nn;
 	err: string;
 	{
@@ -2884,10 +2896,48 @@ compilelazy(c: ref Code)
 	"JScompile" =>
 		err = cu.err;
 		lazyunit = nil;	# its names half registered
+		lazychain = nil;
 	}
 	cu = saved;
 	if(err != nil)
 		throwerr(ESyntax, err);
+}
+
+# The scopes registered in lazyunit, innermost first.  Functions compiled
+# one after another are mostly in the same scopes: moving to another
+# function's scopes takes off those that are not its and adds those that are
+# missing, rather than registering every name around it again (a bundle's
+# outer scope can have thousands).
+lazychain: list of ref Scope;
+
+rechain(top: ref Scope)
+{
+	# the innermost scope of top's chain already registered
+	common: ref Scope;
+	for(sc := top; sc != nil && common == nil; sc = sc.up)
+		for(l := lazychain; l != nil; l = tl l)
+			if(hd l == sc) {
+				common = sc;
+				break;
+			}
+	# off: what is registered inside it, innermost first
+	while(lazychain != nil && hd lazychain != common) {
+		for(bl := (hd lazychain).binds; bl != nil; bl = tl bl) {
+			b := hd bl;
+			m := ment(b.name, 0);
+			if(m != nil && m.binds != nil && hd m.binds == b)
+				m.binds = tl m.binds;
+		}
+		lazychain = tl lazychain;
+	}
+	# on: top's scopes inside it, outermost first
+	add: list of ref Scope;
+	for(sc = top; sc != common; sc = sc.up)
+		add = sc :: add;
+	for(; add != nil; add = tl add) {
+		registerscope(hd add);
+		lazychain = hd add :: lazychain;
+	}
 }
 
 # the scopes around some code compiled on its own (eval code, a lazy function),
@@ -2897,28 +2947,31 @@ registerchain(top: ref Scope)
 	chain: list of ref Scope;
 	for(sc := top; sc != nil; sc = sc.up)
 		chain = sc :: chain;
-	for(; chain != nil; chain = tl chain) {
-		sc = hd chain;
-		for(l := revbinds(sc.binds); l != nil; l = tl l) {
-			b := hd l;
-			b.id = cu.nbind;
-			if(cu.nbind == len cu.binds) {
-				a := array[2 * cu.nbind] of ref Bind;
-				a[0:] = cu.binds;
-				cu.binds = a;
-			}
-			cu.binds[cu.nbind++] = b;
-			m := ment(b.name, 1);
-			m.binds = b :: m.binds;
+	for(; chain != nil; chain = tl chain)
+		registerscope(hd chain);
+}
+
+registerscope(sc: ref Scope)
+{
+	for(l := revbinds(sc.binds); l != nil; l = tl l) {
+		b := hd l;
+		b.id = cu.nbind;
+		if(cu.nbind == len cu.binds) {
+			a := array[2 * cu.nbind] of ref Bind;
+			a[0:] = cu.binds;
+			cu.binds = a;
 		}
-		sc.id = cu.nscope;
-		if(cu.nscope == len cu.scopes) {
-			a := array[2 * cu.nscope] of ref Scope;
-			a[0:] = cu.scopes;
-			cu.scopes = a;
-		}
-		cu.scopes[cu.nscope++] = sc;
+		cu.binds[cu.nbind++] = b;
+		m := ment(b.name, 1);
+		m.binds = b :: m.binds;
 	}
+	sc.id = cu.nscope;
+	if(cu.nscope == len cu.scopes) {
+		a := array[2 * cu.nscope] of ref Scope;
+		a[0:] = cu.scopes;
+		cu.scopes = a;
+	}
+	cu.scopes[cu.nscope++] = sc;
 }
 
 # a function's scope, parameters and body

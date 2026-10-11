@@ -488,13 +488,7 @@ protohasidx(o: ref Obj): int
 
 hasidxkey(p: ref Obj): int
 {
-	sh := p.sh;
-	for(i := 0; i < sh.n; i++) {
-		k := sh.keys[i];
-		if(k >= 0 && atomidx[k] != -1)
-			return 1;
-	}
-	return 0;
+	return p.sh.nidx > 0;
 }
 
 growelems(o: ref Obj, n: int)

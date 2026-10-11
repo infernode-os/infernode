@@ -101,6 +101,13 @@ All notable changes to InferNode are documented in this file.
 
 ### Xenith
 
+- **A document shown beside its text is set again on Put**, or when
+  its `doc/ctl` is written `refresh` (from the unsaved text, for
+  scripts), not at each edit. Each keystroke used to lay the page out
+  again from the file's committed text, which did not yet hold what was
+  being typed: the shown window flickered and kept the old text, and an
+  HTML page took half a second a key. The old drawing now stays until
+  the new one is ready.
 - **Finder opens files in Xenith.app**: Open With, or a file or folder
   dropped on its Dock icon, opens in the running Xenith or starts one,
   and a file dropped on Xenith's window opens in it on every host. The

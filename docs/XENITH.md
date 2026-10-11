@@ -198,9 +198,12 @@ it only to a file named (`Put /tmp/report.txt`), never over the PDF.
 `Render` sets the text, unsaved edits and all, as the document, and
 `Render` again goes back. The text is never changed: `Put` saves it,
 programs reading the body see it, and typing goes back to it. Each
-switch keeps your place in Markdown. For editing beside a live
-preview, `Zerox` the window and `Render` one of the two: it is set
-again as you edit in the other.
+switch keeps your place in Markdown. For editing beside the document,
+`Zerox` the window and `Render` one of the two: it is set again each
+time the file is `Put`, from either window, or when its `doc/ctl` is
+written `refresh` (from the unsaved text). It is not set again at each
+edit: a page is laid out again whole, which for HTML takes a good part
+of a second. The old drawing stays until the new one is ready.
 
 Markdown and Mermaid are set by `rlayout` (`appl/xenith/render/rlayout.b`),
 the one typesetter, which Lucifer's presentation view uses too:

@@ -174,7 +174,7 @@ newdoc(w: ref Window, k: ref Kind, name: string): ref Doc
 {
 	v := sheetview->new(k, name, evc);
 	setview(w, v);
-	d := ref Doc(v, 1, nil, -1);
+	d := ref Doc(v, 1, nil, -1, nil);
 	w.doc = d;
 	views = (v, w.id) :: views;
 	return d;
@@ -223,7 +223,7 @@ handle(e: ref Ev)
 			w = look->lookid((hd l).t1, 0);
 			break;
 		}
-	if(w == nil || w.col == nil || w.doc == nil || w.doc.v != e.v){
+	if(w == nil || w.col == nil || w.doc == nil || w.doc.v != e.v && w.doc.next != e.v){
 		# nothing to show it in
 		pick o := e {
 		Opened =>
@@ -233,6 +233,10 @@ handle(e: ref Ev)
 		return;
 	}
 	d := w.doc;
+	if(e.v == d.next){
+		nextevent(w, e);
+		return;
+	}
 	v := d.v;
 	setview(w, v);
 	note := v.handle(e);
@@ -267,6 +271,31 @@ handle(e: ref Ev)
 		warning(nil, sprint("%s: %s\n", v.name, n.err));
 	Redraw =>
 		draw(w);
+	}
+}
+
+# An event for the view setting the document again: shown in place of
+# the old one once it is open, dropped if it cannot be
+nextevent(w: ref Window, e: ref Ev)
+{
+	d := w.doc;
+	nv := d.next;
+	setview(w, nv);
+	note := nv.handle(e);
+	if(note == nil)
+		return;
+	pick n := note {
+	Opened =>
+		old := d.v;
+		d.v = nv;
+		d.next = nil;
+		dropview(old);
+		draw(w);
+		w.settag();
+	Failed =>
+		d.next = nil;
+		dropview(nv);
+		warning(nil, sprint("%s: %s\n", nv.name, n.err));
 	}
 }
 
@@ -379,13 +408,20 @@ drop(w: ref Window)
 	d := w.doc;
 	if(d == nil)
 		return;
-	d.v.close();
+	if(d.next != nil)
+		dropview(d.next);
+	dropview(d.v);
+	w.doc = nil;
+}
+
+dropview(v: ref View)
+{
+	v.close();
 	nv: list of (ref View, int);
 	for(l := views; l != nil; l = tl l)
-		if((hd l).t0 != d.v)
+		if((hd l).t0 != v)
 			nv = hd l :: nv;
 	views = nv;
-	w.doc = nil;
 }
 
 # The body's text frame drawn off screen, its tick gone
@@ -419,19 +455,32 @@ showframe(w: ref Window, org: int)
 }
 
 # A source document's text changed while shown: set again, in place
-textchanged(w: ref Window)
+# The document set again from the window's text, typing and all: not
+# at each edit (a page is laid out again whole), but when the file is
+# Put or doc/ctl says refresh.  A new view is opened beside the old,
+# which stays on the screen until the new one is open (nextevent).
+refresh(w: ref Window): string
 {
 	d := w.doc;
 	if(d == nil || !d.shown || d.v.web || d.v.kind == nil || d.v.kind.class != Docreg->Source)
-		return;
-	org := d.v.org;
-	scale := d.v.scale;
-	open(w, d.v.name, d.v.kind);
-	if(w.doc != nil){
-		w.doc.v.org = org;
-		w.doc.v.scale = scale;
-		w.doc.line = -1;
-	}
+		return "not a source document shown";
+	f := w.body.file;
+	for(i := 0; i < f.ntext; i++)
+		if(f.text[i].ncache > 0)
+			f.text[i].commit(TRUE);
+	if(d.next != nil)
+		dropview(d.next);
+	nv := sheetview->new(d.v.kind, d.v.name, evc);
+	setview(w, nv);
+	views = (nv, w.id) :: views;
+	d.next = nv;
+	data: array of byte;
+	if(nv.name == f.name)
+		data = array of byte bodytext(w);
+	nv.open(data, nv.name);
+	nv.org = d.v.org;
+	nv.scale = d.v.scale;
+	return nil;
 }
 
 # ---- drawing ----
@@ -755,6 +804,8 @@ ctlwrite(w: ref Window, s: string): string
 	"text" =>
 		if(d.shown)
 			hide(w);
+	"refresh" =>
+		return refresh(w);
 	* =>
 		(ok, err) := command(w, cmd, arg);
 		if(!ok)

@@ -43,8 +43,10 @@ Two kinds of file:
 
 - **Source documents** — Markdown, HTML, Mermaid. The body is the
   file's text, editable; Render shows the document or the text; Put
-  saves the text. The document is set again from the text when it
-  changes.
+  saves the text. A document shown is set again from the text when
+  the file is Put (from any window on it, a Zerox'd twin say) or
+  `doc/ctl` is written `refresh`, not at each edit; the old drawing
+  stays until the new one is open.
 - **Binary documents** — PDF, images. Always shown as the document.
   The body holds the document's text (extracted), read-only, so Look,
   search, Snarf and an agent reading `body` work as they do now; Put
@@ -173,7 +175,9 @@ for a window showing text):
 			column 1224 14000	(the column's size, at the scale)
 		write: commands, one a line —
 			sheet n | scale n | fit [page] | scroll dy |
-			render | text | the view's and the engine's commands
+			render | text | refresh (a source document set again
+			from the window's text, unsaved edits and all) |
+			the view's and the engine's commands
 	text	the document's text, read-only
 	links	one link a line: sheet x0 y0 x1 y1 url (scale 100)
 	find	write a string; read where it was found, one a line:

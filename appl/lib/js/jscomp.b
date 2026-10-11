@@ -1849,6 +1849,9 @@ lazycompile1(c: ref Code)
 			r.fnscope = l.fnscope;
 			r.inarrowof = 1;
 		}
+		# its parameters too: a function in a default value has a scope
+		# of its own to find (function rq(e, i = e => e) {...})
+		walklist1(nf.params, r);
 		walklist1(body, r);
 		func1tail(nf, fs, strict);
 		file := c.file;

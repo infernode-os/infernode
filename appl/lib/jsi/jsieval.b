@@ -2079,7 +2079,14 @@ globalinst(n: int)
 		if(s >= 0)
 			throwerr(ESyntax, "Identifier '" + hd vl + "' has already been declared");
 	}
+	# a function's name is a var name too
 	for(fl := inf.fns; fl != nil; fl = tl fl) {
+		(name, nil) := hd fl;
+		(s, nil) := glexfind(name);
+		if(s >= 0)
+			throwerr(ESyntax, "Identifier '" + name + "' has already been declared");
+	}
+	for(fl = inf.fns; fl != nil; fl = tl fl) {
 		(name, nil) := hd fl;
 		a := intern(name);
 		(found, nil, at) := getown(global, a);

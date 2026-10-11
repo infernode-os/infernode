@@ -586,6 +586,11 @@ small separate fix should profiles of Limbo programs justify it.
 `appl/lib/ecmascript`, the old interpreter, is retired: Jwin (Acme's and
 Xenith's scripted window) uses `Js->deffn` and `Js->callfn`.
 
+A second implementation of `module/js.m`, jsi (`appl/lib/jsi`, run by
+`js -I` and `t262 -I`), interprets a compiled tree and keeps its values
+in Limbo's heap; it is measured against this engine in
+[JSI-ENGINE.md](JSI-ENGINE.md) so that one of the two can be kept.
+
 The design is §9's: the engine's own heap, Dis and its JIT unchanged.
 The interpreter runs script-to-script calls in one loop without Limbo
 recursion; a thrown value is a Limbo exception unwound through each

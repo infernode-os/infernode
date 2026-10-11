@@ -126,6 +126,17 @@ by a proc of its own, and kept while it is in view or is the next the
 way the view last moved
 .RI ( dir );
 until it arrives, a painting at another scale is shown scaled.
+A flowing document at scale 100 is painted off
+.I dst
+into a band of the view and half a view above and below
+.RI ( band ,
+.IR bandr ):
+a scroll within it is a copy, and one past it paints only the strip it
+exposes.
+.I Result
+and anything that lays the document out again drop the band.
+The view is never filled before its sheets are drawn, only the gaps
+round them.
 .I Rotate
 turns the sheets by quarter turns: a sheet is turned once, as it is
 painted;

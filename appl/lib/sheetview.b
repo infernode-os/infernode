@@ -64,8 +64,10 @@ View.open(v: self ref View, data: array of byte, name: string)
 
 View.browse(v: self ref View, url: string): string
 {
-	if(v.h >= 0)
+	if(v.h >= 0){
+		unband(v);
 		return v.eng->command(v.h, "browse", url);
+	}
 	v.web = 1;
 	v.open(nil, url);
 	return nil;
@@ -123,6 +125,7 @@ View.close(v: self ref View)
 	v.h = -1;
 	v.gen = -1;
 	v.cache = nil;
+	unband(v);
 }
 
 View.handle(v: self ref View, e: ref Ev): ref Note
@@ -202,6 +205,7 @@ View.handle(v: self ref View, e: ref Ev): ref Note
 
 measure(v: ref View)
 {
+	unband(v);
 	n := v.eng->nsheets(v.h);
 	v.sizes = array[n] of Point;
 	for(i := 0; i < n; i++)
@@ -425,15 +429,29 @@ View.draw(v: self ref View)
 
 	oclip := dst.clipr;
 	dst.clipr = fr;
-	dst.draw(fr, bg, nil, Point(0, 0));
+	# the sheets, and round them the background: the view is never
+	# filled first, so it is not shown blank while a sheet is painted
+	y := fr.min.y;
 	for(n := v.sheetat(v.org.y); n < len v.sizes; n++){
 		sr := v.sheetrect(n);
 		if(sr.max.y <= fr.min.y)
 			continue;
 		if(sr.min.y >= fr.max.y)
 			break;
+		(vis, ok) := sr.clip(fr);
+		if(!ok)
+			continue;
+		if(vis.min.y > y)
+			dst.draw(Rect((fr.min.x, y), (fr.max.x, vis.min.y)), bg, nil, Point(0, 0));
+		if(vis.min.x > fr.min.x)
+			dst.draw(Rect((fr.min.x, vis.min.y), (vis.min.x, vis.max.y)), bg, nil, Point(0, 0));
+		if(vis.max.x < fr.max.x)
+			dst.draw(Rect((vis.max.x, vis.min.y), (fr.max.x, vis.max.y)), bg, nil, Point(0, 0));
 		paintsheet(v, n, sr, fr);
+		y = vis.max.y;
 	}
+	if(y < fr.max.y)
+		dst.draw(Rect((fr.min.x, y), fr.max), bg, nil, Point(0, 0));
 	marks(v);
 	dst.clipr = oclip;
 	requestpaint(v);
@@ -455,7 +473,10 @@ paintsheet(v: ref View, n: int, sr, fr: Rect)
 	dst := v.dst;
 	scalable := v.eng->scalable(v.h);
 	if(!scalable && v.scale == 100 && v.rot == 0){
-		# straight onto dst
+		# a flowing document from its band; anything else, or with no
+		# memory for one, straight onto dst
+		if(v.flowing() && banded(v, n, sr, vis))
+			return;
 		if(v.eng->paint(v.h, n, 100, dst, vis, vis.min.sub(sr.min)) != nil)
 			blank(dst, vis);
 		return;
@@ -497,6 +518,75 @@ paintsheet(v: ref View, n: int, sr, fr: Rect)
 		}
 	}
 	blank(dst, vis);
+}
+
+# The part vis of sheet n (at sr on dst) copied from the band, which is
+# moved first if it does not hold it: what the old band held is kept,
+# only the rest painted.  Painting a web page is laying it out again
+# box by box, so a scroll step paints a strip, not the view.
+banded(v: ref View, n: int, sr, vis: Rect): int
+{
+	want := vis.subpt(sr.min);
+	b := v.band;
+	br := v.bandr;
+	if(b != nil && v.bandn == n && br.min.x == want.min.x && br.max.x == want.max.x &&
+	   want.min.y >= br.min.y && want.max.y <= br.max.y){
+		v.dst.draw(vis, b, nil, want.min.sub(br.min));
+		return 1;
+	}
+	m := v.r.dy() / 2;
+	nr := Rect((want.min.x, want.min.y - m), (want.max.x, want.max.y + m));
+	if(nr.min.y < 0)
+		nr.min.y = 0;
+	if(nr.max.y > sr.dy())
+		nr.max.y = sr.dy();
+	if(nr.max.y < want.max.y)
+		nr.max.y = want.max.y;
+	sz := nr.size();
+	im := v.spare;
+	if(im == nil || !im.r.size().eq(sz))
+		im = v.dst.display.newimage(Rect((0, 0), sz), v.dst.chans, 0, Draw->White);
+	if(im == nil)
+		return 0;
+	# what the band has, where it goes in the new one
+	got := Rect((0, 0), (0, 0));
+	if(b != nil && v.bandn == n && br.min.x == nr.min.x && br.max.x == nr.max.x){
+		(o, ok) := nr.clip(br);
+		if(ok){
+			im.draw(o.subpt(nr.min), b, nil, o.min.sub(br.min));
+			got = o;
+		}
+	}
+	if(got.dy() <= 0){
+		if(!bandpaint(v, n, im, nr, nr))
+			return 0;
+	}else{
+		if(got.min.y > nr.min.y && !bandpaint(v, n, im, nr, Rect(nr.min, (nr.max.x, got.min.y))))
+			return 0;
+		if(got.max.y < nr.max.y && !bandpaint(v, n, im, nr, Rect((nr.min.x, got.max.y), nr.max)))
+			return 0;
+	}
+	v.spare = b;
+	v.band = im;
+	v.bandn = n;
+	v.bandr = nr;
+	v.dst.draw(vis, im, nil, want.min.sub(nr.min));
+	return 1;
+}
+
+# The part s of the sheet painted into the band im, which holds nr
+bandpaint(v: ref View, n: int, im: ref Image, nr, s: Rect): int
+{
+	r := s.subpt(nr.min);
+	im.draw(r, im.display.white, nil, Point(0, 0));
+	return v.eng->paint(v.h, n, 100, im, r, s.min) == nil;
+}
+
+# The band forgotten: what is painted has changed
+unband(v: ref View)
+{
+	v.band = nil;
+	v.spare = nil;
 }
 
 blank(dst: ref Image, r: Rect)
@@ -945,6 +1035,7 @@ View.at(v: self ref View, p: Point): (int, Point)
 # What an engine's click or key asks for
 View.result(v: self ref View, res: string): ref Note
 {
+	unband(v);	# the page has changed, or may have
 	(verb, rest) := split(res);
 	case verb {
 	"layout" =>
@@ -1081,8 +1172,10 @@ View.command(v: self ref View, cmd, arg: string): (int, string)
 		v.gotosheet(v.sheetat(v.org.y) - 1);
 	* =>
 		for(l := v.eng->commands(v.h); l != nil; l = tl l)
-			if(hd l == cmd)
+			if(hd l == cmd){
+				unband(v);
 				return (1, v.eng->command(v.h, cmd, arg));
+			}
 		return (0, nil);
 	}
 	return (1, nil);

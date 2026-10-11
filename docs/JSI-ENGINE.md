@@ -126,7 +126,7 @@ test262 (`t262 -r -I`, the same skip list as the other engine):
 | | appl/lib/js (JS-ENGINE.md §13) | jsi |
 |---|---|---|
 | `test/language` | 98.3% (18652 of 18968) | **99.7%** (18904 of 18962) |
-| `test/built-ins` | 99.1% (17623 of 17791) | BUILTINS |
+| `test/built-ins` | 99.1% (17623 of 17791) | **99.8%** (17760 of 17791) |
 
 What jsi fails, by kind:
 
@@ -138,7 +138,13 @@ What jsi fails, by kind:
   turn rather than in parallel, and the order of a cycle's errors.
 - **`$262.createRealm`** and Atomics: one realm per engine instance, no
   shared memory, as in the other engine (skipped there too).
-- **`String.prototype.normalize`** returns its string (both engines).
+- **Regular expressions** (16, in the shared `jsre`): the `v` flag's set
+  operations on properties of strings (`[\p{Emoji_Keycap_Sequence}--\d]`),
+  `\p{Script=Unknown}`, and `\P{Lu}` under an `i` modifier.
+- **`String.prototype.normalize`** returns its string, and
+  `localeCompare` compares code units (both engines).
+- Two `decodeURI` tests over every four-byte sequence exceed the
+  harness's 10 s under either engine (12 s here, 17 s there).
 - A few async generator corner cases (`yield*` with a throwing `value`
   getter), `arguments.callee.caller`.
 

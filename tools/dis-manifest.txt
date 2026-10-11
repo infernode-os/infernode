@@ -752,6 +752,12 @@ dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/jit_unload_test.dis
+dis/tests/js-spike/gctest.dis
+dis/tests/js-spike/loadtest.dis
+dis/tests/js-spike/spike.dis
+dis/tests/js-spike/spike2.dis
+dis/tests/js-spike/tiny.dis
+dis/tests/js-spike/valrep.dis
 dis/tests/js_engine_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis

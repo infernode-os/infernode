@@ -161,9 +161,9 @@ testShortScripts(t: ref T)
 	cmds := "abcdDgGhHilnNpPqrstwxy={}:!";
 	for(i := 0; i < len cmds; i++){
 		c := cmds[i:i+1];
+		if(c == "w" || c == "r")
+			continue;	# names a file (w/a writes /a): not this test's business
 		for(l := list of {c, c + "/", "1" + c, c + "/a"}; l != nil; l = tl l){
-			if(hd l == "w" || hd l == "1w" || hd l == "r" || hd l == "1r")
-				continue;	# names a file: not this test's business
 			(nil, how) := runsed(hd l :: nil, "abc\n");
 			t.assert(how == "ok" || how == "error",
 				sys->sprint("sed '%s' ended %s", hd l, how));

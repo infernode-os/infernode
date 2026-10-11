@@ -66,7 +66,7 @@ Run inside the Inferno emulator. All compiled to `dis/tests/*.dis`.
 |------|----------------|----------|
 | `luciuisrv_test` | All luciuisrv ctl commands: conversation, presentation, context, events | nothing (loads server in-process) |
 | `lucifer_flicker_test` | Lucia rendering regression | nothing |
-| `pres_launch_test` | Presentation zone launch and render | nothing |
+| `pres_launch_test` | exec refuses `/dis/wm/` GUI apps with a pointer to `launch` (the presentation zone is launch's job) | nothing |
 
 ### Networking / Crypto
 

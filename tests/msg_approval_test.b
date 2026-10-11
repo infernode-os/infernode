@@ -5,12 +5,13 @@ include "sys.m";
 include "draw.m";
 
 MsgApprovalTest: module {
-	init: fn(nil: ref Draw->Context, nil: list of string);
+	init: fn(nil: ref Draw->Context, args: list of string);
 };
 
 fail(s: string)
 {
 	sys->print("MSGAPPROVAL FAIL: %s\n", s);
+	raise "fail:msgapproval";
 }
 
 readfile(path: string): string
@@ -34,9 +35,13 @@ writefile(path, data: string): int
 	return sys->write(fd, b, len b);
 }
 
-init(nil: ref Draw->Context, nil: list of string)
+init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	# Run directly, it would write a draft into whatever is at
+	# /mnt/msg/draft, which with no msg9p there is a file in the host tree.
+	if(tl args == nil || hd tl args != "check")
+		raise "skip:helper for tests/inferno/msg_approval.sh, which runs it";
 	sys->remove("/tmp/veltro/sent/security-test");
 
 	request := "email\nsecurity-test\napproved body";

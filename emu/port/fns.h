@@ -92,6 +92,7 @@ ulong	getcallerpc(void*);
 ulong	getFPcontrol(void);
 ulong	getFPstatus(void);
 void		gkbdputc(Queue*, int);
+void		hostopen(char*);
 int		incref(Ref*);
 int		iprint(char*, ...);
 void		isdir(Chan*);

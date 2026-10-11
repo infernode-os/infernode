@@ -51,6 +51,7 @@ TARG=\
 	editor_test.dis\
 	example_test.dis\
 	factotum_test.dis\
+	factotum_grant_test.dis\
 	fdclose_test.dis\
 	memfs_test.dis\
 	font_format_test.dis\
@@ -61,6 +62,16 @@ TARG=\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	docengine_test.dis\
+	pdfrender.dis\
+	pdftext_test.dis\
+	sheetview_test.dis\
+	alt_nilchan_test.dis\
+	lock_stress_test.dis\
+	plan_test.dis\
+	rfc3339_test.dis\
+	spawn_exec_test.dis\
+	spawn_schedule_test.dis\
 	imap_test.dis\
 	jit_bounds_test.dis\
 	jit_fault_test.dis\
@@ -81,8 +92,10 @@ TARG=\
 	msg_approval_test.dis\
 	msg_badsrc.dis\
 	msg_capability_test.dis\
+	msg_inject_test.dis\
 	msg_notification_escape_test.dis\
 	msg_register_test.dis\
+	msg_triage_test.dis\
 	ninepsrc_config_test.dis\
 	lucifer_winstart_test.dis\
 	lucitheme_test.dis\
@@ -100,9 +113,9 @@ TARG=\
 	interrupt_test.dis\
 	concurrent_auth_test.dis\
 	handshake_fuzz_test.dis\
+	limbo_inline_test.dis\
 	refadt_zero_test.dis\
 	regex_test.dis\
-	render_registry_test.dis\
 	runner.dis\
 	sdl3_test.dis\
 	sed_test.dis\
@@ -194,6 +207,7 @@ TARG=\
 	ethrpc_conv_test.dis\
 	publicnet_host_test.dis\
 	wallet_policy_test.dis\
+	wallet9p_test.dis\
 	x402_test.dis\
 	wiki9p_security_probe.dis\
 	contacts_tool_test.dis\
@@ -259,7 +273,8 @@ SYSMODULES=\
 	pkcs.m\
 	readdir.m\
 	regex.m\
-	renderer.m\
+	docengine.m\
+	docreg.m\
 	security.m\
 	sh.m\
 	sort.m\
@@ -303,6 +318,3 @@ tool_schema_test.dis: tool_schema_test.b $ROOT/appl/veltro/agentlib.m $ROOT/appl
 pres_launch_test.dis: pres_launch_test.b $ROOT/module/nsconstruct.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw pres_launch_test.b
 
-# render_registry_test needs -I for appl/xenith/render.m
-render_registry_test.dis: render_registry_test.b $ROOT/appl/xenith/render.m
-	limbo -I$ROOT/module -I$ROOT/appl/xenith -gw render_registry_test.b

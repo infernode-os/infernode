@@ -5,11 +5,13 @@ load std
 path=(/dis .)
 mkdir /n >[2] /dev/null
 mount -ac {mntgen} /n
-auth/factotum &
+# A factotum service of its own: #sfactotum is one for the whole emulator,
+# and another test's factotum may still hold it.
+auth/factotum -s factotum.^${pid} &
 sleep 1
-/tests/wallet_capability_test.dis
+st=ok
+if {! /tests/wallet_capability_test.dis check} {st=failed}
 unmount /n/wallet > /dev/null >[2] /dev/null
 unmount /n > /dev/null >[2] /dev/null
-kill wallet9p Wallet9p Styx > /dev/null >[2] /dev/null
-kill factotum Factotum Factotum+Authio Mntgen Nametree > /dev/null >[2] /dev/null
+if {! ~ $st ok} {raise 'fail:wallet_capability'}
 echo WALLETCAP DONE

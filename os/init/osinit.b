@@ -1661,6 +1661,7 @@ wifisetup()
 #	class 0x000104
 #	pairable on
 #	discoverable on
+#	baud 3000000
 #
 # so what the board does with its radio is the card's decision and
 # nothing is assumed here: no file, no Bluetooth. Link keys live in

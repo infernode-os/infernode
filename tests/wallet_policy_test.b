@@ -20,6 +20,8 @@ include "sys.m";
 
 include "draw.m";
 
+include "sh.m";
+
 include "testing.m";
 	testing: Testing;
 	T: import testing;
@@ -27,11 +29,6 @@ include "testing.m";
 WalletPolicyTest: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
-};
-
-Command: module
-{
-	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
 SRCFILE: con "/tests/wallet_policy_test.b";
@@ -341,6 +338,28 @@ testNoSignOracle(t: ref T)
 	t.assert(ok < 0, "the raw sign file is not served");
 }
 
+# Start factotum (wallet9p keeps its keys there) and wallet9p.  Both are
+# started through Sh, not loaded as a Command: this module's type is
+# structurally the same as Command, so limbo gives the two one import
+# table, and the test functions passed by reference (run(name, testfn))
+# land in it; loading a command as a Command would fail to link.
+startserver(): string
+{
+	sh := load Sh Sh->PATH;
+	if(sh == nil)
+		return sys->sprint("cannot load sh: %r");
+	(ok, nil) := sys->stat("/mnt/factotum/rpc");
+	err: string;
+	# A factotum service of its own: #sfactotum is one for the whole
+	# emulator, and another test's factotum may still hold it.
+	fcmd := "/dis/auth/factotum.dis -s factotum." + string sys->pctl(0, nil);
+	if(ok < 0 && (err = sh->system(nil, fcmd)) != nil)
+		return "factotum: " + err;
+	if((err = sh->system(nil, "/dis/veltro/wallet9p.dis")) != nil)
+		return "wallet9p: " + err;
+	return nil;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -355,12 +374,18 @@ init(nil: ref Draw->Context, args: list of string)
 		if(hd a == "-v")
 			testing->verbose(1);
 
-	# wallet9p must already be mounted at /n/wallet (the host harness
-	# starts factotum and the server before running this).
+	# The host harness (tests/host/wallet9p_test.sh) starts factotum and
+	# wallet9p before running this.  Run on its own, as the test runner
+	# does, it starts them itself, in its own namespace.
 	(ok, nil) := sys->stat(W + "/accounts");
 	if(ok < 0) {
-		sys->fprint(sys->fildes(2), "wallet9p not mounted at %s\n", W);
-		raise "fail:no wallet9p";
+		if((err := startserver()) != nil)
+			raise "fail:" + err;
+		(ok, nil) = sys->stat(W + "/accounts");
+		if(ok < 0) {
+			sys->fprint(sys->fildes(2), "wallet9p not mounted at %s\n", W);
+			raise "fail:no wallet9p";
+		}
 	}
 
 	run("Account/Setup", testAccountSetup);

@@ -1020,6 +1020,10 @@ parsespecsection(section: string): (ref SubSpec, string)
 	return (spec, "");
 }
 
+# The longest wait sys->sleep takes: 2^31-1 ms, some 24.8 days.
+# Durations and at= times are refused beyond it, not wrapped.
+MAXMS: con 16r7FFFFFFF;
+
 # parseduration accepts ISO-8601-flavoured suffixes: <int><unit>
 # where unit is s, m, h, or d. Returns (milliseconds, error).
 # Examples: "30s" -> (30000, ""); "1h" -> (3600000, ""); "1d" -> (86400000, "").
@@ -1037,18 +1041,21 @@ parseduration(s: string): (int, string)
 	for(i := 0; i < len digits; i++)
 		if(digits[i] < '0' || digits[i] > '9')
 			return (0, "duration must be <int><unit>");
-	val := int digits;
-	if(val < 0)
-		return (0, "negative duration");
-	mult: int;
+	mult: big;
 	case unit {
-	's' => mult = 1000;
-	'm' => mult = 60 * 1000;
-	'h' => mult = 3600 * 1000;
-	'd' => mult = 86400 * 1000;
+	's' => mult = big 1000;
+	'm' => mult = big (60 * 1000);
+	'h' => mult = big (3600 * 1000);
+	'd' => mult = big (86400 * 1000);
 	*   => return (0, "unknown unit (use s/m/h/d)");
 	}
-	return (val * mult, "");
+	# in big: an int of milliseconds holds no more than MAXMS
+	if(len digits > 12)
+		return (0, "duration too long: at most 24 days");
+	ms := big digits * mult;
+	if(ms > big MAXMS)
+		return (0, "duration too long: at most 24 days");
+	return (int ms, "");
 }
 
 # parserfc3339delta wraps the shared appl/lib/rfc3339 parser to return
@@ -1066,7 +1073,10 @@ parserfc3339delta(s: string): (int, string)
 	now := daytime->now();
 	if(target <= now)
 		return (0, "target time is in the past");
-	return ((target - now) * 1000, "");
+	ms := (big target - big now) * big 1000;
+	if(ms > big MAXMS)
+		return (0, "target time is more than 24 days ahead");
+	return (int ms, "");
 }
 
 # Collector goroutine: reads result from pipe with a per-subagent timeout.

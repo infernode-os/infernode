@@ -1697,6 +1697,18 @@ sdl3_mainloop(void)
 				cleanexit(0);
 				break;
 
+			/*
+			 * A file dropped on the window, or, on macOS, opened
+			 * with the app (Finder's Open With, the Dock icon):
+			 * SDL's app delegate turns the open-document event
+			 * into this. The path goes to /dev/hostopen; what to
+			 * open it in is for the reader there.
+			 */
+			case SDL_EVENT_DROP_FILE:
+				if (event.drop.data != NULL)
+					hostopen((char*)event.drop.data);
+				break;
+
 			case SDL_EVENT_MOUSE_MOTION:
 				/* SDL event coords are in window logical points;
 				 * display_scale converts to pixels (1.0 on Android,

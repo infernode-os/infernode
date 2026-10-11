@@ -2482,6 +2482,17 @@ file of `ctl` lines written in order once the tree is served:
     class 0x000104
     pairable on
     discoverable on
+    baud 3000000
+
+`baud` after `up`: the controller answers at 115200 out of reset, and
+the patch keeps it there. At 115200 an L2CAP stream runs at about
+94 kbit/s, and the controller sits with its buffers full for as long
+as one lasts; at 3 Mbaud, as Linux runs it, about 1.1 Mbit/s. The
+PL011 then needs real flow control: its receive interrupt stops taking
+from the FIFO when the 8 KB stage is full, so RTS drops and the
+controller waits (`held(n)` in `/dev/eia0status`), where before the
+stage overflowed and the bytes were dropped (`berr(n)`, 852619 of them
+in one push before the fix).
 
 No file, no Bluetooth. The mount is made before the shell starts, so
 the console, the network console and the desktop all see `/net/bt`;

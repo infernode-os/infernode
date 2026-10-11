@@ -102,32 +102,66 @@ writefile(path: string, data: string): int
 
 include "sh.m";
 
-# Start wallet9p in background
-startserver()
+# Start factotum (wallet9p keeps its keys there) and wallet9p, each in
+# this test's own namespace.  Both are started through Sh, not loaded as a
+# Command: this module's type is structurally the same as Command (one init
+# of the same type), so limbo gives the two one import table, and the test
+# functions this module passes by reference (run(name, testfn)) land in it.
+# Loading a command as a Command here would demand testChain and the rest
+# of it, and fail to link.
+startserver(): string
 {
-	spawn runsrv();
-	sys->sleep(1500);	# wait for mount
+	sh := load Sh Sh->PATH;
+	if(sh == nil)
+		return sys->sprint("cannot load sh: %r");
+	(ok, nil) := sys->stat("/mnt/factotum/rpc");
+	err: string;
+	# A factotum service of its own: #sfactotum is one for the whole
+	# emulator, and another test's factotum may still hold it.
+	fcmd := "/dis/auth/factotum.dis -s factotum." + string sys->pctl(0, nil);
+	if(ok < 0 && (err = sh->system(nil, fcmd)) != nil)
+		return "factotum: " + err;
+	if((err = sh->system(nil, "/dis/veltro/wallet9p.dis")) != nil)
+		return "wallet9p: " + err;
+	return nil;
 }
 
-runsrv()
+# Write then read on one fd: wallet9p's results belong to the fid that
+# wrote the request, and another open sees none of them.
+transact(path, data: string): (int, string)
 {
-	mod := load Command "/dis/veltro/wallet9p.dis";
-	if(mod == nil) {
-		sys->fprint(sys->fildes(2), "cannot load wallet9p: %r\n");
-		return;
-	}
-	mod->init(nil, "wallet9p" :: nil);
+	fd := sys->open(path, Sys->ORDWR);
+	if(fd == nil)
+		return (-1, nil);
+	b := array of byte data;
+	n := sys->write(fd, b, len b);
+	if(n <= 0)
+		return (n, nil);
+	sys->seek(fd, big 0, Sys->SEEKSTART);
+	buf := array[8192] of byte;
+	r := sys->read(fd, buf, len buf);
+	if(r <= 0)
+		return (n, "");
+	return (n, string buf[0:r]);
 }
+
+strip(s: string): string
+{
+	while(len s > 0 && (s[len s-1] == '\n' || s[len s-1] == ' '))
+		s = s[0:len s-1];
+	return s;
+}
+
+# The address of private key 1
+ADDR1: con "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
 
 #
 # Test: mount exists
 #
 testMount(t: ref T)
 {
-	s := readfile("/n/wallet/accounts");
-	# Initially empty, but the file should exist
-	t.assert(s != nil || s == "", "accounts file readable");
-	t.log("accounts: '" + s + "'");
+	(ok, nil) := sys->stat("/n/wallet/accounts");
+	t.assert(ok >= 0, "accounts file served");
 }
 
 #
@@ -136,38 +170,36 @@ testMount(t: ref T)
 testImportAndAddress(t: ref T)
 {
 	# Import private key = 1
-	n := writefile("/n/wallet/new", "import eth ethereum testkey 0000000000000000000000000000000000000000000000000000000000000001");
+	(n, name) := transact("/n/wallet/new", "import eth ethereum testkey 0000000000000000000000000000000000000000000000000000000000000001");
 	t.assert(n > 0, "write to new succeeded");
+	t.log("new account: '" + strip(name) + "'");
+	t.assertseq(strip(name), "testkey", "new names the account made");
 
-	# Read back the account name
-	name := readfile("/n/wallet/new");
-	t.log("new account: '" + name + "'");
-
-	# Read address
-	addr := readfile("/n/wallet/testkey/address");
-	t.assert(addr != nil, "address readable");
+	addr := strip(readfile("/n/wallet/testkey/address"));
 	t.log("address: " + addr);
+	t.assertseq(addr, ADDR1, "address derived for private key 1");
+
+	accts := readfile("/n/wallet/accounts");
+	t.assert(accts != nil && contains(accts, "testkey"), "accounts lists the account");
 }
 
 #
-# Test: sign a hash and recover
+# Test: there is no raw signing oracle.  The sign file, which signed any
+# hash written to it, was taken out deliberately: whoever could write it
+# could sign anything, bypassing the payment policy.  Payments are
+# proposed through pay and authorize instead (tests/wallet_policy_test.b).
 #
 testSign(t: ref T)
 {
+	(ok, nil) := sys->stat("/n/wallet/testkey/sign");
+	t.assert(ok < 0, "the raw sign file is not served");
+
 	# Hash to sign (keccak256 of "test")
 	msg := array of byte "test";
 	hash := array[32] of byte;
 	kr->keccak256(msg, len msg, hash);
-	hexhash := ethcrypto->hexencode(hash);
-
-	# Write hash to sign file
-	n := writefile("/n/wallet/testkey/sign", hexhash);
-	t.assert(n > 0, "write to sign succeeded");
-
-	# Read signature
-	sig := readfile("/n/wallet/testkey/sign");
-	t.assert(sig != nil && len sig > 0, "signature readable");
-	t.log("signature: " + sig);
+	n := writefile("/n/wallet/testkey/sign", ethcrypto->hexencode(hash));
+	t.assert(n < 0, "a hash cannot be signed through the file system");
 }
 
 #
@@ -175,9 +207,19 @@ testSign(t: ref T)
 #
 testChain(t: ref T)
 {
-	chain := readfile("/n/wallet/testkey/chain");
-	t.assert(chain != nil, "chain readable");
+	chain := strip(readfile("/n/wallet/testkey/chain"));
 	t.log("chain: " + chain);
+	t.assertseq(chain, "ethereum", "chain is the one the account was made on");
+}
+
+contains(s, sub: string): int
+{
+	if(len sub > len s)
+		return 0;
+	for(i := 0; i + len sub <= len s; i++)
+		if(s[i:i+len sub] == sub)
+			return 1;
+	return 0;
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -204,8 +246,9 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 	}
 
-	# Start wallet9p
-	startserver();
+	# Start factotum and wallet9p
+	if((err := startserver()) != nil)
+		raise "fail:" + err;
 
 	run("Mount", testMount);
 	run("ImportAndAddress", testImportAndAddress);

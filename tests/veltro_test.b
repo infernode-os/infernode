@@ -328,12 +328,18 @@ testSpawnExecValid(t: ref T)
 	}
 
 	# Check if /tool is mounted (spawn needs it for tool validation)
-	fd := sys->open("/tool/tools", Sys->OREAD);
-	if(fd == nil) {
+	if(!toolsmounted()) {
 		t.skip("/tool not mounted - run with tools9p");
 		return;
 	}
-	fd = nil;
+
+	# The child is an LLM agent: without an LLM server there is nothing
+	# to run it (CI has none).  A bare mount point is not one.
+	(lok, nil) := sys->stat("/mnt/llm/new");
+	if(lok < 0) {
+		t.skip("no LLM at /mnt/llm - spawn needs a live model");
+		return;
+	}
 
 	# Test spawning with list tool to list a known directory.
 	# Format: [globals] -- tools=<t> paths=<p> :: <task>
@@ -366,18 +372,27 @@ testSpawnExecInvalidTool(t: ref T)
 	}
 
 	# Check if /tool is mounted
-	fd := sys->open("/tool/tools", Sys->OREAD);
-	if(fd == nil) {
+	if(!toolsmounted()) {
 		t.skip("/tool not mounted - run with tools9p");
 		return;
 	}
-	fd = nil;
 
 	# Try to grant a tool that doesn't exist
 	result := tool->exec("tools=nonexistenttool -- do something");
 
 	# Should return error about not having the tool
 	t.assert(hassubstr(result, "error:"), "should error for invalid tool");
+}
+
+# tools9p is mounted at /tool: its tools file lists at least one tool.
+# An empty /tool/tools is a leftover file on a bare mount point, not tools9p.
+toolsmounted(): int
+{
+	fd := sys->open("/tool/tools", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[64] of byte;
+	return sys->read(fd, buf, len buf) > 0;
 }
 
 # Truncate result for logging

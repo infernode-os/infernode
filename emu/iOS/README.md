@@ -121,11 +121,12 @@ runner, proving the app-target + libemu + bundled-root mechanics.
   stage `dis/ tests/ lib/` under `<App>.app/root`, ad-hoc sign, install
   and `--verify` (launch + assert `hello_test` passes). No signing
   identity needed for the simulator.
-* **Gotcha gated:** the installed-bundle path (~180 chars) overflows
-  emu's `rootdir` buffer (`MAXROOT = 5*KNAMELEN = 140`), so the app
+* **Gotcha gated:** the installed-bundle path (~180 chars) overflowed
+  emu's `rootdir` buffer (`MAXROOT` was `5*KNAMELEN = 140`), so the app
   `chdir()`s into the bundle root and passes `-r .` (devfs-posix
-  resolves relative to the CWD). A future general fix would bump
-  `MAXROOT` in `emu/port/dat.h`.
+  resolves relative to the CWD). `MAXROOT` is now 1024 and a root too
+  long for it is refused rather than cut short
+  (`tests/host/emu_root_test.sh`); the `chdir` is kept, and harmless.
 
 **B1 — SDL3 GUI (Lucia). DONE (simulator).** `./build-ios-app.sh --gui`
 builds a GUI `libemu` (GUIBACK=sdl3) linking the iOS SDL3 static lib

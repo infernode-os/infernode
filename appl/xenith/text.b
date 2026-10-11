@@ -21,6 +21,7 @@ exec : Exec;
 lookx : Look;
 complete: Complete;
 asyncio: Asyncio;
+docview : Docview;
 
 Dir, sprint : import sys;
 dirname : import lookx;
@@ -128,6 +129,7 @@ init(mods : ref Dat->Mods)
 	exec = mods.exec;
 	lookx = mods.look;
 	asyncio = mods.asyncio;
+	docview = mods.docview;
 
 	complete = load Complete Complete->PATH;
 	if(complete != nil)
@@ -555,8 +557,8 @@ Text.insert(t : self ref Text, q0 : int, r : string, n : int, tofile : int, echo
 	}
 	# a window showing the text as a document (Render) shows the
 	# edit made in another window on the file
-	if(t.what == Body && t.w != nil && t.w.docview)
-		t.w.docrender();
+	if(t.what == Body && t.w != nil && docview->shown(t.w))
+		docview->textchanged(t.w);
 	if(t.w != nil){
 		c = 'i';
 		if(t.what == Body)
@@ -655,8 +657,8 @@ Text.delete(t : self ref Text, q0 : int, q1 : int, tofile : int)
 		frdelete(t.frame, p0, p1);
 		t.fill();
 	}
-	if(t.what == Body && t.w != nil && t.w.docview)
-		t.w.docrender();
+	if(t.what == Body && t.w != nil && docview->shown(t.w))
+		docview->textchanged(t.w);
 	if(t.w != nil){
 		c = 'd';
 		if(t.what == Body)
@@ -809,30 +811,15 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 
 	if(alphabet != ALPHA_LATIN)
 		r = transc(r, alphabet);
-	# A rendered document scrolls; anything else goes back to its text
-	if(t.what == Body && t.w != nil && t.w.docview){
-		h := t.frame.r.dy();
-		case(r){
-		Dat->Kscrolldown or Keyboard->Down =>
-			t.w.docscroll(t.frame.font.height * 3);
+	# A document scrolls, a page browsed takes keys in a form field,
+	# a binary document's text is not typed into; anything else goes
+	# back to the text (docview(2))
+	if(t.what == Body && t.w != nil && t.w.doc != nil){
+		if(docview->shown(t.w)){
+			if(docview->key(t.w, r))
+				return;
+		}else if(docview->readonly(t.w) && !isscroll(r))
 			return;
-		Dat->Kscrollup or Keyboard->Up =>
-			t.w.docscroll(-t.frame.font.height * 3);
-			return;
-		Keyboard->Pgdown =>
-			t.w.docscroll(h - t.frame.font.height);
-			return;
-		Keyboard->Pgup =>
-			t.w.docscroll(-(h - t.frame.font.height));
-			return;
-		Keyboard->Home =>
-			t.w.docscroll(-(1<<30));
-			return;
-		Keyboard->End =>
-			t.w.docscroll(1<<30);
-			return;
-		}
-		t.w.docoff();
 	}
 	if (echomode == EM_RAW && t.what == Body) {
 		if (t.w != nil) {
@@ -1701,4 +1688,16 @@ Text.reset(t : self ref Text)
 	t.q1 = 0;
 	t.file.reset();
 	t.file.buf.reset();
+}
+
+# A key that moves about the text without changing it
+isscroll(r : int) : int
+{
+	case r {
+	Dat->Kscrollup or Dat->Kscrolldown or Keyboard->Up or Keyboard->Down or
+	Keyboard->Left or Keyboard->Right or Keyboard->Pgup or Keyboard->Pgdown or
+	Keyboard->Home or Keyboard->End =>
+		return 1;
+	}
+	return 0;
 }

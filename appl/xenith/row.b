@@ -17,6 +17,7 @@ windowm : Windowm;
 columnm : Columnm;
 exec : Exec;
 look : Look;
+docview : Docview;
 edit : Edit;
 ecmd : Editcmd;
 
@@ -56,6 +57,7 @@ init(mods : ref Dat->Mods)
 	columnm = mods.columnm;
 	exec = mods.exec;
 	look = mods.look;
+	docview = mods.docview;
 	edit = mods.edit;
 	ecmd = mods.editcmd;
 }
@@ -330,10 +332,7 @@ Row.typex(row : self ref Row, r : int, p : Point) : ref Text
 			t.typex(r, 0);
 		else{
 			w.lock('K');
-			if(t.what == Textm->Body && w.docweb && w.webfield != 0)
-				w.webkey(r);	# a form field on the page has the keyboard
-			else
-				w.typex(t, r);
+			w.typex(t, r);
 # TAG If we typed in the tag, might need to make it
 # bigger to show text.  \n causes tag to expand.
 			if(t.what == Tag){
@@ -447,9 +446,11 @@ Row.dump(row : self ref Row, file : string)
 				}else if(len a == 0){	# don't save unnamed windows 
 					continue;
 				}else if((!w.dirty && utils->access(a)==0) || w.isdir ||
-				    (w.rendermode && !w.docview && utils->access(a)==0)){
-					# (a formatted view's text is the formatter's,
-					# not the file's: Load reads the file again)
+				    (w.rendermode && utils->access(a)==0) ||
+				    (docview->readonly(w) && !w.doc.v.web && utils->access(a)==0)){
+					# (a formatted view's text is the formatter's, a
+					# PDF's or an image's the document's, not the
+					# file's: Load reads the file again)
 					dumped = FALSE;
 					t.file.dumpid = w.id;
 					b.puts(sprint("f%11d %11d %11d %11d %11d %s\n", i, w.id,
@@ -682,14 +683,13 @@ Row.loadx(row : self ref Row, file : string, initing : int)
 				r = l[5*12:len l];
 				nr = len r;
 				ns = -1;
-				for(n=0; n<nr; n++){
-					if(r[n] == '/')
-						ns = n;
-					if(r[n] == ' ')
-						break;
-				}
+				name : string;
+				(name, n) = look->tagname(r);
+				for(m := 0; m < len name; m++)
+					if(name[m] == '/')
+						ns = m;
 				if(dumpid == 0)
-					w.setname(r, n);
+					w.setname(name, len name);
 				for(; n<nr; n++)
 					if(r[n] == '|')
 						break;

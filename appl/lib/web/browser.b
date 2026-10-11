@@ -41,20 +41,22 @@ init(d: ref Draw->Display): string
 	draw = load Draw Draw->PATH;
 	dom = load Dom Dom->PATH;
 	style = load Style Style->PATH;
-	layout = load Layout Layout->PATH;
 	page = load Page Page->PATH;
 	css = load Css Css->PATH;
 	html = load Html Html->PATH;
-	if(dom == nil || style == nil || layout == nil || page == nil || css == nil || html == nil)
+	if(dom == nil || style == nil || page == nil || css == nil || html == nil)
 		return sys->sprint("cannot load modules: %r");
 	realmlk = chan[1] of int;
 	html->init();
 	css->init();
 	if((err := style->init()) != nil)
 		return err;
-	if((err = layout->init(d)) != nil)
+	if((err = page->init(d)) != nil)
 		return err;
-	return page->init(d);
+	# page's own: a Layout of our own would know nothing of where page
+	# put things (sticky boxes as last painted, for a click)
+	layout = page->layoutmod();
+	return nil;
 }
 
 Session.new(width, height: int): ref Session

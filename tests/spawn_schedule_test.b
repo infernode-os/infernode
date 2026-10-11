@@ -65,6 +65,10 @@ run(name: string, testfn: ref fn(t: ref T))
 # Helpers (DUPLICATED FROM spawn.b — keep in sync)
 # ============================================================================
 
+# The longest wait sys->sleep takes: 2^31-1 ms, some 24.8 days.
+# Durations and at= times are refused beyond it, not wrapped.
+MAXMS: con 16r7FFFFFFF;
+
 parseduration(s: string): (int, string)
 {
 	if(s == "")
@@ -77,18 +81,21 @@ parseduration(s: string): (int, string)
 	for(i := 0; i < len digits; i++)
 		if(digits[i] < '0' || digits[i] > '9')
 			return (0, "duration must be <int><unit>");
-	val := int digits;
-	if(val < 0)
-		return (0, "negative duration");
-	mult: int;
+	mult: big;
 	case unit {
-	's' => mult = 1000;
-	'm' => mult = 60 * 1000;
-	'h' => mult = 3600 * 1000;
-	'd' => mult = 86400 * 1000;
+	's' => mult = big 1000;
+	'm' => mult = big (60 * 1000);
+	'h' => mult = big (3600 * 1000);
+	'd' => mult = big (86400 * 1000);
 	*   => return (0, "unknown unit (use s/m/h/d)");
 	}
-	return (val * mult, "");
+	# in big: an int of milliseconds holds no more than MAXMS
+	if(len digits > 12)
+		return (0, "duration too long: at most 24 days");
+	ms := big digits * mult;
+	if(ms > big MAXMS)
+		return (0, "duration too long: at most 24 days");
+	return (int ms, "");
 }
 
 # parserfc3339delta is the same wrapper spawn.b uses: rfc3339->parse,
@@ -103,7 +110,10 @@ parserfc3339delta(s: string): (int, string)
 	now := daytime->now();
 	if(target <= now)
 		return (0, "target time is in the past");
-	return ((target - now) * 1000, "");
+	ms := (big target - big now) * big 1000;
+	if(ms > big MAXMS)
+		return (0, "target time is more than 24 days ahead");
+	return (int ms, "");
 }
 
 # ============================================================================
@@ -179,11 +189,24 @@ testDurationZero(t: ref T)
 # lives in tests/rfc3339_test.b.
 # ============================================================================
 
-testDeltaFuture(t: ref T)
+# Further ahead than an int of milliseconds reaches: refused, where the
+# delta once wrapped (negative on arm64, so a schedule of nothing)
+testDeltaTooFar(t: ref T)
 {
 	(ms, err) := parserfc3339delta("2030-01-01T00:00:00Z");
-	t.assertseq(err, "", "future timestamp parses");
-	t.assert(ms > 0, "delta is positive");
+	t.assertseq(err, "target time is more than 24 days ahead", "2030 is refused");
+	t.asserteq(ms, 0, "no delta");
+}
+
+testDurationTooLong(t: ref T)
+{
+	(ms, err) := parseduration("24d");
+	t.assertseq(err, "", "24d parses");
+	t.asserteq(ms, 24*86400000, "24d -> ms");
+	(nil, err) = parseduration("30d");
+	t.assertseq(err, "duration too long: at most 24 days", "30d is refused");
+	(nil, err) = parseduration("99999999999999s");
+	t.assertseq(err, "duration too long: at most 24 days", "a huge count is refused");
 }
 
 testDeltaPast(t: ref T)
@@ -251,9 +274,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DurationNoUnit",      testDurationNoUnit);
 	run("DurationNonDigit",    testDurationNonDigit);
 	run("DurationZero",        testDurationZero);
+	run("DurationTooLong",     testDurationTooLong);
 
 	# parserfc3339delta: 3 cases (wrapper policy only)
-	run("DeltaFuture",         testDeltaFuture);
+	run("DeltaTooFar",         testDeltaTooFar);
 	run("DeltaPast",           testDeltaPast);
 	run("DeltaSoonInFuture",   testDeltaSoonInFuture);
 

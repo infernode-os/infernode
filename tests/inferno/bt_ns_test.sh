@@ -40,18 +40,17 @@ if {! ftest -f $MNT/chan/btmock} {
 	raise 'fail:btmock did not serve its file'
 }
 
-# factotum, for the pairing keys: the one already running if there is
-# one, else our own at a mount point of our own.
-FACT=/mnt/factotum
-if {! ftest -f $FACT/ctl} {
-	if {! ftest -f /dis/auth/factotum.dis} {
-		raise 'skip:no factotum'
-	}
-	FACT=$MNT/factotum
-	mkdir -p $FACT
-	auth/factotum -m $FACT
-	sleep 1
+# factotum, for the pairing keys: our own, at a mount point of our own
+# and under a srv name of its own (#sfactotum is one name for the whole
+# emulator).  Not one that seems to be running: a plain file left at
+# /mnt/factotum/ctl looks like one, and the link key would go nowhere.
+if {! ftest -f /dis/auth/factotum.dis} {
+	raise 'skip:no factotum'
 }
+FACT=$MNT/factotum
+mkdir -p $FACT
+auth/factotum -s factotum.bt_ns -m $FACT
+sleep 1
 if {! ftest -f $FACT/ctl} {
 	raise 'fail:factotum did not start'
 }
@@ -197,7 +196,10 @@ if {! ~ $"scan *aa:bb:cc:dd:ee:ff*0x000104*-80*-*} {
 }
 
 # An LE scan: one line per device heard, address type, RSSI, the
-# name from its advertising data; EOF when the scan time is up.
+# name from its advertising data; EOF when the scan time is up.  The
+# mock advertises on its tick, so a second was not always time enough
+# to hear all eight on a slow runner (interpreted, on CI's macOS).
+echo scan 3 > $BT/ctl
 le=`{cat $BT/lescan}
 n=`{cat $BT/lescan | wc -l}
 if {! ~ $"n 8} {

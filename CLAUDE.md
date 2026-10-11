@@ -413,20 +413,25 @@ timeoutTask(ch: chan of int, ms: int)
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
 | `wpa_test.b` | WPA2 key derivation (RFC 6070, 802.11i, RFC 3394) + the four-way handshake |
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
-| `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection |
+| `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection; a chain deeper than destroy() recurses is freed whole |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
 | `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
 | `fractals_zoombox_test.b` | wm/fractals' own canvas bindings, driven by a synthetic button-1 drag: the zoom rubber-band grows from the press point and is painted |
 | `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler |
 | `jit_bounds_test.b` | Negative and overlarge indices on arrays, strings and slices raise `array bounds error` from compiled code; `tests/host/jit_bounds_test.sh` runs it under `-c0` and `-c1` |
 | `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
+| `limbo_inline_test.b` | Code the compiler inlines: an inlined call's temporary argument outlives the use of its element; `v = f(v)` reads the old `v` |
 | `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
 | `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
 | `hostplumb_test.b` | hostplumb(1) re-plumbing host messages under `/n/local`; the plumber refusing a message nothing can receive |
 | `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |
 | `tests/host/xenith_agent_test.sh` | The `Agent` window in a headless Xenith: a message sent, the reply shown |
-| `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, Xenith's image renderer not claiming text that begins like an image |
+| `imgload_test.b` | The shared image loader (`module/imgload.m`): format detection from the data and the name, every format decoded from `tests/imgload/` fixtures with its pixels checked, the document registry not taking text that begins like an image for one |
+| `docengine_test.b` | The document registry and engines (`module/docreg.m`, `module/docengine.m`): kinds by name and magic, no engine loaded until a document of its kind is opened (and Markdown never loading Charon), each engine's sheets, painting and text, a PDF sharp at scale 200, a PDF's words where they are drawn, Markdown's words and links, documents kept apart |
+| `sheetview_test.b` | The document view (`module/sheetview.m`) on an image of its own: a PDF of three pages opened through the view's events, fitted, painted, paged, zoomed, searched, turned (points mapped back to the page), its place kept on a resize, the way it last moved |
+| `tests/host/page_test.sh` | `wm/page` under `wm/wm`, driven by keys: the page shown written as an image on page 1, page 2 and page 2 turned (wider than tall) |
+| `tests/host/xenith_doc_test.sh` | A window's document through its files (`doc/`): a PDF shown as a document (read-only body, Put refused, zoom, fit, sheet, Render, Get, find), a window open on it as text shown, Markdown set by Render, an image |
 | `tests/host/plumbrules_test.sh` | `lib/sh/plumbrules`: the user's plumbing rules read before the defaults (a user rule overrides, the defaults take the rest); `load` replaces them; a rules file that does not parse is refused at load and left out at start |
 | `tests/host/charon_accept_test.sh` | What Charon's engine sends as Accept: an image fetch `image/webp` first, as browsers do, so image CDNs send WebP; a page or style sheet fetch none |
 | `tests/host/presentation_fileopen_test.sh` | Lucifer's plumbed file-opens: by type into the presentation view, a web URL into Charon (a second one to the running Charon), the Tasks tab with and without a plumber |
@@ -435,10 +440,11 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |
 | `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool) |
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
+| `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 
-Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). They need the SDL GUI emulator and skip on a headless build.
+Xenith's 9P interface is tested inside a headless Xenith: `tests/host/xenith_inside.sh` runs a `tests/inferno/` script where it can see `/mnt/xenith` (`xenith_acme_files_test.sh`: the window files from canonical Acme; `xenith_edit_test.sh`: addresses, regular expressions and the sam command language, through `addr`, `xdata` and `edit`; `xenith_event_test.sh`: the event protocol, both ways; `xenith_image_test.sh`: images opened by a look; `xenith_blankname_test.sh`: a file name with a blank in it, quoted in the tag and Put to the right file; `xenith_browse_test.sh`: browsing, with `XENITH_INSIDE_NET=1` for the network). They need the SDL GUI emulator and skip on a headless build.
 
 ## Project Structure
 

@@ -398,6 +398,8 @@ dis/lib/oldauth.dis
 dis/lib/outlinefont.dis
 dis/lib/parseman.dis
 dis/lib/pdf.dis
+dis/lib/pdfenc.dis
+dis/lib/sheetview.dis
 dis/lib/plumbing.dis
 dis/lib/plumbmsg.dis
 dis/lib/pngload.dis
@@ -714,12 +716,14 @@ dis/tests/dhcp_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
 dis/tests/diswrite_test.dis
+dis/tests/docengine_test.dis
 dis/tests/edit_test.dis
 dis/tests/editor_test.dis
 dis/tests/ethcrypto_test.dis
 dis/tests/ethrpc_conv_test.dis
 dis/tests/example_test.dis
 dis/tests/exception_test.dis
+dis/tests/factotum_grant_test.dis
 dis/tests/factotum_test.dis
 dis/tests/fdclose_test.dis
 dis/tests/fltfmt_test.dis
@@ -753,6 +757,7 @@ dis/tests/kbddrainer_test.dis
 dis/tests/keyring_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/l2cap_test.dis
+dis/tests/limbo_inline_test.dis
 dis/tests/lists_test.dis
 dis/tests/llmclient_reqshape_test.dis
 dis/tests/llmclient_sse_fallback_test.dis
@@ -780,8 +785,10 @@ dis/tests/mlkem_test.dis
 dis/tests/msg_approval_test.dis
 dis/tests/msg_badsrc.dis
 dis/tests/msg_capability_test.dis
+dis/tests/msg_inject_test.dis
 dis/tests/msg_notification_escape_test.dis
 dis/tests/msg_register_test.dis
+dis/tests/msg_triage_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/opus_test.dis
 dis/tests/originfs_test.dis
@@ -789,6 +796,9 @@ dis/tests/outlinefont_test.dis
 dis/tests/pathmanage_test.dis
 dis/tests/pdf_conformance_test.dis
 dis/tests/pdf_test.dis
+dis/tests/pdfrender.dis
+dis/tests/pdftext_test.dis
+dis/tests/sheetview_test.dis
 dis/tests/pqauth_test.dis
 dis/tests/pqc_fuzz_test.dis
 dis/tests/pres_launch_test.dis
@@ -798,7 +808,6 @@ dis/tests/readjpg_test.dis
 dis/tests/readwebp_test.dis
 dis/tests/refadt_zero_test.dis
 dis/tests/regex_test.dis
-dis/tests/render_registry_test.dis
 dis/tests/rfcomm_test.dis
 dis/tests/rlayout_test.dis
 dis/tests/runner.dis
@@ -859,6 +868,7 @@ dis/tests/veltro_security_test.dis
 dis/tests/veltro_test.dis
 dis/tests/veltro_tools_test.dis
 dis/tests/voice_scripts_test.dis
+dis/tests/wallet9p_test.dis
 dis/tests/wallet_capability_test.dis
 dis/tests/wallet_policy_test.dis
 dis/tests/web_browser_test.dis
@@ -999,6 +1009,7 @@ dis/wm/shell.dis
 dis/wm/task.dis
 dis/wm/tetris.dis
 dis/wm/view.dis
+dis/wm/page.dis
 dis/wm/wallet.dis
 dis/wm/wm.dis
 dis/wmexport.dis
@@ -1011,6 +1022,13 @@ dis/xenith/buff.dis
 dis/xenith/col.dis
 dis/xenith/dat.dis
 dis/xenith/disk.dis
+dis/xenith/doc/imgdoc.dis
+dis/xenith/doc/mddoc.dis
+dis/xenith/doc/mmddoc.dis
+dis/xenith/doc/pdfdoc.dis
+dis/xenith/doc/webdoc.dis
+dis/xenith/docreg.dis
+dis/xenith/docview.dis
 dis/xenith/ecmd.dis
 dis/xenith/edit.dis
 dis/xenith/elog.dis
@@ -1023,16 +1041,10 @@ dis/xenith/graph.dis
 dis/xenith/gui.dis
 dis/xenith/look.dis
 dis/xenith/regx.dis
-dis/xenith/render.dis
 dis/xenith/render/htmldoc.dis
 dis/xenith/render/htmlfmt.dis
-dis/xenith/render/imgrender.dis
-dis/xenith/render/mdrender.dis
-dis/xenith/render/mermaidrender.dis
-dis/xenith/render/pdfrender.dis
 dis/xenith/render/rlayout.dis
 dis/xenith/render/tlayout.dis
-dis/xenith/render/webrender.dis
 dis/xenith/row.dis
 dis/xenith/scrl.dis
 dis/xenith/styxaux.dis
@@ -1069,3 +1081,9 @@ xenith/dis/rect.dis
 xenith/dis/spout.dis
 xenith/dis/win.dis
 xenith/dis/winm.dis
+dis/tests/alt_nilchan_test.dis
+dis/tests/lock_stress_test.dis
+dis/tests/plan_test.dis
+dis/tests/rfc3339_test.dis
+dis/tests/spawn_exec_test.dis
+dis/tests/spawn_schedule_test.dis

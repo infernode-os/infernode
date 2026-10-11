@@ -3,13 +3,17 @@
 # wm/charon -h: Charon with no window, only its files.  The page is
 # read and a form filled in and submitted through them, as a script or
 # an agent would; the rendering (image) needs a draw device, and is
-# checked unless the caller sets nodraw=1 (a headless emu).
+# checked unless there is none (#i has no frame buffer) or the caller
+# sets nodraw=1.
 #
 # tests/host/charon_headless_test.sh runs this.
 
 load std
 
 P=/tmp/charon_headless_test
+if {! ftest -d '#i'} {
+	nodraw=1
+}
 PAGE=file:///tests/xenith/html/search.html
 failed=0
 

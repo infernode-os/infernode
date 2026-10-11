@@ -1590,13 +1590,16 @@ verifyNsWorker(result: chan of string)
 
 	# Seed representative privileged control files before restriction. The
 	# shared verifier must prove restriction hides real pre-existing controls,
-	# not just paths absent from the test namespace.
-	mkdirp("/tool");
+	# not just paths absent from the test namespace.  They are made in a
+	# scratch tree bound before the root, in this worker's namespace only:
+	# made in place they were files in the host tree (the emulator's root),
+	# left there for later tests to take for mounted servers.
+	if((err := scratchroot("/tool" :: "/mnt/toolctl" :: "/mnt/msg" :: nil)) != nil) {
+		result <-= err;
+		return;
+	}
 	createfile("/tool/ctl");
-	mkdirp("/mnt");
-	mkdirp("/mnt/toolctl");
 	createfile("/mnt/toolctl/ctl");
-	mkdirp("/mnt/msg");
 	createfile("/mnt/msg/status");
 	createfile("/mnt/msg/ctl");
 	createfile("/mnt/msg/pending");
@@ -1610,7 +1613,7 @@ verifyNsWorker(result: chan of string)
 		nil, 0, 0, -1, nil
 	, nil);
 
-	err := nsconstruct->restrictns(caps);
+	err = nsconstruct->restrictns(caps);
 	if(err != nil) {
 		result <-= sys->sprint("restrictns failed: %s", err);
 		return;
@@ -1963,7 +1966,10 @@ toolCtlHiddenWorker(result: chan of string)
 
 	# Build a synthetic /tool tree so restrictns() can exercise its allowlist
 	# behavior without requiring a running tools9p instance.
-	mkdirp("/tool");
+	if((serr := scratchroot("/tool" :: nil)) != nil) {
+		result <-= serr;
+		return;
+	}
 	createfile("/tool/tools");
 	createfile("/tool/grantable");
 	createfile("/tool/help");
@@ -2275,7 +2281,10 @@ safeGrantPathOne(path: string, result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 
-	mkdirp("/mnt/msg");
+	if((serr := scratchroot("/mnt/msg" :: nil)) != nil) {
+		result <-= serr;
+		return;
+	}
 	createfile("/mnt/msg/status");
 	createfile("/mnt/msg/draft");
 	mkdirp("/tmp/veltro/scratch");
@@ -2363,7 +2372,31 @@ testStagedWriteOverlay(t: ref T)
 
 testDirectWriteManifest(t: ref T)
 {
-	mkdirp("/mnt/msg");
+	done := chan of string;
+	spawn directwritemanifest(t, done);
+	if((err := <-done) != nil)
+		t.error(err);
+}
+
+directwritemanifest(t: ref T, done: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	{
+		directwritemanifest1(t);
+	} exception e {
+	"*" =>
+		done <-= "exception: " + e;
+		return;
+	}
+	done <-= nil;
+}
+
+directwritemanifest1(t: ref T)
+{
+	if((err := scratchroot("/mnt/msg" :: nil)) != nil) {
+		t.error(err);
+		return;
+	}
 	writefilecontent("/mnt/msg/draft", "");
 	manifest := "/tmp/veltro/.ns/test-manifest-direct";
 	sys->remove(manifest);
@@ -2405,6 +2438,21 @@ mkdirp(path: string)
 }
 
 # Create an empty file
+# A scratch tree, with dirs made in it, bound before the root of the
+# calling process's namespace (which must be its own): fixtures made in
+# it are not files in the host tree, the emulator's root, left behind
+# for later tests to take for mounted servers.  The result is nil, or
+# why it could not be.
+scratchroot(dirs: list of string): string
+{
+	fix := sys->sprint("/tmp/veltro_security.%d", sys->pctl(0, nil));
+	for(; dirs != nil; dirs = tl dirs)
+		mkdirp(fix + hd dirs);
+	if(sys->bind(fix, "/", Sys->MBEFORE|Sys->MCREATE) < 0)
+		return sys->sprint("bind %s before /: %r", fix);
+	return nil;
+}
+
 createfile(path: string)
 {
 	fd := sys->create(path, Sys->OWRITE, 8r644);

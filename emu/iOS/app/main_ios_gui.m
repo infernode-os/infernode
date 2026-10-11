@@ -13,7 +13,7 @@
  *
  * Boots -c0 (no JIT) against the Inferno root bundled at <App>.app/root,
  * via the mobile boot script the Android port introduced. chdir + "-r ."
- * dodges the MAXROOT(140) rootdir-buffer overflow (see main_ios.m).
+ * dodged the old MAXROOT(140) rootdir-buffer overflow (see main_ios.m).
  */
 
 #import <Foundation/Foundation.h>
@@ -171,8 +171,9 @@ main(int argc, char *argv[])
 		umask(0);
 
 		char *root = prepare_writable_root();
-		/* chdir + "-r ." dodges emu's MAXROOT(140) rootdir overflow on
-		 * the long container path; devfs-posix resolves relative to CWD. */
+		/* chdir + "-r ." dodged emu's old MAXROOT(140) rootdir overflow
+		 * on the long container path; devfs-posix resolves relative to
+		 * CWD. */
 		if (chdir(root) != 0)
 			fprintf(stderr, "InferNode: chdir(%s) failed\n", root);
 

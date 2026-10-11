@@ -52,7 +52,7 @@ enum
 {
 	NERR		= 32,
 	KNAMELEN	= 28,
-	MAXROOT		= 5*KNAMELEN, 	/* Maximum root pathname len of devfs-* */
+	MAXROOT		= 1024, 	/* Maximum root pathname len of devfs-* (a host path) */
 	NUMSIZE		= 11,
 	PRINTSIZE	= 256,
 	READSTR		= 1000		/* temporary buffer size for device reads */

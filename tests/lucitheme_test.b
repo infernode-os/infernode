@@ -328,8 +328,12 @@ testWatch(t: ref T)
 
 watchprobe(pidc: chan of int, res: chan of string)
 {
-	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	# watch reads the current name before it returns: only then may the
+	# test change it, or the watcher may start from the new name and see
+	# no change (it did, on a slow CI runner)
 	c := lucitheme->watch();
+	pidc <-= pid;
 	res <-= <-c;
 	<-chan of int;	# stay, so the group can be killed by this pid
 }

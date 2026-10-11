@@ -276,20 +276,33 @@ freeheap(Heap *h, int swept)
 		freeptrs(H2D(void*, h), t);
 }
 
-void
-destroy(void *v)
+/*
+ * A block whose count reaches zero more than DDEPTH frees deep is
+ * not freed by recursion (that would grow the C stack without bound
+ * along a long list or chain).  It used to be abandoned, count zero,
+ * for the mark-and-sweep collector, which a busy VM may not run for
+ * a long time; dropping one deep structure then held all of it
+ * past the first DDEPTH levels.  It is queued here instead and the
+ * outermost destroy frees the queue, each entry again recursing at
+ * most DDEPTH deep.  The queue is drained before destroy returns,
+ * so the collector (which runs only between instructions) never
+ * sees a queued block.  If the queue cannot grow, the block is
+ * abandoned to the collector as before.
+ */
+enum
 {
-	Heap *h;
+	DDEPTH = 64,
+};
+
+static	Heap**	dq;
+static	int	ndq;
+static	int	dqlen;
+static	int	ddepth;
+
+static void
+destroyh(Heap *h)
+{
 	Type *t;
-
-	if(v == H)
-		return;
-
-	h = D2H(v);
-	{ Bhdr *b; D2B(b, h); }		/* consistency check */
-
-	if(--h->ref > 0 || gchalt > 64) 	/* Protect 'C' thread stack */
-		return;
 
 	if(heapmonitor != nil)
 		heapmonitor(1, h, 0);
@@ -301,6 +314,41 @@ destroy(void *v)
 		freetype(t);
 	}
 	poolfree(heapmem, h);
+}
+
+void
+destroy(void *v)
+{
+	Heap *h, **ndqp;
+
+	if(v == H)
+		return;
+
+	h = D2H(v);
+	{ Bhdr *b; D2B(b, h); }		/* consistency check */
+
+	if(--h->ref > 0)
+		return;
+
+	if(ddepth >= DDEPTH) {	/* Protect 'C' thread stack */
+		if(ndq == dqlen) {
+			ndqp = realloc(dq, (dqlen+256)*sizeof(Heap*));
+			if(ndqp == nil)
+				return;		/* the collector will find it */
+			dq = ndqp;
+			dqlen += 256;
+		}
+		dq[ndq++] = h;
+		return;
+	}
+
+	ddepth++;
+	destroyh(h);
+	if(ddepth == 1) {
+		while(ndq > 0)
+			destroyh(dq[--ndq]);
+	}
+	ddepth--;
 }
 
 Type*

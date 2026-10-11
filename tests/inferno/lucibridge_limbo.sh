@@ -2,22 +2,23 @@
 # End-to-end orchestrator → /tool/limbo → devstral test (headless).
 #
 # Drives a full Veltro session (luciuisrv + lucibridge + tools9p)
-# against the configured remote serve-llm to verify that:
+# against a remote serve-llm to verify that:
 #   1. /mnt/llm 9P mount succeeds (multi-client serve-llm fix)
 #   2. tools9p loads the limbo tool from the registry
-#   3. lucibridge picks up the user's .infernode overlay so it
-#      doesn't trip the first-run LLM-setup wizard
+#   3. lucibridge reads the remote configuration in /lib/ndb/llm so
+#      it doesn't trip the first-run LLM-setup wizard
 #   4. The orchestrator (whatever model serve-llm is configured for —
 #      typically gpt-oss/low) dispatches /tool/limbo when asked for
 #      Limbo authoring rather than attempting it itself
 #   5. The limbo tool successfully calls devstral-limbo-v3 via a
 #      private /mnt/llm session and returns Limbo source
 #
-# Run with the Veltro/luciuisrv/lucibridge/tools9p stack already built
-# into the host runtime tree (e.g. an InferNode dev bundle):
+# It needs a live serve-llm, which CI does not have, so it runs only
+# when given one, as its argument; with none (as the test runner calls
+# it) it skips.  The LLM configuration lucibridge reads is the test's
+# own, written below from that argument, never the user's ~/.infernode:
 #
-#   emu -c1 -r/tmp/InferNode-dev.app/Contents/Resources \
-#       sh /tests/inferno/lucibridge_limbo.sh
+#   emu -c1 -r$PWD sh /tests/inferno/lucibridge_limbo.sh 'tcp!host!5640'
 #
 # Caller greps the output for:
 #   "lucibridge: llm: STOP:tool_use"  followed by  "TOOL:....:limbo:..."
@@ -28,49 +29,28 @@
 #       → assistant returned Limbo source to user
 
 load std
-# Environmental skip-guard (INFR-312): this end-to-end test needs a full
-# InferNode runtime — an mntgen-backed /n, a trfs host overlay, and a
-# live serve-llm. On a bare host there is no /n mountpoint, so this first
-# mntgen mount fails and the trfs/overlay setup below would abort. Wrap
-# it in `if {! ...}` so the failure is caught as status and we skip
-# cleanly instead of reporting a false failure.
-if {! mount -ac {mntgen} /n} {
-	raise 'skip:no /n namespace (mntgen) — needs a full InferNode runtime/dev-bundle'
+if {~ $#* 0} {
+	raise 'skip:needs a live serve-llm: sh /tests/inferno/lucibridge_limbo.sh <dial>'
 }
+llmdial=$1
+
 bind -a '#I' /net
 ndb/cs
 
-echo TRFS
-trfs '#U*' /n/local
-ghome=/n/local/^`{echo 'echo $HOME' | os sh}
-infhome=$ghome^/.infernode
-echo HOME $ghome
-echo INFHOME $infhome
-
-# Bind the user's .infernode overlay over /lib/ndb so lucibridge
-# sees the configured remote-9P dial address. Without this, the
-# bundle's default /lib/ndb/llm says backend=api with no key, and
-# lucibridge trips its first-run setup wizard which consumes the
-# next user message as a "setup choice" instead of a real prompt.
-if {ftest -d $infhome/lib/ndb} {
-	echo BINDING_NDB_OVERLAY
-	bind -bc $infhome/lib/ndb /lib/ndb
-}
+# lucibridge's LLM configuration, the test's own: /lib/ndb/llm says
+# remote at $llmdial, so lucibridge does not trip its first-run setup
+# wizard (which would take the prompt below as a setup choice).
+cfg=/tmp/lucibridge_limbo/ndb
+mkdir -p $cfg
+echo 'mode=remote' > $cfg/llm
+echo 'dial='^$llmdial >> $cfg/llm
+bind -bc $cfg /lib/ndb
 echo LIB_NDB_LLM:
 cat /lib/ndb/llm
 
-llmdial=`{sed -n 's/^dial=//p' /lib/ndb/llm}
-if {~ $llmdial ''} {
-	llmdial=tcp!10.243.169.78!5640
-}
 echo MOUNTING $llmdial
-# Environmental skip-guard (INFR-312): this end-to-end test needs a live
-# serve-llm reachable at $llmdial. On a bare host the dial is refused;
-# the mount runs inside `if {! ...}` so its failure is caught as status
-# rather than aborting the script, and the orchestrator→/tool/limbo→
-# devstral flow below is skipped cleanly instead of reported as a failure.
 if {! mount -A $llmdial /mnt/llm} {
-	raise 'skip:no serve-llm reachable at '^$llmdial^' (configure .infernode overlay / start serve-llm)'
+	raise 'fail:cannot mount serve-llm at '^$llmdial
 }
 
 echo START_TOOLS9P

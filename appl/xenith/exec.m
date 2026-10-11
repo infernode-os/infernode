@@ -13,6 +13,9 @@ Exec : module {
 
 	getarg : fn(t : ref Textm->Text, m : int, n : int) : (string, string, int);
 	execute : fn(t : ref Textm->Text, aq0, aq1, external : int, argt : ref Textm->Text);
+	# s executed as a word button 2 chose in t's window: a built-in, a
+	# document's command, or a command run (a word on a document's drawing)
+	executeword : fn(t : ref Textm->Text, s : string);
 	run : fn(w : ref Windowm->Window, s : string, rdir : string, ndir : int, newns : int, argaddr : string, arg : string, ise: int);
 	undo: fn(t: ref Textm->Text, flag: int);
 	putfile: fn(f: ref Filem->File, q0: int, q1: int, r: string);

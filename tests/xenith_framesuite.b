@@ -33,6 +33,9 @@ include "sys.m";
 	sprint: import sys;
 
 include "draw.m";
+include "docengine.m";
+include "docreg.m";
+include "sheetview.m";
 	drawm: Draw;
 	Point, Rect, Image, Font, Chans: import drawm;
 
@@ -68,11 +71,10 @@ include "../appl/xenith/ecmd.m";
 include "../appl/xenith/styxaux.m";
 include "imagefile.m";
 include "imgload.m";
-include "renderer.m";
-include "../appl/xenith/render.m";
 include "formatter.m";
 include "../appl/xenith/format.m";
 include "../appl/xenith/asyncio.m";
+include "../appl/xenith/docview.m";
 
 	Frame: import Framem;
 

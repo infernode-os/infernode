@@ -28,6 +28,23 @@ Push-Location $ROOT
 # paths in committed source).
 $repoRoot = Resolve-Path "$ROOT\..\.."
 
+# The launchers' version (Explorer's Properties > Details) is the
+# release's: include/version.h names it ("InferNode 0.6.0 build ..."; the
+# release stamps it with its tag, a source checkout says 0.1).  It is
+# written to launcher-version.h, which both resource scripts include.
+$verLine = Get-Content (Join-Path $repoRoot "include\version.h") | Select-String 'InferNode (\d+(\.\d+){0,3})' | Select-Object -First 1
+if (-not $verLine) {
+    Write-Host "ERROR: no version in include\version.h" -ForegroundColor Red
+    exit 1
+}
+$verStr = $verLine.Matches[0].Groups[1].Value
+$verNum = @($verStr.Split('.') + @('0', '0', '0', '0'))[0..3] -join ','
+Set-Content -Path "$ROOT\launcher-version.h" -Encoding ascii -Value @(
+    "#define LVERNUM $verNum",
+    "#define LVERSTR `"$verStr`""
+)
+Write-Host "Launcher version: $verStr ($verNum)"
+
 function Build-Launcher([string]$exe, [string]$rc, [string]$ico, [string]$define) {
     $iconSrc = Join-Path $repoRoot "Nt\$ico"
     if (-not (Test-Path $iconSrc)) {
@@ -63,5 +80,7 @@ function Build-Launcher([string]$exe, [string]$rc, [string]$ico, [string]$define
 
 Build-Launcher "InferNode.exe" "infernode-launcher.rc" "Infernode.ico" ""
 Build-Launcher "Xenith.exe" "xenith-launcher.rc" "Xenith.ico" "XENITH"
+
+Remove-Item "$ROOT\launcher-version.h" -ErrorAction SilentlyContinue
 
 Pop-Location

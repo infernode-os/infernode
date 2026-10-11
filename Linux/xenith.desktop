@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Xenith
+GenericName=Text Editor
+Comment=InferNode's text environment, on its own
+Exec=xenith %F
+Icon=xenith
+Terminal=false
+Categories=Development;TextEditor;
+MimeType=text/plain;
+Keywords=acme;editor;inferno;limbo;

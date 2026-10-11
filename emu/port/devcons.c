@@ -16,6 +16,7 @@ enum
 	Qcons,
 	Qconsctl,
 	Qdrivers,
+	Qhostopen,
 	Qhostowner,
 	Qhoststdin,
 	Qhoststdout,
@@ -41,6 +42,7 @@ Dirtab contab[] =
 	"cons",		{Qcons},	0,	0666,
 	"consctl",	{Qconsctl},	0,	0222,
 	"drivers",	{Qdrivers},	0,	0444,
+	"hostopen",	{Qhostopen},	0,	0444,
 	"hostowner",	{Qhostowner},	0,	0644,
 	"hoststdin",	{Qhoststdin},	0,	0444,
 	"hoststdout",	{Qhoststdout},	0,	0222,
@@ -65,6 +67,7 @@ char*	gkscanid;		/* name of raw scan format (if defined) */
 Queue*	gkbdq;			/* Graphics keyboard unprocessed input */
 Queue*	kbdq;			/* Console window unprocessed keyboard input */
 Queue*	lineq;			/* processed console input */
+Queue*	hostopenq;		/* host paths the host asked us to open */
 
 char	*ossysname;
 
@@ -172,7 +175,30 @@ consinit(void)
 	gkbdq = qopen(512, 0, nil, nil);
 	if(gkbdq == 0)
 		panic("no memory");
+	hostopenq = qopen(16*1024, Qmsg, nil, nil);
+	if(hostopenq == 0)
+		panic("no memory");
 	randominit();
+}
+
+/*
+ *  a file the host asked us to open (a document opened with the app,
+ *  a file dropped on the window), from any thread: one host path per
+ *  read of /dev/hostopen; what to do with it is for the reader to say.
+ *  Dropped, not blocked on, when nothing has read for a while.
+ */
+void
+hostopen(char *path)
+{
+	char buf[4096];
+	int n;
+
+	n = strlen(path);
+	if(n == 0 || n >= sizeof buf)
+		return;
+	memmove(buf, path, n);
+	buf[n++] = '\n';
+	qproduce(hostopenq, buf, n);
 }
 
 /*
@@ -421,6 +447,9 @@ consread(Chan *c, void *va, long n, vlong offset)
 
 	case Qkeyboard:
 		return qread(gkbdq, va, n);
+
+	case Qhostopen:
+		return qread(hostopenq, va, n);
 
 	case Qkprint:
 		rlock(&kprintq.l);

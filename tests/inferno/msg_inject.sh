@@ -16,5 +16,7 @@ echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl
 sleep 1
 /dis/veltro/msgwatch.dis -a 0 >[2] /dev/null &
 sleep 2
-/tests/msg_inject_test.dis msgreader
+st=ok
+if {! /tests/msg_inject_test.dis msgreader} {st=failed}
+if {! ~ $st ok} {raise 'fail:msg_inject'}
 echo MSGINJECT DONE

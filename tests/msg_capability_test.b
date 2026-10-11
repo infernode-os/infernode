@@ -22,13 +22,16 @@ MsgCapTest: module {
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
-	nsc = load NsConstruct NsConstruct->PATH;
-	if(nsc == nil) { sys->print("MSGCAP: FAIL load nsconstruct\n"); return; }
-	nsc->init();
-
-	mode := "draft";
+	mode := "";
 	if(tl args != nil)
 		mode = hd tl args;
+	if(mode != "draft" && mode != "send" && mode != "flag")
+		raise "skip:helper for tests/inferno/msg_capability.sh, which runs it";
+
+	nsc = load NsConstruct NsConstruct->PATH;
+	if(nsc == nil)
+		fail(sys->sprint("cannot load nsconstruct: %r"));
+	nsc->init();
 
 	paths: list of string;
 	if(mode == "send")
@@ -41,7 +44,8 @@ init(nil: ref Draw->Context, args: list of string)
 	caps := ref NsConstruct->Capabilities("read" :: nil, paths, nil, nil, nil, nil, 0, 0, -1, nil, nil);
 	sys->pctl(Sys->FORKNS, nil);
 	err := nsc->restrictns(caps);
-	if(err != nil) { sys->print("MSGCAP %s: restrictns err: %s\n", mode, err); return; }
+	if(err != nil)
+		fail(sys->sprint("%s: restrictns err: %s", mode, err));
 
 	(sok, nil) := sys->stat("/mnt/msg/status");
 	(draftok, nil) := sys->stat("/mnt/msg/draft");

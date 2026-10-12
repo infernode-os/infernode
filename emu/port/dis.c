@@ -204,15 +204,36 @@ delprog(Prog *p, char *msg)
 {
 	Osenv *o;
 	Prog **ph;
+	Pgrp *pg;
+	Fgrp *fg;
+	Egrp *eg;
+	Skeyset *sg;
 
 	tellsomeone(p, msg);	/* call before being removed from prog list */
 
+	/*
+	 * The groups are taken from the Osenv while the VM is held, and
+	 * closed after it is released: the prog stays on the list until
+	 * below, and devprog, holding the VM, reads them (its fd and ns
+	 * files, its open's permission check, the ns file's rlock).  Freed
+	 * under it, they were read and written after free -- a pool's
+	 * block headers zeroed or overwritten, the fault turning up later
+	 * in an unrelated free, killing a prog as it exited.
+	 */
 	o = p->osenv;
+	pg = o->pgrp;
+	fg = o->fgrp;
+	eg = o->egrp;
+	sg = o->sigs;
+	o->pgrp = nil;
+	o->fgrp = nil;
+	o->egrp = nil;
+	o->sigs = nil;
 	release();
-	closepgrp(o->pgrp);
-	closefgrp(o->fgrp);
-	closeegrp(o->egrp);
-	closesigs(o->sigs);
+	closepgrp(pg);
+	closefgrp(fg);
+	closeegrp(eg);
+	closesigs(sg);
 	acquire();
 
 	delgrp(p);

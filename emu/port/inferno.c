@@ -912,9 +912,6 @@ Sys_pctl(void *fp)
 		closeegrp(oe);
 	}
 
-	if(f->flags & Sys_NEWPGRP)
-		newgrp(p);
-
 	if(f->flags & Sys_NODEVS)
 		o->pgrp->nodevs = 1;
 
@@ -922,6 +919,22 @@ Sys_pctl(void *fp)
 
 	if(vmreleased)
 		acquire();
+
+	/*
+	 * With the VM: the groups' lists are the VM's, changed by spawn,
+	 * exit and kill on other threads.  newgrp with the VM released (as
+	 * pctl(NEWPGRP|FORKNS, ...) had it, a common pairing) raced them,
+	 * and a list could keep a Prog that had exited and been freed: the
+	 * next spawn into that group wrote into freed memory.
+	 */
+	if(f->flags & Sys_NEWPGRP){
+		if(waserror()){
+			*f->ret = -1;
+			return;
+		}
+		newgrp(p);
+		poperror();
+	}
 
 	*f->ret = p->pid;
 }

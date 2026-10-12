@@ -70,6 +70,7 @@ TARG=\
 	spawn_schedule_test.dis\
 	imap_test.dis\
 	jit_bounds_test.dis\
+	jit_real_test.dis\
 	jit_fault_test.dis\
 	jit_unload_helper.dis\
 	jit_unload_test.dis\

@@ -1223,6 +1223,163 @@ cbrab(Inst *i, int jmp)
 }
 
 /*
+ * REALs in SSE2.  These all went to the interpreter (punt), the
+ * conversions too, so a program doing arithmetic in reals -- every
+ * number in the JavaScript engine is one -- left compiled code at every
+ * operation: the same JavaScript ran ten to twenty times slower here than
+ * under comp-arm64.c, which compiles them.  Each takes its operands by
+ * address (RAX the source, RCX the middle), XMM0 and XMM1 the working
+ * registers, and gives what the interpreter's (xec.c) gives, NaN and the
+ * signed zeros included.
+ */
+
+/* op xmm, [rm]: rm a low register other than RSP and RBP */
+static void
+ssemem(int prefix, int w, int op, int x, int rm)
+{
+	genb(prefix);
+	if(w)
+		genb(REXW);
+	gen2(0x0f, op);
+	genb((0<<6)|((x&7)<<3)|(rm&7));
+}
+
+/* op x, r: register to register (x the ModRM reg field, r its r/m) */
+static void
+sserr(int prefix, int w, int op, int x, int r)
+{
+	genb(prefix);
+	if(w)
+		genb(REXW);
+	gen2(0x0f, op);
+	genb((3<<6)|((x&7)<<3)|(r&7));
+}
+
+enum
+{
+	Smovsd	= 0x10,	/* F2: movsd xmm, m64 */
+	Smovsdst	= 0x11,	/* F2: movsd m64, xmm */
+	Saddsd	= 0x58,
+	Smulsd	= 0x59,
+	Ssubsd	= 0x5c,
+	Sdivsd	= 0x5e,
+	Scvtsi2sd	= 0x2a,	/* F2 REX.W: from a 64-bit integer */
+	Scvttsd2si	= 0x2c,	/* F2 REX.W: to a 64-bit integer, truncated */
+	Sucomisd	= 0x2e,	/* 66 */
+	Smovq	= 0x6e,	/* 66 REX.W: movq xmm, r64 */
+};
+
+/* a REAL operand cannot be an immediate: those go to the interpreter as before */
+static int
+realops(Inst *i)
+{
+	return UXSRC(i->add) != SRC(AIMM) && UXDST(i->add) != DST(AIMM) && (i->add&ARM) != AXIMM;
+}
+
+/* F(d) = F(m) op F(s) */
+static void
+arithf(Inst *i, int op)
+{
+	opwld(i, Olea, RAX);
+	mid(i, Olea, RCX);
+	ssemem(0xf2, 0, Smovsd, 0, RCX);
+	ssemem(0xf2, 0, op, 0, RAX);
+	opwst(i, Olea, RAX);
+	ssemem(0xf2, 0, Smovsdst, 0, RAX);
+}
+
+/*
+ * if(F(s) op F(m)) goto d.  ucomisd sets ZF, PF and CF all for an
+ * unordered pair (a NaN), so > and >= (ja, jae) are false for one, as in
+ * C; < and <= are those with the operands swapped; == wants ZF without
+ * PF, and != is true when unordered.
+ */
+static void
+cbraf(Inst *i, int op)
+{
+	uvlong dst;
+	int a, b, jcc;
+
+	if(RESCHED)
+		schedcheck(i);
+	opwld(i, Olea, RAX);	/* s */
+	mid(i, Olea, RCX);	/* m */
+	a = RAX;
+	b = RCX;
+	jcc = Ojal;
+	switch(op) {
+	case IBGTF:
+		break;
+	case IBGEF:
+		jcc = Ojael;
+		break;
+	case IBLTF:
+		a = RCX;
+		b = RAX;
+		break;
+	case IBLEF:
+		a = RCX;
+		b = RAX;
+		jcc = Ojael;
+		break;
+	}
+	ssemem(0xf2, 0, Smovsd, 0, a);
+	ssemem(0x66, 0, Sucomisd, 0, b);
+	dst = patch[i->d.ins-mod->prog];
+	switch(op) {
+	case IBEQF:
+		gen2(0x7a, 6);		/* jp over the je: unordered is not equal */
+		genb(0x0f);
+		rbra(dst, Ojeql);
+		break;
+	case IBNEF:
+		genb(0x0f);
+		rbra(dst, 0x8a);	/* jp: unordered is not equal */
+		genb(0x0f);
+		rbra(dst, Ojnel);
+		break;
+	default:
+		genb(0x0f);
+		rbra(dst, jcc);
+	}
+}
+
+/*
+ * W(d) = CW((vlong)(f < 0 ? f - .5 : f + .5)) (cvtfw), V(d) the same but
+ * not CW (cvtfl): f + copysign(.5, f) truncated is that for every f, -0
+ * and NaN included (a - .5 is a + -.5 exactly).
+ */
+static void
+cvtfi(Inst *i, int w)
+{
+	opwld(i, Oldw, RAX);		/* f's bits */
+	modrr(Ostw, RDX, RAX);		/* mov rdx, rax */
+	modrr(0xc1, RDX, 5);		/* shr rdx, 63 */
+	genb(63);
+	modrr(0xc1, RDX, 4);		/* shl rdx, 63: f's sign */
+	genb(63);
+	con64(0x3FE0000000000000ULL, RCX);	/* .5 */
+	modrr(0x09, RCX, RDX);		/* or rcx, rdx: copysign(.5, f) */
+	sserr(0x66, 1, Smovq, 0, RAX);
+	sserr(0x66, 1, Smovq, 1, RCX);
+	sserr(0xf2, 0, Saddsd, 0, 1);
+	sserr(0xf2, 1, Scvttsd2si, RAX, 0);
+	if(w)
+		modrr(Omovsxd, RAX, RAX);
+	opwst(i, Ostw, RAX);
+}
+
+/* F(d) = W(s) (a WORD holds its int sign-extended: CW) or V(s) */
+static void
+cvtif(Inst *i)
+{
+	opwld(i, Olea, RAX);
+	ssemem(0xf2, 1, Scvtsi2sd, 0, RAX);
+	opwst(i, Olea, RAX);
+	ssemem(0xf2, 0, Smovsdst, 0, RAX);
+}
+
+/*
  * Case dispatch
  */
 static void
@@ -1609,7 +1766,20 @@ comp(Inst *i)
 	case ICVTWF:
 	case ICVTLF:
 	case ICVTFL:
-		punt(i, SRCOP|DSTOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP, optab[i->op]);
+			break;
+		}
+		switch(i->op) {
+		case ICVTFW:
+			cvtfi(i, 1);
+			break;
+		case ICVTFL:
+			cvtfi(i, 0);
+			break;
+		default:
+			cvtif(i);
+		}
 		break;
 	case IHEADM:
 		opwld(i, Oldw, RAX);
@@ -1738,7 +1908,11 @@ comp(Inst *i)
 	case IBLTF:
 	case IBGEF:
 	case IBGTF:
-		punt(i, SRCOP|DSTOP|DBRAN|NEWPC|WRTPC, optab[i->op]);
+		if((i->add&ARM) == AXIMM || UXSRC(i->add) == SRC(AIMM)) {
+			punt(i, SRCOP|DSTOP|DBRAN|NEWPC|WRTPC, optab[i->op]);
+			break;
+		}
+		cbraf(i, i->op);
 		break;
 	case IBEQW:
 		cbra(i, Ojeql);
@@ -1783,7 +1957,11 @@ comp(Inst *i)
 		arithb(i, 0x28);
 		break;
 	case ISUBF:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+			break;
+		}
+		arithf(i, Ssubsd);
 		break;
 	case IADDW:
 		arith(i, 0x01, 0);
@@ -1792,7 +1970,11 @@ comp(Inst *i)
 		arithb(i, 0x00);
 		break;
 	case IADDF:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+			break;
+		}
+		arithf(i, Saddsd);
 		break;
 	case IORW:
 		arith(i, 0x09, 1);
@@ -1825,16 +2007,18 @@ comp(Inst *i)
 		shift(i, Oldb, Ostb, 0xd2, 5);
 		break;
 	case IMOVF:
-		gen2(0xDB, 0xE3);	/* FNINIT: reset x87 FPU state */
-		opwld(i, Omovf, 0);
-		opwst(i, Omovf, 3);
+		/* the eight bytes as they are: through the x87, with an FNINIT
+		 * each time, it was slow and quieted a signalling NaN */
+		opwld(i, Oldw, RAX);
+		opwst(i, Ostw, RAX);
 		break;
 	case INEGF:
-		gen2(0xDB, 0xE3);	/* FNINIT: reset x87 FPU state */
-		opwld(i, Omovf, 0);
-		genb(0xd9);
-		genb(0xe0);
-		opwst(i, Omovf, 3);
+		opwld(i, Oldw, RAX);
+		genb(REXW);			/* btc rax, 63: the sign flipped, as -x is */
+		gen2(0x0f, 0xba);
+		genb(0xf8);
+		genb(63);
+		opwst(i, Ostw, RAX);
 		break;
 	case IMOVB:
 		opwld(i, Oldb, RAX);
@@ -1913,7 +2097,11 @@ comp(Inst *i)
 		break;
 	case IMULF:
 	case IDIVF:
-		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+		if(!realops(i)) {
+			punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
+			break;
+		}
+		arithf(i, i->op == IMULF? Smulsd: Sdivsd);
 		break;
 	case IMODW:
 	case IDIVW:

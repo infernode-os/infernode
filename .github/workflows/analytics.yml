@@ -4,7 +4,8 @@ name: Analytics snapshot
 # issues/PRs, traffic views/clones/referrers/paths) into analytics/.
 # Time series the API doesn't expose natively (downloads-per-day, star
 # growth curve, 14-day traffic) is built up one row at a time in
-# analytics/snapshots.jsonl. Dashboard at analytics/README.md.
+# snapshots.jsonl. Dashboard in README.md. Both live on the `analytics`
+# branch: master requires pull requests, so the bot cannot push there.
 
 on:
   schedule:
@@ -19,26 +20,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: write   # commit analytics/ back to the default branch
+      contents: write   # push snapshots to the analytics branch
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
+
+      # The script writes to analytics/, so check the data branch out there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: analytics
+          path: analytics
 
       - name: Capture snapshot
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The traffic endpoints need the Administration (read) permission,
+          # which GITHUB_TOKEN cannot be granted. ANALYTICS_TOKEN is a
+          # fine-grained PAT on this repo with Administration: read.
+          GH_TOKEN: ${{ secrets.ANALYTICS_TOKEN }}
         run: python3 tools/github-analytics.py
 
       - name: Commit if changed
+        working-directory: analytics
         run: |
           set -euo pipefail
-          if [ -z "$(git status --porcelain analytics/)" ]; then
+          if [ -z "$(git status --porcelain)" ]; then
             echo "no analytics changes to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add analytics/
+          git add -A
           git commit -m "chore(analytics): daily snapshot $(date -u +%Y-%m-%d)"
           git push

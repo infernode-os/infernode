@@ -553,6 +553,10 @@ scrollclick(w: ref Window, but: int, y: int)
 		return;
 	sr := w.body.scrollr;
 	off := y - sr.min.y;
+	if(off < 0)
+		off = 0;
+	if(off > sr.dy())
+		off = sr.dy();	# (2 dragged past the bar's ends: the top, the end)
 	case but {
 	1 =>	scroll(w, -off);
 	3 =>	scroll(w, off);

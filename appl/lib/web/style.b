@@ -2842,7 +2842,7 @@ restyleflat(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed, m: ref 
 	roots, outs: list of int;
 	for(l := changes; l != nil; l = tl l) {
 		r := hd l;
-		if(r == root || d.nodes[r].kind == Dom->Document)
+		if(r == root || d.nodes[r].kind == Dom->Document && hostof(f, r) == 0)	# (a shadow root: its host, below)
 			return whole(d, s, env, "the root changed");
 		if(d.nodes[r].kind != Dom->Element) {
 			if((h := hostof(f, r)) == 0)
@@ -2900,7 +2900,8 @@ restyleflat(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed, m: ref 
 			fp = 0;
 		# none of it styled, as compute leaves what it does not reach
 		# (what is no longer assigned to a slot, a slot's fallback once
-		# something is)
+		# something is; a new host's children, by the document's tree)
+		unstyle(d, c, r, r);
 		clearall(d, f, c, r);
 		if(fp == 0 || c.st[fp] == nil || c.st[fp].display == Dnone)
 			continue;	# inside display: none
@@ -3321,8 +3322,11 @@ scopeindexes(d: ref Doc, f: ref Dom->Flat, s: ref Styles, env: ref Env): list of
 			text += ad[i] + "\n\u0001";
 		}
 		sc: ref Scoped;
-		for(k := scoped; k != nil; k = tl k)
-			if((hd k).root == root && (hd k).doc == d && (hd k).text == text && sameenv((hd k).idx.env, env))
+		for(k := keep; k != nil && sc == nil; k = tl k)	# (another of this page's with the same sheets)
+			if((hd k).text == text)
+				sc = hd k;
+		for(k = scoped; k != nil && sc == nil; k = tl k)
+			if((hd k).doc == d && (hd k).text == text && sameenv((hd k).idx.env, env))
 				sc = hd k;
 		if(sc == nil) {
 			ss := Styles.new();
@@ -3342,7 +3346,11 @@ scopeindexes(d: ref Doc, f: ref Dom->Flat, s: ref Styles, env: ref Env): list of
 			idx.env = ref *env;
 			sc = ref Scoped(root, text, idx, d);
 		}
-		keep = sc :: keep;
+		kept := 0;
+		for(k = keep; k != nil && !kept; k = tl k)
+			kept = hd k == sc;
+		if(!kept)
+			keep = sc :: keep;
 		r = (root, sc.idx, array[Nshare] of list of (string, ref Shared)) :: r;
 	}
 	scoped = keep;

@@ -217,6 +217,7 @@ Doc.create(d: self ref Doc, kind: int, name: string, ns: int): int
 # Note that n's subtree may style differently (n and what is under it).
 # :has(), which looks further, style->restyle answers itself.
 Changedmax: con 512;
+Kidsmax: con 4;	# (compact's)
 
 changed(d: ref Doc, n: int)
 {
@@ -228,11 +229,31 @@ changed(d: ref Doc, n: int)
 	}
 	if(d.changed != nil && hd d.changed == n)
 		return;	# (as it was just now)
+	if(!intree(d, n))
+		return;	# no styles to change: built apart, it is restyled when put in
 	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
 		overflow(d);
 		return;
 	}
 	d.changed = n :: d.changed;
+}
+
+# n is in the document, or in a shadow tree in it
+intree(d: ref Doc, n: int): int
+{
+	while(n > 1) {
+		p := d.nodes[n].parent;
+		if(p == 0)
+			for(l := d.shadows; l != nil; l = tl l)
+				if((hd l).t1 == n) {
+					p = (hd l).t0;
+					break;
+				}
+		if(p == 0)
+			return 0;
+		n = p;
+	}
+	return n == 1;
 }
 
 overflow(d: ref Doc)
@@ -247,12 +268,23 @@ overflow(d: ref Doc)
 # the whole); how many entries it then has
 compact(d: ref Doc): int
 {
+	# and none under another, whose subtree is restyled with it (a
+	# script building a list in place changes each item and what is
+	# in it); a parent whose children changed in many places, as when
+	# a script appends them one by one, changed as a whole
+	nk := array[d.n] of {* => 0};
+	for(kl := d.kids; kl != nil; kl = tl kl)
+		if((p := (hd kl).t0) < len nk && nk[p]++ == Kidsmax)
+			d.changed = p :: d.changed;
 	seen := array[d.n] of byte;
+	for(l := d.changed; l != nil; l = tl l)
+		if((hd l) < len seen)
+			seen[hd l] = byte 1;
 	r: list of int;
 	k := 0;
-	for(l := d.changed; l != nil; l = tl l)
-		if((hd l) < len seen && seen[hd l] == byte 0) {
-			seen[hd l] = byte 1;
+	for(l = d.changed; l != nil; l = tl l)
+		if((hd l) < len seen && seen[hd l] == byte 1 && !under(d, seen, hd l)) {
+			seen[hd l] = byte 2;
 			r = hd l :: r;
 			k++;
 		}
@@ -261,9 +293,9 @@ compact(d: ref Doc): int
 		d.changed = hd r :: d.changed;
 	kp: list of (int, int);
 	kr: list of (int, int);
-	for(kl := d.kids; kl != nil; kl = tl kl) {
+	for(kl = d.kids; kl != nil; kl = tl kl) {
 		(p, at) := hd kl;
-		dup := 0;
+		dup := p < len seen && (seen[p] != byte 0 || under(d, seen, p));
 		for(o := kr; o != nil && !dup; o = tl o)
 			dup = (hd o).t0 == p && (hd o).t1 == at;
 		if(!dup) {
@@ -278,10 +310,19 @@ compact(d: ref Doc): int
 	return k;
 }
 
+# whether one of n's ancestors is marked in seen
+under(d: ref Doc, seen: array of byte, n: int): int
+{
+	for(a := d.nodes[n].parent; a != 0; a = d.nodes[a].parent)
+		if(a < len seen && seen[a] != byte 0)
+			return 1;
+	return 0;
+}
+
 # parent's children changed at at (Doc.kids)
 kidschanged(d: ref Doc, parent, at: int)
 {
-	if(d.nchanged < 0)
+	if(d.nchanged < 0 || !intree(d, parent))
 		return;
 	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
 		overflow(d);
@@ -311,7 +352,7 @@ Doc.attachshadow(d: self ref Doc, host, root: int)
 	d.shadows = (host, root) :: d.shadows;
 	d.gen++;
 	d.nodes[host].mgen = d.gen;
-	changed(d, 0);
+	changed(d, host);	# (what it shows now its shadow's, by the flat tree)
 }
 
 Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
@@ -326,7 +367,12 @@ Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
 	d.gen++;
 	if(root > 0 && root < d.n)
 		d.nodes[root].mgen = d.gen;
-	changed(d, 0);
+	# a shadow root's sheets: its host's flat subtree, as attachshadow
+	host := 0;
+	for(sl := d.shadows; sl != nil; sl = tl sl)
+		if((hd sl).t1 == root)
+			host = (hd sl).t0;
+	changed(d, host);
 }
 
 Doc.adoptedof(d: self ref Doc, root: int): array of string
@@ -483,8 +529,6 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 		d.remove(child);
 	if(d.nodes[parent].first == 0)
 		changedfrom(d, parent);	# (:empty no longer)
-	changed(d, child);
-	kidschanged(d, parent, child);
 	p := d.nodes[parent];
 	c := d.nodes[child];
 	c.parent = parent;
@@ -506,6 +550,8 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 			p.first = child;
 		b.prev = child;
 	}
+	changed(d, child);	# (now in the tree, if parent is)
+	kidschanged(d, parent, child);
 	d.gen++;
 	p.mgen = d.gen;
 	c.mgen = d.gen;

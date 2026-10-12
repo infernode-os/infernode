@@ -2,6 +2,7 @@
 
 DIRS=\
 	js\
+	js-spike\
 	testing\
 
 TARG=\

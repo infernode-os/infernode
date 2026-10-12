@@ -129,7 +129,7 @@ APPOBJ=${APPSRC%.m}.o
 echo "=== linking executable ==="
 LIBDIR="$ROOT/iOS/arm64/lib"
 INFERNO_LIBS="$LIBDIR/libemu.a \
-	$LIBDIR/libinterp.a $LIBDIR/libmath.a $LIBDIR/libdraw.a \
+	$LIBDIR/libinterp.a $LIBDIR/libtk.a $LIBDIR/libmath.a $LIBDIR/libdraw.a \
 	$LIBDIR/libmemlayer.a $LIBDIR/libmemdraw.a $LIBDIR/libkeyring.a \
 	$LIBDIR/libsec.a $LIBDIR/libmp.a $LIBDIR/lib9.a"
 rm -rf "$APPDIR"

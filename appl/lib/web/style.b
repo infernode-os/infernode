@@ -1085,9 +1085,24 @@ matchfrom(m: ref M, s: ref Sel, k, n, anchor: int): int
 	}
 	case c {
 	' ' =>
-		for(p := parentelm(m, n); p != 0; p = parentelm(m, p))
-			if(matchfrom(m, s, k-1, p, anchor))
-				return 1;
+		# with only descendant combinators further left, the nearest
+		# ancestor part k-1 matches is the one to go on from: what
+		# matches above a farther one is above it too.  (Trying each
+		# ancestor in turn was most of GitHub's styling: .a .b .c
+		# against every ancestor of every ancestor.)
+		desc := anchor == 0 || s.combs[0] == ' ';
+		for(j := 1; j < k && desc; j++)
+			desc = s.combs[j] == ' ';
+		mk := masks[k-1];
+		for(p := parentelm(m, n); p != 0; p = parentelm(m, p)) {
+			if(mk != big 0 && (nodesig(m, p) & mk) != mk)
+				continue;
+			if(!desc) {
+				if(matchfrom(m, s, k-1, p, anchor))
+					return 1;
+			} else if(compound(m, s.parts[k-1], p))
+				return matchfrom(m, s, k-1, p, anchor);
+		}
 	'>' =>
 		if((p := parentelm(m, n)) != 0)
 			return matchfrom(m, s, k-1, p, anchor);

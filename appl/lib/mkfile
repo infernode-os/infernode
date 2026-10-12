@@ -4,8 +4,8 @@ DIRS=\
 	convcs\
 	ftree\
 	crypt\
-	ecmascript\
 	encoding\
+	js\
 	git\
 	ida\
 	spki\

@@ -62,8 +62,13 @@ holds:
 Written before the request is made:
 .BI url " url"\f1,
 .BI method " method"
-(GET, POST, PUT, DELETE, HEAD or PATCH) and
-.BI header " Name: value"\f1.
+(GET, POST, PUT, DELETE, HEAD, PATCH or OPTIONS),
+.BI header " Name: value"
+and
+.B "cookies off"
+(the request neither sends the jar's cookies nor stores those its
+response sets: a script's cross-origin request without credentials) or
+.BR "cookies on" .
 Reading gives what has been set.
 .TP
 .B postbody

@@ -85,6 +85,7 @@ B: adt {
 	c:	ref Computed;
 	counters:	list of ref Ctr;	# the counters in scope, innermost first
 	qdepth:	int;		# quotes open (CSS 2.2 §12.3.2)
+	f:	ref Dom->Flat;	# with shadow roots, the flat tree, whose children are boxed
 };
 
 # A counter instance (CSS Lists 3 §4).  Its scope is the element that
@@ -118,7 +119,7 @@ newbox(kind, inl, node: int, st: ref St): ref Box
 {
 	return ref Box(kind, inl, node, st, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, nil, nil, nil, 0, 0, 0, 0.0, 0.0, 0.0, nil, nil, nil, nil, 0, 0, 0, 0, 0, 0,
-		nil, nil, nil, nil, 0, 0, nil, nil, 0, nil);
+		nil, nil, nil, nil, 0, 0, nil, nil, 0, nil, 0);
 }
 
 build(d: ref Doc, c: ref Computed): ref Box
@@ -127,7 +128,7 @@ build(d: ref Doc, c: ref Computed): ref Box
 	root := d.root();
 	if(root == 0 || c.st[root] == nil)
 		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
-	b := ref B(d, c, nil, 0);
+	b := ref B(d, c, nil, 0, dom->flat(d));
 	l := element(b, root);
 	if(l == nil) {
 		# display: none on the root: nothing, not even its background
@@ -540,7 +541,10 @@ firsttext(box: ref Box): (ref Box, int)
 children(b: ref B, n: int, st: ref St): list of ref Box
 {
 	r: list of ref Box;
-	for(c := b.d.nodes[n].first; c != 0; c = b.d.nodes[c].next) {
+	c := b.d.nodes[n].first;
+	if(b.f != nil)
+		c = b.f.first[n];
+	for(; c != 0; c = nextkid(b, c)) {
 		cn := b.d.nodes[c];
 		case cn.kind {
 		Dom->Text =>
@@ -553,6 +557,13 @@ children(b: ref B, n: int, st: ref St): list of ref Box
 		}
 	}
 	return rev(r);
+}
+
+nextkid(b: ref B, c: int): int
+{
+	if(b.f != nil)
+		return b.f.next[c];
+	return b.d.nodes[c].next;
 }
 
 splitinline(box: ref Box, kids: list of ref Box): list of ref Box
@@ -1609,7 +1620,29 @@ Abs: adt {
 	area:	ref Rect;	# a grid area that is its containing block instead, in cb's coordinates (Grid 2 §9)
 	icb:	ref Box;	# a positioned inline box whose padding box is the containing block (§10.1): cb is its block container, and area is set from its fragments once laid out
 	flexsp:	int;		# how area serves: 1, 2 a flex container's child, its static position as the sole item of a row or column container (Flexbox §4.1), area being the content box once laid out; 3 a grid's child likewise, in its content box (Grid 2 §9.2); 4 a grid's descendant, whose area is the containing block only, the static position its own
+	seq:	int;		# made abseq'th (Memo)
 };
+
+# k's absolutely positioned box awaits its containing block: a box laid
+# out again (each pass of a flex container over its items, each
+# intrinsic measure) registers its descendants again, and only the
+# newest, from the last pass, is to be laid out, once
+pend(l: ref L, a: ref Abs)
+{
+	a.seq = ++abseq;
+	pre: list of ref Abs;
+	for(p := l.pending; p != nil; p = tl p) {
+		if((hd p).box == a.box) {
+			p = tl p;
+			for(; pre != nil; pre = tl pre)
+				p = hd pre :: p;
+			l.pending = a :: p;
+			return;
+		}
+		pre = hd p :: pre;
+	}
+	l.pending = a :: l.pending;
+}
 
 # the static position's x: the content box's start edge, which is the
 # right one in a right-to-left block
@@ -1740,6 +1773,8 @@ lay(root: ref Box, width, height: int)
 		facedoc = curdoc;
 	}
 	laygen++;
+	memos = nil;
+	nmemo = 0;
 	l := ref L(width, height, root, nil);
 	edges(root, width);
 	sizew(root, width, height);
@@ -2209,7 +2244,105 @@ incenter(b: ref Box): int
 # Returns its top and bottom margins, collapsed with any of its
 # children's that adjoin them, and whether its own margins collapse
 # through it.
+# ---- laying a box out again the same way ----
+#
+# A flex container lays each item out several times (for its content
+# height, at its final size, with that height imposed), and each of
+# those lays out the item's children; nested, the work multiplied with
+# depth: GitHub's repository page laid out 1,916 boxes 198,703 times.
+# A box laid out again in the same layout with the same inputs as its
+# last time is as that left it, unless something has moved its content
+# since (shiftcontent, shiftx forget the record): its height, which
+# callers set after, is put back, the absolutely positioned boxes it
+# left for containing blocks outside it are left again, and the result
+# is the same.  Only a box laid out in a formatting context of its own
+# (no floats around it to read or add to) is recorded.
+
+Memo: adt {
+	box:	ref Box;
+	gen:	int;
+	w, cbw, cbh, ox, oy, flags, imph, pcth:	int;
+	h:	int;
+	r1, r2:	Margin;
+	r3:	int;
+	abs:	list of ref Abs;	# the absolutely positioned boxes it left pending
+};
+memos: array of ref Memo;
+nmemo := 0;
+abseq := 0;	# Abs records made, for knowing those a layout leaves
+
+memokey(b: ref Box): (int, int)
+{
+	flags := 0;
+	imph := 0;
+	if(asauto == b)
+		flags |= 1;
+	if(imposed == b) {
+		flags |= 2;
+		imph = imposedh;
+	}
+	if(nowidth == b)
+		flags |= 4;
+	return (flags, imph);
+}
+
+memoof(b: ref Box): ref Memo
+{
+	if(b.memo > 0 && b.memo < nmemo && memos[b.memo].box == b)
+		return memos[b.memo];
+	return nil;
+}
+
+forget(b: ref Box)
+{
+	if((m := memoof(b)) != nil)
+		m.gen = -1;
+}
+
 layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margin, Margin, int)
+{
+	if(fc != nil || pcthbox != nil)
+		return layblock1(l, b, cbw, cbh, fc, ox, oy);
+	(flags, imph) := memokey(b);
+	if((m := memoof(b)) != nil && m.gen == laygen && m.w == b.w && m.cbw == cbw && m.cbh == cbh &&
+	   m.ox == ox && m.oy == oy && m.flags == flags && m.imph == imph && m.pcth == pcth) {
+		b.h = m.h;
+		for(a := m.abs; a != nil; a = tl a) {
+			x := ref *hd a;
+			if(x.icb != nil || x.flexsp >= 1 && x.flexsp <= 3)
+				x.area = nil;	# found from the containing block when it is laid out
+			pend(l, x);
+		}
+		return (m.r1, m.r2, m.r3);
+	}
+	seq0 := abseq;
+	(r1, r2, r3) := layblock1(l, b, cbw, cbh, fc, ox, oy);
+	abs: list of ref Abs;
+	for(p := l.pending; p != nil; p = tl p)
+		if((hd p).seq > seq0)
+			abs = ref *hd p :: abs;
+	if(m == nil) {
+		if(memos == nil || nmemo >= len memos) {
+			na := array[2 * nmemo + 1024] of ref Memo;
+			if(memos != nil)
+				na[0:] = memos[0:nmemo];
+			memos = na;
+		}
+		if(nmemo == 0)
+			nmemo = 1;
+		m = ref Memo;
+		m.box = b;
+		b.memo = nmemo;
+		memos[nmemo++] = m;
+	}
+	(m.gen, m.w, m.cbw, m.cbh, m.ox, m.oy, m.flags, m.imph, m.pcth) = (laygen, b.w, cbw, cbh, ox, oy, flags, imph, pcth);
+	m.h = b.h;
+	(m.r1, m.r2, m.r3) = (r1, r2, r3);
+	m.abs = abs;
+	return (r1, r2, r3);
+}
+
+layblock1(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margin, Margin, int)
 {
 	case b.kind {
 	Kreplaced =>
@@ -2319,7 +2452,7 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 					Style->Aright =>	sx += rx - lx;
 					}
 				}
-				l.pending = ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil, b.st.dirrtl, nil, icbof(k), 0) :: l.pending;
+				pend(l, ref Abs(k, cbof(l, k), b, sx, b.bt + b.pt + cury + msum(pending), nil, b.st.dirrtl, nil, icbof(k), 0, 0));
 				continue;
 			}
 			if(isfloat(k)) {
@@ -2620,7 +2753,7 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k)) {
-			l.pending = ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0, nil, icbof(k), 2 - row) :: l.pending;
+			pend(l, ref Abs(k, cbof(l, k), b, b.bl + b.pl, b.bt + b.pt, nil, 0, nil, icbof(k), 2 - row, 0));
 			continue;
 		}
 		items = ref Fi(k, 0.0, 0.0, 0.0, 0.0, -1.0, 0, 0, 0, 0) :: items;
@@ -4273,9 +4406,9 @@ gridabs(l: ref L, b: ref Box, cols: array of ref Track, cpos: array of int, colg
 			continue;
 		cb := cbof(l, k);
 		if(cb == b)
-			l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, ref gridabsarea(b, k, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars), nil, 0) :: l.pending;
+			pend(l, ref Abs(k, cb, b, b.bl, b.bt, nil, 0, ref gridabsarea(b, k, cols, cpos, colgap, colnames, ncexp, rows, rpos, rowgap, rownames, nrexp, ars), nil, 0, 0));
 		else
-			l.pending = ref Abs(k, cb, b, b.bl, b.bt, nil, 0, nil, nil, 3) :: l.pending;	# the static position is in the grid's content box, the containing block elsewhere (grid-abspos-staticpos-align-items-center)
+			pend(l, ref Abs(k, cb, b, b.bl, b.bt, nil, 0, nil, nil, 3, 0));	# the static position is in the grid's content box, the containing block elsewhere (grid-abspos-staticpos-align-items-center)
 	}
 	# a descendant whose containing block is the grid takes its grid
 	# area too (§9.1), its static position its own (descendant-static-position-001)
@@ -6514,7 +6647,7 @@ tableabs(l: ref L, t, b: ref Box)
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
 		if(isabs(k))
-			l.pending = ref Abs(k, cbof(l, k), t, t.bl + t.pl, t.bt + t.pt, nil, t.st.dirrtl, nil, icbof(k), 0) :: l.pending;
+			pend(l, ref Abs(k, cbof(l, k), t, t.bl + t.pl, t.bt + t.pt, nil, t.st.dirrtl, nil, icbof(k), 0, 0));
 		else if(isrowgroup(k) || k.kind == Krow)
 			tableabs(l, t, k);
 	}
@@ -6949,6 +7082,7 @@ laycaption(l: ref L, k, b: ref Box, cw, y: int): int
 # move a box's content down (vertical-align in table cells)
 shiftcontent(b: ref Box, dy: int)
 {
+	forget(b);
 	for(i := 0; i < len b.lines; i++) {
 		ln := b.lines[i];
 		ln.y += dy;
@@ -6969,6 +7103,7 @@ shiftcontent(b: ref Box, dy: int)
 # the content of b moved dx to the right
 shiftx(b: ref Box, dx: int)
 {
+	forget(b);
 	for(i := 0; i < len b.lines; i++) {
 		ln := b.lines[i];
 		for(j := 0; j < len ln.frags; j++)
@@ -7187,6 +7322,13 @@ relative(k: ref Box, cbw, cbh: int)
 positioned(l: ref L, b: ref Box)
 {
 	if(!ispositioned(b) || l.pending == nil)
+		return;
+	# (most positioned boxes contain none of those pending: found with
+	# no list made, as it is asked of every one, on every pass)
+	for(q := l.pending; q != nil; q = tl q)
+		if((hd q).cb == b)
+			break;
+	if(q == nil)
 		return;
 	mine, rest: list of ref Abs;
 	for(p := l.pending; p != nil; p = tl p)
@@ -9923,14 +10065,14 @@ layinline1(l: ref L, b: ref Box, cw, ch: int, fc: ref Fctx, ox, oy: int): int
 				# marks the place through alignment and reordering
 				mark := ref Frag(Ftext, ir(ln.x), 0, 0, 0, 0, it.box, "", face(it.box.st), 0, 0, 0, 0, it.level, 0, 0);
 				ln.frags = mark :: ln.frags;
-				l.pending = ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil, icbof(it.box), 0) :: l.pending;
+				pend(l, ref Abs(it.box, cbof(l, it.box), b, x0 + ir(ln.x), f.y, mark, b.st.dirrtl, nil, icbof(it.box), 0, 0));
 			} else {
 				# a block-level one's is where a block would go: the
 				# start of this line, or under it once content is on it
-				a := ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl, nil, icbof(it.box), 0);
+				a := ref Abs(it.box, cbof(l, it.box), b, staticx(b), f.y, nil, b.st.dirrtl, nil, icbof(it.box), 0, 0);
 				if(ln.content)
 					ln.below = a :: ln.below;
-				l.pending = a :: l.pending;
+				pend(l, a);
 			}
 		Ibreak =>
 			ln.content = 1;

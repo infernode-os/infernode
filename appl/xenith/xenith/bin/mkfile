@@ -24,7 +24,10 @@ SYSMODULES=\
 	arg.m\
 	bufio.m\
 	draw.m\
-	ecmascript.m\
+	web/dom.m\
+	js.m\
+	jslex.m\
+	jsparse.m\
 	env.m\
 	names.m\
 	plumbmsg.m\

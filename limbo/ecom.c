@@ -964,6 +964,18 @@ ecom(Src *src, Node *nto, Node *n)
 			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 
 		/*
+		 * a call in right can change what left's address is found
+		 * from: a[i] = f(), where f makes a new a and the old one,
+		 * its only reference gone, is freed, had f's result written
+		 * into freed memory (indx before the call, the element's
+		 * address passed as where the result goes); p.x = f() so
+		 * too, f making a new p.  So right first, into a temporary,
+		 * then the address.  (Only a name's address is fixed.)
+		 */
+		if(left->op != Oname && right != &tr && hascall(right))
+			right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
+
+		/*
 		 * think carefully about types here
 		 */
 		if(left->addable >= Rcant)
@@ -1147,7 +1159,7 @@ ecom(Src *src, Node *nto, Node *n)
 		if(right->addable < Rcant){
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nto);
-		}else if(left->temps < right->temps){
+		}else if(left->temps < right->temps || hascall(right)){	/* (a call first: as for Oas) */
 			right = eacom(right, &tr, nto);
 			if(left->addable >= Rcant)
 				left = eacom(left, &tl, nil);

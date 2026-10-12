@@ -117,6 +117,7 @@ TARG=\
 	concurrent_auth_test.dis\
 	handshake_fuzz_test.dis\
 	limbo_inline_test.dis\
+	limbo_asgcall_test.dis\
 	refadt_zero_test.dis\
 	regex_test.dis\
 	runner.dis\

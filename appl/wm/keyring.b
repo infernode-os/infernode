@@ -253,15 +253,18 @@ setmode(m: int)
 		return;
 	}
 
-	# one labelled row per field
-	for(i := 0; i < len fields; i++){
+	# one labelled row per field, the label column as wide as the
+	# longest label so the rows line up.  Size it in characters ("Nw"):
+	# a pixel width cut the labels off on a 3x display.
+	labw := 0;
+	for(i := 0; i < len fields; i++)
+		if(len fields[i].label > labw)
+			labw = len fields[i].label;
+	for(i = 0; i < len fields; i++){
 		f := fields[i];
 		row := sys->sprint(".form.r%d", i);
 		tk->cmd(top, "frame " + row);
-		# Inferno Tk widget -width is in PIXELS, not characters: reserve
-		# a fixed label column wide enough for the longest label so the
-		# rows line up.
-		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width 84 -anchor w", row, f.label));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %dw -anchor w", row, f.label, labw));
 		show := "";
 		if(f.secret)
 			show = " -show *";

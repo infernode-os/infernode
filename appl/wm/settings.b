@@ -312,10 +312,16 @@ eget(path: string): string
 
 buildui()
 {
+	# Width in characters: a listbox's default width is pixels, which on a
+	# 3x display leaves the category names cut off after a few letters.
+	catw := 0;
+	for(i := 0; i < len catnames; i++)
+		if(len catnames[i] > catw)
+			catw = len catnames[i];
 	tkcmds(array[] of {
 		". configure -background " + c_bg,
 		"frame .cats -background " + c_bg,
-		"listbox .cats.lb -font " + SFONT + " -selectmode browse" +
+		"listbox .cats.lb -font " + SFONT + " -selectmode browse -width " + string catw + "w" +
 			" -background " + c_bg + " -foreground " + c_fg +
 			" -selectbackground " + c_accent + " -selectforeground " + c_bg,
 		"pack .cats.lb -side top -fill both -expand 1",
@@ -327,7 +333,7 @@ buildui()
 		"pack propagate . 0",
 		"bind .cats.lb <ButtonRelease-1> {send act cat}",
 	});
-	for(i := 0; i < len catnames; i++)
+	for(i = 0; i < len catnames; i++)
 		tk->cmd(top, sys->sprint(".cats.lb insert end {%s}", catnames[i]));
 	tk->cmd(top, sys->sprint(".cats.lb selection set %d", category));
 	buildpanel(category);

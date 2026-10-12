@@ -92,7 +92,8 @@ statusbg: string;	# status-strip background
 statusfg: string;	# status-strip foreground
 
 WALLET: con "/n/wallet";
-LBLW:   con 96;		# pixel width of the aligned label column
+LBLW:   con "12w";	# width of the aligned label column, in characters
+			# (pixels cut the labels off on a 3x display)
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
@@ -191,7 +192,7 @@ buildbase()
 		"frame .main",
 		"frame .main.list",
 		"scrollbar .main.list.sb -command {.main.list.lb yview}",
-		"listbox .main.list.lb -yscrollcommand {.main.list.sb set} -width 160 -selectmode single",
+		"listbox .main.list.lb -yscrollcommand {.main.list.sb set} -width 20w -selectmode single",
 		"pack .main.list.sb -side right -fill y",
 		"pack .main.list.lb -side left -fill both -expand 1",
 		"frame .main.div -width 1 -background " + accent,
@@ -338,7 +339,7 @@ buildview()
 {
 	r := ".main.right";
 	tk->cmd(top, "frame " + r + ".net");
-	tk->cmd(top, sys->sprint("label %s.net.l -text {Network:} -width %d -anchor w", r, LBLW));
+	tk->cmd(top, sys->sprint("label %s.net.l -text {Network:} -width %s -anchor w", r, LBLW));
 	vals := "";
 	for(i := 0; i < len networks; i++)
 		vals += "{" + networks[i] + "} ";
@@ -405,7 +406,7 @@ buildform(title: string, flds: array of ref Field, oklabel, oktok: string)
 		f := flds[i];
 		row := sys->sprint("%s.r%d", r, i);
 		tk->cmd(top, "frame " + row);
-		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %s -anchor w", row, f.label, LBLW));
 		show := "";
 		if(f.secret)
 			show = " -show *";
@@ -442,7 +443,7 @@ buildpay()
 		f := fields[i];
 		row := sys->sprint("%s.r%d", r, i);
 		tk->cmd(top, "frame " + row);
-		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %d -anchor w", row, f.label, LBLW));
+		tk->cmd(top, sys->sprint("label %s.l -text {%s} -width %s -anchor w", row, f.label, LBLW));
 		tk->cmd(top, sys->sprint("entry %s.e -width 220", row));
 		tk->cmd(top, sys->sprint("pack %s.l -side left -padx {12 4}", row));
 		tk->cmd(top, sys->sprint("pack %s.e -side left -fill x -expand 1 -padx {0 12}", row));
@@ -450,7 +451,7 @@ buildpay()
 		f.path = row + ".e";
 	}
 	tk->cmd(top, "frame " + r + ".tok");
-	tk->cmd(top, sys->sprint("label %s.tok.l -text {Token:} -width %d -anchor w", r, LBLW));
+	tk->cmd(top, sys->sprint("label %s.tok.l -text {Token:} -width %s -anchor w", r, LBLW));
 	tk->cmd(top, "choicebutton " + r + ".tok.cb -values {{ETH (wei)} {USDC (base units)}}");
 	tk->cmd(top, "pack " + r + ".tok.l -side left -padx {12 4}");
 	tk->cmd(top, "pack " + r + ".tok.cb -side left");

@@ -2256,7 +2256,9 @@ incenter(b: ref Box): int
 # callers set after, is put back, the absolutely positioned boxes it
 # left for containing blocks outside it are left again, and the result
 # is the same.  Only a box laid out in a formatting context of its own
-# (no floats around it to read or add to) is recorded.
+# (no floats around it to read or add to) is recorded, and not a
+# subgrid: its tracks are its parent's, handed to it (subcw, subrh)
+# before each layout and different from one to the next.
 
 Memo: adt {
 	box:	ref Box;
@@ -2301,7 +2303,7 @@ forget(b: ref Box)
 
 layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margin, Margin, int)
 {
-	if(fc != nil || pcthbox != nil)
+	if(fc != nil || pcthbox != nil || b.subcw != nil || b.subrh != nil)
 		return layblock1(l, b, cbw, cbh, fc, ox, oy);
 	(flags, imph) := memokey(b);
 	if((m := memoof(b)) != nil && m.gen == laygen && m.w == b.w && m.cbw == cbw && m.cbh == cbh &&

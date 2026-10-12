@@ -3048,12 +3048,39 @@ appreaper(actid: int, id: string, pid: int)
 		sfd = nil;
 		sys->sleep(500);
 	}
+	# Some apps spawn their tasks and return from init (xenith), so
+	# the main proc is gone while the app runs on.  launchappns gave
+	# the app its own process group, numbered by this pid: wait for
+	# the group to empty.
+	while(groupalive(pid))
+		sys->sleep(500);
 	if(actid < 0 || id == "")
 		return;
 	writetofile(
 		sys->sprint("%s/activity/%d/presentation/ctl", mountpt, actid),
 		"delete id=" + id);
 	cleanupappslotbyid(actid, id);
+}
+
+# groupalive: whether any proc in process group gid is still running.
+groupalive(gid: int): int
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			return 0;
+		for(i := 0; i < n; i++) {
+			st := readfile("/prog/" + d[i].name + "/status");
+			if(st == nil)
+				continue;
+			(nf, f) := sys->tokenize(st, " ");
+			if(nf >= 2 && int hd tl f == gid)
+				return 1;
+		}
+	}
 }
 
 # cleanupappslotbyid — slot-array twin of cleanupappslot.  Same

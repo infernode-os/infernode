@@ -184,6 +184,11 @@ done
 for d in n tmp usr mnt; do
 	mkdir -p "$APPDIR/root/$d"
 done
+# and the mount points beneath them (mnt/xenith, mnt/acme, n/client, ...):
+# without /mnt/xenith, Xenith cannot mount its file system.
+(cd "$ROOT" && find mnt n -type d) | while read -r d; do
+	mkdir -p "$APPDIR/root/$d"
+done
 # Installing the app clears the execute bits on every bundle file but the
 # binary, and scripts the boot runs directly (lib/sh/plumbrules) then fail
 # "not executable". List them; the app restores the bits on its copy.

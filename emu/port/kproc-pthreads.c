@@ -38,6 +38,11 @@ struct Osdep {
 };
 
 static pthread_key_t  prdakey;
+#ifdef __ANDROID__
+static Proc *machup;	/* unused: up is getup() there (emu.h) */
+#else
+__thread Proc *machup;	/* up, where emu.h makes it this (see there) */
+#endif
 
 extern int dflag;
 
@@ -98,6 +103,7 @@ pexit(char *msg, int t)
 	 * the namespace setup in emuinit about one launch in 700.
 	 */
 	pthread_setspecific(prdakey, nil);
+	machup = nil;
 	free(p);
 	pthread_exit(0);
 }
@@ -113,6 +119,7 @@ tramp(void *arg)
 	os->self = pthread_self();
 	if(pthread_setspecific(prdakey, arg))
 		panic("set specific data failed in tramp\n");
+	machup = arg;
 	p->func(p->arg);
 	pexit("{Tramp}", 0);
 	return nil;
@@ -235,6 +242,7 @@ kprocinit(Proc *p)
 		panic("key_create failed");
 	if(pthread_setspecific(prdakey, p))
 		panic("set specific thread data failed");
+	machup = p;
 }
 
 /*
@@ -255,6 +263,7 @@ kprocsetup(Proc *p)
 
 	if(pthread_setspecific(prdakey, p))
 		panic("kprocsetup: pthread_setspecific failed");
+	machup = p;
 }
 
 void

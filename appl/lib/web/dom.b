@@ -193,7 +193,7 @@ tagname(tag: int): string
 
 Doc.new(url: string): ref Doc
 {
-	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil);
+	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil, nil, -1);
 	d.create(Document, "#document", HTML);
 	return d;
 }
@@ -214,6 +214,193 @@ Doc.create(d: self ref Doc, kind: int, name: string, ns: int): int
 	return n;
 }
 
+# Note that n's subtree may style differently (n and what is under it).
+# :has(), which looks further, style->restyle answers itself.
+Changedmax: con 512;
+
+changed(d: ref Doc, n: int)
+{
+	if(d.nchanged < 0)
+		return;
+	if(n <= 0 || ++d.nchanged > Changedmax) {
+		d.changed = nil;
+		d.nchanged = -1;
+		return;
+	}
+	d.changed = n :: d.changed;
+}
+
+# n and the siblings after it, which can match by it (+, ~)
+changedfrom(d: ref Doc, n: int)
+{
+	k := 0;
+	for(s := n; s != 0; s = d.nodes[s].next)
+		if(++k > 50) {
+			changed(d, d.nodes[n].parent);
+			return;
+		}
+	for(s = n; s != 0; s = d.nodes[s].next)
+		changed(d, s);
+}
+
+Doc.attachshadow(d: self ref Doc, host, root: int)
+{
+	for(l := d.shadows; l != nil; l = tl l)
+		if((hd l).t0 == host)
+			return;
+	d.shadows = (host, root) :: d.shadows;
+	d.gen++;
+	changed(d, 0);
+}
+
+Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
+{
+	r: list of (int, array of string);
+	for(l := d.adopted; l != nil; l = tl l)
+		if((hd l).t0 != root)
+			r = hd l :: r;
+	if(len sheets > 0)
+		r = (root, sheets) :: r;
+	d.adopted = r;
+	d.gen++;
+	changed(d, 0);
+}
+
+Doc.adoptedof(d: self ref Doc, root: int): array of string
+{
+	for(l := d.adopted; l != nil; l = tl l)
+		if((hd l).t0 == root)
+			return (hd l).t1;
+	return nil;
+}
+
+# ---- the flat tree ----
+
+flat(d: ref Doc): ref Flat
+{
+	if(d.shadows == nil)
+		return nil;
+	f := ref Flat(array[d.n] of {* => 0}, array[d.n] of {* => 0}, array[d.n] of {* => 0}, array[d.n] of {* => 1}, d.shadows);
+	# each shadow tree's nodes are in its scope
+	for(l := d.shadows; l != nil; l = tl l) {
+		(nil, root) := hd l;
+		if(root <= 0 || root >= d.n)
+			continue;
+		f.scope[root] = root;
+		for(c := d.nodes[root].first; c != 0; c = within(d, c, root))
+			f.scope[c] = root;
+	}
+	flatkids(d, f, 1);
+	return f;
+}
+
+# the next node after n in tree order, inside top
+within(d: ref Doc, n, top: int): int
+{
+	if(d.nodes[n].first != 0)
+		return d.nodes[n].first;
+	while(n != top && n != 0) {
+		if(d.nodes[n].next != 0)
+			return d.nodes[n].next;
+		n = d.nodes[n].parent;
+	}
+	return 0;
+}
+
+shadowof(f: ref Flat, n: int): int
+{
+	for(l := f.roots; l != nil; l = tl l)
+		if((hd l).t0 == n)
+			return (hd l).t1;
+	return 0;
+}
+
+# link n's flat children, then theirs (a walk with its own stack: trees
+# are deep)
+flatkids(d: ref Doc, f: ref Flat, top: int)
+{
+	stack := top :: nil;
+	while(stack != nil) {
+		n := hd stack;
+		stack = tl stack;
+		kids := flatchildren(d, f, n);
+		prev := 0;
+		for(k := kids; k != nil; k = tl k) {
+			c := hd k;
+			f.parent[c] = n;
+			if(prev == 0)
+				f.first[n] = c;
+			else
+				f.next[prev] = c;
+			prev = c;
+		}
+		for(k = kids; k != nil; k = tl k)
+			if(d.nodes[hd k].kind == Element)
+				stack = hd k :: stack;
+	}
+}
+
+# n's children in the flat tree
+flatchildren(d: ref Doc, f: ref Flat, n: int): list of int
+{
+	nd := d.nodes[n];
+	src := n;
+	if(nd.kind == Element && (root := shadowof(f, n)) != 0)
+		src = root;
+	else if(nd.kind == Element && nd.name == "slot" && f.scope[n] != 1) {
+		# the slot's assigned nodes, or its own children for want of any
+		a := assigned(d, f, n);
+		if(a != nil)
+			return a;
+	}
+	r: list of int;
+	for(c := d.nodes[src].first; c != 0; c = d.nodes[c].next)
+		r = c :: r;
+	return rev(r);
+}
+
+# the light children of slot s's host that s is the slot of: the first
+# slot in the shadow tree with the name a child asks for ("" for the
+# unnamed one, which takes text and elements naming none)
+assigned(d: ref Doc, f: ref Flat, s: int): list of int
+{
+	root := f.scope[s];
+	host := 0;
+	for(l := f.roots; l != nil; l = tl l)
+		if((hd l).t1 == root)
+			host = (hd l).t0;
+	if(host == 0)
+		return nil;
+	name := d.attr(s, "name");
+	# s takes a name only if it is the first slot with it
+	for(c := d.nodes[root].first; c != 0; c = within(d, c, root))
+		if(d.nodes[c].kind == Element && d.nodes[c].name == "slot" && d.attr(c, "name") == name) {
+			if(c != s)
+				return nil;
+			break;
+		}
+	r: list of int;
+	for(c = d.nodes[host].first; c != 0; c = d.nodes[c].next) {
+		k := d.nodes[c].kind;
+		want := "";
+		if(k == Element)
+			want = d.attr(c, "slot");
+		else if(k != Text)
+			continue;
+		if(want == name)
+			r = c :: r;
+	}
+	return rev(r);
+}
+
+rev(l: list of int): list of int
+{
+	r: list of int;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
 Doc.append(d: self ref Doc, parent, child: int)
 {
 	d.insert(parent, child, 0);
@@ -231,6 +418,9 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 			return;
 	if(d.nodes[child].parent != 0)
 		d.remove(child);
+	if(d.nodes[parent].first == 0)
+		changedfrom(d, parent);	# (:empty no longer)
+	changed(d, parent);
 	p := d.nodes[parent];
 	c := d.nodes[child];
 	c.parent = parent;
@@ -260,6 +450,10 @@ Doc.remove(d: self ref Doc, child: int)
 	c := d.nodes[child];
 	if(c.parent == 0)
 		return;
+	changed(d, c.parent);
+	changed(d, child);	# (out of the tree: its styles go)
+	if(c.prev == 0 && c.next == 0)
+		changedfrom(d, c.parent);	# (:empty now)
 	p := d.nodes[c.parent];
 	if(c.prev != 0)
 		d.nodes[c.prev].next = c.next;
@@ -291,6 +485,7 @@ Doc.setattr(d: self ref Doc, n: int, name, val: string)
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	changedfrom(d, n);
 }
 
 Doc.delattr(d: self ref Doc, n: int, name: string)
@@ -303,12 +498,16 @@ Doc.delattr(d: self ref Doc, n: int, name: string)
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	changedfrom(d, n);
 }
 
 Doc.settext(d: self ref Doc, n: int, s: string)
 {
+	old := d.nodes[n].text;
 	d.nodes[n].text = s;
 	d.gen++;
+	if((p := d.nodes[n].parent) != 0 && (old == "") != (s == ""))
+		changedfrom(d, p);	# (:empty)
 }
 
 Doc.attr(d: self ref Doc, n: int, name: string): string

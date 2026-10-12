@@ -59,12 +59,13 @@ char *cputype = "power";
 #endif
 
 static pthread_key_t  prdakey;
+__thread Proc *machup;	/* up: see emu.h */
 
 extern int dflag;
 
 Proc *
 getup(void) {
-    return (Proc *)pthread_getspecific(prdakey);
+    return machup;
 }
 
 /*  Pthread version */
@@ -104,6 +105,7 @@ pexit(char *msg, int t)
     free(p->prog);
     /* forget p before freeing it: lock() counts into up->nlocks (see kproc-pthreads.c:/^pexit) */
     pthread_setspecific(prdakey, nil);
+    machup = nil;
     free(p);
     pthread_exit(0);
 }
@@ -389,6 +391,7 @@ tramp(void *arg)
         print("set specific data failed in tramp\n");
         pthread_exit(0);
     }
+    machup = arg;
     p->func(p->arg);
     pexit("{Tramp}", 0);
     return NULL;
@@ -628,6 +631,7 @@ emuinit_worker(void *arg)
     p = newproc();
     if(pthread_setspecific(prdakey, p))
         panic("emuinit_worker: pthread_setspecific failed");
+    machup = p;
 
     /* Now emuinit can use 'up' */
     emuinit(imod);
@@ -664,6 +668,7 @@ libinit(char *imod)
     p = newproc();
     if(pthread_setspecific(prdakey, p))
         panic("set specific thread data failed\n");
+    machup = p;
     
     pw = getpwuid(getuid());
     if(pw != nil)

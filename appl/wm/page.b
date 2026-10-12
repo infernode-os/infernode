@@ -205,6 +205,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	wc = <-top.wreq =>
 		# wreq makes a posted menu's window
 		tkclient->wmctl(top, wc);
+		if(wc == "retheme")
+			retheme();
 		if(wc != nil && len wc > 0 && wc[0] == '!')
 			redraw();
 	k := <-top.ctxt.kbd =>
@@ -430,6 +432,18 @@ colours()
 	c_bg = sprint("#%06xff", (bg >> 8) & 16rFFFFFF);
 	c_fg = sprint("#%06xff", (fg >> 8) & 16rFFFFFF);
 	c_accent = sprint("#%06xff", (accent >> 8) & 16rFFFFFF);
+}
+
+# a theme switched: the colours again, and the page set in them
+retheme()
+{
+	colours();
+	style = nil;
+	tkcmd(". configure -background " + c_bg);
+	tkcmd(".p configure -background " + c_bg);
+	tkcmd(".s configure -background " + c_bg + " -foreground " + c_fg);
+	tkcmd(".e configure -background " + c_bg + " -foreground " + c_fg);
+	redraw();
 }
 
 # ---- doing things ----

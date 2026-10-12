@@ -324,6 +324,20 @@ main(int argc, char *argv[])
 		if (chdir(root) != 0)
 			fprintf(stderr, "InferNode: chdir(%s) failed\n", root);
 
+		/* Local time: daytime(2) reads /locale/timezone, which the app
+		 * does not ship and could not keep current if it did. Write the
+		 * phone's zone at every launch: its name and offset now, with no
+		 * daylight-saving table (a relaunch picks up a change). */
+		{
+			NSTimeZone *tz = [NSTimeZone localTimeZone];
+			NSString *abbr = [[tz abbreviation] stringByReplacingOccurrencesOfString:@" " withString:@""];
+			NSString *zone = [NSString stringWithFormat:@"%@ %ld %@ %ld\n",
+				abbr, (long)[tz secondsFromGMT], abbr, (long)[tz secondsFromGMT]];
+			mkdir("locale", 0777);
+			[zone writeToFile:@"locale/timezone" atomically:YES
+				encoding:NSUTF8StringEncoding error:nil];
+		}
+
 		/* emu's option parser (poolopt) writes into argv strings in
 		 * place (it splits "-pheap=512m" on '='), so these must be
 		 * MUTABLE — string literals live in read-only pages and a

@@ -279,7 +279,7 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	qunlock(&c->umqlock);
 
 	/* m's copy: f.version points into msg, freed above */
-	k = strlen(m->version);
+	k = strlen(m->version);	/* Flawfinder: ignore — kstrdup'd, so NUL-terminated */
 	if(returnlen > 0){
 		if(returnlen < k)
 			error(Eshort);

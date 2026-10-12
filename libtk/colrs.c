@@ -251,6 +251,8 @@ tksetenvcolours(TkEnv *env)
 	loadpalette(&pal);
 
 	for(c = &coltab[0]; c->c != -1; c++) {
+		if(env->own & (1<<c->c))
+			continue;
 		if(c->f == PTransparent)
 			rgba = DTransparent;
 		else

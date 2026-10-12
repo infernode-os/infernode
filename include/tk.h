@@ -410,6 +410,7 @@ struct TkEnv
 	int		ref;
 	TkTop*		top;			/* Owner */
 	ulong		set;
+	ulong		own;			/* colours an option gave; a retheme keeps them */
 	ulong		colors[TkNcolor];	/* OPTcolr */
 	Font*		font;			/* Font description */
 	int		wzero;			/* Width of "0" in pixel */

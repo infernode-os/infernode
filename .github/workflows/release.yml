@@ -1476,6 +1476,16 @@ jobs:
         cp MacOSX/$OBJTYPE/bin/limbo MacOSX/$OBJTYPE/bin/mk "$STAGE/MacOSX/$OBJTYPE/bin/"
         strip "$STAGE/emu/MacOSX/o.emu" "$STAGE/MacOSX/$OBJTYPE/bin/limbo" "$STAGE/MacOSX/$OBJTYPE/bin/mk" 2>/dev/null || true
 
+        # install_name_tool (bundle step) and strip leave the dylibs and
+        # binaries with invalid signatures, and Apple Silicon kills a process
+        # that loads one: o.emu exits 137 before printing a byte.  Every
+        # macOS tarball from v0.5.0 to v0.6.0 shipped that way.  The .dmg is
+        # Developer-ID signed in its own job; the tarball gets ad-hoc.
+        codesign --force --sign - "$STAGE"/emu/MacOSX/*.dylib "$STAGE/emu/MacOSX/o.emu" \
+          "$STAGE/MacOSX/$OBJTYPE/bin/limbo" "$STAGE/MacOSX/$OBJTYPE/bin/mk"
+        codesign --verify --strict "$STAGE"/emu/MacOSX/*.dylib "$STAGE/emu/MacOSX/o.emu" \
+          "$STAGE/MacOSX/$OBJTYPE/bin/limbo" "$STAGE/MacOSX/$OBJTYPE/bin/mk"
+
         # dis/ is not tracked, so the tree must be built before it can be
         # staged -- exactly as emu/*/o.emu already is.  This also checks the
         # build against tools/dis-manifest.txt, so a release cannot quietly
@@ -1531,6 +1541,16 @@ jobs:
           find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
           exit 1
         fi
+
+        # Run what ships, from the stage, before archiving it.  Nothing else
+        # in CI does: every other emu run uses the build tree, linked against
+        # Homebrew's own (validly signed) dylibs, so a broken bundle passes.
+        # perl's alarm stands in for timeout(1), which macOS lacks.
+        out=$(perl -e 'alarm 60; exec @ARGV' "$STAGE/emu/MacOSX/o.emu" -c1 -r"$PWD/$STAGE" \
+          sh -c 'echo staged-emu-ok' < /dev/null 2>&1) || {
+          echo "FATAL: staged o.emu failed (exit $?): $out" >&2; exit 1; }
+        echo "$out" | grep -qx 'staged-emu-ok' || {
+          echo "FATAL: staged o.emu did not run sh: $out" >&2; exit 1; }
 
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"

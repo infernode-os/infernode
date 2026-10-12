@@ -216,7 +216,7 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 
 	perm = tab->perm;
 	if((perm & 7) == 0)
-		perm = (perm|(perm>>3)|(perm>>6)) & (o->pgrp != nil? o->pgrp->progmode: 0);	/* (none: exiting, see delprog) */
+		perm = (perm|(perm>>3)|(perm>>6)) & o->pgrp->progmode;
 
 	len = tab->length;
 	mkqid(&qid, path|tab->qid.path, c->qid.vers, QTFILE);
@@ -263,8 +263,6 @@ progopen(Chan *c, int omode)
 	if(p == nil)
 		error(Ethread);
 	o = p->osenv;
-	if(o->pgrp == nil)
-		error(Ethread);	/* exiting (delprog) */
 	perm = progdir[QID(c->qid)-1].perm;
 	if((perm & 7) == 0)
 		perm = (perm|(perm>>3)|(perm>>6)) & o->pgrp->progmode;
@@ -357,7 +355,7 @@ progwstat(Chan *c, uchar *db, int n)
 		release();
 		error(Eshortstat);
 	}
-	if(d.mode != ~0UL && o->pgrp != nil)
+	if(d.mode != ~0UL)
 		o->pgrp->progmode = d.mode&0777;
 	release();
 	return n;
@@ -508,8 +506,6 @@ progfds(Osenv *o, char *va, int count, long offset)
 	int n, i, w, ww;
 
 	f = o->fgrp;	/* f is not locked because we've acquired */
-	if(f == nil || o->pgrp == nil)
-		return 0;	/* exiting (delprog) */
 	n = readstr(0, va, count, o->pgrp->dot->name->s);
 	n += snprint(va+n, count-n, "\n");
 	offset = progoffset(offset, va, &n);
@@ -897,8 +893,6 @@ progread(Chan *c, void *va, long n, vlong offset)
 			return 0;
 		}
 		o = p->osenv;
-		if(o->pgrp == nil)
-			error(Ethread);	/* exiting (delprog) */
 		mntscan(mw, o->pgrp);
 		if(mw->mh == 0) {
 			mw->cddone = 1;
@@ -924,10 +918,6 @@ progread(Chan *c, void *va, long n, vlong offset)
 		if(p == nil) {
 			release();
 			error(Ethread);
-		}
-		if(((Osenv *)p->osenv)->pgrp == nil) {
-			release();
-			error(Ethread);	/* exiting (delprog) */
 		}
 		grpid = ((Osenv *)p->osenv)->pgrp->pgrpid;
 		release();

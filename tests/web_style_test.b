@@ -97,6 +97,45 @@ col(c: int): string
 	return sys->sprint("%.8ux", c);
 }
 
+# style->element: one element's style from its ancestors alone is what
+# the whole document's computation gives it, for every element
+testElement(t: ref T)
+{
+	srcs := array[] of {
+		"<style>:root{--c:#123456;font-size:20px} body{margin:1em} .a{color:var(--c);padding:2rem} " +
+		"li:nth-child(2n){color:red} li:first-child+li{font-weight:bold} ul>li~li{margin-left:3px} " +
+		".n{display:none} .n *{color:blue} div p{line-height:1.5} [data-x=y]{border:1px solid} " +
+		"p:not(.a){font-style:italic} h1:has(+p){letter-spacing:2px} em{font-size:1.5em}</style>" +
+		"<body><div class=a><h1>t</h1><p>x <em>y <em>z</em></em></p><ul><li>1<li>2<li data-x=y>3<li>4</ul>" +
+		"<div class=n><p>hidden <b>b</b></p></div><table><tr><td>c<td style='color:green'>d</table></div>",
+	};
+	for(i := 0; i < len srcs; i++) {
+		p := page(srcs[i]);
+		s := Styles.new();
+		for(n := 1; n < p.d.n; n++)
+			if(p.d.nodes[n].kind == Dom->Element && p.d.nodes[n].tag == Dom->Tstyle)
+				s.add(css->parse(p.d.textof(n)), Style->Author, p.d.url);
+		checked := 0;
+		for(n = 1; n < p.d.n; n++) {
+			if(p.d.nodes[n].kind != Dom->Element)
+				continue;
+			e := style->element(p.d, s, env, n);
+			w := p.c.st[n];
+			if(w == nil) {
+				t.assert(e == nil, sys->sprint("element %d: nil in the document, not alone", n));
+				continue;
+			}
+			if(e == nil) {
+				t.error(sys->sprint("element %d: nil alone", n));
+				continue;
+			}
+			t.assertseq(style->dump(e), style->dump(w), sys->sprint("element %d (%s)", n, p.d.nodes[n].name));
+			checked++;
+		}
+		t.assert(checked > 15, sys->sprint("%d elements checked", checked));
+	}
+}
+
 testDefaults(t: ref T)
 {
 	p := page("<div id=d><span id=s>x</span></div><h1 id=h>H</h1><p id=p>p</p><ul><li id=li>i</ul><table id=tb><tr><td id=td>c</table><b id=b>b</b><a id=a href=x>a</a><pre id=pre>x</pre>");
@@ -490,6 +529,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Pseudo", testPseudo);
 	run("Dump", testDump);
 	run("URLs", testURLs);
+	run("Element", testElement);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -271,6 +271,7 @@ dis/jitcrash.dis
 dis/jitshift.dis
 dis/jittest.dis
 dis/js.dis
+dis/jsfs.dis
 dis/kill.dis
 dis/ktrans.dis
 dis/lan78stats.dis
@@ -333,7 +334,12 @@ dis/lib/dict.dis
 dis/lib/dis.dis
 dis/lib/diskblocks.dis
 dis/lib/disks.dis
-dis/lib/ecmascript.dis
+dis/lib/js/jslex.dis
+dis/lib/js/jscheck.dis
+dis/lib/js/jsparse.dis
+dis/lib/js/jsre.dis
+dis/lib/js/js.dis
+dis/lib/js/jsjitt.dis
 dis/lib/encoding/base16.dis
 dis/lib/encoding/base32.dis
 dis/lib/encoding/base32a.dis
@@ -475,6 +481,7 @@ dis/lib/web/dom.dis
 dis/lib/web/fonts.dis
 dis/lib/web/html.dis
 dis/lib/web/layout.dis
+dis/lib/web/originfs.dis
 dis/lib/web/page.dis
 dis/lib/web/style.dis
 dis/lib/web/wordbreak.dis
@@ -708,6 +715,7 @@ dis/tests/destructor_test.dis
 dis/tests/dhcp_test.dis
 dis/tests/dial_test.dis
 dis/tests/dialnorm_test.dis
+dis/tests/diswrite_test.dis
 dis/tests/docengine_test.dis
 dis/tests/edit_test.dis
 dis/tests/editor_test.dis
@@ -721,6 +729,7 @@ dis/tests/fdclose_test.dis
 dis/tests/fltfmt_test.dis
 dis/tests/font_format_test.dis
 dis/tests/fractal_tool_test.dis
+dis/tests/gentmpl.dis
 dis/tests/geomap_test.dis
 dis/tests/git_test.dis
 dis/tests/goroutine_leak_test.dis
@@ -743,6 +752,13 @@ dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/jit_unload_test.dis
+dis/tests/js-spike/gctest.dis
+dis/tests/js-spike/loadtest.dis
+dis/tests/js-spike/spike.dis
+dis/tests/js-spike/spike2.dis
+dis/tests/js-spike/tiny.dis
+dis/tests/js-spike/valrep.dis
+dis/tests/js_engine_test.dis
 dis/tests/json_test.dis
 dis/tests/kbddrainer_test.dis
 dis/tests/keyring_test.dis
@@ -782,6 +798,7 @@ dis/tests/msg_register_test.dis
 dis/tests/msg_triage_test.dis
 dis/tests/ninepsrc_config_test.dis
 dis/tests/opus_test.dis
+dis/tests/originfs_test.dis
 dis/tests/outlinefont_test.dis
 dis/tests/pathmanage_test.dis
 dis/tests/pdf_conformance_test.dis
@@ -827,6 +844,11 @@ dis/tests/task_consistency_test.dis
 dis/tests/taskparse_test.dis
 dis/tests/tcp_test.dis
 dis/tests/tempfile_test.dis
+dis/tests/js/jsfuzz.dis
+dis/tests/js/jsp.dis
+dis/tests/js/jspage.dis
+dis/tests/js/jsrun.dis
+dis/tests/js/t262.dis
 dis/tests/testing/testing_test.dis
 dis/tests/textwidget_test.dis
 dis/tests/tk_test.dis

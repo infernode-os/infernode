@@ -251,6 +251,7 @@ buildui()
 		".ctx add checkbutton -label {Load images automatically} -variable autoimages -command {send act setting images}",
 		".ctx add checkbutton -label {Web fonts} -variable webfonts -command {send act setting fonts}",
 		".ctx add checkbutton -label {Shadows and filters} -variable effects -command {send act setting effects}",
+		".ctx add checkbutton -label {Run scripts} -variable scripts -command {send act setting scripts}",
 		".ctx add command -label {Keep these settings} -command {send act savesettings}",
 		".ctx add separator",
 		".ctx add command -label {Quit} -command {send act quit}",
@@ -406,8 +407,19 @@ event(e: string)
 		(got, n) := split(rest);
 		if(n != nil && got != n)
 			status(sys->sprint("Loading images ... %s of %s", got, n));
+		else if(sess.title != shownt && sess.title != "") {
+			# a page's script set its title
+			shownt = sess.title;
+			tkclient->settitle(top, sess.title + " — Charon");
+		}
+	"scroll" =>
+		# a page's script scrolled
+		scrollto(int rest);
+		redraw();
 	}
 }
+
+shownt: string;	# the title in the window's
 
 # The session is showing another page, or another place in it.
 shown()
@@ -418,6 +430,7 @@ shown()
 	if(title == "")
 		title = sess.url;
 	tkclient->settitle(top, title + " — Charon");
+	shownt = sess.title;
 	hiliting = 0;
 	scroll = 0;
 	scrollto(sess.scroll);
@@ -465,7 +478,7 @@ action(a: string)
 			v = "system";
 			if(on)
 				v = "web";
-		"effects" =>
+		"effects" or "scripts" =>
 			v = "off";
 			if(on)
 				v = "on";
@@ -555,6 +568,7 @@ syncmenu()
 	tk->cmd(top, "variable autoimages " + onoff(browser->setting("images") == "on"));
 	tk->cmd(top, "variable webfonts " + onoff(browser->setting("fonts") == "web"));
 	tk->cmd(top, "variable effects " + onoff(browser->setting("effects") == "on"));
+	tk->cmd(top, "variable scripts " + onoff(browser->setting("scripts") == "on"));
 }
 
 menuvar(setting: string): string

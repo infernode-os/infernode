@@ -157,17 +157,15 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	<-themech =>
 		loadtheme();
-		# Re-theme the engine palette (env-derived widget colours) and
-		# reconfigure the widgets that carry explicit theme colours; the
-		# hardcoded-then-never-updated toplevel + status strip were why the
-		# footer stayed brimstone after a switch.
-		tkclient->wmctl(top, "retheme");
+		# Reconfigure the widgets that carry explicit theme colours, then
+		# re-theme the rest: retheme repaints every widget, so it comes last.
 		tk->cmd(top, ". configure -background " + bgc);
 		tk->cmd(top, ".div configure -background " + accent);
 		tk->cmd(top, ".status configure -background " + statusbg + " -foreground " + statusfg);
 		# re-create the menus / accents that carry explicit colours
 		setmode(mode);
 		flashstatus("theme updated");
+		tkclient->wmctl(top, "retheme");
 	}
 }
 

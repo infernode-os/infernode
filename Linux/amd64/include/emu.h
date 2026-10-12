@@ -39,9 +39,14 @@ static __inline Proc *getup(void) {
  * program allocating hard spent.  kproc-pthreads.c sets it wherever it
  * sets the thread's key.
  */
-extern	__thread Proc *machup;
 extern	Proc*	getup(void);
+#ifdef __ANDROID__
+/* not on Android: see Linux/arm64/include/emu.h */
+#define	up	(getup())
+#else
+extern	__thread Proc *machup;
 #define	up	machup
+#endif
 #endif
 
 typedef sigjmp_buf osjmpbuf;

@@ -13,8 +13,12 @@ include "web/dom.m";
 	dom: Dom;
 	Doc: import dom;
 include "web/css.m";
+	css: Css;
+include "web/html.m";
+	html: Html;
 include "web/style.m";
 	style: Style;
+	Vars: import style;
 include "outlinefont.m";
 include "web/fonts.m";
 include "web/layout.m";
@@ -24,6 +28,9 @@ include "web/page.m";
 	page: Page;
 	Pg: import page;
 include "web/browser.m";
+include "js.m";
+	js: Js;	# a type only: each page loads its own
+	Event: import js;
 
 # how a navigation changes history
 Hnew, Hback, Hforward, Hreload, Hnone: con iota;
@@ -35,8 +42,13 @@ init(d: ref Draw->Display): string
 	dom = load Dom Dom->PATH;
 	style = load Style Style->PATH;
 	page = load Page Page->PATH;
-	if(dom == nil || style == nil || page == nil)
+	css = load Css Css->PATH;
+	html = load Html Html->PATH;
+	if(dom == nil || style == nil || page == nil || css == nil || html == nil)
 		return sys->sprint("cannot load modules: %r");
+	realmlk = chan[1] of int;
+	html->init();
+	css->init();
 	if((err := style->init()) != nil)
 		return err;
 	if((err = page->init(d)) != nil)
@@ -114,6 +126,7 @@ Session.show(s: self ref Session, data: array of byte, ctype, url: string): stri
 	"*" =>
 		return "internal error: " + e;
 	}
+	endrealm(s);
 	lock(s);
 	s.gen++;	# whatever was loading is superseded
 	if(unfrag(pg.url) != unfrag(s.url))
@@ -200,9 +213,16 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 {
 	if(url == "about:blank")
 		url = "data:text/html,";
+	# (the page's realm may be stuck holding the lock: it goes first,
+	# unless only the view moves within the page, which keeps it)
+	if(!(s.pg != nil && method == "GET" && hist != Hreload &&
+	   fragment(url) != nil && unfrag(url) == unfrag(s.url)))
+		endrealm(s);
 	lock(s);
 	s.gen++;
 	g := s.gen;
+	if(s.pg != nil && (r := realmof(s)) != nil)
+		r.g = g;	# a fragment keeps the page and its scripts
 	# a link to elsewhere in this page moves the view, not the page
 	if(s.pg != nil && method == "GET" && hist != Hreload &&
 	   (frag := fragment(url)) != nil && unfrag(url) == unfrag(s.url)) {
@@ -294,6 +314,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	s.status = "loading images " + u;
 	unlock(s);
 	event(s, "shown " + u);
+	startrealm(s, g, pg);
 	# the page is up; what it shows comes in behind it
 	{
 		images(s, g, pg);
@@ -321,7 +342,9 @@ BATCHMS: con 250;
 
 images(s: ref Session, g: int, pg: ref Pg)
 {
+	lock(s);
 	urls := pg.wanted();
+	unlock(s);
 	n := len urls;
 	if(n == 0)
 		return;
@@ -406,6 +429,8 @@ Session.configure(s: self ref Session, line: string): string
 		s.reload();
 	"effects" =>
 		event(s, "update 0 0");	# drawn again, as it is
+	"scripts" =>
+		s.reload();	# its scripts run, or the page as it is without them
 	}
 	return nil;
 }
@@ -948,8 +973,13 @@ Session.set(s: self ref Session, n: int, value: string): string
 	if(err == nil)
 		pg.update();
 	unlock(s);
-	if(err == nil)
+	if(err == nil) {
 		event(s, "update");
+		if(realmof(s) != nil) {
+			reply := chan[1] of int;
+			ask(s, ref Event.Input(n, reply), reply);
+		}
+	}
 	return err;
 }
 
@@ -1017,6 +1047,11 @@ Session.submit(s: self ref Session, form, submitter: int): string
 	if(form < 1 || form >= len fnode)
 		return sys->sprint("no form %d", form);
 	fe := fnode[form];
+	if(realmof(s) != nil) {
+		reply := chan[1] of int;
+		if(ask(s, ref Event.Submit(fe, submitter, reply), reply) || s.pg != pg)
+			return nil;
+	}
 	action := d.attr(fe, "action");
 	method := lower(d.attr(fe, "method"));
 	if(submitter > 0 && submitter < d.n) {
@@ -1113,10 +1148,32 @@ Session.nodeat(s: self ref Session, x, y: int): int
 
 Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point)
 {
-	lock(s);
+	# a page's script may hold the lock for seconds: the window keeps
+	# what it shows rather than wait (the realm says "update" when done)
+	if(realmof(s) != nil) {
+		if(!trylock(s, 100))
+			return;
+	} else
+		lock(s);
 	if(s.pg != nil)
 		s.pg.paint(dst, scroll);
 	unlock(s);
+}
+
+# the lock, if it can be had within ms milliseconds
+trylock(s: ref Session, ms: int): int
+{
+	for(t := 0; ; t += 10) {
+		alt {
+		s.lk <-= 1 =>
+			return 1;
+		* =>
+			;
+		}
+		if(t >= ms)
+			return 0;
+		sys->sleep(10);
+	}
 }
 
 Session.boxof(s: self ref Session, n: int): (int, Draw->Rect)
@@ -1198,9 +1255,18 @@ Session.click(s: self ref Session, n: int): string
 	d := pg.doc;
 	if(n <= 0 || n >= d.n)
 		return sys->sprint("no node %d", n);
+	if(realmof(s) != nil) {
+		reply := chan[1] of int;
+		(nil, br) := s.boxof(n);
+		if(ask(s, ref Event.Click(n, br.min.x, br.min.y, reply), reply) || s.pg != pg)
+			return nil;	# a handler prevented it, or went elsewhere
+	}
 	if(popovers(s, pg, n))
 		return nil;
-	if((us := pg.want(n)) != nil) {
+	lock(s);
+	us := pg.want(n);
+	unlock(s);
+	if(us != nil) {
 		# an image left to be clicked for: this click loads it (and
 		# what is shown with it), and does not follow a link it is in
 		spawn picsome(s, s.gen, pg, us);
@@ -1542,4 +1608,735 @@ contains(s, t: string): int
 		if(s[i:i+len t] == t)
 			return 1;
 	return 0;
+}
+
+# ---- scripts ----
+#
+# A page's scripts run in a realm of their own (see Js->page): a process
+# that loads the engine, confines itself to a namespace holding only
+# the network, and calls back here for what needs the page laid out.
+# Each session has at most one, for the page it shows; a navigation
+# away kills it.  What a realm asks that needs this process's
+# namespace (another page, a redraw) goes to a helper running here.
+
+Realm: adt {
+	id:	int;
+	s:	ref Session;
+	g:	int;
+	pg:	ref Pg;
+	events:	chan of ref Event;
+	reqs:	chan of ref Req;
+	pid:	int;		# its process, whose group it leads
+	locked:	int;		# it holds the session's lock
+	since:	int;		# since when (sys->millisec)
+	laidout:	int;	# the document's generation when last laid out
+	styled:	int;	# when last styled
+	sels:	list of (string, array of ref Css->Sel);	# selectors parsed, most recent first
+};
+
+Req: adt {
+	pick {
+	Changed =>
+	Navigate =>
+		url:	string;
+		replace:	int;
+	Scroll =>
+		y:	int;
+	Quit =>
+	}
+};
+
+realms: list of ref Realm;
+realmlk: chan of int;
+realmids := 0;
+
+# whether the page has anything a script engine would run
+hasscripts(d: ref Doc): int
+{
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind != Dom->Element)
+			continue;
+		if(nd.tag == Dom->Tscript && nd.ns == Dom->HTML)
+			return 1;
+		for(l := nd.attrs; l != nil; l = tl l)
+			if(len (hd l).t0 > 2 && (hd l).t0[0:2] == "on")
+				return 1;
+	}
+	return 0;
+}
+
+startrealm(s: ref Session, g: int, pg: ref Pg)
+{
+	if(page->setting("scripts") != "on" || !hasscripts(pg.doc))
+		return;
+	realmlk <-= 1;
+	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil);
+	realms = r :: realms;
+	<-realmlk;
+	pidc := chan of int;
+	spawn realmhelper(r);
+	spawn realmrun(r, pidc);
+	r.pid = <-pidc;
+	spawn watchdog(r);
+}
+
+# A task that runs too long (a script in an endless loop) holds the
+# session's lock, and nothing else can draw the page: the realm is
+# killed and the page stays as it was.
+Maxtask: con 30000;
+
+watchdog(r: ref Realm)
+{
+	for(;;) {
+		sys->sleep(1000);
+		if(realmbyid(r.id) == nil)
+			return;
+		if(r.locked && sys->millisec() - r.since > Maxtask) {
+			sys->fprint(sys->fildes(2), "charon: scripts: %s: a script ran for %d seconds and was stopped\n", r.pg.url, Maxtask / 1000);
+			endrealm(r.s);
+			return;
+		}
+	}
+}
+
+realmrun(r: ref Realm, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	err: string;
+	{
+		pjs := load Js Js->PATH;
+		if(pjs == nil)
+			err = sys->sprint("cannot load %s: %r", Js->PATH);
+		else {
+			h := ref Js->Host(r.id, envint("/env/jsstress"), envint("/env/jsprofile"), r.pg.doc, r.pg.url, r.events, grants(r.pg.url),
+				hlock, hunlock, hchanged, hbox, hcomputed, hmedia, hmatch, hselect, hparse,
+				hviewport, hnavigate, hscroll, hconsole);
+			err = pjs->page(h);
+		}
+	} exception e {
+	"*" =>
+		err = "internal error: " + e;
+	}
+	if(err != nil)
+		sys->fprint(sys->fildes(2), "charon: scripts: %s: %s\n", r.pg.url, err);
+	dropealm(r);
+}
+
+# for testing the engine: /env/jsstress, its collector runs every n
+# allocations; /env/jsprofile, where the time goes, sampled every n ms
+envint(path: string): int
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[16] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	return int string buf[0:n];
+}
+
+# The origin's storage (localStorage): a directory of the user's of its
+# own, made when first wanted, which only that origin's realms are given
+Storeroot: con "lib/charon/store";
+
+storedir(url: string): string
+{
+	o := originname(url);
+	if(o == nil)
+		return nil;
+	fd := sys->open("/dev/user", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[64] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	d := "/usr/" + string buf[0:n] + "/" + Storeroot + "/" + o;
+	(ok, nil) := sys->stat(d);
+	if(ok < 0 && mkdirp(d) < 0)
+		return nil;
+	return d;
+}
+
+# an origin as a file name: scheme_host_port, nothing a path can misuse
+originname(url: string): string
+{
+	sch := lower(scheme(url));
+	if(sch == "file")
+		return "file";
+	if(sch != "http" && sch != "https")
+		return nil;
+	rest := url[len sch + 1:];
+	if(!prefix(rest, "//"))
+		return nil;
+	rest = rest[2:];
+	for(i := 0; i < len rest && rest[i] != '/' && rest[i] != '?' && rest[i] != '#'; i++)
+		;
+	auth := lower(rest[0:i]);
+	for(j := len auth - 1; j >= 0 && auth[j] != '@'; j--)
+		;
+	auth = auth[j+1:];
+	port := "80";
+	if(sch == "https")
+		port = "443";
+	for(k := len auth - 1; k >= 0 && auth[k] >= '0' && auth[k] <= '9'; k--)
+		;
+	if(k >= 0 && k < len auth - 1 && auth[k] == ':') {
+		port = auth[k+1:];
+		auth = auth[0:k];
+	}
+	name := sch + "_";
+	for(k = 0; k < len auth; k++) {
+		c := auth[k];
+		if(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '.')
+			name[len name] = c;
+		else
+			name[len name] = '_';
+	}
+	if(name == sch + "_" || prefix(name[len sch + 1:], "."))
+		return nil;
+	return name + "_" + port;
+}
+
+mkdirp(d: string): int
+{
+	(ok, nil) := sys->stat(d);
+	if(ok >= 0)
+		return 0;
+	for(i := len d - 1; i > 0 && d[i] != '/'; i--)
+		;
+	if(i > 0 && mkdirp(d[0:i]) < 0)
+		return -1;
+	fd := sys->create(d, Sys->OREAD, Sys->DMDIR|8r700);
+	if(fd == nil)
+		return -1;
+	return 0;
+}
+
+# what a page's realm may reach: the network, and a file: page's directory
+grants(url: string): list of (string, string, int)
+{
+	g: list of (string, string, int);
+	(ok, nil) := sys->stat(Page->WEBFS);
+	if(ok >= 0)
+		g = (Page->WEBFS, Page->WEBFS, 1) :: g;
+	(ok, nil) = sys->stat("/lib/js");
+	if(ok >= 0)
+		g = ("/lib/js", "/lib/js", 0) :: g;
+	if((sd := storedir(url)) != nil)
+		g = ("/mnt/store", sd, 1) :: g;
+	if(lower(scheme(url)) == "file") {
+		p := url[5:];
+		if(prefix(p, "//")) {
+			for(i := 2; i < len p && p[i] != '/'; i++)
+				;
+			p = p[i:];
+		}
+		for(i := len p - 1; i > 0 && p[i] != '/'; i--)
+			;
+		if(i > 0) {
+			dir := p[0:i];
+			(ok, nil) = sys->stat(dir);
+			if(ok >= 0 && dir != "/")
+				g = (dir, dir, 0) :: g;
+		}
+	}
+	return g;
+}
+
+dropealm(r: ref Realm)
+{
+	realmlk <-= 1;
+	l: list of ref Realm;
+	for(m := realms; m != nil; m = tl m)
+		if(hd m != r)
+			l = hd m :: l;
+	realms = l;
+	<-realmlk;
+	alt {
+	r.reqs <-= ref Req.Quit =>
+		;
+	* =>
+		;
+	}
+	sys->remove(sys->sprint("/tmp/.js/%d", r.pid));
+}
+
+realmof(s: ref Session): ref Realm
+{
+	realmlk <-= 1;
+	for(l := realms; l != nil; l = tl l)
+		if((hd l).s == s) {
+			<-realmlk;
+			return hd l;
+		}
+	<-realmlk;
+	return nil;
+}
+
+realmbyid(id: int): ref Realm
+{
+	realmlk <-= 1;
+	for(l := realms; l != nil; l = tl l)
+		if((hd l).id == id) {
+			<-realmlk;
+			return hd l;
+		}
+	<-realmlk;
+	return nil;
+}
+
+# the page's realm ended: told to quit if it is waiting, killed if not
+endrealm(s: ref Session)
+{
+	r := realmof(s);
+	if(r == nil)
+		return;
+	alt {
+	r.events <-= ref Event.Quit =>
+		;
+	* =>
+		killgrp(r.pid);
+		if(r.locked) {
+			r.locked = 0;
+			unlock(s);
+		}
+		rmshadow(r.pid);
+	}
+	dropealm(r);
+}
+
+killgrp(pid: int)
+{
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+# the empty tree the realm's namespace was made in (its mount points)
+rmshadow(pid: int)
+{
+	rmtree(sys->sprint("/tmp/.js/%d", pid));
+}
+
+rmtree(path: string)
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return;
+	if(d.mode & Sys->DMDIR) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd != nil)
+			for(;;) {
+				(n, dirs) := sys->dirread(fd);
+				if(n <= 0)
+					break;
+				for(i := 0; i < n; i++)
+					rmtree(path + "/" + dirs[i].name);
+			}
+	}
+	sys->remove(path);
+}
+
+# an event to the page's realm, and whether a handler prevented its default
+ask(s: ref Session, e: ref Event, reply: chan of int): int
+{
+	r := realmof(s);
+	if(r == nil)
+		return 0;
+	t := chan of int;
+	spawn timeout(t, 2000);
+	alt {
+	r.events <-= e =>
+		;
+	<-t =>
+		return 0;
+	}
+	alt {
+	v := <-reply =>
+		return v;
+	<-t =>
+		return 0;
+	}
+}
+
+timeout(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
+# runs in this process's namespace on the realm's behalf
+realmhelper(r: ref Realm)
+{
+	s := r.s;
+	for(;;) {
+		q := <-r.reqs;
+		pick rq := q {
+		Quit =>
+			return;
+		Changed =>
+			event(s, "update");
+		Navigate =>
+			hist := Hnew;
+			if(rq.replace)
+				hist = Hnone;
+			navigate(s, rq.url, "GET", nil, nil, hist);
+		Scroll =>
+			lock(s);
+			s.scroll = rq.y;
+			unlock(s);
+			event(s, "scroll " + string rq.y);
+		}
+	}
+}
+
+# the document's title as a script left it
+doctitle(d: ref Doc): string
+{
+	t := d.find(1, Dom->Ttitle);
+	if(t == 0)
+		return "";
+	return squash(d.textof(t));
+}
+
+# the page laid out again if its document has changed (the lock held)
+laidout(r: ref Realm)
+{
+	d := r.pg.doc;
+	if(d.gen == r.laidout)
+		return;
+	{
+		r.pg.update();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: laying out after a script: %s\n", e);
+	}
+	r.laidout = d.gen;
+	r.styled = d.gen;
+}
+
+# the document's computed styles as it now is (the lock held)
+styled(r: ref Realm)
+{
+	d := r.pg.doc;
+	if(d.gen == r.styled || d.gen == r.laidout)
+		return;
+	{
+		r.pg.restyle();
+	} exception e {
+	"*" =>
+		sys->fprint(sys->fildes(2), "charon: styling after a script: %s\n", e);
+	}
+	r.styled = d.gen;
+}
+
+# The Host functions: they run on the realm's thread, in its namespace.
+
+hlock(id: int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		raise "fail:realm gone";
+	lock(r.s);
+	r.since = sys->millisec();
+	r.locked = 1;
+}
+
+hunlock(id: int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		raise "fail:realm gone";
+	# whoever takes the lock next finds the page laid out as the
+	# document now is
+	if(r.s.pg == r.pg && r.pg.doc.gen != r.laidout) {
+		laidout(r);
+		t := doctitle(r.pg.doc);
+		if(t != r.pg.title) {
+			r.pg.title = t;
+			r.s.title = t;
+		}
+	}
+	r.locked = 0;
+	unlock(r.s);
+}
+
+hchanged(id: int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return;
+	alt {
+	r.reqs <-= ref Req.Changed =>
+		;
+	* =>
+		;	# one is waiting already
+	}
+}
+
+hbox(id, n: int): (int, int, int, int, int)
+{
+	r := realmbyid(id);
+	if(r == nil || n <= 0 || n >= r.pg.doc.n)
+		return (0, 0, 0, 0, 0);
+	laidout(r);
+	for(l := layout->boxes(r.pg.root, n); l != nil; l = tl l) {
+		b := hd l;
+		return (1, absx(b), absy(b), b.w, b.h);
+	}
+	return (0, 0, 0, 0, 0);
+}
+
+hcomputed(id, n: int, prop: string): string
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return "";
+	d := r.pg.doc;
+	if(n <= 0 || n >= d.n)
+		return "";
+	st: ref Style->St;
+	if(d.gen == r.styled || d.gen == r.laidout) {
+		c := r.pg.computed;
+		if(c != nil && n < len c.st)
+			st = c.st[n];
+	} else {
+		# changed since: this element's alone, not the document's
+		{
+			st = r.pg.stylefor(n);
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: styling after a script: %s\n", e);
+		}
+	}
+	if(st == nil)
+		return "";
+	if(prefix(prop, "--"))
+		return css->tostring(st.vars.get(prop));
+	# a side's margin, padding or border width: one of the dump's four
+	# (top, right, bottom, left)
+	short := prop;
+	side := -1;
+	for(i := 0; i < len sides; i++) {
+		(pre, post) := (sides[i].t0, sides[i].t1);
+		if(prefix(prop, pre) && len prop > len pre + len post && prop[len prop - len post:] == post) {
+			for(k := 0; k < 4; k++)
+				if(prop[len pre:len prop - len post] == sidenames[k]) {
+					short = sides[i].t2;
+					side = k;
+				}
+		}
+	}
+	(nil, lines) := sys->tokenize(style->dump(st), "\n");
+	for(; lines != nil; lines = tl lines) {
+		ln := hd lines;
+		if(prefix(ln, short + " ")) {
+			v := ln[len short + 1:];
+			if(side < 0)
+				return cssrgb(v);
+			(nv, vl) := sys->tokenize(v, " ");
+			if(nv != 4)
+				return "";
+			for(k := 0; k < side; k++)
+				vl = tl vl;
+			x := hd vl;
+			if(short == "border-width")
+				x += "px";
+			return x;
+		}
+	}
+	return "";
+}
+
+sidenames := array[] of {"top", "right", "bottom", "left"};
+sides := array[] of {("margin-", "", "margin"), ("padding-", "", "padding"), ("border-", "-width", "border-width")};
+
+# The dump writes colours #rrggbbaa; a computed value serializes them
+# rgb(r, g, b), or rgba() when not opaque (CSSOM §6.7.2).
+cssrgb(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; ) {
+		if(s[i] == '#' && i+9 <= len s && (i+9 == len s || s[i+9] == ' ') && ishex(s[i+1:i+9])) {
+			v := array[4] of int;
+			for(k := 0; k < 4; k++)
+				v[k] = hexval(s[i+1+2*k:i+3+2*k]);
+			if(v[3] == 255)
+				r += sys->sprint("rgb(%d, %d, %d)", v[0], v[1], v[2]);
+			else
+				r += sys->sprint("rgba(%d, %d, %d, %s)", v[0], v[1], v[2], alphastr(v[3]));
+			i += 9;
+		} else
+			r[len r] = s[i++];
+	}
+	return r;
+}
+
+ishex(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(!(s[i] >= '0' && s[i] <= '9' || s[i] >= 'a' && s[i] <= 'f' || s[i] >= 'A' && s[i] <= 'F'))
+			return 0;
+	return 1;
+}
+
+hexval(s: string): int
+{
+	v := 0;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c >= 'a')
+			c -= 'a' - 10;
+		else if(c >= 'A')
+			c -= 'A' - 10;
+		else
+			c -= '0';
+		v = v*16 + c;
+	}
+	return v;
+}
+
+# the shortest decimal that rounds back to this alpha byte
+alphastr(a: int): string
+{
+	if(a == 0)
+		return "0";
+	for(p := 1; p <= 3; p++) {
+		t := sys->sprint("%.*f", p, real a / 255.0);
+		if(int (real t * 255.0 + 0.5) == a) {
+			while(t[len t - 1] == '0')
+				t = t[0:len t - 1];
+			return t;
+		}
+	}
+	return sys->sprint("%.3f", real a / 255.0);
+}
+
+hmedia(id: int, query: string): int
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return 0;
+	return style->mediamatch(css->tokenize(query), r.pg.env);
+}
+
+sels(r: ref Realm, sel: string): array of ref Css->Sel
+{
+	n := 0;
+	for(l := r.sels; l != nil; l = tl l) {
+		if((hd l).t0 == sel)
+			return (hd l).t1;
+		n++;
+	}
+	a := css->parsesels(sel);
+	if(a == nil)
+		return nil;
+	if(n >= 64)
+		r.sels = nil;
+	r.sels = (sel, a) :: r.sels;
+	return a;
+}
+
+matchsels(r: ref Realm, n: int, a: array of ref Css->Sel, scope: int): int
+{
+	d := r.pg.doc;
+	if(d.nodes[n].kind != Dom->Element)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(style->match(d, n, a[i], r.pg.env, scope))
+			return 1;
+	return 0;
+}
+
+hmatch(id, n: int, sel: string, scope: int): int
+{
+	r := realmbyid(id);
+	if(r == nil || n <= 0 || n >= r.pg.doc.n)
+		return 0;
+	a := sels(r, sel);
+	if(a == nil)
+		return -1;
+	if(scope < 0 || scope >= r.pg.doc.n || r.pg.doc.nodes[scope].kind != Dom->Element)
+		scope = 0;
+	return matchsels(r, n, a, scope);
+}
+
+hselect(id, root: int, sel: string, all: int): (int, list of int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return (0, nil);
+	a := sels(r, sel);
+	if(a == nil)
+		return (-1, nil);
+	d := r.pg.doc;
+	scope := root;
+	if(d.nodes[root].kind != Dom->Element)
+		scope = 0;
+	found: list of int;
+	for(n := d.nodes[root].first; n != 0; n = nextin(d, n, root))
+		if(matchsels(r, n, a, scope)) {
+			if(!all)
+				return (1, n :: nil);
+			found = n :: found;
+		}
+	l: list of int;
+	for(; found != nil; found = tl found)
+		l = hd found :: l;
+	return (1, l);
+}
+
+hparse(id: int, markup: string, whole: int): ref Doc
+{
+	r := realmbyid(id);
+	url := "";
+	if(r != nil)
+		url = r.pg.url;
+	if(whole)
+		return html->parsestring(markup, url);
+	return html->parsestring("<!DOCTYPE html><body>" + markup, url);
+}
+
+hviewport(id: int): (int, int, int, int)
+{
+	r := realmbyid(id);
+	if(r == nil)
+		return (0, 0, 0, 0);
+	return (r.s.width, r.s.height, 0, r.s.scroll);
+}
+
+hnavigate(id: int, url: string, replace: int)
+{
+	r := realmbyid(id);
+	if(r != nil)
+		r.reqs <-= ref Req.Navigate(url, replace);
+}
+
+hscroll(id, nil, y: int)
+{
+	r := realmbyid(id);
+	if(r != nil)
+		alt {
+		r.reqs <-= ref Req.Scroll(y) =>
+			;
+		* =>
+			;
+		}
+}
+
+hconsole(id: int, s: string)
+{
+	r := realmbyid(id);
+	url := "";
+	if(r != nil)
+		url = r.pg.url;
+	sys->fprint(sys->fildes(2), "js: %s: %s\n", url, s);
 }

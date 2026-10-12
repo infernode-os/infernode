@@ -64,6 +64,7 @@ Css: module
 		combs:	array of int;
 		spec:	int;		# specificity, (a<<20)|(b<<10)|c
 		pseudo:	string;		# pseudo-element of the subject ("before"), or nil
+		masks:	array of big;	# style's, by compound: bits of the tag, id and classes a node must have (nil until wanted)
 	};
 
 	Rule: adt {

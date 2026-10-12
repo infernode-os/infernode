@@ -657,14 +657,14 @@ themelistener()
 retheme()
 {
 	th := gettheme();
-	# Re-theme env-derived widget colours, then reconfigure the widgets that
-	# carry explicit theme colours (toplevel, the text body, the status
-	# strip) — these were hardcoded brimstone and stayed dark after a switch.
-	tkclient->wmctl(top, "retheme");
+	# Reconfigure the widgets that carry explicit theme colours (toplevel,
+	# the text body, the status strip), then re-theme the rest: retheme
+	# repaints every widget, so it comes last.
 	tk->cmd(top, ". configure -background " + col(th.bg >> 8));
 	tk->cmd(top, ".top.t configure -background " + col(th.editbg >> 8) + " -foreground " + col(th.edittext >> 8));
 	tk->cmd(top, ".status configure -background " + col(th.editstatus >> 8) + " -foreground " + col(th.editstattext >> 8));
 	configtags();
+	tkclient->wmctl(top, "retheme");
 }
 
 gettheme(): ref Theme

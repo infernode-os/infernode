@@ -423,12 +423,12 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			updatesbar();
 		<-themech =>
 			loadcanvasbg();
-			# Re-theme env-derived widgets, reconfigure the widgets carrying
-			# explicit theme colours, and repaint the fractal on the new bg.
-			tkclient->wmctl(top, "retheme");
+			# Reconfigure the widgets carrying explicit theme colours, then
+			# re-theme the rest and repaint every widget in its new colours.
 			tk->cmd(top, ". configure -background " + bgs);
 			tk->cmd(top, ".top.frac configure -background " + bgs);
 			tk->cmd(top, ".status configure -background " + statusbgs + " -foreground " + statusfgs);
+			tkclient->wmctl(top, "retheme");
 			updatesbar();
 		}
 		if(restart) {

@@ -209,8 +209,8 @@ Doc.create(d: self ref Doc, kind: int, name: string, ns: int): int
 	if(kind == Element && ns == HTML)
 		tag = atom(name);
 	n := d.n++;
-	d.nodes[n] = ref Node(kind, tag, ns, name, 0, 0, 0, 0, 0, nil, nil);
 	d.gen++;
+	d.nodes[n] = ref Node(kind, tag, ns, name, 0, 0, 0, 0, 0, nil, nil, d.gen);
 	return n;
 }
 
@@ -310,6 +310,7 @@ Doc.attachshadow(d: self ref Doc, host, root: int)
 			return;
 	d.shadows = (host, root) :: d.shadows;
 	d.gen++;
+	d.nodes[host].mgen = d.gen;
 	changed(d, 0);
 }
 
@@ -323,6 +324,8 @@ Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
 		r = (root, sheets) :: r;
 	d.adopted = r;
 	d.gen++;
+	if(root > 0 && root < d.n)
+		d.nodes[root].mgen = d.gen;
 	changed(d, 0);
 }
 
@@ -504,6 +507,8 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 		b.prev = child;
 	}
 	d.gen++;
+	p.mgen = d.gen;
+	c.mgen = d.gen;
 }
 
 Doc.remove(d: self ref Doc, child: int)
@@ -524,8 +529,11 @@ Doc.remove(d: self ref Doc, child: int)
 		d.nodes[c.next].prev = c.prev;
 	else
 		p.last = c.prev;
+	pn := c.parent;
 	c.parent = c.next = c.prev = 0;
 	d.gen++;
+	d.nodes[pn].mgen = d.gen;
+	c.mgen = d.gen;
 }
 
 Doc.setattr(d: self ref Doc, n: int, name, val: string)
@@ -555,6 +563,7 @@ Doc.setattr(d: self ref Doc, n: int, name, val: string)
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	nd.mgen = d.gen;
 	changedfrom(d, n);
 }
 
@@ -572,6 +581,7 @@ Doc.delattr(d: self ref Doc, n: int, name: string)
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	nd.mgen = d.gen;
 	changedfrom(d, n);
 }
 
@@ -580,7 +590,11 @@ Doc.settext(d: self ref Doc, n: int, s: string)
 	old := d.nodes[n].text;
 	d.nodes[n].text = s;
 	d.gen++;
-	if((p := d.nodes[n].parent) != 0 && (old == "") != (s == ""))
+	d.nodes[n].mgen = d.gen;
+	p := d.nodes[n].parent;
+	if(p != 0)
+		d.nodes[p].mgen = d.gen;
+	if(p != 0 && (old == "") != (s == ""))
 		changedfrom(d, p);	# (:empty)
 }
 

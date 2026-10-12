@@ -110,6 +110,8 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 ptime := 0;
 pt0 := 0;
 stylecheck := 0;	# /env/stylecheck: each restyle checked against the whole computed again
+layoutcheck := 0;	# /env/layoutcheck: each rebuild checked against one from nothing
+layoutreuse := 1;	# /env/layoutnoreuse: boxes built from nothing each time
 
 phase(what: string)
 {
@@ -127,6 +129,11 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 	ptime = pok >= 0;
 	(sck, nil) := sys->stat("/env/stylecheck");
 	stylecheck = sck >= 0;
+	(lck, nil) := sys->stat("/env/layoutcheck");
+	layoutcheck = lck >= 0;
+	(lnr, nil) := sys->stat("/env/layoutnoreuse");
+	layoutreuse = lnr < 0;
+	layout->setreuse(layoutreuse);
 	pt0 = sys->millisec();
 	data: array of byte;
 	ctype, err, final: string;
@@ -248,6 +255,57 @@ rebuild(p: ref Pg)
 	phase("rebuild: svgs carried");
 	inlinesvg(p, p.root);
 	phase("rebuild: inline svgs");
+	if(layoutcheck && old != nil)
+		checklayout(p);
+}
+
+# a test's (/env/layoutcheck): the boxes built and laid out again from
+# nothing, compared with what the rebuild made, line by line
+checklayout(p: ref Pg)
+{
+	layout->setreuse(0);
+	fresh := layout->build(p.doc, p.computed);
+	layout->setreuse(layoutreuse);
+	carryimages(p.root, fresh);
+	applypics(p, fresh);
+	layout->lay(fresh, p.width, p.height);
+	fitimages(p, fresh);
+	carrysvgs1(p, p.root, fresh);
+	inlinesvg(p, fresh);
+	a := layout->dump(p.root);
+	b := layout->dump(fresh);
+	if(a == b) {
+		sys->fprint(sys->fildes(2), "page: layout checked: same (%d lines)\n", nlines(a));
+		return;
+	}
+	(nil, la) := sys->tokenize(a, "\n");
+	(nil, lb) := sys->tokenize(b, "\n");
+	k := 0;
+	while(la != nil && lb != nil && hd la == hd lb) {
+		la = tl la;
+		lb = tl lb;
+		k++;
+	}
+	wa, wb: string;
+	if(la != nil) wa = hd la;
+	if(lb != nil) wb = hd lb;
+	sys->fprint(sys->fildes(2), "page: layout differs at line %d: rebuilt %q, fresh %q\n", k, wa, wb);
+}
+
+nlines(s: string): int
+{
+	n := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			n++;
+	return n;
+}
+
+carrysvgs1(p: ref Pg, src, dst: ref Box)
+{
+	svgs := array[p.doc.n] of ref Image;
+	if(inlinesvgs(p, src, svgs))
+		carrysvgs(p, svgs, dst);
 }
 
 # Layout keeps one table of background images: the page that last

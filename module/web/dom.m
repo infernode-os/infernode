@@ -57,6 +57,7 @@ Dom: module
 		parent, first, last, next, prev:	int;
 		attrs:	list of (string, string);	# in source order
 		text:	string;		# Text, Comment; doctype public id
+		mgen:	int;		# the Doc.gen of its last change (attributes, text, children): what layout's box reuse goes by
 	};
 
 	Doc: adt {

@@ -86,6 +86,7 @@ B: adt {
 	counters:	list of ref Ctr;	# the counters in scope, innermost first
 	qdepth:	int;		# quotes open (CSS 2.2 §12.3.2)
 	f:	ref Dom->Flat;	# with shadow roots, the flat tree, whose children are boxed
+	noreuse:	int;	# building inside what changes its descendants' boxes (reuse)
 };
 
 # A counter instance (CSS Lists 3 §4).  Its scope is the element that
@@ -122,14 +123,270 @@ newbox(kind, inl, node: int, st: ref St): ref Box
 		nil, nil, nil, nil, 0, 0, nil, nil, 0, nil, 0);
 }
 
+# Boxes kept from the last build, by node, given back for a subtree
+# nothing in has changed since: its elements' styles the same (restyle
+# keeps an element's St when it restyles nothing in it), no node of it
+# changed (Node.mgen, which each change of attributes, text or children
+# sets), its children (in the flat tree, where there is one) the same
+# nodes in the same order.  A page with scripts is built again and
+# again, most of it each time as it was.  Not given back inside what
+# changes its descendants' boxes as it builds (element1's nr), nor in a
+# document whose content shows counters or quotes (what one shows comes
+# from what went before it in the document, which reuse skips), nor
+# when the objects or the environment the build is told of changed.
+Reuse: adt {
+	doc:	ref Doc;
+	gen:	int;		# the document's generation at the last build
+	ordered:	int;	# its content shows counters or quotes
+	have:	array of byte;	# by node: built last time
+	give:	array of byte;	# and its boxes can be given back (not built inside what changed them)
+	boxes:	array of list of ref Box;	# what element gave it
+	st, before, after, marker, fletter, fline:	array of ref St;	# the styles it was built from
+	first:	array of int;	# its first child, as built
+	next:	array of int;	# the child after it, as built
+	text:	array of string;	# a text node's text
+	seen:	array of byte;	# this build: 1 unchanged, 2 changed (reusable's memo)
+	objects:	list of (int, int, string);
+	envw, envh:	int;
+};
+reuses: list of ref Reuse;
+reuse: ref Reuse;	# this build's, nil if nothing is to be given back or kept
+
+reusefor(d: ref Doc, c: ref Computed)
+{
+	r: ref Reuse;
+	keep: list of ref Reuse;
+	k := 0;
+	for(l := reuses; l != nil; l = tl l)
+		if((hd l).doc == d)
+			r = hd l;
+		else if(k++ < 3)
+			keep = hd l :: keep;	# (a page and its frames)
+	if(r == nil) {
+		r = ref Reuse;
+		r.doc = d;
+		r.gen = -1;	# (nothing built yet: nothing to give back)
+	}
+	reuses = r :: keep;
+	ew, eh: int;
+	if(layenv != nil)
+		(ew, eh) = (layenv.width, layenv.height);
+	if(!sameobjects(r.objects, objects) || ew != r.envw || eh != r.envh)
+		r.gen = -1;
+	(r.objects, r.envw, r.envh) = (objects, ew, eh);
+	if(r.ordered)
+		r.gen = -1;
+	if(len r.have < d.n) {
+		n := d.n + d.n/4 + 16;
+		r.have = growb(r.have, n);
+		r.give = growb(r.give, n);
+		r.boxes = growl(r.boxes, n);
+		(r.st, r.before, r.after) = (grows(r.st, n), grows(r.before, n), grows(r.after, n));
+		(r.marker, r.fletter, r.fline) = (grows(r.marker, n), grows(r.fletter, n), grows(r.fline, n));
+		r.first = growi(r.first, n);
+		r.next = growi(r.next, n);
+		r.text = growt(r.text, n);
+	}
+	r.seen = array[len r.have] of {* => byte 0};
+	if(r.gen < 0)
+		for(i := 0; i < len r.have; i++)
+			r.have[i] = r.give[i] = byte 0;
+	reuse = r;
+	if(!reuseon)
+		reuse = nil;	# (built as from nothing, and nothing kept: a check's tree)
+}
+
+reuseon := 1;
+
+setreuse(on: int)
+{
+	reuseon = on;
+}
+
+reusedone(d: ref Doc)
+{
+	if(reuse != nil) {
+		reuse.gen = d.gen;
+		reuse.seen = nil;
+	}
+	reuse = nil;
+}
+
+# the document's content shows counters or quotes: never reuse in it
+ordered(d: ref Doc)
+{
+	for(l := reuses; l != nil; l = tl l)
+		if((hd l).doc == d)
+			(hd l).ordered = 1;
+}
+
+sameobjects(a, b: list of (int, int, string)): int
+{
+	for(; a != nil && b != nil; (a, b) = (tl a, tl b)) {
+		(n1, k1, u1) := hd a;
+		(n2, k2, u2) := hd b;
+		if(n1 != n2 || k1 != k2 || u1 != u2)
+			return 0;
+	}
+	return a == nil && b == nil;
+}
+
+# whether node n's boxes can be given back: it and everything under it
+# as when it was built
+reusable(b: ref B, n: int): int
+{
+	r := reuse;
+	if(r.gen < 0 || n <= 0 || n >= len r.have || n >= len b.c.st)
+		return 0;
+	case int r.seen[n] {
+	1 =>
+		return 1;
+	2 =>
+		return 0;
+	}
+	ok := unchanged(b, n);
+	if(ok)
+		r.seen[n] = byte 1;
+	else
+		r.seen[n] = byte 2;
+	return ok && r.give[n] != byte 0;
+}
+
+# whether n's subtree is as built last time (its boxes given back or not)
+same(b: ref B, n: int): int
+{
+	r := reuse;
+	if(n <= 0 || n >= len r.have || n >= len b.c.st)
+		return 0;
+	case int r.seen[n] {
+	1 =>
+		return 1;
+	2 =>
+		return 0;
+	}
+	ok := unchanged(b, n);
+	if(ok)
+		r.seen[n] = byte 1;
+	else
+		r.seen[n] = byte 2;
+	return ok;
+}
+
+unchanged(b: ref B, n: int): int
+{
+	r := reuse;
+	nd := b.d.nodes[n];
+	if(nd.mgen > r.gen || r.have[n] == byte 0)
+		return 0;
+	case nd.kind {
+	Dom->Text =>
+		return r.text[n] == nd.text;
+	Dom->Element =>
+		c := b.c;
+		if(c.st[n] != r.st[n] || c.before[n] != r.before[n] || c.after[n] != r.after[n] ||
+		   c.marker[n] != r.marker[n] || c.firstletter[n] != r.fletter[n] || c.firstline[n] != r.fline[n])
+			return 0;
+	* =>
+		return 1;
+	}
+	k := nd.first;
+	if(b.f != nil)
+		k = b.f.first[n];
+	if(k != r.first[n])
+		return 0;
+	for(; k != 0; k = nextkid(b, k)) {
+		if(k >= len r.have || nextkid(b, k) != r.next[k])
+			return 0;
+		if(b.d.nodes[k].kind == Dom->Element) {
+			if(!same(b, k))
+				return 0;
+		} else if(b.d.nodes[k].kind == Dom->Text && (r.have[k] == byte 0 || r.text[k] != b.d.nodes[k].text || b.d.nodes[k].mgen > r.gen))
+			return 0;
+	}
+	return 1;
+}
+
+# what was built for n, kept for the next build
+reused(b: ref B, n: int, l: list of ref Box)
+{
+	r := reuse;
+	if(n <= 0 || n >= len r.have)
+		return;
+	c := b.c;
+	r.have[n] = byte 1;
+	r.give[n] = byte (b.noreuse == 0);
+	r.boxes[n] = l;
+	(r.st[n], r.before[n], r.after[n]) = (c.st[n], c.before[n], c.after[n]);
+	(r.marker[n], r.fletter[n], r.fline[n]) = (c.marker[n], c.firstletter[n], c.firstline[n]);
+}
+
+# n's children as built: its first, each one's next, a text node's text
+reusekids(b: ref B, n, first: int)
+{
+	r := reuse;
+	if(n <= 0 || n >= len r.have)
+		return;
+	r.first[n] = first;
+	for(k := first; k != 0; k = nextkid(b, k))
+		if(k < len r.have) {
+			r.next[k] = nextkid(b, k);
+			if(b.d.nodes[k].kind == Dom->Text) {
+				r.text[k] = b.d.nodes[k].text;
+				r.have[k] = byte 1;
+			}
+		}
+}
+
+growb(a: array of byte, n: int): array of byte
+{
+	r := array[n] of {* => byte 0};
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+growl(a: array of list of ref Box, n: int): array of list of ref Box
+{
+	r := array[n] of list of ref Box;
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+grows(a: array of ref St, n: int): array of ref St
+{
+	r := array[n] of ref St;
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+growi(a: array of int, n: int): array of int
+{
+	r := array[n] of {* => 0};
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+growt(a: array of string, n: int): array of string
+{
+	r := array[n] of string;
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
 build(d: ref Doc, c: ref Computed): ref Box
 {
 	curdoc = d;
 	root := d.root();
 	if(root == 0 || c.st[root] == nil)
 		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
-	b := ref B(d, c, nil, 0, dom->flat(d));
+	b := ref B(d, c, nil, 0, dom->flat(d), 0);
+	reusefor(d, c);
 	l := element(b, root);
+	reusedone(d);
 	if(l == nil) {
 		# display: none on the root: nothing, not even its background
 		# (Backgrounds 3 §2.11.2; CSS 2.2's root-box-003 wanted otherwise)
@@ -215,6 +472,16 @@ boxkind(st: ref St): (int, int)
 # several for display:contents or an inline split around a block).
 element(b: ref B, n: int): list of ref Box
 {
+	if(reuse != nil && b.noreuse == 0 && reusable(b, n))
+		return reuse.boxes[n];
+	l := element1(b, n);
+	if(reuse != nil)
+		reused(b, n, l);
+	return l;
+}
+
+element1(b: ref B, n: int): list of ref Box
+{
 	st := b.c.st[n];
 	if(st == nil || st.display == Style->Dnone)
 		return nil;
@@ -236,6 +503,14 @@ element(b: ref B, n: int): list of ref Box
 	# (ol, ul and menu reset list-item by the UA sheet; start= and reversed are hints)
 	ctrprops(b, n, st, st.display == Style->Dlistitem);
 	own := b.counters;
+	# what changes its descendants' boxes as it is built, which reuse
+	# must not hand back changed already: an outside marker put in its
+	# first line's box, ::first-letter's split of its first text, an
+	# inline's opacity or filter copied into the blocks it holds
+	nr := st.display == Style->Dlistitem && !st.listinside ||
+		(kind == Kblock || kind == Kcell) && b.c.firstletter[n] != nil ||
+		kind == Kinline && (st.filter != nil || st.opacity < 1.0);
+	b.noreuse += nr;
 	kids: list of ref Box;
 	if(st.display == Style->Dlistitem)
 		kids = marker(b, n, st) :: nil;
@@ -245,6 +520,7 @@ element(b: ref B, n: int): list of ref Box
 		kids = hd l :: kids;
 	if((as := b.c.after[n]) != nil && (ga := generated(b, n, as)) != nil)
 		kids = ga :: kids;
+	b.noreuse -= nr;
 	b.counters = ctrleave(own, n);
 	kids = rev(kids);
 	if(kind == Kinline) {
@@ -544,6 +820,8 @@ children(b: ref B, n: int, st: ref St): list of ref Box
 	c := b.d.nodes[n].first;
 	if(b.f != nil)
 		c = b.f.first[n];
+	if(reuse != nil)
+		reusekids(b, n, c);
 	for(; c != 0; c = nextkid(b, c)) {
 		cn := b.d.nodes[c];
 		case cn.kind {
@@ -1165,6 +1443,7 @@ contentof(b: ref B, n: int, st: ref St, v: array of ref Css->Tok): string
 							sty = lower(t.kids[k].s);
 						else if(t.kids[k].kind == Css->Kstring)
 							sep = t.kids[k].s;
+					ordered(b.d);
 					if(t.s == "counter")
 						s += counterrep(sty, counter(b, t.kids[0].s));
 					else
@@ -1177,6 +1456,10 @@ contentof(b: ref B, n: int, st: ref St, v: array of ref Css->Tok): string
 			q := st.quotes;
 			if(q == nil)
 				q = defaultquotes;
+			case lower(t.s) {
+			"open-quote" or "close-quote" or "no-open-quote" or "no-close-quote" =>
+				ordered(b.d);
+			}
 			case lower(t.s) {
 			"open-quote" =>
 				s += quotemark(q, b.qdepth, 0);
@@ -1239,8 +1522,15 @@ marker(b: ref B, n: int, st: ref St): ref Box
 	ms := b.c.marker[n];
 	if(ms != nil && ms.content != nil)
 		m.text = content(b, n, ms);
-	else
+	else {
+		case st.liststyle {
+		"disc" or "circle" or "square" or "none" or "disclosure-open" or "disclosure-closed" =>
+			;
+		* =>
+			ordered(b.d);	# its number shows
+		}
 		m.text = markertext(st.liststyle, v);
+	}
 	if(ms != nil)
 		m.st = ms;
 	return m;
@@ -11868,8 +12158,8 @@ firstbaseline(b: ref Box): (int, int)
 		return (1, b.lines[0].base);
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
-		if(k.inl || k.st.display == Style->Dtablecaption)
-			continue;
+		if(k.inl || k.st.display == Style->Dtablecaption || isoof(k))
+			continue;	# (an absolutely positioned or floated box gives none: nor did it here when it was not laid out yet)
 		(ok, by) := firstbaseline(k);
 		if(ok)
 			return (1, k.y + by);
@@ -11883,7 +12173,7 @@ lastbaseline(b: ref Box): (int, int)
 		return (1, b.lines[len b.lines - 1].base);
 	for(i := len b.kids - 1; i >= 0; i--) {
 		k := b.kids[i];
-		if(k.inl)
+		if(k.inl || isoof(k))
 			continue;
 		(ok, by) := lastbaseline(k);
 		if(ok)

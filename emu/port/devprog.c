@@ -786,7 +786,7 @@ modstatus(REG *r, char *ptr, int len)
 			return (WORD)f->lr;
 		return f->lr - f->mr->prog;
 	}
-	memmove(ptr, r->M->m->name, len);
+	strecpy(ptr, ptr+len, r->M->m->name);	/* (the name is shorter than len) */
 	if(r->M->compiled)
 		return (WORD)r->PC;
 	PC = r->PC;

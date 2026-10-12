@@ -1620,7 +1620,14 @@ dhcpdone(pid: int)
 #
 dhcpwait(c: chan of array of byte, xid, want, ms: int): array of byte
 {
-	t := chan of int;
+	#
+	# Buffered, as the readers' channels are: when the reply wins, no
+	# one receives from the timer, and on a plain channel it would wait
+	# on its send for ever -- seven of them, from one boot's DHCP, pings
+	# and NTP, each holding a process and this module, and more with
+	# every cable plugged in again.
+	#
+	t := chan[1] of int;
 	spawn dhcptimer(t, ms);
 
 	for(;;){
@@ -1715,7 +1722,7 @@ pingout(dest: string)
 	pc := chan of int;
 	spawn pingreader(d, rc, pc);
 	rpid := <-pc;
-	tc := chan of int;
+	tc := chan[1] of int;	# see dhcpwait
 	spawn dhcptimer(tc, 3000);
 
 	alt {
@@ -3097,7 +3104,7 @@ trytime(server: string): int
 	pc := chan of int;
 	spawn ntpreader(d, rc, pc);
 	rpid := <-pc;
-	tc := chan of int;
+	tc := chan[1] of int;	# see dhcpwait
 	spawn ntptimer(tc, 3000);
 	rep: array of byte;
 	alt {

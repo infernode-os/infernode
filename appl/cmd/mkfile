@@ -102,6 +102,7 @@ TARG=\
 	import.dis\
 	iostats.dis\
 	js.dis\
+	jsfs.dis\
 	kill.dis\
 	lan78stats.dis\
 	ktrans.dis\
@@ -243,7 +244,10 @@ SYSMODULES=\
 	dis.m\
 	draw.m\
 	scene.m\
-	ecmascript.m\
+	web/dom.m\
+	js.m\
+	jslex.m\
+	jsparse.m\
 	encoding.m\
 	env.m\
 	factotum.m\

@@ -1,10 +1,15 @@
 <$ROOT/mkconfig
 
 DIRS=\
+	js\
+	js-spike\
 	testing\
 
 TARG=\
 	authnode.dis\
+	diswrite_test.dis\
+	gentmpl.dis\
+	originfs_test.dis\
 	9p_export_test.dis\
 	auditchain_test.dis\
 	auditprov_test.dis\
@@ -75,6 +80,7 @@ TARG=\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
 	jit_test.dis\
+	js_engine_test.dis\
 	json_test.dis\
 	llmclient_think_gating_test.dis\
 	llmclient_reqshape_test.dis\
@@ -251,6 +257,10 @@ SYSMODULES=\
 	git.m\
 	gpu.m\
 	json.m\
+	js.m\
+	jslex.m\
+	jsparse.m\
+	web/dom.m\
 	llmclient.m\
 	keyring.m\
 	geoproj.m\

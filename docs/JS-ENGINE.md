@@ -1,6 +1,10 @@
 # A JavaScript engine for InferNode
 
-Status: proposal, for decision before any code. Nothing here is built.
+Status (§13): the parser, the interpreter tier with the built-ins, the
+`js` command, the realm sandbox and the DOM binding in Charon are built,
+on branch feat/js-engine; Charon runs pages' scripts with `scripts on`.
+`/mnt/js`, the origin filter and webfs sessions, lazy compilation and
+the compiled tiers are to come.
 
 This is InferNode's script engine, not Charon's. Charon is its first and
 largest user. The same engine should serve a `js` command beside `sh`,
@@ -309,6 +313,15 @@ because that data is not in the realm's namespace. This requires a
 change to webfs itself: **per-attach sessions** (an attach name selects
 a jar), so that the filter is thin and webfs keeps one implementation.
 
+*As built (originfs(4), 2026-10-10):* the filter is a 9P server the
+realm starts while confining itself, in the realm's process group but
+its own name space, mounted at the realm's `/mnt/web`. It applies CORS
+(preflights included), Opaque Response Blocking for no-cors requests,
+the forbidden request headers, and cookie scoping over webfs's one jar
+(only the page's host's cookies, never HttpOnly ones). Per-origin jars
+in `/mnt/store`, and so webfs's per-attach sessions, are not done:
+cookies are scoped, not partitioned. SameSite and CSP are not applied.
+
 ### 6.3 Threats and the mechanism that answers each
 
 | Threat | Mechanism | Strength |
@@ -439,25 +452,61 @@ on script (GitHub menus, BBC).
 
 ## 9. The spike: does Dis go fast enough?
 
-A few days, before any engine code. Hand-write in Limbo the code the
-compiler would emit, at baseline and optimised tiers, for:
+Done on 2026-10-09; the method and every figure are in
+[tests/js-spike/README.md](../tests/js-spike/README.md). The decision is
+Dis, for the safety reasons above, and the spike says what the VM and
+the engine need for it to be fast:
 
-| Benchmark | What it measures |
-|---|---|
-| property get/set on a shaped object in a loop | inline-cache hit path |
-| `richards` / `deltablue` | polymorphic calls, object-heavy code |
-| closure creation and calls | allocation and environments |
-| string building and splitting | string representation |
-| allocating 10⁶ small cyclic objects | the Dis cycle collector's pause and throughput |
-| `load` of 1,000 tiny generated modules | runtime codegen cost under the JIT |
+- **Where the JIT is good, the optimised tier is a good target.** On
+  arm64 it is level with QuickJS or within 2.5× of it, and faster on
+  property access, calls and floating point. On amd64 pure arithmetic
+  is 3× faster than QuickJS.
+- **The amd64 JIT punts struct copies that hold pointers** (`IMOVMP`),
+  calling the interpreter's routine for each one, so a value with any
+  pointer in it costs 8× a value without, slower even than
+  interpretation. JavaScript copies values at every assignment,
+  argument and return.
+- **A generic (baseline) tier is 9–39× slower than QuickJS on amd64**,
+  3–13× on arm64. Type-specialised code is needed early, not as the
+  last phase (§5.3, §11).
+- **Strings need the engine's own representation**; Limbo strings used
+  directly are 8–40× slower at this work.
+- **Generated modules are cheap:** 25–35 µs to load and translate one.
+- **The collector is paced by the scheduler, not by allocation:** a
+  thread making cyclic garbage outruns it and exhausts the heap.
 
-Compare with QuickJS on the same machine (minipc, amd64; and the Mac,
-arm64) with `emu -c1`.
+Those findings come from values that hold Limbo pointers, with
+JavaScript's objects left to Dis's collector.  Dis is built that way
+for Limbo programs: reference counting so a file or window goes the
+moment nothing refers to it, an idle-time collector for the rare cycle
+(Limbo makes a cyclic type say so), and a small JIT that punts the
+rarer instructions.  JavaScript's heap is nothing like that, which is
+why V8 and QuickJS manage their own.
 
-**Go:** baseline tier within 2× of QuickJS on the object benchmarks, GC
-pauses under 10 ms for a 50 MB heap, and module load under 1 ms. **No
-go:** any of these 5× off with no clear fix. The spike's code and numbers
-are committed under `tests/js-spike/` whichever way it comes out.
+**So the engine has its own heap, and Dis is not changed** (spike2,
+2026-10-10):
+
+- **Values** are a tag, a handle and a number, with no pointers, so a
+  copy is a plain move.
+- **Objects** are rows of the engine's own arrays.
+- **Locals** live on the engine's value stack.
+- **Collection** is the engine's own mark-and-sweep.
+
+On amd64 the optimised tier is then:
+
+- 1.7–3.2× faster than QuickJS on calls, allocation and floating point;
+- level with it on closures;
+- 1.7–2.5× off it on polymorphic calls and property access;
+- 10× off it on strings, which need their own representation.
+
+Six rounds of half a million cyclic objects take about 165 ms, with
+pauses of 5–6 ms.
+
+The baseline tier is 3–11× off, so it emits each operation's common
+case in line, and specialised code comes early.  §5.1 and §5.4 are
+superseded by this.  One amd64 JIT gap shows: real-to-integer
+conversions are punted where arm64 compiles them in line, which is a
+small separate fix should profiles of Limbo programs justify it.
 
 
 ## 10. Work this needs elsewhere in the system
@@ -502,3 +551,293 @@ are committed under `tests/js-spike/` whichever way it comes out.
    a Jira issue for review, per the project rule.
 4. **webfs sessions**: change webfs (preferred), or run one webfs per
    origin.
+
+
+## 13. Status
+
+### What is built
+
+| File | What it is |
+|---|---|
+| `appl/lib/js/jslex.b`, `jsparse.b` | Tokens and the grammar, to an ESTree-shaped tree (`module/jsparse.m`), scripts and modules |
+| `appl/lib/js/jscheck.b` | The early errors that need the whole tree |
+| `appl/lib/js/jsre.b`, `jsrx.b` | Regular expressions: patterns parsed in all three modes, compiled to a backtracking machine |
+| `lib/js/unicode` | Unicode 17 property and case data, read when first needed |
+| `appl/lib/js/js.b` | The engine: one module made of included fragments; each loaded instance is a realm |
+| `jsval.b` | Values (tag, int, real: no Limbo pointers), strings, property keys, shapes, the collector |
+| `jsobj.b` | The object internal methods, conversions, comparisons |
+| `jsops.b`, `jscomp.b` | Register bytecode and the compiler that makes it |
+| `jsvm.b` | The interpreter |
+| `jsjit.b`, `jsjit.m`, `jsjitt.b` | The compiled tier: a hot function made into a Dis module (`Dis->writeobj`) the JIT compiles |
+| `jsrt.b` | Generators, async functions, promises and jobs, iteration, eval |
+| `jsbuiltin.b` and the rest | The built-ins: Object to Date, typed arrays, Proxy, BigInt, iterator helpers, modules, explicit resource management |
+| `tests/js/t262.b` | test262, for parsing or (`-r`) running, each test in a fresh realm |
+| `tests/js/jsrun.b` | Run scripts in a realm; `$262.disasm(f)` shows a function's bytecode |
+| `appl/cmd/js.b` | js(1): files, `-e`, modules, a read-eval-print loop; `-t` timings, `-P` a profile, `-g n` collection stress, `-L n` lazy compilation from n characters |
+| `appl/lib/js/jsdom.b` | A web page's realm (`Js->page`): confinement, the DOM's natives over Charon's `Dom->Doc`, the event loop, fetching through webfs |
+| `lib/js/dom.js` | The DOM and the window in JavaScript over those natives: nodes, elements and the HTML element classes, events, selectors, forms, style and style sheets, geometry, URL, fetch and XMLHttpRequest (with CORS), timers, storage, cookies, observers, custom elements, import maps |
+| `lib/js/intl.js` | Intl, run before the DOM prelude: number, date, plural, relative-time and list formats, collation, segmentation; English words, a few locales' separators, no time zone database |
+| `appl/lib/web/originfs.b` | originfs(4): the origin filter a page's realm sees as `/mnt/web` |
+| `appl/cmd/jsfs.b` | jsfs(4): realms as files at `/mnt/js` (clone, ctl, status, console, eval, profile) |
+| `appl/lib/web/browser.b` | Charon's side: a realm per page with scripts, the host functions (layout, selectors, parsing), clicks and form input through the realm, a watchdog |
+| `tests/js/jspage.b`, `tests/js/pages/` | A page loaded headlessly with scripts on; `dom.html` checks 188 behaviours, `confine.html` the namespace, `storage.html` what lasts |
+| `tests/js_engine_test.b` | The host interface: values, errors, control flow, lazy compilation, jobs, host functions, realms apart |
+
+`appl/lib/ecmascript`, the old interpreter, is retired: Jwin (Acme's and
+Xenith's scripted window) uses `Js->deffn` and `Js->callfn`.
+
+The design is §9's: the engine's own heap, Dis and its JIT unchanged.
+The interpreter runs script-to-script calls in one loop without Limbo
+recursion; a thrown value is a Limbo exception unwound through each
+code's handler table; generators and async functions suspend by saving
+their registers; the collector runs only at the interpreter's safe
+points.
+
+A script of 16K characters or more is compiled lazily, as V8 does it:
+the parser keeps a nested function's extent and the names it mentions,
+not its body, and the function is parsed and compiled when first
+called.  Every name it mentions that is bound outside is taken as
+captured.
+
+### Conformance (test262, 2026-10-11)
+
+- Parsing (`test/language`, `test/annexB/language`): all tests pass.
+- Running `test/language`: 98.3% (18652 of 18968; the early-error tests
+  are counted by the parser's run), the same with every function
+  compiled lazily (`-L 0`).
+- Running `test/built-ins`: 99.1% (17625 of 17791).
+- `t262 -g 16` runs them with a collection every sixteen allocations,
+  which is how the collector's missing roots were found.
+
+Skipped: proposals no browser ships (decorators, import defer and source
+phase imports, Temporal, ShadowRealm, the iterator proposals in
+progress, await dictionaries, the error stack accessor, immutable array
+buffers), Atomics and SharedArrayBuffer, cross-realm tests.
+
+### Web pages
+
+A page's realm is a process that confines itself before running
+anything: a new process group, a namespace of only its grants (webfs,
+`/lib/js`, a `file:` page's own directory, its origin's store), no
+descriptors but standard error, no devices.  `tests/js/pages/confine.html` checks that it can
+read nothing else.  The document is Charon's own `Dom->Doc`, shared;
+each task holds the session's lock, and the page is laid out again
+before the lock is let go.  A script that runs 30 seconds is stopped.
+
+localStorage lasts, in the origin's directory under the user's
+`lib/charon/store`; `document.cookie` reads and writes webfs's jar, as
+RFC 6265 filters it.  A cross-origin fetch is CORS's: the page's Origin
+sent, a preflight when it is needed, the response readable only when the
+server allows it, no-cors responses opaque.
+
+The realm's `/mnt/web` is originfs(4), not webfs: CORS, Opaque Response
+Blocking, cookie scoping and the forbidden headers are enforced outside
+the realm (§6.2); `tests/host/originfs_test.sh` checks them, directly
+and from a page.
+
+Shadow DOM is rendered (2026-10-10).  The document keeps its shadow
+roots; `Dom->flat` makes the flat tree (a host's children are its shadow
+root's, a slot's its assigned light nodes or its fallback) as index
+arrays once a pass, and style walks it for inheritance and layout boxes
+it, while selectors match in each tree's own structure.  A shadow tree's
+rules are the user agent's and its own (`<style>` elements, then adopted
+sheets), the document's do not reach in; `:host`, `:host()` and
+`::slotted()` apply below the document's rules, as an inner context's
+do.  Events cross the boundary with retargeting; slots have
+`assignedNodes`, `assignedElements`, `assignedSlot` and `slotchange`;
+declarative shadow roots are attached when the page is parsed.  A
+document without shadow roots builds no flat tree: restyle and relayout
+of Wikipedia, the Python docs, BBC and GitHub measure the same as before
+within the noise.  Reddit, built of web components, went from 9 lines of
+text to its whole feed.  Style sheets a script adds or changes now apply
+(they were read once, at load).
+
+Gaps, in order: cookies scoped but not partitioned, no SameSite or CSP;
+Web Workers (MSN needs them); a shadow tree's linked sheets and
+`:host-context`; inline elements' getBoundingClientRect (empty: their
+geometry is in the line fragments); POST forms from script; no canvas or
+media.
+
+Measured on nineteen large sites (2026-10-10): GitHub, YouTube,
+Wikipedia, Google, Amazon, MDN, Mozilla, NASA, the Python docs, Pantip,
+Hacker News, Lazada, Medium, Booking, BBC and Apple run their scripts
+with no error of ours; Microsoft's one error is its own (raw newlines in
+a JSON attribute).
+
+### Speed
+
+The interpreter is 10-50x slower than QuickJS on the spike's benchmarks
+(calls are the worst).  That is what §9 predicted for an interpreter.
+
+**The compiled tier (phase 6, begun 2026-10-10).**  A function that has
+looped a thousand times is translated to a Dis module of its own
+(`Dis->writeobj`, written to `/tmp` and loaded; a page's realm has a
+`/tmp` of its own in memory), which the JIT compiles like any Limbo
+module.  Its `run(st, pc)` enters at any operation through a case on
+pc and runs in line: constants and moves, number arithmetic and
+comparisons (NaN tested before an ordered branch), `%` and the bitwise
+operators on 32-bit integers, increments, `===`, branches on booleans,
+property reads and writes on an inline cache's hit, array elements, and
+closure variables.  At anything else, or operands of another type, it
+returns that operation's pc and the interpreter does it.  Compiled code
+so never throws, allocates, calls or changes frames, and nothing else in
+the engine knows of it.  test262 run with every function compiled at
+once (`-J 0`) passes exactly what the interpreter passes.
+
+It is off unless `/env/jsjit` exists (its value is the threshold; empty
+means 1000): until it has been proven on pages, scripts run interpreted.
+`js -J n` and `Js->jit` choose for themselves.  Known issue: with it on,
+reddit.com's scripts corrupt the heap in about one run in five (amd64,
+2026-10-12), after the compiler fix for `a[i] = f()` (#856) that cured
+the interpreter's; to be found before it is turned on.
+
+| Loop (Apple M-series, arm64 JIT) | interpreted | compiled |
+|---|---|---|
+| counter, multiply, add (3,000,000) | 469 ms | 38 ms |
+| object property read and write (1,000,000) | 215 ms | 50 ms |
+| array elements (300,000) | 73 ms | 14 ms |
+| closure variable (1,000,000) | 144 ms | 15 ms |
+| `%` and `===` (300,000) | 109 ms | 9 ms |
+
+**Verifier and fuzzing.**  Each module made is checked before it is
+loaded: a forward data flow over its instructions keeps what each frame
+slot holds, and every instruction must be one the generator makes with
+operands of the kinds it takes (addresses only of an engine array's
+element, made by INDX, which Dis bounds-checks, or of the frame's
+registers below their count; st's fields as their types; jumps within
+the code).  A module refused is not loaded.  A test spoils modules four
+ways and checks each is refused.  The verifier earned its place at once:
+in a test262 run it refused 920 modules, all from a generator whose
+operations runto() patches while its parameters run, which the compiler
+had walked out of step; that is fixed.  `tests/js/jsfuzz` makes random
+programs over what compiled code has in line and what makes it leave,
+runs each interpreted and compiled, and compares: 20,000 programs, no
+difference; a subtraction made an addition in the compiler shows in 5
+programs of 500.  Its first run also found a Limbo compiler bug: an
+inlined call's temporary argument freed before its element was read,
+corrupting the heap under `-c0` too (fixed in PR #830).  Running more
+programs per process then found the emulator abandoning to the
+collector everything more than 64 levels into a structure whose last
+reference dropped, so each realm made and shut down kept most of its
+heap until the emulator idled (fixed in PR #829).
+
+Calls from compiled code were the next thing.  Making one through the
+engine's callv, which runs the callee in a loop of its own, was tried
+and is slower than leaving the call to the interpreter, whose calls push
+a frame (a million calls in a loop: 305 ms interpreted with the loop
+compiled around them, 467 ms called from compiled code).  Pushing frames
+as the interpreter does was tried too: compiled code asked the engine
+(through a function reference) to push the callee's frame, called the
+callee's compiled run directly, and its return asked the engine to pop
+the frame.  It is correct, and still slower, 357 ms against 245
+interpreted, as each call is three calls between Dis modules, which cost
+more on this VM than the interpreter's own call.  A compiled call has to
+stay inside one module.
+
+So a small function is compiled into its caller, in line.  The
+interpreter notes at each call site of a function not yet compiled what
+it called there (Code.calltarget).  A call whose function calls nothing,
+has at most 256 operations all compiled, and is not a generator, async
+or a class constructor, gets that function's code at the call: guarded
+by the function being the same object (else the interpreter makes the
+call), the arguments moved into registers of the callee's own (st.inl),
+this given as the call would give it (an object as it is; anything else
+in sloppy code is the interpreter's), its constants put in line, its
+property reads and writes on its own inline caches, and its return a
+move to the call's register.  Where the callee meets an operation or an
+operand compiled code does not have, jitrun gives it the frame the call
+would have made, with its registers, and the interpreter goes on in the
+callee at that operation.  So inlined code still never throws or calls.
+
+| Loop of 1,000,000 calls (arm64 JIT) | interpreted | compiled |
+|---|---|---|
+| `f(a, b) { return a + b; }` | 291 ms | 86 ms |
+
+The fuzzer's programs now call functions and methods with arguments of
+every kind, and use this in sloppy code; it is compiled after two
+iterations, so the interpreter has seen the calls first.  Faults planted
+in the inlining (an argument lost when the callee is given its frame,
+the sloppy-this guard left out, every site using one function's inline
+caches) each show as differences.
+
+Profiles of real pages (prof(1) around `jspage -k`) moved work into the
+interpreter too: a shape's many transitions are hashed (objects used as
+maps: 216 ms to 33), adding a property is cached at the site with the
+prototypes' shapes, a property found on a prototype is cached likewise,
+`new` pushes a frame instead of running a nested loop (a loop making
+objects by a method: 565 ms to 250), for-of over an array makes no
+result objects, and a plain descriptor is read from its shape.  Google
+Tag Manager's scripts on NASA's page ran 10.6 s and 7.0 s under the
+profiler before, 1.6 s and 2.5 s after.
+
+Compiling a 430 KB bundle takes 100 ms; parsing it 200 ms.  Lazy
+compilation took YouTube's 10.9 MB of script from 6.8 s to parse and
+980 MB to 3.7 s and 252 MB, and the whole page from 1.4 GB to 387 MB.
+
+### Pages: where the time went (2026-10-11)
+
+Timing whole pages (`jspage -q`, with scripts off and on; `/env/jstime`
+has a page's realm say where its time went, `/env/pagetime` Charon's
+phases) showed most of a slow page's time outside the engine, in the
+browser's handling of what scripts do.  In order of what they cost:
+
+| Fix | Measured |
+|---|---|
+| `style->match` made a matcher, with caches the length of the document, for every element a querySelectorAll asked of | GitHub: 711 queries, 18.7 s → 911 queries, 160 ms |
+| A box laid out again in one layout with the same inputs is not laid out again (flex items were laid out several times, multiplied by nesting) | GitHub repository page layout 8.9 s → 2.2 s; 90 pages render to the same pixels |
+| getComputedStyle computes one element from its ancestors, not the document | Apple: 155 calls, 8.5 s → 123 ms |
+| A script's changes restyle the subtrees they can affect (`Doc.changed`, `style->restyle`), checked element by element against a whole restyle (`/env/stylecheck`) on nine sites | Apple's 34 restylings 8.5 s → 3.5 s |
+| Rule index takes only an element's own keys and indexes attribute selectors; compounds' tag, id and class bits test an ancestor before it is tried; custom properties in one table | GitHub's styling 870 ms → 315 ms |
+| A module's imports fetched together, scanned for from its source as it comes | GitHub's 80 module scripts no longer fetched one at a time inside a task |
+| Lazy compilation from 16 KB (was 512 KB); a lazily compiled function passes over its own functions' bodies (parsed once already) rather than parsing them again | Lazada's 7,400 lazy compiles 3.1 s → 1.3 s |
+| A realm frees itself when it ends: compiled-tier state, lazy functions' compile records and page realms' loaders were cycles only the collector freed | 3.4 MB per compiling realm kept until the emulator idled |
+| Emulator: a slice ended on every call between modules after a punted return (stale `R.t`, PR #831); `destroy` abandoned deep structures to the collector (PR #829); `up` a thread-local variable | 2.6 s → 0.6 s on one benchmark; per-realm leak gone; 8% on allocation-heavy code |
+
+GitHub's home page was shown in 44–69 s with scripts on, its scripts
+busy for 23.5 s; now 12–14 s and 2–5 s (the rest is the network and
+Charon's own layout).  What remains, largest first: geometry queries
+after a change still lay the page out again whole (no incremental
+layout); parsing big bundles (1–2.5 s on BBC, YouTube, NASA); running
+code that runs once (the compiled tier is for loops); and a realm's
+heap, 300–500 MB on the heaviest pages, mostly compile-time structures
+and many small allocations.
+
+### Toolchain bugs found on the way (reported, not fixed here)
+
+- `libmath/dtoa.c` (every Limbo string-to-real conversion) does not
+  return, or returns a wrong value, for some subnormal inputs
+  (`2.5e-310`, `4.94e-324`, `1e-320`), outside the emulator too.
+- The Limbo compiler folds `x != x` to 0, and branches on the inverse of
+  an ordered real comparison: both are wrong when a value is NaN.  The
+  engine tests for NaN with `math->isnan` before ordered comparisons.
+- The Limbo compiler's inliner writes a small function's result into
+  the destination while building it, so `v = f(v)` can read a field it
+  has already written; and it freed a temporary argument before the
+  element taken from it was read.  Such functions in the engine have a
+  local, which stops inlining.  Both are fixed in PR #830; the locals
+  can go once it is merged.
+- `destroy()` abandoned a structure's blocks past 64 levels to the
+  collector, which a busy VM runs seldom: a realm made and dropped in a
+  loop kept most of its heap.  Fixed in PR #829.
+- A module implementing two interfaces (`implement A, B`) breaks its
+  function references (`invalid mframe`), so the page interface is part
+  of `Js`.
+- Dis strings hold 16-bit characters (`Rune` is `ushort`, whatever
+  `Runemax` says), so a character past the BMP assigned into one is
+  cut to 16 bits; the engine keeps UTF-16 as it is.
+- emu faults in `poolfree` after an allocation the arena refuses (seen
+  once, under collection stress).
+- `sprint`'s precision is capped at 20, so `%.*f` cannot format
+  `toFixed(100)`; the engine formats exact decimals itself.
+- emu with the JIT corrupted its heap loading a page that opens many TLS
+  connections at once (a loopback copy of BBC's front page: three runs
+  in four, within seconds, with scripts off as well as on).  Found and
+  fixed (libinterp/xec.c): xec() released a compiled module's pending
+  Modlink before loading the next Prog's registers, and when that
+  release closed a file it released the VM, which saved the previous
+  Prog's registers as the next one's: two Progs on one stack.  Only
+  compiled modules defer the release, so `-c1` only, on every JIT
+  (verified on arm64; amd64 has the same code).  Reproducer after: 8 of
+  8 clean; tests/jit_unload_test.b has a deterministic case.  It is not
+  the GoDis gate's flake, which faults under `-c0` too.
+

@@ -686,7 +686,10 @@ once (`-J 0`) passes exactly what the interpreter passes.
 
 It is off unless `/env/jsjit` exists (its value is the threshold; empty
 means 1000): until it has been proven on pages, scripts run interpreted.
-`js -J n` and `Js->jit` choose for themselves.
+`js -J n` and `Js->jit` choose for themselves.  Known issue: with it on,
+reddit.com's scripts corrupt the heap in about one run in five (amd64,
+2026-10-12), after the compiler fix for `a[i] = f()` (#856) that cured
+the interpreter's; to be found before it is turned on.
 
 | Loop (Apple M-series, arm64 JIT) | interpreted | compiled |
 |---|---|---|

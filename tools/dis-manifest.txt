@@ -789,6 +789,7 @@ dis/tests/pdf_test.dis
 dis/tests/pdfrender.dis
 dis/tests/pdftext_test.dis
 dis/tests/pgrp_race_test.dis
+dis/tests/spawn_budget_test.dis
 dis/tests/sheetview_test.dis
 dis/tests/pqauth_test.dis
 dis/tests/pqc_fuzz_test.dis

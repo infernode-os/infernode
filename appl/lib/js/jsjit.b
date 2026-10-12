@@ -19,7 +19,7 @@
 
 Jittmpl: con "/dis/lib/js/jsjitt.dis";
 Disdata: type Dis->Data;	# (the engine has a Data of its own)
-jitthreshold := 1000;	# calls and backward jumps before compiling; -1: never
+jitthreshold := -2;	# calls and backward jumps before compiling; -1: never; -2: as /env/jsjit says
 jitsig := 0;		# run's signature, from the template
 jitsrt := 0;
 jitssize := 0;
@@ -39,6 +39,21 @@ jit(n: int)
 	jitthreshold = n;
 }
 
+# Off unless /env/jsjit is there: the threshold it holds, or 1000.  The
+# compiled tier is still being proven on pages (scripts run interpreted
+# meanwhile); js -J and Js->jit choose for themselves.
+jitenv()
+{
+	jitthreshold = -1;
+	if((fd := sys->open("/env/jsjit", Sys->OREAD)) == nil)
+		return;
+	b := array[16] of byte;
+	k := sys->read(fd, b, len b);
+	jitthreshold = 1000;
+	if(k > 0 && (s := string b[0:k]) != "" && s[0] >= '0' && s[0] <= '9')
+		jitthreshold = int s;
+}
+
 jitstats(): (int, int)
 {
 	return (jitcompiled, jitrejected);
@@ -48,6 +63,8 @@ jitinit(): int
 {
 	if(jitok >= 0)
 		return jitok;
+	if(jitthreshold == -2)
+		jitenv();
 	jitok = 0;
 	if(jitthreshold < 0)
 		return 0;
@@ -86,7 +103,11 @@ jitinit(): int
 # count toward compiling c; compile it when it is hot
 jithot(c: ref Code)
 {
-	if(c.jitstate != 0 || jitthreshold < 0)
+	if(c.jitstate != 0)
+		return;
+	if(jitthreshold == -2)
+		jitenv();
+	if(jitthreshold < 0)
 		return;
 	if(++c.jitn < jitthreshold)
 		return;

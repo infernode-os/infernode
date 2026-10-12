@@ -684,6 +684,10 @@ so never throws, allocates, calls or changes frames, and nothing else in
 the engine knows of it.  test262 run with every function compiled at
 once (`-J 0`) passes exactly what the interpreter passes.
 
+It is off unless `/env/jsjit` exists (its value is the threshold; empty
+means 1000): until it has been proven on pages, scripts run interpreted.
+`js -J n` and `Js->jit` choose for themselves.
+
 | Loop (Apple M-series, arm64 JIT) | interpreted | compiled |
 |---|---|---|
 | counter, multiply, add (3,000,000) | 469 ms | 38 ms |

@@ -204,15 +204,36 @@ delprog(Prog *p, char *msg)
 {
 	Osenv *o;
 	Prog **ph;
+	Pgrp *pg;
+	Fgrp *fg;
+	Egrp *eg;
+	Skeyset *sg;
 
 	tellsomeone(p, msg);	/* call before being removed from prog list */
 
+	/*
+	 * The groups are taken from the Osenv while the VM is held, and
+	 * closed after it is released: the prog stays on the list until
+	 * below, and devprog, holding the VM, reads them (its fd and ns
+	 * files, its open's permission check, the ns file's rlock).  Freed
+	 * under it, they were read and written after free -- a pool's
+	 * block headers zeroed or overwritten, the fault turning up later
+	 * in an unrelated free, killing a prog as it exited.
+	 */
 	o = p->osenv;
+	pg = o->pgrp;
+	fg = o->fgrp;
+	eg = o->egrp;
+	sg = o->sigs;
+	o->pgrp = nil;
+	o->fgrp = nil;
+	o->egrp = nil;
+	o->sigs = nil;
 	release();
-	closepgrp(o->pgrp);
-	closefgrp(o->fgrp);
-	closeegrp(o->egrp);
-	closesigs(o->sigs);
+	closepgrp(pg);
+	closefgrp(fg);
+	closeegrp(eg);
+	closesigs(sg);
 	acquire();
 
 	delgrp(p);
@@ -348,7 +369,8 @@ exprog(Prog *p, char *exc)
 static void
 propex(Prog *p, char *estr)
 {
-	Prog *f, *nf, *pgl;
+	Prog *f, *pgl;
+	int i, npid, *pids, pglpid, prop;
 
 	if(!(p->flags & (Ppropagate|Pnotifyleader)) || p->group == nil)
 		return;
@@ -362,18 +384,38 @@ propex(Prog *p, char *estr)
 		pgl = p;
 	if(!(pgl->flags & (Ppropagate|Pnotifyleader)))
 		return;	/* exceptions are local; don't propagate */
-	for(f = p->group->head; f != nil; f = nf){
-		nf = f->grpnext;
-		if(f != p && f != pgl){
-			if(pgl->flags & Ppropagate)
-				exprog(f, estr);
-			else{
-				f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
-				killprog(f, "killed");
-			}
+	/*
+	 * By pid, not Prog*, as killgrp does it: killprog can run delprog,
+	 * which releases the VM, and another thread can free the next
+	 * member meanwhile.  Walking on through grpnext, the group's list
+	 * was then unlinked through a freed Prog -- its grpnext written
+	 * into whatever had been allocated there since.
+	 */
+	npid = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		npid++;
+	pids = malloc(npid*sizeof(int));
+	if(pids == nil)
+		return;
+	npid = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		if(f != p && f != pgl)
+			pids[npid++] = f->pid;
+	pglpid = pgl->pid;
+	prop = pgl->flags & Ppropagate;
+	for(i = 0; i < npid; i++){
+		f = progpid(pids[i]);
+		if(f == nil || f == p)
+			continue;
+		if(prop)
+			exprog(f, estr);
+		else{
+			f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
+			killprog(f, "killed");
 		}
 	}
-	if(p != pgl)
+	free(pids);
+	if(pglpid != p->pid && (pgl = progpid(pglpid)) != nil)
 		exprog(pgl, estr);
 }
 

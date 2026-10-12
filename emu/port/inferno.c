@@ -912,9 +912,6 @@ Sys_pctl(void *fp)
 		closeegrp(oe);
 	}
 
-	if(f->flags & Sys_NEWPGRP)
-		newgrp(p);
-
 	if(f->flags & Sys_NODEVS)
 		o->pgrp->nodevs = 1;
 
@@ -922,6 +919,16 @@ Sys_pctl(void *fp)
 
 	if(vmreleased)
 		acquire();
+
+	/*
+	 * The process groups' lists are the VM's (spawn adds to them, an
+	 * exit takes from them, both holding it): changed here with the VM
+	 * released (NEWPGRP with FORKNS, as programs commonly ask), a list
+	 * kept a Prog that had been freed, and a later unlink wrote into
+	 * it (its grpnext, in whatever the pool had put there since).
+	 */
+	if(f->flags & Sys_NEWPGRP)
+		newgrp(p);
 
 	*f->ret = p->pid;
 }

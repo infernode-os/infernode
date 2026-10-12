@@ -13,8 +13,9 @@
 # interpreter's, and nothing the engine relies on (its handlers, frames,
 # collector) has to know about it.
 #
-# A module is written to /tmp, loaded and removed; where there is no /tmp
-# (a page's confined realm) nothing is compiled.
+# A module is written to /tmp, loaded and removed; /tmp is made if it is
+# missing, and where it cannot be (a confined realm with none) nothing is
+# compiled.
 
 Jittmpl: con "/dis/lib/js/jsjitt.dis";
 Disdata: type Dis->Data;	# (the engine has a Data of its own)
@@ -61,8 +62,11 @@ jitinit(): int
 	jitsig = tm.links[0].sig;
 	jitsrt = tm.rt;
 	jitssize = tm.ssize;
+	# made, if it is not there, as the shell's profile makes it (a
+	# fresh tree has none: emu running js directly, not under sh -l, had
+	# nothing compiled at all, and nothing said so)
 	(ok, nil) := sys->stat("/tmp");
-	if(ok < 0)
+	if(ok < 0 && sys->create("/tmp", Sys->OREAD, Sys->DMDIR|8r777) == nil)
 		return 0;
 	(dbg, nil) := sys->stat("/env/jsjitdebug");
 	jitdebug = dbg >= 0;

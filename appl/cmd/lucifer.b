@@ -1105,22 +1105,36 @@ reqkbd(on: int)
 		return;
 	if(on) {
 		sys->fprint(fd, "kbd ontop");
-		# INFR-166: hand the workspace zone rect to SDL as the
-		# focused area. wm apps that know their cursor rect more
-		# precisely (editor / xenith) refine this with their own
-		# softkbd->set_rect call; for forms (settings) and shells
-		# where we can't see the cursor from here, the zone rect is
-		# a conservative fallback — SDL slides only as much as
-		# needed for the zone bottom to clear the keyboard.
-		if(softkbd != nil && preszone.dx() > 0 && preszone.dy() > 0)
-			softkbd->set_rect(
-				preszone.min.x, preszone.min.y,
-				preszone.dx(), preszone.dy());
+		# INFR-166: a shell's prompt is at the bottom of the zone, so
+		# hand SDL the zone rect and it slides the zone bottom above
+		# the keyboard.  Every other app keeps the top pinned ("kbd
+		# ontop"): sliding the whole zone clear pushed full-window text
+		# apps (xenith, editor) up under the status bar, and no app
+		# reports its own caret rect.
+		if(softkbd != nil) {
+			if(isshellapp(curtaskpres) && preszone.dx() > 0 && preszone.dy() > 0)
+				softkbd->set_rect(
+					preszone.min.x, preszone.min.y,
+					preszone.dx(), preszone.dy());
+			else
+				softkbd->clear_rect();
+		}
 	} else {
 		sys->fprint(fd, "kbd off");
 		if(softkbd != nil)
 			softkbd->clear_rect();
 	}
+}
+
+isshellapp(tp: ref TaskPres): int
+{
+	if(tp == nil)
+		return 0;
+	case tp.activeappid {
+	"shell" or "sh" =>
+		return 1;
+	}
+	return 0;
 }
 
 # 1 if the focused activity's active workspace app subscribed to the

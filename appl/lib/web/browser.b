@@ -1148,14 +1148,14 @@ Session.nodeat(s: self ref Session, x, y: int): int
 	return n;
 }
 
-Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point)
+Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point): int
 {
 	# a page's script may hold the lock for seconds: the window keeps
 	# what it shows rather than wait (the realm says "update" when done)
 	r := realmof(s);
 	if(r != nil) {
 		if(!trylock(s, 100))
-			return;
+			return 0;
 	} else
 		lock(s);
 	# laid out as the page's scripts left the document: here, as a
@@ -1165,6 +1165,7 @@ Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point)
 	if(s.pg != nil)
 		s.pg.paint(dst, scroll);
 	unlock(s);
+	return 1;
 }
 
 # the page laid out as its document now is, if its scripts changed it

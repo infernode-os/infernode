@@ -1,0 +1,81 @@
+.TH JS 1
+.SH NAME
+js \- run JavaScript
+.SH SYNOPSIS
+.B js
+[
+.B -p
+] [
+.B -m
+] [
+.B -t
+] [
+.B -P
+] [
+.B -g
+.I n
+] [
+.B -e
+.I source
+] [
+.I file ...
+]
+.SH DESCRIPTION
+.I Js
+runs JavaScript (ECMAScript 2025) in a realm of InferNode's engine.
+Each
+.I file
+(a module, with
+.BR -m ),
+then each
+.B -e
+.IR source ,
+runs in turn in the one realm, and then the promise jobs it queued.
+With neither,
+.I js
+reads statements from its standard input and prints each one's value;
+a statement not yet complete continues on the next line.
+.PP
+The realm has the language's built-ins and
+.BR print ,
+which writes its arguments and a newline to the standard output.
+A module imports others by path, relative to its own.
+.PP
+The options are:
+.TF -g\ n
+.TP
+.B -p
+Print each file's or source's completion value.
+.TP
+.B -m
+Run the files as modules.
+.TP
+.B -t
+Say on the standard error how long each took.
+.TP
+.B -P
+Sample where the realm is every 5 ms, and print where the time went, by
+function, at the end.
+.TP
+.BI -g " n
+Collect garbage after every
+.I n
+allocations, to find values the collector cannot see (engine testing).
+.PD
+.PP
+An uncaught exception is printed on the standard error, and
+.I js
+exits with an error status.
+.SH EXAMPLES
+.EX
+; js -p -e '[1, 2, 3].map(x => x ** 2)'
+1,4,9
+; js -m main.js
+.EE
+.SH SOURCE
+.B /appl/cmd/js.b
+.br
+.B /appl/lib/js
+.SH SEE ALSO
+.IR jsfs (4),
+.IR charon (1)

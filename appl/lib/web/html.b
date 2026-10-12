@@ -1610,8 +1610,7 @@ insertchars(p: ref P, s: string)
 	else
 		prev = p.d.nodes[par].last;
 	if(prev != 0 && p.d.nodes[prev].kind == Text) {
-		p.d.nodes[prev].text += s;
-		p.d.gen++;
+		p.d.settext(prev, p.d.nodes[prev].text + s);
 		return;
 	}
 	n := p.d.create(Text, nil, HTML);

@@ -68,6 +68,13 @@ Dom: module
 		xml:	int;		# parsed as XML (attribute values match case-sensitively)
 		charset:	string;		# the encoding it was decoded from (its stylesheets' default)
 		lang:	string;		# the document's language, from <meta http-equiv=content-language>, for :lang()
+		shadows:	list of (int, int);	# (host, shadow root): the root a node of kind Document
+		adopted:	list of (int, array of string);	# (root, its adopted style sheets' text): 1, the document
+		# what changed since whoever restyles it last took the list
+		# (style->restyle): nodes whose subtrees' styles may differ;
+		# nchanged -1, everything
+		changed:	list of int;
+		nchanged:	int;
 
 		new:	fn(url: string): ref Doc;
 		create:	fn(d: self ref Doc, kind: int, name: string, ns: int): int;
@@ -77,6 +84,9 @@ Dom: module
 		setattr:	fn(d: self ref Doc, n: int, name, val: string);
 		delattr:	fn(d: self ref Doc, n: int, name: string);
 		settext:	fn(d: self ref Doc, n: int, s: string);
+		attachshadow:	fn(d: self ref Doc, host, root: int);
+		adopt:	fn(d: self ref Doc, root: int, sheets: array of string);
+		adoptedof:	fn(d: self ref Doc, root: int): array of string;
 
 		attr:	fn(d: self ref Doc, n: int, name: string): string;	# "" if absent or empty: see hasattr
 		hasattr:	fn(d: self ref Doc, n: int, name: string): int;
@@ -85,6 +95,19 @@ Dom: module
 		textof:	fn(d: self ref Doc, n: int): string;	# concatenated descendant text
 		dump:	fn(d: self ref Doc): string;	# html5lib-test tree format
 	};
+
+	# The flat tree (DOM §4.2.2), as style and layout see a document with
+	# shadow roots: a host's children are its shadow root's, a slot's are
+	# the light children assigned to it (or its own, if none are), and a
+	# host's light children no slot takes are not in it.  Selectors still
+	# match the document's own tree; scope says which tree a node is in.
+	Flat: adt {
+		parent, first, next:	array of int;	# by node; 0 none
+		scope:	array of int;	# the root of a node's tree: 1, or its shadow root
+		roots:	list of (int, int);	# (host, root), as Doc.shadows
+	};
+	flat:	fn(d: ref Doc): ref Flat;	# nil if the document has no shadow roots
+	within:	fn(d: ref Doc, n, top: int): int;	# the node after n in tree order, inside top; 0 at its end
 
 	atom:	fn(name: string): int;		# lower-case name -> tag, or Tnone
 	tagname:	fn(tag: int): string;

@@ -634,6 +634,7 @@ absx(b: ref Box): int
 
 Session.text(s: self ref Session): string
 {
+	freshen(s);
 	pg := s.pg;
 	if(pg == nil)
 		return "";
@@ -1139,6 +1140,7 @@ formencode(s: string): string
 
 Session.nodeat(s: self ref Session, x, y: int): int
 {
+	freshen(s);
 	pg := s.pg;
 	if(pg == nil)
 		return 0;
@@ -1150,13 +1152,32 @@ Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point)
 {
 	# a page's script may hold the lock for seconds: the window keeps
 	# what it shows rather than wait (the realm says "update" when done)
-	if(realmof(s) != nil) {
+	r := realmof(s);
+	if(r != nil) {
 		if(!trylock(s, 100))
 			return;
 	} else
 		lock(s);
+	# laid out as the page's scripts left the document: here, as a
+	# browser does it for a frame, not after each task that changed it
+	if(r != nil && r.pg == s.pg)
+		laidout(r);
 	if(s.pg != nil)
 		s.pg.paint(dst, scroll);
+	unlock(s);
+}
+
+# the page laid out as its document now is, if its scripts changed it
+# since (for what reads the boxes without painting)
+freshen(s: ref Session)
+{
+	r := realmof(s);
+	if(r == nil || r.pg != s.pg || r.pg.doc.gen == r.laidout)
+		return;
+	if(!trylock(s, 100))
+		return;
+	if(r.pg == s.pg)
+		laidout(r);
 	unlock(s);
 }
 
@@ -1178,6 +1199,7 @@ trylock(s: ref Session, ms: int): int
 
 Session.boxof(s: self ref Session, n: int): (int, Draw->Rect)
 {
+	freshen(s);
 	pg := s.pg;
 	if(pg == nil)
 		return (0, ((0, 0), (0, 0)));
@@ -1206,6 +1228,7 @@ Session.linkat(s: self ref Session, x, y: int): string
 
 Session.findat(s: self ref Session, what: string, after: int): (int, Draw->Rect)
 {
+	freshen(s);
 	pg := s.pg;
 	if(pg == nil || what == "")
 		return (0, ((0, 0), (0, 0)));
@@ -1242,6 +1265,7 @@ findin(b: ref Box, what: string, after, ox, oy: int): (int, Draw->Rect)
 
 Session.pageheight(s: self ref Session): int
 {
+	freshen(s);
 	if(s.pg == nil)
 		return 0;
 	return s.pg.pageheight();
@@ -1445,6 +1469,7 @@ Session.dom(s: self ref Session, n: int, what: string): (string, string)
 			return ("", nil);
 		return (style->dump(pg.computed.st[n]), nil);
 	"box" =>
+		freshen(s);
 		r := "";
 		for(l := layout->boxes(pg.root, n); l != nil; l = tl l) {
 			b := hd l;
@@ -2055,10 +2080,11 @@ hunlock(id: int)
 	r := realmbyid(id);
 	if(r == nil)
 		raise "fail:realm gone";
-	# whoever takes the lock next finds the page laid out as the
-	# document now is
+	# the page is laid out when it is next painted, or asked about
+	# (laidout), not here: a page's scripts change the document in task
+	# after task, and each was a layout of the whole (BBC: 28 in ten
+	# seconds, 190 ms each)
 	if(r.s.pg == r.pg && r.pg.doc.gen != r.laidout) {
-		laidout(r);
 		t := doctitle(r.pg.doc);
 		if(t != r.pg.title) {
 			r.pg.title = t;

@@ -86,6 +86,7 @@ B: adt {
 	counters:	list of ref Ctr;	# the counters in scope, innermost first
 	qdepth:	int;		# quotes open (CSS 2.2 §12.3.2)
 	f:	ref Dom->Flat;	# with shadow roots, the flat tree, whose children are boxed
+	noreuse:	int;	# building inside what changes its descendants' boxes (reuse)
 };
 
 # A counter instance (CSS Lists 3 §4).  Its scope is the element that
@@ -122,14 +123,270 @@ newbox(kind, inl, node: int, st: ref St): ref Box
 		nil, nil, nil, nil, 0, 0, nil, nil, 0, nil, 0);
 }
 
+# Boxes kept from the last build, by node, given back for a subtree
+# nothing in has changed since: its elements' styles the same (restyle
+# keeps an element's St when it restyles nothing in it), no node of it
+# changed (Node.mgen, which each change of attributes, text or children
+# sets), its children (in the flat tree, where there is one) the same
+# nodes in the same order.  A page with scripts is built again and
+# again, most of it each time as it was.  Not given back inside what
+# changes its descendants' boxes as it builds (element1's nr), nor in a
+# document whose content shows counters or quotes (what one shows comes
+# from what went before it in the document, which reuse skips), nor
+# when the objects or the environment the build is told of changed.
+Reuse: adt {
+	doc:	ref Doc;
+	gen:	int;		# the document's generation at the last build
+	ordered:	int;	# its content shows counters or quotes
+	have:	array of byte;	# by node: built last time
+	give:	array of byte;	# and its boxes can be given back (not built inside what changed them)
+	boxes:	array of list of ref Box;	# what element gave it
+	st, before, after, marker, fletter, fline:	array of ref St;	# the styles it was built from
+	first:	array of int;	# its first child, as built
+	next:	array of int;	# the child after it, as built
+	text:	array of string;	# a text node's text
+	seen:	array of byte;	# this build: 1 unchanged, 2 changed (reusable's memo)
+	objects:	list of (int, int, string);
+	envw, envh:	int;
+};
+reuses: list of ref Reuse;
+reuse: ref Reuse;	# this build's, nil if nothing is to be given back or kept
+
+reusefor(d: ref Doc, c: ref Computed)
+{
+	r: ref Reuse;
+	keep: list of ref Reuse;
+	k := 0;
+	for(l := reuses; l != nil; l = tl l)
+		if((hd l).doc == d)
+			r = hd l;
+		else if(k++ < 3)
+			keep = hd l :: keep;	# (a page and its frames)
+	if(r == nil) {
+		r = ref Reuse;
+		r.doc = d;
+		r.gen = -1;	# (nothing built yet: nothing to give back)
+	}
+	reuses = r :: keep;
+	ew, eh: int;
+	if(layenv != nil)
+		(ew, eh) = (layenv.width, layenv.height);
+	if(!sameobjects(r.objects, objects) || ew != r.envw || eh != r.envh)
+		r.gen = -1;
+	(r.objects, r.envw, r.envh) = (objects, ew, eh);
+	if(r.ordered)
+		r.gen = -1;
+	if(len r.have < d.n) {
+		n := d.n + d.n/4 + 16;
+		r.have = growb(r.have, n);
+		r.give = growb(r.give, n);
+		r.boxes = growl(r.boxes, n);
+		(r.st, r.before, r.after) = (grows(r.st, n), grows(r.before, n), grows(r.after, n));
+		(r.marker, r.fletter, r.fline) = (grows(r.marker, n), grows(r.fletter, n), grows(r.fline, n));
+		r.first = growi(r.first, n);
+		r.next = growi(r.next, n);
+		r.text = growt(r.text, n);
+	}
+	r.seen = array[len r.have] of {* => byte 0};
+	if(r.gen < 0)
+		for(i := 0; i < len r.have; i++)
+			r.have[i] = r.give[i] = byte 0;
+	reuse = r;
+	if(!reuseon)
+		reuse = nil;	# (built as from nothing, and nothing kept: a check's tree)
+}
+
+reuseon := 1;
+
+setreuse(on: int)
+{
+	reuseon = on;
+}
+
+reusedone(d: ref Doc)
+{
+	if(reuse != nil) {
+		reuse.gen = d.gen;
+		reuse.seen = nil;
+	}
+	reuse = nil;
+}
+
+# the document's content shows counters or quotes: never reuse in it
+ordered(d: ref Doc)
+{
+	for(l := reuses; l != nil; l = tl l)
+		if((hd l).doc == d)
+			(hd l).ordered = 1;
+}
+
+sameobjects(a, b: list of (int, int, string)): int
+{
+	for(; a != nil && b != nil; (a, b) = (tl a, tl b)) {
+		(n1, k1, u1) := hd a;
+		(n2, k2, u2) := hd b;
+		if(n1 != n2 || k1 != k2 || u1 != u2)
+			return 0;
+	}
+	return a == nil && b == nil;
+}
+
+# whether node n's boxes can be given back: it and everything under it
+# as when it was built
+reusable(b: ref B, n: int): int
+{
+	r := reuse;
+	if(r.gen < 0 || n <= 0 || n >= len r.have || n >= len b.c.st)
+		return 0;
+	case int r.seen[n] {
+	1 =>
+		return 1;
+	2 =>
+		return 0;
+	}
+	ok := unchanged(b, n);
+	if(ok)
+		r.seen[n] = byte 1;
+	else
+		r.seen[n] = byte 2;
+	return ok && r.give[n] != byte 0;
+}
+
+# whether n's subtree is as built last time (its boxes given back or not)
+same(b: ref B, n: int): int
+{
+	r := reuse;
+	if(n <= 0 || n >= len r.have || n >= len b.c.st)
+		return 0;
+	case int r.seen[n] {
+	1 =>
+		return 1;
+	2 =>
+		return 0;
+	}
+	ok := unchanged(b, n);
+	if(ok)
+		r.seen[n] = byte 1;
+	else
+		r.seen[n] = byte 2;
+	return ok;
+}
+
+unchanged(b: ref B, n: int): int
+{
+	r := reuse;
+	nd := b.d.nodes[n];
+	if(nd.mgen > r.gen || r.have[n] == byte 0)
+		return 0;
+	case nd.kind {
+	Dom->Text =>
+		return r.text[n] == nd.text;
+	Dom->Element =>
+		c := b.c;
+		if(c.st[n] != r.st[n] || c.before[n] != r.before[n] || c.after[n] != r.after[n] ||
+		   c.marker[n] != r.marker[n] || c.firstletter[n] != r.fletter[n] || c.firstline[n] != r.fline[n])
+			return 0;
+	* =>
+		return 1;
+	}
+	k := nd.first;
+	if(b.f != nil)
+		k = b.f.first[n];
+	if(k != r.first[n])
+		return 0;
+	for(; k != 0; k = nextkid(b, k)) {
+		if(k >= len r.have || nextkid(b, k) != r.next[k])
+			return 0;
+		if(b.d.nodes[k].kind == Dom->Element) {
+			if(!same(b, k))
+				return 0;
+		} else if(b.d.nodes[k].kind == Dom->Text && (r.have[k] == byte 0 || r.text[k] != b.d.nodes[k].text || b.d.nodes[k].mgen > r.gen))
+			return 0;
+	}
+	return 1;
+}
+
+# what was built for n, kept for the next build
+reused(b: ref B, n: int, l: list of ref Box)
+{
+	r := reuse;
+	if(n <= 0 || n >= len r.have)
+		return;
+	c := b.c;
+	r.have[n] = byte 1;
+	r.give[n] = byte (b.noreuse == 0);
+	r.boxes[n] = l;
+	(r.st[n], r.before[n], r.after[n]) = (c.st[n], c.before[n], c.after[n]);
+	(r.marker[n], r.fletter[n], r.fline[n]) = (c.marker[n], c.firstletter[n], c.firstline[n]);
+}
+
+# n's children as built: its first, each one's next, a text node's text
+reusekids(b: ref B, n, first: int)
+{
+	r := reuse;
+	if(n <= 0 || n >= len r.have)
+		return;
+	r.first[n] = first;
+	for(k := first; k != 0; k = nextkid(b, k))
+		if(k < len r.have) {
+			r.next[k] = nextkid(b, k);
+			if(b.d.nodes[k].kind == Dom->Text) {
+				r.text[k] = b.d.nodes[k].text;
+				r.have[k] = byte 1;
+			}
+		}
+}
+
+growb(a: array of byte, n: int): array of byte
+{
+	r := array[n] of {* => byte 0};
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+growl(a: array of list of ref Box, n: int): array of list of ref Box
+{
+	r := array[n] of list of ref Box;
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+grows(a: array of ref St, n: int): array of ref St
+{
+	r := array[n] of ref St;
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+growi(a: array of int, n: int): array of int
+{
+	r := array[n] of {* => 0};
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
+growt(a: array of string, n: int): array of string
+{
+	r := array[n] of string;
+	if(a != nil)
+		r[0:] = a;
+	return r;
+}
+
 build(d: ref Doc, c: ref Computed): ref Box
 {
 	curdoc = d;
 	root := d.root();
 	if(root == 0 || c.st[root] == nil)
 		return newbox(Kblock, 0, 0, style->anon(nil, Style->Dblock));
-	b := ref B(d, c, nil, 0, dom->flat(d));
+	b := ref B(d, c, nil, 0, dom->flat(d), 0);
+	reusefor(d, c);
 	l := element(b, root);
+	reusedone(d);
 	if(l == nil) {
 		# display: none on the root: nothing, not even its background
 		# (Backgrounds 3 §2.11.2; CSS 2.2's root-box-003 wanted otherwise)
@@ -215,6 +472,16 @@ boxkind(st: ref St): (int, int)
 # several for display:contents or an inline split around a block).
 element(b: ref B, n: int): list of ref Box
 {
+	if(reuse != nil && b.noreuse == 0 && reusable(b, n))
+		return reuse.boxes[n];
+	l := element1(b, n);
+	if(reuse != nil)
+		reused(b, n, l);
+	return l;
+}
+
+element1(b: ref B, n: int): list of ref Box
+{
 	st := b.c.st[n];
 	if(st == nil || st.display == Style->Dnone)
 		return nil;
@@ -236,6 +503,14 @@ element(b: ref B, n: int): list of ref Box
 	# (ol, ul and menu reset list-item by the UA sheet; start= and reversed are hints)
 	ctrprops(b, n, st, st.display == Style->Dlistitem);
 	own := b.counters;
+	# what changes its descendants' boxes as it is built, which reuse
+	# must not hand back changed already: an outside marker put in its
+	# first line's box, ::first-letter's split of its first text, an
+	# inline's opacity or filter copied into the blocks it holds
+	nr := st.display == Style->Dlistitem && !st.listinside ||
+		(kind == Kblock || kind == Kcell) && b.c.firstletter[n] != nil ||
+		kind == Kinline && (st.filter != nil || st.opacity < 1.0);
+	b.noreuse += nr;
 	kids: list of ref Box;
 	if(st.display == Style->Dlistitem)
 		kids = marker(b, n, st) :: nil;
@@ -245,6 +520,7 @@ element(b: ref B, n: int): list of ref Box
 		kids = hd l :: kids;
 	if((as := b.c.after[n]) != nil && (ga := generated(b, n, as)) != nil)
 		kids = ga :: kids;
+	b.noreuse -= nr;
 	b.counters = ctrleave(own, n);
 	kids = rev(kids);
 	if(kind == Kinline) {
@@ -544,6 +820,8 @@ children(b: ref B, n: int, st: ref St): list of ref Box
 	c := b.d.nodes[n].first;
 	if(b.f != nil)
 		c = b.f.first[n];
+	if(reuse != nil)
+		reusekids(b, n, c);
 	for(; c != 0; c = nextkid(b, c)) {
 		cn := b.d.nodes[c];
 		case cn.kind {
@@ -1165,6 +1443,7 @@ contentof(b: ref B, n: int, st: ref St, v: array of ref Css->Tok): string
 							sty = lower(t.kids[k].s);
 						else if(t.kids[k].kind == Css->Kstring)
 							sep = t.kids[k].s;
+					ordered(b.d);
 					if(t.s == "counter")
 						s += counterrep(sty, counter(b, t.kids[0].s));
 					else
@@ -1177,6 +1456,10 @@ contentof(b: ref B, n: int, st: ref St, v: array of ref Css->Tok): string
 			q := st.quotes;
 			if(q == nil)
 				q = defaultquotes;
+			case lower(t.s) {
+			"open-quote" or "close-quote" or "no-open-quote" or "no-close-quote" =>
+				ordered(b.d);
+			}
 			case lower(t.s) {
 			"open-quote" =>
 				s += quotemark(q, b.qdepth, 0);
@@ -1239,8 +1522,15 @@ marker(b: ref B, n: int, st: ref St): ref Box
 	ms := b.c.marker[n];
 	if(ms != nil && ms.content != nil)
 		m.text = content(b, n, ms);
-	else
+	else {
+		case st.liststyle {
+		"disc" or "circle" or "square" or "none" or "disclosure-open" or "disclosure-closed" =>
+			;
+		* =>
+			ordered(b.d);	# its number shows
+		}
 		m.text = markertext(st.liststyle, v);
+	}
 	if(ms != nil)
 		m.st = ms;
 	return m;
@@ -1712,7 +2002,9 @@ contentheightof(l: ref L, k: ref Box, cw: int): int
 {
 	outer := asauto;
 	asauto = k;
+	measuring++;
 	layblock(l, k, cw, -1, nil, 0, 0);
+	measuring--;
 	asauto = outer;
 	if(k.st.aspect > 0.0 && k.kind != Kreplaced) {
 		# an aspect ratio gives an auto height from the width
@@ -1727,7 +2019,7 @@ contentheightof(l: ref L, k: ref Box, cw: int): int
 # content would come out differently for knowing it
 imposeh(l: ref L, k: ref Box, h, cbw, cbh: int)
 {
-	if(heightmatters(k)) {	# even when h is what it had: it is definite now
+	if(!measuring && heightmatters(k)) {	# even when h is what it had: it is definite now
 		outer := imposed;
 		outerh := imposedh;
 		imposed = k;
@@ -1742,6 +2034,19 @@ imposeh(l: ref L, k: ref Box, h, cbw, cbh: int)
 seethrough(o: int): int
 {
 	return o == Style->Ovisible || o == Style->Oclip;
+}
+
+# whether a row flex container's item k is stretched to its line's cross size
+flexstretched(k: ref Box, st: ref Style->St): int
+{
+	ks := k.st;
+	al := ks.alignself;
+	if(al == Style->ALauto)
+		al = st.alignitems;
+	if(al == Style->ALnormal)
+		al = Style->ALstretch;
+	return al == Style->ALstretch && ks.height.kind == Style->Lauto &&
+		ks.mt.kind != Style->Lauto && ks.mb.kind != Style->Lauto;
 }
 
 # Would b's content come out differently if its height were known?
@@ -2268,8 +2573,31 @@ Memo: adt {
 	r1, r2:	Margin;
 	r3:	int;
 	abs:	list of ref Abs;	# the absolutely positioned boxes it left pending
+	hgen:	int;		# the layout hc is from
+	hc:	list of ref Hmemo;	# heights it came out at, newest first, for measuring
 };
 memos: array of ref Memo;
+
+# Measuring: laying a box out only for the height it comes out at, its
+# insides to be laid out again before anything reads them (a flex item
+# measured before it is stretched; a column item's content height).  A
+# box measured before at the same constraints gives its height from
+# Memo.hc without being laid out, and imposeh gives a box its height
+# without laying it out again, since only the height is read.  A box
+# laid out while measuring may so hold boxes laid out for other
+# constraints, so its Memo does not stand for it.  What reads the
+# insides of what it lays out (an atomic inline's baseline, a table
+# cell's) is never measuring.  Each nesting of flex containers laid
+# out each item twice, and those inside it twice for each of those
+# (github.com: 85,000 block layouts for 2,900 nodes).
+measuring := 0;
+Hmemo: adt {
+	w, cbw, cbh, ox, oy, flags, imph, pcth:	int;
+	h:	int;
+	r1, r2:	Margin;
+	r3:	int;
+};
+Nhmemo: con 4;
 nmemo := 0;
 abseq := 0;	# Abs records made, for knowing those a layout leaves
 
@@ -2317,6 +2645,15 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 		}
 		return (m.r1, m.r2, m.r3);
 	}
+	if(measuring && m != nil && m.hgen == laygen)
+		for(hl := m.hc; hl != nil; hl = tl hl) {
+			e := hd hl;
+			if(e.w == b.w && e.cbw == cbw && e.cbh == cbh && e.ox == ox && e.oy == oy &&
+			   e.flags == flags && e.imph == imph && e.pcth == pcth) {
+				b.h = e.h;
+				return (e.r1, e.r2, e.r3);
+			}
+		}
 	seq0 := abseq;
 	(r1, r2, r3) := layblock1(l, b, cbw, cbh, fc, ox, oy);
 	abs: list of ref Abs;
@@ -2341,6 +2678,28 @@ layblock(l: ref L, b: ref Box, cbw, cbh: int, fc: ref Fctx, ox, oy: int): (Margi
 	m.h = b.h;
 	(m.r1, m.r2, m.r3) = (r1, r2, r3);
 	m.abs = abs;
+	if(measuring)
+		m.gen = -1;
+	# the height, for measuring
+	if(m.hgen != laygen) {
+		m.hgen = laygen;
+		m.hc = nil;
+	}
+	e := ref Hmemo(b.w, cbw, cbh, ox, oy, flags, imph, pcth, b.h, r1, r2, r3);
+	nl: list of ref Hmemo;
+	n := 1;
+	for(ol := m.hc; ol != nil && n < Nhmemo; ol = tl ol) {
+		x := hd ol;
+		if(x.w != e.w || x.cbw != cbw || x.cbh != cbh || x.ox != ox || x.oy != oy ||
+		   x.flags != flags || x.imph != imph || x.pcth != pcth) {
+			nl = x :: nl;
+			n++;
+		}
+	}
+	rest: list of ref Hmemo;
+	for(; nl != nil; nl = tl nl)
+		rest = hd nl :: rest;
+	m.hc = e :: rest;
 	return (r1, r2, r3);
 }
 
@@ -2954,7 +3313,11 @@ layflex(l: ref L, b: ref Box, cbw, cbh: int)
 				hch := -1;
 				if(ch >= 0 && !wrap)
 					hch = ch;
+				# only measured when it will be stretched, and so laid out again
+				m0 := flexstretched(k, st) && heightmatters(k);
+				measuring += m0;
 				layblock(l, k, cw, hch, nil, 0, 0);
+				measuring -= m0;
 				fi.cross = k.h + k.mt + k.mb;
 			} else {
 				k.w = flexcrossw(k, b, cw);
@@ -6657,6 +7020,21 @@ tableabs(l: ref L, t, b: ref Box)
 
 laytable(l: ref L, b: ref Box, cbw, cbh: int)
 {
+	# its cells' baselines are read from their insides (measuring)
+	outerm := measuring;
+	measuring = 0;
+	{
+		laytable1(l, b, cbw, cbh);
+	} exception e {
+	"*" =>
+		measuring = outerm;
+		raise e;
+	}
+	measuring = outerm;
+}
+
+laytable1(l: ref L, b: ref Box, cbw, cbh: int)
+{
 	st := b.st;
 	tableabs(l, b, b);
 	t := tgrid(curdoc, b);
@@ -8996,6 +9374,10 @@ lbkeepall := 0;	# word-break: keep-all: no break between the letters of Chinese,
 
 lbbreak(a, b: int): int
 {
+	# two ASCII letters or digits (AL, NU): no break, unless break-all;
+	# most of a page's text, each pair two calls of lbclass otherwise
+	if(!lbbreakall && asciialnum(a) && asciialnum(b))
+		return 0;
 	if(bidi == nil)
 		return isideo(a) || isideo(b);
 	ca := bidi->lbclass(a);
@@ -9082,11 +9464,16 @@ viewbox(s: string): array of real
 # nothing breaks after one, LB8a)
 lbbase(s: string, i, st0: int): int
 {
-	if(bidi == nil)
-		return i;
+	if(bidi == nil || s[i] >= ' ' && s[i] < 16r7F)
+		return i;	# (printable ASCII: no combining mark, no control, class CM)
 	while(i > st0 && bidi->lbclass(s[i]) == Bidi->LBCM)
 		i--;
 	return i;
+}
+
+asciialnum(c: int): int
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9';
 }
 
 # the classes a line breaks beside: ideographs, emoji, Hangul (CJ as
@@ -9150,18 +9537,48 @@ transform(s: string, t: int, first: int, lang: string): string
 }
 
 # the content language of node n: the nearest lang attribute, lower-cased
+# n's language, by its lang (or xml:lang) or its nearest ancestor's;
+# each node's kept for the layout (asked for each text run, several
+# times: Wikipedia's 10,000 nodes, a walk up the tree each)
+langs: array of string;
+langgen := 0;	# the layout langs is for
+langdoc: ref Doc;
+
 langof(n: int): string
 {
 	if(curdoc == nil)
 		return nil;
-	for(p := n; p != 0; p = curdoc.nodes[p].parent) {
-		l := curdoc.attr(p, "lang");
-		if(l == nil)
-			l = curdoc.attr(p, "xml:lang");
-		if(l != nil)
-			return lower(l);
+	if(langgen != laygen || langdoc != curdoc || len langs < curdoc.n) {
+		langs = array[curdoc.n] of string;
+		langgen = laygen;
+		langdoc = curdoc;
 	}
-	return nil;
+	return langof1(n);
+}
+
+Nolang: con " ";	# known to have none
+
+langof1(n: int): string
+{
+	if(n <= 0 || n >= len langs)
+		return nil;
+	if((l := langs[n]) != nil) {
+		if(l == Nolang)
+			return nil;
+		return l;
+	}
+	l = curdoc.attr(n, "lang");
+	if(l == nil)
+		l = curdoc.attr(n, "xml:lang");
+	if(l != nil)
+		l = lower(l);
+	else if((p := curdoc.nodes[n].parent) != 0)
+		l = langof1(p);
+	if(l == nil)
+		langs[n] = Nolang;
+	else
+		langs[n] = l;
+	return l;
 }
 
 # East Asian Width F, W or H (not A), and not Hangul: the characters a
@@ -9289,48 +9706,26 @@ text(f: ref Fl, b: ref Box)
 			}
 		return;
 	}
-	lbmode = st.lbmode;
-	lbcjk = cjklang(langof(b.node));
-	lbkeepall = st.keepall == 1;
 	fc := face(st);
-	s := b.text;
-	if(st.transform != Style->TTnone)
-		s = transform(s, st.transform, f.space, langof(b.node));
-	# a carriage return is a space in every respect (CSS Text 3 §4.1)
-	for(k := 0; k < len s; k++)
-		if(s[k] == '\r') {
-			s = crtospace(s);
-			break;
-		}
-	ws := st.whitespace;
-	collapsesp := ws == Style->Wnormal || ws == Style->Wnowrap || ws == Style->Wpreline;
-	keepnl := !(ws == Style->Wnormal || ws == Style->Wnowrap);
-	nowrap := ws == Style->Wnowrap || ws == Style->Wpre;
-	ls := st.letterspacing;
-	if(collapsesp)
-		s = segbreaks(s, keepnl, cjklang(langof(b.node)));
-	# Thai: between the words a dictionary finds (UAX #14 SA)
-	thai: array of byte;
-	if(wordbreak != nil && st.keepall != 2)
-		thai = wordbreak->breaks(s);
-	i := 0;
-	while(i < len s) {
-		c := s[i];
-		if(c == '\n' && keepnl) {
-			emit(f, ref Item(Ibreak, nil, 0.0, b, fc, 0, 0, 0, 0, 0, 0.0, 0));
-			f.space = 1;
-			i++;
-			continue;
-		}
-		if(isspace(c) && collapsesp) {
-			i0 := i;
-			nl := 0;
-			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl)) {
-				if(s[i] == '\n')
-					nl = 1;
-				i++;
-			}
-			if(f.space && !nowrap) {
+	lang := langof(b.node);
+	# its words, spaces and breaks: the same each layout for the same
+	# text in the same style, so kept, by node (but not when text-
+	# transform makes them depend on what came before)
+	segs: list of ref Seg;
+	ok := 0;
+	cache := st.transform == Style->TTnone && b.node > 0;
+	if(cache)
+		(ok, segs) = cachedsegs(b, st, fc, lang);
+	if(!ok) {
+		segs = textsegs(b, st, fc, lang, f.space);
+		if(cache)
+			keepsegs(b, st, fc, lang, segs);
+	}
+	for(; segs != nil; segs = tl segs) {
+		g := hd segs;
+		if(g.collapse) {
+			# a run of collapsible white space
+			if(f.space && !g.it.nowrap) {
 				# collapsed into a space before it: a break opportunity is
 				# decided on the text before collapsing (Text 3 §4.1.1), so
 				# that space may break if this one could
@@ -9343,12 +9738,80 @@ text(f: ref Fl, b: ref Box)
 				}
 			}
 			if(!f.space) {
-				if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
-					emit(f, ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-				else
-					emit(f, ref Item(Ispace, " ", fc.space + st.wordspacing + ls, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
+				emit(f, segitem(g, b, fc, f));
 				f.space = 1;
 			}
+			continue;
+		}
+		emit(f, segitem(g, b, fc, f));
+		f.space = g.space;
+	}
+}
+
+# What text() makes of a text run before what came before it is known:
+# an item, or (collapse) a run of collapsible white space, the space it
+# leaves if not collapsed into one before it.  The items are patterns,
+# without the box, face and decoration they are emitted with.
+Seg: adt {
+	it:	ref Item;
+	collapse:	int;
+	space:	int;	# what Fl.space is after it
+	deco:	int;	# it takes the flow's decoration
+};
+
+segitem(g: ref Seg, b: ref Box, fc: ref Typeface, f: ref Fl): ref Item
+{
+	it := ref *g.it;
+	it.box = b;
+	it.face = fc;
+	if(g.deco)
+		(it.deco, it.decocolor) = (f.deco, f.decocolor);
+	return it;
+}
+
+# the segments of b's text; space0, whether what came before ended with
+# a collapsible space, matters only to text-transform
+textsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string, space0: int): list of ref Seg
+{
+	lbmode = st.lbmode;
+	lbcjk = cjklang(lang);
+	lbkeepall = st.keepall == 1;
+	r: list of ref Seg;	# reversed
+	s := b.text;
+	if(st.transform != Style->TTnone)
+		s = transform(s, st.transform, space0, lang);
+	# a carriage return is a space in every respect (CSS Text 3 §4.1)
+	for(k := 0; k < len s; k++)
+		if(s[k] == '\r') {
+			s = crtospace(s);
+			break;
+		}
+	ws := st.whitespace;
+	collapsesp := ws == Style->Wnormal || ws == Style->Wnowrap || ws == Style->Wpreline;
+	keepnl := !(ws == Style->Wnormal || ws == Style->Wnowrap);
+	nowrap := ws == Style->Wnowrap || ws == Style->Wpre;
+	ls := st.letterspacing;
+	if(collapsesp)
+		s = segbreaks(s, keepnl, cjklang(lang));
+	# Thai: between the words a dictionary finds (UAX #14 SA)
+	thai: array of byte;
+	if(wordbreak != nil && st.keepall != 2)
+		thai = wordbreak->breaks(s);
+	i := 0;
+	while(i < len s) {
+		c := s[i];
+		if(c == '\n' && keepnl) {
+			r = ref Seg(ref Item(Ibreak, nil, 0.0, nil, nil, 0, 0, 0, 0, 0, 0.0, 0), 0, 1, 0) :: r;
+			i++;
+			continue;
+		}
+		if(isspace(c) && collapsesp) {
+			while(i < len s && isspace(s[i]) && !(s[i] == '\n' && keepnl))
+				i++;
+			if(st.transform == Style->TTfull)	# full-width: the space that is left is an ideographic one
+				r = ref Seg(ref Item(Ispace, "　", fc.width("　") + st.wordspacing + ls, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 1, 1, 1) :: r;
+			else
+				r = ref Seg(ref Item(Ispace, " ", fc.space + st.wordspacing + ls, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 1, 1, 1) :: r;
 			continue;
 		}
 		if(c == ' ' && st.transform == Style->TTfull)
@@ -9370,15 +9833,13 @@ text(f: ref Fl, b: ref Box)
 				t[0] = c;
 				w = fc.width(t);
 			}
-			emit(f, ref Item(Ispace, t, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-			f.space = 0;
+			r = ref Seg(ref Item(Ispace, t, w, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 			i++;
 			continue;
 		}
 		if(c == 16r200B) {
 			# a zero-width space: a break opportunity that shows nothing
-			emit(f, ref Item(Ispace, "", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-			f.space = 0;
+			r = ref Seg(ref Item(Ispace, "", 0.0, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 			i++;
 			continue;
 		}
@@ -9404,8 +9865,7 @@ text(f: ref Fl, b: ref Box)
 			# nothing but soft hyphens: a break opportunity that shows
 			# nothing and, unlike a zero-width space, does not come
 			# between the letters around it for shaping
-			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-			f.space = 0;
+			r = ref Seg(ref Item(Ispace, "\u00AD", 0.0, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 			continue;
 		}
 		w := tw(fc, word, ls) + ls * real len word;
@@ -9415,19 +9875,73 @@ text(f: ref Fl, b: ref Box)
 			# anywhere: every character
 			lbbreakall = st.breakall == 1;
 			k0 := 0;
-			for(k := 1; k <= len word; k++)
+			for(k = 1; k <= len word; k++)
 				if(k == len word || st.breakall == 2 || lbbreak(word[k-1], word[k])) {
 					ch := word[k0:k];
-					emit(f, ref Item(Iword, ch, tw(fc, ch, ls) + ls * real len ch, b, fc, 0, f.deco, f.decocolor, 0, 0, 0.0, 0));
+					r = ref Seg(ref Item(Iword, ch, tw(fc, ch, ls) + ls * real len ch, nil, nil, 0, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 					k0 = k;
 				}
 			lbbreakall = 0;
 		} else
-			emit(f, ref Item(Iword, word, w, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
-		f.space = 0;
+			r = ref Seg(ref Item(Iword, word, w, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 		if(s[i-1] == 16rAD && st.hyphens != 0)	# the soft hyphen it ended with: a break opportunity whose hyphen shows only at a line's end
-			emit(f, ref Item(Ispace, "\u00AD", 0.0, b, fc, nowrap, f.deco, f.decocolor, 0, 0, 0.0, 0));
+			r = ref Seg(ref Item(Ispace, "\u00AD", 0.0, nil, nil, nowrap, 0, 0, 0, 0, 0.0, 0), 0, 0, 1) :: r;
 	}
+	segs: list of ref Seg;
+	for(; r != nil; r = tl r)
+		segs = hd r :: segs;
+	return segs;
+}
+
+# Segments kept by text node: a run's are good while its text, style,
+# face and language are what they were (across layouts: a page laid out
+# again after a script's change has most of its text as it was).  Some
+# nodes make more than one run (::first-letter), each kept.
+Tseg: adt {
+	text:	string;
+	st:	ref St;
+	fc:	ref Typeface;
+	lang:	string;
+	segs:	list of ref Seg;
+};
+tsegs: array of list of ref Tseg;
+tsegdoc: ref Doc;
+
+cachedsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string): (int, list of ref Seg)
+{
+	if(tsegdoc != curdoc || b.node >= len tsegs)
+		return (0, nil);
+	for(l := tsegs[b.node]; l != nil; l = tl l) {
+		t := hd l;
+		if(t.st == st && t.fc == fc && t.lang == lang && t.text == b.text)
+			return (1, t.segs);
+	}
+	return (0, nil);
+}
+
+keepsegs(b: ref Box, st: ref St, fc: ref Typeface, lang: string, segs: list of ref Seg)
+{
+	if(curdoc == nil)
+		return;
+	if(tsegdoc != curdoc) {
+		tsegs = nil;
+		tsegdoc = curdoc;
+	}
+	if(b.node >= len tsegs) {
+		n := array[curdoc.n + curdoc.n/4 + 16] of list of ref Tseg;
+		if(tsegs != nil)
+			n[0:] = tsegs;
+		tsegs = n;
+	}
+	# (no more than a few: a run whose style keeps changing)
+	keep: list of ref Tseg;
+	k := 0;
+	for(l := tsegs[b.node]; l != nil && k < 3; l = tl l)
+		if((hd l).text == b.text || k < 1) {
+			keep = hd l :: keep;
+			k++;
+		}
+	tsegs[b.node] = ref Tseg(b.text, st, fc, lang, segs) :: keep;
 }
 
 # word-space-transform (Text 4 §8.3): a zero-width space (a <wbr> is
@@ -10646,9 +11160,11 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 	# baseline is what touches the line's edge, and what is inside
 	# keeps its place relative to it (CSS 2.2 §10.8.1).
 	subtrees: list of (ref Box, real, real);	# (box, above, below)
+	fms := array[len frags] of Fm;	# each fragment's metrics, for placing it below
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift, nil, anchor) := fragmetrics(f, b, sf);
+		fms[i] = fragmetrics(f, b, sf);
+		(a, d, shift, nil, anchor) := fms[i];
 		f.base = ir(shift);
 		if(anchor != nil) {
 			subtrees = extend(subtrees, anchor, a - shift, d + shift);
@@ -10678,7 +11194,7 @@ finish(l: ref L, b: ref Box, ln: ref Ln, y, x0, first, forced: int): ref Line
 		line.fl = firstlinest(b);
 	for(i = 0; i < len frags; i++) {
 		f := frags[i];
-		(a, d, shift, va, anchor) := fragmetrics(f, b, sf);
+		(nil, nil, shift, va, anchor) := fms[i];
 		fb := real line.base + shift;
 		if(anchor != nil) {
 			(sa, sd) := extent(subtrees, anchor);
@@ -11463,6 +11979,8 @@ extent(l: list of (ref Box, real, real), k: ref Box): (real, real)
 
 # the fifth value is the top- or bottom-aligned inline box the fragment
 # is in (or is), with shift then relative to that box's baseline
+Fm: type (real, real, real, int, ref Box);	# fragmetrics': above, below, shift, vertical-align, anchor
+
 fragmetrics(f: ref Frag, b: ref Box, sf: ref Typeface): (real, real, real, int, ref Box)
 {
 	st := f.box.st;
@@ -11541,6 +12059,21 @@ vshift(st: ref St, va: int, a, d: real, parent: ref Typeface): real
 
 # Lay out an atomic inline (inline-block, inline replaced, inline flex...).
 layatomic(l: ref L, k: ref Box, cbw, cbh: int)
+{
+	# its baseline is read from its insides (measuring)
+	outerm := measuring;
+	measuring = 0;
+	{
+		layatomic1(l, k, cbw, cbh);
+	} exception e {
+	"*" =>
+		measuring = outerm;
+		raise e;
+	}
+	measuring = outerm;
+}
+
+layatomic1(l: ref L, k: ref Box, cbw, cbh: int)
 {
 	edges(k, cbw);
 	w := specw(k, k.st.width, cbw);
@@ -11627,8 +12160,8 @@ firstbaseline(b: ref Box): (int, int)
 		return (1, b.lines[0].base);
 	for(i := 0; i < len b.kids; i++) {
 		k := b.kids[i];
-		if(k.inl || k.st.display == Style->Dtablecaption)
-			continue;
+		if(k.inl || k.st.display == Style->Dtablecaption || isoof(k))
+			continue;	# (an absolutely positioned or floated box gives none: nor did it here when it was not laid out yet)
 		(ok, by) := firstbaseline(k);
 		if(ok)
 			return (1, k.y + by);
@@ -11642,7 +12175,7 @@ lastbaseline(b: ref Box): (int, int)
 		return (1, b.lines[len b.lines - 1].base);
 	for(i := len b.kids - 1; i >= 0; i--) {
 		k := b.kids[i];
-		if(k.inl)
+		if(k.inl || isoof(k))
 			continue;
 		(ok, by) := lastbaseline(k);
 		if(ok)
@@ -11658,7 +12191,7 @@ lastbaseline(b: ref Box): (int, int)
 # as page.b's numbers the elements', so two styles can share a sid
 # and a face found by sid alone was another style's (a ::before line
 # took an earlier page's line height).
-Nfacecache: con 256;
+Nfacecache: con 4096;	# (styles, not faces: Wikipedia has thousands)
 faces: array of list of (ref St, ref Typeface);
 facedoc: ref Doc;	# the document the cached styles belong to
 

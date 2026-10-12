@@ -110,6 +110,8 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 ptime := 0;
 pt0 := 0;
 stylecheck := 0;	# /env/stylecheck: each restyle checked against the whole computed again
+layoutcheck := 0;	# /env/layoutcheck: each rebuild checked against one from nothing
+layoutreuse := 1;	# /env/layoutnoreuse: boxes built from nothing each time
 
 phase(what: string)
 {
@@ -127,6 +129,11 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 	ptime = pok >= 0;
 	(sck, nil) := sys->stat("/env/stylecheck");
 	stylecheck = sck >= 0;
+	(lck, nil) := sys->stat("/env/layoutcheck");
+	layoutcheck = lck >= 0;
+	(lnr, nil) := sys->stat("/env/layoutnoreuse");
+	layoutreuse = lnr < 0;
+	layout->setreuse(layoutreuse);
 	pt0 = sys->millisec();
 	data: array of byte;
 	ctype, err, final: string;
@@ -220,6 +227,13 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 # page has, and lay them out.  Under plk.
 rebuild(p: ref Pg)
 {
+	# styles as the document now is: its scripts may have changed it
+	# since (the page is laid out when painted, not after each of their
+	# tasks), and an image coming in builds it again
+	pt0 = sys->millisec();	# (not the time since the last)
+	if(p.computed == nil || p.doc.nchanged != 0 || len p.computed.st < p.doc.n)
+		styleagain(p);
+	phase("rebuild: styles");
 	bgpage = nil;	# its background images, again with any new ones
 	usebg(p);
 	old := p.root;
@@ -235,11 +249,65 @@ rebuild(p: ref Pg)
 	phase("rebuild: laid out");
 	fitimages(p, p.root);
 	phase("rebuild: images fitted");
-	if(old != nil)
-		carrysvgs(p, inlinesvgs(p, old, nil), p.root);	# after: an inline SVG's picture is not its size
+	if(old != nil) {
+		svgs := array[p.doc.n] of ref Image;
+		if(inlinesvgs(p, old, svgs))
+			carrysvgs(p, svgs, p.root);	# after: an inline SVG's picture is not its size
+	}
 	phase("rebuild: svgs carried");
 	inlinesvg(p, p.root);
 	phase("rebuild: inline svgs");
+	if(layoutcheck && old != nil)
+		checklayout(p);
+}
+
+# a test's (/env/layoutcheck): the boxes built and laid out again from
+# nothing, compared with what the rebuild made, line by line
+checklayout(p: ref Pg)
+{
+	layout->setreuse(0);
+	fresh := layout->build(p.doc, p.computed);
+	layout->setreuse(layoutreuse);
+	carryimages(p.root, fresh);
+	applypics(p, fresh);
+	layout->lay(fresh, p.width, p.height);
+	fitimages(p, fresh);
+	carrysvgs1(p, p.root, fresh);
+	inlinesvg(p, fresh);
+	a := layout->dump(p.root);
+	b := layout->dump(fresh);
+	if(a == b) {
+		sys->fprint(sys->fildes(2), "page: layout checked: same (%d lines)\n", nlines(a));
+		return;
+	}
+	(nil, la) := sys->tokenize(a, "\n");
+	(nil, lb) := sys->tokenize(b, "\n");
+	k := 0;
+	while(la != nil && lb != nil && hd la == hd lb) {
+		la = tl la;
+		lb = tl lb;
+		k++;
+	}
+	wa, wb: string;
+	if(la != nil) wa = hd la;
+	if(lb != nil) wb = hd lb;
+	sys->fprint(sys->fildes(2), "page: layout differs at line %d: rebuilt %q, fresh %q\n", k, wa, wb);
+}
+
+nlines(s: string): int
+{
+	n := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			n++;
+	return n;
+}
+
+carrysvgs1(p: ref Pg, src, dst: ref Box)
+{
+	svgs := array[p.doc.n] of ref Image;
+	if(inlinesvgs(p, src, svgs))
+		carrysvgs(p, svgs, dst);
 }
 
 # Layout keeps one table of background images: the page that last
@@ -625,9 +693,18 @@ Pg.stylefor(p: self ref Pg, n: int): ref Style->St
 	st: ref Style->St;
 	plock();
 	{
-		if(resheet(p))
-			p.computed = nil;	# (the next styling is of the whole, with these sheets)
-		st = style->element(p.doc, p.styles, p.env, n);
+		if(p.doc.shadows != nil && p.computed != nil) {
+			# with shadow trees one element's style is the whole's
+			# (style->element): the page's own brought up to date, as
+			# its next update would, by restyling what changed
+			styleagain(p);
+			if(n > 0 && n < len p.computed.st)
+				st = p.computed.st[n];
+		} else {
+			if(resheet(p))
+				p.computed = nil;	# (the next styling is of the whole, with these sheets)
+			st = style->element(p.doc, p.styles, p.env, n);
+		}
 	} exception e {
 	"*" =>
 		punlock();
@@ -1458,7 +1535,7 @@ inlinesvg(p: ref Pg, b: ref Box)
 		(w, h) := layout->objectbox(b);
 		if(w > 0 && h > 0 && (b.img.r.dx() != w || b.img.r.dy() != h))
 			if((pic := picof(p, b.url)) != nil && pic.svg != nil)
-				if((img := decodeimage(layout->svgresize(pic.svg, w, h), "image/svg+xml", nil)) != nil)
+				if((img := svgsized(pic, w, h)) != nil)
 					b.img = img;
 	}
 	for(i := 0; i < len b.kids; i++)
@@ -1473,34 +1550,66 @@ inlinesvg(p: ref Pg, b: ref Box)
 	}
 }
 
-# Inline <svg>s drawn already, by node, to keep across a rebuild.
-inlinesvgs(p: ref Pg, b: ref Box, acc: list of (int, ref Image)): list of (int, ref Image)
+# An SVG image drawn at w by h: each size drawn kept, as each rebuild
+# starts again from its natural size (go.dev's icons and logos, drawn
+# again at every rebuild: 100 ms each)
+Sized: adt {
+	pic:	ref Pic;
+	w, h:	int;
+	img:	ref Image;
+};
+sized: list of ref Sized;
+Nsized: con 256;
+
+svgsized(pic: ref Pic, w, h: int): ref Image
 {
-	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.img != nil && p.doc.nodes[b.node].ns == Dom->SVG)
-		acc = (b.node, b.img) :: acc;
+	for(l := sized; l != nil; l = tl l)
+		if((hd l).pic == pic && (hd l).w == w && (hd l).h == h)
+			return (hd l).img;
+	img := decodeimage(layout->svgresize(pic.svg, w, h), "image/svg+xml", nil);
+	if(img == nil)
+		return nil;
+	# newest first, the oldest let go
+	keep: list of ref Sized;
+	n := 1;
+	for(l = sized; l != nil && n < Nsized; l = tl l) {
+		keep = hd l :: keep;
+		n++;
+	}
+	sized = nil;
+	for(; keep != nil; keep = tl keep)
+		sized = hd keep :: sized;
+	sized = ref Sized(pic, w, h, img) :: sized;
+	return img;
+}
+
+# Inline <svg>s drawn already, by node, to keep across a rebuild (by
+# node: a box looked each up in a list, go.dev's icons 34 ms a rebuild);
+# whether there are any
+inlinesvgs(p: ref Pg, b: ref Box, imgs: array of ref Image): int
+{
+	any := 0;
+	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.node < len imgs && b.img != nil && p.doc.nodes[b.node].ns == Dom->SVG) {
+		imgs[b.node] = b.img;
+		any = 1;
+	}
 	for(i := 0; i < len b.kids; i++)
-		acc = inlinesvgs(p, b.kids[i], acc);
+		any |= inlinesvgs(p, b.kids[i], imgs);
 	for(l := b.pos; l != nil; l = tl l)
-		acc = inlinesvgs(p, hd l, acc);
+		any |= inlinesvgs(p, hd l, imgs);
 	for(i = 0; i < len b.lines; i++) {
 		ln := b.lines[i];
 		for(j := 0; j < len ln.frags; j++)
 			if(ln.frags[j].kind == Layout->Fatomic)
-				acc = inlinesvgs(p, ln.frags[j].box, acc);
+				any |= inlinesvgs(p, ln.frags[j].box, imgs);
 	}
-	return acc;
+	return any;
 }
 
-carrysvgs(p: ref Pg, imgs: list of (int, ref Image), b: ref Box)
+carrysvgs(p: ref Pg, imgs: array of ref Image, b: ref Box)
 {
-	if(imgs == nil)
-		return;
-	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.img == nil)
-		for(l := imgs; l != nil; l = tl l)
-			if((hd l).t0 == b.node) {
-				b.img = (hd l).t1;
-				break;
-			}
+	if(b.kind == Layout->Kreplaced && b.url == nil && b.node != 0 && b.node < len imgs && b.img == nil)
+		b.img = imgs[b.node];
 	for(i := 0; i < len b.kids; i++)
 		carrysvgs(p, imgs, b.kids[i]);
 	for(pl := b.pos; pl != nil; pl = tl pl)

@@ -18,7 +18,7 @@ include "sys.m";
 	sys: Sys;
 include "draw.m";
 	draw: Draw;
-	Display: import draw;
+	Display, Rect, Point: import draw;
 include "web/dom.m";
 	dom: Dom;
 	Doc: import dom;
@@ -96,16 +96,16 @@ init(nil: ref Draw->Context, args: list of string)
 	else
 		s.configure("scripts on");
 	ev := s.listen();
+	# the page painted at each update, as a window paints it (the page
+	# is laid out when painted)
+	donec := chan of string;
+	img := disp.newimage(Rect((0, 0), (1024, 768)), Draw->RGB24, 0, Draw->White);
+	spawn painter(s, ev, img, donec);
 	t0 := sys->millisec();
 	s.open(url);
-	for(;;) {
-		e := <-ev;
-		if(len e >= 4 && e[0:4] == "done" || len e >= 5 && e[0:5] == "error") {
-			if(e[0] == 'e')
-				sys->fprint(stderr, "jspage: %s\n", e);
-			break;
-		}
-	}
+	e := <-donec;
+	if(e[0] == 'e')
+		sys->fprint(stderr, "jspage: %s\n", e);
 	sys->fprint(stderr, "jspage: shown in %d ms\n", sys->millisec() - t0);
 	sys->sleep(wait);
 	if(quiet)
@@ -128,6 +128,39 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->sleep(1500);	# (the page's realm says where its time went as it ends)
 	if(!keep)
 		halt();
+}
+
+# reads the session's events, never blocking (an event a listener does
+# not take is lost: "done" among them), and has the page painted at
+# each update by paint, which takes one at a time
+painter(s: ref Session, ev: chan of string, img: ref Draw->Image, donec: chan of string)
+{
+	want := chan[1] of int;
+	spawn paint(s, img, want);
+	said := 0;
+	for(;;) {
+		e := <-ev;
+		if(!said && (len e >= 4 && e[0:4] == "done" || len e >= 5 && e[0:5] == "error")) {
+			said = 1;
+			donec <-= e;
+		} else if(!(len e >= 6 && e[0:6] == "update"))
+			continue;
+		alt {
+		want <-= 1 =>
+			;
+		* =>
+			;	# one is waiting already
+		}
+	}
+}
+
+paint(s: ref Session, img: ref Draw->Image, want: chan of int)
+{
+	for(;;) {
+		<-want;
+		if(img != nil)
+			s.paint(img, Point(0, 0));
+	}
 }
 
 startwebfs()

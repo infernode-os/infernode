@@ -64,6 +64,7 @@ TARG=\
 	sheetview_test.dis\
 	alt_nilchan_test.dis\
 	lock_stress_test.dis\
+	pgrp_race_test.dis\
 	plan_test.dis\
 	rfc3339_test.dis\
 	spawn_exec_test.dis\

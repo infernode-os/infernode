@@ -223,9 +223,8 @@ enum
 struct Mntwalk				/* state for /proc/#/ns */
 {
 	int		cddone;
+	int		started;	/* id is the last mount read */
 	ulong	id;
-	Mhead*	mh;
-	Mount*	cm;
 };
 
 struct Mount

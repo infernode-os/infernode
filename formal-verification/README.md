@@ -22,7 +22,7 @@ The Inferno kernel provides **per-process namespaces** that isolate each process
 | 1 | SPIN | Namespace isolation with non-atomic operations | **Verified** (5/5 models pass) |
 | 2 | SPIN | Multi-lock locking protocol (per-pgrp, per-mhead) | **Verified** |
 | 3 | CBMC | Real C code verification (pgrpcpy, closepgrp) | **Verified** (quick: 3 kernel + 16 PQC crypto checks; full pgrpcpy: pending) |
-| 4 | SPIN | Race conditions (pctl/kchdir/namec) | **Verified** (3 real races found; `kchdir`/`namec` fixed in 89db5178, see Known Limitations) |
+| 4 | SPIN | Race conditions (pctl/kchdir/namec) | **Verified** (3 real races found and fixed: `kchdir`/`namec` in 89db5178, the `Sys_pctl` swap in INFR-373; the model is the fixed code, `-DUNFIXED` the code before) |
 | 5 | SPIN | exportfs root boundary | **Verified** |
 | CI | GH Actions | Automated verification on push | **Active** |
 
@@ -181,7 +181,7 @@ The verification trusts:
 
 1. **Bounded verification**: TLA+/TLC and CBMC explore finite state spaces. For unbounded proofs, interactive theorem proving (Isabelle/HOL) would be needed.
 2. **Abstraction gap**: SPIN models abstract lock semantics; the real RWlock implementation is not verified at the assembly level.
-3. **Race condition findings**: The `namespace_races.pml` model may report races that are benign under Inferno's cooperative threading model (one Dis thread at a time), but are real at the C/emu level with multiple host threads. Of the three found, `kchdir` and `namec` were fixed in 89db5178 (both now take the `pg->ns` lock). That commit's VM-lock re-acquire around the `Sys_pctl` NEWNS/FORKNS swap was removed in fa93471d because it deadlocked; see `docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`.
+3. **Race condition findings**: The `namespace_races.pml` model may report races that are benign under Inferno's cooperative threading model (one Dis thread at a time), but are real at the C/emu level with multiple host threads. All three found are fixed: `kchdir` and `namec` in 89db5178 (both now take the `pg->ns` lock), and the `Sys_pctl` NEWNS/FORKNS swap in INFR-373, which holds the VM lock for the pointer store alone. 89db5178's VM-lock re-acquire around the whole NEWNS/FORKNS branch was removed in fa93471d because the copy inside it waits on Limbo file servers and deadlocked; see `docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`.
 4. **`nodevs` exception consistency**: Verified via manual audit — both `namec()` and `devindir.c` use identical exception string `"|esDa"`.
 
 ## CI/CD Integration

@@ -62,22 +62,23 @@ run_spin_ltl() {
     local model="$2"
     local property="$3"
     local limit="${4:-1000000}"
+    local spin_flags="${5:-}"
 
     echo "----------------------------------------"
     echo "Verifying LTL: $name"
-    echo "Model: $model"
+    echo "Model: $model $spin_flags"
     echo "Property: $property"
     echo ""
 
     # Generate with LTL
-    spin -a "$model" 2>/dev/null
+    spin $spin_flags -a "$model" 2>/dev/null
 
     # Compile for acceptance cycle checking
     gcc -o pan pan.c -DCOLLAPSE -O2 -w 2>/dev/null
 
     local logname
     logname=$(echo "$name" | tr ' ()/' '____')
-    if ./pan -m"$limit" -a 2>&1 | tee "/tmp/spin_ltl_${logname}.log" | grep -q "errors: 0"; then
+    if ./pan -m"$limit" -a -N "$property" 2>&1 | tee "/tmp/spin_ltl_${logname}.log" | grep -q "errors: 0"; then
         echo "PASS: $name (LTL)"
         PASS=$((PASS + 1))
     else
@@ -90,29 +91,32 @@ run_spin_ltl() {
     return 0
 }
 
+# The model of the code before a fix must still show the bug:
+# otherwise the property holding for the fixed model proves nothing.
 run_spin_ltl_expect_violation() {
     local name="$1"
     local model="$2"
     local property="$3"
     local limit="${4:-1000000}"
+    local spin_flags="${5:-}"
 
     echo "----------------------------------------"
     echo "Checking race: $name"
-    echo "Model: $model"
+    echo "Model: $model $spin_flags"
     echo "Property: $property (expect violation = race found)"
     echo ""
 
-    spin -a "$model" 2>/dev/null
+    spin $spin_flags -a "$model" 2>/dev/null
     gcc -o pan pan.c -DCOLLAPSE -O2 -w 2>/dev/null
 
     local logname
     logname=$(echo "$name" | tr ' ()/' '____')
     if ./pan -m"$limit" -a -N "$property" 2>&1 | tee "/tmp/spin_race_${logname}.log" | grep -q "errors: 0"; then
-        echo "NOTE: $name - no race detected (property holds)"
-        PASS=$((PASS + 1))
+        echo "FAIL: $name - no race detected; the model no longer shows the bug"
+        FAIL=$((FAIL + 1))
     else
-        echo "FOUND: $name - race condition confirmed!"
-        PASS=$((PASS + 1))  # Finding a race is a successful verification
+        echo "FOUND: $name - race condition confirmed"
+        PASS=$((PASS + 1))
     fi
 
     rm -f pan pan.* _spin_nvr.tmp 2>/dev/null
@@ -173,24 +177,40 @@ if [[ "$MODE" = "full" ]]; then
     echo "(Lock ordering is verified structurally via inline assertions)"
     echo ""
 
-    # Race condition LTL checks - violations are EXPECTED (these are real bugs)
-    run_spin_ltl_expect_violation \
-        "Use-After-Free dot (kchdir race)" \
+    # Race conditions (INFR-373): no use-after-free with the locking
+    # the code now has; and the model of the code before it (-DUNFIXED)
+    # still finds the races, so the model can see them.
+    run_spin_ltl \
+        "No Use-After-Free dot (kchdir)" \
         "namespace_races.pml" \
         "no_use_after_free_dot" \
         10000000
 
-    run_spin_ltl_expect_violation \
-        "Use-After-Free pgrp (FORKNS race)" \
+    run_spin_ltl \
+        "No Use-After-Free pgrp (FORKNS)" \
         "namespace_races.pml" \
         "no_use_after_free_pgrp" \
         10000000
 
-    run_spin_ltl_expect_violation \
-        "Use-After-Free slash (namec race)" \
+    run_spin_ltl \
+        "No Use-After-Free slash (namec)" \
         "namespace_races.pml" \
         "no_use_after_free_slash" \
         10000000
+
+    run_spin_ltl_expect_violation \
+        "Use-After-Free dot before fix (kchdir race)" \
+        "namespace_races.pml" \
+        "no_use_after_free_dot" \
+        10000000 \
+        "-DUNFIXED"
+
+    run_spin_ltl_expect_violation \
+        "Use-After-Free pgrp before fix (FORKNS race)" \
+        "namespace_races.pml" \
+        "no_use_after_free_pgrp" \
+        10000000 \
+        "-DUNFIXED"
 
     # Export boundary LTL - should PASS (no violation)
     run_spin_ltl \

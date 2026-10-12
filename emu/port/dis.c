@@ -207,14 +207,11 @@ delprog(Prog *p, char *msg)
 
 	tellsomeone(p, msg);	/* call before being removed from prog list */
 
-	o = p->osenv;
-	release();
-	closepgrp(o->pgrp);
-	closefgrp(o->fgrp);
-	closeegrp(o->egrp);
-	closesigs(o->sigs);
-	acquire();
-
+	/*
+	 * Unlink p before closing its groups with the VM released:
+	 * devprog finds Progs by pid, through the list or their prog
+	 * group, holding the VM, and reads their groups (INFR-373).
+	 */
 	delgrp(p);
 
 	if(p->prev)
@@ -231,6 +228,14 @@ delprog(Prog *p, char *msg)
 	if(*ph == nil)
 		panic("lost pid");
 	*ph = p->pidlink;
+
+	o = p->osenv;
+	release();
+	closepgrp(o->pgrp);
+	closefgrp(o->fgrp);
+	closeegrp(o->egrp);
+	closesigs(o->sigs);
+	acquire();
 
 	if(p == isched.runhd) {
 		isched.runhd = p->link;

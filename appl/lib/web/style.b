@@ -769,11 +769,44 @@ M: adt {
 	host:	int;	# matching a shadow tree's rules: its host (featureless but for :host), and
 	sroot:	int;	# its root
 	flat:	ref Dom->Flat;	# the flat tree, if there are shadow roots (for ::slotted)
+	langs:	array of string;	# per node, lazily: its language for :lang(), lower case (Nolang none)
 };
+
+Nolang: con "\u0000";
 
 matcher(d: ref Doc, env: ref Env): ref M
 {
-	return ref M(d, env, array[d.n] of list of string, array[d.n] of array of int, array[d.n] of big, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil);
+	return ref M(d, env, array[d.n] of list of string, array[d.n] of array of int, array[d.n] of big, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil, nil);
+}
+
+# n's language: its lang (or xml:lang) or its parent's, else the
+# document's; Nolang if none.  Kept for each node, as :lang() rules
+# are asked of every element (Apple's home page: a fifth of styling
+# was walking up for lang)
+elang(m: ref M, n: int): string
+{
+	if(m.langs == nil || n >= len m.langs) {
+		a := array[m.d.n] of string;
+		if(m.langs != nil)
+			a[0:] = m.langs;
+		m.langs = a;
+	}
+	if((l := m.langs[n]) != nil)
+		return l;
+	d := m.d;
+	l = d.attr(n, "lang");
+	if(l == nil)
+		l = d.attr(n, "xml:lang");	# XHTML
+	if(l != nil)
+		l = lower(l);
+	else if((p := parentel(d, n)) != 0)
+		l = elang(m, p);
+	else if(d.lang != nil)
+		l = lower(d.lang);	# the document's, from <meta http-equiv> (lang-selector-006)
+	else
+		l = Nolang;
+	m.langs[n] = l;
+	return l;
 }
 
 # n's parent element for a selector of a shadow tree: past the tree's
@@ -1340,16 +1373,9 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"defined" or "valid" or "in-range" or "user-valid" =>
 		return 1;
 	"lang" =>
-		for(p := n; p != 0; p = parentel(d, p)) {
-			l := d.attr(p, "lang");
-			if(l == nil)
-				l = d.attr(p, "xml:lang");	# XHTML
-			if(l != nil)
-				return langmatch(lower(l), x.val);
-		}
-		if(d.lang != nil)
-			return langmatch(lower(d.lang), x.val);	# the document's, from <meta http-equiv> (lang-selector-006)
-		return 0;
+		if((l := elang(m, n)) == Nolang)
+			return 0;
+		return langmatch(l, x.val);
 	"dir" =>
 		return lower(x.val) == "ltr";
 	"host" or "host-context" or "state" =>

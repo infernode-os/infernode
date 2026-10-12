@@ -136,5 +136,8 @@ Layout: module
 	height:	fn(root: ref Box): int;		# the page's height, for scrolling
 	boxat:	fn(root: ref Box, p: Draw->Point): (int, ref Box);	# node and box under p
 	boxes:	fn(root: ref Box, n: int): list of ref Box;	# the boxes node n generated
-	dump:	fn(root: ref Box): string;	# "kind node x y w h" per box, indented
+	dump:	fn(root: ref Box): string;
+	# whether build gives back boxes kept from the last build of the same
+	# document where nothing under them changed (on unless set off)
+	setreuse:	fn(on: int);	# "kind node x y w h" per box, indented
 };

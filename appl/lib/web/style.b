@@ -215,7 +215,7 @@ Ix: adt {
 buildindex(s: ref Styles, env: ref Env): ref Index
 {
 	ix := ref Ix(ref Index(array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry,
-		array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry, nil, 0, nil, nil, 0, nil), 0, nil, 0, env);
+		array[Nbucket] of list of ref Entry, array[Nbucket] of list of ref Entry, nil, 0, nil, nil, 0, nil, 0, 0), 0, nil, 0, env);
 	# layer names first, in order of first appearance, so tiers are known
 	sheets: list of (ref Sheet, int, string);
 	for(l := s.sheets; l != nil; l = tl l)
@@ -436,11 +436,24 @@ hasanchors(idx: ref Index, s: ref Sel)
 		found := 0;
 		for(i := 0; i < len c; i++)
 			if(simplehas(c[i])) {
-				found = 1;
 				if(!hasonsubject(c[i])) {
-					idx.hashas = 2;
-					return;
+					# a :has() in a branch of an :is() (or the like), but
+					# not on the branch's subject: the branch's own
+					# anchors, as a selector of its own, whose elements
+					# come before the subject as the compound's would
+					if(c[i].name == "has") {
+						idx.hashas = 2;
+						return;
+					}
+					for(j := 0; j < len c[i].sub; j++)
+						if(selhas(c[i].sub[j])) {
+							hasanchors(idx, c[i].sub[j]);
+							if(idx.hashas == 2)
+								return;
+						}
+					continue;
 				}
+				found = 1;
 			} else
 				rest = c[i] :: rest;
 		if(!found)
@@ -452,6 +465,12 @@ hasanchors(idx: ref Index, s: ref Sel)
 				x := c[i];
 				if(!simplehas(x))
 					continue;
+				if(x.name == "has" && k == len s.parts - 1 && looksdown(x)) {
+					# the subject: an ancestor of what changed, whose
+					# style restyle finds again (Index.hasup)
+					idx.hasup = 1;
+					continue;
+				}
 				if(x.name != "is" && x.name != "where") {
 					idx.hashas = 2;
 					return;
@@ -476,6 +495,18 @@ hasanchors(idx: ref Index, s: ref Sel)
 	}
 }
 
+# whether every relative selector of a :has() is of descendants or
+# children (:has(.a), :has(> .a)), not of later siblings
+looksdown(x: ref Simple): int
+{
+	for(j := 0; j < len x.sub; j++) {
+		b := x.sub[j];
+		if(len b.combs > 0 && b.combs[0] != ' ' && b.combs[0] != '>' && b.combs[0] != 0)
+			return 0;
+	}
+	return 1;
+}
+
 listsimple(l: list of ref Simple): array of ref Simple
 {
 	n := 0;
@@ -487,8 +518,42 @@ listsimple(l: list of ref Simple): array of ref Simple
 	return a;
 }
 
+# How a rule depends on an element's siblings, for restyle to know which
+# children of a parent to restyle when it gains or loses one (Doc.kids):
+# those after (+, ~, :nth-child, :first-child, first and nth of a type),
+# the neighbours (:last-child, :only-child), those before (:nth-last-
+# child, last and only of a type).
+Sibafter, Sibnext, Sibbefore: con 1<<iota;
+
+selsibs(s: ref Sel): int
+{
+	r := 0;
+	for(k := 1; k < len s.combs; k++)
+		if(s.combs[k] == '+' || s.combs[k] == '~')
+			r |= Sibafter;
+	if(len s.combs > 0 && (s.combs[0] == '+' || s.combs[0] == '~'))
+		r |= Sibafter;
+	for(k = 0; k < len s.parts; k++)
+		for(i := 0; i < len s.parts[k]; i++) {
+			x := s.parts[k][i];
+			if(x.kind == Css->Spseudo)
+				case x.name {
+				"first-child" or "nth-child" or "first-of-type" or "nth-of-type" =>
+					r |= Sibafter;
+				"last-child" or "only-child" =>
+					r |= Sibnext;
+				"nth-last-child" or "last-of-type" or "only-of-type" or "nth-last-of-type" =>
+					r |= Sibbefore;
+				}
+			for(j := 0; j < len x.sub; j++)
+				r |= selsibs(x.sub[j]);
+		}
+	return r;
+}
+
 addentry(idx: ref Index, e: ref Entry)
 {
+	idx.sibs |= selsibs(e.sel);
 	if(idx.hashas != 2 && selhas(e.sel)) {
 		idx.hashas = 1;
 		hasanchors(idx, e.sel);
@@ -704,11 +769,44 @@ M: adt {
 	host:	int;	# matching a shadow tree's rules: its host (featureless but for :host), and
 	sroot:	int;	# its root
 	flat:	ref Dom->Flat;	# the flat tree, if there are shadow roots (for ::slotted)
+	langs:	array of string;	# per node, lazily: its language for :lang(), lower case (Nolang none)
 };
+
+Nolang: con "\u0000";
 
 matcher(d: ref Doc, env: ref Env): ref M
 {
-	return ref M(d, env, array[d.n] of list of string, array[d.n] of array of int, array[d.n] of big, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil);
+	return ref M(d, env, array[d.n] of list of string, array[d.n] of array of int, array[d.n] of big, array[d.n] of {* => 0}, array[d.n] of {* => 0}, 0, 0, 0, nil, nil);
+}
+
+# n's language: its lang (or xml:lang) or its parent's, else the
+# document's; Nolang if none.  Kept for each node, as :lang() rules
+# are asked of every element (Apple's home page: a fifth of styling
+# was walking up for lang)
+elang(m: ref M, n: int): string
+{
+	if(m.langs == nil || n >= len m.langs) {
+		a := array[m.d.n] of string;
+		if(m.langs != nil)
+			a[0:] = m.langs;
+		m.langs = a;
+	}
+	if((l := m.langs[n]) != nil)
+		return l;
+	d := m.d;
+	l = d.attr(n, "lang");
+	if(l == nil)
+		l = d.attr(n, "xml:lang");	# XHTML
+	if(l != nil)
+		l = lower(l);
+	else if((p := parentel(d, n)) != 0)
+		l = elang(m, p);
+	else if(d.lang != nil)
+		l = lower(d.lang);	# the document's, from <meta http-equiv> (lang-selector-006)
+	else
+		l = Nolang;
+	m.langs[n] = l;
+	return l;
 }
 
 # n's parent element for a selector of a shadow tree: past the tree's
@@ -1020,9 +1118,24 @@ matchfrom(m: ref M, s: ref Sel, k, n, anchor: int): int
 	}
 	case c {
 	' ' =>
-		for(p := parentelm(m, n); p != 0; p = parentelm(m, p))
-			if(matchfrom(m, s, k-1, p, anchor))
-				return 1;
+		# with only descendant combinators further left, the nearest
+		# ancestor part k-1 matches is the one to go on from: what
+		# matches above a farther one is above it too.  (Trying each
+		# ancestor in turn was most of GitHub's styling: .a .b .c
+		# against every ancestor of every ancestor.)
+		desc := anchor == 0 || s.combs[0] == ' ';
+		for(j := 1; j < k && desc; j++)
+			desc = s.combs[j] == ' ';
+		mk := masks[k-1];
+		for(p := parentelm(m, n); p != 0; p = parentelm(m, p)) {
+			if(mk != big 0 && (nodesig(m, p) & mk) != mk)
+				continue;
+			if(!desc) {
+				if(matchfrom(m, s, k-1, p, anchor))
+					return 1;
+			} else if(compound(m, s.parts[k-1], p))
+				return matchfrom(m, s, k-1, p, anchor);
+		}
 	'>' =>
 		if((p := parentelm(m, n)) != 0)
 			return matchfrom(m, s, k-1, p, anchor);
@@ -1260,16 +1373,9 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"defined" or "valid" or "in-range" or "user-valid" =>
 		return 1;
 	"lang" =>
-		for(p := n; p != 0; p = parentel(d, p)) {
-			l := d.attr(p, "lang");
-			if(l == nil)
-				l = d.attr(p, "xml:lang");	# XHTML
-			if(l != nil)
-				return langmatch(lower(l), x.val);
-		}
-		if(d.lang != nil)
-			return langmatch(lower(d.lang), x.val);	# the document's, from <meta http-equiv> (lang-selector-006)
-		return 0;
+		if((l := elang(m, n)) == Nolang)
+			return 0;
+		return langmatch(l, x.val);
 	"dir" =>
 		return lower(x.val) == "ltr";
 	"host" or "host-context" or "state" =>
@@ -2522,6 +2628,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	(sibdoc, sibnode) = (nil, 0);
 	schemedark = -1;
 	d.changed = nil;
+	d.kids = nil;
 	d.nchanged = 0;
 	return c;
 }
@@ -2530,8 +2637,8 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 # subtrees it says changed (Doc.changed) styled again, rather than the
 # whole document (Apple's home page restyled 33 times as it loaded, 260
 # ms each).  The whole, where that cannot be known so: no earlier
-# styles, too much changed, shadow trees, a rule with :has(), another
-# environment, or the root among the changed.
+# styles, too much changed, a rule with :has(), another environment, or
+# the root among the changed.  With shadow trees, restyleflat.
 restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Computed
 {
 	if(sys == nil)
@@ -2540,15 +2647,31 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
 	root := d.root();
 	if(prev == nil || d.nchanged < 0 || root == 0 || s.idx == nil || !sameenv(s.idx.env, env) ||
-	   s.idx.hashas == 2 || d.shadows != nil || root >= len prev.st || prev.st[root] == nil)
+	   s.idx.hashas == 2 || root >= len prev.st || prev.st[root] == nil)
 		return whole(d, s, env, sys->sprint("changed %d, :has %d, shadows %d", d.nchanged, s.idx != nil && s.idx.hashas == 2, d.shadows != nil));
 	m := matcher(d, env);
 	changes := d.changed;
+	# parents that gained or lost a child: their other children, as far
+	# as the rules depend on siblings; and they are where the :has()
+	# walks start, as the changes are
+	parents: list of int;
+	for(kl := d.kids; kl != nil; kl = tl kl) {
+		(p, at) := hd kl;
+		parents = p :: parents;
+		if(d.nodes[p].kind == Dom->Element)
+			changes = sibchanges(d, s.idx.sibs, p, at, changes);
+		else if(isshadowroot(d, p))
+			changes = p :: changes;	# its host's (restyleflat)
+	}
+	d.kids = nil;
+	touched := d.changed;
+	for(pl := parents; pl != nil; pl = tl pl)
+		touched = hd pl :: touched;
 	if(s.idx.hashas) {
 		# a :has() a change could turn is on one of its ancestors or
 		# their earlier siblings: those that can be one's element are
 		# restyled too, with what follows them
-		for(l := d.changed; l != nil; l = tl l)
+		for(l := touched; l != nil; l = tl l)
 			for(a := hd l; a != 0; a = d.nodes[a].parent) {
 				if(d.nodes[a].kind == Dom->Document)
 					break;
@@ -2560,6 +2683,44 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 					}
 			}
 	}
+	if(s.idx.hasup) {
+		# a :has() alone on a rule's subject may now be on any ancestor
+		# of a change, or no longer be: those whose own styles come out
+		# different are restyled, with what is under them
+		f: ref Dom->Flat;
+		scopes: list of (int, ref Index, array of list of (string, ref Shared));
+		if(d.shadows != nil) {
+			f = dom->flat(d);
+			m.flat = f;
+			if(f != nil)
+				scopes = scopeindexes(d, f, s, env);
+		}
+		scratch := ref Computed(grow(prev.st, d.n), array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St,
+			array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
+		ctx := ref Ctx(16.0, prev.st[root].fontsize, 19.2, env, 0, nil, 400, 0);
+		seen: list of int;
+		starts: list of int;
+		for(l := d.changed; l != nil; l = tl l)
+			starts = parentel(d, hd l) :: starts;
+		for(pl = parents; pl != nil; pl = tl pl)
+			if(d.nodes[hd pl].kind == Dom->Element)
+				starts = hd pl :: starts;
+		for(l = starts; l != nil; l = tl l)
+			for(a := hd l; a != 0 && a != root; a = parentel(d, a)) {
+				done := 0;
+				for(sl := seen; sl != nil && !done; sl = tl sl)
+					done = hd sl == a;
+				if(done)
+					break;	# (and its ancestors with it)
+				seen = a :: seen;
+				if(a >= len prev.st || prev.st[a] == nil)
+					continue;
+				if(styleagain(d, s, f, scopes, m, a, scratch, ctx, prev))
+					changes = a :: changes;
+			}
+	}
+	if(d.shadows != nil)
+		return restyleflat(d, s, env, prev, m, changes, root);
 	# the changed subtrees, less those inside another
 	roots, outs: list of int;
 	for(l := changes; l != nil; l = tl l) {
@@ -2584,6 +2745,7 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 			roots = r :: roots;
 	}
 	d.changed = nil;
+	d.kids = nil;
 	d.nchanged = 0;
 	lastenv = ref *env;
 	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
@@ -2643,6 +2805,317 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 	(sibdoc, sibnode) = (nil, 0);
 	schemedark = -1;
 	return c;
+}
+
+# the children of p that may match otherwise for its having gained a
+# child at at, or lost one before at (0: at the end), by how the rules
+# depend on siblings (Index.sibs), added to changes; p itself when that
+# is most of them
+sibchanges(d: ref Doc, sibs: int, p, at: int, changes: list of int): list of int
+{
+	if(sibs == 0)
+		return changes;
+	if(at != 0 && d.nodes[at].parent != p)
+		return p :: changes;	# moved since: all of them
+	add: list of int;
+	n := 0;
+	if(sibs & Sibafter)
+		for(k := at; k != 0; k = d.nodes[k].next)
+			if(d.nodes[k].kind == Dom->Element) {
+				add = k :: add;
+				n++;
+			}
+	before := d.nodes[p].last;
+	if(at != 0)
+		before = d.nodes[at].prev;
+	if(sibs & Sibbefore) {
+		for(k := before; k != 0; k = d.nodes[k].prev)
+			if(d.nodes[k].kind == Dom->Element) {
+				add = k :: add;
+				n++;
+			}
+	} else if(sibs & Sibnext) {
+		# the element neighbours: one now last, or now or no longer only
+		for(k := before; k != 0 && d.nodes[k].kind != Dom->Element; k = d.nodes[k].prev)
+			;
+		if(k != 0)
+			add = k :: add;
+		for(k = at; k != 0 && d.nodes[k].kind != Dom->Element; k = d.nodes[k].next)
+			;
+		if(k != 0) {
+			add = k :: add;
+			for(k = d.nodes[k].next; k != 0 && d.nodes[k].kind != Dom->Element; k = d.nodes[k].next)
+				;
+			if(k != 0)
+				add = k :: add;
+		}
+	}
+	if(n > 64)
+		return p :: changes;
+	for(; add != nil; add = tl add)
+		changes = hd add :: changes;
+	return changes;
+}
+
+isshadowroot(d: ref Doc, n: int): int
+{
+	for(l := d.shadows; l != nil; l = tl l)
+		if((hd l).t1 == n)
+			return 1;
+	return 0;
+}
+
+# restyle with shadow trees: as compute does it, by the flat tree (a
+# node inherits from its parent there, matches selectors in its own
+# tree, by its tree's rules, :host and ::slotted), each changed subtree
+# of it styled again.  A change to a host's children or to a <slot> may
+# change what is assigned where, so it is taken as the host's (GitHub:
+# a restyle of 2,900 elements in its shadow-hosting custom elements,
+# 300 ms, at each of its twenty).
+restyleflat(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed, m: ref M, changes: list of int, root: int): ref Computed
+{
+	f := dom->flat(d);
+	if(f == nil)
+		return whole(d, s, env, "no flat tree");
+	m.flat = f;
+	scopes := scopeindexes(d, f, s, env);
+	# the host whose assignments a change to n may change, else n
+	roots, outs: list of int;
+	for(l := changes; l != nil; l = tl l) {
+		r := hd l;
+		if(r == root || d.nodes[r].kind == Dom->Document && hostof(f, r) == 0)	# (a shadow root: its host, below)
+			return whole(d, s, env, "the root changed");
+		if(d.nodes[r].kind != Dom->Element) {
+			if((h := hostof(f, r)) == 0)
+				continue;
+			r = h;	# a shadow root's children: its host's
+		}
+		for(;;) {
+			h := 0;
+			if(d.nodes[r].name == "slot")
+				h = hostof(f, f.scope[r]);
+			else if((p := d.nodes[r].parent) != 0 && ishost(f, p))
+				h = p;
+			if(h == 0 || h == r)
+				break;
+			r = h;
+		}
+		if(r == root)
+			return whole(d, s, env, "the root changed");
+		if(!flatin(f, r, root)) {
+			if(r < len prev.st)
+				outs = r :: outs;	# not shown: no styles, as compute gives it
+			continue;
+		}
+		roots = r :: roots;
+	}
+	# less those inside another
+	tops: list of int;
+	for(l = roots; l != nil; l = tl l) {
+		r := hd l;
+		inside := 0;
+		for(o := roots; o != nil && !inside; o = tl o)
+			if(hd o != r && flatancestor(f, hd o, r))
+				inside = 1;
+		for(o = tops; o != nil && !inside; o = tl o)
+			if(hd o == r)
+				inside = 1;
+		if(!inside)
+			tops = r :: tops;
+	}
+	d.changed = nil;
+	d.kids = nil;
+	d.nchanged = 0;
+	lastenv = ref *env;
+	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
+		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
+	ctx := ref Ctx(16.0, c.st[root].fontsize, 19.2, env, 0, nil, 400, 0);
+	share := array[Nshare] of list of (string, ref Shared);
+	filters := array[d.n] of array of int;
+	for(; outs != nil; outs = tl outs)
+		clearall(d, f, c, hd outs);
+	for(; tops != nil; tops = tl tops) {
+		r := hd tops;
+		fp := f.parent[r];
+		if(fp != 0 && d.nodes[fp].kind != Dom->Element)
+			fp = 0;
+		# none of it styled, as compute leaves what it does not reach
+		# (what is no longer assigned to a slot, a slot's fallback once
+		# something is; a new host's children, by the document's tree)
+		unstyle(d, c, r, r);
+		clearall(d, f, c, r);
+		if(fp == 0 || c.st[fp] == nil || c.st[fp].display == Dnone)
+			continue;	# inside display: none
+		n := r;
+		while(n != 0) {
+			nd := d.nodes[n];
+			skip := 0;
+			if(nd.kind == Dom->Element) {
+				p := parentel(d, n);
+				pp := f.parent[n];
+				if(pp != 0 && d.nodes[pp].kind != Dom->Element)
+					pp = 0;
+				idx := s.idx;
+				sh := share;
+				(m.host, m.sroot) = (0, 0);
+				if(f.scope[n] != 1) {
+					for(sl := scopes; sl != nil; sl = tl sl)
+						if((hd sl).t0 == f.scope[n]) {
+							(nil, idx, sh) = hd sl;
+							break;
+						}
+					m.sroot = f.scope[n];
+					for(rl := f.roots; rl != nil; rl = tl rl)
+						if((hd rl).t1 == m.sroot)
+							m.host = (hd rl).t0;
+				}
+				extra := hostrules(m, f, scopes, n);
+				for(sl2 := slottedrules(m, f, scopes, n); sl2 != nil; sl2 = tl sl2)
+					extra = hd sl2 :: extra;
+				(c.before[n], c.after[n], c.marker[n], c.firstletter[n], c.firstline[n], c.placeholder[n]) = (nil, nil, nil, nil, nil, nil);
+				ps: ref St;
+				if(pp != 0)
+					ps = c.st[pp];
+				if(pp != 0 && ps == nil)
+					skip = 1;	# inside display: none
+				else {
+					pf: array of int;
+					if(p != 0) {
+						if(filters[p] == nil)
+							filters[p] = filterchain(m, d, p);
+						pf = filters[p];
+					}
+					(sibdoc, sibnode) = (d, n);
+					if(extra != nil)
+						sh = array[Nshare] of list of (string, ref Shared);	# (not shared: it has its own)
+					st := styleof(m, idx, n, ps, ctx, c, sh, pf, extra);
+					if(nd.first != 0)
+						filters[n] = childfilter(m, n, pf);
+					c.st[n] = st;
+					if(st.display == Dnone)
+						skip = 1;
+				}
+			}
+			if(skip || nd.kind != Dom->Element)
+				n = flatnextskip(f, n, r);
+			else
+				n = flatnext(f, n, r);
+		}
+	}
+	(sibdoc, sibnode) = (nil, 0);
+	schemedark = -1;
+	return c;
+}
+
+# whether element a's styles (its own and its pseudo-elements') come out
+# other than prev has them, its ancestors' as prev has them
+styleagain(d: ref Doc, s: ref Styles, f: ref Dom->Flat, scopes: list of (int, ref Index, array of list of (string, ref Shared)),
+	m: ref M, a: int, c: ref Computed, ctx: ref Ctx, prev: ref Computed): int
+{
+	p := parentel(d, a);
+	pp := p;
+	idx := s.idx;
+	extra: list of ref Entry;
+	if(f != nil) {
+		pp = f.parent[a];
+		if(pp != 0 && d.nodes[pp].kind != Dom->Element)
+			pp = 0;
+		(m.host, m.sroot) = (0, 0);
+		if(f.scope[a] != 1) {
+			for(sl := scopes; sl != nil; sl = tl sl)
+				if((hd sl).t0 == f.scope[a]) {
+					(nil, idx, nil) = hd sl;
+					break;
+				}
+			m.sroot = f.scope[a];
+			m.host = hostof(f, m.sroot);
+		}
+		extra = hostrules(m, f, scopes, a);
+		for(sl2 := slottedrules(m, f, scopes, a); sl2 != nil; sl2 = tl sl2)
+			extra = hd sl2 :: extra;
+	}
+	ps: ref St;
+	if(pp != 0) {
+		ps = prev.st[pp];
+		if(ps == nil)
+			return 0;	# inside display: none
+	}
+	pf: array of int;
+	if(p != 0)
+		pf = filterchain(m, d, p);
+	(sibdoc, sibnode) = (d, a);
+	st := styleof(m, idx, a, ps, ctx, c, array[Nshare] of list of (string, ref Shared), pf, extra);
+	(sibdoc, sibnode) = (nil, 0);
+	return differ(st, prev.st[a]) || differ(c.before[a], prev.before[a]) || differ(c.after[a], prev.after[a]) ||
+		differ(c.marker[a], prev.marker[a]);
+}
+
+differ(a, b: ref St): int
+{
+	if(a == b)
+		return 0;
+	if(a == nil || b == nil)
+		return 1;
+	return dump(a) != dump(b);
+}
+
+# the filter of p's children: its ancestors' in its own tree, root down
+filterchain(m: ref M, d: ref Doc, p: int): array of int
+{
+	chain: list of int;
+	for(a := p; a != 0; a = parentel(d, a))
+		chain = a :: chain;
+	f: array of int;
+	for(; chain != nil; chain = tl chain)
+		f = childfilter(m, hd chain, f);
+	return f;
+}
+
+ishost(f: ref Dom->Flat, n: int): int
+{
+	for(l := f.roots; l != nil; l = tl l)
+		if((hd l).t0 == n)
+			return 1;
+	return 0;
+}
+
+hostof(f: ref Dom->Flat, sroot: int): int
+{
+	for(l := f.roots; l != nil; l = tl l)
+		if((hd l).t1 == sroot)
+			return (hd l).t0;
+	return 0;
+}
+
+# whether n is in the flat tree under top
+flatin(f: ref Dom->Flat, n, top: int): int
+{
+	for(; n != 0; n = f.parent[n])
+		if(n == top)
+			return 1;
+	return 0;
+}
+
+# whether a is n's ancestor in the flat tree
+flatancestor(f: ref Dom->Flat, a, n: int): int
+{
+	for(n = f.parent[n]; n != 0; n = f.parent[n])
+		if(n == a)
+			return 1;
+	return 0;
+}
+
+# r and everything under it unstyled: its light tree, and the shadow
+# trees of the hosts in it
+clearall(d: ref Doc, f: ref Dom->Flat, c: ref Computed, r: int)
+{
+	for(k := r; k != 0; k = next(d, k, r)) {
+		if(k < len c.st)
+			(c.st[k], c.before[k], c.after[k], c.marker[k], c.firstletter[k], c.firstline[k], c.placeholder[k]) = (nil, nil, nil, nil, nil, nil, nil);
+		for(l := f.roots; l != nil; l = tl l)
+			if((hd l).t0 == k && (hd l).t1 != r)
+				clearall(d, f, c, (hd l).t1);
+	}
 }
 
 # restyle's answer when it cannot restyle less: all, and (for a test,
@@ -2717,9 +3190,9 @@ element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
 		return nil;
 	if(dom->flat(d) != nil) {
 		# (what changed is the page's restyle's to take, not this one's)
-		(ch, nch) := (d.changed, d.nchanged);
+		(ch, kids, nch) := (d.changed, d.kids, d.nchanged);
 		st := compute(d, s, env).st[n];
-		(d.changed, d.nchanged) = (ch, nch);
+		(d.changed, d.kids, d.nchanged) = (ch, kids, nch);
 		return st;
 	}
 	if(s.idx == nil || !sameenv(s.idx.env, env)) {
@@ -2890,8 +3363,11 @@ scopeindexes(d: ref Doc, f: ref Dom->Flat, s: ref Styles, env: ref Env): list of
 			text += ad[i] + "\n\u0001";
 		}
 		sc: ref Scoped;
-		for(k := scoped; k != nil; k = tl k)
-			if((hd k).root == root && (hd k).doc == d && (hd k).text == text && sameenv((hd k).idx.env, env))
+		for(k := keep; k != nil && sc == nil; k = tl k)	# (another of this page's with the same sheets)
+			if((hd k).text == text)
+				sc = hd k;
+		for(k = scoped; k != nil && sc == nil; k = tl k)
+			if((hd k).doc == d && (hd k).text == text && sameenv((hd k).idx.env, env))
 				sc = hd k;
 		if(sc == nil) {
 			ss := Styles.new();
@@ -2911,7 +3387,11 @@ scopeindexes(d: ref Doc, f: ref Dom->Flat, s: ref Styles, env: ref Env): list of
 			idx.env = ref *env;
 			sc = ref Scoped(root, text, idx, d);
 		}
-		keep = sc :: keep;
+		kept := 0;
+		for(k = keep; k != nil && !kept; k = tl k)
+			kept = hd k == sc;
+		if(!kept)
+			keep = sc :: keep;
 		r = (root, sc.idx, array[Nshare] of list of (string, ref Shared)) :: r;
 	}
 	scoped = keep;

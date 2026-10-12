@@ -193,7 +193,7 @@ tagname(tag: int): string
 
 Doc.new(url: string): ref Doc
 {
-	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil, nil, -1);
+	d := ref Doc(array[256] of ref Node, 1, 0, 0, url, 0, nil, nil, nil, nil, nil, -1, nil);
 	d.create(Document, "#document", HTML);
 	return d;
 }
@@ -209,25 +209,126 @@ Doc.create(d: self ref Doc, kind: int, name: string, ns: int): int
 	if(kind == Element && ns == HTML)
 		tag = atom(name);
 	n := d.n++;
-	d.nodes[n] = ref Node(kind, tag, ns, name, 0, 0, 0, 0, 0, nil, nil);
 	d.gen++;
+	d.nodes[n] = ref Node(kind, tag, ns, name, 0, 0, 0, 0, 0, nil, nil, d.gen);
 	return n;
 }
 
 # Note that n's subtree may style differently (n and what is under it).
 # :has(), which looks further, style->restyle answers itself.
 Changedmax: con 512;
+Kidsmax: con 4;	# (compact's)
 
 changed(d: ref Doc, n: int)
 {
 	if(d.nchanged < 0)
 		return;
-	if(n <= 0 || ++d.nchanged > Changedmax) {
-		d.changed = nil;
-		d.nchanged = -1;
+	if(n <= 0) {
+		overflow(d);
+		return;
+	}
+	if(d.changed != nil && hd d.changed == n)
+		return;	# (as it was just now)
+	if(!intree(d, n))
+		return;	# no styles to change: built apart, it is restyled when put in
+	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
+		overflow(d);
 		return;
 	}
 	d.changed = n :: d.changed;
+}
+
+# n is in the document, or in a shadow tree in it
+intree(d: ref Doc, n: int): int
+{
+	while(n > 1) {
+		p := d.nodes[n].parent;
+		if(p == 0)
+			for(l := d.shadows; l != nil; l = tl l)
+				if((hd l).t1 == n) {
+					p = (hd l).t0;
+					break;
+				}
+		if(p == 0)
+			return 0;
+		n = p;
+	}
+	return n == 1;
+}
+
+overflow(d: ref Doc)
+{
+	d.changed = nil;
+	d.kids = nil;
+	d.nchanged = -1;
+}
+
+# the journal with each node once (a node changed again and again, as a
+# script animating one element does, filled it, and the restyle was of
+# the whole); how many entries it then has
+compact(d: ref Doc): int
+{
+	# and none under another, whose subtree is restyled with it (a
+	# script building a list in place changes each item and what is
+	# in it); a parent whose children changed in many places, as when
+	# a script appends them one by one, changed as a whole
+	nk := array[d.n] of {* => 0};
+	for(kl := d.kids; kl != nil; kl = tl kl)
+		if((p := (hd kl).t0) < len nk && nk[p]++ == Kidsmax)
+			d.changed = p :: d.changed;
+	seen := array[d.n] of byte;
+	for(l := d.changed; l != nil; l = tl l)
+		if((hd l) < len seen)
+			seen[hd l] = byte 1;
+	r: list of int;
+	k := 0;
+	for(l = d.changed; l != nil; l = tl l)
+		if((hd l) < len seen && seen[hd l] == byte 1 && !under(d, seen, hd l)) {
+			seen[hd l] = byte 2;
+			r = hd l :: r;
+			k++;
+		}
+	d.changed = nil;
+	for(; r != nil; r = tl r)
+		d.changed = hd r :: d.changed;
+	kp: list of (int, int);
+	kr: list of (int, int);
+	for(kl = d.kids; kl != nil; kl = tl kl) {
+		(p, at) := hd kl;
+		dup := p < len seen && (seen[p] != byte 0 || under(d, seen, p));
+		for(o := kr; o != nil && !dup; o = tl o)
+			dup = (hd o).t0 == p && (hd o).t1 == at;
+		if(!dup) {
+			kr = hd kl :: kr;
+			k++;
+		}
+	}
+	for(; kr != nil; kr = tl kr)
+		kp = hd kr :: kp;
+	d.kids = kp;
+	d.nchanged = k;
+	return k;
+}
+
+# whether one of n's ancestors is marked in seen
+under(d: ref Doc, seen: array of byte, n: int): int
+{
+	for(a := d.nodes[n].parent; a != 0; a = d.nodes[a].parent)
+		if(a < len seen && seen[a] != byte 0)
+			return 1;
+	return 0;
+}
+
+# parent's children changed at at (Doc.kids)
+kidschanged(d: ref Doc, parent, at: int)
+{
+	if(d.nchanged < 0 || !intree(d, parent))
+		return;
+	if(++d.nchanged > Changedmax && compact(d) > Changedmax*3/4) {
+		overflow(d);
+		return;
+	}
+	d.kids = (parent, at) :: d.kids;
 }
 
 # n and the siblings after it, which can match by it (+, ~)
@@ -250,7 +351,8 @@ Doc.attachshadow(d: self ref Doc, host, root: int)
 			return;
 	d.shadows = (host, root) :: d.shadows;
 	d.gen++;
-	changed(d, 0);
+	d.nodes[host].mgen = d.gen;
+	changed(d, host);	# (what it shows now its shadow's, by the flat tree)
 }
 
 Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
@@ -263,7 +365,14 @@ Doc.adopt(d: self ref Doc, root: int, sheets: array of string)
 		r = (root, sheets) :: r;
 	d.adopted = r;
 	d.gen++;
-	changed(d, 0);
+	if(root > 0 && root < d.n)
+		d.nodes[root].mgen = d.gen;
+	# a shadow root's sheets: its host's flat subtree, as attachshadow
+	host := 0;
+	for(sl := d.shadows; sl != nil; sl = tl sl)
+		if((hd sl).t1 == root)
+			host = (hd sl).t0;
+	changed(d, host);
 }
 
 Doc.adoptedof(d: self ref Doc, root: int): array of string
@@ -420,7 +529,6 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 		d.remove(child);
 	if(d.nodes[parent].first == 0)
 		changedfrom(d, parent);	# (:empty no longer)
-	changed(d, parent);
 	p := d.nodes[parent];
 	c := d.nodes[child];
 	c.parent = parent;
@@ -442,7 +550,11 @@ Doc.insert(d: self ref Doc, parent, child, before: int)
 			p.first = child;
 		b.prev = child;
 	}
+	changed(d, child);	# (now in the tree, if parent is)
+	kidschanged(d, parent, child);
 	d.gen++;
+	p.mgen = d.gen;
+	c.mgen = d.gen;
 }
 
 Doc.remove(d: self ref Doc, child: int)
@@ -450,7 +562,7 @@ Doc.remove(d: self ref Doc, child: int)
 	c := d.nodes[child];
 	if(c.parent == 0)
 		return;
-	changed(d, c.parent);
+	kidschanged(d, c.parent, c.next);
 	changed(d, child);	# (out of the tree: its styles go)
 	if(c.prev == 0 && c.next == 0)
 		changedfrom(d, c.parent);	# (:empty now)
@@ -463,16 +575,28 @@ Doc.remove(d: self ref Doc, child: int)
 		d.nodes[c.next].prev = c.prev;
 	else
 		p.last = c.prev;
+	pn := c.parent;
 	c.parent = c.next = c.prev = 0;
 	d.gen++;
+	d.nodes[pn].mgen = d.gen;
+	c.mgen = d.gen;
 }
 
 Doc.setattr(d: self ref Doc, n: int, name, val: string)
 {
 	nd := d.nodes[n];
+	# the value it has already: nothing changes (scripts set the same
+	# class or attribute again and again; each was a restyle, of the
+	# whole document when it was <html>'s)
+	for(l := nd.attrs; l != nil; l = tl l)
+		if((hd l).t0 == name) {
+			if((hd l).t1 == val)
+				return;
+			break;
+		}
 	r: list of (string, string);
 	found := 0;
-	for(l := nd.attrs; l != nil; l = tl l) {
+	for(l = nd.attrs; l != nil; l = tl l) {
 		(k, v) := hd l;
 		if(k == name) {
 			v = val;
@@ -485,19 +609,25 @@ Doc.setattr(d: self ref Doc, n: int, name, val: string)
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	nd.mgen = d.gen;
 	changedfrom(d, n);
 }
 
 Doc.delattr(d: self ref Doc, n: int, name: string)
 {
 	nd := d.nodes[n];
+	for(l := nd.attrs; l != nil && (hd l).t0 != name; l = tl l)
+		;
+	if(l == nil)
+		return;	# it has none: nothing changes
 	r: list of (string, string);
-	for(l := nd.attrs; l != nil; l = tl l)
+	for(l = nd.attrs; l != nil; l = tl l)
 		if((hd l).t0 != name)
 			r = hd l :: r;
 	for(nd.attrs = nil; r != nil; r = tl r)
 		nd.attrs = hd r :: nd.attrs;
 	d.gen++;
+	nd.mgen = d.gen;
 	changedfrom(d, n);
 }
 
@@ -506,7 +636,11 @@ Doc.settext(d: self ref Doc, n: int, s: string)
 	old := d.nodes[n].text;
 	d.nodes[n].text = s;
 	d.gen++;
-	if((p := d.nodes[n].parent) != 0 && (old == "") != (s == ""))
+	d.nodes[n].mgen = d.gen;
+	p := d.nodes[n].parent;
+	if(p != 0)
+		d.nodes[p].mgen = d.gen;
+	if(p != 0 && (old == "") != (s == ""))
 		changedfrom(d, p);	# (:empty)
 }
 

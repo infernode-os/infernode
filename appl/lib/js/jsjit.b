@@ -13,12 +13,13 @@
 # interpreter's, and nothing the engine relies on (its handlers, frames,
 # collector) has to know about it.
 #
-# A module is written to /tmp, loaded and removed; where there is no /tmp
-# (a page's confined realm) nothing is compiled.
+# A module is written to /tmp, loaded and removed; /tmp is made if it is
+# missing, and where it cannot be (a confined realm with none) nothing is
+# compiled.
 
 Jittmpl: con "/dis/lib/js/jsjitt.dis";
 Disdata: type Dis->Data;	# (the engine has a Data of its own)
-jitthreshold := 1000;	# calls and backward jumps before compiling; -1: never
+jitthreshold := -2;	# calls and backward jumps before compiling; -1: never; -2: as /env/jsjit says
 jitsig := 0;		# run's signature, from the template
 jitsrt := 0;
 jitssize := 0;
@@ -38,6 +39,21 @@ jit(n: int)
 	jitthreshold = n;
 }
 
+# Off unless /env/jsjit is there: the threshold it holds, or 1000.  The
+# compiled tier is still being proven on pages (scripts run interpreted
+# meanwhile); js -J and Js->jit choose for themselves.
+jitenv()
+{
+	jitthreshold = -1;
+	if((fd := sys->open("/env/jsjit", Sys->OREAD)) == nil)
+		return;
+	b := array[16] of byte;
+	k := sys->read(fd, b, len b);
+	jitthreshold = 1000;
+	if(k > 0 && (s := string b[0:k]) != "" && s[0] >= '0' && s[0] <= '9')
+		jitthreshold = int s;
+}
+
 jitstats(): (int, int)
 {
 	return (jitcompiled, jitrejected);
@@ -47,6 +63,8 @@ jitinit(): int
 {
 	if(jitok >= 0)
 		return jitok;
+	if(jitthreshold == -2)
+		jitenv();
 	jitok = 0;
 	if(jitthreshold < 0)
 		return 0;
@@ -61,8 +79,11 @@ jitinit(): int
 	jitsig = tm.links[0].sig;
 	jitsrt = tm.rt;
 	jitssize = tm.ssize;
+	# made, if it is not there, as the shell's profile makes it (a
+	# fresh tree has none: emu running js directly, not under sh -l, had
+	# nothing compiled at all, and nothing said so)
 	(ok, nil) := sys->stat("/tmp");
-	if(ok < 0)
+	if(ok < 0 && sys->create("/tmp", Sys->OREAD, Sys->DMDIR|8r777) == nil)
 		return 0;
 	(dbg, nil) := sys->stat("/env/jsjitdebug");
 	jitdebug = dbg >= 0;
@@ -82,7 +103,11 @@ jitinit(): int
 # count toward compiling c; compile it when it is hot
 jithot(c: ref Code)
 {
-	if(c.jitstate != 0 || jitthreshold < 0)
+	if(c.jitstate != 0)
+		return;
+	if(jitthreshold == -2)
+		jitenv();
+	if(jitthreshold < 0)
 		return;
 	if(++c.jitn < jitthreshold)
 		return;

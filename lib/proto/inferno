@@ -855,16 +855,6 @@ appl
 		dis.b
 		diskblocks.b
 		dividers.b
-		ecmascript
-			builtin.b
-			date.b
-			ecmascript.b
-			exec.b
-			mkfile
-			obj.b
-			pprint.b
-			regexp.b
-			uri.b
 		encoding
 			base16.b
 			base32.b
@@ -1443,7 +1433,6 @@ dis
 		diskblocks.dis
 		dividers.dis
 		drawmux.dis
-		ecmascript.dis
 		encoding
 			+
 		env.dis
@@ -2029,7 +2018,6 @@ module
 	diskblocks.m
 	dividers.m
 	draw.m
-	ecmascript.m
 	emio.m
 	encoding.m
 	env.m

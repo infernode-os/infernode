@@ -38,7 +38,11 @@ struct Osdep {
 };
 
 static pthread_key_t  prdakey;
+#ifdef __ANDROID__
+static Proc *machup;	/* unused: up is getup() there (emu.h) */
+#else
 __thread Proc *machup;	/* up, where emu.h makes it this (see there) */
+#endif
 
 extern int dflag;
 

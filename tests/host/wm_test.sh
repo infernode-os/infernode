@@ -4,7 +4,8 @@
 # by the pointer (tests/wm/drive.sh): rio's button-3 menu, New by a
 # click or a hold, the sweep cancelled or too small, the frame's move
 # and reshape, click to focus, Move, Resize, Hide and back, Delete, and
-# the background, and a theme switched (frames and menu, by pixel).
+# the background, and a theme switched (frames, fractals' among them,
+# and the menu, by pixel).
 # Checks where each step leaves the windows, as wm/wm lists them
 # (/chan/uitest).
 #
@@ -64,7 +65,8 @@ expect menu-unhide	1 500 300 850 600  0 100 450 400 700
 expect menu-delete	1 500 300 850 600
 expect delete-cancel	1 500 300 850 600
 
-expect theme		1 500 300 850 600
+expect fractals		0 0 0 368 278  1 500 300 850 600
+expect theme		0 0 0 368 278  1 500 300 850 600
 
 # the colour at x y of a screenshot, as RRGGBB
 pixel() {
@@ -125,6 +127,10 @@ check() {	# what, shot, x, y, spread, theme, key
 # (New under the pointer, Move 36 below)
 check "frame in the first theme" wm-theme-0.img 501 450 0 brimstone windowborder
 check "frame follows the theme switch" wm-theme-1.img 501 450 0 halo windowborder
+# fractals' left frame: it sets the background of ".", which gives that
+# widget its own copy of the colours
+check "fractals' frame in the first theme" wm-theme-0.img 1 150 0 brimstone windowborder
+check "fractals' frame follows the theme switch" wm-theme-1.img 1 150 0 halo windowborder
 check "menu in the theme switched to" wm-theme-menu.img 900 136 10 halo menubg
 check "menu's chosen item in it too" wm-theme-menu.img 900 100 10 halo menuhilit
 

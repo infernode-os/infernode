@@ -174,6 +174,17 @@ All notable changes to InferNode are documented in this file.
   watches the theme and passes `retheme` to every window, hidden ones
   too, and its menu (and every `menuhit` menu) takes the theme's menu
   colours as it opens instead of fixed greens.
+- **Every window's frame follows a theme switch, and sam, scene and
+  page's insides too.** A Tk window given an explicit colour has its own
+  copy of the palette, which a live `retheme` passed over, so the frames
+  of charon, editor, fractals, ftree, keyring, man, matrix, page,
+  settings, shell and wallet kept the old windowborder. Tk now records
+  which colours an option set, and a `retheme` refreshes every other
+  colour of every widget. sam, scene and page read the theme only at
+  start; they now take it again on a switch. fractals, man and keyring
+  recoloured widgets without repainting them, so a switch could leave
+  them stale. `tests/host/wm_theme_test.sh` runs every wm application
+  through a switch and checks it by pixel.
 - **One job per mouse button, as in Plan 9.** wm/page's operations
   (paging, zoom, fit, turning, find, go to, write) move to button 2, and
   button 3 lists the pages and files to choose from, as Plan 9's page

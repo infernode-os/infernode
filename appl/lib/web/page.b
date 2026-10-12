@@ -105,15 +105,36 @@ request(url, method, reqctype: string, body: array of byte, width, height: int):
 	return (p, nil);
 }
 
+# where a page's time goes (/env/pagetime): each phase of its load,
+# said on standard error as it ends
+ptime := 0;
+pt0 := 0;
+stylecheck := 0;	# /env/stylecheck: each restyle checked against the whole computed again
+
+phase(what: string)
+{
+	if(!ptime)
+		return;
+	t := sys->millisec();
+	sys->fprint(sys->fildes(2), "page: %s %d ms\n", what, t - pt0);
+	pt0 = t;
+}
+
 begin(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
 	readsettings();
+	(pok, nil) := sys->stat("/env/pagetime");
+	ptime = pok >= 0;
+	(sck, nil) := sys->stat("/env/stylecheck");
+	stylecheck = sck >= 0;
+	pt0 = sys->millisec();
 	data: array of byte;
 	ctype, err, final: string;
 	if(method == "POST")
 		(data, ctype, err, final) = webfs(url, method, reqctype, body, nil);
 	else
 		(data, ctype, err, final) = fetchfinal(url, nil);
+	phase(sys->sprint("fetched (%d bytes)", len data));
 	if(err != nil && len data == 0)
 		return (nil, err);	# (webfs gives a failed dial an empty body, not none)
 	# a redirected page's links are relative to where it is
@@ -135,13 +156,18 @@ images(p: ref Pg)
 {
 	if((urls := p.wanted()) != nil) {
 		pics: list of ref Pic;
-		for(got := fetchall(urls, ACCEPTIMAGE); got != nil; got = tl got) {
+		got := fetchall(urls, ACCEPTIMAGE);
+		phase(sys->sprint("images fetched (%d)", len got));
+		for(; got != nil; got = tl got) {
 			g := hd got;
 			pics = picture(g.url, g.data, g.ctype, g.err) :: pics;
 		}
+		phase("images decoded");
 		p.install(pics);
+		phase("images placed");
 	}
 	p.frames();
+	phase("frames");
 }
 
 # the document and its style sheets, laid out with no images yet
@@ -149,7 +175,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 {
 	charset := param(ctype, "charset");
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil, nil, 0);
+		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil, nil, 0, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -160,6 +186,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	else
 		p.doc = html->parse(data, charset, url);
 	d := p.doc;
+	phase(sys->sprint("parsed (%d nodes)", d.n));
 	# <base href>
 	if((b := d.find(1, Dom->Tbase)) != 0 && (h := d.attr(b, "href")) != nil) {
 		d.url = style->resolveurl(url, h);
@@ -167,13 +194,19 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	}
 	if((t := d.find(1, Dom->Ttitle)) != 0)
 		p.title = squash(d.textof(t));
+	declarative(d);
 	loadsheets(p);
+	phase("style sheets");
 	loadfonts(p);
+	phase("fonts");
 	findobjects(p);
+	phase("objects");
 	plock();
 	{
 		p.computed = style->compute(d, p.styles, p.env);
+		phase("styles computed");
 		rebuild(p);
+		phase("laid out");
 	} exception e {
 	"*" =>
 		punlock();
@@ -193,14 +226,20 @@ rebuild(p: ref Pg)
 	layout->setobjects(p.objects);
 	layout->setenv(p.env);
 	p.root = layout->build(p.doc, p.computed);
+	phase("rebuild: boxes built");
 	if(old != nil)
 		carryimages(old, p.root);
 	applypics(p, p.root);
+	phase("rebuild: images");
 	layout->lay(p.root, p.width, p.height);
+	phase("rebuild: laid out");
 	fitimages(p, p.root);
+	phase("rebuild: images fitted");
 	if(old != nil)
 		carrysvgs(p, inlinesvgs(p, old, nil), p.root);	# after: an inline SVG's picture is not its size
+	phase("rebuild: svgs carried");
 	inlinesvg(p, p.root);
+	phase("rebuild: inline svgs");
 }
 
 # Layout keeps one table of background images: the page that last
@@ -553,9 +592,12 @@ attached(d: ref Doc, n: int): int
 Pg.update(p: self ref Pg)
 {
 	plock();
+	pt0 = sys->millisec();
 	{
-		p.computed = style->compute(p.doc, p.styles, p.env);
+		styleagain(p);
+		phase(sys->sprint("update: styles (%d nodes, %d sheets)", p.doc.n, len p.sheetlist));
 		rebuild(p);
+		phase("update: laid out");
 	} exception e {
 	"*" =>
 		punlock();
@@ -563,6 +605,36 @@ Pg.update(p: self ref Pg)
 	}
 	punlock();
 	loadframes(p);
+}
+
+Pg.restyle(p: self ref Pg)
+{
+	plock();
+	{
+		styleagain(p);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+}
+
+Pg.stylefor(p: self ref Pg, n: int): ref Style->St
+{
+	st: ref Style->St;
+	plock();
+	{
+		if(resheet(p))
+			p.computed = nil;	# (the next styling is of the whole, with these sheets)
+		st = style->element(p.doc, p.styles, p.env, n);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+	return st;
 }
 
 Pg.paint(p: self ref Pg, dst: ref Image, scroll: Point)
@@ -585,11 +657,124 @@ Pg.pageheight(p: self ref Pg): int
 }
 
 # <style> and <link rel=stylesheet>, in document order, then @imports.
+# declarative shadow roots (HTML §4.12.3.1): a <template shadowrootmode>
+# makes its parent a shadow host, its content the root (the mode kept as
+# the root's attribute, for the page's script), and is gone
+declarative(d: ref Dom->Doc)
+{
+	tpls: list of int;
+	for(n := 1; n < d.n; n++) {
+		nd := d.nodes[n];
+		if(nd.kind == Dom->Element && nd.tag == Dom->Ttemplate && nd.ns == Dom->HTML && d.hasattr(n, "shadowrootmode"))
+			tpls = n :: tpls;
+	}
+	# inner ones first: a template's content may hold another host's
+	for(; tpls != nil; tpls = tl tpls) {
+		t := hd tpls;
+		mode := lower(d.attr(t, "shadowrootmode"));
+		host := d.nodes[t].parent;
+		if(mode != "open" && mode != "closed" || host == 0 || d.nodes[host].kind != Dom->Element || hosts(d, host))
+			continue;
+		root := d.create(Dom->Document, "#document-fragment", Dom->HTML);
+		d.setattr(root, "mode", mode);
+		while((c := d.nodes[t].first) != 0) {
+			d.remove(c);
+			d.append(root, c);
+		}
+		d.remove(t);
+		d.attachshadow(host, root);
+	}
+}
+
+hosts(d: ref Dom->Doc, n: int): int
+{
+	for(l := d.shadows; l != nil; l = tl l)
+		if((hd l).t0 == n)
+			return 1;
+	return 0;
+}
+
 loadsheets(p: ref Pg)
 {
+	a := sheetsof(p);
+	applysheets(p, a);
+	p.sheetlist = a;
+}
+
+# the sheets again, if the document's are not those last read: a script
+# added, removed or rewrote a <style>, or linked a sheet (CSS-in-JS does
+# it all the time).  Under plk.
+# the page's sheets as its document now has them; whether they changed
+resheet(p: ref Pg): int
+{
+	a := sheetsof(p);
+	if(samesheets(a, p.sheetlist))
+		return 0;
+	p.styles = Styles.new();
+	applysheets(p, a);
+	p.sheetlist = a;
+	return 1;
+}
+
+# the document's styles after a script's changes: only what changed
+# (style->restyle), unless the sheets did
+styleagain(p: ref Pg)
+{
+	if(resheet(p) || p.computed == nil)
+		p.computed = style->compute(p.doc, p.styles, p.env);
+	else {
+		p.computed = style->restyle(p.doc, p.styles, p.env, p.computed);
+		if(stylecheck) {
+			# a test's: the whole computed again, element by element
+			c := style->compute(p.doc, p.styles, p.env);
+			bad := 0;
+			first := 0;
+			for(i := 1; i < p.doc.n; i++) {
+				(a, b) := (c.st[i], p.computed.st[i]);
+				if(a == nil && b == nil)
+					continue;
+				if(a == nil || b == nil || style->dump(a) != style->dump(b)) {
+					if(bad++ == 0) {
+						first = i;
+						da, db: string;
+						if(a != nil) da = style->dump(a);
+						if(b != nil) db = style->dump(b);
+						(nil, la) := sys->tokenize(da, "\n");
+						(nil, lb) := sys->tokenize(db, "\n");
+						while(la != nil && lb != nil && hd la == hd lb) {
+							la = tl la;
+							lb = tl lb;
+						}
+						wa, wb: string;
+						if(la != nil) wa = hd la;
+						if(lb != nil) wb = hd lb;
+						sys->fprint(sys->fildes(2), "page: restyle differs at %d <%s class=%q>: whole %q, restyled %q\n",
+							i, p.doc.nodes[i].name, p.doc.attr(i, "class"), wa, wb);
+					}
+				}
+			}
+			sys->fprint(sys->fildes(2), "page: restyle checked: %d of %d differ (first %d)\n", bad, p.doc.n, first);
+			p.computed = c;
+		}
+	}
+}
+
+samesheets(a, b: array of (string, string, string)): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i].t0 != b[i].t0 || a[i].t1 != b[i].t1 || a[i].t2 != b[i].t2)
+			return 0;
+	return 1;
+}
+
+# the document's sheets in document order: (inline text, nil, nil) or
+# (nil, url, the link's charset attribute); a shadow tree's are its own
+# (Style->compute reads them)
+sheetsof(p: ref Pg): array of (string, string, string)
+{
 	d := p.doc;
-	# the sheets in document order: (inline text, nil, nil) or (nil, url,
-	# the link's charset attribute)
 	sheets: list of (string, string, string);
 	for(n := 1; n < d.n; n++) {
 		nd := d.nodes[n];
@@ -597,14 +782,14 @@ loadsheets(p: ref Pg)
 			continue;
 		case nd.tag {
 		Dom->Tstyle =>
-			if(!style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
+			if(!indoc(d, n) || !style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
 				continue;
 			sheets = (d.textof(n), nil, nil) :: sheets;
 		Dom->Tlink =>
 			rel := " " + lower(d.attr(n, "rel")) + " ";
 			if(index(rel, " stylesheet ") < 0 || index(rel, " alternate ") >= 0)
 				continue;
-			if(d.hasattr(n, "disabled"))
+			if(d.hasattr(n, "disabled") || !indoc(d, n))
 				continue;
 			if(!style->mediamatch(css->tokenize(d.attr(n, "media")), p.env))
 				continue;
@@ -614,21 +799,52 @@ loadsheets(p: ref Pg)
 			sheets = (nil, style->resolveurl(d.url, href), d.attr(n, "charset")) :: sheets;
 		}
 	}
+	# the document's adopted sheets, after its own
+	ad := d.adoptedof(1);
+	for(k := 0; k < len ad; k++)
+		sheets = (ad[k], nil, nil) :: sheets;
 	a := array[len sheets] of (string, string, string);
 	for(i := len a - 1; i >= 0; i--) {
 		a[i] = hd sheets;
 		sheets = tl sheets;
 	}
+	return a;
+}
+
+# whether n is in the document (not removed, nor in a shadow tree or
+# another fragment)
+cached(c: list of (string, ref Css->Sheet), key: string): int
+{
+	for(; c != nil; c = tl c)
+		if((hd c).t0 == key)
+			return 1;
+	return 0;
+}
+
+indoc(d: ref Dom->Doc, n: int): int
+{
+	for(; n != 0; n = d.nodes[n].parent)
+		if(n == 1)
+			return 1;
+	return 0;
+}
+
+applysheets(p: ref Pg, a: array of (string, string, string))
+{
+	d := p.doc;
+	i: int;
 	urls: list of string;
 	for(i = 0; i < len a; i++)
-		if(a[i].t1 != nil)
+		if(a[i].t1 != nil && !cached(p.sheetcache, a[i].t1 + " " + a[i].t2))
 			urls = a[i].t1 :: urls;
-	got := fetchall(urls, nil);
+	got: list of ref Got;
+	if(urls != nil)
+		got = fetchall(urls, nil);
 	# a sheet linked (or written inline) again is parsed once: the
 	# parsed form is never changed, and each use keeps its own place
 	# in the cascade.  (GitHub links some of its largest sheets five
 	# and six times; parsed each time they took 200M.)
-	parsed: list of (string, ref Css->Sheet);
+	parsed := p.sheetcache;
 	for(i = 0; i < len a; i++) {
 		(text, u, hint) := a[i];
 		key := "\u0000" + text;
@@ -666,6 +882,18 @@ loadsheets(p: ref Pg)
 		parsed = (key, sh) :: parsed;
 		p.styles.add(sh, Style->Author, u);
 	}
+	# kept: what these sheets are (a <style> rewritten many times leaves
+	# only its last text)
+	keep: list of (string, ref Css->Sheet);
+	for(l := parsed; l != nil; l = tl l) {
+		(k, nil) := hd l;
+		for(j := 0; j < len a; j++)
+			if(a[j].t1 == nil && k == "\u0000" + a[j].t0 || a[j].t1 != nil && k == a[j].t1 + " " + a[j].t2) {
+				keep = hd l :: keep;
+				break;
+			}
+	}
+	p.sheetcache = keep;
 	# @import, to a depth of 4
 	for(depth := 0; depth < 4; depth++) {
 		urls = p.styles.imports(p.env);
@@ -2064,6 +2292,7 @@ settings0()
 		ref Setting("images", array[] of {"on", "click"}, "on"),
 		ref Setting("fonts", array[] of {"web", "system"}, "web"),
 		ref Setting("effects", array[] of {"on", "off"}, "on"),
+		ref Setting("scripts", array[] of {"on", "off"}, "off"),
 	};
 }
 

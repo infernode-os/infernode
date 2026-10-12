@@ -93,6 +93,12 @@ menu 900 100 154
 click 600 400 1
 show delete-cancel
 
+# an application that gives its window explicit colours (fractals sets
+# the background of "."): its frame must follow a theme switch too
+wm/fractals &
+sleep 3
+show fractals
+
 # a theme switched (as Xenith's Theme does): the windows' frames and
 # the menu follow.  The host gives /lib/lucifer/theme as a copy.
 scap /tmp/wm-theme-0.img

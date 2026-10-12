@@ -287,6 +287,19 @@ prepare_writable_root(void)
 	}
 
 	nftw([dst fileSystemRepresentation], mk_writable, 32, FTW_PHYS);
+
+	/* The bundle lost its execute bits at install (see root-exec in
+	 * build-ios-app.sh); give them back to the files that had them. */
+	NSString *execlist = [[[NSBundle mainBundle] bundlePath]
+			stringByAppendingPathComponent:@"root-exec"];
+	NSString *execs = [NSString stringWithContentsOfFile:execlist
+			encoding:NSUTF8StringEncoding error:nil];
+	for (NSString *rel in [execs componentsSeparatedByString:@"\n"]) {
+		if ([rel length] == 0)
+			continue;
+		chmod([[dst stringByAppendingPathComponent:rel] fileSystemRepresentation], 0777);
+	}
+
 	[want writeToFile:marker atomically:YES encoding:NSUTF8StringEncoding error:nil];
 	return strdup([dst fileSystemRepresentation]);
 }

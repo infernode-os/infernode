@@ -184,6 +184,10 @@ done
 for d in n tmp usr mnt; do
 	mkdir -p "$APPDIR/root/$d"
 done
+# Installing the app clears the execute bits on every bundle file but the
+# binary, and scripts the boot runs directly (lib/sh/plumbrules) then fail
+# "not executable". List them; the app restores the bits on its copy.
+(cd "$APPDIR/root" && find . -type f -perm -u+x | sed 's|^\./||') >"$APPDIR/root-exec"
 
 # --- 5. codesign -------------------------------------------------------
 # Simulator: ad-hoc (no identity). Device: real Apple Development cert +

@@ -278,11 +278,12 @@ mntversion(Chan *c, char *version, int msize, int returnlen)
 	poperror();	/* c */
 	qunlock(&c->umqlock);
 
-	k = strlen(f.version);
+	/* m's copy: f.version points into msg, freed above */
+	k = strlen(m->version);	/* Flawfinder: ignore — kstrdup'd, so NUL-terminated */
 	if(returnlen > 0){
 		if(returnlen < k)
 			error(Eshort);
-		memmove(version, f.version, k);
+		memmove(version, m->version, k);
 	}
 
 	return k;

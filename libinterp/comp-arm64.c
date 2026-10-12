@@ -1103,7 +1103,9 @@ comcase(Inst *i, int w)
 		t[2] = RELPC(patch[t[2]]);
 		t += 3;
 	}
-	t[0] = RELPC(patch[t[0]]);
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	if(t[0] >= 0)
+		t[0] = RELPC(patch[t[0]]);
 }
 
 static void
@@ -1132,7 +1134,9 @@ comcasel(Inst *i)
 		t[2] = RELPC(patch[t[2]]);
 		t += 4;
 	}
-	t[0] = RELPC(patch[t[0]]);
+	/* -1: no default, a pick with every tag (limbo/com.c): never taken */
+	if(t[0] >= 0)
+		t[0] = RELPC(patch[t[0]]);
 }
 
 static void

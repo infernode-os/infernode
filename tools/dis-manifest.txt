@@ -747,6 +747,7 @@ dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
 dis/tests/intsem_test.dis
 dis/tests/jit_bounds_test.dis
+dis/tests/jit_real_test.dis
 dis/tests/jit_fault_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
@@ -764,6 +765,7 @@ dis/tests/kbddrainer_test.dis
 dis/tests/keyring_test.dis
 dis/tests/keyringinst_test.dis
 dis/tests/l2cap_test.dis
+dis/tests/limbo_asgcall_test.dis
 dis/tests/limbo_inline_test.dis
 dis/tests/lists_test.dis
 dis/tests/llmclient_reqshape_test.dis

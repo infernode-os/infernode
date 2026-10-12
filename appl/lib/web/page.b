@@ -230,8 +230,10 @@ rebuild(p: ref Pg)
 	# styles as the document now is: its scripts may have changed it
 	# since (the page is laid out when painted, not after each of their
 	# tasks), and an image coming in builds it again
+	pt0 = sys->millisec();	# (not the time since the last)
 	if(p.computed == nil || p.doc.nchanged != 0 || len p.computed.st < p.doc.n)
 		styleagain(p);
+	phase("rebuild: styles");
 	bgpage = nil;	# its background images, again with any new ones
 	usebg(p);
 	old := p.root;

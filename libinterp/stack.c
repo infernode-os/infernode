@@ -24,9 +24,10 @@ newstack(Prog *p)
 	f->mr = nil;
 	f->fp = nil;
 	l = p->R.M->m->ss;
-	/* 16 bytes for Stkext record keeping */
-	if(l < t->size+16)
-		l = t->size+16;
+	/* room for Stkext's record keeping, before the frame: four
+	 * pointers, 32 bytes on a 64-bit host (16 was a 32-bit host's) */
+	if(l < OA(Stkext, reg.tos.fu)+t->size)
+		l = OA(Stkext, reg.tos.fu)+t->size;
 	ns = mallocz(l, 0);
 	if(ns == nil)
 		error(exNomem);
@@ -55,9 +56,9 @@ extend(void)
 
 	t = R.s;
 	l = R.M->m->ss;
-	/* 16 bytes for Stkext record keeping */
-	if(l < t->size+16)
-		l = 2*t->size+16;
+	/* room for Stkext's record keeping, as in newstack */
+	if(l < OA(Stkext, reg.tos.fu)+t->size)
+		l = 2*t->size+OA(Stkext, reg.tos.fu);
 	ns = mallocz(l, 0);
 	if(ns == nil)
 		error(exNomem);

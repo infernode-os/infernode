@@ -62,6 +62,7 @@ init(d: ref Display): string
 {
 	plk = chan[1] of int;
 	dlk = chan[1] of int;
+	iclk = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
@@ -2017,8 +2018,94 @@ fetch(url: string): (array of byte, string, string)
 
 fetchimage(url: string): (array of byte, string, string)
 {
-	(data, ctype, err, nil) := fetchfinal(url, ACCEPTIMAGE);
+	(scheme, nil) := splitscheme(url);
+	if(scheme != "http" && scheme != "https") {
+		(data, ctype, err, nil) := fetchfinal(url, ACCEPTIMAGE);
+		return (data, ctype, err);
+	}
+	if((c := cachedimage(url)) != nil)
+		return (c.data, c.ctype, nil);
+	(data, ctype, err, nil, header) := webfsh(url, "GET", nil, nil, ACCEPTIMAGE);
+	if(err == nil && data != nil && !nostore(header))
+		keepimage(url, data, ctype);
 	return (data, ctype, err);
+}
+
+# ---- images kept ----
+#
+# A page's images come again on Back, Reload and the site's next page,
+# and were fetched again each time (upload.wikimedia.org answered "429
+# Too many requests" after a few pages).  Kept for the session, by URL,
+# unless the response said no-store; up to ICACHEMAX bytes, the least
+# recently used dropped first.
+
+Cached: adt {
+	url:	string;
+	ctype:	string;
+	data:	array of byte;
+};
+icache: list of ref Cached;	# most recently used first
+icachebytes := 0;
+iclk: chan of int;
+ICACHEMAX: con 64*1024*1024;
+ICACHEONE: con 8*1024*1024;	# larger ones are not kept
+
+cachedimage(url: string): ref Cached
+{
+	iclk <-= 1;
+	found: ref Cached;
+	rest: list of ref Cached;
+	for(l := icache; l != nil; l = tl l)
+		if(found == nil && (hd l).url == url)
+			found = hd l;
+		else
+			rest = hd l :: rest;
+	if(found != nil) {
+		icache = found :: revc(rest);
+	}
+	<-iclk;
+	return found;
+}
+
+keepimage(url: string, data: array of byte, ctype: string)
+{
+	if(len data > ICACHEONE)
+		return;
+	iclk <-= 1;
+	keep: list of ref Cached;
+	n := len data;
+	for(l := icache; l != nil; l = tl l) {
+		c := hd l;
+		if(c.url == url)
+			continue;
+		if(n + len c.data > ICACHEMAX)
+			continue;	# (older than everything kept: dropped)
+		n += len c.data;
+		keep = c :: keep;
+	}
+	icache = ref Cached(url, ctype, data) :: revc(keep);
+	icachebytes = n;
+	<-iclk;
+}
+
+revc(l: list of ref Cached): list of ref Cached
+{
+	r: list of ref Cached;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+# Cache-Control: no-store in a response header ("Name: value" lines)
+nostore(header: string): int
+{
+	(nil, lines) := sys->tokenize(header, "\n");
+	for(; lines != nil; lines = tl lines) {
+		h := lower(hd lines);
+		if(prefix(h, "cache-control:") && index(h, "no-store") >= 0)
+			return 1;
+	}
+	return 0;
 }
 
 # fetch, and the URL the resource came from in the end
@@ -2205,31 +2292,38 @@ hexv(c: int): int
 # write its URL, read its body.
 webfs(url, method, reqctype: string, body: array of byte, accept: string): (array of byte, string, string, string)
 {
+	(data, ctype, err, final, nil) := webfsh(url, method, reqctype, body, accept);
+	return (data, ctype, err, final);
+}
+
+# webfs, and the response's header
+webfsh(url, method, reqctype: string, body: array of byte, accept: string): (array of byte, string, string, string, string)
+{
 	cfd := sys->open(WEBFS + "/clone", Sys->OREAD);
 	if(cfd == nil)
-		return (nil, nil, "no webfs at " + WEBFS + ": " + sys->sprint("%r"), url);
+		return (nil, nil, "no webfs at " + WEBFS + ": " + sys->sprint("%r"), url, nil);
 	buf := array[32] of byte;
 	n := sys->read(cfd, buf, len buf);
 	if(n <= 0)
-		return (nil, nil, sys->sprint("webfs clone: %r"), url);
+		return (nil, nil, sys->sprint("webfs clone: %r"), url, nil);
 	id := squash(string buf[0:n]);
 	dir := WEBFS + "/" + id;
 	ctl := sys->open(dir + "/ctl", Sys->OWRITE);
 	if(ctl == nil || sys->fprint(ctl, "url %s", url) < 0)
-		return (nil, nil, sys->sprint("webfs: %r"), url);
+		return (nil, nil, sys->sprint("webfs: %r"), url, nil);
 	if(accept != nil && sys->fprint(ctl, "header Accept: %s", accept) < 0)
-		return (nil, nil, sys->sprint("webfs: %r"), url);
+		return (nil, nil, sys->sprint("webfs: %r"), url, nil);
 	if(method != "GET") {
 		if(sys->fprint(ctl, "method %s", method) < 0 ||
 		   reqctype != nil && sys->fprint(ctl, "header Content-Type: %s", reqctype) < 0)
-			return (nil, nil, sys->sprint("webfs: %r"), url);
+			return (nil, nil, sys->sprint("webfs: %r"), url, nil);
 		pfd := sys->open(dir + "/postbody", Sys->OWRITE);
 		if(pfd == nil || sys->write(pfd, body, len body) != len body)
-			return (nil, nil, sys->sprint("webfs postbody: %r"), url);
+			return (nil, nil, sys->sprint("webfs postbody: %r"), url, nil);
 	}
 	bfd := sys->open(dir + "/body", Sys->OREAD);
 	if(bfd == nil)
-		return (nil, nil, sys->sprint("%s: %r", url), url);
+		return (nil, nil, sys->sprint("%s: %r", url), url, nil);
 	data := readall(bfd);
 	final := readstr(dir + "/url");
 	if(final == "")
@@ -2238,8 +2332,11 @@ webfs(url, method, reqctype: string, body: array of byte, accept: string): (arra
 	# an error's body comes too: a page shows a 404's, nothing else does
 	status := readstr(dir + "/status");
 	if(status != "" && !prefix(status, "2"))
-		return (data, ctype, status, final);
-	return (data, ctype, nil, final);
+		return (data, ctype, status, final, nil);
+	header: string;
+	if((hfd := sys->open(dir + "/header", Sys->OREAD)) != nil)
+		header = string readall(hfd);
+	return (data, ctype, nil, final, header);
 }
 
 readstr(path: string): string

@@ -80,7 +80,10 @@ Browser: module
 		# again, effects draws it again
 		configure:	fn(s: self ref Session, line: string): string;
 		nodeat:	fn(s: self ref Session, x, y: int): int;	# page coordinates
-		paint:	fn(s: self ref Session, dst: ref Draw->Image, scroll: Draw->Point);
+		# the viewport drawn into dst; 0, dst untouched, when a page's
+		# script holds the page (the window keeps what it shows: the
+		# session says "update" when the script is done)
+		paint:	fn(s: self ref Session, dst: ref Draw->Image, scroll: Draw->Point): int;
 		boxof:	fn(s: self ref Session, n: int): (int, Draw->Rect);	# node n's first border box, page coordinates
 		linkat:	fn(s: self ref Session, x, y: int): string;	# the URL of the link under a point
 		findat:	fn(s: self ref Session, what: string, after: int): (int, Draw->Rect);	# next text match below y=after

@@ -21,6 +21,14 @@ SYSMODULES=\
 	imagefile.m\
 	imgload.m\
 	htmldoc.m\
+	outlinefont.m\
+	web/dom.m\
+	web/css.m\
+	web/style.m\
+	web/fonts.m\
+	web/layout.m\
+	web/page.m\
+	web/browser.m\
 	web/charonfs.m\
 	formatter.m\
 

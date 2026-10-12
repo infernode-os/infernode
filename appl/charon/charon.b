@@ -323,7 +323,10 @@ resized()
 	redraw();
 }
 
-# Paint the viewport and put it in the canvas.
+# Paint the viewport and put it in the canvas.  While a page's script
+# holds the page the canvas keeps what it shows: putting the cleared
+# image up instead blanked the page each time (the session says
+# "update" when the script is done).
 redraw()
 {
 	if(pageimg == nil || pageimg.r.dx() != vw || pageimg.r.dy() != vh)
@@ -331,7 +334,8 @@ redraw()
 	if(pageimg == nil)
 		return;
 	pageimg.draw(pageimg.r, display.white, nil, (0, 0));
-	sess.paint(pageimg, Point(0, scroll));
+	if(!sess.paint(pageimg, Point(0, scroll)))
+		return;
 	if(hiliting) {
 		r := hilite.subpt(Point(0, scroll));
 		y := display.color(int 16rFFFF0060);

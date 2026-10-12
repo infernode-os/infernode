@@ -345,10 +345,21 @@ exprog(Prog *p, char *exc)
 	return 1;
 }
 
+/*
+ * The group's other Progs are taken by pid and each looked up again
+ * before it is touched, as killgrp does.  killprog can release the VM
+ * (delprog does, to close the Prog's groups), and other threads run
+ * meanwhile: any Prog of the group may exit and be freed then, the
+ * leader too.  Walking grpnext across a killprog wrote into such a freed
+ * Prog (its grpnext, through delgrp), corrupting whatever had been
+ * allocated there: emu died now and then in poolfree, a block's
+ * neighbour no longer a block.
+ */
 static void
 propex(Prog *p, char *estr)
 {
-	Prog *f, *nf, *pgl;
+	Prog *f, *pgl;
+	int i, n, gid, ppid, pglpid, propagate, *pids;
 
 	if(!(p->flags & (Ppropagate|Pnotifyleader)) || p->group == nil)
 		return;
@@ -362,18 +373,35 @@ propex(Prog *p, char *estr)
 		pgl = p;
 	if(!(pgl->flags & (Ppropagate|Pnotifyleader)))
 		return;	/* exceptions are local; don't propagate */
-	for(f = p->group->head; f != nil; f = nf){
-		nf = f->grpnext;
-		if(f != p && f != pgl){
-			if(pgl->flags & Ppropagate)
-				exprog(f, estr);
-			else{
-				f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
-				killprog(f, "killed");
-			}
+	propagate = pgl->flags & Ppropagate;
+	gid = p->group->id;
+	ppid = p->pid;
+	pglpid = pgl->pid;
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		n++;
+	pids = malloc(n*sizeof(int));
+	if(pids == nil){
+		print("propex: no memory to propagate \"%s\" from %d\n", estr, ppid);
+		return;
+	}
+	n = 0;
+	for(f = p->group->head; f != nil; f = f->grpnext)
+		if(f->pid != ppid && f->pid != pglpid)
+			pids[n++] = f->pid;
+	for(i = 0; i < n; i++){
+		f = progpid(pids[i]);
+		if(f == nil || f->group == nil || f->group->id != gid)
+			continue;	/* gone, or in a group of its own now */
+		if(propagate)
+			exprog(f, estr);
+		else{
+			f->flags &= ~(Ppropagate|Pnotifyleader);	/* prevent recursion */
+			killprog(f, "killed");
 		}
 	}
-	if(p != pgl)
+	free(pids);
+	if(pglpid != ppid && (pgl = progpid(pglpid)) != nil)
 		exprog(pgl, estr);
 }
 
@@ -433,11 +461,16 @@ killprog(Prog *p, char *cause)
 		return 0;
 	}
 
+	/*
+	 * Exiting before propex: killing the group's others can release the
+	 * VM (delprog), and a killprog or exprog of p from another thread
+	 * then must leave p alone, not free it or queue it to run again.
+	 */
+	p->state = Pexiting;
 	propex(p, "killed");
 
 	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
 
-	p->state = Pexiting;
 	gclock();
 	destroystack(&p->R);
 	delprog(p, msg);
@@ -550,10 +583,31 @@ printgrp(Prog *p, char *v)
 	print("]\n");
 }
 
+/*
+ * The group with id gid, found through those of pids still in it; nil
+ * once none is.  A group is freed with its last Prog (delgrp), and
+ * killprog can release the VM (delprog), so killgrp holds the group by
+ * id, not by pointer: killing every Prog of another's group, it freed
+ * the group and then cleared Pkilled in what had been allocated there.
+ */
+static Progs*
+grpbyid(int gid, int *pids, int npid)
+{
+	int i;
+	Prog *f;
+
+	for(i = 0; i < npid; i++){
+		f = progpid(pids[i]);
+		if(f != nil && f->group != nil && f->group->id == gid)
+			return f->group;
+	}
+	return nil;
+}
+
 int
 killgrp(Prog *p, char *msg)
 {
-	int i, npid, *pids;
+	int i, npid, *pids, pid, gid;
 	Prog *f;
 	Progs *g;
 
@@ -561,9 +615,14 @@ killgrp(Prog *p, char *msg)
 	g = p->group;
 	if(g == nil || g->head == nil)
 		return 0;
+	pid = p->pid;
+	gid = g->id;
 	while(g->flags & Pkilled){
 		release();
 		acquire();
+		/* p, and its group, may be gone */
+		if((p = progpid(pid)) == nil || (g = p->group) == nil || g->id != gid || g->head == nil)
+			return 0;
 	}
 	npid = 0;
 	for(f = g->head; f != nil; f = f->grpnext)
@@ -580,7 +639,8 @@ killgrp(Prog *p, char *msg)
 		pids[npid++] = f->pid;
 	g->flags |= Pkilled;
 	if(waserror()) {
-		g->flags &= ~Pkilled;
+		if((g = grpbyid(gid, pids, npid)) != nil)
+			g->flags &= ~Pkilled;
 		free(pids);
 		nexterror();
 	}
@@ -590,7 +650,8 @@ killgrp(Prog *p, char *msg)
 			killprog(f, msg);
 	}
 	poperror();
-	g->flags &= ~Pkilled;
+	if((g = grpbyid(gid, pids, npid)) != nil)
+		g->flags &= ~Pkilled;
 	free(pids);
 	return 1;
 }

@@ -415,6 +415,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection; a chain deeper than destroy() recurses is freed whole |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
+| `pgrp_race_test.b` | A Prog swapping its name space, fd group and dot (`pctl` FORKNS, NEWFD, `chdir`) and exiting while others read its `/prog/n/ns`, `fd` and `status`: no use-after-free, no wedged name space (INFR-373) |
 | `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
 | `fractals_zoombox_test.b` | wm/fractals' own canvas bindings, driven by a synthetic button-1 drag: the zoom rubber-band grows from the press point and is painted |
 | `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler |
@@ -444,6 +445,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/xenith_image_test.sh` | Xenith opens every image format as an image through a look (B3) at its name; formats with no decoder are refused with a reason; text still opens as text |
 | `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |
 | `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool) |
+| `tests/host/spawn_budget_test.sh` | A subagent spawned through tools9p loads the delegation budget's tools (named, and its default `plan`) and cannot load a tool outside it (INFR-486); `spawn_budget_test.b` is its Limbo half |
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 | `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
 

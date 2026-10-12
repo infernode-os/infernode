@@ -1817,6 +1817,15 @@ applynsrestriction(invokedtool: string): string
 	#   - /dis/veltro/tools restricted to registered .dis files (step 2)
 	# sh.dis appears ONLY if exec was explicitly passed by the caller.
 	toolnames := invokedtool :: nil;
+	# spawn delegates. Its children load their tools from /dis/veltro/tools
+	# when it runs, in namespaces forked from this one and narrowed to each
+	# child's spec; so the spawn invocation holds the delegation budget's
+	# authority, and only that (INFR-486). A tool outside the budget is not
+	# in this namespace for a child to load.
+	if(invokedtool == "spawn")
+		for(cb := childbudget(); cb != nil; cb = tl cb)
+			if(!strlist_contains(toolnames, hd cb))
+				toolnames = hd cb :: toolnames;
 	# Merge extpaths (from -p flags) and boundpaths (from runtime bindpath ctl).
 	# Called per-invocation from asyncexec(), so boundpaths always reflects
 	# the current state — paths bound via the GUI after startup are captured.
@@ -1840,7 +1849,8 @@ applynsrestriction(invokedtool: string): string
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
-	allpaths = addtoolpaths(allpaths, invokedtool);
+	for(tn := toolnames; tn != nil; tn = tl tn)
+		allpaths = addtoolpaths(allpaths, hd tn);
 	writepaths := genwritepaths();
 	if(invokedtool == "exec")
 		writepaths = execwritepaths();

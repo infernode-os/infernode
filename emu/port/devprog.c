@@ -144,7 +144,7 @@ static	void	dbgstart(Prog*);
 static	void	freebpts(Bpt*);
 static	Bpt*	delbpt(Bpt*, char*, int);
 static	Bpt*	setbpt(Bpt*, char*, int);
-static	void	mntscan(Mntwalk*, Pgrp*);
+static	int	mntscan(Mntwalk*, Pgrp*, char*, int);
 extern	Type	*Trdchan;
 extern	Type	*Twrchan;
 extern	Module*	modules;
@@ -498,6 +498,21 @@ progfdprint(Chan *c, int fd, int w, char *s, int ns)
 	return n;
 }
 
+/*
+ * The Prog's current directory.  Its owner can chdir with the VM
+ * released, replacing and closing dot under pg->ns, so hold that.
+ */
+static int
+progdot(Pgrp *pg, char *va, int count)
+{
+	int n;
+
+	rlock(&pg->ns);
+	n = readstr(0, va, count, pg->dot->name->s);
+	runlock(&pg->ns);
+	return n;
+}
+
 static int
 progfds(Osenv *o, char *va, int count, long offset)
 {
@@ -506,7 +521,7 @@ progfds(Osenv *o, char *va, int count, long offset)
 	int n, i, w, ww;
 
 	f = o->fgrp;	/* f is not locked because we've acquired */
-	n = readstr(0, va, count, o->pgrp->dot->name->s);
+	n = progdot(o->pgrp, va, count);
 	n += snprint(va+n, count-n, "\n");
 	offset = progoffset(offset, va, &n);
 	/* compute width of qid.path */
@@ -839,7 +854,6 @@ progread(Chan *c, void *va, long n, vlong offset)
 	char *a = va;
 	Progctl *ctl;
 	char mbuf[64], timebuf[12];
-	char flag[10];
 
 	if(c->qid.type & QTDIR)
 		return devdirread(c, a, n, 0, 0, proggen);
@@ -893,22 +907,13 @@ progread(Chan *c, void *va, long n, vlong offset)
 			return 0;
 		}
 		o = p->osenv;
-		mntscan(mw, o->pgrp);
-		if(mw->mh == 0) {
+		i = mntscan(mw, o->pgrp, a, n);
+		if(i < 0) {
 			mw->cddone = 1;
-			i = snprint(a, n, "cd %s\n", o->pgrp->dot->name->s);
-			poperror();
-			release();
-			return i;
+			i = snprint(a, n, "cd ");
+			i += progdot(o->pgrp, a+i, n-i);
+			i += snprint(a+i, n-i, "\n");
 		}
-		int2flag(mw->cm->mflag, flag);
-		if(strcmp(mw->cm->to->name->s, "#M") == 0){
-			i = snprint(a, n, "mount %s %s %s %s\n", flag,
-				mw->cm->to->mchan->name->s,
-				mw->mh->from->name->s, mw->cm->spec? mw->cm->spec : "");
-		}else
-			i = snprint(a, n, "bind %s %s %s\n", flag,
-				mw->cm->to->name->s, mw->mh->from->name->s);
 		poperror();
 		release();
 		return i;
@@ -990,40 +995,54 @@ progread(Chan *c, void *va, long n, vlong offset)
 	return 0;
 }
 
-static void
-mntscan(Mntwalk *mw, Pgrp *pg)
+/*
+ * Format the mount after the last one read into a, in mountid
+ * order; -1 when there are no more.  The Prog's owner can unmount,
+ * or replace and close its whole group, between reads, so remember
+ * only the last mountid.  pg->ns holds the hash table still; each
+ * Mhead's own lock holds its mount list (cmount changes and frees
+ * it under that alone), so read a list, and format from it, only
+ * holding its lock.
+ */
+static int
+mntscan(Mntwalk *mw, Pgrp *pg, char *a, int n)
 {
 	Mount *t;
 	Mhead *f;
-	int nxt, i;
-	ulong last, bestmid;
+	int i, r;
+	ulong best;
+	char flag[10];
 
+	r = -1;
+	best = 0;
 	rlock(&pg->ns);
-
-	nxt = 0;
-	bestmid = ~0;
-
-	last = 0;
-	if(mw->mh)
-		last = mw->cm->mountid;
-
 	for(i = 0; i < MNTHASH; i++) {
 		for(f = pg->mnthash[i]; f; f = f->hash) {
+			rlock(&f->lock);
 			for(t = f->mount; t; t = t->next) {
-				if(mw->mh == 0 ||
-				  (t->mountid > last && t->mountid < bestmid)) {
-					mw->cm = t;
-					mw->mh = f;
-					bestmid = mw->cm->mountid;
-					nxt = 1;
-				}
+				if(mw->started && t->mountid <= mw->id)
+					continue;
+				if(r >= 0 && t->mountid >= best)
+					continue;
+				best = t->mountid;
+				int2flag(t->mflag, flag);
+				if(strcmp(t->to->name->s, "#M") == 0)
+					r = snprint(a, n, "mount %s %s %s %s\n", flag,
+						t->to->mchan->name->s,
+						f->from->name->s, t->spec? t->spec : "");
+				else
+					r = snprint(a, n, "bind %s %s %s\n", flag,
+						t->to->name->s, f->from->name->s);
 			}
+			runlock(&f->lock);
 		}
 	}
-	if(nxt == 0)
-		mw->mh = 0;
-
 	runlock(&pg->ns);
+	if(r >= 0) {
+		mw->started = 1;
+		mw->id = best;
+	}
+	return r;
 }
 
 static long

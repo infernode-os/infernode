@@ -332,7 +332,7 @@ properties:
 | `namespace_isolation.pml` | 339 | 3 | 82,628 | Post-copy mount isolation |
 | `namespace_isolation_extended.pml` | 211 | 3 | 5,724 | Nested fork (parent→child→grandchild) |
 | `namespace_locks.pml` | 343 | 3 | 39,744 | Lock ordering (`pg->ns` before `mh->lock`) |
-| `namespace_races.pml` | 370 | 4 | 3,131 | Use-after-free race detection |
+| `namespace_races.pml` | 475 | 4 | 2,013 | Use-after-free race detection |
 | `exportfs_boundary.pml` | 177 | 1 | 106 | Walk("..") cannot escape exported root |
 
 ### 5.2 Modeling Decisions
@@ -364,25 +364,38 @@ wlock_mh(pg, mh);
 
 ### 5.3 Race Conditions Found
 
-The `namespace_races.pml` model formally confirms three use-after-free
-races. These are run with `-DNOCLAIM` for safety (assertions pass) and
-with LTL claims for expected violations (counterexamples found):
+The `namespace_races.pml` model formally confirmed three use-after-free
+races in the code as it was:
 
-1. **kchdir dot race** (`sysfile.c:153-154`): `cclose(pg->dot)` followed
+1. **kchdir dot race** (`sysfile.c`): `cclose(pg->dot)` followed
    by `pg->dot = c` without lock. Concurrent `namec()` reads freed pointer.
-   *LTL `no_use_after_free_dot` violated.*
-
-2. **FORKNS pgrp swap** (`inferno.c:873`): `o->pgrp = np.np` without lock.
-   Cached pgrp pointer in another thread becomes stale.
-
-3. **namec slash/dot read** (`chan.c:1022,1057`): Unprotected reads of
+2. **FORKNS pgrp swap** (`inferno.c`, `Sys_pctl`): `o->pgrp = np.np` and
+   `closepgrp` of the old group with the VM released, while devprog reads
+   another Prog's `o->pgrp` holding the VM.
+3. **namec slash/dot read** (`chan.c`): Unprotected reads of
    `pg->slash`/`pg->dot` concurrent with `kchdir`/`FORKNS`.
-   *LTL `no_use_after_free_slash` violated.*
 
-These races are mitigated by Inferno's cooperative Dis VM scheduling (only
-one Dis thread executes at a time) but are genuine hazards for the
+**Status: fixed** (89db5178 for 1 and 3; INFR-373 for 2). The model is
+now the fixed code, in which the three LTL properties hold and no end
+state deadlocks; `-DUNFIXED` models the code before, in which SPIN
+still finds the dot and pgrp use-after-frees, so the model can see
+them. `verify-all.sh full` checks both.
+
+Exercising the fix on a running emu (`tests/pgrp_race_test.b`: one Prog
+swapping its name space, fd group and dot while others read its
+`/prog/n/ns`, `fd` and `status`) found three more of the same kind in
+devprog and the Prog lifecycle, fixed with it: `/prog/n/ns` kept
+pointers to the Prog's mounts across reads and walked mount lists
+without the `Mhead` lock that `cmount` changes and frees them under
+(a fault there leaked the `pg->ns` read lock and wedged the name
+space); `Sys_pctl` swapped the fd group the same way as the pgrp; and
+`delprog` closed an exiting Prog's groups with the VM released while
+the Prog was still in the pid table.
+
+These races were masked by Inferno's cooperative Dis VM scheduling (only
+one Dis thread executes at a time) but were genuine hazards for the
 multi-threaded emu host layer where I/O threads, timer threads, and
-interpreter threads share the `Osenv`. (Line numbers are as of the finding.)
+interpreter threads share the `Osenv`.
 
 **Status:** races 1 and 3 were fixed in 89db5178 (2026-05-14): `kchdir`
 and `namec` now take the `pg->ns` lock. That commit also re-acquired the VM
@@ -486,8 +499,11 @@ OS threads for I/O, timers, and the interpreter, and the `Osenv`
 structure (containing the `Pgrp` pointer) is accessible from all threads.
 
 **Fix**: applied in 89db5178 — `pg->ns` read lock around the `slash`/`dot`
-reads in `namec()` and write lock around the reassign in `kchdir()`. For
-the FORKNS swap see §5.3 Status.
+reads in `namec()` and write lock around the reassign in `kchdir()`; and
+for INFR-373 the FORKNS/NEWNS (and NEWFD/FORKFD) swap holds the VM lock
+for the pointer store alone, not the copy that can wait on Limbo file
+servers (see `docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md` for
+why the copy must not). See §5.3.
 
 ---
 

@@ -720,7 +720,8 @@ extern	void		tkdelpack(Tk*);
 extern	void		tkappendpack(Tk*, Tk*, int);
 extern	void		tkpackqit(Tk*);
 extern	void		tkrunpack(TkTop*);
-extern	void		tksetslavereq(Tk*, TkGeom);
+extern	void		tkpackreq(Tk*);
+extern	int		tksetslavereq(Tk*, TkGeom);
 extern	int		tkisslave(Tk*, Tk*);
 
 /* General - grids.c */

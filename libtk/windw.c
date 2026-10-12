@@ -104,10 +104,8 @@ tkgeomchg(Tk *tk, TkGeom *g, int bd)
 	if(geomfn != nil)
 		geomfn(tk);
 
-	if(tk->master != nil) {
-		tkpackqit(tk->master);
-		tkrunpack(tk->env->top);
-	}
+	if(tk->master != nil)
+		tkpackreq(tk->master);
 	else
 	if(tk->geom != nil) {
 		w = tk->req.width;

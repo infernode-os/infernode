@@ -12,6 +12,42 @@ struct Pack
 };
 static Pack *packorder;
 
+/*
+ * The master being packed again only because a slave asked for another
+ * size (tkgeomchg).  Its own area is drawn again only if a slave moved
+ * or changed size: a label given new text otherwise repainted the whole
+ * window from its background up, straight onto the screen, and a window
+ * whose status line changes often (a browser loading) flickered.
+ */
+static Tk *packquiet;
+
+static int
+tkpackqueued(Tk *t)
+{
+	Pack *f;
+
+	for(f = packorder; f != nil; f = f->next)
+		if(f->t == t)
+			return 1;
+	return 0;
+}
+
+/*
+ * pack master again after a slave's requested size changed
+ */
+void
+tkpackreq(Tk *master)
+{
+	Tk *was;
+
+	was = packquiet;
+	if(!tkpackqueued(master))
+		packquiet = master;
+	tkpackqit(master);
+	tkrunpack(master->env->top);
+	packquiet = was;
+}
+
 static int tkpacker(Tk *);
 
 typedef struct TkParam TkParam;
@@ -474,7 +510,7 @@ Error:
 	return e;
 }
 
-void
+int
 tksetslavereq(Tk *slave, TkGeom frame)
 {
 	Point border;
@@ -529,7 +565,9 @@ tksetslavereq(Tk *slave, TkGeom frame)
 
 		slave->dirty = tkrect(slave, 1);
 		slave->flag |= Tkrefresh;
+		return 1;
 	}
+	return 0;
 }
 static int
 tkexpandx(Tk* slave, int cavityWidth)
@@ -600,7 +638,7 @@ tkpacker(Tk *master)
 {
 	Tk *slave;
 	TkGeom frame, cavity, pos;
-	int maxwidth, maxheight, tmp, slave2BW;
+	int maxwidth, maxheight, tmp, slave2BW, moved;
 
 	pos.width = 0;
 	pos.height = 0;
@@ -635,6 +673,8 @@ tkpacker(Tk *master)
 
 	if(maxwidth != master->req.width || maxheight != master->req.height)
 	if((master->flag & Tknoprop) == 0) {
+		if(master == packquiet)
+			packquiet = nil;	/* its own size changes: drawn whole */
 		if(master->geom != nil) {
 			master->geom(master, master->act.x, master->act.y, 
 					maxwidth, maxheight);
@@ -653,6 +693,7 @@ tkpacker(Tk *master)
 	cavity.width = master->act.width;
 	cavity.height = master->act.height;
 
+	moved = 0;
 	for(slave = master->slave; slave != nil; slave = slave->next) {
 		slave2BW = slave->borderwidth*2;
 		if(slave->flag & (Tktop|Tkbottom)) {
@@ -694,11 +735,13 @@ tkpacker(Tk *master)
 				frame.x = cavity.x + cavity.width;
 		}
 
-		tksetslavereq(slave, frame);
+		moved |= tksetslavereq(slave, frame);
 	}
 
-	master->dirty = tkrect(master, 1);
-	tkdirty(master);
+	if(master != packquiet || moved) {
+		master->dirty = tkrect(master, 1);
+		tkdirty(master);
+	}
 	return 1;
 }
 

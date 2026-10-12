@@ -75,6 +75,11 @@
 	<string>iphonesimulator</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- UIKit delivers mouse and trackpad input (and Simulator host
+	     clicks) only with this set; without it SDL3 logs "You need
+	     UIApplicationSupportsIndirectInputEvents" and drops them. -->
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

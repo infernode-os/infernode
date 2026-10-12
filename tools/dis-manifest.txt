@@ -747,6 +747,7 @@ dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
 dis/tests/intsem_test.dis
 dis/tests/jit_bounds_test.dis
+dis/tests/jit_real_test.dis
 dis/tests/jit_fault_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis

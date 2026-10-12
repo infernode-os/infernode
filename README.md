@@ -1,6 +1,6 @@
 # InferNode analytics
 
-Snapshot captured `2026-10-12T02:56:23+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
+Snapshot captured `2026-10-12T03:03:21+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
 
 ## Engagement
 
@@ -15,7 +15,7 @@ Snapshot captured `2026-10-12T02:56:23+00:00`. Updated daily by [`.github/workfl
 
 | State | Issues | PRs |
 |---|---:|---:|
-| Open | 27 | 16 |
+| Open | 27 | 17 |
 | Merged | — | 755 |
 | Closed (unmerged) | 29 | 25 |
 

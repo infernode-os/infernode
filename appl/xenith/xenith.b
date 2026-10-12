@@ -331,17 +331,21 @@ main(argl : list of string)
 	}
 	else{
 		row.init(mainwin.clipr);
+		# one column where two would be under 40 characters each (a phone)
+		defcol := 2;
+		if(mainwin.clipr.dx() < 80*font.width("0"))
+			defcol = 1;
 		if(ncol < 0){
 			if(arg.av == nil)
-				ncol = 2;
+				ncol = defcol;
 			else{
 				ncol = (len arg.av+(WPERCOL-1))/WPERCOL;
-				if(ncol < 2)
-					ncol = 2;
+				if(ncol < defcol)
+					ncol = defcol;
 			}
 		}
 		if(ncol == 0)
-			ncol = 2;
+			ncol = defcol;
 		for(i=0; i<ncol; i++){
 			c = row.add(nil, -1);
 			if(c==nil && i==0)

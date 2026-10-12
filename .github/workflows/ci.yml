@@ -1553,6 +1553,76 @@ jobs:
   # ─────────────────────────────────────────────
   # Windows AMD64: MSVC build from source
   # ─────────────────────────────────────────────
+  ios:
+    name: iOS Build & Simulator Test
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    # The iOS scripts drive the host's mk and limbo, and bundle dis/ into
+    # the app, so the host side is built first.
+    - name: Build the host's mk and limbo, and the Dis tree
+      run: |
+        set -e
+        ./makemk.sh
+        export PATH="$ROOT/MacOSX/arm64/bin:$PATH"
+        for d in lib9 libbio libmp libsec libmath utils/iyacc limbo; do
+          (cd "$d" && mk install)
+        done
+        for d in appl appl/mpeg appl/veltro tests; do
+          (cd "$d" && mk install) > "/tmp/dis-$(basename "$d").log" 2>&1 || {
+            grep -E '\.b:[0-9]+:' "/tmp/dis-$(basename "$d").log" | grep -v 'warning:' | head -40
+            echo "::error::mk install failed in $d"; exit 1; }
+        done
+
+    - name: Cross-build the simulator slice
+      run: ./build-ios-arm64.sh > /tmp/ios-sim.log 2>&1 || { tail -40 /tmp/ios-sim.log; exit 1; }
+
+    - name: Boot a simulator
+      run: |
+        UDID=$(xcrun simctl list devices available | grep -m1 -E '^ +iPhone' | grep -oE '[0-9A-F-]{36}')
+        test -n "$UDID" || { echo "::error::no iPhone simulator available"; exit 1; }
+        xcrun simctl boot "$UDID"
+        xcrun simctl bootstatus "$UDID"
+
+    # Headless app: boots emu from the bundled root and runs hello_test.
+    - name: Headless app runs a test inside iOS
+      run: ./build-ios-app.sh --verify
+
+    - name: Cache SDL3 for iOS
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/sdks/SDL3-ios-sim-arm64
+        key: sdl3-ios-sim-3.2.26-${{ runner.os }}
+
+    # GUI app: the script launches it but asserts nothing, so watch the
+    # console for the presentation view coming up, the last step of a
+    # Lucifer boot.
+    - name: GUI app boots Lucifer
+      run: |
+        ./build-sdl3-ios.sh > /tmp/sdl3.log 2>&1 || { tail -40 /tmp/sdl3.log; exit 1; }
+        ./build-ios-app.sh --gui
+        xcrun simctl terminate booted os.infernode.ios || true
+        ( xcrun simctl launch --console-pty booted os.infernode.ios > /tmp/ios-gui.log 2>&1 ) &
+        for i in $(seq 1 24); do
+          grep -q 'lucipres: plumb consumer listening' /tmp/ios-gui.log && break
+          sleep 5
+        done
+        grep -vE '^$' /tmp/ios-gui.log | tail -40
+        grep -q 'lucipres: plumb consumer listening' /tmp/ios-gui.log || {
+          echo "::error::Lucifer did not finish booting in the iOS Simulator"; exit 1; }
+
+    # Device slice: compile only. Installing needs signing and hardware.
+    - name: Cross-build the device slice
+      run: |
+        IOSSDK=iphoneos ./build-ios-arm64.sh > /tmp/ios-dev.log 2>&1 || { tail -40 /tmp/ios-dev.log; exit 1; }
+
   windows-amd64:
     name: Windows AMD64 Build & Test
     runs-on: windows-2022

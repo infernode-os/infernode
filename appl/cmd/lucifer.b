@@ -379,23 +379,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 			sys->fprint(hse, "lucifer: INIT BUILD=%s (hoststderr)\n", buildstamp);
 	}
 
-	# Remove stale wmready sentinel from a previous run, then immediately
-	# write the new one.  The sentinel only signals "lucifer process is alive";
-	# tools9p and lucibridge must start regardless of display/WM setup outcome.
-	#
-	# Use /usr/inferno/tmp/ (emu root filesystem, not trfs-backed /tmp).
-	# trfs has a negative lookup cache: after sys->remove deletes the old
-	# sentinel, subsequent cat calls can get a cached "not found" even after
-	# sys->create writes the new one.  The emu root filesystem has no such
-	# cache — reads and writes are immediately coherent.
-	sys->remove("/usr/inferno/tmp/lucifer-wmready");
-	{
-		rfd := sys->create("/usr/inferno/tmp/lucifer-wmready", Sys->OWRITE, 8r644);
-		if(rfd == nil)
-			sys->fprint(sys->fildes(2), "lucifer: warning: cannot create wmready sentinel: %r\n");
-		rfd = nil;
-	}
-
 	draw = load Draw Draw->PATH;
 	if(draw == nil)
 		nomod(Draw->PATH);
@@ -1122,17 +1105,13 @@ reqkbd(on: int)
 		return;
 	if(on) {
 		sys->fprint(fd, "kbd ontop");
-		# INFR-166: hand the workspace zone rect to SDL as the
-		# focused area. wm apps that know their cursor rect more
-		# precisely (editor / xenith) refine this with their own
-		# softkbd->set_rect call; for forms (settings) and shells
-		# where we can't see the cursor from here, the zone rect is
-		# a conservative fallback — SDL slides only as much as
-		# needed for the zone bottom to clear the keyboard.
-		if(softkbd != nil && preszone.dx() > 0 && preszone.dy() > 0)
-			softkbd->set_rect(
-				preszone.min.x, preszone.min.y,
-				preszone.dx(), preszone.dy());
+		# Keep the top pinned ("kbd ontop"); an app that knows where
+		# its caret is (wm/shell) reports it with softkbd->set_rect and
+		# SDL slides just that line above the keyboard.  Handing SDL the
+		# whole zone instead (INFR-166) slid full-window text apps up
+		# under the status bar.
+		if(softkbd != nil)
+			softkbd->clear_rect();
 	} else {
 		sys->fprint(fd, "kbd off");
 		if(softkbd != nil)
@@ -3065,12 +3044,39 @@ appreaper(actid: int, id: string, pid: int)
 		sfd = nil;
 		sys->sleep(500);
 	}
+	# Some apps spawn their tasks and return from init (xenith), so
+	# the main proc is gone while the app runs on.  launchappns gave
+	# the app its own process group, numbered by this pid: wait for
+	# the group to empty.
+	while(groupalive(pid))
+		sys->sleep(500);
 	if(actid < 0 || id == "")
 		return;
 	writetofile(
 		sys->sprint("%s/activity/%d/presentation/ctl", mountpt, actid),
 		"delete id=" + id);
 	cleanupappslotbyid(actid, id);
+}
+
+# groupalive: whether any proc in process group gid is still running.
+groupalive(gid: int): int
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			return 0;
+		for(i := 0; i < n; i++) {
+			st := readfile("/prog/" + d[i].name + "/status");
+			if(st == nil)
+				continue;
+			(nf, f) := sys->tokenize(st, " ");
+			if(nf >= 2 && int hd tl f == gid)
+				return 1;
+		}
+	}
 }
 
 # cleanupappslotbyid — slot-array twin of cleanupappslot.  Same

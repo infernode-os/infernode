@@ -23,6 +23,7 @@ Bounce: module {
 };
 
 BALLSIZE: con 4;
+ballsize := BALLSIZE;	# grows with the font: a quarter of a line of text
 ZERO: con 1e-6;
 π: con Math->Pi;
 
@@ -104,6 +105,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	randch = chan of int;
 	spawn randgenproc(randch);
 	csz := Point(int cmd(win, ".c cget -actwidth"), int cmd(win, ".c cget -actheight"));
+	if ((lh := int cmd(win, ".f.l cget -actheight")) / 4 > ballsize)
+		ballsize = lh / 4;
 
 	# add edges of window
 	addline(win, ((-1, -1), (csz.x, -1)));
@@ -246,8 +249,8 @@ loop:	for (;;) {
 			currp := Realpoint(p.x + s * v.x,  p.y + s * v.y);
 			bp := Point(int currp.x, int currp.y);
 			cmd(win, ".c coords " + ballid + " " +
-				string (bp.x-BALLSIZE)+" "+string (bp.y-BALLSIZE)+" "+
-				string (bp.x+BALLSIZE)+" "+string (bp.y+BALLSIZE));
+				string (bp.x-ballsize)+" "+string (bp.y-ballsize)+" "+
+				string (bp.x+ballsize)+" "+string (bp.y+ballsize));
 			cmd(win, "update");
 			if (lineversion > version) {
 				(p, hitlineid, version) = (currp, oldid, lineversion);

@@ -61,6 +61,8 @@ include "workdir.m";
 include "plumbmsg.m";
 	plumbmod: Plumbmsg;
 	Msg: import plumbmod;
+include "softkbd.m";
+	softkbd: Softkbd;
 
 Shell: module
 {
@@ -253,6 +255,9 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
+	softkbd = load Softkbd Softkbd->PATH;
+	if(softkbd != nil && softkbd->init() != nil)
+		softkbd = nil;
 
 	# Get working directory
 	workdir = load Workdir Workdir->PATH;
@@ -537,6 +542,29 @@ rendertext()
 	rebuildbuttons();
 	updatestatus();
 	tk->cmd(top, "update");
+	reportcaret();
+}
+
+# Tell the soft keyboard where the caret is, so a phone slides the
+# prompt line above the keyboard: not the whole window (a fresh
+# shell's prompt is at the top and slid off-screen), and not nothing
+# (a long transcript's prompt is at the bottom, under the keyboard).
+# A no-op without a soft keyboard.
+reportcaret()
+{
+	if(softkbd == nil)
+		return;
+	(n, b) := sys->tokenize(tk->cmd(top, ".main.t bbox insert"), " ");
+	if(n != 4)
+		return;
+	x := int hd b; b = tl b;
+	y := int hd b; b = tl b;
+	h := int hd tl b;
+	x += int tk->cmd(top, ".main cget -actx") + int tk->cmd(top, ".main.t cget -actx");
+	y += int tk->cmd(top, ".main cget -acty") + int tk->cmd(top, ".main.t cget -acty");
+	o := top.screenr.min;
+	w := int tk->cmd(top, ".main.t cget -actwidth");
+	softkbd->set_rect(o.x + x, o.y + y, w, h);
 }
 
 # After native mouse handling, copy the widget cursor and selection back.

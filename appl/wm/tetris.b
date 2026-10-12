@@ -183,6 +183,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# lands off-window.  Pinning the size (as the classic score screen already
 	# did) lets us anchor the board top-centre in the window below.
 	cmd(win, "pack propagate . 0");
+	# Once on screen the window has its real size (in the presentation
+	# zone, the zone's); bound the board by that, not the whole display.
+	(aw, ah) := (int cmd(win, ". cget -actwidth"), int cmd(win, ". cget -actheight"));
+	if (aw >= 2 * BOARDWIDTH * blocksize && ah >= BOARDHEIGHT * blocksize)
+		maxsize = Point(aw, ah);
 	for (;;) {
 		bd := Board.new(win, ".f", blocksize, maxsize);
 		if (bd == nil) {
@@ -589,6 +594,10 @@ Board.new(top: ref Tk->Toplevel, w: string, blocksize: int, maxsize: Point): ref
 		dx = avail.y;
 	if (dx <= 0)
 		return nil;
+	# A block no smaller than a line of text: 17px is right on a desktop
+	# but a speck on a phone, whose fonts are three times the pixels.
+	if ((lh := wsize(top, w + ".f.scoref").y) > blocksize)
+		blocksize = lh;
 	if (dx > blocksize)
 		dx = blocksize;
 	cmd(top, w + ".f.ns configure -width " + string(4 * dx + 1 - 2*2) +

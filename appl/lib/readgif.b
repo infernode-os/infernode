@@ -102,6 +102,8 @@ readarray(fd: ref Iobuf, multi: int): (array of ref Rawimage, string)
 			(new.chans[0], err) = decode(header, new);
 			if(new.chans[0] == nil)
 				return (nil, err);
+			if(new.cmap == nil)
+				new.cmap = greymap();	# no table, global or local: the decoder's own (GIF89a §18, §21)
 			if(new.fields & 16r40)
 				interlace(new);
 			new.transp = header.transp;
@@ -150,6 +152,17 @@ readheader(fd: ref Iobuf, buf: array of byte): (ref Header, string)
 	h.buf = buf;
 	h.transp = 0;
 	return (h, "");
+}
+
+# A GIF may give no colour table at all (a 1x1 transparent pixel, as
+# pages use for spacing and tracking, often does), leaving the colours
+# to the decoder: a grey ramp, 256 entries, so any index has one
+greymap(): array of byte
+{
+	m := array[3*256] of byte;
+	for(i := 0; i < 256; i++)
+		m[3*i] = m[3*i+1] = m[3*i+2] = byte i;
+	return m;
 }
 
 readcmap(h: ref Header, size: int): (array of byte,string)

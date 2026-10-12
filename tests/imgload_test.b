@@ -362,6 +362,27 @@ testUnrecognised(t: ref T)
 	t.assert(err != nil && err[0:4] == "GIF:", "error names the format: " + err);
 }
 
+# A GIF with no colour table, global or local, as pages use for a 1x1
+# transparent spacer (apple.com's, as a data: URL): its colours are
+# the decoder's to give, not an error
+testGifNoColourTable(t: ref T)
+{
+	needdisplay(t);
+	gif := array[] of {
+		byte 16r47, byte 16r49, byte 16r46, byte 16r38, byte 16r39, byte 16r61, byte 16r01, byte 16r00,
+		byte 16r01, byte 16r00, byte 16r70, byte 16r00, byte 16r00, byte 16r21, byte 16rf9, byte 16r04,
+		byte 16r01, byte 16r00, byte 16r00, byte 16r00, byte 16r00, byte 16r2c, byte 16r00, byte 16r00,
+		byte 16r00, byte 16r00, byte 16r01, byte 16r00, byte 16r01, byte 16r00, byte 16r00, byte 16r02,
+		byte 16r02, byte 16r44, byte 16r01, byte 16r00, byte 16r3b
+	};
+	(im, err) := imgload->readimagedata(gif, "spacer.gif");
+	t.assert(im != nil, "decoded: " + err);
+	if(im != nil) {
+		t.asserteq(im.r.dx(), 1, "width");
+		t.asserteq(im.r.dy(), 1, "height");
+	}
+}
+
 testReader(t: ref T)
 {
 	(rd, err) := imgload->reader("gif");
@@ -890,6 +911,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DecodeBit", testDecodeBit);
 	run("RemapTrueColour", testRemapTrueColour);
 	run("Unrecognised", testUnrecognised);
+	run("GifNoColourTable", testGifNoColourTable);
 	run("Reader", testReader);
 	run("Kinds", testKinds);
 

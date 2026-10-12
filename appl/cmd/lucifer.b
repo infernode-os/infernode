@@ -379,23 +379,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 			sys->fprint(hse, "lucifer: INIT BUILD=%s (hoststderr)\n", buildstamp);
 	}
 
-	# Remove stale wmready sentinel from a previous run, then immediately
-	# write the new one.  The sentinel only signals "lucifer process is alive";
-	# tools9p and lucibridge must start regardless of display/WM setup outcome.
-	#
-	# Use /usr/inferno/tmp/ (emu root filesystem, not trfs-backed /tmp).
-	# trfs has a negative lookup cache: after sys->remove deletes the old
-	# sentinel, subsequent cat calls can get a cached "not found" even after
-	# sys->create writes the new one.  The emu root filesystem has no such
-	# cache — reads and writes are immediately coherent.
-	sys->remove("/usr/inferno/tmp/lucifer-wmready");
-	{
-		rfd := sys->create("/usr/inferno/tmp/lucifer-wmready", Sys->OWRITE, 8r644);
-		if(rfd == nil)
-			sys->fprint(sys->fildes(2), "lucifer: warning: cannot create wmready sentinel: %r\n");
-		rfd = nil;
-	}
-
 	draw = load Draw Draw->PATH;
 	if(draw == nil)
 		nomod(Draw->PATH);

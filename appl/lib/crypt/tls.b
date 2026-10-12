@@ -169,6 +169,8 @@ init(): string
 	sys = load Sys Sys->PATH;
 	if(sys == nil)
 		return "tls: cannot load Sys";
+	if(connlk == nil)
+		connlk = chan[1] of int;
 
 	keyring = load Keyring Keyring->PATH;
 	if(keyring == nil)
@@ -264,25 +266,37 @@ Connentry: adt {
 	cs:	ref ConnState;
 };
 
+# Connections are made, used and closed by many processes at once
+# (webfs fetches in parallel): the pool is changed only under connlk,
+# else one change loses another's and a live connection's state is
+# gone (its reads fail, as an empty response).
 connpool: list of ref Connentry;
+connlk: chan of int;
 
 addconn(conn: ref Conn, cs: ref ConnState)
 {
+	connlk <-= 1;
 	connpool = ref Connentry(conn, cs) :: connpool;
+	<-connlk;
 }
 
 findconn(conn: ref Conn): ref ConnState
 {
+	connlk <-= 1;
 	for(l := connpool; l != nil; l = tl l) {
 		e := hd l;
-		if(e.conn == conn)
+		if(e.conn == conn) {
+			<-connlk;
 			return e.cs;
+		}
 	}
+	<-connlk;
 	return nil;
 }
 
 delconn(conn: ref Conn)
 {
+	connlk <-= 1;
 	nl: list of ref Connentry;
 	for(l := connpool; l != nil; l = tl l) {
 		e := hd l;
@@ -290,6 +304,7 @@ delconn(conn: ref Conn)
 			nl = e :: nl;
 	}
 	connpool = nl;
+	<-connlk;
 }
 
 Conn.read(conn: self ref Conn, buf: array of byte, n: int): int

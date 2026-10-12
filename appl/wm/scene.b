@@ -109,6 +109,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	c := <-w.ctl or
 	c = <-w.ctxt.ctl =>
 		w.wmctl(c);
+		if(c == "retheme") {
+			scene->retheme();
+			redraw(w);
+		}
 		if(c != nil && c[0] == '!') {
 			resize(w);
 			redraw(w);

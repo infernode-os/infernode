@@ -311,10 +311,13 @@ Style: module
 	};
 	Index: adt {
 		id, class, tag:	array of list of ref Entry;	# hashed
+		attr:	array of list of ref Entry;	# by an attribute's name, lower case; ":root" for :root
 		other:	list of ref Entry;
 		n:	int;
 		layers:	list of string;
 		env:	ref Env;	# the environment whose media queries it reflects
+		hashas:	int;	# a rule uses :has(), whose element's style follows its descendants
+		hasanchors:	list of array of ref Css->Simple;	# what an element must match for a :has() of a rule's to be on it (its compound, less the :has)
 	};
 	Entry: adt {
 		sel:	ref Css->Sel;
@@ -323,6 +326,7 @@ Style: module
 		order:	int;
 		anc:	array of int;	# Bloom bits an element's ancestors must have
 		mark:	int;	# candidate-gathering generation
+		key:	string;	# the id, class or tag it is indexed by; nil if several (or none)
 	};
 
 	# Computed styles for d's elements, indexed by node; before[n] and
@@ -337,7 +341,9 @@ Style: module
 	};
 
 	compute:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env): ref Computed;
-	match:	fn(d: ref Dom->Doc, n: int, sel: ref Css->Sel, env: ref Env): int;
+	element:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env, n: int): ref St;	# compute's st[n], from n's ancestors alone
+	restyle:	fn(d: ref Dom->Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Computed;	# compute's, from prev and what d says changed since (Doc.changed)
+	match:	fn(d: ref Dom->Doc, n: int, sel: ref Css->Sel, env: ref Env, scope: int): int;	# scope: the :scope element, or 0 for the root
 	mediamatch:	fn(q: array of ref Css->Tok, env: ref Env): int;
 	supports:	fn(cond: array of ref Css->Tok): int;
 	color:	fn(v: array of ref Css->Tok): (int, int);	# (ok, RGBA)

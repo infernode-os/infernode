@@ -84,6 +84,7 @@ Layout: module
 		tb:	ref Tb;		# a table's collapsed borders, once laid out
 		clip:	int;		# content clipped to the border box (a cell crossing a collapsed column)
 		fl:	ref Style->St;	# ::first-line's style, if rules give the element one
+		memo:	int;		# its last layout's record, for laying it out again the same way (layout.b's own)
 	};
 
 	# one border of a table's collapsed model: what won at a grid

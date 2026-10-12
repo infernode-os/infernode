@@ -568,6 +568,7 @@ tkdupenv(TkEnv **env)
 	d = e->top->display;
 	memmove(ne->colors, e->colors, sizeof(e->colors));
 	ne->set = e->set;
+	ne->own = e->own;
 	ne->font = font_open(d, e->font->name);
 	ne->wzero = e->wzero;
 
@@ -578,13 +579,12 @@ tkdupenv(TkEnv **env)
 
 /*
  * "retheme": reload the active lucitheme palette into this toplevel's
- * shared colour environment and repaint every widget.  Widgets that draw
- * from env colours (no explicit -background/-foreground) pick up the new
- * theme immediately; those carrying their own cloned env (explicit colours)
- * refresh when the app rebuilds them from this now-fresh env.  Without this
- * a live theme switch only reached toplevels created AFTER the switch —
- * existing windows kept their frozen palette (stale button faces, check /
- * radio indicators, select colours, ...).
+ * colour environments and repaint every widget.  A widget given an
+ * explicit colour has its own copy of the environment; its other colours
+ * (the frame's windowborder among them) are refreshed too, and only the
+ * colours an option set are kept.  Without this a live theme switch only
+ * reached toplevels created AFTER the switch, and a window whose "." had
+ * a -background kept its old frame.
  */
 static char*
 tkretheme(TkTop *t, char *arg, char **ret)
@@ -596,6 +596,8 @@ tkretheme(TkTop *t, char *arg, char **ret)
 	if(t->env != nil)
 		tksetenvcolours(t->env);
 	for(tk = t->root; tk != nil; tk = tk->siblings) {
+		if(tk->env != nil && tk->env != t->env)
+			tksetenvcolours(tk->env);
 		tk->dirty = tkrect(tk, 1);
 		tkdirty(tk);
 	}

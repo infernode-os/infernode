@@ -48,19 +48,56 @@ plk: chan of int;
 # whole image as it works: six at once took GitHub's heap to 123M.
 dlk: chan of int;
 
+plkpid := 0;	# the process holding plk
+stlk: chan of int;	# (taking it back from one that is gone)
+
+# A page's scripts are killed when the page is left (Browser's
+# endrealm), and may be holding plk as they are: a script asking where
+# something is lays the page out.  Taken back from a holder that is
+# gone, or the next page waits for it forever.
 plock()
 {
-	plk <-= 1;
+	for(;;) {
+		alt {
+		plk <-= 1 =>
+			plkpid = sys->pctl(0, nil);
+			return;
+		* =>
+			;
+		}
+		h := plkpid;
+		if(h > 0 && !alive(h)) {
+			stlk <-= 1;
+			if(plkpid == h && !alive(h)) {
+				alt {
+				<-plk =>
+					plkpid = 0;
+				* =>
+					;
+				}
+			}
+			<-stlk;
+			continue;
+		}
+		sys->sleep(2);
+	}
 }
 
 punlock()
 {
+	plkpid = 0;
 	<-plk;
+}
+
+alive(pid: int): int
+{
+	return sys->open(sys->sprint("#p/%d/status", pid), Sys->OREAD) != nil;
 }
 
 init(d: ref Display): string
 {
 	plk = chan[1] of int;
+	stlk = chan[1] of int;
 	dlk = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
@@ -379,7 +416,21 @@ Pg.want(p: self ref Pg, n: int): list of string
 {
 	if(p.root == nil || setting("images") != "click")
 		return nil;
+	urls: list of string;
 	plock();
+	{
+		urls = want1(p, n);
+	} exception e {
+	"*" =>
+		punlock();
+		raise e;
+	}
+	punlock();
+	return urls;
+}
+
+want1(p: ref Pg, n: int): list of string
+{
 	curdoc = p.doc;
 	boxes := replacedboxes(p.root, nil);
 	# where n's image is: its box's centre.  Pages lay a placeholder
@@ -407,7 +458,6 @@ Pg.want(p: self ref Pg, n: int): list of string
 					p.asked = b.url :: p.asked;
 			}
 		}
-	punlock();
 	return urls;
 }
 

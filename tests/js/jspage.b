@@ -11,7 +11,8 @@ implement Jspage;
 # -k: return, not halt the emulator (for prof(1) around it); -n: scripts
 # off; -q: print neither text nor title, only how long the page took to
 # be shown.
-# Console output goes to standard error.
+# What the page wrote to its console goes to standard error, a line
+# each as "js: url: text", once its scripts have had their time.
 #
 
 include "sys.m";
@@ -114,6 +115,13 @@ init(nil: ref Draw->Context, args: list of string)
 		if((err := s.click(click)) != nil)
 			sys->fprint(stderr, "jspage: click: %s\n", err);
 		sys->sleep(wait);
+	}
+	if(s.pg != nil) {
+		cl: list of string;
+		for(l := s.pg.console; l != nil; l = tl l)
+			cl = hd l :: cl;
+		for(; cl != nil; cl = tl cl)
+			sys->fprint(stderr, "js: %s: %s\n", s.pg.url, hd cl);
 	}
 	if(quiet)
 		;

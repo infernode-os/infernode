@@ -54,6 +54,7 @@ TARG=\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\
+	killblocked_test.dis\
 	memfs_test.dis\
 	font_format_test.dis\
 	git_test.dis\

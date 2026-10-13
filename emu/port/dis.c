@@ -945,8 +945,11 @@ acquire(void)
 	vmsetowner();
 
 	if(up->type == Interp) {
+		lock(&up->rlock);	/* with swiproc */
 		p = up->iprog;
 		up->iprog = nil;
+		up->intpend = 0;	/* a kill pending for p is p's, not the next Prog's */
+		unlock(&up->rlock);
 		irestore(p);
 	}
 	else
@@ -1120,11 +1123,11 @@ disfault(void *reg, char *msg)
 
 	if(up == nil) {
 		print("EMU: faults: %s\n", msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->type != Interp) {
 		print("SYS: process %s faults: %s\n", up->text, msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->nlocks > 0) {
 		/*

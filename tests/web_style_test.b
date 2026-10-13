@@ -454,6 +454,27 @@ testMedia(t: ref T)
 		t.assertseq(col(st(p, hd l).color), "008000ff", "media/supports " + hd l);
 }
 
+# (scripting) is enabled when the page's scripts run, and then noscript
+# is not shown (HTML §15.3.1)
+testScripting(t: ref T)
+{
+	src := "<style>@media (scripting: none) { #a { color: green } } @media (scripting) { #b { color: green } }" +
+		"@media (scripting: enabled) { #c { color: green } }</style><p id=a>a<p id=b>b<p id=c>c<noscript id=n>n</noscript>";
+	p := page(src);
+	t.assertseq(col(st(p, "a").color), "008000ff", "scripting: none without scripts");
+	t.assertseq(col(st(p, "b").color), "000000ff", "no (scripting) without scripts");
+	t.assert(st(p, "n") != nil && st(p, "n").display != Style->Dnone, "noscript shown without scripts");
+	env.scripting = 1;
+	html->scripting(1);
+	p = page(src);
+	html->scripting(0);
+	env.scripting = 0;
+	t.assertseq(col(st(p, "a").color), "000000ff", "no scripting: none with scripts");
+	t.assertseq(col(st(p, "b").color), "008000ff", "(scripting) with scripts");
+	t.assertseq(col(st(p, "c").color), "008000ff", "scripting: enabled with scripts");
+	t.assert(st(p, "n") == nil || st(p, "n").display == Style->Dnone, "noscript hidden with scripts");
+}
+
 testSelectors(t: ref T)
 {
 	p := page("<style>.p:has(> .c) { color: green } li:nth-child(2n+1) { color: green }" +
@@ -634,7 +655,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:load";
 	}
 	testing->init();
-	env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+	env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0);
 	html->init();
 	css->init();
 	if((err := style->init()) != nil) {
@@ -654,6 +675,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Shorthands", testShorthands);
 	run("Colors", testColors);
 	run("Media", testMedia);
+	run("Scripting", testScripting);
 	run("Selectors", testSelectors);
 	run("Backgrounds", testBackgrounds);
 	run("GridLanes", testLanes);

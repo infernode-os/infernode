@@ -21,6 +21,9 @@
 #		  from when it was opened; reads block
 #	dom/<n>/	tag attrs text style box children
 #	settings	the engine's settings, a line each, as ctl takes them
+#	console	what the page's scripts wrote to the console, a line each
+#		  (the last 500)
+#	errors	<url>: <why>, a line for each resource the page could not fetch
 #
 # A file's contents are taken when it is opened, so a reader sees one
 # page even if another loads while it reads.

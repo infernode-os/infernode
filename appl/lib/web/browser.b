@@ -48,6 +48,7 @@ init(d: ref Draw->Display): string
 		return sys->sprint("cannot load modules: %r");
 	realmlk = chan[1] of int;
 	html->init();
+	html->scripting(1);	# what it parses is a running script's (hparse)
 	css->init();
 	if((err := style->init()) != nil)
 		return err;
@@ -1719,7 +1720,7 @@ watchdog(r: ref Realm)
 		if(realmbyid(r.id) == nil)
 			return;
 		if(r.locked && sys->millisec() - r.since > Maxtask) {
-			sys->fprint(sys->fildes(2), "charon: scripts: %s: a script ran for %d seconds and was stopped\n", r.pg.url, Maxtask / 1000);
+			toconsole(r.pg, sys->sprint("a script ran for %d seconds and was stopped", Maxtask / 1000));
 			endrealm(r.s);
 			return;
 		}
@@ -2359,11 +2360,29 @@ hscroll(id, nil, y: int)
 		}
 }
 
+# what a page's scripts write to the console is the page's, as a
+# browser keeps it for its developer tools (charonfs's console), not
+# the terminal's
+Maxconsole: con 500;
+
 hconsole(id: int, s: string)
 {
 	r := realmbyid(id);
-	url := "";
 	if(r != nil)
-		url = r.pg.url;
-	sys->fprint(sys->fildes(2), "js: %s: %s\n", url, s);
+		toconsole(r.pg, s);
+}
+
+toconsole(pg: ref Pg, s: string)
+{
+	l := s :: pg.console;
+	if(len l > Maxconsole) {
+		k: list of string;
+		for(i := 0; i < Maxconsole && l != nil; i++) {
+			k = hd l :: k;
+			l = tl l;
+		}
+		for(l = nil; k != nil; k = tl k)
+			l = hd k :: l;
+	}
+	pg.console = l;
 }

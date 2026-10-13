@@ -1120,11 +1120,11 @@ disfault(void *reg, char *msg)
 
 	if(up == nil) {
 		print("EMU: faults: %s\n", msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->type != Interp) {
 		print("SYS: process %s faults: %s\n", up->text, msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->nlocks > 0) {
 		/*

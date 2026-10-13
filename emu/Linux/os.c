@@ -291,11 +291,17 @@ termrestore(void)
 	tcsetattr(0, TCSANOW, &tinit);
 }
 
+/*
+ * Leave with status x: halt's argument, 1 for a panic or a fault in
+ * emu, 128+n for signal n.  _exit ends every thread at once, as the
+ * SIGKILL to our own group it replaces did; with the SIGKILL the
+ * status was whichever of the signal and the exit(0) after it came
+ * first, so the same run exited 0 on one machine and 137 on the next,
+ * and a crash could exit 0.
+ */
 void
 cleanexit(int x)
 {
-	USED(x);
-
 	if(up->intwait) {
 		up->intwait = 0;
 		return;
@@ -304,8 +310,13 @@ cleanexit(int x)
 	if(dflag == 0)
 		termrestore();
 
-	kill(0, SIGKILL);
-	exit(0);
+	_exit(x);
+}
+
+static void
+sigexit(int sig)
+{
+	cleanexit(128+sig);
 }
 
 void
@@ -373,9 +384,9 @@ libinit(char *imod)
 	 */
 	signal(SIGPIPE, SIG_IGN);
 	if(signal(SIGTERM, SIG_IGN) != SIG_IGN)
-		signal(SIGTERM, cleanexit);
+		signal(SIGTERM, sigexit);
 	if(signal(SIGINT, SIG_IGN) != SIG_IGN)
-		signal(SIGINT, cleanexit);
+		signal(SIGINT, sigexit);
 
 	if(sflag == 0) {
 		act.sa_flags = SA_SIGINFO;
@@ -443,7 +454,7 @@ readkbd(void)
 		buf[0] = 'H' - '@';
 		break;
 	case CTRLC:
-		cleanexit(0);
+		cleanexit(128+SIGINT);
 		break;
 	}
 	return buf[0];

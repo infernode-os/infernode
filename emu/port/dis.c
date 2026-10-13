@@ -945,8 +945,11 @@ acquire(void)
 	vmsetowner();
 
 	if(up->type == Interp) {
+		lock(&up->rlock);	/* with swiproc */
 		p = up->iprog;
 		up->iprog = nil;
+		up->intpend = 0;	/* a kill pending for p is p's, not the next Prog's */
+		unlock(&up->rlock);
 		irestore(p);
 	}
 	else

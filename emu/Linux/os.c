@@ -248,21 +248,20 @@ trapFPE(int signo, siginfo_t *si, void *a)
 static void
 trapUSR1(int signo)
 {
-	int intwait;
-
 	USED(signo);
 
 	if(up == nil)		/* pexit has already forgotten the proc */
 		return;
 
-	intwait = up->intwait;
-	up->intwait = 0;	/* clear it to let proc continue in osleave */
-
-	if(up->type != Interp)		/* Used to unblock pending I/O */
-		return;
-
-	if(intwait == 0)		/* Not posted so it's a sync error */
-		disfault(nil, Eintr);	/* Should never happen */
+	/*
+	 * Let the proc continue in osleave.  Nothing more to do: swiproc
+	 * set swipend with intwait, and osleave raises the Eintr.  If
+	 * intwait is already 0, osleave gave up waiting for this signal and
+	 * cleared it itself (proc.c), so the signal is late; it used to
+	 * raise a second Eintr here, from a signal handler, wherever the
+	 * proc had got to by then.
+	 */
+	up->intwait = 0;
 }
 
 void
@@ -302,7 +301,7 @@ termrestore(void)
 void
 cleanexit(int x)
 {
-	if(up->intwait) {
+	if(up != nil && up->intwait) {
 		up->intwait = 0;
 		return;
 	}
@@ -313,10 +312,17 @@ cleanexit(int x)
 	_exit(x);
 }
 
+/*
+ * SIGTERM and SIGINT: not cleanexit, whose intwait test would take a
+ * signal landing on a proc waiting for its SIGUSR1 for that SIGUSR1,
+ * swallowing it and leaving the SIGUSR1 to come late.
+ */
 static void
 sigexit(int sig)
 {
-	cleanexit(128+sig);
+	if(dflag == 0)
+		termrestore();
+	_exit(128+sig);
 }
 
 void

@@ -1136,6 +1136,16 @@ formencode(s: string): string
 	return r;
 }
 
+Session.scrollto(s: self ref Session, y: int)
+{
+	if(y < 0)
+		y = 0;
+	lock(s);
+	s.scroll = y;
+	unlock(s);
+	event(s, "scroll " + string y);
+}
+
 # ---- pointing ----
 
 Session.nodeat(s: self ref Session, x, y: int): int

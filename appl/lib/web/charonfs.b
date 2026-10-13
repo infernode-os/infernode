@@ -478,7 +478,7 @@ ctl(s: string): string
 			return "usage: size <w>x<h>";
 		sess.resize(num(hd l), num(hd tl l));
 	"scroll" =>
-		sess.scroll = num(arg);
+		sess.scrollto(num(arg));
 	"images" or "fonts" or "effects" or "scripts" =>
 		return sess.configure(cmd + " " + arg);
 	"loadimages" =>

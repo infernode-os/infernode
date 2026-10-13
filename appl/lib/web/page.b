@@ -181,8 +181,10 @@ images(p: ref Pg)
 document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 {
 	charset := param(ctype, "charset");
+	scripting := setting("scripts") == "on";
+	html->scripting(scripting);
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0), nil, width, height, nil, nil, nil, nil, 0, nil, nil);
+		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);

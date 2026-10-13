@@ -151,6 +151,7 @@ init(nil: ref Draw->Context, argl: list of string)
 	argl = arg->argv();
 	if(kflag){
 		dict->printkey();
+		bout.flush();
 		exit;
 	}
 	if(len argl  > 1)

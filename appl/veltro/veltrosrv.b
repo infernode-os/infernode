@@ -28,7 +28,9 @@ implement VeltroSrv;
 #	        status     read: idle | working | blocked | <tool>
 #	        approve    read: while a turn runs, waits for a gated call,
 #	                   then "<callid> <tool> <args>"; write: allow
-#	                   <callid> | deny <callid>
+#	                   <callid> | deny <callid> | deny <callid> headless
+#	                   (the last for a client with no one to ask, such
+#	                   as an unattended campaign: recorded as such)
 #
 # The loop is lucibridge's agentturn, moved here with its writes to
 # /mnt/ui replaced by appends to text and log; what the grinding tuned
@@ -113,7 +115,7 @@ Qroot, Qnew, Qsessdir, Qctl, Qinput, Qtext, Qlog, Qstatus, Qapprove: con iota;
 
 Approval: adt {
 	callid, tool, args: string;
-	reply: chan of int;		# 1 allow, 0 deny
+	reply: chan of int;		# 1 allow, 0 deny, 2 deny: no one to ask
 };
 
 Session: adt {
@@ -495,6 +497,10 @@ pretoolapproval(s: ref Session, callid, toolname, args: string): string
 	evc <-= ref Ev.Approve(s, a);
 	ok := <-a.reply;
 	setstatus(s, "working");
+	if(ok == 2) {
+		log(s, "pretool: denied by headless campaign policy for " + toolname);
+		return "headless-deny";
+	}
 	if(!ok) {
 		log(s, "pretool: user responded: deny");
 		return "deny";
@@ -643,11 +649,17 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 				s.llmid, step + 1, name), array of byte "said");
 			continue;
 		}
-		if(pretoolapproval(s, id, nm, args) == "deny") {
+		approval := pretoolapproval(s, id, nm, args);
+		if(approval == "deny" || approval == "headless-deny") {
 			denied := "error: operation denied by operator";
+			status := "denied";
+			if(approval == "headless-deny") {
+				denied = "error: operation denied by headless campaign policy";
+				status = "headless-denied";
+			}
 			results = (id, denied) :: results;
-			prov("toolres", sys->sprint("agent=%s step=%d tool=%s status=denied",
-				s.llmid, step + 1, name), array of byte denied);
+			prov("toolres", sys->sprint("agent=%s step=%d tool=%s status=%s",
+				s.llmid, step + 1, name, status), array of byte denied);
 			continue;
 		}
 		# Read cache: identical read-only repeats are answered from the
@@ -1570,21 +1582,28 @@ Serve:
 			Qapprove =>
 				(verb, rest) := str->splitl(strip(data), " \t");
 				rest = str->drop(rest, " \t");
-				if(s.approval == nil || rest != s.approval.callid) {
+				(callid, why) := str->splitl(rest, " \t");
+				why = str->drop(why, " \t");
+				if(s.approval == nil || callid != s.approval.callid) {
 					srv.reply(ref Rmsg.Error(m.tag, "no such call awaiting approval"));
 					break;
 				}
 				case verb {
-				"allow" =>
-					s.approval.reply <-= 1;
-					s.approval = nil;
-					srv.reply(ref Rmsg.Write(m.tag, len m.data));
-				"deny" =>
-					s.approval.reply <-= 0;
+				"allow" or "deny" =>
+					r := 1;
+					if(verb == "deny")
+						r = 0;
+					if(why == "headless" && verb == "deny")
+						r = 2;
+					else if(why != "") {
+						srv.reply(ref Rmsg.Error(m.tag, "allow <callid> | deny <callid> [headless]"));
+						break;
+					}
+					s.approval.reply <-= r;
 					s.approval = nil;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				* =>
-					srv.reply(ref Rmsg.Error(m.tag, "allow <callid> | deny <callid>"));
+					srv.reply(ref Rmsg.Error(m.tag, "allow <callid> | deny <callid> [headless]"));
 				}
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));

@@ -37,7 +37,7 @@ UPDATE=${UPDATE:-0}
 
 SCENARIOS="text_only single_read text_and_tool two_reads many_reads dup_read dup_in_batch
 big_output unknown_tool error_streak say write_then_read approval_deny
-approval_deny_json read_write_read step_cap"
+approval_deny_json approval_headless read_write_read step_cap"
 [ $# -gt 0 ] && SCENARIOS="$*"
 
 TOOLS="read list write say"
@@ -51,6 +51,7 @@ cleanup() {
 	[ -z "$SERVER_PID" ] || kill "$SERVER_PID" 2>/dev/null || true
 	[ -z "$SCRIPT" ] || rm -f "$SCRIPT"
 	rm -rf "$ROOT/usr/agentloop"
+	rm -f "$ROOT/tmp/veltro/.headless-approval-deny"
 	[ "${KEEP:-0}" = 1 ] && echo "work kept in $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT HUP INT TERM
@@ -81,6 +82,7 @@ prelude() {	# port
 #!/dis/sh.dis
 load std
 rm -r /usr/agentloop >[2] /dev/null
+rm -f /tmp/veltro/.headless-approval-deny
 mkdir -p /usr/agentloop
 echo alpha > /usr/agentloop/a.txt
 echo beta > /usr/agentloop/b.txt
@@ -111,6 +113,9 @@ EOF
 # denies whatever the gate asks about, as the lucibridge driver does.
 veltrosrv_driver() {	# port scenario
 	prelude "$1"
+	# approval_headless: the client has no one to ask, and says so
+	why=
+	[ "$2" = approval_headless ] && why=' headless'
 	cat <<EOF
 /dis/veltro/veltrosrv.dis -p /usr/agentloop
 id=\`{cat /mnt/veltro/new}
@@ -119,7 +124,7 @@ echo 'SCENARIO:$2 go' > /mnt/veltro/\$id/input
 	for i in 1 2 3 4 5 {
 		a=\`{cat /mnt/veltro/\$id/approve}
 		if {! ~ \$#a 0} {
-			echo deny \${index 1 \$a} > /mnt/veltro/\$id/approve
+			echo deny \${index 1 \$a}$why > /mnt/veltro/\$id/approve
 		}
 	}
 } &
@@ -135,6 +140,10 @@ EOF
 
 lucibridge_driver() {	# port scenario
 	prelude "$1"
+	# approval_headless: an unattended campaign's marker, and no one to
+	# answer the dialogue (the Deny below is never reached)
+	marker=
+	[ "$2" = approval_headless ] && marker='mkdir -p /tmp/veltro; echo deny > /tmp/veltro/.headless-approval-deny'
 	cat <<EOF
 # lucibridge's configuration gate reads /lib/ndb/llm; stage one naming the
 # scripted backend, as the grind driver does, so it starts instead of
@@ -155,6 +164,7 @@ bind -bc /tmp/charveltro /lib/veltro
 luciuisrv
 sleep 1
 echo 'activity create Characterize' > /mnt/ui/ctl
+$marker
 lucibridge -a 0 -p /usr/agentloop &
 sleep 2
 echo 'SCENARIO:$2 go' > /mnt/ui/activity/0/conversation/input
@@ -164,7 +174,9 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
 	if {! ~ \$done 1} {
 		s=\`{cat /mnt/ui/activity/0/status}
 		if {~ \$s blocked} {
-			echo Deny > /mnt/ui/activity/0/conversation/input
+			if {! ftest -e /tmp/veltro/.headless-approval-deny} {
+				echo Deny > /mnt/ui/activity/0/conversation/input
+			}
 		}
 		if {~ \$s idle complete} {
 			done=1

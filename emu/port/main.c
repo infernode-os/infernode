@@ -481,7 +481,7 @@ panic(char *fmt, ...)
 	if(sflag)
 		abort();
 
-	cleanexit(0);
+	cleanexit(1);
 }
 
 int

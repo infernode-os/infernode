@@ -1291,6 +1291,19 @@ logfollow(done: chan of int)
 	done <-= 1;
 }
 
+# An unattended campaign has no operator to answer a dialogue: its driver
+# creates this marker, and a gated call is denied at once and recorded as
+# such, rather than left waiting for an answer that never comes (INFR-442).
+# The marker can only make a call fail, never grant one, so a spoofed
+# marker cannot widen anything.
+HEADLESSDENY: con "/tmp/veltro/.headless-approval-deny";
+
+headlessdeny(): int
+{
+	(ok, nil) := sys->stat(HEADLESSDENY);
+	return ok >= 0;
+}
+
 # Answer the agent's requests for approval with a dialogue tile.
 approver(done: chan of int)
 {
@@ -1304,6 +1317,11 @@ approver(done: chan of int)
 			break;		# the turn is over
 		(callid, rest) := str->splitl(req, " ");
 		rest = str->drop(rest, " ");
+		if(headlessdeny()) {
+			log("pretool: denied by headless campaign policy: " + rest);
+			writefile(sess + "/approve", "deny " + callid + " headless");
+			continue;
+		}
 		didx := writedialogue("Permission required", rest, "", "Allow,Deny");
 		response := readuserinput();
 		answer := "allow";

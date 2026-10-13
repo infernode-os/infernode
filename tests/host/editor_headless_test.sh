@@ -22,12 +22,16 @@ set -u
 [ -r /proc/self/stat ] || { echo "SKIP: no /proc to measure CPU time"; exit 77; }
 
 OUT=$(mktemp)
+TMPD=$(mktemp -d)
 EMUPID=
-trap 'rm -f "$OUT"; [ -n "$EMUPID" ] && kill "$EMUPID" 2>/dev/null; true' EXIT HUP INT TERM
+trap 'rm -rf "$OUT" "$TMPD"; [ -n "$EMUPID" ] && kill "$EMUPID" 2>/dev/null; true' EXIT HUP INT TERM
 
+# The editor keeps its state under /tmp/veltro/editor and leaves it when
+# killed; give it a /tmp of its own, or editor_test, run later in the same
+# tree, takes the files left for a running editor.
 # emu does not exit while the editor runs: wait for the marker, then stop it.
 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c \
-	"wm/editor & sleep 2; echo 'body 365' > /edit/1/body; echo '=== WROTE'; cat /edit/1/body; echo '=== READ'; sleep 3600" \
+	"bind -c '#U*$TMPD' /tmp; wm/editor & sleep 2; echo 'body 365' > /edit/1/body; echo '=== WROTE'; cat /edit/1/body; echo '=== READ'; sleep 3600" \
 	</dev/null >"$OUT" 2>&1 &
 EMUPID=$!
 i=0

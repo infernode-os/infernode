@@ -246,6 +246,7 @@ decompress(data: array of byte, param: string): array of byte
 request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar): (ref Response, string)
 {
 	for(redir := 0; redir < MAXREDIRECTS; redir++) {
+		requrl = encodeurl(requrl);
 		rh := hdrs;
 		if(jar != nil && (c := jar.header(requrl)) != nil)
 			rh = Header("Cookie", c) :: rh;
@@ -319,6 +320,34 @@ resolve(base, rel: string): string
 		if(path[i] == '/')
 			break;
 	return sh + path[0:i+1] + rel;
+}
+
+# A URL as a browser sends it: a space, a character outside ASCII (as
+# its UTF-8 bytes) and " < > ` { } percent-encoded (WHATWG URL, the
+# path and query percent-encode sets).  A link to
+# https://pantip.com/tag/ดูแล... was sent with its Thai as it was, and
+# answered 400; one with a space was refused.  Control characters are
+# left, for validrequesttext to refuse.
+encodeurl(u: string): string
+{
+	for(i := 0; i < len u; i++) {
+		c := u[i];
+		if(c == ' ' || c >= 16r80 || c == '"' || c == '<' || c == '>' || c == '`' || c == '{' || c == '}')
+			break;
+	}
+	if(i == len u)
+		return u;
+	r := u[0:i];
+	for(; i < len u; i++) {
+		c := u[i];
+		if(c == ' ' || c >= 16r80 || c == '"' || c == '<' || c == '>' || c == '`' || c == '{' || c == '}') {
+			b := array of byte u[i:i+1];
+			for(j := 0; j < len b; j++)
+				r += sys->sprint("%%%.2X", int b[j]);
+		} else
+			r[len r] = c;
+	}
+	return r;
 }
 
 validrequesttext(method, requrl: string, hdrs: list of Header): string

@@ -119,6 +119,7 @@ TARG=\
 	concurrent_auth_test.dis\
 	handshake_fuzz_test.dis\
 	limbo_inline_test.dis\
+	limbo_ldt_test.dis\
 	limbo_asgcall_test.dis\
 	refadt_zero_test.dis\
 	regex_test.dis\
@@ -157,6 +158,7 @@ TARG=\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
 	webclient_test.dis\
+	url_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_charon_security_test.dis\

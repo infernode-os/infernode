@@ -131,6 +131,16 @@ disvar(nil: int, ids: ref Decl)
 		print("%bd data bytes start %bd\n", bout.seek(big 0, 1) - fileoff, fileoff);
 }
 
+#
+# is id an entry of the link table ldt?
+# the tagged entries addiface puts in an interface are
+# implemented only by this module; only $self links them.
+#
+ldtentry(ldt, id: ref Decl): int
+{
+	return id.tag == 0 || ldt == selfldt;
+}
+
 disldt(size: int, ds: ref Decl)
 {
 	if(0){
@@ -150,8 +160,14 @@ disldt(size: int, ds: ref Decl)
 			n = d.init;
 			if(n.ty.kind != Tiface)
 				nerror(n, "disldt: not Tiface");
-			discon(int n.c.val);
-			for(id := n.decl.ty.ids; id != nil; id = id.next){
+			m = 0;
+			for(id := n.decl.ty.ids; id != nil; id = id.next)
+				if(ldtentry(n.decl, id))
+					m++;
+			discon(m);
+			for(id = n.decl.ty.ids; id != nil; id = id.next){
+				if(!ldtentry(n.decl, id))
+					continue;
 				disword(sign(id));
 				if(id.dot.ty.kind == Tadt){
 					s := array of byte id.dot.sym.name;

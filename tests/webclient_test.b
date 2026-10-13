@@ -203,6 +203,18 @@ testRejectsControlRequestText(t: ref T)
 		"header name separator rejected before dial");
 }
 
+# A URL with a space or characters outside ASCII is sent percent-encoded,
+# as a browser sends it, not refused (pantip.com's Thai tag links): the
+# request gets as far as dialling (port 1 on the loopback, refused)
+testEncodesURLText(t: ref T)
+{
+	for(l := "http://127.0.0.1:1/a b" :: "http://127.0.0.1:1/tag/\u0e14\u0e39" :: "http://127.0.0.1:1/?q=\"x\"" :: nil; l != nil; l = tl l) {
+		(resp, err) := webclient->request("GET", hd l, nil, nil);
+		t.assert(resp == nil, hd l + ": no response");
+		t.assert(!contains(err, "invalid URL text"), hd l + ": not refused as text: " + err);
+	}
+}
+
 contains(s, needle: string): int
 {
 	if(needle == nil || len needle == 0)
@@ -246,6 +258,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("CookieJar", testCookieJar);
 	run("PublicRequestRejectsPrivate", testPublicRequestRejectsPrivate);
 	run("RejectsControlRequestText", testRejectsControlRequestText);
+	run("EncodesURLText", testEncodesURLText);
 
 	# Network tests (may skip if no connectivity)
 	run("HttpsGet", testHttpsGet);

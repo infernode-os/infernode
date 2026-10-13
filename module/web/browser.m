@@ -50,6 +50,7 @@ Browser: module
 		gen:	int;
 		lk:	chan of int;
 		listeners:	list of chan of string;
+		lkpid:	int;	# the process holding lk (one that died holding it is taken back from)
 
 		new:	fn(width, height: int): ref Session;
 		open:	fn(s: self ref Session, url: string);

@@ -35,8 +35,11 @@ uasheet: ref Sheet;
 
 init(): string
 {
-	if(ilock == nil)
+	if(ilock == nil) {
 		ilock = chan[1] of int;
+		stlk = chan[1] of int;
+		itab = array[4093] of list of (string, int);
+	}
 	sys = load Sys Sys->PATH;
 	(sck, nil) := sys->stat("/env/stylecheck");
 	stylecheck = sck >= 0;
@@ -936,25 +939,71 @@ classesof(m: ref M, n: int): list of string
 itab: array of list of (string, int);
 nitab := 0;
 ilock: chan of int;
+ilockpid := 0;	# who holds it: a page's realm, killed as its page goes, may (lockitab)
+stlk: chan of int;
 
 intern(s: string): int
 {
-	ilock <-= 1;
-	if(itab == nil)
-		itab = array[4093] of list of (string, int);
 	h := 0;
 	for(i := 0; i < len s; i++)
 		h = h * 31 + s[i];
 	h = (h & 16r7FFFFFFF) % len itab;
+	# looked for with no lock: a bucket is a list replaced whole
 	for(l := itab[h]; l != nil; l = tl l)
+		if((hd l).t0 == s)
+			return (hd l).t1;
+	lockitab();
+	for(l = itab[h]; l != nil; l = tl l)
 		if((hd l).t0 == s) {
-			<-ilock;
+			unlockitab();
 			return (hd l).t1;
 		}
 	id := ++nitab;
 	itab[h] = (s, id) :: itab[h];
-	<-ilock;
+	unlockitab();
 	return id;
+}
+
+lockitab()
+{
+	for(;;) {
+		alt {
+		ilock <-= 1 =>
+			ilockpid = sys->pctl(0, nil);
+			return;
+		* =>
+			;
+		}
+		h := ilockpid;
+		if(h > 0 && !alive(h)) {
+			stlk <-= 1;
+			if(ilockpid == h && !alive(h)) {
+				alt {
+				<-ilock =>
+					ilockpid = 0;
+				* =>
+					;
+				}
+			}
+			<-stlk;
+		}
+		sys->sleep(1);
+	}
+}
+
+unlockitab()
+{
+	ilockpid = 0;
+	<-ilock;
+}
+
+# whether process pid is still there; one in a name space with no
+# devices (a page's realm) cannot see, and takes it that it is
+alive(pid: int): int
+{
+	if(sys->open(sys->sprint("#p/%d/status", pid), Sys->OREAD) != nil)
+		return 1;
+	return sys->open(sys->sprint("#p/%d/status", sys->pctl(0, nil)), Sys->OREAD) == nil;
 }
 
 clsof(m: ref M, n: int): array of int

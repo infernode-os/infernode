@@ -368,6 +368,90 @@ testConsole(t: ref T)
 	t.assertseq(rd("console"), "", "and nothing written to the console");
 }
 
+# A page left while its script runs: the realm is killed holding the
+# session's lock, and the next page loads all the same
+testLeaveBusy(t: ref T)
+{
+	if((err := wr("ctl", "scripts on")) != nil)
+		t.fatal("scripts on: " + err);
+	nav(t, "open " + DIR + "busy.html");
+	sys->sleep(1500);	# its script is running, the lock held
+	c := chan of string;
+	spawn navto(c, "open " + DIR + "b.html");
+	tick := chan of int;
+	spawn ticker(tick, 20000);
+	alt {
+	e := <-c =>
+		t.assertseq(e, "done " + DIR + "b.html", "the next page loads");
+		wr("ctl", "scripts off");
+	<-tick =>
+		t.fatal("the next page did not load in 20 s: the session's lock was never had again");
+	}
+}
+
+navto(c: chan of string, cmd: string)
+{
+	ev := sys->open(MNT + "/event", Sys->OREAD);
+	if(ev == nil || wr("ctl", cmd) != nil) {
+		c <-= "cannot";
+		return;
+	}
+	buf := array[1024] of byte;
+	for(;;) {
+		n := sys->read(ev, buf, len buf);
+		if(n <= 0) {
+			c <-= "event: eof";
+			return;
+		}
+		e := chomp(string buf[0:n]);
+		if(prefix(e, "done") || prefix(e, "error")) {
+			c <-= e;
+			return;
+		}
+	}
+}
+
+ticker(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	c <-= 1 =>
+		;
+	* =>
+		;
+	}
+}
+
+# A page left as soon as it is shown, while its script engine is still
+# loading: the realm is killed, and only the realm (it killed every
+# other process of the browser's, these files' server among them)
+testLeaveEarly(t: ref T)
+{
+	if((err := wr("ctl", "scripts on")) != nil)
+		t.fatal("scripts on: " + err);
+	for(i := 0; i < 3; i++) {
+		wr("ctl", "open " + DIR + "busy.html");
+		for(j := 0; j < 200; j++) {
+			st := rd("status");
+			if(!prefix(st, "loading " + DIR) || prefix(st, "loading images"))
+				break;
+			sys->sleep(5);
+		}
+		c := chan of string;
+		spawn navto(c, "open " + DIR + "b.html");
+		tick := chan of int;
+		spawn ticker(tick, 20000);
+		alt {
+		e := <-c =>
+			t.assertseq(e, "done " + DIR + "b.html", sys->sprint("left early, %d: the next page loads", i));
+		<-tick =>
+			t.fatal(sys->sprint("left early, %d: the next page did not load in 20 s", i));
+		}
+	}
+	t.assertseq(rd("title"), "Page B\n", "the files still answer");
+	wr("ctl", "scripts off");
+}
+
 testPosted(t: ref T)
 {
 	t.assertseq(postname, "fs", "posted as fs");
@@ -435,6 +519,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Forms", testForms);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
+	run("LeaveBusy", testLeaveBusy);
+	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);
 

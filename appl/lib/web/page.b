@@ -62,9 +62,11 @@ plock()
 		plk <-= 1 =>
 			plkpid = sys->pctl(0, nil);
 			return;
-		* =>
+		<-ptick =>
 			;
 		}
+		# blocked on it, so waiters are served in turn; a tick has one
+		# look whether the holder has gone
 		h := plkpid;
 		if(h > 0 && !alive(h)) {
 			stlk <-= 1;
@@ -77,9 +79,22 @@ plock()
 				}
 			}
 			<-stlk;
-			continue;
 		}
-		sys->sleep(2);
+	}
+}
+
+ptick: chan of int;
+
+pticker()
+{
+	for(;;) {
+		sys->sleep(250);
+		alt {
+		ptick <-= 1 =>
+			;
+		* =>
+			;
+		}
 	}
 }
 
@@ -89,9 +104,15 @@ punlock()
 	<-plk;
 }
 
+# whether process pid is still there.  A process in a name space with
+# no devices (a page's realm, which asks for computed styles and boxes)
+# cannot see, and takes it that it is: it took the lock from a holder
+# very much alive.
 alive(pid: int): int
 {
-	return sys->open(sys->sprint("#p/%d/status", pid), Sys->OREAD) != nil;
+	if(sys->open(sys->sprint("#p/%d/status", pid), Sys->OREAD) != nil)
+		return 1;
+	return sys->open(sys->sprint("#p/%d/status", sys->pctl(0, nil)), Sys->OREAD) == nil;
 }
 
 init(d: ref Display): string
@@ -101,6 +122,10 @@ init(d: ref Display): string
 	dlk = chan[1] of int;
 	iclk = chan[1] of int;
 	sys = load Sys Sys->PATH;
+	if(ptick == nil) {
+		ptick = chan of int;
+		spawn pticker();
+	}
 	draw = load Draw Draw->PATH;
 	bufio = load Bufio Bufio->PATH;
 	dom = load Dom Dom->PATH;

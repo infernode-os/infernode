@@ -4,6 +4,170 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-13
+
+This release gives InferNode a JavaScript engine of its own, and Charon
+runs pages' scripts with it (off by default: `scripts on` in charon(1)'s
+settings). Browsing is the other half: a grind of 40 live sites, six
+links and Back on each, went from clicks that did nothing and seven
+sites stuck for good to 316 of 320 navigations completed and none stuck.
+Layout and style are incremental, a click lands on what is drawn, and
+pictures come in from the top of the page. Documents (PDF, Markdown,
+Mermaid, HTML, images) share one view in Xenith and in a new wm/page.
+The Dis VM, its JITs and the Limbo compiler had a run of memory-safety
+fixes, found mostly by the engine's fuzzer. Two fixes are urgent for
+users of 0.5.0 and 0.6.0: their macOS tarballs do not run on Apple
+Silicon, and Xenith could write a file over 10 KB empty on Put.
+
+### JavaScript
+
+- **A JavaScript engine of InferNode's own** (#848), in Limbo on Dis
+  (`appl/lib/js`, `docs/JS-ENGINE.md`): current ECMAScript to register
+  bytecode and an interpreter, regular expressions with Unicode 17 data,
+  generators, async functions, promises, modules, and the built-ins
+  through typed arrays, Proxy and BigInt, with a heap and collector of
+  its own. test262: 98.3% of `test/language`, 99.1% of `test/built-ins`.
+  Hot functions compile to Dis modules (`jsjit`), which the Dis JIT
+  compiles; a verifier checks each, and `jsfuzz` compares the tiers.
+  `js(1)` runs scripts; `jsfs(4)` serves realms as files.
+- **Charon runs a page's scripts** in a realm confined before it runs
+  anything to a name space of its grants: the DOM, events, selectors,
+  forms, CSSOM, geometry, fetch and XHR, timers, storage, cookies,
+  observers, custom elements, import maps, Intl. A page's network is
+  `originfs(4)`, an origin filter in front of webfs that holds requests
+  to CORS. Scripts are off unless `scripts on` is in the user's
+  settings. The old `appl/lib/ecmascript` is gone; Jwin uses the new
+  engine.
+
+### Charon
+
+- **Layout and style are incremental** (#861, #860): a change journal on
+  the document and a rule index restyle only what a script changed
+  (`:has`, siblings, shadow trees), unchanged blocks keep their layout,
+  flex items are measured once, text and SVG are cached. On live sites
+  with scripts on, layout time over ten seconds fell from 12953 to
+  199 ms on a GitHub repository and from 2701 to 803 ms on BBC News.
+- **Leaving a page no longer stops the browser** (#888). A page's realm
+  took its process group only once the engine had loaded, and leaving
+  the page killed that group: until then, the browser's own, window and
+  all. A realm killed holding the session's lock, the realm list's, or
+  style's class table's left it held, and every click after waited for
+  ever. Locks now know their holder and are taken back from one that is
+  gone (#865 did this for the layout lock; its check, made from inside a
+  realm, took a live holder for dead, and is fixed).
+- **A click lands on what is painted there** (#875, #880): hit testing
+  follows paint's stacking order (z-index, stacking contexts), so a
+  headline raised over a card's stretched link is clicked, not the card;
+  and a box positioned against the root clips its overflow for clicks as
+  for paint (GitHub's screen-reader headings took the clicks on the file
+  list).
+- **With scripts on, `<noscript>` is hidden and its content is text**
+  (#873), and `@media (scripting)` matches: craigslist's and Apple's
+  no-JavaScript curtains no longer cover their pages.
+- **A page's console is a file** (#873): what its scripts log, uncaught
+  exceptions and CORS refusals go to `/mnt/charon/console`, not the
+  terminal; `/mnt/charon/errors` lists what the page could not fetch. A
+  CORS refusal of an error page says it was one.
+- **Pictures come from the top of the page down** (#882): the first
+  screen's pictures arrived in 6 s where they took 13.5 (CNN), 3 s where
+  they took 10 (the Guardian). Pictures are kept for the session (#869),
+  so going Back does not fetch them again, and a GIF with no colour
+  table decodes (#867).
+- **A link to what Charon cannot show is not fetched** (#887): an mp3
+  linked from a podcast page was fetched whole (20 MB ran a page load out
+  of heap) and parsed as HTML. webclient's `requesttypes` and webfs(4)'s
+  `types` read only the bodies asked for; the page says what the file
+  was.
+- **The window keeps what it shows while a script is busy** (#863), and a
+  widget asking for another size repaints only what moved (#862): pages
+  no longer flash as their pictures load.
+- **Links go where they say** (#866): a URL's host ends at `?` and `#` as
+  well as `/` (`cnn.com?x=...` went to the wrong host), and URLs are
+  percent-encoded as a browser sends them (Thai paths, spaces).
+- **TLS: secp384r1, and handshake messages longer than a record** (#868),
+  for pantip.com, w3c.social and instagram.com; the connection pool is
+  changed under a lock (#847), which lost modules from GitHub's module
+  graph.
+- **The window is the size it asks for** (#877): wm/wm kept every
+  application's window at what its widgets needed (Charon 380x300 for its
+  1024x768); `tkclient` now turns off geometry propagation for a toplevel
+  given a size.
+- **`ctl scroll` moves the window's view** (#876), and **an inline box's
+  place is its pieces in the lines** (#881): `dom/<n>/box` gave a link in
+  a paragraph as 0 by 0.
+- **Known limits**: sites that refuse a browser they do not recognise
+  (by its TLS handshake or a script challenge: Stack Overflow, Reddit,
+  Amazon, Medium and others) answer 403; craigslist needs `SharedWorker`,
+  which the engine does not have; heavily scripted sites (YouTube,
+  GitLab) render nearly empty; pictures are decoded one at a time.
+
+### Dis VM, JITs and the Limbo compiler
+
+- **`a[i] = f()` makes the call before finding the element** (#856): when
+  `f` replaced `a`, its result was written into the freed array. Rebuild
+  from a clean `dis/` to drop bytecode made by the old compiler.
+- **Two inliner faults** (#830): a temporary argument freed before its
+  element was read, and `v = f(v)` reading members already written.
+- **A `ref fn` of a module's own function no longer adds to equal module
+  types' link table** (#872): `load Cmd "/dis/cut.dis"` failed in any
+  module of the same shape, which is how `awk_test` skipped every test.
+- **A compiled module returning after its last reference dropped**
+  (#826): its registers were loaded after the release, so a Prog resumed
+  on another's stack under `-c1`.
+- **amd64**: reals in SSE2 (#850; JavaScript ran 10 to 25 times slower
+  than on arm64), big `*`, `/`, `%` and `hd` compiled, and a fault in a
+  callee caught by its own handler, not its caller's (#883). The most
+  negative big over -1 now wraps everywhere.
+- **A deep structure is freed whole** when its last reference drops
+  (#829), not left to the collector past 64 levels; **a call between
+  modules no longer ends a compiled thread's time slice** (#831); past
+  half a heap the collector runs on one scheduler pass in eight, not
+  every one (#845); `up` is a thread-local variable (#844; Android keeps
+  the call, #858).
+
+### Emulator
+
+- **The intermittent `poolfree` crash under `-c1`** (#854): three races in
+  Prog group handling inherited from Inferno wrote into freed Progs and
+  groups; a stack segment now has room for its 64-bit header; three reads
+  past an allocation, found with AddressSanitizer.
+- **Name space use-after-frees** (#857): a Prog's groups are swapped, read
+  and freed under the locks that guard them; a fault reading
+  `/prog/n/ns` could leave a name space hung for good. `pgrp_race_test`
+  reproduces the `kchdir`/`namec` race on the runtime (#879).
+- **Killing a Prog blocked in the host stops it** (#886): a killed
+  `listen` stayed in `/prog` holding its port. emu's exit status is the
+  one asked for (`halt 3` exits 3; it was 137 or 0 by a race), and a
+  panic exits 1.
+- **A root path as long as the host allows** (up to 1023 bytes, was
+  139). A longer `-r`, `$INFERNO` or `$ROOT` was cut short without a
+  word, and emu stopped at `loading "/dis/emuinit.dis": '/dis' file does
+  not exist`, as it did for a root that was missing or not a directory.
+  A root too long is now refused, naming its length, and one that cannot
+  be used stops emu naming it and why.
+
+### Bare metal
+
+- **Bluetooth on the Pi runs at 3 Mbaud** (#825): hardware flow control
+  now holds input when the UART's stage is full, where 3 Mbaud lost most
+  of a 1.2 MB push; L2CAP 873 kbit/s, was 94.
+- **etherusb's timers no longer hang** when the reply wins (#852): a boot
+  left seven blocked processes, now none.
+
+### Veltro and the agent loop
+
+- **A tool call longer than one 9P message runs once, on all of it**
+  (#870); it ran once per fragment.
+- **Plaintext API keys are imported into factotum**, not bound into the
+  name space (#871).
+- **LLM API connections go through an HTTPS proxy** when `HTTPS_PROXY` is
+  set, with `NO_PROXY` (#878).
+- **An unattended campaign's gated call is denied**, not left waiting on
+  a dialogue (#885); **subagents load their tools**, within their
+  delegation budget (#857).
+- **Boot waits for the services it needs, not for fixed seconds** (#884,
+  #889): a headless Lucifer reaches INIT in about 0.55 s (was 6).
+
 ### Documents
 
 - **A PDF's links work**, in Xenith and in wm/page. pdf(2) reads a
@@ -105,6 +269,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Platforms and releases
 
+- **The macOS tarball runs on Apple Silicon** (#859): from 0.5.0 to
+  0.6.0, its bundled libraries' signatures were broken by
+  `install_name_tool`, and `o.emu` was killed at exec. The release now
+  signs them and runs the staged emulator before archiving. The DMGs
+  were not affected.
+- **iOS builds from master again**, with a CI job that boots it in the
+  Simulator (#855); Tk applications and the plumber run there, and
+  Xenith appears.
 - **Xenith for Linux**: `xenith-<version>-linux-amd64.tar.gz` and
   `-linux-arm64.tar.gz`, the Linux GUI release's emulator and runtime with
   its own launcher (`./xenith [file ...]`), desktop entry and icon, as
@@ -119,6 +291,15 @@ All notable changes to InferNode are documented in this file.
 
 ### Xenith
 
+- **Put no longer writes a large file empty** (#890). A file over 10 KB
+  is written in the background, and the writer read the window's text
+  from its own process while Put set a document shown beside it again
+  from the same buffer: the file was written empty and the window's text
+  left broken. The writer now writes a copy taken at Put, and an edit
+  made during the write is no longer marked saved. Affects 0.6.0 and
+  earlier when a large file is edited while it is written.
+- **Button 2 held on a document's scroll bar follows the mouse** (#864),
+  as it does in a text window.
 - **A file opened for the plumber no longer races the window files.**
   Xenith handled a plumbed message without holding the row, which every
   other change to its windows holds; acme's threads never ran at once,
@@ -146,15 +327,6 @@ All notable changes to InferNode are documented in this file.
   change to the tag renamed such a window to the part before the blank,
   and Put wrote that file. A selected name looked at (B3) may have
   blanks in it.
-
-### Emulator
-
-- **A root path as long as the host allows** (up to 1023 bytes, was
-  139). A longer `-r`, `$INFERNO` or `$ROOT` was cut short without a
-  word, and emu stopped at `loading "/dis/emuinit.dis": '/dis' file does
-  not exist`, as it did for a root that was missing or not a directory.
-  A root too long is now refused, naming its length, and one that cannot
-  be used stops emu naming it and why.
 
 ### Window system
 

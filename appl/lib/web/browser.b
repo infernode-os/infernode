@@ -47,6 +47,11 @@ init(d: ref Draw->Display): string
 	if(dom == nil || style == nil || page == nil || css == nil || html == nil)
 		return sys->sprint("cannot load modules: %r");
 	realmlk = chan[1] of int;
+	stlk = chan[1] of int;
+	if(locktick == nil) {
+		locktick = chan of int;
+		spawn lockticker();
+	}
 	html->init();
 	html->scripting(1);	# what it parses is a running script's (hparse)
 	css->init();
@@ -62,17 +67,78 @@ init(d: ref Draw->Display): string
 
 Session.new(width, height: int): ref Session
 {
-	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, chan[1] of int, nil);
+	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, chan[1] of int, nil, 0);
 }
 
+# The session's lock.  A page's realm takes it for each task, and a
+# realm is killed when the page goes (killgrp, which takes effect when
+# the realm next runs): one could take the lock between being told to
+# go and going, and nothing could have the session again.  So the
+# process holding it is known, and one that is gone is taken back from.
+#
+# A waiter blocks on the lock, so waiters are served in turn (one
+# polling for it lost to a realm taking it task after task: a page's
+# Back waited out its 45 s); a tick now and then has one of them look
+# whether the holder has gone.
 lock(s: ref Session)
 {
-	s.lk <-= 1;
+	for(;;) alt {
+	s.lk <-= 1 =>
+		s.lkpid = sys->pctl(0, nil);
+		return;
+	<-locktick =>
+		takeback(s);
+	}
+}
+
+# a tick, every so often, to one process waiting for a lock
+locktick: chan of int;
+
+lockticker()
+{
+	for(;;) {
+		sys->sleep(250);
+		alt {
+		locktick <-= 1 =>
+			;
+		* =>
+			;
+		}
+	}
 }
 
 unlock(s: ref Session)
 {
+	s.lkpid = 0;
 	<-s.lk;
+}
+
+stlk: chan of int;	# (taking a lock back from a process that is gone)
+
+takeback(s: ref Session)
+{
+	h := s.lkpid;
+	if(h <= 0 || alive(h))
+		return;
+	stlk <-= 1;
+	if(s.lkpid == h && !alive(h)) {
+		alt {
+		<-s.lk =>
+			s.lkpid = 0;
+		* =>
+			;
+		}
+	}
+	<-stlk;
+}
+
+# whether process pid is still there; a process in a name space with no
+# devices (a page's realm) cannot see, and takes it that it is
+alive(pid: int): int
+{
+	if(sys->open(sys->sprint("#p/%d/status", pid), Sys->OREAD) != nil)
+		return 1;
+	return sys->open(sys->sprint("#p/%d/status", sys->pctl(0, nil)), Sys->OREAD) == nil;
 }
 
 event(s: ref Session, e: string)
@@ -1213,12 +1279,14 @@ trylock(s: ref Session, ms: int): int
 	for(t := 0; ; t += 10) {
 		alt {
 		s.lk <-= 1 =>
+			s.lkpid = sys->pctl(0, nil);
 			return 1;
 		* =>
 			;
 		}
 		if(t >= ms)
 			return 0;
+		takeback(s);
 		sys->sleep(10);
 	}
 }
@@ -1728,9 +1796,46 @@ Req: adt {
 	}
 };
 
+# The realms, a list replaced whole on each change, so that it is read
+# with no lock (a reference's assignment is whole).  The lock is the
+# writers': a realm's own process takes it to drop itself as it ends,
+# and could be killed holding it (lockrealms takes it back).
 realms: list of ref Realm;
 realmlk: chan of int;
+realmlkpid := 0;
 realmids := 0;
+
+lockrealms()
+{
+	for(;;) {
+		alt {
+		realmlk <-= 1 =>
+			realmlkpid = sys->pctl(0, nil);
+			return;
+		<-locktick =>
+			;
+		}
+		h := realmlkpid;
+		if(h > 0 && !alive(h)) {
+			stlk <-= 1;
+			if(realmlkpid == h && !alive(h)) {
+				alt {
+				<-realmlk =>
+					realmlkpid = 0;
+				* =>
+					;
+				}
+			}
+			<-stlk;
+		}
+	}
+}
+
+unlockrealms()
+{
+	realmlkpid = 0;
+	<-realmlk;
+}
 
 # whether the page has anything a script engine would run
 hasscripts(d: ref Doc): int
@@ -1752,10 +1857,10 @@ startrealm(s: ref Session, g: int, pg: ref Pg)
 {
 	if(page->setting("scripts") != "on" || !hasscripts(pg.doc))
 		return;
-	realmlk <-= 1;
+	lockrealms();
 	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil);
 	realms = r :: realms;
-	<-realmlk;
+	unlockrealms();
 	pidc := chan of int;
 	spawn realmhelper(r);
 	spawn realmrun(r, pidc);
@@ -1784,6 +1889,12 @@ watchdog(r: ref Realm)
 
 realmrun(r: ref Realm, pidc: chan of int)
 {
+	# a group of its own before it is known: endrealm kills r.pid's
+	# group, and until the engine confined the realm (its own new
+	# group, in confine) that was the browser's.  A page left while its
+	# engine was still loading killed the session's other processes,
+	# a window's among them, every one but the one leaving.
+	sys->pctl(Sys->NEWPGRP, nil);
 	pidc <-= sys->pctl(0, nil);
 	err: string;
 	{
@@ -1930,13 +2041,13 @@ grants(url: string): list of (string, string, int)
 
 dropealm(r: ref Realm)
 {
-	realmlk <-= 1;
+	lockrealms();
 	l: list of ref Realm;
 	for(m := realms; m != nil; m = tl m)
 		if(hd m != r)
 			l = hd m :: l;
 	realms = l;
-	<-realmlk;
+	unlockrealms();
 	alt {
 	r.reqs <-= ref Req.Quit =>
 		;
@@ -1948,25 +2059,17 @@ dropealm(r: ref Realm)
 
 realmof(s: ref Session): ref Realm
 {
-	realmlk <-= 1;
 	for(l := realms; l != nil; l = tl l)
-		if((hd l).s == s) {
-			<-realmlk;
+		if((hd l).s == s)
 			return hd l;
-		}
-	<-realmlk;
 	return nil;
 }
 
 realmbyid(id: int): ref Realm
 {
-	realmlk <-= 1;
 	for(l := realms; l != nil; l = tl l)
-		if((hd l).id == id) {
-			<-realmlk;
+		if((hd l).id == id)
 			return hd l;
-		}
-	<-realmlk;
 	return nil;
 }
 
@@ -1980,11 +2083,9 @@ endrealm(s: ref Session)
 	r.events <-= ref Event.Quit =>
 		;
 	* =>
+		# if it holds the session's lock, or takes it before it
+		# goes, the next to want it takes it back (lock)
 		killgrp(r.pid);
-		if(r.locked) {
-			r.locked = 0;
-			unlock(s);
-		}
 		rmshadow(r.pid);
 	}
 	dropealm(r);

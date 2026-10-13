@@ -945,8 +945,11 @@ acquire(void)
 	vmsetowner();
 
 	if(up->type == Interp) {
+		lock(&up->rlock);	/* with swiproc */
 		p = up->iprog;
 		up->iprog = nil;
+		up->intpend = 0;	/* a kill pending for p is p's, not the next Prog's */
+		unlock(&up->rlock);
 		irestore(p);
 	}
 	else
@@ -1120,11 +1123,11 @@ disfault(void *reg, char *msg)
 
 	if(up == nil) {
 		print("EMU: faults: %s\n", msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->type != Interp) {
 		print("SYS: process %s faults: %s\n", up->text, msg);
-		cleanexit(0);
+		cleanexit(1);
 	}
 	if(up->nlocks > 0) {
 		/*
@@ -1173,9 +1176,25 @@ isnilfault(uintptr addr)
  * the fixed-width ISAs, which keeps it aligned, and one byte on x86.
  * A fault outside the running module's compiled code (in emu itself,
  * in a builtin) leaves R.PC alone.
+ *
+ * R.FP is stale in the same way: compiled code keeps the Dis frame
+ * pointer in a register and stores it to R only where it leaves the
+ * compiled code, not at a call.  A fault in a function called from
+ * compiled code had handler() start from the caller's frame with the
+ * callee's pc; it unwound to the wrong handler and freed the wrong
+ * frames ("alloc:D2B", or a SEGV), where -c0 caught the exception.
+ * jitfaultfp sets R.FP as well, from the register the JIT keeps it
+ * in, where the trap handler can read it from the fault's context;
+ * jitfault, for one that cannot, leaves R.FP as it is.
  */
 int
 jitfault(uintptr pc)
+{
+	return jitfaultfp(pc, 0);
+}
+
+int
+jitfaultfp(uintptr pc, uintptr fp)
 {
 	Modlink *ml;
 
@@ -1191,6 +1210,8 @@ jitfault(uintptr pc)
 #else
 	R.PC = (Inst*)(pc + 4);
 #endif
+	if(fp != 0)
+		R.FP = (uchar*)fp;
 	return 1;
 }
 

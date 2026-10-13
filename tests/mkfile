@@ -54,6 +54,7 @@ TARG=\
 	factotum_test.dis\
 	factotum_grant_test.dis\
 	fdclose_test.dis\
+	killblocked_test.dis\
 	memfs_test.dis\
 	font_format_test.dis\
 	git_test.dis\
@@ -78,7 +79,9 @@ TARG=\
 	imap_test.dis\
 	jit_bounds_test.dis\
 	jit_real_test.dis\
+	jit_big_test.dis\
 	jit_fault_test.dis\
+	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
@@ -228,6 +231,7 @@ TARG=\
 	gpu_bench.dis\
 	gpu_smoke.dis\
 	llmclient_sse_fallback_test.dis\
+	llmclient_proxy_test.dis\
 	tlsclient.dis\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\

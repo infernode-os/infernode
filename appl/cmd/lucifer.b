@@ -2085,10 +2085,13 @@ loadstatus()
 # Read all activities from /mnt/ui/ and populate tile state
 loadtiles()
 {
-	<-tilelock;
+	# Read before taking the lock: the read touches no tile state, and a
+	# failed one returned holding it, so the blinker, updatetile and the
+	# pointer's tile code all waited on it for good.
 	info := readfile(mountpt + "/ctl");
 	if(info == nil)
 		return;
+	<-tilelock;
 	info = strip(info);
 
 	# Parse "activities: id1 id2 ..." line

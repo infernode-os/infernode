@@ -1693,11 +1693,8 @@ comp(Inst *i)
 		punt(i, SRCOP|DSTOP|NEWPC, optab[i->op]);
 		break;
 	case IADDC:
-	case IMULL:
-	case IDIVL:
-	case IMODL:
 	case IMNEWZ:
-	case ILSRW:
+	case ILSRW:	/* no compiler emits these */
 	case ILSRL:
 		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
@@ -1717,7 +1714,6 @@ comp(Inst *i)
 	case ICONSP:
 	case IMOVMP:
 	case IHEADMP:
-	case IHEADL:
 	case IINSC:
 	case ICVTAC:
 	case ICVTCW:
@@ -1824,6 +1820,7 @@ comp(Inst *i)
 		opwst(i, Ostw, RAX);
 		break;
 	case IHEADW:
+	case IHEADL:		/* a big is a word here: the same 8 bytes */
 		opwld(i, Oldw, RAX);
 		modrm(Oldw, OA(List, data), RAX, RAX);
 		opwst(i, Ostw, RAX);
@@ -2122,6 +2119,43 @@ comp(Inst *i)
 				modrr(Oxchg, RAX, RDX);
 		}
 		modrr(Omovsxd, RAX, RAX);
+		opwst(i, Ostw, RAX);
+		break;
+	case IMODL:
+	case IDIVL:
+	case IMULL:
+		/*
+		 * As the word forms, all 64 bits kept. A zero divisor faults
+		 * in idiv and is raised as a zero divide (jitfaultfp), as
+		 * divl raises it. A divisor of -1 does not reach idiv: the
+		 * most negative big over -1 would fault too, and divl and
+		 * modl wrap it instead (the quotient negated, the remainder 0).
+		 */
+		mid(i, Oldw, RAX);
+		opwld(i, Oldw, RRTMP);
+		if(i->op == IMULL) {
+			modrr(0xf7, RRTMP, 4);
+		} else {
+			uchar *lnorm, *ldone;
+
+			modrr(0x83, RRTMP, 7);		/* cmp rrtmp, -1 */
+			genb(0xff);
+			gen2(Ojneb, 0);
+			lnorm = code-1;
+			if(i->op == IDIVL)
+				modrr(0xf7, RAX, 3);	/* neg rax */
+			else
+				modrr32(0x33, RAX, RAX);	/* xor eax, eax */
+			gen2(Ojmpb, 0);
+			ldone = code-1;
+			*lnorm = code-lnorm-1;
+			genb(REXW);
+			genb(Ocqo);
+			modrr(0xf7, RRTMP, 7);
+			if(i->op == IMODL)
+				modrr(Oxchg, RAX, RDX);
+			*ldone = code-ldone-1;
+		}
 		opwst(i, Ostw, RAX);
 		break;
 	case IMODB:

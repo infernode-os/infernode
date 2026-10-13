@@ -381,6 +381,22 @@ if {~ $emuhost MacOSX Linux Nt}{
 	mount -A 'tcp!llmserver!5640' /mnt/llm >[2] /dev/null
 }
 
+# ── Remote dictionaries (dict(7)) ─────────────────────────
+# /lib/ndb/dict names a host that exports dictionary files (the OED,
+# whose text InferNode does not ship); they are unioned onto /lib/dict:
+#   dial=tcp!host!5644
+#   keyfile=/lib/keyring/serve-llm	(keyring auth; none means -A)
+# In the background, like /mnt/llm: a remote must never hold up boot.
+dictdial=`{sed -n 's/^dial=//p' /lib/ndb/dict >[2] /dev/null}
+if {! ~ $dictdial ''} {
+	dictkey=`{sed -n 's/^keyfile=//p' /lib/ndb/dict}
+	if {~ $dictkey ''} {
+		mount -a -A $dictdial /lib/dict >[2] /dev/null &
+	}{
+		mount -a -k $dictkey $dictdial /lib/dict >[2] /dev/null &
+	}
+}
+
 # ── tmp setup ─────────────────────────────────────────────
 if {! ftest -d $home/tmp} {
 	mkdir -p $home/tmp

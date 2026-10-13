@@ -303,6 +303,19 @@ fn provisionkeyfile {
 		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
 	}
 }
+# The host's HTTPS proxy settings, for llmclient's API connections
+# (INFR-307): copied into /env, which the services started below inherit,
+# unless already set here. Not on Windows, where os sh in backticks hangs.
+fn importproxy {
+	for _pv in https_proxy HTTPS_PROXY no_proxy NO_PROXY {
+		if {~ $#$_pv 0} {
+			_pval=`{os sh -c 'printf %s "${'^$_pv^'}"' >[2] /dev/null}
+			if {! ~ $#_pval 0} {
+				echo -n $"_pval > /env/$_pv
+			}
+		}
+	}
+}
 if {~ $emuhost Nt} {
 	provisionkeyfile anthropic
 	provisionkeyfile brave
@@ -311,6 +324,7 @@ if {~ $emuhost Nt} {
 	provisionkey anthropic ANTHROPIC_API_KEY
 	provisionkey brave BRAVE_API_KEY
 	provisionkey openai OPENAI_API_KEY
+	importproxy
 }
 
 # ── LLM + Speech (desktop platforms) ──────────────────────

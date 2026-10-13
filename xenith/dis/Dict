@@ -1,4 +1,0 @@
-#!/dis/sh.dis
-# Dict word: look word up with dict(1) in a new window.
-# Uses the OED when /lib/dict/oed2 is in the namespace (see dict(7)).
-/dis/dict/adict.dis $*

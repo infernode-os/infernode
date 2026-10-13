@@ -1,6 +1,7 @@
 acme/dis/Calendar.dis
 acme/dis/Chat.dis
 acme/dis/Ctag.dis
+acme/dis/Dict.dis
 acme/dis/Feedkey.dis
 acme/dis/Jwin.dis
 acme/dis/Mail.dis
@@ -1079,6 +1080,7 @@ xenith/dis/Agent.dis
 xenith/dis/Calendar.dis
 xenith/dis/Chat.dis
 xenith/dis/Ctag.dis
+xenith/dis/Dict.dis
 xenith/dis/Feedkey.dis
 xenith/dis/Jwin.dis
 xenith/dis/Mail.dis

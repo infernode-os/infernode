@@ -31,7 +31,7 @@ True : con 1;
 stderr: ref Sys->FD;
 debug := 0;
 prog: con "adict";
-lprog: con "adict";
+lprog: con "/dis/dict/adict.dis";
 xprog: con "dict";
 dict, pattern, curone, buffer: string;
 curaddr:= array[MAXMATCH] of string;

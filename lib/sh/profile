@@ -341,17 +341,19 @@ if {~ $emuhost MacOSX Linux Nt}{
 		# backend=cli/codex are the host-side CLI gateways (claude-gate,
 		# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
 		# the same way.
+		# In the foreground: llmsrv returns once /mnt/llm is mounted (it
+		# dials nothing until asked), so what follows can count on it.
 		if {~ $llmbackend openai cli codex} {
 			if {! ~ $llmmodel ''} {
-				llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null &
+				llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
 			}{
-				llmsrv -b openai -u $llmurl >[2] /dev/null &
+				llmsrv -b openai -u $llmurl >[2] /dev/null
 			}
 		}{
 			if {! ~ $llmmodel ''} {
-				llmsrv -M $llmmodel >[2] /dev/null &
+				llmsrv -M $llmmodel >[2] /dev/null
 			}{
-				llmsrv >[2] /dev/null &
+				llmsrv >[2] /dev/null
 			}
 		}
 	}

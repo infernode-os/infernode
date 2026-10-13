@@ -446,6 +446,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |
 | `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool); arguments longer than one 9P message run the tool once, on all of them, including arguments ending exactly on a message boundary (INFR-521) |
 | `tests/host/spawn_budget_test.sh` | A subagent spawned through tools9p loads the delegation budget's tools (named, and its default `plan`) and cannot load a tool outside it (INFR-486); `spawn_budget_test.b` is its Limbo half |
+| `tests/host/profile_legacykey_test.sh` | The login profile imports a plaintext key left in `~/.infernode/lib/veltro-keys` into factotum, says which file to delete, and does not bind it into the name space (INFR-347) |
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 | `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
 

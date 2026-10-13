@@ -34,12 +34,6 @@ include "auditchain.m";
 AuditverifyTest: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
-
-	# INFR-310 workaround: keep this module type structurally distinct
-	# from Auditverify below, or the compiler shares one LDT between
-	# them and the ref-fn'd test functions pollute it — making the
-	# load demand that auditverify implement the test functions.
-	ldtworkaround: fn();
 };
 
 # the command under test, loaded by its canonical path
@@ -47,10 +41,6 @@ Auditverify: module
 {
 	init: fn(ctxt: ref Draw->Context, args: list of string);
 };
-
-ldtworkaround()
-{
-}
 
 AVPATH: con "/dis/auditverify.dis";
 SRCFILE: con "/tests/auditverify_test.b";

@@ -423,6 +423,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `jit_real_test.b` | Real arithmetic, comparisons (a NaN, the signed zeros), conversions (half away from zero), negation and moves give from compiled code what the interpreter gives; `tests/host/jit_real_test.sh` runs it under `-c0` and `-c1` |
 | `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
 | `limbo_inline_test.b` | Code the compiler inlines: an inlined call's temporary argument outlives the use of its element; `v = f(v)` reads the old `v` |
+| `limbo_ldt_test.b` | A module taking a `ref fn` of its own functions loads another module through a module type equal to its own (INFR-310); the `ref fn` still calls through `$self` |
 | `limbo_asgcall_test.b` | `a[i] = f()` and `p.x = f()` where `f` makes a new `a` or `p`: the call is made before the element's address is found, so its result lands in the new one, not in freed memory |
 | `jit_unload_test.b` | A compiled module returning after its caller dropped the last reference (its code must not be unmapped under the return) |
 | `jit_retslice_test.b` | A call between modules from compiled code does not end the thread's time slice, at any stack depth (a return punted to the VM after a call saw mcall's stale R.t) |
@@ -443,9 +444,11 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/presentation_fileopen_test.sh` | Lucifer's plumbed file-opens: by type into the presentation view, a web URL into Charon (a second one to the running Charon), the Tasks tab with and without a plumber |
 | `tests/host/xenith_browse_test.sh` | Xenith browses: a URL looked at opens a browser window (the page over its text, Back Fwd Reload in the tag); Get goes to the URL in the tag; Back, Fwd and Render; a form typed into (injected click and keys); the page as files (posted where the window's `web` file says, a form submitted through `ctl` shown in the window, unposted when it closes); the same page over HTTP through webfs from a loopback server |
 | `tests/host/xenith_image_test.sh` | Xenith opens every image format as an image through a look (B3) at its name; formats with no decoder are refused with a reason; text still opens as text |
+| `tests/host/editor_headless_test.sh` | A Tk application with no window manager waits rather than spins (INFR-365): `wm/editor`'s `/edit/1/body` written and read back, its idle CPU time measured |
 | `tests/host/xen_boot_test.sh` | `lib/xen/boot.sh`, the standalone Xenith's entry point: plumber and model up, a plumbed file opened |
-| `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool) |
+| `tests/host/tools9p_result_test.sh` | Two callers of one tool each read their own result (results are per fid, not per tool); arguments longer than one 9P message run the tool once, on all of them, including arguments ending exactly on a message boundary (INFR-521) |
 | `tests/host/spawn_budget_test.sh` | A subagent spawned through tools9p loads the delegation budget's tools (named, and its default `plan`) and cannot load a tool outside it (INFR-486); `spawn_budget_test.b` is its Limbo half |
+| `tests/host/profile_legacykey_test.sh` | The login profile imports a plaintext key left in `~/.infernode/lib/veltro-keys` into factotum, says which file to delete, and does not bind it into the name space (INFR-347) |
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 | `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
 

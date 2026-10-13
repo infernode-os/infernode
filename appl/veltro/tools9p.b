@@ -1256,7 +1256,86 @@ setresult(ti: ref ToolInfo, c: ref Fid, r: string)
 		c.data = b;
 }
 
-asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, c: ref Fid, data: string)
+# How a tool call answers its caller. A call is made by the Twrite that
+# completes its arguments (answered with Rwrite), or, when the arguments
+# end exactly on a message boundary, by the read or clunk that follows
+# (answered with Rread, or not at all).
+Callreply: adt {
+	tag:	int;
+	count:	int;			# Rwrite count
+	rd:	ref Tmsg.Read;		# Rread instead
+	none:	int;			# clunk: no reply
+};
+
+replyerr(srv: ref Styxserver, cr: ref Callreply, e: string)
+{
+	if(!cr.none)
+		srv.reply(ref Rmsg.Error(cr.tag, e));
+}
+
+replydone(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid)
+{
+	if(cr.none)
+		return;
+	if(cr.rd == nil) {
+		srv.reply(ref Rmsg.Write(cr.tag, cr.count));
+		return;
+	}
+	r := ti.result;
+	if(c != nil && c.data != nil)
+		r = c.data;
+	srv.reply(styxservers->readbytes(cr.rd, r));
+}
+
+# A tool's arguments can be longer than one message: the mnt device
+# splits a write into Twrites of at most iounit bytes. A fragment that
+# fills the iounit may have more after it, so it is kept on its fid and
+# acknowledged; the call runs once, on the whole, at the first shorter
+# fragment (INFR-521). Arguments that end exactly on a boundary run at
+# the fid's next read, or at its clunk.
+MAXARGS: con 1024*1024;
+pendingargs: list of (int, array of byte);
+
+takeargs(fid: int): array of byte
+{
+	b: array of byte;
+	rest: list of (int, array of byte);
+	for(l := pendingargs; l != nil; l = tl l) {
+		(f, a) := hd l;
+		if(f == fid)
+			b = a;
+		else
+			rest = (f, a) :: rest;
+	}
+	pendingargs = rest;
+	return b;
+}
+
+keepargs(fid: int, b: array of byte)
+{
+	pendingargs = (fid, b) :: pendingargs;
+}
+
+catargs(a, b: array of byte): array of byte
+{
+	if(a == nil)
+		return b;
+	n := array[len a + len b] of byte;
+	n[0:] = a;
+	n[len a:] = b;
+	return n;
+}
+
+# The arguments as the tool takes them: one trailing newline dropped.
+argstring(b: array of byte): string
+{
+	data := string b;
+	if(len data > 0 && data[len data - 1] == '\n')
+		data = data[0:len data - 1];
+	return data;
+}
+
+asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, data: string)
 {
 	# The trusted startup manifest needs a restricted namespace in which .ns
 	# remains writable. Finish that one-time probe before model-facing workers
@@ -1275,14 +1354,14 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, c: ref Fi
 	mypid := sys->pctl(Sys->FORKNS, nil);
 	if(mypid < 0) {
 		setresult(ti, c, "error: cannot fork namespace");
-		srv.reply(ref Rmsg.Error(tag, "cannot fork namespace"));
+		replyerr(srv, cr, "cannot fork namespace");
 		releasetaskcreate(locked);
 		return;
 	}
 	enverr := isolateenv();
 	if(enverr != nil) {
 		setresult(ti, c, "error: " + enverr);
-		srv.reply(ref Rmsg.Error(tag, "cannot isolate tool environment"));
+		replyerr(srv, cr, "cannot isolate tool environment");
 		cleanupchan <-= mypid;
 		releasetaskcreate(locked);
 		return;
@@ -1296,7 +1375,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, c: ref Fi
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
 		setresult(ti, c, "error: cannot disable device attachment");
-		srv.reply(ref Rmsg.Error(tag, "cannot disable device attachment"));
+		replyerr(srv, cr, "cannot disable device attachment");
 		releasetaskcreate(locked);
 		return;
 	}
@@ -1309,7 +1388,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, c: ref Fi
 	# /tool pointing to the parent instance (wrong activity ID).
 	if(mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0) {
 		setresult(ti, c, "error: cannot bind activity tool service");
-		srv.reply(ref Rmsg.Error(tag, "cannot bind activity tool service"));
+		replyerr(srv, cr, "cannot bind activity tool service");
 		releasetaskcreate(locked);
 		return;
 	}
@@ -1318,7 +1397,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, c: ref Fi
 		nserr = applynsrestriction(ti.name);
 	if(nserr != nil) {
 		setresult(ti, c, "error: namespace restriction failed: " + nserr);
-		srv.reply(ref Rmsg.Error(tag, "namespace restriction failed"));
+		replyerr(srv, cr, "namespace restriction failed");
 		cleanupchan <-= mypid;
 		releasetaskcreate(locked);
 		return;
@@ -1326,7 +1405,7 @@ asyncexec(srv: ref Styxserver, tag: int, count: int, ti: ref ToolInfo, c: ref Fi
 	result := exectool(ti.name, data);
 	# Assign result before replying so it is visible for subsequent reads.
 	setresult(ti, c, result);
-	srv.reply(ref Rmsg.Write(tag, count));
+	replydone(srv, cr, ti, c);
 	releasetaskcreate(locked);
 	# Hand this invocation's shadow dirs to the cleanup goroutine.
 	#
@@ -2024,7 +2103,9 @@ Serve:
 					Qtool_dir =>
 						srv.read(m);  # directory read via navigator
 					Qtool_ctl or Qtool_run =>
-						if(c.data != nil)
+						if((args := takeargs(c.fid)) != nil)
+							spawn asyncexec(srv, ref Callreply(m.tag, 0, m, 0), ti, c, argstring(args));
+						else if(c.data != nil)
 							srv.reply(styxservers->readbytes(m, c.data));
 						else {
 							if(ti.result == nil)
@@ -2215,13 +2296,28 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 						break;
 					}
-					spawn asyncexec(srv, m.tag, len m.data, ti, c, data);
+					args := catargs(takeargs(c.fid), m.data);
+					if(len args > MAXARGS) {
+						srv.reply(ref Rmsg.Error(m.tag, "tool arguments too large"));
+						break;
+					}
+					if(len m.data >= srv.iounit()) {
+						keepargs(c.fid, args);
+						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						break;
+					}
+					spawn asyncexec(srv, ref Callreply(m.tag, len m.data, nil, 0), ti, c, argstring(args));
 				} else {
 					srv.reply(ref Rmsg.Error(m.tag, Eperm));
 				}
 			}
 
 		Clunk =>
+			if((args := takeargs(m.fid)) != nil) {
+				f := srv.getfid(m.fid);
+				if(f != nil && (ti := findtoolbyqid(TYPE(f.path))) != nil)
+					spawn asyncexec(srv, ref Callreply(m.tag, 0, nil, 1), ti, nil, argstring(args));
+			}
 			srv.clunk(m);
 
 		Remove =>

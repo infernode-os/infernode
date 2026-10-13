@@ -33,9 +33,6 @@ include "auditprov.m";
 AuditProvTest: module
 {
 	init: fn(nil: ref Draw->Context, args: list of string);
-	# keep this module type structurally distinct from Command so
-	# ref-fn'd test functions don't pollute the shared LDT (INFR-310)
-	ldtworkaround: fn();
 };
 
 Command: module
@@ -50,10 +47,6 @@ VADDR: con "tcp!127.0.0.1!17035";
 passed := 0;
 failed := 0;
 skipped := 0;
-
-ldtworkaround()
-{
-}
 
 run(name: string, testfn: ref fn(t: ref T))
 {

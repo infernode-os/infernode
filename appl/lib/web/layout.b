@@ -15964,16 +15964,24 @@ boxat(root: ref Box, p: Point): (int, ref Box)
 	# sticky boxes where the last paint showed them: a click on BBC's
 	# header, stuck at the top, was taken for what scrolled under it
 	stickscroll(scrolled.y);
+	painted = root;
+	rootorg = Point(root.x, root.y);
+	claimed = nil;
+	claimfixed(root, root);
 	n: int;
 	b: ref Box;
 	{
-		(n, b, nil) = findin(root, p, Point(0, 0));
+		(n, b) = hitctx(root, Point(0, 0), noclip, p);
 	} exception e {
 	"*" =>
 		unstick();
+		claimed = nil;
+		painted = nil;
 		raise e;
 	}
 	unstick();
+	claimed = nil;
+	painted = nil;
 	# an anonymous box (a block around inline content, an anonymous
 	# table part) is no element: what was clicked is the element it
 	# belongs to (github.com's file list: grid cells' anonymous blocks)
@@ -15985,25 +15993,81 @@ boxat(root: ref Box, p: Point): (int, ref Box)
 	return (n, b);
 }
 
-# What is under p in b, and whether it is more than an in-flow block's
-# background: such a hit is weak, and anything painted over it wins,
-# wherever it is in the tree (a float overhanging the end of its own
-# section is over the next section's background: Wikipedia's infobox
-# links were taken for that section).
+# What is under p in b as a stacking context (or a layer of one), in
+# the order paintctx paints it, topmost first: its layers with z-index
+# 0 or more, the last painted first, its flow content, the layers below
+# it, its own background.  A link raised by its z-index over a card's
+# stretched link or a picture (the Guardian's, NASA's) is clicked, not
+# what it is painted over.  o is b's parent's border-box origin.
+hitctx(b: ref Box, o: Point, clip: Rect, p: Point): (int, ref Box)
+{
+	st := b.st;
+	if(st.position == Style->Pfixed) {
+		# against the viewport the last paint showed, in page
+		# coordinates (viewport is the screen's)
+		o = o.add(scrolled);
+		clip = noclip;
+		if(rectok(viewport))
+			clip = Rect(scrolled, scrolled.add(viewport.max.sub(viewport.min)));
+	}
+	fo := o;	# where findin takes it from: it moves it by a translation itself
+	if(st.translated && st.tfs == nil)	# drawn moved, so clicked moved (a drawer off-screen by translateX(-100%))
+		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
+	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
+	if(st.clipinset != nil) {
+		ins := st.clipinset;
+		cr := Rect((r.min.x + ir(ins[3].resolve(real b.w)), r.min.y + ir(ins[0].resolve(real b.h))),
+			(r.max.x - ir(ins[1].resolve(real b.w)), r.max.y - ir(ins[2].resolve(real b.h))));
+		clip = intersect(clip, cr);
+	}
+	if(!p.in(clip))
+		return (0, nil);
+	layers: list of ref Lyr;
+	if(isctx(b))
+		layers = revlayers(sortlayers(collectlayers(b, r.min, noclip, nil)));
+	inner := innerclip(b, r, clip);
+	for(l := layers; l != nil; l = tl l)
+		if((hd l).z >= 0) {
+			(n, x) := hitctx((hd l).box, (hd l).o, layerclip(inner, hd l), p);
+			if(x != nil)
+				return (n, x);
+		}
+	(hn, hx, nil) := findin(b, p, fo);
+	if(hx != nil && hx != b)
+		return (hn, hx);
+	for(l = layers; l != nil; l = tl l)
+		if((hd l).z < 0) {
+			(n, x) := hitctx((hd l).box, (hd l).o, layerclip(inner, hd l), p);
+			if(x != nil)
+				return (n, x);
+		}
+	return (hn, hx);
+}
+
+revlayers(l: list of ref Lyr): list of ref Lyr
+{
+	r: list of ref Lyr;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+# What is under p in b's flow, and whether it is more than an in-flow
+# block's background: such a hit is weak, and anything painted over it
+# wins, wherever it is in the tree (a float overhanging the end of its
+# own section is over the next section's background: Wikipedia's
+# infobox links were taken for that section).  Layers are not here:
+# hitctx has them, in their stacking context's order; a stacking
+# context in the flow is hit as hitctx hits one.
 findin(b: ref Box, p, o: Point): (int, ref Box, int)
 {
 	st := b.st;
-	if(st.translated && st.tfs == nil)	# drawn moved, so clicked moved (a drawer off-screen by translateX(-100%))
+	if(st.translated && st.tfs == nil)	# drawn moved, so clicked moved
 		o = o.add(Point(res(st.tx, b.w), res(st.ty, b.h)));
 	r := Rect((o.x + b.x, o.y + b.y), (o.x + b.x + b.w, o.y + b.y + b.h));
 	org := r.min;
 	if(clipshit(b) && !p.in(r))
 		return (0, nil, 0);	# what overflows a clipping box is not there to click (an sr-only heading's text)
-	for(pl := b.pos; pl != nil; pl = tl pl) {
-		(n, x, nil) := findin(hd pl, p, org);
-		if(x != nil)
-			return (n, x, 1);	# positioned: over everything in flow
-	}
 	weak: ref Box;
 	wn := 0;
 	if(b.lines != nil) {
@@ -16012,9 +16076,9 @@ findin(b: ref Box, p, o: Point): (int, ref Box, int)
 		# floated list items holding the links)
 		for(fi := len b.kids - 1; fi >= 0; fi--) {
 			k := b.kids[fi];
-			if(!isfloat(k) || isabs(k))
+			if(!isfloat(k) || isabs(k) || islayer(k))
 				continue;
-			(n, x, strong) := findin(k, p, org);
+			(n, x, strong) := flowkid(k, p, org);
 			if(x != nil && strong)
 				return (n, x, 1);
 			if(x != nil && weak == nil)
@@ -16033,7 +16097,9 @@ findin(b: ref Box, p, o: Point): (int, ref Box, int)
 				f := ln.frags[k];
 				fr := Rect((org.x + f.x, org.y + f.y), (org.x + f.x + f.w, org.y + f.y + f.h));
 				if(f.kind == Fatomic) {
-					(n, x, nil) := findin(f.box, p, org);
+					if(islayer(f.box))
+						continue;
+					(n, x, nil) := flowkid(f.box, p, org);
 					if(x != nil)
 						return (n, x, 1);
 					continue;
@@ -16055,9 +16121,9 @@ findin(b: ref Box, p, o: Point): (int, ref Box, int)
 		for(pass := 0; pass < 2; pass++)
 			for(i := len b.kids - 1; i >= 0; i--) {
 				k := b.kids[i];
-				if(isabs(k) || isfloat(k) != (pass == 0))
+				if(isabs(k) || islayer(k) || isfloat(k) != (pass == 0))
 					continue;
-				(n, x, strong) := findin(k, p, org);
+				(n, x, strong) := flowkid(k, p, org);
 				if(x != nil && strong)
 					return (n, x, 1);
 				if(x != nil && weak == nil)
@@ -16072,6 +16138,20 @@ findin(b: ref Box, p, o: Point): (int, ref Box, int)
 	if(p.in(r) && hittable(b))
 		return (b.node, b, over);
 	return (0, nil, 0);
+}
+
+# k in its parent's flow, the parent's border box at o: a stacking
+# context of its own (opacity, isolation, contain: paint) is hit as
+# one, its own layers in their order
+flowkid(k: ref Box, p, o: Point): (int, ref Box, int)
+{
+	if(!ownctx(k.st))
+		return findin(k, p, o);
+	(n, x) := hitctx(k, o, noclip, p);
+	if(x == nil)
+		return (0, nil, 0);
+	strong := x != k || isfloat(k) || k.inl || k.kind == Kreplaced;
+	return (n, x, strong);
 }
 
 # a box a click can land on: visible, and not pointer-events: none

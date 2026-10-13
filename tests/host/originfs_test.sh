@@ -48,6 +48,8 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.reply(204, "text/plain", "", h)
         if u.path == "/echo":
             return self.reply(200, "text/plain", "".join("%s: %s\n" % kv for kv in self.headers.items()), self.cors(q))
+        if u.path == "/busy":
+            return self.reply(503, "text/html", "busy")
         if u.path == "/setcookie":
             return self.reply(200, "text/plain", "set", [("Set-Cookie", "vis=1; Path=/"), ("Set-Cookie", "hid=2; Path=/; HttpOnly")])
         if u.path == "/script.js":

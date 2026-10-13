@@ -124,11 +124,12 @@ frame pointer at a call, so a fault in a function called from compiled
 code started the search from the caller's frame with the callee's pc:
 a callee with a handler of its own unwound to the wrong handler and
 freed the wrong frames (`alloc:D2B`, or a SEGV) where `-c0` caught the
-exception. On Linux amd64 `jitfaultfp` now takes the frame pointer
-from RBX, where the amd64 JIT keeps it; `tests/jit_fault_test.b`'s
-`OwnHandler` case is the test. The arm64 and riscv64 JITs keep it in
-X21 and s2 and want the same; macOS and Windows still pass the pc
-alone.
+exception. The hosted trap handlers now pass `jitfaultfp` the
+register the JIT keeps it in: RBX on amd64, X21 on arm64, s2 on
+riscv64 (Linux and macOS). `tests/jit_ownhandler_test.b` is the test;
+it is apart from `tests/jit_fault_test.b` because the bare-metal
+kernels run that one and their trap paths (`os/`) still pass the pc
+alone, as Windows does.
 
 Checks the JIT makes itself (bounds, the arm64 zero divide) store both
 before raising, and are not affected.

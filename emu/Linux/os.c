@@ -192,9 +192,8 @@ faultpc(void *a)
 
 /*
  * The Dis frame pointer compiled code was running with, from the
- * register the JIT keeps it in, or 0 where we do not say (see
- * jitfaultfp).  Only amd64 so far: the arm64 and riscv64 JITs keep it
- * in X21 and s2 and want the same.
+ * register the JIT keeps it in (RFP in comp-<arch>.c), or 0 where we
+ * do not say (see jitfaultfp).
  */
 static uintptr
 faultfp(void *a)
@@ -206,6 +205,10 @@ faultfp(void *a)
 	uc = (ucontext_t*)a;
 #if defined(__x86_64__)
 	return (uintptr)uc->uc_mcontext.gregs[Gregrbx];
+#elif defined(__aarch64__)
+	return (uintptr)uc->uc_mcontext.regs[21];	/* X21 */
+#elif defined(__riscv)
+	return (uintptr)uc->uc_mcontext.__gregs[18];	/* s2 (x18) */
 #else
 	USED(uc);
 	return 0;

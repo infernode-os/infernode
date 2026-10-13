@@ -394,24 +394,24 @@ testConsole(t: ref T)
 # session's lock, and the next page loads all the same
 testLeaveBusy(t: ref T)
 {
-	if((err := wr("ctl", "scripts on")) != nil)
-		t.fatal("scripts on: " + err);
-	nav(t, "open " + DIR + "busy.html");
+	scripts(t, "on");
+	navto(t, "open " + DIR + "busy.html", DIR + "busy.html");
 	sys->sleep(1500);	# its script is running, the lock held
 	c := chan of string;
-	spawn navto(c, "open " + DIR + "b.html");
+	spawn navasync(c, "open " + DIR + "b.html", DIR + "b.html");
 	tick := chan of int;
 	spawn ticker(tick, 20000);
 	alt {
 	e := <-c =>
 		t.assertseq(e, "done " + DIR + "b.html", "the next page loads");
-		wr("ctl", "scripts off");
+		scripts(t, "off");
 	<-tick =>
 		t.fatal("the next page did not load in 20 s: the session's lock was never had again");
 	}
 }
 
-navto(c: chan of string, cmd: string)
+# navto, its answer sent on c, so a test can wait for it with a limit
+navasync(c: chan of string, cmd, url: string)
 {
 	ev := sys->open(MNT + "/event", Sys->OREAD);
 	if(ev == nil || wr("ctl", cmd) != nil) {
@@ -426,11 +426,21 @@ navto(c: chan of string, cmd: string)
 			return;
 		}
 		e := chomp(string buf[0:n]);
-		if(prefix(e, "done") || prefix(e, "error")) {
+		if(e == "done " + url || e == "error " + url) {
 			c <-= e;
 			return;
 		}
 	}
+}
+
+# scripts on or off: the page showing is loaded again with them or
+# without, and that is waited for (its done must not answer the next)
+scripts(t: ref T, v: string)
+{
+	u := chomp(rd("url"));
+	e := navto(t, "scripts " + v, u);
+	if(e != "done " + u)
+		t.fatal("scripts " + v + ": " + e);
 }
 
 ticker(c: chan of int, ms: int)
@@ -449,8 +459,7 @@ ticker(c: chan of int, ms: int)
 # other process of the browser's, these files' server among them)
 testLeaveEarly(t: ref T)
 {
-	if((err := wr("ctl", "scripts on")) != nil)
-		t.fatal("scripts on: " + err);
+	scripts(t, "on");
 	for(i := 0; i < 3; i++) {
 		wr("ctl", "open " + DIR + "busy.html");
 		for(j := 0; j < 200; j++) {
@@ -460,7 +469,7 @@ testLeaveEarly(t: ref T)
 			sys->sleep(5);
 		}
 		c := chan of string;
-		spawn navto(c, "open " + DIR + "b.html");
+		spawn navasync(c, "open " + DIR + "b.html", DIR + "b.html");
 		tick := chan of int;
 		spawn ticker(tick, 20000);
 		alt {
@@ -471,7 +480,7 @@ testLeaveEarly(t: ref T)
 		}
 	}
 	t.assertseq(rd("title"), "Page B\n", "the files still answer");
-	wr("ctl", "scripts off");
+	scripts(t, "off");
 }
 
 testPosted(t: ref T)

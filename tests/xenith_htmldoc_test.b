@@ -147,7 +147,10 @@ testStacking(t: ref T)
 		"<a href=under style='position:absolute;top:100px;left:0;width:100px;height:30px'>under</a>" +
 		"<div style='position:absolute;top:100px;left:0;width:100px;height:30px;background:red'></div>" +
 		"<div style='position:absolute;top:180px;left:0;width:200px;height:40px;z-index:-1;background:#eee'></div>" +
-		"<div style='position:absolute;top:180px;left:0'><a href=over>over the box below</a></div>";
+		"<div style='position:absolute;top:180px;left:0'><a href=over>over the box below</a></div>" +
+		"<div style='display:flex;width:300px'>" +
+		"<h2 style='position:absolute;width:1px;height:1px;overflow:hidden;margin:0;padding:0'>Hiddenheadingwords and more</h2>" +
+		"<a href=hidden>under a hidden heading</a></div>";
 	(nil, err) := htmldoc->set(9, array of byte page, URL, 400, 300);
 	t.assertnil(err, "set");
 	base := "file://" + DIR;
@@ -155,6 +158,8 @@ testStacking(t: ref T)
 	t.assertseq(htmldoc->linkat(9, 200, 40), base + "card", "the card's link beside it");
 	t.assertnil(htmldoc->linkat(9, 10, 110), "the overlay after the link is over it");
 	t.assertseq(htmldoc->linkat(9, 10, 188), base + "over", "the link over a box with a negative z-index");
+	for(y := 62; y < 80; y += 5)
+		t.assertseq(htmldoc->linkat(9, 20, y), base + "hidden", sys->sprint("the link under a 1px heading's clipped text (y %d)", y));
 }
 
 testEdited(t: ref T)

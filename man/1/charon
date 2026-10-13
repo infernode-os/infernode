@@ -178,7 +178,8 @@ for text),
 .B box
 (each box it generated, as
 .IR kind " " x " " y " " w " " h
-in page coordinates) and
+in page coordinates; an inline box, a link in a paragraph, as each of
+its pieces, a line each) and
 .B children
 (their node numbers).
 .PD

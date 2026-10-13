@@ -1206,11 +1206,37 @@ Session.boxof(s: self ref Session, n: int): (int, Draw->Rect)
 		return (0, ((0, 0), (0, 0)));
 	for(l := layout->boxes(pg.root, n); l != nil; l = tl l) {
 		b := hd l;
+		if(b.kind == Layout->Kinline && (fr := inlinerects(b)) != nil)
+			return (1, hd fr);	# where it starts
 		x := absx(b);
 		y := absy(b);
 		return (1, ((x, y), (x + b.w, y + b.h)));
 	}
 	return (0, ((0, 0), (0, 0)));
+}
+
+# An inline box's area, in page coordinates: a box has no extent of its
+# own, its fragments in the lines of the block it is in do (a fragment
+# a line, in order).  A link's box was 0 by 0 at its block's origin.
+inlinerects(b: ref Box): list of Draw->Rect
+{
+	c := b.parent;
+	while(c != nil && c.lines == nil)
+		c = c.parent;
+	if(c == nil)
+		return nil;
+	x := absx(c);
+	y := absy(c);
+	r: list of Draw->Rect;
+	for(i := len c.lines - 1; i >= 0; i--) {
+		ln := c.lines[i];
+		for(k := len ln.frags - 1; k >= 0; k--) {
+			f := ln.frags[k];
+			if(f.kind == Layout->Fspan && f.box == b)
+				r = Draw->Rect((x + f.x, y + f.y), (x + f.x + f.w, y + f.y + f.h)) :: r;
+		}
+	}
+	return r;
 }
 
 Session.linkat(s: self ref Session, x, y: int): string
@@ -1477,6 +1503,11 @@ Session.dom(s: self ref Session, n: int, what: string): (string, string)
 			k := "?";
 			if(b.kind >= 0 && b.kind < len kindnames)
 				k = kindnames[b.kind];
+			if(b.kind == Layout->Kinline && (fr := inlinerects(b)) != nil) {
+				for(; fr != nil; fr = tl fr)
+					r += sys->sprint("%s %d %d %d %d\n", k, (hd fr).min.x, (hd fr).min.y, (hd fr).max.x - (hd fr).min.x, (hd fr).max.y - (hd fr).min.y);
+				continue;
+			}
 			r += sys->sprint("%s %d %d %d %d\n", k, absx(b), absy(b), b.w, b.h);
 		}
 		return (r, nil);

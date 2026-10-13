@@ -174,6 +174,41 @@ testLinks(t: ref T)
 	}
 }
 
+# A link in a paragraph is an inline box: its box is where its words
+# are, not nothing at the paragraph's corner
+testInlineBox(t: ref T)
+{
+	a := byattr("href b.html");
+	t.assert(a != 0, "found the link");
+	b := chomp(rd(sys->sprint("dom/%d/box", a)));
+	t.log("box: " + b);
+	(n, f) := sys->tokenize(b, " ");
+	t.asserteq(n, 5, "one piece, on one line");
+	if(n == 5) {
+		t.assertseq(hd f, "inline", "inline box");
+		t.assert(int hd tl f > 8 + 40, "x: after the paragraph's first words: " + b);
+		t.assert(int hd tl tl tl f > 30, "width of its words: " + b);
+		t.assert(int hd tl tl tl tl f > 10, "a line's height: " + b);
+	}
+}
+
+# the node whose attrs include this line
+byattr(line: string): int
+{
+	fd := sys->open(MNT + "/dom", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			return 0;
+		for(i := 0; i < n; i++)
+			for(l := lines(rd("dom/" + d[i].name + "/attrs")); l != nil; l = tl l)
+				if(hd l == line)
+					return int d[i].name;
+	}
+}
+
 testHistory(t: ref T)
 {
 	t.assertseq(nav(t, "follow 1"), "done " + DIR + "b.html", "follow");
@@ -384,6 +419,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Open", testOpen);
 	run("Links", testLinks);
+	run("InlineBox", testInlineBox);
 	run("History", testHistory);
 	run("Fragment", testFragment);
 	run("Find", testFind);

@@ -215,7 +215,6 @@ if {~ $emuhost Nt} {
 }
 mkdir -p /usr/inferno/secstore >[2] /dev/null
 auth/secstored >[2] /dev/null &
-sleep 1
 
 # ── Factotum ──────────────────────────────────────────────
 # Headless: if $SECSTORE_PASSWORD is set on the host, start factotum
@@ -230,6 +229,9 @@ if {! ftest -f /mnt/factotum/proto}{
 		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
 	}
 	if {! ~ $#havesecpass 0} {
+		# factotum dials the secstored started above at once: give
+		# it the time to announce.  Nothing else here waits on it.
+		sleep 1
 		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
 		if {! ~ $#secpass 0} {
 			if {! ~ $#user 0} {

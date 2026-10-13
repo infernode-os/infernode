@@ -58,8 +58,14 @@ init(nil: ref Draw->Context, args: list of string)
 	args = arg->argv();
 	if(len args == 1){
 		pattern = hd args;
-		if(dict == nil)
-			dict = "pgw";
+		if(dict == nil){
+			# as dict(1): the OED when it is in the namespace
+			(ok, nil) := sys->stat("/lib/dict/oed2");
+			if(ok >= 0)
+				dict = "oed";
+			else
+				dict = "pgw";
+		}
 	}
 	if((dict == nil) && (pattern == nil))
 		openwin(prog, "", Dictwin);

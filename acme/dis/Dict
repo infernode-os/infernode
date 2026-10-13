@@ -1,4 +1,4 @@
 #!/dis/sh.dis
-x=$*
-q=`{echo $x | sed 's/ /+/g'}
-plumb -d web 'http://www.dict.org/bin/Dict?Form=Dict2&Database=*&Query='^$"q 
+# Dict word: look word up with dict(1) in a new window.
+# Uses the OED when /lib/dict/oed2 is in the namespace (see dict(7)).
+/dis/dict/adict.dis $*

@@ -40,6 +40,7 @@ Dictinfo: adt{
 };
 
 dicts := array[] of {
+	Dictinfo ("oed",	"Oxford English Dictionary, 2nd Ed.",	"/lib/dict/oed2",	"/lib/dict/oed2index",	"/dis/dict/oed.dis"),
 	Dictinfo ("pgw",	"Project Gutenberg Webster Dictionary",	"/lib/dict/pgw",	"/lib/dict/pgwindex",	"/dis/dict/pgw.dis"),
 	Dictinfo("simple", "Simple test dictionary", "/lib/dict/simple", "/lib/dict/simpleindex", "/dis/dict/simple.dis"),
 	Dictinfo ("roget",	"Roget's Thesaurus from Project Gutenberg",	"/lib/dict/roget",	"/lib/dict/rogetindex", "/dis/dict/roget.dis"),
@@ -94,7 +95,12 @@ init(nil: ref Draw->Context, argl: list of string)
 
 	kflag = 0;
 	line = nil;
+	#  The OED is the default, as on Plan 9, when it is in the namespace
+	#  (installed, or a bound-in remote /lib/dict); otherwise Webster.
 	dictinfo := dicts[0];
+	(ok, nil) := sys->stat(dictinfo.path);
+	if(ok < 0)
+		dictinfo = dicts[1];
 	
 	bout = bufio->fopen(sys->fildes(1), Bufio->OWRITE);
 	bin = bufio->fopen(sys->fildes(0), Bufio->OREAD);

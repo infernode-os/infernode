@@ -232,8 +232,10 @@ fold(rp: string): string
 #  version of r with accent acc (acc in [LIGS..LIGE-1]),
 #  and return it if so, else return NONE.
 
-NONE : con 16r800;
-TAGS, TAGE, SPCS, PAR, LIGS : con iota + NONE;
+#  Runes for special purposes (0xe800-0xfdff is Private Use Area),
+#  as in Plan 9's dict.h; every dictionary module must agree.
+NONE : con 16re800;
+TAGS, TAGE, SPCS, PAR, LIGS : con NONE + 1 + iota;
 LACU, LGRV, LUML, LCED, LTIL, LBRV, LRNG, LDOT, LDTB, LFRN, LFRB, LOGO, LMAC,
 LHCK, LASP, LLEN, LBRB, LIGE: con iota + LIGS;
 liglookup(acc: int, r: int): int
@@ -242,7 +244,7 @@ liglookup(acc: int, r: int): int
 
 	if(acc < LIGS || acc >= LIGE)
 		return NONE;
-	for(p = ligtab[acc-LIGS].pairs; p[0]; p = p[2: ])
+	for(p = ligtab[acc-LIGS].pairs; len p >= 2; p = p[2: ])
 		if(p[0] == r)
 			return p[1];
 	return NONE;

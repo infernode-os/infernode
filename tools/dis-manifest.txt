@@ -147,6 +147,7 @@ dis/dial.dis
 dis/dict.dis
 dis/dict/adict.dis
 dis/dict/mkindex.dis
+dis/dict/oed.dis
 dis/dict/oeis.dis
 dis/dict/pg.dis
 dis/dict/pgw.dis

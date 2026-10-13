@@ -143,39 +143,88 @@ After an
 the default command is
 .BR p .
 Otherwise, the default command is the previous command.
-.SS "Remote dictionaries"
-The dictionary text is not part of the distribution.
-A host that has it exports the directory holding it over 9P,
-and other machines union it onto
-.BR /lib/dict ;
+.SS "Installing the OED"
+The dictionary text is not part of the distribution;
+it is copyright, and must be licensed.
+.I Dict
+reads the edition published for Plan 9:
+the files
+.B oed2
+(the text, about 545MB)
+and
+.B oed2index
+(its index), in
+.BR /lib/dict .
+In a source tree, put them in
+.BR /lib/dict ,
+where
+.IR git (1)
+ignores them.
+The installed applications' tree is read-only;
+there, put them in
+.BR $home/.infernode/lib/dict ,
+which the login profile unions onto
+.BR /lib/dict .
+.SS "A dictionary server"
+One machine can hold the text for many.
+It exports the directory over 9P,
+and the others union it onto
+.BR /lib/dict ,
+where
 .I dict
-reads it there as it would local files.
-The login profile does this when
+reads it as it would local files.
+Programs, and agents, need nothing else:
+the dictionary is a file in the name space.
+.PP
+The login profile mounts the export when
 .B /lib/ndb/dict
-(as usual, the copy under
+(the copy under
 .BR $home/.infernode/lib/ndb )
-names the export:
+names it:
 .IP
 .EX
 dial=tcp!host!5644
-keyfile=/lib/keyring/serve-llm
+keyfile=/lib/keyring/\fIkey\fP
 .EE
 .PP
 With no
 .BR keyfile ,
 the mount is unauthenticated.
+The mount is made in the background
+and appears a few seconds after login.
 By hand:
 .IP
 .EX
-mount -a -k /lib/keyring/serve-llm tcp!host!5644 /lib/dict
+mount -a -k /lib/keyring/\fIkey\fP tcp!host!5644 /lib/dict
 .EE
 .PP
-On the exporting host:
+On the server, in an emulator whose
+.B /n/local
+is the host's file system:
 .IP
 .EX
 bind /n/local/\fIdir\fP /n/dict
-listen -s -k \fIkeyfile\fP 'tcp!*!5644' {export /n/dict &}
+listen -s -k /lib/keyring/\fIkey\fP 'tcp!*!5644' {export /n/dict &}
 .EE
+.PP
+Both ends must agree on the strength of the key exchange.
+A server run with the host environment variable
+.B CNSAMODE=1
+(CNSA 2.0: ML-KEM-1024)
+refuses clients without it,
+and the mount fails with
+.LR "bad ml-kem public key length" .
+The emulator reads the variable once, when it starts.
+On macOS, applications started from the Finder or the Dock
+do not see a shell's environment; set it for them with
+.IP
+.EX
+launchctl setenv CNSAMODE 1
+.EE
+.PP
+which lasts until logout
+(a launch agent that runs it at login makes it permanent),
+and restart the application.
 .SS "Acme and Xenith"
 .B Dict
 .I word
@@ -190,6 +239,8 @@ Look on a word there looks that word up in turn.
 .br
 .B /lib/dict/oed2index
 .br
+.B $home/.infernode/lib/dict
+.br
 .B /lib/ndb/dict
 .br
 Other files in
@@ -197,7 +248,8 @@ Other files in
 .SH "SEE ALSO"
 .IR regexp (6),
 .IR listen (1),
-.IR export (4)
+.IR export (4),
+.IR mount (1)
 .SH SOURCE
 .B /appl/cmd/dict
 .br

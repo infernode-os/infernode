@@ -945,12 +945,16 @@ mousetask()
 										f.dev = d.dev;
 										f.mtime = msg.mtime;
 									}
-									f.mod = FALSE;
-									w.dirty = FALSE;
+									# what was written is the text as it was at
+									# Put: an edit made while it was written is
+									# not saved
+									dirty := f.seq != w.saveseq;
+									f.mod = dirty;
+									w.dirty = dirty;
 									f.unread = FALSE;
 									for(i := 0; i < f.ntext; i++) {
-										f.text[i].w.putseq = f.seq;
-										f.text[i].w.dirty = FALSE;
+										f.text[i].w.putseq = w.saveseq;
+										f.text[i].w.dirty = dirty;
 									}
 								}
 								w.settag();

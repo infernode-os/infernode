@@ -56,6 +56,7 @@ Windowm : module {
 		asyncload : ref Asyncio->AsyncOp;	# Current async file load operation (nil = none)
 		asyncsave : ref Asyncio->AsyncOp;	# Current async file save operation (nil = none)
 		savename : string;	# Name being saved to (for async save completion)
+		saveseq : int;	# the file's seq when the text being saved was taken
 
 		init : fn(w : self ref Window, w0 : ref Window, r : Draw->Rect);
 		lock : fn(w : self ref Window, n : int);

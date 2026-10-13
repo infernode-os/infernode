@@ -103,6 +103,7 @@ typedef struct {
 extern int dladdr(const void*, Dlinfo*);
 
 enum {
+	Gregrbx	= 11,	/* REG_RBX: RRFP, the amd64 JIT's Dis frame pointer */
 	Gregrbp	= 10,	/* REG_RBP */
 	Gregrsp	= 15,	/* REG_RSP */
 	Gregrip	= 16,	/* REG_RIP */
@@ -189,6 +190,31 @@ faultpc(void *a)
 #endif
 }
 
+/*
+ * The Dis frame pointer compiled code was running with, from the
+ * register the JIT keeps it in (RFP in comp-<arch>.c), or 0 where we
+ * do not say (see jitfaultfp).
+ */
+static uintptr
+faultfp(void *a)
+{
+	ucontext_t *uc;
+
+	if(a == nil)
+		return 0;
+	uc = (ucontext_t*)a;
+#if defined(__x86_64__)
+	return (uintptr)uc->uc_mcontext.gregs[Gregrbx];
+#elif defined(__aarch64__)
+	return (uintptr)uc->uc_mcontext.regs[21];	/* X21 */
+#elif defined(__riscv)
+	return (uintptr)uc->uc_mcontext.__gregs[18];	/* s2 (x18) */
+#else
+	USED(uc);
+	return 0;
+#endif
+}
+
 static void
 faultwhere(void *a)
 {
@@ -214,7 +240,7 @@ static void
 trapmemref(int signo, siginfo_t *si, void *a)
 {
 	if(isnilref(si)){
-		jitfault((uintptr)faultpc(a));
+		jitfaultfp((uintptr)faultpc(a), faultfp(a));
 		disfault(nil, exNilref);
 	}else if(signo == SIGBUS){
 		fprint(2, "BUS: addr=%p code=%d\n", si->si_addr, si->si_code);
@@ -239,7 +265,7 @@ trapFPE(int signo, siginfo_t *si, void *a)
 	 * it, at the divide (see jitfault); it was "sys: fp: ..." with a
 	 * stale R.PC, so no handler for "zero divide" matched.
 	 */
-	if(si != nil && si->si_code == FPE_INTDIV && jitfault((uintptr)faultpc(a)))
+	if(si != nil && si->si_code == FPE_INTDIV && jitfaultfp((uintptr)faultpc(a), faultfp(a)))
 		disfault(nil, exZdiv);
 	snprint(buf, sizeof(buf), "sys: fp: exception status=%.4lux pc=%#p", getfsr(), si->si_addr);
 	disfault(nil, buf);

@@ -78,7 +78,9 @@ TARG=\
 	imap_test.dis\
 	jit_bounds_test.dis\
 	jit_real_test.dis\
+	jit_big_test.dis\
 	jit_fault_test.dis\
+	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\

@@ -70,20 +70,19 @@ if {~ $llmbackend openai cli codex} {
 	# scenarios with no quality loss vs default medium. Devstral and
 	# Anthropic backends ignore the field — safe to set unconditionally.
 	if {! ~ $llmmodel ''} {
-		llmsrv -D -b openai -u $llmurl -M $llmmodel -r low &
+		llmsrv -D -b openai -u $llmurl -M $llmmodel -r low
 	}{
-		llmsrv -D -b openai -u $llmurl -r low &
+		llmsrv -D -b openai -u $llmurl -r low
 	}
 }{
 	if {! ~ $llmmodel ''} {
-		llmsrv -D -M $llmmodel &
+		llmsrv -D -M $llmmodel
 	}{
-		llmsrv -D &
+		llmsrv -D
 	}
 }
 
-# Wait for llmsrv to finish its self-mount of /mnt/llm
-sleep 2
+# Each llmsrv above returns once /mnt/llm is mounted, so it is there now.
 
 # ── 9P export ───────────────────────────────────────────────
 # Default: keyring auth (Inferno Ed25519 signer). Clients dial with

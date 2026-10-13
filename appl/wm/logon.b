@@ -751,18 +751,27 @@ ensurellmsrv()
 		return;	# already running
 
 	sys->fprint(stderr, "logon: /mnt/llm not mounted, starting llmsrv\n");
-	spawn startllmsrv();
-	sys->sleep(1000);	# give it time to mount
+	done := chan of int;
+	spawn startllmsrv(done);
+	<-done;	# llmsrv's init returns once /mnt/llm is mounted
 }
 
-startllmsrv()
+# In a process of its own: llmsrv's init takes a new process group.
+startllmsrv(done: chan of int)
 {
 	mod := load Command "/dis/llmsrv.dis";
 	if(mod == nil) {
 		sys->fprint(stderr, "logon: cannot load llmsrv: %r\n");
+		done <-= 0;
 		return;
 	}
-	mod->init(nil, "llmsrv" :: nil);
+	{
+		mod->init(nil, "llmsrv" :: nil);
+	} exception e {
+	"*" =>
+		sys->fprint(stderr, "logon: llmsrv: %s\n", e);	# no key yet, say
+	}
+	done <-= 1;
 }
 
 connectfactotum(pass, recoverypass, fidopin: string): string

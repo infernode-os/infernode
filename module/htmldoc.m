@@ -67,6 +67,8 @@ Htmldoc: module
 	title:	fn(id: int): string;
 	height:	fn(id: int): int;
 	scroll:	fn(id: int): int;
+	# The view shows id's page from y down (where Back comes back to).
+	viewing:	fn(id: int, y: int);
 
 	# Lay id's page out again, width wide.
 	resize:	fn(id: int, width, height: int);

@@ -494,6 +494,18 @@ draw(w: ref Window)
 	setview(w, d.v);
 	d.v.draw();
 	scrollbar(w);
+	viewing(d.v);
+}
+
+# Where the view is, told the engine: a page browsed keeps it for Back
+viewing(v: ref View)
+{
+	if(v.h < 0 || v.eng == nil)
+		return;
+	n := v.sheetat(v.org.y);
+	if(n < 0 || n >= len v.tops)
+		return;
+	v.eng->viewing(v.h, n, (v.org.y - v.tops[n]) * 100 / v.scale);
 }
 
 # The scroll bar's thumb where the view is in the column

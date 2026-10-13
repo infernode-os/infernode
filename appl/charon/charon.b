@@ -376,6 +376,7 @@ scrollto(y: int)
 	if(y == scroll)
 		return;
 	scroll = y;
+	sess.viewing(y);
 	redraw();
 }
 

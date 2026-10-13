@@ -16163,10 +16163,14 @@ hittable(b: ref Box): int
 }
 
 # a box whose overflow is clipped: nothing of it is hit outside it (the
-# root's and the body's overflow is the viewport's)
+# root's and the body's overflow is the viewport's).  Known by their
+# tags, as innerclip knows them: an absolutely positioned box's parent
+# is its containing block, so one placed against the root looked like
+# the body, and GitHub's screen-reader headings (1px, overflow hidden)
+# took the clicks on the links under the text they hide.
 clipshit(b: ref Box): int
 {
-	if(b.parent == nil || b.parent.parent == nil)
+	if(b.parent == nil || istag(b, Dom->Thtml) || istag(b, Dom->Tbody) && istag(b.parent, Dom->Thtml))
 		return 0;
 	return b.st.overflowx != Style->Ovisible || b.st.overflowy != Style->Ovisible;
 }

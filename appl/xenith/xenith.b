@@ -652,13 +652,21 @@ mousetask()
 					if(w != nil && docview->shown(w)){
 						# a document's scroll bar, as acme's: 1 back
 						# and 3 on by the distance from its top, 2 to
-						# that point in the document
+						# that point in the document, following the
+						# mouse while it is held, as a text's does
 						if(mouse.buttons & (8|16))
 							docview->wheel(w, mouse.buttons);
 						else if(but){
 							docview->scrollclick(w, but, mouse.xy.y);
-							while(mouse.buttons)
+							y := mouse.xy.y;
+							while(mouse.buttons){
+								bflush();
 								frgetmouse();
+								if(but == 2 && (mouse.buttons & 2) && mouse.xy.y != y){
+									y = mouse.xy.y;
+									docview->scrollclick(w, 2, y);
+								}
+							}
 						}
 						bflush();
 						row.qlock.unlock();

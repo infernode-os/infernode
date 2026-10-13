@@ -643,6 +643,32 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	}
 }
 
+# the text of buf from q0 to q1, as UTF-8
+textbytes(buf: ref Bufferm->Buffer, q0, q1: int): array of byte
+{
+	r := stralloc(BUFSIZE);
+	parts: list of array of byte;
+	total := 0;
+	for(q := q0; q < q1; ){
+		n := q1 - q;
+		if(n > BUFSIZE)
+			n = BUFSIZE;
+		buf.read(q, r, 0, n);
+		b := array of byte r.s[0:n];
+		parts = b :: parts;
+		total += len b;
+		q += n;
+	}
+	strfree(r);
+	data := array[total] of byte;
+	for(; parts != nil; parts = tl parts){
+		b := hd parts;
+		total -= len b;
+		data[total:] = b;
+	}
+	return data;
+}
+
 putfile(f: ref File, q0: int, q1: int, name: string)
 {
 	n : int;
@@ -674,9 +700,11 @@ putfile(f: ref File, q0: int, q1: int, name: string)
 				warning(nil, sys->sprint("%s modified since last read\n", name));
 			return;
 		}
-		# Start async save
+		# Start async save, of the text as it is now: the writer has
+		# its own copy, not the Buffer the window goes on using
 		w.savename = name;
-		w.asyncsave = asyncio->asyncsavefile(name, w.id, f.buf, q0, q1);
+		w.saveseq = f.seq;
+		w.asyncsave = asyncio->asyncsavefile(name, w.id, textbytes(f.buf, q0, q1));
 		return;
 	}
 

@@ -347,7 +347,7 @@ dirtask(op: ref AsyncOp, path: string, winid: int)
 	op.active = 0;
 }
 
-asyncsavefile(path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int): ref AsyncOp
+asyncsavefile(path: string, winid: int, data: array of byte): ref AsyncOp
 {
 	op := ref AsyncOp;
 	op.opid = nextopid++;
@@ -356,11 +356,17 @@ asyncsavefile(path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int): 
 	op.active = 1;
 	op.winid = winid;
 
-	spawn savetask(op, path, winid, buf, q0, q1);
+	spawn savetask(op, path, winid, data);
 	return op;
 }
 
-savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int)
+# Write data, the text as it was when Put was done.  It was read from the
+# window's Buffer here, in this process, while the window went on: a
+# Buffer has one cache block, moved by every read, and the window's own
+# reads and edits moved it under this one.  A Markdown file shown
+# rendered beside its text was written empty when Put, and its Buffer
+# left broken ("array bounds error", "block not found").
+savetask(op: ref AsyncOp, path: string, winid: int, data: array of byte)
 {
 	# Check for cancellation before starting
 	alt {
@@ -380,11 +386,9 @@ savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0
 		return;
 	}
 
-	total := q1 - q0;
+	total := len data;
 	written := 0;
-	rp := ref Dat->Astring;
-
-	for(q := q0; q < q1; ) {
+	while(written < total) {
 		# Check for cancellation
 		alt {
 			<-op.ctl =>
@@ -394,18 +398,11 @@ savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0
 			* => ;
 		}
 
-		n := q1 - q;
-		if(n > Dat->BUFSIZE)
-			n = Dat->BUFSIZE;
-
-		buf.read(q, rp, 0, n);
-		ab := array of byte rp.s[0:n];
-
-		nw := sys->write(fd, ab, len ab);
-		wantlen := len ab;
-		ab = nil;
-
-		if(nw != wantlen) {
+		n := total - written;
+		if(n > 64*1024)
+			n = 64*1024;
+		nw := sys->write(fd, data[written:written+n], n);
+		if(nw != n) {
 			fd = nil;
 			alt {
 				dat->casync <-= ref AsyncMsg.SaveComplete(op.opid, winid, path, written, 0, sys->sprint("write error: %r")) => ;
@@ -414,20 +411,14 @@ savetask(op: ref AsyncOp, path: string, winid: int, buf: ref Bufferm->Buffer, q0
 			op.active = 0;
 			return;
 		}
-
 		written += nw;
-		q += n;
-
-		# Send progress every 64KB
-		if((written % (64*1024)) < Dat->BUFSIZE) {
-			alt {
-				dat->casync <-= ref AsyncMsg.SaveProgress(op.opid, winid, written, total) => ;
-				<-op.ctl =>
-					fd = nil;
-					op.active = 0;
-					return;
-				* => ;
-			}
+		alt {
+			dat->casync <-= ref AsyncMsg.SaveProgress(op.opid, winid, written, total) => ;
+			<-op.ctl =>
+				fd = nil;
+				op.active = 0;
+				return;
+			* => ;
 		}
 	}
 

@@ -83,7 +83,10 @@ Asyncio: module {
 
 	# Start async file save - returns operation handle
 	# Reads from buffer positions q0..q1 and writes to path
-	asyncsavefile: fn(path: string, winid: int, buf: ref Bufferm->Buffer, q0, q1: int): ref AsyncOp;
+	# write data to path in the background; data is the caller's copy
+	# of the text, taken before (a Buffer is not to be read from another
+	# process while the window edits it)
+	asyncsavefile: fn(path: string, winid: int, data: array of byte): ref AsyncOp;
 
 	# Cancel an async operation
 	asynccancel: fn(op: ref AsyncOp);

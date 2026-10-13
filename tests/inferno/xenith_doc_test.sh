@@ -12,6 +12,8 @@
 #	Render again goes back to the text;
 #	a source document (Markdown, HTML) shown beside its text (Zerox)
 #	is not set again at each edit, but on Put and doc/ctl refresh;
+#	a large one (saved in the background) Put beside its document is
+#	written whole;
 #	an image looked at is a document of one sheet its size;
 #	a PDF's links listed in doc/links, button 3 on one to a page goes
 #	to it, on one to a URI browses it in a window of Xenith's and does
@@ -445,6 +447,56 @@ for kind in md html {
 	}
 	rm -f $SRC
 }
+# ---- a large file (written in the background) Put beside its ----
+# ---- document: the writer read the window's Buffer as the document ----
+# ---- was set again from it, and the file was written empty ----
+for order in first twin {
+	SRC=/tmp/xenith_doc_big_$order.md
+	cp /CHANGELOG.md $SRC
+	cp /CHANGELOG.md /tmp/xenith_doc_big.want
+	echo -n ' Saved' >> /tmp/xenith_doc_big.want
+	look $SRC
+	aid=()
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {~ $#aid 0} {
+			aid=`{winof xenith_doc_big_$order.md}
+			if {~ $#aid 0} {sleep 1}
+		}
+	}
+	if {~ $order first} {
+		echo render > $XENITH/$aid/doc/ctl
+		loaded $aid
+	}
+	tagexec $aid Zerox
+	bid=()
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {~ $#bid 0} {
+			bid=`{other xenith_doc_big_$order.md $aid}
+			if {~ $#bid 0} {sleep 1}
+		}
+	}
+	tw=$bid
+	if {~ $order twin} {
+		echo render > $XENITH/$bid/doc/ctl
+		loaded $bid
+		tw=$aid
+	}
+	echo -n ' Saved' >> $XENITH/$tw/body
+	echo put > $XENITH/$tw/ctl
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {! cmp $SRC /tmp/xenith_doc_big.want > /dev/null} {sleep 1}
+	}
+	if {cmp $SRC /tmp/xenith_doc_big.want > /dev/null} {
+		ok 'a large file Put beside its document ('^$order^' rendered) is written whole'
+	} {
+		bad 'a large file Put beside its document ('^$order^' rendered):' `{wc -c < $SRC} 'bytes, want' `{wc -c < /tmp/xenith_doc_big.want}
+	}
+	b=`{cat $XENITH/$tw/body | wc -c}
+	check 'and its text is as it was ('^$order^' rendered)' $b `{wc -c < /tmp/xenith_doc_big.want}
+	rm -f $SRC
+}
+rm -f /tmp/xenith_doc_big.want
+
 if {echo refresh > $M/doc/ctl} {bad 'refresh on a window showing text was taken'} {ok 'refresh on a window showing its text is refused'}
 
 # ---- an image ----

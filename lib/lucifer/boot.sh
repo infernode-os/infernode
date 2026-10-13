@@ -53,9 +53,12 @@ if {! ~ $skiplogon 1} {
 	run /lib/lucifer/llmsrv.sh
 } &
 
-# Wallet service
-/dis/veltro/wallet9p.dis >[2] /dev/null &
-sleep 1
+# Wallet service.  wallet9p, msg9p and luciuisrv mount themselves and
+# return, serving from the background: run in the foreground, each one's
+# files are there when the next line runs.  (Each used to be started
+# with & and followed by a sleep 1 -- five seconds of every boot spent
+# guessing how long a mount takes.)
+/dis/veltro/wallet9p.dis >[2] /dev/null
 
 # Message layer — msg9p mounts /mnt/msg and aggregates Notifications from
 # every registered MsgSrc into /mnt/msg/notify, which lucibridge / agents
@@ -64,8 +67,7 @@ sleep 1
 # own init() returns an error if the backing channel isn't available,
 # e.g. sms on a build without /phone bound). stderr stays attached so
 # mount/register failures surface in the console.
-/dis/veltro/msg9p.dis &
-sleep 1
+/dis/veltro/msg9p.dis
 echo 'register sms /dis/veltro/sources/sms.dis' > /mnt/msg/ctl
 
 # Email source — registered only when an account is configured, so we never
@@ -81,7 +83,6 @@ if {ftest -f /lib/veltro/sources/email.conf} {
 # GUI services
 luciuisrv
 echo activity create Main > /mnt/ui/ctl
-sleep 1
 /dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 # /tmp is bound by lib/sh/profile; on Windows the bind has hit edge
 # cases where it silently failed and the redirect below produced no log
@@ -91,9 +92,10 @@ sleep 1
 # instead of being silenced.
 mkdir -p /tmp
 > /tmp/lucibridge.log
-lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
-sleep 1
+# The Tasks tab first: lucibridge may add a Welcome tab of its own, and
+# a sleep between them only made this order likely.
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
+lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno
 # plumber matches the user's rules (/usr/<user>/lib/plumbing) and then

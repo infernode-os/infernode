@@ -103,6 +103,7 @@ typedef struct {
 extern int dladdr(const void*, Dlinfo*);
 
 enum {
+	Gregrbx	= 11,	/* REG_RBX: RRFP, the amd64 JIT's Dis frame pointer */
 	Gregrbp	= 10,	/* REG_RBP */
 	Gregrsp	= 15,	/* REG_RSP */
 	Gregrip	= 16,	/* REG_RIP */
@@ -189,6 +190,31 @@ faultpc(void *a)
 #endif
 }
 
+/*
+ * The Dis frame pointer compiled code was running with, from the
+ * register the JIT keeps it in (RFP in comp-<arch>.c), or 0 where we
+ * do not say (see jitfaultfp).
+ */
+static uintptr
+faultfp(void *a)
+{
+	ucontext_t *uc;
+
+	if(a == nil)
+		return 0;
+	uc = (ucontext_t*)a;
+#if defined(__x86_64__)
+	return (uintptr)uc->uc_mcontext.gregs[Gregrbx];
+#elif defined(__aarch64__)
+	return (uintptr)uc->uc_mcontext.regs[21];	/* X21 */
+#elif defined(__riscv)
+	return (uintptr)uc->uc_mcontext.__gregs[18];	/* s2 (x18) */
+#else
+	USED(uc);
+	return 0;
+#endif
+}
+
 static void
 faultwhere(void *a)
 {
@@ -214,7 +240,7 @@ static void
 trapmemref(int signo, siginfo_t *si, void *a)
 {
 	if(isnilref(si)){
-		jitfault((uintptr)faultpc(a));
+		jitfaultfp((uintptr)faultpc(a), faultfp(a));
 		disfault(nil, exNilref);
 	}else if(signo == SIGBUS){
 		fprint(2, "BUS: addr=%p code=%d\n", si->si_addr, si->si_code);
@@ -239,7 +265,7 @@ trapFPE(int signo, siginfo_t *si, void *a)
 	 * it, at the divide (see jitfault); it was "sys: fp: ..." with a
 	 * stale R.PC, so no handler for "zero divide" matched.
 	 */
-	if(si != nil && si->si_code == FPE_INTDIV && jitfault((uintptr)faultpc(a)))
+	if(si != nil && si->si_code == FPE_INTDIV && jitfaultfp((uintptr)faultpc(a), faultfp(a)))
 		disfault(nil, exZdiv);
 	snprint(buf, sizeof(buf), "sys: fp: exception status=%.4lux pc=%#p", getfsr(), si->si_addr);
 	disfault(nil, buf);
@@ -248,21 +274,20 @@ trapFPE(int signo, siginfo_t *si, void *a)
 static void
 trapUSR1(int signo)
 {
-	int intwait;
-
 	USED(signo);
 
 	if(up == nil)		/* pexit has already forgotten the proc */
 		return;
 
-	intwait = up->intwait;
-	up->intwait = 0;	/* clear it to let proc continue in osleave */
-
-	if(up->type != Interp)		/* Used to unblock pending I/O */
-		return;
-
-	if(intwait == 0)		/* Not posted so it's a sync error */
-		disfault(nil, Eintr);	/* Should never happen */
+	/*
+	 * Let the proc continue in osleave.  Nothing more to do: swiproc
+	 * set swipend with intwait, and osleave raises the Eintr.  If
+	 * intwait is already 0, osleave gave up waiting for this signal and
+	 * cleared it itself (proc.c), so the signal is late; it used to
+	 * raise a second Eintr here, from a signal handler, wherever the
+	 * proc had got to by then.
+	 */
+	up->intwait = 0;
 }
 
 void
@@ -291,12 +316,18 @@ termrestore(void)
 	tcsetattr(0, TCSANOW, &tinit);
 }
 
+/*
+ * Leave with status x: halt's argument, 1 for a panic or a fault in
+ * emu, 128+n for signal n.  _exit ends every thread at once, as the
+ * SIGKILL to our own group it replaces did; with the SIGKILL the
+ * status was whichever of the signal and the exit(0) after it came
+ * first, so the same run exited 0 on one machine and 137 on the next,
+ * and a crash could exit 0.
+ */
 void
 cleanexit(int x)
 {
-	USED(x);
-
-	if(up->intwait) {
+	if(up != nil && up->intwait) {
 		up->intwait = 0;
 		return;
 	}
@@ -304,8 +335,20 @@ cleanexit(int x)
 	if(dflag == 0)
 		termrestore();
 
-	kill(0, SIGKILL);
-	exit(0);
+	_exit(x);
+}
+
+/*
+ * SIGTERM and SIGINT: not cleanexit, whose intwait test would take a
+ * signal landing on a proc waiting for its SIGUSR1 for that SIGUSR1,
+ * swallowing it and leaving the SIGUSR1 to come late.
+ */
+static void
+sigexit(int sig)
+{
+	if(dflag == 0)
+		termrestore();
+	_exit(128+sig);
 }
 
 void
@@ -373,9 +416,9 @@ libinit(char *imod)
 	 */
 	signal(SIGPIPE, SIG_IGN);
 	if(signal(SIGTERM, SIG_IGN) != SIG_IGN)
-		signal(SIGTERM, cleanexit);
+		signal(SIGTERM, sigexit);
 	if(signal(SIGINT, SIG_IGN) != SIG_IGN)
-		signal(SIGINT, cleanexit);
+		signal(SIGINT, sigexit);
 
 	if(sflag == 0) {
 		act.sa_flags = SA_SIGINFO;
@@ -443,7 +486,7 @@ readkbd(void)
 		buf[0] = 'H' - '@';
 		break;
 	case CTRLC:
-		cleanexit(0);
+		cleanexit(128+SIGINT);
 		break;
 	}
 	return buf[0];

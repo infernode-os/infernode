@@ -215,7 +215,6 @@ if {~ $emuhost Nt} {
 }
 mkdir -p /usr/inferno/secstore >[2] /dev/null
 auth/secstored >[2] /dev/null &
-sleep 1
 
 # ── Factotum ──────────────────────────────────────────────
 # Headless: if $SECSTORE_PASSWORD is set on the host, start factotum
@@ -230,6 +229,9 @@ if {! ftest -f /mnt/factotum/proto}{
 		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
 	}
 	if {! ~ $#havesecpass 0} {
+		# factotum dials the secstored started above at once: give
+		# it the time to announce.  Nothing else here waits on it.
+		sleep 1
 		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
 		if {! ~ $#secpass 0} {
 			if {! ~ $#user 0} {
@@ -303,6 +305,19 @@ fn provisionkeyfile {
 		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
 	}
 }
+# The host's HTTPS proxy settings, for llmclient's API connections
+# (INFR-307): copied into /env, which the services started below inherit,
+# unless already set here. Not on Windows, where os sh in backticks hangs.
+fn importproxy {
+	for _pv in https_proxy HTTPS_PROXY no_proxy NO_PROXY {
+		if {~ $#$_pv 0} {
+			_pval=`{os sh -c 'printf %s "${'^$_pv^'}"' >[2] /dev/null}
+			if {! ~ $#_pval 0} {
+				echo -n $"_pval > /env/$_pv
+			}
+		}
+	}
+}
 if {~ $emuhost Nt} {
 	provisionkeyfile anthropic
 	provisionkeyfile brave
@@ -311,6 +326,7 @@ if {~ $emuhost Nt} {
 	provisionkey anthropic ANTHROPIC_API_KEY
 	provisionkey brave BRAVE_API_KEY
 	provisionkey openai OPENAI_API_KEY
+	importproxy
 }
 
 # ── LLM + Speech (desktop platforms) ──────────────────────

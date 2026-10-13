@@ -199,6 +199,15 @@ jobs:
         chmod +x tests/host/llmsrv_session_capability_test.sh
         ROOT=. tests/host/llmsrv_session_capability_test.sh
 
+    - name: Run login-profile proxy import check
+      run: |
+        # The host's HTTPS_PROXY and no_proxy reach Inferno's environment,
+        # where llmclient reads them (INFR-307). 77 = skip (no emu).
+        chmod +x tests/host/profile_proxy_test.sh
+        rc=0
+        ROOT=. bash tests/host/profile_proxy_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run agent harness checks
       run: |
         # The one agent loop, veltrosrv, through its files and through its

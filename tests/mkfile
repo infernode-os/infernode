@@ -146,6 +146,7 @@ TARG=\
 	web_html_test.dis\
 	web_css_test.dis\
 	web_style_test.dis\
+	web_page_test.dis\
 	web_browser_test.dis\
 	xenith_htmldoc_test.dis\
 	web_fonts_test.dis\

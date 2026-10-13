@@ -889,6 +889,7 @@ dis/tests/web_css_test.dis
 dis/tests/web_fonts_test.dis
 dis/tests/web_wordbreak_test.dis
 dis/tests/web_html_test.dis
+dis/tests/web_page_test.dis
 dis/tests/web_style_test.dis
 dis/tests/webclient_test.dis
 dis/tests/webfs_test.dis

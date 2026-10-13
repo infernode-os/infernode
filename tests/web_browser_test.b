@@ -419,8 +419,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Forms", testForms);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
-	run("Console", testConsole);
 	run("Posted", testPosted);
+	run("Console", testConsole);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

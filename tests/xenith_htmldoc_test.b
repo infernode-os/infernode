@@ -162,6 +162,34 @@ testStacking(t: ref T)
 		t.assertseq(htmldoc->linkat(9, 20, y), base + "hidden", sys->sprint("the link under a 1px heading's clipped text (y %d)", y));
 }
 
+# A page with a frame: the frame's document is built after the page's,
+# and a click on the page (or its height) read the page's boxes against
+# the frame's nodes, past the end of them: a nil dereference that killed
+# Xenith (Glenda's lair, a Facebook box in an iframe)
+testFrame(t: ref T)
+{
+	page := "<body style='margin:0'><iframe src=frame.html style='width:200px;height:50px'></iframe>";
+	for(i := 0; i < 120; i++)
+		page += "<span>.</span>";
+	page += "<div style='overflow:hidden'><a href=far>a link far down the document</a></div>";
+	(nil, err) := htmldoc->set(10, array of byte page, URL, 400, 300);
+	t.assertnil(err, "set");
+	sys->sleep(1500);	# the frame loads
+	u: string;
+	h := 0;
+	{
+		for(y := 0; y < 300; y += 4)
+			if((u = htmldoc->linkat(10, 20, y)) != nil)
+				break;
+		h = htmldoc->height(10);
+	} exception e {
+	"*" =>
+		t.fatal("a fault: " + e);
+	}
+	t.assertseq(u, "file://" + DIR + "far", "the link below the frame");
+	t.assert(h > 0, "the page's height");
+}
+
 testEdited(t: ref T)
 {
 	(nil, err) := htmldoc->set(1, array of byte "<p>Edited, not saved</p>", URL, 400, 300);
@@ -363,6 +391,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("StyleSheet", testStyleSheet);
 	run("Link", testLink);
 	run("Stacking", testStacking);
+	run("Frame", testFrame);
 	run("Edited", testEdited);
 	run("Windows", testWindows);
 	run("Browse", testBrowse);

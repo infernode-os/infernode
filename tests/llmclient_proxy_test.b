@@ -156,8 +156,10 @@ viaproxy(t: ref T, url, reply: string): (ref Seen, string)
 	<-tmo =>
 		t.fatal("listmodels did not return");
 	}
-	# The proxy reports once it has answered.  If no connection came,
-	# hang up the announcement: the proxy's listen fails and it reports nil.
+	# The proxy reports once it has answered.  If no connection came
+	# in 2s, none is coming: say so without waiting on the proxy, whose
+	# listen a hangup does not end on every host (macOS's accept goes on
+	# blocking), and dial it once so that its listen returns and it goes.
 	tmo = chan of int;
 	spawn timer(tmo, 2000);
 	s: ref Seen;
@@ -165,8 +167,9 @@ viaproxy(t: ref T, url, reply: string): (ref Seen, string)
 	s = <-seen =>
 		;
 	<-tmo =>
-		sys->fprint(ac.cfd, "hangup");
-		s = <-seen;
+		s = nil;
+		(nil, d) := sys->dial(sys->sprint("tcp!127.0.0.1!%d", proxyport), nil);
+		d.dfd = nil;
 	}
 	return (s, err);
 }

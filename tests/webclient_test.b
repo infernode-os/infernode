@@ -225,6 +225,103 @@ contains(s, needle: string): int
 	return 0;
 }
 
+# A response whose type is not among those asked for is not read past
+# its header: a loopback server offering 32 MB of audio/mpeg sees the
+# connection go before it has sent it; one offering text/html sends it
+# all, and its body comes back.
+testTypes(t: ref T)
+{
+	(ok, c) := sys->announce("tcp!127.0.0.1!0");
+	if(ok < 0)
+		t.skip(sys->sprint("announce: %r"));
+	port := "";
+	(nil, l) := sys->tokenize(readfile(c.dir + "/local"), "!\n");
+	if(l != nil && tl l != nil)
+		port = hd tl l;
+	if(port == "")
+		t.fatal("no local port: " + readfile(c.dir + "/local"));
+	url := "http://127.0.0.1:" + port + "/";
+	sent := chan of int;
+	huge := 32 * 1024 * 1024;
+	spawn serve1(c, sent, "audio/mpeg", huge);
+	(r, err) := webclient->requesttypes("GET", url + "a.mp3", nil, nil, nil, "text/" :: "+xml" :: nil);
+	t.assert(err == nil, "request: " + err);
+	n := <-sent;
+	if(r != nil) {
+		t.asserteq(r.statuscode, 200, "status as answered");
+		t.assertseq(r.hdrval("Content-Type"), "audio/mpeg", "its type");
+		t.asserteq(len r.body, 0, "no body");
+	}
+	t.assert(n < huge, sys->sprint("not read whole: %d of %d sent", n, huge));
+	spawn serve1(c, sent, "text/html; charset=utf-8", 100000);
+	(r, err) = webclient->requesttypes("GET", url + "p.html", nil, nil, nil, "text/" :: "+xml" :: nil);
+	n = <-sent;
+	t.assert(err == nil && r != nil, "request: " + err);
+	if(r != nil)
+		t.asserteq(len r.body, 100000, "a type asked for is read");
+	spawn serve1(c, sent, "image/svg+xml", 1000);
+	(r, err) = webclient->requesttypes("GET", url + "i.svg", nil, nil, nil, "text/" :: "+xml" :: nil);
+	n = <-sent;
+	if(r != nil)
+		t.asserteq(len r.body, 1000, "a suffix (+xml) matches");
+}
+
+serve1(c: Sys->Connection, sent: chan of int, ctype: string, size: int)
+{
+	(ok, nc) := sys->listen(c);
+	if(ok < 0) {
+		sent <-= -1;
+		return;
+	}
+	fd := sys->open(nc.dir + "/data", Sys->ORDWR);
+	if(fd == nil) {
+		sent <-= -1;
+		return;
+	}
+	req := "";
+	buf := array[4096] of byte;
+	while(!hasend(req)) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		req += string buf[0:n];
+	}
+	hdr := array of byte sys->sprint("HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", ctype, size);
+	sys->write(fd, hdr, len hdr);
+	chunk := array[65536] of {* => byte 16rFF};
+	total := 0;
+	while(total < size) {
+		k := len chunk;
+		if(size - total < k)
+			k = size - total;
+		if(sys->write(fd, chunk, k) != k)
+			break;
+		total += k;
+	}
+	fd = nil;
+	sent <-= total;
+}
+
+hasend(s: string): int
+{
+	for(i := 0; i + 3 < len s; i++)
+		if(s[i:i+4] == "\r\n\r\n")
+			return 1;
+	return 0;
+}
+
+readfile(f: string): string
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "";
+	return string buf[0:n];
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -259,6 +356,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PublicRequestRejectsPrivate", testPublicRequestRejectsPrivate);
 	run("RejectsControlRequestText", testRejectsControlRequestText);
 	run("EncodesURLText", testEncodesURLText);
+	run("Types", testTypes);
 
 	# Network tests (may skip if no connectivity)
 	run("HttpsGet", testHttpsGet);

@@ -63,12 +63,30 @@ Written before the request is made:
 .BI url " url"\f1,
 .BI method " method"
 (GET, POST, PUT, DELETE, HEAD, PATCH or OPTIONS),
-.BI header " Name: value"
-and
+.BI header " Name: value"\f1,
 .B "cookies off"
 (the request neither sends the jar's cookies nor stores those its
 response sets: a script's cross-origin request without credentials) or
-.BR "cookies on" .
+.BR "cookies on" ,
+and
+.BI types " type ..."\f1:
+the content types whose body is wanted, an entry ending in
+.B /
+a prefix
+.RB ( text/ ),
+one beginning with
+.B +
+a suffix
+.RB ( +xml ),
+any other the type itself.
+A successful response of another type is not read past its header:
+.B status
+and
+.B contenttype
+are as it answered, and
+.B body
+is empty.
+A browser's navigation to an mp3 has no use for its megabytes.
 Reading gives what has been set.
 .TP
 .B postbody

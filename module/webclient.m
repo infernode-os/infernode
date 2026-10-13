@@ -56,6 +56,14 @@ Webclient: module {
 	# Accept-Encoding header)
 	requestjar:	fn(method, url: string, hdrs: list of Header,
 			   body: array of byte, jar: ref Jar): (ref Response, string);
+	# requestjar, reading a successful response's body only if its
+	# Content-Type is one of types: an entry ending in / is a prefix
+	# (text/), one beginning with + a suffix (+xml), any other the type
+	# itself; a response with no Content-Type is any.  A body not read
+	# is nil, and the connection is closed rather than kept.  No types:
+	# every body is read.
+	requesttypes:	fn(method, url: string, hdrs: list of Header,
+			   body: array of byte, jar: ref Jar, types: list of string): (ref Response, string);
 	get:		fn(url: string): (ref Response, string);
 	post:		fn(url, contenttype: string,
 			   body: array of byte): (ref Response, string);

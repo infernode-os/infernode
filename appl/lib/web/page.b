@@ -374,23 +374,28 @@ usebg(p: ref Pg)
 
 Pg.wanted(p: self ref Pg): list of string
 {
-	urls: list of string;
+	urls: list of (string, int);
 	plock();
 	{
 		curdoc = p.doc;
+		ny := array[p.doc.n + 1] of {* => -1};
+		nodetops(p.root, ny);
 		for(l := replacedboxes(p.root, nil); l != nil; l = tl l)
-			urls = (hd l).url :: urls;
+			urls = ((hd l).url, boxtop(hd l)) :: urls;
 		c := p.computed;
 		for(i := 0; i < len c.st; i++) {
+			y := Unplaced;
+			if(i < len ny && ny[i] >= 0)
+				y = ny[i];
 			if(c.st[i] != nil && c.st[i].display != Style->Dnone)
 				for(lb := layout->bgurls(c.st[i]); lb != nil; lb = tl lb)
-					urls = hd lb :: urls;
+					urls = (hd lb, y) :: urls;
 			if(c.before != nil && c.before[i] != nil)
 				for(la := layout->bgurls(c.before[i]); la != nil; la = tl la)
-					urls = hd la :: urls;
+					urls = (hd la, y) :: urls;
 			if(c.after != nil && c.after[i] != nil)
 				for(lc := layout->bgurls(c.after[i]); lc != nil; lc = tl lc)
-					urls = hd lc :: urls;
+					urls = (hd lc, y) :: urls;
 		}
 	} exception e {
 	"*" =>
@@ -399,20 +404,68 @@ Pg.wanted(p: self ref Pg): list of string
 	}
 	punlock();
 	click := !p.allimages && setting("images") == "click";
-	r: list of string;
+	r: list of (string, int);
+	n := 0;
 	for(; urls != nil; urls = tl urls) {
-		u := hd urls;
+		(u, y) := hd urls;
 		if(u == nil || picof(p, u) != nil)
 			continue;
 		if(click && !local(u) && !member(u, p.asked))
 			continue;
 		for(t := r; t != nil; t = tl t)
-			if(hd t == u)
+			if((hd t).t0 == u)
 				break;
-		if(t == nil)
-			r = u :: r;
+		if(t == nil) {
+			r = (u, y) :: r;
+			n++;
+		}
 	}
+	return toptobottom(r, n);
+}
+
+# Pictures are fetched and decoded in the order wanted gives them, a
+# few at a time: from the top of the page down, so the ones a page
+# opens on are not behind a long page's last (CNN's front page: 72
+# pictures, ten seconds of them).  Where it is not laid out, last.
+Unplaced: con 1 << 30;
+
+toptobottom(l: list of (string, int), n: int): list of string
+{
+	a := array[n] of (string, int);
+	for(i := n - 1; i >= 0 && l != nil; i--) {
+		a[i] = hd l;
+		l = tl l;
+	}
+	# insertion sort, stable: those at the same height in the order found
+	for(i = 1; i < n; i++)
+		for(j := i; j > 0 && a[j].t1 < a[j-1].t1; j--)
+			(a[j], a[j-1]) = (a[j-1], a[j]);
+	r: list of string;
+	for(i = n - 1; i >= 0; i--)
+		r = a[i].t0 :: r;
 	return r;
+}
+
+# a box's top in page coordinates (an absolutely positioned box's
+# parent is its containing block, so the sum holds for it too)
+boxtop(b: ref Box): int
+{
+	y := 0;
+	for(; b != nil; b = b.parent)
+		y += b.y;
+	return y;
+}
+
+# each node's highest box's top, -1 for one with none
+nodetops(b: ref Box, ny: array of int)
+{
+	if(b.node > 0 && b.node < len ny) {
+		y := boxtop(b);
+		if(ny[b.node] < 0 || y < ny[b.node])
+			ny[b.node] = y;
+	}
+	for(i := 0; i < len b.kids; i++)
+		nodetops(b.kids[i], ny);
 }
 
 Pg.want(p: self ref Pg, n: int): list of string

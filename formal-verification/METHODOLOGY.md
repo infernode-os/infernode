@@ -402,8 +402,26 @@ and `namec` now take the `pg->ns` lock. That commit also re-acquired the VM
 lock before the NEWNS/FORKNS swap; fa93471d removed that because it
 deadlocked, on the reasoning that the `pg->ns` rwlock covers the race
 (see the comment in `Sys_pctl` and
-`docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`). The FORKNS
-pointer swap itself still takes no lock.
+`docs/postmortems/2026-05-17-newns-vm-lock-deadlock.md`). INFR-373 then
+fixed race 2 by holding the VM lock for the pointer swap alone.
+
+**Reproduced on the runtime** (INFR-59): `tests/pgrp_race_test.b` has a
+case for each.
+- `SwapWhileRead` covers race 2: before INFR-373, 10 of 12 runs hung or
+  faulted.
+- `ChdirWhileResolve` covers races 1 and 3: Progs sharing a name space,
+  one changing dot while the others resolve relative names. With
+  `kchdir` and `namec` reverted to their unlocked form, 6 of 6 runs
+  panicked emu (`cclose`: the freed dot closed again).
+
+On the fixed emu, 10 of 10 runs pass, under `-c0` and `-c1`. Any Dis
+program can reach both: they need no privilege, only `spawn`, `chdir`,
+`pctl` and reads of `/prog`. The demonstrated impact is a crash of the
+whole emu, which is denial of service to every agent and service on
+the node. A freed `Chan` or `Pgrp` that is reused before the stale
+reference is followed could also resolve names in the wrong name space,
+but this was not demonstrated. All three are fixed, so no follow-up is
+open.
 
 ---
 

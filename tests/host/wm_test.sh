@@ -65,8 +65,9 @@ expect menu-unhide	1 500 300 850 600  0 100 450 400 700
 expect menu-delete	1 500 300 850 600
 expect delete-cancel	1 500 300 850 600
 
-expect fractals		0 0 0 368 278  1 500 300 850 600
-expect theme		0 0 0 368 278  1 500 300 850 600
+# fractals asks for 400x400: 408x408 with its frame
+expect fractals		0 0 0 408 408  1 500 300 850 600
+expect theme		0 0 0 408 408  1 500 300 850 600
 
 # the colour at x y of a screenshot, as RRGGBB
 pixel() {

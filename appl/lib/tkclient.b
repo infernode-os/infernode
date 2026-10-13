@@ -45,6 +45,14 @@ makedrawcontext(): ref Draw->Context
 	return wmlib->makedrawcontext();
 }
 
+hasopt(config, opt: string): int
+{
+	for((nil, l) := sys->tokenize(config, " \t"); l != nil; l = tl l)
+		if(hd l == opt)
+			return 1;
+	return 0;
+}
+
 toplevel(ctxt: ref Draw->Context, topconfig: string, title: string, buts: int): (ref Tk->Toplevel, chan of string)
 {
 	wm := wmlib->connect(ctxt);
@@ -58,6 +66,13 @@ toplevel(ctxt: ref Draw->Context, topconfig: string, title: string, buts: int): 
 		raise "fail:window creation failed";
 	}
 	top.ctxt = wm;
+	# A size asked for is the window's: Tk keeps it only if propagation
+	# is off before anything is packed, and the applications turn it
+	# off after packing theirs, by which time . had shrunk to what they
+	# need.  A window manager that keeps the size a window asks for
+	# (wm/wm) showed them all at that.
+	if(hasopt(topconfig, "-width") || hasopt(topconfig, "-height"))
+		tk->cmd(top, "pack propagate . 0");
 	readscreenrect(top);
 	c := titlebar->new(top, buts);
 	titlebar->settitle(top, title);

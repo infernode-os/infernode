@@ -746,9 +746,11 @@ dis/tests/imgload_test.dis
 dis/tests/interop_test.dis
 dis/tests/interrupt_test.dis
 dis/tests/intsem_test.dis
+dis/tests/jit_big_test.dis
 dis/tests/jit_bounds_test.dis
 dis/tests/jit_real_test.dis
 dis/tests/jit_fault_test.dis
+dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
@@ -770,6 +772,7 @@ dis/tests/limbo_asgcall_test.dis
 dis/tests/limbo_inline_test.dis
 dis/tests/limbo_ldt_test.dis
 dis/tests/lists_test.dis
+dis/tests/llmclient_proxy_test.dis
 dis/tests/llmclient_reqshape_test.dis
 dis/tests/llmclient_sse_fallback_test.dis
 dis/tests/llmclient_think_gating_test.dis

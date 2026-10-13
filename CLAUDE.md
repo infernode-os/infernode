@@ -408,6 +408,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `ethcrypto_test.b` | RLP, EIP-155 spec vector, address derivation, strict amounts |
 | `ethrpc_conv_test.b` | Arbitrary-precision hex/decimal conversions |
 | `x402_test.b` | x402 parsing, EIP-712 type hashes, authdigest |
+| `llmclient_proxy_test.b` | llmclient's TLS connections through an HTTP proxy (INFR-307): CONNECT for the API's host and port, Basic credentials from the proxy URL, a ClientHello naming the host inside the tunnel, a refusal reported, `no_proxy` hosts and domains dialled directly; `tests/host/profile_proxy_test.sh` checks the login profile copies the host's `HTTPS_PROXY` and `no_proxy` |
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
@@ -415,12 +416,13 @@ timeoutTask(ch: chan of int, ms: int)
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
 | `destructor_test.b` | Dropping the last reference frees the cell now (JIT MacFRP), not at the next collection; a chain deeper than destroy() recurses is freed whole |
 | `fdclose_test.b` | Dropping the last reference to an fd closes it |
-| `killblocked_test.b` | A Prog killed while blocked in the host (a listen, a read of a connection, a read of or write to a host command) leaves `/prog` at once, including one killed just before it blocks |
-| `pgrp_race_test.b` | A Prog swapping its name space, fd group and dot (`pctl` FORKNS, NEWFD, `chdir`) and exiting while others read its `/prog/n/ns`, `fd` and `status`: no use-after-free, no wedged name space (INFR-373) |
+| `pgrp_race_test.b` | A Prog swapping its name space, fd group and dot (`pctl` FORKNS, NEWFD, `chdir`) and exiting while others read its `/prog/n/ns`, `fd` and `status`: no use-after-free, no wedged name space (INFR-373); Progs sharing a name space, one changing dot while the others resolve relative names (INFR-59) |
 | `wstat_nulldir_test.b` | A wstat's "don't change" (~0) fields change nothing on 64-bit hosts; `tests/host/wstat_nulldir_test.sh` checks host files keep their mode and time across `mv` and `chmod` |
 | `fractals_zoombox_test.b` | wm/fractals' own canvas bindings, driven by a synthetic button-1 drag: the zoom rubber-band grows from the press point and is painted |
-| `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler |
+| `jit_fault_test.b` | JIT faults: zero divide, bounds, nil, unwinding to the right handler; `tests/host/jit_fault_test.sh` runs it under `-c0` and `-c1` |
+| `jit_ownhandler_test.b` | A hardware fault in compiled code caught in the faulting callee's own frame (the trap handler takes R.FP from the JIT's register); run by `tests/host/jit_fault_test.sh` too |
 | `jit_bounds_test.b` | Negative and overlarge indices on arrays, strings and slices raise `array bounds error` from compiled code; `tests/host/jit_bounds_test.sh` runs it under `-c0` and `-c1` |
+| `jit_big_test.b` | `big` `*`, `/`, `%` and `hd` of a list of `big` give from compiled code what the interpreter gives: signs, wrapping, zero divide, the most negative `big` over -1 (it wraps); `tests/host/jit_big_test.sh` runs it under `-c0` and `-c1` |
 | `jit_real_test.b` | Real arithmetic, comparisons (a NaN, the signed zeros), conversions (half away from zero), negation and moves give from compiled code what the interpreter gives; `tests/host/jit_real_test.sh` runs it under `-c0` and `-c1` |
 | `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
 | `limbo_inline_test.b` | Code the compiler inlines: an inlined call's temporary argument outlives the use of its element; `v = f(v)` reads the old `v` |

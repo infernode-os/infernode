@@ -163,17 +163,22 @@ tlswritepump(conn: ref Conn, fd: ref Sys->FD)
 
 request(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(method, requrl, hdrs, body, 0, nil);
+	return request0(method, requrl, hdrs, body, 0, nil, nil);
 }
 
 requestpublic(method, requrl: string, hdrs: list of Header, body: array of byte): (ref Response, string)
 {
-	return request0(method, requrl, hdrs, body, 1, nil);
+	return request0(method, requrl, hdrs, body, 1, nil, nil);
 }
 
 requestjar(method, requrl: string, hdrs: list of Header, body: array of byte, jar: ref Jar): (ref Response, string)
 {
-	(resp, err) := request0(method, requrl, hdrs, body, 0, jar);
+	return requesttypes(method, requrl, hdrs, body, jar, nil);
+}
+
+requesttypes(method, requrl: string, hdrs: list of Header, body: array of byte, jar: ref Jar, types: list of string): (ref Response, string)
+{
+	(resp, err) := request0(method, requrl, hdrs, body, 0, jar, types);
 	if(resp != nil && resp.body != nil) {
 		ce := str->tolower(resp.hdrval("Content-Encoding"));
 		case ce {
@@ -243,7 +248,7 @@ decompress(data: array of byte, param: string): array of byte
 
 # Revalidates every redirect target. Public mode resolves first and dials the
 # exact validated address, preventing redirect and DNS-rebinding SSRF.
-request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar): (ref Response, string)
+request0(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, jar: ref Jar, types: list of string): (ref Response, string)
 {
 	for(redir := 0; redir < MAXREDIRECTS; redir++) {
 		requrl = encodeurl(requrl);
@@ -253,7 +258,7 @@ request0(method, requrl: string, hdrs: list of Header, body: array of byte, publ
 		verr := validrequesttext(method, requrl, rh);
 		if(verr != nil)
 			return (nil, verr);
-		(resp, err) := dorequest(method, requrl, rh, body, public);
+		(resp, err) := dorequest(method, requrl, rh, body, public, types);
 		if(err != nil)
 			return (nil, err);
 		resp.url = requrl;
@@ -454,7 +459,7 @@ schemehost(requrl: string): string
 }
 
 # [private]
-dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, public: int): (ref Response, string)
+dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, public: int, types: list of string): (ref Response, string)
 {
 	u := url->makeurl(requrl);
 	if(u == nil)
@@ -484,7 +489,7 @@ dorequest(method, requrl: string, hdrs: list of Header, body: array of byte, pub
 		if(err != nil)
 			return (nil, err);
 	}
-	return linkrequest(method, u, host, addr, ishttps, hdrs, body);
+	return linkrequest(method, u, host, addr, ishttps, hdrs, body, types);
 }
 
 publicaddr(host, port: string): (string, string)
@@ -670,7 +675,7 @@ newlink(key, addr, host: string, ishttps: int): (ref Link, string)
 
 # [private]
 linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
-	hdrs: list of Header, body: array of byte): (ref Response, string)
+	hdrs: list of Header, body: array of byte, types: list of string): (ref Response, string)
 {
 	req := array of byte buildrequest(method, u, host, hdrs, body);
 	key := addr;
@@ -695,7 +700,7 @@ linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
 				continue;
 			return (nil, "write failed");
 		}
-		(resp, keep, err) := readresponse(l, method);
+		(resp, keep, err) := readresponse(l, method, types);
 		if(resp == nil) {
 			l.close();
 			if(again && err == "empty response")
@@ -713,7 +718,7 @@ linkrequest(method: string, u: ref ParsedUrl, host, addr: string, ishttps: int,
 # [private]
 # The response to a request: its header, and its body as the header
 # frames it.  Whether the connection can carry another request after.
-readresponse(l: ref Link, method: string): (ref Response, int, string)
+readresponse(l: ref Link, method: string, types: list of string): (ref Response, int, string)
 {
 	resp: ref Response;
 	for(;;) {
@@ -739,6 +744,8 @@ readresponse(l: ref Link, method: string): (ref Response, int, string)
 	code := resp.statuscode;
 	if(method == "HEAD" || code == 204 || code == 304 || code < 200)
 		return (resp, keep, nil);
+	if(code < 300 && types != nil && !typeok(resp.hdrval("Content-Type"), types))
+		return (resp, 0, nil);	# not wanted: not read, and the connection with it not kept
 	if(te != nil && contains(te, "chunked")) {
 		ok: int;
 		(resp.body, ok) = readchunked(l);
@@ -781,6 +788,34 @@ readresponse(l: ref Link, method: string): (ref Response, int, string)
 	}
 	resp.body = concatchunks(chunks, total);
 	return (resp, 0, nil);
+}
+
+# [private]
+# whether a Content-Type is one of types (see requesttypes)
+typeok(ctype: string, types: list of string): int
+{
+	t := str->tolower(ctype);
+	for(i := 0; i < len t; i++)
+		if(t[i] == ';' || t[i] == ' ' || t[i] == '\t') {
+			t = t[0:i];
+			break;
+		}
+	if(t == "")
+		return 1;
+	for(; types != nil; types = tl types) {
+		e := str->tolower(hd types);
+		if(e == "")
+			continue;
+		if(e[len e - 1] == '/') {
+			if(str->prefix(e, t))
+				return 1;
+		} else if(e[0] == '+') {
+			if(len t >= len e && t[len t - len e:] == e)
+				return 1;
+		} else if(t == e)
+			return 1;
+	}
+	return 0;
 }
 
 # [private]

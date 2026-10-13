@@ -175,8 +175,9 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 	pt0 = sys->millisec();
 	data: array of byte;
 	ctype, err, final: string;
-	if(method == "POST")
-		(data, ctype, err, final) = webfs(url, method, reqctype, body, nil);
+	(scheme, nil) := splitscheme(url);
+	if(method == "POST" || scheme == "http" || scheme == "https")
+		(data, ctype, err, final, nil) = webfsp(url, method, reqctype, body, nil, 1);
 	else
 		(data, ctype, err, final) = fetchfinal(url, nil);
 	phase(sys->sprint("fetched (%d bytes)", len data));
@@ -2404,6 +2405,37 @@ webfs(url, method, reqctype: string, body: array of byte, accept: string): (arra
 # webfs, and the response's header
 webfsh(url, method, reqctype: string, body: array of byte, accept: string): (array of byte, string, string, string, string)
 {
+	return webfsp(url, method, reqctype, body, accept, 0);
+}
+
+# what webfs is asked to fetch the body of, for a page (webfs(4) types)
+SHOWN: con "text/ image/ +xml +json application/json application/xml application/javascript application/x-javascript application/ecmascript";
+
+# What a page can be: anything Charon shows.  A link to a podcast's mp3
+# was a page: all its megabytes fetched, then parsed as HTML.  A page
+# that is none of these is not fetched past its header.
+showable(ctype: string): int
+{
+	t := lower(ctype);
+	for(i := 0; i < len t; i++)
+		if(t[i] == ';' || t[i] == ' ') {
+			t = t[0:i];
+			break;
+		}
+	if(t == "" || prefix(t, "text/") || prefix(t, "image/") || isxml(t))
+		return 1;
+	if(suffix(t, "+xml") || suffix(t, "+json") || suffix(t, "/json"))
+		return 1;
+	case t {
+	"application/javascript" or "application/x-javascript" or "application/ecmascript" =>
+		return 1;
+	}
+	return 0;
+}
+
+# webfsh; for a page (page set), what Charon cannot show is not read
+webfsp(url, method, reqctype: string, body: array of byte, accept: string, page: int): (array of byte, string, string, string, string)
+{
 	cfd := sys->open(WEBFS + "/clone", Sys->OREAD);
 	if(cfd == nil)
 		return (nil, nil, "no webfs at " + WEBFS + ": " + sys->sprint("%r"), url, nil);
@@ -2418,6 +2450,8 @@ webfsh(url, method, reqctype: string, body: array of byte, accept: string): (arr
 		return (nil, nil, sys->sprint("webfs: %r"), url, nil);
 	if(accept != nil && sys->fprint(ctl, "header Accept: %s", accept) < 0)
 		return (nil, nil, sys->sprint("webfs: %r"), url, nil);
+	if(page)
+		sys->fprint(ctl, "types %s", SHOWN);	# (an older webfs refuses it, and fetches it all)
 	if(method != "GET") {
 		if(sys->fprint(ctl, "method %s", method) < 0 ||
 		   reqctype != nil && sys->fprint(ctl, "header Content-Type: %s", reqctype) < 0)
@@ -2429,6 +2463,13 @@ webfsh(url, method, reqctype: string, body: array of byte, accept: string): (arr
 	bfd := sys->open(dir + "/body", Sys->OREAD);
 	if(bfd == nil)
 		return (nil, nil, sys->sprint("%s: %r", url), url, nil);
+	if(page && !showable(readstr(dir + "/contenttype")) && prefix(readstr(dir + "/status"), "2")) {
+		final := readstr(dir + "/url");
+		if(final == "")
+			final = url;
+		t := readstr(dir + "/contenttype");
+		return (nil, t, sys->sprint("%s is %s, which Charon does not show", final, t), final, nil);
+	}
 	data := readall(bfd);
 	final := readstr(dir + "/url");
 	if(final == "")

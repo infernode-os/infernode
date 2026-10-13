@@ -13,7 +13,10 @@ implement Webfs;
 #       cookies         read: the cookie jar, one cookie per line;
 #                       write: a line in the same form, or "clear"
 #       N/              per-connection directory
-#           ctl         write: "url https://...", "method POST", "header Key: Value"
+#           ctl         write: "url https://...", "method POST", "header Key: Value",
+#                       "cookies off", "types text/ image/ +xml ..." (the
+#                       Content-Types whose body is wanted; another's is not
+#                       fetched: status as answered, body empty)
 #           body        open triggers HTTP fetch; read returns response body
 #           postbody    write: POST request body (before opening body)
 #           contenttype read: response Content-Type header
@@ -105,6 +108,7 @@ ConnState: adt {
 	pending:     list of ref Tmsg;  # waiting for it, newest first
 	nopen:       int;               # open fids on its files
 	nocookies:   int;               # "cookies off": the jar is neither sent nor filled
+	types:       list of string;    # "types ...": the bodies wanted (webclient->requesttypes)
 };
 
 # Connections nobody has open are kept, so that a client may write ctl
@@ -234,7 +238,7 @@ init(nil: ref Draw->Context, args: list of string)
 newconn(): ref ConnState
 {
 	id := nextid++;
-	c := ref ConnState(id, "", "GET", nil, nil, nil, "", 0, "", 0, 0, nil, 0, 0);
+	c := ref ConnState(id, "", "GET", nil, nil, nil, "", 0, "", 0, 0, nil, 0, 0, nil);
 
 	# Grow pool if needed
 	if(nconns >= len conns) {
@@ -334,16 +338,16 @@ needfetch(c: ref ConnState, m: ref Tmsg): int
 	j := jar;
 	if(c.nocookies)
 		j = nil;
-	spawn fetcher(c, c.gen, c.method, c.url, hdrs, c.postdata, j);
+	spawn fetcher(c, c.gen, c.method, c.url, hdrs, c.postdata, j, c.types);
 	return 1;
 }
 
-fetcher(c: ref ConnState, gen: int, method, url: string, hdrs: list of Header, body: array of byte, j: ref Jar)
+fetcher(c: ref ConnState, gen: int, method, url: string, hdrs: list of Header, body: array of byte, j: ref Jar, types: list of string)
 {
 	resp: ref Response;
 	err: string;
 	{
-		(resp, err) = webclient->requestjar(method, url, hdrs, body, j);
+		(resp, err) = webclient->requesttypes(method, url, hdrs, body, j, types);
 	} exception e {
 	"*" =>
 		resp = nil;
@@ -491,6 +495,12 @@ handle(srv: ref Styxserver, gm: ref Tmsg)
 					"method " + conn.method + "\n";
 				for(h := conn.headers; h != nil; h = tl h)
 					info += "header " + (hd h).name + ": " + (hd h).value + "\n";
+				if(conn.types != nil) {
+					info += "types";
+					for(t := conn.types; t != nil; t = tl t)
+						info += " " + hd t;
+					info += "\n";
+				}
 				srv.reply(styxservers->readbytes(m, array of byte info));
 
 			Qbody =>
@@ -693,6 +703,13 @@ connctl(c: ref ConnState, data: string): string
 	}
 	if(data == "cookies off" || data == "cookies on") {
 		c.nocookies = data == "cookies off";
+		c.fetched = 0;
+		c.gen++;
+		vers++;
+		return nil;
+	}
+	if(hasprefix(data, "types ") || data == "types") {
+		(nil, c.types) = sys->tokenize(data[len "types":], " \t");
 		c.fetched = 0;
 		c.gen++;
 		vers++;

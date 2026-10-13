@@ -510,7 +510,12 @@ perform1(r: ref Req)
 			resp.header = "Content-Type: " + resp.ctype + "\n";
 		* =>
 			if(!corsok(resp.header, creds)) {
-				fail(r, "blocked by CORS: " + resp.url + " does not allow " + pageorigin);
+				# an error page seldom carries the CORS headers: say
+				# which it was, or a refusal reads as a policy
+				why := "";
+				if((c := statuscode(resp.status)) < 200 || c >= 300)
+					why = sys->sprint(" (it answered %d)", c);
+				fail(r, "blocked by CORS: " + resp.url + " does not allow " + pageorigin + why);
 				return;
 			}
 			resp.header = exposed(resp.header);

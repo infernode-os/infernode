@@ -187,12 +187,18 @@ asminitializer(long offset, Node *n)
 		Bprint(bout, "\tapop\n");
 		break;
 	case Tiface:
+		e = 0;
+		for(id = n->decl->ty->ids; id != nil; id = id->next)
+			if(!LDT || ldtentry(n->decl, id))
+				e++;
 		if(LDT)
-			Bprint(bout, "\tword\t@ldt+%ld,%ld\n", offset, (long)n->val);
+			Bprint(bout, "\tword\t@ldt+%ld,%ld\n", offset, e);
 		else
-			Bprint(bout, "\tword\t@mp+%ld,%ld\n", offset, (long)n->val);
+			Bprint(bout, "\tword\t@mp+%ld,%ld\n", offset, e);
 		offset += IBY2WD;
 		for(id = n->decl->ty->ids; id != nil; id = id->next){
+			if(LDT && !ldtentry(n->decl, id))
+				continue;
 			offset = align(offset, IBY2WD);
 			if(LDT)
 				Bprint(bout, "\text\t@ldt+%ld,0x%lux,\"", offset, sign(id));

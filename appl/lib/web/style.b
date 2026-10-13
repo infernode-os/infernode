@@ -892,7 +892,7 @@ match(d: ref Doc, n: int, sel: ref Sel, env: ref Env, scope: int): int
 		init();
 	if(env == nil) {
 		if(defenv == nil)
-			defenv = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+			defenv = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0);
 		env = defenv;
 	}
 	m := lastm;
@@ -1797,8 +1797,10 @@ boolfeature(nm: string, env: ref Env): int
 	"color" or "hover" or "pointer" or "any-hover" or "any-pointer" or "width" or "height" or "grid" =>
 		return nm != "grid";
 	"monochrome" or "inverted-colors" or "forced-colors" or "prefers-reduced-motion" or
-	"prefers-reduced-transparency" or "prefers-contrast" or "scripting" =>
+	"prefers-reduced-transparency" or "prefers-contrast" =>
 		return 0;
+	"scripting" =>
+		return env.scripting;
 	}
 	return 0;
 }
@@ -1867,6 +1869,8 @@ cmpfeature(nm, op: string, val: array of ref Tok, env: ref Env): int
 	"display-mode" =>
 		return v0.kind == Kident && lower(v0.s) == "browser";
 	"scripting" =>
+		if(env.scripting)
+			return v0.kind == Kident && lower(v0.s) == "enabled";
 		return v0.kind == Kident && lower(v0.s) == "none";
 	"update" =>
 		return v0.kind == Kident && lower(v0.s) == "fast";
@@ -1908,7 +1912,7 @@ supportsdecl(v: array of ref Tok): int
 		if(v[k].kind == Kfunction && v[k].s == "var")
 			return css->validvars(v[2:]);	# a var() makes any value valid at parse time, unless it is malformed itself (Variables 1 §3; variable-supports-09)
 	s := St.new();
-	ctx := ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
+	ctx := ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0);
 	lh := longhands(nm, trim(v[2:]));
 	if(lh == nil)
 		return 0;
@@ -2540,7 +2544,7 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 	if(sys == nil)
 		init();
 	if(env == nil)
-		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0);
 	# the index reflects the media queries of one environment: this
 	# document's, not the last one computed (two pages at two widths)
 	if(s.idx == nil || !sameenv(s.idx.env, env)) {
@@ -2644,7 +2648,7 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 	if(sys == nil)
 		init();
 	if(env == nil)
-		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0);
 	root := d.root();
 	if(prev == nil || d.nchanged < 0 || root == 0 || s.idx == nil || !sameenv(s.idx.env, env) ||
 	   s.idx.hashas == 2 || root >= len prev.st || prev.st[root] == nil)
@@ -3185,7 +3189,7 @@ element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
 	if(sys == nil)
 		init();
 	if(env == nil)
-		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0);
+		env = ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0);
 	if(n <= 0 || n >= d.n || d.nodes[n].kind != Dom->Element)
 		return nil;
 	if(dom->flat(d) != nil) {
@@ -4653,7 +4657,7 @@ channels(t: ref Tok): (int, array of (int, real), (int, real))
 		Kfunction =>
 			# (an angle in it as its degrees: a hue)
 			x = ref Tok(x.kind, x.s, x.n, x.flag, anglenums(x.kids));
-			e := calcexpr(x, ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0));
+			e := calcexpr(x, ref Ctx(16.0, 16.0, 19.2, ref Env(1024, 768, 1.0, 0, 0, 0, 0, 0, 0, 0), 0, nil, 400, 0));
 			if(e == nil)
 				return (0, nil, alpha);
 			(nil, p, pc) := fold(e);

@@ -26,6 +26,10 @@ Html: module
 	# lenient where browsers would show an error page.
 	parsexml:	fn(data: array of byte, charset, url: string): ref Dom->Doc;
 
+	# whether the documents parsed from now are a browser's with scripts
+	# running (the scripting flag): noscript's content is then its text
+	scripting:	fn(on: int);
+
 	charset:	fn(data: array of byte, transport: string): string;	# the sniffing used by parse
 
 	# A stylesheet's text (CSS Syntax 3 §3.2): from its byte order mark,

@@ -82,7 +82,9 @@ date
 cat /dev/sysctl
 SHELL
 )
-check pwd '^; */$' "$TEST_OUTPUT"
+# The console echoes the input as sh starts, so its first prompt can land
+# inside an echoed line rather than before the answer: "/" may stand alone.
+check pwd '^\(; *\)*/$' "$TEST_OUTPUT"
 check date '20[0-9][0-9]' "$TEST_OUTPUT"
 check cat 'Fourth Edition' "$TEST_OUTPUT"
 

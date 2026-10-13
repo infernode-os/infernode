@@ -17,6 +17,7 @@ embed[hidden] { display: inline; height: 0; width: 0; }
 input[type=hidden i] { display: none !important; }
 dialog:not([open]) { display: none; }
 details:not([open]) > :not(summary:first-of-type) { display: none; }
+@media (scripting) { noscript { display: none !important; } }
 
 /* §15.3.2 the page */
 html, body { display: block; }

@@ -222,6 +222,21 @@ testFind(t: ref T)
 # the draw device's display; nil with none (a headless emu)
 disp: ref Display;
 
+# Scrolling through ctl is the window's scrolling too: its view
+# follows the event
+testScroll(t: ref T)
+{
+	ev := sys->open(MNT + "/event", Sys->OREAD);
+	if(ev == nil)
+		t.fatal(sys->sprint("open event: %r"));
+	if((err := wr("ctl", "scroll 120")) != nil)
+		t.fatal("ctl: " + err);
+	buf := array[256] of byte;
+	n := sys->read(ev, buf, len buf);
+	t.assertseq(chomp(string buf[0:n]), "scroll 120", "the event a window scrolls by");
+	wr("ctl", "scroll 0");
+}
+
 testImage(t: ref T)
 {
 	if(disp == nil)
@@ -325,6 +340,34 @@ testUnreachable(t: ref T)
 	t.assertseq(nav(t, "back"), "done " + before, "back to the page before");
 }
 
+# What the page's scripts write to the console is the page's console
+# file, not the terminal; what it could not fetch, its errors file.
+# With scripts on, noscript is not shown.
+testConsole(t: ref T)
+{
+	if((err := wr("ctl", "scripts on")) != nil)
+		t.fatal("scripts on: " + err);
+	e := nav(t, "open " + DIR + "console.html");
+	t.assertseq(e, "done " + DIR + "console.html", "loaded");
+	cl := "";
+	for(i := 0; i < 50; i++) {
+		cl = rd("console");
+		if(contains(cl, "hello"))
+			break;
+		sys->sleep(100);
+	}
+	t.assertseq(cl, "hello from the page\n", "console");
+	errs := rd("errors");
+	t.assert(contains(errs, "no-such-sheet.css: "), "errors: " + errs);
+	text := rd("text");
+	t.assert(!contains(text, "without scripts"), "noscript not shown: " + text);
+	t.assert(!contains(rd("links"), "b.html"), "nor its link");
+	wr("ctl", "scripts off");
+	e = nav(t, "reload");
+	t.assert(contains(rd("text"), "without scripts"), "scripts off: noscript shown");
+	t.assertseq(rd("console"), "", "and nothing written to the console");
+}
+
 testPosted(t: ref T)
 {
 	t.assertseq(postname, "fs", "posted as fs");
@@ -387,11 +430,13 @@ init(nil: ref Draw->Context, args: list of string)
 	run("History", testHistory);
 	run("Fragment", testFragment);
 	run("Find", testFind);
+	run("Scroll", testScroll);
 	run("Image", testImage);
 	run("Forms", testForms);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("Posted", testPosted);
+	run("Console", testConsole);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

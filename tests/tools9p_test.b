@@ -483,6 +483,71 @@ readall(fd: ref Sys->FD): string
 	return s;
 }
 
+# A json -d call whose document is n bytes long and answers OK only if
+# the tool sees it whole (as the JSON string "OK"): any piece of it
+# is not valid JSON.
+longjson(n: int): string
+{
+	head := "-d '{\"pad\":\"";
+	tail := "\",\"k\":\"OK\"}' .k";
+	pad := n - len head - len tail;
+	if(pad < 1)
+		pad = 1;
+	b := array[pad] of { * => byte 'x' };
+	return head + string b + tail;
+}
+
+# Write args on one fid as one write, and read that fid's result.
+call1(t: ref T, name, args: string): string
+{
+	fd := sys->open(TOOLMNT + "/" + name + "/ctl", Sys->ORDWR);
+	if(fd == nil) {
+		t.fatal(sys->sprint("cannot open %s ctl: %r", name));
+		return nil;
+	}
+	b := array of byte args;
+	if(sys->write(fd, b, len b) != len b) {
+		t.fatal(sys->sprint("write %d bytes of arguments: %r", len b));
+		return nil;
+	}
+	return readall(fd);
+}
+
+# Arguments longer than one 9P message arrive as several Twrites; the
+# tool runs once, on all of them (INFR-521), not once a fragment.
+testLongArgsOneCall(t: ref T)
+{
+	if(!hastool() || !strcontains(readfile(TOOLMNT + "/tools"), "json")) {
+		t.skip("'json' tool not active in tools9p");
+		return;
+	}
+	t.assertseq(call1(t, "json", longjson(3*8192 + 1000)), "\"OK\"",
+		"a call spanning several messages sees its arguments whole");
+}
+
+# Arguments that end exactly on a message boundary give no short
+# fragment to start the call; the read that follows runs it.
+testArgsOnBoundary(t: ref T)
+{
+	if(!hastool() || !strcontains(readfile(TOOLMNT + "/tools"), "json")) {
+		t.skip("'json' tool not active in tools9p");
+		return;
+	}
+	fd := sys->open(TOOLMNT + "/json/ctl", Sys->OREAD);
+	if(fd == nil) {
+		t.fatal(sys->sprint("cannot open json ctl: %r"));
+		return;
+	}
+	iou := sys->iounit(fd);
+	fd = nil;
+	if(iou <= 0) {
+		t.skip("no iounit");
+		return;
+	}
+	t.assertseq(call1(t, "json", longjson(2*iou)), "\"OK\"",
+		"a call ending on a message boundary runs at the next read");
+}
+
 # Test 7: List tool execution via 9P
 testListToolExec(t: ref T)
 {
@@ -672,6 +737,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PathsReadable",         testPathsReadable);
 	run("MetaReadable",          testMetaReadable);
 	run("InactiveToolNotPresent",testInactiveToolNotPresent);
+	run("LongArgsOneCall",       testLongArgsOneCall);
+	run("ArgsOnBoundary",        testArgsOnBoundary);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

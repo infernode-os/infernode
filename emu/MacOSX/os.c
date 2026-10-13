@@ -128,9 +128,11 @@ nilfault(siginfo_t *info, void *context)
     uc = (ucontext_t*)context;
     if(uc != nil) {
 #if defined(__aarch64__)
-        jitfault((uintptr)uc->uc_mcontext->__ss.__pc);
+        jitfaultfp((uintptr)uc->uc_mcontext->__ss.__pc,
+            (uintptr)uc->uc_mcontext->__ss.__x[21]);	/* X21: the JIT's RFP */
 #elif defined(__x86_64__)
-        jitfault((uintptr)uc->uc_mcontext->__ss.__rip);
+        jitfaultfp((uintptr)uc->uc_mcontext->__ss.__rip,
+            (uintptr)uc->uc_mcontext->__ss.__rbx);	/* RBX: the JIT's RFP */
 #endif
     }
     disfault(nil, exNilref);
@@ -333,7 +335,8 @@ trapFPE(int signo, siginfo_t *info, void *context)
      * Linux (see emu/Linux/os.c:/^trapFPE).
      */
     if(info != nil && info->si_code == FPE_INTDIV && context != nil &&
-       jitfault((uintptr)((ucontext_t*)context)->uc_mcontext->__ss.__rip))
+       jitfaultfp((uintptr)((ucontext_t*)context)->uc_mcontext->__ss.__rip,
+            (uintptr)((ucontext_t*)context)->uc_mcontext->__ss.__rbx))
         disfault(nil, exZdiv);
 #else
     USED(info);

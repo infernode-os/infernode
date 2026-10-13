@@ -124,7 +124,10 @@ subdirectories over the corresponding paths in the Inferno namespace.
   lib/lucifer/theme/         # GUI theme (current)
   lib/veltro/                # Agent state (welcome_shown, tour_offered, meta.txt)
   lib/veltro-agents/         # Task agent prompts
-  lib/veltro-keys/           # Agent API keys
+  lib/veltro-keys/           # Legacy plaintext API keys: imported into
+                             #   factotum (saved to secstore) at login, not
+                             #   bound into the name space; delete them once
+                             #   secstore holds the keys (INFR-347)
   tmp/                       # Session temp files
 ```
 
@@ -260,6 +263,8 @@ cd tests && mk install
 | `ANTHROPIC_API_KEY` | API key fallback (used if not in secstore) |
 | `SECSTORE_PASSWORD` | Headless mode: auto-unlock secstore without login screen |
 | `OLLAMA_HOST` | Not used by InferNode — configure via Settings or `lib/ndb/llm` |
+| `HTTPS_PROXY` / `https_proxy` | HTTP proxy for the LLM API connections (`http://[user:pass@]host[:port]`): llmclient opens its TLS connections through it with CONNECT. Copied into Inferno's environment at login on macOS and Linux; on Windows set `https_proxy` in Inferno |
+| `NO_PROXY` / `no_proxy` | Hosts reached directly, not through the proxy: names, domains (covering their subdomains), or `*`. Plain-HTTP backends such as a local Ollama never use the proxy |
 
 ## Platform Notes
 

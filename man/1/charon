@@ -182,6 +182,17 @@ in page coordinates; an inline box, a link in a paragraph, as each of
 its pieces, a line each) and
 .B children
 (their node numbers).
+.TP
+.B console
+What the page's scripts wrote to the console
+.RB ( console.log ,
+an exception nothing caught, a request blocked by CORS),
+a line each, the last 500.
+Charon does not print them.
+.TP
+.B errors
+.IR url ": " reason
+for each resource the page could not fetch.
 .PD
 .PP
 A file's contents are taken when it is opened.

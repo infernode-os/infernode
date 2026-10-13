@@ -129,7 +129,6 @@ if {~ $emuhost MacOSX Linux Nt}{
 	bind -bc $infhome/lib/lucifer/theme    /lib/lucifer/theme
 	bind -bc $infhome/lib/veltro           /lib/veltro
 	bind -bc $infhome/lib/veltro-agents    /lib/veltro/agents
-	bind -bc $infhome/lib/veltro-keys      /lib/veltro/keys >[2] /dev/null
 	mkdir -p /lib/keyring >[2] /dev/null
 	bind -bc $infhome/lib/keyring          /lib/keyring >[2] /dev/null
 	bind -bc $infhome/tmp /tmp >[2] /dev/null
@@ -216,7 +215,6 @@ if {~ $emuhost Nt} {
 }
 mkdir -p /usr/inferno/secstore >[2] /dev/null
 auth/secstored >[2] /dev/null &
-sleep 1
 
 # ── Factotum ──────────────────────────────────────────────
 # Headless: if $SECSTORE_PASSWORD is set on the host, start factotum
@@ -231,6 +229,9 @@ if {! ftest -f /mnt/factotum/proto}{
 		havesecpass=`{os sh -c 'if [ -n "$SECSTORE_PASSWORD" ]; then echo yes; fi' >[2] /dev/null}
 	}
 	if {! ~ $#havesecpass 0} {
+		# factotum dials the secstored started above at once: give
+		# it the time to announce.  Nothing else here waits on it.
+		sleep 1
 		secpass=`{os sh -c 'printf "%s" "$SECSTORE_PASSWORD"'}
 		if {! ~ $#secpass 0} {
 			if {! ~ $#user 0} {
@@ -248,8 +249,13 @@ if {! ftest -f /mnt/factotum/proto}{
 
 # Provision API keys into factotum (secstore is the persistent home; these are
 # the CLI/CI fallbacks). Each service is sourced from its host env var
-# <SERVICE>_API_KEY first, then the legacy plaintext file /lib/veltro/keys/<svc>.
-# Add a service to the lists below to provision it the same way.
+# <SERVICE>_API_KEY first, then a legacy plaintext file in
+# ~/.infernode/lib/veltro-keys/<svc> (or the tree's /lib/veltro/keys/<svc>).
+# The host overlay's plaintext directory is no longer
+# bound into the name space (INFR-347): only this profile reads it, once a
+# login, to import the key; factotum saves it to secstore, and the file can
+# then be deleted. Add a service to the lists below to provision it the same
+# way.
 fn provisionkey {
 	# $1 = service name, $2 = host env var
 	# The arguments are copied first: a {block} has its own $*, so a $1 or
@@ -260,19 +266,56 @@ fn provisionkey {
 	_pkvar=$2
 	_pk=`{os sh -c 'printf %s "${'^$_pkvar^'}"' >[2] /dev/null}
 	if {~ $#_pk 0} {
-		_pk=`{cat /lib/veltro/keys/$_pksvc >[2] /dev/null}
+		legacykey $_pksvc
 	}
 	if {! ~ $#_pk 0} {
 		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
+	}
+}
+fn legacykey {
+	# $1 = service name. Sets _pk from a plaintext key file (the host
+	# overlay's, or one dropped in the tree's /lib/veltro/keys), and says
+	# which, so it can be deleted once secstore holds the key.
+	_lksvc=$1
+	_lkfile=()
+	if {! ~ $#infhome 0} {
+		if {ftest -f $infhome/lib/veltro-keys/$_lksvc} {
+			_lkfile=$infhome/lib/veltro-keys/$_lksvc
+		}
+	}
+	if {~ $#_lkfile 0} {
+		if {ftest -f /lib/veltro/keys/$_lksvc} {
+			_lkfile=/lib/veltro/keys/$_lksvc
+		}
+	}
+	_pk=()
+	if {! ~ $#_lkfile 0} {
+		_pk=`{cat $_lkfile >[2] /dev/null}
+	}
+	if {! ~ $#_pk 0} {
+		echo 'profile: '^$_lksvc^' key imported into factotum from plaintext '^$_lkfile^'; once secstore holds it, delete that file' >[1=2]
 	}
 }
 fn provisionkeyfile {
 	# Windows: os sh in backticks hangs, so file-only. $1 = service name,
 	# copied first for the reason given in provisionkey.
 	_pksvc=$1
-	_pk=`{cat /lib/veltro/keys/$_pksvc >[2] /dev/null}
+	legacykey $_pksvc
 	if {! ~ $#_pk 0} {
 		echo 'key proto=pass service='^$1^' user=apikey !password='^$_pk > /mnt/factotum/ctl >[2] /dev/null
+	}
+}
+# The host's HTTPS proxy settings, for llmclient's API connections
+# (INFR-307): copied into /env, which the services started below inherit,
+# unless already set here. Not on Windows, where os sh in backticks hangs.
+fn importproxy {
+	for _pv in https_proxy HTTPS_PROXY no_proxy NO_PROXY {
+		if {~ $#$_pv 0} {
+			_pval=`{os sh -c 'printf %s "${'^$_pv^'}"' >[2] /dev/null}
+			if {! ~ $#_pval 0} {
+				echo -n $"_pval > /env/$_pv
+			}
+		}
 	}
 }
 if {~ $emuhost Nt} {
@@ -283,6 +326,7 @@ if {~ $emuhost Nt} {
 	provisionkey anthropic ANTHROPIC_API_KEY
 	provisionkey brave BRAVE_API_KEY
 	provisionkey openai OPENAI_API_KEY
+	importproxy
 }
 
 # ── LLM + Speech (desktop platforms) ──────────────────────

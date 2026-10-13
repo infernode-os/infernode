@@ -25,6 +25,7 @@ Page: module
 		title:	string;
 		width, height:	int;	# viewport
 		errors:	list of string;	# what could not be fetched, most recent first
+		console:	list of string;	# what its scripts wrote to the console, most recent first
 		objects:	list of (int, int, string);	# <object>s that render (see Layout->setobjects)
 		pics:	list of ref Pic;	# the images it has, decoded
 		asked:	list of string;	# images clicked for, with images click

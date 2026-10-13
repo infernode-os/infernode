@@ -35,13 +35,13 @@ rc=$?
 
 echo "$out"
 
-# 137 is not a failure. The hosted emulator leaves by sending SIGKILL to
-# its own process group and then calling exit(0) (cleanexit, emu/Linux/
-# os.c, unchanged since 2006), and which of the two the shell sees is a
-# race between its threads: the same run is 0 on one machine and 137 on
-# the next. What the test proved is in its output, checked below.
+# emu exits with halt's status, 0 when the last Prog has gone
+# (cleanexit, emu/Linux/os.c). It used to SIGKILL its own process group
+# and then exit(0), so the same run was 0 on one machine and 137 on the
+# next; that is gone, and a 137 now means something killed it. What the
+# test proved is in its output, checked below.
 case "$rc" in
-0|137) ;;
+0) ;;
 *)	echo "FAIL: wpa_test exited $rc"
 	exit 1 ;;
 esac

@@ -145,6 +145,8 @@ testCors(t: ref T)
 	t.assert(has(st, "blocked by CORS"), "* does not do for a request with credentials: " + st);
 	(st, nil, nil) = req("url " + other + "echo?acao=" + pageorigin + "&cred=1" :: "credentials include" :: nil, nil);
 	t.assert(ok(st), "with Allow-Credentials it does: " + st);
+	(st, nil, nil) = req("url " + other + "busy" :: nil, nil);
+	t.assert(has(st, "blocked by CORS") && has(st, "answered 503"), "an error page says it was one: " + st);
 	(st, nil, nil) = req("url " + other + "echo" :: "mode same-origin" :: nil, nil);
 	t.assert(has(st, "same-origin mode"), "same-origin mode refuses another origin: " + st);
 }

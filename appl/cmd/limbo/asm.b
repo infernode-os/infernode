@@ -170,12 +170,18 @@ asminitializer(offset: int, n: ref Node)
 				asminitializer(esz * last, wild);
 		bout.puts("\tapop\n");
 	Tiface =>
+		ne := 0;
+		for(id = n.decl.ty.ids; id != nil; id = id.next)
+			if(!LDT || ldtentry(n.decl, id))
+				ne++;
 		if(LDT)
-			bout.puts("\tword\t@ldt+"+string offset+","+string int n.c.val+"\n");
+			bout.puts("\tword\t@ldt+"+string offset+","+string ne+"\n");
 		else
-			bout.puts("\tword\t@mp+"+string offset+","+string int n.c.val+"\n");
+			bout.puts("\tword\t@mp+"+string offset+","+string ne+"\n");
 		offset += IBY2WD;
 		for(id = n.decl.ty.ids; id != nil; id = id.next){
+			if(LDT && !ldtentry(n.decl, id))
+				continue;
 			offset = align(offset, IBY2WD);
 			if(LDT)
 				bout.puts("\text\t@ldt+"+string offset+",0x"+string hex(sign(id), 0)+",\"");

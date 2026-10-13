@@ -48,6 +48,7 @@ init(d: ref Draw->Display): string
 		return sys->sprint("cannot load modules: %r");
 	realmlk = chan[1] of int;
 	html->init();
+	html->scripting(1);	# what it parses is a running script's (hparse)
 	css->init();
 	if((err := style->init()) != nil)
 		return err;
@@ -1136,6 +1137,16 @@ formencode(s: string): string
 	return r;
 }
 
+Session.scrollto(s: self ref Session, y: int)
+{
+	if(y < 0)
+		y = 0;
+	lock(s);
+	s.scroll = y;
+	unlock(s);
+	event(s, "scroll " + string y);
+}
+
 # ---- pointing ----
 
 Session.nodeat(s: self ref Session, x, y: int): int
@@ -1144,7 +1155,21 @@ Session.nodeat(s: self ref Session, x, y: int): int
 	pg := s.pg;
 	if(pg == nil)
 		return 0;
-	(n, nil) := layout->boxat(pg.root, Point(x, y));
+	# boxat follows paint's stacking order with paint's own state: not
+	# while the window paints (a script holding the lock for long gets
+	# the click all the same)
+	locked := trylock(s, 500);
+	n := 0;
+	{
+		(n, nil) = layout->boxat(pg.root, Point(x, y));
+	} exception e {
+	"*" =>
+		if(locked)
+			unlock(s);
+		raise e;
+	}
+	if(locked)
+		unlock(s);
 	return n;
 }
 
@@ -1750,7 +1775,7 @@ watchdog(r: ref Realm)
 		if(realmbyid(r.id) == nil)
 			return;
 		if(r.locked && sys->millisec() - r.since > Maxtask) {
-			sys->fprint(sys->fildes(2), "charon: scripts: %s: a script ran for %d seconds and was stopped\n", r.pg.url, Maxtask / 1000);
+			toconsole(r.pg, sys->sprint("a script ran for %d seconds and was stopped", Maxtask / 1000));
 			endrealm(r.s);
 			return;
 		}
@@ -2390,11 +2415,29 @@ hscroll(id, nil, y: int)
 		}
 }
 
+# what a page's scripts write to the console is the page's, as a
+# browser keeps it for its developer tools (charonfs's console), not
+# the terminal's
+Maxconsole: con 500;
+
 hconsole(id: int, s: string)
 {
 	r := realmbyid(id);
-	url := "";
 	if(r != nil)
-		url = r.pg.url;
-	sys->fprint(sys->fildes(2), "js: %s: %s\n", url, s);
+		toconsole(r.pg, s);
+}
+
+toconsole(pg: ref Pg, s: string)
+{
+	l := s :: pg.console;
+	if(len l > Maxconsole) {
+		k: list of string;
+		for(i := 0; i < Maxconsole && l != nil; i++) {
+			k = hd l :: k;
+			l = tl l;
+		}
+		for(l = nil; k != nil; k = tl k)
+			l = hd k :: l;
+	}
+	pg.console = l;
 }

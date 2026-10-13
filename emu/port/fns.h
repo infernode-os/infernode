@@ -58,6 +58,7 @@ Walkqid*	devwalk(Chan*, Chan*, char**, int, Dirtab*, int, Devgen*);
 void		disfault(void*, char*);
 int		isnilfault(uintptr);
 int		jitfault(uintptr);
+int		jitfaultfp(uintptr, uintptr);
 void		disinit(void*);
 void		cnamepush(Cname*, Chan*);
 int		domount(Chan**, Mhead**, Cname**);

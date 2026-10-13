@@ -33,6 +33,7 @@ Style: module
 		focus:	int;		# focused element
 		active:	int;		# element being clicked
 		target:	int;		# element named by the URL fragment
+		scripting:	int;	# its scripts run (the scripting media feature: enabled)
 	};
 
 	# length kinds

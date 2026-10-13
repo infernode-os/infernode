@@ -103,6 +103,26 @@ nav(t: ref T, cmd: string): string
 	}
 }
 
+# As nav, but the answer is the one about url: events about any other
+# page (a reload superseded by this load, say) are passed over.
+navto(t: ref T, cmd, url: string): string
+{
+	ev := sys->open(MNT + "/event", Sys->OREAD);
+	if(ev == nil)
+		t.fatal(sys->sprint("open event: %r"));
+	if((err := wr("ctl", cmd)) != nil)
+		return "ctl: " + err;
+	buf := array[1024] of byte;
+	for(;;) {
+		n := sys->read(ev, buf, len buf);
+		if(n <= 0)
+			return "event: eof";
+		e := chomp(string buf[0:n]);
+		if(e == "done " + url || e == "error " + url)
+			return e;
+	}
+}
+
 chomp(s: string): string
 {
 	if(len s > 0 && s[len s - 1] == '\n')
@@ -257,6 +277,21 @@ testFind(t: ref T)
 # the draw device's display; nil with none (a headless emu)
 disp: ref Display;
 
+# Scrolling through ctl is the window's scrolling too: its view
+# follows the event
+testScroll(t: ref T)
+{
+	ev := sys->open(MNT + "/event", Sys->OREAD);
+	if(ev == nil)
+		t.fatal(sys->sprint("open event: %r"));
+	if((err := wr("ctl", "scroll 120")) != nil)
+		t.fatal("ctl: " + err);
+	buf := array[256] of byte;
+	n := sys->read(ev, buf, len buf);
+	t.assertseq(chomp(string buf[0:n]), "scroll 120", "the event a window scrolls by");
+	wr("ctl", "scroll 0");
+}
+
 testImage(t: ref T)
 {
 	if(disp == nil)
@@ -360,6 +395,36 @@ testUnreachable(t: ref T)
 	t.assertseq(nav(t, "back"), "done " + before, "back to the page before");
 }
 
+# What the page's scripts write to the console is the page's console
+# file, not the terminal; what it could not fetch, its errors file.
+# With scripts on, noscript is not shown.
+testConsole(t: ref T)
+{
+	# Turning scripts on reloads the page showing (Session.configure),
+	# whose done can come after the next load's event file is open.
+	if((err := wr("ctl", "scripts on")) != nil)
+		t.fatal("scripts on: " + err);
+	e := navto(t, "open " + DIR + "console.html", DIR + "console.html");
+	t.assertseq(e, "done " + DIR + "console.html", "loaded");
+	cl := "";
+	for(i := 0; i < 50; i++) {
+		cl = rd("console");
+		if(contains(cl, "hello"))
+			break;
+		sys->sleep(100);
+	}
+	t.assertseq(cl, "hello from the page\n", "console");
+	errs := rd("errors");
+	t.assert(contains(errs, "no-such-sheet.css: "), "errors: " + errs);
+	text := rd("text");
+	t.assert(!contains(text, "without scripts"), "noscript not shown: " + text);
+	t.assert(!contains(rd("links"), "b.html"), "nor its link");
+	e = nav(t, "scripts off");	# reloads the page, without its scripts
+	t.assertseq(e, "done " + DIR + "console.html", "reloaded");
+	t.assert(contains(rd("text"), "without scripts"), "scripts off: noscript shown");
+	t.assertseq(rd("console"), "", "and nothing written to the console");
+}
+
 testPosted(t: ref T)
 {
 	t.assertseq(postname, "fs", "posted as fs");
@@ -423,11 +488,13 @@ init(nil: ref Draw->Context, args: list of string)
 	run("History", testHistory);
 	run("Fragment", testFragment);
 	run("Find", testFind);
+	run("Scroll", testScroll);
 	run("Image", testImage);
 	run("Forms", testForms);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("Posted", testPosted);
+	run("Console", testConsole);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

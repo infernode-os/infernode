@@ -32,6 +32,9 @@ include "json.m";
 include "wirefmt.m";
 	wirefmt: WireFmt;
 
+include "encoding.m";
+	base64: Encoding;
+
 include "llmclient.m";
 
 stderr: ref Sys->FD;
@@ -538,9 +541,9 @@ askopenaistream(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse,
 			if(terr != nil)
 				return (nil, "openai: TLS init: " + terr);
 		}
-		(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
-		if(ok < 0)
-			return (nil, sys->sprint("openai: cannot connect to %s: %r", host));
+		(conn, derr) := tlsdial(host, port);
+		if(derr != nil)
+			return (nil, "openai: " + derr);
 		config := tlsmod->defaultconfig();
 		config.servername = host;
 		(tc, cerr) := tlsmod->client(conn.dfd, config);
@@ -2025,6 +2028,207 @@ _httpsreadloop(conn: Sys->Connection, tc: ref Conn): (string, string)
 	return (response, nil);
 }
 
+# ==================== HTTPS proxy ====================
+#
+# Hosts that reach the Internet only through an HTTP proxy reach the
+# APIs through it (INFR-307): a TLS connection is dialled through the
+# proxy named by $https_proxy (or $HTTPS_PROXY), opened with CONNECT,
+# and TLS runs inside the tunnel as it would on a direct connection.
+# The proxy is written as curl and Go take it, http://[user:pass@]host[:port];
+# a user and password are sent as Basic authorisation.  $no_proxy (or
+# $NO_PROXY) lists the hosts dialled directly: a name, a domain (with or
+# without a leading dot, matching its subdomains too), or * for all.
+# Plain HTTP, as to a local Ollama, is always dialled directly.
+# The login profile copies these variables from the host's environment.
+
+PROXYHDRMAX: con 16*1024;
+
+getenv(name: string): string
+{
+	fd := sys->open("/env/" + name, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	for(i := 0; i < n; i++)
+		if(buf[i] == byte 0)
+			break;
+	v := string buf[0:i];
+	(nil, v) = str->splitl(v, "^ \t\r\n");
+	while(v != nil && str->in(v[len v - 1], " \t\r\n"))
+		v = v[0:len v - 1];
+	return v;
+}
+
+proxyenv(lower, upper: string): string
+{
+	v := getenv(lower);
+	if(v == nil)
+		v = getenv(upper);
+	return v;
+}
+
+# Is host dialled directly, by the list in $no_proxy?
+noproxy(host: string): int
+{
+	(nil, l) := sys->tokenize(proxyenv("no_proxy", "NO_PROXY"), ", \t");
+	host = str->tolower(host);
+	for(; l != nil; l = tl l){
+		e := str->tolower(hd l);
+		if(e == "*")
+			return 1;
+		(e, nil) = str->splitl(e, ":");
+		if(e != nil && e[0] == '.')
+			e = e[1:];
+		if(e == nil)
+			continue;
+		if(host == e)
+			return 1;
+		if(len host > len e && host[len host - len e:] == e && host[len host - len e - 1] == '.')
+			return 1;
+	}
+	return 0;
+}
+
+# The proxy for host, as (address, Basic credentials, error); nil address for none.
+proxyfor(host: string): (string, string, string)
+{
+	p := proxyenv("https_proxy", "HTTPS_PROXY");
+	if(p == nil || noproxy(host))
+		return (nil, nil, nil);
+	(scheme, rest) := str->splitstrl(p, "://");
+	if(rest != nil){
+		# not the whole URL: it may hold a password
+		if(str->tolower(scheme) != "http")
+			return (nil, nil, "proxy scheme " + scheme + ": only an http:// proxy is supported");
+		p = rest[len "://":];
+	}
+	(p, nil) = str->splitl(p, "/");
+	cred := "";
+	(u, hp) := str->splitr(p, "@");
+	if(u != nil){
+		cred = u[0:len u - 1];
+		p = hp;
+	}
+	if(p == nil)
+		return (nil, nil, "proxy has no host");
+	phost := p;
+	pport := "80";
+	if(p[0] == '['){
+		(a, b) := str->splitl(p, "]");
+		if(b == nil)
+			return (nil, nil, "proxy " + p + ": bad address");
+		phost = a[1:];
+		if(len b > 1 && b[1] == ':')
+			pport = b[2:];
+	}else{
+		(a, b) := str->splitl(p, ":");
+		phost = a;
+		if(b != nil)
+			pport = b[1:];
+	}
+	if(phost == nil || pport == nil)
+		return (nil, nil, "proxy " + p + ": bad address");
+	if(cred != nil){
+		if(base64 == nil)
+			base64 = load Encoding Encoding->BASE64PATH;
+		if(base64 == nil)
+			return (nil, nil, sys->sprint("cannot load base64: %r"));
+		cred = base64->enc(array of byte urldecode(cred));
+	}
+	return ("tcp!" + phost + "!" + pport, cred, nil);
+}
+
+urldecode(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s; i++){
+		if(s[i] == '%' && i+2 < len s){
+			(v, rest) := str->toint(s[i+1:i+3], 16);
+			if(rest == nil){
+				r[len r] = v;
+				i += 2;
+				continue;
+			}
+		}
+		r[len r] = s[i];
+	}
+	return r;
+}
+
+# Dial host!port for a TLS connection: directly, or through the proxy.
+tlsdial(host, port: string): (Sys->Connection, string)
+{
+	none: Sys->Connection;
+	(paddr, cred, perr) := proxyfor(host);
+	if(perr != nil)
+		return (none, perr);
+	if(paddr == nil){
+		(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
+		if(ok < 0)
+			return (none, sys->sprint("cannot connect to %s: %r", host));
+		return (conn, nil);
+	}
+	(ok, conn) := sys->dial(paddr, nil);
+	if(ok < 0)
+		return (none, sys->sprint("cannot connect to proxy %s: %r", paddr));
+	target := host + ":" + port;
+	if(str->in(':', host))
+		target = "[" + host + "]:" + port;
+	req := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n";
+	if(cred != nil)
+		req += "Proxy-Authorization: Basic " + cred + "\r\n";
+	req += "\r\n";
+	b := array of byte req;
+	if(sys->write(conn.dfd, b, len b) != len b)
+		return (none, sys->sprint("proxy %s: write failed: %r", paddr));
+	# The reply is read a byte at a time: whatever follows its header
+	# belongs to the tunnel.  A proxy that never answers is hung up on.
+	answered := chan[1] of int;
+	spawn connectdog(conn.cfd, answered);
+	hdr := array[PROXYHDRMAX] of byte;
+	n := 0;
+	for(;;){
+		if(n == len hdr){
+			answered <-= 1;
+			return (none, "proxy " + paddr + ": reply header too long");
+		}
+		if(sys->read(conn.dfd, hdr[n:], 1) != 1){
+			answered <-= 1;
+			return (none, "proxy " + paddr + ": no answer to CONNECT");
+		}
+		n++;
+		if(n >= 4 && string hdr[n-4:n] == "\r\n\r\n")
+			break;
+	}
+	answered <-= 1;
+	(status, nil) := str->splitl(string hdr[0:n], "\r\n");
+	(nil, w) := sys->tokenize(status, " ");
+	if(len w < 2 || !str->prefix("HTTP/", hd w) || hd tl w != "200")
+		return (none, "proxy " + paddr + " refused CONNECT " + target + ": " + status);
+	return (conn, nil);
+}
+
+# Hang up a proxy connection whose CONNECT goes unanswered for
+# HTTP_NO_PROGRESS_MS.  It looks for the answer often, so as not to
+# hold the connection open long after it is done with.
+connectdog(cfd: ref Sys->FD, answered: chan of int)
+{
+	for(t := 0; t < HTTP_NO_PROGRESS_MS; t += HTTP_POLL_MS){
+		sys->sleep(HTTP_POLL_MS);
+		alt {
+		<-answered =>
+			return;
+		* =>
+			;
+		}
+	}
+	if(cfd != nil)
+		sys->fprint(cfd, "hangup");
+}
+
 httpspost(host, port, path, headers, body: string): (string, string)
 {
 	if(tlsmod == nil) {
@@ -2036,9 +2240,9 @@ httpspost(host, port, path, headers, body: string): (string, string)
 			return (nil, "TLS init: " + terr);
 	}
 
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", host));
+	(conn, derr) := tlsdial(host, port);
+	if(derr != nil)
+		return (nil, derr);
 
 	config := tlsmod->defaultconfig();
 	config.servername = host;
@@ -2089,9 +2293,9 @@ httpsget(host, port, path, headers: string): (string, string)
 			return (nil, "TLS init: " + terr);
 	}
 
-	(ok, conn) := sys->dial("tcp!" + host + "!" + port, nil);
-	if(ok < 0)
-		return (nil, sys->sprint("cannot connect to %s: %r", host));
+	(conn, derr) := tlsdial(host, port);
+	if(derr != nil)
+		return (nil, derr);
 
 	config := tlsmod->defaultconfig();
 	config.servername = host;

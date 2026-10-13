@@ -484,6 +484,15 @@ jobs:
         chmod +x tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
 
+    - name: Run JIT fault and big arithmetic tests (JIT and interpreter)
+      run: |
+        # A fault in compiled code is caught by the handler around it,
+        # in a callee with a handler of its own too; big *, / and % and
+        # hd of a list of big give what the interpreter gives.
+        chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_big_test.sh
+
     - name: Run cpu(1) session lifetime test
       run: |
         # A cpu session ends when its command does, or when its caller

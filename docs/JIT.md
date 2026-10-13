@@ -111,6 +111,28 @@ every index unchecked and a negative index read or wrote outside the
 array; the riscv64 JIT always checks and ignores `-B`.
 `tests/host/jit_bounds_test.sh` runs the test under `-c0` and `-c1`.
 
+## Faults in compiled code
+
+A nil load or store, and on x86 an integer divide by zero, fault in
+hardware. The emulator's trap handler turns the fault into the
+program's exception (`jitfault` in `emu/port/dis.c`), and `handler()`
+searches the exception tables from `R.PC` and `R.FP`. Compiled code
+keeps both in registers and stores them to `R` only where it leaves
+the compiled code, so the trap handler must set them from the fault's
+context. It set `R.PC` but not `R.FP`, and the JIT does not store the
+frame pointer at a call, so a fault in a function called from compiled
+code started the search from the caller's frame with the callee's pc:
+a callee with a handler of its own unwound to the wrong handler and
+freed the wrong frames (`alloc:D2B`, or a SEGV) where `-c0` caught the
+exception. On Linux amd64 `jitfaultfp` now takes the frame pointer
+from RBX, where the amd64 JIT keeps it; `tests/jit_fault_test.b`'s
+`OwnHandler` case is the test. The arm64 and riscv64 JITs keep it in
+X21 and s2 and want the same; macOS and Windows still pass the pc
+alone.
+
+Checks the JIT makes itself (bounds, the arm64 zero divide) store both
+before raising, and are not affected.
+
 ## Memory pool option
 
 Pool quanta affect both the interpreter and the JIT:

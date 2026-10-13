@@ -245,6 +245,56 @@ testHandlerChoice(t: ref T)
 	t.asserteq(n, 1000 + 10 + 5 + 3 + 2 + 2 + 1 + 1 + 1 + 1, "loop with a handler");
 }
 
+# A callee with a handler of its own: it is not inlined, so its fault
+# is in its own frame, called from compiled code, which keeps the frame
+# pointer in a register and does not store it at a call. The amd64
+# emulator's trap handler set R.PC for the fault but left R.FP on the
+# caller's frame, so handler() looked for the callee's pc in the
+# caller's frame, unwound to the wrong handler and freed the wrong
+# frames: "alloc:D2B" or a SEGV under -c1. -c0 was right.
+owndivw(a, b: int): string
+{
+	{
+		a = a / b;
+	} exception e {
+	"*" =>
+		return e;
+	}
+	return string a;
+}
+
+owndivl(a, b: big): string
+{
+	{
+		a = a % b;
+	} exception e {
+	"*" =>
+		return e;
+	}
+	return string a;
+}
+
+ownnil(r: ref Rec): string
+{
+	{
+		r.a++;
+	} exception e {
+	"*" =>
+		return e;
+	}
+	return string r.a;
+}
+
+testOwnHandler(t: ref T)
+{
+	for(k := 0; k < 3; k++) {
+		t.assertseq(owndivw(7, zero()), "zero divide", "int / in a callee with its own handler");
+		t.assertseq(owndivw(7, 2 * one()), "3", "and the one that does not fault");
+		t.assertseq(owndivl(big 7, big zero()), "zero divide", "big % in a callee with its own handler");
+		t.assertseq(ownnil(nilrec), "dereference of nil", "nil load in a callee with its own handler");
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -267,6 +317,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("NilRef", testNilRef);
 	run("Unwind", testUnwind);
 	run("HandlerChoice", testHandlerChoice);
+	run("OwnHandler", testOwnHandler);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

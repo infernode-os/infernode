@@ -9,7 +9,9 @@
 # command on load, as acme does), and that script runs Agent with a
 # first message, finds its window, and reads the body back through
 # /chan into a file the host can see.  The message must have been sent,
-# the tool call made, and the reply shown in the window.
+# the tool call made, and the reply shown in the window.  A second
+# Agent is given a reply in markdown: when its turn is over the window
+# must show it set as a document (doc/ctl), its body still the text.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -83,6 +85,26 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
 	}
 }
 echo reply >> /tmp/xenith-agent-test.trace
+/xenith/dis/Agent.dis -t read,list -x SCENARIO:markdown_reply >[2] /tmp/xenith-agent-test.agent2 &
+md=
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
+	if {~ $#md 0} {
+		for w in `{ls /chan} {
+			if {ftest -f $w/body} {
+				if {grep -s 'SCENARIO:markdown_reply' $w/body} {
+					md=$w
+				}
+			}
+		}
+		sleep 1
+	}
+}
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
+	if {! grep -s '^shown 1' $md/doc/ctl} {
+		sleep 1
+	}
+}
+echo markdown $md >> /tmp/xenith-agent-test.trace
 {
 	echo '@@ window' $id
 	echo '@@ tag'
@@ -90,6 +112,17 @@ echo reply >> /tmp/xenith-agent-test.trace
 	echo
 	echo '@@ body'
 	cat $id/body
+	echo '@@ doc'
+	cat $id/doc/ctl
+	echo '@@ mdtag'
+	cat $md/tag
+	echo
+	echo '@@ mdbody'
+	cat $md/body
+	echo '@@ mddoc'
+	cat $md/doc/ctl
+	echo '@@ mdtext'
+	cat $md/doc/text
 	echo '@@ tools'
 	cat /tool/tools
 	echo '@@ log'
@@ -164,8 +197,20 @@ expect() {
 grep -q '^@@ window /chan/[0-9]' "$OUT" && echo "PASS: Agent window opened" || { echo "FAIL: no Agent window"; FAILED=$((FAILED + 1)); }
 expect "tag has Send" tag 'Send'
 expect "tag has Stop" tag 'Stop'
+expect "tag has Render" tag 'Render'
 expect "body shows the user message" body 'SCENARIO:single_read'
 expect "body shows the reply" body 'Read it.'
+expect "a turn over, the conversation is a document" doc '^shown 1'
+expect "a markdown reply set as markdown" mddoc '^kind markdown'
+expect "and shown" mddoc '^shown 1'
+expect "its body still the text" mdbody '^## Findings'
+expect "the document set: the heading" mdtext 'Findings'
+expect "the document set: the code" mdtext 'cat a.txt'
+if section mdtext | grep -q -e '##' -e '[*][*]one'; then
+	echo "FAIL: the document shows markdown syntax"; FAILED=$((FAILED + 1))
+else
+	echo "PASS: the document shows no markdown syntax"
+fi
 grep -q 'call_single_read_0_0' "$WORK/req.log" && echo "PASS: the model saw the tool result" || { echo "FAIL: no tool round trip in the model's requests"; FAILED=$((FAILED + 1)); }
 
 [ "$FAILED" -eq 0 ] || { cat "$OUT"; echo "xenith_agent_test: $FAILED failed"; exit 1; }

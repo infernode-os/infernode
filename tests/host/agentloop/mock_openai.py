@@ -31,6 +31,13 @@ SCENARIOS = {
     "text_only": [
         {"content": "Hello from the mock."},
     ],
+    # A reply in markdown, as models write them (xenith_agent_test).
+    "markdown_reply": [
+        {"content": "## Findings\n\nThe file holds **one** word:\n\n"
+                    "- `alpha`, in *a.txt*\n- nothing else\n\n"
+                    "```\ncat a.txt\n```\n\n"
+                    "| file | words |\n|---|---|\n| a.txt | 1 |\n"},
+    ],
     "single_read": [
         {"tools": [tool("read", FIX + "/a.txt")]},
         {"content": "Read it."},

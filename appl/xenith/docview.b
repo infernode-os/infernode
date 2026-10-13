@@ -782,13 +782,6 @@ ctlread(w: ref Window): string
 ctlwrite(w: ref Window, s: string): string
 {
 	d := w.doc;
-	if(d == nil){
-		# a window showing its text: render shows the file as the
-		# document it is
-		if(s == "render")
-			return render(w);
-		return "no document";
-	}
 	(nil, l) := sys->tokenize(s, " \t\n");
 	if(l == nil)
 		return nil;
@@ -796,6 +789,20 @@ ctlwrite(w: ref Window, s: string): string
 	arg := "";
 	if(tl l != nil)
 		arg = hd tl l;
+	if(d == nil){
+		# a window showing its text: render shows the file as the
+		# document it is, or its text as the kind named (render
+		# markdown), for a window whose name says nothing (a
+		# program's, like Agent's)
+		if(cmd != "render")
+			return "no document";
+		if(arg == "")
+			return render(w);
+		k := docreg->kindof(arg);
+		if(k == nil || k.class != Docreg->Source)
+			return "not a kind of source document: " + arg;
+		return open(w, w.body.file.name, k);
+	}
 	case cmd {
 	"sheet" =>
 		(nil, err) := command(w, "Page", arg);

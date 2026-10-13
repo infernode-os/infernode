@@ -248,7 +248,7 @@ document(data: array of byte, ctype, url: string, width, height: int): ref Pg
 	scripting := setting("scripts") == "on";
 	html->scripting(scripting);
 	p := ref Pg(url, nil, Styles.new(), nil, nil,
-		ref Env(width, height, 1.0, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil);
+		ref Env(width, height, pxscale, 0, 0, 0, 0, 0, 0, scripting), nil, width, height, nil, nil, nil, nil, nil, 0, nil, nil);
 	if(prefix(lower(ctype), "text/plain")) {
 		# as a page of its own bytes, so that its charset applies
 		p.doc = html->parse(escapebytes(data), charset, url);
@@ -1529,12 +1529,12 @@ applypics(p: ref Pg, root: ref Box)
 		if(pic == nil || pic.img == nil)
 			continue;
 		b.img = pic.img;
-		b.iw = pic.nw;
-		b.ih = pic.nh;
+		b.iw = dpx(pic.nw);	# (natural sizes are in CSS px: see dpx)
+		b.ih = dpx(pic.nh);
 		if(pic.raw != nil && b.st.imgorient == 1) {
 			b.img = pic.raw;	# image-orientation: none
-			b.iw = b.img.r.dx();
-			b.ih = b.img.r.dy();
+			b.iw = dpx(b.img.r.dx());
+			b.ih = dpx(b.img.r.dy());
 		}
 		b.text = nil;
 		if(pic.svg != nil) {
@@ -1637,9 +1637,9 @@ svgdims(b: ref Box, data: array of byte, obj: int)
 	b.iw = 0;
 	b.ih = 0;
 	if(iw > 0)
-		b.iw = iw;
+		b.iw = dpx(iw);
 	if(ih > 0)
-		b.ih = ih;
+		b.ih = dpx(ih);
 	b.iratio = ratio;
 	if(obj) {
 		if(iw < 0 && pw == 0.0)
@@ -2647,6 +2647,30 @@ index(s, t: string): int
 layoutmod(): Layout
 {
 	return layout;
+}
+
+# ---- the display's pixels (page.m) ----
+
+pxscale := 1.0;
+
+scale(r: real)
+{
+	if(r < 1.0)
+		r = 1.0;
+	if(r > 4.0)
+		r = 4.0;
+	pxscale = r;
+}
+
+dpr(): real
+{
+	return pxscale;
+}
+
+# n CSS px (an image's natural size) in device pixels
+dpx(n: int): int
+{
+	return int (real n * pxscale);
 }
 
 # ---- settings (page.m) ----

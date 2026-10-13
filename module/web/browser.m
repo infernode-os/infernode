@@ -95,6 +95,10 @@ Browser: module
 		dom:	fn(s: self ref Session, n: int, what: string): (string, string);	# tag attrs text style box children
 	};
 
+	# device pixels to the CSS px, for pages made from now on
+	# (Page->scale): what scripts see of the page is in CSS px still
+	scale:	fn(r: real);
+
 	# the engine's settings (Page->setting and the rest, for the page
 	# module this one uses)
 	setting:	fn(name: string): string;

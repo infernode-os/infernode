@@ -321,6 +321,20 @@ testHandshakeTruncatedBody(t: ref T)
 	expecterr(t, response, "handshake message truncated");
 }
 
+# A handshake message may go on in the next record (RFC 8446 §5.1):
+# a ServerHello split over two records is read whole, and reaches the
+# check on its suite, not an error that it is truncated (a certificate
+# chain longer than a record failed so: instagram.com)
+testHandshakeAcrossRecords(t: ref T)
+{
+	body := mkserverhello();
+	body[35] = byte 16rFF;
+	body[36] = byte 16rFF;
+	hsmsg := mkhsmsg(2, body);
+	response := catbytes(mkrecord(22, hsmsg[0:20]), mkrecord(22, hsmsg[20:]));
+	expecterr(t, response, "unsupported suite");
+}
+
 # Send Certificate (type 11) when ServerHello (type 2) expected
 testHandshakeWrongType(t: ref T)
 {
@@ -543,6 +557,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Handshake message tests
 	run("HandshakeTruncatedHeader", testHandshakeTruncatedHeader);
 	run("HandshakeTruncatedBody", testHandshakeTruncatedBody);
+	run("HandshakeAcrossRecords", testHandshakeAcrossRecords);
 	run("HandshakeWrongType", testHandshakeWrongType);
 
 	# ServerHello parsing tests

@@ -70,6 +70,7 @@ EXT_KEY_SHARE:			con 51;
 
 # Named groups
 GROUP_SECP256R1:	con 16r0017;
+GROUP_SECP384R1:	con 16r0018;
 GROUP_X25519:		con 16r001D;
 GROUP_X25519MLKEM768:	con 16r4588;
 GROUP_SECP384R1MLKEM1024: con 16r11ED;	# CNSA 2.0 hybrid: P-384 ECDH + ML-KEM-1024
@@ -79,6 +80,7 @@ MLKEM1024_CTLEN:	con 1568;	# ML-KEM-1024 ciphertext
 
 # Max record size
 MAXRECORD:	con 16384;
+MAXHSMSG:	con 1<<18;	# a handshake message, however many records it takes (certificate chains run to tens of kilobytes)
 MAXFRAGMENT:	con 16384 + 256;	# room for overhead
 
 # TLS 1.2 record version
@@ -693,6 +695,7 @@ handshake(cs: ref ConnState, config: ref Config): string
 	x25519_pub: array of byte;
 	hybridshare: array of byte;
 	p256share: array of byte;
+	p384share: array of byte;
 	cnsa := cnsamode();
 	if(cnsa){
 		strictcnsaconfig(config);
@@ -714,10 +717,18 @@ handshake(cs: ref ConnState, config: ref Config): string
 			cs.eph_p256_priv = p256priv;
 			p256share = keyring->p256_point_bytes(p256pt);
 		}
+		# and secp384r1, for servers that take nothing else
+		# (pantip.com); with no HelloRetryRequest here, the share
+		# has to be in the first hello
+		(p384priv, p384pub) := keyring->p384_keygen();
+		if(p384priv != nil && p384pub != nil) {
+			cs.eph_p384_priv = p384priv;
+			p384share = p384pub;
+		}
 	}
 
 	# Build and send ClientHello
-	hello := buildclienthello(config, client_random, x25519_pub, hybridshare, p256share);
+	hello := buildclienthello(config, client_random, x25519_pub, hybridshare, p256share, p384share);
 	err := sendhsmsg(cs, HT_CLIENT_HELLO, hello);
 	if(err != nil) {
 		if(cnsa)
@@ -843,7 +854,27 @@ handshake12(cs: ref ConnState, config: ref Config,
 	premaster: array of byte;
 
 	if(uses_ecdhe) {
-		if(server_curve == GROUP_SECP256R1) {
+		if(server_curve == GROUP_SECP384R1) {
+			# ECDHE with P-384: points are SEC1 uncompressed (0x04 || x || y)
+			(p384_priv, p384_pub) := keyring->p384_keygen();
+			if(p384_priv == nil || p384_pub == nil)
+				return "tls: P-384 key generation failed";
+			if(server_ecpoint == nil || len server_ecpoint != P384_POINTLEN)
+				return "tls: invalid server P-384 point";
+			{
+				premaster = keyring->p384_ecdh(p384_priv, server_ecpoint);
+			} exception {
+			* =>
+				premaster = nil;
+			}
+			wipebytes(p384_priv);
+			if(premaster == nil)
+				return "tls: P-384 ECDH failed";
+			cke := buildclientkeyexchange_ecdhe(p384_pub);
+			err := sendhsmsg(cs, HT_CLIENT_KEY_EXCHANGE, cke);
+			if(err != nil)
+				return err;
+		} else if(server_curve == GROUP_SECP256R1) {
 			# ECDHE with P-256
 			(p256_priv, p256_pub) := keyring->p256_keygen();
 			if(p256_priv == nil)
@@ -1032,6 +1063,21 @@ handshake13(cs: ref ConnState, config: ref Config,
 		cs.eph_p256_priv = nil;
 		if(shared_secret == nil)
 			return "tls: P-256 ECDH failed";
+	}else if(key_share_group == GROUP_SECP384R1){
+		if(cs.eph_p384_priv == nil)
+			return "tls: server chose secp384r1, which we did not offer";
+		if(key_share_data == nil || len key_share_data != P384_POINTLEN)
+			return "tls: invalid server P-384 key share";
+		{
+			shared_secret = keyring->p384_ecdh(cs.eph_p384_priv, key_share_data);
+		} exception {
+		* =>
+			shared_secret = nil;
+		}
+		wipebytes(cs.eph_p384_priv);
+		cs.eph_p384_priv = nil;
+		if(shared_secret == nil)
+			return "tls: P-384 ECDH failed";
 	}else
 		return "tls: unsupported key share group";
 
@@ -1190,7 +1236,8 @@ handshake13(cs: ref ConnState, config: ref Config,
 # ================================================================
 
 buildclienthello(config: ref Config, random: array of byte,
-	x25519_pub: array of byte, hybridshare: array of byte, p256share: array of byte): array of byte
+	x25519_pub: array of byte, hybridshare: array of byte, p256share: array of byte,
+	p384share: array of byte): array of byte
 {
 	# Build extensions
 	exts: array of byte;
@@ -1210,7 +1257,7 @@ buildclienthello(config: ref Config, random: array of byte,
 		keyshare = buildkeyshare_group(GROUP_SECP384R1MLKEM1024, hybridshare);
 	}else{
 		groups = buildsupportedgroups();
-		keyshare = buildkeyshare(x25519_pub, p256share);
+		keyshare = buildkeyshare(x25519_pub, p256share, p384share);
 	}
 
 	# Signature algorithms extension
@@ -1293,13 +1340,14 @@ buildsniext(name: string): array of byte
 
 buildsupportedgroups(): array of byte
 {
-	# x25519 + secp256r1
-	ext := array [4 + 2 + 4] of byte;
+	# x25519, secp256r1, secp384r1
+	ext := array [4 + 2 + 6] of byte;
 	put16(ext, 0, EXT_SUPPORTED_GROUPS);
-	put16(ext, 2, 2 + 4);
-	put16(ext, 4, 4);
+	put16(ext, 2, 2 + 6);
+	put16(ext, 4, 6);
 	put16(ext, 6, GROUP_X25519);
 	put16(ext, 8, GROUP_SECP256R1);
+	put16(ext, 10, GROUP_SECP384R1);
 	return ext;
 }
 
@@ -1380,12 +1428,14 @@ buildsupportedversions(config: ref Config): array of byte
 	return ext;
 }
 
-buildkeyshare(x25519_pub, p256_pub: array of byte): array of byte
+buildkeyshare(x25519_pub, p256_pub, p384_pub: array of byte): array of byte
 {
-	# X25519 first (preferred), then secp256r1 if we have one
+	# X25519 first (preferred), then secp256r1 and secp384r1 if we have them
 	listlen := 2 + 2 + 32;	# group(2) + keylen(2) + data(32)
 	if(p256_pub != nil)
 		listlen += 2 + 2 + len p256_pub;
+	if(p384_pub != nil)
+		listlen += 2 + 2 + len p384_pub;
 
 	ext := array [4 + 2 + listlen] of byte;
 	put16(ext, 0, EXT_KEY_SHARE);
@@ -1395,10 +1445,17 @@ buildkeyshare(x25519_pub, p256_pub: array of byte): array of byte
 	put16(ext, 6, GROUP_X25519);
 	put16(ext, 8, 32);
 	ext[10:] = x25519_pub;
+	off := 42;
 	if(p256_pub != nil) {
-		put16(ext, 42, GROUP_SECP256R1);
-		put16(ext, 44, len p256_pub);
-		ext[46:] = p256_pub;
+		put16(ext, off, GROUP_SECP256R1);
+		put16(ext, off+2, len p256_pub);
+		ext[off+4:] = p256_pub;
+		off += 4 + len p256_pub;
+	}
+	if(p384_pub != nil) {
+		put16(ext, off, GROUP_SECP384R1);
+		put16(ext, off+2, len p384_pub);
+		ext[off+4:] = p384_pub;
 	}
 
 	return ext;
@@ -1620,7 +1677,7 @@ parseserverkeyexchange(data: array of byte,
 	named_curve := get16(data, off);
 	off += 2;
 
-	if(named_curve != GROUP_X25519 && named_curve != GROUP_SECP256R1)
+	if(named_curve != GROUP_X25519 && named_curve != GROUP_SECP256R1 && named_curve != GROUP_SECP384R1)
 		return (0, nil, sys->sprint("tls: unsupported named curve 0x%04x", named_curve));
 
 	point_len := int data[off];
@@ -2307,66 +2364,64 @@ sendhsmsg(cs: ref ConnState, mtype: int, data: array of byte): string
 readhsmsg(cs: ref ConnState): (int, array of byte, string)
 {
 	for(;;) {
-	# Check buffered handshake data first (multiple msgs per record)
-	if(cs.hsbuf != nil && cs.hsoff < len cs.hsbuf) {
-		remaining := cs.hsbuf[cs.hsoff:];
-		if(len remaining >= 4) {
-			mtype := int remaining[0];
-			mlen := get24(remaining, 1);
-			if(4 + mlen <= len remaining) {
-				updatehash(cs, remaining[0:4+mlen]);
+		# a whole message buffered (a record may carry several): take it
+		if(cs.hsbuf != nil && len cs.hsbuf - cs.hsoff >= 4) {
+			rem := cs.hsbuf[cs.hsoff:];
+			mtype := int rem[0];
+			mlen := get24(rem, 1);
+			if(mlen > MAXHSMSG)
+				return (0, nil, "tls: handshake message too long");
+			if(4 + mlen <= len rem) {
+				updatehash(cs, rem[0:4+mlen]);
 				cs.hsoff += 4 + mlen;
 				if(cs.hsoff >= len cs.hsbuf) {
 					cs.hsbuf = nil;
 					cs.hsoff = 0;
 				}
-				return (mtype, remaining[4:4+mlen], nil);
+				return (mtype, rem[4:4+mlen], nil);
 			}
 		}
-		# Incomplete message in buffer — fall through to read more
-		cs.hsbuf = nil;
+
+		# Read record (possibly encrypted)
+		(ctype, payload, rerr) := readrecord(cs);
+		if(rerr != nil) {
+			# the connection ended part way through a message
+			if(cs.hsbuf != nil && cs.hsoff < len cs.hsbuf) {
+				if(len cs.hsbuf - cs.hsoff < 4)
+					return (0, nil, "tls: handshake message too short");
+				return (0, nil, "tls: handshake message truncated");
+			}
+			return (0, nil, rerr);
+		}
+
+		# TLS 1.3: silently skip CCS records (middlebox compatibility)
+		if(ctype == CT_CHANGE_CIPHER_SPEC)
+			continue;
+
+		if(ctype == CT_ALERT) {
+			if(len payload >= 2)
+				return (0, nil, sys->sprint("tls: alert level=%d desc=%d",
+					int payload[0], int payload[1]));
+			return (0, nil, "tls: received alert");
+		}
+
+		if(ctype != CT_HANDSHAKE)
+			return (0, nil, sys->sprint("tls: expected handshake, got type %d", ctype));
+
+		# a message may be longer than a record, and go on in the
+		# next (RFC 8446 §5.1, RFC 5246 §6.2.1): a certificate chain
+		# often does.  What is left of the last record comes first.
+		if(cs.hsbuf == nil || cs.hsoff >= len cs.hsbuf)
+			cs.hsbuf = payload;
+		else {
+			rest := cs.hsbuf[cs.hsoff:];
+			nb := array[len rest + len payload] of byte;
+			nb[0:] = rest;
+			nb[len rest:] = payload;
+			cs.hsbuf = nb;
+		}
 		cs.hsoff = 0;
 	}
-
-	# Read record (possibly encrypted)
-	(ctype, payload, rerr) := readrecord(cs);
-	if(rerr != nil)
-		return (0, nil, rerr);
-
-	# TLS 1.3: silently skip CCS records (middlebox compatibility)
-	if(ctype == CT_CHANGE_CIPHER_SPEC)
-		continue;
-
-	if(ctype == CT_ALERT) {
-		if(len payload >= 2)
-			return (0, nil, sys->sprint("tls: alert level=%d desc=%d",
-				int payload[0], int payload[1]));
-		return (0, nil, "tls: received alert");
-	}
-
-	if(ctype != CT_HANDSHAKE)
-		return (0, nil, sys->sprint("tls: expected handshake, got type %d", ctype));
-
-	if(len payload < 4)
-		return (0, nil, "tls: handshake message too short");
-
-	mtype := int payload[0];
-	mlen := get24(payload, 1);
-
-	if(4 + mlen > len payload)
-		return (0, nil, "tls: handshake message truncated");
-
-	# Hash the entire handshake message
-	updatehash(cs, payload[0:4+mlen]);
-
-	# Buffer remaining data if record contains multiple messages
-	if(4 + mlen < len payload) {
-		cs.hsbuf = payload;
-		cs.hsoff = 4 + mlen;
-	}
-
-	return (mtype, payload[4:4+mlen], nil);
-	}	# for(;;)
 }
 
 # ================================================================

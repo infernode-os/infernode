@@ -869,6 +869,7 @@ dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis
 dis/tests/tooluse_test.dis
 dis/tests/twofaslot_test.dis
+dis/tests/url_test.dis
 dis/tests/veltro_cc_alignment_test.dis
 dis/tests/veltro_charon_security_test.dis
 dis/tests/veltro_concurrent_test.dis

@@ -157,6 +157,7 @@ TARG=\
 	tls_live_test.dis\
 	tls_protocol_test.dis\
 	webclient_test.dis\
+	url_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_charon_security_test.dis\

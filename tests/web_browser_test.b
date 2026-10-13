@@ -222,6 +222,21 @@ testFind(t: ref T)
 # the draw device's display; nil with none (a headless emu)
 disp: ref Display;
 
+# Scrolling through ctl is the window's scrolling too: its view
+# follows the event
+testScroll(t: ref T)
+{
+	ev := sys->open(MNT + "/event", Sys->OREAD);
+	if(ev == nil)
+		t.fatal(sys->sprint("open event: %r"));
+	if((err := wr("ctl", "scroll 120")) != nil)
+		t.fatal("ctl: " + err);
+	buf := array[256] of byte;
+	n := sys->read(ev, buf, len buf);
+	t.assertseq(chomp(string buf[0:n]), "scroll 120", "the event a window scrolls by");
+	wr("ctl", "scroll 0");
+}
+
 testImage(t: ref T)
 {
 	if(disp == nil)
@@ -415,6 +430,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("History", testHistory);
 	run("Fragment", testFragment);
 	run("Find", testFind);
+	run("Scroll", testScroll);
 	run("Image", testImage);
 	run("Forms", testForms);
 	run("Refresh", testRefresh);

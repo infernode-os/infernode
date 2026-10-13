@@ -74,9 +74,12 @@ makeurl(surl: string): ref ParsedUrl
 		path = url;
 	else {
 		if(S->prefix("//", url)) {
+			# the authority ends at the first / ? or # (RFC 3986
+			# §3.2): https://example.com?q=1 is example.com's
+			# path / with the query q=1
 			netloc: string;
-			(netloc, path) = S->splitl(url[2:], "/");
-			if(path != "")
+			(netloc, path) = S->splitl(url[2:], "/?#");
+			if(path != "" && path[0] == '/')
 				path = path[1:];
 			pstart = "/";
 			if(scheme == FILE)

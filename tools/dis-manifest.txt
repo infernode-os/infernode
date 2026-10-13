@@ -767,6 +767,7 @@ dis/tests/keyringinst_test.dis
 dis/tests/l2cap_test.dis
 dis/tests/limbo_asgcall_test.dis
 dis/tests/limbo_inline_test.dis
+dis/tests/limbo_ldt_test.dis
 dis/tests/lists_test.dis
 dis/tests/llmclient_proxy_test.dis
 dis/tests/llmclient_reqshape_test.dis

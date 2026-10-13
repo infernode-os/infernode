@@ -30,14 +30,14 @@ include "web/browser.m";
 include "web/charonfs.m";
 
 Qroot, Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent,
-Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings: con iota;
+Qdom, Qnode, Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren, Qsettings, Qconsole, Qerrors: con iota;
 
-rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings};
+rootfiles := array[] of {Qctl, Qurl, Qtitle, Qstatus, Qtext, Qlinks, Qforms, Qfind, Qimage, Qevent, Qdom, Qsettings, Qconsole, Qerrors};
 nodefiles := array[] of {Qtag, Qattrs, Qntext, Qstyle, Qbox, Qchildren};
 
 names := array[] of {
 	"/", "ctl", "url", "title", "status", "text", "links", "forms", "find", "image", "event",
-	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings",
+	"dom", "", "tag", "attrs", "text", "style", "box", "children", "settings", "console", "errors",
 };
 
 # an open event file
@@ -478,7 +478,7 @@ ctl(s: string): string
 			return "usage: size <w>x<h>";
 		sess.resize(num(hd l), num(hd tl l));
 	"scroll" =>
-		sess.scroll = num(arg);
+		sess.scrollto(num(arg));
 	"images" or "fonts" or "effects" or "scripts" =>
 		return sess.configure(cmd + " " + arg);
 	"loadimages" =>
@@ -511,6 +511,12 @@ contents(t, n: int): array of byte
 		return image();
 	Qsettings =>
 		s = browser->settings();
+	Qconsole =>
+		if(sess.pg != nil)
+			s = lines(sess.pg.console);
+	Qerrors =>
+		if(sess.pg != nil)
+			s = lines(sess.pg.errors);
 	Qtag or Qattrs or Qntext or Qstyle or Qbox or Qchildren =>
 		(r, nil) := sess.dom(n, names[t]);
 		s = r;
@@ -551,6 +557,26 @@ slurp(fd: ref Sys->FD, c: chan of array of byte)
 }
 
 # ---- the tree ----
+
+# a list kept most recent first, one line each, oldest first
+lines(l: list of string): string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	s := "";
+	for(; r != nil; r = tl r)
+		s += oneline(hd r) + "\n";
+	return s;
+}
+
+oneline(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			s[i] = ' ';
+	return s;
+}
 
 dir(p: big, name: string, perm: int): ref Sys->Dir
 {

@@ -105,6 +105,15 @@ P: adt {
 
 # ---- module ----
 
+# the scripting flag (§13.2.4.5): scripts run, so noscript's content is
+# text, not markup
+scriptingon := 0;
+
+scripting(on: int)
+{
+	scriptingon = on;
+}
+
 init()
 {
 	sys = load Sys Sys->PATH;
@@ -2205,6 +2214,10 @@ inhead(p: ref P, t: ref Tok)
 			rawtext(p, t, Srcdata);
 			return;
 		Tnoscript =>
+			if(scriptingon) {
+				rawtext(p, t, Srawtext);
+				return;
+			}
 			# scripting is disabled: noscript content is markup
 			insertelem(p, t);
 			p.mode = Minheadnoscript;
@@ -2536,6 +2549,13 @@ bodystart(p: ref P, t: ref Tok)
 		rawtext(p, t, Srawtext);
 	Tnoembed =>
 		rawtext(p, t, Srawtext);
+	Tnoscript =>
+		if(scriptingon)
+			rawtext(p, t, Srawtext);
+		else {
+			reconstruct(p);
+			insertelem(p, t);
+		}
 	Tselect =>
 		reconstruct(p);
 		insertelem(p, t);

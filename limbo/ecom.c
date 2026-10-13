@@ -157,6 +157,31 @@ isfix(Node *n)
 }
 
 /*
+ * the link table for the load of $self.
+ * a ref fn of a function the module does not declare adds it,
+ * tagged, to the module's interface (addiface), which it shares
+ * with every structurally equal module type.  only $self
+ * implements those functions, so only its load links them:
+ * the shared table leaves them out (ldtentry), or loading
+ * another module through an equal type would demand them (INFR-310).
+ */
+static Decl*
+mkselfldt(Src *src, Type *t)
+{
+	Decl *d;
+
+	if(selfldt == nil){
+		d = selfldt = mkids(src, enter(".m.$self", 0), t, nil);
+		installids(Dglobal, d);
+		d->refs++;
+		d->init = mkn(Onothing, nil, nil);
+		d->init->ty = t;
+		d->init->decl = d;
+	}
+	return selfldt;
+}
+
+/*
  * rewrite an expression to make it easiser to compile,
  * or give the correct results
  */
@@ -488,6 +513,8 @@ if(debug['U']) print("call %n\n", left);
 		usetype(nn->ty);
 		usetype(nn->ty->tof);
 		nn = rewrite(nn);
+		if(LDT)
+			nn->right->decl = mkselfldt(&n->src, nn->ty->tof);
 		nn->op = Oself;
 		return nn;
 	case Ofnptr:

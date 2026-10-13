@@ -62,6 +62,9 @@ Browser: module
 		goforward:	fn(s: self ref Session): string;
 		reload:	fn(s: self ref Session);
 		stop:	fn(s: self ref Session);
+		# show the page from y down: the view a window has follows
+		# (its listeners hear "scroll y")
+		scrollto:	fn(s: self ref Session, y: int);
 		resize:	fn(s: self ref Session, width, height: int);
 		listen:	fn(s: self ref Session): chan of string;
 		unlisten:	fn(s: self ref Session, c: chan of string);

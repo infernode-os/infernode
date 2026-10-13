@@ -240,6 +240,17 @@ jobs:
         # above, so a skip (77) here is a failure.
         ROOT=. sh tests/host/aa_test.sh
 
+    - name: Run headless Tk application check
+      run: |
+        # A Tk application with no window manager waits for events
+        # rather than spinning, and its 9P files answer (INFR-365):
+        # wm/editor's /edit, written and read back, then its idle CPU
+        # time measured. 77 = skip (no emu or dis tree).
+        chmod +x tests/host/editor_headless_test.sh
+        rc=0
+        ROOT=. bash tests/host/editor_headless_test.sh || rc=$?
+        if [ "$rc" -ne 0 ] && [ "$rc" -ne 77 ]; then exit "$rc"; fi
+
     - name: Run sh script-execution check
       run: |
         # A script without the execute bit must be reported as such,

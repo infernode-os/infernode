@@ -257,6 +257,35 @@ testTags(t: ref T)
 	t.asserteq(dom->atom("my-widget"), Dom->Tnone, "unknown tag");
 }
 
+# With scripts running, noscript's content is its text (§13.2.4.5, the
+# scripting flag): a stylesheet linked in it is no element, and does
+# not apply; without them it is markup.
+testNoscript(t: ref T)
+{
+	src := "<head><noscript><link rel=stylesheet href=a.css></noscript></head>" +
+		"<body><noscript><a href=x>no</a></noscript><p>yes";
+	html->scripting(1);
+	on := html->parsestring(src, nil).dump();
+	html->scripting(0);
+	off := html->parsestring(src, nil).dump();
+	t.log(on);
+	t.assert(!contains(on, "<link>"), "scripts on: no link element");
+	t.assert(!contains(on, "<a>"), "scripts on: no a element");
+	t.assert(contains(on, "\"<link rel=stylesheet href=a.css>\""), "scripts on: the head's noscript holds text");
+	t.assert(contains(on, "\"<a href=x>no</a>\""), "scripts on: the body's noscript holds text");
+	t.assert(contains(on, "<p>"), "scripts on: what follows is parsed");
+	t.assert(contains(off, "<link>"), "scripts off: a link element");
+	t.assert(contains(off, "<a>"), "scripts off: an a element");
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return 1;
+	return 0;
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -279,6 +308,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Charset", testCharset);
 	run("Mutation", testMutation);
 	run("XML", testXML);
+	run("Noscript", testNoscript);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

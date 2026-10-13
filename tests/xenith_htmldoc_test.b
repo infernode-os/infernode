@@ -135,6 +135,28 @@ testLink(t: ref T)
 }
 
 # Render again after an edit: the text as it is now
+# A click lands on what is painted there, in stacking order: a link
+# raised by its z-index over a card's stretched link, an overlay after
+# a link over it, an in-flow link over a box with a negative z-index
+testStacking(t: ref T)
+{
+	page := "<body style='margin:0'>" +
+		"<div style='position:relative;width:300px;height:60px'>" +
+		"<a href=card style='position:absolute;inset:0;z-index:1'></a>" +
+		"<p style='position:relative;z-index:2;margin:0'><a href=inner>inner</a></p></div>" +
+		"<a href=under style='position:absolute;top:100px;left:0;width:100px;height:30px'>under</a>" +
+		"<div style='position:absolute;top:100px;left:0;width:100px;height:30px;background:red'></div>" +
+		"<div style='position:absolute;top:180px;left:0;width:200px;height:40px;z-index:-1;background:#eee'></div>" +
+		"<div style='position:absolute;top:180px;left:0'><a href=over>over the box below</a></div>";
+	(nil, err) := htmldoc->set(9, array of byte page, URL, 400, 300);
+	t.assertnil(err, "set");
+	base := "file://" + DIR;
+	t.assertseq(htmldoc->linkat(9, 5, 8), base + "inner", "the raised link, not the card's under it");
+	t.assertseq(htmldoc->linkat(9, 200, 40), base + "card", "the card's link beside it");
+	t.assertnil(htmldoc->linkat(9, 10, 110), "the overlay after the link is over it");
+	t.assertseq(htmldoc->linkat(9, 10, 188), base + "over", "the link over a box with a negative z-index");
+}
+
 testEdited(t: ref T)
 {
 	(nil, err) := htmldoc->set(1, array of byte "<p>Edited, not saved</p>", URL, 400, 300);
@@ -335,6 +357,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Set", testSet);
 	run("StyleSheet", testStyleSheet);
 	run("Link", testLink);
+	run("Stacking", testStacking);
 	run("Edited", testEdited);
 	run("Windows", testWindows);
 	run("Browse", testBrowse);

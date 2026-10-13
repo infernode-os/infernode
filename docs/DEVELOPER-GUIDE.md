@@ -124,7 +124,10 @@ subdirectories over the corresponding paths in the Inferno namespace.
   lib/lucifer/theme/         # GUI theme (current)
   lib/veltro/                # Agent state (welcome_shown, tour_offered, meta.txt)
   lib/veltro-agents/         # Task agent prompts
-  lib/veltro-keys/           # Agent API keys
+  lib/veltro-keys/           # Legacy plaintext API keys: imported into
+                             #   factotum (saved to secstore) at login, not
+                             #   bound into the name space; delete them once
+                             #   secstore holds the keys (INFR-347)
   tmp/                       # Session temp files
 ```
 

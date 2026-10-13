@@ -1145,7 +1145,21 @@ Session.nodeat(s: self ref Session, x, y: int): int
 	pg := s.pg;
 	if(pg == nil)
 		return 0;
-	(n, nil) := layout->boxat(pg.root, Point(x, y));
+	# boxat follows paint's stacking order with paint's own state: not
+	# while the window paints (a script holding the lock for long gets
+	# the click all the same)
+	locked := trylock(s, 500);
+	n := 0;
+	{
+		(n, nil) = layout->boxat(pg.root, Point(x, y));
+	} exception e {
+	"*" =>
+		if(locked)
+			unlock(s);
+		raise e;
+	}
+	if(locked)
+		unlock(s);
 	return n;
 }
 

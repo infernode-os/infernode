@@ -15,6 +15,7 @@ newproc(void)
 	p->type = Unknown;
 	p->killed = 0;
 	p->swipend = 0;
+	p->intpend = 0;
 	p->env = &p->defenv;
 	kstrdup(&p->env->user, "*nouser");
 	p->env->errstr = p->env->errbuf0;
@@ -33,7 +34,7 @@ Sleep(Rendez *r, int (*f)(void*), void *arg)
 	/*
 	 * if interrupted or condition happened, never mind
 	 */
-	if(up->killed || f(arg)) {
+	if(up->killed || up->intpend || f(arg)) {
 		unlock(&r->l);
 	}else{
 		if(r->p != nil)
@@ -51,9 +52,10 @@ Sleep(Rendez *r, int (*f)(void*), void *arg)
 		up->r = nil;
 	}
 
-	if(up->killed || up->swipend) {
+	if(up->killed || up->swipend || up->intpend) {
 		up->killed = 0;
 		up->swipend = 0;
+		up->intpend = 0;
 		unlock(&up->rlock);
 		error(Eintr);
 	}
@@ -101,6 +103,16 @@ swiproc(Proc *p, int interp)
 		unlock(&p->rlock);
 		return;
 	}
+	/*
+	 * Neither asleep nor (below) in the host: the Prog's kill came while
+	 * its proc was between the two, and would be lost, leaving the proc
+	 * to block in the Sleep or system call it was about to make, until
+	 * that returned of its own accord (a listen: never).  Leave it for
+	 * the next one.  Only for a Prog, released (iprog set) and not yet
+	 * back in the VM: exportfs interrupts its slaves whether busy or not.
+	 */
+	if(interp && p->iprog != nil)
+		p->intpend = 1;
 	unlock(&p->rlock);
 
 	/*
@@ -128,9 +140,23 @@ notkilled(void)
 void
 osenter(void)
 {
+	int i;
+
 	lock(&up->sysio);
 	up->syscall = 1;
 	unlock(&up->sysio);
+
+	/*
+	 * After syscall is set: a swiproc that has not seen it has set
+	 * intpend before looking, so one or the other is seen.
+	 */
+	lock(&up->rlock);
+	i = up->intpend;
+	if(i)
+		up->swipend = 1;
+	unlock(&up->rlock);
+	if(i)
+		osleave();	/* raises Eintr */
 }
 
 void
@@ -141,6 +167,8 @@ osleave(void)
 	lock(&up->rlock);
 	r = up->swipend;
 	up->swipend = 0;
+	if(r)
+		up->intpend = 0;	/* the one interrupt, raised below */
 	unlock(&up->rlock);
 
 	lock(&up->sysio);

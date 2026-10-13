@@ -199,6 +199,15 @@ jobs:
         chmod +x tests/host/llmsrv_session_capability_test.sh
         ROOT=. tests/host/llmsrv_session_capability_test.sh
 
+    - name: Run login-profile proxy import check
+      run: |
+        # The host's HTTPS_PROXY and no_proxy reach Inferno's environment,
+        # where llmclient reads them (INFR-307). 77 = skip (no emu).
+        chmod +x tests/host/profile_proxy_test.sh
+        rc=0
+        ROOT=. bash tests/host/profile_proxy_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run agent harness checks
       run: |
         # The one agent loop, veltrosrv, through its files and through its
@@ -483,6 +492,15 @@ jobs:
         # from compiled code, not read or write outside the array.
         chmod +x tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+
+    - name: Run JIT fault and big arithmetic tests (JIT and interpreter)
+      run: |
+        # A fault in compiled code is caught by the handler around it,
+        # in a callee with a handler of its own too; big *, / and % and
+        # hd of a list of big give what the interpreter gives.
+        chmod +x tests/host/jit_fault_test.sh tests/host/jit_big_test.sh
+        ROOT=. sh tests/host/jit_fault_test.sh
+        ROOT=. sh tests/host/jit_big_test.sh
 
     - name: Run cpu(1) session lifetime test
       run: |
@@ -1235,7 +1253,7 @@ jobs:
 
     - name: Run JIT fault tests (JIT and interpreter)
       run: |
-        for t in jit_fault_test jit_bounds_test; do
+        for t in jit_fault_test jit_ownhandler_test jit_bounds_test; do
           for c in 1 0; do
             timeout 300 "$RUNNER_TEMP/emu-rv" -c$c -r . /dis/tests/$t.dis -v > $t-c$c.txt 2>&1 < /dev/null || true
             cat $t-c$c.txt

@@ -79,11 +79,16 @@ OP(subl) { V(d) = V(m) - V(s); }
 OP(subf) { F(d) = F(m) - F(s); }
 OP(divb) { if(B(s) == 0) error(exZdiv); B(d) = B(m) / B(s); }
 OP(divw) { if(W(s) == 0) error(exZdiv); W(d) = CW((vlong)(int)W(m) / (vlong)(int)W(s)); }
-OP(divl) { if(V(s) == 0) error(exZdiv); V(d) = V(m) / V(s); }
+/*
+ * The most negative big over -1 overflows: in C it is undefined, and
+ * x86's idiv traps on it ("sys: fp: exception") where arm64's sdiv
+ * wraps. It wraps here, on every platform, and the JITs do the same.
+ */
+OP(divl) { if(V(s) == 0) error(exZdiv); if(V(s) == -1) V(d) = (LONG)-(ULONG)V(m); else V(d) = V(m) / V(s); }
 OP(divf) { F(d) = F(m) / F(s); }
 OP(modb) { if(B(s) == 0) error(exZdiv); B(d) = B(m) % B(s); }
 OP(modw) { if(W(s) == 0) error(exZdiv); W(d) = CW((vlong)(int)W(m) % (vlong)(int)W(s)); }
-OP(modl) { if(V(s) == 0) error(exZdiv); V(d) = V(m) % V(s); }
+OP(modl) { if(V(s) == 0) error(exZdiv); if(V(s) == -1) V(d) = 0; else V(d) = V(m) % V(s); }
 OP(mulb) { B(d) = B(m) * B(s); }
 OP(mulw) { W(d) = CW((UWORD)W(m) * (UWORD)W(s)); }
 OP(mull) { V(d) = V(m) * V(s); }

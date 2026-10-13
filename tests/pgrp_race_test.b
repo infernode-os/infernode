@@ -17,6 +17,12 @@ implement PgrpRaceTest;
 # finishes: a changer process swaps as fast as it can while readers
 # read its /prog files the whole time.
 #
+# ChdirWhileResolve is the same kind of race inside one name space:
+# processes sharing it, one changing dot while the others resolve
+# relative names from it (formal-verification races 1 and 3, INFR-59).
+# Without the pg->ns lock in kchdir and namec, every run of it panics
+# emu ("cclose": a freed dot closed again).
+#
 #   emu -c0 -r . /dis/tests/pgrp_race_test.dis
 #   emu -c1 -r . /dis/tests/pgrp_race_test.dis
 #
@@ -143,6 +149,75 @@ testSwapWhileRead(t: ref T)
 	t.assert(reads > 0, "readers read nothing");
 }
 
+# Change the shared current directory until told to stop.
+chdirer(stop: chan of int, done: chan of int)
+{
+	dirs := array[] of {"/dis", "/dev", "/lib", "/"};
+	n := 0;
+	for(;;) {
+		alt {
+		<-stop =>
+			done <-= n;
+			return;
+		* =>
+			;
+		}
+		sys->chdir(dirs[n % len dirs]);
+		n++;
+	}
+}
+
+# Resolve names relative to the shared current directory until told
+# to stop; then report how many resolved.
+resolver(stop: chan of int, done: chan of int)
+{
+	names := array[] of {".", "..", "lib", "sh.dis", "cons", "ndb"};
+	n := 0;
+	for(i := 0; ; i++) {
+		alt {
+		<-stop =>
+			done <-= n;
+			return;
+		* =>
+			;
+		}
+		(ok, nil) := sys->stat(names[i % len names]);
+		if(ok == 0)
+			n++;
+	}
+}
+
+# Processes sharing a name space: one changes dot while the others
+# resolve names from it. namec takes a reference to pg->dot while
+# kchdir replaces and closes it, both with the VM released, so
+# without the pg->ns lock around both a resolver could take a
+# reference to a Chan already freed (formal-verification races 1
+# and 3; INFR-59).
+testChdirWhileResolve(t: ref T)
+{
+	cstop := chan of int;
+	cdone := chan of int;
+	spawn chdirer(cstop, cdone);
+
+	rstop := chan of int;
+	rdone := chan of int;
+	for(i := 0; i < Nreaders; i++)
+		spawn resolver(rstop, rdone);
+
+	sys->sleep(Runms);
+
+	cstop <-= 1;
+	rounds := <-cdone;
+	resolved := 0;
+	for(i = 0; i < Nreaders; i++) {
+		rstop <-= 1;
+		resolved += <-rdone;
+	}
+	t.log(sys->sprint("%d chdirs, %d names resolved", rounds, resolved));
+	t.assert(rounds > 0, "chdirer made no changes");
+	t.assert(resolved > 0, "resolvers resolved nothing");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -157,6 +232,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("SwapWhileRead", testSwapWhileRead);
+	run("ChdirWhileResolve", testChdirWhileResolve);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

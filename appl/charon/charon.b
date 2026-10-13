@@ -214,6 +214,11 @@ fatal(s: string)
 buildui()
 {
 	cmds := array[] of {
+		# the window's size is the one asked for (-g), not what its
+		# parts need: frozen before they are packed, as Tk takes it
+		# when it is said, and a window manager that keeps the size a
+		# window asks for (wm/wm) showed a 380x300 browser
+		"pack propagate . 0",
 		"frame .bar",
 		"button .bar.back -text {◀} -command {send act back}",
 		"button .bar.fwd -text {▶} -command {send act forward}",
@@ -233,7 +238,6 @@ buildui()
 		"pack .bar -side top -fill x",
 		"pack .status -side bottom -fill x",
 		"pack .view -side top -fill both -expand 1",
-		"pack propagate . 0",
 		"bind .view.c <Button-1> {send act click %x %y %X %Y}",
 		"bind .view.c <ButtonRelease-1> {send act release}",
 		"bind .view.c <Motion> {send act hover %x %y}",

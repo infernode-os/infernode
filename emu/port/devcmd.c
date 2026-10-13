@@ -356,6 +356,7 @@ cmdclose(Chan *c)
 static long
 cmdread(Chan *ch, void *a, long n, vlong offset)
 {
+	long r;
 	Conv *c;
 	char *p, *cmds;
 	int fd;
@@ -395,12 +396,12 @@ cmdread(Chan *ch, void *a, long n, vlong offset)
 		qunlock(&c->l);
 		osenter();
 		do {
-			n = read(c->fd[fd], a, n);
-		} while(n < 0 && errno == EINTR);
+			r = read(c->fd[fd], a, n);	/* not n =: a retry read -1 bytes */
+		} while(r < 0 && errno == EINTR && !up->swipend);	/* swipend: swiproc's, osleave raises it */
 		osleave();
-		if(n < 0)
+		if(r < 0)
 			oserror();
-		return n;
+		return r;
 	case Qwait:
 		c = cmd.conv[CONV(ch->qid)];
 		return qread(c->waitq, a, n);
@@ -521,7 +522,7 @@ cmdwrite(Chan *ch, void *a, long n, vlong offset)
 		osenter();
 		do {
 			r = write(c->fd[0], a, n);
-		} while(r < 0 && errno == EINTR);
+		} while(r < 0 && errno == EINTR && !up->swipend);
 		osleave();
 		if(r == 0)
 			error(Ehungup);

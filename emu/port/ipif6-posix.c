@@ -16,6 +16,14 @@
 #include	<netdb.h>
 #include	<sys/ioctl.h>
 #include	<errno.h>
+#include	<signal.h>
+#include	<pthread.h>
+#include	<sys/select.h>
+#ifdef __linux__
+#include	<poll.h>
+/* behind _GNU_SOURCE, which makes lib9.h's _XOPEN_SOURCE warn (cf. emu/Linux/os.c) */
+extern int ppoll(struct pollfd*, nfds_t, const struct timespec*, const sigset_t*);
+#endif
 #undef ulong
 #undef ushort
 #undef uint
@@ -359,6 +367,53 @@ so_listen(int fd)
 		oserror();
 }
 
+/*
+ * Wait for fd to have a connection to accept, or for swiproc's SIGUSR1
+ * (after osenter).  Calling accept straight away left a window: the
+ * signal could come after osenter but before accept was entered, be
+ * handled there, and leave accept blocked with nothing to interrupt
+ * it, so a killed listener stayed in the host for good.  SIGUSR1 is
+ * blocked while swipend is looked at, and unblocked only inside the
+ * wait, atomically, so it either is seen or interrupts the wait.
+ * Returns -1 with EINTR when interrupted.
+ */
+static int
+acceptwait(int fd)
+{
+	sigset_t usr1, old, wait;
+	int r;
+#ifdef __linux__
+	struct pollfd pfd;
+#else
+	fd_set rd;
+
+	if(fd >= FD_SETSIZE)
+		return 0;	/* no wait; accept may block as it did */
+#endif
+
+	sigemptyset(&usr1);
+	sigaddset(&usr1, SIGUSR1);
+	pthread_sigmask(SIG_BLOCK, &usr1, &old);
+	if(up->swipend){
+		pthread_sigmask(SIG_SETMASK, &old, nil);
+		errno = EINTR;
+		return -1;
+	}
+	wait = old;
+	sigdelset(&wait, SIGUSR1);
+#ifdef __linux__
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+	r = ppoll(&pfd, 1, nil, &wait);
+#else
+	FD_ZERO(&rd);
+	FD_SET(fd, &rd);
+	r = pselect(fd+1, &rd, nil, nil, nil, &wait);
+#endif
+	pthread_sigmask(SIG_SETMASK, &old, nil);
+	return r;
+}
+
 int
 so_accept(int fd, uchar *raddr, ushort *rport)
 {
@@ -368,8 +423,10 @@ so_accept(int fd, uchar *raddr, ushort *rport)
 	len = sizeof(sa);
 	osenter();
 	do {
-		nfd = accept(fd, (struct sockaddr*)&sa, &len);
-	} while(nfd < 0 && errno == EINTR);
+		nfd = acceptwait(fd);
+		if(nfd >= 0)
+			nfd = accept(fd, (struct sockaddr*)&sa, &len);
+	} while(nfd < 0 && errno == EINTR && !up->swipend);	/* swipend: swiproc's, osleave raises it */
 	osleave();
 	if(nfd < 0)
 		oserror();

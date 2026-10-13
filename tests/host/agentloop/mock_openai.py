@@ -99,6 +99,12 @@ SCENARIOS = {
         {"tools": [tool("write", "/dis/agentloop-probe.txt probe")]},
         {"content": "Write was handled."},
     ],
+    # The same gated write in an unattended campaign: the driver answers
+    # nothing, and the call is denied as no one is there to ask (INFR-442).
+    "approval_headless": [
+        {"tools": [tool("write", "/dis/agentloop-probe.txt probe")]},
+        {"content": "Write was handled."},
+    ],
     # The same, with the tool's own schema as a native model sends it.
     "approval_deny_json": [
         {"tools": [tool("write", {"path": "/dis/agentloop-probe.txt",

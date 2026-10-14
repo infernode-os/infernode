@@ -1,0 +1,18 @@
+<$ROOT/mkconfig
+
+TARG=	tr2pdf.dis\
+
+MODULES=\
+	font.b\
+	pdf.b\
+	pdfext.b\
+
+SYSMODULES= \
+	bufio.m\
+	draw.m\
+	filter.m\
+	sys.m\
+
+DISBIN=$ROOT/dis
+
+<$ROOT/mkfiles/mkdis

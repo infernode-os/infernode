@@ -14,6 +14,7 @@ DIRS=\
 	ndb\
 	sh\
 	troff\
+	tr2pdf\
 	wikifs\
 	fs\
 	dbm\

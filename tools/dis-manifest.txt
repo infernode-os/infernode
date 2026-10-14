@@ -916,6 +916,7 @@ dis/tokenize.dis
 dis/tone.dis
 dis/touch.dis
 dis/tr.dis
+dis/tr2pdf.dis
 dis/trfs.dis
 dis/troff.dis
 dis/tsort.dis

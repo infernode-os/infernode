@@ -455,6 +455,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 | `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
 | `tests/host/mkfn_test.sh` | `mkfn`, troff's font descriptions from OpenType fonts: `lib/troff/devutf` is what its `mkdesc` makes; an alias does not take a character the font has its own glyph for (the micro sign's alias μ hid Greek mu) and troff's Greek names go to Greek letters; `-c` gives Neatmkfn's aliases; no glyph named by a character beyond U+FFFF (Dis strings are 16-bit); troff sets μ µ `\(*m` `\(/u` `\(*D` as themselves |
+| `tests/host/tr2pdf_test.sh` | `tr2pdf`, troff's output as PDF: the xref table finds every object; a CFF OpenType font embedded as OpenType (FontFile3), compressed, with a ToUnicode map; poppler (where installed) reads it and finds its text, Greek and ligatures; `x X papersize` sets the page; an included PDF (`x X pdf`) is an XObject, including the two inputs that loop Neatpost for ever (a page list `[3 0 R 5 0 R]`, a keyword in a dictionary); `-c` writes as Neatpost |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

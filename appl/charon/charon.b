@@ -532,9 +532,12 @@ action(a: string)
 		endedit(1);
 		if(n != 0) {
 			f := fieldat(n);
-			if(f != nil && istext(f.kind))
-				startedit(f);
-			else if(f != nil && f.kind == "select")
+			if(f != nil && f.disabled)
+				;	# takes no click
+			else if(f != nil && istext(f.kind)) {
+				if(!f.readonly)
+					startedit(f);
+			} else if(f != nil && f.kind == "select")
 				selpending = f;	# posted when the button comes up: a menu posted on the press goes with the release
 			else
 				report(sess.click(n));

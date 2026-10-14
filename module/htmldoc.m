@@ -22,6 +22,8 @@ Htmldoc: module
 		checked:	int;
 		options:	list of (string, string, int);	# select: (value, label, selected)
 		box:	Draw->Rect;	# page coordinates
+		disabled:	int;	# not focused or set
+		readonly:	int;	# focused, not typed into
 	};
 
 	init:	fn(d: ref Draw->Display): string;

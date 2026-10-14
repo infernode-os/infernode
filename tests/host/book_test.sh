@@ -18,6 +18,17 @@
 #	citing a work is on the page of its mark;
 #	Greek is set and hyphenated as Greek;
 #	the bibliography is sorted, its entries Chicago's.
+#
+# Then tests/book/notes.ms, notes short, long and longer than a page,
+# its words kNNNN (the text) and nNNNN (the notes) each to be set once:
+#
+#	every word is set, once: a note longer than the page's room goes
+#	on on the next pages (where troff looped, the foot's trap carrying
+#	the whole note on each), and the text with it;
+#	no note is set below the bottom margin (the rule set as a line of
+#	its own, and the room for it, were a line short), nor any text;
+#	no text is set over the notes (troff sets the line that reaches a
+#	trap before springing it: the trap is a line above them).
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -140,3 +151,73 @@ else:
     print('SKIP: no pdftotext')
 sys.exit(fail)
 PY
+st=$?
+
+cp tests/book/notes.ms "$tmp/"
+with_timeout 300 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c "cd '#U*$tmp'; book notes.ms" </dev/null >"$tmp/emu2.log" 2>&1
+if [ ! -s "$tmp/notes.out" ]; then
+    echo "FAIL: no notes.out: $(grep -v fsqid "$tmp/emu2.log" | head -5)"
+    exit 1
+fi
+python3 -I - "$tmp/notes.out" tests/book/notes.ms <<'PY' || st=1
+import re, sys
+out, src = sys.argv[1], sys.argv[2]
+fail = 0
+def check(ok, what):
+    global fail
+    print(('PASS: ' if ok else 'FAIL: ') + what)
+    if not ok:
+        fail = 1
+words = re.findall(r'\b[kn]\d{4}\b', open(src).read())
+res = 7200
+pages = []
+cur = None
+v = 0
+line = None
+for ln in open(out, encoding='utf-8'):
+    ln = ln.rstrip('\n')
+    m = re.match(r'x res (\d+)', ln)
+    if m:
+        res = int(m.group(1))
+    if re.fullmatch(r'p\d+', ln):
+        cur = {'lines': [], 'rule': None}
+        pages.append(cur)
+        line = None
+        continue
+    if cur is None:
+        continue
+    for cmd in re.finditer(r'([Vv])(-?\d+)|c(.)|D(l) (-?\d+) (-?\d+)', ln):
+        if cmd.group(1) == 'V':
+            v = int(cmd.group(2)); line = None
+        elif cmd.group(1) == 'v':
+            v += int(cmd.group(2)); line = None
+        elif cmd.group(4):
+            # the notes' rule: 1.5i, flat
+            if int(cmd.group(6)) == 0 and abs(int(cmd.group(5)) - int(1.5 * res)) < 5 and cur['rule'] is None:
+                cur['rule'] = v
+        else:
+            if line is None or line[0] != v:
+                line = [v, '']
+                cur['lines'].append(line)
+            line[1] += cmd.group(3)
+foot = 9 * res - int(0.875 * res)	# the bottom margin's top
+seen = {}
+below = []
+over = []
+for i, p in enumerate(pages):
+    for v, t in p['lines']:
+        for w in re.findall(r'[kn]\d{4}', t):
+            seen[w] = seen.get(w, 0) + 1
+            if v > foot:
+                below.append((i + 1, w, v))
+            if w[0] == 'k' and p['rule'] is not None and v > p['rule']:
+                over.append((i + 1, w, v, p['rule']))
+            if w[0] == 'n' and (p['rule'] is None or v < p['rule']):
+                over.append((i + 1, w, v, p['rule']))
+lost = [w for w in words if seen.get(w, 0) != 1]
+check(not lost, 'every word set once (%d words, %d pages) %s' % (len(words), len(pages), lost[:4]))
+check(not below, 'nothing below the bottom margin %s' % below[:3])
+check(not over, 'no text over the notes, no note above their rule %s' % over[:3])
+sys.exit(fail)
+PY
+exit $st

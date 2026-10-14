@@ -367,6 +367,13 @@ nodivs := 0;
 
 odiv_beg()
 {
+	# diverted lines output inside traps nest as deep as the traps; C's
+	# stack of NPREV overflows into what follows it
+	if(nodivs >= len odivs){
+		o := array[2 * len odivs] of Odiv;
+		o[0:] = odivs;
+		odivs = o;
+	}
 	odivs[nodivs++] = Odiv(nr(R_f), nr(R_s), nr(R_m),
 		nr(R_f0), nr(R_s0), nr(R_m0), nr(R_cd));
 }

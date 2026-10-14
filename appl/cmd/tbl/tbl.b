@@ -51,6 +51,7 @@ MAXLIN:		con 250;
 MAXHEAD:	con 44;
 MAXCHS:		con 2000;
 MAXLINLEN:	con 300;
+NOLIMIT:	con 16r7fffffff;	# a line of any length
 CLLEN:		con 10;
 SHORTLINE:	con 4;
 BACKMAX:	con 500;
@@ -246,7 +247,9 @@ tbl(args: list of string)
 	setinp(args);
 	line := "";
 	for(;;){
-		(l, ok) := gets1(5120, line);
+		# a line outside a table is passed on whole: C's buffer of
+		# 5120 bytes cut a longer one in two, and a word with it
+		(l, ok) := gets1(NOLIMIT, line);
 		if(!ok)
 			break;
 		line = l;
@@ -2047,7 +2050,7 @@ gettext(ilin: int, icol: int, fnt: string, sz: string): (int, string)
 	line := "";
 	for(;;){
 		ok: int;
-		(line, ok) = gets1(4096, line);
+		(line, ok) = gets1(NOLIMIT, line);	# C's 4096 cut a text block's line
 		if(!ok){
 			iline = startline;
 			error("missing closing T}");

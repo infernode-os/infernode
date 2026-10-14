@@ -140,8 +140,10 @@
 .el .po \\n[book-om]u
 'sp |\\n[book-tm]u
 .ns
-.\" the foot's trap, lifted while the foot was set
-.wh -\\n[book-bm]u book-fo
+.\" the foot's trap, lifted while the foot was set; troff sets the line
+.\" that reaches a trap, then springs it, so the trap is a line of the
+.\" text less a unit above the margin, and no line is set below it
+.wh -\\n[book-bm]u-\\n[book-vs]u+1u book-fo
 .book-fncarry
 ..
 .de book-fo
@@ -411,7 +413,9 @@
 .nr fn-n 0 1		\" the note's number (each chapter's)
 .nr fn-h 0		\" the page's notes' height
 .nr fn-marked 0		\" \*[fn] marked the text for the note to come
-.nr fn-gap 1v		\" between the text and the rule
+.nr fn-gap 1v		\" from the foot of the text to the rule
+.nr fn-nexth 0		\" the height of the notes carried
+.nr fn-hfull 0		\" the height of the notes carried, more than a page
 .nr fn-nextset 0	\" notes carried to the next page
 .ds fnmark \R'fn-n +1'\R'fn-marked 1'\v'-0.4m'\s-3\\n[fn-n]\s+3\v'0.4m'
 .de fn
@@ -421,6 +425,7 @@
 \v'-0.4m'\s-3\\n[fn-n]\s+3\v'0.4m'
 .\}
 .nr fn-marked 0
+.nr fn-tv \\n[.v]	\" the text's line, the note's mark in it
 .ev fn
 .di fn-one
 \v'-0.3m'\s-2\\n[fn-n]\s+2\v'0.3m'\ \c
@@ -429,25 +434,29 @@
 .br
 .di
 .nr fn-dn \\n[dn]
-.ie \\n[fn-h]=0 .nr fn-need \\n[fn-dn]+\\n[fn-gap]+0.5v
+.\" what the notes take (as book-fnput sets them): the first, the gap,
+.\" then the rule, 0.4v below it; each after, 0.3v from the one before
+.ie \\n[fn-h]=0 .nr fn-need \\n[fn-dn]+\\n[fn-gap]+0.4v
 .el .nr fn-need \\n[fn-dn]+0.3v
 .\" room on the page: below the line being set, above the foot
-.ie (\\n[nl]+\\n[.v]+\\n[fn-h]+\\n[fn-need])<=(\\n[.p]-\\n[book-bm]) \{\
+.ie (\\n[nl]+\\n[fn-tv]+\\n[fn-h]+\\n[fn-need])<=(\\n[.p]-\\n[book-bm]) \{\
 .	da fn-page
 .	if \\n[fn-h] .sp 0.3v
 .	nf
 .	fn-one
 .	di
 .	nr fn-h +\\n[fn-need]
-.	ch book-fo -\\n[book-bm]u-\\n[fn-h]u
+.	ch book-fo -\\n[book-bm]u-\\n[fn-h]u-\\n[book-vs]u+1u
 .\}
 .el \{\
 .	da fn-next
 .	if \\n[fn-nextset] .sp 0.3v
-.	nr fn-nextset 1
 .	nf
 .	fn-one
 .	di
+.	ie \\n[fn-nextset] .nr fn-nexth +\\n[fn-dn]+0.3v
+.	el .nr fn-nexth \\n[fn-dn]+\\n[fn-gap]+0.4v
+.	nr fn-nextset 1
 .\}
 .fi
 .ev
@@ -458,14 +467,46 @@
 .if \\n[fn-h] \{\
 .	ev fn
 .	nf
-.	sp |\\n[.p]u-\\n[book-bm]u-\\n[fn-h]u+\\n[fn-gap]u
+.	rs
+.\"	the rule a line of its own: its baseline fn-gap below the text's foot
+.	sp |\\n[.p]u-\\n[book-bm]u-\\n[fn-h]u+\\n[fn-gap]u-1v
 \D'l 1.5i 0'
 .	sp 0.4v
+.\"	what does not fit above the foot is carried to the next page
+.	nr fn-over 0
+.	wh -\\n[book-bm]u-1v+1u book-fnover
 .	fn-page
+.	ch book-fnover
+.	if \\n[fn-over] \{\
+.		br
+.		di
+.		book-fnrest
+.	\}
 .	fi
 .	ev
 .	rm fn-page
 .	nr fn-h 0
+.	nr fn-hfull 0
+.\}
+..
+.de book-fnover
+.nr fn-over 1
+.di fn-rest
+..
+.\" the notes' rest, before those carried already
+.de book-fnrest
+.if \\n[dn] \{\
+.	nr fn-restdn \\n[dn]
+.	if \\n[fn-nextset] \{\
+.		da fn-rest
+.		sp 0.3v
+.		fn-next
+.		di
+.		nr fn-restdn +\\n[fn-nexth]-\\n[fn-gap]-0.4v+0.3v
+.	\}
+.	rn fn-rest fn-next
+.	nr fn-nexth \\n[fn-restdn]+\\n[fn-gap]+0.4v
+.	nr fn-nextset 1
 .\}
 ..
 .\" the notes carried from the page before
@@ -473,15 +514,25 @@
 .if \\n[fn-nextset] \{\
 .	nr fn-nextset 0
 .	rn fn-next fn-page
-.	nr fn-h \\n[dn]+\\n[fn-gap]+0.5v
-.	ch book-fo -\\n[book-bm]u-\\n[fn-h]u
+.	nr fn-h \\n[fn-nexth]
+.	nr fn-hfull \\n[fn-nexth]
+.	ch book-fo -\\n[book-bm]u-\\n[fn-h]u-\\n[book-vs]u+1u
+.\"	more than leaves the page a line of text (its trap would be above
+.\"	the head, never sprung): a page of notes alone, now (the foot
+.\"	carries what is left), and the text goes on on the next
+.	if \\n[fn-h]>(\\n[.p]-\\n[book-bm]-\\n[book-tm]-\\n[book-vs]) \{\
+.		nr fn-h \\n[.p]-\\n[book-bm]-\\n[book-tm]
+.		book-fo
+.	\}
 .\}
 ..
 .\" the last page's notes, and those carried past it
 .de book-end
-.if \\n[fn-nextset] \{\
+.if \\n[fn-nextset]+(\\n[fn-hfull]>\\n[fn-h]) \{\
 .	nr book-nohead 0
 .	br
+.\}
+.while \\n[fn-nextset]+(\\n[fn-hfull]>\\n[fn-h]) \{\
 \&
 .	bp
 .\}

@@ -13,8 +13,10 @@ DIRS=\
 	mk\
 	mkfn\
 	ndb\
+	pic\
 	refer\
 	sh\
+	tbl\
 	troff\
 	tr2pdf\
 	wikifs\

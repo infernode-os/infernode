@@ -4,8 +4,9 @@
 #	book [-p works.bib] [-S style] [-o book.pdf] book.ms
 #
 # Citations are set by refer(1) from the database, in the style
-# (chicago); equations by eqn(1), if there are any, with its settings
-# for the fonts (/lib/troff/eqnrc); the book by troff(1) -mbook, as
+# (chicago); pictures, tables and equations by pic(1), tbl(1) and eqn(1),
+# if there are any (eqn with its settings for the fonts,
+# /lib/troff/eqnrc); the book by troff(1) -mbook, as
 # often as its table of contents and references need to be set again
 # (they come from the pass before, through book.aux); then the PDF by
 # tr2pdf(1). troff's output is kept as book.out, for the document views.
@@ -31,7 +32,12 @@ tr=$stem.out	# troff's output, kept for viewing it
 err=$stem.log
 new=$stem.aux.new
 
-# equations: eqn, after its settings for the fonts
+# pictures, tables and equations: pic, tbl, eqn (after its settings for
+# the fonts), if there are any
+pics=0
+grep -s '^\.PS' $src && pics=1
+tbls=0
+grep -s '^\.TS' $src && tbls=1
 math=0
 grep -s '^\.EQ' $src && math=1
 
@@ -41,11 +47,17 @@ fn input {
 fn cite {
 	if {~ $#bib 0} {cat} {refer -p $bib -S $style}
 }
+fn pics {
+	if {~ $pics 1} {pic} {cat}
+}
+fn tbls {
+	if {~ $tbls 1} {tbl} {cat}
+}
 fn eqns {
 	if {~ $math 1} {eqn} {cat}
 }
 fn pass {
-	input | cite | eqns | troff -mbook '-dbook-aux='^$aux >$tr >[2]$err
+	input | cite | pics | tbls | eqns | troff -mbook '-dbook-aux='^$aux >$tr >[2]$err
 	grep '^aux:' $err | sed 's/^aux://' >$new
 }
 

@@ -1,0 +1,22 @@
+<$ROOT/mkconfig
+
+TARG=	pic.dis\
+
+MODULES=\
+	picdefs.b\
+	picgen.b\
+	picl.b\
+	picmain.b\
+	picprint.b\
+
+SYSMODULES= \
+	bufio.m\
+	draw.m\
+	math.m\
+	sys.m\
+
+DISBIN=$ROOT/dis
+
+<$ROOT/mkfiles/mkdis
+# pic.b is made from pic.y by yacc(1), a Limbo program, and kept:
+# inside Inferno, cd /appl/cmd/pic; yacc -o pic.b pic.y

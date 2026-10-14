@@ -12,13 +12,16 @@ to read in InferNode's document views.
 |---|---|---|
 | `troff` | Sets troff's input: paragraph-at-once filling, OpenType kerning, ligatures and features, hyphenation (English and Ancient Greek) | Neatroff, translated (byte-identical output on ~500 documents) |
 | `eqn` | Mathematics: TeX's rules for setting it, in troff; Libertinus Math's sized brackets, radicals and operators (`/lib/troff/eqnrc`) | Neateqn, translated (byte-identical output) |
+| `tbl` | Tables | Plan 9's tbl, translated (byte-identical output) |
+| `pic` | Pictures | Plan 9's pic, translated (byte-identical output; its grammar through Inferno's yacc) |
 | `refer` | Citations by key from BibTeX's and refer's databases; with `-S chicago`, the *Chicago Manual of Style*'s notes and bibliography (18th edition) | Neatrefer, translated, with a BibTeX reader and styles of its own |
 | `tr2pdf` | Troff's output as PDF: OpenType fonts embedded, compressed, with ToUnicode maps (text can be searched and copied) | Neatpost's PDF writer, translated |
 | `mkfn` | Font descriptions for troff from OpenType, TrueType and AFM fonts, with each glyph's bounding box (CFF's too) | Neatmkfn, translated |
-| `book` | Runs them: refer, eqn (if there are equations), troff `-mbook` until its references settle, tr2pdf | |
+| `book` | Runs them: refer, pic, tbl and eqn (each if there is anything for it), troff `-mbook` until its references settle, tr2pdf | |
 
-`troff`, `eqn`, and `refer` without a style, write what the C programs
-they came from write, byte for byte; `tr2pdf -c` and `mkfn -c` do too.
+`troff`, `eqn`, `tbl`, `pic`, and `refer` without a style, write what
+the C programs they came from write, byte for byte, but where those
+loop for ever or crash; `tr2pdf -c` and `mkfn -c` do too.
 Without `-c` those two differ where troff and its readers are better
 served (their commits list how).
 
@@ -52,6 +55,8 @@ LaTeX without being LaTeX.
 | `.bibliography` | `\printbibliography` |
 | `$...$` (after `delim $$`) | `$...$` |
 | `.EQ` ... `.EN`; `.EQ (1.1)` | `\[...\]`; `equation` with `\tag{1.1}` |
+| `.TS` ... `.TE` | `tabular` (in a `table`) |
+| `.PS` ... `.PE` | `picture` (or TikZ) |
 | `\fI...\fP`, `\fB...\fP` | `\emph{...}`, `\textbf{...}` |
 
 A footnote's mark follows the text before it: end that line with `\c`
@@ -121,6 +126,14 @@ Glyphs' heights and depths come from the fonts' descriptions: `mkfn`
 reads each glyph's bounding box from its outline, CFF's (Libertinus's)
 as well as TrueType's.
 
+## Tables and pictures: `tbl` and `pic`
+
+Tables are written in tbl's language, pictures in pic's (Lesk's and
+Kernighan's); `book` runs each when a book has any. Under `-mbook` a
+table's rules are drawn as lines (troff's `.rules`, which draws `\l`'s
+and `\L`'s of rule characters as lines rather than setting a font's
+glyphs side by side), and a picture is centred with space about it.
+
 ## Fonts
 
 The device `utf` (`lib/troff/devutf`) sets in Libertinus: Serif (R, I,
@@ -142,7 +155,7 @@ after the work above is done.
 
 ## Still to come
 
-tbl and pic; an index; the LaTeX converter; `-man`; microtypography
+An index; the LaTeX converter; `-man`; microtypography
 (protrusion and expansion); fonts falling back for characters a font
 lacks; font subsetting in PDFs; eqn's bars drawn as lines (they are
 glyphs now, and copied with the text).

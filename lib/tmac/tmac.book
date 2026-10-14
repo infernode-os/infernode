@@ -66,6 +66,9 @@
 .fp 11 SC R
 .ff SC +smcp
 .\"
+.\" rules (tbl's, \l's of \(ul, \L's) drawn as lines, not glyphs
+.rules 1
+.\"
 .\" ---------------------------------------------------------------
 .\" begin: the page set, once, before the first text
 .\"
@@ -572,6 +575,37 @@
 .	sp 0.5v
 .	nr book-noindent 1
 .\}
+..
+.\"
+.\" ---------------------------------------------------------------
+.\" tables (tbl's: centred by its own option, center) and pictures
+.\" (pic's: centred), with space above and below
+.\"
+.de TS
+.book-begin
+.br
+.sp 0.5v
+..
+.de TE
+.sp 0.5v
+.nr book-noindent 1
+..
+.de PS
+.book-begin
+.br
+.\" pic gives the picture's height and width
+.ie \\$1>0 \{\
+.	sp 0.35v
+.	nr book-pich 1
+.\}
+.el .nr book-pich 0
+.in (\\n[.l]u-\\$2)/2u
+.ne \\$1
+..
+.de PE
+.in
+.if \\n[book-pich] .sp 0.65v
+.nr book-noindent 1
 ..
 .\"
 .\" ---------------------------------------------------------------

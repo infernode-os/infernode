@@ -604,6 +604,7 @@ dis/nsbuild.dis
 dis/os.dis
 dis/p.dis
 dis/pause.dis
+dis/pic.dis
 dis/pipefile.dis
 dis/pipefs.dis
 dis/plumb.dis
@@ -679,6 +680,7 @@ dis/svc/webget/webget.dis
 dis/svc/webget/wgutils.dis
 dis/tail.dis
 dis/tarfs.dis
+dis/tbl.dis
 dis/tcs.dis
 dis/tee.dis
 dis/telnet.dis

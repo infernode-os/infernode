@@ -310,6 +310,12 @@ folds(Node *n)
 {
 	if(hasside(n, 1))
 		return n;
+	/*
+	 * a real may be a NaN, which equals nothing, itself included, and
+	 * Inf - Inf is a NaN: only x < x and x > x are known
+	 */
+	if(n->left->ty == treal && n->op != Olt && n->op != Ogt)
+		return n;
 	switch(n->op){
 	case Oeq:
 	case Oleq:

@@ -1960,8 +1960,17 @@ bcom(n: ref Node, true: int, b: ref Inst): ref Inst
 		return b;
 	}
 
-	if(true)
-		op = oprelinvert[op];
+	# a branch on the inverse comparison: but the inverse of an ordered
+	# comparison of reals is not its complement, for a NaN is in no order
+	# (NaN < 1 and NaN >= 1 are both false); those branch on the
+	# comparison past a jump instead
+	viajump := 0;
+	if(true){
+		if(left.ty.kind == Treal && op != Oeq && op != Oneq)
+			viajump = 1;
+		else
+			op = oprelinvert[op];
+	}
 
 	if(left.addable < right.addable){
 		t := left;
@@ -1982,6 +1991,12 @@ bcom(n: ref Node, true: int, b: ref Inst): ref Inst
 		right = ecom(right.src, tright = talloc(right.ty, nil), right);
 	}
 	bb := genbra(n.src, op, left, right);
+	if(viajump){
+		bb.branch = nil;
+		j := genrawop(n.src, IJMP, nil, nil, nil);
+		patch(bb, nextinst());
+		bb = j;
+	}
 	bb.branch = b;
 	tfree(tleft);
 	tfree(tright);

@@ -107,11 +107,12 @@ isnan(x: real): int
 	return (b & big 16r7FF0000000000000) == big 16r7FF0000000000000 && (b & big 16rFFFFFFFFFFFFF) != big 0;
 }
 
-# What each comparison of a and b gives, as the interpreter has it.
-# limbo compiles if(a < b) as a branch on the inverse (bgef) past the
-# then part, so with a NaN, which no ordered comparison is true of, the
-# then part runs: the answers below are the interpreter's, which a JIT
-# must give too (its bgef false for a NaN, as C's >= is).
+# What each comparison of a and b gives.  A NaN is in no order: no
+# comparison but != is true of it.  limbo once compiled if(a < b) as a
+# branch on the inverse (bgef) past the then part, which with a NaN ran
+# the then part; it branches on the comparison past a jump now (see
+# limbo_nan_test.b), and a JIT's real branches must be false for a NaN,
+# as C's are.
 cmp(a, b: real): string
 {
 	s := "";
@@ -129,9 +130,9 @@ testCompare(t: ref T)
 	t.assertseq(cmp(v[ONE], v[TWO]), "<l...!", "1 ? 2");
 	t.assertseq(cmp(v[TWO], v[ONE]), "..>g.!", "2 ? 1");
 	t.assertseq(cmp(v[ONE], v[ONE]), ".l.g=.", "1 ? 1");
-	t.assertseq(cmp(v[NAN], v[ONE]), "<l>g.!", "NaN ? 1 (the inverse branches not taken)");
-	t.assertseq(cmp(v[ONE], v[NAN]), "<l>g.!", "1 ? NaN");
-	t.assertseq(cmp(v[NAN], v[NAN]), "<l>g.!", "NaN ? NaN");
+	t.assertseq(cmp(v[NAN], v[ONE]), ".....!", "NaN ? 1");
+	t.assertseq(cmp(v[ONE], v[NAN]), ".....!", "1 ? NaN");
+	t.assertseq(cmp(v[NAN], v[NAN]), ".....!", "NaN ? NaN");
 	t.assertseq(cmp(v[NZERO], v[PZERO]), ".l.g=.", "-0 ? +0");
 	t.assertseq(cmp(v[INF], v[ONE]), "..>g.!", "Inf ? 1");
 	# a loop on a real compare: taken, not taken, and the count right

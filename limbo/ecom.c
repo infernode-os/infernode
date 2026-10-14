@@ -2124,9 +2124,9 @@ tuplrcom(Node *n, Node *nto)
 Inst*
 bcom(Node *n, int iftrue, Inst *b)
 {
-	Inst *bb;
+	Inst *bb, *j;
 	Node tl, tr, *t, *left, *right, *tn;
-	int op;
+	int op, viajump;
 
 	if(n->op == Ocomma){
 		tn = n->left->left;
@@ -2175,8 +2175,19 @@ bcom(Node *n, int iftrue, Inst *b)
 		return b;
 	}
 
-	if(iftrue)
-		op = oprelinvert[op];
+	/*
+	 * a branch on the inverse comparison: but the inverse of an ordered
+	 * comparison of reals is not its complement, for a NaN is in no order
+	 * (NaN < 1 and NaN >= 1 are both false); those branch on the
+	 * comparison past a jump instead
+	 */
+	viajump = 0;
+	if(iftrue){
+		if(left->ty->kind == Treal && op != Oeq && op != Oneq)
+			viajump = 1;
+		else
+			op = oprelinvert[op];
+	}
 
 	if(left->addable < right->addable){
 		t = left;
@@ -2199,6 +2210,12 @@ bcom(Node *n, int iftrue, Inst *b)
 		right = ecom(&right->src, talloc(&tr, right->ty, nil), right);
 	}
 	bb = genbra(&n->src, op, left, right);
+	if(viajump){
+		bb->branch = nil;
+		j = genrawop(&n->src, IJMP, nil, nil, nil);
+		patch(bb, nextinst());
+		bb = j;
+	}
 	bb->branch = b;
 	tfree(&tl);
 	tfree(&tr);

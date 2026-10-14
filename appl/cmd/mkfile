@@ -12,6 +12,7 @@ DIRS=\
 	mk\
 	mkfn\
 	ndb\
+	refer\
 	sh\
 	troff\
 	tr2pdf\

@@ -1,0 +1,14 @@
+<$ROOT/mkconfig
+
+MODULES=
+
+TARG=\
+	chicago.dis\
+
+SYSMODULES=\
+	referstyle.m\
+	sys.m\
+
+DISBIN=$ROOT/dis/refer
+
+<$ROOT/mkfiles/mkdis

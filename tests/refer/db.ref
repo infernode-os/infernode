@@ -1,0 +1,39 @@
+%L kr78
+%A Brian W. Kernighan
+%A Dennis M. Ritchie
+%T The C Programming Language
+%I Prentice Hall
+%D 1978
+
+%L oss76
+%A Joseph F. Ossanna
+%T Nroff/Troff User's Manual
+%R CSTR 54
+%I Bell Laboratories
+%D 1976
+
+%L rudi17
+%A Ali Gholami Rudi
+%T Neatroff
+%J Unpublished
+%D 2017
+%O A note
+%P 1-10
+
+%L knuth84
+%A Donald E. Knuth
+%T Literate Programming
+%J The Computer Journal
+%V 27
+%N 2
+%P 97-111
+%D 1984
+
+%L lamport
+%A Leslie Lamport
+%T LaTeX: A Document Preparation System
+%B Some Collection
+%E Ed Itor
+%I Addison-Wesley
+%D 1986
+%H yes

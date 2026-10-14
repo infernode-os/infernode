@@ -1,0 +1,48 @@
+.PP
+Numbered .[ kr78 .] and
+1
+.ds [F 1
+.]-
+.ds [A Joseph F. Ossanna
+.ds [D 1976
+.ds [I Bell Laboratories
+.ds [L oss76
+.ds [R CSTR 54
+.ds [T Nroff/Troff User's Manual
+.][ 4 Report
+and \*[cite 2] here.
+.ds [F 2
+.]-
+.ds [A Ali Gholami Rudi
+.ds [D 2017
+.ds [J Unpublished
+.ds [L rudi17
+.ds [O A note
+.nr [O 1
+.ds [P 1-10
+.nr [P 1
+.ds [T Neatroff
+.][ 1 Article
+.]<
+.ds [F 1
+.]-
+.ds [A Joseph F. Ossanna
+.ds [D 1976
+.ds [I Bell Laboratories
+.ds [L oss76
+.ds [R CSTR 54
+.ds [T Nroff/Troff User's Manual
+.][ 4 Report
+.ds [F 2
+.]-
+.ds [A Ali Gholami Rudi
+.ds [D 2017
+.ds [J Unpublished
+.ds [L rudi17
+.ds [O A note
+.nr [O 1
+.ds [P 1-10
+.nr [P 1
+.ds [T Neatroff
+.][ 1 Article
+.]>

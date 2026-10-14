@@ -618,6 +618,8 @@ dis/raw2iaf.dis
 dis/rawdbfs.dis
 dis/rcmd.dis
 dis/read.dis
+dis/refer.dis
+dis/refer/chicago.dis
 dis/rm.dis
 dis/rng.dis
 dis/runas.dis

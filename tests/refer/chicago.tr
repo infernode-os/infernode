@@ -1,0 +1,25 @@
+.chapter
+Text one.
+.cite smith-swing 315-16
+Text two.
+.cite smith-swing 320
+.cite grazer 12
+.cite grazer 37
+.cite barnes 7
+.cite barnes 85
+.cite garcia 242-255
+.cite thoreau 177-178
+.cite thoreau 182
+.cite satterfield 170
+.cite satterfield 172-173
+.cite rutz 99-100
+.cite homer-il 1.1-5
+.cite homer-il 2.484
+.cite plato-rep 327a1-3
+.cite morrison 3
+.cite morrison
+.cite smith-swing 1; satterfield 166
+A note of my own: \*[cite rutz 101].
+.chapter
+.cite smith-swing 1101-1108
+.bibliography

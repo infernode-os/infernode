@@ -1,0 +1,22 @@
+<$ROOT/mkconfig
+
+DIRS=\
+	style\
+
+TARG=\
+	refer.dis\
+
+MODULES=\
+	accents.b\
+	bibtex.b\
+
+SYSMODULES=\
+	bufio.m\
+	draw.m\
+	referstyle.m\
+	sys.m\
+
+DISBIN=$ROOT/dis
+
+<$ROOT/mkfiles/mkdis
+<$ROOT/mkfiles/mksubdirs

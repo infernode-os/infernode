@@ -232,15 +232,22 @@ handle(e: ref Ev)
 		}
 		return;
 	}
-	# what the document does to the window (its name, its text) is
-	# done as through its files: a program reading the window's events
-	# hears them from 'F', not from no one, which Xenith took for a
-	# fault and quit (a page loading in a window a client watched)
-	owner := w.owner;
-	if(owner == 0)
-		w.owner = 'F';
-	handle1(w, e);
-	w.owner = owner;
+	# What the document does to the window (its name, its text) is done
+	# with the window locked, as the mouse's work is, and as through its
+	# files ('F'). Done with only the row locked, the window's owner was
+	# whatever a 9P request for it left, none once it was answered: a
+	# program reading the window's events (an Acme client; a script)
+	# was sent the page's new text from no one, which Xenith takes for
+	# a fault, and quit.
+	w.lock('F');
+	{
+		handle1(w, e);
+	} exception {
+	"*" =>
+		w.unlock();
+		raise;
+	}
+	w.unlock();
 }
 
 handle1(w: ref Window, e: ref Ev)

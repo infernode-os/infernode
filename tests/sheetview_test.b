@@ -6,7 +6,8 @@ implement SheetviewTest;
 # (ink where the text is), paged, zoomed, a search finding the page a
 # word is on, the sheets turned (their sizes, and a point on the screen
 # taken back to the page), its place kept when it is resized, and the
-# way it last moved.
+# way it last moved.  A web page is painted from a band round the view,
+# or, with a header fixed to the window, all of what is shown.
 #
 
 include "sys.m";
@@ -294,12 +295,13 @@ testDirection(t: ref T)
 	v.close();
 }
 
-# A long web page (an HTML file), drawn on an image 500 by 400
-htmlview(t: ref T): ref View
+# A long web page (an HTML file), drawn on an image 500 by 400, with
+# top at the start of its body
+htmlview(t: ref T, top: string): ref View
 {
 	if(display == nil)
 		t.skip("no display");
-	page := "<html><body>";
+	page := "<html><body>" + top;
 	for(i := 0; i < 60; i++)
 		page += sprint("<h2>Part %d</h2><p>Some words in part %d, enough of them to wrap onto a second line in a view five hundred wide.</p>", i, i);
 	page += "</body></html>";
@@ -345,7 +347,7 @@ direct(v: ref View): ref Image
 # what it exposes, and what is shown is what the engine paints
 testBand(t: ref T)
 {
-	v := htmlview(t);
+	v := htmlview(t, nil);
 	v.draw();
 	b := v.band;
 	t.assert(b != nil, "a band painted");
@@ -371,6 +373,54 @@ testBand(t: ref T)
 	v.result("paint");
 	t.assert(v.band == nil, "a page changed by a click or key is painted again");
 	v.close();
+}
+
+# A page with a header fixed to the top of the window is painted where
+# the view is, all of it, as it scrolls: a strip painted as the top of
+# the window had a header of its own (bbc.com's, down the page)
+testPinned(t: ref T)
+{
+	v := htmlview(t, "<div style=\"position: fixed; top: 0; left: 0; right: 0; height: 40px; background: red\"></div>");
+	t.assert(v.eng->pinned(v.h), "the page has a part pinned to the view");
+	v.draw();
+	for(i := 0; i < 12; i++){
+		v.scroll(30);
+		v.draw();
+	}
+	t.assert(v.org.y > 0, "the view scrolled");
+	t.assert(v.band == nil, "it is not painted into a band");
+	(n, first, last) := reds(v.dst);
+	t.asserteq(n, 40, sys->sprint("the header's rows red, and only those (%d..%d)", first, last));
+	t.asserteq(first, 0, "at the top of the view");
+	sr := v.sheetrect(0);
+	(vis, nil) := sr.clip(v.r);
+	t.assert(same(v.dst, direct(v), vis), "what is shown is the page");
+	v.close();
+
+	v = htmlview(t, nil);
+	t.assert(!v.eng->pinned(v.h), "a page with nothing fixed has nothing pinned");
+	v.close();
+}
+
+# The rows of im red at its right edge: how many, the first and last
+reds(im: ref Image): (int, int, int)
+{
+	b := array[3] of byte;
+	n := 0;
+	first := -1;
+	last := -1;
+	x := im.r.max.x - 2;
+	for(y := im.r.min.y; y < im.r.max.y; y++){
+		im.readpixels(Rect((x, y), (x+1, y+1)), b);
+		# RGB24 is stored b g r
+		if(int b[2] > 200 && int b[1] < 60 && int b[0] < 60){
+			if(first < 0)
+				first = y;
+			last = y;
+			n++;
+		}
+	}
+	return (n, first, last);
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -405,6 +455,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("KeepPlace", testKeepPlace);
 	run("Direction", testDirection);
 	run("Band", testBand);
+	run("Pinned", testPinned);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

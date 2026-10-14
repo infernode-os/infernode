@@ -1507,6 +1507,14 @@ Session.pageheight(s: self ref Session): int
 	return s.pg.pageheight();
 }
 
+Session.pinned(s: self ref Session): int
+{
+	freshen(s);
+	if(s.pg == nil)
+		return 0;
+	return s.pg.pinned();
+}
+
 Session.click(s: self ref Session, n: int): string
 {
 	pg := s.pg;

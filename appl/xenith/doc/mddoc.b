@@ -153,6 +153,11 @@ scalable(nil: int): int
 	return 0;
 }
 
+pinned(nil: int): int
+{
+	return 0;
+}
+
 paint(h: int, n: int, nil: int, dst: ref Image, r: Rect, org: Point): string
 {
 	s := get(h);

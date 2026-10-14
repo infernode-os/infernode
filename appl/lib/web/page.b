@@ -865,6 +865,11 @@ Pg.pageheight(p: self ref Pg): int
 	return layout->height(p.root);
 }
 
+Pg.pinned(p: self ref Pg): int
+{
+	return layout->pinned(p.root);
+}
+
 # <style> and <link rel=stylesheet>, in document order, then @imports.
 # declarative shadow roots (HTML §4.12.3.1): a <template shadowrootmode>
 # makes its parent a shadow host, its content the root (the mode kept as

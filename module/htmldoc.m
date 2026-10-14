@@ -69,6 +69,8 @@ Htmldoc: module
 	title:	fn(id: int): string;
 	height:	fn(id: int): int;
 	scroll:	fn(id: int): int;
+	# Whether a box of id's page stays put in the window as it scrolls.
+	pinned:	fn(id: int): int;
 	# The view shows id's page from y down (where Back comes back to).
 	viewing:	fn(id: int, y: int);
 

@@ -63,6 +63,11 @@ Docengine: module
 	# scale 100 only, and the view scales what it paints.
 	scalable:	fn(h: int): int;
 
+	# 1 if part of the document stays where it is in the view as the
+	# view scrolls (a web page's fixed and sticky boxes): the view
+	# then paints all it shows, never a strip of it.
+	pinned:	fn(h: int): int;
+
 	# Sheet n at scale (percent) into dst's rectangle r, the point
 	# org of the scaled sheet at r.min.
 	paint:	fn(h: int, n: int, scale: int, dst: ref Draw->Image,

@@ -98,6 +98,7 @@ Browser: module
 		linkat:	fn(s: self ref Session, x, y: int): string;	# the URL of the link under a point
 		findat:	fn(s: self ref Session, what: string, after: int): (int, Draw->Rect);	# next text match below y=after
 		pageheight:	fn(s: self ref Session): int;
+		pinned:	fn(s: self ref Session): int;	# a box of the page stays put in the window as it scrolls
 		dom:	fn(s: self ref Session, n: int, what: string): (string, string);	# tag attrs text style box children
 	};
 

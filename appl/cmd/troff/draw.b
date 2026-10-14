@@ -26,8 +26,32 @@ vchar(c: string): int
 	return len c >= 2 && (c[0:2] == "bv" || c[0:2] == "br");
 }
 
+# .rules: \l's and \L's of rule characters drawn as lines, as long as
+# they are, not as a font's glyphs set side by side (not Neatroff's);
+# \(ru and \(rn, eqn's, are left as glyphs: eqn places them by their
+# boxes
+n_rules := 0;
+
+hrule(c: string): int
+{
+	return n_rules && (c == "ul" || c == "_");
+}
+
+vrule(c: string): int
+{
+	return n_rules && (c == "br" || c == "bv" || c == "|");
+}
+
 ren_hline(wb: ref Wb, l: int, c: string)
 {
+	if(hrule(c)){
+		if(l < 0){
+			wb_hmov(wb, l);
+			l = -l;
+		}
+		wb_drawl(wb, 'l', l, 0);
+		return;
+	}
 	w := cwid(c);
 	# negative length; moving backwards
 	if(l < 0){
@@ -63,6 +87,12 @@ ren_hline(wb: ref Wb, l: int, c: string)
 
 ren_vline(wb: ref Wb, l: int, c: string)
 {
+	if(vrule(c)){
+		hw := cwid(c);
+		wb_drawl(wb, 'l', 0, l);
+		wb_hmov(wb, hw);
+		return;
+	}
 	neg := l < 0;
 	w := SC_EM();	# character height
 	hw := cwid(c);	# character width

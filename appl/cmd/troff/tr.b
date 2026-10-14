@@ -675,6 +675,14 @@ tr_ff(args: array of string)
 			font_feat(fnt, args[i][1:], args[i][0] == '+');
 }
 
+# .rules [n]: rules drawn as lines (draw.b)
+tr_rules(args: array of string)
+{
+	n_rules = 1;
+	if(len args > 1)
+		n_rules = eval(args[1], 0) != 0;
+}
+
 tr_ffsc(args: array of string)
 {
 	fnt := argfont(args);
@@ -1215,6 +1223,7 @@ cmds := array[] of {
 	Cmd("fp", A_REQ),
 	Cmd("ffsc", A_REQ),
 	Cmd("fspecial", A_REQ),
+	Cmd("rules", A_REQ),
 	Cmd("ft", A_REQ),
 	Cmd("fzoom", A_REQ),
 	Cmd("hc", A_REQ),
@@ -1339,6 +1348,7 @@ cmd_run(i: int, args: array of string)
 	"fp" =>		tr_fp(args);
 	"ffsc" =>	tr_ffsc(args);
 	"fspecial" =>	tr_fspecial(args);
+	"rules" =>	tr_rules(args);
 	"ft" =>		tr_ft(args);
 	"fzoom" =>	tr_fzoom(args);
 	"hc" =>		tr_hc(args);

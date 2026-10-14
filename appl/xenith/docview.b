@@ -276,6 +276,19 @@ handle1(w: ref Window, e: ref Ev)
 		w.settag();
 	Failed =>
 		warning(nil, sprint("%s: %s\n", v.name, n.err));
+		if(v.kind != nil && v.kind.class == Docreg->Source && !v.web){
+			# a source document that cannot be set (one too long
+			# for an image of it, say) is its text: shown again,
+			# where it was, not hidden behind the error
+			line := d.line;
+			drop(w);
+			org := 0;
+			if(line > 0)
+				org = charofline(w.body, line);
+			showframe(w, org);
+			w.settag();
+			return;
+		}
 		draw(w);
 	Text =>
 		settext(w, n.text);
@@ -814,13 +827,6 @@ ctlread(w: ref Window): string
 ctlwrite(w: ref Window, s: string): string
 {
 	d := w.doc;
-	if(d == nil){
-		# a window showing its text: render shows the file as the
-		# document it is
-		if(s == "render")
-			return render(w);
-		return "no document";
-	}
 	(nil, l) := sys->tokenize(s, " \t\n");
 	if(l == nil)
 		return nil;
@@ -828,6 +834,20 @@ ctlwrite(w: ref Window, s: string): string
 	arg := "";
 	if(tl l != nil)
 		arg = hd tl l;
+	if(d == nil){
+		# a window showing its text: render shows the file as the
+		# document it is, or its text as the kind named (render
+		# markdown), for a window whose name says nothing (a
+		# program's, like Agent's)
+		if(cmd != "render")
+			return "no document";
+		if(arg == "")
+			return render(w);
+		k := docreg->kindof(arg);
+		if(k == nil || k.class != Docreg->Source)
+			return "not a kind of source document: " + arg;
+		return open(w, w.body.file.name, k);
+	}
 	case cmd {
 	"sheet" =>
 		(nil, err) := command(w, "Page", arg);

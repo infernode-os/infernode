@@ -198,11 +198,11 @@ dev_close()
 dev_find(c: string, fnt: int, byid: int): ref Glyph
 {
 	g: ref Glyph;
-	if(fnt >= 0 && fnt < NFONTS && fn_font[fnt] != nil){
+	if((f := dev_font(fnt)) != nil){
 		if(byid)
-			g = font_glyph(fn_font[fnt], c);
+			g = font_glyph(f, c);
 		else
-			g = font_find(fn_font[fnt], c);
+			g = font_find(f, c);
 		if(g != nil)
 			return g;
 		for(i := 0; i < NFONTSPCL && fn_special[fnt][i] > 0; i++){
@@ -219,10 +219,11 @@ dev_find(c: string, fnt: int, byid: int): ref Glyph
 	}
 	for(i := 0; i < NFONTS; i++)
 		if(fn_font[i] != nil && font_special(fn_font[i])){
+			sf := dev_font(i);
 			if(byid)
-				g = font_glyph(fn_font[i], c);
+				g = font_glyph(sf, c);
 			else
-				g = font_find(fn_font[i], c);
+				g = font_find(sf, c);
 			if(g != nil)
 				return g;
 		}
@@ -269,10 +270,15 @@ dev_fontpos(fnt: ref Font): int
 	return 0;
 }
 
+# the font at pos, read if it has not been
 dev_font(pos: int): ref Font
 {
-	if(pos >= 0 && pos < NFONTS)
-		return fn_font[pos];
+	if(pos >= 0 && pos < NFONTS){
+		f := fn_font[pos];
+		if(f != nil && !f.loaded)
+			font_load(f);
+		return f;
+	}
 	return nil;
 }
 

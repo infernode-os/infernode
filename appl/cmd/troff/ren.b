@@ -302,7 +302,7 @@ zwid(): int
 {
 	g := dev_glyph("0", nr(R_f));
 	if(g != nil)
-		return font_gwid(g.font, dev_font(nr(R_f)), nr(R_s), g.wid);
+		return font_gwid(gfont(g), dev_font(nr(R_f)), nr(R_s), g.wid);
 	return 0;
 }
 

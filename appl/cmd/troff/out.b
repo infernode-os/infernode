@@ -130,16 +130,16 @@ outc(c: string)
 	fnt := dev_font(o_f);
 	if(g == nil)
 		return;
-	cwid := font_gwid(g.font, dev_font(o_f), o_s, g.wid);
-	bwid := font_wid(g.font, o_s, g.wid);
-	if(font_mapped(g.font, c))
+	cwid := font_gwid(gfont(g), dev_font(o_f), o_s, g.wid);
+	bwid := font_wid(gfont(g), o_s, g.wid);
+	if(font_mapped(gfont(g), c))
 		c = g.name;
 	if(font_getcs(fnt))
 		outnn(sys->sprint("h%d", (cwid - bwid) / 2));
-	outg(c, dev_fontpos(g.font), font_zoom(g.font, o_s));
+	outg(c, dev_fontpos(gfont(g)), font_zoom(gfont(g), o_s));
 	if(font_getbd(fnt)){
 		outnn(sys->sprint("h%d", font_getbd(fnt) - 1));
-		outg(c, dev_fontpos(g.font), font_zoom(g.font, o_s));
+		outg(c, dev_fontpos(gfont(g)), font_zoom(gfont(g), o_s));
 		outnn(sys->sprint("h%d", -font_getbd(fnt) + 1));
 	}
 	if(font_getcs(fnt))

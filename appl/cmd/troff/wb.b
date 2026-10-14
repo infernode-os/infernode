@@ -92,7 +92,8 @@ wb_init(wb: ref Wb)
 	wb.sb = 0;
 	wb.st = 0;
 	wb.icleft = 0;
-	wb.sub_c = array[WORDLEN] of string;
+	if(wb.sub_c == nil)
+		wb.sub_c = array[WORDLEN] of string;
 	wb.sub_n = 0;
 	wb.sub_collect = 1;
 	wb.f = -1;
@@ -229,7 +230,7 @@ wb_putbuf(wb: ref Wb, c: string)
 		c1 = at(c, 1);
 	}
 	if(g != nil && !zerowidth && wb.icleft && glyph_icleft(g))
-		wb_hmov(wb, font_wid(g.font, wb.s, glyph_icleft(g)));
+		wb_hmov(wb, font_wid(gfont(g), wb.s, glyph_icleft(g)));
 	wb.icleft = 0;
 	if(len c <= 1 || c0 == ecc() || c0 == c_ni){
 		if(c0 == c_ni && c1 == ecc())
@@ -243,14 +244,14 @@ wb_putbuf(wb: ref Wb, c: string)
 	if(!zerowidth){
 		if(!nr(R_cp) && g != nil){
 			if(g.llx || g.lly || g.urx || g.ury){
-				llx := font_wid(g.font, wb.s, g.llx);
-				lly := font_wid(g.font, wb.s, g.lly);
-				urx := font_wid(g.font, wb.s, g.urx);
-				ury := font_wid(g.font, wb.s, g.ury);
+				llx := font_wid(gfont(g), wb.s, g.llx);
+				lly := font_wid(gfont(g), wb.s, g.lly);
+				urx := font_wid(gfont(g), wb.s, g.urx);
+				ury := font_wid(gfont(g), wb.s, g.ury);
 				wb_bbox(wb, llx, lly, urx, ury);
 			}else{	# no bounding box information
 				ht := wb.s * SC_PT();
-				urx := font_wid(g.font, wb.s, g.wid);
+				urx := font_wid(gfont(g), wb.s, g.wid);
 				lly := 0;
 				if(g.typ & 1)
 					lly = -ht / 2;
@@ -261,7 +262,7 @@ wb_putbuf(wb: ref Wb, c: string)
 			}
 		}
 		if(g != nil){
-			wb.h += font_gwid(g.font, dev_font(wb.f), wb.s, g.wid);
+			wb.h += font_gwid(gfont(g), dev_font(wb.f), wb.s, g.wid);
 			wb.ct |= g.typ;
 		}
 		wb_stsb(wb);
@@ -296,6 +297,10 @@ wb_collect(wb: ref Wb, val: int): int
 	return old;
 }
 
+# wb_flushsub()'s buffers
+fs_hyph, fs_x, fs_y, fs_xadv, fs_yadv, fs_dmap: array of int;
+fs_gsrc, fs_gdst: array of ref Glyph;
+
 # output the collected characters; only for those present in the wb.f font
 wb_flushsub(wb: ref Wb)
 {
@@ -303,17 +308,29 @@ wb_flushsub(wb: ref Wb)
 		return;
 	wb.sub_collect = 0;
 	fnt := dev_font(wb.f);
-	src_hyph := array[WORDLEN] of {* => 0};
-	if(!nr(R_hy) || wb_hyph(wb.sub_c, wb.sub_n, src_hyph, nr(R_hy)))
-		for(k := 0; k < WORDLEN; k++)
+	if(fs_hyph == nil){
+		fs_hyph = array[WORDLEN] of {* => 0};
+		fs_gsrc = array[WORDLEN] of ref Glyph;
+		fs_gdst = array[WORDLEN] of ref Glyph;
+		fs_x = array[WORDLEN] of {* => 0};
+		fs_y = array[WORDLEN] of {* => 0};
+		fs_xadv = array[WORDLEN] of {* => 0};
+		fs_yadv = array[WORDLEN] of {* => 0};
+		fs_dmap = array[WORDLEN] of {* => 0};
+	}
+	src_hyph := fs_hyph;
+	for(k := 0; k < wb.sub_n; k++)
+		src_hyph[k] = 0;
+	if(nr(R_hy) && wb_hyph(wb.sub_c, wb.sub_n, src_hyph, nr(R_hy)))
+		for(k = 0; k < wb.sub_n; k++)
 			src_hyph[k] = 0;
-	gsrc := array[WORDLEN] of ref Glyph;
-	gdst := array[WORDLEN] of ref Glyph;
-	x := array[WORDLEN] of {* => 0};
-	y := array[WORDLEN] of {* => 0};
-	xadv := array[WORDLEN] of {* => 0};
-	yadv := array[WORDLEN] of {* => 0};
-	dmap := array[WORDLEN] of {* => 0};
+	gsrc := fs_gsrc;
+	gdst := fs_gdst;
+	x := fs_x;
+	y := fs_y;
+	xadv := fs_xadv;
+	yadv := fs_yadv;
+	dmap := fs_dmap;
 	cd := wb.cd;
 	if(cd < 0)
 		cd = 0;
@@ -616,7 +633,7 @@ wb_italiccorrection(wb: ref Wb)
 {
 	g := wb_prevglyph(wb);
 	if(g != nil && glyph_ic(g))
-		wb_hmov(wb, font_wid(g.font, wb.s, glyph_ic(g)));
+		wb_hmov(wb, font_wid(gfont(g), wb.s, glyph_ic(g)));
 }
 
 wb_italiccorrectionleft(wb: ref Wb)
@@ -660,7 +677,7 @@ wb_hywid(wb: ref Wb): int
 {
 	g := dev_glyph("hy", wb.f);
 	if(g != nil)
-		return font_gwid(g.font, dev_font(R_F(wb)), R_S(wb), g.wid);
+		return font_gwid(gfont(g), dev_font(R_F(wb)), R_S(wb), g.wid);
 	return 0;
 }
 
@@ -703,7 +720,7 @@ wb_keshideh(word: string, dst: ref Wb, wid: int): int
 			g := dev_glyph("ـ", R_F(dst));
 			kw := 0;
 			if(g != nil)
-				kw = font_gwid(g.font, dev_font(R_F(dst)), R_S(dst), g.wid);
+				kw = font_gwid(gfont(g), dev_font(R_F(dst)), R_S(dst), g.wid);
 			if(g != nil && kw < wid){
 				s_kesh = s_prev;
 				ins = kw;

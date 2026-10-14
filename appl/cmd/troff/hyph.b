@@ -112,6 +112,7 @@ tr_hw(args: array of string)
 		}
 		hw_add(word);
 	}
+	hycache_reset();
 }
 
 # TeX's hyphenation algorithm
@@ -119,26 +120,90 @@ tr_hw(args: array of string)
 hyinit := 0;				# the hyphenation data is initialised
 hynums: array of int;			# the numbers of the patterns, one after another
 hypats_len := 0;			# used hynums[] length
-hypref: ref Pref;			# map patterns to their index in hyoff[]
 hyoff: array of int;			# the offset of the patterns in hynums[]
 hylen: array of int;			# their lengths
 hy_n := 0;				# the number of patterns
 
-# find the patterns matching w at off and update the values n from there
+# the patterns in a trie: a node's character, first child, next sibling
+# and the first pattern ending there (patnext links the rest)
+tchar, tchild, tnext, tpat: array of int;
+tn := 0;
+patnext: array of int;
+
+trie_init()
+{
+	tchar = array[4096] of {* => 0};
+	tchild = array[4096] of {* => -1};
+	tnext = array[4096] of {* => -1};
+	tpat = array[4096] of {* => -1};
+	tn = 1;		# the root
+	patnext = array[NHYPHS] of {* => -1};
+}
+
+trie_node(c: int): int
+{
+	if(tn == len tchar){
+		n := 2 * len tchar;
+		a := array[n] of {* => 0};
+		a[0:] = tchar;
+		tchar = a;
+		a = array[n] of {* => -1};
+		a[0:] = tchild;
+		tchild = a;
+		a = array[n] of {* => -1};
+		a[0:] = tnext;
+		tnext = a;
+		a = array[n] of {* => -1};
+		a[0:] = tpat;
+		tpat = a;
+	}
+	tchar[tn] = c;
+	return tn++;
+}
+
+# add pattern i, the letters p, to the trie
+trie_put(p: string, i: int)
+{
+	node := 0;
+	for(k := 0; k < len p; k++){
+		c := p[k];
+		ch := tchild[node];
+		while(ch >= 0 && tchar[ch] != c)
+			ch = tnext[ch];
+		if(ch < 0){
+			ch = trie_node(c);
+			tnext[ch] = tchild[node];
+			tchild[node] = ch;
+		}
+		node = ch;
+	}
+	patnext[i] = tpat[node];
+	tpat[node] = i;
+}
+
+# find the patterns matching w at off and update the values n from there.
+# Neatroff finds a pattern only through the first two bytes of its UTF-8,
+# so a pattern of a single ASCII letter never matches.
 hy_find(w: string, off: int, n: array of int)
 {
-	s := w[off:];
-	idx := -1;
-	for(;;){
-		i: int;
-		(i, idx) = pref_prefix(hypref, s, idx);
-		if(i < 0)
+	node := 0;
+	for(k := off; k < len w; k++){
+		c := w[k];
+		ch := tchild[node];
+		while(ch >= 0 && tchar[ch] != c)
+			ch = tnext[ch];
+		if(ch < 0)
 			break;
-		np := hyoff[i];
-		plen := hylen[i] + 1;
-		for(j := 0; j < plen; j++)
-			if(n[off + j] < hynums[np + j])
-				n[off + j] = hynums[np + j];
+		node = ch;
+		if(k == off && c < 16r80)
+			continue;
+		for(i := tpat[node]; i >= 0; i = patnext[i]){
+			np := hyoff[i];
+			plen := hylen[i] + 1;
+			for(j := 0; j < plen; j++)
+				if(n[off + j] < hynums[np + j])
+					n[off + j] = hynums[np + j];
+		}
 	}
 }
 
@@ -185,7 +250,8 @@ hy_add(s: string)
 	}
 	hyoff[hy_n] = hypats_len;
 	hylen[hy_n] = len p;
-	pref_put(hypref, p, hy_n);
+	if(p != nil)
+		trie_put(p, hy_n);
 	hypats_len += len p + 1;
 	hy_n++;
 }
@@ -258,6 +324,7 @@ tr_hcode(args: array of string)
 		i = i2;
 		hcode_add(c1, c2);
 	}
+	hycache_reset();
 }
 
 # the whitespace-separated words of s
@@ -293,6 +360,18 @@ hyph_readexceptions(s: string)
 		hw_add(hd l);
 }
 
+# the words hyphenated so far, and where their hyphens go
+hycache: ref Dict;
+hycached: array of array of int;
+hyncached := 0;
+
+hycache_reset()
+{
+	hycache = dict_make(4096);
+	hycached = array[1024] of array of int;
+	hyncached = 0;
+}
+
 hyphenate(hyph: array of int, word: string, flg: int)
 {
 	if(!hyinit){
@@ -300,8 +379,26 @@ hyphenate(hyph: array of int, word: string, flg: int)
 		hyph_readpatterns(en_patterns);
 		hyph_readexceptions(en_exceptions);
 	}
+	key := word + "\u0000" + chr(flg + 'A');
+	if((i := dict_get(hycache, key)) >= 0){
+		h := hycached[i];
+		hyph[0:] = h;
+		return;
+	}
 	if(hw_lookup(word, hyph))
 		hy_dohyph(hyph, word, flg);
+	if(hyncached == len hycached){
+		a := array[2 * len hycached] of array of int;
+		a[0:] = hycached;
+		hycached = a;
+	}
+	n := len word + 1;
+	if(n > len hyph)
+		n = len hyph;
+	h := array[n] of int;
+	h[0:] = hyph[0:n];
+	hycached[hyncached] = h;
+	dict_put(hycache, key, hyncached++);
 }
 
 # lower and upper case letters
@@ -353,6 +450,7 @@ filetoks(path: string): list of string
 tr_hpfa(args: array of string)
 {
 	l: list of string;
+	hycache_reset();
 	hyinit = 1;
 	# load the English patterns with no arguments
 	if(len args < 2){
@@ -390,8 +488,9 @@ hyph_init()
 	hyoff = array[NHYPHS] of {* => 0};
 	hylen = array[NHYPHS] of {* => 0};
 	hwpref = pref_make();
-	hypref = pref_make();
+	trie_init();
 	hcodedict = dict_make(1024);
+	hycache_reset();
 }
 
 tr_hpf(args: array of string)

@@ -163,8 +163,6 @@ char aa	"
 char \'	"
 char µ	589	3	mu	
 char /u	"
-char *m	"
-char μ	"
 char ¶	602	3	paragraph	
 char P!	"
 char pg	"
@@ -712,7 +710,6 @@ char *B	"
 char Γ	528	3	Gamma	
 char *G	"
 char Δ	692	3	uni0394	
-char ∆	"
 char *D	"
 char Ε	578	3	Epsilon	
 char *E	"
@@ -754,7 +751,6 @@ char Ψ	784	3	Psi
 char *Q	"
 char Ω	717	3	uni03A9	
 char *W	"
-char Ω	"
 char Ϊ	351	3	Iotadieresis	
 char Ϋ	606	3	Upsilondieresis	
 char ά	590	3	alphatonos	
@@ -786,8 +782,6 @@ char λ	492	3	lambda
 char *l	"
 char μ	589	3	uni03BC	
 char *m	"
-char µ	"
-char /u	"
 char ν	481	3	nu	
 char *n	"
 char ξ	439	3	xi	
@@ -1627,8 +1621,6 @@ char ℠	750	3	uni2120
 char ™	795	3	trademark	
 char ℤ	691	3	uni2124	
 char Ω	701	3	Omega	
-char Ω	"
-char *W	"
 char ℧	701	3	uni2127	
 char ℮	513	3	estimated	
 char ℵ	481	3	aleph	
@@ -1737,8 +1729,6 @@ char ∄	400	3	uni2204
 char ∅	642	3	emptyset	
 char es	"
 char ∆	692	3	Delta	
-char *D	"
-char Δ	"
 char ∇	661	3	gradient	
 char gr	"
 char ∈	506	3	element	
@@ -1982,9 +1972,9 @@ char בֿ	468	3	betrafe
 char כֿ	463	3	kafrafe	
 char פֿ	474	3	perafe	
 char �	1059	3	uniFFFD	
-char 𝄆	599	3	u1D106	
-char 𝄇	597	3	u1D107	
-char 🄯	633	3	u1F12F	
+char ---	599	3	u1D106	
+char ---	597	3	u1D107	
+char ---	633	3	u1F12F	
 char ---	710	3	Adieresis.alt	
 char ---	699	3	Odieresis.alt	
 char ---	732	3	Udieresis.alt	

@@ -804,8 +804,8 @@ char ♯	640	3	uni266F
 char ꞉	640	3	uniA789	
 char ﬩	640	3	uniFB29	
 char �	640	3	uniFFFD	
-char 𝄆	640	3	u1D106	
-char 𝄇	640	3	u1D107	
+char ---	640	3	u1D106	
+char ---	640	3	u1D107	
 char ---	640	3	Eng.UCStyle	
 char ---	640	3	Adieresis.ss01	
 char ---	640	3	Odieresis.ss01	

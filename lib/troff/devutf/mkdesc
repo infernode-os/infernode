@@ -1,0 +1,19 @@
+#!/dis/sh
+# make devutf's font descriptions from the Libertinus fonts, with
+# mkfn(1), in the directory given, else in /lib/troff/devutf; inside
+# Inferno:	sh /lib/troff/devutf/mkdesc
+load std
+d=/lib/troff/devutf
+if {~ $#* 1} {d=$1}
+l=/fonts/libertinus
+o=(-b -l -o -r7200 -Slatn,grek)
+mkfn $o -tR -f$l/LibertinusSerif-Regular.otf $l/LibertinusSerif-Regular.otf >$d/R
+mkfn $o -tI -f$l/LibertinusSerif-Italic.otf $l/LibertinusSerif-Italic.otf >$d/I
+mkfn $o -tB -f$l/LibertinusSerif-Bold.otf $l/LibertinusSerif-Bold.otf >$d/B
+mkfn $o -tBI -f$l/LibertinusSerif-BoldItalic.otf $l/LibertinusSerif-BoldItalic.otf >$d/BI
+mkfn $o -tCR -f$l/LibertinusMono-Regular.otf $l/LibertinusMono-Regular.otf >$d/CR
+mkfn $o -tHR -f$l/LibertinusSans-Regular.otf $l/LibertinusSans-Regular.otf >$d/HR
+mkfn $o -tHI -f$l/LibertinusSans-Italic.otf $l/LibertinusSans-Italic.otf >$d/HI
+mkfn $o -tHB -f$l/LibertinusSans-Bold.otf $l/LibertinusSans-Bold.otf >$d/HB
+mkfn $o -s -tS1 -f$l/LibertinusSerif-Regular.otf $l/LibertinusSerif-Regular.otf >$d/S1
+mkfn $o -s -tS -f$l/LibertinusMath-Regular.otf $l/LibertinusMath-Regular.otf >$d/S

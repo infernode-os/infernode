@@ -454,6 +454,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/profile_legacykey_test.sh` | The login profile imports a plaintext key left in `~/.infernode/lib/veltro-keys` into factotum, says which file to delete, and does not bind it into the name space (INFR-347) |
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 | `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
+| `tests/host/mkfn_test.sh` | `mkfn`, troff's font descriptions from OpenType fonts: `lib/troff/devutf` is what its `mkdesc` makes; an alias does not take a character the font has its own glyph for (the micro sign's alias μ hid Greek mu) and troff's Greek names go to Greek letters; `-c` gives Neatmkfn's aliases; no glyph named by a character beyond U+FFFF (Dis strings are 16-bit); troff sets μ µ `\(*m` `\(/u` `\(*D` as themselves |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

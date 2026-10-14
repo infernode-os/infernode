@@ -168,6 +168,7 @@ TARG=\
 	watchvars.dis\
 	web.dis\
 	outlinefont.dis\
+	troffpage.dis\
 	pdfenc.dis\
 	sheetview.dis\
 	pdf.dis\
@@ -318,6 +319,7 @@ SYSMODULES=\
 	timers.m\
 	titlebar.m\
 	tk.m\
+	troffpage.m\
 	translate.m\
 	twofa.m\
 	twofaslot.m\

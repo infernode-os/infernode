@@ -1,0 +1,36 @@
+.\" tmac.eps
+.\"
+.\" .EPS file.eps [L|R|C|indents] [width] [height]
+.de EPS
+.	ds eps.tmp /tmp/.eps.\n($$
+.	\" obtaining the bounding box
+.	ec @
+.	ie '@$0'.PDF' .sy cat "@$1" | sed -n '/^.*MediaBox *\[ *\([-.0123456789]\{1,10\}\)  *\([-.0123456789]\{1,10\}\)  *\([-.0123456789]\{1,10\}\)  *\([-.0123456789]\{1,10\}\) *\].*$/{s//.nr llx 0+\1p,.nr lly 0+\2p,.nr urx 0+\3p,.nr ury 0+\4p/p; q; }' | tr ',' '\\n' >@*[eps.tmp]
+.	el .sy cat "@$1" | sed -n '/%%BoundingBox: *\([-0123456789]\{1,10\}\)  *\([-0123456789]\{1,10\}\)  *\([-0123456789]\{1,10\}\)  *\([-0123456789]\{1,10\}\)/{s//.nr llx 0+\1p,.nr lly 0+\2p,.nr urx 0+\3p,.nr ury 0+\4p/p; q; }' | tr ',' '\\n' >@*[eps.tmp]
+.	ec
+.	so \\*[eps.tmp]
+.	sy rm \\*[eps.tmp]
+.	\" image scaling
+.	ie '\\$3'' .nr eps.scale 100
+.	el .nr eps.scale ((\\$3)*100/(\\n[urx]-\\n[llx]))
+.	if !'\\$4'' .if \\n[eps.scale]>(((\\$4)*100/(\\n[ury]-\\n[lly]))) \
+.		nr eps.scale ((\\$4)*100/(\\n[ury]-\\n[lly]))
+.	nr eps.w (\\n[urx]-\\n[llx])*\\n[eps.scale]/100
+.	nr eps.h (\\n[ury]-\\n[lly])*\\n[eps.scale]/100
+.	\" the placement
+.	ie '\\$2'' .nr eps.in 0
+.	el .nr eps.in (\\$2)
+.	if '\\$2'L' .nr eps.in 0
+.	if '\\$2'C' .nr eps.in (\\n(.l-\\n(.i-\\n[eps.w])/2
+.	if '\\$2'R' .nr eps.in (\\n(.l-\\n(.i-\\n[eps.w])
+.	\" printing the image
+.	br
+.	rs
+.	ne \\n[eps.h]u
+.	sp \\n[eps.h]u
+.	ie '\\$0'.PDF' \h'|\\n[eps.in]u'\\X'pdf "\\$1" \\n[eps.w]'\h'\\n[eps.w]u'
+.	el \h'|\\n[eps.in]u'\\X'eps "\\$1" \\n[eps.w]'\h'\\n[eps.w]u'
+.	br
+..
+.\" .PDF file.pdf [L|R|C|indents] [width] [height]
+.co EPS PDF

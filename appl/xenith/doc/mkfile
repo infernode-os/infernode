@@ -9,6 +9,7 @@ TARG=\
 	mddoc.dis\
 	mmddoc.dis\
 	webdoc.dis\
+	trodoc.dis\
 
 SYSMODULES=\
 	sys.m\
@@ -22,6 +23,8 @@ SYSMODULES=\
 	htmldoc.m\
 	rlayout.m\
 	keyboard.m\
+	troffpage.m\
+	sh.m\
 
 MODULES=\
 

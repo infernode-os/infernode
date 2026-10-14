@@ -1,0 +1,63 @@
+.\" A package for PostScript-specific requests (deprecated; use -mpost)
+.\"
+.\" Including EPS files
+.so \n(.D/tmac.eps
+.de ps.eps
+.	EPS \\$^
+..
+.\" pdfmark document information
+.\"
+.\" .ps.info title [author] [subject] [keywords]
+.de ps.info
+.	br
+.	ds ps._info "[
+.	if !'\\$1'' .as ps._info " /Title (\\$1)
+.	if !'\\$2'' .as ps._info " /Author (\\$2)
+.	if !'\\$3'' .as ps._info " /Subject (\\$3)
+.	if !'\\$4'' .as ps._info " /Keywords (\\$4)
+.	dv ps \\*[ps._info] /Creator (Neatroff) /DOCINFO pdfmark
+..
+.\" pdfmark bookmarks
+.\"
+.\" .ps.mark title [page] [count]
+.de ps.mark
+.	br
+.	ds ps._mark "[ /Title (\\$1)
+.	nr ps._vpos \\n(.p-\\n(nl/1p
+.	ie !'\\$2'' .as ps._mark " /Page \\$2
+.	el .as ps._mark " /View [/XYZ null \\n[ps._vpos] null]
+.	if !'\\$3'' .as ps._mark " /Count \\$3
+.	dv ps \\*[ps._mark] /OUT pdfmark
+..
+.\" pdfmark named destintion
+.\"
+.\" .ps.name name [page]
+.de ps.name
+.	br
+.	ds ps._mark "[ /Dest /\\$1
+.	nr ps._vpos \\n(.p-\\n(nl/1p
+.	ie !'\\$2'' .as ps._mark " /Page \\$2
+.	el .as ps._mark " /View [/XYZ null \\n[ps._vpos] null]
+.	dv ps \\*[ps._mark] /DEST pdfmark
+..
+.\" pdfmark link: The destination can be a URL, a page number,
+.\" or an internal named reference (defined with .ps.name).  For
+.\" named references, the name of the reference should be
+.\" prefixed with '#'.
+.\"
+.\" .ps.link destination width height
+.de ps.link
+.	nr ps._linkh \\$2
+.	nr ps._linkv \\$3
+\X'link "\\$1" \\n[ps._linkh] -\\n[ps._linkv]'
+..
+.\" Inline URL: See the comments about the destination of .ps.link.
+.\"
+.\" \*[ps.url destination text]
+.de ps.url
+\R'ps._linkh \\w'\\?'\\n(.$>1@\\$2@\\$1'''\
+\R'ps._linkv \\n(.sp'\
+\v'+\\n(.sp*2u/10u'\X'link "\\$1" \\n[ps._linkh] -\\n[ps._linkv]'\v'-\\n(.sp*2u/10u'\
+\\?'\\n(.$>1@\\$2@\\$1'
+..
+.chop ps.url

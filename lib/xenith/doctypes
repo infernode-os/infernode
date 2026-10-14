@@ -12,3 +12,5 @@ image	binary	/dis/xenith/doc/imgdoc.dis	.png .jpg .jpeg .jpe .gif .webp .avif .s
 markdown	source	/dis/xenith/doc/mddoc.dis	.md .markdown
 mermaid	source	/dis/xenith/doc/mmddoc.dis	.mmd .mermaid
 html	source	/dis/xenith/doc/webdoc.dis	.html .htm
+troff	binary	/dis/xenith/doc/trodoc.dis	magic=x\x20T\x20
+roff	source	/dis/xenith/doc/trodoc.dis	.ms .mm .me .man .roff .tr .t

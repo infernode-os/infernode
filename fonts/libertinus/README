@@ -1,0 +1,7 @@
+Libertinus 7.051 (https://github.com/alerque/libertinus), the static
+OpenType (CFF) faces: Serif in six weights and styles, Sans, Mono
+and Math.  Licensed under the SIL Open Font License 1.1 (OFL.txt).
+
+They are troff(1)'s default device, devutf, through the font
+descriptions in /lib/troff/devutf: R I B BI the Serif, HR HI HB the
+Sans, CR the Mono, S1 the Serif as a special font, S the Math.

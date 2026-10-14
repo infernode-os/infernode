@@ -459,6 +459,7 @@ dis/lib/timers.dis
 dis/lib/titlebar.dis
 dis/lib/tkclient.dis
 dis/lib/translate.dis
+dis/lib/troffpage.dis
 dis/lib/twofa.dis
 dis/lib/twofaslot.dis
 dis/lib/ubfa.dis
@@ -1044,6 +1045,7 @@ dis/xenith/doc/imgdoc.dis
 dis/xenith/doc/mddoc.dis
 dis/xenith/doc/mmddoc.dis
 dis/xenith/doc/pdfdoc.dis
+dis/xenith/doc/trodoc.dis
 dis/xenith/doc/webdoc.dis
 dis/xenith/docreg.dis
 dis/xenith/docview.dis

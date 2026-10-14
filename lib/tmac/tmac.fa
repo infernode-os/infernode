@@ -1,0 +1,463 @@
+.\" A package for short Farsi manuscripts
+.\" Registers and their default values
+.nr PS 14		\" point size
+.nr VS \n(PS+12		\" vertical spacing
+.nr LL 6i		\" line length
+.nr PO 1.1i		\" page offset
+.nr FP -1.2i		\" footer position
+.\" Internal registers
+.nr fa.in 0		\" current indentation
+.nr fa.ip 2m		\" IP indentation
+.nr fa.pi 2m		\" RS indentation
+.nr fa.pg 1		\" page numbering (0 disables)
+.ds fa.cl "0		\" header colour
+.\" Reset variables; when beginning a paragraph, e.g.
+.de RT
+.	fi
+.	<<
+.	ft FR
+.	ad pbk
+.	ps \\n(PS
+.	vs \\n(VS
+.	ll \\n(LLu
+.	lt \\n(LLu
+.	po \\n(POu
+.	in 0
+.	in2 \\n[fa.in]u
+.	cl 0
+.	AL
+..
+.\" Alignment
+.de AL
+.	if \\n(.d%\\n(.v 'sp \\n(.vu-(\\n(.du%\\n(.vu)
+..
+.\" Paragraphs
+.de LP		\" Paragraphs without temporary indentation
+.	RT
+..
+.de PP		\" Ordinary paragraphs
+.	RT
+.	ti2 +3n
+..
+.de QP		\" Quoted paragraphs
+.	LP
+.	in2 \\n[fa.in]u+0.5i
+.	ll -2m
+..
+.de IP		\" Indented paragraphs
+.	br
+.	RT
+.	ne 1
+.	<<
+.	if \\n(.$>1 .nr fa.ip \\$2
+.	in2 +\\n[fa.ip]u
+\h'|-\\n[fa.ip]u'\\$1
+.	sp -1
+..
+.de IP.en	\" Indented paragraphs (English)
+.	br
+.	ne 1
+.	ft R
+.	>>
+.	if \\n(.$>1 .nr fa.ip \\$2
+.	in +\\n[fa.ip]u
+\h'|-\\n[fa.ip]u'\\$1
+.	sp -1
+..
+.de RS		\" Indented block start
+.	br
+.	if \\n(.$ .nr fa.pi \\$1
+.	nr fa.in +\\n[fa.pi]
+..
+.de RE		\" Indented block end
+.	br
+.	if \\n(.$ .nr fa.pi \\$1
+.	nr fa.in -\\n[fa.pi]
+..
+.de QS		\" Quote start
+.	br
+.	RS
+.	LP
+..
+.de QE		\" Quote end
+.	br
+.	RE
+..
+.\" Section header
+.de SH
+.	RT
+.	sp
+.	ne 1.5
+.	cl \\*[fa.cl]
+.	ft HD
+.	ps \\n(PS+2
+.	ad r
+.	if \\n(.$ \{\
+\\$1
+.		LP
+.	\}
+..
+.\" Document title
+.de TL
+.	RT
+.	cl \\*[fa.cl]
+.	ft HD
+.	sp 2
+.	ad c
+.	ps \\n(PS+4
+.	vs \\n(VS+6
+.	fi
+.	if \\n(.$ \{\
+\\$1
+.		sp 2
+.		LP
+.	\}
+..
+.\" Preprocessor macros
+.de EQ
+.	RT
+.	nf
+.	>>
+.	ft R
+.	ds fa.eqlab "\\$1
+.	di fa.eqdiv
+..
+.de EN
+.	di
+.	if \\n(dn \{\
+.		sp .5
+.		ad c
+.		ie "\\*[fa.eqlab]"" .fa.eqdiv
+.		el \{\
+.			nr fa.eqwid \\n(dl
+.			if \\n[fa.eqwid]<(\\n(.lu/2u) .nr fa.eqwid \\n(.lu/2u
+.			ll \\n[fa.eqwid]u
+.			ad r
+.			fa.eqdiv
+.			sp -1
+.			ll
+.			in +(\\n[fa.eqwid]u+2m)
+.			ad l
+\\*[fa.eqlab]
+.			in
+.		\}
+.		sp .5
+.	\}
+.	fi
+.	<<
+.	ft FR
+..
+.de PS
+.	br
+.	RT
+.	nf
+.	>>
+.	in (\\n(.lu-\\$2)/2u
+.	ne \\$1
+..
+.de PE
+.	<<
+.	in
+..
+.de TS
+.	br
+.	>>
+..
+.de TE
+.	<<
+.	RT
+..
+.\" Header and footer macros
+.de FT		\" Page footer
+.	ev fa.ft
+.	FP
+'	sp |\\n(.pu+\\n(FPu
+.	RT
+'	sp
+.	FT.pg
+'	bp
+.	ev
+.	if \\n(.t==(\\n(.p+(\\n(FP)) .HD
+..
+.de HD		\" Page header (called by FT)
+.	ev fa.ft
+.	RT
+'	sp 1
+.	HD.pg
+.	ev
+.	ns
+.	keepbop
+..
+.de FT.pg	\" Footer page number
+.	ie \\n[fa.pg]=1 'tl ''\>%\<''
+.	el 'sp
+..
+.de HD.pg	\" Header page number
+'	sp
+..
+.\" Footnotes
+.de FS.common
+'	br
+.	ie \\n[fa.footnum] .ne 1
+.	el .ne 1.5
+.	if !\\n[fa.footnum] .nr fa.footpos 0\\n(FP+\\n(VSp
+.	da fa.footdiv
+.	ev fa.footenv
+.	RT
+.	in2 0
+.	ps \\n(PS-4
+.	vs \\n(PS-2
+.	nf
+.	>>
+.	nr fa.footnum +1
+.	if \\n[fa.footnum]=1 \l'\\n(.lu'
+.	ds fa.footsign "\\n[fa.footnum]
+.	if \\n(.$>0 .ds fa.footsign "\\$1
+..
+.de FS
+.	FS.common \\$1
+.	ft R
+\\*[fa.footsign]
+.	sp -1
+.	in 3n
+.	in2 3n
+.	fi
+..
+.de FS.fa
+.	FS.common \\$1
+.	<<
+.	ft FR
+\>\\*[fa.footsign]\<
+.	sp -1
+.	in 3n
+.	in2 3n
+.	fi
+..
+.de FE
+.	br
+.	ev
+.	di
+\s-4\d\>\\*[fa.footsign]\<\u\s+4\c
+.	nr fa.footpos -\\n(dn
+.	ch FT \\n[fa.footpos]u
+..
+.de FP
+.	if \\n[fa.footnum] \{\
+.		ev fa.footenv
+'		in 0
+'		in2 0
+'		nf
+'		ad L
+.		fa.footdiv
+.		rm fa.footdiv
+.		ev
+.	\}
+.	nr fa.footnum 0
+.	ch FT \\n(FPu
+..
+.\" Including EPS files (overrides -meps)
+.rn EPS __EPS
+.de EPS
+.	>>
+.	__EPS "\\$1" \\$2 \\$3 \\$4 \\$5 \\$6 \\$7 \\$8 \\$9
+..
+.\" Adjusting fonts
+.de fa.gmap	\" Mapping glyphs
+.	fmap \\n(.f \\$1
+.	if \w'\N'\\$2'' .fmap \\n(.f \\$1 \\$2
+..
+.de fa.cmap	\" Mapping characters
+.	ochar \\n(.f \\$1
+.	if !\w'\\$1' .ochar \\n(.f \\$1 \\$2
+..
+.de fa.umap	\" Mapping characters (unconditionally)
+.	ochar \\n(.f \\$1
+.	if \w'\\$2' .ochar \\n(.f \\$1 \\$2
+..
+.de fa.ffont	\" Adjusting old Farsi fonts
+.	ft \\$1
+.	ff \\$1 +ccmp +rlig +rclt +calt +mset +curs +kern +mark +mkmk
+.	fa.cmap ﻫ ھ
+.	fa.cmap ﻬ ﮫ
+.	fa.cmap ی ﻱ
+.	fa.cmap ﯾ ﻳ
+.	fa.cmap ﯿ ﻴ
+.	fa.cmap ﯽ ﻰ
+.	fa.cmap ﯽ ﻲ
+.	fa.cmap ﮐ ﻛ
+.	fa.cmap ﮑ ﻜ
+.	fa.cmap ﮏ ﻚ
+.	fa.umap 0 ۰
+.	fa.umap 1 ۱
+.	fa.umap 2 ۲
+.	fa.umap 3 ۳
+.	fa.umap 4 ۴
+.	fa.umap 5 ۵
+.	fa.umap 6 ۶
+.	fa.umap 7 ۷
+.	fa.umap 8 ۸
+.	fa.umap 9 ۹
+.	ft P
+..
+.de fa.efont	\" Adjusting English fonts
+.	fzoom \\$1 900
+..
+.de fa.mfont	\" Adjusting math fonts
+.	ft \\$1
+.	fzoom \\$1 900
+.	fa.umap 0 "\f(FR۰\fP
+.	fa.umap 1 "\f(FR۱\fP
+.	fa.umap 2 "\f(FR۲\fP
+.	fa.umap 3 "\f(FR۳\fP
+.	fa.umap 4 "\f(FR۴\fP
+.	fa.umap 5 "\f(FR۵\fP
+.	fa.umap 6 "\f(FR۶\fP
+.	fa.umap 7 "\f(FR۷\fP
+.	fa.umap 8 "\f(FR۸\fP
+.	fa.umap 9 "\f(FR۹\fP
+.	ft P
+..
+.de fa.fonts	\" Adjust the default fonts
+.	fa.ffont FR
+.	fa.ffont FI
+.	fa.ffont FB
+.	fa.ffont HD
+.	fa.efont R
+.	fa.efont I
+.	fa.efont B
+.	fa.efont BI
+.	fa.efont CMMI
+..
+.\" Small auxiliary macros
+.ds en "\>\fR\\$1\fP\<
+.ds num "\>\\$1\<
+.ds ct "]\>\\$1\<[
+.de fs		\" English footnote
+\c
+.	FS
+\\$1
+.	FE
+\&
+..
+.chop fs
+.de fs.fa	\" Farsi footnote
+\c
+.	FS.fa
+\\$1
+.	FE
+\&
+..
+.chop fs.fa
+.\" For tbl package
+.de tblrst
+.	fi
+.	ft FR
+.	ad pbk
+.	ps \\n(PS-2
+.	vs \\n(VS-3
+.	ll \\n(LLu
+.	in 0
+.	in2 0
+.	cl 0
+.	>>
+..
+.de fa.tblhd
+.	<<
+.	ft FB
+.	ad c
+..
+.de fa.tblfc
+.	<<
+.	ft FR
+.	ad c
+..
+.de fa.tblfb
+.	<<
+.	ft FR
+.	ad pbk
+..
+.\" For keep package
+.de KF
+.	keepbeg f
+..
+.de KT
+.	keepbeg t
+..
+.de KS
+.	keepbeg d
+..
+.de KE
+.	keepend
+..
+.de DS
+.	RT
+.	nf
+..
+.de DE
+.	fi
+..
+.\" Initialization
+.de fa.init
+.	lg 1
+.	kn 1
+.	wh \\n(FPu FT
+.	hy 14
+.	hycost 800
+.	eos .?!؟ '")]*
+.	nh
+.	ssh 15
+.	ss 12 6
+.	char ‌ \&
+.	char ‍ \&
+.	\" Fonts: Times Roman + IR Nazanin + Computer Modern
+.	fp 5 FR IRNazanin	\" Farsi regular font
+.	fp 6 FI IRNazaninIranic	\" Farsi italic font
+.	fp 7 FB IRNazaninBold	\" Farsi bold font
+.	fp 8 HD IRNazaninBold	\" Farsi header font
+.	fp 14 CMR CMR10
+.	fp 15 CMEX CMEX10
+.	fp 16 CMSY CMSY10
+.	fp 17 CMMI CMMI10
+.	fspecial CMR S1 S CMEX CMSY
+.	fa.fonts
+.	fa.mfont CMR
+.	ds .eqnbeg "\\\\?'\\\\n[.td]@\>'
+.	ds .eqnend "\\\\?'\\\\n[.td]@\<'
+.	ochar CMR { "\f[CMSY]{\fP
+.	ochar CMR } "\f[CMSY]}\fP
+.	ochar CMR \(<= "\f[CMSY]\(<=\fP
+.	ochar CMR < "\f[CMSY]<\fP
+.	ochar CMR > "\f[CMSY]>\fP
+.	ochar CMR \(>= "\f[CMSY]\(>=\fP
+.	ochar CMR \(mu "\f[CMSY]\(mu\fP
+.	ochar CMR \(mi "\f[CMSY]\(mi\fP
+.	ochar CMR \(+- "\f[CMSY]\(+-\fP
+.	ochar CMR \(-+ "\f[CMSY]\(-+\fP
+.	ochar CMR \(O+ "\f[CMSY]\(O+\fP
+.	ochar CMR \(Ox "\f[CMSY]\(Ox\fP
+.	ochar CMR \(bu "\f[CMSY]\(bu\fP
+.	ochar CMR \(== "\f[CMSY]\(==\fP
+.	ochar CMR \(ap "\f[CMSY]\(ap\fP
+.	ochar CMR \(sb "\f[CMSY]\(sb\fP
+.	ochar CMR \(sp "\f[CMSY]\(sp\fP
+.	ochar CMR \(<- "\f[CMSY]\(<-\fP
+.	ochar CMR \(-> "\f[CMSY]\(->\fP
+.	ochar CMR \(ua "\f[CMSY]\(ua\fP
+.	ochar CMR \(da "\f[CMSY]\(da\fP
+.	ochar CMR \(<> "\f[CMSY]\(<>\fP
+.	ochar CMR \(pt "\f[CMSY]\(pt\fP
+.	ochar CMR \(if "\f[CMSY]\(if\fP
+.	ochar CMR \(mo "\f[CMSY]\(mo\fP
+.	ochar CMR \(fa "\f[CMSY]\(fa\fP
+.	ochar CMR \(-, "\f[CMSY]\(-,\fP
+.	ochar CMR \(es "\f[CMSY]\(es\fP
+.	ochar CMR \(pp "\f[CMSY]\(pp\fP
+.	ochar CMR \(cu "\f[CMSY]\(cu\fP
+.	ochar CMR \(ca "\f[CMSY]\(ca\fP
+.	ochar CMR \(l& "\f[CMSY]\(l&\fP
+.	ochar CMR \(l| "\f[CMSY]\(l|\fP
+.	ochar CMR \(is "\f[CMSY]\(is\fP
+.	ochar CMR \(sc "\f[CMSY]\(sc\fP
+.	ochar CMR \(dg "\f[CMSY]\(dg\fP
+..
+.fa.init

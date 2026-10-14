@@ -1264,10 +1264,10 @@ whatpos(p: ref Obj, corner: int): (real, real)	# what is the position (no side e
 		case corner {
 		START =>	;	# already in place
 		END =>	x = x1; y = y1;
-		NORTH =>	if(fgt(y1, y)){ x = x1; y = y1; }
-		SOUTH =>	if(flt(y1, y)){ x = x1; y = y1; }
-		EAST =>	if(fgt(x1, x)){ x = x1; y = y1; }
-		WEST =>	if(flt(x1, x)){ x = x1; y = y1; }
+		NORTH =>	if(y1 > y){ x = x1; y = y1; }
+		SOUTH =>	if(y1 < y){ x = x1; y = y1; }
+		EAST =>	if(x1 > x){ x = x1; y = y1; }
+		WEST =>	if(x1 < x){ x = x1; y = y1; }
 		* =>	# CENTER, and others: change!
 			x = (x+x1)/2.0; y = (y+y1)/2.0;
 		}
@@ -1382,13 +1382,13 @@ makenode(typ: int, n: int): ref Obj
 
 extreme(x: real, y: real)	# record max and min x and y values
 {
-	if(fgt(x, xmax))
+	if(x > xmax)
 		xmax = x;
-	if(fgt(y, ymax))
+	if(y > ymax)
 		ymax = y;
-	if(flt(x, xmin))
+	if(x < xmin)
 		xmin = x;
-	if(flt(y, ymin))
+	if(y < ymin)
 		ymin = y;
 }
 
@@ -1507,7 +1507,7 @@ forloop(var: string, from: real, tov: real, op: int, by: real, str: string)	# se
 nextfor()	# do one iteration of a for loop
 {
 	# BUG:  this should depend on op and direction
-	if(fgt(getfval(forstk[forp].var), SLOP * forstk[forp].tov)){	# loop is done
+	if(getfval(forstk[forp].var) > SLOP * forstk[forp].tov){	# loop is done
 		if(--forp < 0)
 			fatal("forstk popped too far");
 	}else{	# another iteration

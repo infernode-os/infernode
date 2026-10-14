@@ -151,28 +151,6 @@ f32(x: real): real
 	return math->bits32real(math->realbits32(x));
 }
 
-# C's ordering of doubles: false with a NaN (Limbo's compiler makes
-# these true then, inverting them as it branches)
-flt(a: real, b: real): int
-{
-	return !math->isnan(a) && !math->isnan(b) && a < b;
-}
-
-fle(a: real, b: real): int
-{
-	return !math->isnan(a) && !math->isnan(b) && a <= b;
-}
-
-fgt(a: real, b: real): int
-{
-	return !math->isnan(a) && !math->isnan(b) && a > b;
-}
-
-fge(a: real, b: real): int
-{
-	return !math->isnan(a) && !math->isnan(b) && a >= b;
-}
-
 # C's (long) of a double: towards zero
 clong(x: real): big
 {

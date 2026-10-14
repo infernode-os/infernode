@@ -61,9 +61,9 @@ rightthing(p: ref Obj, c: int): ref Obj	# called for ... ] or ... }
 		q = makenode(BLOCKEND, 7);
 		q.val[4] = f32(real (p.nobj + 1));	# back pointer
 		p.val[5] = f32(real (q.nobj - 1));	# forward pointer
-		if(fgt(xmin, xmax))	# nothing happened
+		if(xmin > xmax)	# nothing happened
 			xmin = xmax;
-		if(fgt(ymin, ymax))
+		if(ymin > ymax)
 			ymin = ymax;
 		p.val[0] = f32(xmin); p.val[1] = f32(ymin);
 		p.val[2] = f32(xmax); p.val[3] = f32(ymax);
@@ -392,12 +392,12 @@ circgen(typ: int): ref Obj
 	p := makenode(typ, 2);
 	p.val[0] = f32(circ_rad[t] = r);
 	p.val[1] = f32(circ_rad2[t] = r2);
-	if(fle(r, 0.0) || fle(r2, 0.0)){
+	if(r <= 0.0 || r2 <= 0.0){
 		what := "ellipse";
 		if(typ == CIRCLE)
 			what = "circle";
 		m := r2;
-		if(flt(r, r2))
+		if(r < r2)
 			m = r;
 		error(what + " has invalid radius " + g(m) + "\n");
 	}
@@ -506,11 +506,11 @@ arcgen(typ: int): ref Obj	# handles circular and (eventually) elliptical arcs
 			phi += -PI/2.0;
 		else
 			phi += PI/2.0;
-		if(fle(arc_prevrad, 0.0))
+		if(arc_prevrad <= 0.0)
 			arc_prevrad = dx2*dx2+dy2*dy2;
 		r := arc_prevrad;
 		d: real;
-		for(; fle(d = r*r - (dx2*dx2+dy2*dy2), 0.0); r *= 2.0)
+		for(; (d = r*r - (dx2*dx2+dy2*dy2)) <= 0.0; r *= 2.0)
 			;	# this kludge gets around too-small radii
 		arc_prevrad = r;
 		ht := math->sqrt(d);
@@ -562,27 +562,27 @@ arc_extreme(x0: real, y0: real, x1: real, y1: real, xc: real, yc: real)	# start,
 	x0 -= xc; y0 -= yc;	# move to center
 	x1 -= xc; y1 -= yc;
 	xmn, ymn, xmx, ymx: real;
-	if(flt(x0, x1)) xmn = x0; else xmn = x1;
-	if(flt(y0, y1)) ymn = y0; else ymn = y1;
-	if(fgt(x0, x1)) xmx = x0; else xmx = x1;
-	if(fgt(y0, y1)) ymx = y0; else ymx = y1;
+	if(x0 < x1) xmn = x0; else xmn = x1;
+	if(y0 < y1) ymn = y0; else ymn = y1;
+	if(x0 > x1) xmx = x0; else xmx = x1;
+	if(y0 > y1) ymx = y0; else ymx = y1;
 	r := math->sqrt(x0*x0 + y0*y0);
-	if(fgt(r, 0.0)){
+	if(r > 0.0){
 		j := quadrant(x0, y0);
 		k := quadrant(x1, y1);
-		if(j == k && flt(y1*x0, x1*y0)){
+		if(j == k && (y1*x0 < x1*y0)){
 			# viewed as complex numbers, if Im(z1/z0)<0, arc is big
-			if(fgt(xmn, -r)) xmn = -r;
-			if(fgt(ymn, -r)) ymn = -r;
-			if(flt(xmx, r)) xmx = r;
-			if(flt(ymx, r)) ymx = r;
+			if(xmn > -r) xmn = -r;
+			if(ymn > -r) ymn = -r;
+			if(xmx < r) xmx = r;
+			if(ymx < r) ymx = r;
 		}else{
 			while(j != k){
 				case j {
-				1 =>	if(flt(ymx, r)) ymx = r;	# north
-				2 =>	if(fgt(xmn, -r)) xmn = -r;	# west
-				3 =>	if(fgt(ymn, -r)) ymn = -r;	# south
-				4 =>	if(flt(xmx, r)) xmx = r;	# east
+				1 =>	if(ymx < r) ymx = r;	# north
+				2 =>	if(xmn > -r) xmn = -r;	# west
+				3 =>	if(ymn > -r) ymn = -r;	# south
+				4 =>	if(xmx < r) xmx = r;	# east
 				}
 				j = j%4 + 1;
 			}
@@ -596,10 +596,10 @@ arc_extreme(x0: real, y0: real, x1: real, y1: real, xc: real, yc: real)	# start,
 
 quadrant(x: real, y: real): int
 {
-	if(fge(x, 0.0) && fgt(y, 0.0)) return 1;
-	else if(flt(x, 0.0) && fge(y, 0.0)) return 2;
-	else if(fle(x, 0.0) && flt(y, 0.0)) return 3;
-	else if(fgt(x, 0.0) && fle(y, 0.0)) return 4;
+	if(x >= 0.0 && y > 0.0) return 1;
+	else if(x < 0.0 && y >= 0.0) return 2;
+	else if(x <= 0.0 && y < 0.0) return 3;
+	else if(x > 0.0 && y <= 0.0) return 4;
 	return 0;	# shut up lint
 }
 

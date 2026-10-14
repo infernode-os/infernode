@@ -64,9 +64,6 @@ YYLEX: adt {
 };
 
 y: YYSTYPE;
-#
-# C's yacc sets $$ to $1 before a rule's action; this one does not, and
-# the actions that want it say so
 Pic: module {
 
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -174,7 +171,7 @@ YYEOFCODE: con 1;
 YYERRCODE: con 2;
 YYMAXDEPTH: con 200;
 
-#line	391	"pic.y"
+#line	388	"pic.y"
 
 
 include "picl.b";
@@ -805,7 +802,8 @@ yystack:
 	
 		yypt := yyp;
 		yyp -= yyr2[yyn];
-#		yyval = yys[yyp+1].yyv;
+		# $$ is $1 until an action says otherwise, as in C's yacc
+		yyval = yys[yyp+1].yyv;
 		yym := yyn;
 	
 		# consult goto table to find next state
@@ -818,44 +816,44 @@ yystack:
 		case yym {
 			
 3=>
-#line	129	"pic.y"
+#line	126	"pic.y"
 { error("syntax error"); }
 4=>
 yyval.o = yys[yyp+1].yyv.o;
 5=>
 yyval.o = yys[yyp+1].yyv.o;
 6=>
-#line	138	"pic.y"
-{ yyval.o = yys[yypt-1].yyv.o; codegen = 1; makeiattr(0, 0); }
+#line	135	"pic.y"
+{ codegen = 1; makeiattr(0, 0); }
 7=>
-#line	139	"pic.y"
+#line	136	"pic.y"
 { rightthing(yys[yypt-2].yyv.o, '}'); yyval.o = yys[yypt-1].yyv.o; }
 8=>
-#line	140	"pic.y"
+#line	137	"pic.y"
 { y.o=yys[yypt-0].yyv.o; makevar(yys[yypt-2].yyv.p,PLACENAME,y); yyval.o = yys[yypt-0].yyv.o; }
 9=>
-#line	141	"pic.y"
+#line	138	"pic.y"
 { y.o=yys[yypt-0].yyv.o; makevar(yys[yypt-3].yyv.p,PLACENAME,y); yyval.o = yys[yypt-0].yyv.o; }
 10=>
-#line	142	"pic.y"
+#line	139	"pic.y"
 { y.o=yys[yypt-1].yyv.o; makevar(yys[yypt-3].yyv.p,PLACENAME,y); yyval.o = yys[yypt-1].yyv.o; }
 11=>
-#line	143	"pic.y"
+#line	140	"pic.y"
 { y.f = yys[yypt-1].yyv.f; yyval.o = y.o; yyval.o = makenode(PLACE, 0); }
 12=>
-#line	144	"pic.y"
+#line	141	"pic.y"
 { setdir(yys[yypt-0].yyv.i); yyval.o = makenode(PLACE, 0); }
 13=>
-#line	145	"pic.y"
+#line	142	"pic.y"
 { printexpr(yys[yypt-1].yyv.f); yyval.o = makenode(PLACE, 0); }
 14=>
-#line	146	"pic.y"
+#line	143	"pic.y"
 { printpos(yys[yypt-1].yyv.o); yyval.o = makenode(PLACE, 0); }
 15=>
-#line	147	"pic.y"
+#line	144	"pic.y"
 { out(yys[yypt-1].yyv.p + "\n"); yyval.o = makenode(PLACE, 0); }
 16=>
-#line	148	"pic.y"
+#line	145	"pic.y"
 { resetvar(); makeiattr(0, 0); yyval.o = makenode(PLACE, 0); }
 17=>
 yyval.o = yys[yyp+1].yyv.o;
@@ -866,310 +864,310 @@ yyval.o = yys[yyp+1].yyv.o;
 20=>
 yyval.o = yys[yyp+1].yyv.o;
 22=>
-#line	157	"pic.y"
+#line	154	"pic.y"
 { makevattr(yys[yypt-0].yyv.p); }
 23=>
-#line	158	"pic.y"
+#line	155	"pic.y"
 { makevattr(yys[yypt-0].yyv.p); }
 24=>
-#line	159	"pic.y"
+#line	156	"pic.y"
 { makevattr(yys[yypt-0].yyv.p); }
 25=>
-#line	163	"pic.y"
+#line	160	"pic.y"
 { yyval.f=y.f=yys[yypt-0].yyv.f; makevar(yys[yypt-2].yyv.p,VARNAME,y); checkscale(yys[yypt-2].yyv.p); }
 26=>
-#line	167	"pic.y"
+#line	164	"pic.y"
 { copy(); }
 29=>
-#line	174	"pic.y"
+#line	171	"pic.y"
 { copyfile(yys[yypt-0].yyv.p); }
 30=>
-#line	175	"pic.y"
+#line	172	"pic.y"
 { copydef(yys[yypt-0].yyv.st); }
 31=>
-#line	176	"pic.y"
+#line	173	"pic.y"
 { copyuntil(yys[yypt-0].yyv.p); }
 32=>
-#line	181	"pic.y"
+#line	178	"pic.y"
 { forloop(yys[yypt-8].yyv.p, yys[yypt-6].yyv.f, yys[yypt-4].yyv.f, yys[yypt-2].yyv.i, yys[yypt-1].yyv.f, yys[yypt-0].yyv.p); }
 33=>
-#line	183	"pic.y"
+#line	180	"pic.y"
 { forloop(yys[yypt-5].yyv.p, yys[yypt-3].yyv.f, yys[yypt-1].yyv.f, '+', 1.0, yys[yypt-0].yyv.p); }
 34=>
-#line	185	"pic.y"
+#line	182	"pic.y"
 { forloop(yys[yypt-8].yyv.p, yys[yypt-6].yyv.f, yys[yypt-4].yyv.f, yys[yypt-2].yyv.i, yys[yypt-1].yyv.f, yys[yypt-0].yyv.p); }
 35=>
-#line	187	"pic.y"
+#line	184	"pic.y"
 { forloop(yys[yypt-5].yyv.p, yys[yypt-3].yyv.f, yys[yypt-1].yyv.f, '+', 1.0, yys[yypt-0].yyv.p); }
 36=>
-#line	191	"pic.y"
+#line	188	"pic.y"
 { ifstat(yys[yypt-2].yyv.f, yys[yypt-1].yyv.p, yys[yypt-0].yyv.p); }
 37=>
-#line	192	"pic.y"
+#line	189	"pic.y"
 { ifstat(yys[yypt-1].yyv.f, yys[yypt-0].yyv.p, NULLP); }
 38=>
 yyval.f = yys[yyp+1].yyv.f;
 39=>
-#line	196	"pic.y"
+#line	193	"pic.y"
 { yyval.f = real (yys[yypt-2].yyv.p == yys[yypt-0].yyv.p); }
 40=>
-#line	197	"pic.y"
+#line	194	"pic.y"
 { yyval.f = real (yys[yypt-2].yyv.p != yys[yypt-0].yyv.p); }
 41=>
-#line	201	"pic.y"
-{ yyval.p = yys[yypt-0].yyv.p; y.f = 0.0; makevar(yys[yypt-0].yyv.p, VARNAME, y); }
+#line	198	"pic.y"
+{ y.f = 0.0; makevar(yys[yypt-0].yyv.p, VARNAME, y); }
 42=>
-#line	204	"pic.y"
+#line	201	"pic.y"
 { yyval.i = '+'; }
 43=>
-#line	205	"pic.y"
+#line	202	"pic.y"
 { yyval.i = '-'; }
 44=>
-#line	206	"pic.y"
+#line	203	"pic.y"
 { yyval.i = '*'; }
 45=>
-#line	207	"pic.y"
+#line	204	"pic.y"
 { yyval.i = '/'; }
 46=>
-#line	208	"pic.y"
+#line	205	"pic.y"
 { yyval.i = ' '; }
 47=>
-#line	213	"pic.y"
+#line	210	"pic.y"
 { yyval.o = leftthing('{'); }
 48=>
-#line	217	"pic.y"
+#line	214	"pic.y"
 { yyval.o = boxgen(); }
 49=>
-#line	218	"pic.y"
+#line	215	"pic.y"
 { yyval.o = circgen(yys[yypt-1].yyv.i); }
 50=>
-#line	219	"pic.y"
+#line	216	"pic.y"
 { yyval.o = circgen(yys[yypt-1].yyv.i); }
 51=>
-#line	220	"pic.y"
+#line	217	"pic.y"
 { yyval.o = arcgen(yys[yypt-1].yyv.i); }
 52=>
-#line	221	"pic.y"
+#line	218	"pic.y"
 { yyval.o = linegen(yys[yypt-1].yyv.i); }
 53=>
-#line	222	"pic.y"
+#line	219	"pic.y"
 { yyval.o = linegen(yys[yypt-1].yyv.i); }
 54=>
-#line	223	"pic.y"
+#line	220	"pic.y"
 { yyval.o = linegen(yys[yypt-1].yyv.i); }
 55=>
-#line	224	"pic.y"
+#line	221	"pic.y"
 { yyval.o = movegen(); }
 56=>
-#line	225	"pic.y"
+#line	222	"pic.y"
 { yyval.o = textgen(); }
 57=>
-#line	226	"pic.y"
+#line	223	"pic.y"
 { yyval.o = troffgen(yys[yypt-0].yyv.p); }
 58=>
-#line	227	"pic.y"
+#line	224	"pic.y"
 { yyval.o=rightthing(yys[yypt-2].yyv.o,']'); }
 59=>
-#line	228	"pic.y"
+#line	225	"pic.y"
 { yyval.o = blockgen(yys[yypt-4].yyv.o, yys[yypt-1].yyv.o); }
 60=>
-#line	232	"pic.y"
+#line	229	"pic.y"
 { yyval.o = leftthing('['); }
 63=>
-#line	241	"pic.y"
+#line	238	"pic.y"
 { makefattr(yys[yypt-1].yyv.i, !DEFAULT, yys[yypt-0].yyv.f); }
 64=>
-#line	242	"pic.y"
+#line	239	"pic.y"
 { makefattr(yys[yypt-0].yyv.i, DEFAULT, 0.0); }
 65=>
-#line	243	"pic.y"
+#line	240	"pic.y"
 { makefattr(curdir(), !DEFAULT, yys[yypt-0].yyv.f); }
 66=>
-#line	244	"pic.y"
+#line	241	"pic.y"
 { makefattr(yys[yypt-1].yyv.i, !DEFAULT, yys[yypt-0].yyv.f); }
 67=>
-#line	245	"pic.y"
+#line	242	"pic.y"
 { makefattr(yys[yypt-0].yyv.i, DEFAULT, 0.0); }
 68=>
-#line	246	"pic.y"
+#line	243	"pic.y"
 { makeoattr(yys[yypt-1].yyv.i, yys[yypt-0].yyv.o); }
 69=>
-#line	247	"pic.y"
+#line	244	"pic.y"
 { makeoattr(yys[yypt-1].yyv.i, yys[yypt-0].yyv.o); }
 70=>
-#line	248	"pic.y"
+#line	245	"pic.y"
 { makeoattr(yys[yypt-1].yyv.i, yys[yypt-0].yyv.o); }
 71=>
-#line	249	"pic.y"
+#line	246	"pic.y"
 { makeoattr(yys[yypt-1].yyv.i, yys[yypt-0].yyv.o); }
 72=>
-#line	250	"pic.y"
+#line	247	"pic.y"
 { makeiattr(WITH, yys[yypt-0].yyv.i); }
 73=>
-#line	251	"pic.y"
+#line	248	"pic.y"
 { makeoattr(PLACE, getblock(getlast(1,BLOCK), yys[yypt-0].yyv.p)); }
 74=>
-#line	253	"pic.y"
+#line	250	"pic.y"
 { makeoattr(PLACE, getpos(getblock(getlast(1,BLOCK), yys[yypt-1].yyv.p), yys[yypt-0].yyv.i)); }
 75=>
-#line	254	"pic.y"
+#line	251	"pic.y"
 { makeoattr(PLACE, yys[yypt-0].yyv.o); }
 76=>
-#line	255	"pic.y"
+#line	252	"pic.y"
 { makeiattr(SAME, yys[yypt-0].yyv.i); }
 77=>
-#line	256	"pic.y"
+#line	253	"pic.y"
 { maketattr(yys[yypt-0].yyv.i, NULLP); }
 78=>
-#line	257	"pic.y"
+#line	254	"pic.y"
 { makeiattr(HEAD, yys[yypt-0].yyv.i); }
 79=>
-#line	258	"pic.y"
+#line	255	"pic.y"
 { makefattr(DOT, !DEFAULT, yys[yypt-0].yyv.f); }
 80=>
-#line	259	"pic.y"
+#line	256	"pic.y"
 { makefattr(DOT, DEFAULT, 0.0); }
 81=>
-#line	260	"pic.y"
+#line	257	"pic.y"
 { makefattr(DASH, !DEFAULT, yys[yypt-0].yyv.f); }
 82=>
-#line	261	"pic.y"
+#line	258	"pic.y"
 { makefattr(DASH, DEFAULT, 0.0); }
 83=>
-#line	262	"pic.y"
+#line	259	"pic.y"
 { makefattr(CHOP, !DEFAULT, yys[yypt-0].yyv.f); }
 84=>
-#line	263	"pic.y"
+#line	260	"pic.y"
 { makefattr(CHOP, DEFAULT, 0.0); }
 85=>
-#line	264	"pic.y"
+#line	261	"pic.y"
 { makeattr(CHOP, PLACENAME, getvar(yys[yypt-0].yyv.p)); }
 86=>
-#line	265	"pic.y"
+#line	262	"pic.y"
 { makefattr(FILL, !DEFAULT, yys[yypt-0].yyv.f); }
 87=>
-#line	266	"pic.y"
+#line	263	"pic.y"
 { makefattr(FILL, DEFAULT, 0.0); }
 88=>
-#line	267	"pic.y"
+#line	264	"pic.y"
 { makeiattr(NOEDGE, 0); }
 90=>
 yyval.i = yys[yyp+1].yyv.i;
 91=>
 yyval.i = yys[yyp+1].yyv.i;
 92=>
-#line	276	"pic.y"
+#line	273	"pic.y"
 { maketattr(CENTER, yys[yypt-0].yyv.p); }
 93=>
-#line	277	"pic.y"
+#line	274	"pic.y"
 { maketattr(yys[yypt-0].yyv.i, yys[yypt-1].yyv.p); }
 94=>
-#line	278	"pic.y"
+#line	275	"pic.y"
 { addtattr(yys[yypt-0].yyv.i); }
 95=>
 yyval.p = yys[yyp+1].yyv.p;
 96=>
-#line	282	"pic.y"
+#line	279	"pic.y"
 { yyval.p = sprintgen(yys[yypt-1].yyv.p); }
 97=>
-#line	283	"pic.y"
+#line	280	"pic.y"
 { yyval.p = sprintgen(yys[yypt-3].yyv.p); }
 98=>
-#line	287	"pic.y"
+#line	284	"pic.y"
 { exprsave(yys[yypt-0].yyv.f); yyval.i = 0; }
 99=>
-#line	288	"pic.y"
-{ yyval.i = yys[yypt-2].yyv.i; exprsave(yys[yypt-0].yyv.f); }
+#line	285	"pic.y"
+{ exprsave(yys[yypt-0].yyv.f); }
 100=>
 yyval.o = yys[yyp+1].yyv.o;
 101=>
-#line	293	"pic.y"
+#line	290	"pic.y"
 { yyval.o = yys[yypt-1].yyv.o; }
 102=>
-#line	294	"pic.y"
+#line	291	"pic.y"
 { yyval.o = makepos(yys[yypt-2].yyv.f, yys[yypt-0].yyv.f); }
 103=>
-#line	295	"pic.y"
+#line	292	"pic.y"
 { yyval.o = fixpos(yys[yypt-4].yyv.o, yys[yypt-2].yyv.f, yys[yypt-0].yyv.f); }
 104=>
-#line	296	"pic.y"
+#line	293	"pic.y"
 { yyval.o = fixpos(yys[yypt-4].yyv.o, -yys[yypt-2].yyv.f, -yys[yypt-0].yyv.f); }
 105=>
-#line	297	"pic.y"
+#line	294	"pic.y"
 { yyval.o = fixpos(yys[yypt-6].yyv.o, yys[yypt-3].yyv.f, yys[yypt-1].yyv.f); }
 106=>
-#line	298	"pic.y"
+#line	295	"pic.y"
 { yyval.o = fixpos(yys[yypt-6].yyv.o, -yys[yypt-3].yyv.f, -yys[yypt-1].yyv.f); }
 107=>
-#line	299	"pic.y"
+#line	296	"pic.y"
 { yyval.o = addpos(yys[yypt-2].yyv.o, yys[yypt-0].yyv.o); }
 108=>
-#line	300	"pic.y"
+#line	297	"pic.y"
 { yyval.o = subpos(yys[yypt-2].yyv.o, yys[yypt-0].yyv.o); }
 109=>
-#line	301	"pic.y"
+#line	298	"pic.y"
 { yyval.o = makepos(getcomp(yys[yypt-3].yyv.o,DOTX), getcomp(yys[yypt-1].yyv.o,DOTY)); }
 110=>
-#line	302	"pic.y"
+#line	299	"pic.y"
 { yyval.o = makebetween(yys[yypt-5].yyv.f, yys[yypt-3].yyv.o, yys[yypt-1].yyv.o); }
 111=>
-#line	303	"pic.y"
+#line	300	"pic.y"
 { yyval.o = makebetween(yys[yypt-4].yyv.f, yys[yypt-2].yyv.o, yys[yypt-0].yyv.o); }
 112=>
-#line	307	"pic.y"
+#line	304	"pic.y"
 { y = getvar(yys[yypt-0].yyv.p); yyval.o = y.o; }
 113=>
-#line	308	"pic.y"
+#line	305	"pic.y"
 { y = getvar(yys[yypt-1].yyv.p); yyval.o = getpos(y.o, yys[yypt-0].yyv.i); }
 114=>
-#line	309	"pic.y"
+#line	306	"pic.y"
 { y = getvar(yys[yypt-0].yyv.p); yyval.o = getpos(y.o, yys[yypt-1].yyv.i); }
 115=>
-#line	310	"pic.y"
+#line	307	"pic.y"
 { yyval.o = gethere(); }
 116=>
-#line	311	"pic.y"
+#line	308	"pic.y"
 { yyval.o = getlast(yys[yypt-1].yyv.i, yys[yypt-0].yyv.i); }
 117=>
-#line	312	"pic.y"
+#line	309	"pic.y"
 { yyval.o = getpos(getlast(yys[yypt-2].yyv.i, yys[yypt-1].yyv.i), yys[yypt-0].yyv.i); }
 118=>
-#line	313	"pic.y"
+#line	310	"pic.y"
 { yyval.o = getpos(getlast(yys[yypt-1].yyv.i, yys[yypt-0].yyv.i), yys[yypt-2].yyv.i); }
 119=>
-#line	314	"pic.y"
+#line	311	"pic.y"
 { yyval.o = getfirst(yys[yypt-1].yyv.i, yys[yypt-0].yyv.i); }
 120=>
-#line	315	"pic.y"
+#line	312	"pic.y"
 { yyval.o = getpos(getfirst(yys[yypt-2].yyv.i, yys[yypt-1].yyv.i), yys[yypt-0].yyv.i); }
 121=>
-#line	316	"pic.y"
+#line	313	"pic.y"
 { yyval.o = getpos(getfirst(yys[yypt-1].yyv.i, yys[yypt-0].yyv.i), yys[yypt-2].yyv.i); }
 122=>
 yyval.o = yys[yyp+1].yyv.o;
 123=>
-#line	318	"pic.y"
+#line	315	"pic.y"
 { yyval.o = getpos(yys[yypt-1].yyv.o, yys[yypt-0].yyv.i); }
 124=>
-#line	319	"pic.y"
+#line	316	"pic.y"
 { yyval.o = getpos(yys[yypt-0].yyv.o, yys[yypt-1].yyv.i); }
 125=>
-#line	323	"pic.y"
+#line	320	"pic.y"
 { yyval.o = getblock(getlast(yys[yypt-3].yyv.i,yys[yypt-2].yyv.i), yys[yypt-0].yyv.p); }
 126=>
-#line	324	"pic.y"
+#line	321	"pic.y"
 { yyval.o = getblock(getfirst(yys[yypt-3].yyv.i,yys[yypt-2].yyv.i), yys[yypt-0].yyv.p); }
 127=>
-#line	325	"pic.y"
+#line	322	"pic.y"
 { y = getvar(yys[yypt-2].yyv.p); yyval.o = getblock(y.o, yys[yypt-0].yyv.p); }
 128=>
-#line	329	"pic.y"
+#line	326	"pic.y"
 { yyval.i = yys[yypt-1].yyv.i + 1; }
 129=>
-#line	330	"pic.y"
+#line	327	"pic.y"
 { yyval.i = yys[yypt-1].yyv.i; }
 130=>
-#line	331	"pic.y"
+#line	328	"pic.y"
 { yyval.i = 1; }
 131=>
 yyval.i = yys[yyp+1].yyv.i;
@@ -1190,121 +1188,121 @@ yyval.i = yys[yyp+1].yyv.i;
 139=>
 yyval.f = yys[yyp+1].yyv.f;
 140=>
-#line	347	"pic.y"
+#line	344	"pic.y"
 { yyval.f = getfval(yys[yypt-0].yyv.p); }
 141=>
 yyval.f = yys[yyp+1].yyv.f;
 142=>
-#line	349	"pic.y"
+#line	346	"pic.y"
 { yyval.f = yys[yypt-2].yyv.f + yys[yypt-0].yyv.f; }
 143=>
-#line	350	"pic.y"
+#line	347	"pic.y"
 { yyval.f = yys[yypt-2].yyv.f - yys[yypt-0].yyv.f; }
 144=>
-#line	351	"pic.y"
+#line	348	"pic.y"
 { yyval.f = yys[yypt-2].yyv.f * yys[yypt-0].yyv.f; }
 145=>
-#line	352	"pic.y"
+#line	349	"pic.y"
 { if (yys[yypt-0].yyv.f == 0.0) {
 					error("division by 0"); yys[yypt-0].yyv.f = 1.0; }
 				  yyval.f = yys[yypt-2].yyv.f / yys[yypt-0].yyv.f; }
 146=>
-#line	355	"pic.y"
+#line	352	"pic.y"
 { if (clong(yys[yypt-0].yyv.f) == big 0) {
 					error("mod division by 0"); yys[yypt-0].yyv.f = 1.0; }
 				  yyval.f = real (clong(yys[yypt-2].yyv.f) % clong(yys[yypt-0].yyv.f)); }
 147=>
-#line	358	"pic.y"
+#line	355	"pic.y"
 { yyval.f = -yys[yypt-0].yyv.f; }
 148=>
-#line	359	"pic.y"
+#line	356	"pic.y"
 { yyval.f = yys[yypt-0].yyv.f; }
 149=>
-#line	360	"pic.y"
+#line	357	"pic.y"
 { yyval.f = yys[yypt-1].yyv.f; }
 150=>
-#line	361	"pic.y"
+#line	358	"pic.y"
 { yyval.f = getcomp(yys[yypt-1].yyv.o, yys[yypt-0].yyv.i); }
 151=>
-#line	362	"pic.y"
+#line	359	"pic.y"
 { yyval.f = getcomp(yys[yypt-1].yyv.o, yys[yypt-0].yyv.i); }
 152=>
-#line	363	"pic.y"
+#line	360	"pic.y"
 { yyval.f = getcomp(yys[yypt-1].yyv.o, yys[yypt-0].yyv.i); }
 153=>
-#line	364	"pic.y"
+#line	361	"pic.y"
 { yyval.f = getcomp(yys[yypt-1].yyv.o, yys[yypt-0].yyv.i); }
 154=>
-#line	365	"pic.y"
+#line	362	"pic.y"
 { yyval.f = getcomp(yys[yypt-1].yyv.o, yys[yypt-0].yyv.i); }
 155=>
-#line	366	"pic.y"
+#line	363	"pic.y"
 { y = getvar(yys[yypt-2].yyv.p); yyval.f = getblkvar(y.o, yys[yypt-0].yyv.p); }
 156=>
-#line	367	"pic.y"
+#line	364	"pic.y"
 { yyval.f = getblkvar(getlast(yys[yypt-3].yyv.i,yys[yypt-2].yyv.i), yys[yypt-0].yyv.p); }
 157=>
-#line	368	"pic.y"
+#line	365	"pic.y"
 { yyval.f = getblkvar(getfirst(yys[yypt-3].yyv.i,yys[yypt-2].yyv.i), yys[yypt-0].yyv.p); }
 158=>
-#line	369	"pic.y"
-{ yyval.f = real fgt(yys[yypt-2].yyv.f, yys[yypt-0].yyv.f); }
+#line	366	"pic.y"
+{ yyval.f = real (yys[yypt-2].yyv.f > yys[yypt-0].yyv.f); }
 159=>
-#line	370	"pic.y"
-{ yyval.f = real flt(yys[yypt-2].yyv.f, yys[yypt-0].yyv.f); }
+#line	367	"pic.y"
+{ yyval.f = real (yys[yypt-2].yyv.f < yys[yypt-0].yyv.f); }
 160=>
-#line	371	"pic.y"
-{ yyval.f = real fle(yys[yypt-2].yyv.f, yys[yypt-0].yyv.f); }
+#line	368	"pic.y"
+{ yyval.f = real (yys[yypt-2].yyv.f <= yys[yypt-0].yyv.f); }
 161=>
-#line	372	"pic.y"
-{ yyval.f = real fge(yys[yypt-2].yyv.f, yys[yypt-0].yyv.f); }
+#line	369	"pic.y"
+{ yyval.f = real (yys[yypt-2].yyv.f >= yys[yypt-0].yyv.f); }
 162=>
-#line	373	"pic.y"
+#line	370	"pic.y"
 { yyval.f = real (yys[yypt-2].yyv.f == yys[yypt-0].yyv.f); }
 163=>
-#line	374	"pic.y"
+#line	371	"pic.y"
 { yyval.f = real (yys[yypt-2].yyv.f != yys[yypt-0].yyv.f); }
 164=>
-#line	375	"pic.y"
+#line	372	"pic.y"
 { yyval.f = real (yys[yypt-2].yyv.f != 0.0 && yys[yypt-0].yyv.f != 0.0); }
 165=>
-#line	376	"pic.y"
+#line	373	"pic.y"
 { yyval.f = real (yys[yypt-2].yyv.f != 0.0 || yys[yypt-0].yyv.f != 0.0); }
 166=>
-#line	377	"pic.y"
+#line	374	"pic.y"
 { yyval.f = real (yys[yypt-0].yyv.f == 0.0); }
 167=>
-#line	378	"pic.y"
+#line	375	"pic.y"
 { yyval.f = errcheck(math->log10(yys[yypt-1].yyv.f), "log"); }
 168=>
-#line	379	"pic.y"
+#line	376	"pic.y"
 { yyval.f = errcheck(math->exp(yys[yypt-1].yyv.f * math->log(10.0)), "exp"); }
 169=>
-#line	380	"pic.y"
+#line	377	"pic.y"
 { yyval.f = errcheck(math->pow(yys[yypt-2].yyv.f, yys[yypt-0].yyv.f), nil); }
 170=>
-#line	381	"pic.y"
+#line	378	"pic.y"
 { yyval.f = math->sin(yys[yypt-1].yyv.f); }
 171=>
-#line	382	"pic.y"
+#line	379	"pic.y"
 { yyval.f = math->cos(yys[yypt-1].yyv.f); }
 172=>
-#line	383	"pic.y"
+#line	380	"pic.y"
 { yyval.f = math->atan2(yys[yypt-3].yyv.f, yys[yypt-1].yyv.f); }
 173=>
-#line	384	"pic.y"
+#line	381	"pic.y"
 { yyval.f = errcheck(math->sqrt(yys[yypt-1].yyv.f), "sqrt"); }
 174=>
-#line	385	"pic.y"
+#line	382	"pic.y"
 { yyval.f = f32(real crand()) / 32767.0; }
 175=>
-#line	386	"pic.y"
-{ if(fge(yys[yypt-3].yyv.f, yys[yypt-1].yyv.f)) yyval.f = yys[yypt-3].yyv.f; else yyval.f = yys[yypt-1].yyv.f; }
+#line	383	"pic.y"
+{ if(yys[yypt-3].yyv.f >= yys[yypt-1].yyv.f) yyval.f = yys[yypt-3].yyv.f; else yyval.f = yys[yypt-1].yyv.f; }
 176=>
-#line	387	"pic.y"
-{ if(fle(yys[yypt-3].yyv.f, yys[yypt-1].yyv.f)) yyval.f = yys[yypt-3].yyv.f; else yyval.f = yys[yypt-1].yyv.f; }
+#line	384	"pic.y"
+{ if(yys[yypt-3].yyv.f <= yys[yypt-1].yyv.f) yyval.f = yys[yypt-3].yyv.f; else yyval.f = yys[yypt-1].yyv.f; }
 177=>
-#line	388	"pic.y"
+#line	385	"pic.y"
 { yyval.f = real clong(yys[yypt-1].yyv.f); }
 		}
 	}

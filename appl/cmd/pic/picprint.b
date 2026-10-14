@@ -128,7 +128,7 @@ print()
 				dx := ox;
 				dy := oy;
 				j := 5;
-				for(k := 0; flt(real k, p.val[4]); k++){
+				for(k := 0; real k < p.val[4]; k++){
 					ndx := dx + p.val[j];
 					ndy := dy + p.val[j+1];
 					if(p.attr & (DOTBIT|DASHBIT))
@@ -144,7 +144,7 @@ print()
 				dx := ox;
 				dy := oy;
 				j := 5;
-				for(k := 0; flt(real k, p.val[4] - 1.0); k++){
+				for(k := 0; real k < p.val[4] - 1.0; k++){
 					dx += p.val[j];
 					dy += p.val[j+1];
 					j += 2;
@@ -185,7 +185,7 @@ dotline(x0: real, y0: real, x1: real, y1: real, ddtype: int, ddval: real)	# dott
 			}
 	}else if(ddtype & DASHBIT){
 		d := math->sqrt(dx*dx + dy*dy);
-		if(fle(d, 2.0 * prevval)){
+		if(d <= 2.0 * prevval){
 			line(x0, y0, x1, y1);
 			return;
 		}
@@ -254,12 +254,12 @@ openpl(s: string)	# initialize device; s is residue of .PS invocation line
 	hpos = vpos = 0.0;
 	maxw := getfval("maxpswid");
 	maxh := getfval("maxpsht");
-	if(fgt(deltx, maxw)){	# shrink horizontal
+	if(deltx > maxw){	# shrink horizontal
 		ratio = maxw / deltx;
 		deltx *= ratio;
 		delty *= ratio;
 	}
-	if(fgt(delty, maxh)){	# shrink vertical
+	if(delty > maxh){	# shrink vertical
 		ratio = maxh / delty;
 		deltx *= ratio;
 		delty *= ratio;
@@ -348,11 +348,11 @@ vgoto(n: real)
 
 hvflush()	# get to proper point for output
 {
-	if(fge(math->fabs(hpos-htrue), 0.0005)){
+	if(math->fabs(hpos-htrue) >= 0.0005){
 		out("\\h'" + f3(hpos - htrue) + "i'");
 		htrue = hpos;
 	}
-	if(fge(math->fabs(vpos-vtrue), 0.0005)){
+	if(math->fabs(vpos-vtrue) >= 0.0005){
 		out("\\v'" + f3(vpos - vtrue) + "i'");
 		vtrue = vpos;
 	}
@@ -411,14 +411,14 @@ label(s: string, t: int, nh: int)	# text s of type t nh half-lines up
 
 fillbeg(fillval: real): string
 {
-	if(fge(fillval, 0.0) && fle(fillval, 1.0))
+	if(fillval >= 0.0 && fillval <= 1.0)
 		return sys->sprint("\\m[#%02x]", cint(fillval * 255.0));
 	return "";
 }
 
 fillend(fillval: real): string
 {
-	if(fge(fillval, 0.0) && fle(fillval, 1.0))
+	if(fillval >= 0.0 && fillval <= 1.0)
 		return "\\m[]";
 	return "";
 }
@@ -431,7 +431,7 @@ muline(x: real, y: real, n: real, p: array of real, fill: int, fillval: real)
 	yerr := 0.0;
 	if(fill)
 		out(fillbeg(fillval) + "\\D'P ");
-	for(i := 0; flt(real i, 2.0 * n); i += 2){
+	for(i := 0; real i < 2.0 * n; i += 2){
 		xerr += p[i];
 		dx := xsc(xerr);
 		xerr -= dx/xscale;
@@ -515,7 +515,7 @@ spline(x: real, y: real, n: real, p: array of real, nil: int, nil: real, fill: i
 		out(fillbeg(fillval) + "\\D'P ~");
 	else
 		out("\\D'~");
-	for(i := 0; flt(real i, 2.0 * n); i += 2){
+	for(i := 0; real i < 2.0 * n; i += 2){
 		xerr += p[i];
 		dx := xsc(xerr);
 		xerr -= dx/xscale;
@@ -537,7 +537,7 @@ ellipse(x: real, y: real, r1: real, r2: real, fill: int, fillval: real)
 	hvflush();
 	ir1 := xsc(r1);
 	ir2 := ysc(r2);
-	if(flt(ir2, 0.0))
+	if(ir2 < 0.0)
 		ir2 = -ir2;
 	if(fill){
 		out(fillbeg(fillval) + "\\D'E" + f3(2.0 * ir1) + "i " + f3(2.0 * ir2) + "i'" + fillend(fillval) + "\n");

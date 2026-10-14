@@ -62,9 +62,6 @@ YYLEX: adt {
 };
 
 y: YYSTYPE;
-#
-# C's yacc sets $$ to $1 before a rule's action; this one does not, and
-# the actions that want it say so
 %}
 
 %module Pic
@@ -135,7 +132,7 @@ piclist:
 	;
 
 picture:
-	  prim ST			{ $$ = $1; codegen = 1; makeiattr(0, 0); }
+	  prim ST			{ codegen = 1; makeiattr(0, 0); }
 	| leftbrace piclist '}'		{ rightthing($1, '}'); $$ = $2; }
 	| PLACENAME ':' picture		{ y.o=$3; makevar($1,PLACENAME,y); $$ = $3; }
 	| PLACENAME ':' ST picture	{ y.o=$4; makevar($1,PLACENAME,y); $$ = $4; }
@@ -198,7 +195,7 @@ if_expr:
 	;
 
 name:
-	  VARNAME	{ $$ = $1; y.f = 0.0; makevar($1, VARNAME, y); }
+	  VARNAME	{ y.f = 0.0; makevar($1, VARNAME, y); }
 	;
 optop:
 	  '+'		{ $$ = '+'; }
@@ -285,7 +282,7 @@ text:
 
 exprlist:
 	  expr			{ exprsave($1); $$ = 0; }
-	| exprlist ',' expr	{ $$ = $1; exprsave($3); }
+	| exprlist ',' expr	{ exprsave($3); }
 	;
 
 position:
@@ -366,10 +363,10 @@ expr:
 	| PLACENAME '.' VARNAME	{ y = getvar($1); $$ = getblkvar(y.o, $3); }
 	| last BLOCK '.' VARNAME { $$ = getblkvar(getlast($1,$2), $4); }
 	| NTH BLOCK '.' VARNAME	{ $$ = getblkvar(getfirst($1,$2), $4); }
-	| expr GT expr		{ $$ = real fgt($1, $3); }
-	| expr LT expr		{ $$ = real flt($1, $3); }
-	| expr LE expr		{ $$ = real fle($1, $3); }
-	| expr GE expr		{ $$ = real fge($1, $3); }
+	| expr GT expr		{ $$ = real ($1 > $3); }
+	| expr LT expr		{ $$ = real ($1 < $3); }
+	| expr LE expr		{ $$ = real ($1 <= $3); }
+	| expr GE expr		{ $$ = real ($1 >= $3); }
 	| expr EQ expr		{ $$ = real ($1 == $3); }
 	| expr NEQ expr		{ $$ = real ($1 != $3); }
 	| expr ANDAND expr	{ $$ = real ($1 != 0.0 && $3 != 0.0); }
@@ -383,8 +380,8 @@ expr:
 	| ATAN2 '(' expr ',' expr ')'	{ $$ = math->atan2($3, $5); }
 	| SQRT '(' expr ')'		{ $$ = errcheck(math->sqrt($3), "sqrt"); }
 	| RAND '(' ')'			{ $$ = f32(real crand()) / 32767.0; }
-	| MAX '(' expr ',' expr ')'	{ if(fge($3, $5)) $$ = $3; else $$ = $5; }
-	| MIN '(' expr ',' expr ')'	{ if(fle($3, $5)) $$ = $3; else $$ = $5; }
+	| MAX '(' expr ',' expr ')'	{ if($3 >= $5) $$ = $3; else $$ = $5; }
+	| MIN '(' expr ',' expr ')'	{ if($3 <= $5) $$ = $3; else $$ = $5; }
 	| INT '(' expr ')'		{ $$ = real clong($3); }
 	;
 

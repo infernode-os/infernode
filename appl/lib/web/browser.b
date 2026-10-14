@@ -297,9 +297,7 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 		y := wasat(s, hist);
 		history(s, prev, hist);
 		s.url = url;
-		if(y < 0)
-			y = target(s.pg, frag);
-		s.scroll = s.at = y;
+		s.scroll = target1(s, s.pg, frag);
 		s.status = "done";
 		unlock(s);
 		event(s, "shown " + url);
@@ -393,11 +391,9 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	if((frag := fragment(url)) != nil && fragment(s.url) == nil)
 		s.url += "#" + frag;
 	s.title = pg.title;
-	if(y < 0 && frag != nil)
-		y = target(pg, frag);
-	if(y < 0)
-		y = 0;
-	s.scroll = s.at = y;
+	s.scroll = 0;
+	if(frag != nil)
+		s.scroll = target1(s, pg, frag);
 	u := s.url;
 	s.status = "loading images " + u;
 	unlock(s);
@@ -540,7 +536,12 @@ apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: 
 		unlock(s);
 		return 0;
 	}
-	pg.install(batch);
+	{
+		pg.install(batch);
+	} exception e {
+	"*" =>
+		fault(s, "placing images", e);
+	}
 	unlock(s);
 	event(s, sys->sprint("update %d %d", got, n));
 	return 1;
@@ -1060,7 +1061,7 @@ Session.set(s: self ref Session, n: int, value: string): string
 	lock(s);
 	err := setfield(d, n, value);
 	if(err == nil)
-		pg.update();
+		update(s, pg);
 	unlock(s);
 	if(err == nil) {
 		event(s, "update");
@@ -1234,9 +1235,37 @@ Session.scrollto(s: self ref Session, y: int)
 	event(s, "scroll " + string y);
 }
 
-Session.viewing(s: self ref Session, y: int)
+# A fault in the engine while the session's lock is held: said, and
+# the lock let go as ever.  Raised out of a section holding it, it was
+# not: Xenith caught the fault (an array bound in painting
+# www.sanook.com) and went on, and its next paint waited for the lock
+# it held itself.
+fault(s: ref Session, what, e: string)
 {
-	s.at = y;	# (one word: read under the lock when the page is left)
+	sys->fprint(sys->fildes(2), "charon: %s %s: %s\n", what, s.url, e);
+}
+
+# where a #fragment is, made the :target (the lock held)
+target1(s: ref Session, pg: ref Pg, frag: string): int
+{
+	{
+		return target(pg, frag);
+	} exception e {
+	"*" =>
+		fault(s, "going to #" + frag + " in", e);
+	}
+	return 0;
+}
+
+# the page laid out again after a change the session made (the lock held)
+update(s: ref Session, pg: ref Pg)
+{
+	{
+		pg.update();
+	} exception e {
+	"*" =>
+		fault(s, "laying out", e);
+	}
 }
 
 # ---- pointing ----
@@ -1279,8 +1308,14 @@ Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point): int
 	# browser does it for a frame, not after each task that changed it
 	if(r != nil && r.pg == s.pg)
 		laidout(r);
-	if(s.pg != nil)
-		s.pg.paint(dst, scroll);
+	if(s.pg != nil) {
+		{
+			s.pg.paint(dst, scroll);
+		} exception e {
+		"*" =>
+			fault(s, "painting", e);
+		}
+	}
 	unlock(s);
 	return 1;
 }
@@ -1434,7 +1469,13 @@ Session.click(s: self ref Session, n: int): string
 	if(popovers(s, pg, n))
 		return nil;
 	lock(s);
-	us := pg.want(n);
+	us: list of string;
+	{
+		us = pg.want(n);
+	} exception e {
+	"*" =>
+		fault(s, "a click", e);
+	}
 	unlock(s);
 	if(us != nil) {
 		# an image left to be clicked for: this click loads it (and
@@ -1491,7 +1532,7 @@ Session.click(s: self ref Session, n: int): string
 					d.delattr(p, "open");
 				else
 					d.setattr(p, "open", "");
-				pg.update();
+				update(s, pg);
 				unlock(s);
 				event(s, "update");
 			}
@@ -1550,7 +1591,7 @@ popovers(s: ref Session, pg: ref Pg, n: int): int
 	}
 	if(changed) {
 		lock(s);
-		pg.update();
+		update(s, pg);
 		unlock(s);
 		event(s, "update");
 	}

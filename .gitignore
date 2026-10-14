@@ -141,6 +141,11 @@ lib/veltro/keys/
 # Site-local NDB config (contains private IPs/hostnames, API URLs, model choices)
 lib/ndb/local
 lib/ndb/llm
+lib/ndb/dict
+
+# Dictionary text (dict(7)): copyright, never distributed
+lib/dict/*
+!lib/dict/README.*
 
 # =========================
 # Build Artifacts

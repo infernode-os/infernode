@@ -3876,6 +3876,11 @@ parsesimpleglyph(fd: ref FaceData, gid: int, data: array of byte, off, ncontours
 	for(i := 0; i < ncontours; i++){
 		endpts[i] = getu16be(data, pos);
 		pos += 2;
+		# in increasing order (the points are as many as the last
+		# says): a contour ending past them was read past its arrays
+		# (a web font on www.sanook.com, painted in Xenith)
+		if(i > 0 && endpts[i] <= endpts[i-1])
+			return ref GlyphOutline(nil, advwidth);
 	}
 
 	npoints := endpts[ncontours - 1] + 1;

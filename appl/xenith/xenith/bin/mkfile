@@ -1,6 +1,7 @@
 <$ROOT/mkconfig
 
 TARG=\
+	Dict.dis\
 	Ctag.dis\
 	Feedkey.dis\
 	Jwin.dis\

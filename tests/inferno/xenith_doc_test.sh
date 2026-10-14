@@ -499,6 +499,29 @@ rm -f /tmp/xenith_doc_big.want
 
 if {echo refresh > $M/doc/ctl} {bad 'refresh on a window showing text was taken'} {ok 'refresh on a window showing its text is refused'}
 
+# ---- a source document too long to set: its text, not the error ----
+# a program's window, its kind named (render markdown), its text far
+# too long for an image of it: the window shows its text again
+(lid rest) = `{cat $XENITH/new/ctl}
+echo name /+Long > $XENITH/$lid/ctl
+rm -f /tmp/xenith_doc_long.md
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 {
+	cat /CHANGELOG.md >> /tmp/xenith_doc_long.md
+}
+cat /tmp/xenith_doc_long.md > $XENITH/$lid/body
+if {echo render markdown > $XENITH/$lid/doc/ctl} {ok 'render markdown taken by a window named for no kind'} {bad 'render markdown refused'}
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
+	if {grep -s '^loading|^kind' $XENITH/$lid/doc/ctl} {sleep 1}
+}
+if {grep -s . $XENITH/$lid/doc/ctl} {
+	bad 'a document too long to set is still the window''s:' `{cat $XENITH/$lid/doc/ctl}
+} {
+	ok 'a document too long to set gives the window its text again'
+}
+check 'and the text is whole' `{wc -c < $XENITH/$lid/body} `{wc -c < /tmp/xenith_doc_long.md}
+echo delete > $XENITH/$lid/ctl
+rm -f /tmp/xenith_doc_long.md
+
 # ---- an image ----
 
 look /tests/imgload/rb.png

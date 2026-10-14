@@ -256,6 +256,19 @@ handle(e: ref Ev)
 		w.settag();
 	Failed =>
 		warning(nil, sprint("%s: %s\n", v.name, n.err));
+		if(v.kind != nil && v.kind.class == Docreg->Source && !v.web){
+			# a source document that cannot be set (one too long
+			# for an image of it, say) is its text: shown again,
+			# where it was, not hidden behind the error
+			line := d.line;
+			drop(w);
+			org := 0;
+			if(line > 0)
+				org = charofline(w.body, line);
+			showframe(w, org);
+			w.settag();
+			return;
+		}
 		draw(w);
 	Text =>
 		settext(w, n.text);

@@ -54,6 +54,10 @@ Command: module {
 
 VELTROSRV: con "/dis/veltro/veltrosrv.dis";
 TOOLS9P: con "/dis/veltro/tools9p.dis";
+# A conversation longer than this is not set between turns: the
+# document is drawn whole, as one image, and one of a long session's
+# would be hundreds of megabytes (Render still tries).
+MAXTYPESET: con 200000;
 DEFAULT_TOOLS: con "read,list,find,search,grep,write,edit,diff,exec,git,limbo";
 
 verbose := 0;
@@ -444,7 +448,7 @@ shown(w: ref Win): int
 settype(w: ref Win, turn, hostpt: int)
 {
 	(nil, q1) := bodyend(w);
-	if(q1 == 0 || q1 > hostpt && trim(w.wread(hostpt, q1)) != "")
+	if(q1 == 0 || q1 > MAXTYPESET || q1 > hostpt && trim(w.wread(hostpt, q1)) != "")
 		return;
 	if(w.wsetaddr(sprint("#%d", turn), 1))
 		w.ctlwrite("dot=addr\nshow\n");

@@ -1,0 +1,56 @@
+#!/dis/sh
+# book - a book written with troff's macros -mbook, as PDF
+#
+#	book [-p works.bib] [-S style] [-o book.pdf] book.ms
+#
+# Citations are set by refer(1) from the database, in the style
+# (chicago); the book by troff(1) -mbook, as often as its table of
+# contents and references need to be set again (they come from the pass
+# before, through book.aux); then the PDF by tr2pdf(1). troff's output
+# is kept as book.out, for the document views.
+load std
+
+bib=()
+style=chicago
+out=()
+args=$*
+while {~ $#args 2 3 4 5 6 7 && ~ ${hd $args} -*} {
+	o=${hd $args}
+	args=${tl $args}
+	if {~ $o -p} {bib=${hd $args}; args=${tl $args}}
+	if {~ $o -S} {style=${hd $args}; args=${tl $args}}
+	if {~ $o -o} {out=${hd $args}; args=${tl $args}}
+}
+~ $#args 1 || {echo 'usage: book [-p works.bib] [-S style] [-o book.pdf] book.ms' >[1=2]; raise usage}
+src=$args
+stem=`{echo $src | sed 's/\.[^.\/]*$//'}
+aux=$stem.aux
+~ $#out 0 && out=$stem.pdf
+tr=$stem.out	# troff's output, kept for viewing it
+err=$stem.log
+new=$stem.aux.new
+
+fn pass {
+	if {~ $#bib 0} {
+		troff -mbook '-dbook-aux='^$aux <$src >$tr >[2]$err
+	} {
+		refer -p $bib -S $style <$src | troff -mbook '-dbook-aux='^$aux >$tr >[2]$err
+	}
+	grep '^aux:' $err | sed 's/^aux://' >$new
+}
+
+ftest -f $aux || echo -n >$aux
+done=0
+for n in 1 2 3 4 {
+	if {~ $done 0} {
+		pass
+		if {cmp -s $aux $new >[2]/dev/null} {
+			done=1
+		} {
+			cp $new $aux
+		}
+	}
+}
+grep -v '^aux:' $err >[1=2]
+tr2pdf $tr >$out
+rm -f $err $new

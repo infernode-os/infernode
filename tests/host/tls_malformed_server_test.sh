@@ -144,7 +144,7 @@ PY
 	sleep 1
 
 	if [ "$mode" = "cnsa" ]; then
-		( export CNSAMODE=1; run_emu -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) >"$out" &
+		( export CNSATLS=1; run_emu -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) >"$out" &
 	else
 		( run_emu -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) >"$out" &
 	fi

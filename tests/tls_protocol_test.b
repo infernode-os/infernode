@@ -174,9 +174,9 @@ contains(s, sub: string): int
 	return 0;
 }
 
-setcnsamode(v: string)
+setcnsatls(v: string)
 {
-	fd := sys->create("/env/cnsamode", Sys->OWRITE, 8r644);
+	fd := sys->create("/env/cnsatls", Sys->OWRITE, 8r644);
 	if(fd != nil)
 		sys->fprint(fd, "%s", v);
 }
@@ -236,15 +236,15 @@ expecterr(t: ref T, response: array of byte, want: string)
 
 expecterrcnsa(t: ref T, response: array of byte, want: string)
 {
-	setcnsamode("1");
+	setcnsatls("1");
 	{
 		expecterr(t, response, want);
 	} exception e {
 	* =>
-		setcnsamode("0");
+		setcnsatls("0");
 		raise e;
 	}
-	setcnsamode("0");
+	setcnsatls("0");
 }
 
 # ================================================================

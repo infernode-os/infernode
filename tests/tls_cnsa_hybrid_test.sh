@@ -1,12 +1,16 @@
 #!/bin/bash
 #
-# CNSA 2.0 TLS hybrid (SecP384r1MLKEM1024) interop regression.
+# TLS hybrid key exchange interop regression.
 #
 # Drives the Inferno TLS client (tests/tlsclient.b) against an OpenSSL s_server
 # and asserts:
-#   1. CNSA client  vs SecP384r1MLKEM1024 server -> hybrid handshake succeeds
-#   2. default client vs X25519 server           -> classical handshake succeeds
-#   3. CNSA client  vs X25519-only server        -> FAILS (no silent downgrade)
+#   1. default client vs X25519MLKEM768 server     -> hybrid (group 11ec)
+#   2. default client vs X25519 server             -> classical fallback
+#   3. CNSATLS client vs SecP384r1MLKEM1024 server -> CNSA hybrid (group 11ed)
+#   4. CNSATLS client vs X25519-only server        -> FAILS (no silent downgrade)
+#   5. CNSATLS client vs TLS 1.2 server            -> FAILS
+#   6. CNSAMODE alone vs X25519 server             -> succeeds: CNSAMODE governs
+#      the native STS handshake between nodes, not TLS
 #
 # Requires a built emu and OpenSSL >= 3.5 (ML-KEM + the hybrid groups).
 #
@@ -17,7 +21,7 @@ EMU="${EMU:-$ROOT/emu/MacOSX/o.emu}"
 LIMBO="${LIMBO:-$ROOT/MacOSX/arm64/bin/limbo}"
 [ -x "$LIMBO" ] || LIMBO="$ROOT/Linux/amd64/bin/limbo"
 
-# find an OpenSSL that knows SecP384r1MLKEM1024 (macOS default is LibreSSL)
+# find an OpenSSL that knows the hybrid groups (macOS default is LibreSSL)
 OSSL="${OPENSSL:-}"
 if [ -z "$OSSL" ]; then
 	for c in /opt/homebrew/Cellar/openssl@3/*/bin/openssl /opt/homebrew/bin/openssl openssl; do
@@ -30,64 +34,58 @@ fi
 [ -x "$LIMBO" ] || { echo "FAIL: no Limbo compiler found"; exit 1; }
 
 PORT=14433
-CERT="/tmp/tlscnsa-c.$$.pem"; KEY="/tmp/tlscnsa-k.$$.pem"
+TMP="$(mktemp -d)"
+CERT="$TMP/c.pem"; KEY="$TMP/k.pem"
 fails=0
-cleanup(){ pkill -9 -f "s_server -accept $PORT" 2>/dev/null; pkill -9 -f o.emu 2>/dev/null; rm -f "$CERT" "$KEY"; }
+# Only the processes this test started are killed: never every o.emu, which
+# would take a developer's running session with it.
+sp=; cp=
+cleanup(){ [ -n "$sp" ] && kill -9 "$sp" 2>/dev/null; [ -n "$cp" ] && kill -9 "$cp" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
 "$OSSL" req -x509 -newkey rsa:2048 -keyout "$KEY" -out "$CERT" -days 1 -nodes -subj "/CN=localhost" 2>/dev/null
 "$LIMBO" -gw -I"$ROOT/module" -o "$ROOT/dis/tests/tlsclient.dis" "$ROOT/tests/tlsclient.b" 2>&1 | head -3
 
-case_run(){  # case_run <name> <mode: cnsa|plain> <server-groups> <expect: OK|FAIL>
-	local name="$1" mode="$2" groups="$3" expect="$4"
-	pkill -9 -f "s_server -accept $PORT" 2>/dev/null; pkill -9 -f o.emu 2>/dev/null; sleep 1
-	( "$OSSL" s_server -accept "$PORT" -cert "$CERT" -key "$KEY" -tls1_3 -groups "$groups" -www -quiet ) >/tmp/ss.$$ 2>&1 &
-	local sp=$!
+# case_run <name> <env: none|CNSATLS|CNSAMODE> <expect: OK|FAIL> <want group or -> <s_server args...>
+case_run(){
+	local name="$1" env="$2" expect="$3" group="$4"; shift 4
+	PORT=$((PORT+1))
+	"$OSSL" s_server -accept "$PORT" -naccept 1 -cert "$CERT" -key "$KEY" -www -quiet "$@" >"$TMP/ss" 2>&1 &
+	sp=$!
 	sleep 1
-	local out="/tmp/tc.$$"
-	if [ "$mode" = cnsa ]; then
-		( CNSAMODE=1 "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) > "$out" &
-	else
-		( "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) > "$out" &
-	fi
-	local p=$!; sleep 15; kill "$p" 2>/dev/null; pkill -9 -f o.emu 2>/dev/null
-	kill -9 "$sp" 2>/dev/null; wait "$sp" 2>/dev/null || true
-	pkill -9 -f "s_server -accept $PORT" 2>/dev/null
+	local out="$TMP/tc"
+	case $env in
+	CNSATLS)	CNSATLS=1 "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" </dev/null >"$out" 2>&1 & ;;
+	CNSAMODE)	CNSAMODE=1 "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" </dev/null >"$out" 2>&1 & ;;
+	*)		env -u CNSATLS -u CNSAMODE "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" </dev/null >"$out" 2>&1 & ;;
+	esac
+	cp=$!
+	# the client prints its verdict and the reply, then exits
+	for _ in $(seq 1 60); do
+		kill -0 "$cp" 2>/dev/null || break
+		grep -q 'DATA-\|HANDSHAKE-FAIL\|FAIL:' "$out" 2>/dev/null && break
+		sleep 0.5
+	done
+	kill -9 "$cp" 2>/dev/null; kill -9 "$sp" 2>/dev/null
+	wait "$cp" "$sp" 2>/dev/null; cp=; sp=
 	local got=FAIL
 	grep -q HANDSHAKE-OK "$out" && got=OK
-	if [ "$got" = "$expect" ]; then
+	if [ "$got" = OK ] && [ "$group" != - ] && ! grep -q "group=$group" "$out"; then
+		echo "FAIL: $name (want group $group)"; cat "$out"; fails=$((fails+1))
+	elif [ "$got" = "$expect" ]; then
 		echo "PASS: $name ($got)"
 	else
 		echo "FAIL: $name (want $expect, got $got)"; cat "$out" 2>/dev/null; fails=$((fails+1))
 	fi
-	rm -f "$out" /tmp/ss.$$
+	rm -f "$out" "$TMP/ss"
 }
 
-case_run_tls12(){  # CNSA mode must reject a TLS 1.2 server even if the suite is otherwise supported
-	local name="$1" expect="$2"
-	pkill -9 -f "s_server -accept $PORT" 2>/dev/null; pkill -9 -f o.emu 2>/dev/null; sleep 1
-	( "$OSSL" s_server -accept "$PORT" -cert "$CERT" -key "$KEY" -tls1_2 -cipher AES128-GCM-SHA256 -www -quiet ) >/tmp/ss.$$ 2>&1 &
-	local sp=$!
-	sleep 1
-	local out="/tmp/tc.$$"
-	( CNSAMODE=1 "$EMU" -r"$ROOT" /dis/tests/tlsclient.dis "tcp!127.0.0.1!$PORT" 2>&1 </dev/null ) > "$out" &
-	local p=$!; sleep 15; kill "$p" 2>/dev/null; pkill -9 -f o.emu 2>/dev/null
-	kill -9 "$sp" 2>/dev/null; wait "$sp" 2>/dev/null || true
-	pkill -9 -f "s_server -accept $PORT" 2>/dev/null
-	local got=FAIL
-	grep -q HANDSHAKE-OK "$out" && got=OK
-	if [ "$got" = "$expect" ]; then
-		echo "PASS: $name ($got)"
-	else
-		echo "FAIL: $name (want $expect, got $got)"; cat "$out" 2>/dev/null; fails=$((fails+1))
-	fi
-	rm -f "$out" /tmp/ss.$$
-}
-
-case_run "cnsa-hybrid-secp384r1mlkem1024" cnsa  SecP384r1MLKEM1024 OK
-case_run "default-x25519-regression"      plain X25519             OK
-case_run "cnsa-vs-x25519-only-rejected"   cnsa  X25519             FAIL
-case_run_tls12 "cnsa-vs-tls12-rsa-rejected" FAIL
+case_run "default-hybrid-x25519mlkem768"  none     OK   11ec -tls1_3 -groups X25519MLKEM768
+case_run "default-x25519-fallback"        none     OK   001d -tls1_3 -groups X25519
+case_run "cnsatls-secp384r1mlkem1024"     CNSATLS  OK   11ed -tls1_3 -groups SecP384r1MLKEM1024
+case_run "cnsatls-vs-x25519-rejected"     CNSATLS  FAIL -    -tls1_3 -groups X25519
+case_run "cnsatls-vs-tls12-rejected"      CNSATLS  FAIL -    -tls1_2 -cipher AES128-GCM-SHA256
+case_run "cnsamode-leaves-tls-alone"      CNSAMODE OK   001d -tls1_3 -groups X25519
 
 echo "----"
-if [ "$fails" -eq 0 ]; then echo "TLS CNSA hybrid: ALL PASS"; exit 0; else echo "TLS CNSA hybrid: $fails FAILED"; exit 1; fi
+if [ "$fails" -eq 0 ]; then echo "TLS hybrid: ALL PASS"; exit 0; else echo "TLS hybrid: $fails FAILED"; exit 1; fi

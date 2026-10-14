@@ -9,7 +9,8 @@ Security Systems).
 Every applicable CNSA 2.0 algorithm is implemented natively at the required security
 category. The two parameter-selection gaps are closed under a fleet-wide **CNSA mode**
 (the host `CNSAMODE` env var, reflected by the emu into Inferno `/env/cnsamode`, off by
-default): **ML-KEM-1024** is negotiated end-to-end on both transports (G1 — native STS
+default, for the native transport; the host `CNSATLS`, reflected into `/env/cnsatls`, for
+TLS): **ML-KEM-1024** is negotiated end-to-end on both transports (G1 — native STS
 multi-node-verified + TLS interop-verified vs OpenSSL) and **ML-DSA-87** is the signing
 default (G2). The **LMS/XMSS firmware-signing** item (G3) is determined **Not Applicable**
 — InferNode has no firmware and no in-system signed-image verification; distribution
@@ -62,7 +63,7 @@ implementation and the regression test.
 |------|--------|
 | Requirement | AES with 256-bit keys |
 | Implementation | `libsec/aes.c`, AES-GCM in `libsec/aesgcm.c` (`setupAESGCMstate` accepts `keylen`; 32 = AES-256) — decl `include/libsec.h:53` |
-| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA mode restricts to it alone, `:653` (`strictcnsaconfig`). Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
+| In use | TLS offers `TLS_AES_256_GCM_SHA384` — `appl/lib/crypt/tls.b:209` (`defaultconfig`); CNSA-strict TLS (`/env/cnsatls`) restricts to it alone (`strictcnsaconfig`). Login/EKE channel uses ChaCha20-Poly1305 (256-bit) — `docs/CRYPTO-MODERNIZATION.md` §5 |
 | Evidence | `tests/tls_crypto_test.b` (AES-GCM NIST vectors), `tests/secstore_crypto_test.b` (SGCM file encryption) |
 | Status | **Met** — AES-256-GCM available and negotiated |
 
@@ -83,9 +84,9 @@ implementation and the regression test.
 | Requirement | ML-KEM-1024 (Category 5) |
 | Implementation | `libsec/mlkem.c`, `libsec/mlkem_ntt.c`, `libsec/mlkem_poly.c`. **Both** ML-KEM-768 *and* ML-KEM-1024 keygen/encaps/decaps present (`mlkem1024_*`) — sizes per FIPS 203 (`docs/CRYPTO-MODERNIZATION.md` §8) |
 | Keyring binding | `libinterp/keyring.c` builtins (`Keyring_mlkem768_keygen` at `:3944`, ML-KEM-1024 counterparts) |
-| In use | **Native 9P/Styx STS handshake** — mutual ML-KEM (768 default, **1024 under CNSA mode**) hybridised with classical DH (`libinterp/keyring.c` `Keyring_auth`, SHA3-512 combiner). **TLS 1.3** — classical X25519 by default; under CNSA mode the client offers the **SecP384r1MLKEM1024** hybrid (P-384 ECDH + ML-KEM-1024, `0x11ED`, `appl/lib/crypt/tls.b`). *(Note: the older `GROUP_X25519MLKEM768 = 0x4588` constant existed but was never wired into the TLS key_share; the CNSA path supersedes it.)* |
+| In use | **Native 9P/Styx STS handshake** — mutual ML-KEM (768 default, **1024 under CNSA mode**) hybridised with classical DH (`libinterp/keyring.c` `Keyring_auth`, SHA3-512 combiner). **TLS 1.3** — the **X25519MLKEM768** hybrid (`0x11EC`) first by default, with classical X25519/P-256/P-384 for servers without it; under CNSA-strict TLS (`/env/cnsatls`) the client offers the **SecP384r1MLKEM1024** hybrid alone (P-384 ECDH + ML-KEM-1024, `0x11ED`, `appl/lib/crypt/tls.b`). *(Until October 2026 the X25519MLKEM768 constant was `0x4588`, the decimal codepoint read as hex, and the share was never sent.)* |
 | Evidence | `tests/mlkem_test.b` (KAT + round-trip), `tests/mlkem_stress_test.b`, `tests/pqauth_test.b` (hybrid handshake, downgrade-rejected, tamper-rejected), `tests/handshake_fuzz_test.b` |
-| Status | **Met (CNSA-strict mode)** — both transports negotiate **ML-KEM-1024** under CNSA mode. *Native STS:* `Keyring_auth` uses `mlkem1024_*`; **multi-node verified** (`tests/cnsa_nodepair_test.sh`) — two CNSA nodes complete the 1024 handshake over TCP, a mixed 1024/768 pair is rejected (no silent downgrade); `tests/pqauth_test.b` passes 11/11 in both modes. *TLS 1.3:* the client offers **SecP384r1MLKEM1024** (P-384 ECDH + ML-KEM-1024, ECDH-first combiner) — **interop-verified against OpenSSL 3.6** (`tests/tls_cnsa_hybrid_test.sh`): the hybrid handshake + application data succeed, the classical path still works, and a CNSA client refuses an X25519-only server. Default deployments stay classical (ML-KEM-768 native / X25519 TLS). |
+| Status | **Met (CNSA-strict mode)** — both transports negotiate **ML-KEM-1024** under CNSA mode (`CNSAMODE` for the native transport, `CNSATLS` for TLS). *Native STS:* `Keyring_auth` uses `mlkem1024_*`; **multi-node verified** (`tests/cnsa_nodepair_test.sh`) — two CNSA nodes complete the 1024 handshake over TCP, a mixed 1024/768 pair is rejected (no silent downgrade); `tests/pqauth_test.b` passes 11/11 in both modes. *TLS 1.3:* the client offers **SecP384r1MLKEM1024** (P-384 ECDH + ML-KEM-1024, ECDH-first combiner) — **interop-verified against OpenSSL 3.6** (`tests/tls_cnsa_hybrid_test.sh`): the hybrid handshake + application data succeed, the classical path still works, and a CNSA client refuses an X25519-only server. Default deployments use ML-KEM-768 (native) and X25519MLKEM768 with classical fallback (TLS). The two settings are apart because public servers do not offer SecP384r1MLKEM1024: a node CNSA-strict to its peers keeps the web. |
 
 ### 3.4 Signatures (general) — ML-DSA (FIPS 204) ✅
 
@@ -125,8 +126,8 @@ All deployed PQ key exchange is **hybrid** (classical + PQ), so a session is saf
 *both* the classical and the post-quantum problem are broken — directly addressing the
 "harvest-now-decrypt-later" threat:
 
-- TLS 1.3: X25519 **+** ML-KEM-768, combined secret fed to HKDF
-  (`appl/lib/crypt/tls.b`, `docs/CRYPTO-MODERNIZATION.md` §8).
+- TLS 1.3: X25519 **+** ML-KEM-768, combined secret fed to HKDF, where the server offers
+  it; classical otherwise (`appl/lib/crypt/tls.b`, `docs/CRYPTO-MODERNIZATION.md` §8).
 - Native 9P/Styx transport: classical DH **+** mutual ML-KEM-768, combined via SHA3-512,
   transcript-bound against active substitution (`docs/CRYPTO-MODERNIZATION.md` §10;
   proven by `tests/pqauth_test.b` *TamperedEkRejected* / *DowngradeRejected*).

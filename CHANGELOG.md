@@ -4,6 +4,23 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **TLS is post-quantum by default.** The client offers the
+  X25519MLKEM768 hybrid first, with X25519, P-256 and P-384 for servers
+  that do not take it. Cloudflare, Google, Wikipedia, the BBC, OpenAI and
+  Anthropic negotiate it; GitHub falls back to X25519. The hybrid was
+  documented before but never sent: its constant was 0x4588, the
+  decimal codepoint 4588 read as hex, where it is 0x11EC. `tls->client`'s
+  `Conn` has a `group` field naming the group negotiated.
+- **`CNSAMODE` no longer makes TLS CNSA-strict.** It governs
+  authentication between nodes (ML-KEM-1024, ML-DSA-87) as before. TLS
+  that offers only SecP384r1MLKEM1024 is now the host `CNSATLS`
+  (`/env/cnsatls`). Public servers do not offer that group, so with
+  `CNSAMODE=1` every HTTPS site failed with `alert level=2 desc=40`; a
+  node can now be CNSA-strict to its peers and reach the web. A
+  deployment that wants strict TLS sets `CNSATLS=1` as well.
+
 ## [0.7.0] - 2026-10-13
 
 This release gives InferNode a JavaScript engine of its own, and Charon

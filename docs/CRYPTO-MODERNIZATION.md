@@ -235,7 +235,14 @@ Native implementations of NIST post-quantum standards, with no external dependen
 
 #### Hybrid TLS 1.3 Key Exchange
 
-X25519MLKEM768 (IANA group 0x4588) hybrid key exchange per draft-ietf-tls-ecdhe-mlkem.
+X25519MLKEM768 (IANA group 0x11EC, 4588 decimal) hybrid key exchange per
+draft-ietf-tls-ecdhe-mlkem. The client offers it first, with X25519, P-256
+and P-384 shares beside it for servers that do not take it.
+
+Until October 2026 the constant was 0x4588, the decimal codepoint read as
+hex, and the share was never sent: TLS was classical X25519 in practice.
+`tests/tls_cnsa_hybrid_test.sh` now checks the group negotiated against
+OpenSSL.
 
 | Aspect | Classical | Hybrid |
 |--------|-----------|--------|
@@ -269,6 +276,8 @@ auth/createsignerkey -a mldsa87 signer_name
 ```
 
 TLS hybrid key exchange is automatic — clients advertise X25519MLKEM768 first with X25519 fallback.
+`/env/cnsatls` (the host `CNSATLS`) makes the client offer SecP384r1MLKEM1024
+alone instead; see "CNSA 2.0 strict mode" below.
 
 #### Testing
 
@@ -407,6 +416,12 @@ choose SHA-384 for ML-DSA and SLH-DSA keys and SHA-256 for classical keys, and
 record the choice in the certificate's `ha` field, which verifiers re-hash
 from. `tests/cnsa_nodepair_test.sh` runs two CNSA-mode nodes through the
 handshake with ML-DSA-87 certificates.
+
+`CNSAMODE` does not touch TLS. CNSA-strict TLS (SecP384r1MLKEM1024 only,
+TLS 1.3, `TLS_AES_256_GCM_SHA384`) is the host `CNSATLS`, reflected into
+`/env/cnsatls`. Public servers do not offer that group, so it suits only a
+network whose TLS servers are all its own; a node CNSA-strict to its peers
+keeps the web, over X25519MLKEM768 where the server has it.
 
 **Files modified:**
 - `libinterp/keyring.c` — `Keyring_auth` hybrid handshake (ML-KEM exchange,

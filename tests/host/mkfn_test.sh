@@ -10,6 +10,7 @@
 #	-c gives the aliases as Neatmkfn does;
 #	no glyph is named by a character beyond the 16 bits of a Limbo
 #	string's (u1D400 would be read as U+D400, a Hangul syllable);
+#	a CFF glyph's bounding box is read from its charstring;
 #	troff sets μ, µ, \(*m, \(/u and \(*D as the characters they are.
 
 . "$(dirname "$0")/common.sh"
@@ -65,8 +66,16 @@ if LC_ALL=C grep -q "$(printf '^char [^\t]*[\360-\367]')" "$tmp/dev/R" "$tmp/dev
 else
     pass "no glyph named by a character beyond U+FFFF"
 fi
-grep -q "$(printf '^char ---\t[0-9]*\t3\tu1D400\t$')" "$tmp/dev/S" &&
+grep -q "$(printf '^char ---\t[0-9,-]*\t[0-3]\tu1D400\t$')" "$tmp/dev/S" &&
     pass "u1D400 is described, unnamed" || failed "u1D400: $(grep 'u1D400' "$tmp/dev/S")"
+
+# a CFF glyph's bounding box, from its charstring: a sits on the
+# baseline below the x-height, g descends, b ascends
+grep -q "$(printf '^char a\t457,36,-10,455,439\t0\t')" "$tmp/dev/R" &&
+grep -q "$(printf '^char g\t[0-9]*,[0-9]*,-[0-9]*,[0-9]*,[0-9]*\t1\t')" "$tmp/dev/R" &&
+grep -q "$(printf '^char b\t[0-9,-]*\t2\t')" "$tmp/dev/R" &&
+    pass "CFF glyphs' bounding boxes" ||
+    failed "CFF bounding boxes: $(grep '^char [agb]	' "$tmp/dev/R")"
 
 # troff sets each as itself
 printf 'μ µ \\(*m \\(/u \\(*D\n' >"$tmp/mu.tr"

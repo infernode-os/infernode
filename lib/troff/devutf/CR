@@ -2,815 +2,815 @@ name CR
 fontname LibertinusMono-Regular
 fontpath /fonts/libertinus/LibertinusMono-Regular.otf
 spacewidth 640
-char ---	640	3	.notdef	
+char ---	640,-1,-146,641,678	3	.notdef	
 char ---	640	0	space	32
-char !	640	2	exclam	33
-char "	640	2	quotedbl	34
+char !	640,246,-10,368,658	2	exclam	33
+char "	640,157,363,483,668	2	quotedbl	34
 char dq	"
-char #	640	2	numbersign	35
-char $	640	2	dollar	36
-char %	640	2	percent	37
-char &	640	2	ampersand	38
-char aq	640	3	quotesingle	
-char (	640	3	parenleft	40
-char )	640	3	parenright	41
-char *	640	2	asterisk	42
-char +	640	0	plus	43
+char #	640,64,-34,561,660	2	numbersign	35
+char $	640,97,-103,552,743	2	dollar	36
+char %	640,57,-12,598,575	2	percent	37
+char &	640,40,-10,621,647	2	ampersand	38
+char aq	640,260,363,380,667	3	quotesingle	
+char (	640,197,-204,514,707	3	parenleft	40
+char )	640,126,-203,443,708	3	parenright	41
+char *	640,75,150,509,574	2	asterisk	42
+char +	640,50,-1,590,504	0	plus	43
 char pl	"
-char ,	640	1	comma	44
-char -	640	0	hyphen	45
+char ,	640,209,-164,377,122	1	comma	44
+char -	640,124,215,516,291	0	hyphen	45
 char hy	"
-char .	640	0	period	46
-char /	640	2	slash	47
+char .	640,239,-10,375,124	0	period	46
+char /	640,82,-97,552,727	2	slash	47
 char sl	"
-char 0	640	2	zero	48
-char 1	640	2	one	49
-char 2	640	2	two	50
-char 3	640	2	three	51
-char 4	640	2	four	52
-char 5	640	2	five	53
-char 6	640	2	six	54
-char 7	640	2	seven	55
-char 8	640	2	eight	56
-char 9	640	2	nine	57
-char :	640	0	colon	58
-char ;	640	1	semicolon	59
-char <	640	0	less	60
-char =	640	0	equal	61
+char 0	640,90,-10,550,658	2	zero	48
+char 1	640,133,-2,507,657	2	one	49
+char 2	640,105,-2,527,657	2	two	50
+char 3	640,99,-10,541,658	2	three	51
+char 4	640,72,-2,566,658	2	four	52
+char 5	640,108,-12,532,660	2	five	53
+char 6	640,86,-12,552,660	2	six	54
+char 7	640,104,-14,534,663	2	seven	55
+char 8	640,88,-11,552,657	2	eight	56
+char 9	640,88,-14,554,658	2	nine	57
+char :	640,252,29,388,456	0	colon	58
+char ;	640,228,-164,396,456	1	semicolon	59
+char <	640,96,23,543,454	0	less	60
+char =	640,90,143,550,379	0	equal	61
 char eq	"
-char >	640	0	greater	62
-char ?	640	2	question	63
-char @	640	3	at	64
-char A	640	2	A	65
-char B	640	2	B	66
-char C	640	2	C	67
-char D	640	2	D	68
-char E	640	2	E	69
-char F	640	2	F	70
-char G	640	2	G	71
-char H	640	2	H	72
-char I	640	2	I	73
-char J	640	3	J	74
-char K	640	2	K	75
-char L	640	2	L	76
-char M	640	2	M	77
-char N	640	2	N	78
-char O	640	2	O	79
-char P	640	2	P	80
-char Q	640	3	Q	81
-char R	640	2	R	82
-char S	640	2	S	83
-char T	640	2	T	84
-char U	640	2	U	85
-char V	640	2	V	86
-char W	640	2	W	87
-char X	640	2	X	88
-char Y	640	2	Y	89
-char Z	640	2	Z	90
-char [	640	3	bracketleft	91
-char \	640	2	backslash	92
+char >	640,97,21,544,452	0	greater	62
+char ?	640,122,-10,533,659	2	question	63
+char @	640,32,-80,603,549	3	at	64
+char A	640,2,-2,630,625	2	A	65
+char B	640,38,-2,581,616	2	B	66
+char C	640,35,-10,603,625	2	C	67
+char D	640,14,-2,597,616	2	D	68
+char E	640,30,-2,610,617	2	E	69
+char F	640,57,-2,612,617	2	F	70
+char G	640,35,-10,622,625	2	G	71
+char H	640,14,-2,626,615	2	H	72
+char I	640,123,-2,532,616	2	I	73
+char J	640,62,-10,548,615	3	J	74
+char K	640,34,-2,622,615	2	K	75
+char L	640,62,-2,590,615	2	L	76
+char M	640,4,-2,637,615	2	M	77
+char N	640,15,-10,627,615	2	N	78
+char O	640,34,-10,606,625	2	O	79
+char P	640,44,-2,588,619	2	P	80
+char Q	640,34,-199,632,625	3	Q	81
+char R	640,12,-10,624,619	2	R	82
+char S	640,61,-10,571,625	2	S	83
+char T	640,16,-2,624,620	2	T	84
+char U	640,5,-10,631,615	2	U	85
+char V	640,0,-11,640,615	2	V	86
+char W	640,0,-11,639,615	2	W	87
+char X	640,2,-2,635,615	2	X	88
+char Y	640,26,-2,620,615	2	Y	89
+char Z	640,41,-2,578,620	2	Z	90
+char [	640,228,-193,495,703	3	bracketleft	91
+char \	640,88,-97,558,727	2	backslash	92
 char bs	"
 char rs	"
-char ]	640	3	bracketright	93
-char ha	640	3	asciicircum	
-char _	640	1	underscore	95
+char ]	640,145,-192,412,704	3	bracketright	93
+char ha	640,112,220,527,616	3	asciicircum	
+char _	640,51,-154,589,-110	1	underscore	95
 char ru	"
 char ul	"
-char ga	640	3	grave	
+char ga	640,149,510,430,689	3	grave	
 char \`	"
-char a	640	0	a	97
-char b	640	2	b	98
-char c	640	0	c	99
-char d	640	2	d	100
-char e	640	0	e	101
-char f	640	2	f	102
-char g	640	1	g	103
-char h	640	2	h	104
-char i	640	2	i	105
-char j	640	3	j	106
-char k	640	2	k	107
-char l	640	2	l	108
-char m	640	0	m	109
-char n	640	0	n	110
-char o	640	0	o	111
-char p	640	1	p	112
-char q	640	1	q	113
-char r	640	0	r	114
-char s	640	0	s	115
-char t	640	2	t	116
-char u	640	0	u	117
-char v	640	0	v	118
-char w	640	0	w	119
-char x	640	0	x	120
-char y	640	1	y	121
-char z	640	0	z	122
-char {	640	3	braceleft	123
-char |	640	3	bar	124
+char a	640,64,-10,611,490	0	a	97
+char b	640,12,-16,579,698	2	b	98
+char c	640,76,-10,579,490	0	c	99
+char d	640,60,-12,617,698	2	d	100
+char e	640,78,-10,574,490	0	e	101
+char f	640,64,-2,588,698	2	f	102
+char g	640,64,-237,582,516	1	g	103
+char h	640,29,-2,614,698	2	h	104
+char i	640,94,-2,569,705	2	i	105
+char j	640,80,-156,462,705	3	j	106
+char k	640,30,-2,595,698	2	k	107
+char l	640,86,-2,567,698	2	l	108
+char m	640,5,-2,639,493	0	m	109
+char n	640,31,-2,611,493	0	n	110
+char o	640,60,-10,580,490	0	o	111
+char p	640,21,-234,580,494	1	p	112
+char q	640,60,-234,609,494	1	q	113
+char r	640,58,-2,606,493	0	r	114
+char s	640,88,-10,553,490	0	s	115
+char t	640,71,-10,549,643	2	t	116
+char u	640,35,-12,607,482	0	u	117
+char v	640,24,-12,616,482	0	v	118
+char w	640,2,-12,638,482	0	w	119
+char x	640,36,-2,593,482	0	x	120
+char y	640,24,-232,626,482	1	y	121
+char z	640,61,-2,582,490	0	z	122
+char {	640,169,-212,535,707	3	braceleft	123
+char |	640,298,-232,342,698	3	bar	124
 char or	"
-char }	640	3	braceright	125
-char ti	640	3	asciitilde	
-char  	640	3	uni00A0	
-char ¡	640	3	exclamdown	
+char }	640,105,-213,471,706	3	braceright	125
+char ti	640,88,250,551,402	0	asciitilde	
+char  	640	0	uni00A0	
+char ¡	640,239,-180,361,488	1	exclamdown	
 char !!	"
 char r!	"
-char ¢	640	3	cent	
+char ¢	640,86,-23,565,621	0	cent	
 char c|	"
 char ct	"
-char £	640	3	sterling	
+char £	640,36,-12,579,658	2	sterling	
 char L-	"
 char ps	"
-char ¤	640	3	currency	
+char ¤	640,102,87,537,522	0	currency	
 char xo	"
 char cr	"
-char ¥	640	3	yen	
+char ¥	640,26,-2,620,647	2	yen	
 char Y-	"
 char yn	"
-char ¦	640	3	brokenbar	
+char ¦	640,296,-201,345,674	3	brokenbar	
 char ||	"
-char §	640	3	section	
+char §	640,140,-172,513,658	3	section	
 char so	"
 char sc	"
-char ¨	640	3	dieresis	
+char ¨	640,189,577,452,672	2	dieresis	
 char ""	"
 char :a	"
-char ©	640	3	copyright	
+char ©	640,37,23,602,588	0	copyright	
 char co	"
-char ª	640	3	ordfeminine	
+char ª	640,198,351,476,644	2	ordfeminine	
 char a_	"
-char «	640	3	guillemotleft	
+char «	640,89,35,548,455	0	guillemotleft	
 char <<	"
 char Fo	"
-char ¬	640	3	logicalnot	
+char ¬	640,35,93,553,367	0	logicalnot	
 char -,	"
 char no	"
-char ­	640	3	uni00AD	
-char ®	640	3	registered	
+char ­	640,124,215,516,291	0	uni00AD	
+char ®	640,37,23,602,588	0	registered	
 char ro	"
 char rg	"
-char ¯	640	3	macron	
+char ¯	640,59,529,339,573	0	macron	
 char -a	"
-char °	640	3	degree	
+char °	640,188,393,451,658	2	degree	
 char 0^	"
 char de	"
-char ±	640	3	plusminus	
+char ±	640,50,32,590,669	2	plusminus	
 char +-	"
-char ²	640	3	uni00B2	
+char ²	640,121,364,390,688	2	uni00B2	
 char 2^	"
-char ³	640	3	uni00B3	
+char ³	640,125,358,381,688	2	uni00B3	
 char 3^	"
-char ´	640	3	acute	
+char ´	640,158,508,437,689	2	acute	
 char aa	"
 char \'	"
-char µ	640	3	mu	
+char µ	640,76,-234,560,439	1	mu	
 char /u	"
 char *m	"
 char μ	"
-char ¶	640	3	paragraph	
+char ¶	640,57,-234,587,647	3	paragraph	
 char P!	"
 char pg	"
-char ·	640	3	periodcentered	
+char ·	640,71,204,179,312	0	periodcentered	
 char .^	"
-char ¸	640	3	cedilla	
+char ¸	640,57,-200,238,0	1	cedilla	
 char ,,	"
 char ,a	"
-char ¹	640	3	uni00B9	
+char ¹	640,148,364,341,692	2	uni00B9	
 char 1^	"
-char º	640	3	ordmasculine	
+char º	640,39,303,311,566	0	ordmasculine	
 char o_	"
-char »	640	3	guillemotright	
+char »	640,92,30,551,450	0	guillemotright	
 char >>	"
 char Fc	"
-char ¼	640	3	onequarter	
+char ¼	640,55,-81,597,643	2	onequarter	
 char 14	"
-char ½	640	3	onehalf	
+char ½	640,47,-79,628,643	2	onehalf	
 char 12	"
-char ¾	640	3	threequarters	
+char ¾	640,33,-79,571,637	0	threequarters	
 char 34	"
-char ¿	640	3	questiondown	
+char ¿	640,102,-179,513,490	1	questiondown	
 char ??	"
 char r?	"
-char À	640	3	Agrave	
+char À	640,2,-2,630,818	2	Agrave	
 char A`	"
-char Á	640	3	Aacute	
+char Á	640,2,-2,630,820	2	Aacute	
 char A'	"
-char Â	640	3	Acircumflex	
+char Â	640,2,-2,630,814	2	Acircumflex	
 char A^	"
-char Ã	640	3	Atilde	
+char Ã	640,2,-2,630,775	2	Atilde	
 char A~	"
-char Ä	640	3	Adieresis	
+char Ä	640,2,-2,630,754	2	Adieresis	
 char A:	"
 char A"	"
-char Å	640	3	Aring	
+char Å	640,2,-2,630,788	2	Aring	
 char A*	"
-char Æ	640	3	AE	
+char Æ	640,2,-2,631,617	0	AE	
 char AE	"
-char Ç	640	3	Ccedilla	
+char Ç	640,35,-200,603,625	1	Ccedilla	
 char C,	"
-char È	640	3	Egrave	
+char È	640,30,-2,610,817	2	Egrave	
 char E`	"
-char É	640	3	Eacute	
+char É	640,30,-2,610,820	2	Eacute	
 char E'	"
-char Ê	640	3	Ecircumflex	
+char Ê	640,30,-2,610,814	2	Ecircumflex	
 char E^	"
-char Ë	640	3	Edieresis	
+char Ë	640,30,-2,610,805	2	Edieresis	
 char E:	"
-char Ì	640	3	Igrave	
+char Ì	640,123,-2,532,817	2	Igrave	
 char I`	"
-char Í	640	3	Iacute	
+char Í	640,123,-2,532,819	2	Iacute	
 char I'	"
-char Î	640	3	Icircumflex	
+char Î	640,123,-2,532,814	2	Icircumflex	
 char I^	"
-char Ï	640	3	Idieresis	
+char Ï	640,123,-2,532,805	2	Idieresis	
 char I:	"
-char Ð	640	3	Eth	
+char Ð	640,8,-2,597,616	0	Eth	
 char D-	"
-char Ñ	640	3	Ntilde	
+char Ñ	640,15,-10,627,775	2	Ntilde	
 char N~	"
-char Ò	640	3	Ograve	
+char Ò	640,34,-10,606,819	2	Ograve	
 char O`	"
-char Ó	640	3	Oacute	
+char Ó	640,34,-10,606,820	2	Oacute	
 char O'	"
-char Ô	640	3	Ocircumflex	
+char Ô	640,34,-10,606,814	2	Ocircumflex	
 char O^	"
-char Õ	640	3	Otilde	
+char Õ	640,34,-10,606,775	2	Otilde	
 char O~	"
-char Ö	640	3	Odieresis	
+char Ö	640,34,-10,606,754	2	Odieresis	
 char O:	"
-char ×	640	3	multiply	
+char ×	640,163,95,478,410	0	multiply	
 char xx	"
 char mu	"
-char Ø	640	3	Oslash	
+char Ø	640,32,-12,606,625	0	Oslash	
 char O/	"
-char Ù	640	3	Ugrave	
+char Ù	640,5,-10,631,818	2	Ugrave	
 char U`	"
-char Ú	640	3	Uacute	
+char Ú	640,5,-10,631,819	2	Uacute	
 char U'	"
-char Û	640	3	Ucircumflex	
+char Û	640,5,-10,631,814	2	Ucircumflex	
 char U^	"
-char Ü	640	3	Udieresis	
+char Ü	640,7,-10,637,754	2	Udieresis	
 char U:	"
-char Ý	640	3	Yacute	
+char Ý	640,26,-2,620,820	2	Yacute	
 char Y'	"
-char Þ	640	3	Thorn	
+char Þ	640,46,-2,573,615	0	Thorn	
 char TH	"
-char ß	640	3	germandbls	
+char ß	640,49,-10,580,698	2	germandbls	
 char ss	"
-char à	640	3	agrave	
+char à	640,64,-10,611,731	2	agrave	
 char a`	"
-char á	640	3	aacute	
+char á	640,64,-10,611,731	2	aacute	
 char a'	"
-char â	640	3	acircumflex	
+char â	640,64,-10,611,724	2	acircumflex	
 char a^	"
-char ã	640	3	atilde	
+char ã	640,64,-10,611,695	2	atilde	
 char a~	"
-char ä	640	3	adieresis	
+char ä	640,64,-10,611,692	2	adieresis	
 char a:	"
-char å	640	3	aring	
+char å	640,64,-10,611,719	2	aring	
 char a*	"
-char æ	640	3	ae	
+char æ	640,25,-10,613,490	0	ae	
 char ae	"
-char ç	640	3	ccedilla	
+char ç	640,76,-200,579,490	1	ccedilla	
 char c,	"
-char è	640	3	egrave	
+char è	640,78,-10,574,731	2	egrave	
 char e`	"
-char é	640	3	eacute	
+char é	640,78,-10,574,731	2	eacute	
 char e'	"
-char ê	640	3	ecircumflex	
+char ê	640,78,-10,574,724	2	ecircumflex	
 char e^	"
-char ë	640	3	edieresis	
+char ë	640,78,-10,574,692	2	edieresis	
 char e:	"
-char ì	640	3	igrave	
+char ì	640,94,-2,569,731	2	igrave	
 char i`	"
-char í	640	3	iacute	
+char í	640,94,-2,569,731	2	iacute	
 char i'	"
-char î	640	3	icircumflex	
+char î	640,94,-2,569,724	2	icircumflex	
 char i^	"
-char ï	640	3	idieresis	
+char ï	640,94,-2,569,692	2	idieresis	
 char i:	"
-char ð	640	3	eth	
+char ð	640,68,-10,556,699	2	eth	
 char d-	"
-char ñ	640	3	ntilde	
+char ñ	640,31,-2,611,695	2	ntilde	
 char n~	"
-char ò	640	3	ograve	
+char ò	640,60,-10,580,731	2	ograve	
 char o`	"
-char ó	640	3	oacute	
+char ó	640,60,-10,580,731	2	oacute	
 char o'	"
-char ô	640	3	ocircumflex	
+char ô	640,60,-10,580,724	2	ocircumflex	
 char o^	"
-char õ	640	3	otilde	
+char õ	640,60,-10,580,695	2	otilde	
 char o~	"
-char ö	640	3	odieresis	
+char ö	640,60,-10,580,692	2	odieresis	
 char o:	"
-char ÷	640	3	divide	
+char ÷	640,50,63,590,453	0	divide	
 char di	"
 char -:	"
-char ø	640	3	oslash	
+char ø	640,60,-31,580,504	0	oslash	
 char o/	"
-char ù	640	3	ugrave	
+char ù	640,35,-12,607,731	2	ugrave	
 char u`	"
-char ú	640	3	uacute	
+char ú	640,35,-12,607,731	2	uacute	
 char u'	"
-char û	640	3	ucircumflex	
+char û	640,35,-12,607,724	2	ucircumflex	
 char u^	"
-char ü	640	3	udieresis	
+char ü	640,35,-12,607,692	2	udieresis	
 char u:	"
-char ý	640	3	yacute	
+char ý	640,24,-232,626,731	3	yacute	
 char y'	"
-char þ	640	3	thorn	
+char þ	640,37,-234,554,698	3	thorn	
 char th	"
-char ÿ	640	3	ydieresis	
+char ÿ	640,24,-232,626,692	3	ydieresis	
 char y:	"
-char Ā	640	3	Amacron	
-char ā	640	3	amacron	
-char Ă	640	3	Abreve	
-char ă	640	3	abreve	
-char Ą	640	3	Aogonek	
-char ą	640	3	aogonek	
-char Ć	640	3	Cacute	
-char ć	640	3	cacute	
-char Ĉ	640	3	Ccircumflex	
-char ĉ	640	3	ccircumflex	
-char Ċ	640	3	Cdotaccent	
-char ċ	640	3	cdotaccent	
-char Č	640	3	Ccaron	
+char Ā	640,2,-2,630,754	2	Amacron	
+char ā	640,64,-10,611,636	0	amacron	
+char Ă	640,2,-2,630,804	2	Abreve	
+char ă	640,64,-10,611,727	2	abreve	
+char Ą	640,2,-200,630,625	1	Aogonek	
+char ą	640,64,-193,617,490	1	aogonek	
+char Ć	640,35,-10,603,819	2	Cacute	
+char ć	640,76,-10,579,731	2	cacute	
+char Ĉ	640,35,-10,603,815	2	Ccircumflex	
+char ĉ	640,76,-10,579,724	2	ccircumflex	
+char Ċ	640,35,-10,603,805	2	Cdotaccent	
+char ċ	640,76,-10,579,705	2	cdotaccent	
+char Č	640,35,-10,603,812	2	Ccaron	
 char C<	"
-char č	640	3	ccaron	
+char č	640,76,-10,579,727	2	ccaron	
 char c<	"
-char Ď	640	3	Dcaron	
+char Ď	640,14,-2,597,812	2	Dcaron	
 char D<	"
-char ď	640	3	dcaron	
+char ď	640,60,-12,691,698	2	dcaron	
 char d<	"
-char Đ	640	3	Dcroat	
-char đ	640	3	dcroat	
-char Ē	640	3	Emacron	
-char ē	640	3	emacron	
-char Ĕ	640	3	Ebreve	
-char ĕ	640	3	ebreve	
-char Ė	640	3	Edotaccent	
-char ė	640	3	edotaccent	
-char Ę	640	3	Eogonek	
-char ę	640	3	eogonek	
-char Ě	640	3	Ecaron	
-char ě	640	3	ecaron	
+char Đ	640,14,-2,597,616	0	Dcroat	
+char đ	640,60,-12,617,698	2	dcroat	
+char Ē	640,30,-2,610,617	0	Emacron	
+char ē	640,78,-10,574,636	0	emacron	
+char Ĕ	640,30,-2,610,803	2	Ebreve	
+char ĕ	640,78,-10,574,727	2	ebreve	
+char Ė	640,30,-2,610,805	2	Edotaccent	
+char ė	640,78,-10,574,705	2	edotaccent	
+char Ę	640,30,-200,610,617	1	Eogonek	
+char ę	640,78,-200,574,490	1	eogonek	
+char Ě	640,30,-2,610,812	2	Ecaron	
+char ě	640,78,-10,574,727	2	ecaron	
 char e<	"
-char Ĝ	640	3	Gcircumflex	
-char ĝ	640	3	gcircumflex	
-char Ğ	640	3	Gbreve	
-char ğ	640	3	gbreve	
-char Ġ	640	3	Gdotaccent	
-char ġ	640	3	gdotaccent	
-char Ģ	640	3	uni0122	
-char ģ	640	3	uni0123	
-char Ĥ	640	3	Hcircumflex	
-char ĥ	640	3	hcircumflex	
-char Ħ	640	3	Hbar	
-char ħ	640	3	hbar	
-char Ĩ	640	3	Itilde	
-char ĩ	640	3	itilde	
-char Ī	640	3	Imacron	
-char ī	640	3	imacron	
-char Ĭ	640	3	Ibreve	
-char ĭ	640	3	ibreve	
-char Į	640	3	Iogonek	
-char į	640	3	iogonek	
-char İ	640	3	Idotaccent	
-char ı	640	3	dotlessi	
-char Ĳ	640	3	IJ	
-char ĳ	640	3	ij	
-char Ĵ	640	3	Jcircumflex	
-char ĵ	640	3	jcircumflex	
-char Ķ	640	3	uni0136	
-char ķ	640	3	uni0137	
-char ĸ	640	3	kgreenlandic	
-char Ĺ	640	3	Lacute	
-char ĺ	640	3	lacute	
-char Ļ	640	3	uni013B	
-char ļ	640	3	uni013C	
-char Ľ	640	3	Lcaron	
-char ľ	640	3	lcaron	
-char Ŀ	640	3	Ldot	
-char ŀ	640	3	ldot	
-char Ł	640	3	Lslash	
-char ł	640	3	lslash	
-char Ń	640	3	Nacute	
-char ń	640	3	nacute	
-char Ņ	640	3	uni0145	
-char ņ	640	3	uni0146	
-char Ň	640	3	Ncaron	
-char ň	640	3	ncaron	
+char Ĝ	640,35,-10,622,814	2	Gcircumflex	
+char ĝ	640,64,-237,582,724	3	gcircumflex	
+char Ğ	640,35,-10,622,806	2	Gbreve	
+char ğ	640,64,-237,582,727	3	gbreve	
+char Ġ	640,35,-10,622,815	2	Gdotaccent	
+char ġ	640,64,-237,582,705	3	gdotaccent	
+char Ģ	640,35,-226,622,625	1	uni0122	
+char ģ	640,64,-237,582,744	3	uni0123	
+char Ĥ	640,14,-2,626,812	2	Hcircumflex	
+char ĥ	640,29,-2,614,736	2	hcircumflex	
+char Ħ	640,1,-2,636,615	0	Hbar	
+char ħ	640,9,-2,614,698	2	hbar	
+char Ĩ	640,123,-2,532,805	2	Itilde	
+char ĩ	640,94,-2,569,695	2	itilde	
+char Ī	640,123,-2,532,616	0	Imacron	
+char ī	640,94,-2,569,636	0	imacron	
+char Ĭ	640,123,-2,532,805	2	Ibreve	
+char ĭ	640,94,-2,569,727	2	ibreve	
+char Į	640,123,-200,532,616	1	Iogonek	
+char į	640,94,-200,569,705	3	iogonek	
+char İ	640,123,-2,532,805	2	Idotaccent	
+char ı	640,94,-2,569,493	0	dotlessi	
+char Ĳ	640,30,-163,615,615	1	IJ	
+char ĳ	640,54,-224,556,705	3	ij	
+char Ĵ	640,62,-10,548,814	2	Jcircumflex	
+char ĵ	640,80,-156,519,724	3	jcircumflex	
+char Ķ	640,34,-226,622,615	1	uni0136	
+char ķ	640,30,-226,595,698	3	uni0137	
+char ĸ	640,29,-2,610,490	0	kgreenlandic	
+char Ĺ	640,62,-2,590,819	2	Lacute	
+char ĺ	640,86,-2,567,847	2	lacute	
+char Ļ	640,62,-226,590,615	1	uni013B	
+char ļ	640,86,-226,567,698	3	uni013C	
+char Ľ	640,62,-2,590,615	0	Lcaron	
+char ľ	640,86,-2,567,698	2	lcaron	
+char Ŀ	640,62,-2,590,615	0	Ldot	
+char ŀ	640,86,-2,567,698	2	ldot	
+char Ł	640,35,-2,590,615	0	Lslash	
+char ł	640,86,-2,567,698	2	lslash	
+char Ń	640,15,-10,627,820	2	Nacute	
+char ń	640,31,-2,611,731	2	nacute	
+char Ņ	640,15,-226,627,615	1	uni0145	
+char ņ	640,31,-226,611,493	1	uni0146	
+char Ň	640,15,-10,627,812	2	Ncaron	
+char ň	640,31,-2,611,727	2	ncaron	
 char n<	"
-char ŉ	640	3	napostrophe	
-char Ŋ	640	3	Eng	
-char ŋ	640	3	eng	
-char Ō	640	3	Omacron	
-char ō	640	3	omacron	
-char Ŏ	640	3	Obreve	
-char ŏ	640	3	obreve	
-char Ő	640	3	Ohungarumlaut	
+char ŉ	640,-42,-2,624,698	2	napostrophe	
+char Ŋ	640,14,-163,573,625	1	Eng	
+char ŋ	640,41,-223,541,493	1	eng	
+char Ō	640,34,-10,606,802	2	Omacron	
+char ō	640,60,-10,580,636	0	omacron	
+char Ŏ	640,34,-10,606,805	2	Obreve	
+char ŏ	640,60,-10,580,727	2	obreve	
+char Ő	640,34,-10,606,835	2	Ohungarumlaut	
 char O"	"
-char ő	640	3	ohungarumlaut	
+char ő	640,60,-10,580,784	2	ohungarumlaut	
 char o"	"
-char Œ	640	3	OE	
+char Œ	640,22,-2,630,614	0	OE	
 char OE	"
-char œ	640	3	oe	
+char œ	640,24,-10,617,490	0	oe	
 char oe	"
-char Ŕ	640	3	Racute	
-char ŕ	640	3	racute	
-char Ŗ	640	3	uni0156	
-char ŗ	640	3	uni0157	
-char Ř	640	3	Rcaron	
+char Ŕ	640,12,-10,624,820	2	Racute	
+char ŕ	640,58,-2,606,731	2	racute	
+char Ŗ	640,12,-226,624,619	1	uni0156	
+char ŗ	640,58,-226,606,493	1	uni0157	
+char Ř	640,12,-10,624,812	2	Rcaron	
 char R<	"
-char ř	640	3	rcaron	
+char ř	640,58,-2,606,727	2	rcaron	
 char r<	"
-char Ś	640	3	Sacute	
-char ś	640	3	sacute	
-char Ŝ	640	3	Scircumflex	
-char ŝ	640	3	scircumflex	
-char Ş	640	3	Scedilla	
-char ş	640	3	scedilla	
-char Š	640	3	Scaron	
+char Ś	640,61,-10,571,820	2	Sacute	
+char ś	640,88,-10,553,731	2	sacute	
+char Ŝ	640,61,-10,571,821	2	Scircumflex	
+char ŝ	640,88,-10,553,724	2	scircumflex	
+char Ş	640,61,-200,571,625	1	Scedilla	
+char ş	640,88,-200,553,490	1	scedilla	
+char Š	640,61,-10,571,812	2	Scaron	
 char S<	"
-char š	640	3	scaron	
+char š	640,88,-10,553,727	2	scaron	
 char s<	"
-char Ţ	640	3	uni0162	
-char ţ	640	3	uni0163	
-char Ť	640	3	Tcaron	
+char Ţ	640,16,-200,624,620	1	uni0162	
+char ţ	640,71,-200,549,643	3	uni0163	
+char Ť	640,16,-2,624,812	2	Tcaron	
 char T<	"
-char ť	640	3	tcaron	
+char ť	640,-42,-10,549,698	2	tcaron	
 char t<	"
-char Ŧ	640	3	Tbar	
-char ŧ	640	3	tbar	
-char Ũ	640	3	Utilde	
-char ũ	640	3	utilde	
-char Ū	640	3	Umacron	
-char ū	640	3	umacron	
-char Ŭ	640	3	Ubreve	
-char ŭ	640	3	ubreve	
-char Ů	640	3	Uring	
+char Ŧ	640,16,-2,624,620	0	Tbar	
+char ŧ	640,71,-10,549,643	2	tbar	
+char Ũ	640,5,-10,631,819	2	Utilde	
+char ũ	640,35,-12,607,695	2	utilde	
+char Ū	640,5,-10,631,802	2	Umacron	
+char ū	640,35,-12,607,636	0	umacron	
+char Ŭ	640,5,-10,631,804	2	Ubreve	
+char ŭ	640,35,-12,607,727	2	ubreve	
+char Ů	640,5,-10,631,850	2	Uring	
 char U*	"
-char ů	640	3	uring	
+char ů	640,35,-12,607,719	2	uring	
 char u*	"
-char Ű	640	3	Uhungarumlaut	
+char Ű	640,5,-10,631,835	2	Uhungarumlaut	
 char U"	"
-char ű	640	3	uhungarumlaut	
+char ű	640,35,-12,607,482	0	uhungarumlaut	
 char u"	"
-char Ų	640	3	Uogonek	
-char ų	640	3	uogonek	
-char Ŵ	640	3	Wcircumflex	
-char ŵ	640	3	wcircumflex	
-char Ŷ	640	3	Ycircumflex	
-char ŷ	640	3	ycircumflex	
-char Ÿ	640	3	Ydieresis	
+char Ų	640,5,-200,631,615	1	Uogonek	
+char ų	640,35,-200,607,482	1	uogonek	
+char Ŵ	640,0,-11,639,814	2	Wcircumflex	
+char ŵ	640,2,-12,638,724	2	wcircumflex	
+char Ŷ	640,26,-2,620,814	2	Ycircumflex	
+char ŷ	640,24,-232,626,724	3	ycircumflex	
+char Ÿ	640,26,-2,620,805	2	Ydieresis	
 char Y:	"
-char Ź	640	3	Zacute	
-char ź	640	3	zacute	
-char Ż	640	3	Zdotaccent	
-char ż	640	3	zdotaccent	
-char Ž	640	3	Zcaron	
+char Ź	640,41,-2,578,820	2	Zacute	
+char ź	640,61,-2,582,731	2	zacute	
+char Ż	640,41,-2,578,802	2	Zdotaccent	
+char ż	640,61,-2,582,705	2	zdotaccent	
+char Ž	640,41,-2,578,812	2	Zcaron	
 char Z<	"
-char ž	640	3	zcaron	
+char ž	640,61,-2,582,727	2	zcaron	
 char z<	"
-char ſ	640	3	longs	
-char ȷ	640	3	uni0237	
-char ̀	640	3	gravecomb	
-char ́	640	3	acutecomb	
-char ̂	640	3	uni0302	
-char ̃	640	3	tildecomb	
-char ̄	640	3	uni0304	
-char ̅	640	3	uni0305	
-char ̆	640	3	uni0306	
-char ̇	640	3	uni0307	
-char ̈	640	3	uni0308	
-char ̉	640	3	hookabovecomb	
-char ̊	640	3	uni030A	
-char ̋	640	3	uni030B	
-char ̌	640	3	uni030C	
-char ̍	640	3	uni030D	
-char ̎	640	3	uni030E	
-char ̏	640	3	uni030F	
-char ̐	640	3	uni0310	
-char ̑	640	3	uni0311	
-char ̒	640	3	uni0312	
-char ̓	640	3	uni0313	
-char ̔	640	3	uni0314	
-char ̕	640	3	uni0315	
-char ̖	640	3	uni0316	
-char ̗	640	3	uni0317	
-char ̘	640	3	uni0318	
-char ̙	640	3	uni0319	
-char ̚	640	3	uni031A	
-char ̛	640	3	uni031B	
-char ̜	640	3	uni031C	
-char ̝	640	3	uni031D	
-char ̞	640	3	uni031E	
-char ̟	640	3	uni031F	
-char ̠	640	3	uni0320	
-char ̡	640	3	uni0321	
-char ̢	640	3	uni0322	
-char ̣	640	3	dotbelowcomb	
-char ̤	640	3	uni0324	
-char ̥	640	3	uni0325	
-char ̦	640	3	uni0326	
-char ̧	640	3	uni0327	
-char ̨	640	3	uni0328	
-char ̩	640	3	uni0329	
-char ̪	640	3	uni032A	
-char ̫	640	3	uni032B	
-char ̬	640	3	uni032C	
-char ̭	640	3	uni032D	
-char ̮	640	3	uni032E	
-char ̯	640	3	uni032F	
-char ̰	640	3	uni0330	
-char ̱	640	3	uni0331	
-char ̲	640	3	uni0332	
-char ̳	640	3	uni0333	
-char ̴	640	3	uni0334	
-char ̵	640	3	uni0335	
-char ̶	640	3	uni0336	
-char ̷	640	3	uni0337	
-char ̸	640	3	uni0338	
-char ̹	640	3	uni0339	
-char ̺	640	3	uni033A	
-char ̻	640	3	uni033B	
-char ̼	640	3	uni033C	
-char ̽	640	3	uni033D	
-char ̾	640	3	uni033E	
-char ̿	640	3	uni033F	
-char ̀	640	3	uni0340	
-char ́	640	3	uni0341	
-char ͂	640	3	uni0342	
-char ̓	640	3	uni0343	
-char ̈́	640	3	uni0344	
-char ͅ	640	3	uni0345	
-char ͆	640	3	uni0346	
-char ͇	640	3	uni0347	
-char ͈	640	3	uni0348	
-char ͉	640	3	uni0349	
-char ͊	640	3	uni034A	
-char ͋	640	3	uni034B	
-char ͌	640	3	uni034C	
-char ͍	640	3	uni034D	
-char ͎	640	3	uni034E	
-char ͏	640	3	uni034F	
-char ͐	640	3	uni0350	
-char ͑	640	3	uni0351	
-char ͒	640	3	uni0352	
-char ͓	640	3	uni0353	
-char ͔	640	3	uni0354	
-char ͕	640	3	uni0355	
-char ͖	640	3	uni0356	
-char ͗	640	3	uni0357	
-char ͘	640	3	uni0358	
-char ͙	640	3	uni0359	
-char ͚	640	3	uni035A	
-char ͛	640	3	uni035B	
-char ͜	640	3	uni035C	
-char ͝	640	3	uni035D	
-char ͞	640	3	uni035E	
-char ͟	640	3	uni035F	
-char ͠	640	3	uni0360	
-char ͡	640	3	uni0361	
-char ͢	640	3	uni0362	
-char ͣ	640	3	uni0363	
-char ͤ	640	3	uni0364	
-char ͥ	640	3	uni0365	
-char ͦ	640	3	uni0366	
-char ͧ	640	3	uni0367	
-char ͨ	640	3	uni0368	
-char ͩ	640	3	uni0369	
-char ͪ	640	3	uni036A	
-char ͫ	640	3	uni036B	
-char ͬ	640	3	uni036C	
-char ͭ	640	3	uni036D	
-char ͮ	640	3	uni036E	
-char ͯ	640	3	uni036F	
-char ‐	640	3	uni2010	
-char ‑	640	3	uni2011	
-char ‒	640	3	figuredash	
-char –	640	3	endash	
+char ſ	640,64,-2,588,698	2	longs	
+char ȷ	640,80,-156,462,493	1	uni0237	
+char ̀	640,241,568,399,731	2	gravecomb	
+char ́	640,241,569,400,731	2	acutecomb	
+char ̂	640,194,565,446,724	2	uni0302	
+char ̃	640,181,589,459,695	2	tildecomb	
+char ̄	640,190,586,451,636	0	uni0304	
+char ̅	640,132,733,508,777	2	uni0305	
+char ̆	640,185,580,455,727	2	uni0306	
+char ̇	640,264,590,376,705	2	uni0307	
+char ̈	640,184,597,457,692	2	uni0308	
+char ̉	640,247,663,393,832	2	hookabovecomb	
+char ̊	640,232,549,408,719	2	uni030A	
+char ̋	640,190,608,451,784	2	uni030B	
+char ̌	640,194,584,447,727	2	uni030C	
+char ̍	640,293,599,347,761	2	uni030D	
+char ̎	640,246,590,395,770	2	uni030E	
+char ̏	640,190,632,451,808	2	uni030F	
+char ̐	640,185,580,455,796	2	uni0310	
+char ̑	640,185,447,455,594	0	uni0311	
+char ̒	640,264,519,377,701	2	uni0312	
+char ̓	640,264,419,377,601	0	uni0313	
+char ̔	640,264,526,377,708	2	uni0314	
+char ̕	640,264,407,377,589	0	uni0315	
+char ̖	640,229,-219,411,-78	1	uni0316	
+char ̗	640,235,-214,406,-68	1	uni0317	
+char ̘	640,239,-238,401,-56	1	uni0318	
+char ̙	640,239,-237,401,-55	1	uni0319	
+char ̚	640,232,424,408,596	0	uni031A	
+char ̛	640,265,332,376,503	0	uni031B	
+char ̜	640,265,-244,375,-52	1	uni031C	
+char ̝	640,229,-228,411,-66	1	uni031D	
+char ̞	640,229,-228,411,-66	1	uni031E	
+char ̟	640,222,-238,419,-53	1	uni031F	
+char ̠	640,222,-167,419,-124	1	uni0320	
+char ̡	640,227,-237,414,14	1	uni0321	
+char ̢	640,227,-237,414,12	1	uni0322	
+char ̣	640,266,-167,374,-59	1	dotbelowcomb	
+char ̤	640,167,-167,473,-59	1	uni0324	
+char ̥	640,232,-221,408,-51	1	uni0325	
+char ̦	640,263,-226,377,-41	1	uni0326	
+char ̧	640,230,-200,411,0	1	uni0327	
+char ̨	640,221,-200,419,31	1	uni0328	
+char ̩	640,293,-237,347,-60	1	uni0329	
+char ̪	640,200,-209,440,-88	1	uni032A	
+char ̫	640,165,-225,476,-73	1	uni032B	
+char ̬	640,194,-220,447,-77	1	uni032C	
+char ̭	640,193,-225,447,-82	1	uni032D	
+char ̮	640,185,-179,455,-32	1	uni032E	
+char ̯	640,185,-277,455,-130	1	uni032F	
+char ̰	640,181,-107,459,-1	0	uni0330	
+char ̱	640,200,-131,440,-87	0	uni0331	
+char ̲	640,130,-131,510,-87	0	uni0332	
+char ̳	640,190,-211,450,-77	1	uni0333	
+char ̴	640,181,186,459,292	0	uni0334	
+char ̵	640,200,201,440,245	0	uni0335	
+char ̶	640,130,201,510,245	0	uni0336	
+char ̷	640,117,-28,524,454	0	uni0337	
+char ̸	640,43,-13,598,658	2	uni0338	
+char ̹	640,265,-244,375,-52	1	uni0339	
+char ̺	640,200,-209,440,-88	1	uni033A	
+char ̻	640,229,-238,411,-72	1	uni033B	
+char ̼	640,165,-225,476,-73	1	uni033C	
+char ̽	640,218,439,422,642	0	uni033D	
+char ̾	640,278,441,362,663	2	uni033E	
+char ̿	640,130,479,510,613	0	uni033F	
+char ̀	640,241,547,399,710	2	uni0340	
+char ́	640,241,548,400,710	2	uni0341	
+char ͂	640,181,519,459,625	0	uni0342	
+char ̓	640,264,419,377,601	0	uni0343	
+char ̈́	640,189,577,452,672	2	uni0344	
+char ͅ	640,234,-238,407,-61	1	uni0345	
+char ͆	640,200,481,440,602	0	uni0346	
+char ͇	640,130,-211,510,-77	1	uni0347	
+char ͈	640,245,-225,395,-48	1	uni0348	
+char ͉	640,247,-186,393,-65	1	uni0349	
+char ͊	640,181,511,459,684	2	uni034A	
+char ͋	640,181,492,459,726	2	uni034B	
+char ͌	640,186,504,455,671	2	uni034C	
+char ͍	640,135,-221,506,-46	1	uni034D	
+char ͎	640,233,-230,408,-28	1	uni034E	
+char ͏	640	0	uni034F	
+char ͐	640,204,500,436,696	2	uni0350	
+char ͑	640,256,509,385,692	2	uni0351	
+char ͒	640,185,479,455,674	2	uni0352	
+char ͓	640,222,-227,418,-31	1	uni0353	
+char ͔	640,204,-228,436,-32	1	uni0354	
+char ͕	640,204,-228,436,-32	1	uni0355	
+char ͖	640,118,-228,522,-32	1	uni0356	
+char ͗	640,256,519,384,702	2	uni0357	
+char ͘	640,268,588,372,692	2	uni0358	
+char ͙	640,244,-189,397,-42	1	uni0359	
+char ͚	640,165,-214,476,-48	1	uni035A	
+char ͛	640,215,489,426,718	2	uni035B	
+char ͜	640,-48,-237,688,-67	1	uni035C	
+char ͝	640,-48,475,688,645	2	uni035D	
+char ͞	640,-67,530,708,579	0	uni035E	
+char ͟	640,-67,-134,708,-85	0	uni035F	
+char ͠	640,-127,543,767,677	2	uni0360	
+char ͡	640,-48,498,688,698	2	uni0361	
+char ͢	640,47,-221,593,-46	1	uni0362	
+char ͣ	640,253,509,388,660	2	uni0363	
+char ͤ	640,253,509,388,662	2	uni0364	
+char ͥ	640,281,511,360,741	2	uni0365	
+char ͦ	640,247,509,394,659	2	uni0366	
+char ͧ	640,237,509,403,657	2	uni0367	
+char ͨ	640,255,509,385,662	2	uni0368	
+char ͩ	640,241,509,399,715	2	uni0369	
+char ͪ	640,231,512,410,716	2	uni036A	
+char ͫ	640,192,513,448,660	2	uni036B	
+char ͬ	640,257,511,383,662	2	uni036C	
+char ͭ	640,268,509,372,708	2	uni036D	
+char ͮ	640,236,509,404,657	2	uni036E	
+char ͯ	640,235,509,405,660	2	uni036F	
+char ‐	640,188,236,451,290	0	uni2010	
+char ‑	640,188,236,451,290	0	uni2011	
+char ‒	640,137,287,503,335	0	figuredash	
+char –	640,92,238,548,287	0	endash	
 char en	"
 char \-	"
-char —	640	3	emdash	
+char —	640,0,238,640,287	0	emdash	
 char em	"
 char --	"
-char ―	640	3	uni2015	
-char ‖	640	3	uni2016	
-char ‗	640	3	underscoredbl	
-char ‘	640	3	quoteleft	
+char ―	640,0,238,640,287	0	uni2015	
+char ‖	640,249,-189,391,857	3	uni2016	
+char ‗	640,51,-154,589,-4	0	underscoredbl	
+char ‘	640,220,452,388,738	2	quoteleft	
 char `	"
 char oq	"
-char ’	640	3	quoteright	
+char ’	640,253,419,421,705	2	quoteright	
 char '	"
 char cq	"
-char ‚	640	3	quotesinglbase	
+char ‚	640,253,-164,421,122	1	quotesinglbase	
 char bq	"
-char ‛	640	3	quotereversed	
-char “	640	3	quotedblleft	
+char ‛	640,240,419,408,705	2	quotereversed	
+char “	640,143,452,524,738	2	quotedblleft	
 char ``	"
 char lq	"
-char ”	640	3	quotedblright	
+char ”	640,117,419,498,705	2	quotedblright	
 char ''	"
 char rq	"
-char „	640	3	quotedblbase	
-char ‟	640	3	uni201F	
-char †	640	3	dagger	
+char „	640,117,-165,498,121	1	quotedblbase	
+char ‟	640,116,439,498,725	2	uni201F	
+char †	640,62,-207,516,697	3	dagger	
 char dg	"
-char ‡	640	3	daggerdbl	
+char ‡	640,62,-207,516,697	3	daggerdbl	
 char dd	"
-char •	640	3	bullet	
+char •	640,206,116,434,344	0	bullet	
 char bu	"
-char ‣	640	3	uni2023	
-char ․	640	3	onedotenleader	
-char ‥	640	3	twodotenleader	
-char …	640	3	ellipsis	
+char ‣	640,188,84,452,380	0	uni2023	
+char ․	640,239,-10,375,124	0	onedotenleader	
+char ‥	640,170,-10,511,124	0	twodotenleader	
+char …	640,48,-10,633,124	0	ellipsis	
 char el	"
-char ‧	640	3	uni2027	
-char ⁰	640	3	uni2070	
-char ⁱ	640	3	uni2071	
-char ⁴	640	3	uni2074	
-char ⁵	640	3	uni2075	
-char ⁶	640	3	uni2076	
-char ⁷	640	3	uni2077	
-char ⁸	640	3	uni2078	
-char ⁹	640	3	uni2079	
-char ⁺	640	3	uni207A	
-char ⁻	640	3	uni207B	
-char ⁼	640	3	uni207C	
-char ⁽	640	3	uni207D	
-char ⁾	640	3	uni207E	
-char ⁿ	640	3	uni207F	
-char ₀	640	3	uni2080	
-char ₁	640	3	uni2081	
-char ₂	640	3	uni2082	
-char ₃	640	3	uni2083	
-char ₄	640	3	uni2084	
-char ₅	640	3	uni2085	
-char ₆	640	3	uni2086	
-char ₇	640	3	uni2087	
-char ₈	640	3	uni2088	
-char ₉	640	3	uni2089	
-char ₊	640	3	uni208A	
-char ₋	640	3	uni208B	
-char ₌	640	3	uni208C	
-char ₍	640	3	uni208D	
-char ₎	640	3	uni208E	
-char ₐ	640	3	uni2090	
-char ₑ	640	3	uni2091	
-char ₓ	640	3	uni2093	
-char ₔ	640	3	uni2094	
-char ⅓	640	3	onethird	
-char ⅔	640	3	twothirds	
-char ⅕	640	3	uni2155	
-char ⅖	640	3	uni2156	
-char ⅗	640	3	uni2157	
-char ⅘	640	3	uni2158	
-char ⅙	640	3	uni2159	
-char ⅚	640	3	uni215A	
-char ⅛	640	3	oneeighth	
-char ⅜	640	3	threeeighths	
-char ⅝	640	3	fiveeighths	
-char ⅞	640	3	seveneighths	
-char ⅟	640	3	uni215F	
-char ←	640	3	arrowleft	
+char ‧	640,239,213,375,347	0	uni2027	
+char ⁰	640,232,359,477,688	2	uni2070	
+char ⁱ	640,160,365,319,754	2	uni2071	
+char ⁴	640,221,365,469,688	2	uni2074	
+char ⁵	640,237,359,449,683	2	uni2075	
+char ⁶	640,236,359,465,688	2	uni2076	
+char ⁷	640,233,365,459,688	2	uni2077	
+char ⁸	640,230,359,463,688	2	uni2078	
+char ⁹	640,240,359,471,688	2	uni2079	
+char ⁺	640,129,382,381,634	0	uni207A	
+char ⁻	640,134,488,372,527	0	uni207B	
+char ⁼	640,137,474,367,581	0	uni207C	
+char ⁽	640,300,326,436,717	2	uni207D	
+char ⁾	640,310,328,446,719	2	uni207E	
+char ⁿ	640,102,365,436,637	0	uni207F	
+char ₀	640,132,-117,377,212	0	uni2080	
+char ₁	640,149,-111,342,217	0	uni2081	
+char ₂	640,114,-112,383,212	0	uni2082	
+char ₃	640,115,-118,371,212	0	uni2083	
+char ₄	640,130,-111,379,212	0	uni2084	
+char ₅	640,143,-117,355,207	0	uni2085	
+char ₆	640,137,-117,366,212	0	uni2086	
+char ₇	640,138,-111,364,212	0	uni2087	
+char ₈	640,136,-117,369,212	0	uni2088	
+char ₉	640,136,-117,367,212	0	uni2089	
+char ₊	640,129,-95,381,157	0	uni208A	
+char ₋	640,134,11,372,50	0	uni208B	
+char ₌	640,137,-3,367,104	0	uni208C	
+char ₍	640,168,-147,304,244	0	uni208D	
+char ₎	640,168,-147,304,244	0	uni208E	
+char ₐ	640,121,-125,399,168	0	uni2090	
+char ₑ	640,134,-117,371,161	0	uni2091	
+char ₓ	640,120,-112,400,157	0	uni2093	
+char ₔ	640,134,-117,371,161	0	uni2094	
+char ⅓	640,64,-85,619,643	2	onethird	
+char ⅔	640,24,-87,633,640	0	twothirds	
+char ⅕	640,61,-86,596,644	2	uni2155	
+char ⅖	640,32,-85,607,640	0	uni2156	
+char ⅗	640,24,-85,594,639	0	uni2157	
+char ⅘	640,62,-85,574,640	0	uni2158	
+char ⅙	640,66,-86,608,644	2	uni2159	
+char ⅚	640,74,-85,574,635	0	uni215A	
+char ⅛	640,61,-87,613,643	2	oneeighth	
+char ⅜	640,37,-85,612,638	0	threeeighths	
+char ⅝	640,74,-86,577,635	0	fiveeighths	
+char ⅞	640,74,-85,615,640	0	seveneighths	
+char ⅟	640,68,-62,574,644	2	uni215F	
+char ←	640,17,82,624,448	0	arrowleft	
 char <-	"
-char ↑	640	3	arrowup	
+char ↑	640,137,-130,503,693	2	arrowup	
 char ua	"
-char →	640	3	arrowright	
+char →	640,17,82,624,448	0	arrowright	
 char ->	"
-char ↓	640	3	arrowdown	
+char ↓	640,137,-119,503,694	2	arrowdown	
 char da	"
-char ↔	640	3	arrowboth	
+char ↔	640,15,82,625,448	0	arrowboth	
 char ab	"
 char <>	"
-char ↕	640	3	arrowupdn	
-char ↖	640	3	uni2196	
-char ↗	640	3	uni2197	
-char ↘	640	3	uni2198	
-char ↙	640	3	uni2199	
-char ↚	640	3	uni219A	
-char ↛	640	3	uni219B	
-char ∀	640	3	universal	
+char ↕	640,137,-115,503,696	2	arrowupdn	
+char ↖	640,17,-12,623,595	0	uni2196	
+char ↗	640,17,-8,624,597	0	uni2197	
+char ↘	640,18,5,623,612	0	uni2198	
+char ↙	640,17,3,624,608	0	uni2199	
+char ↚	640,11,-163,630,661	3	uni219A	
+char ↛	640,14,-163,626,661	3	uni219B	
+char ∀	640,85,-2,556,570	0	universal	
 char fa	"
-char ∁	640	3	uni2201	
-char ∂	640	3	partialdiff	
+char ∁	640,148,-10,492,578	0	uni2201	
+char ∂	640,111,-10,529,617	0	partialdiff	
 char pd	"
-char ∃	640	3	existential	
+char ∃	640,155,0,486,572	0	existential	
 char te	"
-char ∄	640	3	uni2204	
-char ∅	640	3	emptyset	
+char ∄	640,157,-80,497,648	2	uni2204	
+char ∅	640,26,-67,616,611	0	emptyset	
 char es	"
-char ∆	640	3	Delta	
+char ∆	640,40,0,605,616	0	Delta	
 char *D	"
 char Δ	"
-char ∇	640	3	gradient	
+char ∇	640,40,0,605,616	0	gradient	
 char gr	"
-char ∈	640	3	element	
+char ∈	640,97,0,530,572	0	element	
 char mo	"
-char ∉	640	3	notelement	
+char ∉	640,97,-80,530,648	2	notelement	
 char !m	"
-char ∊	640	3	uni220A	
-char ∋	640	3	suchthat	
+char ∊	640,146,60,449,432	0	uni220A	
+char ∋	640,107,0,540,572	0	suchthat	
 char st	"
-char ∌	640	3	uni220C	
-char ∍	640	3	uni220D	
-char ∏	640	3	product	
+char ∌	640,104,-76,537,652	2	uni220C	
+char ∍	640,166,59,469,431	0	uni220D	
+char ∏	640,30,-110,608,587	0	product	
 char pr	"
-char ∐	640	3	uni2210	
-char ∑	640	3	summation	
+char ∐	640,30,-110,608,587	0	uni2210	
+char ∑	640,42,-62,551,583	0	summation	
 char su	"
-char −	640	3	minus	
+char −	640,55,221,585,281	0	minus	
 char mi	"
-char ∓	640	3	uni2213	
+char ∓	640,50,-28,590,609	0	uni2213	
 char -+	"
-char ∔	640	3	uni2214	
-char ∗	640	3	asteriskmath	
+char ∔	640,50,-35,590,624	0	uni2214	
+char ∗	640,171,108,450,375	0	asteriskmath	
 char **	"
-char ∘	640	3	uni2218	
-char ∙	640	3	uni2219	
-char √	640	3	radical	
+char ∘	640,189,125,452,390	0	uni2218	
+char ∙	640,266,203,374,311	0	uni2219	
+char √	640,26,-20,539,772	2	radical	
 char sr	"
-char ∛	640	3	uni221B	
-char ∜	640	3	uni221C	
-char ∝	640	3	proportional	
+char ∛	640,115,-20,629,772	2	uni221B	
+char ∜	640,116,-20,629,772	2	uni221C	
+char ∝	640,48,78,623,436	0	proportional	
 char pt	"
-char ∞	640	3	infinity	
+char ∞	640,30,78,606,436	0	infinity	
 char if	"
-char ∟	640	3	orthogonal	
-char ⋅	640	3	dotmath	
+char ∟	640,61,0,481,442	0	orthogonal	
+char ⋅	640,271,204,379,312	0	dotmath	
 char c.	"
-char ─	640	3	SF100000	
-char ┃	640	3	uni2503	
-char ┌	640	3	SF010000	
-char ┐	640	3	SF030000	
-char └	640	3	SF020000	
-char ┘	640	3	SF040000	
-char ├	640	3	SF080000	
-char ┤	640	3	SF090000	
-char ┬	640	3	SF060000	
-char ┴	640	3	SF070000	
-char ┼	640	3	SF050000	
-char ═	640	3	SF430000	
-char ║	640	3	SF240000	
-char ╒	640	3	SF510000	
-char ╓	640	3	SF520000	
-char ╔	640	3	SF390000	
-char ╕	640	3	SF220000	
-char ╖	640	3	SF210000	
-char ╗	640	3	SF250000	
-char ╘	640	3	SF500000	
-char ╙	640	3	SF490000	
-char ╚	640	3	SF380000	
-char ╛	640	3	SF280000	
-char ╜	640	3	SF270000	
-char ╝	640	3	SF260000	
-char ╞	640	3	SF360000	
-char ╟	640	3	SF370000	
-char ╠	640	3	SF420000	
-char ╡	640	3	SF190000	
-char ╢	640	3	SF200000	
-char ╣	640	3	SF230000	
-char ╤	640	3	SF470000	
-char ╥	640	3	SF480000	
-char ╦	640	3	SF410000	
-char ╧	640	3	SF450000	
-char ╨	640	3	SF460000	
-char ╩	640	3	SF400000	
-char ╪	640	3	SF540000	
-char ╫	640	3	SF530000	
-char ╬	640	3	SF440000	
-char ▀	640	3	upblock	
-char ▄	640	3	dnblock	
-char █	640	3	block	
-char ▌	640	3	lfblock	
-char ▐	640	3	rtblock	
-char ░	640	3	ltshade	
-char ▒	640	3	shade	
-char ▓	640	3	dkshade	
-char ★	640	3	uni2605	
-char ☹	640	3	uni2639	
-char ☺	640	3	smileface	
-char ☻	640	3	invsmileface	
-char ♠	640	3	spade	
-char ♣	640	3	club	
-char ♥	640	3	heart	
-char ♦	640	3	diamond	
-char ♩	640	3	uni2669	
-char ♪	640	3	musicalnote	
-char ♫	640	3	musicalnotedbl	
-char ♬	640	3	uni266C	
-char ♭	640	3	uni266D	
-char ♮	640	3	uni266E	
-char ♯	640	3	uni266F	
-char ꞉	640	3	uniA789	
-char ﬩	640	3	uniFB29	
-char �	640	3	uniFFFD	
-char ---	640	3	u1D106	
-char ---	640	3	u1D107	
-char ---	640	3	Eng.UCStyle	
-char ---	640	3	Adieresis.ss01	
-char ---	640	3	Odieresis.ss01	
-char ---	640	3	Udieresis.ss01	
-char ---	640	3	zero.slash	
+char ─	640,0,216,640,288	0	SF100000	
+char ┃	640,284,-288,356,792	3	uni2503	
+char ┌	640,284,-288,640,288	1	SF010000	
+char ┐	640,0,-288,356,288	1	SF030000	
+char └	640,284,216,640,792	2	SF020000	
+char ┘	640,0,216,356,792	2	SF040000	
+char ├	640,284,-288,640,792	3	SF080000	
+char ┤	640,0,-288,356,792	3	SF090000	
+char ┬	640,0,-288,640,288	1	SF060000	
+char ┴	640,0,216,640,792	2	SF070000	
+char ┼	640,0,-288,640,792	3	SF050000	
+char ═	640,0,144,640,360	0	SF430000	
+char ║	640,212,-246,428,894	3	SF240000	
+char ╒	640,284,-246,640,360	1	SF510000	
+char ╓	640,212,-246,640,288	1	SF520000	
+char ╔	640,212,-246,640,360	1	SF390000	
+char ╕	640,0,-246,356,360	1	SF220000	
+char ╖	640,0,-246,428,288	1	SF210000	
+char ╗	640,0,-246,428,360	1	SF250000	
+char ╘	640,284,144,640,894	2	SF500000	
+char ╙	640,212,216,640,894	2	SF490000	
+char ╚	640,212,144,640,894	2	SF380000	
+char ╛	640,0,144,356,894	2	SF280000	
+char ╜	640,0,216,428,894	2	SF270000	
+char ╝	640,0,144,428,894	2	SF260000	
+char ╞	640,284,-246,640,894	3	SF360000	
+char ╟	640,212,-246,640,894	3	SF370000	
+char ╠	640,212,-246,640,894	3	SF420000	
+char ╡	640,0,-246,356,894	3	SF190000	
+char ╢	640,0,-246,428,894	3	SF200000	
+char ╣	640,0,-246,428,894	3	SF230000	
+char ╤	640,0,-246,640,360	1	SF470000	
+char ╥	640,0,-246,640,288	1	SF480000	
+char ╦	640,0,-246,640,360	1	SF410000	
+char ╧	640,0,144,640,894	2	SF450000	
+char ╨	640,0,216,640,894	2	SF460000	
+char ╩	640,0,144,640,894	2	SF400000	
+char ╪	640,0,-246,640,894	3	SF540000	
+char ╫	640,0,-246,640,894	3	SF530000	
+char ╬	640,0,-246,640,894	3	SF440000	
+char ▀	640,0,252,640,895	2	upblock	
+char ▄	640,0,-246,640,252	1	dnblock	
+char █	640,0,-246,640,893	3	block	
+char ▌	640,0,-246,320,893	3	lfblock	
+char ▐	640,320,-246,640,894	3	rtblock	
+char ░	640,0,-226,700,874	3	ltshade	
+char ▒	640,0,-267,600,733	3	shade	
+char ▓	640,0,-267,600,733	3	dkshade	
+char ★	640,53,-6,586,500	0	uni2605	
+char ☹	640,28,-19,613,567	0	uni2639	
+char ☺	640,28,-19,613,567	0	smileface	
+char ☻	640,28,-19,613,567	0	invsmileface	
+char ♠	640,35,0,606,633	0	spade	
+char ♣	640,17,0,623,607	0	club	
+char ♥	640,34,-17,605,596	0	heart	
+char ♦	640,34,-17,611,620	0	diamond	
+char ♩	640,189,-10,452,698	2	uni2669	
+char ♪	640,88,-10,552,698	2	musicalnote	
+char ♫	640,24,-148,570,698	2	musicalnotedbl	
+char ♬	640,14,-151,570,698	2	uni266C	
+char ♭	640,199,50,442,549	0	uni266D	
+char ♮	640,226,74,415,548	0	uni266E	
+char ♯	640,176,22,464,600	0	uni266F	
+char ꞉	640,259,95,381,390	0	uniA789	
+char ﬩	640,50,221,590,504	0	uniFB29	
+char �	640,4,-9,636,624	0	uniFFFD	
+char ---	640,137,-232,543,698	3	u1D106	
+char ---	640,97,-233,503,697	3	u1D107	
+char ---	640,15,-180,627,615	1	Eng.UCStyle	
+char ---	640,2,-2,630,803	2	Adieresis.ss01	
+char ---	640,34,-10,606,798	2	Odieresis.ss01	
+char ---	640,5,-10,631,798	2	Udieresis.ss01	
+char ---	640,90,-40,550,658	2	zero.slash	
 gsec 10 gsub zero:grek
 2 -17 +617
 gsec 20 gsub ss01:grek

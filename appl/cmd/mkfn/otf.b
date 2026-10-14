@@ -1152,6 +1152,414 @@ otf_cff(otf: ref Otf, cff: int)
 			}
 		}
 	}
+	if(!compat){
+		gsubrs := cffidx_end(stridx);
+		if(cffidx_cnt(gsubrs) == 0)
+			gsubrs = -1;
+		cff_bboxes(cff, top, toplen, chridx, gsubrs);
+	}
+}
+
+#
+# CFF glyphs' bounding boxes, from their Type 2 charstrings (Neatmkfn
+# takes them from TrueType's outlines only; without -c, mkfn takes them
+# from CFF's too: eqn sizes brackets and places accents by them)
+#
+
+# a DICT's operands before key, else nil
+cffdict_args(dict: int, n: int, key: int): array of int
+{
+	args := array[48] of int;
+	na := 0;
+	off := 0;
+	while(off < n){
+		b0 := U8(dict + off);
+		if(b0 <= 21){
+			op := b0;
+			off++;
+			if(b0 == 12){
+				op = 1200 + U8(dict + off);
+				off++;
+			}
+			if(op == key)
+				return args[0:na];
+			na = 0;
+			continue;
+		}
+		v := 0;
+		if(b0 == 28){
+			v = S16(dict + off + 1);
+			off += 3;
+		}else if(b0 == 29){
+			v = U32(dict + off + 1);
+			off += 5;
+		}else if(b0 == 30){
+			off++;
+			while(off < n && (U8(dict + off) & 16r0f) != 16r0f && (U8(dict + off) & 16rf0) != 16rf0)
+				off++;
+			off++;
+		}else{
+			(l, x) := cff_op(dict + off);
+			v = x;
+			off += l;
+		}
+		if(na < len args)
+			args[na++] = v;
+	}
+	return nil;
+}
+
+# a private DICT's local subroutines (or -1)
+cff_subrs(cff: int, top: int, toplen: int): int
+{
+	p := cffdict_args(top, toplen, 18);
+	if(len p < 2)
+		return -1;
+	s := cffdict_args(cff + p[1], p[0], 19);
+	if(len s < 1)
+		return -1;
+	return cff + p[1] + s[0];
+}
+
+cff_bias(idx: int): int
+{
+	if(idx < 0)
+		return 0;
+	n := cffidx_cnt(idx);
+	if(n < 1240)
+		return 107;
+	if(n < 33900)
+		return 1131;
+	return 32768;
+}
+
+Cs: adt {
+	st:	array of real;
+	n:	int;
+	x, y:	real;
+	stems:	int;
+	open:	int;		# no point yet
+	bb:	array of real;	# llx lly urx ury
+	gsubrs, lsubrs:	int;
+	gbias, lbias:	int;
+	depth:	int;
+	done:	int;
+};
+
+cs_pt(c: ref Cs, x, y: real)
+{
+	if(c.open){
+		c.bb[0] = c.bb[2] = x;
+		c.bb[1] = c.bb[3] = y;
+		c.open = 0;
+		return;
+	}
+	if(x < c.bb[0])
+		c.bb[0] = x;
+	if(x > c.bb[2])
+		c.bb[2] = x;
+	if(y < c.bb[1])
+		c.bb[1] = y;
+	if(y > c.bb[3])
+		c.bb[3] = y;
+}
+
+cs_line(c: ref Cs, dx, dy: real)
+{
+	cs_pt(c, c.x, c.y);
+	c.x += dx;
+	c.y += dy;
+	cs_pt(c, c.x, c.y);
+}
+
+# a cubic's extremes in one axis, at t in (0, 1)
+cs_ext(p0, p1, p2, p3: real): list of real
+{
+	a := -p0 + 3.0 * p1 - 3.0 * p2 + p3;
+	b := 2.0 * (p0 - 2.0 * p1 + p2);
+	k := p1 - p0;
+	ts: list of real;
+	if(a > -1e-9 && a < 1e-9){
+		if(b != 0.0)
+			ts = -k / b :: nil;
+	}else{
+		d := b * b - 4.0 * a * k;
+		if(d >= 0.0){
+			r := math->sqrt(d);
+			ts = (-b + r) / (2.0 * a) :: (-b - r) / (2.0 * a) :: nil;
+		}
+	}
+	vs: list of real;
+	for(; ts != nil; ts = tl ts){
+		t := hd ts;
+		if(t > 0.0 && t < 1.0){
+			u := 1.0 - t;
+			vs = u*u*u*p0 + 3.0*u*u*t*p1 + 3.0*u*t*t*p2 + t*t*t*p3 :: vs;
+		}
+	}
+	return vs;
+}
+
+cs_curve(c: ref Cs, dx1, dy1, dx2, dy2, dx3, dy3: real)
+{
+	x0 := c.x;
+	y0 := c.y;
+	x1 := x0 + dx1;
+	y1 := y0 + dy1;
+	x2 := x1 + dx2;
+	y2 := y1 + dy2;
+	x3 := x2 + dx3;
+	y3 := y2 + dy3;
+	cs_pt(c, x0, y0);
+	cs_pt(c, x3, y3);
+	for(xs := cs_ext(x0, x1, x2, x3); xs != nil; xs = tl xs)
+		cs_pt(c, hd xs, y0);
+	for(ys := cs_ext(y0, y1, y2, y3); ys != nil; ys = tl ys)
+		cs_pt(c, x0, hd ys);
+	c.x = x3;
+	c.y = y3;
+}
+
+cs_run(c: ref Cs, o: int, end: int)
+{
+	if(c.depth > 10)
+		return;
+	c.depth++;
+	st := c.st;
+	while(o < end && !c.done){
+		b0 := U8(o);
+		if(b0 >= 32 || b0 == 28){
+			v := 0.0;
+			if(b0 == 28){
+				v = real S16(o + 1);
+				o += 3;
+			}else if(b0 <= 246){
+				v = real (b0 - 139);
+				o++;
+			}else if(b0 <= 250){
+				v = real ((b0 - 247) * 256 + U8(o + 1) + 108);
+				o += 2;
+			}else if(b0 <= 254){
+				v = real (-(b0 - 251) * 256 - U8(o + 1) - 108);
+				o += 2;
+			}else{
+				v = real U32(o + 1) / 65536.0;	# 16.16, signed
+				o += 5;
+			}
+			if(c.n < len st)
+				st[c.n++] = v;
+			continue;
+		}
+		o++;
+		n := c.n;
+		case b0 {
+		1 or 3 or 18 or 23 =>	# hstem vstem hstemhm vstemhm
+			c.stems += n / 2;
+			c.n = 0;
+		19 or 20 =>		# hintmask cntrmask
+			c.stems += n / 2;
+			c.n = 0;
+			o += (c.stems + 7) / 8;
+		21 =>			# rmoveto
+			if(n >= 2){
+				c.x += st[n - 2];
+				c.y += st[n - 1];
+			}
+			c.n = 0;
+		22 =>			# hmoveto
+			if(n >= 1)
+				c.x += st[n - 1];
+			c.n = 0;
+		4 =>			# vmoveto
+			if(n >= 1)
+				c.y += st[n - 1];
+			c.n = 0;
+		5 =>			# rlineto
+			for(i := 0; i + 1 < n; i += 2)
+				cs_line(c, st[i], st[i + 1]);
+			c.n = 0;
+		6 or 7 =>		# hlineto vlineto
+			h := b0 == 6;
+			for(i := 0; i < n; i++){
+				if(h)
+					cs_line(c, st[i], 0.0);
+				else
+					cs_line(c, 0.0, st[i]);
+				h = !h;
+			}
+			c.n = 0;
+		8 =>			# rrcurveto
+			for(i := 0; i + 5 < n; i += 6)
+				cs_curve(c, st[i], st[i+1], st[i+2], st[i+3], st[i+4], st[i+5]);
+			c.n = 0;
+		24 =>			# rcurveline
+			i := 0;
+			for(; i + 5 < n - 2; i += 6)
+				cs_curve(c, st[i], st[i+1], st[i+2], st[i+3], st[i+4], st[i+5]);
+			if(i + 1 < n)
+				cs_line(c, st[i], st[i + 1]);
+			c.n = 0;
+		25 =>			# rlinecurve
+			i := 0;
+			for(; i + 1 < n - 6; i += 2)
+				cs_line(c, st[i], st[i + 1]);
+			if(i + 5 < n)
+				cs_curve(c, st[i], st[i+1], st[i+2], st[i+3], st[i+4], st[i+5]);
+			c.n = 0;
+		26 =>			# vvcurveto
+			i := 0;
+			dx1 := 0.0;
+			if(n % 4 == 1)
+				dx1 = st[i++];
+			for(; i + 3 < n; i += 4){
+				cs_curve(c, dx1, st[i], st[i+1], st[i+2], 0.0, st[i+3]);
+				dx1 = 0.0;
+			}
+			c.n = 0;
+		27 =>			# hhcurveto
+			i := 0;
+			dy1 := 0.0;
+			if(n % 4 == 1)
+				dy1 = st[i++];
+			for(; i + 3 < n; i += 4){
+				cs_curve(c, st[i], dy1, st[i+1], st[i+2], st[i+3], 0.0);
+				dy1 = 0.0;
+			}
+			c.n = 0;
+		30 or 31 =>		# vhcurveto hvcurveto
+			h := b0 == 31;
+			for(i := 0; i + 3 < n; i += 4){
+				last := 0.0;
+				if(i + 5 == n)
+					last = st[i + 4];
+				if(h)
+					cs_curve(c, st[i], 0.0, st[i+1], st[i+2], last, st[i+3]);
+				else
+					cs_curve(c, 0.0, st[i], st[i+1], st[i+2], st[i+3], last);
+				h = !h;
+			}
+			c.n = 0;
+		10 or 29 =>		# callsubr callgsubr
+			if(n < 1)
+				break;
+			c.n--;
+			idx := c.lsubrs;
+			bias := c.lbias;
+			if(b0 == 29){
+				idx = c.gsubrs;
+				bias = c.gbias;
+			}
+			k := int st[c.n] + bias;
+			if(idx >= 0 && k >= 0 && k < cffidx_cnt(idx))
+				cs_run(c, cffidx_get(idx, k), cffidx_get(idx, k + 1));
+		11 =>			# return
+			c.depth--;
+			return;
+		14 =>			# endchar
+			c.done = 1;
+		12 =>
+			e := U8(o++);
+			case e {
+			35 =>		# flex
+				if(n >= 12){
+					cs_curve(c, st[0], st[1], st[2], st[3], st[4], st[5]);
+					cs_curve(c, st[6], st[7], st[8], st[9], st[10], st[11]);
+				}
+			34 =>		# hflex
+				if(n >= 7){
+					cs_curve(c, st[0], 0.0, st[1], st[2], st[3], 0.0);
+					cs_curve(c, st[4], 0.0, st[5], -st[2], st[6], 0.0);
+				}
+			36 =>		# hflex1
+				if(n >= 9){
+					cs_curve(c, st[0], st[1], st[2], st[3], st[4], 0.0);
+					cs_curve(c, st[5], 0.0, st[6], st[7], st[8], -(st[1] + st[3] + st[7]));
+				}
+			37 =>		# flex1
+				if(n >= 11){
+					dx := st[0] + st[2] + st[4] + st[6] + st[8];
+					dy := st[1] + st[3] + st[5] + st[7] + st[9];
+					x6 := 0.0;
+					y6 := 0.0;
+					if(math->fabs(dx) > math->fabs(dy)){
+						x6 = st[10];
+						y6 = -dy;
+					}else{
+						x6 = -dx;
+						y6 = st[10];
+					}
+					cs_curve(c, st[0], st[1], st[2], st[3], st[4], st[5]);
+					cs_curve(c, st[6], st[7], st[8], st[9], x6, y6);
+				}
+			}
+			c.n = 0;
+		* =>
+			c.n = 0;
+		}
+	}
+	c.depth--;
+}
+
+# the glyphs' bounding boxes; fdsel and fdarr are CID-keyed fonts'
+cff_bboxes(cff: int, top: int, toplen: int, chridx: int, gsubrs: int)
+{
+	lsubrs := cff_subrs(cff, top, toplen);
+	fds: array of int;	# each font DICT's subrs
+	fdsel := -1;
+	if((a := cffdict_args(top, toplen, 1236)) != nil && len a > 0){
+		fdarr := cff + a[0];
+		fds = array[cffidx_cnt(fdarr)] of int;
+		for(i := 0; i < len fds; i++)
+			fds[i] = cff_subrs(cff, cffidx_get(fdarr, i), cffidx_len(fdarr, i));
+		if((s := cffdict_args(top, toplen, 1237)) != nil && len s > 0)
+			fdsel = cff + s[0];
+	}
+	c := ref Cs(array[48] of real, 0, 0.0, 0.0, 0, 1, array[4] of real,
+		gsubrs, -1, cff_bias(gsubrs), 0, 0, 0);
+	for(g := 0; g < glyph_n && g < NGLYPHS; g++){
+		c.lsubrs = lsubrs;
+		if(fdsel >= 0){
+			fd := cff_fdselect(fdsel, g);
+			if(fd >= 0 && fd < len fds)
+				c.lsubrs = fds[fd];
+		}
+		c.lbias = cff_bias(c.lsubrs);
+		c.n = 0;
+		c.x = c.y = 0.0;
+		c.stems = 0;
+		c.open = 1;
+		c.depth = 0;
+		c.done = 0;
+		{
+			cs_run(c, cffidx_get(chridx, g), cffidx_get(chridx, g + 1));
+		} exception {
+		"array bounds error" =>
+			c.open = 1;
+		}
+		if(!c.open){
+			glyph_bbox[4 * g] = int math->floor(c.bb[0]);
+			glyph_bbox[4 * g + 1] = int math->floor(c.bb[1]);
+			glyph_bbox[4 * g + 2] = int math->ceil(c.bb[2]);
+			glyph_bbox[4 * g + 3] = int math->ceil(c.bb[3]);
+		}
+	}
+}
+
+# a CID-keyed font's font DICT for glyph g
+cff_fdselect(fdsel: int, g: int): int
+{
+	case U8(fdsel) {
+	0 =>
+		return U8(fdsel + 1 + g);
+	3 =>
+		n := U16(fdsel + 1);
+		for(i := 0; i < n; i++){
+			r := fdsel + 3 + 3 * i;
+			if(g >= U16(r) && g < U16(r + 3))
+				return U8(r + 2);
+		}
+	}
+	return -1;
 }
 
 otf_feat(otf: ref Otf)

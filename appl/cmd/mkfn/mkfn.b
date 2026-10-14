@@ -31,6 +31,9 @@ include "bufio.m";
 	bufio: Bufio;
 	Iobuf: import bufio;
 
+include "math.m";
+	math: Math;
+
 Mkfn: module
 {
 	init:	fn(nil: ref Draw->Context, args: list of string);
@@ -117,6 +120,7 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	bufio = load Bufio Bufio->PATH;
+	math = load Math Math->PATH;
 	if(bufio == nil){
 		sys->fprint(sys->fildes(2), "mkfn: cannot load %s: %r\n", Bufio->PATH);
 		raise "fail:load";

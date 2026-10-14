@@ -349,6 +349,25 @@ testForms(t: ref T)
 	t.assertseq(rd("title"), "Page B\n", "landed on the action");
 }
 
+# Where an element is is its own boxes, not its ::after's, which the
+# layout gives first: a link's box was its underline, 4 pixels high,
+# and a click at its middle, on the underline, was no click on it
+testPseudoBox(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "pseudo.html"), "done " + DIR + "pseudo.html", "load");
+	n := byid("pl");
+	t.assert(n != 0, "found the link");
+	b := chomp(rd(sys->sprint("dom/%d/box", n)));
+	t.log("box: " + b);
+	(nf, f) := sys->tokenize(b, " \n");
+	t.assert(nf >= 5, "a box");
+	if(nf >= 5) {
+		t.asserteq(int hd tl tl f, 10, "y: its own, below its margin");
+		t.asserteq(int hd tl tl tl tl f, 40, "height: its own 40, not the underline's 4");
+	}
+	t.asserteq(nf, 5, "one box: the ::after's is not the link's");
+}
+
 postname: string;
 
 # The posted session, mounted from a separate name space as an agent's
@@ -584,6 +603,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Scroll", testScroll);
 	run("Image", testImage);
 	run("Forms", testForms);
+	run("PseudoBox", testPseudoBox);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("LeaveBusy", testLeaveBusy);

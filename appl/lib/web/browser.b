@@ -1299,6 +1299,8 @@ Session.boxof(s: self ref Session, n: int): (int, Draw->Rect)
 		return (0, ((0, 0), (0, 0)));
 	for(l := layout->boxes(pg.root, n); l != nil; l = tl l) {
 		b := hd l;
+		if(pseudo(pg, n, b))
+			continue;
 		if(b.kind == Layout->Kinline && (fr := inlinerects(b)) != nil)
 			return (1, hd fr);	# where it starts
 		x := absx(b);
@@ -1306,6 +1308,20 @@ Session.boxof(s: self ref Session, n: int): (int, Draw->Rect)
 		return (1, ((x, y), (x + b.w, y + b.h)));
 	}
 	return (0, ((0, 0), (0, 0)));
+}
+
+# A box of n's ::before, ::after or ::marker, which boxes counts as n's
+# and may give first (the Guardian's links' ::after, their underline):
+# where n is, its box file and a script's getBoundingClientRect, is
+# n's own boxes
+pseudo(pg: ref Pg, n: int, b: ref Box): int
+{
+	c := pg.computed;
+	if(c == nil || b.st == nil || n >= len c.st || b.st == c.st[n])
+		return 0;
+	return c.before != nil && b.st == c.before[n] ||
+		c.after != nil && b.st == c.after[n] ||
+		c.marker != nil && b.st == c.marker[n];
 }
 
 # An inline box's area, in page coordinates: a box has no extent of its
@@ -1593,6 +1609,8 @@ Session.dom(s: self ref Session, n: int, what: string): (string, string)
 		r := "";
 		for(l := layout->boxes(pg.root, n); l != nil; l = tl l) {
 			b := hd l;
+			if(pseudo(pg, n, b))
+				continue;
 			k := "?";
 			if(b.kind >= 0 && b.kind < len kindnames)
 				k = kindnames[b.kind];
@@ -2274,7 +2292,8 @@ hbox(id, n: int): (int, int, int, int, int)
 	laidout(r);
 	for(l := layout->boxes(r.pg.root, n); l != nil; l = tl l) {
 		b := hd l;
-		return (1, absx(b), absy(b), b.w, b.h);
+		if(!pseudo(r.pg, n, b))
+			return (1, absx(b), absy(b), b.w, b.h);
 	}
 	return (0, 0, 0, 0, 0);
 }

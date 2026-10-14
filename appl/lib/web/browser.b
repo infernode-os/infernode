@@ -929,7 +929,7 @@ kindof(d: ref Doc, n: int): string
 
 field(d: ref Doc, form, n: int): ref Field
 {
-	f := ref Field(form, n, kindof(d, n), d.attr(n, "name"), nil, 0, nil);
+	f := ref Field(form, n, kindof(d, n), d.attr(n, "name"), nil, 0, nil, disabled(d, n), d.hasattr(n, "readonly"));
 	case f.kind {
 	"select" =>
 		first := "";
@@ -1003,6 +1003,27 @@ Session.fields(s: self ref Session): array of ref Field
 	return a;
 }
 
+# A control disabled itself or by a disabled fieldset it is in, outside
+# that fieldset's first legend (HTML §4.10.18.5)
+disabled(d: ref Doc, n: int): int
+{
+	if(d.hasattr(n, "disabled"))
+		return 1;
+	c := n;
+	for(p := d.nodes[n].parent; p > 0; p = d.nodes[p].parent) {
+		nd := d.nodes[p];
+		if(nd.tag == Dom->Tfieldset && nd.ns == Dom->HTML && d.hasattr(p, "disabled")) {
+			l := nd.first;
+			while(l != 0 && d.nodes[l].kind != Dom->Element)
+				l = d.nodes[l].next;
+			if(l == 0 || l != c || d.nodes[l].tag != Dom->Tlegend)
+				return 1;
+		}
+		c = p;
+	}
+	return 0;
+}
+
 fieldstext(a: array of ref Field): string
 {
 	r := "";
@@ -1014,6 +1035,10 @@ fieldstext(a: array of ref Field): string
 		r += sys->sprint("%d %d %s %s %s", f.form, f.node, f.kind, name, oneline(f.value));
 		if(f.checked)
 			r += " checked";
+		if(f.disabled)
+			r += " disabled";
+		if(f.readonly)
+			r += " readonly";
 		r += "\n";
 		for(o := f.options; o != nil; o = tl o) {
 			(v, label, sel) := hd o;
@@ -1034,7 +1059,7 @@ Session.set(s: self ref Session, n: int, value: string): string
 	d := pg.doc;
 	if(n <= 0 || n >= d.n || !iscontrol(d, n))
 		return sys->sprint("node %d is not a form control", n);
-	if(d.hasattr(n, "disabled"))
+	if(disabled(d, n))
 		return sys->sprint("node %d is disabled", n);
 	lock(s);
 	err := setfield(d, n, value);
@@ -1131,7 +1156,7 @@ Session.submit(s: self ref Session, form, submitter: int): string
 	url := resolve(d.url, action);
 	q := "";
 	for(n := 1; n < d.n; n++) {
-		if(forms[n] != form || !iscontrol(d, n) || d.hasattr(n, "disabled"))
+		if(forms[n] != form || !iscontrol(d, n) || disabled(d, n))
 			continue;
 		f := field(d, form, n);
 		if(f.name == "")
@@ -1439,7 +1464,7 @@ Session.click(s: self ref Session, n: int): string
 				if(iscontrol(d, c))
 					return s.click(c);
 		Dom->Tinput or Dom->Tbutton =>
-			if(d.hasattr(m, "disabled"))
+			if(disabled(d, m))
 				return nil;
 			(forms, nil) := formnumbers(d);
 			case kindof(d, m) {

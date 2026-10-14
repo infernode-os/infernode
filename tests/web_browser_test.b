@@ -349,6 +349,35 @@ testForms(t: ref T)
 	t.assertseq(rd("title"), "Page B\n", "landed on the action");
 }
 
+# Disabled controls, and those in a disabled fieldset outside its
+# first legend, are not set or submitted; a read-only one is
+testDisabled(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "disabled.html"), "done " + DIR + "disabled.html", "load");
+	f := rd("forms");
+	t.log(f);
+	t.assert(contains(f, " text a 1\n"), "an ordinary field");
+	t.assert(contains(f, " text off 2 disabled\n"), "disabled");
+	t.assert(contains(f, " text ro 3 readonly\n"), "read-only");
+	t.assert(contains(f, " text inlegend 4\n"), "in the fieldset's legend: not disabled");
+	t.assert(contains(f, " text infs 5 disabled\n"), "in a disabled fieldset");
+	off := 0; infs := 0; go := 0;
+	for(l := lines(f); l != nil; l = tl l) {
+		(n, w) := sys->tokenize(hd l, " ");
+		if(n < 4)
+			continue;
+		case hd tl tl tl w {
+		"off" => off = int hd tl w;
+		"infs" => infs = int hd tl w;
+		"go" => go = int hd tl w;
+		}
+	}
+	t.assertseq(wr("ctl", sys->sprint("set %d x", off)), sys->sprint("node %d is disabled", off), "a disabled field is not set");
+	t.assertseq(wr("ctl", sys->sprint("set %d x", infs)), sys->sprint("node %d is disabled", infs), "nor one in a disabled fieldset");
+	want := DIR + "b.html?a=1&ro=3&inlegend=4&go=Go";
+	t.assertseq(nav(t, sys->sprint("click %d", go)), "done " + want, "submitted without the disabled");
+}
+
 postname: string;
 
 # The posted session, mounted from a separate name space as an agent's
@@ -584,6 +613,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Scroll", testScroll);
 	run("Image", testImage);
 	run("Forms", testForms);
+	run("Disabled", testDisabled);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("LeaveBusy", testLeaveBusy);

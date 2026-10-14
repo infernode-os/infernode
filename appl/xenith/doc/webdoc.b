@@ -408,6 +408,8 @@ key(h: int, r: int): string
 			return "paint";
 		}
 	}
+	if(f.readonly && f.kind != "select")
+		return "paint";	# shown, not typed into
 	if(f.kind == "select"){
 		case r {
 		Keyboard->Up =>	select(h, f, -1);
@@ -452,7 +454,7 @@ fieldat(h: int, p: Point): ref Field
 {
 	f := htmldoc->fields(h);
 	for(i := 0; i < len f; i++)
-		if(typedinto(f[i].kind) && p.in(f[i].box))
+		if(typedinto(f[i].kind) && p.in(f[i].box) && !f[i].disabled)
 			return f[i];
 	return nil;
 }

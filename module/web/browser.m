@@ -37,6 +37,8 @@ Browser: module
 		value:	string;
 		checked:	int;	# checkbox, radio
 		options:	list of (string, string, int);	# select: (value, label, selected)
+		disabled:	int;	# it, or a fieldset it is in: not focused, set or submitted
+		readonly:	int;	# a text field shown, not typed into
 	};
 
 	Session: adt {

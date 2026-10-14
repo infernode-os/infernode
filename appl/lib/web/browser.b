@@ -59,6 +59,11 @@ init(d: ref Draw->Display): string
 		return err;
 	if((err = page->init(d)) != nil)
 		return err;
+	# pages at the display's pixels to the point, where the emulator
+	# draws at the screen's density (Retina: $displayscale, as Xenith
+	# sizes its own text by)
+	if((ds := real envstr("displayscale")) >= 1.1)
+		page->scale(ds);
 	# page's own: a Layout of our own would know nothing of where page
 	# put things (sticky boxes as last painted, for a click)
 	layout = page->layoutmod();
@@ -2272,6 +2277,18 @@ hchanged(id: int)
 scale(r: real)
 {
 	page->scale(r);
+}
+
+envstr(name: string): string
+{
+	fd := sys->open("/env/" + name, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
 }
 
 # device pixels, in CSS px

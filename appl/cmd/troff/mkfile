@@ -1,0 +1,35 @@
+<$ROOT/mkconfig
+
+TARG=	troff.dis\
+
+MODULES=\
+	char.b\
+	clr.b\
+	cp.b\
+	dev.b\
+	dict.b\
+	dir.b\
+	draw.b\
+	eval.b\
+	fmt.b\
+	font.b\
+	hyen.b\
+	hyph.b\
+	in.b\
+	map.b\
+	out.b\
+	reg.b\
+	ren.b\
+	tr.b\
+	util.b\
+	wb.b\
+
+SYSMODULES= \
+	bufio.m\
+	daytime.m\
+	draw.m\
+	sys.m\
+
+DISBIN=$ROOT/dis
+
+<$ROOT/mkfiles/mkdis

@@ -12,6 +12,7 @@ DIRS=\
 	mk\
 	ndb\
 	sh\
+	troff\
 	wikifs\
 	fs\
 	dbm\

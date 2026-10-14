@@ -915,6 +915,7 @@ dis/tone.dis
 dis/touch.dis
 dis/tr.dis
 dis/trfs.dis
+dis/troff.dis
 dis/tsort.dis
 dis/unicode.dis
 dis/uniq.dis

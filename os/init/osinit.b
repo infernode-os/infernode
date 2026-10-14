@@ -2081,8 +2081,20 @@ wifiwatch(ifcno, essid: string)
 		# makes the next wait twice as long, so a network that is
 		# simply gone is not joined every minute.
 		#
+		#
+		# Only a radio that says it is associated. One that says it is
+		# not has reported its loss, and the supplicant is already
+		# joining: this watch joining as well raced it (the kernel's
+		# "double sleep", before ether4330 took one join at a time)
+		# and, once the network was back, made a second join and a
+		# second address request (2026-10-14, the 5 GHz radio
+		# switched off at the router for five minutes).
+		#
 		r := rxcount();
-		if(r != rx){
+		if(wifistatus() != "associated"){
+			rx = r;
+			quiet = 0;
+		}else if(r != rx){
 			rx = r;
 			quiet = 0;
 			if(sincejoin > Deaf)
@@ -2122,6 +2134,19 @@ Livepoll: con 10*1000;
 Probeafter: con 30*1000;
 Deaf: con 60*1000;
 Deafmax: con 16*60*1000;
+
+# the driver's "status:" line in ifstats: associated, connecting, ...
+wifistatus(): string
+{
+	(st, nil) := slurp(Wifidev + "/ifstats");
+	(nil, lines) := sys->tokenize(st, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nf, f) := sys->tokenize(hd lines, " \t");
+		if(nf == 2 && hd f == "status:")
+			return hd tl f;
+	}
+	return nil;
+}
 
 # frames the radio has delivered: "in: n" in its stats; -1 if unreadable
 rxcount(): int

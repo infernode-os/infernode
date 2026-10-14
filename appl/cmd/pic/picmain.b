@@ -931,6 +931,8 @@ curdir(): int	# convert current dir (hvmode) to RIGHT, LEFT, etc.
 
 getcomp(p: ref Obj, t: int): real	# return component of a position
 {
+	if(p == nil)	# a place not found (C crashes): as whatpos
+		fatal("null object");
 	case t {
 	DOTX =>
 		return p.x;
@@ -1308,7 +1310,10 @@ getfirst(n: int, t: int): ref Obj	# find n-th occurrence of type t
 	for(i := 0; i < nobj; i++){
 		p := objlist[i];
 		if(p.typ == BLOCK && t != BLOCK){	# skip whole block
-			i = cint(p.val[5] + 1.0);
+			# one still open (we are in it) has no end yet: C
+			# went back to it for ever; look in it instead
+			if(p.val[5] >= 0.0)
+				i = cint(p.val[5] + 1.0);
 			continue;
 		}
 		if(p.typ != t)

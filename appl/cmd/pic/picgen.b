@@ -30,6 +30,7 @@ leftthing(c: int): ref Obj	# called for {... or [...
 		xmax = ymax = -30000.0;
 		p = makenode(BLOCK, 7);
 		p.val[4] = f32(real nobj);	# 1st item within [...]
+		p.val[5] = -1.0;	# open: no last item yet (set at ])
 		if(p.nobj != nobj-1)
 			errout(sys->sprint("nobjs wrong%d %d\n", p.nobj, nobj));
 	}else{

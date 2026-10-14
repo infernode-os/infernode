@@ -301,7 +301,7 @@ position:
 	;
 
 place:
-	  PLACENAME		{ y = getvar($1); $$ = y.o; }
+	  PLACENAME		{ y = getvar($1); $$ = y.o; if($$ == nil) fatal("null object"); }
 	| PLACENAME CORNER	{ y = getvar($1); $$ = getpos(y.o, $2); }
 	| CORNER PLACENAME	{ y = getvar($2); $$ = getpos(y.o, $1); }
 	| HERE			{ $$ = gethere(); }

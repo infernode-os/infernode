@@ -1115,7 +1115,7 @@ yyval.o = yys[yyp+1].yyv.o;
 { yyval.o = makebetween(yys[yypt-4].yyv.f, yys[yypt-2].yyv.o, yys[yypt-0].yyv.o); }
 112=>
 #line	304	"pic.y"
-{ y = getvar(yys[yypt-0].yyv.p); yyval.o = y.o; }
+{ y = getvar(yys[yypt-0].yyv.p); yyval.o = y.o; if(yyval.o == nil) fatal("null object"); }
 113=>
 #line	305	"pic.y"
 { y = getvar(yys[yypt-1].yyv.p); yyval.o = getpos(y.o, yys[yypt-0].yyv.i); }

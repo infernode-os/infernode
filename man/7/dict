@@ -190,8 +190,16 @@ keyfile=/lib/keyring/\fIkey\fP
 With no
 .BR keyfile ,
 the mount is unauthenticated.
-The mount is made in the background
-and appears a few seconds after login.
+The mount is made in the background,
+a few seconds after login;
+.I dict
+and
+.B adict
+make it themselves, in their own name space,
+when they find no dictionary in
+.BR /lib/dict ,
+as they do under Acme and Xenith,
+which take their name space before it is made.
 By hand:
 .IP
 .EX

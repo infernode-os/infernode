@@ -13,6 +13,11 @@ include "bufio.m";
 	Iobuf: import bufio;
 include "utils.m";
 
+Command: module
+{
+	init: fn(ctxt: ref Draw->Context, argv: list of string);
+};
+
 
 
 init(b: Bufio, bo: ref Iobuf)
@@ -283,3 +288,46 @@ changett(curtab: array of int, newtab: array of int, starting: int): array of in
 	}
 }
 
+
+# No dictionary in /lib/dict: union onto it, in this name space, the
+# server /lib/ndb/dict names (dict(7)).  The login profile mounts it
+# too, in the background, but a program that took a name space of its
+# own before that was done (Xenith, Acme) never sees it.
+mountremote(): string
+{
+	if(sys == nil)
+		sys = load Sys Sys->PATH;
+	fd := sys->open("/lib/ndb/dict", Sys->OREAD);
+	if(fd == nil)
+		return "no /lib/ndb/dict";
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return "/lib/ndb/dict is empty";
+	dial, key: string;
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		l := hd lines;
+		if(len l > 5 && l[0:5] == "dial=")
+			dial = l[5:];
+		else if(len l > 8 && l[0:8] == "keyfile=")
+			key = l[8:];
+	}
+	if(dial == nil)
+		return "no dial= in /lib/ndb/dict";
+	args := dial :: "/lib/dict" :: nil;
+	if(key != nil)
+		args = "-k" :: key :: args;
+	else
+		args = "-A" :: args;
+	m := load Command "/dis/mount.dis";
+	if(m == nil)
+		return sys->sprint("can't load mount: %r");
+	{
+		m->init(nil, "mount" :: "-a" :: args);
+	} exception e {
+	"fail:*" =>
+		return e[5:];
+	}
+	return nil;
+}

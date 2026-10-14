@@ -16,6 +16,7 @@ include "acmewin.m";
 include "string.m";
 	str: String;
 include "sh.m";
+include "utils.m";
 	sh: Sh;
 
 Adict: module {
@@ -59,8 +60,15 @@ init(nil: ref Draw->Context, args: list of string)
 	if(len args == 1){
 		pattern = hd args;
 		if(dict == nil){
-			# as dict(1): the OED when it is in the namespace
+			# as dict(1): the OED when it is in the namespace,
+			# or on the server /lib/ndb/dict names
 			(ok, nil) := sys->stat("/lib/dict/oed2");
+			if(ok < 0){
+				utils := load Utils Utils->PATH;
+				if(utils != nil)
+					utils->mountremote();
+				(ok, nil) = sys->stat("/lib/dict/oed2");
+			}
 			if(ok >= 0)
 				dict = "oed";
 			else

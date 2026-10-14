@@ -101,6 +101,7 @@ init(nil: ref Draw->Context, argl: list of string)
 	(ok, nil) := sys->stat(dictinfo.path);
 	if(ok < 0)
 		dictinfo = dicts[1];
+	dflag := 0;
 	
 	bout = bufio->fopen(sys->fildes(1), Bufio->OWRITE);
 	bin = bufio->fopen(sys->fildes(0), Bufio->OREAD);
@@ -118,6 +119,7 @@ init(nil: ref Draw->Context, argl: list of string)
 						}
 				if(i == len dicts)
 					usage();
+				dflag = 1;
 			'c' =>
 				line = arg->arg();
 				if(line == nil)
@@ -129,6 +131,15 @@ init(nil: ref Draw->Context, argl: list of string)
 			* =>
 				usage();
 			}
+
+	#  Not in this name space: the server /lib/ndb/dict names, if any
+	(ok, nil) = sys->stat(dictinfo.path);
+	if(ok < 0){
+		utils->mountremote();
+		(ok, nil) = sys->stat(dicts[0].path);
+		if(!dflag && ok >= 0)
+			dictinfo = dicts[0];
+	}
 
 	dict = load Dictm dictinfo.modpath;
 	if(dict == nil){

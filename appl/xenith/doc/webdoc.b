@@ -190,6 +190,17 @@ nsheets(h: int): int
 
 sheetsize(h: int, n: int): Point
 {
+	{
+		return sheetsize1(h, n);
+	} exception e {
+	"*" =>
+		pagefault("sheetsize", e);
+		return Point(0, 0);
+	}
+}
+
+sheetsize1(h: int, n: int): Point
+{
 	s := get(h);
 	if(s == nil || n != 0)
 		return Point(0, 0);
@@ -218,7 +229,18 @@ scalable(nil: int): int
 
 # The page from org down, into r of dst, the field with the keyboard
 # ringed
-paint(h: int, n: int, nil: int, dst: ref Image, r: Rect, org: Point): string
+paint(h: int, n: int, scale: int, dst: ref Image, r: Rect, org: Point): string
+{
+	{
+		return paint1(h, n, scale, dst, r, org);
+	} exception e {
+	"*" =>
+		pagefault("paint", e);
+		return "error " + e;
+	}
+}
+
+paint1(h: int, n: int, nil: int, dst: ref Image, r: Rect, org: Point): string
 {
 	s := get(h);
 	if(s == nil || n != 0)
@@ -241,6 +263,17 @@ paint(h: int, n: int, nil: int, dst: ref Image, r: Rect, org: Point): string
 }
 
 text(h: int): string
+{
+	{
+		return text1(h);
+	} exception e {
+	"*" =>
+		pagefault("text", e);
+		return nil;
+	}
+}
+
+text1(h: int): string
 {
 	if(get(h) == nil)
 		return nil;
@@ -266,6 +299,17 @@ links(nil: int): array of Link
 
 linkat(h: int, n: int, p: Point): string
 {
+	{
+		return linkat1(h, n, p);
+	} exception e {
+	"*" =>
+		pagefault("linkat", e);
+		return nil;
+	}
+}
+
+linkat1(h: int, n: int, p: Point): string
+{
 	if(get(h) == nil || n != 0)
 		return nil;
 	return htmldoc->linkat(h, p.x, p.y);
@@ -281,6 +325,12 @@ lineat(nil: int, nil: int, nil: int): int
 	return 0;
 }
 
+viewing(h: int, n: int, y: int)
+{
+	if(get(h) != nil && n == 0)
+		htmldoc->viewing(h, y);
+}
+
 commands(h: int): list of string
 {
 	s := get(h);
@@ -289,7 +339,18 @@ commands(h: int): list of string
 	return "Back" :: "Fwd" :: "Reload" :: nil;
 }
 
-command(h: int, cmd, arg: string): string
+command(h: int, cmd: string, arg: string): string
+{
+	{
+		return command1(h, cmd, arg);
+	} exception e {
+	"*" =>
+		pagefault("command", e);
+		return "error " + e;
+	}
+}
+
+command1(h: int, cmd, arg: string): string
 {
 	s := get(h);
 	if(s == nil)
@@ -335,6 +396,17 @@ files(h: int): string
 
 click(h: int, n: int, p: Point): string
 {
+	{
+		return click1(h, n, p);
+	} exception e {
+	"*" =>
+		pagefault("click", e);
+		return "error " + e;
+	}
+}
+
+click1(h: int, n: int, p: Point): string
+{
 	s := get(h);
 	if(s == nil || n != 0 || !s.browsing)
 		return nil;
@@ -366,6 +438,17 @@ click(h: int, n: int, p: Point): string
 }
 
 key(h: int, r: int): string
+{
+	{
+		return key1(h, r);
+	} exception e {
+	"*" =>
+		pagefault("key", e);
+		return nil;
+	}
+}
+
+key1(h: int, r: int): string
 {
 	s := get(h);
 	if(s == nil || s.field == 0)
@@ -408,6 +491,8 @@ key(h: int, r: int): string
 			return "paint";
 		}
 	}
+	if(f.readonly && f.kind != "select")
+		return "paint";	# shown, not typed into
 	if(f.kind == "select"){
 		case r {
 		Keyboard->Up =>	select(h, f, -1);
@@ -452,7 +537,7 @@ fieldat(h: int, p: Point): ref Field
 {
 	f := htmldoc->fields(h);
 	for(i := 0; i < len f; i++)
-		if(typedinto(f[i].kind) && p.in(f[i].box))
+		if(typedinto(f[i].kind) && p.in(f[i].box) && !f[i].disabled)
 			return f[i];
 	return nil;
 }
@@ -550,6 +635,14 @@ get(h: int): ref State
 	if(h < 0 || h >= len d)
 		return nil;
 	return d[h];
+}
+
+# A fault in the page's engine is the page's: the window says so, and
+# Xenith goes on (an exception from a click on a page killed Xenith's
+# main process, and Xenith stopped)
+pagefault(what, e: string)
+{
+	sys->fprint(sys->fildes(2), "xenith: web page: %s: %s\n", what, e);
 }
 
 readfile(path: string): array of byte

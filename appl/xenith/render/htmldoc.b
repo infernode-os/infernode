@@ -241,6 +241,13 @@ scroll(id: int): int
 	return s.scroll;
 }
 
+viewing(id: int, y: int)
+{
+	s := find(id);
+	if(s != nil)
+		s.viewing(y);
+}
+
 resize(id: int, width, height: int)
 {
 	s := find(id);
@@ -289,7 +296,7 @@ fields(id: int): array of ref Field
 	for(i := 0; i < len f; i++) {
 		(nil, r) := s.boxof(f[i].node);
 		a[i] = ref Field(f[i].node, f[i].form, f[i].kind, f[i].name,
-			f[i].value, f[i].checked, f[i].options, r);
+			f[i].value, f[i].checked, f[i].options, r, f[i].disabled, f[i].readonly);
 	}
 	return a;
 }

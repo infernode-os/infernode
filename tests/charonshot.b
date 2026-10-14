@@ -8,7 +8,8 @@ implement Charonshot;
 # Renders with Charon's engine (page(2): parse, style, lay out, paint).
 # -d prints the box tree (kind node x y w h) on standard error, -b the
 # same with each box's position on the page, -c hit-tests every visible
-# link; -y draws the page scrolled down that far.  With just a
+# link; -y draws the page scrolled down that far; -s lays it out for a
+# screen of that many pixels to the px (width and scroll are pixels).  With just a
 # width the canvas is up to Maxheight tall and the image is cropped to the
 # page, so long pages are captured whole; with widthxheight the viewport is
 # exactly that and the whole of it is written, as for conformance
@@ -47,6 +48,7 @@ Maxheight: con 12000;
 dumpboxes := 0;
 
 yscroll := 0;	# -y
+pxscale := 1.0;	# -s
 
 init(nil: ref Draw->Context, argv: list of string)
 {
@@ -65,11 +67,16 @@ init(nil: ref Draw->Context, argv: list of string)
 			argv = tl argv;
 			if(argv != nil)
 				yscroll = int hd argv;
+		"-s" =>
+			# device pixels to the px, as a Retina screen's 2
+			argv = tl argv;
+			if(argv != nil)
+				pxscale = real hd argv;
 		}
 		argv = tl argv;
 	}
 	if(len argv != 3) {
-		sys->fprint(stderr, "usage: charonshot [-d|-b|-c] [-y scroll] width[xheight] outimg url\n");
+		sys->fprint(stderr, "usage: charonshot [-d|-b|-c] [-y scroll] [-s scale] width[xheight] outimg url\n");
 		halt();
 		raise "fail:usage";
 	}
@@ -127,6 +134,7 @@ newengine(disp: ref Display, w, h, crop: int, outimg, url: string): string
 		return sys->sprint("cannot load %s: %r", Page->PATH);
 	if((ierr := page->init(disp)) != nil)
 		return ierr;
+	page->scale(pxscale);
 	layout = load Layout Layout->PATH;
 	dom = load Dom Dom->PATH;
 	layout->init(disp);

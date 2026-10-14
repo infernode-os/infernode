@@ -37,6 +37,8 @@ Browser: module
 		value:	string;
 		checked:	int;	# checkbox, radio
 		options:	list of (string, string, int);	# select: (value, label, selected)
+		disabled:	int;	# it, or a fieldset it is in: not focused, set or submitted
+		readonly:	int;	# a text field shown, not typed into
 	};
 
 	Session: adt {
@@ -44,9 +46,10 @@ Browser: module
 		url:	string;
 		title:	string;
 		status:	string;	# "", "loading <url>", "loading images <url>", "done", "error <msg>"
-		back, fwd:	list of string;
+		back, fwd:	list of (string, int);	# the pages before and after, each with where its view was
 		width, height:	int;
-		scroll:	int;	# where the last navigation asks the view to be (a #fragment)
+		scroll:	int;	# where the last navigation asks the view to be (a #fragment, or where Back left it)
+		at:	int;	# where the view shows the page from (viewing)
 		gen:	int;
 		lk:	chan of int;
 		listeners:	list of chan of string;
@@ -66,6 +69,9 @@ Browser: module
 		# show the page from y down: the view a window has follows
 		# (its listeners hear "scroll y")
 		scrollto:	fn(s: self ref Session, y: int);
+		# the view shows the page from y down: kept with the page when
+		# it is left, so Back and Fwd come back to it there
+		viewing:	fn(s: self ref Session, y: int);
 		resize:	fn(s: self ref Session, width, height: int);
 		listen:	fn(s: self ref Session): chan of string;
 		unlisten:	fn(s: self ref Session, c: chan of string);
@@ -94,6 +100,10 @@ Browser: module
 		pageheight:	fn(s: self ref Session): int;
 		dom:	fn(s: self ref Session, n: int, what: string): (string, string);	# tag attrs text style box children
 	};
+
+	# device pixels to the CSS px, for pages made from now on
+	# (Page->scale): what scripts see of the page is in CSS px still
+	scale:	fn(r: real);
 
 	# the engine's settings (Page->setting and the rest, for the page
 	# module this one uses)

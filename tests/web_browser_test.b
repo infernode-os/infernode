@@ -276,6 +276,7 @@ testFind(t: ref T)
 
 # the draw device's display; nil with none (a headless emu)
 disp: ref Display;
+sess: ref Session;
 
 # Scrolling through ctl is the window's scrolling too: its view
 # follows the event
@@ -290,6 +291,24 @@ testScroll(t: ref T)
 	n := sys->read(ev, buf, len buf);
 	t.assertseq(chomp(string buf[0:n]), "scroll 120", "the event a window scrolls by");
 	wr("ctl", "scroll 0");
+}
+
+# Back and Fwd come back to where the view was on the page (as the
+# window said, viewing), not to its top
+testBackPlace(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "a.html"), "done " + DIR + "a.html", "open A");
+	sess.viewing(137);
+	t.assertseq(nav(t, "follow 1"), "done " + DIR + "b.html", "follow to B");
+	t.asserteq(sess.scroll, 0, "a new page from its top");
+	sess.viewing(55);
+	t.assertseq(nav(t, "back"), "done " + DIR + "a.html", "back to A");
+	t.asserteq(sess.scroll, 137, "A where it was left");
+	t.assertseq(nav(t, "forward"), "done " + DIR + "b.html", "forward to B");
+	t.asserteq(sess.scroll, 55, "B where it was left");
+	t.assertseq(nav(t, "back"), "done " + DIR + "a.html", "back to A again");
+	t.asserteq(sess.scroll, 137, "A where it was left, again");
+	sess.viewing(0);
 }
 
 testImage(t: ref T)
@@ -349,23 +368,33 @@ testForms(t: ref T)
 	t.assertseq(rd("title"), "Page B\n", "landed on the action");
 }
 
-# Where an element is is its own boxes, not its ::after's, which the
-# layout gives first: a link's box was its underline, 4 pixels high,
-# and a click at its middle, on the underline, was no click on it
-testPseudoBox(t: ref T)
+# Disabled controls, and those in a disabled fieldset outside its
+# first legend, are not set or submitted; a read-only one is
+testDisabled(t: ref T)
 {
-	t.assertseq(nav(t, "open " + DIR + "pseudo.html"), "done " + DIR + "pseudo.html", "load");
-	n := byid("pl");
-	t.assert(n != 0, "found the link");
-	b := chomp(rd(sys->sprint("dom/%d/box", n)));
-	t.log("box: " + b);
-	(nf, f) := sys->tokenize(b, " \n");
-	t.assert(nf >= 5, "a box");
-	if(nf >= 5) {
-		t.asserteq(int hd tl tl f, 10, "y: its own, below its margin");
-		t.asserteq(int hd tl tl tl tl f, 40, "height: its own 40, not the underline's 4");
+	t.assertseq(nav(t, "open " + DIR + "disabled.html"), "done " + DIR + "disabled.html", "load");
+	f := rd("forms");
+	t.log(f);
+	t.assert(contains(f, " text a 1\n"), "an ordinary field");
+	t.assert(contains(f, " text off 2 disabled\n"), "disabled");
+	t.assert(contains(f, " text ro 3 readonly\n"), "read-only");
+	t.assert(contains(f, " text inlegend 4\n"), "in the fieldset's legend: not disabled");
+	t.assert(contains(f, " text infs 5 disabled\n"), "in a disabled fieldset");
+	off := 0; infs := 0; go := 0;
+	for(l := lines(f); l != nil; l = tl l) {
+		(n, w) := sys->tokenize(hd l, " ");
+		if(n < 4)
+			continue;
+		case hd tl tl tl w {
+		"off" => off = int hd tl w;
+		"infs" => infs = int hd tl w;
+		"go" => go = int hd tl w;
+		}
 	}
-	t.asserteq(nf, 5, "one box: the ::after's is not the link's");
+	t.assertseq(wr("ctl", sys->sprint("set %d x", off)), sys->sprint("node %d is disabled", off), "a disabled field is not set");
+	t.assertseq(wr("ctl", sys->sprint("set %d x", infs)), sys->sprint("node %d is disabled", infs), "nor one in a disabled fieldset");
+	want := DIR + "b.html?a=1&ro=3&inlegend=4&go=Go";
+	t.assertseq(nav(t, sys->sprint("click %d", go)), "done " + want, "submitted without the disabled");
 }
 
 postname: string;
@@ -583,7 +612,7 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "init: %s\n", err);
 		raise "fail:init";
 	}
-	s := Session.new(800, 600);
+	s := sess = Session.new(800, 600);
 	if((err = charonfs->serve(browser, s, disp, MNT)) != nil) {
 		sys->fprint(sys->fildes(2), "serve: %s\n", err);
 		raise "fail:serve";
@@ -601,9 +630,10 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Fragment", testFragment);
 	run("Find", testFind);
 	run("Scroll", testScroll);
+	run("BackPlace", testBackPlace);
 	run("Image", testImage);
 	run("Forms", testForms);
-	run("PseudoBox", testPseudoBox);
+	run("Disabled", testDisabled);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("LeaveBusy", testLeaveBusy);

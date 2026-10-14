@@ -297,6 +297,10 @@ lineat(nil: int, nil: int, nil: int): int
 	return 0;
 }
 
+viewing(nil: int, nil: int, nil: int)
+{
+}
+
 commands(nil: int): list of string
 {
 	return nil;

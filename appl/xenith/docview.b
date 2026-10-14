@@ -232,6 +232,26 @@ handle(e: ref Ev)
 		}
 		return;
 	}
+	# What the document does to the window (its name, its text) is done
+	# with the window locked, as the mouse's work is, and as through its
+	# files ('F'). Done with only the row locked, the window's owner was
+	# whatever a 9P request for it left, none once it was answered: a
+	# program reading the window's events (an Acme client; a script)
+	# was sent the page's new text from no one, which Xenith takes for
+	# a fault, and quit.
+	w.lock('F');
+	{
+		handle1(w, e);
+	} exception {
+	"*" =>
+		w.unlock();
+		raise;
+	}
+	w.unlock();
+}
+
+handle1(w: ref Window, e: ref Ev)
+{
 	d := w.doc;
 	if(e.v == d.next){
 		nextevent(w, e);
@@ -256,6 +276,19 @@ handle(e: ref Ev)
 		w.settag();
 	Failed =>
 		warning(nil, sprint("%s: %s\n", v.name, n.err));
+		if(v.kind != nil && v.kind.class == Docreg->Source && !v.web){
+			# a source document that cannot be set (one too long
+			# for an image of it, say) is its text: shown again,
+			# where it was, not hidden behind the error
+			line := d.line;
+			drop(w);
+			org := 0;
+			if(line > 0)
+				org = charofline(w.body, line);
+			showframe(w, org);
+			w.settag();
+			return;
+		}
 		draw(w);
 	Text =>
 		settext(w, n.text);
@@ -494,6 +527,18 @@ draw(w: ref Window)
 	setview(w, d.v);
 	d.v.draw();
 	scrollbar(w);
+	viewing(d.v);
+}
+
+# Where the view is, told the engine: a page browsed keeps it for Back
+viewing(v: ref View)
+{
+	if(v.h < 0 || v.eng == nil)
+		return;
+	n := v.sheetat(v.org.y);
+	if(n < 0 || n >= len v.tops)
+		return;
+	v.eng->viewing(v.h, n, (v.org.y - v.tops[n]) * 100 / v.scale);
 }
 
 # The scroll bar's thumb where the view is in the column
@@ -782,13 +827,6 @@ ctlread(w: ref Window): string
 ctlwrite(w: ref Window, s: string): string
 {
 	d := w.doc;
-	if(d == nil){
-		# a window showing its text: render shows the file as the
-		# document it is
-		if(s == "render")
-			return render(w);
-		return "no document";
-	}
 	(nil, l) := sys->tokenize(s, " \t\n");
 	if(l == nil)
 		return nil;
@@ -796,6 +834,20 @@ ctlwrite(w: ref Window, s: string): string
 	arg := "";
 	if(tl l != nil)
 		arg = hd tl l;
+	if(d == nil){
+		# a window showing its text: render shows the file as the
+		# document it is, or its text as the kind named (render
+		# markdown), for a window whose name says nothing (a
+		# program's, like Agent's)
+		if(cmd != "render")
+			return "no document";
+		if(arg == "")
+			return render(w);
+		k := docreg->kindof(arg);
+		if(k == nil || k.class != Docreg->Source)
+			return "not a kind of source document: " + arg;
+		return open(w, w.body.file.name, k);
+	}
 	case cmd {
 	"sheet" =>
 		(nil, err) := command(w, "Page", arg);

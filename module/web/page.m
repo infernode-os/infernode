@@ -68,6 +68,12 @@ Page: module
 	# the Layout instance pages are laid out and painted by: what is
 	# where on a page (boxat, boxes) is that instance's to say
 	layoutmod:	fn(): Layout;
+	# Device pixels to the CSS px, for pages made from now on: on a
+	# screen of two pixels to the point (Retina), 2, and pages are
+	# laid out and drawn twice the size, as sharp. Whoever knows the
+	# display says ($displayscale); not a setting, so not saved.
+	scale:	fn(r: real);
+	dpr:	fn(): real;
 	setting:	fn(name: string): string;
 	set:	fn(line: string): string;	# "name value"; nil, or what is wrong with it
 	settings:	fn(): string;		# every setting, a line each

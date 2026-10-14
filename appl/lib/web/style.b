@@ -1865,7 +1865,7 @@ cmpfeature(nm, op: string, val: array of ref Tok, env: ref Env): int
 		have := real env.width;
 		if(nm == "height" || nm == "device-height")
 			have = real env.height;
-		(ok, l) := length(val, ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0));
+		(ok, l) := length(val, ref Ctx(16.0*env.dpr, 16.0*env.dpr, 19.2*env.dpr, env, 0, nil, 400, 0));
 		if(!ok || l.kind != Lpx)
 			return 0;
 		return cmp(have, op, l.px);
@@ -2400,12 +2400,37 @@ colornames := array[] of {
 
 initial: ref St;
 
+# Device pixels to the CSS px of the environment styled (Env.dpr):
+# every length is computed in device pixels, so a page styled for a
+# screen of two pixels to the px is laid out and drawn twice the
+# size, as sharp; what scripts see is in CSS px again (the session's).
+# The initial values in px (font-size medium, border widths medium)
+# are made for it.
+dpr := 1.0;
+
+setdpr(env: ref Env)
+{
+	r := 1.0;
+	if(env != nil && env.dpr > 0.0)
+		r = env.dpr;
+	if(r != dpr || initial == nil) {
+		dpr = r;
+		initial = St.new();
+	}
+}
+
+# n CSS px, in device pixels
+dpx(n: int): int
+{
+	return int (real n * dpr);
+}
+
 St.new(): ref St
 {
 	z := px(0.0);
 	a := kw(Lauto);
 	nogrid := Gline(0, 0, nil);
-	return ref St(
+	s := ref St(
 		Dinline, Pstatic, Fnone, Cnone, 0,
 		a, a, a, a, kw(Lnone), kw(Lnone), 0.0,
 		z, z, z, z,
@@ -2452,6 +2477,9 @@ St.new(): ref St
 		0, z, z, nil, Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0,
 		0, 0, kw(Lnormal), 0, 0, 0, 0, 0, kw(Lnone), kw(Lnone), 0, nil, 0, 1, "\u2010", 0, 0, 1, 0, nil, nil, nil, nil, 0, nil, 100.0, 0.0, 3, nil, 0,
 		Len(Lpx, 0.0, 50.0, nil), Len(Lpx, 0.0, 50.0, nil), 0, nil);
+	s.fontsize = 16.0 * dpr;
+	s.bt = s.br = s.bb = s.bl = s.outlinew = s.colrulew = dpx(3);
+	return s;
 }
 
 nextsid := 1;
@@ -2601,12 +2629,13 @@ compute(d: ref Doc, s: ref Styles, env: ref Env): ref Computed
 		s.idx.env = ref *env;
 	}
 	lastenv = ref *env;	# for light-dark() in colours parsed without a context
+	setdpr(env);
 	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
 	m := matcher(d, env);
 	root := d.root();
 	if(root == 0)
 		return c;
-	ctx := ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0);
+	ctx := ref Ctx(16.0*dpr, 16.0*dpr, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;	# filter for each element's children
 	# with shadow roots, the flat tree: a node inherits from its parent
@@ -2750,7 +2779,7 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 		}
 		scratch := ref Computed(grow(prev.st, d.n), array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St,
 			array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
-		ctx := ref Ctx(16.0, prev.st[root].fontsize, 19.2, env, 0, nil, 400, 0);
+		ctx := ref Ctx(16.0*dpr, prev.st[root].fontsize, 19.2*dpr, env, 0, nil, 400, 0);
 		seen: list of int;
 		starts: list of int;
 		for(l := d.changed; l != nil; l = tl l)
@@ -2801,9 +2830,10 @@ restyle(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed): ref Comput
 	d.kids = nil;
 	d.nchanged = 0;
 	lastenv = ref *env;
+	setdpr(env);
 	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
 		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
-	ctx := ref Ctx(16.0, c.st[root].fontsize, 19.2, env, 0, nil, 400, 0);
+	ctx := ref Ctx(16.0*dpr, c.st[root].fontsize, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;
 	for(; outs != nil; outs = tl outs)
@@ -2980,9 +3010,10 @@ restyleflat(d: ref Doc, s: ref Styles, env: ref Env, prev: ref Computed, m: ref 
 	d.kids = nil;
 	d.nchanged = 0;
 	lastenv = ref *env;
+	setdpr(env);
 	c := ref Computed(grow(prev.st, d.n), grow(prev.before, d.n), grow(prev.after, d.n), grow(prev.marker, d.n),
 		grow(prev.firstletter, d.n), grow(prev.firstline, d.n), grow(prev.placeholder, d.n));
-	ctx := ref Ctx(16.0, c.st[root].fontsize, 19.2, env, 0, nil, 400, 0);
+	ctx := ref Ctx(16.0*dpr, c.st[root].fontsize, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	filters := array[d.n] of array of int;
 	for(; outs != nil; outs = tl outs)
@@ -3253,6 +3284,7 @@ element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
 		s.idx.env = ref *env;
 	}
 	lastenv = ref *env;
+	setdpr(env);
 	root := d.root();
 	chain: list of int;
 	for(p := n; p != 0; p = parentel(d, p))
@@ -3261,7 +3293,7 @@ element(d: ref Doc, s: ref Styles, env: ref Env, n: int): ref St
 		return nil;	# not in the document's tree
 	c := ref Computed(array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St, array[d.n] of ref St);
 	m := matcher(d, env);
-	ctx := ref Ctx(16.0, 16.0, 19.2, env, 0, nil, 400, 0);
+	ctx := ref Ctx(16.0*dpr, 16.0*dpr, 19.2*dpr, env, 0, nil, 400, 0);
 	share := array[Nshare] of list of (string, ref Shared);
 	ps: ref St;
 	pf: array of int;
@@ -3793,7 +3825,7 @@ cascade(mds: array of ref Md, parent: ref St, ctx: ref Ctx): ref St
 {
 	curmds = mds;
 	st := inherit(parent);
-	pfs := 16.0;
+	pfs := 16.0 * dpr;
 	if(parent != nil)
 		pfs = parent.fontsize;
 	# custom properties
@@ -4192,7 +4224,7 @@ length(v: array of ref Tok, ctx: ref Ctx): (int, Len)
 unit(n: real, u: string, ctx: ref Ctx): (int, real)
 {
 	case u {
-	"px" => return (1, n);
+	"px" => return (1, n*ctx.env.dpr);
 	"em" => return (1, n*ctx.fs);
 	"rem" => return (1, n*ctx.rootfs);
 	"ex" or "cap" or "ch" =>
@@ -4218,12 +4250,12 @@ unit(n: real, u: string, ctx: ref Ctx): (int, real)
 		if(ctx.env.height > m)
 			m = ctx.env.height;
 		return (1, n*real m/100.0);
-	"pt" => return (1, n*96.0/72.0);
-	"pc" => return (1, n*16.0);
-	"in" => return (1, n*96.0);
-	"cm" => return (1, n*96.0/2.54);
-	"mm" => return (1, n*96.0/25.4);
-	"q" => return (1, n*96.0/101.6);
+	"pt" => return (1, n*96.0/72.0 * ctx.env.dpr);
+	"pc" => return (1, n*16.0 * ctx.env.dpr);
+	"in" => return (1, n*96.0 * ctx.env.dpr);
+	"cm" => return (1, n*96.0/2.54 * ctx.env.dpr);
+	"mm" => return (1, n*96.0/25.4 * ctx.env.dpr);
+	"q" => return (1, n*96.0/101.6 * ctx.env.dpr);
 	}
 	return (0, 0.0);
 }
@@ -6251,9 +6283,9 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 	"outline-width" or "column-rule-width" =>
 		w := -1;
 		case id {
-		"thin" => w = 1;
-		"medium" => w = 3;
-		"thick" => w = 5;
+		"thin" => w = dpx(1);
+		"medium" => w = dpx(3);
+		"thick" => w = dpx(5);
 		* =>
 			(ok, l) := length(v, ctx);
 			if(!ok || l.kind != Lpx || l.pct != 0.0 || l.px < 0.0)
@@ -6930,19 +6962,19 @@ apply(st: ref St, nm: string, v: array of ref Tok, parent: ref St, ctx: ref Ctx)
 			return 0;
 		st.family = f;
 	"font-size" =>
-		pfs := 16.0;
+		pfs := 16.0 * dpr;
 		if(parent != nil)
 			pfs = parent.fontsize;
 		sz := -1.0;
 		case id {
-		"xx-small" => sz = 9.0;
-		"x-small" => sz = 10.0;
-		"small" => sz = 13.0;
-		"medium" => sz = 16.0;
-		"large" => sz = 18.0;
-		"x-large" => sz = 24.0;
-		"xx-large" => sz = 32.0;
-		"xxx-large" => sz = 48.0;
+		"xx-small" => sz = 9.0 * dpr;
+		"x-small" => sz = 10.0 * dpr;
+		"small" => sz = 13.0 * dpr;
+		"medium" => sz = 16.0 * dpr;
+		"large" => sz = 18.0 * dpr;
+		"x-large" => sz = 24.0 * dpr;
+		"xx-large" => sz = 32.0 * dpr;
+		"xxx-large" => sz = 48.0 * dpr;
 		"smaller" => sz = pfs/1.2;
 		"larger" => sz = pfs*1.2;
 		"math" => sz = pfs;

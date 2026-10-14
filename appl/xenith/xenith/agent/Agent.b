@@ -9,16 +9,24 @@ implement Agent;
 # generated.  When the agent needs approval for a call, the request
 # appears in the body and Allow or Deny answers it.
 #
+# A reply is markdown, more often than not.  While a turn runs the
+# window shows its text, the reply arriving as it is generated; when
+# the turn is over the conversation is set as a document (docview(2)),
+# opened at the turn.  Render switches between the two; set to the
+# text, the window stays so until Render again.  Typing goes to the
+# text, as in any rendered window, and what is sent, read through
+# body or snarfed is always the text.
+#
 #	Agent [-v] [-p path,...] [-t tool,...] [-x message]
 #
-# Tag: Send Stop Reset Allow Deny Delete
+# Tag: Send Stop Reset Render Allow Deny (and Del)
 #
 # -x sends a message at once, as if typed and Sent (for scripts and
 # tests).
 #
 # With no /mnt/veltro in the namespace, Agent starts a veltrosrv with
 # the grants given (the current directory, when no -p is given), and a
-# tools9p with the editing tools when there is no /tool.  Delete ends
+# tools9p with the editing tools when there is no /tool.  Del ends
 # the session, and the server if Agent started it.
 #
 
@@ -46,6 +54,10 @@ Command: module {
 
 VELTROSRV: con "/dis/veltro/veltrosrv.dis";
 TOOLS9P: con "/dis/veltro/tools9p.dis";
+# A conversation longer than this is not set between turns: the
+# document is drawn whole, as one image, and one of a long session's
+# would be hundreds of megabytes (Render still tries).
+MAXTYPESET: con 200000;
 DEFAULT_TOOLS: con "read,list,find,search,grep,write,edit,diff,exec,git,limbo";
 
 verbose := 0;
@@ -54,6 +66,7 @@ sess := "";			# the session's directory
 srvpid := 0;		# the server's process group, when Agent started it
 busy := 0;
 pending := "";		# callid of a call awaiting approval
+typeset := 1;		# set the conversation as a document between turns
 
 usage()
 {
@@ -90,7 +103,7 @@ exists(path: string): int
 
 # Run a command module in a process group of its own, sharing this
 # namespace, so what it mounts is seen here and it can be stopped later.
-# The process stays until Delete, so the group has a member to send
+# The process stays until Del, so the group has a member to send
 # killgrp to.
 cmdstop: chan of int;
 
@@ -189,7 +202,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	w := Win.wnew();
 	w.wname("/+Agent");
-	w.wtagwrite(" Send Stop Reset Allow Deny Delete");
+	w.wtagwrite(" Send Stop Reset Render Allow Deny");
 	w.openbody(OWRITE);
 
 	err: string;
@@ -241,7 +254,13 @@ follow(offset: big, out: chan of string)
 	out <-= nil;
 }
 
-# Wait for a request for approval, until the turn is over.
+# Wait for a request for approval, until the turn is over.  The
+# approve file gives the call waiting for as long as it waits, so once
+# one is shown the next is not asked for until it is answered (ack 1)
+# or the turn is over (ack 0): asked again at once, the same request
+# was shown again and again.
+ackc: chan of int;
+
 approvals(out: chan of string)
 {
 	for(;;) {
@@ -254,6 +273,8 @@ approvals(out: chan of string)
 		if(n <= 0)
 			break;
 		out <-= string buf[0:n];
+		if(<-ackc == 0)
+			break;
 	}
 	out <-= nil;
 }
@@ -267,7 +288,9 @@ mainwin(w: ref Win, live: int, first: string)
 	textoff := big 0;
 	followers := 0;
 
+	ackc = chan of int;
 	spawn w.wslave(c);
+	turn := 0;		# where the turn began in the body
 	if(live && first != "" && writefile(sess + "/input", first) >= 0) {
 		busy = 1;
 		w.ctlwrite("dirty");
@@ -278,27 +301,35 @@ mainwin(w: ref Win, live: int, first: string)
 	for(;;) alt {
 	t := <-textc =>
 		if(t == nil) {
+			if(pending != "") {
+				pending = "";
+				ackc <-= 0;
+			}
 			followers--;
 			if(followers == 0) {
 				busy = 0;
 				w.ctlwrite("clean");
+				if(typeset)
+					settype(w, turn, hostpt);
 			}
 			break;
 		}
 		textoff += big len array of byte t;
-		hostpt = append(w, hostpt, t);
+		hostpt = append(w, hostpt, blocks(t));
 	a := <-approvec =>
 		if(a == nil) {
 			followers--;
 			if(followers == 0) {
 				busy = 0;
 				w.ctlwrite("clean");
+				if(typeset)
+					settype(w, turn, hostpt);
 			}
 			break;
 		}
 		(callid, rest) := str->splitl(a, " ");
 		pending = callid;
-		hostpt = append(w, hostpt, "== approve? (Allow or Deny)\n" + str->drop(rest, " "));
+		hostpt = append(w, hostpt, blocks("== approve? (Allow or Deny)\n" + str->drop(rest, " ")));
 	e := <-c =>
 		case e.c1 {
 		'M' or 'K' =>
@@ -335,6 +366,8 @@ mainwin(w: ref Win, live: int, first: string)
 					input := w.wread(hostpt, q1);
 					if(trim(input) == "")
 						break;
+					docctl(w, "text");
+					turn = hostpt;
 					w.wreplace(sprint("#%d,#%d", hostpt, q1), "");
 					if(writefile(sess + "/input", input) < 0) {
 						hostpt = append(w, hostpt, sprint("== note\n(cannot send: %r)\n"));
@@ -348,15 +381,28 @@ mainwin(w: ref Win, live: int, first: string)
 				"Stop" =>
 					if(live)
 						writefile(sess + "/ctl", "cancel");
+					if(pending != "") {
+						pending = "";
+						ackc <-= 1;
+					}
 				"Reset" =>
 					if(live && !busy)
 						writefile(sess + "/ctl", "reset");
+				"Render" =>
+					if(shown(w)) {
+						typeset = 0;
+						docctl(w, "text");
+					} else {
+						typeset = 1;
+						docctl(w, "render markdown");
+					}
 				"Allow" or "Deny" =>
 					if(pending != "") {
 						writefile(sess + "/approve", str->tolower(cmd) + " " + pending);
 						pending = "";
+						ackc <-= 1;
 					}
-				"Del" or "Delete" =>
+				"Del" =>
 					if(live) {
 						writefile(sess + "/ctl", "cancel");
 						writefile(sess + "/ctl", "close");
@@ -372,6 +418,83 @@ mainwin(w: ref Win, live: int, first: string)
 			}
 		}
 	}
+}
+
+# The window's document (docview(2)): its doc/ctl
+docctl(w: ref Win, s: string): string
+{
+	fd := sys->open(sprint("/chan/%d/doc/ctl", w.winid), OWRITE);
+	if(fd == nil)
+		return sprint("%r");
+	if(fprint(fd, "%s\n", s) < 0)
+		return sprint("%r");
+	return nil;
+}
+
+# The document, not the text, is in the window
+shown(w: ref Win): int
+{
+	s := readfile(sprint("/chan/%d/doc/ctl", w.winid));
+	(nil, l) := sys->tokenize(s, "\n");
+	for(; l != nil; l = tl l)
+		if(hd l == "shown 1")
+			return 1;
+	return 0;
+}
+
+# A turn over: set the conversation as a document, opened at the turn
+# (the document opens on the line at the top of the text).  Not while
+# the user has begun typing the next message after the host point.
+settype(w: ref Win, turn, hostpt: int)
+{
+	(nil, q1) := bodyend(w);
+	if(q1 == 0 || q1 > MAXTYPESET || q1 > hostpt && trim(w.wread(hostpt, q1)) != "")
+		return;
+	if(w.wsetaddr(sprint("#%d", turn), 1))
+		w.ctlwrite("dot=addr\nshow\n");
+	# and typing, which shows the text again, goes at the end
+	if(w.wsetaddr(sprint("#%d", q1), 1))
+		w.ctlwrite("dot=addr\n");
+	docctl(w, "render markdown");
+}
+
+# The session's text with each message's header line (== user,
+# == veltro, == note) a paragraph of its own, so that set as markdown
+# the messages do not run together.  Text arrives in pieces: a line
+# that may yet be a header is held until it is whole.
+held := "";
+bol := 1;		# at the start of a line
+headed := 0;		# a header has been written
+
+blocks(t: string): string
+{
+	t = held + t;
+	held = "";
+	out := "";
+	i := 0;
+	while(i < len t) {
+		if(bol) {
+			for(e := i; e < len t && t[e] != '\n'; e++)
+				;
+			line := t[i:e];
+			if(e == len t && (len line < 3 && line == "=="[0:len line] || len line >= 3 && line[0:3] == "== ")) {
+				held = line;		# maybe a header; wait for the rest
+				break;
+			}
+			if(len line >= 3 && line[0:3] == "== " && e < len t) {
+				if(headed)
+					out += "\n";
+				out += line + "\n\n";
+				headed = 1;
+				i = e + 1;
+				continue;
+			}
+		}
+		out[len out] = t[i];
+		bol = t[i] == '\n';
+		i++;
+	}
+	return out;
 }
 
 # Insert text at the host point, keeping what the user typed after it.

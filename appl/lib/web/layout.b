@@ -1684,8 +1684,8 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		r.svg = 1;
 		wa := b.d.attr(n, "width");
 		ha := b.d.attr(n, "height");
-		r.iw = dimattr(wa, 0);
-		r.ih = dimattr(ha, 0);
+		r.iw = dp(dimattr(wa, 0));
+		r.ih = dp(dimattr(ha, 0));
 		r.ipw = pctattr(wa);
 		r.iph = pctattr(ha);
 		if((vb := viewbox(b.d.attr(n, "viewBox"))) != nil && vb[2] > 0.0 && vb[3] > 0.0)
@@ -1713,8 +1713,8 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 			if(kind == Oimage)
 				r.url = url;
 			else {
-				r.iw = 300;
-				r.ih = 150;
+				r.iw = dp(300);
+				r.ih = dp(150);
 			}
 			return r;
 		}
@@ -1722,18 +1722,18 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		# embed shows nothing then but its box)
 		if(nd.tag == Dom->Tembed) {
 			r := newbox(Kreplaced, inl, n, st);
-			r.iw = 300;
-			r.ih = 150;
+			r.iw = dp(300);
+			r.ih = dp(150);
 			return r;
 		}
 	Dom->Tvideo or Dom->Tcanvas or Dom->Tiframe =>
 		r := newbox(Kreplaced, inl, n, st);
-		r.iw = 300;
-		r.ih = 150;
+		r.iw = dp(300);
+		r.ih = dp(150);
 		if(nd.tag == Dom->Tcanvas) {
 			# its bitmap's size (HTML §4.12.5: 300 by 150 by default)
-			r.iw = dimattr(b.d.attr(n, "width"), 300);
-			r.ih = dimattr(b.d.attr(n, "height"), 150);
+			r.iw = dp(dimattr(b.d.attr(n, "width"), 300));
+			r.ih = dp(dimattr(b.d.attr(n, "height"), 150));
 		}
 		if(nd.tag == Dom->Tvideo && (p := b.d.attr(n, "poster")) != nil)
 			r.url = style->resolveurl(b.d.url, p);
@@ -1750,7 +1750,7 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 		r := newbox(Kreplaced, inl, n, st);
 		case t {
 		"checkbox" or "radio" =>
-			r.iw = r.ih = 13;
+			r.iw = r.ih = dp(13);
 		"submit" or "reset" or "button" =>
 			r.text = b.d.attr(n, "value");
 			if(r.text == nil)
@@ -1762,11 +1762,11 @@ replaced(b: ref B, n: int, st: ref St): ref Box
 			if((src := b.d.attr(n, "src")) != nil)
 				r.url = style->resolveurl(b.d.url, src);
 		"range" =>
-			r.iw = 129;
-			r.ih = 16;
+			r.iw = dp(129);
+			r.ih = dp(16);
 		"color" =>
-			r.iw = 50;
-			r.ih = 27;
+			r.iw = dp(50);
+			r.ih = dp(27);
 		* =>
 			r.text = b.d.attr(n, "value");
 			if(t == "password" && r.text != "") {
@@ -8188,8 +8188,8 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 	iw := b.iw;
 	ih := b.ih;
 	if(b.img != nil && iw == 0 && ih == 0 && !b.svg) {
-		iw = b.img.r.dx();
-		ih = b.img.r.dy();
+		iw = dp(b.img.r.dx());
+		ih = dp(b.img.r.dy());
 	}
 	if(b.iw == 0 && b.img == nil && b.node != 0 && curdoc != nil &&
 	   curdoc.nodes[b.node].tag == Dom->Tinput && textfield(curdoc, b.node)) {
@@ -8208,7 +8208,7 @@ replacedsize(b: ref Box, cbw, cbh: int): (int, int)
 		f := face(b.st);
 		iw = ir(f.width(b.text));
 		if(!isbutton(b))
-			iw += 2;
+			iw += dp(2);
 		ih = ir(lineheight(b.st, f));
 	}
 	st := b.st;
@@ -8402,6 +8402,16 @@ layenv: ref Style->Env;
 setenv(env: ref Style->Env)
 {
 	layenv = env;
+}
+
+# n CSS px in device pixels, for the environment's pixels to the px
+# (Style->Env.dpr): the sizes below given in px (300 by 150, a
+# checkbox's 13) are made for it as style's lengths are
+dp(n: int): int
+{
+	if(layenv == nil || layenv.dpr <= 0.0)
+		return n;
+	return int (real n * layenv.dpr);
 }
 
 imgsrc(d: ref Doc, n: int): string
@@ -8617,8 +8627,8 @@ replacedheight(b: ref Box, cbw, cbh: int): int
 		iw := b.iw;
 		ih := b.ih;
 		if(b.img != nil && iw == 0 && ih == 0) {
-			iw = b.img.r.dx();
-			ih = b.img.r.dy();
+			iw = dp(b.img.r.dx());
+			ih = dp(b.img.r.dy());
 		}
 		ratio := aspect(b, iw, ih);
 		if(ratio > 0.0)
@@ -12253,7 +12263,22 @@ visible(c: int): int
 # b is the box of an HTML element with this tag
 istag(b: ref Box, tag: int): int
 {
-	return b.node != 0 && curdoc != nil && curdoc.nodes[b.node].tag == tag && curdoc.nodes[b.node].ns == Dom->HTML;
+	# curdoc is the module's: a frame's document built since can be in
+	# it, and a node of the page's not one of its own
+	if(b.node <= 0 || curdoc == nil || b.node >= curdoc.n)
+		return 0;
+	nd := curdoc.nodes[b.node];
+	return nd != nil && nd.tag == tag && nd.ns == Dom->HTML;
+}
+
+# the document whose boxes root's are, for what reads it (istag), as lay
+# and paint set it: entry points that walk a tree set it too (a page
+# with a frame had the frame's, and a click on the page, or its height
+# asked, dereferenced the frame's nil nodes: Xenith stopped)
+setdoc(root: ref Box)
+{
+	if(root != nil && root.doc != nil)
+		curdoc = root.doc;
 }
 
 hasimage(st: ref St): int
@@ -12271,6 +12296,7 @@ height(root: ref Box): int
 {
 	if(root == hroot && laygen == hgen)
 		return hval;
+	setdoc(root);
 	h := root.y + root.h + root.mb;
 	if((e := overflowbottom(root, 0)) > h)
 		h = e;
@@ -14585,14 +14611,18 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	svg: array of byte;
 	if(!grad) {
 		svg = bgsvgof(u);
-		if(svg != nil)
+		if(svg != nil) {
 			(iw, ih, ratio, nil, nil) = svgintrinsic(svg);
-		else {
-			iw = img.r.dx();
-			ih = img.r.dy();
-			if(iw <= 0 || ih <= 0)
+			if(iw > 0)
+				iw = dp(iw);
+			if(ih > 0)
+				ih = dp(ih);
+		} else {
+			if(img.r.dx() <= 0 || img.r.dy() <= 0)
 				return;
-			ratio = real iw / real ih;
+			ratio = real img.r.dx() / real img.r.dy();
+			iw = dp(img.r.dx());
+			ih = dp(img.r.dy());
 		}
 	}
 	(w, h) := concretesize(bg, iw, ih, ratio, aw, ah);
@@ -14619,7 +14649,7 @@ paintbg(dst: ref Image, b: ref Box, r: Rect, bg: ref Style->Bg)
 	if(!grad) {
 		if(svg != nil)
 			img = svgraster(u, svg, tw, th);
-		else if(tw != iw || th != ih)
+		else if(tw != img.r.dx() || th != img.r.dy())
 			img = scale(img, tw, th);
 		if(img == nil)
 			return;
@@ -15961,6 +15991,7 @@ paintdeco(dst: ref Image, f: ref Frag, o: Point)
 
 boxat(root: ref Box, p: Point): (int, ref Box)
 {
+	setdoc(root);
 	# sticky boxes where the last paint showed them: a click on BBC's
 	# header, stuck at the top, was taken for what scrolled under it
 	stickscroll(scrolled.y);
@@ -16177,6 +16208,7 @@ clipshit(b: ref Box): int
 
 boxes(root: ref Box, n: int): list of ref Box
 {
+	setdoc(root);
 	return collect(root, n, nil);
 }
 
@@ -16193,6 +16225,7 @@ kindnames := array[] of {"block", "inline", "text", "br", "replaced", "flex", "g
 
 dump(root: ref Box): string
 {
+	setdoc(root);
 	return dumpbox(root, "", Point(0, 0));
 }
 

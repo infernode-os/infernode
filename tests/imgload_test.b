@@ -351,6 +351,31 @@ testDecodeBit(t: ref T)
 	near(t, pixel(im, (3, 6)), (0, 0, 255), 0, "bottom half");
 }
 
+# A row wider than the display's buffer (8000 bytes: 2100 pixels of
+# XRGB32, a Retina window's width): writeimage read it a buffer's
+# rows at a time, which was none, and never finished
+testWriteWide(t: ref T)
+{
+	needdisplay(t);
+	src := display.newimage(Rect((0, 0), (2100, 4)), Draw->XRGB32, 0, Draw->Blue);
+	src.draw(Rect((2000, 0), (2100, 4)), display.color(Draw->Red), nil, (0, 0));
+	path := "/tmp/imgload_test_wide.bit";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.fatal(sys->sprint("create %s: %r", path));
+	if(display.writeimage(fd, src) < 0)
+		t.fatal(sys->sprint("writeimage: %r"));
+	fd = nil;
+	data := readfile(path);
+	sys->remove(path);
+	(im, err) := imgload->readimagedata(data, "x.bit");
+	if(im == nil)
+		t.fatal("readimagedata: " + err);
+	t.asserteq(im.r.dx(), 2100, "width");
+	near(t, pixel(im, (10, 1)), (0, 0, 255), 0, "left");
+	near(t, pixel(im, (2050, 2)), (255, 0, 0), 0, "right");
+}
+
 testUnrecognised(t: ref T)
 {
 	needdisplay(t);
@@ -909,6 +934,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DecodeXbm", testDecodeXbm);
 	run("DecodePic", testDecodePic);
 	run("DecodeBit", testDecodeBit);
+	run("WriteWide", testWriteWide);
 	run("RemapTrueColour", testRemapTrueColour);
 	run("Unrecognised", testUnrecognised);
 	run("GifNoColourTable", testGifNoColourTable);

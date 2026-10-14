@@ -59,6 +59,11 @@ init(d: ref Draw->Display): string
 		return err;
 	if((err = page->init(d)) != nil)
 		return err;
+	# pages at the display's pixels to the point, where the emulator
+	# draws at the screen's density (Retina: $displayscale, as Xenith
+	# sizes its own text by)
+	if((ds := real envstr("displayscale")) >= 1.1)
+		page->scale(ds);
 	# page's own: a Layout of our own would know nothing of where page
 	# put things (sticky boxes as last painted, for a click)
 	layout = page->layoutmod();
@@ -67,7 +72,7 @@ init(d: ref Draw->Display): string
 
 Session.new(width, height: int): ref Session
 {
-	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, chan[1] of int, nil, 0);
+	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, 0, chan[1] of int, nil, 0);
 }
 
 # The session's lock.  A page's realm takes it for each task, and a
@@ -229,7 +234,7 @@ Session.goback(s: self ref Session): string
 		unlock(s);
 		return "no previous page";
 	}
-	u := hd s.back;
+	(u, nil) := hd s.back;
 	unlock(s);
 	navigate(s, u, "GET", nil, nil, Hback);
 	return nil;
@@ -242,7 +247,7 @@ Session.goforward(s: self ref Session): string
 		unlock(s);
 		return "no next page";
 	}
-	u := hd s.fwd;
+	(u, nil) := hd s.fwd;
 	unlock(s);
 	navigate(s, u, "GET", nil, nil, Hforward);
 	return nil;
@@ -294,9 +299,10 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 	if(s.pg != nil && method == "GET" && hist != Hreload &&
 	   (frag := fragment(url)) != nil && unfrag(url) == unfrag(s.url)) {
 		prev := s.url;
+		y := wasat(s, hist);
 		history(s, prev, hist);
 		s.url = url;
-		s.scroll = target(s.pg, frag);
+		s.scroll = target1(s, s.pg, frag);
 		s.status = "done";
 		unlock(s);
 		event(s, "shown " + url);
@@ -314,19 +320,34 @@ history(s: ref Session, prev: string, hist: int)
 	case hist {
 	Hnew =>
 		if(prev != "")
-			s.back = prev :: s.back;
+			s.back = (prev, s.at) :: s.back;
 		s.fwd = nil;
 	Hback =>
 		if(s.back != nil)
 			s.back = tl s.back;
 		if(prev != "")
-			s.fwd = prev :: s.fwd;
+			s.fwd = (prev, s.at) :: s.fwd;
 	Hforward =>
 		if(s.fwd != nil)
 			s.fwd = tl s.fwd;
 		if(prev != "")
-			s.back = prev :: s.back;
+			s.back = (prev, s.at) :: s.back;
 	}
+}
+
+# where the view was on the page Back or Fwd goes to, as history has it
+wasat(s: ref Session, hist: int): int
+{
+	h: list of (string, int);
+	case hist {
+	Hback =>	h = s.back;
+	Hforward =>	h = s.fwd;
+	* =>	return -1;
+	}
+	if(h == nil)
+		return -1;
+	(nil, y) := hd h;
+	return y;
 }
 
 loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, hist: int)
@@ -361,13 +382,14 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 			s.pg = ep;
 			s.url = url;	# so that reload tries it again
 			s.title = ep.title;
-			s.scroll = 0;
+			s.scroll = s.at = 0;
 		}
 		s.status = "error " + err;
 		unlock(s);
 		event(s, "error " + err);
 		return;
 	}
+	y := wasat(s, hist);
 	history(s, s.url, hist);
 	s.pg = pg;
 	s.url = pg.url;
@@ -376,7 +398,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	s.title = pg.title;
 	s.scroll = 0;
 	if(frag != nil)
-		s.scroll = target(pg, frag);
+		s.scroll = target1(s, pg, frag);
 	u := s.url;
 	s.status = "loading images " + u;
 	unlock(s);
@@ -519,7 +541,12 @@ apply(s: ref Session, g: int, pg: ref Pg, batch: list of ref Page->Pic, got, n: 
 		unlock(s);
 		return 0;
 	}
-	pg.install(batch);
+	{
+		pg.install(batch);
+	} exception e {
+	"*" =>
+		fault(s, "placing images", e);
+	}
 	unlock(s);
 	event(s, sys->sprint("update %d %d", got, n));
 	return 1;
@@ -929,7 +956,7 @@ kindof(d: ref Doc, n: int): string
 
 field(d: ref Doc, form, n: int): ref Field
 {
-	f := ref Field(form, n, kindof(d, n), d.attr(n, "name"), nil, 0, nil);
+	f := ref Field(form, n, kindof(d, n), d.attr(n, "name"), nil, 0, nil, disabled(d, n), d.hasattr(n, "readonly"));
 	case f.kind {
 	"select" =>
 		first := "";
@@ -1003,6 +1030,27 @@ Session.fields(s: self ref Session): array of ref Field
 	return a;
 }
 
+# A control disabled itself or by a disabled fieldset it is in, outside
+# that fieldset's first legend (HTML §4.10.18.5)
+disabled(d: ref Doc, n: int): int
+{
+	if(d.hasattr(n, "disabled"))
+		return 1;
+	c := n;
+	for(p := d.nodes[n].parent; p > 0; p = d.nodes[p].parent) {
+		nd := d.nodes[p];
+		if(nd.tag == Dom->Tfieldset && nd.ns == Dom->HTML && d.hasattr(p, "disabled")) {
+			l := nd.first;
+			while(l != 0 && d.nodes[l].kind != Dom->Element)
+				l = d.nodes[l].next;
+			if(l == 0 || l != c || d.nodes[l].tag != Dom->Tlegend)
+				return 1;
+		}
+		c = p;
+	}
+	return 0;
+}
+
 fieldstext(a: array of ref Field): string
 {
 	r := "";
@@ -1014,6 +1062,10 @@ fieldstext(a: array of ref Field): string
 		r += sys->sprint("%d %d %s %s %s", f.form, f.node, f.kind, name, oneline(f.value));
 		if(f.checked)
 			r += " checked";
+		if(f.disabled)
+			r += " disabled";
+		if(f.readonly)
+			r += " readonly";
 		r += "\n";
 		for(o := f.options; o != nil; o = tl o) {
 			(v, label, sel) := hd o;
@@ -1034,12 +1086,12 @@ Session.set(s: self ref Session, n: int, value: string): string
 	d := pg.doc;
 	if(n <= 0 || n >= d.n || !iscontrol(d, n))
 		return sys->sprint("node %d is not a form control", n);
-	if(d.hasattr(n, "disabled"))
+	if(disabled(d, n))
 		return sys->sprint("node %d is disabled", n);
 	lock(s);
 	err := setfield(d, n, value);
 	if(err == nil)
-		pg.update();
+		update(s, pg);
 	unlock(s);
 	if(err == nil) {
 		event(s, "update");
@@ -1131,7 +1183,7 @@ Session.submit(s: self ref Session, form, submitter: int): string
 	url := resolve(d.url, action);
 	q := "";
 	for(n := 1; n < d.n; n++) {
-		if(forms[n] != form || !iscontrol(d, n) || d.hasattr(n, "disabled"))
+		if(forms[n] != form || !iscontrol(d, n) || disabled(d, n))
 			continue;
 		f := field(d, form, n);
 		if(f.name == "")
@@ -1213,6 +1265,39 @@ Session.scrollto(s: self ref Session, y: int)
 	event(s, "scroll " + string y);
 }
 
+# A fault in the engine while the session's lock is held: said, and
+# the lock let go as ever.  Raised out of a section holding it, it was
+# not: Xenith caught the fault (an array bound in painting
+# www.sanook.com) and went on, and its next paint waited for the lock
+# it held itself.
+fault(s: ref Session, what, e: string)
+{
+	sys->fprint(sys->fildes(2), "charon: %s %s: %s\n", what, s.url, e);
+}
+
+# where a #fragment is, made the :target (the lock held)
+target1(s: ref Session, pg: ref Pg, frag: string): int
+{
+	{
+		return target(pg, frag);
+	} exception e {
+	"*" =>
+		fault(s, "going to #" + frag + " in", e);
+	}
+	return 0;
+}
+
+# the page laid out again after a change the session made (the lock held)
+update(s: ref Session, pg: ref Pg)
+{
+	{
+		pg.update();
+	} exception e {
+	"*" =>
+		fault(s, "laying out", e);
+	}
+}
+
 # ---- pointing ----
 
 Session.nodeat(s: self ref Session, x, y: int): int
@@ -1253,8 +1338,14 @@ Session.paint(s: self ref Session, dst: ref Draw->Image, scroll: Point): int
 	# browser does it for a frame, not after each task that changed it
 	if(r != nil && r.pg == s.pg)
 		laidout(r);
-	if(s.pg != nil)
-		s.pg.paint(dst, scroll);
+	if(s.pg != nil) {
+		{
+			s.pg.paint(dst, scroll);
+		} exception e {
+		"*" =>
+			fault(s, "painting", e);
+		}
+	}
 	unlock(s);
 	return 1;
 }
@@ -1424,7 +1515,13 @@ Session.click(s: self ref Session, n: int): string
 	if(popovers(s, pg, n))
 		return nil;
 	lock(s);
-	us := pg.want(n);
+	us: list of string;
+	{
+		us = pg.want(n);
+	} exception e {
+	"*" =>
+		fault(s, "a click", e);
+	}
 	unlock(s);
 	if(us != nil) {
 		# an image left to be clicked for: this click loads it (and
@@ -1455,7 +1552,7 @@ Session.click(s: self ref Session, n: int): string
 				if(iscontrol(d, c))
 					return s.click(c);
 		Dom->Tinput or Dom->Tbutton =>
-			if(d.hasattr(m, "disabled"))
+			if(disabled(d, m))
 				return nil;
 			(forms, nil) := formnumbers(d);
 			case kindof(d, m) {
@@ -1481,7 +1578,7 @@ Session.click(s: self ref Session, n: int): string
 					d.delattr(p, "open");
 				else
 					d.setattr(p, "open", "");
-				pg.update();
+				update(s, pg);
 				unlock(s);
 				event(s, "update");
 			}
@@ -1540,7 +1637,7 @@ popovers(s: ref Session, pg: ref Pg, n: int): int
 	}
 	if(changed) {
 		lock(s);
-		pg.update();
+		update(s, pg);
 		unlock(s);
 		event(s, "update");
 	}
@@ -2284,6 +2381,59 @@ hchanged(id: int)
 	}
 }
 
+# ---- what scripts see: CSS px, where the page is laid out in device
+# pixels (Page->scale) ----
+
+scale(r: real)
+{
+	page->scale(r);
+}
+
+envstr(name: string): string
+{
+	fd := sys->open("/env/" + name, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
+# device pixels, in CSS px
+cssn(n: int): int
+{
+	return int (real n / page->dpr());
+}
+
+# a computed value's px lengths in CSS px
+csspx(v: string): string
+{
+	if(page->dpr() == 1.0)
+		return v;
+	r := "";
+	for(i := 0; i < len v; ) {
+		j := i;
+		while(j < len v && (v[j] >= '0' && v[j] <= '9' || v[j] == '.' || v[j] == '-' && j == i))
+			j++;
+		if(j > i && j + 2 <= len v && v[j:j+2] == "px" && (i == 0 || !isalnum(v[i-1]))) {
+			r += sys->sprint("%g", real v[i:j] / page->dpr()) + "px";
+			i = j + 2;
+		} else if(j > i) {
+			r += v[i:j];
+			i = j;
+		} else
+			r[len r] = v[i++];
+	}
+	return r;
+}
+
+isalnum(c: int): int
+{
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '-';
+}
+
 hbox(id, n: int): (int, int, int, int, int)
 {
 	r := realmbyid(id);
@@ -2292,8 +2442,7 @@ hbox(id, n: int): (int, int, int, int, int)
 	laidout(r);
 	for(l := layout->boxes(r.pg.root, n); l != nil; l = tl l) {
 		b := hd l;
-		if(!pseudo(r.pg, n, b))
-			return (1, absx(b), absy(b), b.w, b.h);
+		return (1, cssn(absx(b)), cssn(absy(b)), cssn(b.w), cssn(b.h));
 	}
 	return (0, 0, 0, 0, 0);
 }
@@ -2344,7 +2493,7 @@ hcomputed(id, n: int, prop: string): string
 		if(prefix(ln, short + " ")) {
 			v := ln[len short + 1:];
 			if(side < 0)
-				return cssrgb(v);
+				return csspx(cssrgb(v));
 			(nv, vl) := sys->tokenize(v, " ");
 			if(nv != 4)
 				return "";
@@ -2353,7 +2502,7 @@ hcomputed(id, n: int, prop: string): string
 			x := hd vl;
 			if(short == "border-width")
 				x += "px";
-			return x;
+			return csspx(x);
 		}
 	}
 	return "";
@@ -2513,7 +2662,7 @@ hviewport(id: int): (int, int, int, int)
 	r := realmbyid(id);
 	if(r == nil)
 		return (0, 0, 0, 0);
-	return (r.s.width, r.s.height, 0, r.s.scroll);
+	return (cssn(r.s.width), cssn(r.s.height), 0, cssn(r.s.scroll));
 }
 
 hnavigate(id: int, url: string, replace: int)
@@ -2528,7 +2677,7 @@ hscroll(id, nil, y: int)
 	r := realmbyid(id);
 	if(r != nil)
 		alt {
-		r.reqs <-= ref Req.Scroll(y) =>
+		r.reqs <-= ref Req.Scroll(int (real y * page->dpr())) =>
 			;
 		* =>
 			;

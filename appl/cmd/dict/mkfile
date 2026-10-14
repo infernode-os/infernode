@@ -1,6 +1,7 @@
 <$ROOT/mkconfig
 
 TARG=\
+	oed.dis\
 	simple.dis\
 	utils.dis\
 	mkindex.dis\

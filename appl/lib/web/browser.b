@@ -59,6 +59,11 @@ init(d: ref Draw->Display): string
 		return err;
 	if((err = page->init(d)) != nil)
 		return err;
+	# pages at the display's pixels to the point, where the emulator
+	# draws at the screen's density (Retina: $displayscale, as Xenith
+	# sizes its own text by)
+	if((ds := real envstr("displayscale")) >= 1.1)
+		page->scale(ds);
 	# page's own: a Layout of our own would know nothing of where page
 	# put things (sticky boxes as last painted, for a click)
 	layout = page->layoutmod();
@@ -2358,6 +2363,59 @@ hchanged(id: int)
 	}
 }
 
+# ---- what scripts see: CSS px, where the page is laid out in device
+# pixels (Page->scale) ----
+
+scale(r: real)
+{
+	page->scale(r);
+}
+
+envstr(name: string): string
+{
+	fd := sys->open("/env/" + name, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[32] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
+
+# device pixels, in CSS px
+cssn(n: int): int
+{
+	return int (real n / page->dpr());
+}
+
+# a computed value's px lengths in CSS px
+csspx(v: string): string
+{
+	if(page->dpr() == 1.0)
+		return v;
+	r := "";
+	for(i := 0; i < len v; ) {
+		j := i;
+		while(j < len v && (v[j] >= '0' && v[j] <= '9' || v[j] == '.' || v[j] == '-' && j == i))
+			j++;
+		if(j > i && j + 2 <= len v && v[j:j+2] == "px" && (i == 0 || !isalnum(v[i-1]))) {
+			r += sys->sprint("%g", real v[i:j] / page->dpr()) + "px";
+			i = j + 2;
+		} else if(j > i) {
+			r += v[i:j];
+			i = j;
+		} else
+			r[len r] = v[i++];
+	}
+	return r;
+}
+
+isalnum(c: int): int
+{
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_' || c == '-';
+}
+
 hbox(id, n: int): (int, int, int, int, int)
 {
 	r := realmbyid(id);
@@ -2366,7 +2424,7 @@ hbox(id, n: int): (int, int, int, int, int)
 	laidout(r);
 	for(l := layout->boxes(r.pg.root, n); l != nil; l = tl l) {
 		b := hd l;
-		return (1, absx(b), absy(b), b.w, b.h);
+		return (1, cssn(absx(b)), cssn(absy(b)), cssn(b.w), cssn(b.h));
 	}
 	return (0, 0, 0, 0, 0);
 }
@@ -2417,7 +2475,7 @@ hcomputed(id, n: int, prop: string): string
 		if(prefix(ln, short + " ")) {
 			v := ln[len short + 1:];
 			if(side < 0)
-				return cssrgb(v);
+				return csspx(cssrgb(v));
 			(nv, vl) := sys->tokenize(v, " ");
 			if(nv != 4)
 				return "";
@@ -2426,7 +2484,7 @@ hcomputed(id, n: int, prop: string): string
 			x := hd vl;
 			if(short == "border-width")
 				x += "px";
-			return x;
+			return csspx(x);
 		}
 	}
 	return "";
@@ -2586,7 +2644,7 @@ hviewport(id: int): (int, int, int, int)
 	r := realmbyid(id);
 	if(r == nil)
 		return (0, 0, 0, 0);
-	return (r.s.width, r.s.height, 0, r.s.scroll);
+	return (cssn(r.s.width), cssn(r.s.height), 0, cssn(r.s.scroll));
 }
 
 hnavigate(id: int, url: string, replace: int)
@@ -2601,7 +2659,7 @@ hscroll(id, nil, y: int)
 	r := realmbyid(id);
 	if(r != nil)
 		alt {
-		r.reqs <-= ref Req.Scroll(y) =>
+		r.reqs <-= ref Req.Scroll(int (real y * page->dpr())) =>
 			;
 		* =>
 			;

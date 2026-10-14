@@ -19,14 +19,14 @@ implement Agent;
 #
 #	Agent [-v] [-p path,...] [-t tool,...] [-x message]
 #
-# Tag: Send Stop Reset Render Allow Deny Delete
+# Tag: Send Stop Reset Render Allow Deny (and Del)
 #
 # -x sends a message at once, as if typed and Sent (for scripts and
 # tests).
 #
 # With no /mnt/veltro in the namespace, Agent starts a veltrosrv with
 # the grants given (the current directory, when no -p is given), and a
-# tools9p with the editing tools when there is no /tool.  Delete ends
+# tools9p with the editing tools when there is no /tool.  Del ends
 # the session, and the server if Agent started it.
 #
 
@@ -99,7 +99,7 @@ exists(path: string): int
 
 # Run a command module in a process group of its own, sharing this
 # namespace, so what it mounts is seen here and it can be stopped later.
-# The process stays until Delete, so the group has a member to send
+# The process stays until Del, so the group has a member to send
 # killgrp to.
 cmdstop: chan of int;
 
@@ -198,7 +198,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	w := Win.wnew();
 	w.wname("/+Agent");
-	w.wtagwrite(" Send Stop Reset Render Allow Deny Delete");
+	w.wtagwrite(" Send Stop Reset Render Allow Deny");
 	w.openbody(OWRITE);
 
 	err: string;
@@ -250,7 +250,13 @@ follow(offset: big, out: chan of string)
 	out <-= nil;
 }
 
-# Wait for a request for approval, until the turn is over.
+# Wait for a request for approval, until the turn is over.  The
+# approve file gives the call waiting for as long as it waits, so once
+# one is shown the next is not asked for until it is answered (ack 1)
+# or the turn is over (ack 0): asked again at once, the same request
+# was shown again and again.
+ackc: chan of int;
+
 approvals(out: chan of string)
 {
 	for(;;) {
@@ -263,6 +269,8 @@ approvals(out: chan of string)
 		if(n <= 0)
 			break;
 		out <-= string buf[0:n];
+		if(<-ackc == 0)
+			break;
 	}
 	out <-= nil;
 }
@@ -276,6 +284,7 @@ mainwin(w: ref Win, live: int, first: string)
 	textoff := big 0;
 	followers := 0;
 
+	ackc = chan of int;
 	spawn w.wslave(c);
 	turn := 0;		# where the turn began in the body
 	if(live && first != "" && writefile(sess + "/input", first) >= 0) {
@@ -288,6 +297,10 @@ mainwin(w: ref Win, live: int, first: string)
 	for(;;) alt {
 	t := <-textc =>
 		if(t == nil) {
+			if(pending != "") {
+				pending = "";
+				ackc <-= 0;
+			}
 			followers--;
 			if(followers == 0) {
 				busy = 0;
@@ -364,6 +377,10 @@ mainwin(w: ref Win, live: int, first: string)
 				"Stop" =>
 					if(live)
 						writefile(sess + "/ctl", "cancel");
+					if(pending != "") {
+						pending = "";
+						ackc <-= 1;
+					}
 				"Reset" =>
 					if(live && !busy)
 						writefile(sess + "/ctl", "reset");
@@ -379,8 +396,9 @@ mainwin(w: ref Win, live: int, first: string)
 					if(pending != "") {
 						writefile(sess + "/approve", str->tolower(cmd) + " " + pending);
 						pending = "";
+						ackc <-= 1;
 					}
-				"Del" or "Delete" =>
+				"Del" =>
 					if(live) {
 						writefile(sess + "/ctl", "cancel");
 						writefile(sess + "/ctl", "close");

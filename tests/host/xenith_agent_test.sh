@@ -12,6 +12,8 @@
 # the tool call made, and the reply shown in the window.  A second
 # Agent is given a reply in markdown: when its turn is over the window
 # must show it set as a document (doc/ctl), its body still the text.
+# A third makes a call that needs approval: left unanswered, the request
+# must be shown once, not again and again; answered, the turn ends.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -105,6 +107,37 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
 	}
 }
 echo markdown $md >> /tmp/xenith-agent-test.trace
+/xenith/dis/Agent.dis -t read,list,write -x SCENARIO:approval_deny >[2] /tmp/xenith-agent-test.agent3 &
+ap=
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
+	if {~ $#ap 0} {
+		for w in `{ls /chan} {
+			if {ftest -f $w/body} {
+				if {grep -s 'approve[?]' $w/body} {
+					ap=$w
+				}
+			}
+		}
+		sleep 1
+	}
+}
+sleep 5
+asked=`{grep 'approve[?]' $ap/body | wc -l}
+for s in `{ls /mnt/veltro} {
+	if {ftest -f $s/approve} {
+		req=`{cat $s/approve}
+		if {! ~ $#req 0} {
+			(cid rest) = $req
+			echo deny $cid > $s/approve
+		}
+	}
+}
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+	if {! grep -s 'Write was handled' $ap/body} {
+		sleep 1
+	}
+}
+echo approval $ap $asked >> /tmp/xenith-agent-test.trace
 {
 	echo '@@ window' $id
 	echo '@@ tag'
@@ -123,6 +156,10 @@ echo markdown $md >> /tmp/xenith-agent-test.trace
 	cat $md/doc/ctl
 	echo '@@ mdtext'
 	cat $md/doc/text
+	echo '@@ asked'
+	echo asked $asked
+	echo '@@ apbody'
+	cat $ap/body
 	echo '@@ tools'
 	cat /tool/tools
 	echo '@@ log'
@@ -210,6 +247,13 @@ if section mdtext | grep -q -e '##' -e '[*][*]one'; then
 	echo "FAIL: the document shows markdown syntax"; FAILED=$((FAILED + 1))
 else
 	echo "PASS: the document shows no markdown syntax"
+fi
+expect "an unanswered request is shown once" asked '^asked 1$'
+expect "answered, the turn goes on" apbody 'Write was handled'
+if section tag | grep -q 'Delete'; then
+	echo "FAIL: the tag has Delete (Del is the system's)"; FAILED=$((FAILED + 1))
+else
+	echo "PASS: no Delete in the tag"
 fi
 grep -q 'call_single_read_0_0' "$WORK/req.log" && echo "PASS: the model saw the tool result" || { echo "FAIL: no tool round trip in the model's requests"; FAILED=$((FAILED + 1)); }
 

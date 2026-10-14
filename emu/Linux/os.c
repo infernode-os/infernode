@@ -136,6 +136,25 @@ whereis(char *what, void *pc)
 }
 
 /*
+ * The same, into buf, for the allocator's refusals (poolnomem): where
+ * the caller of malloc and the rest is, as addr2line takes it.
+ */
+static char*
+pcwhere(ulong pc, char *buf, int n)
+{
+	Dlinfo di;
+
+	if(dladdr((void*)pc, &di) == 0)
+		return nil;
+	if(di.dli_sname != nil)
+		snprint(buf, n, "%s+%#lux", di.dli_sname, (ulong)(pc - (uintptr)di.dli_saddr));
+	else
+		snprint(buf, n, "%s+%#lux", di.dli_fname != nil ? di.dli_fname : "?",
+			(ulong)(pc - (uintptr)di.dli_fbase));
+	return buf;
+}
+
+/*
  * The callers, by the frame-pointer chain (the Linux builds keep frame
  * pointers): a fault in a leaf such as _tas, the lock primitive, names
  * only the leaf, and the question is who took the lock.  (A leaf with no
@@ -391,6 +410,7 @@ libinit(char *imod)
 	char sys[64];
 
 	setsid();
+	poolpcwhere = pcwhere;
 
 	gethostname(sys, sizeof(sys));
 	kstrdup(&ossysname, sys);

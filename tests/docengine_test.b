@@ -10,6 +10,7 @@ implement DocengineTest;
 #	each engine: sheets, their sizes, painting, text; a PDF painted
 #	at twice the scale is twice the size; Markdown set again to a
 #	new width, and its lines mapped to the document and back;
+#	a PDF's ToUnicode mapping a code to several characters;
 #	PDF documents each keep their own pages.
 #
 # Painting needs a draw device (the GUI emulator; SDL_VIDEODRIVER=dummy
@@ -217,6 +218,57 @@ testPdfWords(t: ref T)
 	e->close(h);
 }
 
+# A one-page PDF whose font's ToUnicode CMap maps codes to several
+# characters (9.10.3), as LaTeX's and troff's ligatures are: one to
+# <00660066> and one to <0066>; bfrange to several, by its last
+# character; a surrogate pair; a bfrange of destinations
+tounicodepdf(): array of byte
+{
+	cmap := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+		"1 begincodespacerange <00> <FF> endcodespacerange\n" +
+		"4 beginbfchar\n<01> <00660066>\n<02> <0066>\n<03> <00660069>\n<06> <D835DC00>\nendbfchar\n" +
+		"2 beginbfrange\n<04> <05> <00660069>\n<07> <08> [<0041> <00660066006C>]\nendbfrange\n" +
+		"endcmap CMapName currentdict /CMap defineresource pop end end\n";
+	content := "BT /F1 24 Tf 40 300 Td <01200220032004052006204E01200708> Tj ET\n";
+	objs := array[] of {
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		sys->sprint("<< /Length %d >>\nstream\n%sendstream", len content, content),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+		sys->sprint("<< /Length %d >>\nstream\n%sendstream", len cmap, cmap),
+	};
+	out := "%PDF-1.4\n";
+	offs := array[len objs] of int;
+	for(i := 0; i < len objs; i++){
+		offs[i] = len out;
+		out += sys->sprint("%d 0 obj\n%s\nendobj\n", i+1, objs[i]);
+	}
+	xref := len out;
+	out += sys->sprint("xref\n0 %d\n0000000000 65535 f \n", len objs + 1);
+	for(i = 0; i < len objs; i++)
+		out += sys->sprint("%.10d 00000 n \n", offs[i]);
+	out += sys->sprint("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len objs + 1, xref);
+	return array of byte out;
+}
+
+testPdfToUnicode(t: ref T)
+{
+	needdisplay(t);
+	(e, h) := openfile(t, "pdf", "tounicode.pdf", tounicodepdf(), nil);
+	runs := e->runs(h, 0);
+	# MATHEMATICAL BOLD CAPITAL A, or U+FFFD where strings hold the BMP only
+	bold := "";
+	bold[0] = 16r1D400;
+	if(bold[0] != 16r1D400)
+		bold[0] = 16rFFFD;
+	want := array[] of {"ff", "f", "fi", "fifj", bold, "Nff", "Affl"};
+	t.asserteq(len runs, len want, "the page's words");
+	for(i := 0; i < len runs && i < len want; i++)
+		t.assertseq(runs[i].text, want[i], sys->sprint("word %d", i));
+	e->close(h);
+}
+
 # tests/page/links.pdf: on page 1 (400x500), a link to a URI, one to
 # page 2 by its destination, one by a named destination
 testPdfLinks(t: ref T)
@@ -383,6 +435,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Lazy", testLazy);
 	run("Pdf", testPdf);
 	run("PdfWords", testPdfWords);
+	run("PdfToUnicode", testPdfToUnicode);
 	run("PdfLinks", testPdfLinks);
 	run("PdfApart", testPdfApart);
 	run("Image", testImage);

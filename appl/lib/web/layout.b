@@ -12253,7 +12253,22 @@ visible(c: int): int
 # b is the box of an HTML element with this tag
 istag(b: ref Box, tag: int): int
 {
-	return b.node != 0 && curdoc != nil && curdoc.nodes[b.node].tag == tag && curdoc.nodes[b.node].ns == Dom->HTML;
+	# curdoc is the module's: a frame's document built since can be in
+	# it, and a node of the page's not one of its own
+	if(b.node <= 0 || curdoc == nil || b.node >= curdoc.n)
+		return 0;
+	nd := curdoc.nodes[b.node];
+	return nd != nil && nd.tag == tag && nd.ns == Dom->HTML;
+}
+
+# the document whose boxes root's are, for what reads it (istag), as lay
+# and paint set it: entry points that walk a tree set it too (a page
+# with a frame had the frame's, and a click on the page, or its height
+# asked, dereferenced the frame's nil nodes: Xenith stopped)
+setdoc(root: ref Box)
+{
+	if(root != nil && root.doc != nil)
+		curdoc = root.doc;
 }
 
 hasimage(st: ref St): int
@@ -12271,6 +12286,7 @@ height(root: ref Box): int
 {
 	if(root == hroot && laygen == hgen)
 		return hval;
+	setdoc(root);
 	h := root.y + root.h + root.mb;
 	if((e := overflowbottom(root, 0)) > h)
 		h = e;
@@ -15961,6 +15977,7 @@ paintdeco(dst: ref Image, f: ref Frag, o: Point)
 
 boxat(root: ref Box, p: Point): (int, ref Box)
 {
+	setdoc(root);
 	# sticky boxes where the last paint showed them: a click on BBC's
 	# header, stuck at the top, was taken for what scrolled under it
 	stickscroll(scrolled.y);
@@ -16177,6 +16194,7 @@ clipshit(b: ref Box): int
 
 boxes(root: ref Box, n: int): list of ref Box
 {
+	setdoc(root);
 	return collect(root, n, nil);
 }
 
@@ -16193,6 +16211,7 @@ kindnames := array[] of {"block", "inline", "text", "br", "replaced", "flex", "g
 
 dump(root: ref Box): string
 {
+	setdoc(root);
 	return dumpbox(root, "", Point(0, 0));
 }
 

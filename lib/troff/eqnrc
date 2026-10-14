@@ -1,0 +1,47 @@
+.\" eqnrc - eqn(1)'s settings for Libertinus Math: read before a
+.\" document's equations (book(1) puts it first when there are any)
+.\"
+.\" the mathematical symbols the text fonts lack, from the math font
+.fspecial R S
+.fspecial I S
+.fspecial B S
+.\" rules: fractions' and radicals' bars, as one line however long
+.char \(ru \f[S]\N'uni23AF'
+.char \(rn \f[S]\N'uni23AF'
+.EQ
+set text_limits 1
+bracketsizes ( 13 "(" "\N'parenleft.size1'" "\N'parenleft.size2'" "\N'parenleft.size3'" "\N'parenleft.size4'" "\N'parenleft.size5'" "\N'parenleft.size6'" "\N'parenleft.size7'" "\N'parenleft.size8'" "\N'parenleft.size9'" "\N'parenleft.size10'" "\N'parenleft.size11'" "\N'parenleft.size12'"
+bracketsizes ) 13 ")" "\N'parenright.size1'" "\N'parenright.size2'" "\N'parenright.size3'" "\N'parenright.size4'" "\N'parenright.size5'" "\N'parenright.size6'" "\N'parenright.size7'" "\N'parenright.size8'" "\N'parenright.size9'" "\N'parenright.size10'" "\N'parenright.size11'" "\N'parenright.size12'"
+bracketsizes [ 13 "[" "\N'bracketleft.size1'" "\N'bracketleft.size2'" "\N'bracketleft.size3'" "\N'bracketleft.size4'" "\N'bracketleft.size5'" "\N'bracketleft.size6'" "\N'bracketleft.size7'" "\N'bracketleft.size8'" "\N'bracketleft.size9'" "\N'bracketleft.size10'" "\N'bracketleft.size11'" "\N'bracketleft.size12'"
+bracketsizes ] 13 "]" "\N'bracketright.size1'" "\N'bracketright.size2'" "\N'bracketright.size3'" "\N'bracketright.size4'" "\N'bracketright.size5'" "\N'bracketright.size6'" "\N'bracketright.size7'" "\N'bracketright.size8'" "\N'bracketright.size9'" "\N'bracketright.size10'" "\N'bracketright.size11'" "\N'bracketright.size12'"
+bracketsizes { 13 "{" "\N'braceleft.size1'" "\N'braceleft.size2'" "\N'braceleft.size3'" "\N'braceleft.size4'" "\N'braceleft.size5'" "\N'braceleft.size6'" "\N'braceleft.size7'" "\N'braceleft.size8'" "\N'braceleft.size9'" "\N'braceleft.size10'" "\N'braceleft.size11'" "\N'braceleft.size12'"
+bracketsizes } 13 "}" "\N'braceright.size1'" "\N'braceright.size2'" "\N'braceright.size3'" "\N'braceright.size4'" "\N'braceright.size5'" "\N'braceright.size6'" "\N'braceright.size7'" "\N'braceright.size8'" "\N'braceright.size9'" "\N'braceright.size10'" "\N'braceright.size11'" "\N'braceright.size12'"
+bracketsizes \(lc 13 "\N'uni2308'" "\N'uni2308.size1'" "\N'uni2308.size2'" "\N'uni2308.size3'" "\N'uni2308.size4'" "\N'uni2308.size5'" "\N'uni2308.size6'" "\N'uni2308.size7'" "\N'uni2308.size8'" "\N'uni2308.size9'" "\N'uni2308.size10'" "\N'uni2308.size11'" "\N'uni2308.size12'"
+bracketsizes \(rc 13 "\N'uni2309'" "\N'uni2309.size1'" "\N'uni2309.size2'" "\N'uni2309.size3'" "\N'uni2309.size4'" "\N'uni2309.size5'" "\N'uni2309.size6'" "\N'uni2309.size7'" "\N'uni2309.size8'" "\N'uni2309.size9'" "\N'uni2309.size10'" "\N'uni2309.size11'" "\N'uni2309.size12'"
+bracketsizes \(lf 13 "\N'uni230A'" "\N'uni230A.size1'" "\N'uni230A.size2'" "\N'uni230A.size3'" "\N'uni230A.size4'" "\N'uni230A.size5'" "\N'uni230A.size6'" "\N'uni230A.size7'" "\N'uni230A.size8'" "\N'uni230A.size9'" "\N'uni230A.size10'" "\N'uni230A.size11'" "\N'uni230A.size12'"
+bracketsizes \(rf 13 "\N'uni230B'" "\N'uni230B.size1'" "\N'uni230B.size2'" "\N'uni230B.size3'" "\N'uni230B.size4'" "\N'uni230B.size5'" "\N'uni230B.size6'" "\N'uni230B.size7'" "\N'uni230B.size8'" "\N'uni230B.size9'" "\N'uni230B.size10'" "\N'uni230B.size11'" "\N'uni230B.size12'"
+bracketsizes \(la 13 "\N'uni27E8'" "\N'uni27E8.size1'" "\N'uni27E8.size2'" "\N'uni27E8.size3'" "\N'uni27E8.size4'" "\N'uni27E8.size5'" "\N'uni27E8.size6'" "\N'uni27E8.size7'" "\N'uni27E8.size8'" "\N'uni27E8.size9'" "\N'uni27E8.size10'" "\N'uni27E8.size11'" "\N'uni27E8.size12'"
+bracketsizes \(ra 13 "\N'uni27E9'" "\N'uni27E9.size1'" "\N'uni27E9.size2'" "\N'uni27E9.size3'" "\N'uni27E9.size4'" "\N'uni27E9.size5'" "\N'uni27E9.size6'" "\N'uni27E9.size7'" "\N'uni27E9.size8'" "\N'uni27E9.size9'" "\N'uni27E9.size10'" "\N'uni27E9.size11'" "\N'uni27E9.size12'"
+bracketsizes | 13 "|" "\N'bar.size1'" "\N'bar.size2'" "\N'bar.size3'" "\N'bar.size4'" "\N'bar.size5'" "\N'bar.size6'" "\N'bar.size7'" "\N'bar.size8'" "\N'bar.size9'" "\N'bar.size10'" "\N'bar.size11'" "\N'bar.size12'"
+bracketsizes \(sr 8 "\(sr" "\N'radical.size1'" "\N'radical.size2'" "\N'radical.size3'" "\N'radical.size4'" "\N'radical.size5'" "\N'radical.size6'" "\N'radical.size7'"
+bracketpieces ( "⎛" "⎜" "⎝" ""
+bracketpieces ) "⎞" "⎟" "⎠" ""
+bracketpieces [ "⎡" "⎢" "⎣" ""
+bracketpieces ] "⎤" "⎥" "⎦" ""
+bracketpieces { "⎧" "⎪" "⎩" "⎨"
+bracketpieces } "⎫" "⎪" "⎭" "⎬"
+bracketpieces \(lc "⎡" "⎢" "⎢" ""
+bracketpieces \(rc "⎤" "⎥" "⎥" ""
+bracketpieces \(lf "⎢" "⎢" "⎣" ""
+bracketpieces \(rf "⎥" "⎥" "⎦" ""
+bracketpieces \(sr "\N'radical.tp'" "\N'radical.md'" "\N'radical.bt'" ""
+define sum @ifdisplay {type op vcenter roman "\N'summation.size1'"} {type op vcenter roman "\N'summation'"}@
+define prod @ifdisplay {type op vcenter roman "\N'product.size1'"} {type op vcenter roman "\N'product'"}@
+define coprod @ifdisplay {type op vcenter roman "\N'uni2210.size1'"} {type op vcenter roman "\N'uni2210'"}@
+define int @ifdisplay {type op vcenter roman "\N'integral.size1'"} {type op vcenter roman "\N'integral'"}@
+define iint @ifdisplay {type op vcenter roman "\N'uni222C.size1'"} {type op vcenter roman "\N'uni222C'"}@
+define oint @ifdisplay {type op vcenter roman "\N'uni222E.size1'"} {type op vcenter roman "\N'uni222E'"}@
+define bigcup @ifdisplay {type op vcenter roman "\N'uni22C3.size1'"} {type op vcenter roman "\N'uni22C3'"}@
+define bigcap @ifdisplay {type op vcenter roman "\N'uni22C2.size1'"} {type op vcenter roman "\N'uni22C2'"}@
+.EN
+.lf 1

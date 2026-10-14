@@ -5,6 +5,7 @@ DIRS=\
 	auxi\
 	dict\
 	disk\
+	eqn\
 	git\
 	install\
 	ip\

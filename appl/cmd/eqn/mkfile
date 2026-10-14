@@ -1,0 +1,18 @@
+<$ROOT/mkconfig
+
+TARG=	eqn.dis\
+
+MODULES=\
+	box.b\
+	def.b\
+	src.b\
+	tok.b\
+
+SYSMODULES= \
+	bufio.m\
+	draw.m\
+	sys.m\
+
+DISBIN=$ROOT/dis
+
+<$ROOT/mkfiles/mkdis

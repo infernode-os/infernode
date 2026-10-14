@@ -11,13 +11,14 @@ to read in InferNode's document views.
 | Command | What it does | From |
 |---|---|---|
 | `troff` | Sets troff's input: paragraph-at-once filling, OpenType kerning, ligatures and features, hyphenation (English and Ancient Greek) | Neatroff, translated (byte-identical output on ~500 documents) |
+| `eqn` | Mathematics: TeX's rules for setting it, in troff; Libertinus Math's sized brackets, radicals and operators (`/lib/troff/eqnrc`) | Neateqn, translated (byte-identical output) |
 | `refer` | Citations by key from BibTeX's and refer's databases; with `-S chicago`, the *Chicago Manual of Style*'s notes and bibliography (18th edition) | Neatrefer, translated, with a BibTeX reader and styles of its own |
 | `tr2pdf` | Troff's output as PDF: OpenType fonts embedded, compressed, with ToUnicode maps (text can be searched and copied) | Neatpost's PDF writer, translated |
-| `mkfn` | Font descriptions for troff from OpenType, TrueType and AFM fonts | Neatmkfn, translated |
-| `book` | Runs them: refer, troff `-mbook` until its references settle, tr2pdf | |
+| `mkfn` | Font descriptions for troff from OpenType, TrueType and AFM fonts, with each glyph's bounding box (CFF's too) | Neatmkfn, translated |
+| `book` | Runs them: refer, eqn (if there are equations), troff `-mbook` until its references settle, tr2pdf | |
 
-`troff`, and `refer` without a style, write what the C programs they
-came from write, byte for byte; `tr2pdf -c` and `mkfn -c` do too.
+`troff`, `eqn`, and `refer` without a style, write what the C programs
+they came from write, byte for byte; `tr2pdf -c` and `mkfn -c` do too.
 Without `-c` those two differ where troff and its readers are better
 served (their commits list how).
 
@@ -49,6 +50,8 @@ LaTeX without being LaTeX.
 | `.cite key [loc][; key loc]` | `\autocite[loc]{key}` (biblatex-chicago) |
 | `\*[cite key loc]` within a note of one's own | `\cite[loc]{key}` |
 | `.bibliography` | `\printbibliography` |
+| `$...$` (after `delim $$`) | `$...$` |
+| `.EQ` ... `.EN`; `.EQ (1.1)` | `\[...\]`; `equation` with `\tag{1.1}` |
 | `\fI...\fP`, `\fB...\fP` | `\emph{...}`, `\textbf{...}` |
 
 A footnote's mark follows the text before it: end that line with `\c`
@@ -93,6 +96,31 @@ rules and `tests/refer/` for examples.
 A style is a module (`module/referstyle.m`): another is a file of its
 own under `appl/cmd/refer/style`.
 
+## Mathematics: `eqn`
+
+Equations are written in eqn's language (Kernighan and Cherry's, with
+groff's additions), and set by TeX's rules:
+
+    .EQ
+    delim $$
+    .EN
+    The roots of $a x sup 2 + b x + c = 0$ are
+    .EQ (1.1)
+    x = {- b +- sqrt {b sup 2 - 4ac}} over {2a}
+    .EN
+
+`book` runs eqn when a book has equations, after
+`/lib/troff/eqnrc`: its settings for Libertinus Math. Brackets (`left (`
+... `right )`) take the font's larger sizes, then are built from its
+pieces; radicals likewise; a displayed sum, product or integral is the
+font's display size, an inline one the text size with its limits beside
+it (`ifdisplay` and `set text_limits 1`, which eqn has beyond Neateqn).
+A display is centred, its label at the right on its baseline.
+
+Glyphs' heights and depths come from the fonts' descriptions: `mkfn`
+reads each glyph's bounding box from its outline, CFF's (Libertinus's)
+as well as TrueType's.
+
 ## Fonts
 
 The device `utf` (`lib/troff/devutf`) sets in Libertinus: Serif (R, I,
@@ -114,6 +142,7 @@ after the work above is done.
 
 ## Still to come
 
-eqn (Neateqn), tbl and pic; an index; the LaTeX converter; `-man`;
-microtypography (protrusion and expansion); fonts falling back for
-characters a font lacks; font subsetting in PDFs.
+tbl and pic; an index; the LaTeX converter; `-man`; microtypography
+(protrusion and expansion); fonts falling back for characters a font
+lacks; font subsetting in PDFs; eqn's bars drawn as lines (they are
+glyphs now, and copied with the text).

@@ -534,6 +534,47 @@
 ..
 .\"
 .\" ---------------------------------------------------------------
+.\" equations: eqn's displays, centred, a label (.EQ (1.1)) at the right
+.\"
+.\" the equation's depth, as eqn last measured it, when it is set
+.ds .eqnbeg \R'book-eqlly \\n[bblly]'
+.de EQ
+.br
+.ds book-eqlabel \\$1
+.di book-eqd
+.nf
+..
+.de EN
+.br
+.di
+.\" the line's extra space below: the equation's depth past the line's own
+.nr book-eqpost \\n[book-eqlly]-(\\n[.v]-\\n[.s]p+(\\n[.s]p*25u/100u))
+.if \\n[book-eqpost]<0 .nr book-eqpost 0
+.fi
+.if \\n[dn] \{\
+.	book-begin
+.	nr book-eqw \\n[dl]
+.	sp 0.5v
+.	ne \\n[dn]u
+.	nf
+.	in (\\n[book-ll]u-\\n[book-eqw]u)/2u
+.	book-eqd
+.	in 0
+.	fi
+.	nr book-eqe \\n[.d]
+.	if !'\\*[book-eqlabel]'' \{\
+.\"		on the equation's baseline
+.		sp -(\\n[book-eqpost]u+1v)
+.		lt \\n[book-ll]u
+.		tl '''\\*[book-eqlabel]'
+.		sp |\\n[book-eqe]u
+.	\}
+.	sp 0.5v
+.	nr book-noindent 1
+.\}
+..
+.\"
+.\" ---------------------------------------------------------------
 .\" refer's citations and bibliography
 .\"
 .ds book-citenotes fn	\" notes citing: fn (footnotes) or en (endnotes)

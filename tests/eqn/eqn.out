@@ -1,0 +1,2040 @@
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 \n[.eqnsz]
+.nr 04 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 05 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.ds 12 "
+.nr 03 0\w'\*(12'
+.if -\n[bbury]>\n(04 .as 12 "\x'\n[bbury]u+\n(04u'
+.if \n[bblly]>\n(05 .as 12 "\x'\n[bblly]u-\n(05u'
+.nr MK 0
+.lf 6
+.EN
+.eo
+.ds 10 "Inline 
+.ec
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.ds 12 "\s[\n(02]\,\f2a
+.nr 05 0\w'\*(12'
+.as 12 "\/
+.ps \n(02
+.nr 04 0\w'\*(12'
+.nr 07 0-\n[bbury]
+.nr 06 0\n[bblly]
+.as 12 "\h'5m/100u'
+.ds 13 "\s[\n(03]\f12
+.nr 09 0\w'\*(13'
+.nr 11 0\n[bblly]
+.nr 13 0\n(07u-(38m/100u)
+.if \n(13<(37m/100u) .nr 13 (37m/100u)
+.if \n(13<(\n(11+(45m/100u/4)) .nr 13 0\n(11+(45m/100u/4)
+.ds 14 "\s[\n(03]\,\f2i\/
+.nr 08 0\w'\*(14'
+.nr 12 0-\n[bbury]
+.nr 14 0\n(06u+(5m/100u)
+.if \n(14<(23m/100u) .nr 14 (23m/100u)
+.if (\n(13-\n(11)-(\n(12-\n(14)<(4m/100u*4) \{\
+.nr 14 (4m/100u*4)+\n(12-(\n(13-\n(11)
+.nr 15 (45m/100u*4/5)-(\n(13-\n(11)
+.if \n(15>0 .nr 13 +\n(15
+.if \n(15>0 .nr 14 -\n(15 \}
+.as 12 "\v'-\n(13u'\*(13\v'\n(13u'
+.as 12 "\h'-\n(09u'
+.nr 16 (\n(04-\n(05)
+.if \n(07>0 .nr 16 (\n(07+\n(14)*(\n(04-\n(05)/\n(07
+.nr 08 -\n(16
+.as 12 "\h'-\n(16u'
+.as 12 "\v'\n(14u'\*(14\v'-\n(14u'
+.as 12 "\h'-\n(08u'
+.ie \n(08>=\n(09 .nr 10 0+\n(08
+.el .nr 10 0+\n(09
+.as 12 "\h'+\n(10u'
+.as 12 "\h'12m/100u'
+.ds 13 "
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\,\f2b
+.as 13 "\*(12
+.as 13 "\/
+.nr 16 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 15 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 03 0\w'\*(13'
+.if -\n[bbury]>\n(16 .as 13 "\x'\n[bbury]u+\n(16u'
+.if \n[bblly]>\n(15 .as 13 "\x'\n[bblly]u-\n(15u'
+.nr MK 0
+.as 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(13\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 7
+.eo
+.as 10 " and 
+.ec
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.nr 03 \n(02+2
+.ds 12 "\s[\n(03]\f1\(su
+.nr 04 0\w'\*(12'
+.nr 05 0-\n[bbury]
+.nr 06 0\n[bblly]
+.nr 07 0-\n(06+\n(05/2-(\n(02p*23u/100u)
+.ds 13 "\v'\n(07u'\*(12\v'-\n(07u'
+.ds 12 "
+.as 12 "\*(13
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 07 0\w'\*(12'
+.nr 06 0-\n[bbury]
+.nr 05 0\n[bblly]
+.ps \n(02
+.ds 13 "\s[\n(03]\,\f2n
+.nr 08 0\w'\*(13'
+.nr 09 0\n[bblly]
+.ds 14 "\s[\n(03]\,\f2i\/\f1=\f10
+.nr 04 0\w'\*(14'
+.nr 10 0-\n[bbury]
+.ie \n(04>=\n(08 .nr 13 0+\n(04
+.el .nr 13 0+\n(08
+.if \n(07>\n(13 .nr 13 0\n(07
+.ds 15 "\h'\n(13u-\n(07u/2u'
+.as 15 "\*(12
+.as 15 "\h'-\n(07u/2u'
+.nr 11 (20m/100u)-\n(09
+.if \n(11<(11m/100u) .nr 11 (11m/100u)
+.nr 11 +\n(06+\n(09
+.as 15 "\h'-\n(08u/2u'\v'-\n(11u'\*(13\v'\n(11u'\h'-\n(08u/2u'
+.nr 12 (60m/100u)-\n(10
+.if \n(12<(17m/100u) .nr 12 (17m/100u)
+.nr 12 +\n(05+\n(10
+.as 15 "\h'-\n(04u/2u'\v'\n(12u'\*(14\v'-\n(12u'\h'-\n(04u/2u'
+.as 15 "\h'\n(13u/2u'
+.ds 13 "
+.as 13 "\*(15
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.ds 15 "\s[\n(02]\,\f2x
+.nr 12 0\w'\*(15'
+.as 15 "\/
+.ps \n(02
+.nr 13 0\w'\*(15'
+.nr 10 0-\n[bbury]
+.nr 11 0\n[bblly]
+.as 15 "\h'5m/100u'
+.ds 14 "\s[\n(03]\,\f2i\/
+.nr 09 0\w'\*(14'
+.nr 06 0-\n[bbury]
+.nr 14 0\n(11u+(5m/100u)
+.if \n(14<(20m/100u) .nr 14 (20m/100u)
+.if \n(14<(\n(06-(45m/100u*4/5)) .nr 14 0\n(06-(45m/100u*4/5)
+.nr 16 (\n(13-\n(12)
+.if \n(10>0 .nr 16 (\n(10+\n(14)*(\n(13-\n(12)/\n(10
+.nr 09 -\n(16
+.as 15 "\h'-\n(16u'
+.as 15 "\v'\n(14u'\*(14\v'-\n(14u'
+.as 15 "\h'12m/100u'
+.as 13 "\s[\En(.s*17u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(15
+.nr 16 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 15 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 03 0\w'\*(13'
+.if -\n[bbury]>\n(16 .as 13 "\x'\n[bbury]u+\n(16u'
+.if \n[bblly]>\n(15 .as 13 "\x'\n[bblly]u-\n(15u'
+.nr MK 0
+.as 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(13\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 7
+.eo
+.as 10 " and 
+.ec
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.ps \n(02
+.ds 12 "\s[\n(02]\,\f2x\/
+.nr 04 0\w'\*(12'
+.nr 07 0-\n[bbury]
+.nr 06 0\n[bblly]
+.as 12 "\h'5m/100u'
+.ds 13 "\s[\n(03]\f12
+.nr 09 0\w'\*(13'
+.nr 11 0\n[bblly]
+.nr 13 0\n(07u-(38m/100u)
+.if \n(13<(37m/100u) .nr 13 (37m/100u)
+.if \n(13<(\n(11+(45m/100u/4)) .nr 13 0\n(11+(45m/100u/4)
+.as 12 "\v'-\n(13u'\*(13\v'\n(13u'
+.as 12 "\h'12m/100u'
+.ds 13 "
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ds 12 "\s[\n(02]\,\f2a\/
+.nr 03 0\w'\*(12'
+.nr 16 0\n[bblly]
+.ds 14 "\s[\n(02]\,\f2b\/\h'22u*\n(02p/100u'\f1\(pl\h'22u*\n(02p/100u'\,\f2c\/
+.nr 15 0\w'\*(14'
+.nr 14 0-\n[bbury]
+.ie \n(03>=\n(15 .nr 13 0+\n(03
+.el .nr 13 0+\n(15
+.ps \n(02
+.nr 10 0\w'\(ru'
+.nr 09 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.nr 12 040m/100u
+.nr 11 036m/100u
+.nr 06 (\n(12-\n(16)-((23m/100u)+(4m/100u/2))
+.if \n(06<(6m/100u) .nr 12 +(6m/100u)-\n(06
+.nr 06 ((23m/100u)-(4m/100u/2))-(\n(14-\n(11)
+.if \n(06<(6m/100u) .nr 11 +(6m/100u)-\n(06
+.nr 07 0-\n(09+\n(08/2-(23m/100u)
+.nr 13 +2*(7m/100u)
+.ds 15 "\h'\n(02p*12u/100u'\v'\n(07u'\f[\n(.f]\s[\n(02]\l'\n(13u'\v'-\n(07u'\h'-\n(13u/2u'\h'-\n(03u/2u'\v'-\n(12u'\*(12\v'\n(12u'\h'-\n(03u/2u'\h'-\n(15u/2u'\v'\n(11u'\*(14\v'-\n(11u'\h'(-\n(15u+\n(13u)/2u'\h'\n(02p*12u/100u'
+.ds 14 "
+.as 14 "\*(15
+.ft 1
+.nr 06 0\w'\*(14'
+.nr 07 0\n[bblly]-\n[bbury]-2
+.nr 09 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.ps \n(02
+.ie \n(08>=\n(09 .nr 10 0+\n(08
+.el .nr 10 0+\n(09
+.ds 15 "
+.if '\*(15'' .if \w'(' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "(
+.if '\*(15'' .if \w'\N'parenleftbig'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenleftbig'
+.if '\*(15'' .if \w'\N'parenleftBig'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenleftBig'
+.if '\*(15'' .if \w'\N'parenleftbigg'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenleftbigg'
+.if '\*(15'' .if \w'\N'parenleftBigg'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenleftBigg'
+.if '\*(15'' \{\
+.nr 15 0\w'\(LT'
+.nr 16 0\n[bblly]-\n[bbury]-2
+.nr 05 0\n[bblly]-1
+.nr 03 0-\n[bbury]-1
+.nr 04 0\w'\(LX'
+.nr 17 0\n[bblly]-\n[bbury]-2
+.nr 19 0\n[bblly]-1
+.nr 18 0-\n[bbury]-1
+.nr 20 0\w'\(LB'
+.nr 21 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 22 0-\n[bbury]-1
+.nr 12 \n(10*2-\n(16-\n(21*11/10/\n(17
+.if \n(12<0 .nr 12 0
+.de 12
+.if \\n(13<\\n(12 .as 15 "\v'-\\n(19u'\(LX\h'-\\n(04u'\v'-\\n(18u'
+.if \\n+(13<\\n(12 .12
+..
+.ds 15 "\v'-\n(23u'\(LB\h'-\n(20u'\v'-\n(22u'
+.nr 13 0 1
+.12
+.as 15 "\v'-\n(05u'\(LT\h'-\n(15u'\v'-\n(03u'
+.as 15 "\v'\n(12u*\n(17u+\n(21u+\n(16u+0u'
+.as 15 "\h'\n(04u'
+.  \}
+.nr 14 0\w'\*(15'
+.nr 13 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 12 0-\n[bbury]-1
+.nr 11 0-\n(23+\n(12/2-(\n(02p*23u/100u)
+.ds 12 "\f[\n(.f]\s[\n(.s]\v'\n(11u'\*(15\v'-\n(11u'
+.as 12 "\*(14
+.ie \n(08>=\n(09 .nr 11 0+\n(08
+.el .nr 11 0+\n(09
+.ds 15 "
+.if '\*(15'' .if \w')' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 ")
+.if '\*(15'' .if \w'\N'parenrightbig'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenrightbig'
+.if '\*(15'' .if \w'\N'parenrightBig'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenrightBig'
+.if '\*(15'' .if \w'\N'parenrightbigg'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenrightbigg'
+.if '\*(15'' .if \w'\N'parenrightBigg'' .if (\n(08-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(09*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'parenrightBigg'
+.if '\*(15'' \{\
+.nr 14 0\w'\(RT'
+.nr 22 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 21 0-\n[bbury]-1
+.nr 19 0\w'\(RX'
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 04 0\n[bblly]-1
+.nr 17 0-\n[bbury]-1
+.nr 05 0\w'\(RB'
+.nr 03 0\n[bblly]-\n[bbury]-2
+.nr 15 0\n[bblly]-1
+.nr 16 0-\n[bbury]-1
+.nr 23 \n(11*2-\n(22-\n(03*11/10/\n(18
+.if \n(23<0 .nr 23 0
+.de 16
+.if \\n(12<\\n(23 .as 15 "\v'-\\n(04u'\(RX\h'-\\n(19u'\v'-\\n(17u'
+.if \\n+(12<\\n(23 .16
+..
+.ds 15 "\v'-\n(15u'\(RB\h'-\n(05u'\v'-\n(16u'
+.nr 12 0 1
+.16
+.as 15 "\v'-\n(20u'\(RT\h'-\n(14u'\v'-\n(21u'
+.as 15 "\v'\n(23u*\n(18u+\n(03u+\n(22u+0u'
+.as 15 "\h'\n(19u'
+.  \}
+.nr 13 0\w'\*(15'
+.nr 12 0\n[bblly]-\n[bbury]-2
+.nr 15 0\n[bblly]-1
+.nr 23 0-\n[bbury]-1
+.nr 10 0-\n(15+\n(23/2-(\n(02p*23u/100u)
+.as 12 "\f[\n(.f]\s[\n(.s]\v'\n(10u'\*(15\v'-\n(10u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.nr 08 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 07 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 09 0\w'\*(13'
+.if -\n[bbury]>\n(08 .as 13 "\x'\n[bbury]u+\n(08u'
+.if \n[bblly]>\n(07 .as 13 "\x'\n[bblly]u-\n(07u'
+.nr MK 0
+.as 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(13\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 7
+.lf 8
+\*(10.
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.ds 13 "\s[\n(02]\,\f2x
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1=
+.as 12 "\*(13
+.ds 13 "
+.ds 14 "\s[\n(02]\f1\(mi\,\f2b
+.as 13 "\*(14
+.as 13 "\/
+.as 13 "\h'22u*\n(02p/100u'
+.ds 14 "\s[\n(02]\f1\(+-
+.as 13 "\*(14
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.ps \n(02
+.ds 14 "\s[\n(02]\,\f2b\/
+.nr 04 0\w'\*(14'
+.nr 07 0-\n[bbury]
+.nr 06 0\n[bblly]
+.as 14 "\h'5m/100u'
+.ds 15 "\s[\n(03]\f12
+.nr 09 0\w'\*(15'
+.nr 11 0\n[bblly]
+.nr 13 0\n(07u-(38m/100u)
+.if \n(13<(28m/100u) .nr 13 (28m/100u)
+.if \n(13<(\n(11+(45m/100u/4)) .nr 13 0\n(11+(45m/100u/4)
+.as 14 "\v'-\n(13u'\*(15\v'\n(13u'
+.as 14 "\h'12m/100u'
+.ds 15 "
+.as 15 "\*(14
+.as 15 "\h'22u*\n(02p/100u'
+.ds 14 "\s[\n(02]\f1\(mi
+.as 15 "\*(14
+.as 15 "\h'22u*\n(02p/100u'
+.ds 14 "\s[\n(02]\f14\,\f2a\f2c
+.as 15 "\*(14
+.ft 1
+.as 15 "\/
+.nr 15 0\w'\*(15'
+.nr 14 0\n[bblly]-\n[bbury]-2
+.nr 12 0\n[bblly]-1
+.nr 13 0-\n[bbury]-1
+.ps \n(02
+.nr 16 0\n(13+\n(12+(2*4m/100u)+(45m/100u/4)
+.nr 07 0\n(16/2*11/10
+.ds 16 "
+.if '\*(16'' .if \w'\(sr' .if (\n(07+\n(07)<=(-\n[bbury]+\n[bblly]) .ds 16 "\(sr
+.if '\*(16'' .if \w'\N'radical'' .if (\n(07+\n(07)<=(-\n[bbury]+\n[bblly]) .ds 16 "\N'radical'
+.if '\*(16'' .if \w'\N'radicalbig'' .if (\n(07+\n(07)<=(-\n[bbury]+\n[bblly]) .ds 16 "\N'radicalbig'
+.if '\*(16'' .if \w'\N'radicalBig'' .if (\n(07+\n(07)<=(-\n[bbury]+\n[bblly]) .ds 16 "\N'radicalBig'
+.if '\*(16'' .if \w'\N'radicalbigg'' .if (\n(07+\n(07)<=(-\n[bbury]+\n[bblly]) .ds 16 "\N'radicalbigg'
+.if '\*(16'' .if \w'\N'radicalBigg'' .if (\n(07+\n(07)<=(-\n[bbury]+\n[bblly]) .ds 16 "\N'radicalBigg'
+.if \w'\N'radicalvertex'' .if '\*(16'' \{\
+.nr 17 0\w'\N'radicaltp''
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 19 0-\n[bbury]-1
+.nr 21 0\w'\N'radicalvertex''
+.nr 22 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 23 0-\n[bbury]-1
+.nr 25 0\w'\N'radicalbt''
+.nr 26 0\n[bblly]-\n[bbury]-2
+.nr 28 0\n[bblly]-1
+.nr 27 0-\n[bbury]-1
+.nr 06 \n(07*2-\n(18-\n(26*11/10/\n(22
+.if \n(06<0 .nr 06 0
+.de 17
+.if \\n(05<\\n(06 .as 16 "\v'-\\n(24u'\N'radicalvertex'\h'-\\n(21u'\v'-\\n(23u'
+.if \\n+(05<\\n(06 .17
+..
+.ds 16 "\v'-\n(28u'\N'radicalbt'\h'-\n(25u'\v'-\n(27u'
+.nr 05 0 1
+.17
+.as 16 "\v'-\n(20u'\N'radicaltp'\h'-\n(17u'\v'-\n(19u'
+.as 16 "\v'\n(06u*\n(22u+\n(26u+\n(18u+0u'
+.as 16 "\h'\n(21u'
+.  \}
+.if '\*(16'' \{\
+.nr 04 0\w'\(sr'
+.nr 05 0\n[bblly]-\n[bbury]-2
+.nr 28 0\n[bblly]-1
+.nr 06 0-\n[bbury]-1
+.ie \n(16<(\n(06+\n(28) .nr 11 0\n(.s
+.el .nr 11 0\n(16*\n(.s/(\n(06+\n(28-(4m/100u))+1
+.ps \n(11
+.ds 16 "\(sr
+.  \}
+.nr 28 0\w'\*(16'
+.nr 06 0\n[bblly]-\n[bbury]-2
+.nr 04 0\n[bblly]-1
+.nr 05 0-\n[bbury]-1
+.nr 09 \n[bburx]
+.nr 27 0\w'\(rn'
+.nr 26 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 25 0-\n[bbury]-1
+.nr 08 0\n(09-\n[bbllx]-(4m/100u)
+.nr 10 0
+.if \n(15<\n(27 .nr 10 0\n(27-\n(15
+.ds 14 "\s[\n(.s]\f[\n(.f]\v'\n(25u'\h'\n(08u'\l'\n(15u+\n(10u\(rn'\h'-\n(08u'\v'-\n(25u'\h'-\n(15u-\n(10u'\v'\n(05u'\*(16\v'-\n(05u'\h'\n(15u+\n(10u'
+.nr 08 0\w'\*(14'
+.nr 09 0\n[bblly]-\n[bbury]-2
+.nr 11 0\n[bblly]-1
+.nr 10 0-\n[bbury]-1
+.nr 03 0(4m/100u)+(45m/100u/4)
+.if \n(11>(\n(13+\n(12+\n(03) .nr 03 (\n(03+\n(11-\n(13-\n(12)/2
+.nr 03 +\n(13
+.ds 16 "\v'-\n(03u'\*(14\v'\n(03u'\h'-\n(15u'\*(15
+.as 13 "\h'22u*\n(02p/100u'
+.as 13 "\*(16
+.ft 1
+.nr 16 0\w'\*(13'
+.nr 03 0\n[bblly]
+.ds 16 "\s[\n(02]\f12\,\f2a\/
+.nr 11 0\w'\*(16'
+.nr 10 0-\n[bbury]
+.ie \n(16>=\n(11 .nr 09 0+\n(16
+.el .nr 09 0+\n(11
+.ps \n(02
+.nr 13 0\w'\(ru'
+.nr 14 0\n[bblly]-1
+.nr 15 0-\n[bbury]-1
+.nr 08 070m/100u
+.nr 12 070m/100u
+.nr 25 (\n(08-\n(03)-((23m/100u)+(4m/100u/2))
+.if \n(25<(14m/100u) .nr 08 +(14m/100u)-\n(25
+.nr 25 ((23m/100u)-(4m/100u/2))-(\n(10-\n(12)
+.if \n(25<(14m/100u) .nr 12 +(14m/100u)-\n(25
+.nr 24 0-\n(14+\n(15/2-(23m/100u)
+.nr 09 +2*(7m/100u)
+.ds 15 "\h'\n(02p*12u/100u'\v'\n(24u'\f[\n(.f]\s[\n(02]\l'\n(09u'\v'-\n(24u'\h'-\n(09u/2u'\h'-\n(16u/2u'\v'-\n(08u'\*(13\v'\n(08u'\h'-\n(16u/2u'\h'-\n(11u/2u'\v'\n(12u'\*(16\v'-\n(12u'\h'(-\n(11u+\n(09u)/2u'\h'\n(02p*12u/100u'
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 12 "\*(15
+.nr 24 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 15 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 25 0\w'\*(12'
+.if -\n[bbury]>\n(24 .as 12 "\x'\n[bbury]u+\n(24u'
+.if \n[bblly]>\n(15 .as 12 "\x'\n[bblly]u-\n(15u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(12\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 9
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 10
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.ds 12 "
+.ds 13 "\s[\n(03]\,\f2n
+.as 12 "\*(13
+.as 12 "\/
+.ds 13 "\s[\n(03]\f1\(->
+.as 12 "\*(13
+.ds 13 "\s[\n(03]\,\f2\(if
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f1lim
+.nr 04 0\w'\*(13'
+.nr 05 0-\n[bbury]
+.nr 06 0\n[bblly]
+.ps \n(02
+.nr 07 0\w'\*(12'
+.nr 10 0-\n[bbury]
+.nr 13 \n(07
+.if \n(04>\n(13 .nr 13 0\n(04
+.ds 14 "\h'\n(13u-\n(04u/2u'
+.as 14 "\*(13
+.as 14 "\h'-\n(04u/2u'
+.nr 12 (60m/100u)-\n(10
+.if \n(12<(17m/100u) .nr 12 (17m/100u)
+.nr 12 +\n(06+\n(10
+.as 14 "\h'-\n(07u/2u'\v'\n(12u'\*(12\v'-\n(12u'\h'-\n(07u/2u'
+.as 14 "\h'\n(13u/2u'
+.ds 12 "
+.as 12 "\*(14
+.nr 03 \n(02+2
+.ds 14 "\s[\n(03]\f1\(su
+.nr 13 0\w'\*(14'
+.nr 12 0-\n[bbury]
+.nr 11 0\n[bblly]
+.nr 10 0-\n(11+\n(12/2-(\n(02p*23u/100u)
+.ds 13 "\v'\n(10u'\*(14\v'-\n(10u'
+.ds 14 "
+.as 14 "\*(13
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.ds 13 "
+.ds 15 "\s[\n(03]\,\f2k\/\f1=\f11
+.as 13 "\*(15
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 10 0\w'\*(14'
+.nr 11 0-\n[bbury]
+.nr 12 0\n[bblly]
+.ps \n(02
+.ds 15 "\s[\n(03]\,\f2n
+.nr 09 0\w'\*(15'
+.nr 08 0\n[bblly]
+.nr 13 0\w'\*(13'
+.nr 07 0-\n[bbury]
+.ie \n(13>=\n(09 .nr 04 0+\n(13
+.el .nr 04 0+\n(09
+.if \n(10>\n(04 .nr 04 0\n(10
+.ds 16 "\h'\n(04u-\n(10u/2u'
+.as 16 "\*(14
+.as 16 "\h'-\n(10u/2u'
+.nr 06 (20m/100u)-\n(08
+.if \n(06<(11m/100u) .nr 06 (11m/100u)
+.nr 06 +\n(11+\n(08
+.as 16 "\h'-\n(09u/2u'\v'-\n(06u'\*(15\v'\n(06u'\h'-\n(09u/2u'
+.nr 05 (60m/100u)-\n(07
+.if \n(05<(17m/100u) .nr 05 (17m/100u)
+.nr 05 +\n(12+\n(07
+.as 16 "\h'-\n(13u/2u'\v'\n(05u'\*(13\v'-\n(05u'\h'-\n(13u/2u'
+.as 16 "\h'\n(04u/2u'
+.as 12 "\s[\En(.s*17u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 12 "\*(16
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.ps \n(02
+.ds 16 "\s[\n(02]\,\f2k\/
+.nr 04 0\w'\*(16'
+.nr 07 0-\n[bbury]
+.nr 06 0\n[bblly]
+.as 16 "\h'5m/100u'
+.ds 15 "\s[\n(03]\f12
+.nr 09 0\w'\*(15'
+.nr 12 0\n[bblly]
+.nr 10 0\n(07u-(38m/100u)
+.if \n(10<(28m/100u) .nr 10 (28m/100u)
+.if \n(10<(\n(12+(45m/100u/4)) .nr 10 0\n(12+(45m/100u/4)
+.as 16 "\v'-\n(10u'\*(15\v'\n(10u'
+.as 16 "\h'12m/100u'
+.ds 15 "
+.as 15 "\*(16
+.ft 1
+.ds 16 "\s[\n(02]\f11
+.nr 03 0\w'\*(16'
+.nr 16 0\n[bblly]
+.nr 15 0\w'\*(15'
+.nr 14 0-\n[bbury]
+.ie \n(03>=\n(15 .nr 10 0+\n(03
+.el .nr 10 0+\n(15
+.ps \n(02
+.nr 13 0\w'\(ru'
+.nr 09 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.nr 11 070m/100u
+.nr 12 070m/100u
+.nr 06 (\n(11-\n(16)-((23m/100u)+(4m/100u/2))
+.if \n(06<(14m/100u) .nr 11 +(14m/100u)-\n(06
+.nr 06 ((23m/100u)-(4m/100u/2))-(\n(14-\n(12)
+.if \n(06<(14m/100u) .nr 12 +(14m/100u)-\n(06
+.nr 07 0-\n(09+\n(08/2-(23m/100u)
+.nr 10 +2*(7m/100u)
+.ds 13 "\h'\n(02p*12u/100u'\v'\n(07u'\f[\n(.f]\s[\n(02]\l'\n(10u'\v'-\n(07u'\h'-\n(10u/2u'\h'-\n(03u/2u'\v'-\n(11u'\*(16\v'\n(11u'\h'-\n(03u/2u'\h'-\n(15u/2u'\v'\n(12u'\*(15\v'-\n(12u'\h'(-\n(15u+\n(10u)/2u'\h'\n(02p*12u/100u'
+.as 12 "\s[\En(.s*17u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1=
+.as 12 "\*(13
+.nr 06 \n(02*7/10
+.if \n(06<5 .nr 06 5
+.ps \n(02
+.ds 13 "\s[\n(02]\,\f2\(*p\/
+.nr 07 0\w'\*(13'
+.nr 13 0-\n[bbury]
+.nr 09 0\n[bblly]
+.as 13 "\h'5m/100u'
+.ds 15 "\s[\n(06]\f12
+.nr 11 0\w'\*(15'
+.nr 14 0\n[bblly]
+.nr 16 0\n(13u-(38m/100u)
+.if \n(16<(42m/100u) .nr 16 (42m/100u)
+.if \n(16<(\n(14+(45m/100u/4)) .nr 16 0\n(14+(45m/100u/4)
+.as 13 "\v'-\n(16u'\*(15\v'\n(16u'
+.as 13 "\h'12m/100u'
+.ft 1
+.nr 06 0\w'\*(13'
+.nr 04 0\n[bblly]
+.ds 15 "\s[\n(02]\f16
+.nr 05 0\w'\*(15'
+.nr 03 0-\n[bbury]
+.ie \n(06>=\n(05 .nr 16 0+\n(06
+.el .nr 16 0+\n(05
+.ps \n(02
+.nr 10 0\w'\(ru'
+.nr 11 0\n[bblly]-1
+.nr 12 0-\n[bbury]-1
+.nr 15 070m/100u
+.nr 14 070m/100u
+.nr 09 (\n(15-\n(04)-((23m/100u)+(4m/100u/2))
+.if \n(09<(14m/100u) .nr 15 +(14m/100u)-\n(09
+.nr 09 ((23m/100u)-(4m/100u/2))-(\n(03-\n(14)
+.if \n(09<(14m/100u) .nr 14 +(14m/100u)-\n(09
+.nr 13 0-\n(11+\n(12/2-(23m/100u)
+.nr 16 +2*(7m/100u)
+.ds 16 "\h'\n(02p*12u/100u'\v'\n(13u'\f[\n(.f]\s[\n(02]\l'\n(16u'\v'-\n(13u'\h'-\n(16u/2u'\h'-\n(06u/2u'\v'-\n(15u'\*(13\v'\n(15u'\h'-\n(06u/2u'\h'-\n(05u/2u'\v'\n(14u'\*(15\v'-\n(14u'\h'(-\n(05u+\n(16u)/2u'\h'\n(02p*12u/100u'
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 12 "\*(16
+.nr 13 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 12 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 09 0\w'\*(12'
+.if -\n[bbury]>\n(13 .as 12 "\x'\n[bbury]u+\n(13u'
+.if \n[bblly]>\n(12 .as 12 "\x'\n[bblly]u-\n(12u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(12\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 12
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 13
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.nr 03 \n(02+2
+.ds 12 "\s[\n(03]\f1\(is
+.nr 04 0\w'\*(12'
+.nr 05 0-\n[bbury]
+.nr 06 0\n[bblly]
+.nr 07 0-\n(06+\n(05/2-(\n(02p*23u/100u)
+.ds 13 "\v'\n(07u'\*(12\v'-\n(07u'
+.ds 12 "
+.as 12 "\*(13
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 07 0\w'\*(12'
+.nr 06 0-\n[bbury]
+.nr 05 0\n[bblly]
+.ps \n(02
+.ds 13 "\s[\n(03]\,\f2\(if
+.nr 08 0\w'\*(13'
+.nr 09 0\n[bblly]
+.ds 14 "\s[\n(03]\f10
+.nr 04 0\w'\*(14'
+.nr 10 0-\n[bbury]
+.ie \n(04>=\n(08 .nr 13 0+\n(04
+.el .nr 13 0+\n(08
+.if \n(07>\n(13 .nr 13 0\n(07
+.ds 15 "\h'\n(13u-\n(07u/2u'
+.as 15 "\*(12
+.as 15 "\h'-\n(07u/2u'
+.nr 11 (20m/100u)-\n(09
+.if \n(11<(11m/100u) .nr 11 (11m/100u)
+.nr 11 +\n(06+\n(09
+.as 15 "\h'-\n(08u/2u'\v'-\n(11u'\*(13\v'\n(11u'\h'-\n(08u/2u'
+.nr 12 (60m/100u)-\n(10
+.if \n(12<(17m/100u) .nr 12 (17m/100u)
+.nr 12 +\n(05+\n(10
+.as 15 "\h'-\n(04u/2u'\v'\n(12u'\*(14\v'-\n(12u'\h'-\n(04u/2u'
+.as 15 "\h'\n(13u/2u'
+.ds 13 "
+.as 13 "\*(15
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 13 \n(03*7/10
+.if \n(13<5 .nr 13 5
+.ps \n(03
+.ds 15 "\s[\n(03]\f1\(mi\,\f2x\/
+.nr 12 0\w'\*(15'
+.nr 09 0-\n[bbury]
+.nr 10 0\n[bblly]
+.as 15 "\h'5m/100u'
+.ds 14 "\s[\n(13]\f12
+.nr 04 0\w'\*(14'
+.nr 06 0\n[bblly]
+.nr 14 0\n(09u-(38m/100u)
+.if \n(14<(28m/100u) .nr 14 (28m/100u)
+.if \n(14<(\n(06+(45m/100u/4)) .nr 14 0\n(06+(45m/100u/4)
+.as 15 "\v'-\n(14u'\*(14\v'\n(14u'
+.as 15 "\h'12m/100u'
+.ds 14 "
+.as 14 "\*(15
+.ps \n(02
+.ds 15 "\s[\n(02]\,\f2e\/
+.nr 13 0\w'\*(15'
+.nr 15 0-\n[bbury]
+.nr 16 0\n[bblly]
+.as 15 "\h'5m/100u'
+.nr 07 0\w'\*(14'
+.nr 05 0\n[bblly]
+.nr 08 0\n(15u-(38m/100u)
+.if \n(08<(42m/100u) .nr 08 (42m/100u)
+.if \n(08<(\n(05+(45m/100u/4)) .nr 08 0\n(05+(45m/100u/4)
+.as 15 "\v'-\n(08u'\*(14\v'\n(08u'
+.as 15 "\h'12m/100u'
+.as 13 "\s[\En(.s*17u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(15
+.ds 15 "\s[\n(02]\,\f2d\f2x
+.as 13 "\*(15
+.as 13 "\/
+.as 13 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 15 "\s[\n(02]\f1=
+.as 13 "\*(15
+.ft 1
+.ds 14 "\s[\n(02]\,\f2\(*p\/
+.nr 10 0\w'\*(14'
+.nr 09 0\n[bblly]-\n[bbury]-2
+.nr 04 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.ps \n(02
+.nr 11 0\n(08+\n(04+(2*4m/100u)+(45m/100u/4)
+.nr 15 0\n(11/2*11/10
+.ds 12 "
+.if '\*(12'' .if \w'\(sr' .if (\n(15+\n(15)<=(-\n[bbury]+\n[bblly]) .ds 12 "\(sr
+.if '\*(12'' .if \w'\N'radical'' .if (\n(15+\n(15)<=(-\n[bbury]+\n[bblly]) .ds 12 "\N'radical'
+.if '\*(12'' .if \w'\N'radicalbig'' .if (\n(15+\n(15)<=(-\n[bbury]+\n[bblly]) .ds 12 "\N'radicalbig'
+.if '\*(12'' .if \w'\N'radicalBig'' .if (\n(15+\n(15)<=(-\n[bbury]+\n[bblly]) .ds 12 "\N'radicalBig'
+.if '\*(12'' .if \w'\N'radicalbigg'' .if (\n(15+\n(15)<=(-\n[bbury]+\n[bblly]) .ds 12 "\N'radicalbigg'
+.if '\*(12'' .if \w'\N'radicalBigg'' .if (\n(15+\n(15)<=(-\n[bbury]+\n[bblly]) .ds 12 "\N'radicalBigg'
+.if \w'\N'radicalvertex'' .if '\*(12'' \{\
+.nr 12 0\w'\N'radicaltp''
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 19 0-\n[bbury]-1
+.nr 21 0\w'\N'radicalvertex''
+.nr 22 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 23 0-\n[bbury]-1
+.nr 25 0\w'\N'radicalbt''
+.nr 26 0\n[bblly]-\n[bbury]-2
+.nr 28 0\n[bblly]-1
+.nr 27 0-\n[bbury]-1
+.nr 16 \n(15*2-\n(18-\n(26*11/10/\n(22
+.if \n(16<0 .nr 16 0
+.de 16
+.if \\n(17<\\n(16 .as 12 "\v'-\\n(24u'\N'radicalvertex'\h'-\\n(21u'\v'-\\n(23u'
+.if \\n+(17<\\n(16 .16
+..
+.ds 12 "\v'-\n(28u'\N'radicalbt'\h'-\n(25u'\v'-\n(27u'
+.nr 17 0 1
+.16
+.as 12 "\v'-\n(20u'\N'radicaltp'\h'-\n(12u'\v'-\n(19u'
+.as 12 "\v'\n(16u*\n(22u+\n(26u+\n(18u+0u'
+.as 12 "\h'\n(21u'
+.  \}
+.if '\*(12'' \{\
+.nr 13 0\w'\(sr'
+.nr 17 0\n[bblly]-\n[bbury]-2
+.nr 28 0\n[bblly]-1
+.nr 16 0-\n[bbury]-1
+.ie \n(11<(\n(16+\n(28) .nr 05 0\n(.s
+.el .nr 05 0\n(11*\n(.s/(\n(16+\n(28-(4m/100u))+1
+.ps \n(05
+.ds 12 "\(sr
+.  \}
+.nr 28 0\w'\*(12'
+.nr 16 0\n[bblly]-\n[bbury]-2
+.nr 13 0\n[bblly]-1
+.nr 17 0-\n[bbury]-1
+.nr 07 \n[bburx]
+.nr 27 0\w'\(rn'
+.nr 26 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 25 0-\n[bbury]-1
+.nr 14 0\n(07-\n[bbllx]-(4m/100u)
+.nr 06 0
+.if \n(10<\n(27 .nr 06 0\n(27-\n(10
+.ds 15 "\s[\n(.s]\f[\n(.f]\v'\n(25u'\h'\n(14u'\l'\n(10u+\n(06u\(rn'\h'-\n(14u'\v'-\n(25u'\h'-\n(10u-\n(06u'\v'\n(17u'\*(12\v'-\n(17u'\h'\n(10u+\n(06u'
+.nr 14 0\w'\*(15'
+.nr 07 0\n[bblly]-\n[bbury]-2
+.nr 05 0\n[bblly]-1
+.nr 06 0-\n[bbury]-1
+.nr 03 0(4m/100u)+(45m/100u/4)
+.if \n(05>(\n(08+\n(04+\n(03) .nr 03 (\n(03+\n(05-\n(08-\n(04)/2
+.nr 03 +\n(08
+.ds 12 "\v'-\n(03u'\*(15\v'\n(03u'\h'-\n(10u'\*(14
+.ft 1
+.nr 11 0\w'\*(12'
+.nr 03 0\n[bblly]
+.ds 14 "\s[\n(02]\f12
+.nr 05 0\w'\*(14'
+.nr 06 0-\n[bbury]
+.ie \n(11>=\n(05 .nr 07 0+\n(11
+.el .nr 07 0+\n(05
+.ps \n(02
+.nr 08 0\w'\(ru'
+.nr 09 0\n[bblly]-1
+.nr 10 0-\n[bbury]-1
+.nr 14 070m/100u
+.nr 04 070m/100u
+.nr 25 (\n(14-\n(03)-((23m/100u)+(4m/100u/2))
+.if \n(25<(14m/100u) .nr 14 +(14m/100u)-\n(25
+.nr 25 ((23m/100u)-(4m/100u/2))-(\n(06-\n(04)
+.if \n(25<(14m/100u) .nr 04 +(14m/100u)-\n(25
+.nr 24 0-\n(09+\n(10/2-(23m/100u)
+.nr 07 +2*(7m/100u)
+.ds 15 "\h'\n(02p*12u/100u'\v'\n(24u'\f[\n(.f]\s[\n(02]\l'\n(07u'\v'-\n(24u'\h'-\n(07u/2u'\h'-\n(11u/2u'\v'-\n(14u'\*(12\v'\n(14u'\h'-\n(11u/2u'\h'-\n(05u/2u'\v'\n(04u'\*(14\v'-\n(04u'\h'(-\n(05u+\n(07u)/2u'\h'\n(02p*12u/100u'
+.as 13 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(15
+.nr 24 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 10 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 25 0\w'\*(13'
+.if -\n[bbury]>\n(24 .as 13 "\x'\n[bbury]u+\n(24u'
+.if \n[bblly]>\n(10 .as 13 "\x'\n[bblly]u-\n(10u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(13\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 15
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 16
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.ds 13 "\s[\n(02]\,\f2a
+.as 12 "\*(13
+.ds 13 "
+.ds 14 "\s[\n(02]\,\f2c
+.as 13 "\*(14
+.ds 14 "
+.ds 15 "\s[\n(02]\,\f2b
+.as 14 "\*(15
+.ds 15 "
+.ds 16 "\s[\n(02]\,\f2d
+.as 15 "\*(16
+.as 12 "\/
+.as 13 "\/
+.nr 09 0\w'\*(12'
+.nr 10 0\n[bblly]-\n[bbury]-2
+.nr 12 0\n[bblly]-1
+.nr 11 0-\n[bbury]-1
+.nr 13 0\w'\*(13'
+.nr 14 0\n[bblly]-\n[bbury]-2
+.nr 16 0\n[bblly]-1
+.nr 15 0-\n[bbury]-1
+.nr 05 0\n(09
+.nr 07 0\n(11
+.if \n(13>\n(05 .nr 05 0+\n(13
+.if \n(12+\n(15>\n(07 .nr 07 0+\n(12+\n(15
+.if \n(16>\n(07 .nr 07 0+\n(16
+.as 14 "\/
+.as 15 "\/
+.nr 17 0\w'\*(14'
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 19 0-\n[bbury]-1
+.nr 21 0\w'\*(15'
+.nr 22 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 23 0-\n[bbury]-1
+.nr 06 0\n(17
+.nr 08 0\n(19
+.if \n(21>\n(06 .nr 06 0+\n(21
+.if \n(20+\n(23>\n(08 .nr 08 0+\n(20+\n(23
+.if \n(24>\n(08 .nr 08 0+\n(24
+.nr 04 0\n(05
+.nr 03 0\n(07
+.if \n(06>\n(04 .nr 04 0+\n(06
+.if \n(08>\n(03 .nr 03 0+\n(08
+.if \n(03<(\n(02p*140u/100u) .nr 03 (\n(02p*140u/100u)
+.ds 16 "\v'-1u*\n(03u/2u'\h'\n(04u-\n(09u/2u'\v'0u'\*(12\h'-\n(04u+(\n(04u-\n(09u/2u)'\h'\n(04u-\n(13u/2u'\v'\n(03u'\*(13\h'-\n(04u+(\n(04u-\n(13u/2u)'\v'-1u*\n(03u/2u'\h'\n(04u'\h'\n(02p*100u/100u'\v'-1u*\n(03u/2u'\h'\n(04u-\n(17u/2u'\v'0u'\*(14\h'-\n(04u+(\n(04u-\n(17u/2u)'\h'\n(04u-\n(21u/2u'\v'\n(03u'\*(15\h'-\n(04u+(\n(04u-\n(21u/2u)'\v'-1u*\n(03u/2u'\h'\n(04u'
+.ds 15 "
+.as 15 "\*(16
+.ft 1
+.nr 03 0\w'\*(15'
+.nr 04 0\n[bblly]-\n[bbury]-2
+.nr 05 0\n[bblly]-1
+.nr 06 0-\n[bbury]-1
+.ps \n(02
+.ie \n(06>=\n(05 .nr 08 0+\n(06
+.el .nr 08 0+\n(05
+.ds 16 "
+.if '\*(16'' .if \w'[' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "[
+.if '\*(16'' .if \w'\N'bracketleftbig'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketleftbig'
+.if '\*(16'' .if \w'\N'bracketleftBig'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketleftBig'
+.if '\*(16'' .if \w'\N'bracketleftbigg'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketleftbigg'
+.if '\*(16'' .if \w'\N'bracketleftBigg'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketleftBigg'
+.if '\*(16'' \{\
+.nr 21 0\w'\(lc'
+.nr 20 0\n[bblly]-\n[bbury]-2
+.nr 18 0\n[bblly]-1
+.nr 19 0-\n[bbury]-1
+.nr 17 0\w'\(lx'
+.nr 16 0\n[bblly]-\n[bbury]-2
+.nr 14 0\n[bblly]-1
+.nr 15 0-\n[bbury]-1
+.nr 13 0\w'\(lf'
+.nr 12 0\n[bblly]-\n[bbury]-2
+.nr 10 0\n[bblly]-1
+.nr 11 0-\n[bbury]-1
+.nr 24 \n(08*2-\n(20-\n(12*11/10/\n(16
+.if \n(24<0 .nr 24 0
+.de 14
+.if \\n(23<\\n(24 .as 16 "\v'-\\n(14u'\(lx\h'-\\n(17u'\v'-\\n(15u'
+.if \\n+(23<\\n(24 .14
+..
+.ds 16 "\v'-\n(10u'\(lf\h'-\n(13u'\v'-\n(11u'
+.nr 23 0 1
+.14
+.as 16 "\v'-\n(18u'\(lc\h'-\n(21u'\v'-\n(19u'
+.as 16 "\v'\n(24u*\n(16u+\n(12u+\n(20u+0u'
+.as 16 "\h'\n(17u'
+.  \}
+.nr 22 0\w'\*(16'
+.nr 23 0\n[bblly]-\n[bbury]-2
+.nr 10 0\n[bblly]-1
+.nr 24 0-\n[bbury]-1
+.nr 07 0-\n(10+\n(24/2-(\n(02p*23u/100u)
+.ds 14 "\f[\n(.f]\s[\n(.s]\v'\n(07u'\*(16\v'-\n(07u'
+.as 14 "\*(15
+.ie \n(06>=\n(05 .nr 07 0+\n(06
+.el .nr 07 0+\n(05
+.ds 16 "
+.if '\*(16'' .if \w']' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "]
+.if '\*(16'' .if \w'\N'bracketrightbig'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketrightbig'
+.if '\*(16'' .if \w'\N'bracketrightBig'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketrightBig'
+.if '\*(16'' .if \w'\N'bracketrightbigg'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketrightbigg'
+.if '\*(16'' .if \w'\N'bracketrightBigg'' .if (\n(06-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(05*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 16 "\N'bracketrightBigg'
+.if '\*(16'' \{\
+.nr 22 0\w'\(rc'
+.nr 11 0\n[bblly]-\n[bbury]-2
+.nr 13 0\n[bblly]-1
+.nr 12 0-\n[bbury]-1
+.nr 14 0\w'\(rx'
+.nr 15 0\n[bblly]-\n[bbury]-2
+.nr 17 0\n[bblly]-1
+.nr 16 0-\n[bbury]-1
+.nr 18 0\w'\(rf'
+.nr 19 0\n[bblly]-\n[bbury]-2
+.nr 21 0\n[bblly]-1
+.nr 20 0-\n[bbury]-1
+.nr 10 \n(07*2-\n(11-\n(19*11/10/\n(15
+.if \n(10<0 .nr 10 0
+.de 13
+.if \\n(24<\\n(10 .as 16 "\v'-\\n(17u'\(rx\h'-\\n(14u'\v'-\\n(16u'
+.if \\n+(24<\\n(10 .13
+..
+.ds 16 "\v'-\n(21u'\(rf\h'-\n(18u'\v'-\n(20u'
+.nr 24 0 1
+.13
+.as 16 "\v'-\n(13u'\(rc\h'-\n(22u'\v'-\n(12u'
+.as 16 "\v'\n(10u*\n(15u+\n(19u+\n(11u+0u'
+.as 16 "\h'\n(14u'
+.  \}
+.nr 23 0\w'\*(16'
+.nr 24 0\n[bblly]-\n[bbury]-2
+.nr 21 0\n[bblly]-1
+.nr 10 0-\n[bbury]-1
+.nr 08 0-\n(21+\n(10/2-(\n(02p*23u/100u)
+.as 14 "\f[\n(.f]\s[\n(.s]\v'\n(08u'\*(16\v'-\n(08u'
+.ds 15 "
+.as 15 "\*(14
+.ds 14 "
+.ds 16 "\s[\n(02]\,\f2x
+.as 14 "\*(16
+.ds 16 "
+.ds 13 "\s[\n(02]\,\f2y
+.as 16 "\*(13
+.ds 13 "
+.ds 12 "\s[\n(02]\,\f2z
+.as 13 "\*(12
+.as 14 "\/
+.as 16 "\/
+.as 13 "\/
+.nr 04 0\w'\*(14'
+.nr 03 0\n[bblly]-\n[bbury]-2
+.nr 07 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.nr 21 0\w'\*(16'
+.nr 10 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 24 0-\n[bbury]-1
+.nr 20 0\w'\*(13'
+.nr 19 0\n[bblly]-\n[bbury]-2
+.nr 17 0\n[bblly]-1
+.nr 18 0-\n[bbury]-1
+.nr 05 0\n(04
+.nr 06 0\n(08
+.if \n(21>\n(05 .nr 05 0+\n(21
+.if \n(20>\n(05 .nr 05 0+\n(20
+.if \n(07+\n(24>\n(06 .nr 06 0+\n(07+\n(24
+.if \n(23+\n(18>\n(06 .nr 06 0+\n(23+\n(18
+.if \n(17>\n(06 .nr 06 0+\n(17
+.if \n(06<(\n(02p*140u/100u) .nr 06 (\n(02p*140u/100u)
+.ds 12 "\v'-2u*\n(06u/2u'\h'\n(05u-\n(04u/2u'\v'0u'\*(14\h'-\n(05u+(\n(05u-\n(04u/2u)'\h'\n(05u-\n(21u/2u'\v'\n(06u'\*(16\h'-\n(05u+(\n(05u-\n(21u/2u)'\h'\n(05u-\n(20u/2u'\v'\n(06u'\*(13\h'-\n(05u+(\n(05u-\n(20u/2u)'\v'-2u*\n(06u/2u'\h'\n(05u'
+.as 15 "\s[\En(.s*17u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 15 "\*(12
+.ds 12 "\h'28u*\n(02p/100u'\h'28u*\n(02p/100u'
+.as 15 "\*(12
+.ds 12 "
+.ds 13 "\s[\n(02]\f11
+.as 12 "\*(13
+.ds 13 "
+.ds 16 "\s[\n(02]\f12\f12
+.as 13 "\*(16
+.nr 17 0\w'\*(12'
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 19 0-\n[bbury]-1
+.nr 23 0\w'\*(13'
+.nr 24 0\n[bblly]-\n[bbury]-2
+.nr 21 0\n[bblly]-1
+.nr 10 0-\n[bbury]-1
+.nr 06 0\n(17
+.nr 05 0\n(19
+.if \n(23>\n(06 .nr 06 0+\n(23
+.if \n(20+\n(10>\n(05 .nr 05 0+\n(20+\n(10
+.if \n(21>\n(05 .nr 05 0+\n(21
+.if \n(05<(\n(02p*140u/100u) .nr 05 (\n(02p*140u/100u)
+.ds 16 "\v'-1u*\n(05u/2u'\v'0u'\*(12\h'-\n(17u'\v'\n(05u'\*(13\h'-\n(23u'\v'-1u*\n(05u/2u'\h'\n(06u'
+.as 15 "\*(16
+.ds 16 "\h'17u*\n(02p/100u'
+.as 15 "\*(16
+.ds 16 "
+.ds 13 "\s[\n(02]\f13\f13\f13
+.as 16 "\*(13
+.ds 13 "
+.ds 12 "\s[\n(02]\f14
+.as 13 "\*(12
+.nr 21 0\w'\*(16'
+.nr 10 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 24 0-\n[bbury]-1
+.nr 20 0\w'\*(13'
+.nr 19 0\n[bblly]-\n[bbury]-2
+.nr 17 0\n[bblly]-1
+.nr 18 0-\n[bbury]-1
+.nr 05 0\n(21
+.nr 06 0\n(24
+.if \n(20>\n(05 .nr 05 0+\n(20
+.if \n(23+\n(18>\n(06 .nr 06 0+\n(23+\n(18
+.if \n(17>\n(06 .nr 06 0+\n(17
+.if \n(06<(\n(02p*140u/100u) .nr 06 (\n(02p*140u/100u)
+.ds 12 "\v'-1u*\n(06u/2u'\h'\n(05u-\n(21u'\v'0u'\*(16\h'-\n(05u'\h'\n(05u-\n(20u'\v'\n(06u'\*(13\h'-\n(05u'\v'-1u*\n(06u/2u'\h'\n(05u'
+.as 15 "\*(12
+.nr 05 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 17 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 06 0\w'\*(15'
+.if -\n[bbury]>\n(05 .as 15 "\x'\n[bbury]u+\n(05u'
+.if \n[bblly]>\n(17 .as 15 "\x'\n[bblly]u-\n(17u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(15\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 19
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 20
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ft 1
+.ps \n(02
+.nr 05 0\w'\(ru'
+.nr 06 0\n[bblly]-1
+.ds 12 "\s[\n(02]\,\f2x\/
+.nr 03 0\w'\*(12'
+.nr 04 0-\n[bbury]
+.if \n(04u<(45m/100u) .nr 04 045m/100u
+.nr 07 0\n(04u+\n(06u+(3*4m/100u)
+.as 12 "\v'-\n(07u'\s[\n(02]\f[\n(.f]\l'-\n(03u\(ru'\v'\n(07u'
+.ds 13 "
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ps \n(02
+.nr 05 0\w'\(ul'
+.nr 04 0-\n[bbury]-1
+.ds 12 "\s[\n(02]\,\f2y\/
+.nr 07 0\w'\*(12'
+.nr 06 0\n[bblly]
+.if \n(06<0 .nr 06 0
+.nr 03 0\n(06u+\n(04u+(3*4m/100u)
+.as 12 "\v'\n(03u'\s[\n(02]\f[\n(.f]\l'-\n(07u\(ul'\v'-\n(03u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ps \n(02
+.nr 06 0\w'\s[\n(.s/2u]\(->\s0'
+.nr 07 0\n[bblly]-1
+.ds 12 "\s[\n(02]\,\f2z\/
+.nr 03 0\w'\*(12'
+.nr 04 0-\n[bbury]
+.if \n(04u<(45m/100u) .nr 04 045m/100u
+.nr 05 0\n(04u+\n(07u+(\n(02p*10u/100u)
+.as 12 "\v'-\n(05u'\h'-\n(03u-\n(06u/2u'\s[\n(02]\f[\n(.f]\s[\n(.s/2u]\(->\s0\h'\n(03u-\n(06u/2u'\v'\n(05u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ps \n(02
+.nr 04 0\w'\s[\n(.s*3u/4u]\(ap\s0'
+.nr 03 0\n[bblly]-1
+.ds 12 "\s[\n(02]\,\f2w\/
+.nr 07 0\w'\*(12'
+.nr 06 0-\n[bbury]
+.if \n(06u<(45m/100u) .nr 06 045m/100u
+.nr 05 0\n(06u+\n(03u+(\n(02p*10u/100u)
+.as 12 "\v'-\n(05u'\h'-\n(07u-\n(04u/2u'\s[\n(02]\f[\n(.f]\s[\n(.s*3u/4u]\(ap\s0\h'\n(07u-\n(04u/2u'\v'\n(05u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ps \n(02
+.nr 06 0\w'ˆ'
+.nr 07 0\n[bblly]-1
+.ds 12 "\s[\n(02]\,\f2v\/
+.nr 03 0\w'\*(12'
+.nr 04 0-\n[bbury]
+.if \n(04u<(45m/100u) .nr 04 045m/100u
+.nr 05 0\n(04u+\n(07u+(\n(02p*10u/100u)
+.as 12 "\v'-\n(05u'\h'-\n(03u-\n(06u/2u'\s[\n(02]\f[\n(.f]ˆ\h'\n(03u-\n(06u/2u'\v'\n(05u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ps \n(02
+.nr 04 0\w'.'
+.nr 03 0\n[bblly]-1
+.ds 12 "\s[\n(02]\,\f2u\/
+.nr 07 0\w'\*(12'
+.nr 06 0-\n[bbury]
+.if \n(06u<(45m/100u) .nr 06 045m/100u
+.nr 05 0\n(06u+\n(03u+(\n(02p*10u/100u)
+.as 12 "\v'-\n(05u'\h'-\n(07u-\n(04u/2u'\s[\n(02]\f[\n(.f].\h'\n(07u-\n(04u/2u'\v'\n(05u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ps \n(02
+.nr 06 0\w'..'
+.nr 07 0\n[bblly]-1
+.ds 12 "\s[\n(02]\,\f2t\/
+.nr 03 0\w'\*(12'
+.nr 04 0-\n[bbury]
+.if \n(04u<(45m/100u) .nr 04 045m/100u
+.nr 05 0\n(04u+\n(07u+(\n(02p*10u/100u)
+.as 12 "\v'-\n(05u'\h'-\n(03u-\n(06u/2u'\s[\n(02]\f[\n(.f]..\h'\n(03u-\n(06u/2u'\v'\n(05u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 12 "\s[\n(02]\f1\(pl
+.as 13 "\*(12
+.ft 1
+.ps \n(02
+.nr 04 0\w'\(ab'
+.nr 03 0\n[bblly]-1
+.ds 12 "\s[\n(02]\,\f2s\/
+.nr 07 0\w'\*(12'
+.nr 06 0-\n[bbury]
+.if \n(06u<(45m/100u) .nr 06 045m/100u
+.nr 05 0\n(06u+\n(03u+(\n(02p*10u/100u)
+.as 12 "\v'-\n(05u'\h'-\n(07u-\n(04u/2u'\s[\n(02]\f[\n(.f]\(ab\h'\n(07u-\n(04u/2u'\v'\n(05u'
+.as 13 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 13 "\*(12
+.nr 04 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 05 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 03 0\w'\*(13'
+.if -\n[bbury]>\n(04 .as 13 "\x'\n[bbury]u+\n(04u'
+.if \n[bblly]>\n(05 .as 13 "\x'\n[bblly]u-\n(05u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(13\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 22
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 23
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.ds 13 "\s[\n(02]\f11
+.as 12 "\*(13
+.ds 13 "
+.ds 14 "\s[\n(02]\f10
+.as 13 "\*(14
+.nr 05 0\w'\*(12'
+.nr 06 0\n[bblly]-\n[bbury]-2
+.nr 08 0\n[bblly]-1
+.nr 07 0-\n[bbury]-1
+.nr 09 0\w'\*(13'
+.nr 10 0\n[bblly]-\n[bbury]-2
+.nr 12 0\n[bblly]-1
+.nr 11 0-\n[bbury]-1
+.nr 03 0\n(05
+.nr 04 0\n(07
+.if \n(09>\n(03 .nr 03 0+\n(09
+.if \n(08+\n(11>\n(04 .nr 04 0+\n(08+\n(11
+.if \n(12>\n(04 .nr 04 0+\n(12
+.if \n(04<(\n(02p*140u/100u) .nr 04 (\n(02p*140u/100u)
+.ds 14 "\v'-1u*\n(04u/2u'\h'\n(03u-\n(05u/2u'\v'0u'\*(12\h'-\n(03u+(\n(03u-\n(05u/2u)'\h'\n(03u-\n(09u/2u'\v'\n(04u'\*(13\h'-\n(03u+(\n(03u-\n(09u/2u)'\v'-1u*\n(04u/2u'\h'\n(03u'
+.ds 13 "
+.as 13 "\*(14
+.ft 1
+.nr 04 0\w'\*(13'
+.nr 03 0\n[bblly]-\n[bbury]-2
+.nr 11 0\n[bblly]-1
+.nr 12 0-\n[bbury]-1
+.ps \n(02
+.ie \n(12>=\n(11 .nr 10 0+\n(12
+.el .nr 10 0+\n(11
+.ds 14 "
+.if '\*(14'' .if \w'{' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "{
+.if '\*(14'' .if \w'\N'braceleftbig'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'braceleftbig'
+.if '\*(14'' .if \w'\N'braceleftBig'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'braceleftBig'
+.if '\*(14'' .if \w'\N'braceleftbigg'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'braceleftbigg'
+.if '\*(14'' .if \w'\N'braceleftBigg'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'braceleftBigg'
+.if '\*(14'' \{\
+.nr 05 0\w'\(lt'
+.nr 13 0\n[bblly]-\n[bbury]-2
+.nr 15 0\n[bblly]-1
+.nr 14 0-\n[bbury]-1
+.nr 16 0\w'\(bv'
+.nr 17 0\n[bblly]-\n[bbury]-2
+.nr 19 0\n[bblly]-1
+.nr 18 0-\n[bbury]-1
+.nr 20 0\w'\(lb'
+.nr 21 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 22 0-\n[bbury]-1
+.nr 24 0\w'\(lk'
+.nr 25 0\n[bblly]-\n[bbury]-2
+.nr 27 0\n[bblly]-1
+.nr 26 0-\n[bbury]-1
+.nr 06 \n(10-(\n(25+\n(13+\n(21/2)*11/10/\n(17
+.if \n(06<0 .nr 06 0
+.nr 08 0\n(06*2
+.de 12
+.if \\n(07=\\n(06 .as 14 "\v'-\\n(27u'\(lk\h'-\\n(24u'\v'-\\n(26u'
+.if \\n(07<\\n(08 .as 14 "\v'-\\n(19u'\(bv\h'-\\n(16u'\v'-\\n(18u'
+.if \\n+(07<\\n(08 .12
+..
+.ds 14 "\v'-\n(23u'\(lb\h'-\n(20u'\v'-\n(22u'
+.nr 07 0 1
+.12
+.as 14 "\v'-\n(15u'\(lt\h'-\n(05u'\v'-\n(14u'
+.as 14 "\v'\n(08u*\n(17u+\n(21u+\n(13u+\n(25u'
+.as 14 "\h'\n(24u'
+.  \}
+.nr 06 0\w'\*(14'
+.nr 07 0\n[bblly]-\n[bbury]-2
+.nr 27 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.nr 09 0-\n(27+\n(08/2-(\n(02p*23u/100u)
+.ds 12 "\f[\n(.f]\s[\n(.s]\v'\n(09u'\*(14\v'-\n(09u'
+.as 12 "\*(13
+.ie \n(12>=\n(11 .nr 09 0+\n(12
+.el .nr 09 0+\n(11
+.ds 14 "
+.if '\*(14'' .if \w'.' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 ".
+.if '\*(14'' .if \w'.' .ds 14 ".
+.nr 27 0\w'\*(14'
+.nr 08 0\n[bblly]-\n[bbury]-2
+.nr 06 0\n[bblly]-1
+.nr 07 0-\n[bbury]-1
+.nr 10 0-\n(06+\n(07/2-(\n(02p*23u/100u)
+.as 12 "\f[\n(.f]\s[\n(.s]\v'\n(10u'\*(14\v'-\n(10u'
+.ds 13 "
+.as 13 "\*(12
+.ds 12 "\h'28u*\n(02p/100u'
+.as 13 "\*(12
+.ds 12 "
+.ds 14 "\s[\n(02]\,\f2x
+.as 12 "\*(14
+.ft 1
+.nr 11 0\w'\*(12'
+.nr 12 0\n[bblly]-\n[bbury]-2
+.nr 04 0\n[bblly]-1
+.nr 03 0-\n[bbury]-1
+.ps \n(02
+.ie \n(03>=\n(04 .nr 10 0+\n(03
+.el .nr 10 0+\n(04
+.ds 14 "
+.if '\*(14'' .if \w'\N'floorleft'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorleft'
+.if '\*(14'' .if \w'\N'floorleftbig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorleftbig'
+.if '\*(14'' .if \w'\N'floorleftBig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorleftBig'
+.if '\*(14'' .if \w'\N'floorleftbigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorleftbigg'
+.if '\*(14'' .if \w'\N'floorleftBigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorleftBigg'
+.if '\*(14'' .if \w'\(lf' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\(lf
+.if '\*(14'' \{\
+.nr 27 0\w'\(lx'
+.nr 26 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 25 0-\n[bbury]-1
+.nr 23 0\w'\(lx'
+.nr 22 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 21 0-\n[bbury]-1
+.nr 19 0\w'\(lf'
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 16 0\n[bblly]-1
+.nr 17 0-\n[bbury]-1
+.nr 06 \n(10*2-\n(26-\n(18*11/10/\n(22
+.if \n(06<0 .nr 06 0
+.de 15
+.if \\n(07<\\n(06 .as 14 "\v'-\\n(20u'\(lx\h'-\\n(23u'\v'-\\n(21u'
+.if \\n+(07<\\n(06 .15
+..
+.ds 14 "\v'-\n(16u'\(lf\h'-\n(19u'\v'-\n(17u'
+.nr 07 0 1
+.15
+.as 14 "\v'-\n(24u'\(lx\h'-\n(27u'\v'-\n(25u'
+.as 14 "\v'\n(06u*\n(22u+\n(18u+\n(26u+0u'
+.as 14 "\h'\n(23u'
+.  \}
+.nr 08 0\w'\*(14'
+.nr 07 0\n[bblly]-\n[bbury]-2
+.nr 16 0\n[bblly]-1
+.nr 06 0-\n[bbury]-1
+.nr 09 0-\n(16+\n(06/2-(\n(02p*23u/100u)
+.ds 15 "\f[\n(.f]\s[\n(.s]\v'\n(09u'\*(14\v'-\n(09u'
+.as 15 "\*(12
+.as 15 "\/
+.ie \n(03>=\n(04 .nr 09 0+\n(03
+.el .nr 09 0+\n(04
+.ds 14 "
+.if '\*(14'' .if \w'\N'floorright'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorright'
+.if '\*(14'' .if \w'\N'floorrightbig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorrightbig'
+.if '\*(14'' .if \w'\N'floorrightBig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorrightBig'
+.if '\*(14'' .if \w'\N'floorrightbigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorrightbigg'
+.if '\*(14'' .if \w'\N'floorrightBigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\N'floorrightBigg'
+.if '\*(14'' .if \w'\(rf' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "\(rf
+.if '\*(14'' \{\
+.nr 08 0\w'\(rx'
+.nr 17 0\n[bblly]-\n[bbury]-2
+.nr 19 0\n[bblly]-1
+.nr 18 0-\n[bbury]-1
+.nr 20 0\w'\(rx'
+.nr 21 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 22 0-\n[bbury]-1
+.nr 24 0\w'\(rf'
+.nr 25 0\n[bblly]-\n[bbury]-2
+.nr 27 0\n[bblly]-1
+.nr 26 0-\n[bbury]-1
+.nr 16 \n(09*2-\n(17-\n(25*11/10/\n(21
+.if \n(16<0 .nr 16 0
+.de 16
+.if \\n(06<\\n(16 .as 14 "\v'-\\n(23u'\(rx\h'-\\n(20u'\v'-\\n(22u'
+.if \\n+(06<\\n(16 .16
+..
+.ds 14 "\v'-\n(27u'\(rf\h'-\n(24u'\v'-\n(26u'
+.nr 06 0 1
+.16
+.as 14 "\v'-\n(19u'\(rx\h'-\n(08u'\v'-\n(18u'
+.as 14 "\v'\n(16u*\n(21u+\n(25u+\n(17u+0u'
+.as 14 "\h'\n(20u'
+.  \}
+.nr 07 0\w'\*(14'
+.nr 06 0\n[bblly]-\n[bbury]-2
+.nr 27 0\n[bblly]-1
+.nr 16 0-\n[bbury]-1
+.nr 10 0-\n(27+\n(16/2-(\n(02p*23u/100u)
+.as 15 "\f[\n(.f]\s[\n(.s]\v'\n(10u'\*(14\v'-\n(10u'
+.as 13 "\*(15
+.ds 15 "\h'28u*\n(02p/100u'
+.as 13 "\*(15
+.ds 15 "
+.ds 12 "\s[\n(02]\,\f2x
+.as 15 "\*(12
+.ft 1
+.nr 04 0\w'\*(15'
+.nr 03 0\n[bblly]-\n[bbury]-2
+.nr 11 0\n[bblly]-1
+.nr 12 0-\n[bbury]-1
+.ps \n(02
+.ie \n(12>=\n(11 .nr 10 0+\n(12
+.el .nr 10 0+\n(11
+.ds 12 "
+.if '\*(12'' .if \w'\N'ceilingleft'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingleft'
+.if '\*(12'' .if \w'\N'ceilingleftbig'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingleftbig'
+.if '\*(12'' .if \w'\N'ceilingleftBig'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingleftBig'
+.if '\*(12'' .if \w'\N'ceilingleftbigg'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingleftbigg'
+.if '\*(12'' .if \w'\N'ceilingleftBigg'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingleftBigg'
+.if '\*(12'' .if \w'\(lc' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\(lc
+.if '\*(12'' \{\
+.nr 07 0\w'\(lc'
+.nr 26 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 25 0-\n[bbury]-1
+.nr 23 0\w'\(lx'
+.nr 22 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 21 0-\n[bbury]-1
+.nr 19 0\w'\(lx'
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 08 0\n[bblly]-1
+.nr 17 0-\n[bbury]-1
+.nr 27 \n(10*2-\n(26-\n(18*11/10/\n(22
+.if \n(27<0 .nr 27 0
+.de 14
+.if \\n(16<\\n(27 .as 12 "\v'-\\n(20u'\(lx\h'-\\n(23u'\v'-\\n(21u'
+.if \\n+(16<\\n(27 .14
+..
+.ds 12 "\v'-\n(08u'\(lx\h'-\n(19u'\v'-\n(17u'
+.nr 16 0 1
+.14
+.as 12 "\v'-\n(24u'\(lc\h'-\n(07u'\v'-\n(25u'
+.as 12 "\v'\n(27u*\n(22u+\n(18u+\n(26u+0u'
+.as 12 "\h'\n(23u'
+.  \}
+.nr 06 0\w'\*(12'
+.nr 16 0\n[bblly]-\n[bbury]-2
+.nr 08 0\n[bblly]-1
+.nr 27 0-\n[bbury]-1
+.nr 09 0-\n(08+\n(27/2-(\n(02p*23u/100u)
+.ds 14 "\f[\n(.f]\s[\n(.s]\v'\n(09u'\*(12\v'-\n(09u'
+.as 14 "\*(15
+.as 14 "\/
+.ie \n(12>=\n(11 .nr 09 0+\n(12
+.el .nr 09 0+\n(11
+.ds 12 "
+.if '\*(12'' .if \w'\N'ceilingright'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingright'
+.if '\*(12'' .if \w'\N'ceilingrightbig'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingrightbig'
+.if '\*(12'' .if \w'\N'ceilingrightBig'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingrightBig'
+.if '\*(12'' .if \w'\N'ceilingrightbigg'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingrightbigg'
+.if '\*(12'' .if \w'\N'ceilingrightBigg'' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\N'ceilingrightBigg'
+.if '\*(12'' .if \w'\(rc' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 12 "\(rc
+.if '\*(12'' \{\
+.nr 06 0\w'\(rc'
+.nr 17 0\n[bblly]-\n[bbury]-2
+.nr 19 0\n[bblly]-1
+.nr 18 0-\n[bbury]-1
+.nr 20 0\w'\(rx'
+.nr 21 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 22 0-\n[bbury]-1
+.nr 24 0\w'\(rx'
+.nr 25 0\n[bblly]-\n[bbury]-2
+.nr 07 0\n[bblly]-1
+.nr 26 0-\n[bbury]-1
+.nr 08 \n(09*2-\n(17-\n(25*11/10/\n(21
+.if \n(08<0 .nr 08 0
+.de 16
+.if \\n(27<\\n(08 .as 12 "\v'-\\n(23u'\(rx\h'-\\n(20u'\v'-\\n(22u'
+.if \\n+(27<\\n(08 .16
+..
+.ds 12 "\v'-\n(07u'\(rx\h'-\n(24u'\v'-\n(26u'
+.nr 27 0 1
+.16
+.as 12 "\v'-\n(19u'\(rc\h'-\n(06u'\v'-\n(18u'
+.as 12 "\v'\n(08u*\n(21u+\n(25u+\n(17u+0u'
+.as 12 "\h'\n(20u'
+.  \}
+.nr 16 0\w'\*(12'
+.nr 27 0\n[bblly]-\n[bbury]-2
+.nr 07 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.nr 10 0-\n(07+\n(08/2-(\n(02p*23u/100u)
+.as 14 "\f[\n(.f]\s[\n(.s]\v'\n(10u'\*(12\v'-\n(10u'
+.as 13 "\*(14
+.ds 14 "\h'28u*\n(02p/100u'
+.as 13 "\*(14
+.ds 14 "
+.ds 15 "\s[\n(02]\,\f2a
+.as 14 "\*(15
+.ft 1
+.nr 11 0\w'\*(14'
+.nr 12 0\n[bblly]-\n[bbury]-2
+.nr 04 0\n[bblly]-1
+.nr 03 0-\n[bbury]-1
+.ps \n(02
+.ie \n(03>=\n(04 .nr 10 0+\n(03
+.el .nr 10 0+\n(04
+.ds 15 "
+.if '\*(15'' .if \w'\(la' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\(la
+.if '\*(15'' .if \w'\N'angbracketleft'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketleft'
+.if '\*(15'' .if \w'\N'angbracketleftbig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketleftbig'
+.if '\*(15'' .if \w'\N'angbracketleftBig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketleftBig'
+.if '\*(15'' .if \w'\N'angbracketleftbigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketleftbigg'
+.if '\*(15'' .if \w'\N'angbracketleftBigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketleftBigg'
+.if '\*(15'' .if \w'\N'angbracketleftBigg'' .ds 15 "\N'angbracketleftBigg'
+.if '\*(15'' .if \w'\N'angbracketleftbigg'' .ds 15 "\N'angbracketleftbigg'
+.if '\*(15'' .if \w'\N'angbracketleftBig'' .ds 15 "\N'angbracketleftBig'
+.if '\*(15'' .if \w'\N'angbracketleftbig'' .ds 15 "\N'angbracketleftbig'
+.if '\*(15'' .if \w'\N'angbracketleft'' .ds 15 "\N'angbracketleft'
+.if '\*(15'' .if \w'\(la' .ds 15 "\(la
+.nr 07 0\w'\*(15'
+.nr 08 0\n[bblly]-\n[bbury]-2
+.nr 16 0\n[bblly]-1
+.nr 27 0-\n[bbury]-1
+.nr 09 0-\n(16+\n(27/2-(\n(02p*23u/100u)
+.ds 12 "\f[\n(.f]\s[\n(.s]\v'\n(09u'\*(15\v'-\n(09u'
+.as 12 "\*(14
+.as 12 "\/
+.ie \n(03>=\n(04 .nr 09 0+\n(03
+.el .nr 09 0+\n(04
+.ds 15 "
+.if '\*(15'' .if \w'\(ra' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\(ra
+.if '\*(15'' .if \w'\N'angbracketright'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketright'
+.if '\*(15'' .if \w'\N'angbracketrightbig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketrightbig'
+.if '\*(15'' .if \w'\N'angbracketrightBig'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketrightBig'
+.if '\*(15'' .if \w'\N'angbracketrightbigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketrightbigg'
+.if '\*(15'' .if \w'\N'angbracketrightBigg'' .if (\n(03-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(04*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 15 "\N'angbracketrightBigg'
+.if '\*(15'' .if \w'\N'angbracketrightBigg'' .ds 15 "\N'angbracketrightBigg'
+.if '\*(15'' .if \w'\N'angbracketrightbigg'' .ds 15 "\N'angbracketrightbigg'
+.if '\*(15'' .if \w'\N'angbracketrightBig'' .ds 15 "\N'angbracketrightBig'
+.if '\*(15'' .if \w'\N'angbracketrightbig'' .ds 15 "\N'angbracketrightbig'
+.if '\*(15'' .if \w'\N'angbracketright'' .ds 15 "\N'angbracketright'
+.if '\*(15'' .if \w'\(ra' .ds 15 "\(ra
+.nr 16 0\w'\*(15'
+.nr 27 0\n[bblly]-\n[bbury]-2
+.nr 07 0\n[bblly]-1
+.nr 08 0-\n[bbury]-1
+.nr 10 0-\n(07+\n(08/2-(\n(02p*23u/100u)
+.as 12 "\f[\n(.f]\s[\n(.s]\v'\n(10u'\*(15\v'-\n(10u'
+.as 13 "\*(12
+.ds 12 "\h'28u*\n(02p/100u'
+.as 13 "\*(12
+.ds 12 "
+.ds 14 "\s[\n(02]\,\f2b
+.as 12 "\*(14
+.ft 1
+.nr 04 0\w'\*(12'
+.nr 03 0\n[bblly]-\n[bbury]-2
+.nr 11 0\n[bblly]-1
+.nr 12 0-\n[bbury]-1
+.ps \n(02
+.ie \n(12>=\n(11 .nr 10 0+\n(12
+.el .nr 10 0+\n(11
+.ds 14 "
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' \{\
+.nr 16 0\w'|'
+.nr 26 0\n[bblly]-\n[bbury]-2
+.nr 24 0\n[bblly]-1
+.nr 25 0-\n[bbury]-1
+.nr 23 0\w'|'
+.nr 22 0\n[bblly]-\n[bbury]-2
+.nr 20 0\n[bblly]-1
+.nr 21 0-\n[bbury]-1
+.nr 19 0\w'|'
+.nr 18 0\n[bblly]-\n[bbury]-2
+.nr 06 0\n[bblly]-1
+.nr 17 0-\n[bbury]-1
+.nr 07 \n(10*2-\n(26-\n(18*11/10/\n(22
+.if \n(07<0 .nr 07 0
+.de 15
+.if \\n(08<\\n(07 .as 14 "\v'-\\n(20u'|\h'-\\n(23u'\v'-\\n(21u'
+.if \\n+(08<\\n(07 .15
+..
+.ds 14 "\v'-\n(06u'|\h'-\n(19u'\v'-\n(17u'
+.nr 08 0 1
+.15
+.as 14 "\v'-\n(24u'|\h'-\n(16u'\v'-\n(25u'
+.as 14 "\v'\n(07u*\n(22u+\n(18u+\n(26u+0u'
+.as 14 "\h'\n(23u'
+.  \}
+.nr 27 0\w'\*(14'
+.nr 08 0\n[bblly]-\n[bbury]-2
+.nr 06 0\n[bblly]-1
+.nr 07 0-\n[bbury]-1
+.nr 09 0-\n(06+\n(07/2-(\n(02p*23u/100u)
+.ds 15 "\f[\n(.f]\s[\n(.s]\v'\n(09u'\*(14\v'-\n(09u'
+.as 15 "\*(12
+.as 15 "\/
+.ie \n(12>=\n(11 .nr 09 0+\n(12
+.el .nr 09 0+\n(11
+.ds 14 "
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' .if \w'|' .if (\n(12-(4m/100)*2)<=(-\n[bbury]+\n[bblly]+(23m/100*2)) .if (\n(11*2)<=(-\n[bbury]+\n[bblly]-(23m/100*2)) .ds 14 "|
+.if '\*(14'' \{\
+.nr 27 0\w'|'
+.nr 17 0\n[bblly]-\n[bbury]-2
+.nr 19 0\n[bblly]-1
+.nr 18 0-\n[bbury]-1
+.nr 20 0\w'|'
+.nr 21 0\n[bblly]-\n[bbury]-2
+.nr 23 0\n[bblly]-1
+.nr 22 0-\n[bbury]-1
+.nr 24 0\w'|'
+.nr 25 0\n[bblly]-\n[bbury]-2
+.nr 16 0\n[bblly]-1
+.nr 26 0-\n[bbury]-1
+.nr 06 \n(09*2-\n(17-\n(25*11/10/\n(21
+.if \n(06<0 .nr 06 0
+.de 16
+.if \\n(07<\\n(06 .as 14 "\v'-\\n(23u'|\h'-\\n(20u'\v'-\\n(22u'
+.if \\n+(07<\\n(06 .16
+..
+.ds 14 "\v'-\n(16u'|\h'-\n(24u'\v'-\n(26u'
+.nr 07 0 1
+.16
+.as 14 "\v'-\n(19u'|\h'-\n(27u'\v'-\n(18u'
+.as 14 "\v'\n(06u*\n(21u+\n(25u+\n(17u+0u'
+.as 14 "\h'\n(20u'
+.  \}
+.nr 08 0\w'\*(14'
+.nr 07 0\n[bblly]-\n[bbury]-2
+.nr 16 0\n[bblly]-1
+.nr 06 0-\n[bbury]-1
+.nr 10 0-\n(16+\n(06/2-(\n(02p*23u/100u)
+.as 15 "\f[\n(.f]\s[\n(.s]\v'\n(10u'\*(14\v'-\n(10u'
+.as 13 "\*(15
+.nr 12 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 03 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 11 0\w'\*(13'
+.if -\n[bbury]>\n(12 .as 13 "\x'\n[bbury]u+\n(12u'
+.if \n[bblly]>\n(03 .as 13 "\x'\n[bblly]u-\n(03u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(13\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 26
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 27
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.ds 13 "\s[\n(02]\f3x
+.as 12 "\*(13
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(pl
+.as 12 "\*(13
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2y
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(pl
+.as 12 "\*(13
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1z
+.as 12 "\*(13
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(pl
+.as 12 "\*(13
+.nr 03 14
+.ft 1
+.ds 13 "\s[\n(03]\,\f2A\/
+.nr 04 0\w'\*(13'
+.nr 05 0\n[bblly]
+.ds 14 "\s[\n(03]\,\f2B\/
+.nr 06 0\w'\*(14'
+.nr 07 0-\n[bbury]
+.ie \n(04>=\n(06 .nr 08 0+\n(04
+.el .nr 08 0+\n(06
+.ps \n(03
+.nr 11 0\w'\(ru'
+.nr 12 0\n[bblly]-1
+.nr 13 0-\n[bbury]-1
+.nr 09 070m/100u
+.nr 10 070m/100u
+.nr 15 (\n(09-\n(05)-((23m/100u)+(4m/100u/2))
+.if \n(15<(14m/100u) .nr 09 +(14m/100u)-\n(15
+.nr 15 ((23m/100u)-(4m/100u/2))-(\n(07-\n(10)
+.if \n(15<(14m/100u) .nr 10 +(14m/100u)-\n(15
+.nr 14 0-\n(12+\n(13/2-(23m/100u)
+.nr 08 +2*(7m/100u)
+.ds 15 "\h'\n(03p*12u/100u'\v'\n(14u'\f[\n(.f]\s[\n(03]\l'\n(08u'\v'-\n(14u'\h'-\n(08u/2u'\h'-\n(04u/2u'\v'-\n(09u'\*(13\v'\n(09u'\h'-\n(04u/2u'\h'-\n(06u/2u'\v'\n(10u'\*(14\v'-\n(10u'\h'(-\n(06u+\n(08u)/2u'\h'\n(03p*12u/100u'
+.ds 14 "
+.as 14 "\*(15
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.as 12 "\*(14
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 14 "\s[\n(02]\f1\(pl
+.as 12 "\*(14
+.nr 03 \n(02-2
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 14 "\s[\n(03]\,\f2c
+.as 12 "\*(14
+.as 12 "\/
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 14 "\s[\n(02]\f1\(pl
+.as 12 "\*(14
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 14 "\s[\n(02]\f(CRd
+.as 12 "\*(14
+.ds 14 "\h'50u*\n(02p/100u'\s[\n(02]\,\f2e\h'-50u*\n(02p/100u'
+.as 12 "\*(14
+.ds 14 "\h'-20u*\n(02p/100u'\s[\n(02]\f2f\h'20u*\n(02p/100u'
+.as 12 "\*(14
+.ds 14 "\v'-30u*\n(02p/100u'\s[\n(02]\f2g\v'30u*\n(02p/100u'
+.as 12 "\*(14
+.ds 14 "\v'30u*\n(02p/100u'\s[\n(02]\f2h\v'-30u*\n(02p/100u'
+.as 12 "\*(14
+.as 12 "\/
+.nr 15 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 14 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 03 0\w'\*(12'
+.if -\n[bbury]>\n(15 .as 12 "\x'\n[bbury]u+\n(15u'
+.if \n[bblly]>\n(14 .as 12 "\x'\n[bblly]u-\n(14u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(12\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 30
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 31
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.nr .eqnmk 0\w'\*(12'
+.ds 13 "\s[\n(02]\,\f2x
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1=
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2y
+.as 12 "\*(13
+.as 12 "\/
+.nr 04 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 05 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 03 0\w'\*(12'
+.if -\n[bbury]>\n(04 .as 12 "\x'\n[bbury]u+\n(04u'
+.if \n[bblly]>\n(05 .as 12 "\x'\n[bblly]u-\n(05u'
+.nr MK 1
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(12\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 33
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 34
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.nr 01 0\w'\*(12'
+.ds 13 "\s[\n(02]\f1=
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\,\f2z
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(pl
+.as 12 "\*(13
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f11
+.as 12 "\*(13
+.nr 04 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 05 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 03 0\w'\*(12'
+.if -\n[bbury]>\n(04 .as 12 "\x'\n[bbury]u+\n(04u'
+.if \n[bblly]>\n(05 .as 12 "\x'\n[bblly]u-\n(05u'
+.nr MK 2
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\h'\n[.eqnmk]u-\n(01u'\*(12\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 36
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 37
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.ds 13 "\s[\n(02]\,\f2\(*a
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f2\(*b
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f2\(*g
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f2\(*D
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f2\(*S
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f2\(*w
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(c.
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f1\(mu
+.as 12 "\*(13
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100' \s0
+.ds 13 "\s[\n(02]\,\f2\v'-.2m'\z\(ap\v'.25m'\(ap\v'-.05m'
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f2\(pd
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f2\(gr
+.as 12 "\*(13
+.as 12 "\/
+.ds 13 "\s[\n(02]\f1\(12
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f1\(fm
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\,\f2a
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(<=
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2b
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(>=
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2c
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(!=
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2d
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(==
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2e
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(->
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2f
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(<-
+.as 12 "\*(13
+.as 12 "\s[\En(.s*28u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\,\f2g
+.as 12 "\*(13
+.as 12 "\/
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 13 "\s[\n(02]\f1\(+-
+.as 12 "\*(13
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100' \s0
+.ds 13 "\s[\n(02]\,\f2h
+.as 12 "\*(13
+.ds 13 "\s[\n(02]\f1\ .\ .\ .\ 
+.nr 03 0\w'\*(13'
+.nr 04 0-\n[bbury]
+.nr 05 0\n[bblly]
+.nr 06 0-\n(05+\n(04/2-(\n(02p*23u/100u)
+.ds 14 "\v'\n(06u'\*(13\v'-\n(06u'
+.as 12 "\/
+.as 12 "\*(14
+.ds 14 "\s[\n(02]\f1,\ .\ .\ .\ ,\|
+.as 12 "\*(14
+.nr 06 \n(02+2
+.ds 14 "\s[\n(06]\f1\(is
+.nr 05 0\w'\*(14'
+.nr 04 0-\n[bbury]
+.nr 03 0\n[bblly]
+.nr 07 0-\n(03+\n(04/2-(\n(02p*23u/100u)
+.ds 13 "\v'\n(07u'\*(14\v'-\n(07u'
+.ds 14 "
+.as 14 "\*(13
+.as 12 "\*(14
+.nr 06 \n(02+2
+.ds 14 "\s[\n(06]\f1\(pr
+.nr 07 0\w'\*(14'
+.nr 03 0-\n[bbury]
+.nr 04 0\n[bblly]
+.nr 05 0-\n(04+\n(03/2-(\n(02p*23u/100u)
+.ds 13 "\v'\n(05u'\*(14\v'-\n(05u'
+.ds 14 "
+.as 14 "\*(13
+.as 12 "\*(14
+.nr 06 \n(02+2
+.ds 14 "\s[\n(06]\f1\(su
+.nr 05 0\w'\*(14'
+.nr 04 0-\n[bbury]
+.nr 03 0\n[bblly]
+.nr 07 0-\n(03+\n(04/2-(\n(02p*23u/100u)
+.ds 13 "\v'\n(07u'\*(14\v'-\n(07u'
+.ds 14 "
+.as 14 "\*(13
+.as 12 "\*(14
+.nr 06 \n(02+2
+.as 12 "\s[\En(.s*22u*\n(02p/100u/\w' 'u]\j'100000' \s0
+.ds 14 "\s[\n(06]\f1\(cu
+.as 12 "\*(14
+.nr 06 \n(02+2
+.ds 14 "\s[\n(06]\f1\(ca
+.as 12 "\*(14
+.nr 07 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 03 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 06 0\w'\*(12'
+.if -\n[bbury]>\n(07 .as 12 "\x'\n[bbury]u+\n(07u'
+.if \n[bblly]>\n(03 .as 12 "\x'\n[bblly]u-\n(03u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(12\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 44
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 45
+.EN
+.EQ
+.nr .eqnsz \n(.s
+.nr .eqnfn \n(.f
+.nr 02 11
+.ds 12 "
+.ds 13 "\s[\n(02]\,\f2quoted text
+.as 12 "\*(13
+.ds 13 "
+.ds 14 "\s[\n(02]\f1\(pl\h'28u*\n(02p/100u'\f1=
+.as 13 "\*(14
+.ds 14 "
+.as 14 "\*(13
+.as 12 "\/
+.as 12 "\*(14
+.nr 03 \n(02*7/10
+.if \n(03<5 .nr 03 5
+.nr 04 \n(03*7/10
+.if \n(04<5 .nr 04 5
+.nr 04 \n(03*7/10
+.if \n(04<5 .nr 04 5
+.nr 05 \n(04
+.ps \n(04
+.ds 14 "\s[\n(04]\f13
+.nr 06 0\w'\*(14'
+.nr 09 0-\n[bbury]
+.nr 08 0\n[bblly]
+.as 14 "\h'5m/100u'
+.ds 13 "\s[\n(05]\f14
+.nr 11 0\w'\*(13'
+.nr 13 0\n[bblly]
+.nr 15 0\n(09u-(38m/100u)
+.if \n(15<(28m/100u) .nr 15 (28m/100u)
+.if \n(15<(\n(13+(45m/100u/4)) .nr 15 0\n(13+(45m/100u/4)
+.as 14 "\v'-\n(15u'\*(13\v'\n(15u'
+.as 14 "\h'12m/100u'
+.ds 13 "\s[\n(03]\f11
+.nr 18 0\w'\*(13'
+.ps \n(03
+.nr 05 0\w'\*(13'
+.nr 16 0-\n[bbury]
+.nr 17 0\n[bblly]
+.as 13 "\h'5m/100u'
+.nr 14 0\w'\*(14'
+.nr 12 0\n[bblly]
+.nr 10 0\n(16u-(38m/100u)
+.if \n(10<(37m/100u) .nr 10 (37m/100u)
+.if \n(10<(\n(12+(45m/100u/4)) .nr 10 0\n(12+(45m/100u/4)
+.ds 15 "\s[\n(04]\f12
+.nr 15 0\w'\*(15'
+.nr 11 0-\n[bbury]
+.nr 09 0\n(17u+(5m/100u)
+.if \n(09<(23m/100u) .nr 09 (23m/100u)
+.if (\n(10-\n(12)-(\n(11-\n(09)<(4m/100u*4) \{\
+.nr 09 (4m/100u*4)+\n(11-(\n(10-\n(12)
+.nr 08 (45m/100u*4/5)-(\n(10-\n(12)
+.if \n(08>0 .nr 10 +\n(08
+.if \n(08>0 .nr 09 -\n(08 \}
+.as 13 "\v'-\n(10u'\*(14\v'\n(10u'
+.as 13 "\h'-\n(14u'
+.nr 07 (\n(05-\n(18)
+.if \n(16>0 .nr 07 (\n(16+\n(09)*(\n(05-\n(18)/\n(16
+.nr 15 -\n(07
+.as 13 "\h'-\n(07u'
+.as 13 "\v'\n(09u'\*(15\v'-\n(09u'
+.as 13 "\h'-\n(15u'
+.ie \n(15>=\n(14 .nr 13 0+\n(15
+.el .nr 13 0+\n(14
+.as 13 "\h'+\n(13u'
+.as 13 "\h'12m/100u'
+.ds 14 "\s[\n(02]\,\f2x
+.nr 07 0\w'\*(14'
+.as 14 "\/
+.ps \n(02
+.nr 04 0\w'\*(14'
+.nr 09 0-\n[bbury]
+.nr 08 0\n[bblly]
+.as 14 "\h'5m/100u'
+.nr 10 0\w'\*(13'
+.nr 14 0-\n[bbury]
+.nr 16 0\n(08u+(5m/100u)
+.if \n(16<(20m/100u) .nr 16 (20m/100u)
+.if \n(16<(\n(14-(45m/100u*4/5)) .nr 16 0\n(14-(45m/100u*4/5)
+.nr 18 (\n(04-\n(07)
+.if \n(09>0 .nr 18 (\n(09+\n(16)*(\n(04-\n(07)/\n(09
+.nr 10 -\n(18
+.as 14 "\h'-\n(18u'
+.as 14 "\v'\n(16u'\*(13\v'-\n(16u'
+.as 14 "\h'12m/100u'
+.as 12 "\*(14
+.nr 18 0+\n(.vu-\n(02p+(\n(02p*70u/100u)
+.nr 17 0+\n(.vu-\n(02p+(\n(02p*25u/100u)
+.nr 03 0\w'\*(12'
+.if -\n[bbury]>\n(18 .as 12 "\x'\n[bbury]u+\n(18u'
+.if \n[bblly]>\n(17 .as 12 "\x'\n[bblly]u-\n(17u'
+.nr MK 0
+.ds 10 "\E*[.eqnbeg]\R'.eqnfn0 \En(.f'\R'.eqnsz0 \En(.s'\*(12\f[\En[.eqnfn0]]\s[\En[.eqnsz0]]\E*[.eqnend]
+.lf 47
+\&\*(10
+.ps \n[.eqnsz]
+.ft \n[.eqnfn]
+.lf 48
+.EN

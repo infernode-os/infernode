@@ -4,10 +4,11 @@
 #	book [-p works.bib] [-S style] [-o book.pdf] book.ms
 #
 # Citations are set by refer(1) from the database, in the style
-# (chicago); the book by troff(1) -mbook, as often as its table of
-# contents and references need to be set again (they come from the pass
-# before, through book.aux); then the PDF by tr2pdf(1). troff's output
-# is kept as book.out, for the document views.
+# (chicago); equations by eqn(1), if there are any, with its settings
+# for the fonts (/lib/troff/eqnrc); the book by troff(1) -mbook, as
+# often as its table of contents and references need to be set again
+# (they come from the pass before, through book.aux); then the PDF by
+# tr2pdf(1). troff's output is kept as book.out, for the document views.
 load std
 
 bib=()
@@ -30,12 +31,21 @@ tr=$stem.out	# troff's output, kept for viewing it
 err=$stem.log
 new=$stem.aux.new
 
+# equations: eqn, after its settings for the fonts
+math=0
+grep -s '^\.EQ' $src && math=1
+
+fn input {
+	if {~ $math 1} {cat /lib/troff/eqnrc $src} {cat $src}
+}
+fn cite {
+	if {~ $#bib 0} {cat} {refer -p $bib -S $style}
+}
+fn eqns {
+	if {~ $math 1} {eqn} {cat}
+}
 fn pass {
-	if {~ $#bib 0} {
-		troff -mbook '-dbook-aux='^$aux <$src >$tr >[2]$err
-	} {
-		refer -p $bib -S $style <$src | troff -mbook '-dbook-aux='^$aux >$tr >[2]$err
-	}
+	input | cite | eqns | troff -mbook '-dbook-aux='^$aux >$tr >[2]$err
 	grep '^aux:' $err | sed 's/^aux://' >$new
 }
 
@@ -44,7 +54,7 @@ done=0
 for n in 1 2 3 4 {
 	if {~ $done 0} {
 		pass
-		if {cmp -s $aux $new >[2]/dev/null} {
+		if {cmp -s $aux $new >/dev/null >[2]/dev/null} {
 			done=1
 		} {
 			cp $new $aux

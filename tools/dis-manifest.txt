@@ -176,6 +176,7 @@ dis/ed.dis
 dis/edit.dis
 dis/emuinit.dis
 dis/env.dis
+dis/eqn.dis
 dis/esort.dis
 dis/export.dis
 dis/fc.dis

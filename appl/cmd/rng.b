@@ -441,7 +441,8 @@ yystack:
 	
 		yypt := yyp;
 		yyp -= yyr2[yyn];
-#		yyval = yys[yyp+1].yyv;
+		# $$ is $1 until an action says otherwise, as in C's yacc
+		yyval = yys[yyp+1].yyv;
 		yym := yyn;
 	
 		# consult goto table to find next state

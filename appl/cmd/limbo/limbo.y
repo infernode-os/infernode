@@ -57,6 +57,7 @@ include "draw.m";
 	impmods:		ref Decl;		# name of implementation module(s)
 	nildecl:	ref Decl;		# declaration for limbo's nil
 	selfdecl:	ref Decl;		# declaration for limbo's self
+	selfldt:	ref Decl;		# link table for the load of $self
 
 	#
 	# types.b

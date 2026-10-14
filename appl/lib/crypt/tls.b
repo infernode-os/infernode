@@ -72,9 +72,11 @@ EXT_KEY_SHARE:			con 51;
 GROUP_SECP256R1:	con 16r0017;
 GROUP_SECP384R1:	con 16r0018;
 GROUP_X25519:		con 16r001D;
-GROUP_X25519MLKEM768:	con 16r4588;
+GROUP_X25519MLKEM768:	con 16r11EC;	# hybrid: ML-KEM-768 + X25519 (4588 decimal), offered by default
 GROUP_SECP384R1MLKEM1024: con 16r11ED;	# CNSA 2.0 hybrid: P-384 ECDH + ML-KEM-1024
 P384_POINTLEN:		con 97;		# SEC1 uncompressed point (0x04||x||y)
+MLKEM768_EKLEN:		con 1184;	# ML-KEM-768 encapsulation key
+MLKEM768_CTLEN:		con 1088;	# ML-KEM-768 ciphertext
 MLKEM1024_EKLEN:	con 1568;	# ML-KEM-1024 encapsulation key
 MLKEM1024_CTLEN:	con 1568;	# ML-KEM-1024 ciphertext
 
@@ -91,6 +93,7 @@ ConnState: adt {
 	fd:		ref Sys->FD;
 	version:	int;		# negotiated version
 	suite:		int;		# negotiated cipher suite
+	group:		int;		# TLS 1.3 key-exchange group; 0 under TLS 1.2
 
 	# AEAD keys
 	writekey:	array of byte;
@@ -130,6 +133,9 @@ ConnState: adt {
 	# Ephemeral CNSA hybrid (SecP384r1MLKEM1024) private material; nil otherwise
 	eph_p384_priv:	array of byte;
 	eph_mlkem_sk:	array of byte;
+
+	# Ephemeral ML-KEM-768 secret key for the X25519MLKEM768 share; nil otherwise
+	eph_mlkem768_sk:	array of byte;
 
 	# Ephemeral P-256 private key for the TLS 1.3 secp256r1 key share; nil otherwise
 	eph_p256_priv:	array of byte;
@@ -251,6 +257,7 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	conn := ref Conn;
 	conn.version = cs.version;
 	conn.suite = cs.suite;
+	conn.group = cs.group;
 	conn.servername = cs.servername;
 
 	# Stash ConnState in a global for the conn methods to access
@@ -641,12 +648,16 @@ isccpoly(suite: int): int
 # Handshake
 # ================================================================
 
-# CNSA 2.0 strict mode: read the /env/cnsamode policy flag (off by default).
-# When set, the TLS client offers the SecP384r1MLKEM1024 hybrid (P-384 is the
-# CNSA-approved curve; X25519 is not). Mirrors the native STS handshake gating.
-cnsamode(): int
+# CNSA 2.0 strict TLS: read the /env/cnsatls policy flag (off by default; the
+# emu reflects the host CNSATLS into it). When set, the TLS client offers only
+# the SecP384r1MLKEM1024 hybrid (P-384 is the CNSA-approved curve; X25519 is
+# not) and refuses any server that will not take it. Public servers do not, so
+# this is for networks whose TLS servers are all your own. It is apart from
+# /env/cnsamode, which governs the native STS handshake between nodes: a node
+# can be CNSA-strict to its peers and still reach the web.
+cnsatls(): int
 {
-	fd := sys->open("/env/cnsamode", Sys->OREAD);
+	fd := sys->open("/env/cnsatls", Sys->OREAD);
 	if(fd == nil)
 		return 0;
 	buf := array[8] of byte;
@@ -672,15 +683,27 @@ strictcnsaconfig(config: ref Config)
 	config.maxver = TLS13;
 }
 
-clearcnsa(cs: ref ConnState)
+# Wipe whatever ephemeral key material this handshake made.
+clearephemeral(cs: ref ConnState)
 {
 	wipebytes(cs.eph_p384_priv);
 	wipebytes(cs.eph_mlkem_sk);
+	wipebytes(cs.eph_mlkem768_sk);
+	wipebytes(cs.eph_p256_priv);
 	cs.eph_p384_priv = nil;
 	cs.eph_mlkem_sk = nil;
+	cs.eph_mlkem768_sk = nil;
+	cs.eph_p256_priv = nil;
 }
 
 handshake(cs: ref ConnState, config: ref Config): string
+{
+	e := handshake0(cs, config);
+	clearephemeral(cs);
+	return e;
+}
+
+handshake0(cs: ref ConnState, config: ref Config): string
 {
 	# Initialize handshake hash (SHA-256 for most suites)
 	cs.handhash = nil;
@@ -689,14 +712,16 @@ handshake(cs: ref ConnState, config: ref Config): string
 	# Generate client random
 	client_random := randombytes(32);
 
-	# Key exchange: CNSA hybrid (SecP384r1MLKEM1024) when /env/cnsamode is set,
-	# else classical X25519.
+	# Key exchange: only the CNSA hybrid (SecP384r1MLKEM1024) when
+	# /env/cnsatls is set; else the X25519MLKEM768 hybrid first, with
+	# X25519, P-256 and P-384 for servers that do not take it.
 	x25519_priv: array of byte;
 	x25519_pub: array of byte;
 	hybridshare: array of byte;
+	pqshare: array of byte;
 	p256share: array of byte;
 	p384share: array of byte;
-	cnsa := cnsamode();
+	cnsa := cnsatls();
 	if(cnsa){
 		strictcnsaconfig(config);
 		(p384priv, p384pub) := keyring->p384_keygen();
@@ -710,6 +735,14 @@ handshake(cs: ref ConnState, config: ref Config): string
 	}else{
 		x25519_priv = randombytes(32);
 		x25519_pub = keyring->x25519_base(x25519_priv);
+		# The post-quantum hybrid, preferred: ML-KEM-768 ek (1184) ||
+		# X25519 (32), the X25519 key shared with the plain X25519
+		# share (draft-ietf-tls-ecdhe-mlkem allows it, as browsers do).
+		(mlkem_ek, mlkem_sk) := keyring->mlkem768_keygen();
+		if(mlkem_ek != nil && mlkem_sk != nil) {
+			cs.eph_mlkem768_sk = mlkem_sk;
+			pqshare = catbytes(mlkem_ek, x25519_pub);
+		}
 		# Also offer a secp256r1 share, so TLS 1.3 servers that prefer
 		# P-256 (e.g. www.nist.gov) accept it without a HelloRetryRequest.
 		(p256priv, p256pt) := keyring->p256_keygen();
@@ -728,65 +761,42 @@ handshake(cs: ref ConnState, config: ref Config): string
 	}
 
 	# Build and send ClientHello
-	hello := buildclienthello(config, client_random, x25519_pub, hybridshare, p256share, p384share);
+	hello := buildclienthello(config, client_random, x25519_pub, hybridshare, pqshare, p256share, p384share);
 	err := sendhsmsg(cs, HT_CLIENT_HELLO, hello);
-	if(err != nil) {
-		if(cnsa)
-			clearcnsa(cs);
+	if(err != nil)
 		return err;
-	}
 
 	# Read ServerHello
 	(shtype, shdata, sherr) := readhsmsg(cs);
-	if(sherr != nil) {
-		if(cnsa)
-			clearcnsa(cs);
+	if(sherr != nil)
 		return sherr;
-	}
-	if(shtype != HT_SERVER_HELLO) {
-		if(cnsa)
-			clearcnsa(cs);
+	if(shtype != HT_SERVER_HELLO)
 		return "tls: expected ServerHello";
-	}
 
 	# Parse ServerHello
 	(server_random, server_suite, server_version, key_share_group, key_share_data, pherr) := parseserverhello(shdata, config);
-	if(pherr != nil) {
-		if(cnsa)
-			clearcnsa(cs);
+	if(pherr != nil)
 		return pherr;
-	}
 
 	cs.version = server_version;
 	cs.suite = server_suite;
+	if(cs.version == TLS13)
+		cs.group = key_share_group;
 
 	if(cnsa) {
-		if(cs.version != TLS13) {
-			clearcnsa(cs);
+		if(cs.version != TLS13)
 			return "tls: CNSA mode requires TLS 1.3";
-		}
-		if(cs.suite != TLS_AES_256_GCM_SHA384) {
-			clearcnsa(cs);
+		if(cs.suite != TLS_AES_256_GCM_SHA384)
 			return "tls: CNSA mode requires TLS_AES_256_GCM_SHA384";
-		}
-		if(key_share_group != GROUP_SECP384R1MLKEM1024) {
-			clearcnsa(cs);
+		if(key_share_group != GROUP_SECP384R1MLKEM1024)
 			return "tls: CNSA mode requires SecP384r1MLKEM1024";
-		}
 	}
 
-	e: string;
 	if(cs.version == TLS13)
-		e = handshake13(cs, config, client_random, server_random,
+		return handshake13(cs, config, client_random, server_random,
 			x25519_priv, key_share_group, key_share_data);
-	else
-		e = handshake12(cs, config, client_random, server_random,
-			x25519_priv);
-	if(cnsa)
-		clearcnsa(cs);
-	wipebytes(cs.eph_p256_priv);	# unused if the server chose X25519
-	cs.eph_p256_priv = nil;
-	return e;
+	return handshake12(cs, config, client_random, server_random,
+		x25519_priv);
 }
 
 # ================================================================
@@ -1044,6 +1054,25 @@ handshake13(cs: ref ConnState, config: ref Config,
 			return "tls: CNSA hybrid key agreement failed";
 		# combiner: ECDH secret first, then ML-KEM (SecP-prefixed codepoint order)
 		shared_secret = catbytes(ecdh_ss, mlkem_ss);
+	}else if(key_share_group == GROUP_X25519MLKEM768){
+		# server share = ML-KEM-768 ct (1088) || X25519 (32)
+		if(key_share_data == nil || len key_share_data != MLKEM768_CTLEN + 32)
+			return "tls: invalid server hybrid key share";
+		if(cs.eph_mlkem768_sk == nil)
+			return "tls: server chose X25519MLKEM768, which we did not offer";
+		mlkem_ss: array of byte;
+		x_ss: array of byte;
+		{
+			mlkem_ss = keyring->mlkem768_decaps(cs.eph_mlkem768_sk, key_share_data[0:MLKEM768_CTLEN]);
+			x_ss = keyring->x25519(x25519_priv, key_share_data[MLKEM768_CTLEN:]);
+		} exception {
+		* =>
+			return "tls: X25519MLKEM768 key agreement failed";
+		}
+		if(mlkem_ss == nil || x_ss == nil)
+			return "tls: X25519MLKEM768 key agreement failed";
+		# combiner: ML-KEM secret first, then X25519 (the codepoint's order)
+		shared_secret = catbytes(mlkem_ss, x_ss);
 	}else if(key_share_group == GROUP_X25519){
 		if(key_share_data == nil || len key_share_data != 32)
 			return "tls: invalid server key share";
@@ -1236,8 +1265,8 @@ handshake13(cs: ref ConnState, config: ref Config,
 # ================================================================
 
 buildclienthello(config: ref Config, random: array of byte,
-	x25519_pub: array of byte, hybridshare: array of byte, p256share: array of byte,
-	p384share: array of byte): array of byte
+	x25519_pub: array of byte, hybridshare: array of byte, pqshare: array of byte,
+	p256share: array of byte, p384share: array of byte): array of byte
 {
 	# Build extensions
 	exts: array of byte;
@@ -1249,15 +1278,16 @@ buildclienthello(config: ref Config, random: array of byte,
 	else
 		sni = nil;
 
-	# Supported groups + key share: CNSA hybrid or classical X25519.
+	# Supported groups + key share: the CNSA hybrid alone, or the
+	# X25519MLKEM768 hybrid ahead of the classical groups.
 	groups: array of byte;
 	keyshare: array of byte;
 	if(hybridshare != nil){
 		groups = buildsupportedgroups_cnsa();
 		keyshare = buildkeyshare_group(GROUP_SECP384R1MLKEM1024, hybridshare);
 	}else{
-		groups = buildsupportedgroups();
-		keyshare = buildkeyshare(x25519_pub, p256share, p384share);
+		groups = buildsupportedgroups(pqshare != nil);
+		keyshare = buildkeyshare(pqshare, x25519_pub, p256share, p384share);
 	}
 
 	# Signature algorithms extension
@@ -1338,16 +1368,22 @@ buildsniext(name: string): array of byte
 	return ext;
 }
 
-buildsupportedgroups(): array of byte
+buildsupportedgroups(pq: int): array of byte
 {
-	# x25519, secp256r1, secp384r1
-	ext := array [4 + 2 + 6] of byte;
+	# [x25519mlkem768,] x25519, secp256r1, secp384r1
+	groups := GROUP_X25519 :: GROUP_SECP256R1 :: GROUP_SECP384R1 :: nil;
+	if(pq)
+		groups = GROUP_X25519MLKEM768 :: groups;
+	n := 2 * len groups;
+	ext := array [4 + 2 + n] of byte;
 	put16(ext, 0, EXT_SUPPORTED_GROUPS);
-	put16(ext, 2, 2 + 6);
-	put16(ext, 4, 6);
-	put16(ext, 6, GROUP_X25519);
-	put16(ext, 8, GROUP_SECP256R1);
-	put16(ext, 10, GROUP_SECP384R1);
+	put16(ext, 2, 2 + n);
+	put16(ext, 4, n);
+	off := 6;
+	for(; groups != nil; groups = tl groups) {
+		put16(ext, off, hd groups);
+		off += 2;
+	}
 	return ext;
 }
 
@@ -1428,10 +1464,13 @@ buildsupportedversions(config: ref Config): array of byte
 	return ext;
 }
 
-buildkeyshare(x25519_pub, p256_pub, p384_pub: array of byte): array of byte
+buildkeyshare(pq_pub, x25519_pub, p256_pub, p384_pub: array of byte): array of byte
 {
-	# X25519 first (preferred), then secp256r1 and secp384r1 if we have them
+	# X25519MLKEM768 first (preferred) if we have it, then X25519,
+	# then secp256r1 and secp384r1 if we have them
 	listlen := 2 + 2 + 32;	# group(2) + keylen(2) + data(32)
+	if(pq_pub != nil)
+		listlen += 2 + 2 + len pq_pub;
 	if(p256_pub != nil)
 		listlen += 2 + 2 + len p256_pub;
 	if(p384_pub != nil)
@@ -1442,10 +1481,17 @@ buildkeyshare(x25519_pub, p256_pub, p384_pub: array of byte): array of byte
 	put16(ext, 2, 2 + listlen);
 	put16(ext, 4, listlen);
 
-	put16(ext, 6, GROUP_X25519);
-	put16(ext, 8, 32);
-	ext[10:] = x25519_pub;
-	off := 42;
+	off := 6;
+	if(pq_pub != nil) {
+		put16(ext, off, GROUP_X25519MLKEM768);
+		put16(ext, off+2, len pq_pub);
+		ext[off+4:] = pq_pub;
+		off += 4 + len pq_pub;
+	}
+	put16(ext, off, GROUP_X25519);
+	put16(ext, off+2, 32);
+	ext[off+4:] = x25519_pub;
+	off += 4 + 32;
 	if(p256_pub != nil) {
 		put16(ext, off, GROUP_SECP256R1);
 		put16(ext, off+2, len p256_pub);

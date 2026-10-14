@@ -25,7 +25,9 @@ TLS: module {
 	# Named groups
 	X25519:			con 16r001D;
 	SECP256R1:		con 16r0017;
-	X25519MLKEM768:		con 16r4588;
+	SECP384R1:		con 16r0018;
+	X25519MLKEM768:		con 16r11EC;	# 4588 decimal; offered first by default
+	SECP384R1MLKEM1024:	con 16r11ED;	# offered alone under /env/cnsatls
 
 	# Signature algorithms
 	RSA_PKCS1_SHA256:		con 16r0401;
@@ -49,6 +51,7 @@ TLS: module {
 	Conn: adt {
 		version:	int;		# negotiated TLS version
 		suite:		int;		# negotiated cipher suite
+		group:		int;		# TLS 1.3 key-exchange group (X25519MLKEM768, ...); 0 under TLS 1.2
 		servername:	string;		# peer name
 
 		read:	fn(c: self ref Conn, buf: array of byte, n: int): int;

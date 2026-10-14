@@ -20,7 +20,7 @@ lacks PQ support. Tested end-to-end including negative cases.
 
 | Requirement | Mechanism | Evidence | Status |
 |-------------|-----------|----------|--------|
-| Hybrid key exchange over TLS | X25519 **+** ML-KEM-768, `GROUP_X25519MLKEM768` (0x4588); combined secret → HKDF; classical fallback if peer lacks it | `appl/lib/crypt/tls.b:74`; `docs/CRYPTO-MODERNIZATION.md` §8 | ✅ |
+| Hybrid key exchange over TLS | X25519 **+** ML-KEM-768, `GROUP_X25519MLKEM768` (0x11EC); combined secret → HKDF; classical fallback if peer lacks it | `appl/lib/crypt/tls.b:75`; `docs/CRYPTO-MODERNIZATION.md` §8 | ✅ |
 | Hybrid on node-to-node transport | STS v2 handshake: classical DH **+** mutual ML-KEM-768, combined via SHA3-512, transcript-bound | `libinterp/keyring.c` (`Keyring_auth`, `mlkem768_keygen` at `:2019`, `mlkem1024_keygen` at `:2017` under CNSA mode); `docs/CRYPTO-MODERNIZATION.md` §10 | ✅ |
 | Transparent to applications | Negotiated in the TLS/STS layer; apps speak unchanged 9P/Styx | `docs/CRYPTO-MODERNIZATION.md` §10 | ✅ |
 | Defense-in-depth (safe unless *both* broken) | Combined classical‖PQ secret | [`CNSA-2.0.md`](CNSA-2.0.md) §4 | ✅ |

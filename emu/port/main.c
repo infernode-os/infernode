@@ -389,6 +389,12 @@ emuinit(void *imod)
 		char *cnsa = getenv("CNSAMODE");
 		if(cnsa != nil && cnsa[0] != 0)
 			ksetenv("cnsamode", cnsa, 1);
+		/* CNSA-strict TLS is a separate choice: public servers do not
+		 * offer SecP384r1MLKEM1024, so a node CNSA-strict to its peers
+		 * still needs the web. tls(2) reads /env/cnsatls. */
+		cnsa = getenv("CNSATLS");
+		if(cnsa != nil && cnsa[0] != 0)
+			ksetenv("cnsatls", cnsa, 1);
 	}
 	putenvqv("emuargs", rebootargv, rebootargc, 1);
 	putenvq("emuroot", rootdir, 1);

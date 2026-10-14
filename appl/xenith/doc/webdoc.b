@@ -227,6 +227,13 @@ scalable(nil: int): int
 	return 0;
 }
 
+pinned(h: int): int
+{
+	if(get(h) == nil)
+		return 0;
+	return htmldoc->pinned(h);
+}
+
 # The page from org down, into r of dst, the field with the keyboard
 # ringed
 paint(h: int, n: int, scale: int, dst: ref Image, r: Rect, org: Point): string

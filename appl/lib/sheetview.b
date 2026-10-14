@@ -473,9 +473,11 @@ paintsheet(v: ref View, n: int, sr, fr: Rect)
 	dst := v.dst;
 	scalable := v.eng->scalable(v.h);
 	if(!scalable && v.scale == 100 && v.rot == 0){
-		# a flowing document from its band; anything else, or with no
-		# memory for one, straight onto dst
-		if(v.flowing() && banded(v, n, sr, vis))
+		# a flowing document from its band; anything else, with no
+		# memory for one, or with part of it pinned to the view (a
+		# web page's fixed header, painted where the view is: a strip
+		# would have one of its own), straight onto dst
+		if(v.flowing() && !v.eng->pinned(v.h) && banded(v, n, sr, vis))
 			return;
 		if(v.eng->paint(v.h, n, 100, dst, vis, vis.min.sub(sr.min)) != nil)
 			blank(dst, vis);

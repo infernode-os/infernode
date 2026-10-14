@@ -241,6 +241,14 @@ scroll(id: int): int
 	return s.scroll;
 }
 
+pinned(id: int): int
+{
+	s := find(id);
+	if(s == nil)
+		return 0;
+	return s.pinned();
+}
+
 viewing(id: int, y: int)
 {
 	s := find(id);

@@ -134,6 +134,7 @@ Layout: module
 	lay:	fn(root: ref Box, width, height: int);
 	paint:	fn(root: ref Box, dst: ref Draw->Image, origin: Draw->Point, clip: Draw->Rect);
 	height:	fn(root: ref Box): int;		# the page's height, for scrolling
+	pinned:	fn(root: ref Box): int;		# 1 if a box stays where it is in the window as the page scrolls (fixed, sticky)
 	boxat:	fn(root: ref Box, p: Draw->Point): (int, ref Box);	# node and box under p
 	boxes:	fn(root: ref Box, n: int): list of ref Box;	# the boxes node n generated
 	dump:	fn(root: ref Box): string;

@@ -12308,6 +12308,40 @@ hroot: ref Box;	# the last answer, until the next lay()
 hgen := -1;
 hval := 0;
 
+# Whether the page has a box that stays where it is in the window as
+# the page scrolls: one fixed, or one sticky that sticks (stickies()).
+# What paints the page a strip at a time must paint all it shows then:
+# such a box is painted where the window is, not where the strip is.
+pinned(root: ref Box): int
+{
+	if(root == proot && laygen == pgen)
+		return pval;
+	(proot, pgen, pval) = (root, laygen, haspinned(root));
+	return pval;
+}
+
+proot: ref Box;
+pgen := -1;
+pval := 0;
+
+haspinned(b: ref Box): int
+{
+	for(i := 0; i < len b.kids; i++) {
+		k := b.kids[i];
+		st := k.st;
+		if(st.position == Style->Pfixed ||
+		   st.position == Style->Psticky && !k.inl && st.top.kind != Style->Lauto)
+			return 1;
+		if(haspinned(k))
+			return 1;
+	}
+	for(i = 0; i < len b.lines; i++)
+		for(j := 0; j < len b.lines[i].frags; j++)
+			if((f := b.lines[i].frags[j]).kind == Fatomic && f.box != nil && haspinned(f.box))
+				return 1;
+	return 0;
+}
+
 # The bottom of b's border box, or of its descendants' if they reach
 # further and b does not clip them; oy is the y of b's parent's border box.
 overflowbottom(b: ref Box, oy: int): int

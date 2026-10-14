@@ -40,6 +40,7 @@ Page: module
 		target:	fn(p: self ref Pg, fragment: string): int;	# make the element a #fragment names the :target; its y
 		paint:	fn(p: self ref Pg, dst: ref Draw->Image, scroll: Draw->Point);
 		pageheight:	fn(p: self ref Pg): int;
+		pinned:	fn(p: self ref Pg): int;	# a box in it stays put in the window as it scrolls
 		# progressively: the URLs of images it shows and has not got,
 		# then those that have come, laid out with them
 		wanted:	fn(p: self ref Pg): list of string;

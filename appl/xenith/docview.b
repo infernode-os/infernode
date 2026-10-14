@@ -232,6 +232,19 @@ handle(e: ref Ev)
 		}
 		return;
 	}
+	# what the document does to the window (its name, its text) is
+	# done as through its files: a program reading the window's events
+	# hears them from 'F', not from no one, which Xenith took for a
+	# fault and quit (a page loading in a window a client watched)
+	owner := w.owner;
+	if(owner == 0)
+		w.owner = 'F';
+	handle1(w, e);
+	w.owner = owner;
+}
+
+handle1(w: ref Window, e: ref Ev)
+{
 	d := w.doc;
 	if(e.v == d.next){
 		nextevent(w, e);

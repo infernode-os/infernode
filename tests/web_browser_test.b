@@ -276,6 +276,7 @@ testFind(t: ref T)
 
 # the draw device's display; nil with none (a headless emu)
 disp: ref Display;
+sess: ref Session;
 
 # Scrolling through ctl is the window's scrolling too: its view
 # follows the event
@@ -290,6 +291,24 @@ testScroll(t: ref T)
 	n := sys->read(ev, buf, len buf);
 	t.assertseq(chomp(string buf[0:n]), "scroll 120", "the event a window scrolls by");
 	wr("ctl", "scroll 0");
+}
+
+# Back and Fwd come back to where the view was on the page (as the
+# window said, viewing), not to its top
+testBackPlace(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "a.html"), "done " + DIR + "a.html", "open A");
+	sess.viewing(137);
+	t.assertseq(nav(t, "follow 1"), "done " + DIR + "b.html", "follow to B");
+	t.asserteq(sess.scroll, 0, "a new page from its top");
+	sess.viewing(55);
+	t.assertseq(nav(t, "back"), "done " + DIR + "a.html", "back to A");
+	t.asserteq(sess.scroll, 137, "A where it was left");
+	t.assertseq(nav(t, "forward"), "done " + DIR + "b.html", "forward to B");
+	t.asserteq(sess.scroll, 55, "B where it was left");
+	t.assertseq(nav(t, "back"), "done " + DIR + "a.html", "back to A again");
+	t.asserteq(sess.scroll, 137, "A where it was left, again");
+	sess.viewing(0);
 }
 
 testImage(t: ref T)
@@ -564,7 +583,7 @@ init(nil: ref Draw->Context, args: list of string)
 		sys->fprint(sys->fildes(2), "init: %s\n", err);
 		raise "fail:init";
 	}
-	s := Session.new(800, 600);
+	s := sess = Session.new(800, 600);
 	if((err = charonfs->serve(browser, s, disp, MNT)) != nil) {
 		sys->fprint(sys->fildes(2), "serve: %s\n", err);
 		raise "fail:serve";
@@ -582,6 +601,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Fragment", testFragment);
 	run("Find", testFind);
 	run("Scroll", testScroll);
+	run("BackPlace", testBackPlace);
 	run("Image", testImage);
 	run("Forms", testForms);
 	run("Refresh", testRefresh);

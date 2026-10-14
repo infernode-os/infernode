@@ -241,6 +241,13 @@ scroll(id: int): int
 	return s.scroll;
 }
 
+viewing(id: int, y: int)
+{
+	s := find(id);
+	if(s != nil)
+		s.viewing(y);
+}
+
 resize(id: int, width, height: int)
 {
 	s := find(id);

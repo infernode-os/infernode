@@ -67,7 +67,7 @@ init(d: ref Draw->Display): string
 
 Session.new(width, height: int): ref Session
 {
-	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, chan[1] of int, nil, 0);
+	return ref Session(nil, "", "", "", nil, nil, width, height, 0, 0, 0, chan[1] of int, nil, 0);
 }
 
 # The session's lock.  A page's realm takes it for each task, and a
@@ -229,7 +229,7 @@ Session.goback(s: self ref Session): string
 		unlock(s);
 		return "no previous page";
 	}
-	u := hd s.back;
+	(u, nil) := hd s.back;
 	unlock(s);
 	navigate(s, u, "GET", nil, nil, Hback);
 	return nil;
@@ -242,7 +242,7 @@ Session.goforward(s: self ref Session): string
 		unlock(s);
 		return "no next page";
 	}
-	u := hd s.fwd;
+	(u, nil) := hd s.fwd;
 	unlock(s);
 	navigate(s, u, "GET", nil, nil, Hforward);
 	return nil;
@@ -294,6 +294,7 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 	if(s.pg != nil && method == "GET" && hist != Hreload &&
 	   (frag := fragment(url)) != nil && unfrag(url) == unfrag(s.url)) {
 		prev := s.url;
+		y := wasat(s, hist);
 		history(s, prev, hist);
 		s.url = url;
 		s.scroll = target1(s, s.pg, frag);
@@ -314,19 +315,34 @@ history(s: ref Session, prev: string, hist: int)
 	case hist {
 	Hnew =>
 		if(prev != "")
-			s.back = prev :: s.back;
+			s.back = (prev, s.at) :: s.back;
 		s.fwd = nil;
 	Hback =>
 		if(s.back != nil)
 			s.back = tl s.back;
 		if(prev != "")
-			s.fwd = prev :: s.fwd;
+			s.fwd = (prev, s.at) :: s.fwd;
 	Hforward =>
 		if(s.fwd != nil)
 			s.fwd = tl s.fwd;
 		if(prev != "")
-			s.back = prev :: s.back;
+			s.back = (prev, s.at) :: s.back;
 	}
+}
+
+# where the view was on the page Back or Fwd goes to, as history has it
+wasat(s: ref Session, hist: int): int
+{
+	h: list of (string, int);
+	case hist {
+	Hback =>	h = s.back;
+	Hforward =>	h = s.fwd;
+	* =>	return -1;
+	}
+	if(h == nil)
+		return -1;
+	(nil, y) := hd h;
+	return y;
 }
 
 loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, hist: int)
@@ -361,13 +377,14 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 			s.pg = ep;
 			s.url = url;	# so that reload tries it again
 			s.title = ep.title;
-			s.scroll = 0;
+			s.scroll = s.at = 0;
 		}
 		s.status = "error " + err;
 		unlock(s);
 		event(s, "error " + err);
 		return;
 	}
+	y := wasat(s, hist);
 	history(s, s.url, hist);
 	s.pg = pg;
 	s.url = pg.url;

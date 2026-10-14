@@ -325,6 +325,12 @@ lineat(nil: int, nil: int, nil: int): int
 	return 0;
 }
 
+viewing(h: int, n: int, y: int)
+{
+	if(get(h) != nil && n == 0)
+		htmldoc->viewing(h, y);
+}
+
 commands(h: int): list of string
 {
 	s := get(h);

@@ -226,6 +226,7 @@ SYSMODULES=\
 	dis.m\
 	diskblocks.m\
 	disks.m\
+	docengine.m\
 	draw.m\
 	encoding.m\
 	env.m\

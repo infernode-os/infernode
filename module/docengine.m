@@ -87,6 +87,10 @@ Docengine: module
 	lineto:	fn(h: int, l: int): (int, int);
 	lineat:	fn(h: int, n: int, y: int): int;
 
+	# The view shows sheet n from y down (pixels at scale 100): a page
+	# browsed keeps where it was, for Back and Fwd to come back to.
+	viewing:	fn(h: int, n: int, y: int);
+
 	# Commands the engine adds to the view's own (Zoom, Fit, Page
 	# and paging are the view's).
 	commands:	fn(h: int): list of string;

@@ -110,6 +110,24 @@ usage := "usage: refer [options] <input >output\n" +
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
+	{
+		refermain(args);
+	} exception e {
+	"fail:*" =>
+		if(stdout != nil)
+			stdout.flush();
+		raise e;
+	"*" =>
+		# where C would crash: said, and failed (a Broken program keeps emu alive)
+		if(stdout != nil)
+			stdout.flush();
+		sys->fprint(sys->fildes(2), "refer: %s\n", e);
+		raise "fail:" + e;
+	}
+}
+
+refermain(args: list of string)
+{
 	bufio = load Bufio Bufio->PATH;
 	if(bufio == nil){
 		sys->fprint(sys->fildes(2), "refer: cannot load %s: %r\n", Bufio->PATH);

@@ -12,7 +12,9 @@
 #	bibliography; translated, edited, chapter, article (DOI), thesis
 #	and classical works; inclusive page ranges (101–8, 321–28); a
 #	title ending in ? keeping its comma; a chapter citing in full
-#	again; the bibliography sorted, accents aside.
+#	again; the bibliography sorted, accents aside;
+#	a name left empty in a BibTeX list ("Smith and ", " and Jones")
+#	is dropped, where refer stopped on it.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -23,9 +25,11 @@ cd "$ROOT"
 fail=0
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/refer.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
+printf '@book{a, author = {Smith and }, title = {T}, year = 2000}\n@book{b, author = { and Jones}, title = {U}, year = 2001}\n' >"$tmp/empty.bib"
+printf 'x\n.cite a\ny\n.cite b\n.bibliography\n' >"$tmp/empty.tr"
 
 with_timeout 60 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c \
-    "cd /tests/refer; refer -p db.ref -ocite -sa < ms.tr > '#U*$tmp/ms.out'; refer -p works.bib -S chicago < chicago.tr > '#U*$tmp/chicago.out'" \
+    "cd /tests/refer; refer -p db.ref -ocite -sa < ms.tr > '#U*$tmp/ms.out'; refer -p works.bib -S chicago < chicago.tr > '#U*$tmp/chicago.out'; refer -p '#U*$tmp/empty.bib' -S chicago < '#U*$tmp/empty.tr' > '#U*$tmp/empty.out' >[2] '#U*$tmp/empty.err'" \
     </dev/null >/dev/null 2>&1
 
 for t in ms chicago; do
@@ -37,4 +41,11 @@ for t in ms chicago; do
         fail=1
     fi
 done
+if grep -q '^Smith, \\fIT\\fP' "$tmp/empty.out" 2>/dev/null && grep -q '^Jones, \\fIU\\fP' "$tmp/empty.out" &&
+    ! grep -q . "$tmp/empty.err"; then
+    echo "PASS: a name left empty is dropped"
+else
+    echo "FAIL: a name left empty: $(cat "$tmp/empty.err" "$tmp/empty.out" 2>/dev/null | head -4)"
+    fail=1
+fi
 exit $fail

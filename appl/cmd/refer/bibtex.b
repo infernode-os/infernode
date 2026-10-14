@@ -463,12 +463,17 @@ bibnames(s: string): array of ref Name
 		}
 	}
 	parts = s[b:] :: parts;
+	# a name left empty ("Smith and", "and Jones") is no one
+	ne: list of string;
+	for(; parts != nil; parts = tl parts)
+		if(trim(hd parts) != nil)
+			ne = trim(hd parts) :: ne;
 	n := 0;
-	for(l := parts; l != nil; l = tl l)
+	for(l := ne; l != nil; l = tl l)
 		n++;
 	a := array[n] of ref Name;
-	for(; parts != nil; parts = tl parts)
-		a[--n] = bibname(trim(hd parts));
+	for(k := 0; ne != nil; ne = tl ne)
+		a[k++] = bibname(hd ne);
 	return a;
 }
 
@@ -501,8 +506,9 @@ bibname(s: string): ref Name
 	n := ref Name("", "", "", "");
 	if(nseg == 1){
 		w := words(seg[0]);
-		if(len w == 1){
-			n.last = tex2troff(w[0]);
+		if(len w <= 1){
+			if(len w == 1)
+				n.last = tex2troff(w[0]);
 			return n;
 		}
 		# First von Last: von is the lower-case words; Last the rest

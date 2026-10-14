@@ -352,6 +352,7 @@ ctl: ref Sys->FD;		# #u/usb/<dev>/ctl
 ep0: ref Sys->FD;		# #u/usb/<dev>/data -- the control endpoint
 ipifc: ref Sys->FD;		# the ipifc netconfig bound /net/ether0 to; the link watcher's
 ipaddr, ipmask: string;		# the address on it now; nil when there is none
+invented := 0;			# ipaddr is QEMU's, invented when no DHCP server answered at boot
 ipifcno: string;		# its number, for the messages
 kernelnif := 0;			# -k: the link is a kernel driver's, reported in its stats
 reqid := 1;
@@ -1189,7 +1190,9 @@ ifcup(first: int, ifcno: string): int
 		addr = "10.0.2.15";
 		mask = "255.255.255.0";
 		gw = "10.0.2.2";
-	}
+		invented = 1;
+	}else
+		invented = 0;
 
 	sys->fprint(ifc, "remove 0.0.0.0 %s", nullmask);
 	if(sys->fprint(ifc, "add %s %s", addr, mask) < 0){
@@ -1303,6 +1306,7 @@ Linkpoll:	con 2000;
 linkwatch(ifcno: string)
 {
 	up := !nocarrier && ipaddr != nil;
+	sinceask := 0;
 	for(;;){
 		sys->sleep(Linkpoll);
 		if(!ours(ifcno)){
@@ -1322,6 +1326,23 @@ linkwatch(ifcno: string)
 			sys->print("etherusb: link watch ended: %r\n");
 			return;
 		}
+		#
+		# An address invented at boot is not a lease. A board that
+		# booted while its router was off kept QEMU's 10.0.2.15 for
+		# good: this loop saw an address and never asked again, so the
+		# wired network stayed gone after the router came back
+		# (2026-10-14). Ask now and then; a failed ask holds UDP port 68
+		# for about 45 s, which the radio's client also needs, so not
+		# at every poll.
+		#
+		if(st && up && invented){
+			sinceask += Linkpoll;
+			if(sinceask >= Inventedretry){
+				sinceask = 0;
+				relet(ifcno);
+			}
+			continue;
+		}
 		if(st == up && (!up || ipaddr != nil))
 			continue;
 		if(st){
@@ -1335,6 +1356,35 @@ linkwatch(ifcno: string)
 			ifcdown();
 		}
 	}
+}
+
+Inventedretry:	con 120*1000;
+
+#
+# Ask for a lease while the invented address stays, and only when one is
+# offered swap it in: the invented address and the default route through
+# QEMU's gateway go, and the boot's configuration runs again -- the lease,
+# the route, the clock, the path check.
+#
+relet(ifcno: string)
+{
+	(dc, dconv) := dhcpconn();
+	if(dc == nil)
+		return;
+	sys->fprint(ipifc, "add 0.0.0.0 0.0.0.0");
+	(addr, nil, nil) := dhcp(dc, dconv);
+	dc = nil;
+	sys->fprint(ipifc, "remove 0.0.0.0 0.0.0.0");
+	if(addr == nil)
+		return;
+	sys->print("etherusb: a DHCP server answers now; replacing the invented %s\n", ipaddr);
+	sys->fprint(ipifc, "remove %s %s", ipaddr, ipmask);
+	r := sys->open("/net/iproute", Sys->OWRITE);
+	if(r != nil)
+		sys->fprint(r, "remove 0.0.0.0 0.0.0.0");
+	ipaddr = ipmask = nil;
+	invented = 0;
+	ifcup(1, ifcno);
 }
 
 # is ipifc n still bound to /net/ether0 (the first line of its status)

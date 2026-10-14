@@ -504,9 +504,9 @@ pdfext(p: array of byte, hwid, vwid: int): int
 			(e, dim) := pdfbbox100(p, bbox);
 			if(!e){
 				if(hwid > 0)
-					hzoom = int (big hwid * big (100 * 7200 / dev_res) / big (dim[2] - dim[0]));
+					hzoom = int (big hwid * big (100 * 7200 / devres()) / big (dim[2] - dim[0]));
 				if(vwid > 0)
-					vzoom = int (big vwid * big (100 * 7200 / dev_res) / big (dim[3] - dim[1]));
+					vzoom = int (big vwid * big (100 * 7200 / devres()) / big (dim[3] - dim[1]));
 				if(vwid <= 0)
 					vzoom = hzoom;
 				if(hwid <= 0)

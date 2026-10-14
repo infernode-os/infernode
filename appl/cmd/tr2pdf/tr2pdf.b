@@ -151,8 +151,19 @@ init(nil: ref Draw->Context, args: list of string)
 		ps_pagewidth = ps_pageheight;
 		ps_pageheight = t;
 	}
-	post();
-	doctrailer(o_pages);
+	{
+		post();
+		doctrailer(o_pages);
+	} exception e {
+	"fail:*" =>
+		bout.flush();
+		raise e;
+	"*" =>
+		# where Neatpost would crash: said, and failed
+		bout.flush();
+		sys->fprint(sys->fildes(2), "tr2pdf: %s\n", e);
+		raise "fail:" + e;
+	}
 	bout.flush();
 }
 
@@ -187,6 +198,8 @@ nextutf8(): string
 	if(c < 0)
 		return "";
 	l := utf8len(c);
+	if(l < 1)	# a NUL
+		l = 1;
 	b := array[l] of byte;
 	b[0] = byte c;
 	for(i := 1; i < l; i++)

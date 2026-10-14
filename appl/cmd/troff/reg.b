@@ -481,6 +481,9 @@ nf_roman(n: int, I, V: string): string
 		if(n % 10 >= 5)
 			s[len s] = V[0];
 	}
+	if(n < 10)
+		return s;
+	# V is a letter shorter than I: below 40000 it runs out with n
 	return s + nf_roman(n / 10, I[1:], V[1:]);
 }
 

@@ -7,6 +7,17 @@ NFONTS: con 1024;
 dev_dir: string;	# the device directory
 dev_dev: string;	# and its name
 dev_res := 0;		# resolution
+
+# the resolution, which troff's output gives with its device (x T)
+# before it draws or sets anything: a zero divide in Neatpost without one
+devres(): int
+{
+	if(dev_res <= 0){
+		sys->fprint(sys->fildes(2), "tr2pdf: no device (x T and x res) before the page\n");
+		raise "fail:no device";
+	}
+	return dev_res;
+}
 dev_uwid := 0;		# unitwidth
 dev_hor := 0;
 dev_vert := 0;

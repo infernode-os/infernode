@@ -25,7 +25,8 @@ pg: string;			# the page's contents
 o_f, o_s, o_m: int;		# font, size and colour
 o_h, o_v: int;			# the position troff is at
 p_h, p_v: int;			# and the PDF's
-o_i, p_i: int;			# troff's and the PDF's fonts (pfonts' indices)
+o_i := -1;			# troff's font (pfonts' index; none yet)
+p_i := 0;			# the PDF's
 p_f, p_s, p_m: int;
 o_queued := 0;			# a TJ begun
 o_iset := array[1024] of {* => byte 0};	# the page's fonts
@@ -135,7 +136,7 @@ iscff(path: string): int
 
 wid1000(w: int): int
 {
-	return int (big w * big 100 * big 72 / big dev_res);
+	return int (big w * big 100 * big 72 / big devres());
 }
 
 pfont_write(ps: ref Pfont)
@@ -614,8 +615,8 @@ o_loadfont(g: ref Glyph): int
 # a position, its coordinates multiplied by 100
 pdfpos00(uh, uv: big): string
 {
-	h := int (uh * big 72 / big dev_res);
-	v := int (big pdf_height * big 100 - uv * big 72 / big dev_res);
+	h := int (uh * big 72 / big devres());
+	v := int (big pdf_height * big 100 - uv * big 72 / big devres());
 	return dec2(h) + " " + dec2(v);
 }
 
@@ -638,7 +639,7 @@ pdfpos(uh, uv: int): string
 # a troff length in thousandths of a unit of text space
 pdfunit(uh, sz: int): string
 {
-	h := int (big uh * big 1000 * big 72 / big sz / big dev_res);
+	h := int (big uh * big 1000 * big 72 / big sz / big devres());
 	return string h;
 }
 
@@ -799,7 +800,7 @@ outname(n: int, desc: array of string, page, off: array of int)
 	for(i := 0; i < n; i++)
 		if(page[i] > 0 && page[i] - 1 < page_n)
 			s += "  /" + desc[i] + " [ " + string page_id[page[i] - 1] + " 0 R /XYZ 0 " +
-				string (pdf_height - (off[i] * 72 / dev_res)) + " 0 ]\n";
+				string (pdf_height - (off[i] * 72 / devres())) + " 0 ]\n";
 	pdfout(s + ">>\n");
 	obj_end();
 }
@@ -858,7 +859,7 @@ outmark(n: int, desc: array of string, page, off, level: array of int)
 		}
 		if(page[i] > 0 && page[i] - 1 < page_n)
 			s += "  /Dest [ " + string page_id[page[i] - 1] + " 0 R /XYZ 0 " +
-				string (pdf_height - (off[i] * 72 / dev_res)) + " 0 ]\n";
+				string (pdf_height - (off[i] * 72 / devres())) + " 0 ]\n";
 		pdfout(s + ">>\n");
 		obj_end();
 	}

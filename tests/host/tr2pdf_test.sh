@@ -11,7 +11,9 @@
 #	a PDF included (x X pdf) is an XObject; Neatpost loops for ever on
 #	one whose page list has two pages ([3 0 R 4 0 R]: it read the
 #	revision as 4) and on a keyword (true) in a dictionary;
-#	-c writes as Neatpost does (no compression, the font in hex).
+#	-c writes as Neatpost does (no compression, the font in hex);
+#	output with no device (x T, x res) before its first page is refused
+#	with a reason, where it divided by zero.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -94,5 +96,14 @@ inferno "cd '#U*$tmp'; troff doc.tr | tr2pdf -c >compat.pdf"
 LC_ALL=C grep -aq '/FontFile2' "$tmp/compat.pdf" && LC_ALL=C grep -aq '/ASCIIHexDecode' "$tmp/compat.pdf" &&
     ! LC_ALL=C grep -aq '/FlateDecode' "$tmp/compat.pdf" &&
     pass "-c writes as Neatpost" || failed "-c"
+
+# no device: said, and failed
+printf 'p1\nDl 100 100\n' >"$tmp/nodev.tr"
+inferno "cd '#U*$tmp'; tr2pdf <nodev.tr >nodev.pdf >[2]nodev.err" >/dev/null
+if grep -q 'no device' "$tmp/nodev.err" 2>/dev/null; then
+    pass "output with no device is refused"
+else
+    failed "no device: $(cat "$tmp/nodev.err" "$tmp/err")"
+fi
 
 exit $fail

@@ -287,6 +287,24 @@ init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
 	stderr = sys->fildes(2);
+	{
+		troff(args);
+	} exception e {
+	"fail:*" =>
+		if(bout != nil)
+			bout.flush();
+		raise e;
+	"*" =>
+		# where C would crash: said, and failed (a Broken program keeps emu alive)
+		if(bout != nil)
+			bout.flush();
+		sys->fprint(stderr, "troff: %s\n", e);
+		raise "fail:" + e;
+	}
+}
+
+troff(args: list of string)
+{
 	bufio = load Bufio Bufio->PATH;
 	if(bufio == nil){
 		sys->fprint(stderr, "troff: cannot load %s: %r\n", Bufio->PATH);

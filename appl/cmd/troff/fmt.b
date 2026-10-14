@@ -530,9 +530,9 @@ fmt_fillwords(f: ref Fmt, br: int): int
 		nw = fillreq;
 	out_n: int;
 	if(nr(R_j) & AD_Q)
-		out_n = fmtb_fill(f.words, nw, out, min(len out, nrem), FMT_LLEN(f), fillreq > 0, br, nohy);
+		out_n = fmtb_fill(f.words, nw, out, lenmin(len out, nrem), FMT_LLEN(f), fillreq > 0, br, nohy);
 	else
-		out_n = fmta_fill(f.words, nw, out, min(len out, nrem), FMT_LLEN(f), fillreq > 0, br, nohy);
+		out_n = fmta_fill(f.words, nw, out, lenmin(len out, nrem), FMT_LLEN(f), fillreq > 0, br, nohy);
 	# extract filled lines
 	n := min(1, out_n);
 	if(nreq > 0)
@@ -550,6 +550,16 @@ fmt_fillwords(f: ref Fmt, br: int): int
 		fmt_confupdate(f);
 	return i < out_n || fillreq > 0 || (br && f.words_n) ||
 		(n == nreq && fmt_totwid(f, f.words_n) > FMT_LLEN(f));
+}
+
+# C's MIN(LEN(a), n): LEN is unsigned (a size_t), so a negative n, made
+# unsigned, is the larger: no lines left before a trap (nrem < 0) fills
+# as many as out holds
+lenmin(l: int, n: int): int
+{
+	if(n < 0 || n > l)
+		return l;
+	return n;
 }
 
 # Algorithm A for filling lines
@@ -699,7 +709,7 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 			if(hyphenated){
 				dep := fmt_hydepth(words, best_pos, i);
 				if(hlm0 <= 0 || dep < hlm0)
-					cur += big hycost[min(dep, len hycost - 1)];
+					cur += big hycost[lenmin(len hycost - 1, dep)];
 				else
 					cur += big 10000000;
 			}
@@ -754,7 +764,7 @@ fmtb_cost(words: array of ref Word, nil: int, llen: int, br: int, nohy: int, end
 				cur += big 10000000;
 			if(w.hy){
 				if(nr(R_hlm) <= 0 || hydep < nr(R_hlm))
-					cur += big hycost[min(hydep, len hycost - 1)];
+					cur += big hycost[lenmin(len hycost - 1, hydep)];
 				else
 					cur += big 10000000;
 			}

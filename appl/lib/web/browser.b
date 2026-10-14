@@ -302,7 +302,9 @@ navigate(s: ref Session, url, method, ctype: string, body: array of byte, hist: 
 		y := wasat(s, hist);
 		history(s, prev, hist);
 		s.url = url;
-		s.scroll = target1(s, s.pg, frag);
+		if(y < 0)
+			y = target1(s, s.pg, frag);
+		s.scroll = s.at = y;
 		s.status = "done";
 		unlock(s);
 		event(s, "shown " + url);
@@ -396,9 +398,11 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	if((frag := fragment(url)) != nil && fragment(s.url) == nil)
 		s.url += "#" + frag;
 	s.title = pg.title;
-	s.scroll = 0;
-	if(frag != nil)
-		s.scroll = target1(s, pg, frag);
+	if(y < 0 && frag != nil)
+		y = target1(s, pg, frag);
+	if(y < 0)
+		y = 0;
+	s.scroll = s.at = y;
 	u := s.url;
 	s.status = "loading images " + u;
 	unlock(s);
@@ -1263,6 +1267,11 @@ Session.scrollto(s: self ref Session, y: int)
 	s.scroll = y;
 	unlock(s);
 	event(s, "scroll " + string y);
+}
+
+Session.viewing(s: self ref Session, y: int)
+{
+	s.at = y;	# (one word: read under the lock when the page is left)
 }
 
 # A fault in the engine while the session's lock is held: said, and

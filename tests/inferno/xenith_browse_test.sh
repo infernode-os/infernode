@@ -147,6 +147,27 @@ if {waitbody $w 'Page two'} {
 	fail 'Fwd did not'
 }
 
+# A program reading the window's events, as an Acme client does, while
+# a page loads in it: what the page does to the window is an event it
+# hears (Xenith quit, "no window owner", when there was none to say)
+cat $XENITH/$w/event > /tmp/xenith_browse_events &
+evpid=$apid
+sleep 1
+execute $w Back
+if {waitbody $w 'Hello from the index'} {
+	pass 'a page loads in a window whose events are read'
+} {
+	fail 'the page did not load with its events read'
+}
+if {ftest -f $XENITH/index && grep -s $INDEX $XENITH/index} {
+	pass 'and Xenith is still there'
+} {
+	fail 'Xenith is gone'
+}
+echo kill > /prog/$evpid/ctl
+execute $w Fwd
+waitbody $w 'Page two'
+
 execute $w Render
 img=`{cat $XENITH/$w/image}
 if {~ $#img 0 && grep -s 'Page two' $XENITH/$w/body} {

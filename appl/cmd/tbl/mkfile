@@ -1,0 +1,12 @@
+<$ROOT/mkconfig
+
+TARG=	tbl.dis\
+
+SYSMODULES= \
+	bufio.m\
+	draw.m\
+	sys.m\
+
+DISBIN=$ROOT/dis
+
+<$ROOT/mkfiles/mkdis

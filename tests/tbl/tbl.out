@@ -1,0 +1,715 @@
+.\" tbl(1)'s test: tables of most kinds; tbl.out is Plan 9 tbl's output
+.PP
+A boxed table, a heading spanning its columns:
+.TS
+.if \n+(b.=1 .nr d. \n(.c-\n(c.-1
+.de 35
+.ps \n(.s
+.vs \n(.vu
+.in \n(.iu
+.if \n(.u .fi
+.if \n(.j .ad
+.if \n(.j=0 .na
+..
+.nf
+.nr #~ 0
+.if \n(.T .if n .nr #~ 0.6n
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.fc
+.nr 33 \n(.s
+.af 33 01
+.rm 48 49 50
+.nr 48 0
+.nr 38 \wName
+.if \n(48<\n(38 .nr 48 \n(38
+.nr 38 \walpha
+.if \n(48<\n(38 .nr 48 \n(38
+.nr 38 \wbeta
+.if \n(48<\n(38 .nr 48 \n(38
+.nr 38 \wgamma
+.if \n(48<\n(38 .nr 48 \n(38
+.48
+.rm 48
+.nr 49 0
+.nr 38 \wLetter
+.if \n(49<\n(38 .nr 49 \n(38
+.nr 38 \wα
+.if \n(49<\n(38 .nr 49 \n(38
+.nr 38 \wβ
+.if \n(49<\n(38 .nr 49 \n(38
+.nr 38 \wγ
+.if \n(49<\n(38 .nr 49 \n(38
+.49
+.rm 49
+.nr 50 0
+.nr 38 \wValue
+.if \n(50<\n(38 .nr 50 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w1
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w2
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w3
+.if \n(31<\n(38 .nr 31 \n(38
+.50
+.rm 50
+.nr 46 \n(31
+.nr 38 \n(46+\n(32
+.if \n(38>\n(50 .nr 50 \n(38
+.if \n(38<\n(50 .nr 46 +(\n(50-\n(38)/2
+.nr 38 \wThe Greek Alphabet-\n(48-3n-\n(49-3n-\n(50
+.if \n(38>0 .nr 38 \n(38/2
+.if \n(38<0 .nr 38 0
+.nr 49 +\n(38
+.nr 46 +\n(38/2
+.nr 50 +\n(38
+.nr 38 1n
+.nr 47 0
+.nr 40 \n(47+((2*\n(38)/2)
+.nr 48 +\n(40
+.nr 41 \n(48+((6*\n(38)/2)
+.nr 49 +\n(41
+.nr 42 \n(49+((6*\n(38)/2)
+.nr 50 +\n(42
+.nr 46 +\n(42
+.nr TW \n(50
+.nr TW +((2*\n(38)/2)
+.if t .if (\n(TW+\n(.o)>7.65i .tm Table at line 15 file Input is too wide - \n(TW units
+.ne 5v+4p
+.nr #I \n(.i
+.in +(\n(.lu-\n(TWu-\n(.iu)/2u
+.fc  
+.nr #T 0-1
+.nr #a 0-1
+.nr #c 0-1
+.nr #a 0-1
+.eo
+.de T#
+.nr 35 1m
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.mk ##
+.nr ## -1v
+.ls 1
+.if \n(#T>=0 .nr #a \n(#T
+.if \n(#T>=0 .nr #c \n(#T
+.if \n(T. .vs \n(.vu-\n(.sp
+.if \n(T. \h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.if \n(T. .vs
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'|0'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v'\s0\v'\n(\*(#du-\n(#au+1v'\h'|\n(TWu'
+.if \n(#c>=0 .sp -1
+.if \n(#c>=0 \h'(|\n(41u+|\n(48u)/2u'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#cu-\n(35u'\s0\v'\n(\*(#du-\n(#cu+\n(35u'\h'|\n(TWu'
+.if \n(#c>=0 .sp -1
+.if \n(#c>=0 \h'(|\n(42u+|\n(49u)/2u'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#cu-\n(35u'\s0\v'\n(\*(#du-\n(#cu+\n(35u'\h'|\n(TWu'
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'|\n(TWu'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v'\s0\v'\n(\*(#du-\n(#au+1v'
+.ls
+..
+.ec
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.vs \n(36u
+.mk #a
+.ta \n(50u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'The Greek Alphabet
+.mk #c
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.vs \n(36u
+.ta \n(48u \n(49u \n(50u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Name\h'|\n(41u'Letter\h'|\n(42u'Value
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\v'-1p'\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0\v'2p'\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0\v'-1p'
+.vs \n(36u
+.ta \n(48u \n(49u \n(46u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'alpha\h'|\n(41u'α\h'|\n(42u'1
+.ta \n(48u \n(49u \n(46u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'beta\h'|\n(41u'β\h'|\n(42u'2
+.ta \n(48u \n(49u \n(46u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'gamma\h'|\n(41u'γ\h'|\n(42u'3
+.fc
+.nr T. 1
+.T# 1
+.in \n(#Iu
+.35
+.nr #a 0
+.nr #c 0
+.TE
+.if \n-(b.=0 .nr c. \n(.c-\n(d.-11
+Every cell boxed, its own tab character, numbers aligned:
+.TS
+.if \n+(b.=1 .nr d. \n(.c-\n(c.-1
+.de 35
+.ps \n(.s
+.vs \n(.vu
+.in \n(.iu
+.if \n(.u .fi
+.if \n(.j .ad
+.if \n(.j=0 .na
+..
+.nf
+.nr #~ 0
+.if \n(.T .if n .nr #~ 0.6n
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.fc
+.nr 33 \n(.s
+.af 33 01
+.rm 48 49 50
+.nr 48 0
+.nr 38 \wItem
+.if \n(48<\n(38 .nr 48 \n(38
+.nr 38 \wManuscripts
+.if \n(48<\n(38 .nr 48 \n(38
+.nr 38 \wPapyri
+.if \n(48<\n(38 .nr 48 \n(38
+.nr 38 \wInscriptions
+.if \n(48<\n(38 .nr 48 \n(38
+.nr 38 \wFragments
+.if \n(48<\n(38 .nr 48 \n(38
+.48
+.rm 48
+.nr 49 0
+.nr 38 \wCount
+.if \n(49<\n(38 .nr 49 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w1,240
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w87
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w1665
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w\&12a
+.if \n(32<\n(38 .nr 32 \n(38
+.49
+.rm 49
+.nr 45 \n(31
+.nr 38 \n(45+\n(32
+.if \n(38>\n(49 .nr 49 \n(38
+.if \n(38<\n(49 .nr 45 +(\n(49-\n(38)/2
+.nr 50 0
+.nr 38 \wShare
+.if \n(50<\n(38 .nr 50 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w41
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w.5
+.if \n(32<\n(38 .nr 32 \n(38
+.nr 38 \w2
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w.9
+.if \n(32<\n(38 .nr 32 \n(38
+.nr 38 \w55
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w.6
+.if \n(32<\n(38 .nr 32 \n(38
+.nr 38 \w.75
+.if \n(32<\n(38 .nr 32 \n(38
+.50
+.rm 50
+.nr 46 \n(31
+.nr 38 \n(46+\n(32
+.if \n(38>\n(50 .nr 50 \n(38
+.if \n(38<\n(50 .nr 46 +(\n(50-\n(38)/2
+.nr 38 1n
+.nr 47 0
+.nr 40 \n(47+((2*\n(38)/2)
+.nr 48 +\n(40
+.nr 41 \n(48+((6*\n(38)/2)
+.nr 49 +\n(41
+.nr 45 +\n(41
+.nr 42 \n(49+((6*\n(38)/2)
+.nr 50 +\n(42
+.nr 46 +\n(42
+.nr TW \n(50
+.nr TW +((2*\n(38)/2)
+.if t .if (\n(TW+\n(.o)>7.65i .tm Table at line 25 file Input is too wide - \n(TW units
+.ne 5v+0p
+.fc  
+.nr #T 0-1
+.nr #a 0-1
+.nr #a 0-1
+.eo
+.de T#
+.nr 35 1m
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.mk ##
+.nr ## -1v
+.ls 1
+.if \n(#T>=0 .nr #a \n(#T
+.if \n(T. .vs \n(.vu-\n(.sp
+.if \n(T. \h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.if \n(T. .vs
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'|0'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v'\s0\v'\n(\*(#du-\n(#au+1v'\h'|\n(TWu'
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'(|\n(41u+|\n(48u)/2u'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v'\s0\v'\n(\*(#du-\n(#au+1v'\h'|\n(TWu'
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'(|\n(42u+|\n(49u)/2u'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v'\s0\v'\n(\*(#du-\n(#au+1v'\h'|\n(TWu'
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'|\n(TWu'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v'\s0\v'\n(\*(#du-\n(#au+1v'
+.ls
+..
+.ec
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.vs \n(36u
+.mk #a
+.ta \n(48u \n(49u \n(50u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Item\h'|\n(41u'Count\h'|\n(42u'Share
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.vs \n(36u
+.ta \n(48u \n(45u \n(49u \n(46u \n(50u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Manuscripts\h'|\n(41u'1,240\h'|\n(42u'41.5
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.vs \n(36u
+.ta \n(48u \n(45u \n(49u \n(46u \n(50u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Papyri\h'|\n(41u'87\h'|\n(42u'2.9
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.vs \n(36u
+.ta \n(48u \n(45u \n(49u \n(46u \n(50u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Inscriptions\h'|\n(41u'1665\h'|\n(42u'55.6
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\s(\n(33\l'|\n(TWu\(ul'\s0
+.vs \n(36u
+.ta \n(48u \n(45u \n(49u \n(46u \n(50u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Fragments\h'|\n(41u'\&12a\h'|\n(42u'.75
+.fc
+.nr T. 1
+.T# 1
+.35
+.nr #a 0
+.TE
+.if \n-(b.=0 .nr c. \n(.c-\n(d.-8
+Expanded, doubled, fonts and sizes, vertical spans, text blocks:
+.TS
+.if \n+(b.=1 .nr d. \n(.c-\n(c.-1
+.de 35
+.ps \n(.s
+.vs \n(.vu
+.in \n(.iu
+.if \n(.u .fi
+.if \n(.j .ad
+.if \n(.j=0 .na
+..
+.nf
+.nr #~ 0
+.if \n(.T .if n .nr #~ 0.6n
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.fc
+.nr 33 \n(.s
+.af 33 01
+.rm 52 53 54
+.nr 34 \n(.lu
+.eo
+.am 53
+.br
+.di a+
+.35
+.ft \n(.f
+.ll \n(34u*1u/4u
+.if \n(.l<\n(53 .ll \n(53u
+.in 0
+Works and Days, a poem of the farmer's year,
+in a block of text that fills.
+.br
+.di
+.nr a| \n(dn
+.nr a- \n(dl
+..
+.ec \
+.35
+.nf
+.ll \n(34u
+.nr 52 0
+.nr 38 \w\f3Author\fP
+.if \n(52<\n(38 .nr 52 \n(38
+.nr 38 \wHomer
+.if \n(52<\n(38 .nr 52 \n(38
+.nr 38 \wHesiod
+.if \n(52<\n(38 .nr 52 \n(38
+.nr 38 \wSappho
+.if \n(52<\n(38 .nr 52 \n(38
+.52
+.rm 52
+.nr 38 1.5in
+.if \n(52<\n(38 .nr 52 \n(38
+.nr 53 0
+.nr 38 \w\f2Work\fP
+.if \n(53<\n(38 .nr 53 \n(38
+.nr 38 \w\_
+.if \n(53<\n(38 .nr 53 \n(38
+.53
+.rm 53
+.nr 38 \n(a-
+.if \n(53<\n(38 .nr 53 \n(38
+.nr 54 0
+.nr 38 \w\f(CRYear\fP
+.if \n(54<\n(38 .nr 54 \n(38
+.nr 38 \w\s(-1\-750\s0
+.if \n(54<\n(38 .nr 54 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w\-700
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w\-600
+.if \n(31<\n(38 .nr 31 \n(38
+.54
+.rm 54
+.nr 48 \n(31
+.nr 38 \n(48+\n(32
+.if \n(38>\n(54 .nr 54 \n(38
+.if \n(38<\n(54 .nr 48 +(\n(54-\n(38)/2
+.nr 38 \wLater-\n(52-\n(53-\n(54
+.if \n(38>0 .nr 38 \n(38/2
+.if \n(38<0 .nr 38 0
+.nr 53 +\n(38
+.nr 48 +\n(38/2
+.nr 54 +\n(38
+.35
+.nf
+.ll \n(34u
+.nr 38 0+\n(52+\n(53+\n(54
+.nr 38 \n(.l-\n(38
+.nr 38 \n(38/8
+.if \n(38<0 .nr 38 0
+.nr 51 0
+.nr 40 \n(51+((2*\n(38)/2)
+.nr 52 +\n(40
+.nr 41 \n(52+((6*\n(38)/2)
+.nr 53 +\n(41
+.nr 42 \n(53+((6*\n(38)/2)
+.nr 54 +\n(42
+.nr 48 +\n(42
+.nr TW \n(54
+.nr TW +((2*\n(38)/2)
+.if t .if (\n(TW+\n(.o)>7.65i .tm Table at line 43 file Input is too wide - \n(TW units
+.ne 5v+2p
+.fc  
+.nr #T 0-1
+.nr #a 0-1
+.nr #a 0-1
+.eo
+.de T#
+.nr 35 1m
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.mk ##
+.nr ## -1v
+.ls 1
+.if \n(#T>=0 .nr #a \n(#T
+.if \n(T. .vs \n(.vu-\n(.sp
+.if \n(T. \v'-1p'\h'|0'\h'1p'\s(\n(33\l'|\n(TWu-1p\(ul'\s0\v'2p'\h'|0'\h'-1p'\s(\n(33\l'|\n(TWu+1p\(ul'\s0\v'-1p'
+.if \n(T. .vs
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'|0'\h'-1p'\v'1p'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v-2p'\s0\v'\n(\*(#du-\n(#au+1v+1p'\h'-1p'\v'-1p'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v+2p'\s0\v'\n(\*(#du-\n(#au+1v-1p'\h'|\n(TWu'
+.if \n(#a>=0 .sp -1
+.if \n(#a>=0 \h'|\n(TWu'\h'-1p'\v'-1p'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v+2p'\s0\v'\n(\*(#du-\n(#au+1v-1p'\h'-1p'\v'1p'\s(\n(33\h'-\n(#~u'\h'-\n(33p*7u/100u'\v'\n(33p*2u/100u'\L'|\n(#au-1v-2p'\s0\v'\n(\*(#du-\n(#au+1v+1p'
+.ls
+..
+.ec
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\v'-1p'\h'|0'\h'-1p'\s(\n(33\l'|\n(TWu+1p\(ul'\s0\v'2p'\h'|0'\h'1p'\s(\n(33\l'|\n(TWu-1p\(ul'\s0\v'-1p'
+.vs \n(36u
+.mk #a
+.nr #^ \n(\*(#du
+.nr #- \n(#^
+.ta \n(52u \n(53u \n(54u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'\f3Author\f(\n(31\h'|\n(41u'\h'|\n(42u'\f(CRYear\f(\n(31
+.nr ^b \n(#^u
+.nr #^ \n(\*(#du
+.nr #- \n(#^
+.ta \n(52u \n(53u \n(54u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Homer\h'|\n(41u'\v'-(\n(\*(#du-\n(^bu-((\n(#-u-\n(^bu)/2u)'\f2Work\f(\n(31\v'(\n(\*(#du-\n(^bu-((\n(#-u-\n(^bu)/2u)'\h'|\n(42u'\s(-1\-750\s0
+.ne \n(a|u+\n(.Vu
+.if (\n(a|+\n(#^-1v)>\n(#- .nr #- +(\n(a|+\n(#^-\n(#--1v)
+.ta \n(52u \n(53u \n(48u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Hesiod\h'|\n(41u'\h'|\n(42u'\-700
+.mk ##
+.nr 31 \n(##
+.sp |\n(##u-1v
+.nr 37 \n(41u
+.in +\n(37u
+.a+
+.in -\n(37u
+.mk 32
+.if \n(32>\n(31 .nr 31 \n(32
+.sp |\n(31u
+.ta \n(52u \n(53u \n(48u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Sappho\h'|\n(41u'\v'-.5m'\h'|\n(41u'\s(\n(33\l'|\n(53u'\s0\v'+.5m'\h'|\n(42u'\-600
+.nr 36 \n(.v
+.vs \n(.vu-\n(.sp
+\h'|0'\h'1p'\s(\n(33\l'|\n(TWu-1p\(ul'\s0
+.vs \n(36u
+.T&
+.ta \n(54u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'Later
+.fc
+.nr T. 1
+.T# 1
+.35
+.nr #a 0
+.rm a+
+.TE
+.if \n-(b.=0 .nr c. \n(.c-\n(d.-16
+Short and alphabetic columns, a centred span, and \\R's filler:
+.TS
+.if \n+(b.=1 .nr d. \n(.c-\n(c.-1
+.de 35
+.ps \n(.s
+.vs \n(.vu
+.in \n(.iu
+.if \n(.u .fi
+.if \n(.j .ad
+.if \n(.j=0 .na
+..
+.nf
+.nr #~ 0
+.if \n(.T .if n .nr #~ 0.6n
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.fc
+.nr 33 \n(.s
+.af 33 01
+.rm 46 47
+.nr 46 0
+.nr 31 0
+.nr 32 0
+.nr 38 \walpha
+.if \n(32<\n(38 .nr 32 \n(38
+.46
+.rm 46
+.if \n(32>=\n(46 .nr 46 \n(32u+2n
+.nr 43 \n(31
+.nr 38 \n(43+\n(32
+.if \n(38>\n(46 .nr 46 \n(38
+.if \n(38<\n(46 .nr 43 +(\n(46-\n(38)/2
+.nr 47 0
+.nr 31 0
+.nr 32 0
+.nr 38 \wbeta
+.if \n(32<\n(38 .nr 32 \n(38
+.nr 38 \wend
+.if \n(47<\n(38 .nr 47 \n(38
+.47
+.rm 47
+.if \n(32>=\n(47 .nr 47 \n(32u+2n
+.nr 44 \n(31
+.nr 38 \n(44+\n(32
+.if \n(38>\n(47 .nr 47 \n(38
+.if \n(38<\n(47 .nr 44 +(\n(47-\n(38)/2
+.nr 38 \wgamma delta-\n(46-3n-\n(47
+.if \n(38>0 .nr 38 \n(38/1
+.if \n(38<0 .nr 38 0
+.nr 44 +\n(38/2
+.nr 47 +\n(38
+.nr 38 1n
+.nr 45 0
+.nr 40 \n(45+((0*\n(38)/2)
+.nr 46 +\n(40
+.nr 43 +\n(40
+.nr 41 \n(46+((6*\n(38)/2)
+.nr 47 +\n(41
+.nr 44 +\n(41
+.nr TW \n(47
+.if t .if (\n(TW+\n(.o)>7.65i .tm Table at line 54 file Input is too wide - \n(TW units
+.nr #I \n(.i
+.in +(\n(.lu-\n(TWu-\n(.iu)/2u
+.fc  
+.nr #T 0-1
+.nr #a 0-1
+.eo
+.de T#
+.nr 35 1m
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.mk ##
+.nr ## -1v
+.ls 1
+.ls
+..
+.ec
+.ta \n(46u \n(47u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(43u'alpha\h'|\n(44u'beta
+.ta \n(47u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'gamma delta
+.ta \n(46u \n(47u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'\l'|\n(46u\&x'\h'|\n(41u'end
+.ta \n(46u \n(47u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'\h'|\n(41u'
+.fc
+.nr T. 1
+.T# 1
+.in \n(#Iu
+.35
+.TE
+.if \n-(b.=0 .nr c. \n(.c-\n(d.-9
+Equations' delimiters within numbers:
+.TS
+.if \n+(b.=1 .nr d. \n(.c-\n(c.-1
+.de 35
+.ps \n(.s
+.vs \n(.vu
+.in \n(.iu
+.if \n(.u .fi
+.if \n(.j .ad
+.if \n(.j=0 .na
+..
+.nf
+.nr #~ 0
+.if \n(.T .if n .nr #~ 0.6n
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.fc
+.nr 33 \n(.s
+.af 33 01
+.rm 46 47
+.nr 46 0
+.nr 38 \w$x.5$
+.if \n(46<\n(38 .nr 46 \n(38
+.nr 31 0
+.nr 32 0
+.nr 38 \w3
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w.0
+.if \n(32<\n(38 .nr 32 \n(38
+.46
+.rm 46
+.nr 43 \n(31
+.nr 38 \n(43+\n(32
+.if \n(38>\n(46 .nr 46 \n(38
+.if \n(38<\n(46 .nr 43 +(\n(46-\n(38)/2
+.nr 47 0
+.nr 31 0
+.nr 32 0
+.nr 38 \w1
+.if \n(31<\n(38 .nr 31 \n(38
+.nr 38 \w.25
+.if \n(32<\n(38 .nr 32 \n(38
+.nr 38 \w$y$
+.if \n(47<\n(38 .nr 47 \n(38
+.47
+.rm 47
+.nr 44 \n(31
+.nr 38 \n(44+\n(32
+.if \n(38>\n(47 .nr 47 \n(38
+.if \n(38<\n(47 .nr 44 +(\n(47-\n(38)/2
+.nr 38 1n
+.nr 45 0
+.nr 40 \n(45+((0*\n(38)/2)
+.nr 46 +\n(40
+.nr 43 +\n(40
+.nr 41 \n(46+((6*\n(38)/2)
+.nr 47 +\n(41
+.nr 44 +\n(41
+.nr TW \n(47
+.if t .if (\n(TW+\n(.o)>7.65i .tm Table at line 61 file Input is too wide - \n(TW units
+.nr #I \n(.i
+.in +(\n(.lu-\n(TWu-\n(.iu)/2u
+.fc  
+.nr #T 0-1
+.nr #a 0-1
+.eo
+.de T#
+.nr 35 1m
+.ds #d .d
+.if \(ts\n(.z\(ts\(ts .ds #d nl
+.mk ##
+.nr ## -1v
+.ls 1
+.ls
+..
+.ec
+.ta \n(46u \n(44u \n(47u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'$x.5$\h'|\n(41u'1.25
+.ta \n(43u \n(46u \n(47u 
+.nr 35 1m
+.nr 31 \n(.f
+.af 31 01
+\&\h'|\n(40u'3.0\h'|\n(41u'$y$
+.fc
+.nr T. 1
+.T# 1
+.in \n(#Iu
+.35
+.TE
+.if \n-(b.=0 .nr c. \n(.c-\n(d.-5

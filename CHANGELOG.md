@@ -71,6 +71,16 @@ All notable changes to InferNode are documented in this file.
   `tests/host/wiki9p_test.sh` runs the whole loop against a scripted
   model.
 
+### Window manager
+
+- **Closing `wm/colors` no longer takes down `wm/wm`.** Its exit is a
+  `killgrp` (wmclient), and it never took a process group of its own, so
+  Delete from the menu killed whatever had started it: `wm/wm` itself
+  when run from wm's shell, or the shell window it was typed in.
+  `tests/host/wm_ghost_test.sh` deletes and then kills a `wm/colors`
+  under `wm/wm`: wm stays up, and where the window was is wm's
+  background again (INFR-433).
+
 ## [0.7.0] - 2026-10-13
 
 This release gives InferNode a JavaScript engine of its own, and Charon

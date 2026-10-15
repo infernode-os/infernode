@@ -99,6 +99,7 @@ dis/bdf2subfont.dis
 dis/bind.dis
 dis/bioget.dis
 dis/bit2gif.dis
+dis/book2tex.dis
 dis/broke.dis
 dis/bt9p.dis
 dis/bthid.dis

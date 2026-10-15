@@ -40,6 +40,7 @@ TARG=\
 	basename.dis\
 	bdf2subfont.dis\
 	bind.dis\
+	book2tex.dis\
 	bit2gif.dis\
 	broke.dis\
 	bt9p.dis\

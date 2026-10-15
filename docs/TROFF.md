@@ -18,6 +18,7 @@ to read in InferNode's document views.
 | `tr2pdf` | Troff's output as PDF: OpenType fonts embedded, subset to the glyphs used, compressed, with ToUnicode maps (text can be searched and copied) | Neatpost's PDF writer, translated |
 | `mkfn` | Font descriptions for troff from OpenType, TrueType and AFM fonts, with each glyph's bounding box (CFF's too) | Neatmkfn, translated |
 | `mkindex` | A book's index from troff's output: makeindex's entries, sorted word by word as the *Chicago Manual* sorts, Greek and accents included | |
+| `book2tex` | A book written with `-mbook` as LaTeX, for LuaLaTeX, for a publisher who wants it | |
 | `book` | Runs them: refer, pic, tbl and eqn (each if there is anything for it), troff `-mbook` until its references settle, tr2pdf | |
 
 `troff`, `eqn`, `tbl`, `pic`, and `refer` without a style, write what
@@ -245,7 +246,47 @@ On a 2.8 GHz Xeon, the 62-page benchmark book takes troff 2.9 seconds
 page; a page is painted in about 20 milliseconds. Making it faster comes
 after the work above is done.
 
+## LaTeX for a publisher: `book2tex`
+
+    book2tex -p works.bib -o book.tex book.ms
+
+writes the book as LaTeX, each of `-mbook`'s macros as the LaTeX the
+table above gives it. The LaTeX is for LuaLaTeX, set as `book` sets
+it:
+- Libertinus, through `fontspec` and `unicode-math`.
+- The page and margins, from `.papersize` and `.margins`.
+- `microtype`.
+- Citations by `biblatex-chicago` (its notes, the *Chicago Manual*'s
+  as refer's `-S chicago`), from the BibTeX database `-p` names.
+- Endnotes by `endnotes`, under each chapter's heading.
+- The index by `imakeidx`, its entries makeindex's as `.index` has
+  them.
+
+Set it with:
+
+    lualatex book; biber book; makeindex book; lualatex book; lualatex book
+
+Troff's escapes become LaTeX's: `\fI` and `\fB` become `\emph` and
+`\textbf`, a character named becomes the character, `\*` strings are
+expanded. LaTeX's special characters are escaped, and troff's two
+hyphens stay two.
+
+eqn's equations become LaTeX's mathematics:
+- `sub`, `sup`, `over`, `sqrt`, `from` and `to` (an operator's
+  limits), `left` and `right`, `pile`, `matrix`, accents, fonts and
+  defines.
+- `.EQ (1.1)` is numbered with `\tag`.
+- An equation between `delim`'s characters is inline.
+
+tbl's tables become `tabular`s, with their rules, spans and text
+blocks. A picture is drawn by `pic`, `troff` and `tr2pdf` as a PDF the
+size of the picture (`book-pic1.pdf`, beside `-o`'s file) and
+included.
+
+Anything with no LaTeX of its own (a macro of the book's own, say) is
+kept as a comment and named on standard error.
+
 ## Still to come
 
-The LaTeX converter; `-man`; eqn's bars drawn as lines (they are
+`-man`; eqn's bars drawn as lines (they are
 glyphs now, and copied with the text).

@@ -679,6 +679,19 @@ clearfaces()
 				r = hd cl :: r;
 		cache[h] = r;
 	}
+	# and the widths measured with them: an entry holds its face, and
+	# so the font; kept, every page's fonts stayed until the cache was
+	# full (bbc.com, 23 MB more for each visit)
+	nwcache = 0;
+	for(h = 0; h < len wcache; h++) {
+		r: list of ref Wcache;
+		for(wl := wcache[h]; wl != nil; wl = tl wl)
+			if((hd wl).parts == nil) {
+				r = hd wl :: r;
+				nwcache++;
+			}
+		wcache[h] = r;
+	}
 }
 
 readall(f: string): array of byte

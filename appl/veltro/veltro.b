@@ -212,12 +212,20 @@ join(l: list of string, sep: string): string
 
 # ---- One turn ----
 
+filelen(path: string): big
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return big 0;
+	return d.length;
+}
+
 # What the agent said in the turn, for the planning step.
 turntext := "";
 curstep := 0;
 
 # Print the agent's text as it streams, and keep what it said.
-textfollow(done: chan of int)
+textfollow(offset: big, done: chan of int)
 {
 	fd := sys->open(sess + "/text", Sys->OREAD);
 	if(fd == nil) {
@@ -225,10 +233,6 @@ textfollow(done: chan of int)
 		return;
 	}
 	buf := array[8192] of byte;
-	offset := big 0;
-	(ok, d) := sys->fstat(fd);
-	if(ok >= 0)
-		offset = d.length;
 	role := "";
 	atline := 1;
 	held := "";
@@ -284,7 +288,7 @@ emit(role, s: string): string
 
 # Follow the log: the tool calls, as this command has always shown them,
 # and the session log that -r resumes from.
-logfollow(done: chan of int)
+logfollow(offset: big, done: chan of int)
 {
 	fd := sys->open(sess + "/log", Sys->OREAD);
 	if(fd == nil) {
@@ -292,10 +296,6 @@ logfollow(done: chan of int)
 		return;
 	}
 	buf := array[8192] of byte;
-	offset := big 0;
-	(ok, d) := sys->fstat(fd);
-	if(ok >= 0)
-		offset = d.length;
 	partial := "";
 	curtool := "";
 	curargs := "";
@@ -367,6 +367,10 @@ turn(input: string): int
 {
 	turntext = "";
 	curstep = 0;
+	# Where this turn starts in text and log: taken before the input is
+	# written, so a quick reply is not skipped.
+	textoff := filelen(sess + "/text");
+	logoff := filelen(sess + "/log");
 	fd := sys->open(sess + "/input", Sys->OWRITE);
 	if(fd == nil) {
 		sys->fprint(stderr, "veltro: cannot open %s/input: %r\n", sess);
@@ -379,8 +383,8 @@ turn(input: string): int
 	}
 	fd = nil;
 	done := chan of int;
-	spawn textfollow(done);
-	spawn logfollow(done);
+	spawn textfollow(textoff, done);
+	spawn logfollow(logoff, done);
 	spawn approver(done);
 	<-done;
 	<-done;

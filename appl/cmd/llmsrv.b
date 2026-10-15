@@ -135,6 +135,7 @@ LlmSession: adt {
 
 	# Streaming state
 	streamch:       chan of string;  # nil when idle
+	streamleft:     array of byte;   # the rest of a chunk a read had no room for
 	donech:         chan of int;     # signaled when gen completes
 	genactive:      int;            # 1 during generation
 	pendingwrite:   array of byte;   # /ask prompt reassembled across write-fragments,
@@ -402,6 +403,7 @@ newsession(): ref LlmSession
 		nil,           # tools
 		autocompactdefault, # autocompact high-water mark (daemon -c default)
 		nil,           # streamch
+		nil,           # streamleft
 		nil,           # donech
 		0,             # genactive
 		nil,           # pendingwrite
@@ -1064,6 +1066,7 @@ triggerpending(sess: ref LlmSession)
 		return;
 	# Allocate channels before spawning, then run generation async.
 	sess.streamch = chan[256] of string;
+	sess.streamleft = nil;
 	sess.donech = chan[1] of int;
 	sess.genactive = 1;
 	spawn rungeneration(sess, prompt);
@@ -1321,14 +1324,26 @@ asyncstreamread(id: int, m: ref Tmsg.Read, sess: ref LlmSession)
 		return;
 	}
 
-	chunk := <-ch;
-	if(chunk == nil || chunk == "") {
-		# Channel "closed" (EOF sentinel)
-		asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, nil));
-		return;
+	# The stream is a sequence of chunks, not a file: each read gets the
+	# next one from its start, whatever the offset (it grows with every
+	# read, and indexing a chunk by it lost all but the first).  A chunk
+	# longer than the read is served over as many reads as it takes.
+	data := sess.streamleft;
+	sess.streamleft = nil;
+	if(data == nil) {
+		chunk := <-ch;
+		if(chunk == nil || chunk == "") {
+			# Channel "closed" (EOF sentinel)
+			asyncrepl <-= ref Asyncreply(id, ref Rmsg.Read(m.tag, nil));
+			return;
+		}
+		data = array of byte chunk;
 	}
-
-	asyncrepl <-= ref Asyncreply(id, styxservers->readbytes(m, array of byte chunk));
+	if(len data > m.count) {
+		sess.streamleft = data[m.count:];
+		data = data[0:m.count];
+	}
+	asyncrepl <-= ref Asyncreply(id, ref Rmsg.Read(m.tag, data));
 }
 
 # --- Compaction ---

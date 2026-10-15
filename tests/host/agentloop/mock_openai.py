@@ -126,6 +126,24 @@ SCENARIOS = {
                    tool("read", FIX + "/a.txt")]},
         {"content": "Read, wrote, read."},
     ],
+    # Activity 0 delegates (agent_delegation_test): a task whose brief names
+    # the child's own scenario, so the child runs child_read.
+    "delegate": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Child tools=read brief=SCENARIO:child_read go"})]},
+        {"content": "Started Child."},
+    ],
+    # The task agent: a read with its own tools, then a report whose text
+    # names the scenario activity 0 runs on the completion event.
+    "child_read": [
+        {"tools": [tool("read", "/lib/veltro/system.txt")]},
+        {"content": "Child is done. SCENARIO:parent_report"},
+    ],
+    # Activity 0 on the completion event: its own tools still work.
+    "parent_report": [
+        {"tools": [tool("task", {"command": "status", "args": "1"})]},
+        {"content": "Reported the child."},
+    ],
 }
 
 # Scenarios whose model never stops calling tools: every turn is the same.

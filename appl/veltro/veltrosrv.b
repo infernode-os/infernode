@@ -804,13 +804,30 @@ turn(s: ref Session, input: string)
 		started := 0;
 		if(streamfd != nil) {
 			log(s, "stream: reading " + streampath);
-			buf := array[512] of byte;
+			buf := array[8192] of byte;
 			nchunks := 0;
+			part: array of byte;	# an incomplete UTF-8 sequence, held for the next read
 			for(;;) {
 				n := sys->read(streamfd, buf, len buf);
 				if(n <= 0)
 					break;
-				chunk := string buf[0:n];
+				b := buf[0:n];
+				if(part != nil) {
+					nb := array[len part + n] of byte;
+					nb[0:] = part;
+					nb[len part:] = b;
+					b = nb;
+					part = nil;
+				}
+				whole := sys->utfbytes(b, len b);
+				if(whole < len b) {
+					part = array[len b - whole] of byte;
+					part[0:] = b[whole:];
+					b = b[0:whole];
+				}
+				if(len b == 0)
+					continue;
+				chunk := string b;
 				streamed += chunk;
 				nchunks++;
 				if(!started) {
@@ -861,12 +878,8 @@ turn(s: ref Session, input: string)
 		if(text != "") {
 			if(!started)
 				say(s, "veltro", text);
-			else if(text != streamed) {
-				if(hasprefix(text, streamed))
-					evc <-= ref Ev.Text(s, text[len streamed:]);
-				else if(!(len text > len streamed && text[len text - len streamed:] == streamed))
-					evc <-= ref Ev.Text(s, "\n" + text);
-			}
+			else
+				evc <-= ref Ev.Text(s, unstreamed(streamed, text));
 		}
 		if(started)
 			evc <-= ref Ev.End(s);
@@ -1307,14 +1320,23 @@ dirgen(path: big): (ref Sys->Dir, string)
 	Qroot =>	return (dir(".", Sys->DMDIR|8r555, path), nil);
 	Qnew =>		return (dir("new", 8r444, path), nil);
 	}
-	if(findsession(sid) == nil)
+	s := findsession(sid);
+	if(s == nil)
 		return (nil, Enotfound);
 	case ft {
 	Qsessdir =>	return (dir(string sid, Sys->DMDIR|8r555, path), nil);
 	Qctl =>		return (dir("ctl", 8r644, path), nil);
 	Qinput =>	return (dir("input", 8r222, path), nil);
-	Qtext =>	return (dir("text", 8r444, path), nil);
-	Qlog =>		return (dir("log", 8r444, path), nil);
+	# text and log grow: their length is where a client following the
+	# next turn starts, so it must be the real one.
+	Qtext =>
+		d := dir("text", 8r444, path);
+		d.length = big len array of byte s.text;
+		return (d, nil);
+	Qlog =>
+		d := dir("log", 8r444, path);
+		d.length = big len array of byte s.log;
+		return (d, nil);
 	Qstatus =>	return (dir("status", 8r444, path), nil);
 	Qapprove =>	return (dir("approve", 8r644, path), nil);
 	}
@@ -1322,6 +1344,65 @@ dirgen(path: big): (ref Sys->Dir, string)
 }
 
 SESSFILES: con 6;
+
+# The longest message a client may write to input.
+MAXINPUT: con 1024*1024;
+
+# A message written to input is whole: the turn it starts.
+startturn(s: ref Session, data: string)
+{
+	if(len data > 0 && data[len data - 1] == '\n')
+		data = data[0:len data - 1];
+	if(strip(data) == "")
+		return;
+	if(s.busy || s.llmid == "") {
+		# Another writer's message started a turn first.
+		appendlog(s, "input: dropped, a turn is in progress");
+		return;
+	}
+	appendhead(s, "user");
+	appendtext(s, data + "\n");
+	s.busy = 1;
+	s.cancel = 0;
+	s.status = "working";
+	spawn turn(s, data);
+}
+
+# What of a response's text the page still lacks, given what streamed.
+# text is the parsed reply (stripped; it may carry the prefill marker the
+# stream never did); streamed is on the page already and cannot be taken
+# back, so the reply is never shown twice: when the two disagree beyond a
+# lost tail, what streamed stands.
+unstreamed(streamed, text: string): string
+{
+	st := strip(streamed);
+	if(st == "")
+		return text;
+	if(text == st)
+		return "";
+	if(hasprefix(text, st))
+		return text[len st:];
+	if(len text > len st && text[len text - len st:] == st)
+		return "";
+	# They part somewhere: if most of the reply is on the page, it stands
+	# (the rest differs only in what was parsed out of it); otherwise the
+	# stream was not the reply, and the reply follows it.
+	i := 0;
+	while(i < len st && i < len text && st[i] == text[i])
+		i++;
+	if(i >= len st / 2)
+		return "";
+	return "\n" + text;
+}
+
+# Where the namespace manifest of the agent on a tool mount goes:
+# /tool -> /tmp/veltro/.ns/manifest, /tool.N -> /tmp/veltro/.ns/manifest.N.
+manifestpath(mpt: string): string
+{
+	if(len mpt > 6 && mpt[0:6] == "/tool.")
+		return "/tmp/veltro/.ns/manifest." + mpt[6:];
+	return "/tmp/veltro/.ns/manifest";
+}
 
 navigator(navops: chan of ref Navop)
 {
@@ -1409,12 +1490,24 @@ serveloop(tchanc: chan of chan of ref Tmsg, errc: chan of string, caps: ref NsCo
 		errc <-= sys->sprint("cannot disable device attachment: %r");
 		return;
 	}
+	# A child activity's tools are served at /tool.N.  The restriction keeps
+	# /tool and nothing else of that name, so in this namespace the child's
+	# tool server is put at /tool: without it the agent had no tools at all
+	# and could only describe the calls it would have made.
+	manifest := manifestpath(toolmount);
+	if(toolmount != "/tool" && exists(toolmount + "/tools")) {
+		if(sys->bind(toolmount, "/tool", Sys->MREPL) < 0) {
+			errc <-= sys->sprint("cannot bind %s on /tool: %r", toolmount);
+			return;
+		}
+		toolmount = "/tool";
+	}
 	nserr := nsconstruct->restrictns(caps);
 	if(nserr != nil) {
 		errc <-= "namespace restriction failed: " + nserr;
 		return;
 	}
-	nsconstruct->emitmanifest(caps, "/tmp/veltro/.ns/manifest");
+	nsconstruct->emitmanifest(caps, manifest);
 	if(verbose)
 		sys->fprint(stderr, "veltrosrv: namespace restricted\n");
 	errc <-= nil;
@@ -1555,14 +1648,20 @@ Serve:
 				else
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qinput =>
-				if(len data > 0 && data[len data - 1] == '\n')
-					data = data[0:len data - 1];
-				if(strip(data) == "") {
+				# A message longer than msize arrives in pieces: they
+				# are gathered on the fid, and the turn starts when it
+				# is clunked (startturn).  The first piece used to start
+				# the turn and the rest were refused as busy.
+				if(c.data == nil && strip(data) == "") {
 					srv.reply(ref Rmsg.Error(m.tag, "empty message"));
 					break;
 				}
-				if(s.busy) {
+				if(c.data == nil && s.busy) {
 					srv.reply(ref Rmsg.Error(m.tag, "busy"));
+					break;
+				}
+				if(len c.data + len m.data > MAXINPUT) {
+					srv.reply(ref Rmsg.Error(m.tag, "message too long"));
 					break;
 				}
 				if(s.llmid == "") {
@@ -1572,12 +1671,10 @@ Serve:
 						break;
 					}
 				}
-				appendhead(s, "user");
-				appendtext(s, data + "\n");
-				s.busy = 1;
-				s.cancel = 0;
-				s.status = "working";
-				spawn turn(s, data);
+				nd := array[len c.data + len m.data] of byte;
+				nd[0:] = c.data;
+				nd[len c.data:] = m.data;
+				c.data = nd;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qapprove =>
 				(verb, rest) := str->splitl(strip(data), " \t");
@@ -1610,6 +1707,13 @@ Serve:
 			}
 		Clunk =>
 			unparkall(m.fid, -1);
+			cf := srv.getfid(m.fid);
+			if(cf != nil && FTYPE(cf.path) == Qinput && cf.data != nil) {
+				msg := string cf.data;
+				cf.data = nil;
+				if((s := findsession(SESSID(cf.path))) != nil)
+					startturn(s, msg);
+			}
 			srv.clunk(m);
 		* =>
 			srv.default(gm);
@@ -1734,8 +1838,19 @@ init(nil: ref Draw->Context, args: list of string)
 	# The loop opens its model session by path after restriction.
 	pathlist = "/mnt/llm" :: pathlist;
 
+	# The workspace (/tmp/veltro/scratch) is the activity's: the one its
+	# tool workers see.  Keyed by anything else (it was this process's
+	# pid), what the loop spills there for the agent to read is somewhere
+	# its read tool cannot reach.
+	wsid := -1;
+	if(exists(toolmount + "/activity")) {
+		(aid, rest) := str->toint(strip(readfile(toolmount + "/activity")), 10);
+		if(rest == "" && aid >= 0)
+			wsid = aid;
+	}
+
 	caps := ref NsConstruct->Capabilities(
-		toollist, pathlist, nil, nil, nil, nil, 0, xgrant, -1, nil, nil);
+		toollist, pathlist, nil, nil, nil, nil, 0, xgrant, wsid, nil, nil);
 
 	# The grants are checked, and the namespace restricted, before
 	# anything else is started or required: a bad grant is refused as

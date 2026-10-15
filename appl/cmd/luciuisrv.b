@@ -216,6 +216,17 @@ Activity: adt {
 };
 
 # --- Pending read for blocking files ---
+# A message being read from conversation/input: one message per fid, over as
+# many reads as it takes (a read is at most msize, 8K), then end of file.
+InputRead: adt {
+	fid:	int;
+	rest:	array of byte;
+};
+inputreads: list of ref InputRead;
+
+# The longest message a writer may post to conversation/input.
+MAXINPUT: con 1024*1024;
+
 PendingRead: adt {
 	fid:	int;
 	tag:	int;
@@ -778,6 +789,14 @@ Serve:
 			dowrite(srv, m, c);
 
 		Clunk =>
+			# A message written to conversation/input is whole now.
+			cf := srv.getfid(m.fid);
+			if(cf != nil && FTYPE(cf.path) == Qconvinput) {
+				if(cf.data != nil)
+					postinput(ACTID(cf.path), string cf.data);
+				cf.data = nil;
+				dropinputread(m.fid);
+			}
 			# Remove pending reads for this fid
 			prev: ref PendingRead;
 			p := pending;
@@ -914,14 +933,17 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		if(a.inputq == nil) {
+		if(findinputread(m.fid) != nil) {
+			# The rest of this fid's message, then end of file.
+			srv.reply(inputchunk(m));
+		} else if(a.inputq == nil) {
 			# Blocking read
 			addpending(m.fid, m.tag, Qconvinput, actid, m);
 		} else {
 			# inputq is in FIFO order (head = oldest). INFR-36.
-			data := array of byte (hd a.inputq + "\n");
+			startinputread(m.fid, hd a.inputq);
 			a.inputq = tl a.inputq;
-			srv.reply(styxservers->readbytes(m, data));
+			srv.reply(inputchunk(m));
 		}
 
 	Qconvmsg =>
@@ -1054,6 +1076,72 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 
 # --- Write handling ---
 
+# Post a message written to an activity's conversation/input: to the first
+# reader waiting for one, or to the queue.
+postinput(actid: int, data: string)
+{
+	a := findactivity(actid);
+	if(a == nil)
+		return;
+	if(len data > 0 && data[len data - 1] == '\n')
+		data = data[0:len data - 1];
+	delivered := 0;
+	prev: ref PendingRead;
+	for(p := pending; p != nil; p = p.next) {
+		if(p.ft == Qconvinput && p.actid == actid) {
+			if(prev == nil)
+				pending = p.next;
+			else
+				prev.next = p.next;
+			startinputread(p.fid, data);
+			srv_g.reply(inputchunk(p.m));
+			delivered = 1;
+			break;	# deliver to first waiter only
+		}
+		prev = p;
+	}
+	if(!delivered)
+		a.inputq = appendstr(a.inputq, data);
+	pushevent(actid, "input");
+}
+
+findinputread(fid: int): ref InputRead
+{
+	for(l := inputreads; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+startinputread(fid: int, msg: string)
+{
+	dropinputread(fid);
+	inputreads = ref InputRead(fid, array of byte (msg + "\n")) :: inputreads;
+}
+
+dropinputread(fid: int)
+{
+	kept: list of ref InputRead;
+	for(l := inputreads; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			kept = hd l :: kept;
+	inputreads = kept;
+}
+
+# The next piece of the message a fid is reading; nothing once it is all read.
+inputchunk(m: ref Tmsg.Read): ref Rmsg.Read
+{
+	r := findinputread(m.fid);
+	if(r == nil || len r.rest == 0)
+		return ref Rmsg.Read(m.tag, nil);
+	n := len r.rest;
+	if(n > m.count)
+		n = m.count;
+	d := r.rest[0:n];
+	r.rest = r.rest[n:];
+	return ref Rmsg.Read(m.tag, d);
+}
+
 dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 {
 	ft := FTYPE(c.path);
@@ -1180,29 +1268,18 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
-		# Check for pending input readers
-		delivered := 0;
-		prev: ref PendingRead;
-		p := pending;
-		while(p != nil) {
-			next := p.next;
-			if(p.ft == Qconvinput && p.actid == actid) {
-				reply := array of byte (data + "\n");
-				srv_g.reply(styxservers->readbytes(p.m, reply));
-				if(prev == nil)
-					pending = next;
-				else
-					prev.next = next;
-				delivered = 1;
-				p = next;
-				break;	# deliver to first waiter only
-			}
-			prev = p;
-			p = next;
+		# A write larger than msize arrives in pieces: gather them on the
+		# fid, and post the message when it is clunked (postinput).  Each
+		# piece used to be a message of its own, so a long paste became
+		# several turns, each a fragment.
+		if(len c.data + len m.data > MAXINPUT) {
+			srv.reply(ref Rmsg.Error(m.tag, "message too long"));
+			break;
 		}
-		if(!delivered)
-			a.inputq = appendstr(a.inputq, data);
-		pushevent(actid, "input");
+		nd := array[len c.data + len m.data] of byte;
+		nd[0:] = c.data;
+		nd[len c.data:] = m.data;
+		c.data = nd;
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 	Qpresctl =>

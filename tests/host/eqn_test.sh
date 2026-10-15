@@ -13,7 +13,10 @@
 #	tests/eqn/book.ms is set to PDF: a display's label on its
 #	equation's baseline at the right; a sum in a display larger than
 #	one inline, whose limits are beside it (TeX's text style), not
-#	above and below.
+#	above and below; its bars (fractions, radicals, bar, under) drawn
+#	as rectangles where the rule glyphs' ink would be (.rules), none
+#	set as a glyph, so none copied with the text, the page drawn as
+#	with the glyphs (within the ink where they overlap).
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -85,4 +88,27 @@ check(inl and lim and lim[0][0] >= inl[2] - 0.5,
       "an inline sum's limits beside it", '%s %s' % (inl, lim))
 sys.exit(fail)
 PY
+
+# the bars drawn, where the glyphs would be
+{ cat lib/troff/eqnrc; printf '.ps 24\n.vs 40p\n.EQ\n{a + b} over {c + d} = sqrt {x sup 2 + 1} + x bar + y under + left ( {1 over 2} right )\n.EN\n'; } >"$tmp/bars.tr"
+with_timeout 120 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c "cd '#U*$tmp'; eqn < bars.tr | troff -mbook > bars.out; eqn < bars.tr | troff -mbook | tr2pdf > bars.pdf; { echo .rules 0; eqn < bars.tr } | troff -mbook | tr2pdf > glyphs.pdf" </dev/null >/dev/null 2>&1
+if [ "$(grep -c '^DP' "$tmp/bars.out")" -ge 5 ] && ! grep -q 'uni23AF\|⎯\|^c_\|^Cul' "$tmp/bars.out"; then
+    echo "PASS: eqn's bars drawn, not set as glyphs"
+else
+    echo "FAIL: eqn's bars: $(grep -c '^DP' "$tmp/bars.out") drawn"; fail=1
+fi
+if command -v pdftoppm >/dev/null 2>&1 && python3 -c 'import PIL, numpy' 2>/dev/null; then
+    pdftoppm -r 300 -png -f 1 -l 1 "$tmp/bars.pdf" "$tmp/b"
+    pdftoppm -r 300 -png -f 1 -l 1 "$tmp/glyphs.pdf" "$tmp/g"
+    python3 -I - "$tmp"/b-1.png "$tmp"/g-1.png <<'PY' && echo "PASS: the bars where the glyphs were" || { echo "FAIL: the bars moved"; fail=1; }
+import sys
+import numpy as np
+from PIL import Image
+a = np.array(Image.open(sys.argv[1]).convert('L')) < 128
+b = np.array(Image.open(sys.argv[2]).convert('L')) < 128
+d = (a ^ b).sum()
+print('%d of %d pixels of ink differ' % (d, b.sum()))
+sys.exit(not (b.sum() > 10000 and d < 0.06 * b.sum()))
+PY
+fi
 exit $fail

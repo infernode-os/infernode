@@ -205,9 +205,18 @@ as well as TrueType's.
 
 Tables are written in tbl's language, pictures in pic's (Lesk's and
 Kernighan's); `book` runs each when a book has any. Under `-mbook` a
-table's rules are drawn as lines (troff's `.rules`, which draws `\l`'s
-and `\L`'s of rule characters as lines rather than setting a font's
-glyphs side by side), and a picture is centred with space about it.
+table's rules, and an equation's (its fractions', radicals', bars and
+underlines), are drawn as lines, and a picture is centred with space
+about it.
+
+The rules come from troff's `.rules`. It draws `\l`'s and `\L`'s of
+rule characters as lines, not as a font's glyphs set side by side,
+which leave joins and are copied with the text. Each line is a filled
+rectangle exactly where the glyphs' ink would be. Its place and
+thickness come from the glyph's bounding box: the character's own, or
+the one its `.char` gives it (eqnrc's rules are Libertinus Math's).
+eqn and tbl place the rules by those boxes, so each lands where its
+glyphs would have.
 
 ## Fonts
 
@@ -288,5 +297,4 @@ kept as a comment and named on standard error.
 
 ## Still to come
 
-`-man`; eqn's bars drawn as lines (they are
-glyphs now, and copied with the text).
+`-man`.

@@ -27,19 +27,53 @@ vchar(c: string): int
 }
 
 # .rules: \l's and \L's of rule characters drawn as lines, as long as
-# they are, not as a font's glyphs set side by side (not Neatroff's);
-# \(ru and \(rn, eqn's, are left as glyphs: eqn places them by their
-# boxes
+# they are, not as a font's glyphs set side by side (not Neatroff's).
+# A rule is drawn where the glyphs' ink would be: a rectangle from the
+# bottom of the glyph's box to its top (\(ul, \(ru and \(rn: eqn's
+# fractions, bars and radicals, tbl's rules, placed by those boxes), or
+# from its left to its right (\(br, \(bv, |); through the character's
+# .char where it has one (eqnrc's).  A glyph with no box is drawn as a
+# line, at the baseline or the left of the glyph.
 n_rules := 0;
 
 hrule(c: string): int
 {
-	return n_rules && (c == "ul" || c == "_");
+	return n_rules && (c == "ul" || c == "_" || c == "ru" || c == "rn");
 }
 
 vrule(c: string): int
 {
 	return n_rules && (c == "br" || c == "bv" || c == "|");
+}
+
+# the box of the character as set: its left, bottom, right and top;
+# empty, the left the right.  A rule needs no glyph: one missing is not
+# said (.mg)
+rulebox(c: string): (int, int, int, int)
+{
+	mg := mg_warn;
+	mg_warn = 0;
+	bw := wb_new();
+	wb_putexpand(bw, c);
+	wb_flush(bw);
+	mg_warn = mg;
+	if(bw.urx <= bw.llx || bw.ury <= bw.lly)
+		return (0, 0, 0, 0);
+	return (bw.llx, bw.lly, bw.urx, bw.ury);
+}
+
+# a filled rectangle w by h, its top left corner dx and dy from here
+rulerect(wb: ref Wb, dx, dy, w, h: int)
+{
+	wb_hmov(wb, dx);
+	wb_vmov(wb, dy);
+	wb_drawxbeg(wb, 'P');
+	wb_drawxdot(wb, w, 0);
+	wb_drawxdot(wb, 0, h);
+	wb_drawxdot(wb, -w, 0);
+	wb_drawxend(wb);
+	wb_vmov(wb, -dy - h);
+	wb_hmov(wb, -dx);
 }
 
 ren_hline(wb: ref Wb, l: int, c: string)
@@ -49,7 +83,12 @@ ren_hline(wb: ref Wb, l: int, c: string)
 			wb_hmov(wb, l);
 			l = -l;
 		}
-		wb_drawl(wb, 'l', l, 0);
+		(nil, bot, nil, top) := rulebox(c);
+		if(top > bot){
+			rulerect(wb, 0, -top, l, top - bot);
+			wb_hmov(wb, l);
+		}else
+			wb_drawl(wb, 'l', l, 0);
 		return;
 	}
 	w := cwid(c);
@@ -88,8 +127,19 @@ ren_hline(wb: ref Wb, l: int, c: string)
 ren_vline(wb: ref Wb, l: int, c: string)
 {
 	if(vrule(c)){
+		mg := mg_warn;
+		mg_warn = 0;
 		hw := cwid(c);
-		wb_drawl(wb, 'l', 0, l);
+		mg_warn = mg;
+		(left, nil, right, nil) := rulebox(c);
+		if(right > left){
+			if(l < 0)
+				rulerect(wb, left, l, right - left, -l);
+			else
+				rulerect(wb, left, 0, right - left, l);
+			wb_vmov(wb, l);
+		}else
+			wb_drawl(wb, 'l', 0, l);
 		wb_hmov(wb, hw);
 		return;
 	}

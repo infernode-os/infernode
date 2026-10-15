@@ -341,8 +341,8 @@ else
 fi
 
 if emu_c "provision_control_descendants_denied" 14 \
-    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; mkdir /mnt/msg/ctl >[2] /dev/null; touch /mnt/msg/ctl/session; mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/new >[2] /dev/null; touch /n/wallet/new/session; tools9p -p /mnt/msg:rw -p /n/wallet:rw read task & sleep 3; echo '21 paths=/mnt/msg/ctl/session:rw,/n/wallet/new/session:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.21/paths"; then
-    if echo "$OUTPUT" | grep -q "^/mnt/msg/ctl/session" || echo "$OUTPUT" | grep -q "^/n/wallet/new/session"; then
+    "mkdir /mnt >[2] /dev/null; mkdir /mnt/msg >[2] /dev/null; mkdir /mnt/msg/ctl >[2] /dev/null; touch /mnt/msg/ctl/session; mkdir /n >[2] /dev/null; mkdir /mnt/wallet >[2] /dev/null; mkdir /mnt/wallet/new >[2] /dev/null; touch /mnt/wallet/new/session; tools9p -p /mnt/msg:rw -p /mnt/wallet:rw read task & sleep 3; echo '21 paths=/mnt/msg/ctl/session:rw,/mnt/wallet/new/session:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.21/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/msg/ctl/session" || echo "$OUTPUT" | grep -q "^/mnt/wallet/new/session"; then
         fail "broad parent grants must not mint trusted control descendants"
     else
         pass "child cannot derive trusted control descendants from broad parents"
@@ -352,22 +352,22 @@ else
 fi
 
 if emu_c "provision_wallet_controls_denied" 14 \
-    "mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; touch /n/wallet/ctl; touch /n/wallet/pending; touch /n/wallet/new; tools9p -p /n/wallet:rw read task & sleep 3; echo '17 paths=/n/wallet/ctl:rw,/n/wallet/pending:rw,/n/wallet/new:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.17/paths"; then
-    if echo "$OUTPUT" | grep -q "^/n/wallet/\\(ctl\\|pending\\|new\\)"; then
-        fail "bare /n/wallet grant must not mint trusted wallet control capabilities"
+    "mkdir /n >[2] /dev/null; mkdir /mnt/wallet >[2] /dev/null; touch /mnt/wallet/ctl; touch /mnt/wallet/pending; touch /mnt/wallet/new; tools9p -p /mnt/wallet:rw read task & sleep 3; echo '17 paths=/mnt/wallet/ctl:rw,/mnt/wallet/pending:rw,/mnt/wallet/new:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.17/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/wallet/\\(ctl\\|pending\\|new\\)"; then
+        fail "bare /mnt/wallet grant must not mint trusted wallet control capabilities"
     else
-        pass "child cannot derive wallet ctl/pending/new from bare /n/wallet"
+        pass "child cannot derive wallet ctl/pending/new from bare /mnt/wallet"
     fi
 else
     fail "wallet control delegation-denial test failed"
 fi
 
 if emu_c "provision_wallet_account_ctl_denied" 14 \
-    "mkdir /n >[2] /dev/null; mkdir /n/wallet >[2] /dev/null; mkdir /n/wallet/alice >[2] /dev/null; touch /n/wallet/alice/ctl; tools9p -p /n/wallet:rw read task & sleep 3; echo '20 paths=/n/wallet/alice/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.20/paths"; then
-    if echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl"; then
-        fail "bare /n/wallet grant must not mint per-account wallet ctl"
+    "mkdir /n >[2] /dev/null; mkdir /mnt/wallet >[2] /dev/null; mkdir /mnt/wallet/alice >[2] /dev/null; touch /mnt/wallet/alice/ctl; tools9p -p /mnt/wallet:rw read task & sleep 3; echo '20 paths=/mnt/wallet/alice/ctl:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.20/paths"; then
+    if echo "$OUTPUT" | grep -q "^/mnt/wallet/alice/ctl"; then
+        fail "bare /mnt/wallet grant must not mint per-account wallet ctl"
     else
-        pass "child cannot derive per-account wallet ctl from bare /n/wallet"
+        pass "child cannot derive per-account wallet ctl from bare /mnt/wallet"
     fi
 else
     fail "wallet account ctl delegation-denial test failed"
@@ -509,10 +509,10 @@ else
 fi
 
 if emu_c "bindpath_privileged_rejected" 12 \
-    "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice /llm /mnt/audit /mnt/msg/ctl /n/wallet/alice/ctl /n/wallet/new /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man; touch /mnt/factotum/ctl; touch /mnt/cal/ctl; touch /mnt/cal/accounts/alice/ctl; touch /llm/ctl; touch /mnt/audit/ctl; touch /mnt/audit/chain; touch /mnt/msg/ctl/session; touch /n/wallet/alice/ctl/session; touch /n/wallet/new/session; touch /tmp/veltro/ftree/ctl; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/factotum:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/factotum/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/accounts:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/accounts/alice:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/accounts/alice/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /llm:rw' > /mnt/toolctl/ctl; echo 'bindpath /llm/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/audit:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/audit/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/audit/chain:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/ui:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/ui/activity/0/presentation:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl/session' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/alice/ctl/session' > /mnt/toolctl/ctl; echo 'bindpath /n/wallet/new/session' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/ftree:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/.ns:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/cow:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/tasks:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/browser:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/editor:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/shell:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/fractal:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/man:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
+    "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice /llm /mnt/audit /mnt/msg/ctl /mnt/wallet/alice/ctl /mnt/wallet/new /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man; touch /mnt/factotum/ctl; touch /mnt/cal/ctl; touch /mnt/cal/accounts/alice/ctl; touch /llm/ctl; touch /mnt/audit/ctl; touch /mnt/audit/chain; touch /mnt/msg/ctl/session; touch /mnt/wallet/alice/ctl/session; touch /mnt/wallet/new/session; touch /tmp/veltro/ftree/ctl; tools9p read & sleep 2; echo 'bindpath /tmp' > /mnt/toolctl/ctl; echo 'bindpath /mnt/factotum:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/factotum/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/accounts:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/accounts/alice:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/cal/accounts/alice/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /llm:rw' > /mnt/toolctl/ctl; echo 'bindpath /llm/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/audit:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/audit/ctl:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/audit/chain:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/ui:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/ui/activity/0/presentation:rw' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl' > /mnt/toolctl/ctl; echo 'bindpath /mnt/msg/ctl/session' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wallet/alice/ctl' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wallet/alice/ctl/session' > /mnt/toolctl/ctl; echo 'bindpath /mnt/wallet/new/session' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/ftree:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/.ns:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/cow:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/tasks:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/browser:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/editor:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/shell:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/fractal:rw' > /mnt/toolctl/ctl; echo 'bindpath /tmp/veltro/man:rw' > /mnt/toolctl/ctl; echo AFTER; cat /tool/paths"; then
     if ! echo "$OUTPUT" | grep -q "^/tmp rw"; then
         fail "privileged bindpath probe did not establish a valid baseline (output: $OUTPUT)"
-    elif echo "$OUTPUT" | grep -q "^/mnt/factotum" || echo "$OUTPUT" | grep -q "^/mnt/cal" || echo "$OUTPUT" | grep -q "^/llm" || echo "$OUTPUT" | grep -q "^/mnt/audit" || echo "$OUTPUT" | grep -q "^/mnt/ui" || echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/alice/ctl" || echo "$OUTPUT" | grep -q "^/n/wallet/new/session" || echo "$OUTPUT" | grep -q "^/tmp/veltro/ftree" || echo "$OUTPUT" | grep -q "^/tmp/veltro/.ns" || echo "$OUTPUT" | grep -q "^/tmp/veltro/cow" || echo "$OUTPUT" | grep -q "^/tmp/veltro/tasks" || echo "$OUTPUT" | grep -q "^/tmp/veltro/browser" || echo "$OUTPUT" | grep -q "^/tmp/veltro/editor" || echo "$OUTPUT" | grep -q "^/tmp/veltro/shell" || echo "$OUTPUT" | grep -q "^/tmp/veltro/fractal" || echo "$OUTPUT" | grep -q "^/tmp/veltro/man"; then
+    elif echo "$OUTPUT" | grep -q "^/mnt/factotum" || echo "$OUTPUT" | grep -q "^/mnt/cal" || echo "$OUTPUT" | grep -q "^/llm" || echo "$OUTPUT" | grep -q "^/mnt/audit" || echo "$OUTPUT" | grep -q "^/mnt/ui" || echo "$OUTPUT" | grep -q "^/mnt/msg/ctl" || echo "$OUTPUT" | grep -q "^/mnt/wallet/alice/ctl" || echo "$OUTPUT" | grep -q "^/mnt/wallet/new/session" || echo "$OUTPUT" | grep -q "^/tmp/veltro/ftree" || echo "$OUTPUT" | grep -q "^/tmp/veltro/.ns" || echo "$OUTPUT" | grep -q "^/tmp/veltro/cow" || echo "$OUTPUT" | grep -q "^/tmp/veltro/tasks" || echo "$OUTPUT" | grep -q "^/tmp/veltro/browser" || echo "$OUTPUT" | grep -q "^/tmp/veltro/editor" || echo "$OUTPUT" | grep -q "^/tmp/veltro/shell" || echo "$OUTPUT" | grep -q "^/tmp/veltro/fractal" || echo "$OUTPUT" | grep -q "^/tmp/veltro/man"; then
         fail "bindpath accepted privileged control path (output: $OUTPUT)"
     else
         pass "bindpath rejects privileged control paths"

@@ -45,20 +45,20 @@ sleep 5
 sleep 3
 
 echo '=== 1. check balance ==='
-cat /n/wallet/veltro-demo-wallet/balance
+cat /mnt/wallet/veltro-demo-wallet/balance
 
 echo '=== 2. send 1000 wei ETH ==='
-echo '1000 $BURN' > /n/wallet/veltro-demo-wallet/pay
-pending=\`{cat /n/wallet/pending}
-echo approve \$pending(1) > /n/wallet/ctl
+echo '1000 $BURN' > /mnt/wallet/veltro-demo-wallet/pay
+pending=\`{cat /mnt/wallet/pending}
+echo approve \$pending(1) > /mnt/wallet/ctl
 
 echo '=== 3. send 1 USDC (1000000 base units) ==='
-echo 'usdc 1000000 $BURN' > /n/wallet/veltro-demo-wallet/pay
-pending=\`{cat /n/wallet/pending}
-echo approve \$pending(1) > /n/wallet/ctl
+echo 'usdc 1000000 $BURN' > /mnt/wallet/veltro-demo-wallet/pay
+pending=\`{cat /mnt/wallet/pending}
+echo approve \$pending(1) > /mnt/wallet/ctl
 
 echo '=== 4. check history ==='
-cat /n/wallet/veltro-demo-wallet/history
+cat /mnt/wallet/veltro-demo-wallet/history
 
 echo '=== done ==='
 EOF

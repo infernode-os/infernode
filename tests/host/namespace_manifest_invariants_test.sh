@@ -63,9 +63,9 @@ assert_absent_paths() {
 		"/mnt/msg/ctl"
 		"/mnt/msg/approve"
 		"/mnt/msg/deny"
-		"/n/wallet/ctl"
-		"/n/wallet/pending"
-		"/n/wallet/new"
+		"/mnt/wallet/ctl"
+		"/mnt/wallet/pending"
+		"/mnt/wallet/new"
 		"/mnt/llm"
 	)
 	local found=""

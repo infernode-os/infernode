@@ -21,6 +21,15 @@ All notable changes to InferNode are documented in this file.
   node can now be CNSA-strict to its peers and reach the web. A
   deployment that wants strict TLS sets `CNSATLS=1` as well.
 
+### Name space
+
+- **wiki9p mounts at `/mnt/wikia`, not `/n/wikia`.** It invents its own
+  schema, so it belongs under `/mnt` (docs/NAMESPACE-LAYOUT.md); `/mnt/wiki`
+  is wikifs, the store beneath it. The wiki tool is granted `/mnt/wikia`
+  and nothing else is; neither name can be granted as a path. A script
+  that binds sources into `/n/wikia/raw` now binds them into
+  `/mnt/wikia/raw` (INFR-402).
+
 ## [0.7.0] - 2026-10-13
 
 This release gives InferNode a JavaScript engine of its own, and Charon

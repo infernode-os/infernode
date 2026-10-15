@@ -283,14 +283,6 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 				nallow = "wallet" :: nallow;
 		}
 
-		# /n/wikia — fixed-function wiki agent service. The wiki tool receives
-		# it per-invocation; generic path grants cannot drive ctl/query directly.
-		if(inlist("wiki", caps.tools)) {
-			(wikiaok, nil) := sys->stat("/n/wikia");
-			if(wikiaok >= 0)
-				nallow = "wikia" :: nallow;
-		}
-
 		# (The UI presentation surface moved to /mnt/ui — granted + sub-restricted
 		# by the uniform /mnt machinery in step 5b, like /mnt/llm and /mnt/mcp.
 		# It is no longer a /n entry. INFR-254.)
@@ -405,6 +397,14 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		(gitok, nil) := sys->stat("/mnt/git");
 		if(gitok >= 0 && !inlist("git", mntpaths))
 			mntpaths = "git" :: mntpaths;
+	}
+	# /mnt/wikia — fixed-function wiki agent service (wiki9p; migrated from
+	# /n/wikia per docs/NAMESPACE-LAYOUT.md, INFR-402). The wiki tool receives
+	# it per-invocation; generic path grants cannot drive ctl/query directly.
+	if(inlist("wiki", caps.tools)) {
+		(wikiaok, nil) := sys->stat("/mnt/wikia");
+		if(wikiaok >= 0 && !inlist("wikia", mntpaths))
+			mntpaths = "wikia" :: mntpaths;
 	}
 	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
 	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
@@ -1225,6 +1225,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
+		path == "/mnt/wikia" || prefix(path, "/mnt/wikia/") ||
 		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
 		path == "/mnt/keys" || prefix(path, "/mnt/keys/") ||
 		path == "/mnt/keysrv" || prefix(path, "/mnt/keysrv/") ||
@@ -1405,7 +1406,6 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
 		("/n/speech", "Speech",           "rw"),
-		("/n/wikia",  "Wiki Agent",       "rw"),
 		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
 		# /mnt now — application mount points, schema is ours, not /n imports
@@ -1419,6 +1419,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),
+		("/mnt/wikia", "Wiki Agent", "rw"),
 		("/mnt/registry", "Registry", "rw"),
 	};
 

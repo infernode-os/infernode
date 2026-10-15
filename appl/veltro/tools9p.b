@@ -974,6 +974,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
+		path == "/mnt/wikia" || prefix(path, "/mnt/wikia/") ||
 		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
 		path == "/mnt/keys" || prefix(path, "/mnt/keys/") ||
 		path == "/mnt/keysrv" || prefix(path, "/mnt/keysrv/") ||

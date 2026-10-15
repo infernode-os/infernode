@@ -181,7 +181,7 @@ absent, not present-and-denied:
 | 1 | `/dis` | `lib/`, `veltro/`; `sh.dis` for exec; named commands from `shellcmds`; explicitly granted `/dis/<tree>` | Runtime and named executable allowlist |
 | 2 | `/dis/veltro/tools` | Granted tool modules only | Tool allowlist |
 | 3 | `/dev` | `cons`, `null`, `time` | Console/null and TLS clock |
-| 4 | `/n` | Capability-derived foreign imports: speech, wallet, wikia, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
+| 4 | `/n` | Capability-derived foreign imports: speech, wallet, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
 | 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services are narrowed again | Synthesized-service capabilities |
 | 6 | `/lib` | `veltro/`, `certs/`; `/lib/veltro/keys` replaced with an empty view | Prompts/config and TLS roots, not credentials |
 | 7 | `/env` | `VELTRO_SESSION` only | No inherited environment secrets |
@@ -753,7 +753,7 @@ be explicit:
 
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
-`/mnt/gpu` only from `gpu` or local `vision`, `/n/wikia` only from `wiki`,
+`/mnt/gpu` only from `gpu` or local `vision`, `/mnt/wikia` only from `wiki`,
 `/mnt/video` only from video presentation tools, and `/phone` only from `sms`,
 `dial`, or `contacts`.
 Legacy authority roots such as `/mnt/keys`, `/mnt/keysrv`, and

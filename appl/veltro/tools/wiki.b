@@ -5,11 +5,11 @@ implement ToolWiki;
 #
 # Provides ingest, query, lint, and status operations against
 # the wiki9p file server ("wikia" = wiki agent, mounted at
-# /n/wikia).  This is the Phase 1 tool wrapper; eventually
-# Veltro will use the /n/wikia filesystem directly.
+# /mnt/wikia).  This is the Phase 1 tool wrapper; eventually
+# Veltro will use the /mnt/wikia filesystem directly.
 #
 # Usage:
-#   wiki ingest                   # Ingest all sources at /n/wikia/raw
+#   wiki ingest                   # Ingest all sources at /mnt/wikia/raw
 #   wiki ingest <path>            # Ingest a specific file or directory
 #   wiki query <question>         # Ask a question, get synthesized answer
 #   wiki lint                     # Run wiki health check
@@ -17,11 +17,11 @@ implement ToolWiki;
 #   wiki log                      # Show operation history
 #
 # Source binding (done before ingest):
-#   Veltro or the user binds data into /n/wikia/raw before calling ingest.
+#   Veltro or the user binds data into /mnt/wikia/raw before calling ingest.
 #   Sources can be host paths, databases, remote mounts, or other wikis.
 #
 # Dependencies:
-#   /n/wikia   wiki9p must be mounted
+#   /mnt/wikia   wiki9p must be mounted
 #   /mnt/wiki  wikifs must be mounted (wiki9p talks to it)
 #   /mnt/llm     LLM service must be available (wiki9p talks to it)
 #
@@ -44,11 +44,11 @@ ToolWiki: module {
 	schema: fn(): string;
 };
 
-WIKIA_CTL:    con "/n/wikia/ctl";
-WIKIA_QUERY:  con "/n/wikia/query";
-WIKIA_STATUS: con "/n/wikia/status";
-WIKIA_LOG:    con "/n/wikia/log";
-WIKIA_DOC:    con "/n/wikia/doc";
+WIKIA_CTL:    con "/mnt/wikia/ctl";
+WIKIA_QUERY:  con "/mnt/wikia/query";
+WIKIA_STATUS: con "/mnt/wikia/status";
+WIKIA_LOG:    con "/mnt/wikia/log";
+WIKIA_DOC:    con "/mnt/wikia/doc";
 
 init(): string
 {
@@ -70,23 +70,23 @@ doc(): string
 {
 	return "Wiki - LLM-maintained knowledge base\n\n" +
 		"Usage:\n" +
-		"  wiki ingest              Ingest all sources bound at /n/wikia/raw\n" +
+		"  wiki ingest              Ingest all sources bound at /mnt/wikia/raw\n" +
 		"  wiki ingest <path>       Ingest a specific file or path\n" +
 		"  wiki query <question>    Ask a question, get answer from wiki\n" +
 		"  wiki lint                Run health check on wiki pages\n" +
 		"  wiki status              Show current state and statistics\n" +
 		"  wiki log                 Show operation history\n\n" +
 		"Before ingesting, bind source data:\n" +
-		"  bind /n/local/docs /n/wikia/raw\n\n" +
+		"  bind /n/local/docs /mnt/wikia/raw\n\n" +
 		"The wiki is browsable via Charon at the httpd wiki URL.\n" +
-		"Requires /n/wikia (run wiki9p), /mnt/wiki (run wikifs), /mnt/llm.\n";
+		"Requires /mnt/wikia (run wiki9p), /mnt/wiki (run wikifs), /mnt/llm.\n";
 }
 
 schema(): string
 {
 	return "{" +
 		"\"name\":\"wiki\"," +
-		"\"description\":\"LLM-maintained knowledge base. Requires /n/wikia (wiki9p), /mnt/wiki (wikifs), and /mnt/llm.\"," +
+		"\"description\":\"LLM-maintained knowledge base. Requires /mnt/wikia (wiki9p), /mnt/wiki (wikifs), and /mnt/llm.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -128,23 +128,23 @@ exec(args: string): string
 		if(rest != "" && !safeingestpath(rest))
 			return "error: unsafe ingest path";
 		if(!mounted())
-			return "error: /n/wikia not mounted (run wiki9p first)";
+			return "error: /mnt/wikia not mounted (run wiki9p first)";
 		return doingest(rest);
 	"query" =>
 		if(!mounted())
-			return "error: /n/wikia not mounted (run wiki9p first)";
+			return "error: /mnt/wikia not mounted (run wiki9p first)";
 		return doquery(rest);
 	"lint" =>
 		if(!mounted())
-			return "error: /n/wikia not mounted (run wiki9p first)";
+			return "error: /mnt/wikia not mounted (run wiki9p first)";
 		return dolint();
 	"status" =>
 		if(!mounted())
-			return "error: /n/wikia not mounted (run wiki9p first)";
+			return "error: /mnt/wikia not mounted (run wiki9p first)";
 		return dostatus();
 	"log" =>
 		if(!mounted())
-			return "error: /n/wikia not mounted (run wiki9p first)";
+			return "error: /mnt/wikia not mounted (run wiki9p first)";
 		return dolog();
 	* =>
 		return "error: unknown command: " + verb +
@@ -248,7 +248,7 @@ readall(fd: ref Sys->FD): string
 
 safeingestpath(path: string): int
 {
-	rawroot := "/n/wikia/raw";
+	rawroot := "/mnt/wikia/raw";
 	if(path == rawroot)
 		return 1;
 	if(!hasprefix(path, rawroot + "/"))

@@ -1368,7 +1368,19 @@ initepctx(Ctlr *ctlr, u32int *w, Ring *r, Ep *ep)
 	int ival;
 
 	if(ep->dev->speed == Lowspeed || ep->dev->speed == Fullspeed){
-		for(ival=3; ival < 11 && (1<<ival) < ep->pollival; ival++)
+		/*
+		 * A low- or full-speed pollival is in frames (ms); the
+		 * context's interval is 2^ival microframes (125us). 9front
+		 * compared the two directly, so a 10ms keyboard was polled
+		 * every 2ms -- five times what it asked -- and on a Pi 4,
+		 * where such devices reach the VL805 through its hub's one
+		 * transaction translator, a keyboard and a mouse together
+		 * overran it: Split Transaction Errors on whichever was
+		 * already running as soon as the other was plugged in.
+		 * Linux's rule (xhci_parse_frame_interval): the largest
+		 * power of two not over the asked interval, 1ms to 128ms.
+		 */
+		for(ival=3; ival < 10 && (1<<(ival+1)) <= ep->pollival*8; ival++)
 			;
 	} else {
 		for(ival=0; ival < 15 && (1<<ival) < ep->pollival; ival++)

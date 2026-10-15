@@ -75,6 +75,29 @@
 #include	"../port/netif.h"
 #include	"../port/etherif.h"
 
+
+/*
+ * The input queue of each conversation on an interface, counted as qio
+ * counts it: the blocks' allocations, not their data. 128KB suits a
+ * 100 Mbit link. A board with a faster one sets its own in mem.h: a
+ * Pi 4's GENET receives into 2KB buffers, so 128KB held about 55
+ * frames -- a millisecond at a gigabit -- and a 41-fragment datagram on
+ * top of any backlog overflowed it ("soft overflows" in the stats, and
+ * 14 of 20 such pings never answered).
+ */
+#ifndef ETHERQLIMIT
+#define ETHERQLIMIT	(128*1024)
+#endif
+
+/*
+ * The output queue, which drops rather than blocks (etherreset says
+ * why). 256KB is about 130 full frames by allocation; a board whose
+ * link drains faster than its TCP bursts can fill that sets its own.
+ */
+#ifndef ETHEROQLIMIT
+#define ETHEROQLIMIT	(256*1024)
+#endif
+
 enum {
 	Maxframe	= 1514,		/* an Ethernet frame, header included */
 
@@ -95,8 +118,8 @@ enum {
 	Lrxerr		= 0x00400000,	/* RX_CMD_A: receive error */
 
 	Nfiles		= 8,		/* ipv4 + arp + ipv6 + spare sniffers */
-	Qlimit		= 128*1024,	/* per-conversation input queue */
-	Oqlimit		= 256*1024,	/* outbound, before frames are dropped */
+	Qlimit		= ETHERQLIMIT,	/* per-conversation input queue; see below */
+	Oqlimit		= ETHEROQLIMIT,	/* outbound, before frames are dropped */
 
 	/*
 	 * Frames gathered into one bulk OUT. Sixteen is a TCP window's

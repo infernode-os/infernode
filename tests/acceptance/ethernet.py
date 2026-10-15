@@ -144,7 +144,11 @@ def main():
         tx, rx, avg, mx = ping(a.board, 20, 60000, 0.2, via)
         m = re.search(r"mbps: (\d+)", b.sh("cat /net/ether0/stats"))
         mbps = int(m.group(1)) if m else 0
-        if mbps >= 1000 and rx < tx - 1:
+        # The excuse is the LAN78xx's alone. A Pi 4's GENET has no such
+        # FIFO, and the same shortfall there was a queue limit in the
+        # kernel (devether.c, ETHERQLIMIT) that this skip hid.
+        lan78xx = "genet" not in b.sh("cat /net/ether0/ifstats")
+        if lan78xx and mbps >= 1000 and rx < tx - 1:
             b.skip("IP reassembly: 60000-byte (41-fragment) echoes", "%d/%d at %d Mb/s: a 60 KB burst overruns the LAN78xx's 12 KB FIFO unless the switch honours pause; passes at 100 Mb/s" % (rx, tx, mbps))
         else:
             b.check(rx >= tx - 1, "IP reassembly: %d/%d 60000-byte (41-fragment) echoes answered%s" % (rx, tx, frm))

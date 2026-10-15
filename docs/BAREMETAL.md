@@ -283,7 +283,26 @@ kernel asks for the maximum the firmware reports, so the boot log's
 `mbox: ARM clock ... max` line says which it got. Its fan or heatsink is
 the board owner's business.
 
-`[tryboot]` is native here; the EEPROM is where it came from. Do **not**
+**And a `tryboot.txt`** -- the Pi 4 needs it and the 3B+ does not. On a
+Pi 4 a tryboot reset is handled by the boot EEPROM, which then reads
+`tryboot.txt` *instead of* `config.txt`; the `[tryboot]` section above
+is never consulted. Without the file the reset is acknowledged and the
+ordinary kernel boots, so a candidate silently never runs (seen on the
+bench board, rev 1.5). It is `config.txt` with
+the two tryboot lines in place of the kernel's:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+    max_framebuffers=2
+    arm_boost=1
+
+Keep the `[tryboot]` section in `config.txt` anyway: it is harmless here
+and it is what a card moved to a 3B+ needs.
+
+Do **not**
 add `enable_gic=0` — the kernel's interrupt controller is the GIC, and
 that line would hand it the 3B+'s instead — and do not add
 `dtoverlay=disable-bt`, for the 3B+'s reason. No `core_freq` pinning:

@@ -730,10 +730,20 @@ initrings(Ctlr *ctlr)
 	initring(ctlr->rx, ctlr->rd, (i-1)*32, nelem(ctlr->rd) - (i-1)*32);
 
 	for(i = 0; i < nelem(ctlr->rx); i++){		 
-		REG(ctlr->rx[i].regs[DmaDoneThresh]) = 1;
+		/*
+		 * An interrupt per 16 frames, or 50us after the first, not
+		 * one per frame: at a gigabit the per-frame interrupt and
+		 * wakeup were the receive path's cost, and an outbound TCP
+		 * stream receives an ACK for every two segments.
+		 */
+		REG(ctlr->rx[i].regs[DmaDoneThresh]) = 16;
 		REG(ctlr->rx[i].regs[RdmaXonXoffThresh]) = (5 << 16) | ((ctlr->rx[i].m+1) >> 4);
 
-		/* set dma timeout to 50us */
+		/*
+		 * And 50us behind it (9front's, moot behind its threshold of
+		 * 1). One unit, 8.2us, was measured and was worse both ways:
+		 * 800 in and 295 out, against 939 and 483.
+		 */
 		REG(ctlr->rx->regs[RdmaTimeout0 + ctlr->rx[i].num]) = ((50*1000 + 8191)/8192);
 	}
 

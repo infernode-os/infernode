@@ -1944,8 +1944,8 @@ fi
 # The per-core clock is readable from the shell, not only asserted at
 # boot: one line per core that came up, and the fourth core's line is
 # the one that proves the file is not merely core 0 talking about itself.
-if grep -q "^cpu3 ticks [0-9][0-9]* intrs [0-9][0-9]* timers [0-9][0-9]*$" <<<"$SHOUT"; then
-    pass "/dev/sysstat reports every core's ticks, interrupts and timer callbacks"
+if grep -q "^cpu3 ticks [0-9][0-9]* idle [0-9][0-9]* intrs [0-9][0-9]* timers [0-9][0-9]*$" <<<"$SHOUT"; then
+    pass "/dev/sysstat reports every core's ticks, idle ticks, interrupts and timer callbacks"
 else
     fail "/dev/sysstat did not show a line for cpu3"
 fi

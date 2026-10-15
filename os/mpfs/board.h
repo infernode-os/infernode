@@ -30,6 +30,7 @@ int	emmcinit(void);
 void	ethergemlink(void);	/* ethergem.c: GEM0 as #l/ether0 */
 char*	sdcontroller(void);
 int	sdblkread(uvlong, void*);
+int	sdblkreadn(uvlong, void*, int);
 int	sdblkwrite(uvlong, void*);
 int	sdblkpresent(void);
 uvlong	sdblknblocks(void);

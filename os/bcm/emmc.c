@@ -58,6 +58,7 @@ enum
 	Corefallback	= 41666667,	/* the usual base clock if unasked */
 
 	Goidle		= 0,
+	Readmultiple	= 18,
 	Iorwextended	= 53,		/* SDIO: the data command */
 
 	/*
@@ -413,6 +414,14 @@ arasancmd(int idx, u32int arg, int flags, u32int *resp)
 		if(arasan.bcount != 1)
 			cmd |= Tmmultiblock | Tmblkcnten;
 	}
+	/*
+	 * READ_MULTIPLE_BLOCK (sdblkreadn): as many blocks as the last
+	 * iosetup said, and the controller sends the STOP_TRANSMISSION
+	 * itself when the count is done (Auto CMD12), so the card is back
+	 * in its transfer state before the data is called finished.
+	 */
+	if(idx == Readmultiple && arasan.bcount != 1)
+		cmd |= Tmmultiblock | Tmblkcnten | Tmautocmd12;
 	if(data){
 		cmd |= Cmdisdata;
 		if(data == Dread)

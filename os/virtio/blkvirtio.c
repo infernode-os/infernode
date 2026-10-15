@@ -219,6 +219,17 @@ sdblkread(uvlong blkno, void *buf)
 }
 
 int
+sdblkreadn(uvlong blkno, void *buf, int n)
+{
+	int i;
+
+	for(i = 0; i < n; i++)
+		if(blkrequest(Blkin, blkno + i, (uchar*)buf + i*512) < 0)
+			return -1;
+	return 0;
+}
+
+int
 sdblkwrite(uvlong blkno, void *buf)
 {
 	return blkrequest(Blkout, blkno, buf);

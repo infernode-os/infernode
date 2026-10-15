@@ -108,6 +108,8 @@
  */
 #define	ETHERQLIMIT	(1024*1024)
 #define	ETHEROQLIMIT	(1024*1024)	/* and out: the same 1MB */
+#define	ETHEROQWAITMS	50		/* a full output queue makes its writer wait this long before dropping */
+#define	TCPWQLIMIT	(1024*1024)	/* a TCP connection's send queue, when windows are scaled (../ip/tcp.c) */
 
 /*
  * The card is on EMMC2 (io.h, emmc2.c). ../bcm/sdmmc.c picks between the

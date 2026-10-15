@@ -1,7 +1,7 @@
 /*
  * (This file was os/bcm2837/devsd.c. It moved here when a second
  * board, os/virt, put a virtio disk under it: all it asks of a board is
- * sdblkpresent(), sdblknblocks(), sdblkread() and sdblkwrite(), declared
+ * sdblkpresent(), sdblknblocks(), sdblkread(), sdblkreadn() and sdblkwrite(), declared
  * in the board's board.h. They were emmcread() and friends while the
  * only thing under #S was this SoC's card. "The SD card" below is
  * whatever answers those.)
@@ -36,6 +36,7 @@ enum{
 	Qpart,		/* and upwards, one per partition */
 
 	Blen	= 512,
+	Maxblks	= 64,	/* blocks per multiple-block read: 32KB */
 	Npart	= 8,
 	Namelen	= 32,
 };
@@ -183,7 +184,7 @@ sdio(int iswrite, void *a, long n, vlong off, vlong base, vlong total)
 	uchar *p;
 	vlong blk;
 	long done, m;
-	int boff;
+	int boff, nb;
 
 	/*
 	 * Clamp against this FILE's length before adding its base.
@@ -219,6 +220,20 @@ sdio(int iswrite, void *a, long n, vlong off, vlong base, vlong total)
 		if(m > n - done)
 			m = n - done;
 
+		if(!iswrite && boff == 0 && n - done >= Blen){
+			/*
+			 * Whole blocks in the middle go straight into the
+			 * caller's buffer, many at a time: one command for
+			 * up to Maxblks blocks where the controller can.
+			 */
+			nb = (n - done) / Blen;
+			if(nb > Maxblks)
+				nb = Maxblks;
+			if(sdblkreadn(blk, p + done, nb) < 0)
+				error(Eio);
+			done += nb*Blen;
+			continue;
+		}
 		if(!iswrite){
 			if(sdblkread(blk, sd.buf) < 0)
 				error(Eio);

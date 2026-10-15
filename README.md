@@ -9,9 +9,13 @@
 [![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev/spec/v1.0/levels#build-l3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**64-bit Inferno® OS for embedded systems, servers, and AI agents.**
+**A secure, open-source operating system for AI agents. Each agent sees only what you grant it.**
 
-InferNode is a modern Inferno® distribution with JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, namespace-isolated AI agents (Veltro), an optional SDL3 GUI (Lucia + Xenith), and a complete Plan 9-inspired environment — all in under 30 MB of RAM.
+[![Claude Sonnet is told to find an SSH private key. In its namespace the key does not exist.](https://infernode.io/demo/containment-demo.gif)](https://infernode.io/#demo)
+
+InferNode is a 64-bit distribution of Inferno® OS. Each agent runs in its own namespace, which holds only the files and services you grant it. Nothing else exists for it. [Watch the 45-second demo](https://infernode.io/#demo).
+
+It also has JIT compilation on AMD64 (14×), ARM64 (9×) and RISC-V, an optional SDL3 GUI (Lucia + Xenith), and a complete Plan 9-inspired environment, all in under 30 MB of RAM. It runs on macOS, Linux and Windows, and boots on bare metal on ARM64 and RISC-V.
 
 ## Quick Start
 
@@ -19,7 +23,7 @@ InferNode is a modern Inferno® distribution with JIT compilation on AMD64 (14×
 
 Every tagged release ships signed binaries for macOS, Linux, and Windows on the [latest release page](https://github.com/infernode-os/infernode/releases/latest). No toolchain, no build step — download and run.
 
-- **macOS (Apple Silicon)** — `infernode-*-macos-arm64.dmg`: open, drag to Applications, launch.
+- **macOS (Apple Silicon or Intel)** — `infernode-*-macos-arm64.dmg` or `infernode-*-macos-amd64.dmg`: open, drag to Applications, launch. Or with Homebrew: `brew install --cask infernode-os/tap/infernode`.
 - **macOS (Intel)** — `infernode-*-macos-amd64.dmg`: the same, built and tested on GitHub's Intel macOS runner. Supported for as long as Apple supports Intel Macs and GitHub has Intel runners.
 - **Windows (x86_64)** — `infernode-*-windows-amd64-gui.zip`: extract, **double-click `setup-windows.bat`** (it clears the Mark-of-the-Web tag from the bundle and configures an LLM backend), then double-click `InferNode.exe`. (Until code-signing lands, the unsigned `InferNode.exe` would otherwise be silently blocked by SmartScreen after browser download — Windows propagates Mark-of-the-Web from the zip to every extracted file. `.bat` files are exempt from that gate, so `setup-windows.bat` runs anyway and its first job is to unblock the rest of the bundle.)
 - **Linux x86_64 (GUI)** — `infernode-*-linux-amd64-gui.tar.gz`: SDL3 is bundled.

@@ -466,20 +466,31 @@ tr_eos(args: array of string)
 		eos_trancnt = charsread(args[2], eos_tran);
 }
 
-c_eossent(s: string): int
+# whether s is one of a[0:n]; compared by length and first character first
+charsin(a: array of string, n: int, s: string): int
 {
-	for(i := 0; i < eos_sentcnt; i++)
-		if(eos_sent[i] == s)
+	l := len s;
+	if(l == 0){
+		for(i := 0; i < n; i++)
+			if(a[i] == s)
+				return 1;
+		return 0;
+	}
+	c := s[0];
+	for(i := 0; i < n; i++)
+		if(len a[i] == l && a[i][0] == c && a[i] == s)
 			return 1;
 	return 0;
 }
 
+c_eossent(s: string): int
+{
+	return charsin(eos_sent, eos_sentcnt, s);
+}
+
 c_eostran(s: string): int
 {
-	for(i := 0; i < eos_trancnt; i++)
-		if(eos_tran[i] == s)
-			return 1;
-	return 0;
+	return charsin(eos_tran, eos_trancnt, s);
 }
 
 # hyphenation dashes and the hyphenation-inhibiting character
@@ -559,23 +570,18 @@ tr_hystop(args: array of string)
 
 c_hydash(s: string): int
 {
-	for(i := 0; i < hy_dashcnt; i++)
-		if(hy_dash[i] == s)
-			return 1;
-	return 0;
+	return charsin(hy_dash, hy_dashcnt, s);
 }
 
 c_hystop(s: string): int
 {
-	for(i := 0; i < hy_stopcnt; i++)
-		if(hy_stop[i] == s)
-			return 1;
-	return 0;
+	return charsin(hy_stop, hy_stopcnt, s);
 }
 
 c_hymark(s: string): int
 {
-	return s == c_bp || s == env.hc;
+	l := len s;
+	return l == len c_bp && s == c_bp || l == len env.hc && s == env.hc;
 }
 
 tr_pmll(args: array of string)

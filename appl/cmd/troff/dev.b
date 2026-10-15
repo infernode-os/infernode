@@ -50,6 +50,7 @@ dev_mnt(pos: int, id, name: string): int
 		pos = dev_position(id);
 	fn_name[pos] = id;
 	fn_font[pos] = fnt;
+	fn_ver++;	# dev_fontpos()'s are out of date
 	out(sys->sprint("x font %d %s\n", pos, name));
 	return pos;
 }
@@ -262,12 +263,22 @@ dev_pos(id: string): int
 }
 
 # the mounted position of a font
+fn_ver := 1;	# changed with fn_font
+
 dev_fontpos(fnt: ref Font): int
 {
+	if(fnt != nil && fnt.fposv == fn_ver)
+		return fnt.fpos;
 	for(i := 0; i < NFONTS; i++)
 		if(fn_font[i] == fnt)
-			return i;
-	return 0;
+			break;
+	if(i == NFONTS)
+		i = 0;
+	if(fnt != nil){
+		fnt.fpos = i;
+		fnt.fposv = fn_ver;
+	}
+	return i;
 }
 
 # the font at pos, read if it has not been

@@ -106,10 +106,45 @@ utf8nbytes(c: int): int
 	return 4;
 }
 
+# n as sprint's %.2d
+d2(n: int): string
+{
+	if(n >= 0 && n < 10)
+		return "0" + string n;
+	if(n < 0 && n > -10)
+		return "-0" + string -n;
+	return string n;
+}
+
 # a string of the single character c
+chrs: array of string;
 chr(c: int): string
 {
+	if(c >= 0 && c < 256){
+		if(chrs == nil)
+			chrs = array[256] of string;
+		if((s := chrs[c]) != nil)
+			return s;
+	}
 	s := "";
 	s[0] = c;
+	if(c >= 0 && c < 256)
+		chrs[c] = s;
 	return s;
+}
+
+# a set of characters below 256, for inset(); C's strchr(s, c) != NULL
+cset(s: string): array of byte
+{
+	t := array[256] of {* => byte 0};
+	t[0] = byte 1;
+	for(i := 0; i < len s; i++)
+		if(s[i] < 256)
+			t[s[i]] = byte 1;
+	return t;
+}
+
+inset(t: array of byte, c: int): int
+{
+	return c >= 0 && c < 256 && int t[c];
 }

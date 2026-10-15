@@ -56,8 +56,12 @@ dict_put(d: ref Dict, key: string, val: int)
 # the index of key in d, or -1
 dict_idx(d: ref Dict, key: string): int
 {
-	idx := d.head[dict_hash(d, key)];
-	while(idx > 0 && key != d.key[idx])
+	h := 0;
+	l := len key;
+	for(i := 0; i < l; i++)
+		h = (h << 5) + h + key[i];
+	idx := d.head[(h & 16r7fffffff) % d.tabsz];
+	while(idx > 0 && (len d.key[idx] != l || key != d.key[idx]))
 		idx = d.next[idx];
 	if(idx > 0)
 		return idx;

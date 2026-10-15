@@ -123,7 +123,7 @@ fmt_wordscopy(f: ref Fmt, end: int, l: ref Line): int
 	for(i := 0; i < end; i++){
 		wcur := f.words[i];
 		if(wcur.gap)
-			s += sys->sprint("%sh'%du'", ecs(), wcur.gap);
+			s += ecs() + "h'" + string wcur.gap + "u'";
 		s += wcur.s;
 		w += wcur.wid + wcur.gap;
 		if(wcur.elsn < l.elsn)
@@ -403,14 +403,17 @@ fmt_hyphmarks(word: string, hyidx, hyins, hygap: array of int): int
 		if(!c){
 			if(d == env_hc()){
 				hyins[n] = 1;
+				hm_dirty = 1;
 				hyidx[n++] = s;
 			}
 			if(c_hydash(d)){
 				hyins[n] = 0;
+				hm_dirty = 1;
 				hyidx[n++] = s;
 			}
 			if(d == c_nb){
 				hygap[n] = 1;
+				hm_dirty = 1;
 				hyidx[n++] = s;
 			}
 			lastchar = s;
@@ -422,13 +425,26 @@ fmt_hyphmarks(word: string, hyidx, hyins, hygap: array of int): int
 	return n;
 }
 
+# fmt_insertword()'s, all zero until fmt_hyphmarks() writes (hm_dirty)
+hm_idx := array[NHYPHSWORD + 2] of {* => 0};
+hm_ins := array[NHYPHSWORD + 2] of {* => 0};
+hm_gap := array[NHYPHSWORD + 2] of {* => 0};
+hm_dirty := 0;
+
 fmt_insertword(f: ref Fmt, wb: ref Wb, gap: int)
 {
-	hyidx := array[NHYPHSWORD + 2] of {* => 0};	# sub-word boundaries
-	hyins := array[NHYPHSWORD + 2] of {* => 0};	# insert dash
-	hygap := array[NHYPHSWORD + 2] of {* => 0};	# stretchable no-break space
 	src := wb_buf(wb);
+	hyidx := hm_idx;	# sub-word boundaries
+	hyins := hm_ins;	# insert dash
+	hygap := hm_gap;	# stretchable no-break space
+	hm_dirty = 0;
 	n := fmt_hyphmarks(src, hyidx, hyins, hygap);
+	if(hm_dirty){	# these are this word's; clean ones for the next
+		hm_idx = array[NHYPHSWORD + 2] of {* => 0};
+		hm_ins = array[NHYPHSWORD + 2] of {* => 0};
+		hm_gap = array[NHYPHSWORD + 2] of {* => 0};
+		hm_dirty = 0;
+	}
 	if(n <= 0){
 		fmt_wb2word(f, wb, 0, 1, gap, wb_cost(wb));
 		return;
@@ -601,7 +617,23 @@ fmt_safelines(): int
 fmt_fillwords(f: ref Fmt, br: int): int
 {
 	nohy := -1;		# no hyphenation allowed on this line
-	out := array[64] of {* => 0};	# the number of words in filled lines
+	out: array of int;	# the number of words in filled lines
+	if(fw_out != nil){	# one, unless called within itself
+		out = fw_out;
+		fw_out = nil;
+		for(k := 0; k < len out; k++)
+			out[k] = 0;
+	}else
+		out = array[64] of {* => 0};
+	n := fmt_fillwords1(f, br, nohy, out);
+	fw_out = out;
+	return n;
+}
+
+fw_out := array[64] of {* => 0};
+
+fmt_fillwords1(f: ref Fmt, br: int, nohy: int, out: array of int): int
+{
 	if(!FMT_FILL(f) || !f.words_n)
 		return 0;
 	if(f.tind)
@@ -760,11 +792,15 @@ lenmin(l: int, n: int): int
 # approximately 8 * sqrt(cost)
 scaledown(cost: big): big
 {
-	ret := big 0;
-	for(i := 0; i < 14; i++)
-		ret += ((cost >> (i * 2)) & big 3) << (i + 3);
-	if(ret < big (1 << 13))
-		return ret;
+	# only the low 28 bits count, two at a time
+	c := int (cost & big 16rfffffff);
+	ret := 0;
+	for(i := 3; c != 0; i++){
+		ret += (c & 3) << i;
+		c >>= 2;
+	}
+	if(ret < 1 << 13)
+		return big ret;
 	return big (1 << 13);
 }
 
@@ -774,15 +810,24 @@ FMT_COST(llen, lwid, swid, nspc: int): big
 	# the ratio that the stretchable spaces of the line should be spread
 	if(!swid)
 		swid = 1;
-	ratio := big (llen - lwid) * big 100 / big swid;
+	if(!nspc)
+		nspc = 1;
+	d := llen - lwid;
+	if(d > -20000000 && d < 20000000){	# in int, as in big
+		r := d * 100 / swid;
+		if(r < 0)
+			r = -r;
+		if(r > 4000)
+			r = 4000 + int scaledown(big (r - 4000));
+		return big (r * r / 100) * big nspc;
+	}
+	ratio := big d * big 100 / big swid;
 	if(ratio < big 0)
 		ratio = -ratio;
 	# ratio too large; scaling it down
 	if(ratio > big 4000)
 		ratio = big 4000 + scaledown(ratio - big 4000);
 	# assigning a cost of 100 to each space stretching 100 percent
-	if(!nspc)
-		nspc = 1;
 	return ratio * ratio / big 100 * big nspc;
 }
 
@@ -877,10 +922,13 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 	best[0] = big 0;
 	for(i := 1; i < words_n + 1; i++)
 		best_pos[i] = -1;
+	mtek := nr(R_mtek);
+	mte := mtek || nr(R_mtes);
 	for(pos := 1; pos <= words_n; pos++){
 		swid := 0;		# the amount of stretchable spaces
 		nspc := 0;		# the number of stretchable spaces
 		dwid := 0;		# equal to swid, unless swid is zero
+		erp := endrp(words[pos - 1]);
 		hyphenated := words[pos - 1].hy != 0;
 		lwid := words[pos - 1].hy;	# non-zero if the last word is hyphenated
 		gsum := words[pos - 1].hy;	# the glyphs' advances (.mte)
@@ -894,13 +942,18 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 				swid += words[i + 1].gap;
 				nspc++;
 			}
-			pw := lwid - words[i].lp - endrp(words[pos - 1]);
-			if(pw > llen + swid * ssh0 / 100 + int (big gsum * big nr(R_mtek) / big 1000) && i + 1 < pos)
+			pw := lwid - words[i].lp - erp;
+			xk := 0;
+			if(mtek)
+				xk = int (big gsum * big mtek / big 1000);
+			if(pw > llen + swid * ssh0 / 100 + xk && i + 1 < pos)
 				break;
 			dwid = swid;
 			if(!dwid && i > 0)	# no stretchable spaces
 				dwid = words[i - 1].swid;
-			cur := best[i] + FMT_COST(llen, pw, dwid + fmt_excap(gsum, pw > llen), nspc);
+			if(mte)
+				dwid += fmt_excap(gsum, pw > llen);
+			cur := best[i] + FMT_COST(llen, pw, dwid, nspc);
 			if(hyphenated && best_dep[i] + 1 == nohy)
 				cur += big 10000000;
 			if(hyphenated){

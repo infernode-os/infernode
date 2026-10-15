@@ -836,11 +836,11 @@ ren_put(wb: ref Wb, c: string, src: int)
 			wb_hmov(wb, w - wb_wid(wb));
 			return;
 		}
-		if(hasc(" bCcDdefHhjkLlmNoprSsuvXxZz0^|!{}&/,<>", c1)){
+		if(inset(esc_ren, c1)){
 			a: string;
-			if(hasc(ESC_P, c1))
+			if(inset(esc_p, c1))
 				a = unquotednext(c1, src);
-			if(hasc(ESC_Q, c1))
+			if(inset(esc_q, c1))
 				a = quotednext(src);
 			if(c1 == 'e')
 				c = ecs() + ecs();

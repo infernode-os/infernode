@@ -145,10 +145,18 @@ outc(c: string)
 	fnt := dev_font(o_f);
 	if(g == nil)
 		return;
-	cwid := font_gwid(gfont(g), dev_font(o_f), o_s, g.wid);
-	bwid := font_wid(gfont(g), o_s, g.wid);
-	if(font_mapped(gfont(g), c))
+	gf := gfont(g);
+	cwid := font_gwid(gf, fnt, o_s, g.wid);
+	if(font_mapped(gf, c))
 		c = g.name;
+	if(!font_getcs(fnt) && !font_getbd(fnt) && !out_ex && len c == 1 && c[0] < 16r80 &&
+			font_zoom(gf, o_s) == o_s && ((fp := dev_fontpos(gf)) < 0 || fp == o_f)){
+		# what follows, in one: no change of font or size, and no newline after
+		bout.puts("c" + c + "h" + string cwid);
+		out_nl = 0;
+		return;
+	}
+	bwid := font_wid(gf, o_s, g.wid);
 	if(font_getcs(fnt))
 		outnn(sys->sprint("h%d", (cwid - bwid) / 2));
 	outg(c, dev_fontpos(gfont(g)), font_zoom(gfont(g), o_s));
@@ -164,7 +172,7 @@ outc(c: string)
 		out_exacc = t % 1000;
 		cwid = t / 1000;
 	}
-	outnn(sys->sprint("h%d", cwid));
+	outnn("h" + string cwid);
 }
 
 out_x(s: string)
@@ -210,7 +218,7 @@ out_line(s: string)
 		'f' =>
 			out_ft(dev_pos(c));
 		'h' =>
-			outnn(sys->sprint("h%d", eval(c, 'm')));
+			outnn("h" + string eval(c, 'm'));
 		'm' =>
 			if(!nr(R_cp))
 				out_clr(clr_get(c));

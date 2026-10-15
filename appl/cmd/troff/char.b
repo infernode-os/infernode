@@ -183,6 +183,8 @@ unquotedread(s: string, i: int): (string, int)
 # its name and argument, or a glyph name, returning 0 and the name;
 # -1 at the end of s.
 #
+esc_arg, esc_p, esc_q, esc_ren: array of byte;
+
 escread(s: string, i: int): (int, string, int)
 {
 	if(i >= len s)
@@ -204,11 +206,11 @@ escread(s: string, i: int): (int, string, int)
 				r[len r] = s[i++];
 			if(i < len s && s[i] == ']')
 				i++;
-		}else if(hasc("CDfhmsvXx<>", c)){
+		}else if(inset(esc_arg, c)){
 			d := "";
-			if(hasc(ESC_P, c))
+			if(inset(esc_p, c))
 				(d, i) = unquotedread(s, i);
-			if(hasc(ESC_Q, c))
+			if(inset(esc_q, c))
 				(d, i) = quotedread(s, i);
 			if(c == 'C')
 				return (0, d, i);

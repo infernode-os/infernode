@@ -150,18 +150,18 @@ wb_pendingdir(wb: ref Wb): int
 wb_flushfont(wb: ref Wb)
 {
 	if(wb.f != R_F(wb)){
-		wb.sbuf += sys->sprint("%sf(%.2d", ecs(), R_F(wb));
+		wb.sbuf += ecs() + "f(" + d2(R_F(wb));
 		wb.f = R_F(wb);
 	}
 	if(wb.s != R_S(wb)){
 		if(R_S(wb) < 100)
-			wb.sbuf += sys->sprint("%ss(%.2d", ecs(), R_S(wb));
+			wb.sbuf += ecs() + "s(" + d2(R_S(wb));
 		else
 			wb.sbuf += sys->sprint("%ss[%d]", ecs(), R_S(wb));
 		wb.s = R_S(wb);
 	}
 	if(!nr(R_cp) && wb.m != R_M(wb)){
-		wb.sbuf += sys->sprint("%sm[%s]", ecs(), clr_str(R_M(wb)));
+		wb.sbuf += ecs() + "m[" + clr_str(R_M(wb)) + "]";
 		wb.m = R_M(wb);
 	}
 	wb_stsb(wb);
@@ -246,7 +246,7 @@ wb_hmov(wb: ref Wb, n: int)
 	wb_flushsub(wb);
 	wb_noprot(wb);
 	wb.h += n;
-	wb.sbuf += sys->sprint("%sh'%du'", ecs(), n);
+	wb.sbuf += ecs() + "h'" + string n + "u'";
 }
 
 wb_vmov(wb: ref Wb, n: int)
@@ -304,16 +304,19 @@ wb_putbuf(wb: ref Wb, c: string)
 	else
 		wb.sbuf += ecs() + "C'" + c + "'";
 	if(!zerowidth){
+		gf: ref Font;
+		if(g != nil)
+			gf = gfont(g);
 		if(!nr(R_cp) && g != nil){
 			if(g.llx || g.lly || g.urx || g.ury){
-				llx := font_wid(gfont(g), wb.s, g.llx);
-				lly := font_wid(gfont(g), wb.s, g.lly);
-				urx := font_wid(gfont(g), wb.s, g.urx);
-				ury := font_wid(gfont(g), wb.s, g.ury);
+				llx := font_wid(gf, wb.s, g.llx);
+				lly := font_wid(gf, wb.s, g.lly);
+				urx := font_wid(gf, wb.s, g.urx);
+				ury := font_wid(gf, wb.s, g.ury);
 				wb_bbox(wb, llx, lly, urx, ury);
 			}else{	# no bounding box information
 				ht := wb.s * SC_PT();
-				urx := font_wid(gfont(g), wb.s, g.wid);
+				urx := font_wid(gf, wb.s, g.wid);
 				lly := 0;
 				if(g.typ & 1)
 					lly = -ht / 2;
@@ -324,7 +327,7 @@ wb_putbuf(wb: ref Wb, c: string)
 			}
 		}
 		if(g != nil){
-			gw := font_gwid(gfont(g), dev_font(wb.f), wb.s, g.wid);
+			gw := font_gwid(gf, dev_font(wb.f), wb.s, g.wid);
 			wb.h += gw;
 			wb.gw += gw;
 			wb.ct |= g.typ;

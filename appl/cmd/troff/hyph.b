@@ -212,7 +212,7 @@ hy_dohyph(hyph: array of int, word: string, flg: int)
 {
 	(w, wmap) := hcode_strcpy(word, 1);	# cleaned-up word; "Abc" is ".abc."
 	wlen := len w;
-	n := array[wlen + WORDLEN] of {* => 0};	# the hyphenation value for w
+	n := array[wlen + GNLEN] of {* => 0};	# the hyphenation value for w
 	c := array[wlen + 1] of {* => 0};		# the start of the i-th character in w
 	nc := 0;
 	for(i := 0; i < wlen - 1; ){
@@ -280,7 +280,7 @@ hcode_mapchar(s: string): string
 hcode_strcpy(s: string, dots: int): (string, array of int)
 {
 	d := "";
-	map := array[len s * GNLEN / 2 + WORDLEN] of {* => 0};
+	map := array[WORDLEN + 1] of {* => 0};	# d is shorter than WORDLEN
 	if(dots)
 		d = ".";
 	si := 0;

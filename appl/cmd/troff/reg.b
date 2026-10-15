@@ -535,7 +535,7 @@ num_fmt(n: int, fmt: int): (string, int)
 		w := fmt >> NF_LSH;
 		case typ {
 		'0' =>
-			return (sign + zeropad(sys->sprint("%d", n), w), 1);
+			return (sign + zeropad(string n, w), 1);
 		'x' =>
 			return (sign + zeropad(sys->sprint("%x", n), w), 1);
 		'X' =>

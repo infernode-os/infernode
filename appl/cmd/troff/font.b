@@ -59,6 +59,11 @@ Font: adt {
 	gl_dict:	ref Dict;	# mapping from gl[i].id to i
 	ch_dict:	ref Dict;	# charset mapping
 	ch_map:		ref Dict;	# characters mapped via font_map()
+	fc:		array of int;	# font_findidx()'s, by character
+	fpos, fposv:	int;	# dev_fontpos(), when fn_ver was fposv
+	lyD:		ref Dict;	# font_layout()'s, by layoutkey()
+	ly:		array of ref Layout;
+	lyK:		array of int;	# the state they are for
 	feat_name:	array of string;	# feature names
 	feat_set:	array of int;	# feature enabled
 	scrp_name:	array of string;	# script names
@@ -111,12 +116,34 @@ DEVWID(sz: int, wid: int): int
 # find a glyph by its name
 font_find(fnt: ref Font, name: string): ref Glyph
 {
-	i := dict_get(fnt.ch_map, name);
-	if(i == -1)		# -2 means the glyph has been unmapped
-		i = dict_get(fnt.ch_dict, name);
+	i := font_findidx(fnt, name);
 	if(i >= 0)
 		return fnt.gl[i];
 	return nil;
+}
+
+# the glyphs of names of one character below FCMAX, by the character:
+# 0 if not looked up, else (gl index + 2) << 1 (1 << 1 for none), and 1
+# if mapped with font_map(); cleared when ch_map or ch_dict changes
+FCMAX:	con 16r2100;
+
+font_findidx(fnt: ref Font, name: string): int
+{
+	c := -1;
+	if(len name == 1 && (c = name[0]) < FCMAX && fnt.fc != nil && (v := fnt.fc[c]) != 0)
+		return (v >> 1) - 2;
+	i := dict_get(fnt.ch_map, name);
+	mapped := i != -1;
+	if(i == -1)		# -2 means the glyph has been unmapped
+		i = dict_get(fnt.ch_dict, name);
+	if(i < 0)
+		i = -1;
+	if(c >= 0 && c < FCMAX){
+		if(fnt.fc == nil)
+			fnt.fc = array[FCMAX] of {* => 0};
+		fnt.fc[c] = (i + 2) << 1 | mapped;
+	}
+	return i;
 }
 
 # find a glyph by its device-dependent identifier
@@ -155,6 +182,7 @@ font_map(fnt: ref Font, name: string, id: string, hasid: int): int
 			gidx = -2;
 	}
 	dict_put(fnt.ch_map, name, gidx);
+	fnt.fc = nil;
 	return 0;
 }
 
@@ -186,6 +214,11 @@ font_prot(fnt: ref Font, g: ref Glyph): (int, int)
 # whether character name has been mapped with font_map()
 font_mapped(fnt: ref Font, name: string): int
 {
+	if(len name == 1 && name[0] < FCMAX){
+		if(fnt.fc == nil || fnt.fc[name[0]] == 0)
+			font_findidx(fnt, name);
+		return fnt.fc[name[0]] & 1;
+	}
 	return dict_get(fnt.ch_map, name) != -1;
 }
 
@@ -415,8 +448,81 @@ font_performgsub(fnt: ref Font, src: array of int, slen: int, smap: array of int
 
 layout_dst: array of int;
 
+# font_layout()'s results, kept by the glyphs laid out
+Layout: adt {
+	n:	int;
+	dst, dmap, x, y, xadv, yadv:	array of int;
+};
+LYMAX:	con 8192;
+
+# the key of a layout in fnt's present state, or nil
+layoutkey(gsrc: array of ref Glyph, nsrc: int, lg, kn: int): string
+{
+	k := "";
+	f := 1;
+	if(lg)
+		f |= 2;
+	if(kn)
+		f |= 4;
+	if(dir_do)
+		f |= 8;
+	k[0] = f;
+	for(i := 0; i < nsrc; i++){
+		g := 1;
+		if(gsrc[i] != nil)
+			g = gsrc[i].idx + 2;
+		if(g >= 16rd000)
+			return nil;
+		k[i + 1] = g;
+	}
+	return k;
+}
+
 # lay out the glyphs gsrc; returns their number in gdst
-font_layout(fnt: ref Font, gsrc: array of ref Glyph, nsrc: int, nil: int,
+font_layout(fnt: ref Font, gsrc: array of ref Glyph, nsrc: int, sz: int,
+		gdst: array of ref Glyph, dmap: array of int,
+		x, y, xadv, yadv: array of int, lg, kn: int): int
+{
+	key := layoutkey(gsrc, nsrc, lg, kn);
+	if(key == nil)
+		return font_layout1(fnt, gsrc, nsrc, sz, gdst, dmap, x, y, xadv, yadv, lg, kn);
+	if(fnt.lyD != nil && !font_samestate(fnt, fnt.lyK))
+		fnt.lyD = nil;
+	if(fnt.lyD != nil && (i := dict_get(fnt.lyD, key)) >= 0){
+		l := fnt.ly[i];
+		n := l.n;
+		for(j := 0; j < n; j++){
+			gdst[j] = fnt.gl[l.dst[j]];
+			dmap[j] = l.dmap[j];
+			x[j] = l.x[j];
+			y[j] = l.y[j];
+			xadv[j] = l.xadv[j];
+			yadv[j] = l.yadv[j];
+		}
+		return n;
+	}
+	k := font_state(fnt);
+	n := font_layout1(fnt, gsrc, nsrc, sz, gdst, dmap, x, y, xadv, yadv, lg, kn);
+	if(fnt.lyD == nil || fnt.lyD.n > LYMAX){
+		fnt.lyD = dict_make(4096);
+		fnt.ly = array[LYMAX + 2] of ref Layout;
+		fnt.lyK = k;
+	}else if(!font_samestate(fnt, fnt.lyK))
+		return n;
+	l := ref Layout(n, array[n] of int, array[n] of int, array[n] of int, array[n] of int, array[n] of int, array[n] of int);
+	l.dmap[0:] = dmap[0:n];
+	l.x[0:] = x[0:n];
+	l.y[0:] = y[0:n];
+	l.xadv[0:] = xadv[0:n];
+	l.yadv[0:] = yadv[0:n];
+	for(j := 0; j < n; j++)
+		l.dst[j] = gdst[j].idx;
+	fnt.ly[fnt.lyD.n] = l;
+	dict_put(fnt.lyD, key, fnt.lyD.n);
+	return n;
+}
+
+font_layout1(fnt: ref Font, gsrc: array of ref Glyph, nsrc: int, nil: int,
 		gdst: array of ref Glyph, dmap: array of int,
 		x, y, xadv, yadv: array of int, lg, kn: int): int
 {
@@ -737,9 +843,11 @@ font_readchar(fnt: ref Font, f: ref Fb, n: int, gid: int): (int, int, int)
 		g.urx = v[3];
 		g.ury = v[4];
 		dict_put(fnt.ch_dict, name, gid);
+		fnt.fc = nil;
 		n++;
 	}else
 		dict_put(fnt.ch_map, name, gid);
+		fnt.fc = nil;
 	return (0, n, gid);
 }
 
@@ -1212,6 +1320,7 @@ font_needrules(fnt: ref Font)
 # read the rules of the features in fnt.parsed, in the order they are in the description
 font_rules(fnt: ref Font)
 {
+	fnt.lyD = nil;
 	liga := font_findfeat(fnt, "liga");
 	nr := array[2] of {* => 0};
 	np := array[2] of {* => 0};
@@ -1302,10 +1411,11 @@ font_special(fnt: ref Font): int
 # width w for the given font and size
 font_wid(fnt: ref Font, sz: int, w: int): int
 {
-	sz = font_zoom(fnt, sz);
+	if(fnt.zoom)
+		sz = (sz * fnt.zoom + 500) / 1000;
 	if(w >= 0)
-		return DEVWID(sz, w);
-	return -DEVWID(sz, -w);
+		return (w * sz + dev_uwid / 2) / dev_uwid;
+	return -((-w * sz + dev_uwid / 2) / dev_uwid);
 }
 
 # track kerning width for the given size
@@ -1333,11 +1443,18 @@ font_gwid(fnt: ref Font, cfnt: ref Font, sz: int, w: int): int
 			s = xfnt.cs_ps;
 		return xfnt.cs * (font_zoom(fnt, s) * SC_IN() / 72) / 36;
 	}
-	r := font_wid(fnt, sz, w);
-	if(cfnt != nil)
+	z := sz;
+	if(fnt.zoom)
+		z = (sz * fnt.zoom + 500) / 1000;
+	r: int;
+	if(w >= 0)
+		r = (w * z + dev_uwid / 2) / dev_uwid;
+	else
+		r = -((-w * z + dev_uwid / 2) / dev_uwid);
+	if(cfnt != nil && (fnt.n1 || fnt.n2))	# else font_twid() is 0
 		r += font_twid(fnt, sz);
-	if(font_getbd(xfnt))
-		r += font_getbd(xfnt) - 1;
+	if(xfnt.bd)
+		r += xfnt.bd - 1;
 	return r;
 }
 

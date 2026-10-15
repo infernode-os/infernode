@@ -316,6 +316,10 @@ troff(args: list of string)
 		raise "fail:load";
 	}
 	daytime = load Daytime Daytime->PATH;
+	esc_arg = cset("CDfhmsvXx<>");
+	esc_p = cset(ESC_P);
+	esc_q = cset(ESC_Q);
+	esc_ren = cset(" bCcDdefHhjkLlmNoprSsuvXxZz0^|!{}&/,<>");
 	bout = bufio->fopen(sys->fildes(1), Bufio->OWRITE);
 	fdir := FDIR;
 	mdir := MDIR;

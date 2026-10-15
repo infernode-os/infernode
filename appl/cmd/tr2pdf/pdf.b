@@ -368,9 +368,11 @@ zip(data: array of byte): array of byte
 	}
 }
 
-# the font descriptor; its object
-writedesc(fnt: ref Font): int
+# the font descriptor, as object id (if not 0); its object, or (with
+# used, the glyphs a subset is to keep) its subset's tag, nil if whole
+writedesc(fnt: ref Font, id: int, used: array of byte): string
 {
+	tag: string;
 	str_obj := -1;
 	path := fnt.fontpath;
 	fntype := fonttype(path);
@@ -383,6 +385,13 @@ writedesc(fnt: ref Font): int
 		cff = len data >= 4 && string data[0:4] == "OTTO";
 		fm = fmetrics(data, fm);
 		if(len data > 0){
+			if(fntype == 't' && cff && used != nil){
+				# subset to the glyphs used; whole if it cannot be
+				if((sub := otfsubset(data, used)) != nil){
+					data = sub;
+					tag = subsettag(used);
+				}
+			}
 			if(fntype == 't' && cff)
 				str_obj = writestream("  /Subtype /OpenType\n", data);
 			else if(fntype == 't')
@@ -426,9 +435,12 @@ writedesc(fnt: ref Font): int
 		}
 	}
 	# the descriptor
-	des_obj := obj_beg(0);
+	des_obj := obj_beg(id);
 	s := "<<\n  /Type /FontDescriptor\n";
-	s += "  /FontName /" + font_name(fnt) + "\n";
+	if(tag != nil)
+		s += "  /FontName /" + tag + "+" + font_name(fnt) + "\n";
+	else
+		s += "  /FontName /" + font_name(fnt) + "\n";
 	s += "  /Flags " + string fm.flags + "\n";
 	s += sys->sprint("  /FontBBox [%d %d %d %d]\n", fm.x0, fm.y0, fm.x1, fm.y1);
 	s += "  /MissingWidth 1000\n";
@@ -447,7 +459,24 @@ writedesc(fnt: ref Font): int
 	}
 	pdfout(s + ">>\n");
 	obj_end();
-	return des_obj;
+	if(id == 0)
+		return string des_obj;
+	return tag;
+}
+
+# a subset font's tag: six capitals, from the glyphs it keeps
+subsettag(used: array of byte): string
+{
+	h := 5381;
+	for(i := 0; i < len used; i++)
+		if(used[i] != byte 0)
+			h = (h * 33 + i) & 16r7fffffff;
+	t := "";
+	for(i = 0; i < 6; i++){
+		t[len t] = 'A' + h % 26;
+		h /= 26;
+	}
+	return t;
 }
 
 # a Type 1 font's lengths: its clear text, encrypted and fixed parts; and whether it is not one
@@ -582,14 +611,49 @@ pfont_find(g: ref Glyph): int
 			break;
 	if(i < pfonts_n)
 		ps.des = pfonts[i].des;
-	else
-		ps.des = writedesc(fnt);
+	else if(compat)
+		ps.des = int writedesc(fnt, 0, nil);
+	else{
+		# written at the end, when the glyphs it is subset to are known
+		ps.des = obj_map();
+		pdescs = (fnt, ps.des) :: pdescs;
+	}
 	pfonts[pfonts_n] = ps;
 	return pfonts_n++;
 }
 
+pdescs: list of (ref Font, int);	# descriptors to write, with their objects
+wholefonts := 0;	# -W: fonts embedded whole
+
 pfont_done()
 {
+	for(l := pdescs; l != nil; l = tl l){
+		(fnt, des) := hd l;
+		name := font_name(fnt);
+		# the glyphs every font of this name used
+		used := array[0] of byte;
+		for(i := 0; i < pfonts_n; i++){
+			ps := pfonts[i];
+			if(ps.name != name || ps.used == nil)
+				continue;
+			if(len ps.used > len used){
+				n := array[len ps.used] of {* => byte 0};
+				n[0:] = used;
+				used = n;
+			}
+			for(k := 0; k < len ps.used; k++)
+				if(ps.used[k] != byte 0)
+					used[k] = byte 1;
+		}
+		if(wholefonts)
+			used = nil;
+		tag := writedesc(fnt, des, used);
+		if(tag != nil)
+			for(i = 0; i < pfonts_n; i++)
+				if(pfonts[i].name == name)
+					pfonts[i].name = tag + "+" + name;
+	}
+	pdescs = nil;
 	for(i := 0; i < pfonts_n; i++){
 		if(pfonts[i].cid)
 			pfont_writecid(pfonts[i]);

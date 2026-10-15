@@ -6,6 +6,7 @@ MODULES=\
 	font.b\
 	pdf.b\
 	pdfext.b\
+	cffsub.b\
 
 SYSMODULES= \
 	bufio.m\

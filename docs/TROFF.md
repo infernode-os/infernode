@@ -15,7 +15,7 @@ to read in InferNode's document views.
 | `tbl` | Tables | Plan 9's tbl, translated (byte-identical output) |
 | `pic` | Pictures | Plan 9's pic, translated (byte-identical output; its grammar through Inferno's yacc) |
 | `refer` | Citations by key from BibTeX's and refer's databases; with `-S chicago`, the *Chicago Manual of Style*'s notes and bibliography (18th edition) | Neatrefer, translated, with a BibTeX reader and styles of its own |
-| `tr2pdf` | Troff's output as PDF: OpenType fonts embedded, compressed, with ToUnicode maps (text can be searched and copied) | Neatpost's PDF writer, translated |
+| `tr2pdf` | Troff's output as PDF: OpenType fonts embedded, subset to the glyphs used, compressed, with ToUnicode maps (text can be searched and copied) | Neatpost's PDF writer, translated |
 | `mkfn` | Font descriptions for troff from OpenType, TrueType and AFM fonts, with each glyph's bounding box (CFF's too) | Neatmkfn, translated |
 | `mkindex` | A book's index from troff's output: makeindex's entries, sorted word by word as the *Chicago Manual* sorts, Greek and accents included | |
 | `book` | Runs them: refer, pic, tbl and eqn (each if there is anything for it), troff `-mbook` until its references settle, tr2pdf | |
@@ -220,6 +220,17 @@ font, Minion Pro for one, is described the same way:
 Glyphs beyond U+FFFF (mathematical alphanumerics, for one) are
 described without names: a Limbo string's characters are 16 bits.
 
+## Fonts in the PDF
+
+`tr2pdf` embeds each OpenType (CFF) font subset to the glyphs the book
+uses: the glyphs it does not use, and the subroutines only they call,
+are emptied (the glyphs keep their numbers, so the text is unchanged),
+and the tables only typesetting needs (GSUB, GPOS, GDEF, MATH) are left
+out; the font is named as a subset (`ABCDEF+LibertinusSerif-Regular`).
+A book's PDF is a fifth of what it was, or less; every page is drawn as
+with the fonts whole (`tr2pdf -W`), pixel for pixel. A font it cannot
+read so (CID-keyed, Type 1 charstrings) is embedded whole.
+
 ## Speed
 
 On a 2.8 GHz Xeon, the 62-page benchmark book takes troff 2.9 seconds
@@ -230,5 +241,5 @@ after the work above is done.
 ## Still to come
 
 The LaTeX converter; `-man`; fonts falling back for characters a font
-lacks; font subsetting in PDFs; eqn's bars drawn as lines (they are
+lacks; eqn's bars drawn as lines (they are
 glyphs now, and copied with the text).

@@ -12,6 +12,12 @@
 #	one whose page list has two pages ([3 0 R 4 0 R]: it read the
 #	revision as 4) and on a keyword (true) in a dictionary;
 #	-c writes as Neatpost does (no compression, the font in hex);
+#	its OpenType (CFF) fonts subset to the glyphs used (tagged ABCDEF+,
+#	glyphs not used and the subroutines only they call emptied, the
+#	layout tables left out): every page drawn as with the fonts whole
+#	(-W), pixel for pixel, its text the same, the file a third the size
+#	or less; where fontTools is installed, each subset font read, every
+#	glyph kept its own charstring and every glyph drawn;
 #	output with no device (x T, x res) before its first page is refused
 #	with a reason, where it divided by zero.
 
@@ -74,6 +80,58 @@ if command -v pdftotext >/dev/null 2>&1; then
     esac
 else
     echo "SKIP: no pdftotext"
+fi
+
+# fonts subset to the glyphs used: a page of text, italic, bold, Greek
+# and mathematics (Libertinus Math), set as with the fonts whole
+{ cat lib/troff/eqnrc; printf '.EQ\ndelim $$\n.EN\n.ps 12\nRoman \\fIitalic\\fP \\fBbold\\fP: ἀρετή, λόγος, φιλοσοφία; fi ffl.\n.br\nIts sum $sum from {i=1} to n x sub i sup 2$ and root $sqrt {a + b}$.\n'; } >"$tmp/sub.tr"
+inferno "cd '#U*$tmp'; eqn < sub.tr | troff -mbook | tr2pdf > sub.pdf; eqn < sub.tr | troff -mbook | tr2pdf -W > whole.pdf"
+if [ -s "$tmp/sub.pdf" ] && [ -s "$tmp/whole.pdf" ]; then
+    ns=$(LC_ALL=C grep -aoc '/FontName /[A-Z][A-Z][A-Z][A-Z][A-Z][A-Z]+' "$tmp/sub.pdf")
+    ss=$(wc -c <"$tmp/sub.pdf"); sw=$(wc -c <"$tmp/whole.pdf")
+    [ "$ns" -ge 3 ] && [ $((ss * 3)) -lt "$sw" ] &&
+        pass "fonts subset ($ns fonts tagged; $ss bytes, $sw whole)" || failed "subset: $ns tagged, $ss bytes, $sw whole"
+    if command -v pdftoppm >/dev/null 2>&1; then
+        pdftoppm -r 150 "$tmp/sub.pdf" "$tmp/ps" 2>/dev/null
+        pdftoppm -r 150 "$tmp/whole.pdf" "$tmp/pw" 2>/dev/null
+        same=1
+        for f in "$tmp"/ps*.ppm; do cmp -s "$f" "$tmp/pw${f#$tmp/ps}" || same=0; done
+        [ -n "$(ls "$tmp"/ps*.ppm 2>/dev/null)" ] && [ $same = 1 ] &&
+            [ "$(pdftotext "$tmp/sub.pdf" - 2>&1)" = "$(pdftotext "$tmp/whole.pdf" - 2>&1)" ] &&
+            pass "a subset font draws the page as the whole one, and its text is the same" ||
+            failed "subset fonts draw or read otherwise"
+    fi
+    if python3 -c 'import fontTools' 2>/dev/null; then
+        python3 -I - "$tmp/sub.pdf" "$ROOT/fonts/libertinus" <<'PY' && pass "each subset font read, its glyphs the original's, every one drawn" || failed "a subset font: see above"
+import io, re, sys, zlib
+from fontTools.ttLib import TTFont
+from fontTools.pens.boundsPen import BoundsPen
+d = open(sys.argv[1], 'rb').read()
+n = 0
+for m in re.finditer(rb'<<([^>]*?/Subtype /OpenType[^>]*?)>>\s*stream\n', d):
+    ln = int(re.search(rb'/Length (\d+)', m.group(1)).group(1))
+    f = TTFont(io.BytesIO(zlib.decompress(d[m.end():m.end() + ln])))
+    cff = f['CFF '].cff
+    name = cff.fontNames[0]
+    orig = TTFont(sys.argv[2] + '/' + name + '.otf')['CFF '].cff[name].CharStrings
+    cs = cff[name].CharStrings
+    kept = 0
+    for g in cs.keys():
+        c = cs[g]
+        c.compile()
+        if c.bytecode != b'\x0e':
+            kept += 1
+            o = orig[g]
+            o.compile()
+            assert c.bytecode == o.bytecode, '%s: %s differs' % (name, g)
+        c.draw(BoundsPen(cs))
+    assert 0 < kept < len(cs) / 2, '%s: %d of %d glyphs kept' % (name, kept, len(cs))
+    n += 1
+assert n >= 3, '%d fonts' % n
+PY
+    fi
+else
+    failed "subset: no PDFs: $(cat "$tmp/err")"
 fi
 
 # an included PDF; these two looped Neatpost for ever

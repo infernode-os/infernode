@@ -8,7 +8,8 @@ implement Tr2pdf;
 # also compresses its streams, embeds an OpenType font with CFF outlines
 # as OpenType (FontFile3), describes each font from its tables, maps its
 # glyphs to their characters (ToUnicode), so that a reader can search
-# and copy the text, and takes the page size from x X papersize.
+# and copy the text, takes the page size from x X papersize, and embeds
+# each OpenType (CFF) font subset to the glyphs used (-W: whole).
 #
 # Copyright (C) 2013-2025 Ali Gholami Rudi <ali at rudi dot ir>
 #
@@ -45,6 +46,7 @@ Tr2pdf: module
 include "font.b";
 include "pdf.b";
 include "pdfext.b";
+include "cffsub.b";
 
 TROFFFDIR: con "/lib/troff";
 
@@ -82,6 +84,7 @@ usage := "usage: tr2pdf [options] [file] >output\n" +
 	"  -l      \tlandscape mode\n" +
 	"  -n      \talways draw glyphs by name (ps glyphshow)\n" +
 	"  -d x=v  \tset device-specific variables\n" +
+	"  -W      \tembed fonts whole, not subset to the glyphs used\n" +
 	"  -c      \twrite what Neatpost writes\n";
 
 init(nil: ref Draw->Context, args: list of string)
@@ -124,6 +127,8 @@ init(nil: ref Draw->Context, args: list of string)
 			cmdset(v);
 		'c' =>
 			compat = 1;
+		'W' =>
+			wholefonts = 1;
 		* =>
 			sys->fprint(sys->fildes(2), "%s", usage);
 			raise "fail:usage";

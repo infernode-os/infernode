@@ -34,6 +34,7 @@ Page: module
 		sheetcache:	list of (string, ref Css->Sheet);	# parsed, by text or url
 
 		relayout:	fn(p: self ref Pg, width, height: int);
+		close:	fn(p: self ref Pg);	# done with: what it alone holds (its web fonts) is let go
 		update:	fn(p: self ref Pg);	# restyle and relayout after the document changed
 		restyle:	fn(p: self ref Pg);	# restyle only (computed styles for a script), the layout as it was
 		stylefor:	fn(p: self ref Pg, n: int): ref Style->St;	# element n's computed style as the document now is (its sheets read again), restyling nothing else

@@ -666,8 +666,18 @@ Web: adt {
 
 webfaces: list of ref Web;
 
-clearfaces()
+clearfaces(): list of ref OutlineFont->Face
 {
+	# the faces read, and those made from them for each variation (a
+	# variable face, one for each size: bbc.com's), for the caller
+	made: list of ref OutlineFont->Face;
+	for(wl := webfaces; wl != nil; wl = tl wl)
+		made = (hd wl).part.outline :: made;
+	for(pm := partsmade; pm != nil; pm = tl pm) {
+		(nil, nil, pa, nil) := hd pm;
+		for(i := 0; i < len pa; i++)
+			made = pa[i].outline :: made;
+	}
 	webfaces = nil;
 	partsmade = nil;
 	ahemloaded = 0;
@@ -679,6 +689,13 @@ clearfaces()
 				r = hd cl :: r;
 		cache[h] = r;
 	}
+	return made;
+}
+
+closefaces(l: list of ref OutlineFont->Face)
+{
+	for(; l != nil; l = tl l)
+		(hd l).close();
 }
 
 readall(f: string): array of byte

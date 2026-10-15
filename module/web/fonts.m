@@ -71,5 +71,8 @@ Fonts: module
 	# family lower case) for this module instance's documents.
 	addface:	fn(family: string, weight, italic: int, ranges: array of int, data: array of byte): string;
 	addfacedesc:	fn(family: string, d: ref Desc, ranges: array of int, data: array of byte): string;
-	clearfaces:	fn();
+	# Forget the downloaded faces, and give them back: they are closed
+	# (OutlineFont's Face.close) once nothing draws with them.
+	clearfaces:	fn(): list of ref OutlineFont->Face;
+	closefaces:	fn(l: list of ref OutlineFont->Face);
 };

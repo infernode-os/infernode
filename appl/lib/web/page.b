@@ -1150,13 +1150,46 @@ Fontsrc: adt {
 	desc:	ref Fonts->Desc;
 };
 
+# The faces fetched for a page are its own, and closed when it is (the
+# module kept every face it was given: 23 MB more for each visit to
+# bbc.com).  The fonts module has the newest page's; the faces it gave
+# back when another's came are kept by the page they were fetched for
+# until it closes, and a page closed while its faces are the module's
+# loses them when the next page's come.
+fontowner: ref Pg;
+fontownerclosed := 0;
+owned: list of (ref Pg, list of ref OutlineFont->Face);
+
+Pg.close(p: self ref Pg)
+{
+	plock();
+	r: list of (ref Pg, list of ref OutlineFont->Face);
+	for(l := owned; l != nil; l = tl l)
+		if((hd l).t0 == p)
+			layout->fontmod()->closefaces((hd l).t1);
+		else
+			r = hd l :: r;
+	owned = r;
+	if(p == fontowner)
+		fontownerclosed = 1;
+	punlock();
+}
+
 # Download the faces @font-face rules describe that this document's
 # text needs (by unicode-range), in formats we read, and register them
 # with the fonts layout uses.
 loadfonts(p: ref Pg)
 {
 	fm := layout->fontmod();
-	fm->clearfaces();
+	gone := fm->clearfaces();
+	plock();
+	if(fontowner != nil && !fontownerclosed)
+		owned = (fontowner, gone) :: owned;
+	else
+		fm->closefaces(gone);
+	fontowner = p;
+	fontownerclosed = 0;
+	punlock();
 	if(setting("fonts") == "system")
 		return;	# the faces the system has, nothing fetched
 	srcs: list of ref Fontsrc;

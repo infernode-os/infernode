@@ -31,7 +31,7 @@ done)
 if [ -z "$missing" ]; then
 	echo "PASS: /$top is staged by every release job"
 else
-	echo "FAIL: /$top is not staged by: $missing"; fail=1
+	echo "FAIL: /$top is not staged by the release job copying: $(echo "$missing" | sort -u | tr "\n" ";")"; fail=1
 fi
 
 if [ -x "$EMU" ]; then

@@ -147,12 +147,15 @@ charread_delim(s: string, i: int, delim: string): (int, string, int)
 quotedread(s: string, i: int): (string, int)
 {
 	q := at(s, i++);
-	d := "";
-	while(i < len s && s[i] != q)
-		d[len d] = s[i++];
-	if(i < len s && s[i] == q)
-		i++;
-	return (d, i);
+	if(i >= len s)
+		return ("", i);
+	j := i;
+	while(j < len s && s[j] != q)
+		j++;
+	d := s[i:j];
+	if(j < len s && s[j] == q)
+		j++;
+	return (d, j);
 }
 
 # an unquoted argument in a Neatroff string
@@ -161,18 +164,24 @@ unquotedread(s: string, i: int): (string, int)
 	d := "";
 	if(at(s, i) == '('){
 		i++;
-		if(i < len s)
-			d[len d] = s[i++];
-		if(i < len s)
-			d[len d] = s[i++];
+		j := i + 2;
+		if(j > len s)
+			j = len s;
+		if(i < j)
+			d = s[i:j];
+		i = j;
 	}else if(!nr(R_cp) && at(s, i) == '['){
 		i++;
-		while(i < len s && s[i] != ']')
-			d[len d] = s[i++];
+		j := i;
+		while(j < len s && s[j] != ']')
+			j++;
+		if(i < j)
+			d = s[i:j];
+		i = j;
 		if(i < len s && s[i] == ']')
 			i++;
 	}else if(i < len s)
-		d[len d] = s[i++];
+		d = chr(s[i++]);
 	return (d, i);
 }
 
@@ -189,23 +198,29 @@ escread(s: string, i: int): (int, string, int)
 {
 	if(i >= len s)
 		return (-1, nil, i);
-	r := chr(s[i++]);
-	if(r[0] == c_ec){
+	c0 := s[i++];
+	if(c0 == c_ec){
 		c := at(s, i);
 		if(i < len s)
-			r[1] = s[i++];
+			i++;
 		if(c == '('){
-			r = "";
-			if(i < len s)
-				r[len r] = s[i++];
-			if(i < len s)
-				r[len r] = s[i++];
+			j := i + 2;
+			if(j > len s)
+				j = len s;
+			r := "";
+			if(i < j)
+				r = s[i:j];
+			return (0, r, j);
 		}else if(!nr(R_cp) && c == '['){
-			r = "";
-			while(i < len s && s[i] != ']')
-				r[len r] = s[i++];
-			if(i < len s && s[i] == ']')
-				i++;
+			j := i;
+			while(j < len s && s[j] != ']')
+				j++;
+			r := "";
+			if(i < j)
+				r = s[i:j];
+			if(j < len s && s[j] == ']')
+				j++;
+			return (0, r, j);
 		}else if(inset(esc_arg, c)){
 			d := "";
 			if(inset(esc_p, c))
@@ -216,11 +231,12 @@ escread(s: string, i: int): (int, string, int)
 				return (0, d, i);
 			return (c, d, i);
 		}
-	}else if(r[0] == c_ni){
-		if(i < len s)
-			r[1] = s[i++];
+		return (0, s[i - 2:i], i);
+	}else if(c0 == c_ni && i < len s){
+		i++;
+		return (0, s[i - 2:i], i);
 	}
-	return (0, r, i);
+	return (0, chr(c0), i);
 }
 
 #

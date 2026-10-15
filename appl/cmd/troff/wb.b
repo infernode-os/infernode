@@ -37,6 +37,23 @@ ecs(): string
 	return chr(ecc());
 }
 
+# \h'nu', with the escape character
+eschs := array[8192] of string;
+eschs_ec := -1;
+
+esch(n: int): string
+{
+	if(n < 0 || n >= len eschs)
+		return ecs() + "h'" + string n + "u'";
+	if(eschs_ec != ecc()){
+		eschs = array[len eschs] of string;
+		eschs_ec = ecc();
+	}
+	if(eschs[n] == nil)
+		eschs[n] = ecs() + "h'" + string n + "u'";
+	return eschs[n];
+}
+
 R_F(wb: ref Wb): int
 {
 	if(wb.r_f >= 0)
@@ -99,9 +116,7 @@ wb_init(wb: ref Wb)
 	wb.pr = 0;
 	wb.pseen = 0;
 	wb.gw = 0;
-	if(wb.sub_c == nil)
-		wb.sub_c = array[WORDLEN] of string;
-	wb.sub_n = 0;
+	wb.sub_n = 0;	# sub_c made when there is something to collect
 	wb.sub_collect = 1;
 	wb.f = -1;
 	wb.s = -1;
@@ -147,8 +162,26 @@ wb_pendingdir(wb: ref Wb): int
 }
 
 # append font and size to the buffer if needed
+# the last font, size and colour changes written together, by wb_flushfont()
+ffs_f, ffs_s, ffs_m, ffs_ec: int;
+ffs: string;
+
 wb_flushfont(wb: ref Wb)
 {
+	f := R_F(wb);
+	sz := R_S(wb);
+	if(wb.f != f && wb.s != sz && sz < 100 && !nr(R_cp) && wb.m != (m := R_M(wb))){
+		if(ffs == nil || ffs_f != f || ffs_s != sz || ffs_m != m || ffs_ec != ecc()){
+			ffs = ecs() + "f(" + d2(f) + ecs() + "s(" + d2(sz) + ecs() + "m[" + clr_str(m) + "]";
+			(ffs_f, ffs_s, ffs_m, ffs_ec) = (f, sz, m, ecc());
+		}
+		wb.sbuf += ffs;
+		wb.f = f;
+		wb.s = sz;
+		wb.m = m;
+		wb_stsb(wb);
+		return;
+	}
 	if(wb.f != R_F(wb)){
 		wb.sbuf += ecs() + "f(" + d2(R_F(wb));
 		wb.f = R_F(wb);
@@ -246,7 +279,7 @@ wb_hmov(wb: ref Wb, n: int)
 	wb_flushsub(wb);
 	wb_noprot(wb);
 	wb.h += n;
-	wb.sbuf += ecs() + "h'" + string n + "u'";
+	wb.sbuf += esch(n);
 }
 
 wb_vmov(wb: ref Wb, n: int)
@@ -350,7 +383,10 @@ wb_hyph(src: array of string, src_n: int, src_hyph: array of int, flg: int): int
 			return 1;
 		if(c_hymark(s))
 			continue;
-		word += hy_cput(s);
+		if(len s == 1)
+			word[len word] = s[0];
+		else
+			word += hy_cput(s);
 	}
 	hyph := array[len word + 1] of {* => 0};
 	hyphenate(hyph, word, flg);
@@ -471,8 +507,11 @@ wb_put(wb: ref Wb, c: string)
 	if(wb_pendingfont(wb) || wb.sub_n == WORDLEN)
 		wb_flush(wb);
 	if(wb.sub_collect){
-		if(font_find(dev_font(wb.f), c) != nil || c_hymark(c))
+		if(font_find(dev_font(wb.f), c) != nil || c_hymark(c)){
+			if(wb.sub_c == nil)
+				wb.sub_c = array[WORDLEN] of string;
 			wb.sub_c[wb.sub_n++] = c;
+		}
 		else
 			wb_putraw(wb, c);
 	}else

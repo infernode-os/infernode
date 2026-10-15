@@ -152,7 +152,9 @@ outc(c: string)
 	if(!font_getcs(fnt) && !font_getbd(fnt) && !out_ex && len c == 1 && c[0] < 16r80 &&
 			font_zoom(gf, o_s) == o_s && ((fp := dev_fontpos(gf)) < 0 || fp == o_f)){
 		# what follows, in one: no change of font or size, and no newline after
-		bout.puts("c" + c + "h" + string cwid);
+		if(out_cs[c[0]] == nil)
+			out_cs[c[0]] = "c" + c;
+		bout.puts(out_cs[c[0]] + hnum(cwid));
 		out_nl = 0;
 		return;
 	}
@@ -172,7 +174,19 @@ outc(c: string)
 		out_exacc = t % 1000;
 		cwid = t / 1000;
 	}
-	outnn("h" + string cwid);
+	outnn(hnum(cwid));
+}
+
+out_cs := array[16r80] of string;	# "c" and a character
+out_hs := array[8192] of string;	# "h" and a number
+
+hnum(n: int): string
+{
+	if(n < 0 || n >= len out_hs)
+		return "h" + string n;
+	if(out_hs[n] == nil)
+		out_hs[n] = "h" + string n;
+	return out_hs[n];
 }
 
 out_x(s: string)
@@ -218,7 +232,7 @@ out_line(s: string)
 		'f' =>
 			out_ft(dev_pos(c));
 		'h' =>
-			outnn("h" + string eval(c, 'm'));
+			outnn(hnum(eval(c, 'm')));
 		'm' =>
 			if(!nr(R_cp))
 				out_clr(clr_get(c));

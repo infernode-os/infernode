@@ -8,7 +8,7 @@ HYPATLEN:	con NHYPHS * 16;	# the hyphenation pattern store
 hy_cget(s: string, i: int): (string, int)
 {
 	if(at(s, i) != '\\')
-		return (s[i:i+1], 1);
+		return (chr(s[i]), 1);
 	d := "";
 	case at(s, i + 1) {
 	'[' =>
@@ -263,7 +263,21 @@ hcodedst := array[NHCODES] of string;
 hcode_n := 0;
 
 # the character s after .hcode mapping
+hcodec: array of string;	# hcode_mapchar()'s of single characters below 16r80
+
 hcode_mapchar(s: string): string
+{
+	if(len s == 1 && s[0] < 16r80){
+		if(hcodec == nil)
+			hcodec = array[16r80] of string;
+		if(hcodec[s[0]] == nil)
+			hcodec[s[0]] = hcode_mapchar1(s);
+		return hcodec[s[0]];
+	}
+	return hcode_mapchar1(s);
+}
+
+hcode_mapchar1(s: string): string
 {
 	i := dict_get(hcodedict, s);
 	if(i >= 0)
@@ -288,7 +302,11 @@ hcode_strcpy(s: string, dots: int): (string, array of int)
 		map[len d] = si;
 		(c, k) := hy_cget(s, si);
 		si += k;
-		d += hy_cput(hcode_mapchar(c));
+		m := hcode_mapchar(c);
+		if(len m == 1)
+			d[len d] = m[0];
+		else
+			d += hy_cput(m);
 	}
 	if(dots)
 		d += ".";
@@ -297,6 +315,7 @@ hcode_strcpy(s: string, dots: int): (string, array of int)
 
 hcode_add(c1, c2: string)
 {
+	hcodec = nil;
 	i := dict_get(hcodedict, c1);
 	if(i >= 0)
 		hcodedst[i] = c2;
@@ -490,6 +509,7 @@ hyph_init()
 	hwpref = pref_make();
 	trie_init();
 	hcodedict = dict_make(1024);
+	hcodec = nil;
 	hycache_reset();
 }
 

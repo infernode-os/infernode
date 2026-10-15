@@ -122,15 +122,30 @@ font_find(fnt: ref Font, name: string): ref Glyph
 	return nil;
 }
 
-# the glyphs of names of one character below FCMAX, by the character:
+# where a name is in Font.fc: one character below FCMAX, or two below
+# 16r80; -1 if it is not
+fc_idx(name: string): int
+{
+	case len name {
+	1 =>
+		if(name[0] < FCMAX)
+			return name[0];
+	2 =>
+		if(name[0] < 16r80 && name[1] < 16r80)
+			return FCMAX + (name[0] << 7) + name[1];
+	}
+	return -1;
+}
+
+# the glyphs of names of one character below FCMAX (or two below 16r80), by fc_idx():
 # 0 if not looked up, else (gl index + 2) << 1 (1 << 1 for none), and 1
 # if mapped with font_map(); cleared when ch_map or ch_dict changes
 FCMAX:	con 16r2100;
 
 font_findidx(fnt: ref Font, name: string): int
 {
-	c := -1;
-	if(len name == 1 && (c = name[0]) < FCMAX && fnt.fc != nil && (v := fnt.fc[c]) != 0)
+	c := fc_idx(name);
+	if(c >= 0 && fnt.fc != nil && (v := fnt.fc[c]) != 0)
 		return (v >> 1) - 2;
 	i := dict_get(fnt.ch_map, name);
 	mapped := i != -1;
@@ -138,9 +153,9 @@ font_findidx(fnt: ref Font, name: string): int
 		i = dict_get(fnt.ch_dict, name);
 	if(i < 0)
 		i = -1;
-	if(c >= 0 && c < FCMAX){
+	if(c >= 0){
 		if(fnt.fc == nil)
-			fnt.fc = array[FCMAX] of {* => 0};
+			fnt.fc = array[FCMAX + 128 * 128] of {* => 0};
 		fnt.fc[c] = (i + 2) << 1 | mapped;
 	}
 	return i;
@@ -214,10 +229,10 @@ font_prot(fnt: ref Font, g: ref Glyph): (int, int)
 # whether character name has been mapped with font_map()
 font_mapped(fnt: ref Font, name: string): int
 {
-	if(len name == 1 && name[0] < FCMAX){
-		if(fnt.fc == nil || fnt.fc[name[0]] == 0)
+	if((c := fc_idx(name)) >= 0){
+		if(fnt.fc == nil || fnt.fc[c] == 0)
 			font_findidx(fnt, name);
-		return fnt.fc[name[0]] & 1;
+		return fnt.fc[c] & 1;
 	}
 	return dict_get(fnt.ch_map, name) != -1;
 }

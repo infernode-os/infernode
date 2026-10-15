@@ -123,7 +123,7 @@ fmt_wordscopy(f: ref Fmt, end: int, l: ref Line): int
 	for(i := 0; i < end; i++){
 		wcur := f.words[i];
 		if(wcur.gap)
-			s += ecs() + "h'" + string wcur.gap + "u'";
+			s += esch(wcur.gap);
 		s += wcur.s;
 		w += wcur.wid + wcur.gap;
 		if(wcur.elsn < l.elsn)

@@ -1,0 +1,69 @@
+.TH EQN 1
+.SH NAME
+eqn \- typeset mathematics
+.SH SYNOPSIS
+.B eqn
+[
+.BI -c " chars"
+]
+.SH DESCRIPTION
+.I Eqn
+is a preprocessor for
+.IR troff (1):
+it reads troff's input on its standard input and writes it on its
+standard output with each equation turned into what troff sets it by.
+An equation is a display, between
+.B .EQ
+and
+.BR .EN ,
+or within a line, between the two characters a
+.B delim
+statement names:
+.IP
+.EX
+\&.EQ
+delim $$
+\&.EN
+The sum $sum from i=1 to n x sub i$ and its mean $x bar$.
+\&.EQ
+int from 0 to inf e sup {-x sup 2} dx = {sqrt pi} over 2
+\&.EN
+.EE
+.PP
+Its language is Kernighan and Cherry's
+.RB ( sub ,
+.BR sup ,
+.BR over ,
+.BR sqrt ,
+.BR from ,
+.BR to ,
+.BR left ,
+.BR right ,
+.BR pile ,
+.BR matrix ,
+.BR define
+and the rest), set by TeX's rules for mathematics, as Ali Gholami Rudi's
+Neateqn sets it, of which
+.I eqn
+is a translation; for the same input its output is, byte for byte,
+Neateqn's.
+.B /lib/troff/eqnrc
+gives it Libertinus Math: its brackets, radicals and operators in the
+sizes the font has for them;
+.IR book (1)
+reads it first.
+.TP
+.BI -c " chars"
+The characters an equation within a line may be broken after.
+.SH FILES
+.B /lib/troff/eqnrc
+.SH SOURCE
+.B /appl/cmd/eqn
+.SH SEE ALSO
+.IR book (1),
+.IR troff (1)
+.br
+B. W. Kernighan and L. L. Cherry,
+\(lqA System for Typesetting Mathematics\(rq,
+.I CACM
+18 (1975).

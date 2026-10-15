@@ -1,0 +1,94 @@
+.TH REFER 1
+.SH NAME
+refer \- cite works by their keys
+.SH SYNOPSIS
+.B refer
+[
+.BI -p " bib"
+] [
+.BI -S " style"
+] [
+.B -e
+] [
+.B -m
+] [
+.B -i
+] [
+.BI -o " xy"
+] [
+.BI -a " xy"
+] [
+.B -sa
+] [
+.BI -r " xy,..."
+]
+.SH DESCRIPTION
+.I Refer
+is a preprocessor for
+.IR troff (1):
+it reads troff's input on its standard input and writes it with each
+citation set from a database of works, refer's own or BibTeX's
+(a file ending in
+.BR .bib ).
+A citation is a work's key and, after it, the place in it:
+.IP
+.EX
+\&.cite smith-swing 315-16
+\&.cite grazer 12; thoreau 177-178
+.EE
+.PP
+or, within a line,
+.BR "\e*[cite smith-swing 315-16]" ;
+.B .bibliography
+sets the works cited.
+Without a style it is Ali Gholami Rudi's Neatrefer, of which it is a
+translation, and writes what Neatrefer writes.
+.PP
+With
+.B "-S chicago"
+it sets citations as
+.I "The Chicago Manual of Style"
+(18th edition) sets them, in notes and a bibliography: a work in full
+the first time it is cited in a chapter, shortened after; a book, a
+chapter of one, an article, a thesis, a classical work; et al.,
+translators and editors; inclusive pages (315\(en16); the bibliography
+sorted.
+.IR Book (1)
+runs it so.
+.TP
+.BI -p " bib"
+The database.
+.TP
+.BI -S " style"
+Set citations in the style
+.RB ( chicago ).
+.TP
+.BI -r " xy,..."
+The requests that begin a chapter, for a style
+.RB ( chapter ).
+.TP
+.B -e
+Accumulate the references, for a list at the end.
+.TP
+.B -m
+Merge the references of one
+.B .[
+.B .]
+block.
+.TP
+.B -i
+Authors' first and middle names as initials.
+.TP
+.BI -o " xy"
+.TP
+.BI -a " xy"
+The citation's macro, and the author and year citation's
+.RB ( \e*[ xy " label" ] ).
+.TP
+.B -sa
+Sort by the authors' last names.
+.SH SOURCE
+.B /appl/cmd/refer
+.SH SEE ALSO
+.IR book (1),
+.IR troff (1)

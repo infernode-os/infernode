@@ -1,0 +1,116 @@
+.TH MKFN 1
+.SH NAME
+mkfn \- describe a font for troff
+.SH SYNOPSIS
+.B mkfn
+[
+.B -a
+|
+.B -o
+] [
+.B -s
+] [
+.B -b
+] [
+.B -l
+] [
+.B -n
+] [
+.B -g
+] [
+.B -w
+] [
+.B -c
+] [
+.BI -p " name"
+] [
+.BI -t " name"
+] [
+.BI -f " path"
+] [
+.BI -r " res"
+] [
+.BI -k " kmin"
+] [
+.BI -S " scripts"
+] [
+.BI -L " languages"
+] [
+.BI -F " font"
+] [
+.I font
+]
+.SH DESCRIPTION
+.I Mkfn
+writes the description
+.IR troff (1)
+sets a font by: its glyphs, their widths and bounding boxes, the
+characters each is, and its OpenType substitutions and positionings
+(ligatures, small capitals, kerning and the rest), from an OpenType,
+TrueType or AFM font.
+It is a translation of Ali Gholami Rudi's Neatmkfn;
+.B /lib/troff/devutf/mkdesc
+makes the device's descriptions with it.
+.PP
+Without
+.BR -c ,
+it differs from Neatmkfn where troff is better served: a CFF glyph's
+bounding box is read from its outline; an alias does not take a
+character the font has its own glyph for; a lookup the font's scripts
+share is written once, not once for each (troff would perform each
+copy); and a pair kerning subtable's first class 0 is every glyph of
+its coverage given no other class.
+.TP
+.B -a
+.TP
+.B -o
+The font is AFM (the default), or OpenType or TrueType.
+.TP
+.B -s
+A special font: searched for a character the current font lacks.
+.TP
+.BI -p " name"
+.TP
+.BI -t " name"
+.TP
+.BI -f " path"
+Its PostScript name, troff's name for it, and its file.
+.TP
+.BI -r " res"
+The device's resolution (720).
+.TP
+.BI -k " kmin"
+The least kerning written (0).
+.TP
+.B -b
+Each glyph's bounding box.
+.TP
+.B -l
+No ligatures line.
+.TP
+.B -n
+No glyph positions.
+.TP
+.B -g
+Glyphs by name in the rules.
+.TP
+.BI -S " scripts"
+.TP
+.BI -L " languages"
+The scripts and languages kept, apart by commas
+.RB ( list
+lists them).
+.TP
+.BI -F " font"
+A font of a collection.
+.TP
+.B -w
+Say what of the font is not supported.
+.TP
+.B -c
+Write as Neatmkfn writes.
+.SH SOURCE
+.B /appl/cmd/mkfn
+.SH SEE ALSO
+.IR troff (1),
+.IR tr2pdf (1)

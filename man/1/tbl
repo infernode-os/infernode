@@ -1,0 +1,77 @@
+.TH TBL 1
+.SH NAME
+tbl \- typeset tables
+.SH SYNOPSIS
+.B tbl
+[
+.B -ms
+] [
+.B -mm
+] [
+.B -TX
+] [
+.I file ...
+]
+.SH DESCRIPTION
+.I Tbl
+is a preprocessor for
+.IR troff (1):
+each table in its
+.I files
+(or its standard input), between
+.B .TS
+and
+.BR .TE ,
+is turned into what troff sets it by; the rest is passed on.
+A table is its options (ending in
+.BR ; :
+.BR center ,
+.BR box ,
+.BR allbox ,
+.BR tab( x )
+and others), the formats of its columns (ending in
+.BR . :
+.B l
+.B r
+.B c
+.B n
+.B s
+.B ^
+.BR _ ,
+fonts and widths), then its rows, the cells apart by tabs:
+.IP
+.EX
+\&.TS
+center box;
+c s
+l n.
+Philosophers
+_
+Plato	347
+Aristotle	322
+\&.TE
+.EE
+.PP
+It is a translation of Plan 9's
+.IR tbl ;
+for the same input its output is, byte for byte, Plan 9's.
+Under
+.B -mbook
+a table's rules are drawn as lines
+.RB ( .rules
+in
+.IR troff (1)).
+.TP
+.B -ms
+.TP
+.B -mm
+Read the macros first.
+.TP
+.B -TX
+For a printer without fractional motions.
+.SH SOURCE
+.B /appl/cmd/tbl
+.SH SEE ALSO
+.IR troff (1)
+.br
+M. E. Lesk, \(lqTbl \(em A Program to Format Tables\(rq.

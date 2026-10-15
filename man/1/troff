@@ -1,0 +1,217 @@
+.TH TROFF 1
+.SH NAME
+troff \- typeset text
+.SH SYNOPSIS
+.B troff
+[
+.BI -m x
+] [
+.BI -r x = y
+] [
+.BI -d x = y
+] [
+.B -C
+] [
+.BI -T dev
+] [
+.BI -F dir
+] [
+.BI -M dir
+] [
+.I file ...
+]
+.SH DESCRIPTION
+.I Troff
+sets the text of its
+.I files
+(or of its standard input) in type, as their requests and escapes
+direct, and writes on its standard output a description of the pages
+it made, independent of any device, for
+.IR tr2pdf (1)
+to make a PDF of, or for the document views
+.RI ( wm/page (1),
+Xenith, Lucifer) to show as it is.
+It is a translation of Ali Gholami Rudi's Neatroff:
+its language is Neatroff's, which is troff's with long names
+.RB ( \e*[name] ,
+.BR \en[name] ),
+OpenType's features and kerning, a paragraph filled at once
+(as TeX fills one), and hyphenation by TeX's patterns
+(English and Ancient Greek here).
+For the same input and fonts its output is, byte for byte, Neatroff's.
+.PP
+Its preprocessors
+.IR eqn (1),
+.IR tbl (1),
+.IR pic (1)
+and
+.IR refer (1)
+set mathematics, tables, pictures and citations;
+.IR book (1)
+runs them all, and
+.I troff
+as often as a book's references need.
+The macro packages are described in
+.IR troff (6).
+.PP
+The options are:
+.TP
+.BI -m x
+Read the macro package
+.BI tmac. x
+(from
+.BR /lib/tmac )
+before the files:
+.B -ms
+for papers,
+.B -man
+for manual pages,
+.B -mbook
+for books.
+.TP
+.BI -r x = y
+Set the number register
+.I x
+to
+.IR y .
+.TP
+.BI -d x = y
+Define the string
+.I x
+as
+.IR y .
+.TP
+.B -C
+Compatibility: names of two characters, run into what follows them,
+as old troff reads them.
+.TP
+.BI -T dev
+Set for the device
+.I dev
+(the default,
+.BR utf :
+Libertinus, its Serif, Sans, Mono and Math, and DejaVu Sans for what
+they lack).
+.TP
+.BI -F dir
+Read the device's description from
+.I dir
+(default
+.BR /lib/troff ).
+.TP
+.BI -M dir
+Read macro packages from
+.I dir
+(default
+.BR /lib/tmac ).
+.SS "Not Neatroff's"
+These are this troff's; with none of them requested,
+it sets as Neatroff sets.
+.TP
+.BI .mtp " n"
+Protrusion: with
+.I n
+not zero, punctuation, hyphens and some letters at a line's ends hang
+into the margins, each by the thousandths of its width
+.B .mtpc
+gives it, so that the text's edges look straight.
+.TP
+.BI ".mtpc " "font left right chars ..."
+Set the protrusion of
+.IR chars ,
+in
+.IR font ,
+at a line's left and its right.
+.TP
+.BI ".mte " "stretch shrink step"
+Expansion: a justified line's glyphs may be widened or narrowed, by up
+to
+.I stretch
+and
+.I shrink
+thousandths in steps of
+.IR step ,
+so that its spaces vary less; tr2pdf draws them so.
+.TP
+.BI .wo " n"
+Widows and orphans: with
+.I n
+not zero, a paragraph is broken by a page only with two of its lines
+at least on either side.
+.TP
+.BI .rules " n"
+Rules drawn: with
+.I n
+not zero (or none), the
+.B \el
+and
+.B \eL
+of rule characters
+.RB ( \e(ul ,
+.BR \e(ru ,
+.BR \e(rn ,
+.BR \e(br ...)
+are drawn, each a rectangle where its glyphs' ink would be, not set as
+glyphs side by side.
+.TP
+.BI .mg " n"
+With
+.I n
+not zero, a character no font has is said on the standard error
+(once), not dropped without a word.
+.TP
+.B \en[.pend]
+The lines the text not yet set will take, were the paragraph to end
+here.
+.TP
+.BI \eX'nr " name value" '
+Set the register
+.I name
+to
+.I value
+as the line it is in goes out (not when it is read): what is set on a
+page, known at the page's foot.
+.PP
+A pair is kerned as its font kerns it, once: a font's kerning lookup
+that its scripts share is performed once, not once for each script.
+.SH EXAMPLES
+A paper, as a PDF:
+.IP
+.EX
+troff -ms paper.ms | tr2pdf >paper.pdf
+.EE
+.PP
+Its tables and equations first:
+.IP
+.EX
+tbl paper.ms | eqn | troff -ms | tr2pdf >paper.pdf
+.EE
+.SH FILES
+.TF /lib/troff/devutf
+.TP
+.B /lib/troff/devutf
+the device's description and its fonts', made by
+.IR mkfn (1)
+.TP
+.B /lib/tmac
+the macro packages
+.TP
+.B /fonts/libertinus
+the fonts
+.SH SOURCE
+.B /appl/cmd/troff
+.SH SEE ALSO
+.IR book (1),
+.IR eqn (1),
+.IR mkfn (1),
+.IR pic (1),
+.IR refer (1),
+.IR tbl (1),
+.IR tr2pdf (1),
+.IR troff (6)
+.br
+.B docs/TROFF.md
+in the source tree.
+.br
+Neatroff,
+.BR https://github.com/aligrudi/neatroff .

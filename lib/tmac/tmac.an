@@ -1,0 +1,351 @@
+.\" tmac.an: the manual's macros (troff -man), for InferNode's pages,
+.\" which are written for Plan 9's: TH SH SS PP LP P IP TP HP RS RE PD TF
+.\" EX EE SM DT, and the fonts' B I L R CW and their alternations BI BR
+.\" IB IR LR RB RI RL.  A page is set as Plan 9's tmac.an sets it
+.\" (sys/lib/tmac/tmac.an in the Plan 9 Foundation's plan9): 9 on 11
+.\" points, 6.5 inches wide, its head the page's name and section, its
+.\" foot the folio; headings bold at the margin, the text 3.6 ems in;
+.\" commands and literals (B, L) in constant width.  Libertinus Sans is
+.\" Plan 9's Lucida Sans, Libertinus Mono its constant width.
+.\"
+.\" Arguments are compared between BELs, as Plan 9's are: an argument
+.\" may hold a quote.
+.\"
+.\" Written for this troff, not converted: Plan 9's keep a paragraph's
+.\" tag in a string made from a diversion, which Neatroff's diversions
+.\" (holding requests) cannot be.  The tag is set as a line of its own,
+.\" and the paragraph goes back up beside it if it fits.
+.\"
+.fp 1 R HR
+.fp 2 I HI
+.fp 3 B HB
+.fp 5 L CR
+.nr an-ps 9		\" point size
+.nr an-vs 11		\" and line spacing, in points
+.nr an-ll 6.5i
+.pl 11i
+.po 1i
+.ll \n[an-ll]u
+.lt \n[an-ll]u
+.ps \n[an-ps]
+.vs \n[an-vs]p
+.nr an-m 3.6m		\" the text's indent, and a tagged paragraph's
+.nr an-in \n[an-m]	\" the text's indent
+.nr an-i \n[an-m]	\" the tagged (or indented) paragraph's
+.nr an-r 0		\" .RS's indent
+.nr an-rn 0		\" .RS's depth
+.nr an-pd .4v		\" between paragraphs
+.nr an-e 0		\" what the next text line ends: 1 a tag, 2 a heading
+.ds R \(rg
+.ds S \s\n[an-ps]
+.ev 1
+.ps \n[an-ps]
+.vs \n[an-vs]p
+.ll \n[an-ll]u
+.lt \n[an-ll]u
+.ft 1
+.ev
+.\"
+.\" the type, and the text's indent and measure
+.de an-f
+.ps \\n[an-ps]
+.vs \\n[an-vs]p
+.ft 1
+..
+.de an-e
+.an-f
+.in \\n[an-r]u+\\n[an-in]u
+.ll \\n[an-ll]u
+.lt \\n[an-ll]u
+..
+.\" the head and foot
+.de an-hd
+.ev 1
+'sp |3v
+.tl |\\*[an-h]|\\*[an-l]|\\*[an-h]|
+'sp 3v
+.ev
+.ns
+..
+.de an-fo
+.ev 1
+'sp |\\n(.pu-3v
+.tl ||%||
+.ev
+'bp
+..
+.\" .TH name section [heading]: a page; another begins anew
+.de TH
+.PD
+.ds an-h \\$1\^(\^\\$2\^)
+.ds an-l
+.if !\\$3 .ds an-l (\^\\$3\^)
+.if \\n(nl .bp 1
+.wh 0 an-hd
+.wh -6v an-fo
+.nr an-i \\n[an-m]u
+.nr an-r 0
+.nr an-rn 0
+.an-e
+.DT
+.bd S 3 3
+.hy 14
+..
+.de DT
+.ta 3.6m 7.2m 10.8m 14.4m 18m 21.6m 25.2m 28.8m 32.4m 36m 39.6m 43.2m 46.8m
+..
+.de HY
+.hy 14
+..
+.\" headings: .SH at the margin, .SS 3n in; bold, the text after them
+.de SH
+.PD
+.br
+.ne 3v
+.an-x 0
+\&\\$*
+..
+.de SS
+.PD
+.br
+.ne 3v
+.an-x 3n
+\&\\$*
+..
+.de an-x
+.an-e
+.ti \\$1
+.sp \\n[an-pd]u
+.ne 1.1v
+.nr an-r 0
+.nr an-rn 0
+.fi
+.it 1 an-n
+.nr an-e 2
+.ft 3
+..
+.\" after the line a macro began: its font ended; a heading's or a tag's
+.\" line ended
+.de an-n
+.ie \\n[an-e]=1 .an-tag
+.el .ie \\n[an-e]=2 \{\
+.	br
+.	nr an-e 0
+.	an-e
+.	nr an-i \\n[an-m]u
+.	ns
+.\}
+.el .an-f
+..
+.\" paragraphs
+.de PP
+.sp \\n[an-pd]u
+.ne 1.1v
+.an-e
+.nr an-i \\n[an-m]u
+.ns
+..
+.de LP
+.PP
+..
+.de P
+.PP
+..
+.de PD
+.nr an-pd .4v
+.if \\n(.$ .nr an-pd \\$1v
+..
+.de PD0
+.PD 0
+..
+.\" .TP [indent]: the next line a tag, the paragraph after it indented;
+.\" the tag set on a line of its own, the paragraph beside it if it fits
+.de TP
+.if !\\$1 \{\
+.	nr an-i \\$1n
+.	if \\$10 .nr an-i \\n[an-m]u
+.\}
+.sp \\n[an-pd]u
+.ne 2.1v
+.an-f
+.in \\n[an-r]u+\\n[an-in]u
+.lg 0
+.ns
+.nf
+.it 1 an-n
+.nr an-e 1
+..
+.de an-tag
+.nr an-e 0
+.fi
+.lg 1
+.an-f
+.ll \\n[an-ll]u
+.in \\n[an-r]u+\\n[an-in]u+\\n[an-i]u
+.\" beside it if it leaves 3 points
+.if \\n(.n<=(\\n[an-i]-3p) .sp -1v
+..
+.\" .IP [tag [indent]]: an indented paragraph, its tag the first
+.de IP
+.ie !\\$1 \{\
+.	TP "\\$2"
+\&\\$1
+.\}
+.el \{\
+.	sp \\n[an-pd]u
+.	ne 1.1v
+.	if !\\$2 .nr an-i \\$2n
+.	an-f
+.	ll \\n[an-ll]u
+.	in \\n[an-r]u+\\n[an-in]u+\\n[an-i]u
+.\}
+..
+.\" .TF word: the paragraphs after indented by word's width, closely
+.de TF
+.nr an-i \w'\f5\\$1\ \ \fP'u
+.IP
+.PD 0
+..
+.\" .HP [indent]: a hanging paragraph
+.de HP
+.sp \\n[an-pd]u
+.ne 1.1v
+.if !\\$1 .nr an-i \\$1n
+.an-f
+.ll \\n[an-ll]u
+.in \\n[an-r]u+\\n[an-in]u+\\n[an-i]u
+.ti \\n[an-r]u+\\n[an-in]u
+..
+.\" .RS [indent], .RE [level]: the text moved in, and back
+.de RS
+.nr an-rn +1
+.nr an-si\\n[an-rn] \\n[an-i]
+.nr an-sr\\n[an-rn] \\n[an-r]
+.ie !\\$1 .nr an-r +\\$1n
+.el .nr an-r +\\n[an-i]u
+.nr an-i \\n[an-m]u
+.an-e
+..
+.de RE
+.if !\\$1 \{\
+.	nr an-rn \\$1
+.	if \\n[an-rn]<1 .nr an-rn 1
+.\}
+.if \\n[an-rn] \{\
+.	nr an-i \\n[an-si\\n[an-rn]]
+.	nr an-r \\n[an-sr\\n[an-rn]]
+.	nr an-rn -1
+.\}
+.an-e
+..
+.\" examples: constant width, as typed
+.de EX
+.ft 5
+.nf
+..
+.de EE
+.ft 1
+.fi
+..
+.\" fonts: the arguments, or the next line
+.de I
+.nh
+.ft 2
+.it 1 an-n
+.if \\n(.$ \&\\$*
+.HY
+..
+.de B
+.nh
+.it 1 an-n
+.ie \\n(.$ \%\&\f5\\$*
+.el .ft 5
+.HY
+..
+.de L
+.B \\$@
+..
+.de CW
+.B \\$@
+..
+.de R
+.nh
+.ft 1
+.it 1 an-n
+.if \\n(.$ \&\\$*
+.HY
+..
+.de SM
+.nh
+.ps \\n[an-ps]-1
+.ie \\n(.$ \{\
+\&\\$*
+.	ps \\n[an-ps]
+.\}
+.el .it 1 an-n
+.HY
+..
+.\" alternations: each word in the next of the two fonts, a thin space
+.\" after a word before another when either is italic; as many words as
+.\" are given (Plan 9's take six)
+.de an-alt
+.ds an-t \\$1
+.nr an-f1 \\$2
+.nr an-f2 \\$3
+.shift 3
+.an-alt1 \\$@
+\\*[an-t]
+.an-f
+..
+.de an-alt1
+.if \\n(.$ \{\
+.	ds an-sp
+.	if \\n(.$>1 .if (\\n[an-f1]=2)+(\\n[an-f2]=2) .ds an-sp \^
+.	as an-t \f\\n[an-f1]\\$1\\*[an-sp]
+.	nr an-f \\n[an-f1]
+.	nr an-f1 \\n[an-f2]
+.	nr an-f2 \\n[an-f]
+.	shift
+.	an-alt1 \\$@
+.\}
+..
+.de BI
+.nh
+.an-alt \%\& 5 2 \\$@
+.HY
+..
+.de IB
+.nh
+.an-alt \%\& 2 5 \\$@
+.HY
+..
+.de RB
+.nh
+.an-alt \%\& 1 5 \\$@
+.HY
+..
+.de BR
+.nh
+.an-alt \%\& 5 1 \\$@
+.HY
+..
+.de RI
+.nh
+.an-alt \& 1 2 \\$@
+.HY
+..
+.de IR
+.nh
+.an-alt \& 2 1 \\$@
+.HY
+..
+.de LR
+.nh
+\%\&\f5\\$1\f1\\$2
+.HY
+..
+.de RL
+.nh
+\%\&\f1\\$1\f5\\$2\f1\\$3
+.HY
+..

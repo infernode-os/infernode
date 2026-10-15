@@ -1,0 +1,111 @@
+.TH TR2PDF 1
+.SH NAME
+tr2pdf \- troff's output as PDF
+.SH SYNOPSIS
+.B tr2pdf
+[
+.BI -p " size"
+] [
+.BI -t " title"
+] [
+.BI -w " lwid"
+] [
+.B -l
+] [
+.B -n
+] [
+.BI -F " dir"
+] [
+.BI -d " x=v"
+] [
+.B -W
+] [
+.B -c
+] [
+.I file
+]
+.SH DESCRIPTION
+.I Tr2pdf
+reads the pages
+.IR troff (1)
+described (its
+.I file
+or its standard input) and writes them as PDF.
+It embeds the fonts, OpenType (Libertinus's CFF) and TrueType, subset
+to the glyphs the document uses, compressed, each with a map from its
+glyphs to the characters they are, so that a reader can search and copy
+the text.
+It is a translation of Ali Gholami Rudi's Neatpost; with
+.B -c
+it writes what Neatpost writes.
+.PP
+Besides the text and drawing, it reads troff's device controls
+.RB ( \eX' ... ' ):
+.TP
+.BI "papersize " w x h
+The page's size, in points.
+.TP
+.BI "pdf " "file height"
+Include a page of a PDF.
+.TP
+.BI "link " "target width height"
+A link, from here, to a URI or
+.BI # name\fR.
+.TP
+.BI "dest " "name " \fR[ page \fR]
+A destination here (at the page's top, with
+.BR page ).
+.TP
+.BI "outline " "level title"
+A bookmark here.
+.TP
+.BI "folio " f
+The page's number as printed: its label.
+.TP
+.BI "info " "key value"
+The PDF's information
+.RB ( Title ,
+.BR Author ).
+.TP
+.BI "name " "name page offset"
+.TP
+.BI "mark " "title page offset level"
+Neatpost's: a destination and a bookmark at a page and place given.
+.PP
+The options:
+.TP
+.BI -p " size"
+The paper
+.RB ( letter ,
+.BR a4 ,
+or its width and height in tenths of a millimetre).
+.TP
+.BI -t " title"
+The title.
+.TP
+.BI -w " lwid"
+Lines' thickness, in thousandths of an em (40).
+.TP
+.B -l
+Landscape.
+.TP
+.B -n
+Draw glyphs by name.
+.TP
+.BI -F " dir"
+The device directory.
+.TP
+.BI -d " x=v"
+Set a device variable.
+.TP
+.B -W
+Embed fonts whole, not subset.
+.TP
+.B -c
+Write what Neatpost writes.
+.SH SOURCE
+.B /appl/cmd/tr2pdf
+.SH SEE ALSO
+.IR troff (1),
+.IR mkfn (1),
+.IR page (1)

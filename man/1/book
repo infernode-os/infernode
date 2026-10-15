@@ -1,0 +1,117 @@
+.TH BOOK 1
+.SH NAME
+book, book2tex, mkindex \- make a book
+.SH SYNOPSIS
+.B book
+[
+.B -f
+] [
+.BI -p " works.bib"
+] [
+.BI -S " style"
+] [
+.BI -o " book.pdf"
+]
+.I book.ms
+.br
+.B book2tex
+[
+.BI -p " works.bib"
+] [
+.BI -o " book.tex"
+] [
+.I book.ms
+]
+.br
+.B mkindex
+[
+.B -l
+] [
+.I book.out ...
+]
+.SH DESCRIPTION
+.I Book
+makes a PDF of a book written with
+.BR -mbook ,
+the macros of
+.IR troff (6).
+It runs
+.IR refer (1)
+with the database
+.I works.bib
+(its citations in the style,
+.B chicago
+by default),
+.IR pic (1),
+.IR tbl (1)
+and
+.IR eqn (1)
+(each if the book has anything for it),
+.IR troff (1)
+as often as the book's table of contents, references and index need
+to settle (each pass learning from the one before, through
+.IR book .aux),
+and
+.IR tr2pdf (1).
+Troff's output is kept as
+.IR book .out,
+for the document views.
+A book with
+.B .printindex
+has its index made by
+.I mkindex
+after each pass.
+.PP
+A book is set as a draft unless
+.B -f
+is given: then as it goes to press, with microtypography (punctuation
+hanging into the margins, glyphs widened or narrowed a little), as
+.IR troff 's
+.B .mtp
+and
+.B .mte
+set them.
+.PP
+.I Book2tex
+writes the book as LaTeX, for LuaLaTeX, for a publisher who wants it:
+each of
+.BR -mbook 's
+macros as the LaTeX it stands for, the citations as biblatex-chicago's,
+the equations as LaTeX's mathematics, the tables as tabulars, the
+pictures (with
+.BR -o )
+drawn as PDFs of their own beside it.
+.PP
+.I Mkindex
+reads troff's output for the entries
+.B .index
+put there and each page's folio, and writes the index
+.B .printindex
+sets, in the order of
+.IR "The Chicago Manual of Style" .
+With
+.B -l
+each page is a link to it.
+.SH EXAMPLES
+.EX
+book -p works.bib thesis.ms
+book -f -p works.bib -o press.pdf thesis.ms
+book2tex -p works.bib -o thesis.tex thesis.ms
+.EE
+.SH SOURCE
+.B /dis/book
+.br
+.B /appl/cmd/book2tex.b
+.br
+.B /appl/cmd/mkindex.b
+.SH SEE ALSO
+.IR eqn (1),
+.IR pic (1),
+.IR refer (1),
+.IR tbl (1),
+.IR tr2pdf (1),
+.IR troff (1),
+.IR troff (6)
+.br
+.B docs/TROFF.md
+in the source tree.

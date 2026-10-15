@@ -59,7 +59,7 @@ return option characters in turn; 0 is returned at the end of the list.
 A program might take a parameter to a given option (eg, an option of the form
 .BI -f file
 or
-.BI -f " file" \f1).\f0
+.BI -f " file" \f1).\fP
 Following a call to
 .BR opt ,
 a call to

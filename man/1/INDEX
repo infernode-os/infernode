@@ -222,3 +222,13 @@ xd xd
 yacc yacc
 zeros zeros
 sam sam
+troff troff
+eqn eqn
+tbl tbl
+pic pic
+refer refer
+tr2pdf tr2pdf
+mkfn mkfn
+book book
+book2tex book
+mkindex book

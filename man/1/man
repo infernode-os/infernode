@@ -13,6 +13,8 @@ print or find manual pages
 ] [
 .B -S
 ] [
+.B -t
+] [
 .B -w
 ]
 [
@@ -122,6 +124,20 @@ Display the pages using
 .B -S
 Do not search the manual indices for the names: only print pages whose file names match the
 .IR titles .
+.TP
+.B -t
+Typeset the pages: write
+.IR troff (1)'s
+output for them, set with the manual's macros
+.RB ( -man ,
+.BR /lib/tmac/tmac.an ),
+as Plan 9's printed manual is set.
+.IR Tr2pdf (1)
+makes a PDF of it, as in
+.BR "man -t ls | tr2pdf >ls.pdf" ;
+the document views
+.RI ( wm/page (1),
+Xenith) show it as it is.
 .TP
 .B -w
 Print the names of the man page source files instead of formatting them.

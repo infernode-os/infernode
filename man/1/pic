@@ -1,0 +1,47 @@
+.TH PIC 1
+.SH NAME
+pic \- draw pictures
+.SH SYNOPSIS
+.B pic
+[
+.B -V
+] [
+.I file ...
+]
+.SH DESCRIPTION
+.I Pic
+is a preprocessor for
+.IR troff (1):
+each picture in its
+.I files
+(or its standard input), between
+.B .PS
+and
+.BR .PE ,
+is turned into troff's drawing commands; the rest is passed on.
+A picture is described in Kernighan's language of boxes, circles,
+ellipses, arcs, lines, arrows and splines, placed by one another and
+labelled, with variables,
+.BR for ,
+.BR if ,
+.BR define
+and blocks:
+.IP
+.EX
+\&.PS
+box "input"; arrow; ellipse "pic"; arrow; box "troff"
+\&.PE
+.EE
+.PP
+It is a translation of Plan 9's
+.IR pic ;
+for the same input its output is, byte for byte, Plan 9's.
+.TP
+.B -V
+Print the version.
+.SH SOURCE
+.B /appl/cmd/pic
+.SH SEE ALSO
+.IR troff (1)
+.br
+B. W. Kernighan, \(lqPIC \(em A Graphics Language for Typesetting\(rq.

@@ -269,6 +269,17 @@ looks for a glyph in it when the font set in lacks one). One no font has
 is said (`troff: no font has 中 (U+4E2D)`), once, where C Neatroff drops
 it without a word (`.mg 1`, as `-mbook` sets it).
 
+A pair is kerned as its font kerns it, once. Libertinus's Latin and
+Greek share their kerning lookups. Neatmkfn wrote a lookup once for
+each script, and troff, with no script chosen, performed every copy:
+every pair in every book set before this was kerned twice (AV by -224
+units at 10 points, not the font's -112). Neatmkfn also left out the
+pairs a kerning class table gives its first glyphs' class 0 (D in DA,
+DV and DY). `mkfn` now writes a shared lookup once, with no script,
+and class 0 as every glyph of the table's coverage given no other
+class. `tests/host/troff_test.sh` checks every pair of letters in
+Libertinus Serif and Sans against the font's GPOS.
+
 ## Fonts in the PDF
 
 `tr2pdf` embeds each OpenType (CFF) font subset to the glyphs the book
@@ -328,6 +339,34 @@ included.
 Anything with no LaTeX of its own (a macro of the book's own, say) is
 kept as a comment and named on standard error.
 
+## Manual pages: `-man` and `man -t`
+
+`troff -man` sets a manual page as Plan 9's printed manual is set: 9
+on 11 points, 6.5 inches wide, its head the page's name and section,
+its foot the folio. Headings are bold at the margin and the text 3.6
+ems in; commands and literals (`.B`, `.L`) are in constant width.
+Libertinus Sans stands for Plan 9's Lucida Sans, Libertinus Mono for
+its constant width. `man -t ls` writes troff's output for `ls(1)`;
+`man -t ls | tr2pdf >ls.pdf` makes a PDF of it.
+
+`lib/tmac/tmac.an` is written for this troff. Plan 9's macros keep a
+paragraph's tag in a string made from a diversion, which Neatroff's
+diversions cannot be (they hold requests); with Plan 9's file, C
+Neatroff and troff alike set every page with its macros' bodies
+printed as text. The macros are those InferNode's pages use:
+`.TH .SH .SS .PP .LP .P .IP .TP .HP .RS .RE .PD .TF .EX .EE .SM`, and
+the fonts' `.B .I .L .R` and their alternations (`.BR .IR` ...). A
+tag is set as a line of its own, and its paragraph goes back up
+beside it if the tag fits the indent. An alternation takes as many
+words as it is given (Plan 9's take six). Arguments are compared
+between BELs, as Plan 9's are, so an argument may hold a quote.
+`tests/host/man_test.sh` sets every page of the manual, and checks
+each macro by where it puts its words.
+
+The toolchain's own pages are `troff(1)`, `eqn(1)`, `tbl(1)`, `pic(1)`,
+`refer(1)`, `tr2pdf(1)`, `mkfn(1)`, `book(1)` (with `book2tex` and
+`mkindex`) and `troff(6)`, the macro packages.
+
 ## Still to come
 
-`-man`.
+Speed.

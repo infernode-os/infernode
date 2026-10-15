@@ -1,0 +1,132 @@
+.TH TROFF 6
+.SH NAME
+troff \- troff's macro packages
+.SH SYNOPSIS
+.B troff -mbook
+.br
+.B troff -man
+.br
+.B troff -ms
+.br
+.B troff -me
+.br
+.B troff -mm
+.SH DESCRIPTION
+.IR Troff (1)
+reads a macro package before its input when given
+.BI -m x\fR,
+from
+.BI /lib/tmac/tmac. x\fR.
+.SS -mbook
+A book: each macro one of LaTeX's, so that a book is readily turned
+into LaTeX
+.RI ( book2tex (1)).
+.TP
+.B ".title \fIT\fP  .subtitle \fIS\fP  .author \fIA\fP  .date \fID\fP  .maketitle"
+The title page.
+.TP
+.B ".frontmatter  .mainmatter  .backmatter"
+The book's parts: the front matter's folios roman, its chapters
+unnumbered.
+.TP
+.BI ".part " title
+.TP
+.BI ".chapter " "title " \fR[ label \fR]
+.TP
+.BI ".chapter* " title
+.TP
+.BI ".section " "title " \fR[ label \fR]
+.TP
+.BI ".subsection " "title " \fR[ label \fR]
+Headings; chapters open on right-hand pages.
+.TP
+.B ".p"
+A paragraph (or a blank line).
+.TP
+.B ".quote ... .endquote"
+.TP
+.BI ".epigraph ... .attrib " source " .endepigraph"
+.TP
+.BR ".fn ... .fe" ,  " \e*[fnmark]"
+A footnote, its mark after the text a
+.B \ec
+ends (or where
+.B \e*[fnmark]
+is).
+.TP
+.BR ".en ... .ee" ,  " \e*[enmark]" ,  " .notes"
+Endnotes, set under their chapters' names by
+.BR .notes .
+.TP
+.BR ".label " \fIname\fP,  " \e*[ref " \fIname\fP],  " \e*[pageref " \fIname\fP]
+A cross-reference: the chapter or section, and the page.
+.TP
+.B ".contents"
+The table of contents.
+.TP
+.BI ".cite " "key place" \fR[ ";" " key place" \fR]
+.TP
+.B ".bibliography"
+Citations and the works cited, by
+.IR refer (1).
+.TP
+.BI ".index " entry
+.TP
+.B ".printindex"
+The index, its entries makeindex's
+.RB ( sub!subentry ,
+.BR sort@shown ,
+.BR |see{...} ,
+.BR |( ...
+.BR |) ).
+.TP
+.BI ".papersize " "w h"
+.TP
+.BI ".margins " "top bottom inner outer"
+The page (6 by 9 inches); the registers
+.B book-ps
+and
+.B book-vs
+the type (11 on 14 points).
+.PP
+Notes are set at the foot of their marks' pages, in order, a long one
+split between pages; widows and orphans are kept from pages' edges; the
+PDF's contents, references, notes' marks and index are links, its
+headings bookmarks.
+.SS -man
+A manual page, as Plan 9's are written and set:
+.BR .TH ,
+.BR .SH ,
+.BR .SS ,
+.BR .PP ,
+.BR .TP ,
+.BR .IP ,
+.BR .HP ,
+.BR .RS ,
+.BR .RE ,
+.BR .TF ,
+.BR .EX ,
+.BR .EE ,
+.BR .PD ,
+and the fonts'
+.B .B
+.B .I
+.B .L
+and their alternations
+.RB ( .BR ,
+.BR .IR ...).
+.IR Man (1)
+.B -t
+sets a page so.
+.SS -ms -me -mm
+Plan 9's, as Neatroff reads them: papers, Berkeley's, and the
+memorandum macros.
+.SH FILES
+.B /lib/tmac
+.SH SEE ALSO
+.IR book (1),
+.IR man (1),
+.IR troff (1)
+.br
+.B docs/TROFF.md
+in the source tree.

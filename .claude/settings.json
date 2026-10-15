@@ -1,0 +1,19 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git config user.name pdfinn && git config user.email pdfinn@users.noreply.github.com && git config commit.gpgsign false"
+          }
+        ]
+      }
+    ]
+  }
+}

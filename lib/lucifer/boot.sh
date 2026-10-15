@@ -83,7 +83,11 @@ if {ftest -f /lib/veltro/sources/email.conf} {
 # GUI services
 luciuisrv
 echo activity create Main > /mnt/ui/ctl
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
+# The messages are activity 0's to hand on: /mnt/msg is the read-only
+# summary (status), /mnt/msg/draft the proposal endpoint a task writes a
+# draft to (queued for the user, never sent by itself).  nsconstruct keeps
+# each to that.  Without them meta.txt's way to delegate mail was refused.
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 # /tmp is bound by lib/sh/profile; on Windows the bind has hit edge
 # cases where it silently failed and the redirect below produced no log
 # file (GH #230 sphynkx report). Force /tmp into existence and pre-create

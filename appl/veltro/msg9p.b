@@ -504,6 +504,10 @@ handlectl(data: string): string
 # source and original id. Nothing is sent until a trusted controller consumes
 # the immutable pending request through /mnt/msg/approve.
 
+# What a writer that got the form wrong needs to know: an agent drafting a
+# new email tried it here, again and again, from "unsafe source name".
+DRAFTHOW: con " (a draft is a reply to a message here: its first line is the message's source and its second the message's id, as /mnt/msg/status lists them, then the body; a new message to someone cannot be drafted here)";
+
 queuedraft(data: string): string
 {
 	verr := validreply(data);
@@ -529,15 +533,15 @@ validreply(data: string): string
 	src = msgstrip(src);
 	origid = msgstrip(origid);
 	if(src == "" || origid == "")
-		return "draft: want <srcname>\\n<origid>\\n<body>";
+		return "draft: want <srcname>\\n<origid>\\n<body>" + DRAFTHOW;
 	if(!safesrcname(src))
-		return "draft: unsafe source name";
+		return "draft: unsafe source name" + DRAFTHOW;
 	if(hascontrol(origid))
-		return "draft: unsafe message id";
+		return "draft: unsafe message id" + DRAFTHOW;
 	for(sl := sources; sl != nil; sl = tl sl)
 		if((hd sl).name == src)
 			return nil;
-	return "draft: no source: " + src;
+	return "draft: no source: " + src + DRAFTHOW;
 }
 
 genpending(): string

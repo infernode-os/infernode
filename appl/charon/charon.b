@@ -57,7 +57,7 @@ Command: module
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-HOME: con "file:///tests/charon/pages/article.html";
+HOME: con "file:///lib/charon/start.html";
 LINE: con 40;	# pixels per arrow-key scroll
 
 stderr: ref Sys->FD;

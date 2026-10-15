@@ -203,11 +203,13 @@ Session.show(s: self ref Session, data: array of byte, ctype, url: string): stri
 	s.gen++;	# whatever was loading is superseded
 	if(unfrag(pg.url) != unfrag(s.url))
 		history(s, s.url, Hnew);
+	old := s.pg;
 	s.pg = pg;
 	s.url = pg.url;
 	s.title = pg.title;
 	s.status = "done";
 	unlock(s);
+	left(old, pg);
 	event(s, "done " + s.url);
 	return nil;
 }
@@ -269,6 +271,25 @@ Session.stop(s: self ref Session)
 	unlock(s);
 	if(stopped)
 		event(s, "stopped");
+}
+
+# The session ends: what it was loading stops, and its page goes
+Session.close(s: self ref Session)
+{
+	s.stop();
+	endrealm(s);
+	lock(s);
+	old := s.pg;
+	s.pg = nil;
+	unlock(s);
+	left(old, nil);
+}
+
+# A page the session has left, for another or none, is closed
+left(old, now: ref Pg)
+{
+	if(old != nil && old != now)
+		old.close();
 }
 
 Session.resize(s: self ref Session, width, height: int)
@@ -379,6 +400,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 		return;	# superseded or stopped
 	}
 	if(pg == nil) {
+		old := s.pg;
 		if(ep != nil) {
 			history(s, s.url, hist);
 			s.pg = ep;
@@ -388,11 +410,13 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 		}
 		s.status = "error " + err;
 		unlock(s);
+		left(old, s.pg);
 		event(s, "error " + err);
 		return;
 	}
 	y := wasat(s, hist);
 	history(s, s.url, hist);
+	old := s.pg;
 	s.pg = pg;
 	s.url = pg.url;
 	if((frag := fragment(url)) != nil && fragment(s.url) == nil)
@@ -406,6 +430,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	u := s.url;
 	s.status = "loading images " + u;
 	unlock(s);
+	left(old, pg);
 	event(s, "shown " + u);
 	startrealm(s, g, pg);
 	# the page is up; what it shows comes in behind it

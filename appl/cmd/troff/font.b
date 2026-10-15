@@ -234,8 +234,9 @@ grp_has(fnt: ref Font, g: int, grp: int): int
 font_rulematch(fnt: ref Font, R: ref Rules, r: int,
 		src: array of int, soff, slen: int, dst: array of int, doff, dlen: int): int
 {
-	# enable only the active script if set
-	if(fnt.scrp >= 0 && fnt.scrp != R.scrp[r])
+	# enable only the active script if set (and rules of every script's,
+	# which mkfn writes with no script: not Neatroff's)
+	if(fnt.scrp >= 0 && R.scrp[r] >= 0 && fnt.scrp != R.scrp[r])
 		return 0;
 	# enable common script features and those in the active language
 	if(R.lang[r] >= 0 && fnt.lang != R.lang[r])

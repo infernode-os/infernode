@@ -360,6 +360,26 @@ ggrp_class(src, cls: array of int, id: int): int
 	return ggrp_make(g);
 }
 
+# the glyphs of cov in class 0 of the class definition gl, cls
+ggrp_class0(cov, gl, cls: array of int): int
+{
+	g := array[len cov] of int;
+	n := 0;
+	for(i := 0; i < len cov; i++){
+		c := 0;
+		for(j := 0; j < len gl; j++)
+			if(gl[j] == cov[i]){
+				c = cls[j];
+				break;
+			}
+		if(c == 0)
+			g[n++] = cov[i];
+	}
+	g = g[0:n];
+	isort(g);
+	return ggrp_make(g);
+}
+
 ggrp_coverage(g: array of int): int
 {
 	isort(g);
@@ -464,6 +484,12 @@ otf_gpostype2(nil: ref Otf, sub: int, nil: string)
 		grp2 := array[ncls2] of int;
 		for(i := 0; i < ncls1; i++)
 			grp1[i] = ggrp_class(gl1, cls1, i);
+		# the first glyph's class 0 is every glyph of the coverage the
+		# class definition gives no other class (not Neatmkfn's, which
+		# gives it those the definition lists as 0: Libertinus kerns D
+		# and the like by it)
+		if(!compat && ncls1 > 0)
+			grp1[0] = ggrp_class0(coverage(sub + U16(sub + 2)), gl1, cls1);
 		for(i = 0; i < ncls2; i++)
 			grp2[i] = ggrp_class(gl2, cls2, i);
 		for(i = 0; i < ncls1; i++){
@@ -855,6 +881,8 @@ otf_lang(gtab: int, lang: int, stag, ltag: string)
 # a lookup's tag, as liga:latn:ENG
 lookuptag(l: ref Lookup): string
 {
+	if(l.scrp == "*")	# every script's
+		return l.feat;
 	s := l.feat + ":";
 	if(l.scrp != "")
 		s += l.scrp;
@@ -930,7 +958,41 @@ otf_gtab(gpos: int): array of ref Lookup
 	a := lookups[0:nlookups];
 	lookups = nil;
 	lookupsort(a);
+	if(!compat){
+		a = lookupshare(a);
+		lookupsort(a);
+	}
 	return a;
+}
+
+# a lookup two scripts' features share (not a language's own) written
+# once, for every script ("*"), not once for each (Neatmkfn's): troff,
+# with no script chosen, would perform each copy, kerning a pair as
+# many times as the font has scripts that kern it
+lookupshare(a: array of ref Lookup): array of ref Lookup
+{
+	b := array[len a] of ref Lookup;
+	n := 0;
+	for(i := 0; i < len a; i++){
+		l := a[i];
+		if(l.lang != ""){
+			b[n++] = l;
+			continue;
+		}
+		dup := 0;
+		for(j := 0; j < n; j++){
+			k := b[j];
+			if(k.lang == "" && k.feat == l.feat && k.lookup == l.lookup){
+				if(k.scrp != l.scrp)
+					k.scrp = "*";
+				dup = 1;
+				break;
+			}
+		}
+		if(!dup)
+			b[n++] = ref Lookup(l.scrp, l.lang, l.feat, l.lookup);
+	}
+	return b[0:n];
 }
 
 otf_gpos(otf: ref Otf, gpos: int)

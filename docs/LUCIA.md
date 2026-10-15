@@ -35,7 +35,7 @@ From the repository root, run the emulator for your platform with the boot scrip
 ./emu/Linux/o.emu  -c1 -pheap=1024m -pmain=1024m -pimage=1024m -r$PWD sh -l /lib/lucifer/boot.sh   # Linux
 ```
 
-Windows uses `.\emu\Nt\o.emu.exe` with `-r%CD%`; see [CLAUDE.md](../CLAUDE.md) and [QUICKSTART.md](../QUICKSTART.md#running-for-development). Add `-g WxH` for a custom window size. The `-p` flags set the memory limits. `sh -l` runs `lib/sh/profile` first, which starts `speech9p` (TTS/STT, mounted at `/n/speech`). `lib/lucifer/boot.sh` then:
+Windows uses `.\emu\Nt\o.emu.exe` with `-r%CD%`; see [CLAUDE.md](../CLAUDE.md) and [QUICKSTART.md](../QUICKSTART.md#running-for-development). Add `-g WxH` for a custom window size. The `-p` flags set the memory limits. `sh -l` runs `lib/sh/profile` first, which starts `speech9p` (TTS/STT, mounted at `/mnt/speech`). `lib/lucifer/boot.sh` then:
 
 1. Runs the login screen (`wm/logon`) unless `skiplogon=1`.
 2. Starts the LLM service in the background (`lib/lucifer/llmsrv.sh`).
@@ -110,7 +110,7 @@ Lucia stitches together several 9P services. Once the UI is up, you can `cat` an
 |--------------|-------------|------------------|
 | `/mnt/ui`      | luciuisrv   | All UI state. `/mnt/ui/ctl` to create/delete activities; `/mnt/ui/activity/N/{conversation,presentation,context}` for each zone. |
 | `/mnt/llm`     | llmsrv      | LLM sessions. `/mnt/llm/new` clones a fresh session; each `/mnt/llm/N/` exposes `ask`, `stream`, `model`, `thinking`, `system`, `compact`, `context`. |
-| `/n/speech`  | speech9p    | `say` (write text → TTS), `hear` (write `start`, then read transcription), `voices`, `ctl`. |
+| `/mnt/speech`  | speech9p    | `say` (write text → TTS), `hear` (write `start`, then read transcription), `voices`, `ctl`. |
 | `/tool`      | tools9p     | Tool registry. `/tool/tools` lists tools; `/tool/paths` lists exposed host paths; `/tool/ctl` toggles state. |
 | `/n/local`   | (lucibridge)| Read-only host paths plus per-activity writable directories. |
 
@@ -141,9 +141,9 @@ This is the same surface the agent uses — so anything Veltro does, you can do 
 Click **Voice** in the conversation zone:
 
 1. `luciconv` spawns a `voiceworker` goroutine.
-2. The worker writes `start` to `/n/speech/hear` (speech9p) and reads the transcription (30-second timeout).
+2. The worker writes `start` to `/mnt/speech/hear` (speech9p) and reads the transcription (30-second timeout).
 3. On success, the transcribed text is written to `/mnt/ui/activity/N/conversation/input` as a user message.
-4. The agent's reply can optionally be read back by writing it to `/n/speech/say`.
+4. The agent's reply can optionally be read back by writing it to `/mnt/speech/say`.
 
 `speech9p` is started by `lib/sh/profile`; it ships with InferNode and runs entirely inside the emulator.
 
@@ -202,7 +202,7 @@ Anything you can write through `/mnt/ui/...` from a normal shell works at startu
 |---------|--------------|-----|
 | Blank black window, no header | `lucitheme` failed to load (corrupted `.dis`, missing file). | Rebuild: `cd appl/lib && mk install`. (Historical audit: [LUCIA-EVALUATION.md §P0.1](history/LUCIA-EVALUATION.md); the nil check it called for has since been added.) |
 | `ANTHROPIC_API_KEY not set` warning | Host env var missing | `export ANTHROPIC_API_KEY=sk-ant-…` and relaunch. |
-| Voice button does nothing for 30s | `speech9p` not running, or no host audio access | Check `/n/speech` exists; on Linux confirm PulseAudio/PipeWire is reachable from the emulator. |
+| Voice button does nothing for 30s | `speech9p` not running, or no host audio access | Check `/mnt/speech` exists; on Linux confirm PulseAudio/PipeWire is reachable from the emulator. |
 | `link typecheck` errors at startup | Stale `.dis` after a `git pull` | `./hooks/install.sh` (one-time) or `cd appl/cmd && mk install`. |
 | Apps fail to launch in the presentation zone | `MAXAPPSLOTS` (48) exhausted | Close app tabs or restart Lucia. Background: [LUCIA-EVALUATION.md §P0.2](history/LUCIA-EVALUATION.md) (historical audit). |
 | Header shows no activity label | `nslistener` isn't seeing `status`/`label` events | Confirm `luciuisrv` is running: `ps | grep luciuisrv`. |

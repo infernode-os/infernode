@@ -1375,6 +1375,90 @@ wikiaGenericHiddenWorker(result: chan of string)
 }
 
 
+# speech9p mounts at /mnt/speech (migrated from /n/speech per
+# docs/NAMESPACE-LAYOUT.md, INFR-403). tools9p grants "/mnt/speech" as a path
+# to say and hear; that grant must expose it and no sibling under /mnt, and a
+# tool without the grant must not see it.
+testRestrictNsSpeechGrant(t: ref T)
+{
+	made: list of string;
+	for(p := "/mnt" :: "/mnt/speech" :: "/mnt/speechsib" :: nil; p != nil; p = tl p) {
+		(ok, nil) := sys->stat(hd p);
+		if(ok < 0) {
+			fd := sys->create(hd p, Sys->OREAD, Sys->DMDIR | 8r755);
+			if(fd == nil) {
+				for(; made != nil; made = tl made)
+					sys->remove(hd made);
+				t.skip("cannot create " + hd p + " test fixture");
+				return;
+			}
+			made = hd p :: made;
+		}
+	}
+
+	result := chan of string;
+	spawn speechGrantedWorker(result);
+	r := <-result;
+	if(r == "") {
+		spawn speechHiddenWorker(result);
+		r = <-result;
+	}
+
+	for(; made != nil; made = tl made)
+		sys->remove(hd made);
+	if(r != "")
+		t.error(r);
+}
+
+speechGrantedWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"say" :: nil,
+		"/mnt/speech" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (say tool) failed: %s", err);
+		return;
+	}
+	(speechok, nil) := sys->stat("/mnt/speech");
+	if(speechok < 0) {
+		result <-= "/mnt/speech missing for say tool granted /mnt/speech";
+		return;
+	}
+	(sibok, nil) := sys->stat("/mnt/speechsib");
+	if(sibok >= 0) {
+		result <-= "/mnt/speech grant exposed a sibling under /mnt";
+		return;
+	}
+	result <-= "";
+}
+
+speechHiddenWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (generic tool) failed: %s", err);
+		return;
+	}
+	(speechok, nil) := sys->stat("/mnt/speech");
+	if(speechok >= 0) {
+		result <-= "/mnt/speech visible to a tool without the speech grant";
+		return;
+	}
+	result <-= "";
+}
+
 # /mnt/wsys (wmsrv window pictures, one tree per Lucifer activity) is a
 # fixed-function grant: only the window tool gets it, and only its own
 # activity's tree, bound over /mnt/wsys so no other activity is nameable.
@@ -2948,6 +3032,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);
 	run("RestrictNsGitToolDerived", testRestrictNsGitToolDerived);
+	run("RestrictNsSpeechGrant", testRestrictNsSpeechGrant);
 	run("RestrictNsWikiaToolDerived", testRestrictNsWikiaToolDerived);
 	run("RestrictNsMntCombined", testRestrictNsMntCombined);
 	run("RestrictNsMcpDeny", testRestrictNsMcpDeny);

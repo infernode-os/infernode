@@ -13,5 +13,5 @@ Examples:
   say -v echo The task is complete.
   say I found 3 files matching your query.
 
-Requires /n/speech (run speech9p first).
-Configure via: echo 'voice <name>' > /n/speech/ctl
+Requires /mnt/speech (run speech9p first).
+Configure via: echo 'voice <name>' > /mnt/speech/ctl

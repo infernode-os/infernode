@@ -11,5 +11,5 @@ Examples:
   hear                       Listen for 5 seconds
   hear 10000                 Listen for 10 seconds
 
-Requires /n/speech (run speech9p first).
-Configure STT engine via: echo 'engine api' > /n/speech/ctl
+Requires /mnt/speech (run speech9p first).
+Configure STT engine via: echo 'engine api' > /mnt/speech/ctl

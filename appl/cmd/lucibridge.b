@@ -236,13 +236,13 @@ registernamespace()
 	if(mdata != "") {
 		(nil, sl) := sys->tokenize(mdata, "\n");
 		for(; sl != nil; sl = tl sl)
-			if(agentlib->hasprefix(hd sl, "path=/n/speech"))
+			if(agentlib->hasprefix(hd sl, "path=/mnt/speech"))
 				hasspeech = 1;
 	}
 	if(!hasspeech) {
-		(speechok, nil) := sys->stat("/n/speech");
+		(speechok, nil) := sys->stat("/mnt/speech");
 		if(speechok >= 0) {
-			cmd := "resource add path=/n/speech label=Speech type=service status=idle";
+			cmd := "resource add path=/mnt/speech label=Speech type=service status=idle";
 			if(writefile(ctxpath, cmd) >= 0)
 				nreg++;
 		}
@@ -831,7 +831,7 @@ handleslash(cmd: string): int
 			ack = "voice: auto-speak disabled";
 		} else {
 			# Set voice name
-			writefile("/n/speech/ctl", "voice " + cmdarg);
+			writefile("/mnt/speech/ctl", "voice " + cmdarg);
 			ack = "voice: set to " + cmdarg;
 		}
 	"diff" =>

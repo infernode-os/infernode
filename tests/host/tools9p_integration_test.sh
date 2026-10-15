@@ -577,6 +577,21 @@ else
     fail "fixed-service derived capability probe failed"
 fi
 
+# speech9p mounts at /mnt/speech (INFR-403). tools9p grants it to say and
+# hear when they run, and to nothing else.
+if emu_c "speech_tool_derived" 15 \
+    "mkdir -p /mnt/speech; echo 'voice x' > /mnt/speech/ctl; touch /mnt/speech/say; tools9p say read & sleep 2; echo hello speech > /tool/say/ctl; cat /tool/say/ctl; echo; echo /mnt/speech/ctl > /tool/read/ctl; echo GENERICSPEECH; cat /tool/read/ctl; echo; echo HOSTSAY; cat /mnt/speech/say; rm -r /mnt/speech"; then
+    if ! echo "$OUTPUT" | grep -A1 "^HOSTSAY" | grep -q "hello speech"; then
+        fail "say did not reach /mnt/speech/say (output: $OUTPUT)"
+    elif ! echo "$OUTPUT" | grep -A1 "^GENERICSPEECH" | grep -q "error: cannot open /mnt/speech/ctl"; then
+        fail "generic read inherited the speech tools' /mnt/speech (output: $OUTPUT)"
+    else
+        pass "say reaches /mnt/speech while generic read remains isolated"
+    fi
+else
+    fail "speech derived capability probe failed"
+fi
+
 if emu_c "app_ipc_tool_derived" 15 \
     "mkdir -p /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man; echo shell-transcript > /tmp/veltro/shell/body; echo shell-input > /tmp/veltro/shell/input; echo 'type mandelbrot' > /tmp/veltro/fractal/state; echo 'fractal view' > /tmp/veltro/fractal/view; echo 'man state' > /tmp/veltro/man/state; echo 'manual page view' > /tmp/veltro/man/view; tools9p shell fractal man read & sleep 2; echo read > /tool/shell/ctl; cat /tool/shell/ctl; echo state > /tool/fractal/ctl; cat /tool/fractal/ctl; echo view > /tool/man/ctl; cat /tool/man/ctl; echo /tmp/veltro/shell/body > /tool/read/ctl; echo GENERIC; cat /tool/read/ctl"; then
     if ! echo "$OUTPUT" | grep -q "shell-transcript" ||

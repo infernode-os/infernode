@@ -164,7 +164,7 @@ TOOL_PATHS := array[] of {
 	("charon",    "/dis/veltro/tools/charon.dis"),
 	# GPU inference (requires gpusrv mounted at /mnt/gpu)
 	("gpu",     "/dis/veltro/tools/gpu.dis"),
-	# Speech tools (require /n/speech via speech9p)
+	# Speech tools (require /mnt/speech via speech9p)
 	("say",     "/dis/veltro/tools/say.dis"),
 	("hear",    "/dis/veltro/tools/hear.dis"),
 	# Vision (local GPU or Anthropic cloud API)
@@ -1854,8 +1854,8 @@ emitmanifestnow(mpath: string, ready: chan of int)
 		if(!strlist_contains(allpaths, (hd bp).path))
 			allpaths = (hd bp).path :: allpaths;
 	if(findtool("say") != nil || findtool("hear") != nil)
-		if(!strlist_contains(allpaths, "/n/speech"))
-			allpaths = "/n/speech" :: allpaths;
+		if(!strlist_contains(allpaths, "/mnt/speech"))
+			allpaths = "/mnt/speech" :: allpaths;
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
 		if(!strlist_contains(allpaths, "/n/wallet"))
 			allpaths = "/n/wallet" :: allpaths;
@@ -1919,12 +1919,12 @@ applynsrestriction(invokedtool: string): string
 		for(bp2 := boundpaths; bp2 != nil; bp2 = tl bp2)
 			if(!strlist_contains(allpaths, (hd bp2).path))
 				allpaths = (hd bp2).path :: allpaths;
-	# Auto-grant /n/speech when say or hear tool is registered.
-	# speech9p mounts /n/speech in the shared namespace; without this,
+	# Auto-grant /mnt/speech when say or hear tool is registered.
+	# speech9p mounts /mnt/speech in the shared namespace; without this,
 	# restrictns() hides it entirely and say/hear tools fail silently.
 	if(invokedtool == "say" || invokedtool == "hear")
-		if(!strlist_contains(allpaths, "/n/speech"))
-			allpaths = "/n/speech" :: allpaths;
+		if(!strlist_contains(allpaths, "/mnt/speech"))
+			allpaths = "/mnt/speech" :: allpaths;
 	# Auto-grant /n/wallet when wallet or payfetch tool is registered.
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
 		if(!strlist_contains(allpaths, "/n/wallet"))

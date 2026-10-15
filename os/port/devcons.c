@@ -1153,8 +1153,8 @@ consread(Chan *c, void *buf, long n, vlong offset)
 		for(i = 0; i < conf.nmach; i++){
 			if((active.machs & (1<<i)) == 0)
 				continue;
-			l += snprint(p+l, READSTR-l, "cpu%d ticks %lud intrs %lud timers %lud\n",
-				i, MACHP(i)->ticks, intrcount[i], fcallcount[i]);
+			l += snprint(p+l, READSTR-l, "cpu%d ticks %lud idle %lud intrs %lud timers %lud\n",
+				i, MACHP(i)->ticks, MACHP(i)->idleticks, intrcount[i], fcallcount[i]);
 		}
 		if(waserror()){
 			free(p);

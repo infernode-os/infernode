@@ -181,6 +181,7 @@ struct Mach
 	ulong		cpuhz;
 	int		nrdy;
 	uintptr		gicr;		/* this core's GICv3 redistributor, if the GIC is one; gic.c */
+	ulong		idleticks;	/* ticks that found no process here: /dev/sysstat */
 	int		stack[1];
 };
 

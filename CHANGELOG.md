@@ -21,6 +21,16 @@ All notable changes to InferNode are documented in this file.
   node can now be CNSA-strict to its peers and reach the web. A
   deployment that wants strict TLS sets `CNSATLS=1` as well.
 
+### Name space
+
+- **speech9p mounts at `/mnt/speech`, not `/n/speech`.** It invents its
+  own schema (`say`, `hear`, `voices`, `ctl`), so it belongs under `/mnt`
+  (docs/NAMESPACE-LAYOUT.md). The `say` and `hear` tools are granted
+  `/mnt/speech` as before, and nothing else is. Scripts that write
+  `/n/speech/say` or `/n/speech/ctl` now write `/mnt/speech/say` and
+  `/mnt/speech/ctl`; a remote speech host exports and mounts
+  `/mnt/speech` (INFR-403).
+
 ## [0.7.0] - 2026-10-13
 
 This release gives InferNode a JavaScript engine of its own, and Charon

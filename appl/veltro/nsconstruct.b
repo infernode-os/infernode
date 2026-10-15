@@ -252,10 +252,11 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 	# 4-5. Restrict /n to explicitly granted entries only.
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
-	#   /n/speech — "/n/speech" in caps.paths
 	#   /n/wallet — "/n/wallet" in caps.paths
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
+	# NB: speech9p moved to /mnt/speech (INFR-403): a "/mnt/speech" path grant is
+	# handled by the /mnt machinery in step 5b like any other.
 	# NB: the LLM (llm9p) and the UI presentation surface (luciuisrv) are no longer
 	# /n entries — their schemas are ours, so they live at /mnt/llm and /mnt/ui
 	# (docs/NAMESPACE-LAYOUT.md, INFR-254). Both are handled by the uniform /mnt
@@ -268,13 +269,6 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		# MCP providers (mc9p, mcp9p adapters) and the LLM (llm9p) mount under
 		# /mnt — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). All
 		# /mnt grants are handled in step 5b below, not here.
-
-		# /n/speech — only if explicitly granted via caps.paths
-		if(inlist("/n/speech", caps.paths)) {
-			(speechok, nil) := sys->stat("/n/speech");
-			if(speechok >= 0)
-				nallow = "speech" :: nallow;
-		}
 
 		# /n/wallet — only if explicitly granted via caps.paths
 		if(inlist("/n/wallet", caps.paths)) {
@@ -1404,7 +1398,6 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 
 	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
-		("/n/speech", "Speech",           "rw"),
 		("/n/wikia",  "Wiki Agent",       "rw"),
 		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
@@ -1419,6 +1412,7 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),
+		("/mnt/speech", "Speech", "rw"),
 		("/mnt/registry", "Registry", "rw"),
 	};
 

@@ -33,7 +33,7 @@ It bridges between the Inferno audio device
 and pluggable speech engine backends.
 .PP
 The server mounts a synthetic filesystem (default
-.BR /n/speech )
+.BR /mnt/speech )
 containing the following files:
 .TP
 .B ctl
@@ -64,7 +64,7 @@ Enable 9P debug tracing.
 Mount the file server at
 .I mountpoint
 (default
-.BR /n/speech ).
+.BR /mnt/speech ).
 .TP
 .BI \-e " engine"
 Select the speech engine backend.
@@ -84,7 +84,7 @@ the
 flag itself currently rejects
 .BR local ,
 so set it via
-.B "echo 'engine local' > /n/speech/ctl"
+.B "echo 'engine local' > /mnt/speech/ctl"
 or rely on auto-detection.
 .TP
 .BI \-k " apikey"
@@ -212,7 +212,7 @@ For STT, install
 .I whisper.cpp
 or similar and configure via:
 .IP
-.B "echo 'cmdstt whisper-cli' > /n/speech/ctl"
+.B "echo 'cmdstt whisper-cli' > /mnt/speech/ctl"
 .SS Veltro Integration
 To give a Veltro agent speech capabilities:
 .IP
@@ -232,26 +232,26 @@ veltro "greet the user verbally"
 speech9p
 
 # Configure voice
-echo 'voice samantha' > /n/speech/ctl
+echo 'voice samantha' > /mnt/speech/ctl
 
 # Speak text
-echo 'Hello from Inferno' > /n/speech/say
+echo 'Hello from Inferno' > /mnt/speech/say
 
 # Listen and transcribe
-echo 'start' > /n/speech/hear
-cat /n/speech/hear
+echo 'start' > /mnt/speech/hear
+cat /mnt/speech/hear
 
 # Check configuration
-cat /n/speech/ctl
+cat /mnt/speech/ctl
 
 # Use API engine with OpenAI
 speech9p -e api -k sk-...
-echo 'voice nova' > /n/speech/ctl
-echo 'Hello from the cloud' > /n/speech/say
+echo 'voice nova' > /mnt/speech/ctl
+echo 'Hello from the cloud' > /mnt/speech/say
 .EE
 .SH FILES
 .TP
-.B /n/speech
+.B /mnt/speech
 Default mount point.
 .TP
 .B /dev/audio

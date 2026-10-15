@@ -621,13 +621,18 @@
 .da en-all
 .if \\n[book-en-new] \{\
 .	sp 1v
-.	ne 3v
+.\"	kept with its notes when they are set, not while they are gathered
+\\!.ne 3v
+.	in 0
 \f[I]\\*[book-en-chapter]\fP
 .	sp 0.5v
 .	nr book-en-new 0
 .\}
+.\" a hanging indent: the numbers right-aligned in a field of their own,
+.\" each note's lines aligned past them, however many digits
+.in 2.2m
 .ti 0
-\\n[en-n].\ \c
+\h'1.8m-\w'\\n[en-n].'u'\\n[en-n].\h'0.4m'\c
 ..
 .de ee
 .br
@@ -736,6 +741,9 @@
 .de ]bb
 .book-chapterhead 0 "Bibliography"
 .ad l
+.\" set ragged, so not hyphenated: nothing gained by it
+.nr book-hy0 \\n[.hy]
+.nh
 ..
 .de ]be
 .br
@@ -747,6 +755,7 @@
 .br
 .in 0
 .ad b
+.hy \\n[book-hy0]
 ..
 .\"
 .\" ---------------------------------------------------------------

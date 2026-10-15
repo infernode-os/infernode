@@ -20,7 +20,12 @@
 #	the bibliography is sorted, its entries Chicago's;
 #	the contents' page numbers end at one right edge (a section's,
 #	indented, did not), their leaders' dots on one grid (they began
-#	wherever the leader did).
+#	wherever the leader did);
+#	with twelve endnotes in a chapter, the notes' numbers right-aligned
+#	and their text at one indent (10. began its text further right
+#	than 9.), a chapter's heading in the notes never the last line of a
+#	page (its .ne was spent while the notes were gathered); the
+#	bibliography, set ragged, not hyphenated.
 #
 # Then tests/book/notes.ms, notes short, long and longer than a page,
 # its words kNNNN (the text) and nNNNN (the notes) each to be set once:
@@ -172,6 +177,61 @@ else:
 sys.exit(fail)
 PY
 st=$?
+
+# endnotes past nine, the bibliography
+python3 -I - "$tmp/book.ms" "$tmp/en.ms" <<'PY'
+import sys
+s = open(sys.argv[1]).read()
+i = s.index('.en\n')
+add = ''.join('word\\c\n.en\nAn endnote, the %dth, long enough to run over a line: with Greek, '
+    'μῆνιν ἄειδε θεά, and more words to wrap.\n.ee\n' % (k + 3) for k in range(10))
+open(sys.argv[2], 'w').write(s[:i] + add + s[i:])
+PY
+with_timeout 300 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c "cd '#U*$tmp'; book -p works.bib en.ms" </dev/null >"$tmp/emu3.log" 2>&1
+if command -v pdftotext >/dev/null 2>&1; then
+python3 -I - "$tmp/en.pdf" <<'PY' || st=1
+import re, subprocess, sys
+pdf = sys.argv[1]
+n = int(re.search(r'Pages:\s+(\d+)', subprocess.run(['pdfinfo', pdf], capture_output=True, text=True).stdout).group(1))
+fail = 0
+def check(ok, what):
+    global fail
+    print(('PASS: ' if ok else 'FAIL: ') + what)
+    if not ok:
+        fail = 1
+def words(p):
+    bb = subprocess.run(['pdftotext', '-bbox', '-f', str(p), '-l', str(p), pdf, '-'], capture_output=True, text=True).stdout
+    return [(float(m.group(1)), float(m.group(2)), float(m.group(3)), m.group(4))
+        for m in re.finditer(r'xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="[\d.]+">([^<]*)<', bb)]
+notes = [p for p in range(1, n + 1) if any(w[3] == 'Notes' for w in words(p)[:2])]
+bib = [p for p in range(1, n + 1) if any(w[3] == 'Bibliography' for w in words(p)[:2])]
+starts = {}
+headlast = []
+for p in range(notes[0] if notes else 1, bib[0] if bib else 1):
+    ws = words(p)
+    rows = {}
+    for w in ws:
+        rows.setdefault(round(w[1]), []).append(w)
+    for y, r in rows.items():
+        r.sort()
+        if re.fullmatch(r'\d+\.', r[0][3]) and len(r) > 1:
+            starts.setdefault(p, set()).add(round(r[1][0], 1))
+    body = [r for y, r in sorted(rows.items()) if not (len(r) == 1 and re.fullmatch(r'\d+', r[0][3]))]
+    if body and sorted(body[-1])[0][3] == 'Chapter':
+        headlast.append(p)
+check(notes and starts and all(len(v) == 1 for v in starts.values()),
+    "the endnotes' text at one indent on each page, past numbers of one and two digits %s" % starts)
+check(notes and not headlast, "no chapter's heading the last line of a page of notes %s" % headlast)
+hy = []
+for p in bib:
+    rows = {}
+    for w in words(p):
+        rows.setdefault(round(w[1]), []).append(w)
+    hy += [max(r)[3] for r in rows.values() if max(r)[3].endswith('-') and len(max(r)[3]) > 1]
+check(bib and not hy, 'the bibliography not hyphenated %s' % hy)
+sys.exit(fail)
+PY
+fi
 
 cp tests/book/notes.ms "$tmp/"
 with_timeout 300 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c "cd '#U*$tmp'; book notes.ms" </dev/null >"$tmp/emu2.log" 2>&1

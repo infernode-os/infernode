@@ -9,8 +9,8 @@
 # between 9P file operations and actual speech engines.
 #
 # Engine selection is done at runtime via the ctl file:
-#   echo 'engine cmd' > /n/speech/ctl     # Host command backend
-#   echo 'engine api' > /n/speech/ctl     # HTTP API backend
+#   echo 'engine cmd' > /mnt/speech/ctl     # Host command backend
+#   echo 'engine api' > /mnt/speech/ctl     # HTTP API backend
 #
 
 Speech: module {

@@ -8,10 +8,10 @@
 
 ## Current Design
 
-`speech9p` presents TTS/STT as a 9P filesystem at `/n/speech`:
+`speech9p` presents TTS/STT as a 9P filesystem at `/mnt/speech`:
 
 ```
-/n/speech/
+/mnt/speech/
 ├── ctl      rw  engine, voice, lang config
 ├── say      rw  write text → synthesized audio plays
 ├── hear     rw  write "start" → read transcription back
@@ -37,9 +37,9 @@ GUI machine (Mac)                   Headless machine (Jetson)
 ─────────────────                   ─────────────────────────
 /dev/audio  ──── exported via 9P ──► /dev/audio  (bound from Mac)
                                      speech9p    (uses /dev/audio transparently)
-                                     /n/speech   ── exported via 9P ──►  /n/speech
+                                     /mnt/speech   ── exported via 9P ──►  /mnt/speech
                                                                           (mounted on Mac)
-Lucifer GUI ──── writes to /n/speech/say ──────────────────────────────────────────►
+Lucifer GUI ──── writes to /mnt/speech/say ──────────────────────────────────────────►
 ◄──────────────── audio plays on Mac speakers ◄──────── PCM written to /dev/audio ──
 ```
 
@@ -55,12 +55,12 @@ listen -A 'tcp!*!17010' export /dev &
 mount -A 'tcp!<mac-ip>!17010' /n/macaudio
 bind /n/macaudio/audio /dev/audio
 speech9p -e cmd &
-listen -A 'tcp!*!17019' export /n/speech &
+listen -A 'tcp!*!17019' export /mnt/speech &
 ```
 
 **Mac — mount remote speech service:**
 ```sh
-mount -A 'tcp!<jetson-ip>!17019' /n/speech
+mount -A 'tcp!<jetson-ip>!17019' /mnt/speech
 ```
 
 Or via the Lucifer catalog: add an entry with `dial=tcp!hephaestus!17019` and click `[+]`.
@@ -90,7 +90,7 @@ pathway:
 | `mount` Mac audio on Jetson | yes (launch script) | ✗ | ✗ |
 | `bind /n/macaudio/audio /dev/audio` | yes | ✗ | ✗ |
 | `speech9p &` on Jetson | yes (launch script) | ✗ | ✗ |
-| `listen export /n/speech` on Jetson | yes (launch script) | ✗ | ✗ |
+| `listen export /mnt/speech` on Jetson | yes (launch script) | ✗ | ✗ |
 | Mount remote speech on Mac | via catalog `[+]` | ✓ | ✗ |
 
 ### What Would Enable Full GUI/Agent Control
@@ -107,7 +107,7 @@ pathway:
    "Speech on Jetson" catalog entry could encode the full setup and execute it on `[+]`.
 
 4. **Mount path for catalog entries** — `mountresource()` currently mounts to
-   `/tmp/veltro/mnt/<slug>`. Speech tools expect `/n/speech`. Either allow catalog entries
+   `/tmp/veltro/mnt/<slug>`. Speech tools expect `/mnt/speech`. Either allow catalog entries
    to specify a target path, or make speech tools check the catalog mount location.
 
 ### Recommended Approach (When Implementing)

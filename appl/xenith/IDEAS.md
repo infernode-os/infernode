@@ -88,7 +88,7 @@ pic2draw < diagram.pic > /mnt/xenith/1/image
 
 ## Audio as Files
 
-*Done*: speech9p (`appl/veltro/speech9p.b`) serves `/n/speech` with `say` (write text to speak), `hear` (write `start`, read the transcription), `voices` and `ctl`; `lib/sh/profile` starts it. The sketch below is the original idea.
+*Done*: speech9p (`appl/veltro/speech9p.b`) serves `/mnt/speech` with `say` (write text to speak), `hear` (write `start`, read the transcription), `voices` and `ctl`; `lib/sh/profile` starts it. The sketch below is the original idea.
 
 Plan 9 model:
 ```

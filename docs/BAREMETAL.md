@@ -9,9 +9,11 @@ bytecode the hosted emulator runs: the same shell, the same Tk, the same
 Lucia desktop.
 
 It runs on three machines. Two are below; the third, the **Raspberry Pi
-4B** (`os/bcm2711`), boots to the desktop under QEMU's `raspi4b` and has
-never run on a board — [os/bcm2711/README.md](../os/bcm2711/README.md)
-says exactly what that does and does not establish.
+4B** (`os/bcm2711`), runs on a board -- a Pi 4B rev 1.5, 4GB, since
+2026-10-15: the card, gigabit Ethernet at line rate, both radios, the
+USB-A sockets, the 7" panel and all four cores -- and boots to the desktop
+under QEMU's `raspi4b`; [os/bcm2711/README.md](../os/bcm2711/README.md)
+says what was proved on the board and what has not been tried.
 
 It also runs on 64-bit RISC-V: `os/riscv64` is the architecture, with
 QEMU's RISC-V `virt` (`os/riscvvirt`) and the PolarFire SoC of the
@@ -250,10 +252,11 @@ before that, and every panic, is on the serial line only.
 
 ### And on a Raspberry Pi 4B
 
-The same card, three differences, and a page of what the first boot
-should say — **written before any Pi 4 has run it**, from the QEMU
-model and the datasheets; `os/bcm2711/README.md` lists what is
-untested and what each line of the boot log proves.
+The same card, four differences (the firmware, `config.txt`,
+`tryboot.txt`, the kernel), and a page of what the boot says. Written
+from the QEMU model and the datasheets before any Pi 4 had run it, and
+checked line by line against the first board on 2026-10-15;
+`os/bcm2711/README.md` has what that board showed.
 
 **From the Raspberry Pi firmware repository:** `start4.elf` and
 `fixup4.dat` (the `4` variants; a Pi 4 boots from an EEPROM and ignores
@@ -323,23 +326,23 @@ settles:
 |-|-|
 | `InferNode bare-metal (BCM2711 / Raspberry Pi 4B)` | the kernel image, `arm_64bit=1`, and the peripheral address |
 | `mbox: board rev …, ARM memory …` | the mailbox, at its new address |
-| `mbox: ARM clock 600 MHz, max 1500, now 1500 MHz` | the clock request; 1800 on a later board |
+| `mbox: ARM clock 600 MHz, max 1800, now 1800 MHz` | the clock request: 1800 on a rev 1.4+ board with `arm_boost=1`, 1500 without it or on an earlier board |
 | `mmu:  on, caches on, identity map 0-4096MB` | the page tables, including the PCIe window 24 GB up |
 | `intr: device interrupt delivered` (the system timer, first try) | the interrupt numbers in `io.h`. If only the GIC's self-test passes, they are wrong |
 | `cpu1: up` … `cpu3: up` | the firmware's spin table is where QEMU's is |
-| `rng:  RNG200 …` and **not** `NO RNG200 AT ITS ADDRESS` | the RNG200's address and layout |
+| **no** `NO RNG200 AT ITS ADDRESS` (a working generator says nothing) | the RNG200's address and layout |
 | `sd: … EMMC2` and **not** `no card on the board's SD controller` | the card controller and its clock id |
 | `ether4330: …` on the Arasan | the radio has its own controller, as intended |
 | `genet: rev 0x6…, xx:xx:… is #l (ether0)` | the MAC exists and answers; `genet: link up, 1000Mbit/s` is the PHY |
 | `pci: bcmstb bridge revision …`, a bus listing with `1106 3483`, `pci: … VL805 firmware reload requested` | the PCIe link came up and the VL805 is on it |
-| `usbxhci: PCI.0.1.0: 1106:3483 registers at …` then `init: USB root hub ep2.0 …` | the USB-A sockets. The USB-C port is `ep1.0` |
+| `usbxhci: PCI.1.0.0: 1106:3483 registers at …` then `init: USB ep3.0 0x2109:0x3431 class 9 (hub)` | the USB-A sockets, behind the VL805's own hub. The USB-C port is `ep1.0` |
 | `boot OK` | everything else |
 
 A line that says **NO** in capitals is the kernel finding the emulator
 where it expected the board; on a board, each is a bug in this tree, and
-the README says where to look. The Ethernet, PCIe and xHCI lines are the
-first time those drivers have met their hardware, and are the most
-likely to be wrong.
+the README says where to look. On the first board every line above
+appeared as written except `sd:`, which said `card will not go idle`
+until the EMMC2's bus power was switched back on after its reset.
 
 **Memory**: a 2 GB or 4 GB board is used entirely; an 8 GB board's top
 half is not (`RAMLIMIT`). **Displays**: [below](#displays); the short

@@ -1,4 +1,4 @@
 tool=wiki
-	description='Knowledge-base operations via wiki9p at /n/wikia'
+	description='Knowledge-base operations via wiki9p at /mnt/wikia'
 	authorities='reads_fs writes_fs'
 	notes='Ingest/query/lint against the wiki file server.'

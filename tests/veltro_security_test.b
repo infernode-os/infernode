@@ -1283,6 +1283,98 @@ gitGenericHiddenWorker(result: chan of string)
 }
 
 
+# The wiki agent service is a fixed tool-derived /mnt application mount
+# (migrated from /n/wikia per docs/NAMESPACE-LAYOUT.md, INFR-402). The wiki
+# tool must see /mnt/wikia without a raw path grant, while generic tools must
+# not.
+testRestrictNsWikiaToolDerived(t: ref T)
+{
+	createdmnt := 0;
+	(ok, nil) := sys->stat("/mnt");
+	if(ok < 0) {
+		fd := sys->create("/mnt", Sys->OREAD, Sys->DMDIR | 8r755);
+		if(fd == nil) {
+			t.skip("cannot create /mnt test fixture");
+			return;
+		}
+		fd = nil;
+		createdmnt = 1;
+	}
+	createdwikia := 0;
+	(ok, nil) = sys->stat("/mnt/wikia");
+	if(ok < 0) {
+		fd := sys->create("/mnt/wikia", Sys->OREAD, Sys->DMDIR | 8r755);
+		if(fd == nil) {
+			if(createdmnt)
+				sys->remove("/mnt");
+			t.skip("cannot create /mnt/wikia test fixture");
+			return;
+		}
+		fd = nil;
+		createdwikia = 1;
+	}
+
+	result := chan of string;
+	spawn wikiaToolDerivedWorker(result);
+	r := <-result;
+	if(r == "") {
+		spawn wikiaGenericHiddenWorker(result);
+		r = <-result;
+	}
+
+	if(createdwikia)
+		sys->remove("/mnt/wikia");
+	if(createdmnt)
+		sys->remove("/mnt");
+	if(r != "")
+		t.error(r);
+}
+
+wikiaToolDerivedWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"wiki" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (wiki tool) failed: %s", err);
+		return;
+	}
+	(wikiaok, nil) := sys->stat("/mnt/wikia");
+	if(wikiaok < 0) {
+		result <-= "/mnt/wikia missing for wiki tool without raw path grant";
+		return;
+	}
+	result <-= "";
+}
+
+wikiaGenericHiddenWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"read" :: nil,
+		nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (generic tool) failed: %s", err);
+		return;
+	}
+	(wikiaok, nil) := sys->stat("/mnt/wikia");
+	if(wikiaok >= 0) {
+		result <-= "/mnt/wikia visible to generic tool without wiki capability";
+		return;
+	}
+	result <-= "";
+}
+
+
 # /mnt/wsys (wmsrv window pictures, one tree per Lucifer activity) is a
 # fixed-function grant: only the window tool gets it, and only its own
 # activity's tree, bound over /mnt/wsys so no other activity is nameable.
@@ -2198,6 +2290,8 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/n/web/clone",
 		"/mnt/wiki",
 		"/mnt/wiki/new",
+		"/mnt/wikia",
+		"/mnt/wikia/ctl",
 		"/n/wikia",
 		"/n/wikia/ctl",
 		"/mnt/keys",
@@ -2854,6 +2948,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);
 	run("RestrictNsGitToolDerived", testRestrictNsGitToolDerived);
+	run("RestrictNsWikiaToolDerived", testRestrictNsWikiaToolDerived);
 	run("RestrictNsMntCombined", testRestrictNsMntCombined);
 	run("RestrictNsMcpDeny", testRestrictNsMcpDeny);
 	run("RestrictNsRace", testRestrictNsRace);

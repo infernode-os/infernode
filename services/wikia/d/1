@@ -12,7 +12,7 @@ CKnowledge base index
 #
 # *	[wiki syntax] - markup reference
 #
-#To add content, bind source documents to /n/wikia/raw
+#To add content, bind source documents to /mnt/wikia/raw
 #and run ingest via wiki9p or the wiki tool.
 #
 

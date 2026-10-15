@@ -103,8 +103,8 @@ Speech starts automatically from the profile. To configure
 voice and language at runtime:
 
 ```
-echo 'voice alloy' > /n/speech/ctl
-echo 'lang es' > /n/speech/ctl
+echo 'voice alloy' > /mnt/speech/ctl
+echo 'lang es' > /mnt/speech/ctl
 ```
 
 ## Key concepts

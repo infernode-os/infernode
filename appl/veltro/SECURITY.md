@@ -68,8 +68,9 @@ also part of the boundary: source-controlled fields must remain single physical
 lines so hostile mail/SMS content cannot forge `Triage:` or `Message ID:`
 control records.
 
-Wallet payments follow the same split. A `/n/wallet` grant is narrowed inside
-the agent namespace: agents can read account metadata and write per-account
+Wallet payments follow the same split. A `/mnt/wallet` grant is narrowed inside
+the agent namespace (only the exact grant: a path beneath `/mnt/wallet` grants
+nothing): agents can read account metadata and write per-account
 `pay` proposals and structured `authorize` (x402/EIP-3009) requests, but cannot
 see root `ctl`, `pending`, `new`, or per-account `ctl`. There is no raw `sign`
 file at all: a hash-blind signing oracle over the spend key — signing an
@@ -181,8 +182,8 @@ absent, not present-and-denied:
 | 1 | `/dis` | `lib/`, `veltro/`; `sh.dis` for exec; named commands from `shellcmds`; explicitly granted `/dis/<tree>` | Runtime and named executable allowlist |
 | 2 | `/dis/veltro/tools` | Granted tool modules only | Tool allowlist |
 | 3 | `/dev` | `cons`, `null`, `time` | Console/null and TLS clock |
-| 4 | `/n` | Capability-derived foreign imports: speech, wallet, wikia, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
-| 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services are narrowed again | Synthesized-service capabilities |
+| 4 | `/n` | Capability-derived foreign imports: presentation and exact `/n/local` grants | Foreign-tree capabilities |
+| 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services (`msg`, `wallet`, `ui`) are narrowed again | Synthesized-service capabilities |
 | 6 | `/lib` | `veltro/`, `certs/`; `/lib/veltro/keys` replaced with an empty view | Prompts/config and TLS roots, not credentials |
 | 7 | `/env` | `VELTRO_SESSION` only | No inherited environment secrets |
 | 8 | `/prog` | Current pid for non-exec tools; empty for exec, including exec with `shellcmds` | No parent/sibling inspection or control |
@@ -370,7 +371,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |
 | Writable views explicit | `MREADONLY` protects code/source views; `MCREATE` appears only on `/tmp`, proposal endpoints, activity scratch, and cowfs staging |
 | Host path control | `/n/local` hidden unless `caps.paths` grants specific subpaths (`-p` flag) |
-| Speech preserved | `/n/speech` auto-detected and included in `/n` allowlist |
+| Speech preserved | `/mnt/speech` granted as a path to `say` and `hear`, exposed only if mounted |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
 
 The baseline paths above are retained capabilities, not declarations that an
@@ -447,7 +448,7 @@ Options:
 
 ### Speech
 
-If speech9p is mounted at `/n/speech`:
+If speech9p is mounted at `/mnt/speech`:
 - `say <text>` -- text-to-speech output
 - `hear` -- speech-to-text input (5-second recording)
 - `Voice` button in Xenith REPL for voice input
@@ -615,7 +616,10 @@ directory of the same shape. Fixtures for CI are directories of the same
 shape.
 
 `tools9p` exposes `role`, `xenith`, `actid`, and `nodevs` as read-only scalar
-files under `/tool/meta/`. Fixtures use the same shape.
+files under `/tool/meta/`. Fixtures use the same shape. `nodevs` is not
+declared by the launcher: every tool `tools9p` runs runs with `NODEVS` (exec's
+wrapper applies its own) or the call is refused, so it is always `set`. The
+old `-N` flag is accepted and ignored.
 
 **Tool authority manifest — ndb files at `lib/veltro/nsaudit/authorities/<tool>`:**
 
@@ -723,7 +727,7 @@ Current fixtures under `tests/nsaudit-fixtures/`:
   remain excluded, and the identity of the trusted approver is a deployment
   property rather than something the draft capability can attest.
 - `profile-payments` — base profile plus wallet proposal authority
-  (`/n/wallet`). Agent-visible `pay` and `authorize` files can only queue
+  (`/mnt/wallet`). Agent-visible `pay` and `authorize` files can only queue
   proposals; approval cannot be disabled, and trusted wallet controls remain
   excluded. A future direct-spend capability would be a distinct authority and
   would require enforcement metadata for that exact agent view.
@@ -753,7 +757,7 @@ be explicit:
 
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
-`/mnt/gpu` only from `gpu` or local `vision`, `/n/wikia` only from `wiki`,
+`/mnt/gpu` only from `gpu` or local `vision`, `/mnt/wikia` only from `wiki`,
 `/mnt/video` only from video presentation tools, and `/phone` only from `sms`,
 `dial`, or `contacts`.
 Legacy authority roots such as `/mnt/keys`, `/mnt/keysrv`, and
@@ -789,9 +793,14 @@ The gate is not runtime enforcement. CI runs the rule fixtures, additive
 profile invariants, and component-aware path checks. These fail on known bad
 authority compositions but do not freeze complete shipping namespace snapshots.
 
-The current additive fixtures are listed above. Full shipping snapshots and
-boot-configuration drift checks do not exist yet; do not describe a profile
-fixture as proof that a live launcher has the same authority set.
+The current additive fixtures are listed above. `nsaudit_profiles_test.sh`
+also starts a live `tools9p` with each fixture's tools and paths, and with the
+desktop+messaging, messaging+payments and all-layer compositions, and requires
+its `nsaudit -m /tool` report to equal the fixture's (a composition's, the
+union of its layers'). That ties the fixtures to what `tools9p` serves, not to
+any launcher's command line: full shipping snapshots and boot-configuration
+drift checks do not exist yet, so do not describe a profile fixture as proof
+that a particular launcher has the same authority set.
 
 ### What nsaudit cannot answer
 
@@ -879,7 +888,8 @@ sets. `nsaudit` fills unclaimed ground.
 - `tests/nsaudit-fixtures/profile-*` — lightweight additive profile fixtures
   for minimal headless, desktop GUI, messaging, and payments.
 - `tests/host/nsaudit_profiles_test.sh` — hard invariant gate for those
-  profile fixtures.
+  profile fixtures, and a live `tools9p` for each (and three compositions)
+  audited the same way.
 - `tests/host/nsaudit_path_semantics_test.sh` — regression for component-aware
   path containment.
 - No full shipping-profile snapshot gate yet.

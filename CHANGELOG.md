@@ -20,6 +20,56 @@ All notable changes to InferNode are documented in this file.
   `CNSAMODE=1` every HTTPS site failed with `alert level=2 desc=40`; a
   node can now be CNSA-strict to its peers and reach the web. A
   deployment that wants strict TLS sets `CNSATLS=1` as well.
+- **`/tool/meta/nodevs` is a fact, not a declaration.** tools9p reported
+  `unset` unless its launcher passed `-N`, and Lucifer's boot does not, so
+  `nsaudit -m /tool` on a live session reported a high `DEVICE_GATE_BYPASS`
+  that was not there: every tool tools9p runs runs with `NODEVS`, or is
+  refused. It now always reports `set`; `-N` is accepted and ignored. The
+  profile test starts a live tools9p for each `nsaudit` profile fixture,
+  and for three compositions of them, and requires the same report
+  (INFR-456).
+
+### Name space
+
+- **wiki9p mounts at `/mnt/wikia`, not `/n/wikia`.** It invents its own
+  schema, so it belongs under `/mnt` (docs/NAMESPACE-LAYOUT.md); `/mnt/wiki`
+  is wikifs, the store beneath it. The wiki tool is granted `/mnt/wikia`
+  and nothing else is; neither name can be granted as a path. A script
+  that binds sources into `/n/wikia/raw` now binds them into
+  `/mnt/wikia/raw` (INFR-402).
+- **speech9p mounts at `/mnt/speech`, not `/n/speech`.** It invents its
+  own schema (`say`, `hear`, `voices`, `ctl`), so it belongs under `/mnt`
+  (docs/NAMESPACE-LAYOUT.md). The `say` and `hear` tools are granted
+  `/mnt/speech` as before, and nothing else is. Scripts that write
+  `/n/speech/say` or `/n/speech/ctl` now write `/mnt/speech/say` and
+  `/mnt/speech/ctl`; a remote speech host exports and mounts
+  `/mnt/speech` (INFR-403).
+- **wallet9p mounts at `/mnt/wallet`, not `/n/wallet`.** It invents its
+  own schema, so it belongs under `/mnt` (docs/NAMESPACE-LAYOUT.md). The
+  wallet tool, payfetch, x402 and wm/wallet follow it. An agent granted
+  `/mnt/wallet` sees the same narrowed view as before (accounts, `default`,
+  `network`, and in each account only its proposal and read files). The
+  trusted controls under both names stay ungrantable. A path beneath
+  `/mnt/wallet` grants nothing, and nsconstruct no longer lets a `/mnt`
+  path it declined come back as an extra root. Scripts that write
+  `/n/wallet/ctl` or read `/n/wallet/<account>/...` now use `/mnt/wallet`
+  (INFR-400).
+- **The LLM-maintained wiki works.** wiki9p had never written a page:
+  - it read llmsrv's hex session names as numbers, so every model request
+    failed;
+  - a command's result read back empty unless the read happened to come
+    after the work, so the agent's `wiki` tool always returned nothing;
+  - concurrent commands shared one model session;
+  - `status` deadlocked when nothing was bound on `raw`;
+  - pages were listed through wikifs's `map`, which is a lookup, not a
+    list.
+
+  Now a result is read on the fid that wrote the command, the read waits
+  for it, and operations run one at a time. wikifs also listed a new page
+  only once the clock had ticked: its forced map reload trusted a qid
+  version that a host file system can leave unchanged.
+  `tests/host/wiki9p_test.sh` runs the whole loop against a scripted
+  model.
 
 ## [0.7.0] - 2026-10-13
 

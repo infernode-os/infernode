@@ -374,7 +374,7 @@ if {~ $emuhost MacOSX Linux Nt}{
 		}
 	}
 
-	# Start speech file server (TTS/STT via /n/speech)
+	# Start speech file server (TTS/STT via /mnt/speech)
 	/dis/veltro/speech9p.dis -e cmd &
 }{
 	# Non-desktop: mount remote llm9p

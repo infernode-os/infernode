@@ -78,17 +78,17 @@ sleep 1
 sleep 3
 
 # Import Stripe account
-echo 'import stripe fiat stripe-test $STRIPE_TEST_KEY' > /n/wallet/new
-cat /n/wallet/new
+echo 'import stripe fiat stripe-test $STRIPE_TEST_KEY' > /mnt/wallet/new
+cat /mnt/wallet/new
 
 echo '=== balance ==='
-cat /n/wallet/stripe-test/balance
+cat /mnt/wallet/stripe-test/balance
 
 echo '=== pay ==='
-echo '100 Test payment from InferNode' > /n/wallet/stripe-test/pay
-pending=\`{cat /n/wallet/pending}
-echo approve \$pending(1) > /n/wallet/ctl
-cat /n/wallet/stripe-test/history
+echo '100 Test payment from InferNode' > /mnt/wallet/stripe-test/pay
+pending=\`{cat /mnt/wallet/pending}
+echo approve \$pending(1) > /mnt/wallet/ctl
+cat /mnt/wallet/stripe-test/history
 
 echo '=== done ==='
 EOF

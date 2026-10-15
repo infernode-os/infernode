@@ -20,7 +20,7 @@ Host OS (macOS / Linux / Windows)
 │           ├── /mnt/llm        ← llmsrv (LLM providers as 9P)
 │           ├── /mnt/veltro     ← veltrosrv (the agent loop as 9P)
 │           ├── /mnt/ui         ← luciuisrv (GUI state 9P server)
-│           ├── /n/wallet     ← wallet9p (crypto wallet 9P server)
+│           ├── /mnt/wallet     ← wallet9p (crypto wallet 9P server)
 │           ├── /tool         ← tools9p (44 tool modules as 9P)
 │           ├── /mnt/factotum ← factotum (key agent, secstore-backed)
 │           ├── /n/local/     ← agent-visible host paths (via sys->bind)
@@ -203,15 +203,15 @@ Policy applied after `FORKNS`:
 - `/dis` → reduced to `lib/`, `veltro/` (+ `sh.dis` if `exec` tool active)
 - `/dis/veltro/tools/` → only registered tool `.dis` files visible
 - `/dev` → reduced to `cons`, `null`, `time`
-- `/n` → capability-gated foreign imports: `/n/speech` only if in `caps.paths` (`/mnt/git` is derived only for the fixed `git` tool — migrated from `/n/git`, INFR-401)
+- `/n` → capability-gated foreign imports; `/mnt/speech` only if in `caps.paths`, migrated from `/n/speech` (INFR-403) (`/mnt/git` is derived only for the fixed `git` tool — migrated from `/n/git`, INFR-401)
 - `/tmp` → writable only at `/tmp/veltro/scratch/`
 
 ### wallet9p (`appl/veltro/wallet9p.b`)
 
-Cryptocurrency wallet exposed as a 9P file server at `/n/wallet/`.
+Cryptocurrency wallet exposed as a 9P file server at `/mnt/wallet/`.
 
 ```
-/n/wallet/
+/mnt/wallet/
 ├── ctl              rw   "network <name>", "default <name>", "rpc <url>"
 ├── accounts         r    newline-separated account names
 ├── new              rw   write: "eth chain name" or "import eth chain name hexkey"
@@ -235,7 +235,7 @@ Key design properties:
   account budget, and payments always queue for trusted approval. There is no
   raw signing file: agents submit structured `pay`/`authorize` requests that
   wallet9p constructs, policy-checks, and signs itself.
-- **Namespace-gated** — agents need `"/n/wallet"` in `caps.paths` to access.
+- **Namespace-gated** — agents need `"/mnt/wallet"` in `caps.paths` to access.
   `/mnt/llm` is also capability-driven: top-level loops grant it when they open
   model sessions by path, while subagents normally use pre-opened descriptors.
 - **Multi-network** — supports Ethereum Mainnet, Sepolia, Base, Base Sepolia with

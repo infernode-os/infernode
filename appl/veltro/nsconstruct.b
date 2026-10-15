@@ -252,10 +252,12 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 	# 4-5. Restrict /n to explicitly granted entries only.
 	# /n is the IMPORT YARD — foreign trees imported intact (docs/NAMESPACE-LAYOUT.md).
 	# All /n/ entries are capability-driven — never auto-exposed by existence:
-	#   /n/speech — "/n/speech" in caps.paths
-	#   /n/wallet — "/n/wallet" in caps.paths
 	#   /n/pres-* — caps.xenith != 0
 	#   /n/local  — /n/local/ subpaths in caps.paths
+	# NB: speech9p moved to /mnt/speech (INFR-403): a "/mnt/speech" path grant is
+	# handled by the /mnt machinery in step 5b like any other.
+	# NB: wallet9p moved to /mnt/wallet (INFR-400); its filtered view is built
+	# in step 5b.
 	# NB: the LLM (llm9p) and the UI presentation surface (luciuisrv) are no longer
 	# /n entries — their schemas are ours, so they live at /mnt/llm and /mnt/ui
 	# (docs/NAMESPACE-LAYOUT.md, INFR-254). Both are handled by the uniform /mnt
@@ -268,28 +270,6 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		# MCP providers (mc9p, mcp9p adapters) and the LLM (llm9p) mount under
 		# /mnt — they synthesize their own schema (docs/NAMESPACE-LAYOUT.md). All
 		# /mnt grants are handled in step 5b below, not here.
-
-		# /n/speech — only if explicitly granted via caps.paths
-		if(inlist("/n/speech", caps.paths)) {
-			(speechok, nil) := sys->stat("/n/speech");
-			if(speechok >= 0)
-				nallow = "speech" :: nallow;
-		}
-
-		# /n/wallet — only if explicitly granted via caps.paths
-		if(inlist("/n/wallet", caps.paths)) {
-			(walletok, nil) := sys->stat("/n/wallet");
-			if(walletok >= 0)
-				nallow = "wallet" :: nallow;
-		}
-
-		# /n/wikia — fixed-function wiki agent service. The wiki tool receives
-		# it per-invocation; generic path grants cannot drive ctl/query directly.
-		if(inlist("wiki", caps.tools)) {
-			(wikiaok, nil) := sys->stat("/n/wikia");
-			if(wikiaok >= 0)
-				nallow = "wikia" :: nallow;
-		}
 
 		# (The UI presentation surface moved to /mnt/ui — granted + sub-restricted
 		# by the uniform /mnt machinery in step 5b, like /mnt/llm and /mnt/mcp.
@@ -315,12 +295,6 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		err = filterdir("/n", nallow, 0);
 		if(err != nil)
 			return sys->sprint("restrict /n: %s", err);
-
-		if(inlist("/n/wallet", caps.paths)) {
-			werr := restrictwallet();
-			if(werr != nil)
-				return sys->sprint("restrict /n/wallet: %s", werr);
-		}
 
 		# Drill down /n/local to only the granted paths
 		if(localpaths != nil) {
@@ -361,8 +335,13 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 	# Message descendants are separate proposal capabilities but /mnt/msg has
 	# its own protocol-aware filter below. Recursing through them here and then
 	# filtering the service a second time creates inconsistent stacked mounts.
+	# The wallet is one capability: "/mnt/wallet" grants the filtered view
+	# restrictwallet() builds below, and nothing beneath it is a grant of its
+	# own, so a path under it is dropped rather than drilled (INFR-400).
 	mnttop: list of string;
 	for(mp0 := mntpaths; mp0 != nil; mp0 = tl mp0) {
+		if(prefix(hd mp0, "wallet/"))
+			continue;
 		if(prefix(hd mp0, "msg/")) {
 			if(!inlist("msg", mnttop))
 				mnttop = "msg" :: mnttop;
@@ -406,6 +385,14 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		if(gitok >= 0 && !inlist("git", mntpaths))
 			mntpaths = "git" :: mntpaths;
 	}
+	# /mnt/wikia — fixed-function wiki agent service (wiki9p; migrated from
+	# /n/wikia per docs/NAMESPACE-LAYOUT.md, INFR-402). The wiki tool receives
+	# it per-invocation; generic path grants cannot drive ctl/query directly.
+	if(inlist("wiki", caps.tools)) {
+		(wikiaok, nil) := sys->stat("/mnt/wikia");
+		if(wikiaok >= 0 && !inlist("wikia", mntpaths))
+			mntpaths = "wikia" :: mntpaths;
+	}
 	# /mnt/ui — presentation surface (luciuisrv), granted only to fixed-function
 	# UI tools. Per-invocation caps prevent unrelated tools from inheriting it.
 	# Capability-gated exactly as before, now under /mnt. The grant exposes the
@@ -430,6 +417,12 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		(facok, nil) := sys->stat("/mnt/factotum");
 		if(facok >= 0 && !inlist("factotum", mntpaths))
 			mntpaths = "factotum" :: mntpaths;
+	}
+	# /mnt/wallet (wallet9p) only if it is mounted, as the old /n/wallet was.
+	if(inlist("wallet", mntpaths)) {
+		(walletok, nil) := sys->stat("/mnt/wallet");
+		if(walletok < 0)
+			mntpaths = dropname("wallet", mntpaths);
 	}
 	if(mntpaths != nil) {
 		(mntok, nil) := sys->stat("/mnt");
@@ -470,6 +463,13 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 					merr = restrictdir("/mnt/msg", msgallow, 0);
 				if(merr != nil)
 					return sys->sprint("restrict /mnt/msg: %s", merr);
+			}
+			# /mnt/wallet sub-restriction: accounts, default and network, and
+			# in each account only its proposal and read files.
+			if(inlist("wallet", mntpaths)) {
+				werr := restrictwallet();
+				if(werr != nil)
+					return sys->sprint("restrict /mnt/wallet: %s", werr);
 			}
 		}
 	}
@@ -570,7 +570,9 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 
 	# Expose additional Inferno root-level directories from caps.paths.
 	# e.g. "/appl/veltro" → add "appl" to safe, then restrict /appl to "veltro".
-	# Paths under /dis/, /n/, /dev/, /lib/, /tmp/ are already handled above.
+	# Paths under /dis/, /n/, /dev/, /lib/, /tmp/, /mnt/ are already handled
+	# above. /mnt is step 5b's alone: a /mnt path it declined to grant (one
+	# beneath /mnt/wallet, say) must not come back here as an extra root.
 	extradirs: list of string;
 	for(ep := caps.paths; ep != nil; ep = tl ep) {
 		p := hd ep;
@@ -580,7 +582,8 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		if(first == "")
 			continue;
 		# Skip top-level dirs already in safe or handled by steps 1–7
-		if(inlist(first, safe) || first == "net" || first == "net.alt")
+		if(inlist(first, safe) || first == "net" || first == "net.alt" ||
+		   first == "mnt")
 			continue;
 		if(!inlist(first, extradirs))
 			extradirs = first :: extradirs;
@@ -780,7 +783,7 @@ restrictwallet(): string
 		if(!inlist(hd a, allow))
 			allow = hd a :: allow;
 
-	err := filterdir("/n/wallet", allow, 0);
+	err := filterdir("/mnt/wallet", allow, 0);
 	if(err != nil)
 		return err;
 
@@ -791,7 +794,7 @@ restrictwallet(): string
 	acctallow := "address" :: "balance" :: "chain" ::
 		"pay" :: "authorize" :: "history" :: nil;
 	for(a = accts; a != nil; a = tl a) {
-		err = restrictdir("/n/wallet/" + hd a, acctallow, 1);
+		err = restrictdir("/mnt/wallet/" + hd a, acctallow, 1);
 		if(err != nil)
 			return err;
 	}
@@ -800,7 +803,7 @@ restrictwallet(): string
 
 walletaccounts(): list of string
 {
-	fd := sys->open("/n/wallet/accounts", Sys->OREAD);
+	fd := sys->open("/mnt/wallet/accounts", Sys->OREAD);
 	if(fd == nil)
 		return nil;
 	buf := array[8192] of byte;
@@ -887,6 +890,15 @@ inlist(s: string, l: list of string): int
 		if(hd l == s)
 			return 1;
 	return 0;
+}
+
+dropname(s: string, l: list of string): list of string
+{
+	out: list of string;
+	for(; l != nil; l = tl l)
+		if(hd l != s)
+			out = hd l :: out;
+	return out;
 }
 
 denymcptools(deny: list of string): string
@@ -1076,6 +1088,9 @@ privilegedcontrolpath(path: string, tools: list of string): int
 		"/mnt/msg/pending",
 		"/mnt/msg/approve",
 		"/mnt/msg/deny",
+		"/mnt/wallet/ctl",
+		"/mnt/wallet/pending",
+		"/mnt/wallet/new",
 		"/n/wallet/ctl",
 		"/n/wallet/pending",
 		"/n/wallet/new",
@@ -1115,7 +1130,8 @@ privilegedcontrolpath(path: string, tools: list of string): int
 #
 walletcontrolpath(path: string): int
 {
-	if(!prefix(path, "/n/wallet/"))
+	# /n/wallet is where wallet9p mounted before INFR-400; it stays denied.
+	if(!prefix(path, "/mnt/wallet/") && !prefix(path, "/n/wallet/"))
 		return 0;
 	if(componentcount(path) < 4)
 		return 0;
@@ -1225,6 +1241,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
+		path == "/mnt/wikia" || prefix(path, "/mnt/wikia/") ||
 		path == "/n/wikia" || prefix(path, "/n/wikia/") ||
 		path == "/mnt/keys" || prefix(path, "/mnt/keys/") ||
 		path == "/mnt/keysrv" || prefix(path, "/mnt/keysrv/") ||
@@ -1404,8 +1421,6 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 
 	# /n entries — capability-driven (import yard)
 	nentries := array[] of {
-		("/n/speech", "Speech",           "rw"),
-		("/n/wikia",  "Wiki Agent",       "rw"),
 		("/phone",    "Phone Bridge",     "rw"),
 		# The LLM (llm9p), UI surface (luciuisrv) and MCP providers live under
 		# /mnt now — application mount points, schema is ours, not /n imports
@@ -1419,6 +1434,8 @@ emitmanifest(caps: ref Capabilities, mpath: string)
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),
+		("/mnt/wikia", "Wiki Agent", "rw"),
+		("/mnt/speech", "Speech", "rw"),
 		("/mnt/registry", "Registry", "rw"),
 	};
 
@@ -1523,6 +1540,9 @@ verifyns(expected: list of string): string
 		"/mnt/msg/pending",
 		"/mnt/msg/approve",
 		"/mnt/msg/deny",
+		"/mnt/wallet/ctl",
+		"/mnt/wallet/pending",
+		"/mnt/wallet/new",
 		"/n/wallet/ctl",
 		"/n/wallet/pending",
 		"/n/wallet/new",

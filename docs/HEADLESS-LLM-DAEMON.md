@@ -656,7 +656,7 @@ own configuration (`OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`).
   server while a Mac or other client acts as a thin renderer over the
   same 9P mount. Multiple renderers can attach to the same activity.
 - **Speech.** `appl/veltro/speech9p.b` exposes TTS/STT under
-  `/n/speech`. Useful for voice front-ends to a remote Veltro session.
+  `/mnt/speech`. Useful for voice front-ends to a remote Veltro session.
 
 Each of these can be added as a peer service in the same lean
 `serve-profile`, exported either on `:5640` alongside `/mnt/llm` or on

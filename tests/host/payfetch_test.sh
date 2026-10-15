@@ -113,7 +113,7 @@ sleep 1
 # Create a test wallet
 /dis/veltro/wallet9p.dis &
 sleep 3
-echo 'eth ethereum payfetch-test' > /n/wallet/new
+echo 'eth ethereum payfetch-test' > /mnt/wallet/new
 sleep 1
 # NOTE: payfetch cannot reach loopback addresses (publicnet refuses
 # private/reserved ranges at dial), so the x402 test server must be
@@ -146,7 +146,7 @@ echo secstore tcp!localhost!5356 $TESTUSER $PASS > /mnt/factotum/ctl
 sleep 1
 /dis/veltro/wallet9p.dis &
 sleep 3
-echo 'eth ethereum payfetch-test' > /n/wallet/new
+echo 'eth ethereum payfetch-test' > /mnt/wallet/new
 sleep 1
 
 # Import wallet key to factotum, sync
@@ -155,7 +155,7 @@ sleep 3
 
 # Test free endpoint via webfetch-style direct fetch
 echo '=== wallet address ==='
-cat /n/wallet/payfetch-test/address
+cat /mnt/wallet/payfetch-test/address
 
 echo '=== done ==='
 EOF

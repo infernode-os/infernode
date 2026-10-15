@@ -7,10 +7,17 @@
 # change these defines as appropriate here or in mkconfig
 # ROOT should be the root of the Inferno tree
 ROOT=${ROOT:-$(pwd)}
-SYSTARG=${SYSTARG:-MacOSX}
+# the host's, as mkconfig names it
+if [ -z "$SYSTARG" ]; then
+	case $(uname -s) in
+	Darwin)	SYSTARG=MacOSX;;
+	*)	SYSTARG=$(uname -s);;
+	esac
+fi
 if [ -z "$OBJTYPE" ]; then
 	case $(uname -m) in
 	x86_64)	OBJTYPE=amd64;;
+	riscv64)	OBJTYPE=riscv64;;
 	*)	OBJTYPE=arm64;;
 	esac
 fi
@@ -25,7 +32,7 @@ PLAT=$ROOT/$SYSTARG/$OBJTYPE
 CC="p cc -c -I$PLAT/include -I$ROOT/include -I$ROOT/utils/include"
 LD="p cc"
 AR="p /usr/bin/ar rcs"
-RANLIB=":"	# macOS ar includes ranlib functionality
+RANLIB=":"	# ar rcs writes the index itself
 
 error() {
 	echo $* >&2

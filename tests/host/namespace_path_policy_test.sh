@@ -48,8 +48,11 @@ BAD_PRIV=(
   "/mnt/audit/chain"
   "/mnt/msg/ctl"
   "/mnt/msg/ctl/session"
+  "/mnt/wallet/alice/ctl"
+  "/mnt/wallet/alice/ctl/session"
+  "/mnt/wallet/alice/sign"
   "/n/wallet/alice/ctl"
-  "/n/wallet/alice/ctl/session"
+  "/n/wallet/ctl"
   "/tmp/veltro/ftree"
   "/tmp/veltro/.ns"
   "/tmp/veltro/cow"
@@ -70,6 +73,8 @@ BAD_PRIV=(
   "/n/web/clone"
   "/mnt/wiki"
   "/mnt/wiki/new"
+  "/mnt/wikia"
+  "/mnt/wikia/ctl"
   "/n/wikia"
   "/n/wikia/ctl"
   "/mnt/keys"
@@ -179,7 +184,7 @@ for p in "${GOOD[@]}"; do
 done
 
 mkpaths() {
-    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice/calendars /llm /mnt/audit /mnt/msg/ctl /n/wallet/alice/ctl /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /n/git /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /n/wikia /mnt/keys/alice /mnt/keysrv /mnt/registry /mnt/video/0 /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/factotum/ctl /mnt/cal/ctl /mnt/cal/accounts/alice/ctl /llm/ctl /llm/status /mnt/audit/ctl /mnt/audit/chain /mnt/audit/log /mnt/audit/head /mnt/msg/ctl/session /n/wallet/alice/ctl/session /tmp/veltro/ftree/ctl /mnt/matrix/ctl /n/git/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /n/wikia/ctl /mnt/keys/alice/secret /mnt/keysrv/secret /mnt/registry/new /mnt/video/0/ctl /phone/sms /mnt/mail/accounts/alice/compose"
+    echo "mkdir -p /mnt/ui/activity/0/presentation /mnt/factotum /mnt/cal/accounts/alice/calendars /llm /mnt/audit /mnt/msg/ctl /mnt/wallet/alice/ctl /n/wallet/alice /tmp/veltro/ftree /tmp/veltro/.ns /tmp/veltro/cow /tmp/veltro/tasks /tmp/veltro/browser /tmp/veltro/editor /tmp/veltro/shell /tmp/veltro/fractal /tmp/veltro/man /mnt/matrix /n/git /mnt/gpu/0 /mnt/web /n/web /mnt/wiki /mnt/wikia /n/wikia /mnt/keys/alice /mnt/keysrv /mnt/registry /mnt/video/0 /phone /mnt/mail/accounts/alice /tmp/veltro/scratch; touch /mnt/factotum/ctl /mnt/cal/ctl /mnt/cal/accounts/alice/ctl /llm/ctl /llm/status /mnt/audit/ctl /mnt/audit/chain /mnt/audit/log /mnt/audit/head /mnt/msg/ctl/session /mnt/wallet/alice/ctl/session /mnt/wallet/alice/sign /n/wallet/alice/ctl /n/wallet/ctl /tmp/veltro/ftree/ctl /mnt/matrix/ctl /n/git/ctl /mnt/gpu/clone /mnt/gpu/0/ctl /mnt/web/clone /n/web/clone /mnt/wiki/new /mnt/wikia/ctl /n/wikia/ctl /mnt/keys/alice/secret /mnt/keysrv/secret /mnt/registry/new /mnt/video/0/ctl /phone/sms /mnt/mail/accounts/alice/compose"
 }
 
 # Startup -p parsing is an ingress smoke test. The full bad corpus is checked
@@ -193,7 +198,7 @@ STARTUP_BAD=(
   "/mnt/audit/chain"
   "/mnt/ui"
   "/mnt/msg/ctl"
-  "/n/wallet/alice/ctl"
+  "/mnt/wallet/alice/ctl"
   "/tmp/veltro/ftree"
   "/mnt/matrix"
   "/mnt/mail/accounts/alice/compose"

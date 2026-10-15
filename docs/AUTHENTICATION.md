@@ -496,7 +496,7 @@ line; the password is hashed in-place and the line is overwritten with zeroes.
 their attributes (and `!password=` values, in `text` form). InferNode's
 `nsconstruct` blocks Veltro agents from seeing `ctl` at all — agents can only
 use factotum *as a delegated authenticator* via `proto`/`rpc`. The wallet
-follows the same pattern: agents see addresses and balances under `/n/wallet`,
+follows the same pattern: agents see addresses and balances under `/mnt/wallet`,
 never the raw `wallet-eth-*` private-key keys in factotum.
 
 ```mermaid

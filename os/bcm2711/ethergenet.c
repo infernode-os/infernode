@@ -396,12 +396,21 @@ setdma(Desc *d, void *v)
  * puts the data at the END of its allocation, so rounding rp up stays
  * inside it.
  */
+Block*	_allocb(int);	/* ../port/allocb.c: allocb that returns nil */
+
 static Block*
 newrxblock(void)
 {
 	Block *b;
 
-	b = iallocb(Rbsz + 2*Cacheline);
+	/*
+	 * _allocb, not iallocb: both callers are processes, and the whole
+	 * ring is 256 of these, 560KB, over four times conf.ialloc. Charged
+	 * to ialloc, filling it waited for ever in replenish -- the first
+	 * thing this driver did on a board. 9front's ring comes from a
+	 * Bpool, which is not charged to ialloc either.
+	 */
+	b = _allocb(Rbsz + 2*Cacheline);
 	if(b == nil)
 		return nil;
 	b->rp = (uchar*)ROUND((uintptr)b->rp, Cacheline);

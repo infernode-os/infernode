@@ -50,7 +50,7 @@ and factotum. Then `boot.sh` runs, in order:
 |------|---------|---------|
 | 1 | `wm/logon` | Login screen. Creates secstore account on first run, unlocks and loads keys on subsequent runs. Blocks until the user enters their password. |
 | 2 | `run /lib/lucifer/llmsrv.sh` (backgrounded) | (Re-)starts the LLM service from `/lib/ndb/llm`: a local `llmsrv` at `/mnt/llm`, or a remote `/mnt/llm` mounted over 9P. |
-| 3 | `wallet9p &` | Cryptocurrency wallet 9P server. Mounts at `/n/wallet`; enforces budget and approval policy on all payments. |
+| 3 | `wallet9p &` | Cryptocurrency wallet 9P server. Mounts at `/mnt/wallet`; enforces budget and approval policy on all payments. |
 | 3a | `msg9p &` | Message layer at `/mnt/msg`; registers the sms source, and email when `/lib/veltro/sources/email.conf` exists. |
 | 4 | `luciuisrv` | UI 9P server. Creates the `/mnt/ui` namespace that lucifer, lucipres, luciconv, and lucibridge all communicate through. This is the hub. |
 | 5 | `echo activity create Main > /mnt/ui/ctl` | Creates the default "Main" activity (task/conversation). |

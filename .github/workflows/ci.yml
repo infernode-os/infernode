@@ -220,12 +220,14 @@ jobs:
         chmod +x tests/host/veltrosrv_test.sh tests/host/veltro_cli_test.sh \
           tests/host/lucibridge_tool_timeout_test.sh \
           tests/host/agentloop_characterization_test.sh \
-          tests/host/tools9p_result_test.sh
+          tests/host/tools9p_result_test.sh tests/host/wiki9p_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
         ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
         ROOT=. bash tests/host/veltrosrv_test.sh
         ROOT=. bash tests/host/veltro_cli_test.sh
+        # The LLM-maintained wiki (wiki9p over wikifs) against a scripted model.
+        ROOT=. bash tests/host/wiki9p_test.sh
         ROOT=. FRONTENDS=veltrosrv bash tests/host/agentloop_characterization_test.sh
         ROOT=. FRONTENDS=lucibridge bash tests/host/agentloop_characterization_test.sh \
           single_read two_reads write_then_read error_streak say step_cap
@@ -290,6 +292,12 @@ jobs:
         chmod +x tests/host/wstat_nulldir_test.sh
         rc=0
         ROOT=. bash tests/host/wstat_nulldir_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # An allocation the pool refuses says how much, why, for whom
+        # and how the pool stood (INFR-472). 77 = skip (no emu).
+        chmod +x tests/host/pool_nomem_test.sh
+        rc=0
+        ROOT=. bash tests/host/pool_nomem_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run WPA2 supplicant vector checks

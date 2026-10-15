@@ -408,6 +408,8 @@ enum
 	/* Emmccontrol0 */
 	Hctldwidth4	= 1<<1,
 	Hctlhsen	= 1<<2,
+	Buspower	= 1<<8,		/* SDHCI power control: VDD1 on */
+	Busvdd33	= 7<<9,		/* ... at 3.3V */
 
 	/* Emmccontrol1 */
 	Clkintlen	= 1<<0,		/* enable the internal clock */

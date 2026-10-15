@@ -217,12 +217,16 @@ makes). On it:
     init_uart_clock=48000000
     kernel=infernode8.img
     cmdline=cmdline.txt
+    max_framebuffers=2
 
     [tryboot]
     kernel=tryboot.img
     cmdline=tryboot.cmd
 
-`tryboot.cmd` holds the single word `tryboot`. `cmdline.txt` may be empty
+`tryboot.cmd` holds the single word `tryboot`. `max_framebuffers=2` lets
+the firmware offer a second display (the panel and HDMI together;
+[Displays](#displays), below); without it there is one, whatever is
+plugged in. `cmdline.txt` may be empty
 or absent. Do **not** add `dtoverlay=disable-bt`: the PL011 is the
 radio's now. (On firmware too old to know `[tryboot]`, a `tryboot.txt`
 that is `config.txt` with the two lines substituted does the same.)
@@ -265,10 +269,19 @@ things:
     init_uart_clock=48000000
     kernel=infernode8.img
     cmdline=cmdline.txt
+    max_framebuffers=2
+    arm_boost=1
 
     [tryboot]
     kernel=tryboot.img
     cmdline=tryboot.cmd
+
+`arm_boost=1` is the one line the 3B+ does not have: it lets a board
+that can (revision 1.4 and later, C0 silicon) run at 1800 MHz instead of
+1500 -- about 20% on compute-bound code, measured on a rev 1.5 board; the
+kernel asks for the maximum the firmware reports, so the boot log's
+`mbox: ARM clock ... max` line says which it got. Its fan or heatsink is
+the board owner's business.
 
 `[tryboot]` is native here; the EEPROM is where it came from. Do **not**
 add `enable_gic=0` — the kernel's interrupt controller is the GIC, and
@@ -310,8 +323,45 @@ first time those drivers have met their hardware, and are the most
 likely to be wrong.
 
 **Memory**: a 2 GB or 4 GB board is used entirely; an 8 GB board's top
-half is not (`RAMLIMIT`). **Displays**: HDMI0, the socket beside the
-USB-C, is display 0 and the console.
+half is not (`RAMLIMIT`). **Displays**: [below](#displays); the short
+version is that with the 7" panel attached a monitor belongs on HDMI0,
+the socket beside the USB-C.
+
+### Displays
+
+The firmware decides what is a display, **once, at power-on**, and the
+kernel takes what it is offered (`fb:   displays: N` in the boot log).
+So plug screens in before power-on, and restart after moving a cable.
+
+| attached at power-on | display 0 (console, then login and desktop) | display 1 |
+|-|-|-|
+| the 7" DSI panel | the panel | -- |
+| a monitor alone | the monitor (on a Pi 4, tried on HDMI1) | -- |
+| the panel and a monitor on **HDMI0** | the panel | the monitor: the boot console, mirrored, until the desktop starts; then it keeps the last text shown |
+| the panel and a monitor on **HDMI1** (Pi 4) | the panel | none: the firmware reads the monitor's EDID but offers one display, with `max_framebuffers` 2 or 3 |
+| either, with `ignore_lcd=1` in `config.txt` | the monitor | -- |
+
+- **The panel is the main screen whenever it is attached**, so a board
+  with a panel and a monitor shows login on the panel. To have the
+  desktop on the monitor instead, add `ignore_lcd=1`; the panel then
+  stays dark.
+- **A second display needs `max_framebuffers=2`**, which both
+  `config.txt`s above carry. Without it the firmware offers one.
+- **A monitor plugged in after power-on** is brought up as display 1 if
+  the firmware counted two displays at boot and the desktop has not
+  started yet (the kernel stops looking once it has). Otherwise nothing
+  happens until a restart -- a monitor showing "no signal" after being
+  moved between ports is this, not a fault.
+- **The size** is whatever the firmware negotiated with the screen: the
+  panel is 800x480; the bench's monitor came up at 1024x768 on either
+  port.
+- **The desktop is on display 0 only.** Display 1 mirrors the text
+  console; drawing the desktop on both is not done.
+
+Measured on a Pi 4B rev 1.5 with the official 7" panel, 2026-10-15. The
+3B+ runs the same code (`os/bcm/board.c`, `os/bcm/fb.c`) and has one HDMI
+socket. The bench 3B+ shows the panel-only row; no capture of it with a
+monitor attached exists, so its HDMI rows are expected, not observed.
 
 ### Changing the kernel without pulling the card
 

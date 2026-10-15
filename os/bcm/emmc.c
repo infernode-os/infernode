@@ -332,6 +332,17 @@ arasaninit(void)
 		uartputstr("emmc: controller will not reset\n");
 		return -1;
 	}
+#ifdef EMMCBUSPOWER
+	/*
+	 * SD bus power on, at 3.3V: SDHCI's power control register, byte 1
+	 * of control 0. The Arasan has no such switch and ignores the bits;
+	 * EMMC2 has one, and the write of 0 above turned the card off --
+	 * on a Pi 4 the card then never answered CMD0. Then the 1ms and 74
+	 * clocks the specification asks of a card that has just had power.
+	 */
+	emmcwr(Emmccontrol0, emmcrd(Emmccontrol0) | Busvdd33 | Buspower);
+	microdelay(2000);
+#endif
 	return 0;
 }
 

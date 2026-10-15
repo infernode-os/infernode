@@ -24,6 +24,7 @@
 #define EMMCBASE	EMMC2REGS
 #define EMMCCLK		Clkemmc2
 #define EMMCALTBASE	EMMCREGS
+#define EMMCBUSPOWER	/* a standard SDHCI: the card's power is a register bit */
 /* no EMMCCARDPINS: EMMC2's pins are its own */
 
 #include "../bcm/emmc.c"

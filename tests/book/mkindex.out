@@ -1,0 +1,318 @@
+x T utf
+x res 7200 1 1
+x init
+p1
+x X idx Preface, the
+x X folio i
+p2
+x X idx Preface, the
+x X folio ii
+p3
+x X idx Preface, the
+x X idx virtue
+x X folio iii
+p4
+x X idx virtue
+x X folio 1
+p5
+x X idx virtue
+x X folio 2
+p6
+x X idx virtue
+x X folio 3
+p7
+x X idx virtue
+x X folio 4
+p8
+x X idx virtue!and justice
+x X folio 5
+p9
+x X idx virtue!and justice
+x X folio 6
+p10
+x X idx virtue
+x X folio 7
+p11
+x X folio 8
+p12
+x X idx virtue!as knowledge|textbf
+x X folio 9
+p13
+x X idx tragedy|(
+x X idx polis|see{city}
+x X idx polis|see{city}
+x X folio 10
+p14
+x X folio 11
+p15
+x X idx aretē@ἀρετή
+x X idx Ætna
+x X idx Œdipus
+x X idx épée
+x X idx New York
+x X idx Newark
+x X idx Socrates|seealso{Plato}
+x X folio 12
+p16
+x X idx Plato!Republic
+x X idx Plato!Laws
+x X idx Plato|seealso{Socrates}
+x X idx Plato|seealso{Xenophon}
+x X idx "!important"
+x X idx 1066 and All That
+x X idx zeal
+x X idx Zeno
+x X folio 13
+p17
+x X idx city
+x X idx city!walls of
+x X idx city!walls of!gates
+x X idx city|emph
+x X idx λόγος
+x X idx Ἀριστοτέλης
+x X folio 14
+p18
+x X idx \fIRepublic\fP (Plato)
+x X idx self-knowledge
+x X idx self knowledge
+x X idx selfhood
+x X folio 15
+p19
+x X folio 16
+p20
+x X folio 17
+p21
+x X idx tragedy|)
+x X folio 18
+p22
+x X folio 19
+p23
+x X folio 20
+p24
+x X folio 21
+p25
+x X folio 22
+p26
+x X folio 23
+p27
+x X folio 24
+p28
+x X folio 25
+p29
+x X folio 26
+p30
+x X folio 27
+p31
+x X folio 28
+p32
+x X folio 29
+p33
+x X folio 30
+p34
+x X folio 31
+p35
+x X folio 32
+p36
+x X folio 33
+p37
+x X folio 34
+p38
+x X folio 35
+p39
+x X folio 36
+p40
+x X folio 37
+p41
+x X folio 38
+p42
+x X folio 39
+p43
+x X folio 40
+p44
+x X folio 41
+p45
+x X folio 42
+p46
+x X folio 43
+p47
+x X folio 44
+p48
+x X folio 45
+p49
+x X folio 46
+p50
+x X folio 47
+p51
+x X folio 48
+p52
+x X folio 49
+p53
+x X folio 50
+p54
+x X folio 51
+p55
+x X folio 52
+p56
+x X folio 53
+p57
+x X folio 54
+p58
+x X folio 55
+p59
+x X folio 56
+p60
+x X folio 57
+p61
+x X folio 58
+p62
+x X folio 59
+p63
+x X folio 60
+p64
+x X folio 61
+p65
+x X folio 62
+p66
+x X folio 63
+p67
+x X folio 64
+p68
+x X folio 65
+p69
+x X folio 66
+p70
+x X folio 67
+p71
+x X folio 68
+p72
+x X folio 69
+p73
+x X folio 70
+p74
+x X folio 71
+p75
+x X folio 72
+p76
+x X folio 73
+p77
+x X folio 74
+p78
+x X folio 75
+p79
+x X folio 76
+p80
+x X folio 77
+p81
+x X folio 78
+p82
+x X folio 79
+p83
+x X folio 80
+p84
+x X folio 81
+p85
+x X folio 82
+p86
+x X folio 83
+p87
+x X folio 84
+p88
+x X folio 85
+p89
+x X folio 86
+p90
+x X folio 87
+p91
+x X folio 88
+p92
+x X folio 89
+p93
+x X folio 90
+p94
+x X folio 91
+p95
+x X folio 92
+p96
+x X folio 93
+p97
+x X folio 94
+p98
+x X folio 95
+p99
+x X folio 96
+p100
+x X folio 97
+p101
+x X folio 98
+p102
+x X folio 99
+p103
+x X folio 100
+p104
+x X idx Homer
+x X folio 101
+p105
+x X idx Homer
+x X folio 102
+p106
+x X idx Homer
+x X folio 103
+p107
+x X idx Homer
+x X folio 104
+p108
+x X idx Homer
+x X folio 105
+p109
+x X idx Homer
+x X folio 106
+p110
+x X idx Homer
+x X folio 107
+p111
+x X idx Homer
+x X folio 108
+p112
+x X folio 109
+p113
+x X folio 110
+p114
+x X folio 111
+p115
+x X folio 112
+p116
+x X folio 113
+p117
+x X folio 114
+p118
+x X folio 115
+p119
+x X folio 116
+p120
+x X folio 117
+p121
+x X folio 118
+p122
+x X folio 119
+p123
+x X folio 120
+p124
+x X folio 121
+p125
+x X folio 122
+p126
+x X folio 123
+p127
+x X folio 124
+p128
+x X folio 125
+p129
+x X folio 126
+p130
+x X folio 127
+p131
+x X folio 128
+p132
+x X folio 129
+x trailer
+x stop

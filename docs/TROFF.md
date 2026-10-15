@@ -17,6 +17,7 @@ to read in InferNode's document views.
 | `refer` | Citations by key from BibTeX's and refer's databases; with `-S chicago`, the *Chicago Manual of Style*'s notes and bibliography (18th edition) | Neatrefer, translated, with a BibTeX reader and styles of its own |
 | `tr2pdf` | Troff's output as PDF: OpenType fonts embedded, compressed, with ToUnicode maps (text can be searched and copied) | Neatpost's PDF writer, translated |
 | `mkfn` | Font descriptions for troff from OpenType, TrueType and AFM fonts, with each glyph's bounding box (CFF's too) | Neatmkfn, translated |
+| `mkindex` | A book's index from troff's output: makeindex's entries, sorted word by word as the *Chicago Manual* sorts, Greek and accents included | |
 | `book` | Runs them: refer, pic, tbl and eqn (each if there is anything for it), troff `-mbook` until its references settle, tr2pdf | |
 
 `troff`, `eqn`, `tbl`, `pic`, and `refer` without a style, write what
@@ -53,6 +54,8 @@ LaTeX without being LaTeX.
 | `.cite key [loc][; key loc]` | `\autocite[loc]{key}` (biblatex-chicago) |
 | `\*[cite key loc]` within a note of one's own | `\cite[loc]{key}` |
 | `.bibliography` | `\printbibliography` |
+| `.index "term!sub"` | `\index{term!sub}` (makeindex's syntax) |
+| `.printindex` | `\printindex` |
 | `$...$` (after `delim $$`) | `$...$` |
 | `.EQ` ... `.EN`; `.EQ (1.1)` | `\[...\]`; `equation` with `\tag{1.1}` |
 | `.TS` ... `.TE` | `tabular` (in a `table`) |
@@ -83,6 +86,33 @@ The table of contents and the references need a second pass (the pages
 are known only once the book has been set): `book` gathers what the
 first pass learnt (the `aux:` lines troff writes to its standard error)
 into `book.aux`, and sets the book again until it no longer changes.
+
+## The index: `.index` and `mkindex`
+
+An entry is written as LaTeX's `\index` (makeindex's syntax), on a line
+of its own before the line its word begins:
+
+    .index "virtue"
+    virtue is ...
+    .index "virtue!and justice"           \" a subentry (up to three levels)
+    .index "aretē@ἀρετή"                  \" sorted as aretē, set as ἀρετή
+    .index "polis|see{city}"
+    .index "Plato|seealso{Socrates}"
+    .index "tragedy|("  ...  .index "tragedy|)"   \" a range
+    .index "soul|textbf"                  \" its page in bold (textit, emph)
+
+`.index` puts the entry into troff's output where the word after it is
+set (`x X idx`), so it gives that page even when the line or its note
+goes to the next; each page's foot writes its folio (`x X folio`).
+`mkindex book.out` reads them back and writes the index for
+`.printindex`, which sets it in two columns at the end of the book.
+The order is the *Manual*'s, word by word (New York before Newark), case,
+accents, breathings and troff's escapes aside (Ætna and ἀρετή under a);
+three pages or more in a row are a range, a range's end abbreviated as
+the *Manual* abbreviates it (101–8); a page is given once, in bold or
+italic if any entry on it asks; *See also* follows an entry's
+subentries. `book` runs `mkindex` after each pass and sets the book
+again until the index, too, no longer changes.
 
 ## Citations: `refer -S chicago`
 
@@ -155,7 +185,7 @@ after the work above is done.
 
 ## Still to come
 
-An index; the LaTeX converter; `-man`; microtypography
+The LaTeX converter; `-man`; microtypography
 (protrusion and expansion); fonts falling back for characters a font
 lacks; font subsetting in PDFs; eqn's bars drawn as lines (they are
 glyphs now, and copied with the text).

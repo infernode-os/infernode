@@ -18,6 +18,9 @@
 .\"	.label name, \*[ref name], \*[pageref name]	(the second pass's)
 .\"	.contents			the table of contents (the second pass's)
 .\"	.cite key loc			refer -S chicago's notes; .bibliography
+.\"	.index "term!sub|see{other}"	an index entry, as makeindex's;
+.\"	.printindex			the index (mkindex(1)'s, the
+.\"					second pass's), in two columns
 .\"
 .\" The page: .papersize W H (6i 9i), .margins top bottom inner outer;
 .\" the type: registers book-ps (point size, in points) and book-vs.
@@ -133,12 +136,18 @@
 .\" when it is known whether the page opened a chapter or was left blank.
 .\" A trap's requests that would break the text being set are given with
 .\" the no-break control character.
+.nr book-ncol 1		\" columns on the page (the index's two)
+.nr book-col 1		\" the column being set
+.nr book-colw 0
+.nr book-gut 0
 .de book-hd
 .if !\\n[book-sized] .book-papersize
 .\" the binding margin alternates: inner on the left of a right-hand page
 .ie o .po \\n[book-im]u
 .el .po \\n[book-om]u
 'sp |\\n[book-tm]u
+.nr book-col 1
+.mk book-coltop
 .ns
 .\" the foot's trap, lifted while the foot was set; troff sets the line
 .\" that reaches a trap, then springs it, so the trap is a line of the
@@ -146,7 +155,18 @@
 .wh -\\n[book-bm]u-\\n[book-vs]u+1u book-fo
 .book-fncarry
 ..
+.\" the foot of a column: the next column, or the page's foot
 .de book-fo
+.ie \\n[book-col]<\\n[book-ncol] \{\
+.	nr book-col +1
+.	po +\\n[book-colw]u+\\n[book-gut]u
+'	sp |\\n[book-coltop]u
+.\}
+.el .book-pagefo
+..
+.\" the page's foot: its notes, its folio (written for mkindex as well,
+.\" x X folio), the next page
+.de book-pagefo
 .\" not sprung again by the moves below
 .ch book-fo
 .book-fnput
@@ -156,12 +176,12 @@
 .if !\\n[book-blank] \{\
 .	ie \\n[book-nohead] \{\
 '	sp |\\n[.p]u-\\n[book-bm]u+0.4i
-.	tl ''\\n%''
+.	tl '\X^folio \\n%^'\\n%''
 .	\}
 .	el \{\
 '	sp |\\n[book-tm]u-0.45i
-.	ie o .tl '\f[SC]\\*[book-rh]\fP''\\n%'
-.	el .tl '\\n%''\f[SC]\\*[book-lh]\fP'
+.	ie o .tl '\X^folio \\n%^\f[SC]\\*[book-rh]\fP''\\n%'
+.	el .tl '\X^folio \\n%^\\n%''\f[SC]\\*[book-lh]\fP'
 .	\}
 .\}
 .ev
@@ -531,10 +551,9 @@
 .if \\n[fn-nextset]+(\\n[fn-hfull]>\\n[fn-h]) \{\
 .	nr book-nohead 0
 .	br
-.\}
-.while \\n[fn-nextset]+(\\n[fn-hfull]>\\n[fn-h]) \{\
 \&
 .	bp
+.	book-end
 .\}
 ..
 .em book-end
@@ -685,6 +704,48 @@
 .br
 .in 0
 .ad b
+..
+.\"
+.\" ---------------------------------------------------------------
+.\" the index: .index puts its entry where the text it is on is set, as
+.\" x X idx in troff's output, mkindex(1) sorts them with each page's
+.\" folio, and .printindex reads what mkindex made (the file the string
+.\" book-ind names; book(1) runs mkindex, and sets the book again)
+.\"
+.de index
+\\X^idx \\$*^\c
+..
+.de printindex
+.book-begin
+.book-chapterhead 0 "Index"
+.nr book-gut 0.25i
+.nr book-colw (\\n[book-ll]-\\n[book-gut])/2
+.ll \\n[book-colw]u
+.ps \\n[book-ps]-2
+.vs \\n[book-vs]u-2p
+.ad l
+.nh
+.in 0
+.mk book-coltop
+.nr book-col 1
+.nr book-ncol 2
+.if !'\\*[book-ind]'' .so \\*[book-ind]
+.br
+.\" one column again, or the last page's foot would move to the next
+.\" column and troff, ending, set another page
+.nr book-ncol 1
+..
+.\" an entry at its level (0 the heading, 1 and 2 subentries), its lines
+.\" after the first indented past the deepest
+.de book-ix
+.br
+.in 3m
+.ti \\$1m
+..
+.\" between the entries of one letter and the next
+.de book-ixgroup
+.br
+.sp 1v
 ..
 .\"
 .\" ---------------------------------------------------------------

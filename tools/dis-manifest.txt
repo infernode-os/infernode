@@ -571,6 +571,7 @@ dis/memfs.dis
 dis/mermaid_test.dis
 dis/mk.dis
 dis/mkdir.dis
+dis/mkindex.dis
 dis/mkfn.dis
 dis/mkroot.dis
 dis/mntgen.dis

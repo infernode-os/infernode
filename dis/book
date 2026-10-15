@@ -10,6 +10,8 @@
 # often as its table of contents and references need to be set again
 # (they come from the pass before, through book.aux); then the PDF by
 # tr2pdf(1). troff's output is kept as book.out, for the document views.
+# A book with an index (.printindex) has it made by mkindex(1) from each
+# pass's output, into book.ind, and is set again until that settles too.
 load std
 
 bib=()
@@ -31,6 +33,8 @@ aux=$stem.aux
 tr=$stem.out	# troff's output, kept for viewing it
 err=$stem.log
 new=$stem.aux.new
+ind=$stem.ind
+indnew=$stem.ind.new
 
 # pictures, tables and equations: pic, tbl, eqn (after its settings for
 # the fonts), if there are any
@@ -40,6 +44,8 @@ tbls=0
 grep -s '^\.TS' $src && tbls=1
 math=0
 grep -s '^\.EQ' $src && math=1
+index=0
+grep -s '^\.printindex' $src && index=1
 
 fn input {
 	if {~ $math 1} {cat /lib/troff/eqnrc $src} {cat $src}
@@ -57,22 +63,29 @@ fn eqns {
 	if {~ $math 1} {eqn} {cat}
 }
 fn pass {
-	input | cite | pics | tbls | eqns | troff -mbook '-dbook-aux='^$aux >$tr >[2]$err
+	input | cite | pics | tbls | eqns | troff -mbook '-dbook-aux='^$aux '-dbook-ind='^$ind >$tr >[2]$err
 	grep '^aux:' $err | sed 's/^aux://' >$new
+	if {~ $index 1} {mkindex $tr >$indnew} {cp $ind $indnew}
 }
 
 ftest -f $aux || echo -n >$aux
+ftest -f $ind || echo -n >$ind
 done=0
 for n in 1 2 3 4 {
 	if {~ $done 0} {
 		pass
+		same=0
 		if {cmp -s $aux $new >/dev/null >[2]/dev/null} {
+			if {cmp -s $ind $indnew >/dev/null >[2]/dev/null} {same=1}
+		}
+		if {~ $same 1} {
 			done=1
 		} {
 			cp $new $aux
+			cp $indnew $ind
 		}
 	}
 }
 grep -v '^aux:' $err >[1=2]
 tr2pdf $tr >$out
-rm -f $err $new
+rm -f $err $new $indnew

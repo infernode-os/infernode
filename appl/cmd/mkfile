@@ -135,6 +135,7 @@ TARG=\
 	mdb.dis\
 	memfs.dis\
 	mkdir.dis\
+	mkindex.dis\
 	mkroot.dis\
 	mntgen.dis\
 	mount.dis\

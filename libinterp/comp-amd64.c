@@ -2270,9 +2270,8 @@ comp(Inst *i)
 			modrr(0x3b, RRTA, RDI);			/* CMP RDI, R10 */
 			jnebounds(0x72, i);			/* JB: in range */
 		}
-		genb(0x0f);					/* MOVZX EAX, word [RAX+RDI*2+data] */
-		gen2(Omovzxw, (1<<6)|(0<<3)|4);
-		gen2((1<<6)|(RDI<<3)|RAX, O(String, data));
+		gen2(Oldw, (1<<6)|(0<<3)|4);			/* MOV EAX, dword [RAX+RDI*4+data]: a Rune is 32 bits; zero-extends */
+		gen2((2<<6)|(RDI<<3)|RAX, O(String, data));
 		*done = code - (done + 1);
 		opwst(i, Ostw, RAX);
 		break;

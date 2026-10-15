@@ -729,8 +729,9 @@ struct F_Sys_wstat
 #define Sys_FORKENV 128
 #define Sys_EXPWAIT 0
 #define Sys_EXPASYNC 1
-#define Sys_UTFmax 3
-#define Sys_UTFerror 128
+#define Sys_UTFmax 4
+#define Sys_UTFerror 65533
+#define Sys_Runemax 1114111
 void IPint_add(void*);
 typedef struct F_IPint_add F_IPint_add;
 struct F_IPint_add

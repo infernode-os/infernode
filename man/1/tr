@@ -58,13 +58,14 @@ The character
 .L \e
 followed by 1, 2 or 3 octal digits stands for the
 character whose
-16-bit
 value is given by those digits.
 The character sequence
 .L \ex
-followed by 1, 2, 3, or 4 hexadecimal digits stands
+followed by 1 to 6 hexadecimal digits stands
 for the character whose
-16-bit value is given by those digits.
+value, up to
+.BR 10FFFF ,
+is given by those digits.
 A 
 .L \e
 followed by any other character stands

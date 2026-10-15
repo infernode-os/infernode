@@ -1116,7 +1116,7 @@ tksubdeliver(Tk *tk, TkAction *binds, int event, void *data, int extn)
 //debug = (tk->name && !strcmp(tk->name->name, ".cd")) ? print : nullop;
 //debug("subdeliver %v\n", event);
 
-	if (event & TkTakefocus) {
+	if (!(event & TkKey) && (event & TkTakefocus)) {
 		if (tk->flag & Tktakefocus)
 			tksetkeyfocus(tk->env->top, tk, 0);
 		return TkDdelivered;
@@ -1854,8 +1854,8 @@ tkeventfmt(Fmt *f)
 	fmtprint(f, "<");
 	k = -1;
 	if (e & TkKey) {
-		k = e & 0xffff;
-		e &= ~0xffff;
+		k = TKKEY(e);
+		e &= ~TKKEY(~0);
 	}
 	d = 0;
 	for (i = 0; events[i].name; i++) {

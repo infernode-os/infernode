@@ -128,21 +128,16 @@ runelen(long c)
 int
 runenlen(Rune *r, int nrune)
 {
-	int nb, i;
+	int nb;
 	Rune c;
 
 	nb = 0;
 	while(nrune--) {
 		c = *r++;
-		if(c <= Rune1){
+		if(c <= Rune1)
 			nb++;
-		} else {
-			for(i = 2; i < UTFmax + 1; i++)
-				if(c <= RuneX(i) || i == UTFmax){
-					nb += i;
-					break;
-				}
-		}
+		else
+			nb += runelen(c);	/* as runetochar has it: Runeerror's three for one out of range */
 	}
 	return nb;
 }

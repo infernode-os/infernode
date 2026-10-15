@@ -28,20 +28,31 @@ stob(state : Convcs->State, s : string) : (Convcs->State, array of byte)
 		state = "doneheader";
 	}
 
-	b := array[len s * 2] of byte;
+	b := array[len s * 4] of byte;
 	j := 0;
-	if(bigendian){
-		for(i := 0; i < len s; i++){
-			c := s[i];
-			b[j++] = byte (c >> 8);
-			b[j++] = byte c;
-		}
-	}else{
-		for(i := 0; i < len s; i++){
-			c := s[i];
-			b[j++] = byte c;
-			b[j++] = byte (c >> 8);
-		}
+	for(i := 0; i < len s; i++){
+		c := s[i];
+		if(c > Sys->Runemax || c >= 16rD800 && c <= 16rDFFF)
+			c = Sys->UTFerror;
+		if(c > 16rFFFF){
+			# beyond the BMP: a surrogate pair
+			c -= 16r10000;
+			j = put(b, j, 16rD800 + (c >> 10));
+			j = put(b, j, 16rDC00 + (c & 16r3FF));
+		}else
+			j = put(b, j, c);
 	}
-	return (state, b);
+	return (state, b[0:j]);
+}
+
+put(b: array of byte, j: int, u: int): int
+{
+	if(bigendian){
+		b[j++] = byte (u >> 8);
+		b[j++] = byte u;
+	}else{
+		b[j++] = byte u;
+		b[j++] = byte (u >> 8);
+	}
+	return j;
 }

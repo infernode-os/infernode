@@ -37,7 +37,7 @@ Dat : module {
 		docview: Docview;
 	};
 
-	SZSHORT : con 2;
+	SZRUNE : con 4;	# bytes a rune takes in the temp file (runes go to 16r10FFFF)
 	SZINT : con 4;
 
 	FALSE, TRUE, XXX : con iota;

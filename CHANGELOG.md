@@ -2,7 +2,19 @@
 
 All notable changes to InferNode are documented in this file.
 
-## [Unreleased]
+## [0.8.0] - 2026-10-15
+
+This release makes TLS post-quantum by default: the hybrid key exchange
+documented before was never sent, because its codepoint was wrong. A
+node can now be CNSA-strict to its peers and still reach the web. The
+Raspberry Pi 4 kernel has run on a board, and does gigabit both ways.
+Characters outside the Basic Multilingual Plane, emoji among them, now
+survive the trip from bytes to a Limbo string and back. Delegation in
+the agent loop works again after its move into veltrosrv, the
+LLM-maintained wiki writes pages for the first time, and `dict` reads
+the OED as on Plan 9. Three services moved from `/n` to `/mnt`
+(wiki9p, speech9p, wallet9p); scripts that name the old paths need
+changing. See Name space.
 
 ### Security
 
@@ -80,6 +92,118 @@ All notable changes to InferNode are documented in this file.
   `tests/host/wm_ghost_test.sh` deletes and then kills a `wm/colors`
   under `wm/wm`: wm stays up, and where the window was is wm's
   background again (INFR-433).
+
+### Text
+
+- **Runes are 21 bits on every hosted platform** (#918). Each hosted
+  `lib9.h` declared a 16-bit `Rune` and `lib9/rune.c` decoded at most
+  three bytes of UTF-8, so the four bytes of an emoji became error
+  runes, and writing the string back produced `C2 80`. `Rune` is now
+  `unsigned int` with `UTFmax` 4, as the native kernel already had;
+  `sys.m` has `UTFmax` 4, `UTFerror` 16rFFFD and a new `Runemax`.
+  `sys->char2byte` encodes runes above U+FFFF, Tk key events carry 21
+  bits, the Limbo compiler takes `\UXXXXXXXX`, and `convcs` joins and
+  splits UTF-16 surrogate pairs. The amd64 JIT read `s[i]` on a rune
+  string as 16 bits; it reads 32, and the 386, arm, thumb and power JITs
+  hand `indc` to the interpreter. The Windows emulator converts Win32
+  strings as UTF-16, and Android converts SMS text from UTF-16, not
+  JNI's modified UTF-8. Xenith's and Acme's temp files hold 4 bytes a
+  rune.
+
+### Charon and the browser engine
+
+- **Pages at the display's pixels to the point** (#899). On a Retina
+  screen pages came out half size in the standalone Xenith app. The
+  engine lays a page out at `$displayscale` when that is 1.1 or more:
+  sharp, not a 1x rendering scaled up.
+- **A page leaves nothing behind when it goes.** Its web fonts are
+  closed with it (#919); before, every face any page had downloaded
+  stayed in OutlineFont's table. With scripts on, a realm that quit
+  cleanly left its `setTimeout` sleepers and fetches running, and with
+  them the realm's heap; its process group is now killed (#920).
+- **Back and Fwd return to where the page was left** (#894, #902), in
+  Charon and in Xenith, not to its top.
+- **A form with no `action` is submitted to its own page** (#914), not
+  to `?q=...` opened as a file.
+- **A disabled field takes no click** (#895), and a read-only one takes
+  no keys. In Xenith, typing into a disabled field opened the Errors
+  window under the pointer, which took the rest of the keys.
+- **An element's position is its own boxes, not its `::after`'s**
+  (#900), in `Session.boxof`, `dom/N/box` and `getBoundingClientRect`.
+- **Two ways a page stopped Xenith** (#892): layout's `curdoc` was left
+  pointing at a page's iframe, so a click looked up the page's boxes
+  among the frame's nodes. A page's fault is now the page's, not
+  Xenith's.
+
+### Xenith
+
+- **Agent typesets its replies** (#898). The reply streams in as text
+  and is typeset as markdown when the turn ends; `Render` in the tag
+  switches between the two. The window no longer repeats an approval
+  request without end, and a failed typeset no longer hides its text.
+- **A page loading in a window whose events another program reads no
+  longer makes Xenith quit** (#896) with `xenith: no window owner`. The
+  document view's work now locks the window, not only the row.
+- **A fixed header stays at the top of the window** (#903), instead of
+  being drawn again on each strip a scroll exposed.
+
+### Dictionary
+
+- **`dict` reads the second edition of the OED, as on Plan 9** (#893),
+  and `Dict word` in Acme or Xenith opens a window of its entries. The
+  text is copyright and is not shipped: a user supplies it, as files or
+  from a server that exports it over 9P (`dict(7)`). Characters above
+  U+07FF were dropped by every dict module; they are not now. The tag
+  scripts in `xenith/dis` (`Goog`, `Pedia`, `Slide`, ...) were tracked
+  without execute permission and none of them ran; they do.
+
+### Veltro and the agent loop
+
+- **Delegation works again after the move into veltrosrv** (#917). What
+  looked like model failures were harness bugs: task agents had no
+  tools, activity 0 lost its own at its first delegation, every
+  lucibridge shared one `/mnt/veltro`, replies repeated each turn, and
+  llmsrv's `/stream` lost text. Activity 0 is now told when a task
+  finishes, by a `[task-event]` with its report, instead of polling, and
+  the user can keep talking to it meanwhile. Inputs over 8K arrive as
+  one turn. `tests/host/agent_delegation_test.sh` runs in CI.
+
+### Emulator
+
+- **An allocation a pool refuses says how much, why and for whom**
+  (#905): the size, the reason (the pool's maxsize, the 1 GB block
+  limit, a restricted Prog's reserve, or the host), the caller (as
+  image+offset on Linux, for `addr2line`), and the pool's state.
+- **`Display.writeimage` finishes on an image wider than the display's
+  buffer** (#897); it looped forever holding the VM, so `charonshot`
+  and `scap` hung on a Retina-wide window.
+- **The launchers give the Dis heap 1536 MB** (#921), from 512 for
+  Xenith and 1024 for InferNode. Charon with scripts on needs it; the
+  pool costs nothing until it fills.
+
+### Documents
+
+- **PDF text from fonts whose ToUnicode maps one code to several
+  characters** (#911): ligatures such as "ff", "fi" and "ffl" extract
+  as their letters.
+
+### Bare metal
+
+- **The Pi 4 kernel runs on a Pi 4** (#912, #915, #922), a 4B rev 1.5
+  with 4 GB. On the board: SD card power on EMMC2 and the GENET receive
+  ring fixed, a serial loader, USB keyboard and mouse together behind
+  the VL805 (the xHCI interval was read in the wrong unit), all of its
+  memory, temperature in `#P`, and `tryboot.txt`. Gigabit TCP both ways
+  (out 537 to 890 Mbit/s, in 932) from a send queue sized to the board,
+  and SD reads from 1.7 to 19 MB/s raw by reading multiple blocks. The
+  console no longer interleaves the cores' lines character by
+  character, and `/dev/sysstat` reports idle ticks per core.
+  `os/bcm2711/README.md` lists what each subsystem did on the board.
+
+### Build
+
+- **`makemk.sh` builds `mk` for the host it runs on** (#913); on Linux
+  it compiled against the macOS headers and failed.
 
 ## [0.7.0] - 2026-10-13
 

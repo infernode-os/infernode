@@ -16,6 +16,8 @@ Wb: adt {
 	sub_c:	array of string;	# the collected subword
 	sub_n:	int;
 	sub_collect:	int;	# collect subwords
+	pl, pr:	int;		# protrusion of the first and last glyph (.mtp), in units
+	pseen:	int;		# anything put yet (a glyph, a move, a drawing)
 };
 
 BBMAX:	con 1 << 29;
@@ -92,6 +94,9 @@ wb_init(wb: ref Wb)
 	wb.sb = 0;
 	wb.st = 0;
 	wb.icleft = 0;
+	wb.pl = 0;
+	wb.pr = 0;
+	wb.pseen = 0;
 	if(wb.sub_c == nil)
 		wb.sub_c = array[WORDLEN] of string;
 	wb.sub_n = 0;
@@ -183,9 +188,41 @@ wb_flush(wb: ref Wb)
 	wb_flushfont(wb);
 }
 
+# protrusion: the first glyph's left, the last's right (.mtp, .mtpc)
+wb_prot(wb: ref Wb, g: ref Glyph, gw: int)
+{
+	if(!nr(R_mtp))
+		return;
+	(l, r) := font_prot(gfont(g), g);
+	if(!wb.pseen)
+		wb.pl = l * gw / 1000;
+	wb.pseen = 1;
+	wb.pr = r * gw / 1000;
+}
+
+# not a glyph at the word's edge: a move, a tab, a drawing
+wb_noprot(wb: ref Wb)
+{
+	wb.pseen = 1;
+	wb.pr = 0;
+}
+
+# the inserted hyphen's right protrusion
+wb_hyprot(wb: ref Wb): int
+{
+	if(!nr(R_mtp))
+		return 0;
+	g := dev_glyph("hy", wb.f);
+	if(g == nil)
+		return 0;
+	(nil, r) := font_prot(gfont(g), g);
+	return r * font_gwid(gfont(g), dev_font(R_F(wb)), R_S(wb), g.wid) / 1000;
+}
+
 wb_hmov(wb: ref Wb, n: int)
 {
 	wb_flushsub(wb);
+	wb_noprot(wb);
 	wb.h += n;
 	wb.sbuf += sys->sprint("%sh'%du'", ecs(), n);
 }
@@ -219,6 +256,7 @@ wb_putbuf(wb: ref Wb, c: string)
 	c1 := at(c, 1);
 	if(c0 == '\t' || c0 == 1 || (c0 == c_ni && (c1 == '\t' || c1 == 1))){
 		wb.sbuf += c;
+		wb_noprot(wb);
 		return;
 	}
 	g := dev_glyph(c, wb.f);
@@ -262,9 +300,12 @@ wb_putbuf(wb: ref Wb, c: string)
 			}
 		}
 		if(g != nil){
-			wb.h += font_gwid(gfont(g), dev_font(wb.f), wb.s, g.wid);
+			gw := font_gwid(gfont(g), dev_font(wb.f), wb.s, g.wid);
+			wb.h += gw;
 			wb.ct |= g.typ;
-		}
+			wb_prot(wb, g, gw);
+		}else
+			wb_noprot(wb);
 		wb_stsb(wb);
 	}
 }
@@ -449,6 +490,7 @@ wb_setcost(wb: ref Wb, cost: int)
 wb_drawl(wb: ref Wb, c: int, h, v: int)
 {
 	wb_flush(wb);
+	wb_noprot(wb);
 	wb.sbuf += sys->sprint("%sD'%c %du %du'", ecs(), c, h, v);
 	wb.h += h;
 	wb.v += v;
@@ -458,6 +500,7 @@ wb_drawl(wb: ref Wb, c: int, h, v: int)
 wb_drawc(wb: ref Wb, c: int, r: int)
 {
 	wb_flush(wb);
+	wb_noprot(wb);
 	wb.sbuf += sys->sprint("%sD'%c %du'", ecs(), c, r);
 	wb.h += r;
 }
@@ -465,6 +508,7 @@ wb_drawc(wb: ref Wb, c: int, r: int)
 wb_drawe(wb: ref Wb, c: int, h, v: int)
 {
 	wb_flush(wb);
+	wb_noprot(wb);
 	wb.sbuf += sys->sprint("%sD'%c %du %du'", ecs(), c, h, v);
 	wb.h += h;
 }
@@ -472,6 +516,7 @@ wb_drawe(wb: ref Wb, c: int, h, v: int)
 wb_drawa(wb: ref Wb, c: int, h1, v1, h2, v2: int)
 {
 	wb_flush(wb);
+	wb_noprot(wb);
 	wb.sbuf += sys->sprint("%sD'%c %du %du %du %du'", ecs(), c, h1, v1, h2, v2);
 	wb.h += h1 + h2;
 	wb.v += v1 + v2;
@@ -481,6 +526,7 @@ wb_drawa(wb: ref Wb, c: int, h1, v1, h2, v2: int)
 wb_drawxbeg(wb: ref Wb, c: int)
 {
 	wb_flush(wb);
+	wb_noprot(wb);
 	wb.sbuf += sys->sprint("%sD'%c", ecs(), c);
 }
 

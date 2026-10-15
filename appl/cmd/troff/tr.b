@@ -960,6 +960,41 @@ tr_ochar(args: array of string)
 		cdef_remove(arg(args, 1), 1, arg(args, 2));
 }
 
+# .mtp [n]: protrusion into the margin, on (1) or off (0), in this
+# environment: a line's first and last glyphs hang out of it by what
+# .mtpc gives them, and the line is filled and adjusted for that
+tr_mtp(args: array of string)
+{
+	n := 1;
+	if(len args > 1)
+		n = eval(args[1], 0) != 0;
+	nrset(R_mtp, n);
+}
+
+# .mtpc F l r c...: the characters' protrusion in font F, left and right,
+# in thousandths of the glyph's width (as pdfTeX's \lpcode and \rpcode)
+tr_mtpc(args: array of string)
+{
+	fnt := argfont(args);
+	if(fnt == nil || len args < 5)
+		return;
+	l := eval(args[2], 0);
+	r := eval(args[3], 0);
+	for(k := 4; k < len args; k++){
+		a := args[k];
+		i := 0;
+		while(i < len a){
+			(t, c, ni) := charread(a, i);
+			if(t < 0 || ni <= i)
+				break;
+			i = ni;
+			g := font_find(fnt, c);
+			if(g != nil)
+				font_setprot(fnt, g, l, r);
+		}
+	}
+}
+
 tr_fmap(args: array of string)
 {
 	fnt := argfont(args);
@@ -1224,6 +1259,8 @@ cmds := array[] of {
 	Cmd("ffsc", A_REQ),
 	Cmd("fspecial", A_REQ),
 	Cmd("rules", A_REQ),
+	Cmd("mtp", A_REQ),
+	Cmd("mtpc", A_REQ),
 	Cmd("ft", A_REQ),
 	Cmd("fzoom", A_REQ),
 	Cmd("hc", A_REQ),
@@ -1349,6 +1386,8 @@ cmd_run(i: int, args: array of string)
 	"ffsc" =>	tr_ffsc(args);
 	"fspecial" =>	tr_fspecial(args);
 	"rules" =>	tr_rules(args);
+	"mtp" =>	tr_mtp(args);
+	"mtpc" =>	tr_mtpc(args);
 	"ft" =>		tr_ft(args);
 	"fzoom" =>	tr_fzoom(args);
 	"hc" =>		tr_hc(args);

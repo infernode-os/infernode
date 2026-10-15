@@ -18,6 +18,8 @@ Word: adt {
 	cost:	int;		# the extra cost of a line break after this word
 	swid:	int;		# the space width after this word (\w' ')
 	totwid, totswid, totscnt:	int;	# widths of words up to this one
+	lp, rp:	int;		# protrusion of its first and last glyph (.mtp)
+	hyrp:	int;		# the hyphen's, if one is inserted after it
 };
 
 Line: adt {
@@ -38,7 +40,16 @@ Fmt: adt {
 	filled:	int;		# filled all words in the last fmt_fill()
 	eos:	int;		# the last word ends a sentence
 	fillreq:	int;	# fill after the last word (\p)
+	tind:	int;		# the line's indent is .ti's: no protrusion at its left
 };
+
+# the protrusion at a line's right: its last word's, or its hyphen's
+endrp(w: ref Word): int
+{
+	if(w.hy)
+		return w.hyrp;
+	return w.rp;
+}
 
 FMT_LLEN(f: ref Fmt): int
 {
@@ -59,6 +70,7 @@ FMT_BOTH(nil: ref Fmt): int
 fmt_confupdate(f: ref Fmt)
 {
 	f.ll = nr(R_l);
+	f.tind = nr(R_ti) >= 0;
 	if(nr(R_ti) >= 0)
 		f.li = nr(R_ti);
 	else
@@ -178,9 +190,18 @@ fmt_extractline(f: ref Fmt, end: int, str: int): int
 	l := fmt_mkline(f);
 	llen := FMT_LLEN(f);
 	w := fmt_totwid(f, end);
+	# protrusion: the line hangs out by its first and last glyphs'
+	lp := 0;
+	prot := 0;
+	if(end > 0){
+		if(!f.tind)
+			lp = f.words[0].lp;
+		prot = lp + endrp(f.words[end - 1]);
+	}
+	w -= prot;
 	if(str && FMT_BOTH(f) && nr(R_j) & AD_K){
 		fmt_keshideh(f, end, llen - w);
-		w = fmt_totwid(f, end);
+		w = fmt_totwid(f, end) - prot;
 	}
 	nspc := fmt_scnt(f, end);
 	if(nspc && FMT_BOTH(f) && (llen < w || str)){
@@ -197,7 +218,9 @@ fmt_extractline(f: ref Fmt, end: int, str: int): int
 					f.words[i].gap++;
 			}
 	}
-	l.wid = fmt_wordscopy(f, end, l);
+	l.wid = fmt_wordscopy(f, end, l) - prot;
+	if(lp)
+		l.sbuf = sys->sprint("%sh'%du'", ecs(), -lp) + l.sbuf;
 	return 0;
 }
 
@@ -280,6 +303,11 @@ fmt_wb2word(f: ref Fmt, wb: ref Wb, hy, str, gap, cost: int)
 	word.gap = gap;
 	word.cost = cost;
 	word.swid = wb_swid(wb);
+	word.lp = wb.pl;
+	word.rp = wb.pr;
+	word.hyrp = 0;
+	if(hy)
+		word.hyrp = wb_hyprot(wb);
 	word.totwid = word.wid + word.gap;
 	word.totswid = 0;
 	if(str)
@@ -502,6 +530,8 @@ fmt_fillwords(f: ref Fmt, br: int): int
 	out := array[64] of {* => 0};	# the number of words in filled lines
 	if(!FMT_FILL(f) || !f.words_n)
 		return 0;
+	if(f.tind)
+		f.words[0].lp = 0;
 	# the total length, taking shrinkable spaces into account
 	llen := fmt_totwid(f, f.words_n) -
 		fmt_totswid(f, f.words_n) * nr(R_ssh) / 100;
@@ -620,13 +650,14 @@ fmta_last(words: array of ref Word, words_n: int, llen: int, br: int,
 			lwid += words[i + 1].gap;
 		if(i + 1 < pos && words[i + 1].str)
 			swid += words[i + 1].gap;
-		if(lwid > llen + swid * nr(R_ssh) / 100)
+		pw := lwid - words[i].lp - endrp(words[pos - 1]);
+		if(pw > llen + swid * nr(R_ssh) / 100)
 			break;
 		cost := best[i];
 		# the cost of formatting short lines; should prevent widows
-		if(br && nr(R_pmll) && lwid < llen * nr(R_pmll) / 100){
+		if(br && nr(R_pmll) && pw < llen * nr(R_pmll) / 100){
 			pmll := llen * nr(R_pmll) / 100;
-			cost += big nr(R_pmllcost) * big (pmll - lwid) / big pmll;
+			cost += big nr(R_pmllcost) * big (pmll - pw) / big pmll;
 		}
 		if(last < 0 || cost < last_cost){
 			last = i;
@@ -698,12 +729,13 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 				swid += words[i + 1].gap;
 				nspc++;
 			}
-			if(lwid > llen + swid * ssh0 / 100 && i + 1 < pos)
+			pw := lwid - words[i].lp - endrp(words[pos - 1]);
+			if(pw > llen + swid * ssh0 / 100 && i + 1 < pos)
 				break;
 			dwid = swid;
 			if(!dwid && i > 0)	# no stretchable spaces
 				dwid = words[i - 1].swid;
-			cur := best[i] + FMT_COST(llen, lwid, dwid, nspc);
+			cur := best[i] + FMT_COST(llen, pw, dwid, nspc);
 			if(hyphenated && best_dep[i] + 1 == nohy)
 				cur += big 10000000;
 			if(hyphenated){
@@ -744,6 +776,7 @@ fmtb_cost(words: array of ref Word, nil: int, llen: int, br: int, nohy: int, end
 	for(i := 0; i < cnt; i++){
 		w := words[end[i] - 1];
 		lwid := words[end[i] - 1].totwid - words[pos].totwid + words[pos].wid;
+		lwid -= words[pos].lp + endrp(words[end[i] - 1]);
 		swid := words[end[i] - 1].totswid - words[pos].totswid;
 		scnt := words[end[i] - 1].totscnt - words[pos].totscnt;
 		cur := big 0;
@@ -789,6 +822,7 @@ fmtb_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 			lwid := words[i - 1].totwid - words[pos].totwid + words[pos].wid;
 			swid := words[i - 1].totswid - words[pos].totswid;
 			lwid += words[i - 1].hy;
+			lwid -= words[pos].lp + endrp(words[i - 1]);
 			if(lwid > llen + swid * nr(R_ssh) / 100)
 				break;
 			best = i;

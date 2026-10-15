@@ -1,7 +1,7 @@
 #!/dis/sh
 # book - a book written with troff's macros -mbook, as PDF
 #
-#	book [-p works.bib] [-S style] [-o book.pdf] book.ms
+#	book [-f] [-p works.bib] [-S style] [-o book.pdf] book.ms
 #
 # Citations are set by refer(1) from the database, in the style
 # (chicago); pictures, tables and equations by pic(1), tbl(1) and eqn(1),
@@ -10,6 +10,9 @@
 # often as its table of contents and references need to be set again
 # (they come from the pass before, through book.aux); then the PDF by
 # tr2pdf(1). troff's output is kept as book.out, for the document views.
+# -f sets it as it goes to press (the register book-final): with
+# microtypography, its punctuation hanging into the margins; without
+# it, a draft, set as before and sooner.
 # A book with an index (.printindex) has it made by mkindex(1) from each
 # pass's output, into book.ind, and is set again until that settles too.
 load std
@@ -17,15 +20,17 @@ load std
 bib=()
 style=chicago
 out=()
+final=0
 args=$*
-while {~ $#args 2 3 4 5 6 7 && ~ ${hd $args} -*} {
+while {~ $#args 2 3 4 5 6 7 8 && ~ ${hd $args} -*} {
 	o=${hd $args}
 	args=${tl $args}
 	if {~ $o -p} {bib=${hd $args}; args=${tl $args}}
 	if {~ $o -S} {style=${hd $args}; args=${tl $args}}
 	if {~ $o -o} {out=${hd $args}; args=${tl $args}}
+	if {~ $o -f} {final=1}
 }
-~ $#args 1 || {echo 'usage: book [-p works.bib] [-S style] [-o book.pdf] book.ms' >[1=2]; raise usage}
+~ $#args 1 || {echo 'usage: book [-f] [-p works.bib] [-S style] [-o book.pdf] book.ms' >[1=2]; raise usage}
 src=$args
 stem=`{echo $src | sed 's/\.[^.\/]*$//'}
 aux=$stem.aux
@@ -63,7 +68,7 @@ fn eqns {
 	if {~ $math 1} {eqn} {cat}
 }
 fn pass {
-	input | cite | pics | tbls | eqns | troff -mbook '-dbook-aux='^$aux '-dbook-ind='^$ind >$tr >[2]$err
+	input | cite | pics | tbls | eqns | troff -mbook '-rbook-final='^$final '-dbook-aux='^$aux '-dbook-ind='^$ind >$tr >[2]$err
 	grep '^aux:' $err | sed 's/^aux://' >$new
 	if {~ $index 1} {mkindex $tr >$indnew} {cp $ind $indnew}
 }

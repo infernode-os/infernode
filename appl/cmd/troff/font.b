@@ -74,6 +74,7 @@ Font: adt {
 	gsubK:		array of int;	# the feature state gsubA and gposA are for
 	gposK:		array of int;
 	ggrp:		ref Iset;	# glyphs of each group
+	prl, prr:	array of int;	# protrusion left and right, by gl index (.mtpc), in thousandths of the glyph's width
 	ggrp_rev:	ref Csr;	# groups of each glyph
 	data:		array of byte;	# the description, its rules read when needed
 	blocks:		array of ref Block;	# where its rules are
@@ -155,6 +156,31 @@ font_map(fnt: ref Font, name: string, id: string, hasid: int): int
 	}
 	dict_put(fnt.ch_map, name, gidx);
 	return 0;
+}
+
+# a glyph's protrusion into the margin (.mtpc): left and right, in
+# thousandths of its width
+font_setprot(fnt: ref Font, g: ref Glyph, l, r: int)
+{
+	if(fnt.prl == nil || len fnt.prl < len fnt.gl){
+		a := array[len fnt.gl] of {* => 0};
+		b := array[len fnt.gl] of {* => 0};
+		if(fnt.prl != nil){
+			a[0:] = fnt.prl;
+			b[0:] = fnt.prr;
+		}
+		fnt.prl = a;
+		fnt.prr = b;
+	}
+	fnt.prl[g.idx] = l;
+	fnt.prr[g.idx] = r;
+}
+
+font_prot(fnt: ref Font, g: ref Glyph): (int, int)
+{
+	if(fnt.prl == nil || g.idx >= len fnt.prl)
+		return (0, 0);
+	return (fnt.prl[g.idx], fnt.prr[g.idx]);
 }
 
 # whether character name has been mapped with font_map()

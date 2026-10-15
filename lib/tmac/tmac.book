@@ -72,6 +72,30 @@
 .\" rules (tbl's, \l's of \(ul, \L's) drawn as lines, not glyphs
 .rules 1
 .\"
+.\" microtypography, for the book as it goes to press (book -f, which
+.\" sets the register book-final): punctuation, hyphens, quotation marks
+.\" and a few letters hang into the margins (protrusion), so the text's
+.\" edges look straight; in thousandths of each glyph's width, after
+.\" microtype's defaults.  Drafts are set without it.
+.de book-mtpc
+.mtpc \\$1 0 700 . \(hy - ‐
+.mtpc \\$1 0 500 , : ;
+.mtpc \\$1 0 200 ? ! ·
+.mtpc \\$1 200 300 –
+.mtpc \\$1 150 200 —
+.mtpc \\$1 500 300 “ ‘ « ‹
+.mtpc \\$1 300 500 ” ’ » › '
+.mtpc \\$1 100 0 ( [
+.mtpc \\$1 0 100 ) ]
+.mtpc \\$1 50 50 A T V W X Y v w x y
+.mtpc \\$1 0 50 F K L k r
+.mtpc \\$1 0 70 t
+..
+.book-mtpc R
+.book-mtpc I
+.book-mtpc B
+.book-mtpc BI
+.\"
 .\" ---------------------------------------------------------------
 .\" begin: the page set, once, before the first text
 .\"
@@ -89,6 +113,7 @@
 .nr book-ll \\n[.l]
 .fi
 .ad b
+.mtp \\n[book-final]
 .ev fn
 .book-noteenv
 .ev
@@ -97,6 +122,7 @@
 .ev
 .ev quote
 .ft R
+.mtp \\n[book-final]
 .ev
 .ev hd
 .ft R
@@ -123,6 +149,7 @@
 .ad b
 .in 0
 .ti 0
+.mtp \\n[book-final]
 ..
 .\"
 .\" ---------------------------------------------------------------
@@ -396,7 +423,9 @@
 .vs \\n[book-vs]u-1.5p
 .in +2m
 .ll -2m
-.ti 0
+.\" the first line at the indent too (a paragraph's .ti cancelled;
+.\" .ti 0 put it at the margin)
+.ti +0
 ..
 .de endquote
 .br
@@ -412,7 +441,9 @@
 .ps \\n[book-ps]-1
 .vs \\n[book-vs]u-1.5p
 .in \\n[book-ll]u*4/10
-.ti 0
+.\" the first line at the indent too (a paragraph's .ti cancelled;
+.\" .ti 0 put it at the margin)
+.ti +0
 .ad l
 ..
 .de attrib

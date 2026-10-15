@@ -140,7 +140,7 @@ R_ct, R_td, R_cd, R_dl, R_dn, R_ln, R_nl, R_sb, R_st, R_pg,
 R_lb, R_ce, R_f0, R_lg, R_hy, R_hycost, R_hycost2, R_hycost3, R_hlm, R_i0,
 R_ti, R_kn, R_tI, R_I0, R_l0, R_L0, R_m0, R_mk, R_na, R_ns,
 R_o0, R_pmll, R_pmllcost, R_ss, R_sss, R_ssh, R_s0, R_sv, R_lt, R_lt0,
-R_v0, R_llx, R_lly, R_urx, R_ury: int;
+R_v0, R_llx, R_lly, R_urx, R_ury, R_mtp: int;
 
 regsinit()
 {
@@ -199,6 +199,7 @@ regsinit()
 	R_lly = map("bblly");
 	R_urx = map("bburx");
 	R_ury = map("bbury");
+	R_mtp = map(".mtp");
 }
 
 # scales

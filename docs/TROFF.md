@@ -87,6 +87,27 @@ are known only once the book has been set): `book` gathers what the
 first pass learnt (the `aux:` lines troff writes to its standard error)
 into `book.aux`, and sets the book again until it no longer changes.
 
+## Drafts and the book as it goes to press: `book -f`
+
+`book` sets a draft; `book -f` sets the book as it goes to press, with
+microtypography: punctuation, hyphens, quotation marks and a few letters
+hang into the margins (*protrusion*), so that the text's edges look
+straight rather than measure straight, as LaTeX's microtype makes them.
+A paragraph is filled knowing it, so its lines break better too.
+
+It is troff's (`-mbook` turns it on when the register `book-final` is
+set, as `book -f` sets it):
+
+    .mtpc R 0 700 . \(hy         \" font R: these hang right by 0.7 of their width
+    .mtpc R 500 300 “            \" left by half, right by 0.3
+    .mtp 1                       \" protrusion on, in this environment
+
+The codes are in thousandths of each glyph's width, as pdfTeX's
+`\lpcode` and `\rpcode`; `-mbook`'s follow microtype's defaults. A
+line's first glyph protrudes left, its last (or the hyphen inserted)
+right; a first line indented by `.ti` (a paragraph's) does not protrude
+left. With `.mtp 0`, the default, troff sets as C Neatroff does.
+
 ## The index: `.index` and `mkindex`
 
 An entry is written as LaTeX's `\index` (makeindex's syntax), on a line
@@ -185,7 +206,7 @@ after the work above is done.
 
 ## Still to come
 
-The LaTeX converter; `-man`; microtypography
-(protrusion and expansion); fonts falling back for characters a font
+The LaTeX converter; `-man`; font expansion (the
+other half of microtypography); fonts falling back for characters a font
 lacks; font subsetting in PDFs; eqn's bars drawn as lines (they are
 glyphs now, and copied with the text).

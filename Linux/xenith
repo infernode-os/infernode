@@ -48,5 +48,5 @@ for f in "$@"; do
     files="$files $(q "/n/local$f")"
 done
 
-exec "$EMU" -c1 -pheap=512m -pmain=512m -pimage=512m "-g${XEN_GEOM:-1400x900}" "-r$RESOURCES" \
+exec "$EMU" -c1 -pheap=1536m -pmain=512m -pimage=512m "-g${XEN_GEOM:-1400x900}" "-r$RESOURCES" \
     /dis/sh.dis -l -c "cd $(q "/n/local$PWD") >[2] /dev/null; run /lib/xen/boot.sh -t $(q "${XEN_THEME:-xenith}")$files"

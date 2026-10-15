@@ -44,6 +44,8 @@ enum
 	Sendstatus	= 13,
 	Setblocklen	= 16,
 	Readsingle	= 17,
+	Readmultiple	= 18,
+	Stoptransmission= 12,
 	Writesingle	= 24,
 	Appcmd		= 55,
 	Sdsendopcond	= 41,		/* ACMD41 */
@@ -509,6 +511,50 @@ sdblkread(uvlong blockno, void *a)
 		uartputstr("sd: no data from the card\n");
 		return -1;
 	}
+	return 0;
+}
+
+/*
+ * Read n consecutive 512-byte blocks into a. Returns 0 on success.
+ *
+ * One READ_MULTIPLE_BLOCK where the controller can do it: a card takes
+ * a few hundred microseconds to find a block and then streams the ones
+ * after it, and CMD17 a block at a time paid that every block -- 1.7
+ * MB/s from a card on a 50MHz four-bit bus, on a Pi 4. The SDHCI
+ * controllers (EMMC2, the Arasan) count the blocks and stop the card
+ * themselves; on any other, one block at a time as before.
+ */
+int
+sdblkreadn(uvlong blockno, void *a, int n)
+{
+	uchar *p;
+	int i;
+
+	if(!card.valid)
+		return -1;
+#if defined(SDCARD_EMMC2) || defined(SDCARD_ARASAN)
+	if(n > 1){
+		io->iosetup(0, Blocksize, n);
+		if(io->cmd(Readmultiple, blockaddr(blockno), R48 | Dread, nil) < 0){
+			io->iosetup(0, Blocksize, 1);
+			uartputstr("sd: multiple-block read refused\n");
+			return -1;
+		}
+		if(io->io(0, a, n*Blocksize) < 0){
+			/* the card may still be sending: stop it, so the next command is heard */
+			io->cmd(Stoptransmission, 0, R48busy, nil);
+			io->iosetup(0, Blocksize, 1);
+			uartputstr("sd: multiple-block read lost its data\n");
+			return -1;
+		}
+		io->iosetup(0, Blocksize, 1);
+		return 0;
+	}
+#endif
+	p = a;
+	for(i = 0; i < n; i++)
+		if(sdblkread(blockno + i, p + i*Blocksize) < 0)
+			return -1;
 	return 0;
 }
 

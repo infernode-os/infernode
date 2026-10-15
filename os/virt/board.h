@@ -29,6 +29,7 @@ Fbinfo*	boardfb(void);
 /* blkvirtio.c: the blocks under #S -- ../port/devsd.c's contract */
 void	blkvirtioinit(void);
 int	sdblkread(uvlong, void*);
+int	sdblkreadn(uvlong, void*, int);
 int	sdblkwrite(uvlong, void*);
 int	sdblkpresent(void);
 uvlong	sdblknblocks(void);

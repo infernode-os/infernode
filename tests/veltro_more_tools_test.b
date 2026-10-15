@@ -6,7 +6,7 @@ implement VeltroMoreToolsTest;
 # These tools have no dedicated test file.  They share a pattern: the agent
 # calls exec(args), the tool dispatches on the first word, and most error
 # paths are reached without any external service running (no /mnt/ui, /mnt/wallet,
-# /n/wikia, /tmp/veltro/man/).  We exercise:
+# /mnt/wikia, /tmp/veltro/man/).  We exercise:
 #
 #   mount    — stub: must always refuse, never expand the namespace
 #   wallet   — argument parsing, command dispatch, missing-arg errors
@@ -15,7 +15,7 @@ implement VeltroMoreToolsTest;
 #   matrix   — fixed-service path-name validation before /mnt/matrix I/O
 #   gap      — subcommand dispatch (add / resolve / list), bad-input errors
 #   task     — subcommand dispatch (create / status / list / close), errors
-#   wiki     — argument validation, unmounted-/n/wikia error path
+#   wiki     — argument validation, unmounted-/mnt/wikia error path
 #   say      — unsafe voice names rejected before speech9p ctl writes
 #   gpu      — unsafe model names rejected before /mnt/gpu session writes
 #   fractal  — exact typed args before fractal ctl writes
@@ -584,17 +584,17 @@ testWikiUnmounted(t: ref T)
 	tool := loadtool(t, "wiki");
 	if(tool == nil)
 		return;
-	# /n/wikia is the wiki9p mount.  When not mounted, every wiki command
+	# /mnt/wikia is the wiki9p mount.  When not mounted, every wiki command
 	# should fail fast with a clear pointer to wiki9p.
-	(ok, nil) := sys->stat("/n/wikia/ctl");
+	(ok, nil) := sys->stat("/mnt/wikia/ctl");
 	if(ok >= 0) {
-		t.skip("/n/wikia is mounted — cannot test the unmounted path");
+		t.skip("/mnt/wikia is mounted — cannot test the unmounted path");
 		return;
 	}
 
 	r := tool->exec("status");
-	t.assert(hassubstr(r, "error") && hassubstr(r, "/n/wikia"),
-		"wiki status without /n/wikia mounted reports the mount");
+	t.assert(hassubstr(r, "error") && hassubstr(r, "/mnt/wikia"),
+		"wiki status without /mnt/wikia mounted reports the mount");
 }
 
 testWikiRejectsUnsafeIngestPath(t: ref T)
@@ -603,23 +603,23 @@ testWikiRejectsUnsafeIngestPath(t: ref T)
 	if(tool == nil)
 		return;
 
-	r := tool->exec("ingest /n/wikia/raw/../secret");
+	r := tool->exec("ingest /mnt/wikia/raw/../secret");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
 		"wiki ingest rejects traversal before wiki9p I/O");
 
 	r = tool->exec("ingest /tmp/secret");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
-		"wiki ingest rejects paths outside /n/wikia/raw");
+		"wiki ingest rejects paths outside /mnt/wikia/raw");
 
-	r = tool->exec("ingest /n/wikia/raw/doc\nlint");
+	r = tool->exec("ingest /mnt/wikia/raw/doc\nlint");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
 		"wiki ingest rejects control delimiters");
 
-	r = tool->exec("ingest /n/wikia/raw/doc=owned");
+	r = tool->exec("ingest /mnt/wikia/raw/doc=owned");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
 		"wiki ingest rejects key delimiter in paths");
 
-	r = tool->exec("ingest /n/wikia/raw/doc,owned");
+	r = tool->exec("ingest /mnt/wikia/raw/doc,owned");
 	t.assert(hassubstr(r, "error") && hassubstr(r, "unsafe"),
 		"wiki ingest rejects list delimiter in paths");
 }

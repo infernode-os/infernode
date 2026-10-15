@@ -3,7 +3,7 @@ implement Wiki9p;
 #
 # wiki9p - 9P file server for LLM-maintained wiki knowledge bases
 #
-# "wikia" = wiki agent.  Mounts at /n/wikia to distinguish from
+# "wikia" = wiki agent.  Mounts at /mnt/wikia to distinguish from
 # wikifs itself (the storage layer at /mnt/wiki).
 #
 # Intelligence layer atop wikifs: ingests sources via LLM, answers
@@ -11,7 +11,7 @@ implement Wiki9p;
 # Designed for both human use (Charon/Lucifer) and agent use (Veltro).
 #
 # Filesystem structure:
-#   /n/wikia/
+#   /mnt/wikia/
 #   ├── ctl        (rw)  Commands: ingest [path], lint, reset
 #   ├── query      (rw)  Write question, read synthesized answer
 #   ├── status     (r)   Current state and wiki statistics
@@ -24,9 +24,9 @@ implement Wiki9p;
 #
 # Sources are bound into the namespace by the caller before
 # issuing an ingest command.  They can be anything mountable:
-#   bind /n/local/path/to/docs /n/wikia/raw
-#   mount tcp!host!styx       /n/wikia/raw
-#   mount dbfs                /n/wikia/raw
+#   bind /n/local/path/to/docs /mnt/wikia/raw
+#   mount tcp!host!styx       /mnt/wikia/raw
+#   mount dbfs                /mnt/wikia/raw
 #
 # After ingestion completes, the source can be unmounted.
 # The wiki retains the knowledge with citations.
@@ -34,19 +34,19 @@ implement Wiki9p;
 # Usage:
 #   wiki9p                          # Start with defaults
 #   wiki9p -D                       # With 9P debug tracing
-#   wiki9p -m /n/wikia              # Custom mount point
+#   wiki9p -m /mnt/wikia              # Custom mount point
 #   wiki9p -w /mnt/wiki             # Custom wikifs location
 #
 # Examples:
-#   bind /n/local/research /n/wikia/raw
-#   echo 'ingest' > /n/wikia/ctl              # Ingest all sources at /n/wikia/raw
-#   echo 'ingest /n/wikia/raw/report.md' > /n/wikia/ctl  # Ingest one file
-#   echo 'What are the ITAR risks?' > /n/wikia/query
-#   cat /n/wikia/query                         # Read answer
-#   echo 'lint' > /n/wikia/ctl                # Health check
-#   cat /n/wikia/status                        # Wiki stats
-#   cat /n/wikia/log                           # Operation history
-#   cat /n/wikia/doc                           # Interface docs
+#   bind /n/local/research /mnt/wikia/raw
+#   echo 'ingest' > /mnt/wikia/ctl              # Ingest all sources at /mnt/wikia/raw
+#   echo 'ingest /mnt/wikia/raw/report.md' > /mnt/wikia/ctl  # Ingest one file
+#   echo 'What are the ITAR risks?' > /mnt/wikia/query
+#   cat /mnt/wikia/query                         # Read answer
+#   echo 'lint' > /mnt/wikia/ctl                # Health check
+#   cat /mnt/wikia/status                        # Wiki stats
+#   cat /mnt/wikia/log                           # Operation history
+#   cat /mnt/wikia/doc                           # Interface docs
 #
 
 include "sys.m";
@@ -96,7 +96,7 @@ statenames := array[] of { "idle", "ingesting", "querying", "linting" };
 curstate := IDLE;
 
 # Configuration
-mountpt := "/n/wikia";
+mountpt := "/mnt/wikia";
 wikidir := "/mnt/wiki";    # Where wikifs is mounted
 llmdir := "/mnt/llm";        # Where llmsrv is mounted
 
@@ -725,7 +725,7 @@ DOCTEXT: con
 	"\n" +
 	"  ctl      Read/write. Write commands, read results.\n" +
 	"           Commands:\n" +
-	"             ingest          Ingest all sources at /n/wikia/raw\n" +
+	"             ingest          Ingest all sources at /mnt/wikia/raw\n" +
 	"             ingest <path>   Ingest a specific file\n" +
 	"             lint            Run wiki health check\n" +
 	"             reset           Close LLM session\n" +
@@ -742,8 +742,8 @@ DOCTEXT: con
 	"\n" +
 	"  raw/     Bind point for source data. Bind or mount any\n" +
 	"           data source here before running ingest:\n" +
-	"             bind /n/local/docs /n/wikia/raw\n" +
-	"             mount tcp!host!styx /n/wikia/raw\n" +
+	"             bind /n/local/docs /mnt/wikia/raw\n" +
+	"             mount tcp!host!styx /mnt/wikia/raw\n" +
 	"           Sources can be unmounted after ingestion.\n" +
 	"\n" +
 	"DEPENDENCIES\n" +

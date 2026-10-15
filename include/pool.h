@@ -55,6 +55,7 @@ struct Btail
 #define BHDRSIZE	((uintptr)(((Bhdr*)0)->u.data)+sizeof(Btail))
 
 extern	void	(*poolfault)(void *, char *, ulong);
+extern	char*	(*poolpcwhere)(ulong, char*, int);
 extern	void	poolinit(void);
 extern	void*	poolalloc(Pool*, ulong);
 extern	void	poolfree(Pool*, void*);

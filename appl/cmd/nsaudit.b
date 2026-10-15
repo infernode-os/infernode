@@ -650,6 +650,7 @@ fixedServiceControlGrant(p: string): int
 		p == "/mnt/web" || prefix(p, "/mnt/web/") ||
 		p == "/n/web" || prefix(p, "/n/web/") ||
 		p == "/mnt/wiki" || prefix(p, "/mnt/wiki/") ||
+		p == "/mnt/wikia" || prefix(p, "/mnt/wikia/") ||
 		p == "/n/wikia" || prefix(p, "/n/wikia/") ||
 		p == "/mnt/keys" || prefix(p, "/mnt/keys/") ||
 		p == "/mnt/keysrv" || prefix(p, "/mnt/keysrv/") ||

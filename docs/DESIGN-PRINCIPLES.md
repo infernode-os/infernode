@@ -195,11 +195,11 @@ serves remote HTTP at `/mnt/web`, because *it* invents the
 foreign trees imported intact, named by their source
 (`/n/local`, a remote peer's root). The full argument, and why
 the convention is itself security work, is in
-[NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md). A few older trees
-predate the convention (`/n/git`, `/n/wikia`, `/n/speech`); do
-not copy them for new work — their migrations are tracked as
-INFR-401 through INFR-403. `/n/git` has moved to `/mnt/git` and
-`/n/wallet` to `/mnt/wallet`.
+[NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md). One older tree
+predates the convention (`/n/speech`); do not copy it for new
+work — its migration is tracked as INFR-403. `/n/git`, `/n/wikia`
+and `/n/wallet` have moved to `/mnt/git`, `/mnt/wikia` and
+`/mnt/wallet`.
 
 **Control files, not config files.** A service is configured and
 commanded by writing text to its `ctl` file, and reports through

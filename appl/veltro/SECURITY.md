@@ -182,7 +182,7 @@ absent, not present-and-denied:
 | 1 | `/dis` | `lib/`, `veltro/`; `sh.dis` for exec; named commands from `shellcmds`; explicitly granted `/dis/<tree>` | Runtime and named executable allowlist |
 | 2 | `/dis/veltro/tools` | Granted tool modules only | Tool allowlist |
 | 3 | `/dev` | `cons`, `null`, `time` | Console/null and TLS clock |
-| 4 | `/n` | Capability-derived foreign imports: speech, wikia, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
+| 4 | `/n` | Capability-derived foreign imports: speech, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
 | 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services (`msg`, `wallet`, `ui`) are narrowed again | Synthesized-service capabilities |
 | 6 | `/lib` | `veltro/`, `certs/`; `/lib/veltro/keys` replaced with an empty view | Prompts/config and TLS roots, not credentials |
 | 7 | `/env` | `VELTRO_SESSION` only | No inherited environment secrets |
@@ -616,7 +616,10 @@ directory of the same shape. Fixtures for CI are directories of the same
 shape.
 
 `tools9p` exposes `role`, `xenith`, `actid`, and `nodevs` as read-only scalar
-files under `/tool/meta/`. Fixtures use the same shape.
+files under `/tool/meta/`. Fixtures use the same shape. `nodevs` is not
+declared by the launcher: every tool `tools9p` runs runs with `NODEVS` (exec's
+wrapper applies its own) or the call is refused, so it is always `set`. The
+old `-N` flag is accepted and ignored.
 
 **Tool authority manifest — ndb files at `lib/veltro/nsaudit/authorities/<tool>`:**
 
@@ -754,7 +757,7 @@ be explicit:
 
 The same rule applies to other fixed-function service trees. `/mnt/matrix` is
 derived only from the `matrix` tool, `/mnt/git` only from the `git` tool,
-`/mnt/gpu` only from `gpu` or local `vision`, `/n/wikia` only from `wiki`,
+`/mnt/gpu` only from `gpu` or local `vision`, `/mnt/wikia` only from `wiki`,
 `/mnt/video` only from video presentation tools, and `/phone` only from `sms`,
 `dial`, or `contacts`.
 Legacy authority roots such as `/mnt/keys`, `/mnt/keysrv`, and
@@ -790,9 +793,14 @@ The gate is not runtime enforcement. CI runs the rule fixtures, additive
 profile invariants, and component-aware path checks. These fail on known bad
 authority compositions but do not freeze complete shipping namespace snapshots.
 
-The current additive fixtures are listed above. Full shipping snapshots and
-boot-configuration drift checks do not exist yet; do not describe a profile
-fixture as proof that a live launcher has the same authority set.
+The current additive fixtures are listed above. `nsaudit_profiles_test.sh`
+also starts a live `tools9p` with each fixture's tools and paths, and with the
+desktop+messaging, messaging+payments and all-layer compositions, and requires
+its `nsaudit -m /tool` report to equal the fixture's (a composition's, the
+union of its layers'). That ties the fixtures to what `tools9p` serves, not to
+any launcher's command line: full shipping snapshots and boot-configuration
+drift checks do not exist yet, so do not describe a profile fixture as proof
+that a particular launcher has the same authority set.
 
 ### What nsaudit cannot answer
 
@@ -880,7 +888,8 @@ sets. `nsaudit` fills unclaimed ground.
 - `tests/nsaudit-fixtures/profile-*` — lightweight additive profile fixtures
   for minimal headless, desktop GUI, messaging, and payments.
 - `tests/host/nsaudit_profiles_test.sh` — hard invariant gate for those
-  profile fixtures.
+  profile fixtures, and a live `tools9p` for each (and three compositions)
+  audited the same way.
 - `tests/host/nsaudit_path_semantics_test.sh` — regression for component-aware
   path containment.
 - No full shipping-profile snapshot gate yet.

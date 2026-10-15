@@ -107,6 +107,7 @@
  * gigabit and receives into 2KB buffers; 1MB is about 450 frames, 8ms.
  */
 #define	ETHERQLIMIT	(1024*1024)
+#define	ETHEROQLIMIT	(1024*1024)	/* and out: the same 1MB */
 
 /*
  * The card is on EMMC2 (io.h, emmc2.c). ../bcm/sdmmc.c picks between the

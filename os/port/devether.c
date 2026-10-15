@@ -89,6 +89,15 @@
 #define ETHERQLIMIT	(128*1024)
 #endif
 
+/*
+ * The output queue, which drops rather than blocks (etherreset says
+ * why). 256KB is about 130 full frames by allocation; a board whose
+ * link drains faster than its TCP bursts can fill that sets its own.
+ */
+#ifndef ETHEROQLIMIT
+#define ETHEROQLIMIT	(256*1024)
+#endif
+
 enum {
 	Maxframe	= 1514,		/* an Ethernet frame, header included */
 
@@ -110,7 +119,7 @@ enum {
 
 	Nfiles		= 8,		/* ipv4 + arp + ipv6 + spare sniffers */
 	Qlimit		= ETHERQLIMIT,	/* per-conversation input queue; see below */
-	Oqlimit		= 256*1024,	/* outbound, before frames are dropped */
+	Oqlimit		= ETHEROQLIMIT,	/* outbound, before frames are dropped */
 
 	/*
 	 * Frames gathered into one bulk OUT. Sixteen is a TCP window's

@@ -70,7 +70,7 @@ fn eqns {
 fn pass {
 	input | cite | pics | tbls | eqns | troff -mbook '-rbook-final='^$final '-dbook-aux='^$aux '-dbook-ind='^$ind >$tr >[2]$err
 	grep '^aux:' $err | sed 's/^aux://' >$new
-	if {~ $index 1} {mkindex $tr >$indnew} {cp $ind $indnew}
+	if {~ $index 1} {mkindex -l $tr >$indnew} {cp $ind $indnew}
 }
 
 ftest -f $aux || echo -n >$aux

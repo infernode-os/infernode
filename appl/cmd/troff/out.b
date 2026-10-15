@@ -173,6 +173,14 @@ out_x(s: string)
 		out_exset(int s[4:]);
 		return;
 	}
+	# \X'nr name value': the register set as the line goes out, nothing
+	# written (not Neatroff's): what is set on a page, known there
+	if(len s > 3 && s[0:3] == "nr "){
+		(nil, w) := sys->tokenize(s[3:], " ");
+		if(w != nil && tl w != nil)
+			nrset(map(hd w), int hd tl w);
+		return;
+	}
 	out("x X " + s + "\n");
 }
 

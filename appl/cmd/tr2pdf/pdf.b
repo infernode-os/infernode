@@ -24,6 +24,7 @@ pdf_dests := 0;			# named destinations
 pg: string;			# the page's contents
 o_f, o_s, o_m: int;		# font, size and colour
 o_h, o_v: int;			# the position troff is at
+pg_label: array of string;	# each page's number as printed (x X folio)
 p_h, p_v: int;			# and the PDF's
 o_i := -1;			# troff's font (pfonts' index; none yet)
 p_i := 0;			# the PDF's
@@ -867,8 +868,10 @@ outlink(lnk: string, hwid, vwid: int)
 	s += " " + pdfpos(o_h + hwid, o_v + vwid) + "]\n";
 	if(!compat)
 		s += "  /Border [0 0 0]\n";
-	if(lnk[0] == '#')	# within the document
+	if(lnk[0] == '#' && compat)	# within the document
 		s += "  /A << /S /GoTo /D (" + lnk[1:] + ") >>\n";
+	else if(lnk[0] == '#')	# by its name in the catalogue's Dests
+		s += "  /A << /S /GoTo /D /" + pdfname(lnk[1:]) + " >>\n";
 	else
 		s += "  /A << /S /URI /URI " + pdftext_static(lnk) + " >>\n";
 	pdfout(s + ">>\n");
@@ -881,15 +884,52 @@ outname(n: int, desc: array of string, page, off: array of int)
 	pdf_dests = obj_beg(0);
 	s := "<<\n";
 	for(i := 0; i < n; i++)
-		if(page[i] > 0 && page[i] - 1 < page_n)
+		if(page[i] > 0 && page[i] - 1 < page_n && compat)
 			s += "  /" + desc[i] + " [ " + string page_id[page[i] - 1] + " 0 R /XYZ 0 " +
+				string (pdf_height - (off[i] * 72 / devres())) + " 0 ]\n";
+		else if(page[i] > 0 && page[i] - 1 < page_n)
+			s += "  /" + pdfname(desc[i]) + " [ " + string page_id[page[i] - 1] + " 0 R /XYZ 0 " +
 				string (pdf_height - (off[i] * 72 / devres())) + " 0 ]\n";
 	pdfout(s + ">>\n");
 	obj_end();
 }
 
+# a name as PDF writes one: a character not regular in a name as #xx,
+# each byte of its UTF-8
+pdfname(s: string): string
+{
+	r := "";
+	b := array of byte s;
+	for(i := 0; i < len b; i++){
+		c := int b[i];
+		if(c <= 32 || c >= 127 || c == '#' || c == '/' || c == '%' || c == '(' || c == ')' ||
+				c == '<' || c == '>' || c == '[' || c == ']' || c == '{' || c == '}')
+			r += sys->sprint("#%.2X", c);
+		else
+			r[len r] = c;
+	}
+	return r;
+}
+
 outmark(n: int, desc: array of string, page, off, level: array of int)
 {
+	# the levels made a tree: the first the top, none deeper than one
+	# below the one before (not Neatpost's: it nests them as given)
+	if(!compat && n > 0){
+		lv := array[n] of int;
+		lo := level[0];
+		for(i := 1; i < n; i++)
+			if(level[i] < lo)
+				lo = level[i];
+		for(i = 0; i < n; i++){
+			lv[i] = level[i] - lo;
+			if(i == 0)
+				lv[i] = 0;
+			else if(lv[i] > lv[i - 1] + 1)
+				lv[i] = lv[i - 1] + 1;
+		}
+		level = lv;
+	}
 	objs := array[n] of int;
 	pdf_outline = obj_map();
 	for(i := 0; i < n; i++)
@@ -1134,6 +1174,88 @@ docheader(title: string, pagewidth, pageheight, linewidth: int)
 	pdf_linewid = linewidth;
 }
 
+# each page's label: its folio; a page without one numbered on from the
+# nearest page before with one (or back from the nearest after), roman
+# if that is, else its place
+pagelabels(): string
+{
+	s := "";
+	for(i := 0; i < page_n; i++){
+		l: string;
+		if(i < len pg_label)
+			l = pg_label[i];
+		if(l == nil)
+			l = labelnear(i);
+		s += " " + string i + " << /P " + pdftext_static(l) + " >>";
+	}
+	return s;
+}
+
+labelnear(i: int): string
+{
+	for(j := i - 1; j >= 0; j--)
+		if(j < len pg_label && pg_label[j] != nil){
+			(n, rom) := folionum(pg_label[j]);
+			if(n > 0)
+				return foliostr(n + i - j, rom);
+			break;
+		}
+	for(j = i + 1; j < page_n && j < len pg_label; j++)
+		if(pg_label[j] != nil){
+			(n, rom) := folionum(pg_label[j]);
+			if(n - (j - i) > 0)
+				return foliostr(n - (j - i), rom);
+			break;
+		}
+	return string (i + 1);
+}
+
+romans := array[] of {
+	(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+	(50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"),
+};
+
+# a folio's number, and whether it is roman (lower case); 0, neither
+folionum(f: string): (int, int)
+{
+	if(f == nil)
+		return (0, 0);
+	if(f[0] >= '0' && f[0] <= '9'){
+		for(i := 0; i < len f; i++)
+			if(f[i] < '0' || f[i] > '9')
+				return (0, 0);
+		return (int f, 0);
+	}
+	n := 0;
+	i := 0;
+	for(k := 0; k < len romans && i < len f; ){
+		(v, r) := romans[k];
+		if(i + len r <= len f && f[i:i + len r] == r){
+			n += v;
+			i += len r;
+		}else
+			k++;
+	}
+	if(i < len f || foliostr(n, 1) != f)
+		return (0, 0);
+	return (n, 1);
+}
+
+foliostr(n: int, rom: int): string
+{
+	if(!rom)
+		return string n;
+	s := "";
+	for(k := 0; k < len romans; k++){
+		(v, r) := romans[k];
+		while(n >= v){
+			s += r;
+			n -= v;
+		}
+	}
+	return s;
+}
+
 doctrailer(nil: int)
 {
 	# the pages
@@ -1154,6 +1276,10 @@ doctrailer(nil: int)
 		s += "  /Dests " + string pdf_dests + " 0 R\n";
 	if(pdf_outline > 0)
 		s += "  /Outlines " + string pdf_outline + " 0 R\n";
+	if(pdf_outline > 0 && !compat)
+		s += "  /PageMode /UseOutlines\n";
+	if(!compat && pg_label != nil)
+		s += "  /PageLabels << /Nums [" + pagelabels() + " ] >>\n";
 	pdfout(s + ">>\n");
 	obj_end();
 	pfont_done();

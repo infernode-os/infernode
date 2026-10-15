@@ -3,7 +3,7 @@ implement Mkindex;
 #
 # mkindex - a book's index, from troff's output
 #
-#	mkindex [book.out ...]
+#	mkindex [-l] [book.out ...]
 #
 # Reads troff's output for the entries -mbook's .index put there (x X
 # idx ...) and the folio of each page (x X folio ...), and writes the
@@ -18,6 +18,8 @@ implement Mkindex;
 # " quotes the next character.  Three pages or more in a row are a
 # range; a range's second number is abbreviated as the Manual
 # abbreviates it (101–8, 321–28).
+# -l writes each page as -mbook's \*[book-pl folio shown]: a link to the
+# page (book(1) gives it).
 #
 
 include "sys.m";
@@ -53,6 +55,8 @@ folio := array[64] of string;	# each page's folio
 npg := 0;
 stderr: ref Sys->FD;
 
+links := 0;	# -l: each page a link to it (-mbook's \*[book-pl])
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -60,6 +64,10 @@ init(nil: ref Draw->Context, args: list of string)
 	stderr = sys->fildes(2);
 	if(args != nil)
 		args = tl args;
+	if(args != nil && hd args == "-l"){
+		links = 1;
+		args = tl args;
+	}
 	if(args == nil)
 		read(bufio->fopen(sys->fildes(0), Bufio->OREAD));
 	for(; args != nil; args = tl args){
@@ -468,7 +476,7 @@ pagesof(e: ref Ent): string
 		else
 			for(k := i; k <= j; k++)
 				if(k == i || locs[k].pg != locs[k - 1].pg)
-					parts = fmt(lc.fmt, folioof(locs[k].pg)) :: parts;
+					parts = fmt(lc.fmt, pagelink(folioof(locs[k].pg), folioof(locs[k].pg))) :: parts;
 		i = j + 1;
 	}
 	return join(rev(parts), ", ");
@@ -522,10 +530,18 @@ span(a, b: int): string
 	fa := folioof(a);
 	fb := folioof(b);
 	if(fa == fb)
-		return fa;
+		return pagelink(fa, fa);
 	if(isnum(fa) && isnum(fb))
-		return fa + "–" + inclusive(fa, fb);
-	return fa + "–" + fb;
+		return pagelink(fa, fa) + "–" + pagelink(fb, inclusive(fa, fb));
+	return pagelink(fa, fa) + "–" + pagelink(fb, fb);
+}
+
+# a page as shown: with -l, a link to the page whose folio is f
+pagelink(f, shown: string): string
+{
+	if(!links || f == "?")
+		return shown;
+	return "\\*[book-pl " + f + " " + shown + "]";
 }
 
 # both arabic, or both not

@@ -118,6 +118,8 @@ num_str(id: int): string
 	}
 	if(s == ".neat")
 		return "1";
+	if(s == ".pend")	# the lines the text not yet set will take (not Neatroff's)
+		return sys->sprint("%d", fmt_pending(env_fmt()));
 	if(s == ".ev")
 		return map_name(env_id);
 	if(s == "$$")

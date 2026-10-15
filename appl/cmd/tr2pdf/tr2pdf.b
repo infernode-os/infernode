@@ -515,10 +515,36 @@ postps()
 				mark_level[mark_n] = v[2];
 			mark_n++;
 		}
+	"dest" =>
+		# a named destination here (not Neatpost's: name gives the page)
+		# (dest NAME page: the page's top)
+		(d, rest) := word(arg);
+		(w, nil) := word(rest);
+		off := here();
+		if(w == "page")
+			off = 0;
+		if(d != nil && o_pages > 0)
+			addname(d, o_pages, off);
+	"outline" =>
+		# a bookmark here, its level and title (not Neatpost's: mark
+		# gives the page)
+		(lv, t) := word(arg);
+		t = titletext(t);
+		if(lv != nil && t != "" && o_pages > 0)
+			addmark(t, o_pages, here(), int lv);
+	"folio" =>
+		# the page's number as printed: its label
+		(f, nil) := word(arg);
+		if(f != nil && o_pages > 0){
+			if(o_pages > len pg_label)
+				pg_label = growstr(pg_label, 2 * o_pages + 128);
+			if(pg_label[o_pages - 1] == nil)
+				pg_label[o_pages - 1] = f;
+		}
 	"link" =>
 		(lnk, spec) := strcut(arg);
 		v := scanints(spec, 2);
-		if(lnk != "" && len v == 2)
+		if(lnk != "" && lnk != "#" && len v == 2)
 			outlink(lnk, v[0], v[1]);
 	"info" =>
 		i := 0;
@@ -532,7 +558,10 @@ postps()
 			kwd = kwd[0:127];
 		while(i < len arg && arg[i] == ' ')
 			i++;
-		outinfo(kwd, arg[i:]);
+		if(compat)
+			outinfo(kwd, arg[i:]);
+		else
+			outinfo(kwd, titletext(arg[i:]));
 	"set" =>
 		(var, rest) := word(arg);
 		(val, nil) := word(rest);
@@ -550,6 +579,120 @@ postps()
 				outpapersize(v[0], h[0]);
 		}
 	}
+}
+
+# where a destination here shows the page from: a line above
+here(): int
+{
+	v := o_v - o_s * devres() / 72;
+	if(v < 0)
+		v = 0;
+	return v;
+}
+
+addname(desc: string, page, off: int)
+{
+	if(name_n == len name_desc){
+		sz := 2 * name_n + 128;
+		name_desc = growstr(name_desc, sz);
+		name_page = growint(name_page, sz);
+		name_offset = growint(name_offset, sz);
+	}
+	name_desc[name_n] = desc;
+	name_page[name_n] = page;
+	name_offset[name_n] = off;
+	name_n++;
+}
+
+addmark(desc: string, page, off, level: int)
+{
+	if(mark_n == len mark_desc){
+		sz := 2 * mark_n + 128;
+		mark_desc = growstr(mark_desc, sz);
+		mark_page = growint(mark_page, sz);
+		mark_offset = growint(mark_offset, sz);
+		mark_level = growint(mark_level, sz);
+	}
+	mark_desc[mark_n] = desc;
+	mark_page[mark_n] = page;
+	mark_offset[mark_n] = off;
+	mark_level[mark_n] = level;
+	mark_n++;
+}
+
+# a title as text: troff's escapes of fonts and sizes left out, its
+# characters by name the characters the fonts say they are
+titletext(s: string): string
+{
+	r := "";
+	i := 0;
+	while(i < len s && s[i] == ' ')
+		i++;
+	while(i < len s){
+		c := s[i++];
+		if(c != '\\' || i >= len s){
+			r[len r] = c;
+			continue;
+		}
+		c = s[i++];
+		case c {
+		'f' or 's' or '*' or 'n' or 'F' or 'm' or 'M' or 'k' =>
+			if(c == 's' && i < len s && (s[i] == '+' || s[i] == '-'))
+				i++;
+			if(i < len s && s[i] == '(')
+				i += 3;
+			else if(i < len s && s[i] == '['){
+				while(i < len s && s[i] != ']')
+					i++;
+				i++;
+			}else if(c == 's')
+				while(i < len s && s[i] >= '0' && s[i] <= '9')
+					i++;
+			else
+				i++;
+		'(' or '[' =>
+			n := "";
+			if(c == '('){
+				if(i + 2 <= len s)
+					n = s[i:i + 2];
+				i += 2;
+			}else{
+				while(i < len s && s[i] != ']')
+					n[len n] = s[i++];
+				i++;
+			}
+			r += charnamed(n);
+		'e' or '\\' =>
+			r += "\\";
+		' ' or '~' or '0' =>
+			r += " ";
+		'-' =>
+			r += "−";
+		'h' or 'v' or 'w' or 'X' or 'o' or 'D' or 'l' or 'L' or 'Z' or 'b' or 'x' or 'R' =>
+			if(i < len s){
+				d := s[i++];
+				while(i < len s && s[i] != d)
+					i++;
+				i++;
+			}
+		'&' or '|' or '^' or '%' or 'c' or 'u' or 'd' or 'a' or 'z' or ':' =>
+			;
+		* =>
+			r[len r] = c;
+		}
+	}
+	return r;
+}
+
+# the character a name is, in the first font mounted that has it
+charnamed(n: string): string
+{
+	for(f := 0; f < NFONTS; f++){
+		g := dev_glyph(n, f);
+		if(g != nil && g.name != nil && g.name != n)
+			return g.name;
+	}
+	return "";
 }
 
 # a blank-separated word of s; and what follows

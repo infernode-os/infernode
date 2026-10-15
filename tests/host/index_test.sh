@@ -91,7 +91,13 @@ for i, p in enumerate(pages):
         continue
     for w in re.findall(r'[kn]\d{4}', ''.join(p)):
         where.setdefault(w, set()).add(f)
-entries = [re.match(r'([kn]\d{4}), (.*)', l) for l in open(ind, encoding='utf-8')]
+# each page a link to it (mkindex -l, as book runs it): its folio and
+# what is shown
+links = re.findall(r'\\\*\[book-pl (\S+) (\S+)\]', open(ind, encoding='utf-8').read())
+check(len(links) > 60 and all(f == t for f, t in links),
+    'each page in the index a link to its page (%d)' % len(links))
+plain = lambda l: re.sub(r'\\\*\[book-pl \S+ (\S+)\]', r'\1', l)
+entries = [re.match(r'([kn]\d{4}), (.*)', plain(l)) for l in open(ind, encoding='utf-8')]
 entries = [e for e in entries if e]
 wrong = [(e.group(1), e.group(2), sorted(where.get(e.group(1), []))) for e in entries
     if set(e.group(2).strip().split(', ')) != where.get(e.group(1))]

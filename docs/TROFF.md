@@ -79,9 +79,18 @@ change it before the first text:
 
 Chapters open on right-hand pages, with no running head and their folio
 at the foot; the running heads are the book's title on the left, the
-chapter's on the right. Footnotes are numbered in each chapter; a note
-that does not fit on its page goes to the next. Endnotes are gathered
-under their chapters' names for `.notes`.
+chapter's on the right. Footnotes are numbered in each chapter. Endnotes
+are gathered under their chapters' names for `.notes`.
+
+Footnotes are set at the foot of their marks' pages, in order:
+- A note too long for the room left is begun there if three of its
+  lines fit, and goes on at the next page's foot, as LaTeX splits a
+  note. A shorter note that doesn't fit goes whole to the next page.
+- troff fills a paragraph at once, so a mark may be several lines into
+  text not yet set. `.fe` counts those lines (troff's `.pend` register).
+- The page's foot sets only the notes whose marks went out on it.
+  troff learns which as each line goes out (an `\X'nr fn-out N'` in the
+  mark): a line the widows' rule moved on takes its note with it.
 
 The table of contents and the references need a second pass (the pages
 are known only once the book has been set): `book` gathers what the
@@ -158,6 +167,30 @@ the *Manual* abbreviates it (101–8); a page is given once, in bold or
 italic if any entry on it asks; *See also* follows an entry's
 subentries. `book` runs `mkindex` after each pass and sets the book
 again until the index, too, no longer changes.
+
+## Reading it on a screen: links and bookmarks
+
+The PDF is made to be read as well as printed, as hyperref makes
+LaTeX's:
+- **Links.** These are links to where they lead:
+  - each line of the contents;
+  - `\*[ref]` and `\*[pageref]`;
+  - a footnote's or endnote's mark (and the note's number, back to the
+    mark);
+  - each page in the index.
+- **Bookmarks.** The bookmarks are the contents: parts, chapters and
+  sections, each under the one it is in.
+- **Page labels.** Each page is labelled as it is numbered, so a viewer
+  shows iv, not 4.
+- **Information.** `.title` and `.author` become the PDF's information.
+
+The macros put destinations and bookmarks where their headings, labels
+and notes are set (`x X dest name`, `x X outline level title`), and
+links on text (`x X link #name width height`). tr2pdf takes the page
+and the place from where they land: a heading is found wherever troff
+put it. Each page's folio (`x X folio`) gives its label and its
+destination for the index (`pg-` and the folio). `mkindex -l`, as
+`book` runs it, writes each page as a link (`\*[book-pl folio shown]`).
 
 ## Citations: `refer -S chicago`
 

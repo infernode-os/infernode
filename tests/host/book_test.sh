@@ -78,7 +78,7 @@ for ln in open(out, encoding='utf-8'):
         cur = {'lines': [], 'rule': None}
         pages.append(cur)
         continue
-    if cur is None:
+    if cur is None or ln.startswith('x '):	# device control: no text, no motion
         continue
     for cmd in re.finditer(r'([sVHvh])(-?\d+)|c(.)|D(l) (-?\d+) (-?\d+)|C(\S+)', ln):
         if cmd.group(1) == 's':

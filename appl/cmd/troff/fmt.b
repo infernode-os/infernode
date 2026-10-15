@@ -563,6 +563,21 @@ fmt_suppressnl(f: ref Fmt)
 	}
 }
 
+# the lines the text not yet set will take, were the paragraph to end
+# here (.pend): those filled and waiting, and the words' as they fill
+fmt_pending(f: ref Fmt): int
+{
+	n := fmt_nlines(f);
+	if(!f.words_n)
+		return n;
+	if(!FMT_FILL(f))
+		return n + 1;
+	out := array[4096] of {* => 0};
+	if(nr(R_j) & AD_Q)
+		return n + fmtb_fill(f.words, f.words_n, out, len out, FMT_LLEN(f), 0, 1, -1);
+	return n + fmta_fill(f.words, f.words_n, out, len out, FMT_LLEN(f), 0, 1, -1);
+}
+
 # estimated number of lines until a trap or the end of the page
 fmt_safelines(): int
 {

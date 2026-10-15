@@ -15,7 +15,9 @@
 #	book sets tests/book/notes.ms with an index of its words, each
 #	indexed where the word is set: every entry gives the page its word
 #	is set on, in the text or in a note, a note carried over pages
-#	among them; the index is the book's last page, no blank one after.
+#	among them; the index is the book's last page, no blank one after;
+#	its last page's two columns balanced (within two lines), where the
+#	first was filled before the second was begun.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -58,9 +60,9 @@ if [ ! -s "$tmp/n.out" ] || [ ! -s "$tmp/n.ind" ]; then
     echo "FAIL: no book: $(grep -v fsqid "$tmp/emu.log" | head -5)"
     exit 1
 fi
-python3 -I - "$tmp/n.out" "$tmp/n.ind" "$tmp/n.aux" <<'PY' || fail=1
+python3 -I - "$tmp/n.out" "$tmp/n.ind" "$tmp/n.aux" "$tmp/n.pdf" <<'PY' || fail=1
 import re, sys
-out, ind, aux = sys.argv[1:4]
+out, ind, aux, pdf = sys.argv[1:5]
 fail = 0
 def check(ok, what):
     global fail
@@ -98,6 +100,24 @@ check(len(entries) > 60 and notes > 20 and not wrong,
     'each entry gives its word\'s page (%d entries, %d in notes) %s' % (len(entries), notes, wrong[:3]))
 last = ''.join(pages[-1]) if pages else ''
 check(re.search(r'[kn]\d{4}', last) is not None, 'the index ends the book, no blank page after it')
+# the last page's columns, by their lines' places in troff's output
+cols = {}
+h = 0
+v = 0
+for ln in ''.join(open(out, encoding='utf-8').read().split('\np')[-1:]).split('\n'):
+    for cmd in re.finditer(r'([HVhv])(-?\d+)|c(.)', ln):
+        if cmd.group(1) == 'H':
+            h = int(cmd.group(2))
+        elif cmd.group(1) == 'h':
+            h += int(cmd.group(2))
+        elif cmd.group(1) == 'V':
+            v = int(cmd.group(2))
+        elif cmd.group(1) == 'v':
+            v += int(cmd.group(2))
+        elif re.match(r'[kn]', cmd.group(3) or ''):
+            cols.setdefault(0 if h < 20000 else 1, set()).add(v)
+n0, n1 = len(cols.get(0, ())), len(cols.get(1, ()))
+check(n0 + n1 > 4 and n1 > 0 and abs(n0 - n1) <= 2, "the last page's columns balanced (%d and %d lines)" % (n0, n1))
 sys.exit(fail)
 PY
 exit $fail

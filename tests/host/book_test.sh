@@ -17,7 +17,10 @@
 #	no line of the text is set below a page's footnotes, and a note
 #	citing a work is on the page of its mark;
 #	Greek is set and hyphenated as Greek;
-#	the bibliography is sorted, its entries Chicago's.
+#	the bibliography is sorted, its entries Chicago's;
+#	the contents' page numbers end at one right edge (a section's,
+#	indented, did not), their leaders' dots on one grid (they began
+#	wherever the leader did).
 #
 # Then tests/book/notes.ms, notes short, long and longer than a page,
 # its words kNNNN (the text) and nNNNN (the notes) each to be set once:
@@ -143,6 +146,23 @@ if have_poppler:
     allt = subprocess.run(['pdftotext', pdf, '-'], capture_output=True, text=True).stdout
     check('see chapter 2 on page %d' % (opens['2'] - first + 1) in ' '.join(allt.split()),
         'a cross-reference gives the chapter and its page')
+    # the contents (page 3): numbers right-aligned, dots in step
+    import xml.etree.ElementTree as ET
+    bb = subprocess.run(['pdftotext', '-bbox', '-f', '3', '-l', '3', pdf, '-'],
+        capture_output=True, text=True).stdout
+    words = [(float(w.get('xMin')), float(w.get('xMax')), round(float(w.get('yMin'))), w.text or '')
+        for w in ET.fromstring(bb[bb.index('<html'):].replace('xmlns="http://www.w3.org/1999/xhtml"', '')).iter('word')]
+    nums = [w for w in words if re.fullmatch(r'\d+|[ivxl]+', w[3]) and w[0] > 300]
+    ends = set(round(w[1]) for w in nums)
+    check(len(nums) >= 8 and len(ends) == 1, 'the contents\' page numbers end at one edge %s' % sorted(ends))
+    # each line's dots end at the same stop, so lie on one grid
+    rows = {}
+    for w in words:
+        if w[3] == '.':
+            rows.setdefault(w[2], []).append(w[0])
+    last = [max(xs) for xs in rows.values() if len(xs) > 3]
+    check(len(last) >= 8 and max(last) - min(last) < 0.25,
+        "the leaders' dots in step (%d lines, their last dots %.2f to %.2f)" % (len(last), min(last or [0]), max(last or [0])))
     check('Πάντες ἄνθρωποι τοῦ εἰδέναι ὀρέγονται φύσει.' in allt, 'Greek is set')
     b = allt[allt.rindex('Bibliography'):]
     order = [b.find(n) for n in ('Grazer, Brian', 'Homer.', 'Satterfield, Susan', 'Smith, Zadie', 'Thoreau, Henry David')]

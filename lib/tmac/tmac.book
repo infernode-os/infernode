@@ -147,20 +147,24 @@
 .el .po \\n[book-om]u
 'sp |\\n[book-tm]u
 .nr book-col 1
+.nr book-po \\n[.o]
 .mk book-coltop
 .ns
 .\" the foot's trap, lifted while the foot was set; troff sets the line
 .\" that reaches a trap, then springs it, so the trap is a line of the
 .\" text less a unit above the margin, and no line is set below it
 .wh -\\n[book-bm]u-\\n[book-vs]u+1u book-fo
+.if \\n[book-balance] .book-colbal
 .book-fncarry
 ..
 .\" the foot of a column: the next column, or the page's foot
 .de book-fo
+.if \\n[book-balance] .nr book-left -(\\n[nl]-\\n[book-coltop])
 .ie \\n[book-col]<\\n[book-ncol] \{\
 .	nr book-col +1
 .	po +\\n[book-colw]u+\\n[book-gut]u
 '	sp |\\n[book-coltop]u
+.	if \\n[book-balance] .ch book-fo -\\n[book-bm]u-\\n[book-vs]u+1u
 .\}
 .el .book-pagefo
 ..
@@ -169,6 +173,8 @@
 .de book-pagefo
 .\" not sprung again by the moves below
 .ch book-fo
+.\" the page's own margin, not its last column's
+.po \\n[book-po]u
 .book-fnput
 .ev hd
 .ps \\n[book-ps]-1
@@ -729,11 +735,41 @@
 .mk book-coltop
 .nr book-col 1
 .nr book-ncol 2
+.\" set in a column's measure, kept, then put out in columns: its height
+.\" known, the last page's are balanced
+.di book-ixd
 .if !'\\*[book-ind]'' .so \\*[book-ind]
 .br
+.di
+.nr book-left \\n[dn]
+.nf
+.in 0
+.ti 0
+.mk book-coltop
+.nr book-col 1
+.nr book-ncol 2
+.nr book-balance 1
+.book-colbal
+.book-ixd
+.rm book-ixd
+.nr book-balance 0
 .\" one column again, or the last page's foot would move to the next
 .\" column and troff, ending, set another page
 .nr book-ncol 1
+.fi
+..
+.\" at a page's first column: if what is left fits in this page's two,
+.\" the first ends at half of it (in whole lines; troff sets the line
+.\" that reaches the trap, so the trap is a line less a unit above)
+.nr book-balance 0
+.nr book-left 0
+.de book-colbal
+.nr book-room \\n[.p]-\\n[book-bm]-\\n[book-coltop]
+.if \\n[book-left]<=(2*\\n[book-room]) \{\
+.	nr book-half (\\n[book-left]/\\n[.v]+1)/2*\\n[.v]
+.	if \\n[book-half]<\\n[.v] .nr book-half \\n[.v]
+.	ch book-fo \\n[book-coltop]u+\\n[book-half]u-\\n[.v]u+1u
+.\}
 ..
 .\" an entry at its level (0 the heading, 1 and 2 subentries), its lines
 .\" after the first indented past the deepest
@@ -765,26 +801,32 @@
 .book-tocline \\$1 "\\$2" "\\$3" \\$4
 .book-x
 ..
+.\" a line of the contents: its title, leaders to a stop the same on every
+.\" line (so their dots line up), the page at the right margin; tab stops
+.\" are measured from the indent, so an indented line's are moved back
+.char \[book-ld] \h'0.18m'.\h'0.18m'
 .de book-tocline
 .nf
 .in 0
 .ti 0
-.ta \\n[book-ll]uR
+.lc \[book-ld]
 .ie '\\$1'part' \{\
 .	sp 1v
 \f[B]\\$3\fP
 .\}
 .el .ie '\\$1'chapter' \{\
 .	sp 0.5v
-.	ie !'\\$2'' \\$2.\ \ \\$3\a\\$4
-.	el \\$3\a\\$4
+.	ta \\n[book-ll]u-2m \\n[book-ll]uR
+.	ie !'\\$2'' \\$2.\ \ \\$3\a\t\\$4
+.	el \\$3\a\t\\$4
 .\}
 .el \{\
 .	in 2m
-.	ta \\n[book-ll]uR
-\\$2\ \ \\$3\a\\$4
+.	ta \\n[book-ll]u-2m-2m \\n[book-ll]u-2mR
+\\$2\ \ \\$3\a\t\\$4
 .\}
 .br
+.lc .
 .fi
 ..
 .de contents

@@ -756,6 +756,7 @@ dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
+dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis
 dis/tests/js-spike/gctest.dis
 dis/tests/js-spike/loadtest.dis

@@ -293,7 +293,8 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 		buf[n] = 0;
 
 		/*
-		 * "m x y b" is a position; "d dx dy b" is movement.
+		 * "m x y b" is a position; "d dx dy b" is movement; "a x y b"
+		 * is a position as a fraction of the screen (below).
 		 *
 		 * Both exist because the two callers genuinely differ. A
 		 * mouse reports movement and nothing else -- a HID report
@@ -313,6 +314,25 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 			b = strtoul(a, 0, 0);
 		else
 			b = mouse.v.b;
+		/*
+		 * "a x y b": a position as a fraction of the screen, x and y
+		 * in 0..65535. A touchscreen or a tablet knows where on its
+		 * surface it is touched but not how big the screen is; only
+		 * this device has the bounds (pointerbounds), so the scaling
+		 * is done once, here, for every absolute source. Before the
+		 * console has said how big the screen is there is nothing to
+		 * scale to, and the report is dropped rather than guessed at.
+		 */
+		if(buf[0] == 'a'){
+			if(mouse.maxx <= 0 || mouse.maxy <= 0)
+				break;
+			if(x > 65535)
+				x = 65535;
+			if(y > 65535)
+				y = 65535;
+			x = (int)(((vlong)x * mouse.maxx) / 65536);
+			y = (int)(((vlong)y * mouse.maxy) / 65536);
+		}
 		mousetrack(b, x, y, isdelta);
 		break;
 

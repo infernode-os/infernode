@@ -11,6 +11,23 @@
 #include "mem.h"
 #include "dat.h"
 #include "io.h"
+
+/*
+ * The pools' ceilings as fractions of memory (see the sizing in kmain).
+ * A board's mem.h may set its own; these are the 3B+'s, under which
+ * the three together can reach half of memory. A ceiling is not a
+ * reservation, so fractions that add up to all of it are not an
+ * overcommitment either.
+ */
+#ifndef MAINDIV
+#define MAINDIV	8
+#endif
+#ifndef HEAPDIV
+#define HEAPDIV	4
+#endif
+#ifndef IMAGDIV
+#define IMAGDIV	8
+#endif
 #include "ureg.h"
 #include "fns.h"
 #include "kernel.h"
@@ -2567,9 +2584,9 @@ kmain(void)
 		ulong mem;
 
 		mem = (ulong)conf.npage * BY2PG;
-		poolsize(mainmem, mem/8, 0);
-		poolsize(heapmem, mem/4, 0);
-		poolsize(imagmem, mem/8, 0);
+		poolsize(mainmem, mem/MAINDIV, 0);
+		poolsize(heapmem, mem/HEAPDIV, 0);
+		poolsize(imagmem, mem/IMAGDIV, 0);
 	}
 
 	boardfbprobe();

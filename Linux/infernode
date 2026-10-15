@@ -18,4 +18,4 @@ fi
 # LD_LIBRARY_PATH as fallback in case patchelf wasn't applied.
 export LD_LIBRARY_PATH="$SCRIPT_DIR/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-exec "$EMU" -c1 -pheap=1024m -pmain=1024m -pimage=1024m "-r$RESOURCES" sh -l /lib/lucifer/boot.sh
+exec "$EMU" -c1 -pheap=1536m -pmain=1024m -pimage=1024m "-r$RESOURCES" sh -l /lib/lucifer/boot.sh

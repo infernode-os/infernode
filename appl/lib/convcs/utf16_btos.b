@@ -43,20 +43,44 @@ btos(state : Convcs->State, b : array of byte, n : int) : (Convcs->State, string
 		state[0] = endian;
 	}
 	nb := len b & ~1;
-	if(n > 0 && nb - i > n * 2)
-		nb = i + n * 2;
 	out := "";
-	if(endian == Bigendian){
-		for(; i < nb; i += 2)
-			out[len out] = (int b[i] << 8) | int b[i + 1];
-	}else{
-		for(; i < nb; i += 2)
-			out[len out] = int b[i] | int b[i + 1] << 8;
+	# a character beyond U+FFFF is a surrogate pair, two units; one
+	# that is not part of a pair is an error. A pair the bytes end
+	# in the middle of is left for the next call, unless this is
+	# the last (n == 0).
+	while(i < nb && (n <= 0 || len out < n)){
+		c := unit(b, i, endian);
+		if(c >= 16rD800 && c <= 16rDBFF){
+			if(i + 4 > nb){
+				if(n != 0)
+					break;
+				c = Sys->UTFerror;
+				i += 2;
+			}else if((c2 := unit(b, i + 2, endian)) >= 16rDC00 && c2 <= 16rDFFF){
+				c = 16r10000 + ((c - 16rD800) << 10) + (c2 - 16rDC00);
+				i += 4;
+			}else{
+				c = Sys->UTFerror;
+				i += 2;
+			}
+		}else{
+			if(c >= 16rDC00 && c <= 16rDFFF)
+				c = Sys->UTFerror;
+			i += 2;
+		}
+		out[len out] = c;
 	}
 	if(n == 0 && i < len b)
 		out[len out] = Sys->UTFerror;
 		
 	return (state, out, i);
+}
+
+unit(b: array of byte, i: int, endian: int): int
+{
+	if(endian == Bigendian)
+		return (int b[i] << 8) | int b[i + 1];
+	return int b[i] | int b[i + 1] << 8;
 }
 
 guessendian(nil: array of byte): int

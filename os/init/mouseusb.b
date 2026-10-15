@@ -203,8 +203,15 @@ poll(fd, ptr: ref Sys->FD, ival: int, maxpkt: int)
 		# The count resets on any successful read, so a device that
 		# glitches and recovers is not abandoned.
 		#
+			#
+			# Say WHY, once per run: the controller's completion
+			# code is the difference between a device that went
+			# away and a transfer the host got wrong.
+			#
+			if(nerr == 0)
+				sys->print("mouseusb: %s read failed: %r\n", dev);
 			if(++nerr >= Maxerr){
-				sys->print("mouseusb: %s stopped responding; unplugged?\n", dev);
+				sys->print("mouseusb: %s stopped responding (%r); unplugged?\n", dev);
 				return;
 			}
 			sys->sleep(ival);

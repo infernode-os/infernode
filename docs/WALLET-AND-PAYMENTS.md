@@ -64,7 +64,7 @@ InferNode provides a native cryptocurrency wallet that enables Veltro AI agents 
 │          │ tool     │ (x402)    │                        │
 ├──────────┴──────────┴───────────┴───────────────────────┤
 │                   wallet9p (9P server)                   │
-│           /n/wallet/{acct}/address,balance,pay,authorize │
+│           /mnt/wallet/{acct}/address,balance,pay,authorize │
 ├─────────────────────────────────────────────────────────┤
 │  ethcrypto     │  ethrpc        │  x402         │ stripe │
 │  (RLP, EIP-155)│  (JSON-RPC)    │  (HTTP 402)   │ (fiat) │
@@ -306,12 +306,12 @@ gwei20 := big 20 * billion;
 
 ## Wallet9p (9P File Server)
 
-The wallet filesystem mounts at `/n/wallet/` and provides account management, signing, and balance queries.
+The wallet filesystem mounts at `/mnt/wallet/` and provides account management, signing, and balance queries.
 
 ### File Tree
 
 ```
-/n/wallet/
+/mnt/wallet/
 ├── ctl              rw   "network <name>", "default <name>", "rpc <url>",
 │                         "approve <id>", "deny <id>"
 ├── accounts         r    newline-separated account names
@@ -332,7 +332,7 @@ The wallet filesystem mounts at `/n/wallet/` and provides account management, si
     └── history      r    recent transactions (timestamped, capped at 200)
 ```
 
-Agent namespaces do not receive this full tree. A `/n/wallet` capability is
+Agent namespaces do not receive this full tree. A `/mnt/wallet` capability is
 narrowed to `accounts`, `default`, `network`, account directories, and the
 per-account `address`, `balance`, `chain`, `pay`, `authorize`, and `history`
 files. Root `ctl`, `pending`, `new`, and per-account `ctl` are trusted
@@ -360,15 +360,15 @@ return a result.
 ### Account Creation
 
 ```sh
-echo 'eth ethereum myaccount' > /n/wallet/new
-cat /n/wallet/new    # → myaccount
-cat /n/wallet/myaccount/address    # → 0x...
+echo 'eth ethereum myaccount' > /mnt/wallet/new
+cat /mnt/wallet/new    # → myaccount
+cat /mnt/wallet/myaccount/address    # → 0x...
 ```
 
 ### Importing a Private Key
 
 ```sh
-echo 'import eth ethereum myaccount 0123456789abcdef...' > /n/wallet/new
+echo 'import eth ethereum myaccount 0123456789abcdef...' > /mnt/wallet/new
 ```
 
 ### x402 Authorization
@@ -381,8 +381,8 @@ payto 0xServerAddress...
 amount 10000
 timeout 60
 name USDC
-version 2' > /n/wallet/myaccount/authorize
-cat /n/wallet/myaccount/authorize
+version 2' > /mnt/wallet/myaccount/authorize
+cat /mnt/wallet/myaccount/authorize
 # → pending:3            (waits for approval), then after approval:
 # → sig <130 hex> from <addr> nonce <64 hex> validafter <t> validbefore <t>
 ```
@@ -414,7 +414,7 @@ wallet9p supports multiple networks, each with its own RPC endpoint and USDC con
 
 Switch network:
 ```sh
-echo 'network Ethereum Sepolia' > /n/wallet/ctl
+echo 'network Ethereum Sepolia' > /mnt/wallet/ctl
 ```
 
 ### Account Persistence
@@ -435,8 +435,8 @@ When a new account is created, wallet9p immediately triggers a factotum sync to 
 ### Budget Enforcement
 
 ```sh
-echo 'budget 1000000 10000000 USDC' > /n/wallet/myaccount/ctl
-echo 'gasbudget 10000000000000000 50000000000000000' > /n/wallet/myaccount/ctl
+echo 'budget 1000000 10000000 USDC' > /mnt/wallet/myaccount/ctl
+echo 'gasbudget 10000000000000000 50000000000000000' > /mnt/wallet/myaccount/ctl
 ```
 
 Budgets are hard caps enforced inside wallet9p on **every** execution path:
@@ -468,7 +468,7 @@ amounts and balances above 2^63 wei do not wrap.
 ### Payment Approval
 
 All accounts require trusted approval. Writing to
-`/n/wallet/{account}/pay` or `/n/wallet/{account}/authorize` queues a pending
+`/mnt/wallet/{account}/pay` or `/mnt/wallet/{account}/authorize` queues a pending
 payment and returns `pending:<id>`. Requests are validated *before* queueing
 (malformed or over-budget requests are rejected immediately), and pending
 entries expire after 15 minutes if unapproved.
@@ -478,8 +478,8 @@ right-click menu (the status bar shows a count when payments are waiting),
 or from a trusted shell:
 
 ```sh
-cat /n/wallet/pending   # "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
-echo 'approve 3' > /n/wallet/ctl      # or: deny 3
+cat /mnt/wallet/pending   # "<id> <kind> <acct> <token> <amount> <recipient> <network> <agent>"
+echo 'approve 3' > /mnt/wallet/ctl      # or: deny 3
 ```
 
 Payments the user initiates in the wallet GUI itself are auto-approved (the
@@ -529,7 +529,7 @@ Implements the x402 v2 specification for HTTP 402 payment flows.
 1. Client requests resource
 2. Server returns 402 with payment requirements (JSON)
 3. Client selects the payment option matching the wallet's active network
-4. Client writes a structured request to /n/wallet/{acct}/authorize;
+4. Client writes a structured request to /mnt/wallet/{acct}/authorize;
    wallet9p validates, budget-checks, queues for approval, and signs
    the EIP-3009 authorization itself
 5. Client retries with the X-PAYMENT header (base64 payload; the legacy
@@ -601,7 +601,7 @@ payfetch <url> -a <account> -c <chain>    Specify chain preference
 
 When a server returns 402 Payment Required:
 1. Parses x402 payment requirements
-2. Selects the option matching the wallet's active network (`/n/wallet/network`)
+2. Selects the option matching the wallet's active network (`/mnt/wallet/network`)
 3. Requests a signed authorization from wallet9p via `authorize`
    (budget + approval enforced there; waits up to 90 s for approval,
    then reports "payment pending approval" so the agent can retry later)
@@ -619,7 +619,7 @@ local x402 test servers must listen on a routable address.
 
 Wallet access is gated by namespace capabilities:
 
-- Agent needs `"/n/wallet"` in `caps.paths` to access the wallet
+- Agent needs `"/mnt/wallet"` in `caps.paths` to access the wallet
 - `/mnt/factotum/ctl` is blocked by nsconstruct — agents never see private keys
 - Budget and approval enforcement is server-side in wallet9p, on every path
 - There is no raw signing file at all. Agents submit structured `pay` and

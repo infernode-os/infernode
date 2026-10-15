@@ -203,11 +203,13 @@ Session.show(s: self ref Session, data: array of byte, ctype, url: string): stri
 	s.gen++;	# whatever was loading is superseded
 	if(unfrag(pg.url) != unfrag(s.url))
 		history(s, s.url, Hnew);
+	old := s.pg;
 	s.pg = pg;
 	s.url = pg.url;
 	s.title = pg.title;
 	s.status = "done";
 	unlock(s);
+	left(old, pg);
 	event(s, "done " + s.url);
 	return nil;
 }
@@ -269,6 +271,25 @@ Session.stop(s: self ref Session)
 	unlock(s);
 	if(stopped)
 		event(s, "stopped");
+}
+
+# The session ends: what it was loading stops, and its page goes
+Session.close(s: self ref Session)
+{
+	s.stop();
+	endrealm(s);
+	lock(s);
+	old := s.pg;
+	s.pg = nil;
+	unlock(s);
+	left(old, nil);
+}
+
+# A page the session has left, for another or none, is closed
+left(old, now: ref Pg)
+{
+	if(old != nil && old != now)
+		old.close();
 }
 
 Session.resize(s: self ref Session, width, height: int)
@@ -379,6 +400,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 		return;	# superseded or stopped
 	}
 	if(pg == nil) {
+		old := s.pg;
 		if(ep != nil) {
 			history(s, s.url, hist);
 			s.pg = ep;
@@ -388,11 +410,13 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 		}
 		s.status = "error " + err;
 		unlock(s);
+		left(old, s.pg);
 		event(s, "error " + err);
 		return;
 	}
 	y := wasat(s, hist);
 	history(s, s.url, hist);
+	old := s.pg;
 	s.pg = pg;
 	s.url = pg.url;
 	if((frag := fragment(url)) != nil && fragment(s.url) == nil)
@@ -406,6 +430,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	u := s.url;
 	s.status = "loading images " + u;
 	unlock(s);
+	left(old, pg);
 	event(s, "shown " + u);
 	startrealm(s, g, pg);
 	# the page is up; what it shows comes in behind it
@@ -1184,7 +1209,11 @@ Session.submit(s: self ref Session, form, submitter: int): string
 		if(d.hasattr(submitter, "formmethod"))
 			method = lower(d.attr(submitter, "formmethod"));
 	}
-	url := resolve(d.url, action);
+	# no action, or an empty one, is the document's URL (HTML
+	# §4.10.21.3); resolve leaves an empty reference empty
+	url := d.url;
+	if(action != "")
+		url = resolve(d.url, action);
 	q := "";
 	for(n := 1; n < d.n; n++) {
 		if(forms[n] != form || !iscontrol(d, n) || disabled(d, n))
@@ -2213,7 +2242,7 @@ endrealm(s: ref Session)
 		return;
 	alt {
 	r.events <-= ref Event.Quit =>
-		;
+		spawn reap(r.pid);
 	* =>
 		# if it holds the session's lock, or takes it before it
 		# goes, the next to want it takes it back (lock)
@@ -2221,6 +2250,47 @@ endrealm(s: ref Session)
 		rmshadow(r.pid);
 	}
 	dropealm(r);
+}
+
+# A realm that quits leaves what it started: the sleepers of its timers,
+# its fetches.  They run in its engine, and while one lives so does the
+# engine and every value the page's scripts made (a sleeper waits
+# forever to tell a realm that is gone: ten visits to bbc.com, 600 MB).
+# Its group goes once it has, through any of them still there.
+reap(g: int)
+{
+	for(i := 0; i < 50 && alive(g); i++)
+		sys->sleep(100);
+	if(alive(g))
+		killgrp(g);
+	else if((m := ingroup(g)) > 0)
+		killgrp(m);
+	rmshadow(g);
+}
+
+# a process in group g, or 0
+ingroup(g: int): int
+{
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			return 0;
+		for(i := 0; i < n; i++) {
+			sf := sys->open("/prog/" + d[i].name + "/status", Sys->OREAD);
+			if(sf == nil)
+				continue;
+			b := array[128] of byte;
+			k := sys->read(sf, b, len b);
+			if(k <= 0)
+				continue;
+			(nf, f) := sys->tokenize(string b[0:k], " \t");
+			if(nf >= 2 && int hd tl f == g && int d[i].name != g)
+				return int d[i].name;
+		}
+	}
 }
 
 killgrp(pid: int)

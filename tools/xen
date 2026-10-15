@@ -186,7 +186,7 @@ sam)
 esac
 cmd="cd $(q "/n/local$PWD"); $run"
 
-set -- "$emu" -c1 -pheap=512m -pmain=512m -pimage=512m \
+set -- "$emu" -c1 -pheap=1536m -pmain=512m -pimage=512m \
 	-g"${XEN_GEOM:-1400x900}" -r"$root" /dis/sh.dis -l -c "$cmd"
 if [ $wait = 1 ]; then
 	exec "$@"

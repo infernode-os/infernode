@@ -692,16 +692,16 @@ wallet9p (the 9P server) starts automatically when needed.
 
 ```sh
 # Create an account
-echo 'eth ethereum myaccount' > /n/wallet/new
+echo 'eth ethereum myaccount' > /mnt/wallet/new
 
 # Check address
-cat /n/wallet/myaccount/address
+cat /mnt/wallet/myaccount/address
 
 # Check balance
-cat /n/wallet/myaccount/balance
+cat /mnt/wallet/myaccount/balance
 
 # Switch network
-echo 'network Base' > /n/wallet/ctl
+echo 'network Base' > /mnt/wallet/ctl
 ```
 
 ### Agent Payments
@@ -722,7 +722,7 @@ error cannot be retried around the session limit.
 
 - Private keys live in factotum; wallet9p fetches them per operation and zeroes them immediately
 - Agents never see the raw signing interface. They submit structured payment requests (`pay`, `authorize`); wallet9p constructs what it signs, so the key only ever signs messages the wallet itself built and policy-checked
-- Wallet access is namespace-gated: agents need explicit `"/n/wallet"` in their capabilities
+- Wallet access is namespace-gated: agents need explicit `"/mnt/wallet"` in their capabilities
 - `/mnt/factotum/ctl` is blocked by nsconstruct — agents never see raw keys
 
 See [docs/WALLET-AND-PAYMENTS.md](WALLET-AND-PAYMENTS.md) for the full architecture, crypto primitives, and API reference.

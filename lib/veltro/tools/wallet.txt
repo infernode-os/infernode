@@ -11,7 +11,7 @@ Examples:
 The agent NEVER sees private keys — signing happens inside wallet9p,
 which retrieves keys from factotum on demand.
 
-Provides wallet operations via the wallet9p filesystem at /n/wallet/.
+Provides wallet operations via the wallet9p filesystem at /mnt/wallet/.
 
 Usage:
   wallet accounts                     List all wallet accounts

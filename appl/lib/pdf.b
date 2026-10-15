@@ -72,6 +72,7 @@ CMapEntry: adt {
 	lo: int;
 	hi: int;
 	unicode: int;
+	uni: string;	# a ToUnicode destination of several characters (nil: unicode alone)
 };
 
 # A font as a resource dictionary names it
@@ -1923,7 +1924,7 @@ parseencoding(text: string): (array of (int, int, int), list of ref CMapEntry)
 			if(q2 < 0 || q2 > e) break;
 			(c, q3) := cmapint(text, q2);
 			if(q3 < 0 || q3 > e) break;
-			m = ref CMapEntry(lo, hi, c) :: m;
+			m = ref CMapEntry(lo, hi, c, nil) :: m;
 			q = q3;
 		}
 		p = e;
@@ -1938,7 +1939,7 @@ parseencoding(text: string): (array of (int, int, int), list of ref CMapEntry)
 			if(q1 < 0 || q1 > e) break;
 			(c, q2) := cmapint(text, q1);
 			if(q2 < 0 || q2 > e) break;
-			m = ref CMapEntry(lo, lo, c) :: m;
+			m = ref CMapEntry(lo, lo, c, nil) :: m;
 			q = q2;
 		}
 		p = e;
@@ -1982,17 +1983,53 @@ strindexfrom(s, t: string, from: int): int
 }
 
 # The Unicode value of a code, as the font says: ToUnicode, else the
-# encoding's glyph names, else the code.
+# encoding's glyph names, else the code.  A code ToUnicode maps to
+# several characters is its ligature, if it is one, else the first.
 unicodeof(fm: ref PdfFont, code: int): int
 {
 	if(fm.entries != nil){
 		for(e := fm.entries; e != nil; e = tl e)
-			if(code >= (hd e).lo && code <= (hd e).hi)
-				return (hd e).unicode + code - (hd e).lo;
+			if(code >= (hd e).lo && code <= (hd e).hi){
+				if((hd e).uni == nil)
+					return (hd e).unicode + code - (hd e).lo;
+				s := cmapstr(hd e, code);
+				for(i := 0; i < len ligatures; i++)
+					if(s == ligatures[i])
+						return 16rFB00 + i;
+				return s[0];
+			}
 	}
 	if(fm.code2uni != nil && code >= 0 && code < len fm.code2uni && fm.code2uni[code] > 0)
 		return fm.code2uni[code];
 	return code;
+}
+
+# The text of a code, as the font says: the characters ToUnicode
+# maps it to, else its one character (nil if none).
+textof(fm: ref PdfFont, code: int): string
+{
+	for(e := fm.entries; e != nil; e = tl e)
+		if(code >= (hd e).lo && code <= (hd e).hi){
+			if((hd e).uni != nil)
+				return cmapstr(hd e, code);
+			break;
+		}
+	u := unicodeof(fm, code);
+	if(u <= 0)
+		return nil;
+	s := "";
+	s[0] = u;
+	return s;
+}
+
+# A ToUnicode entry's characters for a code in its range: the
+# destination with its last character advanced (9.10.3)
+cmapstr(e: ref CMapEntry, code: int): string
+{
+	s := e.uni;
+	if(code != e.lo)
+		s[len s - 1] = s[len s - 1] + code - e.lo;
+	return s;
 }
 
 # ---- Fonts ----
@@ -5963,18 +6000,21 @@ showwords(words: list of (string, Rect), f: ref PdfFont, items: list of (string,
 			a := (codewidth(f, cid) * fs + tc) * th;
 			if(step == 1 && code == 32)
 				a += tw * th;
-			u := unicodeof(f, code);
-			if(u <= 32 || u == 16rA0){
+			s := textof(f, code);
+			u := 0;
+			if(s != nil)
+				u = s[0];
+			if(len s <= 1 && (u <= 32 || u == 16rA0)){
 				if(w != "")
 					words = (w, wordbox(trm, x0, x, fs, ph)) :: words;
 				w = "";
 			} else {
 				if(w == "")
 					x0 = x;
-				if(u >= 16rFB00 && u <= 16rFB06)
+				if(len s == 1 && u >= 16rFB00 && u <= 16rFB06)
 					w += ligatures[u - 16rFB00];
 				else
-					w[len w] = u;
+					w += s;
 			}
 			x += a;
 		}
@@ -6316,9 +6356,9 @@ parsecmap(text: string): (int, list of ref CMapEntry)
 				pos = np1;
 				while(pos < tlen && text[pos] != '<') pos++;
 				if(pos >= tlen) break;
-				(uni, np2) := parsecmaphex(text, pos);
+				(uni, us, np2) := parsecmapdst(text, pos);
 				pos = np2;
-				entries = ref CMapEntry(cid, cid, uni) :: entries;
+				entries = ref CMapEntry(cid, cid, uni, us) :: entries;
 			}
 			continue;
 		}
@@ -6340,11 +6380,26 @@ parsecmap(text: string): (int, list of ref CMapEntry)
 				if(pos >= tlen) break;
 				(hi, np2) := parsecmaphex(text, pos);
 				pos = np2;
-				while(pos < tlen && text[pos] != '<') pos++;
+				while(pos < tlen && text[pos] != '<' && text[pos] != '[') pos++;
 				if(pos >= tlen) break;
-				(uni, np3) := parsecmaphex(text, pos);
+				if(text[pos] == '['){
+					# a destination for each code in the range
+					pos++;
+					for(c := lo; c <= hi; c++){
+						while(pos < tlen && text[pos] != '<' && text[pos] != ']') pos++;
+						if(pos >= tlen || text[pos] == ']')
+							break;
+						(uni, us, np3) := parsecmapdst(text, pos);
+						pos = np3;
+						entries = ref CMapEntry(c, c, uni, us) :: entries;
+					}
+					while(pos < tlen && text[pos] != ']') pos++;
+					if(pos < tlen) pos++;
+					continue;
+				}
+				(uni, us, np3) := parsecmapdst(text, pos);
 				pos = np3;
-				entries = ref CMapEntry(lo, hi, uni) :: entries;
+				entries = ref CMapEntry(lo, hi, uni, us) :: entries;
 			}
 			continue;
 		}
@@ -6367,6 +6422,36 @@ parsecmaphex(s: string, pos: int): (int, int)
 	}
 	if(pos < slen && s[pos] == '>') pos++;
 	return (val, pos);
+}
+
+# A ToUnicode destination at s[pos]: UTF-16BE code units, surrogate
+# pairs combined (U+FFFD where a string cannot hold the character).
+# One character is its value (and nil); several are their string
+# too, the value then the first.  Up to four digits, or digits not
+# whole code units, are one value, as they always were.
+parsecmapdst(s: string, pos: int): (int, string, int)
+{
+	(val, np) := parsecmaphex(s, pos);
+	digits := "";
+	for(p := pos + 1; p < np && s[p] != '>'; p++)
+		if(hexval(s[p]) >= 0)
+			digits[len digits] = s[p];
+	if(len digits <= 4 || len digits % 4 != 0)
+		return (val, nil, np);
+	str := "";
+	for(i := 0; i + 4 <= len digits; i += 4){
+		u := hexval(digits[i])<<12 | hexval(digits[i+1])<<8 | hexval(digits[i+2])<<4 | hexval(digits[i+3]);
+		if(u >= 16rDC00 && u <= 16rDFFF && len str > 0 && str[len str - 1] >= 16rD800 && str[len str - 1] <= 16rDBFF){
+			c := 16r10000 + ((str[len str - 1] - 16rD800) << 10) + (u - 16rDC00);
+			str[len str - 1] = c;
+			if(str[len str - 1] != c)	# a string too narrow to hold it
+				str[len str - 1] = 16rFFFD;
+		}else
+			str[len str] = u;
+	}
+	if(len str == 1)
+		return (str[0], nil, np);
+	return (str[0], str, np);
 }
 
 buildfontmap(doc: ref PdfDoc, page: ref PdfObj): list of ref FontMapEntry
@@ -6519,9 +6604,7 @@ decodecidstr(s: string, e: ref FontMapEntry): string
 		i += n;
 		if(n > 1 && code == 0)
 			continue;
-		uni := unicodeof(fm, code);
-		if(uni > 0)
-			out[len out] = uni;
+		out += textof(fm, code);
 	}
 	return out;
 }

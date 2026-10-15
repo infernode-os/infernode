@@ -1539,35 +1539,13 @@ comp(Inst *i)
 		comgoto(i);
 		break;
 	case IINDC:
-		opwld(i, Olwz, Ro1);			// Ro1 = string
-		if((i->add&ARM) != AXIMM)
-			op2(i, Olwz, Ro2);			// Ro2 = i
-		AIRR(Olwz, Ri, Ro1,O(String,len));	// len<0 => index Runes, otherwise bytes
-		AIRR(Oaddi, Ro1, Ro1,O(String,data));
-		AIRR(Ocmpi, Rcrf0, Ri, 0);
-		if(bflag){
-			br(Obge, 2*4);
-			ARRR(Oneg, Ri, Ri, 0);
-			if((i->add&ARM) != AXIMM)
-				ARRR(Ocmpl, Rcrf1, Ri, Ro2);		/* CMPU len, i */
-			else
-				AIRR(Ocmpli, Rcrf1, Ri, i->reg);	/* CMPU len, i */
-			jmpc(Cle1, (ulong*)bounds);
-		}
-		cp = code;
-		br(Obge, 0);
-		if((i->add&ARM) != AXIMM){
-			SLWI(Ro2, Ro2, 1);
-			ARRR(Olhzx, Ro3, Ro1, Ro2);
-		} else
-			mem(Olhz, (short)i->reg<<1, Ro1, Ro3);
-		gen(Ob | (2*4));	// skip
-		PATCH(cp);
-		if((i->add&ARM) != AXIMM)
-			ARRR(Olbzx, Ro3, Ro1, Ro2);
-		else
-			AIRR(Olbz, Ro3, Ro1,i->reg);
-		opwst(i, Ostw, Ro3);
+		/*
+		 * s[i] reads a byte or, when len < 0, a Rune: 32 bits
+		 * now runes go to U+10FFFF. The code compiled here loaded
+		 * a 16-bit one, and there is no machine left to test a
+		 * wider load on, so the interpreter's OP(indc) does it.
+		 */
+		punt(i, SRCOP|DSTOP|THREOP, optab[i->op]);
 		break;
 	case IINDX:
 	case IINDB:

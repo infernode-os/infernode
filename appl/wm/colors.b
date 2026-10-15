@@ -28,6 +28,9 @@ init(ctxt: ref Draw->Context, nil: list of string)
 init1(ctxt: ref Draw->Context)
 {
 	sys = load Sys Sys->PATH;
+	# exit is a killgrp (wmclient): a group of its own, or it takes
+	# the shell that started it, or wm/wm, with it
+	sys->pctl(Sys->NEWPGRP, nil);
 	draw = load Draw Draw->PATH;
 	wmclient = load Wmclient Wmclient->PATH;
 	wmclient->init();

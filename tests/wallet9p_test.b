@@ -160,7 +160,7 @@ ADDR1: con "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
 #
 testMount(t: ref T)
 {
-	(ok, nil) := sys->stat("/n/wallet/accounts");
+	(ok, nil) := sys->stat("/mnt/wallet/accounts");
 	t.assert(ok >= 0, "accounts file served");
 }
 
@@ -170,16 +170,16 @@ testMount(t: ref T)
 testImportAndAddress(t: ref T)
 {
 	# Import private key = 1
-	(n, name) := transact("/n/wallet/new", "import eth ethereum testkey 0000000000000000000000000000000000000000000000000000000000000001");
+	(n, name) := transact("/mnt/wallet/new", "import eth ethereum testkey 0000000000000000000000000000000000000000000000000000000000000001");
 	t.assert(n > 0, "write to new succeeded");
 	t.log("new account: '" + strip(name) + "'");
 	t.assertseq(strip(name), "testkey", "new names the account made");
 
-	addr := strip(readfile("/n/wallet/testkey/address"));
+	addr := strip(readfile("/mnt/wallet/testkey/address"));
 	t.log("address: " + addr);
 	t.assertseq(addr, ADDR1, "address derived for private key 1");
 
-	accts := readfile("/n/wallet/accounts");
+	accts := readfile("/mnt/wallet/accounts");
 	t.assert(accts != nil && contains(accts, "testkey"), "accounts lists the account");
 }
 
@@ -191,14 +191,14 @@ testImportAndAddress(t: ref T)
 #
 testSign(t: ref T)
 {
-	(ok, nil) := sys->stat("/n/wallet/testkey/sign");
+	(ok, nil) := sys->stat("/mnt/wallet/testkey/sign");
 	t.assert(ok < 0, "the raw sign file is not served");
 
 	# Hash to sign (keccak256 of "test")
 	msg := array of byte "test";
 	hash := array[32] of byte;
 	kr->keccak256(msg, len msg, hash);
-	n := writefile("/n/wallet/testkey/sign", ethcrypto->hexencode(hash));
+	n := writefile("/mnt/wallet/testkey/sign", ethcrypto->hexencode(hash));
 	t.assert(n < 0, "a hash cannot be signed through the file system");
 }
 
@@ -207,7 +207,7 @@ testSign(t: ref T)
 #
 testChain(t: ref T)
 {
-	chain := strip(readfile("/n/wallet/testkey/chain"));
+	chain := strip(readfile("/mnt/wallet/testkey/chain"));
 	t.log("chain: " + chain);
 	t.assertseq(chain, "ethereum", "chain is the one the account was made on");
 }

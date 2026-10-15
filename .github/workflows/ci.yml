@@ -220,8 +220,8 @@ jobs:
         chmod +x tests/host/veltrosrv_test.sh tests/host/veltro_cli_test.sh \
           tests/host/lucibridge_tool_timeout_test.sh \
           tests/host/agentloop_characterization_test.sh \
-          tests/host/tools9p_result_test.sh tests/host/agent_delegation_test.sh \
-          tests/host/prompt_defaults_test.sh
+          tests/host/tools9p_result_test.sh tests/host/wiki9p_test.sh \
+          tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
         ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
@@ -233,6 +233,8 @@ jobs:
         # The agent prompts in ~/.infernode follow the shipped defaults
         # until edited; every shipped version's hash is listed.
         ROOT=. bash tests/host/prompt_defaults_test.sh
+        # The LLM-maintained wiki (wiki9p over wikifs) against a scripted model.
+        ROOT=. bash tests/host/wiki9p_test.sh
         ROOT=. FRONTENDS=veltrosrv bash tests/host/agentloop_characterization_test.sh
         ROOT=. FRONTENDS=lucibridge bash tests/host/agentloop_characterization_test.sh \
           single_read two_reads write_then_read error_streak say step_cap
@@ -505,6 +507,12 @@ jobs:
         # from compiled code, not read or write outside the array.
         chmod +x tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+
+    - name: Run rune tests beyond U+FFFF (JIT and interpreter)
+      run: |
+        # U+1F680 and U+20000 are one rune each through byte -> string
+        # -> byte, and s[i] reads all 21 bits from compiled code.
+        ROOT=. sh tests/host/utf21_test.sh
 
     - name: Run JIT fault and big arithmetic tests (JIT and interpreter)
       run: |
@@ -936,6 +944,7 @@ jobs:
         # suite's non-gating run hid it.
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/utf21_test.sh
 
     - name: Run ML-DSA decompose test
       run: |
@@ -1266,7 +1275,7 @@ jobs:
 
     - name: Run JIT fault tests (JIT and interpreter)
       run: |
-        for t in jit_fault_test jit_ownhandler_test jit_bounds_test; do
+        for t in jit_fault_test jit_ownhandler_test jit_bounds_test utf21_test; do
           for c in 1 0; do
             timeout 300 "$RUNNER_TEMP/emu-rv" -c$c -r . /dis/tests/$t.dis -v > $t-c$c.txt 2>&1 < /dev/null || true
             cat $t-c$c.txt
@@ -1534,6 +1543,7 @@ jobs:
         # JIT's only macOS hardware.
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/utf21_test.sh
 
     - name: Run ML-DSA decompose test
       run: |

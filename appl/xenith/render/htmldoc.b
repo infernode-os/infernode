@@ -109,12 +109,13 @@ drop(id: int)
 				p.fs->unpost();
 			# whoever reads the page's events stops
 			p.s.unlisten(p.ev);
-			p.s.stop();
+			p.s.close();
 			alt {
 			p.ev <-= "gone" =>	;
 			* =>	;
 			}
-		}
+		}else
+			p.s.close();
 	}
 	pages = l;
 }

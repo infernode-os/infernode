@@ -65,7 +65,7 @@ $cmd = if ($cwd) { 'cd ' + (Q $cwd) + '; ' + $run } else { $run }
 
 $geom = if ($env:XEN_GEOM) { $env:XEN_GEOM } else { '1400x900' }
 # Windows paths cannot contain ", so double-quoting each argument is enough.
-$argline = "-c1 -pheap=512m -pmain=512m -pimage=512m -g$geom `"-r$root`" /dis/sh.dis -l -c `"$cmd`""
+$argline = "-c1 -pheap=1536m -pmain=512m -pimage=512m -g$geom `"-r$root`" /dis/sh.dis -l -c `"$cmd`""
 
 if ($Wait) {
 	$p = Start-Process -FilePath $emu -ArgumentList $argline -NoNewWindow -Wait -PassThru

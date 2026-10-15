@@ -92,6 +92,24 @@
 #define	RAMLIMIT	0xFC000000UL
 
 /*
+ * The allocator pools' ceilings, as fractions of memory (../arm64/main.c).
+ * The 3B+'s defaults let the three reach half of memory together, which
+ * on a 4GB board left 2GB that nothing could allocate: here they add up
+ * to all of it, the Dis heap taking half. poolsize takes an int, and
+ * half of memory below RAMLIMIT is under 2GB, so none of them wraps.
+ */
+#define	MAINDIV		4
+#define	HEAPDIV		2
+#define	IMAGDIV		4
+
+/*
+ * Ethernet input queue per conversation (../port/devether.c): GENET is
+ * gigabit and receives into 2KB buffers; 1MB is about 450 frames, 8ms.
+ */
+#define	ETHERQLIMIT	(1024*1024)
+#define	ETHEROQLIMIT	(1024*1024)	/* and out: the same 1MB */
+
+/*
  * The card is on EMMC2 (io.h, emmc2.c). ../bcm/sdmmc.c picks between the
  * places a card can be when it is compiled.
  */

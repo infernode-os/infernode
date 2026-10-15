@@ -3353,6 +3353,19 @@ tcpinit(Fs *fs)
 	Fsproto(fs, tcp);
 }
 
+/*
+ * The write queue holds everything sent and not yet acknowledged, so its
+ * limit is the most this end can have in flight. (3*QMAX)/2, 96KB, is
+ * a window's worth when windows are not scaled; with scaling it is the
+ * ceiling, and on a Pi 4 it was: 96KB a round trip is about 530 Mbit/s
+ * at the millisecond a gigabit LAN's RTT becomes under load, with the
+ * cores 80% idle. A board with the memory and the link for more says so
+ * in mem.h; the queue is a limit, not an allocation.
+ */
+#ifndef TCPWQLIMIT
+#define TCPWQLIMIT	((3*QMAX)/2)
+#endif
+
 void
 tcpsetscale(Conv *s, Tcpctl *tcb, ushort rcvscale, ushort sndscale)
 {
@@ -3361,6 +3374,7 @@ tcpsetscale(Conv *s, Tcpctl *tcb, ushort rcvscale, ushort sndscale)
 		tcb->snd.scale = sndscale & 0xff;
 		tcb->window = QMAX<<tcb->snd.scale;
 		qsetlimit(s->rq, tcb->window);
+		qsetlimit(s->wq, TCPWQLIMIT);
 	} else {
 		tcb->rcv.scale = 0;
 		tcb->snd.scale = 0;

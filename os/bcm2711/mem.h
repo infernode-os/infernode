@@ -103,6 +103,12 @@
 #define	IMAGDIV		4
 
 /*
+ * Ethernet input queue per conversation (../port/devether.c): GENET is
+ * gigabit and receives into 2KB buffers; 1MB is about 450 frames, 8ms.
+ */
+#define	ETHERQLIMIT	(1024*1024)
+
+/*
  * The card is on EMMC2 (io.h, emmc2.c). ../bcm/sdmmc.c picks between the
  * places a card can be when it is compiled.
  */

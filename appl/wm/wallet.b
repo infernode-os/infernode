@@ -3,7 +3,7 @@ implement WmWallet;
 #
 # wallet - Crypto/fiat wallet manager for Lucifer (Tk version)
 #
-# A GUI front-end to wallet9p (/n/wallet). Lists accounts, shows address
+# A GUI front-end to wallet9p (/mnt/wallet). Lists accounts, shows address
 # and balance, transaction history, and sends payments. Private keys live
 # in factotum behind wallet9p; this app only drives the ctl interface.
 #
@@ -91,7 +91,7 @@ bgc:      string;	# theme background
 statusbg: string;	# status-strip background
 statusfg: string;	# status-strip foreground
 
-WALLET: con "/n/wallet";
+WALLET: con "/mnt/wallet";
 LBLW:   con "12w";	# width of the aligned label column, in characters
 			# (pixels cut the labels off on a 3x display)
 

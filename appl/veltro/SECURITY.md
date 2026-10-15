@@ -68,8 +68,9 @@ also part of the boundary: source-controlled fields must remain single physical
 lines so hostile mail/SMS content cannot forge `Triage:` or `Message ID:`
 control records.
 
-Wallet payments follow the same split. A `/n/wallet` grant is narrowed inside
-the agent namespace: agents can read account metadata and write per-account
+Wallet payments follow the same split. A `/mnt/wallet` grant is narrowed inside
+the agent namespace (only the exact grant: a path beneath `/mnt/wallet` grants
+nothing): agents can read account metadata and write per-account
 `pay` proposals and structured `authorize` (x402/EIP-3009) requests, but cannot
 see root `ctl`, `pending`, `new`, or per-account `ctl`. There is no raw `sign`
 file at all: a hash-blind signing oracle over the spend key — signing an
@@ -181,8 +182,8 @@ absent, not present-and-denied:
 | 1 | `/dis` | `lib/`, `veltro/`; `sh.dis` for exec; named commands from `shellcmds`; explicitly granted `/dis/<tree>` | Runtime and named executable allowlist |
 | 2 | `/dis/veltro/tools` | Granted tool modules only | Tool allowlist |
 | 3 | `/dev` | `cons`, `null`, `time` | Console/null and TLS clock |
-| 4 | `/n` | Capability-derived foreign imports: speech, wallet, wikia, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
-| 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services are narrowed again | Synthesized-service capabilities |
+| 4 | `/n` | Capability-derived foreign imports: speech, wikia, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
+| 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services (`msg`, `wallet`, `ui`) are narrowed again | Synthesized-service capabilities |
 | 6 | `/lib` | `veltro/`, `certs/`; `/lib/veltro/keys` replaced with an empty view | Prompts/config and TLS roots, not credentials |
 | 7 | `/env` | `VELTRO_SESSION` only | No inherited environment secrets |
 | 8 | `/prog` | Current pid for non-exec tools; empty for exec, including exec with `shellcmds` | No parent/sibling inspection or control |
@@ -723,7 +724,7 @@ Current fixtures under `tests/nsaudit-fixtures/`:
   remain excluded, and the identity of the trusted approver is a deployment
   property rather than something the draft capability can attest.
 - `profile-payments` — base profile plus wallet proposal authority
-  (`/n/wallet`). Agent-visible `pay` and `authorize` files can only queue
+  (`/mnt/wallet`). Agent-visible `pay` and `authorize` files can only queue
   proposals; approval cannot be disabled, and trusted wallet controls remain
   excluded. A future direct-spend capability would be a distinct authority and
   would require enforcement metadata for that exact agent view.

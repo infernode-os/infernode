@@ -40,7 +40,7 @@ Four statements, each meant literally:
 **Everything is a file.** Not "many things have file-like
 wrappers" — everything. Networks (`/net/tcp/0/data`), processes
 (`/prog/123/ctl`), the screen (`/dev/draw`), the LLM
-(`/mnt/llm`), payments (`/n/wallet`), the audit trail
+(`/mnt/llm`), payments (`/mnt/wallet`), the audit trail
 (`/mnt/audit/log`). Unix had this as a nice idea applied
 inconsistently; Plan 9 took it seriously, and InferNode inherits
 that seriousness. When you add a capability to the system, you
@@ -196,9 +196,10 @@ foreign trees imported intact, named by their source
 (`/n/local`, a remote peer's root). The full argument, and why
 the convention is itself security work, is in
 [NAMESPACE-LAYOUT.md](NAMESPACE-LAYOUT.md). A few older trees
-predate the convention (`/n/wallet`, `/n/git`, `/n/wikia`,
-`/n/speech`); do not copy them for new work — their migrations
-are tracked as INFR-400 through INFR-403.
+predate the convention (`/n/git`, `/n/wikia`, `/n/speech`); do
+not copy them for new work — their migrations are tracked as
+INFR-401 through INFR-403. `/n/git` has moved to `/mnt/git` and
+`/n/wallet` to `/mnt/wallet`.
 
 **Control files, not config files.** A service is configured and
 commanded by writing text to its `ctl` file, and reports through

@@ -32,7 +32,7 @@ WalletPolicyTest: module
 };
 
 SRCFILE: con "/tests/wallet_policy_test.b";
-W: con "/n/wallet";
+W: con "/mnt/wallet";
 
 passed := 0;
 failed := 0;

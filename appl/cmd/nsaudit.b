@@ -549,6 +549,9 @@ privilegedControlGrant(p: string): int
 		"/mnt/msg/pending",
 		"/mnt/msg/approve",
 		"/mnt/msg/deny",
+		"/mnt/wallet/ctl",
+		"/mnt/wallet/pending",
+		"/mnt/wallet/new",
 		"/n/wallet/ctl",
 		"/n/wallet/pending",
 		"/n/wallet/new",
@@ -577,11 +580,14 @@ privilegedControlGrant(p: string): int
 	return 0;
 }
 
+# nsconstruct's walletcontrolpath: per-account ctl and sign, under the
+# mount (/mnt/wallet) and where it was before INFR-400 (/n/wallet).
 walletAccountControlGrant(p: string): int
 {
-	if(!prefix(p, "/n/wallet/"))
+	if(!prefix(p, "/mnt/wallet/") && !prefix(p, "/n/wallet/"))
 		return 0;
-	return componentcount(p) >= 4 && pathhascomponent(p, "ctl");
+	return componentcount(p) >= 4 &&
+		(pathhascomponent(p, "ctl") || pathhascomponent(p, "sign"));
 }
 
 ftreeControlGrant(p: string): int

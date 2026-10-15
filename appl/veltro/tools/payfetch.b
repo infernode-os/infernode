@@ -106,14 +106,14 @@ doc(): string
 		"  payfetch <url> -a <account> -c <chain>\n\n" +
 		"Arguments:\n" +
 		"  url      - Full URL (https://...)\n" +
-		"  -a acct  - Wallet account name (default: reads /n/wallet/ctl)\n" +
+		"  -a acct  - Wallet account name (default: reads /mnt/wallet/ctl)\n" +
 		"  -c chain - Preferred chain (default: base)\n\n" +
 		"Behavior:\n" +
 		"  1. Fetches the URL normally\n" +
 		"  2. If the server returns 402 Payment Required with x402 headers,\n" +
 		"     requests a payment authorization from the wallet and retries\n" +
 		"  3. Reports what was paid before returning content\n\n" +
-		"The agent must have /n/wallet access (caps.paths must include /n/wallet).\n" +
+		"The agent must have /mnt/wallet access (caps.paths must include /mnt/wallet).\n" +
 		"Budget and approval policy are enforced inside wallet9p: if the\n" +
 		"account requires approval, the fetch waits up to 90s for a trusted\n" +
 		"controller to approve, then reports pending if it hasn't been.\n";
@@ -123,7 +123,7 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"payfetch\"," +
-		"\"description\":\"Fetch a URL, automatically paying via x402 if the server returns 402 Payment Required. Reports what was paid before returning content. Requires /n/wallet access.\"," +
+		"\"description\":\"Fetch a URL, automatically paying via x402 if the server returns 402 Payment Required. Reports what was paid before returning content. Requires /mnt/wallet access.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -215,7 +215,7 @@ exec(args: string): string
 		return "error: server payment error: " + pr.errmsg;
 
 	# Select payment option: prefer the wallet's ACTIVE network (read
-	# from /n/wallet/network) so we never request an authorization the
+	# from /mnt/wallet/network) so we never request an authorization the
 	# wallet will refuse; an explicit -c overrides.
 	opt: ref X402->PaymentReq;
 	walletnet := walletcaip2();
@@ -242,7 +242,7 @@ exec(args: string): string
 		if(len aerr > 8 && aerr[0:8] == "pending:")
 			return "payment pending approval (" + aerr[8:] + ").\n" +
 				"A trusted controller must approve it in the wallet GUI\n" +
-				"(or via /n/wallet/ctl); retry this fetch after approval.";
+				"(or via /mnt/wallet/ctl); retry this fetch after approval.";
 		return "error: payment authorization failed: " + aerr;
 	}
 
@@ -284,14 +284,14 @@ exec(args: string): string
 
 getdefaultaccount(): string
 {
-	d := readfile("/n/wallet/default");
+	d := readfile("/mnt/wallet/default");
 	if(d != nil) {
 		(nil, dtoks) := sys->tokenize(d, " \t\n");
 		if(dtoks != nil)
 			return hd dtoks;
 	}
 
-	s := readfile("/n/wallet/ctl");
+	s := readfile("/mnt/wallet/ctl");
 	if(s == nil)
 		return "";
 	# Parse "default <name>\n"
@@ -304,7 +304,7 @@ getdefaultaccount(): string
 # Read the wallet's active network as a CAIP-2 id ("eip155:NNNN")
 walletcaip2(): string
 {
-	s := readfile("/n/wallet/network");
+	s := readfile("/mnt/wallet/network");
 	if(s == nil)
 		return "";
 	(nil, lines) := sys->tokenize(s, "\n");

@@ -3498,8 +3498,8 @@ kernelimage()
 #
 # Every core's clock, read through the namespace.
 #
-# /dev/sysstat has one line per running core -- "cpuN ticks T intrs I
-# timers F" -- and a core whose tick count does not move between two
+# /dev/sysstat has one line per running core -- "cpuN ticks T idle D
+# intrs I timers F" -- and a core whose tick count does not move between two
 # reads a fifth of a second apart has a clock interrupt that arrives
 # and does nothing. That was cores 1-3 until secclockinit gave each its
 # own hzclock Timer: their interrupt count climbed, their ticks sat at

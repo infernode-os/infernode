@@ -107,6 +107,7 @@ struct Mach
 	ulong		cpuhz;
 	int		nrdy;
 	ulong		hartid;		/* the hart this Mach runs on */
+	ulong		idleticks;	/* ticks that found no process here: /dev/sysstat */
 	int		stack[1];
 };
 

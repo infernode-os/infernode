@@ -150,6 +150,8 @@ hzclock(Ureg *ur)
 	m->ticks++;
 	if(m->proc)
 		m->proc->pc = ur->pc;
+	else
+		m->idleticks++;	/* in the idle loop: what /dev/sysstat calls idle */
 
 	kmapinval();
 

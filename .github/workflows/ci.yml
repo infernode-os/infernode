@@ -291,6 +291,12 @@ jobs:
         rc=0
         ROOT=. bash tests/host/wstat_nulldir_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+        # An allocation the pool refuses says how much, why, for whom
+        # and how the pool stood (INFR-472). 77 = skip (no emu).
+        chmod +x tests/host/pool_nomem_test.sh
+        rc=0
+        ROOT=. bash tests/host/pool_nomem_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run WPA2 supplicant vector checks
       run: |

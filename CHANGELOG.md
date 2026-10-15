@@ -20,9 +20,23 @@ All notable changes to InferNode are documented in this file.
   `CNSAMODE=1` every HTTPS site failed with `alert level=2 desc=40`; a
   node can now be CNSA-strict to its peers and reach the web. A
   deployment that wants strict TLS sets `CNSATLS=1` as well.
+- **`/tool/meta/nodevs` is a fact, not a declaration.** tools9p reported
+  `unset` unless its launcher passed `-N`, and Lucifer's boot does not, so
+  `nsaudit -m /tool` on a live session reported a high `DEVICE_GATE_BYPASS`
+  that was not there: every tool tools9p runs runs with `NODEVS`, or is
+  refused. It now always reports `set`; `-N` is accepted and ignored. The
+  profile test starts a live tools9p for each `nsaudit` profile fixture,
+  and for three compositions of them, and requires the same report
+  (INFR-456).
 
 ### Name space
 
+- **wiki9p mounts at `/mnt/wikia`, not `/n/wikia`.** It invents its own
+  schema, so it belongs under `/mnt` (docs/NAMESPACE-LAYOUT.md); `/mnt/wiki`
+  is wikifs, the store beneath it. The wiki tool is granted `/mnt/wikia`
+  and nothing else is; neither name can be granted as a path. A script
+  that binds sources into `/n/wikia/raw` now binds them into
+  `/mnt/wikia/raw` (INFR-402).
 - **speech9p mounts at `/mnt/speech`, not `/n/speech`.** It invents its
   own schema (`say`, `hear`, `voices`, `ctl`), so it belongs under `/mnt`
   (docs/NAMESPACE-LAYOUT.md). The `say` and `hear` tools are granted

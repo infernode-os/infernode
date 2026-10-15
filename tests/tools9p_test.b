@@ -634,8 +634,9 @@ testPathsReadable(t: ref T)
 }
 
 # Test 9b: /tool/meta/ scalar files expose the agent's role/xenith/actid/
-# nodevs for nsaudit (INFR-18). Values vary by how this tools9p was
-# launched; here we assert the files exist and carry well-formed values.
+# nodevs for nsaudit (INFR-18). Role, xenith and actid vary by how this
+# tools9p was launched; nodevs does not, since every tool it runs runs with
+# NODEVS (INFR-456).
 testMetaReadable(t: ref T)
 {
 	if(!hastool()) {
@@ -652,8 +653,7 @@ testMetaReadable(t: ref T)
 		"/tool/meta/xenith is 0|1 (got '" + xenith + "')");
 
 	nodevs := trimnl(readfile(TOOLMNT + "/meta/nodevs"));
-	t.assert(nodevs == "set" || nodevs == "unset",
-		"/tool/meta/nodevs is set|unset (got '" + nodevs + "')");
+	t.assertseq(nodevs, "set", "/tool/meta/nodevs");
 
 	actid := trimnl(readfile(TOOLMNT + "/meta/actid"));
 	t.assertnotnil(actid, "/tool/meta/actid is readable");

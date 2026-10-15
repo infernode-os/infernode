@@ -345,7 +345,9 @@ docreate(args: string): string
 	# Refuse a duplicate active label and point it at the existing task.
 	dupid := findlabelledtask(label);
 	if(dupid > 0)
-		return sys->sprint("error: a task labelled \"%s\" already exists (id %d). Use 'task status %d' to check it — do NOT create it again.", label, dupid, dupid);
+		# Not an error: the work is under way.  Worded as a refusal, it
+		# read to the model as a broken tool, and it told the user so.
+		return sys->sprint("task \"%s\" already exists as activity %d and is under way: your earlier create worked. Do not create it again; tell the user it has started, and its report will come as a [task-event].", label, dupid);
 
 	# Create activity via /mnt/ui/ctl
 	ctlpath := UI_MOUNT + "/ctl";

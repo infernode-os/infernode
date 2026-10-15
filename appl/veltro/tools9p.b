@@ -56,6 +56,9 @@ include "styxservers.m";
 include "string.m";
 	str: String;
 
+include "daytime.m";
+	daytime: Daytime;
+
 include "tool.m";
 
 include "nsconstruct.m";
@@ -258,6 +261,7 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers->init(styx);
 
 	str = load String String->PATH;
+	daytime = load Daytime Daytime->PATH;
 	if(str == nil)
 		nomod(String->PATH);
 
@@ -1507,19 +1511,32 @@ removepidshadows(pid: int)
 # its shadows, and removing them under it makes every walk through them fail
 # ("tool not found").  Every child task starts a tools9p of its own, so
 # sweeping them all took activity 0's tools away at its first delegation.
+#
+# /prog shows only this emulator's processes, and another one may share
+# this /tmp (Lucifer and a standalone Xenith both use ~/.infernode/tmp), so
+# a dir whose owner is not here is swept only once it is old: a crashed
+# session's leftovers, not a running neighbour's namespace.
+SHADOW_STALE: con 2*24*60*60;	# seconds
+
 cleanshadows()
 {
 	fd := sys->open(SHADOW_BASE, Sys->OREAD);
 	if(fd == nil)
 		return;
+	if(daytime == nil)
+		return;
+	now := daytime->now();
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
 			break;
 		for(i := 0; i < n; i++) {
 			name := dirs[i].name;
-			if(name != "." && name != ".." && !shadowowneralive(name))
-				removeshadowdir(SHADOW_BASE + "/" + name);
+			if(name == "." || name == ".." || shadowowneralive(name))
+				continue;
+			if(now - dirs[i].mtime < SHADOW_STALE)
+				continue;
+			removeshadowdir(SHADOW_BASE + "/" + name);
 		}
 	}
 	fd = nil;

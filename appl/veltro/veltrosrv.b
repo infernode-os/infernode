@@ -571,7 +571,67 @@ readonlytool(name: string): int
 
 calltoolworker(s: ref Session, name, args: string, resultch: chan of string)
 {
-	resultch <-= s.al->calltool(name, args);
+	if(brokerc == nil) {
+		resultch <-= s.al->calltool(name, args);
+		return;
+	}
+	brokerc <-= (name, args, resultch);
+}
+
+# The tool broker.  The agent's namespace is restricted once, at start, and
+# /tool in it is a snapshot of the tools active then: a tool the user turns
+# on later (Settings, /tools +name) was offered to the model and every call
+# to it failed, "tool not found".  So calls go through this process, which
+# keeps the unrestricted view of the tool server, and does one thing: call
+# a tool the server lists as active now, by a plain name.  The tools still
+# run in the tool server's own confined workers.
+brokerc: chan of (string, string, chan of string);
+
+toolbroker(ready: chan of int)
+{
+	sys->pctl(Sys->FORKNS, nil);	# keep this view when the loop's is restricted
+	bal := load AgentLib AgentLib->PATH;
+	if(bal != nil) {
+		bal->init();
+		bal->settoolmount(toolmount);
+	}
+	ready <-= 1;
+	for(;;) {
+		(name, args, resultch) := <-brokerc;
+		if(bal == nil) {
+			resultch <-= "error: tool broker unavailable";
+			continue;
+		}
+		if(!activetool(name)) {
+			resultch <-= sys->sprint("error: tool not found: %s", name);
+			continue;
+		}
+		spawn brokered(bal, name, args, resultch);
+	}
+}
+
+brokered(bal: AgentLib, name, args: string, resultch: chan of string)
+{
+	resultch <-= bal->calltool(name, args);
+}
+
+# A tool the server has active now, named plainly: never a path, never one
+# of the server's own files (ctl, meta, ...), which are not in its list.
+activetool(name: string): int
+{
+	name = str->tolower(name);
+	if(name == "")
+		return 0;
+	for(i := 0; i < len name; i++) {
+		c := name[i];
+		if(!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return 0;
+	}
+	(nil, active) := sys->tokenize(readfile(toolmount + "/tools"), "\n");
+	for(; active != nil; active = tl active)
+		if(str->tolower(hd active) == name)
+			return 1;
+	return 0;
 }
 
 # One bounded call: a buffered one-shot channel lets a late sender finish
@@ -1501,6 +1561,12 @@ serveloop(tchanc: chan of chan of ref Tmsg, errc: chan of string, caps: ref NsCo
 			return;
 		}
 		toolmount = "/tool";
+	}
+	if(exists(toolmount + "/tools")) {
+		brokerc = chan of (string, string, chan of string);
+		bready := chan of int;
+		spawn toolbroker(bready);
+		<-bready;
 	}
 	nserr := nsconstruct->restrictns(caps);
 	if(nserr != nil) {

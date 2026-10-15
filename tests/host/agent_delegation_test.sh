@@ -23,7 +23,9 @@
 #   - the completion reaches activity 0 and is not shown as the human's;
 #   - a reply is shown once (text's length was 0, so every turn replayed
 #     the whole conversation into the UI);
-#   - a long message arrives whole, as one message.
+#   - a long message arrives whole, as one message;
+#   - a tool turned on after the agent started can be called (the agent's
+#     restricted /tool was a snapshot of the tools active at its start).
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -111,10 +113,13 @@ waitfor 0 'Hello from the mock'
 sleep 2
 echo -n '$LONG' > /mnt/ui/activity/0/conversation/input
 sleep 5
+echo add find > /mnt/toolctl/ctl
+echo 'SCENARIO:late_tool go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Found with a late tool'
 
 for a in 0 1 {
 	echo '@@ conversation' \$a
-	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 {
+	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 {
 		if {ftest -e /mnt/ui/activity/\$a/conversation/\$i} {
 			echo msg \$i
 			cat /mnt/ui/activity/\$a/conversation/\$i | sed 's/w[0-9]* //g'
@@ -176,6 +181,10 @@ reqcheck "activity 0's tools still work after delegating" \
 	'tools and "tool not found" not in tools[-1]["content"] and "activity 1" in tools[-1]["content"]' parent_report 1
 reqcheck "activity 0 talks to its own agent after delegating" \
 	'"Chief of Staff" in system' text_only 0
+reqcheck "a tool turned on later is offered" \
+	'"find" in [t["function"]["name"] for t in r["body"].get("tools", [])]' late_tool 0
+reqcheck "a tool turned on later can be called" \
+	'tools and "tool not found" not in tools[-1]["content"]' late_tool 1
 if grep -q TAILMARK "$REQ" && python3 -I - "$REQ" <<'PY'
 import json, sys
 for line in open(sys.argv[1]):

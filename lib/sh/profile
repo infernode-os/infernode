@@ -93,6 +93,28 @@ if {~ $emuhost MacOSX Linux Nt}{
 		cp /lib/veltro/agents/task.txt $infhome/lib/veltro-agents/task.txt >[2] /dev/null
 	}
 
+	# The agent prompts follow the shipped default until the user edits
+	# them (Settings writes these copies). Seeded once and never touched
+	# again, they froze at the first install's: an install kept running
+	# prompts written for a harness it no longer had. A copy whose hash
+	# is one InferNode has shipped (lib/veltro/prompt-defaults) was never
+	# edited, and becomes the current default; an edited one is the user's.
+	fn promptfollow {
+		shipped=$1
+		copy=$2
+		name=$3
+		if {ftest -f $copy} {
+			if {! cmp -s $shipped $copy} {
+				h=`{sha1sum < $copy}
+				if {grep -s '^'^$h^' '^$name^'$' /lib/veltro/prompt-defaults} {
+					cp $shipped $copy
+				}
+			}
+		}
+	}
+	promptfollow /lib/veltro/meta.txt $infhome/lib/veltro/meta.txt meta.txt
+	promptfollow /lib/veltro/agents/task.txt $infhome/lib/veltro-agents/task.txt task.txt
+
 	# First-run only: seed the default user's home from the shipped
 	# /usr/inferno skeleton (the historical `cp -r /usr/inferno
 	# /usr/<name>` — doc/install.ms "Adding new users" — done once for

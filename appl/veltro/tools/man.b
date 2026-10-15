@@ -178,7 +178,7 @@ readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return sys->sprint("error: cannot open %s: %%r (is wm/man running?)", path);
+		return sys->sprint("error: cannot open %s: %r (is wm/man running?)", path);
 
 	result := "";
 	buf := array[8192] of byte;
@@ -196,14 +196,14 @@ writefile(path, data: string): string
 {
 	fd := sys->create(path, Sys->OWRITE, 8r666);
 	if(fd == nil)
-		return sys->sprint("error: cannot create %s: %%r (is wm/man running?)", path);
+		return sys->sprint("error: cannot create %s: %r (is wm/man running?)", path);
 
 	b := array of byte data;
 	n := sys->write(fd, b, len b);
 	fd = nil;
 
 	if(n != len b)
-		return sys->sprint("error: write failed: %%r");
+		return sys->sprint("error: write failed: %r");
 
 	return nil;
 }

@@ -15,8 +15,12 @@ grep -q 'c := ref Call(id, name, args, chan\[1\] of string, chan\[1\] of int);' 
 	fail "tool result channels are not buffered one-shots"
 grep -q 'r := collect(c);' "$SRC" || fail "parallel batch does not collect through the bound"
 grep -q 'r := collect(launch(s, id, name, args));' "$SRC" || fail "sequential batch does not go through the bound"
-[ "$(grep -c 'al->calltool(' "$SRC")" = 1 ] || fail "a tool call in veltrosrv.b bypasses launch"
-grep -q 'resultch <-= s.al->calltool(name, args);' "$SRC" || fail "the one direct call is not the worker's"
+# Two direct calls, both behind launch's bound: the worker's own (no tool
+# broker) and the broker's, which the worker hands its call to.
+[ "$(grep -c 'al->calltool(' "$SRC")" = 2 ] || fail "a tool call in veltrosrv.b bypasses launch"
+grep -q 'resultch <-= s.al->calltool(name, args);' "$SRC" || fail "the worker does not make the direct call"
+grep -q 'resultch <-= bal->calltool(name, args);' "$SRC" || fail "the broker does not answer the worker's channel"
+grep -q 'brokerc <-= (name, args, resultch);' "$SRC" || fail "the worker does not hand its call to the broker"
 
 if grep 'calltool(' "$ROOT/appl/cmd/lucibridge.b" | grep -v -q '"task"'; then
 	fail "lucibridge calls tools itself"

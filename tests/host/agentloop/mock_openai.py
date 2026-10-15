@@ -139,6 +139,12 @@ SCENARIOS = {
         {"tools": [tool("read", "/lib/veltro/system.txt")]},
         {"content": "Child is done. SCENARIO:parent_report"},
     ],
+    # A tool turned on after the agent started (/tools +find, Settings):
+    # offered to the model, it must also be callable.
+    "late_tool": [
+        {"tools": [tool("find", {"args": "/lib/veltro system.txt"})]},
+        {"content": "Found with a late tool."},
+    ],
     # Activity 0 on the completion event: its own tools still work.
     "parent_report": [
         {"tools": [tool("task", {"command": "status", "args": "1"})]},

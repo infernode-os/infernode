@@ -54,6 +54,22 @@ All notable changes to InferNode are documented in this file.
   path it declined come back as an extra root. Scripts that write
   `/n/wallet/ctl` or read `/n/wallet/<account>/...` now use `/mnt/wallet`
   (INFR-400).
+- **The LLM-maintained wiki works.** wiki9p had never written a page:
+  - it read llmsrv's hex session names as numbers, so every model request
+    failed;
+  - a command's result read back empty unless the read happened to come
+    after the work, so the agent's `wiki` tool always returned nothing;
+  - concurrent commands shared one model session;
+  - `status` deadlocked when nothing was bound on `raw`;
+  - pages were listed through wikifs's `map`, which is a lookup, not a
+    list.
+
+  Now a result is read on the fid that wrote the command, the read waits
+  for it, and operations run one at a time. wikifs also listed a new page
+  only once the clock had ticked: its forced map reload trusted a qid
+  version that a host file system can leave unchanged.
+  `tests/host/wiki9p_test.sh` runs the whole loop against a scripted
+  model.
 
 ## [0.7.0] - 2026-10-13
 

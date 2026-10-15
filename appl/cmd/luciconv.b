@@ -1179,9 +1179,9 @@ startvoice()
 	if(voicestate != VOICE_IDLE)
 		return;
 	# Check if speech9p is mounted
-	(ok, nil) := sys->stat("/n/speech/hear");
+	(ok, nil) := sys->stat("/mnt/speech/hear");
 	if(ok < 0) {
-		sys->fprint(stderr, "luciconv: /n/speech not mounted\n");
+		sys->fprint(stderr, "luciconv: /mnt/speech not mounted\n");
 		return;
 	}
 	voicestate = VOICE_REC;
@@ -1196,9 +1196,9 @@ VoiceFD: adt {
 
 voiceworker(ch: chan of string)
 {
-	fd := sys->open("/n/speech/hear", Sys->ORDWR);
+	fd := sys->open("/mnt/speech/hear", Sys->ORDWR);
 	if(fd == nil) {
-		ch <-= "error: cannot open /n/speech/hear";
+		ch <-= "error: cannot open /mnt/speech/hear";
 		return;
 	}
 

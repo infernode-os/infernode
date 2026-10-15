@@ -37,6 +37,13 @@ All notable changes to InferNode are documented in this file.
   and nothing else is; neither name can be granted as a path. A script
   that binds sources into `/n/wikia/raw` now binds them into
   `/mnt/wikia/raw` (INFR-402).
+- **speech9p mounts at `/mnt/speech`, not `/n/speech`.** It invents its
+  own schema (`say`, `hear`, `voices`, `ctl`), so it belongs under `/mnt`
+  (docs/NAMESPACE-LAYOUT.md). The `say` and `hear` tools are granted
+  `/mnt/speech` as before, and nothing else is. Scripts that write
+  `/n/speech/say` or `/n/speech/ctl` now write `/mnt/speech/say` and
+  `/mnt/speech/ctl`; a remote speech host exports and mounts
+  `/mnt/speech` (INFR-403).
 - **wallet9p mounts at `/mnt/wallet`, not `/n/wallet`.** It invents its
   own schema, so it belongs under `/mnt` (docs/NAMESPACE-LAYOUT.md). The
   wallet tool, payfetch, x402 and wm/wallet follow it. An agent granted

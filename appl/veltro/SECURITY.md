@@ -182,7 +182,7 @@ absent, not present-and-denied:
 | 1 | `/dis` | `lib/`, `veltro/`; `sh.dis` for exec; named commands from `shellcmds`; explicitly granted `/dis/<tree>` | Runtime and named executable allowlist |
 | 2 | `/dis/veltro/tools` | Granted tool modules only | Tool allowlist |
 | 3 | `/dev` | `cons`, `null`, `time` | Console/null and TLS clock |
-| 4 | `/n` | Capability-derived foreign imports: speech, presentation, and exact `/n/local` grants | Foreign-tree capabilities |
+| 4 | `/n` | Capability-derived foreign imports: presentation and exact `/n/local` grants | Foreign-tree capabilities |
 | 5 | `/mnt` | Exact application subtrees plus fixed-function tool mounts such as Git; sensitive services (`msg`, `wallet`, `ui`) are narrowed again | Synthesized-service capabilities |
 | 6 | `/lib` | `veltro/`, `certs/`; `/lib/veltro/keys` replaced with an empty view | Prompts/config and TLS roots, not credentials |
 | 7 | `/env` | `VELTRO_SESSION` only | No inherited environment secrets |
@@ -371,7 +371,7 @@ The subagent's system prompt comes from `/lib/veltro/agents/{type}.txt`, loaded 
 | Shell access controlled | `sh.dis` + named command `.dis` files only bound if `shellcmds` is non-nil |
 | Writable views explicit | `MREADONLY` protects code/source views; `MCREATE` appears only on `/tmp`, proposal endpoints, activity scratch, and cowfs staging |
 | Host path control | `/n/local` hidden unless `caps.paths` grants specific subpaths (`-p` flag) |
-| Speech preserved | `/n/speech` auto-detected and included in `/n` allowlist |
+| Speech preserved | `/mnt/speech` granted as a path to `say` and `hear`, exposed only if mounted |
 | 9P self-mount safe | Root restriction skips `stat()` to avoid deadlock on `/tool` |
 
 The baseline paths above are retained capabilities, not declarations that an
@@ -448,7 +448,7 @@ Options:
 
 ### Speech
 
-If speech9p is mounted at `/n/speech`:
+If speech9p is mounted at `/mnt/speech`:
 - `say <text>` -- text-to-speech output
 - `hear` -- speech-to-text input (5-second recording)
 - `Voice` button in Xenith REPL for voice input

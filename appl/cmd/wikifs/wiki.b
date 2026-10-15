@@ -488,7 +488,10 @@ currentmap(force: int)
 		return;
 	if((d = wdirstat("d/map")) == nil)
 		return;
-	if(map != nil && d.qid.path == map.qid.path && d.qid.vers == map.qid.vers){
+	# A forced load (after allocnum adds a page) must not trust the qid:
+	# a host file system can leave vers unchanged by a write within the
+	# same second, which hid the new page from listings.
+	if(!force && map != nil && d.qid.path == map.qid.path && d.qid.vers == map.qid.vers){
 		map.t = now();
 		return;
 	}

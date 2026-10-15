@@ -83,6 +83,7 @@ TARG=\
 	jit_fault_test.dis\
 	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
+	pool_nomem_helper.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
 	jit_test.dis\

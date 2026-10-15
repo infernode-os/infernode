@@ -38,6 +38,7 @@ struct Pool
 	ulong	nfree;
 	int	nbrk;
 	int	lastfree;
+	ulong	nfail;		/* allocations refused, for poolnomem */
 	void	(*move)(void*, void*);
 };
 
@@ -384,13 +385,11 @@ dopoolalloc(Pool *p, ulong asize, ulong pc)
 		if (ns < size) {
 			if(poolcompact(p)) {
 				unlock(&p->l);
-				return poolalloc(p, osize);
+				return dopoolalloc(p, osize, pc);
 			}
 
 			unlock(&p->l);
-			print("arena %s too large: size %d cursize %lud arenasize %lud maxsize %lud\n",
-			 p->name, size, p->cursize, p->arenasize, p->maxsize);
-			return nil;
+			return nil;	/* reported by the caller, poolnomem */
 		}
 		alloc = ns+ldr+ldr;
 		p->arenasize += alloc;
@@ -476,14 +475,81 @@ dopoolalloc(Pool *p, ulong asize, ulong pc)
 	return B2D(t);
 }
 
+/*
+ * Where in the program a pc is, for poolnomem: set by the host (Linux:
+ * the image and offset addr2line takes), else the bare pc.
+ */
+char*	(*poolpcwhere)(ulong, char*, int) = nil;
+
+/* The largest free block: the free tree is ordered by size.  Under p->l. */
+static ulong
+poolbiggest(Pool *p)
+{
+	Bhdr *t;
+	ulong big;
+
+	big = 0;
+	for(t = p->root; t != nil; t = t->right)
+		big = t->size;
+	return big;
+}
+
+/*
+ * An allocation refused: say how much, why, for whom, and how the pool
+ * stood, so that an "out of memory" with a pool nearly empty (INFR-472)
+ * tells an oversized request from a full or fragmented pool.  The first
+ * ten are reported, then every thousandth, so a degraded system that
+ * keeps asking cannot fill its log.
+ */
+static void
+poolnomem(Pool *p, ulong size, ulong pc, char *why)
+{
+	char where[128];
+	ulong n, cur, arena, big;
+
+	lock(&p->l);
+	n = ++p->nfail;
+	cur = p->cursize;
+	arena = p->arenasize;
+	big = poolbiggest(p);
+	unlock(&p->l);
+	if(n > 10 && n % 1000 != 0)
+		return;
+	if(poolpcwhere == nil || poolpcwhere(pc, where, sizeof(where)) == nil)
+		snprint(where, sizeof(where), "pc %#lux", pc);
+	print("pool %s: cannot allocate %lud bytes (%s) for %s: cursize %lud arenasize %lud maxsize %lud largest free %lud; refusal %lud%s\n",
+		p->name, size, why, where, cur, arena, p->maxsize, big, n,
+		n == 10? ", now reporting every 1000th": "");
+}
+
+static void*
+pallocpc(Pool *p, ulong asize, ulong pc)
+{
+	Prog *prog;
+	void *v;
+	char *why;
+
+	if(p->cursize > p->ressize && (prog = currun()) != nil && prog->flags&Prestricted){
+		poolnomem(p, asize, pc, "restricted Prog, pool past its reserve");
+		return nil;
+	}
+	v = dopoolalloc(p, asize, pc);
+	if(v == nil){
+		if(asize >= 1024*1024*1024)
+			why = "over the 1GB limit on one block";
+		else if(p->arenasize + asize > p->maxsize)
+			why = "beyond the pool's maxsize";
+		else
+			why = "host refused memory";
+		poolnomem(p, asize, pc, why);
+	}
+	return v;
+}
+
 void *
 poolalloc(Pool *p, ulong asize)
 {
-	Prog *prog;
-
-	if(p->cursize > p->ressize && (prog = currun()) != nil && prog->flags&Prestricted)
-		return nil;
-	return dopoolalloc(p, asize, getcallerpc(&p));
+	return pallocpc(p, asize, getcallerpc(&p));
 }
 
 void
@@ -523,20 +589,22 @@ poolfree(Pool *p, void *v)
 	unlock(&p->l);
 }
 
-void *
-poolrealloc(Pool *p, void *v, ulong size)
+static void*
+dopoolrealloc(Pool *p, void *v, ulong size, ulong pc)
 {
 	Bhdr *b;
 	void *nv;
 	int osize;
 
-	if(size >= 1024*1024*1024)	/* for sanity and to avoid overflow */
+	if(size >= 1024*1024*1024){	/* for sanity and to avoid overflow */
+		poolnomem(p, size, pc, "over the 1GB limit on one block");
 		return nil;
+	}
 	if(size == 0){
 		poolfree(p, v);
 		return nil;
 	}
-	SET(osize);
+	osize = 0;	/* read only when v != nil, which sets it */
 	if(v != nil){
 		lock(&p->l);
 		D2B(b, v);
@@ -545,12 +613,18 @@ poolrealloc(Pool *p, void *v, ulong size)
 		if(osize >= size)
 			return v;
 	}
-	nv = poolalloc(p, size);
+	nv = pallocpc(p, size, pc);
 	if(nv != nil && v != nil){
 		memmove(nv, v, osize);
 		poolfree(p, v);
 	}
 	return nv;
+}
+
+void *
+poolrealloc(Pool *p, void *v, ulong size)
+{
+	return dopoolrealloc(p, v, size, getcallerpc(&p));
 }
 
 ulong
@@ -684,7 +758,7 @@ malloc(size_t size)
 {
 	void *v;
 
-	v = poolalloc(mainmem, size+Npadlong*sizeof(ulong));
+	v = pallocpc(mainmem, size+Npadlong*sizeof(ulong), getcallerpc(&size));
 	if(v != nil){
 		ML(v, size, getcallerpc(&size));
 		if(Npadlong){
@@ -694,8 +768,7 @@ malloc(size_t size)
 		}
 		memset(v, 0, size);
 		MM(0, getcallerpc(&size), (ulong)v, size);
-	} else 
-		print("malloc failed from %lux\n", getcallerpc(&size));
+	}
 	return v;
 }
 
@@ -704,7 +777,7 @@ mallocz(ulong size, int clr)
 {
 	void *v;
 
-	v = poolalloc(mainmem, size+Npadlong*sizeof(ulong));
+	v = pallocpc(mainmem, size+Npadlong*sizeof(ulong), getcallerpc(&size));
 	if(v != nil){
 		ML(v, size, getcallerpc(&size));
 		if(Npadlong){
@@ -715,8 +788,7 @@ mallocz(ulong size, int clr)
 		if(clr)
 			memset(v, 0, size);
 		MM(0, getcallerpc(&size), (ulong)v, size);
-	} else 
-		print("mallocz failed from %lux\n", getcallerpc(&size));
+	}
 	return v;
 }
 
@@ -794,7 +866,7 @@ realloc(void *v, size_t size)
 		v = (ulong*)v-Npadlong;
 	if(Npadlong!=0 && size!=0)
 		size += Npadlong*sizeof(ulong);
-	nv = poolrealloc(mainmem, v, size);
+	nv = dopoolrealloc(mainmem, v, size, getcallerpc(&v));
 	ML(v, 0, 0);
 	ML(nv, size, getcallerpc(&v));
 	if(nv != nil) {
@@ -802,8 +874,7 @@ realloc(void *v, size_t size)
 		setrealloctag(nv, getcallerpc(&v));
 		if(v == nil)
 			setmalloctag(v, getcallerpc(&v));
-	} else 
-		print("realloc failed from %lux\n", getcallerpc(&v));
+	}
 	return nv;
 }
 

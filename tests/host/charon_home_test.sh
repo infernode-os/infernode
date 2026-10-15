@@ -26,7 +26,7 @@ top=$(echo "$path" | cut -d/ -f2)
 lists=$(grep -E '^[[:space:]]*for d in .*; do' .github/workflows/release.yml | sed 's/.*for d in \(.*\); do.*/\1/')
 [ -n "$lists" ] || { echo "FAIL: no staging lists found in release.yml"; exit 1; }
 missing=$(echo "$lists" | while read -r l; do
-	case " $l " in *" $top "*) ;; *) echo "$l" ;; esac
+	case " $l " in (*" $top "*) ;; (*) echo "$l" ;; esac
 done)
 if [ -z "$missing" ]; then
 	echo "PASS: /$top is staged by every release job"

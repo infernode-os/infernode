@@ -42,10 +42,22 @@ bytes starting at
 and returns the number of bytes copied.
 .BR UTFmax ,
 defined as
-.B 3
+.B 4
 in
-.BR <libc.h> ,
+.BR <lib9.h>
+and
+.BR <kern.h> ,
 is the maximum number of bytes required to represent a rune.
+A
+.B Rune
+is 32 bits wide and holds values up to
+.BR Runemax
+(0x10FFFF).
+A rune above
+.B Runemax
+or a surrogate (0xD800 to 0xDFFF)
+is converted as
+.BR Runeerror .
 .PP
 .I Chartorune
 copies at most
@@ -59,7 +71,9 @@ If the input is not exactly in
 .SM UTF
 format,
 .I chartorune
-will convert to 0x80 and return 1.
+will convert to
+.B Runeerror
+(0xFFFD) and return 1.
 .PP
 .I Runelen
 returns the number of bytes
@@ -137,6 +151,8 @@ returns
 .IR s1 .
 .SH SOURCE
 .B /libkern/rune.c
+.br
+.B /lib9/rune.c
 .br
 .B /libkern/runestrlen.c
 .br

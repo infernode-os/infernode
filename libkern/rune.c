@@ -118,31 +118,32 @@ runetochar(char *str, Rune *rune)
 int
 runelen(long c)
 {
-	Rune rune;
-	char str[10];
+	Rune r;
 
-	rune = c;
-	return runetochar(str, &rune);
+	/* as runetochar has it: out of range is Runeerror, three bytes */
+	r = c;
+	if(r <= Rune1)
+		return 1;
+	if(r <= RuneX(2))
+		return 2;
+	if(r <= RuneX(3) || r > Runemax)
+		return 3;
+	return UTFmax;
 }
 
 int
 runenlen(Rune *r, int nrune)
 {
-	int nb, i;
+	int nb;
 	Rune c;
 
 	nb = 0;
 	while(nrune--) {
 		c = *r++;
-		if(c <= Rune1){
+		if(c <= Rune1)
 			nb++;
-		} else {
-			for(i = 2; i < UTFmax + 1; i++)
-				if(c <= RuneX(i) || i == UTFmax){
-					nb += i;
-					break;
-				}
-		}
+		else
+			nb += runelen(c);	/* as runetochar has it: Runeerror's three for one out of range */
 	}
 	return nb;
 }

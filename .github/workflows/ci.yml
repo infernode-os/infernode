@@ -501,6 +501,12 @@ jobs:
         chmod +x tests/host/jit_bounds_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
 
+    - name: Run rune tests beyond U+FFFF (JIT and interpreter)
+      run: |
+        # U+1F680 and U+20000 are one rune each through byte -> string
+        # -> byte, and s[i] reads all 21 bits from compiled code.
+        ROOT=. sh tests/host/utf21_test.sh
+
     - name: Run JIT fault and big arithmetic tests (JIT and interpreter)
       run: |
         # A fault in compiled code is caught by the handler around it,
@@ -931,6 +937,7 @@ jobs:
         # suite's non-gating run hid it.
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/utf21_test.sh
 
     - name: Run ML-DSA decompose test
       run: |
@@ -1261,7 +1268,7 @@ jobs:
 
     - name: Run JIT fault tests (JIT and interpreter)
       run: |
-        for t in jit_fault_test jit_ownhandler_test jit_bounds_test; do
+        for t in jit_fault_test jit_ownhandler_test jit_bounds_test utf21_test; do
           for c in 1 0; do
             timeout 300 "$RUNNER_TEMP/emu-rv" -c$c -r . /dis/tests/$t.dis -v > $t-c$c.txt 2>&1 < /dev/null || true
             cat $t-c$c.txt
@@ -1529,6 +1536,7 @@ jobs:
         # JIT's only macOS hardware.
         ROOT=. sh tests/host/jit_fault_test.sh
         ROOT=. sh tests/host/jit_bounds_test.sh
+        ROOT=. sh tests/host/utf21_test.sh
 
     - name: Run ML-DSA decompose test
       run: |

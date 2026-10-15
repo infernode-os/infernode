@@ -138,7 +138,7 @@ extern	int TKF2I(int);
 /*#define TKF2I(f)	(((f) + Tkfpscalar/2)/Tkfpscalar)*/
 #define IAUX(i)		((void*)i)
 #define AUXI(i)		((int)i)
-#define TKKEY(i)	((i)&0xFFFF)
+#define TKKEY(i)	((i)&0x1FFFFF)	/* the rune of a TkKey event; see TkKey below */
 
 typedef struct Tk Tk;
 typedef struct TkCol TkCol;
@@ -323,9 +323,12 @@ enum
 
 	/* Supported Event Types 		*/
 	/*
-	 * Bits 0-15 are keyboard characters
+	 * Bits 0-20 are keyboard characters (a rune, to Runemax)
 	 * but duplicated by other events, as we can distinguish
 	 * key events from others with the TkKey bit.
+	 * Bits 16-18 are TkExtn1, TkExtn2 and TkTakefocus in other
+	 * events, and a rune beyond U+FFFF in a key event: test
+	 * TkKey before any of them.
 	 * N.B. make sure that this distinction *is* made;
 	 * i.e.
 	 *	if (event & TkButton1P)

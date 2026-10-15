@@ -30,6 +30,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <jni.h>
 #include "phonebridge.h"
@@ -281,27 +282,81 @@ phonebridge_send_sms(const char *number, const char *body, char *err, int errlen
  *
  * Naming convention path — works without RegisterNatives.
  */
+/*
+ * A Java string as UTF-8. Not GetStringUTFChars: that is JNI's
+ * "modified" UTF-8, which writes a character beyond U+FFFF (an emoji
+ * in a text message) as its two surrogates, three bytes each, and
+ * Inferno takes a surrogate for an encoding error. The UTF-16 is
+ * converted here instead, a pair to one four-byte sequence.
+ * The caller frees the result.
+ */
+static char*
+jstrutf8(JNIEnv *env, jstring js, int *np)
+{
+	const jchar *u;
+	jsize i, n;
+	unsigned long r;
+	char *b, *p;
+
+	n = (*env)->GetStringLength(env, js);
+	u = (*env)->GetStringChars(env, js, NULL);
+	if(u == NULL){
+		(*env)->ExceptionClear(env);
+		return NULL;
+	}
+	b = malloc(3*(size_t)n + 1);	/* a unit is at most three bytes, a pair four */
+	if(b == NULL){
+		(*env)->ReleaseStringChars(env, js, u);
+		return NULL;
+	}
+	p = b;
+	for(i = 0; i < n; i++){
+		r = u[i];
+		if(r >= 0xD800 && r <= 0xDBFF && i+1 < n && u[i+1] >= 0xDC00 && u[i+1] <= 0xDFFF){
+			r = 0x10000 + ((r - 0xD800) << 10) + (u[i+1] - 0xDC00);
+			i++;
+		}else if(r >= 0xD800 && r <= 0xDFFF)
+			r = 0xFFFD;	/* an unpaired surrogate */
+		if(r < 0x80)
+			*p++ = r;
+		else if(r < 0x800){
+			*p++ = 0xC0 | (r >> 6);
+			*p++ = 0x80 | (r & 0x3F);
+		}else if(r < 0x10000){
+			*p++ = 0xE0 | (r >> 12);
+			*p++ = 0x80 | ((r >> 6) & 0x3F);
+			*p++ = 0x80 | (r & 0x3F);
+		}else{
+			*p++ = 0xF0 | (r >> 18);
+			*p++ = 0x80 | ((r >> 12) & 0x3F);
+			*p++ = 0x80 | ((r >> 6) & 0x3F);
+			*p++ = 0x80 | (r & 0x3F);
+		}
+	}
+	*p = 0;
+	(*env)->ReleaseStringChars(env, js, u);
+	*np = p - b;
+	return b;
+}
+
 JNIEXPORT void JNICALL
 Java_io_infernode_InfernodePhoneBridge_postSms(JNIEnv *env, jclass cls,
                                                jstring jrecord)
 {
-	const char *bytes;
-	jsize n;
+	char *bytes;
+	int n;
 
 	(void)cls;
 	if(jrecord == NULL)
 		return;
-	n = (*env)->GetStringUTFLength(env, jrecord);
-	if(n <= 0)
+	bytes = jstrutf8(env, jrecord, &n);
+	if(bytes == NULL)
 		return;
-	bytes = (*env)->GetStringUTFChars(env, jrecord, NULL);
-	if(bytes == NULL){
-		(*env)->ExceptionClear(env);
-		return;
+	if(n > 0){
+		phonebridge_post_sms(bytes, n);
+		fprintf(stderr, "phone: Android postSms forwarded %d bytes\n", n);
 	}
-	phonebridge_post_sms(bytes, (int)n);
-	(*env)->ReleaseStringUTFChars(env, jrecord, bytes);
-	fprintf(stderr, "phone: Android postSms forwarded %d bytes\n", (int)n);
+	free(bytes);
 }
 
 /* Inbound paths land via phonebridge_post_sms / phonebridge_post_call_event

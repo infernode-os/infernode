@@ -424,6 +424,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `jit_bounds_test.b` | Negative and overlarge indices on arrays, strings and slices raise `array bounds error` from compiled code; `tests/host/jit_bounds_test.sh` runs it under `-c0` and `-c1` |
 | `jit_big_test.b` | `big` `*`, `/`, `%` and `hd` of a list of `big` give from compiled code what the interpreter gives: signs, wrapping, zero divide, the most negative `big` over -1 (it wraps); `tests/host/jit_big_test.sh` runs it under `-c0` and `-c1` |
 | `jit_real_test.b` | Real arithmetic, comparisons (a NaN, the signed zeros), conversions (half away from zero), negation and moves give from compiled code what the interpreter gives; `tests/host/jit_real_test.sh` runs it under `-c0` and `-c1` |
+| `utf21_test.b` | Runes beyond U+FFFF (U+1F680, U+20000, to U+10FFFF): one rune each from four bytes of UTF-8 and back, `s[i] = r` and `%c`, `\U` literals, bad sequences and unencodable runes to U+FFFD, `utfbytes`/`byte2char`/`char2byte`, UTF-16 surrogate pairs through convcs; run under `-c0` and `-c1` |
 | `refadt_zero_test.b` | `ref T` with no initializer zero-fills every scalar member; `tests/host/refadt_zero_test.sh` runs it under `-c0` and `-c1` |
 | `limbo_inline_test.b` | Code the compiler inlines: an inlined call's temporary argument outlives the use of its element; `v = f(v)` reads the old `v` |
 | `limbo_ldt_test.b` | A module taking a `ref fn` of its own functions loads another module through a module type equal to its own (INFR-310); the `ref fn` still calls through `$self` |

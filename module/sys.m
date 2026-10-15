@@ -113,8 +113,9 @@ Sys: module
 	EXPWAIT:	con 0;
 	EXPASYNC:	con 1;
 
-	UTFmax:		con 3;
-	UTFerror:	con 16r80;
+	UTFmax:		con 4;		# bytes in the longest rune's UTF-8
+	UTFerror:	con 16rFFFD;	# the rune a decoding error yields
+	Runemax:	con 16r10FFFF;	# the largest rune
 
 	announce:	fn(addr: string): (int, Connection);
 	aprint:		fn(s: string, *): array of byte;

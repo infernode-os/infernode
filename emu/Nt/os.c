@@ -39,11 +39,12 @@ static	int sleepers = 0;
 	wchar_t	*widen(char *s);
 	char		*narrowen(wchar_t *ws);
 	int		widebytes(wchar_t *ws);
-	int		runeslen(Rune*);
-	Rune*	runesdup(Rune*);
-	Rune*	utftorunes(Rune*, char*, int);
-	char*	runestoutf(char*, Rune*, int);
-	int		runescmp(Rune*, Rune*);
+	int		widerune(Rune*, wchar_t*);
+	int		runeslen(wchar_t*);
+	wchar_t*	runesdup(wchar_t*);
+	wchar_t*	utftorunes(wchar_t*, char*, int);
+	char*	runestoutf(char*, wchar_t*, int);
+	int		runescmp(wchar_t*, wchar_t*);
 
 __declspec(thread)       Proc    *up;
 
@@ -868,7 +869,7 @@ widen(char *s)
 	int n;
 	wchar_t *ws;
 
-	n = utflen(s) + 1;
+	n = strlen(s) + 1;	/* no more UTF-16 than UTF-8: a surrogate pair is four bytes */
 	ws = smalloc(n*sizeof(wchar_t));
 	utftorunes(ws, s, n);
 	return ws;
@@ -892,8 +893,11 @@ int
 widebytes(wchar_t *ws)
 {
 	int n = 0;
+	Rune r;
 
-	while (*ws)
-		n += runelen(*ws++);
+	while (*ws) {
+		ws += widerune(&r, ws);
+		n += runelen(r);
+	}
 	return n+1;
 }

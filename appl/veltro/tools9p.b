@@ -56,6 +56,9 @@ include "styxservers.m";
 include "string.m";
 	str: String;
 
+include "daytime.m";
+	daytime: Daytime;
+
 include "tool.m";
 
 include "nsconstruct.m";
@@ -258,6 +261,7 @@ init(nil: ref Draw->Context, args: list of string)
 	styxservers->init(styx);
 
 	str = load String String->PATH;
+	daytime = load Daytime Daytime->PATH;
 	if(str == nil)
 		nomod(String->PATH);
 
@@ -1504,23 +1508,51 @@ removepidshadows(pid: int)
 	fd = nil;
 }
 
-# Remove ALL shadow dirs — used at startup to clear previous session's dirs.
+# Remove the shadow dirs left by processes that are gone — used at startup to
+# clear a previous session's dirs.  A live process's are left alone: an agent
+# (veltrosrv) holds its restricted namespace for its whole life, bound through
+# its shadows, and removing them under it makes every walk through them fail
+# ("tool not found").  Every child task starts a tools9p of its own, so
+# sweeping them all took activity 0's tools away at its first delegation.
+#
+# /prog shows only this emulator's processes, and another one may share
+# this /tmp (Lucifer and a standalone Xenith both use ~/.infernode/tmp), so
+# a dir whose owner is not here is swept only once it is old: a crashed
+# session's leftovers, not a running neighbour's namespace.
+SHADOW_STALE: con 2*24*60*60;	# seconds
+
 cleanshadows()
 {
 	fd := sys->open(SHADOW_BASE, Sys->OREAD);
 	if(fd == nil)
 		return;
+	if(daytime == nil)
+		return;
+	now := daytime->now();
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
 			break;
 		for(i := 0; i < n; i++) {
 			name := dirs[i].name;
-			if(name != "." && name != "..")
-				removeshadowdir(SHADOW_BASE + "/" + name);
+			if(name == "." || name == ".." || shadowowneralive(name))
+				continue;
+			if(now - dirs[i].mtime < SHADOW_STALE)
+				continue;
+			removeshadowdir(SHADOW_BASE + "/" + name);
 		}
 	}
 	fd = nil;
+}
+
+# Is the process that made shadow dir PID-SEQ-MS still running?
+shadowowneralive(name: string): int
+{
+	(pid, rest) := str->toint(name, 10);
+	if(rest == name || rest == "" || rest[0] != '-' || pid <= 0)
+		return 0;
+	(ok, nil) := sys->stat(sys->sprint("/prog/%d", pid));
+	return ok >= 0;
 }
 
 # Goroutine: drains cleanupchan and removes shadow dirs for each completed
@@ -1647,6 +1679,11 @@ provisionparse(args: string): (int, string, list of string, string)
 			if(raw == "")
 				return (id, nil, nil, "empty path in paths=");
 			(ppath, pperm) := splitpathperm(raw);
+			# Every task has its own workspace at /tmp/veltro/scratch
+			# already; asking for it is asking for what it has.  Refused,
+			# it cost a retry and left a dead activity behind.
+			if(pathwithin("/tmp/veltro/scratch", ppath))
+				continue;
 			perr := validatepath(ppath);
 			if(perr != nil)
 				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
@@ -1760,6 +1797,10 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
 	mpath := manifestpath(mpt);
 	sys->remove(mpath);
+	# A new task starts with an empty workspace.  Activity ids start again
+	# at 1 every session and /tmp persists, so task 1 found the files of
+	# every earlier session's task 1 there, and reported them as its own.
+	removeshadowdir(sys->sprint("/tmp/veltro/scratch/%d", id));
 
 	t9p := load ShCommand "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {

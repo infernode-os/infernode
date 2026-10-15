@@ -8,9 +8,11 @@ HOW DELEGATION WORKS (read this first):
   a file path, or a command after creation — calls like `task write ...`
   or `task <path> ...` are errors. Put EVERYTHING the agent needs into
   brief= and instructions= at create time.
-  After create: poll `task status <id>` to watch progress. Do NOT create
-  the same task again while it is [working]. When it reports done, read
-  any file it produced and report the result to the user.
+  After create: tell the user what you started and end your turn. When
+  the task finishes, a "[task-event]" message brings you its report and
+  the files it wrote; report the outcome to the user then. Do not poll
+  `task status` in a loop. Do NOT create the same task again while it
+  is [working].
 
   task create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]
               [category=<text>] [model=<name>] [agenttype=<type>]
@@ -52,7 +54,7 @@ find, search, grep). Use tools= to add task-specific capabilities from the
 budget. Persistence, delegation, planning state, and UI effects are not
 automatic. Only budget tools may be delegated.
 
-Use "task list" to monitor progress. Close tasks when done.
+Use "task list" or "task status" when the user asks about progress.
 
 Examples:
   task create label=Review tools=grep,search

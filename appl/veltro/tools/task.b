@@ -131,7 +131,7 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"task\"," +
-		"\"description\":\"Create and manage delegated AI agents that run AUTONOMOUSLY from their brief. Put all work detail in brief=/instructions= at create time; you CANNOT send a task content or commands afterward, and you never do the work yourself. After create, poll status until it reports done, then read its result. Never re-create a task that is already running.\"," +
+		"\"description\":\"Create and manage delegated AI agents that run AUTONOMOUSLY from their brief. Put all work detail in brief=/instructions= at create time; you CANNOT send a task content or commands afterward, and you never do the work yourself. After create, tell the user what you started and end your turn: a [task-event] message brings you the task's report when it finishes. Do not poll status in a loop. Never re-create a task that is already running.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
@@ -345,7 +345,9 @@ docreate(args: string): string
 	# Refuse a duplicate active label and point it at the existing task.
 	dupid := findlabelledtask(label);
 	if(dupid > 0)
-		return sys->sprint("error: a task labelled \"%s\" already exists (id %d). Use 'task status %d' to check it — do NOT create it again.", label, dupid, dupid);
+		# Not an error: the work is under way.  Worded as a refusal, it
+		# read to the model as a broken tool, and it told the user so.
+		return sys->sprint("task \"%s\" already exists as activity %d and is under way: your earlier create worked. Do not create it again; tell the user it has started, and its report will come as a [task-event].", label, dupid);
 
 	# Create activity via /mnt/ui/ctl
 	ctlpath := UI_MOUNT + "/ctl";
@@ -557,7 +559,7 @@ doresult(args: string): string
 	if(last == "") {
 		if(hasprefix(status, "failed"))
 			return sys->sprint("task %d [%s] result: task failed before producing a reply", id, status);
-		return sys->sprint("task %d [%s]: no result yet — it has not produced a reply. Poll 'task status %d' until it reports done, then read the result.", id, status, id);
+		return sys->sprint("task %d [%s]: no result yet — it has not produced a reply. A [task-event] message will bring you its report when it finishes.", id, status);
 	}
 	return sys->sprint("task %d [%s] result:\n%s", id, status, last);
 }

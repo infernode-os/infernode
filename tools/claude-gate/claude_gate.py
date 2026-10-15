@@ -378,6 +378,22 @@ if not MOCK:
             handlers.append(tool(name, desc, schema)(make_handler(name)))
         return handlers
 
+    def with_tool_names(system_prompt, tooldefs):
+        """The SDK serves the caller's tools as mcp__nerva__<name>, while the
+        caller's prompt names them bare (read, write, task).  Without saying
+        so, the model calls the bare name, fails, retries with the prefix,
+        and tells the user about it."""
+        if not tooldefs:
+            return system_prompt
+        names = [td.get("function", {}).get("name", "") for td in tooldefs]
+        names = [n for n in names if n]
+        note = ("\n\n<tool_names>The tools named in these instructions are "
+                "available to you as mcp__nerva__<name>: " +
+                ", ".join("%s is mcp__nerva__%s" % (n, n) for n in names) +
+                ". Call them by those names; when you mention a tool to the "
+                "user, use its plain name.</tool_names>")
+        return (system_prompt or "") + note
+
     async def sdk_turn(turn, system_prompt, prompt, tooldefs):
         try:
             mcp_servers = {}
@@ -392,7 +408,7 @@ if not MOCK:
 
             options = make_options(
                 model=map_model(turn.model),
-                system_prompt=system_prompt or None,
+                system_prompt=with_tool_names(system_prompt, tooldefs) or None,
                 mcp_servers=mcp_servers,
                 allowed_tools=allowed,
                 disallowed_tools=list(BUILTIN_TOOLS),

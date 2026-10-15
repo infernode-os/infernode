@@ -78,6 +78,16 @@ BRIDGE_SUFFIX: con "\n\nYou are %AGENT%, the AI agent in a Lucifer activity. " +
 	"Reply directly in plain text for conversation, greetings, and answers. " +
 	"Use tools only when the user asks you to perform a task.";
 
+# A task agent's report to activity 0 when it has finished its assignment,
+# written to activity 0's input (luciuisrv queues it behind a turn in
+# progress).  Activity 0 takes it as a turn of its own, not as words from
+# the human, and tells the human the outcome: it delegates and goes back to
+# the conversation, instead of polling task status in a loop the human can
+# neither see the end of nor interrupt.
+TASKEVENT: con "[task-event] ";
+TASKEVENT_MAX: con 7600;	# the whole event: one 9P write (msize 8K) is one message
+TASKEVENT_FILEMAX: con 3500;	# bytes of the task's files carried in the event
+
 # Meta-agent prompt for activity 0 (the Chief of Staff).
 META_PROMPT_PATH: con "/lib/veltro/meta.txt";
 
@@ -251,14 +261,24 @@ registernamespace()
 	log(sys->sprint("context: registered %d namespace entries", nreg));
 }
 
-# Read from a blocking fd, strip trailing newline
+# Read one message from a blocking fd (it may take several reads: a read
+# is at most msize), strip trailing newline
 blockread(fd: ref Sys->FD): string
 {
 	buf := array[65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
+	got := array[0] of byte;
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0)
+			break;
+		nb := array[len got + n] of byte;
+		nb[0:] = got;
+		nb[len got:] = buf[0:n];
+		got = nb;
+	}
+	if(len got == 0)
 		return nil;
-	s := string buf[0:n];
+	s := string got;
 	if(len s > 0 && s[len s - 1] == '\n')
 		s = s[0:len s - 1];
 	return s;
@@ -1101,7 +1121,7 @@ curstep := 0;
 # Follow text from offset until the session goes idle, rendering each
 # message as it arrives: the first reply of a turn fills the placeholder,
 # later ones get their own bubble, titled notes become dialogue tiles.
-textfollow(done: chan of int)
+textfollow(offset: big, done: chan of int)
 {
 	fd := sys->open(sess + "/text", Sys->OREAD);
 	if(fd == nil) {
@@ -1109,11 +1129,6 @@ textfollow(done: chan of int)
 		return;
 	}
 	buf := array[8192] of byte;
-	offset := big 0;
-	# Skip what was there before this turn.
-	(ok, d) := sys->fstat(fd);
-	if(ok >= 0)
-		offset = d.length;
 
 	role := "";		# of the message being received
 	title := "";
@@ -1215,7 +1230,7 @@ endmessage(role, title, body: string, idx: int)
 
 # Follow the log: echo it under our prefix (the trajectory grind scores),
 # and keep status and the context zone in step with the tools.
-logfollow(done: chan of int)
+logfollow(offset: big, done: chan of int)
 {
 	fd := sys->open(sess + "/log", Sys->OREAD);
 	if(fd == nil) {
@@ -1223,10 +1238,6 @@ logfollow(done: chan of int)
 		return;
 	}
 	buf := array[8192] of byte;
-	offset := big 0;
-	(ok, d) := sys->fstat(fd);
-	if(ok >= 0)
-		offset = d.length;
 	partial := "";
 	ctxpath := sys->sprint("/mnt/ui/activity/%d/context/ctl", actid);
 	curtool := "";
@@ -1338,6 +1349,110 @@ approver(done: chan of int)
 	done <-= 1;
 }
 
+# Tell activity 0 this task has done its assignment: what it said last, and
+# the files it left in its workspace.  The workspace is the task's own, out
+# of activity 0's sight, so their contents travel with the event.
+notifyparent()
+{
+	base := sys->sprint("/mnt/ui/activity/%d", actid);
+	label := agentlib->strip(agentlib->readfile(base + "/label"));
+	status := agentlib->strip(agentlib->readfile(base + "/status"));
+	report := "";
+	for(i := 0; ; i++) {
+		m := agentlib->readfile(sys->sprint("%s/conversation/%d", base, i));
+		if(m == nil)
+			break;
+		if(!agentlib->hasprefix(m, "role=veltro "))
+			continue;
+		(nil, t) := str->splitstrl(m, "text=");
+		if(t != nil) {
+			t = agentlib->strip(t[len "text=":]);
+			if(t != "" && t != "▌")
+				report = t;
+		}
+	}
+	if(report == "")
+		report = "(it gave no report)";
+
+	ev := TASKEVENT + sys->sprint("Task %d \"%s\" has finished its assignment (status: %s). " +
+		"This is a notification from the harness, not a message from the user.\n\n" +
+		"Its report:\n%s\n", actid, label, status, report);
+	files := taskfiles();
+	tail := "\nTell the user the outcome now, briefly: what was done, and the result " +
+		"(show it when it is short, or what the files hold). If the task asked a " +
+		"question, relay it: the user can answer in the task's own tab.";
+	# Fit one write: the files give way first, then the report.
+	room := TASKEVENT_MAX - len array of byte (ev + tail);
+	if(len array of byte files > room) {
+		cut := room;
+		if(cut < 0)
+			cut = 0;
+		files = clipbytes(files, cut) + "\n... (truncated)\n";
+	}
+	ev = clipbytes(ev, TASKEVENT_MAX - len array of byte (files + tail) - 32);
+	ev += files + tail;
+	if(writefile("/mnt/ui/activity/0/conversation/input", ev) < 0)
+		log(sys->sprint("notify activity 0: %r"));
+	else
+		log("notified activity 0 of completion");
+}
+
+# s cut to at most n bytes, on a character boundary.
+clipbytes(s: string, n: int): string
+{
+	if(n <= 0)
+		return "";
+	if(len array of byte s <= n)
+		return s;
+	b := array of byte s;
+	return string b[0:sys->utfbytes(b, n)];
+}
+
+# The files a task left in its workspace, with what they hold (bounded).
+taskfiles(): string
+{
+	dir := sys->sprint("%s/%d", AgentLib->SCRATCH_PATH, actid);
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	budget := TASKEVENT_FILEMAX;
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			nm := d[i].name;
+			if(nm == "" || nm[0] == '.' || (d[i].mode & Sys->DMDIR))
+				continue;
+			out += sys->sprint("\n--- %s/%s (%bd bytes; in the task's workspace) ---\n",
+				AgentLib->SCRATCH_PATH, nm, d[i].length);
+			if(budget <= 0 || d[i].length > big (2 * TASKEVENT_FILEMAX)) {
+				out += "(not shown)\n";
+				continue;
+			}
+			c := agentlib->readfile(dir + "/" + nm);
+			if(len c > budget)
+				c = c[0:budget] + "\n... (truncated)";
+			budget -= len c;
+			out += c;
+			if(c != "" && c[len c - 1] != '\n')
+				out += "\n";
+		}
+	}
+	if(out == "")
+		return "";
+	return "\nFiles it wrote:" + out;
+}
+
+filelen(path: string): big
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return big 0;
+	return d.length;
+}
+
 # Run the agent for one human turn.
 agentturn(input: string)
 {
@@ -1352,6 +1467,10 @@ agentturn(input: string)
 	placeholderused = 0;
 	curstep = 0;
 
+	# Where this turn starts in text and log: taken before the input is
+	# written, so a quick reply is not skipped.
+	textoff := filelen(sess + "/text");
+	logoff := filelen(sess + "/log");
 	if(writefile(sess + "/input", input) < 0) {
 		writemsg("veltro", sys->sprint("(the agent is unavailable: %r)"));
 		setstatus("idle");
@@ -1362,8 +1481,8 @@ agentturn(input: string)
 	writemsg("veltro", "▌");
 
 	done := chan of int;
-	spawn textfollow(done);
-	spawn logfollow(done);
+	spawn textfollow(textoff, done);
+	spawn logfollow(logoff, done);
 	spawn approver(done);
 	<-done;
 	<-done;
@@ -1583,6 +1702,12 @@ init(nil: ref Draw->Context, args: list of string)
 		log("no " + toolmount + " mount — running in chat-only mode");
 
 	# The agent: its own server, with this activity's grants (-t, -p).
+	# It mounts at /mnt/veltro in this namespace, so the namespace must be
+	# this activity's alone: activity 0 and the task agents tools9p starts
+	# were born in one, and each new agent's mount replaced the last, so
+	# after its first delegation activity 0 was talking to its child.
+	if(sys->pctl(Sys->FORKNS, nil) < 0)
+		fatal(sys->sprint("cannot fork namespace: %r"));
 	startharness();
 	(taskbrief, taskinstr) := configuresession();
 
@@ -1653,6 +1778,7 @@ init(nil: ref Draw->Context, args: list of string)
 			"concise clarifying question; otherwise make a reasonable assumption " +
 			"and proceed.";
 		agentturn(kickoff);
+		notifyparent();
 	}
 
 	# Main loop: re-open input fd each iteration because 9P offset
@@ -1668,6 +1794,12 @@ init(nil: ref Draw->Context, args: list of string)
 			break;
 		}
 		log("human: " + human);
+
+		# A task's report: a turn for the agent, not words from the human.
+		if(actid == 0 && agentlib->hasprefix(human, TASKEVENT)) {
+			agentturn(human);
+			continue;
+		}
 
 		# Slash commands (/bind, /unbind, /tools, /help) are handled locally.
 		# They update tools9p state and reply immediately; agent is not invoked.

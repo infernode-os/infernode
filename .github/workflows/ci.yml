@@ -220,12 +220,19 @@ jobs:
         chmod +x tests/host/veltrosrv_test.sh tests/host/veltro_cli_test.sh \
           tests/host/lucibridge_tool_timeout_test.sh \
           tests/host/agentloop_characterization_test.sh \
-          tests/host/tools9p_result_test.sh tests/host/wiki9p_test.sh
+          tests/host/tools9p_result_test.sh tests/host/wiki9p_test.sh \
+          tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
         ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
         ROOT=. bash tests/host/veltrosrv_test.sh
         ROOT=. bash tests/host/veltro_cli_test.sh
+        # Activity 0 delegating to a task agent through lucibridge: the
+        # task's tools, activity 0's afterwards, the completion event.
+        ROOT=. bash tests/host/agent_delegation_test.sh
+        # The agent prompts in ~/.infernode follow the shipped defaults
+        # until edited; every shipped version's hash is listed.
+        ROOT=. bash tests/host/prompt_defaults_test.sh
         # The LLM-maintained wiki (wiki9p over wikifs) against a scripted model.
         ROOT=. bash tests/host/wiki9p_test.sh
         ROOT=. FRONTENDS=veltrosrv bash tests/host/agentloop_characterization_test.sh

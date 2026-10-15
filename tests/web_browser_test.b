@@ -397,6 +397,24 @@ testDisabled(t: ref T)
 	t.assertseq(nav(t, sys->sprint("click %d", go)), "done " + want, "submitted without the disabled");
 }
 
+# A form with no action is submitted to the page it is on (HTML
+# §4.10.21.3), not to an empty URL ("?q=", which was opened as a file:
+# sanook.com's search)
+testNoAction(t: ref T)
+{
+	t.assertseq(nav(t, "open " + DIR + "noaction.html"), "done " + DIR + "noaction.html", "load");
+	f := rd("forms");
+	t.log(f);
+	go := 0;
+	for(l := lines(f); l != nil; l = tl l) {
+		(n, w) := sys->tokenize(hd l, " ");
+		if(n >= 3 && hd tl tl w == "submit")
+			go = int hd tl w;
+	}
+	t.assert(go != 0, "found the button");
+	t.assertseq(nav(t, sys->sprint("click %d", go)), "done " + DIR + "noaction.html?q=x", "submitted to the page itself");
+}
+
 postname: string;
 
 # The posted session, mounted from a separate name space as an agent's
@@ -634,6 +652,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Image", testImage);
 	run("Forms", testForms);
 	run("Disabled", testDisabled);
+	run("NoAction", testNoAction);
 	run("Refresh", testRefresh);
 	run("Unreachable", testUnreachable);
 	run("LeaveBusy", testLeaveBusy);

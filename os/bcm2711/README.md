@@ -1,9 +1,13 @@
 # Bare-metal BCM2711 (Raspberry Pi 4B) port
 
-The native kernel on a Raspberry Pi 4. **It has never run on one.** Every
-claim in this file was established under QEMU's `raspi4b` machine, there
-is no Pi 4 on the bench yet, and the second half of this file is a list
-of what that means. Read it before trusting anything here on hardware.
+The native kernel on a Raspberry Pi 4. **It runs on one**: first booted
+on 2026-10-15 on a Pi 4B rev 1.5 (revision code `c03115`, 4GB, BCM2711
+C0), to the login screen on the official 7" panel, with the card, both
+radios, gigabit Ethernet, the USB-A sockets and all four cores working.
+[On the board](#on-the-board) below is what was proved there and what
+was fixed to get there; the list after it, written before any Pi 4 had
+run this, is kept as the record of what each line of the boot log was
+expected to prove.
 
 Under QEMU it is a machine: all four Cortex-A72 cores scheduling, the
 JIT, a FAT32 card mounted and the system's userspace taken from it, a
@@ -32,12 +36,13 @@ beside `os/ipaq1110` and `os/cerf1110`). What is here:
 | `mem.h` | the BCM2837's, but for `MAPGB` (4) and the SD controller choice |
 | `random.c` | the RNG200 — a different generator from the BCM2837's |
 | `emmc2.c` | the card's SDHCI controller: a second instance of `../bcm/emmc.c`, six lines |
-| `ethergenet.c` | the gigabit Ethernet MAC, from 9front. **Never run**: see below |
-| `pcibcm.c` | the PCIe bridge, from 9front. **Never run**: see below |
+| `ethergenet.c` | the gigabit Ethernet MAC, from 9front; runs on the board |
+| `pcibcm.c` | the PCIe bridge, from 9front; runs on the board |
 | `soc.c` | the probe for what this SoC has and the family does not |
 | `intr.c` | not the controller (that is `../arm64/gic.c`), only the boot-time question asked of it |
-| `devtab.c` | the device list: the Pi 3B+'s, today |
-| `recover.c` | an empty `serialrecover`: there is no serial loader for this board |
+| `devtab.c` | the device list: the Pi 3B+'s, and `#P` |
+| `recover.c` | offers the serial loader, `../bcm2837/serialboot.c` built at this SoC's base |
+| `devarch.c` | `#P`: `cputemp`, `maxtemp`, `throttled`, from the firmware |
 | `kernel.ld`, `board.h` | the BCM2837's |
 
 ## Running it
@@ -91,9 +96,33 @@ world it found itself in:
   board the *first* should pass; if only the second does, the interrupt
   numbers in `io.h` are wrong.
 
-## What has NOT been tested, because it cannot be here
+## On the board
 
-Everything below will be met for the first time on the board.
+A Pi 4B rev 1.5, 4GB, fan and heatsink, at 1800 MHz (`arm_boost=1`),
+with the official 7" DSI panel; `config.txt` and `tryboot.txt` as in
+`docs/BAREMETAL.md` §4. Measured from a Jetson on the same gigabit
+switch.
+
+| | on the board |
+|-|-|
+| boot | firmware → kernel → `boot OK` → Dis, all four cores; the first boot's system-timer interrupt probe passed as itself (interrupt 99), so `io.h`'s numbers are right |
+| memory | 948MB below 1GB + 3008MB above it; 64MB more sits behind the peripheral window. Pools may grow to all of it (`MAINDIV`/`HEAPDIV`/`IMAGDIV`) |
+| SD card (EMMC2) | works once its bus power is switched back on after the reset (`EMMCBUSPOWER`). Reads 19 MB/s raw with multiple-block reads (was 1.7, a block per command); `card.py` 16/0 |
+| GENET | 1000 Mbit/s full duplex, DHCP. `netbench` 932 in, 890 out (TCP line rate is ~941); Ethernet battery 17/0. Needed: receive buffers outside `ialloc`'s 128KB, per-board queue limits, interrupt coalescing, a bounded wait on a full output queue, a TCP send queue that grows with window scaling |
+| PCIe, VL805, USB-A | bridge up, VL805 found and its firmware reloaded; keyboard and mouse in either kind of socket, plugged and unplugged in turn. Needed: the xHCI interrupt interval for low/full-speed devices (they were polled five times too often and overran the hub's transaction translator) |
+| Wi-Fi, Bluetooth | firmware loads on the Arasan, WPA2 joins; 47 Mbit/s receive. Bluetooth battery 20/0 |
+| RNG200 | no complaint, and WPA2 (which needs it) works |
+| displays | the panel is display 0; a monitor on HDMI0 is display 1 (the console, mirrored); on HDMI1 beside the panel the firmware offers nothing; `ignore_lcd=1` puts the desktop on the monitor. `docs/BAREMETAL.md`, "Displays" |
+| temperature | `#P/cputemp` 44-48C idle in a 31C room; `#P/throttled` clean |
+| tryboot | needs `tryboot.txt`: the EEPROM reads it instead of `config.txt` and ignores `[tryboot]` |
+| serial loader | `recover.c` offers it as on the 3B+ (proved under `raspi4b`); the board's serial input is proved |
+
+Not yet tried: SuperSpeed devices on the blue sockets, a USB disk, an
+8GB board (memory above 4GB is not mapped), HDMI audio, the camera.
+
+## What could not be tested before there was a board
+
+Written before the board arrived; each is answered in the table above.
 
 1. **The interrupt numbers.** They are derived from Linux's
    `bcm2711.dtsi` and agree with QEMU's wiring for the UARTs and USB,

@@ -76,7 +76,10 @@
 .\" sets the register book-final): punctuation, hyphens, quotation marks
 .\" and a few letters hang into the margins (protrusion), so the text's
 .\" edges look straight; in thousandths of each glyph's width, after
-.\" microtype's defaults.  Drafts are set without it.
+.\" microtype's defaults.  And a justified line's glyphs may widen or
+.\" narrow by up to 2%, in steps of 0.5% (expansion, .mte 20 20 5, as
+.\" pdfTeX's are commonly set), so its spaces vary less.  Drafts are set
+.\" without either.
 .de book-mtpc
 .mtpc \\$1 0 700 . \(hy - ‐
 .mtpc \\$1 0 500 , : ;
@@ -114,6 +117,7 @@
 .fi
 .ad b
 .mtp \\n[book-final]
+.if \\n[book-final] .mte 20 20 5
 .ev fn
 .book-noteenv
 .ev
@@ -123,6 +127,7 @@
 .ev quote
 .ft R
 .mtp \\n[book-final]
+.if \\n[book-final] .mte 20 20 5
 .ev
 .ev hd
 .ft R
@@ -150,6 +155,7 @@
 .in 0
 .ti 0
 .mtp \\n[book-final]
+.if \\n[book-final] .mte 20 20 5
 ..
 .\"
 .\" ---------------------------------------------------------------

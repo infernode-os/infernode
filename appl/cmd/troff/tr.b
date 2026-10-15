@@ -995,6 +995,27 @@ tr_mtpc(args: array of string)
 	}
 }
 
+# .mte stretch shrink step: font expansion, in thousandths of the
+# glyphs' widths: a justified line's glyphs may widen by stretch or
+# narrow by shrink, in steps of step, so its spaces stay nearer their
+# width (pdfTeX's \pdfadjustspacing); .mte 0 (the default) is off
+tr_mte(args: array of string)
+{
+	st := 0;
+	sh := 0;
+	sp := 1;
+	if(len args > 1)
+		st = max(0, eval(args[1], 0));
+	sh = st;
+	if(len args > 2)
+		sh = max(0, eval(args[2], 0));
+	if(len args > 3)
+		sp = max(1, eval(args[3], 0));
+	nrset(R_mtes, st);
+	nrset(R_mtek, sh);
+	nrset(R_mtep, sp);
+}
+
 tr_fmap(args: array of string)
 {
 	fnt := argfont(args);
@@ -1261,6 +1282,7 @@ cmds := array[] of {
 	Cmd("rules", A_REQ),
 	Cmd("mtp", A_REQ),
 	Cmd("mtpc", A_REQ),
+	Cmd("mte", A_REQ),
 	Cmd("ft", A_REQ),
 	Cmd("fzoom", A_REQ),
 	Cmd("hc", A_REQ),
@@ -1388,6 +1410,7 @@ cmd_run(i: int, args: array of string)
 	"rules" =>	tr_rules(args);
 	"mtp" =>	tr_mtp(args);
 	"mtpc" =>	tr_mtpc(args);
+	"mte" =>	tr_mte(args);
 	"ft" =>		tr_ft(args);
 	"fzoom" =>	tr_fzoom(args);
 	"hc" =>		tr_hc(args);

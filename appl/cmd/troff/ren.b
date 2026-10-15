@@ -295,6 +295,7 @@ ren_out(beg, mid, end: string)
 		out_line(beg);
 		out_line(mid);
 		out_line(end);
+		out_exset(0);	# a line's expansion is its own
 	}
 }
 

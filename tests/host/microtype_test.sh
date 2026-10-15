@@ -9,8 +9,14 @@
 #	and every other line ends at the margin;
 #	codes given (.mtpc) but protrusion off (.mtp 0, the default): the
 #	output is that of no codes, byte for byte (as C Neatroff's);
-#	book -f (the book as it goes to press) sets -mbook's protrusion,
-#	book without it (a draft) does not.
+#	with .mte 20 20 5 (font expansion), each justified line still ends
+#	at the margin, its glyphs' advances scaled by its x X mtx (within
+#	±20, a multiple of 5), and some lines are expanded or condensed;
+#	tr2pdf draws them scaled (Tz) where troff put them: poppler finds
+#	every line's right edge at the margin (within 0.1 point; they
+#	drifted 0.3 when the PDF's cursor was not tracked as troff's);
+#	book -f (the book as it goes to press) sets -mbook's protrusion and
+#	expansion, book without it (a draft) does neither.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -43,12 +49,13 @@ d = sys.argv[1]
 open(d + '/off.tr', 'w').write(head + body + '\n')
 open(d + '/offc.tr', 'w').write(head + codes + body + '\n')
 open(d + '/on.tr', 'w').write(head + codes + '.mtp 1\n' + body + '\n')
+open(d + '/ex.tr', 'w').write('.mte 20 20 5\n' + head + body + '\n')
 PY
 cp tests/book/book.ms tests/book/works.bib "$tmp/"
 cp "$tmp/book.ms" "$tmp/final.ms"
 
 with_timeout 600 "$EMU" -c1 -r"$ROOT" /dis/sh.dis -c \
-    "cd '#U*$tmp'; troff off.tr > off.out; troff offc.tr > offc.out; troff on.tr > on.out; book -p works.bib book.ms; book -f -p works.bib final.ms" \
+    "cd '#U*$tmp'; troff off.tr > off.out; troff offc.tr > offc.out; troff on.tr > on.out; troff ex.tr > ex.out; tr2pdf ex.out > ex.pdf; book -p works.bib book.ms; book -f -p works.bib final.ms" \
     </dev/null >"$tmp/emu.log" 2>&1
 
 if [ -s "$tmp/off.out" ] && cmp -s "$tmp/off.out" "$tmp/offc.out"; then
@@ -96,8 +103,48 @@ print(('PASS' if ok2 else 'FAIL') + ': an opening quotation mark left of the mar
 sys.exit(0 if ok and ok2 else 1)
 PY
 
-if [ -s "$tmp/book.out" ] && [ -s "$tmp/final.out" ] && ! cmp -s "$tmp/book.out" "$tmp/final.out"; then
-    echo "PASS: book -f sets the book with protrusion, book a draft without"
+python3 -I - "$tmp/ex.out" "$tmp/ex.pdf" <<'PY' || fail=1
+import re, subprocess, sys
+lines = []
+ex = 0
+exs = []
+for ln in open(sys.argv[1], encoding='utf-8'):
+    ln = ln.rstrip('\n')
+    m = re.match(r'x X mtx (-?\d+)', ln)
+    if m:
+        ex = int(m.group(1))
+        exs.append(ex)
+        continue
+    if ln.startswith('H'):
+        lines.append([int(ln[1:]), ''])
+        continue
+    if ln.startswith('V') or not lines or ln.startswith('x'):
+        continue
+    for m in re.finditer(r'c(.)|C(\S+)|h(-?\d+)', ln):
+        if m.group(3):
+            lines[-1][0] += int(m.group(3))
+ends = set(l[0] for l in lines[:-1])
+used = [e for e in exs if e]
+ok = ends == {7200 + 3 * 7200} and used and all(abs(e) <= 20 and e % 5 == 0 for e in exs) and any(e > 0 for e in used) and any(e < 0 for e in used)
+print(('PASS' if ok else 'FAIL') + ': expansion: justified lines end at the margin %s, %d lines scaled %s' % (sorted(ends)[:3], len(used), sorted(set(used))))
+have = subprocess.run(['sh', '-c', 'command -v pdftotext'], capture_output=True).returncode == 0
+if have:
+    bb = subprocess.run(['pdftotext', '-bbox', sys.argv[2], '-'], capture_output=True, text=True).stdout
+    rows = {}
+    for m in re.finditer(r'xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)"', bb):
+        rows.setdefault(round(float(m.group(2))), []).append(float(m.group(3)))
+    e = [max(v) for k, v in sorted(rows.items())][:-1]
+    ok2 = e and max(e) - 288 < 0.1 and 288 - min(e) < 0.1
+    print(('PASS' if ok2 else 'FAIL') + ': the PDF draws each expanded line to the margin (%.2f to %.2f)' % (min(e or [0]), max(e or [0])))
+    ok = ok and ok2
+else:
+    print('SKIP: no pdftotext')
+sys.exit(0 if ok else 1)
+PY
+
+if [ -s "$tmp/book.out" ] && [ -s "$tmp/final.out" ] && ! cmp -s "$tmp/book.out" "$tmp/final.out" &&
+        grep -q '^x X mtx' "$tmp/final.out" && ! grep -q '^x X mtx' "$tmp/book.out"; then
+    echo "PASS: book -f sets the book with protrusion and expansion, book a draft without"
 else
     echo "FAIL: book -f: $(grep -v fsqid "$tmp/emu.log" | head -3)"
     fail=1

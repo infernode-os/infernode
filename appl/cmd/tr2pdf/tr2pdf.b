@@ -533,6 +533,10 @@ postps()
 		(val, nil) := word(rest);
 		if(var != nil && val != nil)
 			outset(var, val);
+	"mtx" =>
+		(v, nil) := word(arg);
+		if(v != nil)
+			outmtx(int v);
 	"papersize" =>
 		if(!compat){
 			v := scanints(arg, 1);

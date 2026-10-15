@@ -20,7 +20,21 @@ Word: adt {
 	totwid, totswid, totscnt:	int;	# widths of words up to this one
 	lp, rp:	int;		# protrusion of its first and last glyph (.mtp)
 	hyrp:	int;		# the hyphen's, if one is inserted after it
+	gw, totgw:	int;	# its glyphs' advances, and theirs up to this one (.mte)
 };
+
+# what font expansion (.mte) adds to a line's give, as the width of
+# spaces that would give as much: its glyphs (gsum) may widen by .mtes or
+# narrow by .mtek thousandths; a space shrinks by .ssh percent at most
+fmt_excap(gsum: int, shrink: int): int
+{
+	if(!shrink)
+		return int (big gsum * big nr(R_mtes) / big 1000);
+	c := int (big gsum * big nr(R_mtek) / big 1000);
+	if(nr(R_ssh) > 0)
+		return c * 100 / nr(R_ssh);
+	return c;
+}
 
 Line: adt {
 	sbuf:	string;
@@ -203,6 +217,37 @@ fmt_extractline(f: ref Fmt, end: int, str: int): int
 		fmt_keshideh(f, end, llen - w);
 		w = fmt_totwid(f, end) - prot;
 	}
+	# font expansion: the line's glyphs take their share of what it
+	# lacks or has too much of, as the give of theirs and its spaces'
+	# divide it, in steps of .mtep, within .mtes and .mtek
+	ex := 0;
+	exd := 0;	# what it adds to the line
+	if(end > 0 && FMT_BOTH(f) && (llen < w || str) && (nr(R_mtes) || nr(R_mtek))){
+		gsum := f.words[end - 1].totgw - f.words[0].totgw + f.words[0].gw + f.words[end - 1].hy;
+		d := llen - w;
+		sw := fmt_totswid(f, end);
+		if(gsum > 0 && d != 0){
+			lim := nr(R_mtes);
+			sg := sw;
+			if(d < 0){
+				lim = nr(R_mtek);
+				sg = sw * nr(R_ssh) / 100;
+			}
+			cap := int (big gsum * big lim / big 1000);
+			if(cap > 0){
+				fd := int (big d * big cap / big (sg + cap));
+				ex = int (big fd * big 1000 / big gsum);
+				if(ex > lim)
+					ex = lim;
+				if(ex < -lim)
+					ex = -lim;
+				ex = ex / max(1, nr(R_mtep)) * max(1, nr(R_mtep));
+				# what out.b's scaling makes of the glyphs
+				exd = int (big gsum * big (1000 + ex) / big 1000) - gsum;
+				w += exd;
+			}
+		}
+	}
 	nspc := fmt_scnt(f, end);
 	if(nspc && FMT_BOTH(f) && (llen < w || str)){
 		fmt_div := (llen - w) / nspc;
@@ -221,6 +266,10 @@ fmt_extractline(f: ref Fmt, end: int, str: int): int
 	l.wid = fmt_wordscopy(f, end, l) - prot;
 	if(lp)
 		l.sbuf = sys->sprint("%sh'%du'", ecs(), -lp) + l.sbuf;
+	if(ex){
+		l.sbuf = sys->sprint("%sX'mtx %d'", ecs(), ex) + l.sbuf;
+		l.wid += exd;
+	}
 	return 0;
 }
 
@@ -303,6 +352,7 @@ fmt_wb2word(f: ref Fmt, wb: ref Wb, hy, str, gap, cost: int)
 	word.gap = gap;
 	word.cost = cost;
 	word.swid = wb_swid(wb);
+	word.gw = wb.gw;
 	word.lp = wb.pl;
 	word.rp = wb.pr;
 	word.hyrp = 0;
@@ -313,7 +363,9 @@ fmt_wb2word(f: ref Fmt, wb: ref Wb, hy, str, gap, cost: int)
 	if(str)
 		word.totswid = gap;
 	word.totscnt = str != 0;
+	word.totgw = word.gw;
 	if(prev != nil){
+		word.totgw += prev.totgw;
 		word.totwid += prev.totwid;
 		word.totswid += prev.totswid;
 		word.totscnt += prev.totscnt;
@@ -720,9 +772,11 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 		dwid := 0;		# equal to swid, unless swid is zero
 		hyphenated := words[pos - 1].hy != 0;
 		lwid := words[pos - 1].hy;	# non-zero if the last word is hyphenated
+		gsum := words[pos - 1].hy;	# the glyphs' advances (.mte)
 		i = pos - 1;
 		while(i >= 0){
 			lwid += words[i].wid;
+			gsum += words[i].gw;
 			if(i + 1 < pos)
 				lwid += words[i + 1].gap;
 			if(i + 1 < pos && words[i + 1].str){
@@ -730,12 +784,12 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 				nspc++;
 			}
 			pw := lwid - words[i].lp - endrp(words[pos - 1]);
-			if(pw > llen + swid * ssh0 / 100 && i + 1 < pos)
+			if(pw > llen + swid * ssh0 / 100 + int (big gsum * big nr(R_mtek) / big 1000) && i + 1 < pos)
 				break;
 			dwid = swid;
 			if(!dwid && i > 0)	# no stretchable spaces
 				dwid = words[i - 1].swid;
-			cur := best[i] + FMT_COST(llen, pw, dwid, nspc);
+			cur := best[i] + FMT_COST(llen, pw, dwid + fmt_excap(gsum, pw > llen), nspc);
 			if(hyphenated && best_dep[i] + 1 == nohy)
 				cur += big 10000000;
 			if(hyphenated){
@@ -777,6 +831,7 @@ fmtb_cost(words: array of ref Word, nil: int, llen: int, br: int, nohy: int, end
 		w := words[end[i] - 1];
 		lwid := words[end[i] - 1].totwid - words[pos].totwid + words[pos].wid;
 		lwid -= words[pos].lp + endrp(words[end[i] - 1]);
+		gsum := words[end[i] - 1].totgw - words[pos].totgw + words[pos].gw + words[end[i] - 1].hy;
 		swid := words[end[i] - 1].totswid - words[pos].totswid;
 		scnt := words[end[i] - 1].totscnt - words[pos].totscnt;
 		cur := big 0;
@@ -787,7 +842,7 @@ fmtb_cost(words: array of ref Word, nil: int, llen: int, br: int, nohy: int, end
 		}else{
 			if(!swid)
 				swid = 1;
-			cur += FMT_COST(llen, lwid, swid, scnt);
+			cur += FMT_COST(llen, lwid, swid + fmt_excap(gsum, lwid > llen), scnt);
 			cur += big w.cost;
 			if(w.hy)
 				hydep++;
@@ -823,7 +878,8 @@ fmtb_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 			swid := words[i - 1].totswid - words[pos].totswid;
 			lwid += words[i - 1].hy;
 			lwid -= words[pos].lp + endrp(words[i - 1]);
-			if(lwid > llen + swid * nr(R_ssh) / 100)
+			gsum := words[i - 1].totgw - words[pos].totgw + words[pos].gw + words[i - 1].hy;
+			if(lwid > llen + swid * nr(R_ssh) / 100 + int (big gsum * big nr(R_mtek) / big 1000))
 				break;
 			best = i;
 		}

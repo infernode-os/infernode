@@ -665,11 +665,19 @@ o_queue(g: ref Glyph)
 		p_h = o_h;
 		p_v = o_v;
 	}
+	if(o_tz != p_tz){
+		o_flush();
+		t := 1000 + o_tz;
+		pg += string (t / 10) + "." + string (t % 10) + " Tz\n";
+		p_tz = o_tz;
+		p_tzacc = 0;
+	}
 	if(!o_queued)
 		pg += "[<";
 	o_queued = 1;
+	# TJ's numbers are scaled with the glyphs (Tz): troff's are not
 	if(o_h != p_h)
-		pg += "> " + pdfunit(p_h - o_h, o_s) + " <";
+		pg += "> " + pdfunit(int (big (p_h - o_h) * big 1000 / big (1000 + p_tz)), o_s) + " <";
 	gid := g.idx;
 	ps := pfonts[o_i];
 	if(ps.cid)
@@ -688,7 +696,12 @@ o_queue(g: ref Glyph)
 		}
 		ps.used[gid] = byte 1;
 	}
-	p_h = o_h + font_wid(g.fnt, o_s, g.wid);
+	if(p_tz){
+		t := font_wid(g.fnt, o_s, g.wid) * (1000 + p_tz) + p_tzacc;
+		p_tzacc = t % 1000;
+		p_h = o_h + t / 1000;
+	}else
+		p_h = o_h + font_wid(g.fnt, o_s, g.wid);
 }
 
 out_fontup()
@@ -898,8 +911,23 @@ outpapersize(w, h: int)
 	}
 }
 
+# font expansion (troff's .mte, x X mtx): the line's glyphs scaled
+# horizontally by (1000 + e) / 1000, as troff scaled their advances
+o_tz := 0;
+p_tz := 0;
+p_tzacc := 0;	# the remainder troff carries from glyph to glyph, carried here too
+
+outmtx(e: int)
+{
+	if(e <= -1000)
+		e = 0;
+	o_tz = e;
+}
+
 outpage()
 {
+	o_tz = 0;
+	p_tz = 0;
 	o_v = 0;
 	o_h = 0;
 	p_i = 0;

@@ -18,6 +18,7 @@ Wb: adt {
 	sub_collect:	int;	# collect subwords
 	pl, pr:	int;		# protrusion of the first and last glyph (.mtp), in units
 	pseen:	int;		# anything put yet (a glyph, a move, a drawing)
+	gw:	int;		# the glyphs' advances alone (what expansion scales)
 };
 
 BBMAX:	con 1 << 29;
@@ -97,6 +98,7 @@ wb_init(wb: ref Wb)
 	wb.pl = 0;
 	wb.pr = 0;
 	wb.pseen = 0;
+	wb.gw = 0;
 	if(wb.sub_c == nil)
 		wb.sub_c = array[WORDLEN] of string;
 	wb.sub_n = 0;
@@ -302,6 +304,7 @@ wb_putbuf(wb: ref Wb, c: string)
 		if(g != nil){
 			gw := font_gwid(gfont(g), dev_font(wb.f), wb.s, g.wid);
 			wb.h += gw;
+			wb.gw += gw;
 			wb.ct |= g.typ;
 			wb_prot(wb, g, gw);
 		}else

@@ -124,6 +124,21 @@ outg(c: string, fnt: int, sz: int)
 	out_ps(osz);
 }
 
+# font expansion (.mte): a line's glyphs' advances scaled by
+# (1000 + out_ex) / 1000, the remainder carried so that the line's
+# total is what fmt counted; tr2pdf scales their shapes (x X mtx)
+out_ex := 0;
+out_exacc := 0;
+
+out_exset(e: int)
+{
+	if(e == out_ex)
+		return;
+	out_ex = e;
+	out_exacc = 0;
+	out("x X mtx " + string e + "\n");
+}
+
 outc(c: string)
 {
 	g := dev_glyph(c, o_f);
@@ -144,11 +159,20 @@ outc(c: string)
 	}
 	if(font_getcs(fnt))
 		outnn(sys->sprint("h%d", -(cwid - bwid) / 2));
+	if(out_ex){
+		t := cwid * (1000 + out_ex) + out_exacc;
+		out_exacc = t % 1000;
+		cwid = t / 1000;
+	}
 	outnn(sys->sprint("h%d", cwid));
 }
 
 out_x(s: string)
 {
+	if(len s > 4 && s[0:4] == "mtx "){
+		out_exset(int s[4:]);
+		return;
+	}
 	out("x X " + s + "\n");
 }
 

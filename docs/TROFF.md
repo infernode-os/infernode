@@ -90,10 +90,12 @@ into `book.aux`, and sets the book again until it no longer changes.
 ## Drafts and the book as it goes to press: `book -f`
 
 `book` sets a draft; `book -f` sets the book as it goes to press, with
-microtypography: punctuation, hyphens, quotation marks and a few letters
-hang into the margins (*protrusion*), so that the text's edges look
-straight rather than measure straight, as LaTeX's microtype makes them.
-A paragraph is filled knowing it, so its lines break better too.
+microtypography, as LaTeX's microtype (with pdfTeX) sets a book:
+punctuation, hyphens, quotation marks and a few letters hang into the
+margins (*protrusion*), so that the text's edges look straight rather
+than measure straight; and a justified line's glyphs widen or narrow by
+up to 2% (*expansion*), so that its spaces vary less from line to line.
+A paragraph is filled knowing both, so its lines break better too.
 
 It is troff's (`-mbook` turns it on when the register `book-final` is
 set, as `book -f` sets it):
@@ -101,12 +103,20 @@ set, as `book -f` sets it):
     .mtpc R 0 700 . \(hy         \" font R: these hang right by 0.7 of their width
     .mtpc R 500 300 “            \" left by half, right by 0.3
     .mtp 1                       \" protrusion on, in this environment
+    .mte 20 20 5                 \" expansion: stretch, shrink, step (thousandths)
 
 The codes are in thousandths of each glyph's width, as pdfTeX's
 `\lpcode` and `\rpcode`; `-mbook`'s follow microtype's defaults. A
 line's first glyph protrudes left, its last (or the hyphen inserted)
 right; a first line indented by `.ti` (a paragraph's) does not protrude
-left. With `.mtp 0`, the default, troff sets as C Neatroff does.
+left.
+
+Expansion treats a line's glyphs as giving like its spaces: the line's
+lack or excess is divided between them as their give divides it (as
+pdfTeX's), the glyphs' share rounded to a step. troff scales the glyphs'
+advances, and says by how much (`x X mtx 15`, thousandths) for tr2pdf,
+which draws their shapes as scaled (`Tz`), each where troff put it.
+With `.mtp 0` and `.mte 0`, the defaults, troff sets as C Neatroff does.
 
 ## The index: `.index` and `mkindex`
 
@@ -206,7 +216,6 @@ after the work above is done.
 
 ## Still to come
 
-The LaTeX converter; `-man`; font expansion (the
-other half of microtypography); fonts falling back for characters a font
+The LaTeX converter; `-man`; fonts falling back for characters a font
 lacks; font subsetting in PDFs; eqn's bars drawn as lines (they are
 glyphs now, and copied with the text).

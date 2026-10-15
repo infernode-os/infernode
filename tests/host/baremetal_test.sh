@@ -5608,6 +5608,23 @@ if ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
     return
 fi
 
+# serialboot at the BCM2711's peripheral base, for the kernel to carry
+# (os/bcm2711/recover.c). Rebuilt here rather than inherited: the boards
+# share $BUILD, and build_kernel embeds whatever serialboot.img is in it,
+# so without this a Pi 4 kernel would carry the Pi 3's loader.
+rm -f "$BUILD/serialboot.img"
+mkdir -p "$BUILD/sb"
+SBF=("${CFLAGS[@]}" -DPHYSIO=0xFE000000UL)
+if "$CC" "${SBF[@]}" -c "$ROOT/os/bcm2837/serialboot.c" -o "$BUILD/sb/c.o" 2>>"$BUILD/cc.log" \
+&& "$CC" "${SBF[@]}" -c "$ROOT/os/bcm2837/serialboot.S" -o "$BUILD/sb/s.o" 2>>"$BUILD/cc.log" \
+&& "$LLD" -T "$ROOT/os/bcm2837/serialboot.ld" "$BUILD/sb/s.o" "$BUILD/sb/c.o" \
+        -o "$BUILD/sb/serialboot.elf" 2>>"$BUILD/cc.log" \
+&& "$OBJCOPY" -O binary "$BUILD/sb/serialboot.elf" "$BUILD/serialboot.img" 2>>"$BUILD/cc.log"; then
+    pass "bcm2711: serialboot builds and is $(wc -c < "$BUILD/serialboot.img" | tr -d ' ') bytes"
+else
+    fail "bcm2711: serialboot failed to build"
+fi
+
 if build_kernel "$BUILD/$PLAT-kernel.img" ""; then
     pass "bcm2711: kernel cross-builds for aarch64-elf"
 else

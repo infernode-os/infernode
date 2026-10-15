@@ -26,7 +26,15 @@ typedef unsigned char uchar;
 
 void jumpflush(void);
 
+/*
+ * The one thing that differs between the boards it runs on: where the
+ * peripherals are. The BCM2711's PL011, GPIO function select and system
+ * timer sit at the same offsets from a different base, so a Pi 4's
+ * loader is this file built with -DPHYSIO=0xFE000000UL.
+ */
+#ifndef PHYSIO
 #define PHYSIO		0x3F000000UL
+#endif
 #define UARTREGS	(PHYSIO + 0x201000)
 #define SYSTIMER	(PHYSIO + 0x003000)	/* free-running, 1MHz, no init */
 #define GPIOREGS	(PHYSIO + 0x200000)

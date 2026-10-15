@@ -99,6 +99,7 @@ extern int sdarasantaken;	/* sdmmc.c: the card is on the Arasan; the radio must 
 /* sdmmc.c: the card, as blocks -- devsd.c's contract */
 int	emmcinit(void);
 int	sdblkread(uvlong, void*);
+int	sdblkreadn(uvlong, void*, int);
 int	sdblkwrite(uvlong, void*);
 int	sdblkpresent(void);
 uvlong	sdblknblocks(void);

@@ -1,6 +1,6 @@
 # InferNode analytics
 
-Snapshot captured `2026-10-14T08:49:08+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
+Snapshot captured `2026-10-15T08:24:30+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
 
 ## Engagement
 
@@ -15,18 +15,18 @@ Snapshot captured `2026-10-14T08:49:08+00:00`. Updated daily by [`.github/workfl
 
 | State | Issues | PRs |
 |---|---:|---:|
-| Open | 27 | 9 |
-| Merged | — | 811 |
+| Open | 27 | 12 |
+| Merged | — | 818 |
 | Closed (unmerged) | 29 | 26 |
 
 ## Release downloads
 
-Lifetime downloads across published releases: **353** (Δ 7d —, Δ 30d —).
+Lifetime downloads across published releases: **366** (Δ 7d —, Δ 30d —).
 
 | Release | Published | Downloads |
 |---|---|---:|
-| `v0.7.0` | 2026-10-13 | 4 |
-| `v0.6.0` | 2026-10-10 | 10 |
+| `v0.7.0` | 2026-10-13 | 14 |
+| `v0.6.0` | 2026-10-10 | 13 |
 | `v0.5.0` | 2026-09-27 | 15 |
 | `v0.4.1` | 2026-09-17 | 26 |
 | `v0.4.0` | 2026-09-12 | 32 |
@@ -59,27 +59,27 @@ Lifetime downloads across published releases: **353** (Δ 7d —, Δ 30d —).
 | `v0.3.6` | `infernode-0.3.6-linux-amd64-gui.tar.gz` | 5 |
 | `v0.3.6` | `infernode-0.3.6-windows-amd64-gui.zip` | 5 |
 | `v0.1.3` | `infernode-0.1.3-linux-arm64-gui.tar.gz` | 5 |
-| `v0.3.6` | `infernode-0.3.6-linux-arm64-gui.tar.gz` | 4 |
+| `v0.7.0` | `infernode-0.7.0-macos-arm64.dmg` | 4 |
 
 ## Traffic (last 14 days)
 
-- Views: **678** total, **27** unique visitors
-- Clones: **13420** total, **1416** unique cloners
+- Views: **695** total, **30** unique visitors
+- Clones: **13875** total, **1485** unique cloners
 
 ### Top referrers
 
 | Referrer | Views | Uniques |
 |---|---:|---:|
-| github.com | 103 | 3 |
-| infernode.io | 10 | 5 |
-| Google | 8 | 8 |
+| github.com | 104 | 3 |
+| infernode.io | 11 | 5 |
+| Google | 7 | 7 |
 
 ### Top paths
 
 | Path | Views | Uniques |
 |---|---:|---:|
-| `/infernode-os/infernode/pulls` | 284 | 2 |
-| `/infernode-os/infernode` | 69 | 20 |
+| `/infernode-os/infernode/pulls` | 290 | 3 |
+| `/infernode-os/infernode` | 74 | 24 |
 | `/infernode-os/infernode/issues` | 15 | 3 |
 | `/infernode-os/infernode/releases/tag/v0.5.0` | 6 | 4 |
 | `/infernode-os/infernode/pull/839` | 6 | 1 |

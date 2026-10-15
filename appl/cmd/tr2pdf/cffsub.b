@@ -503,12 +503,18 @@ otfsubset1(otf: array of byte, used: array of byte): array of byte
 			tabs[n++] = otf[off:off + ln];
 		}
 	}
-	# the directory, the tables after it each on four bytes
+	return sfnt(otf[0:4], tags[0:n], tabs[0:n]);
+}
+
+# an sfnt of these tables, each on four bytes after the directory
+sfnt(ver: array of byte, tags: array of string, tabs: array of array of byte): array of byte
+{
+	n := len tags;
 	sz := 12 + 16 * n;
-	for(i = 0; i < n; i++)
+	for(i := 0; i < n; i++)
 		sz += (len tabs[i] + 3) & ~3;
 	r := array[sz] of {* => byte 0};
-	r[0:] = otf[0:4];
+	r[0:] = ver;
 	r[4] = byte (n >> 8);
 	r[5] = byte n;
 	es := 1;
@@ -560,4 +566,134 @@ put32(b: array of byte, o: int, v: int)
 	b[o + 1] = byte (v >> 16);
 	b[o + 2] = byte (v >> 8);
 	b[o + 3] = byte v;
+}
+
+#
+# a TrueType font subset to the glyphs used: the glyphs not used are
+# empty (no outline), keeping their numbers, and a kept composite
+# glyph's components are kept with it; glyf and loca are written again
+# (loca long), and of the other tables those a reader may look at, the
+# hinting programs among them
+#
+ttfsubset(otf: array of byte, used: array of byte): array of byte
+{
+	{
+		return ttfsubset1(otf, used);
+	} exception {
+	"*" =>
+		return nil;
+	}
+}
+
+ttfsubset1(otf: array of byte, used: array of byte): array of byte
+{
+	if(len otf < 12)
+		return nil;
+	nt := (int otf[4] << 8) | int otf[5];
+	tag := array[nt] of string;
+	tab := array[nt] of array of byte;
+	head, loca, glyf, maxp: array of byte;
+	for(i := 0; i < nt; i++){
+		e := 12 + 16 * i;
+		tag[i] = string otf[e:e + 4];
+		off := s32(otf, e + 8);
+		ln := s32(otf, e + 12);
+		if(off < 0 || ln < 0 || off + ln > len otf)
+			return nil;
+		tab[i] = otf[off:off + ln];
+		case tag[i] {
+		"head" =>	head = tab[i];
+		"loca" =>	loca = tab[i];
+		"glyf" =>	glyf = tab[i];
+		"maxp" =>	maxp = tab[i];
+		}
+	}
+	if(head == nil || loca == nil || glyf == nil || maxp == nil || len head < 54)
+		return nil;
+	ng := (int maxp[4] << 8) | int maxp[5];
+	long := s16(head, 50) != 0;
+	offs := array[ng + 1] of int;
+	for(i = 0; i <= ng; i++){
+		if(long)
+			offs[i] = s32(loca, 4 * i);
+		else
+			offs[i] = 2 * ((int loca[2 * i] << 8) | int loca[2 * i + 1]);
+		if(offs[i] < 0 || offs[i] > len glyf)
+			return nil;
+	}
+	keep := array[ng] of {* => byte 0};
+	keep[0] = byte 1;
+	for(i = 0; i < len used && i < ng; i++)
+		if(used[i] != byte 0)
+			keep[i] = byte 1;
+	# a composite glyph's components, and theirs
+	for(changed := 1; changed; ){
+		changed = 0;
+		for(i = 0; i < ng; i++){
+			if(keep[i] == byte 0 || offs[i + 1] - offs[i] < 10)
+				continue;
+			g := glyf[offs[i]:offs[i + 1]];
+			if(s16(g, 0) >= 0)
+				continue;
+			p := 10;
+			for(;;){
+				fl := (int g[p] << 8) | int g[p + 1];
+				ci := (int g[p + 2] << 8) | int g[p + 3];
+				if(ci < ng && keep[ci] == byte 0){
+					keep[ci] = byte 1;
+					changed = 1;
+				}
+				p += 4;
+				if(fl & 1)
+					p += 4;
+				else
+					p += 2;
+				if(fl & 8)
+					p += 2;
+				else if(fl & 16r40)
+					p += 4;
+				else if(fl & 16r80)
+					p += 8;
+				if(!(fl & 16r20))
+					break;
+			}
+		}
+	}
+	tot := 0;
+	for(i = 0; i < ng; i++)
+		if(keep[i] != byte 0)
+			tot += (offs[i + 1] - offs[i] + 3) & ~3;
+	nglyf := array[tot] of {* => byte 0};
+	nloca := array[4 * (ng + 1)] of byte;
+	p := 0;
+	for(i = 0; i < ng; i++){
+		put32(nloca, 4 * i, p);
+		if(keep[i] != byte 0){
+			nglyf[p:] = glyf[offs[i]:offs[i + 1]];
+			p += (offs[i + 1] - offs[i] + 3) & ~3;
+		}
+	}
+	put32(nloca, 4 * ng, p);
+	nhead := array[len head] of byte;
+	nhead[0:] = head;
+	put16(nhead, 50, 1);	# loca long
+	put32(nhead, 8, 0);	# checkSumAdjustment: not kept up
+	tags := array[nt] of string;
+	tabs := array[nt] of array of byte;
+	n := 0;
+	for(i = 0; i < nt; i++){
+		t := tab[i];
+		case tag[i] {
+		"head" =>	t = nhead;
+		"loca" =>	t = nloca;
+		"glyf" =>	t = nglyf;
+		"hhea" or "hmtx" or "maxp" or "OS/2" or "name" or "post" or "cmap" or "cvt " or "fpgm" or "prep" =>
+			;
+		* =>
+			continue;
+		}
+		tags[n] = tag[i];
+		tabs[n++] = t;
+	}
+	return sfnt(otf[0:4], tags[0:n], tabs[0:n]);
 }

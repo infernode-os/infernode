@@ -1027,6 +1027,14 @@ tr_wo(args: array of string)
 	nrset(R_wo, n);
 }
 
+# .mg n: say which characters no font has (1), or not (0, the default)
+tr_mg(args: array of string)
+{
+	mg_warn = 1;
+	if(len args > 1)
+		mg_warn = eval(args[1], 0) != 0;
+}
+
 tr_fmap(args: array of string)
 {
 	fnt := argfont(args);
@@ -1295,6 +1303,7 @@ cmds := array[] of {
 	Cmd("mtpc", A_REQ),
 	Cmd("mte", A_REQ),
 	Cmd("wo", A_REQ),
+	Cmd("mg", A_REQ),
 	Cmd("ft", A_REQ),
 	Cmd("fzoom", A_REQ),
 	Cmd("hc", A_REQ),
@@ -1424,6 +1433,7 @@ cmd_run(i: int, args: array of string)
 	"mtpc" =>	tr_mtpc(args);
 	"mte" =>	tr_mte(args);
 	"wo" =>	tr_wo(args);
+	"mg" =>	tr_mg(args);
 	"ft" =>		tr_ft(args);
 	"fzoom" =>	tr_fzoom(args);
 	"hc" =>		tr_hc(args);

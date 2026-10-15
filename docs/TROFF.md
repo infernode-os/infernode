@@ -220,13 +220,20 @@ font, Minion Pro for one, is described the same way:
 Glyphs beyond U+FFFF (mathematical alphanumerics, for one) are
 described without names: a Limbo string's characters are 16 bits.
 
+A character none of Libertinus's fonts has (✓, ☐, many symbols) is set
+in the fallback, DejaVu Sans (`DF`, a special font `-mbook` mounts: troff
+looks for a glyph in it when the font set in lacks one). One no font has
+is said (`troff: no font has 中 (U+4E2D)`), once, where C Neatroff drops
+it without a word (`.mg 1`, as `-mbook` sets it).
+
 ## Fonts in the PDF
 
 `tr2pdf` embeds each OpenType (CFF) font subset to the glyphs the book
 uses: the glyphs it does not use, and the subroutines only they call,
 are emptied (the glyphs keep their numbers, so the text is unchanged),
 and the tables only typesetting needs (GSUB, GPOS, GDEF, MATH) are left
-out; the font is named as a subset (`ABCDEF+LibertinusSerif-Regular`).
+out; a TrueType font (the fallback) likewise, by its glyf and loca, a
+composite glyph keeping its components; the font is named as a subset (`ABCDEF+LibertinusSerif-Regular`).
 A book's PDF is a fifth of what it was, or less; every page is drawn as
 with the fonts whole (`tr2pdf -W`), pixel for pixel. A font it cannot
 read so (CID-keyed, Type 1 charstrings) is embedded whole.
@@ -240,6 +247,5 @@ after the work above is done.
 
 ## Still to come
 
-The LaTeX converter; `-man`; fonts falling back for characters a font
-lacks; eqn's bars drawn as lines (they are
+The LaTeX converter; `-man`; eqn's bars drawn as lines (they are
 glyphs now, and copied with the text).

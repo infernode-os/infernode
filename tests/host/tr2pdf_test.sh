@@ -16,8 +16,9 @@
 #	glyphs not used and the subroutines only they call emptied, the
 #	layout tables left out): every page drawn as with the fonts whole
 #	(-W), pixel for pixel, its text the same, the file a third the size
-#	or less; where fontTools is installed, each subset font read, every
-#	glyph kept its own charstring and every glyph drawn;
+#	or less (the fallback's TrueType too, DejaVu Sans, by glyf and loca);
+#	where fontTools is installed, each subset font read, every glyph
+#	kept its own charstring and every glyph drawn;
 #	output with no device (x T, x res) before its first page is refused
 #	with a reason, where it divided by zero.
 
@@ -84,12 +85,13 @@ fi
 
 # fonts subset to the glyphs used: a page of text, italic, bold, Greek
 # and mathematics (Libertinus Math), set as with the fonts whole
-{ cat lib/troff/eqnrc; printf '.EQ\ndelim $$\n.EN\n.ps 12\nRoman \\fIitalic\\fP \\fBbold\\fP: ἀρετή, λόγος, φιλοσοφία; fi ffl.\n.br\nIts sum $sum from {i=1} to n x sub i sup 2$ and root $sqrt {a + b}$.\n'; } >"$tmp/sub.tr"
+{ cat lib/troff/eqnrc; printf '.EQ\ndelim $$\n.EN\n.ps 12\nRoman \\fIitalic\\fP \\fBbold\\fP: ἀρετή, λόγος, φιλοσοφία; fi ffl.\n.br\nIts sum $sum from {i=1} to n x sub i sup 2$ and root $sqrt {a + b}$; done ✓.\n'; } >"$tmp/sub.tr"
 inferno "cd '#U*$tmp'; eqn < sub.tr | troff -mbook | tr2pdf > sub.pdf; eqn < sub.tr | troff -mbook | tr2pdf -W > whole.pdf"
 if [ -s "$tmp/sub.pdf" ] && [ -s "$tmp/whole.pdf" ]; then
     ns=$(LC_ALL=C grep -aoc '/FontName /[A-Z][A-Z][A-Z][A-Z][A-Z][A-Z]+' "$tmp/sub.pdf")
     ss=$(wc -c <"$tmp/sub.pdf"); sw=$(wc -c <"$tmp/whole.pdf")
-    [ "$ns" -ge 3 ] && [ $((ss * 3)) -lt "$sw" ] &&
+    LC_ALL=C grep -aq '/FontName /[A-Z]\{6\}+DejaVuSans' "$tmp/sub.pdf" || ns=0
+    [ "$ns" -ge 4 ] && [ $((ss * 3)) -lt "$sw" ] &&
         pass "fonts subset ($ns fonts tagged; $ss bytes, $sw whole)" || failed "subset: $ns tagged, $ss bytes, $sw whole"
     if command -v pdftoppm >/dev/null 2>&1; then
         pdftoppm -r 150 "$tmp/sub.pdf" "$tmp/ps" 2>/dev/null

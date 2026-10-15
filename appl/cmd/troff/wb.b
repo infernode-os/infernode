@@ -190,6 +190,26 @@ wb_flush(wb: ref Wb)
 	wb_flushfont(wb);
 }
 
+# .mg: a character no font mounted has, said once (C Neatroff drops it
+# without a word)
+mg_warn := 0;
+mg_dict: ref Dict;
+
+mg_said(c: string)
+{
+	if(c == nil || c[0] < 16r20)
+		return;
+	if(mg_dict == nil)
+		mg_dict = dict_make(64);
+	if(dict_get(mg_dict, c) >= 0)
+		return;
+	dict_put(mg_dict, c, 1);
+	if(len c == 1)
+		sys->fprint(stderr, "troff: no font has %s (U+%.4X)\n", c, c[0]);
+	else
+		sys->fprint(stderr, "troff: no font has \\(%s\n", c);
+}
+
 # protrusion: the first glyph's left, the last's right (.mtp, .mtpc)
 wb_prot(wb: ref Wb, g: ref Glyph, gw: int)
 {
@@ -269,6 +289,8 @@ wb_putbuf(wb: ref Wb, c: string)
 		c0 = at(c, 0);
 		c1 = at(c, 1);
 	}
+	if(g == nil && !zerowidth && mg_warn)
+		mg_said(c);
 	if(g != nil && !zerowidth && wb.icleft && glyph_icleft(g))
 		wb_hmov(wb, font_wid(gfont(g), wb.s, glyph_icleft(g)));
 	wb.icleft = 0;

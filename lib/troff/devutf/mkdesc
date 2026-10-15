@@ -17,3 +17,6 @@ mkfn $o -tHI -f$l/LibertinusSans-Italic.otf $l/LibertinusSans-Italic.otf >$d/HI
 mkfn $o -tHB -f$l/LibertinusSans-Bold.otf $l/LibertinusSans-Bold.otf >$d/HB
 mkfn $o -s -tS1 -f$l/LibertinusSerif-Regular.otf $l/LibertinusSerif-Regular.otf >$d/S1
 mkfn $o -s -tS -f$l/LibertinusMath-Regular.otf $l/LibertinusMath-Regular.otf >$d/S
+# the fallback for characters Libertinus lacks (✓, ☐ ...): DejaVu Sans, special
+v=/fonts/ttf/dejavu
+mkfn -b -l -o -r7200 -s -tDF -f$v/DejaVuSans.ttf $v/DejaVuSans.ttf >$d/DF

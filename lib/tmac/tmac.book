@@ -68,6 +68,11 @@
 .\" the fonts: R I B BI as the device has them; small capitals
 .fp 11 SC R
 .ff SC +smcp
+.\" the fallback: a character none of Libertinus's fonts has is DejaVu
+.\" Sans's (a special font, searched when the font set in lacks a glyph)
+.fp 12 DF
+.\" and a character none has is said, not dropped without a word
+.mg 1
 .\"
 .\" rules (tbl's, \l's of \(ul, \L's) drawn as lines, not glyphs
 .rules 1

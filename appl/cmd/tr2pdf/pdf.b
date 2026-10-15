@@ -392,6 +392,12 @@ writedesc(fnt: ref Font, id: int, used: array of byte): string
 					tag = subsettag(used);
 				}
 			}
+			if(fntype == 't' && !cff && used != nil){
+				if((sub := ttfsubset(data, used)) != nil){
+					data = sub;
+					tag = subsettag(used);
+				}
+			}
 			if(fntype == 't' && cff)
 				str_obj = writestream("  /Subtype /OpenType\n", data);
 			else if(fntype == 't')

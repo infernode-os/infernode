@@ -1184,7 +1184,11 @@ Session.submit(s: self ref Session, form, submitter: int): string
 		if(d.hasattr(submitter, "formmethod"))
 			method = lower(d.attr(submitter, "formmethod"));
 	}
-	url := resolve(d.url, action);
+	# no action, or an empty one, is the document's URL (HTML
+	# §4.10.21.3); resolve leaves an empty reference empty
+	url := d.url;
+	if(action != "")
+		url = resolve(d.url, action);
 	q := "";
 	for(n := 1; n < d.n; n++) {
 		if(forms[n] != form || !iscontrol(d, n) || disabled(d, n))

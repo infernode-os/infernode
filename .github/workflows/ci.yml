@@ -181,6 +181,13 @@ jobs:
         ROOT=. bash tests/host/namespace_manifest_invariants_test.sh
         ROOT=. bash tests/host/veltro_namespace_failclosed_test.sh
 
+    - name: Check Charon's start page ships
+      run: |
+        # The start page must be a file every release package carries
+        # (it was a test fixture, missing from every package).
+        chmod +x tests/host/charon_home_test.sh
+        ROOT=. bash tests/host/charon_home_test.sh
+
     - name: Run codex-gate preflight checks
       run: |
         # INFR-413: the gateway pins the Codex CLI's plugin, app, MCP, skill,

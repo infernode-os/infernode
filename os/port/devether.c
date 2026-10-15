@@ -1034,6 +1034,40 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 	return r;
 }
 
+/*
+ * Backpressure, bounded. The output queue drops when full rather than
+ * block (etherreset), and TCP, which grows its window until something
+ * drops, then fills it: on a Pi 4 the only loss on a quiet LAN was the
+ * board's own queue, and Plan 9's TCP answers loss slowly (a timeout
+ * when the peer's window moves, or a restart from one segment). So a
+ * writer that finds the queue full waits for room -- a millisecond at
+ * a time, for at most Oqwaitms -- and only then is its frame dropped.
+ * The bound is what keeps #692 away: a queue that stops draining costs
+ * each writer Oqwaitms, never for ever. Only a process waits; an
+ * interrupt-time writer (up == nil) drops as before. Per board
+ * (ETHEROQWAITMS in mem.h): a Pi 4 waits 50ms; the 3B+, whose USB
+ * adapter is where #692 stalled, has not been tried with a wait and
+ * keeps 0.
+ */
+#ifndef ETHEROQWAITMS
+#define ETHEROQWAITMS	0	/* drop at once, as before; a board opts in */
+#endif
+
+enum {
+	Oqwaitms	= ETHEROQWAITMS,
+};
+
+static void
+oqwait(Ether *e)
+{
+	int i;
+
+	if(up == nil)
+		return;
+	for(i = 0; i < Oqwaitms && qwindow(e->oq) < 2*Maxframe; i++)
+		tsleep(&up->sleep, return0, nil, 1);
+}
+
 static long
 etherbwrite(Chan *c, Block *bp, ulong offset)
 {
@@ -1044,6 +1078,7 @@ etherbwrite(Chan *c, Block *bp, ulong offset)
 	if((c->qid.type & QTDIR) == 0 && NETTYPE(c->qid.path) == Ndataqid){
 		if(e->transmit != nil){
 			n = BLEN(bp);
+			oqwait(e);
 			qbwrite(e->oq, bp);
 			e->transmit(e);
 			return n;
@@ -1058,6 +1093,7 @@ etherbwrite(Chan *c, Block *bp, ulong offset)
 		 * is the call os/ip's etherbwrite makes for every outbound
 		 * frame, so it is the one worth keeping cheap.
 		 */
+		oqwait(e);
 		qbwrite(e->oq, bp);
 		return n;
 	}

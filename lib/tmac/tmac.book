@@ -118,6 +118,9 @@
 .ad b
 .mtp \\n[book-final]
 .if \\n[book-final] .mte 20 20 5
+.\" no paragraph's first line alone at a page's foot, nor its last alone
+.\" at the next page's head (drafts too, so that they break as the book)
+.wo 1
 .ev fn
 .book-noteenv
 .ev
@@ -126,6 +129,7 @@
 .ev
 .ev quote
 .ft R
+.wo 1
 .mtp \\n[book-final]
 .if \\n[book-final] .mte 20 20 5
 .ev

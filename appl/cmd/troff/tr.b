@@ -1016,6 +1016,17 @@ tr_mte(args: array of string)
 	nrset(R_mtep, sp);
 }
 
+# .wo n: widows and orphans, in this environment: with n 1, a
+# paragraph's first line is not left alone at a page's foot, nor its
+# last carried alone to the next page
+tr_wo(args: array of string)
+{
+	n := 1;
+	if(len args > 1)
+		n = eval(args[1], 0) != 0;
+	nrset(R_wo, n);
+}
+
 tr_fmap(args: array of string)
 {
 	fnt := argfont(args);
@@ -1283,6 +1294,7 @@ cmds := array[] of {
 	Cmd("mtp", A_REQ),
 	Cmd("mtpc", A_REQ),
 	Cmd("mte", A_REQ),
+	Cmd("wo", A_REQ),
 	Cmd("ft", A_REQ),
 	Cmd("fzoom", A_REQ),
 	Cmd("hc", A_REQ),
@@ -1411,6 +1423,7 @@ cmd_run(i: int, args: array of string)
 	"mtp" =>	tr_mtp(args);
 	"mtpc" =>	tr_mtpc(args);
 	"mte" =>	tr_mte(args);
+	"wo" =>	tr_wo(args);
 	"ft" =>		tr_ft(args);
 	"fzoom" =>	tr_fzoom(args);
 	"hc" =>		tr_hc(args);

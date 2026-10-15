@@ -35,7 +35,7 @@ eregs := array[] of {		# environment-specific number registers
 	".L0", ".m0", ".n0", ".s0", ".ss", ".ssh", ".sss", ".pmll", ".pmllcost",
 	".ti", ".lt", ".lt0", ".v0",
 	".I", ".I0", ".tI", ".td", ".cd",
-	".mtp", ".mtes", ".mtek", ".mtep",
+	".mtp", ".mtes", ".mtek", ".mtep", ".wo",
 };
 
 nreginit()

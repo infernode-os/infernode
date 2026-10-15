@@ -118,6 +118,19 @@ advances, and says by how much (`x X mtx 15`, thousandths) for tr2pdf,
 which draws their shapes as scaled (`Tz`), each where troff put it.
 With `.mtp 0` and `.mte 0`, the defaults, troff sets as C Neatroff does.
 
+## Widows and orphans: `.wo`
+
+A paragraph is broken by a page only with two lines at least on either
+side: its first line is not left alone at a page's foot (an orphan), nor
+its last carried alone to the next page's head (a widow), as LaTeX's
+penalties keep them. Where one would be, a line more goes with it to
+the next page and this one is a line short, or the whole paragraph goes.
+troff does it (`.wo 1`, in an environment) as it fills: the page's last
+lines are set only when what follows them is known, and a note that
+moves the foot up is allowed for. `-mbook` sets it in drafts as in the
+book as it goes to press, so the two break their pages alike. With
+`.wo 0`, the default, troff sets as C Neatroff does.
+
 ## The index: `.index` and `mkindex`
 
 An entry is written as LaTeX's `\index` (makeindex's syntax), on a line

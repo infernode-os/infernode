@@ -55,6 +55,11 @@ Fmt: adt {
 	eos:	int;		# the last word ends a sentence
 	fillreq:	int;	# fill after the last word (\p)
 	tind:	int;		# the line's indent is .ti's: no protrusion at its left
+	parpg, parcnt:	int;	# the page the paragraph's last lines went to, and how many (.wo)
+	eject:	int;		# end the page before the next line (.wo)
+	ejected:	int;	# ended it, and no line set since
+	ejpg, ejd:	int;	# where it was ended: until the trap's macro has run, nothing is set
+	trpg, trd:	int;	# the page and place of the trap the last fill saw coming
 };
 
 # the protrusion at a line's right: its last word's, or its hyphen's
@@ -529,6 +534,8 @@ fmt_alloc(): ref Fmt
 	f := ref Fmt;
 	f.words = array[256] of ref Word;
 	f.lines = array[256] of ref Line;
+	f.parpg = -1;
+	f.trpg = -1;
 	return f;
 }
 
@@ -611,14 +618,22 @@ fmt_fillwords(f: ref Fmt, br: int): int
 	if(fillreq > 0)
 		nw = fillreq;
 	out_n: int;
+	lim := lenmin(len out, nrem);
+	if(nr(R_wo) && nrem > 0)	# two lines past the trap, to see widows coming
+		lim = lenmin(len out, nrem + 2);
 	if(nr(R_j) & AD_Q)
-		out_n = fmtb_fill(f.words, nw, out, lenmin(len out, nrem), FMT_LLEN(f), fillreq > 0, br, nohy);
+		out_n = fmtb_fill(f.words, nw, out, lim, FMT_LLEN(f), fillreq > 0, br, nohy);
 	else
-		out_n = fmta_fill(f.words, nw, out, lenmin(len out, nrem), FMT_LLEN(f), fillreq > 0, br, nohy);
+		out_n = fmta_fill(f.words, nw, out, lim, FMT_LLEN(f), fillreq > 0, br, nohy);
 	# extract filled lines
 	n := min(1, out_n);
 	if(nreq > 0)
 		n = min(nreq, out_n);
+	room := fmt_safelines() - fmt_nlines(f);
+	if(fmt_safelines() == 0)
+		room = 1;
+	(wn, wait, eject) := fmt_widows(f, n, room, out_n, br, fillreq);
+	n = wn;
 	i: int;
 	for(i = 0; i < n; i++){
 		cur := out[i];
@@ -627,11 +642,92 @@ fmt_fillwords(f: ref Fmt, br: int): int
 		if(f.words_n)
 			f.words[0].gap = 0;
 	}
+	if(i > 0){
+		if(f.parpg != nr(R_PG)){
+			f.parpg = nr(R_PG);
+			f.parcnt = 0;
+		}
+		f.parcnt += i;
+		f.ejected = 0;
+	}
+	if(br && !f.words_n)	# the paragraph is done
+		f.parpg = -1;
+	if(eject){
+		f.eject = 1;
+		f.ejected = 1;
+		f.ejpg = -1;	# set when the page is ended (fmt_ejected)
+		return 1;
+	}
+	if(wait)
+		return 0;
 	f.filled = i && !f.words_n;
 	if(f.words_n)		# apply the new .l and .i
 		fmt_confupdate(f);
-	return i < out_n || fillreq > 0 || (br && f.words_n) ||
+	return i < min(out_n, lenmin(len out, nrem)) || fillreq > 0 || (br && f.words_n) ||
 		(n == nreq && fmt_totwid(f, f.words_n) > FMT_LLEN(f));
+}
+
+# the page ended by .wo: where (the trap reached)
+fmt_ejected(f: ref Fmt, d: int)
+{
+	f.ejpg = nr(R_PG);
+	f.ejd = d;
+}
+
+# widows and orphans (.wo): how many of the n lines planned to set now
+# (n is 1 where the next line's settings change); whether to stop and
+# wait for more words (the page's last line could leave the paragraph's
+# last alone on the next); whether to end the page after them.  room is
+# the lines that fit before the trap; out_n the paragraph's filled lines
+fmt_widows(f: ref Fmt, n, room, out_n, br, fillreq: int): (int, int, int)
+{
+	if(!nr(R_wo) || cdiv != nil || fillreq > 0 || room <= 0)
+		return (n, 0, 0);
+	# the page ended for the paragraph, its foot's macro not yet run:
+	# nothing more on this page (at the paragraph's end, go on all the same)
+	if(f.ejected && f.ejpg == nr(R_PG) && f.ejd == nr(R_d) && !br)
+		return (0, 1, 0);
+	# the trap the last fill saw coming passed on this page: its macro is
+	# running (and filling lines as it reads its own), nothing more here
+	if(f.trpg == nr(R_PG) && nr(R_d) >= f.trd && !br)
+		return (0, 1, 0);
+	f.trpg = nr(R_PG);
+	f.trd = nr(R_d) + f_nexttrap();
+	onpg := 0;	# the paragraph's lines on this page already
+	if(f.parpg == nr(R_PG))
+		onpg = f.parcnt;
+	# a paragraph is broken by a page only with two lines on either side
+	# of it: of its L lines, b = min(room, L - 2) on this page; fewer than
+	# two here, the whole of it goes to the next
+	if(br){
+		L := out_n;		# all its lines (or room + 2, if more)
+		if(L <= room)
+			return (n, 0, 0);
+		b := min(room, L - 2);
+		if(onpg + b < 2 && onpg == 0 && !f.ejected)
+			return (0, 0, 1);
+		if(b >= room)
+			return (n, 0, 0);
+		if(n >= b)
+			return (b, 0, 1);	# b lines, then the page ends
+		return (n, 0, 0);
+	}
+	# its end not yet read: the known lines (out_n) and the words not yet
+	# filled (none, or a line, or more)
+	if(out_n + 1 < room)	# they end before the page does
+		return (n, 0, 0);
+	if(out_n >= room + 2){	# two lines at least go to the next page
+		if(onpg + room < 2 && !f.ejected)
+			return (0, 0, 1);	# its first line alone at the foot
+		return (n, 0, 0);
+	}
+	# set only what stays on this page however it ends
+	safe := min(room, out_n - 2);
+	if(safe < 0 || onpg + safe < 2)
+		safe = 0;
+	if(n < safe)
+		return (n, 0, 0);
+	return (safe, 1, 0);
 }
 
 # C's MIN(LEN(a), n): LEN is unsigned (a size_t), so a negative n, made

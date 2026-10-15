@@ -415,6 +415,17 @@ ren_fmtpop(fmt: ref Fmt): int
 	ret := 0;
 	while(fmt_morelines(fmt))
 		ret = ren_passline(fmt);
+	if(fmt.eject){
+		# end the page here (.wo): spring the next trap, as .ne would
+		fmt.eject = 0;
+		n := f_nexttrap() + 1;
+		# the trap's macro runs within: nothing set at the trap meanwhile
+		fmt_ejected(fmt, nr(R_d) + n - 1);
+		if(ren_first())
+			if(!ren_traps(nr(R_d), nr(R_d) + n - 1, 1))
+				ren_pagelimit(n - 1);
+		ret = 1;
+	}
 	return ret;
 }
 

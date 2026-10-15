@@ -268,36 +268,83 @@ uartlockon(void)
  * the nested-owner rule above is what makes that safe for the
  * uartputstr() calls inside it.
  */
+/*
+ * How long a writer waits for the console before printing over its
+ * holder, by the clock and not by a count of attempts. An emission is
+ * up to 256 bytes, 22ms at 115200 baud, and dumpureg holds the lock
+ * across a whole report. The bound was a million test-and-sets, which
+ * a BCM2711 gets through in less time than one emission takes: on a Pi
+ * 4 every boot printed lines from three cores interleaved a character
+ * at a time. The generic timer is every Cortex-A's, whatever drives the
+ * tick, and is readable here with interrupts masked.
+ */
+enum {
+	Lockwaitms	= 1000,
+	Lockround	= 1000,		/* test-and-sets per round at splhi */
+};
+
+static u64int
+lockclock(void)
+{
+	u64int v;
+
+	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(v));
+	return v;
+}
+
+static u64int
+lockclockhz(void)
+{
+	u64int v;
+
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(v));
+	return v;
+}
+
 int
 uartlock(void)
 {
 	int i, s;
+	u64int start, limit;
 
 	if(!uartlocking)
 		return 0;
-	/*
-	 * splhi before the test-and-set, not after: a tick between a
-	 * successful _tas and a later splhi would leave a Ready process
-	 * holding the console lock with interrupts on -- the migration
-	 * case described above, in a narrower window.
-	 */
-	s = splhi();
-	if(uartowner == m->machno){
-		splx(s);
-		return 0;
-	}
-	for(i = 0; i < 1000000; i++)
-		if(_tas(&uartmutex) == 0){
-			uartowner = m->machno;
-			uartspl = s;
-			return 1;
+	start = lockclock();
+	limit = lockclockhz() / 1000 * Lockwaitms;
+	for(;;){
+		/*
+		 * splhi before the test-and-set, not after: a tick between
+		 * a successful _tas and a later splhi would leave a Ready
+		 * process holding the console lock with interrupts on --
+		 * the migration case described above, in a narrower
+		 * window.
+		 *
+		 * In rounds, with the level put back between them, so that
+		 * a writer kept waiting by a long report does not keep its
+		 * core's interrupts masked for all of it. That also means it
+		 * may be on another core by the next round, so whether this
+		 * core is the holder is asked again each time.
+		 */
+		s = splhi();
+		if(uartowner == m->machno){
+			splx(s);
+			return 0;
 		}
+		for(i = 0; i < Lockround; i++)
+			if(_tas(&uartmutex) == 0){
+				uartowner = m->machno;
+				uartspl = s;
+				return 1;
+			}
+		splx(s);
+		if(lockclock() - start > limit)
+			break;
+	}
 	/*
 	 * Gave up: the text goes out over the holder's, at the caller's
 	 * level. Nothing was taken, so nothing is held and nothing is
-	 * restored later; put the level back here.
+	 * restored later.
 	 */
-	splx(s);
 	return 0;
 }
 

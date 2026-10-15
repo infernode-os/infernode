@@ -294,10 +294,38 @@ read so (CID-keyed, Type 1 charstrings) is embedded whole.
 
 ## Speed
 
-On a 2.8 GHz Xeon, the 62-page benchmark book takes troff 2.9 seconds
-(C Neatroff: 1.05), about 0.2 seconds to start and 45 milliseconds a
-page; a page is painted in about 20 milliseconds. Making it faster comes
-after the work above is done.
+On a 2.8 GHz Xeon, the 62-page benchmark book (`-ms`) takes troff 1.36
+seconds compiled (`emu -c1`), 22 milliseconds a page; C Neatroff takes
+0.58. It took 2.34 before the changes below. A 39-page `-mbook` book
+with notes on every page takes 0.77 seconds a pass. A page is painted
+in about 20 milliseconds.
+
+The time went where a translation from C puts it: a string made for
+every character, an array allocated and zeroed for every word, a
+function called to read a field. What was done about it, the output
+the same byte for byte:
+- A font's glyphs by name kept by character (names of one character,
+  or two ASCII ones), and a word's layout (GSUB, GPOS) kept by its
+  glyphs and the font's state, so neither dictionaries nor the rules
+  are searched again for a word set before.
+- Buffers kept between words, or made the size they need; escape
+  sequences' names and arguments sliced from their strings.
+- Strings for the output's commonest pieces (`hN`, `cX`, `\h'Nu'`, a
+  word's font, size and colour) kept, not formatted each time.
+- Paragraph filling's cost figured in `int` where it cannot overflow.
+
+The profile is flat now: no function takes more than 4 per cent. What
+remains is Dis's: reference counting on every pointer copied, frames
+made and returned from (together a fifth of the time), allocation and
+freeing (an eighth), and calls.
+
+Profiling compiled code: `prof` counts the interpreter's instructions,
+and is no guide to where compiled code spends its time. Sample the
+emulator's program counter (ptrace) instead, run with `-c5` so that the
+compiler prints where each Dis instruction's code begins, and map the
+samples through the module's `.sbl` to source lines. Compile troff with
+its included files put into one (`include "x.b"` replaced by the file),
+so that every line has one file to be in.
 
 ## LaTeX for a publisher: `book2tex`
 
@@ -369,4 +397,5 @@ The toolchain's own pages are `troff(1)`, `eqn(1)`, `tbl(1)`, `pic(1)`,
 
 ## Still to come
 
-Speed.
+Nothing on the list. A test book like the one this was made for
+(its notes, index, tables, equations and Greek) is the next measure.

@@ -1601,7 +1601,7 @@ tr_nextreq(): int
 
 tr_next(): int
 {
-	while(!tr_nextreq())
+	while(tr_nl && !tr_nextreq())	# tr_nextreq() is 1 unless tr_nl
 		;
 	c := cp_next();
 	tr_nl = c == '\n' || c < 0;

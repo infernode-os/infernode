@@ -314,8 +314,10 @@ wb_putbuf(wb: ref Wb, c: string)
 		wb_noprot(wb);
 		return;
 	}
-	g := dev_glyph(c, wb.f);
 	zerowidth := c_hymark(c);
+	g: ref Glyph;
+	if(!zerowidth)	# else not used
+		g = dev_glyph(c, wb.f);
 	if(g == nil && c0 == ecc() && !zerowidth){	# an unknown escape
 		c = c[1:];
 		g = dev_glyph(c, wb.f);

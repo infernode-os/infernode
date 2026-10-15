@@ -213,7 +213,7 @@ cp_cond()
 
 cp_raw(): int
 {
-	if(in_top() >= 0)
+	if(buf != nil && buf.un && buf.unbuf[buf.un - 1] >= 0)	# in_top() >= 0
 		return in_next();
 	c: int;
 	do
@@ -256,7 +256,7 @@ cp_raw(): int
 
 cp_next(): int
 {
-	if(in_top() >= 0)
+	if(buf != nil && buf.un && buf.unbuf[buf.un - 1] >= 0)	# in_top() >= 0
 		return in_next();
 	c := cp_raw();
 	if(c == c_ec){

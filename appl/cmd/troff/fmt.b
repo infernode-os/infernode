@@ -391,7 +391,8 @@ fmt_hyphmarks(word: string, hyidx, hyins, hygap: array of int): int
 		if(c <= 0)
 			break;
 	}
-	if(c < 0 || d == env_hc())
+	hc := env_hc();
+	if(c < 0 || len d == len hc && d == hc)
 		return -1;
 	n := 0;
 	lastchar := 0;
@@ -401,7 +402,7 @@ fmt_hyphmarks(word: string, hyidx, hyins, hygap: array of int): int
 			break;
 		s = ni;
 		if(!c){
-			if(d == env_hc()){
+			if(len d == len hc && d == hc){
 				hyins[n] = 1;
 				hm_dirty = 1;
 				hyidx[n++] = s;
@@ -411,7 +412,7 @@ fmt_hyphmarks(word: string, hyidx, hyins, hygap: array of int): int
 				hm_dirty = 1;
 				hyidx[n++] = s;
 			}
-			if(d == c_nb){
+			if(len d == len c_nb && d == c_nb){
 				hygap[n] = 1;
 				hm_dirty = 1;
 				hyidx[n++] = s;
@@ -789,6 +790,9 @@ lenmin(l: int, n: int): int
 
 # Algorithm A for filling lines
 
+fa_best: array of big;	# fmta_fill()'s
+fa_pos, fa_dep: array of int;
+
 # approximately 8 * sqrt(cost)
 scaledown(cost: big): big
 {
@@ -913,9 +917,17 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 		nr(R_hycost) + nr(R_hycost2),
 		nr(R_hycost) + nr(R_hycost2) + nr(R_hycost3),
 	};
-	best := array[words_n + 1] of {* => big 0};
-	best_pos := array[words_n + 1] of {* => 0};
-	best_dep := array[words_n + 1] of {* => 0};
+	# every entry is set before it is read, but best_pos (below)
+	if(fa_best == nil || len fa_best < words_n + 1){
+		fa_best = array[words_n + 64] of big;
+		fa_pos = array[words_n + 64] of int;
+		fa_dep = array[words_n + 64] of int;
+	}
+	best := fa_best;
+	best_pos := fa_pos;
+	best_dep := fa_dep;
+	fa_best = nil;	# taken, should this be called within itself
+
 	last := words_n;	# the beginning of the last line
 	best_pos[0] = 0;
 	best_dep[0] = 0;
@@ -929,6 +941,7 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 		nspc := 0;		# the number of stretchable spaces
 		dwid := 0;		# equal to swid, unless swid is zero
 		erp := endrp(words[pos - 1]);
+		wcost := big words[pos - 1].cost;
 		hyphenated := words[pos - 1].hy != 0;
 		lwid := words[pos - 1].hy;	# non-zero if the last word is hyphenated
 		gsum := words[pos - 1].hy;	# the glyphs' advances (.mte)
@@ -953,7 +966,24 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 				dwid = words[i - 1].swid;
 			if(mte)
 				dwid += fmt_excap(gsum, pw > llen);
-			cur := best[i] + FMT_COST(llen, pw, dwid, nspc);
+			# FMT_COST(llen, pw, dwid, nspc), here where it is hot
+			cost: big;
+			d := llen - pw;
+			if(d > -20000000 && d < 20000000){
+				cw := dwid;
+				if(!cw)
+					cw = 1;
+				r := d * 100 / cw;
+				if(r < 0)
+					r = -r;
+				if(r > 4000)
+					r = 4000 + int scaledown(big (r - 4000));
+				cost = big (r * r / 100);
+				if(nspc > 1)
+					cost *= big nspc;
+			}else
+				cost = FMT_COST(llen, pw, dwid, nspc);
+			cur := best[i] + cost;
 			if(hyphenated && best_dep[i] + 1 == nohy)
 				cur += big 10000000;
 			if(hyphenated){
@@ -963,10 +993,11 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 				else
 					cur += big 10000000;
 			}
-			if(best_pos[pos] < 0 || cur + big words[pos - 1].cost < best[pos]){
+			cur += wcost;
+			if(best_pos[pos] < 0 || cur < best[pos]){
 				best_pos[pos] = i;
 				best_dep[pos] = best_dep[i] + 1;
-				best[pos] = cur + big words[pos - 1].cost;
+				best[pos] = cur;
 			}
 			i--;
 		}
@@ -976,6 +1007,7 @@ fmta_fill(words: array of ref Word, words_n: int, out: array of int, out_n: int,
 	cnt := fmta_break(best_pos, last, out, out_n);
 	if(!all && cnt < out_n && br && last < words_n)
 		out[cnt++] = words_n - last;
+	(fa_best, fa_pos, fa_dep) = (best, best_pos, best_dep);
 	return min(out_n, cnt);
 }
 

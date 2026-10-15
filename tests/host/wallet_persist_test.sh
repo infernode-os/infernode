@@ -80,10 +80,10 @@ sleep 1
 /dis/veltro/wallet9p.dis &
 sleep 3
 echo '--- creating wallet ---'
-echo 'eth ethereum persist-regtest' > /n/wallet/new
-cat /n/wallet/new
+echo 'eth ethereum persist-regtest' > /mnt/wallet/new
+cat /mnt/wallet/new
 echo '--- address ---'
-cat /n/wallet/persist-regtest/address
+cat /mnt/wallet/persist-regtest/address
 echo '--- factotum keys ---'
 cat /mnt/factotum/ctl
 echo '--- forcing sync ---'
@@ -126,9 +126,9 @@ echo '--- starting wallet9p ---'
 /dis/veltro/wallet9p.dis &
 sleep 3
 echo '--- accounts ---'
-cat /n/wallet/accounts
+cat /mnt/wallet/accounts
 echo '--- address ---'
-cat /n/wallet/persist-regtest/address
+cat /mnt/wallet/persist-regtest/address
 echo '--- session 2 done ---'
 EOF
 

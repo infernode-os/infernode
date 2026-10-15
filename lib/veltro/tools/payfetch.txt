@@ -4,7 +4,7 @@ Like webfetch, but when the server answers 402 Payment Required with
 x402 payment requirements it requests a signed payment authorization
 from the wallet and retries with the payment attached. Choose
 payfetch over webfetch only when willing to spend money. Requires
-/n/wallet access; budgets and approval policy are enforced inside
+/mnt/wallet access; budgets and approval policy are enforced inside
 wallet9p and cannot be bypassed from this tool.
 
 Usage:
@@ -12,8 +12,8 @@ Usage:
   payfetch <url> -a <account>           Use a specific wallet account
   payfetch <url> -a <account> -c <chain>  Override the chain preference
 
-With no -a, the default account is read from /n/wallet/default (or
-/n/wallet/ctl); an error is returned if none is set. The payment
+With no -a, the default account is read from /mnt/wallet/default (or
+/mnt/wallet/ctl); an error is returned if none is set. The payment
 option is chosen to match the wallet's active network; -c overrides
 (default preference: base). If the account requires approval, the
 tool waits up to 90s for a trusted controller to approve, then

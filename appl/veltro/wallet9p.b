@@ -7,7 +7,7 @@ implement Wallet9p;
 # Uses factotum for private key storage, budget enforcement for safety.
 #
 # Filesystem layout:
-#   /n/wallet/
+#   /mnt/wallet/
 #       ctl          rw: global config ("limit <amount>", "default <name>")
 #       accounts     r:  newline-separated account names
 #       default      r:  default account name
@@ -463,7 +463,7 @@ init(nil: ref Draw->Context, args: list of string)
 		raise "fail:init";
 	}
 
-	mountpt := "/n/wallet";
+	mountpt := "/mnt/wallet";
 	debug := 0;
 
 	arg := load Arg Arg->PATH;

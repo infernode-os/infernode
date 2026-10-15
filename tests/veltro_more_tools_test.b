@@ -5,7 +5,7 @@ implement VeltroMoreToolsTest;
 #
 # These tools have no dedicated test file.  They share a pattern: the agent
 # calls exec(args), the tool dispatches on the first word, and most error
-# paths are reached without any external service running (no /mnt/ui, /n/wallet,
+# paths are reached without any external service running (no /mnt/ui, /mnt/wallet,
 # /mnt/wikia, /tmp/veltro/man/).  We exercise:
 #
 #   mount    — stub: must always refuse, never expand the namespace
@@ -134,7 +134,7 @@ testMountAlwaysRefuses(t: ref T)
 # ============================================================================
 # wallet — argument parsing
 #
-# Without /n/wallet mounted, every command path that touches the filesystem
+# Without /mnt/wallet mounted, every command path that touches the filesystem
 # returns an error message.  We assert the parser correctly dispatches:
 # missing args produce "error: missing/need ...", unknown commands list the
 # valid set.
@@ -213,7 +213,7 @@ testWalletDoubledCommand(t: ref T)
 	# 'wallet wallet accounts' should be normalized to 'wallet accounts'
 	# (handles agents that double-prefix the tool name)
 	r := tool->exec("wallet accounts");
-	# Without /n/wallet mounted, doaccounts() returns a "no accounts
+	# Without /mnt/wallet mounted, doaccounts() returns a "no accounts
 	# configured" message — never an "unknown command" error.
 	t.assert(!hassubstr(r, "unknown command"),
 		"doubled 'wallet wallet accounts' not treated as unknown");

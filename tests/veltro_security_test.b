@@ -1459,6 +1459,94 @@ speechHiddenWorker(result: chan of string)
 	result <-= "";
 }
 
+# wallet9p mounts at /mnt/wallet (migrated from /n/wallet per
+# docs/NAMESPACE-LAYOUT.md, INFR-400). The wallet is one capability: only an
+# exact "/mnt/wallet" grant exposes it, through restrictwallet()'s filter. A
+# path beneath it grants nothing, and an exact grant with wallet9p absent
+# exposes nothing and does not fail the restriction.
+testRestrictNsWalletGrant(t: ref T)
+{
+	result := chan of string;
+	r: string;
+	(wok, nil) := sys->stat("/mnt/wallet");
+	if(wok >= 0)
+		t.log("/mnt/wallet exists (a wallet9p, or its residue): absent case not run");
+	else {
+		spawn walletAbsentWorker(result);
+		r = <-result;
+		if(r != "") {
+			t.error(r);
+			return;
+		}
+	}
+
+	made: list of string;
+	for(p := "/mnt" :: "/mnt/wallet" :: "/mnt/wallet/alice" ::
+			"/mnt/wallet/alice/pay" :: nil; p != nil; p = tl p) {
+		(ok, nil) := sys->stat(hd p);
+		if(ok < 0) {
+			fd := sys->create(hd p, Sys->OREAD, Sys->DMDIR | 8r755);
+			if(fd == nil) {
+				for(; made != nil; made = tl made)
+					sys->remove(hd made);
+				t.skip("cannot create " + hd p + " test fixture");
+				return;
+			}
+			made = hd p :: made;
+		}
+	}
+	spawn walletSubpathWorker(result);
+	r = <-result;
+	for(; made != nil; made = tl made)
+		sys->remove(hd made);
+	if(r != "")
+		t.error(r);
+}
+
+walletAbsentWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"wallet" :: nil,
+		"/mnt/wallet" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (wallet granted, wallet9p absent) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/mnt/wallet");
+	if(ok >= 0) {
+		result <-= "/mnt/wallet visible with wallet9p absent";
+		return;
+	}
+	result <-= "";
+}
+
+walletSubpathWorker(result: chan of string)
+{
+	sys->pctl(Sys->FORKNS, nil);
+	caps := ref NsConstruct->Capabilities(
+		"wallet" :: nil,
+		"/mnt/wallet/alice/pay" :: nil, nil, nil,
+		0 :: 1 :: 2 :: nil,
+		nil, 0, 0, -1, nil
+	, nil);
+	err := nsconstruct->restrictns(caps);
+	if(err != nil) {
+		result <-= sys->sprint("restrictns (wallet subpath) failed: %s", err);
+		return;
+	}
+	(ok, nil) := sys->stat("/mnt/wallet");
+	if(ok >= 0) {
+		result <-= "a path under /mnt/wallet exposed the wallet";
+		return;
+	}
+	result <-= "";
+}
+
 # /mnt/wsys (wmsrv window pictures, one tree per Lucifer activity) is a
 # fixed-function grant: only the window tool gets it, and only its own
 # activity's tree, bound over /mnt/wsys so no other activity is nameable.
@@ -2390,8 +2478,11 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/phone/sms",
 		"/mnt/msg/ctl",
 		"/mnt/msg/ctl/session",
+		"/mnt/wallet/alice/ctl",
+		"/mnt/wallet/alice/ctl/session",
+		"/mnt/wallet/alice/sign",
 		"/n/wallet/alice/ctl",
-		"/n/wallet/alice/ctl/session",
+		"/n/wallet/ctl",
 		"/mnt/mail/accounts/alice/compose",
 		"/mnt/mail/accounts/alice/boxes/INBOX/1/draft-reply",
 		"/tmp/veltro/.ns",
@@ -3032,6 +3123,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("RestrictNsMnt", testRestrictNsMnt);
 	run("RestrictNsMntLlm", testRestrictNsMntLlm);
 	run("RestrictNsGitToolDerived", testRestrictNsGitToolDerived);
+	run("RestrictNsWalletGrant", testRestrictNsWalletGrant);
 	run("RestrictNsSpeechGrant", testRestrictNsSpeechGrant);
 	run("RestrictNsWikiaToolDerived", testRestrictNsWikiaToolDerived);
 	run("RestrictNsMntCombined", testRestrictNsMntCombined);

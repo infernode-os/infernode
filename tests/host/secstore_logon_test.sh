@@ -181,10 +181,10 @@ sleep 5
 /dis/veltro/wallet9p.dis &
 sleep 5
 echo '--- create wallet ---'
-echo 'eth ethereum persist-test' > /n/wallet/new
-cat /n/wallet/new
+echo 'eth ethereum persist-test' > /mnt/wallet/new
+cat /mnt/wallet/new
 echo '--- address ---'
-cat /n/wallet/persist-test/address
+cat /mnt/wallet/persist-test/address
 echo '--- factotum has wallet key ---'
 cat /mnt/factotum/ctl
 echo sync > /mnt/factotum/ctl
@@ -212,9 +212,9 @@ sleep 5
 /dis/veltro/wallet9p.dis &
 sleep 5
 echo '--- accounts after restart ---'
-cat /n/wallet/accounts
+cat /mnt/wallet/accounts
 echo '--- address ---'
-cat /n/wallet/persist-test/address
+cat /mnt/wallet/persist-test/address
 echo '--- done ---'
 EOF
 OUTPUT=$(run_emu 60 /tmp/test_wallet_restore.sh)

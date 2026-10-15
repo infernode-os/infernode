@@ -203,7 +203,7 @@ authorize(req: ref PaymentReq, resource: ref ResourceInfo,
 		reqtext += "resource " + resource.url + "\n";
 	}
 
-	authpath := "/n/wallet/" + acctname + "/authorize";
+	authpath := "/mnt/wallet/" + acctname + "/authorize";
 	fd := sys->open(authpath, Sys->ORDWR);
 	if(fd == nil)
 		return (nil, sys->sprint("cannot open %s: %r", authpath));

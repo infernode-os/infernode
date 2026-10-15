@@ -726,7 +726,7 @@ childbudget(): list of string
 childpathallowed(path: string): int
 {
 	# Trusted control endpoints are never delegatable through child task
-	# provisioning. A broad parent grant such as /mnt/msg or /n/wallet may be
+	# provisioning. A broad parent grant such as /mnt/msg or /mnt/wallet may be
 	# intentionally attenuated by nsconstruct; it must not become lexical
 	# authority to mint hidden controller files in a child namespace.
 	if(privilegedcontrolpath(path))
@@ -842,6 +842,9 @@ privilegedcontrolpath(path: string): int
 		"/mnt/msg/pending",
 		"/mnt/msg/approve",
 		"/mnt/msg/deny",
+		"/mnt/wallet/ctl",
+		"/mnt/wallet/pending",
+		"/mnt/wallet/new",
 		"/n/wallet/ctl",
 		"/n/wallet/pending",
 		"/n/wallet/new",
@@ -1857,8 +1860,8 @@ emitmanifestnow(mpath: string, ready: chan of int)
 		if(!strlist_contains(allpaths, "/mnt/speech"))
 			allpaths = "/mnt/speech" :: allpaths;
 	if(findtool("wallet") != nil || findtool("payfetch") != nil)
-		if(!strlist_contains(allpaths, "/n/wallet"))
-			allpaths = "/n/wallet" :: allpaths;
+		if(!strlist_contains(allpaths, "/mnt/wallet"))
+			allpaths = "/mnt/wallet" :: allpaths;
 	for(tl3 := toolnames; tl3 != nil; tl3 = tl tl3)
 		allpaths = addtoolpaths(allpaths, hd tl3);
 	caps := ref NsConstruct->Capabilities(
@@ -1925,10 +1928,10 @@ applynsrestriction(invokedtool: string): string
 	if(invokedtool == "say" || invokedtool == "hear")
 		if(!strlist_contains(allpaths, "/mnt/speech"))
 			allpaths = "/mnt/speech" :: allpaths;
-	# Auto-grant /n/wallet when wallet or payfetch tool is registered.
+	# Auto-grant /mnt/wallet when wallet or payfetch tool is registered.
 	if(invokedtool == "wallet" || invokedtool == "payfetch")
-		if(!strlist_contains(allpaths, "/n/wallet"))
-			allpaths = "/n/wallet" :: allpaths;
+		if(!strlist_contains(allpaths, "/mnt/wallet"))
+			allpaths = "/mnt/wallet" :: allpaths;
 	for(tn := toolnames; tn != nil; tn = tl tn)
 		allpaths = addtoolpaths(allpaths, hd tn);
 	writepaths := genwritepaths();

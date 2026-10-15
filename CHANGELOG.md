@@ -44,6 +44,16 @@ All notable changes to InferNode are documented in this file.
   `/n/speech/say` or `/n/speech/ctl` now write `/mnt/speech/say` and
   `/mnt/speech/ctl`; a remote speech host exports and mounts
   `/mnt/speech` (INFR-403).
+- **wallet9p mounts at `/mnt/wallet`, not `/n/wallet`.** It invents its
+  own schema, so it belongs under `/mnt` (docs/NAMESPACE-LAYOUT.md). The
+  wallet tool, payfetch, x402 and wm/wallet follow it. An agent granted
+  `/mnt/wallet` sees the same narrowed view as before (accounts, `default`,
+  `network`, and in each account only its proposal and read files). The
+  trusted controls under both names stay ungrantable. A path beneath
+  `/mnt/wallet` grants nothing, and nsconstruct no longer lets a `/mnt`
+  path it declined come back as an extra root. Scripts that write
+  `/n/wallet/ctl` or read `/n/wallet/<account>/...` now use `/mnt/wallet`
+  (INFR-400).
 
 ## [0.7.0] - 2026-10-13
 

@@ -33,17 +33,17 @@ sleep 1
 sleep 2
 
 echo '=== 1. create account ==='
-echo 'eth ethereum e2e-test' > /n/wallet/new
-cat /n/wallet/new
+echo 'eth ethereum e2e-test' > /mnt/wallet/new
+cat /mnt/wallet/new
 
 echo '=== 2. read address ==='
-cat /n/wallet/e2e-test/address
+cat /mnt/wallet/e2e-test/address
 
 echo '=== 3. read chain ==='
-cat /n/wallet/e2e-test/chain
+cat /mnt/wallet/e2e-test/chain
 
 echo '=== 4. query balance (Base Sepolia RPC) ==='
-cat /n/wallet/e2e-test/balance
+cat /mnt/wallet/e2e-test/balance
 
 echo '=== 5. check factotum key ==='
 cat /mnt/factotum/ctl

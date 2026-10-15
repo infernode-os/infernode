@@ -52,8 +52,14 @@ Enable 9P protocol tracing.
 Enable verbose server logging.
 .TP
 .B -N
-Record that the agent namespace has NODEVS applied. This metadata must match
-the namespace constructed by the trusted launcher.
+Accepted for compatibility and ignored.
+.B /tool/meta/nodevs
+is always
+.BR set :
+every tool runs with NODEVS applied
+.RI ( exec
+applies it in its own wrapper, after opening its wait file),
+and a call whose NODEVS cannot be applied is refused.
 .TP
 .BI -a " activity"
 Set the activity identity used for scratch and staged writes.
@@ -77,8 +83,8 @@ Add an ordinary filesystem capability. Repeat as needed.
 .SH EXAMPLES
 .PP
 .nf
-	tools9p -N read list find grep
-	tools9p -N -p /mnt/msg:ro -p /mnt/msg/draft:rw read write
+	tools9p read list find grep
+	tools9p -p /mnt/msg:ro -p /mnt/msg/draft:rw read write
 	nsaudit -m /tool
 .fi
 .SH FILES

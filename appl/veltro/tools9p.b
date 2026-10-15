@@ -104,11 +104,13 @@ activityid := 0;           # Activity ID this tools9p serves (-a flag)
 mountpt_g := "/tool";      # This instance's mount point (set from -m flag)
 verbose := 0;              # Verbose logging (-v flag); forwarded to child lucibridge
 # Agent metadata exposed read-only at /tool/meta/ for nsaudit (INFR-18).
-# Declared by whoever launches this tools9p — tools9p cannot observe the
-# agent process's own pgrp. Defaults are the honest top-level state; the
-# provisioning path passes the child values (see provisionchild).
+# The role is declared by whoever launches this tools9p; the provisioning
+# path passes the child value (see provisionchild).
 agentrole := "toplevel";   # "toplevel" | "child" (-r flag)
-agentnodevs := "unset";    # "set" | "unset" (-N flag sets it)
+# Not declared: every tool this server runs is run by asyncexec, which
+# applies NODEVS (exec's wrapper applies its own) or refuses the call, so
+# no tool reached through /tool can attach a device (INFR-456).
+agentnodevs: con "set";
 vers: int;
 
 # Shadow directories for per-invocation namespace restriction
@@ -208,7 +210,7 @@ usage()
 	sys->fprint(stderr, "  -D            Enable 9P debug tracing\n");
 	sys->fprint(stderr, "  -v            Verbose logging (forwarded to child lucibridge)\n");
 	sys->fprint(stderr, "  -r role       Agent role for /tool/meta: toplevel (default) or child\n");
-	sys->fprint(stderr, "  -N            Agent namespace has NODEVS applied (/tool/meta/nodevs=set)\n");
+	sys->fprint(stderr, "  -N            Accepted and ignored: tools always run with NODEVS\n");
 	sys->fprint(stderr, "  -m mountpoint Mount point (default: /tool)\n");
 	sys->fprint(stderr, "  -b tools      Delegation budget: the maximum tool set a child/subagent\n");
 	sys->fprint(stderr, "                may ever be granted (comma-separated; children narrow, never expand)\n");
@@ -277,7 +279,7 @@ init(nil: ref Draw->Context, args: list of string)
 				raise "fail:usage";
 			}
 			agentrole = rarg;
-		'N' =>	agentnodevs = "set";
+		'N' =>	;	# nodevs is a fact of asyncexec, not a declaration
 		'm' =>	mountpt = arg->earg();
 		'p' =>
 			parg := arg->earg();
@@ -1675,12 +1677,10 @@ provisionparse(args: string): (int, string, list of string, string)
 	rargs = "-m" :: rargs;
 	rargs = string id :: rargs;
 	rargs = "-a" :: rargs;
-	# Child agents run with NODEVS applied in the spawn/child path, so the
-	# provisioned tools9p declares role=child, nodevs=set at /tool/meta for
+	# The provisioned tools9p declares role=child at /tool/meta for
 	# nsaudit (INFR-18).
 	rargs = "child" :: rargs;
 	rargs = "-r" :: rargs;
-	rargs = "-N" :: rargs;
 	if(verbose)
 		rargs = "-v" :: rargs;
 	rargs = "tools9p" :: rargs;

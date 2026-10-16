@@ -117,6 +117,7 @@ Block*	mem2bl(uchar*, int);
 int		memusehigh(void);
 int		memlow(void);
 int		memlowpass(int);
+ulong		heapactivity(void);
 void		mkqid(Qid*, vlong, ulong, int);
 Qid	mkuqid(Chan*, Uqid*);
 Chan*		mntauth(Chan*, char*);

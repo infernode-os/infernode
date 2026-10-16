@@ -180,9 +180,12 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
-        for d in dis acme xenith lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # appl: the source, and the .sbl files beside it that the debugger and
+        # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+        find "$STAGE/appl" -name '*.dis' -delete
 
         # tmp directory (needed by profile)
         mkdir -p "$STAGE/tmp"
@@ -475,9 +478,12 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Runtime tree into resources/
-        for d in dis acme xenith lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
+        # appl: the source, and the .sbl files beside it that the debugger and
+        # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+        find "$STAGE/resources/appl" -name '*.dis' -delete
         mkdir -p "$STAGE/resources/tmp"
 
         # mkconfig and mkfiles
@@ -695,9 +701,12 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
-        for d in dis acme xenith lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # appl: the source, and the .sbl files beside it that the debugger and
+        # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+        find "$STAGE/appl" -name '*.dis' -delete
 
         # tmp directory (needed by profile)
         mkdir -p "$STAGE/tmp"
@@ -988,9 +997,12 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Runtime tree into resources/
-        for d in dis acme xenith lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
+        # appl: the source, and the .sbl files beside it that the debugger and
+        # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+        find "$STAGE/resources/appl" -name '*.dis' -delete
         mkdir -p "$STAGE/resources/tmp"
 
         # mkconfig and mkfiles
@@ -1225,9 +1237,12 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Runtime tree goes in Contents/Resources/
-        for d in dis acme xenith lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$RESOURCES/"
         done
+        # appl: the source, and the .sbl files beside it that the debugger and
+        # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+        find "$RESOURCES/appl" -name '*.dis' -delete
         mkdir -p "$RESOURCES/tmp" "$RESOURCES/usr/inferno/secstore" "$RESOURCES/usr/inferno/tmp"
 
         # Set distribution defaults for LLM config
@@ -1515,9 +1530,12 @@ jobs:
         "$ROOT/tools/verify-dis-build.sh"
 
         # Shared runtime tree
-        for d in dis acme xenith lib fonts module services locale usr mnt; do
+        for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # appl: the source, and the .sbl files beside it that the debugger and
+        # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+        find "$STAGE/appl" -name '*.dis' -delete
 
         # tmp directory (needed by profile)
         mkdir -p "$STAGE/tmp"

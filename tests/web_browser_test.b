@@ -415,6 +415,60 @@ testNoAction(t: ref T)
 	t.assertseq(nav(t, sys->sprint("click %d", go)), "done " + DIR + "noaction.html?q=x", "submitted to the page itself");
 }
 
+# A page left is let go: a long page, then about:blank, and the heap
+# back near where it was.  The layout kept its last documents' boxes
+# (for frames) and its words, so a session's last pages stayed whole.
+testLeftPageFreed(t: ref T)
+{
+	f := "/tmp/web_browser_long.html";
+	fd := sys->create(f, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.fatal(sys->sprint("create %s: %r", f));
+	sys->fprint(fd, "<!doctype html><title>Long</title><body>");
+	words := "";
+	for(i := 0; i < 25; i++)
+		words += sys->sprint(" word%d", i);
+	for(i = 0; i < 2000; i++)
+		sys->fprint(fd, "<p>%d%s</p>\n", i, words);
+	fd = nil;
+	t.assert(prefix(nav(t, "open about:blank"), "done"), "start blank");
+	sys->sleep(3000);
+	h0 := heap();
+	t.assertseq(nav(t, "open file://" + f), "done file://" + f, "load the long page");
+	h1 := heap();
+	t.assert(prefix(nav(t, "open about:blank"), "done"), "leave it");
+	sys->sleep(3000);	# (its boxes are cycles: the collector's, when idle)
+	h2 := heap();
+	t.log(sys->sprint("heap: blank %d MB, long page %d MB, blank again %d MB", h0>>20, h1>>20, h2>>20));
+	t.assert(h1 - h0 > 20<<20, sys->sprint("the page took memory (%d MB)", (h1 - h0)>>20));
+	t.assert(h2 - h0 < (h1 - h0)/4, sys->sprint("and gave it back: %d of %d MB still held", (h2 - h0)>>20, (h1 - h0)>>20));
+	sys->remove(f);
+}
+
+# the heap pool in use, in bytes
+heap(): int
+{
+	fd := sys->open("/dev/memory", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	(nil, ls) := sys->tokenize(string buf[0:n], "\n");
+	for(; ls != nil; ls = tl ls) {
+		(k, w) := sys->tokenize(hd ls, " ");
+		if(k >= 8) {
+			l := w;
+			for(j := 0; j < 7; j++)
+				l = tl l;
+			if(hd l == "heap")
+				return int hd w;
+		}
+	}
+	return 0;
+}
+
 postname: string;
 
 # The posted session, mounted from a separate name space as an agent's
@@ -659,6 +713,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("LeaveEarly", testLeaveEarly);
 	run("Posted", testPosted);
 	run("Console", testConsole);
+	run("LeftPageFreed", testLeftPageFreed);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

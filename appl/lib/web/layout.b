@@ -198,6 +198,41 @@ reusefor(d: ref Doc, c: ref Computed)
 
 reuseon := 1;
 
+# A document no longer shown: the boxes kept to give back, its words,
+# the caches answered from its tree.  Kept, a session's last pages
+# stayed whole (reuses keeps four documents, for a page's frames): a
+# long page left for about:blank held 85 MB.
+forgetdoc(d: ref Doc)
+{
+	if(d == nil)
+		return;
+	keep: list of ref Reuse;
+	for(l := reuses; l != nil; l = tl l)
+		if((hd l).doc != d)
+			keep = hd l :: keep;
+	reuses = nil;
+	for(; keep != nil; keep = tl keep)
+		reuses = hd keep :: reuses;
+	if(reuse != nil && reuse.doc == d)
+		reuse = nil;
+	if(tsegdoc == d) {
+		tsegs = nil;
+		tsegdoc = nil;
+	}
+	if(facedoc == d) {
+		faces = array[Nfacecache] of list of (ref St, ref Typeface);
+		facedoc = nil;
+	}
+	if(langdoc == d) {
+		langs = nil;
+		langdoc = nil;
+	}
+	if(hroot != nil && hroot.doc == d)
+		hroot = nil;
+	if(proot != nil && proot.doc == d)
+		proot = nil;
+}
+
 setreuse(on: int)
 {
 	reuseon = on;
@@ -2076,6 +2111,12 @@ lay(root: ref Box, width, height: int)
 	if(curdoc != facedoc) {
 		faces = array[Nfacecache] of list of (ref St, ref Typeface);	# another page's styles, kept alive by nothing else
 		facedoc = curdoc;
+	}
+	if(curdoc != tsegdoc) {
+		# another page's words: their items hold its boxes, and so the
+		# page (left for about:blank, all 190 MB of a long page stayed)
+		tsegs = nil;
+		tsegdoc = curdoc;
 	}
 	laygen++;
 	memos = nil;

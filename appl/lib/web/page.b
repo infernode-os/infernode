@@ -1170,8 +1170,18 @@ Pg.close(p: self ref Pg)
 		else
 			r = hd l :: r;
 	owned = r;
-	if(p == fontowner)
+	if(p == fontowner) {
+		# its faces are closed when the next page's come; the page
+		# itself not kept for that (about:blank loads none)
+		fontowner = nil;
 		fontownerclosed = 1;
+	}
+	# and what layout kept of it, and its background images
+	layout->forgetdoc(p.doc);
+	if(bgpage == p) {
+		layout->clearbgimages();
+		bgpage = nil;
+	}
 	punlock();
 }
 

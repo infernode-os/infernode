@@ -137,6 +137,7 @@ Layout: module
 	pinned:	fn(root: ref Box): int;		# 1 if a box stays where it is in the window as the page scrolls (fixed, sticky)
 	boxat:	fn(root: ref Box, p: Draw->Point): (int, ref Box);	# node and box under p
 	boxes:	fn(root: ref Box, n: int): list of ref Box;	# the boxes node n generated
+	forgetdoc:	fn(d: ref Dom->Doc);	# a document shown no more: what was kept of it (its boxes for reuse, its words) let go
 	dump:	fn(root: ref Box): string;
 	# whether build gives back boxes kept from the last build of the same
 	# document where nothing under them changed (on unless set off)

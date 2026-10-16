@@ -476,7 +476,7 @@ boot runs verbatim is a persistence hook for anything that can write
 the file — however convenient it was to generate at install time.
 
 **Placement is shipping.** The release copy loop packs `dis lib fonts
-module services locale usr mnt` into every tarball, .app, and .zip. A
+man doc icons module services locale usr mnt n appl` into every tarball, .app, and .zip. A
 "dev-only" helper placed under `lib/` is in every user's install — its
 placement *is* a release decision. Development-rig material lives in the
 external `infernode-os/infernode-escape-room` repository; CI and release

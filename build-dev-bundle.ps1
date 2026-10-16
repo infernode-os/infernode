@@ -70,11 +70,14 @@ Copy-Item "$ROOT\Nt\amd64\bin\mk.exe"    "$OutDir\Nt\amd64\bin\"
 # Runtime tree. usr\ and mnt\ excluded by default: usr\ contains
 # per-user state (secstore data, test artefacts) that shouldn't ship in
 # a release bundle; profile creates the needed subdirs at boot.
-foreach ($d in @("dis", "lib", "fonts", "module", "services", "locale")) {
+foreach ($d in @("dis", "lib", "fonts", "man", "doc", "icons", "module", "services", "locale", "n", "appl")) {
     if (Test-Path "$ROOT\$d") {
         Copy-Item -Recurse "$ROOT\$d" "$OutDir\$d"
     }
 }
+# appl: the source, and the .sbl files beside it that the debugger and
+# profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+Get-ChildItem -Recurse -Filter *.dis "$OutDir\appl" | Remove-Item
 
 # tmp directory referenced by lib/sh/profile.
 New-Item -ItemType Directory -Force -Path "$OutDir\tmp" | Out-Null

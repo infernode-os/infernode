@@ -188,6 +188,14 @@ jobs:
         chmod +x tests/host/charon_home_test.sh
         ROOT=. bash tests/host/charon_home_test.sh
 
+    - name: Check releases ship the system's directories
+      run: |
+        # man, doc, icons, appl (without its .dis) and n, in every
+        # release package; without n a fresh install's first start
+        # made the user's home inside the package.
+        chmod +x tests/host/release_dirs_test.sh
+        ROOT=. bash tests/host/release_dirs_test.sh
+
     - name: Run codex-gate preflight checks
       run: |
         # INFR-413: the gateway pins the Codex CLI's plugin, app, MCP, skill,

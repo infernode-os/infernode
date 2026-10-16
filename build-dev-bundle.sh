@@ -44,9 +44,12 @@ cp "$ROOT/MacOSX/arm64/bin/limbo" "$MACOS/tools/"
 cp "$ROOT/MacOSX/arm64/bin/mk" "$MACOS/tools/"
 
 # Runtime tree
-for d in dis lib fonts module services locale usr mnt; do
+for d in dis lib fonts man doc icons module services locale usr mnt n appl; do
 	[ -d "$ROOT/$d" ] && cp -a "$ROOT/$d" "$RESOURCES/"
 done
+# appl: the source, and the .sbl files beside it that the debugger and
+# profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
+find "$RESOURCES/appl" -name '*.dis' -delete
 mkdir -p "$RESOURCES/tmp" "$RESOURCES/usr/inferno/secstore" "$RESOURCES/usr/inferno/tmp"
 
 # Bundled default LLM config — gets overridden by the writable overlay

@@ -2139,7 +2139,15 @@ Keyring_auth(void *fp)
 		goto out;
 	}
 	if(n != pklen){
-		err = "bad ml-kem public key length";
+		/* say which side is in CNSA mode: the policy is per node, set
+		 * by CNSAMODE where each was started, and a node started
+		 * another way (a terminal's shell, not launchd) can differ */
+		if(n == MLKEM1024_PKLEN)
+			err = "bad ml-kem public key length: the peer is in CNSA mode (ML-KEM-1024), this node is not; set CNSAMODE alike";
+		else if(n == MLKEM768_PKLEN)
+			err = "bad ml-kem public key length: this node is in CNSA mode (ML-KEM-1024), the peer is not; set CNSAMODE alike";
+		else
+			err = "bad ml-kem public key length";
 		goto out;
 	}
 	memmove(hisek, buf, pklen);

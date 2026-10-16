@@ -8,7 +8,7 @@ implement ToolTask;
 #
 # Commands:
 #   create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]
-#          [category=<text>] [model=<name>] [agenttype=<type>]
+#          [category=<text>] [agenttype=<type>]
 #          [brief=<text>] [instructions=<text>]
 #   status <id>
 #   list
@@ -16,7 +16,7 @@ implement ToolTask;
 #
 # Unknown create args are rejected loudly (with the valid set listed) so the
 # caller — typically an LLM — gets a clear signal instead of having silently
-# dropped fields. Allowed model names live in MODELS; "" inherits from parent.
+# dropped fields. model= is taken and ignored: the model is the server's.
 # agenttype= names a prompt under /lib/veltro/agents/<type>.txt and sets
 # category-specific defaults (see AGENT_DEFAULTS below).
 #
@@ -46,18 +46,13 @@ UI_MOUNT: con "/mnt/ui";
 # Initialized in init() since Limbo `con` does not support array literals.
 createkeys: list of string;
 
-# Recognised models. "" means "inherit parent session's model" (current
-# default behaviour). Keep in sync with serve-llm's backend registry.
-models: list of string;
-
 # Per-agenttype defaults applied when a field is omitted. Fields the caller
 # supplies always win — agenttype only fills blanks. Each tuple is
-# (name, default-model, default-tools-csv).
+# (name, unused, default-tools-csv).
 #
-# coder: backed by the Daedalus fine-tune (Limbo-capable), with the tool
-# surface a coding loop typically needs.
+# coder: the tool surface a coding loop needs (limbo writes and compiles).
 # research: a web-research loop (decompose -> fan out -> synthesize -> cite),
-# backed by gpt-oss with search/fetch and spawn for parallel sub-questions.
+# with search/fetch and spawn for parallel sub-questions.
 # verify: an adversarial "run it, don't read it" checker (exec + read tools,
 # no write/edit — read-only on the project) that emits a PASS/FAIL/PARTIAL
 # verdict backed by captured output.
@@ -77,12 +72,13 @@ init(): string
 	createkeys = "label" :: "tools" :: "paths" :: "urgency" :: "brief" ::
 		"instructions" :: "category" :: "model" :: "agenttype" :: nil;
 
-	models = "gpt-oss" :: "daedalus" :: "haiku" :: "sonnet" :: "opus" :: nil;
-
+	# An agent type is a prompt and its tools.  Not a model: the model is
+	# the server's (llmsrv -M), and a task that named one the server did
+	# not have failed outright ("daedalus" for coder, on a server of one).
 	agentdefs =
-		("coder", "daedalus", "read,write,edit,find,grep,list,limbo") ::
-		("research", "gpt-oss", "websearch,webfetch,read,find,grep,memory,plan,todo,gap,spawn,present") ::
-		("verify", "gpt-oss", "read,list,find,search,grep,exec,plan,todo,gap,present") ::
+		("coder", "", "read,write,edit,find,grep,list,limbo") ::
+		("research", "", "websearch,webfetch,read,find,grep,memory,plan,todo,gap,spawn,present") ::
+		("verify", "", "read,list,find,search,grep,exec,plan,todo,gap,present") ::
 		nil;
 
 	return nil;
@@ -98,18 +94,17 @@ doc(): string
 	return "task - Create and manage delegated AI tasks\n\n" +
 		"Commands:\n" +
 		"  create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]\n" +
-		"         [category=<text>] [model=<name>] [agenttype=<type>]\n" +
+		"         [category=<text>] [agenttype=<type>]\n" +
 		"         [brief=<text>] [instructions=<text>]\n" +
 		"      Create new task with isolated tools and conversation.\n" +
 		"      Tools validated against delegation budget.\n" +
 		"      instructions= sets structured directives injected into the TA system prompt.\n" +
-		"      model= selects the LLM backing the new activity (gpt-oss, daedalus,\n" +
-		"        haiku, sonnet, opus). Omit to inherit parent session's model.\n" +
+		"      The model is the server's; a task cannot choose one (model= is ignored).\n" +
 		"      agenttype= picks a prompt under /lib/veltro/agents/<type>.txt and\n" +
-		"        fills sensible defaults (e.g. agenttype=coder ⇒ model=daedalus,\n" +
+		"        its tools (e.g. agenttype=coder ⇒\n" +
 		"        tools=read,write,edit,find,grep,list,limbo).\n" +
 		"      Unknown args are rejected with the list of valid keys.\n" +
-		"      Put tools=/paths=/model=/agenttype= before brief=/instructions=.\n" +
+		"      Put tools=/paths=/agenttype= before brief=/instructions=.\n" +
 		"      brief=/instructions= consume the rest of the line.\n" +
 		"  status <id>     Show task status and urgency\n" +
 		"  list            List all active tasks\n" +
@@ -121,7 +116,7 @@ doc(): string
 		"  task create label=Review tools=read,list,find,grep\n" +
 		"  task create label=Editor instructions=\"Open /lib/veltro/system.txt and edit it\"\n" +
 		"  task create label=BugFix agenttype=coder brief=\"fix the bug in cat.b\"\n" +
-		"  task create label=Refactor model=daedalus tools=read,write,edit\n" +
+		"  task create label=Refactor tools=read,write,edit\n" +
 		"  task list\n" +
 		"  task status 2\n" +
 		"  task close 2";
@@ -136,7 +131,7 @@ schema(): string
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, result, close, promote, revert. To make a task do work, describe it in args brief=/instructions= at create time. When a task reports done, use 'result <id>' to get its final answer back — do NOT re-create the task to retrieve output.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [model=<name>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/result/close/promote/revert: the task id. Omit for list.\"}" +
+				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/result/close/promote/revert: the task id. Omit for list.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -316,17 +311,15 @@ docreate(args: string): string
 		return "error: label contains no safe display text";
 
 	agenttype := str->tolower(getattr(attrs, "agenttype"));
-	(deftools, defmodel) := agentdefaults(agenttype);
-	if(agenttype != "" && deftools == "" && defmodel == "")
+	(deftools, nil) := agentdefaults(agenttype);
+	if(agenttype != "" && deftools == "")
 		return sys->sprint("error: unknown agenttype '%s' (valid: %s).",
 			agenttype, knownagenttypes());
 
-	model := getattr(attrs, "model");
-	if(model == "" && defmodel != "")
-		model = defmodel;
-	if(model != "" && !knownmodel(model))
-		return sys->sprint("error: unknown model '%s' (valid: %s).",
-			model, joinmodels());
+	# model= is taken and ignored: the model is the server's.
+	modelnote := "";
+	if(getattr(attrs, "model") != "")
+		modelnote = " (model= ignored: the model is the server's)";
 
 	toolsarg := getattr(attrs, "tools");
 	if(toolsarg == "" && deftools != "")
@@ -430,15 +423,6 @@ docreate(args: string): string
 	# reads these files at startup (before opening the LLM session). Files
 	# are only written when explicitly set so the absence still means
 	# "inherit parent session's model" / "use default task prompt".
-	if(model != "") {
-		mpath := sys->sprint("/tmp/veltro/tasks/model.%d", newid);
-		mfd := sys->create(mpath, Sys->OWRITE, 8r644);
-		if(mfd != nil) {
-			mb := array of byte model;
-			sys->write(mfd, mb, len mb);
-			mfd = nil;
-		}
-	}
 	if(agenttype != "") {
 		apath := sys->sprint("/tmp/veltro/tasks/agenttype.%d", newid);
 		afd := sys->create(apath, Sys->OWRITE, 8r644);
@@ -494,7 +478,7 @@ docreate(args: string): string
 			return sys->sprint("error: task not created — activity %d %s", newid, pstatus);
 		}
 		if(pstatus == "ready")
-			return sys->sprint("created activity %d: %s", newid, label);
+			return sys->sprint("created activity %d: %s%s", newid, label, modelnote);
 		sys->sleep(50);
 	}
 	writefile("/tool/provision", "cancel " + string newid);
@@ -818,16 +802,6 @@ joinstrs(l: list of string, sep: string): string
 		first = 0;
 	}
 	return r;
-}
-
-knownmodel(m: string): int
-{
-	return strlistcontains(models, m);
-}
-
-joinmodels(): string
-{
-	return joinstrs(models, ", ");
 }
 
 # Look up agenttype defaults. Returns (tools, model). Both empty if unknown.

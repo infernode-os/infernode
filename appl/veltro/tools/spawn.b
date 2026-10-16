@@ -250,7 +250,6 @@ doc(): string
 		"  tools=        Comma-separated tools to grant (REQUIRED)\n" +
 		"  paths=        Comma-separated paths to expose\n" +
 		"  shellcmds=    Comma-separated shell commands to allow\n" +
-		"  model=        LLM model (default: haiku)\n" +
 		"  temperature=  LLM temperature 0.0-2.0 (default: 0.7)\n" +
 		"  thinking=     Thinking budget: off, max, or token count\n" +
 		"  agenttype=    Load prompt from /lib/veltro/agents/<type>.txt\n" +
@@ -746,10 +745,9 @@ buildagent(o: ref JValue): (ref SubSpec, string)
 	spec.at_ms = atms;
 	spec.every_ms = evms;
 
-	# Default to the BACKEND's own model (empty => llmsrv default) rather than a
-	# hardcoded Claude-era "haiku" — a non-Anthropic backend (e.g. a local
-	# gpt-oss server) 404s on "haiku". An explicit "model" in the args still wins.
-	llmmodel := str->tolower(jfirststr(o, "model" :: nil));
+	# The model is the server's (llmsrv -M): a subagent never chooses one,
+	# and a "model" in the args is ignored.
+	llmmodel := "";
 	llmtemp := jvreal(o.get("temperature"), 0.7);
 	if(llmtemp < 0.0)
 		llmtemp = 0.0;
@@ -936,7 +934,7 @@ parsespecsection(section: string): (ref SubSpec, string)
 	spec.at_ms = 0;
 	spec.every_ms = 0;
 
-	llmmodel   := "haiku";
+	llmmodel   := "";	# the server's; model= is ignored
 	llmtemp    := 0.7;
 	llmsystem  := "";
 	llmthink   := 0;
@@ -961,7 +959,7 @@ parsespecsection(section: string): (ref SubSpec, string)
 				spec.shellcmds = str->tolower(hd clist) :: spec.shellcmds;
 			spec.shellcmds = reverse(spec.shellcmds);
 		} else if(hasprefix(tv, "model=")) {
-			llmmodel = str->tolower(tv[6:]);
+			;	# the model is the server's
 		} else if(hasprefix(tv, "temperature=")) {
 			llmtemp = real tv[12:];
 			if(llmtemp < 0.0)

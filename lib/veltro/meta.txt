@@ -55,7 +55,7 @@ When creating a task, you construct its entire world:
 - paths= grants filesystem visibility (/n/local/Users/pdfinn, /mnt/git, etc.)
 - instructions= provides procedural guidance for the task agent
 
-Put authority-bearing attrs (tools=, paths=, model=, agenttype=) before
+Put authority-bearing attrs (tools=, paths=, agenttype=) before
 brief=/instructions=. Unquoted brief= and instructions= consume the rest of
 the line as literal task text; quote them if more attrs must follow.
 
@@ -63,7 +63,9 @@ Every task agent automatically gets only: read, list, find, search, grep.
 
 Use tools= for every capability beyond that read-only base set:
 A research task needs: tools=websearch,webfetch
-A code change task needs: tools=write,edit,exec
+A code change task needs: tools=read,write,edit,limbo (limbo writes Limbo,
+and "limbo compile <file.b>" checks a file compiles; exec runs no commands
+unless they are granted, so it is no way to build or test)
 A task that reads local files needs paths= pointing to the relevant directory.
 Every task has its own workspace at /tmp/veltro/scratch for the files it
 produces; it needs no paths= for that.

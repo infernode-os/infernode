@@ -1080,14 +1080,6 @@ configuresession(): (string, string)
 		else
 			ctl("brief " + substall(substall(BRIDGE_SUFFIX, "%AGENT%", agentname), "%OS%", osname));
 	} else {
-		modelname := agentlib->strip(agentlib->readfile(
-			sys->sprint("/tmp/veltro/tasks/model.%d", actid)));
-		if(modelname != "") {
-			if(ctl("model " + modelname) >= 0)
-				log("session model set to " + modelname);
-			else
-				log("session model write failed for " + modelname);
-		}
 		atype = agentlib->strip(agentlib->readfile(
 			sys->sprint("/tmp/veltro/tasks/agenttype.%d", actid)));
 		role := "task";

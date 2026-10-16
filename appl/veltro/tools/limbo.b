@@ -91,7 +91,10 @@ doc(): string
 		"produces compileable code (10/10 on the same scenarios).\n\n" +
 		"Example:\n" +
 		"  limbo a Cat command that copies stdin to stdout if argv is " +
-		"empty, or concatenates each named file to stdout otherwise";
+		"empty, or concatenates each named file to stdout otherwise\n\n" +
+		"To check a Limbo file you have (written, edited, been given):\n" +
+		"  limbo compile /tmp/veltro/scratch/cat.b\n" +
+		"reports whether it compiles, with the compiler's errors.";
 }
 
 # Returns a non-empty token-name if the description looks like code
@@ -197,11 +200,11 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"limbo\"," +
-		"\"description\":\"Author a complete, compilable Limbo source file. Delegates to a dedicated Limbo-trained model. Use this whenever the user asks for Limbo, .b files, or any code that must run on Inferno \\u2014 DO NOT attempt to write Limbo yourself.\"," +
+		"\"description\":\"Author a complete, compilable Limbo source file. Delegates to a dedicated Limbo-trained model. Use this whenever the user asks for Limbo, .b files, or any code that must run on Inferno \\u2014 DO NOT attempt to write Limbo yourself. Also checks that a Limbo file compiles: compile <path>.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies.\"}" +
+				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies. Or, to check a Limbo file you already have: compile <absolute path of the .b file>, which reports whether it compiles, with the compiler's errors.\"}" +
 			"}," +
 			"\"required\":[\"description\"]" +
 		"}" +
@@ -223,7 +226,17 @@ exec(args: string): string
 		desc = desc[:len desc - 1];
 
 	if(desc == "")
-		return "error: usage: limbo <description-of-what-to-write>";
+		return "error: usage: limbo <description-of-what-to-write> | limbo compile <file.b>";
+
+	# compile <path>: check a Limbo source file the agent has (written,
+	# edited, been given) with the hosted compiler.  The way to know code
+	# compiles without a shell: no command runs but the compiler.
+	if(len desc > 8 && desc[0:8] == "compile ") {
+		path := desc[8:];
+		while(len path > 0 && (path[0] == ' ' || path[0] == '\t'))
+			path = path[1:];
+		return compilefile(path);
+	}
 
 	# 0. Args validation — orchestrators trained for code generation
 	#    sometimes pass their own (wrong-language) source as args
@@ -364,14 +377,27 @@ gate(resp: string, sid: string): string
 	if(fd == nil || sys->write(fd, b := array of byte code, len b) != len b)
 		return gatenote(sys->sprint("not compiled: cannot write %s: %r", srcpath));
 	fd = nil;
+	r := compileat(srcpath, sid, "The source above compiles.",
+		"The emitted Limbo did not compile. Re-call /tool/limbo with a description that avoids the above errors, or quote the failing line back to the user if the error is unfixable.");
+	sys->remove(srcpath);
+	return r;
+}
 
-	dispath := srcpath[:len srcpath - 2] + ".dis";
+# Compile the Limbo source at srcpath with the hosted compiler, into a
+# scratch .dis that is removed after, and say what happened.
+compileat(srcpath, sid, passmsg, failmsg: string): string
+{
+	dispath := sys->sprint("%s/limbo-gate-%s.dis", GATEDIR, sid);
+	incdir := "/";
+	for(k := len srcpath - 1; k > 0; k--)
+		if(srcpath[k] == '/') {
+			incdir = srcpath[0:k];
+			break;
+		}
 
 	limbo := load Command "/dis/limbo.dis";
-	if(limbo == nil) {
-		sys->remove(srcpath);
+	if(limbo == nil)
 		return gatenote(sys->sprint("not compiled: cannot load /dis/limbo.dis: %r"));
-	}
 
 	# The compiler's diagnostics (its output and its error output) go to a
 	# pipe that drain() empties as they come, so a long list of errors
@@ -381,7 +407,6 @@ gate(resp: string, sid: string): string
 	saved1 := sys->dup(1, -1);
 	saved2 := sys->dup(2, -1);
 	if(sys->pipe(p) < 0 || saved1 < 0 || saved2 < 0) {
-		sys->remove(srcpath);
 		return gatenote(sys->sprint("not compiled: cannot capture the compiler's errors: %r"));
 	}
 	diag := chan[1] of string;
@@ -394,7 +419,7 @@ gate(resp: string, sid: string): string
 	ok := 1;
 	raised := "";
 	{
-		limbo->init(nil, "limbo" :: "-I" :: "/module" :: "-o" :: dispath :: srcpath :: nil);
+		limbo->init(nil, "limbo" :: "-I" :: "/module" :: "-I" :: incdir :: "-o" :: dispath :: srcpath :: nil);
 	} exception e {
 	"*" =>
 		ok = 0;
@@ -410,19 +435,30 @@ gate(resp: string, sid: string): string
 	if(stok < 0)
 		ok = 0;
 	sys->remove(dispath);
-	sys->remove(srcpath);
 	if(errtxt == "" && raised != "")
 		errtxt = raised + "\n";
 
 	if(ok)
-		return "<gate>\nstatus: compiled\ncompiler: hosted limbo (/dis/limbo.dis)\n</gate>\n" +
-			"The source above compiles.";
+		return "<gate>\nstatus: compiled\ncompiler: hosted limbo (/dis/limbo.dis)\n</gate>\n" + passmsg;
 	return "<gate>\n" +
 		"status: failed\n" +
 		"compiler: hosted limbo (/dis/limbo.dis)\n" +
 		"stderr:\n" + errtxt +
-		"</gate>\n" +
-		"The emitted Limbo did not compile. Re-call /tool/limbo with a description that avoids the above errors, or quote the failing line back to the user if the error is unfixable.";
+		"</gate>\n" + failmsg;
+}
+
+compilefile(path: string): string
+{
+	if(path == "" || path[0] != '/' || len path < 3 || path[len path - 2:] != ".b")
+		return "error: limbo compile takes the absolute path of a .b file";
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return sys->sprint("error: cannot compile %s: %r", path);
+	if(d.mode & Sys->DMDIR)
+		return "error: " + path + " is a directory";
+	return compileat(path, sys->sprint("c%d", sys->pctl(0, nil)),
+		path + " compiles.",
+		path + " does not compile: fix the lines named above and compile it again.");
 }
 
 drain(fd: ref Sys->FD, out: chan of string)

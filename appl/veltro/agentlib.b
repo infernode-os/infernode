@@ -861,10 +861,42 @@ editargs(inputjson: string): string
 			"args" => return v;	# already positional
 			}
 		}
-		r := path + " " + editquote(old) + " " + editquote(new);
+		r := "-r " + path + " " + editquote(old) + " " + editquote(new);
 		if(all == "true" || all == "all" || all == "1")
 			r += " all";
 		return r;
+	}
+	return inputjson;
+}
+
+# write <path> <content>: a native call's content goes verbatim (-r), as
+# the file is to hold it.
+writeargs(inputjson: string): string
+{
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	pick obj := jv {
+	Object =>
+		path, content: string;
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			case name {
+			"path" => path = v;
+			"content" => content = v;
+			"args" => return v;	# already positional
+			}
+		}
+		if(path == "")
+			return extracttoolargs(inputjson);
+		# tools9p drops one trailing newline from a call's arguments (as
+		# echo leaves it); this one is that, so the file keeps its own.
+		return "-r " + path + " " + content + "\n";
 	}
 	return inputjson;
 }
@@ -890,6 +922,8 @@ calltool(tool, args: string): string
 	# input through unchanged, so this is safe for any caller.
 	if(str->tolower(tool) == "edit")
 		args = editargs(args);
+	else if(str->tolower(tool) == "write")
+		args = writeargs(args);
 	else
 		args = extracttoolargs(args);
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";

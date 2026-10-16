@@ -36,7 +36,7 @@ Llmclient: module
 		messages:       list of ref LlmMessage;
 		prompt:         string;   # empty when toolresults set
 		model:          string;
-		temperature:    real;
+		temperature:    real;     # negative: none sent, the model's own
 		maxtokens:      int;      # 0 = backend default
 		systemprompt:   string;
 		thinkingtokens: int;      # 0=disabled, -1=max, >0=budget

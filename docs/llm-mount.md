@@ -59,7 +59,7 @@ it for next startup.
     ├── ask          # Write prompt, read response
     ├── stream       # Read streaming response chunks
     ├── model        # Read/write model name
-    ├── temperature  # Read/write, 0.0-2.0
+    ├── temperature  # Read/write, 0.0-2.0, or default (the model's own)
     ├── system       # Read/write system prompt
     ├── thinking     # Read/write: "disabled", "max" or a token budget
     ├── prefill      # Read/write assistant response prefill

@@ -13,7 +13,7 @@ implement Llmsrv;
 #           ask          rw: write prompt, read response (blocks until done)
 #           stream       r:  blocking reads return chunks during generation
 #           model        rw: model name (aliases: haiku/sonnet/opus)
-#           temperature  rw: float 0.0-2.0
+#           temperature  rw: float 0.0-2.0, or "default": the model's own
 #           system       rw: system prompt
 #           thinking     rw: "disabled" / "max" / integer
 #           prefill      rw: assistant response prefill
@@ -180,6 +180,7 @@ backend: string;      # "api" or "openai"
 apikey: string;
 apiurl: string;       # Anthropic: hostname; OpenAI: base URL
 defaultmodel: string;
+defaulttemp: real;	# negative: none sent
 autocompactdefault: int;   # default session auto-compact high-water mark
                            # (estimated tokens); -c flag, 0 = disabled.
 defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
@@ -272,6 +273,11 @@ init(nil: ref Draw->Context, args: list of string)
 	# select a model explicitly with -M or the per-session model file.
 	if(backend == "openai" && !modelset)
 		defaultmodel = "";
+	# Current Claude models refuse a request that names a temperature,
+	# so an Anthropic session leaves it to the model until one is set.
+	defaulttemp = 0.7;
+	if(backend == "api")
+		defaulttemp = -1.0;
 
 	# Factotum is preferred. Environment fallback supports direct headless
 	# daemon startup where no interactive factotum/secstore unlock is possible;
@@ -390,7 +396,7 @@ newsession(): ref LlmSession
 		"",            # lastresponse
 		0,             # totaltokens
 		defaultmodel,  # model
-		0.7,           # temperature
+		defaulttemp,   # temperature
 		1024,          # maxtokens (per-session; previously hardcoded 4096
 		               # in llmclient.b, now overridable via /mnt/llm/$id/maxtokens)
 		"",            # systemprompt
@@ -489,6 +495,14 @@ CONTEXTLIMIT: con 200000;
 # /compact themselves (the agent harness, sub-agents) can't grow context unbounded.
 # Clients that own their own compaction policy set the session value to 0.
 DEFAULTAUTOCOMPACT: con 150000;
+
+# A low temperature for a summary, unless the session leaves it to the model.
+summarytemp(t: real): real
+{
+	if(t < 0.0)
+		return t;
+	return 0.3;
+}
 
 # --- Backend call ---
 
@@ -637,7 +651,10 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				srv.reply(styxservers->readbytes(m, array of byte sys->sprint("%.2f\n", sess.temperature)));
+				ts := "default\n";
+				if(sess.temperature >= 0.0)
+					ts = sys->sprint("%.2f\n", sess.temperature);
+				srv.reply(styxservers->readbytes(m, array of byte ts));
 
 			Qsystem =>
 				sess := findsession(sid);
@@ -794,6 +811,11 @@ Serve:
 					break;
 				}
 				tstr := strip(string m.data);
+				if(tstr == "default") {
+					sess.temperature = -1.0;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					break;
+				}
 				temp := parsefloat(tstr);
 				if(temp < 0.0 || temp > 2.0) {
 					srv.reply(ref Rmsg.Error(m.tag, "temperature must be between 0.0 and 2.0"));
@@ -1379,7 +1401,7 @@ compactnow(sess: ref LlmSession): string
 		nil,       # messages
 		"Summarize this conversation concisely, preserving key facts, decisions, file paths, code snippets, and all context needed to continue the work:\n\n" + convtext,
 		sess.model,
-		0.3,       # low temperature for summarization
+		summarytemp(sess.temperature),
 		2048,      # maxtokens (compact: longer than chat default for summary breathing room)
 		"",        # no system prompt
 		0,         # no thinking

@@ -106,8 +106,11 @@ buildanthropicrequest(req: ref AskRequest): string
 	mt := req.maxtokens;
 	if(mt <= 0)
 		mt = 8192;
-	s += sys->sprint("\"max_tokens\":%d,", mt);
-	s += sys->sprint("\"temperature\":%.2f", req.temperature);
+	s += sys->sprint("\"max_tokens\":%d", mt);
+	# A negative temperature is none: the model's own.  Current Claude
+	# models refuse a request that names one.
+	if(req.temperature >= 0.0)
+		s += sys->sprint(",\"temperature\":%.2f", req.temperature);
 
 	# System prompt — cache_control marks it for Anthropic prompt caching.
 	# The cache hierarchy is tools → system → messages; caching the system
@@ -747,8 +750,9 @@ buildopenairequestjson(req: ref AskRequest): string
 	mt := req.maxtokens;
 	if(mt <= 0)
 		mt = 1024;
-	s += sys->sprint("\"max_tokens\":%d,", mt);
-	s += sys->sprint("\"temperature\":%.2f", req.temperature);
+	s += sys->sprint("\"max_tokens\":%d", mt);
+	if(req.temperature >= 0.0)
+		s += sys->sprint(",\"temperature\":%.2f", req.temperature);
 
 	# Stream
 	if(req.streamch != nil)

@@ -147,6 +147,21 @@ testOpenAiGolden(t: ref T)
 	t.assertseq(body, OPENAI_GOLDEN, "openai base: byte-exact request shape");
 }
 
+# ---- a negative temperature is none: the model's own (current Claude
+# models refuse a request that names one) ----
+testNoTemperature(t: ref T)
+{
+	r := basereq();
+	r.temperature = -1.0;
+	body := llmclient->buildanthropicrequest(r);
+	t.assert(parsesok(body), "anthropic, no temperature: valid JSON");
+	t.assert(!contains(body, "temperature"), "anthropic: no temperature sent");
+	t.assert(contains(body, "\"max_tokens\":1024,\"system\""), "anthropic: max_tokens then system");
+	body = llmclient->buildopenairequestjson(r);
+	t.assert(parsesok(body), "openai, no temperature: valid JSON");
+	t.assert(!contains(body, "temperature"), "openai: no temperature sent");
+}
+
 contains(s, sub: string): int
 {
 	if(sub == "")
@@ -193,6 +208,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("AnthropicMalformedSc", testAnthropicMalformedSc);
 	run("AnthropicGolden", testAnthropicGolden);
 	run("OpenAiGolden", testOpenAiGolden);
+	run("NoTemperature", testNoTemperature);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

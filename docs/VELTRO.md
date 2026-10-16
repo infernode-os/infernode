@@ -193,7 +193,7 @@ LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
 /mnt/llm/N/ask          # write a user message, read a full response
 /mnt/llm/N/stream       # streaming response
 /mnt/llm/N/model        # haiku | sonnet | opus  (or any backend-specific id)
-/mnt/llm/N/temperature  # 0.0 – 2.0
+/mnt/llm/N/temperature  # 0.0 – 2.0, or default (the model's own)
 /mnt/llm/N/thinking     # disabled | max | <integer token budget>
 /mnt/llm/N/system       # write-only system prompt
 /mnt/llm/N/context      # read current conversation as JSON

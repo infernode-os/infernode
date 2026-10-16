@@ -380,10 +380,8 @@ shutdown(msg : string)
 		row.dump(nil);
 	}
 	for(i=0; oknotes[i] != nil; i++)
-		if(utils->strncmp(oknotes[i], msg, len oknotes[i]) == 0) {
-			killprocs();
-			exit;
-		}
+		if(utils->strncmp(oknotes[i], msg, len oknotes[i]) == 0)
+			leave();
 	# killprocs();
 	sys->fprint(sys->fildes(2), "acme: %s\n", msg);
 	sys->print("acme: %s\n", msg);
@@ -394,6 +392,13 @@ acmeexit(err: string)
 {
 	if(err != nil)
 		shutdown(err);
+	leave();
+}
+
+# Close the window too: killing the processes alone left it on the
+# screen, drawn and dead
+leave()
+{
 	graph->cursorswitch(nil);
 	if (plumbed)
 		plumbmsg->shutdown();

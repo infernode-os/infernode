@@ -12,8 +12,9 @@
 #
 # This loads a dump holding one file in two windows, types into the
 # first through /dev/keyboard (characters, Left, more characters, a
-# backspace), and checks Xenith is still running with no text.type
-# error. Needs the SDL GUI emulator: SKIP (77) on a headless build.
+# backspace), saves with ^S, and checks Xenith is still running with no
+# text.type error and the file holds what was typed, once. Needs the
+# SDL GUI emulator: SKIP (77) on a headless build.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -36,7 +37,6 @@ second line
 '
 name="/n/local$d/t.md"
 tag="$name Del Snarf | Look"
-printf '%s' "$body" > "$d/t.md"
 # one window on t.md in column 0 (dump id 1), its Zerox in column 1
 {
     echo "/n/local$d"
@@ -53,6 +53,7 @@ printf 'ab' > "$d/chars"
 printf '\356\200\224' > "$d/left"	# Keyboard->Left, U+E014
 printf 'c' > "$d/c"
 printf '\010' > "$d/bs"
+printf '\023' > "$d/save"	# ^S: Put
 
 out=$(SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c1 -g800x600 -r"$ROOT" /dis/sh.dis -c "
 load std
@@ -62,7 +63,8 @@ sleep 6
 echo before \`{ps | grep -i xenith | wc -l}
 echo m 100 122 0 > /dev/pointer
 sleep 1
-for k in chars left c c chars left bs bs {
+# t.md is not on disk yet: the dump holds its text, and Put makes it
+for k in chars left c c chars left bs bs save {
 	cat /n/local$d/\$k > /dev/keyboard
 	sleep 1
 }
@@ -81,10 +83,19 @@ if printf '%s\n' "$out" | grep -q 'text\.type'; then
     printf '%s\n' "$out" | sed 's/^/    /'
     exit 1
 fi
-if [ "$after" = "$before" ]; then
-    echo "PASS: Xenith keeps running when typing beside a Zerox"
-    exit 0
+if [ "$after" != "$before" ]; then
+    echo "FAIL: Xenith processes $before before typing, '$after' after"
+    printf '%s\n' "$out" | sed 's/^/    /'
+    exit 1
 fi
-echo "FAIL: Xenith processes $before before typing, '$after' after"
-printf '%s\n' "$out" | sed 's/^/    /'
-exit 1
+# ab, Left, cc, ab, Left, two backspaces
+want='acbbhello world
+second line'
+got=$(cat "$d/t.md")
+if [ "$got" != "$want" ]; then
+    echo "FAIL: saved text is not what was typed"
+    printf '    want: %s\n    got:  %s\n' "$(printf '%s' "$want" | head -1)" "$(printf '%s' "$got" | head -1)"
+    exit 1
+fi
+echo "PASS: Xenith keeps running when typing beside a Zerox, and saves what was typed"
+exit 0

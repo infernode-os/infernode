@@ -1003,7 +1003,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 	}
 	if(t.q1 > t.q0){
 		if(t.ncache != 0)
-			error("text.type");
+			typecommit(t);
 		exec->cut(t, t, TRUE, TRUE);
 		t.eq0 = ~0;
 		if (r == 16r08 || r == 16r7f){	# erase character : odd if a char then erased
@@ -1033,6 +1033,7 @@ if(0)	# DEBUGGING
 		if(u.cq0!=t.cq0 && (u.ncache!=t.ncache || t.ncache!=0))
 			error("text.type inconsistent caches");
 	}
+		typesync(t);
 		nnb = t.bswidth(r);
 		q1 = t.q0;
 		q0 = q1-nnb;
@@ -1104,6 +1105,7 @@ if(0)	# DEBUGGING
 		return;
 	}
 	# otherwise ordinary character; just insert, typically in caches of all texts 
+	typesync(t);
 if(0)	# DEBUGGING 
 	for(i=0; i<t.file.ntext; i++){
 		u = t.file.text[i];
@@ -1161,6 +1163,28 @@ typecommit(t: ref Text)
 		t.w.commit(t);
 	else
 		t.commit(TRUE);
+}
+
+# A window's copy of the typing must end where t types next; one that
+# does not has gone stale. Say so and commit them all, rather than let
+# Text.type's checks below take the editor down with the edit.
+typesync(t: ref Text)
+{
+	for(i:=0; i<t.file.ntext; i++){
+		u := t.file.text[i];
+		if(u.ncache > 0 && u.cq0+u.ncache != t.q0){
+			# commit before warning: the Errors window it may open
+			# reshapes this column, and a redraw then would put a
+			# stale copy into the file a second time
+			typecommit(t);
+			# an Errors window opening takes the pointer, and the
+			# typing would follow it; keep both where they were
+			p := mouse.xy;
+			warning(nil, "typing went out of step between windows on "+t.file.name+"; recovered\n");
+			graph->cursorset(p);
+			return;
+		}
+	}
 }
 
 clicktext : ref Text;

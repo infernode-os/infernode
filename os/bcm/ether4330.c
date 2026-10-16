@@ -2703,7 +2703,7 @@ wlinit(Ether *edev, Ctlr *ctlr)
 	uchar ea[Eaddrlen];
 	uchar eventmask[16];
 	char *p;
-	static uchar keepalive[12] = {1, 0, 11, 0, 0xd8, 0xd6, 0, 0, 0, 0, 0, 0};
+	static uchar keepalive[12] = {1, 0, 11, 0, 0x30, 0x75, 0, 0, 0, 0, 0, 0};	/* version 1, length 11, every 30000ms */
 
 	wlgetvar(ctlr, "cur_etheraddr", ea, Eaddrlen);
 	memmove(edev->ea, ea, Eaddrlen);
@@ -2722,8 +2722,17 @@ wlinit(Ether *edev, Ctlr *ctlr)
 	if(ctlr->chipid == 0x4330){
 		wlsetint(ctlr, "btc_wire", 4);
 		wlsetint(ctlr, "btc_mode", 1);
-		wlsetvar(ctlr, "mkeep_alive", keepalive, 11);
 	}
+	/*
+	 * The firmware's keepalive -- a null frame to the access point when
+	 * the link has been quiet for the period -- for every chip, not the
+	 * 4330 alone as 9front had it; Linux's brcmfmac starts it for all of
+	 * them. Without it a CYW43455 whose link carries nothing for a few
+	 * minutes is taken for gone: a Pi 4 with its traffic on Ethernet
+	 * lost Wi-Fi every 8.4 minutes, exactly, and stopped losing it the
+	 * moment it was pinged every 30 seconds.
+	 */
+	wlsetvar(ctlr, "mkeep_alive", keepalive, 11);
 	memset(eventmask, 0xFF, sizeof eventmask);
 #define ENABLE(n)	eventmask[n/8] |= 1<<(n%8)
 #define DISABLE(n)	eventmask[n/8] &= ~(1<<(n%8))

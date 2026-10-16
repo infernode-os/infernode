@@ -15,7 +15,7 @@ HOW DELEGATION WORKS (read this first):
   is [working].
 
   task create label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>]
-              [category=<text>] [model=<name>] [agenttype=<type>]
+              [category=<text>] [agenttype=<type>]
               [brief=<text>] [instructions=<text>]
       Create new task with isolated conversation and tools.
       Tools validated against delegation budget (/tool/budget).
@@ -24,15 +24,13 @@ HOW DELEGATION WORKS (read this first):
       instructions= sets structured directives injected into the
       TA system prompt via <instructions> tags. Use for specific
       procedural guidance the task agent should follow.
-      model= selects the LLM backing the new activity. Valid:
-      gpt-oss, daedalus, haiku, sonnet, opus. Omit to inherit the
-      parent session's model.
-      agenttype= picks a preset prompt + defaults. Currently:
-        coder — Limbo-capable Daedalus fine-tune with
-                tools=read,write,edit,find,grep,list,limbo
+      The model is the server's: a task cannot choose one, and a
+      model= is ignored.
+      agenttype= picks a preset prompt and its tools. Currently:
+        coder — tools=read,write,edit,find,grep,list,limbo
       Unknown args (e.g. priority=high) are rejected with the list
       of valid keys instead of being silently dropped.
-      Put authority-bearing attrs such as tools=, paths=, model=, and
+      Put authority-bearing attrs such as tools=, paths= and
       agenttype= before brief=/instructions=. Unquoted brief= and
       instructions= consume the rest of the line as literal task text;
       quote them if you intentionally need more attrs after the text.
@@ -68,7 +66,7 @@ Examples:
   task create label=Editor instructions="Open /lib/veltro/system.txt and suggest improvements"
   task create label=Refactor tools=read,edit,grep instructions="Refactor all uses of foo() to bar()"
   task create label=BugFix agenttype=coder brief="fix the bug in cat.b"
-  task create label=Port model=daedalus tools=read,write,edit,limbo brief="port spawn.b to ARM64"
+  task create label=Port tools=read,write,edit,limbo brief="port spawn.b to ARM64"
   task list
   task status 2
   task close 2

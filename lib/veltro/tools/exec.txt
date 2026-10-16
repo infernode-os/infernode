@@ -2,13 +2,19 @@ exec - Run command in Inferno shell (rc-style, not POSIX)
 
   exec <command>
 
+Only the shell and the commands this task was granted are here: a command
+is a capability, granted by name. Without a grant, only the shell's own
+builtins run (echo, cd, load, ...); ls, cat and the rest do not exist.
+For files use read/write/edit/list/find/grep; for Limbo, the limbo tool
+("limbo compile <file.b>" checks a file compiles).
+
 Shell differences from bash:
   - Single quotes (double quotes auto-converted)
   - Use ; not && for chaining
   - for i in $list { cmd }   (not do/done)
   - $var not ${var}
 
-Examples:
+Examples (with the commands granted):
   exec ls /appl
   exec 'for f in *.b { echo $f }'
 

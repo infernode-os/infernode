@@ -102,7 +102,13 @@ exec(args: string): string
 	if(sys == nil)
 		init();
 
-	# Parse arguments
+	# -r: old and new are the text itself (a native call's, already
+	# decoded), not to be unescaped again.
+	raw := 0;
+	if(len args > 3 && args[0:3] == "-r ") {
+		raw = 1;
+		args = args[3:];
+	}
 	(path, old, new, all) := parseargs(args);
 	if(path == "")
 		return "error: usage: Edit <path> <old> <new> [all]";
@@ -115,8 +121,10 @@ exec(args: string): string
 		return roerr;
 
 	# Process escape sequences
-	old = unescape(old);
-	new = unescape(new);
+	if(!raw) {
+		old = unescape(old);
+		new = unescape(new);
+	}
 
 	# Read file
 	content := readfile(path);

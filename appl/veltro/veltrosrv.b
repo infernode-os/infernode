@@ -11,8 +11,9 @@ implement VeltroSrv;
 #	    new            read: start a session; returns its id
 #	    <id>/
 #	        ctl        write: cancel | reset | close | persona <type> |
-#	                          role <name> | brief <text> | model <m> |
+#	                          role <name> | brief <text> |
 #	                          think <n> | maxsteps <n> | gate on|off
+#	                   (no model: the model is the server's, llmsrv -M)
 #	                   read: the settings, attr=value
 #	        input      write: one user message; starts a turn.  "busy"
 #	                   while a turn runs.
@@ -126,7 +127,6 @@ Session: adt {
 	persona:	string;		# agents/<type>.txt, layered as == Agent Role ==
 	role:		string;		# meta | <name>: a suffix file, lucibridge's way
 	brief:		string;		# literal suffix
-	model:		string;
 	think:		int;
 	maxsteps:	int;
 	gate:		int;
@@ -1088,8 +1088,6 @@ llmstart(s: ref Session): string
 		tval = AGENT_TEMP;
 	writefile("/mnt/llm/" + s.llmid + "/temperature", tval);
 
-	if(s.model != "")
-		writefile("/mnt/llm/" + s.llmid + "/model", s.model);
 	if(s.think != 0)
 		writefile("/mnt/llm/" + s.llmid + "/thinking", string s.think);
 
@@ -1144,7 +1142,7 @@ newsession(): ref Session
 	al->init();
 	al->setverbose(verbose);
 	al->settoolmount(toolmount);
-	s := ref Session(nextsid++, al, "", nil, "", "", "", "", 0, maxsteps, 1,
+	s := ref Session(nextsid++, al, "", nil, "", "", "", 0, maxsteps, 1,
 		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, 0);
 	sessions = s :: sessions;
 	vers++;
@@ -1316,10 +1314,6 @@ ctl(s: ref Session, line: string): string
 		if(s.llmid != "")
 			setsystemprompt(s);
 		prov("task", sys->sprint("agent=%s", s.llmid), array of byte rest);
-	"model" =>
-		s.model = rest;
-		if(s.llmid != "" && rest != "")
-			writefile("/mnt/llm/" + s.llmid + "/model", rest);
 	"think" =>
 		(n, r) := str->toint(rest, 10);
 		if(r != "" || n < 0)
@@ -1351,8 +1345,8 @@ ctlread(s: ref Session): string
 	gate := "off";
 	if(s.gate)
 		gate = "on";
-	return sys->sprint("persona=%s role=%s model=%s think=%d maxsteps=%d gate=%s llm=%s busy=%d\n",
-		s.persona, s.role, s.model, s.think, s.maxsteps, gate, s.llmid, s.busy);
+	return sys->sprint("persona=%s role=%s think=%d maxsteps=%d gate=%s llm=%s busy=%d\n",
+		s.persona, s.role, s.think, s.maxsteps, gate, s.llmid, s.busy);
 }
 
 # ---- 9P ----

@@ -123,6 +123,20 @@ echo add limbo > /mnt/toolctl/ctl
 echo 'SCENARIO:gate go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Gate checked'
 
+echo add write > /mnt/toolctl/ctl
+echo add edit > /mnt/toolctl/ctl
+echo 'SCENARIO:raw_write go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Wrote it raw'
+echo '@@ raw file'
+cat /tmp/veltro/scratch/0/raw.b
+echo '@@ raw file end'
+
+mkdir -p /tmp/veltro/scratch/0
+{echo 'implement Good;'; echo 'include "sys.m";'; echo 'include "draw.m";'; echo 'Good: module { init: fn(nil: ref Draw->Context, nil: list of string); };'; echo 'init(nil: ref Draw->Context, nil: list of string) { }'} > /tmp/veltro/scratch/0/good.b
+{echo 'implement Bad;'; echo 'include "sys.m";'; echo 'include "draw.m";'; echo 'Bad: module { init: fn(nil: ref Draw->Context, nil: list of string); };'; echo 'init(nil: ref Draw->Context, nil: list of string) { undeclared = 1; }'} > /tmp/veltro/scratch/0/bad.b
+echo 'SCENARIO:compile_check go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Compiled the files'
+
 echo '/help' > /mnt/ui/activity/0/conversation/input
 sleep 2
 mkdir -p /usr/deltest/notes
@@ -239,6 +253,13 @@ reqcheck "the compile gate passes code that compiles" \
 	'any("status: compiled" in t["content"] for t in tools)' gate 1
 reqcheck "the compile gate fails code that does not, with the compiler's error" \
 	'any("status: failed" in t["content"] and "undeclared" in t["content"] for t in tools)' gate 1
+want=$(printf '\n"quoted" first line\n\tsys->print("%%d\\t%%d\\n", i, j);')
+got=$(section "raw file")
+[ "$got" = "$want" ] && ok "a native write and edit keep the text as given" || bad "a native write and edit keep the text as given (got: $(printf '%s' "$got" | od -c | head -3))"
+reqcheck "limbo compile passes a file that compiles" \
+	'any("good.b compiles." in t["content"] for t in tools)' compile_check 1
+reqcheck "limbo compile fails a file that does not, with the compiler's error" \
+	'any("bad.b does not compile" in t["content"] and "undeclared" in t["content"] for t in tools)' compile_check 1
 reqcheck "a task's edit with a space in it is made" \
 	'tools and "replaced 1" in tools[-1]["content"]' child_edit 1
 reqcheck "activity 0 is told the task's change is staged" \

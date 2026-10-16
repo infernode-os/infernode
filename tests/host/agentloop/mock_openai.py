@@ -20,6 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FIX = "/usr/agentloop"
 
+# What raw_write writes, and the test expects back byte for byte.
+RAWTEXT = '\n"quoted" first line\n\tsys->print("%d\\n", i);\n'
+
 
 def tool(name, args):
     """args: a string (sent as {"args": ...}) or a dict (sent as is)."""
@@ -162,6 +165,22 @@ SCENARIOS = {
     "gate": [
         {"tools": [tool("limbo", "SCENARIO:limbo_ok go"), tool("limbo", "SCENARIO:limbo_bad go")]},
         {"content": "Gate checked."},
+    ],
+    # A native write's content is the file, as is: a leading blank line, a
+    # leading quote, and a \\n inside a string literal all survive; an edit's
+    # old and new likewise.
+    "raw_write": [
+        {"tools": [tool("write", {"path": "/tmp/veltro/scratch/raw.b",
+                                  "content": RAWTEXT})]},
+        {"tools": [tool("edit", {"path": "/tmp/veltro/scratch/raw.b",
+                                 "old": 'print("%d\\n", i);', "new": 'print("%d\\t%d\\n", i, j);'})]},
+        {"content": "Wrote it raw."},
+    ],
+    # Checking files with the limbo tool: one compiles, one does not.
+    "compile_check": [
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/good.b"),
+                   tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+        {"content": "Compiled the files."},
     ],
     # A task edits a file in a folder the user granted: the change is
     # staged; activity 0, told so, promotes it on the user's word.

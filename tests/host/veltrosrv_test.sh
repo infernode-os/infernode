@@ -155,7 +155,7 @@ expect "root lists new" root '/new$'
 for f in ctl input text log status approve; do
 	expect "session has $f" session "/$f\$"
 done
-expect "ctl reads settings" ctl 'persona= role= model= think=0 maxsteps=100 gate=on llm= busy=0'
+expect "ctl reads settings" ctl 'persona= role= think=0 maxsteps=100 gate=on llm= busy=0'
 expectnot "idle text is empty" "idle text" '.'
 expectnot "idle approve is empty" "idle approve" '.'
 expect "status idle" status '^idle$'

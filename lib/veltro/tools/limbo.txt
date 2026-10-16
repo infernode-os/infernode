@@ -19,7 +19,14 @@ limbo - Author a complete, compilable Limbo source file.
     "include" "package main" "def main" "#include".
 
   RETURNS
-    The Limbo source code in a single ```limbo fenced block.
+    The Limbo source code in a single ```limbo fenced block, then a
+    <gate> block saying whether it compiled (status: compiled), did not
+    (status: failed, with the compiler's errors), or was not checked.
+
+  CHECKING A FILE
+    limbo compile <absolute path of a .b file>
+    compiles a Limbo file you already have (written, edited, been given)
+    and reports the same way. Use it after every edit of a .b file.
 
   WHY THIS TOOL EXISTS
     The orchestrator's general-purpose training produces Go-style or

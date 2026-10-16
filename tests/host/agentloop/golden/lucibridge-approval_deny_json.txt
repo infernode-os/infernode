@@ -18,7 +18,7 @@ tool-result call_approval_deny_json_0_0:
   | role=veltro text=
   | 
   | msg 2
-  | role=veltro dtype=dialogue title=Denied options=Allow,Deny text=write {"path": "/dis/agentloop-probe.txt", "content": "probe"}
+  | role=veltro dtype=dialogue title=Denied options=Allow,Deny text=write: /dis/agentloop-probe.txt probe
   | 
   | msg 3
   | role=veltro text=Write was handled.

@@ -715,9 +715,14 @@ Serve:
 			srv.reply(ref Rmsg.Write(m.tag, n));
 
 		Remove =>
-			(c, nil, rerr) := srv.canremove(m);
+			# Checked as Create and Write are: the host filesystem under
+			# the overlay is the authority.  Styxserver.canremove judged
+			# against the owner cowfs started with, which in an agent's
+			# namespace (no /dev/user then) is "inferno", not the caller,
+			# so every remove in a workspace was refused.
+			c := srv.getfid(m.fid);
 			if(c == nil) {
-				srv.reply(ref Rmsg.Error(m.tag, rerr));
+				srv.reply(ref Rmsg.Error(m.tag, "bad fid"));
 				break;
 			}
 			# Tremove always clunks the fid (success or failure). The
@@ -734,13 +739,21 @@ Serve:
 
 			# Remove from overlay if present
 			opath := state.overlaydir + "/" + pe.relpath;
-			sys->remove(opath);
+			(inoverlay, nil) := sys->stat(opath);
+			if(inoverlay >= 0 && sys->remove(opath) < 0) {
+				srv.reply(ref Rmsg.Error(m.tag, sys->sprint("remove: %r")));
+				break;
+			}
 
 			# If file exists in base, add whiteout
 			bpath := state.basepath + "/" + pe.relpath;
 			(bok, nil) := sys->stat(bpath);
 			if(bok >= 0)
 				addwhiteout(state, pe.relpath);
+			else if(inoverlay < 0) {
+				srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+				break;
+			}
 
 			state.vers++;
 			srv.reply(ref Rmsg.Remove(m.tag));

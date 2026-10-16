@@ -873,7 +873,9 @@ handleslash(cmd: string): int
 	* =>
 		return 0;	# unknown slash: pass to agent
 	}
-	writemsg("assistant", ack);
+	# As the agent's: luciuisrv takes no "assistant" role, and every slash
+	# command's answer (/help, /bind, /promote, ...) was refused and lost.
+	writemsg("veltro", ack);
 	return 1;
 }
 
@@ -936,14 +938,8 @@ cowpromote(arg: string): string
 	overlay := cowfindoverlay();
 	if(overlay == nil)
 		return "no cowfs overlay for this activity";
-	# Read basepath from .cowmeta
-	basepath := agentlib->readfile(overlay + "/.cowmeta");
-	if(basepath != nil) {
-		# Trim trailing whitespace/newlines
-		while(len basepath > 0 && (basepath[len basepath - 1] == '\n' || basepath[len basepath - 1] == ' '))
-			basepath = basepath[0:len basepath - 1];
-	}
-	if(basepath == nil || basepath == "")
+	basepath := cowbasepath(overlay);
+	if(basepath == nil)
 		return "error: cannot determine base path";
 	if(arg != "") {
 		err := cowfs->promotefile(basepath, overlay, arg);
@@ -955,6 +951,25 @@ cowpromote(arg: string): string
 	if(err != nil)
 		return "error: " + err;
 	return sys->sprint("promoted %d file(s)", n);
+}
+
+# The folder an overlay stages changes for: the basepath= line of its
+# .cowmeta.  The whole file used to be taken for the path, so a promote
+# wrote "basepath=/n/local/..." relative to wherever it ran, and saved that
+# as the base, doubling the prefix.  Only an absolute path is a base.
+cowbasepath(overlay: string): string
+{
+	(nil, lines) := sys->tokenize(agentlib->readfile(overlay + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines) {
+		v := agentlib->strip(hd lines);
+		if(!agentlib->hasprefix(v, "basepath="))
+			continue;
+		while(agentlib->hasprefix(v, "basepath="))
+			v = v[len "basepath=":];
+		if(len v > 1 && v[0] == '/')
+			return v;
+	}
+	return nil;
 }
 
 cowrevert(arg: string): string
@@ -1333,7 +1348,8 @@ approver(done: chan of int)
 			writefile(sess + "/approve", "deny " + callid + " headless");
 			continue;
 		}
-		didx := writedialogue("Permission required", rest, "", "Allow,Deny");
+		(tool, what) := str->splitl(rest, " ");
+		didx := writedialogue("Permission required", tool + ":" + what, "", "Allow,Deny");
 		response := readuserinput();
 		answer := "allow";
 		if(response == "Deny" || response == "deny" || response == "no")
@@ -1377,10 +1393,12 @@ notifyparent()
 	ev := TASKEVENT + sys->sprint("Task %d \"%s\" has finished its assignment (status: %s). " +
 		"This is a notification from the harness, not a message from the user.\n\n" +
 		"Its report:\n%s\n", actid, label, status, report);
-	files := taskfiles();
+	files := stagedchanges() + taskfiles();
 	tail := "\nTell the user the outcome now, briefly: what was done, and the result " +
 		"(show it when it is short, or what the files hold). If the task asked a " +
-		"question, relay it: the user can answer in the task's own tab.";
+		"question, relay it: the user can answer in the task's own tab. If you " +
+		"have already told the user this outcome (they asked, and you looked), say " +
+		"nothing more about it than that it is done.";
 	# Fit one write: the files give way first, then the report.
 	room := TASKEVENT_MAX - len array of byte (ev + tail);
 	if(len array of byte files > room) {
@@ -1395,6 +1413,28 @@ notifyparent()
 		log(sys->sprint("notify activity 0: %r"));
 	else
 		log("notified activity 0 of completion");
+}
+
+# What the task changed in the user's folders: staged in its overlay, not in
+# the folders, until promoted.  Said in the report, or the user was told a
+# file had been changed when it had not.
+stagedchanges(): string
+{
+	overlay := cowfindoverlay();
+	if(overlay == nil)
+		return "";
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "";
+	changes := cowfs->diff(overlay);
+	if(changes == nil)
+		return "";
+	out := sys->sprint("\nIts changes to the user's files are STAGED, not yet in the files " +
+		"(\"task promote %d\" applies them once the user agrees; \"task revert %d\" " +
+		"discards them):\n", actid, actid);
+	for(; changes != nil; changes = tl changes)
+		out += "  " + hd changes + "\n";
+	return out;
 }
 
 # s cut to at most n bytes, on a character boundary.
@@ -1445,6 +1485,28 @@ taskfiles(): string
 	return "\nFiles it wrote:" + out;
 }
 
+# A task closed while it works stops working: its turn is cancelled, not
+# left to run on with no one to see it.
+closewatch(turnover: chan of int)
+{
+	statpath := sys->sprint("/mnt/ui/activity/%d/status", actid);
+	for(;;) {
+		alt {
+		<-turnover =>
+			return;
+		* =>
+			;
+		}
+		if(agentlib->strip(agentlib->readfile(statpath)) == "hidden") {
+			log("activity closed: cancelling the turn");
+			ctl("cancel");
+			<-turnover;
+			return;
+		}
+		sys->sleep(1000);
+	}
+}
+
 filelen(path: string): big
 {
 	(ok, d) := sys->stat(path);
@@ -1484,9 +1546,14 @@ agentturn(input: string)
 	spawn textfollow(textoff, done);
 	spawn logfollow(logoff, done);
 	spawn approver(done);
+	turnover := chan[1] of int;
+	if(actid > 0)
+		spawn closewatch(turnover);
 	<-done;
 	<-done;
 	<-done;
+	if(actid > 0)
+		turnover <-= 1;
 
 	if(placeholder >= 0 && !placeholderused)
 		updateliveconvmsg(placeholder, "");
@@ -1790,7 +1857,11 @@ init(nil: ref Draw->Context, args: list of string)
 		human := blockread(inputfd);
 		inputfd = nil;
 		if(human == nil) {
+			# The activity is closed: stop the agent and give back its
+			# model session, so nothing of it keeps running.
 			log("input closed");
+			ctl("cancel");
+			ctl("close");
 			break;
 		}
 		log("human: " + human);

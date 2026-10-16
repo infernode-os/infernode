@@ -44,6 +44,10 @@ HOW DELEGATION WORKS (read this first):
                        once the task reports done to retrieve what it produced —
                        do NOT re-create the task to get its output.
   task close <id>      Archive a completed task
+  task promote <id>    Apply the changes a task staged to the user's folders
+                       (they stay staged until then; the user is asked to
+                       allow it). Only when the user has said to apply them.
+  task revert <id>     Discard a task's staged changes
 
 Each task gets its own activity tile in the header bar, its own
 conversation, tools, and filesystem overlay. Use for work that

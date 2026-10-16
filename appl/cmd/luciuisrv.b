@@ -936,6 +936,9 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		if(findinputread(m.fid) != nil) {
 			# The rest of this fid's message, then end of file.
 			srv.reply(inputchunk(m));
+		} else if(a.status == "hidden") {
+			# Closed: nothing more will come.
+			srv.reply(ref Rmsg.Read(m.tag, nil));
 		} else if(a.inputq == nil) {
 			# Blocking read
 			addpending(m.fid, m.tag, Qconvinput, actid, m);
@@ -1075,6 +1078,23 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 }
 
 # --- Write handling ---
+
+# Answer every read waiting on an activity with end of file.
+endpending(actid: int)
+{
+	prev: ref PendingRead;
+	for(p := pending; p != nil; p = p.next) {
+		if(p.actid == actid) {
+			if(prev == nil)
+				pending = p.next;
+			else
+				prev.next = p.next;
+			srv_g.reply(ref Rmsg.Read(p.m.tag, nil));
+			continue;
+		}
+		prev = p;
+	}
+}
 
 # Post a message written to an activity's conversation/input: to the first
 # reader waiting for one, or to the queue.
@@ -1422,6 +1442,10 @@ globalctl(data: string): string
 		activities[idx].nbg = 0;
 		activities[idx].pendingevent = nil;
 		activities[idx].inputq = nil;
+		# Its readers are told it is gone (end of file): a task's agent
+		# blocked reading its input used to wait for ever, and every closed
+		# task kept its agent, tool server and model session running.
+		endpending(id);
 		vers++;
 		pushglobalevent("activity delete " + idstr);
 		return nil;

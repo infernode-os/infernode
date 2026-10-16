@@ -55,6 +55,7 @@ Command: module {
 # /model on the new session, leaving llmsrv on its configured default).
 LIMBO_MODEL_DEFAULT: con "devstral-limbo-v3:latest";
 LIMBO_MODEL_FILE:    con "/lib/veltro/limbo-model";
+GATEDIR:             con "/tmp/veltro/scratch";	# the tool's workspace: its namespace's writable /tmp
 LIMBO_SYSTEM:   con "You are an expert Limbo programmer for the Inferno operating system. When given a description, respond with one complete, compilable Limbo source file inside a single ```limbo code fence. Do not add explanation outside the code fence.";
 
 LLMROOT: con "/mnt/llm";
@@ -313,10 +314,7 @@ exec(args: string): string
 	#    follow-up (would require pushing failure context into the same
 	#    /mnt/llm/<sid> conversation rather than re-entering at the tool
 	#    boundary).
-	gateerr := gate(resp, idstr);
-	if(gateerr == "")
-		return resp;
-	return resp + "\n\n" + gateerr;
+	return resp + "\n\n" + gate(resp, idstr);
 }
 
 # Extract the first ```limbo ... ``` block from a model response.
@@ -349,73 +347,96 @@ extractblock(s: string): string
 	return "";
 }
 
-# Compile-gate the response. Returns "" on pass (or skip), or a
-# diagnostic block on fail. Uses the hosted /dis/limbo.dis compiler;
-# stderr is redirected to a temp file via sys->dup so we can recover
-# the diagnostic text and surface it to the orchestrator.
+# Compile-gate the response with the hosted compiler (/dis/limbo.dis), and
+# say what happened, always: compiled, failed with the compiler's errors,
+# or not checked and why.  A pass and a skip used to look the same (the
+# source, and nothing else), and the gate wrote under /tmp, which a tool's
+# namespace does not have: it never ran, and an agent asked for code that
+# compiles went looking for a compiler it could not reach.
 gate(resp: string, sid: string): string
 {
 	code := extractblock(resp);
 	if(code == "")
-		return "";
+		return gatenote("not compiled: no ```limbo block in the response");
 
-	srcpath := sys->sprint("/tmp/limbo-gate-%s.b", sid);
-	werr := writefile(srcpath, code);
-	if(werr != nil)
-		return "";
+	srcpath := sys->sprint("%s/limbo-gate-%s.b", GATEDIR, sid);
+	fd := sys->create(srcpath, Sys->OWRITE, 8r644);
+	if(fd == nil || sys->write(fd, b := array of byte code, len b) != len b)
+		return gatenote(sys->sprint("not compiled: cannot write %s: %r", srcpath));
+	fd = nil;
 
-	errpath := sys->sprint("/tmp/limbo-gate-%s.err", sid);
 	dispath := srcpath[:len srcpath - 2] + ".dis";
 
-	saved := sys->dup(2, -1);
-	if(saved < 0) {
-		sys->remove(srcpath);
-		return "";
-	}
-	errfd := sys->create(errpath, Sys->OWRITE, 8r644);
-	if(errfd == nil) {
-		sys->dup(saved, 2);
-		sys->remove(srcpath);
-		return "";
-	}
-	sys->dup(errfd.fd, 2);
-	errfd = nil;
-
-	ok := 1;
 	limbo := load Command "/dis/limbo.dis";
 	if(limbo == nil) {
+		sys->remove(srcpath);
+		return gatenote(sys->sprint("not compiled: cannot load /dis/limbo.dis: %r"));
+	}
+
+	# The compiler's diagnostics (its output and its error output) go to a
+	# pipe that drain() empties as they come, so a long list of errors
+	# cannot block it.  (A file in the workspace, written through the
+	# dup'd descriptor, read back empty.)
+	p := array[2] of ref Sys->FD;
+	saved1 := sys->dup(1, -1);
+	saved2 := sys->dup(2, -1);
+	if(sys->pipe(p) < 0 || saved1 < 0 || saved2 < 0) {
+		sys->remove(srcpath);
+		return gatenote(sys->sprint("not compiled: cannot capture the compiler's errors: %r"));
+	}
+	diag := chan[1] of string;
+	spawn drain(p[0], diag);
+	p[0] = nil;
+	sys->dup(p[1].fd, 1);
+	sys->dup(p[1].fd, 2);
+	p[1] = nil;
+
+	ok := 1;
+	raised := "";
+	{
+		limbo->init(nil, "limbo" :: "-I" :: "/module" :: "-o" :: dispath :: srcpath :: nil);
+	} exception e {
+	"*" =>
 		ok = 0;
-	} else {
-		{
-			limbo->init(nil, "limbo" :: "-I" :: "/module" :: srcpath :: nil);
-		} exception {
-		"*" =>
-			ok = 0;
-		}
+		raised = e;
 	}
 	limbo = nil;
+
+	sys->dup(saved1, 1);	# the pipe's last writers gone: drain sees its end
+	sys->dup(saved2, 2);
+	errtxt := <-diag;
 
 	(stok, nil) := sys->stat(dispath);
 	if(stok < 0)
 		ok = 0;
-
-	sys->dup(saved, 2);
 	sys->remove(dispath);
-
-	if(ok) {
-		sys->remove(srcpath);
-		sys->remove(errpath);
-		return "";
-	}
-
-	(errtxt, _) := readfile(errpath);
 	sys->remove(srcpath);
-	sys->remove(errpath);
+	if(errtxt == "" && raised != "")
+		errtxt = raised + "\n";
 
+	if(ok)
+		return "<gate>\nstatus: compiled\ncompiler: hosted limbo (/dis/limbo.dis)\n</gate>\n" +
+			"The source above compiles.";
 	return "<gate>\n" +
 		"status: failed\n" +
 		"compiler: hosted limbo (/dis/limbo.dis)\n" +
 		"stderr:\n" + errtxt +
 		"</gate>\n" +
 		"The emitted Limbo did not compile. Re-call /tool/limbo with a description that avoids the above errors, or quote the failing line back to the user if the error is unfixable.";
+}
+
+drain(fd: ref Sys->FD, out: chan of string)
+{
+	s := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		if(len s < 16384)
+			s += string buf[0:n];
+	out <-= s;
+}
+
+gatenote(why: string): string
+{
+	return "<gate>\nstatus: " + why + "\n</gate>\n" +
+		"Whether the source above compiles is unknown.";
 }

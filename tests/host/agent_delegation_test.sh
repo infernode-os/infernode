@@ -44,10 +44,12 @@ SERVER_PID=
 EMU_PID=
 SCRIPT=
 cleanup() {
+	# KEEP=<dir>: keep the emulator's and the model's logs there.
+	[ -z "${KEEP:-}" ] || { mkdir -p "$KEEP"; cp "$WORK"/*.log "$KEEP"/ 2>/dev/null || true; }
 	[ -z "$EMU_PID" ] || kill -9 "$EMU_PID" 2>/dev/null || true
 	[ -z "$SERVER_PID" ] || kill "$SERVER_PID" 2>/dev/null || true
 	[ -z "$SCRIPT" ] || rm -f "$SCRIPT"
-	rm -rf "$WORK" "$ROOT/tmp/deltest"
+	rm -rf "$WORK" "$ROOT/tmp/deltest" "$ROOT/usr/deltest"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -58,7 +60,7 @@ while [ ! -s "$WORK/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 [ -s "$WORK/port" ] || { echo "FAIL: mock backend did not start"; exit 1; }
 PORT=$(cat "$WORK/port")
 
-rm -rf "$ROOT/tmp/deltest"
+rm -rf "$ROOT/tmp/deltest" "$ROOT/usr/deltest"
 # A message longer than one 9P message (msize is 8K): words, then a mark.
 LONG="SCENARIO:text_only go $(python3 -c "print(' '.join('w%d' % i for i in range(3000)))") TAILMARK"
 
@@ -80,7 +82,7 @@ llmsrv -b openai -u http://127.0.0.1:$PORT/v1 -M mock &
 sleep 1
 luciuisrv
 echo 'activity create Main' > /mnt/ui/ctl
-/dis/veltro/tools9p -m /tool -b read,list read list task
+/dis/veltro/tools9p -v -m /tool -b read,list,edit read list task
 lucibridge -v -a 0 >[2] /tmp/deltest/luci0.log &
 sleep 3
 
@@ -117,9 +119,37 @@ echo add find > /mnt/toolctl/ctl
 echo 'SCENARIO:late_tool go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Found with a late tool'
 
-for a in 0 1 {
+echo add limbo > /mnt/toolctl/ctl
+echo 'SCENARIO:gate go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Gate checked'
+
+echo '/help' > /mnt/ui/activity/0/conversation/input
+sleep 2
+mkdir -p /usr/deltest/notes
+{echo Shopping; echo '- eggs'; echo '- milk'} > /usr/deltest/notes/todo.txt
+echo '/bind /usr/deltest/notes rw' > /mnt/ui/activity/0/conversation/input
+sleep 2
+echo 'SCENARIO:delegate_edit go' > /mnt/ui/activity/0/conversation/input
+n=''
+while {! ~ \`{cat /mnt/ui/activity/0/status} blocked} {
+	n=\`{echo \$n | sed 's/.*/&x/'}
+	if {~ \$n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx} {
+		echo 'timed out waiting for the approval'
+		echo blocked > /mnt/ui/activity/0/status
+	}
+	sleep 1
+}
+echo '@@ before promote'
+cat /usr/deltest/notes/todo.txt
+echo Allow > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Promoted the edit'
+echo '@@ after promote'
+cat /usr/deltest/notes/todo.txt
+
+
+for a in 0 1 2 {
 	echo '@@ conversation' \$a
-	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 {
+	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 {
 		if {ftest -e /mnt/ui/activity/\$a/conversation/\$i} {
 			echo msg \$i
 			cat /mnt/ui/activity/\$a/conversation/\$i | sed 's/w[0-9]* //g'
@@ -129,6 +159,14 @@ for a in 0 1 {
 }
 echo '@@ luci0'
 cat /tmp/deltest/luci0.log
+echo '@@ agents before close'
+ps | grep LuciBridge | wc -l
+echo 'activity delete 1' > /mnt/ui/ctl
+sleep 5
+echo '@@ agents after close'
+ps | grep LuciBridge | wc -l
+echo '@@ tool mount after close'
+ls -d /tool.1 /tool.1/tools >[2=1]
 echo '@@ end'
 echo DRIVER_DONE
 EOF
@@ -197,6 +235,28 @@ sys.exit(1)
 PY
 then ok "a long message reaches the model whole"; else bad "a long message reaches the model whole"; fi
 
+reqcheck "the compile gate passes code that compiles" \
+	'any("status: compiled" in t["content"] for t in tools)' gate 1
+reqcheck "the compile gate fails code that does not, with the compiler's error" \
+	'any("status: failed" in t["content"] and "undeclared" in t["content"] for t in tools)' gate 1
+reqcheck "a task's edit with a space in it is made" \
+	'tools and "replaced 1" in tools[-1]["content"]' child_edit 1
+reqcheck "activity 0 is told the task's change is staged" \
+	'"STAGED" in users[-1] and "todo.txt" in users[-1]' parent_promote 0
+reqcheck "promote applies the staged change" \
+	'tools and "promoted" in tools[-1]["content"]' parent_promote 1
+section "before promote" | grep -q bread && bad "a staged change is not in the file before promote" || ok "a staged change is not in the file before promote"
+section "after promote" | grep -q -- '- bread' && ok "the promoted change is in the file" || bad "the promoted change is in the file"
+
+before=$(section "agents before close" | grep -E '^ *[0-9]+ *$' | tr -dc 0-9)
+after=$(section "agents after close" | grep -E '^ *[0-9]+ *$' | tr -dc 0-9)
+if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -lt "$before" ]; then
+	ok "a closed task's agent stops ($before -> $after lucibridge processes)"
+else
+	bad "a closed task's agent stops ($before -> $after lucibridge processes)"
+fi
+section "tool mount after close" | grep -q '/tool.1/tools *$' && bad "a closed task's tool server is unmounted" || ok "a closed task's tool server is unmounted"
+
 C0=$(section "conversation 0")
 [ "$(printf '%s\n' "$C0" | grep -c 'text=Started Child.')" -eq 1 ] && ok "a reply is shown once" || bad "a reply is shown once"
 [ "$(printf '%s\n' "$C0" | grep -c 'text=Hello from the mock.')" -eq 2 ] && ok "each turn shows only its own reply" || bad "each turn shows only its own reply"
@@ -204,6 +264,7 @@ printf '%s\n' "$C0" | grep -q 'role=human text=\[task-event\]' && bad "the compl
 printf '%s\n' "$C0" | grep -q 'text=Reported the child.' && ok "activity 0 reports the completion" || bad "activity 0 reports the completion"
 [ "$(printf '%s\n' "$C0" | grep -c 'role=human text=SCENARIO:text_only')" -eq 2 ] && ok "the long message is one message" || bad "the long message is one message"
 section "conversation 1" | grep -q 'text=Child is done.' && ok "the task agent reports" || bad "the task agent reports"
+printf '%s\n' "$C0" | grep -q 'role=veltro text=/bind <path>' && ok "a slash command is answered where the user sees it" || bad "a slash command is answered where the user sees it"
 
 [ "$FAILED" -eq 0 ] || { tail -60 "$LOG"; echo "agent_delegation_test: $FAILED failed"; exit 1; }
 echo "agent_delegation_test: PASS"

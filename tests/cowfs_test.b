@@ -106,6 +106,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DiffListing", testDiffListing);
 	run("PerFilePromote", testPerFilePromote);
 	run("SecurityBaseIsolation", testSecurityBaseIsolation);
+	run("CreateDupWriteRead", testCreateDupWriteRead);
+	run("RemoveNewFile", testRemoveNewFile);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
@@ -586,4 +588,43 @@ listlen(l: list of string): int
 	for(; l != nil; l = tl l)
 		n++;
 	return n;
+}
+
+# A file created through cowfs, written through a descriptor dup'd onto fd 2
+# (how a tool captures a command's errors), reads back what was written once
+# that descriptor is gone.
+testCreateDupWriteRead(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup(t, "dupwrite");
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	path := mntpoint + "/errs.txt";
+	fd := sys->create(path, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		t.fatal(sys->sprint("create through cowfs: %r"));
+	saved := sys->dup(2, -1);
+	sys->dup(fd.fd, 2);
+	fd = nil;
+	e := sys->fildes(2);
+	sys->fprint(e, "line one\n");
+	sys->fprint(e, "line two\n");
+	e = nil;
+	sys->dup(saved, 2);
+
+	t.assertseq(readfile(path), "line one\nline two\n", "written through fd 2, read back");
+}
+
+# A file that is only in the overlay goes when removed.
+testRemoveNewFile(t: ref T)
+{
+	(basedir, overlaydir, mntpoint) := setup(t, "removenew");
+	mountcow(t, basedir, overlaydir, mntpoint);
+
+	path := mntpoint + "/scratch.b";
+	writefile(path, "temporary");
+	t.assert(fileexists(overlaydir + "/scratch.b"), "new file in overlay");
+	if(sys->remove(path) < 0)
+		t.fatal(sys->sprint("remove through cowfs: %r"));
+	t.assert(!fileexists(path), "removed file gone through cowfs");
+	t.assert(!fileexists(overlaydir + "/scratch.b"), "removed file gone from overlay");
 }

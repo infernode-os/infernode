@@ -131,12 +131,12 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"task\"," +
-		"\"description\":\"Create and manage delegated AI agents that run AUTONOMOUSLY from their brief. Put all work detail in brief=/instructions= at create time; you CANNOT send a task content or commands afterward, and you never do the work yourself. After create, tell the user what you started and end your turn: a [task-event] message brings you the task's report when it finishes. Do not poll status in a loop. Never re-create a task that is already running.\"," +
+		"\"description\":\"Create and manage delegated AI agents that run AUTONOMOUSLY from their brief. Put all work detail in brief=/instructions= at create time; you CANNOT send a task content or commands afterward, and you never do the work yourself. After create, tell the user what you started and end your turn: a [task-event] message brings you the task's report when it finishes. Do not poll status in a loop. Never re-create a task that is already running. A task's writes to the user's folders are staged, not applied: 'promote <id>' applies them once the user agrees (the user is asked to allow it), 'revert <id>' discards them.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, result, close. To make a task do work, describe it in args brief=/instructions= at create time. When a task reports done, use 'result <id>' to get its final answer back — do NOT re-create the task to retrieve output.\"}," +
-				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [model=<name>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/close: the task id. Omit for list.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"One of: create, status, list, result, close, promote, revert. To make a task do work, describe it in args brief=/instructions= at create time. When a task reports done, use 'result <id>' to get its final answer back — do NOT re-create the task to retrieve output.\"}," +
+				"\"args\":{\"type\":\"string\",\"description\":\"For create: key=value attributes. Put authority attrs first: label=<name> [tools=<csv>] [paths=<csv>] [urgency=<0-2>] [category=<text>] [model=<name>] [agenttype=<type>] [brief=<text>] [instructions=<text>]. brief=/instructions= consume the rest of the line. For status/result/close/promote/revert: the task id. Omit for list.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -149,7 +149,7 @@ exec(args: string): string
 		return "error: not initialized";
 	args = strip(args);
 	if(args == "")
-		return "error: no command. Use: create, status, list, result, close";
+		return "error: no command. Use: create, status, list, result, close, promote, revert";
 
 	(cmd, rest) := splitfirst(args);
 	cmd = str->tolower(cmd);
@@ -165,8 +165,17 @@ exec(args: string): string
 		return doresult(rest);
 	"close" =>
 		return doclose(rest);
+	"promote" =>
+		return dostaged(rest, "/promote");
+	"revert" =>
+		return dostaged(rest, "/revert");
 	* =>
-		return sys->sprint("error: unknown command '%s'. Use: create, status, list, result, close", cmd);
+		# A create with its verb left out ("label=X tools=... brief=..."):
+		# models do this, and only a create takes these attributes.
+		if(iskeyat(args, 0) && (hasprefix(args, "label=") ||
+		   hasprefix(args, "tools=") || hasprefix(args, "brief=")))
+			return docreate(args);
+		return sys->sprint("error: unknown command '%s'. Use: create, status, list, result, close, promote, revert", cmd);
 	}
 }
 
@@ -658,6 +667,43 @@ doclose(args: string): string
 		return "error: " + err;
 
 	return sys->sprint("activity %d archived", id);
+}
+
+# Apply (promote) or discard (revert) the changes a task has staged to the
+# user's files.  Its writes to a granted folder go to an overlay, not the
+# folder, until then; the task's own tab takes /promote and /revert, and
+# this sends the same, a fixed command and nothing else, to its input.
+dostaged(args, slash: string): string
+{
+	args = strip(args);
+	(id, nil) := str->toint(args, 10);
+	if(args == "" || id <= 0)
+		return "error: task id required";
+	base := sys->sprint("%s/activity/%d", UI_MOUNT, id);
+	status := readfile(base + "/status");
+	if(status == nil)
+		return sys->sprint("error: activity %d not found", id);
+	if(strip(status) == "hidden")
+		return sys->sprint("error: task %d is closed", id);
+	nbefore := 0;
+	while(readfile(sys->sprint("%s/conversation/%d", base, nbefore)) != nil)
+		nbefore++;
+	err := writefile(base + "/conversation/input", slash);
+	if(err != nil)
+		return "error: " + err;
+	# The task answers in its conversation; wait a little for it.
+	for(i := 0; i < 20; i++) {
+		sys->sleep(250);
+		for(m := nbefore; ; m++) {
+			c := readfile(sys->sprint("%s/conversation/%d", base, m));
+			if(c == nil)
+				break;
+			(role, text) := parseconvmsg(c);
+			if(role != "human" && text != "")
+				return sys->sprint("task %d: %s", id, text);
+		}
+	}
+	return sys->sprint("task %d: %s sent; the task is busy and will do it when its turn ends", id, slash[1:]);
 }
 
 # --- Utility functions ---

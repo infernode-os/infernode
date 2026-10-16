@@ -145,6 +145,40 @@ SCENARIOS = {
         {"tools": [tool("find", {"args": "/lib/veltro system.txt"})]},
         {"content": "Found with a late tool."},
     ],
+    # The limbo tool's own model: one program that compiles, one that does not.
+    "limbo_ok": [
+        {"content": "```limbo\nimplement Hello;\n\ninclude \"sys.m\";\n\tsys: Sys;\n"
+                    "include \"draw.m\";\n\nHello: module\n{\n\tinit: fn(nil: ref Draw->Context, nil: list of string);\n};\n\n"
+                    "init(nil: ref Draw->Context, nil: list of string)\n{\n\tsys = load Sys Sys->PATH;\n"
+                    "\tsys->print(\"hello\\n\");\n}\n```\n"},
+    ],
+    "limbo_bad": [
+        {"content": "```limbo\nimplement Bad;\n\ninclude \"sys.m\";\n\tsys: Sys;\n"
+                    "include \"draw.m\";\n\nBad: module\n{\n\tinit: fn(nil: ref Draw->Context, nil: list of string);\n};\n\n"
+                    "init(nil: ref Draw->Context, nil: list of string)\n{\n\tundeclared = 3;\n}\n```\n"},
+    ],
+    # Activity 0 asks for Limbo through the limbo tool, whose compile gate
+    # must say whether the code compiles.
+    "gate": [
+        {"tools": [tool("limbo", "SCENARIO:limbo_ok go"), tool("limbo", "SCENARIO:limbo_bad go")]},
+        {"content": "Gate checked."},
+    ],
+    # A task edits a file in a folder the user granted: the change is
+    # staged; activity 0, told so, promotes it on the user's word.
+    "delegate_edit": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Editor tools=edit,read paths=/usr/deltest/notes brief=SCENARIO:child_edit go"})]},
+        {"content": "Started the editor."},
+    ],
+    "child_edit": [
+        {"tools": [tool("edit", {"path": "/usr/deltest/notes/todo.txt",
+                                 "old": "- milk", "new": "- milk\n- bread"})]},
+        {"content": "Edited the list. SCENARIO:parent_promote"},
+    ],
+    "parent_promote": [
+        {"tools": [tool("task", {"command": "promote", "args": "2"})]},
+        {"content": "Promoted the edit."},
+    ],
     # Activity 0 on the completion event: its own tools still work.
     "parent_report": [
         {"tools": [tool("task", {"command": "status", "args": "1"})]},

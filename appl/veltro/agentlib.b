@@ -835,6 +835,52 @@ extracttoolargs(inputjson: string): string
 	return inputjson;
 }
 
+# edit takes <path> <old> <new> [all], and old and new are text: quoted, or
+# a space in one split it ("- milk" became "-" and "milk", and the edit
+# failed, "'-' found 2 times").  Its parser reads "..." with \" inside.
+editargs(inputjson: string): string
+{
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	pick obj := jv {
+	Object =>
+		path, old, new, all: string;
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			case name {
+			"path" => path = v;
+			"old" => old = v;
+			"new" => new = v;
+			"all" => all = v;
+			"args" => return v;	# already positional
+			}
+		}
+		r := path + " " + editquote(old) + " " + editquote(new);
+		if(all == "true" || all == "all" || all == "1")
+			r += " all";
+		return r;
+	}
+	return inputjson;
+}
+
+editquote(s: string): string
+{
+	q := "\"";
+	for(i := 0; i < len s; i++) {
+		if(s[i] == '"')
+			q[len q] = '\\';
+		q[len q] = s[i];
+	}
+	q[len q] = '"';
+	return q;
+}
+
 calltool(tool, args: string): string
 {
 	# Legacy /tool shell tools take positional Plan 9 args. The LLM now emits
@@ -842,7 +888,10 @@ calltool(tool, args: string): string
 	# mcp9p /call), so the JSON->positional projection for /tool tools happens
 	# HERE, at the boundary. extracttoolargs passes already-positional or empty
 	# input through unchanged, so this is safe for any caller.
-	args = extracttoolargs(args);
+	if(str->tolower(tool) == "edit")
+		args = editargs(args);
+	else
+		args = extracttoolargs(args);
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
 
 	# Open tool file. The active tool set in tools9p can transiently churn at

@@ -466,11 +466,15 @@ needsapproval(s: ref Session, toolname, args: string): int
 {
 	if(!s.gate)
 		return 0;
-	if(toolname != "exec" && toolname != "write" && toolname != "edit")
+	if(toolname != "exec" && toolname != "write" && toolname != "edit" && toolname != "task")
 		return 0;
 	# Native tool calls carry JSON ({"path":"/lib/x",...}); judge the
 	# positional form the tool will actually run, as calltool sends it.
 	args = s.al->extracttoolargs(args);
+	# A task's staged changes reach the user's own files only on the
+	# user's word.
+	if(toolname == "task")
+		return hasprefix(strip(args), "promote");
 	if(toolname == "exec") {
 		if(recursiveRmOutsideTmp(s, args))
 			return 1;
@@ -486,12 +490,24 @@ needsapproval(s: ref Session, toolname, args: string): int
 	return 0;
 }
 
+# What the user is asked to allow, in words: a native call's arguments are
+# JSON, and the dialogue showed it raw (task {"command":"promote",...}).
+approvaltext(s: ref Session, toolname, args: string): string
+{
+	pos := strip(s.al->extracttoolargs(args));
+	if(toolname == "task" && hasprefix(pos, "promote")) {
+		id := strip(pos[len "promote":]);
+		return "apply the changes task " + id + " staged to your files";
+	}
+	return pos;
+}
+
 # Blocks until the operator answers through the approve file (or cancels).
 pretoolapproval(s: ref Session, callid, toolname, args: string): string
 {
 	if(!needsapproval(s, toolname, args))
 		return "allow";
-	a := ref Approval(callid, toolname, s.al->truncate(args, 120), chan[1] of int);
+	a := ref Approval(callid, toolname, s.al->truncate(approvaltext(s, toolname, args), 160), chan[1] of int);
 	log(s, "pretool: awaiting approval for " + toolname);
 	setstatus(s, "blocked");
 	evc <-= ref Ev.Approve(s, a);

@@ -410,7 +410,13 @@ node; all nodes must be upgraded together.
 set (any value other than empty, `0`, or one starting with `n`/`N`), the
 handshake uses ML-KEM-1024 instead of ML-KEM-768 (`cnsamode()` in
 `libinterp/keyring.c`). Every node in the fleet must agree: a 768/1024 pair
-fails the public-key length check, with no fallback. Certificates follow the
+fails the public-key length check, with no fallback, and each side's error
+says which of the two is in CNSA mode (`bad ml-kem public key length: the
+peer is in CNSA mode (ML-KEM-1024), this node is not; set CNSAMODE alike`).
+The policy is the environment of the process that started the emulator, so
+set it where every way of starting one sees it: on macOS, both launchd
+(`launchctl setenv`, which a LaunchAgent makes last) for the Dock and Finder,
+and the shell's profile for a terminal. Certificates follow the
 signing key's strength (#304): `createsignerkey` and the other signer sites
 choose SHA-384 for ML-DSA and SLH-DSA keys and SHA-256 for classical keys, and
 record the choice in the certificate's `ha` field, which verifiers re-hash

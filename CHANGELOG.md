@@ -2,6 +2,18 @@
 
 All notable changes to InferNode are documented in this file.
 
+## [Unreleased]
+
+### Security
+
+- **A CNSA-mode mismatch says which side is in CNSA mode.** A node
+  with `CNSAMODE` set and one without failed authentication with only
+  "bad ml-kem public key length"; each side now says whether it or its
+  peer uses ML-KEM-1024, and to set `CNSAMODE` alike. On macOS the
+  Dock and a terminal can start an emulator with different
+  environments, so one machine could reach a CNSA server one way and
+  not the other. `tests/cnsa_nodepair_test.sh` covers both mixes.
+
 ## [0.8.0] - 2026-10-15
 
 This release makes TLS post-quantum by default: the hybrid key exchange

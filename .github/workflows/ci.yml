@@ -181,6 +181,13 @@ jobs:
         ROOT=. bash tests/host/namespace_manifest_invariants_test.sh
         ROOT=. bash tests/host/veltro_namespace_failclosed_test.sh
 
+    - name: Check an idle emulator uses no CPU
+      run: |
+        # With a web page loaded and nothing to do, the idle collector
+        # kept going round the heap: a core, for as long as it sat idle.
+        chmod +x tests/host/idle_cpu_test.sh
+        ROOT=. bash tests/host/idle_cpu_test.sh
+
     - name: Check Charon's start page ships
       run: |
         # The start page must be a file every release package carries

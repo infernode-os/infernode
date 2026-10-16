@@ -4,17 +4,15 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
-### Packaging
+### Security
 
-- **Releases ship `man`, `doc`, `icons`, `appl` and `n`.** The tarballs,
-  .app bundles and Windows zip had no manual (`man` found nothing), none
-  of the papers in `/doc`, none of the images Tk programs load from
-  `/icons`, no source or symbol files for the debugger and profiler
-  (`/appl`, without its `.dis`, which `/dis` has), and no `/n`. Without `/n` the profile's mount of the host's
-  files on `/n/local` failed, silently, on a fresh install's first
-  start, and the profile then made the user's home under the bundle's
-  own `n/local` (`.infernode`, `tmp`) instead of using the real one; the
-  `mkdir` happened to make `/n`, so later starts worked.
+- **A CNSA-mode mismatch says which side is in CNSA mode.** A node
+  with `CNSAMODE` set and one without failed authentication with only
+  "bad ml-kem public key length"; each side now says whether it or its
+  peer uses ML-KEM-1024, and to set `CNSAMODE` alike. On macOS the
+  Dock and a terminal can start an emulator with different
+  environments, so one machine could reach a CNSA server one way and
+  not the other. `tests/cnsa_nodepair_test.sh` covers both mixes.
 
 ## [0.8.0] - 2026-10-15
 

@@ -84,12 +84,24 @@ nprog(void)
 	return n;
 }
 
+/*
+ * The heap's activity (heapactivity) when the idle collector last went
+ * round it all.  Going round again finds nothing new while nothing has
+ * been allocated or freed since, and a heap of a few hundred MB (a web
+ * page laid out) took a core to do it, over and over, for as long as
+ * the emulator sat idle.
+ */
+static ulong idleseen;
+static int idleknown;
+
 static void
 execatidle(void)
 {
 	int done;
 
 	if(tready(nil))
+		return;
+	if(idleknown && heapactivity() == idleseen)
 		return;
 
 	gcidle++;
@@ -106,6 +118,10 @@ execatidle(void)
 		gcidlepass++;
 		if(((ulong)gcidlepass&0xFF) == 0)
 			osyield();
+	}
+	if(gccolor >= done) {	/* all the way round, not cut short */
+		idleseen = heapactivity();
+		idleknown = 1;
 	}
 	up->type = Interp;
 	delrunq(up->prog);

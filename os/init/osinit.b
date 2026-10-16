@@ -1897,9 +1897,6 @@ wifijoin(essid, pass: string)
 #
 wifiwatch(ifcno: string)
 {
-	dhcp := load Command "/dis/ip/dhcp.dis";
-	if(dhcp == nil)
-		return;
 	seen := keycount();
 	for(;;){
 		sys->sleep(10*1000);
@@ -1911,8 +1908,7 @@ wifiwatch(ifcno: string)
 		seen = n;
 		sys->print("init: wifi: re-joined; asking for an address again\n");
 		dropaddress(ifcno);
-		dhcp->init(nil, "dhcp" :: "/net/ipifc/" + ifcno :: nil);
-		if(hasaddress(ifcno)){
+		if(wifidhcp(ifcno)){
 			(ndb, nil) := slurp("/net/ndb");
 			sys->print("init: wifi: %s\n", ndb);
 		}else
@@ -2054,14 +2050,8 @@ wifiaddr(): string
 		sys->print("init: wifi: bind ether failed: %r\n");
 		return nil;
 	}
-	dhcp := load Command "/dis/ip/dhcp.dis";
-	if(dhcp == nil){
-		sys->print("init: wifi: cannot load ip/dhcp: %r\n");
-		return nil;
-	}
 	for(try := 0; try < 2; try++){
-		dhcp->init(nil, "dhcp" :: "/net/ipifc/" + ifcno :: nil);
-		if(hasaddress(ifcno))
+		if(wifidhcp(ifcno))
 			break;
 		sys->print("init: wifi: no address yet; asking again\n");
 		sys->sleep(5000);
@@ -2073,6 +2063,58 @@ wifiaddr(): string
 	(ndb, nil) := slurp("/net/ndb");
 	sys->print("init: wifi: %s\n", ndb);
 	return ifcno;
+}
+
+#
+# The radio's DHCP client, run as ip/dhcp -m: kept running, so the lease
+# is renewed, in a process group of its own, so that the next call --
+# a re-join -- can stop all of it first.
+#
+# It used to be run in the foreground without -m, once at boot and again
+# at every re-join. Without -m nothing reads the lease's channel, so the
+# client's renewal process blocked on its first renewal for ever: no
+# renewal, and one process left behind per run. A Pi 4 whose Wi-Fi
+# re-joined every eight minutes had 93 of them after 13 hours, the whole
+# of a 200 KB/hour climb in its main pool (memtags: newproc, newstack,
+# newprog, newfgrp).
+#
+dhcpgrp := 0;
+
+wifidhcp(ifcno: string): int
+{
+	if(dhcpgrp > 0){
+		killgrp(dhcpgrp);
+		dhcpgrp = 0;
+	}
+	dhcp := load Command "/dis/ip/dhcp.dis";
+	if(dhcp == nil){
+		sys->print("init: wifi: cannot load ip/dhcp: %r\n");
+		return 0;
+	}
+	pidc := chan of int;
+	spawn dhcprun(dhcp, ifcno, pidc);
+	dhcpgrp = <-pidc;
+	for(i := 0; i < 40 && !hasaddress(ifcno); i++)
+		sys->sleep(500);
+	return hasaddress(ifcno);
+}
+
+dhcprun(dhcp: Command, ifcno: string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
+	{
+		dhcp->init(nil, "dhcp" :: "-m" :: "/net/ipifc/" + ifcno :: nil);
+	} exception {
+	* =>
+		;	# no lease: dhcp says why; wifidhcp sees no address
+	}
+}
+
+killgrp(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
 }
 
 tmpsetup()

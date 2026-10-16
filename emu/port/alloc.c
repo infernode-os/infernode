@@ -116,6 +116,18 @@ memlow(void)
  * whole heap again and again while a large program ran, three quarters
  * of the CPU on a web page with a 400 MB JavaScript realm.
  */
+/*
+ * How much the heap has been used: its allocations and frees so far.
+ * The idle collector compares it with what it was when it last went
+ * round the whole heap, and does not go round again while nothing has
+ * changed.
+ */
+ulong
+heapactivity(void)
+{
+	return heapmem->nalloc + heapmem->nfree;
+}
+
 int
 memlowpass(int n)
 {

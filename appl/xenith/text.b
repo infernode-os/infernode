@@ -884,7 +884,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 				scrollup(t, 4);
 			return;
 		Keyboard->Down=>
-			t.commit(TRUE);
+			typecommit(t);
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
 				nnb = t.bswidth(16r15);
@@ -904,7 +904,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.show (q0, q0);
 			return;
 		Keyboard->Up=>
-			t.commit(TRUE);
+			typecommit(t);
 			# go to where ^U would erase, if not already at BOL
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
@@ -931,7 +931,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			scrollup(t, 2*t.frame.maxlines/3);
 			return;
 		Keyboard->Left =>
-			t.commit(TRUE);
+			typecommit(t);
 			if(t.q0 != t.q1)
 				t.show(t.q0, t.q0);
 			else if(t.q0 != 0)
@@ -939,7 +939,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.navoffset = 0;
 			return;
 		Keyboard->Right =>
-			t.commit(TRUE);
+			typecommit(t);
 			if(t.q0 != t.q1)
 				t.show(t.q1, t.q1);
 			else if(t.q1 != t.file.buf.nc)
@@ -952,15 +952,15 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 				return;
 			break;
 		 16r10 or Keyboard->Home =>
-			t.commit(TRUE);
+			typecommit(t);
 			t.show(0,0);
 			return;
 		 16r11 or Keyboard->End=>
-			t.commit(TRUE);
+			typecommit(t);
 			t.show(t.file.buf.nc,t.file.buf.nc);
 			return;
 		16r01 => # ^A: beginning of line
-			t.commit(TRUE);
+			typecommit(t);
 			# go to where ^U would erase, if not already at BOL
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
@@ -968,22 +968,22 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.show (t.q0-nnb, t.q0-nnb);
 			return;
 		16r05 => # ^E: end of line
-			t.commit(TRUE);
+			typecommit(t);
 			q0 = t.q0;
 			while (q0 < t.file.buf.nc && (t.readc(q0) != '\n'))
 				q0++;
 			t.show (q0, q0);
 			return;
 		16r03 => # ^C: copy
-			t.commit(TRUE);
+			typecommit(t);
 			exec->cut(t, nil, TRUE, FALSE);
 			return;
 		16r1A => # ^Z: undo
-			t.commit(TRUE);
+			typecommit(t);
 			exec->undo(t, TRUE);
 			return;
 		16r13 => # ^S: saves
-			t.commit(TRUE);
+			typecommit(t);
 			exec->put(t, nil, nil, 0);
 			return;
 	}
@@ -993,11 +993,11 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 	}
 	case(r){
 	16r18 => # ^X: cut
-		t.commit(TRUE);
+		typecommit(t);
 		exec->cut(t, nil, TRUE, TRUE);
 		return;
 	16r16 => # ^V: paste
-		t.commit(TRUE);
+		typecommit(t);
 		exec->paste(t, nil, FALSE, TRUE);
 		return;
 	}
@@ -1078,7 +1078,7 @@ if(0)	# DEBUGGING
 		break; # fall through to normal code
 	16r7f or Keyboard->Del =>
 		# Delete character - forward delete
-		t.commit(TRUE);
+		typecommit(t);
 		if(t.q0 >= t.file.buf.nc)
 			return;
 		nnb = 1;
@@ -1150,6 +1150,17 @@ Text.commit(t : self ref Text, tofile : int)
 		t.w.utflastqid = -1;
 	}
 	t.ncache = 0;
+}
+
+# Commit typing in every window on the file, not t's alone: a Zerox
+# (or a Render of one) keeps its own copy of what is being typed, and
+# a copy left behind no longer matches where the next key goes in.
+typecommit(t: ref Text)
+{
+	if(t.w != nil)
+		t.w.commit(t);
+	else
+		t.commit(TRUE);
 }
 
 clicktext : ref Text;

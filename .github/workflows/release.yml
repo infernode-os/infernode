@@ -230,6 +230,10 @@ jobs:
           exit 1
         fi
 
+        # Charon in the package as a user meets it (0.8.0 shipped one whose
+        # start page was in no package): fails the release if not.
+        sh tests/host/release_smoke_test.sh "$STAGE" emu/Linux/o.emu .
+
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
@@ -497,6 +501,10 @@ jobs:
           exit 1
         fi
 
+        # Charon in the package as a user meets it (0.8.0 shipped one whose
+        # start page was in no package): fails the release if not.
+        sh tests/host/release_smoke_test.sh "$STAGE" bin/emu resources gui
+
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
@@ -736,6 +744,10 @@ jobs:
           find "$STAGE" \( -name 'serve-agent*' -o -path '*agent-harness*' \) >&2
           exit 1
         fi
+
+        # Charon in the package as a user meets it (0.8.0 shipped one whose
+        # start page was in no package): fails the release if not.
+        sh tests/host/release_smoke_test.sh "$STAGE" emu/Linux/o.emu .
 
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
@@ -1002,6 +1014,10 @@ jobs:
           exit 1
         fi
 
+        # Charon in the package as a user meets it (0.8.0 shipped one whose
+        # start page was in no package): fails the release if not.
+        sh tests/host/release_smoke_test.sh "$STAGE" bin/emu resources gui
+
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"
 
@@ -1240,6 +1256,10 @@ jobs:
         # Xenith.app: the same emu, libraries and runtime tree, with its own
         # Info.plist, launcher, icon and credits (MacOSX/Xenith.app).  It
         # runs /lib/xen/boot.sh rather than Lucifer's boot.
+        # Charon in the package as a user meets it (0.8.0 shipped one whose
+        # start page was in no package): fails the release if not.
+        sh tests/host/release_smoke_test.sh "$APP" Contents/MacOS/emu Contents/Resources gui
+
         XAPP="Xenith.app"
         cp -a "$APP" "$XAPP"
         rm -f "$XAPP/Contents/MacOS/InferNode" "$XAPP/Contents/Resources/InferNode.icns" \
@@ -1551,6 +1571,10 @@ jobs:
           echo "FATAL: staged o.emu failed (exit $?): $out" >&2; exit 1; }
         echo "$out" | grep -qx 'staged-emu-ok' || {
           echo "FATAL: staged o.emu did not run sh: $out" >&2; exit 1; }
+
+        # Charon in the package as a user meets it (0.8.0 shipped one whose
+        # start page was in no package): fails the release if not.
+        sh tests/host/release_smoke_test.sh "$STAGE" emu/MacOSX/o.emu .
 
         tar czf "${STAGE}.tar.gz" -C "$STAGE" .
         echo "Archive: $(ls -lh ${STAGE}.tar.gz)"

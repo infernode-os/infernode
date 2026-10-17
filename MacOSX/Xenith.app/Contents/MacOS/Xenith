@@ -23,6 +23,9 @@ EMU="$SCRIPT_DIR/emu"
 INFERNODE_HIDPI=${INFERNODE_HIDPI:-1}
 export INFERNODE_HIDPI
 
+# The window's title.
+export SDL_APP_NAME=Xenith
+
 # Start in the home directory, through /n/local; the profile (-l) sets up
 # the overlays, then lib/xen/boot.sh starts the plumber, the model and
 # Xenith.  Leaving Xenith halts the emu, and so the app.

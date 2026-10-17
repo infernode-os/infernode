@@ -421,7 +421,7 @@ jobs:
 
         # Desktop integration
         cp Linux/infernode.desktop "$STAGE/"
-        cp Nt/Assets/Square150x150Logo.png "$STAGE/infernode.png"
+        cp MacOSX/InferNode.png "$STAGE/infernode.png"
 
         # Build scripts
         cp build-linux-amd64.sh install-sdl3.sh "$STAGE/"
@@ -942,7 +942,7 @@ jobs:
 
         # Desktop integration
         cp Linux/infernode.desktop "$STAGE/"
-        cp Nt/Assets/Square150x150Logo.png "$STAGE/infernode.png"
+        cp MacOSX/InferNode.png "$STAGE/infernode.png"
 
         # Build scripts
         cp build-linux-arm64.sh install-sdl3.sh "$STAGE/"

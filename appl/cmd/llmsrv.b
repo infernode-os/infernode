@@ -246,7 +246,7 @@ init(nil: ref Draw->Context, args: list of string)
 	backend = "api";
 	apiurl = "";
 	apikey = "";
-	defaultmodel = "claude-sonnet-4-5-20250929";
+	defaultmodel = "claude-sonnet-5-5";
 	modelset := 0;
 	defaultreasoning = "";
 	autocompactdefault = DEFAULTAUTOCOMPACT;
@@ -467,9 +467,9 @@ resolvemodel(name: string): string
 {
 	lname := str->tolower(name);
 	case lname {
-	"haiku" =>  return "claude-haiku-4-5-20251001";
-	"sonnet" => return "claude-sonnet-4-5-20250929";
-	"opus" =>   return "claude-opus-4-5-20251101";
+	"haiku" =>  return "claude-haiku-5-5";
+	"sonnet" => return "claude-sonnet-5-5";
+	"opus" =>   return "claude-opus-5-5";
 	}
 	return name;
 }
@@ -520,7 +520,7 @@ availablemodels(): (string, string)
 {
 	if(backend == "openai")
 		return llmclient->listmodels(apiurl, apikey);
-	return ("claude-opus-4-5-20251101\nclaude-sonnet-4-5-20250929\nclaude-haiku-4-5-20251001\n", nil);
+	return ("claude-opus-5-5\nclaude-sonnet-5-5\nclaude-haiku-5-5\n", nil);
 }
 
 # --- Error classification ---

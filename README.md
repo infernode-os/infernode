@@ -1,31 +1,31 @@
 # InferNode analytics
 
-Snapshot captured `2026-10-16T08:16:56+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
+Snapshot captured `2026-10-17T07:53:07+00:00`. Updated daily by [`.github/workflows/analytics.yml`](../.github/workflows/analytics.yml). Raw time series in [`snapshots.jsonl`](snapshots.jsonl).
 
 ## Engagement
 
 | Metric | Current | Δ 7d | Δ 30d |
 |---|---:|---:|---:|
-| Stars | 26 | — | — |
+| Stars | 27 | — | — |
 | Forks | 5 | — | — |
-| Watchers | 26 | — | — |
+| Watchers | 27 | — | — |
 | Subscribers | 2 | — | — |
 
 ## Issues & pull requests
 
 | State | Issues | PRs |
 |---|---:|---:|
-| Open | 28 | 9 |
-| Merged | — | 839 |
+| Open | 28 | 10 |
+| Merged | — | 843 |
 | Closed (unmerged) | 29 | 26 |
 
 ## Release downloads
 
-Lifetime downloads across published releases: **377** (Δ 7d —, Δ 30d —).
+Lifetime downloads across published releases: **381** (Δ 7d —, Δ 30d —).
 
 | Release | Published | Downloads |
 |---|---|---:|
-| `v0.8.0` | 2026-10-15 | 7 |
+| `v0.8.0` | 2026-10-15 | 11 |
 | `v0.7.0` | 2026-10-13 | 18 |
 | `v0.6.0` | 2026-10-10 | 13 |
 | `v0.5.0` | 2026-09-27 | 15 |

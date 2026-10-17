@@ -460,7 +460,7 @@ Row.dump(row : self ref Row, file : string)
 				}else{
 					dumped = TRUE;
 					t.file.dumpid = w.id;
-					b.puts(sprint("F%11d %11d %11d %11d %11d %11d %s\n", i, j,
+					b.puts(sprint("F%11d %11d %11d %11d %11d %11d %s\n", i, w.id,
 						w.body.q0, w.body.q1,
 						100*(w.r.min.y-c.r.min.y)/c.r.dy(),
 						w.body.file.buf.nc, fontname));

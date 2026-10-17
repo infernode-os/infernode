@@ -180,7 +180,11 @@ xenith)
 	# Xenith sizes itself by $displayscale (emu(1)). Not for sam, whose
 	# Tk does not. INFERNODE_HIDPI=0 keeps them doubled.
 	INFERNODE_HIDPI=${INFERNODE_HIDPI:-1}
-	export INFERNODE_HIDPI ;;
+	export INFERNODE_HIDPI
+	# The window's title, and on Linux the desktop entry it belongs to.
+	SDL_APP_NAME=Xenith
+	SDL_APP_ID=${SDL_APP_ID:-xenith}
+	export SDL_APP_NAME SDL_APP_ID ;;
 sam)
 	run="wm/wm sh -c $(q "wm/sam$files; echo halt > /dev/sysctl")" ;;
 esac

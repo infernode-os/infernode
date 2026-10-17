@@ -33,7 +33,9 @@ export LD_LIBRARY_PATH="$SCRIPT_DIR/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # The window's app ID (Wayland app_id, X11 WM_CLASS) names xenith.desktop,
 # so the dock shows this icon for the running window rather than a
 # generic one beside the pinned entry. emu's own ID is io.infernode.
+# The name is the window's title.
 export SDL_APP_ID="${SDL_APP_ID:-xenith}"
+export SDL_APP_NAME=Xenith
 
 # The display's own pixels on a HiDPI screen (see tools/xen).
 INFERNODE_HIDPI=${INFERNODE_HIDPI:-1}

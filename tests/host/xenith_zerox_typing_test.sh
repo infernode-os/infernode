@@ -35,11 +35,11 @@ trap 'rm -rf "$d"' EXIT
 body='hello world
 second line
 '
-name="/n/local$d/t.md"
+name="/n$d/t.md"
 tag="$name Del Snarf | Look"
 # one window on t.md in column 0 (dump id 1), its Zerox in column 1
 {
-    echo "/n/local$d"
+    echo "/n$d"
     echo /fonts/combined/go.14.font
     echo /fonts/combined/gomono.14.font
     printf '%11d %11d\n' 0 49
@@ -57,15 +57,15 @@ printf '\023' > "$d/save"	# ^S: Put
 
 out=$(SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c1 -g800x600 -r"$ROOT" /dis/sh.dis -c "
 load std
-bind '#U*' /n/local
-xenith -l /n/local$d/xenith.dump &
+bind '#U*' /n	# /n is in every checkout; /n/local is made at run time
+xenith -l /n$d/xenith.dump &
 sleep 6
 echo before \`{ps | grep -i xenith | wc -l}
 echo m 100 122 0 > /dev/pointer
 sleep 1
 # t.md is not on disk yet: the dump holds its text, and Put makes it
 for k in chars left c c chars left bs bs save {
-	cat /n/local$d/\$k > /dev/keyboard
+	cat /n$d/\$k > /dev/keyboard
 	sleep 1
 }
 echo after \`{ps | grep -i xenith | wc -l}

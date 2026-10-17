@@ -827,7 +827,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 				scrollup(t, 4);
 			return;
 		Keyboard->Down=>
-			typecommit(t);
+			t.commit(TRUE);
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
 				nnb = t.bswidth(16r15);
@@ -847,7 +847,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.show (q0, q0);
 			return;
 		Keyboard->Up=>
-			typecommit(t);
+			t.commit(TRUE);
 			# go to where ^U would erase, if not already at BOL
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
@@ -874,7 +874,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			scrollup(t, 2*t.frame.maxlines/3);
 			return;
 		Keyboard->Left =>
-			typecommit(t);
+			t.commit(TRUE);
 			if(t.q0 != t.q1)
 				t.show(t.q0, t.q0);
 			else if(t.q0 != 0)
@@ -882,7 +882,7 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.navoffset = 0;
 			return;
 		Keyboard->Right =>
-			typecommit(t);
+			t.commit(TRUE);
 			if(t.q0 != t.q1)
 				t.show(t.q1, t.q1);
 			else if(t.q1 != t.file.buf.nc)
@@ -895,15 +895,15 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 				return;
 			break;
 		 16r10 or Keyboard->Home =>
-			typecommit(t);
+			t.commit(TRUE);
 			t.show(0,0);
 			return;
 		 16r11 or Keyboard->End=>
-			typecommit(t);
+			t.commit(TRUE);
 			t.show(t.file.buf.nc,t.file.buf.nc);
 			return;
 		16r01 => # ^A: beginning of line
-			typecommit(t);
+			t.commit(TRUE);
 			# go to where ^U would erase, if not already at BOL
 			nnb=0;
 			if (t.q0 > 0 && (t.readc(t.q0-1) != '\n'))
@@ -911,22 +911,22 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 			t.show (t.q0-nnb, t.q0-nnb);
 			return;
 		16r05 => # ^E: end of line
-			typecommit(t);
+			t.commit(TRUE);
 			q0 = t.q0;
 			while (q0 < t.file.buf.nc && (t.readc(q0) != '\n'))
 				q0++;
 			t.show (q0, q0);
 			return;
 		16r03 => # ^C: copy
-			typecommit(t);
+			t.commit(TRUE);
 			exec->cut(t, nil, TRUE, FALSE);
 			return;
 		16r1A => # ^Z: undo
-			typecommit(t);
+			t.commit(TRUE);
 			exec->undo(t, TRUE);
 			return;
 		16r13 => # ^S: saves
-			typecommit(t);
+			t.commit(TRUE);
 			exec->put(t, nil, nil, 0);
 			return;
 	}
@@ -936,17 +936,17 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 	}
 	case(r){
 	16r18 => # ^X: cut
-		typecommit(t);
+		t.commit(TRUE);
 		exec->cut(t, nil, TRUE, TRUE);
 		return;
 	16r16 => # ^V: paste
-		typecommit(t);
+		t.commit(TRUE);
 		exec->paste(t, nil, FALSE, TRUE);
 		return;
 	}
 	if(t.q1 > t.q0){
 		if(t.ncache != 0)
-			typecommit(t);
+			error("text.type");
 		exec->cut(t, t, TRUE, TRUE);
 		t.eq0 = ~0;
 		if (r == 16r08 || r == 16r7f){	# erase character : odd if a char then erased
@@ -976,7 +976,6 @@ if(0)	# DEBUGGING
 		if(u.cq0!=t.cq0 && (u.ncache!=t.ncache || t.ncache!=0))
 			error("text.type inconsistent caches");
 	}
-		typesync(t);
 		nnb = t.bswidth(r);
 		q1 = t.q0;
 		q0 = q1-nnb;
@@ -1022,7 +1021,7 @@ if(0)	# DEBUGGING
 		break; # fall through to normal code
 	16r7f or Keyboard->Del =>
 		# Delete character - forward delete
-		typecommit(t);
+		t.commit(TRUE);
 		if(t.q0 >= t.file.buf.nc)
 			return;
 		nnb = 1;
@@ -1048,7 +1047,6 @@ if(0)	# DEBUGGING
 		return;
 	}
 	# otherwise ordinary character; just insert, typically in caches of all texts 
-	typesync(t);
 if(0)	# DEBUGGING 
 	for(i=0; i<t.file.ntext; i++){
 		u = t.file.text[i];
@@ -1095,39 +1093,6 @@ Text.commit(t : self ref Text, tofile : int)
 		t.w.utflastqid = -1;
 	}
 	t.ncache = 0;
-}
-
-# Commit typing in every window on the file, not t's alone: a Zerox
-# (or a Render of one) keeps its own copy of what is being typed, and
-# a copy left behind no longer matches where the next key goes in.
-typecommit(t: ref Text)
-{
-	if(t.w != nil)
-		t.w.commit(t);
-	else
-		t.commit(TRUE);
-}
-
-# A window's copy of the typing must end where t types next; one that
-# does not has gone stale. Say so and commit them all, rather than let
-# Text.type's checks below take the editor down with the edit.
-typesync(t: ref Text)
-{
-	for(i:=0; i<t.file.ntext; i++){
-		u := t.file.text[i];
-		if(u.ncache > 0 && u.cq0+u.ncache != t.q0){
-			# commit before warning: the Errors window it may open
-			# reshapes this column, and a redraw then would put a
-			# stale copy into the file a second time
-			typecommit(t);
-			# an Errors window opening takes the pointer, and the
-			# typing would follow it; keep both where they were
-			p := mouse.xy;
-			warning(nil, "typing went out of step between windows on "+t.file.name+"; recovered\n");
-			graph->cursorset(p);
-			return;
-		}
-	}
 }
 
 clicktext : ref Text;

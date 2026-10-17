@@ -18,4 +18,9 @@ fi
 # LD_LIBRARY_PATH as fallback in case patchelf wasn't applied.
 export LD_LIBRARY_PATH="$SCRIPT_DIR/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# The window's app ID (Wayland app_id, X11 WM_CLASS) names infernode.desktop,
+# so the dock shows this icon for the running window rather than a
+# generic one beside the pinned entry. emu's own ID is io.infernode.
+export SDL_APP_ID="${SDL_APP_ID:-infernode}"
+
 exec "$EMU" -c1 -pheap=1536m -pmain=1024m -pimage=1024m "-r$RESOURCES" sh -l /lib/lucifer/boot.sh

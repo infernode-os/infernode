@@ -6,6 +6,7 @@ Comment=InferNode's text environment, on its own
 Exec=xenith %F
 Icon=xenith
 Terminal=false
+StartupWMClass=xenith
 Categories=Development;TextEditor;
 MimeType=text/plain;
 Keywords=acme;editor;inferno;limbo;

@@ -59,6 +59,8 @@ if ($Sam) {
 	$theme = if ($env:XEN_THEME) { $env:XEN_THEME } else { 'xenith' }
 	# The plumber, the model and Xenith, as tools/xen and the apps start them.
 	$run = 'run /lib/xen/boot.sh -t ' + (Q $theme) + $list
+	# The window's title.
+	$env:SDL_APP_NAME = 'Xenith'
 }
 $cwd = ToInferno (Get-Location).ProviderPath
 $cmd = if ($cwd) { 'cd ' + (Q $cwd) + '; ' + $run } else { $run }

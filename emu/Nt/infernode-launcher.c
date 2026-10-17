@@ -154,6 +154,9 @@ WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 				break;
 		}
 
+		/* The window's title; o.emu.exe inherits it. */
+		SetEnvironmentVariableA("SDL_APP_NAME", "Xenith");
+
 		/* -l sources lib/sh/profile; /lib/xen/boot.sh starts the
 		 * plumber, the model and Xenith, as tools/xen does. */
 		_snprintf(cmd, sizeof(cmd),

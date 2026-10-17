@@ -101,7 +101,11 @@ arguments given. The bundle and launcher sources are
 `/DXENITH` (`emu/Nt/build-launcher.ps1` builds both launchers), and
 `Linux/xenith` with `Linux/xenith.desktop`; the
 icon is `MacOSX/Xenith.png`, from which `Xenith.icns` and
-`Nt/Xenith.ico` are made.
+`Nt/Xenith.ico` are made. It is drawn on the macOS icon grid: a
+1024px canvas with the rounded square 824px across, its corners
+Apple's continuous curve, a transparent margin and a soft shadow.
+macOS does not round an app icon itself, so the shape is in the
+image; Linux, which ships the same PNG, imposes no shape either.
 
 ## Behaviour
 

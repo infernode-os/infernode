@@ -483,6 +483,20 @@ postwmsize(void)
  * pixels would come out half size on a Retina screen, so it is not
  * the default there.
  */
+/*
+ * The window's title is the app's name: InferNode, or what the
+ * launcher gave as SDL_APP_NAME, which overrides the name set in
+ * sdl3_preinit (Xenith's launchers set it to Xenith).
+ */
+static const char*
+wintitle(void)
+{
+	const char *t;
+
+	t = SDL_GetAppMetadataProperty(SDL_PROP_APP_METADATA_NAME_STRING);
+	return t != nil && *t != 0 ? t : "InferNode";
+}
+
 static int
 hidpiwanted(void)
 {
@@ -1004,7 +1018,7 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	attacherr[0] = 0;
 	dispatch_sync(dispatch_get_main_queue(), ^{
 		sdl_window = SDL_CreateWindow(
-			"InferNode",
+			wintitle(),
 			sdl_width, sdl_height,
 			SDL_WINDOW_RESIZABLE | hidpiflag());
 		if (!sdl_window)
@@ -1408,7 +1422,7 @@ handle_window_creation(void)
 		return;
 
 	sdl_window = SDL_CreateWindow(
-		"InferNode",
+		wintitle(),
 		sdl_width, sdl_height,
 		SDL_WINDOW_RESIZABLE | hidpiflag());
 	if (!sdl_window) {

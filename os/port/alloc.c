@@ -88,7 +88,7 @@ struct
 };
 
 Pool*	mainmem = &table.pool[0];
-Pool*	heapmem = &table.pool[1];
+Pool*	heappool = &table.pool[1];	/* vm0's; heapmem is the running VM's (interp.h) */
 Pool*	imagmem = &table.pool[2];
 
 static void _auditmemloc(char *, void *);
@@ -1258,6 +1258,7 @@ poolbysite(void)
 void
 poolinit(void)
 {
+	vm0.vheap = heappool;	/* vm0's heap is the heap pool, from the start (interp.h) */
 	debugkey('m', "memory pools", poolsummary, 0);
 	debugkey('l', "main pool by allocation site", poolbysite, 0);
 }

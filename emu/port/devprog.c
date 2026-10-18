@@ -147,7 +147,6 @@ static	Bpt*	setbpt(Bpt*, char*, int);
 static	int	mntscan(Mntwalk*, Pgrp*, char*, int);
 extern	Type	*Trdchan;
 extern	Type	*Twrchan;
-extern	Module*	modules;
 static  char 	Emisalign[] = "misaligned address";
 
 static int

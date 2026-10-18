@@ -75,6 +75,7 @@ typedef struct Altc	Altc;
 typedef struct Except Except;
 typedef struct Handler Handler;
 typedef struct Vm Vm;
+typedef struct Pool Pool;
 
 /*
  * R, the running VM's registers.
@@ -305,6 +306,11 @@ struct Vm
 	void*	gcptr;		/* os/port/alloc.c moves it past a block it frees */
 	ulong	vgcnruns, vgcsweeps, vgcbroken, vgchalted, vgcepochs;
 	uvlong	vgcdestroys, vgcinspects;
+	void*	ptrtab[32];	/* Heap the C side holds, which the collector must mark: gc.c, ptradd */
+	void*	ptrfree;
+	Pool*	vheap;		/* the pool its Dis objects live in: no other VM's sweeper ever walks it */
+	Module*	vmodules;	/* the modules loaded into it */
+	Modlink*	vretpending;	/* the module OP(ret) is holding for release: xec.c */
 };
 extern	Vm	vm0;
 #define	mutator		(VM->vmutator)
@@ -318,6 +324,10 @@ extern	Vm	vm0;
 #define	gcepochs	(VM->vgcepochs)
 #define	gcdestroys	(VM->vgcdestroys)
 #define	gcinspects	(VM->vgcinspects)
+#define	heapmem		(VM->vheap)
+#define	modules		(VM->vmodules)
+#define	retpending	(VM->vretpending)
+extern	Pool*	heappool;	/* vm0's heap pool (os/port/alloc.c, emu/port/alloc.c) */
 
 struct Progs
 {
@@ -468,7 +478,6 @@ extern	String	snil;
 extern	void	(*optab[256])(OPARGS);
 extern	void	(*comvec)(void);
 extern	void	(*dec[])(OPARGS);
-extern	Module*	modules;
 extern	int	minvalid;
 
 extern	int		Dconv(Fmt*);

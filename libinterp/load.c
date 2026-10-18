@@ -6,7 +6,6 @@
 
 #define	A(r)	*((Array**)(r))
 
-Module*	modules;
 int	dontcompile;
 
 typedef struct ParseState ParseState;

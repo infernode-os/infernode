@@ -28,9 +28,8 @@ struct Ptrhash
 };
 
 	int	mflag;
-extern	Pool*	heapmem;
-static	Ptrhash	*ptrtab[PTRHASH];
-static	Ptrhash	*ptrfree;
+#define	ptrtab	((Ptrhash**)VM->ptrtab)	/* PTRHASH of them: interp.h's 32 */
+#define	ptrfree	(*(Ptrhash**)&VM->ptrfree)
 
 #define	HASHPTR(p)	(((ulong)(p) >> 6) & (PTRHASH - 1))
 
@@ -185,7 +184,6 @@ marklist(Type *t, void *vw)
 	}
 }
 
-extern Modlink *retpending;	/* xec.c */
 
 static void
 rootset(Prog *root)

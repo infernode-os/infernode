@@ -675,7 +675,7 @@ enum
 };
 
 extern Pool*	mainmem;
-extern Pool*	heapmem;
+extern Pool*	heappool;
 extern Pool*	imagmem;
 
 /* queue state bits,  Qmsg, Qcoalesce, and Qkick can be set in qopen */

@@ -2591,7 +2591,7 @@ kmain(void)
 
 		mem = (ulong)conf.npage * BY2PG;
 		poolsize(mainmem, mem/MAINDIV, 0);
-		poolsize(heapmem, mem/HEAPDIV, 0);
+		poolsize(heappool, mem/HEAPDIV, 0);
 		poolsize(imagmem, mem/IMAGDIV, 0);
 	}
 

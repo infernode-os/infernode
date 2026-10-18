@@ -19,7 +19,6 @@ Type Tword = { 1, 0, 0, sizeof(WORD) };
 Type Tlong = { 1, 0, 0, sizeof(LONG) };
 Type Treal = { 1, 0, 0, sizeof(REAL) };
 
-extern	Pool*	heapmem;
 
 void	(*heapmonitor)(int, void*, ulong);
 

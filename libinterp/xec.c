@@ -809,14 +809,14 @@ OP(mspawn)
  * the compiled code has come back to xec, and it is also certain when
  * another return comes to OP(ret): that call is from another module's
  * code, and the first module has no reference left that could run it.
- * There is one R, and so one of these. Nothing else refers to it, so
+ * Each VM has one R, and so one of these (Vm.vretpending). Nothing else refers to it, so
  * the collector is told of it (gc.c, rootset), or it would be swept.
  */
-Modlink *retpending;		/* a GC root: gc.c, rootset */
 
 static void
 retrelease(void)
 {
+	RPDECL;
 	Modlink *ml;
 
 	ml = retpending;
@@ -1906,6 +1906,9 @@ void
 opinit(void)
 {
 	int i;
+
+	if(vm0.vheap == nil)
+		vm0.vheap = heappool;	/* before modinit and the first load allocate in it */
 
 	for(i = 0; i < 256; i++)
 		if(optab[i] == nil)

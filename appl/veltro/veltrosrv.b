@@ -1794,6 +1794,16 @@ Serve:
 				nd[len c.data:] = m.data;
 				c.data = nd;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				# A piece shorter than a full message is the write's last:
+				# the message is whole, and the turn starts now.  (Waiting
+				# for the clunk, a turn could wait for ever: the close of
+				# a dropped descriptor is not always prompt.)  Only a
+				# message of exact full pieces waits for the clunk.
+				if(len m.data < srv.iounit()) {
+					msg := string c.data;
+					c.data = nil;
+					startturn(s, msg);
+				}
 			Qapprove =>
 				(verb, rest) := str->splitl(strip(data), " \t");
 				rest = str->drop(rest, " \t");

@@ -1316,6 +1316,13 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		nd[len c.data:] = m.data;
 		c.data = nd;
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		# A piece shorter than a full message is the write's last: post it
+		# now, not at the clunk, which is not always prompt.
+		if(len m.data < srv.iounit()) {
+			msg := string c.data;
+			c.data = nil;
+			postinput(actid, msg);
+		}
 
 	Qpresctl =>
 		a := findactivity(actid);

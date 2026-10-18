@@ -21,6 +21,9 @@ tool and check each .b file with "limbo compile <path>" until it compiles.
 exec runs no commands unless they were granted to you.
 File tasks: use find/grep to locate targets, read to confirm, then act.
 Use spawn or memory only when the parent explicitly granted those capabilities.
+Calls you make in one response run in the order you give them, and when any of
+them changes something (write, edit) each finishes before the next starts: a
+compile after a write in the same response checks the file as written.
 </approach>
 
 <completion>

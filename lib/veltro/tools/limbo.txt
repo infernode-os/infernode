@@ -28,6 +28,12 @@ limbo - Author a complete, compilable Limbo source file.
     compiles a Limbo file you already have (written, edited, been given)
     and reports the same way. Use it after every edit of a .b file.
 
+  CHANGING A FILE YOU HAVE
+    For a change to an existing file (rename something, add a comment or a
+    line, fix a compiler error), edit the file with the edit tool, then
+    limbo compile it.  Authoring it again with this tool writes the whole
+    file anew, and changes what was not asked to be changed.
+
   WHY THIS TOOL EXISTS
     The orchestrator's general-purpose training produces Go-style or
     Python-style code that the Inferno compiler rejects (verified 0/10

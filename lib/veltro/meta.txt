@@ -118,6 +118,10 @@ Bad:  "Research websockets"
 Good: "Find the current WebSocket API specification version and summarize the key differences from the previous version. Use websearch to find the spec, webfetch to read it. Report: version number, release date, and top 3 changes."
 
 For complex tasks, use instructions= to give step-by-step procedures.
+
+When the user will work with the task themselves ("I'll talk to it", "let me
+work with it"), the brief says what it is for and to wait for the user: do not
+decide their requirements for them, or the task does the work before they ask.
 </writing_briefs>
 
 <monitoring>

@@ -298,6 +298,44 @@ testControl(t: ref T)
 	t.assert(waitfor(c, "gone") != nil, "a dropped page's reader is told");
 }
 
+# A click on an element a script listens on reaches the script: Xenith
+# passed a click on only a link or a form control, so a cookie banner's
+# button (jstor.org's) and a page's menus took none
+testScriptClick(t: ref T)
+{
+	(c, err) := htmldoc->browse(5, "file://" + DIR + "scriptclick.html", 400, 300);
+	t.assertnil(err, "browse");
+	t.assert(c != nil && waitfor(c, "done") != nil, "it loads");
+	where := htmldoc->posted(5);
+	if(where == nil)
+		t.fatal("no page files");
+	mfd := sys->open(where, Sys->ORDWR);
+	sys->create("/n/xht", Sys->OREAD, Sys->DMDIR|8r755);
+	if(mfd == nil || sys->mount(mfd, nil, "/n/xht", Sys->MREPL, nil) < 0)
+		t.fatal(sys->sprint("mount %s: %r", where));
+	ctl := sys->open("/n/xht/ctl", Sys->OWRITE);
+	if(ctl == nil || sys->fprint(ctl, "scripts on") < 0)
+		t.fatal(sys->sprint("scripts on: %r"));
+	ctl = nil;
+	t.assertnil(htmldoc->reload(5), "reload, with its script");
+	t.assert(waitfor(c, "done") != nil, "loads");
+	sys->sleep(1000);
+	(nil, cerr) := htmldoc->click(5, 50, 20);
+	t.assertnil(cerr, "a click on the div");
+	pressed := 0;
+	for(i := 0; i < 50 && !pressed; i++) {
+		pressed = contains(htmldoc->text(5), "pressed");
+		if(!pressed)
+			sys->sleep(100);
+	}
+	t.assert(pressed, "reaches its script: " + htmldoc->text(5));
+	ctl = sys->open("/n/xht/ctl", Sys->OWRITE);
+	if(ctl != nil)
+		sys->fprint(ctl, "scripts off");
+	sys->unmount(nil, "/n/xht");
+	htmldoc->drop(5);
+}
+
 field(t: ref T, id: int, name: string): ref Htmldoc->Field
 {
 	f := htmldoc->fields(id);
@@ -400,6 +438,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Control", testControl);
 	run("Fields", testFields);
 	run("Submit", testSubmit);
+	run("ScriptClick", testScriptClick);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

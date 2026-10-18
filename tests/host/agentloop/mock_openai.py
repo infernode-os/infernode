@@ -142,6 +142,9 @@ SCENARIOS = {
         {"tools": [tool("read", "/lib/veltro/system.txt")]},
         {"content": "Child is done. SCENARIO:parent_report"},
     ],
+    "compact_summary": [
+        {"content": "Earlier: the user asked for files to be read; some were."},
+    ],
     # A tool turned on after the agent started (/tools +find, Settings):
     # offered to the model, it must also be callable.
     "late_tool": [
@@ -277,6 +280,26 @@ class Handler(BaseHTTPRequestHandler):
         name, turn = scenario_of(body)
         with open(LOG, "a") as f:
             f.write(json.dumps({"scenario": name, "turn": turn, "body": body}) + "\n")
+        msgs = body.get("messages", [])
+        # llmsrv compacting a session: a summary, not a scenario's turn.
+        if not body.get("tools") and msgs and str(msgs[-1].get("content", "")).startswith(
+                "Summarize this conversation"):
+            name, turn = "compact_summary", 0
+        # As a real API does: a tool result must answer a tool call that
+        # is in the history before it.
+        called = set()
+        for m in msgs:
+            for c in m.get("tool_calls") or []:
+                called.add(c.get("id"))
+            if m.get("role") == "tool" and m.get("tool_call_id") not in called:
+                msg = json.dumps({"error": {"message": "tool message %s answers no tool call"
+                                            % m.get("tool_call_id")}}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(msg)))
+                self.end_headers()
+                self.wfile.write(msg)
+                return
         if name == "backend_down":
             # The model service failing (as an unreachable or overloaded one
             # does): the user must be told so, not shown the error as a reply.

@@ -1124,7 +1124,12 @@ rungeneration(sess: ref LlmSession, prompt: string)
 		askprompt(sess, prompt);
 	}
 
-	maybeautocompact(sess);
+	# Not in the middle of a tool exchange: compacted then, the model's
+	# tool calls went into the summary and the results sent next answered
+	# calls its history no longer had, which a real API refuses (400), and
+	# the turn died.  The exchange's end (end_turn) is the time.
+	if(!hasprefix(sess.lastresponse, "STOP:tool_use"))
+		maybeautocompact(sess);
 	endgeneration(sess);
 }
 

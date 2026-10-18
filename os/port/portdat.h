@@ -484,6 +484,7 @@ struct Proc
 	Label		sched;		/* known to l.s */
 	char*		kstack;		/* known to l.s */
 	Mach*		mach;		/* machine running this proc */
+	struct Vm*	vm;		/* the Dis VM whose interpreter it takes in acquire() (#944) */
 	char		text[KNAMELEN];
 	Proc*		rnext;		/* next process in run queue */
 	Proc*		qnext;		/* next process on queue for a QLock */

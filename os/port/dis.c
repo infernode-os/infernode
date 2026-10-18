@@ -21,7 +21,14 @@
 
 	void	vmachine(void*);
 
-struct
+/*
+ * A VM's scheduler (#944): the interpreter token, which procs queue for
+ * in acquire(), its run queue and its Progs. isched is the one of the
+ * VM the current process belongs to -- not the core's, because acquire()
+ * is called by a process that does not hold any yet.
+ */
+typedef struct Isched Isched;
+struct Isched
 {
 	Lock	l;
 	Prog*	runhd;
@@ -36,7 +43,10 @@ struct
 	Proc*	vmqt;
 	Proc*	idlevmq;	/* queue of procs wanting work */
 	Atidle*	idletasks;
-} isched;
+};
+static	Isched	sched0;		/* vm0's */
+#define	VMSCHED(v)	((Isched*)(v)->vsched)
+#define	isched	(*VMSCHED(up->vm))
 
 int	bflag = 1;	/* JIT array bounds checks; emu -B clears it */
 int	cflag;
@@ -119,7 +129,8 @@ accountant(void)
 {
 	Prog *p;
 
-	p = isched.runhd;
+	/* on the clock, in whatever process it interrupted: say which VM */
+	p = VMSCHED(&vm0)->runhd;
 	if(p != nil)
 		p->ticks++;
 }
@@ -1411,6 +1422,9 @@ disinit(void *a)
 
 	if(waserror())
 		panic("disinit error: %r");
+
+	vm0.vsched = &sched0;
+	up->vm = &vm0;
 
 	print("Initial Dis: \"%s\"\n", initmod);
 

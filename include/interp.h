@@ -311,6 +311,7 @@ struct Vm
 	Pool*	vheap;		/* the pool its Dis objects live in: no other VM's sweeper ever walks it */
 	Module*	vmodules;	/* the modules loaded into it */
 	Modlink*	vretpending;	/* the module OP(ret) is holding for release: xec.c */
+	void*	vsched;		/* its scheduler: the interpreter token, run queue and Progs (os/port/dis.c) */
 };
 extern	Vm	vm0;
 #define	mutator		(VM->vmutator)

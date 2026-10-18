@@ -85,6 +85,9 @@ BRIDGE_SUFFIX: con "\n\nYou are %AGENT%, the AI agent in a Lucifer activity. " +
 # the conversation, instead of polling task status in a loop the human can
 # neither see the end of nor interrupt.
 TASKEVENT: con "[task-event] ";
+# A message arrived (msgwatch, with its triage policy): a turn for the agent,
+# shown to the user as a short notice, never as the user's own words.
+MSGEVENT: con "[message-event] ";
 TASKEVENT_MAX: con 7600;	# the whole event: one 9P write (msize 8K) is one message
 TASKEVENT_FILEMAX: con 3500;	# bytes of the task's files carried in the event
 
@@ -546,7 +549,8 @@ turninput(m: string)
 		return;
 	}
 	shown := 0;
-	if(!agentlib->hasprefix(m, TASKEVENT) && (len m == 0 || m[0] != '/')) {
+	if(!agentlib->hasprefix(m, TASKEVENT) && !agentlib->hasprefix(m, MSGEVENT) &&
+	   (len m == 0 || m[0] != '/')) {
 		writemsg("human", m);
 		shown = 1;
 	}
@@ -1529,6 +1533,22 @@ stagedchanges(): string
 	return out;
 }
 
+# What the user is shown of an arrived message: who, what, a preview.
+msgnotice(ev: string): string
+{
+	out := "";
+	(nil, lines) := sys->tokenize(ev, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		if(agentlib->hasprefix(l, "From: ") || agentlib->hasprefix(l, "Subject: ") ||
+		   agentlib->hasprefix(l, "Preview: "))
+			out += l + "\n";
+	}
+	if(out == "")
+		out = "A message arrived.";
+	return agentlib->strip(out);
+}
+
 # What a task event says for the user: the event less its instructions to
 # the agent.
 eventreport(ev: string): string
@@ -1857,6 +1877,11 @@ init(nil: ref Draw->Context, args: list of string)
 					sys->sleep(500);
 					writefile(pctl, "center id=settings");
 					writemsg("veltro", "Settings is open on **LLM Service**. Check your LLM configuration, then restart.");
+				} else if(agentlib->hasprefix(choice, TASKEVENT) || agentlib->hasprefix(choice, MSGEVENT)) {
+					# A task's report or an arrived message, not the user:
+					# there is no model to give it to, and saying so to each
+					# one only filled the chat with the same line.
+					continue;
 				} else {
 					# A typed message while the LLM is unreachable: echo it
 					# and explain, instead of silently eating it.
@@ -1974,6 +1999,11 @@ init(nil: ref Draw->Context, args: list of string)
 		log("human: " + human);
 
 		# A task's report: a turn for the agent, not words from the human.
+		if(actid == 0 && agentlib->hasprefix(human, MSGEVENT)) {
+			writedialogue("New message", msgnotice(human), "", "");
+			agentturn(human);
+			continue;
+		}
 		if(actid == 0 && agentlib->hasprefix(human, TASKEVENT)) {
 			agentturn(human);
 			# The model could not take it: the outcome is the user's all

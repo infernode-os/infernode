@@ -682,6 +682,17 @@ splitpathperm(s: string): (string, string)
 	return (s, "rw");
 }
 
+# Paths every agent's namespace has, read-only (nsconstruct's infra list).
+baselinepath(p: string): int
+{
+	base := array[] of {"/lib/veltro", "/lib/certs", "/dis/veltro",
+		"/dev/time", "/dev/cons", "/dev/null"};
+	for(i := 0; i < len base; i++)
+		if(pathwithin(base[i], p))
+			return 1;
+	return 0;
+}
+
 pathwithin(grant, want: string): int
 {
 	if(grant == want)
@@ -1683,6 +1694,12 @@ provisionparse(args: string): (int, string, list of string, string)
 			# already; asking for it is asking for what it has.  Refused,
 			# it cost a retry and left a dead activity behind.
 			if(pathwithin("/tmp/veltro/scratch", ppath))
+				continue;
+			# Nor to read what every agent reads already (its baseline:
+			# /lib/veltro, /lib/certs, /dis/veltro, the clock and console).
+			# Asked for, it was refused as outside this agent's grants.
+			# Write access to them is another matter, checked as any grant.
+			if(pperm != "rw" && baselinepath(ppath))
 				continue;
 			perr := validatepath(ppath);
 			if(perr != nil)

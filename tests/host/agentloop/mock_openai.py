@@ -277,6 +277,13 @@ class Handler(BaseHTTPRequestHandler):
         name, turn = scenario_of(body)
         with open(LOG, "a") as f:
             f.write(json.dumps({"scenario": name, "turn": turn, "body": body}) + "\n")
+        if name == "backend_down":
+            # The model service failing (as an unreachable or overloaded one
+            # does): the user must be told so, not shown the error as a reply.
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         r = reply_for(name, turn) if name else {"content": "no scenario"}
         calls = calls_of(name, turn, r) if name else []
         finish = "tool_calls" if calls else "stop"

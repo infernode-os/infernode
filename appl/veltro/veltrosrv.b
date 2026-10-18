@@ -142,6 +142,7 @@ Session: adt {
 	failtool:	string;
 	failcount:	int;
 	closed:		int;
+	stopped:	int;		# the last turn was stopped by the user
 };
 
 sessions: list of ref Session;
@@ -855,6 +856,13 @@ turn(s: ref Session, input: string)
 
 	setstatus(s, "working");
 	prompt := input;
+	# A turn the user stopped is still in the model's history, unfinished,
+	# and the model took it up again at the next message.  It is told.
+	if(s.stopped) {
+		prompt = "[The user stopped your previous turn before it finished. " +
+			"Do not resume that work unless they ask you to.]\n\n" + prompt;
+		s.stopped = 0;
+	}
 	streambase := "/mnt/llm/" + s.llmid;
 
 	hitlimit := 1;
@@ -923,6 +931,18 @@ turn(s: ref Session, input: string)
 		if(response == "") {
 			stopstate = "empty";
 			say(s, "note", "(no response from LLM)");
+			break;
+		}
+		# The model service's own failure (unreachable, refused, timed
+		# out) is not the agent's reply: it was shown as one, raw
+		# ("Error: openai: cannot connect to ..."), and a task that never
+		# did its work was then reported complete.
+		if(!hasprefix(response, "STOP:") && (hasprefix(response, "Error:") || hasprefix(response, "error:"))) {
+			stopstate = "llm-error";
+			hitlimit = 0;
+			say(s, "note Model unavailable", "The model service did not answer (" +
+				strip(response[len "Error:":]) + "). Nothing more was done: " +
+				"send your message again once it is back.");
 			break;
 		}
 		prov("llm", sys->sprint("agent=%s step=%d", s.llmid, step + 1), array of byte response);
@@ -1001,6 +1021,8 @@ turn(s: ref Session, input: string)
 	if(hitlimit)
 		say(s, "note", sys->sprint("(reached %d-step limit — send another message to continue)", s.maxsteps));
 	prov("agentdone", sys->sprint("agent=%s steps=%d stop=%s", s.llmid, laststep, stopstate), nil);
+	if(stopstate == "cancelled")
+		s.stopped = 1;
 	log(s, sys->sprint("turn done stop=%s steps=%d", stopstate, laststep));
 	evc <-= ref Ev.Done(s);
 }
@@ -1143,7 +1165,7 @@ newsession(): ref Session
 	al->setverbose(verbose);
 	al->settoolmount(toolmount);
 	s := ref Session(nextsid++, al, "", nil, "", "", "", 0, maxsteps, 1,
-		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, 0);
+		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, 0, 0);
 	sessions = s :: sessions;
 	vers++;
 	return s;

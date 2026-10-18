@@ -161,18 +161,20 @@ echo '@@ after promote'
 cat /usr/deltest/notes/todo.txt
 
 
-for a in 0 1 2 {
-	echo '@@ conversation' \$a
-	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 {
-		if {ftest -e /mnt/ui/activity/\$a/conversation/\$i} {
-			echo msg \$i
-			cat /mnt/ui/activity/\$a/conversation/\$i | sed 's/w[0-9]* //g'
-			echo
-		}
-	}
-}
-echo '@@ luci0'
-cat /tmp/deltest/luci0.log
+echo 'SCENARIO:backend_down go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Model unavailable'
+
+echo 'SCENARIO:step_cap go' > /mnt/ui/activity/0/conversation/input
+sleep 4
+echo 'SCENARIO:text_only typed during the turn' > /mnt/ui/activity/0/conversation/input
+sleep 2
+echo '@@ typed shown'
+grep -l 'typed during the turn' /mnt/ui/activity/0/conversation/[0-9]* | wc -l
+echo '@@ stopping'
+echo '/stop' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Hello from the mock' 
+sleep 3
+
 echo 'SCENARIO:delegate_loop go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Started the looper'
 sleep 4
@@ -182,6 +184,19 @@ sleep 6
 echo '@@ looper closed'
 sleep 6
 echo '@@ looper later'
+
+for a in 0 1 2 {
+	echo '@@ conversation' \$a
+	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 {
+		if {ftest -e /mnt/ui/activity/\$a/conversation/\$i} {
+			echo msg \$i
+			cat /mnt/ui/activity/\$a/conversation/\$i | sed 's/w[0-9]* //g'
+			echo
+		}
+	}
+}
+echo '@@ luci0'
+cat /tmp/deltest/luci0.log
 
 echo '@@ agents before close'
 ps | grep LuciBridge | wc -l
@@ -300,13 +315,18 @@ fi
 grep -q 'turn done stop=cancelled' "$LOG" && ok "its turn ends cancelled" || bad "its turn ends cancelled"
 
 C0=$(section "conversation 0")
+printf '%s\n' "$C0" | grep -q 'dtype=dialogue title=Model unavailable' && ok "the model service failing is said so, plainly" || bad "the model service failing is said so, plainly"
+printf '%s\n' "$C0" | grep -q 'role=veltro text=Error:' && bad "no raw error is shown as the agent's reply" || ok "no raw error is shown as the agent's reply"
+[ "$(section "typed shown" | grep -E '^ *[0-9]+ *$' | tr -dc 0-9)" = 1 ] && ok "what the user types during a turn is shown at once" || bad "what the user types during a turn is shown at once"
+awk '/^@@ stopping$/{p=1} p' "$LOG" | grep -q 'veltrosrv: turn done stop=cancelled' && ok "/stop stops the turn" || bad "/stop stops the turn"
+[ "$(printf '%s\n' "$C0" | grep -c 'role=human text=SCENARIO:text_only typed during the turn')" -eq 1 ] && ok "what was typed is shown once, and answered after" || bad "what was typed is shown once, and answered after"
 [ "$(printf '%s\n' "$C0" | grep -c 'text=Started Child.')" -eq 1 ] && ok "a reply is shown once" || bad "a reply is shown once"
-[ "$(printf '%s\n' "$C0" | grep -c 'text=Hello from the mock.')" -eq 2 ] && ok "each turn shows only its own reply" || bad "each turn shows only its own reply"
+[ "$(printf '%s\n' "$C0" | grep -c 'text=Hello from the mock.')" -eq 3 ] && ok "each turn shows only its own reply" || bad "each turn shows only its own reply"
 printf '%s\n' "$C0" | grep -q 'role=human text=\[task-event\]' && bad "the completion is not shown as the human's" || ok "the completion is not shown as the human's"
 printf '%s\n' "$C0" | grep -q 'text=Reported the child.' && ok "activity 0 reports the completion" || bad "activity 0 reports the completion"
-[ "$(printf '%s\n' "$C0" | grep -c 'role=human text=SCENARIO:text_only')" -eq 2 ] && ok "the long message is one message" || bad "the long message is one message"
+[ "$(printf '%s\n' "$C0" | grep -c 'role=human text=SCENARIO:text_only go')" -eq 2 ] && ok "the long message is one message" || bad "the long message is one message"
 section "conversation 1" | grep -q 'text=Child is done.' && ok "the task agent reports" || bad "the task agent reports"
-printf '%s\n' "$C0" | grep -q 'role=veltro text=/bind <path>' && ok "a slash command is answered where the user sees it" || bad "a slash command is answered where the user sees it"
+printf '%s\n' "$C0" | grep -q 'role=veltro text=/stop' && ok "a slash command is answered where the user sees it" || bad "a slash command is answered where the user sees it"
 
 [ "$FAILED" -eq 0 ] || { tail -60 "$LOG"; echo "agent_delegation_test: $FAILED failed"; exit 1; }
 echo "agent_delegation_test: PASS"

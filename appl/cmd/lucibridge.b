@@ -304,14 +304,30 @@ substall(s, pat, repl: string): string
 	return out;
 }
 
-writemsg(role, text: string)
+# Messages are written from several processes in a turn (the reply as it
+# streams, the user's words as they come); each takes the next index, and
+# the lock keeps two from taking the same one.
+convlock: chan of int;
+
+# Write a message; its index, or -1.
+writemsg(role, text: string): int
+{
+	return writeconv("role=" + role + " text=" + text);
+}
+
+writeconv(msg: string): int
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
-	msg := "role=" + role + " text=" + text;
+	if(convlock == nil)
+		convlock = chan[1] of int;
+	convlock <-= 1;
+	idx := -1;
 	if(writefile(path, msg) < 0)
 		sys->fprint(stderr, "lucibridge: write to %s failed: %r\n", path);
 	else
-		convcount++;
+		idx = convcount++;
+	<-convlock;
+	return idx;
 }
 
 # Sync convcount with the server's actual message count.
@@ -331,7 +347,6 @@ syncconvcount()
 # Returns the message index for later updates (e.g. progress).
 writedialogue(title, text, progress, options: string): int
 {
-	path := sys->sprint("/mnt/ui/activity/%d/conversation/ctl", actid);
 	msg := "role=veltro dtype=dialogue";
 	if(title != "")
 		msg += " title=" + title;
@@ -340,12 +355,9 @@ writedialogue(title, text, progress, options: string): int
 	if(options != "")
 		msg += " options=" + options;
 	msg += " text=" + text;
-	if(writefile(path, msg) < 0) {
-		sys->fprint(stderr, "lucibridge: writedialogue failed: %r\n");
-		return -1;
-	}
-	idx := convcount;
-	convcount++;
+	idx := writeconv(msg);
+	if(idx < 0)
+		sys->fprint(stderr, "lucibridge: writedialogue failed\n");
 	return idx;
 }
 
@@ -467,14 +479,93 @@ updatedialogue(idx: int, progress, title, text: string)
 	writefile(path, msg);
 }
 
-# Read a single user input from the conversation input file (blocking).
-readuserinput(): string
+# The activity's input is read by one process for the agent's life, so
+# what the user types while a turn runs is seen at once: /stop stops the
+# turn, an answer goes to the dialogue that asked, anything else is shown
+# and kept for after the turn.  Read only between turns, it sat unseen
+# until the turn ended, and nothing could stop a turn.
+inputc: chan of string;		# nil once the input is closed
+answerc: chan of string;		# a dialogue's answer, while one is awaited
+awaiting := 0;
+Queued: adt {
+	text:	string;
+	shown:	int;		# already shown as the human's
+};
+queued: list of ref Queued;
+inputclosed := 0;
+
+inputreader()
 {
 	path := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return "";
-	return blockread(fd);
+	for(;;) {
+		fd := sys->open(path, Sys->OREAD);
+		if(fd == nil) {
+			inputc <-= nil;
+			return;
+		}
+		m := blockread(fd);
+		fd = nil;
+		inputc <-= m;
+		if(m == nil)
+			return;
+	}
+}
+
+# The next input: one that came during a turn first, in order.
+nextinput(): (string, int)
+{
+	if(queued != nil) {
+		q := hd queued;
+		queued = tl queued;
+		return (q.text, q.shown);
+	}
+	if(inputclosed)
+		return (nil, 0);
+	m := <-inputc;
+	if(m == nil)
+		inputclosed = 1;
+	return (m, 0);
+}
+
+# Input that came while a turn ran.
+turninput(m: string)
+{
+	if(m == nil) {
+		inputclosed = 1;
+		ctl("cancel");
+		return;
+	}
+	if(awaiting) {
+		answerc <-= m;
+		return;
+	}
+	if(m == "/stop") {
+		log("human: /stop");
+		ctl("cancel");
+		writemsg("veltro", "(stopping)");
+		return;
+	}
+	shown := 0;
+	if(!agentlib->hasprefix(m, TASKEVENT) && (len m == 0 || m[0] != '/')) {
+		writemsg("human", m);
+		shown = 1;
+	}
+	r: list of ref Queued;
+	for(l := queued; l != nil; l = tl l)
+		r = hd l :: r;
+	r = ref Queued(m, shown) :: r;
+	queued = nil;
+	for(; r != nil; r = tl r)
+		queued = hd r :: queued;
+}
+
+# An answer to a dialogue, during a turn.
+readuserinput(): string
+{
+	awaiting = 1;
+	r := <-answerc;
+	awaiting = 0;
+	return r;
 }
 
 setstatus(status: string)
@@ -861,7 +952,8 @@ handleslash(cmd: string): int
 	"revert" =>
 		ack = cowrevert(cmdarg);
 	"help" =>
-		ack = "/bind <path>  — add namespace path\n" +
+		ack = "/stop  — stop what the agent is doing (type it while it works)\n" +
+		      "/bind <path>  — add namespace path\n" +
 		      "/unbind <path>  — remove namespace path\n" +
 		      "/tools +name  — add tool\n" +
 		      "/tools -name  — remove tool\n" +
@@ -1121,6 +1213,7 @@ configuresession(): (string, string)
 # --- One turn: the agent's files, rendered into the UI ---
 
 # Shared between the followers of one turn.
+laststop := "";		# how the last turn ended (veltrosrv's stop=)
 placeholder := -1;		# the ▌ bubble shown while the first reply is awaited
 placeholderused := 0;
 curstep := 0;
@@ -1214,8 +1307,7 @@ beginmessage(role, title: string): int
 		placeholderused = 1;
 		return placeholder;
 	}
-	writemsg("veltro", "");
-	return convcount - 1;
+	return writemsg("veltro", "");
 }
 
 endmessage(role, title, body: string, idx: int)
@@ -1261,6 +1353,10 @@ logfollow(offset: big, done: chan of int)
 				break;
 			partial = rest[1:];
 			log(line);
+			if(agentlib->hasprefix(line, "turn done stop=")) {
+				(st, nil) := str->splitl(line[len "turn done stop=":], " ");
+				laststop = st;
+			}
 			if(agentlib->hasprefix(line, "step ") && agentlib->contains(line, ": writing ")) {
 				(stepno, nil) := str->toint(line[5:], 10);
 				curstep = stepno;
@@ -1341,6 +1437,7 @@ approver(done: chan of int)
 			continue;
 		}
 		(tool, what) := str->splitl(rest, " ");
+		awaiting = 1;	# before the tile: a quick answer is the tile's
 		didx := writedialogue("Permission required", tool + ":" + what, "", "Allow,Deny");
 		response := readuserinput();
 		answer := "allow";
@@ -1382,9 +1479,12 @@ notifyparent()
 	if(report == "")
 		report = "(it gave no report)";
 
-	ev := TASKEVENT + sys->sprint("Task %d \"%s\" has finished its assignment (status: %s). " +
+	done := "has finished its assignment";
+	if(agentlib->hasprefix(status, "failed"))
+		done = "could not finish its assignment";
+	ev := TASKEVENT + sys->sprint("Task %d \"%s\" %s (status: %s). " +
 		"This is a notification from the harness, not a message from the user.\n\n" +
-		"Its report:\n%s\n", actid, label, status, report);
+		"Its report:\n%s\n", actid, label, done, status, report);
 	files := stagedchanges() + taskfiles();
 	tail := "\nTell the user the outcome now, briefly: what was done, and the result " +
 		"(show it when it is short, or what the files hold). If the task asked a " +
@@ -1427,6 +1527,20 @@ stagedchanges(): string
 	for(; changes != nil; changes = tl changes)
 		out += "  " + hd changes + "\n";
 	return out;
+}
+
+# What a task event says for the user: the event less its instructions to
+# the agent.
+eventreport(ev: string): string
+{
+	ev = ev[len TASKEVENT:];
+	(head, nil) := str->splitstrl(ev, "\nTell the user the outcome now");
+	(first, rest) := str->splitstrl(head, " This is a notification from the harness");
+	if(rest != nil) {
+		(nil, after) := str->splitstrl(rest, "\n");
+		head = first + after;
+	}
+	return agentlib->strip(head);
 }
 
 # s cut to at most n bytes, on a character boundary.
@@ -1520,6 +1634,7 @@ agentturn(input: string)
 	placeholder = -1;
 	placeholderused = 0;
 	curstep = 0;
+	laststop = "";
 
 	# Where this turn starts in text and log: taken before the input is
 	# written, so a quick reply is not skipped.
@@ -1531,8 +1646,7 @@ agentturn(input: string)
 		return;
 	}
 	# Show activity at once: a cursor while the first reply is awaited.
-	placeholder = convcount;
-	writemsg("veltro", "▌");
+	placeholder = writemsg("veltro", "▌");
 
 	done := chan of int;
 	spawn textfollow(textoff, done);
@@ -1541,9 +1655,12 @@ agentturn(input: string)
 	turnover := chan[1] of int;
 	if(actid > 0)
 		spawn closewatch(turnover);
-	<-done;
-	<-done;
-	<-done;
+	for(ndone := 0; ndone < 3; ) alt {
+	<-done =>
+		ndone++;
+	m := <-inputc =>
+		turninput(m);
+	}
 	if(actid > 0)
 		turnover <-= 1;
 
@@ -1554,7 +1671,9 @@ agentturn(input: string)
 	# autonomous turn.  Once the user has sent a message, further
 	# completions don't raise urgency — the user is already engaged.
 	# "complete" tells the MA this TA finished its autonomous assignment.
-	if(actid > 0 && !userinteracted)
+	if(laststop == "llm-error" && actid > 0)
+		setstatus("failed: the model service could not be reached");
+	else if(actid > 0 && !userinteracted)
 		setstatus("complete");
 	else
 		setstatus("idle");
@@ -1811,8 +1930,6 @@ init(nil: ref Draw->Context, args: list of string)
 	# Register namespace entries (services, devices, filesystems) as resources
 	registernamespace();
 
-	inputpath := sys->sprint("/mnt/ui/activity/%d/conversation/input", actid);
-
 	log(sys->sprint("ready — activity %d, session %s, max %d steps, %d existing msgs",
 		actid, sess, maxsteps, convcount));
 
@@ -1825,6 +1942,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# This turn is NOT recorded with writemsg(), so it is invisible in the UI;
 	# only the agent's response is shown. Fires on brief OR instructions so an
 	# instructions-only task still auto-starts.
+	inputc = chan of string;
+	answerc = chan of string;
+	spawn inputreader();
+
 	if(taskbrief != "" || taskinstr != "") {
 		kickoff := "You have been started automatically to carry out an assigned task.";
 		if(taskbrief != "")
@@ -1840,14 +1961,8 @@ init(nil: ref Draw->Context, args: list of string)
 		notifyparent();
 	}
 
-	# Main loop: re-open input fd each iteration because 9P offset
-	# advances after read, causing subsequent reads to return EOF.
 	for(;;) {
-		inputfd := sys->open(inputpath, Sys->OREAD);
-		if(inputfd == nil)
-			fatal("cannot open " + inputpath);
-		human := blockread(inputfd);
-		inputfd = nil;
+		(human, shown) := nextinput();
 		if(human == nil) {
 			# The activity is closed: stop the agent and give back its
 			# model session, so nothing of it keeps running.
@@ -1861,6 +1976,10 @@ init(nil: ref Draw->Context, args: list of string)
 		# A task's report: a turn for the agent, not words from the human.
 		if(actid == 0 && agentlib->hasprefix(human, TASKEVENT)) {
 			agentturn(human);
+			# The model could not take it: the outcome is the user's all
+			# the same, so it is shown as the task gave it.
+			if(laststop == "llm-error")
+				writedialogue("Task report", eventreport(human), "", "");
 			continue;
 		}
 
@@ -1873,8 +1992,9 @@ init(nil: ref Draw->Context, args: list of string)
 		if(handletourchoice(human))
 			continue;
 
-		# Record human message in UI
-		writemsg("human", human);
+		# Record human message in UI (unless it was, as it came)
+		if(!shown)
+			writemsg("human", human);
 		# Revert "complete" → "idle" once the human engages this TA.
 		if(!userinteracted)
 			setstatus("idle");

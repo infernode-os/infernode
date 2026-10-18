@@ -32,6 +32,9 @@ Pending: adt {
 	Navigate =>
 		url:	string;
 		replace:	int;
+		method:	string;
+		ctype:	string;
+		body:	array of byte;
 	Scroll =>
 		x, y:	int;
 	}
@@ -297,7 +300,7 @@ hook(name: string, args: array of V): int
 	for(l := rev(pgpending); l != nil; l = tl l)
 		pick p := hd l {
 		Navigate =>
-			h.navigate(h.id, p.url, p.replace);
+			h.navigate(h.id, p.url, p.replace, p.method, p.ctype, p.body);
 		Scroll =>
 			h.scroll(h.id, p.x, p.y);
 		}
@@ -1105,7 +1108,13 @@ sleeper(c: chan of int, id, ms: int)
 
 dn_navigate(nil: V, a, n: int, nil: V, nil: int): V
 {
-	pgpending = ref Pending.Navigate(jsarg(a, n, 0), truthy(arg(a, n, 1))) :: pgpending;
+	(method, ctype, body) := ("GET", "", array[0] of byte);
+	if(n > 2) {	# a form posted: navigate(url, replace, method, type, body)
+		method = jsarg(a, n, 2);
+		ctype = jsarg(a, n, 3);
+		body = array of byte jsarg(a, n, 4);
+	}
+	pgpending = ref Pending.Navigate(jsarg(a, n, 0), truthy(arg(a, n, 1)), method, ctype, body) :: pgpending;
 	return undef;
 }
 

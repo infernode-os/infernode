@@ -1271,6 +1271,8 @@ Dosbpb: adt {
 	fatclusters: int;
 	fatbits: int;	# 12, 16 or 32
 	rootclust: int;	# FAT32 only: the root is a cluster chain, not an area
+	fsinfo: int;	# FAT32 only: sector of the FSInfo free-count hint, or 0
+	fsinfodone: int;	# the hint has been marked unknown this mount
 	fataddr: int; #big;	# sector number 
 	rootaddr: int; #big;
 	dataaddr: int; #big;
@@ -1482,6 +1484,7 @@ Dmddo:
 	if(bp.fatsize == 0 && bp.rootsize == 0) {
 		bp.fatsize = bytes2int(p.iobuf[36:40]);
 		bp.rootclust = bytes2int(p.iobuf[44:48]);
+		bp.fsinfo = bytes2short(p.iobuf[48:50]);
 	}
 
 	bp.fataddr = int bp.nresrv;
@@ -2773,11 +2776,43 @@ getfat(xf: ref Xfs, n: int): int
 	return k;
 }
 
+#
+# A FAT32 volume keeps a free-cluster count and a next-free hint in its
+# FSInfo sector. Nothing here keeps them up to date, so before the FAT
+# first changes they are set to 0xFFFFFFFF, "unknown", which the
+# specification allows and every reader must handle: it counts the FAT
+# itself. Left alone they would be wrong after the first write (fsck
+# reports it, and a host could believe the disk fuller or emptier than
+# it is).
+#
+fsinfounknown(xf: ref Xfs)
+{
+	bp := xf.ptr;
+	bp.fsinfodone = 1;
+	if(bp.fsinfo <= 0 || bp.fsinfo >= bp.nresrv)
+		return;
+	p := getsect(xf, bp.fsinfo);
+	if(p == nil)
+		return;
+	b := p.iobuf;
+	if(len b < 512 || string b[0:4] != "RRaA" || string b[484:488] != "rrAa" ||
+	   int b[510] != 16r55 || int b[511] != 16rAA){
+		putsect(p);
+		return;
+	}
+	for(i := 488; i < 496; i++)
+		b[i] = byte 16rFF;
+	p.flags |= BMOD;
+	putsect(p);
+}
+
 putfat(xf: ref Xfs, n, val: int)
 {
 	bp := xf.ptr;
 	if(n < 2 || n >= bp.fatclusters)
 		panic(sys->sprint("putfat n=%d", n));
+	if(bp.fatbits == 32 && !bp.fsinfodone)
+		fsinfounknown(xf);
 	k := (bp.fatbits*n) >> 3;
 	if(k >= bp.fatsize*bp.sectsize)
 		panic("putfat");

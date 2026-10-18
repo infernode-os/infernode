@@ -768,8 +768,8 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 			}
 		}
 		if(dup) {
-			note := sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)",
-				nm, s.al->truncate(args, 120), step);
+			note := sys->sprint("(skipped: `%s %s` is the same as a call before it in this response; its output is that one's)",
+				nm, s.al->truncate(args, 120));
 			results = (id, note) :: results;
 			prov("toolres", sys->sprint("agent=%s step=%d tool=%s status=cached",
 				s.llmid, step + 1, name), array of byte note);

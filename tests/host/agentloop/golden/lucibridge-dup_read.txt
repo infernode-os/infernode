@@ -14,7 +14,7 @@ tool-result call_dup_read_0_0:
 tools: list read write
 assistant-call call_dup_read_1_0 read {"args": "\/usr\/agentloop\/a.txt"}
 tool-result call_dup_read_1_0:
-  | (skipped: identical `read {"args": "/usr/agentloop/a.txt"}` already ran at step 0 — its output is in your earlier results; use that instead of repeating the call)
+  | (skipped: you already made the call `read {"args": "/usr/agentloop/a.txt"}` in this turn, and nothing has changed anything since, so its output is the same as then)
 
 == output
   | msg 0

@@ -134,8 +134,11 @@ dedupcheck(name, args: string): string
 		if(k == name + " " + args) {
 			if(verbose)
 				sys->fprint(stderr, "agentlib: dedup skip %s (identical call first ran at step %d)\n", name, s);
-			return sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)",
-				name, truncate(args, 120), s);
+			# No step number: the model's count is not this one, and told
+			# "step 12" it took the result from before its own edit for
+			# this one, and said the file had read stale.
+			return sys->sprint("(skipped: you already made the call `%s %s` in this turn, and nothing has changed anything since, so its output is the same as then)",
+				name, truncate(args, 120));
 		}
 	}
 	return "";

@@ -1804,9 +1804,10 @@ runprovisionedagent(lb: ShCommand, id: int, lbargs: list of string)
 	# the unmount below must happen in this one, where the mount is.
 	done := chan of int;
 	spawn runlucibridge(lb, id, lbargs, done);
-	<-done;
-	# The task's agent is done (its activity closed, or it failed): its
-	# tool server goes too, unmounted here, its last reference.
+	if(!<-done)
+		return;	# it failed: left as it was, its status says so
+	# The task's agent is done, its activity closed: its tool server goes
+	# too, unmounted here, its last reference.
 	setprovisionstate(id, "closed");
 	provisioncleanup("/tool." + string id);
 	if(verbose)
@@ -1821,6 +1822,8 @@ runlucibridge(lb: ShCommand, id: int, lbargs: list of string, done: chan of int)
 	"*" =>
 		provisionstatus(id, "failed: task agent exited");
 		sys->fprint(stderr, "tools9p: lucibridge activity %d exited: %s\n", id, e);
+		done <-= 0;
+		return;
 	}
 	done <-= 1;
 }

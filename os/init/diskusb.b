@@ -120,7 +120,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	(inep, outep, maxpkt) = bulkeps();
-	if(inep < 0 || outep < 0 || inep == outep){
+	if(inep < 0 || outep < 0){
 		sys->print("diskusb: %s: no pair of bulk endpoints\n", dev);
 		return;
 	}
@@ -608,6 +608,29 @@ bulkeps(): (int, int, int)
 
 openbulk(): int
 {
+	#
+	# One endpoint number both ways -- 0x81 in and 0x01 out, which is
+	# how Linux's mass-storage gadget does it -- is one endpoint to
+	# devusb, opened for reading and writing. This refused such a disk
+	# outright ("no pair of bulk endpoints"); the disks it had met, QEMU's
+	# and the Jetson's composite gadget, used two numbers.
+	#
+	if(inep == outep){
+		if(sys->fprint(ctlfd, "new %d bulk rw", inep) < 0 && !inuse()){
+			sys->print("diskusb: %s: cannot create bulk %d: %r\n", dev, inep);
+			return -1;
+		}
+		efd := sys->open("/usb/usb/" + epname(inep) + "/ctl", Sys->OWRITE);
+		if(efd != nil)
+			sys->fprint(efd, "maxpkt %d", maxpkt);
+		bulkin = sys->open("/usb/usb/" + epname(inep) + "/data", Sys->ORDWR);
+		bulkout = bulkin;
+		if(bulkin == nil){
+			sys->print("diskusb: %s: cannot open the bulk endpoint: %r\n", dev);
+			return -1;
+		}
+		return 0;
+	}
 	if(sys->fprint(ctlfd, "new %d bulk r", inep) < 0 && !inuse()){
 		sys->print("diskusb: %s: cannot create bulk in %d: %r\n", dev, inep);
 		return -1;

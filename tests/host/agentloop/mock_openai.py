@@ -68,6 +68,14 @@ SCENARIOS = {
         {"tools": [tool("read", FIX + "/a.txt"), tool("read", FIX + "/a.txt")]},
         {"content": "Same file twice in one batch."},
     ],
+    # A result too long for the model is kept in the workspace: read it
+    # back at the path the agent is told (turn 1 is made from turn 0's
+    # result, below).  The first read has a limit and no offset.
+    "spill_readback": [
+        {"tools": [tool("read", {"path": "/lib/veltro/system.txt", "limit": "1000"})]},
+        {"tools": []},
+        {"content": "Spill read."},
+    ],
     "big_output": [
         {"tools": [tool("read", FIX + "/big.txt")]},
         {"content": "Read the big one."},
@@ -316,6 +324,14 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         r = reply_for(name, turn) if name else {"content": "no scenario"}
+        if name == "spill_readback" and turn == 1:
+            told = None
+            for m in msgs:
+                if m.get("role") == "tool":
+                    mt = re.search(r"full output at (\S+?)\)?$", str(m.get("content", "")), re.M)
+                    if mt:
+                        told = mt.group(1)
+            r = {"tools": [tool("read", {"path": told or "/no/spill/path/given"})]}
         calls = calls_of(name, turn, r) if name else []
         finish = "tool_calls" if calls else "stop"
         text = r.get("content", "")

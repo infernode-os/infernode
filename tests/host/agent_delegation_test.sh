@@ -198,6 +198,8 @@ echo '@@ kept overlay'
 cat /tmp/veltro/cow/kept-1000-2-$STALEKEY/todo.txt
 
 
+echo 'SCENARIO:spill_readback go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Spill read'
 echo 'SCENARIO:grant_baseline go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Granted the baseline'
 
@@ -342,6 +344,14 @@ reqcheck "promote applies the staged change" \
 	'tools and "promoted" in tools[-1]["content"]' parent_promote 1
 section "before promote" | grep -q bread && bad "a staged change is not in the file before promote" || ok "a staged change is not in the file before promote"
 section "after promote" | grep -q -- '- bread' && ok "the promoted change is in the file" || bad "the promoted change is in the file"
+python3 -I -c 'import json,sys
+first = back = None
+for l in open(sys.argv[1]):
+    for m in json.loads(l)["body"]["messages"]:
+        if m.get("role") == "tool" and m.get("tool_call_id") == "call_spill_readback_0_0": first = str(m.get("content"))
+        if m.get("role") == "tool" and m.get("tool_call_id") == "call_spill_readback_1_0": back = str(m.get("content"))
+ok = first is not None and "full output at" in first and back is not None and not back.startswith("error") and "1\t" in back
+sys.exit(0 if ok else 1)' "$WORK/req.log" && ok "a long result is read back where the agent is told it is" || bad "a long result is read back where the agent is told it is"
 section "task status" | grep -q '^recently used (latest first): /lib/veltro/system.txt (via read)' && ok "task status says what the task has used" || bad "task status says what the task has used"
 section "task status" | grep -q '^last said: Child is done' && ok "task status says what the task last said" || bad "task status says what the task last said"
 section "after promote" | grep -q '^two$' && ok "a task's changes to a second folder are promoted too" || bad "a task's changes to a second folder are promoted too"

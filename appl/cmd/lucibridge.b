@@ -1686,7 +1686,7 @@ notifyparent()
 	ev := TASKEVENT + sys->sprint("Task %d \"%s\" %s (status: %s). " +
 		"This is a notification from the harness, not a message from the user.\n\n" +
 		"Its report:\n%s\n", actid, label, done, status, report);
-	files := stagedchanges() + taskfiles();
+	files := taskartifacts() + stagedchanges() + taskfiles();
 	tail := "\nTell the user the outcome now, briefly: what was done, and the result " +
 		"(show it when it is short, or what the files hold). If the task asked a " +
 		"question, relay it: the user can answer in the task's own tab. If you " +
@@ -1772,6 +1772,18 @@ clipbytes(s: string, n: int): string
 }
 
 # The files a task left in its workspace, with what they hold (bounded).
+# stepN.txt: a tool result too long for the model, kept for it to read
+# (veltrosrv), not something the task made.
+spillfile(nm: string): int
+{
+	if(!agentlib->hasprefix(nm, "step") || len nm < 9 || nm[len nm - 4:] != ".txt")
+		return 0;
+	for(i := 4; i < len nm - 4; i++)
+		if(nm[i] < '0' || nm[i] > '9')
+			return 0;
+	return 1;
+}
+
 taskfiles(): string
 {
 	dir := sys->sprint("%s/%d", AgentLib->SCRATCH_PATH, actid);
@@ -1786,7 +1798,7 @@ taskfiles(): string
 			break;
 		for(i := 0; i < n; i++) {
 			nm := d[i].name;
-			if(nm == "" || nm[0] == '.' || (d[i].mode & Sys->DMDIR))
+			if(nm == "" || nm[0] == '.' || (d[i].mode & Sys->DMDIR) || spillfile(nm))
 				continue;
 			out += sys->sprint("\n--- %s/%s (%bd bytes; in the task's workspace) ---\n",
 				AgentLib->SCRATCH_PATH, nm, d[i].length);
@@ -1806,6 +1818,37 @@ taskfiles(): string
 	if(out == "")
 		return "";
 	return "\nFiles it wrote:" + out;
+}
+
+# The documents the task put in its presentation view: they are in its own
+# tab, not activity 0's.  Unsaid, activity 0 told the user a task's
+# document was "in the presentation zone" and offered to bring it forward
+# there, where it is not.
+taskartifacts(): string
+{
+	dir := sys->sprint("/mnt/ui/activity/%d/presentation", actid);
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			if(!(d[i].mode & Sys->DMDIR))
+				continue;
+			id := d[i].name;
+			label := agentlib->strip(agentlib->readfile(dir + "/" + id + "/label"));
+			typ := agentlib->strip(agentlib->readfile(dir + "/" + id + "/type"));
+			out += sys->sprint("  %s \"%s\" (%s)\n", id, label, typ);
+		}
+	}
+	if(out == "")
+		return "";
+	return sys->sprint("\nIt made these documents, shown in its own tab (task %d, \"%s\"), " +
+		"not in yours; the user opens that tab to read them:\n%s", actid,
+		agentlib->strip(agentlib->readfile(sys->sprint("/mnt/ui/activity/%d/label", actid))), out);
 }
 
 # A task closed while it works stops working: its turn is cancelled, not

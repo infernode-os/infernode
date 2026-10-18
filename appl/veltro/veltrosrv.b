@@ -381,22 +381,24 @@ readllmfd(s: ref Session): string
 	}
 }
 
-# Scratch spill.  With -S the file lands in the backing directory and the
-# agent is told the path it sees that directory at (an activity's scratch
-# is mounted at SCRATCH_PATH in its tool namespace).
+# Scratch spill.  The session runs in the restricted namespace, where
+# restrictns has put the activity's own scratch (its backing directory,
+# -S) at SCRATCH_PATH: the file is written there, at the path the agent is
+# told and will read.  Written to the backing directory's own name, it went
+# through that view into a directory of the same name inside it (scratch/1
+# /1/step0.txt), and the agent, told scratch/step0.txt, found nothing there.
 writescratch(s: ref Session, content: string, step: int): string
 {
 	if(scratchdir == "")
 		return s.al->writescratch(content, step);
-	sys->create(scratchdir, Sys->OREAD, 8r700 | Sys->DMDIR);
-	path := sys->sprint("%s/step%d.txt", scratchdir, step);
+	path := sys->sprint("%s/step%d.txt", SCRATCH_PATH, step);
 	fd := sys->create(path, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return "(cannot create scratch file)";
 	b := array of byte content;
 	if(sys->write(fd, b, len b) != len b)
 		return "(cannot write scratch file)";
-	return sys->sprint("%s/step%d.txt", SCRATCH_PATH, step);
+	return path;
 }
 
 firstlines(s: string, n: int): string

@@ -147,5 +147,6 @@ Per-platform breakdowns with all individual runs and v2 per-benchmark data:
 - [ARM64 macOS](arm64-jit/BENCHMARK-arm64-macOS.md)
 - [ARM64 Linux](arm64-jit/BENCHMARK-arm64-Linux.md)
 - [ARM64 bare metal, Raspberry Pi 3B+](arm64-jit/BENCHMARK-arm64-bcm2837.md)
+- [ARM64 bare metal, Raspberry Pi 4B](arm64-jit/BENCHMARK-arm64-bcm2711.md) — 3.6x the 3B+ on jitbench v1 under the JIT, 2.6x on v2
 
 Benchmark source code and runner scripts: `benchmarks/`.

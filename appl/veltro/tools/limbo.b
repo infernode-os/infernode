@@ -443,8 +443,34 @@ compileat(srcpath, sid, passmsg, failmsg: string): string
 	return "<gate>\n" +
 		"status: failed\n" +
 		"compiler: hosted limbo (/dis/limbo.dis)\n" +
-		"stderr:\n" + errtxt +
+		"stderr:\n" + errtxt + srchints(srcpath) +
 		"</gate>\n" + failmsg;
+}
+
+# What a model writing Limbo from other languages gets wrong that the
+# compiler's "near ` / ` : syntax error" does not say.  A task wrote a
+# comment as // and then as /* */, compiled sixteen times, failed each
+# time, and told the user it compiled.
+srchints(srcpath: string): string
+{
+	fd := sys->open(srcpath, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	src := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		src += string buf[0:n];
+	(nil, lines) := sys->tokenize(src, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		i := 0;
+		while(i < len l && (l[i] == ' ' || l[i] == '\t'))
+			i++;
+		if(i + 1 < len l && l[i] == '/' && (l[i+1] == '/' || l[i+1] == '*'))
+			return "hint: Limbo comments begin with # and run to the end of the line; " +
+				"// and /* */ are not comments in Limbo.\n";
+	}
+	return "";
 }
 
 compilefile(path: string): string

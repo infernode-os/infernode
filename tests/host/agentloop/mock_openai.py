@@ -190,7 +190,8 @@ SCENARIOS = {
     # Checking files with the limbo tool: one compiles, one does not.
     "compile_check": [
         {"tools": [tool("limbo", "compile /tmp/veltro/scratch/good.b"),
-                   tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+                   tool("limbo", "compile /tmp/veltro/scratch/bad.b"),
+                   tool("limbo", "compile /tmp/veltro/scratch/ccomment.b")]},
         {"content": "Compiled the files."},
     ],
     # A task granted what every agent reads anyway: created, not refused.

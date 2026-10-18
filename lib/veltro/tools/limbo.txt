@@ -27,6 +27,13 @@ limbo - Author a complete, compilable Limbo source file.
     limbo compile <absolute path of a .b file>
     compiles a Limbo file you already have (written, edited, been given)
     and reports the same way. Use it after every edit of a .b file.
+    Say a file compiles only when its latest compile said status: compiled;
+    if you stop with it failing, say it does not compile, and why.
+
+  LIMBO, NOT C
+    A comment begins with # and runs to the end of the line: // and /* */
+    are not comments.  Declarations are name: type, and := declares and
+    assigns.
 
   CHANGING A FILE YOU HAVE
     For a change to an existing file (rename something, add a comment or a

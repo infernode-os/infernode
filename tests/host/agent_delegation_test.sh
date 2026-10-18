@@ -160,6 +160,7 @@ echo '@@ raw file end'
 mkdir -p /tmp/veltro/scratch/0
 {echo 'implement Good;'; echo 'include "sys.m";'; echo 'include "draw.m";'; echo 'Good: module { init: fn(nil: ref Draw->Context, nil: list of string); };'; echo 'init(nil: ref Draw->Context, nil: list of string) { }'} > /tmp/veltro/scratch/0/good.b
 {echo 'implement Bad;'; echo 'include "sys.m";'; echo 'include "draw.m";'; echo 'Bad: module { init: fn(nil: ref Draw->Context, nil: list of string); };'; echo 'init(nil: ref Draw->Context, nil: list of string) { undeclared = 1; }'} > /tmp/veltro/scratch/0/bad.b
+{echo 'implement C;'; echo 'include "sys.m";'; echo 'include "draw.m";'; echo 'C: module { init: fn(nil: ref Draw->Context, nil: list of string); };'; echo '// a comment as C writes one'; echo 'init(nil: ref Draw->Context, nil: list of string) { }'} > /tmp/veltro/scratch/0/ccomment.b
 echo 'SCENARIO:compile_check go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Compiled the files'
 
@@ -336,6 +337,8 @@ reqcheck "limbo compile passes a file that compiles" \
 	'any("good.b compiles." in t["content"] for t in tools)' compile_check 1
 reqcheck "limbo compile fails a file that does not, with the compiler's error" \
 	'any("bad.b does not compile" in t["content"] and "undeclared" in t["content"] for t in tools)' compile_check 1
+reqcheck "a C comment's failure says how Limbo writes one" \
+	'any("ccomment.b" in t["content"] and "comments begin with #" in t["content"] for t in tools)' compile_check 1
 reqcheck "a task's edit with a space in it is made" \
 	'tools and "replaced 1" in tools[-1]["content"]' child_edit 1
 reqcheck "activity 0 is told the task's change is staged" \

@@ -74,6 +74,7 @@ typedef struct Atidle	Atidle;
 typedef struct Altc	Altc;
 typedef struct Except Except;
 typedef struct Handler Handler;
+typedef struct Vm Vm;
 
 /*
  * R, the running VM's registers.
@@ -102,12 +103,13 @@ _vmreg(void)
 	return r;
 }
 #define	R	(*_vmreg())
-extern	REG	R0;		/* VM 0's registers */
+#define	VM	((Vm*)_vmreg())	/* R is a Vm's first member */
 #define	OPARGS	REG *Rp		/* an op's and a decoder's parameter: libinterp/opreg.h */
 #define	OPCALL	Rp
 #define	OPCALLR	(&R)		/* the same, from outside an op */
 #else
-extern	REG	R;
+#define	R	(vm0.reg)
+#define	VM	(&vm0)
 #define	OPARGS	void
 #define	OPCALL
 #define	OPCALLR
@@ -271,6 +273,52 @@ struct REG
 	WORD		dt;		/* Destination temporary */
 };
 
+/*
+ * A Dis VM (#944): its registers and its collector. There is one,
+ * vm0, so far.
+ *
+ * reg, which R names, must stay first. The core's Mach.vmreg and the JIT's X20 point at a
+ * Vm and use it as the REG, and the JIT reaches the collector's colours
+ * the same way, as X20 plus an offset: mutator is stamped on what the
+ * write barrier touches and nprop set when it propagates, so the barrier
+ * costs no more than it did against globals.
+ *
+ * mutator, nprop, gccolor, gchalt and the collector's counters are
+ * macros for the running VM's (below; the fields are v-prefixed so the
+ * macros do not rewrite them); the rest of the collector's
+ * state is private to gc.c.
+ */
+struct Vm
+{
+	REG	reg;		/* R: first, see above */
+	int	vmutator;	/* colour the mutator allocates and marks with */
+	int	vnprop;		/* something was coloured propagator this pass */
+	int	vgccolor;	/* the epoch: mutator, marker and sweeper rotate from it */
+	int	vgchalt;		/* rungc does nothing (devbench) */
+	int	marker;
+	int	sweeper;
+	int	quanta;		/* blocks to sweep each time slice */
+	int	gce, gct;	/* sweep efficiency, which sets quanta */
+	int	visit;
+	void*	gcbase;		/* gc.c's walk of the heap pool: Bhdr* */
+	void*	gclimit;
+	void*	gcptr;		/* os/port/alloc.c moves it past a block it frees */
+	ulong	vgcnruns, vgcsweeps, vgcbroken, vgchalted, vgcepochs;
+	uvlong	vgcdestroys, vgcinspects;
+};
+extern	Vm	vm0;
+#define	mutator		(VM->vmutator)
+#define	nprop		(VM->vnprop)
+#define	gccolor		(VM->vgccolor)
+#define	gchalt		(VM->vgchalt)
+#define	gcnruns		(VM->vgcnruns)
+#define	gcsweeps	(VM->vgcsweeps)
+#define	gcbroken	(VM->vgcbroken)
+#define	gchalted	(VM->vgchalted)
+#define	gcepochs	(VM->vgcepochs)
+#define	gcdestroys	(VM->vgcdestroys)
+#define	gcinspects	(VM->vgcinspects)
+
 struct Progs
 {
 	int	id;
@@ -421,10 +469,6 @@ extern	void	(*optab[256])(OPARGS);
 extern	void	(*comvec)(void);
 extern	void	(*dec[])(OPARGS);
 extern	Module*	modules;
-extern	int	mutator;
-extern	int	nprop;
-extern	int	gchalt;
-extern	int	gccolor;
 extern	int	minvalid;
 
 extern	int		Dconv(Fmt*);

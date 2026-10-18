@@ -568,9 +568,10 @@ void
 poolfree(Pool *p, void *v)
 {
 	Bhdr *b, *c;
-	extern Bhdr *ptr;
+	Bhdr **gcp;
 
 	D2B(b, v);
+	gcp = (Bhdr**)&VM->gcptr;	/* the collector's place in its sweep (gc.c): moved off a block absorbed here */
 	if(p->monitor)
 		MM(p->pnum|(1<<8), getcallerpc(&p), (ulong)v, b->size);
 
@@ -579,8 +580,8 @@ poolfree(Pool *p, void *v)
 	p->cursize -= b->size;
 	c = B2NB(b);
 	if(c->magic == MAGIC_F) {	/* Join forward */
-		if(c == ptr)
-			ptr = b;
+		if(c == *gcp)
+			*gcp = b;
 		pooldel(p, c);
 		c->magic = 0;
 		b->size += c->size;
@@ -589,8 +590,8 @@ poolfree(Pool *p, void *v)
 
 	c = B2PT(b)->hdr;
 	if(c->magic == MAGIC_F) {	/* Join backward */
-		if(b == ptr)
-			ptr = c;
+		if(b == *gcp)
+			*gcp = c;
 		pooldel(p, c);
 		b->magic = 0;
 		c->size += b->size;

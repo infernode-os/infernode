@@ -4,11 +4,13 @@
 #include "raise.h"
 #include "pool.h"
 
-#ifdef VMREGPERMACH
-REG	R0;			/* VM 0's registers; R is the running VM's (interp.h) */
-#else
-REG	R;			/* Virtual Machine registers */
-#endif
+Vm	vm0 = {		/* the VM; R is the running VM's registers (interp.h) */
+	.vgccolor = 3,
+	.marker = 1,
+	.sweeper = 2,
+	.quanta = 50,		/* gc.c's Quanta */
+	.gct = 1,
+};
 String	snil;			/* String known to be zero length */
 
 #define Stmp	*((WORD*)(R.FP+NREG*IBY2WD))
@@ -1270,6 +1272,7 @@ csendalt(Channel *c, void *ip, Type *t, int len)
 List*
 cons(ulong size, List **lp)
 {
+	RPDECL;
 	Heap *h;
 	List *lv, *l;
 

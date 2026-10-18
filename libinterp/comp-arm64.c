@@ -2382,18 +2382,17 @@ maccolr(void)
 	ADD_IMM(RA0, RA0, 1);
 	mem(Stw, O(Heap, ref) - sizeof(Heap), RA1, RA0);
 
+	/* the running VM's colours, X20-relative: X20 is its Vm (interp.h) */
 	mem(Ldw32, O(Heap, color) - sizeof(Heap), RA1, RA0);
-	con((uvlong)&mutator, RA2);
-	mem(Ldw32, 0, RA2, RA2);
+	mem(Ldw32, O(Vm, vmutator), RREG, RA2);
 	CMP_REG(RA0, RA2);
 	done = code;
 	BCOND(EQ, 0);
 
 	con(propagator, RA2);
 	mem(Stw32, O(Heap, color) - sizeof(Heap), RA1, RA2);
-	con((uvlong)&nprop, RA2);
 	con(1, RA0);
-	mem(Stw32, 0, RA2, RA0);
+	mem(Stw32, O(Vm, vnprop), RREG, RA0);
 
 	PATCH_BCOND(done);
 	RET_X30();

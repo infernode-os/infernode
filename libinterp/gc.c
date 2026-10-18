@@ -9,8 +9,16 @@ enum
 	PTRHASH		= (1<<5)
 };
 
-static int quanta = Quanta;
-static int gce, gct = 1;
+/* the running VM's collector (interp.h, struct Vm): initial values are vm0's in xec.c */
+#define	quanta	(VM->quanta)
+#define	gce	(VM->gce)
+#define	gct	(VM->gct)
+#define	marker	(VM->marker)
+#define	sweeper	(VM->sweeper)
+#define	visit	(VM->visit)
+#define	base	(*(Bhdr**)&VM->gcbase)
+#define	limit	(*(Bhdr**)&VM->gclimit)
+#define	ptr	(*(Bhdr**)&VM->gcptr)
 
 typedef struct Ptrhash Ptrhash;
 struct Ptrhash
@@ -19,26 +27,7 @@ struct Ptrhash
 	Ptrhash	*next;
 };
 
-	int	nprop;
-	int	gchalt;
 	int	mflag;
-	int	mutator = 0;
-	int	gccolor = 3;
-
-	ulong	gcnruns;
-	ulong	gcsweeps;
-	ulong	gcbroken;
-	ulong	gchalted;
-	ulong	gcepochs;
-	uvlong	gcdestroys;
-	uvlong	gcinspects;
-
-static	int	marker  = 1;
-static	int	sweeper = 2;
-static	Bhdr*	base;
-static	Bhdr*	limit;
-Bhdr*	ptr;
-static	int	visit;
 extern	Pool*	heapmem;
 static	Ptrhash	*ptrtab[PTRHASH];
 static	Ptrhash	*ptrfree;

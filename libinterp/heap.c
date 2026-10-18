@@ -20,7 +20,6 @@ Type Tlong = { 1, 0, 0, sizeof(LONG) };
 Type Treal = { 1, 0, 0, sizeof(REAL) };
 
 extern	Pool*	heapmem;
-extern	int	mutator;
 
 void	(*heapmonitor)(int, void*, ulong);
 

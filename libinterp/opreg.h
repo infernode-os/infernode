@@ -16,6 +16,8 @@
 #ifdef VMREGPERMACH
 #undef	R
 #define	R	(*Rp)
+#undef	VM
+#define	VM	((Vm*)Rp)
 #define	RPDECL	REG *Rp = _vmreg()
 #else
 #define	RPDECL

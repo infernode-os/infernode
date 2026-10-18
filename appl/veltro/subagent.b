@@ -594,7 +594,7 @@ calltool(tool, args: string): string
 	modlist := loadedtools;
 	while(namelist != nil && modlist != nil) {
 		if(hd namelist == ltool)
-			return (hd modlist)->exec(args);
+			return (hd modlist)->exec(agentlib->toolargs(ltool, args));
 		namelist = tl namelist;
 		modlist = tl modlist;
 	}

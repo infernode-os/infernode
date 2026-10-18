@@ -461,6 +461,25 @@ testCtlRoundtripStillWorks(t: ref T)
 
 # ---------- main ----------
 
+# A native call's arguments reach a positional tool in the tool's order, by
+# name, whatever order the model sent them in; an omitted one before a
+# present one gets its default; names that are flags become flags.
+testToolArgsByName(t: ref T)
+{
+	a := agentlib->toolargs;
+	t.assertseq(a("read", "{\"path\":\"/f\",\"limit\":\"400\"}"), "/f 0 400", "read: a limit with no offset is not taken for the offset");
+	t.assertseq(a("read", "{\"limit\":\"5\",\"offset\":\"2\",\"path\":\"/f\"}"), "/f 2 5", "read: in its order, whatever order sent");
+	t.assertseq(a("read", "{\"path\":\"/f\"}"), "/f", "read: the path alone");
+	t.assertseq(a("find", "{\"path\":\"/lib\",\"pattern\":\"*.txt\"}"), "*.txt /lib", "find: pattern first");
+	t.assertseq(a("grep", "{\"path\":\"/lib\",\"pattern\":\"x\"}"), "x /lib", "grep: no flags");
+	t.assertseq(a("say", "{\"text\":\"hello there\",\"voice\":\"amy\"}"), "-v amy hello there", "say: voice is a flag");
+	t.assertseq(a("say", "{\"text\":\"hello\"}"), "hello", "say: text alone");
+	t.assertseq(a("vision", "{\"imagepath\":\"/i.png\",\"backend\":\"local\"}"), "--local /i.png", "vision: backend is a flag");
+	t.assertseq(a("write", "{\"content\":\"x\",\"path\":\"/lib/f\"}"), "-r /lib/f x\n", "write: the path first, whatever order sent");
+	t.assertseq(a("task", "{\"command\":\"status\",\"args\":\"1\"}"), "status 1", "command and args as before");
+	t.assertseq(a("read", "/f 3"), "/f 3", "already positional: unchanged");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -502,6 +521,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("SchemaEndpointMatchesToolSchema", testSchemaEndpointMatchesToolSchema);
 	run("BuildToolDefsUsesPerToolSchemas", testBuildToolDefsUsesPerToolSchemas);
 	run("CtlRoundtripStillWorks", testCtlRoundtripStillWorks);
+	run("ToolArgsByName", testToolArgsByName);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

@@ -471,7 +471,9 @@ needsapproval(s: ref Session, toolname, args: string): int
 		return 0;
 	# Native tool calls carry JSON ({"path":"/lib/x",...}); judge the
 	# positional form the tool will actually run, as calltool sends it.
-	args = s.al->extracttoolargs(args);
+	args = s.al->toolargs(toolname, args);
+	if(hasprefix(args, "-r "))
+		args = args[3:];	# write's and edit's raw mode: the path follows
 	# A task's staged changes reach the user's own files only on the
 	# user's word.
 	if(toolname == "task")
@@ -495,7 +497,9 @@ needsapproval(s: ref Session, toolname, args: string): int
 # JSON, and the dialogue showed it raw (task {"command":"promote",...}).
 approvaltext(s: ref Session, toolname, args: string): string
 {
-	pos := strip(s.al->extracttoolargs(args));
+	pos := strip(s.al->toolargs(toolname, args));
+	if(hasprefix(pos, "-r "))
+		pos = pos[3:];
 	if(toolname == "task" && hasprefix(pos, "promote")) {
 		id := strip(pos[len "promote":]);
 		return "apply the changes task " + id + " staged to your files";

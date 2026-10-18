@@ -49,7 +49,7 @@ cleanup() {
 	[ -z "$EMU_PID" ] || kill -9 "$EMU_PID" 2>/dev/null || true
 	[ -z "$SERVER_PID" ] || kill "$SERVER_PID" 2>/dev/null || true
 	[ -z "$SCRIPT" ] || rm -f "$SCRIPT"
-	rm -rf "$WORK" "$ROOT/tmp/deltest" "$ROOT/usr/deltest"
+	rm -rf "$WORK" "$ROOT/tmp/deltest" "$ROOT/usr/deltest" "$ROOT/tmp/veltro/cow/kept-1000-2-${STALEKEY:-none}"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -61,6 +61,20 @@ while [ ! -s "$WORK/port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 PORT=$(cat "$WORK/port")
 
 rm -rf "$ROOT/tmp/deltest" "$ROOT/usr/deltest"
+# What an earlier session left: task 2's overlay of the same folder, with a
+# change staged in it and never approved.  Activity ids start again at 1,
+# so this session's task 2 is given the same overlay name; it must not
+# take over that change, and the change must not be lost.
+STALEKEY=$(python3 -I -c '
+h = 0x811c9dc5
+for b in b"/usr/deltest/notes":
+    h = ((h ^ b) * 0x01000193) & 0xffffffff
+print("%08x" % h)')
+STALE="$ROOT/tmp/veltro/cow/2-$STALEKEY"
+rm -rf "$STALE" "$ROOT/tmp/veltro/cow/kept-1000-2-$STALEKEY"
+mkdir -p "$STALE"
+printf 'basepath=/usr/deltest/notes\nboot=1000\n' > "$STALE/.cowmeta"
+printf 'Shopping\n- eggs\n- milk\n- STALE\n' > "$STALE/todo.txt"
 # A message longer than one 9P message (msize is 8K): words, then a mark.
 LONG="SCENARIO:text_only go $(python3 -c "print(' '.join('w%d' % i for i in range(3000)))") TAILMARK"
 
@@ -159,6 +173,8 @@ echo Allow > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Promoted the edit'
 echo '@@ after promote'
 cat /usr/deltest/notes/todo.txt
+echo '@@ kept overlay'
+cat /tmp/veltro/cow/kept-1000-2-$STALEKEY/todo.txt
 
 
 echo 'SCENARIO:grant_baseline go' > /mnt/ui/activity/0/conversation/input
@@ -298,6 +314,8 @@ reqcheck "promote applies the staged change" \
 	'tools and "promoted" in tools[-1]["content"]' parent_promote 1
 section "before promote" | grep -q bread && bad "a staged change is not in the file before promote" || ok "a staged change is not in the file before promote"
 section "after promote" | grep -q -- '- bread' && ok "the promoted change is in the file" || bad "the promoted change is in the file"
+section "after promote" | grep -q STALE && bad "an earlier session's staged change was promoted with this task's" || ok "an earlier session's staged change was not taken over"
+section "kept overlay" | grep -q STALE && ok "an earlier session's staged change is kept aside" || bad "an earlier session's staged change is kept aside"
 
 before=$(section "agents before close" | grep -E '^ *[0-9]+ *$' | tr -dc 0-9)
 after=$(section "agents after close" | grep -E '^ *[0-9]+ *$' | tr -dc 0-9)

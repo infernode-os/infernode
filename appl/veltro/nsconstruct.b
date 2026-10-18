@@ -25,6 +25,7 @@ include "draw.m";
 include "nsconstruct.m";
 
 include "cowfs.m";
+include "daytime.m";
 
 include "keyring.m";
 	kr: Keyring;
@@ -1338,6 +1339,85 @@ overlaykey(path: string): string
 	return sys->sprint("%8.8ux", h);
 }
 
+# An overlay is this session's or an earlier one's: activity ids start
+# again at 1 when InferNode does, and /tmp persists, so a new task 1 given
+# the folder an earlier task 1 had took over its overlay, with changes the
+# user had not approved in it, to be shown as its own and promoted with
+# its own.  The overlay notes when the emulator it was made in started
+# (boot= in .cowmeta, which cowfs keeps from the agent); one from another
+# start is set aside, not deleted: the changes in it were never approved,
+# nor refused.  Within one start, every tool server of the activity
+# shares the overlay as before.
+BOOTSLACK: con 2;	# seconds: the start time is worked out, not read
+
+bootstamp(): int
+{
+	daytime := load Daytime Daytime->PATH;
+	if(daytime == nil)
+		return 0;
+	return daytime->now() - sys->millisec() / 1000;
+}
+
+markboot(overlaydir: string, boot: int)
+{
+	if(boot == 0)
+		return;
+	fd := sys->open(overlaydir + "/.cowmeta", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	sys->seek(fd, big 0, Sys->SEEKEND);
+	sys->fprint(fd, "boot=%d\n", boot);
+}
+
+setasidestale(overlaydir: string, boot: int)
+{
+	(ok, nil) := sys->stat(overlaydir);
+	if(ok < 0 || boot == 0)
+		return;
+	was := 0;
+	(nil, lines) := sys->tokenize(readfile(overlaydir + "/.cowmeta"), "\n");
+	for(; lines != nil; lines = tl lines)
+		if(prefix(hd lines, "boot="))
+			was = int (hd lines)[len "boot=":];
+	if(was != 0 && was - boot <= BOOTSLACK && boot - was <= BOOTSLACK)
+		return;
+	# Nothing staged in it: nothing to keep.
+	staged := 0;
+	fd := sys->open(overlaydir, Sys->OREAD);
+	if(fd != nil) {
+		for(;;) {
+			(n, d) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++)
+				if(d[i].name != ".cowmeta")
+					staged = 1;
+		}
+		fd = nil;
+	}
+	if(!staged) {
+		sys->remove(overlaydir + "/.cowmeta");
+		sys->remove(overlaydir);
+		return;
+	}
+	# Kept beside the others, under a name no activity's overlay has.
+	(nil, base) := splitlast(overlaydir);
+	dir := sys->nulldir;
+	dir.name = sys->sprint("kept-%d-%s", was, base);
+	if(sys->wstat(overlaydir, dir) < 0)
+		sys->fprint(sys->fildes(2), "nsconstruct: cannot set aside %s: %r\n", overlaydir);
+	else
+		sys->fprint(sys->fildes(2), "nsconstruct: %s is from an earlier session: kept as %s, not used\n", overlaydir, dir.name);
+}
+
+splitlast(path: string): (string, string)
+{
+	for(i := len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			return (path[0:i], path[i+1:]);
+	return ("", path);
+}
+
 overlaywritepaths(paths: list of string, actid: int): string
 {
 	cowfs: Cowfs;
@@ -1360,6 +1440,8 @@ overlaywritepaths(paths: list of string, actid: int): string
 		# Keyed by (activity, path) so every tool that is granted the same
 		# writable path shares one overlay and sees the same files.
 		overlaydir := sys->sprint("/tmp/veltro/cow/%d-%s", actid, overlaykey(fullpath));
+		boot := bootstamp();
+		setasidestale(overlaydir, boot);
 		merr := mkdirp(overlaydir);
 		if(merr != nil)
 			return sys->sprint("cowfs overlay %s: %s", overlaydir, merr);
@@ -1367,6 +1449,7 @@ overlaywritepaths(paths: list of string, actid: int): string
 		(mntfd, cerr) := cowfs->start(fullpath, overlaydir);
 		if(cerr != nil)
 			return sys->sprint("cowfs %s: %s", fullpath, cerr);
+		markboot(overlaydir, boot);
 
 		# MCREATE here is safe in a way it is NOT for the plain MREPL
 		# binds above (which restrict MCREATE to /tmp): every mutation

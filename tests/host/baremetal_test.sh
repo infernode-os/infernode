@@ -301,6 +301,11 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/diskusb.dis" \
             "$ROOT/os/init/diskusb.b" 2>>"$BUILD/cc.log" || return 1
 
+        # USB serial adapters (CDC-ACM, FTDI, CP210x) as eia(3) ports,
+        # /dev/eiaU<n>.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/usbserial.dis" \
+            "$ROOT/os/init/usbserial.b" 2>>"$BUILD/cc.log" || return 1
+
         # The touch panel's frames as pointer events. Under QEMU there is
         # no panel, so what gets exercised is the driver noticing that
         # and its decoder self-test.
@@ -345,6 +350,7 @@ build_kernel() {
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
             "/dis/diskusb.dis=$BUILD/diskusb.dis"
+            "/dis/usbserial.dis=$BUILD/usbserial.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
             "/dis/drawtest.dis=$BUILD/drawtest.dis"
             "/dis/tktest.dis=$BUILD/tktest.dis"
@@ -4274,6 +4280,7 @@ OUT="$OUT_SAVED"
 TOUCH2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'touch -t' \
+        'usbserial -t' \
         'ls /dev/touch')"
 TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
@@ -4281,6 +4288,7 @@ TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
 check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
+check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
 OUT="$OUT_SAVED"
 
 #
@@ -5216,6 +5224,110 @@ if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
 else
     skip "virt: this QEMU has no nec-usb-xhci, the xHCI model with MSI"
 fi
+
+#
+# A USB serial adapter, on xHCI: QEMU's usb-serial is an FTDI FT232BM,
+# its far end a socket this script holds. Bytes both ways; the line
+# settings checked where they land, in QEMU's own decoding of the
+# adapter's requests (its trace); the status file; and the port gone
+# when the adapter is pulled.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-sqmp.sock" "$BUILD/$PLAT-ser.sock" "$BUILD/$PLAT-sertrace.txt" <<'PYEOF' > "$BUILD/$PLAT-serial.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp, ser, trace = sys.argv[1:7]
+for f in (qmp, ser, trace):
+    if os.path.exists(f):
+        os.unlink(f)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-chardev", "socket,id=s0,path=%s,server=on,wait=off" % ser,
+    "-device", "usb-serial,chardev=s0,id=ftdi,port=1",
+    "-trace", "usb_serial_set_*", "-D", trace,
+    "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+far = bytearray()
+def reader(f, b):
+    while True:
+        d = f.read(1) if hasattr(f, "read") else f.recv(4096)
+        if not d:
+            return
+        b.extend(d)
+threading.Thread(target=reader, args=(p.stdout, buf), daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    time.sleep(1)
+    s = socket.socket(socket.AF_UNIX)
+    for i in range(50):
+        try:
+            s.connect(ser); break
+        except OSError:
+            time.sleep(0.2)
+    threading.Thread(target=reader, args=(s, far), daemon=True).start()
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"served as /dev/eiaU0", 30)
+    time.sleep(1)
+    typed("echo b115200 l7 pe s2 > /dev/eiaU0ctl")
+    typed("cat /dev/eiaU0status")
+    typed("echo b9600 l8 pn s1 m1 > /dev/eiaU0ctl")
+    typed("echo m0 > /dev/eiaU0ctl")
+    # 19200's divisor is 0x809C: a wValue with its top bit set, which
+    # usbxhci once sign-extended into wIndex and wLength
+    typed("echo b19200 > /dev/eiaU0ctl")
+    typed("echo written-to-the-adapter > /dev/eiaU0", 2)
+    # a reader killed in its read leaves its read queued: the bytes must
+    # go to the next reader, not to the dead one
+    typed("cat /dev/eiaU0 > /dev/null &", 1)
+    typed("echo kill > /prog/$apid/ctl", 1)
+    typed("cat /dev/eiaU0 &", 1)
+    s.sendall(b"Sent-From-The-Far-End\n")
+    time.sleep(2)
+    typed("")
+    q = socket.socket(socket.AF_UNIX); q.connect(qmp)
+    f = q.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    f.write(json.dumps({"execute": "device_del", "arguments": {"id": "ftdi"}}) + "\n"); f.flush(); f.readline()
+    waitfor(b"/dev/eiaU0 is gone", 15)
+    time.sleep(1)
+    typed("ls /dev/eiaU0 >[2=1]")
+    q.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+sys.stdout.write("\n--- the far end received ---\n" + far.decode(errors="replace") + "\n")
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-serial.txt"; echo '--- trace ---'; cat "$BUILD/$PLAT-sertrace.txt" 2>/dev/null)"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "serial: an FTDI adapter is claimed and served"        "(ftdi) served as /dev/eiaU0"
+# 115384, not 115200: an FT232's 115200 is 3 MHz / 26, as on the real chip;
+# QEMU works the rate out from the divisor the driver sent
+vcheck "serial: the baud rate set through eiaU0ctl reaches the adapter (QEMU decodes the divisor)" "baud rate 115384"
+vcheck "serial: 7 bits, even parity, 2 stop bits reach it"    "parity E, data bits 7, stop bits 2"
+vcheck "serial: the status file says what was set"            "b115200 c0 d1 e0 l7 m0 pe r1 s2"
+vcheck "serial: and names the adapter"                         "type(usb-ftdi) 0x0403:0x6001"
+vcheck "serial: m1 turns on RTS/CTS flow control"             "flow control 1"
+vcheck "serial: a request whose wValue has its top bit set gets through (19200 is divisor 0x809C)" "baud rate 19200"
+vcheck "serial: bytes written to /dev/eiaU0 come out of the adapter" "written-to-the-adapter"
+vcheck "serial: bytes into the adapter are read from /dev/eiaU0 (status bytes taken off), not lost to a reader that was killed" "Sent-From-The-Far-End"
+vcheck "serial: pulling the adapter takes the port away"      "/dev/eiaU0 is gone"
+vcheck "serial: and the file with it"                         "'/dev/eiaU0' file does not exist"
+# one write of several settings is one change of the line, not one per setting
+if [[ "$(grep -c 'baud rate 115384' "$BUILD/$PLAT-sertrace.txt" 2>/dev/null)" -eq 1 ]]; then
+    pass "virt: serial: b115200 l7 pe s2 in one write sets the line once"
+else
+    fail "virt: serial: b115200 l7 pe s2 set the line $(grep -c 'baud rate 115384' "$BUILD/$PLAT-sertrace.txt" 2>/dev/null) times"
+fi
+vrefute "serial: nothing panics"                              "panic:"
+vrefute "serial: no exception goes unhandled"                 "unhandled exception"
 
 #
 # Plugging things in and pulling them out, on xHCI. On a Raspberry Pi 4

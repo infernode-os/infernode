@@ -63,12 +63,12 @@ schema(): string
 {
 	return "{" +
 		"\"name\":\"write\"," +
-		"\"description\":\"Write content to a file, creating it if needed. Use \\\\n inside content for newlines.\"," +
+		"\"description\":\"Write content to a file, creating it if needed.\"," +
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"path\":{\"type\":\"string\",\"description\":\"File path to create or overwrite (use /tmp/veltro/scratch/ for temporary files).\"}," +
-				"\"content\":{\"type\":\"string\",\"description\":\"Content to write. May contain newlines and quotes; escape sequences like \\\\n are processed.\"}" +
+				"\"content\":{\"type\":\"string\",\"description\":\"What the file is to hold, exactly: line breaks as line breaks, quotes as quotes. Nothing in it is unescaped.\"}" +
 			"}," +
 			"\"required\":[\"path\",\"content\"]" +
 		"}" +

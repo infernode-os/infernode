@@ -10,6 +10,9 @@
 # llmsrv compacts at a mark so low that it does it after every
 # generation, the scripted model refuses a result that answers no call,
 # and an agent runs turns of several tool steps.  Each must finish.
+# Then a chat compacts at a mark its last exchange fits under: that is kept
+# as it was, after the summary (all of it summarised, the model lost what
+# it had just said, and repeated it).
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -66,6 +69,17 @@ echo '@@ text'
 cat /mnt/veltro/\$id/text
 echo '@@ log'
 cat /mnt/veltro/\$id/log
+# A chat, with a mark the last exchange fits under: kept as it was.
+llmsrv -m /mnt/llm2 -b openai -u http://127.0.0.1:$PORT/v1 -M mock -c 40 &
+sleep 1
+lid=\`{cat /mnt/llm2/new}
+for q in ONE TWO THREE FOUR {
+	echo -n 'Question '^\$q^': tell me more about the owls, please.' > /mnt/llm2/\$lid/ask
+	cat /mnt/llm2/\$lid/ask > /dev/null
+}
+echo '@@ context'
+cat /mnt/llm2/\$lid/context
+echo
 echo '@@ end'
 echo DRIVER_DONE
 EOS
@@ -97,5 +111,16 @@ for want in "Read both." "Read twice." "Done looking." "Giving up."; do
 	section text | grep -q -- "$want" && ok "a turn finishes across compaction: $want" || bad "a turn finishes across compaction: $want"
 done
 
+# The chat compacted: the summary first, then the last exchange as it was,
+# not in the summary.
+section context | grep -q 'Context from earlier' && ok "the chat was compacted" || bad "the chat was compacted"
+section context | grep -q '"role":"user","content":"Question FOUR: tell me more about the owls, please."' &&
+	ok "the last exchange is kept as it was" || bad "the last exchange is kept as it was"
+python3 -I -c 'import json,sys
+for l in open(sys.argv[1]):
+    m = json.loads(l)["body"]["messages"]
+    c = str(m[-1].get("content", ""))
+    if c.startswith("Summarize this conversation") and "Question FOUR" in c: sys.exit(1)' "$WORK/req.log" &&
+	ok "what is kept is not summarised" || bad "what is kept is not summarised"
 [ "$FAILED" -eq 0 ] || { tail -40 "$LOG"; echo "compaction_test: $FAILED failed"; exit 1; }
 echo "compaction_test: PASS"

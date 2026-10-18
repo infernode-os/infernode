@@ -66,6 +66,11 @@ BUILTIN_TOOLS = [
 ]
 
 
+# What a request with no system prompt of its own is given (llmsrv's
+# summary request is one).
+NEUTRAL_SYSTEM = "You are a helpful assistant."
+
+
 # ── turn state ─────────────────────────────────────────────────────
 
 class Rendezvous:
@@ -92,7 +97,8 @@ class Turn:
         self.model = model
         self.events = asyncio.Queue()      # ("tool_calls", [...] ) | ("final", text, usage) | ("error", msg)
         self.text_acc = ""                 # assistant text since the last emit
-        self.rendezvous = {}               # argkey -> [Rendezvous FIFO]
+        self.rendezvous = {}               # argkey -> [Rendezvous] handlers waiting
+        self.delivered = {}                # argkey -> [Rendezvous] results not yet claimed
         self.id_to_argkey = {}             # tool_use id -> argkey
         self.task = None                   # backend driver task
         self.last_activity = time.monotonic()
@@ -104,36 +110,36 @@ class Turn:
     def argkey(name: str, args) -> str:
         return name + "\x00" + json.dumps(args, sort_keys=True, separators=(",", ":"))
 
-    def handler_rendezvous(self, name: str, args) -> Rendezvous:
-        """Called from inside an SDK tool handler: park until the result
-        for this (name, args) call arrives."""
-        rv = Rendezvous()
-        self.rendezvous.setdefault(self.argkey(name, args), []).append(rv)
-        return rv
-
     def register_tool_use(self, tool_use_id: str, name: str, args):
         self.id_to_argkey[tool_use_id] = self.argkey(name, args)
 
+    # Calls are matched to results by (name, args), first come first
+    # served: the SDK's handler is told no tool_use id.  A rendezvous is
+    # taken off its queue by whichever side meets it second, so each one
+    # serves one call.  (Left on the queue once used, the next identical
+    # call in the turn met the spent one and was handed the earlier call's
+    # result: a file read again after it was changed read as it had been.)
     def deliver_result(self, tool_use_id: str, content: str, is_error: bool) -> bool:
         key = self.id_to_argkey.get(tool_use_id)
         if key is None:
             return False
-        fifo = self.rendezvous.get(key)
-        if not fifo:
-            # Handler hasn't fired yet — pre-resolve by creating the slot.
-            rv = Rendezvous()
-            rv.resolve(content, is_error)
-            self.rendezvous.setdefault(key, []).append(rv)
+        waiting = self.rendezvous.get(key)
+        if waiting:
+            waiting.pop(0).resolve(content, is_error)
             return True
-        fifo[0].resolve(content, is_error)
-        # Consumed entries are popped by the handler side after wait().
+        # The result came before its handler: kept for it.
+        rv = Rendezvous()
+        rv.resolve(content, is_error)
+        self.delivered.setdefault(key, []).append(rv)
         return True
 
     def pop_rendezvous(self, name: str, args):
+        """Called from an SDK tool handler: the result for this call,
+        already arrived or to wait for."""
         key = self.argkey(name, args)
-        fifo = self.rendezvous.get(key)
-        if fifo:
-            return fifo.pop(0)
+        early = self.delivered.get(key)
+        if early:
+            return early.pop(0)
         rv = Rendezvous()
         self.rendezvous.setdefault(key, []).append(rv)
         return rv
@@ -408,7 +414,11 @@ if not MOCK:
 
             options = make_options(
                 model=map_model(turn.model),
-                system_prompt=with_tool_names(system_prompt, tooldefs) or None,
+                # Never None: with none, the CLI's own prompt is used, and
+                # with it the host's (its working directory, its git, its
+                # rules), which went into a session's summary as if it
+                # were the session's.
+                system_prompt=with_tool_names(system_prompt, tooldefs) or NEUTRAL_SYSTEM,
                 mcp_servers=mcp_servers,
                 allowed_tools=allowed,
                 disallowed_tools=list(BUILTIN_TOOLS),

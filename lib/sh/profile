@@ -376,22 +376,31 @@ if {~ $emuhost MacOSX Linux Nt}{
 		llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
 		llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}
 		llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm >[2] /dev/null}
+		# autocompact=<tokens>: where a session's history is summarised
+		# (llmsrv -c; its own default when unset).  This llmsrv is the one
+		# a session reaches: lib/lucifer/llmsrv.sh's runs in the boot's
+		# background, in a namespace of its own; it reads the same field.
+		llmcompact=`{sed -n 's/^autocompact=//p' /lib/ndb/llm >[2] /dev/null}
+		llmopts=()
+		if {! ~ $#llmcompact 0} { llmopts=(-c $llmcompact) }
 		# backend=cli/codex are the host-side CLI gateways (claude-gate,
 		# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
 		# the same way.
 		# In the foreground: llmsrv returns once /mnt/llm is mounted (it
 		# dials nothing until asked), so what follows can count on it.
+		# (A field not set is an empty list, which ~ '' does not match:
+		# its length is the test.)
 		if {~ $llmbackend openai cli codex} {
-			if {! ~ $llmmodel ''} {
-				llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
+			if {! ~ $#llmmodel 0} {
+				llmsrv $llmopts -b openai -u $llmurl -M $llmmodel >[2] /dev/null
 			}{
-				llmsrv -b openai -u $llmurl >[2] /dev/null
+				llmsrv $llmopts -b openai -u $llmurl >[2] /dev/null
 			}
 		}{
-			if {! ~ $llmmodel ''} {
-				llmsrv -M $llmmodel >[2] /dev/null
+			if {! ~ $#llmmodel 0} {
+				llmsrv $llmopts -M $llmmodel >[2] /dev/null
 			}{
-				llmsrv >[2] /dev/null
+				llmsrv $llmopts >[2] /dev/null
 			}
 		}
 	}

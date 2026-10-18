@@ -10,6 +10,8 @@ Arguments:
   new  - Replacement text
   all  - Optional: replace all
 
-Use \n for newlines, \t for tabs.
+Called with arguments by name (path, old, new), old and new are the text
+itself: line breaks as line breaks, nothing unescaped.  Only the one-line
+form above takes \n for a newline and \t for a tab.
 
 Fails if old text not found. Without 'all', fails if multiple matches.

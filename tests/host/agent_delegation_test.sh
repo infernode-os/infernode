@@ -49,7 +49,7 @@ cleanup() {
 	[ -z "$EMU_PID" ] || kill -9 "$EMU_PID" 2>/dev/null || true
 	[ -z "$SERVER_PID" ] || kill "$SERVER_PID" 2>/dev/null || true
 	[ -z "$SCRIPT" ] || rm -f "$SCRIPT"
-	rm -rf "$WORK" "$ROOT/tmp/deltest" "$ROOT/usr/deltest" "$ROOT/tmp/veltro/cow/kept-1000-2-${STALEKEY:-none}"
+	rm -rf "$WORK" "$ROOT/tmp/deltest" "$ROOT/usr/deltest" "$ROOT/tmp/veltro/cow/kept-1000-2-${STALEKEY:-none}" "$ROOT/tmp/veltro/cow/kept-999-1-${KEPTKEY:-none}"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -70,11 +70,19 @@ h = 0x811c9dc5
 for b in b"/usr/deltest/notes":
     h = ((h ^ b) * 0x01000193) & 0xffffffff
 print("%08x" % h)')
-STALE="$ROOT/tmp/veltro/cow/2-$STALEKEY"
-rm -rf "$STALE" "$ROOT/tmp/veltro/cow/kept-1000-2-$STALEKEY"
-mkdir -p "$STALE"
-printf 'basepath=/usr/deltest/notes\nboot=1000\n' > "$STALE/.cowmeta"
-printf 'Shopping\n- eggs\n- milk\n- STALE\n' > "$STALE/todo.txt"
+rm -rf "$ROOT/tmp/veltro/cow/2-$STALEKEY" "$ROOT/tmp/veltro/cow/kept-1000-2-$STALEKEY"
+# And one an earlier session left under its own name (task 1, a folder no
+# task here is given): set aside and offered back at start, then applied.
+KEPTKEY=$(python3 -I -c '
+h = 0x811c9dc5
+for b in b"/usr/deltest/kept":
+    h = ((h ^ b) * 0x01000193) & 0xffffffff
+print("%08x" % h)')
+KEPT="$ROOT/tmp/veltro/cow/1-$KEPTKEY"
+rm -rf "$KEPT" "$ROOT/tmp/veltro/cow/kept-999-1-$KEPTKEY"; mkdir -p "$KEPT" "$ROOT/usr/deltest/kept"
+printf 'basepath=/usr/deltest/kept\nboot=999\n' > "$KEPT/.cowmeta"
+echo old > "$ROOT/usr/deltest/kept/k.txt"
+echo new > "$KEPT/k.txt"
 # A message longer than one 9P message (msize is 8K): words, then a mark.
 LONG="SCENARIO:text_only go $(python3 -c "print(' '.join('w%d' % i for i in range(3000)))") TAILMARK"
 
@@ -157,6 +165,14 @@ mkdir -p /usr/deltest/notes
 {echo Shopping; echo '- eggs'; echo '- milk'} > /usr/deltest/notes/todo.txt
 echo '/bind /usr/deltest/notes rw' > /mnt/ui/activity/0/conversation/input
 sleep 2
+mkdir -p /usr/deltest/more
+echo one > /usr/deltest/more/m.txt
+echo '/bind /usr/deltest/more rw' > /mnt/ui/activity/0/conversation/input
+sleep 2
+# (made after activity 0 started, which sets aside what it finds then)
+mkdir -p /tmp/veltro/cow/2-$STALEKEY
+{echo 'basepath=/usr/deltest/notes'; echo 'boot=1000'} > /tmp/veltro/cow/2-$STALEKEY/.cowmeta
+{echo Shopping; echo '- eggs'; echo '- milk'; echo '- STALE'} > /tmp/veltro/cow/2-$STALEKEY/todo.txt
 echo 'SCENARIO:delegate_edit go' > /mnt/ui/activity/0/conversation/input
 n=''
 while {! ~ \`{cat /mnt/ui/activity/0/status} blocked} {
@@ -173,6 +189,7 @@ echo Allow > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Promoted the edit'
 echo '@@ after promote'
 cat /usr/deltest/notes/todo.txt
+cat /usr/deltest/more/m.txt
 echo '@@ kept overlay'
 cat /tmp/veltro/cow/kept-1000-2-$STALEKEY/todo.txt
 
@@ -203,6 +220,13 @@ sleep 6
 echo '@@ looper closed'
 sleep 6
 echo '@@ looper later'
+
+echo 'Apply 1' > /mnt/ui/activity/0/conversation/input
+sleep 3
+echo '@@ kept applied'
+cat /usr/deltest/kept/k.txt
+ls /tmp/veltro/cow
+echo '@@ kept end'
 
 for a in 0 1 2 {
 	echo '@@ conversation' \$a
@@ -314,7 +338,16 @@ reqcheck "promote applies the staged change" \
 	'tools and "promoted" in tools[-1]["content"]' parent_promote 1
 section "before promote" | grep -q bread && bad "a staged change is not in the file before promote" || ok "a staged change is not in the file before promote"
 section "after promote" | grep -q -- '- bread' && ok "the promoted change is in the file" || bad "the promoted change is in the file"
+section "after promote" | grep -q '^two$' && ok "a task's changes to a second folder are promoted too" || bad "a task's changes to a second folder are promoted too"
 section "after promote" | grep -q STALE && bad "an earlier session's staged change was promoted with this task's" || ok "an earlier session's staged change was not taken over"
+grep -q 'offered 1 kept change set' "$LOG" && section "conversation 0" | grep -q 'options=Apply 1,Discard 1 text=M /usr/deltest/kept/k.txt' && ok "changes kept from an earlier session are offered at start" || bad "changes kept from an earlier session are offered at start"
+python3 -I -c 'import json,sys
+for l in open(sys.argv[1]):
+    m = json.loads(l)["body"]["messages"]
+    if any("were never applied" in str(x.get("content", "")) for x in m): sys.exit(0)
+sys.exit(1)' "$WORK/req.log" && ok "the agent is told of them" || bad "the agent is told of them"
+section "kept applied" | grep -q '^new$' && ok "Apply puts them in the folder" || bad "Apply puts them in the folder"
+section "kept applied" | grep -q 'kept-999' && bad "an applied set is still kept" || ok "an applied set is no longer kept"
 section "kept overlay" | grep -q STALE && ok "an earlier session's staged change is kept aside" || bad "an earlier session's staged change is kept aside"
 
 before=$(section "agents before close" | grep -E '^ *[0-9]+ *$' | tr -dc 0-9)

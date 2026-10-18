@@ -195,12 +195,14 @@ SCENARIOS = {
     # staged; activity 0, told so, promotes it on the user's word.
     "delegate_edit": [
         {"tools": [tool("task", {"command": "create",
-                                 "args": "label=Editor tools=edit,read paths=/usr/deltest/notes brief=SCENARIO:child_edit go"})]},
+                                 "args": "label=Editor tools=edit,read paths=/usr/deltest/notes,/usr/deltest/more brief=SCENARIO:child_edit go"})]},
         {"content": "Started the editor."},
     ],
     "child_edit": [
         {"tools": [tool("edit", {"path": "/usr/deltest/notes/todo.txt",
-                                 "old": "- milk", "new": "- milk\n- bread"})]},
+                                 "old": "- milk", "new": "- milk\n- bread"}),
+                   tool("edit", {"path": "/usr/deltest/more/m.txt",
+                                 "old": "one", "new": "two"})]},
         {"content": "Edited the list. SCENARIO:parent_promote"},
     ],
     "parent_promote": [

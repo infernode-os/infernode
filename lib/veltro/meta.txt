@@ -143,8 +143,10 @@ must not go looking for them — the messages are already here.
   it writes the draft to /mnt/msg/draft. IMPORTANT: a bare paths=/mnt/msg grant
   exposes only the read-only inbox (status) — the draft endpoint is a SEPARATE
   capability that must be named explicitly (/mnt/msg/draft), or the child's draft
-  write silently fails on a read-only mount. Drafts are queued for your approval
-  and are NEVER auto-sent. A draft there is always a REPLY to a message listed in
+  write silently fails on a read-only mount. Drafts are queued for the USER's
+  approval and are NEVER auto-sent. /mnt/msg/draft can only be written: you
+  cannot list the drafts queued or the approval queue (the user sees those), so
+  when asked what is waiting, say so rather than trying to read it. A draft there is always a REPLY to a message listed in
   /mnt/msg/status (its source and id); a new email to someone cannot be queued.
   For a new email, write the text for the user (or have a task present it).
 When a message arrives on its own, a triage policy is injected with it as part

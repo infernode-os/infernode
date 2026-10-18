@@ -36,6 +36,7 @@ include "sys.m";
 include "draw.m";
 
 include "string.m";
+include "nsconstruct.m";
 	str: String;
 
 include "arg.m";
@@ -955,6 +956,14 @@ handleslash(cmd: string): int
 		ack = cowpromote(cmdarg);
 	"revert" =>
 		ack = cowrevert(cmdarg);
+	"kept" =>
+		(nil, w) := sys->tokenize(cmdarg, " ");
+		if(w == nil)
+			ack = keptlist();
+		else if(tl w != nil && (hd w == "apply" || hd w == "discard"))
+			ack = keptdo(hd w, int hd tl w);
+		else
+			ack = "usage: /kept, /kept apply <n>, /kept discard <n>";
 	"help" =>
 		ack = "/stop  — stop what the agent is doing (type it while it works)\n" +
 		      "/bind <path>  — add namespace path\n" +
@@ -965,7 +974,8 @@ handleslash(cmd: string): int
 		      "/voice <name>  — change voice\n" +
 		      "/diff  — show cowfs changes\n" +
 		      "/promote [path]  — promote cowfs changes\n" +
-		      "/revert [path]  — revert cowfs changes";
+		      "/revert [path]  — revert cowfs changes\n" +
+		      "/kept [apply|discard <n>]  — changes from an earlier session, not applied";
 	* =>
 		return 0;	# unknown slash: pass to agent
 	}
@@ -986,13 +996,16 @@ Cowfs: module {
 	revertfile:  fn(overlaydir, relpath: string): string;
 };
 
-cowfindoverlay(): string
+# The overlays an activity stages its changes in, one for each folder it
+# may write: /tmp/veltro/cow/<actid>-<key of the folder>.  Only the first
+# was found, so a task given two folders had the changes to one of them
+# reported, promoted and reverted, and the other's left behind.
+cowoverlays(prefix: string): list of string
 {
-	# Overlay dir is /tmp/veltro/cow/{actid}-*
-	prefix := sys->sprint("%d-", actid);
 	fd := sys->open("/tmp/veltro/cow", Sys->OREAD);
 	if(fd == nil)
 		return nil;
+	l: list of string;
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
 		if(n <= 0)
@@ -1000,10 +1013,37 @@ cowfindoverlay(): string
 		for(i := 0; i < n; i++) {
 			nm := dirs[i].name;
 			if(len nm >= len prefix && nm[0:len prefix] == prefix)
-				return "/tmp/veltro/cow/" + nm;
+				l = "/tmp/veltro/cow/" + nm :: l;
 		}
 	}
-	return nil;
+	return l;
+}
+
+myoverlays(): list of string
+{
+	return cowoverlays(sys->sprint("%d-", actid));
+}
+
+# An overlay's changes as lines, each with the folder it is in.
+overlaychanges(cowfs: Cowfs, overlay: string): list of string
+{
+	base := cowbasepath(overlay);
+	out: list of string;
+	for(c := cowfs->diff(overlay); c != nil; c = tl c) {
+		l := hd c;
+		if(base != nil && len l > 2 && l[1] == ' ')
+			l = l[0:2] + base + "/" + l[2:];
+		out = l :: out;
+	}
+	return revl(out);
+}
+
+revl(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
 }
 
 cowdiff(): string
@@ -1011,19 +1051,33 @@ cowdiff(): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
-	changes := cowfs->diff(overlay);
-	if(changes == nil)
-		return "no changes";
 	result := "";
-	for(; changes != nil; changes = tl changes) {
-		if(result != "")
-			result += "\n";
-		result += hd changes;
-	}
+	for(; ovs != nil; ovs = tl ovs)
+		for(c := overlaychanges(cowfs, hd ovs); c != nil; c = tl c) {
+			if(result != "")
+				result += "\n";
+			result += hd c;
+		}
+	if(result == "")
+		return "no changes";
 	return result;
+}
+
+# The overlay a file named for /promote or /revert is in: by its full path
+# (under a folder's base), or by a path in the folder (the only overlay).
+cowfilein(ovs: list of string, arg: string): (string, string)
+{
+	for(o := ovs; o != nil; o = tl o) {
+		base := cowbasepath(hd o);
+		if(base != nil && agentlib->hasprefix(arg, base + "/"))
+			return (hd o, arg[len base + 1:]);
+	}
+	if(len ovs == 1 && arg != "" && arg[0] != '/')
+		return (hd ovs, arg);
+	return (nil, nil);
 }
 
 cowpromote(arg: string): string
@@ -1031,22 +1085,38 @@ cowpromote(arg: string): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
-	basepath := cowbasepath(overlay);
-	if(basepath == nil)
-		return "error: cannot determine base path";
 	if(arg != "") {
-		err := cowfs->promotefile(basepath, overlay, arg);
+		(overlay, rel) := cowfilein(ovs, arg);
+		if(overlay == nil)
+			return "error: " + arg + " is not in a folder this activity changed";
+		err := cowfs->promotefile(cowbasepath(overlay), overlay, rel);
 		if(err != nil)
 			return "error: " + err;
 		return "promoted: " + arg;
 	}
-	(n, err) := cowfs->promote(basepath, overlay);
-	if(err != nil)
-		return "error: " + err;
-	return sys->sprint("promoted %d file(s)", n);
+	total := 0;
+	conflicts := "";
+	for(; ovs != nil; ovs = tl ovs) {
+		basepath := cowbasepath(hd ovs);
+		if(basepath == nil)
+			return "error: cannot determine base path of " + hd ovs;
+		(n, err) := cowfs->promote(basepath, hd ovs);
+		total += n;
+		if(err != nil && agentlib->hasprefix(err, "not applied"))
+			conflicts += sys->sprint("\n%s (in %s)", err, basepath);
+		else if(err != nil)
+			return sys->sprint("error: %s (%d file(s) promoted)", err, total);
+	}
+	if(conflicts != "")
+		return sys->sprint("promoted %d file(s), but not all:%s\n" +
+			"Those files were changed after this task copied them, so its version would " +
+			"undo that; the file is as it was and the task's change stays staged.  To have " +
+			"it made on the current file: \"task revert %d\", then ask task %d to make " +
+			"its change again.", total, conflicts, actid, actid);
+	return sys->sprint("promoted %d file(s)", total);
 }
 
 # The folder an overlay stages changes for: the basepath= line of its
@@ -1073,19 +1143,146 @@ cowrevert(arg: string): string
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "error: cannot load cowfs module";
-	overlay := cowfindoverlay();
-	if(overlay == nil)
+	ovs := myoverlays();
+	if(ovs == nil)
 		return "no cowfs overlay for this activity";
 	if(arg != "") {
-		err := cowfs->revertfile(overlay, arg);
+		(overlay, rel) := cowfilein(ovs, arg);
+		if(overlay == nil)
+			return "error: " + arg + " is not in a folder this activity changed";
+		err := cowfs->revertfile(overlay, rel);
 		if(err != nil)
 			return "error: " + err;
 		return "reverted: " + arg;
 	}
-	err := cowfs->revert(overlay);
-	if(err != nil)
-		return "error: " + err;
+	for(; ovs != nil; ovs = tl ovs) {
+		err := cowfs->revert(hd ovs);
+		if(err != nil)
+			return "error: " + err;
+	}
 	return "all changes reverted";
+}
+
+# Changes a task staged and the user neither applied nor discarded before
+# InferNode quit are kept (nsconstruct names their overlay kept-...), not
+# applied, not lost.  Activity 0 offers them back at start, as Acme's Load
+# brings back what was open: each with Apply and Discard, the agent told so
+# it can answer for them.  Left unanswered, they are offered again next time.
+kept: list of (int, string, int);	# (number, overlay, dialogue)
+keptnote := "";				# for the agent, with the first message
+
+offerkept()
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return;
+	# This start's tasks have none yet: an overlay named for an activity is
+	# an earlier start's, until it is set aside when a task of this one is
+	# given the folder.  Set aside now, so its changes are offered.
+	ns := load NsConstruct NsConstruct->PATH;
+	if(ns != nil)
+		for(ovs := cowoverlays(""); ovs != nil; ovs = tl ovs)
+			if(!agentlib->hasprefix(hd ovs, "/tmp/veltro/cow/kept-"))
+				ns->setasidestale(hd ovs);
+	n := 0;
+	about := "";
+	for(ovs = revl(cowoverlays("kept-")); ovs != nil; ovs = tl ovs) {
+		changes := overlaychanges(cowfs, hd ovs);
+		if(changes == nil)
+			continue;
+		if(n == 0)
+			writemsg("veltro", "Some changes a task made in your files last time were never applied. " +
+				"They are kept as they were: apply or discard each below, or leave them for later.");
+		n++;
+		text := "";
+		for(c := changes; c != nil; c = tl c)
+			text += hd c + "\n";
+		text = agentlib->strip(text);
+		didx := writedialogue(sys->sprint("Not applied, from your last session (%d)", n),
+			text, "", sys->sprint("Apply %d,Discard %d", n, n));
+		kept = (n, hd ovs, didx) :: kept;
+		about += sys->sprint("  %d: %s\n", n, agentlib->strip(text));
+	}
+	if(n == 0)
+		return;
+	keptnote = "[Changes a task staged to the user's files in an earlier session were never applied " +
+		"nor discarded; the user is shown each with Apply and Discard. They are:\n" + about +
+		"Only the user applies or discards them (the buttons, or typing /kept apply <n> or " +
+		"/kept discard <n>); you cannot. Mention them if it helps the user.]\n\n";
+	log(sys->sprint("offered %d kept change set(s)", n));
+}
+
+# Apply or discard kept change set n.  Returns what happened.
+keptdo(verb: string, n: int): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(cowfs == nil)
+		return "error: cannot load cowfs module";
+	rest: list of (int, string, int);
+	result := "";
+	for(l := kept; l != nil; l = tl l) {
+		(k, overlay, didx) := hd l;
+		if(k != n) {
+			rest = hd l :: rest;
+			continue;
+		}
+		base := cowbasepath(overlay);
+		if(verb == "apply") {
+			if(base == nil)
+				return "error: cannot determine the folder of these changes";
+			(nf, err) := cowfs->promote(base, overlay);
+			if(err != nil && agentlib->hasprefix(err, "not applied"))
+				return sys->sprint("applied %d file(s) to %s, but %s: those files were changed " +
+					"since, and these changes would undo that. Discard %d drops them.", nf, base, err, n);
+			if(err != nil)
+				return "error: " + err;
+			result = sys->sprint("applied %d file(s) to %s", nf, base);
+			updatedialogue(didx, "", sys->sprint("Applied (%d)", n), "");
+		} else {
+			err := cowfs->revert(overlay);
+			if(err != nil)
+				return "error: " + err;
+			result = "discarded the changes to " + base;
+			updatedialogue(didx, "", sys->sprint("Discarded (%d)", n), "");
+		}
+		sys->remove(overlay + "/.cowmeta");
+		sys->remove(overlay);
+	}
+	if(result == "")
+		return sys->sprint("no kept changes numbered %d", n);
+	kept = rest;
+	if(kept == nil)
+		keptnote = "";
+	return result;
+}
+
+keptlist(): string
+{
+	cowfs := load Cowfs Cowfs->PATH;
+	if(kept == nil || cowfs == nil)
+		return "no changes kept from an earlier session";
+	out := "";
+	for(l := kept; l != nil; l = tl l) {
+		(k, overlay, nil) := hd l;
+		out += sys->sprint("%d:\n", k);
+		for(c := overlaychanges(cowfs, overlay); c != nil; c = tl c)
+			out += "  " + hd c + "\n";
+	}
+	return agentlib->strip(out) + "\n/kept apply <n> or /kept discard <n>";
+}
+
+# "Apply 2", "Discard 2": a kept change set's buttons.
+handlekeptchoice(input: string): int
+{
+	(n, words) := sys->tokenize(input, " ");
+	if(n != 2 || kept == nil)
+		return 0;
+	verb := hd words;
+	(k, rest) := str->toint(hd tl words, 10);
+	if(rest != "" || (verb != "Apply" && verb != "Discard"))
+		return 0;
+	writemsg("veltro", keptdo(str->tolower(verb), k));
+	return 1;
 }
 
 # --- The harness ---
@@ -1516,19 +1713,19 @@ notifyparent()
 # file had been changed when it had not.
 stagedchanges(): string
 {
-	overlay := cowfindoverlay();
-	if(overlay == nil)
-		return "";
 	cowfs := load Cowfs Cowfs->PATH;
 	if(cowfs == nil)
 		return "";
-	changes := cowfs->diff(overlay);
+	changes: list of string;
+	for(ovs := myoverlays(); ovs != nil; ovs = tl ovs)
+		for(c := overlaychanges(cowfs, hd ovs); c != nil; c = tl c)
+			changes = hd c :: changes;
 	if(changes == nil)
 		return "";
 	out := sys->sprint("\nIts changes to the user's files are STAGED, not yet in the files " +
 		"(\"task promote %d\" applies them once the user agrees; \"task revert %d\" " +
 		"discards them):\n", actid, actid);
-	for(; changes != nil; changes = tl changes)
+	for(changes = revl(changes); changes != nil; changes = tl changes)
 		out += "  " + hd changes + "\n";
 	return out;
 }
@@ -1920,6 +2117,8 @@ init(nil: ref Draw->Context, args: list of string)
 	# Offer guided tour on second launch (keys configured, not first boot)
 	if(actid == 0)
 		offertour();
+	if(actid == 0)
+		offerkept();
 
 	# Sync convcount with messages already in the conversation.
 	syncconvcount();
@@ -2021,6 +2220,8 @@ init(nil: ref Draw->Context, args: list of string)
 		# Tour dialogue button clicks (non-blocking — user can also just chat)
 		if(handletourchoice(human))
 			continue;
+		if(handlekeptchoice(human))
+			continue;
 
 		# Record human message in UI (unless it was, as it came)
 		if(!shown)
@@ -2030,8 +2231,9 @@ init(nil: ref Draw->Context, args: list of string)
 			setstatus("idle");
 		userinteracted = 1;
 
-		# Run agent turn
-		agentturn(human);
+		# Run agent turn; the first is told of changes kept from before.
+		agentturn(keptnote + human);
+		keptnote = "";
 	}
 }
 

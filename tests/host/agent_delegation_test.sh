@@ -161,6 +161,9 @@ echo '@@ after promote'
 cat /usr/deltest/notes/todo.txt
 
 
+echo 'SCENARIO:grant_baseline go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Granted the baseline'
+
 echo 'SCENARIO:backend_down go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Model unavailable'
 
@@ -179,7 +182,7 @@ echo 'SCENARIO:delegate_loop go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Started the looper'
 sleep 4
 echo '@@ looper closing'
-echo 'activity delete 3' > /mnt/ui/ctl
+echo 'activity delete 4' > /mnt/ui/ctl
 sleep 6
 echo '@@ looper closed'
 sleep 6
@@ -281,6 +284,8 @@ reqcheck "the compile gate fails code that does not, with the compiler's error" 
 want=$(printf '\n"quoted" first line\n\tsys->print("%%d\\t%%d\\n", i, j);')
 got=$(section "raw file")
 [ "$got" = "$want" ] && ok "a native write and edit keep the text as given" || bad "a native write and edit keep the text as given (got: $(printf '%s' "$got" | od -c | head -3))"
+reqcheck "a task granted what every agent reads is created" \
+	'tools and tools[-1]["content"].startswith("created activity")' grant_baseline 1
 reqcheck "limbo compile passes a file that compiles" \
 	'any("good.b compiles." in t["content"] for t in tools)' compile_check 1
 reqcheck "limbo compile fails a file that does not, with the compiler's error" \

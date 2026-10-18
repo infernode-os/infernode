@@ -1445,11 +1445,21 @@ startturn(s: ref Session, data: string)
 {
 	if(len data > 0 && data[len data - 1] == '\n')
 		data = data[0:len data - 1];
-	if(strip(data) == "")
+	if(strip(data) == "") {
+		s.busy = 0;
+		s.status = "idle";
+		wake(s, Qtext);
+		wake(s, Qlog);
+		wake(s, Qapprove);
 		return;
-	if(s.busy || s.llmid == "") {
-		# Another writer's message started a turn first.
-		appendlog(s, "input: dropped, a turn is in progress");
+	}
+	if(s.llmid == "") {
+		appendlog(s, "input: dropped, no model session");
+		s.busy = 0;
+		s.status = "idle";
+		wake(s, Qtext);
+		wake(s, Qlog);
+		wake(s, Qapprove);
 		return;
 	}
 	appendhead(s, "user");
@@ -1757,6 +1767,16 @@ Serve:
 				if(c.data == nil && s.busy) {
 					srv.reply(ref Rmsg.Error(m.tag, "busy"));
 					break;
+				}
+				# The session is this writer's from its first piece: busy,
+				# so a client following text from now waits for the turn
+				# rather than finding the session idle and ending, which
+				# it did when the close that starts the turn came after
+				# its first read (a task was reported done, with no
+				# report, before it had begun).
+				if(c.data == nil) {
+					s.busy = 1;
+					s.status = "working";
 				}
 				if(len c.data + len m.data > MAXINPUT) {
 					srv.reply(ref Rmsg.Error(m.tag, "message too long"));

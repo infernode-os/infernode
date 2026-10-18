@@ -185,6 +185,12 @@ SCENARIOS = {
                    tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
         {"content": "Compiled the files."},
     ],
+    # A task granted what every agent reads anyway: created, not refused.
+    "grant_baseline": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Reader paths=/lib/veltro tools=read brief=SCENARIO:text_only go"})]},
+        {"content": "Granted the baseline."},
+    ],
     # A task edits a file in a folder the user granted: the change is
     # staged; activity 0, told so, promotes it on the user's word.
     "delegate_edit": [

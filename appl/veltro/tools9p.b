@@ -1699,7 +1699,10 @@ provisionparse(args: string): (int, string, list of string, string)
 			# /lib/veltro, /lib/certs, /dis/veltro, the clock and console).
 			# Asked for, it was refused as outside this agent's grants.
 			# Write access to them is another matter, checked as any grant.
-			if(pperm != "rw" && baselinepath(ppath))
+			# (A grant names no permission more often than not, and that
+			# reads as rw: only an rw asked for is a request to write.)
+			explicitrw := len raw > 3 && (raw[len raw - 3:] == ":rw" || raw[len raw - 3:] == " rw");
+			if(!explicitrw && baselinepath(ppath))
 				continue;
 			perr := validatepath(ppath);
 			if(perr != nil)

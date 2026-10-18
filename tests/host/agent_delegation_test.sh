@@ -173,6 +173,16 @@ for a in 0 1 2 {
 }
 echo '@@ luci0'
 cat /tmp/deltest/luci0.log
+echo 'SCENARIO:delegate_loop go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Started the looper'
+sleep 4
+echo '@@ looper closing'
+echo 'activity delete 3' > /mnt/ui/ctl
+sleep 6
+echo '@@ looper closed'
+sleep 6
+echo '@@ looper later'
+
 echo '@@ agents before close'
 ps | grep LuciBridge | wc -l
 echo 'activity delete 1' > /mnt/ui/ctl
@@ -277,6 +287,17 @@ else
 	bad "a closed task's agent stops ($before -> $after lucibridge processes)"
 fi
 section "tool mount after close" | grep -q '/tool.1/tools *$' && bad "a closed task's tool server is unmounted" || ok "a closed task's tool server is unmounted"
+
+# The looper's model calls after it is closed (and a moment for the call
+# in flight): none.
+steps_after=$(awk '/^@@ looper closed$/ {p=1; next} /^@@ looper later$/ {p=0} p && /^veltrosrv: step [0-9]+: writing/' "$LOG" | wc -l)
+steps_before=$(awk '/^@@ looper closing$/ {p=0} /Started the looper/ {p=1} p && /^veltrosrv: step [0-9]+: writing/' "$LOG" | wc -l)
+if [ "$steps_before" -gt 2 ] && [ "$steps_after" -eq 0 ]; then
+	ok "a task closed while it works stops ($steps_before steps, then $steps_after)"
+else
+	bad "a task closed while it works stops ($steps_before steps, then $steps_after)"
+fi
+grep -q 'turn done stop=cancelled' "$LOG" && ok "its turn ends cancelled" || bad "its turn ends cancelled"
 
 C0=$(section "conversation 0")
 [ "$(printf '%s\n' "$C0" | grep -c 'text=Started Child.')" -eq 1 ] && ok "a reply is shown once" || bad "a reply is shown once"

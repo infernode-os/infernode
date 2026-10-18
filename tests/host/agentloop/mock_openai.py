@@ -198,6 +198,13 @@ SCENARIOS = {
         {"tools": [tool("task", {"command": "promote", "args": "2"})]},
         {"content": "Promoted the edit."},
     ],
+    # A task that never stops working (its model calls a tool every turn),
+    # closed while it works.
+    "delegate_loop": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Looper tools=list brief=SCENARIO:step_cap go"})]},
+        {"content": "Started the looper."},
+    ],
     # Activity 0 on the completion event: its own tools still work.
     "parent_report": [
         {"tools": [tool("task", {"command": "status", "args": "1"})]},

@@ -434,6 +434,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `sam_test.b` | Native sam engine over its pipe: addresses, commands, undo, the terminal protocol |
 | `hostplumb_test.b` | hostplumb(1) re-plumbing host messages under `/n/local`; the plumber refusing a message nothing can receive |
 | `tests/host/agent_delegation_test.sh` | Activity 0 delegating to a task agent through lucibridge: the task agent uses its own tools, activity 0 keeps its tools and its own session afterwards, the completion reaches activity 0 as a turn (not the human's words), each reply shown once, a message longer than one 9P message arrives whole |
+| `tests/host/luciuisrv_closed_test.sh` | A closed activity refuses every write (status, messages, resources, artifacts, urgency) and luciuisrv keeps answering: a task closed while it worked used to crash the UI server or reopen itself |
 | `tests/host/prompt_defaults_test.sh` | The agent prompts copied into `~/.infernode` follow the shipped defaults until the user edits them: every shipped version's hash is in `lib/veltro/prompt-defaults`, an unedited old copy is brought up to date at boot, an edited one is left |
 | `tests/host/veltrosrv_test.sh` | The agent harness's file contract at `/mnt/veltro`: idle EOF, busy, cancel, ctl validation, and the agent's tools unable to see the mount |
 | `tests/host/agentloop_characterization_test.sh` | What the agent loop does against a scripted model, through `lucibridge` (via `/mnt/ui`) and through `/mnt/veltro`, pinned as golden files |

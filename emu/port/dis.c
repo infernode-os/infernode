@@ -181,8 +181,8 @@ newprog(Prog *p, Modlink *m)
 	h = D2H(m);
 	h->ref++;
 	Setmark(h);
-	n->R.M = m;
-	n->R.MP = m->MP;
+	n->reg.M = m;
+	n->reg.MP = m->MP;
 	if(m->MP != H)
 		Setmark(D2H(m->MP));
 	addrun(n);
@@ -330,7 +330,7 @@ exprog(Prog *p, char *exc)
 	/* similar code to killprog but not quite */
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -441,7 +441,7 @@ killprog(Prog *p, char *cause)
 
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -490,10 +490,10 @@ killprog(Prog *p, char *cause)
 	p->state = Pexiting;
 	propex(p, "killed");
 
-	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
+	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
 	gclock();
-	destroystack(&p->R);
+	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
 
@@ -857,12 +857,12 @@ schedmod(Module *m)
 	p = newprog(nil, ml);
 	h = D2H(ml);
 	h->ref--;
-	p->R.PC = m->entry;
+	p->reg.PC = m->entry;
 	fp = &f;
 	R.s = &fp;
 	f.t = m->entryt;
 	newstack(p);
-	initmem(m->entryt, p->R.FP);
+	initmem(m->entryt, p->reg.FP);
 
 	return p;
 }
@@ -872,9 +872,9 @@ static char*
 m(Prog *p)
 {
 	if(p)
-		if(p->R.M)
-			if(p->R.M->m)
-				return p->R.M->m->name;
+		if(p->reg.M)
+			if(p->reg.M->m)
+				return p->reg.M->m->name;
 	return "nil";
 }
 */
@@ -1097,7 +1097,7 @@ progexit(void)
 			char *pc = strstr(estr, "pc=");
 
 			if(pc != nil)
-				R.PC = r->R.PC = (Inst*)strtol(pc+3, nil, 0);	/* for debugging */
+				R.PC = r->reg.PC = (Inst*)strtol(pc+3, nil, 0);	/* for debugging */
 		}
 		print("[%s] Broken: \"%s\"\n", m->name, estr);
 	}

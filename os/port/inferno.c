@@ -1075,7 +1075,7 @@ crecv(Channel *c, void *ip)
 	rsav = R;
 	R.s = &c;
 	R.d = ip;
-	irecv();
+	irecv(OPCALLR);
 	R = rsav;
 }
 
@@ -1095,6 +1095,6 @@ csend(Channel *c, void *ip)
 	rsav = R;
 	R.s = ip;
 	R.d = &c;
-	isend();
+	isend(OPCALLR);
 	R = rsav;
 }

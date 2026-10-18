@@ -217,7 +217,7 @@ found:
 				R.PC, (void*)m->prog, newpc, m->m ? m->m->name : "?", estr);
 	} else
 		R.PC = m->prog+newpc;
-	memmove(&p->R, &R, sizeof(R));
+	memmove(&p->reg, &R, sizeof(R));
 	p->kill = nil;
 	destroy(p->exval);
 	p->exval = H;

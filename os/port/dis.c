@@ -283,8 +283,8 @@ newprog(Prog *p, Modlink *m)
 	h = D2H(m);
 	h->ref++;
 	Setmark(h);
-	n->R.M = m;
-	n->R.MP = m->MP;
+	n->reg.M = m;
+	n->reg.MP = m->MP;
 	if(m->MP != H)
 		Setmark(D2H(m->MP));
 	addrun(n);
@@ -441,7 +441,7 @@ exprog(Prog *p, char *exc)
 {
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -524,7 +524,7 @@ killprog(Prog *p, char *cause)
 
 	switch(p->state) {
 	case Palt:
-		altdone(p->R.s, p, nil, -1);
+		altdone(p->reg.s, p, nil, -1);
 		break;
 	case Psend:
 		cqdelp(&p->chan->send, p);
@@ -567,11 +567,11 @@ killprog(Prog *p, char *cause)
 
 	propex(p, "killed");
 
-	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->R.M->m->name, cause);
+	snprint(msg, sizeof(msg), "%d \"%s\":%s", p->pid, p->reg.M->m->name, cause);
 
 	p->state = Pexiting;
 	gclock();
-	destroystack(&p->R);
+	destroystack(&p->reg);
 	delprog(p, msg);
 	gcunlock();
 
@@ -834,10 +834,10 @@ addrun(Prog *p)
 	 * nil->compiled quietly returned junk; with no memory there (RISC-V,
 	 * no paging) it is a load access fault in the boot's first addrun.
 	 */
-	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && ((uintptr)p->R.PC & 3))
+	if(p->reg.M != nil && p->reg.M != H && p->reg.M->compiled && ((uintptr)p->reg.PC & 3))
 		print("BUG: addrun: prog %d %s R.PC=%p (prog %p) from %#p\n",
-			p->pid, p->R.M->m? p->R.M->m->name : "?", p->R.PC,
-			p->R.M->m? (void*)p->R.M->m->prog : nil, getcallerpc(&p));
+			p->pid, p->reg.M->m? p->reg.M->m->name : "?", p->reg.PC,
+			p->reg.M->m? (void*)p->reg.M->m->prog : nil, getcallerpc(&p));
 	chkprog(p, "addrun");
 	chkprog(isched.runtl, "addrun.tl");
 	if(isched.runhd == nil)
@@ -926,12 +926,12 @@ schedmod(Module *m)
 	p = newprog(nil, ml);
 	h = D2H(ml);
 	h->ref--;
-	p->R.PC = m->entry;
+	p->reg.PC = m->entry;
 	fp = &f;
 	R.s = &fp;
 	f.t = m->entryt;
 	newstack(p);
-	initmem(m->entryt, p->R.FP);
+	initmem(m->entryt, p->reg.FP);
 
 	return p;
 }
@@ -1269,7 +1269,7 @@ vmachine(void*)
 			 * read these two fields first.
 			 */
 			pid = r->pid;
-			modname = r->R.M != nil && r->R.M->m != nil ? r->R.M->m->name : "?";
+			modname = r->reg.M != nil && r->reg.M->m != nil ? r->reg.M->m->name : "?";
 
 			FPrestore(&o->fpu);
 			r->xec(r);
@@ -1286,11 +1286,11 @@ vmachine(void*)
 			{
 				Prog *q;
 				for(q = isched.runhd; q != nil; q = q->link)
-					if(q != r && q->R.M != nil && q->R.M != H && q->R.M->compiled && ((uintptr)q->R.PC & 3) && !(q->flags & Pbadpc)){
+					if(q != r && q->reg.M != nil && q->reg.M != H && q->reg.M->compiled && ((uintptr)q->reg.PC & 3) && !(q->flags & Pbadpc)){
 						q->flags |= Pbadpc;
 						print("BUG: prog %d %s R.PC=%p (prog %p) went bad during the quantum of prog %d %s at pc %p (prog %p, state %d)\n",
-							q->pid, q->R.M->m? q->R.M->m->name : "?", q->R.PC, q->R.M->m? (void*)q->R.M->m->prog : nil,
-							pid, modname, r->R.PC, r->R.M != H && r->R.M->m? (void*)r->R.M->m->prog : nil, r->state);
+							q->pid, q->reg.M->m? q->reg.M->m->name : "?", q->reg.PC, q->reg.M->m? (void*)q->reg.M->m->prog : nil,
+							pid, modname, r->reg.PC, r->reg.M != H && r->reg.M->m? (void*)r->reg.M->m->prog : nil, r->state);
 					}
 			}
 

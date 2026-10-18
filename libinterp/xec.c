@@ -4,13 +4,18 @@
 #include "raise.h"
 #include "pool.h"
 
+#ifdef VMREGPERMACH
+REG	R0;			/* VM 0's registers; R is the running VM's (interp.h) */
+#else
 REG	R;			/* Virtual Machine registers */
+#endif
 String	snil;			/* String known to be zero length */
 
 #define Stmp	*((WORD*)(R.FP+NREG*IBY2WD))
 #define Dtmp	*((WORD*)(R.FP+(NREG+2)*IBY2WD))
 
-#define OP(fn)	void fn(void)
+#include "opreg.h"
+#define OP(fn)	void fn(OPARGS)
 #define B(r)	*((BYTE*)(R.r))
 #define W(r)	*((WORD*)(R.r))
 #define UW(r)	*((UWORD*)(R.r))
@@ -527,7 +532,7 @@ OP(newaz)
 	destroy(at);
 }
 Channel*
-cnewc(Type *t, void (*mover)(void), int len)
+cnewc(Type *t, void (*mover)(OPARGS), int len)
 {
 	Heap *h;
 	Channel *c;
@@ -556,8 +561,9 @@ cnewc(Type *t, void (*mover)(void), int len)
 	return c;
 }
 Channel*
-newc(Type *t, void (*mover)(void))
+newc(Type *t, void (*mover)(OPARGS))
 {
+	RPDECL;
 	Channel **cp, *oldc;
 	WORD len;
 
@@ -771,7 +777,7 @@ OP(spawn)
 	Prog *p;
 
 	p = newprog(currun(), R.M);
-	p->R.PC = *(Inst**)R.d;
+	p->reg.PC = *(Inst**)R.d;
 	newstack(p);
 	unframe();
 }
@@ -789,9 +795,9 @@ OP(mspawn)
 	p = newprog(currun(), ml);
 	o = W(m);
 	if(o >= 0)
-		p->R.PC = ml->links[o].u.pc;
+		p->reg.PC = ml->links[o].u.pc;
 	else
-		p->R.PC = ml->m->ext[-o-1].u.pc;
+		p->reg.PC = ml->m->ext[-o-1].u.pc;
 	newstack(p);
 	unframe();
 }
@@ -1046,6 +1052,7 @@ OP(lenl)
 static int
 cgetb(Channel *c, void *v)
 {
+	RPDECL;
 	Array *a;
 	void *w;
 
@@ -1060,7 +1067,7 @@ cgetb(Channel *c, void *v)
 		R.s = w;
 		R.m = &c->mid;
 		R.d = v;
-		c->mover();
+		c->mover(OPCALL);
 		if(a->t->np){
 			freeptrs(w, a->t);
 			initmem(a->t, w);
@@ -1072,6 +1079,7 @@ cgetb(Channel *c, void *v)
 static int
 cputb(Channel *c, void *v)
 {
+	RPDECL;
 	Array *a;
 	WORD len, r;
 
@@ -1086,7 +1094,7 @@ cputb(Channel *c, void *v)
 		R.s = v;
 		R.m = &c->mid;
 		R.d = a->data+r*a->t->size;
-		c->mover();
+		c->mover(OPCALL);
 		return 1;
 	}
 	return 0;
@@ -1181,12 +1189,12 @@ OP(isend)
 
 	cqdel(&c->recv);
 	if(p->state == Palt)
-		altdone(p->R.s, p, c, 1);
+		altdone(p->reg.s, p, c, 1);
 
 	R.m = &c->mid;
 	R.d = p->ptr;
 	p->ptr = nil;
-	c->mover();
+	c->mover(OPCALL);
 	addrun(p);
 	R.t = 0;
 }
@@ -1216,7 +1224,7 @@ OP(irecv)
 
 	cqdel(&c->send);
 	if(p->state == Palt)
-		altdone(p->R.s, p, c, 0);
+		altdone(p->reg.s, p, c, 0);
 
 	if(c->buf != H){
 		cgetb(c, R.d);
@@ -1227,7 +1235,7 @@ OP(irecv)
 		R.m = &c->mid;
 		R.s = p->ptr;
 		p->ptr = nil;
-		c->mover();
+		c->mover(OPCALL);
 	}
 	addrun(p);
 	R.t = 0;
@@ -1235,6 +1243,7 @@ OP(irecv)
 int
 csendalt(Channel *c, void *ip, Type *t, int len)
 {
+	RPDECL;
 	REG rsav;
 
 	if(c == H)
@@ -1252,7 +1261,7 @@ csendalt(Channel *c, void *ip, Type *t, int len)
 	rsav = R;
 	R.s = ip;
 	R.d = &c;
-	isend();
+	isend(OPCALL);
 	R = rsav;
 	freeptrs(ip, t);
 	return 1;
@@ -1372,7 +1381,7 @@ OP(headp)
 
 	l = L(s);
 	R.s = l->data;
-	movp();
+	movp(OPCALL);
 }
 OP(headf)
 {
@@ -1394,7 +1403,7 @@ OP(headmp)
 
 	l = L(s);
 	R.s = l->data;
-	movmp();
+	movmp(OPCALL);
 }
 OP(tail)
 {
@@ -1402,7 +1411,7 @@ OP(tail)
 
 	l = L(s);
 	R.s = &l->tail;
-	movp();
+	movp(OPCALL);
 }
 OP(slicea)
 {
@@ -1833,6 +1842,7 @@ destroystack(REG *reg)
 Prog*
 isave(void)
 {
+	RPDECL;
 	Prog *p;
 
 	p = delrun(Prelease);
@@ -1847,21 +1857,22 @@ isave(void)
 		print("BUG: isave: misaligned R.PC=%p in %s (prog %p) saved from %p\n",
 			R.PC, R.M->m ? R.M->m->name : "?", R.M->m ? (void*)R.M->m->prog : nil,
 			getcallerpc(&p));
-	p->R = R;
+	p->reg = R;
 	return p;
 }
 
 void
 irestore(Prog *p)
 {
-	if(p->R.M != nil && p->R.M != H && p->R.M->compiled && PC_MISALIGNED(p->R.PC))
-		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->R.PC);
-	R = p->R;
+	RPDECL;
+	if(p->reg.M != nil && p->reg.M != H && p->reg.M->compiled && PC_MISALIGNED(p->reg.PC))
+		print("BUG: irestore: prog %d R.PC=%p misaligned\n", p->pid, p->reg.PC);
+	R = p->reg;
 	R.IC = 1;
 }
 
 void
-movtmp(void)		/* Used by send & receive */
+movtmp(OPARGS)		/* Used by send & receive */
 {
 	Type *t;
 
@@ -1901,6 +1912,7 @@ opinit(void)
 void
 xec(Prog *p)
 {
+	RPDECL;
 	int op;
 
 	/*
@@ -1916,7 +1928,7 @@ xec(Prog *p)
 	 * their release, so only -c1 did it (a page load opening many
 	 * TLS connections at once, docs/JS-ENGINE.md).
 	 */
-	R = p->R;
+	R = p->reg;
 	retrelease();
 	R.MP = R.M->MP;
 	R.IC = p->quanta;
@@ -1950,10 +1962,10 @@ xec(Prog *p)
 	}
 	else {
 		do {
-		dec[R.PC->add]();
+		dec[R.PC->add](OPCALL);
 		op = R.PC->op;
 		R.PC++;
-		optab[op]();
+		optab[op](OPCALL);
 	} while(--R.IC != 0);
 	}
 
@@ -1976,5 +1988,5 @@ xec(Prog *p)
 			}
 		}
 	}
-	p->R = R;
+	p->reg = R;
 }

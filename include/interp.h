@@ -75,6 +75,44 @@ typedef struct Altc	Altc;
 typedef struct Except Except;
 typedef struct Handler Handler;
 
+/*
+ * R, the running VM's registers.
+ *
+ * On the native arm64 kernel each core's Mach holds, at offset 0, a
+ * pointer to the registers of the VM whose process that core is
+ * running (m is x28 there, os/arm64/dat.h), so R is one load from x28
+ * -- the same cost as the global it replaces -- and the JIT keeps it in
+ * X20 as before. That is what lets more than one VM run at once (#944).
+ * The asm is not volatile on purpose: the value is the running
+ * process's VM, which does not change while it runs, so a copy cached
+ * across a preemption and a move to another core is still right. (What
+ * must never be cached is x28 itself; this reads through it in the
+ * same instruction.)
+ *
+ * Elsewhere -- the hosted emulator, the RISC-V kernel -- R is a global.
+ */
+#if defined(__aarch64__) && !__STDC_HOSTED__	/* the native kernel: -ffreestanding */
+#define	VMREGPERMACH
+static inline REG*
+_vmreg(void)
+{
+	REG *r;
+
+	__asm__("ldr %0, [x28]" : "=r"(r));
+	return r;
+}
+#define	R	(*_vmreg())
+extern	REG	R0;		/* VM 0's registers */
+#define	OPARGS	REG *Rp		/* an op's and a decoder's parameter: libinterp/opreg.h */
+#define	OPCALL	Rp
+#define	OPCALLR	(&R)		/* the same, from outside an op */
+#else
+extern	REG	R;
+#define	OPARGS	void
+#define	OPCALL
+#define	OPCALLR
+#endif
+
 struct ILock
 {
 	int	lk;
@@ -126,7 +164,7 @@ struct Channel
 	Progq*	send;		/* Queue of progs ready to send */
 	Progq*	recv;		/* Queue of progs ready to receive */
 	void*	aux;		/* Rock for devsrv */
-	void	(*mover)(void);	/* Data mover */
+	void	(*mover)(OPARGS);	/* Data mover: an op (libinterp/opreg.h) */
 	union {
 		WORD	w;
 		Type*	t;
@@ -246,7 +284,7 @@ struct Progs
 
 struct Prog
 {
-	REG		R;		/* Register set */
+	REG		reg;		/* Register set (R is the running VM's; see interp.h) */
 	Prog*		link;		/* Run queue */
 	Channel*		chan;	/* Channel pointer */
 	void*		ptr;		/* Channel data pointer */
@@ -378,11 +416,10 @@ extern	Type	Tbyte;
 extern	Type Tword;
 extern	Type Tlong;
 extern	Type Treal;
-extern	REG	R;
 extern	String	snil;
-extern	void	(*optab[256])(void);
+extern	void	(*optab[256])(OPARGS);
 extern	void	(*comvec)(void);
-extern	void	(*dec[])(void);
+extern	void	(*dec[])(OPARGS);
 extern	Module*	modules;
 extern	int	mutator;
 extern	int	nprop;
@@ -401,7 +438,7 @@ extern	Module*	builtinmod(char*, void*, int);
 extern	void		cblock(Prog*);
 extern	void*		checktype(void*, Type*, char*, int);
 extern	void		cmovw(void*, void*);
-extern	Channel*	cnewc(Type*, void (*)(void), int);
+extern	Channel*	cnewc(Type*, void (*)(OPARGS), int);
 extern	int		compile(Module*, int, Modlink*);
 extern	void		freejitcode(void*, ulong);
 /*
@@ -489,9 +526,9 @@ extern	Array*		mem2array(void*, int);
 extern	void		mlink(Module*, Link*, uchar*, int, int, Type*);
 extern	void		modinit(void);
 extern	WORD		modstatus(REG*, char*, int);
-extern	void		movp(void);
-extern	void		movtmp(void);
-extern	void		movtmpsafe(void);
+extern	void		movp(OPARGS);
+extern	void		movtmp(OPARGS);
+extern	void		movtmpsafe(OPARGS);
 extern	int			mustbesigned(char*, uchar*, ulong, Dir*);
 extern	Module*		newmod(char*);
 extern	Module*		newdyncode(int, char*, Dir*);
@@ -513,7 +550,7 @@ extern	void		ptradd(Heap*);
 extern	void		ptrdel(Heap*);
 extern	void		pushrun(Prog*);
 extern	Module*		readmod(char*, Module*, int);
-extern	void		irecv(void);
+extern	void		irecv(OPARGS);
 extern	void		release(void);
 extern	void		releasex(void);
 extern	void		retnstr(char*, int, String**);
@@ -522,7 +559,7 @@ extern	void		rungc(Prog*);
 extern	void		runtime(Module*, Link*, char*, int, void(*)(void*), Type*);
 extern	void		safemem(void*, Type*, void (*)(void*));
 extern	int		segflush(void *, ulong);
-extern	void		isend(void);
+extern	void		isend(OPARGS);
 extern	void	setdbreg(uchar*);
 extern	uchar*	setdbloc(uchar*);
 extern	void		seterror(char*, ...);

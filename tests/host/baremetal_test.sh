@@ -929,7 +929,7 @@ SBEOF
         # ipint.c stays: keyring's public-key paths stand on IPint_*.
         esac
         o="$BUILD/libinterp-$(basename "$f").o"
-        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -Werror=incompatible-function-pointer-types -Werror=incompatible-pointer-types -Wno-error=incompatible-pointer-types-discards-qualifiers -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 
@@ -959,7 +959,7 @@ SBEOF
     for f in "$ROOT"/libkernfp/*.c; do
         [[ -e "$f" ]] || continue
         o="$BUILD/libkernfp-$(basename "$f").o"
-        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
+        "$CC" "${IFLAGS[@]}" -I"$BUILD" -Wno-everything -Werror=incompatible-function-pointer-types -c "$f" -o "$o" 2>>"$BUILD/cc.log" || return 1
         libobjs+=("$o")
     done
 

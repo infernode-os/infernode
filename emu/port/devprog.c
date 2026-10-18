@@ -427,7 +427,7 @@ progsize(Prog *p)
 	uchar *fp;
 	Modlink *m;
 
-	m = p->R.M;
+	m = p->reg.M;
 	size = 0;
 	if(m->MP != H)
 		size += hmsize(D2H(m->MP));
@@ -443,7 +443,7 @@ progsize(Prog *p)
 	if(m->prog != nil && !m->compiled)
 		size += msize(m->prog);
 
-	fp = p->R.FP;
+	fp = p->reg.FP;
 	while(fp != nil) {
 		f = (Frame*)fp;
 		fp = f->fp;
@@ -865,7 +865,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 	case Qstatus:
 		acquire();
 		p = progpid(PID(c->qid));
-		if(p == nil || p->state == Pexiting || p->R.M == H) {
+		if(p == nil || p->state == Pexiting || p->reg.M == H) {
 			release();
 			snprint(up->genbuf, sizeof(up->genbuf), "%8lud %8d %10s %s %10s %5dK %s",
 				PID(c->qid),
@@ -877,7 +877,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 				"[$Sys]");
 			return readstr(offset, va, n, up->genbuf);
 		}
-		modstatus(&p->R, mbuf, sizeof(mbuf));
+		modstatus(&p->reg, mbuf, sizeof(mbuf));
 		o = p->osenv;
 		snprint(up->genbuf, sizeof(up->genbuf), "%8d %8d %10s %s %10s %5dK %s",
 			p->pid,
@@ -948,7 +948,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 			release();
 			error(Estopped);
 		}
-		n = progstack(&p->R, p->state, va, n, offset);
+		n = progstack(&p->reg, p->state, va, n, offset);
 		release();
 		return n;
 	case Qheap:
@@ -1127,10 +1127,10 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 			break;
 		case CDtoret:
 			f = currun();
-			i = calldepth(&p->R);
+			i = calldepth(&p->reg);
 			while(f->kill == nil) {
 				dbgstep(c->aux, p, 1024);
-				if(i > calldepth(&p->R))
+				if(i > calldepth(&p->reg))
 					break;
 			}
 			break;
@@ -1423,7 +1423,7 @@ dbgxec(Prog *p)
 		nexterror();
 	}
 
-	R = p->R;
+	R = p->reg;
 	R.MP = R.M->MP;
 
 	R.IC = p->quanta;
@@ -1500,7 +1500,7 @@ save:
 	if(ctl->stop)
 		strcpy(buf, "stopped");
 
-	p->R = R;
+	p->reg = R;
 
 	if(env->debug == nil) {
 		poperror();

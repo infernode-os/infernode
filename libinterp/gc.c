@@ -214,7 +214,7 @@ rootset(Prog *root)
 	sweeper = (gccolor-2)%3;
 
 	while(root != nil) {
-		ml = root->R.M;
+		ml = root->reg.M;
 		h = D2H(ml);
 		Setmark(h);
 		mp = ml->MP;
@@ -223,8 +223,8 @@ rootset(Prog *root)
 			Setmark(h);
 		}
 
-		sp = root->R.SP;
-		ex = root->R.EX;
+		sp = root->reg.SP;
+		ex = root->reg.EX;
 		while(ex != nil) {
 			sx = (Stkext*)ex;
 			fp = sx->reg.tos.fu;

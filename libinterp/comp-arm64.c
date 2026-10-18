@@ -324,6 +324,18 @@ static	void	macnil(void);
 static	void	movmem(Inst*);
 static	void	mid(Inst*, int, int);
 static	void	mem(int, long, int, int);
+
+/*
+ * X20 = &R. On the native kernel R is the running VM's, found through
+ * the core's Mach (x28, offset 0: include/interp.h), so it is loaded
+ * from there, which a process moved to another core still gets right.
+ * Hosted, R is a global and its address a constant.
+ */
+#ifdef VMREGPERMACH
+#define	LOADRREG()	mem(Ldw, 0, 28, RREG)
+#else
+#define	LOADRREG()	con((uvlong)&R, RREG)
+#endif
 static	void	memfl(int, long, int, int);
 static	void	faultif(int, int);
 static	void	bradis(int);
@@ -883,7 +895,7 @@ schedcheck(Inst *i)
  * punt — fall back to C interpreter for an instruction.
  */
 static void
-punt(Inst *i, int m, void (*fn)(void))
+punt(Inst *i, int m, void (*fn)(OPARGS))
 {
 	ulong pc;
 
@@ -942,9 +954,12 @@ punt(Inst *i, int m, void (*fn)(void))
 
 	mem(Stw, O(REG, FP), RREG, RFP);
 	con((uvlong)fn, RTA);
+#ifdef VMREGPERMACH
+	MOV_REG(0, RREG);	/* the op's argument: its VM's registers (opreg.h) */
+#endif
 	BLR_REG(RTA);
 
-	con((uvlong)&R, RREG);
+	LOADRREG();
 
 	if(m & TCHECK) {
 		mem(Ldw, O(REG, t), RREG, RA0);
@@ -2258,7 +2273,7 @@ preamble(void)
 	*code++ = 0xA9024FF6;	/* STP X22, X19, [SP, #32] */
 
 	/* RREG = &R */
-	con((uvlong)&R, RREG);
+	LOADRREG();
 
 	/* R.xpc = epilogue (placeholder, patched below) */
 	xpc_loc = code;
@@ -2349,7 +2364,7 @@ macfrp(void)
 	mem(Stw, O(REG, st), RREG, 30);
 	con((uvlong)rdestroy, RTA);
 	BLR_REG(RTA);
-	con((uvlong)&R, RREG);
+	LOADRREG();
 	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
@@ -2550,7 +2565,7 @@ macmcal(void)
 	mem(Stw, O(REG, dt), RREG, RA0);
 	con((uvlong)rmcall, RTA);
 	BLR_REG(RTA);
-	con((uvlong)&R, RREG);
+	LOADRREG();
 	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
@@ -2567,7 +2582,7 @@ macmcal(void)
 	mem(Stw, O(REG, dt), RREG, RA0);
 	con((uvlong)rmcall, RTA);
 	BLR_REG(RTA);
-	con((uvlong)&R, RREG);
+	LOADRREG();
 	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);
@@ -2625,7 +2640,7 @@ macfram(void)
 	mem(Stw, O(REG, st), RREG, 30);
 	con((uvlong)extend, RTA);
 	BLR_REG(RTA);
-	con((uvlong)&R, RREG);
+	LOADRREG();
 	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, s), RREG, RA2);
@@ -2642,7 +2657,7 @@ macmfra(void)
 	mem(Stw, O(REG, st), RREG, 30);
 	con((uvlong)rmfram, RTA);
 	BLR_REG(RTA);
-	con((uvlong)&R, RREG);
+	LOADRREG();
 	mem(Ldw, O(REG, st), RREG, 30);
 	mem(Ldw, O(REG, FP), RREG, RFP);
 	mem(Ldw, O(REG, MP), RREG, RMP);

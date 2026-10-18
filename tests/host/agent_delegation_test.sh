@@ -132,6 +132,7 @@ fn waitfor {
 echo 'SCENARIO:delegate go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Reported the child'
 sleep 2
+echo 'create id=notes type=markdown label=Notes' > /mnt/ui/activity/1/presentation/ctl
 echo '@@ task status'
 echo 'status 1' > /tool/task/run
 cat /tool/task/run
@@ -356,6 +357,7 @@ for l in open(sys.argv[1]):
 ok = first is not None and "full output at" in first and back is not None and not back.startswith("error") and "1\t" in back
 sys.exit(0 if ok else 1)' "$WORK/req.log" && ok "a long result is read back where the agent is told it is" || bad "a long result is read back where the agent is told it is"
 section "task status" | grep -q '^recently used (latest first): /lib/veltro/system.txt (via read)' && ok "task status says what the task has used" || bad "task status says what the task has used"
+section "task status" | grep -q '^documents, in its own tab (task 1), not yours: notes "Notes"' && ok "task status says where the task's documents are" || bad "task status says where the task's documents are"
 section "task status" | grep -q '^last said: Child is done' && ok "task status says what the task last said" || bad "task status says what the task last said"
 section "after promote" | grep -q '^two$' && ok "a task's changes to a second folder are promoted too" || bad "a task's changes to a second folder are promoted too"
 section "after promote" | grep -q STALE && bad "an earlier session's staged change was promoted with this task's" || ok "an earlier session's staged change was not taken over"

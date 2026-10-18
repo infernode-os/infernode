@@ -512,6 +512,9 @@ dostatus(args: string): string
 	recent := recentuse(id, 6);
 	if(recent != "")
 		out += "\nrecently used (latest first): " + recent;
+	docs := taskdocs(id);
+	if(docs != "")
+		out += sys->sprint("\ndocuments, in its own tab (task %d), not yours: %s", id, docs);
 	last := lastsaid(id);
 	if(last != "") {
 		if(len last > 400)
@@ -571,6 +574,32 @@ recentuse(id, max: int): string
 				rest = hd l :: rest;
 		used = rest;
 		bt = 0;
+	}
+	return out;
+}
+
+# The documents the task has put in its presentation view.
+taskdocs(id: int): string
+{
+	dir := sys->sprint("%s/activity/%d/presentation", UI_MOUNT, id);
+	fd := sys->open(dir, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	for(;;) {
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++) {
+			if(!(d[i].mode & Sys->DMDIR))
+				continue;
+			label := readfile(dir + "/" + d[i].name + "/label");
+			if(label != nil)
+				label = strip(label);
+			if(out != "")
+				out += ", ";
+			out += sys->sprint("%s \"%s\"", d[i].name, label);
+		}
 	}
 	return out;
 }

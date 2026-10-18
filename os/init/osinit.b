@@ -1106,6 +1106,17 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	product := int desc[10] | (int desc[11] << 8);
 	class := int desc[4];
 	maxpkt := int desc[7];
+	#
+	# From USB 3.0 on, bMaxPacketSize0 is an exponent: 9 is 512 bytes,
+	# the only size a SuperSpeed control endpoint has (USB 3.2, 9.6.1).
+	# Taken as a count it told the controller ep0 moved 9-byte packets;
+	# QEMU's xHCI let that pass, the Pi 4's VL805 refused every later
+	# use of the endpoint with a Context State Error, and the first USB
+	# disk plugged into the board was left without a driver ("no pair of
+	# bulk endpoints": its configuration could not be read again).
+	#
+	if(int desc[3] >= 3 && maxpkt < 16)
+		maxpkt = 1 << maxpkt;
 
 	what := "";
 	if(class == Clhub)

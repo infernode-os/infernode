@@ -505,7 +505,91 @@ dostatus(args: string): string
 	if(status != nil) status = strip(status); else status = "unknown";
 	if(urgstr != nil) urgstr = strip(urgstr); else urgstr = "0";
 
-	return sys->sprint("activity %d: %s [%s] urgency=%s", id, label, status, urgstr);
+	out := sys->sprint("activity %d: %s [%s] urgency=%s", id, label, status, urgstr);
+	# What it is doing: asked how a task was going, the agent had only
+	# "working" to say.  What the task has used lately (its context, each
+	# with when it was last used) and the last thing it has said.
+	recent := recentuse(id, 6);
+	if(recent != "")
+		out += "\nrecently used (latest first): " + recent;
+	last := lastsaid(id);
+	if(last != "") {
+		if(len last > 400)
+			last = last[0:400] + "...";
+		out += "\nlast said: " + last;
+	}
+	return out;
+}
+
+# The context resources the task used most recently, latest first:
+# "path (via tool)" or a tool's name.
+recentuse(id, max: int): string
+{
+	dir := sys->sprint("%s/activity/%d/context/resources", UI_MOUNT, id);
+	used: list of (int, string);
+	for(i := 0; i < 256; i++) {
+		r := readfile(dir + "/" + string i);
+		if(r == nil)
+			break;
+		# key=value words (parseattrs is for task create's arguments,
+		# whose values run on to the next key it knows)
+		(nil, words) := sys->tokenize(strip(r), " ");
+		attrs: list of (string, string);
+		for(; words != nil; words = tl words) {
+			(k, v) := str->splitl(hd words, "=");
+			if(v != "")
+				attrs = (k, v[1:]) :: attrs;
+		}
+		lu := getattr(attrs, "lastused");
+		if(lu == "" || getattr(attrs, "type") == "tool")
+			continue;	# a tool's use is in the paths' "via"
+		what := getattr(attrs, "path");
+		via := getattr(attrs, "via");
+		if(via != "" && via != "ro" && via != "rw" && via != "cow" && via != "bound")
+			what += " (via " + via + ")";
+		if(getattr(attrs, "status") == "active")
+			what += " [now]";
+		used = (int lu, what) :: used;
+	}
+	# latest first, max of them
+	out := "";
+	for(n := 0; n < max && used != nil; n++) {
+		best := used;
+		for(l := used; l != nil; l = tl l) {
+			(t, nil) := hd l;
+			(bt, nil) := hd best;
+			if(t > bt)
+				best = l;
+		}
+		(bt, bw) := hd best;
+		if(out != "")
+			out += ", ";
+		out += bw;
+		rest: list of (int, string);
+		for(l = used; l != nil; l = tl l)
+			if(l != best)
+				rest = hd l :: rest;
+		used = rest;
+		bt = 0;
+	}
+	return out;
+}
+
+# The latest thing the task's agent has said (while it works, the reply
+# being written).
+lastsaid(id: int): string
+{
+	base := sys->sprint("%s/activity/%d/conversation", UI_MOUNT, id);
+	last := "";
+	for(m := 0; ; m++) {
+		c := readfile(base + "/" + string m);
+		if(c == nil)
+			break;
+		(role, text) := parseconvmsg(c);
+		if(role == "veltro" && text != "" && text != "\u258c" && !hasprefix(c, "role=veltro dtype="))
+			last = text;
+	}
+	return last;
 }
 
 # Parse a /mnt/ui conversation message file ("role=<r> text=<...>") into

@@ -36,7 +36,8 @@ HOW DELEGATION WORKS (read this first):
       quote them if you intentionally need more attrs after the text.
       Returns activity ID.
 
-  task status <id>     Show task status, urgency, label
+  task status <id>     Show task status, urgency, label, what it has used
+                       lately (latest first) and the last thing it said
   task list            List all active tasks with status
   task result <id>     Get the task agent's final report (its answer). Use this
                        once the task reports done to retrieve what it produced —

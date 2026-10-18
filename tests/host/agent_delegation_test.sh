@@ -132,6 +132,10 @@ fn waitfor {
 echo 'SCENARIO:delegate go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Reported the child'
 sleep 2
+echo '@@ task status'
+echo 'status 1' > /tool/task/run
+cat /tool/task/run
+echo
 echo 'SCENARIO:text_only go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Hello from the mock'
 sleep 2
@@ -338,6 +342,8 @@ reqcheck "promote applies the staged change" \
 	'tools and "promoted" in tools[-1]["content"]' parent_promote 1
 section "before promote" | grep -q bread && bad "a staged change is not in the file before promote" || ok "a staged change is not in the file before promote"
 section "after promote" | grep -q -- '- bread' && ok "the promoted change is in the file" || bad "the promoted change is in the file"
+section "task status" | grep -q '^recently used (latest first): /lib/veltro/system.txt (via read)' && ok "task status says what the task has used" || bad "task status says what the task has used"
+section "task status" | grep -q '^last said: Child is done' && ok "task status says what the task last said" || bad "task status says what the task last said"
 section "after promote" | grep -q '^two$' && ok "a task's changes to a second folder are promoted too" || bad "a task's changes to a second folder are promoted too"
 section "after promote" | grep -q STALE && bad "an earlier session's staged change was promoted with this task's" || ok "an earlier session's staged change was not taken over"
 grep -q 'offered 1 kept change set' "$LOG" && section "conversation 0" | grep -q 'options=Apply 1,Discard 1 text=M /usr/deltest/kept/k.txt' && ok "changes kept from an earlier session are offered at start" || bad "changes kept from an earlier session are offered at start"

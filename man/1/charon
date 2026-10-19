@@ -141,6 +141,11 @@ per control, with
 .B checked
 appended to a checked box; a select's options follow it on lines
 beginning with a tab.
+A control is in the form HTML puts it in: the one round it, or the one
+its
+.B form
+attribute names; it is in form 0 if none.
+Controls in a template's content are not listed.
 A password field's value is
 .B ********
 when it holds anything, here and in its

@@ -402,6 +402,33 @@ writescratch(s: ref Session, content: string, step: int): string
 	return path;
 }
 
+# The line number of the last numbered line of a read's result ("  101\t...").
+lastlineno(s: string): int
+{
+	n := 0;
+	(nil, lines) := sys->tokenize(s, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		i := 0;
+		while(i < len l && l[i] == ' ')
+			i++;
+		j := i;
+		while(j < len l && l[j] >= '0' && l[j] <= '9')
+			j++;
+		if(j > i && j < len l && l[j] == '\t')
+			n = int l[i:j];
+	}
+	return n;
+}
+
+splitword(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == ' ')
+			return (s[0:i], s[i+1:]);
+	return (s, "");
+}
+
 firstlines(s: string, n: int): string
 {
 	out := "";
@@ -748,12 +775,24 @@ finish(s: ref Session, step: int, name, args, result: string): string
 	if(len result > AgentLib->STREAM_THRESHOLD) {
 		# Never re-scratch a read of a scratch file: each read would
 		# produce another scratch file of similar size, without end.
-		isscratchread := nm == "read" &&
-			len args >= len SCRATCH_PATH &&
-			args[0:len SCRATCH_PATH] == SCRATCH_PATH;
+		# A native call's arguments are JSON: judged as such, the path
+		# never matched, and each read of a long spilled result was spilled
+		# again (the model, to stop it, read 60 lines at a time).
+		pos := s.al->toolargs(nm, args);
+		isscratchread := nm == "read" && hasprefix(pos, SCRATCH_PATH + "/");
 		if(isscratchread) {
-			result = result[0:AgentLib->STREAM_THRESHOLD] +
-				"\n... (truncated — content continues in " + args + ")";
+			(path, nil) := splitword(pos);
+			shown := result[0:AgentLib->STREAM_THRESHOLD];
+			# whole lines only, and where the next read starts
+			for(e := len shown - 1; e > 0 && shown[e] != '\n'; e--)
+				;
+			if(e > 0)
+				shown = shown[0:e+1];
+			more := "";
+			last := lastlineno(shown);
+			if(last > 0)
+				more = sys->sprint("; read %s with offset %d for what follows", path, last);
+			result = shown + "... (truncated at " + string len array of byte shown + " bytes" + more + ")";
 		} else {
 			scratch := writescratch(s, result, step);
 			# The first 3 lines stay inline so the model has something to

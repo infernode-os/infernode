@@ -45,6 +45,9 @@ TLS: module {
 		maxver:		int;		# maximum TLS version
 		servername:	string;		# SNI hostname
 		insecure:	int;		# skip cert verification
+		clientcert:	array of byte;	# DER certificate offered if the server asks (TLS 1.3); nil: none
+		clientkey:	array of byte;	# its raw 32-byte P-256 private scalar
+		pinspki:	array of byte;	# SHA-256 of the server's SubjectPublicKeyInfo: replaces chain and name checks
 	};
 
 	# Connection (read/write after handshake)

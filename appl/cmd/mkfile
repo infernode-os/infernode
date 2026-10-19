@@ -35,6 +35,7 @@ TARG=\
 	bind.dis\
 	bit2gif.dis\
 	broke.dis\
+	brick.dis\
 	bt9p.dis\
 	btboardaddr.dis\
 	bthid.dis\

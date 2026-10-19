@@ -307,6 +307,17 @@ exec(args: string): string
 		return "error: /mnt/llm/new returned empty session id";
 
 	sessdir := sys->sprint("%s/%s", LLMROOT, idstr);
+	# The session is the tool's for this call alone: closed after, on every
+	# way out.  Left open, each call kept one, and on a gateway shared by
+	# many clients they reached its limit (128) and every agent after was
+	# refused a session ("cannot allocate session").
+	r := author(sessdir, idstr, desc, outpath);
+	writefile(sessdir + "/ctl", "close");
+	return r;
+}
+
+author(sessdir, idstr, desc, outpath: string): string
+{
 
 	# 2. Optionally override the session model. If the user has configured
 	#    a dedicated Limbo author at /lib/veltro/limbo-model, use it.

@@ -149,6 +149,11 @@ waitfor 0 'Found with a late tool'
 echo add limbo > /mnt/toolctl/ctl
 echo 'SCENARIO:gate go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Gate checked'
+echo 'SCENARIO:limbo_save go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Saved it'
+echo '@@ saved source'
+cat /tmp/veltro/scratch/0/saved.b
+echo '@@ saved source end'
 
 echo add write > /mnt/toolctl/ctl
 echo add edit > /mnt/toolctl/ctl
@@ -349,6 +354,11 @@ reqcheck "the same failure a third time says the changes are not fixing it" \
 	'tools and "failed 3 times this turn" in tools[-1]["content"]' compile_loop 5
 reqcheck "not before" \
 	'tools and "failed 3 times" not in tools[-1]["content"] and "harness:" not in tools[-1]["content"]' compile_loop 3
+reqcheck "a new Limbo file is saved where the agent says" \
+	'tools and "Saved to /tmp/veltro/scratch/saved.b" in tools[-1]["content"]' limbo_save 1
+section "saved source" | grep -q '^implement Hello;' && ok "the saved file is the source written" || bad "the saved file is the source written"
+reqcheck "without a path, the result says nothing was saved" \
+	'any("Not saved: this source is only in this reply" in t["content"] for t in tools)' gate 1
 reqcheck "a C comment's failure says how Limbo writes one" \
 	'any("ccomment.b" in t["content"] and "comments begin with #" in t["content"] for t in tools)' compile_check 1
 reqcheck "a task's edit with a space in it is made" \

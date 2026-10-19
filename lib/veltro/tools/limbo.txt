@@ -18,6 +18,11 @@ limbo - Author a complete, compilable Limbo source file.
     args MUST NOT contain code tokens: { } ; "implement" "import"
     "include" "package main" "def main" "#include".
 
+  PATH
+    path, optional: where to save the new file (an absolute path ending
+    in .b, e.g. /tmp/veltro/scratch/fib.b).  Without it the source is only
+    returned: nothing is saved until you write it to a file.
+
   RETURNS
     The Limbo source code in a single ```limbo fenced block, then a
     <gate> block saying whether it compiled (status: compiled), did not

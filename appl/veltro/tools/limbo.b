@@ -223,7 +223,8 @@ schema(): string
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies. Or, to check a Limbo file you already have: compile <absolute path of the .b file>, which reports whether it compiles, with the compiler's errors.\"}" +
+				"\"description\":{\"type\":\"string\",\"description\":\"Natural-language description of the program: what it should do, command-line arguments, and any specific module dependencies. Or, to check a Limbo file you already have: compile <absolute path of the .b file>, which reports whether it compiles, with the compiler's errors.\"}," +
+				"\"path\":{\"type\":\"string\",\"description\":\"Where to save the new file, e.g. /tmp/veltro/scratch/fib.b. Without it the source is only returned, not saved anywhere.\"}" +
 			"}," +
 			"\"required\":[\"description\"]" +
 		"}" +
@@ -245,7 +246,23 @@ exec(args: string): string
 		desc = desc[:len desc - 1];
 
 	if(desc == "")
-		return "error: usage: limbo <description-of-what-to-write> | limbo compile <file.b>";
+		return "error: usage: limbo [-o <file.b>] <description-of-what-to-write> | limbo compile <file.b>";
+
+	# -o <file.b>: save what is written there.  Asked to "save it as
+	# fib.b", the tool returned the source and saved nothing; gpt-oss took
+	# the file to exist, wrote nothing itself, and told the user it did.
+	outpath := "";
+	if(len desc > 3 && desc[0:3] == "-o ") {
+		rest := desc[3:];
+		for(k := 0; k < len rest && rest[k] != ' '; k++)
+			;
+		outpath = rest[0:k];
+		desc = rest[k:];
+		while(len desc > 0 && desc[0] == ' ')
+			desc = desc[1:];
+		if(desc == "")
+			return "error: usage: limbo -o <file.b> <description-of-what-to-write>";
+	}
 
 	# compile <path>: check a Limbo source file the agent has (written,
 	# edited, been given) with the hosted compiler.  The way to know code
@@ -349,7 +366,26 @@ exec(args: string): string
 	#    follow-up (would require pushing failure context into the same
 	#    /mnt/llm/<sid> conversation rather than re-entering at the tool
 	#    boundary).
-	return resp + "\n\n" + gate(resp, idstr);
+	return resp + "\n\n" + gate(resp, idstr) + save(resp, outpath);
+}
+
+# Save the source written, or say it was not.
+save(resp, outpath: string): string
+{
+	if(outpath == "")
+		return "\nNot saved: this source is only in this reply. Save it with the write tool, or call limbo again with a path to have it saved.";
+	code := extractblock(resp);
+	if(code == "")
+		return "\nNot saved to " + outpath + ": there was no ```limbo block to save.";
+	if(outpath[0] != '/' || len outpath < 3 || outpath[len outpath - 2:] != ".b")
+		return "\nNot saved: the path must be an absolute path ending in .b (" + outpath + ").";
+	fd := sys->create(outpath, Sys->OWRITE, 8r644);
+	if(fd == nil)
+		return sys->sprint("\nNot saved to %s: %r", outpath);
+	b := array of byte code;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("\nNot saved to %s: %r", outpath);
+	return "\nSaved to " + outpath + " (change it with edit, check it with limbo compile " + outpath + ").";
 }
 
 # Extract the first ```limbo ... ``` block from a model response.

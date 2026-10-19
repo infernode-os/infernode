@@ -176,6 +176,11 @@ SCENARIOS = {
     ],
     # Activity 0 asks for Limbo through the limbo tool, whose compile gate
     # must say whether the code compiles.
+    # A new file written, and saved where the agent said.
+    "limbo_save": [
+        {"tools": [tool("limbo", {"description": "SCENARIO:limbo_ok go", "path": "/tmp/veltro/scratch/saved.b"})]},
+        {"content": "Saved it."},
+    ],
     "gate": [
         {"tools": [tool("limbo", "SCENARIO:limbo_ok go"), tool("limbo", "SCENARIO:limbo_bad go")]},
         {"content": "Gate checked."},

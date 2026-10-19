@@ -100,6 +100,7 @@ dis/bdf2subfont.dis
 dis/bind.dis
 dis/bioget.dis
 dis/bit2gif.dis
+dis/brick.dis
 dis/broke.dis
 dis/bt9p.dis
 dis/bthid.dis
@@ -872,6 +873,7 @@ dis/tests/tls_live_test.dis
 dis/tests/tls_pq_test.dis
 dis/tests/tls_protocol_test.dis
 dis/tests/tlsclient.dis
+dis/tests/tlspinclient.dis
 dis/tests/tool_schema_test.dis
 dis/tests/tooldoc_test.dis
 dis/tests/tools9p_test.dis

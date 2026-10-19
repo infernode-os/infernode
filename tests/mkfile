@@ -235,6 +235,7 @@ TARG=\
 	llmclient_sse_fallback_test.dis\
 	llmclient_proxy_test.dis\
 	tlsclient.dis\
+	tlspinclient.dis\
 	veltro_cc_alignment_test.dis\
 	webfs_test.dis\
 

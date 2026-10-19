@@ -122,6 +122,7 @@ ConnState: adt {
 	# Server name for cert verification
 	servername:	string;
 	insecure:	int;
+	pinspki:	array of byte;	# pinned server key (Config.pinspki)
 
 	# TLS 1.3: whether handshake is encrypted
 	hsencrypted:	int;
@@ -225,7 +226,10 @@ defaultconfig(): ref Config
 		TLS12,		# minver
 		TLS13,		# maxver
 		"",			# servername
-		0			# insecure
+		0,			# insecure
+		nil,			# clientcert
+		nil,			# clientkey
+		nil			# pinspki
 	);
 }
 
@@ -246,6 +250,7 @@ client(fd: ref Sys->FD, config: ref Config): (ref Conn, string)
 	cs.sts = nil;
 	cs.servername = config.servername;
 	cs.insecure = config.insecure;
+	cs.pinspki = config.pinspki;
 	cs.hsencrypted = 0;
 	cs.hsbuf = nil;
 	cs.hsoff = 0;
@@ -1143,6 +1148,7 @@ handshake13(cs: ref ConnState, config: ref Config,
 	# before its Finished, echoing the certificate_request_context.
 	cert_requested := 0;
 	cert_request_context: array of byte;	# nil = empty context
+	cert_request: array of byte;	# the CertificateRequest body
 
 	while(!hs_done) {
 		# Save transcript hash (as finalized bytes) before reading next message.
@@ -1167,6 +1173,7 @@ handshake13(cs: ref ConnState, config: ref Config,
 			# empty Certificate response (with the echoed context) or
 			# the server will respond with unexpected_message(10).
 			cert_requested = 1;
+			cert_request = mdata;
 			if(len mdata >= 1) {
 				ctxlen := int mdata[0];
 				if(1 + ctxlen <= len mdata && ctxlen > 0)
@@ -1229,18 +1236,41 @@ handshake13(cs: ref ConnState, config: ref Config,
 	# us to send a Certificate message before our Finished — even when we
 	# have no certificate to present. The body is:
 	#   opaque certificate_request_context<0..2^8-1>;	(echoed from request)
-	#   CertificateEntry certificate_list<0..2^24-1>;	(empty list)
-	# When the list is empty we MUST NOT send CertificateVerify (§4.4.3).
+	#   CertificateEntry certificate_list<0..2^24-1>;
+	# with our one certificate, if the config has one, and then a
+	# CertificateVerify over the transcript so far.  When the list is
+	# empty we MUST NOT send CertificateVerify (§4.4.3).
 	if(cert_requested) {
+		entry: array of byte;
+		if(config.clientcert != nil && config.clientkey != nil) {
+			if(!certreqsigalg(cert_request, ECDSA_SECP256R1_SHA256))
+				return "tls: server does not accept an ecdsa_secp256r1_sha256 client signature";
+			# CertificateEntry: cert_data<1..2^24-1>, extensions<0..2^16-1>
+			c := config.clientcert;
+			entry = array [3 + len c + 2] of byte;
+			put24(entry, 0, len c);
+			entry[3:] = c;
+			put16(entry, 3 + len c, 0);
+		}
 		ctxlen := len cert_request_context;
-		cmsg := array [1 + ctxlen + 3] of byte;
+		cmsg := array [1 + ctxlen + 3 + len entry] of byte;
 		cmsg[0] = byte ctxlen;
 		if(ctxlen > 0)
 			cmsg[1:] = cert_request_context;
-		put24(cmsg, 1 + ctxlen, 0);	# empty certificate_list
+		put24(cmsg, 1 + ctxlen, len entry);
+		if(entry != nil)
+			cmsg[1 + ctxlen + 3:] = entry;
 		cerr := sendhsmsg(cs, HT_CERTIFICATE, cmsg);
 		if(cerr != nil)
 			return cerr;
+		if(entry != nil) {
+			(cv, cverr) := clientcertverify13(hashcurrent(cs), config.clientkey);
+			if(cverr != nil)
+				return cverr;
+			cerr = sendhsmsg(cs, HT_CERTIFICATE_VERIFY, cv);
+			if(cerr != nil)
+				return cerr;
+		}
 	}
 
 	# Send client Finished
@@ -1773,6 +1803,11 @@ verifycerts(cs: ref ConnState, certs: list of array of byte): string
 	if(certs == nil)
 		return "tls: no server certificates";
 
+	# A pinned key stands in for the chain and the name: the peer is
+	# whoever holds that key (its CertificateVerify is checked apart).
+	if(cs.pinspki != nil)
+		return verifypin(cs.pinspki, hd certs);
+
 	# Use X509 to verify certificate chain
 	(ok, err) := x509->verify_certchain(certs);
 	if(!ok && !cs.insecure)
@@ -1785,6 +1820,166 @@ verifycerts(cs: ref ConnState, certs: list of array of byte): string
 			return herr;
 	}
 	return nil;
+}
+
+verifypin(pin: array of byte, leaf: array of byte): string
+{
+	spki := certspki(leaf);
+	if(spki == nil)
+		return "tls: no SubjectPublicKeyInfo in the server certificate";
+	digest := array [Keyring->SHA256dlen] of byte;
+	keyring->sha256(spki, len spki, digest, nil);
+	if(!bytescmp(digest, pin))
+		return "tls: server key does not match the pinned key";
+	return nil;
+}
+
+# The DER header at a[off]: (tag, header length, content length), or
+# tag -1 if it is malformed or runs past the end of a.
+dertlv(a: array of byte, off: int): (int, int, int)
+{
+	if(off < 0 || off + 2 > len a)
+		return (-1, 0, 0);
+	tag := int a[off];
+	if((tag & 16r1F) == 16r1F)
+		return (-1, 0, 0);	# multi-byte tags do not occur here
+	n := int a[off+1];
+	hdr := 2;
+	if(n & 16r80) {
+		k := n & 16r7F;
+		if(k == 0 || k > 3 || off + 2 + k > len a)
+			return (-1, 0, 0);
+		n = 0;
+		for(i := 0; i < k; i++)
+			n = (n << 8) | int a[off+2+i];
+		hdr += k;
+	}
+	if(n > len a - off - hdr)
+		return (-1, 0, 0);
+	return (tag, hdr, n);
+}
+
+# The raw DER SubjectPublicKeyInfo of a certificate, as it is hashed
+# for a pin: Certificate { tbsCertificate { [0] version OPTIONAL,
+# serial, signature, issuer, validity, subject, spki, ... } ... }.
+certspki(der: array of byte): array of byte
+{
+	(t, h, n) := dertlv(der, 0);
+	if(t != 16r30)
+		return nil;
+	off := h;
+	(t, h, n) = dertlv(der, off);	# tbsCertificate
+	if(t != 16r30)
+		return nil;
+	off += h;
+	end := off + n;
+	(t, h, n) = dertlv(der, off);
+	if(t == 16rA0) {
+		off += h + n;
+		(t, h, n) = dertlv(der, off);
+	}
+	for(i := 0; i < 5; i++) {	# serial .. subject
+		if(t < 0 || off + h + n > end)
+			return nil;
+		off += h + n;
+		(t, h, n) = dertlv(der, off);
+	}
+	if(t != 16r30 || off + h + n > end)
+		return nil;
+	return der[off:off+h+n];
+}
+
+# The CertificateRequest's signature_algorithms extension offers alg.
+certreqsigalg(m: array of byte, alg: int): int
+{
+	if(len m < 1)
+		return 0;
+	off := 1 + int m[0];	# skip certificate_request_context
+	if(off + 2 > len m)
+		return 0;
+	end := off + 2 + get16(m, off);
+	if(end > len m)
+		return 0;
+	for(off += 2; off + 4 <= end; ) {
+		etype := get16(m, off);
+		elen := get16(m, off + 2);
+		off += 4;
+		if(off + elen > end)
+			return 0;
+		if(etype == EXT_SIGNATURE_ALGORITHMS && elen >= 2) {
+			n := get16(m, off);
+			if(2 + n > elen)
+				return 0;
+			for(i := 0; i + 1 < n; i += 2)
+				if(get16(m, off + 2 + i) == alg)
+					return 1;
+		}
+		off += elen;
+	}
+	return 0;
+}
+
+# TLS 1.3 client CertificateVerify (RFC 8446 §4.4.3), signed
+# ecdsa_secp256r1_sha256 with the raw P-256 private scalar key.
+clientcertverify13(transcript_hash, key: array of byte): (array of byte, string)
+{
+	if(len key != 32)
+		return (nil, "tls: client key is not a P-256 private key");
+	context_str := "TLS 1.3, client CertificateVerify";
+	content := array [64 + len context_str + 1 + len transcript_hash] of byte;
+	for(i := 0; i < 64; i++)
+		content[i] = byte 16r20;
+	content[64:] = array of byte context_str;
+	content[64 + len context_str] = byte 0;
+	content[64 + len context_str + 1:] = transcript_hash;
+
+	digest := array [Keyring->SHA256dlen] of byte;
+	keyring->sha256(content, len content, digest, nil);
+	raw: array of byte;
+	{
+		raw = keyring->p256_ecdsa_sign(key, digest);
+	} exception {
+	* =>
+		raw = nil;
+	}
+	if(raw == nil || len raw != 64)
+		return (nil, "tls: client CertificateVerify signature failed");
+	sig := ecdsadersig(raw[0:32], raw[32:64]);
+	cv := array [4 + len sig] of byte;
+	put16(cv, 0, ECDSA_SECP256R1_SHA256);
+	put16(cv, 2, len sig);
+	cv[4:] = sig;
+	return (cv, nil);
+}
+
+# Ecdsa-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER }, from raw r and s.
+ecdsadersig(r, s: array of byte): array of byte
+{
+	ri := derposint(r);
+	si := derposint(s);
+	seq := array [2 + len ri + len si] of byte;	# at most 70 bytes: short form
+	seq[0] = byte 16r30;
+	seq[1] = byte (len ri + len si);
+	seq[2:] = ri;
+	seq[2 + len ri:] = si;
+	return seq;
+}
+
+# A minimal DER INTEGER for the unsigned big-endian b.
+derposint(b: array of byte): array of byte
+{
+	i := 0;
+	while(i < len b - 1 && b[i] == byte 0)
+		i++;
+	pad := 0;
+	if(int b[i] & 16r80)
+		pad = 1;
+	n := len b - i + pad;
+	e := array [2 + n] of {* => byte 0};
+	e[0] = byte 16r02;
+	e[1] = byte n;
+	e[2 + pad:] = b[i:];
+	return e;
 }
 
 # Verify that hostname matches the leaf certificate's CN or SAN dNSName entries.
@@ -2660,7 +2855,8 @@ keylength(suite: int): int
 	TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 or
 	TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 or
 	TLS_AES_256_GCM_SHA384 or
-	TLS_RSA_WITH_AES_256_GCM_SHA384 =>
+	TLS_RSA_WITH_AES_256_GCM_SHA384 or
+	TLS_CHACHA20_POLY1305_SHA256 =>	# ChaCha20 takes only a 256-bit key
 		return 32;
 	* =>
 		return 16;

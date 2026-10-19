@@ -141,6 +141,12 @@ per control, with
 .B checked
 appended to a checked box; a select's options follow it on lines
 beginning with a tab.
+A password field's value is
+.B ********
+when it holds anything, here and in its
+.BR attrs :
+the files say that it is filled, not with what.
+The page's scripts, and the form when sent, have the value.
 .TP
 .B find
 Write text; read the lines of

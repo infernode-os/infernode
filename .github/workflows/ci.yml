@@ -210,6 +210,13 @@ jobs:
         chmod +x tests/host/js_dom_test.sh
         ROOT=. bash tests/host/js_dom_test.sh
 
+    - name: Check a page's files do not show a password
+      run: |
+        # The forms and dom/N/attrs files showed a password field's value
+        # as typed, to anything that could read a browser window's files.
+        chmod +x tests/host/charon_password_test.sh
+        ROOT=. bash tests/host/charon_password_test.sh
+
     - name: Check releases ship the system's directories
       run: |
         # man, doc, icons, appl (without its .dis) and n, in every

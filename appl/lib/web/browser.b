@@ -1088,7 +1088,10 @@ fieldstext(a: array of ref Field): string
 		name := f.name;
 		if(name == "")
 			name = "-";
-		r += sys->sprint("%d %d %s %s %s", f.form, f.node, f.kind, name, oneline(f.value));
+		v := oneline(f.value);
+		if(f.kind == "password")
+			v = masked(v);
+		r += sys->sprint("%d %d %s %s %s", f.form, f.node, f.kind, name, v);
 		if(f.checked)
 			r += " checked";
 		if(f.disabled)
@@ -1105,6 +1108,17 @@ fieldstext(a: array of ref Field): string
 		}
 	}
 	return r;
+}
+
+# What a password field holds, as the page's files show it: whether it
+# holds anything, not what or how much.  The files are read by whatever
+# has the window's name space, an agent among them; the page is drawn
+# masked too (layout), and its own scripts still see the value.
+masked(v: string): string
+{
+	if(v == "")
+		return "";
+	return "********";
 }
 
 Session.set(s: self ref Session, n: int, value: string): string
@@ -1736,8 +1750,13 @@ Session.dom(s: self ref Session, n: int, what: string): (string, string)
 		return ("#document\n", nil);
 	"attrs" =>
 		r := "";
-		for(l := nd.attrs; l != nil; l = tl l)
-			r += (hd l).t0 + " " + oneline((hd l).t1) + "\n";
+		pw := nd.tag == Dom->Tinput && iscontrol(d, n) && kindof(d, n) == "password";
+		for(l := nd.attrs; l != nil; l = tl l) {
+			v := oneline((hd l).t1);
+			if(pw && (hd l).t0 == "value")
+				v = masked(v);
+			r += (hd l).t0 + " " + v + "\n";
+		}
 		return (r, nil);
 	"text" =>
 		if(nd.kind == Dom->Text || nd.kind == Dom->Comment)

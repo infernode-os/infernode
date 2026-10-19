@@ -113,25 +113,116 @@ progpid(int pid)
 	return p;
 }
 
+/*
+ * The VMs (#944). vm0 is the boot VM, the desktop's; the others are
+ * made when something is first run in them (/dev/vm, devvm.c). A VM
+ * is never destroyed.
+ */
+static Vm*	vms[MAXVM] = { &vm0 };
+static int	nvms = 1;
+static Lock	vmlk;
+
+int
+vmcount(void)
+{
+	return nvms;
+}
+
+Vm*
+vmn(int n)
+{
+	if(n < 0 || n >= MAXVM)
+		return nil;
+	return vms[n];
+}
+
+/*
+ * The n'th Prog of all of them, in VM order. Under pidlk, which every
+ * VM's list changes take, so the walk is safe from another VM's
+ * newprog and delprog; the Prog itself is only safe to touch under its
+ * own VM (devprog's pacquire).
+ */
+static Prog*
+prognlocked(int n)
+{
+	int i;
+	Prog *p;
+
+	for(i = 0; i < nvms; i++)
+		if(vms[i] != nil)
+			for(p = VMSCHED(vms[i])->head; p != nil; p = p->next)
+				if(n-- == 0)
+					return p;
+	return nil;
+}
+
 Prog*
 progn(int n)
 {
 	Prog *p;
 
-	for(p = isched.head; p && n--; p = p->next)
-		;
+	lock(&pidlk);
+	p = prognlocked(n);
+	unlock(&pidlk);
 	return p;
 }
 
+/* the pid of the n'th Prog, or -1: what can be kept after the lock */
 int
-nprog(void)
+progpidn(int n)
+{
+	Prog *p;
+	int pid;
+
+	lock(&pidlk);
+	p = prognlocked(n);
+	pid = p != nil ? p->pid : -1;
+	unlock(&pidlk);
+	return pid;
+}
+
+/* the VM a pid's Prog runs in, or nil if there is no such Prog */
+Vm*
+pidvm(int pid)
+{
+	Prog *p;
+	Vm *v;
+
+	lock(&pidlk);
+	p = *pidlook(pid);
+	v = p != nil ? p->vm : nil;
+	unlock(&pidlk);
+	return v;
+}
+
+/* how many Progs one VM has */
+int
+vmprogs(Vm *v)
 {
 	int n;
 	Prog *p;
 
 	n = 0;
-	for(p = isched.head; p; p = p->next)
+	lock(&pidlk);
+	for(p = VMSCHED(v)->head; p != nil; p = p->next)
 		n++;
+	unlock(&pidlk);
+	return n;
+}
+
+int
+nprog(void)
+{
+	int i, n;
+	Prog *p;
+
+	n = 0;
+	lock(&pidlk);
+	for(i = 0; i < nvms; i++)
+		if(vms[i] != nil)
+			for(p = VMSCHED(vms[i])->head; p != nil; p = p->next)
+				n++;
+	unlock(&pidlk);
 	return n;
 }
 
@@ -140,10 +231,16 @@ accountant(void)
 {
 	Prog *p;
 
-	/* on the clock, in whatever process it interrupted: say which VM */
-	p = VMSCHED(&vm0)->runhd;
-	if(p != nil)
-		p->ticks++;
+	int i;
+
+	/* on the clock, in whatever process it interrupted: every VM's */
+	for(i = 0; i < nvms; i++){
+		if(vms[i] == nil)
+			continue;
+		p = VMSCHED(vms[i])->runhd;
+		if(p != nil)
+			p->ticks++;
+	}
 }
 
 /*
@@ -275,13 +372,13 @@ newprog(Prog *p, Modlink *m)
 			error(exNomem);
 	}
 
+	n->vm = up->vm;
+	n->group = nil;
+
 	lock(&pidlk);
 	n->pid = ++pidnum;
 	if(n->pid <= 0)
 		panic("no pids");
-	unlock(&pidlk);
-	n->group = nil;
-
 	if(isched.tail != nil) {
 		n->prev = isched.tail;
 		isched.tail->next = n;
@@ -291,8 +388,6 @@ newprog(Prog *p, Modlink *m)
 		n->prev = nil;
 	}
 	isched.tail = n;
-
-	lock(&pidlk);
 	ph = pidlook(n->pid);
 	if(*ph != nil)
 		panic("dup pid");
@@ -378,6 +473,7 @@ delprog(Prog *p, char *msg)
 
 	delgrp(p);
 
+	lock(&pidlk);
 	if(p->prev)
 		p->prev->next = p->next;
 	else
@@ -388,7 +484,6 @@ delprog(Prog *p, char *msg)
 	else
 		isched.tail = p->prev;
 
-	lock(&pidlk);
 	ph = pidlook(p->pid);
 	if(*ph == nil)
 		panic("lost pid");
@@ -962,6 +1057,145 @@ schedmod(Module *m)
 	initmem(m->entryt, p->reg.FP);
 
 	return p;
+}
+
+/*
+ * VM n, made if it is not there yet (#944): a scheduler whose
+ * interpreter is free, a heap pool of its own, a collector at the
+ * start of its first epoch. Its builtin modules are registered by the
+ * first vmrun, under its interpreter. nil if n is out of range or the
+ * pools are all taken.
+ */
+Vm*
+vmget(int n)
+{
+	static char names[MAXVM][8];
+	Vm *v;
+	Isched *s;
+
+	if(n < 0 || n >= MAXVM)
+		return nil;
+	lock(&vmlk);
+	v = vms[n];
+	if(v == nil){
+		v = mallocz(sizeof(Vm), 1);
+		s = mallocz(sizeof(Isched), 1);
+		snprint(names[n], sizeof names[n], "heap%d", n);
+		if(v == nil || s == nil || (v->vheap = heappoolnew(names[n])) == nil){
+			unlock(&vmlk);
+			free(v);
+			free(s);
+			return nil;
+		}
+		v->id = n;
+		v->vgccolor = 3;	/* as vm0's (xec.c) */
+		v->marker = 1;
+		v->sweeper = 2;
+		v->quanta = 50;
+		v->gct = 1;
+		s->idle = 1;		/* the interpreter is free: the first acquire takes it */
+		v->vsched = s;
+		vms[n] = v;
+		if(n >= nvms)
+			nvms = n+1;
+	}
+	unlock(&vmlk);
+	return v;
+}
+
+/*
+ * Run a module in VM n: init(nil, argv), with the caller's namespace,
+ * environment and file descriptors as a spawn would share them, and
+ * its own heap there. Returns the new pid. The caller is in a system
+ * call, holding no interpreter; it takes VM n's for the length of the
+ * load, as a crossing does (#944), and the release that ends it starts
+ * the VM's first interpreter process if it has none.
+ *
+ * init's parameters are where the Limbo compiler puts a function's
+ * first two: MaxTemp, (NREG+3) words into the frame (limbo/limbo.h).
+ * The frame type is checked to say both are pointers, so a module
+ * whose init is not init(ctxt, argv) is refused, not mis-called.
+ */
+int
+vmrun(int n, int argc, char **argv)
+{
+	Vm *v, *home;
+	Module *root;
+	Prog *p;
+	Osenv *o;
+	Type *t;
+	List *l;
+	String *s;
+	uchar *fp;
+	int i, pid, w;
+
+	if(argc < 1)
+		error(Ebadarg);
+	v = vmget(n);
+	if(v == nil)
+		error("no such VM");
+	home = up->vm;
+	up->vm = v;
+	acquire();
+	if(waserror()){
+		release();
+		up->vm = home;
+		nexterror();
+	}
+	if(!v->ready){
+		vmbuiltins();
+		v->ready = 1;
+	}
+	/*
+	 * As OP(load) does it, not as load() does: the interpreter is let
+	 * go while the file is read, because the file may be served by a
+	 * Dis program -- /dis on the card is dossrv's, in vm0 -- which must
+	 * run to answer. Held, that is a deadlock.
+	 */
+	root = readmod(argv[0], lookmod(argv[0]), 1);
+	if(root == nil){
+		kgerrstr(up->genbuf, sizeof up->genbuf);
+		error(up->genbuf);
+	}
+	t = root->entryt;
+	w = NREG+3;
+	if(t == nil || t->np <= (w+1)/8 || (t->map[w/8] & (0x80>>(w%8))) == 0 || (t->map[(w+1)/8] & (0x80>>((w+1)%8))) == 0)
+		error("not a command: init is not init(ctxt, argv)");
+	p = schedmod(root);
+
+	l = (List*)H;
+	for(i = argc-1; i >= 0; i--){
+		s = c2string(argv[i], strlen(argv[i]));
+		l = cons(IBY2WD, &l);
+		l->t = &Tptr;
+		Tptr.ref++;
+		*(String**)l->data = s;
+	}
+	fp = p->reg.FP;
+	*(WORD**)(fp + w*IBY2WD) = H;		/* ctxt: nil */
+	*(List**)(fp + (w+1)*IBY2WD) = l;	/* argv */
+
+	memmove(p->osenv, up->env, sizeof(Osenv));
+	o = p->osenv;
+	incref(&o->pgrp->r);
+	incref(&o->fgrp->r);
+	if(o->egrp != nil)
+		incref(&o->egrp->r);
+	if(o->sigs != nil)
+		incref(&o->sigs->r);
+	o->user = nil;
+	kstrdup(&o->user, up->env->user);
+	o->errstr = o->errbuf0;
+	o->syserrstr = o->errbuf1;
+	o->waitq = nil;
+	o->childq = nil;
+	o->debug = nil;
+	pid = p->pid;
+
+	poperror();
+	release();
+	up->vm = home;
+	return pid;
 }
 
 /*

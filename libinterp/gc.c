@@ -310,8 +310,10 @@ rungc(Prog *p)
 		return;
 	}
 	if(base == nil) {
-		gcsweeps++;
 		b = poolchain(heapmem);
+		if(b == nil)
+			return;		/* nothing allocated yet: a VM's pool before its first object (#944) */
+		gcsweeps++;
 		base = b;
 		ptr = b;
 		limit = B2LIMIT(b);

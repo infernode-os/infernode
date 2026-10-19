@@ -178,7 +178,34 @@ extern	Type	*Trdchan;
 extern	Type	*Twrchan;
 static  char 	Emisalign[] = "misaligned address";
 
-static int
+static /*
+ * A Prog is touched only under its own VM's interpreter (#944): its
+ * VM may be running it, or freeing it, on another core. So devprog
+ * takes the VM of the Prog it is asked about, and gives the caller's
+ * own back after. pid 0 (the directory) needs no particular VM.
+ */
+static void
+pacquire(ulong pid)
+{
+	Vm *v;
+
+	v = nil;
+	if(pid != 0)
+		v = pidvm(pid);
+	up->vmhome = up->vm;
+	if(v != nil)
+		up->vm = v;
+	acquire();
+}
+
+static void
+prelease(void)
+{
+	release();
+	up->vm = up->vmhome;
+}
+
+int
 proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 {
 	Qid qid;
@@ -201,17 +228,20 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 			pid = strtoul(name, &e, 0);
 			if(pid == 0 || *e != '\0')
 				return -1;
-			acquire();
+			pacquire(pid);
 			p = progpid(pid);
 			if(p == nil){
-				release();
+				prelease();
 				return -1;
 			}
 		}else{
-			acquire();
-			p = progn(s);
+			pid = progpidn(s);
+			if(pid < 0)
+				return -1;
+			pacquire(pid);
+			p = progpid(pid);
 			if(p == nil) {
-				release();
+				prelease();
 				return -1;
 			}
 			pid = p->pid;
@@ -219,12 +249,12 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 		o = p->osenv;
 		sprint(up->genbuf, "%lud", pid);
 		if(name != nil && strcmp(name, up->genbuf) != 0){
-			release();
+			prelease();
 			return -1;
 		}
 		mkqid(&qid, pid<<QSHIFT, pid, QTDIR);
 		devdir(c, qid, up->genbuf, 0, o->user, DMDIR|0555, dp);
-		release();
+		prelease();
 		return 1;
 	}
 
@@ -233,10 +263,10 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 	tab = &progdir[s];
 	path = PATH(c->qid);
 
-	acquire();
+	pacquire(PID(c->qid));
 	p = progpid(PID(c->qid));
 	if(p == nil) {
-		release();
+		prelease();
 		return -1;
 	}
 
@@ -249,7 +279,7 @@ proggen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 	len = tab->length;
 	mkqid(&qid, path|tab->qid.path, c->qid.vers, QTFILE);
 	devdir(c, qid, tab->name, len, o->user, perm, dp);
-	release();
+	prelease();
 	return 1;
 }
 
@@ -282,9 +312,9 @@ progopen(Chan *c, int omode)
 	if(c->qid.type & QTDIR)
 		return devopen(c, omode, 0, 0, proggen);
 
-	acquire();
+	pacquire(PID(c->qid));
 	if (waserror()) {
-		release();
+		prelease();
 		nexterror();
 	}
 	p = progpid(PID(c->qid));
@@ -347,7 +377,7 @@ progopen(Chan *c, int omode)
 		c->qid.vers = p->pid;
 
 	poperror();
-	release();
+	prelease();
 	c->offset = 0;
 	c->mode = omode;
 	c->flag |= COPEN;
@@ -364,28 +394,28 @@ progwstat(Chan *c, uchar *db, int n)
 
 	if(c->qid.type&QTDIR)
 		error(Eperm);
-	acquire();
+	pacquire(PID(c->qid));
 	p = progpid(PID(c->qid));
 	if(p == nil) {
-		release();
+		prelease();
 		error(Ethread);
 	}
 
 	u = up->env->user;
 	o = p->osenv;
 	if(strcmp(u, o->user) != 0 && strcmp(u, eve) != 0) {
-		release();
+		prelease();
 		error(Eperm);
 	}
 
 	n = convM2D(db, n, &d, nil);
 	if(n == 0){
-		release();
+		prelease();
 		error(Eshortstat);
 	}
 	if(d.mode != ~0UL)
 		o->pgrp->progmode = d.mode&0777;
-	release();
+	prelease();
 	return n;
 }
 
@@ -411,7 +441,7 @@ closedbgctl(Progctl *ctl, Prog *p)
 static void
 progclose(Chan *c)
 {
-	int i;
+	int i, pid;
 	Prog *f;
 	Osenv *o;
 	Progctl *ctl;
@@ -425,24 +455,24 @@ progclose(Chan *c)
 		if((c->flag & COPEN) == 0)
 			return;
 		ctl = c->aux;
-		acquire();
+		pacquire(PID(c->qid));
 		closedbgctl(ctl, progpid(PID(c->qid)));
-		release();
+		prelease();
 		break;
 	case Qwait:
-		acquire();
-		i = 0;
-		for(;;) {
-			f = progn(i++);
-			if(f == nil)
-				break;
-			o = f->osenv;
-			if(o->waitq == c->aux)
-				o->waitq = nil;
-			if(o->childq == c->aux)
-				o->childq = nil;
+		/* each Prog under its own VM: they may be in any */
+		for(i = 0; (pid = progpidn(i)) >= 0; i++){
+			pacquire(pid);
+			f = progpid(pid);
+			if(f != nil){
+				o = f->osenv;
+				if(o->waitq == c->aux)
+					o->waitq = nil;
+				if(o->childq == c->aux)
+					o->childq = nil;
+			}
+			prelease();
 		}
-		release();
 		qfree(c->aux);
 	}
 }
@@ -877,10 +907,10 @@ progread(Chan *c, void *va, long n, vlong offset)
 		ctl = c->aux;
 		return qread(ctl->q, va, n);
 	case Qstatus:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil || p->state == Pexiting || p->reg.M == H) {
-			release();
+			prelease();
 			snprint(up->genbuf, sizeof(up->genbuf), "%8lud %8d %10s %s %10s %5dK %s",
 				PID(c->qid),
 				0,
@@ -901,14 +931,14 @@ progread(Chan *c, void *va, long n, vlong offset)
 			progstate[p->state],
 			progsize(p),
 			mbuf);
-		release();
+		prelease();
 		return readstr(offset, va, n, up->genbuf);
 	case Qwait:
 		return qread(c->aux, va, n);
 	case Qns:
-		acquire();
+		pacquire(PID(c->qid));
 		if(waserror()){
-			release();
+			prelease();
 			nexterror();
 		}
 		p = progpid(PID(c->qid));
@@ -917,7 +947,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 		mw = c->aux;
 		if(mw->cddone){
 			poperror();
-			release();
+			prelease();
 			return 0;
 		}
 		o = p->osenv;
@@ -926,7 +956,7 @@ progread(Chan *c, void *va, long n, vlong offset)
 			mw->cddone = 1;
 			i = snprint(a, n, "cd %s\n", o->pgrp->dot->name->s);
 			poperror();
-			release();
+			prelease();
 			return i;
 		}
 		int2flag(mw->cm->mflag, flag);
@@ -938,58 +968,58 @@ progread(Chan *c, void *va, long n, vlong offset)
 			i = snprint(a, n, "bind %s %s %s\n", flag,
 				mw->cm->to->name->s, mw->mh->from->name->s);
 		poperror();
-		release();
+		prelease();
 		return i;
 	case Qnsgrp:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil) {
-			release();
+			prelease();
 			error(Ethread);
 		}
 		grpid = ((Osenv *)p->osenv)->pgrp->pgrpid;
-		release();
+		prelease();
 		return readnum(offset, va, n, grpid, NUMSIZE);
 	case Qpgrp:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil) {
-			release();
+			prelease();
 			error(Ethread);
 		}
 		grpid = p->group!=nil? p->group->id: 0;
-		release();
+		prelease();
 		return readnum(offset, va, n, grpid, NUMSIZE);
 	case Qstack:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil || p->state == Pexiting) {
-			release();
+			prelease();
 			error(Ethread);
 		}
 		if(p->state == Pready) {
-			release();
+			prelease();
 			error(Estopped);
 		}
 		n = progstack(&p->reg, p->state, va, n, offset);
-		release();
+		prelease();
 		return n;
 	case Qheap:
-		acquire();
+		pacquire(PID(c->qid));
 		if(waserror()){
-			release();
+			prelease();
 			nexterror();
 		}
 		n = progheap(c->aux, va, n, offset);
 		if(n == -1)
 			error(Emisalign);
 		poperror();
-		release();
+		prelease();
 		return n;
 	case Qfd:
-		acquire();
+		pacquire(PID(c->qid));
 		if(waserror()) {
-			release();
+			prelease();
 			nexterror();
 		}
 		p = progpid(PID(c->qid));
@@ -998,20 +1028,20 @@ progread(Chan *c, void *va, long n, vlong offset)
 		o = p->osenv;
 		n = progfds(o, va, n, offset);
 		poperror();
-		release();
+		prelease();
 		return n;
 	case Qexception:
-		acquire();
+		pacquire(PID(c->qid));
 		p = progpid(PID(c->qid));
 		if(p == nil) {
-			release();
+			prelease();
 			error(Ethread);
 		}
 		if(p->exstr == nil)
 			up->genbuf[0] = 0;
 		else
 			snprint(up->genbuf, sizeof(up->genbuf), p->exstr);
-		release();
+		prelease();
 		return readstr(offset, va, n, up->genbuf);
 	}
 	error(Egreg);
@@ -1072,9 +1102,9 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 	if(c->qid.type & QTDIR)
 		error(Eisdir);
 
-	acquire();
+	pacquire(PID(c->qid));
 	if(waserror()) {
-		release();
+		prelease();
 		nexterror();
 	}
 	p = progpid(PID(c->qid));
@@ -1201,7 +1231,7 @@ progwrite(Chan *c, void *va, long n, vlong offset)
 		error(Egreg);
 	}
 	poperror();
-	release();
+	prelease();
 	return n;
 }
 

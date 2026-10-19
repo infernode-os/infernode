@@ -206,6 +206,7 @@ TARG=\
 	ventisrv.dis\
 	vid9p.dis\
 	wav2iaf.dis\
+	vm.dis\
 	wc.dis\
 	webfs.dis\
 	webgrab.dis\

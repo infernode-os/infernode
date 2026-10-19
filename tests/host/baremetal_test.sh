@@ -5667,6 +5667,99 @@ PYEOF
     vrefute "headless: nothing claims a desktop exited"     "the desktop has exited"
     vcheck "headless: the machine is up -- shell and network" "etherusb: 10.0.2.15 mask"
     vrefute "headless: nothing panics"                      "panic:"
+
+    #
+    # More than one Dis VM (#944): #V, the vm command, programs in VMs 1
+    # and 2 at once, and the two places the kernel crosses between VMs --
+    # a VM 1 client of a file a VM 0 program serves through file2chan
+    # (devsrv), and a VM 0 kill of a VM 1 Prog (devprog). Correctness
+    # here; how much faster four VMs are is measured on the board, which
+    # TCG is no stopwatch for.
+    #
+    cp "$VCARD" "$BUILD/$PLAT-card-vm.img"
+    python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-card-vm.img" <<'PYEOF' > "$BUILD/$PLAT-vm.txt" 2>&1
+import re, subprocess, sys, threading, time
+qemu, img, extra, card = sys.argv[1:5]
+p = subprocess.Popen([qemu] + extra.split() + ["-kernel", img, "-display", "none", "-serial", "stdio",
+    "-drive", "file=%s,if=none,format=raw,id=sd" % card, "-device", "virtio-blk-device,drive=sd"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def rd():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=rd, daemon=True).start()
+def waitfor(pat, secs, start=0):
+    end = time.time() + secs
+    while time.time() < end:
+        if re.search(pat, bytes(buf[start:])):
+            return True
+        time.sleep(0.3)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(rb"init: starting the shell", 150)
+    time.sleep(8)
+    typed("vm")
+    m = len(buf)
+    typed("vm 1 jitbench2", 0.5)
+    typed("vm 2 jitbench2", 0.5)
+    end = time.time() + 300
+    while len(re.findall(rb"Total Time: \d+ ms", bytes(buf[m:]))) < 2 and time.time() < end:
+        time.sleep(0.5)
+    time.sleep(1)
+    typed("ramfile /chan/vmrf served-from-vm0", 1)
+    typed("vm 1 cat /chan/vmrf", 3)
+    typed("vm 1 sh -c 'echo written-by-vm1 > /chan/vmrf'", 3)
+    typed("echo VMRF `{cat /chan/vmrf}", 2)
+    # not pid=`{vm 1 sleep 300}: the sleep shares vm's output, which
+    # there is the substitution's pipe, held open for the 300 seconds
+    typed("ramfile /chan/vmpid", 1)
+    typed("vm 1 sleep 300 > /chan/vmpid", 2)
+    typed("pid=`{cat /chan/vmpid}; echo VMSLEEP pid $pid", 2)
+    typed("ps; echo VMPSBEFORE", 3)
+    typed("kill $pid; sleep 1; echo VMPS; ps; echo VMKILLED", 3)
+    typed("vm 1 sh -c 'load tk'", 4)
+    typed("vm")
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+    rm -f "$BUILD/$PLAT-card-vm.img"
+    OUT="$(cat "$BUILD/$PLAT-vm.txt")"
+    [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+    vcheck "vm: #V lists the VMs, vm 0 the boot VM"          "vms 1 max 4"
+    nt="$(grep -ac 'Total Time: [0-9]* ms' <<<"$OUT")"
+    if [[ "$nt" -ge 2 ]]; then
+        pass "virt: vm: jitbench2 in VM 1 and VM 2 at once, both to the end ($(grep -ao 'Total Time: [0-9]* ms' <<<"$OUT" | tr '\n' ' '))"
+    else
+        fail "virt: vm: jitbench2 in VMs 1 and 2 finished $nt time(s), not 2"
+    fi
+    vcheck "vm: they are three VMs now"                       "vms 3 max 4"
+    vcheck "vm: a VM 1 program reads a file a VM 0 program serves (file2chan across VMs)" "served-from-vm0"
+    vcheck "vm: and writes it"                                "VMRF written-by-vm1"
+    if grep -aqE "^VMSLEEP pid [0-9]+" <<<"$(tr -d '\r' <<<"$OUT")"; then
+        pass "virt: vm: a VM 1 Prog is given a pid"
+    else
+        fail "virt: vm: vm 1 sleep gave no pid"
+    fi
+    VMOUT="$(tr -d '\r' <<<"$OUT")"
+    if sed -n '/echo VMPSBEFORE/,/^VMPSBEFORE/p' <<<"$VMOUT" | grep -aq "Sleep"; then
+        pass "virt: vm: ps lists the VM 1 Prog among VM 0's (/prog across VMs)"
+    else
+        fail "virt: vm: ps does not show the VM 1 sleep"
+    fi
+    if sed -n '/^VMPS$/,/^VMKILLED$/p' <<<"$VMOUT" | grep -aq "Sleep"; then
+        fail "virt: vm: the VM 1 sleep outlived its kill from VM 0"
+    else
+        pass "virt: vm: VM 0 kills it (devprog across VMs)"
+    fi
+    vcheck "vm: \$Tk stays VM 0's: VM 1's shell cannot load it" "not built-in"
+    vrefute "vm: nothing panics"                              "panic:"
+    vrefute "vm: no exception goes unhandled"                 "unhandled exception"
 else
     fail "virt: mkcard failed: $(tail -2 "$BUILD/mkcard.txt" | tr '\n' ' ')"
 fi

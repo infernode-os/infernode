@@ -326,8 +326,12 @@ struct Vm
 	Heap**	dq;		/* destroy()'s queue of what is too deep to destroy now: heap.c */
 	int	ndq, dqlen, ddepth;
 	int	markdepth;	/* markheap()'s recursion: gc.c */
+	int	id;		/* its number: /dev/vm/<id> */
+	int	ready;		/* its builtin modules are registered */
 };
+enum { MAXVM = 4 };	/* Dis VMs: one a core on the Pi (#944); os/port/dis.c */
 extern	Vm	vm0;
+extern	void	vmbuiltins(void);
 #define	mutator		(VM->vmutator)
 #define	nprop		(VM->vnprop)
 #define	gccolor		(VM->vgccolor)
@@ -358,6 +362,7 @@ struct Progs
 struct Prog
 {
 	REG		reg;		/* Register set (R is the running VM's; see interp.h) */
+	Vm*		vm;		/* the VM it runs in, for ever (#944) */
 	Prog*		link;		/* Run queue */
 	Channel*		chan;	/* Channel pointer */
 	void*		ptr;		/* Channel data pointer */

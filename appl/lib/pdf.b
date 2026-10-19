@@ -368,7 +368,7 @@ Doc.words(d: self ref Doc, page: int): list of (string, Rect)
 	pobj := getpageobj(pdoc, page);
 	if(pobj == nil)
 		return nil;
-	(nil, ph) := getmediabox(pdoc, pobj);
+	(bx, by, nil, ph) := pagebox(pdoc, pobj);
 	fontmap := buildfontmap(pdoc, pobj);
 	contents := dictget(pobj.dval, "Contents");
 	if(contents == nil)
@@ -399,7 +399,7 @@ Doc.words(d: self ref Doc, page: int): list of (string, Rect)
 		return nil;
 	words: list of (string, Rect);
 	{
-		words = contentwords(pdoc, data, fontmap, ph);
+		words = contentwords(pdoc, data, fontmap, ph, bx, by);
 	} exception {
 	"*" =>
 		;
@@ -441,7 +441,8 @@ pagelinks(doc: ref PdfDoc, page: ref PdfObj): list of (Rect, string)
 	annots := resolve(doc, dictget(page.dval, "Annots"));
 	if(annots == nil || annots.kind != Oarray)
 		return nil;
-	(nil, ph) := getmediabox(doc, page);
+	(bx, by, nil, ph) := pagebox(doc, page);
+	ph += by;
 	l: list of (Rect, string);
 	n := 0;
 	for(a := annots.aval; a != nil && n < MAXLINKS; a = tl a){
@@ -469,7 +470,7 @@ pagelinks(doc: ref PdfDoc, page: ref PdfObj): list of (Rect, string)
 		y1 := b[3];
 		if(y0 > y1)
 			(y0, y1) = (y1, y0);
-		l = (Rect((int x0, int (ph - y1)), (int x1, int (ph - y0))), goes) :: l;
+		l = (Rect((int (x0 - bx), int (ph - y1)), (int (x1 - bx), int (ph - y0))), goes) :: l;
 		n++;
 	}
 	r: list of (Rect, string);
@@ -829,6 +830,13 @@ getpageobj(doc: ref PdfDoc, page: int): ref PdfObj
 # Walks up the page tree via Parent refs per PDF spec inheritance.
 getmediabox(doc: ref PdfDoc, page: ref PdfObj): (real, real)
 {
+	(nil, nil, w, h) := pagebox(doc, page);
+	return (w, h);
+}
+
+# Its lower left corner (not always 0 0) and its size, in points
+pagebox(doc: ref PdfDoc, page: ref PdfObj): (real, real, real, real)
+{
 	box: ref PdfObj;
 
 	# Walk up page tree to find CropBox or MediaBox
@@ -852,7 +860,7 @@ getmediabox(doc: ref PdfDoc, page: ref PdfObj): (real, real)
 	}
 
 	if(box == nil || box.kind != Oarray)
-		return (612.0, 792.0);
+		return (0.0, 0.0, 612.0, 792.0);
 
 	vals := array[4] of { * => 0.0 };
 	i := 0;
@@ -866,9 +874,9 @@ getmediabox(doc: ref PdfDoc, page: ref PdfObj): (real, real)
 	}
 	w := vals[2] - vals[0];
 	h := vals[3] - vals[1];
-	if(w <= 0.0) w = 612.0;
-	if(h <= 0.0) h = 792.0;
-	return (w, h);
+	if(w <= 0.0 || h <= 0.0)
+		return (0.0, 0.0, 612.0, 792.0);
+	return (vals[0], vals[1], w, h);
 }
 
 # Walk parent chain to find /Resources (like getmediabox)
@@ -936,8 +944,10 @@ renderto(doc: ref PdfDoc, page: ref PdfObj, img: ref Image, scale: real): string
 	gs.ctm[1] = 0.0;
 	gs.ctm[2] = 0.0;
 	gs.ctm[3] = -scale;
-	gs.ctm[4] = real img.r.min.x;
-	gs.ctm[5] = real img.r.max.y;
+	# the page's box's lower left corner at the image's
+	(bx, by, nil, nil) := pagebox(doc, page);
+	gs.ctm[4] = real img.r.min.x - bx * scale;
+	gs.ctm[5] = real img.r.max.y + by * scale;
 
 	# Get page resources (walk parent chain)
 	resources := getresources(doc, page);
@@ -5827,10 +5837,10 @@ parsecontentstream_text(data: array of byte, fontmap: list of ref FontMapEntry):
 # points high: the text state (matrices, font, size, spacing) followed
 # as the renderer follows it, each word measured as the renderer
 # measures the text it draws. Newest first.
-contentwords(doc: ref PdfDoc, data: array of byte, fontmap: list of ref FontMapEntry, ph: real): list of (string, Rect)
+contentwords(doc: ref PdfDoc, data: array of byte, fontmap: list of ref FontMapEntry, ph, bx, by: real): list of (string, Rect)
 {
 	words: list of (string, Rect);
-	ctm := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+	ctm := array[] of {1.0, 0.0, 0.0, 1.0, -bx, -by};	# the box's corner at 0 0
 	stack: list of array of real;
 	tm := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
 	tlm := array[] of {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};

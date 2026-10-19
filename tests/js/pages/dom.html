@@ -160,6 +160,15 @@ test('style', () => {
 	check('camel', box.style.backgroundColor, 'blue');
 	box.style.removeProperty('color');
 	check('removed', box.style.color, '');
+	// nothing animates: a page testing for it must hear no, or it waits
+	// for an animationend that never comes (Microsoft's sign-in did)
+	check('no animation', box.style.animationName, undefined);
+	check('no prefixed animation', box.style.WebkitAnimation, undefined);
+	check('no transition', 'transition' in box.style, false);
+	check('supports no animation', CSS.supports('animation-name', 'x'), false);
+	check('known property', box.style.opacity, '');
+	box.style.transition = 'opacity 1s';
+	check('set transition reads back', box.style.transition, 'opacity 1s');
 	box.style.cssText = '';
 	check('cleared', box.hasAttribute('style'), false);
 	check('computed display', getComputedStyle(document.querySelector('template')).display !== undefined, true);

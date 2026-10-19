@@ -195,6 +195,14 @@ jobs:
         chmod +x tests/host/charon_home_test.sh
         ROOT=. bash tests/host/charon_home_test.sh
 
+    - name: Check the DOM a page's scripts see
+      run: |
+        # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;
+        # nothing ran it, and dom.js told pages CSS animates, which it
+        # does not, so Microsoft's sign-in never left its first step.
+        chmod +x tests/host/js_dom_test.sh
+        ROOT=. bash tests/host/js_dom_test.sh
+
     - name: Check releases ship the system's directories
       run: |
         # man, doc, icons, appl (without its .dis) and n, in every

@@ -449,10 +449,13 @@ docreate(args: string): string
 		p := joinstrs(need, ",");
 		if(getattr(attrs, "paths") != "")
 			p = getattr(attrs, "paths") + "," + p;
-		return sys->sprint("error: not created: the brief names a path in %s, and the task will not see %s unless you grant %s; " +
-			"a grant is the whole folder.  If the task needs it, repeat the create with paths=%s placed before brief=.  " +
-			"If it should not have it, leave that path out of the brief.\nsuggest: paths=%s",
-			joinstrs(need, " and "), plural(need, "it", "them"), plural(need, "it", "them"), p, p);
+		# Say whose move it is: told "unless you grant it", mistral-small3.2
+		# asked the user to bind a folder that was already bound.
+		return sys->sprint("error: not created: the brief names a path in %s.  You have %s, but a task sees only what its create's paths= gives it.  " +
+			"The user has nothing to do.  If the task needs %s, call task create again, the same but with paths=%s before brief=; " +
+			"it gets the whole folder.  If it should not have %s, leave that path out of the brief.\nsuggest: paths=%s",
+			joinstrs(need, " and "), plural(need, "that folder", "those folders"), plural(need, "it", "them"), p,
+			plural(need, "it", "them"), p);
 	}
 
 	# Idempotency guard (INFR-390): the meta-agent repeatedly re-creates the

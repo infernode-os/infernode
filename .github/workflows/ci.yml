@@ -226,6 +226,14 @@ jobs:
         chmod +x tests/host/js_dom_test.sh
         ROOT=. bash tests/host/js_dom_test.sh
 
+    - name: Check a page's scripts get and send bytes as they are
+      run: |
+        # A body was kept as text only: bytes that are not UTF-8 read
+        # through arrayBuffer() came back mangled (JSTOR's sign-in check
+        # failed so), and an ArrayBuffer posted was sent re-encoded.
+        chmod +x tests/host/js_binary_test.sh
+        ROOT=. bash tests/host/js_binary_test.sh
+
     - name: Check a page's files do not show a password
       run: |
         # The forms and dom/N/attrs files showed a password field's value

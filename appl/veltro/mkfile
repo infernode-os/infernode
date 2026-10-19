@@ -76,10 +76,10 @@ TOOLS=\
 all:V: $MAIN $TOOLS $SOURCES
 
 # Main programs
-agentlib.dis: agentlib.b agentlib.m
+agentlib.dis: agentlib.b $MODDIR/agentlib.m
 	limbo $LIMBOFLAGS -gw agentlib.b
 
-veltro.dis: veltro.b agentlib.m tool.m $MODDIR/nsconstruct.m
+veltro.dis: veltro.b $MODDIR/agentlib.m tool.m $MODDIR/nsconstruct.m
 	limbo $LIMBOFLAGS -gw veltro.b
 
 tools9p.dis: tools9p.b tool.m
@@ -94,7 +94,7 @@ cowfs.dis: cowfs.b
 subagent.dis: subagent.b subagent.m tool.m
 	limbo $LIMBOFLAGS -gw subagent.b
 
-veltrosrv.dis: veltrosrv.b veltrosrv.m agentlib.m
+veltrosrv.dis: veltrosrv.b veltrosrv.m $MODDIR/agentlib.m
 	limbo $LIMBOFLAGS -gw veltrosrv.b
 
 mc9p.dis: mc9p.b
@@ -106,7 +106,7 @@ speech9p.dis: speech9p.b
 msg9p.dis: msg9p.b
 	limbo $LIMBOFLAGS -gw msg9p.b
 
-msgwatch.dis: msgwatch.b agentlib.m
+msgwatch.dis: msgwatch.b $MODDIR/agentlib.m
 	limbo $LIMBOFLAGS -gw msgwatch.b
 
 ninepsrc.dis: ninepsrc.b

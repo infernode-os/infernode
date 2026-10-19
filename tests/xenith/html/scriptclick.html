@@ -1,0 +1,10 @@
+<!doctype html>
+<title>Script click</title>
+<body style="margin: 0; font-family: sans-serif">
+<div id=b style="width: 200px; height: 40px; background: #ccc">Press</div>
+<p id=out>not yet</p>
+<script>
+document.getElementById("b").addEventListener("click", function () {
+  document.getElementById("out").textContent = "pressed";
+});
+</script>

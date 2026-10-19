@@ -302,7 +302,7 @@ DISBIN=$ROOT/dis
 
 <$ROOT/mkfiles/mkdis
 
-# lucibridge.b needs agentlib.m from appl/veltro
+# lucibridge.b includes veltro interfaces from appl/veltro (agentlib.m is in module/)
 LIMBOFLAGS=$LIMBOFLAGS -I$ROOT/appl/veltro
 <$ROOT/mkfiles/mksubdirs
 

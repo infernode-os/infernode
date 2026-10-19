@@ -194,6 +194,16 @@ init()
 		sys->print("init: cannot bind #A on /dev: %r\n");
 
 	#
+	# And where USB serial ports appear: usbserial makes eiaU0 and its
+	# ctl and status files in #seia, a #s of their own, and that is
+	# bound after /dev now, at boot, so that every namespace forked from
+	# here -- the console shell's, the desktop's -- sees a port plugged
+	# in at any time later. Empty until one is.
+	#
+	if(sys->bind("#seia", "/dev", Sys->MAFTER) < 0)
+		sys->print("init: cannot bind #seia on /dev: %r\n");
+
+	#
 	# Bring up loopback.
 	#
 	# This is the first thing that exercises the stack rather than
@@ -617,6 +627,13 @@ Hidmouse:	con 2;		# HID boot protocol: mouse
 Clvendor:	con 255;	# device class: vendor-specific
 Vmicrochip:	con 16r0424;	# Microchip/SMSC: the LAN78xx family
 Clcomm:		con 2;		# device class: communications
+Sacm:		con 2;		# ...subclass: abstract control model (a serial port, or RNDIS)
+Prndis:		con 255;	# ...the vendor protocol of that subclass: Microsoft's RNDIS
+Secm:		con 6;		# ...subclass: Ethernet control model
+Sncm:		con 13;		# ...subclass: network control model
+Clwireless:	con 16rE0;	# interface class: wireless controller (RNDIS's other guise)
+Vftdi:		con 16r0403;	# FTDI: FT232 and family, serial adapters
+Vsilabs:	con 16r10C4;	# Silicon Labs: CP210x serial adapters
 
 HPpresent:	con 16r1;
 HPenable:	con 16r2;
@@ -712,6 +729,9 @@ statusflags(status: int): string
 # What dumpconfig last saw on a HID interface; 0 if none.
 hidproto := 0;
 isdisk := 0;		# dumpconfig saw a mass-storage interface (SCSI over bulk-only)
+isacm := 0;		# ...a serial port's control interface (CDC-ACM)
+isether := 0;		# ...a USB Ethernet interface (RNDIS, ECM, NCM)
+isvendorif := 0;	# ...a vendor-specific interface
 hidep := -1;
 hidmaxpkt := 0;
 hidival := 0;
@@ -1178,6 +1198,9 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 
 	hidproto = 0;
 	isdisk = 0;
+	isacm = 0;
+	isether = 0;
+	isvendorif = 0;
 	hidep = -1;
 	dumpconfig(d, indent + "  ");
 
@@ -1236,8 +1259,23 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# "start the driver for anything vendor-specific", which would
 	# spawn a driver per unknown device and call that discovery.
 	#
-	if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
+	#
+	# A serial port: a CDC-ACM control interface that is not part of a
+	# network adapter (the Jetson's gadget is serial AND Ethernet, and
+	# stays etherusb's), or a vendor interface on an FTDI or CP210x.
+	# usbserial serves it as /dev/eiaU<n>. On an xHCI machine only, as
+	# with disks: it has not run on a Pi 3's controller, and a Pi 3
+	# keeps what it did before -- an ACM device goes to etherusb, which
+	# refuses it.
+	#
+	serial := (isacm && !isether) ||
+		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
+	if(serial && havexhci)
+		startdriver("/dis/usbserial.dis", name, -1, 0, 0);
+	else if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
+	if(serial && !havexhci)
+		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);
 	return (0, name);
 }
 
@@ -2682,6 +2720,21 @@ dumpconfig(d: ref Sys->FD, indent: string)
 					hidproto = int cfg[i+7];
 				if(int cfg[i+5] == Clstorage && int cfg[i+6] == Sscsi && int cfg[i+7] == Pbulkonly)
 					isdisk = 1;
+				#
+				# The communications class is two things: a
+				# serial port (abstract control model) and
+				# Ethernet (RNDIS, which is the same subclass
+				# with a vendor protocol, ECM and NCM). They
+				# are told apart here, on the interface.
+				#
+				(ic, is, ip) := (int cfg[i+5], int cfg[i+6], int cfg[i+7]);
+				if(ic == Clcomm && is == Sacm && ip != Prndis)
+					isacm = 1;
+				if((ic == Clcomm && (is == Sacm && ip == Prndis || is == Secm || is == Sncm))
+				|| (ic == Clwireless && is == 1 && ip == 3))
+					isether = 1;
+				if(ic == Clvendor)
+					isvendorif = 1;
 			}
 		5 =>	# endpoint
 			if(i + 7 <= total){

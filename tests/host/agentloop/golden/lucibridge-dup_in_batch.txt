@@ -11,7 +11,7 @@ assistant-call call_dup_in_batch_0_1 read {"args": "\/usr\/agentloop\/a.txt"}
 tool-result call_dup_in_batch_0_0:
   |     1	alpha
 tool-result call_dup_in_batch_0_1:
-  | (skipped: identical `read {"args": "/usr/agentloop/a.txt"}` already ran at step 0 — its output is in your earlier results; use that instead of repeating the call)
+  | (skipped: `read {"args": "/usr/agentloop/a.txt"}` is the same as a call before it in this response; its output is that one's)
 
 == output
   | msg 0

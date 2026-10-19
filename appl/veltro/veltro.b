@@ -10,8 +10,8 @@ implement Veltro;
 # session directory that -r resumes from, and answering the agent's
 # approval requests on the terminal.
 #
-#	veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] <task>
-#	veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] -r <name> [extra]
+#	veltro [-v] [-t] [-y] [-a type] [-p paths] <task>
+#	veltro [-v] [-t] [-y] [-a type] [-p paths] -r <name> [extra]
 #
 
 include "sys.m";
@@ -62,9 +62,8 @@ maxsteps := DEFAULT_MAX_STEPS;
 # research, explore, plan). Empty = the default Veltro behaviour.
 agenttype := "";
 
-# -m <model>: override the LLM model for this run. Empty = the server's
-# default. Used for multi-model evaluation without reconfiguring the server.
-model := "";
+# The model is the server's (llmsrv -M): to run another, serve another.
+# -m is taken, for old scripts, and ignored.
 
 # Active session directory (empty = sessions disabled for this run)
 sessiondir := "";
@@ -78,14 +77,13 @@ stdout: ref Sys->FD;
 
 usage()
 {
-	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] <task>\n");
-	sys->fprint(stderr, "       veltro [-v] [-t] [-y] [-a type] [-m model] [-p paths] -r <name> [extra instruction]\n");
+	sys->fprint(stderr, "Usage: veltro [-v] [-t] [-y] [-a type] [-p paths] <task>\n");
+	sys->fprint(stderr, "       veltro [-v] [-t] [-y] [-a type] [-p paths] -r <name> [extra instruction]\n");
 	sys->fprint(stderr, "\nOptions:\n");
 	sys->fprint(stderr, "  -v          Verbose output (the agent's trajectory)\n");
 	sys->fprint(stderr, "  -t          Enable extended thinking (%d token budget)\n", THINK_DEFAULT);
 	sys->fprint(stderr, "  -y          Answer the agent's approval requests yes (no gate)\n");
 	sys->fprint(stderr, "  -a type     Run as agent persona /lib/veltro/agents/<type>.txt (e.g. research)\n");
-	sys->fprint(stderr, "  -m model    Override the LLM model for this run (e.g. mistral-small3.2:24b)\n");
 	sys->fprint(stderr, "  -r name     Resume session ('last' = most recent)\n");
 	sys->fprint(stderr, "  -p paths    Comma-separated /n/local/ paths to expose (e.g. /n/local/Users/you/proj)\n");
 	sys->fprint(stderr, "\nRequires /tool and /mnt/llm to be mounted.\n");
@@ -786,7 +784,8 @@ init(nil: ref Draw->Context, args: list of string)
 		'y' =>	nogate = 1;
 		'r' =>	resumename = arg->earg();
 		'a' =>	agenttype = arg->earg();
-		'm' =>	model = arg->earg();
+		'm' =>	arg->earg();
+			sys->fprint(stderr, "veltro: -m ignored: the model is the server's (llmsrv -M)\n");
 		'p' =>
 			(nil, pathlist) = sys->tokenize(arg->earg(), ",");
 		* =>	usage();
@@ -830,8 +829,6 @@ init(nil: ref Draw->Context, args: list of string)
 	startharness(pathlist);
 	if(agenttype != "" && ctl("persona " + agenttype) < 0)
 		sys->fprint(stderr, "veltro: warning: persona '%s' empty or unreadable\n", agenttype);
-	if(model != "" && ctl("model " + model) >= 0 && verbose)
-		sys->fprint(stderr, "veltro: model set to %s\n", model);
 	if(thinkbudget > 0 && ctl("think " + string thinkbudget) >= 0 && verbose)
 		sys->fprint(stderr, "veltro: thinking budget: %d tokens\n", thinkbudget);
 	if(nogate)

@@ -158,9 +158,11 @@ click(id: int, x, y: int): (int, string)
 	n := s.nodeat(x, y);
 	if(n == 0)
 		return (0, nil);
-	if(s.linkat(x, y) == nil && !clickable(s, x, y))
-		return (0, nil);
-	return (1, s.click(n));
+	hit := s.linkat(x, y) != nil || clickable(s, x, y);
+	# every click goes to the page: its scripts may act on any element
+	# (a cookie banner's button, a menu, a div made a button), and
+	# those clicks went nowhere; a link or a control is a hit as before
+	return (hit, s.click(n));
 }
 
 # A form control under x, y: a click on one acts (the engine's click

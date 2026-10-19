@@ -20,6 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FIX = "/usr/agentloop"
 
+# What raw_write writes, and the test expects back byte for byte.
+RAWTEXT = '\n"quoted" first line\n\tsys->print("%d\\n", i);\n'
+
 
 def tool(name, args):
     """args: a string (sent as {"args": ...}) or a dict (sent as is)."""
@@ -64,6 +67,14 @@ SCENARIOS = {
     "dup_in_batch": [
         {"tools": [tool("read", FIX + "/a.txt"), tool("read", FIX + "/a.txt")]},
         {"content": "Same file twice in one batch."},
+    ],
+    # A result too long for the model is kept in the workspace: read it
+    # back at the path the agent is told (turn 1 is made from turn 0's
+    # result, below).  The first read has a limit and no offset.
+    "spill_readback": [
+        {"tools": [tool("read", {"path": "/lib/veltro/system.txt", "limit": "1000"})]},
+        {"tools": []},
+        {"content": "Spill read."},
     ],
     "big_output": [
         {"tools": [tool("read", FIX + "/big.txt")]},
@@ -139,11 +150,90 @@ SCENARIOS = {
         {"tools": [tool("read", "/lib/veltro/system.txt")]},
         {"content": "Child is done. SCENARIO:parent_report"},
     ],
+    "compact_summary": [
+        {"content": "Earlier: the user asked for files to be read; some were."},
+    ],
     # A tool turned on after the agent started (/tools +find, Settings):
     # offered to the model, it must also be callable.
     "late_tool": [
         {"tools": [tool("find", {"args": "/lib/veltro system.txt"})]},
         {"content": "Found with a late tool."},
+    ],
+    # The limbo tool's own model: one program that compiles, one that does not.
+    "limbo_ok": [
+        {"content": "```limbo\nimplement Hello;\n\ninclude \"sys.m\";\n\tsys: Sys;\n"
+                    "include \"draw.m\";\n\nHello: module\n{\n\tinit: fn(nil: ref Draw->Context, nil: list of string);\n};\n\n"
+                    "init(nil: ref Draw->Context, nil: list of string)\n{\n\tsys = load Sys Sys->PATH;\n"
+                    "\tsys->print(\"hello\\n\");\n}\n```\n"},
+    ],
+    "limbo_bad": [
+        {"content": "```limbo\nimplement Bad;\n\ninclude \"sys.m\";\n\tsys: Sys;\n"
+                    "include \"draw.m\";\n\nBad: module\n{\n\tinit: fn(nil: ref Draw->Context, nil: list of string);\n};\n\n"
+                    "init(nil: ref Draw->Context, nil: list of string)\n{\n\tundeclared = 3;\n}\n```\n"},
+    ],
+    # Activity 0 asks for Limbo through the limbo tool, whose compile gate
+    # must say whether the code compiles.
+    "gate": [
+        {"tools": [tool("limbo", "SCENARIO:limbo_ok go"), tool("limbo", "SCENARIO:limbo_bad go")]},
+        {"content": "Gate checked."},
+    ],
+    # A native write's content is the file, as is: a leading blank line, a
+    # leading quote, and a \\n inside a string literal all survive; an edit's
+    # old and new likewise.
+    "raw_write": [
+        {"tools": [tool("write", {"path": "/tmp/veltro/scratch/raw.b",
+                                  "content": RAWTEXT})]},
+        {"tools": [tool("edit", {"path": "/tmp/veltro/scratch/raw.b",
+                                 "old": 'print("%d\\n", i);', "new": 'print("%d\\t%d\\n", i, j);'})]},
+        {"content": "Wrote it raw."},
+    ],
+    # Checking files with the limbo tool: one compiles, one does not.
+    "compile_check": [
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/good.b"),
+                   tool("limbo", "compile /tmp/veltro/scratch/bad.b"),
+                   tool("limbo", "compile /tmp/veltro/scratch/ccomment.b")]},
+        {"content": "Compiled the files."},
+    ],
+    # The same compile failing the same way, with other calls between:
+    # the third time, the result says the changes are not fixing it.
+    "compile_loop": [
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+        {"tools": [tool("read", "/tmp/veltro/scratch/good.b")]},
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+        {"tools": [tool("list", "/tmp/veltro/scratch")]},
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+        {"content": "It still fails."},
+    ],
+    # A task granted what every agent reads anyway: created, not refused.
+    "grant_baseline": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Reader paths=/lib/veltro tools=read brief=SCENARIO:text_only go"})]},
+        {"content": "Granted the baseline."},
+    ],
+    # A task edits a file in a folder the user granted: the change is
+    # staged; activity 0, told so, promotes it on the user's word.
+    "delegate_edit": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Editor tools=edit,read paths=/usr/deltest/notes,/usr/deltest/more brief=SCENARIO:child_edit go"})]},
+        {"content": "Started the editor."},
+    ],
+    "child_edit": [
+        {"tools": [tool("edit", {"path": "/usr/deltest/notes/todo.txt",
+                                 "old": "- milk", "new": "- milk\n- bread"}),
+                   tool("edit", {"path": "/usr/deltest/more/m.txt",
+                                 "old": "one", "new": "two"})]},
+        {"content": "Edited the list. SCENARIO:parent_promote"},
+    ],
+    "parent_promote": [
+        {"tools": [tool("task", {"command": "promote", "args": "2"})]},
+        {"content": "Promoted the edit."},
+    ],
+    # A task that never stops working (its model calls a tool every turn),
+    # closed while it works.
+    "delegate_loop": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Looper tools=list brief=SCENARIO:step_cap go"})]},
+        {"content": "Started the looper."},
     ],
     # Activity 0 on the completion event: its own tools still work.
     "parent_report": [
@@ -217,7 +307,42 @@ class Handler(BaseHTTPRequestHandler):
         name, turn = scenario_of(body)
         with open(LOG, "a") as f:
             f.write(json.dumps({"scenario": name, "turn": turn, "body": body}) + "\n")
+        msgs = body.get("messages", [])
+        # llmsrv compacting a session: a summary, not a scenario's turn.
+        if not body.get("tools") and msgs and str(msgs[-1].get("content", "")).startswith(
+                "Summarize this conversation"):
+            name, turn = "compact_summary", 0
+        # As a real API does: a tool result must answer a tool call that
+        # is in the history before it.
+        called = set()
+        for m in msgs:
+            for c in m.get("tool_calls") or []:
+                called.add(c.get("id"))
+            if m.get("role") == "tool" and m.get("tool_call_id") not in called:
+                msg = json.dumps({"error": {"message": "tool message %s answers no tool call"
+                                            % m.get("tool_call_id")}}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(msg)))
+                self.end_headers()
+                self.wfile.write(msg)
+                return
+        if name == "backend_down":
+            # The model service failing (as an unreachable or overloaded one
+            # does): the user must be told so, not shown the error as a reply.
+            self.send_response(503)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         r = reply_for(name, turn) if name else {"content": "no scenario"}
+        if name == "spill_readback" and turn == 1:
+            told = None
+            for m in msgs:
+                if m.get("role") == "tool":
+                    mt = re.search(r"full output at (\S+?)\)?$", str(m.get("content", "")), re.M)
+                    if mt:
+                        told = mt.group(1)
+            r = {"tools": [tool("read", {"path": told or "/no/spill/path/given"})]}
         calls = calls_of(name, turn, r) if name else []
         finish = "tool_calls" if calls else "stop"
         text = r.get("content", "")

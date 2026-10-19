@@ -1124,7 +1124,12 @@ rungeneration(sess: ref LlmSession, prompt: string)
 		askprompt(sess, prompt);
 	}
 
-	maybeautocompact(sess);
+	# Not in the middle of a tool exchange: compacted then, the model's
+	# tool calls went into the summary and the results sent next answered
+	# calls its history no longer had, which a real API refuses (400), and
+	# the turn died.  The exchange's end (end_turn) is the time.
+	if(!hasprefix(sess.lastresponse, "STOP:tool_use"))
+		maybeautocompact(sess);
 	endgeneration(sess);
 }
 
@@ -1366,18 +1371,29 @@ compactnow(sess: ref LlmSession): string
 	if(nmsg < 4)
 		return "";
 
+	# The last exchanges are kept as they were, the rest summarised.  All
+	# of it summarised, the model no longer had what it had just said: a
+	# question it had put to the user went into the summary as still open,
+	# and it put it again at the end of every reply after.
+	(older, recent) := compactsplit(sess.messages, compactkeep(sess));
+	if(len older < 2)
+		return "";
+
 	# Build conversation text for summarization
 	convtext := "";
-	for(ml = sess.messages; ml != nil; ml = tl ml) {
+	for(ml = older; ml != nil; ml = tl ml) {
 		m := hd ml;
 		if(m.role == "system")
 			continue;
 		convtext += m.role + ": " + m.content + "\n\n";
 	}
+	if(recent != nil)
+		convtext += "(The latest exchanges follow the summary as they were; they are not part of this.)\n";
 
 	req := ref AskRequest(
 		nil,       # messages
-		"Summarize this conversation concisely, preserving key facts, decisions, file paths, code snippets, and all context needed to continue the work:\n\n" + convtext,
+		"Summarize this conversation concisely, preserving key facts, decisions, file paths, code snippets, and all context needed to continue the work.  " +
+		"Say what has already been told to or asked of the user, so it is not said again:\n\n" + convtext,
 		sess.model,
 		0.3,       # low temperature for summarization
 		2048,      # maxtokens (compact: longer than chat default for summary breathing room)
@@ -1400,9 +1416,54 @@ compactnow(sess: ref LlmSession): string
 		"Context from earlier in this session:\n" + resp.response, "");
 	sess.messages = addmessage(sess.messages, "assistant",
 		"Understood. I have the context from our previous work and will continue from there.", "");
+	for(; recent != nil; recent = tl recent) {
+		m := hd recent;
+		sess.messages = addmessage(sess.messages, m.role, m.content, m.sc);
+	}
 	sess.totaltokens = resp.tokens;
 
 	return "";
+}
+
+# How much of the latest history compaction keeps as it was: half the
+# session's mark (a quarter of the context, with none).
+compactkeep(sess: ref LlmSession): int
+{
+	if(sess.autocompact > 0)
+		return sess.autocompact / 2;
+	return CONTEXTLIMIT / 4;
+}
+
+# The history split where the last exchanges begin: as many as fit in
+# budget (estimated tokens), up to COMPACTKEEPTURNS.  An exchange begins at
+# the user's own message, never at a tool result, so what is kept never
+# answers a call left in the summary.
+COMPACTKEEPTURNS: con 2;
+
+compactsplit(msgs: list of ref LlmMessage, budget: int): (list of ref LlmMessage, list of ref LlmMessage)
+{
+	a := array[len msgs] of ref LlmMessage;
+	i := 0;
+	for(ml := msgs; ml != nil; ml = tl ml)
+		a[i++] = hd ml;
+	cut := len a;
+	size := 0;
+	turns := 0;
+	for(j := len a - 1; j > 0 && turns < COMPACTKEEPTURNS; j--) {
+		size += len a[j].content / 4 + len a[j].sc / 4;
+		if(size > budget)
+			break;
+		if(a[j].role == "user" && a[j].sc == "") {
+			cut = j;
+			turns++;
+		}
+	}
+	older, recent: list of ref LlmMessage;
+	for(j = cut - 1; j >= 0; j--)
+		older = a[j] :: older;
+	for(j = len a - 1; j >= cut; j--)
+		recent = a[j] :: recent;
+	return (older, recent);
 }
 
 # Manual /compact trigger. Compaction rewrites sess.messages, which the

@@ -85,9 +85,10 @@ luciuisrv
 echo activity create Main > /mnt/ui/ctl
 # The messages are activity 0's to hand on: /mnt/msg is the read-only
 # summary (status), /mnt/msg/draft the proposal endpoint a task writes a
-# draft to (queued for the user, never sent by itself).  nsconstruct keeps
-# each to that.  Without them meta.txt's way to delegate mail was refused.
-/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
+# draft to (queued for the user, never sent by itself), /mnt/msg/flag where
+# a message is marked seen.  nsconstruct keeps each to that.  Without them
+# meta.txt's and the message policy's ways to delegate mail were refused.
+/dis/veltro/tools9p -v -m /tool -b read,list,find,search,grep,write,edit,exec,launch,spawn,diff,json,webfetch,git,say,editor,fractal,memory,todo,plan,websearch,mail,keyring,present,gap,limbo,sms,dial,contacts -p /dis/wm -p /mnt/msg:ro -p /mnt/msg/draft:rw -p /mnt/msg/flag:rw read list find present say hear task memory gap keyring editor shell limbo sms dial contacts
 # /tmp is bound by lib/sh/profile; on Windows the bind has hit edge
 # cases where it silently failed and the redirect below produced no log
 # file (GH #230 sphynkx report). Force /tmp into existence and pre-create
@@ -100,6 +101,13 @@ mkdir -p /tmp
 # a sleep between them only made this order likely.
 echo 'create id=tasks type=taskboard label=Tasks' > /mnt/ui/activity/0/presentation/ctl
 lucibridge -a 0 -v -s >[2] /tmp/lucibridge.log &
+
+# Incoming messages reach the agent only when the user has turned it on
+# (/lib/veltro/messaging.conf watch=on; shipped off).  After luciuisrv and
+# activity 0, which msgwatch hands each message to.
+if {grep -s '^watch=on' /lib/veltro/messaging.conf} {
+	/dis/veltro/msgwatch.dis >[2] /tmp/msgwatch.log &
+}
 
 # Plumbing — route file-opens to the presentation view.  The stock Inferno
 # plumber matches the user's rules (/usr/<user>/lib/plumbing) and then

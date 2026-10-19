@@ -134,8 +134,11 @@ dedupcheck(name, args: string): string
 		if(k == name + " " + args) {
 			if(verbose)
 				sys->fprint(stderr, "agentlib: dedup skip %s (identical call first ran at step %d)\n", name, s);
-			return sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)",
-				name, truncate(args, 120), s);
+			# No step number: the model's count is not this one, and told
+			# "step 12" it took the result from before its own edit for
+			# this one, and said the file had read stale.
+			return sys->sprint("(skipped: you already made the call `%s %s` in this turn, and nothing has changed anything since, so its output is the same as then)",
+				name, truncate(args, 120));
 		}
 	}
 	return "";
@@ -835,6 +838,184 @@ extracttoolargs(inputjson: string): string
 	return inputjson;
 }
 
+# edit takes <path> <old> <new> [all], and old and new are text: quoted, or
+# a space in one split it ("- milk" became "-" and "milk", and the edit
+# failed, "'-' found 2 times").  Its parser reads "..." with \" inside.
+editargs(inputjson: string): string
+{
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	pick obj := jv {
+	Object =>
+		path, old, new, all: string;
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			case name {
+			"path" => path = v;
+			"old" => old = v;
+			"new" => new = v;
+			"all" => all = v;
+			"args" => return v;	# already positional
+			}
+		}
+		r := "-r " + path + " " + editquote(old) + " " + editquote(new);
+		if(all == "true" || all == "all" || all == "1")
+			r += " all";
+		return r;
+	}
+	return inputjson;
+}
+
+# write <path> <content>: a native call's content goes verbatim (-r), as
+# the file is to hold it.
+writeargs(inputjson: string): string
+{
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	pick obj := jv {
+	Object =>
+		path, content: string;
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			case name {
+			"path" => path = v;
+			"content" => content = v;
+			"args" => return v;	# already positional
+			}
+		}
+		if(path == "")
+			return extracttoolargs(inputjson);
+		# tools9p drops one trailing newline from a call's arguments (as
+		# echo leaves it); this one is that, so the file keeps its own.
+		return "-r " + path + " " + content + "\n";
+	}
+	return inputjson;
+}
+
+editquote(s: string): string
+{
+	q := "\"";
+	for(i := 0; i < len s; i++) {
+		if(s[i] == '"')
+			q[len q] = '\\';
+		q[len q] = s[i];
+	}
+	q[len q] = '"';
+	return q;
+}
+
+# A native call's JSON arguments, as the tool takes them on its command
+# line.  extracttoolargs joins the values in the order the model sent them,
+# whatever their names: a read with a limit and no offset had the limit
+# taken for the offset ("offset 400 beyond end", every page the agent had
+# fetched unreadable), and arguments sent in another order changed places
+# (a write's content before its path was not seen to write /lib).  Each
+# tool whose arguments are positions is given them in its own order, an
+# omitted one before a present one filled with its default, and names that
+# are flags (say's voice, vision's backend) as flags.  Anything else, and
+# arguments already positional, as before.
+toolargs(tool, inputjson: string): string
+{
+	t := str->tolower(tool);
+	if(t == "edit")
+		return editargs(inputjson);
+	if(t == "write")
+		return writeargs(inputjson);
+	(jv, jerr) := readjsonstring(inputjson);
+	if(jerr != nil)
+		return inputjson;
+	vals: list of (string, string);
+	pick obj := jv {
+	Object =>
+		for(ml := obj.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			v := "";
+			pick sv := val {
+			String => v = sv.s;
+			* => v = val.text();
+			}
+			vals = (name, strip(v)) :: vals;
+		}
+	* =>
+		return extracttoolargs(inputjson);
+	}
+	if(jval(vals, "args") != nil || jval(vals, "command") != nil)
+		return extracttoolargs(inputjson);
+	order: list of string;
+	case t {
+	"read" =>
+		offset := jval(vals, "offset");
+		limit := jval(vals, "limit");
+		if(offset == "" && limit != "")
+			offset = "0";
+		return joinargs(jval(vals, "path") :: offset :: limit :: nil);
+	"say" =>
+		voice := jval(vals, "voice");
+		if(voice != "")
+			return "-v " + voice + " " + jval(vals, "text");
+		return jval(vals, "text");
+	"vision" =>
+		b := jval(vals, "backend");
+		if(b != "" && !hasprefix(b, "--"))
+			b = "--" + b;
+		return joinargs(b :: jval(vals, "imagepath") :: jval(vals, "prompt") :: nil);
+	"find" or "search" => order = "pattern" :: "path" :: nil;
+	"grep" => order = "flags" :: "pattern" :: "path" :: nil;
+	"window" => order = "op" :: "id" :: "name" :: nil;
+	"http" => order = "method" :: "url" :: "body" :: nil;
+	"webfetch" => order = "url" :: "prompt" :: nil;
+	"payfetch" => order = "url" :: "flags" :: nil;
+	"sms" => order = "number" :: "body" :: nil;
+	"launch" => order = "app" :: "extra" :: nil;
+	"json" => order = "source" :: "path" :: nil;
+	* =>
+		return extracttoolargs(inputjson);
+	}
+	l: list of string;
+	for(; order != nil; order = tl order)
+		l = jval(vals, hd order) :: l;
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return joinargs(r);
+}
+
+jval(vals: list of (string, string), name: string): string
+{
+	for(; vals != nil; vals = tl vals) {
+		(n, v) := hd vals;
+		if(n == name)
+			return v;
+	}
+	return nil;
+}
+
+# The words, one blank between, the empty ones left out.
+joinargs(l: list of string): string
+{
+	out := "";
+	for(; l != nil; l = tl l) {
+		if(hd l == "")
+			continue;
+		if(out != "")
+			out += " ";
+		out += hd l;
+	}
+	return out;
+}
+
 calltool(tool, args: string): string
 {
 	# Legacy /tool shell tools take positional Plan 9 args. The LLM now emits
@@ -842,7 +1023,7 @@ calltool(tool, args: string): string
 	# mcp9p /call), so the JSON->positional projection for /tool tools happens
 	# HERE, at the boundary. extracttoolargs passes already-positional or empty
 	# input through unchanged, so this is safe for any caller.
-	args = extracttoolargs(args);
+	args = toolargs(tool, args);
 	path := toolmount_g + "/" + str->tolower(tool) + "/ctl";
 
 	# Open tool file. The active tool set in tools9p can transiently churn at

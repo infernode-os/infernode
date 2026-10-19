@@ -682,6 +682,17 @@ splitpathperm(s: string): (string, string)
 	return (s, "rw");
 }
 
+# Paths every agent's namespace has, read-only (nsconstruct's infra list).
+baselinepath(p: string): int
+{
+	base := array[] of {"/lib/veltro", "/lib/certs", "/dis/veltro",
+		"/dev/time", "/dev/cons", "/dev/null"};
+	for(i := 0; i < len base; i++)
+		if(pathwithin(base[i], p))
+			return 1;
+	return 0;
+}
+
 pathwithin(grant, want: string): int
 {
 	if(grant == want)
@@ -1684,6 +1695,15 @@ provisionparse(args: string): (int, string, list of string, string)
 			# it cost a retry and left a dead activity behind.
 			if(pathwithin("/tmp/veltro/scratch", ppath))
 				continue;
+			# Nor to read what every agent reads already (its baseline:
+			# /lib/veltro, /lib/certs, /dis/veltro, the clock and console).
+			# Asked for, it was refused as outside this agent's grants.
+			# Write access to them is another matter, checked as any grant.
+			# (A grant names no permission more often than not, and that
+			# reads as rw: only an rw asked for is a request to write.)
+			explicitrw := len raw > 3 && (raw[len raw - 3:] == ":rw" || raw[len raw - 3:] == " rw");
+			if(!explicitrw && baselinepath(ppath))
+				continue;
 			perr := validatepath(ppath);
 			if(perr != nil)
 				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
@@ -1780,13 +1800,32 @@ provisionfail(id: int, mpt, reason: string): string
 
 runprovisionedagent(lb: ShCommand, id: int, lbargs: list of string)
 {
+	# The agent runs in a process of its own: it forks its namespace, and
+	# the unmount below must happen in this one, where the mount is.
+	done := chan of int;
+	spawn runlucibridge(lb, id, lbargs, done);
+	if(!<-done)
+		return;	# it failed: left as it was, its status says so
+	# The task's agent is done, its activity closed: its tool server goes
+	# too, unmounted here, its last reference.
+	setprovisionstate(id, "closed");
+	provisioncleanup("/tool." + string id);
+	if(verbose)
+		sys->fprint(stderr, "tools9p: activity %d closed\n", id);
+}
+
+runlucibridge(lb: ShCommand, id: int, lbargs: list of string, done: chan of int)
+{
 	{
 		lb->init(nil, lbargs);
 	} exception e {
 	"*" =>
 		provisionstatus(id, "failed: task agent exited");
 		sys->fprint(stderr, "tools9p: lucibridge activity %d exited: %s\n", id, e);
+		done <-= 0;
+		return;
 	}
+	done <-= 1;
 }
 
 # Launch the validated child and publish a narrow lifecycle result only after
@@ -2011,6 +2050,10 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	"man" =>
 		return addpath(paths, "/tmp/veltro/man");
 	"limbo" =>
+		# The model it asks, and the compiler and interfaces its compile
+		# gate needs (without them the gate could not run).
+		paths = addpath(paths, "/dis/limbo.dis");
+		paths = addpath(paths, "/module");
 		return addpath(paths, "/mnt/llm");
 	}
 	return paths;

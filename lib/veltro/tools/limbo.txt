@@ -19,7 +19,27 @@ limbo - Author a complete, compilable Limbo source file.
     "include" "package main" "def main" "#include".
 
   RETURNS
-    The Limbo source code in a single ```limbo fenced block.
+    The Limbo source code in a single ```limbo fenced block, then a
+    <gate> block saying whether it compiled (status: compiled), did not
+    (status: failed, with the compiler's errors), or was not checked.
+
+  CHECKING A FILE
+    limbo compile <absolute path of a .b file>
+    compiles a Limbo file you already have (written, edited, been given)
+    and reports the same way. Use it after every edit of a .b file.
+    Say a file compiles only when its latest compile said status: compiled;
+    if you stop with it failing, say it does not compile, and why.
+
+  LIMBO, NOT C
+    A comment begins with # and runs to the end of the line: // and /* */
+    are not comments.  Declarations are name: type, and := declares and
+    assigns.
+
+  CHANGING A FILE YOU HAVE
+    For a change to an existing file (rename something, add a comment or a
+    line, fix a compiler error), edit the file with the edit tool, then
+    limbo compile it.  Authoring it again with this tool writes the whole
+    file anew, and changes what was not asked to be changed.
 
   WHY THIS TOOL EXISTS
     The orchestrator's general-purpose training produces Go-style or

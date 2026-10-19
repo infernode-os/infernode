@@ -202,6 +202,14 @@ jobs:
         chmod +x tests/host/charon_home_test.sh
         ROOT=. bash tests/host/charon_home_test.sh
 
+    - name: Check the forms file lists the page's controls
+      run: |
+        # Form numbers came from the order nodes were made: a control a
+        # script moved into a form was in none, and was not sent with it;
+        # removed and never-attached controls were listed as on the page.
+        chmod +x tests/host/charon_forms_test.sh
+        ROOT=. bash tests/host/charon_forms_test.sh
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;

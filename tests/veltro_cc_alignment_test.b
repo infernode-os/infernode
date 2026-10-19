@@ -34,7 +34,7 @@ include "testing.m";
 	testing: Testing;
 	T: import testing;
 
-include "../appl/veltro/agentlib.m";
+include "agentlib.m";
 	agentlib: AgentLib;
 
 # Direct tool module interface (bypasses tools9p — no /tool mount required)

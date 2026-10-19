@@ -309,24 +309,24 @@ DISBIN=$ROOT/dis/tests
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs
 
-# agentlib_test needs -I for appl/veltro/agentlib.m
-agentlib_test.dis: agentlib_test.b $ROOT/appl/veltro/agentlib.m
+# agentlib_test needs -I for appl/veltro (tool.m)
+agentlib_test.dis: agentlib_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_test.b
 
 # agentlib_mcp_test exercises the shared MCP router in agentlib.m (INFR-247)
-agentlib_mcp_test.dis: agentlib_mcp_test.b $ROOT/appl/veltro/agentlib.m
+agentlib_mcp_test.dis: agentlib_mcp_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_mcp_test.b
 
-# tooluse_test needs -I for appl/veltro/agentlib.m
-tooluse_test.dis: tooluse_test.b $ROOT/appl/veltro/agentlib.m
+# tooluse_test needs -I for appl/veltro (tool.m)
+tooluse_test.dis: tooluse_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tooluse_test.b
 
-# tooldoc_test needs -I for appl/veltro/agentlib.m
-tooldoc_test.dis: tooldoc_test.b $ROOT/appl/veltro/agentlib.m
+# tooldoc_test needs -I for appl/veltro (tool.m)
+tooldoc_test.dis: tooldoc_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tooldoc_test.b
 
 # tool_schema_test (INFR-126) needs -I for appl/veltro/{agentlib,tool}.m
-tool_schema_test.dis: tool_schema_test.b $ROOT/appl/veltro/agentlib.m $ROOT/appl/veltro/tool.m
+tool_schema_test.dis: tool_schema_test.b $ROOT/module/agentlib.m $ROOT/appl/veltro/tool.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw tool_schema_test.b
 
 # pres_launch_test uses nsconstruct.m (canonical copy in module/)

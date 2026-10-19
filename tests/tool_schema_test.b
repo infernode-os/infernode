@@ -41,7 +41,7 @@ include "testing.m";
 	testing: Testing;
 	T: import testing;
 
-include "../appl/veltro/agentlib.m";
+include "agentlib.m";
 	agentlib: AgentLib;
 
 ToolSchemaTest: module

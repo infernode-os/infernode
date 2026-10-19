@@ -940,19 +940,23 @@ iscontrol(d: ref Doc, n: int): int
 # in it: a node's index is when it was made, and a page's scripts make
 # nodes in any order, move them, and keep some out of the document (a
 # framework's copies of a form it is not showing), which are not the
-# page's controls.
-formnumbers(d: ref Doc): (array of int, array of int)
+# page's controls.  A template's content is not in the document either
+# (HTML §4.13.1), though its nodes are the template's children here.
+# A control with a form attribute is in the form with that id, or in
+# none (§4.10.17.3).  order is the nodes in the document, in its order.
+formnumbers(d: ref Doc): (array of int, array of int, array of int)
 {
 	forms := array[d.n] of {* => -1};
 	nodes: list of int;	# the form elements, reversed
+	order: list of int;	# the nodes, reversed
 	nf := 0;
-	(nf, nodes) = formwalk(d, 1, forms, nf, nodes);
+	(nf, nodes, order) = formwalk(d, 1, forms, nf, nodes, order);
 	for(more := 1; more; ) {
 		more = 0;
 		for(l := d.shadows; l != nil; l = tl l) {
 			(host, root) := hd l;
 			if(host > 0 && host < d.n && forms[host] >= 0 && root > 0 && root < d.n && forms[root] < 0) {
-				(nf, nodes) = formwalk(d, root, forms, nf, nodes);
+				(nf, nodes, order) = formwalk(d, root, forms, nf, nodes, order);
 				more = 1;
 			}
 		}
@@ -960,11 +964,15 @@ formnumbers(d: ref Doc): (array of int, array of int)
 	fnode := array[nf+1] of {* => 0};
 	for(i := nf; nodes != nil; nodes = tl nodes)
 		fnode[i--] = hd nodes;
-	return (forms, fnode);
+	a := array[len order] of int;
+	for(i = len a - 1; order != nil; order = tl order)
+		a[i--] = hd order;
+	owners(d, forms, a);
+	return (forms, fnode, a);
 }
 
 # number the forms under root, and the nodes in them
-formwalk(d: ref Doc, root: int, forms: array of int, nf: int, nodes: list of int): (int, list of int)
+formwalk(d: ref Doc, root: int, forms: array of int, nf: int, nodes, order: list of int): (int, list of int, list of int)
 {
 	forms[root] = 0;
 	n := d.nodes[root].first;
@@ -976,7 +984,8 @@ formwalk(d: ref Doc, root: int, forms: array of int, nf: int, nodes: list of int
 			forms[n] = nf;
 		} else
 			forms[n] = forms[nd.parent];
-		if(nd.first != 0) {
+		order = n :: order;
+		if(nd.first != 0 && !(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Ttemplate)) {
 			n = nd.first;
 			continue;
 		}
@@ -986,7 +995,58 @@ formwalk(d: ref Doc, root: int, forms: array of int, nf: int, nodes: list of int
 			break;
 		n = d.nodes[n].next;
 	}
-	return (nf, nodes);
+	return (nf, nodes, order);
+}
+
+# controls whose form attribute names their form: the first element in
+# the document with that id, if it is a form
+owners(d: ref Doc, forms, order: array of int)
+{
+	want: list of string;
+	for(i := 0; i < len order; i++) {
+		n := order[i];
+		if(iscontrol(d, n) && d.hasattr(n, "form"))
+			want = d.attr(n, "form") :: want;
+	}
+	if(want == nil)
+		return;
+	found: list of (string, int);
+	for(i = 0; i < len order && want != nil; i++) {
+		n := order[i];
+		if(d.nodes[n].kind != Dom->Element || (id := d.attr(n, "id")) == "" || !member(id, want))
+			continue;
+		want = remove(id, want);
+		nd := d.nodes[n];
+		if(nd.ns == Dom->HTML && nd.tag == Dom->Tform)
+			found = (id, forms[n]) :: found;
+	}
+	for(i = 0; i < len order; i++) {
+		n := order[i];
+		if(!iscontrol(d, n) || !d.hasattr(n, "form"))
+			continue;
+		id := d.attr(n, "form");
+		forms[n] = 0;
+		for(l := found; l != nil; l = tl l)
+			if((hd l).t0 == id)
+				forms[n] = (hd l).t1;
+	}
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+remove(s: string, l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		if(hd l != s)
+			r = hd l :: r;
+	return r;
 }
 
 kindof(d: ref Doc, n: int): string
@@ -1077,10 +1137,10 @@ Session.fields(s: self ref Session): array of ref Field
 	if(pg == nil)
 		return nil;
 	d := pg.doc;
-	(forms, nil) := formnumbers(d);
+	(forms, nil, order) := formnumbers(d);
 	r: list of ref Field;
-	for(n := 1; n < d.n; n++)
-		if(forms[n] >= 0 && iscontrol(d, n))
+	for(k := 0; k < len order; k++)
+		if(iscontrol(d, n := order[k]))
 			r = field(d, forms[n], n) :: r;
 	a := array[len r] of ref Field;
 	for(i := len a - 1; i >= 0; i--) {
@@ -1193,7 +1253,7 @@ setfield(d: ref Doc, n: int, value: string): string
 			d.delattr(n, "checked");
 		* =>
 			# one of a group: the others in its form with its name go off
-			(forms, nil) := formnumbers(d);
+			(forms, nil, nil) := formnumbers(d);
 			name := d.attr(n, "name");
 			for(m := 1; m < d.n; m++)
 				if(m != n && iscontrol(d, m) && kindof(d, m) == "radio" &&
@@ -1237,7 +1297,7 @@ Session.submit(s: self ref Session, form, submitter: int): string
 	if(pg == nil)
 		return "no page";
 	d := pg.doc;
-	(forms, fnode) := formnumbers(d);
+	(forms, fnode, order) := formnumbers(d);
 	if(form < 1 || form >= len fnode)
 		return sys->sprint("no form %d", form);
 	fe := fnode[form];
@@ -1260,7 +1320,8 @@ Session.submit(s: self ref Session, form, submitter: int): string
 	if(action != "")
 		url = resolve(d.url, action);
 	q := "";
-	for(n := 1; n < d.n; n++) {
+	for(i := 0; i < len order; i++) {
+		n := order[i];
 		if(forms[n] != form || !iscontrol(d, n) || disabled(d, n))
 			continue;
 		f := field(d, form, n);
@@ -1290,7 +1351,7 @@ Session.submit(s: self ref Session, form, submitter: int): string
 		navigate(s, url, "POST", "application/x-www-form-urlencoded", array of byte q, Hnew);
 	else {
 		u := unfrag(url);
-		for(i := 0; i < len u; i++)
+		for(i = 0; i < len u; i++)
 			if(u[i] == '?') {
 				u = u[0:i];
 				break;
@@ -1645,7 +1706,7 @@ Session.click(s: self ref Session, n: int): string
 		Dom->Tinput or Dom->Tbutton =>
 			if(disabled(d, m))
 				return nil;
-			(forms, nil) := formnumbers(d);
+			(forms, nil, nil) := formnumbers(d);
 			case kindof(d, m) {
 			"submit" or "image" =>
 				if(forms[m] <= 0)

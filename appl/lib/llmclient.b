@@ -1192,7 +1192,13 @@ _ssehandle_event(jv: ref JValue, st: ref _SseState, req: ref AskRequest)
 		if(cv != nil) {
 			pick c := cv {
 			String =>
-				if(c.s != "") {
+				# The whole text so far, sent again in a chunk of its own:
+				# SGLang (gpt-oss, with its tool-call parser) was seen to,
+				# and the reply was shown and kept twice over.  No reply
+				# repeats all of itself in one chunk; it is dropped.
+				if(c.s != "" && len c.s >= 32 && c.s == st.fulltext)
+					;
+				else if(c.s != "") {
 					st.fulltext += c.s;
 					if(req.streamch != nil) {
 						alt {

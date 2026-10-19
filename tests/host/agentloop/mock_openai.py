@@ -76,6 +76,9 @@ SCENARIOS = {
         {"tools": []},
         {"content": "Spill read."},
     ],
+    "doubled_text": [
+        {"content": "This sentence came twice from the backend.", "resend": True},
+    ],
     "big_output": [
         {"tools": [tool("read", FIX + "/big.txt")]},
         {"content": "Read the big one."},
@@ -355,6 +358,12 @@ class Handler(BaseHTTPRequestHandler):
                 delta["tool_calls"] = [dict(c, index=i) for i, c in enumerate(calls)]
             events = [
                 {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+            ]
+            # As SGLang's gpt-oss parser was seen to: the text sent again,
+            # whole, in a chunk of its own.
+            if r.get("resend") and text:
+                events.append({"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]})
+            events += [
                 {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                  "usage": usage},
             ]

@@ -202,6 +202,11 @@ echo '@@ kept overlay'
 cat /tmp/veltro/cow/kept-1000-2-$STALEKEY/todo.txt
 
 
+echo 'SCENARIO:doubled_text go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'came twice from the backend'
+echo '@@ doubled'
+for f in /mnt/ui/activity/0/conversation/[0-9]* { grep 'came twice from the backend' \$f }
+echo '@@ doubled end'
 echo 'SCENARIO:spill_readback go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Spill read'
 echo 'SCENARIO:grant_baseline go' > /mnt/ui/activity/0/conversation/input
@@ -240,7 +245,7 @@ echo '@@ kept end'
 
 for a in 0 1 2 {
 	echo '@@ conversation' \$a
-	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 {
+	for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 96 97 98 99 {
 		if {ftest -e /mnt/ui/activity/\$a/conversation/\$i} {
 			echo msg \$i
 			cat /mnt/ui/activity/\$a/conversation/\$i | sed 's/w[0-9]* //g'
@@ -369,6 +374,8 @@ for l in open(sys.argv[1]):
         if m.get("role") == "tool" and m.get("tool_call_id") == "call_spill_readback_1_0": back = str(m.get("content"))
 ok = back is not None and "full output at" not in back and re.search(r"read /tmp/veltro/scratch/step[0-9]+[.]txt with offset [0-9]+ for what follows", back)
 sys.exit(0 if ok else 1)' "$WORK/req.log" && ok "reading it back is not kept again, and says where to go on" || bad "reading it back is not kept again, and says where to go on"
+n=$(section doubled | grep -o 'came twice from the backend' | wc -l)
+[ "$n" -eq 1 ] && ok "a reply the backend sends twice is shown once" || bad "a reply the backend sends twice is shown once ($n times)"
 section "task status" | grep -q '^recently used (latest first): /lib/veltro/system.txt (via read)' && ok "task status says what the task has used" || bad "task status says what the task has used"
 section "task status" | grep -q '^documents, in its own tab (task 1), not yours: notes "Notes"' && ok "task status says where the task's documents are" || bad "task status says where the task's documents are"
 section "task status" | grep -q '^last said: Child is done' && ok "task status says what the task last said" || bad "task status says what the task last said"

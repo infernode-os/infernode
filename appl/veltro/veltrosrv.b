@@ -748,7 +748,7 @@ launch(s: ref Session, id, name, args: string): ref Call
 {
 	c := ref Call(id, name, args, chan[1] of string, chan[1] of int);
 	spawn calltoolworker(s, name, args, c.resultch);
-	spawn timer(c.timeoutch, TOOL_TIMEOUT);
+	spawn timer(c.timeoutch, tooltimeout(name));
 	return c;
 }
 
@@ -759,8 +759,22 @@ collect(c: ref Call): string
 		return result;
 	<-c.timeoutch =>
 		return sys->sprint("error: tool '%s' timed out after %d seconds",
-			c.name, TOOL_TIMEOUT / 1000);
+			c.name, tooltimeout(c.name) / 1000);
 	}
+}
+
+# A tool that asks a model itself (limbo writing a file, a sub-agent, the
+# wiki's answer, an image described) takes as long as the model does: on a
+# local model sharing its GPU with other sessions, the limbo tool's author
+# took more than the 60 seconds every tool was given, and the agent, told it
+# had timed out, asked again, and again.
+tooltimeout(name: string): int
+{
+	case str->tolower(name) {
+	"limbo" or "spawn" or "wiki" or "vision" =>
+		return LLM_READ_TIMEOUT;
+	}
+	return TOOL_TIMEOUT;
 }
 
 # After a call: provenance, cache, spill.  Returns what the model sees.

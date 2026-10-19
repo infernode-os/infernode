@@ -2399,35 +2399,33 @@ else
 fi
 
 #
-# 3b. Scrolling by moving the window, not by moving the pixels.
+# 3b. Scrolling by copying the pixels, never by moving the window.
 #
-#     Console writes measured 570-770ms on hardware and all of it was
-#     the full-screen memmove -- which put a keystroke's echo the better
-#     part of a second behind the key. The framebuffer is now allocated
-#     taller than the display and scrolling sets a GPU offset instead.
+#     The console used to scroll by moving the GPU's scanout window down
+#     a buffer twice the screen's height, and the draw device then had
+#     to paint where the window was left. On real firmware the window
+#     did not reliably go where it was told: a login screen painted 80
+#     rows below what a 1280x800 HDMI panel on a 3B+ showed, with
+#     console text above it and the cursor off the touch. So the buffer
+#     is now the screen's size, the window stays at 0,0, and the console
+#     copies. What is checked is that design: the console says it
+#     copies, and the allocation the firmware returned has no room for
+#     the window to be anywhere else.
 #
-#     That path cannot run under a plain emulated boot: QEMU grants the
-#     offset but reports a screen-sized allocation, so the safety gate
-#     -- rightly -- keeps the fast path off, and the code that only runs
-#     on hardware would be the code nothing tests. So build a variant
-#     that gives the console half the panel and uses the other half as
-#     headroom. The offset arithmetic, the fold, and the line clearing
-#     then all execute inside the allocation QEMU really did give us.
-#
-#     What this proves is bounded but is the part that matters: the
-#     window moves, a full cycle folds back to the top, no write lands
-#     outside the buffer, and the kernel still finishes booting.
-#
-if build_kernel "$BUILD/$PLAT-fbscroll.img" "" "-DFBSCROLLTEST"; then
-    FBOUT="$(boot_kernel "$BUILD/$PLAT-fbscroll.img" 20)"
-    OUT_SAVED="$OUT"; OUT="$FBOUT"
-    check "console on display .*scroll by GPU offset" "the console scrolls by moving the window, not the pixels"
-    check "fb:   window folded once"   "the window walks to the end of the buffer and folds back"
-    refute "SCROLL OUT OF RANGE"       "no scroll writes outside the framebuffer allocation"
-    check "boot OK"                    "the kernel boots through a full scroll cycle without faulting"
-    OUT="$OUT_SAVED"
+check "console on display 0, .*(scroll by copy)" "the console scrolls by copying, not by moving the scanout window"
+refute "scroll by GPU offset"                     "nothing moves the scanout window"
+fbline="$(grep -aoE 'fb:   [0-9]+x[0-9]+x32 pitch=[0-9]+ base=0x[0-9a-f]+ size=[0-9]+' <<<"$OUT" | head -1)"
+if [[ -z "$fbline" ]]; then
+    fail "no framebuffer allocation line in the boot log"
 else
-    fail "the framebuffer-scroll variant failed to build"
+    fbh="$(sed -E 's/fb:   [0-9]+x([0-9]+)x32.*/\1/' <<<"$fbline")"
+    fbpitch="$(sed -E 's/.*pitch=([0-9]+).*/\1/' <<<"$fbline")"
+    fbsize="$(sed -E 's/.*size=([0-9]+).*/\1/' <<<"$fbline")"
+    if [[ "$fbsize" -lt $((fbpitch * fbh * 2)) ]]; then
+        pass "the framebuffer is the screen's size, not taller: nowhere for the window to move ($fbline)"
+    else
+        fail "the framebuffer is still at least twice the screen's height: $fbline"
+    fi
 fi
 
 #

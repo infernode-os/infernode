@@ -60,22 +60,20 @@ void	setcursor(Cursor*);
  * softscreen is 0: drawing goes straight into the framebuffer the GPU
  * scans out, so there is no second copy to flush from.
  */
-/*
- * Row of the framebuffer the glass is scanning from, fixed at the
- * moment the draw device took the screen. Everything that touches
- * screen pixels -- the draw device, the software cursor, the debug
- * captures -- addresses the framebuffer through screenbase() so they
- * all agree with the panel, not with row zero.
- */
-static ulong screenoff;
-
 /* diagnostic counters, printed by the S debug key: what the pointer path costs */
 ulong ncursorat, ndrawcursor, nflushscreen;
 
+/*
+ * Where the screen's pixels are: the top of the framebuffer, which is
+ * what the glass shows -- the console never moves the scanout window
+ * (os/fb/fbcons.c, screenscroll). Everything that touches screen pixels
+ * -- the draw device, the software cursor, the debug captures -- goes
+ * through here.
+ */
 static uchar*
 screenbase(void)
 {
-	return (uchar*)screenfb->base + screenoff * screenfb->pitch;
+	return (uchar*)screenfb->base;
 }
 
 uchar*
@@ -97,14 +95,6 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 	 * every machine, until something actually wants to draw.
 	 */
 	fbconsstop();
-
-	/*
-	 * Paint where the glass is looking. The console froze its window
-	 * in place (see fbconsstop for why it is not moved back to zero);
-	 * the draw device's screen is that window, so the pixels it
-	 * writes are the pixels being scanned out.
-	 */
-	screenoff = fbconsvoff();
 
 	r->min.x = 0;
 	r->min.y = 0;
@@ -605,8 +595,6 @@ screendump(void)
 	uartputx((ulong)screenfb->base);
 	uartputstr(" stride ");
 	uartputd(stride);
-	uartputstr(" voff ");
-	uartputd(fbconsvoff());
 	uartputstr(" px(5,5)=");
 	uartputx(fb[5*stride + 5]);
 	uartputstr(" px(320,240)=");
@@ -700,8 +688,6 @@ screenhex(void)
 	uartputd(screenfb->width / 4);
 	uartputstr(" ");
 	uartputd(screenfb->height / 4);
-	uartputstr(" row=");
-	uartputd(screenoff);
 	uartputstr("\n");
 	w = screenfb->width / 4;
 	h = screenfb->height / 4;

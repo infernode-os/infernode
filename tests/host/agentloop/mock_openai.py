@@ -218,6 +218,13 @@ SCENARIOS = {
                                  "args": "label=Reader paths=/lib/veltro tools=read brief=SCENARIO:text_only go"})]},
         {"content": "Granted the baseline."},
     ],
+    # A brief naming a folder of the user's with no paths= for it is
+    # refused, saying what to grant: no task is made that cannot see it.
+    "ungranted_brief": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Lister tools=read brief=add bread to /usr/deltest/notes/todo.txt"})]},
+        {"content": "Was told to grant it."},
+    ],
     # A task edits a file in a folder the user granted: the change is
     # staged; activity 0, told so, promotes it on the user's word.
     "delegate_edit": [

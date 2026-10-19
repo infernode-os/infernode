@@ -216,6 +216,8 @@ echo 'SCENARIO:spill_readback go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Spill read'
 echo 'SCENARIO:grant_baseline go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Granted the baseline'
+echo 'SCENARIO:ungranted_brief go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'Was told to grant it'
 
 echo 'SCENARIO:backend_down go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Model unavailable'
@@ -346,6 +348,8 @@ got=$(section "raw file")
 [ "$got" = "$want" ] && ok "a native write and edit keep the text as given" || bad "a native write and edit keep the text as given (got: $(printf '%s' "$got" | od -c | head -3))"
 reqcheck "a task granted what every agent reads is created" \
 	'tools and tools[-1]["content"].startswith("created activity")' grant_baseline 1
+reqcheck "a brief naming a folder it is not granted is refused, saying what to grant" \
+	'tools and "not created" in tools[-1]["content"] and "paths=/usr/deltest/notes" in tools[-1]["content"]' ungranted_brief 1
 reqcheck "limbo compile passes a file that compiles" \
 	'any("good.b compiles." in t["content"] for t in tools)' compile_check 1
 reqcheck "limbo compile fails a file that does not, with the compiler's error" \

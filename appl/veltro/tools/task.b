@@ -279,6 +279,77 @@ getattr(attrs: list of (string, string), key: string): string
 	return "";
 }
 
+# The folders that text names, that a task sees only when granted and
+# paths= does not cover, each as the folder to grant: a named file gives
+# its directory.
+ungranted(text, paths: string): list of string
+{
+	(nil, grants) := sys->tokenize(paths, ",");
+	need: list of string;
+	(nil, words) := sys->tokenize(text, " \t\n");
+	for(; words != nil; words = tl words) {
+		w := hd words;
+		while(len w > 0 && strchr("\"'`(<[", w[0]))
+			w = w[1:];
+		while(len w > 0 && strchr("\"'`)>],.;:!?/", w[len w - 1]))
+			w = w[0:len w - 1];
+		if(!needsgrant(w))
+			continue;
+		(ok, d) := sys->stat(w);
+		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
+			# a file, or one still to be made: grant where it lives
+			for(i := len w - 1; i > 0 && w[i] != '/'; i--)
+				;
+			w = w[0:i];
+		}
+		if(!needsgrant(w) || covered(w, grants) || strlistcontains(need, w))
+			continue;
+		need = w :: need;
+	}
+	return need;
+}
+
+# Whether a task sees a path only when it is granted: below a folder of
+# its own, or /n/<something>, as nsconstruct builds a task's root.  What
+# every task has (/dis, /lib, /tmp, /tool, ...) or gets by capability
+# (/mnt, /net, /chan, /phone) is not asked for.
+needsgrant(p: string): int
+{
+	if(len p < 2 || p[0] != '/')
+		return 0;
+	(nil, parts) := sys->tokenize(p, "/");
+	if(parts == nil)
+		return 0;
+	case hd parts {
+	"dev" or "dis" or "env" or "lib" or "prog" or "tmp" or "tool" or
+	"mnt" or "net" or "net.alt" or "chan" or "phone" =>
+		return 0;
+	"n" =>
+		return tl parts != nil;
+	}
+	return 1;
+}
+
+covered(p: string, grants: list of string): int
+{
+	for(; grants != nil; grants = tl grants) {
+		g := strip(hd grants);
+		while(len g > 1 && g[len g - 1] == '/')
+			g = g[0:len g - 1];
+		if(g != "" && (p == g || hasprefix(p, g + "/")))
+			return 1;
+	}
+	return 0;
+}
+
+strchr(set: string, c: int): int
+{
+	for(i := 0; i < len set; i++)
+		if(set[i] == c)
+			return 1;
+	return 0;
+}
+
 readprovisionstate(id: int): string
 {
 	raw := readfile("/tool/provision");
@@ -340,6 +411,21 @@ docreate(args: string): string
 					return sys->sprint("error: tool '%s' not in delegation budget", t);
 			}
 		}
+	}
+
+	# A task sees only what paths= grants it. A brief that names a folder
+	# of the user's without granting it creates a task that cannot open the
+	# folder it was sent to work on, and answers that the path does not
+	# exist (mistral-small3.2 did). Refuse it and say what to add, before
+	# anything is made.
+	need := ungranted(getattr(attrs, "brief") + " " + getattr(attrs, "instructions"),
+		getattr(attrs, "paths"));
+	if(need != nil) {
+		p := joinstrs(need, ",");
+		if(getattr(attrs, "paths") != "")
+			p = getattr(attrs, "paths") + "," + p;
+		return sys->sprint("error: not created: the brief names %s, which the task cannot see unless you grant it. Repeat the create with paths=%s placed before brief=.",
+			joinstrs(need, " and "), p);
 	}
 
 	# Idempotency guard (INFR-390): the meta-agent repeatedly re-creates the

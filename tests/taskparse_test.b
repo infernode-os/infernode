@@ -95,6 +95,32 @@ testParse(t: ref T)
 	t.assert(!strlistcontains(parsetoollist("webfetch"), "web"), "tool budget parser rejects prefix matches");
 }
 
+need(t: ref T, text, paths, want: string)
+{
+	got := "";
+	for(l := ungranted(text, paths); l != nil; l = tl l)
+		got = hd l + " " + got;
+	t.assertseq(got, want, text + " / paths=" + paths);
+}
+
+# A brief naming a host folder the task is not granted (mistral-small3.2
+# made such tasks: paths= left out, the task then found no such folder).
+testUngranted(t: ref T)
+{
+	need(t, "Add bread to /n/local/home/notes/list.txt.", "", "/n/local/home/notes ");
+	need(t, "Add bread to /n/local/home/notes/list.txt.", "/n/local/home/notes", "");
+	need(t, "Add bread to /n/local/home/notes/list.txt.", "/n/local/home/", "");
+	need(t, "Add bread to `/n/local/home/notes/list.txt`", "/n/local/home/note", "/n/local/home/notes ");
+	need(t, "copy /n/local/a/x.txt to /n/local/b/y.txt", "/n/local/a", "/n/local/b ");
+	need(t, "read /n/local/a/x.txt and /n/local/a/y.txt", "", "/n/local/a ");
+	need(t, "list /lib/veltro and /tmp/veltro/scratch/out.txt", "", "");
+	need(t, "look in /n/ for it", "", "");
+	need(t, "edit /usr/me/notes/todo.txt", "", "/usr/me/notes ");
+	need(t, "edit /usr/me/notes/todo.txt", "/usr/me", "");
+	need(t, "fix /appl/cmd/cat.b then build", "", "/appl/cmd ");
+	need(t, "list /lib, then /dis, then /mnt/msg/status", "", "");
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -113,6 +139,7 @@ init(nil: ref Draw->Context, args: list of string)
 			testing->verbose(1);
 
 	run("Parse", testParse);
+	run("Ungranted", testUngranted);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
@@ -242,4 +269,77 @@ parsetoollist(s: string): list of string
 		if(hd toks != "")
 			out = hd toks :: out;
 	return out;
+}
+
+ungranted(text, paths: string): list of string
+{
+	(nil, grants) := sys->tokenize(paths, ",");
+	need: list of string;
+	(nil, words) := sys->tokenize(text, " \t\n");
+	for(; words != nil; words = tl words) {
+		w := hd words;
+		while(len w > 0 && strchr("\"'`(<[", w[0]))
+			w = w[1:];
+		while(len w > 0 && strchr("\"'`)>],.;:!?/", w[len w - 1]))
+			w = w[0:len w - 1];
+		if(!needsgrant(w))
+			continue;
+		(ok, d) := sys->stat(w);
+		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
+			# a file, or one still to be made: grant where it lives
+			for(i := len w - 1; i > 0 && w[i] != '/'; i--)
+				;
+			w = w[0:i];
+		}
+		if(!needsgrant(w) || covered(w, grants) || strlistcontains(need, w))
+			continue;
+		need = w :: need;
+	}
+	return need;
+}
+
+# Whether a task sees a path only when it is granted: below a folder of
+# its own, or /n/<something>, as nsconstruct builds a task's root.  What
+# every task has (/dis, /lib, /tmp, /tool, ...) or gets by capability
+# (/mnt, /net, /chan, /phone) is not asked for.
+needsgrant(p: string): int
+{
+	if(len p < 2 || p[0] != '/')
+		return 0;
+	(nil, parts) := sys->tokenize(p, "/");
+	if(parts == nil)
+		return 0;
+	case hd parts {
+	"dev" or "dis" or "env" or "lib" or "prog" or "tmp" or "tool" or
+	"mnt" or "net" or "net.alt" or "chan" or "phone" =>
+		return 0;
+	"n" =>
+		return tl parts != nil;
+	}
+	return 1;
+}
+
+covered(p: string, grants: list of string): int
+{
+	for(; grants != nil; grants = tl grants) {
+		g := strip(hd grants);
+		while(len g > 1 && g[len g - 1] == '/')
+			g = g[0:len g - 1];
+		if(g != "" && (p == g || hasprefix(p, g + "/")))
+			return 1;
+	}
+	return 0;
+}
+
+strchr(set: string, c: int): int
+{
+	for(i := 0; i < len set; i++)
+		if(set[i] == c)
+			return 1;
+	return 0;
+}
+
+hasprefix(s, pfx: string): int
+{
+	return len s >= len pfx && s[0:len pfx] == pfx;
 }

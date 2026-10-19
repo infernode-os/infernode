@@ -87,7 +87,12 @@ include "veltrosrv.m";
 DEFAULT_MAX_STEPS: con 100;
 MAX_MAX_STEPS: con 500;
 TOOL_TIMEOUT: con 60000;		# ms per tool call
-LLM_READ_TIMEOUT: con 300000;	# ms; long for extended thinking
+# ms; a backstop for a link that is gone.  llmsrv's own watchdog ends a
+# request that stops (2 min quiet, 5 min before the first byte), so this
+# is the whole turn: one queued behind another on a one-at-a-time server,
+# then slowly generated, as mistral-small3.2 on a Jetson is, takes more
+# than the five minutes it used to be.
+LLM_READ_TIMEOUT: con 600000;
 MAX_TOOL_FAILURES: con 3;
 AGENT_TEMP: con "0.2";		# measured: ~22% delegation-miss at 0.7, ~0 at 0.2
 AGENT_NAME_PATH: con "/lib/veltro/agent-name";

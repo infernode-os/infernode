@@ -1110,12 +1110,20 @@ cowpromote(arg: string): string
 		else if(err != nil)
 			return sys->sprint("error: %s (%d file(s) promoted)", err, total);
 	}
-	if(conflicts != "")
-		return sys->sprint("promoted %d file(s), but not all:%s\n" +
-			"Those files were changed after this task copied them, so its version would " +
-			"undo that; the file is as it was and the task's change stays staged.  To have " +
-			"it made on the current file: \"task revert %d\", then ask task %d to make " +
-			"its change again.", total, conflicts, actid, actid);
+	# This goes back to the agent that asked for it.  It used to begin
+	# "promoted N file(s)", which a model read as done and told the user so,
+	# and it said to ask the task again, which the task tool cannot do.
+	if(conflicts != "") {
+		applied := "";
+		if(total > 0)
+			applied = sys->sprint(" (%d other file(s) were applied)", total);
+		return sys->sprint("NOT applied%s:%s\n" +
+			"Someone changed those files after this task copied them, so its version would " +
+			"undo that change.  They are left as they are now, without the task's change, which " +
+			"stays staged.  Tell the user it was not applied and why.  To make the change on " +
+			"the current file: \"task revert %d\", then create a new task with the same brief; " +
+			"it starts from the file as it is now.", applied, conflicts, actid);
+	}
 	return sys->sprint("promoted %d file(s)", total);
 }
 

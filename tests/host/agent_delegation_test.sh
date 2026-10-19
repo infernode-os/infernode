@@ -349,7 +349,7 @@ got=$(section "raw file")
 reqcheck "a task granted what every agent reads is created" \
 	'tools and tools[-1]["content"].startswith("created activity")' grant_baseline 1
 reqcheck "a brief naming a folder it is not granted is refused, saying what to grant" \
-	'tools and "not created" in tools[-1]["content"] and "paths=/usr/deltest/notes" in tools[-1]["content"]' ungranted_brief 1
+	'tools and "not created" in tools[-1]["content"] and "suggest: paths=/usr/deltest/notes" in tools[-1]["content"]' ungranted_brief 1
 reqcheck "limbo compile passes a file that compiles" \
 	'any("good.b compiles." in t["content"] for t in tools)' compile_check 1
 reqcheck "limbo compile fails a file that does not, with the compiler's error" \

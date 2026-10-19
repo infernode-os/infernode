@@ -95,30 +95,47 @@ testParse(t: ref T)
 	t.assert(!strlistcontains(parsetoollist("webfetch"), "web"), "tool budget parser rejects prefix matches");
 }
 
-need(t: ref T, text, paths, want: string)
+need(t: ref T, text, paths, held, want: string)
 {
 	got := "";
-	for(l := ungranted(text, paths); l != nil; l = tl l)
+	(nil, h) := sys->tokenize(held, ",");
+	for(l := ungranted(text, paths, h); l != nil; l = tl l)
 		got = hd l + " " + got;
-	t.assertseq(got, want, text + " / paths=" + paths);
+	t.assertseq(got, want, text + " / paths=" + paths + " / held=" + held);
 }
 
-# A brief naming a host folder the task is not granted (mistral-small3.2
-# made such tasks: paths= left out, the task then found no such folder).
+# A brief naming a folder of the user's that the task is not granted
+# (mistral-small3.2 left paths= out; the task then found no such folder).
+# Only what this agent holds is suggested, only ordinary file trees, and
+# nothing is granted: the brief is text, and may be someone else's.
 testUngranted(t: ref T)
 {
-	need(t, "Add bread to /n/local/home/notes/list.txt.", "", "/n/local/home/notes ");
-	need(t, "Add bread to /n/local/home/notes/list.txt.", "/n/local/home/notes", "");
-	need(t, "Add bread to /n/local/home/notes/list.txt.", "/n/local/home/", "");
-	need(t, "Add bread to `/n/local/home/notes/list.txt`", "/n/local/home/note", "/n/local/home/notes ");
-	need(t, "copy /n/local/a/x.txt to /n/local/b/y.txt", "/n/local/a", "/n/local/b ");
-	need(t, "read /n/local/a/x.txt and /n/local/a/y.txt", "", "/n/local/a ");
-	need(t, "list /lib/veltro and /tmp/veltro/scratch/out.txt", "", "");
-	need(t, "look in /n/ for it", "", "");
-	need(t, "edit /usr/me/notes/todo.txt", "", "/usr/me/notes ");
-	need(t, "edit /usr/me/notes/todo.txt", "/usr/me", "");
-	need(t, "fix /appl/cmd/cat.b then build", "", "/appl/cmd ");
-	need(t, "list /lib, then /dis, then /mnt/msg/status", "", "");
+	H := "/n/local/home/notes,/usr/me";
+	need(t, "Add bread to /n/local/home/notes/list.txt.", "", H, "/n/local/home/notes ");
+	need(t, "Add bread to /n/local/home/notes/list.txt.", "/n/local/home/notes", H, "");
+	need(t, "Add bread to /n/local/home/notes/list.txt.", "/n/local/home/", H, "");
+	need(t, "Add bread to `/n/local/home/notes/list.txt`", "/n/local/home/note", H, "/n/local/home/notes ");
+	need(t, "edit /usr/me/notes/todo.txt", "", H, "/usr/me/notes ");
+	need(t, "edit /usr/me/notes/todo.txt", "/usr/me", H, "");
+	need(t, "read /usr/me/a/x.txt and /usr/me/a/y.txt", "", H, "/usr/me/a ");
+	# not held: nothing to suggest (provisioning would refuse it anyway)
+	need(t, "copy /n/local/secret/k.txt to /usr/other/x", "", H, "");
+	need(t, "add bread to /n/local/home/notes/list.txt", "", "", "");
+	# never services, control files, metadata, or what every task has
+	need(t, "read /mnt/msg/status and /mnt/wallet/ctl", "", "/mnt", "");
+	need(t, "look at /tmp/veltro/tasks/brief.2", "", "/tmp/veltro", "");
+	need(t, "list /lib, then /dis, then /lib/veltro", "", "/lib,/dis", "");
+	need(t, "fix /appl/cmd/cat.b then build", "", "/appl", "");
+	need(t, "look in /n/ for it", "", "/n", "");
+	need(t, "see /n/local/home/notes/../../etc", "", "/n/local", "");
+}
+
+heldlisting(t: ref T)
+{
+	h := heldpaths("/tmp/veltro/scratch cow\n/lib/veltro ro\n/n/local/home/notes rw\n");
+	t.assert(strlistcontains(h, "/n/local/home/notes"), "a grant listed is held");
+	t.assert(strlistcontains(h, "/lib/veltro"), "a read grant is held");
+	t.assert(!strlistcontains(h, "/tmp/veltro/scratch"), "scratch is every task's, not a grant");
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -140,6 +157,7 @@ init(nil: ref Draw->Context, args: list of string)
 
 	run("Parse", testParse);
 	run("Ungranted", testUngranted);
+	run("HeldListing", heldlisting);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";
@@ -271,7 +289,7 @@ parsetoollist(s: string): list of string
 	return out;
 }
 
-ungranted(text, paths: string): list of string
+ungranted(text, paths: string, held: list of string): list of string
 {
 	(nil, grants) := sys->tokenize(paths, ",");
 	need: list of string;
@@ -282,41 +300,52 @@ ungranted(text, paths: string): list of string
 			w = w[1:];
 		while(len w > 0 && strchr("\"'`)>],.;:!?/", w[len w - 1]))
 			w = w[0:len w - 1];
-		if(!needsgrant(w))
+		if(!plaintree(w) || !covered(w, held))
 			continue;
 		(ok, d) := sys->stat(w);
 		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
-			# a file, or one still to be made: grant where it lives
 			for(i := len w - 1; i > 0 && w[i] != '/'; i--)
 				;
 			w = w[0:i];
 		}
-		if(!needsgrant(w) || covered(w, grants) || strlistcontains(need, w))
+		if(!plaintree(w) || !covered(w, held) || covered(w, grants) || strlistcontains(need, w))
 			continue;
 		need = w :: need;
 	}
 	return need;
 }
 
-# Whether a task sees a path only when it is granted: below a folder of
-# its own, or /n/<something>, as nsconstruct builds a task's root.  What
-# every task has (/dis, /lib, /tmp, /tool, ...) or gets by capability
-# (/mnt, /net, /chan, /phone) is not asked for.
-needsgrant(p: string): int
+# An ordinary file tree of the user's, below its root: /n/local/<...> or
+# /usr/<...>.  Everything else a task sees either way or gets only by
+# capability, and is never suggested.
+plaintree(p: string): int
 {
-	if(len p < 2 || p[0] != '/')
-		return 0;
+	if(hasprefix(p, "/n/local/") && len p > len "/n/local/")
+		return !hasdotdot(p);
+	if(hasprefix(p, "/usr/") && len p > len "/usr/")
+		return !hasdotdot(p);
+	return 0;
+}
+
+hasdotdot(p: string): int
+{
 	(nil, parts) := sys->tokenize(p, "/");
-	if(parts == nil)
-		return 0;
-	case hd parts {
-	"dev" or "dis" or "env" or "lib" or "prog" or "tmp" or "tool" or
-	"mnt" or "net" or "net.alt" or "chan" or "phone" =>
-		return 0;
-	"n" =>
-		return tl parts != nil;
+	for(; parts != nil; parts = tl parts)
+		if(hd parts == ".." || hd parts == ".")
+			return 1;
+	return 0;
+}
+
+# The paths of a grants listing (/tool/paths: "<path> <perm>" a line).
+heldpaths(listing: string): list of string
+{
+	held: list of string;
+	for(lines := splitlines(listing); lines != nil; lines = tl lines) {
+		(nil, f) := sys->tokenize(hd lines, " \t");
+		if(f != nil && hd f != "/tmp/veltro/scratch")
+			held = hd f :: held;
 	}
-	return 1;
+	return held;
 }
 
 covered(p: string, grants: list of string): int
@@ -342,4 +371,23 @@ strchr(set: string, c: int): int
 hasprefix(s, pfx: string): int
 {
 	return len s >= len pfx && s[0:len pfx] == pfx;
+}
+
+splitlines(s: string): list of string
+{
+	result: list of string;
+	start := 0;
+	for(i := 0; i < len s; i++) {
+		if(s[i] == '\n') {
+			if(i > start)
+				result = s[start:i] :: result;
+			start = i + 1;
+		}
+	}
+	if(start < len s)
+		result = s[start:] :: result;
+	rev: list of string;
+	for(; result != nil; result = tl result)
+		rev = hd result :: rev;
+	return rev;
 }

@@ -279,10 +279,15 @@ getattr(attrs: list of (string, string), key: string): string
 	return "";
 }
 
-# The folders that text names, that a task sees only when granted and
-# paths= does not cover, each as the folder to grant: a named file gives
-# its directory.
-ungranted(text, paths: string): list of string
+# The folders text names that the task would see only if granted, that
+# this agent holds (held: its own grants, from /tool/paths), and that
+# paths= does not give.  Nothing is granted here: the caller refuses the
+# create and suggests these, for the agent to grant itself or leave out.
+# Prose names a path; it never confers one (a brief can be copied mail
+# or a web page).  Only ordinary file trees are suggested: /n/local and
+# /usr, never services, control files or task metadata.  A named file
+# gives its folder (a writable grant is a cowfs folder), said as such.
+ungranted(text, paths: string, held: list of string): list of string
 {
 	(nil, grants) := sys->tokenize(paths, ",");
 	need: list of string;
@@ -293,41 +298,59 @@ ungranted(text, paths: string): list of string
 			w = w[1:];
 		while(len w > 0 && strchr("\"'`)>],.;:!?/", w[len w - 1]))
 			w = w[0:len w - 1];
-		if(!needsgrant(w))
+		if(!plaintree(w) || !covered(w, held))
 			continue;
 		(ok, d) := sys->stat(w);
 		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
-			# a file, or one still to be made: grant where it lives
 			for(i := len w - 1; i > 0 && w[i] != '/'; i--)
 				;
 			w = w[0:i];
 		}
-		if(!needsgrant(w) || covered(w, grants) || strlistcontains(need, w))
+		if(!plaintree(w) || !covered(w, held) || covered(w, grants) || strlistcontains(need, w))
 			continue;
 		need = w :: need;
 	}
 	return need;
 }
 
-# Whether a task sees a path only when it is granted: below a folder of
-# its own, or /n/<something>, as nsconstruct builds a task's root.  What
-# every task has (/dis, /lib, /tmp, /tool, ...) or gets by capability
-# (/mnt, /net, /chan, /phone) is not asked for.
-needsgrant(p: string): int
+# An ordinary file tree of the user's, below its root: /n/local/<...> or
+# /usr/<...>.  Everything else a task sees either way or gets only by
+# capability, and is never suggested.
+plaintree(p: string): int
 {
-	if(len p < 2 || p[0] != '/')
-		return 0;
+	if(hasprefix(p, "/n/local/") && len p > len "/n/local/")
+		return !hasdotdot(p);
+	if(hasprefix(p, "/usr/") && len p > len "/usr/")
+		return !hasdotdot(p);
+	return 0;
+}
+
+hasdotdot(p: string): int
+{
 	(nil, parts) := sys->tokenize(p, "/");
-	if(parts == nil)
-		return 0;
-	case hd parts {
-	"dev" or "dis" or "env" or "lib" or "prog" or "tmp" or "tool" or
-	"mnt" or "net" or "net.alt" or "chan" or "phone" =>
-		return 0;
-	"n" =>
-		return tl parts != nil;
+	for(; parts != nil; parts = tl parts)
+		if(hd parts == ".." || hd parts == ".")
+			return 1;
+	return 0;
+}
+
+# The paths of a grants listing (/tool/paths: "<path> <perm>" a line).
+heldpaths(listing: string): list of string
+{
+	held: list of string;
+	for(lines := splitlines(listing); lines != nil; lines = tl lines) {
+		(nil, f) := sys->tokenize(hd lines, " \t");
+		if(f != nil && hd f != "/tmp/veltro/scratch")
+			held = hd f :: held;
 	}
-	return 1;
+	return held;
+}
+
+plural(l: list of string, one, many: string): string
+{
+	if(l != nil && tl l != nil)
+		return many;
+	return one;
 }
 
 covered(p: string, grants: list of string): int
@@ -416,16 +439,20 @@ docreate(args: string): string
 	# A task sees only what paths= grants it. A brief that names a folder
 	# of the user's without granting it creates a task that cannot open the
 	# folder it was sent to work on, and answers that the path does not
-	# exist (mistral-small3.2 did). Refuse it and say what to add, before
-	# anything is made.
+	# exist (mistral-small3.2 did). Refuse it and say what could be granted,
+	# before anything is made.  Nothing is granted from the brief: it is
+	# text, possibly copied from mail or a page, and a grant is only ever
+	# what paths= says (security review, 2026-10).
 	need := ungranted(getattr(attrs, "brief") + " " + getattr(attrs, "instructions"),
-		getattr(attrs, "paths"));
+		getattr(attrs, "paths"), heldpaths(readfile("/tool/paths")));
 	if(need != nil) {
 		p := joinstrs(need, ",");
 		if(getattr(attrs, "paths") != "")
 			p = getattr(attrs, "paths") + "," + p;
-		return sys->sprint("error: not created: the brief names %s, which the task cannot see unless you grant it. Repeat the create with paths=%s placed before brief=.",
-			joinstrs(need, " and "), p);
+		return sys->sprint("error: not created: the brief names a path in %s, and the task will not see %s unless you grant %s; " +
+			"a grant is the whole folder.  If the task needs it, repeat the create with paths=%s placed before brief=.  " +
+			"If it should not have it, leave that path out of the brief.\nsuggest: paths=%s",
+			joinstrs(need, " and "), plural(need, "it", "them"), plural(need, "it", "them"), p, p);
 	}
 
 	# Idempotency guard (INFR-390): the meta-agent repeatedly re-creates the

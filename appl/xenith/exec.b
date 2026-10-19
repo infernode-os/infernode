@@ -73,7 +73,7 @@ Exectab : adt {
 	flag2 : int;
 };
 
-F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB : con iota;
+F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_LIVE, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB : con iota;
 
 exectab := array[] of {
 	Exectab ( "Alphabet",	F_ALPHABET,	FALSE,	XXX,		XXX		),
@@ -95,6 +95,7 @@ exectab := array[] of {
 	Exectab ( "Limbo",		F_LIMBO,		FALSE,	XXX,		XXX   	),
 	Exectab ( "Lineno",		F_LINENO,	FALSE,	XXX,		XXX		),
 	Exectab ( "Load",		F_DUMP,		FALSE,	FALSE,	XXX		),
+	Exectab ( "Live",		F_LIVE,		FALSE,	XXX,		XXX		),
 	Exectab ( "Local",		F_LOCAL,		FALSE,	XXX,		XXX		),
 	Exectab ( "Look",		F_LOOK,		FALSE,	XXX,		XXX		),
 	Exectab ( "New",		F_NEW,		FALSE,	XXX,		XXX		),
@@ -143,6 +144,7 @@ runfun(fun : int, et, t, argt : ref Text, flag1, flag2 : int, arg : string, narg
 		F_PUT		=> put(et, argt, arg, narg);
 		F_PUTALL 	=> putall();
 		F_RENDER	=> renderx(et, t);
+		F_LIVE		=> livex(et);
 		F_UNDO 		=> undo(et, flag1);
 		F_SEND		=> send(et, t);
 		F_SORT		=> sort(et);
@@ -1095,6 +1097,35 @@ renderx(et : ref Text, nil : ref Text)
 		renderon(w);
 	else
 		renderoff(w);
+}
+
+# Live: a source document set again as its text is edited, or not
+# (docview(2)): the window's own, or those of the windows showing its
+# file; none, and a window opened below showing it, live
+livex(et : ref Text)
+{
+	if(et==nil || et.w==nil)
+		return;
+	w := et.w;
+	if(docview->live(w, -1) > 0)
+		return;
+	if(docview->shown(w)){
+		warning(nil, "Live: not a source document\n");
+		return;
+	}
+	k := docview->kind(w.body.file.name);
+	if(k == nil || k.class != Docreg->Source){
+		warning(nil, sprint("Live: %s: not a source document\n", w.body.file.name));
+		return;
+	}
+	nw := w.col.add(nil, w, -1);
+	nw.lock1(w.owner);
+	if((err := docview->render(nw)) != nil){
+		warning(nil, sprint("Live: %s\n", err));
+		return;
+	}
+	docview->live(nw, 1);
+	nw.settag();
 }
 
 renderon(w : ref Window)

@@ -11,8 +11,9 @@ implement VeltroSrv;
 #	    new            read: start a session; returns its id
 #	    <id>/
 #	        ctl        write: cancel | reset | close | persona <type> |
-#	                          role <name> | brief <text> | model <m> |
+#	                          role <name> | brief <text> |
 #	                          think <n> | maxsteps <n> | gate on|off
+#	                   (no model: the model is the server's, llmsrv -M)
 #	                   read: the settings, attr=value
 #	        input      write: one user message; starts a turn.  "busy"
 #	                   while a turn runs.
@@ -126,7 +127,6 @@ Session: adt {
 	persona:	string;		# agents/<type>.txt, layered as == Agent Role ==
 	role:		string;		# meta | <name>: a suffix file, lucibridge's way
 	brief:		string;		# literal suffix
-	model:		string;
 	think:		int;
 	maxsteps:	int;
 	gate:		int;
@@ -141,7 +141,9 @@ Session: adt {
 	toolsraw, pathsraw: string;
 	failtool:	string;
 	failcount:	int;
+	failseen:	list of (string, int);	# this turn: a call and its failure, how often
 	closed:		int;
+	stopped:	int;		# the last turn was stopped by the user
 };
 
 sessions: list of ref Session;
@@ -380,22 +382,24 @@ readllmfd(s: ref Session): string
 	}
 }
 
-# Scratch spill.  With -S the file lands in the backing directory and the
-# agent is told the path it sees that directory at (an activity's scratch
-# is mounted at SCRATCH_PATH in its tool namespace).
+# Scratch spill.  The session runs in the restricted namespace, where
+# restrictns has put the activity's own scratch (its backing directory,
+# -S) at SCRATCH_PATH: the file is written there, at the path the agent is
+# told and will read.  Written to the backing directory's own name, it went
+# through that view into a directory of the same name inside it (scratch/1
+# /1/step0.txt), and the agent, told scratch/step0.txt, found nothing there.
 writescratch(s: ref Session, content: string, step: int): string
 {
 	if(scratchdir == "")
 		return s.al->writescratch(content, step);
-	sys->create(scratchdir, Sys->OREAD, 8r700 | Sys->DMDIR);
-	path := sys->sprint("%s/step%d.txt", scratchdir, step);
+	path := sys->sprint("%s/step%d.txt", SCRATCH_PATH, step);
 	fd := sys->create(path, Sys->OWRITE, 8r600);
 	if(fd == nil)
 		return "(cannot create scratch file)";
 	b := array of byte content;
 	if(sys->write(fd, b, len b) != len b)
 		return "(cannot write scratch file)";
-	return sys->sprint("%s/step%d.txt", SCRATCH_PATH, step);
+	return path;
 }
 
 firstlines(s: string, n: int): string
@@ -466,11 +470,17 @@ needsapproval(s: ref Session, toolname, args: string): int
 {
 	if(!s.gate)
 		return 0;
-	if(toolname != "exec" && toolname != "write" && toolname != "edit")
+	if(toolname != "exec" && toolname != "write" && toolname != "edit" && toolname != "task")
 		return 0;
 	# Native tool calls carry JSON ({"path":"/lib/x",...}); judge the
 	# positional form the tool will actually run, as calltool sends it.
-	args = s.al->extracttoolargs(args);
+	args = s.al->toolargs(toolname, args);
+	if(hasprefix(args, "-r "))
+		args = args[3:];	# write's and edit's raw mode: the path follows
+	# A task's staged changes reach the user's own files only on the
+	# user's word.
+	if(toolname == "task")
+		return hasprefix(strip(args), "promote");
 	if(toolname == "exec") {
 		if(recursiveRmOutsideTmp(s, args))
 			return 1;
@@ -486,12 +496,26 @@ needsapproval(s: ref Session, toolname, args: string): int
 	return 0;
 }
 
+# What the user is asked to allow, in words: a native call's arguments are
+# JSON, and the dialogue showed it raw (task {"command":"promote",...}).
+approvaltext(s: ref Session, toolname, args: string): string
+{
+	pos := strip(s.al->toolargs(toolname, args));
+	if(hasprefix(pos, "-r "))
+		pos = pos[3:];
+	if(toolname == "task" && hasprefix(pos, "promote")) {
+		id := strip(pos[len "promote":]);
+		return "apply the changes task " + id + " staged to your files";
+	}
+	return pos;
+}
+
 # Blocks until the operator answers through the approve file (or cancels).
 pretoolapproval(s: ref Session, callid, toolname, args: string): string
 {
 	if(!needsapproval(s, toolname, args))
 		return "allow";
-	a := ref Approval(callid, toolname, s.al->truncate(args, 120), chan[1] of int);
+	a := ref Approval(callid, toolname, s.al->truncate(approvaltext(s, toolname, args), 160), chan[1] of int);
 	log(s, "pretool: awaiting approval for " + toolname);
 	setstatus(s, "blocked");
 	evc <-= ref Ev.Approve(s, a);
@@ -507,6 +531,57 @@ pretoolapproval(s: ref Session, callid, toolname, args: string): string
 	}
 	log(s, "pretool: user responded: allow");
 	return "allow";
+}
+
+# The same call failing the same way, again and again in one turn, with
+# other calls between (an edit, then the compile, failing as before): the
+# consecutive-failure count, reset by each edit that succeeded, never saw
+# it, nor a compile's failure, which is not an "error:".  gpt-oss compiled
+# one file sixteen times, failing on the same line each time, reached the
+# step limit, and told the user it compiled.  At the third, the result
+# says so.
+SAMEFAILURES: con 3;
+
+samefailure(s: ref Session, name, args, result: string): string
+{
+	why := failureof(result);
+	if(why == nil)
+		return "";
+	key := name + " " + args + "\n" + why;
+	n := 1;
+	seen: list of (string, int);
+	for(l := s.failseen; l != nil; l = tl l) {
+		(k, c) := hd l;
+		if(k == key)
+			n = c + 1;
+		else
+			seen = hd l :: seen;
+	}
+	s.failseen = (key, n) :: seen;
+	if(n != SAMEFAILURES)
+		return "";
+	log(s, sys->sprint("tool %s: the same failure %d times this turn", name, n));
+	return sys->sprint("\n\n[harness: this call has now failed %d times this turn with the same " +
+		"error, so the changes made between them are not fixing it.  Read the error again " +
+		"and change the approach; if you cannot fix it, stop and tell the user plainly " +
+		"that it still fails, and why.]", n);
+}
+
+# What a failed result says, the same each time it fails the same way; nil
+# for a result that is not a failure.
+failureof(result: string): string
+{
+	if(hasprefix(result, "error:") || hasprefix(result, "ERROR:"))
+		return firstlines(result, 1);
+	(nil, st) := str->splitstrl(result, "status: failed");
+	if(hasprefix(result, "<gate>") && st != nil) {
+		# the compiler's first diagnostic
+		(nil, after) := str->splitstrl(result, "stderr:\n");
+		if(after != nil)
+			return firstlines(after[len "stderr:\n":], 1);
+		return "status: failed";
+	}
+	return nil;
 }
 
 # Track consecutive failures of one tool; after MAX_TOOL_FAILURES the
@@ -669,6 +744,7 @@ finish(s: ref Session, step: int, name, args, result: string): string
 		s.llmid, step + 1, name, toolresultstatus(s, nm, result)), array of byte result);
 	s.al->deduprecord(nm, args, result, step);
 	log(s, "tool " + name + ": done, " + s.al->truncate(result, 100));
+	result += samefailure(s, nm, args, result);
 	if(len result > AgentLib->STREAM_THRESHOLD) {
 		# Never re-scratch a read of a scratch file: each read would
 		# produce another scratch file of similar size, without end.
@@ -745,8 +821,8 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 			}
 		}
 		if(dup) {
-			note := sys->sprint("(skipped: identical `%s %s` already ran at step %d — its output is in your earlier results; use that instead of repeating the call)",
-				nm, s.al->truncate(args, 120), step);
+			note := sys->sprint("(skipped: `%s %s` is the same as a call before it in this response; its output is that one's)",
+				nm, s.al->truncate(args, 120));
 			results = (id, note) :: results;
 			prov("toolres", sys->sprint("agent=%s step=%d tool=%s status=cached",
 				s.llmid, step + 1, name), array of byte note);
@@ -818,6 +894,7 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 turn(s: ref Session, input: string)
 {
 	s.al->dedupreset();	# fresh read-cache per turn
+	s.failseen = nil;
 	prov("prompt", sys->sprint("agent=%s", s.llmid), array of byte input);
 
 	# If the tool set changed (via /tool/ctl), reinstall the session's
@@ -839,6 +916,13 @@ turn(s: ref Session, input: string)
 
 	setstatus(s, "working");
 	prompt := input;
+	# A turn the user stopped is still in the model's history, unfinished,
+	# and the model took it up again at the next message.  It is told.
+	if(s.stopped) {
+		prompt = "[The user stopped your previous turn before it finished. " +
+			"Do not resume that work unless they ask you to.]\n\n" + prompt;
+		s.stopped = 0;
+	}
 	streambase := "/mnt/llm/" + s.llmid;
 
 	hitlimit := 1;
@@ -907,6 +991,18 @@ turn(s: ref Session, input: string)
 		if(response == "") {
 			stopstate = "empty";
 			say(s, "note", "(no response from LLM)");
+			break;
+		}
+		# The model service's own failure (unreachable, refused, timed
+		# out) is not the agent's reply: it was shown as one, raw
+		# ("Error: openai: cannot connect to ..."), and a task that never
+		# did its work was then reported complete.
+		if(!hasprefix(response, "STOP:") && (hasprefix(response, "Error:") || hasprefix(response, "error:"))) {
+			stopstate = "llm-error";
+			hitlimit = 0;
+			say(s, "note Model unavailable", "The model service did not answer (" +
+				strip(response[len "Error:":]) + "). Nothing more was done: " +
+				"send your message again once it is back.");
 			break;
 		}
 		prov("llm", sys->sprint("agent=%s step=%d", s.llmid, step + 1), array of byte response);
@@ -985,6 +1081,8 @@ turn(s: ref Session, input: string)
 	if(hitlimit)
 		say(s, "note", sys->sprint("(reached %d-step limit — send another message to continue)", s.maxsteps));
 	prov("agentdone", sys->sprint("agent=%s steps=%d stop=%s", s.llmid, laststep, stopstate), nil);
+	if(stopstate == "cancelled")
+		s.stopped = 1;
 	log(s, sys->sprint("turn done stop=%s steps=%d", stopstate, laststep));
 	evc <-= ref Ev.Done(s);
 }
@@ -1072,8 +1170,6 @@ llmstart(s: ref Session): string
 		tval = AGENT_TEMP;
 	writefile("/mnt/llm/" + s.llmid + "/temperature", tval);
 
-	if(s.model != "")
-		writefile("/mnt/llm/" + s.llmid + "/model", s.model);
 	if(s.think != 0)
 		writefile("/mnt/llm/" + s.llmid + "/thinking", string s.think);
 
@@ -1128,8 +1224,8 @@ newsession(): ref Session
 	al->init();
 	al->setverbose(verbose);
 	al->settoolmount(toolmount);
-	s := ref Session(nextsid++, al, "", nil, "", "", "", "", 0, maxsteps, 1,
-		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, 0);
+	s := ref Session(nextsid++, al, "", nil, "", "", "", 0, maxsteps, 1,
+		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, nil, 0, 0);
 	sessions = s :: sessions;
 	vers++;
 	return s;
@@ -1300,10 +1396,6 @@ ctl(s: ref Session, line: string): string
 		if(s.llmid != "")
 			setsystemprompt(s);
 		prov("task", sys->sprint("agent=%s", s.llmid), array of byte rest);
-	"model" =>
-		s.model = rest;
-		if(s.llmid != "" && rest != "")
-			writefile("/mnt/llm/" + s.llmid + "/model", rest);
 	"think" =>
 		(n, r) := str->toint(rest, 10);
 		if(r != "" || n < 0)
@@ -1335,8 +1427,8 @@ ctlread(s: ref Session): string
 	gate := "off";
 	if(s.gate)
 		gate = "on";
-	return sys->sprint("persona=%s role=%s model=%s think=%d maxsteps=%d gate=%s llm=%s busy=%d\n",
-		s.persona, s.role, s.model, s.think, s.maxsteps, gate, s.llmid, s.busy);
+	return sys->sprint("persona=%s role=%s think=%d maxsteps=%d gate=%s llm=%s busy=%d\n",
+		s.persona, s.role, s.think, s.maxsteps, gate, s.llmid, s.busy);
 }
 
 # ---- 9P ----
@@ -1413,11 +1505,21 @@ startturn(s: ref Session, data: string)
 {
 	if(len data > 0 && data[len data - 1] == '\n')
 		data = data[0:len data - 1];
-	if(strip(data) == "")
+	if(strip(data) == "") {
+		s.busy = 0;
+		s.status = "idle";
+		wake(s, Qtext);
+		wake(s, Qlog);
+		wake(s, Qapprove);
 		return;
-	if(s.busy || s.llmid == "") {
-		# Another writer's message started a turn first.
-		appendlog(s, "input: dropped, a turn is in progress");
+	}
+	if(s.llmid == "") {
+		appendlog(s, "input: dropped, no model session");
+		s.busy = 0;
+		s.status = "idle";
+		wake(s, Qtext);
+		wake(s, Qlog);
+		wake(s, Qapprove);
 		return;
 	}
 	appendhead(s, "user");
@@ -1726,6 +1828,16 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, "busy"));
 					break;
 				}
+				# The session is this writer's from its first piece: busy,
+				# so a client following text from now waits for the turn
+				# rather than finding the session idle and ending, which
+				# it did when the close that starts the turn came after
+				# its first read (a task was reported done, with no
+				# report, before it had begun).
+				if(c.data == nil) {
+					s.busy = 1;
+					s.status = "working";
+				}
 				if(len c.data + len m.data > MAXINPUT) {
 					srv.reply(ref Rmsg.Error(m.tag, "message too long"));
 					break;
@@ -1742,6 +1854,16 @@ Serve:
 				nd[len c.data:] = m.data;
 				c.data = nd;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				# A piece shorter than a full message is the write's last:
+				# the message is whole, and the turn starts now.  (Waiting
+				# for the clunk, a turn could wait for ever: the close of
+				# a dropped descriptor is not always prompt.)  Only a
+				# message of exact full pieces waits for the clunk.
+				if(len m.data < srv.iounit()) {
+					msg := string c.data;
+					c.data = nil;
+					startturn(s, msg);
+				}
 			Qapprove =>
 				(verb, rest) := str->splitl(strip(data), " \t");
 				rest = str->drop(rest, " \t");

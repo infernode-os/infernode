@@ -22,7 +22,7 @@ tool-result call_read_write_read_0_2:
   | == veltro
   | Read, wrote, read.
   | == log
-  | session <llm>, prompt 14062 bytes
+  | session <llm>, prompt 14220 bytes
   | step 1: writing 27 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (0 chunks, 0 bytes)

@@ -101,4 +101,9 @@ NsConstruct: module {
 	# Clean up shadow directories for the current process.
 	# Call on agent exit to reclaim /tmp/.veltro-ns/shadow/{pid}-* entries.
 	cleanup: fn();
+
+	# An overlay (/tmp/veltro/cow/<actid>-<key>) made in an earlier start
+	# of the emulator, with changes in it, renamed kept-<start>-<name>:
+	# returns its new path, or "" when it is this start's or empty.
+	setasidestale: fn(overlaydir: string): string;
 };

@@ -539,7 +539,7 @@ addartifact(a: ref Activity, id, atype, label: string): ref Artifact
 	if(a.nart >= MAX_ARTIFACTS)
 		return nil;
 	if(a.nart >= len a.artifacts) {
-		na := array[len a.artifacts * 2] of ref Artifact;
+		na := array[len a.artifacts * 2 + 8] of ref Artifact;
 		na[0:] = a.artifacts[0:a.nart];
 		a.artifacts = na;
 	}
@@ -936,6 +936,9 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 		if(findinputread(m.fid) != nil) {
 			# The rest of this fid's message, then end of file.
 			srv.reply(inputchunk(m));
+		} else if(a.status == "hidden") {
+			# Closed: nothing more will come.
+			srv.reply(ref Rmsg.Read(m.tag, nil));
 		} else if(a.inputq == nil) {
 			# Blocking read
 			addpending(m.fid, m.tag, Qconvinput, actid, m);
@@ -1076,6 +1079,23 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 
 # --- Write handling ---
 
+# Answer every read waiting on an activity with end of file.
+endpending(actid: int)
+{
+	prev: ref PendingRead;
+	for(p := pending; p != nil; p = p.next) {
+		if(p.actid == actid) {
+			if(prev == nil)
+				pending = p.next;
+			else
+				prev.next = p.next;
+			srv_g.reply(ref Rmsg.Read(p.m.tag, nil));
+			continue;
+		}
+		prev = p;
+	}
+}
+
 # Post a message written to an activity's conversation/input: to the first
 # reader waiting for one, or to the queue.
 postinput(actid: int, data: string)
@@ -1146,6 +1166,14 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 {
 	ft := FTYPE(c.path);
 	actid := ACTID(c.path);
+
+	# A closed activity takes no more writes: its arrays are freed, and
+	# its agent, still working when it was closed, kept writing to them
+	# (resources, artifacts), which crashed the server and with it the UI.
+	if(actid > 0 && (ca := findactivity(actid)) != nil && ca.status == "hidden") {
+		srv.reply(ref Rmsg.Error(m.tag, "activity closed"));
+		return;
+	}
 
 	if(len m.data > MAX_DATA_SIZE) {
 		srv.reply(ref Rmsg.Error(m.tag, "write too large"));
@@ -1225,6 +1253,13 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 			srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 			break;
 		}
+		# Closed is final: the agent of a task closed while it worked kept
+		# writing its status ("working", a tool's name), which undid the
+		# close, so it was never stopped and its tab came back.
+		if(a.status == "hidden") {
+			srv.reply(ref Rmsg.Error(m.tag, "activity closed"));
+			break;
+		}
 		a.status = safeattrtext(data);
 		vers++;
 		pushevent(actid, "status");
@@ -1281,6 +1316,13 @@ dowrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 		nd[len c.data:] = m.data;
 		c.data = nd;
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
+		# A piece shorter than a full message is the write's last: post it
+		# now, not at the clunk, which is not always prompt.
+		if(len m.data < srv.iounit()) {
+			msg := string c.data;
+			c.data = nil;
+			postinput(actid, msg);
+		}
 
 	Qpresctl =>
 		a := findactivity(actid);
@@ -1422,6 +1464,10 @@ globalctl(data: string): string
 		activities[idx].nbg = 0;
 		activities[idx].pendingevent = nil;
 		activities[idx].inputq = nil;
+		# Its readers are told it is gone (end of file): a task's agent
+		# blocked reading its input used to wait for ever, and every closed
+		# task kept its agent, tool server and model session running.
+		endpending(id);
 		vers++;
 		pushglobalevent("activity delete " + idstr);
 		return nil;
@@ -1719,7 +1765,7 @@ ctxctl(a: ref Activity, data: string): string
 		if(a.nres >= MAX_RESOURCES)
 			return "too many resources";
 		if(a.nres >= len a.resources) {
-			nr := array[len a.resources * 2] of ref Resource;
+			nr := array[len a.resources * 2 + 8] of ref Resource;
 			nr[0:] = a.resources[0:a.nres];
 			a.resources = nr;
 		}
@@ -1804,7 +1850,7 @@ ctxctl(a: ref Activity, data: string): string
 			if(a.nres >= MAX_RESOURCES)
 				return "too many resources";
 			if(a.nres >= len a.resources) {
-				nr := array[len a.resources * 2] of ref Resource;
+				nr := array[len a.resources * 2 + 8] of ref Resource;
 				nr[0:] = a.resources[0:a.nres];
 				a.resources = nr;
 			}
@@ -1874,7 +1920,7 @@ ctxctl(a: ref Activity, data: string): string
 		if(a.ngaps >= MAX_GAPS)
 			return "too many gaps";
 		if(a.ngaps >= len a.gaps) {
-			ng := array[len a.gaps * 2] of ref Gap;
+			ng := array[len a.gaps * 2 + 8] of ref Gap;
 			ng[0:] = a.gaps[0:a.ngaps];
 			a.gaps = ng;
 		}
@@ -1922,7 +1968,7 @@ ctxctl(a: ref Activity, data: string): string
 			if(a.ngaps >= MAX_GAPS)
 				return "too many gaps";
 			if(a.ngaps >= len a.gaps) {
-				ng := array[len a.gaps * 2] of ref Gap;
+				ng := array[len a.gaps * 2 + 8] of ref Gap;
 				ng[0:] = a.gaps[0:a.ngaps];
 				a.gaps = ng;
 			}
@@ -1969,7 +2015,7 @@ ctxctl(a: ref Activity, data: string): string
 		if(a.nbg >= MAX_BGTASKS)
 			return "too many background tasks";
 		if(a.nbg >= len a.bgtasks) {
-			nb := array[len a.bgtasks * 2] of ref BgTask;
+			nb := array[len a.bgtasks * 2 + 8] of ref BgTask;
 			nb[0:] = a.bgtasks[0:a.nbg];
 			a.bgtasks = nb;
 		}

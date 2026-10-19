@@ -44,20 +44,25 @@ if {~ $llmmode remote} {
 	llmbackend=`{sed -n 's/^backend=//p' /lib/ndb/llm >[2] /dev/null}
 	llmurl=`{sed -n 's/^url=//p' /lib/ndb/llm >[2] /dev/null}
 	llmmodel=`{sed -n 's/^model=//p' /lib/ndb/llm >[2] /dev/null}
+	# autocompact=<tokens>: where a session's history is summarised
+	# (llmsrv -c; its own default when unset).
+	llmcompact=`{sed -n 's/^autocompact=//p' /lib/ndb/llm >[2] /dev/null}
+	llmopts=()
+	if {! ~ $#llmcompact 0} { llmopts=(-c $llmcompact) }
 	# backend=cli/codex are the host-side CLI gateways (claude-gate,
 	# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
 	# the same way.
 	if {~ $llmbackend openai cli codex} {
-		if {! ~ $llmmodel ''} {
-			llmsrv -b openai -u $llmurl -M $llmmodel >[2] /dev/null
+		if {! ~ $#llmmodel 0} {
+			llmsrv $llmopts -b openai -u $llmurl -M $llmmodel >[2] /dev/null
 		}{
-			llmsrv -b openai -u $llmurl >[2] /dev/null
+			llmsrv $llmopts -b openai -u $llmurl >[2] /dev/null
 		}
 	}{
-		if {! ~ $llmmodel ''} {
-			llmsrv -M $llmmodel >[2] /dev/null
+		if {! ~ $#llmmodel 0} {
+			llmsrv $llmopts -M $llmmodel >[2] /dev/null
 		}{
-			llmsrv >[2] /dev/null
+			llmsrv $llmopts >[2] /dev/null
 		}
 	}
 }

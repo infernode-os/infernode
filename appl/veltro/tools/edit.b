@@ -88,8 +88,8 @@ schema(): string
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
 				"\"path\":{\"type\":\"string\",\"description\":\"File path to edit. Quote if it contains spaces.\"}," +
-				"\"old\":{\"type\":\"string\",\"description\":\"Text to find. Quote if it contains spaces; \\\\n for newlines.\"}," +
-				"\"new\":{\"type\":\"string\",\"description\":\"Replacement text. Quote if it contains spaces; \\\\n for newlines.\"}," +
+				"\"old\":{\"type\":\"string\",\"description\":\"The text to find, exactly as it is in the file: line breaks as line breaks. Nothing in it is unescaped.\"}," +
+				"\"new\":{\"type\":\"string\",\"description\":\"The text to put in its place, exactly as the file is to hold it: line breaks as line breaks. Nothing in it is unescaped.\"}," +
 				"\"all\":{\"type\":\"string\",\"description\":\"Set to 'all' to replace every occurrence. Optional; default replaces only the first match.\"}" +
 			"}," +
 			"\"required\":[\"path\",\"old\",\"new\"]" +
@@ -102,7 +102,13 @@ exec(args: string): string
 	if(sys == nil)
 		init();
 
-	# Parse arguments
+	# -r: old and new are the text itself (a native call's, already
+	# decoded), not to be unescaped again.
+	raw := 0;
+	if(len args > 3 && args[0:3] == "-r ") {
+		raw = 1;
+		args = args[3:];
+	}
 	(path, old, new, all) := parseargs(args);
 	if(path == "")
 		return "error: usage: Edit <path> <old> <new> [all]";
@@ -115,8 +121,10 @@ exec(args: string): string
 		return roerr;
 
 	# Process escape sequences
-	old = unescape(old);
-	new = unescape(new);
+	if(!raw) {
+		old = unescape(old);
+		new = unescape(new);
+	}
 
 	# Read file
 	content := readfile(path);

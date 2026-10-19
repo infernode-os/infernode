@@ -194,6 +194,16 @@ SCENARIOS = {
                    tool("limbo", "compile /tmp/veltro/scratch/ccomment.b")]},
         {"content": "Compiled the files."},
     ],
+    # The same compile failing the same way, with other calls between:
+    # the third time, the result says the changes are not fixing it.
+    "compile_loop": [
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+        {"tools": [tool("read", "/tmp/veltro/scratch/good.b")]},
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+        {"tools": [tool("list", "/tmp/veltro/scratch")]},
+        {"tools": [tool("limbo", "compile /tmp/veltro/scratch/bad.b")]},
+        {"content": "It still fails."},
+    ],
     # A task granted what every agent reads anyway: created, not refused.
     "grant_baseline": [
         {"tools": [tool("task", {"command": "create",

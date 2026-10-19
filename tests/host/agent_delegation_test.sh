@@ -164,6 +164,8 @@ mkdir -p /tmp/veltro/scratch/0
 {echo 'implement C;'; echo 'include "sys.m";'; echo 'include "draw.m";'; echo 'C: module { init: fn(nil: ref Draw->Context, nil: list of string); };'; echo '// a comment as C writes one'; echo 'init(nil: ref Draw->Context, nil: list of string) { }'} > /tmp/veltro/scratch/0/ccomment.b
 echo 'SCENARIO:compile_check go' > /mnt/ui/activity/0/conversation/input
 waitfor 0 'Compiled the files'
+echo 'SCENARIO:compile_loop go' > /mnt/ui/activity/0/conversation/input
+waitfor 0 'It still fails'
 
 echo '/help' > /mnt/ui/activity/0/conversation/input
 sleep 2
@@ -338,6 +340,10 @@ reqcheck "limbo compile passes a file that compiles" \
 	'any("good.b compiles." in t["content"] for t in tools)' compile_check 1
 reqcheck "limbo compile fails a file that does not, with the compiler's error" \
 	'any("bad.b does not compile" in t["content"] and "undeclared" in t["content"] for t in tools)' compile_check 1
+reqcheck "the same failure a third time says the changes are not fixing it" \
+	'tools and "failed 3 times this turn" in tools[-1]["content"]' compile_loop 5
+reqcheck "not before" \
+	'tools and "failed 3 times" not in tools[-1]["content"] and "harness:" not in tools[-1]["content"]' compile_loop 3
 reqcheck "a C comment's failure says how Limbo writes one" \
 	'any("ccomment.b" in t["content"] and "comments begin with #" in t["content"] for t in tools)' compile_check 1
 reqcheck "a task's edit with a space in it is made" \

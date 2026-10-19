@@ -141,6 +141,7 @@ Session: adt {
 	toolsraw, pathsraw: string;
 	failtool:	string;
 	failcount:	int;
+	failseen:	list of (string, int);	# this turn: a call and its failure, how often
 	closed:		int;
 	stopped:	int;		# the last turn was stopped by the user
 };
@@ -532,6 +533,57 @@ pretoolapproval(s: ref Session, callid, toolname, args: string): string
 	return "allow";
 }
 
+# The same call failing the same way, again and again in one turn, with
+# other calls between (an edit, then the compile, failing as before): the
+# consecutive-failure count, reset by each edit that succeeded, never saw
+# it, nor a compile's failure, which is not an "error:".  gpt-oss compiled
+# one file sixteen times, failing on the same line each time, reached the
+# step limit, and told the user it compiled.  At the third, the result
+# says so.
+SAMEFAILURES: con 3;
+
+samefailure(s: ref Session, name, args, result: string): string
+{
+	why := failureof(result);
+	if(why == nil)
+		return "";
+	key := name + " " + args + "\n" + why;
+	n := 1;
+	seen: list of (string, int);
+	for(l := s.failseen; l != nil; l = tl l) {
+		(k, c) := hd l;
+		if(k == key)
+			n = c + 1;
+		else
+			seen = hd l :: seen;
+	}
+	s.failseen = (key, n) :: seen;
+	if(n != SAMEFAILURES)
+		return "";
+	log(s, sys->sprint("tool %s: the same failure %d times this turn", name, n));
+	return sys->sprint("\n\n[harness: this call has now failed %d times this turn with the same " +
+		"error, so the changes made between them are not fixing it.  Read the error again " +
+		"and change the approach; if you cannot fix it, stop and tell the user plainly " +
+		"that it still fails, and why.]", n);
+}
+
+# What a failed result says, the same each time it fails the same way; nil
+# for a result that is not a failure.
+failureof(result: string): string
+{
+	if(hasprefix(result, "error:") || hasprefix(result, "ERROR:"))
+		return firstlines(result, 1);
+	(nil, st) := str->splitstrl(result, "status: failed");
+	if(hasprefix(result, "<gate>") && st != nil) {
+		# the compiler's first diagnostic
+		(nil, after) := str->splitstrl(result, "stderr:\n");
+		if(after != nil)
+			return firstlines(after[len "stderr:\n":], 1);
+		return "status: failed";
+	}
+	return nil;
+}
+
 # Track consecutive failures of one tool; after MAX_TOOL_FAILURES the
 # guidance rides inside the last tool result (so it stays inside the
 # TOOL_RESULTS wire format) and the user is told.
@@ -692,6 +744,7 @@ finish(s: ref Session, step: int, name, args, result: string): string
 		s.llmid, step + 1, name, toolresultstatus(s, nm, result)), array of byte result);
 	s.al->deduprecord(nm, args, result, step);
 	log(s, "tool " + name + ": done, " + s.al->truncate(result, 100));
+	result += samefailure(s, nm, args, result);
 	if(len result > AgentLib->STREAM_THRESHOLD) {
 		# Never re-scratch a read of a scratch file: each read would
 		# produce another scratch file of similar size, without end.
@@ -841,6 +894,7 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 turn(s: ref Session, input: string)
 {
 	s.al->dedupreset();	# fresh read-cache per turn
+	s.failseen = nil;
 	prov("prompt", sys->sprint("agent=%s", s.llmid), array of byte input);
 
 	# If the tool set changed (via /tool/ctl), reinstall the session's
@@ -1171,7 +1225,7 @@ newsession(): ref Session
 	al->setverbose(verbose);
 	al->settoolmount(toolmount);
 	s := ref Session(nextsid++, al, "", nil, "", "", "", 0, maxsteps, 1,
-		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, 0, 0);
+		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, nil, 0, 0);
 	sessions = s :: sessions;
 	vers++;
 	return s;

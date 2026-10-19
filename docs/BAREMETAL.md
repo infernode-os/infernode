@@ -572,6 +572,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#I` | `/net` | `tcp udp icmp ipifc iproute arp` … | both |
 | `#t` | `/dev` | `eia0 eia0ctl eia0status` (PL011), `eia1…` (mini-UART). Bound only when the card has a `bt` file. | both; virt has `eia0` only |
 | `#u` | `/usb` | USB endpoints | both; empty on virt |
+| `#seia` | `/dev` | `eiaU0 eiaU0ctl eiaU0status`, `eiaU1…`: USB serial adapters, served by `usbserial`. Bound at boot, empty until one is plugged in. | both |
 | `#G` | `/dev/gpio/N/` | `ctl` (`function in\|out\|alt0-5`, `pull up\|down\|none`, `edge rising\|falling\|both\|none`), `level`, `event` (blocks for an edge; `<µs> <level>`) | Pi |
 | `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
 | `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
@@ -598,6 +599,37 @@ enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
 on this machine`) and left alone: the driver has run only under
 emulation, and a Pi 3 gets no new behaviour on that evidence. One logical
 unit, disks up to 2 TB, no hot removal of the medium.
+
+**A USB serial adapter** is a port like the board's own, `eia(3)` and
+all: `usbserial` serves it as `/dev/eiaU0`, `eiaU0ctl` and `eiaU0status`
+(the next one `eiaU1`), so a program written for `/dev/eia0`, here or on
+a hosted emulator, works on it unchanged.
+
+    echo b115200 l8 pn s1 > /dev/eiaU0ctl
+    cat /dev/eiaU0 &
+    echo 'hello' > /dev/eiaU0
+    cat /dev/eiaU0status
+        b115200 c0 d1 e0 l8 m0 pn r1 s1 i0
+        dev(U0) type(usb-ftdi) 0x0403:0x6001 framing(0) overruns(0) parity(0) breaks(0) rx(6) tx(6) CTS DSR
+
+The second status line names the adapter and lists the modem inputs that
+are up (`CTS DSR DCD RING`). Three kinds are driven:
+
+- **CDC-ACM**, the USB standard: microcontroller boards (Pico, Arduino,
+  STM32), GPS receivers, modems. It has no CTS and no flow control of its
+  own; DCD, DSR and RI come from its notification endpoint.
+- **FTDI** (FT232R/BM, FT2232, FT4232, FT232H): every `ctl` verb, RTS/CTS
+  and XON/XOFF flow control included.
+- **CP210x** (Silicon Labs): every verb but `x1`.
+
+A port starts at 9600 8N1 with DTR and RTS up, which is what boards that
+wait for DTR before they talk need; one `ctl` write of several settings
+changes the line once. Pulling the adapter hangs up its readers and takes
+the files away. Only on xHCI machines for now, as with disks: a Pi 3
+names the adapter (`is a USB serial port; usbserial is not started on
+this machine`) and leaves it. Not done: CH340 and PL2303, the same name
+for the same adapter after a re-plug (the first free number is taken),
+and exclusive open.
 
 ## 9. Testing
 
@@ -638,6 +670,6 @@ unless `BAREMETAL_QEMU_PATCHED=1` says otherwise.
   desktop check uses `skiplogon`.
 - **The tryboot firmware handshake and the watchdog's countdown** are
   things QEMU models neither of.
-- **USB storage** (`diskusb`, section 8) runs only on xHCI machines (virt); a Pi 3 enumerates a USB disk and leaves it alone. **The Pi 4** (`os/bcm2711`) is built and booted under QEMU's `raspi4b` in CI; see [os/bcm2711/README.md](../os/bcm2711/README.md).
+- **USB storage and USB serial** (`diskusb` and `usbserial`, section 8) run only on xHCI machines (virt, Pi 4); a Pi 3 enumerates such a device and leaves it alone. **The Pi 4** (`os/bcm2711`) is built and booted under QEMU's `raspi4b` in CI; see [os/bcm2711/README.md](../os/bcm2711/README.md).
 - Not started: an audio or HDMI acceptance battery.
 - On virt only: KVM untried. USB there is xHCI on the PCI bus and optional (`-device qemu-xhci`).

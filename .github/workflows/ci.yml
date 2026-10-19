@@ -210,6 +210,14 @@ jobs:
         chmod +x tests/host/charon_forms_test.sh
         ROOT=. bash tests/host/charon_forms_test.sh
 
+    - name: Check a form's controls are the ones HTML puts in it
+      run: |
+        # A template's input was listed and sent, a control's form
+        # attribute was ignored, and entries went in the order nodes were
+        # made; both through Charon's files and from the page's scripts.
+        chmod +x tests/host/charon_formowner_test.sh
+        ROOT=. bash tests/host/charon_formowner_test.sh
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;

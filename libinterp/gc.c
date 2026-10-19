@@ -87,7 +87,7 @@ noptrs(Type *t, void *vw)
 	USED(vw);
 }
 
-static int markdepth;
+#define	markdepth	(VM->markdepth)	/* the running VM's */
 
 /* code simpler with a depth search compared to a width search*/
 void

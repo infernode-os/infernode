@@ -246,6 +246,31 @@ brpatch(Inst *ip, Module *m)
 	return 1;
 }
 
+/*
+ * compile() under a lock: the code generator's state is global and
+ * another VM may be loading at the same time (#944). libqlock lets the
+ * interpreter go while it waits, so the rest of this VM runs on. The
+ * first load, init's at boot, comes before there is a Prog to own the
+ * lock or a second VM to race, and makes the lock.
+ */
+static void*	complock;
+
+static int
+lockedcompile(Module *m, int isize)
+{
+	int ok;
+
+	if(complock == nil || currun() == nil){
+		if(complock == nil)
+			complock = libqlalloc();
+		return compile(m, isize, nil);
+	}
+	libqlock(complock);
+	ok = compile(m, isize, nil);
+	libqunlock(complock);
+	return ok;
+}
+
 Module*
 parsemod(char *path, uchar *code, ulong length, Dir *dir)
 {
@@ -760,13 +785,17 @@ parsemod(char *path, uchar *code, ulong length, Dir *dir)
 		m->entryt = m->type[entryt];
 	}
 
+	/*
+	 * The code generator keeps its state in globals (comp-*.c), and two
+	 * VMs may load a module at once (#944): one compile at a time.
+	 */
 	if(cflag) {
 		if((m->rt&DONTCOMPILE) == 0 && !dontcompile)
-			compile(m, isize, nil);
+			lockedcompile(m, isize);
 	}
 	else
 	if(m->rt & MUSTCOMPILE && !dontcompile) {
-		if(compile(m, isize, nil) == 0) {
+		if(lockedcompile(m, isize) == 0) {
 			kwerrstr("compiler required");
 			goto bad;
 		}

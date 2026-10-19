@@ -56,6 +56,12 @@ uvlong	gcidlepass;
 uvlong	gcpartial;
 int keepbroken = 1;
 static Prog*	proghash[64];
+/*
+ * pids are unique across every VM, and the pid hash is global: kill,
+ * /prog and wait look a Prog up by pid from anywhere. So they have a
+ * lock of their own; each VM's lists are under its interpreter (#944).
+ */
+static Lock	pidlk;
 
 /*
  * Every Prog pointer stored into the run queue must point at RAM, and
@@ -99,7 +105,12 @@ tready(void *a)
 Prog*
 progpid(int pid)
 {
-	return *pidlook(pid);
+	Prog *p;
+
+	lock(&pidlk);
+	p = *pidlook(pid);
+	unlock(&pidlk);
+	return p;
 }
 
 Prog*
@@ -264,9 +275,11 @@ newprog(Prog *p, Modlink *m)
 			error(exNomem);
 	}
 
+	lock(&pidlk);
 	n->pid = ++pidnum;
 	if(n->pid <= 0)
 		panic("no pids");
+	unlock(&pidlk);
 	n->group = nil;
 
 	if(isched.tail != nil) {
@@ -279,11 +292,13 @@ newprog(Prog *p, Modlink *m)
 	}
 	isched.tail = n;
 
+	lock(&pidlk);
 	ph = pidlook(n->pid);
 	if(*ph != nil)
 		panic("dup pid");
 	n->pidlink = nil;
 	*ph = n;
+	unlock(&pidlk);
 
 	n->osenv = (Osenv*)((uchar*)n + sizeof(Prog));
 	n->xec = xec;
@@ -373,10 +388,12 @@ delprog(Prog *p, char *msg)
 	else
 		isched.tail = p->prev;
 
+	lock(&pidlk);
 	ph = pidlook(p->pid);
 	if(*ph == nil)
 		panic("lost pid");
 	*ph = p->pidlink;
+	unlock(&pidlk);
 
 	if(p == isched.runhd) {
 		isched.runhd = p->link;
@@ -984,6 +1001,14 @@ acquire(void)
 		sched();
 	}
 
+#ifdef VMREGPERMACH
+	/*
+	 * This core now runs this process's VM: R must be its registers
+	 * before irestore loads them (interp.h). sched() does the same on a
+	 * switch; this is the path that takes a free interpreter without one.
+	 */
+	m->vmreg = up->vm;
+#endif
 	if(up->type == Interp) {
 		p = up->iprog;
 		up->iprog = nil;
@@ -1437,6 +1462,7 @@ disinit(void *a)
 
 	opinit();
 	modinit();
+	typesperm = 0;		/* builtin types are shared and permanent; a module's are its VM's (interp.h) */
 	excinit();
 
 	root = load(initmod);

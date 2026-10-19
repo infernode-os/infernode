@@ -243,6 +243,17 @@ struct Alt
 	Altc	ac[1];
 };
 
+/*
+ * A Type made at boot -- the static ones in heap.c and those the builtin
+ * modules make in their init -- is shared by every VM, and its ref is
+ * bumped by all of them without a lock. It starts at Permref, which no
+ * number of lost updates brings to zero, so it is never freed and the
+ * races cost nothing (#944). Types a module makes when it is loaded
+ * belong to one VM and count as ever.
+ */
+enum { Permref = 1<<30 };
+extern	int	typesperm;	/* dtype() makes permanent types while set: boot */
+
 struct Type
 {
 	int	ref;
@@ -312,6 +323,9 @@ struct Vm
 	Module*	vmodules;	/* the modules loaded into it */
 	Modlink*	vretpending;	/* the module OP(ret) is holding for release: xec.c */
 	void*	vsched;		/* its scheduler: the interpreter token, run queue and Progs (os/port/dis.c) */
+	Heap**	dq;		/* destroy()'s queue of what is too deep to destroy now: heap.c */
+	int	ndq, dqlen, ddepth;
+	int	markdepth;	/* markheap()'s recursion: gc.c */
 };
 extern	Vm	vm0;
 #define	mutator		(VM->vmutator)

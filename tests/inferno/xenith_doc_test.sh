@@ -11,7 +11,8 @@
 #	Markdown opens as text and Render shows it set (doc/ctl, doc/text),
 #	Render again goes back to the text;
 #	a source document (Markdown, HTML) shown beside its text (Zerox)
-#	is not set again at each edit, but on Put and doc/ctl refresh;
+#	is set again a moment after an edit (live), and with nolive only
+#	on Put and doc/ctl refresh;
 #	a large one (saved in the background) Put beside its document is
 #	written whole;
 #	an image looked at is a document of one sheet its size;
@@ -340,7 +341,7 @@ c=`{cat $M/doc/ctl}
 check 'Render again goes back to the text' $#c 0
 
 # ---- a source document shown beside its text (Zerox): set again ----
-# ---- on Put and on doc/ctl refresh, not at each edit ----
+# ---- live, as its text is edited; or (nolive) on Put and refresh ----
 
 # Execute a word in a window's tag, as B2 does (lower-case events are
 # the tag's): tagexec id word
@@ -401,10 +402,19 @@ for kind in md html {
 		echo render > $XENITH/$bid/doc/ctl
 		loaded $bid
 		hasdoctext $bid First
+		# live: an edit in its twin sets it again once the editing pauses
+		check $kind^': live' `{attr $bid live} 1
+		echo ' Live' >> $XENITH/$aid/body
+		hasdoctext $bid Live
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Live*} {ok $kind^': an edit in its twin sets it again, live, from the unsaved text'} {bad $kind^': live:' $"t}
+		# not live: only Put and doc/ctl refresh set it again
+		echo nolive > $XENITH/$bid/doc/ctl
+		check $kind^': nolive' `{attr $bid live} 0
 		echo ' Unsaved' >> $XENITH/$aid/body
 		sleep 3
 		t=`{cat $XENITH/$bid/doc/text}
-		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again'} {ok $kind^': an edit in its twin does not set the document again'}
+		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again (nolive)'} {ok $kind^': not live, an edit in its twin does not set the document again'}
 		echo refresh > $XENITH/$bid/doc/ctl
 		hasdoctext $bid Unsaved
 		t=`{cat $XENITH/$bid/doc/text}

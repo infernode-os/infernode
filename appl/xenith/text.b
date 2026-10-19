@@ -526,6 +526,8 @@ Text.insert(t : self ref Text, q0 : int, r : string, n : int, tofile : int, echo
 		error("text.insert");
 	if(n == 0)
 		return;
+	if(t.what == Body && t.w != nil)
+		docview->edited(t.w);	# a document of it set again, live
 	if(tofile){
 		t.file.insert(q0, r, n);
 		if(t.what == Body){
@@ -618,6 +620,8 @@ Text.delete(t : self ref Text, q0 : int, q1 : int, tofile : int)
 	n = q1-q0;
 	if(n == 0)
 		return;
+	if(t.what == Body && t.w != nil)
+		docview->edited(t.w);
 	if(tofile){
 		t.file.delete(q0, q1);
 		if(t.what == Body){

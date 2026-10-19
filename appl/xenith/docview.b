@@ -32,6 +32,7 @@ sheetview: Sheetview;
 
 sprint: import sys;
 FALSE, TRUE: import Dat;
+Lock: import dat;
 mouse: import dat;
 Point, Rect, Image, Display, Font: import drawm;
 warning, stralloc, strfree: import utils;
@@ -46,6 +47,9 @@ View, Ev, Note, Fitnone, Fitwidth, Fitpage, GAP: import sheetview;
 
 evc: chan of ref Ev;
 views: list of (ref View, int);	# each view's window
+livec: chan of int;		# an edit: the live task wakes
+livewins: list of ref Window;	# windows whose documents wait to be set again
+LIVEMS: con 600;		# the pause in editing after which they are
 fonts: array of ref Font;
 fontsfor: array of string;
 
@@ -71,6 +75,8 @@ init(mods: ref Dat->Mods)
 	if(sheetview != nil)
 		sheetview->init(display);
 	evc = chan of ref Ev;
+	livec = chan[1] of int;
+	spawn livetask();
 }
 
 events(): chan of ref Ev
@@ -174,7 +180,7 @@ newdoc(w: ref Window, k: ref Kind, name: string): ref Doc
 {
 	v := sheetview->new(k, name, evc);
 	setview(w, v);
-	d := ref Doc(v, 1, nil, -1, nil);
+	d := ref Doc(v, 1, nil, -1, nil, 1, 0);
 	w.doc = d;
 	views = (v, w.id) :: views;
 	return d;
@@ -488,9 +494,9 @@ showframe(w: ref Window, org: int)
 }
 
 # A source document's text changed while shown: set again, in place
-# The document set again from the window's text, typing and all: not
-# at each edit (a page is laid out again whole), but when the file is
-# Put or doc/ctl says refresh.  A new view is opened beside the old,
+# The document set again from the window's text, typing and all: when
+# the editing pauses (live, edited), when the file is Put, or when
+# doc/ctl says refresh.  A new view is opened beside the old,
 # which stays on the screen until the new one is open (nextevent).
 refresh(w: ref Window): string
 {
@@ -511,9 +517,92 @@ refresh(w: ref Window): string
 	if(nv.name == f.name)
 		data = array of byte bodytext(w);
 	nv.open(data, nv.name);
+	# the reader's place: where, how large, fitted and turned as before
 	nv.org = d.v.org;
 	nv.scale = d.v.scale;
+	nv.fit = d.v.fit;
+	nv.rot = d.v.rot;
+	d.liveat = 0;
 	return nil;
+}
+
+# ---- live: set again as the text is edited ----
+
+# a window's text edited: the windows showing its file as a source
+# document (its Zerox twins, or itself) marked, and the live task woken
+edited(w: ref Window)
+{
+	if(w == nil || w.body.file == nil)
+		return;
+	f := w.body.file;
+	marked := 0;
+	for(i := 0; i < f.ntext; i++){
+		u := f.text[i].w;
+		if(u == nil || u.doc == nil)
+			continue;
+		d := u.doc;
+		if(!d.live || !d.shown || d.v.web || d.v.kind == nil || d.v.kind.class != Docreg->Source)
+			continue;
+		if(d.liveat == 0){
+			for(l := livewins; l != nil; l = tl l)
+				if(hd l == u)
+					break;
+			if(l == nil)
+				livewins = u :: livewins;
+		}
+		d.liveat = sys->millisec();
+		if(d.liveat == 0)
+			d.liveat = 1;
+		marked = 1;
+	}
+	if(marked)
+		alt{
+		livec <-= 1 =>
+			;
+		* =>
+			;	# already woken
+		}
+}
+
+# wait for an edit; then, each time the editing has paused LIVEMS,
+# set again the documents edited, until none waits
+livetask()
+{
+	for(;;){
+		<-livec;
+		n := 1;
+		while(n > 0){
+			sys->sleep(LIVEMS / 3);
+			row := dat->row;
+			row.qlock.lock();
+			n = livedue();
+			row.qlock.unlock();
+		}
+	}
+}
+
+# the documents whose editing has paused set again; how many still wait
+livedue(): int
+{
+	now := sys->millisec();
+	keep: list of ref Window;
+	for(l := livewins; l != nil; l = tl l){
+		w := hd l;
+		d := w.doc;
+		if(d == nil || d.liveat == 0 || !d.live || !d.shown)
+			continue;
+		if(now - d.liveat < LIVEMS){
+			keep = w :: keep;
+			continue;
+		}
+		if((e := refresh(w)) != nil)
+			warning(nil, sprint("%s: %s\n", w.body.file.name, e));
+	}
+	livewins = keep;
+	n := 0;
+	for(l = keep; l != nil; l = tl l)
+		n++;
+	return n;
 }
 
 # ---- drawing ----
@@ -821,6 +910,8 @@ ctlread(w: ref Window): string
 	s += sprint("view %d %d %d %d\n", v.org.x, v.org.y, fr.dx(), fr.dy());
 	s += sprint("screen %d %d %d %d\n", fr.min.x, fr.min.y, fr.max.x, fr.max.y);
 	s += sprint("column %d %d\n", v.colw, v.colh);
+	if(v.kind != nil && v.kind.class == Docreg->Source)
+		s += sprint("live %d\n", d.live);
 	return s;
 }
 
@@ -868,6 +959,11 @@ ctlwrite(w: ref Window, s: string): string
 			hide(w);
 	"refresh" =>
 		return refresh(w);
+	"live" =>
+		d.live = 1;
+	"nolive" =>
+		d.live = 0;
+		d.liveat = 0;
 	* =>
 		(ok, err) := command(w, cmd, arg);
 		if(!ok)

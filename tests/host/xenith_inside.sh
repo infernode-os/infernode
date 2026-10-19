@@ -12,6 +12,8 @@
 # Set XENITH_INSIDE_NET=1 to give Xenith the network (#I at /net and
 # ndb/cs, as the profile does), for a script that reaches a server.
 #
+# Set XENITH_INSIDE_TIMEOUT to the seconds the script may take (60).
+#
 # Set XENITH_INSIDE_PLUMB to a rules file (a path inside the root) to
 # start a plumber with those rules before Xenith, as a session has one.
 # The rules must send something to the port edit, which Xenith reads.
@@ -71,7 +73,7 @@ xenith_inside() {
     if [ -n "$XENITH_INSIDE_PLUMB" ]; then
         _net="$_net bind -bc '#splumber' /chan; plumber $XENITH_INSIDE_PLUMB & sleep 1;"
     fi
-    _out=$(SDL_VIDEODRIVER=dummy with_timeout 60 "$EMU" -c0 -g800x600 -r"$ROOT" /dis/sh.dis -c "
+    _out=$(SDL_VIDEODRIVER=dummy with_timeout "${XENITH_INSIDE_TIMEOUT:-60}" "$EMU" -c0 -g800x600 -r"$ROOT" /dis/sh.dis -c "
 load std
 $_net
 xenith -l /$_d/dump" 2>&1)

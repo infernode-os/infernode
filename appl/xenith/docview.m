@@ -19,6 +19,8 @@ Docview: module {
 		offb:	ref Draw->Image;	# where the body's text draws meanwhile, unseen
 		line:	int;		# a source document's line to open at, or -1
 		next:	ref Sheetview->View;	# being set again (refresh), shown when open
+		live:	int;		# a source document set again as its text is edited
+		liveat:	int;		# when it was last edited (sys->millisec), 0 if not since set
 	};
 
 	init:	fn(mods: ref Dat->Mods);
@@ -53,6 +55,11 @@ Docview: module {
 	# A source document shown set again from the window's text
 	# (Put, doc/ctl refresh); the drawing stays until the new one is open
 	refresh:	fn(w: ref Windowm->Window): string;
+
+	# w's text was edited: each window showing its file as a source
+	# document is set again once the editing pauses (live; doc/ctl
+	# live, nolive). Called with the row held, at each edit: cheap.
+	edited:	fn(w: ref Windowm->Window);
 
 	# The mouse on the document: button 1 drags it (grab and pan),
 	# or clicked selects the word there; button 2 executes the word;

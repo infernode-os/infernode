@@ -10,7 +10,7 @@
 #
 #	start()			run the document's scripts, then its load events
 #	timer(id)		a timer set with N.timer has fired
-#	fetched(id, status, statustext, url, header, body, err)
+#	fetched(id, status, statustext, url, header, body, err, raw)
 #	event(kind, node, x, y, key)	from the host; true if the default was prevented
 #	resolve(base, ref)	a URL resolved, for module specifiers
 #
@@ -178,10 +178,17 @@ page1(h: ref Js->Host): string
 		hook("timer", array[] of {num(real id)});
 	f := <-fetchc =>
 		body := undef;
-		if(f.body != nil)
-			body = strv(jslex->utf16(f.body));
+		raw := undef;
+		if(f.body != nil) {
+			t := jslex->utf16(f.body);
+			body = strv(t);
+			# bytes that are not UTF-8 (an image, a binary format) go
+			# as well, a byte a character, for arrayBuffer() and blob()
+			if(!sameb(utf8bytes(t), f.body))
+				raw = strv(bytestr(f.body));
+		}
 		hook("fetched", array[] of {num(real f.id), num(real f.status), strv(f.statustext),
-			strv(tojs(f.url)), strv(f.header), body, strnil(f.err)});
+			strv(tojs(f.url)), strv(f.header), body, strnil(f.err), raw});
 	}
 }
 
@@ -443,6 +450,33 @@ fromjs(s: string): string
 	return s;
 }
 
+# bytes as a string of one character each (0 to 255), and back
+bytestr(b: array of byte): string
+{
+	s := "";
+	for(i := 0; i < len b; i++)
+		s[i] = int b[i];
+	return s;
+}
+
+strbytes(s: string): array of byte
+{
+	b := array[len s] of byte;
+	for(i := 0; i < len s; i++)
+		b[i] = byte s[i];
+	return b;
+}
+
+sameb(a, b: array of byte): int
+{
+	if(len a != len b)
+		return 0;
+	for(i := 0; i < len a; i++)
+		if(a[i] != b[i])
+			return 0;
+	return 1;
+}
+
 # UTF-16 as UTF-8 (a lone surrogate as U+FFFD)
 utf8bytes(s: string): array of byte
 {
@@ -530,7 +564,7 @@ domnatives(): int
 	method(o, "viewport", 0, dn_viewport);
 	method(o, "now", 0, dn_now);
 	method(o, "timer", 2, dn_timer);
-	method(o, "fetch", 5, dn_fetch);
+	method(o, "fetch", 6, dn_fetch);
 	method(o, "fetchsync", 1, dn_fetchsync);
 	method(o, "navigate", 2, dn_navigate);
 	method(o, "scroll", 2, dn_scroll);
@@ -1532,7 +1566,7 @@ dn_random(nil: V, a, n: int, nil: V, nil: int): V
 
 # ---- fetching ----
 
-# fetch(id, method, url, header lines, body): the result comes to the
+# fetch(id, method, url, header lines, body, binary): the result comes to the
 # fetched hook
 dn_fetch(nil: V, a, n: int, nil: V, nil: int): V
 {
@@ -1541,8 +1575,12 @@ dn_fetch(nil: V, a, n: int, nil: V, nil: int): V
 	url := jsarg(a, n, 2);
 	hdr := jsarg(a, n, 3);
 	body: array of byte;
-	if(arg(a, n, 4).t == Tstr)
-		body = utf8bytes(jsarg(a, n, 4));
+	if(arg(a, n, 4).t == Tstr) {
+		if(truthy(arg(a, n, 5)))
+			body = strbytes(jsarg(a, n, 4));	# bytes, a character each
+		else
+			body = utf8bytes(jsarg(a, n, 4));
+	}
 	spawn fetcher(fetchc, id, method, url, hdr, body);
 	return undef;
 }

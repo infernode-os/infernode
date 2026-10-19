@@ -441,9 +441,6 @@ closedbgctl(Progctl *ctl, Prog *p)
 static void
 progclose(Chan *c)
 {
-	int i, pid;
-	Prog *f;
-	Osenv *o;
 	Progctl *ctl;
 
 	switch(QID(c->qid)) {
@@ -460,19 +457,7 @@ progclose(Chan *c)
 		prelease();
 		break;
 	case Qwait:
-		/* each Prog under its own VM: they may be in any */
-		for(i = 0; (pid = progpidn(i)) >= 0; i++){
-			pacquire(pid);
-			f = progpid(pid);
-			if(f != nil){
-				o = f->osenv;
-				if(o->waitq == c->aux)
-					o->waitq = nil;
-				if(o->childq == c->aux)
-					o->childq = nil;
-			}
-			prelease();
-		}
+		vmclearwaitq(c->aux);	/* every VM's Progs, each VM in one go (dis.c) */
 		qfree(c->aux);
 	}
 }

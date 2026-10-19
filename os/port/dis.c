@@ -195,6 +195,42 @@ pidvm(int pid)
 	return v;
 }
 
+/*
+ * Forget a wait queue that is being freed: no Prog in any VM may
+ * still point at it as its waitq or childq. Each VM's Progs are walked
+ * in one go under that VM's interpreter, never one Prog at a time: a
+ * Prog that runs between two steps of such a walk can spawn a child
+ * that inherits the queue, behind the walk, and the child's exit then
+ * writes into a freed Queue -- found as a corrupt main pool by the
+ * bcm2837 scheduler soak (#944). A child is always in its parent's VM,
+ * so each walk is complete.
+ */
+void
+vmclearwaitq(void *q)
+{
+	int i;
+	Vm *home, *v;
+	Prog *p;
+	Osenv *o;
+
+	home = up->vm;
+	for(i = 0; i < MAXVM; i++){
+		if((v = vms[i]) == nil)
+			continue;
+		up->vm = v;
+		acquire();
+		for(p = VMSCHED(v)->head; p != nil; p = p->next){
+			o = p->osenv;
+			if(o->waitq == q)
+				o->waitq = nil;
+			if(o->childq == q)
+				o->childq = nil;
+		}
+		release();
+	}
+	up->vm = home;
+}
+
 /* how many Progs one VM has */
 int
 vmprogs(Vm *v)

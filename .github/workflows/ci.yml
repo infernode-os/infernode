@@ -188,6 +188,13 @@ jobs:
         chmod +x tests/host/idle_cpu_test.sh
         ROOT=. bash tests/host/idle_cpu_test.sh
 
+    - name: Check a form a page's script submits is posted
+      run: |
+        # form.submit() of a POST form was only logged as unsupported, so
+        # a sign-in posting the password from script went nowhere.
+        chmod +x tests/host/js_formpost_test.sh
+        ROOT=. bash tests/host/js_formpost_test.sh
+
     - name: Check Charon's start page ships
       run: |
         # The start page must be a file every release package carries

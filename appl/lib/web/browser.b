@@ -1951,6 +1951,9 @@ Req: adt {
 	Navigate =>
 		url:	string;
 		replace:	int;
+		method:	string;
+		ctype:	string;
+		body:	array of byte;
 	Scroll =>
 		y:	int;
 	Quit =>
@@ -2373,7 +2376,10 @@ realmhelper(r: ref Realm)
 			hist := Hnew;
 			if(rq.replace)
 				hist = Hnone;
-			navigate(s, rq.url, "GET", nil, nil, hist);
+			if(rq.method == "POST")
+				navigate(s, rq.url, "POST", rq.ctype, rq.body, hist);
+			else
+				navigate(s, rq.url, "GET", nil, nil, hist);
 		Scroll =>
 			lock(s);
 			s.scroll = rq.y;
@@ -2752,11 +2758,11 @@ hviewport(id: int): (int, int, int, int)
 	return (cssn(r.s.width), cssn(r.s.height), 0, cssn(r.s.scroll));
 }
 
-hnavigate(id: int, url: string, replace: int)
+hnavigate(id: int, url: string, replace: int, method, ctype: string, body: array of byte)
 {
 	r := realmbyid(id);
 	if(r != nil)
-		r.reqs <-= ref Req.Navigate(url, replace);
+		r.reqs <-= ref Req.Navigate(url, replace, method, ctype, body);
 }
 
 hscroll(id, nil, y: int)

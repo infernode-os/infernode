@@ -97,7 +97,7 @@ Js: module
 		parse:	ref fn(id: int, markup: string, whole: int): ref Dom->Doc;	# whole: a document, not a body's content
 		viewport:	ref fn(id: int): (int, int, int, int);	# width, height, scroll x, scroll y
 		# called unlocked
-		navigate:	ref fn(id: int, url: string, replace: int);
+		navigate:	ref fn(id: int, url: string, replace: int, method, ctype: string, body: array of byte);	# method "GET" or "POST" (a form's, with its body)
 		scroll:	ref fn(id, x, y: int);
 		console:	ref fn(id: int, s: string);	# console output, a line at a time
 	};

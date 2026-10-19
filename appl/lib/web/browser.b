@@ -934,28 +934,59 @@ iscontrol(d: ref Doc, n: int): int
 	return 0;
 }
 
-# form numbers: forms[n] is the number of the form node n is in, 0 if none
+# form numbers: forms[n] is the number of the form node n is in, 0 if
+# none, -1 if n is not in the document.  The tree is walked from the
+# document (node 1), in its order, then each shadow tree whose host is
+# in it: a node's index is when it was made, and a page's scripts make
+# nodes in any order, move them, and keep some out of the document (a
+# framework's copies of a form it is not showing), which are not the
+# page's controls.
 formnumbers(d: ref Doc): (array of int, array of int)
 {
-	forms := array[d.n] of {* => 0};
+	forms := array[d.n] of {* => -1};
 	nodes: list of int;	# the form elements, reversed
 	nf := 0;
-	for(n := 1; n < d.n; n++) {
-		nd := d.nodes[n];
-		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Tform) {
-			nf++;
-			nodes = n :: nodes;
+	(nf, nodes) = formwalk(d, 1, forms, nf, nodes);
+	for(more := 1; more; ) {
+		more = 0;
+		for(l := d.shadows; l != nil; l = tl l) {
+			(host, root) := hd l;
+			if(host > 0 && host < d.n && forms[host] >= 0 && root > 0 && root < d.n && forms[root] < 0) {
+				(nf, nodes) = formwalk(d, root, forms, nf, nodes);
+				more = 1;
+			}
 		}
-		p := nd.parent;
-		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Tform)
-			forms[n] = nf;
-		else if(p > 0 && p < d.n)
-			forms[n] = forms[p];
 	}
 	fnode := array[nf+1] of {* => 0};
 	for(i := nf; nodes != nil; nodes = tl nodes)
 		fnode[i--] = hd nodes;
 	return (forms, fnode);
+}
+
+# number the forms under root, and the nodes in them
+formwalk(d: ref Doc, root: int, forms: array of int, nf: int, nodes: list of int): (int, list of int)
+{
+	forms[root] = 0;
+	n := d.nodes[root].first;
+	while(n > 0 && n < d.n) {
+		nd := d.nodes[n];
+		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Tform) {
+			nf++;
+			nodes = n :: nodes;
+			forms[n] = nf;
+		} else
+			forms[n] = forms[nd.parent];
+		if(nd.first != 0) {
+			n = nd.first;
+			continue;
+		}
+		while(n != root && d.nodes[n].next == 0)
+			n = d.nodes[n].parent;
+		if(n == root)
+			break;
+		n = d.nodes[n].next;
+	}
+	return (nf, nodes);
 }
 
 kindof(d: ref Doc, n: int): string
@@ -1049,7 +1080,7 @@ Session.fields(s: self ref Session): array of ref Field
 	(forms, nil) := formnumbers(d);
 	r: list of ref Field;
 	for(n := 1; n < d.n; n++)
-		if(iscontrol(d, n))
+		if(forms[n] >= 0 && iscontrol(d, n))
 			r = field(d, forms[n], n) :: r;
 	a := array[len r] of ref Field;
 	for(i := len a - 1; i >= 0; i--) {
@@ -1603,7 +1634,7 @@ Session.click(s: self ref Session, n: int): string
 			(forms, nil) := formnumbers(d);
 			case kindof(d, m) {
 			"submit" or "image" =>
-				if(forms[m] == 0)
+				if(forms[m] <= 0)
 					return nil;
 				return s.submit(forms[m], m);
 			"checkbox" =>

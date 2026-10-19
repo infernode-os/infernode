@@ -45,7 +45,7 @@ struct Ether
 	long	(*ctl)(Ether*, void*, long);
 	void	(*shutdown)(Ether*);
 
-	/* the USB-endpoint data path: instance 0 only */
+	/* the USB-endpoint data path: instance 0, or Firstusbx and up */
 	QLock	bindlk;		/* one bind, ever */
 	int	bound;
 	int	family;
@@ -57,6 +57,14 @@ struct Ether
 	uchar	*rxbuf;
 	long	nrxbuf;
 	long	nacc;		/* bytes carried over between reads */
+	long	maxpkt;		/* bulk packet size, for the zero-length-packet rule */
+	long	ndpdiv;		/* NCM: where a datagram may start (wNdpOutDivisor...) */
+	long	ndprem;		/* ...and wNdpOutPayloadRemainder */
+	long	ndpalign;	/* NCM: wNdpOutAlignment */
+	int	maxdgrams;	/* NCM: wNtbOutMaxDatagrams, 0 for no limit */
+	ushort	ntbseq;		/* NCM: the NTH's sequence number */
+	long	ncmidx[16][2];	/* NCM: the datagrams of the block being packed */
+	uvlong	rdlast;		/* when the last read ended, for the gap figures */
 
 	/* rx timing: where a receive cycle's time actually goes */
 	ulong	nrd;		/* reads that returned data */

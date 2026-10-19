@@ -132,6 +132,17 @@ init()
 		sys->print("init: cannot bind #I on /net: %r\n");
 
 	#
+	# The spare Ethernet instances, #l2 and #l3, where a USB adapter
+	# goes when ether0 is a kernel driver's (a Pi 4's GENET). Bound
+	# here, before anything forks the namespace, so the console shell
+	# sees /net/ether2 too; etherusb's own bind happens after the shell
+	# has its copy. Empty until an adapter binds one. A kernel without
+	# them refuses the attach, and nothing is lost.
+	#
+	sys->bind("#l2", "/net", Sys->MAFTER);
+	sys->bind("#l3", "/net", Sys->MAFTER);
+
+	#
 	# And the process device on /prog. sh reaches it as #p directly
 	# for its wait file, so nothing has needed the conventional path
 	# until now -- but a system you cannot list the processes of is
@@ -1272,7 +1283,18 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
 	if(serial && havexhci)
 		startdriver("/dis/usbserial.dis", name, -1, 0, 0);
-	else if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
+	#
+	# Ethernet by the device's class (2), or by an Ethernet interface
+	# in a device that declares itself a composite (class 0 or 239,
+	# "see the interfaces"): a phone or a Linux gadget offering
+	# Ethernet beside a serial port went undriven while only the
+	# device class was asked. Not when the device is a disk as well
+	# (the Jetson's stock gadget is RNDIS, NCM, a serial port and a
+	# disk): diskusb has it, and a second driver would race it for
+	# the control endpoint, which is exclusive -- whichever lost
+	# would get nothing. Sharing one is not done yet.
+	#
+	else if(class == Clcomm || isether && !isdisk || (class == Clvendor && vendor == Vmicrochip))
 		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
 	if(serial && !havexhci)
 		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);

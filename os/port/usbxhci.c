@@ -1977,8 +1977,17 @@ epwrite(Ep *ep, void *va, long n)
 		if((err = unstall(ep, ring)) != nil)
 			error(err);
 
+		/*
+		 * The setup packet as the TRB's 64-bit immediate. Its low word
+		 * is built as an int, and an int with wValue's top bit set is
+		 * negative: OR'd into the u64int it sign-extended and set every
+		 * bit of wIndex and wLength, so any request with a wValue of
+		 * 0x8000 or more reached the device as a 65535-byte one with no
+		 * data stage, and was stalled. Nothing sent one until an FTDI
+		 * adapter's baud divisor did (19200 is 0x809C).
+		 */
 		queuetd(ring, TR_SETUPSTAGE | (len > 0 ? 2+dir : 0)<<16 | TR_IDT | TR_IOC, 8,
-			p[0] | p[1]<<8 | GET2(&p[2])<<16 | (u64int)(GET2(&p[4]) | len<<16)<<32, &w[0]);
+			(u64int)(u32int)(p[0] | p[1]<<8 | GET2(&p[2])<<16) | (u64int)(GET2(&p[4]) | len<<16)<<32, &w[0]);
 		if(len > 0){
 			if(dir != 0)
 				dmainval(io->buf, len);

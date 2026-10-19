@@ -252,6 +252,66 @@ tounicodepdf(): array of byte
 	return array of byte out;
 }
 
+# A page whose box is not at 0 0 (as Ghostscript and pdfTeX crop
+# figures): [100 200 200 300], red, a black square in its top left
+# corner, a word, a link; each where it is in the box, not 100 200 off
+boxpdf(): array of byte
+{
+	content := "1 0 0 rg 100 200 100 100 re f 0 0 0 rg 100 280 20 20 re f BT /F1 12 Tf 130 250 Td (Hi) Tj ET\n";
+	objs := array[] of {
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [100 200 200 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>",
+		sys->sprint("<< /Length %d >>\nstream\n%sendstream", len content, content),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+		"<< /Type /Annot /Subtype /Link /Rect [150 220 190 240] /A << /S /URI /URI (http://example.com/) >> >>",
+	};
+	out := "%PDF-1.4\n";
+	offs := array[len objs] of int;
+	for(i := 0; i < len objs; i++){
+		offs[i] = len out;
+		out += sys->sprint("%d 0 obj\n%s\nendobj\n", i+1, objs[i]);
+	}
+	xref := len out;
+	out += sys->sprint("xref\n0 %d\n0000000000 65535 f \n", len objs + 1);
+	for(i = 0; i < len objs; i++)
+		out += sys->sprint("%.10d 00000 n \n", offs[i]);
+	out += sys->sprint("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len objs + 1, xref);
+	return array of byte out;
+}
+
+testPdfBox(t: ref T)
+{
+	needdisplay(t);
+	(e, h) := openfile(t, "pdf", "box.pdf", boxpdf(), nil);
+	sz := e->sheetsize(h, 0);
+	t.assert(sz.x == 100 && sz.y == 100, sys->sprint("the page its box's size (got %d %d)", sz.x, sz.y));
+	im := painted(t, e, h, 0, 100, "a box at 100 200");
+	px := array[3] of byte;
+	at := array[] of {(5, 5, 0), (50, 50, 255), (95, 95, 255), (95, 5, 255)};
+	for(i := 0; i < len at; i++){
+		(x, y, red) := at[i];
+		im.readpixels(Rect((x, y), (x + 1, y + 1)), px);
+		t.assert(int px[0] == 0 && int px[1] == 0 && int px[2] == red,
+			sys->sprint("at %d %d: %s (got %d %d %d)", x, y, (array[] of {"black", "red"})[red / 255], int px[2], int px[1], int px[0]));
+	}
+	l := e->links(h);
+	t.asserteq(len l, 1, "its link");
+	if(len l == 1){
+		r := l[0].r;
+		t.assert(r.min.x == 50 && r.min.y == 60 && r.max.x == 90 && r.max.y == 80,
+			sys->sprint("the link where it is in the box (got %d %d %d %d)", r.min.x, r.min.y, r.max.x, r.max.y));
+	}
+	runs := e->runs(h, 0);
+	t.asserteq(len runs, 1, "its word");
+	if(len runs == 1){
+		r := runs[0].r;
+		t.assert(r.min.x >= 28 && r.min.x <= 32 && r.max.y >= 50 && r.max.y <= 56,
+			sys->sprint("the word where it is in the box (got %d %d %d %d)", r.min.x, r.min.y, r.max.x, r.max.y));
+	}
+	e->close(h);
+}
+
 testPdfToUnicode(t: ref T)
 {
 	needdisplay(t);
@@ -438,6 +498,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PdfToUnicode", testPdfToUnicode);
 	run("PdfLinks", testPdfLinks);
 	run("PdfApart", testPdfApart);
+	run("PdfBox", testPdfBox);
 	run("Image", testImage);
 	run("Markdown", testMarkdown);
 	run("MarkdownLinks", testMarkdownLinks);

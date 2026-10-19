@@ -24,8 +24,8 @@ implement Diskusb;
 # transport.
 #
 # NOT DONE: more than one logical unit (only LUN 0 is served; a card
-# reader with several slots shows its first), READ(16) beyond 2TB (the
-# capacity is read, the disk is refused), removable media that comes
+# reader with several slots shows its first), UAS (a disk that offers
+# only the UAS transport is not driven), removable media that comes
 # and goes while plugged in, and any queueing: one command at a time,
 # which is what a FAT filesystem asks for anyway.
 #
@@ -82,6 +82,8 @@ Creadcap10:	con 16r25;
 Cread10:	con 16r28;
 Cwrite10:	con 16r2A;
 Creadcap16:	con 16r9E;	# service action in
+Cread16:	con 16r88;	# READ(16) and WRITE(16): a 64-bit block address, for a disk past 2TB
+Cwrite16:	con 16r8A;
 
 Maxio:		con 64*1024;	# one command moves at most this much
 Maxretry:	con 3;
@@ -91,6 +93,7 @@ Pollms:		con 2000;	# how often an idle disk is asked if it is still there
 dev: string;			# devusb's name for the device: epN.0
 ctlfd: ref Sys->FD;
 ep0: ref Sys->FD;
+msiface := 0;	# the mass-storage interface's number, for its class requests
 bulkin: ref Sys->FD;
 bulkout: ref Sys->FD;
 inep, outep, maxpkt: int;
@@ -117,7 +120,7 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	(inep, outep, maxpkt) = bulkeps();
-	if(inep < 0 || outep < 0 || inep == outep){
+	if(inep < 0 || outep < 0){
 		sys->print("diskusb: %s: no pair of bulk endpoints\n", dev);
 		return;
 	}
@@ -129,7 +132,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# answer 0; either way LUN 0 is what is served.
 	#
 	lun := array[1] of byte;
-	if(ctlin(Rd2h|Rclass|Riface, Rgetmaxlun, 0, 0, lun) == 1 && int lun[0] > 0)
+	if(ctlin(Rd2h|Rclass|Riface, Rgetmaxlun, 0, msiface, lun) == 1 && int lun[0] > 0)
 		sys->print("diskusb: %s has %d logical units; only the first is served\n", dev, int lun[0] + 1);
 
 	inq := array[36] of byte;
@@ -154,10 +157,6 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 	if(bsize < 512 || bsize > 4096 || bsize % 512 != 0){
 		sys->print("diskusb: %s (%s): block size %d is not one this driver serves\n", dev, what, bsize);
-		return;
-	}
-	if(blocks > big 16r100000000){
-		sys->print("diskusb: %s (%s): %bd blocks is beyond READ(10); not served\n", dev, what, blocks);
 		return;
 	}
 
@@ -288,14 +287,32 @@ diskwrite(off: big, data: array of byte): (int, string)
 rw(op: int, lba: big, buf: array of byte, out: int): int
 {
 	nb := len buf / bsize;
-	cmd := array[10] of byte;
-	cmd[0] = byte op;
-	cmd[1] = byte 0;
-	put4(cmd, 2, int lba);
-	cmd[6] = byte 0;
-	cmd[7] = byte (nb >> 8);
-	cmd[8] = byte nb;
-	cmd[9] = byte 0;
+	cmd: array of byte;
+	if(blocks > big 16r100000000){
+		#
+		# Past 2^32 blocks (2TB of 512-byte ones) READ(10)'s 32-bit
+		# address wraps: the 16-byte form carries 64 bits. Only for
+		# such a disk, since the 10-byte form is the one every
+		# device, however old, understands.
+		#
+		cmd = array[16] of {* => byte 0};
+		if(op == Cread10)
+			cmd[0] = byte Cread16;
+		else
+			cmd[0] = byte Cwrite16;
+		put4(cmd, 2, int (lba >> 32));
+		put4(cmd, 6, int lba);
+		put4(cmd, 10, nb);
+	} else {
+		cmd = array[10] of byte;
+		cmd[0] = byte op;
+		cmd[1] = byte 0;
+		put4(cmd, 2, int lba);
+		cmd[6] = byte 0;
+		cmd[7] = byte (nb >> 8);
+		cmd[8] = byte nb;
+		cmd[9] = byte 0;
+	}
 	for(try := 0; try < Maxretry; try++){
 		n := scsi(cmd, buf, out);
 		if(n == len buf)
@@ -521,7 +538,7 @@ scsi(cmd: array of byte, data: array of byte, out: int): int
 #
 recover()
 {
-	ctlout(Rh2d|Rclass|Riface, Rmsreset, 0, 0, nil);
+	ctlout(Rh2d|Rclass|Riface, Rmsreset, 0, msiface, nil);
 	sys->sleep(100);
 	unstall(inep | 16r80);
 	unstall(outep);
@@ -549,19 +566,31 @@ bulkeps(): (int, int, int)
 	if(ctlin(Rd2h|Rstd|Rdev, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
 		return (-1, -1, -1);
 	total := int hdr[2] | (int hdr[3] << 8);
-	if(total < len hdr || total > 512)
+	if(total < len hdr || total > 4096)	# a composite device's runs past 512
 		return (-1, -1, -1);
 	cfg := array[total] of byte;
 	if(ctlin(Rd2h|Rstd|Rdev, Rgetdesc, Dconf << 8, 0, cfg) < total)
 		return (-1, -1, -1);
+	#
+	# The endpoints of the MASS-STORAGE interface, not the first bulk
+	# pair in the configuration: on a composite device -- the Jetson's
+	# own USB gadget is network, serial and disk in one -- the first
+	# bulk endpoints are a network interface's.
+	#
 	i := -1;
 	o := -1;
 	mp := -1;
+	inms := 0;
 	for(p := 0; p + 2 <= total; ){
 		dlen := int cfg[p];
 		if(dlen < 2)
 			break;
-		if(int cfg[p+1] == 5 && p + 6 < total && (int cfg[p+3] & 3) == 2){
+		if(int cfg[p+1] == 4 && p + 8 < total){	# interface
+			inms = int cfg[p+5] == 8 && int cfg[p+7] == 16r50;	# mass storage, bulk-only
+			if(inms && i < 0)
+				msiface = int cfg[p+2];
+		}
+		if(inms && int cfg[p+1] == 5 && p + 6 < total && (int cfg[p+3] & 3) == 2){
 			addr := int cfg[p+2];
 			sz := int cfg[p+4] | (int cfg[p+5] << 8);
 			if(addr & 16r80){
@@ -579,6 +608,29 @@ bulkeps(): (int, int, int)
 
 openbulk(): int
 {
+	#
+	# One endpoint number both ways -- 0x81 in and 0x01 out, which is
+	# how Linux's mass-storage gadget does it -- is one endpoint to
+	# devusb, opened for reading and writing. This refused such a disk
+	# outright ("no pair of bulk endpoints"); the disks it had met, QEMU's
+	# and the Jetson's composite gadget, used two numbers.
+	#
+	if(inep == outep){
+		if(sys->fprint(ctlfd, "new %d bulk rw", inep) < 0 && !inuse()){
+			sys->print("diskusb: %s: cannot create bulk %d: %r\n", dev, inep);
+			return -1;
+		}
+		efd := sys->open("/usb/usb/" + epname(inep) + "/ctl", Sys->OWRITE);
+		if(efd != nil)
+			sys->fprint(efd, "maxpkt %d", maxpkt);
+		bulkin = sys->open("/usb/usb/" + epname(inep) + "/data", Sys->ORDWR);
+		bulkout = bulkin;
+		if(bulkin == nil){
+			sys->print("diskusb: %s: cannot open the bulk endpoint: %r\n", dev);
+			return -1;
+		}
+		return 0;
+	}
 	if(sys->fprint(ctlfd, "new %d bulk r", inep) < 0 && !inuse()){
 		sys->print("diskusb: %s: cannot create bulk in %d: %r\n", dev, inep);
 		return -1;
@@ -587,19 +639,26 @@ openbulk(): int
 		sys->print("diskusb: %s: cannot create bulk out %d: %r\n", dev, outep);
 		return -1;
 	}
-	bulkin = sys->open("/usb/usb/" + epname(inep) + "/data", Sys->OREAD);
-	bulkout = sys->open("/usb/usb/" + epname(outep) + "/data", Sys->OWRITE);
-	if(bulkin == nil || bulkout == nil){
-		sys->print("diskusb: %s: cannot open the bulk endpoints: %r\n", dev);
-		return -1;
-	}
-	# a whole command's data in one read: 128 KB is what an xHCI ring here takes
+	#
+	# The packet size BEFORE the endpoints are opened. Opening one is
+	# what describes it to the controller (usbxhci's epopen builds its
+	# endpoint context then), so a size set afterwards never reaches
+	# the hardware: the endpoints went to the controller as 8-byte ones.
+	# QEMU's xHCI ran a SuperSpeed disk that way; the Pi 4's VL805 failed
+	# the first command, a 1024-byte-packet disk's INQUIRY.
+	#
 	for(ep := inep; ; ep = outep){
 		efd := sys->open("/usb/usb/" + epname(ep) + "/ctl", Sys->OWRITE);
 		if(efd != nil)
 			sys->fprint(efd, "maxpkt %d", maxpkt);
 		if(ep == outep)
 			break;
+	}
+	bulkin = sys->open("/usb/usb/" + epname(inep) + "/data", Sys->OREAD);
+	bulkout = sys->open("/usb/usb/" + epname(outep) + "/data", Sys->OWRITE);
+	if(bulkin == nil || bulkout == nil){
+		sys->print("diskusb: %s: cannot open the bulk endpoints: %r\n", dev);
+		return -1;
 	}
 	return 0;
 }

@@ -1271,6 +1271,8 @@ Dosbpb: adt {
 	fatclusters: int;
 	fatbits: int;	# 12, 16 or 32
 	rootclust: int;	# FAT32 only: the root is a cluster chain, not an area
+	fsinfo: int;	# FAT32 only: sector of the FSInfo free-count hint, or 0
+	fsinfodone: int;	# the hint has been marked unknown this mount
 	fataddr: int; #big;	# sector number 
 	rootaddr: int; #big;
 	dataaddr: int; #big;
@@ -1308,6 +1310,9 @@ Asis, Clean, Clunk: con iota;
 FAT12: con byte 16r01;
 FAT16: con byte 16r04;
 FATHUGE: con byte 16r06;
+FAT32: con byte 16r0b;		# the partition types every FAT32 stick and card carries,
+FAT32LBA: con byte 16r0c;	# which this file system reads and the MBR check did not
+FAT16LBA: con byte 16r0e;	# accept: a USB disk with one was "no active partition"
 DMDDO: con 16r54;
 DRONLY: con 16r01;
 DHIDDEN: con 16r02;
@@ -1407,7 +1412,7 @@ Dmddo:
 					mbroffset = 63*Sectorsize;
 					putsect(p);
 					purgebuf(xf);
-					xf.offset += mbroffset;
+					xf.offset += big mbroffset;
 					break Dmddo;
 				}
 				
@@ -1416,7 +1421,10 @@ Dmddo:
 				# (e.g. OS/2 BOOT MANAGER).
 				if(p.iobuf[dp+4] == FAT12 ||
 				   p.iobuf[dp+4] == FAT16 ||
-				   p.iobuf[dp+4] == FATHUGE)
+				   p.iobuf[dp+4] == FATHUGE ||
+				   p.iobuf[dp+4] == FAT32 ||
+				   p.iobuf[dp+4] == FAT32LBA ||
+				   p.iobuf[dp+4] == FAT16LBA)
 					break;
 				dp+=16;
 			}
@@ -1428,10 +1436,11 @@ Dmddo:
 				return -1;
 			}
 
-			offset := bytes2int(p.iobuf[dp+8:dp+12])* Sectorsize;
+			# the starting sector is 32 bits unsigned; the byte offset needs 64
+			offset := (big bytes2int(p.iobuf[dp+8:dp+12]) & big 16rFFFFFFFF) * big Sectorsize;
 			putsect(p);
 			purgebuf(xf);
-			xf.offset = mbroffset+offset;
+			xf.offset = big mbroffset + offset;
 		}
 		break;
 	}
@@ -1475,6 +1484,7 @@ Dmddo:
 	if(bp.fatsize == 0 && bp.rootsize == 0) {
 		bp.fatsize = bytes2int(p.iobuf[36:40]);
 		bp.rootclust = bytes2int(p.iobuf[44:48]);
+		bp.fsinfo = bytes2short(p.iobuf[48:50]);
 	}
 
 	bp.fataddr = int bp.nresrv;
@@ -2766,11 +2776,43 @@ getfat(xf: ref Xfs, n: int): int
 	return k;
 }
 
+#
+# A FAT32 volume keeps a free-cluster count and a next-free hint in its
+# FSInfo sector. Nothing here keeps them up to date, so before the FAT
+# first changes they are set to 0xFFFFFFFF, "unknown", which the
+# specification allows and every reader must handle: it counts the FAT
+# itself. Left alone they would be wrong after the first write (fsck
+# reports it, and a host could believe the disk fuller or emptier than
+# it is).
+#
+fsinfounknown(xf: ref Xfs)
+{
+	bp := xf.ptr;
+	bp.fsinfodone = 1;
+	if(bp.fsinfo <= 0 || bp.fsinfo >= bp.nresrv)
+		return;
+	p := getsect(xf, bp.fsinfo);
+	if(p == nil)
+		return;
+	b := p.iobuf;
+	if(len b < 512 || string b[0:4] != "RRaA" || string b[484:488] != "rrAa" ||
+	   int b[510] != 16r55 || int b[511] != 16rAA){
+		putsect(p);
+		return;
+	}
+	for(i := 488; i < 496; i++)
+		b[i] = byte 16rFF;
+	p.flags |= BMOD;
+	putsect(p);
+}
+
 putfat(xf: ref Xfs, n, val: int)
 {
 	bp := xf.ptr;
 	if(n < 2 || n >= bp.fatclusters)
 		panic(sys->sprint("putfat n=%d", n));
+	if(bp.fatbits == 32 && !bp.fsinfodone)
+		fsinfounknown(xf);
 	k := (bp.fatbits*n) >> 3;
 	if(k >= bp.fatsize*bp.sectsize)
 		panic("putfat");
@@ -3179,7 +3221,7 @@ Xfs: adt {
 	rootqid: Sys->Qid;	# of inferno constructed root directory 
 	dev: ref Sys->FD;  # FD of the file containing external f.s.
 	fmt: int;		# successfully read format
-	offset: int;		# offset in sectors to file system
+	offset: big;		# BYTE offset of the file system in the device: past 2GB on a big disk
 	ptr: ref Dosbpb;
 };
 
@@ -3605,7 +3647,15 @@ devvalid(xf: ref Xfs, addr: int): int
 		limit = xf.ptr.volsize;
 	(ok, d) := sys->fstat(xf.dev);
 	if(ok >= 0 && d.length > big 0){
-		dl := int ((d.length - big (xf.offset*Sectorsize)) / big Sectorsize);
+		#
+		# In 64 bits, and the offset is already bytes. Taken as an int
+		# a 3TB device's sector count wrapped, the bound came out wrong
+		# and every sector read as zero -- no file system to mount.
+		#
+		bdl := (d.length - xf.offset) / big Sectorsize;
+		if(bdl > big 16r7FFFFFFF)
+			bdl = big 16r7FFFFFFF;
+		dl := int bdl;
 		if(limit < 0 || dl < limit)
 			limit = dl;
 	}
@@ -3627,7 +3677,8 @@ devread(xf: ref Xfs, addr: int, buf: array of byte): int
 	nvalid := devvalid(xf, addr);
 	if(nvalid <= 0)
 		return deverror("read", xf, addr, trksize, 0);
-	sys->seek(xf.dev, big (xf.offset+addr*Sectorsize), sys->SEEKSTART);
+	# in 64 bits before the multiply: a sector past 2GB into the device overflowed
+	sys->seek(xf.dev, xf.offset + big addr * big Sectorsize, sys->SEEKSTART);
 	nread := sys->read(xf.dev, buf, nvalid);
 	if(nread != nvalid)
 		return deverror("read", xf, addr, nvalid, nread);
@@ -3645,7 +3696,7 @@ devwrite(xf: ref Xfs, addr: int, buf: array of byte): int
 	nvalid := devvalid(xf, addr);
 	if(nvalid <= 0)
 		return deverror("write", xf, addr, trksize, 0);
-	sys->seek(xf.dev, big (xf.offset+addr*Sectorsize), 0);
+	sys->seek(xf.dev, xf.offset + big addr * big Sectorsize, 0);
 	nwrite := sys->write(xf.dev, buf[0:nvalid], nvalid);
 	if(nwrite != nvalid)
 		return deverror("write", xf, addr, nvalid, nwrite);
@@ -3683,16 +3734,16 @@ getxfs(name: string): (ref Xfs, string)
 	 # Typical use would be to mount a filesystem in the presence
 	 # of a boot manager programm at the beginning of the disc.
 	
-	offset := 0;
+	offset := big 0;
 	for(i := 0;i < len name; i++)
 		if(name[i]==':')
 			break;
 
 	if(i < len name) {
-		offset = int name[i+1:];
-		if(offset < 0)
+		offset = big name[i+1:];
+		if(offset < big 0)
 			return (nil, "invalid device offset to file system");
-		offset *= Sectorsize;
+		offset *= big Sectorsize;
 		name = name[0:i];
 	}
 
@@ -3724,7 +3775,7 @@ getxfs(name: string): (ref Xfs, string)
 		if(devcheck(xf) < 0) # look for media change
 			continue;
 
-		if(offset && xf.offset != offset)
+		if(offset != big 0 && xf.offset != offset)
 			continue;
 
 		if(iodebug)

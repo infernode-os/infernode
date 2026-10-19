@@ -180,7 +180,7 @@ newdoc(w: ref Window, k: ref Kind, name: string): ref Doc
 {
 	v := sheetview->new(k, name, evc);
 	setview(w, v);
-	d := ref Doc(v, 1, nil, -1, nil, 1, 0);
+	d := ref Doc(v, 1, nil, -1, nil, 0, 0, 0);
 	w.doc = d;
 	views = (v, w.id) :: views;
 	return d;
@@ -523,13 +523,22 @@ refresh(w: ref Window): string
 	nv.fit = d.v.fit;
 	nv.rot = d.v.rot;
 	d.liveat = 0;
+	d.stale = 0;
 	return nil;
 }
 
 # ---- live: set again as the text is edited ----
 
+# whether w shows a source document (set from text that may change)
+issource(w: ref Window): int
+{
+	d := w.doc;
+	return d != nil && d.shown && !d.v.web && d.v.kind != nil && d.v.kind.class == Docreg->Source;
+}
+
 # a window's text edited: the windows showing its file as a source
-# document (its Zerox twins, or itself) marked, and the live task woken
+# document (its Zerox twins, or itself) marked stale, the live ones
+# to be set again, and the live task woken
 edited(w: ref Window)
 {
 	if(w == nil || w.body.file == nil)
@@ -538,10 +547,11 @@ edited(w: ref Window)
 	marked := 0;
 	for(i := 0; i < f.ntext; i++){
 		u := f.text[i].w;
-		if(u == nil || u.doc == nil)
+		if(u == nil || !issource(u))
 			continue;
 		d := u.doc;
-		if(!d.live || !d.shown || d.v.web || d.v.kind == nil || d.v.kind.class != Docreg->Source)
+		d.stale = 1;
+		if(!d.live)
 			continue;
 		if(d.liveat == 0){
 			for(l := livewins; l != nil; l = tl l)
@@ -562,6 +572,41 @@ edited(w: ref Window)
 		* =>
 			;	# already woken
 		}
+}
+
+live(w: ref Window, on: int): int
+{
+	if(issource(w)){
+		if(on < 0)
+			on = !w.doc.live;
+		setlive(w, on);
+		return 1;
+	}
+	if(w.body.file == nil)
+		return 0;
+	f := w.body.file;
+	if(on < 0){
+		on = 0;
+		for(i := 0; i < f.ntext; i++)
+			if((u := f.text[i].w) != nil && issource(u) && !u.doc.live)
+				on = 1;
+	}
+	n := 0;
+	for(i := 0; i < f.ntext; i++)
+		if((u := f.text[i].w) != nil && issource(u)){
+			setlive(u, on);
+			n++;
+		}
+	return n;
+}
+
+setlive(w: ref Window, on: int)
+{
+	d := w.doc;
+	d.live = on;
+	d.liveat = 0;
+	if(on && d.stale && (e := refresh(w)) != nil)
+		warning(nil, sprint("%s: %s\n", w.body.file.name, e));
 }
 
 # wait for an edit; then, each time the editing has paused LIVEMS,
@@ -873,6 +918,8 @@ commands(w: ref Window): string
 	if(d == nil || !d.shown)
 		return nil;
 	s := "";
+	if(issource(w))
+		s += " Live";
 	for(l := d.v.commands(); l != nil; l = tl l)
 		s += " " + hd l;
 	return s;
@@ -959,11 +1006,10 @@ ctlwrite(w: ref Window, s: string): string
 			hide(w);
 	"refresh" =>
 		return refresh(w);
-	"live" =>
-		d.live = 1;
-	"nolive" =>
-		d.live = 0;
-		d.liveat = 0;
+	"live" or "nolive" =>
+		if(!issource(w))
+			return "not a source document shown";
+		setlive(w, cmd == "live");
 	* =>
 		(ok, err) := command(w, cmd, arg);
 		if(!ok)

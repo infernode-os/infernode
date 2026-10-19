@@ -21,6 +21,7 @@ Docview: module {
 		next:	ref Sheetview->View;	# being set again (refresh), shown when open
 		live:	int;		# a source document set again as its text is edited
 		liveat:	int;		# when it was last edited (sys->millisec), 0 if not since set
+		stale:	int;		# its text edited since it was set
 	};
 
 	init:	fn(mods: ref Dat->Mods);
@@ -57,9 +58,18 @@ Docview: module {
 	refresh:	fn(w: ref Windowm->Window): string;
 
 	# w's text was edited: each window showing its file as a source
-	# document is set again once the editing pauses (live; doc/ctl
-	# live, nolive). Called with the row held, at each edit: cheap.
+	# document is set again once the editing pauses, if it is live.
+	# Called with the row held, at each edit: cheap.
 	edited:	fn(w: ref Windowm->Window);
+
+	# Live (exec's command, doc/ctl live and nolive): a source document
+	# set again as its text is edited (on 1), or not (0), or turned
+	# over (-1); set again now, turned on, if its text has changed.
+	# In a window showing the document, that document; in one showing
+	# the text, each window showing the file's document, all on if any
+	# was off. How many documents it reached: none, and exec's Live
+	# opens one beside the text.
+	live:	fn(w: ref Windowm->Window, on: int): int;
 
 	# The mouse on the document: button 1 drags it (grab and pan),
 	# or clicked selects the word there; button 2 executes the word;

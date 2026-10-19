@@ -11,8 +11,10 @@
 #	Markdown opens as text and Render shows it set (doc/ctl, doc/text),
 #	Render again goes back to the text;
 #	a source document (Markdown, HTML) shown beside its text (Zerox)
-#	is set again a moment after an edit (live), and with nolive only
-#	on Put and doc/ctl refresh;
+#	is set again on Put and doc/ctl refresh; Live (in either window's
+#	tag, or doc/ctl live) sets it again a moment after each edit too,
+#	at once if its text changed meanwhile; Live in a window showing
+#	only the text opens one below it, showing the document, live;
 #	a large one (saved in the background) Put beside its document is
 #	written whole;
 #	an image looked at is a document of one sheet its size;
@@ -350,9 +352,14 @@ fn tagexec {
 	wid := ${index 1 $a}
 	word := ${index 2 $a}
 	echo -n ' '^$word >> $XENITH/$wid/tag
-	n=`{cat $XENITH/$wid/tag | wc -c}
 	w=`{echo -n $word | wc -c}
-	echo 'Mx'^${expr $n $w -}^' '^$n > $XENITH/$wid/event
+	# the tag measured with the event file open: opening it takes the
+	# file's menu (Undo, Put) from the tag, as Acme does for a program
+	# reading the window's events
+	{
+		n=`{cat $XENITH/$wid/tag | wc -c}
+		echo 'Mx'^${expr $n $w -}^' '^$n
+	} > $XENITH/$wid/event
 }
 
 # Wait until a window's doc/text has a string: hasdoctext id string
@@ -402,19 +409,34 @@ for kind in md html {
 		echo render > $XENITH/$bid/doc/ctl
 		loaded $bid
 		hasdoctext $bid First
-		# live: an edit in its twin sets it again once the editing pauses
-		check $kind^': live' `{attr $bid live} 1
+		# not live (as it opens): only Put and doc/ctl refresh set it again
+		check $kind^': not live as it opens' `{attr $bid live} 0
+		echo ' Early' >> $XENITH/$aid/body
+		sleep 3
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Early*} {bad $kind^': an edit set the document again (not live)'} {ok $kind^': not live, an edit in its twin does not set the document again'}
+		# Live in its tag: set again now (its text changed), then once
+		# the editing in its twin pauses
+		tagexec $bid Live
+		check $kind^': Live' `{attr $bid live} 1
+		hasdoctext $bid Early
+		t=`{cat $XENITH/$bid/doc/text}
+		if {~ $"t *Early*} {ok $kind^': Live sets it again from the edits made before'} {bad $kind^': Live:' $"t}
 		echo ' Live' >> $XENITH/$aid/body
 		hasdoctext $bid Live
 		t=`{cat $XENITH/$bid/doc/text}
-		if {~ $"t *Live*} {ok $kind^': an edit in its twin sets it again, live, from the unsaved text'} {bad $kind^': live:' $"t}
-		# not live: only Put and doc/ctl refresh set it again
+		if {~ $"t *Live*} {ok $kind^': live, an edit in its twin sets it again from the unsaved text'} {bad $kind^': live:' $"t}
+		# Live again, in the text's window: turned off
+		tagexec $aid Live
+		check $kind^': Live in the twin turns it off' `{attr $bid live} 0
+		echo live > $XENITH/$bid/doc/ctl
+		check $kind^': doc/ctl live' `{attr $bid live} 1
 		echo nolive > $XENITH/$bid/doc/ctl
-		check $kind^': nolive' `{attr $bid live} 0
+		check $kind^': doc/ctl nolive' `{attr $bid live} 0
 		echo ' Unsaved' >> $XENITH/$aid/body
 		sleep 3
 		t=`{cat $XENITH/$bid/doc/text}
-		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again (nolive)'} {ok $kind^': not live, an edit in its twin does not set the document again'}
+		if {~ $"t *Unsaved*} {bad $kind^': an edit set the document again (nolive)'} {ok $kind^': nolive, an edit does not set it again'}
 		echo refresh > $XENITH/$bid/doc/ctl
 		hasdoctext $bid Unsaved
 		t=`{cat $XENITH/$bid/doc/text}
@@ -457,6 +479,42 @@ for kind in md html {
 	}
 	rm -f $SRC
 }
+# Live in a window showing only the text: a window opened below it
+# showing the document, live
+SRC=/tmp/xenith_doc_live.md
+echo '# Alone' > $SRC
+look $SRC
+aid=()
+for i in 1 2 3 4 5 6 7 8 9 10 {
+	if {~ $#aid 0} {
+		aid=`{winof xenith_doc_live.md}
+		if {~ $#aid 0} {sleep 1}
+	}
+}
+tagexec $aid Live
+bid=()
+for i in 1 2 3 4 5 6 7 8 9 10 {
+	if {~ $#bid 0} {
+		bid=`{other xenith_doc_live.md $aid}
+		if {~ $#bid 0} {sleep 1}
+	}
+}
+if {~ $#bid 0} {
+	bad 'Live in a text window opened no window for its document'
+} {
+	loaded $bid
+	check 'Live opens a window showing the document' `{attr $bid shown} 1
+	check 'and it is live' `{attr $bid live} 1
+	echo 'Beside' >> $XENITH/$aid/body
+	hasdoctext $bid Beside
+	t=`{cat $XENITH/$bid/doc/text}
+	if {~ $"t *Alone*Beside*} {ok 'and follows the text'} {bad 'Live window:' $"t}
+	echo clean > $XENITH/$bid/ctl
+	echo delete > $XENITH/$bid/ctl
+}
+echo clean > $XENITH/$aid/ctl
+echo delete > $XENITH/$aid/ctl
+rm -f $SRC
 # ---- a large file (written in the background) Put beside its ----
 # ---- document: the writer read the window's Buffer as the document ----
 # ---- was set again from it, and the file was written empty ----

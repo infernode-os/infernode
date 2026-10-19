@@ -44,12 +44,17 @@ Two kinds of file:
 - **Source documents** — Markdown, HTML, Mermaid. The body is the
   file's text, editable; Render shows the document or the text; Put
   saves the text. A document shown is set again from the text, unsaved
-  edits and all, a moment (600 ms) after its editing pauses, in any
-  window on the file (a Zerox'd twin, say): it is *live*, as a
-  preview is in Typst. `doc/ctl` `nolive` stops that for the window,
-  and it is then set again only when the file is Put or `doc/ctl` is
-  written `refresh`; `live` starts it again. The old drawing stays
-  until the new one is open, where the reader was in it.
+  edits and all, when the file is Put (from any window on it, a
+  Zerox'd twin say) or `doc/ctl` is written `refresh`. **Live** makes
+  it a preview, as Typst's is: set again a moment (600 ms) after
+  each edit in any window on the file, and at once if the text changed
+  while it was not live. In the document's window `Live` turns that on
+  and off; in a window showing the text it does so for every window
+  showing the file's document, or, if none does, opens one below it,
+  live. `doc/ctl` takes `live` and `nolive` too. A document opens not
+  live: setting a long one again at every pause is for its author to
+  ask for. The old drawing stays until the new one is open, where the
+  reader was in it.
   A window whose name says nothing of its kind, a program's, is set
   as one by writing `doc/ctl` `render` and the kind's name from
   `/lib/xenith/doctypes`: `render markdown`. Agent does this to set
@@ -195,7 +200,7 @@ for a window showing text):
 			view 0 1840 1200 900	(x y w h of the view, in the column)
 			screen 16 59 1200 887	(where the view is on the screen)
 			column 1224 14000	(the column's size, at the scale)
-			live 1			(a source document: set again as edited)
+			live 0			(a source document: set again as edited, 1)
 		write: commands, one a line —
 			sheet n | scale n | fit [page] | scroll dy |
 			render [kind] | text | refresh (a source document set

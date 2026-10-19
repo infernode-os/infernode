@@ -215,6 +215,7 @@ uniq uniq
 units units
 uudecode uuencode
 uuencode uuencode
+vm vm
 wc wc
 webgrab webgrab
 wm wm

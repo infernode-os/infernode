@@ -107,7 +107,10 @@ mounts it itself with
 .BR "dossrv -f /chan/usbdisk0 -m /n/usb0" )
 for what it finds and watching hubs for changes; and, if
 .B /n/dos/netconsole
-exists, serves a shell on TCP port 17010.
+exists, serves a shell on TCP port 17010; and, if
+.B /n/dos/vms
+exists, starts the programs it names in the Dis VMs it names
+(see below).
 .IP 11.
 Writes
 .B booted
@@ -202,6 +205,25 @@ With a token, at most four checks may be in progress, each has a 15-second
 deadline, and no more than eight attempts per second enter the check.
 Comparison takes fixed work across the bounded 256-byte input.
 .TP
+.B vms
+Programs to start at boot in Dis VMs of their own (see
+.IR vm (3)),
+one a line:
+a VM number, a command \(em a path, or a name in
+.B /dis
+as for
+.IR vm (1)
+\(em and its arguments, which are words, unquoted.
+Lines beginning
+.B #
+are skipped.
+Each runs with
+.IR osinit 's
+namespace and console, and
+.I osinit
+prints its pid.
+With no file, every program runs in VM 0.
+.TP
 .B skiplogon
 Its existence starts the desktop without
 .BR wm/logon ,
@@ -233,6 +255,8 @@ narrows the namespace; starts the desktop if there is a screen
 .IR bt9p (4),
 .IR dossrv (4),
 .IR init (8),
+.IR vm (1),
+.IR vm (3),
 .IR wpa (8)
 .br
 .B /docs/BAREMETAL.md

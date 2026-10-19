@@ -5676,7 +5676,12 @@ PYEOF
     # here; how much faster four VMs are is measured on the board, which
     # TCG is no stopwatch for.
     #
-    cp "$VCARD" "$BUILD/$PLAT-card-vm.img"
+    # its own card: the desktop's, with a vms file placing one program
+    # at boot and naming one that is not there
+    printf '# boot placement (#944)\n1 sleep 600\n3 nosuchprogram\n' > "$BUILD/vms"
+    python3 "$ROOT/tools/mkcard.py" "$BUILD/$PLAT-card-vm.img" 192 /dis="$ROOT/dis" /lib="$ROOT/lib" \
+        /fonts="$ROOT/fonts" /icons="$ROOT/icons" /usr= \
+        /rootpath="$BUILD/rootpath" /skiplogon="$BUILD/skiplogon" /vms="$BUILD/vms" > "$BUILD/mkcard-vm.txt" 2>&1
     python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-card-vm.img" <<'PYEOF' > "$BUILD/$PLAT-vm.txt" 2>&1
 import re, subprocess, sys, threading, time
 qemu, img, extra, card = sys.argv[1:5]
@@ -5731,14 +5736,17 @@ PYEOF
     rm -f "$BUILD/$PLAT-card-vm.img"
     OUT="$(cat "$BUILD/$PLAT-vm.txt")"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
-    vcheck "vm: #V lists the VMs, vm 0 the boot VM"          "vms 1 max 4"
+    vcheck "vm: the card's vms file starts a program in VM 1 at boot" "init: vm 1: /dis/sleep.dis 600, pid "
+    vcheck "vm: and says so when one it names is not there"   "init: vms: /dis/nosuchprogram.dis in VM 3:"
+    vcheck "vm: #V lists the VMs: 0, and 1 and 3 from the card" "vms 3 max 4"
+    vcheck "vm: the boot-placed program is in VM 1"           "vm 1 progs 1 "
     nt="$(grep -ac 'Total Time: [0-9]* ms' <<<"$OUT")"
     if [[ "$nt" -ge 2 ]]; then
         pass "virt: vm: jitbench2 in VM 1 and VM 2 at once, both to the end ($(grep -ao 'Total Time: [0-9]* ms' <<<"$OUT" | tr '\n' ' '))"
     else
         fail "virt: vm: jitbench2 in VMs 1 and 2 finished $nt time(s), not 2"
     fi
-    vcheck "vm: they are three VMs now"                       "vms 3 max 4"
+    vcheck "vm: with VM 2, four"                              "vms 4 max 4"
     vcheck "vm: a VM 1 program reads a file a VM 0 program serves (file2chan across VMs)" "served-from-vm0"
     vcheck "vm: and writes it"                                "VMRF written-by-vm1"
     if grep -aqE "^VMSLEEP pid [0-9]+" <<<"$(tr -d '\r' <<<"$OUT")"; then
@@ -5752,8 +5760,12 @@ PYEOF
     else
         fail "virt: vm: ps does not show the VM 1 sleep"
     fi
-    if sed -n '/^VMPS$/,/^VMKILLED$/p' <<<"$VMOUT" | grep -aq "Sleep"; then
-        fail "virt: vm: the VM 1 sleep outlived its kill from VM 0"
+    # by pid: the sleep the card's vms file started at boot is a Sleep too
+    killpid="$(grep -aoE '^VMSLEEP pid [0-9]+' <<<"$VMOUT" | grep -oE '[0-9]+$' | head -1)"
+    if [[ -z "$killpid" ]]; then
+        fail "virt: vm: no pid to kill"
+    elif sed -n '/^VMPS$/,/^VMKILLED$/p' <<<"$VMOUT" | grep -aqE "^ *$killpid "; then
+        fail "virt: vm: VM 1's sleep (pid $killpid) outlived its kill from VM 0"
     else
         pass "virt: vm: VM 0 kills it (devprog across VMs)"
     fi

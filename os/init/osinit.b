@@ -204,6 +204,14 @@ init()
 		sys->print("init: cannot bind #seia on /dev: %r\n");
 
 	#
+	# And the Dis VMs, /dev/vm (#944): one a core, each running
+	# programs alongside the others. Here so every namespace forked from
+	# init has them; vm(1) reaches #V directly anyway.
+	#
+	if(sys->bind("#V", "/dev", Sys->MAFTER) < 0)
+		sys->print("init: cannot bind #V on /dev: %r\n");
+
+	#
 	# Bring up loopback.
 	#
 	# This is the first thing that exercises the stack rather than
@@ -338,6 +346,13 @@ init()
 	kernelether();
 
 	spawn usbprobe();
+
+	#
+	# Programs the card says to start in VMs of their own: a server
+	# that should not share a core with the desktop, say. Spawned, as
+	# loading them can take a moment and the shell need not wait.
+	#
+	spawn vmsetup();
 
 	#
 	# A console over the network, so the serial cable is not the only
@@ -2060,6 +2075,68 @@ associated(): int
 # A whole small file, and whether it was there at all -- the two are
 # different questions and an empty file answers only the second.
 #
+#
+# Boot placement in the Dis VMs (#944). /n/dos/vms, if the card has it,
+# says what to start where, one program a line:
+#
+#	# vm  command and its arguments
+#	1     svc/httpd/httpd -p 80
+#	2     myserver
+#
+# A command is found as vm(1) finds it -- /dis/<name>.dis unless it is a
+# path -- and runs with init's namespace and console. Arguments are
+# words: there is no quoting here. Which programs go where, if anywhere,
+# is the card's to say; with no file every program runs in VM 0, as on
+# every kernel before there were VMs.
+#
+Vmsfile: con "/n/dos/vms";
+
+vmsetup()
+{
+	(txt, found) := slurp(Vmsfile);
+	if(!found)
+		return;
+	(nil, lines) := sys->tokenize(txt, "\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, w) := sys->tokenize(hd lines, " \t\r");
+		if(w == nil || (hd w)[0] == '#')
+			continue;
+		if(tl w == nil){
+			sys->print("init: vms: \"%s\" names no command\n", hd lines);
+			continue;
+		}
+		n := int hd w;
+		if(string n != hd w){
+			sys->print("init: vms: \"%s\": %s is not a VM number\n", hd lines, hd w);
+			continue;
+		}
+		cmd := hd tl w;
+		if(len cmd < 4 || cmd[len cmd - 4:] != ".dis")
+			cmd += ".dis";
+		if(cmd[0] != '/' && (len cmd < 2 || cmd[0:2] != "./"))
+			cmd = "/dis/" + cmd;
+		line := cmd;
+		for(a := tl tl w; a != nil; a = tl a)
+			line += " " + hd a;
+		fd := sys->open("#V/vm/" + string n + "/run", Sys->ORDWR);
+		if(fd == nil){
+			sys->print("init: vms: no VM %d: %r\n", n);
+			continue;
+		}
+		b := array of byte line;
+		if(sys->write(fd, b, len b) != len b){
+			sys->print("init: vms: %s in VM %d: %r\n", cmd, n);
+			continue;
+		}
+		pid := array[16] of byte;
+		r := sys->pread(fd, pid, len pid, big 0);
+		p := "?";
+		if(r > 0)
+			p = string pid[0:r-1];
+		sys->print("init: vm %d: %s, pid %s\n", n, line, p);
+	}
+}
+
 slurp(name: string): (string, int)
 {
 	fd := sys->open(name, Sys->OREAD);

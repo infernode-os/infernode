@@ -1,0 +1,59 @@
+.TH VM 1
+.SH NAME
+vm \- run a command in another Dis virtual machine
+.SH SYNOPSIS
+.B vm
+.br
+.B vm
+.I n command
+[
+.I arg ...
+]
+.SH DESCRIPTION
+On the native kernel each processor core can run a Dis virtual machine of
+its own (see
+.IR vm (3)).
+.I Vm
+runs
+.I command
+in VM
+.I n
+and prints its pid; the command runs alongside whatever is running in the
+other VMs, on another core, with
+.IR vm 's
+namespace, environment and file descriptors, so its output appears where
+.IR vm 's
+would.
+.I Command
+is a path, or the name of a module in
+.BR /dis ,
+as the shell finds commands.
+.PP
+With no arguments,
+.I vm
+prints how many VMs there are and, for each, its processes and heap.
+.PP
+Which VM a command goes to is the caller's choice.
+VM 0 is the one everything runs in unless placed elsewhere, and the only
+one with the window system.
+A card can place programs at boot with a
+.B vms
+file; see
+.IR osinit (8).
+.SH EXAMPLES
+Four compute-bound jobs, one a core:
+.EX
+	for i in 0 1 2 3 { vm $i myjob $i }
+.EE
+.SH SOURCE
+.B /appl/cmd/vm.b
+.SH SEE ALSO
+.IR vm (3),
+.IR ps (1),
+.IR kill (1)
+.SH BUGS
+A command run this way that loads
+.B $Tk
+or
+.B $Draw
+in any VM but 0 fails: those modules are VM 0's alone.

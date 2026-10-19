@@ -576,6 +576,7 @@ Inferno; `groff -man -Tutf8 man/3/gpio` on the host.)
 | `#G` | `/dev/gpio/N/` | `ctl` (`function in\|out\|alt0-5`, `pull up\|down\|none`, `edge rising\|falling\|both\|none`), `level`, `event` (blocks for an edge; `<µs> <level>`) | Pi |
 | `#T` | `/dev` | `touch` — the DSI panel's raw buffer; `touch.dis` turns it into pointer events | Pi |
 | `#A` | `/dev` | `audio audioctl` — the 3.5 mm jack | Pi |
+| `#V` | `/dev/vm` | `ctl`, and `N/run`, `N/status` for each Dis VM: `vm(3)` | both |
 | `#p #e #s #M #\| #D` | `/prog /env /chan` … | processes, environment, served names, mounts, pipes, TLS records | both |
 
 **`/dev/sdctl`** has one verb, `part <name> <startblock> <nblocks>`, which
@@ -630,6 +631,29 @@ names the adapter (`is a USB serial port; usbserial is not started on
 this machine`) and leaves it. Not done: CH340 and PL2303, the same name
 for the same adapter after a re-plug (the first free number is taken),
 and exclusive open.
+
+**More than one Dis VM** (`vm(1)`, `vm(3)`). The kernel runs up to one
+Dis virtual machine a core, each with its own interpreter, heap,
+collector and modules, so programs in different VMs run at the same
+time on different cores:
+
+    vm 1 myjob            # run myjob in VM 1; prints its pid
+    vm                    # the VMs, and what is in each
+
+VM 0 is the boot VM, where everything runs unless it is placed elsewhere,
+and the only one with `$Tk` and `$Draw` — the desktop's. VMs share the
+kernel — namespace, devices, files, pipes, served names — and no Dis
+objects, so programs in different VMs talk through files as programs on
+different machines do. `spawn` stays in its VM. `ps` and `kill` see every
+VM. On a Pi 4B, `jitbench2` takes 979 ms alone, 4013 ms each with four in
+one VM, and 1073–1271 ms each with one in each of four VMs.
+
+A card can place programs at boot with a `vms` file, one per line:
+
+    # vm  command and arguments
+    1     svc/httpd/httpd -p 80
+
+With no file every program runs in VM 0, as before there were VMs.
 
 ## 9. Testing
 

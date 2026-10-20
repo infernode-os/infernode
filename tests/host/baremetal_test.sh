@@ -2995,6 +2995,98 @@ else
 fi
 
 #
+# 3f2. A touchscreen that calls itself a mouse (#927).
+#
+#     QEMU's usb-tablet is a HID mouse interface whose reports are
+#     ABSOLUTE positions, 0..32767 -- the Waveshare panel's kind of
+#     device. The pointer driver must read the report descriptor,
+#     notice, and write "a" (a fraction of the screen) rather than
+#     treating the numbers as movement. Half-way across and a quarter
+#     of the way down must land there on the screen, whatever its size.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$QEMUARGS" <<'PYEOF' > "$BUILD/$PLAT-tablet.txt" 2>&1
+import subprocess, socket, json, time, sys, threading, os, re
+qemu, img, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+PORT = int(os.environ["QMPBASE"]) + 5
+p = subprocess.Popen([qemu] + extra.split() + ["-device", "usb-tablet",
+                     "-kernel", img, "-display", "none", "-serial", "null", "-serial", "stdio",
+                     "-qmp", f"tcp:127.0.0.1:{PORT},server=on,wait=off"],
+                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+try:
+    s = None
+    deadline = time.time() + 20
+    while time.time() < deadline and s is None:
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT), timeout=1)
+        except OSError:
+            time.sleep(0.3)
+    if s is None:
+        print("SKIP no QMP"); p.kill(); sys.exit(0)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    deadline = time.time() + 60
+    while time.time() < deadline and b"mouseusb: " not in buf:
+        time.sleep(0.2)
+    if b"mouseusb: " not in buf:
+        print("SKIP pointer driver never started"); p.kill(); sys.exit(0)
+    time.sleep(3)
+    p.stdin.write(b"path=(/dis .)\r"); p.stdin.flush()
+    time.sleep(1.5)
+    p.stdin.write(b"cat /dev/pointer\r"); p.stdin.flush()
+    time.sleep(2)
+    for _ in range(3):
+        f.write(json.dumps({"execute": "input-send-event", "arguments":
+            {"events": [{"type": "abs", "data": {"axis": "x", "value": 16384}},
+                        {"type": "abs", "data": {"axis": "y", "value": 8192}}]}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.5)
+    time.sleep(2)
+    p.stdin.write(b"cat /dev/fbinfo >[2] /dev/null\r"); p.stdin.flush()
+    time.sleep(1)
+    s.close()
+finally:
+    p.kill(); p.wait()
+txt = bytes(buf).decode("utf-8", "replace")
+print("ABSOLUTE-OK" if re.search(r"mouseusb: \S+ ready on endpoint .*absolute", txt) else "ABSOLUTE-MISSING")
+fb = re.search(r"fb:\s+(\d+)x(\d+)x", txt)
+w, h = (int(fb.group(1)), int(fb.group(2))) if fb else (0, 0)
+rep = re.findall(r"m\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(\d+)", txt)
+print("SCREEN %dx%d LAST %s" % (w, h, rep[-1][:2] if rep else "none"))
+if w and rep:
+    x, y = int(rep[-1][0]), int(rep[-1][1])
+    print("PLACED-OK" if abs(x - w//2) <= 3 and abs(y - h//4) <= 3 else "PLACED-WRONG")
+else:
+    print("PLACED-NONE")
+PYEOF
+
+TABOUT="$(cat "$BUILD/$PLAT-tablet.txt")"
+[[ "$VERBOSE" -eq 1 ]] && { echo "  --- tablet ---"; echo "$TABOUT"; }
+if grep -q '^SKIP' <<<"$TABOUT"; then
+    skip "tablet ($(grep '^SKIP' <<<"$TABOUT" | head -1))"
+else
+    if grep -q 'ABSOLUTE-OK' <<<"$TABOUT"; then
+        pass "the pointer driver reads a tablet's report descriptor and finds absolute X and Y"
+    else
+        fail "the pointer driver did not take the tablet as absolute"
+    fi
+    if grep -q 'PLACED-OK' <<<"$TABOUT"; then
+        pass "a tablet position lands at that fraction of the screen ($(grep -o 'SCREEN.*' <<<"$TABOUT"))"
+    else
+        fail "a tablet position did not land where it should ($(grep -o 'SCREEN.*' <<<"$TABOUT"))"
+    fi
+fi
+
+#
 # 3g. The SD card, as blocks.
 #
 #     QEMU's raspi3b models both of the SoC's SD controllers -- the

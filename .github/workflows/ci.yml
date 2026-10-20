@@ -218,6 +218,14 @@ jobs:
         chmod +x tests/host/charon_formowner_test.sh
         ROOT=. bash tests/host/charon_formowner_test.sh
 
+    - name: Check a button's label in the files is the one shown
+      run: |
+        # A web component's button showed no label in forms or dom/N/text:
+        # its label is what the page put in the component, shown through a
+        # slot, and the files read only the button's own subtree.
+        chmod +x tests/host/charon_shadowlabel_test.sh
+        ROOT=. bash tests/host/charon_shadowlabel_test.sh
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;

@@ -426,6 +426,7 @@ bench machine depending on what these say. All are optional.
 | `btkeys` | factotum key syntax | Where `bt9p` keeps link keys so pairings survive a reboot. |
 | `netconsole` | first line: empty, or a token; a later line `interface ether0` (recommended) | A shell on **TCP 17010**, section 7. With `interface`, only connections arriving at that interface's addresses are served; without it, every interface, Wi-Fi included. Absent = off. |
 | `cpulisten` | empty, or an address (`tcp!*!17030`) on the first line | The remote-desktop listener: `cpu(1)` from another InferNode runs programs here that draw on its screen, authenticated by certificate and encrypted (AES-256). Needs this machine's certificate in `usr/inferno/keyring/default`, or it refuses to start. Runs in the desktop's narrowed namespace, headless or not. Empty = `tcp!*!rstyx` (6668). Absent = off. See [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md). |
+| `usbquirks` | one line per USB pointer that needs it: `vid:pid word…`, the IDs in hex as the boot log prints them (`0eef:0005`). Words: `swapxy`, `invertx`, `inverty` (a touchscreen mounted turned or mirrored), `boot` (ignore the report descriptor and use the boot protocol), `ignore` (no driver at all) | How `mouseusb` treats that device. It reads every pointer's own report descriptor, so a mouse, a tablet and a touchscreen that calls itself a mouse all work without an entry; this is only for what the descriptor gets wrong (#927). Absent = no exceptions. |
 | `firmware/` | | Radio firmware, as above. |
 | `infernode8.img`, `tryboot.img`, `tryboot.cmd` | | The kernel, a candidate, and the word `tryboot` — section 4. |
 
@@ -631,6 +632,24 @@ names the adapter (`is a USB serial port; usbserial is not started on
 this machine`) and leaves it. Not done: CH340 and PL2303, the same name
 for the same adapter after a re-plug (the first free number is taken),
 and exclusive open.
+
+**A USB Ethernet adapter** is driven by `etherusb`, which reads every
+configuration the device has and takes the best function in them:
+**CDC NCM** (newer adapters, phones, a Linux gadget), then **CDC ECM**
+(most adapters, and QEMU's `usb-net`), then **RNDIS**; the LAN78xx (the
+3B+'s own) is recognised by its vendor. `etherusb=rndis` (or `ecm`,
+`ncm`) on the kernel's command line puts one first. The adapter is
+`/net/ether0` on a board whose Ethernet is USB (the 3B+), and on one
+whose `ether0` is a kernel driver — a Pi 4's GENET, virt's virtio —
+the first spare, `/net/ether2`. A second interface gets its own
+network's address by DHCP but leaves the default route and name servers
+where they are, so plugging a phone or a gadget into a Pi 4 does not
+take it off its own network. Not done: link state from ECM's and NCM's
+notification endpoint (the link is taken to be up), and a composite
+device that is a disk as well as an adapter (the Jetson's stock gadget):
+each driver wants the control endpoint, which is exclusive-open, so such
+a device is left to `diskusb`; one with Ethernet and a serial port gets
+Ethernet only.
 
 **More than one Dis VM** (`vm(1)`, `vm(3)`). The kernel runs up to one
 Dis virtual machine a core, each with its own interpreter, heap,

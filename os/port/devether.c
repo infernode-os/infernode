@@ -104,6 +104,15 @@ enum {
 	/* families: who wraps a frame for the wire */
 	Frndis		= 0,
 	Flan78xx	= 1,
+	Fecm		= 2,		/* CDC ECM: a transfer is a frame, nothing around it */
+	Fncm		= 3,		/* CDC NCM: a transfer is an NTB-16 of frames */
+
+	/* NCM's NTB-16: a 12-byte NTH16, the datagrams, an NDP16 indexing them */
+	Nthlen		= 12,
+	Nthsig		= 0x484D434E,	/* "NCMH" */
+	Ndpsig		= 0x304D434E,	/* "NCM0": datagrams without a CRC */
+	Ndpsigcrc	= 0x314D434E,	/* "NCM1": each carries its CRC-32 */
+	Ndphdr		= 8,		/* signature, length, next NDP */
 
 	/* RNDIS: one 44-byte header per packet message */
 	Rnishdr		= 44,
@@ -129,7 +138,15 @@ enum {
 	 */
 	Txbatch		= 16,
 
-	Nether		= 2,		/* #l and #l1 */
+	/*
+	 * #l, #l1, and two more. 0 is the USB path, or a board's wired
+	 * driver (GENET, virtio); 1 is the radio's; 2 and 3 exist for a
+	 * USB adapter on a machine whose 0 is taken -- a Pi 4 has GENET
+	 * there, so before these a USB Ethernet device on it had nowhere
+	 * to go.
+	 */
+	Nether		= 4,
+	Firstusbx	= 2,		/* the first instance only a USB device fills */
 };
 
 /* the struct is in etherif.h, where a link driver can see it */
@@ -437,6 +454,189 @@ lanunwrap(uchar *p, long n, int atend, uchar **fp, long *lp)
 }
 
 /*
+ * ECM: what one bulk IN transfer carried is one frame. A read ends at
+ * the transfer's short packet (or the zero-length one after a frame
+ * that fills its last packet), so a whole read is a record. A transfer
+ * longer than a frame and the byte a sender may add to avoid the
+ * zero-length packet are tolerated -- os/ip reads lengths from the
+ * headers -- and anything bigger means the reads have lost the
+ * transfer boundaries.
+ */
+static long
+ecmunwrap(uchar *p, long n, uchar **fp, long *lp)
+{
+	*fp = nil;
+	if(n > Maxframe + 4)
+		return -1;
+	if(n >= 14){
+		*fp = p;
+		*lp = n > Maxframe ? Maxframe : n;
+	}
+	return n;
+}
+
+static uint
+get2(uchar *p)
+{
+	return p[0] | (p[1]<<8);
+}
+
+static ulong
+get4(uchar *p)
+{
+	return p[0] | (p[1]<<8) | (p[2]<<16) | ((ulong)p[3]<<24);
+}
+
+static void
+put2(uchar *p, uint v)
+{
+	p[0] = v;
+	p[1] = v >> 8;
+}
+
+static void
+put4(uchar *p, ulong v)
+{
+	p[0] = v;
+	p[1] = v >> 8;
+	p[2] = v >> 16;
+	p[3] = v >> 24;
+}
+
+/*
+ * NCM: one NTB-16, which may hold many frames, so this delivers them
+ * itself rather than returning one. The NTH says how long the block
+ * is; a read that has not yet reached that length asks for more. The
+ * NDPs are a chain, each a list of (offset, length) ending in a zero
+ * entry; every offset and length is checked against the block before
+ * it is used, since they are the device's word and a bad one would
+ * otherwise be a read beyond the buffer. An NDP that indexes outside
+ * the block ends the walk of that NTB and is counted as a framing
+ * error: the frames already delivered from it stand.
+ */
+static long
+ncmunwrap(Ether *e, uchar *p, long n, int atend)
+{
+	long blen, ndp, dlen, off, end;
+	ulong sig;
+	int hops, crc;
+
+	if(n < Nthlen)
+		return atend ? -1 : 0;
+	if(get4(p) != Nthsig || get2(p+4) != Nthlen)
+		return -1;
+	blen = get2(p+8);
+	if(blen < Nthlen || blen > e->nrxbuf)
+		return -1;
+	if(blen > n)
+		return atend ? -1 : 0;
+	ndp = get2(p+10);
+	for(hops = 0; ndp != 0 && hops < 16; hops++){
+		if(ndp < Nthlen || ndp % 4 != 0 || ndp + Ndphdr + 8 > blen)
+			break;
+		sig = get4(p+ndp);
+		if(sig != Ndpsig && sig != Ndpsigcrc)
+			break;
+		crc = sig == Ndpsigcrc;
+		end = ndp + get2(p+ndp+4);
+		if(end > blen || end < ndp + Ndphdr + 8)
+			break;
+		for(off = ndp + Ndphdr; off + 4 <= end; off += 4){
+			long di;
+
+			di = get2(p+off);
+			dlen = get2(p+off+2);
+			if(di == 0 || dlen == 0)
+				break;
+			if(crc)
+				dlen -= 4;
+			if(di < Nthlen || dlen < 14 || dlen > Maxframe || di + dlen > blen){
+				e->nif.frames++;
+				continue;
+			}
+			etheriq(e, p+di, dlen);
+		}
+		ndp = get2(p+ndp+6);
+	}
+	if(ndp != 0)
+		e->nif.frames++;	/* the chain went somewhere it cannot */
+	return blen;
+}
+
+/*
+ * NCM transmit: frames are packed after the NTH at the offsets the
+ * device asked for (wNdpOutDivisor, wNdpOutPayloadRemainder), their
+ * places noted, and ncmfinish writes the NDP after them and the NTH in
+ * front. The room checked for each frame includes the NDP it will
+ * need, so a packed block always finishes.
+ */
+static long
+ncmalign(long o, long div, long rem)
+{
+	return o + ((rem - o % div) % div + div) % div;
+}
+
+static long
+ncmndpsize(int nf)
+{
+	return Ndphdr + 4*(nf + 1);
+}
+
+static long
+ncmwrap(Ether *e, uchar *frame, long len, long o, int nf)
+{
+	long d, ndp;
+
+	if(o == 0)
+		o = Nthlen;
+	d = ncmalign(o, e->ndpdiv, e->ndprem);
+	ndp = ncmalign(d + len, e->ndpalign, 0);
+	if(nf >= nelem(e->ncmidx) || ndp + ncmndpsize(nf+1) + 1 > e->ntxbuf)
+		return -1;
+	memset(e->txbuf + o, 0, d - o);
+	memmove(e->txbuf + d, frame, len);
+	e->ncmidx[nf][0] = d;
+	e->ncmidx[nf][1] = len;
+	return d + len;
+}
+
+static long
+ncmfinish(Ether *e, long o, int nf)
+{
+	uchar *p;
+	long ndp, end;
+	int i;
+
+	ndp = ncmalign(o, e->ndpalign, 0);
+	memset(e->txbuf + o, 0, ndp - o);
+	p = e->txbuf + ndp;
+	put4(p, Ndpsig);
+	put2(p+4, ncmndpsize(nf));
+	put2(p+6, 0);
+	for(i = 0; i < nf; i++){
+		put2(p+Ndphdr+4*i, e->ncmidx[i][0]);
+		put2(p+Ndphdr+4*i+2, e->ncmidx[i][1]);
+	}
+	put4(p+Ndphdr+4*nf, 0);
+	end = ndp + ncmndpsize(nf);
+	/*
+	 * A block that fills its last packet exactly needs a zero-length
+	 * packet after it, unless it is as long as a block may be. Not
+	 * every host controller here sends one, so the block grows by a
+	 * byte instead, as Linux's cdc_ncm does; the NTH counts it.
+	 */
+	if(e->maxpkt > 0 && end % e->maxpkt == 0 && end < e->ntxbuf)
+		e->txbuf[end++] = 0;
+	p = e->txbuf;
+	put4(p, Nthsig);
+	put2(p+4, Nthlen);
+	put2(p+6, e->ntbseq++);
+	put2(p+8, end);
+	put2(p+10, ndp);
+	return end;
+}
+
+/*
  * Append one frame, wrapped for the device, to the transmit buffer.
  * Returns the new fill, or -1 if it does not fit.
  */
@@ -476,6 +676,21 @@ wrap(Ether *e, uchar *frame, long len, long o)
 		memmove(p + Ltxhdr, frame, len);
 		memset(p + Ltxhdr + len, 0, pad);
 		return o + Ltxhdr + len + pad;
+	case Fecm:
+		/*
+		 * One frame per transfer, so the writer sends each alone.
+		 * A frame that fills its last packet would need a
+		 * zero-length packet to end the transfer; a byte more does
+		 * the same with no help from the host controller, and the
+		 * receiver's IP reads its length from the header (Linux's
+		 * usbnet pads the same way).
+		 */
+		if(o != 0 || len + 1 > e->ntxbuf)
+			return -1;
+		memmove(e->txbuf, frame, len);
+		if(e->maxpkt > 0 && len % e->maxpkt == 0)
+			e->txbuf[len++] = 0;
+		return len;
 	}
 	return -1;
 }
@@ -517,7 +732,7 @@ etherunbind(Ether *e)
 	e->nif.link = 0;
 	qhangup(e->oq, "unbound");
 	qunlock(&e->bindlk);
-	print("ether0: kernel data path unbound\n");
+	print("%s: kernel data path unbound\n", e->nif.name);
 }
 
 static void
@@ -532,7 +747,7 @@ etherrxproc(void *a)
 	e = a;
 	in = e->inchan;
 	if(waserror()){
-		print("ether0: reader exits: %s\n", up->env->errstr);
+		print("%s: reader exits: %s\n", e->nif.name, up->env->errstr);
 		etherunbind(e);
 		cclose(in);
 		pexit("hangup", 1);
@@ -554,9 +769,9 @@ etherrxproc(void *a)
 		 * decides the missing-pad question with.
 		 */
 		{
-			uvlong t0;
-			static uvlong tlast;
+			uvlong t0, tlast;
 
+			tlast = e->rdlast;
 			t0 = fastticks(nil);
 			/*
 			 * Only gaps short enough to be part of a transfer
@@ -576,7 +791,7 @@ etherrxproc(void *a)
 				}
 			}
 			n = kchanio(in, e->rxbuf + e->nacc, e->burst, OREAD);
-			tlast = fastticks(nil);
+			tlast = e->rdlast = fastticks(nil);
 			rdtook = fastticks2ns(tlast - t0);
 			if(n > 0){
 				e->nrd++;
@@ -624,10 +839,29 @@ etherrxproc(void *a)
 		e->nacc += n;
 		off = 0;
 		for(;;){
-			used = e->family == Frndis ?
-				rndisunwrap(e->rxbuf+off, e->nacc-off, &fp, &flen) :
-				lanunwrap(e->rxbuf+off, e->nacc-off,
+			fp = nil;
+			switch(e->family){
+			case Frndis:
+				used = rndisunwrap(e->rxbuf+off, e->nacc-off, &fp, &flen);
+				break;
+			case Fecm:
+				used = ecmunwrap(e->rxbuf+off, e->nacc-off, &fp, &flen);
+				break;
+			case Fncm:
+				used = ncmunwrap(e, e->rxbuf+off, e->nacc-off, n < e->burst);
+				/*
+				 * A transfer is one NTB. What a short read
+				 * carried past the block is the device's
+				 * padding, not the start of another.
+				 */
+				if(used > 0 && n < e->burst)
+					used = e->nacc - off;
+				break;
+			default:
+				used = lanunwrap(e->rxbuf+off, e->nacc-off,
 					n < e->burst, &fp, &flen);
+				break;
+			}
 			if(used == 0)
 				break;
 			if(used < 0){
@@ -664,13 +898,18 @@ ethertxproc(void *a)
 	Ether *e;
 	Block *b;
 	long o, no;
-	int nf;
+	int nf, maxnf;
 
 	e = a;
 	in = e->inchan;
 	out = e->outchan;
+	maxnf = Txbatch;
+	if(e->family == Fecm)
+		maxnf = 1;	/* a transfer is a frame */
+	if(e->family == Fncm && e->maxdgrams > 0 && e->maxdgrams < maxnf)
+		maxnf = e->maxdgrams;
 	if(waserror()){
-		print("ether0: writer exits: %s\n", up->env->errstr);
+		print("%s: writer exits: %s\n", e->nif.name, up->env->errstr);
 		etherunbind(e);
 		if(out != in)
 			cclose(out);
@@ -683,18 +922,28 @@ ethertxproc(void *a)
 		o = 0;
 		nf = 0;
 		for(;;){
-			no = wrap(e, b->rp, BLEN(b), o);
+			if(e->family == Fncm)
+				no = ncmwrap(e, b->rp, BLEN(b) > Maxframe ? Maxframe : BLEN(b), o, nf);
+			else
+				no = wrap(e, b->rp, BLEN(b), o);
 			freeb(b);
 			if(no < 0)
 				break;	/* full: send what is packed */
 			o = no;
 			nf++;
-			if(nf >= Txbatch)
+			if(nf >= maxnf)
 				break;
 			b = qget(e->oq);
 			if(b == nil)
 				break;
 		}
+		/*
+		 * The frame that did not fit is dropped, as it always has
+		 * been here; the batch is sized so that only an oversized
+		 * NTB limit from a device makes that happen.
+		 */
+		if(e->family == Fncm && nf > 0)
+			o = ncmfinish(e, o, nf);
 		if(o > 0){
 			if(kchanio(out, e->txbuf, o, OWRITE) != o)
 				e->nif.oerrs++;
@@ -725,7 +974,16 @@ parsemac(uchar *to, char *from)
 }
 
 /*
- * The handoff: "bind <family> <mac> <mbps> <burst> <inpath> <outpath>".
+ * The handoff: "bind <family> <mac> <mbps> <burst> <inpath> <outpath>
+ * [name=value ...]".
+ *
+ * The optional words are what a family's framing needs to know about
+ * the device and that the endpoint channels cannot say: maxpkt (the
+ * bulk packet size, for the zero-length-packet rule) for ECM and NCM,
+ * and for NCM the device's GET_NTB_PARAMETERS answer -- txmax
+ * (dwNtbOutMaxSize), div and rem (wNdpOutDivisor and
+ * wNdpOutPayloadRemainder), align (wNdpOutAlignment) and maxdgrams
+ * (wNtbOutMaxDatagrams, 0 for no limit).
  *
  * Runs in the writing process, deliberately -- namec resolves the
  * endpoint paths in ITS namespace, where #u is bound, and the Chans it
@@ -737,28 +995,73 @@ parsemac(uchar *to, char *from)
 static void
 etherbindctl(Ether *e, char *args)
 {
-	char *f[8];
-	int nf, family;
-	long burst;
+	char *f[16], *v;
+	int nf, family, i;
+	long burst, maxpkt, txmax, div, rem, align, maxdgrams;
 	Chan *in, *out;
+	char pname[KNAMELEN];
 
 	nf = getfields(args, f, nelem(f), 1, " \t\n");
-	if(nf != 7)
+	if(nf < 7)
 		error(Ebadarg);
 	if(strcmp(f[1], "rndis") == 0)
 		family = Frndis;
 	else if(strcmp(f[1], "lan78xx") == 0)
 		family = Flan78xx;
+	else if(strcmp(f[1], "ecm") == 0)
+		family = Fecm;
+	else if(strcmp(f[1], "ncm") == 0)
+		family = Fncm;
 	else
 		error(Ebadarg);
+	maxpkt = 0;
+	txmax = 16*1024;
+	div = 4;
+	rem = 0;
+	align = 4;
+	maxdgrams = 0;
+	for(i = 7; i < nf; i++){
+		v = strchr(f[i], '=');
+		if(v == nil)
+			error(Ebadarg);
+		*v++ = 0;
+		if(strcmp(f[i], "maxpkt") == 0)
+			maxpkt = atoi(v);
+		else if(strcmp(f[i], "txmax") == 0)
+			txmax = atoi(v);
+		else if(strcmp(f[i], "div") == 0)
+			div = atoi(v);
+		else if(strcmp(f[i], "rem") == 0)
+			rem = atoi(v);
+		else if(strcmp(f[i], "align") == 0)
+			align = atoi(v);
+		else if(strcmp(f[i], "maxdgrams") == 0)
+			maxdgrams = atoi(v);
+		else
+			error(Ebadarg);
+	}
+	/*
+	 * The NCM numbers are the device's, and the transmit path does
+	 * arithmetic with them: refuse what would divide by zero or
+	 * misalign the NDP rather than trust it. 2048 is the least
+	 * dwNtbOutMaxSize the spec allows; 64KB is what NTB-16's
+	 * lengths can say.
+	 */
+	if(maxpkt < 0 || maxpkt > 4096 || div < 1 || div > 512 || rem < 0 || rem >= div ||
+	   align < 4 || align > 512 || (align & (align-1)) != 0 || maxdgrams < 0)
+		error(Ebadarg);
+	if(txmax < 2048)
+		txmax = 2048;
+	if(txmax > 0xFFFF)
+		txmax = 0xFFFF;
 
 	qlock(&e->bindlk);
 	if(waserror()){
 		qunlock(&e->bindlk);
 		nexterror();
 	}
-	if(e->bound)
-		error(Einuse);
+	if(e->bound || e->transmit != nil)
+		error(Einuse);	/* bound already, or a link driver's */
 
 	if(parsemac(e->nif.addr, f[2]) < 0)
 		error(Ebadarg);
@@ -771,14 +1074,14 @@ etherbindctl(Ether *e, char *args)
 		burst = 64*1024;
 
 	if(waserror()){
-		print("ether0: open %s: %s\n", f[5], up->env->errstr);
+		print("%s: open %s: %s\n", e->nif.name, f[5], up->env->errstr);
 		nexterror();
 	}
 	in = namec(f[5], Aopen, OREAD, 0);
 	poperror();
 	if(waserror()){
 		cclose(in);
-		print("ether0: open %s: %s\n", f[6], up->env->errstr);
+		print("%s: open %s: %s\n", e->nif.name, f[6], up->env->errstr);
 		nexterror();
 	}
 	if(strcmp(f[5], f[6]) == 0)
@@ -791,10 +1094,25 @@ etherbindctl(Ether *e, char *args)
 	e->burst = burst;
 	e->inchan = in;
 	e->outchan = out;
-	/* room for one gathered transfer plus a record straddling out of it */
+	e->maxpkt = maxpkt;
+	e->ndpdiv = div;
+	e->ndprem = rem;
+	e->ndpalign = align;
+	e->maxdgrams = maxdgrams;
+	e->ntbseq = 0;
+	/*
+	 * Room for one gathered transfer plus a record straddling out
+	 * of it. A buffer from an earlier bind (the device unplugged and
+	 * plugged back) is freed by now or never was: the reader and
+	 * writer that used it have both left before bound cleared.
+	 */
+	free(e->rxbuf);
+	free(e->txbuf);
 	e->nrxbuf = burst + 2*(Rnishdr + Maxframe);
 	e->rxbuf = smalloc(e->nrxbuf);
 	e->ntxbuf = Txbatch * (Rnishdr + Maxframe + 4);
+	if(family == Fncm)
+		e->ntxbuf = txmax;
 	e->txbuf = smalloc(e->ntxbuf);
 	e->nacc = 0;
 	qreopen(e->oq);	/* hung up by the last unbind */
@@ -802,13 +1120,15 @@ etherbindctl(Ether *e, char *args)
 	e->nif.link = 1;
 	e->bound = 1;
 
-	kproc("ether0rx", etherrxproc, e, 0);
-	kproc("ether0tx", ethertxproc, e, 0);
+	snprint(pname, sizeof pname, "%srx", e->nif.name);
+	kproc(pname, etherrxproc, e, 0);
+	snprint(pname, sizeof pname, "%stx", e->nif.name);
+	kproc(pname, ethertxproc, e, 0);
 
 	qunlock(&e->bindlk);
 	poperror();
-	print("ether0: kernel data path bound (%s, %d mbps, burst %ld)\n",
-		f[1], e->nif.mbps, burst);
+	print("%s: kernel data path bound (%s, %d mbps, burst %ld)\n",
+		e->nif.name, f[1], e->nif.mbps, burst);
 }
 
 static void
@@ -838,11 +1158,13 @@ etherreset(void)
 }
 
 /*
- * "#l" is ether0, "#lN" is etherN. An instance without a driver
- * exists only as number 0, the USB path; any other refuses with
- * Enodev, so a kernel with no radio driver linked has no /net/ether1
- * to walk into rather than an empty one. A driver's attach runs here,
- * in the binding process, and its error is the bind's error.
+ * "#l" is ether0, "#lN" is etherN. An instance without a driver is a
+ * USB path: number 0, and the spares from Firstusbx up, which stay
+ * empty (an address of zeros, no link) until etherusb binds one. Any
+ * other driverless instance -- 1, the radio's -- refuses with Enodev,
+ * so a kernel with no radio driver linked has no /net/ether1 to walk
+ * into rather than an empty one. A driver's attach runs here, in the
+ * binding process, and its error is the bind's error.
  */
 static Chan*
 etherattach(char *spec)
@@ -860,7 +1182,7 @@ etherattach(char *spec)
 	if(n >= Nether)
 		error(Enodev);
 	e = &ether[n];
-	if(n != 0 && e->attach == nil)
+	if(n != 0 && n < Firstusbx && e->attach == nil)
 		error(Enodev);
 
 	c = devattach('l', spec);
@@ -944,7 +1266,7 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 			e->transmit(e);
 			return n;
 		}
-		if(e->ctlrno != 0 || !e->bound)
+		if(!e->bound)
 			error(Enodev);
 		b = allocb(n);
 		memmove(b->wp, buf, n);
@@ -969,11 +1291,18 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 		if(n >= 11 && strncmp(buf, "nonblocking", 11) == 0)
 			return n;
 		/*
-		 * The verbs below are instance 0's: the USB handoff and
-		 * its measurement switches. A driver-backed instance
-		 * gets netif's verbs and then its own.
+		 * The verbs below are the USB path's: the handoff and its
+		 * measurement switches. A driver-backed instance gets
+		 * netif's verbs and then its own, and a bind is refused
+		 * there in so many words rather than handed to a driver
+		 * that would call it a bad ctl.
 		 */
-		if(e->ctlrno != 0)
+		if(e->transmit != nil){
+			if(n > 5 && strncmp(buf, "bind ", 5) == 0)
+				error(Einuse);
+			break;
+		}
+		if(e->ctlrno != 0 && e->ctlrno < Firstusbx)
 			break;
 		if(n >= 6 && strncmp(buf, "unbind", 6) == 0){
 			etherunbind(e);
@@ -981,7 +1310,7 @@ etherwrite(Chan *c, void *buf, long n, vlong off)
 		}
 		if(n >= 9 && strncmp(buf, "blackhole", 9) == 0){
 			e->blackhole ^= 1;
-			print("ether0: blackhole %s\n",
+			print("%s: blackhole %s\n", e->nif.name,
 				e->blackhole ? "on" : "off");
 			return n;
 		}
@@ -1083,7 +1412,7 @@ etherbwrite(Chan *c, Block *bp, ulong offset)
 			e->transmit(e);
 			return n;
 		}
-		if(e->ctlrno != 0 || !e->bound){
+		if(!e->bound){
 			freeb(bp);
 			error(Enodev);
 		}

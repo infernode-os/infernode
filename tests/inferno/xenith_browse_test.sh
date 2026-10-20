@@ -316,6 +316,45 @@ if {ftest -s /tmp/xenith_browse.port} {
 	echo 'SKIP: no HTTP server (python3)'
 }
 
+# A page's viewport is its window's height: the screen is 600 high, so
+# a window's page is less (a viewport of 600 whatever the window cut a
+# dialog sized to it off below the window)
+VIEWPORT=file:///tests/xenith/html/viewport.html
+id=`{cat $XENITH/new/ctl}
+id=${index 1 $id}
+echo -n $VIEWPORT > $XENITH/$id/body
+n=`{echo -n $VIEWPORT | wc -c}
+echo 'ML0 '^$n > $XENITH/$id/event
+echo clean > $XENITH/$id/ctl
+echo delete > $XENITH/$id/ctl
+v=()
+for i in 1 2 3 4 5 {
+	if {~ $#v 0} {
+		v=`{winof $VIEWPORT}
+		sleep 1
+	}
+}
+vt=()
+mkdir -p /tmp/xenith_browse_vp
+if {! ~ $#v 0 && mount -A `{cat $XENITH/$v/web} /tmp/xenith_browse_vp} {
+	echo scripts on > /tmp/xenith_browse_vp/ctl
+	for i in 1 2 3 4 5 {
+		vt=`{cat /tmp/xenith_browse_vp/title}
+		if {! ~ ${index 1 $vt} vh} {
+			sleep 1
+		}
+	}
+	unmount /tmp/xenith_browse_vp
+}
+if {~ ${index 1 $vt} vh && ! ~ ${index 2 $vt} 600 && ~ ${index 2 $vt} [1-5][0-9][0-9]} {
+	pass 'the viewport is the window''s height:' ${index 2 $vt}
+} {
+	fail 'viewport:' $vt
+}
+if {! ~ $#v 0} {
+	echo delete > $XENITH/$v/ctl
+}
+
 # Nothing went wrong on the way: a browser window's tag was set before
 # its page was open, and asked the engine not yet there for its commands
 # ("openfile: ... module not loaded", on the first page of a session)

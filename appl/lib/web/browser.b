@@ -378,7 +378,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	pg: ref Pg;
 	err: string;
 	{
-		(pg, err) = page->begin(url, method, ctype, body, s.width, s.height);
+		(pg, err) = page->go(url, method, ctype, body, s.width, s.height);
 	} exception e {
 	"*" =>
 		pg = nil;

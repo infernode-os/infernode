@@ -33,6 +33,7 @@ include "web/fonts.m";
 include "web/layout.m";
 	layout: Layout;
 	Box: import layout;
+include "plumbmsg.m";
 include "web/page.m";
 
 display: ref Display;
@@ -187,6 +188,17 @@ phase(what: string)
 
 begin(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
 {
+	return begin0(url, method, reqctype, body, width, height, 1);
+}
+
+go(url, method, reqctype: string, body: array of byte, width, height: int): (ref Pg, string)
+{
+	return begin0(url, method, reqctype, body, width, height, 2);
+}
+
+# page is 1 for a page (a frame's too), 2 for one navigated to
+begin0(url, method, reqctype: string, body: array of byte, width, height: int, page: int): (ref Pg, string)
+{
 	readsettings();
 	(pok, nil) := sys->stat("/env/pagetime");
 	ptime = pok >= 0;
@@ -202,7 +214,7 @@ begin(url, method, reqctype: string, body: array of byte, width, height: int): (
 	ctype, err, final: string;
 	(scheme, nil) := splitscheme(url);
 	if(method == "POST" || scheme == "http" || scheme == "https")
-		(data, ctype, err, final, nil) = webfsp(url, method, reqctype, body, nil, 1);
+		(data, ctype, err, final, nil) = webfsp(url, method, reqctype, body, nil, page);
 	else
 		(data, ctype, err, final) = fetchfinal(url, nil);
 	phase(sys->sprint("fetched (%d bytes)", len data));
@@ -2506,7 +2518,8 @@ showable(ctype: string): int
 	return 0;
 }
 
-# webfsh; for a page (page set), what Charon cannot show is not read
+# webfsh; for a page (page set), what Charon cannot show is not read,
+# and for one navigated to (page 2) it is saved and opened
 webfsp(url, method, reqctype: string, body: array of byte, accept: string, page: int): (array of byte, string, string, string, string)
 {
 	cfd := sys->open(WEBFS + "/clone", Sys->OREAD);
@@ -2541,6 +2554,16 @@ webfsp(url, method, reqctype: string, body: array of byte, accept: string, page:
 		if(final == "")
 			final = url;
 		t := readstr(dir + "/contenttype");
+		if(page == 2) {
+			hdr: string;
+			if((hfd := sys->open(dir + "/header", Sys->OREAD)) != nil)
+				hdr = string readall(hfd);
+			(path, size, err) := download(bfd, final, hdr);
+			if(err != nil)
+				return (nil, t, sys->sprint("%s is %s, which Charon does not show, and it was not saved: %s", final, t, err), final, nil);
+			plumbfile(path);
+			return (savedpage(final, t, path, size), "text/html", nil, final, nil);
+		}
 		return (nil, t, sys->sprint("%s is %s, which Charon does not show", final, t), final, nil);
 	}
 	data := readall(bfd);
@@ -2556,6 +2579,152 @@ webfsp(url, method, reqctype: string, body: array of byte, accept: string, page:
 	if((hfd := sys->open(dir + "/header", Sys->OREAD)) != nil)
 		header = string readall(hfd);
 	return (data, ctype, nil, final, header);
+}
+
+# ---- downloads ----
+
+# A body saved under the name the server gives it (Content-Disposition)
+# or the last element of its URL, made safe for a file name, in
+# $home/Downloads if there is one, else /tmp; never over a file already
+# there.  The path, the size, or an error.
+download(bfd: ref Sys->FD, url, header: string): (string, big, string)
+{
+	dir := "/tmp";
+	home := readstr("/env/home");
+	if(home != "") {
+		(ok, d) := sys->stat(home + "/Downloads");
+		if(ok >= 0 && (d.mode & Sys->DMDIR))
+			dir = home + "/Downloads";
+	}
+	name := safename(dispositionname(header));
+	if(name == "")
+		name = safename(urlname(url));
+	if(name == "")
+		name = "download";
+	(stem, ext) := splitext(name);
+	path := dir + "/" + name;
+	for(i := 1; ; i++) {
+		(ok, nil) := sys->stat(path);
+		if(ok < 0)
+			break;
+		path = sys->sprint("%s/%s-%d%s", dir, stem, i, ext);
+	}
+	fd := sys->create(path, Sys->OWRITE|Sys->OEXCL, 8r644);
+	if(fd == nil)
+		return (nil, big 0, sys->sprint("cannot create %s: %r", path));
+	size := big 0;
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(bfd, buf, len buf)) > 0) {
+		if(sys->write(fd, buf, n) != n) {
+			e := sys->sprint("writing %s: %r", path);
+			sys->remove(path);
+			return (nil, big 0, e);
+		}
+		size += big n;
+	}
+	if(n < 0) {
+		e := sys->sprint("reading %s: %r", url);
+		sys->remove(path);
+		return (nil, big 0, e);
+	}
+	return (path, size, nil);
+}
+
+# Content-Disposition's filename, if the header has one
+dispositionname(header: string): string
+{
+	(nil, lines) := sys->tokenize(header, "\r\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		if(!prefix(lower(l), "content-disposition:"))
+			continue;
+		(nil, parts) := sys->tokenize(l[len "content-disposition:":], ";");
+		for(; parts != nil; parts = tl parts) {
+			p := squash(hd parts);
+			if(prefix(lower(p), "filename=")) {
+				v := p[len "filename=":];
+				if(len v >= 2 && v[0] == '"' && v[len v - 1] == '"')
+					v = v[1:len v - 1];
+				return v;
+			}
+		}
+	}
+	return nil;
+}
+
+# the last element of a URL's path
+urlname(url: string): string
+{
+	for(i := 0; i < len url; i++)
+		if(url[i] == '?' || url[i] == '#') {
+			url = url[0:i];
+			break;
+		}
+	for(i = len url - 1; i >= 0; i--)
+		if(url[i] == '/')
+			return url[i+1:];
+	return nil;
+}
+
+# a name with only letters, digits, '.', '-' and '_' (others '_'), not
+# starting with '.', and not over 120 characters; the plumber's rules
+# take a file's name as such characters
+safename(s: string): string
+{
+	r := "";
+	for(i := 0; i < len s && len r < 120; i++) {
+		c := s[i];
+		if(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_')
+			r[len r] = c;
+		else
+			r[len r] = '_';
+	}
+	while(len r > 0 && r[0] == '.')
+		r = r[1:];
+	return r;
+}
+
+splitext(name: string): (string, string)
+{
+	for(i := len name - 1; i > 0; i--)
+		if(name[i] == '.')
+			return (name[0:i], name[i:]);
+	return (name, "");
+}
+
+# what is saved is opened: plumbed, as a file name, to whatever opens
+# files (Xenith, Lucifer's presentation); nothing if there is no plumber
+plumbfile(path: string)
+{
+	pm := load Plumbmsg Plumbmsg->PATH;
+	if(pm == nil || pm->init(1, nil, 0) < 0)
+		return;
+	dir := "/";
+	for(i := len path - 1; i > 0; i--)
+		if(path[i] == '/') {
+			dir = path[0:i];
+			break;
+		}
+	m := ref Plumbmsg->Msg("charon", nil, dir, "text", nil, array of byte path);
+	m.send();
+}
+
+savedpage(url, ctype, path: string, size: big): array of byte
+{
+	return array of byte ("<!doctype html><title>Saved " + escape(basename(path)) + "</title>" +
+		"<body style='font-family: sans-serif; margin: 2em 3em; color: #333'>" +
+		"<h1 style='font-size: 1.4em; font-weight: normal'>Saved</h1>" +
+		"<p style='overflow-wrap: anywhere'>" + escape(path) + "</p>" +
+		"<p style='color: #555'>" + escape(ctype) + ", " + string size + " bytes, from</p>" +
+		"<p style='overflow-wrap: anywhere; color: #555'>" + escape(url) + "</p>");
+}
+
+basename(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			return path[i+1:];
+	return path;
 }
 
 readstr(path: string): string

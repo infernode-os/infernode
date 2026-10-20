@@ -195,6 +195,11 @@ jobs:
         chmod +x tests/host/js_formpost_test.sh
         ROOT=. bash tests/host/js_formpost_test.sh
 
+    - name: Check a long POST body is sent whole
+      run: |
+        chmod +x tests/host/charon_bigpost_test.sh
+        ROOT=. bash tests/host/charon_bigpost_test.sh
+
     - name: Check Charon's start page ships
       run: |
         # The start page must be a file every release package carries
@@ -225,6 +230,11 @@ jobs:
         # slot, and the files read only the button's own subtree.
         chmod +x tests/host/charon_shadowlabel_test.sh
         ROOT=. bash tests/host/charon_shadowlabel_test.sh
+
+    - name: Check a label in a shadow tree checks its own checkbox
+      run: |
+        chmod +x tests/host/charon_shadowcheck_test.sh
+        ROOT=. bash tests/host/charon_shadowcheck_test.sh
 
     - name: Check a PDF navigated to is saved and opened
       run: |

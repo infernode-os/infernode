@@ -1714,7 +1714,10 @@ Session.click(s: self ref Session, n: int): string
 		spawn picsome(s, s.gen, pg, us);
 		return nil;
 	}
-	for(m := n; m > 1; m = d.nodes[m].parent) {
+	# up the tree as shown: a component's text given to a slot in its
+	# shadow tree is in what holds the slot (a label, a link)
+	f := dom->flat(d);
+	for(m := n; m > 1; m = shownparent(d, f, m)) {
 		nd := d.nodes[m];
 		if(nd.kind != Dom->Element || nd.ns != Dom->HTML)
 			continue;
@@ -1728,9 +1731,12 @@ Session.click(s: self ref Session, n: int): string
 				return nil;
 			}
 		Dom->Tlabel =>
+			# for names an id in the label's own tree: a web
+			# component's shadow root has its own ids (JSTOR's
+			# checkboxes each hold a "checkbox-element")
 			if((id := d.attr(m, "for")) != nil) {
 				for(c := 1; c < d.n; c++)
-					if(iscontrol(d, c) && d.attr(c, "id") == id)
+					if(iscontrol(d, c) && d.attr(c, "id") == id && samescope(f, c, m))
 						return s.click(c);
 			}
 			for(c := nextin(d, m, m); c != 0; c = nextin(d, c, m))
@@ -1827,6 +1833,23 @@ popovers(s: ref Session, pg: ref Pg, n: int): int
 		event(s, "update");
 	}
 	return invoked != 0;
+}
+
+# n's parent in the flat tree, or in the document's if n is not in it
+shownparent(d: ref Doc, f: ref Dom->Flat, n: int): int
+{
+	if(f != nil && n < len f.parent && f.parent[n] != 0)
+		return f.parent[n];
+	return d.nodes[n].parent;
+}
+
+# whether nodes a and b are in the same tree (the document's, or one
+# shadow root's)
+samescope(f: ref Dom->Flat, a, b: int): int
+{
+	if(f == nil)
+		return 1;
+	return a < len f.scope && b < len f.scope && f.scope[a] == f.scope[b];
 }
 
 byid(d: ref Doc, id: string): int

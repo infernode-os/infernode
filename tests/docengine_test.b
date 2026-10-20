@@ -384,7 +384,7 @@ testImage(t: ref T)
 
 style(width: int): ref Docengine->Style
 {
-	return ref Docengine->Style(width, nil, nil, nil, nil, nil, nil);
+	return ref Docengine->Style(width, nil, nil, nil, nil, nil, nil, 0);
 }
 
 testMarkdown(t: ref T)

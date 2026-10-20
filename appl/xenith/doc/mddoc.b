@@ -76,7 +76,7 @@ set(s: ref State): string
 {
 	st := s.style;
 	if(st == nil)
-		st = ref Style(800, nil, nil, nil, nil, nil, nil);
+		st = ref Style(800, nil, nil, nil, nil, nil, nil, 0);
 	if(st.font == nil){
 		if(propfont == nil && (propfont = Font.open(display, PROPFONT)) == nil)
 			propfont = Font.open(display, "*default*");

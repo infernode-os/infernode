@@ -1,0 +1,153 @@
+.TH ASK 1
+.SH NAME
+ask, llmapi \- put a question to a language model
+.SH SYNOPSIS
+.B ask
+[
+.B -ns
+] [
+.B -m
+.I model
+] [
+.I system
+]
+.br
+.B llmapi
+[
+.B -ns
+] [
+.B -b
+.BR anthropic | openai
+] [
+.B -u
+.I url
+] [
+.B -m
+.I model
+] [
+.B -t
+.I maxtokens
+] [
+.I system
+]
+.SH DESCRIPTION
+.I Ask
+puts the text on its standard input to a language model, with the
+instructions in the file
+.IR system ,
+and prints the answer.
+A tool that wants a model's answer pipes to it, and so needs no
+particular service and does not know which model it has.
+.B $llm
+says which way, as one line of text:
+.TP
+.B llm
+the model mounted at
+.B /mnt/llm
+.RI ( llmsrv ,
+or one mounted from another machine): a session is cloned from
+.BR new ,
+the instructions written to its
+.BR system ,
+the question to its
+.BR ask ,
+the answer read back, and the session closed;
+.TP
+.BR anthropic " [\fIurl\fP]"
+the Anthropic API, called from here by
+.IR llmapi ;
+.TP
+.BI openai " url"
+an OpenAI-compatible API (Ollama, vLLM), the same way;
+.TP
+anything else
+a command, given the instructions, a blank line and the question on its
+standard input; what it prints is the answer.
+Where the command has a word
+.BR {system} ,
+the instructions are put there as one argument and only the question
+goes on its input: the host's Claude command is a plain model as
+\f5os claude -p --tools '' --system-prompt {system}\fP.
+.PP
+Unset, it is
+.B llm
+when
+.B /mnt/llm/new
+is there, and
+.B anthropic
+otherwise.
+.B -m
+names the model.
+.B -n
+prints only the model's name.
+.B -s
+prints only the settings the question is asked with, one line of
+.IB attr = value
+words, the same three whatever the way:
+.EX
+	temperature=default maxtokens=8192 thinking=off
+.EE
+read from the session's files for
+.BR llm ,
+and each
+.B unknown
+for a command, whose settings are its own.
+A tool that keeps a record of what a model wrote puts the model's name
+and this line beside it.
+.PP
+.I Llmapi
+calls a model's API directly, with no service: the Anthropic Messages
+API
+.RB ( -b
+.BR anthropic ,
+the default;
+.B -u
+for another address), or an OpenAI-compatible one
+.RB ( -b
+.B openai
+.B -u
+.IR url ).
+The key is factotum's
+.RB ( "proto=pass service=anthropic" ,
+or
+.BR service=openai ),
+or failing that
+.B $ANTHROPIC_API_KEY
+or
+.BR $OPENAI_API_KEY ;
+a local OpenAI-compatible server needs none.
+No temperature is sent: the model's own is used.
+.B -t
+caps the answer's length (8192 tokens).
+.B -n
+and
+.B -s
+are as for
+.IR ask .
+.SH EXAMPLES
+A command's answer, with no model at all, as a test gives one:
+.EX
+	llm='cat > /dev/null; echo yes'
+	echo 'Is it raining?' | ask
+.EE
+A local model:
+.EX
+	llm='openai http://localhost:11434/v1'
+	echo 'Name a prime.' | ask -m llama3.2 /lib/myprompt
+.EE
+.SH SOURCE
+.B /dis/ask
+.br
+.B /appl/cmd/llmapi.b
+.SH SEE ALSO
+.IR factotum (4);
+.BR llmsrv 's
+files, in
+.B docs/llm-mount.md
+in the source tree
+.SH BUGS
+A command run by
+.I ask
+is the host's, if it begins
+.BR os ,
+and not confined by the caller's name space.

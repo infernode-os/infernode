@@ -503,6 +503,7 @@ dis/lib/xml.dis
 dis/limbo.dis
 dis/limbtest.dis
 dis/listen.dis
+dis/llmapi.dis
 dis/llmctl9p.dis
 dis/llmsrv.dis
 dis/localcron.dis

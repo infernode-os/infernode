@@ -1,0 +1,136 @@
+#!/dis/sh.dis
+# ask [-ns] [-m model] [system] - put the text on standard input to a
+# language model, with the instructions in the file system, and print
+# its answer; with -n, print only the model's name; with -s, only the
+# settings it is asked with, one line of attr=value words, the same
+# three whatever the way (temperature=default maxtokens=8192
+# thinking=off; a command's are unknown here).  A tool that wants a
+# model's answer pipes to this, so that none of them needs a service or
+# knows which model it has: $llm says which way, one line of text,
+#
+#	anthropic [url]	the Anthropic API, called from here (llmapi)
+#	openai url	an OpenAI-compatible API (Ollama, vLLM, ...)
+#	llm		the model mounted at /mnt/llm (llmsrv, or another's)
+#	anything else	a command: it is given the instructions, a blank
+#			line and the question on its standard input, and
+#			what it prints is the answer; where it has a word
+#			{system}, the instructions are put there, one
+#			argument, and only the question goes on its input:
+#			os claude -p --tools '' --system-prompt {system},
+#			for the host's Claude CLI as a plain model
+#
+# Unset, it is llm when /mnt/llm is there and anthropic otherwise.  The
+# API's key is factotum's (proto=pass service=anthropic, or
+# service=openai), so a key need never be in a file or the environment.
+load std
+
+fn usage {
+	echo 'usage: ask [-ns] [-m model] [system]' >[1=2]
+	raise fail:usage
+}
+
+model=()
+n=()
+settings=()
+args=$*
+while {~ ${hd $args} -*} {
+	opt=${hd $args}
+	args=${tl $args}
+	if {~ $opt -n} {
+		n=1
+	} {~ $opt -s} {
+		settings=1
+	} {~ $opt -m} {
+		if {~ $#args 0} {usage}
+		model=${hd $args}
+		args=${tl $args}
+	} {
+		usage
+	}
+}
+if {! ~ $#args 0 1} {usage}
+system=$args
+if {! ~ $#system 0} {
+	if {! ftest -f $system} {
+		echo 'ask: no file '^$system >[1=2]
+		raise 'fail:no file'
+	}
+}
+way=${split ' 	' $"llm}
+if {~ $#way 0} {
+	if {ftest -f /mnt/llm/new} {
+		way=llm
+	} {
+		way=anthropic
+	}
+}
+m=()
+if {! ~ $#model 0} {
+	m=(-m $model)
+}
+
+if {~ ${hd $way} anthropic openai} {
+	u=()
+	if {! ~ $#way 1} {
+		u=(-u ${hd ${tl $way}})
+	}
+	if {~ $#n 1} {
+		llmapi -n -b ${hd $way} $u $m
+	} {~ $#settings 1} {
+		llmapi -s -b ${hd $way} $u $m
+	} {
+		llmapi -b ${hd $way} $u $m $system
+	}
+} {~ $way llm} {
+	if {! ftest -f /mnt/llm/new} {
+		echo 'ask: no model at /mnt/llm: start llmsrv, or mount one, or set llm' >[1=2]
+		raise 'fail:no llm'
+	}
+	id=`{cat /mnt/llm/new}
+	s=/mnt/llm/$id
+	if {! ~ $#model 0} {
+		echo $model > $s/model
+	}
+	# a session's default answer is short: a logic file can be longer
+	if {ftest -f $s/maxtokens} {
+		echo 8192 > $s/maxtokens
+	}
+	if {~ $#n 1} {
+		cat $s/model
+	} {~ $#settings 1} {
+		t=`{cat $s/temperature}
+		k=`{cat $s/maxtokens}
+		h=`{cat $s/thinking}
+		echo 'temperature='^$"t 'maxtokens='^$"k 'thinking='^$"h
+	} {
+		if {! ~ $#system 0} {
+			cat $system > $s/system
+		}
+		cat > $s/ask
+		cat $s/ask
+	}
+	echo close > $s/ctl
+} {
+	if {~ $#n 1} {
+		echo $"llm
+	} {~ $#settings 1} {
+		echo 'temperature=unknown maxtokens=unknown thinking=unknown'
+	} {~ $"llm *'{system}'*} {
+		# the instructions as the command's own argument, its system
+		# prompt; the question alone on its standard input.  The
+		# command is the shell's to parse, {system} a variable in it
+		asksystem=''
+		if {! ~ $#system 0} {
+			asksystem="{cat $system}
+		}
+		sh -c "{echo $"llm | sed 's/\{system\}/$asksystem/g'}
+	} {
+		{
+			if {! ~ $#system 0} {
+				cat $system
+				echo
+			}
+			cat
+		} | sh -c $"llm
+	}
+}

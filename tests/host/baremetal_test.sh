@@ -1702,7 +1702,7 @@ check "class 2 maxpkt 64 usb 2.0"        "it is the CDC Ethernet adapter, at hig
 # complete, so the endpoint lines are checked rather than just the
 # header.
 check "config: 2 interface(s), 67 bytes"  "the full configuration descriptor reads back"
-check "if 0 alt 0: class 2.2.255"        "interface 0 is CDC control, vendor protocol (RNDIS)"
+check "if 0 alt 0: class 2.2.255"        "interface 0 of the first configuration is CDC control, vendor protocol (RNDIS)"
 check "if 1 alt 0: class 10.0.0"         "interface 1 is CDC data"
 check "ep2 in bulk maxpkt 64"            "the bulk IN endpoint is described"
 check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
@@ -1711,15 +1711,24 @@ check "ep2 out bulk maxpkt 64"           "the bulk OUT endpoint is described"
 # into the kernel. See the driver-placement decision in
 # os/bcm2837/README.md.
 #
+# QEMU's usb-net has two configurations: RNDIS first, then CDC ECM.
+# The driver reads both and takes ECM, the open standard, as Linux
+# does; RNDIS is kept tested by the boots that ask for it by name
+# (etherusb=rndis on the command line: the hot-plug boot below and
+# virt's MSI boot).
+#
 # The MAC is the load-bearing check: it is not a constant anywhere in
-# this tree, it is queried out of the device over RNDIS, so a correct
-# answer means the whole chain worked -- SET_CONFIGURATION, a bulk
-# endpoint created through #u, and an RNDIS request/response pair
-# carried on class control transfers to an interface.
-check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u"
-check "etherusb: RNDIS 1.0, max transfer 1580" "the RNDIS handshake completes"
-check "etherusb: ep3.0 rndis, MAC 52:54:00:12:34:57" "the family is chosen and the MAC read out of the device"
-check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
+# this tree, it is read out of the device -- for ECM, the string its
+# Ethernet functional descriptor names -- so a correct answer means
+# the whole chain worked: both configuration descriptors, the union
+# and Ethernet descriptors walked, SET_CONFIGURATION to the second,
+# a string descriptor in UTF-16, and the data interface's setting 1.
+check "etherusb: ep3.0 configuration 2 offers rndis" "the driver reads the first configuration: RNDIS"
+check "etherusb: ep3.0 configuration 1 offers ecm (interfaces 0, 1)" "and the second: ECM, with its union descriptor"
+check "etherusb: ep3.0 bulk in ep3.2 out ep3.2" "the driver creates a bulk endpoint through #u, from the data interface's setting 1"
+check "etherusb: ep3.0 ecm, MAC 40:54:00:12:34:57" "ECM is chosen over RNDIS and the MAC read out of the device"
+refute "SET_INTERFACE"                         "the data interface accepts setting 1"
+check "etherusb: ep3.0 ready"                  "the device is in the configuration asked for"
 
 # The file interface, and the interface bound to it. "configured"
 # only appears if ethermedium dialled /net/ether0, opened its three
@@ -1734,6 +1743,7 @@ check "etherusb: ep3.0 ready"                  "the packet filter is accepted"
 # The reply comes back too, now; the race that once ate it is under
 # "Networking works, intermittently (RESOLVED)" in os/bcm2837/README.md.
 check "etherusb: serving /net/ether0"          "the driver publishes a netif file interface"
+check "ether0: kernel data path bound (ecm,"     "the kernel frames ECM: a transfer is a frame"
 # The kernel data path specifically. The endpoints are exclusive-open,
 # so this line only appears if etherusb's "fd = nil" actually closed
 # them before #l tried to take them -- the "init: fd:" destructor
@@ -3706,6 +3716,7 @@ qemu, img, sd = sys.argv[1], sys.argv[2], sys.argv[3]
 PORT = int(os.environ["QMPBASE"]) + 14   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
 p = subprocess.Popen([qemu, "-M", "raspi3b", "-netdev", "user,id=n0", "-device", "usb-net,netdev=n0,id=usbnet0",
                       "-drive", "file=%s,if=sd,format=raw" % sd, "-kernel", img, "-display", "none",
+                      "-append", "etherusb=rndis",   # the link watcher asks RNDIS; ECM has no link to ask
                       "-qmp", "tcp:127.0.0.1:%d,server=on,wait=off" % PORT, "-serial", "null", "-serial", "stdio"],
                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 buf = bytearray()
@@ -4930,6 +4941,10 @@ args = [qemu] + extra.split() + [
     "-kernel", img, "-display", "none", "-serial", "stdio",
     "-drive", "file=%s,if=none,format=raw,id=sd" % sd, "-device", "virtio-blk-device,drive=sd",
     "-netdev", "user,id=n0", "-device", "virtio-net-device,netdev=n0",
+    # a USB adapter beside it, on a network of its own: ether0 is the
+    # kernel's virtio driver, so this is the Pi 4's case (GENET has
+    # ether0) and must land on a spare instance
+    "-netdev", "user,id=n1,net=10.0.3.0/24", "-device", "usb-net,netdev=n1",
     "-device", "ramfb", "-device", "virtio-keyboard-device", "-device", "virtio-tablet-device",
     "-qmp", "unix:%s,server,nowait" % qmp]
 p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -4970,7 +4985,12 @@ try:
     waitfor(b"init: starting the shell", 90)
     # DHCP runs in its own thread after the shell starts; give it its time
     waitfor(b"etherusb: default route", 30)
+    # the USB adapter's turn at port 68 comes after virtio's
+    waitfor(b"is reached here", 120)
+    waitfor(b"ICMP echo reply from 10.0.3.2", 20)
     time.sleep(1.5)
+    typed("cat /net/ether2/addr; echo")
+    typed("cat /net/iproute")
     typed("cat /n/dos/HELLO.TXT")
     typed("echo written-through-virtio > /n/dos/virt.txt; cat /n/dos/virt.txt", 2.5)
     typed("cat /net/ether0/addr; echo")
@@ -5049,6 +5069,15 @@ vcheck "a nil dereference in JIT code is the program's exception, not a panic" "
 vcheck "page zero is not mapped: a nil ref's later field faults too (#735)" "niltest: OFFSET CAUGHT dereference of nil"
 vcheck "DHCP answers over virtio-net"              "etherusb: 10.0.2.15 mask"
 vcheck "a default route is installed"              "etherusb: default route via 10.0.2.2"
+# The USB adapter beside virtio-net: ether0 is the kernel driver's and
+# refuses the bind, so the adapter takes the first spare, gets its own
+# network's address, and leaves the default route where it was.
+vcheck "usb: a USB adapter on a machine whose ether0 is a kernel driver goes to a spare" "etherusb: serving /net/ether2 (kernel data path)"
+vcheck "usb: the spare is framed for ECM"           "ether2: kernel data path bound (ecm,"
+vcheck "usb: DHCP answers on the adapter's own network" "etherusb: 10.0.3.15 mask"
+vcheck "usb: the default route stays with ether0"   "the default route stays where it is; 10.0.3.2 is reached here"
+vcheck "usb: the adapter's gateway answers a ping over it" "ICMP echo reply from 10.0.3.2"
+vrefute "usb: the adapter takes no default route"   "default route via 10.0.3.2"
 # Hot plugging over a kernel link driver: etherusb -k's link watcher
 # reads the link from the netif (/net/ether0/stats), which virtio-net now
 # keeps from the device's own status (VIRTIO_NET_F_STATUS); it was set
@@ -5158,16 +5187,17 @@ fi
 # under, where PCI devices reach the first gigabyte only -- so that the
 # bounce path is run by this harness and not first on a board.
 #
-# virt_usb_boot <machine args> <log>: the boot described above
+# virt_usb_boot <machine args> <log> [words]: the boot described above;
+# the words join pcibounce on the kernel's command line
 virt_usb_boot() {
 cp "$VSD" "$BUILD/$PLAT-usbdisk.img"
-python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" "$BUILD/$PLAT-usbdisk.img" <<'PYEOF' > "$2" 2>&1
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$1" "$BUILD/$PLAT-xqmp.sock" "$BUILD/$PLAT-usbdisk.img" "pcibounce ${3:-}" <<'PYEOF' > "$2" 2>&1
 import json, os, socket, subprocess, sys, threading, time
-qemu, img, extra, qmp, udisk = sys.argv[1:6]
+qemu, img, extra, qmp, udisk, append = sys.argv[1:7]
 if os.path.exists(qmp):
     os.unlink(qmp)
 args = [qemu] + extra.split() + [
-    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "pcibounce",
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", append.strip(),
     "-device", "usb-hub,port=1", "-device", "usb-kbd,port=1.2", "-device", "usb-mouse,port=2",
     "-netdev", "user,id=u0", "-device", "usb-net,netdev=u0,port=3",
     "-drive", "if=none,id=ud,file=%s,format=raw" % udisk, "-device", "usb-storage,drive=ud,port=4",
@@ -5257,6 +5287,7 @@ vcheck "xhci: a keyboard BEHIND the hub is claimed"    "kbdusb: ep"
 vcheck "xhci: a mouse is claimed"                      "mouseusb: ep"
 vcheck "xhci: keys typed on the USB keyboard reach the shell (interrupt IN, through the hub)" "Xhci-Keys"
 vcheck "xhci: USB Ethernet comes up as ether0 (bulk endpoints)" "etherusb: serving /net/ether0 (kernel data path)"
+vcheck "xhci: usb-net's ECM configuration is chosen over its RNDIS one" "ether0: kernel data path bound (ecm,"
 # a USB disk (os/init/diskusb.b): mass storage, bulk-only, SCSI. Served as
 # a block file and mounted by dossrv -- for init's namespace by the
 # driver, for the console shell's by the shell, which is what is typed.
@@ -5300,7 +5331,9 @@ vcheck "xhci: qemu-xhci has no MSI, and is given a wire" "usbxhci interrupts by 
 # interrupt -- one that must have been made edge-triggered first.
 #
 if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
-    virt_usb_boot "${VIRTARGS/qemu-xhci/nec-usb-xhci}" "$BUILD/$PLAT-xhci-msi.txt"
+    # and the RNDIS family, asked for by name: usb-net offers ECM too,
+    # which every other boot here takes
+    virt_usb_boot "${VIRTARGS/qemu-xhci/nec-usb-xhci}" "$BUILD/$PLAT-xhci-msi.txt" etherusb=rndis
     OUT="$(cat "$BUILD/$PLAT-xhci-msi.txt")"
     [[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
     vcheck "msi: the GIC's MSI frame is found"             "pci: MSI frame at 0x8020000: interrupts 80-"
@@ -5308,6 +5341,9 @@ if "$QEMU" -device help 2>/dev/null | grep -q '"nec-usb-xhci"'; then
     vcheck "msi: a keyboard behind a hub is claimed"       "kbdusb: ep"
     vcheck "msi: keys typed on it reach the shell"         "Xhci-Keys"
     vcheck "msi: the gateway answers a ping over USB Ethernet" "ICMP echo reply from 10.0.2.2"
+    vcheck "msi: etherusb=rndis picks usb-net's RNDIS configuration" "ether0: kernel data path bound (rndis,"
+    vcheck "msi: the RNDIS handshake completes"            "RNDIS 1.0, max transfer 1580"
+    vcheck "msi: the MAC is queried out of the device over RNDIS" "rndis, MAC 52:54:00:12:34:"
     vcheck "msi: the USB disk reads and writes"            "written-over-usb"
     vcheck "msi: isochronous writes are paced"             ": PACED, 0 errors"
     vrefute "msi: nothing panics"                          "panic:"

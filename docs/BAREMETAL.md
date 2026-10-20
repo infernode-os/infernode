@@ -632,6 +632,24 @@ this machine`) and leaves it. Not done: CH340 and PL2303, the same name
 for the same adapter after a re-plug (the first free number is taken),
 and exclusive open.
 
+**A USB Ethernet adapter** is driven by `etherusb`, which reads every
+configuration the device has and takes the best function in them:
+**CDC NCM** (newer adapters, phones, a Linux gadget), then **CDC ECM**
+(most adapters, and QEMU's `usb-net`), then **RNDIS**; the LAN78xx (the
+3B+'s own) is recognised by its vendor. `etherusb=rndis` (or `ecm`,
+`ncm`) on the kernel's command line puts one first. The adapter is
+`/net/ether0` on a board whose Ethernet is USB (the 3B+), and on one
+whose `ether0` is a kernel driver — a Pi 4's GENET, virt's virtio --
+the first spare, `/net/ether2`. A second interface gets its own
+network's address by DHCP but leaves the default route and name servers
+where they are, so plugging a phone or a gadget into a Pi 4 does not
+take it off its own network. Not done: link state from ECM's and NCM's
+notification endpoint (the link is taken to be up), and a composite
+device that is a disk as well as an adapter (the Jetson's stock gadget):
+each driver wants the control endpoint, which is exclusive-open, so such
+a device is left to `diskusb`; one with Ethernet and a serial port gets
+Ethernet only.
+
 ## 9. Testing
 
 | | what it proves | where it runs |

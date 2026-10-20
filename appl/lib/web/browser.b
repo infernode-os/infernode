@@ -1728,9 +1728,13 @@ Session.click(s: self ref Session, n: int): string
 				return nil;
 			}
 		Dom->Tlabel =>
+			# for names an id in the label's own tree: a web
+			# component's shadow root has its own ids (JSTOR's
+			# checkboxes each hold a "checkbox-element")
 			if((id := d.attr(m, "for")) != nil) {
+				f := dom->flat(d);
 				for(c := 1; c < d.n; c++)
-					if(iscontrol(d, c) && d.attr(c, "id") == id)
+					if(iscontrol(d, c) && d.attr(c, "id") == id && samescope(f, c, m))
 						return s.click(c);
 			}
 			for(c := nextin(d, m, m); c != 0; c = nextin(d, c, m))
@@ -1827,6 +1831,15 @@ popovers(s: ref Session, pg: ref Pg, n: int): int
 		event(s, "update");
 	}
 	return invoked != 0;
+}
+
+# whether nodes a and b are in the same tree (the document's, or one
+# shadow root's)
+samescope(f: ref Dom->Flat, a, b: int): int
+{
+	if(f == nil)
+		return 1;
+	return a < len f.scope && b < len f.scope && f.scope[a] == f.scope[b];
 }
 
 byid(d: ref Doc, id: string): int

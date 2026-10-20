@@ -231,6 +231,11 @@ jobs:
         chmod +x tests/host/charon_shadowlabel_test.sh
         ROOT=. bash tests/host/charon_shadowlabel_test.sh
 
+    - name: Check a label in a shadow tree checks its own checkbox
+      run: |
+        chmod +x tests/host/charon_shadowcheck_test.sh
+        ROOT=. bash tests/host/charon_shadowcheck_test.sh
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;

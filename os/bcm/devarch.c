@@ -15,9 +15,10 @@
  * Read-only: the firmware's limits are set in config.txt (temp_limit),
  * not here.
  *
- * In os/bcm2711 and not ../bcm, although the mailbox tags are the same
- * on a BCM2837: a file in ../bcm is linked into the Pi 3B+'s kernel
- * too, and that kernel is not to change until it can be run.
+ * The mailbox tags are the same on a BCM2837, so this serves the Pi 3B+
+ * as well as the Pi 4. It began in os/bcm2711, kept off the 3B+ until
+ * that kernel could be run on its board; a soak that wanted to watch
+ * both boards' temperature brought it here.
  */
 #include	"u.h"
 #include	"../port/lib.h"

@@ -43,6 +43,7 @@ extern Dev gpiodevtab;
 extern Dev touchdevtab;
 extern Dev uartdevtab;
 extern Dev audiodevtab;
+extern Dev archdevtab;
 
 Dev*	devtab[] =
 {
@@ -66,5 +67,6 @@ Dev*	devtab[] =
 	&touchdevtab,		/* 'T' -- #T, the DSI panel's touch buffer */
 	&uartdevtab,		/* 't' -- #t, serial ports: eia0 the PL011, eia1 the mini-UART */
 	&audiodevtab,		/* 'A' -- #A, /dev/audio: the jack, PWM through DMA (os/bcm/audiopwm.c) */
+	&archdevtab,		/* 'P' -- #P, the firmware's temperature and throttling flags (os/bcm/devarch.c) */
 	nil,
 };

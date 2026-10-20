@@ -1845,6 +1845,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "echo 0 > '#G/gpio/129/level'" \
         "echo function out > '#G/gpio/128/ctl'" \
         "cat '#G/gpio/129/ctl'" \
+        "echo PTEMP; cat '#P/cputemp'" \
+        "echo PTHROT; cat '#P/throttled'" \
         "listen 'tcp!*!17030' export / &" \
         'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis')"
 
@@ -1883,6 +1885,17 @@ fi
 # took the machine down (#725). "AUTHMOUNT-" with nothing after it is
 # sh's $status for a mount that succeeded; the ls proves the export is
 # served through it.
+# #P, the firmware's temperature and throttle flags (os/bcm/devarch.c),
+# shared with the Pi 4 so a soak can watch both boards' heat. QEMU's
+# firmware model answers the temperature tag; the line after the marker
+# must be a number of degrees.
+if grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1 | grep -qE '^[0-9]+\.[0-9]$'; then
+    pass "#P/cputemp reads the firmware's temperature ($(grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1) C)"
+else
+    fail "#P/cputemp -- $(grep -A2 '^PTEMP$' <<<"$SHOUT" | tail -2 | tr '\n' ' ')"
+fi
+echo "  #P/throttled under QEMU: $(grep -A1 '^PTHROT$' <<<"$SHOUT" | tail -1)"
+
 if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SHOUT"; then
     pass "an authenticated 9P mount (Keyring->auth both ends, ML-KEM + ed25519) works on the kernel (#725)"
 else

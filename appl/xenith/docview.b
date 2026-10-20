@@ -199,7 +199,7 @@ setview(w: ref Window, v: ref View)
 	v.mark = accent;
 	v.font = graph->font;
 	v.style = ref Docengine->Style(0, getfont(0), getfont(1),
-		cols[TEXT], cols[BACK], accent, xenith->tagcols[BACK]);
+		cols[TEXT], cols[BACK], accent, xenith->tagcols[BACK], 0);
 }
 
 getfont(i: int): ref Font

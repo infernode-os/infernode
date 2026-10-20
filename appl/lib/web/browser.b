@@ -1049,6 +1049,32 @@ remove(s: string, l: list of string): list of string
 	return r;
 }
 
+# n's text as shown, through the flat tree f (a slot's text is what the
+# page put in it, a host's its shadow tree's), leaving out style sheets
+# and scripts; the document's own tree if f is nil or n is not shown
+shown(d: ref Doc, f: ref Dom->Flat, n: int): string
+{
+	if(f == nil || n >= len f.first || f.first[n] == 0 && f.parent[n] == 0)
+		return d.textof(n);
+	s := "";
+	m := f.first[n];
+	while(m > 0 && m < d.n) {
+		nd := d.nodes[m];
+		if(nd.kind == Dom->Text)
+			s += nd.text;
+		if(f.first[m] != 0 && !(nd.kind == Dom->Element && (nd.tag == Dom->Tstyle || nd.tag == Dom->Tscript))) {
+			m = f.first[m];
+			continue;
+		}
+		while(m != n && m != 0 && f.next[m] == 0)
+			m = f.parent[m];
+		if(m == n || m == 0)
+			break;
+		m = f.next[m];
+	}
+	return s;
+}
+
 kindof(d: ref Doc, n: int): string
 {
 	case d.nodes[n].tag {
@@ -1138,10 +1164,17 @@ Session.fields(s: self ref Session): array of ref Field
 		return nil;
 	d := pg.doc;
 	(forms, nil, order) := formnumbers(d);
+	fl := dom->flat(d);
 	r: list of ref Field;
 	for(k := 0; k < len order; k++)
-		if(iscontrol(d, n := order[k]))
-			r = field(d, forms[n], n) :: r;
+		if(iscontrol(d, n := order[k])) {
+			f := field(d, forms[n], n);
+			# a button's label, as shown: a component's is often what
+			# the page put in its slot
+			if(fl != nil && d.nodes[n].tag == Dom->Tbutton && !d.hasattr(n, "value"))
+				f.value = squash(shown(d, fl, n));
+			r = f :: r;
+		}
 	a := array[len r] of ref Field;
 	for(i := len a - 1; i >= 0; i--) {
 		a[i] = hd r;
@@ -1853,7 +1886,7 @@ Session.dom(s: self ref Session, n: int, what: string): (string, string)
 	"text" =>
 		if(nd.kind == Dom->Text || nd.kind == Dom->Comment)
 			return (nd.text, nil);
-		return (d.textof(n), nil);
+		return (shown(d, dom->flat(d), n), nil);
 	"style" =>
 		if(pg.computed == nil || n >= len pg.computed.st || pg.computed.st[n] == nil)
 			return ("", nil);

@@ -746,6 +746,8 @@ isvendorif := 0;	# ...a vendor-specific interface
 hidep := -1;
 hidmaxpkt := 0;
 hidival := 0;
+hidiface := 0;	# the HID interface's number: its report descriptor is asked for by it
+ishid := 0;	# dumpconfig saw a HID interface, whatever protocol it declared
 
 speedname(status: int): string
 {
@@ -790,7 +792,7 @@ kernelether()
 	for(i := 0; i < 12; i++)
 		if(int buf[i] != '0'){
 			sys->print("init: ether0 is a kernel link driver (%s)\n", string buf[0:12]);
-			runstart("/dis/etherusb.dis", "-k", -1, 0, 0);
+			runstart("/dis/etherusb.dis", "-k", -1, 0, 0, nil);
 			return;
 		}
 }
@@ -1208,6 +1210,8 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	}
 
 	hidproto = 0;
+	hidiface = 0;
+	ishid = 0;
 	isdisk = 0;
 	isacm = 0;
 	isether = 0;
@@ -1236,9 +1240,17 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# and the second attempt happens later, when the bus is busier.
 	#
 	if(hidproto == Hidkbd)
-		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival);
-	else if(hidproto == Hidmouse)
-		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival);
+		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival, nil);
+	else if(ishid && hidep >= 0)
+		#
+		# The pointer driver reads the interface's report descriptor
+		# (a touchscreen calls itself a mouse and reports positions),
+		# so it is told which interface, and the device's vid:pid for
+		# the card's quirks file.
+		#
+		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival,
+			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
+			string hidproto :: nil);
 	#
 	# A disk. Only on a machine with an xHCI controller, for now: the
 	# driver has run on QEMU's xHCI and nowhere else, and a Raspberry
@@ -1246,7 +1258,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# On a Pi 3 the disk is enumerated, listed, and left alone.
 	#
 	else if(isdisk && havexhci)
-		startdriver("/dis/diskusb.dis", name, -1, 0, 0);
+		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 	else if(isdisk)
 		sys->print("init: %s%s is a USB disk; diskusb is not started on this machine\n", indent, name);
 
@@ -1282,7 +1294,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	serial := (isacm && !isether) ||
 		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
 	if(serial && havexhci)
-		startdriver("/dis/usbserial.dis", name, -1, 0, 0);
+		startdriver("/dis/usbserial.dis", name, -1, 0, 0, nil);
 	#
 	# Ethernet by the device's class (2), or by an Ethernet interface
 	# in a device that declares itself a composite (class 0 or 239,
@@ -1295,7 +1307,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# would get nothing. Sharing one is not done yet.
 	#
 	else if(class == Clcomm || isether && !isdisk || (class == Clvendor && vendor == Vmicrochip))
-		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
+		startdriver("/dis/etherusb.dis", name, -1, 0, 0, nil);
 	if(serial && !havexhci)
 		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);
 	return (0, name);
@@ -2529,18 +2541,18 @@ rootunion(src, dst: string): int
 # at all, since nothing drains the queue outside a walk.
 #
 walking := 0;
-pending: list of (string, string, int, int, int);
+pending: list of (string, string, int, int, int, list of string);
 
-startdriver(path, name: string, ep, maxpkt, ival: int)
+startdriver(path, name: string, ep, maxpkt, ival: int, extra: list of string)
 {
 	if(walking){
-		pending = (path, name, ep, maxpkt, ival) :: pending;
+		pending = (path, name, ep, maxpkt, ival, extra) :: pending;
 		return;
 	}
-	runstart(path, name, ep, maxpkt, ival);
+	runstart(path, name, ep, maxpkt, ival, extra);
 }
 
-runstart(path, name: string, ep, maxpkt, ival: int)
+runstart(path, name: string, ep, maxpkt, ival: int, extra: list of string)
 {
 	drv := load Command path;
 	if(drv == nil){
@@ -2548,9 +2560,8 @@ runstart(path, name: string, ep, maxpkt, ival: int)
 		return;
 	}
 	argv := path :: name :: nil;
-	if(ep >= 0)
-		argv = path :: name :: string ep :: string maxpkt ::
-			string ival :: nil;
+	if(ep >= 0)	# endpoint, packet size, interval, then what else the driver was given
+		argv = path :: name :: string ep :: string maxpkt :: string ival :: extra;
 	spawn drv->init(nil, argv);
 }
 
@@ -2565,13 +2576,13 @@ runstart(path, name: string, ep, maxpkt, ival: int)
 startpending()
 {
 	walking = 0;
-	l: list of (string, string, int, int, int);
+	l: list of (string, string, int, int, int, list of string);
 	for(p := pending; p != nil; p = tl p)
 		l = hd p :: l;
 	pending = nil;
 	for(; l != nil; l = tl l){
-		(path, name, ep, maxpkt, ival) := hd l;
-		runstart(path, name, ep, maxpkt, ival);
+		(path, name, ep, maxpkt, ival, extra) := hd l;
+		runstart(path, name, ep, maxpkt, ival, extra);
 	}
 }
 
@@ -2738,8 +2749,16 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				# the device class alone therefore never sees
 				# an input device at all.
 				#
-				if(int cfg[i+5] == Clhid && hidproto == 0)
+				#
+				# The first HID interface, whatever its
+				# protocol: a touchscreen or tablet often
+				# declares none (0), not boot mouse (2).
+				#
+				if(int cfg[i+5] == Clhid && !ishid){
+					ishid = 1;
 					hidproto = int cfg[i+7];
+					hidiface = int cfg[i+2];
+				}
 				if(int cfg[i+5] == Clstorage && int cfg[i+6] == Sscsi && int cfg[i+7] == Pbulkonly)
 					isdisk = 1;
 				#
@@ -2777,7 +2796,7 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				# and the first is the one a boot-protocol
 				# device reports on.
 				#
-				if(hidproto != 0 && hidep < 0
+				if(ishid && hidep < 0
 				&& (addr & 16r80) && (attr & 3) == 3){
 					hidep = addr & 16rF;
 					hidmaxpkt = mx;

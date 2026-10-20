@@ -610,20 +610,18 @@ mboxfballoc(u32int disp, u32int w, u32int h, u32int depth, Fbinfo *fb)
 
 	*p++ = Tagfbsetdim;   *p++ = 8; *p++ = Propreq; *p++ = w; *p++ = h;
 	/*
-	 * Twice as tall a VIRTUAL framebuffer as the display shows.
+	 * A VIRTUAL framebuffer exactly the size of the display, with its
+	 * window at 0,0, so the glass can show only row 0 onward.
 	 *
-	 * The extra height is what makes scrolling free: the visible
-	 * window is moved down it by setting an offset, which is a
-	 * register the GPU reads, instead of moving 1.5MB of pixels
-	 * through a bus the ARM reaches slowly. A console write on this
-	 * board measured 990ms and every millisecond of it was the
-	 * memmove.
-	 *
-	 * When the offset reaches the bottom the content is folded back
-	 * to the top, which costs one move -- but once per screenful
-	 * rather than once per line.
+	 * It was twice as tall, so that the console could scroll by moving
+	 * the window down it. But where the window is belongs to the
+	 * firmware, which did not reliably take or report a move, and
+	 * everything that drew had to follow it: a login screen ended up
+	 * painted 80 rows below an HDMI panel's view, and on the 7" panel
+	 * before that. With no room to move, there is no position to get
+	 * wrong. The console scrolls by copying (os/fb/fbcons.c).
 	 */
-	*p++ = Tagfbsetvdim;  *p++ = 8; *p++ = Propreq; *p++ = w; *p++ = h * 2;
+	*p++ = Tagfbsetvdim;  *p++ = 8; *p++ = Propreq; *p++ = w; *p++ = h;
 	*p++ = Tagfbsetvoff;  *p++ = 8; *p++ = Propreq; *p++ = 0; *p++ = 0;
 	*p++ = Tagfbsetdepth; *p++ = 4; *p++ = Propreq; *p++ = depth;
 	/*

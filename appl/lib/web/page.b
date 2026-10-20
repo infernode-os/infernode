@@ -34,6 +34,8 @@ include "web/layout.m";
 	layout: Layout;
 	Box: import layout;
 include "plumbmsg.m";
+	plumbmsg: Plumbmsg;
+	Msg: import plumbmsg;
 include "web/page.m";
 
 display: ref Display;
@@ -2696,8 +2698,9 @@ splitext(name: string): (string, string)
 # files (Xenith, Lucifer's presentation); nothing if there is no plumber
 plumbfile(path: string)
 {
-	pm := load Plumbmsg Plumbmsg->PATH;
-	if(pm == nil || pm->init(1, nil, 0) < 0)
+	if(plumbmsg == nil && (plumbmsg = load Plumbmsg Plumbmsg->PATH) == nil)
+		return;
+	if(plumbmsg->init(1, nil, 0) < 0)
 		return;
 	dir := "/";
 	for(i := len path - 1; i > 0; i--)
@@ -2705,7 +2708,7 @@ plumbfile(path: string)
 			dir = path[0:i];
 			break;
 		}
-	m := ref Plumbmsg->Msg("charon", nil, dir, "text", nil, array of byte path);
+	m := ref Msg("charon", nil, dir, "text", nil, array of byte path);
 	m.send();
 }
 

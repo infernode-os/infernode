@@ -2,26 +2,22 @@
 # ask [-ns] [-m model] [system] - put the text on standard input to a
 # language model, with the instructions in the file system, and print
 # its answer; with -n, print only the model's name; with -s, only the
-# settings it is asked with, one line of attr=value words, the same
-# three whatever the way (temperature=default maxtokens=8192
-# thinking=off; a command's are unknown here).  A tool that wants a
-# model's answer pipes to this, so that none of them needs a service or
-# knows which model it has: $llm says which way, one line of text,
+# settings it is asked with, one line of attr=value words
+# (temperature=... maxtokens=... thinking=..., each unknown for a
+# command).  A tool that wants a model's answer pipes to this, so that
+# none of them knows which model it has: the model is whatever is
+# mounted at /mnt/llm (llmsrv, with the backend and key it was started
+# with, or a model mounted from another machine), a session cloned,
+# asked and closed.  $llm, if it is set and not llm, is a command
+# instead: it is given the instructions, a blank line and the question
+# on its standard input, and what it prints is the answer; where it has
+# a word {system}, the instructions are put there, one argument, and
+# only the question goes on its input:
 #
-#	anthropic [url]	the Anthropic API, called from here (llmapi)
-#	openai url	an OpenAI-compatible API (Ollama, vLLM, ...)
-#	llm		the model mounted at /mnt/llm (llmsrv, or another's)
-#	anything else	a command: it is given the instructions, a blank
-#			line and the question on its standard input, and
-#			what it prints is the answer; where it has a word
-#			{system}, the instructions are put there, one
-#			argument, and only the question goes on its input:
-#			os claude -p --tools '' --system-prompt {system},
-#			for the host's Claude CLI as a plain model
+#	os claude -p --tools '' --system-prompt {system}
 #
-# Unset, it is llm when /mnt/llm is there and anthropic otherwise.  The
-# API's key is factotum's (proto=pass service=anthropic, or
-# service=openai), so a key need never be in a file or the environment.
+# for the host's Claude CLI as a plain model.  A command beginning os
+# runs on the host, outside the caller's name space.
 load std
 
 fn usage {
@@ -56,34 +52,15 @@ if {! ~ $#system 0} {
 		raise 'fail:no file'
 	}
 }
-way=${split ' 	' $"llm}
-if {~ $#way 0} {
-	if {ftest -f /mnt/llm/new} {
-		way=llm
-	} {
-		way=anthropic
+way=llm
+if {! ~ $#llm 0} {
+	if {! ~ $"llm '' llm} {
+		way=command
 	}
 }
-m=()
-if {! ~ $#model 0} {
-	m=(-m $model)
-}
-
-if {~ ${hd $way} anthropic openai} {
-	u=()
-	if {! ~ $#way 1} {
-		u=(-u ${hd ${tl $way}})
-	}
-	if {~ $#n 1} {
-		llmapi -n -b ${hd $way} $u $m
-	} {~ $#settings 1} {
-		llmapi -s -b ${hd $way} $u $m
-	} {
-		llmapi -b ${hd $way} $u $m $system
-	}
-} {~ $way llm} {
+if {~ $way llm} {
 	if {! ftest -f /mnt/llm/new} {
-		echo 'ask: no model at /mnt/llm: start llmsrv, or mount one, or set llm' >[1=2]
+		echo 'ask: no model at /mnt/llm: start llmsrv, or mount one, or set llm to a command' >[1=2]
 		raise 'fail:no llm'
 	}
 	id=`{cat /mnt/llm/new}
@@ -96,7 +73,12 @@ if {~ ${hd $way} anthropic openai} {
 		echo 8192 > $s/maxtokens
 	}
 	if {~ $#n 1} {
-		cat $s/model
+		# a server started with no model names none
+		mn=`{cat $s/model}
+		if {~ $#mn 0} {
+			mn=unknown
+		}
+		echo $mn
 	} {~ $#settings 1} {
 		t=`{cat $s/temperature}
 		k=`{cat $s/maxtokens}

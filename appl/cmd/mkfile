@@ -90,7 +90,6 @@ TARG=\
 	gettar.dis\
 	gif2bit.dis\
 	gpusrv.dis\
-	llmapi.dis\
 	llmctl9p.dis\
 	llmsrv.dis\
 	mail9p.dis\

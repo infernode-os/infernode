@@ -461,7 +461,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `tests/host/veltro_cli_test.sh` | The `veltro` command: a task run, its session saved and resumed |
 | `tests/host/pool_nomem_test.sh` | An allocation a pool refuses is reported with its size, the reason (beyond the pool's maxsize, over the 1GB block limit, a restricted Prog, the host), the caller as image+offset for addr2line, and the pool's state; the first ten, then every thousandth (INFR-472); `pool_nomem_helper.b` is its Limbo half |
 | `tests/host/emu_root_test.sh` | A root (`-r`, `$ROOT`) of 300+ bytes is used; one longer than `rootdir` is refused, naming its length; a missing root, or one that is a file, stops emu saying so (not "`/dis` file does not exist") |
-| `tests/host/ask_test.sh` | ask(1), a question put to a model by the way `$llm` names, with commands standing in for one: the instructions, a blank line and the question given to a command, `{system}` taking the instructions, `-n`, and `-s` giving the settings as `attr=value` words for every way (the APIs' with no key, `/mnt/llm`'s from llmsrv's session files) |
+| `tests/host/ask_test.sh` | ask(1), a question put to the model at `/mnt/llm` or to the command `$llm` names, with commands and an llmsrv standing in for a model: the instructions, a blank line and the question given to a command, `{system}` taking the instructions, `-n` (`unknown` from a server started with no model), `-s` giving the settings as `attr=value` words from the session's files, nothing at `/mnt/llm` said to be so |
 
 Shell tests also exist in `tests/inferno/` (run inside Inferno) and `tests/host/` (run on the host OS).
 

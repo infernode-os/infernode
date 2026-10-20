@@ -39,6 +39,7 @@ State: adt {
 	data:	array of byte;	# an HTML file's text; nil for a page browsed
 	url:	string;
 	width:	int;
+	viewh:	int;		# the view's: the page's viewport
 	height:	int;		# the page's, laid out
 	browsing:	int;
 	ev:	chan of string;	# a page browsed's events, for the view
@@ -47,7 +48,7 @@ State: adt {
 	scratch:	ref Image;	# paint's, kept for the next of its size
 };
 
-VIEWH: con 600;
+VIEWH: con 600;		# the viewport when the view's height is not known
 
 display: ref Display;
 docs: array of ref State;
@@ -90,23 +91,26 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 	if((err := loadhtmldoc()) != nil)
 		return (-1, err);
 	width := 800;
+	viewh := VIEWH;
 	accent: ref Image;
 	if(st != nil){
 		if(st.width > 0)
 			width = st.width;
+		if(st.height > 0)
+			viewh = st.height;
 		accent = st.accent;
 		if(accent == nil)
 			accent = st.fg;
 	}
 	if(accent == nil)
 		accent = display.color(Draw->Blue);
-	s := ref State(data, name, width, 0, 0, nil, 0, accent, nil);
+	s := ref State(data, name, width, viewh, 0, 0, nil, 0, accent, nil);
 	h := add(s);
 	if(data == nil && isurl(name)){
 		# browsed: fetched in the background, the events tell
 		c: chan of string;
 		{
-			(c, err) = htmldoc->browse(h, name, width, VIEWH);
+			(c, err) = htmldoc->browse(h, name, width, viewh);
 		} exception e {
 		"*" =>
 			err = "html: " + e;
@@ -129,7 +133,7 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 		s.url = "file://" + name;
 	ht: int;
 	{
-		(ht, err) = htmldoc->set(h, data, s.url, width, VIEWH);
+		(ht, err) = htmldoc->set(h, data, s.url, width, viewh);
 	} exception e {
 	"*" =>
 		err = "html: " + e;
@@ -214,10 +218,16 @@ restyle(h: int, st: ref Style): string
 		return "no document";
 	if(st != nil && st.accent != nil)
 		s.accent = st.accent;
-	if(st == nil || st.width <= 0 || st.width == s.width)
+	if(st == nil || st.width <= 0)
+		return nil;
+	viewh := s.viewh;
+	if(st.height > 0)
+		viewh = st.height;
+	if(st.width == s.width && viewh == s.viewh)
 		return nil;
 	s.width = st.width;
-	htmldoc->resize(h, s.width, VIEWH);
+	s.viewh = viewh;
+	htmldoc->resize(h, s.width, s.viewh);
 	s.height = htmldoc->height(h);
 	return nil;
 }
@@ -370,7 +380,7 @@ command1(h: int, cmd, arg: string): string
 	"Reload" or "Get" =>	return htmldoc->reload(h);
 	"Stop" =>	return htmldoc->stop(h);
 	"browse" =>
-		(nil, err) := htmldoc->browse(h, arg, s.width, VIEWH);
+		(nil, err) := htmldoc->browse(h, arg, s.width, s.viewh);
 		return err;
 	}
 	return "unknown command " + cmd;

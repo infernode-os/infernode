@@ -310,7 +310,7 @@ htmlview(t: ref T, top: string): ref View
 	v.dst = display.newimage(Rect((0, 0), (500, 400)), Draw->RGB24, 0, Draw->Black);
 	v.r = v.dst.r;
 	v.bg = display.color(int 16r808080FF);
-	v.style = ref Docengine->Style(0, nil, nil, nil, nil, nil, nil);
+	v.style = ref Docengine->Style(0, nil, nil, nil, nil, nil, nil, 0);
 	v.open(array of byte page, "long.html");
 	if(!until(v, "opened"))
 		t.fatal("not opened: " + v.err);

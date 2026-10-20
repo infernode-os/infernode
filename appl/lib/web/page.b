@@ -2538,7 +2538,7 @@ webfsp(url, method, reqctype: string, body: array of byte, accept: string, page:
 		return (nil, nil, sys->sprint("webfs: %r"), url, nil);
 	if(accept != nil && sys->fprint(ctl, "header Accept: %s", accept) < 0)
 		return (nil, nil, sys->sprint("webfs: %r"), url, nil);
-	if(page)
+	if(page == 1)
 		sys->fprint(ctl, "types %s", SHOWN);	# (an older webfs refuses it, and fetches it all)
 	if(method != "GET") {
 		if(sys->fprint(ctl, "method %s", method) < 0 ||

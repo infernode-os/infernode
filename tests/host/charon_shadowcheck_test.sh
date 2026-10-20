@@ -6,7 +6,10 @@
 # each hold an input "checkbox-element"); the label's for was looked up
 # in the whole document, so a click on one component's label checked
 # the first component's box, and the one clicked never changed (JSTOR's
-# terms checkbox could not be ticked).  Skipped without python3.
+# terms checkbox could not be ticked).  And a click on the text the
+# component shows in its label (its own child, given to a slot in the
+# label) is a click in the label, as the tree shown has it.  Skipped
+# without python3.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -72,6 +75,12 @@ echo R_LABELS \$labels
 echo click \${index 2 \$labels} > /n/charonsc/ctl
 sleep 2
 echo R_TITLE \`{cat /n/charonsc/title}
+for n in \`{seq 1 60} {
+	if {grep -s '^id one' /n/charonsc/dom/\$n/attrs} { host=\$n }
+}
+echo click \`{cat /n/charonsc/dom/\$host/children} > /n/charonsc/ctl
+sleep 2
+echo R_TITLE2 \`{cat /n/charonsc/title}
 echo R_FORMS
 cat /n/charonsc/forms
 echo R_END
@@ -83,17 +92,23 @@ failed=0
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; failed=1; }
 forms=$(echo "$out" | sed -n '/^R_FORMS/,/^R_END/p' | sed '1d;$d')
-if echo "$forms" | grep -q '^0 [0-9]* checkbox two on checked$' &&
-   echo "$forms" | grep -q '^0 [0-9]* checkbox one on$'; then
-	pass "the second component's label checks its own checkbox, not the first's"
-else
-	fail "forms: $forms ($(echo "$out" | grep '^R_LABELS'))"
-fi
 got=$(echo "$out" | sed -n 's/^R_TITLE //p')
 if [ "$got" = "changed two true" ]; then
-	pass "and the component hears the change"
+	pass "the second component's label checks its own checkbox, not the first's"
 else
-	fail "title '$got'"
+	fail "after the second label's click: title '$got' ($(echo "$out" | grep '^R_LABELS'))"
+fi
+got=$(echo "$out" | sed -n 's/^R_TITLE2 //p')
+if [ "$got" = "changed one true" ]; then
+	pass "the text a component shows in its label (slotted) checks its box"
+else
+	fail "after a click on the first component's text: title '$got'"
+fi
+if echo "$forms" | grep -q '^0 [0-9]* checkbox two on checked$' &&
+   echo "$forms" | grep -q '^0 [0-9]* checkbox one on checked$'; then
+	pass "both are checked, in forms"
+else
+	fail "forms: $forms"
 fi
 [ $failed = 0 ] && { echo "ALL PASS"; exit 0; }
 echo "$out" | tail -30 | sed 's/^/    /'

@@ -598,8 +598,18 @@ Only on a machine with an xHCI controller so far — QEMU's `virt`, and a
 Pi 4's USB-A sockets once the board is here. On a Pi 3 the disk is
 enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
 on this machine`) and left alone: the driver has run only under
-emulation, and a Pi 3 gets no new behaviour on that evidence. One logical
-unit, disks up to 2 TB, no hot removal of the medium.
+emulation, and a Pi 3 gets no new behaviour on that evidence.
+
+A **card reader** with several slots is one device with a logical unit per
+slot, and each unit with a card in it is a disk of its own: the next free
+`/chan/usbdiskN`, its FAT on `/n/usbN`, as a one-slot device's is (whose
+name is unchanged: a stick is still `usbdisk0`). An empty slot is watched
+and served when a card goes in; a card taken out makes its file fail until
+one is back, and one put back is read again under the same name. The root
+carries `/n/usb0` to `/n/usb3`, so four FAT volumes are mounted at once; a
+fifth disk is its block file only. Tested on QEMU's `usb-bot` with three
+units (two disks and an empty slot that a medium is put into, taken out of
+and put back into); not yet on a real reader.
 
 **A USB serial adapter** is a port like the board's own, `eia(3)` and
 all: `usbserial` serves it as `/dev/eiaU0`, `eiaU0ctl` and `eiaU0status`

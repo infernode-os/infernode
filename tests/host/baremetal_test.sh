@@ -5365,6 +5365,109 @@ else
 fi
 
 #
+# A card reader: one USB device with several logical units, which is
+# what a reader with an SD, a microSD and a CF slot is. QEMU's usb-bot
+# is the bulk-only transport with SCSI units behind it: two disks on
+# LUNs 0 and 1, and a CD drive with no disc on LUN 2 -- the empty slot.
+# The driver must serve both disks as disks of their own (the second's
+# FAT reached and written, landing on its image and not the first's),
+# watch the empty slot, serve it when QMP puts a medium in, and say so
+# when the medium is taken out.
+#
+cp "$VSD" "$BUILD/$PLAT-lun0.img"
+cp "$VSD" "$BUILD/$PLAT-lun1.img"
+dd if=/dev/zero of="$BUILD/$PLAT-lun2.iso" bs=1M count=1 status=none
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-lqmp.sock" "$BUILD" "$PLAT" <<'PYEOF' > "$BUILD/$PLAT-lun.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp, build, plat = sys.argv[1:7]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+img0, img1, iso = ["%s/%s-%s" % (build, plat, f) for f in ("lun0.img", "lun1.img", "lun2.iso")]
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-device", "usb-bot,id=bot,port=1",
+    "-drive", "if=none,id=l0,file=%s,format=raw" % img0, "-device", "scsi-hd,bus=bot.0,scsi-id=0,lun=0,drive=l0",
+    "-drive", "if=none,id=l1,file=%s,format=raw" % img1, "-device", "scsi-hd,bus=bot.0,scsi-id=0,lun=1,drive=l1",
+    "-drive", "if=none,id=l2", "-device", "scsi-cd,id=cd,bus=bot.0,scsi-id=0,lun=2,drive=l2",
+    "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"served as /chan/usbdisk1", 30)
+    waitfor(b"mounted on /n/usb1", 10)
+    time.sleep(2)
+    # the second unit's FAT, from the console shell (diskusb.b says why by hand)
+    typed("dossrv -f /chan/usbdisk1 -m /n/usb1", 3)
+    typed("cat /n/usb1/HELLO.TXT")
+    typed("echo written-to-lun1 > /n/usb1/lun1.txt; cat /n/usb1/lun1.txt", 3)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    # a medium into the empty slot
+    f.write(json.dumps({"execute": "blockdev-change-medium",
+        "arguments": {"id": "cd", "filename": iso, "format": "raw"}}) + "\n"); f.flush(); f.readline()
+    waitfor(b"served as /chan/usbdisk2", 20)
+    time.sleep(3)
+    # and out again
+    f.write(json.dumps({"execute": "eject", "arguments": {"id": "cd", "force": True}}) + "\n"); f.flush(); f.readline()
+    waitfor(b"medium removed", 20)
+    time.sleep(1)
+    # and back: the same unit, the same name, its size read again
+    f.write(json.dumps({"execute": "blockdev-change-medium",
+        "arguments": {"id": "cd", "filename": iso, "format": "raw"}}) + "\n"); f.flush(); f.readline()
+    end = time.time() + 20
+    while time.time() < end and buf.count(b"served as /chan/usbdisk2") < 2:
+        time.sleep(0.2)
+    time.sleep(1)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-lun.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "lun: GET MAX LUN finds the reader's three units"       "has 3 logical units"
+vcheck "lun: unit 0 is a disk of its own"                     "LUN 0 QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk0"
+vcheck "lun: unit 1 is another, the next number"              "LUN 1 QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk1"
+vcheck "lun: the empty slot is watched, not a failure"        "LUN 2 (QEMU QEMU CD-ROM): not ready, no medium: no medium; watched for one"
+vcheck "lun: both FATs are mounted for init"                  "diskusb: /chan/usbdisk1 mounted on /n/usb1"
+vcheck "lun: the second unit's FAT reads from the shell"      "hello from the SD card"
+vcheck "lun: and writes"                                      "written-to-lun1"
+if grep -aq "written-to-lun1" "$BUILD/$PLAT-lun1.img" && ! grep -aq "written-to-lun1" "$BUILD/$PLAT-lun0.img"; then
+    pass "virt: lun: the write reached unit 1's image and not unit 0's (the LUN is in every command)"
+else
+    fail "virt: lun: the write to /n/usb1 is not on unit 1's image alone"
+fi
+vcheck "lun: a medium put into the empty slot is served"      "LUN 2 QEMU QEMU CD-ROM: 512 blocks of 2048 bytes (1 MB), served as /chan/usbdisk2"
+vcheck "lun: taking it out is noticed"                        "LUN 2: medium removed; /chan/usbdisk2 fails until one is back"
+if [[ "$(grep -ac 'LUN 2 QEMU QEMU CD-ROM: 512 blocks of 2048 bytes (1 MB), served as /chan/usbdisk2' <<<"$OUT")" -ge 2 ]]; then
+    pass "virt: lun: a medium put back is read again, under the same name"
+else
+    fail "virt: lun: the medium put back was not served again"
+fi
+vrefute "lun: nothing panics"                                 "panic:"
+vrefute "lun: no exception goes unhandled"                    "unhandled exception"
+rm -f "$BUILD/$PLAT-lun0.img" "$BUILD/$PLAT-lun1.img" "$BUILD/$PLAT-lun2.iso"
+
+#
 # A USB serial adapter, on xHCI: QEMU's usb-serial is an FTDI FT232BM,
 # its far end a socket this script holds. Bytes both ways; the line
 # settings checked where they land, in QEMU's own decoding of the

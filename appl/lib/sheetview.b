@@ -285,8 +285,8 @@ stack(v: ref View)
 	v.colh = y;
 }
 
-# The style a flowing document is set in: the caller's, at the width of
-# the view at its scale
+# The style a flowing document is set in: the caller's, at the width
+# and height of the view at its scale
 setwidth(v: ref View): ref Docengine->Style
 {
 	if(v.style == nil)
@@ -296,8 +296,12 @@ setwidth(v: ref View): ref Docengine->Style
 		vw = vw * 100 / v.scale;
 	if(vw < 50)
 		vw = 50;
+	vh := v.r.dy();
+	if(v.scale > 0 && v.scale != 100)
+		vh = vh * 100 / v.scale;
 	st := ref *v.style;
 	st.width = vw;
+	st.height = vh;
 	return st;
 }
 
@@ -319,7 +323,7 @@ View.layout(v: self ref View)
 		oldscale = v.scale;
 	}
 	if(v.flowing()){
-		if(v.vw != v.r.dx() || restyled(v)){
+		if(v.vw != v.r.dx() || v.vh != v.r.dy() || restyled(v)){
 			v.styled = v.style;
 			v.eng->restyle(v.h, setwidth(v));
 			measure(v);

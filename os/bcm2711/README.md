@@ -40,9 +40,8 @@ beside `os/ipaq1110` and `os/cerf1110`). What is here:
 | `pcibcm.c` | the PCIe bridge, from 9front; runs on the board |
 | `soc.c` | the probe for what this SoC has and the family does not |
 | `intr.c` | not the controller (that is `../arm64/gic.c`), only the boot-time question asked of it |
-| `devtab.c` | the device list: the Pi 3B+'s, and `#P` |
+| `devtab.c` | the device list: the Pi 3B+'s (`#P`, the firmware's temperature, is in both: `os/bcm/devarch.c`) |
 | `recover.c` | offers the serial loader, `../bcm2837/serialboot.c` built at this SoC's base |
-| `devarch.c` | `#P`: `cputemp`, `maxtemp`, `throttled`, from the firmware |
 | `kernel.ld`, `board.h` | the BCM2837's |
 
 ## Running it

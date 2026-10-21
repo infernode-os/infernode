@@ -206,6 +206,7 @@ init(nil: ref Draw->Context, args: list of string)
 		"swapxy" =>	swapxy = 1;
 		"invertx" =>	invertx = 1;
 		"inverty" =>	inverty = 1;
+		"report" =>	;	# a keyboard's word; a combined receiver's line carries both
 		* =>	sys->print("mouseusb: %s: unknown word %s for %s\n", Quirkfile, hd q, vidpid);
 		}
 

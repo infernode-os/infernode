@@ -285,10 +285,9 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/etherusb.dis" \
             "$ROOT/os/init/etherusb.b" 2>>"$BUILD/cc.log" || return 1
 
-        # The HID boot keyboard, likewise a program. Boot protocol only:
-        # parsing a report descriptor is real work, and the boot
-        # protocol exists so a machine that has just started can read a
-        # keyboard without doing any of it.
+        # The HID keyboard, likewise a program: the boot protocol when
+        # the keyboard has one, its report descriptor (through the Hid
+        # library, /dis/lib/hid.dis) when it has not or is asked to.
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/kbdusb.dis" \
             "$ROOT/os/init/kbdusb.b" 2>>"$BUILD/cc.log" || return 1
 
@@ -349,6 +348,11 @@ build_kernel() {
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+            # the HID report-descriptor library: kbdusb reads a keyboard's
+            # reports by it when they are not the boot protocol's, and
+            # osinit asks it whether an interface that names no boot
+            # protocol is a keyboard
+            "/dis/lib/hid.dis=$ROOT/dis/lib/hid.dis"
             "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/usbserial.dis=$BUILD/usbserial.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
@@ -4395,6 +4399,7 @@ TOUCH2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'touch -t' \
         'usbserial -t' \
+        'mouseusb -t' \
         'ls /dev/touch')"
 TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
@@ -4403,6 +4408,7 @@ OUT_SAVED="$OUT"; OUT="$TOUCH2"
 check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
+check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded"
 OUT="$OUT_SAVED"
 
 #
@@ -5692,6 +5698,74 @@ else
     fail "virt: hotplug: the mouse did not survive -- $(grep -a '^ep2' <<<"$OUT" | head -2 | tr '\n' '|')"
 fi
 vrefute "hotplug: nothing panics"                      "panic:"
+
+#
+# A keyboard in report protocol. Every boot keyboard is read with the
+# boot protocol unless it is asked otherwise, and QEMU offers no other
+# kind; "kbdusb=report" on the command line asks, so the report-
+# descriptor path -- descriptor read, parsed by the Hid library,
+# SET_PROTOCOL(report), reports decoded by it -- runs on a real device
+# model. usb-kbd's descriptor is the HID spec's boot keyboard, so its
+# reports are the same eight bytes either way; what this proves is the
+# decoding path, and the shifted letters prove the modifier bits come
+# through it.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-rqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-kbdreport.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "kbdusb=report",
+    "-device", "usb-kbd,port=1", "-device", "usb-mouse,port=2", "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def qkey(f, ch):
+    shift = ch.isupper()
+    keys = (["shift"] if shift else []) + [QCODE.get(ch, ch.lower())]
+    for down in (True, False):
+        ev = [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}
+              for k in (keys if down else reversed(keys))]
+        f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.05)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"kbdusb: ep", 30)
+    time.sleep(2)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    for ch in "echo Report-Keys\n":
+        qkey(f, ch)
+    time.sleep(3)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-kbdreport.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "kbdreport: kbdusb=report puts the keyboard in report protocol, decoded by its descriptor" "(report protocol, report 0)"
+vrefute "kbdreport: the keyboard accepts SET_PROTOCOL(report)" "SET_PROTOCOL(report) failed"
+vcheck "kbdreport: keys typed in report protocol reach the shell, shifted ones too" "Report-Keys"
+vrefute "kbdreport: nothing panics"                     "panic:"
 
 #
 # The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)

@@ -246,6 +246,10 @@ tmp/.veltro/
 # running veltro tests under emu); not source.
 usr/inferno/veltro/
 
+# The audit log's state (wm/settings' /usr/inferno/audit/on, the log the
+# audit service keeps); written at run time, not source.
+usr/inferno/audit/
+
 
 # Stray files
 fprint'

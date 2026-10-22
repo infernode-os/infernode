@@ -302,6 +302,7 @@ Out: adt {
 	val:	int;
 	held:	int;
 	io:	ref Sys->FileIO;
+	max:	int;	# the brick's lease maximum for it, ms
 };
 
 D2: adt {
@@ -341,8 +342,16 @@ d2serve(bmnt, dir: string)
 	(nil, lines) := sys->tokenize(readfile(bmnt + "/d2/status"), "\n");
 	for(; lines != nil; lines = tl lines){
 		(nil, f) := sys->tokenize(hd lines, " ");
-		if(f != nil && (hasprefix(hd f, "pwm/") || hasprefix(hd f, "gpio/")))
-			outs = ref Out(hd f, 0, 0, nil) :: outs;
+		if(f != nil && (hasprefix(hd f, "pwm/") || hasprefix(hd f, "gpio/"))){
+			# "... max N": a lease may be no longer than that (D2's C8)
+			m := leasems;
+			for(g := f; g != nil && tl g != nil; g = tl g)
+				if(hd g == "max")
+					m = int hd tl g;
+			outs = ref Out(hd f, 0, 0, nil, m) :: outs;
+			if(m < leasems)
+				leasems = m;	# one lease for all, so the shortest
+		}
 	}
 	if(outs == nil)
 		fail("d2", "the brick has no safety outputs");

@@ -383,6 +383,8 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 	reads: array of chan of (int, int, int, Sys->Rread),
 	writes: array of chan of (int, array of byte, int, Sys->Rwrite), tick: chan of int)
 {
+	renewing := 0;
+	renewed := chan of int;
 	for(;;) alt {
 	(off, nil, nil, rc) := <-ctl.read =>
 		if(rc == nil)
@@ -446,11 +448,25 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			e = "not armed: write arm to ctl";
 		wc <-= (len data, e);
 	<-tick =>
-		# Renew whatever is held, before its lease runs out.
+		# Renew whatever is held, before its lease runs out - in another
+		# process, so that ctl (safe above all) never waits behind a
+		# renewal stuck on the link.  One at a time; d2send's state
+		# (seq, armed) is shared, and only a renewal and a ctl or value
+		# write can overlap, which the brick orders by seq.
 		h := held(o);
-		if(d.armed && h != nil)
-			d2send(d, "set", h, 1);
+		if(d.armed && h != nil && !renewing){
+			renewing = 1;
+			spawn renew(d, h, renewed);
+		}
+	<-renewed =>
+		renewing = 0;
 	}
+}
+
+renew(d: ref D2, h: list of string, done: chan of int)
+{
+	d2send(d, "set", h, 1);
+	done <-= 1;
 }
 
 held(o: array of ref Out): list of string

@@ -395,6 +395,8 @@ ticker(c: chan of int, ms: int)
 Req: adt {
 	rid:	int;
 	tag:	int;
+	flushing:	int;	# its Tflush is on the way: keep it until the Rflush
+	cancels:	int;	# for a Tflush: the tag it cancels (else -1)
 	write:	int;	# a Twrite: its outcome is unknown if it times out
 	pkt:	array of byte;	# rid || 9P message
 	deadline:	int;
@@ -490,10 +492,13 @@ clock(tick: chan of int, pids: chan of int)
 	}
 }
 
+HANGUP: con 60000;	# no word from the brick this long, requests waiting: the session is gone
+
 core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan of int, pids: list of int)
 {
 	pend: list of ref Req;
 	rid := 0;
+	heard := sys->millisec();	# the last authenticated packet
 	for(;;) alt {
 	m := <-reqs =>
 		if(m == nil){		# unmounted
@@ -505,15 +510,18 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 		tag := int m[5] | int m[6] << 8;
 		if(typ == Tversion && len m >= 11 && get4(m, 7) > MSIZE)
 			put4(m, 7, MSIZE);	# one datagram
+		cancels := -1;
 		if(typ == Tflush && len m >= 9){
-			# The flushed request is answered by the Rflush, never
-			# by a late reply: stop retransmitting it, forget it.
-			old := int m[7] | int m[8] << 8;
-			pend = drop(pend, old);
+			# Stop retransmitting the flushed request, but keep it: if
+			# its reply comes before the Rflush, 9P lets it through.
+			cancels = int m[7] | int m[8] << 8;
+			for(l := pend; l != nil; l = tl l)
+				if((hd l).tag == cancels)
+					(hd l).flushing = 1;
 		}
 		rid++;
 		now := sys->millisec();
-		r := ref Req(rid, tag, typ == Twrite, cat(le4(rid), m), now + DEADLINE, now + RTO, 1, 0, now);
+		r := ref Req(rid, tag, 0, cancels, typ == Twrite, cat(le4(rid), m), now + DEADLINE, now + RTO, 1, 0, now);
 		pend = r :: pend;
 		s.send(r.pkt);
 	pc := <-pkts =>
@@ -522,6 +530,7 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 			ctr |= big pc[i] << (8*i);
 		if(!s.fresh(ctr))
 			continue;
+		heard = sys->millisec();
 		p := pc[8:];
 		id := get4(p, 0);
 		for(l := pend; l != nil; l = tl l){
@@ -535,13 +544,29 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 			}else{
 				sys->write(fd, p[4:], len p - 4);
 				pend = remove(pend, r);
+				if(r.cancels >= 0)	# the Rflush: the flushed request is done
+					pend = drop(pend, r.cancels, 1);
 			}
 			break;
 		}
 	<-tick =>
 		now := sys->millisec();
+		if(pend != nil && now - heard > HANGUP){
+			# Nothing authenticated for a minute while requests wait: the
+			# brick rebooted, or another commander took over.  Its 9P
+			# state is gone either way, so hang up: callers get an error
+			# and can mount again, rather than timing out for ever.
+			for(; pids != nil; pids = tl pids)
+				kill(hd pids);
+			return;
+		}
 		for(l := pend; l != nil; l = tl l){
 			r := hd l;
+			if(r.flushing){
+				if(now >= r.deadline + DEADLINE)
+					pend = remove(pend, r);	# no Rflush either: give up quietly
+				continue;
+			}
 			if(r.pending && now - r.heard > LIVE){
 				rerror(fd, r.tag, "link down");
 				pend = remove(pend, r);
@@ -590,11 +615,12 @@ rerror(fd: ref Sys->FD, tag: int, msg: string)
 	sys->write(fd, m, len m);
 }
 
-drop(l: list of ref Req, tag: int): list of ref Req
+# Remove requests with tag (only those being flushed, if flushing).
+drop(l: list of ref Req, tag: int, flushing: int): list of ref Req
 {
 	r: list of ref Req;
 	for(; l != nil; l = tl l)
-		if((hd l).tag != tag)
+		if((hd l).tag != tag || (flushing && !(hd l).flushing))
 			r = hd l :: r;
 	return r;
 }

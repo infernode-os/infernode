@@ -8,6 +8,7 @@ implement Brick;
 #	brick pair [-d keydir] usbmnt
 #	brick wifi usbmnt  <creds
 #	brick mount [-abu] [-d keydir] addr mountpoint
+#	brick d2 [-d keydir] [-l leasems] brickmnt dir
 #
 # Over USB the brick is mounted with plain `mount -A`; physical access
 # is the trust boundary.  Over the network it serves Styx inside TLS 1.3
@@ -24,6 +25,7 @@ implement Brick;
 #	sdg.psk	the pre-shared key we gave the brick, hex (mode 600)
 #	sdg.brick	the brick's X25519 public key, hex
 #	sdg.ctr	the datagram handshake counter
+#	d2.key	the D2 safety key we gave the brick, hex (mode 600)
 #
 
 include "sys.m";
@@ -47,6 +49,7 @@ Brick: module
 
 PORT: con "564";
 udp := 0;
+leasems := 500;
 
 keydir: string;
 
@@ -79,6 +82,8 @@ init(nil: ref Draw->Context, args: list of string)
 			flags = Sys->MBEFORE;
 		'u' =>
 			udp = 1;
+		'l' =>
+			leasems = int arg->earg();
 		* =>
 			usage();
 		}
@@ -106,6 +111,10 @@ init(nil: ref Draw->Context, args: list of string)
 			dmount(hd args, hd tl args, flags);
 		else
 			mount(hd args, hd tl args, flags);
+	"d2" =>
+		if(len args != 2)
+			usage();
+		d2serve(hd args, hd tl args);
 	* =>
 		usage();
 	}
@@ -116,7 +125,8 @@ usage()
 	sys->fprint(sys->fildes(2), "usage:\tbrick key [-d keydir]\n" +
 		"\tbrick pair [-d keydir] usbmnt\n" +
 		"\tbrick wifi usbmnt <creds\n" +
-		"\tbrick mount [-abu] [-d keydir] addr mountpoint\n");
+		"\tbrick mount [-abu] [-d keydir] addr mountpoint\n" +
+		"\tbrick d2 [-d keydir] [-l leasems] brickmnt dir\n");
 	raise "fail:usage";
 }
 
@@ -168,6 +178,14 @@ pair(mnt: string)
 		fail("pair", "bad datagram key from brick: " + pub);
 	createfile(keydir + "/sdg.brick", pub + "\n", 8r644);
 	sys->print("datagram  %s\n", pub);
+
+	# And D2's safety key, if the brick has safety outputs to configure.
+	if(sys->stat(mnt + "/config/d2").t0 >= 0){
+		d2key := random->randombuf(Random->ReallyRandom, 32);
+		writefile(mnt + "/config/d2", "key " + hex(d2key));
+		createfile(keydir + "/d2.key", hex(d2key) + "\n", 8r600);
+		sys->print("d2 key    set\n");
+	}
 }
 
 wifi(mnt: string)
@@ -267,6 +285,266 @@ dmount(addr, mntpt: string, flags: int)
 	p[1] = nil;
 	if(sys->mount(p[0], nil, mntpt, flags, "") < 0)
 		fail("mount", sys->sprint("mount failed: %r"));
+}
+
+#
+# brick d2: hold safety outputs live for applications (docs/D2-SPEC.md in
+# the styxbrick repository).  dir gets ctl, and a file per safety output
+# (pwm.2, gpio.5, ...).  Writing a value to an output's file holds the
+# output at that value: we renew it with fresh grants every leasems/5 for
+# as long as it is wanted; "release" stops, and the brick takes the output
+# to failsafe within a lease.  ctl takes "arm" and "safe"; arming is never
+# automatic, so after any lapse (a lost link, or this program dying) the
+# outputs stay at failsafe until an application arms again.
+#
+Out: adt {
+	name:	string;	# pwm/2
+	val:	int;
+	held:	int;
+	io:	ref Sys->FileIO;
+};
+
+D2: adt {
+	devid, boot:	string;
+	epoch:	int;
+	tau:	int;
+	seq:	int;
+	key:	array of byte;
+	grant, cmd:	ref Sys->FD;
+	armed:	int;
+	lapsed:	string;	# why we are disarmed, if we were armed
+	last:	string;	# the last command's outcome
+};
+
+d2serve(bmnt, dir: string)
+{
+	key := unhex(trim(readfile0(keydir + "/d2.key")));
+	if(key == nil || len key != 32)
+		fail("d2", "no D2 key in " + keydir + "; run brick pair");
+	d := ref D2;
+	d.key = key;
+	# The session: opening clone made it; its text names it.
+	(nil, w) := sys->tokenize(readfile(bmnt + "/d2/clone"), " \n");
+	if(len w != 4)
+		fail("d2", "bad answer from " + bmnt + "/d2/clone");
+	d.devid = hd w;
+	d.boot = hd tl w;
+	d.epoch = int hd tl tl w;
+	d.tau = int hd tl tl tl w;
+	# (opening clone again would make another session: keep this one's)
+	d.grant = sys->open(bmnt + "/d2/grant", Sys->OREAD);
+	d.cmd = sys->open(bmnt + "/d2/cmd", Sys->OWRITE);
+	if(d.grant == nil || d.cmd == nil)
+		fail("d2", sys->sprint("can't open %s/d2: %r", bmnt));
+	# The safety outputs, from the brick's status.
+	outs: list of ref Out;
+	(nil, lines) := sys->tokenize(readfile(bmnt + "/d2/status"), "\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, f) := sys->tokenize(hd lines, " ");
+		if(f != nil && (hasprefix(hd f, "pwm/") || hasprefix(hd f, "gpio/")))
+			outs = ref Out(hd f, 0, 0, nil) :: outs;
+	}
+	if(outs == nil)
+		fail("d2", "the brick has no safety outputs");
+	if(sys->bind("#s", dir, Sys->MBEFORE) < 0)
+		fail("d2", sys->sprint("can't bind #s on %s: %r", dir));
+	ctl := sys->file2chan(dir, "ctl");
+	n := len outs;
+	o := array[n] of ref Out;
+	reads := array[n] of chan of (int, int, int, Sys->Rread);
+	writes := array[n] of chan of (int, array of byte, int, Sys->Rwrite);
+	for(i := 0; i < n; i++){
+		o[i] = hd outs;
+		outs = tl outs;
+		fname := o[i].name;
+		for(j := 0; j < len fname; j++)
+			if(fname[j] == '/')
+				fname[j] = '.';
+		o[i].io = sys->file2chan(dir, fname);
+		if(ctl == nil || o[i].io == nil)
+			fail("d2", sys->sprint("can't make files in %s: %r", dir));
+		reads[i] = o[i].io.read;
+		writes[i] = o[i].io.write;
+	}
+	tick := chan of int;
+	spawn d2clock(tick, leasems / 5);
+	spawn d2core(d, o, ctl, reads, writes, tick);
+}
+
+d2clock(tick: chan of int, ms: int)
+{
+	for(;;){
+		sys->sleep(ms);
+		tick <-= 1;
+	}
+}
+
+d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
+	reads: array of chan of (int, int, int, Sys->Rread),
+	writes: array of chan of (int, array of byte, int, Sys->Rwrite), tick: chan of int)
+{
+	for(;;) alt {
+	(off, nil, nil, rc) := <-ctl.read =>
+		if(rc == nil)
+			break;
+		st := sys->sprint("session %d %s\nlease %d\nlast %s\n",
+			d.epoch, armedstr(d), leasems, d.last);
+		rc <-= (sliced(st, off), nil);
+	(nil, data, nil, wc) := <-ctl.write =>
+		if(wc == nil)
+			break;
+		case trim(string data) {
+		"arm" =>
+			e := d2send(d, "arm", held(o), 1);
+			if(e == nil){
+				d.armed = 1;
+				d.lapsed = nil;
+			}
+			wc <-= (len data, e);
+		"safe" =>
+			for(i := 0; i < len o; i++)
+				o[i].held = 0;
+			e := d2send(d, "safe", nil, 0);
+			d.armed = 0;
+			d.lapsed = "safe";
+			wc <-= (len data, e);
+		* =>
+			wc <-= (0, "unknown control message");
+		}
+	(i, (off, nil, nil, rc)) := <-reads =>
+		if(rc == nil)
+			break;
+		st := "released\n";
+		if(o[i].held)
+			st = sys->sprint("%d %s\n", o[i].val, armedstr(d));
+		rc <-= (sliced(st, off), nil);
+	(i, (nil, data, nil, wc)) := <-writes =>
+		if(wc == nil)
+			break;
+		v := trim(string data);
+		if(v == "release" || v == "off"){
+			# An orderly release: to failsafe now, the others untouched
+			# (a lapsed lease would disarm everything).
+			o[i].held = 0;
+			e: string;
+			if(d.armed)
+				e = d2send(d, "release", sys->sprint("%s=0", o[i].name) :: nil, 0);
+			wc <-= (len data, e);
+			break;
+		}
+		if(len v == 0 || !isnum(v)){
+			wc <-= (0, "want a value, or release");
+			break;
+		}
+		o[i].val = int v;
+		o[i].held = 1;
+		# Apply at once (and so learn at once if it is refused).
+		e: string;
+		if(d.armed)
+			e = d2send(d, "set", held(o), 1);
+		else
+			e = "not armed: write arm to ctl";
+		wc <-= (len data, e);
+	<-tick =>
+		# Renew whatever is held, before its lease runs out.
+		h := held(o);
+		if(d.armed && h != nil)
+			d2send(d, "set", h, 1);
+	}
+}
+
+held(o: array of ref Out): list of string
+{
+	l: list of string;
+	for(i := 0; i < len o; i++)
+		if(o[i].held)
+			l = sys->sprint("%s=%d", o[i].name, o[i].val) :: l;
+	return l;
+}
+
+# One D2 command under a fresh grant; nil, or why it was refused.
+d2send(d: ref D2, kind: string, outs: list of string, lease: int): string
+{
+	gid := 0;
+	if(kind != "safe" && kind != "release"){
+		buf := array[64] of byte;
+		n := 0;
+		# The brick issues at most 20 grants a second: wait our turn.
+		for(tries := 0; tries < 4; tries++){
+			n = sys->pread(d.grant, buf, len buf, big 0);
+			if(n > 0)
+				break;
+			if(!contains(sys->sprint("%r"), "rate"))
+				break;
+			sys->sleep(55);
+		}
+		if(n <= 0)
+			return d2refused(d, sys->sprint("grant: %r"));
+		(nil, w) := sys->tokenize(string buf[0:n], " \n");
+		if(len w != 3)
+			return d2refused(d, "grant: bad answer");
+		gid = int hd tl tl w;
+	}
+	d.seq++;
+	if(lease)
+		lease = leasems;
+	body := sys->sprint("d2 %s %s %d %d %s %d %d", d.devid, d.boot, d.epoch, d.seq, kind, gid, lease);
+	for(; outs != nil; outs = tl outs)
+		body += " " + hd outs;
+	b := array of byte body;
+	mac := array[Keyring->SHA256dlen] of byte;
+	keyring->hmac_sha256(b, len b, d.key, mac, nil);
+	m := array of byte (body + " " + hex(mac[0:16]));
+	if(sys->write(d.cmd, m, len m) != len m)
+		return d2refused(d, sys->sprint("%r"));
+	d.last = "ok";
+	return nil;
+}
+
+# A refusal; a lapsed lease or an evicted session leaves us disarmed.
+d2refused(d: ref D2, e: string): string
+{
+	d.last = e;
+	if(contains(e, "not armed") || contains(e, "session") || contains(e, "holding") ||
+	   contains(e, "boot")){
+		if(d.armed)
+			d.lapsed = e;
+		d.armed = 0;
+	}
+	return e;
+}
+
+armedstr(d: ref D2): string
+{
+	if(d.armed)
+		return "live";
+	if(d.lapsed != nil)
+		return "failsafe (" + d.lapsed + "; write arm to ctl)";
+	return "failsafe (not armed)";
+}
+
+sliced(s: string, off: int): array of byte
+{
+	b := array of byte s;
+	if(off >= len b)
+		return nil;
+	return b[off:];
+}
+
+isnum(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] < '0' || s[i] > '9')
+			return 0;
+	return 1;
+}
+
+contains(s, t: string): int
+{
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i + len t] == t)
+			return 1;
+	return 0;
 }
 
 # Brick to us: TLS records into the pipe the mount driver reads.

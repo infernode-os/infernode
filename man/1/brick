@@ -27,6 +27,17 @@ brick \- pair with, configure and mount a styxbrick
 ]
 .I addr
 .I mountpoint
+.br
+.B brick d2
+[
+.B -d
+.I keydir
+] [
+.B -l
+.I leasems
+]
+.I brickmnt
+.I dir
 .SH DESCRIPTION
 A styxbrick is a microcontroller that serves its hardware
 (LED, GPIO pins, ADC, temperature sensor) as a Styx file tree.
@@ -66,7 +77,10 @@ as
 If the brick serves datagrams
 .RB ( /config/sdg ),
 it also gives the brick our X25519 public key and a fresh pre-shared key,
-and saves the brick's public key.
+and saves the brick's public key;
+and if the brick has safety outputs
+.RB ( /config/d2 ),
+a fresh D2 safety key.
 Because all of it travels over the USB cable, nothing the network
 could alter is trusted.
 .PP
@@ -115,6 +129,46 @@ that waits for data (such as
 .BR /events )
 may wait as long as it needs.
 .PP
+.B "brick d2"
+holds the brick's safety outputs live on behalf of applications.
+A safety output is driven only by D2 commands: each carries a fresh grant
+from the brick, a lease, a sequence number and a MAC under the safety key,
+and the brick takes the output to its configured failsafe value when the
+lease runs out.
+.B "brick d2"
+opens a D2 session on the brick mounted at
+.I brickmnt
+and serves, in
+.IR dir ,
+a file
+.B ctl
+and a file for each safety output, named for it
+.RB ( pwm.2 ,
+.BR gpio.5 ).
+Writing a value (a pulse width in microseconds, or a level) to an output's
+file holds the output at that value: it is renewed under fresh grants every
+.IR leasems /5
+(default lease 500 ms).
+Writing
+.B release
+ends its use: it goes to failsafe at once, and the others are untouched.
+Reading it gives its value and state.
+Writing
+.B arm
+to
+.B ctl
+arms the session, which values need;
+.B safe
+takes every output to failsafe.
+Arming is never automatic.
+If the link fails or this program dies, renewals stop and the brick takes
+every output to failsafe within a lease, then refuses commands until an
+application writes
+.B arm
+again; reading
+.B ctl
+says why.
+.PP
 .I Keydir
 defaults to
 .BI /usr/ user /keyring/brick
@@ -140,6 +194,9 @@ the brick's X25519 public key
 .TP
 .B sdg.ctr
 the datagram handshake counter, which never repeats or goes back
+.TP
+.B d2.key
+the D2 safety key given to the brick, hex (mode 600)
 .SH EXAMPLE
 Pair over USB, give the brick its network, then use it from anywhere:
 .EX
@@ -148,8 +205,15 @@ Pair over USB, give the brick its network, then use it from anywhere:
 	brick wifi /n/brick <creds
 	cat /n/brick/net/status
 	unmount /n/brick
-	brick mount 192.168.1.23 /n/brick
+	brick mount -u 192.168.1.23 /n/brick
 	echo 1 >/n/brick/led
+.EE
+Hold a servo on a safety output, then let it go:
+.EX
+	brick d2 /n/brick /n/d2
+	echo arm >/n/d2/ctl
+	echo 1600 >/n/d2/pwm.2
+	echo release >/n/d2/pwm.2
 .EE
 .SH SOURCE
 .B /appl/cmd/brick.b

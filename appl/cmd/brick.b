@@ -7,18 +7,23 @@ implement Brick;
 #	brick key [-d keydir]
 #	brick pair [-d keydir] usbmnt
 #	brick wifi usbmnt  <creds
-#	brick mount [-ab] [-d keydir] addr mountpoint
+#	brick mount [-abu] [-d keydir] addr mountpoint
 #
 # Over USB the brick is mounted with plain `mount -A`; physical access
-# is the trust boundary.  Over the network it serves Styx only inside
-# TLS 1.3, and both ends authenticate by pinned key: `brick pair`, run
-# against the USB mount, gives the brick our key's pin and saves the
-# brick's.  Nothing about the keys crosses the network unverified.
+# is the trust boundary.  Over the network it serves Styx inside TLS 1.3
+# on TCP, or (-u) over Noise-secured datagrams on UDP (sdg(2)), and both
+# ends authenticate by pinned key: `brick pair`, run against the USB
+# mount, exchanges the keys.  Nothing about the keys crosses the network
+# unverified.
 #
 # keydir (default /usr/$user/keyring/brick) holds:
 #	client.key	our P-256 private scalar, 64 hex digits (mode 600)
 #	client.crt	our self-signed X.509 certificate, DER
 #	brick.spki	the brick's pin: SHA-256 of its SubjectPublicKeyInfo, hex
+#	sdg.key	our X25519 private key, hex (mode 600)
+#	sdg.psk	the pre-shared key we gave the brick, hex (mode 600)
+#	sdg.brick	the brick's X25519 public key, hex
+#	sdg.ctr	the datagram handshake counter
 #
 
 include "sys.m";
@@ -30,6 +35,10 @@ include "keyring.m";
 include "tls.m";
 	tls: TLS;
 	Conn: import tls;
+include "security.m";
+	random: Random;
+include "sdg.m";
+	sdg: Sdg;
 
 Brick: module
 {
@@ -37,6 +46,7 @@ Brick: module
 };
 
 PORT: con "564";
+udp := 0;
 
 keydir: string;
 
@@ -67,6 +77,8 @@ init(nil: ref Draw->Context, args: list of string)
 			flags = Sys->MAFTER;
 		'b' =>
 			flags = Sys->MBEFORE;
+		'u' =>
+			udp = 1;
 		* =>
 			usage();
 		}
@@ -90,7 +102,10 @@ init(nil: ref Draw->Context, args: list of string)
 	"mount" =>
 		if(len args != 2)
 			usage();
-		mount(hd args, hd tl args, flags);
+		if(udp)
+			dmount(hd args, hd tl args, flags);
+		else
+			mount(hd args, hd tl args, flags);
 	* =>
 		usage();
 	}
@@ -101,7 +116,7 @@ usage()
 	sys->fprint(sys->fildes(2), "usage:\tbrick key [-d keydir]\n" +
 		"\tbrick pair [-d keydir] usbmnt\n" +
 		"\tbrick wifi usbmnt <creds\n" +
-		"\tbrick mount [-ab] [-d keydir] addr mountpoint\n");
+		"\tbrick mount [-abu] [-d keydir] addr mountpoint\n");
 	raise "fail:usage";
 }
 
@@ -127,6 +142,32 @@ pair(mnt: string)
 		fail("pair", "bad pin from brick: " + theirs);
 	createfile(keydir + "/brick.spki", theirs + "\n", 8r644);
 	sys->print("our pin   %s\nbrick pin %s\n", mine, theirs);
+
+	# The datagram transport too, if the brick has one: our X25519 public
+	# key and a fresh PSK go to it, its public key comes back.
+	if(sys->stat(mnt + "/config/sdg").t0 < 0)
+		return;
+	random = load Random Random->PATH;
+	if(random == nil)
+		fail("load", sys->sprint("can't load %s: %r", Random->PATH));
+	key := unhex(trim(readfile0(keydir + "/sdg.key")));
+	if(key == nil || len key != 32){
+		key = random->randombuf(Random->ReallyRandom, 32);
+		createfile(keydir + "/sdg.key", hex(key) + "\n", 8r600);
+	}
+	psk := random->randombuf(Random->ReallyRandom, 32);
+	writefile(mnt + "/config/sdg", "peer " + hex(keyring->x25519_base(key)));
+	writefile(mnt + "/config/sdg", "psk " + hex(psk));
+	createfile(keydir + "/sdg.psk", hex(psk) + "\n", 8r600);
+	pub := "";
+	(nil, lines) := sys->tokenize(readfile(mnt + "/config/sdg"), "\n");
+	for(; lines != nil; lines = tl lines)
+		if(hasprefix(hd lines, "pub "))
+			pub = (hd lines)[4:];
+	if(unhex(pub) == nil || len pub != 64)
+		fail("pair", "bad datagram key from brick: " + pub);
+	createfile(keydir + "/sdg.brick", pub + "\n", 8r644);
+	sys->print("datagram  %s\n", pub);
 }
 
 wifi(mnt: string)
@@ -196,6 +237,36 @@ mount(addr, mntpt: string, flags: int)
 		conn.close();
 		fail("mount", err);
 	}
+}
+
+#
+# Mounting over datagrams (sdg(2)): every request gets an answer, from
+# the brick or, when its deadline passes or the link goes, an error.
+#
+dmount(addr, mntpt: string, flags: int)
+{
+	sdg = load Sdg Sdg->PATH;
+	if(sdg == nil)
+		fail("load", sys->sprint("can't load %s: %r", Sdg->PATH));
+	if((e := sdg->init()) != nil)
+		fail("load", e);
+	k := ref Sdg->Keys;
+	k.key = unhex(trim(readfile0(keydir + "/sdg.key")));
+	k.server = unhex(trim(readfile0(keydir + "/sdg.brick")));
+	k.psk = unhex(trim(readfile0(keydir + "/sdg.psk")));
+	k.ctrfile = keydir + "/sdg.ctr";
+	if(len k.key != 32 || len k.server != 32 || len k.psk != 32)
+		fail("mount", "no datagram keys in " + keydir + "; run brick pair");
+	if(!hasbang(addr))
+		addr = "udp!" + addr + "!" + Sdg->PORT;
+	p := array[2] of ref Sys->FD;
+	if(sys->pipe(p) < 0)
+		fail("mount", sys->sprint("can't make pipe: %r"));
+	if((e = sdg->relay(addr, k, p[1])) != nil)
+		fail("mount", e);
+	p[1] = nil;
+	if(sys->mount(p[0], nil, mntpt, flags, "") < 0)
+		fail("mount", sys->sprint("mount failed: %r"));
 }
 
 # Brick to us: TLS records into the pipe the mount driver reads.

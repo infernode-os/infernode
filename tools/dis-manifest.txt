@@ -403,6 +403,7 @@ dis/lib/outlinefont.dis
 dis/lib/parseman.dis
 dis/lib/pdf.dis
 dis/lib/pdfenc.dis
+dis/lib/sdg.dis
 dis/lib/sheetview.dis
 dis/lib/plumbing.dis
 dis/lib/plumbmsg.dis

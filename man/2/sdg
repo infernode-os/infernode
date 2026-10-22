@@ -72,6 +72,14 @@ A blocking read so acknowledged has no deadline.
 The session outlives outages; an idle one sends a keepalive every
 .B IDLE
 (15 s).
+If requests wait for a minute with no authenticated word from the server
+(it rebooted, was re-paired, or another client took over), its 9P state is
+gone either way:
+.B relay
+then hangs up, so callers get an error at once and can mount again.
+A flushed request is kept until its
+.B Rflush
+arrives, so a reply that comes first is still delivered, as 9P allows.
 Under a handshake flood the server answers with a cookie, which
 .B relay
 uses at once.

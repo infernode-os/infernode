@@ -1,0 +1,81 @@
+.TH SDG 2
+.SH NAME
+sdg \- Styx over Noise-secured datagrams
+.SH SYNOPSIS
+.EX
+include "sdg.m";
+sdg := load Sdg Sdg->PATH;
+
+init:  fn(): string;
+Keys:  adt {
+	key, server, psk: array of byte;
+	ctrfile: string;
+};
+relay: fn(addr: string, keys: ref Keys, fd: ref Sys->FD): string;
+.EE
+.SH DESCRIPTION
+.B Sdg
+carries 9P2000 one message per datagram, secured with
+.BR Noise_IKpsk2_25519_ChaChaPoly_SHA256 ,
+in place of a byte stream.
+Each request is retransmitted under its own request id until it is
+answered; the server keeps recent replies, so a retransmitted request is
+answered again but never run twice.
+A lost packet costs one retransmission (40 ms), not a stream stall.
+The protocol is specified in the styxbrick repository's
+.BR docs/STYX-DGRAM.md .
+.PP
+.B Init
+loads the modules
+.B sdg
+needs and returns nil or an error.
+.PP
+.B Relay
+dials
+.I addr
+(a dial string such as
+.BR udp!host!5640 ),
+performs the handshake with the
+.I keys
+\- our X25519 private key, the server's public key and the pre-shared
+key, 32 bytes each \- and then relays 9P between
+.I fd
+and the session until
+.I fd
+is closed.
+.I Keys.ctrfile
+names a file that keeps the handshake counter increasing across restarts
+and clock steps.
+It returns nil, or an error if the handshake failed.
+Typically
+.I fd
+is one end of a pipe whose other end is given to
+.IR sys-bind (2)'s
+.BR mount .
+.PP
+Every request gets an answer: the server's reply; or, made by
+.BR relay ,
+the error
+.B "timed out"
+when its deadline
+.RB ( DEADLINE ,
+5 s) passes with no word from the server
+.RB ( "outcome unknown: timed out"
+for a write, which may or may not have been applied);
+or
+.B "link down"
+when a request the server has acknowledged as waiting for data (a
+blocking read) stops being acknowledged for
+.B LIVE
+(5 s).
+A blocking read so acknowledged has no deadline.
+The session outlives outages; an idle one sends a keepalive every
+.B IDLE
+(15 s).
+Under a handshake flood the server answers with a cookie, which
+.B relay
+uses at once.
+.SH SOURCE
+.B /appl/lib/sdg.b
+.SH SEE ALSO
+.IR brick (1)

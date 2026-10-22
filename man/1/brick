@@ -20,7 +20,7 @@ brick \- pair with, configure and mount a styxbrick
 .br
 .B brick mount
 [
-.B -ab
+.B -abu
 ] [
 .B -d
 .I keydir
@@ -42,8 +42,11 @@ option, for example
 	mount -A '#U*/dev/ttyACM0' /n/brick
 .EE
 (after setting the host's tty to raw mode).
-On the network the brick serves only inside TLS 1.3,
-and only to the client it was paired with.
+On the network the brick serves only to the client it was paired with:
+inside TLS 1.3 on TCP, or over Noise-secured datagrams on UDP
+(see
+.IR sdg (2)),
+which a lossy or intermittent link favours.
 Each side identifies the other by a pin: the SHA-256 hash
 of its certificate's SubjectPublicKeyInfo, in hex.
 No certificate authority is involved.
@@ -60,7 +63,11 @@ and saves its pin (read from
 .IB usbmnt /config/spki\fR)
 as
 .IB keydir /brick.spki\fR.
-Because both pins travel over the USB cable, nothing the network
+If the brick serves datagrams
+.RB ( /config/sdg ),
+it also gives the brick our X25519 public key and a fresh pre-shared key,
+and saves the brick's public key.
+Because all of it travels over the USB cable, nothing the network
 could alter is trusted.
 .PP
 .B "brick wifi"
@@ -90,6 +97,23 @@ and
 options are as for
 .IR bind (1).
 The connection is closed when the tree is unmounted.
+With
+.BR -u ,
+it mounts over datagrams instead
+(UDP port 5640 if none is given; the address may be a dial string such as
+.BR udp!host!5640 ).
+Then every request gets an answer: the brick's reply, or an error made
+locally when its deadline (5 s) passes
+.RB ( "timed out" ;
+for a write,
+.BR "outcome unknown: timed out" ),
+or when a read the brick has acknowledged as waiting for data stops being
+acknowledged
+.RB ( "link down" ).
+Nothing blocks on a lost link, the session outlives outages, and a read
+that waits for data (such as
+.BR /events )
+may wait as long as it needs.
 .PP
 .I Keydir
 defaults to
@@ -104,6 +128,18 @@ our self-signed X.509 certificate, in DER
 .TP
 .B brick.spki
 the brick's pin
+.TP
+.B sdg.key
+our X25519 private key, hex (mode 600)
+.TP
+.B sdg.psk
+the pre-shared key given to the brick, hex (mode 600)
+.TP
+.B sdg.brick
+the brick's X25519 public key
+.TP
+.B sdg.ctr
+the datagram handshake counter, which never repeats or goes back
 .SH EXAMPLE
 Pair over USB, give the brick its network, then use it from anywhere:
 .EX
@@ -119,4 +155,5 @@ Pair over USB, give the brick its network, then use it from anywhere:
 .B /appl/cmd/brick.b
 .SH SEE ALSO
 .IR mount (1),
-.IR bind (1)
+.IR bind (1),
+.IR sdg (2)

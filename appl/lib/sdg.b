@@ -299,7 +299,8 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	rpid := chan of int;
 	spawn reader1(s.fd, pkts, rpid);
 	reader := <-rpid;
-	deadline := sys->millisec() + DEADLINE;
+	deadline := sys->millisec() + HSDEADLINE;
+	wait := 250;
 	while(sys->millisec() < deadline){
 		# A fresh initiation each try (an accepted one would be refused as old).
 		me := get4(random->randombuf(Random->ReallyRandom, 4), 0);
@@ -314,7 +315,12 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 		else
 			p = cat(p, array[16] of {* => byte 0});
 		sys->write(s.fd, p, len p);
-		spawn ticker(timer, 250);
+		# Each try replaces the last (the brick keeps the newest), so only
+		# the newest try's response is useful: back off until the wait
+		# exceeds the round trip, or a slow link would never connect.
+		spawn ticker(timer, wait);
+		if(wait < 2000)
+			wait *= 2;
 	wait:
 		for(;;) alt {
 		<-timer =>

@@ -34,6 +34,7 @@ Sdg: module
 	# interval and its cap, retransmission while pending, the silence that
 	# means the link is down, and the idle time before a keepalive.
 	DEADLINE:	con 5000;
+	HSDEADLINE:	con 10000;	# the handshake, whose tries back off 250 ms .. 2 s
 	RTO:	con 40;
 	RTOMAX:	con 500;
 	KEEP:	con 1000;

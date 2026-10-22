@@ -294,7 +294,6 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	mac1key := sha256(cat(array of byte "mac1", k.server));
 	ckey := sha256(cat(array of byte "cookie--", k.server));
 	cookie: array of byte;
-	timer := chan of int;
 	pkts := chan of array of byte;
 	rpid := chan of int;
 	spawn reader1(s.fd, pkts, rpid);
@@ -318,6 +317,9 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 		# Each try replaces the last (the brick keeps the newest), so only
 		# the newest try's response is useful: back off until the wait
 		# exceeds the round trip, or a slow link would never connect.
+		# A timer of this try's own: an earlier try's must not cut this
+		# wait short (buffered, so an abandoned one still exits).
+		timer := chan[1] of int;
 		spawn ticker(timer, wait);
 		if(wait < 2000)
 			wait *= 2;

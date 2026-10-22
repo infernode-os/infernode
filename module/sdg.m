@@ -36,7 +36,7 @@ Sdg: module
 	DEADLINE:	con 5000;
 	HSDEADLINE:	con 10000;	# the handshake, whose tries back off 250 ms .. 2 s
 	RTO:	con 40;
-	RTOMAX:	con 500;
+	RTOMAX:	con 200;	# tau: a command is stale after it
 	KEEP:	con 1000;
 	LIVE:	con 5000;
 	IDLE:	con 15000;

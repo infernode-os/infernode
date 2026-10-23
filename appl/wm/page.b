@@ -317,7 +317,7 @@ setview(v: ref View)
 	if(style == nil){
 		# Xenith's faces: a flowing document reads as it does there
 		code := openfont("/fonts/combined/gomono.14.font");
-		style = ref Docengine->Style(0, font, code, display.black, display.white, markcol, display.white);
+		style = ref Docengine->Style(0, font, code, display.black, display.white, markcol, display.white, 0);
 	}
 	v.style = style;
 }

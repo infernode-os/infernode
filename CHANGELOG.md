@@ -4,6 +4,19 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-22
+
+This release fixes what 0.8.0 shipped broken. Charon opened on a test
+fixture that no package carried. Packages left out `man`, `doc`,
+`icons`, `appl` and `n`. An idle emulator with a page loaded kept a
+whole core busy. Every package now runs its own Charon before it is
+uploaded. Charon can now complete an institutional sign-in through
+Microsoft and download what it cannot show. Xenith no longer exits
+when typing beside a Zerox, and its new `Live` command keeps a
+document's preview current as you type. On the bare-metal kernel,
+USB disks, serial adapters, Ethernet adapters, touchscreens and
+non-boot keyboards work on real hardware.
+
 ### Security
 
 - **A CNSA-mode mismatch says which side is in CNSA mode.** A node
@@ -13,6 +26,148 @@ All notable changes to InferNode are documented in this file.
   Dock and a terminal can start an emulator with different
   environments, so one machine could reach a CNSA server one way and
   not the other. `tests/cnsa_nodepair_test.sh` covers both mixes.
+- **Charon's page files no longer show a password.** `forms` and a
+  password input's `dom/N/attrs` showed the value as typed, so anything
+  given the window's files, an agent among them, could read it. They
+  now show `********` when the field holds anything; the page, its
+  scripts and the submitted form still have the real value
+  (`tests/host/charon_password_test.sh`).
+
+### Packages
+
+- **Charon opens on a start page that ships.** Its home was
+  `tests/charon/pages/article.html`, and no package carries `tests/`,
+  so every released Charon since 0.6.0 opened on "file does not
+  exist". `lib/charon/start.html` has a search box, places that render
+  in Charon, and the keys. `tests/host/charon_home_test.sh` checks the
+  home is under a directory every release job stages.
+- **Each package is tested before it ships.**
+  `tests/host/release_smoke_test.sh` runs a staged package's own
+  emulator on its own tree: headless Charon must show its start page
+  and a forty-section page whole; GUI packages also open the page in
+  Xenith and in Lucifer's presentation view. A failure stops the
+  upload.
+- **`man`, `doc`, `icons`, `appl` and `n` are shipped.** `man` found
+  no pages, Tk programs could not load their icons, and the debugger
+  had no source. Without `n`, a fresh install's first start made the
+  user's home inside the package. `appl` ships without its `.dis`.
+- **The app icons sit on the macOS grid.** InferNode's and Xenith's
+  icons are rounded squares with a margin and shadow, not full-bleed
+  squares. On Linux the running window is the pinned dock entry, not
+  a second generic icon, and Xenith's window is titled Xenith. The
+  Brimstone logo in Lucifer's header is on a clear ground.
+
+### Emulator
+
+- **An idle emulator no longer burns a core.** With a web page loaded,
+  the idle collector went round the heap again and again, freeing
+  nothing: 99% of a core for as long as the emulator sat idle. It now
+  rests until the heap has changed.
+
+### Charon and the browser engine
+
+- **A page left is let go.** Layout kept the boxes and words of the
+  last documents after the page was left: 190 MB stayed after leaving
+  a 4,000-paragraph page for `about:blank`; now 6 MB.
+- **Microsoft and SAML sign-in.** Pages are told CSS does not animate,
+  since it does not, so a page waiting for `animationend` takes its
+  static path. A form a script submits by POST is posted. A POST body
+  longer than one 9P message is sent whole (webfs kept only the last
+  piece). Together these take a JSTOR sign-in through Microsoft and
+  OpenAthens to the end.
+- **Forms hold the controls HTML puts in them.** Controls are numbered
+  in document order, including shadow trees; removed controls and a
+  `<template>`'s content are left out; a control's `form` attribute is
+  honoured; entries are sent in tree order.
+- **Web components.** A button's label in `forms` and `dom/N/text` is
+  the one shown through its `<slot>`. A label's `for` names a control
+  in its own tree, so one component's label no longer ticks another's
+  box.
+- **Binary bodies.** `arrayBuffer()`, `bytes()`, `blob()` and XHR's
+  `arraybuffer` give a response's bytes as they came, not decoded as
+  UTF-8; binary request bodies go as their bytes.
+- **Downloads.** A page navigated to that Charon cannot show, such as
+  a PDF, is fetched whole, saved in `$home/Downloads` under its
+  Content-Disposition name, and plumbed, so Xenith or Lucifer opens
+  it. charon(1) has a Downloads section.
+
+### Xenith
+
+- **Typing beside a Zerox no longer kills the editor.** The arrow
+  keys, Home, End and the control keys committed only the typing
+  window's copy of the typing, and the next key tripped a fatal check
+  that left a frozen window. They commit through every window, as
+  Plan 9 acme does. A copy out of step anyway is recovered and
+  reported in Errors. A fatal error now closes the window, and a dump
+  with a Zerox loads back.
+- **`Live`** turns a document's live preview on and off. A live
+  Markdown, HTML or troff document is set again 600 ms after typing
+  stops, unsaved edits included, keeping its place and zoom. `Live`
+  in the text's tag opens the document beside it if none is shown.
+- **Every click reaches the page.** A click on anything but a link or
+  a form control was dropped, so script-driven buttons, such as a
+  cookie banner's, could not be pressed.
+- **A page's viewport is the window's height**, not 600 pixels, so a
+  dialog sized to it is no longer cut off.
+
+### Veltro and the agent loop
+
+- **The Limbo compile gate runs**, and `limbo compile <file.b>`
+  checks any file.
+- **Edits to user folders are staged**, reported as staged, applied
+  with `task promote` after approval and discarded with `task revert`.
+  Staged changes are offered back after a restart, never applied over
+  newer edits.
+- **Closing a task mid-turn no longer takes down the UI**, and closing
+  one stops its agent, tool server and model session.
+- **A failing model service is said so**, shown as "Model unavailable"
+  rather than as the agent's reply, and its task is marked failed.
+  `/stop` stops a running turn; what the user types during a turn is
+  shown at once.
+- **Compaction waits for the end of a turn.** llmsrv compacted
+  history inside a tool exchange, after which the API refused the
+  results and the turn died.
+- **`write` and `edit` keep native content intact**, and a task's
+  status lists the documents it has made.
+- **The model is the server's.** Client-side model selection is gone
+  (`task model=`, `spawn model=`, `veltro -m`).
+
+### Documents
+
+- **A PDF page whose box is not at 0 0 is painted**, with its words
+  and links in place; cropped figures came out blank.
+- **`man -t`** writes troff `-man` output for tr2pdf.
+
+### Bare metal
+
+- **USB disks on a real xHCI controller**: SuperSpeed ep0, composite
+  devices, one endpoint number both ways, and disks past 2 TB. dossrv
+  reads FAT32 partitions and volumes past 2 GB. Every logical unit of
+  a card reader is a disk of its own, and cards may come and go.
+- **USB serial adapters** (CDC-ACM, FTDI, CP210x) are `eia(3)` ports,
+  `/dev/eiaU<n>`. A control request with wValue's top bit set lost its
+  wIndex and wLength on every xHCI machine; fixed.
+- **USB Ethernet**: CDC ECM and NCM, beside a kernel NIC on spare
+  instances `#l2` and `#l3`. A second interface takes its own address
+  by DHCP but leaves the default route alone.
+- **USB pointers and keyboards from the HID report descriptor**: mice,
+  touchscreens and tablets (absolute positions through `/dev/pointer`'s
+  new `a` verb), and keyboards without the boot protocol. Device
+  quirks are data in `/n/dos/usbquirks`.
+- **Wi-Fi**: one DHCP client per interface, renewing its lease; the
+  firmware keepalive on every chip. A Pi 4 soak had collected 93 stuck
+  DHCP clients and lost its link every 8.4 minutes.
+- **The console scrolls by copying** in a screen-sized framebuffer and
+  never moves the scanout window, which left the screen 80 px low on a
+  1280x800 panel.
+- **`#P` on the Pi 3B+** reports the firmware's temperature and
+  throttle flags, as on the Pi 4.
+- docs/arm64-jit/BENCHMARK-arm64-bcm2711.md: jitbench on a Pi 4B,
+  2.6x to 3.7x the 3B+.
+
+### Build
+
+- CI: a merge to master no longer cancels the run of the one before.
 
 ## [0.8.0] - 2026-10-15
 

@@ -8,18 +8,35 @@ implement Kbdusb;
 # is policy, which belongs outside it. See "Decision: device protocols
 # live outside the kernel, mechanism inside" in os/bcm2837/README.md.
 #
-# BOOT protocol, not report protocol. A HID device describes its reports
-# in a report descriptor, and parsing those is a real piece of work; the
-# boot protocol exists precisely so that a machine which has just started
-# can read a keyboard without doing any of it. The report is eight fixed
-# bytes: modifiers, a reserved byte, and up to six keycodes held down.
-# That is enough to type, which is what is wanted here.
+# BOOT protocol first, report protocol when it has to be. The boot
+# protocol exists so that a machine which has just started can read a
+# keyboard without parsing anything: eight fixed bytes, modifiers, a
+# reserved byte, and up to six keycodes held down. Every keyboard whose
+# interface says it can speak it (subclass 1) is read that way, as it
+# always was.
+#
+# Some keyboards cannot: an interface of subclass 0 has no boot
+# protocol, and what it sends is whatever its HID report descriptor
+# describes -- a report ID first, an n-key-rollover bitmap, a vendor
+# byte. Read as eight boot bytes that is garbage. For those the
+# descriptor is read and parsed (the Hid library, /dis/lib/hid.dis,
+# the same one Bluetooth's mouse uses) and the reports decoded by it.
+# A boot keyboard can be asked for its reports too -- every key at
+# once rather than six, on an n-key-rollover board -- by the card's
+# quirks file (/n/dos/usbquirks, "vid:pid report"), or for every
+# keyboard by "kbdusb=report" on the kernel's command line. "boot" in
+# the quirks file insists on the boot protocol, "ignore" leaves the
+# device alone.
 #
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+
+include "hid.m";
+	hid: Hid;
+	Keys: import hid;
 
 Kbdusb: module
 {
@@ -43,6 +60,10 @@ Rsetidle:	con 10;		# HID: SET_IDLE
 Dconf:		con 2;
 
 Bootproto:	con 0;		# SET_PROTOCOL: 0 is boot, 1 is report
+Reportproto:	con 1;
+Dreport:	con 16r22;	# GET_DESCRIPTOR: the HID report descriptor
+Quirkfile:	con "/n/dos/usbquirks";
+Maxreport:	con 64;		# the longest report read, one packet's worth
 
 Reportlen:	con 8;		# the boot keyboard report
 Maxerr:		con 100;	# failed reads before deciding it is gone
@@ -76,6 +97,7 @@ Latin:		con 16rE06F;	# Spec|0x6f, include/keyboard.h
 dev: string;
 ctlfd: ref Sys->FD;	# the device's ctl file
 ep0: ref Sys->FD;	# its control endpoint's data file, held open
+iface := 0;		# the HID interface: class requests and the report descriptor go to it
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -146,13 +168,61 @@ init(nil: ref Draw->Context, args: list of string)
 	}
 
 	#
-	# Ask for the boot protocol before reading anything. A keyboard
-	# left in report protocol sends whatever its report descriptor
-	# describes, which is not the eight bytes below and is not
-	# something this can decode.
+	# The interface, the device's vid:pid and the interface's
+	# subclass, when the walk gives them. Started by hand with only
+	# the endpoint, the keyboard is taken to be interface 0 and boot
+	# capable, which is what this driver always assumed.
 	#
-	if(ctlout(Rh2d|Rclass|Riface, Rsetproto, Bootproto, 0) < 0)
-		sys->print("kbdusb: SET_PROTOCOL(boot) failed: %r\n");
+	vidpid := "";
+	sub := 1;
+	args = tl tl tl args;
+	if(args != nil){
+		iface = int hd args;
+		if(tl args != nil){
+			vidpid = hd tl args;
+			if(tl tl args != nil)
+				sub = int hd tl tl args;
+		}
+	}
+	wantreport := sub != 1 || cmdlinesays("kbdusb=report");
+	for(q := quirks(vidpid); q != nil; q = tl q)
+		case hd q {
+		"ignore" =>
+			sys->print("kbdusb: %s (%s) ignored by %s\n", dev, vidpid, Quirkfile);
+			return;
+		"report" =>	wantreport = 1;
+		"boot" =>	wantreport = 0;
+		* =>	;	# the pointer driver's words share the line
+		}
+
+	#
+	# The report descriptor, when its reports are wanted: what each
+	# byte of a report means. A keyboard that has no boot protocol and
+	# no usable descriptor cannot be read, and says so; a boot
+	# keyboard falls back to the boot protocol.
+	#
+	keys: list of ref Keys;
+	if(wantreport)
+		keys = readkeys();
+	if(keys == nil && sub != 1){
+		sys->print("kbdusb: %s (%s) has no boot protocol and no keyboard report it can read\n", dev, vidpid);
+		return;
+	}
+
+	#
+	# The protocol, before reading anything. A boot keyboard comes
+	# out of reset in report protocol, which is the same eight bytes
+	# on most but not all of them; asking makes it so. SET_PROTOCOL
+	# is a boot device's request -- one without the boot protocol may
+	# refuse it -- so a subclass-0 keyboard is left as it is.
+	#
+	if(sub == 1){
+		proto := Bootproto;
+		if(keys != nil)
+			proto = Reportproto;
+		if(ctlout(Rh2d|Rclass|Riface, Rsetproto, proto, iface) < 0)
+			sys->print("kbdusb: SET_PROTOCOL(%s) failed: %r\n", protoname(proto));
+	}
 
 	#
 	# Idle rate: report the current state every Idlems, changed or
@@ -171,7 +241,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# running it away. Identical reports cost nothing: the loop only
 	# acts on keys that were not already held.
 	#
-	if(ctlout(Rh2d|Rclass|Riface, Rsetidle, (Idlems / 4) << 8, 0) < 0)
+	if(ctlout(Rh2d|Rclass|Riface, Rsetidle, (Idlems / 4) << 8, iface) < 0)
 		sys->print("kbdusb: SET_IDLE failed: %r\n");
 
 	fd := openintr(epnum, maxpkt, ival);
@@ -184,10 +254,92 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 	}
 
-	sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d\n",
-		dev, epnum, maxpkt, ival);
+	if(keys == nil){
+		sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d\n",
+			dev, epnum, maxpkt, ival);
+		poll(fd, kbd, ival);
+		return;
+	}
+	ids := "";
+	for(l := keys; l != nil; l = tl l)
+		ids += sys->sprint(" %d", (hd l).id);
+	sys->print("kbdusb: %s ready on endpoint %d maxpkt %d ival %d (report protocol, report%s)\n",
+		dev, epnum, maxpkt, ival, ids);
+	pollreport(fd, kbd, ival, maxpkt, keys);
+}
 
-	poll(fd, kbd, ival);
+protoname(p: int): string
+{
+	if(p == Reportproto)
+		return "report";
+	return "boot";
+}
+
+#
+# The keyboard reports the interface's report descriptor describes; nil
+# if it cannot be read, the library cannot be loaded, or it describes
+# none.
+#
+readkeys(): list of ref Keys
+{
+	hid = load Hid Hid->PATH;
+	if(hid == nil){
+		sys->print("kbdusb: %s: cannot load %s: %r; boot protocol\n", dev, Hid->PATH);
+		return nil;
+	}
+	hid->init();
+	buf := array[1024] of byte;
+	n := ctlin(Rd2h|Riface, Rgetdesc, Dreport << 8, iface, buf);
+	if(n <= 0){
+		sys->print("kbdusb: %s report descriptor unreadable (%r)\n", dev);
+		return nil;
+	}
+	keys := hid->keyboard(buf[0:n]);
+	if(keys == nil)
+		sys->print("kbdusb: %s report descriptor (%d bytes) describes no keyboard report\n", dev, n);
+	return keys;
+}
+
+#
+# The card's word on this device: the words after "vid:pid" on its line
+# of the quirks file, or nil. A missing file is the usual case. The
+# pointer driver reads the same file; a line can carry words for both.
+#
+quirks(vidpid: string): list of string
+{
+	if(vidpid == nil)
+		return nil;
+	fd := sys->open(Quirkfile, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[4096] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	(nil, lines) := sys->tokenize(string buf[0:n], "\n");
+	for(; lines != nil; lines = tl lines){
+		(nw, w) := sys->tokenize(hd lines, " \t");
+		if(nw > 0 && hd w == vidpid)
+			return tl w;
+	}
+	return nil;
+}
+
+# is this word on the kernel's command line (/dev/bootargs)?
+cmdlinesays(word: string): int
+{
+	fd := sys->open("/dev/bootargs", Sys->OREAD);
+	if(fd == nil)
+		return 0;
+	buf := array[1024] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return 0;
+	(nil, w) := sys->tokenize(string buf[0:n], " \t\n");
+	for(; w != nil; w = tl w)
+		if(hd w == word)
+			return 1;
+	return 0;
 }
 
 #
@@ -200,14 +352,14 @@ intrendpoint(): (int, int, int)
 {
 	hdr := array[9] of byte;
 
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, hdr) < len hdr)
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, hdr) < len hdr)
 		return (-1, 0, 0);
 	total := int hdr[2] | (int hdr[3] << 8);
 	if(total < len hdr || total > 512)
 		return (-1, 0, 0);
 
 	cfg := array[total] of byte;
-	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, cfg) < total)
+	if(ctlin(Rd2h, Rgetdesc, Dconf << 8, 0, cfg) < total)
 		return (-1, 0, 0);
 
 	for(i := 0; i + 2 <= total; ){
@@ -293,9 +445,7 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 	# keystroke.
 	#
 	buf := array[Reportlen] of byte;
-	prev := array[Reportlen] of byte;
-	for(i := 0; i < len prev; i++)
-		prev[i] = byte 0;
+	i: int;
 
 	spawn repeater(kbd);
 
@@ -363,45 +513,128 @@ poll(fd, kbd: ref Sys->FD, ival: int)
 		}
 		nempty = 0;
 
-		lastreport = sys->millisec();
-		mod := int buf[0];
+		down: list of int;
+		for(i = Reportlen - 1; i >= 2; i--)
+			if(int buf[i] != 0)
+				down = int buf[i] :: down;
+		press(kbd, int buf[0], down);
+	}
+}
 
-		#
-		# Alt is a PREFIX, not a held modifier.
-		#
-		# Emitted once when it goes down, which is what devcons
-		# expects: the rune starts a collecting state that consumes
-		# the next keystrokes, rather than modifying the one
-		# pressed with it. Sending it on every report while the key
-		# is held would restart that collection on each poll and
-		# nothing would ever compose.
-		#
-		if((mod & (Malt|Mraltgr)) != 0 && (int prev[0] & (Malt|Mraltgr)) == 0)
-			emit(kbd, Latin);
+#
+# One report's worth of keyboard state, from either protocol: the
+# modifier byte in the boot layout and the keys held, as HID usages.
+# Only newly pressed keys are emitted; the previous report's are in
+# prevmod and prevdown.
+#
+prevmod := 0;
+prevdown: list of int;
 
-		for(i = 2; i < Reportlen; i++){
-			k := int buf[i];
-			if(k == 0)
-				continue;
-			if(held(prev, k))
-				continue;
-			c := decode(k, mod);
-			if(c > 0){
-				emit(kbd, c);
-				heldk = k;
-				heldc = c;
-				heldat = sys->millisec();
+press(kbd: ref Sys->FD, mod: int, down: list of int)
+{
+	lastreport = sys->millisec();
+
+	#
+	# Alt is a PREFIX, not a held modifier.
+	#
+	# Emitted once when it goes down, which is what devcons
+	# expects: the rune starts a collecting state that consumes
+	# the next keystrokes, rather than modifying the one
+	# pressed with it. Sending it on every report while the key
+	# is held would restart that collection on each poll and
+	# nothing would ever compose.
+	#
+	if((mod & (Malt|Mraltgr)) != 0 && (prevmod & (Malt|Mraltgr)) == 0)
+		emit(kbd, Latin);
+
+	for(l := down; l != nil; l = tl l){
+		k := hd l;
+		if(member(prevdown, k))
+			continue;
+		c := decode(k, mod);
+		if(c > 0){
+			emit(kbd, c);
+			heldk = k;
+			heldc = c;
+			heldat = sys->millisec();
+		}
+	}
+	#
+	# The held key, for the repeater: the report says what is
+	# down NOW, so a key that has left the report is up.
+	#
+	if(heldk != 0 && !member(down, heldk)){
+		heldk = 0;
+		heldc = 0;
+	}
+	prevmod = mod;
+	prevdown = down;
+}
+
+member(l: list of int, k: int): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == k)
+			return 1;
+	return 0;
+}
+
+#
+# Reports in report protocol, decoded by the descriptor.
+#
+# A read is one packet, and a keyboard's report fits in one; maxpkt is
+# asked for rather than the report's length because a device with
+# several reports (keys, media keys) sends them at different lengths.
+# A report with an ID the descriptor gives no keyboard fields to -- a
+# media key, a vendor report -- says nothing about the keys, and must
+# not be taken to mean they were all let go.
+#
+pollreport(fd, kbd: ref Sys->FD, ival, maxpkt: int, keys: list of ref Keys)
+{
+	if(maxpkt <= 0 || maxpkt > Maxreport)
+		maxpkt = Maxreport;
+	buf := array[maxpkt] of byte;
+	hasids := (hd keys).id != 0;
+
+	spawn repeater(kbd);
+
+	nerr := 0;
+	for(;;){
+		n := sys->read(fd, buf, len buf);
+		if(n < 0){
+			if(isdetached()){
+				sys->print("kbdusb: %s detached\n", dev);
+				alive = 0;
+				return;
 			}
+			if(nerr == 0)
+				sys->print("kbdusb: %s read failed: %r\n", dev);
+			if(++nerr >= Maxerr){
+				sys->print("kbdusb: %s stopped responding (%r); unplugged?\n", dev);
+				alive = 0;
+				return;
+			}
+			sys->sleep(ival);
+			continue;
 		}
-		#
-		# The held key, for the repeater: the report says what is
-		# down NOW, so a key that has left the report is up.
-		#
-		if(heldk != 0 && !held(buf, heldk)){
-			heldk = 0;
-			heldc = 0;
+		nerr = 0;
+		if(n == 0){
+			sys->sleep(ival);
+			continue;
 		}
-		prev[0:] = buf[0:Reportlen];
+		k: ref Keys;
+		data := buf[0:n];
+		if(hasids){
+			k = hid->findkeys(keys, int buf[0]);
+			data = buf[1:n];
+		} else
+			k = hd keys;
+		if(k == nil)
+			continue;
+		if(8*len data < k.bits)
+			continue;	# short: not a whole report
+		(mod, down) := k.held(data);
+		press(kbd, mod, down);
 	}
 }
 
@@ -454,14 +687,6 @@ emit(kbd: ref Sys->FD, c: int)
 {
 	b := array of byte sys->sprint("%c", c);
 	sys->write(kbd, b, len b);
-}
-
-held(prev: array of byte, k: int): int
-{
-	for(i := 2; i < Reportlen; i++)
-		if(int prev[i] == k)
-			return 1;
-	return 0;
 }
 
 #
@@ -589,15 +814,15 @@ ctlout(rtype, req, value, index: int): int
 	return 0;
 }
 
-ctlin(rtype, req, value: int, data: array of byte): int
+ctlin(rtype, req, value, index: int, data: array of byte): int
 {
 	buf := array[8] of byte;
 	buf[0] = byte rtype;
 	buf[1] = byte req;
 	buf[2] = byte value;
 	buf[3] = byte (value >> 8);
-	buf[4] = byte 0;
-	buf[5] = byte 0;
+	buf[4] = byte index;
+	buf[5] = byte (index >> 8);
 	buf[6] = byte (len data);
 	buf[7] = byte ((len data) >> 8);
 

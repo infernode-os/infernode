@@ -101,7 +101,10 @@ and, on a machine with an xHCI controller,
 (a mass-storage device served as
 .B /chan/usbdiskN
 and mounted on
-.BR /n/usbN ;
+.BR /n/usbN ,
+one of each per logical unit with a medium in it, so a card reader's
+slots are disks of their own and an empty slot is served when a card
+goes in;
 the console shell, whose namespace was forked before the driver ran,
 mounts it itself with
 .BR "dossrv -f /chan/usbdisk0 -m /n/usb0" )

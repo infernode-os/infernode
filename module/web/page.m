@@ -99,6 +99,10 @@ Page: module
 	# the document and its style sheets, laid out with no images yet;
 	# open and request are begin, every image wanted, then frames
 	begin:	fn(url, method, ctype: string, body: array of byte, width, height: int): (ref Pg, string);
+	# begin, for a page navigated to: what Charon does not show (a PDF)
+	# is saved, in $home/Downloads (or /tmp), and plumbed to be opened;
+	# the page is one saying where it went
+	go:	fn(url, method, ctype: string, body: array of byte, width, height: int): (ref Pg, string);
 	# a document already in hand, as if fetched from url with content type ctype
 	parse:	fn(data: array of byte, ctype, url: string, width, height: int): ref Pg;
 	picture:	fn(url: string, data: array of byte, ctype, err: string): ref Pic;

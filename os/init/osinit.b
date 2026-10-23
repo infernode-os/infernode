@@ -34,6 +34,8 @@ include "bench.m";
 include "sh.m";
 include "keyring.m";
 
+include "hid.m";
+
 Init: module
 {
 	init:	fn();
@@ -615,6 +617,8 @@ Rd2h:		con 16r80;	# device to host
 Rh2d:		con 16r00;	# host to device
 Rclass:		con 16r20;	# class request
 Rother:		con 3;		# recipient: other (a port)
+Riface:		con 1;		# recipient: an interface
+Dreport:	con 16r22;	# descriptor type: a HID report descriptor
 
 Rgetstatus:	con 0;
 Rsetfeature:	con 3;
@@ -762,6 +766,7 @@ hidep := -1;
 hidmaxpkt := 0;
 hidival := 0;
 hidiface := 0;	# the HID interface's number: its report descriptor is asked for by it
+hidsub := 0;	# its subclass: 1 if it can speak the boot protocol
 ishid := 0;	# dumpconfig saw a HID interface, whatever protocol it declared
 
 speedname(status: int): string
@@ -1226,6 +1231,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 
 	hidproto = 0;
 	hidiface = 0;
+	hidsub = 0;
 	ishid = 0;
 	isdisk = 0;
 	isacm = 0;
@@ -1233,6 +1239,20 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	isvendorif = 0;
 	hidep = -1;
 	dumpconfig(d, indent + "  ");
+
+	#
+	# A HID interface that names no boot protocol (0) is a pointer
+	# OR a keyboard, and only its report descriptor says which: a
+	# keyboard without the boot protocol declares none, as do most
+	# touchscreens and tablets. It used to go to mouseusb whatever it
+	# was, which turned such a keyboard away as "not a pointer". Ask
+	# the descriptor now, while the control endpoint is still ours --
+	# only for these interfaces, so a boot keyboard or mouse costs no
+	# extra transfer.
+	#
+	kbdbydesc := 0;
+	if(ishid && hidproto == 0 && hidep >= 0)
+		kbdbydesc = iskeyboard(d, hidiface, indent);
 
 	#
 	# Let go of the device's control endpoint and ctl file BEFORE the
@@ -1254,8 +1274,15 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# twice doubled the chance of a device coming up without a driver,
 	# and the second attempt happens later, when the bus is busier.
 	#
-	if(hidproto == Hidkbd)
-		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival, nil);
+	#
+	# The keyboard driver, like the pointer's, is told the interface
+	# (its class requests go to it), the vid:pid (for the quirks
+	# file) and the subclass (whether it has a boot protocol at all).
+	#
+	if(hidproto == Hidkbd || kbdbydesc)
+		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival,
+			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
+			string hidsub :: nil);
 	else if(ishid && hidep >= 0)
 		#
 		# The pointer driver reads the interface's report descriptor
@@ -2620,6 +2647,27 @@ rootunion(src, dst: string): int
 walking := 0;
 pending: list of (string, string, int, int, int, list of string);
 
+#
+# Does this HID interface's report descriptor describe a keyboard? The
+# Hid library is loaded only when there is such an interface to ask
+# about, which on most machines is never.
+#
+iskeyboard(d: ref Sys->FD, iface: int, indent: string): int
+{
+	hid := load Hid Hid->PATH;
+	if(hid == nil)
+		return 0;
+	hid->init();
+	buf := array[1024] of byte;
+	n := ctlreq(d, Rd2h|Riface, Rgetdesc, Dreport << 8, iface, len buf, buf);
+	if(n <= 0)
+		return 0;
+	if(hid->keyboard(buf[0:n]) == nil)
+		return 0;
+	sys->print("init: %s  if %d declares no boot protocol; its report descriptor is a keyboard's\n", indent, iface);
+	return 1;
+}
+
 startdriver(path, name: string, ep, maxpkt, ival: int, extra: list of string)
 {
 	if(walking){
@@ -2835,6 +2883,7 @@ dumpconfig(d: ref Sys->FD, indent: string)
 					ishid = 1;
 					hidproto = int cfg[i+7];
 					hidiface = int cfg[i+2];
+					hidsub = int cfg[i+6];
 				}
 				if(int cfg[i+5] == Clstorage && int cfg[i+6] == Sscsi && int cfg[i+7] == Pbulkonly)
 					isdisk = 1;

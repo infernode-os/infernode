@@ -1692,7 +1692,7 @@ renderart(art: ref Artifact, contentw: int): ref Image
 		if(art.atype == "image")
 			w = contentw * artzoom(art) / 100;
 		st := ref Docengine->Style(w, mainfont, monofont_g,
-			textcol, bgcol, accentcol, codebgcol_g);
+			textcol, bgcol, accentcol, codebgcol_g, 0);
 		(img, err) := docreg->picture(hint, data, st);
 		if(img == nil)
 			sys->fprint(stderr, "%s: render %s: %s\n", "lucipres", art.atype, err);

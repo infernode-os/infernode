@@ -285,10 +285,9 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/etherusb.dis" \
             "$ROOT/os/init/etherusb.b" 2>>"$BUILD/cc.log" || return 1
 
-        # The HID boot keyboard, likewise a program. Boot protocol only:
-        # parsing a report descriptor is real work, and the boot
-        # protocol exists so a machine that has just started can read a
-        # keyboard without doing any of it.
+        # The HID keyboard, likewise a program: the boot protocol when
+        # the keyboard has one, its report descriptor (through the Hid
+        # library, /dis/lib/hid.dis) when it has not or is asked to.
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/kbdusb.dis" \
             "$ROOT/os/init/kbdusb.b" 2>>"$BUILD/cc.log" || return 1
 
@@ -349,6 +348,11 @@ build_kernel() {
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
             "/dis/kbdusb.dis=$BUILD/kbdusb.dis"
             "/dis/mouseusb.dis=$BUILD/mouseusb.dis"
+            # the HID report-descriptor library: kbdusb reads a keyboard's
+            # reports by it when they are not the boot protocol's, and
+            # osinit asks it whether an interface that names no boot
+            # protocol is a keyboard
+            "/dis/lib/hid.dis=$ROOT/dis/lib/hid.dis"
             "/dis/diskusb.dis=$BUILD/diskusb.dis"
             "/dis/usbserial.dis=$BUILD/usbserial.dis"
             "/dis/touch.dis=$BUILD/touch.dis"
@@ -1845,6 +1849,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "echo 0 > '#G/gpio/129/level'" \
         "echo function out > '#G/gpio/128/ctl'" \
         "cat '#G/gpio/129/ctl'" \
+        "echo PTEMP; cat '#P/cputemp'" \
+        "echo PTHROT; cat '#P/throttled'" \
         "listen 'tcp!*!17030' export / &" \
         'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis')"
 
@@ -1883,6 +1889,17 @@ fi
 # took the machine down (#725). "AUTHMOUNT-" with nothing after it is
 # sh's $status for a mount that succeeded; the ls proves the export is
 # served through it.
+# #P, the firmware's temperature and throttle flags (os/bcm/devarch.c),
+# shared with the Pi 4 so a soak can watch both boards' heat. QEMU's
+# firmware model answers the temperature tag; the line after the marker
+# must be a number of degrees.
+if grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1 | grep -qE '^[0-9]+\.[0-9]$'; then
+    pass "#P/cputemp reads the firmware's temperature ($(grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1) C)"
+else
+    fail "#P/cputemp -- $(grep -A2 '^PTEMP$' <<<"$SHOUT" | tail -2 | tr '\n' ' ')"
+fi
+echo "  #P/throttled under QEMU: $(grep -A1 '^PTHROT$' <<<"$SHOUT" | tail -1)"
+
 if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SHOUT"; then
     pass "an authenticated 9P mount (Keyring->auth both ends, ML-KEM + ed25519) works on the kernel (#725)"
 else
@@ -4382,6 +4399,7 @@ TOUCH2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'path=(/dis .)' \
         'touch -t' \
         'usbserial -t' \
+        'mouseusb -t' \
         'ls /dev/touch')"
 TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
@@ -4390,6 +4408,7 @@ OUT_SAVED="$OUT"; OUT="$TOUCH2"
 check "touch: selftest OK"            "the touch decoder reads the FT5406 layout and clamps to the panel"
 check "/dev/touch.*does not exist"     "/dev/touch is absent under emulation, not present and broken"
 check "usbserial: selftest OK"        "usbserial: FTDI baud divisors, line settings for FTDI, CP210x and ACM, and the ports found in a Pico's and an FT2232's descriptors"
+check "mouseusb: selftest OK"         "mouseusb: a tablet's and a touchscreen's report descriptors parsed and decoded"
 OUT="$OUT_SAVED"
 
 #
@@ -5352,6 +5371,109 @@ else
 fi
 
 #
+# A card reader: one USB device with several logical units, which is
+# what a reader with an SD, a microSD and a CF slot is. QEMU's usb-bot
+# is the bulk-only transport with SCSI units behind it: two disks on
+# LUNs 0 and 1, and a CD drive with no disc on LUN 2 -- the empty slot.
+# The driver must serve both disks as disks of their own (the second's
+# FAT reached and written, landing on its image and not the first's),
+# watch the empty slot, serve it when QMP puts a medium in, and say so
+# when the medium is taken out.
+#
+cp "$VSD" "$BUILD/$PLAT-lun0.img"
+cp "$VSD" "$BUILD/$PLAT-lun1.img"
+dd if=/dev/zero of="$BUILD/$PLAT-lun2.iso" bs=1M count=1 status=none
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-lqmp.sock" "$BUILD" "$PLAT" <<'PYEOF' > "$BUILD/$PLAT-lun.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp, build, plat = sys.argv[1:7]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+img0, img1, iso = ["%s/%s-%s" % (build, plat, f) for f in ("lun0.img", "lun1.img", "lun2.iso")]
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio",
+    "-device", "usb-bot,id=bot,port=1",
+    "-drive", "if=none,id=l0,file=%s,format=raw" % img0, "-device", "scsi-hd,bus=bot.0,scsi-id=0,lun=0,drive=l0",
+    "-drive", "if=none,id=l1,file=%s,format=raw" % img1, "-device", "scsi-hd,bus=bot.0,scsi-id=0,lun=1,drive=l1",
+    "-drive", "if=none,id=l2", "-device", "scsi-cd,id=cd,bus=bot.0,scsi-id=0,lun=2,drive=l2",
+    "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+def typed(line, settle=1.5):
+    p.stdin.write(line.encode() + b"\r"); p.stdin.flush(); time.sleep(settle)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"served as /chan/usbdisk1", 30)
+    waitfor(b"mounted on /n/usb1", 10)
+    time.sleep(2)
+    # the second unit's FAT, from the console shell (diskusb.b says why by hand)
+    typed("dossrv -f /chan/usbdisk1 -m /n/usb1", 3)
+    typed("cat /n/usb1/HELLO.TXT")
+    typed("echo written-to-lun1 > /n/usb1/lun1.txt; cat /n/usb1/lun1.txt", 3)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    # a medium into the empty slot
+    f.write(json.dumps({"execute": "blockdev-change-medium",
+        "arguments": {"id": "cd", "filename": iso, "format": "raw"}}) + "\n"); f.flush(); f.readline()
+    waitfor(b"served as /chan/usbdisk2", 20)
+    time.sleep(3)
+    # and out again
+    f.write(json.dumps({"execute": "eject", "arguments": {"id": "cd", "force": True}}) + "\n"); f.flush(); f.readline()
+    waitfor(b"medium removed", 20)
+    time.sleep(1)
+    # and back: the same unit, the same name, its size read again
+    f.write(json.dumps({"execute": "blockdev-change-medium",
+        "arguments": {"id": "cd", "filename": iso, "format": "raw"}}) + "\n"); f.flush(); f.readline()
+    end = time.time() + 20
+    while time.time() < end and buf.count(b"served as /chan/usbdisk2") < 2:
+        time.sleep(0.2)
+    time.sleep(1)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-lun.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "lun: GET MAX LUN finds the reader's three units"       "has 3 logical units"
+vcheck "lun: unit 0 is a disk of its own"                     "LUN 0 QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk0"
+vcheck "lun: unit 1 is another, the next number"              "LUN 1 QEMU QEMU HARDDISK: 131072 blocks of 512 bytes (64 MB), served as /chan/usbdisk1"
+vcheck "lun: the empty slot is watched, not a failure"        "LUN 2 (QEMU QEMU CD-ROM): not ready, no medium: no medium; watched for one"
+vcheck "lun: both FATs are mounted for init"                  "diskusb: /chan/usbdisk1 mounted on /n/usb1"
+vcheck "lun: the second unit's FAT reads from the shell"      "hello from the SD card"
+vcheck "lun: and writes"                                      "written-to-lun1"
+if grep -aq "written-to-lun1" "$BUILD/$PLAT-lun1.img" && ! grep -aq "written-to-lun1" "$BUILD/$PLAT-lun0.img"; then
+    pass "virt: lun: the write reached unit 1's image and not unit 0's (the LUN is in every command)"
+else
+    fail "virt: lun: the write to /n/usb1 is not on unit 1's image alone"
+fi
+vcheck "lun: a medium put into the empty slot is served"      "LUN 2 QEMU QEMU CD-ROM: 512 blocks of 2048 bytes (1 MB), served as /chan/usbdisk2"
+vcheck "lun: taking it out is noticed"                        "LUN 2: medium removed; /chan/usbdisk2 fails until one is back"
+if [[ "$(grep -ac 'LUN 2 QEMU QEMU CD-ROM: 512 blocks of 2048 bytes (1 MB), served as /chan/usbdisk2' <<<"$OUT")" -ge 2 ]]; then
+    pass "virt: lun: a medium put back is read again, under the same name"
+else
+    fail "virt: lun: the medium put back was not served again"
+fi
+vrefute "lun: nothing panics"                                 "panic:"
+vrefute "lun: no exception goes unhandled"                    "unhandled exception"
+rm -f "$BUILD/$PLAT-lun0.img" "$BUILD/$PLAT-lun1.img" "$BUILD/$PLAT-lun2.iso"
+
+#
 # A USB serial adapter, on xHCI: QEMU's usb-serial is an FTDI FT232BM,
 # its far end a socket this script holds. Bytes both ways; the line
 # settings checked where they land, in QEMU's own decoding of the
@@ -5576,6 +5698,74 @@ else
     fail "virt: hotplug: the mouse did not survive -- $(grep -a '^ep2' <<<"$OUT" | head -2 | tr '\n' '|')"
 fi
 vrefute "hotplug: nothing panics"                      "panic:"
+
+#
+# A keyboard in report protocol. Every boot keyboard is read with the
+# boot protocol unless it is asked otherwise, and QEMU offers no other
+# kind; "kbdusb=report" on the command line asks, so the report-
+# descriptor path -- descriptor read, parsed by the Hid library,
+# SET_PROTOCOL(report), reports decoded by it -- runs on a real device
+# model. usb-kbd's descriptor is the HID spec's boot keyboard, so its
+# reports are the same eight bytes either way; what this proves is the
+# decoding path, and the shifted letters prove the modifier bits come
+# through it.
+#
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-rqmp.sock" <<'PYEOF' > "$BUILD/$PLAT-kbdreport.txt" 2>&1
+import json, os, socket, subprocess, sys, threading, time
+qemu, img, extra, qmp = sys.argv[1:5]
+if os.path.exists(qmp):
+    os.unlink(qmp)
+args = [qemu] + extra.split() + [
+    "-kernel", img, "-display", "none", "-serial", "stdio", "-append", "kbdusb=report",
+    "-device", "usb-kbd,port=1", "-device", "usb-mouse,port=2", "-qmp", "unix:%s,server,nowait" % qmp]
+p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+buf = bytearray()
+def reader():
+    while True:
+        d = p.stdout.read(1)
+        if not d:
+            return
+        buf.extend(d)
+threading.Thread(target=reader, daemon=True).start()
+def waitfor(what, secs):
+    end = time.time() + secs
+    while time.time() < end:
+        if what in buf:
+            return True
+        time.sleep(0.2)
+    return False
+QCODE = {" ": "spc", "-": "minus", "\n": "ret"}
+def qkey(f, ch):
+    shift = ch.isupper()
+    keys = (["shift"] if shift else []) + [QCODE.get(ch, ch.lower())]
+    for down in (True, False):
+        ev = [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": k}}}
+              for k in (keys if down else reversed(keys))]
+        f.write(json.dumps({"execute": "input-send-event", "arguments": {"events": ev}}) + "\n")
+        f.flush(); f.readline()
+        time.sleep(0.05)
+try:
+    waitfor(b"init: starting the shell", 90)
+    waitfor(b"kbdusb: ep", 30)
+    time.sleep(2)
+    s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+    f = s.makefile("rw")
+    f.readline()
+    f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+    for ch in "echo Report-Keys\n":
+        qkey(f, ch)
+    time.sleep(3)
+    s.close()
+finally:
+    p.kill(); p.communicate()
+sys.stdout.write(buf.decode(errors="replace"))
+PYEOF
+OUT="$(cat "$BUILD/$PLAT-kbdreport.txt")"
+[[ "$VERBOSE" -eq 1 ]] && echo "$OUT"
+vcheck "kbdreport: kbdusb=report puts the keyboard in report protocol, decoded by its descriptor" "(report protocol, report 0)"
+vrefute "kbdreport: the keyboard accepts SET_PROTOCOL(report)" "SET_PROTOCOL(report) failed"
+vcheck "kbdreport: keys typed in report protocol reach the shell, shifted ones too" "Report-Keys"
+vrefute "kbdreport: nothing panics"                     "panic:"
 
 #
 # The other virtio transport. QEMU's virtio-mmio is "legacy" (version 1)

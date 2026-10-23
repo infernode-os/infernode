@@ -23,14 +23,32 @@ implement Diskusb;
 # status with the wrong tag is read again; a phase error resets the
 # transport.
 #
-# NOT DONE: more than one logical unit (only LUN 0 is served; a card
-# reader with several slots shows its first), UAS (a disk that offers
-# only the UAS transport is not driven), removable media that comes
-# and goes while plugged in, and any queueing: one command at a time,
-# which is what a FAT filesystem asks for anyway.
+# SEVERAL LOGICAL UNITS. A card reader with several slots -- SD,
+# microSD, CF, MS -- is one device with one unit per slot (GET MAX
+# LUN says how many). Each unit with a medium in it is a disk of its
+# own: the next free /chan/usbdiskN, its FAT on /n/usbN, exactly as a
+# one-unit device's is, so a single-unit disk is named as it always
+# was. A slot that is empty is watched (TEST UNIT READY with the idle
+# poll) and served when a card goes in; a card taken out makes that
+# unit's reads and writes fail, and one put back is read again --
+# its size, and its FAT mounted afresh. The units share the one
+# transport, so they are served by one process, one command at a
+# time.
+#
+# NOT DONE: UAS (a disk that offers only the UAS transport is not
+# driven); taking a removed card's file away (it stays, failing, so
+# whatever has it open is told so rather than left with a vanished
+# name); more than four FAT volumes mounted at once (the root has
+# /n/usb0 to /n/usb3; a fifth disk is served as its block file and
+# not mounted); and any queueing: one command at a time, which is
+# what a FAT filesystem asks for anyway.
 #
 # Tested on QEMU's usb-storage behind its xHCI controller (the virt
-# machine), at SuperSpeed. Never yet on a real disk.
+# machine), at SuperSpeed, and on its usb-bot with three units (two
+# disks and an empty slot that a medium is put into, taken out of and
+# put back into). The one-unit driver before this ran on the Pi 4
+# against the Jetson's gadget disk; this one has not run on a board,
+# nor on a real multi-slot reader.
 #
 
 include "sys.m";
@@ -90,6 +108,8 @@ Maxretry:	con 3;
 Readyms:	con 250;	# between TEST UNIT READY attempts
 Pollms:		con 2000;	# how often an idle disk is asked if it is still there
 
+Maxlun:		con 15;		# GET MAX LUN's answer is a four-bit number
+
 dev: string;			# devusb's name for the device: epN.0
 ctlfd: ref Sys->FD;
 ep0: ref Sys->FD;
@@ -98,9 +118,30 @@ bulkin: ref Sys->FD;
 bulkout: ref Sys->FD;
 inep, outep, maxpkt: int;
 tag := 1;
-blocks := big 0;		# how many
-bsize := 0;			# how big each
-name := "";			# /chan/usbdiskN
+multi := 0;			# more than one unit: say which in what is printed
+
+#
+# One logical unit: a slot of a card reader, or the whole of a stick.
+#
+Unit: adt {
+	lun:	int;
+	what:	string;		# vendor and product, from INQUIRY
+	blocks:	big;		# how many
+	bsize:	int;		# how big each
+	name:	string;		# /chan/usbdiskN once served; nil before
+	present:	int;	# a medium is in it now
+	fio:	ref Sys->FileIO;
+	fwd:	int;		# the forwarder's pid, so it can be stopped
+};
+units: list of ref Unit;
+
+#
+# Every unit's file feeds these two, so the one process that owns the
+# transport serves them all in turn (see loop).
+#
+reads: chan of (ref Unit, int, int, Sys->Rread);
+writes: chan of (ref Unit, int, array of byte, Sys->Rwrite);
+tickpid := 0;
 
 init(nil: ref Draw->Context, args: list of string)
 {
@@ -128,167 +169,304 @@ init(nil: ref Draw->Context, args: list of string)
 		return;
 
 	#
-	# GET MAX LUN. A device with one unit may STALL this rather than
-	# answer 0; either way LUN 0 is what is served.
+	# GET MAX LUN: the highest unit number, one per slot of a card
+	# reader. A device with one unit may STALL this rather than answer
+	# 0; either way LUN 0 is there.
 	#
-	lun := array[1] of byte;
-	if(ctlin(Rd2h|Rclass|Riface, Rgetmaxlun, 0, msiface, lun) == 1 && int lun[0] > 0)
-		sys->print("diskusb: %s has %d logical units; only the first is served\n", dev, int lun[0] + 1);
+	maxlun := 0;
+	lb := array[1] of byte;
+	if(ctlin(Rd2h|Rclass|Riface, Rgetmaxlun, 0, msiface, lb) == 1)
+		maxlun = int lb[0] & Maxlun;
+	multi = maxlun > 0;
+	if(multi)
+		sys->print("diskusb: %s has %d logical units\n", dev, maxlun + 1);
 
-	inq := array[36] of byte;
-	if(scsi(array[] of {byte Cinquiry, byte 0, byte 0, byte 0, byte len inq, byte 0}, inq, 0) < 0){
-		sys->print("diskusb: %s: INQUIRY failed: %r\n", dev);
-		return;
+	reads = chan of (ref Unit, int, int, Sys->Rread);
+	writes = chan of (ref Unit, int, array of byte, Sys->Rwrite);
+	for(l := 0; l <= maxlun; l++){
+		u := probe(l);
+		if(u == nil)
+			continue;
+		units = u :: units;
+		if(ready(u) < 0){
+			sys->print("diskusb: %s (%s): not ready, no medium: %r%s\n", unitname(u), u.what,
+				"; watched for one");
+			continue;
+		}
+		bringup(u);
 	}
-	dtype := int inq[0] & 16r1F;
-	if(dtype != 0 && dtype != 5 && dtype != 7 && dtype != 14){
-		sys->print("diskusb: %s is not a disk (SCSI device type %d)\n", dev, dtype);
+	if(units == nil)
 		return;
-	}
-	what := trim(string inq[8:16]) + " " + trim(string inq[16:32]);
 
-	if(ready() < 0){
-		sys->print("diskusb: %s (%s): not ready, no medium: %r\n", dev, what);
-		return;
-	}
-	if(capacity() < 0){
-		sys->print("diskusb: %s (%s): READ CAPACITY failed: %r\n", dev, what);
-		return;
-	}
-	if(bsize < 512 || bsize > 4096 || bsize % 512 != 0){
-		sys->print("diskusb: %s (%s): block size %d is not one this driver serves\n", dev, what, bsize);
-		return;
-	}
-
-	fio := serve();
-	if(fio == nil)
-		return;
-	mb := (blocks * big bsize) / big (1024*1024);
-	sys->print("diskusb: %s %s: %bd blocks of %d bytes (%bd MB), served as %s\n",
-		dev, what, blocks, bsize, mb, name);
-
-	spawn mountfat();
-	loop(fio);
+	tick := chan of int;
+	pidc := chan of int;
+	spawn ticker(tick, pidc);
+	tickpid = <-pidc;
+	loop(tick);
+	stop();
 }
 
 #
-# The file: reads and writes at an offset, served one at a time, and
-# between them the disk is asked now and then whether it is still
-# there, so that an unplugged one is noticed before anything asks for
-# a block. dossrv holds the file open and does 512-byte sector reads
-# at sector offsets; anything else is served too, by reading whole
-# blocks around it.
+# INQUIRY for one unit: what it is, and whether it is a disk at all. A
+# unit that says it is not supported (peripheral qualifier 3) or is
+# not a block device is left out; nil then.
 #
-loop(fio: ref Sys->FileIO)
+probe(lun: int): ref Unit
 {
-	tick := chan of int;
-	spawn ticker(tick);
+	u := ref Unit(lun, "", big 0, 0, nil, 0, nil, 0);
+	inq := array[36] of byte;
+	if(scsi(lun, array[] of {byte Cinquiry, byte 0, byte 0, byte 0, byte len inq, byte 0}, inq, 0) < 0){
+		sys->print("diskusb: %s: INQUIRY failed: %r\n", unitname(u));
+		return nil;
+	}
+	if((int inq[0] >> 5) == 3){
+		sys->print("diskusb: %s: no such unit\n", unitname(u));
+		return nil;
+	}
+	dtype := int inq[0] & 16r1F;
+	if(dtype != 0 && dtype != 5 && dtype != 7 && dtype != 14){
+		sys->print("diskusb: %s is not a disk (SCSI device type %d)\n", unitname(u), dtype);
+		return nil;
+	}
+	u.what = trim(string inq[8:16]) + " " + trim(string inq[16:32]);
+	return u;
+}
+
+# how a unit is named in what this prints: the device, and the LUN when there are several
+unitname(u: ref Unit): string
+{
+	if(multi)
+		return sys->sprint("%s LUN %d", dev, u.lun);
+	return dev;
+}
+
+#
+# A unit with a medium in it: its size, its file, its FAT. Called at
+# start and again whenever a medium arrives -- the same card put back,
+# or another, maybe of another size, so the size is asked every time
+# and the file's length set again. A unit served before keeps its
+# name: whatever has the file open sees the new medium through it.
+#
+bringup(u: ref Unit): int
+{
+	if(capacity(u) < 0){
+		sys->print("diskusb: %s (%s): READ CAPACITY failed: %r\n", unitname(u), u.what);
+		return -1;
+	}
+	if(u.bsize < 512 || u.bsize > 4096 || u.bsize % 512 != 0){
+		sys->print("diskusb: %s (%s): block size %d is not one this driver serves\n", unitname(u), u.what, u.bsize);
+		return -1;
+	}
+	if(u.name == nil){
+		if(serve(u) < 0)
+			return -1;
+	}else
+		setlength(u);
+	u.present = 1;
+	mb := (u.blocks * big u.bsize) / big (1024*1024);
+	sys->print("diskusb: %s %s: %bd blocks of %d bytes (%bd MB), served as %s\n",
+		unitname(u), u.what, u.blocks, u.bsize, mb, u.name);
+	spawn mountfat(u.name);
+	return 0;
+}
+
+#
+# The files: reads and writes at an offset, served one at a time, and
+# between them every unit is asked now and then whether it is still
+# there, so that an unplugged device is noticed before anything asks
+# for a block, and a card put into an empty slot is noticed at all.
+# dossrv holds the file open and does 512-byte sector reads at sector
+# offsets; anything else is served too, by reading whole blocks around
+# it.
+#
+# One process, because the units share one transport: a command and
+# its status must not be split by another unit's. Each file has a
+# forwarder that hands its requests here (forward), so this waits on
+# two channels whatever the number of units.
+#
+loop(tick: chan of int)
+{
 	for(;;) alt {
-	(off, n, nil, rc) := <-fio.read =>
-		if(rc == nil)
-			break;
-		(data, err) := diskread(big off, n);
+	(u, off, n, rc) := <-reads =>
+		(data, err) := diskread(u, big off, n);
 		rc <-= (data, err);
 		if(err != nil && detached(err))
 			return;
-	(off, data, nil, wc) := <-fio.write =>
-		if(wc == nil)
-			break;
-		(n, err) := diskwrite(big off, data);
+	(u, off, data, wc) := <-writes =>
+		(n, err) := diskwrite(u, big off, data);
 		wc <-= (n, err);
 		if(err != nil && detached(err))
 			return;
 	<-tick =>
-		if(scsi(array[6] of {* => byte 0}, nil, 0) < 0 && isdetached()){
-			sys->print("diskusb: %s detached; %s is gone\n", dev, name);
-			return;
-		}
+		for(l := units; l != nil; l = tl l)
+			if(poll(hd l) < 0)
+				return;
 	}
 }
 
-ticker(c: chan of int)
+forward(u: ref Unit, pidc: chan of int)
 {
+	pidc <-= sys->pctl(0, nil);
+	for(;;) alt {
+	(off, n, nil, rc) := <-u.fio.read =>
+		if(rc != nil)
+			reads <-= (u, off, n, rc);
+	(off, data, nil, wc) := <-u.fio.write =>
+		if(wc != nil)
+			writes <-= (u, off, data, wc);
+	}
+}
+
+#
+# One unit's turn at the idle poll. -1: the device has gone.
+#
+# A medium that goes is reported as a unit attention or a NOT READY
+# with "medium not present"; either way the unit is marked empty and
+# its reads fail until one is back. A unit attention is also how a
+# card swapped between two polls is reported -- marking it empty is
+# right then too, since the next poll finds it ready and reads its
+# size again.
+#
+poll(u: ref Unit): int
+{
+	if(scsi(u.lun, array[6] of {* => byte 0}, nil, 0) >= 0){
+		if(!u.present)
+			bringup(u);
+		return 0;
+	}
+	if(isdetached()){
+		sys->print("diskusb: %s detached\n", dev);
+		return -1;
+	}
+	(key, asc, nil) := sense(u.lun);
+	if(key < 0 && isdetached()){
+		sys->print("diskusb: %s detached\n", dev);
+		return -1;
+	}
+	if(u.present && (key == 2 || key == 6 || nounit(key, asc))){
+		u.present = 0;
+		if(u.name != nil)
+			sys->print("diskusb: %s: medium removed; %s fails until one is back\n", unitname(u), u.name);
+	}
+	return 0;
+}
+
+ticker(c: chan of int, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
 	for(;;){
 		sys->sleep(Pollms);
 		c <-= 1;
 	}
 }
 
+#
+# The device has gone: stop the ticker and every forwarder, and let go
+# of the files, which go with their last reference. Without this the
+# forwarders, waiting on their files for ever, kept the files there
+# naming a disk that no longer exists.
+#
+stop()
+{
+	kill(tickpid);
+	for(l := units; l != nil; l = tl l){
+		u := hd l;
+		kill(u.fwd);
+		if(u.name != nil)
+			sys->print("diskusb: %s is gone\n", u.name);
+		u.fio = nil;
+	}
+	units = nil;
+}
+
+kill(pid: int)
+{
+	if(pid <= 0)
+		return;
+	fd := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
+}
+
 detached(err: string): int
 {
 	for(i := 0; i + 8 <= len err; i++)
 		if(err[i:i+8] == "detached"){
-			sys->print("diskusb: %s detached; %s is gone\n", dev, name);
+			sys->print("diskusb: %s detached\n", dev);
 			return 1;
 		}
 	return 0;
 }
 
-diskread(off: big, n: int): (array of byte, string)
+diskread(u: ref Unit, off: big, n: int): (array of byte, string)
 {
+	if(!u.present)
+		return (nil, u.name + ": no medium");
 	if(off < big 0 || n <= 0)
 		return (nil, nil);
 	end := off + big n;
-	if(end > blocks * big bsize)
-		end = blocks * big bsize;
+	if(end > u.blocks * big u.bsize)
+		end = u.blocks * big u.bsize;
 	if(end <= off)
 		return (nil, nil);
-	lba := off / big bsize;
-	last := (end - big 1) / big bsize;
+	lba := off / big u.bsize;
+	last := (end - big 1) / big u.bsize;
 	nb := int (last - lba) + 1;
-	buf := array[nb * bsize] of byte;
+	buf := array[nb * u.bsize] of byte;
 	for(done := 0; done < nb; ){
 		chunk := nb - done;
-		if(chunk * bsize > Maxio)
-			chunk = Maxio / bsize;
-		if(rw(Cread10, lba + big done, buf[done*bsize:(done+chunk)*bsize], 0) < 0)
-			return (nil, sys->sprint("%s: read at %bd: %r", name, off));
+		if(chunk * u.bsize > Maxio)
+			chunk = Maxio / u.bsize;
+		if(rw(u, Cread10, lba + big done, buf[done*u.bsize:(done+chunk)*u.bsize], 0) < 0)
+			return (nil, sys->sprint("%s: read at %bd: %r", u.name, off));
 		done += chunk;
 	}
-	skip := int (off - lba * big bsize);
+	skip := int (off - lba * big u.bsize);
 	return (buf[skip:skip + int (end - off)], nil);
 }
 
-diskwrite(off: big, data: array of byte): (int, string)
+diskwrite(u: ref Unit, off: big, data: array of byte): (int, string)
 {
+	if(!u.present)
+		return (-1, u.name + ": no medium");
 	if(off < big 0)
 		return (-1, "negative offset");
 	n := len data;
 	end := off + big n;
-	if(end > blocks * big bsize)
-		return (-1, "write beyond the end of " + name);
+	if(end > u.blocks * big u.bsize)
+		return (-1, "write beyond the end of " + u.name);
 	if(n == 0)
 		return (0, nil);
-	lba := off / big bsize;
-	last := (end - big 1) / big bsize;
+	lba := off / big u.bsize;
+	last := (end - big 1) / big u.bsize;
 	nb := int (last - lba) + 1;
-	skip := int (off - lba * big bsize);
+	skip := int (off - lba * big u.bsize);
 	buf := data;
-	if(skip != 0 || n % bsize != 0){
+	if(skip != 0 || n % u.bsize != 0){
 		# not whole blocks: read what is there, lay the write over it
-		(old, err) := diskread(lba * big bsize, nb * bsize);
+		(old, err) := diskread(u, lba * big u.bsize, nb * u.bsize);
 		if(err != nil)
 			return (-1, err);
-		buf = array[nb * bsize] of byte;
+		buf = array[nb * u.bsize] of byte;
 		buf[0:] = old;
 		buf[skip:] = data;
 	}
 	for(done := 0; done < nb; ){
 		chunk := nb - done;
-		if(chunk * bsize > Maxio)
-			chunk = Maxio / bsize;
-		if(rw(Cwrite10, lba + big done, buf[done*bsize:(done+chunk)*bsize], 1) < 0)
-			return (-1, sys->sprint("%s: write at %bd: %r", name, off));
+		if(chunk * u.bsize > Maxio)
+			chunk = Maxio / u.bsize;
+		if(rw(u, Cwrite10, lba + big done, buf[done*u.bsize:(done+chunk)*u.bsize], 1) < 0)
+			return (-1, sys->sprint("%s: write at %bd: %r", u.name, off));
 		done += chunk;
 	}
 	return (n, nil);
 }
 
-rw(op: int, lba: big, buf: array of byte, out: int): int
+rw(u: ref Unit, op: int, lba: big, buf: array of byte, out: int): int
 {
-	nb := len buf / bsize;
+	nb := len buf / u.bsize;
 	cmd: array of byte;
-	if(blocks > big 16r100000000){
+	if(u.blocks > big 16r100000000){
 		#
 		# Past 2^32 blocks (2TB of 512-byte ones) READ(10)'s 32-bit
 		# address wraps: the 16-byte form carries 64 bits. Only for
@@ -314,11 +492,11 @@ rw(op: int, lba: big, buf: array of byte, out: int): int
 		cmd[9] = byte 0;
 	}
 	for(try := 0; try < Maxretry; try++){
-		n := scsi(cmd, buf, out);
+		n := scsi(u.lun, cmd, buf, out);
 		if(n == len buf)
 			return 0;
 		if(n >= 0)
-			sys->print("diskusb: %s: short %s: %d of %d bytes\n", name, opname(op), n, len buf);
+			sys->print("diskusb: %s: short %s: %d of %d bytes\n", u.name, opname(op), n, len buf);
 		if(isdetached())
 			return -1;
 	}
@@ -348,7 +526,7 @@ opname(op: int): string
 #
 #	dossrv -f /chan/usbdisk0 -m /n/usb0
 #
-mountfat()
+mountfat(name: string)
 {
 	srv := load Command "/dis/dossrv.dis";
 	if(srv == nil){
@@ -356,6 +534,11 @@ mountfat()
 		return;
 	}
 	mnt := "/n/usb" + name[len "/chan/usbdisk":];
+	(ok, nil) := sys->stat(mnt);
+	if(ok < 0){
+		sys->print("diskusb: %s: no %s to mount its FAT on; it is served as the block file\n", name, mnt);
+		return;
+	}
 	{
 		srv->init(nil, "dossrv" :: "-f" :: name :: "-m" :: mnt :: nil);
 		sys->print("diskusb: %s mounted on %s for init and the network console; elsewhere: dossrv -f %s -m %s\n", name, mnt, name, mnt);
@@ -366,72 +549,104 @@ mountfat()
 }
 
 #
-# The first free /chan/usbdiskN. A driver that has gone takes its file
-# with it, so the numbers are reused.
+# The first free /chan/usbdiskN, and a forwarder for it. A driver that
+# has gone takes its files with it, so the numbers are reused.
 #
-serve(): ref Sys->FileIO
+serve(u: ref Unit): int
 {
 	for(i := 0; i < 16; i++){
 		n := "usbdisk" + string i;
 		(ok, nil) := sys->stat("/chan/" + n);
 		if(ok >= 0)
 			continue;
-		fio := sys->file2chan("/chan", n);
-		if(fio == nil){
+		u.fio = sys->file2chan("/chan", n);
+		if(u.fio == nil){
 			sys->print("diskusb: cannot serve /chan/%s: %r\n", n);
-			return nil;
+			return -1;
 		}
-		name = "/chan/" + n;
-		#
-		# Say how big it is: a served file is born with length 0, and
-		# dossrv bounds its reads by the device's length when there is
-		# one. devsrv takes a wstat of the length alone.
-		#
-		d := sys->nulldir;
-		d.length = blocks * big bsize;
-		d.mode = 8r666;		# said outright: devsrv takes nulldir's ~0 for a mode, exclusive-use bit and all
-		if(sys->wstat(name, d) < 0)
-			sys->print("diskusb: cannot set the length of %s: %r\n", name);
-		return fio;
+		u.name = "/chan/" + n;
+		setlength(u);
+		pidc := chan of int;
+		spawn forward(u, pidc);
+		u.fwd = <-pidc;
+		return 0;
 	}
 	sys->print("diskusb: sixteen disks are enough\n");
-	return nil;
+	return -1;
+}
+
+#
+# Say how big it is: a served file is born with length 0, and dossrv
+# bounds its reads by the device's length when there is one. devsrv
+# takes a wstat of the length alone.
+#
+setlength(u: ref Unit)
+{
+	d := sys->nulldir;
+	d.length = u.blocks * big u.bsize;
+	d.mode = 8r666;		# said outright: devsrv takes nulldir's ~0 for a mode, exclusive-use bit and all
+	if(sys->wstat(u.name, d) < 0)
+		sys->print("diskusb: cannot set the length of %s: %r\n", u.name);
 }
 
 #
 # TEST UNIT READY until it says so; a unit that is "becoming ready" is
-# given its time, one with no medium is not.
+# given its time, one with no medium is not. A unit attention (the
+# medium changed, or the device was reset) is cleared by the REQUEST
+# SENSE that reads it, and the unit asked again at once.
 #
-ready(): int
+ready(u: ref Unit): int
 {
+	(key, asc, ascq) := (-1, 0, 0);
 	for(try := 0; try < 8; try++){
-		if(scsi(array[6] of {* => byte 0}, nil, 0) >= 0)
+		if(scsi(u.lun, array[6] of {* => byte 0}, nil, 0) >= 0)
 			return 0;
-		sense := array[18] of byte;
-		if(scsi(array[] of {byte Crequestsense, byte 0, byte 0, byte 0, byte len sense, byte 0}, sense, 0) < 0)
+		(key, asc, ascq) = sense(u.lun);
+		if(key < 0)
 			return -1;
-		key := int sense[2] & 16rF;
-		asc := int sense[12];
-		if(key == 2 && asc == 16r3A){	# not ready: medium not present
+		if(key == 2 && asc == 16r3A || nounit(key, asc)){	# not ready: medium not present
 			sys->werrstr("no medium");
 			return -1;
 		}
-		if(key == 2 && asc == 16r04 && int sense[13] == 2){	# initializing command required
-			scsi(array[] of {byte Cstartstop, byte 0, byte 0, byte 0, byte 1, byte 0}, nil, 0);
+		if(key == 6)
+			continue;
+		if(key == 2 && asc == 16r04 && ascq == 2){	# initializing command required
+			scsi(u.lun, array[] of {byte Cstartstop, byte 0, byte 0, byte 0, byte 1, byte 0}, nil, 0);
 		}
 		sys->sleep(Readyms);
 	}
-	sys->werrstr("still not ready");
+	sys->werrstr(sys->sprint("still not ready (sense %d/%.2x/%.2x)", key, asc, ascq));
 	return -1;
 }
 
-capacity(): int
+#
+# ILLEGAL REQUEST, "logical unit not supported", from a unit INQUIRY
+# has already answered for. QEMU's usb-bot says this, not "medium not
+# present", when an empty slot other than LUN 0 is asked why it is not
+# ready (its REQUEST SENSE for a non-zero LUN with sense pending), and a
+# unit that exists and is not ready has no medium in any reading of it.
+#
+nounit(key, asc: int): int
+{
+	return key == 5 && asc == 16r25;
+}
+
+# REQUEST SENSE: (key, asc, ascq), or (-1, 0, 0) if it could not be asked
+sense(lun: int): (int, int, int)
+{
+	sb := array[18] of byte;
+	if(scsi(lun, array[] of {byte Crequestsense, byte 0, byte 0, byte 0, byte len sb, byte 0}, sb, 0) < 0)
+		return (-1, 0, 0);
+	return (int sb[2] & 16rF, int sb[12], int sb[13]);
+}
+
+capacity(u: ref Unit): int
 {
 	cap := array[8] of byte;
-	if(scsi(array[10] of {byte Creadcap10, * => byte 0}, cap, 0) < 0)
+	if(scsi(u.lun, array[10] of {byte Creadcap10, * => byte 0}, cap, 0) < 0)
 		return -1;
 	last := get4(cap, 0);
-	bsize = get4(cap, 4);
+	u.bsize = get4(cap, 4);
 	if(last == -1){
 		# more than 2^32 blocks: ask with READ CAPACITY(16), to say so
 		cap16 := array[32] of byte;
@@ -439,22 +654,22 @@ capacity(): int
 		cmd[0] = byte Creadcap16;
 		cmd[1] = byte 16r10;
 		cmd[13] = byte len cap16;
-		if(scsi(cmd, cap16, 0) < 0)
+		if(scsi(u.lun, cmd, cap16, 0) < 0)
 			return -1;
-		blocks = (big get4(cap16, 0) << 32) | (big get4(cap16, 4) & 16rFFFFFFFF) + big 1;
-		bsize = get4(cap16, 8);
+		u.blocks = (big get4(cap16, 0) << 32) | (big get4(cap16, 4) & 16rFFFFFFFF) + big 1;
+		u.bsize = get4(cap16, 8);
 		return 0;
 	}
-	blocks = (big last & 16rFFFFFFFF) + big 1;
+	u.blocks = (big last & 16rFFFFFFFF) + big 1;
 	return 0;
 }
 
 #
-# One command, the bulk-only way: a 31-byte wrapper out, the data in
-# or out, a 13-byte status in. Returns how many data bytes moved, or
-# -1 with the reason in errstr.
+# One command, the bulk-only way, to one unit: a 31-byte wrapper out,
+# the data in or out, a 13-byte status in. Returns how many data bytes
+# moved, or -1 with the reason in errstr.
 #
-scsi(cmd: array of byte, data: array of byte, out: int): int
+scsi(lun: int, cmd: array of byte, data: array of byte, out: int): int
 {
 	n := 0;
 	if(data != nil)
@@ -467,7 +682,7 @@ scsi(cmd: array of byte, data: array of byte, out: int): int
 		cbw[12] = byte Cbwdataout;
 	else
 		cbw[12] = byte Cbwdatain;
-	cbw[13] = byte 0;		# LUN
+	cbw[13] = byte (lun & Maxlun);
 	cbw[14] = byte len cmd;
 	cbw[15:] = cmd;
 	mytag := tag++;

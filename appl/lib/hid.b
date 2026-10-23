@@ -1,7 +1,7 @@
 implement Hid;
 
 #
-# HID report descriptor parsing for a mouse; see hid.m. Short items
+# HID report descriptor parsing for a mouse and a keyboard; see hid.m. Short items
 # only (a long item is skipped whole), Push/Pop of the global state
 # honoured, one application collection at a time. Bits are numbered
 # from the report's first byte, least significant first, as HID lays
@@ -36,9 +36,12 @@ Tusagemin:	con 16r18;
 Tusagemax:	con 16r28;
 
 Pdesktop:	con 1;
+Pkeyboard:	con 7;
 Pbutton:	con 9;
 Umouse:		con 2;
 Upointer:	con 1;
+Ukeyboard:	con 6;
+Ukeypad:	con 7;
 Ux:		con 16r30;
 Uy:		con 16r31;
 Uwheel:		con 16r38;
@@ -51,16 +54,32 @@ Global: adt {
 	id:	int;
 };
 
-parse(map: array of byte): list of ref Report
+#
+# One Input main item, as the walk below found it: the global state at
+# that moment, the local usages that went with it, its flags, and the
+# usage of the top-level application collection it sits in (-1 for
+# none). Both readers -- the mouse's and the keyboard's -- take these
+# in order, so the item walk is written once.
+#
+Inp: adt {
+	g:	ref Global;
+	usages:	list of int;
+	umin, umax: int;
+	flags:	int;
+	app:	int;
+};
+
+# every Input item in the map, in order; ok is 0 if the map is malformed
+walk(map: array of byte): (list of ref Inp, int)
 {
 	g := ref Global(0, 0, 0, 0, 0, 0);
 	stack: list of ref Global;
 	usages: list of int;		# local usages, in order given
 	umin := -1;
 	umax := -1;
-	reports: list of ref Report;	# built up, newest first
+	inps: list of ref Inp;		# newest first
 	depth := 0;
-	inmouse := 0;			# inside a Mouse/Pointer application collection
+	app := -1;			# the application collection we are in
 	appusage := -1;			# the usage the next collection opens with
 
 	for(i := 0; i < len map;){
@@ -68,7 +87,7 @@ parse(map: array of byte): list of ref Report
 		if(b == 16rfe){
 			# long item: bDataSize follows
 			if(i + 2 >= len map)
-				return nil;
+				return (nil, 0);
 			i += 3 + int map[i+1];
 			continue;
 		}
@@ -77,7 +96,7 @@ parse(map: array of byte): list of ref Report
 			n = 4;
 		tag := b & 16rfc;
 		if(i + 1 + n > len map)
-			return nil;
+			return (nil, 0);
 		v := 0;
 		for(k := 0; k < n; k++)
 			v |= int map[i+1+k] << (8*k);
@@ -112,12 +131,10 @@ parse(map: array of byte): list of ref Report
 		Tusagemin =>	umin = v;
 		Tusagemax =>	umax = v;
 		Tcollection =>
-			# 1 is Application; a Mouse or Pointer opens the part we read
-			if(v == 1 && depth == 0){
-				u := appusage;
-				if(u == (Pdesktop << 16 | Umouse) || u == (Pdesktop << 16 | Upointer))
-					inmouse = 1;
-			}
+			# 1 is Application; at the top level it says what the
+			# reports inside it are for
+			if(v == 1 && depth == 0)
+				app = appusage;
 			depth++;
 			usages = nil;
 			umin = umax = -1;
@@ -125,15 +142,16 @@ parse(map: array of byte): list of ref Report
 		Tendcoll =>
 			depth--;
 			if(depth <= 0){
-				inmouse = 0;
+				app = -1;
 				depth = 0;
 			}
 			usages = nil;
 			umin = umax = -1;
 			appusage = -1;
 		Tinput =>
-			if(inmouse)
-				reports = input(reports, g, usages, umin, umax, v);
+			if(app >= 0)
+				inps = ref Inp(ref Global(g.page, g.lmin, g.lmax, g.size, g.count, g.id),
+					usages, umin, umax, v, app) :: inps;
 			usages = nil;
 			umin = umax = -1;
 			appusage = -1;
@@ -143,10 +161,143 @@ parse(map: array of byte): list of ref Report
 			appusage = -1;
 		}
 	}
+	l: list of ref Inp;
+	for(; inps != nil; inps = tl inps)
+		l = hd inps :: l;
+	return (l, 1);
+}
+
+parse(map: array of byte): list of ref Report
+{
+	(inps, ok) := walk(map);
+	if(!ok)
+		return nil;
+	reports: list of ref Report;	# built up, newest first
+	for(; inps != nil; inps = tl inps){
+		p := hd inps;
+		# a Mouse or Pointer application collection is the part we read
+		if(p.app == (Pdesktop << 16 | Umouse) || p.app == (Pdesktop << 16 | Upointer))
+			reports = input(reports, p.g, p.usages, p.umin, p.umax, p.flags);
+	}
 	r: list of ref Report;
 	for(; reports != nil; reports = tl reports)
 		r = hd reports :: r;
 	return r;
+}
+
+#
+# A keyboard: the input reports of every Keyboard or Keypad application
+# collection, and in each the runs of Keyboard-page usages -- the
+# modifier bits (usages E0-E7), the key array a boot-style keyboard
+# reports up to six keys in, and the bitmap an n-key-rollover keyboard
+# reports every key in, one bit each. Fields of other pages in the
+# same report (a vendor byte, LEDs are outputs and never appear) are
+# stepped over; a report with no Keyboard-page field is left out.
+#
+keyboard(map: array of byte): list of ref Keys
+{
+	(inps, ok) := walk(map);
+	if(!ok)
+		return nil;
+	keys: list of ref Keys;		# newest first
+	for(; inps != nil; inps = tl inps){
+		p := hd inps;
+		if(p.app != (Pdesktop << 16 | Ukeyboard) && p.app != (Pdesktop << 16 | Ukeypad))
+			continue;
+		g := p.g;
+		k: ref Keys;
+		for(l := keys; l != nil; l = tl l)
+			if((hd l).id == g.id)
+				k = hd l;
+		if(k == nil){
+			k = ref Keys(g.id, 0, nil);
+			keys = k :: keys;
+		}
+		off := k.bits;
+		k.bits += g.size * g.count;
+		if(p.flags & 1)
+			continue;	# constant: padding
+		if(p.flags & 2){
+			# variable: each field is its own usage, a bit when it is a key
+			for(j := 0; j < g.count; j++){
+				u := -1;
+				if(p.umin >= 0 && (p.umax < 0 || p.umin + j <= p.umax))
+					u = (g.page << 16) | (p.umin + j);
+				else if(p.usages != nil){
+					ul := p.usages;
+					for(m := 0; m < j && tl ul != nil; m++)
+						ul = tl ul;
+					u = hd ul;
+				}
+				if(u >> 16 == Pkeyboard)
+					k.runs = appendr(k.runs, ref Keyrun(off + j*g.size, g.size, 1, u & 16rffff, 0, 0));
+			}
+		} else {
+			# an array: each slot holds the index of a key that is down
+			page := g.page;
+			first := p.umin;
+			if(first < 0 && p.usages != nil){
+				page = hd p.usages >> 16;
+				first = hd p.usages & 16rffff;
+			}
+			if(page == Pkeyboard && first >= 0)
+				k.runs = appendr(k.runs, ref Keyrun(off, g.size, g.count, first, g.lmin, 1));
+		}
+	}
+	r: list of ref Keys;
+	for(; keys != nil; keys = tl keys)
+		if((hd keys).runs != nil)
+			r = hd keys :: r;
+	return r;
+}
+
+findkeys(l: list of ref Keys, id: int): ref Keys
+{
+	for(; l != nil; l = tl l)
+		if((hd l).id == id)
+			return hd l;
+	return nil;
+}
+
+#
+# What one report says is held: the modifier byte, in the boot report's
+# layout (bit 0 left control ... bit 7 right GUI, usages E0-E7), and the
+# other keys down, as Keyboard-page usages. Usages 1-3 are the
+# keyboard's error codes (roll-over, POST fail, undefined): a report
+# full of them means "too many keys to say", and they are not keys.
+#
+Keys.held(k: self ref Keys, data: array of byte): (int, list of int)
+{
+	mod := 0;
+	down: list of int;
+	for(l := k.runs; l != nil; l = tl l){
+		r := hd l;
+		for(j := 0; j < r.count; j++){
+			u: int;
+			if(r.isarray){
+				v := bits(data, r.off + j*r.size, r.size, 0);
+				u = r.umin + (v - r.lmin);
+				if(v < r.lmin)
+					continue;
+			} else {
+				if(bits(data, r.off + j*r.size, r.size, 0) == 0)
+					continue;
+				u = r.umin + j;
+			}
+			if(u >= 16rE0 && u <= 16rE7)
+				mod |= 1 << (u - 16rE0);
+			else if(u >= 4)
+				down = u :: down;
+		}
+	}
+	return (mod, down);
+}
+
+appendr(l: list of ref Keyrun, r: ref Keyrun): list of ref Keyrun
+{
+	if(l == nil)
+		return r :: nil;
+	return hd l :: appendr(tl l, r);
 }
 
 # the report with this ID, made if new; reports are kept newest first

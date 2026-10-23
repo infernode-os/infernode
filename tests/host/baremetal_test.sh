@@ -5842,6 +5842,18 @@ try:
     while len(re.findall(rb"Total Time: \d+ ms", bytes(buf[m:]))) < 2 and time.time() < end:
         time.sleep(0.5)
     time.sleep(1)
+    # Three VMs loading the same module at the same instant: the loads
+    # contend for the JIT's compile lock, and the one that waited used
+    # to let its interpreter go, so its VM's collector swept the module
+    # being parsed (libinterp/load.c, lockedcompile). The Pi 4's soak
+    # panicked on this a minute in. sh is loaded in none of the three
+    # yet, so all three parse and compile it.
+    m = len(buf)
+    typed("load std; for(n in 1 2 3) { vm $n sh -c 'load std; for(i in 1 2 3 4 5 6 7 8){ sleep 0 }; echo CONCSH-ok' & }", 0.5)
+    end = time.time() + 60
+    while bytes(buf[m:]).count(b"\nCONCSH-ok") < 3 and time.time() < end:
+        time.sleep(0.5)
+    time.sleep(1)
     typed("ramfile /chan/vmrf served-from-vm0", 1)
     typed("vm 1 cat /chan/vmrf", 3)
     typed("vm 1 sh -c 'echo written-by-vm1 > /chan/vmrf'", 3)
@@ -5873,6 +5885,12 @@ PYEOF
         fail "virt: vm: jitbench2 in VMs 1 and 2 finished $nt time(s), not 2"
     fi
     vcheck "vm: with VM 2, four"                              "vms 4 max 4"
+    nc="$(tr -d '\r' <<<"$OUT" | grep -ac '^CONCSH-ok')"
+    if [[ "$nc" -ge 3 ]]; then
+        pass "virt: vm: sh started in VMs 1, 2 and 3 at the same instant -- three loads contending for the compiler -- all three run to the end"
+    else
+        fail "virt: vm: sh in VMs 1-3 at once: $nc of 3 finished"
+    fi
     vcheck "vm: a VM 1 program reads a file a VM 0 program serves (file2chan across VMs)" "served-from-vm0"
     vcheck "vm: and writes it"                                "VMRF written-by-vm1"
     if grep -aqE "^VMSLEEP pid [0-9]+" <<<"$(tr -d '\r' <<<"$OUT")"; then

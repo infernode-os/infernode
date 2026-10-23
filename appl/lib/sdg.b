@@ -31,6 +31,7 @@ Tversion:	con 100;
 Rerror:	con 107;
 Tflush:	con 108;
 Twrite:	con 118;
+Rflushtype:	con 109;
 
 init(): string
 {
@@ -543,6 +544,18 @@ core(s: ref Sess, fd: ref Sys->FD, reqs, pkts: chan of array of byte, tick: chan
 				r.pending = 1;
 				r.heard = sys->millisec();
 				r.nexttx = r.heard + KEEP;
+			}else if(len p == 5 && int p[4] == 0){
+				# gone: the brick will never run this rid (it ran and
+				# its reply has left the cache, or it was abandoned)
+				pend = remove(pend, r);
+				if(r.cancels >= 0){	# a Tflush cannot fail: answer it
+					rf := array[7] of {byte 7, byte 0, byte 0, byte 0, byte Rflushtype, byte r.tag, byte (r.tag>>8)};
+					sys->write(fd, rf, len rf);
+					pend = drop(pend, r.cancels, 1);
+				}else if(r.write)
+					rerror(fd, r.tag, "outcome unknown: reply gone");
+				else
+					rerror(fd, r.tag, "reply gone");
 			}else{
 				sys->write(fd, p[4:], len p - 4);
 				pend = remove(pend, r);

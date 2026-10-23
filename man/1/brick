@@ -38,6 +38,16 @@ brick \- pair with, configure and mount a styxbrick
 ]
 .I brickmnt
 .I dir
+.br
+.B brick fetch
+[
+.B -w
+.I window
+] [
+.B -n
+.I bytes
+]
+.I file
 .SH DESCRIPTION
 A styxbrick is a microcontroller that serves its hardware
 (LED, GPIO pins, ADC, temperature sensor) as a Styx file tree.
@@ -169,6 +179,21 @@ again; reading
 .B ctl
 says why.
 .PP
+.B Brick fetch
+copies
+.I file
+to its standard output with up to
+.I window
+reads in flight (default 1), each at its own offset, and writes them in
+order; it stops after
+.I bytes
+(if given) or at the end of the file.
+Over a datagram mount one read moves one
+.IR iounit (2)
+per round trip; a window keeps the link busy, as TCP keeps data in flight.
+It suits files addressed by offset, such as the brick's
+.BR adc/data .
+.PP
 .I Keydir
 defaults to
 .BI /usr/ user /keyring/brick
@@ -193,7 +218,11 @@ the pre-shared key given to the brick, hex (mode 600)
 the brick's X25519 public key
 .TP
 .B sdg.ctr
-the datagram handshake counter, which never repeats or goes back
+the datagram handshake counter, which never repeats or goes back.
+The brick refuses a handshake whose counter is not newer than the last it
+accepted for that key, so each commander needs its own
+.BR sdg.key :
+two sharing one lock each other out whenever their counters disagree
 .TP
 .B d2.key
 the D2 safety key given to the brick, hex (mode 600)

@@ -50,6 +50,8 @@ Brick: module
 PORT: con "564";
 udp := 0;
 leasems := 500;
+window := 1;		# brick fetch: reads in flight
+nbytes := big 0;	# brick fetch: bytes wanted (0: to end of file)
 
 keydir: string;
 
@@ -84,6 +86,10 @@ init(nil: ref Draw->Context, args: list of string)
 			udp = 1;
 		'l' =>
 			leasems = int arg->earg();
+		'w' =>
+			window = int arg->earg();
+		'n' =>
+			nbytes = big arg->earg();
 		* =>
 			usage();
 		}
@@ -115,6 +121,10 @@ init(nil: ref Draw->Context, args: list of string)
 		if(len args != 2)
 			usage();
 		d2serve(hd args, hd tl args);
+	"fetch" =>
+		if(len args != 1)
+			usage();
+		fetch(hd args, window, nbytes);
 	* =>
 		usage();
 	}
@@ -126,7 +136,8 @@ usage()
 		"\tbrick pair [-d keydir] usbmnt\n" +
 		"\tbrick wifi usbmnt <creds\n" +
 		"\tbrick mount [-abu] [-d keydir] addr mountpoint\n" +
-		"\tbrick d2 [-d keydir] [-l leasems] brickmnt dir\n");
+		"\tbrick d2 [-d keydir] [-l leasems] brickmnt dir\n" +
+		"\tbrick fetch [-w window] [-n bytes] file\n");
 	raise "fail:usage";
 }
 
@@ -912,4 +923,75 @@ mkdirs(d: string)
 	fd := sys->create(d, Sys->OREAD, Sys->DMDIR | 8r700);
 	if(fd == nil)
 		fail("io", sys->sprint("can't make %s: %r", d));
+}
+
+#
+# Read a file by offset with several reads in flight, writing it to
+# stdout in order: over a datagram mount (brick mount -u) one read at a
+# time moves one iounit per round trip; a window of them keeps the link
+# busy, as TCP keeps data in flight.  For files addressed by offset
+# (/adc/data, ordinary files).  Stops at nbytes (if > 0) or end of file.
+#
+fetch(file: string, w: int, n: big)
+{
+	fd := sys->open(file, Sys->OREAD);
+	if(fd == nil)
+		fail("fetch", sys->sprint("can't open %s: %r", file));
+	if(w < 1)
+		w = 1;
+	cnt := sys->iounit(fd);
+	if(cnt <= 0)
+		cnt = Sys->ATOMICIO;
+	jobs := chan of int;
+	results := chan of (int, array of byte);
+	for(i := 0; i < w; i++)
+		spawn fetcher(fd, cnt, jobs, results);
+	out := sys->fildes(1);
+	held := array[w] of array of byte;	# results ahead of the next to write, by k % w
+	next := 0;		# the next chunk to write
+	issued := 0;
+	written := big 0;
+	eof := 0;
+	for(; issued < w; issued++)
+		jobs <-= issued;
+	while(next < issued){
+		(k, data) := <-results;
+		held[k % w] = data;
+		while(next < issued && held[next % w] != nil){
+			d := held[next % w];
+			held[next % w] = nil;
+			if(n > big 0 && written + big len d > n)
+				d = d[0:int (n - written)];
+			if(len d > 0 && sys->write(out, d, len d) != len d)
+				fail("fetch", sys->sprint("write: %r"));
+			written += big len d;
+			if(len d < cnt)
+				eof = 1;		# a short chunk ends the file
+			next++;
+			if(!eof && (n <= big 0 || big issued * big cnt < n))
+				jobs <-= issued++;
+		}
+	}
+	for(i = 0; i < w; i++)
+		jobs <-= -1;
+}
+
+# One reader: chunk k is bytes [k*cnt, (k+1)*cnt); a short read is
+# continued until the chunk is full or the file ends.
+fetcher(fd: ref Sys->FD, cnt: int, jobs: chan of int, results: chan of (int, array of byte))
+{
+	for(;;){
+		k := <-jobs;
+		if(k < 0)
+			return;
+		buf := array[cnt] of byte;
+		got := 0;
+		while(got < cnt){
+			m := sys->pread(fd, buf[got:], cnt - got, big k * big cnt + big got);
+			if(m <= 0)
+				break;
+			got += m;
+		}
+		results <-= (k, buf[0:got]);
+	}
 }

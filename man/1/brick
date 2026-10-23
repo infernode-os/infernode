@@ -88,11 +88,20 @@ If the brick serves datagrams
 .RB ( /config/sdg ),
 it also gives the brick our X25519 public key and a fresh pre-shared key,
 and saves the brick's public key;
-and if the brick has safety outputs
-.RB ( /config/d2 ),
-a fresh D2 safety key.
+and a fresh D2 safety key
+.RB ( /config/d2 ).
+Each pairing replaces the brick's datagram peer and its D2 key, so
+pairing a second commander leaves the first one's keys useless; the brick
+holds one commander at a time.
 Because all of it travels over the USB cable, nothing the network
 could alter is trusted.
+A brick that reports
+.B unprovisioned
+in
+.B /config/spki
+has no identity yet: write
+.B regenerate
+there first (it wipes the brick's configuration and reboots it), then pair.
 .PP
 .B "brick wifi"
 copies standard input, which should be
@@ -133,7 +142,12 @@ for a write,
 .BR "outcome unknown: timed out" ),
 or when a read the brick has acknowledged as waiting for data stops being
 acknowledged
-.RB ( "link down" ).
+.RB ( "link down" ),
+or when the brick says it will never run the request, because its reply has
+left the brick's cache or the request came too late
+.RB ( "reply gone" ;
+for a write,
+.BR "outcome unknown: reply gone" ).
 Nothing blocks on a lost link, the session outlives outages, and a read
 that waits for data (such as
 .BR /events )
@@ -171,6 +185,13 @@ arms the session, which values need;
 .B safe
 takes every output to failsafe.
 Arming is never automatic.
+The lease asked for
+.RB ( -l ,
+default 500 ms) is lowered to the smallest maximum the brick reports for
+its outputs, and
+.B off
+is accepted for
+.BR release .
 If the link fails or this program dies, renewals stop and the brick takes
 every output to failsafe within a lease, then refuses commands until an
 application writes
@@ -229,6 +250,8 @@ the D2 safety key given to the brick, hex (mode 600)
 .SH EXAMPLE
 Pair over USB, give the brick its network, then use it from anywhere:
 .EX
+	mount -A '#U*/dev/ttyACM0' /n/brick
+	echo regenerate >/n/brick/config/spki	# a new board only; it reboots
 	mount -A '#U*/dev/ttyACM0' /n/brick
 	brick pair /n/brick
 	brick wifi /n/brick <creds

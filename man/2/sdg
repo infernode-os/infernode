@@ -67,7 +67,12 @@ or
 when a request the server has acknowledged as waiting for data (a
 blocking read) stops being acknowledged for
 .B LIVE
-(5 s).
+(5 s); or
+.B "reply gone"
+.RB ( "outcome unknown: reply gone"
+for a write) at once when the server says it will never run the request
+(its reply has left the server's cache, or the request came too late);
+a Tflush so answered gets its Rflush.
 A blocking read so acknowledged has no deadline.
 The session outlives outages; an idle one sends a keepalive every
 .B IDLE

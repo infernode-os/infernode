@@ -466,6 +466,10 @@ for kind in md html {
 		hasdoctext $bid Typed
 		t=`{cat $XENITH/$bid/doc/text}
 		if {~ $"t *Typed*} {ok $kind^': refresh takes typing not yet committed'} {bad $kind^': refresh after typing:' $"t}
+		# each window on the file holds a copy of the typing; it goes
+		# into the text once, not once for each window
+		b=`{cat $XENITH/$aid/body}
+		if {~ $"b *Typed*Typed* *yped*yped*} {bad $kind^': the typing went into the text twice:' $"b} {ok $kind^': the typing went into the text once'}
 		echo ' Saved' >> $XENITH/$aid/body
 		sleep 2
 		t=`{cat $XENITH/$bid/doc/text}

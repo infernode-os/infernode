@@ -504,9 +504,16 @@ refresh(w: ref Window): string
 	if(d == nil || !d.shown || d.v.web || d.v.kind == nil || d.v.kind.class != Docreg->Source)
 		return "not a source document shown";
 	f := w.body.file;
-	for(i := 0; i < f.ntext; i++)
-		if(f.text[i].ncache > 0)
-			f.text[i].commit(TRUE);
+	# the typing not yet committed: each window on the file holds a
+	# copy of it, which goes into the file once (Window.commit), not
+	# once for each window
+	for(i := 0; i < f.ntext; i++){
+		t := f.text[i];
+		if(t.ncache > 0 && t.w != nil){
+			t.w.commit(t);
+			break;
+		}
+	}
 	if(d.next != nil)
 		dropview(d.next);
 	nv := sheetview->new(d.v.kind, d.v.name, evc);

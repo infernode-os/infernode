@@ -462,7 +462,29 @@ images(s: ref Session, g: int, pg: ref Pg)
 {
 	lock(s);
 	urls := pg.wanted();
+	if((r := realmof(s)) != nil && r.pg == pg) {
+		urls = claim(r, urls);
+		r.imaging = 1;
+	}
 	unlock(s);
+	fetchpics(s, g, pg, urls);
+}
+
+# what of urls is not fetched or being fetched for the realm's page; the
+# rest it now has (the session's lock held)
+claim(r: ref Realm, urls: list of string): list of string
+{
+	n: list of string;
+	for(; urls != nil; urls = tl urls)
+		if(!member(hd urls, r.pics)) {
+			r.pics = hd urls :: r.pics;
+			n = hd urls :: n;
+		}
+	return rev(n);
+}
+
+fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
+{
 	n := len urls;
 	if(n == 0)
 		return;
@@ -2110,6 +2132,8 @@ Realm: adt {
 	laidout:	int;	# the document's generation when last laid out
 	styled:	int;	# when last styled
 	sels:	list of (string, array of ref Css->Sel);	# selectors parsed, most recent first
+	imaging:	int;	# the page's images are being fetched
+	pics:	list of string;	# the images fetched or being fetched for it
 };
 
 Req: adt {
@@ -2189,7 +2213,7 @@ startrealm(s: ref Session, g: int, pg: ref Pg)
 	if(page->setting("scripts") != "on" || !hasscripts(pg.doc))
 		return;
 	lockrealms();
-	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil);
+	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil, 0, nil);
 	realms = r :: realms;
 	unlockrealms();
 	pidc := chan of int;
@@ -2579,6 +2603,19 @@ laidout(r: ref Realm)
 	}
 	r.laidout = d.gen;
 	r.styled = d.gen;
+	if(r.imaging) {
+		# images the page's scripts put in after its own were sent
+		# for (JSTOR's logo, in a header its script makes)
+		us: list of string;
+		{
+			us = claim(r, r.pg.wanted());
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: images after a script: %s\n", e);
+		}
+		if(us != nil)
+			spawn fetchpics(r.s, r.g, r.pg, us);
+	}
 }
 
 # the document's computed styles as it now is (the lock held)

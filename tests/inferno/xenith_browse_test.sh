@@ -184,7 +184,7 @@ if {! ~ $#img 0} {
 }
 
 # A form: a click in its field (which fills the page) gives it the
-# keyboard, typing fills it in, Return submits it
+# keyboard, typing and pasting fill it in, Return submits it
 SEARCH=file:///tests/xenith/html/search.html
 id=`{cat $XENITH/new/ctl}
 id=${index 1 $id}
@@ -208,7 +208,12 @@ if {~ $#f 0} {
 	echo -n 'm400 400 1' > '#m/pointer'
 	echo -n 'm400 400 0' > '#m/pointer'
 	sleep 1
-	echo -n 'plan9' > '#c/keyboard'
+	echo -n 'pl' > '#c/keyboard'
+	sleep 1
+	# the rest pasted (^V, Cmd-V on a Mac), its line break left out
+	echo 'an
+9' > /chan/snarf
+	echo -n '' > '#c/keyboard'
 	sleep 1
 	echo > '#c/keyboard'
 	if {waitbody $f 'The results page'} {
@@ -218,7 +223,7 @@ if {~ $#f 0} {
 	}
 	r=`{winof 'file:///tests/xenith/html/result.html?q=plan9'}
 	if {~ $r $f} {
-		pass 'with what was typed: result.html?q=plan9'
+		pass 'with what was typed and pasted: result.html?q=plan9'
 	} {
 		fail 'the result window:' `{grep result $XENITH/index}
 	}

@@ -528,6 +528,13 @@ key1(h: int, r: int): string
 			v = v[0:len v - 1];
 	16r15 =>	# ^U
 		v = "";
+	16r16 =>	# ^V (Cmd-V): the snarf added; one line but in a textarea
+		t := snarf();
+		if(f.kind != "textarea")
+			t = oneline(t);
+		if(t == nil)
+			return "paint";
+		v += t;
 	* =>
 		if(r == '\n' || (r >= ' ' && r != 16r7F && r < Keyboard->Spec))
 			v[len v] = r;
@@ -538,6 +545,33 @@ key1(h: int, r: int): string
 		return "error " + err;
 	s.height = htmldoc->height(h);
 	return "layout";
+}
+
+# What is snarfed (cut or copied, here or on the host)
+snarf(): string
+{
+	fd := sys->open("/chan/snarf", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[0] of byte;
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0){
+		nb := array[len b + n] of byte;
+		nb[0:] = b;
+		nb[len b:] = buf[0:n];
+		b = nb;
+	}
+	return string b;	# whole, so no character is split between reads
+}
+
+# A field of one line takes text pasted without its line breaks
+oneline(t: string): string
+{
+	r := "";
+	for(i := 0; i < len t; i++)
+		if(t[i] != '\n' && t[i] != '\r')
+			r[len r] = t[i];
+	return r;
 }
 
 typedinto(kind: string): int

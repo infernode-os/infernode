@@ -1364,7 +1364,14 @@ jobs:
             --password "$APPLE_APP_PASSWORD" \
             --wait --timeout 30m
 
-          xcrun stapler staple "$DMG"
+          # The ticket is fetched from Apple's CloudKit, which drops the
+          # connection now and then (NSURLErrorDomain -1005, error 68);
+          # it twice failed v0.8.1's Intel build after notarization passed
+          for try in 1 2 3 4 5; do
+            xcrun stapler staple "$DMG" && break
+            [ $try = 5 ] && exit 1
+            sleep $((try * 30))
+          done
           echo "DMG: $(ls -lh $DMG)"
         done
 

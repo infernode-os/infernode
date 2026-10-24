@@ -236,6 +236,11 @@ jobs:
         chmod +x tests/host/charon_shadowcheck_test.sh
         ROOT=. bash tests/host/charon_shadowcheck_test.sh
 
+    - name: Check a web component laid out as a grid takes the page's areas
+      run: |
+        chmod +x tests/host/charon_shadowgrid_test.sh
+        ROOT=. bash tests/host/charon_shadowgrid_test.sh
+
     - name: Check a PDF navigated to is saved and opened
       run: |
         chmod +x tests/host/charon_download_test.sh

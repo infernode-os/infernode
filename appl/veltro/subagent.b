@@ -37,7 +37,7 @@ include "tool.m";
 include "subagent.m";
 
 # Configuration
-STREAM_THRESHOLD: con 4096;
+STREAM_THRESHOLD: con 32768;	# as veltrosrv's INLINEMAX
 # Under /tmp/veltro — the subtree nsconstruct keeps writable post-restriction
 # (plain /tmp/scratch isn't creatable in the child's restricted namespace).
 SCRATCH_PATH: con "/tmp/veltro/scratch";
@@ -208,6 +208,8 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	}
 
 	loopstart := sys->millisec();
+	cuts := 0;
+	partial := "";	# a reply cut off by the output limit, continued
 	for(step := 0; step < maxsteps; step++) {
 		# Query the LLM via agentlib (same harmony/JSON-aware path + retry as the
 		# parent agent), then parse with parsellmresponse — NOT the legacy
@@ -224,8 +226,30 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 
 		(stopreason, tcalls, text) := agentlib->parsellmresponse(response);
 
+		# Cut off by the output limit: calls in the reply may be cut too,
+		# so none is run (each is answered so); text alone is taken up
+		# where it stopped.
+		if(stopreason == "max_tokens") {
+			if(tcalls != nil) {
+				cut: list of (string, string);
+				for(tc := tcalls; tc != nil; tc = tl tc) {
+					(id, nil, nil) := hd tc;
+					cut = (id, CUTCALL) :: cut;
+				}
+				prompt = agentlib->buildtoolresults(revresults(cut));
+				continue;
+			}
+			if(cuts++ < MAXCUTS) {
+				partial += text;
+				prompt = CUTTEXT;
+				continue;
+			}
+		}
+		if(partial != "")
+			text = partial + text;
+
 		# Turn complete: the model's text IS the subagent's result.
-		if(stopreason == "end_turn" || stopreason == "" || tcalls == nil) {
+		if(stopreason != "tool_use" || tcalls == nil) {
 			logfooter("done", step + 1, sys->millisec() - loopstart);
 			prov("subdone", sys->sprint("agent=%s steps=%d status=done", provid, step + 1),
 				array of byte text);
@@ -247,8 +271,12 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 			prov("subtoolres", sys->sprint("agent=%s step=%d tool=%s", provid, step + 1, name),
 				array of byte result);
 			if(len result > STREAM_THRESHOLD) {
+				# The start stays inline, so the child has something to
+				# act on, and it is told where the rest is.
 				scratchfile := writescratch(result, step);
-				result = sys->sprint("(output written to %s, %d bytes)", scratchfile, len result);
+				result = firstlines(result, SPILLPREVIEW) +
+					sys->sprint("\n... (%d bytes in all; the whole output is in %s: read it with offset and limit)",
+						len result, scratchfile);
 			}
 			results = (id, result) :: results;
 		}
@@ -260,6 +288,22 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	logfooter("max-steps", maxsteps, totaltime);
 	prov("subdone", sys->sprint("agent=%s steps=%d status=max-steps", provid, maxsteps), nil);
 	return sys->sprint("ERROR:max steps (%d) reached without completion", maxsteps);
+}
+
+MAXCUTS: con 2;
+SPILLPREVIEW: con 400;
+CUTCALL: con "error: not run: your reply reached the output limit while this call was being " +
+	"written, so its arguments may be cut off.  Send the call again, complete.  If it is " +
+	"a large write, write the file in smaller parts.";
+CUTTEXT: con "[harness: your reply was cut off at the output limit.  Continue exactly where " +
+	"it stopped; do not repeat what you already wrote.]";
+
+firstlines(s: string, n: int): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n' && --n <= 0)
+			return s[0:i];
+	return s;
 }
 
 # Reverse a (id, result) list to restore call order (results are accumulated

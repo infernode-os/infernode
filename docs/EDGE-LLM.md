@@ -135,10 +135,31 @@ Settled with the project owner:
   control, ITAR on the *application*, or a service's own rules for
   fielding AI. Those belong to whoever deploys it.
 
-Still open: `tests/model-eval/cross-model/` runs Qwen and GLM by
-default, to find harness bugs that recur across model families. That
-is testing, not shipping or recommending. Whether the rule covers it is
-the owner's call.
+**Testing is not using** (settled the same day). `tests/model-eval/`
+keeps testing Qwen and GLM. They are popular for running models
+locally, so a user may well choose one under the installer's "Custom",
+and the harness should work with what users run. InferNode does not
+recommend, default to or ship them.
+
+What the matrix runs, against what is current (2026-10-25, from the
+publishers' pages and Ollama's library):
+
+| family | in the matrix | current | small / phone-sized | licence |
+|-|-|-|-|-|
+| Qwen | `qwen3.6:27b` (April 2026) | Qwen3.8-27B (August 2026): vision, thinking **on by default** at `xhigh` ([card](https://huggingface.co/Qwen/Qwen3.8-27B)) | Qwen3.5 0.8B, 2B, 4B, 9B (February–March 2026): vision, tools, thinking off by default for the small ones ([2B card](https://huggingface.co/Qwen/Qwen3.5-2B)); 1.2GB, ~3GB and ~3.5GB in Ollama | Apache 2.0 |
+| GLM (Zhipu, as Z.ai) | `GLM-4-32B-0414` (April 2025) | GLM-5.x is 321B–753B and only in Ollama's cloud; locally, GLM-4.7-Flash, a 30B mixture of experts with 3B active per token: tools, thinking ([card](https://huggingface.co/zai-org/GLM-4.7-Flash)) | none: Zhipu publishes no current chat model under 9B (GLM-OCR at 1B reads documents only) | MIT |
+
+How popular, by Ollama pulls ([library](https://ollama.com/library?sort=popular)):
+the Qwen families together have well over 100M, more than any other
+publisher's apart from Llama's (`qwen2.5` 43.6M, `qwen3` 41.5M, `qwen3.5`
+23.4M, `qwen3.6` 7.3M, `qwen3.8` 4.9M). GLM's local models are niche:
+`glm-4.7-flash` has 2.1M. The clean models for comparison: `gemma4`
+27.8M, `gpt-oss` 14.2M.
+
+Zhipu has been on the US Entity List since January 2025
+([Bloomberg](https://www.bloomberg.com/news/articles/2025-01-16/us-blacklists-tencent-backed-ai-startup-as-tech-curbs-deepen)).
+That restricts exports *to* Zhipu, not downloading its published
+weights. It is one more reason GLM stays a test subject only.
 
 One note on
 Gemma: Google's site still links its 2024 Prohibited Use Policy from

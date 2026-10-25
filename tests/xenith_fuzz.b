@@ -668,15 +668,20 @@ data(s: string)
 
 integrity()
 {
-	# every window's text reads back as long as the index says
+	# every window's text reads back as long as its ctl says: the body
+	# first, as reading it commits typing the ctl does not count
 	for(l := windows(); l != nil; l = tl l){
 		w := hd l;
 		if(w.isdir)
 			continue;
 		b := xread(X+"/"+w.id+"/body");
-		if(len b != w.bodysize && !isdoc(w))
-			data(sys->sprint("window %s (%s): the index says %d characters, its body reads %d",
-				w.id, w.name, w.bodysize, len b));
+		(n, f) := sys->tokenize(xread(X+"/"+w.id+"/ctl"), " ");
+		if(n < 3 || isdoc(w))
+			continue;
+		size := int hd tl tl f;
+		if(len b != size)
+			data(sys->sprint("window %s (%s): its ctl says %d characters, its body reads %d",
+				w.id, w.name, size, len b));
 	}
 
 	# Put writes what the window holds: each of the work files shown

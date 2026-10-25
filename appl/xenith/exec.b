@@ -1695,7 +1695,10 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 			utils->setenv("%", filename);
 		c.md = fsys->fsysmount(rdir, ndir, incl, nincl);
 		if(c.md == nil){
-			warning(nil, "can't mount /mnt/xenith");
+			# reported by waittask, which holds the row: warning() here,
+			# beside the procs laying out the windows, broke the frames
+			# it drew in (with no /mnt/xenith, Xenith died starting)
+			dat->cerr <-= sys->sprint("can't mount /mnt/xenith: %r\n");
 			exit;
 		}
 		if(winid > 0 && (pipechar=='|' || pipechar=='>')){
@@ -1750,7 +1753,8 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		}
 		p = array[2] of ref Sys->FD;
 		if(sys->pipe(p) < 0){
-			error("child: can't pipe");
+			# the command fails, not Xenith (error() took it down)
+			dat->cerr <-= sys->sprint("can't run %s: no pipe: %r\n", s);
 			exit;
 		}
 		pc = chan of int;

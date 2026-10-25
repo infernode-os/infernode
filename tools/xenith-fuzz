@@ -27,8 +27,9 @@
 # alone. Each run's output is in $ROOT/tmp/xenith-fuzz/logs/<seed>.log;
 # a run that failed keeps it, with the stacks of Xenith's procs when it
 # hung mapped to source lines where the .sbl files are at hand.
-# Xenith runs in a directory of its own under $ROOT/tmp/xenith-fuzz, so
-# the files its random Puts make land there. Exit status 1 if any run
+# The emulator's root is a copy of what Xenith needs, made afresh under
+# $ROOT/tmp/xenith-fuzz/root, so what random use opens and Puts is never
+# the tree's. Exit status 1 if any run
 # failed: froze (HUNG, STUCK), lost a proc (BROKEN), left (no outcome),
 # or lost text (DATA).
 #
@@ -70,6 +71,25 @@ fi
 top=$ROOT/tmp/xenith-fuzz
 logs=$top/logs
 mkdir -p "$logs"
+
+# The emulator's root: a copy of what Xenith and Lucifer need, and the
+# other directories empty, as mount points. Random use opens files by
+# name and Puts them (a directory's listing, B3 on a name in it, typing,
+# Put), so in the tree itself it changed tracked files.
+sandbox=$top/root
+rm -rf "${sandbox:?}"
+mkdir -p "$sandbox/tmp" "$sandbox/tests"
+for d in "$ROOT"/*/; do
+	d=$(basename "$d")
+	case $d in
+	dis|lib|fonts|icons|locale|usr|mnt|n)	cp -a "$ROOT/$d" "$sandbox/$d" ;;
+	tmp|tests)	;;
+	*)	mkdir -p "$sandbox/$d" ;;
+	esac
+done
+for d in page imgload; do
+	cp -a "$ROOT/tests/$d" "$sandbox/tests/$d"
+done
 
 # The stacks in a log (lines "fp pc mp prog type path") as source lines,
 # through the .sbl files mk leaves beside each .b
@@ -115,8 +135,8 @@ EOF
 
 one() {
 	s=$1
-	r=$top/r$s
-	rm -rf "$r"
+	r=$sandbox/tmp/xenith-fuzz/r$s
+	rm -rf "${r:?}"
 	mkdir -p "$r/w"
 	# the start-up command: run from Xenith, so it sees /mnt/xenith
 	{
@@ -132,17 +152,17 @@ one() {
 	log=$logs/$s.log
 	if [ $lucifer = 1 ]; then
 		SDL_VIDEODRIVER=dummy with_timeout $((secs+180)) "$EMU" $flag \
-			-pheap=1024m -pmain=1024m -pimage=1024m -g1024x768 -r"$ROOT" /dis/sh.dis -l -c "
-skiplogon=1; run /lib/lucifer/boot.sh & sleep 45
+			-pheap=1024m -pmain=1024m -pimage=1024m -g1024x768 -r"$sandbox" /dis/sh.dis -l -c "
+skiplogon=1; cd /tmp/xenith-fuzz/r$s/w; run /lib/lucifer/boot.sh & sleep 45
 echo 'create id=xenith type=app dis=/dis/xenith/xenith.dis label=Xenith data=-c 1 -E -l /tmp/xenith-fuzz/r$s/dump' > /mnt/ui/activity/0/presentation/ctl
 echo 'center id=xenith' > /mnt/ui/activity/0/presentation/ctl
 sleep $((secs+100)); echo 'fuzz: NO OUTCOME'; echo halt > /dev/sysctl" </dev/null > "$log" 2>&1
 	else
-		SDL_VIDEODRIVER=dummy with_timeout $((secs+90)) "$EMU" $flag -g800x600 -r"$ROOT" \
-			/dis/sh.dis -c "load std; xenith -l /tmp/xenith-fuzz/r$s/dump" </dev/null > "$log" 2>&1
+		SDL_VIDEODRIVER=dummy with_timeout $((secs+90)) "$EMU" $flag -g800x600 -r"$sandbox" \
+			/dis/sh.dis -c "load std; cd /tmp/xenith-fuzz/r$s/w; xenith -l /tmp/xenith-fuzz/r$s/dump" </dev/null > "$log" 2>&1
 	fi
 	# Xenith's buffer file, left by the halt
-	find "$ROOT/tmp" -maxdepth 1 -name '*xenith' -newer "$r/dump" -exec rm -f {} + 2>/dev/null
+	find "$sandbox/tmp" -maxdepth 1 -name '*xenith' -newer "$r/dump" -exec rm -f {} + 2>/dev/null
 	bad=$(grep -E '^fuzz: (HUNG|BROKEN|STUCK|DATA|NO OUTCOME)|^xenith: ' "$log" | head -4)
 	if [ -z "$bad" ] && ! grep -q '^fuzz: INTEGRITY ok' "$log"; then
 		bad="no outcome: $(grep -v '^fs: fsqid' "$log" | tail -2 | tr '\n' ' ')"
@@ -153,7 +173,7 @@ sleep $((secs+100)); echo 'fuzz: NO OUTCOME'; echo halt > /dev/sysctl" </dev/nul
 		return 1
 	fi
 	echo "seed $s: ok ($(sed -n 's/^fuzz: RESPONSIVE (\(.*\))/\1/p' "$log"))"
-	[ $keep = 1 ] || rm -rf "$r" "$log"
+	[ $keep = 1 ] || rm -rf "${r:?}" "${log:?}"
 	return 0
 }
 

@@ -7,6 +7,7 @@ Textm : module {
 	Columntag, Rowtag, Tag, Body : con iota;
 
 	newtext : fn() : ref Text;
+	loadrest : fn(f : ref Filem->File);
 
 	Text : adt {
 		file : cyclic ref Filem->File;

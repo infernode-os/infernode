@@ -437,7 +437,9 @@ Window.settag(w : self ref Window)
 	f = w.body.file;
 	for(i=0; i<f.ntext; i++){
 		v := f.text[i].w;
-		if(v.col.safe || v.body.frame.maxlines>0)
+		# a Zerox deleted while a client still holds it stays on the
+		# file, with no column, until the client lets go
+		if(v.col != nil && (v.col.safe || v.body.frame.maxlines>0))
 			v.settag1();
 	}
 }

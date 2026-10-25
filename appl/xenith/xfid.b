@@ -153,18 +153,47 @@ Xfid.ctl(x : self ref Xfid)
 	ox = nil;
 	for (;;) {
 		f := <- x.c;
-		case (f) {
-			Xnil => ;
-			Xflush => x.flush();
-			Xwalk => x.walk(nil);
-			Xopen => x.open();
-			Xclose => x.close();
-			Xread => x.read();
-			Xwrite => x.write();
-			* =>		error("bad case in Xfid.ctl()");
+		{
+			case (f) {
+				Xnil => ;
+				Xflush => x.flush();
+				Xwalk => x.walk(nil);
+				Xopen => x.open();
+				Xclose => x.close();
+				Xread => x.read();
+				Xwrite => x.write();
+				* =>		error("bad case in Xfid.ctl()");
+			}
+		}
+		exception{
+			* =>
+				x.recover(utils->getexc());
 		}
 		bflush();
 		cxfidfree <-= x;
+	}
+}
+
+# A request that raised an exception: the locks this proc holds let go
+# and the client answered. It died holding them, and every click and
+# request after waited for the row for ever.
+Xfid.recover(x : self ref Xfid, e : string)
+{
+	if(x.f != nil && (w := x.f.w) != nil && w.qlock.held())
+		w.unlock();
+	if(!row.qlock.held())
+		row.qlock.lock();
+	{
+		warning(nil, sprint("xenith: 9P request: %s\n", e));
+	}
+	exception{
+		* =>
+			sys->fprint(sys->fildes(2), "xenith: 9P request: %s\n", e);
+	}
+	row.qlock.unlock();
+	if(!x.responded){
+		fc : Smsg0;
+		respond(x, fc, "xenith: "+e);
 	}
 }
  
@@ -214,7 +243,9 @@ Xfid.walk(x : self ref Xfid, cw: chan of ref Window)
 		w.creatormnt = x.f.mntdir.id;
 	else
 		w.creatormnt = 0;
-	# w.refx.inc();
+	# the walk's reference taken here, with the row held: taken after,
+	# a window deleted at once could be freed first
+	w.refx.inc();
 	# x.f.w = w;
 	# x.f.qid.path = big QID(w.id, Qdir);
 	# x.f.qid.qtype = Sys->QTDIR;
@@ -236,6 +267,14 @@ Xfid.open(x : self ref Xfid)
 		t := w.body;
 		row.qlock.lock();	# tasks->procs now
 		w.lock('E');
+		# deleted since the walk: its column and frames are gone (a
+		# wrsel open cut its text and set a tag with no column)
+		if(w.col == nil){
+			w.unlock();
+			row.qlock.unlock();
+			respond(x, fc, Edel);
+			return;
+		}
 		q = FILE(x.f.qid);
 		case(q){
 		QWaddr =>
@@ -341,11 +380,19 @@ Xfid.close(x : self ref Xfid)
 	q : int;
 
 	w = x.f.w;
-	x.f.busy = FALSE;
+	# the Fid kept busy until this is done with it: freed first, it
+	# could be given to a new fid while this waited for the row, and
+	# this then cleared that fid's window
 	if(x.f.open == FALSE){
-		if(w != nil)
+		if(w != nil){
+			# the window's last reference can go here: freed with
+			# the row held, as everywhere else
+			row.qlock.lock();
 			w.close();
+			row.qlock.unlock();
+		}
 		x.f.w = nil;
+		x.f.busy = FALSE;
 		respond(x, fc, nil);
 		return;
 	}
@@ -394,6 +441,7 @@ Xfid.close(x : self ref Xfid)
 		row.qlock.unlock();
 	}
 	x.f.w = nil;
+	x.f.busy = FALSE;
 	respond(x, fc, nil);
 }
  
@@ -423,9 +471,15 @@ Xfid.read(x : self ref Xfid)
 		respond(x, fc, nil);
 		return;
 	}
+	# the row held as by every other request: with the window's lock
+	# alone, a read paged the buffer while the mouse task, holding the
+	# row, reshaped or filled the same window (a neighbour deleted, a
+	# column resized), and the buffer's cache was taken by both
+	row.qlock.lock();
 	w.lock('F');
 	if(w.col == nil){
 		w.unlock();
+		row.qlock.unlock();
 		respond(x, fc, Edel);
 		return;
 	}
@@ -441,6 +495,7 @@ Xfid.read(x : self ref Xfid)
 		sbuf = sprint("%11d %11d ", w.addr.q0, w.addr.q1);
 		str = 1;
 	QWbody =>
+		textm->loadrest(w.body.file);	# all of a file still loading
 		if(w.rendermode != 0 && w.contentdata != nil){
 			# Serve raw text to 9P clients (AI sees source, not formatted view)
 			sbuf = string w.contentdata;
@@ -453,6 +508,7 @@ Xfid.read(x : self ref Xfid)
 	QWevent =>
 		x.eventread(w);
 	QWdata =>
+		textm->loadrest(w.body.file);
 		# BUG: what should happen if q1 > q0?
 		if(w.addr.q0 > w.body.file.buf.nc){
 			respond(x, fc, Eaddr);
@@ -461,6 +517,7 @@ Xfid.read(x : self ref Xfid)
 		w.addr.q0 += x.runeread(w.body, w.addr.q0, w.body.file.buf.nc);
 		w.addr.q1 = w.addr.q0;
 	QWxdata =>
+		textm->loadrest(w.body.file);
 		# like data, but the read stops at the end of addr
 		# BUG: what should happen if q1 > q0?
 		if(w.addr.q0 > w.body.file.buf.nc){
@@ -498,9 +555,10 @@ Xfid.read(x : self ref Xfid)
 		# the document shown: its name and its first sheet's size
 		str = 1;
 		sbuf = "";
-		if(docview->shown(w) && w.doc.v.h >= 0 && len w.doc.v.sizes > 0)
-			sbuf = sprint("%s %d %d\n", w.doc.v.name,
-				w.doc.v.sizes[0].x, w.doc.v.sizes[0].y);
+		d := w.doc;
+		if(d != nil && docview->shown(w) && d.v.h >= 0 && len d.v.sizes > 0)
+			sbuf = sprint("%s %d %d\n", d.v.name,
+				d.v.sizes[0].x, d.v.sizes[0].y);
 	QWrdsel =>
 		sys->seek(w.rdselfd, big off, 0);
 		n = count(x.fcall);
@@ -535,6 +593,7 @@ Xfid.read(x : self ref Xfid)
 		buf = nil;
 	}
 	w.unlock();
+	row.qlock.unlock();
 }
  
 Xfid.write(x : self ref Xfid)
@@ -779,12 +838,22 @@ ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 	q, i: int;
 	t: ref Text;
 
+	# The request is served holding the row: lock must not wait here
+	# for another fid's unlock, which needs the row too, nor unlock let
+	# go of a lock nobody holds (it waits for ever): either froze every
+	# window
 	if(strncmp(p, "lock", 4) == 0){	# make window exclusive use
+		if(w.ctlfid == x.f.fid)
+			return (TRUE, 4, nil, FALSE);
+		if(w.ctlfid != ~0)
+			return (TRUE, 0, Einuse, FALSE);
 		w.ctllock.lock();
 		w.ctlfid = x.f.fid;
 		return (TRUE, 4, nil, FALSE);
 	}
 	if(strncmp(p, "unlock", 6) == 0){	# release exclusive use
+		if(w.ctlfid != x.f.fid)
+			return (TRUE, 0, "window not locked by this file", FALSE);
 		w.ctlfid = ~0;
 		w.ctllock.unlock();
 		return (TRUE, 6, nil, FALSE);
@@ -1110,6 +1179,10 @@ Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 	nb = sys->utfbytes(data(x.fcall), count(x.fcall));
 	r = string data(x.fcall)[0:nb];
 	for(n=0; n<len r; n+=m){
+		# deleted by a command before (del, delete): the rest is not
+		# done, as the window's column, frames and file are gone
+		if(w.col == nil)
+			break;
 		p = r[n:];
 		# Try each command group in turn
 		(handled, m, err, settag2) = ctlcmd1(x, w, p);
@@ -1147,9 +1220,9 @@ Xfid.ctlwrite(x : self ref Xfid, w : ref Window)
 		n = 0;
 	fc.count = n;
 	respond(x, fc, err);
-	if(settag)
+	if(settag && w.col != nil)
 		w.settag();
-	if(scrdrw)
+	if(scrdrw && w.col != nil)
 		scrdraw(w.body);
 }
 
@@ -1384,7 +1457,9 @@ Xfid.eventread(x : self ref Xfid, w : ref Window)
 		}
 		w.eventx = x;
 		w.unlock();
+		row.qlock.unlock();	# both let go while the reader waits
 		<- x.c;
+		row.qlock.lock();
 		w.lock('F');
 		i++;
 	}

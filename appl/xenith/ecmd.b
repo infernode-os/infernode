@@ -632,9 +632,9 @@ x_cmd(t: ref Text, cp: ref Cmd): int
 	return TRUE;
 }
 
-X_cmd(nil: ref Text, cp: ref Cmd): int
+X_cmd(t: ref Text, cp: ref Cmd): int
 {
-	filelooper(cp, cp.cmdc=='X');
+	filelooper(t, cp, cp.cmdc=='X');
 	return TRUE;
 }
 
@@ -673,18 +673,27 @@ runpipe(t: ref Text, cmd: int, cr: string, ncr: int, state: int)
 		dir.nr = 0;
 	}
 	editing = state;
-	if(t!=nil && t.w!=nil)
-		t.w.refx.inc();	# run will decref
+	if(w != nil)
+		w.refx.inc();	# run will decref (it is given w alone)
 	spawn run(w, s, dir.r, dir.nr, TRUE, nil, nil, TRUE);
 	s = nil;
-	if(t!=nil && t.w!=nil)
+	# the window kept by a reference of its own while the row is let go
+	# for the command: deleted meanwhile, its last reference went with
+	# its lock, and it was locked again freed
+	if(t!=nil && t.w!=nil){
+		t.w.refx.inc();
 		t.w.unlock();
+	}
 	row.qlock.unlock();
 	<- cedit;
 	row.qlock.lock();
 	editing = Inactive;
-	if(t!=nil && t.w!=nil)
+	if(t!=nil && t.w!=nil){
 		t.w.lock('M');
+		t.w.close();	# the reference above; the lock holds its own
+		if(t.w.col == nil)
+			editerror("window deleted while the command ran");
+	}
 }
 
 pipe_cmd(t: ref Text, cp: ref Cmd): int
@@ -966,7 +975,7 @@ alllooper(w: ref Window, lp: ref Looper)
 	}
 }
 
-filelooper(cp: ref Cmd, XY: int)
+filelooper(t: ref Text, cp: ref Cmd, XY: int)
 {
 	i: int;
 
@@ -991,8 +1000,38 @@ filelooper(cp: ref Cmd, XY: int)
 	#
 	allwindows(Edit->ALLINCREF, nil);
 	dat->globalincref = 1;
-	for(i=0; i<loopstruct.nw; i++)
-		cmdexec(loopstruct.w[i].body, cp.cmd);
+	# The window running the X let go, and each target locked in turn
+	# while its command runs, as Acme does: the targets were not
+	# locked, and a pipe command (,|cmd) lets go of its target's lock
+	# while it waits, which, not held, it waited for for ever, holding
+	# the row. An error part way puts the locks back as they were.
+	if(t != nil && t.w != nil)
+		t.w.unlock();
+	targ: ref Text;
+	{
+		for(i=0; i<loopstruct.nw; i++){
+			targ = loopstruct.w[i].body;
+			if(targ.w != nil)
+				targ.w.lock(cp.cmdc);
+			cmdexec(targ, cp.cmd);
+			if(targ.w != nil)
+				targ.w.unlock();
+			targ = nil;
+		}
+	}
+	exception e{
+		* =>
+			if(targ != nil && targ.w != nil)
+				targ.w.unlock();
+			if(t != nil && t.w != nil)
+				t.w.lock(cp.cmdc);
+			allwindows(Edit->ALLDECREF, nil);
+			dat->globalincref = 0;
+			loopstruct.w = nil;
+			raise e;
+	}
+	if(t != nil && t.w != nil)
+		t.w.lock(cp.cmdc);
 	allwindows(Edit->ALLDECREF, nil);
 	dat->globalincref = 0;
 	loopstruct.w = nil;

@@ -414,6 +414,7 @@ growt(a: array of string, n: int): array of string
 
 build(d: ref Doc, c: ref Computed): ref Box
 {
+	nbuilt++;
 	curdoc = d;
 	root := d.root();
 	if(root == 0 || c.st[root] == nil)
@@ -16292,19 +16293,51 @@ clipshit(b: ref Box): int
 	return b.st.overflowx != Style->Ovisible || b.st.overflowy != Style->Ovisible;
 }
 
+# The boxes of the tree built last, by node: a page's scripts ask where
+# its elements are hundreds of times (getBoundingClientRect, observers),
+# and each asked walked every box (JSTOR's search results, 534 times).
+# Only build changes which boxes a tree has, so an index made after it
+# holds until the next.  One value, swapped whole, as sessions share
+# this module.
+Index: adt {
+	root:	ref Box;
+	gen:	int;
+	a:	array of list of ref Box;
+};
+index: ref Index;
+nbuilt := 0;	# builds so far
+
 boxes(root: ref Box, n: int): list of ref Box
 {
 	setdoc(root);
-	return collect(root, n, nil);
+	x := index;
+	if(x == nil || x.root != root || x.gen != nbuilt){
+		x = ref Index(root, nbuilt, nil);
+		x.a = array[maxnode(root, 0) + 1] of list of ref Box;
+		indexed(root, x.a);
+		index = x;
+	}
+	if(n < 0 || n >= len x.a)
+		return nil;
+	return x.a[n];
 }
 
-collect(b: ref Box, n: int, acc: list of ref Box): list of ref Box
+maxnode(b: ref Box, m: int): int
 {
-	if(b.node == n && b.kind != Ktext)
-		acc = b :: acc;
+	if(b.node > m)
+		m = b.node;
 	for(i := 0; i < len b.kids; i++)
-		acc = collect(b.kids[i], n, acc);
-	return acc;
+		m = maxnode(b.kids[i], m);
+	return m;
+}
+
+# each node's boxes as collect gives them
+indexed(b: ref Box, a: array of list of ref Box)
+{
+	if(b.node >= 0 && b.kind != Ktext)
+		a[b.node] = b :: a[b.node];
+	for(i := 0; i < len b.kids; i++)
+		indexed(b.kids[i], a);
 }
 
 kindnames := array[] of {"block", "inline", "text", "br", "replaced", "flex", "grid", "table", "row", "cell", "marker"};

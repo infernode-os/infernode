@@ -236,6 +236,10 @@ jobs:
         chmod +x tests/host/charon_shadowcheck_test.sh
         ROOT=. bash tests/host/charon_shadowcheck_test.sh
 
+    - name: Check an image a page's script puts in is fetched
+      run: |
+        chmod +x tests/host/charon_scriptimg_test.sh
+        ROOT=. bash tests/host/charon_scriptimg_test.sh
     - name: Check a web component laid out as a grid takes the page's areas
       run: |
         chmod +x tests/host/charon_shadowgrid_test.sh

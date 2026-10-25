@@ -1915,3 +1915,70 @@ mcptidycommas(s: string): string
 	}
 	return r;
 }
+
+# ---- What a loop tells the model (see agentlib.m) ----
+
+# A reply that ends a turn but should not: empty, or announcing a next
+# step it does not take ("Let me check the file:").  "" for one that is
+# a fine end.
+stopnudge(text: string, said: int): string
+{
+	t := strip(text);
+	if(t == "") {
+		if(said)
+			return "";	# it spoke aloud; nothing more is owed
+		return EMPTYNUDGE;
+	}
+	last := t;
+	for(i := len t - 1; i >= 0; i--)
+		if(t[i] == '\n') {
+			last = strip(t[i+1:]);
+			break;
+		}
+	lower := str->tolower(last);
+	if(last[len last - 1] == ':' || hasprefix(lower, "let me ") ||
+	   hasprefix(lower, "now let me ") || hasprefix(lower, "next, let me "))
+		return CONTINUENUDGE;
+	return "";
+}
+
+readonlytool(name: string): int
+{
+	case name {
+	"read" or "list" or "find" or "search" or "grep" or
+	"websearch" or "webfetch" or "spawn" =>
+		return 1;
+	}
+	return 0;
+}
+
+failureof(result: string): string
+{
+	if(hasprefix(result, "error:") || hasprefix(result, "ERROR:"))
+		return firstline(result);
+	(nil, st) := str->splitstrl(result, "status: failed");
+	if(hasprefix(result, "<gate>") && st != nil) {
+		# the compiler's first diagnostic
+		(nil, after) := str->splitstrl(result, "stderr:\n");
+		if(after != nil)
+			return firstline(after[len "stderr:\n":]);
+		return "status: failed";
+	}
+	return nil;
+}
+
+firstline(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			return s[0:i+1];
+	return s;
+}
+
+samefailurenote(n: int): string
+{
+	return sys->sprint("\n\n[harness: this call has now failed %d times this turn with the same " +
+		"error, so the changes made between them are not fixing it.  Read the error again " +
+		"and change the approach; if you cannot fix it, stop and tell the user plainly " +
+		"that it still fails, and why.]", n);
+}

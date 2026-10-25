@@ -19,6 +19,7 @@
 #	edit	read a file, change every line that needs it, say how many
 #	spawn	a child agent reads a file with its own tool call
 #	write	a file longer than one short reply, written whole
+#	fanout	two children at once, one of them several steps deep
 
 set -e
 . "$(dirname "$0")/common.sh"
@@ -30,7 +31,7 @@ for f in dis/veltro/veltrosrv.dis dis/veltro/tools9p.dis dis/llmsrv.dis; do
 	[ -f "$ROOT/$f" ] || { echo "SKIP: $f not built"; exit 77; }
 done
 MODEL=${VELTRO_LIVE_MODEL:-haiku}
-SCENARIOS="edit spawn write"
+SCENARIOS="edit spawn write fanout"
 [ $# -gt 0 ] && SCENARIOS="$*"
 
 WORK="$(mktemp -d)"
@@ -54,6 +55,7 @@ task() {
 	edit)	echo 'The file /usr/live/notes.txt uses British spelling. Change colour to color everywhere in it, leaving everything else as it is, then tell me how many lines you changed.' ;;
 	spawn)	echo 'Use the spawn tool to start one child agent, with the read tool and the path /usr/live, whose task is to read /usr/live/secret.txt and report the word in it. Then tell me the word the child reported.' ;;
 	write)	echo 'Write a file /usr/live/numbers.txt containing the numbers 1 to 1500, one per line, nothing else. Then check its last line.' ;;
+	fanout)	echo 'In one spawn call start two child agents, each with the read and list tools and the path /usr/live. The first child: list /usr/live/maze, where every file names the next file to read, starting at start.txt; follow the chain to its end and report the word in the last file. The second child: read /usr/live/secret.txt and report its word. Then tell me both words.' ;;
 	esac
 }
 
@@ -69,6 +71,11 @@ echo 'Nothing here.' >> /usr/live/notes.txt
 echo 'A colour chart, and colours.' >> /usr/live/notes.txt
 echo 'Last line, no colour words? colour.' >> /usr/live/notes.txt
 echo 'tangerine' > /usr/live/secret.txt
+mkdir -p /usr/live/maze
+echo 'next: b.txt' > /usr/live/maze/start.txt
+echo 'next: c.txt' > /usr/live/maze/b.txt
+echo 'next: d.txt' > /usr/live/maze/c.txt
+echo 'the word is: periwinkle' > /usr/live/maze/d.txt
 bind -a '#I' /net
 ndb/cs
 llmsrv -b openai -u $VELTRO_LIVE_URL -M $MODEL &
@@ -125,6 +132,10 @@ EOF
 	spawn)
 		echo "$reply" | grep -qi tangerine || { fail "spawn: the word is not in the reply"; echo "$reply"; }
 		sed -n '/^== log$/,/^--- END$/p' "$LOG" | grep -q 'tool spawn' || fail "spawn: spawn was not called"
+		;;
+	fanout)
+		echo "$reply" | grep -qi tangerine || { fail "fanout: the second child's word is not in the reply"; echo "$reply"; }
+		echo "$reply" | grep -qi periwinkle || { fail "fanout: the end of the chain is not in the reply"; echo "$reply"; }
 		;;
 	write)
 		nums=$(sed -n '/^--- NUMBERS$/,/^DRIVER_DONE$/p' "$LOG")

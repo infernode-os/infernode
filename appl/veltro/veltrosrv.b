@@ -552,11 +552,9 @@ pretoolapproval(s: ref Session, callid, toolname, args: string): string
 # one file sixteen times, failing on the same line each time, reached the
 # step limit, and told the user it compiled.  At the third, the result
 # says so.
-SAMEFAILURES: con 3;
-
 samefailure(s: ref Session, name, args, result: string): string
 {
-	why := failureof(result);
+	why := s.al->failureof(result);
 	if(why == nil)
 		return "";
 	key := name + " " + args + "\n" + why;
@@ -570,30 +568,10 @@ samefailure(s: ref Session, name, args, result: string): string
 			seen = hd l :: seen;
 	}
 	s.failseen = (key, n) :: seen;
-	if(n != SAMEFAILURES)
+	if(n != AgentLib->SAMEFAILURES)
 		return "";
 	log(s, sys->sprint("tool %s: the same failure %d times this turn", name, n));
-	return sys->sprint("\n\n[harness: this call has now failed %d times this turn with the same " +
-		"error, so the changes made between them are not fixing it.  Read the error again " +
-		"and change the approach; if you cannot fix it, stop and tell the user plainly " +
-		"that it still fails, and why.]", n);
-}
-
-# What a failed result says, the same each time it fails the same way; nil
-# for a result that is not a failure.
-failureof(result: string): string
-{
-	if(hasprefix(result, "error:") || hasprefix(result, "ERROR:"))
-		return firstlines(result, 1);
-	(nil, st) := str->splitstrl(result, "status: failed");
-	if(hasprefix(result, "<gate>") && st != nil) {
-		# the compiler's first diagnostic
-		(nil, after) := str->splitstrl(result, "stderr:\n");
-		if(after != nil)
-			return firstlines(after[len "stderr:\n":], 1);
-		return "status: failed";
-	}
-	return nil;
+	return s.al->samefailurenote(n);
 }
 
 # Track consecutive failures of one tool; after MAX_TOOL_FAILURES the
@@ -645,15 +623,6 @@ updatefailstreak(s: ref Session, tools: list of (string, string, string),
 # concurrently, and a call that changes something runs alone, after
 # those before it (exectools).  spawn is read-only here: its children
 # run concurrently inside the one call already.
-readonlytool(name: string): int
-{
-	case name {
-	"read" or "list" or "find" or "search" or "grep" or
-	"websearch" or "webfetch" or "spawn" =>
-		return 1;
-	}
-	return 0;
-}
 
 calltoolworker(s: ref Session, name, args: string, resultch: chan of string)
 {
@@ -865,9 +834,9 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 		dup := 0;
 		for(tr := torun; tr != nil; tr = tl tr) {
 			(nil, tn, ta) := hd tr;
-			if(!readonlytool(str->tolower(tn)))
+			if(!s.al->readonlytool(str->tolower(tn)))
 				break;
-			if(str->tolower(tn) == nm && ta == args && readonlytool(nm)) {
+			if(str->tolower(tn) == nm && ta == args && s.al->readonlytool(nm)) {
 				dup = 1;
 				break;
 			}
@@ -894,7 +863,7 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 		rev = hd torun :: rev;
 	group: list of ref Call;	# read-only calls running, reversed
 	for(pc := rev; ; pc = tl pc) {
-		if(pc == nil || !readonlytool(str->tolower(nameof(hd pc)))) {
+		if(pc == nil || !s.al->readonlytool(str->tolower(nameof(hd pc)))) {
 			# collect the group, in order
 			inorder: list of ref Call;
 			for(; group != nil; group = tl group)
@@ -941,45 +910,6 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 }
 
 # ---- The turn ----
-
-# What the model is told when its turn went wrong in a way it can put
-# right.  At most MAXNUDGES a turn, so a model that keeps doing it ends
-# the turn as before.
-MAXNUDGES: con 2;
-CUTCALL: con "error: not run: your reply reached the output limit while this call was being " +
-	"written, so its arguments may be cut off.  Send the call again, complete.  If it is " +
-	"a large write, write the file in smaller parts.";
-CUTTEXT: con "[harness: your reply was cut off at the output limit.  Continue exactly where " +
-	"it stopped; do not repeat what you already wrote.]";
-EMPTYNUDGE: con "[harness: your reply was empty.  Answer the user, or make the tool call you " +
-	"meant to make.]";
-CONTINUENUDGE: con "[harness: you said what you would do next, but made no tool call, so " +
-	"nothing was done.  If there is more to do, make the call now; if the work is " +
-	"finished, say so plainly.]";
-
-# A reply that ends a turn but should not: empty, or announcing a next
-# step it does not take ("Let me check the file:").  "" for one that is
-# a fine end.
-stopnudge(text: string, said: int): string
-{
-	t := strip(text);
-	if(t == "") {
-		if(said)
-			return "";	# it spoke aloud; nothing more is owed
-		return EMPTYNUDGE;
-	}
-	last := t;
-	for(i := len t - 1; i >= 0; i--)
-		if(t[i] == '\n') {
-			last = strip(t[i+1:]);
-			break;
-		}
-	lower := str->tolower(last);
-	if(last[len last - 1] == ':' || hasprefix(lower, "let me ") ||
-	   hasprefix(lower, "now let me ") || hasprefix(lower, "next, let me "))
-		return CONTINUENUDGE;
-	return "";
-}
 
 # The messages written to input while the turn ran, joined, and the queue
 # emptied.  The serving process owns the queue.
@@ -1184,14 +1114,14 @@ turn(s: ref Session, input: string)
 				rev: list of (string, string);
 				for(tc := tools; tc != nil; tc = tl tc) {
 					(id, nil, nil) := hd tc;
-					rev = (id, CUTCALL) :: rev;
+					rev = (id, AgentLib->CUTCALL) :: rev;
 				}
 				prompt = s.al->buildtoolresults(reverse(rev));
 				continue;
 			}
-			if(nudges < MAXNUDGES) {
+			if(nudges < AgentLib->MAXNUDGES) {
 				nudges++;
-				prompt = CUTTEXT;
+				prompt = AgentLib->CUTTEXT;
 				continue;
 			}
 		}
@@ -1206,8 +1136,8 @@ turn(s: ref Session, input: string)
 			# A turn that ended where it should not have: nothing said
 			# and nothing done, or the next step announced and not
 			# taken.  The model is told, once or twice a turn.
-			if(stopreason != "max_tokens" && nudges < MAXNUDGES) {
-				nudge := stopnudge(text, s.said);
+			if(stopreason != "max_tokens" && nudges < AgentLib->MAXNUDGES) {
+				nudge := s.al->stopnudge(text, s.said);
 				if(nudge != "") {
 					nudges++;
 					log(s, "harness: nudge: " + s.al->truncate(nudge, 80));

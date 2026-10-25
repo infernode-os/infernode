@@ -1046,8 +1046,10 @@ parsespecsection(section: string): (ref SubSpec, string)
 
 	if(llmsystem == "" && agenttype != "")
 		llmsystem = loadagentprompt(agenttype);
-	if(llmsystem == "")
-		llmsystem = loadagentprompt("default");
+	# As the JSON form: no default.txt, whose text-protocol instructions
+	# (the tool's name as the first word, DONE at the end) are wrong for a
+	# child called with native tool definitions; the subagent's own
+	# default applies.
 
 	spec.llmconfig = ref NsConstruct->LLMConfig(llmmodel, llmtemp, llmsystem, llmthink);
 	return (spec, "");

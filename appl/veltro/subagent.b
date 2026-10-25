@@ -37,7 +37,6 @@ include "tool.m";
 include "subagent.m";
 
 # Configuration
-STREAM_THRESHOLD: con 32768;	# as veltrosrv's INLINEMAX
 # Under /tmp/veltro — the subtree nsconstruct keeps writable post-restriction
 # (plain /tmp/scratch isn't creatable in the child's restricted namespace).
 SCRATCH_PATH: con "/tmp/veltro/scratch";
@@ -208,6 +207,9 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	}
 
 	loopstart := sys->millisec();
+	nudges := 0;
+	lasttext := "";		# what it last said, for a result if it says nothing more
+	failseen: list of (string, int);	# a call and its failure, how often
 	cuts := 0;
 	partial := "";	# a reply cut off by the output limit, continued
 	for(step := 0; step < maxsteps; step++) {
@@ -234,19 +236,32 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 				cut: list of (string, string);
 				for(tc := tcalls; tc != nil; tc = tl tc) {
 					(id, nil, nil) := hd tc;
-					cut = (id, CUTCALL) :: cut;
+					cut = (id, AgentLib->CUTCALL) :: cut;
 				}
 				prompt = agentlib->buildtoolresults(revresults(cut));
 				continue;
 			}
 			if(cuts++ < MAXCUTS) {
 				partial += text;
-				prompt = CUTTEXT;
+				prompt = AgentLib->CUTTEXT;
 				continue;
 			}
 		}
 		if(partial != "")
 			text = partial + text;
+
+		# Ended where it should not have: an empty reply, or a step
+		# announced and not taken.  Told, at most MAXNUDGES times.
+		if((stopreason != "tool_use" || tcalls == nil) && nudges < AgentLib->MAXNUDGES) {
+			nudge := agentlib->stopnudge(text, 0);
+			if(nudge != "") {
+				nudges++;
+				if(text != "")
+					lasttext = text;
+				prompt = nudge;
+				continue;
+			}
+		}
 
 		# Turn complete: the model's text IS the subagent's result.
 		if(stopreason != "tool_use" || tcalls == nil) {
@@ -255,22 +270,43 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 				array of byte text);
 			if(text != "")
 				return text;
+			if(lasttext != "")
+				return lasttext;
 			return "ERROR:subagent produced no answer";
 		}
 
 		# Intermediate step: dispatch the requested tool calls against the
 		# pre-loaded tool modules and feed results back. (A child whose session
 		# has no tools registered won't reach here — it just answers above.)
+		if(text != "")
+			lasttext = text;
 		results: list of (string, string);
 		for(tc := tcalls; tc != nil; tc = tl tc) {
 			(id, name, targs) := hd tc;
 			prov("subtool", sys->sprint("agent=%s step=%d tool=%s", provid, step + 1, name),
 				array of byte targs);
-			result := calltool(name, targs);
+			result := boundedcall(name, targs);
+			# The same call failing the same way, again: said, as the
+			# parent's loop says it.
+			if((why := agentlib->failureof(result)) != nil) {
+				key := name + " " + targs + "\n" + why;
+				n := 1;
+				seen: list of (string, int);
+				for(fl := failseen; fl != nil; fl = tl fl) {
+					(k, c) := hd fl;
+					if(k == key)
+						n = c + 1;
+					else
+						seen = hd fl :: seen;
+				}
+				failseen = (key, n) :: seen;
+				if(n == AgentLib->SAMEFAILURES)
+					result += agentlib->samefailurenote(n);
+			}
 			logstep(step + 1, name, targs, result);
 			prov("subtoolres", sys->sprint("agent=%s step=%d tool=%s", provid, step + 1, name),
 				array of byte result);
-			if(len result > STREAM_THRESHOLD) {
+			if(len result > AgentLib->STREAM_THRESHOLD) {
 				# The start stays inline, so the child has something to
 				# act on, and it is told where the rest is.
 				scratchfile := writescratch(result, step);
@@ -287,16 +323,46 @@ runloop(task: string, tools: list of Tool, toolnames: list of string,
 	sys->fprint(stderr, "subagent: max steps reached after %dms\n", totaltime);
 	logfooter("max-steps", maxsteps, totaltime);
 	prov("subdone", sys->sprint("agent=%s steps=%d status=max-steps", provid, maxsteps), nil);
+	# What it had found is the parent's to use, with the reason it stopped.
+	if(lasttext != "")
+		return sys->sprint("ERROR:max steps (%d) reached without completion.  It last said:\n%s",
+			maxsteps, lasttext);
 	return sys->sprint("ERROR:max steps (%d) reached without completion", maxsteps);
+}
+
+# A tool call, bounded: one that does not answer in TOOL_TIMEOUT is
+# answered as timed out, and the child goes on.  A child had no bound, and
+# one hung call held it, and its parent's spawn, until spawn's own
+# timeout gave up on all of it.
+TOOL_TIMEOUT: con 150000;	# as veltrosrv's
+
+boundedcall(name, args: string): string
+{
+	rc := chan[1] of string;
+	tc := chan[1] of int;
+	spawn callworker(name, args, rc);
+	spawn timer(tc, TOOL_TIMEOUT);
+	alt {
+	r := <-rc =>
+		return r;
+	<-tc =>
+		return sys->sprint("error: tool '%s' timed out after %d seconds", name, TOOL_TIMEOUT / 1000);
+	}
+}
+
+callworker(name, args: string, rc: chan of string)
+{
+	rc <-= calltool(name, args);
+}
+
+timer(c: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	c <-= 1;
 }
 
 MAXCUTS: con 2;
 SPILLPREVIEW: con 400;
-CUTCALL: con "error: not run: your reply reached the output limit while this call was being " +
-	"written, so its arguments may be cut off.  Send the call again, complete.  If it is " +
-	"a large write, write the file in smaller parts.";
-CUTTEXT: con "[harness: your reply was cut off at the output limit.  Continue exactly where " +
-	"it stopped; do not repeat what you already wrote.]";
 
 firstlines(s: string, n: int): string
 {
@@ -403,8 +469,12 @@ discovernamespace(toolnames: list of string): string
 # Assemble system prompt with namespace and task
 assembleprompt(task, ns, systemprompt: string): string
 {
+	# A system prompt given is the session's own (spawn wrote it): sent
+	# again here, the child had it twice.  Without one, the default is
+	# the head of the task's message.
+	head := "";
 	if(systemprompt == "")
-		systemprompt = defaultsystemprompt();
+		head = defaultsystemprompt() + "\n\n";
 
 	# Get tool documentation — read txt files directly (upfront composition,
 	# no on-demand help). Falls back to module doc() if no txt file exists.
@@ -422,7 +492,7 @@ assembleprompt(task, ns, systemprompt: string): string
 		modlist = tl modlist;
 	}
 
-	prompt := systemprompt + "\n\n== Your Namespace ==\n" + ns +
+	prompt := head + "== Your Namespace ==\n" + ns +
 		"\n\n== Tool Documentation ==\n" + tooldocs +
 		"\n\n== Task ==\n" + task +
 		"\n\nComplete the task and provide your final answer directly.";

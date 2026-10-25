@@ -2,10 +2,12 @@
 # matrix.sh — Cross-model compatibility harness for the Veltro agent stack.
 #
 # GOAL: confirm the InferNode agent harness works with each model family
-# (gpt-oss, mistral, qwen, glm) and surface any MODEL-FAMILY-SPECIFIC breakage
+# (gpt-oss, mistral, qwen) and surface any MODEL-FAMILY-SPECIFIC breakage
 # (tool-call emission/parsing, arg formats, output discipline, agentic paths).
 # This is a COMPATIBILITY check, not fine-tuning. gpt-oss + mistral are the
-# known-good baselines; qwen3.6 + GLM-4-32B are the new entrants.
+# known-good baselines; qwen3.6 is the newer entrant. GLM was dropped on
+# 2026-10-25: it patterned like gpt-oss, and its local model was out of
+# date (docs/EDGE-LLM.md, "Licences").
 #
 # Design (learned from INFR-349 / INFR-353):
 #   - ONE emu, ONE mount of /mnt/llm for the whole matrix (no per-run remount).
@@ -32,7 +34,7 @@ HEPH="tcp!10.147.17.120!5640"
 REPS="${REPS:-2}"
 
 # ── Models under test (exact ollama tags; veltro -m writes these per-session) ──
-MODELS="${MODELS:-gpt-oss:20b mistral-small3.2:24b qwen3.6:27b hf.co/unsloth/GLM-4-32B-0414-GGUF:Q4_K_M}"
+MODELS="${MODELS:-gpt-oss:20b mistral-small3.2:24b qwen3.6:27b}"
 
 # ── Toolset the agent gets (covers every dimension below) ──
 TOOLSET="read,list,find,search,grep,exec,plan,todo,gap,present,spawn"

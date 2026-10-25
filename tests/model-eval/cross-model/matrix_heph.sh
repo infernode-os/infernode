@@ -21,7 +21,7 @@ LOCAL="$(cd "$(dirname "$0")" && pwd)"
 LOCALLOG="$LOCAL/matrix-heph-logs${TAG:+-$TAG}"   # local fetch dir (TAG keeps runs separate)
 
 REPS="${REPS:-1}"
-MODELS="${MODELS:-gpt-oss:20b mistral-small3.2:24b qwen3.6:27b hf.co/unsloth/GLM-4-32B-0414-GGUF:Q4_K_M}"
+MODELS="${MODELS:-gpt-oss:20b mistral-small3.2:24b qwen3.6:27b}"
 TOOLSET="read,list,find,search,grep,exec,plan,todo,gap,present,spawn"
 
 read -r -d '' TASKS <<'TASKS_EOF'

@@ -7,6 +7,10 @@ emission/parsing, arg formats, output discipline, reasoning-token leakage).
 
 This is a **compatibility** check, not fine-tuning. gpt-oss + mistral are the
 known-good baselines; qwen3.6 + GLM-4-32B were the new entrants validated here.
+GLM was dropped from the defaults on 2026-10-25: it patterned like gpt-oss, so
+it found nothing the baselines did not, and `GLM-4-32B-0414` was eighteen
+months old with no current local successor of a size worth testing
+(`docs/EDGE-LLM.md`, "Licences"). The June results below still show it.
 
 ## Files
 - `matrix.sh` — generator + launcher for running **locally** (laptop emu mounts
@@ -19,7 +23,7 @@ known-good baselines; qwen3.6 + GLM-4-32B were the new entrants validated here.
 
 ## Usage (hephaestus loopback — the reliable path)
 ```sh
-# full matrix (4 models x 7 tasks x REPS)
+# full matrix (3 models x 7 tasks x REPS)
 REPS=1 sh matrix_heph.sh launch
 sh matrix_heph.sh status            # poll until done
 sh matrix_heph.sh fetch             # pull logs locally + run metrics
@@ -27,7 +31,7 @@ sh matrix_heph.sh fetch             # pull logs locally + run metrics
 # focused re-run of specific cells, separate log dir
 REPS=3 ONLY="t4_verify t5_research" TAG=reps3 sh matrix_heph.sh launch
 ```
-Models default to: `gpt-oss:20b mistral-small3.2:24b qwen3.6:27b hf.co/unsloth/GLM-4-32B-0414-GGUF:Q4_K_M`
+Models default to: `gpt-oss:20b mistral-small3.2:24b qwen3.6:27b`
 (override with `MODELS=`). Model-OUTER ordering keeps each model resident in
 ollama (`OLLAMA_MAX_LOADED_MODELS=1`) to avoid 17–19 GB reloads.
 

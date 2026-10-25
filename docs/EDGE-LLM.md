@@ -136,7 +136,8 @@ Settled with the project owner:
   fielding AI. Those belong to whoever deploys it.
 
 **Testing is not using** (settled the same day). `tests/model-eval/`
-keeps testing Qwen and GLM. They are popular for running models
+keeps testing Qwen. GLM was tested too, and has since been dropped from
+the matrix; the reasons are below. They are popular for running models
 locally, so a user may well choose one under the installer's "Custom",
 and the harness should work with what users run. InferNode does not
 recommend, default to or ship them.
@@ -147,7 +148,7 @@ publishers' pages and Ollama's library):
 | family | in the matrix | current | small / phone-sized | licence |
 |-|-|-|-|-|
 | Qwen | `qwen3.6:27b` (April 2026) | Qwen3.8-27B (August 2026): vision, thinking **on by default** at `xhigh` ([card](https://huggingface.co/Qwen/Qwen3.8-27B)) | Qwen3.5 0.8B, 2B, 4B, 9B (February–March 2026): vision, tools, thinking off by default for the small ones ([2B card](https://huggingface.co/Qwen/Qwen3.5-2B)); 1.2GB, ~3GB and ~3.5GB in Ollama | Apache 2.0 |
-| GLM (Zhipu, as Z.ai) | `GLM-4-32B-0414` (April 2025) | GLM-5.x is 321B–753B and only in Ollama's cloud; locally, GLM-4.7-Flash, a 30B mixture of experts with 3B active per token: tools, thinking ([card](https://huggingface.co/zai-org/GLM-4.7-Flash)) | none: Zhipu publishes no current chat model under 9B (GLM-OCR at 1B reads documents only) | MIT |
+| GLM (Zhipu, as Z.ai) | `GLM-4-32B-0414` (April 2025); **dropped 2026-10-25** | GLM-5.x is 321B–753B and only in Ollama's cloud; locally, GLM-4.7-Flash, a 30B mixture of experts with 3B active per token: tools, thinking ([card](https://huggingface.co/zai-org/GLM-4.7-Flash)) | none: Zhipu publishes no current chat model under 9B (GLM-OCR at 1B reads documents only) | MIT |
 
 How popular, by Ollama pulls ([library](https://ollama.com/library?sort=popular)):
 the Qwen families together have well over 100M, more than any other
@@ -159,7 +160,13 @@ publisher's apart from Llama's (`qwen2.5` 43.6M, `qwen3` 41.5M, `qwen3.5`
 Zhipu has been on the US Entity List since January 2025
 ([Bloomberg](https://www.bloomberg.com/news/articles/2025-01-16/us-blacklists-tencent-backed-ai-startup-as-tech-curbs-deepen)).
 That restricts exports *to* Zhipu, not downloading its published
-weights. It is one more reason GLM stays a test subject only.
+weights.
+
+**GLM was dropped from the matrix (2026-10-25).** In June it behaved
+like gpt-oss (`tests/model-eval/cross-model/README.md`), so it found
+nothing the baselines did not. Its model there was eighteen months old.
+The current local successor, GLM-4.7-Flash, sees little use, and Zhipu
+publishes no small model to test the edge case with.
 
 One note on
 Gemma: Google's site still links its 2024 Prohibited Use Policy from

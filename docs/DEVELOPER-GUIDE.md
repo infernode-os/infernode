@@ -219,8 +219,10 @@ llmsrv failed to start. Common causes:
 - **No API key:** Add one via Keyring, or set `ANTHROPIC_API_KEY` env var
 - **Wrong backend:** Check `~/.infernode/lib/ndb/llm` — `backend=openai`
   needs a URL like `http://127.0.0.1:11434/v1` (not `localhost`)
-- **Model doesn't support tools:** Use a tool-capable model (llama3.2,
-  qwen2.5, mistral) — llama2 does not support tools and returns empty
+- **Model doesn't support tools:** Use a tool-capable model (granite4,
+  ministral-3, gpt-oss, mistral-small3.2; see `docs/EDGE-LLM.md`,
+  "Licences", for which models InferNode uses) — llama2 does not support
+  tools and returns empty
 
 ### Login Asks for Password Setup Again
 

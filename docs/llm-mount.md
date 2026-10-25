@@ -24,7 +24,7 @@ Backend and model can be configured via flags:
 llmsrv &
 
 # Ollama / OpenAI-compatible
-llmsrv -b openai -u http://localhost:11434/v1 -M qwen3-coder:30b &
+llmsrv -b openai -u http://localhost:11434/v1 -M gpt-oss:20b &
 ```
 
 The Settings app (`LLM Service` category) provides a GUI for this configuration.

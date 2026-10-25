@@ -109,9 +109,38 @@ candidates.** Three of its terms bear on this project:
 
 **The Apache-licensed models have none of this.** Gemma 4 E2B, Ministral
 3 3B and Granite 4.0 Micro are tool-calling models of the same class as
-Llama 3.2 3B. **Recommendation:** make the on-device default an Apache
-2.0 model, chosen by the model-eval run (step 2 under "Order of work"),
-and keep Llama 3.2 3B as the baseline it has to match. One note on
+Llama 3.2 3B.
+
+### Decision (2026-10-25): clean licences only
+
+Settled with the project owner:
+
+- **InferNode uses, recommends, defaults to and offers only models
+  whose licence permits military and tactical use without
+  conditions:** Apache 2.0 or MIT, with no use policy beyond complying
+  with the law. This adds to the May rules (open weights; no
+  Chinese-origin models) and does not replace them.
+- **Eligible now:** Ministral 3 (`-2512`), Mistral Small 3.2, Mistral
+  NeMo, Granite 4.0, SmolLM3, Phi-4-mini, GPT-OSS; Gemma 4 on the texts,
+  with the Prohibited Use Policy's scope confirmed before it ships.
+- **Out:** Llama, every version (its AUP), and not kept as a baseline
+  either; Gemma 3, 3n and earlier; Ministral `-2410`; LFM2; and, as
+  before, Qwen, DeepSeek and GLM.
+- **The device default is chosen by the model-eval run** (step 2 under
+  "Order of work") from the eligible set. Until then the installers
+  offer `granite4:micro` (2.1GB in Ollama, text only, the nearest in
+  size to the `llama3.2:3b` they offered), `ministral-3:8b` and
+  `gpt-oss:20b`.
+- **A licence is only the first gate.** It does not settle export
+  control, ITAR on the *application*, or a service's own rules for
+  fielding AI. Those belong to whoever deploys it.
+
+Still open: `tests/model-eval/cross-model/` runs Qwen and GLM by
+default, to find harness bugs that recur across model families. That
+is testing, not shipping or recommending. Whether the rule covers it is
+the owner's call.
+
+One note on
 Gemma: Google's site still links its 2024 Prohibited Use Policy from
 the Gemma 4 pages, and that policy's own scope is just "Gemma". The
 Gemma 4 licence text is plain Apache 2.0 and the Gemma Terms of Use list
@@ -130,8 +159,13 @@ weights, and modified files marked as modified, which a fine-tune is.
 **Size check for the 4GB boards.** Gemma 4 E2B is 2.3B effective
 parameters but 5.1B with its embeddings ([card](https://huggingface.co/google/gemma-4-E2B-it)).
 Google's own runtime lists it at 2.58GB ([LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)).
-How much an engine that loads every tensor needs is a measurement for
-step 1. On a 4GB Pi 4 it may not leave room for a useful KV cache.
+Ollama's `gemma4:e2b` (Q4_K_M, with its vision and audio parts) is
+4.6GB, and `ministral-3:3b` (with its vision encoder) is 3.0GB;
+`granite4:micro` is 2.1GB, and `granite4:micro-h` (the hybrid) 1.9GB
+([Ollama](https://ollama.com/library/granite4/tags)). On a 4GB Pi 4,
+Granite 4.0 Micro is the clean 3B-class model that leaves room for a KV
+cache. A text-only conversion of the other two is a measurement for
+step 1.
 
 ## The three placements
 
@@ -334,7 +368,7 @@ can then reach is what was bound in front of it, and nothing else.
 | Pi 3B+ (bare metal) | P1 | — | — | 1GB |
 | RISC-V (`virt`, PolarFire) | P1 | — | — | no vector unit on the U54s |
 | Android | P1, or P2 via Termux | P2 in-process | 1B–3B; Gemma 4 E2B | loopback key (P2 rule 5) matters most here |
-| iOS | P1 | P2 in-process | Llama 3.2 3B (proven via SwiftLM, as the baseline); Gemma 4 E2B, Ministral 3 3B to try | `-c0` does not matter to inference, which is native; the memory entitlement does |
+| iOS | P1 | P2 in-process | Granite 4.0 Micro, Ministral 3 3B, Gemma 4 E2B to try (SwiftLM was proven with Llama 3.2 3B, now out: prove it again with one of these) | `-c0` does not matter to inference, which is native; the memory entitlement does |
 
 ## Order of work
 
@@ -342,8 +376,8 @@ Each step is useful on its own and none needs the next. The proposed
 INFR tickets are not filed yet.
 
 1. **Measure.** `llama-bench -p 512 -n 128` on a Pi 5 and a Pi 4 under
-   Pi OS for Llama 3.2 1B/3B, Gemma 4 E2B, Ministral 3 3B and Granite
-   4.0 Micro, with each model's resident memory. Then the
+   Pi OS for Granite 4.0 Micro (and its hybrid), Ministral 3 3B, Gemma 4
+   E2B, Phi-4-mini and SmolLM3, with each model's resident memory. Then the
    number that matters: time to the first token for Veltro's real
    prompt through `/mnt/llm`, first turn and second, which shows whether
    prefix caching works through llmsrv.

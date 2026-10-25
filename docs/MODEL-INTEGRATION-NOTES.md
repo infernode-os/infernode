@@ -7,6 +7,11 @@ ones that don't.
 
 ## Current status (2026-05-01)
 
+*Since 2026-10-25 InferNode uses and recommends only models whose licence
+permits military and tactical use without conditions, and none of
+Chinese origin (`docs/EDGE-LLM.md`, "Licences"). `qwen2.5:32b` below is
+kept as a record of what was tested, not as a recommendation.*
+
 Since 2026-05-05 (`de3182ca`), `appl/lib/llmclient.b` recovers tool calls
 whose `[TOOL_CALLS]` / `<SPECIAL_66>` marker leaks into content
 (`trytoolcallsarray()` in the fallback text parser). Bare JSON with no

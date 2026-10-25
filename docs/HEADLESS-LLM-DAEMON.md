@@ -139,15 +139,18 @@ Any Ollama model that supports the OpenAI-compatible chat-completions
 shape will work. Tool-capable models are recommended if you intend to
 drive the service from Veltro (the InferNode agent harness), since
 Veltro relies on function-calling. As of this writing, the following
-are reasonable choices:
+are reasonable choices. All are Apache 2.0, whose terms permit any
+lawful use, military and tactical included; InferNode recommends no
+model whose licence restricts that ([EDGE-LLM.md](EDGE-LLM.md),
+"Licences"):
 
 | Model | Approx. size at q4 | Notes |
 |---|---|---|
 | `mistral-nemo` | 7 GB | 12B parameters, 128 K context |
+| `ministral-3:8b` | 6 GB | Mistral 3 dense, vision and tool use; small footprint |
 | `ministral-3:14b` | 9 GB | Mistral 3 dense, vision and tool use |
+| `gpt-oss:20b` | 14 GB | OpenAI; a known-good baseline in `tests/model-eval/cross-model/` |
 | `mistral-small3.2:24b` | 14 GB | improved function-calling per Mistral release notes |
-| `qwen2.5:14b` | 8 GB | reliable tool use, well-tested |
-| `llama3.1:8b` | 5 GB | small footprint, broad familiarity |
 
 Pull one (the rest of the tutorial assumes `mistral-small3.2:24b`):
 
@@ -498,7 +501,7 @@ Two distinct failure modes have produced this symptom:
 2. **Tool-call retry exhaustion.** When the consumer is Veltro, a
    model that emits malformed `tool_calls` blocks the agent loop after
    N consecutive failures. Switch the session to a model with stronger
-   function-calling discipline (`mistral-small3.2`, `qwen2.5:14b`).
+   function-calling discipline (`mistral-small3.2`, `gpt-oss:20b`).
 
 ### "post-merge: mk not found"
 

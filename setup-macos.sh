@@ -230,9 +230,11 @@ setup_ollama() {
     printf "\n"
     printf "Choose a model to download:\n"
     printf "\n"
-    printf "  ${BOLD}1)${RESET} llama3.2:3b   ${DIM}(~2 GB — fast, good for most tasks)${RESET}\n"
-    printf "  ${BOLD}2)${RESET} llama3.1:8b   ${DIM}(~5 GB — better quality, needs 8+ GB RAM)${RESET}\n"
-    printf "  ${BOLD}3)${RESET} qwen2.5:7b    ${DIM}(~4 GB — strong reasoning, good tool use)${RESET}\n"
+    # Only models whose licence permits any lawful use, military and
+    # tactical included: Apache 2.0 or MIT (docs/EDGE-LLM.md, "Licences").
+    printf "  ${BOLD}1)${RESET} granite4:micro ${DIM}(~2 GB — fast, IBM, Apache 2.0)${RESET}\n"
+    printf "  ${BOLD}2)${RESET} ministral-3:8b ${DIM}(~6 GB — better quality, needs 8+ GB RAM; Mistral, Apache 2.0)${RESET}\n"
+    printf "  ${BOLD}3)${RESET} gpt-oss:20b    ${DIM}(~14 GB — strongest tool use, needs 16+ GB RAM; OpenAI, Apache 2.0)${RESET}\n"
     printf "  ${BOLD}4)${RESET} Custom         ${DIM}(enter any Ollama model name)${RESET}\n"
     printf "\n"
 
@@ -241,9 +243,9 @@ setup_ollama() {
         read -r mchoice
         mchoice="${mchoice:-1}"
         case "$mchoice" in
-            1) MODEL="llama3.2:3b";  break ;;
-            2) MODEL="llama3.1:8b";  break ;;
-            3) MODEL="qwen2.5:7b";   break ;;
+            1) MODEL="granite4:micro"; break ;;
+            2) MODEL="ministral-3:8b"; break ;;
+            3) MODEL="gpt-oss:20b";    break ;;
             4)
                 printf "  Model name: "
                 read -r MODEL

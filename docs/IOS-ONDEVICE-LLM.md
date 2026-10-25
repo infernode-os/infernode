@@ -55,6 +55,12 @@ the whole MLX catalogue, are available to us.
 
 ## Recommended models (tested against the agent harness)
 
+> **Superseded 2026-10-25:** only models whose licence permits military and
+> tactical use without conditions are used now (Apache 2.0 or MIT). Llama is
+> out, so the on-device pick below is no longer one; the candidates and the
+> decision are in [EDGE-LLM.md](EDGE-LLM.md), "Licences". The observations
+> below stay as the record of what was tried.
+
 The MLX catalogue is open to us, with two hard constraints: **not every
 size works with the Veltro agent stack** (its system prompt carries the
 full tool-calling template, and very small models can't follow it), and

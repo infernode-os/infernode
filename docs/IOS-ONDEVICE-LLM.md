@@ -12,7 +12,9 @@ trade-offs. Nothing here is built yet.*
 > conforms to (the decisions below still hold); Gemma 4 E2B/E4B (Apache 2.0)
 > is a candidate the model list predates; and llama.cpp's CPU backend is now
 > mostly C++, which matters for the native kernel. Option A here is P2 there;
-> Option B is P3.
+> Option B is P3. The licensing line below is too broad: Llama's licence brings
+> in an Acceptable Use Policy that prohibits military use, and it requires a
+> fine-tune's name to begin with "Llama". See "Licences" there.
 
 ## Motivation: the seam already exists
 

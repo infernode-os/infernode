@@ -39,7 +39,7 @@ device. Three placements, one profile mechanism, one contract.
 | Tool narrowing | — | A spawned agent loads only its delegation budget's tools (INFR-486, `tests/host/spawn_budget_test.sh`). The mechanism a small-model profile needs already exists. |
 | Bare metal | Pi 3B+ only | Pi 4B on a board since 2026-10-15: four A72 cores, the JIT, 3.9GB usable, GENET at 932 Mbit/s in, the card at 19 MB/s (`os/bcm2711/README.md`). A machine you would run a 1–3B model on. |
 | Apple | Foundation Models rejected: closed weights | WWDC26: Foundation Models is now a **protocol**. Any engine conforming to `LanguageModel` is called the same way as Apple's, and MLX ships one (`MLXLanguageModel(modelID: "mlx-community/…")`) ([WWDC26 339](https://developer.apple.com/videos/play/wwdc2026/339/)). Apple's own on-device model was rebuilt, is "better at logic and tool calling", gained image input, and shows a context of 8192 ([WWDC26 241](https://developer.apple.com/videos/play/wwdc2026/241/)). Core AI succeeds Core ML ([InfoQ](https://infoq.com/news/2026/06/apple-core-ai-wwdc)). |
-| Models | Llama 3.2 3B on device; GPT-OSS 20B on a server | Add **Gemma 4 E2B/E4B** (Google, 2026-04-02, Apache 2.0, native function calling, aimed at phones and Pis) ([report](https://www.implicator.ai/google-releases-gemma-4-under-apache-2-0-dropping-its-custom-ai-license/)) and **Ministral 3 3B** (Mistral, an allowed family) to the candidates. |
+| Models | Llama 3.2 3B on device; GPT-OSS 20B on a server | Add **Gemma 4 E2B/E4B** (Google, 2026-04-02, Apache 2.0, native function calling, aimed at phones and Pis) ([report](https://www.implicator.ai/google-releases-gemma-4-under-apache-2-0-dropping-its-custom-ai-license/)), **Ministral 3 3B** (Mistral, an allowed family), **Granite 4.0 Micro**, **Phi-4-mini** and **SmolLM3** to the candidates. All are Apache 2.0 or MIT; Llama's licence is the most restrictive of the set ("Licences", below). |
 | Android engines | llama.cpp or "something" | llama.cpp has three Snapdragon backends: CPU, Adreno over OpenCL, and the Hexagon NPU ([llama.cpp docs](https://huggingface.co/datasets/echodict/llama.cpp/blob/main/docs/backend/snapdragon/README.md)). One user's report puts Hexagon at the CPU's speed but much cooler ([report](https://reddit.sentinel-team.org/posts/1t0k6fj/snapshots/2026-05-02T03%3A06%3A21.60641Z)). Google's LiteRT-LM runs Gemma 4 with function calling but has no official OpenAI-shaped server ([LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)). |
 | llama.cpp internals | "pure C/C++, links into the C build" | Its CPU backend is now mostly C++: 8 of the 10 top-level sources in `ggml/src/ggml-cpu` are `.cpp` ([tree](https://github.com/ggml-org/llama.cpp/tree/master/ggml/src/ggml-cpu)). Fine beside emu; not something to put in a kernel (P3 below). |
 
@@ -57,7 +57,81 @@ the C build the way `gpu.c` does". That is true for linking it into emu
 on a host. It is not true for the native kernel, and it is no longer
 pure C. Its "Allowed families" list predates Gemma 4's Apache 2.0
 release. Whether to add Gemma is the project owner's call; it is not
-Chinese-origin, so the stated exclusion does not cover it.
+Chinese-origin, so the stated exclusion does not cover it. And its
+licensing line, "clean for our use", holds for the Apache-licensed
+models but not for Llama, its on-device pick: see "Licences", below.
+
+## Licences
+
+*Checked 2026-10-25 against each model card and licence text, linked.
+A summary of what the texts say, not legal advice; a deployment for a
+government or defence user should have counsel read the licence
+itself.*
+
+What InferNode needs from a licence: to download the weights at
+install (pinned, hashed) or bundle them in the iOS and Android apps; to
+**fine-tune them and distribute the fine-tune** (the IOL pipeline);
+and to impose nothing on users that an MIT project cannot pass on. The
+project already ships a CNSA 2.0 mode, so government and defence users
+are in scope, and use restrictions matter as much as commercial ones.
+
+| model | from | licence | use restrictions | on a fine-tune | for InferNode |
+|-|-|-|-|-|-|
+| Gemma 4 E2B, E4B | Google | Apache 2.0 ([card](https://huggingface.co/google/gemma-4-E2B-it), [text](https://ai.google.dev/gemma/docs/gemma_4_license)) | none in the licence text | Apache's notices | **clean** |
+| Ministral 3 3B, 8B (`-2512`) | Mistral | Apache 2.0 ([3B](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512), [8B](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512)) | none | Apache's notices | **clean** |
+| Granite 4.0 Micro (3B) | IBM | Apache 2.0 ([card](https://huggingface.co/ibm-granite/granite-4.0-micro)) | none | Apache's notices | **clean** |
+| SmolLM3 3B | Hugging Face | Apache 2.0 ([card](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)) | none | Apache's notices | **clean** |
+| Phi-4-mini (3.8B) | Microsoft | MIT ([card](https://huggingface.co/microsoft/Phi-4-mini-instruct)) | none; trademarks per Microsoft's guidelines | MIT's notice | **clean** (no express patent grant, unlike Apache) |
+| GPT-OSS 20B | OpenAI | Apache 2.0, plus a policy of one sentence: comply with applicable law ([card](https://huggingface.co/openai/gpt-oss-20b), [policy](https://huggingface.co/openai/gpt-oss-20b/blob/main/USAGE_POLICY)) | none beyond the law | Apache's notices | **clean**; server-side |
+| Llama 3.2 1B, 3B | Meta | Llama 3.2 Community Licence ([card](https://huggingface.co/meta-llama/Llama-3.2-3B-Instruct)) | its Acceptable Use Policy, incorporated by reference, prohibits "Military, warfare, nuclear industries or applications, espionage", anything subject to ITAR, and "Operation of critical infrastructure, transportation technologies, or heavy machinery" ([AUP](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md)); a licence from Meta above 700M monthly users | the model's name **must begin with "Llama"**; "Built with Llama" displayed in the product | **usable, with conditions**; see below |
+| Gemma 3, 3n and earlier | Google | Gemma Terms of Use ([terms](https://ai.google.dev/gemma/terms)) | the Prohibited Use Policy, which must be passed on to recipients as an enforceable term; Google may restrict use "remotely or otherwise" | the same terms, a Notice file | **avoid**; Gemma 4 replaces them |
+| Ministral 3B, 8B (`-2410`) | Mistral | Mistral Research Licence ([card](https://huggingface.co/mistralai/Ministral-8B-Instruct-2410)) | no commercial use without a separate licence | — | **avoid**; the `-2410` and `-2512` names differ only in the suffix |
+| LFM2 | Liquid AI | LFM Open Licence v1.0 ([text](https://huggingface.co/LiquidAI/LFM2-1.2B/blob/main/LICENSE)) | commercial use only by entities under US$10M annual revenue; terminates automatically on any breach | — | **avoid**: an integrator over the threshold is unlicensed, and we cannot vet who that is |
+| Hailo AI HAT+ 2 models | various | — | — | — | excluded by origin (Qwen, DeepSeek) |
+
+**Llama, the incumbent, is the most restrictive of the usable
+candidates.** Three of its terms bear on this project:
+
+- **The military clause.** In November 2024 Meta said it was waiving it
+  for US government agencies and their contractors, and for their
+  counterparts in the UK, Canada, Australia and New Zealand, while
+  saying "Our Acceptable Use Policy remains in place"
+  ([TechCrunch](https://techcrunch.com/2024/11/04/meta-says-its-making-its-llama-models-available-for-us-national-security-applications),
+  [IEEE Spectrum](https://spectrum.ieee.org/ai-used-by-military)). That
+  is a public statement, not a term of the licence. The AUP text names
+  no exception. A defence deployment that relies on the waiver needs
+  that reliance confirmed by counsel, and ideally by Meta in writing.
+- **The naming rule.** An InferNode fine-tune of Llama would have to be
+  called "Llama-something", and the apps would have to show "Built with
+  Llama".
+- **Flow-down.** The licence and its AUP travel with every copy, so a
+  user of an InferNode release would be bound by them too.
+
+**The Apache-licensed models have none of this.** Gemma 4 E2B, Ministral
+3 3B and Granite 4.0 Micro are tool-calling models of the same class as
+Llama 3.2 3B. **Recommendation:** make the on-device default an Apache
+2.0 model, chosen by the model-eval run (step 2 under "Order of work"),
+and keep Llama 3.2 3B as the baseline it has to match. One note on
+Gemma: Google's site still links its 2024 Prohibited Use Policy from
+the Gemma 4 pages, and that policy's own scope is just "Gemma". The
+Gemma 4 licence text is plain Apache 2.0 and the Gemma Terms of Use list
+only Gemma 1 to 3n, so on the texts the policy does not bind Gemma 4.
+That should be confirmed before Gemma 4 ships.
+
+**Conversions are derivatives, and a supply-chain risk.** A GGUF or
+MLX file is the original model under the original licence. Third-party
+conversions (`mlx-community`, community GGUFs) are someone else's
+artefact. Convert from the publisher's own weights, at a pinned
+revision, and record both hashes in the manifest
+(`DESIGN-PRINCIPLES.md`, "The host boundary"). An Apache model's
+distribution then needs its `LICENSE` and any `NOTICE` alongside the
+weights, and modified files marked as modified, which a fine-tune is.
+
+**Size check for the 4GB boards.** Gemma 4 E2B is 2.3B effective
+parameters but 5.1B with its embeddings ([card](https://huggingface.co/google/gemma-4-E2B-it)).
+Google's own runtime lists it at 2.58GB ([LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM)).
+How much an engine that loads every tensor needs is a measurement for
+step 1. On a 4GB Pi 4 it may not leave room for a useful KV cache.
 
 ## The three placements
 
@@ -260,7 +334,7 @@ can then reach is what was bound in front of it, and nothing else.
 | Pi 3B+ (bare metal) | P1 | — | — | 1GB |
 | RISC-V (`virt`, PolarFire) | P1 | — | — | no vector unit on the U54s |
 | Android | P1, or P2 via Termux | P2 in-process | 1B–3B; Gemma 4 E2B | loopback key (P2 rule 5) matters most here |
-| iOS | P1 | P2 in-process | Llama 3.2 3B (proven via SwiftLM); Gemma 4 E2B to try | `-c0` does not matter to inference, which is native; the memory entitlement does |
+| iOS | P1 | P2 in-process | Llama 3.2 3B (proven via SwiftLM, as the baseline); Gemma 4 E2B, Ministral 3 3B to try | `-c0` does not matter to inference, which is native; the memory entitlement does |
 
 ## Order of work
 
@@ -268,7 +342,8 @@ Each step is useful on its own and none needs the next. The proposed
 INFR tickets are not filed yet.
 
 1. **Measure.** `llama-bench -p 512 -n 128` on a Pi 5 and a Pi 4 under
-   Pi OS for Llama 3.2 1B/3B, Gemma 4 E2B and Ministral 3 3B. Then the
+   Pi OS for Llama 3.2 1B/3B, Gemma 4 E2B, Ministral 3 3B and Granite
+   4.0 Micro, with each model's resident memory. Then the
    number that matters: time to the first token for Veltro's real
    prompt through `/mnt/llm`, first turn and second, which shows whether
    prefix caching works through llmsrv.

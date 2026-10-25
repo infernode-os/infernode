@@ -6,6 +6,14 @@ This document records why that is cheap, what the reusable prior art is
 (Full Moon / MLX), and the two concrete wiring options with their
 trade-offs. Nothing here is built yet.*
 
+> **Reviewed 2026-10-25 in [EDGE-LLM.md](EDGE-LLM.md)**, which sets out the
+> pattern this note is one case of: phones, the Raspberry Pi and bare metal.
+> What changed since May: WWDC26 made Foundation Models a protocol that MLX
+> conforms to (the decisions below still hold); Gemma 4 E2B/E4B (Apache 2.0)
+> is a candidate the model list predates; and llama.cpp's CPU backend is now
+> mostly C++, which matters for the native kernel. Option A here is P2 there;
+> Option B is P3.
+
 ## Motivation: the seam already exists
 
 InferNode does **zero in-process LLM inference today.** `/mnt/llm` is a 9P

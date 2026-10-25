@@ -110,11 +110,12 @@
 | [HELLAPHONE.md](HELLAPHONE.md) | InferNode on a phone: Android (Termux) |
 | [IOS.md](IOS.md) | InferNode on iOS: design plan and build spec |
 | [IOS-ONDEVICE-LLM.md](IOS-ONDEVICE-LLM.md) | On-device LLM inference on iOS behind `/mnt/llm` |
+| [EDGE-LLM.md](EDGE-LLM.md) | A local model on a phone, a Pi or bare metal: one pattern (remote, host-adjacent, in-kernel) behind `/mnt/llm`; reviews the iOS note |
 | [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
 | [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) | The contract between the shared native kernel and a board directory: files, hooks in call order, what the shared drivers call downward |
 | [BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md) | What a port to other hardware should take from the first one |
 | [../os/bcm2837/README.md](../os/bcm2837/README.md) | Bare-metal Raspberry Pi 3B+ kernel: the engineering journal -- status, decisions, measurements, board runbook |
-| [../os/bcm2711/README.md](../os/bcm2711/README.md) | Bare-metal Raspberry Pi 4B: boots to the desktop under QEMU `raspi4b`, never on a board; what the emulator lacks and the nine things only hardware will show |
+| [../os/bcm2711/README.md](../os/bcm2711/README.md) | Bare-metal Raspberry Pi 4B: runs on a board (since 2026-10-15) and under QEMU `raspi4b`; what was proved on the board, and what the emulator lacks |
 | [../os/bcm/README.md](../os/bcm/README.md) | The drivers the Raspberry Pi SoCs share, and the rule for what may live there |
 | [../os/virt/README.md](../os/virt/README.md) | Bare-metal QEMU `virt`: what the second machine is for, what it found (a GIC end-of-interrupt bug), and the QEMU flags that fail silently |
 | [BLUETOOTH.md](BLUETOOTH.md) | Bluetooth design: `#t` serial, mini-UART console, `bt9p` at `/net/bt`; classic pairing, SDP/RFCOMM, LE HID -- on the Pi 3B+ |

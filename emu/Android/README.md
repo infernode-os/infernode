@@ -69,7 +69,9 @@ CI: `.github/workflows/android-apk.yml` builds a debug APK;
 (`-b api`); `-b openai` points it at any OpenAI-compatible server
 (Ollama, for instance). The 9P surface at `/mnt/llm` stays the same
 whatever is behind it, so an on-device engine would slot in behind
-`llmsrv` with no change to agents or tools.
+`llmsrv` with no change to agents or tools. How, and what such an engine
+must do (a per-boot key on its loopback port, among others): see
+`docs/EDGE-LLM.md`.
 
 **Phase 2 — iOS.** Lives in `emu/iOS/`; see `emu/iOS/README.md` and
 `docs/IOS.md`. Apple's W^X policy forces interpreter-only execution

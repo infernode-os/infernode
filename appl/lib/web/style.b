@@ -1057,6 +1057,13 @@ parentel(d: ref Doc, n: int): int
 	return 0;
 }
 
+# the document's element: its parent is the document, where one at the
+# top of a shadow tree (Pharos's <slot name="top">) has none either
+isroot(d: ref Doc, n: int): int
+{
+	return d.nodes[n].parent == 1;
+}
+
 prevel(d: ref Doc, n: int): int
 {
 	for(n = d.nodes[n].prev; n != 0; n = d.nodes[n].prev)
@@ -1297,9 +1304,9 @@ pseudo(m: ref M, x: ref Simple, n: int): int
 	"scope" =>
 		if(m.scope > 0)
 			return n == m.scope;
-		return parentel(d, n) == 0;
+		return isroot(d, n);
 	"root" =>
-		return parentel(d, n) == 0;
+		return isroot(d, n);
 	"is" or "where" =>
 		for(i := 0; i < len x.sub; i++)
 			if(matchsel(m, x.sub[i], n))
@@ -4162,7 +4169,7 @@ fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 		Dflex or Dinlineflex or Dgrid or Dinlinegrid or Dgridlanes or Dinlinegridlanes =>
 			blockify = 1;
 		}
-	if(d != nil && parentel(d, n) == 0)
+	if(d != nil && isroot(d, n))
 		blockify = 1;
 	if(blockify) {
 		case st.display {
@@ -4184,7 +4191,7 @@ fixup(st, parent, boxparent: ref St, d: ref Doc, n: int)
 			st.display = Dtable;
 		}
 	}
-	if(d != nil && parentel(d, n) == 0 && st.display == Dcontents)
+	if(d != nil && isroot(d, n) && st.display == Dcontents)
 		st.display = Dblock;
 }
 

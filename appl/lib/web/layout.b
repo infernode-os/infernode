@@ -5901,6 +5901,17 @@ autolo(t: array of ref Track, a0, a1: int): int
 	return 1;
 }
 
+# whether a track spanned has a min-content or max-content minimum,
+# which an item's min-content contribution sizes, not its automatic
+# minimum
+contentlo(t: array of ref Track, a0, a1: int): int
+{
+	for(j := a0; j < a1 && j < len t; j++)
+		if(t[j].lo.kind == Tmin || t[j].lo.kind == Tmax)
+			return 1;
+	return 0;
+}
+
 sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap: int, b: ref Box)
 {
 	n := len t;
@@ -5961,8 +5972,8 @@ sizetracks(t: array of ref Track, items: array of ref Gi, cols: int, avail, gap:
 				mn = mx = 0;
 			else if(cols) {
 				(mn, mx) = contribution(k);
-				if(k.st.minwidth.kind == Style->Lauto && isscroller(k) && autolo(t, a0, a1))
-					mn = mgs(k) + hextra(k);	# auto minimums: a scroll container's is zero (§6.6; MDN's homepage mandala held the hero's column to its 560px)
+				if(k.st.minwidth.kind == Style->Lauto && isscroller(k) && !contentlo(t, a0, a1))
+					mn = mgs(k) + hextra(k);	# auto minimums: a scroll container's is zero, whatever else it spans (§6.6; MDN's homepage mandala held the hero's column to its 560px; JSTOR's hero, spanning its margins, its 35000px slides)
 				else if((k.st.minwidth.kind == Style->Lpx || k.st.minwidth.kind == Style->Lcalc) &&
 				   k.st.width.kind == Style->Lauto && a1 - a0 == 1 && autolo(t, a0, a1) && !issubgrid(k, cols)) {
 					# an auto minimum track takes the item's minimum

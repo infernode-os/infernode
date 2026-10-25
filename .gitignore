@@ -368,6 +368,8 @@ tools/codex-gate/.venv/
 # tools/pi-firmware-manifest.txt pins them by SHA256.
 brcmfmac43455-sdio.*
 cyfmac43455-sdio*
+# and its Bluetooth patch, the same way (tools/pi-btfw-manifest.txt)
+BCM4345C0.hcd
 
 # The Pi's boot firmware: Broadcom's licence, never committed either.
 # tools/mkpiimage.sh puts it in the card images it builds;

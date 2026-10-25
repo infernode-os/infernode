@@ -321,9 +321,12 @@ switch and is never granted.
 
 The CYW43455's Bluetooth core boots from ROM and takes a patch RAM
 image over HCI: `BCM4345C0.hcd`, from `RPi-Distro/bluez-firmware`,
-under the same Cypress/Broadcom binary-redistribution stanza as the
-WiFi blobs. Not committed, not in any artefact, asked for by the boot
-script as `/n/dos/firmware/BCM4345C0.hcd`. Without it the controller
+under the same Cypress licence as the WiFi blobs, and so on their
+road: not committed, not in a hosted release, and on the release's Pi
+card images in `firmware/` beside `LICENCE.cypress`
+(`tools/pi-btfw-manifest.txt` pins it; `tools/pi-firmware.sh` fetches
+it for a card made by hand). Asked for by the boot script as
+`/n/dos/firmware/BCM4345C0.hcd`. Without it the controller
 still answers HCI at 115200 with its ROM firmware and a default
 address, so `addr` and `status` work before the patch and are the
 first thing to see on the board.

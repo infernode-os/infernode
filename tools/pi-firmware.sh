@@ -39,8 +39,9 @@
 # whoever mounted the card; it never asks for sudo, and if the card is
 # not writable by that user it says so and stops.
 #
-# The same tool fetches the Pi's boot firmware for a card image, from a
-# second manifest: --manifest tools/pi-bootfw-manifest.txt (see
+# The same tool fetches the Pi's boot firmware for a card image, and the
+# radio's Bluetooth patch, from their own manifests: --manifest
+# tools/pi-bootfw-manifest.txt or tools/pi-btfw-manifest.txt (see
 # tools/mkpiimage.sh).
 #
 # Exit status: 0 done; 1 a hash did not match (nothing was installed);

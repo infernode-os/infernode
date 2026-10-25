@@ -210,15 +210,17 @@ once.
 `infernode-<version>-rpi3bplus.img.xz` (or `-rpi4b`), written to a card
 whole: Raspberry Pi Imager's "Use custom" (with its OS customisation
 left off: nothing here reads it), `dd`, or Etcher. It is everything
-below, the radio's firmware included (in `firmware/`, with its licence:
-the Pi card images are the one release that carries it, because they are
-the one that runs on a Cypress radio). To make one from your own tree,
+below, the radio's Wi-Fi firmware and Bluetooth patch included (in
+`firmware/`, with their licence: the Pi card images are the one release
+that carries them, because they are the one that runs on a Cypress
+radio). To make one from your own tree,
 build the kernel (section 2) and
 
     tools/mkpiimage.sh rpi3bplus /tmp/bm/bcm2837-kernel.img card.img     # or rpi4b, bcm2711-kernel.img
 
-which fetches the boot and radio firmware, pinned by
-`tools/pi-bootfw-manifest.txt` and `tools/pi-firmware-manifest.txt`, and
+which fetches the boot, Wi-Fi and Bluetooth firmware, pinned by
+`tools/pi-bootfw-manifest.txt`, `tools/pi-firmware-manifest.txt` and
+`tools/pi-btfw-manifest.txt`, and
 puts on the card only the files of `lib/`, `fonts/` and `icons/` that
 git tracks. `.github/workflows/release.yml` (`raspberry-pi`) makes the
 release's two this way. What follows is what is on such a card, for
@@ -264,7 +266,9 @@ accounts, keyrings).
 three `brcmfmac43455-sdio.*` files, checks them against pinned SHA-256s
 (`tools/pi-firmware-manifest.txt`) and puts them in `firmware/`; their
 licence, `os/bcm/card/LICENCE.cypress`, goes beside them. Bluetooth
-also wants `firmware/BCM4345C0.hcd`, which no tool here installs.
+also wants `firmware/BCM4345C0.hcd`: `tools/pi-firmware.sh --manifest
+tools/pi-btfw-manifest.txt CARDROOT` puts it there, under the same
+licence.
 
 **Control files**, all optional: section 5.
 

@@ -32,7 +32,9 @@
 # a card for a Pi 3B+ or 4B is for a board whose radio IS the Cypress
 # CYW43455, which is the licence's purpose, as Raspberry Pi OS and
 # Debian ship them.  The driver reads them from /n/dos/firmware; a card
-# made by hand gets them from tools/pi-firmware.sh.
+# made by hand gets them from tools/pi-firmware.sh.  The radio's
+# Bluetooth patch, under the same licence from another repository, has
+# its own manifest (tools/pi-btfw-manifest.txt) and takes this road too.
 #
 # The NVRAM .txt is the board's radio calibration.  In linux-firmware
 # the same file (brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt)

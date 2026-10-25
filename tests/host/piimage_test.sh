@@ -11,7 +11,8 @@
 #	tracks and nothing else (an untracked file in lib/ stays off);
 #	usr/ is there and empty; no skiplogon, wifi, netconsole or rootpath;
 #	firmware/ holds the radio's firmware under the names the driver
-#	asks for, and the licence it is distributed under;
+#	asks for, its Bluetooth patch, and the licence they are
+#	distributed under;
 #	firmware that does not match its manifest is refused, and no image
 #	is left behind;
 #	fsck.fat, where there is one, finds nothing wrong.
@@ -57,6 +58,12 @@ mkdir -p "$tmp/fw"
 		echo "file ${f%%:*} $sha $(wc -c < "$tmp/fw/${f#*:}" | tr -d ' ') test https://example.invalid/$commit/${f#*:}"
 	done
 } > "$tmp/radiomanifest"
+# the Bluetooth patch's, from its own repository
+echo "stand-in hcd" > "$tmp/fw/BCM4345C0.hcd"
+{
+	echo "commit $commit"
+	echo "file BCM4345C0.hcd $(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/fw/BCM4345C0.hcd") $(wc -c < "$tmp/fw/BCM4345C0.hcd" | tr -d ' ') test https://example.invalid/$commit/BCM4345C0.hcd"
+} > "$tmp/btmanifest"
 head -c 300000 /dev/urandom > "$tmp/kernel.img"
 echo "a developer's own file" > "$ROOT/$untracked"
 
@@ -136,7 +143,8 @@ for board in rpi3bplus rpi4b; do
 	esac
 	img=$tmp/$board.img
 	if sh tools/mkpiimage.sh --size 256 --firmware "$tmp/fw" --manifest "$tmp/manifest" \
-		--radio-manifest "$tmp/radiomanifest" $board "$tmp/kernel.img" "$img" > "$tmp/$board.log" 2>&1; then
+		--radio-manifest "$tmp/radiomanifest" --bt-manifest "$tmp/btmanifest" \
+		$board "$tmp/kernel.img" "$img" > "$tmp/$board.log" 2>&1; then
 		pass "$board: mkpiimage builds a card"
 	else
 		failed "$board: mkpiimage failed: $(tail -3 "$tmp/$board.log" | tr '\n' ' ')"
@@ -155,9 +163,10 @@ for board in rpi3bplus rpi4b; do
 	has "$L" /firmware/brcmfmac43455-sdio.bin "$tmp/fw/cyfmac43455-sdio-standard.bin" || ok=0
 	has "$L" /firmware/brcmfmac43455-sdio.clm_blob "$tmp/fw/cyfmac43455-sdio.clm_blob" || ok=0
 	has "$L" /firmware/brcmfmac43455-sdio.txt "$tmp/fw/brcmfmac43455-sdio.txt" || ok=0
+	has "$L" /firmware/BCM4345C0.hcd "$tmp/fw/BCM4345C0.hcd" || ok=0
 	has "$L" /firmware/LICENCE.cypress os/bcm/card/LICENCE.cypress || ok=0
-	[ "$(grep -c '^/firmware/.' "$L")" = 4 ] || { echo "    firmware/ holds $(grep -c '^/firmware/.' "$L") files, not 4"; ok=0; }
-	[ $ok = 1 ] && pass "$board: firmware/ is the radio's firmware, by the driver's names, and LICENCE.cypress" \
+	[ "$(grep -c '^/firmware/.' "$L")" = 5 ] || { echo "    firmware/ holds $(grep -c '^/firmware/.' "$L") files, not 5"; ok=0; }
+	[ $ok = 1 ] && pass "$board: firmware/ is the radio's firmware, by the driver's names, its Bluetooth patch, and LICENCE.cypress" \
 		|| failed "$board: the radio's firmware"
 	ok=1
 	for f in $other skiplogon wifi netconsole rootpath cmdline.txt; do
@@ -208,7 +217,8 @@ done
 # firmware that is not what the manifest says: refused, nothing left
 echo "not the firmware" > "$tmp/fw/start4.elf"
 if sh tools/mkpiimage.sh --size 256 --firmware "$tmp/fw" --manifest "$tmp/manifest" \
-	--radio-manifest "$tmp/radiomanifest" rpi4b "$tmp/kernel.img" "$tmp/bad.img" > "$tmp/bad.log" 2>&1; then
+	--radio-manifest "$tmp/radiomanifest" --bt-manifest "$tmp/btmanifest" \
+	rpi4b "$tmp/kernel.img" "$tmp/bad.img" > "$tmp/bad.log" 2>&1; then
 	failed "firmware that does not match its manifest was used"
 elif [ -e "$tmp/bad.img" ]; then
 	failed "a refused build left an image behind"

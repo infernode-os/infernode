@@ -6,7 +6,7 @@
 #
 # Usage:
 #     tools/mkpiimage.sh [--size MB] [--firmware DIR] [--manifest FILE] [--radio-manifest FILE]
-#                        BOARD KERNEL OUT.img
+#                        [--bt-manifest FILE] BOARD KERNEL OUT.img
 #
 #     BOARD      rpi3bplus (the kernel is bcm2837-kernel.img) or
 #                rpi4b (bcm2711-kernel.img). One board per image: the
@@ -18,7 +18,7 @@
 #                not use is the machine's writable usr/: the partition is
 #                not grown to fill a bigger card.
 #     --firmware DIR
-#                take the boot and radio firmware from DIR (by their
+#                take the boot, radio and Bluetooth firmware from DIR (by their
 #                upstream names) instead of downloading them; they are
 #                checked against their manifests either way.
 #     --manifest FILE
@@ -27,13 +27,17 @@
 #     --radio-manifest FILE
 #                the radio firmware's manifest (default
 #                tools/pi-firmware-manifest.txt); for tests.
+#     --bt-manifest FILE
+#                the Bluetooth patch's manifest (default
+#                tools/pi-btfw-manifest.txt); for tests.
 #
 # What goes on the card, and from where:
 #   - the boot firmware this board needs, and LICENCE.broadcom, fetched
 #     and checked by tools/pi-firmware.sh against the manifest;
 #   - in firmware/, the CYW43455 radio's firmware (both boards have that
-#     radio), fetched and checked the same way, and
-#     os/bcm/card/LICENCE.cypress, the licence it is distributed under:
+#     radio) and its Bluetooth patch, BCM4345C0.hcd, fetched and checked
+#     the same way, and os/bcm/card/LICENCE.cypress, the licence they are
+#     distributed under:
 #     for use with Cypress parts, which is what this card is for. The
 #     reason these files go on a Pi card and in no other release is in
 #     tools/pi-firmware-manifest.txt;
@@ -59,6 +63,7 @@ SIZE=1024
 FWFROM=
 MANIFEST="$ROOT/tools/pi-bootfw-manifest.txt"
 RADIOMANIFEST="$ROOT/tools/pi-firmware-manifest.txt"
+BTMANIFEST="$ROOT/tools/pi-btfw-manifest.txt"
 
 usage() {
 	sed -n '/^# Usage:/,/^# What goes on the card/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d' >&2
@@ -84,6 +89,9 @@ while [ $# -gt 0 ]; do
 	--radio-manifest)
 		[ $# -ge 2 ] || usage
 		RADIOMANIFEST=$2; shift 2 ;;
+	--bt-manifest)
+		[ $# -ge 2 ] || usage
+		BTMANIFEST=$2; shift 2 ;;
 	-h|--help)
 		usage ;;
 	-*)
@@ -126,7 +134,8 @@ STAGE=$(mktemp -d "${TMPDIR:-/tmp}/mkpiimage.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT INT TERM
 
 # The firmware, checked against its manifest, into DIR/firmware: the
-# boot firmware's into $STAGE/boot, the radio's into $STAGE/radio.
+# boot firmware's into $STAGE/boot, the radio's into $STAGE/radio, the
+# Bluetooth patch into $STAGE/bt.
 # pi-firmware.sh refuses a set in which any file does not match.
 getfirmware() {	# getfirmware <manifest> <dir> <what>
 	mkdir -p "$2"
@@ -138,6 +147,7 @@ getfirmware() {	# getfirmware <manifest> <dir> <what>
 }
 getfirmware "$MANIFEST" "$STAGE/boot" boot
 getfirmware "$RADIOMANIFEST" "$STAGE/radio" radio
+getfirmware "$BTMANIFEST" "$STAGE/bt" Bluetooth
 [ -f "$ROOT/os/bcm/card/LICENCE.cypress" ] || die "no os/bcm/card/LICENCE.cypress"
 
 # lib/, fonts/ and icons/ as git has them.
@@ -151,6 +161,7 @@ set -- "/infernode8.img=$KERNEL" \
 	"/LICENSE=$ROOT/LICENSE" "/NOTICE=$ROOT/NOTICE" \
 	"/LICENCE.broadcom=$STAGE/boot/firmware/LICENCE.broadcom" \
 	"/firmware=$STAGE/radio/firmware" \
+	"/firmware/BCM4345C0.hcd=$STAGE/bt/firmware/BCM4345C0.hcd" \
 	"/firmware/LICENCE.cypress=$ROOT/os/bcm/card/LICENCE.cypress"
 for f in $FIRMWARE; do
 	set -- "$@" "/$f=$STAGE/boot/firmware/$f"

@@ -4,6 +4,26 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Window manager
+
+- **New's cross shows.** emu changed the pointer's cursor through SDL on
+  the thread that wrote `/dev/cursor`, though SDL allows cursor calls
+  only on its main thread. On macOS the main thread rebuilds the
+  window's cursor from SDL's state, and a change made under it from
+  another thread could be lost: wm/wm's menu closed on New and the
+  arrow stayed. Its gunsight and box could go the same way. The main
+  loop now makes the change.
+  `tests/host/wm_cursor_test.sh` checks each cursor wm/wm sets is made
+  SDL's, on the main thread.
+- **A sweep just begun draws no warning.** Its first rectangle is
+  narrower than two borders, and wm/wm asked for a window of negative
+  size for the edges between, which the image pool refused on standard
+  error at the start of every sweep.
+- **The wm/wm tests run in CI.** `tests/host/wm_test.sh`, written with
+  the last fix to New to keep it from breaking again, was not run by any
+  workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and
+  `page_test.sh`. The Linux GUI job runs them all now.
+
 ## [0.8.1] - 2026-10-22
 
 This release fixes what 0.8.0 shipped broken. Charon opened on a test

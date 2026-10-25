@@ -730,7 +730,10 @@ showborders(b: array of ref Image, r: Rect, show: int)
 
 showborder(b: ref Image, show: int, r: Rect): ref Image
 {
-	if(!show)
+	# a sweep just begun is narrower than two borders: the top and
+	# bottom edges between the sides are empty, and a window that size
+	# is refused
+	if(!show || r.dx() <= 0 || r.dy() <= 0)
 		return nil;
 	if(b != nil && b.r.size().eq(r.size()))
 		b.origin(r.min, r.min);

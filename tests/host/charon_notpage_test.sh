@@ -1,11 +1,11 @@
 #!/bin/sh
 #
 # charon_notpage_test.sh — a link to what Charon cannot show (an mp3)
-# is not a page: Charon says what it is, and does not fetch it past its
-# header (a podcast's megabytes were read whole and parsed as HTML).
+# is not a page: it is saved, not parsed (a podcast's megabytes were
+# read whole and parsed as HTML), and the page shown says where it went.
 # A server on the loopback offers 20 MB of audio/mpeg and logs how much
-# went; headless Charon (wm/charon -h) is sent to it through its files.
-# Skipped without python3.
+# went; headless Charon (wm/charon -h) is sent to it through its files,
+# with a home of its own to save in.  Skipped without python3.
 
 . "$(dirname "$0")/common.sh"
 cd "$ROOT"
@@ -13,7 +13,10 @@ cd "$ROOT"
 command -v python3 >/dev/null 2>&1 || { echo "charon_notpage_test: SKIP (no python3)"; exit 77; }
 
 d=$(mktemp -d "${TMPDIR:-/tmp}/charon_notpage.XXXXXX")
-trap 'kill $srv 2>/dev/null; rm -rf "$d" "$ROOT/tmp/charon_notpage.sh"' EXIT
+home="$ROOT/tmp/charon_notpage_home"
+rm -rf "$home"
+mkdir -p "$home/Downloads"
+trap 'kill $srv 2>/dev/null; rm -rf "$d" "$home" "$ROOT/tmp/charon_notpage.sh"' EXIT
 cat >"$d/page.html" <<'HTML'
 <html><head><title>Start</title></head><body><a href="big.mp3">listen</a></body></html>
 HTML
@@ -58,6 +61,7 @@ port=$(cat "$d/port")
 mkdir -p "$ROOT/tmp"
 cat >"$ROOT/tmp/charon_notpage.sh" <<SH
 load std
+home=/tmp/charon_notpage_home
 bind -a '#I' /net
 ndb/cs
 wm/charon -h http://127.0.0.1:$port/page.html &
@@ -66,7 +70,7 @@ mkdir -p /n/charonnp
 mount -A '#scharon/fs' /n/charonnp
 for i in 1 2 3 4 5 6 7 8 9 10 { if {! grep -s done /n/charonnp/status} { sleep 1 } }
 echo open http://127.0.0.1:$port/big.mp3 > /n/charonnp/ctl
-for i in 1 2 3 4 5 6 7 8 9 10 { if {! grep -s error /n/charonnp/status} { sleep 1 } }
+for i in 1 2 3 4 5 6 7 8 9 10 { if {! grep -s Saved /n/charonnp/title} { sleep 1 } }
 echo R_STATUS \`{cat /n/charonnp/status}
 echo R_TITLE \`{cat /n/charonnp/title}
 SH
@@ -76,16 +80,13 @@ sleep 1
 failed=0
 st=$(printf '%s\n' "$out" | sed -n 's/^R_STATUS //p')
 title=$(printf '%s\n' "$out" | sed -n 's/^R_TITLE //p')
-case "$st" in
-*audio/mpeg*) echo "PASS: the page says what it is ($st)";;
-*) echo "FAIL: status '$st', want an error naming audio/mpeg"; failed=1;;
-esac
-[ "$title" = "Cannot load page" ] && echo "PASS: the error page is shown" || { echo "FAIL: title '$title'"; failed=1; }
-sent=$(sed -n 's/^mp3 sent \([0-9]*\) of.*/\1/p' "$d/log" | head -1)
-if [ -n "$sent" ] && [ "$sent" -lt 20971520 ]; then
-    echo "PASS: not fetched whole ($sent of 20971520 bytes went)"
+[ "$st" = done ] && echo "PASS: loaded, not an error" || { echo "FAIL: status '$st'"; failed=1; }
+[ "$title" = "Saved big.mp3" ] && echo "PASS: the page says it was saved" || { echo "FAIL: title '$title'"; failed=1; }
+size=$(wc -c < "$home/Downloads/big.mp3" 2>/dev/null | tr -d ' ')
+if [ "$size" = 20971520 ]; then
+    echo "PASS: saved whole in \$home/Downloads"
 else
-    echo "FAIL: the mp3 was fetched whole (sent '${sent:-?}')"; failed=1
+    echo "FAIL: saved '${size:-nothing}' of 20971520 bytes"; failed=1
 fi
 [ $failed = 0 ] && { echo "ALL PASS"; exit 0; }
 printf '%s\n' "$out" | tail -20 | sed 's/^/    /'

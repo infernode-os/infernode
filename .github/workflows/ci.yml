@@ -251,6 +251,11 @@ jobs:
         chmod +x tests/host/charon_download_test.sh
         ROOT=. bash tests/host/charon_download_test.sh
 
+    - name: Check a link to audio is saved, not parsed as a page
+      run: |
+        chmod +x tests/host/charon_notpage_test.sh
+        ROOT=. bash tests/host/charon_notpage_test.sh
+
     - name: Check the DOM a page's scripts see
       run: |
         # tests/js/pages/dom.html checks lib/js/dom.js from inside a page;

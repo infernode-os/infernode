@@ -16,9 +16,11 @@ Usage: mock_openai.py LOGFILE   (prints the bound port, then serves)
 import json
 import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FIX = "/usr/agentloop"
+FLAKED = []	# the flaky scenario has failed once
 
 # What raw_write writes, and the test expects back byte for byte.
 RAWTEXT = '\n"quoted" first line\n\tsys->print("%d\\n", i);\n'
@@ -30,6 +32,8 @@ def tool(name, args):
 
 
 # A turn is either {"content": str} or {"tools": [tool(...)], "content"?: str}.
+# "delay": seconds to wait before answering; "finish": the finish_reason
+# to send ("length": the reply cut off at the output limit).
 SCENARIOS = {
     "text_only": [
         {"content": "Hello from the mock."},
@@ -40,6 +44,36 @@ SCENARIOS = {
                     "- `alpha`, in *a.txt*\n- nothing else\n\n"
                     "```\ncat a.txt\n```\n\n"
                     "| file | words |\n|---|---|\n| a.txt | 1 |\n"},
+    ],
+    # Cut off by the output limit in the middle of a call: the loop must
+    # not run it, and say why, so the model sends it again.
+    "cut_call": [
+        {"tools": [tool("write", {"path": FIX + "/cut.txt", "content": "half"})],
+         "finish": "length"},
+        {"content": "Sent again."},
+    ],
+    # Cut off in the middle of text: the loop asks for the rest.
+    "cut_text": [
+        {"content": "The first half,", "finish": "length"},
+        {"content": " and the second."},
+    ],
+    # The next step announced and not taken; then an empty reply.
+    "announce": [
+        {"content": "Let me read the file:"},
+        {"tools": [tool("read", FIX + "/a.txt")]},
+        {"content": ""},
+        {"content": "It says alpha."},
+    ],
+    # A slow first step, so a message written meanwhile is delivered
+    # with the tool results (veltrosrv_test).
+    "steer": [
+        {"delay": 3, "tools": [tool("read", FIX + "/a.txt")]},
+        {"content": "Read, and heard you."},
+    ],
+    # The service overloaded at the first request (503, Retry-After: 1),
+    # answering the next: the request is tried again, unseen.
+    "flaky": [
+        {"content": "Answered after a retry."},
     ],
     "single_read": [
         {"tools": [tool("read", FIX + "/a.txt")]},
@@ -72,7 +106,7 @@ SCENARIOS = {
     # back at the path the agent is told (turn 1 is made from turn 0's
     # result, below).  The first read has a limit and no offset.
     "spill_readback": [
-        {"tools": [tool("read", {"path": "/lib/veltro/system.txt", "limit": "1000"})]},
+        {"tools": [tool("read", {"path": "/lib/veltro/big.txt", "limit": "5000"})]},
         {"tools": []},
         {"content": "Spill read."},
     ],
@@ -310,7 +344,7 @@ class Handler(BaseHTTPRequestHandler):
         msgs = body.get("messages", [])
         # llmsrv compacting a session: a summary, not a scenario's turn.
         if not body.get("tools") and msgs and str(msgs[-1].get("content", "")).startswith(
-                "Summarize this conversation"):
+                "Summarise the conversation"):
             name, turn = "compact_summary", 0
         # As a real API does: a tool result must answer a tool call that
         # is in the history before it.
@@ -327,6 +361,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(msg)
                 return
+        if name == "flaky" and not FLAKED:
+            FLAKED.append(1)
+            self.send_response(503)
+            self.send_header("Retry-After", "1")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if name == "backend_down":
             # The model service failing (as an unreachable or overloaded one
             # does): the user must be told so, not shown the error as a reply.
@@ -339,12 +380,14 @@ class Handler(BaseHTTPRequestHandler):
             told = None
             for m in msgs:
                 if m.get("role") == "tool":
-                    mt = re.search(r"full output at (\S+?)\)?$", str(m.get("content", "")), re.M)
+                    mt = re.search(r"whole output is at (\S+?):", str(m.get("content", "")))
                     if mt:
                         told = mt.group(1)
             r = {"tools": [tool("read", {"path": told or "/no/spill/path/given"})]}
         calls = calls_of(name, turn, r) if name else []
-        finish = "tool_calls" if calls else "stop"
+        finish = r.get("finish") or ("tool_calls" if calls else "stop")
+        if r.get("delay"):
+            time.sleep(r["delay"])
         text = r.get("content", "")
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         if body.get("stream"):

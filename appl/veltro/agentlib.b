@@ -404,6 +404,7 @@ buildsystemprompt(ns, persona: string): string
 
 	if(tooldocs != "")
 		prompt += "\n\n== Tool Documentation ==\n" + tooldocs;
+	prompt += "\n\n" + TOOLDOCNOTE;
 
 	# Substitute the agent name so no prompt file hardcodes identity.
 	prompt = injectagent(prompt);
@@ -434,11 +435,34 @@ buildsystemprompt(ns, persona: string): string
 # Each tool's full doc is preceded by a "## <name>" header so the
 # model can locate sections by tool name. Tools without a .txt file
 # are silently skipped.
+#
+# Only the tools whose use a description cannot carry have their whole
+# documentation here: exec (the shell is not POSIX's) and spawn (its
+# grants).  Every other tool's is a file the agent reads when it needs
+# it (TOOLDOCNOTE).  All of them inlined were some 48 KB with every tool
+# on: with the base prompt, past the 65000-byte cap, and cut.
+INLINEDOCS: con "exec spawn";
+TOOLDOCNOTE: con "== Tools ==\nEach tool's description says what it is for.  The full " +
+	"documentation of every tool, with its options and examples, is the file " +
+	"/lib/veltro/tools/<name>.txt: read it before using a tool in a way its " +
+	"description does not cover.";
+
+inlist(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
 loadtooldocs(toollist: list of string): string
 {
 	docs := "";
+	(nil, inline) := sys->tokenize(INLINEDOCS, " ");
 	for(t := toollist; t != nil; t = tl t) {
 		name := hd t;
+		if(!inlist(name, inline))
+			continue;
 		doc := readtooldoc(name);
 		if(doc == "")
 			continue;
@@ -841,6 +865,19 @@ extracttoolargs(inputjson: string): string
 # edit takes <path> <old> <new> [all], and old and new are text: quoted, or
 # a space in one split it ("- milk" became "-" and "milk", and the edit
 # failed, "'-' found 2 times").  Its parser reads "..." with \" inside.
+jget(jv: ref JValue, key: string): ref JValue
+{
+	pick o := jv {
+	Object =>
+		for(ml := o.mem; ml != nil; ml = tl ml) {
+			(name, val) := hd ml;
+			if(name == key)
+				return val;
+		}
+	}
+	return nil;
+}
+
 editargs(inputjson: string): string
 {
 	(jv, jerr) := readjsonstring(inputjson);
@@ -864,6 +901,9 @@ editargs(inputjson: string): string
 			"args" => return v;	# already positional
 			}
 		}
+		# Several changes: the JSON as it is, the path in front.
+		if(jget(jv, "edits") != nil)
+			return "-j " + path + " " + inputjson;
 		r := "-r " + path + " " + editquote(old) + " " + editquote(new);
 		if(all == "true" || all == "all" || all == "1")
 			r += " all";
@@ -951,6 +991,9 @@ toolargs(tool, inputjson: string): string
 	* =>
 		return extracttoolargs(inputjson);
 	}
+	# exec's timeout, by name: before the command, as exec takes it.
+	if(t == "exec" && jval(vals, "timeout") != nil && jval(vals, "command") != nil)
+		return "-t " + jval(vals, "timeout") + " " + jval(vals, "command");
 	if(jval(vals, "args") != nil || jval(vals, "command") != nil)
 		return extracttoolargs(inputjson);
 	order: list of string;
@@ -1472,14 +1515,47 @@ parsellmresponse(response: string): (string, list of (string, string, string), s
 # Build the TOOL_RESULTS wire format for submitting tool execution results.
 # results: list of (tool_use_id, content) pairs.
 # The returned string is written to /mnt/llm/{id}/ask to trigger AskWithToolResults.
+#
+# An entry whose id is "-" is not a tool's result but text from the user,
+# sent with the results (a message written while the turn ran).  A line of
+# a result that is all dashes ("---", which ends an entry) is sent with one
+# dash more; parsetoolresults takes it off.  Sent as it was, a result with
+# a "---" line in it (a Markdown rule) was cut there, and its rest taken
+# for another result.
 buildtoolresults(results: list of (string, string)): string
 {
 	text := "TOOL_RESULTS\n";
 	for(r := results; r != nil; r = tl r) {
 		(id, content) := hd r;
-		text += id + "\n" + content + "\n---\n";
+		text += id + "\n" + escapedashes(content) + "\n---\n";
 	}
 	return text;
+}
+
+escapedashes(s: string): string
+{
+	out := "";
+	start := 0;
+	for(i := 0; i <= len s; i++) {
+		if(i < len s && s[i] != '\n')
+			continue;
+		line := s[start:i];
+		if(len line >= 3 && alldashes(line))
+			out += "-";
+		out += line;
+		if(i < len s)
+			out += "\n";
+		start = i + 1;
+	}
+	return out;
+}
+
+alldashes(s: string): int
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] != '-')
+			return 0;
+	return 1;
 }
 
 # ============================================================================

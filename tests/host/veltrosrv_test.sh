@@ -28,6 +28,7 @@ cleanup() {
 	[ -z "$EMU_PID" ] || kill -9 "$EMU_PID" 2>/dev/null || true
 	[ -z "$SERVER_PID" ] || kill "$SERVER_PID" 2>/dev/null || true
 	[ -z "$SCRIPT" ] || rm -f "$SCRIPT"
+	[ -z "${KEEP:-}" ] || cp "$WORK"/*.log "$KEEP"/ 2>/dev/null || true
 	rm -rf "$ROOT/usr/agentloop" "$WORK"
 }
 trap cleanup EXIT HUP INT TERM
@@ -85,6 +86,26 @@ echo '@@ text'
 cat /mnt/veltro/\$id/text
 echo '@@ status after'
 cat /mnt/veltro/\$id/status
+
+echo '@@ steer'
+echo 'SCENARIO:steer go' > /mnt/veltro/\$id/input
+sleep 1
+echo 'and read it carefully' > /mnt/veltro/\$id/input
+cat /mnt/veltro/\$id/text > /dev/null
+cat /mnt/veltro/\$id/text
+grep 'input:' /mnt/veltro/\$id/log
+
+echo '@@ flaky'
+echo 'SCENARIO:flaky go' > /mnt/veltro/\$id/input
+cat /mnt/veltro/\$id/text > /dev/null
+cat /mnt/veltro/\$id/text
+
+echo '@@ paths'
+mkdir -p /usr/agentloop/more
+echo bindpath /usr/agentloop/more > /mnt/toolctl/ctl
+echo 'SCENARIO:single_read go' > /mnt/veltro/\$id/input
+cat /mnt/veltro/\$id/text > /dev/null
+grep 'namespace changed' /mnt/veltro/\$id/log
 
 echo '@@ cancel'
 echo maxsteps 100 > /mnt/veltro/\$id/ctl
@@ -163,11 +184,35 @@ expect "unknown ctl refused" "bad ctl" 'unknown control request'
 expect "bad gate refused" "bad ctl" 'gate on|off'
 expect "persona name validated" "bad ctl" 'bad persona name'
 expect "maxsteps applied" "ctl after" 'maxsteps=3'
-expect "input refused while busy" busy 'busy'
+expectnot "input written while busy is taken" busy 'busy'
+expect "the message written while busy is in the conversation" text '^another$'
+expect "a message written during a turn is queued" steer 'input: queued while the turn runs'
+expect "and delivered with the tool results" steer 'input: delivered with the tool results'
+expect "the model read it before its next step" steer '^Read, and heard you.$'
 expect "text has the user message" text '^== user$'
 expect "text has the reply" text '^Read it.$'
 expect "status idle after turn" "status after" '^idle$'
 expect "cancel stops the turn" cancelled 'stop=cancelled'
+expect "a model service overloaded once is tried again" flaky '^Answered after a retry.$'
+# The model service saw the same request twice: refused, then answered.
+python3 -I -c 'import json,sys
+n=sum(1 for l in open(sys.argv[1]) if str(json.loads(l)["body"]["messages"][-1].get("content",""))=="SCENARIO:flaky go")
+sys.exit(0 if n==2 else 1)' "$WORK/req.log" && echo "PASS: the refused request was sent again, once" ||
+	{ echo "FAIL: the refused request was sent again, once"; FAILED=$((FAILED + 1)); }
+expect "a path bound mid-session is noted" paths 'namespace changed: the model is told'
+# The system prompt the model was given at the start is the one every
+# later request carries (a rewritten one loses the cache, and a current
+# Claude's thinking); the change rides on the next message.
+python3 -I -c 'import json,sys
+sysp=set(); noted=0
+for l in open(sys.argv[1]):
+    m=json.loads(l)["body"]["messages"]
+    if m and m[0].get("role")=="system": sysp.add(m[0]["content"])
+    for x in m:
+        if x.get("role")=="user" and "your namespace has changed" in str(x.get("content","")) and "/usr/agentloop/more" in str(x.get("content","")): noted=1
+sys.exit(0 if len(sysp)==1 and noted else 1)' "$WORK/req.log" &&
+	echo "PASS: the system prompt is never rewritten; the change goes with the next message" ||
+	{ echo "FAIL: the system prompt is never rewritten; the change goes with the next message"; FAILED=$((FAILED + 1)); }
 expect "the tool cannot see /mnt/veltro" probe "does not exist"
 expectnot "close removes the session" close "^0\$"
 

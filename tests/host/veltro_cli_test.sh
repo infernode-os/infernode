@@ -3,8 +3,9 @@
 # veltro_cli_test.sh — the veltro command as a client of the harness.
 #
 # Against the scripted model: a task runs and prints the tool call and
-# the reply; its session is saved under /usr/inferno/veltro/sessions and
-# -r last resumes it; -y runs without the approval gate.
+# the reply; its session is saved under /usr/inferno/veltro/sessions, the
+# model's own history with it, and -r last gives that history back to the
+# model; -y runs without the approval gate.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -105,8 +106,18 @@ expect "the session has its task" session '/task$'
 expect "the session has its transcript" session '/transcript$'
 expect "the session log records the call" log '^step 1: read .* -> .*alpha'
 expect "resume says so" resume 'resuming session scenariosingle-read-go'
-expect "resume runs the task again" resume '^Read it.$'
-grep -q 'Resuming Task' "$WORK/req.log" && echo "PASS: the model got the resume context" || { echo "FAIL: no resume context reached the model"; FAILED=$((FAILED + 1)); }
+expect "the session keeps the model's history" session '/context$'
+expect "resume answers the new message" resume '^Hello from the mock.$'
+# The resumed session's first request carries the saved conversation:
+# the task, the tool call and its result, the reply, then the new message.
+python3 -I -c 'import json,sys
+reqs=[json.loads(l)["body"]["messages"] for l in open(sys.argv[1])]
+last=reqs[-1]
+users=[m.get("content") for m in last if m.get("role")=="user"]
+calls=[m for m in last if m.get("tool_calls")]
+tools=[m for m in last if m.get("role")=="tool"]
+ok = any("SCENARIO:single_read" in str(u) for u in users) and calls and tools and str(users[-1])=="SCENARIO:text_only go"
+sys.exit(0 if ok else 1)' "$WORK/req.log" && echo "PASS: the resumed model has the saved history" || { echo "FAIL: the resumed model has the saved history"; FAILED=$((FAILED + 1)); }
 expectnot "the server is stopped after the run" mounts 'new'
 
 [ "$FAILED" -eq 0 ] || { tail -40 "$LOG"; echo "veltro_cli_test: $FAILED failed"; exit 1; }

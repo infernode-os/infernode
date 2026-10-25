@@ -95,6 +95,12 @@ echo 'mode=local' > /tmp/deltest/ndb/llm
 echo 'backend=openai' >> /tmp/deltest/ndb/llm
 echo 'url=http://127.0.0.1:$PORT/v1' >> /tmp/deltest/ndb/llm
 bind -bc /tmp/deltest/ndb /lib/ndb
+# Long enough that a read of it is put in the workspace (spill_readback).
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+	for j in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 {
+		echo 'a line of a long file, long enough to be kept in the workspace when read: 0123456789abcdef' >> /tmp/deltest/veltro/big.txt
+	}
+}
 echo > /tmp/deltest/veltro/welcome_shown
 echo > /tmp/deltest/veltro/tour_offered
 bind -bc /tmp/deltest/veltro /lib/veltro
@@ -360,7 +366,7 @@ for l in open(sys.argv[1]):
     for m in json.loads(l)["body"]["messages"]:
         if m.get("role") == "tool" and m.get("tool_call_id") == "call_spill_readback_0_0": first = str(m.get("content"))
         if m.get("role") == "tool" and m.get("tool_call_id") == "call_spill_readback_1_0": back = str(m.get("content"))
-ok = first is not None and "full output at" in first and back is not None and not back.startswith("error") and "1\t" in back
+ok = first is not None and "whole output is at" in first and back is not None and not back.startswith("error") and "1\t" in back
 sys.exit(0 if ok else 1)' "$WORK/req.log" && ok "a long result is read back where the agent is told it is" || bad "a long result is read back where the agent is told it is"
 section "task status" | grep -q '^recently used (latest first): /lib/veltro/system.txt (via read)' && ok "task status says what the task has used" || bad "task status says what the task has used"
 section "task status" | grep -q '^documents, in its own tab (task 1), not yours: notes "Notes"' && ok "task status says where the task's documents are" || bad "task status says where the task's documents are"

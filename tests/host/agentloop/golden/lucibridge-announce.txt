@@ -1,0 +1,33 @@
+# lucibridge announce
+requests 4
+
+== request 0 (turn 0)
+tools: list read write
+
+== request 1 (turn 1)
+tools: list read write
+assistant: Let me read the file:
+user: 
+  | [harness: you said what you would do next, but made no tool call, so nothing was done.  If there is more to do, make the call now; if the work is finished, say so plainly.]
+
+== request 2 (turn 2)
+tools: list read write
+assistant-call call_announce_1_0 read {"args": "\/usr\/agentloop\/a.txt"}
+tool-result call_announce_1_0:
+  |     1	alpha
+
+== request 3 (turn 3)
+tools: list read write
+user: 
+  | [harness: your reply was empty.  Answer the user, or make the tool call you meant to make.]
+
+== output
+  | msg 0
+  | role=human text=SCENARIO:announce go
+  | 
+  | msg 1
+  | role=veltro text=Let me read the file:
+  | 
+  | msg 2
+  | role=veltro text=It says alpha.
+  | 

@@ -775,6 +775,7 @@ dis/tests/limbo_asgcall_test.dis
 dis/tests/limbo_inline_test.dis
 dis/tests/limbo_ldt_test.dis
 dis/tests/lists_test.dis
+dis/tests/llmclient_anthropic_test.dis
 dis/tests/llmclient_proxy_test.dis
 dis/tests/llmclient_reqshape_test.dis
 dis/tests/llmclient_sse_fallback_test.dis
@@ -882,6 +883,7 @@ dis/tests/utf21_test.dis
 dis/tests/veltro_cc_alignment_test.dis
 dis/tests/veltro_charon_security_test.dis
 dis/tests/veltro_concurrent_test.dis
+dis/tests/veltro_edit_test.dis
 dis/tests/veltro_launch_test.dis
 dis/tests/veltro_more_tools_test.dis
 dis/tests/veltro_present_security_test.dis

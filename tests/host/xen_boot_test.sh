@@ -7,7 +7,8 @@
 # /lib/ndb/llm naming the scripted model.  Xenith gets a dump file whose
 # one window runs a driver in Xenith's name space; the driver checks that
 # the plumber and the model are there, plumbs a file, and finds it open
-# in a window.
+# in a window.  A start-up file of the user's (/usr/<user>/lib/xen/profile)
+# binds a directory before Xenith starts; the driver sees the bind.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -31,11 +32,16 @@ EMU_PID=
 DRIVER=
 OUT="$WORK/out"
 DUMP="$ROOT/tmp/xen-boot-test.dump"
+# the user's start-up file, made here unless one is there already
+XUSER=$(id -un)
+XPROFILE="$ROOT/usr/$XUSER/lib/xen/profile"
+XMADE=
 cleanup() {
 	[ -z "$EMU_PID" ] || kill -9 "$EMU_PID" 2>/dev/null || true
 	[ -z "$SERVER_PID" ] || kill "$SERVER_PID" 2>/dev/null || true
 	[ "${KEEP:-0}" = 1 ] && return 0
 	[ -z "$DRIVER" ] || rm -f "$DRIVER"
+	[ -z "$XMADE" ] || rm -rf "$XMADE"
 	rm -rf "$ROOT/usr/xenboot" "$DUMP" "$WORK"
 }
 trap cleanup EXIT HUP INT TERM
@@ -50,6 +56,13 @@ PORT=$(cat "$WORK/port")
 rm -rf "$ROOT/usr/xenboot"
 mkdir -p "$ROOT/usr/xenboot" "$ROOT/tmp"
 echo alpha > "$ROOT/usr/xenboot/a.txt"
+mkdir -p "$ROOT/usr/xenboot/pkg" "$ROOT/usr/xenboot/mnt"
+echo fromprofile > "$ROOT/usr/xenboot/pkg/marker"
+if [ ! -e "$XPROFILE" ]; then
+	if [ -d "$ROOT/usr/$XUSER" ]; then XMADE="$ROOT/usr/$XUSER/lib/xen"; else XMADE="$ROOT/usr/$XUSER"; fi
+	mkdir -p "$(dirname "$XPROFILE")"
+	echo 'bind /usr/xenboot/pkg /usr/xenboot/mnt' > "$XPROFILE"
+fi
 
 # What runs inside Xenith: the services checked, a file plumbed, the
 # windows listed.
@@ -81,6 +94,8 @@ for i in 1 2 3 4 5 6 7 8 9 10 {
 	ls /chan
 	echo '@@ llm'
 	ls /mnt/llm
+	echo '@@ profile'
+	cat /usr/xenboot/mnt/marker
 	echo '@@ window'
 	echo $found
 	echo '@@ body'
@@ -143,6 +158,11 @@ expect() {
 }
 expect "the plumber is running" chan 'plumb.edit'
 expect "the model is mounted" llm '^/mnt/llm/new$'
+if [ -n "$XMADE" ]; then
+	expect "the user's start-up file binds into Xenith's name space" profile '^fromprofile$'
+else
+	echo "SKIP: $XPROFILE exists already; its start-up not checked"
+fi
 expect "a plumbed file opens in a window" window '^/chan/[0-9]'
 expect "the window holds the file" body '^alpha$'
 

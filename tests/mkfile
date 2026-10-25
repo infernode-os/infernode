@@ -138,6 +138,7 @@ TARG=\
 	taskparse_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
+	strcat_test.dis\
 	string_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\

@@ -9,13 +9,14 @@
 #	the kernel is on it as infernode8.img, byte for byte;
 #	dis/ is the built tree's; lib/, fonts/ and icons/ hold what git
 #	tracks and nothing else (an untracked file in lib/ stays off);
-#	usr/ is there and empty; no skiplogon, wifi, netconsole, rootpath
-#	or radio firmware;
+#	usr/ is there and empty; no skiplogon, wifi, netconsole or rootpath;
+#	firmware/ holds the radio's firmware under the names the driver
+#	asks for, and the licence it is distributed under;
 #	firmware that does not match its manifest is refused, and no image
 #	is left behind;
 #	fsck.fat, where there is one, finds nothing wrong.
 #
-# The firmware is stand-in bytes under a manifest made here, and the
+# The firmware is stand-in bytes under manifests made here, and the
 # kernel is random bytes: what is tested is the card, not the boot. The
 # boot is tests/host/baremetal_test.sh's, and a board's.
 
@@ -45,6 +46,17 @@ mkdir -p "$tmp/fw"
 		echo "file $f $sha $(wc -c < "$tmp/fw/$f" | tr -d ' ') test https://example.invalid/$commit/boot/$f"
 	done
 } > "$tmp/manifest"
+# the radio's, in tools/pi-firmware-manifest.txt's shape: upstream names
+# that are not the names on the card
+{
+	echo "commit $commit"
+	for f in brcmfmac43455-sdio.bin:cyfmac43455-sdio-standard.bin brcmfmac43455-sdio.clm_blob:cyfmac43455-sdio.clm_blob \
+		brcmfmac43455-sdio.txt:brcmfmac43455-sdio.txt; do
+		echo "stand-in radio ${f#*:}" > "$tmp/fw/${f#*:}"
+		sha=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/fw/${f#*:}")
+		echo "file ${f%%:*} $sha $(wc -c < "$tmp/fw/${f#*:}" | tr -d ' ') test https://example.invalid/$commit/${f#*:}"
+	done
+} > "$tmp/radiomanifest"
 head -c 300000 /dev/urandom > "$tmp/kernel.img"
 echo "a developer's own file" > "$ROOT/$untracked"
 
@@ -124,7 +136,7 @@ for board in rpi3bplus rpi4b; do
 	esac
 	img=$tmp/$board.img
 	if sh tools/mkpiimage.sh --size 256 --firmware "$tmp/fw" --manifest "$tmp/manifest" \
-		$board "$tmp/kernel.img" "$img" > "$tmp/$board.log" 2>&1; then
+		--radio-manifest "$tmp/radiomanifest" $board "$tmp/kernel.img" "$img" > "$tmp/$board.log" 2>&1; then
 		pass "$board: mkpiimage builds a card"
 	else
 		failed "$board: mkpiimage failed: $(tail -3 "$tmp/$board.log" | tr '\n' ' ')"
@@ -140,7 +152,15 @@ for board in rpi3bplus rpi4b; do
 	for f in $own LICENCE.broadcom; do has "$L" "/$f" "$tmp/fw/$f" || ok=0; done
 	[ $ok = 1 ] && pass "$board: its firmware and LICENCE.broadcom are on it" || failed "$board: its firmware"
 	ok=1
-	for f in $other firmware/ skiplogon wifi netconsole rootpath cmdline.txt; do
+	has "$L" /firmware/brcmfmac43455-sdio.bin "$tmp/fw/cyfmac43455-sdio-standard.bin" || ok=0
+	has "$L" /firmware/brcmfmac43455-sdio.clm_blob "$tmp/fw/cyfmac43455-sdio.clm_blob" || ok=0
+	has "$L" /firmware/brcmfmac43455-sdio.txt "$tmp/fw/brcmfmac43455-sdio.txt" || ok=0
+	has "$L" /firmware/LICENCE.cypress os/bcm/card/LICENCE.cypress || ok=0
+	[ "$(grep -c '^/firmware/.' "$L")" = 4 ] || { echo "    firmware/ holds $(grep -c '^/firmware/.' "$L") files, not 4"; ok=0; }
+	[ $ok = 1 ] && pass "$board: firmware/ is the radio's firmware, by the driver's names, and LICENCE.cypress" \
+		|| failed "$board: the radio's firmware"
+	ok=1
+	for f in $other skiplogon wifi netconsole rootpath cmdline.txt; do
 		grep -q "^/$f\( \|$\)" "$L" && { echo "    /$f is on the card"; ok=0; }
 	done
 	[ $ok = 1 ] && pass "$board: nothing of the other board's, and no control file" || failed "$board: the card has what it should not"
@@ -188,7 +208,7 @@ done
 # firmware that is not what the manifest says: refused, nothing left
 echo "not the firmware" > "$tmp/fw/start4.elf"
 if sh tools/mkpiimage.sh --size 256 --firmware "$tmp/fw" --manifest "$tmp/manifest" \
-	rpi4b "$tmp/kernel.img" "$tmp/bad.img" > "$tmp/bad.log" 2>&1; then
+	--radio-manifest "$tmp/radiomanifest" rpi4b "$tmp/kernel.img" "$tmp/bad.img" > "$tmp/bad.log" 2>&1; then
 	failed "firmware that does not match its manifest was used"
 elif [ -e "$tmp/bad.img" ]; then
 	failed "a refused build left an image behind"

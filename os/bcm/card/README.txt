@@ -26,11 +26,9 @@ Files on this card that change what the machine does
 All are optional, and absent from a new card:
 
   wifi        essid <name> and password <phrase>, one per line: join
-              that network at boot. The radio also needs its firmware in
-              firmware/, which cannot be shipped in this image; fetch it
-              with tools/pi-firmware.sh from the InferNode source.
-              This file is plain text on a FAT card: anyone holding the
-              card can read the passphrase.
+              that network at boot (the radio's firmware is already in
+              firmware/). This file is plain text on a FAT card: anyone
+              holding the card can read the passphrase.
   netconsole  a shell on TCP port 17010. Read the manual first: the
               token on its first line is sent in clear.
   skiplogon   start the desktop with no login. Keys will not persist.
@@ -39,5 +37,7 @@ The manual, and every other file the machine reads:
 https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md
 
 The firmware files beside this one (bootcode.bin, start*.elf, fixup*.dat,
-the .dtb) are Broadcom's and Raspberry Pi's, under LICENCE.broadcom.
+the .dtb) are Broadcom's and Raspberry Pi's, under LICENCE.broadcom. The
+radio's, in firmware/, are Cypress's, under firmware/LICENCE.cypress: for
+use with the Cypress radio on this board, and not to be copied elsewhere.
 InferNode itself is under LICENSE, with NOTICE.

@@ -2114,7 +2114,7 @@ jobs:
 
           **Windows (headless):** Extract the zip, double-click `setup-windows.bat` to clear Mark-of-the-Web, then from a console run `o.emu.exe -c1 -r. sh -l`.
 
-          **Raspberry Pi:** Write the image for your board to an SD card with Raspberry Pi Imager ("Use custom"; leave its OS customisation off, which InferNode does not read), `dd` or Etcher, and boot. The first boot asks for a new password. The 3B+ and 4B images are not interchangeable. Wi-Fi needs the radio's firmware, which cannot ship here: see `README.txt` on the card and [docs/BAREMETAL.md](https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md).
+          **Raspberry Pi:** Write the image for your board to an SD card with Raspberry Pi Imager ("Use custom"; leave its OS customisation off, which InferNode does not read), `dd` or Etcher, and boot. The first boot asks for a new password. The 3B+ and 4B images are not interchangeable. For Wi-Fi, put a `wifi` file on the card (`essid` and `password` lines): see `README.txt` on the card and [docs/BAREMETAL.md](https://github.com/infernode-os/infernode/blob/master/docs/BAREMETAL.md). The images carry Broadcom's boot firmware and Cypress's radio firmware, each with its licence, for use on the Raspberry Pi they are for.
 
           **Xenith (Linux):** Extract, then `./xenith [file ...]`. `./setup-desktop.sh` adds it to the app menu (files open with it) and puts `xenith` on your PATH. It shares `~/.infernode` with InferNode.
 

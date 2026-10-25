@@ -364,7 +364,8 @@ tools/codex-gate/.venv/
 
 # CYW43455 WiFi firmware for the bare-metal Pi port: Cypress binary-
 # redistribution licence, never committed. tools/pi-firmware.sh puts the
-# files on the card; tools/pi-firmware-manifest.txt pins them by SHA256.
+# files on a card, and in the release's Pi card images (tools/mkpiimage.sh);
+# tools/pi-firmware-manifest.txt pins them by SHA256.
 brcmfmac43455-sdio.*
 cyfmac43455-sdio*
 

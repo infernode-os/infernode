@@ -15,13 +15,14 @@
 # tree -- it asks the mailbox -- but the firmware wants the file there).
 # tools/mkpiimage.sh puts on each card the ones its board needs.
 #
-# WHY THEY MAY BE IN A RELEASE AND THE RADIO'S MAY NOT
+# WHY THEY MAY BE IN THE PI CARD IMAGES
 #
 # LICENCE.broadcom permits redistribution in binary form, unmodified,
 # for running a Raspberry Pi, provided the notice goes with it: so the
-# card images carry it beside them.  That is a different licence from
-# the CYW43455 radio firmware's (tools/pi-firmware-manifest.txt), which
-# never goes in a release.  Neither is committed to this tree.
+# card images carry it beside them, and no hosted release carries them.
+# The CYW43455 radio's firmware takes the same road for the same kind of
+# reason (tools/pi-firmware-manifest.txt).  Neither is committed to this
+# tree.
 #
 # REPINNING
 #

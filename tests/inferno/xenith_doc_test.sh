@@ -574,13 +574,14 @@ if {echo refresh > $M/doc/ctl} {bad 'refresh on a window showing text was taken'
 
 # ---- a source document longer than any one image of it: set ----
 # a program's window, its kind named (render markdown), its text far
-# too long for one image of it (25 CHANGELOGs, hundreds of thousands
-# of pixels tall): it is laid out and drawn a strip at a time, not
-# refused for want of image memory (allocimage, as it was)
+# too long for one image of it (6 CHANGELOGs, 120000 pixels tall at
+# this width, over the 256MB the image pool has): it is laid out and
+# drawn a strip at a time, not refused for want of image memory
+# (allocimage, as it was)
 (lid rest) = `{cat $XENITH/new/ctl}
 echo name /+Long > $XENITH/$lid/ctl
 rm -f /tmp/xenith_doc_long.md
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 {
+for i in 1 2 3 4 5 6 {
 	cat /CHANGELOG.md >> /tmp/xenith_doc_long.md
 }
 cat /tmp/xenith_doc_long.md > $XENITH/$lid/body

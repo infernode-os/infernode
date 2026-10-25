@@ -56,6 +56,7 @@ asyncloadtext(path: string, q0: int, winid: int): ref AsyncOp
 	op.path = path;
 	op.active = 1;
 	op.winid = winid;
+	op.q0 = q0;
 
 	spawn texttask(op, path, q0, winid);
 	return op;
@@ -141,7 +142,7 @@ texttask(op: ref AsyncOp, path: string, q0: int, winid: int)
 		# Send chunk - retry with cancellation check if channel full
 		for(;;) {
 			alt {
-				dat->casync <-= ref AsyncMsg.TextData(op.opid, winid, path, q0, data, nrunes, nil) =>
+				dat->casync <-= ref AsyncMsg.TextData(op.opid, winid, path, q0, data, nrunes, nil, nbytes) =>
 					nrunes += nr;
 				<-op.ctl =>
 					fd = nil;

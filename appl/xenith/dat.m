@@ -86,11 +86,13 @@ Dat : module {
 	Lock : adt {
 		cnt : int;
 		chann : chan of int;
+		pid : int;	# the holder's
 
 		init : fn() : ref Lock;
 		lock : fn(l : self ref Lock);
 		unlock : fn(l : self ref Lock);
 		locked : fn(l : self ref Lock) : int;
+		held : fn(l : self ref Lock) : int;
 	};
 
 # 	Lockx : adt {

@@ -5,15 +5,26 @@ include "common.m";
 sys : Sys;
 xenith : Xenith;
 utils : Utils;
+dat : Dat;
 
 SZRUNE, Block, Blockincr, Astring : import Dat;
+Lock : import dat;
 error : import utils;
+
+# Every window's text is paged to one temporary file, from whichever of
+# Xenith's procs is at it: its blocks are read and written at their own
+# offsets (a seek then a read or write from two procs at once took the
+# other's offset: one file's text read into another's), and the list of
+# free blocks is changed by one proc at a time (two given one block)
+dlock : ref Lock;
 
 init(mods : ref Dat->Mods)
 {
 	sys = mods.sys;
 	xenith = mods.xenith;
 	utils = mods.utils;
+	dat = mods.dat;
+	dlock = Lock.init();
 }
 
 blist : ref Block;
@@ -67,6 +78,7 @@ Disk.new(d : self ref Disk, n : int) : ref Block
 	b, bl : ref Block;
 
 	(size, i) = ntosize(n);
+	dlock.lock();
 	b = d.free[i];
 	if(b != nil)
 		d.free[i] = b.next;
@@ -86,14 +98,17 @@ Disk.new(d : self ref Disk, n : int) : ref Block
 		d.addr += size;
 	}
 	b.n = n;
+	dlock.unlock();
 	return b;
 }
 
 Disk.release(d : self ref Disk, b : ref Block)
 {
 	(nil, i) := ntosize(b.n);
+	dlock.lock();
 	b.next = d.free[i];
 	d.free[i] = b;
+	dlock.unlock();
 }
 
 Disk.write(d : self ref Disk, bp : ref Block, r : string, n : int) : ref Block
@@ -109,10 +124,8 @@ Disk.write(d : self ref Disk, bp : ref Block, r : string, n : int) : ref Block
 		d.release(b);
 		b = d.new(n);
 	}
-	if(sys->seek(d.fd, big b.addr, 0) < big 0)
-		error("seek error in temp file");
 	ab = utils->stob(r, n);
-	if(sys->write(d.fd, ab, len ab) != len ab)
+	if(sys->pwrite(d.fd, ab, len ab, big b.addr) != len ab)
 		error("write error to temp file");
 	ab = nil;
 	b.n = n;
@@ -126,10 +139,8 @@ Disk.read(d : self ref Disk, b : ref Block, r : ref Astring, n : int)
 	if (n > b.n)
 		error("bad assert in Disk.read");
 	(nil, nil) := ntosize(b.n);
-	if(sys->seek(d.fd, big b.addr, 0) < big 0)
-		error("seek error in temp file");
 	ab = array[n*SZRUNE] of byte;
-	if(sys->read(d.fd, ab, len ab) != len ab)
+	if(sys->pread(d.fd, ab, len ab, big b.addr) != len ab)
 		error("read error from temp file");
 	utils->btos(ab, r);
 	ab = nil;

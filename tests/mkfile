@@ -85,6 +85,7 @@ TARG=\
 	jit_unload_helper.dis\
 	pool_nomem_helper.dis\
 	xenith_race_helper.dis\
+	xenith_fuzz.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
 	jit_test.dis\

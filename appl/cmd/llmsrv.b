@@ -22,7 +22,8 @@ implement Llmsrv;
 #                            turns), it becomes the history: a saved
 #                            session taken up where it was left
 #           compact      rw: write to trigger compaction
-#           ctl          w:  "reset" or "close"
+#           ctl          w:  "reset", "close", or "cancel" (stop the
+#                            generation under way)
 #           usage        r:  "estimated_tokens/context_limit\n"
 #
 # Usage:
@@ -143,6 +144,7 @@ LlmSession: adt {
 	streamleft:     array of byte;   # the rest of a chunk a read had no room for
 	donech:         chan of int;     # signaled when gen completes
 	genactive:      int;            # 1 during generation
+	genpid:         int;            # its process group, for cancel
 	pendingwrite:   array of byte;   # /ask prompt reassembled across write-fragments,
 	                                 # consumed (-> generation) on the next read
 
@@ -415,6 +417,7 @@ newsession(): ref LlmSession
 		nil,           # streamleft
 		nil,           # donech
 		0,             # genactive
+		0,             # genpid
 		nil,           # pendingwrite
 		0,             # closed
 		1              # refs (starts at 1)
@@ -985,6 +988,9 @@ Serve:
 				"close" =>
 					closesession(sess);
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				"cancel" =>
+					cancelgeneration(sess);
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 				* =>
 					# autocompact <n>: per-session auto-compact high-water
 					# mark in estimated tokens; 0 disables (caller owns its
@@ -1196,6 +1202,9 @@ parsecontext(content: string): (list of ref LlmMessage, string)
 # donech and the triggering write was already replied to.
 rungeneration(sess: ref LlmSession, prompt: string)
 {
+	# A group of its own, the backend's readers in it, so cancel can stop
+	# all of it.
+	sess.genpid = sys->pctl(Sys->NEWPGRP, nil);
 	# Check for TOOL_RESULTS
 	if(hasprefix(prompt, "TOOL_RESULTS\n") || hasprefix(prompt, "TOOL_RESULTS\r\n")) {
 		(results, perr) := llmclient->parsetoolresults(prompt);
@@ -1348,6 +1357,29 @@ askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 	sess.totaltokens += resp.tokens;
 	sess.contexttokens = resp.tokens;
 	sess.lastresponse = resp.response;
+}
+
+# Stop the generation under way: the model's answer is not waited for.
+# The history stays a valid one: a prompt not yet answered was never
+# added; tool results not yet answered are answered so.
+cancelgeneration(sess: ref LlmSession)
+{
+	if(!sess.genactive || sess.genpid <= 0)
+		return;
+	fd := sys->open("/prog/" + string sess.genpid + "/ctl", Sys->OWRITE);
+	if(fd == nil || sys->fprint(fd, "killgrp") < 0) {
+		sys->fprint(stderr, "llmsrv: cancel: cannot stop generation %d: %r\n", sess.genpid);
+		return;
+	}
+	fd = nil;
+	sess.genpid = 0;
+	last: ref LlmMessage;
+	for(ml := sess.messages; ml != nil; ml = tl ml)
+		last = hd ml;
+	if(last != nil && last.role == "user")
+		sess.messages = addmessage(sess.messages, "assistant", "(stopped by the user)", "");
+	sess.lastresponse = "STOP:end_turn\n";
+	endgeneration(sess);
 }
 
 endgeneration(sess: ref LlmSession)

@@ -155,6 +155,7 @@ Session: adt {
 	pending:	string;	# what changed since, for the next message
 	running:	int;		# a turn is running (busy is also set by a writer)
 	queued:		list of string;	# messages written while it runs, reversed
+	unsent:		list of (string, string);	# a stopped turn's calls, answered "not run"
 };
 
 sessions: list of ref Session;
@@ -876,6 +877,11 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 			if(pc == nil)
 				break;
 			(id, name, args) := hd pc;
+			# Stopped: what changes something is not started.
+			if(s.cancel) {
+				ran = (id, "error: not run: the user stopped the turn") :: ran;
+				continue;
+			}
 			setstatus(s, str->tolower(name));
 			log(s, "tool " + name + ": args " + args);
 			log(s, "tool " + name + ": calling with " + string len args + " bytes");
@@ -885,6 +891,10 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 			continue;
 		}
 		(id, name, args) := hd pc;
+		if(s.cancel) {
+			ran = (id, "error: not run: the user stopped the turn") :: ran;
+			continue;
+		}
 		setstatus(s, "working");
 		log(s, "tool " + name + ": args " + args);
 		log(s, "tool " + name + ": calling with " + string len args + " bytes");
@@ -935,6 +945,16 @@ joinqueued(q: list of string): string
 appendresult(l: list of (string, string), id, content: string): list of (string, string)
 {
 	return reverse((id, content) :: reverse(l));
+}
+
+notrun(calls: list of (string, string, string)): list of (string, string)
+{
+	out: list of (string, string);
+	for(; calls != nil; calls = tl calls) {
+		(id, nil, nil) := hd calls;
+		out = (id, "error: not run: the user stopped the turn") :: out;
+	}
+	return reverse(out);
 }
 
 reverse(l: list of (string, string)): list of (string, string)
@@ -992,8 +1012,18 @@ turn(s: ref Session, input: string)
 	laststep := 0;
 	stopstate := "max-steps";
 	nudges := 0;
+	lastresults: list of (string, string);	# what prompt carries, if tool results
+	# A stopped turn's calls are answered first, with this message.
+	if(s.unsent != nil) {
+		prompt = s.al->buildtoolresults(appendresult(s.unsent, "-", prompt));
+		s.unsent = nil;
+	}
 	for(step := 0; step < s.maxsteps; step++) {
 		if(s.cancel) {
+			# The results of this step's calls, not sent: they go with
+			# the next message.
+			if(step > 0)
+				s.unsent = lastresults;
 			hitlimit = 0;
 			stopstate = "cancelled";
 			say(s, "note", "(cancelled)");
@@ -1052,6 +1082,18 @@ turn(s: ref Session, input: string)
 		log(s, "step " + string (step + 1) + ": waiting for LLM response...");
 		response := readllmfd(s);
 		log(s, sys->sprint("step %d: LLM response %d bytes", step + 1, len array of byte response));
+		if(s.cancel) {
+			if(started)
+				evc <-= ref Ev.End(s);
+			# Calls it made before it was stopped are in its history:
+			# each must be answered, or the next request is refused.
+			(nil, cut, nil) := s.al->parsellmresponse(response);
+			s.unsent = notrun(cut);
+			hitlimit = 0;
+			stopstate = "cancelled";
+			say(s, "note", "(cancelled)");
+			break;
+		}
 		if(response == "") {
 			stopstate = "empty";
 			say(s, "note", "(no response from LLM)");
@@ -1189,6 +1231,7 @@ turn(s: ref Session, input: string)
 			rev = appendresult(rev, "-", q);
 		}
 		prompt = s.al->buildtoolresults(rev);
+		lastresults = rev;
 	}
 
 	if(hitlimit)
@@ -1357,7 +1400,7 @@ newsession(): ref Session
 	al->setverbose(verbose);
 	al->settoolmount(toolmount);
 	s := ref Session(nextsid++, al, "", nil, "", "", "", 0, maxsteps, 1,
-		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, nil, 0, 0, 0, 0, "", 0, nil);
+		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, nil, 0, 0, 0, 0, "", 0, nil, nil);
 	sessions = s :: sessions;
 	vers++;
 	return s;
@@ -1491,6 +1534,10 @@ ctl(s: ref Session, line: string): string
 		if(!s.busy)
 			return nil;
 		s.cancel = 1;
+		# The model's generation is stopped where it is, not waited for
+		# (it could run minutes); the turn sees cancel when it returns.
+		if(s.llmid != "")
+			writefile("/mnt/llm/" + s.llmid + "/ctl", "cancel");
 		if(s.approval != nil) {
 			s.approval.reply <-= 0;
 			s.approval = nil;

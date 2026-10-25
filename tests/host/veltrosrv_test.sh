@@ -116,6 +116,17 @@ cat /mnt/veltro/\$id/text > /dev/null
 echo '@@ cancelled'
 grep 'turn done' /mnt/veltro/\$id/log
 
+echo '@@ cancel slow'
+t0=\`{date -n}
+echo 'SCENARIO:slow go' > /mnt/veltro/\$id/input
+sleep 1
+echo cancel > /mnt/veltro/\$id/ctl
+cat /mnt/veltro/\$id/text > /dev/null
+t1=\`{date -n}
+echo elapsed \`{echo \$t1 - \$t0 | calc}
+cat /mnt/veltro/\$id/text | tail -3
+grep 'turn done' /mnt/veltro/\$id/log | tail -1
+
 echo '@@ probe'
 echo 'SCENARIO:probe_mount go' > /mnt/veltro/\$id/input
 cat /mnt/veltro/\$id/text > /dev/null
@@ -213,6 +224,11 @@ for l in open(sys.argv[1]):
 sys.exit(0 if len(sysp)==1 and noted else 1)' "$WORK/req.log" &&
 	echo "PASS: the system prompt is never rewritten; the change goes with the next message" ||
 	{ echo "FAIL: the system prompt is never rewritten; the change goes with the next message"; FAILED=$((FAILED + 1)); }
+expectnot "a cancelled generation's late answer is not shown" "cancel slow" 'Too late.'
+expect "a cancelled generation ends the turn" "cancel slow" 'stop=cancelled'
+el=$(section "cancel slow" | sed -n 's/^elapsed //p')
+[ -n "$el" ] && [ "$el" -lt 10 ] && echo "PASS: cancel does not wait for the model (${el}s)" ||
+	{ echo "FAIL: cancel does not wait for the model (${el:-?}s)"; FAILED=$((FAILED + 1)); }
 expect "the tool cannot see /mnt/veltro" probe "does not exist"
 expectnot "close removes the session" close "^0\$"
 

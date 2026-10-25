@@ -145,6 +145,14 @@ retrydelay(err: string, attempt: int): int
 	}
 	if(contains(err, "overloaded") || contains(err, "cannot connect"))
 		retry = 1;
+	# A backend that went quiet before any of the answer, once: a gateway
+	# that starts a model per conversation stalls now and then, and the
+	# same request then answers; a hung one is not waited on again.
+	if(contains(err, "no-progress timeout")) {
+		if(attempt > 0)
+			return -1;
+		retry = 1;
+	}
 	if(!retry)
 		return -1;
 	ms := RETRYBASEMS << attempt;
@@ -994,6 +1002,7 @@ askopenai(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, strin
 
 askopenaionce(baseurl, apikey: string, req: ref AskRequest): (ref AskResponse, string, int)
 {
+	debugdump(buildopenairequestjson(req));
 	# Streaming path — true incremental SSE consumption.
 	# Forwards delta.content to req.streamch as it arrives on the
 	# wire, not after buffering. On mid-response stall, returns

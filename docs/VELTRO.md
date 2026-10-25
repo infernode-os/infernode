@@ -210,6 +210,15 @@ What veltrosrv does when a model's turn goes wrong in a way it can put right
 - **Calls in one response** run in the model's order: read-only calls that come
   together run concurrently, and a call that changes something runs alone,
   after those before it.
+- **Cancel** (`ctl cancel`) stops the model's generation where it is (llmsrv's
+  `ctl cancel`), and no further call of the turn is started. Calls the model
+  had made are answered "not run" with the next message, so its history stays
+  one the API takes.
+
+`tests/host/veltro_edit_bench.sh` measures the loop against a real model:
+known bugs planted in real Limbo functions, solved when the file is the
+original again, with the steps and tool calls each took. Run it on two trees
+(`BENCH_ROOT`) to compare a change.
 
 llmsrv compacts a long session into a checkpoint of a fixed form (goal,
 constraints, progress, decisions, next steps, critical context, what the user

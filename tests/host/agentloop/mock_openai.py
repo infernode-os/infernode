@@ -75,6 +75,10 @@ SCENARIOS = {
     "flaky": [
         {"content": "Answered after a retry."},
     ],
+    # A model that takes its time: cancel must not wait for it.
+    "slow": [
+        {"delay": 20, "content": "Too late."},
+    ],
     "single_read": [
         {"tools": [tool("read", FIX + "/a.txt")]},
         {"content": "Read it."},

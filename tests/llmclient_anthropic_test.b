@@ -253,6 +253,8 @@ testRetry(t: ref T)
 	t.asserteq(llmclient->retrydelay("anthropic: HTTP error: HTTP/1.1 400 Bad Request: {}", 0), -1, "400 not retried");
 	t.asserteq(llmclient->retrydelay("anthropic: HTTP error: HTTP/1.1 401 Unauthorized", 0), -1, "401 not retried");
 	t.asserteq(llmclient->retrydelay("anthropic: HTTP error: HTTP/1.1 429 x retry-after=600", 0), 60000, "capped");
+	t.asserteq(llmclient->retrydelay("openai: HTTP read no-progress timeout after 120000 ms (got 0 bytes)", 0), 1000, "a stall, once");
+	t.asserteq(llmclient->retrydelay("openai: HTTP read no-progress timeout after 120000 ms (got 0 bytes)", 1), -1, "not twice");
 }
 
 # OpenAI shape: no cap set is none sent; a cut-off reply is said; an

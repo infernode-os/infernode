@@ -67,7 +67,17 @@ init(d: ref Display): string
 	return nil;
 }
 
+# loaded once: two documents opening at once each loaded it, and
+# the one loaded first lost its documents to the other
 loadhtmldoc(): string
+{
+	docslock <-= 1;
+	err := loadhtmldoc0();
+	<-docslock;
+	return err;
+}
+
+loadhtmldoc0(): string
 {
 	if(htmldoc != nil)
 		return nil;
@@ -159,10 +169,8 @@ relay(h: int, c, ev: chan of string)
 	for(;;){
 		e := <-c;
 		if(e == "gone"){
-			alt {
-			ev <-= "gone" =>	;
-			* =>	;
-			}
+			# sent only if the view was reading then, it read on
+			spawn sendgone(ev);
 			return;
 		}
 		s := get(h);
@@ -181,6 +189,11 @@ relay(h: int, c, ev: chan of string)
 		}
 		ev <-= e;
 	}
+}
+
+sendgone(c: chan of string)
+{
+	c <-= "gone";
 }
 
 close(h: int)

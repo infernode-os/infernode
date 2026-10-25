@@ -52,7 +52,17 @@ init(d: ref Display): string
 	return nil;
 }
 
+# loaded once: two documents opening at once each loaded it, and
+# the one loaded first lost its documents to the other
 loadpdf(): string
+{
+	docslock <-= 1;
+	err := loadpdf0();
+	<-docslock;
+	return err;
+}
+
+loadpdf0(): string
 {
 	if(pdf != nil)
 		return nil;

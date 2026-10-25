@@ -43,6 +43,7 @@ init(nil: ref Draw->Context, args: list of string)
 	check("ctllock", "ctl unlock and a second lock are refused, not waited for", ctllock);
 	check("ctldel", "ctl del then more commands in one write", ctldel);
 	check("editxpipe", "Edit X with a pipe command locks each file it runs in", editxpipe);
+	check("hidden", "text reaching a window hidden by one filling its column", hidden);
 	if(failed)
 		raise "fail:tests failed";
 	sys->print("ALL PASS\n");
@@ -428,6 +429,50 @@ editxpipe(): string
 	bb := readall(b+"/body");
 	if(ab != "a\nb\n" || bb != "c\nd\n")
 		return sys->sprint("not sorted: %q %q", ab, bb);
+	put(a+"/ctl", "clean\n");
+	put(b+"/ctl", "clean\n");
+	put(a+"/ctl", "delete\n");
+	put(b+"/ctl", "delete\n");
+	return nil;
+}
+
+# a window grown to fill its column hides the others under it, their
+# frames left with no lines but the text they showed: text put before
+# it (a command's output, an agent's) was laid out past the frame's
+# end, and Xenith exited (endofframe)
+hidden(): string
+{
+	a := newwin("/tmp/xrace-full");
+	b := newwin("/tmp/xrace-hidden");
+	if(a == nil || b == nil)
+		return sys->sprint("no window: %r");
+	put(b+"/body", "1\n");	# less than fills its frame
+	# a write to the body shows its window again, so a grows first each time
+	afd := sys->open(b+"/addr", Sys->ORDWR);	# held, so it is not reset
+	for(i := 0; i < 10; i++){
+		put(a+"/ctl", "growfull\n");
+		sys->fprint(afd, "0");
+		if((e := put(b+"/data", "first\n")) != nil)
+			return e;
+		put(a+"/ctl", "growfull\n");
+		if((e = put(b+"/body", "more\nand more\n")) != nil)
+			return e;
+		put(a+"/ctl", "growfull\n");
+		if((e = put(b+"/tag", " Get")) != nil)
+			return e;
+	}
+	afd = nil;
+	if(!alive())
+		return "Xenith stopped answering";
+	put(b+"/ctl", "show\n");
+	want := "";
+	for(i = 0; i < 10; i++)
+		want += "first\n";
+	want += "1\n";
+	for(i = 0; i < 10; i++)
+		want += "more\nand more\n";
+	if((got := readall(b+"/body")) != want)
+		return sys->sprint("the hidden window holds %d bytes, not %d", len got, len want);
 	put(a+"/ctl", "clean\n");
 	put(b+"/ctl", "clean\n");
 	put(a+"/ctl", "delete\n");

@@ -674,6 +674,13 @@ frinsert(f : ref Frame, rp : string, l : int, p0 : int)
 
 	if(p0 > f.nchars || l == 0 || f.b == nil)
 		return;
+	# a frame with no lines (a window hidden by one grown to fill its
+	# column, or squeezed to its tag) shows none of it; laid out, the
+	# text ran past the frame's end, which raised endofframe
+	if(f.maxlines <= 0){
+		f.lastlinefull = 1;
+		return;
+	}
 	n0 = xfrfindbox(f, 0, 0, p0);
 	cn0 := p0;
 	nn0 = n0;

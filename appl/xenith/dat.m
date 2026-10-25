@@ -190,6 +190,7 @@ Dat : module {
 		mntdir : ref Mntdir;
 		nrpart : int;
 		rpart : array of byte;
+		snap : array of byte;	# a doc text or links read's answer, for the reads after it
 	};
 
 	Rangeset : type array of Range;

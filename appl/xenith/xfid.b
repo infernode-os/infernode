@@ -262,6 +262,7 @@ Xfid.open(x : self ref Xfid)
 	q : int;
 
 	fc.iounit = 0;
+	x.f.snap = nil;
 	w = x.f.w;
 	if(w != nil){
 		t := w.body;
@@ -471,6 +472,10 @@ Xfid.read(x : self ref Xfid)
 		respond(x, fc, nil);
 		return;
 	}
+	if(q == QWdoctext || q == QWdoclinks){
+		docread(x, w, q);
+		return;
+	}
 	# the row held as by every other request: with the window's lock
 	# alone, a read paged the buffer while the mouse task, holding the
 	# row, reshaped or filled the same window (a neighbour deleted, a
@@ -542,12 +547,6 @@ Xfid.read(x : self ref Xfid)
 	QWdocctl =>
 		str = 1;
 		sbuf = docview->ctlread(w);
-	QWdoctext =>
-		str = 1;
-		sbuf = docview->textread(w);
-	QWdoclinks =>
-		str = 1;
-		sbuf = docview->linksread(w);
 	QWdocfind =>
 		str = 1;
 		sbuf = docview->foundread(w);
@@ -596,6 +595,43 @@ Xfid.read(x : self ref Xfid)
 	row.qlock.unlock();
 }
  
+# A document's text or links, made by its engine: for a long PDF that
+# takes a while, and it was made again for each read, the row held
+# (Xenith stood still while a client read them). Made once, from the
+# read at the start, with neither the row nor the window held; the
+# reads after it take the rest of that.
+docread(x : ref Xfid, w : ref Window, q : int)
+{
+	fc : Smsg0;
+
+	off := int offset(x.fcall);
+	if(off == 0 || x.f.snap == nil){
+		row.qlock.lock();
+		w.lock('F');
+		gone := w.col == nil;
+		w.unlock();
+		row.qlock.unlock();
+		if(gone){
+			respond(x, fc, Edel);
+			return;
+		}
+		s : string;
+		if(q == QWdoctext)
+			s = docview->textread(w);
+		else
+			s = docview->linksread(w);
+		x.f.snap = array of byte s;
+	}
+	b := x.f.snap;
+	if(off > len b)
+		off = len b;
+	if(off+count(x.fcall) > len b)
+		setcount(x.fcall, len b-off);
+	fc.count = count(x.fcall);
+	fc.data = b[off:off+fc.count];
+	respond(x, fc, nil);
+}
+
 Xfid.write(x : self ref Xfid)
 {
 	fc  : Smsg0;

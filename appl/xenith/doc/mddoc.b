@@ -53,7 +53,16 @@ init(d: ref Display): string
 	return nil;
 }
 
+# loaded once, though two documents may be opening at once
 loadlayout(): string
+{
+	docslock <-= 1;
+	err := loadlayout0();
+	<-docslock;
+	return err;
+}
+
+loadlayout0(): string
 {
 	if(rlayout != nil)
 		return nil;

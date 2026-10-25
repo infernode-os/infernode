@@ -13,7 +13,9 @@
 #	than waited for with the row held;
 #	commands after del in one ctl write are not run on the deleted
 #	window;
-#	Edit X with a pipe command locks each file it runs in.
+#	Edit X with a pipe command locks each file it runs in;
+#	text reaching a window hidden under one grown to fill its column
+#	does not take Xenith down.
 #
 # Runs tests/inferno/xenith_race_test.sh (tests/xenith_race_helper.b)
 # inside a headless Xenith (xenith_inside.sh). Needs the SDL GUI

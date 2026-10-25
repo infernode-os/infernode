@@ -604,7 +604,7 @@ agentfuzz(seed: int, done: chan of int)
 			continue;
 		}
 		d := X+"/"+w.id;
-		case rand->rand(18) {
+		case rand->rand(25) {
 		0 or 1 or 2 =>
 			xwrite(d+"/body", randtext(1+rand->rand(5)));
 		3 =>
@@ -647,6 +647,26 @@ agentfuzz(seed: int, done: chan of int)
 		17 =>
 			if(rand->rand(3) == 0)
 				xwrite(d+"/ctl", "put");
+		18 =>
+			# grown, hiding the others: their text still reaches them
+			xwrite(d+"/ctl", (array[] of {"growfull", "growmax", "grow"})[rand->rand(3)]);
+		19 =>
+			xwrite(d+"/ctl", (array[] of {"noscroll", "scroll"})[rand->rand(2)]);
+		20 =>
+			# before what the window shows
+			fd := sys->open(d+"/addr", Sys->ORDWR);
+			if(fd != nil){
+				sys->fprint(fd, "0");
+				xwrite(d+"/data", randtext(1+rand->rand(3)));
+			}
+		21 =>
+			xread(d+"/doc/text");
+		22 =>
+			xread(d+"/doc/links");
+		23 =>
+			xread(d+"/doc/ctl");
+		24 =>
+			xwrite(d+"/doc/ctl", (array[] of {"render", "text", "scale 150", "fit page", "sheet 2", "refresh", "live", "nolive"})[rand->rand(8)]);
 		}
 		sys->sleep(rand->rand(60));
 	}

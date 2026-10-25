@@ -368,6 +368,16 @@ tools/codex-gate/.venv/
 brcmfmac43455-sdio.*
 cyfmac43455-sdio*
 
+# The Pi's boot firmware: Broadcom's licence, never committed either.
+# tools/mkpiimage.sh puts it in the card images it builds;
+# tools/pi-bootfw-manifest.txt pins it by SHA256.
+bootcode.bin
+start.elf
+start4.elf
+fixup.dat
+fixup4.dat
+LICENCE.broadcom
+
 # agentloop_characterization_test.sh scratch (removed when the test exits)
 /usr/agentloop/
 /tests/inferno/.agentloop-char.*

@@ -37,6 +37,10 @@
 # whoever mounted the card; it never asks for sudo, and if the card is
 # not writable by that user it says so and stops.
 #
+# The same tool fetches the Pi's boot firmware for a card image, from a
+# second manifest: --manifest tools/pi-bootfw-manifest.txt (see
+# tools/mkpiimage.sh).
+#
 # Exit status: 0 done; 1 a hash did not match (nothing was installed);
 # 2 usage or setup problem (no curl, unreadable manifest, download
 # failure, unwritable destination).
@@ -280,5 +284,5 @@ echo "$FILES" | {
 } || exit $?
 
 echo "pi-firmware: done; $(echo "$FILES" | wc -l | tr -d ' ') files under $FWDIR"
-echo "pi-firmware: these files are Cypress binary-redistribution licensed; they belong on the card, not in the tree"
+echo "pi-firmware: these files are licensed as $MANIFEST says; they belong on the card, not in the tree"
 exit 0

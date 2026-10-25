@@ -113,7 +113,7 @@ leave a stale image behind a failed build.
 |-|-|
 | `BAREMETAL_BUILD_DIR=dir` | keep the artefacts there (otherwise a temp dir, deleted) |
 | `BAREMETAL_PLATFORMS="bcm2837 virt bcm2711"` | which machines; the default is all three. Name one to work on it. |
-| `BAREMETAL_BUILD_ONLY=1` | (virt) stop after the link |
+| `BAREMETAL_BUILD_ONLY=1` | stop after the link; boots nothing, so needs no QEMU (the release job builds the Pi kernels this way) |
 | `EXTRACFLAGS=-D…` | extra compiler flags for an experiment, without editing anything |
 
 It needs `clang` (any; it is asked for `--target=aarch64-elf`), `ld.lld`,
@@ -206,13 +206,30 @@ once.
 
 ## 4. Putting it on a Raspberry Pi 3B+
 
+**The quick way** is a release's image for the board,
+`infernode-<version>-rpi3bplus.img.xz` (or `-rpi4b`), written to a card
+whole: Raspberry Pi Imager's "Use custom" (with its OS customisation
+left off: nothing here reads it), `dd`, or Etcher. It is everything
+below except the radio's firmware, which no release may carry. To make
+one from your own tree, build the kernel (section 2) and
+
+    tools/mkpiimage.sh rpi3bplus /tmp/bm/bcm2837-kernel.img card.img     # or rpi4b, bcm2711-kernel.img
+
+which fetches the boot firmware, pinned by `tools/pi-bootfw-manifest.txt`,
+and puts on the card only the files of `lib/`, `fonts/` and `icons/` that
+git tracks. `.github/workflows/release.yml` (`raspberry-pi`) makes the
+release's two this way. What follows is what is on such a card, for
+making or changing one by hand.
+
 The card is FAT32, partition at sector 2048 (what every imaging tool
 makes). On it:
 
 **From Broadcom** (not in this tree): `bootcode.bin`, `start.elf`,
-`fixup.dat`.
+`fixup.dat`, and `LICENCE.broadcom` with them.
+`tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt DIR` fetches
+the pinned ones into `DIR/firmware/`.
 
-**`config.txt`** — this, exactly:
+**`config.txt`** — exactly `os/bcm2837/card/config.txt`:
 
     arm_64bit=1
     enable_uart=1
@@ -225,7 +242,8 @@ makes). On it:
     kernel=tryboot.img
     cmdline=tryboot.cmd
 
-`tryboot.cmd` holds the single word `tryboot`. `max_framebuffers=2` lets
+`tryboot.cmd` (`os/bcm2837/card/tryboot.cmd`) holds the single word
+`tryboot`. `max_framebuffers=2` lets
 the firmware offer a second display (the panel and HDMI together;
 [Displays](#displays), below); without it there is one, whatever is
 plugged in. `cmdline.txt` may be empty
@@ -258,14 +276,14 @@ from the QEMU model and the datasheets before any Pi 4 had run it, and
 checked line by line against the first board on 2026-10-15;
 `os/bcm2711/README.md` has what that board showed.
 
-**From the Raspberry Pi firmware repository:** `start4.elf` and
-`fixup4.dat` (the `4` variants; a Pi 4 boots from an EEPROM and ignores
-`bootcode.bin`), and `bcm2711-rpi-4-b.dtb`. The kernel reads no device
+**From the Raspberry Pi firmware repository** (the same manifest):
+`start4.elf` and `fixup4.dat` (the `4` variants; a Pi 4 boots from an
+EEPROM and ignores `bootcode.bin`), and `bcm2711-rpi-4-b.dtb`. The kernel reads no device
 tree — it asks the firmware's mailbox for everything — but the firmware
 wants the file there.
 
-**`config.txt`** — the 3B+'s, with the same words meaning the same
-things:
+**`config.txt`** — `os/bcm2711/card/config.txt`, the 3B+'s with the
+same words meaning the same things:
 
     arm_64bit=1
     enable_uart=1
@@ -291,8 +309,8 @@ Pi 4 a tryboot reset is handled by the boot EEPROM, which then reads
 `tryboot.txt` *instead of* `config.txt`; the `[tryboot]` section above
 is never consulted. Without the file the reset is acknowledged and the
 ordinary kernel boots, so a candidate silently never runs (seen on the
-bench board, rev 1.5). It is `config.txt` with
-the two tryboot lines in place of the kernel's:
+bench board, rev 1.5). It is `os/bcm2711/card/tryboot.txt`: `config.txt`
+with the two tryboot lines in place of the kernel's:
 
     arm_64bit=1
     enable_uart=1

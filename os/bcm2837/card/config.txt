@@ -1,0 +1,12 @@
+# The Raspberry Pi firmware's configuration for InferNode on a Pi 3B+.
+# What each line is for: docs/BAREMETAL.md, section 4.
+arm_64bit=1
+enable_uart=1
+init_uart_clock=48000000
+kernel=infernode8.img
+cmdline=cmdline.txt
+max_framebuffers=2
+
+[tryboot]
+kernel=tryboot.img
+cmdline=tryboot.cmd

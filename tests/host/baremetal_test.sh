@@ -132,13 +132,19 @@ if [[ -z "$CC" || -z "$LLD" || -z "$OBJCOPY" ]]; then
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
-if [[ -z "$QEMU" ]]; then
+# BAREMETAL_BUILD_ONLY builds the kernels and boots nothing, so it needs
+# no QEMU: it is how the release job (.github/workflows/release.yml,
+# raspberry-pi) makes the kernels for the card images on a runner that
+# has none.
+BUILDONLY="${BAREMETAL_BUILD_ONLY:-}"
+if [[ -z "$QEMU" && -z "$BUILDONLY" ]]; then
     skip "qemu-system-aarch64 not installed"
     echo ""
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
 for mach in raspi3b; do
+    [[ -n "$BUILDONLY" ]] && break
     if ! "$QEMU" -machine help 2>/dev/null | grep -q "^$mach"; then
         skip "this QEMU build has no $mach machine model"
         echo ""
@@ -1477,6 +1483,8 @@ if [[ -x "$NM" ]]; then
 else
     skip "llvm-nm not available for alignment check"
 fi
+
+[[ -n "$BUILDONLY" ]] && return
 
 #
 # 3. It boots and reports.
@@ -4847,7 +4855,7 @@ platform_flags
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
 
-if ! "$QEMU" -machine help 2>/dev/null | grep -q '^virt '; then
+if [[ -z "$BUILDONLY" ]] && ! "$QEMU" -machine help 2>/dev/null | grep -q '^virt '; then
     skip "this QEMU build has no virt machine model"
     return
 fi
@@ -4859,7 +4867,7 @@ else
     grep -m 20 'error:\|undefined symbol' "$BUILD/cc.log"
     return
 fi
-[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+[[ -n "$BUILDONLY" ]] && return
 
 OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 60)"
 printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
@@ -6031,7 +6039,7 @@ platform_flags
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
 
-if ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
+if [[ -z "$BUILDONLY" ]] && ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
     skip "bcm2711: this QEMU has no raspi4b machine (it arrived in 9.0)"
     return
 fi
@@ -6061,7 +6069,7 @@ else
     tail -5 "$BUILD/cc.log"
     return
 fi
-[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+[[ -n "$BUILDONLY" ]] && return
 
 # A blank USB disk on the DWC OTG: this controller is not an xHCI, so the
 # walker must name it and leave it alone (os/init/osinit.b, the gate on

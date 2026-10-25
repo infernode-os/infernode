@@ -30,6 +30,7 @@ Asyncio: module {
 				data: string;   # Chunk of text data
 				offset: int;    # Rune offset within file (cumulative)
 				err: string;    # nil on success
+				nbytes: int;    # bytes of the file read, this chunk's included
 		TextComplete =>
 				opid: int;      # Operation ID
 				winid: int;     # Window ID for the text
@@ -70,6 +71,10 @@ Asyncio: module {
 		path: string;
 		active: int;
 		winid: int;         # Window ID (for image ops)
+		# a text load's progress, kept by the receiver of its chunks
+		q0: int;            # where the file goes in the text
+		nbytes: int;        # bytes of the file put in
+		nrunes: int;        # and the runes they made
 	};
 
 	# Start async file read - returns operation handle

@@ -522,8 +522,10 @@ Text.insert(t : self ref Text, q0 : int, r : string, n : int, tofile : int, echo
 	c, i : int;
 	u : ref Text;
 
+	if(tofile)
+		loadrest(t.file);
 	if(tofile && t.ncache != 0)
-		error("text.insert");
+		cachecommit(t);
 	if(n == 0)
 		return;
 	if(t.what == Body && t.w != nil)
@@ -615,8 +617,10 @@ Text.delete(t : self ref Text, q0 : int, q1 : int, tofile : int)
 	i, c : int;
 	u : ref Text;
 
+	if(tofile)
+		loadrest(t.file);
 	if(tofile && t.ncache != 0)
-		error("text.delete");
+		cachecommit(t);
 	n = q1-q0;
 	if(n == 0)
 		return;
@@ -678,6 +682,11 @@ Text.readc(t : self ref Text, q : int) : int
 {
 	if(t.cq0<=q && q<t.cq0+t.ncache)
 		return t.cache[q-t.cq0];
+	# past typing not yet in the file, the file has it ncache sooner:
+	# read at q, a scroll's look back from an origin past the typing
+	# read past the end of the file (bad assert: Xenith gone)
+	if(t.ncache > 0 && q >= t.cq0+t.ncache)
+		q -= t.ncache;
 	if (onechar == nil)
 		onechar = stralloc(1);
 	t.file.buf.read(q, onechar, 0, 1);
@@ -977,13 +986,16 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 		t.file.mark();
 	}
 	case(r){
+	# in the text typed in, as Acme's: from a tag they went to the
+	# body, whose own typing, not committed, the cut or paste then
+	# tripped over (error: Xenith gone)
 	16r18 => # ^X: cut
 		typecommit(t);
-		exec->cut(t, nil, TRUE, TRUE);
+		exec->cut(t, t, TRUE, TRUE);
 		return;
 	16r16 => # ^V: paste
 		typecommit(t);
-		exec->paste(t, nil, FALSE, TRUE);
+		exec->paste(t, t, FALSE, FALSE);
 		return;
 	}
 	if(t.q1 > t.q0){
@@ -999,8 +1011,19 @@ Text.typex(t : self ref Text, r : int, echomode : int)
 	t.show(t.q0, t.q0);
 	case(r){
 	16r1B => # Escape key
-		if(t.eq0 != ~0)
-			t.setselect(t.eq0, t.q0);
+		# what was typed since typing began, either way round: ^U and
+		# ^W erase back past where it began, and a client's change
+		# can leave that past the end (an inverted or overlong
+		# selection broke the frame and the next read of the text)
+		if(t.eq0 != ~0){
+			q0 = t.eq0;
+			if(q0 > t.file.buf.nc+t.ncache)
+				q0 = t.file.buf.nc+t.ncache;
+			if(q0 <= t.q0)
+				t.setselect(q0, t.q0);
+			else
+				t.setselect(t.q0, q0);
+		}
 		if(t.ncache > 0){
 			if(t.w != nil)
 				t.w.commit(t);
@@ -1022,9 +1045,18 @@ if(0)	# DEBUGGING
 		nnb = t.bswidth(r);
 		q1 = t.q0;
 		q0 = q1-nnb;
-		for(i=0; i<t.file.ntext; i++){
-			u = t.file.text[i];
-			u.nofill = TRUE;
+		# every text on the file kept from filling until each has let
+		# go of the typing erased, and t, which takes what is left from
+		# the file, last: a Zerox done after t was filled by t's delete,
+		# and committed its copy of the typing where the file had
+		# become shorter (File.insert's assert: Xenith gone)
+		for(i=0; i<t.file.ntext; i++)
+			t.file.text[i].nofill = TRUE;
+		for(j := 0; j<=t.file.ntext; j++){
+			if(j == t.file.ntext)
+				u = t;
+			else if((u = t.file.text[j]) == t)
+				continue;
 			nb = nnb;
 			n = u.ncache;
 			if(n > 0){
@@ -1044,8 +1076,9 @@ if(0)	# DEBUGGING
 				u.setselect(u.q0, u.q1);
 			else
 				t.setselect(q0, q0);
-			u.nofill = FALSE;
 		}
+		for(i=0; i<t.file.ntext; i++)
+			t.file.text[i].nofill = FALSE;
 		for(i=0; i<t.file.ntext; i++)
 			t.file.text[i].fill();
 		return;
@@ -1130,13 +1163,74 @@ Text.commit(t : self ref Text, tofile : int)
 {
 	if(t.ncache == 0)
 		return;
-	if(tofile)
+	if(tofile){
+		loadrest(t.file);	# its fill commits the typing itself
+		if(t.ncache == 0)
+			return;
 		t.file.insert(t.cq0, t.cache, t.ncache);
+	}
 	if(t.what == Body){
 		t.w.dirty = TRUE;
 		t.w.utflastqid = -1;
 	}
 	t.ncache = 0;
+}
+
+# A file still loading in the background (Text.loadx) read in to its
+# end at once, before its text is changed, written or read whole by a
+# client: what an edit's addresses, a Put and a read see is all of it.
+# A Put while it loaded wrote what had come so far over the file, and an
+# edit moved the place the next chunk went in. The load's chunks still
+# on their way are dropped, as its operation is no longer the window's
+# (asyncload in xenith.b).
+loadrest(f : ref File)
+{
+	w : ref Window;
+
+	if(f == nil)
+		return;
+	for(i := 0; i < f.ntext; i++){
+		u := f.text[i].w;
+		# a body's file: a tag's is changed while its body loads
+		if(u != nil && f.text[i] == u.body && u.asyncload != nil && !u.isdir){
+			w = u;
+			break;
+		}
+	}
+	if(w == nil)
+		return;
+	op := w.asyncload;
+	w.asyncload = nil;
+	asyncio->asynccancel(op);
+	fd := sys->open(op.path, Sys->OREAD);
+	if(fd == nil)
+		warning(nil, sys->sprint("%s: the rest not read: %r\n", op.path));
+	else{
+		sys->seek(fd, big op.nbytes, Sys->SEEKSTART);
+		f.buf.loadx(op.q0+op.nrunes, fd);
+	}
+	f.unread = FALSE;
+	w.dirty = FALSE;
+	w.settag();
+	for(i = 0; i < f.ntext; i++){
+		f.text[i].fill();
+		scrdraw(f.text[i]);
+	}
+}
+
+# Typing not yet in the file put there before the file is changed: it
+# already holds its place in the text, so the change's addresses stay
+# right. An error here (Xenith gone) was the cost of a change made
+# while typing was held: a command written to the event file, Paste in
+# a tag after typing in the body, a key and a click crossing in time.
+# A tag's own typing alone: its window's commit can rename it, and so
+# rewrite the tag under the change.
+cachecommit(t: ref Text)
+{
+	if(t.what == Body && t.w != nil)
+		t.w.commit(t);
+	else
+		t.commit(TRUE);
 }
 
 # Commit typing in every window on the file, not t's alone: a Zerox
@@ -1713,6 +1807,7 @@ Text.reset(t : self ref Text)
 {
 	t.file.seq = 0;
 	t.eq0 = ~0;
+	t.ncache = 0;	# typing held goes with the text it was typed in
 	# do t.delete(0, t.nc, TRUE) without building backup stuff 
 	t.setselect(t.org, t.org);
 	frdelete(t.frame, 0, t.frame.nchars);

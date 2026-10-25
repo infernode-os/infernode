@@ -518,26 +518,27 @@ keyboardtask()
 		timer = null;
 		typetext = nil;
 		for(;;){
+			{
 			alt{
 			<-(timer.c) =>
 				timerm->timerstop(timer);
+				# the tag's typing committed, the row held as for any
+				# change to a window (a commit renames it and redraws
+				# the tag), and only while the tag is still there
+				row.qlock.lock();
 				t = typetext;
-				if(t!=nil && t.what==Tag && !t.w.qlock.locked()){
+				if(t!=nil && t.what==Tag && t.file!=nil && t.w!=nil && t.w.col!=nil && !t.w.qlock.locked()){
 					t.w.lock('K');
 					t.w.commit(t);
 					t.w.unlock();
 					bflush();
 				}
+				row.qlock.unlock();
 				timer = null;
 			r = <-ckeyboard =>
 				gotkey := 1;
 				while (gotkey) {
-					typetext = row.typex(r, mouse.xy);
-					t = typetext;
-					if(t!=nil && t.col!=nil)
-						activecol = t.col;
-					if(t!=nil && t.w!=nil)
-						t.w.body.file.curtext = t.w.body;
+					t = row.typex(r, mouse.xy);	# sets typetext
 					if(timer != null)
 						spawn timerm->timerwaittask(timer);
 					if(t!=nil && t.what==Tag)
@@ -552,6 +553,11 @@ keyboardtask()
 					}
 					bflush();
 				}
+			}
+			}
+			exception{
+				* =>
+					taskrecover("keyboard", utils->getexc());
 			}
 		}
 	}
@@ -577,6 +583,7 @@ mousetask()
 		spawn waitproc(mousetid, sync);
 		<- sync;
 		for(;;){
+			{
 			alt{
 			*mouse = *<-dat->cmouse =>
 				row.qlock.lock();
@@ -588,20 +595,44 @@ mousetask()
 					break;
 				}
 				if (mouse.buttons & M_HELP) {
-					row.qlock.unlock();  # Release before warning to avoid blocking
-					warning(nil, "no help provided (yet)");
+					warning(nil, "no help provided (yet)");	# changes the row: held
 					bflush();
+					row.qlock.unlock();
 					break;
 				}
 				if(mouse.buttons & M_RESIZE){
-					clipr := mainwin.clipr;  # Capture state before releasing lock
-					row.qlock.unlock();  # Release during expensive draw operations
+					# the row held throughout: let go while the screen
+					# was cleared and the scroll bars' image made again,
+					# a client's write drew a window, with the old
+					# image, where the new layout was being put
 					draw(mainwin, mainwin.r, bgcol, nil, mainwin.r.min);
 					scrl->scrresize();
-					row.qlock.lock();  # Reacquire for reshape
-					row.reshape(clipr);
+					row.reshape(mainwin.clipr);
 					row.qlock.unlock();
 					bflush();
+					break;
+				}
+				# a scroll under way follows the pointer wherever it
+				# goes and ends when its button is let go, over text or
+				# not: its end was looked for only below, past the
+				# returns for no text and no buttons, so it never came,
+				# and the next click of that button scrolled the old
+				# window again
+				if(scrollstate != nil && scrollstate.active){
+					st := scrollstate.t;
+					if(!(mouse.buttons & (1<<(scrollstate.but-1))))
+						scrl->scrollend();
+					else if(st == nil || st.file == nil || st.w == nil || st.w.col == nil)
+						scrl->scrollend();	# its window went (Del, Delcol, a client's del)
+					else{
+						# the window locked as when the scroll began: a
+						# client reading it holds the window, not the row
+						st.w.lock('M');
+						scrl->scrollupdate();
+						st.w.unlock();
+					}
+					bflush();
+					row.qlock.unlock();
 					break;
 				}
 				t = row.which(mouse.xy);
@@ -640,19 +671,6 @@ mousetask()
 				else if(mouse.buttons == 4)
 					but = 3;
 				barttext = t;
-				# Check for active scroll state and handle updates/end
-				if(scrollstate != nil && scrollstate.active) {
-					# Check if button released
-					if(!(mouse.buttons & (1<<(scrollstate.but-1)))) {
-						scrl->scrollend();
-					} else {
-						# Update scroll position
-						scrl->scrollupdate();
-					}
-					bflush();
-					row.qlock.unlock();
-					break;
-				}
 				if(t.what==Body && mouse.xy.in(t.scrollr)){
 					if(w != nil && docview->shown(w)){
 						# a document's scroll bar, as acme's: 1 back
@@ -867,9 +885,17 @@ mousetask()
 							warning(nil, sprint("text load: %s\n", msg.err));
 						} else {
 							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil && w.body.file != nil) {
-								# Insert chunk into buffer
-								w.body.file.buf.insert(msg.q0 + msg.offset, msg.data, len msg.data);
+							# the window's own load, still under way: a
+							# chunk of one cancelled (Get, the load
+							# finished at once by an edit) is still on
+							# its way, and went into the new text
+							op := asyncload(w, msg.opid);
+							if(op != nil && w.col != nil && w.body.file != nil) {
+								# put after what came before it: where the
+								# window's count says, kept by this side
+								w.body.file.buf.insert(op.q0 + op.nrunes, msg.data, len msg.data);
+								op.nrunes += len msg.data;
+								op.nbytes = msg.nbytes;
 								# Fill frame to show content as it loads
 								t := w.body;
 								t.fill();
@@ -880,11 +906,16 @@ mousetask()
 					TextComplete =>
 						# Mark file as fully loaded
 						row.qlock.lock();
-						if(msg.err != nil) {
+						w := look->lookid(msg.winid, 0);
+						if(asyncload(w, msg.opid) == nil)
+							;	# a load cancelled or finished at once
+						else if(msg.err != nil) {
+							# done with, so that nothing waits on it
+							w.asyncload = nil;
+							w.body.file.unread = 0;
 							warning(nil, sprint("text load: %s\n", msg.err));
 						} else {
-							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil) {
+							if(w.col != nil) {
 								w.body.file.unread = 0;
 								w.dirty = FALSE;
 								w.asyncload = nil;
@@ -899,7 +930,7 @@ mousetask()
 						# Add directory entry to window's list
 						row.qlock.lock();
 						w := look->lookid(msg.winid, 0);
-						if(w != nil && w.col != nil && w.isdir) {
+						if(asyncload(w, msg.opid) != nil && w.col != nil && w.isdir) {
 							# Add entry to dlp array
 							dl := ref Dirlist(msg.name, 0);  # Width calculated later
 							ndl := w.ndl + 1;
@@ -918,7 +949,7 @@ mousetask()
 							warning(nil, sprint("dir load: %s\n", msg.err));
 						} else {
 							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil && w.isdir) {
+							if(asyncload(w, msg.opid) != nil && w.col != nil && w.isdir) {
 								w.body.file.unread = 0;
 								w.asyncload = nil;
 								# Sort and display directory entries
@@ -971,6 +1002,11 @@ mousetask()
 				}
 				bflush();
 			}
+			}
+			exception{
+				* =>
+					taskrecover("mouse", utils->getexc());
+			}
 		}
 	}
 	exception e {
@@ -979,6 +1015,38 @@ mousetask()
 			raise e;
 			# xenithexit(nil);
 	}
+}
+
+# An exception in the mouse, keyboard or wait task: the locks it holds
+# let go, the fault reported, and the task carries on. It died holding the
+# row, and every window froze with it, their unsaved text with them.
+taskrecover(task : string, e : string)
+{
+	for(i := 0; i < row.ncol; i++){
+		c := row.col[i];
+		for(j := 0; j < c.nw; j++)
+			if(c.w[j].qlock.held())
+				c.w[j].unlock();
+	}
+	if(!row.qlock.held())
+		row.qlock.lock();
+	{
+		warning(nil, sprint("xenith: %s: %s\n", task, e));
+		bflush();
+	}
+	exception{
+		* =>
+			sys->fprint(sys->fildes(2), "xenith: %s: %s\n", task, e);
+	}
+	row.qlock.unlock();
+}
+
+# w's load in the background, if it is the operation opid
+asyncload(w : ref Window, opid : int) : ref Asyncio->AsyncOp
+{
+	if(w == nil || w.asyncload == nil || w.asyncload.opid != opid)
+		return nil;
+	return w.asyncload;
 }
 
 # list of processes that have exited but we have not heard of yet
@@ -1020,6 +1088,7 @@ waittask()
 			break;
 		cmd = <-ckill =>
 			found = FALSE;
+			row.qlock.lock();	# warning changes the row
 			for(c=command; c != nil; c=c.next){
 				# -1 for blank 
 				if(c.name[0:len c.name - 1] == cmd){
@@ -1030,6 +1099,8 @@ waittask()
 			}
 			if(!found)
 				warning(nil, sprint("Kill: no process %s\n", cmd));
+			bflush();
+			row.qlock.unlock();
 			cmd = nil;
 			break;
 		status = <-cwait =>
@@ -1080,24 +1151,37 @@ waittask()
 			}
 			break;
 		c = <-ccommand =>
+			# a command that has exited already (its wait came
+			# first: alt takes either when both are ready) is done
+			# with here, not listed; c was set nil for it and then
+			# listed, a nil dereference
 			lastp : ref Pid = nil;
+			done := 0;
 			for(p := pids; p != nil; p = p.next){
 				if(p.pid == c.pid){
-					status = p.msg;
-					if(status[len status - 1] != ':')
-						warning(c.md, sprint("%s\n", status));
 					if(lastp == nil)
 						pids = p.next;
 					else
 						lastp.next = p.next;
+					status = p.msg;
+					if(status[len status - 1] != ':'){
+						row.qlock.lock();
+						warning(c.md, sprint("%s\n", status));
+						bflush();
+						row.qlock.unlock();
+					}
 					if(c.iseditcmd)
 						cedit <- = 0;
 					fsys->fsysdelid(c.md);
-					c = nil;
+					done = 1;
 					break;
 				}
 				lastp = p;
-			}	
+			}
+			if(done){
+				c = nil;
+				break;
+			}
 			c.next = command;
 			command = c;
 			row.qlock.lock();
@@ -1112,7 +1196,10 @@ waittask()
 	}
 	exception{
 		* =>
-			warning(nil, "waittask: " + utils->getexc() + "\n");
+			# the row let go if a locked section raised this: caught
+			# with the row held, it was kept, and every click and
+			# request after waited for it for ever
+			taskrecover("waittask", utils->getexc());
 	}
 	}
 }

@@ -180,7 +180,7 @@ newdoc(w: ref Window, k: ref Kind, name: string): ref Doc
 {
 	v := sheetview->new(k, name, evc);
 	setview(w, v);
-	d := ref Doc(v, 1, nil, -1, nil, 0, 0, 0);
+	d := ref Doc(v, 1, nil, -1, nil, 0, 0, 0, nil, nil, nil, 0, 0);
 	w.doc = d;
 	views = (v, w.id) :: views;
 	return d;
@@ -298,6 +298,13 @@ handle1(w: ref Window, e: ref Ev)
 		draw(w);
 	Text =>
 		settext(w, n.text);
+		if(binary(d)){
+			# kept for doc/text; the links and the sheets' places
+			# in it found off the main loop, from it
+			d.text = array of byte n.text;
+			d.hastext = 1;
+			spawn docindex(d, v, v.gen, v.eng, v.h, len v.sizes, n.text);
+		}
 		draw(w);
 	Loaded =>
 		# a page loaded: its URL names the window, its text is the window's
@@ -338,6 +345,74 @@ nextevent(w: ref Window, e: ref Ev)
 	}
 }
 
+# A binary document's links, and where each sheet's text is in its
+# text (text, the view's Ev.Text): the engine reads every page for
+# them, which for a long PDF takes seconds, so they are found here,
+# holding no lock, and kept on the Doc for doc/links and a click on a
+# word. Kept only if the document is still the one shown.
+docindex(d: ref Doc, v: ref View, gen: int, eng: Docengine, h: int, nsheets: int, text: string)
+{
+	links: array of byte;
+	sheets: array of (int, int);
+	{
+		links = array of byte linksof(eng->links(h));
+		sheets = sheetsin(eng, h, nsheets, text);
+	} exception {
+	"*" =>
+		;
+	}
+	row := dat->row;
+	row.qlock.lock();
+	if(d.v == v && v.gen == gen && v.h == h){
+		d.links = links;
+		d.sheets = sheets;
+		d.haslinks = 1;
+	}
+	row.qlock.unlock();
+}
+
+# Where each sheet's text is in the document's (the sheets' texts in
+# order, with what the engine puts between them), or nil if it cannot
+# be told
+sheetsin(eng: Docengine, h: int, n: int, text: string): array of (int, int)
+{
+	a := array[n] of (int, int);
+	q := 0;
+	for(i := 0; i < n; i++){
+		t := eng->sheettext(h, i);
+		if((q = indexfrom(text, t, q)) < 0)
+			return nil;
+		a[i] = (q, q + len t);
+		q += len t;
+	}
+	return a;
+}
+
+indexfrom(s, t: string, q: int): int
+{
+	if(t == nil)
+		return q;
+	for(; q + len t <= len s; q++)
+		if(s[q] == t[0] && s[q:q+len t] == t)
+			return q;
+	return -1;
+}
+
+linksof(l: array of Docengine->Link): string
+{
+	s := "";
+	for(i := 0; i < len l; i++){
+		r := l[i].r;
+		s += sprint("%d %d %d %d %d %s\n", l[i].sheet + 1, r.min.x, r.min.y, r.max.x, r.max.y, l[i].url);
+	}
+	return s;
+}
+
+binary(d: ref Doc): int
+{
+	return !d.v.web && d.v.kind != nil && d.v.kind.class == Docreg->Binary;
+}
+
 # What a click or a key's result asks the window for
 noted(w: ref Window, n: ref Note)
 {
@@ -365,12 +440,18 @@ settext(w: ref Window, s: string)
 
 bodytext(w: ref Window): string
 {
-	nc := w.body.file.buf.nc;
-	if(nc <= 0)
+	return textof(w, 0, w.body.file.buf.nc);
+}
+
+# The window's text from q0 to q1
+textof(w: ref Window, q0, q1: int): string
+{
+	n := q1 - q0;
+	if(n <= 0)
 		return "";
-	r := stralloc(nc);
-	w.body.file.buf.read(0, r, 0, nc);
-	s := r.s[0:nc];
+	r := stralloc(n);
+	w.body.file.buf.read(q0, r, 0, n);
+	s := r.s[0:n];
 	strfree(r);
 	return s;
 }
@@ -826,26 +907,38 @@ button1(w: ref Window)
 }
 
 # The word clicked on the drawing selected in the window's text too,
-# so Snarf, Look and the rest take it: the occurrence of it whose
-# place among its kind matches its place among the words drawn (the
-# text and the drawing go in the same order)
+# so Snarf, Look and the rest take it: in the sheet's part of the
+# text, the occurrence of it whose place among its kind matches its
+# place among the sheet's words drawn (the text and the drawing go in
+# the same order). Only the sheet clicked is looked at: this is the
+# mouse's work, done holding the row, and an engine reading every
+# page before it up to the one clicked (a PDF keeps few pages' words)
+# held up the whole of Xenith for seconds. A binary document's sheets'
+# places in its text are found off the main loop (docindex); until
+# they are, the word is selected on the drawing alone.
 selectword(w: ref Window, v: ref View, n, k: int, word: string)
 {
+	d := w.doc;
+	q0 := 0;
+	q1 := w.body.file.buf.nc;
+	if(binary(d)){
+		if(n >= len d.sheets)
+			return;
+		(q0, q1) = d.sheets[n];
+		if(q1 > w.body.file.buf.nc)
+			return;
+	}else if(n != 0)
+		return;
 	nth := 0;
-	for(m := 0; m <= n; m++){
-		runs := v.eng->runs(v.h, m);
-		last := len runs;
-		if(m == n)
-			last = k;
-		for(i := 0; i < last; i++)
-			if(runs[i].text == word)
-				nth++;
-	}
-	text := bodytext(w);
+	runs := v.eng->runs(v.h, n);
+	for(i := 0; i < k && i < len runs; i++)
+		if(runs[i].text == word)
+			nth++;
+	text := textof(w, q0, q1);
 	q := -1;
-	for(i := 0; i + len word <= len text; i++)
+	for(i = 0; i + len word <= len text; i++)
 		if(text[i:i+len word] == word){
-			q = i;
+			q = q0 + i;
 			if(nth-- == 0)
 				break;
 		}
@@ -1026,26 +1119,48 @@ ctlwrite(w: ref Window, s: string): string
 	return nil;
 }
 
-textread(w: ref Window): string
+# doc/text and doc/links: a binary document's as found off the main
+# loop (Ev.Text, docindex), as the engine would read every page for
+# them holding the row and the window, and every click and request
+# waited; a source document's or a page's from what is set, at hand
+textread(w: ref Window): (array of byte, string)
 {
 	d := w.doc;
-	if(d == nil || d.v.h < 0)
-		return nil;
-	return d.v.eng->text(d.v.h);
+	if(d == nil)
+		return (nil, nil);
+	if((err := opened(d)) != nil)
+		return (nil, err);
+	if(binary(d)){
+		if(!d.hastext)
+			return (nil, "loading");
+		return (d.text, nil);
+	}
+	return (array of byte d.v.eng->text(d.v.h), nil);
 }
 
-linksread(w: ref Window): string
+linksread(w: ref Window): (array of byte, string)
 {
 	d := w.doc;
-	if(d == nil || d.v.h < 0)
-		return nil;
-	s := "";
-	l := d.v.eng->links(d.v.h);
-	for(i := 0; i < len l; i++){
-		r := l[i].r;
-		s += sprint("%d %d %d %d %d %s\n", l[i].sheet + 1, r.min.x, r.min.y, r.max.x, r.max.y, l[i].url);
+	if(d == nil)
+		return (nil, nil);
+	if((err := opened(d)) != nil)
+		return (nil, err);
+	if(binary(d)){
+		if(!d.haslinks)
+			return (nil, "loading");
+		return (d.links, nil);
 	}
-	return s;
+	return (array of byte linksof(d.v.eng->links(d.v.h)), nil);
+}
+
+# nil if the document is open; why not if not
+opened(d: ref Doc): string
+{
+	if(d.v.h >= 0)
+		return nil;
+	if(d.v.err != nil)
+		return d.v.err;
+	return "loading";
 }
 
 # s found on the drawing, marked; nil, or why not

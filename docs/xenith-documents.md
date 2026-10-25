@@ -209,6 +209,9 @@ for a window showing text):
 			the view's and the engine's commands
 	text	the document's text, read-only
 	links	one link a line: sheet x0 y0 x1 y1 url (scale 100)
+		(a binary document's text and links are read from every
+		page off Xenith's main loop once it is shown, and kept:
+		until they are, a read of either fails with "loading")
 	find	write a string; read where it was found, one a line:
 			sheet x0 y0 x1 y1
 		for the first 100 sheets that have it, then each further

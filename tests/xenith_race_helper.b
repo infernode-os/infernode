@@ -43,6 +43,7 @@ init(nil: ref Draw->Context, args: list of string)
 	check("ctllock", "ctl unlock and a second lock are refused, not waited for", ctllock);
 	check("ctldel", "ctl del then more commands in one write", ctldel);
 	check("editxpipe", "Edit X with a pipe command locks each file it runs in", editxpipe);
+	checkt("longpdf", "a long PDF's doc/text read and a click on its words leave the row free", longpdf, 150000);
 	if(failed)
 		raise "fail:tests failed";
 	sys->print("ALL PASS\n");
@@ -51,6 +52,11 @@ init(nil: ref Draw->Context, args: list of string)
 # run f under a deadline; a check that does not return has frozen
 # Xenith, and nothing after it can be checked
 check(fname, name: string, f: ref fn(): string)
+{
+	checkt(fname, name, f, 20000);
+}
+
+checkt(fname, name: string, f: ref fn(): string, ms: int)
 {
 	if(only != nil){
 		for(l := only; l != nil; l = tl l)
@@ -62,7 +68,7 @@ check(fname, name: string, f: ref fn(): string)
 	c := chan of string;
 	spawn run(f, c);
 	t := chan of int;
-	spawn timer(t, 20000);
+	spawn timer(t, ms);
 	alt{
 	err := <-c =>
 		if(err != nil){
@@ -432,5 +438,243 @@ editxpipe(): string
 	put(b+"/ctl", "clean\n");
 	put(a+"/ctl", "delete\n");
 	put(b+"/ctl", "delete\n");
+	return nil;
+}
+
+# ---- a long PDF ----
+
+LONGPAGES: con 1000;
+MOMENT: con 2000;	# ms: how long the index may wait for the row
+
+# A PDF of n pages, 400 by 500 points, each full of small text and, in
+# its middle, the word Zebra, large; "Page k" at the top of page k. Its
+# text takes the engine seconds to read.
+longpdf_write(f: string, n: int): string
+{
+	fd := sys->create(f, Sys->OWRITE, 8r666);
+	if(fd == nil)
+		return sys->sprint("create %s: %r", f);
+	nobj := 3 + 2*n;
+	offs := array[nobj] of int;
+	off := 0;
+	obj := array[nobj] of string;
+	kids := "";
+	for(i := 0; i < n; i++)
+		kids += sys->sprint("%d 0 R ", 4 + 2*i);
+	obj[0] = "<< /Type /Catalog /Pages 2 0 R >>";
+	obj[1] = sys->sprint("<< /Type /Pages /Kids [%s] /Count %d >>", kids, n);
+	obj[2] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+	small := "";
+	for(y := 486; y >= 20; y -= 6)
+		if(y > 330 || y < 190)
+			small += sys->sprint("BT /F1 5 Tf 10 %d Td (the quick brown fox jumps over the lazy dog) Tj 190 0 Td (pack my box with five dozen liquor jugs) Tj ET\n", y);
+	for(i = 0; i < n; i++){
+		c := sys->sprint("BT /F1 10 Tf 300 490 Td (Page %d) Tj ET\n", i+1);
+		c += "BT /F1 120 Tf 40 200 Td (Zebra) Tj ET\n";
+		c += small;
+		obj[3+2*i] = sys->sprint("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 500] /Contents %d 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5+2*i);
+		obj[4+2*i] = sys->sprint("<< /Length %d >>\nstream\n%sendstream", len c, c);
+	}
+	b := array of byte "%PDF-1.4\n";
+	sys->write(fd, b, len b);
+	off += len b;
+	for(i = 0; i < nobj; i++){
+		offs[i] = off;
+		b = array of byte sys->sprint("%d 0 obj\n%s\nendobj\n", i+1, obj[i]);
+		if(sys->write(fd, b, len b) != len b)
+			return sys->sprint("write %s: %r", f);
+		off += len b;
+	}
+	x := sys->sprint("xref\n0 %d\n0000000000 65535 f \n", nobj+1);
+	for(i = 0; i < nobj; i++)
+		x += sys->sprint("%.10d 00000 n \n", offs[i]);
+	x += sys->sprint("trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", nobj+1, off);
+	b = array of byte x;
+	if(sys->write(fd, b, len b) != len b)
+		return sys->sprint("write %s: %r", f);
+	return nil;
+}
+
+# how long a read of the index took, in ms (up to 60s)
+indexms(): int
+{
+	t0 := sys->millisec();
+	c := chan of int;
+	spawn reader(X+"/index", c);
+	t := chan of int;
+	spawn timer(t, 60000);
+	alt{
+	<-c =>
+		;
+	<-t =>
+		;
+	}
+	return sys->millisec() - t0;
+}
+
+# the first read of a file: what it gave, or the error
+firstread(f: string, c: chan of (string, string))
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil){
+		c <-= (nil, sys->sprint("%r"));
+		return;
+	}
+	b := array[Sys->ATOMICIO] of byte;
+	n := sys->read(fd, b, len b);
+	if(n < 0)
+		c <-= (nil, sys->sprint("%r"));
+	else
+		c <-= (string b[0:n], nil);
+}
+
+# a file read whole, however long, or the error
+readbig(f: string): (array of byte, string)
+{
+	fd := sys->open(f, Sys->OREAD);
+	if(fd == nil)
+		return (nil, sys->sprint("%r"));
+	b := array[64*1024] of byte;
+	n := 0;
+	for(;;){
+		if(n + Sys->ATOMICIO > len b){
+			nb := array[2 * len b] of byte;
+			nb[0:] = b[0:n];
+			b = nb;
+		}
+		m := sys->read(fd, b[n:], Sys->ATOMICIO);
+		if(m < 0)
+			return (nil, sys->sprint("%r"));
+		if(m == 0)
+			break;
+		n += m;
+	}
+	return (b[0:n], nil);
+}
+
+# a value in a window's doc/ctl, as its words
+attr(w, name: string): list of string
+{
+	(nil, lines) := sys->tokenize(readall(w+"/doc/ctl"), "\n");
+	for(; lines != nil; lines = tl lines){
+		(nil, l) := sys->tokenize(hd lines, " ");
+		if(l != nil && hd l == name)
+			return tl l;
+	}
+	return nil;
+}
+
+nth(l: list of string, n: int): int
+{
+	for(; l != nil && n > 0; l = tl l)
+		n--;
+	if(l == nil)
+		return 0;
+	return int hd l;
+}
+
+# the window's text at an address
+textat(w, addr: string): string
+{
+	afd := sys->open(w+"/addr", Sys->ORDWR);	# held, so it is not reset
+	if(afd == nil || sys->fprint(afd, "%s", addr) < 0)
+		return nil;
+	return readall(w+"/xdata");
+}
+
+# doc/text of a binary document read while it opens: the engine read
+# every page's text for it holding the row and the window, and Xenith
+# answered nothing else until it was done. And B1 on a word of a late
+# page read the words of every page before it (a PDF keeps 32 pages'),
+# on the mouse task, holding the row, to find the word in the text.
+longpdf(): string
+{
+	f := "/tmp/xrace-long.pdf";
+	if((e := longpdf_write(f, LONGPAGES)) != nil)
+		return e;
+	w := newwin(f);
+	if(w == nil)
+		return sys->sprint("no window: %r");
+	put(w+"/ctl", "growfull\n");
+	if((e = put(w+"/ctl", "image "+f+"\n")) != nil)
+		return "showing the PDF: "+e;
+	for(i := 0; i < 300 && attr(w, "sheets") == nil; i++)
+		sys->sleep(100);
+	if(attr(w, "sheets") == nil)
+		return "the PDF did not open: "+readall(w+"/doc/ctl");
+
+	# its text being read, a client reads doc/text; the index meanwhile
+	c := chan of (string, string);
+	spawn firstread(w+"/doc/text", c);
+	sys->sleep(300);
+	if((ms := indexms()) > MOMENT)
+		return sys->sprint("the index waited %d ms while doc/text of a %d-page PDF was read", ms, LONGPAGES);
+	<-c;
+
+	# the text comes, all of it, and the links
+	text: array of byte;
+	last := array of byte sys->sprint("--- Page %d ---", LONGPAGES);
+	for(i = 0; i < 1200; i++){
+		(t, err) := readbig(w+"/doc/text");
+		if(err == nil && len t > 2*len last){
+			# the last page's mark, near the end
+			s := string t[len t - len t/LONGPAGES - 2*len last:];
+			if(index(s, string last) >= 0){
+				text = t;
+				break;
+			}
+		}
+		if(err != nil && err != "loading")
+			return "doc/text: "+err;
+		sys->sleep(100);
+	}
+	if(text == nil)
+		return "doc/text never gave the PDF's text";
+	for(i = 0; i < 300; i++){
+		(nil, err) := readbig(w+"/doc/links");
+		if(err == nil)
+			break;
+		if(err != "loading")
+			return "doc/links: "+err;
+		sys->sleep(100);
+	}
+
+	# B1 on Zebra, on page k
+	k := LONGPAGES - 20;
+	put(w+"/doc/ctl", "scale 100\n");
+	put(w+"/doc/ctl", sys->sprint("sheet %d\n", k));
+	sys->sleep(500);
+	scale := nth(attr(w, "scale"), 0);
+	view := attr(w, "view");
+	scr := attr(w, "screen");
+	colw := nth(attr(w, "column"), 0);
+	if(scale != 100 || view == nil || scr == nil)
+		return "doc/ctl: "+readall(w+"/doc/ctl");
+	vw := nth(view, 2);
+	x := (colw - 400) / 2;
+	if(colw < vw)
+		x += (vw - colw) / 2;
+	else
+		x -= nth(view, 0);
+	top := 12 + (k-1) * (500 + 12) - nth(view, 1);	# the sheet's top in the view
+	px := nth(scr, 0) + x + 120;
+	py := nth(scr, 1) + top + 270;	# in Zebra's e, 120pt high on its baseline at 300
+	pfd := sys->open("#m/pointer", Sys->OWRITE);
+	if(pfd == nil)
+		return sys->sprint("#m/pointer: %r");
+	ptr(pfd, px, py, 0);
+	ptr(pfd, px, py, 1);
+	ptr(pfd, px, py, 0);
+	if((ms = indexms()) > MOMENT)
+		return sys->sprint("the index waited %d ms after a click on a word of page %d", ms, k);
+	sys->sleep(500);
+	(q0, q1) := dot(w);
+	word := textat(w, sys->sprint("#%d,#%d", q0, q1));
+	mark := textat(w, sys->sprint("#%d-/--- Page [0-9]+ ---/", q0));
+	put(w+"/ctl", "delete\n");
+	if(word != "Zebra")
+		return sys->sprint("the click selected %q (%d,%d) in the text, not Zebra", word, q0, q1);
+	if(mark != sys->sprint("--- Page %d ---", k))
+		return sys->sprint("the click selected the Zebra after %q, not page %d's", mark, k);
 	return nil;
 }

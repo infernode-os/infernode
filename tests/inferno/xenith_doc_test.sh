@@ -117,6 +117,16 @@ fn hastext {
 	}
 }
 
+# Wait for a binary document's links, found after its text (doc/links
+# says loading until then): haslinks id
+fn haslinks {
+	a := $*
+	wid := ${index 1 $a}
+	for i in 1 2 3 4 5 6 7 8 9 10 {
+		if {! cat $XENITH/$wid/doc/links >/dev/null >[2]/dev/null} {sleep 1}
+	}
+}
+
 # ---- a PDF ----
 
 PDF=/tmp/xenith_doc_test.pdf
@@ -237,6 +247,7 @@ for i in 1 2 3 4 5 6 7 8 9 10 {
 	}
 }
 loaded $lid
+haslinks $lid
 L=$XENITH/$lid
 links=${split '
 ' "{cat $L/doc/links}}

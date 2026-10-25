@@ -41,12 +41,18 @@ Held: adt {
 
 display: ref Display;
 pages: list of ref Held;
+# pages is added to by a page set or browsed (on sheetview's opener
+# proc) and dropped from by a close (on Xenith's mouse task), at once:
+# unlocked, a page added while another was dropped was lost
+pageslock: chan of int;
 inited := 0;
 
 init(d: ref Display): string
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
+	if(pageslock == nil)
+		pageslock = chan[1] of int;
 	if(inited)
 		return nil;
 	browser = load Browser Browser->PATH;
@@ -66,7 +72,7 @@ set(id: int, data: array of byte, url: string, width, height: int): (int, string
 	s := find(id);
 	if(s == nil) {
 		s = Session.new(width, height);
-		pages = ref Held(id, s, nil, nil, nil) :: pages;
+		addpage(ref Held(id, s, nil, nil, nil));
 	} else if(s.width != width || s.height != height)
 		s.resize(width, height);
 	if((err := s.show(data, "text/html", url)) != nil)
@@ -97,27 +103,45 @@ text(id: int): string
 	return s.text();
 }
 
+addpage(h: ref Held)
+{
+	pageslock <-= 1;
+	pages = h :: pages;
+	<-pageslock;
+}
+
 drop(id: int)
 {
-	l: list of ref Held;
-	for(; pages != nil; pages = tl pages){
-		p := hd pages;
-		if(p.id != id)
-			l = p :: l;
-		else if(p.ev != nil){
+	pageslock <-= 1;
+	l, gone: list of ref Held;
+	for(r := pages; r != nil; r = tl r)
+		if((hd r).id != id)
+			l = hd r :: l;
+		else
+			gone = hd r :: gone;
+	pages = l;
+	<-pageslock;
+	for(; gone != nil; gone = tl gone){
+		p := hd gone;
+		if(p.ev != nil){
 			if(p.fs != nil)
 				p.fs->unpost();
-			# whoever reads the page's events stops
+			# whoever reads the page's events stops; a close is the
+			# mouse task's, which does not wait for them to be read
 			p.s.unlisten(p.ev);
 			p.s.close();
 			alt {
 			p.ev <-= "gone" =>	;
-			* =>	;
+			* =>	spawn tellgone(p.ev);	# its 64 events not yet read
 			}
 		}else
 			p.s.close();
 	}
-	pages = l;
+}
+
+tellgone(c: chan of string)
+{
+	c <-= "gone";
 }
 
 find(id: int): ref Session
@@ -142,7 +166,7 @@ browse(id: int, url: string, width, height: int): (chan of string, string)
 		s = Session.new(width, height);
 		c = s.listen();
 		h := ref Held(id, s, c, nil, nil);
-		pages = h :: pages;
+		addpage(h);
 		postpage(h);
 	} else if(s.width != width || s.height != height)
 		s.resize(width, height);

@@ -43,6 +43,7 @@ State: adt {
 	height:	int;		# the page's, laid out
 	browsing:	int;
 	ev:	chan of string;	# a page browsed's events, for the view
+	watched:	int;	# ev given to the view (events), which reads it until "gone"
 	field:	int;		# the form field with the keyboard (its node), or 0
 	accent:	ref Image;
 	scratch:	ref Image;	# paint's, kept for the next of its size
@@ -110,7 +111,7 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 	}
 	if(accent == nil)
 		accent = display.color(Draw->Blue);
-	s := ref State(data, name, width, viewh, 0, 0, nil, 0, accent, nil);
+	s := ref State(data, name, width, viewh, 0, 0, nil, 0, 0, accent, nil);
 	h := add(s);
 	if(data == nil && isurl(name)){
 		# browsed: fetched in the background, the events tell
@@ -127,7 +128,7 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 		}
 		s.browsing = 1;
 		s.ev = chan of string;
-		spawn relay(h, c, s.ev);
+		spawn relay(s, h, c, s.ev);
 		return (h, nil);
 	}
 	if(data == nil && (data = readfile(name)) == nil){
@@ -153,16 +154,18 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 }
 
 # A page browsed's events, to the view: "done y", y where its last
-# navigation asks the view to be; the others as they are
-relay(h: int, c, ev: chan of string)
+# navigation asks the view to be; the others as they are. "gone" is
+# waited for: the view's watch proc may be sending it an event, and
+# missing "gone" it waited for ever, keeping the view. Nothing on the
+# mouse task waits for this proc, and a view that never took the
+# events (closed before it opened) is not waited for.
+relay(st: ref State, h: int, c, ev: chan of string)
 {
 	for(;;){
 		e := <-c;
 		if(e == "gone"){
-			alt {
-			ev <-= "gone" =>	;
-			* =>	;
-			}
+			if(st.watched)
+				ev <-= "gone";
 			return;
 		}
 		s := get(h);
@@ -398,6 +401,8 @@ events(h: int): chan of string
 {
 	if((s := get(h)) == nil)
 		return nil;
+	if(s.ev != nil)
+		s.watched = 1;
 	return s.ev;
 }
 

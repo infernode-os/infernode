@@ -207,6 +207,8 @@ init(d: ref Display): string
 	colorcache = nil;
 	if(inflatelock == nil)
 		inflatelock = chan[1] of int;
+	if(doclock == nil)
+		doclock = chan[1] of int;
 
 	outlinefont = load OutlineFont OutlineFont->PATH;
 	if(outlinefont != nil)
@@ -256,11 +258,22 @@ open(data: array of byte, password: string): (ref Doc, string)
 	return (ref Doc(idx), nil);
 }
 
-# Document table (supports multiple open documents)
+# Document table (supports multiple open documents). Documents are
+# opened on procs of their own (Xenith's document view opens each on
+# one), and closed on another: two adds at once took one slot.
 doctab: array of ref PdfDoc;
 ndocs := 0;
+doclock: chan of int;
 
 adddoc(pdoc: ref PdfDoc): int
+{
+	doclock <-= 1;
+	idx := adddoc0(pdoc);
+	<-doclock;
+	return idx;
+}
+
+adddoc0(pdoc: ref PdfDoc): int
 {
 	if(doctab == nil)
 		doctab = array[4] of ref PdfDoc;
@@ -284,14 +297,17 @@ getdoc(idx: int): ref PdfDoc
 
 Doc.close(d: self ref Doc)
 {
+	pdoc: ref PdfDoc;
+	doclock <-= 1;
 	if(doctab != nil && d.idx >= 0 && d.idx < ndocs){
-		pdoc := doctab[d.idx];
-		if(pdoc != nil)
-			for(l := pdoc.fonts; l != nil; l = tl l)
-				if((hd l).t1.embedded != nil)
-					(hd l).t1.embedded.close();
-		doctab[d.idx] = nil;
+		pdoc = doctab[d.idx];
+		doctab[d.idx] = nil;	# in the table an add has grown, not the one it left
 	}
+	<-doclock;
+	if(pdoc != nil)
+		for(l := pdoc.fonts; l != nil; l = tl l)
+			if((hd l).t1.embedded != nil)
+				(hd l).t1.embedded.close();
 	d.idx = -1;
 }
 

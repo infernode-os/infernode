@@ -13,7 +13,10 @@
 #	than waited for with the row held;
 #	commands after del in one ctl write are not run on the deleted
 #	window;
-#	Edit X with a pipe command locks each file it runs in.
+#	Edit X with a pipe command locks each file it runs in;
+#	a client reading doc/text of a long PDF while it opens, and B1 on
+#	a word of one of its late pages, leave the row free: the index
+#	is answered within a moment, and the word selected is that page's.
 #
 # Runs tests/inferno/xenith_race_test.sh (tests/xenith_race_helper.b)
 # inside a headless Xenith (xenith_inside.sh). Needs the SDL GUI

@@ -487,7 +487,9 @@ Xfid.read(x : self ref Xfid)
 	# A case answering with a string sets str: an empty string is nil
 	# in Limbo, so sbuf alone cannot say an empty answer is due
 	# (reading a text window's image file once hung the reader).
+	# One answering with bytes sets buf and raw.
 	str := 0;
+	raw := 0;
 	case(q){
 	QWaddr =>
 		w.body.commit(TRUE);
@@ -542,12 +544,20 @@ Xfid.read(x : self ref Xfid)
 	QWdocctl =>
 		str = 1;
 		sbuf = docview->ctlread(w);
-	QWdoctext =>
-		str = 1;
-		sbuf = docview->textread(w);
-	QWdoclinks =>
-		str = 1;
-		sbuf = docview->linksread(w);
+	QWdoctext or QWdoclinks =>
+		# what has been found: a long document's text is not read
+		# here, holding the row and the window, nor converted again
+		# for each read of it
+		err: string;
+		if(q == QWdoctext)
+			(buf, err) = docview->textread(w);
+		else
+			(buf, err) = docview->linksread(w);
+		if(err != nil){
+			respond(x, fc, err);
+			break;
+		}
+		raw = 1;
 	QWdocfind =>
 		str = 1;
 		sbuf = docview->foundread(w);
@@ -579,9 +589,12 @@ Xfid.read(x : self ref Xfid)
 		respond(x, fc, sbuf);
 		sbuf = nil;
 	}
-	if (str) {
+	if(str){
 		buf = array of byte sbuf;
 		sbuf = nil;
+		raw = 1;
+	}
+	if(raw){
 		n = len buf;
 		if(off > n)
 			off = n;

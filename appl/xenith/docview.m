@@ -22,6 +22,16 @@ Docview: module {
 		live:	int;		# a source document set again as its text is edited
 		liveat:	int;		# when it was last edited (sys->millisec), 0 if not since set
 		stale:	int;		# its text edited since it was set
+		# a binary document's text, links and where each sheet's text is
+		# in its text: an engine reads every page for them, so they are
+		# found off the main loop (its text by the view, Ev.Text; the rest
+		# by docindex once the text has come) and kept here, for doc/text,
+		# doc/links and a click on a word; nil until then
+		text:	array of byte;
+		links:	array of byte;
+		sheets:	array of (int, int);	# sheet n's text: text[q0:q1]
+		hastext:	int;	# text has come (it may be empty)
+		haslinks:	int;
 	};
 
 	init:	fn(mods: ref Dat->Mods);
@@ -85,11 +95,14 @@ Docview: module {
 	command:	fn(w: ref Windowm->Window, cmd, arg: string): (int, string);
 	commands:	fn(w: ref Windowm->Window): string;
 
-	# The document's files (doc/ in the window's directory)
+	# The document's files (doc/ in the window's directory). textread
+	# and linksread are called holding the row and the window: they
+	# answer from what has been found, never by asking the engine to
+	# read a binary document's pages; "loading" until it is found
 	ctlread:	fn(w: ref Windowm->Window): string;
 	ctlwrite:	fn(w: ref Windowm->Window, s: string): string;
-	textread:	fn(w: ref Windowm->Window): string;
-	linksread:	fn(w: ref Windowm->Window): string;
+	textread:	fn(w: ref Windowm->Window): (array of byte, string);
+	linksread:	fn(w: ref Windowm->Window): (array of byte, string);
 	find:	fn(w: ref Windowm->Window, s: string): string;
 	foundread:	fn(w: ref Windowm->Window): string;
 	filesof:	fn(w: ref Windowm->Window): string;

@@ -73,67 +73,11 @@ top=$ROOT/tmp/xenith-fuzz
 logs=$top/logs
 mkdir -p "$logs"
 
-# The emulator's root: a copy of what Xenith and Lucifer need, and the
-# other directories empty, as mount points. Random use opens files by
-# name and Puts them (a directory's listing, B3 on a name in it, typing,
-# Put), so in the tree itself it changed tracked files.
+# The emulator's root: a copy of what Xenith and Lucifer need, so what
+# random use opens and Puts is never the tree's (tools/fuzz-common.sh)
+. "$ROOT/tools/fuzz-common.sh"
 sandbox=$top/root
-rm -rf "${sandbox:?}"
-mkdir -p "$sandbox/tmp" "$sandbox/tests"
-for d in "$ROOT"/*/; do
-	d=$(basename "$d")
-	case $d in
-	dis|lib|fonts|icons|locale|usr|mnt|n)	cp -a "$ROOT/$d" "$sandbox/$d" ;;
-	tmp|tests)	;;
-	*)	mkdir -p "$sandbox/$d" ;;
-	esac
-done
-for d in page imgload xenith; do
-	cp -a "$ROOT/tests/$d" "$sandbox/tests/$d"
-done
-mkdir -p "$sandbox/usr/$(id -un)"	# a home, for Dump and Load
-
-# The stacks in a log (lines "fp pc mp prog type path") as source lines,
-# through the .sbl files mk leaves beside each .b
-mapstacks() {
-	command -v python3 >/dev/null 2>&1 || { cat "$1"; return; }
-	python3 - "$ROOT" "$1" <<'EOF'
-import re, sys, os
-root, log = sys.argv[1], sys.argv[2]
-cache = {}
-def sbl(dis):
-	if dis in cache:
-		return cache[dis]
-	m = dis.replace('/dis/', '', 1)[:-4]
-	pcs = None
-	for c in (root+'/appl/'+m+'.sbl', root+'/appl/xenith/'+os.path.basename(m)+'.sbl',
-	          root+'/appl/'+m+'/'+os.path.basename(m)+'.sbl', root+'/'+m+'.sbl'):
-		try:
-			L = open(c).read().split('\n')
-		except OSError:
-			continue
-		n = int(L[2]); files = L[3:3+n]; i = 3+n; npc = int(L[i]); i += 1
-		lf = ll = 0; pcs = []
-		for k in range(npc):
-			a, b = L[i+k].rsplit(' ', 1)[0].split(',')
-			def part(x, f, l):
-				if ':' in x: f, x = x.split(':'); f = int(f)
-				if '.' in x: l, x = x.split('.'); l = int(l)
-				return f, l
-			sf, sl = part(a, lf, ll); ef, el = part(b, sf, sl)
-			pcs.append('%s:%d' % (files[sf], sl)); lf, ll = ef, el
-		break
-	cache[dis] = pcs
-	return pcs
-for line in open(log, errors='replace'):
-	m = re.match(r'^\S+ ([0-9a-f]{8}) \S+ \S+ \S+ (\S+\.dis)\s*$', line)
-	if m:
-		pcs = sbl(m.group(2)); pc = int(m.group(1), 16)
-		print('\t' + (pcs[pc] if pcs and pc < len(pcs) else '%s pc %d' % (m.group(2), pc)))
-	else:
-		print(line, end='')
-EOF
-}
+sandbox "$sandbox"
 
 one() {
 	s=$1

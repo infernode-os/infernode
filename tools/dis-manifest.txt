@@ -738,6 +738,7 @@ dis/tests/goroutine_leak_test.dis
 dis/tests/gpu_bench.dis
 dis/tests/gpu_smoke.dis
 dis/tests/gpu_test.dis
+dis/tests/guifuzz.dis
 dis/tests/handshake_fuzz_test.dis
 dis/tests/hello_test.dis
 dis/tests/hid_test.dis
@@ -908,6 +909,7 @@ dis/tests/webfs_test.dis
 dis/tests/wiki9p_security_probe.dis
 dis/tests/wireformat_test.dis
 dis/tests/wm_apps_test.dis
+dis/tests/wmfuzz.dis
 dis/tests/wmsrv_zorder_test.dis
 dis/tests/wpa_test.dis
 dis/tests/x402_test.dis

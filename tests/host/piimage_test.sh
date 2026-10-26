@@ -9,11 +9,13 @@
 #	the kernel is on it as infernode8.img, byte for byte;
 #	dis/ is the built tree's; lib/, fonts/ and icons/ hold what git
 #	tracks and nothing else (an untracked file in lib/ stays off);
-#	the boot firmware and config.txt have their own names as FAT short
-#	names (BOOTCODE.BIN, not BOOTCO~1.BIN: a Pi 3's boot ROM reads
-#	nothing else);
-#	config.txt, and the Pi 4's tryboot.txt, pin the core clock that
-#	the mini-UART console's baud is divided from;
+#	tools/piromcheck.py, reading the card as the boot ROM and firmware
+#	do, finds what they need: the boot files by their own short names
+#	(BOOTCODE.BIN, not BOOTCO~1.BIN), the firmware's bytes, and
+#	config.txt's load-bearing lines (the core clock pinned, a second
+#	display, a kernel= that is on the card);
+#	and piromcheck refuses a card with each fault a board has shown --
+#	so the check that stands in for the board cannot quietly pass;
 #	usr/ is there and empty; no skiplogon, wifi, netconsole or rootpath;
 #	firmware/ holds the radio's firmware under the names the driver
 #	asks for, its Bluetooth patch, and the licence they are
@@ -74,9 +76,7 @@ echo "a developer's own file" > "$ROOT/$untracked"
 
 # The reader: the partition from the MBR, then the BPB, the FAT and the
 # directories. Prints one line per file, "path size sha256", and one
-# per directory, "path/". With "short" after the image it prints instead
-# the root directory's short names, as the 11 bytes are stored (a Pi
-# 3's boot ROM ignores the long entries and reads only these).
+# per directory, "path/".
 cat > "$tmp/fatls.py" <<'EOF'
 import hashlib, struct, sys
 img = open(sys.argv[1], "rb").read()
@@ -130,18 +130,7 @@ def walk(c, path):
             walk(clus, p + "/")
         else:
             print("%s %d %s" % (p, size, hashlib.sha256(read(clus, size) if size else b"").hexdigest()))
-def shorts(c):
-    d = read(c)
-    for o in range(0, len(d), 32):
-        e = d[o:o + 32]
-        if e[0] == 0:
-            break
-        if e[0] != 0xE5 and e[11] != 0x0F:
-            print(e[0:11].decode("ascii", "replace"))
-if sys.argv[2:] == ["short"]:
-    shorts(rootclus)
-else:
-    walk(rootclus, "/")
+walk(rootclus, "/")
 EOF
 
 sha() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
@@ -199,21 +188,14 @@ for board in rpi3bplus rpi4b; do
 	[ $ok = 1 ] && pass "$board: config.txt, the tryboot files, README.txt, LICENSE and NOTICE are the tree's" || failed "$board: the card's own files"
 	has "$L" /infernode8.img "$tmp/kernel.img" && pass "$board: the kernel is infernode8.img, byte for byte" || failed "$board: the kernel"
 
-	# what a boot ROM that reads no long names finds: "NAME    EXT"
-	if python3 "$tmp/fatls.py" "$img" short > "$tmp/$board.short" 2> "$tmp/$board.err"; then
-		ok=1
-		for f in $own config.txt; do
-			b=$(echo "${f%.*}" | tr a-z A-Z); x=$(echo "${f##*.}" | tr a-z A-Z)
-			# a name that is not 8.3 (the Pi 4's .dtb) has only an alias, and
-			# the firmware that reads it reads the long entry
-			[ ${#b} -le 8 ] && [ ${#x} -le 3 ] || continue
-			want=$(printf '%-8s%-3s' "$b" "$x")
-			grep -qxF "$want" "$tmp/$board.short" || { echo "    no short name '$want' for $f"; ok=0; }
-		done
-		[ $ok = 1 ] && pass "$board: the boot firmware and config.txt have their own short names" \
-			|| failed "$board: a boot file has only an alias for a short name"
+	# what the board's boot ROM and firmware find: short names only, the
+	# firmware's bytes, and config.txt's load-bearing lines (tools/piromcheck.py
+	# says why each one); release.yml runs the same on the real images
+	if python3 tools/piromcheck.py --firmware "$tmp/fw" $board "$img" > "$tmp/$board.rom" 2>&1; then
+		pass "$board: the boot ROM and firmware find what they need (piromcheck)"
 	else
-		failed "$board: the root's short names do not read back: $(tail -1 "$tmp/$board.err")"
+		sed 's/^/    /' "$tmp/$board.rom"
+		failed "$board: piromcheck"
 	fi
 
 	ok=1
@@ -262,6 +244,60 @@ elif grep -q 'MISMATCH' "$tmp/bad.log"; then
 else
 	failed "the refusal does not say why: $(tail -2 "$tmp/bad.log" | tr '\n' ' ')"
 fi
+
+# piromcheck must refuse each fault a board has shown, for the reason the
+# board showed it: it is what stands in for the board, here and in
+# release.yml, so a checker that passes everything would be worse than
+# none. Each card is a small one of mkcard's, the 3B+'s files and its
+# config.txt, with one thing broken.
+mkdir -p "$tmp/rom"
+sed -e '/^core_freq/d' os/bcm2837/card/config.txt > "$tmp/rom/nopin.txt"
+sed -e 's/^core_freq_min=.*/core_freq_min=200/' os/bcm2837/card/config.txt > "$tmp/rom/unequal.txt"
+sed -e '/^max_framebuffers/d' os/bcm2837/card/config.txt > "$tmp/rom/onefb.txt"
+sed -e 's/^kernel=.*/kernel=kernel8.img/' os/bcm2837/card/config.txt > "$tmp/rom/nokernel.txt"
+romcard() {	# romcard <out> <config.txt>: the 3B+'s boot files and that config
+	python3 tools/mkcard.py "$1" 48 /bootcode.bin="$tmp/fw/bootcode.bin" /start.elf="$tmp/fw/start.elf" \
+		/fixup.dat="$tmp/fw/fixup.dat" /config.txt="$2" /infernode8.img="$tmp/kernel.img" >/dev/null
+}
+# refused <name> <image> <pattern>: piromcheck fails it, saying <pattern>
+refused() {
+	if python3 tools/piromcheck.py --firmware "$tmp/fw" rpi3bplus "$2" > "$tmp/rom/out" 2>&1; then
+		failed "piromcheck passes a card with $1"
+	elif grep -q "$3" "$tmp/rom/out"; then
+		pass "piromcheck refuses a card with $1"
+	else
+		failed "piromcheck refuses a card with $1, but not for that reason: $(head -2 "$tmp/rom/out" | tr '\n' ' ')"
+	fi
+}
+romcard "$tmp/rom/good.img" os/bcm2837/card/config.txt
+if python3 tools/piromcheck.py --firmware "$tmp/fw" rpi3bplus "$tmp/rom/good.img" > "$tmp/rom/out" 2>&1; then
+	pass "piromcheck passes the 3B+'s files and config.txt on a card of mkcard's"
+else
+	failed "piromcheck refuses the good card: $(head -2 "$tmp/rom/out" | tr '\n' ' ')"
+fi
+# the fault that kept a 3B+ at a steady red LED: bootcode.bin with only
+# a generated alias for a short name, as mkcard wrote it before
+python3 - "$tmp/rom/good.img" "$tmp/rom/alias.img" <<'EOF'
+import sys
+b = open(sys.argv[1], "rb").read()
+assert b.count(b"BOOTCODEBIN") == 1
+open(sys.argv[2], "wb").write(b.replace(b"BOOTCODEBIN", b"BOOTCO~1BIN"))
+EOF
+refused "bootcode.bin's short name an alias (BOOTCO~1.BIN)" "$tmp/rom/alias.img" "no short name BOOTCODE.BIN"
+# the fault that made the console unreadable: the core clock left free
+romcard "$tmp/rom/nopin.img" "$tmp/rom/nopin.txt"
+refused "no core_freq pin in config.txt" "$tmp/rom/nopin.img" "core clock is not pinned"
+romcard "$tmp/rom/unequal.img" "$tmp/rom/unequal.txt"
+refused "core_freq_min unequal to core_freq" "$tmp/rom/unequal.img" "core clock is not pinned"
+romcard "$tmp/rom/onefb.img" "$tmp/rom/onefb.txt"
+refused "no max_framebuffers=2" "$tmp/rom/onefb.img" "no second display"
+romcard "$tmp/rom/nokernel.img" "$tmp/rom/nokernel.txt"
+refused "a kernel= that is not on the card" "$tmp/rom/nokernel.img" "kernel=kernel8.img is not on the card"
+echo "not the firmware" > "$tmp/rom/start.elf"
+python3 tools/mkcard.py "$tmp/rom/wrongfw.img" 48 /bootcode.bin="$tmp/fw/bootcode.bin" /start.elf="$tmp/rom/start.elf" \
+	/fixup.dat="$tmp/fw/fixup.dat" /config.txt=os/bcm2837/card/config.txt /infernode8.img="$tmp/kernel.img" >/dev/null
+refused "a start.elf that is not the pinned firmware" "$tmp/rom/wrongfw.img" "start.elf on the card is not"
+rm -rf "$tmp/rom"
 
 # docs/BAREMETAL.md shows these files whole, so a reader making a card by
 # hand makes this one: the copies must not drift apart

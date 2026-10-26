@@ -1899,11 +1899,44 @@ jobs:
 
     # clang is a cross compiler already (--target=aarch64-elf); lld and
     # llvm supply ld.lld, llvm-objcopy, llvm-ar and llvm-nm. dosfstools
-    # for fsck.fat, which checks each image.
+    # for fsck.fat, which checks each image. qemu-system-arm boots the
+    # 3B+'s image (raspi3b) before it ships.
     - name: Install the cross toolchain
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential clang lld llvm python3 dosfstools xz-utils
+        sudo apt-get install -y build-essential clang lld llvm python3 dosfstools xz-utils qemu-system-arm
+
+    # The 4B's image boots on QEMU's raspi4b, which arrived in 9.0; the
+    # runner's is 8.2. The same QEMU, built the same way and under the
+    # same cache key, as baremetal.yml's bcm2711 job.
+    - name: Restore a built QEMU 9.2.4
+      id: qemucache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/qemu
+        key: qemu-9.2.4-aarch64-softmmu-slirp-ubuntu-24.04-v3-${{ hashFiles('tests/host/qemu/*.patch') }}
+
+    - name: Build QEMU 9.2.4
+      if: steps.qemucache.outputs.cache-hit != 'true'
+      env:
+        QEMU_VERSION: 9.2.4
+      run: |
+        set -e
+        sudo apt-get install -y ninja-build pkg-config libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+        cd "$RUNNER_TEMP"
+        curl -fsSL -o qemu.tar.xz "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz"
+        tar xf qemu.tar.xz
+        cd "qemu-${QEMU_VERSION}"
+        for p in "$GITHUB_WORKSPACE"/tests/host/qemu/*.patch; do patch -p1 < "$p"; done
+        ./configure --prefix="$RUNNER_TEMP/qemu" --target-list=aarch64-softmmu \
+          --enable-slirp --disable-docs --disable-werror --disable-tools --disable-guest-agent \
+          --disable-gtk --disable-sdl --disable-vnc --disable-opengl --disable-curses \
+          --disable-xen --disable-kvm --disable-capstone
+        make -j"$(nproc)"
+        make install
+
+    - name: The QEMU libraries
+      run: sudo apt-get install -y libglib2.0-0 libpixman-1-0 libslirp0
 
     - name: Build mk and limbo
       run: |
@@ -1954,13 +1987,27 @@ jobs:
           exit 1
         fi
 
-        for board in rpi3bplus:bcm2837 rpi4b:bcm2711; do
-          b=${board%%:*} soc=${board##*:}
+        # The boot firmware once more, apart from mkpiimage's copy, to
+        # hold the images' bytes against.
+        sh tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt "$RUNNER_TEMP/bootfw"
+
+        for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64; do
+          b=${board%%:*} rest=${board#*:} soc=${rest%%:*} qemu=${rest#*:}
           img="infernode-$VERSION-$b.img"
           sh tools/mkpiimage.sh "$b" "$RUNNER_TEMP/bm/$soc-kernel.img" "$img"
           dd if="$img" of="$RUNNER_TEMP/part" bs=512 skip=2048 status=none
           fsck.fat -n "$RUNNER_TEMP/part"
           rm -f "$RUNNER_TEMP/part"
+          # What a board would do with this exact image, short of a board:
+          # read it as the boot ROM and firmware do, then boot it to the
+          # login screen. Either failing stops the release here; neither
+          # may skip.
+          python3 tools/piromcheck.py --firmware "$RUNNER_TEMP/bootfw/firmware" "$b" "$img"
+          set +e
+          QEMU="$qemu" sh tests/host/piimage_boot_test.sh "$b" "$img" "$RUNNER_TEMP/bm/$soc-kernel.img"
+          st=$?
+          set -e
+          [ "$st" = 0 ] || { echo "::error::$img did not boot as a board boots it (status $st)"; exit 1; }
           # what Raspberry Pi Imager's repository JSON asks for, before
           # and after compression
           echo "$img: extract_size $(stat -c %s "$img") extract_sha256 $(sha256sum "$img" | cut -d' ' -f1)"

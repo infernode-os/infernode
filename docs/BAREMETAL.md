@@ -223,8 +223,19 @@ which fetches the boot, Wi-Fi and Bluetooth firmware, pinned by
 `tools/pi-btfw-manifest.txt`, and
 puts on the card only the files of `lib/`, `fonts/` and `icons/` that
 git tracks. `.github/workflows/release.yml` (`raspberry-pi`) makes the
-release's two this way. What follows is what is on such a card, for
-making or changing one by hand.
+release's two this way, and checks each before it ships, as a board
+would take it: `tools/piromcheck.py` reads it as the boot ROM and
+firmware do (the boot files by their FAT short names, `config.txt`'s
+load-bearing lines), and `tests/host/piimage_boot_test.sh` boots it
+under QEMU to the login screen. `baremetal.yml` does the same on every
+change to the kernel or the card tools. Run them on a card of your own
+the same way:
+
+    python3 tools/piromcheck.py rpi3bplus card.img
+    sh tests/host/piimage_boot_test.sh rpi3bplus card.img /tmp/bm/bcm2837-kernel.img
+
+What follows is what is on such a card, for making or changing one by
+hand.
 
 The card is FAT32, partition at sector 2048 (what every imaging tool
 makes). On it:

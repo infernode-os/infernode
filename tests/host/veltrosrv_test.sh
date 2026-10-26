@@ -47,6 +47,7 @@ cat > "$SCRIPT" <<EOF
 load std
 mkdir -p /usr/agentloop
 echo alpha > /usr/agentloop/a.txt
+echo 'Answer the user in plain words.' > /usr/agentloop/AGENTS.md
 bind -a '#I' /net
 ndb/cs
 llmsrv -b openai -u http://127.0.0.1:$PORT/v1 -M mock &
@@ -102,6 +103,7 @@ cat /mnt/veltro/\$id/text
 
 echo '@@ paths'
 mkdir -p /usr/agentloop/more
+echo 'In this folder, files are never deleted.' > /usr/agentloop/more/AGENTS.md
 echo bindpath /usr/agentloop/more > /mnt/toolctl/ctl
 echo 'SCENARIO:single_read go' > /mnt/veltro/\$id/input
 cat /mnt/veltro/\$id/text > /dev/null
@@ -211,6 +213,19 @@ n=sum(1 for l in open(sys.argv[1]) if str(json.loads(l)["body"]["messages"][-1].
 sys.exit(0 if n==2 else 1)' "$WORK/req.log" && echo "PASS: the refused request was sent again, once" ||
 	{ echo "FAIL: the refused request was sent again, once"; FAILED=$((FAILED + 1)); }
 expect "a path bound mid-session is noted" paths 'namespace changed: the model is told'
+# A folder's own instructions: the one given at the start in the system
+# prompt, the one given later with the next message.
+python3 -I -c 'import json,sys
+first=None; later=0
+for l in open(sys.argv[1]):
+    m=json.loads(l)["body"]["messages"]
+    if first is None and m and m[0].get("role")=="system": first=m[0]["content"]
+    for x in m:
+        if x.get("role")=="user" and "files are never deleted" in str(x.get("content","")): later=1
+ok = first and "== Project Instructions ==" in first and "Answer the user in plain words" in first and later
+sys.exit(0 if ok else 1)' "$WORK/req.log" &&
+	echo "PASS: a folder's AGENTS.md is in the prompt, and a later folder's comes with the next message" ||
+	{ echo "FAIL: a folder's AGENTS.md is in the prompt, and a later folder's comes with the next message"; FAILED=$((FAILED + 1)); }
 # The system prompt the model was given at the start is the one every
 # later request carries (a rewritten one loses the cache, and a current
 # Claude's thinking); the change rides on the next message.

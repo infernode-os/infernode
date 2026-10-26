@@ -1041,10 +1041,19 @@ turn(s: ref Session, input: string)
 		}
 		lp := readfile(toolmount + "/paths");
 		if(lp != s.pathsraw) {
+			# A folder given since: its own instructions come with it.
+			added: list of string;
+			was := s.al->userpaths(s.pathsraw);
+			for(np := s.al->userpaths(lp); np != nil; np = tl np)
+				if(!member(was, hd np))
+					added = hd np :: added;
 			s.pathsraw = lp;
+			proj := s.al->projectinstructions(added);
+			if(proj != "")
+				proj = "\n\n" + proj;
 			changeprompt(s, "your namespace has changed since this conversation began.  " +
 				"It is now as follows, and this replaces == Your Namespace == in your " +
-				"instructions:\n\n" + s.al->discovernamespace());
+				"instructions:\n\n" + s.al->discovernamespace() + proj);
 			log(s, "namespace changed: the model is told");
 		}
 	}

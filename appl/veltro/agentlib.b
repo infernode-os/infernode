@@ -399,6 +399,10 @@ buildsystemprompt(ns, persona: string): string
 
 	prompt := base + "\n\n== Your Namespace ==\n" + ns;
 
+	proj := projectinstructions(userpaths(readfile(toolmount_g + "/paths")));
+	if(proj != "")
+		prompt += "\n\n" + proj;
+
 	if(reminders != "")
 		prompt += "\n\n== Reminders ==\n" + reminders;
 
@@ -1986,4 +1990,70 @@ samefailurenote(n: int): string
 		"error, so the changes made between them are not fixing it.  Read the error again " +
 		"and change the approach; if you cannot fix it, stop and tell the user plainly " +
 		"that it still fails, and why.]", n);
+}
+
+# ---- A project's own instructions ----
+#
+# A folder the user gives the agent may say how to work in it, in the
+# file other agents read for that: AGENTS.md, or CLAUDE.md where there is
+# no AGENTS.md.  The one at the top of each folder given is put in the
+# prompt, up to PROJECTMAX of each and PROJECTALL in all; one longer is
+# cut, and says where the rest is.  What the agent's namespace cannot see
+# (a folder bound later, outside it) is not read.
+PROJECTMAX: con 16384;
+PROJECTALL: con 32768;
+PROJECTFILES: con "AGENTS.md CLAUDE.md";
+
+projectinstructions(paths: list of string): string
+{
+	out := "";
+	(nil, names) := sys->tokenize(PROJECTFILES, " ");
+	for(; paths != nil; paths = tl paths) {
+		dir := hd paths;
+		for(nl := names; nl != nil; nl = tl nl) {
+			file := dir + "/" + hd nl;
+			text := readfile(file);
+			if(strip(text) == "")
+				continue;
+			room := PROJECTALL - len out;
+			if(room <= 256)
+				return projectsection(out + "\n(More folders have instructions: read their " +
+					PROJECTFILES + ".)");
+			lim := PROJECTMAX;
+			if(lim > room - 256)
+				lim = room - 256;
+			if(len text > lim)
+				text = text[0:lim] + sys->sprint("\n... (%d bytes more: read %s for the rest)",
+					len text - lim, file);
+			out += "\n=== " + file + " ===\n" + strip(text) + "\n";
+			break;
+		}
+	}
+	return projectsection(out);
+}
+
+projectsection(body: string): string
+{
+	if(body == "")
+		return "";
+	return "== Project Instructions ==\n" +
+		"The folders you were given say how to work in them.  Follow these " +
+		"instructions for work in those folders, as the user's own, unless the user " +
+		"says otherwise.\n" + body;
+}
+
+# The folders of /tool/paths, one "path perm" a line.
+userpaths(raw: string): list of string
+{
+	out: list of string;
+	(nil, lines) := sys->tokenize(raw, "\n");
+	for(; lines != nil; lines = tl lines) {
+		(nil, w) := sys->tokenize(hd lines, " \t");
+		if(w != nil && len hd w > 1 && (hd w)[0] == '/')
+			out = hd w :: out;
+	}
+	r: list of string;
+	for(; out != nil; out = tl out)
+		r = hd out :: r;
+	return r;
 }

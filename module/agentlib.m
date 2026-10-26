@@ -31,6 +31,12 @@ AgentLib: module {
 	loadreminders: fn(toollist: list of string): string;
 	loadtooldocs: fn(toollist: list of string): string;
 	defaultsystemprompt: fn(): string;
+	# A project's own instructions for working in it: AGENTS.md (or
+	# CLAUDE.md) at the top of each folder given, as much as fits, under
+	# == Project Instructions ==; "" for none.  userpaths: the folders
+	# /tool/paths lists.
+	projectinstructions: fn(paths: list of string): string;
+	userpaths: fn(raw: string): list of string;
 	readtooldoc: fn(name: string): string;
 	tooldocsummary: fn(name: string): string;
 

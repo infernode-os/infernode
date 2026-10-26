@@ -21,6 +21,7 @@
 #	write	a file longer than one short reply, written whole
 #	fanout	two children at once, one of them several steps deep
 #	docs	a tool's full documentation, read from its file when needed
+#	project	the folder's own AGENTS.md followed
 
 set -e
 . "$(dirname "$0")/common.sh"
@@ -32,7 +33,7 @@ for f in dis/veltro/veltrosrv.dis dis/veltro/tools9p.dis dis/llmsrv.dis; do
 	[ -f "$ROOT/$f" ] || { echo "SKIP: $f not built"; exit 77; }
 done
 MODEL=${VELTRO_LIVE_MODEL:-haiku}
-SCENARIOS="edit spawn write fanout docs"
+SCENARIOS="edit spawn write fanout docs project"
 [ $# -gt 0 ] && SCENARIOS="$*"
 
 WORK="$(mktemp -d)"
@@ -56,6 +57,7 @@ task() {
 	edit)	echo 'The file /usr/live/notes.txt uses British spelling. Change colour to color everywhere in it, leaving everything else as it is, then tell me how many lines you changed.' ;;
 	spawn)	echo 'Use the spawn tool to start one child agent, with the read tool and the path /usr/live, whose task is to read /usr/live/secret.txt and report the word in it. Then tell me the word the child reported.' ;;
 	write)	echo 'Write a file /usr/live/numbers.txt containing the numbers 1 to 1500, one per line, nothing else. Then check its last line.' ;;
+	project)	echo 'How many lines does /usr/live/notes.txt have?' ;;
 	docs)	echo 'At most how many matches does the grep tool report in one call? Look it up in the tool documentation rather than guessing, and give the number.' ;;
 	fanout)	echo 'In one spawn call start two child agents, each with the read and list tools and the path /usr/live. The first child: list /usr/live/maze, where every file names the next file to read, starting at start.txt; follow the chain to its end and report the word in the last file. The second child: read /usr/live/secret.txt and report its word. Then tell me both words.' ;;
 	esac
@@ -73,6 +75,7 @@ echo 'Nothing here.' >> /usr/live/notes.txt
 echo 'A colour chart, and colours.' >> /usr/live/notes.txt
 echo 'Last line, no colour words? colour.' >> /usr/live/notes.txt
 echo 'tangerine' > /usr/live/secret.txt
+echo 'Whenever you answer a question about a file in this folder, end your reply with the line: -- checked against the file' > /usr/live/AGENTS.md
 mkdir -p /usr/live/maze
 echo 'next: b.txt' > /usr/live/maze/start.txt
 echo 'next: c.txt' > /usr/live/maze/b.txt
@@ -134,6 +137,10 @@ EOF
 	spawn)
 		echo "$reply" | grep -qi tangerine || { fail "spawn: the word is not in the reply"; echo "$reply"; }
 		sed -n '/^== log$/,/^--- END$/p' "$LOG" | grep -q 'tool spawn' || fail "spawn: spawn was not called"
+		;;
+	project)
+		echo "$reply" | grep -q -- '-- checked against the file' || { fail "project: AGENTS.md was not followed"; echo "$reply"; }
+		echo "$reply" | grep -q '4\|four' || { fail "project: the count is wrong"; echo "$reply"; }
 		;;
 	docs)
 		echo "$reply" | grep -q '200' || { fail "docs: the reply does not give grep's limit, 200"; echo "$reply"; }

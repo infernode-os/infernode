@@ -220,6 +220,11 @@ known bugs planted in real Limbo functions, solved when the file is the
 original again, with the steps and tool calls each took. Run it on two trees
 (`BENCH_ROOT`) to compare a change.
 
+A folder the agent is given may say how to work in it, in an `AGENTS.md`
+(or `CLAUDE.md`) at its top: it is put in the system prompt under
+`== Project Instructions ==`, up to 16 KB a file and 32 KB in all; a folder
+given later has its file sent with the next message.
+
 llmsrv compacts a long session into a checkpoint of a fixed form (goal,
 constraints, progress, decisions, next steps, critical context, what the user
 was told). The summariser is given the tool calls and their results, not only

@@ -9,3 +9,7 @@ Plan 9 ERE: \d \w \s match literal letters — NOT character classes.
 Use [0-9] not \d, [a-z] not \w, [ \t] not \s.
 
   grep -r '[0-9]+' /appl/veltro
+
+Limits: at most 200 matches in one call, from at most 500 files; a line
+longer than 300 characters is cut.  A search that reaches a limit says
+so: narrow the pattern or the path for the rest.

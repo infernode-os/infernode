@@ -15,8 +15,10 @@ implement VeltroSrv;
 #	                          think <n> | maxsteps <n> | gate on|off
 #	                   (no model: the model is the server's, llmsrv -M)
 #	                   read: the settings, attr=value
-#	        input      write: one user message; starts a turn.  "busy"
-#	                   while a turn runs.
+#	        input      write: one user message; starts a turn.  Written
+#	                   while a turn runs, it is queued: sent with the
+#	                   next tool results, or, if the turn ends first,
+#	                   the next turn (dropped if the turn is cancelled).
 #	        text       read: the conversation as the user sees it, as
 #	                   messages headed "== user", "== veltro" or
 #	                   "== note [title]".  While a turn runs, a read at
@@ -27,6 +29,10 @@ implement VeltroSrv;
 #	                   form lucibridge -v has always written.  Ends as
 #	                   text does.
 #	        status     read: idle | working | blocked | <tool>
+#	        context    read: the model's history, as llmsrv's context
+#	                   file has it (JSON); write, between turns: the
+#	                   history, from a session saved that way, so it is
+#	                   taken up where it was left
 #	        approve    read: while a turn runs, waits for a gated call,
 #	                   then "<callid> <tool> <args>"; write: allow
 #	                   <callid> | deny <callid> | deny <callid> headless
@@ -86,7 +92,7 @@ include "veltrosrv.m";
 
 DEFAULT_MAX_STEPS: con 100;
 MAX_MAX_STEPS: con 500;
-TOOL_TIMEOUT: con 60000;		# ms per tool call
+TOOL_TIMEOUT: con 150000;	# ms per tool call: above exec's longest (120 s)
 # ms; a backstop for a link that is gone.  llmsrv's own watchdog ends a
 # request that stops (2 min quiet, 5 min before the first byte), so this
 # is the whole turn: one queued behind another on a one-at-a-time server,
@@ -117,7 +123,7 @@ provrequired := 0;
 
 # ---- Sessions ----
 
-Qroot, Qnew, Qsessdir, Qctl, Qinput, Qtext, Qlog, Qstatus, Qapprove: con iota;
+Qroot, Qnew, Qsessdir, Qctl, Qinput, Qtext, Qlog, Qstatus, Qapprove, Qcontext: con iota;
 
 Approval: adt {
 	callid, tool, args: string;
@@ -149,6 +155,12 @@ Session: adt {
 	failseen:	list of (string, int);	# this turn: a call and its failure, how often
 	closed:		int;
 	stopped:	int;		# the last turn was stopped by the user
+	said:		int;		# this turn spoke through say
+	frozen:		int;		# the system prompt has been sent: it stays
+	pending:	string;	# what changed since, for the next message
+	running:	int;		# a turn is running (busy is also set by a writer)
+	queued:		list of string;	# messages written while it runs, reversed
+	unsent:		list of (string, string);	# a stopped turn's calls, answered "not run"
 };
 
 sessions: list of ref Session;
@@ -166,6 +178,7 @@ Ev: adt {
 	End =>				# end of a message: ensure it ends a line
 	Status =>	st: string;
 	Approve =>	a: ref Approval;
+	Take =>		reply: chan of string;	# the queued messages, taken
 	Done =>
 	}
 };
@@ -507,8 +520,8 @@ needsapproval(s: ref Session, toolname, args: string): int
 	# Native tool calls carry JSON ({"path":"/lib/x",...}); judge the
 	# positional form the tool will actually run, as calltool sends it.
 	args = s.al->toolargs(toolname, args);
-	if(hasprefix(args, "-r "))
-		args = args[3:];	# write's and edit's raw mode: the path follows
+	if(hasprefix(args, "-r ") || hasprefix(args, "-j "))
+		args = args[3:];	# write's and edit's raw and JSON modes: the path follows
 	# A task's staged changes reach the user's own files only on the
 	# user's word.
 	if(toolname == "task")
@@ -533,7 +546,7 @@ needsapproval(s: ref Session, toolname, args: string): int
 approvaltext(s: ref Session, toolname, args: string): string
 {
 	pos := strip(s.al->toolargs(toolname, args));
-	if(hasprefix(pos, "-r "))
+	if(hasprefix(pos, "-r ") || hasprefix(pos, "-j "))
 		pos = pos[3:];
 	if(toolname == "task" && hasprefix(pos, "promote")) {
 		id := strip(pos[len "promote":]);
@@ -572,11 +585,9 @@ pretoolapproval(s: ref Session, callid, toolname, args: string): string
 # one file sixteen times, failing on the same line each time, reached the
 # step limit, and told the user it compiled.  At the third, the result
 # says so.
-SAMEFAILURES: con 3;
-
 samefailure(s: ref Session, name, args, result: string): string
 {
-	why := failureof(result);
+	why := s.al->failureof(result);
 	if(why == nil)
 		return "";
 	key := name + " " + args + "\n" + why;
@@ -590,30 +601,10 @@ samefailure(s: ref Session, name, args, result: string): string
 			seen = hd l :: seen;
 	}
 	s.failseen = (key, n) :: seen;
-	if(n != SAMEFAILURES)
+	if(n != AgentLib->SAMEFAILURES)
 		return "";
 	log(s, sys->sprint("tool %s: the same failure %d times this turn", name, n));
-	return sys->sprint("\n\n[harness: this call has now failed %d times this turn with the same " +
-		"error, so the changes made between them are not fixing it.  Read the error again " +
-		"and change the approach; if you cannot fix it, stop and tell the user plainly " +
-		"that it still fails, and why.]", n);
-}
-
-# What a failed result says, the same each time it fails the same way; nil
-# for a result that is not a failure.
-failureof(result: string): string
-{
-	if(hasprefix(result, "error:") || hasprefix(result, "ERROR:"))
-		return firstlines(result, 1);
-	(nil, st) := str->splitstrl(result, "status: failed");
-	if(hasprefix(result, "<gate>") && st != nil) {
-		# the compiler's first diagnostic
-		(nil, after) := str->splitstrl(result, "stderr:\n");
-		if(after != nil)
-			return firstlines(after[len "stderr:\n":], 1);
-		return "status: failed";
-	}
-	return nil;
+	return s.al->samefailurenote(n);
 }
 
 # Track consecutive failures of one tool; after MAX_TOOL_FAILURES the
@@ -661,20 +652,10 @@ updatefailstreak(s: ref Session, tools: list of (string, string, string),
 
 # A batch is the tool calls of one model response.  Every call is gated,
 # intercepted (say) and checked against the read cache first, in the
-# model's order; what remains runs concurrently when all of it is
-# read-only, and one at a time, in order, when any of it mutates (so
-# read -> edit -> read still re-reads, and write foo.b still precedes
-# limbo foo.b).  spawn is read-only here: its children run concurrently
-# inside the one call already.
-readonlytool(name: string): int
-{
-	case name {
-	"read" or "list" or "find" or "search" or "grep" or
-	"websearch" or "webfetch" or "spawn" =>
-		return 1;
-	}
-	return 0;
-}
+# model's order; then read-only calls that come together run
+# concurrently, and a call that changes something runs alone, after
+# those before it (exectools).  spawn is read-only here: its children
+# run concurrently inside the one call already.
 
 calltoolworker(s: ref Session, name, args: string, resultch: chan of string)
 {
@@ -782,6 +763,36 @@ tooltimeout(name: string): int
 	return TOOL_TIMEOUT;
 }
 
+# A result longer than INLINEMAX is put in the workspace, and INLINEKEEP
+# of it shown.  (It was 4096, a 9P write's worth, when TOOL_RESULTS had to
+# fit one; llmsrv now gathers a prompt of any size, and at 4096 most
+# results the model needed were three lines and a path to read again.)
+INLINEMAX: con 32768;
+INLINEKEEP: con 24576;
+
+# The start of s up to n characters, ending at a line's end where there
+# is one; and its end, starting at a line's start.
+firsttext(s: string, n: int): string
+{
+	if(len s <= n)
+		return s;
+	for(i := n; i > n / 2; i--)
+		if(s[i] == '\n')
+			return s[0:i];
+	return s[0:n];
+}
+
+lasttext(s: string, n: int): string
+{
+	if(len s <= n)
+		return s;
+	start := len s - n;
+	for(i := start; i < start + n / 2; i++)
+		if(s[i] == '\n')
+			return s[i+1:];
+	return s[start:];
+}
+
 # After a call: provenance, cache, spill.  Returns what the model sees.
 finish(s: ref Session, step: int, name, args, result: string): string
 {
@@ -791,7 +802,7 @@ finish(s: ref Session, step: int, name, args, result: string): string
 	s.al->deduprecord(nm, args, result, step);
 	log(s, "tool " + name + ": done, " + s.al->truncate(result, 100));
 	result += samefailure(s, nm, args, result);
-	if(len result > AgentLib->STREAM_THRESHOLD) {
+	if(len result > INLINEMAX) {
 		# Never re-scratch a read of a scratch file: each read would
 		# produce another scratch file of similar size, without end.
 		# A native call's arguments are JSON: judged as such, the path
@@ -801,7 +812,7 @@ finish(s: ref Session, step: int, name, args, result: string): string
 		isscratchread := nm == "read" && hasprefix(pos, SCRATCH_PATH + "/");
 		if(isscratchread) {
 			(path, nil) := splitword(pos);
-			shown := result[0:AgentLib->STREAM_THRESHOLD];
+			shown := result[0:INLINEMAX];
 			# whole lines only, and where the next read starts
 			for(e := len shown - 1; e > 0 && shown[e] != '\n'; e--)
 				;
@@ -813,16 +824,27 @@ finish(s: ref Session, step: int, name, args, result: string): string
 				more = sys->sprint("; read %s with offset %d for what follows", path, last);
 			result = shown + "... (truncated at " + string len array of byte shown + " bytes" + more + ")";
 		} else {
+			# What fits stays inline, so the model has it to act on: a
+			# command's end (where its errors are), anything else's
+			# start; all of it is in the workspace, at a path it is told.
 			scratch := writescratch(s, result, step);
-			# The first 3 lines stay inline so the model has something to
-			# act on; small, so TOOL_RESULTS fits one 9P write (~8KB).
-			preview := firstlines(result, 3);
-			result = preview +
-				sys->sprint("\n... (%d total bytes — full output at %s)",
-					len result, scratch);
+			kept: string;
+			if(nm == "exec")
+				kept = "...\n" + lasttext(result, INLINEKEEP);
+			else
+				kept = firsttext(result, INLINEKEEP) + "\n...";
+			result = kept + sys->sprint("\n[%d bytes in all, too long to show whole.  " +
+				"The whole output is at %s: read it with offset and limit.]",
+				len result, scratch);
 		}
 	}
 	return result;
+}
+
+nameof(c: (string, string, string)): string
+{
+	(nil, name, nil) := c;
+	return name;
 }
 
 exectools(s: ref Session, calls: list of (string, string, string), step: int): list of (string, string)
@@ -830,13 +852,13 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 	# Pass 1, in order: say, the gate, the read cache.
 	results: list of (string, string);	# reversed
 	torun: list of (string, string, string);	# reversed
-	allread := 1;
 	for(tc := calls; tc != nil; tc = tl tc) {
 		(id, name, args) := hd tc;
 		nm := str->tolower(name);
 		prov("toolcall", sys->sprint("agent=%s step=%d tool=%s",
 			s.llmid, step + 1, name), array of byte args);
 		if(nm == "say") {
+			s.said = 1;
 			say(s, "veltro say", args);
 			results = (id, "said") :: results;
 			prov("toolres", sys->sprint("agent=%s step=%d tool=%s",
@@ -871,9 +893,9 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 		dup := 0;
 		for(tr := torun; tr != nil; tr = tl tr) {
 			(nil, tn, ta) := hd tr;
-			if(!readonlytool(str->tolower(tn)))
+			if(!s.al->readonlytool(str->tolower(tn)))
 				break;
-			if(str->tolower(tn) == nm && ta == args && readonlytool(nm)) {
+			if(str->tolower(tn) == nm && ta == args && s.al->readonlytool(nm)) {
 				dup = 1;
 				break;
 			}
@@ -886,47 +908,55 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 				s.llmid, step + 1, name), array of byte note);
 			continue;
 		}
-		if(!readonlytool(nm))
-			allread = 0;
 		results = (id, nil) :: results;	# placeholder, filled below
 		torun = (id, name, args) :: torun;
 	}
 
-	# Pass 2: run what remains.
+	# Pass 2: run what remains, in the model's order, read-only calls
+	# that come together concurrently, and each call that changes
+	# something alone, once those before it are done (so read -> edit ->
+	# read still re-reads, and write foo.b still precedes limbo foo.b).
 	ran: list of (string, string);	# (id, result), reversed
-	if(allread) {
-		rev: list of (string, string, string);
-		for(; torun != nil; torun = tl torun)
-			rev = hd torun :: rev;
-		launched: list of ref Call;	# reversed
-		for(pc := rev; pc != nil; pc = tl pc) {
+	rev: list of (string, string, string);
+	for(; torun != nil; torun = tl torun)
+		rev = hd torun :: rev;
+	group: list of ref Call;	# read-only calls running, reversed
+	for(pc := rev; ; pc = tl pc) {
+		if(pc == nil || !s.al->readonlytool(str->tolower(nameof(hd pc)))) {
+			# collect the group, in order
+			inorder: list of ref Call;
+			for(; group != nil; group = tl group)
+				inorder = hd group :: inorder;
+			for(; inorder != nil; inorder = tl inorder) {
+				c := hd inorder;
+				r := collect(c);
+				ran = (c.id, finish(s, step, c.name, c.args, r)) :: ran;
+			}
+			if(pc == nil)
+				break;
 			(id, name, args) := hd pc;
-			setstatus(s, "working");
-			log(s, "tool " + name + ": args " + args);
-			log(s, "tool " + name + ": calling with " + string len args + " bytes");
-			launched = launch(s, id, name, args) :: launched;
-		}
-		inorder: list of ref Call;
-		for(; launched != nil; launched = tl launched)
-			inorder = hd launched :: inorder;
-		for(; inorder != nil; inorder = tl inorder) {
-			c := hd inorder;
-			r := collect(c);
-			ran = (c.id, finish(s, step, c.name, c.args, r)) :: ran;
-		}
-	} else {
-		rev: list of (string, string, string);
-		for(; torun != nil; torun = tl torun)
-			rev = hd torun :: rev;
-		for(sc := rev; sc != nil; sc = tl sc) {
-			(id, name, args) := hd sc;
+			# Stopped: what changes something is not started.
+			if(s.cancel) {
+				ran = (id, "error: not run: the user stopped the turn") :: ran;
+				continue;
+			}
 			setstatus(s, str->tolower(name));
 			log(s, "tool " + name + ": args " + args);
 			log(s, "tool " + name + ": calling with " + string len args + " bytes");
 			r := collect(launch(s, id, name, args));
 			setstatus(s, "working");
 			ran = (id, finish(s, step, name, args, r)) :: ran;
+			continue;
 		}
+		(id, name, args) := hd pc;
+		if(s.cancel) {
+			ran = (id, "error: not run: the user stopped the turn") :: ran;
+			continue;
+		}
+		setstatus(s, "working");
+		log(s, "tool " + name + ": args " + args);
+		log(s, "tool " + name + ": calling with " + string len args + " bytes");
+		group = launch(s, id, name, args) :: group;
 	}
 
 	# Merge in the model's order.
@@ -949,10 +979,55 @@ exectools(s: ref Session, calls: list of (string, string, string), step: int): l
 
 # ---- The turn ----
 
+# The messages written to input while the turn ran, joined, and the queue
+# emptied.  The serving process owns the queue.
+takequeued(s: ref Session): string
+{
+	reply := chan[1] of string;
+	evc <-= ref Ev.Take(s, reply);
+	return <-reply;
+}
+
+joinqueued(q: list of string): string
+{
+	out := "";
+	for(; q != nil; q = tl q) {
+		if(out != "")
+			out = hd q + "\n\n" + out;
+		else
+			out = hd q;
+	}
+	return out;
+}
+
+appendresult(l: list of (string, string), id, content: string): list of (string, string)
+{
+	return reverse((id, content) :: reverse(l));
+}
+
+notrun(calls: list of (string, string, string)): list of (string, string)
+{
+	out: list of (string, string);
+	for(; calls != nil; calls = tl calls) {
+		(id, nil, nil) := hd calls;
+		out = (id, "error: not run: the user stopped the turn") :: out;
+	}
+	return reverse(out);
+}
+
+reverse(l: list of (string, string)): list of (string, string)
+{
+	r: list of (string, string);
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
 turn(s: ref Session, input: string)
 {
 	s.al->dedupreset();	# fresh read-cache per turn
 	s.failseen = nil;
+	s.said = 0;
 	prov("prompt", sys->sprint("agent=%s", s.llmid), array of byte input);
 
 	# If the tool set changed (via /tool/ctl), reinstall the session's
@@ -966,14 +1041,31 @@ turn(s: ref Session, input: string)
 		}
 		lp := readfile(toolmount + "/paths");
 		if(lp != s.pathsraw) {
+			# A folder given since: its own instructions come with it.
+			added: list of string;
+			was := s.al->userpaths(s.pathsraw);
+			for(np := s.al->userpaths(lp); np != nil; np = tl np)
+				if(!member(was, hd np))
+					added = hd np :: added;
 			s.pathsraw = lp;
-			setsystemprompt(s);
-			log(s, "system prompt updated with new paths");
+			proj := s.al->projectinstructions(added);
+			if(proj != "")
+				proj = "\n\n" + proj;
+			changeprompt(s, "your namespace has changed since this conversation began.  " +
+				"It is now as follows, and this replaces == Your Namespace == in your " +
+				"instructions:\n\n" + s.al->discovernamespace() + proj);
+			log(s, "namespace changed: the model is told");
 		}
 	}
 
 	setstatus(s, "working");
 	prompt := input;
+	# What changed since the system prompt was sent rides on this message.
+	if(s.pending != "") {
+		prompt = s.pending + "\n\n" + prompt;
+		s.pending = "";
+	}
+	s.frozen = 1;
 	# A turn the user stopped is still in the model's history, unfinished,
 	# and the model took it up again at the next message.  It is told.
 	if(s.stopped) {
@@ -986,8 +1078,19 @@ turn(s: ref Session, input: string)
 	hitlimit := 1;
 	laststep := 0;
 	stopstate := "max-steps";
+	nudges := 0;
+	lastresults: list of (string, string);	# what prompt carries, if tool results
+	# A stopped turn's calls are answered first, with this message.
+	if(s.unsent != nil) {
+		prompt = s.al->buildtoolresults(appendresult(s.unsent, "-", prompt));
+		s.unsent = nil;
+	}
 	for(step := 0; step < s.maxsteps; step++) {
 		if(s.cancel) {
+			# The results of this step's calls, not sent: they go with
+			# the next message.
+			if(step > 0)
+				s.unsent = lastresults;
 			hitlimit = 0;
 			stopstate = "cancelled";
 			say(s, "note", "(cancelled)");
@@ -1046,6 +1149,18 @@ turn(s: ref Session, input: string)
 		log(s, "step " + string (step + 1) + ": waiting for LLM response...");
 		response := readllmfd(s);
 		log(s, sys->sprint("step %d: LLM response %d bytes", step + 1, len array of byte response));
+		if(s.cancel) {
+			if(started)
+				evc <-= ref Ev.End(s);
+			# Calls it made before it was stopped are in its history:
+			# each must be answered, or the next request is refused.
+			(nil, cut, nil) := s.al->parsellmresponse(response);
+			s.unsent = notrun(cut);
+			hitlimit = 0;
+			stopstate = "cancelled";
+			say(s, "note", "(cancelled)");
+			break;
+		}
 		if(response == "") {
 			stopstate = "empty";
 			say(s, "note", "(no response from LLM)");
@@ -1075,7 +1190,7 @@ turn(s: ref Session, input: string)
 		# registry, so it fires only for real tools.  Never on end_turn:
 		# that is the model's terminus, and its wrap-up prose mentions
 		# tool names (INFR-21).
-		if(stopreason != "tool_use" && stopreason != "end_turn" && text != "") {
+		if(stopreason == "" && text != "") {
 			(nativetool, nativeargs) := s.al->parseaction(text);
 			if(nativetool != "" && nativetool != "DONE") {
 				stopreason = "tool_use";
@@ -1098,7 +1213,47 @@ turn(s: ref Session, input: string)
 		if(started)
 			evc <-= ref Ev.End(s);
 
+		# Cut off by the output limit.  Calls in the reply may be cut
+		# too (a write's content, half there): none is run, each is
+		# answered so, and the model sends them again.  A reply of text
+		# alone is taken up where it stopped.
+		if(stopreason == "max_tokens") {
+			log(s, "harness: reply reached the output limit");
+			if(tools != nil) {
+				rev: list of (string, string);
+				for(tc := tools; tc != nil; tc = tl tc) {
+					(id, nil, nil) := hd tc;
+					rev = (id, AgentLib->CUTCALL) :: rev;
+				}
+				prompt = s.al->buildtoolresults(reverse(rev));
+				continue;
+			}
+			if(nudges < AgentLib->MAXNUDGES) {
+				nudges++;
+				prompt = AgentLib->CUTTEXT;
+				continue;
+			}
+		}
+		if(stopreason == "refusal") {
+			hitlimit = 0;
+			stopstate = "refusal";
+			say(s, "note", "(the model declined to continue this request)");
+			break;
+		}
+
 		if(stopreason != "tool_use" || tools == nil) {
+			# A turn that ended where it should not have: nothing said
+			# and nothing done, or the next step announced and not
+			# taken.  The model is told, once or twice a turn.
+			if(stopreason != "max_tokens" && nudges < AgentLib->MAXNUDGES) {
+				nudge := s.al->stopnudge(text, s.said);
+				if(nudge != "") {
+					nudges++;
+					log(s, "harness: nudge: " + s.al->truncate(nudge, 80));
+					prompt = nudge;
+					continue;
+				}
+			}
 			hitlimit = 0;
 			stopstate = stopreason;
 			if(stopstate == "")
@@ -1133,7 +1288,17 @@ turn(s: ref Session, input: string)
 			for(; newrev != nil; newrev = tl newrev)
 				rev = (hd newrev) :: rev;
 		}
+		# What the user wrote while the tools ran goes with their
+		# results, so the model reads it before its next step.
+		if((q := takequeued(s)) != "") {
+			evc <-= ref Ev.Head(s, "user");
+			evc <-= ref Ev.Text(s, q);
+			evc <-= ref Ev.End(s);
+			log(s, "input: delivered with the tool results");
+			rev = appendresult(rev, "-", q);
+		}
 		prompt = s.al->buildtoolresults(rev);
+		lastresults = rev;
 	}
 
 	if(hitlimit)
@@ -1212,11 +1377,30 @@ setsystemprompt(s: ref Session): string
 	return ns + "\n" + sysprompt;
 }
 
+# A change to what the model was told at the start.  Before the session's
+# first message the system prompt is rebuilt; after it, the prompt stays
+# as it was sent and the change goes with the next message.  Rewritten,
+# the system prompt is a new prefix: the cache of everything after it is
+# lost, and a current Claude refuses the thinking it wrote under the old
+# one.
+changeprompt(s: ref Session, note: string)
+{
+	if(!s.frozen) {
+		setsystemprompt(s);
+		return;
+	}
+	if(s.pending != "")
+		s.pending += "\n\n";
+	s.pending += "[harness: " + note + "]";
+}
+
 llmstart(s: ref Session): string
 {
 	s.llmid = s.al->createsession();
 	if(s.llmid == "")
 		return "cannot create LLM session";
+	s.frozen = 0;
+	s.pending = "";
 
 	# Low sampling temperature for the agentic loop (see AGENT_TEMP).
 	# Precedence: /tmp/veltro/agent_temp (test override) > /lib/ndb/llm
@@ -1283,7 +1467,7 @@ newsession(): ref Session
 	al->setverbose(verbose);
 	al->settoolmount(toolmount);
 	s := ref Session(nextsid++, al, "", nil, "", "", "", 0, maxsteps, 1,
-		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, nil, 0, 0);
+		"", 1, "", "idle", 0, 0, nil, nil, nil, nil, "", "", "", 0, nil, 0, 0, 0, 0, "", 0, nil, nil);
 	sessions = s :: sessions;
 	vers++;
 	return s;
@@ -1417,6 +1601,10 @@ ctl(s: ref Session, line: string): string
 		if(!s.busy)
 			return nil;
 		s.cancel = 1;
+		# The model's generation is stopped where it is, not waited for
+		# (it could run minutes); the turn sees cancel when it returns.
+		if(s.llmid != "")
+			writefile("/mnt/llm/" + s.llmid + "/ctl", "cancel");
 		if(s.approval != nil) {
 			s.approval.reply <-= 0;
 			s.approval = nil;
@@ -1439,8 +1627,13 @@ ctl(s: ref Session, line: string): string
 		if(rest != "" && readfile("/lib/veltro/agents/" + rest + ".txt") == "")
 			return "no such persona";
 		s.persona = rest;
-		if(s.llmid != "")
-			setsystemprompt(s);
+		if(s.llmid != "") {
+			persona := "";
+			if(rest != "")
+				persona = readfile("/lib/veltro/agents/" + rest + ".txt");
+			changeprompt(s, "from here on, take this role, in place of any role given " +
+				"before:\n\n" + strip(persona));
+		}
 	"role" =>
 		if(rest != "" && !safename(rest))
 			return "bad role name";
@@ -1448,11 +1641,12 @@ ctl(s: ref Session, line: string): string
 			return "no such role";
 		s.role = rest;
 		if(s.llmid != "")
-			setsystemprompt(s);
+			changeprompt(s, "from here on, follow these instructions, in place of any " +
+				"role instructions given before:" + rolesuffix(s));
 	"brief" =>
 		s.brief += "\n\n" + rest;
 		if(s.llmid != "")
-			setsystemprompt(s);
+			changeprompt(s, "an addition to your instructions:\n\n" + rest);
 		prov("task", sys->sprint("agent=%s", s.llmid), array of byte rest);
 	"think" =>
 		(n, r) := str->toint(rest, 10);
@@ -1549,20 +1743,58 @@ dirgen(path: big): (ref Sys->Dir, string)
 		return (d, nil);
 	Qstatus =>	return (dir("status", 8r444, path), nil);
 	Qapprove =>	return (dir("approve", 8r644, path), nil);
+	Qcontext =>	return (dir("context", 8r644, path), nil);
 	}
 	return (nil, Enotfound);
 }
 
-SESSFILES: con 6;
+SESSFILES: con 7;
 
 # The longest message a client may write to input.
 MAXINPUT: con 1024*1024;
+MAXCONTEXT: con 16*1024*1024;
+
+# A saved history, given to the session's model: its session is started
+# now if it has none, so the history is in place before the first
+# message.
+setcontext(s: ref Session, h: array of byte)
+{
+	if(s.running)
+		return;
+	if(s.llmid == "" && (e := llmstart(s)) != nil) {
+		appendlog(s, "context: " + e);
+		return;
+	}
+	fd := sys->open("/mnt/llm/" + s.llmid + "/context", Sys->OWRITE);
+	if(fd == nil || sys->write(fd, h, len h) != len h) {
+		appendlog(s, sys->sprint("context: cannot set the history: %r"));
+		return;
+	}
+	fd = nil;
+	appendlog(s, sys->sprint("context: history set (%d bytes)", len h));
+	# The system prompt it was sent with is not this one: the model is
+	# not told it changed, it is simply what the session runs under.
+}
+
+readall(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return "";
+	out := "";
+	buf := array[65536] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		out += string buf[0:n];
+	return out;
+}
 
 # A message written to input is whole: the turn it starts.
 startturn(s: ref Session, data: string)
 {
 	if(len data > 0 && data[len data - 1] == '\n')
 		data = data[0:len data - 1];
+	if(strip(data) == "" && s.running)
+		return;
 	if(strip(data) == "") {
 		s.busy = 0;
 		s.status = "idle";
@@ -1580,9 +1812,16 @@ startturn(s: ref Session, data: string)
 		wake(s, Qapprove);
 		return;
 	}
+	# A turn running: the message waits for its next step, or its end.
+	if(s.running) {
+		s.queued = data :: s.queued;
+		appendlog(s, "input: queued while the turn runs");
+		return;
+	}
 	appendhead(s, "user");
 	appendtext(s, data + "\n");
 	s.busy = 1;
+	s.running = 1;
 	s.cancel = 0;
 	s.status = "working";
 	spawn turn(s, data);
@@ -1655,6 +1894,7 @@ navigator(navops: chan of ref Navop)
 				"log" =>	n.path = MKPATH(sid, Qlog);
 				"status" =>	n.path = MKPATH(sid, Qstatus);
 				"approve" =>	n.path = MKPATH(sid, Qapprove);
+				"context" =>	n.path = MKPATH(sid, Qcontext);
 				* =>
 					n.reply <-= (nil, Enotfound);
 					continue;
@@ -1689,7 +1929,7 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 			Qsessdir =>
-				fts := array[] of {Qctl, Qinput, Qtext, Qlog, Qstatus, Qapprove};
+				fts := array[] of {Qctl, Qinput, Qtext, Qlog, Qstatus, Qapprove, Qcontext};
 				for(i := n.offset; i < len fts && i < n.offset + n.count; i++)
 					n.reply <-= dirgen(MKPATH(sid, fts[i]));
 			}
@@ -1758,10 +1998,27 @@ Serve:
 			s.approval = e.a;
 			s.status = "blocked";
 			wake(s, Qapprove);
+		Take =>
+			e.reply <-= joinqueued(s.queued);
+			s.queued = nil;
 		Done =>
 			s.busy = 0;
-			s.cancel = 0;
+			s.running = 0;
 			s.status = "idle";
+			# Written while it ran and not yet read: the next turn, unless
+			# the user stopped this one, when it would be a surprise.
+			if(s.queued != nil) {
+				q := joinqueued(s.queued);
+				s.queued = nil;
+				if(!s.cancel) {
+					s.cancel = 0;
+					startturn(s, q);
+					break;
+				}
+				appendhead(s, "note");
+				appendtext(s, "(not sent, the turn was stopped: " + q + ")\n");
+			}
+			s.cancel = 0;
 			wake(s, Qtext);
 			wake(s, Qlog);
 			wake(s, Qapprove);
@@ -1841,6 +2098,15 @@ Serve:
 					srv.reply(styxservers->readbytes(m, nil));
 				else
 					s.plog = (m.fid, m) :: s.plog;
+			Qcontext =>
+				# The history at the open, read through to its end.
+				if(m.offset == big 0 || c.data == nil) {
+					h := "";
+					if(s.llmid != "")
+						h = readall("/mnt/llm/" + s.llmid + "/context");
+					c.data = array of byte h;
+				}
+				srv.reply(styxservers->readbytes(m, c.data));
 			Qapprove =>
 				if(m.offset > big 0)
 					srv.reply(styxservers->readbytes(m, nil));
@@ -1882,7 +2148,9 @@ Serve:
 					srv.reply(ref Rmsg.Error(m.tag, "empty message"));
 					break;
 				}
-				if(c.data == nil && s.busy) {
+				# While a turn runs a message is queued for it (startturn);
+				# busy is another writer's message, not yet whole.
+				if(c.data == nil && s.busy && !s.running) {
 					srv.reply(ref Rmsg.Error(m.tag, "busy"));
 					break;
 				}
@@ -1892,7 +2160,7 @@ Serve:
 				# it did when the close that starts the turn came after
 				# its first read (a task was reported done, with no
 				# report, before it had begun).
-				if(c.data == nil) {
+				if(c.data == nil && !s.running) {
 					s.busy = 1;
 					s.status = "working";
 				}
@@ -1922,6 +2190,21 @@ Serve:
 					c.data = nil;
 					startturn(s, msg);
 				}
+			Qcontext =>
+				# Gathered on the fid; the history is set at the clunk.
+				if(s.running) {
+					srv.reply(ref Rmsg.Error(m.tag, "busy"));
+					break;
+				}
+				if(len c.data + len m.data > MAXCONTEXT) {
+					srv.reply(ref Rmsg.Error(m.tag, "context too long"));
+					break;
+				}
+				nd := array[len c.data + len m.data] of byte;
+				nd[0:] = c.data;
+				nd[len c.data:] = m.data;
+				c.data = nd;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 			Qapprove =>
 				(verb, rest) := str->splitl(strip(data), " \t");
 				rest = str->drop(rest, " \t");
@@ -1959,6 +2242,13 @@ Serve:
 				cf.data = nil;
 				if((s := findsession(SESSID(cf.path))) != nil)
 					startturn(s, msg);
+			}
+			if(cf != nil && FTYPE(cf.path) == Qcontext && cf.data != nil &&
+			   (cf.mode & 3) != Sys->OREAD) {
+				h := cf.data;
+				cf.data = nil;
+				if((s := findsession(SESSID(cf.path))) != nil)
+					setcontext(s, h);
 			}
 			srv.clunk(m);
 		* =>

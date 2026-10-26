@@ -469,17 +469,43 @@ writefile(path, content: string): string
 	return nil;
 }
 
-# Read entire file contents; returns "" silently on error
+# Read entire file contents; returns "" silently on error.  To its end:
+# one read of a served file is a 9P message's worth, and a transcript
+# saved from one read stopped at 8 KB.
 readfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return "";
+	out := "";
 	buf := array[65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return "";
-	return string buf[0:n];
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		out += string buf[0:n];
+	return out;
+}
+
+# Write to a file that exists (a served one: it cannot be created).
+putfile(path, content: string): string
+{
+	fd := sys->open(path, Sys->OWRITE);
+	if(fd == nil)
+		return sys->sprint("cannot open %s: %r", path);
+	data := array of byte content;
+	if(sys->write(fd, data, len data) != len data)
+		return sys->sprint("write %s failed: %r", path);
+	return nil;
+}
+
+# What the session keeps of a turn: the conversation as the user saw it,
+# and as the model has it, which -r gives back to the model.
+savesession(sdir: string)
+{
+	if(sdir == "")
+		return;
+	writefile(sdir + "/transcript", readfile(sess + "/text"));
+	ctx := readfile(sess + "/context");
+	if(ctx != "")
+		writefile(sdir + "/context", ctx);
 }
 
 setenv(name, val: string)
@@ -704,16 +730,13 @@ runagent(task: string)
 
 	# Assemble initial prompt (system prompt already set separately)
 	prompt: string;
-	if(plan != "") {
-		prompt = "Plan:\n" + plan +
-			"\n\nNow begin execution. Respond with your first tool invocation or DONE if already complete.";
-	} else {
-		prompt = "== Task ==\n" + task + "\n\nBegin. Respond with your first tool call or DONE.";
-	}
+	if(plan != "")
+		prompt = "== Task ==\n" + task + "\n\n== Plan ==\n" + plan + "\n\nCarry out the plan.";
+	else
+		prompt = "== Task ==\n" + task;
 
 	turn(prompt);
-	if(sdir != "")
-		writefile(sdir + "/transcript", readfile(sess + "/text"));
+	savesession(sdir);
 }
 
 # ---- Resume session ----
@@ -749,10 +772,20 @@ runresume(name, extra: string)
 	if(extra != "" && verbose)
 		sys->fprint(stderr, "veltro: extra instruction: %s\n", extra);
 
-	# Build resume context as the initial prompt
-	prompt := buildresumecontext(task, plan, logcontent, extra);
+	# The conversation as the model had it, when it was saved: given
+	# back, the model takes up the work where it was.  A session saved
+	# before there was one is resumed, as it was, from its task, plan
+	# and log.
+	prompt: string;
+	ctx := readfile(sdir + "/context");
+	if(ctx != "" && putfile(sess + "/context", ctx) == nil) {
+		prompt = "Continue the task where you left off.";
+		if(extra != "")
+			prompt = extra;
+	} else
+		prompt = buildresumecontext(task, plan, logcontent, extra);
 	turn(prompt);
-	writefile(sdir + "/transcript", readfile(sess + "/text"));
+	savesession(sdir);
 }
 
 init(nil: ref Draw->Context, args: list of string)

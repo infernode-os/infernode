@@ -18,4 +18,6 @@ Examples (with the commands granted):
   exec ls /appl
   exec 'for f in *.b { echo $f }'
 
-Timeout: 5s default (max 30s).
+Timeout: 30s default; -t <seconds> before the command (or timeout, by
+name) sets another, at most 120.  A long output is shown as its start and
+its end, with how much was left out between.

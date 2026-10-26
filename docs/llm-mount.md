@@ -64,11 +64,11 @@ it for next startup.
     ├── thinking     # Read/write: "disabled", "max" or a token budget
     ├── prefill      # Read/write assistant response prefill
     ├── tools        # Write tool definitions (JSON)
-    ├── context      # Read conversation history (JSON)
+    ├── context      # Read conversation history (JSON); write one back, between turns
     ├── compact      # Write to trigger compaction
     ├── ctl          # Write "reset" or "close"
     ├── usage        # Read "estimated_tokens/context_limit"
-    ├── maxtokens    # Read/write
+    ├── maxtokens    # Read/write: the output cap; 0 (the default) is the backend's
     └── reasoning    # Read/write
 ```
 

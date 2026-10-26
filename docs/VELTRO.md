@@ -184,6 +184,54 @@ are short-circuited within a turn with an "already ran at step N" note instead o
 re-executing. A mutating tool (`write`/`edit`/`exec`/…) invalidates the cache, so
 `read → edit → read` still re-reads the changed file.
 
+### The loop and the model
+
+What veltrosrv does when a model's turn goes wrong in a way it can put right
+(`appl/veltro/veltrosrv.b`, pinned by `tests/host/agentloop_characterization_test.sh`):
+
+- **Cut off by the output limit** (`STOP:max_tokens`). Tool calls in the reply
+  are not run, since their arguments may be cut too; each is answered "not run",
+  and the model sends it again. A reply of text alone is continued.
+- **Ended where it should not have.** An empty reply, or one that announces the
+  next step ("Let me read the file:") without taking it, is answered with a
+  `[harness: …]` note saying so, at most twice a turn.
+- **A message written while the turn runs** is queued, not refused. It goes to
+  the model with the next tool results, or starts the next turn if this one
+  ends first. It is dropped if the turn is cancelled.
+- **Long results.** A result longer than 32 KB is put in the workspace and as
+  much of it as fits is shown: the end of an `exec` output, where the errors
+  are, and the start of anything else, with the path to the whole of it. `read`
+  stops at 2000 lines or 30000 bytes and says the offset to read from next.
+- **The system prompt is sent once.** After a session's first message a change
+  of namespace, persona, role or brief goes with the next message, and the
+  system prompt stays as it was sent. Rewritten, it loses the prompt cache for
+  everything after it, and a current Claude refuses the thinking it wrote under
+  the old one.
+- **Calls in one response** run in the model's order: read-only calls that come
+  together run concurrently, and a call that changes something runs alone,
+  after those before it.
+- **Cancel** (`ctl cancel`) stops the model's generation where it is (llmsrv's
+  `ctl cancel`), and no further call of the turn is started. Calls the model
+  had made are answered "not run" with the next message, so its history stays
+  one the API takes.
+
+`tests/host/veltro_edit_bench.sh` measures the loop against a real model:
+known bugs planted in real Limbo functions, solved when the file is the
+original again, with the steps and tool calls each took. Run it on two trees
+(`BENCH_ROOT`) to compare a change.
+
+A folder the agent is given may say how to work in it, in an `AGENTS.md`
+(or `CLAUDE.md`) at its top: it is put in the system prompt under
+`== Project Instructions ==`, up to 16 KB a file and 32 KB in all; a folder
+given later has its file sent with the next message.
+
+llmsrv compacts a long session into a checkpoint of a fixed form (goal,
+constraints, progress, decisions, next steps, critical context, what the user
+was told). The summariser is given the tool calls and their results, not only
+the prose, and the last exchanges are kept as they were. `veltro -r` gives a
+saved session's own history back to the model through
+`/mnt/veltro/<id>/context`, instead of a summary of its log.
+
 ## LLM configuration
 
 LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
@@ -196,11 +244,12 @@ LLM state lives at `/mnt/llm`, served by `llmsrv` (`appl/cmd/llmsrv.b`).
 /mnt/llm/N/temperature  # 0.0 – 2.0
 /mnt/llm/N/thinking     # disabled | max | <integer token budget>
 /mnt/llm/N/system       # write-only system prompt
-/mnt/llm/N/context      # read current conversation as JSON
+/mnt/llm/N/context      # the conversation as JSON; written between turns, it
+                        # becomes the history (veltro -r gives a saved one back)
 /mnt/llm/N/compact      # summarise+truncate to free tokens
 ```
 
-Default model: llmsrv's, which is `claude-sonnet-4-5-20250929` on the Anthropic backend, or the `model=` line of `/lib/ndb/llm` (passed as `llmsrv -M`). Override with the `LLMConfig` field of `Capabilities`, `veltro -m`, or by writing to `/mnt/llm/N/model` directly.
+Default model: llmsrv's, which is `claude-sonnet-5-5` on the Anthropic backend, or the `model=` line of `/lib/ndb/llm` (passed as `llmsrv -M`). Override with the `LLMConfig` field of `Capabilities`, `veltro -m`, or by writing to `/mnt/llm/N/model` directly.
 
 ### Backends
 

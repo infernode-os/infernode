@@ -18,7 +18,7 @@ tool-result call_say_0_0:
   | == veltro
   | Said it.
   | == log
-  | session <llm>, prompt 14270 bytes
+  | session <llm>, prompt 13019 bytes
   | step 1: writing 15 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (0 chunks, 0 bytes)

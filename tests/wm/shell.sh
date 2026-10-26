@@ -58,6 +58,16 @@ sleep 2
 is interrupt 'alive' `{lines '^alive'}
 is interrupt-killed '' `{lines '^NOTKILLED'}
 
+# Ctrl-C to a shell run as a command: it is a command, and is killed
+# (its frames are all sh's, so it was taken for one of the shell's own)
+enter 'sh -c ''sleep 100; echo NESTED'''
+sleep 2
+key 3
+sleep 2
+enter 'echo afternested'
+sleep 2
+is interrupt-nested 'afternested' `{lines '^afternested|^NESTED'}
+
 # Ctrl-C to a command reading the console: the next line is the shell's
 # (it went to the read of the command killed, and was lost)
 enter 'cat'

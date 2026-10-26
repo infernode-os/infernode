@@ -4,7 +4,8 @@
 # into through /chan/uitest: lines typed while a command runs run after
 # it in their order (they ran last first), Ctrl-C kills what the shell
 # runs and the shell goes on, the rest of its line not run (it sent DEL
-# bytes into the next command), and the line after it is the shell's
+# bytes into the next command), a shell run as a command among them,
+# and the line after it is the shell's
 # when what was killed was reading the console,
 # output whose characters are divided between writes kept whole, a
 # flood of output typed into, history and Ctrl-U.
@@ -39,7 +40,7 @@ SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g100
 	</dev/null >"$LOG" 2>&1 || true
 
 failed=0
-for c in hello typeahead interrupt interrupt-killed interrupt-read utf utf-lines flood history ctrl-u; do
+for c in hello typeahead interrupt interrupt-killed interrupt-nested interrupt-read utf utf-lines flood history ctrl-u; do
 	got=$(sed -n "s/^R $c //p" "$LOG" | head -1)
 	if [ "$got" = ok ]; then
 		echo "PASS: $c"

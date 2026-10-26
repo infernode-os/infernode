@@ -835,8 +835,13 @@ runshell(sh: Command, ctxt: ref Draw->Context, pidc: chan of int)
 	sh->init(ctxt, shellargv);
 }
 
-# Interrupt: kill the commands the shell runs (every process of its group
-# but the shell itself); it goes on to its next prompt.
+# Interrupt: kill the commands the shell runs (the processes of its group
+# running a command's module); it goes on to its next prompt.  Not those
+# that are sh's own, running only sh and the libraries it uses: sh waits
+# for a process it starts to say it has, and one killed before it does
+# leaves sh waiting for ever; they end when the commands they run are
+# killed.  (By the module a process is in now, a helper of sh globbing in
+# Filepat looked like a command; a command reading in Bufio, like sh.)
 interrupt()
 {
 	if(shpgrp <= 0)
@@ -847,6 +852,7 @@ interrupt()
 	* =>
 		;
 	}
+	shmp := shdata(readall("/prog/" + string shpgrp + "/stack"));
 	fd := sys->open("/prog", Sys->OREAD);
 	if(fd == nil)
 		return;
@@ -859,7 +865,9 @@ interrupt()
 			if(pid == shpgrp || pid <= 0)
 				continue;
 			(nf, f) := sys->tokenize(readfile("/prog/" + d[i].name + "/status"), " ");
-			if(nf > 1 && int hd tl f == shpgrp)
+			if(nf < 2 || int hd tl f != shpgrp)
+				continue;
+			if(iscommand(readall("/prog/" + d[i].name + "/stack"), shmp))
 				postnote(0, pid, "kill");
 		}
 	}
@@ -874,6 +882,60 @@ Rdreq: adt {
 };
 
 intrch: chan of int;	# an interrupt was made: the reads waiting may be dead
+
+# sh, and the libraries it uses, in the frames of a process's stack
+shmods := array[] of {
+	"/dis/lib/bufio.dis", "/dis/lib/string.dis",
+	"/dis/lib/filepat.dis", "/dis/lib/readdir.dis", "/dis/lib/env.dis",
+};
+
+# Whether a process, by its stack (/prog/n/stack: a frame a line, "fp
+# pc mp ... path"), runs a command: has a frame neither the shell's (sh's
+# own with its module data shmp: another sh is a command too), nor of a
+# library sh uses, nor of sh's builtins (/dis/sh/), nor built in ($Sys).
+iscommand(stack, shmp: string): int
+{
+	(nil, lines) := sys->tokenize(stack, "\n");
+	for(; lines != nil; lines = tl lines){
+		(n, w) := sys->tokenize(hd lines, " \t");
+		if(n < 4)
+			continue;
+		mp := hd tl tl w;
+		for(; tl w != nil; w = tl w)
+			;
+		path := hd w;
+		if(path == "" || path[0] == '$' || len path > 8 && path[0:8] == "/dis/sh/")
+			continue;
+		if(path == "/dis/sh.dis"){
+			if(shmp != nil && mp != shmp)
+				return 1;
+			continue;
+		}
+		for(i := 0; i < len shmods && path != shmods[i]; i++)
+			;
+		if(i == len shmods)
+			return 1;
+	}
+	return 0;
+}
+
+# The module data of the shell's sh, from its stack: its frames' in
+# sh.dis.
+shdata(stack: string): string
+{
+	(nil, lines) := sys->tokenize(stack, "\n");
+	for(; lines != nil; lines = tl lines){
+		(n, w) := sys->tokenize(hd lines, " \t");
+		if(n < 4)
+			continue;
+		mp := hd tl tl w;
+		for(; tl w != nil; w = tl w)
+			;
+		if(hd w == "/dis/sh.dis")
+			return mp;
+	}
+	return nil;
+}
 
 # consreader: services reads of the synthetic /dev/cons: the shell has
 # the keyboard's bytes in the order they were sent, a read taking no
@@ -1411,6 +1473,18 @@ writestatefile(path, data: string)
 	b := array of byte data;
 	sys->write(fd, b, len b);
 	fd = nil;
+}
+
+readall(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	s := "";
+	buf := array[8192] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		s += string buf[0:n];
+	return s;
 }
 
 readfile(path: string): string

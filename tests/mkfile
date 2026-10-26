@@ -35,6 +35,7 @@ TARG=\
 	hostplumb_test.dis\
 	exception_test.dis\
 	fltfmt_test.dis\
+	nan_test.dis\
 	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\

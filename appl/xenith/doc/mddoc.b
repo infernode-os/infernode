@@ -25,10 +25,18 @@ include "docengine.m";
 PROPFONT: con "/fonts/combined/go.14.font";
 MONOFONT: con "/fonts/combined/gomono.14.font";
 
+# A document is laid out, not drawn: each strip the view asks for is
+# drawn when it is painted.  An image of the whole of a long one, at
+# twice the scale on a Retina display, is tens of thousands of pixels
+# tall; image memory is soon too fragmented for one of those, and set
+# again as it is edited, there are two.
 State: adt {
 	src:	string;
 	style:	ref Style;
-	im:	ref Image;
+	doc:	list of ref Rlayout->DocNode;
+	rs:	ref Rlayout->Style;
+	size:	Point;	# the document's, laid out
+	laid:	ref Rlayout->Laid;
 	text:	string;
 	lines:	array of int;	# each block's first line in the text
 	ys:	array of int;	# and its top in the document
@@ -71,7 +79,7 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 		return (-1, err);
 	if(data == nil && (data = readfile(name)) == nil)
 		return (-1, sys->sprint("cannot read %s: %r", name));
-	s := ref State(string data, st, nil, nil, nil, nil, nil);
+	s := ref State(string data, st, nil, nil, Point(0, 0), nil, nil, nil, nil, nil);
 	if((err = set(s)) != nil)
 		return (-1, err);
 	return (add(s), nil);
@@ -108,13 +116,16 @@ set(s: ref State): string
 		st.fg, st.bg, st.accent, st.codebg, 150);
 	{
 		(doc, lines) := rlayout->parsemdlines(s.src);
-		(im, ys, words) := rlayout->renderwords(doc, rs);
-		if(im == nil)
-			return sys->sprint("render failed: %r");
-		s.im = im;
+		laid := rlayout->measure(doc, rs);
+		if(laid == nil)
+			return "render failed: no font";
+		s.doc = doc;
+		s.rs = rs;
+		s.laid = laid;
+		s.size = Point(width, laid.height);
 		s.lines = lines;
-		s.ys = ys;
-		s.words = words;
+		s.ys = laid.ys;
+		s.words = laid.words;
 		s.text = rlayout->totext(doc);
 	} exception e {
 	"*" =>
@@ -142,9 +153,9 @@ nsheets(h: int): int
 sheetsize(h: int, n: int): Point
 {
 	s := get(h);
-	if(s == nil || n != 0 || s.im == nil)
+	if(s == nil || n != 0 || s.laid == nil)
 		return Point(0, 0);
-	return Point(s.im.r.dx(), s.im.r.dy());
+	return s.size;
 }
 
 restyle(h: int, st: ref Style): string
@@ -169,9 +180,15 @@ pinned(nil: int): int
 paint(h: int, n: int, nil: int, dst: ref Image, r: Rect, org: Point): string
 {
 	s := get(h);
-	if(s == nil || n != 0 || s.im == nil)
+	if(s == nil || n != 0 || s.laid == nil)
 		return "no such sheet";
-	dst.draw(r, s.im, nil, s.im.r.min.add(org));
+	# the strip at org, the size of r, drawn where it is in the document
+	strip := Rect(org, org.add(r.size()));
+	im := display.newimage(strip, Draw->RGB24, 0, Draw->Nofill);
+	if(im == nil)
+		return sys->sprint("no image memory for a strip %d by %d", strip.dx(), strip.dy());
+	rlayout->drawband(s.doc, s.rs, im, s.laid);
+	dst.draw(r, im, nil, org);
 	return nil;
 }
 

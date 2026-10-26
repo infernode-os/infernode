@@ -5,6 +5,7 @@
 # it in their order (they ran last first), Ctrl-C kills what the shell
 # runs and the shell goes on, the rest of its line not run (it sent DEL
 # bytes into the next command), a shell run as a command among them,
+# a loop of builtins stopped by a new shell at a second Ctrl-C,
 # and the line after it is the shell's
 # when what was killed was reading the console,
 # output whose characters are divided between writes kept whole, a
@@ -40,7 +41,7 @@ SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g100
 	</dev/null >"$LOG" 2>&1 || true
 
 failed=0
-for c in hello typeahead interrupt interrupt-killed interrupt-nested interrupt-read utf utf-lines flood history ctrl-u; do
+for c in hello typeahead interrupt interrupt-killed interrupt-nested interrupt-loop interrupt-read utf utf-lines flood history ctrl-u; do
 	got=$(sed -n "s/^R $c //p" "$LOG" | head -1)
 	if [ "$got" = ok ]; then
 		echo "PASS: $c"

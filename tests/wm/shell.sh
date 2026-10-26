@@ -68,6 +68,18 @@ enter 'echo afternested'
 sleep 2
 is interrupt-nested 'afternested' `{lines '^afternested|^NESTED'}
 
+# a loop of sh's builtins has no command to kill: a second Ctrl-C, with
+# the shell not reading what is typed, starts a new one
+enter 'while {} {}'
+sleep 2
+key 3
+sleep 1
+key 3
+sleep 2
+enter 'echo afterloop'
+sleep 3
+is interrupt-loop 'afterloop' `{lines '^afterloop'}
+
 # Ctrl-C to a command reading the console: the next line is the shell's
 # (it went to the read of the command killed, and was lost)
 enter 'cat'

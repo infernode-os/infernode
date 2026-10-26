@@ -260,6 +260,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	outputch = chan[32] of string;
 	intrch = chan[1] of int;
+	restartch = chan[1] of int;
 	# keys sent wait here, not for the console server
 	sendbyteschan = chan[64] of array of byte;
 
@@ -822,10 +823,18 @@ startshell(ctxt: ref Draw->Context)
 	# (wm/matrix, wm/man, wm/clock, etc.) can open their own windows.
 	# Previously this was nil, which made every GUI app fall back to
 	# headless / refuse to start.
+	# here, with the console as its fds, a new shell when one is
+	# wanted (restartch)
 	pidc := chan of int;
-	spawn runshell(sh, ctxt, pidc);
-	shpgrp = <-pidc;
+	for(;;){
+		spawn runshell(sh, ctxt, pidc);
+		shpgrp = <-pidc;
+		<-restartch;
+		postnote(1, shpgrp, "kill");
+	}
 }
+
+restartch: chan of int;
 
 # The shell, in a process group of its own, so that an interrupt can
 # kill what it runs and a quit all of it, and not this.
@@ -833,6 +842,31 @@ runshell(sh: Command, ctxt: ref Draw->Context, pidc: chan of int)
 {
 	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
 	sh->init(ctxt, shellargv);
+}
+
+# The shell, when two interrupts running found nothing to kill and it
+# was not reading what is typed: it is stuck (a loop of its builtins, or
+# waiting on what will not come), and only a new one answers.  (An
+# open quote or brace is not that: sh is reading for its end.)
+stuck := 0;
+
+newshell()
+{
+	stuck = 0;
+	output("shell: the shell did not answer: a new one is started\n");
+	alt {
+	restartch <-= 1 =>
+		;
+	* =>
+		;
+	}
+	# what the old one was asked to read is dead now
+	alt {
+	intrch <-= 1 =>
+		;
+	* =>
+		;
+	}
 }
 
 # Interrupt: kill the commands the shell runs (the processes of its group
@@ -852,10 +886,12 @@ interrupt()
 	* =>
 		;
 	}
-	shmp := shdata(readall("/prog/" + string shpgrp + "/stack"));
+	shstack := readall("/prog/" + string shpgrp + "/stack");
+	shmp := shdata(shstack);
 	fd := sys->open("/prog", Sys->OREAD);
 	if(fd == nil)
 		return;
+	nkilled := 0;
 	for(;;){
 		(n, d) := sys->dirread(fd);
 		if(n <= 0)
@@ -867,10 +903,16 @@ interrupt()
 			(nf, f) := sys->tokenize(readfile("/prog/" + d[i].name + "/status"), " ");
 			if(nf < 2 || int hd tl f != shpgrp)
 				continue;
-			if(iscommand(readall("/prog/" + d[i].name + "/stack"), shmp))
+			if(iscommand(readall("/prog/" + d[i].name + "/stack"), shmp)){
 				postnote(0, pid, "kill");
+				nkilled++;
+			}
 		}
 	}
+	if(nkilled > 0 || reading(shstack))
+		stuck = 0;
+	else if(++stuck >= 2)
+		newshell();
 }
 
 # A read of /dev/cons waiting: its count, where the bytes go, and
@@ -915,6 +957,24 @@ iscommand(stack, shmp: string): int
 			;
 		if(i == len shmods)
 			return 1;
+	}
+	return 0;
+}
+
+# Whether sh, by its stack, is reading what is typed: its frame on top,
+# the system's aside, is Bufio's (sh's lexer reads through it).
+reading(stack: string): int
+{
+	(nil, lines) := sys->tokenize(stack, "\n");
+	for(; lines != nil; lines = tl lines){
+		(n, w) := sys->tokenize(hd lines, " \t");
+		if(n < 4)
+			continue;
+		for(; tl w != nil; w = tl w)
+			;
+		if(hd w == "" || (hd w)[0] == '$')
+			continue;
+		return hd w == "/dis/lib/bufio.dis";
 	}
 	return 0;
 }

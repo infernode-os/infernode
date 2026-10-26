@@ -312,9 +312,13 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		if(c != nil && len c > 0 && c[0] == '!')
 			refresh(1);
 	key := <-top.ctxt.kbd =>
-		if(prompting)
+		# keys go to the prompt or to handlekey, never to the text
+		# widget: its own bindings would change the text unlogged
+		if(prompting){
+			if(tk->cmd(top, "focus") != ".prompt")
+				tk->cmd(top, "focus .prompt");
 			tk->keyboard(top, key);
-		else {
+		} else {
 			statusmsg = "";
 			if(key != 17)
 				exitasked = 0;
@@ -327,6 +331,11 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		if(p.buttons != 0)
 			lastkind = 0;
 		tk->pointer(top, *p);
+		# a click in the text ends a prompt: typing is the text's again
+		if(prompting && tk->cmd(top, "focus") == ".main.t"){
+			endprompt();
+			promptkind = PNONE;
+		}
 		refresh(0);
 	a := <-actch =>
 		handleaction(a);

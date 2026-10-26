@@ -60,6 +60,20 @@ echo -n 'X
 Yabc' > /tmp/want
 same redo /tmp/redone /tmp/want
 
+# a prompt open (find), then a click in the text: what is typed is the
+# text's, and undone (the text widget's own bindings took the keys,
+# unlogged, and Ctrl-Z typed a ^Z)
+echo -n 'abc' > /edit/1/body
+key 6
+sleep 1
+click 300 200
+sleep 1
+text Q
+sleep 1
+key 26
+sleep 1
+is prompt-click abc `{body}
+
 # a body longer than one 9P message: each write replaced the text, so
 # only its last part was kept
 cp /tmp/big.txt /edit/1/body

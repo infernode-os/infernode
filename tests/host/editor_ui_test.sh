@@ -4,7 +4,8 @@
 # into through /chan/uitest while a client changes it through /edit and
 # the Veltro editor tool through /tmp/veltro/editor: undo of a client's
 # change (it crashed the editor), a body longer than one 9P message
-# (only its last part was kept), open, new and quit refused over
+# (only its last part was kept), typing after a click with the find
+# prompt open undone (it went past the log), open, new and quit refused over
 # changes not saved, a save that fails, the tool's write undone and its
 # answers, wm's Delete keeping changes not saved the first time, a new
 # file named on the command line.
@@ -39,7 +40,7 @@ SDL_VIDEODRIVER=dummy with_timeout 120 "$EMU" -c1 -pheap=512m -pimage=512m -g100
 	</dev/null >"$LOG" 2>&1 || true
 
 failed=0
-for c in typed undo-insert undo-typing undone-clean redo big-body \
+for c in typed undo-insert undo-typing undone-clean redo prompt-click big-body \
 	open-dirty new-dirty quit-dirty kept save-error save-error-name \
 	tool-write tool-wrote tool-undone tool-append tool-open-dirty \
 	delete-kept delete-again new-file saved-clean; do

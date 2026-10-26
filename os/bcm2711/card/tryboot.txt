@@ -8,3 +8,5 @@ kernel=tryboot.img
 cmdline=tryboot.cmd
 max_framebuffers=2
 arm_boost=1
+core_freq=500
+core_freq_min=500

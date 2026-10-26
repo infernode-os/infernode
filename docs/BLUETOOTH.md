@@ -112,8 +112,9 @@ From `bcm2837-rpi-3-b-plus.dts` and `bcm283x-rpi-wifi-bt.dtsi`
 The console cable does not move: the same header pins carry TXD/RXD,
 only the alternate function changes. What does change is the clock. The
 mini-UART's baud divisor is derived from the VPU core clock, which the
-firmware scales unless `config.txt` pins it (`enable_uart=1` does this
-on the Pi 3, fixing `core_freq=250`). The PL011 runs from
+firmware scales unless `config.txt` pins it (older firmware did this for
+`enable_uart=1`; the card's `config.txt` now says `core_freq` and
+`core_freq_min` outright, `docs/BAREMETAL.md` section 4). The PL011 runs from
 `init_uart_clock`, which is why the current console never had this
 problem (`uart.c` records the distinction). The card's `config.txt`
 gains `enable_uart=1` and the README's config recipe is updated in the

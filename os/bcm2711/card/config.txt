@@ -7,6 +7,8 @@ kernel=infernode8.img
 cmdline=cmdline.txt
 max_framebuffers=2
 arm_boost=1
+core_freq=500
+core_freq_min=500
 
 [tryboot]
 kernel=tryboot.img

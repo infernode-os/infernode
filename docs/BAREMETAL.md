@@ -242,6 +242,8 @@ the pinned ones into `DIR/firmware/`.
     kernel=infernode8.img
     cmdline=cmdline.txt
     max_framebuffers=2
+    core_freq=250
+    core_freq_min=250
 
     [tryboot]
     kernel=tryboot.img
@@ -251,7 +253,18 @@ the pinned ones into `DIR/firmware/`.
 `tryboot`. `max_framebuffers=2` lets
 the firmware offer a second display (the panel and HDMI together;
 [Displays](#displays), below); without it there is one, whatever is
-plugged in. `cmdline.txt` may be empty
+plugged in. `core_freq` and `core_freq_min` hold the VPU core clock
+still. The console is the mini-UART, whose baud divisor the kernel
+computes once, at boot, from the core rate the firmware reports; a
+clock that moves afterwards moves the baud with it. Older firmware
+held the clock with `enable_uart=1` alone (at 400 MHz on the bench
+board); the firmware this card is made with (`raspberrypi/firmware`
+1.20260915) reported 250 MHz at boot and then ran the core at about
+400, so the console came out at about 184,000 baud, unreadable at
+115200, and the shell on it could not be reached. FAT short names
+matter here too: the 3B+'s boot ROM reads only those, and finds
+nothing unless `bootcode.bin`'s is `BOOTCODE.BIN` (`tools/mkcard.py`
+writes it so). `cmdline.txt` may be empty
 or absent. Do **not** add `dtoverlay=disable-bt`: the PL011 is the
 radio's now. (On firmware too old to know `[tryboot]`, a `tryboot.txt`
 that is `config.txt` with the two lines substituted does the same.)
@@ -300,6 +313,8 @@ same words meaning the same things:
     cmdline=cmdline.txt
     max_framebuffers=2
     arm_boost=1
+    core_freq=500
+    core_freq_min=500
 
     [tryboot]
     kernel=tryboot.img
@@ -327,6 +342,8 @@ with the two tryboot lines in place of the kernel's:
     cmdline=tryboot.cmd
     max_framebuffers=2
     arm_boost=1
+    core_freq=500
+    core_freq_min=500
 
 Keep the `[tryboot]` section in `config.txt` anyway: it is harmless here
 and it is what a card moved to a 3B+ needs.
@@ -334,9 +351,11 @@ and it is what a card moved to a 3B+ needs.
 Do **not**
 add `enable_gic=0` — the kernel's interrupt controller is the GIC, and
 that line would hand it the 3B+'s instead — and do not add
-`dtoverlay=disable-bt`, for the 3B+'s reason. No `core_freq` pinning:
-the console is the mini-UART, as on the 3B+, and the kernel asks the
-firmware what the core clock is rather than assuming.
+`dtoverlay=disable-bt`, for the 3B+'s reason. `core_freq` is pinned
+for the 3B+'s reason as well: the console is the mini-UART here too, and
+its divisor comes from the core rate read once at boot. 500 MHz is the
+rate the Pi 4 bench board's console has always reported, so it is the
+one pinned.
 
 **The kernel**: `bcm2711-kernel.img`, on the card as `infernode8.img`.
 Not the 3B+'s: its peripherals are at another address, and a

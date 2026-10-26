@@ -9,6 +9,11 @@
 #	the kernel is on it as infernode8.img, byte for byte;
 #	dis/ is the built tree's; lib/, fonts/ and icons/ hold what git
 #	tracks and nothing else (an untracked file in lib/ stays off);
+#	the boot firmware and config.txt have their own names as FAT short
+#	names (BOOTCODE.BIN, not BOOTCO~1.BIN: a Pi 3's boot ROM reads
+#	nothing else);
+#	config.txt, and the Pi 4's tryboot.txt, pin the core clock that
+#	the mini-UART console's baud is divided from;
 #	usr/ is there and empty; no skiplogon, wifi, netconsole or rootpath;
 #	firmware/ holds the radio's firmware under the names the driver
 #	asks for, its Bluetooth patch, and the licence they are
@@ -69,7 +74,9 @@ echo "a developer's own file" > "$ROOT/$untracked"
 
 # The reader: the partition from the MBR, then the BPB, the FAT and the
 # directories. Prints one line per file, "path size sha256", and one
-# per directory, "path/".
+# per directory, "path/". With "short" after the image it prints instead
+# the root directory's short names, as the 11 bytes are stored (a Pi
+# 3's boot ROM ignores the long entries and reads only these).
 cat > "$tmp/fatls.py" <<'EOF'
 import hashlib, struct, sys
 img = open(sys.argv[1], "rb").read()
@@ -123,7 +130,18 @@ def walk(c, path):
             walk(clus, p + "/")
         else:
             print("%s %d %s" % (p, size, hashlib.sha256(read(clus, size) if size else b"").hexdigest()))
-walk(rootclus, "/")
+def shorts(c):
+    d = read(c)
+    for o in range(0, len(d), 32):
+        e = d[o:o + 32]
+        if e[0] == 0:
+            break
+        if e[0] != 0xE5 and e[11] != 0x0F:
+            print(e[0:11].decode("ascii", "replace"))
+if sys.argv[2:] == ["short"]:
+    shorts(rootclus)
+else:
+    walk(rootclus, "/")
 EOF
 
 sha() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
@@ -180,6 +198,23 @@ for board in rpi3bplus rpi4b; do
 	has "$L" /NOTICE NOTICE || ok=0
 	[ $ok = 1 ] && pass "$board: config.txt, the tryboot files, README.txt, LICENSE and NOTICE are the tree's" || failed "$board: the card's own files"
 	has "$L" /infernode8.img "$tmp/kernel.img" && pass "$board: the kernel is infernode8.img, byte for byte" || failed "$board: the kernel"
+
+	# what a boot ROM that reads no long names finds: "NAME    EXT"
+	if python3 "$tmp/fatls.py" "$img" short > "$tmp/$board.short" 2> "$tmp/$board.err"; then
+		ok=1
+		for f in $own config.txt; do
+			b=$(echo "${f%.*}" | tr a-z A-Z); x=$(echo "${f##*.}" | tr a-z A-Z)
+			# a name that is not 8.3 (the Pi 4's .dtb) has only an alias, and
+			# the firmware that reads it reads the long entry
+			[ ${#b} -le 8 ] && [ ${#x} -le 3 ] || continue
+			want=$(printf '%-8s%-3s' "$b" "$x")
+			grep -qxF "$want" "$tmp/$board.short" || { echo "    no short name '$want' for $f"; ok=0; }
+		done
+		[ $ok = 1 ] && pass "$board: the boot firmware and config.txt have their own short names" \
+			|| failed "$board: a boot file has only an alias for a short name"
+	else
+		failed "$board: the root's short names do not read back: $(tail -1 "$tmp/$board.err")"
+	fi
 
 	ok=1
 	for f in dis/sh.dis dis/lucifer.dis dis/wm/logon.dis lib/lucifer/boot-baremetal.sh; do has "$L" "/$f" "$f" || ok=0; done
@@ -238,6 +273,14 @@ blocks = ["\n".join(l[4:] for l in b.strip("\n").split("\n")) for b in re.findal
 sys.exit(0 if any(b.strip() == body for b in blocks) else 1)
 EOF
 for f in os/bcm2837/card/config.txt os/bcm2711/card/config.txt os/bcm2711/card/tryboot.txt; do
+	# the console's baud is divided from the core clock once, at boot:
+	# a firmware left to scale it garbles the console (and the shell on it)
+	fq=$(sed -n 's/^core_freq=//p' "$f" | head -1)
+	if [ -n "$fq" ] && grep -qx "core_freq_min=$fq" "$f"; then
+		pass "$f pins the core clock ($fq MHz)"
+	else
+		failed "$f does not pin the core clock (core_freq and core_freq_min, equal)"
+	fi
 	if python3 "$tmp/docblock.py" "$f" docs/BAREMETAL.md; then
 		pass "docs/BAREMETAL.md shows $f as it is"
 	else

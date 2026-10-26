@@ -346,6 +346,15 @@ Row.typex(row : self ref Row, r : int, p : Point) : ref Text
 			w.unlock();
 		}
 	}
+	# what the keyboard task keeps of where it typed, set while the row
+	# is held: set after, the text could be closed between (a click's
+	# Del, a client's del), and the tag's commit timer then locked a
+	# window with no file
+	dat->typetext = t;
+	if(t!=nil && t.col!=nil)
+		dat->activecol = t.col;
+	if(t!=nil && t.w!=nil)
+		t.w.body.file.curtext = t.w.body;
 	row.qlock.unlock();
 	return t;
 }

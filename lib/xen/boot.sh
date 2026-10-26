@@ -19,4 +19,16 @@ if {ftest -e /dev/hostopen} {hostplumb -p < /dev/hostopen &}
 # The model, so the Agent window (xenith/dis/Agent) finds /mnt/llm.
 # In the background: a remote /mnt/llm must never hold up the editor.
 {run /lib/lucifer/llmsrv.sh} >[2] /dev/null &
+# The user's own start-up, /usr/<user>/lib/xen/profile or, for a user
+# with no home of their own (as with the plumbing rules), the one in
+# /usr/inferno, kept in ~/.infernode/usr/inferno.  It runs in this
+# shell so that what it binds (a package's commands and files, its own
+# /lib/xenith/doctypes) is in Xenith's name space from the outset.  One
+# that fails is said and Xenith starts all the same.
+xenprofile=/usr/^`{cat /dev/user}^/lib/xen/profile
+if {! ftest -f $xenprofile} {xenprofile=/usr/inferno/lib/xen/profile}
+if {ftest -f $xenprofile} {
+	run $xenprofile
+	if {! ~ $status ''} {echo 'xen: '^$xenprofile^': '^$status >[1=2]}
+}
 xenith $*

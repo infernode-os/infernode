@@ -202,9 +202,16 @@ programs reading the body see it, and typing goes back to it. Each
 switch keeps your place in Markdown. For editing beside the document,
 `Zerox` the window and `Render` one of the two: it is set again each
 time the file is `Put`, from either window, or when its `doc/ctl` is
-written `refresh` (from the unsaved text). It is not set again at each
-edit: a page is laid out again whole, which for HTML takes a good part
-of a second. The old drawing stays until the new one is ready.
+written `refresh` (from the unsaved text). For a preview that follows
+the typing, as Typst's does, execute `Live`: in the document's tag it
+turns on setting it again 600 ms after each edit in the other window
+(and at once, if the text has changed), and off again; in the text's
+tag it does the same for the windows showing its document, or, if
+none does, opens one below showing it, live. So `Live` alone, in the
+window you are typing in, is Zerox, Render and Live at once. A
+document opens not live: a page is laid out again whole, which for
+HTML takes a good part of a second and for a whole book set by troff
+longer. The old drawing stays until the new one is ready.
 
 Markdown and Mermaid are set by `rlayout` (`appl/xenith/render/rlayout.b`),
 the one typesetter, which Lucifer's presentation view uses too:

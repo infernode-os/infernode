@@ -378,7 +378,7 @@ loader(s: ref Session, g: int, url, method, ctype: string, body: array of byte, 
 	pg: ref Pg;
 	err: string;
 	{
-		(pg, err) = page->begin(url, method, ctype, body, s.width, s.height);
+		(pg, err) = page->go(url, method, ctype, body, s.width, s.height);
 	} exception e {
 	"*" =>
 		pg = nil;
@@ -462,7 +462,29 @@ images(s: ref Session, g: int, pg: ref Pg)
 {
 	lock(s);
 	urls := pg.wanted();
+	if((r := realmof(s)) != nil && r.pg == pg) {
+		urls = claim(r, urls);
+		r.imaging = 1;
+	}
 	unlock(s);
+	fetchpics(s, g, pg, urls);
+}
+
+# what of urls is not fetched or being fetched for the realm's page; the
+# rest it now has (the session's lock held)
+claim(r: ref Realm, urls: list of string): list of string
+{
+	n: list of string;
+	for(; urls != nil; urls = tl urls)
+		if(!member(hd urls, r.pics)) {
+			r.pics = hd urls :: r.pics;
+			n = hd urls :: n;
+		}
+	return rev(n);
+}
+
+fetchpics(s: ref Session, g: int, pg: ref Pg, urls: list of string)
+{
 	n := len urls;
 	if(n == 0)
 		return;
@@ -934,28 +956,145 @@ iscontrol(d: ref Doc, n: int): int
 	return 0;
 }
 
-# form numbers: forms[n] is the number of the form node n is in, 0 if none
-formnumbers(d: ref Doc): (array of int, array of int)
+# form numbers: forms[n] is the number of the form node n is in, 0 if
+# none, -1 if n is not in the document.  The tree is walked from the
+# document (node 1), in its order, then each shadow tree whose host is
+# in it: a node's index is when it was made, and a page's scripts make
+# nodes in any order, move them, and keep some out of the document (a
+# framework's copies of a form it is not showing), which are not the
+# page's controls.  A template's content is not in the document either
+# (HTML §4.13.1), though its nodes are the template's children here.
+# A control with a form attribute is in the form with that id, or in
+# none (§4.10.17.3).  order is the nodes in the document, in its order.
+formnumbers(d: ref Doc): (array of int, array of int, array of int)
 {
-	forms := array[d.n] of {* => 0};
+	forms := array[d.n] of {* => -1};
 	nodes: list of int;	# the form elements, reversed
+	order: list of int;	# the nodes, reversed
 	nf := 0;
-	for(n := 1; n < d.n; n++) {
-		nd := d.nodes[n];
-		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Tform) {
-			nf++;
-			nodes = n :: nodes;
+	(nf, nodes, order) = formwalk(d, 1, forms, nf, nodes, order);
+	for(more := 1; more; ) {
+		more = 0;
+		for(l := d.shadows; l != nil; l = tl l) {
+			(host, root) := hd l;
+			if(host > 0 && host < d.n && forms[host] >= 0 && root > 0 && root < d.n && forms[root] < 0) {
+				(nf, nodes, order) = formwalk(d, root, forms, nf, nodes, order);
+				more = 1;
+			}
 		}
-		p := nd.parent;
-		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Tform)
-			forms[n] = nf;
-		else if(p > 0 && p < d.n)
-			forms[n] = forms[p];
 	}
 	fnode := array[nf+1] of {* => 0};
 	for(i := nf; nodes != nil; nodes = tl nodes)
 		fnode[i--] = hd nodes;
-	return (forms, fnode);
+	a := array[len order] of int;
+	for(i = len a - 1; order != nil; order = tl order)
+		a[i--] = hd order;
+	owners(d, forms, a);
+	return (forms, fnode, a);
+}
+
+# number the forms under root, and the nodes in them
+formwalk(d: ref Doc, root: int, forms: array of int, nf: int, nodes, order: list of int): (int, list of int, list of int)
+{
+	forms[root] = 0;
+	n := d.nodes[root].first;
+	while(n > 0 && n < d.n) {
+		nd := d.nodes[n];
+		if(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Tform) {
+			nf++;
+			nodes = n :: nodes;
+			forms[n] = nf;
+		} else
+			forms[n] = forms[nd.parent];
+		order = n :: order;
+		if(nd.first != 0 && !(nd.kind == Dom->Element && nd.ns == Dom->HTML && nd.tag == Dom->Ttemplate)) {
+			n = nd.first;
+			continue;
+		}
+		while(n != root && d.nodes[n].next == 0)
+			n = d.nodes[n].parent;
+		if(n == root)
+			break;
+		n = d.nodes[n].next;
+	}
+	return (nf, nodes, order);
+}
+
+# controls whose form attribute names their form: the first element in
+# the document with that id, if it is a form
+owners(d: ref Doc, forms, order: array of int)
+{
+	want: list of string;
+	for(i := 0; i < len order; i++) {
+		n := order[i];
+		if(iscontrol(d, n) && d.hasattr(n, "form"))
+			want = d.attr(n, "form") :: want;
+	}
+	if(want == nil)
+		return;
+	found: list of (string, int);
+	for(i = 0; i < len order && want != nil; i++) {
+		n := order[i];
+		if(d.nodes[n].kind != Dom->Element || (id := d.attr(n, "id")) == "" || !member(id, want))
+			continue;
+		want = remove(id, want);
+		nd := d.nodes[n];
+		if(nd.ns == Dom->HTML && nd.tag == Dom->Tform)
+			found = (id, forms[n]) :: found;
+	}
+	for(i = 0; i < len order; i++) {
+		n := order[i];
+		if(!iscontrol(d, n) || !d.hasattr(n, "form"))
+			continue;
+		id := d.attr(n, "form");
+		forms[n] = 0;
+		for(l := found; l != nil; l = tl l)
+			if((hd l).t0 == id)
+				forms[n] = (hd l).t1;
+	}
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
+}
+
+remove(s: string, l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		if(hd l != s)
+			r = hd l :: r;
+	return r;
+}
+
+# n's text as shown, through the flat tree f (a slot's text is what the
+# page put in it, a host's its shadow tree's), leaving out style sheets
+# and scripts; the document's own tree if f is nil or n is not shown
+shown(d: ref Doc, f: ref Dom->Flat, n: int): string
+{
+	if(f == nil || n >= len f.first || f.first[n] == 0 && f.parent[n] == 0)
+		return d.textof(n);
+	s := "";
+	m := f.first[n];
+	while(m > 0 && m < d.n) {
+		nd := d.nodes[m];
+		if(nd.kind == Dom->Text)
+			s += nd.text;
+		if(f.first[m] != 0 && !(nd.kind == Dom->Element && (nd.tag == Dom->Tstyle || nd.tag == Dom->Tscript))) {
+			m = f.first[m];
+			continue;
+		}
+		while(m != n && m != 0 && f.next[m] == 0)
+			m = f.parent[m];
+		if(m == n || m == 0)
+			break;
+		m = f.next[m];
+	}
+	return s;
 }
 
 kindof(d: ref Doc, n: int): string
@@ -1046,11 +1185,18 @@ Session.fields(s: self ref Session): array of ref Field
 	if(pg == nil)
 		return nil;
 	d := pg.doc;
-	(forms, nil) := formnumbers(d);
+	(forms, nil, order) := formnumbers(d);
+	fl := dom->flat(d);
 	r: list of ref Field;
-	for(n := 1; n < d.n; n++)
-		if(iscontrol(d, n))
-			r = field(d, forms[n], n) :: r;
+	for(k := 0; k < len order; k++)
+		if(iscontrol(d, n := order[k])) {
+			f := field(d, forms[n], n);
+			# a button's label, as shown: a component's is often what
+			# the page put in its slot
+			if(fl != nil && d.nodes[n].tag == Dom->Tbutton && !d.hasattr(n, "value"))
+				f.value = squash(shown(d, fl, n));
+			r = f :: r;
+		}
 	a := array[len r] of ref Field;
 	for(i := len a - 1; i >= 0; i--) {
 		a[i] = hd r;
@@ -1088,7 +1234,10 @@ fieldstext(a: array of ref Field): string
 		name := f.name;
 		if(name == "")
 			name = "-";
-		r += sys->sprint("%d %d %s %s %s", f.form, f.node, f.kind, name, oneline(f.value));
+		v := oneline(f.value);
+		if(f.kind == "password")
+			v = masked(v);
+		r += sys->sprint("%d %d %s %s %s", f.form, f.node, f.kind, name, v);
 		if(f.checked)
 			r += " checked";
 		if(f.disabled)
@@ -1105,6 +1254,17 @@ fieldstext(a: array of ref Field): string
 		}
 	}
 	return r;
+}
+
+# What a password field holds, as the page's files show it: whether it
+# holds anything, not what or how much.  The files are read by whatever
+# has the window's name space, an agent among them; the page is drawn
+# masked too (layout), and its own scripts still see the value.
+masked(v: string): string
+{
+	if(v == "")
+		return "";
+	return "********";
 }
 
 Session.set(s: self ref Session, n: int, value: string): string
@@ -1148,7 +1308,7 @@ setfield(d: ref Doc, n: int, value: string): string
 			d.delattr(n, "checked");
 		* =>
 			# one of a group: the others in its form with its name go off
-			(forms, nil) := formnumbers(d);
+			(forms, nil, nil) := formnumbers(d);
 			name := d.attr(n, "name");
 			for(m := 1; m < d.n; m++)
 				if(m != n && iscontrol(d, m) && kindof(d, m) == "radio" &&
@@ -1192,7 +1352,7 @@ Session.submit(s: self ref Session, form, submitter: int): string
 	if(pg == nil)
 		return "no page";
 	d := pg.doc;
-	(forms, fnode) := formnumbers(d);
+	(forms, fnode, order) := formnumbers(d);
 	if(form < 1 || form >= len fnode)
 		return sys->sprint("no form %d", form);
 	fe := fnode[form];
@@ -1215,7 +1375,8 @@ Session.submit(s: self ref Session, form, submitter: int): string
 	if(action != "")
 		url = resolve(d.url, action);
 	q := "";
-	for(n := 1; n < d.n; n++) {
+	for(i := 0; i < len order; i++) {
+		n := order[i];
 		if(forms[n] != form || !iscontrol(d, n) || disabled(d, n))
 			continue;
 		f := field(d, form, n);
@@ -1245,7 +1406,7 @@ Session.submit(s: self ref Session, form, submitter: int): string
 		navigate(s, url, "POST", "application/x-www-form-urlencoded", array of byte q, Hnew);
 	else {
 		u := unfrag(url);
-		for(i := 0; i < len u; i++)
+		for(i = 0; i < len u; i++)
 			if(u[i] == '?') {
 				u = u[0:i];
 				break;
@@ -1575,7 +1736,10 @@ Session.click(s: self ref Session, n: int): string
 		spawn picsome(s, s.gen, pg, us);
 		return nil;
 	}
-	for(m := n; m > 1; m = d.nodes[m].parent) {
+	# up the tree as shown: a component's text given to a slot in its
+	# shadow tree is in what holds the slot (a label, a link)
+	f := dom->flat(d);
+	for(m := n; m > 1; m = shownparent(d, f, m)) {
 		nd := d.nodes[m];
 		if(nd.kind != Dom->Element || nd.ns != Dom->HTML)
 			continue;
@@ -1589,9 +1753,12 @@ Session.click(s: self ref Session, n: int): string
 				return nil;
 			}
 		Dom->Tlabel =>
+			# for names an id in the label's own tree: a web
+			# component's shadow root has its own ids (JSTOR's
+			# checkboxes each hold a "checkbox-element")
 			if((id := d.attr(m, "for")) != nil) {
 				for(c := 1; c < d.n; c++)
-					if(iscontrol(d, c) && d.attr(c, "id") == id)
+					if(iscontrol(d, c) && d.attr(c, "id") == id && samescope(f, c, m))
 						return s.click(c);
 			}
 			for(c := nextin(d, m, m); c != 0; c = nextin(d, c, m))
@@ -1600,10 +1767,10 @@ Session.click(s: self ref Session, n: int): string
 		Dom->Tinput or Dom->Tbutton =>
 			if(disabled(d, m))
 				return nil;
-			(forms, nil) := formnumbers(d);
+			(forms, nil, nil) := formnumbers(d);
 			case kindof(d, m) {
 			"submit" or "image" =>
-				if(forms[m] == 0)
+				if(forms[m] <= 0)
 					return nil;
 				return s.submit(forms[m], m);
 			"checkbox" =>
@@ -1690,6 +1857,23 @@ popovers(s: ref Session, pg: ref Pg, n: int): int
 	return invoked != 0;
 }
 
+# n's parent in the flat tree, or in the document's if n is not in it
+shownparent(d: ref Doc, f: ref Dom->Flat, n: int): int
+{
+	if(f != nil && n < len f.parent && f.parent[n] != 0)
+		return f.parent[n];
+	return d.nodes[n].parent;
+}
+
+# whether nodes a and b are in the same tree (the document's, or one
+# shadow root's)
+samescope(f: ref Dom->Flat, a, b: int): int
+{
+	if(f == nil)
+		return 1;
+	return a < len f.scope && b < len f.scope && f.scope[a] == f.scope[b];
+}
+
 byid(d: ref Doc, id: string): int
 {
 	for(i := 1; i < d.n; i++)
@@ -1736,13 +1920,18 @@ Session.dom(s: self ref Session, n: int, what: string): (string, string)
 		return ("#document\n", nil);
 	"attrs" =>
 		r := "";
-		for(l := nd.attrs; l != nil; l = tl l)
-			r += (hd l).t0 + " " + oneline((hd l).t1) + "\n";
+		pw := nd.tag == Dom->Tinput && iscontrol(d, n) && kindof(d, n) == "password";
+		for(l := nd.attrs; l != nil; l = tl l) {
+			v := oneline((hd l).t1);
+			if(pw && (hd l).t0 == "value")
+				v = masked(v);
+			r += (hd l).t0 + " " + v + "\n";
+		}
 		return (r, nil);
 	"text" =>
 		if(nd.kind == Dom->Text || nd.kind == Dom->Comment)
 			return (nd.text, nil);
-		return (d.textof(n), nil);
+		return (shown(d, dom->flat(d), n), nil);
 	"style" =>
 		if(pg.computed == nil || n >= len pg.computed.st || pg.computed.st[n] == nil)
 			return ("", nil);
@@ -1943,6 +2132,8 @@ Realm: adt {
 	laidout:	int;	# the document's generation when last laid out
 	styled:	int;	# when last styled
 	sels:	list of (string, array of ref Css->Sel);	# selectors parsed, most recent first
+	imaging:	int;	# the page's images are being fetched
+	pics:	list of string;	# the images fetched or being fetched for it
 };
 
 Req: adt {
@@ -1951,6 +2142,9 @@ Req: adt {
 	Navigate =>
 		url:	string;
 		replace:	int;
+		method:	string;
+		ctype:	string;
+		body:	array of byte;
 	Scroll =>
 		y:	int;
 	Quit =>
@@ -2019,7 +2213,7 @@ startrealm(s: ref Session, g: int, pg: ref Pg)
 	if(page->setting("scripts") != "on" || !hasscripts(pg.doc))
 		return;
 	lockrealms();
-	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil);
+	r := ref Realm(++realmids, s, g, pg, chan of ref Event, chan[16] of ref Req, 0, 0, 0, pg.doc.gen, pg.doc.gen, nil, 0, nil);
 	realms = r :: realms;
 	unlockrealms();
 	pidc := chan of int;
@@ -2373,7 +2567,10 @@ realmhelper(r: ref Realm)
 			hist := Hnew;
 			if(rq.replace)
 				hist = Hnone;
-			navigate(s, rq.url, "GET", nil, nil, hist);
+			if(rq.method == "POST")
+				navigate(s, rq.url, "POST", rq.ctype, rq.body, hist);
+			else
+				navigate(s, rq.url, "GET", nil, nil, hist);
 		Scroll =>
 			lock(s);
 			s.scroll = rq.y;
@@ -2406,6 +2603,19 @@ laidout(r: ref Realm)
 	}
 	r.laidout = d.gen;
 	r.styled = d.gen;
+	if(r.imaging) {
+		# images the page's scripts put in after its own were sent
+		# for (JSTOR's logo, in a header its script makes)
+		us: list of string;
+		{
+			us = claim(r, r.pg.wanted());
+		} exception e {
+		"*" =>
+			sys->fprint(sys->fildes(2), "charon: images after a script: %s\n", e);
+		}
+		if(us != nil)
+			spawn fetchpics(r.s, r.g, r.pg, us);
+	}
 }
 
 # the document's computed styles as it now is (the lock held)
@@ -2752,11 +2962,11 @@ hviewport(id: int): (int, int, int, int)
 	return (cssn(r.s.width), cssn(r.s.height), 0, cssn(r.s.scroll));
 }
 
-hnavigate(id: int, url: string, replace: int)
+hnavigate(id: int, url: string, replace: int, method, ctype: string, body: array of byte)
 {
 	r := realmbyid(id);
 	if(r != nil)
-		r.reqs <-= ref Req.Navigate(url, replace);
+		r.reqs <-= ref Req.Navigate(url, replace, method, ctype, body);
 }
 
 hscroll(id, nil, y: int)

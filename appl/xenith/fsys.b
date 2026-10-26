@@ -175,6 +175,7 @@ fsysproc()
 			error("i/o error on server channel");
 		}
 		(ok, x.fcall) = Tmsg.unpack(x.buf[0:n]);
+		x.responded = 0;
 		if(ok < 0)
 			error("convert error in convM2S");
 		if(DEBUG)
@@ -233,7 +234,6 @@ fsysaddid(dir : string, ndir : int, incl : array of string, nincl : int) : ref M
 fsysdelid(idm : ref Mntdir)
 {
 	m, prev : ref Mntdir;
-	i : int;
 	
 	if(idm == nil)
 		return;
@@ -249,11 +249,10 @@ fsysdelid(idm : ref Mntdir)
 				prev.next = m.next;
 			else
 				mnt.md = m.next;
-			for(i=0; i<m.nincl; i++)
-				m.incl[i] = nil;
-			m.incl = nil;
-			m.dir = nil;
-			m = nil;
+			# its dir and incl are left as they are: a command's
+			# output still queued for waittask (ccons) names this
+			# Mntdir, and its dir cleared under ndir sent warning()
+			# out of bounds holding the row
 			mnt.qlock.unlock();
 			return;
 		}
@@ -298,6 +297,7 @@ respond(x : ref Xfid, t0 : Smsg0, err : string) : ref Xfid
 {
 	t : ref Rmsg;
 
+	x.responded = 1;
 	# t = nullsmsg;
 	tag := x.fcall.tag;
 	# fid := fid(x.fcall);
@@ -492,7 +492,9 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 				qtype = QTDIR;
 				id = 0;
 				if(w != nil){
+					row.qlock.lock();	# it may be its last reference
 					w.close();
+					row.qlock.unlock();
 					w = nil;
 				}
 				if(i == MAXWELEM){
@@ -550,8 +552,7 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 						error("w set in walk to new");
 					cw := chan of ref Window;
 					spawn x.walk(cw);
-					w = <- cw;
-					w.refx.inc();
+					w = <- cw;	# with this walk's reference (Xfid.walk)
 					path = QID(w.id, Qdir);
 					qtype = QTDIR;
 					id = w.id;
@@ -627,8 +628,11 @@ fsyswalk(x : ref Xfid, f : ref Fid) : ref Xfid
 		f.qid = q;
 	}
 
-	if(w != nil)
+	if(w != nil){
+		row.qlock.lock();	# it may be its last reference
 		w.close();
+		row.qlock.unlock();
+	}
 
 	return respond(x, t, err);
 }

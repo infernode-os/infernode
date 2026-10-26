@@ -403,6 +403,25 @@ if {ftest -d $BT/$CONV} {
 	if {! ~ $"after $"before} {
 		raise 'fail:a call the peer hung up before a listen took it was not freed: '^$"before^' -> '^$"after
 	}
+	# A call queued before the listen opens, and the open read-write,
+	# as dial(2)'s listen() makes it. That open used to be refused
+	# ("permission denied": the file was mode 444), and listen(1) exited
+	# on it -- which under load, where calls outrun the listener, left
+	# the PSM with no listener and refusing every call after.
+	echo 'call 94:bb:43:44:61:04 0x1003 queued' > $MNT/chan/btmockctl
+	sleep 1
+	got=no
+	{
+		nid=`{read 10}
+		v=`{read 100 < $BT/$nid/data}
+		if {! ~ $"v queued} {
+			raise 'fail:the queued call, taken by a read-write listen, did not deliver: '^$"v
+		}
+		got=yes
+	} <> $BT/$id/listen
+	if {! ~ $got yes} {
+		raise 'fail:a read-write listen open was refused while a call was queued'
+	}
 } <> $BT/clone
 
 # A listener killed while its listen waits -- kill(1) on a process

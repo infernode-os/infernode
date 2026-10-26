@@ -181,6 +181,7 @@ It replaces the polled plain files under `/tmp/veltro/browser/`.
 	text		read: rendered text, in reading order, one block per line
 	links		read: one per line: <n> <url> <text>
 	forms		read: one field per line: <form> <name> <type> <value>
+			(a password field's value is ******** when filled)
 	find		write: <text>; read: matching lines
 	image		read: the rendered viewport, in image(6) format
 	event		read: one line per navigation or load event, blocking

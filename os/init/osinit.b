@@ -34,6 +34,8 @@ include "bench.m";
 include "sh.m";
 include "keyring.m";
 
+include "hid.m";
+
 Init: module
 {
 	init:	fn();
@@ -130,6 +132,17 @@ init()
 	# it, leaving the driver with nowhere to appear.
 	if(sys->bind("#I", "/net", Sys->MBEFORE) < 0)
 		sys->print("init: cannot bind #I on /net: %r\n");
+
+	#
+	# The spare Ethernet instances, #l2 and #l3, where a USB adapter
+	# goes when ether0 is a kernel driver's (a Pi 4's GENET). Bound
+	# here, before anything forks the namespace, so the console shell
+	# sees /net/ether2 too; etherusb's own bind happens after the shell
+	# has its copy. Empty until an adapter binds one. A kernel without
+	# them refuses the attach, and nothing is lost.
+	#
+	sys->bind("#l2", "/net", Sys->MAFTER);
+	sys->bind("#l3", "/net", Sys->MAFTER);
 
 	#
 	# And the process device on /prog. sh reaches it as #p directly
@@ -589,6 +602,8 @@ Rd2h:		con 16r80;	# device to host
 Rh2d:		con 16r00;	# host to device
 Rclass:		con 16r20;	# class request
 Rother:		con 3;		# recipient: other (a port)
+Riface:		con 1;		# recipient: an interface
+Dreport:	con 16r22;	# descriptor type: a HID report descriptor
 
 Rgetstatus:	con 0;
 Rsetfeature:	con 3;
@@ -735,6 +750,9 @@ isvendorif := 0;	# ...a vendor-specific interface
 hidep := -1;
 hidmaxpkt := 0;
 hidival := 0;
+hidiface := 0;	# the HID interface's number: its report descriptor is asked for by it
+hidsub := 0;	# its subclass: 1 if it can speak the boot protocol
+ishid := 0;	# dumpconfig saw a HID interface, whatever protocol it declared
 
 speedname(status: int): string
 {
@@ -779,7 +797,7 @@ kernelether()
 	for(i := 0; i < 12; i++)
 		if(int buf[i] != '0'){
 			sys->print("init: ether0 is a kernel link driver (%s)\n", string buf[0:12]);
-			runstart("/dis/etherusb.dis", "-k", -1, 0, 0);
+			runstart("/dis/etherusb.dis", "-k", -1, 0, 0, nil);
 			return;
 		}
 }
@@ -1197,12 +1215,29 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	}
 
 	hidproto = 0;
+	hidiface = 0;
+	hidsub = 0;
+	ishid = 0;
 	isdisk = 0;
 	isacm = 0;
 	isether = 0;
 	isvendorif = 0;
 	hidep = -1;
 	dumpconfig(d, indent + "  ");
+
+	#
+	# A HID interface that names no boot protocol (0) is a pointer
+	# OR a keyboard, and only its report descriptor says which: a
+	# keyboard without the boot protocol declares none, as do most
+	# touchscreens and tablets. It used to go to mouseusb whatever it
+	# was, which turned such a keyboard away as "not a pointer". Ask
+	# the descriptor now, while the control endpoint is still ours --
+	# only for these interfaces, so a boot keyboard or mouse costs no
+	# extra transfer.
+	#
+	kbdbydesc := 0;
+	if(ishid && hidproto == 0 && hidep >= 0)
+		kbdbydesc = iskeyboard(d, hidiface, indent);
 
 	#
 	# Let go of the device's control endpoint and ctl file BEFORE the
@@ -1224,10 +1259,25 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# twice doubled the chance of a device coming up without a driver,
 	# and the second attempt happens later, when the bus is busier.
 	#
-	if(hidproto == Hidkbd)
-		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival);
-	else if(hidproto == Hidmouse)
-		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival);
+	#
+	# The keyboard driver, like the pointer's, is told the interface
+	# (its class requests go to it), the vid:pid (for the quirks
+	# file) and the subclass (whether it has a boot protocol at all).
+	#
+	if(hidproto == Hidkbd || kbdbydesc)
+		startdriver("/dis/kbdusb.dis", name, hidep, hidmaxpkt, hidival,
+			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
+			string hidsub :: nil);
+	else if(ishid && hidep >= 0)
+		#
+		# The pointer driver reads the interface's report descriptor
+		# (a touchscreen calls itself a mouse and reports positions),
+		# so it is told which interface, and the device's vid:pid for
+		# the card's quirks file.
+		#
+		startdriver("/dis/mouseusb.dis", name, hidep, hidmaxpkt, hidival,
+			string hidiface :: sys->sprint("%.4ux:%.4ux", vendor, product) ::
+			string hidproto :: nil);
 	#
 	# A disk. Only on a machine with an xHCI controller, for now: the
 	# driver has run on QEMU's xHCI and nowhere else, and a Raspberry
@@ -1235,7 +1285,7 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	# On a Pi 3 the disk is enumerated, listed, and left alone.
 	#
 	else if(isdisk && havexhci)
-		startdriver("/dis/diskusb.dis", name, -1, 0, 0);
+		startdriver("/dis/diskusb.dis", name, -1, 0, 0, nil);
 	else if(isdisk)
 		sys->print("init: %s%s is a USB disk; diskusb is not started on this machine\n", indent, name);
 
@@ -1271,9 +1321,20 @@ enumerate(hubctl: string, hubd: ref Sys->FD, port: int, speed, indent: string): 
 	serial := (isacm && !isether) ||
 		(isvendorif && (vendor == Vftdi || vendor == Vsilabs));
 	if(serial && havexhci)
-		startdriver("/dis/usbserial.dis", name, -1, 0, 0);
-	else if(class == Clcomm || (class == Clvendor && vendor == Vmicrochip))
-		startdriver("/dis/etherusb.dis", name, -1, 0, 0);
+		startdriver("/dis/usbserial.dis", name, -1, 0, 0, nil);
+	#
+	# Ethernet by the device's class (2), or by an Ethernet interface
+	# in a device that declares itself a composite (class 0 or 239,
+	# "see the interfaces"): a phone or a Linux gadget offering
+	# Ethernet beside a serial port went undriven while only the
+	# device class was asked. Not when the device is a disk as well
+	# (the Jetson's stock gadget is RNDIS, NCM, a serial port and a
+	# disk): diskusb has it, and a second driver would race it for
+	# the control endpoint, which is exclusive -- whichever lost
+	# would get nothing. Sharing one is not done yet.
+	#
+	else if(class == Clcomm || isether && !isdisk || (class == Clvendor && vendor == Vmicrochip))
+		startdriver("/dis/etherusb.dis", name, -1, 0, 0, nil);
 	if(serial && !havexhci)
 		sys->print("init: %s%s is a USB serial port; usbserial is not started on this machine\n", indent, name);
 	return (0, name);
@@ -2507,18 +2568,39 @@ rootunion(src, dst: string): int
 # at all, since nothing drains the queue outside a walk.
 #
 walking := 0;
-pending: list of (string, string, int, int, int);
+pending: list of (string, string, int, int, int, list of string);
 
-startdriver(path, name: string, ep, maxpkt, ival: int)
+#
+# Does this HID interface's report descriptor describe a keyboard? The
+# Hid library is loaded only when there is such an interface to ask
+# about, which on most machines is never.
+#
+iskeyboard(d: ref Sys->FD, iface: int, indent: string): int
 {
-	if(walking){
-		pending = (path, name, ep, maxpkt, ival) :: pending;
-		return;
-	}
-	runstart(path, name, ep, maxpkt, ival);
+	hid := load Hid Hid->PATH;
+	if(hid == nil)
+		return 0;
+	hid->init();
+	buf := array[1024] of byte;
+	n := ctlreq(d, Rd2h|Riface, Rgetdesc, Dreport << 8, iface, len buf, buf);
+	if(n <= 0)
+		return 0;
+	if(hid->keyboard(buf[0:n]) == nil)
+		return 0;
+	sys->print("init: %s  if %d declares no boot protocol; its report descriptor is a keyboard's\n", indent, iface);
+	return 1;
 }
 
-runstart(path, name: string, ep, maxpkt, ival: int)
+startdriver(path, name: string, ep, maxpkt, ival: int, extra: list of string)
+{
+	if(walking){
+		pending = (path, name, ep, maxpkt, ival, extra) :: pending;
+		return;
+	}
+	runstart(path, name, ep, maxpkt, ival, extra);
+}
+
+runstart(path, name: string, ep, maxpkt, ival: int, extra: list of string)
 {
 	drv := load Command path;
 	if(drv == nil){
@@ -2526,9 +2608,8 @@ runstart(path, name: string, ep, maxpkt, ival: int)
 		return;
 	}
 	argv := path :: name :: nil;
-	if(ep >= 0)
-		argv = path :: name :: string ep :: string maxpkt ::
-			string ival :: nil;
+	if(ep >= 0)	# endpoint, packet size, interval, then what else the driver was given
+		argv = path :: name :: string ep :: string maxpkt :: string ival :: extra;
 	spawn drv->init(nil, argv);
 }
 
@@ -2543,13 +2624,13 @@ runstart(path, name: string, ep, maxpkt, ival: int)
 startpending()
 {
 	walking = 0;
-	l: list of (string, string, int, int, int);
+	l: list of (string, string, int, int, int, list of string);
 	for(p := pending; p != nil; p = tl p)
 		l = hd p :: l;
 	pending = nil;
 	for(; l != nil; l = tl l){
-		(path, name, ep, maxpkt, ival) := hd l;
-		runstart(path, name, ep, maxpkt, ival);
+		(path, name, ep, maxpkt, ival, extra) := hd l;
+		runstart(path, name, ep, maxpkt, ival, extra);
 	}
 }
 
@@ -2716,8 +2797,17 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				# the device class alone therefore never sees
 				# an input device at all.
 				#
-				if(int cfg[i+5] == Clhid && hidproto == 0)
+				#
+				# The first HID interface, whatever its
+				# protocol: a touchscreen or tablet often
+				# declares none (0), not boot mouse (2).
+				#
+				if(int cfg[i+5] == Clhid && !ishid){
+					ishid = 1;
 					hidproto = int cfg[i+7];
+					hidiface = int cfg[i+2];
+					hidsub = int cfg[i+6];
+				}
 				if(int cfg[i+5] == Clstorage && int cfg[i+6] == Sscsi && int cfg[i+7] == Pbulkonly)
 					isdisk = 1;
 				#
@@ -2755,7 +2845,7 @@ dumpconfig(d: ref Sys->FD, indent: string)
 				# and the first is the one a boot-protocol
 				# device reports on.
 				#
-				if(hidproto != 0 && hidep < 0
+				if(ishid && hidep < 0
 				&& (addr & 16r80) && (attr & 3) == 3){
 					hidep = addr & 16rF;
 					hidmaxpkt = mx;

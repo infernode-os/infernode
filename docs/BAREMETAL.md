@@ -426,6 +426,7 @@ bench machine depending on what these say. All are optional.
 | `btkeys` | factotum key syntax | Where `bt9p` keeps link keys so pairings survive a reboot. |
 | `netconsole` | first line: empty, or a token; a later line `interface ether0` (recommended) | A shell on **TCP 17010**, section 7. With `interface`, only connections arriving at that interface's addresses are served; without it, every interface, Wi-Fi included. Absent = off. |
 | `cpulisten` | empty, or an address (`tcp!*!17030`) on the first line | The remote-desktop listener: `cpu(1)` from another InferNode runs programs here that draw on its screen, authenticated by certificate and encrypted (AES-256). Needs this machine's certificate in `usr/inferno/keyring/default`, or it refuses to start. Runs in the desktop's narrowed namespace, headless or not. Empty = `tcp!*!rstyx` (6668). Absent = off. See [REMOTE-DESKTOP.md](REMOTE-DESKTOP.md). |
+| `usbquirks` | one line per USB pointer or keyboard that needs it: `vid:pid word…`, the IDs in hex as the boot log prints them (`0eef:0005`). Words: `swapxy`, `invertx`, `inverty` (a touchscreen mounted turned or mirrored), `boot` (ignore the report descriptor and use the boot protocol), `report` (a keyboard: read its reports by its descriptor even though it has a boot protocol — every key at once on an n-key-rollover board, not six), `ignore` (no driver at all) | How `mouseusb` and `kbdusb` treat that device. `mouseusb` reads every pointer's own report descriptor, so a mouse, a tablet and a touchscreen that calls itself a mouse all work without an entry (#927). `kbdusb` reads a keyboard with the boot protocol when it has one and by its report descriptor when it has not, so this is only for a boot keyboard whose reports are wanted. `kbdusb=report` on the kernel's command line does that for every keyboard. Absent = no exceptions. |
 | `firmware/` | | Radio firmware, as above. |
 | `infernode8.img`, `tryboot.img`, `tryboot.cmd` | | The kernel, a candidate, and the word `tryboot` — section 4. |
 
@@ -597,8 +598,18 @@ Only on a machine with an xHCI controller so far — QEMU's `virt`, and a
 Pi 4's USB-A sockets once the board is here. On a Pi 3 the disk is
 enumerated and named (`init: ep5.0 is a USB disk; diskusb is not started
 on this machine`) and left alone: the driver has run only under
-emulation, and a Pi 3 gets no new behaviour on that evidence. One logical
-unit, disks up to 2 TB, no hot removal of the medium.
+emulation, and a Pi 3 gets no new behaviour on that evidence.
+
+A **card reader** with several slots is one device with a logical unit per
+slot, and each unit with a card in it is a disk of its own: the next free
+`/chan/usbdiskN`, its FAT on `/n/usbN`, as a one-slot device's is (whose
+name is unchanged: a stick is still `usbdisk0`). An empty slot is watched
+and served when a card goes in; a card taken out makes its file fail until
+one is back, and one put back is read again under the same name. The root
+carries `/n/usb0` to `/n/usb3`, so four FAT volumes are mounted at once; a
+fifth disk is its block file only. Tested on QEMU's `usb-bot` with three
+units (two disks and an empty slot that a medium is put into, taken out of
+and put back into); not yet on a real reader.
 
 **A USB serial adapter** is a port like the board's own, `eia(3)` and
 all: `usbserial` serves it as `/dev/eiaU0`, `eiaU0ctl` and `eiaU0status`
@@ -630,6 +641,24 @@ names the adapter (`is a USB serial port; usbserial is not started on
 this machine`) and leaves it. Not done: CH340 and PL2303, the same name
 for the same adapter after a re-plug (the first free number is taken),
 and exclusive open.
+
+**A USB Ethernet adapter** is driven by `etherusb`, which reads every
+configuration the device has and takes the best function in them:
+**CDC NCM** (newer adapters, phones, a Linux gadget), then **CDC ECM**
+(most adapters, and QEMU's `usb-net`), then **RNDIS**; the LAN78xx (the
+3B+'s own) is recognised by its vendor. `etherusb=rndis` (or `ecm`,
+`ncm`) on the kernel's command line puts one first. The adapter is
+`/net/ether0` on a board whose Ethernet is USB (the 3B+), and on one
+whose `ether0` is a kernel driver — a Pi 4's GENET, virt's virtio --
+the first spare, `/net/ether2`. A second interface gets its own
+network's address by DHCP but leaves the default route and name servers
+where they are, so plugging a phone or a gadget into a Pi 4 does not
+take it off its own network. Not done: link state from ECM's and NCM's
+notification endpoint (the link is taken to be up), and a composite
+device that is a disk as well as an adapter (the Jetson's stock gadget):
+each driver wants the control endpoint, which is exclusive-open, so such
+a device is left to `diskusb`; one with Ethernet and a serial port gets
+Ethernet only.
 
 ## 9. Testing
 

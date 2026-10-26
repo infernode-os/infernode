@@ -73,7 +73,7 @@ Exectab : adt {
 	flag2 : int;
 };
 
-F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB : con iota;
+F_ALPHABET, F_CUT, F_DEL, F_DELCOL, F_DUMP, F_EDIT, F_EXITX, F_FONTX, F_GET, F_ID, F_INCL, F_INDENT, F_KILL, F_LIMBO, F_LINENO, F_LOCAL, F_LOOK, F_NEW, F_NEWCOL, F_PASTE, F_PUT, F_PUTALL, F_RENDER, F_LIVE, F_UNDO, F_SEND, F_SORT, F_TAB, F_ZEROX, F_THEME, F_WEB : con iota;
 
 exectab := array[] of {
 	Exectab ( "Alphabet",	F_ALPHABET,	FALSE,	XXX,		XXX		),
@@ -95,6 +95,7 @@ exectab := array[] of {
 	Exectab ( "Limbo",		F_LIMBO,		FALSE,	XXX,		XXX   	),
 	Exectab ( "Lineno",		F_LINENO,	FALSE,	XXX,		XXX		),
 	Exectab ( "Load",		F_DUMP,		FALSE,	FALSE,	XXX		),
+	Exectab ( "Live",		F_LIVE,		FALSE,	XXX,		XXX		),
 	Exectab ( "Local",		F_LOCAL,		FALSE,	XXX,		XXX		),
 	Exectab ( "Look",		F_LOOK,		FALSE,	XXX,		XXX		),
 	Exectab ( "New",		F_NEW,		FALSE,	XXX,		XXX		),
@@ -143,6 +144,7 @@ runfun(fun : int, et, t, argt : ref Text, flag1, flag2 : int, arg : string, narg
 		F_PUT		=> put(et, argt, arg, narg);
 		F_PUTALL 	=> putall();
 		F_RENDER	=> renderx(et, t);
+		F_LIVE		=> livex(et);
 		F_UNDO 		=> undo(et, flag1);
 		F_SEND		=> send(et, t);
 		F_SORT		=> sort(et);
@@ -448,15 +450,32 @@ undo(et : ref Text, flag1 : int)
 	if(et==nil || et.w== nil)
 		return;
 	seq = seqof(et.w, flag1);
+	# nothing to undo: every other window with nothing to undo has the
+	# same seq, 0, and was undone with it
+	if(seq == 0)
+		return;
+	# the executing window first, as Acme does: its display follows,
+	# the others' do not jump
+	et.w.undo(flag1);
 	for(i=0; i<row.ncol; i++){
 		c = row.col[i];
 		for(j=0; j<c.nw; j++){
 			w = c.w[j];
-			if(seqof(w, flag1) == seq)
+			if(w.body.file == et.w.body.file)
+				continue;	# et.w and its Zeroxes, locked with it
+			if(seqof(w, flag1) == seq){
+				# the other files the same change made (Edit X):
+				# locked as et.w is, so their events have an owner
+				# and a client reading them does not see them change
+				o := et.w.owner;
+				if(o == 0)
+					o = 'M';
+				w.lock(o);
 				w.undo(flag1);
+				w.unlock();
+			}
 		}
 	}
-	# et.w.undo(flag1);
 }
 
 getname(t : ref Text, argt : ref Text, arg : string, narg : int, isput : int) : string
@@ -587,6 +606,12 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	# Clear render mode before reloading file
 	if(et.w.rendermode != 0)
 		renderoff(et.w);
+	# typing not yet in the file is a change, as any other: committed,
+	# the window is dirty and not read over. Left, Get read the file
+	# with the typing still held, which Text.loadx refused by taking
+	# Xenith down (a client's get while the body was typed in)
+	if(et.w.body.ncache)
+		et.w.commit(et.w.body);
 	if(!et.w.isdir && (et.w.body.file.buf.nc>0 && !et.w.clean(TRUE, FALSE)))
 		return;
 	w = et.w;
@@ -605,6 +630,12 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	}
 	r = name;
 	n = len name;
+	# a load still under way stopped: its chunks went into the new text
+	# (they are dropped by their operation, no longer the window's)
+	if(w.asyncload != nil){
+		asyncio->asynccancel(w.asyncload);
+		w.asyncload = nil;
+	}
 	for(i=0; i<t.file.ntext; i++){
 		u = t.file.text[i];
 		# second and subsequent calls with zero an already empty buffer, but OK 
@@ -810,6 +841,8 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 		return;
 	w = et.w;
 	f := w.body.file;
+	# all of a file still loading written, not what has come so far
+	textm->loadrest(f);
 	# a web page, a PDF or an image is not written over with the text
 	# it is shown with: its text is written only to a file named
 	if(docview->readonly(w) && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
@@ -989,6 +1022,7 @@ look(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 
 	if(et != nil && et.w != nil){
 		t = et.w.body;
+		et.w.commit(t);	# Look in the tag: the body's typing is in its file
 		if(narg > 0){
 			lookx->search(t, arg, narg);
 			return;
@@ -1095,6 +1129,35 @@ renderx(et : ref Text, nil : ref Text)
 		renderon(w);
 	else
 		renderoff(w);
+}
+
+# Live: a source document set again as its text is edited, or not
+# (docview(2)): the window's own, or those of the windows showing its
+# file; none, and a window opened below showing it, live
+livex(et : ref Text)
+{
+	if(et==nil || et.w==nil)
+		return;
+	w := et.w;
+	if(docview->live(w, -1) > 0)
+		return;
+	if(docview->shown(w)){
+		warning(nil, "Live: not a source document\n");
+		return;
+	}
+	k := docview->kind(w.body.file.name);
+	if(k == nil || k.class != Docreg->Source){
+		warning(nil, sprint("Live: %s: not a source document\n", w.body.file.name));
+		return;
+	}
+	nw := w.col.add(nil, w, -1);
+	nw.lock1(w.owner);
+	if((err := docview->render(nw)) != nil){
+		warning(nil, sprint("Live: %s\n", err));
+		return;
+	}
+	docview->live(nw, 1);
+	nw.settag();
 }
 
 renderon(w : ref Window)
@@ -1251,14 +1314,26 @@ kill(argt : ref Text, arg : string, narg : int)
 	if(r != nil)
 		kill(nil, r, na);
 	# loop condition: *arg is not a blank 
+	cmds : list of string;
 	for(;;){
 		(a, na) = findbl(arg, narg);
 		if(a == arg)
 			break;
 		cmd = arg[0:narg-na];
-		dat->ckill <-= cmd;
+		cmds = cmd :: cmds;
 		(arg, narg) = skipbl(a, na);
 	}
+	if(cmds != nil)
+		spawn sendkills(utils->reverse(cmds));
+}
+
+# The names to kill sent to waittask by a proc of their own: sent with
+# the row held, more than ckill holds waited for waittask, which waited
+# for the row
+sendkills(cmds : list of string)
+{
+	for(; cmds != nil; cmds = tl cmds)
+		dat->ckill <-= hd cmds;
 }
 
 lineno(et : ref Text)
@@ -1588,6 +1663,10 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		wids : string = "";
 		filename: string;
 
+		# the window read, and the reference execute took for this let
+		# go, with the row held: if the window was deleted meanwhile it
+		# is freed here, beside the procs using its file and frames
+		row.qlock.lock();
 		if(win != nil){
 			filename = win.body.file.name;
 			wids = string win.id;
@@ -1604,6 +1683,7 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 			if(dat->activewin != nil)
 				winid = (dat->activewin).id;
 		}
+		row.qlock.unlock();
 		# sys->pctl(Sys->FORKNS|Sys->FORKFD|Sys->NEWPGRP, nil);
 		sys->pctl(Sys->FORKNS|Sys->NEWFD|Sys->FORKENV|Sys->NEWPGRP, 0::1::2::fsys->fsyscfd()::nil);
 		if(rdir != nil){
@@ -1657,8 +1737,11 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		tfd = nil;
 		utils->setenv("xenithwin", wids);
 	}else{
-		if(win != nil)
+		if(win != nil){
+			row.qlock.lock();	# as above
 			win.close();
+			row.qlock.unlock();
+		}
 		sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
 		if(rdir != nil){
 			dir = rdir[0:ndir];

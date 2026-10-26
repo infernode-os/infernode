@@ -39,6 +39,7 @@ State: adt {
 	data:	array of byte;	# an HTML file's text; nil for a page browsed
 	url:	string;
 	width:	int;
+	viewh:	int;		# the view's: the page's viewport
 	height:	int;		# the page's, laid out
 	browsing:	int;
 	ev:	chan of string;	# a page browsed's events, for the view
@@ -47,13 +48,19 @@ State: adt {
 	scratch:	ref Image;	# paint's, kept for the next of its size
 };
 
-VIEWH: con 600;
+VIEWH: con 600;		# the viewport when the view's height is not known
 
 display: ref Display;
 docs: array of ref State;
+# a document's opener runs on a proc of its own (sheetview), beside
+# another's and the closes Xenith makes: two at once took one slot,
+# one document lost and two windows sharing the other
+docslock: chan of int;
 
 init(d: ref Display): string
 {
+	if(docslock == nil)
+		docslock = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	display = d;
@@ -90,23 +97,26 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 	if((err := loadhtmldoc()) != nil)
 		return (-1, err);
 	width := 800;
+	viewh := VIEWH;
 	accent: ref Image;
 	if(st != nil){
 		if(st.width > 0)
 			width = st.width;
+		if(st.height > 0)
+			viewh = st.height;
 		accent = st.accent;
 		if(accent == nil)
 			accent = st.fg;
 	}
 	if(accent == nil)
 		accent = display.color(Draw->Blue);
-	s := ref State(data, name, width, 0, 0, nil, 0, accent, nil);
+	s := ref State(data, name, width, viewh, 0, 0, nil, 0, accent, nil);
 	h := add(s);
 	if(data == nil && isurl(name)){
 		# browsed: fetched in the background, the events tell
 		c: chan of string;
 		{
-			(c, err) = htmldoc->browse(h, name, width, VIEWH);
+			(c, err) = htmldoc->browse(h, name, width, viewh);
 		} exception e {
 		"*" =>
 			err = "html: " + e;
@@ -129,7 +139,7 @@ open(data: array of byte, name: string, st: ref Style): (int, string)
 		s.url = "file://" + name;
 	ht: int;
 	{
-		(ht, err) = htmldoc->set(h, data, s.url, width, VIEWH);
+		(ht, err) = htmldoc->set(h, data, s.url, width, viewh);
 	} exception e {
 	"*" =>
 		err = "html: " + e;
@@ -177,8 +187,10 @@ close(h: int)
 {
 	if(get(h) != nil && htmldoc != nil)
 		htmldoc->drop(h);
+	docslock <-= 1;
 	if(h >= 0 && h < len docs)
 		docs[h] = nil;
+	<-docslock;
 }
 
 nsheets(h: int): int
@@ -214,10 +226,16 @@ restyle(h: int, st: ref Style): string
 		return "no document";
 	if(st != nil && st.accent != nil)
 		s.accent = st.accent;
-	if(st == nil || st.width <= 0 || st.width == s.width)
+	if(st == nil || st.width <= 0)
+		return nil;
+	viewh := s.viewh;
+	if(st.height > 0)
+		viewh = st.height;
+	if(st.width == s.width && viewh == s.viewh)
 		return nil;
 	s.width = st.width;
-	htmldoc->resize(h, s.width, VIEWH);
+	s.viewh = viewh;
+	htmldoc->resize(h, s.width, s.viewh);
 	s.height = htmldoc->height(h);
 	return nil;
 }
@@ -370,7 +388,7 @@ command1(h: int, cmd, arg: string): string
 	"Reload" or "Get" =>	return htmldoc->reload(h);
 	"Stop" =>	return htmldoc->stop(h);
 	"browse" =>
-		(nil, err) := htmldoc->browse(h, arg, s.width, VIEWH);
+		(nil, err) := htmldoc->browse(h, arg, s.width, s.viewh);
 		return err;
 	}
 	return "unknown command " + cmd;
@@ -518,6 +536,13 @@ key1(h: int, r: int): string
 			v = v[0:len v - 1];
 	16r15 =>	# ^U
 		v = "";
+	16r16 =>	# ^V (Cmd-V): the snarf added; one line but in a textarea
+		t := snarf();
+		if(f.kind != "textarea")
+			t = oneline(t);
+		if(t == nil)
+			return "paint";
+		v += t;
 	* =>
 		if(r == '\n' || (r >= ' ' && r != 16r7F && r < Keyboard->Spec))
 			v[len v] = r;
@@ -528,6 +553,33 @@ key1(h: int, r: int): string
 		return "error " + err;
 	s.height = htmldoc->height(h);
 	return "layout";
+}
+
+# What is snarfed (cut or copied, here or on the host)
+snarf(): string
+{
+	fd := sys->open("/chan/snarf", Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	b := array[0] of byte;
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0){
+		nb := array[len b + n] of byte;
+		nb[0:] = b;
+		nb[len b:] = buf[0:n];
+		b = nb;
+	}
+	return string b;	# whole, so no character is split between reads
+}
+
+# A field of one line takes text pasted without its line breaks
+oneline(t: string): string
+{
+	r := "";
+	for(i := 0; i < len t; i++)
+		if(t[i] != '\n' && t[i] != '\r')
+			r[len r] = t[i];
+	return r;
 }
 
 typedinto(kind: string): int
@@ -622,6 +674,14 @@ split(e: string): (string, string)
 }
 
 add(s: ref State): int
+{
+	docslock <-= 1;
+	h := add0(s);
+	<-docslock;
+	return h;
+}
+
+add0(s: ref State): int
 {
 	for(i := 0; i < len docs; i++)
 		if(docs[i] == nil){

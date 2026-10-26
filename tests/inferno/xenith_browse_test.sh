@@ -184,7 +184,7 @@ if {! ~ $#img 0} {
 }
 
 # A form: a click in its field (which fills the page) gives it the
-# keyboard, typing fills it in, Return submits it
+# keyboard, typing and pasting fill it in, Return submits it
 SEARCH=file:///tests/xenith/html/search.html
 id=`{cat $XENITH/new/ctl}
 id=${index 1 $id}
@@ -208,7 +208,12 @@ if {~ $#f 0} {
 	echo -n 'm400 400 1' > '#m/pointer'
 	echo -n 'm400 400 0' > '#m/pointer'
 	sleep 1
-	echo -n 'plan9' > '#c/keyboard'
+	echo -n 'pl' > '#c/keyboard'
+	sleep 1
+	# the rest pasted (^V, Cmd-V on a Mac), its line break left out
+	echo 'an
+9' > /chan/snarf
+	echo -n '' > '#c/keyboard'
 	sleep 1
 	echo > '#c/keyboard'
 	if {waitbody $f 'The results page'} {
@@ -218,7 +223,7 @@ if {~ $#f 0} {
 	}
 	r=`{winof 'file:///tests/xenith/html/result.html?q=plan9'}
 	if {~ $r $f} {
-		pass 'with what was typed: result.html?q=plan9'
+		pass 'with what was typed and pasted: result.html?q=plan9'
 	} {
 		fail 'the result window:' `{grep result $XENITH/index}
 	}
@@ -314,6 +319,45 @@ if {ftest -s /tmp/xenith_browse.port} {
 	}
 } {
 	echo 'SKIP: no HTTP server (python3)'
+}
+
+# A page's viewport is its window's height: the screen is 600 high, so
+# a window's page is less (a viewport of 600 whatever the window cut a
+# dialog sized to it off below the window)
+VIEWPORT=file:///tests/xenith/html/viewport.html
+id=`{cat $XENITH/new/ctl}
+id=${index 1 $id}
+echo -n $VIEWPORT > $XENITH/$id/body
+n=`{echo -n $VIEWPORT | wc -c}
+echo 'ML0 '^$n > $XENITH/$id/event
+echo clean > $XENITH/$id/ctl
+echo delete > $XENITH/$id/ctl
+v=()
+for i in 1 2 3 4 5 {
+	if {~ $#v 0} {
+		v=`{winof $VIEWPORT}
+		sleep 1
+	}
+}
+vt=()
+mkdir -p /tmp/xenith_browse_vp
+if {! ~ $#v 0 && mount -A `{cat $XENITH/$v/web} /tmp/xenith_browse_vp} {
+	echo scripts on > /tmp/xenith_browse_vp/ctl
+	for i in 1 2 3 4 5 {
+		vt=`{cat /tmp/xenith_browse_vp/title}
+		if {! ~ ${index 1 $vt} vh} {
+			sleep 1
+		}
+	}
+	unmount /tmp/xenith_browse_vp
+}
+if {~ ${index 1 $vt} vh && ! ~ ${index 2 $vt} 600 && ~ ${index 2 $vt} [1-5][0-9][0-9]} {
+	pass 'the viewport is the window''s height:' ${index 2 $vt}
+} {
+	fail 'viewport:' $vt
+}
+if {! ~ $#v 0} {
+	echo delete > $XENITH/$v/ctl
 }
 
 # Nothing went wrong on the way: a browser window's tag was set before

@@ -1558,8 +1558,8 @@ value). ALT3 means nothing to it. So "reclaim the Arasan" is ALT3 on
 the board and 0 under emulation, and a runtime switch between the two
 would pass the harness and fail on the board or the reverse. That is
 why the choice is made at build time — `sdmmc.c` holds one pointer,
-SDHOST by default, `-DSDCARD_ARASAN` for the other, the same shape as
-`-DFBSCROLLTEST` — and why the Arasan backend does not write the mux
+SDHOST by default, `-DSDCARD_ARASAN` for the other, chosen when the kernel
+is built — and why the Arasan backend does not write the mux
 at all: "as the firmware left them" is the one setting that is right
 in both places. The other reason there is no runtime choice is that
 there is nothing to make it from: this port parses neither the device

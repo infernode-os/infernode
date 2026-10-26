@@ -188,12 +188,73 @@ jobs:
         chmod +x tests/host/idle_cpu_test.sh
         ROOT=. bash tests/host/idle_cpu_test.sh
 
+    - name: Check a form a page's script submits is posted
+      run: |
+        # form.submit() of a POST form was only logged as unsupported, so
+        # a sign-in posting the password from script went nowhere.
+        chmod +x tests/host/js_formpost_test.sh
+        ROOT=. bash tests/host/js_formpost_test.sh
+
+    - name: Check a long POST body is sent whole
+      run: |
+        chmod +x tests/host/charon_bigpost_test.sh
+        ROOT=. bash tests/host/charon_bigpost_test.sh
+
     - name: Check Charon's start page ships
       run: |
         # The start page must be a file every release package carries
         # (it was a test fixture, missing from every package).
         chmod +x tests/host/charon_home_test.sh
         ROOT=. bash tests/host/charon_home_test.sh
+
+    - name: Check the forms file lists the page's controls
+      run: |
+        # Form numbers came from the order nodes were made: a control a
+        # script moved into a form was in none, and was not sent with it;
+        # removed and never-attached controls were listed as on the page.
+        chmod +x tests/host/charon_forms_test.sh
+        ROOT=. bash tests/host/charon_forms_test.sh
+
+    - name: Check a form's controls are the ones HTML puts in it
+      run: |
+        # A template's input was listed and sent, a control's form
+        # attribute was ignored, and entries went in the order nodes were
+        # made; both through Charon's files and from the page's scripts.
+        chmod +x tests/host/charon_formowner_test.sh
+        ROOT=. bash tests/host/charon_formowner_test.sh
+
+    - name: Check a button's label in the files is the one shown
+      run: |
+        # A web component's button showed no label in forms or dom/N/text:
+        # its label is what the page put in the component, shown through a
+        # slot, and the files read only the button's own subtree.
+        chmod +x tests/host/charon_shadowlabel_test.sh
+        ROOT=. bash tests/host/charon_shadowlabel_test.sh
+
+    - name: Check a label in a shadow tree checks its own checkbox
+      run: |
+        chmod +x tests/host/charon_shadowcheck_test.sh
+        ROOT=. bash tests/host/charon_shadowcheck_test.sh
+
+    - name: Check an image a page's script puts in is fetched
+      run: |
+        chmod +x tests/host/charon_scriptimg_test.sh
+        ROOT=. bash tests/host/charon_scriptimg_test.sh
+
+    - name: Check a web component laid out as a grid takes the page's areas
+      run: |
+        chmod +x tests/host/charon_shadowgrid_test.sh
+        ROOT=. bash tests/host/charon_shadowgrid_test.sh
+
+    - name: Check a PDF navigated to is saved and opened
+      run: |
+        chmod +x tests/host/charon_download_test.sh
+        ROOT=. bash tests/host/charon_download_test.sh
+
+    - name: Check a link to audio is saved, not parsed as a page
+      run: |
+        chmod +x tests/host/charon_notpage_test.sh
+        ROOT=. bash tests/host/charon_notpage_test.sh
 
     - name: Check the DOM a page's scripts see
       run: |
@@ -202,6 +263,21 @@ jobs:
         # does not, so Microsoft's sign-in never left its first step.
         chmod +x tests/host/js_dom_test.sh
         ROOT=. bash tests/host/js_dom_test.sh
+
+    - name: Check a page's scripts get and send bytes as they are
+      run: |
+        # A body was kept as text only: bytes that are not UTF-8 read
+        # through arrayBuffer() came back mangled (JSTOR's sign-in check
+        # failed so), and an ArrayBuffer posted was sent re-encoded.
+        chmod +x tests/host/js_binary_test.sh
+        ROOT=. bash tests/host/js_binary_test.sh
+
+    - name: Check a page's files do not show a password
+      run: |
+        # The forms and dom/N/attrs files showed a password field's value
+        # as typed, to anything that could read a browser window's files.
+        chmod +x tests/host/charon_password_test.sh
+        ROOT=. bash tests/host/charon_password_test.sh
 
     - name: Check releases ship the system's directories
       run: |

@@ -372,38 +372,48 @@ Row.clean(row : self ref Row, exiting : int) : int
 
 Row.dump(row : self ref Row, file : string)
 {
-	i, j, m, n, dumped : int;
-	q0, q1 : int;
-	b : ref Iobuf;
-	buf, fontname, a : string;
-	r : ref Astring;
-	c : ref Column;
-	w, w1 : ref Window;
-	t : ref Text;
+	dump(row, file, FALSE);
+}
 
+# What has not been saved kept, where Xenith has gone wrong (an
+# exception, an internal error, an exit nobody asked for), in a file
+# Load reads: the windows as Dump keeps them, an unnamed one's text too,
+# under a name made for it, and one with changes that a client holds.
+# Nothing in a window is changed to do it (Dump commits each tag), and
+# a window that cannot be read is left out, not the rest. Returns how
+# many were left out, or -1 if the file could not be written.
+Row.rescue(row : self ref Row, file : string) : int
+{
+	return dump(row, file, TRUE);
+}
+
+# A window that raised as it was dumped left the file half written, its
+# buffer never flushed: the dump empty, and Dump's earlier one gone. Each
+# window's lines are made whole before any is written now.
+dump(row : ref Row, file : string, rescue : int) : int
+{
 	if(row.ncol == 0)
-		return;
-	
-	{
-		if(file == nil){
-			if(home == nil){
-				warning(nil, "can't find file for dump: $home not defined\n");
-				raise "e";
-			}
-			buf = sprint("%s/xenith.dump", home);
-			file = buf;
+		return 0;
+	if(file == nil){
+		if(home == nil){
+			warning(nil, "can't find file for dump: $home not defined\n");
+			return -1;
 		}
-		b = bufio->create(file, Bufio->OWRITE, 8r600);
-		if(b == nil){
+		file = sprint("%s/xenith.dump", home);
+	}
+	b := bufio->create(file, Bufio->OWRITE, 8r600);
+	if(b == nil){
+		if(!rescue)
 			warning(nil, sprint("can't open %s: %r\n", file));
-			raise "e";
-		}
-		r = stralloc(BUFSIZE);
+		return -1;
+	}
+	bad := 0;
+	{
 		b.puts(xenith->wdir); b.putc('\n');
 		b.puts(fontnames[0]); b.putc('\n');
 		b.puts(fontnames[1]); b.putc('\n');
-		for(i=0; i<row.ncol; i++){
-			c = row.col[i];
+		for(i:=0; i<row.ncol; i++){
+			c := row.col[i];
 			b.puts(sprint("%11d", 100*(c.r.min.x-row.r.min.x)/row.r.dx()));
 			if(i == row.ncol-1)
 				b.putc('\n');
@@ -411,108 +421,157 @@ Row.dump(row : self ref Row, file : string)
 				b.putc(' ');
 		}
 		for(i=0; i<row.ncol; i++){
-			c = row.col[i];
-			for(j=0; j<c.nw; j++)
+			c := row.col[i];
+			for(j:=0; j<c.nw; j++)
 				c.w[j].body.file.dumpid = 0;
 		}
 		for(i=0; i<row.ncol; i++){
-			c = row.col[i];
-			for(j=0; j<c.nw; j++){
-				w = c.w[j];
-				w.commit(w.tag);
-				t = w.body;
-				# windows owned by others get special treatment 
-				if(w.nopen[Dat->QWevent] > byte 0)
-					if(w.dumpstr == nil)
-						continue;
-				# zeroxes of external windows are tossed 
-				if(t.file.ntext > 1)
-					for(n=0; n<t.file.ntext; n++){
-						w1 = t.file.text[n].w;
-						if(w == w1)
-							continue;
-						if(w1.nopen[Dat->QWevent] != byte 0) {
-							j = c.nw;
-							continue;
-						}
-					}
-				fontname = "";
-				if(t.reffont.f != font)
-					fontname = t.reffont.f.name;
-				a = t.file.name;
-				if(t.file.dumpid){
-					dumped = FALSE;
-					b.puts(sprint("x%11d %11d %11d %11d %11d %s\n", i, t.file.dumpid,
-						w.body.q0, w.body.q1,
-						100*(w.r.min.y-c.r.min.y)/c.r.dy(),
-						fontname));
-				}else if(w.dumpstr != nil){
-					dumped = FALSE;
-					b.puts(sprint("e%11d %11d %11d %11d %11d %s\n", i, t.file.dumpid,
-						0, 0,
-						100*(w.r.min.y-c.r.min.y)/c.r.dy(),
-						fontname));
-				}else if(len a == 0){	# don't save unnamed windows 
-					continue;
-				}else if((!w.dirty && utils->access(a)==0) || w.isdir ||
-				    (w.rendermode && utils->access(a)==0) ||
-				    (docview->readonly(w) && !w.doc.v.web && utils->access(a)==0)){
-					# (a formatted view's text is the formatter's, a
-					# PDF's or an image's the document's, not the
-					# file's: Load reads the file again)
-					dumped = FALSE;
-					t.file.dumpid = w.id;
-					b.puts(sprint("f%11d %11d %11d %11d %11d %s\n", i, w.id,
-						w.body.q0, w.body.q1,
-						100*(w.r.min.y-c.r.min.y)/c.r.dy(),
-						fontname));
-				}else{
-					dumped = TRUE;
-					t.file.dumpid = w.id;
-					b.puts(sprint("F%11d %11d %11d %11d %11d %11d %s\n", i, w.id,
-						w.body.q0, w.body.q1,
-						100*(w.r.min.y-c.r.min.y)/c.r.dy(),
-						w.body.file.buf.nc, fontname));
+			c := row.col[i];
+			for(j:=0; j<c.nw; j++){
+				w := c.w[j];
+				{
+					(l, id) := dumpwin(w, i, c, rescue);
+					if(id != 0)
+						w.body.file.dumpid = id;
+					for(; l != nil; l = tl l)
+						b.puts(hd l);
 				}
-				a = nil;
-				buf = w.ctlprint(0);
-				b.puts(buf);
-				m = min(BUFSIZE, w.tag.file.buf.nc);
-				w.tag.file.buf.read(0, r, 0, m);
-				n = 0;
-				while(n<m && r.s[n]!='\n')
-					n++;
-				r.s[n++] = '\n';
-				b.puts(r.s[0:n]);
-				if(dumped){
-					q0 = 0;
-					q1 = t.file.buf.nc;
-					while(q0 < q1){
-						n = q1 - q0;
-						if(n > Dat->BUFSIZE)
-							n = Dat->BUFSIZE;
-						t.file.buf.read(q0, r, 0, n);
-						b.puts(r.s[0:n]);
-						q0 += n;
-					}
-				}
-				if(w.dumpstr != nil){
-					if(w.dumpdir != nil)
-						b.puts(sprint("%s\n%s\n", w.dumpdir, w.dumpstr));
-					else
-						b.puts(sprint("\n%s\n", w.dumpstr));
+				exception{
+					* =>
+						bad++;
 				}
 			}
 		}
-		b.close();
-		b = nil;
-		strfree(r);
-		r = nil;
 	}
 	exception{
 		* =>
-			return;
+			bad = -1;
 	}
+	if(b.flush() < 0)
+		bad = -1;
+	b.close();
+	return bad;
+}
+
+# A window's lines in a dump, in order, and the id it is dumped as
+# (0 for none)
+dumpwin(w : ref Window, i : int, c : ref Column, rescue : int) : (list of string, int)
+{
+	if(!rescue)
+		w.commit(w.tag);
+	t := w.body;
+	a := t.file.name;
+	changed := w.dirty || t.ncache > 0;
+	# windows owned by others get special treatment: kept where Xenith
+	# has gone wrong if they hold a file's changes
+	if(w.nopen[Dat->QWevent] > byte 0 && w.dumpstr == nil)
+		if(!rescue || !changed || len a == 0)
+			return (nil, 0);
+	# zeroxes of external windows are tossed (this skipped the rest of
+	# the column, which were not dumped)
+	for(n:=0; n<t.file.ntext; n++){
+		w1 := t.file.text[n].w;
+		if(w1 != w && w1.nopen[Dat->QWevent] != byte 0)
+			return (nil, 0);
+	}
+	fontname := "";
+	if(t.reffont.f != font)
+		fontname = t.reffont.f.name;
+	(tl0, nil) := textof(w.tag);
+	tag := "";
+	for(; tl0 != nil; tl0 = tl tl0)
+		tag += hd tl0;
+	for(n=0; n<len tag && n<BUFSIZE; n++)
+		if(tag[n] == '\n')
+			break;
+	tag = tag[0:n];
+	pct := 100*(w.r.min.y-c.r.min.y)/c.r.dy();
+	s : string;
+	id := 0;
+	if(t.file.dumpid)
+		s = sprint("x%11d %11d %11d %11d %11d %s\n", i, t.file.dumpid,
+			t.q0, t.q1, pct, fontname);
+	else if(w.dumpstr != nil)
+		s = sprint("e%11d %11d %11d %11d %11d %s\n", i, t.file.dumpid,
+			0, 0, pct, fontname);
+	else if(len a == 0){
+		# don't save unnamed windows, but where Xenith has gone wrong:
+		# their text then, under a name made for it
+		if(!rescue || t.file.buf.nc+t.ncache == 0)
+			return (nil, 0);
+		d := xenith->wdir;
+		if(d == nil || d[len d-1] != '/')
+			d += "/";
+		tag = sprint("%sunnamed.%d", d, w.id) + tag;
+	}else if((!changed && utils->access(a)==0) || w.isdir ||
+	    (w.rendermode && utils->access(a)==0) ||
+	    (docview->readonly(w) && !w.doc.v.web && utils->access(a)==0)){
+		# (a formatted view's text is the formatter's, a
+		# PDF's or an image's the document's, not the
+		# file's: Load reads the file again)
+		id = w.id;
+		s = sprint("f%11d %11d %11d %11d %11d %s\n", i, w.id,
+			t.q0, t.q1, pct, fontname);
+	}
+	body : list of string;
+	if(s == nil){
+		# the text itself, typing not yet in the file among it
+		id = w.id;
+		nr : int;
+		(body, nr) = textof(t);
+		s = sprint("F%11d %11d %11d %11d %11d %11d %s\n", i, w.id,
+			t.q0, t.q1, pct, nr, fontname);
+	}
+	# the lines last first, turned round at the end
+	l := tag+"\n" :: w.ctlprint(0) :: s :: nil;
+	l = rev(body, l);
+	if(w.dumpstr != nil){
+		if(w.dumpdir != nil)
+			l = sprint("%s\n%s\n", w.dumpdir, w.dumpstr) :: l;
+		else
+			l = sprint("\n%s\n", w.dumpstr) :: l;
+	}
+	return (rev(l, nil), id);
+}
+
+# l reversed, onto the front of m
+rev(l, m : list of string) : list of string
+{
+	r := m;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+# A text's characters in pieces, in order, typing not yet in its file
+# among them, and how many
+textof(t : ref Text) : (list of string, int)
+{
+	l : list of string;
+	nc := t.file.buf.nc;
+	cq := -1;
+	if(t.ncache > 0 && t.cq0 >= 0 && t.cq0 <= nc)
+		cq = t.cq0;
+	nr := nc;
+	r := stralloc(BUFSIZE);
+	for(q := 0; q < nc || q == cq; ){
+		if(q == cq){
+			l = t.cache[0:t.ncache] :: l;
+			nr += t.ncache;
+			cq = -1;
+			continue;
+		}
+		n := nc-q;
+		if(n > BUFSIZE)
+			n = BUFSIZE;
+		if(cq > q && q+n > cq)
+			n = cq-q;
+		t.file.buf.read(q, r, 0, n);
+		l = r.s[0:n] :: l;
+		q += n;
+	}
+	strfree(r);
+	return (rev(l, nil), nr);
 }
 
 rdline(b : ref Iobuf, line : int) : (int, string)

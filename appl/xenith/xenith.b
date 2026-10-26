@@ -225,6 +225,7 @@ main(argl : list of string)
 	ncol = -1;
 
 	mainpid = sys->pctl(0, nil);
+	recoverlock = chan[1] of int;
 	loadfile = nil;
 	fontnames = array[2] of string;
 	fontnames[0:] = deffontnames[0:2];
@@ -428,9 +429,12 @@ shutdown(msg : string)
 	i : int;
 
 	# notify(nil);
-	if(!dumping && msg != "kill" && msg != "exit" && (1 || sys->pctl(0, nil)==mainpid) && row != nil){
+	# kept where Dump's own file is not overwritten: this replaced the
+	# session the user last dumped
+	if(!dumping && msg != "kill" && msg != "exit" && row != nil){
 		dumping = TRUE;
-		row.dump(nil);
+		if((m := rescue()) != nil)
+			sys->fprint(sys->fildes(2), "xenith: %s\n", m);
 	}
 	for(i=0; oknotes[i] != nil; i++)
 		if(utils->strncmp(oknotes[i], msg, len oknotes[i]) == 0)
@@ -513,6 +517,7 @@ keyboardtask()
 
 	{
 		keytid = sys->pctl(0, nil);
+		recovering();
 		null = ref Timer;
 		null.c = chan of int;
 		timer = null;
@@ -579,6 +584,7 @@ mousetask()
 
 	{
 		mousetid = sys->pctl(0, nil);
+		recovering();
 		sync := chan of int;
 		spawn waitproc(mousetid, sync);
 		<- sync;
@@ -1017,6 +1023,109 @@ mousetask()
 	}
 }
 
+# The procs whose exceptions are recovered (the mouse, keyboard and wait
+# tasks, a 9P request's): an internal error in one raises, and it goes on
+recoverers : list of int;
+recoverlock : chan of int;
+
+recovering()
+{
+	pid := sys->pctl(0, nil);
+	recoverlock <-= 1;
+	recoverers = pid :: recoverers;
+	<-recoverlock;
+}
+
+# utils->error: an internal error, an assertion that failed. It exited
+# Xenith, wherever it was, every unsaved window lost. In a proc that
+# recovers it raises, and what has not been saved is kept as the proc
+# recovers; elsewhere it is kept as Xenith exits.
+internalerror(s : string)
+{
+	pid := sys->pctl(0, nil);
+	if(pid == rescuer)	# a window that cannot be read: left out
+		raise "xenith: "+s;
+	for(l := recoverers; l != nil; l = tl l)
+		if(hd l == pid)
+			raise "xenith: "+s;
+	xenithexit("error");
+}
+
+errtimes : list of int;
+rescuer : int;	# the proc keeping what has not been saved
+
+# An exception recovered from, the row held: what has not been saved is
+# kept first, as the state it left may be wrong; what to tell the user.
+# Many in a minute (one raised again at every event) and Xenith exits,
+# having kept it.
+recovered(e : string) : string
+{
+	now := sys->millisec();
+	n := 0;
+	l : list of int;
+	for(t := errtimes; t != nil; t = tl t)
+		if(now-hd t < 60*1000){
+			l = hd t :: l;
+			n++;
+		}
+	errtimes = now :: l;
+	m := rescue();
+	# on the console too: a log keeps it (tools/xenith-fuzz looks there)
+	sys->fprint(sys->fildes(2), "xenith: recovered from %s\n", e);
+	if(m != nil)
+		sys->fprint(sys->fildes(2), "xenith: %s\n", m);
+	if(n >= 9){
+		sys->fprint(sys->fildes(2), "xenith: %d exceptions in a minute, the last %s\n", n+1, e);
+		xenithexit("error");
+	}
+	return m;
+}
+
+# What has not been saved kept where Xenith has gone wrong, in a file of
+# its own (Dump's is the user's); what to tell the user, nil if there
+# was nothing to keep. The row taken if it can be within a second: the
+# proc holding it may be the one that went wrong, or wait on it.
+rescue() : string
+{
+	if(row == nil || row.ncol == 0)
+		return nil;
+	got := 0;
+	if(!row.qlock.held())
+		for(i := 0; i < 20; i++){
+			got = row.qlock.trylock();
+			if(got)
+				break;
+			sys->sleep(50);
+		}
+	f := rescuefile();
+	bad := -1;
+	orescuer := rescuer;
+	rescuer = sys->pctl(0, nil);
+	{
+		bad = row.rescue(f);
+	}
+	exception{
+		* =>
+			;
+	}
+	rescuer = orescuer;
+	if(got)
+		row.qlock.unlock();
+	if(bad < 0)
+		return sprint("unsaved work could not be kept: cannot write %s", f);
+	s := sprint("unsaved work kept in %s (Load %s, or xenith -l %s)", f, f, f);
+	if(bad > 0)
+		s += sprint("; %d windows could not be read", bad);
+	return s;
+}
+
+rescuefile() : string
+{
+	if(dat->home != nil)
+		return dat->home+"/xenith.rescue";
+	return "/tmp/xenith.rescue."+utils->getuser();
+}
+
 # An exception in the mouse, keyboard or wait task: the locks it holds
 # let go, the fault reported, and the task carries on. It died holding the
 # row, and every window froze with it, their unsaved text with them.
@@ -1030,8 +1139,11 @@ taskrecover(task : string, e : string)
 	}
 	if(!row.qlock.held())
 		row.qlock.lock();
+	m := recovered(e);
 	{
 		warning(nil, sprint("xenith: %s: %s\n", task, e));
+		if(m != nil)
+			warning(nil, "xenith: "+m+"\n");
 		bflush();
 	}
 	exception{
@@ -1068,6 +1180,7 @@ waittask()
 	pids : ref Pid;
 
 	waittid = sys->pctl(0, nil);
+	recovering();
 	command = nil;
 	for(;;){
 	{

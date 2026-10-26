@@ -93,6 +93,7 @@ Dat : module {
 		unlock : fn(l : self ref Lock);
 		locked : fn(l : self ref Lock) : int;
 		held : fn(l : self ref Lock) : int;
+		trylock : fn(l : self ref Lock) : int;
 	};
 
 # 	Lockx : adt {

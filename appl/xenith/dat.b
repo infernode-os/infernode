@@ -78,6 +78,19 @@ Lock.held(l : self ref Lock) : int
 	return l.pid != 0 && l.pid == sys->pctl(0, nil);
 }
 
+# taken if nobody holds it, without waiting
+Lock.trylock(l : self ref Lock) : int
+{
+	alt{
+	l.chann <-= 0 =>
+		l.cnt++;
+		l.pid = sys->pctl(0, nil);
+		return 1;
+	* =>
+		return 0;
+	}
+}
+
 Ref.init() : ref Ref
 {
 	r := ref Ref;

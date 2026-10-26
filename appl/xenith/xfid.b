@@ -143,6 +143,7 @@ waitproc(pid : int, sync: chan of int)
 Xfid.ctl(x : self ref Xfid)
 {
 	x.tid = sys->pctl(0, nil);
+	xenith->recovering();
 	sync := chan of int;
 	spawn waitproc(x.tid, sync);
 	<-sync;
@@ -183,8 +184,11 @@ Xfid.recover(x : self ref Xfid, e : string)
 		w.unlock();
 	if(!row.qlock.held())
 		row.qlock.lock();
+	m := xenith->recovered(e);
 	{
 		warning(nil, sprint("xenith: 9P request: %s\n", e));
+		if(m != nil)
+			warning(nil, "xenith: "+m+"\n");
 	}
 	exception{
 		* =>
@@ -865,6 +869,11 @@ Xfid.write(x : self ref Xfid)
 	row.qlock.unlock();
 }
 
+fault()
+{
+	utils->error("a fault made for a test, in a proc that does not recover");
+}
+
 # Helper for ctlwrite: handles lock/unlock, clean, show, name, dump commands
 # Returns (handled, m, err, settag) - split to avoid yacc stack overflow
 ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
@@ -893,6 +902,16 @@ ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		w.ctlfid = ~0;
 		w.ctllock.unlock();
 		return (TRUE, 6, nil, FALSE);
+	}
+	# for tests (tests/host/xenith_rescue_test.sh), with $xenithfaults
+	# set where Xenith started: an internal error, in this request's
+	# proc, which recovers ("fault"), or in one that does not ("fault exit")
+	if(strncmp(p, "fault", 5) == 0 && utils->getenv("xenithfaults") != nil){
+		if(strncmp(p, "fault exit", 10) == 0){
+			spawn fault();
+			return (TRUE, 10, nil, FALSE);
+		}
+		utils->error("a fault made for a test");
 	}
 	if(strncmp(p, "clean", 5) == 0){	# mark window 'clean', seq=0
 		t = w.body;

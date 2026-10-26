@@ -93,6 +93,7 @@ TARG=\
 	json_test.dis\
 	llmclient_think_gating_test.dis\
 	llmclient_reqshape_test.dis\
+	llmclient_anthropic_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
 	mail_provision_test.dis\
@@ -139,6 +140,7 @@ TARG=\
 	taskparse_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
+	strcat_test.dis\
 	string_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
@@ -176,6 +178,7 @@ TARG=\
 	veltro_security_test.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
+	veltro_edit_test.dis\
 	pathmanage_test.dis\
 	tools9p_test.dis\
 	pres_launch_test.dis\

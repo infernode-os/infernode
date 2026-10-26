@@ -951,6 +951,11 @@ exportproc(fd: ref Sys->FD)
 # same channels real input arrives on.  Reads list the windows (above).
 uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 {
+	# keys wait in a buffer, as a keyboard's do: while the main loop
+	# reads only the pointer (button 3's menu) a key would hold up
+	# the pointer events after it, the menu waiting for them
+	keys := chan of string;
+	spawn bufferproc(keys, fakekbd);
 	for(;;) alt {
 	(off, nil, nil, rc) := <-f.read =>
 		# the windows, topmost first: "id minx miny maxx maxy" each,
@@ -976,14 +981,14 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 			b := int hd tl tl tl toks;
 			ptr <-= ref Draw->Pointer(b, (x, y), sys->millisec());
 		} else if(n >= 2 && hd toks == "key")
-			fakekbd <-= hd tl toks;
+			keys <-= hd tl toks;
 		else if(n >= 2 && hd toks == "text"){
 			# the rest of the line, a rune at a time, as typed
 			t := string data;
 			if(t[len t - 1] == '\n')
 				t = t[0:len t - 1];
 			for(i := len "text "; i < len t; i++)
-				fakekbd <-= string t[i];
+				keys <-= string t[i];
 		} else
 			err = "usage: ptr X Y BUTTONS | key RUNE | text STRING";
 		if(err != "")

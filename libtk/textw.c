@@ -1257,6 +1257,11 @@ tktfixgeom(Tk *tk, TkTline *l1, TkTline *l2, int finalwidth)
 				i->width += it->width;
 				i->next = it->next;
 				it->next = nil;
+				/* the selection's ends, if it was one, are i now */
+				if(tkt->selfirst == it)
+					tkt->selfirst = i;
+				if(tkt->sellast == it)
+					tkt->sellast = i;
 				tktfreeitems(tkt, it, 1);
 			}
 			else if(i->kind == TkTwin && i->iwin->sub != nil) {
@@ -2130,8 +2135,8 @@ tktget(TkText *tkt, TkTindex *ix1, TkTindex *ix2, int sgml, char **val)
 					goto nomemret;
 			}
 			if(bychar) {
-				if (ix1->item->kind == TkTrune)
-					n = fmtprint(&fmt, "%.*s", m, s);
+				if (ix1->item->kind == TkTrune)	/* m runes; a precision is bytes */
+					n = fmtprint(&fmt, "%.*s", tktutfpos(s, m), s);
 				else {
 					n = 0;
 					for(i = 0; i < m && n >= 0; i++) {

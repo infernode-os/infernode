@@ -77,6 +77,11 @@ tktfreeitems(TkText *tkt, TkTitem *i, int freewins)
 		n = i->next;
 		if(tkt->mouse == i)
 			tkt->mouse = nil;
+		/* a selection kept in an item freed is lost, not left to be followed */
+		if(tkt->selfirst == i || tkt->sellast == i) {
+			tkt->selfirst = nil;
+			tkt->sellast = nil;
+		}
 		switch(i->kind) {
 		case TkTascii:
 		case TkTrune:

@@ -270,6 +270,26 @@ testTextEdit(t: ref T)
 		"sel tag selects the range");
 }
 
+# Part of a run of text that is not all ASCII: get gave the first m
+# bytes of it for m characters (a precision is bytes), so a character
+# of two, three or four bytes came out short or not at all, and
+# wm/editor's undo put back what it had read.
+testTextGetRunes(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	tk->cmd(top, "text .t -wrap none");
+	s := "a\u00e9\u6f22\U0001F680b";
+	tk->cmd(top, ".t insert end " + tk->quote(s));
+	t.assertseq(tk->cmd(top, ".t get 1.0 end"), s, "the whole text");
+	for(i := 0; i < len s; i++)
+		for(j := i + 1; j <= len s; j++)
+			t.assertseq(tk->cmd(top, sys->sprint(".t get 1.%d 1.%d", i, j)), s[i:j],
+				sys->sprint("characters %d to %d", i, j));
+	t.assertseq(tk->cmd(top, ".t get 1.3"), "\U0001F680", "one character, by its index alone");
+}
+
 # A label bound to a named bitmap image that is later filled with
 # tk->putimage must pick up the new image's size and contents.  libtk
 # had no Tk_ImageChanged-style notification, so the label kept its
@@ -493,6 +513,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Listbox",         testListbox);
 	run("Toggles",         testToggles);
 	run("TextEdit",        testTextEdit);
+	run("TextGetRunes",    testTextGetRunes);
 	run("DynamicImage",    testDynamicImage);
 	run("GlyphColour",     testGlyphColour);
 	run("ForegroundRendered", testForegroundRendered);

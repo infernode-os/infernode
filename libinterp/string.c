@@ -192,10 +192,11 @@ addstring(String *s1, String *s2, int append)
 
 	if(s1->len < 0) {
 		l1 = -s1->len;
-		if(s2->len < 0) 
-			l = l1 - s2->len;
+		l2 = s2->len;	/* s2 may be ns (s += s): its length before ns->len is set */
+		if(l2 < 0)
+			l = l1 - l2;
 		else
-			l = l1 + s2->len;
+			l = l1 + l2;
 		if(append && l <= s1->max)
 			ns = s1;
 		else {
@@ -204,8 +205,8 @@ addstring(String *s1, String *s2, int append)
 		}
 		ns->len = -l;
 		r = &ns->Srune[l1];
-		if(s2->len < 0)
-			memmove(r, s2->Srune, -s2->len*sizeof(Rune));
+		if(l2 < 0)
+			memmove(r, s2->Srune, -l2*sizeof(Rune));
 		else
 			cvtup(r, s2);
 
@@ -223,7 +224,8 @@ addstring(String *s1, String *s2, int append)
 	}
 
 	l1 = s1->len;
-	l = l1 + s2->len;
+	l2 = s2->len;
+	l = l1 + l2;
 	if(append && l <= s1->max)
 		ns = s1;
 	else {
@@ -231,7 +233,7 @@ addstring(String *s1, String *s2, int append)
 		memmove(ns->Sascii, s1->Sascii, l1);
 	}
 	ns->len = l;
-	memmove(ns->Sascii+l1, s2->Sascii, s2->len);
+	memmove(ns->Sascii+l1, s2->Sascii, l2);	/* l2: s2 may be ns (s += s) */
 
 	return ns;
 }

@@ -1121,6 +1121,12 @@ waitfor(ctxt: ref Context, pids: list of int): string
 	r := status[len status - 1];
 	for (i := len status - 2; i >= 0; i--)
 		r += "|" + status[i];
+	# a command killed (as by a shell window's interrupt) ends what an
+	# interactive shell was doing: not the next command on the line
+	if (ctxt.options() & ctxt.INTERACTIVE)
+		for (j := 0; j < len status; j++)
+			if (status[j] == "killed")
+				raise "fail:killed";
 	return r;
 }
 

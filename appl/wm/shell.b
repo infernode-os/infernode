@@ -1,11 +1,17 @@
 implement Shell;
 
 #
-# shell - Draw-based shell terminal with 9P interface
+# shell - Tk shell terminal with a file interface for Veltro
 #
-# A terminal emulator for the Inferno shell, with a file-based interface
-# for read-only access by Veltro agents.  The shell process (/dis/sh.dis)
+# A terminal for the Inferno shell, with a file-based interface for
+# read-only access by Veltro agents.  The shell process (/dis/sh.dis)
 # communicates via synthetic /dev/cons and /dev/consctl created by file2chan.
+#
+# The transcript is the Tk text widget's text, as wm/sh's is: there is no
+# copy of it to keep in step.  The mark outpoint is where output goes:
+# what is before it is the transcript, what is after it the input being
+# typed.  A line of input is sent when it is ended, and what follows
+# it waits its turn, output going in before it.
 #
 # Real-file IPC at /tmp/veltro/shell/ for Veltro tool access:
 #   /tmp/veltro/shell/body      Current transcript (read-only)
@@ -13,22 +19,22 @@ implement Shell;
 #
 # Keyboard:
 #   Type to send input to shell
-#   Enter        send current line to shell
+#   Enter        send current line to shell (on a line of the transcript:
+#                send that line again)
 #   Backspace    delete char before cursor
-#   Ctrl-C       send interrupt (DEL) to shell
+#   Ctrl-C       interrupt: the commands the shell is running are killed
 #   Ctrl-D       send EOF to shell
 #   Ctrl-U       clear input line
 #   Ctrl-W       delete word before cursor
 #   Ctrl-L       clear screen (keep prompt)
-#   Up/Down      scroll history
-#   Page Up/Down scroll transcript
+#   Ctrl-P/N     previous/next line of history
 #   Ctrl-Q       quit
 #   ESC          toggle hold mode (freeze output)
 #
 # Mouse:
 #   Button 1     place cursor / select text
-#   Button 2     paste (snarf buffer)
-#   Button 3     context menu / plumb word
+#   Button 2     drag to scroll
+#   Button 3     context menu (cut, snarf, paste, send, plumb, ...)
 #
 
 include "sys.m";
@@ -77,8 +83,6 @@ CURSORCOL: con int 16r2266CCFF;	# blue cursor
 SELCOL:	con int 16rB4D5FEFF;		# light blue selection
 PROMPTCOL: con int 16r555555FF;	# prompt (slightly dimmer than body text)
 HOLDCOL: con int 16rCC8800FF;		# hold-mode text color
-# Dimensions
-MARGIN: con 4;
 TABSTOP: con 8;
 
 # Key constants (Inferno keyboard codes — canonical defs in Widget)
@@ -94,10 +98,9 @@ Kdel:		con 16rFF9F;
 Kins:		con 16rFF63;
 Kbs:		con 8;
 Kesc:		con 27;
-Kdel_char:	con 16r7F;	# DEL character for Ctrl-C
 Keof_char:	con 16r04;	# ^D EOF
 
-# Transcript buffer
+# Transcript lines kept
 MAXLINES: con 4000;
 TRIMLINES: con 3000;
 
@@ -115,7 +118,6 @@ display_g: ref Display;
 vislines: int;
 stderr: ref Sys->FD;
 themech: chan of int;
-prompting: int;			# unused placeholder (shell has no modal prompt)
 
 # Theme colours resolved to #rrggbbff strings for Tk
 c_bg:	string;
@@ -127,33 +129,11 @@ c_prompt: string;
 
 SHFONT: con "/fonts/combined/unicode.14.font";
 
-# Transcript buffer of output lines
-lines: array of string;
-nlines: int;		# number of lines in buffer
-topline: int;		# first visible line (scroll position)
-atbottom: int;		# auto-scroll to bottom
-
-# Input line (what user is typing, not yet sent)
-inputbuf: string;
-inputcol: int;		# cursor position within inputbuf
-
-# Global cursor (Plan 9 style — cursor can be anywhere in the buffer)
-curline: int;		# cursor line (0..nlines-1)
-curcol: int;		# cursor column in that line
-
-# The last partial line from shell output (prompt hint)
-promptstr: string;
-
 # Shell I/O
 rawon: int;			# written only by rawstateforwarder; reads are word-atomic in Dis
 rawlock: chan of int;
+shpgrp: int;		# the shell's process group: its commands are in it
 
-# Selection
-selactive: int;
-selstartline: int;
-selstartcol: int;
-selendline: int;
-selendcol: int;
 snarfbuf: string;
 
 # History
@@ -175,9 +155,6 @@ holdqueue: list of string;	# output buffered while holding
 
 # Scroll mode
 scrolling: int;			# 1 = auto-scroll on output (default)
-
-# Focus tracking
-haskbdfocus: int;		# 1 = window has keyboard focus
 
 # Working directory
 cwd: string;
@@ -267,34 +244,24 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		cwd = "/";
 
 	# Initialize state
-	lines = array[MAXLINES] of string;
-	lines[0] = "";
-	nlines = 1;
-	topline = 0;
-	atbottom = 1;
-	inputbuf = "";
-	inputcol = 0;
-	curline = 0;
-	curcol = 0;
-	promptstr = "";
 	rawon = 0;
 	rawlock = chan[1] of int;
 	rawlock <-= 1;
-	selactive = 0;
 	snarfbuf = "";
 	history = array[MAXHIST] of string;
 	nhist = 0;
 	histpos = -1;
 	holding = 0;
 	scrolling = 1;
-	haskbdfocus = 1;
 	plumbed = 0;
 	buttons = array[MAXBUTTONS] of ref Button;
 	nbuttons = 0;
 	shctlch = chan[8] of string;
 
 	outputch = chan[32] of string;
-	sendbyteschan = chan of array of byte;
+	intrch = chan[1] of int;
+	# keys sent wait here, not for the console server
+	sendbyteschan = chan[64] of array of byte;
 
 	# Start file-based IPC directory
 	initshelldirs();
@@ -327,7 +294,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 			plumbed = 1;
 	}
 
-	rendertext();
+	refresh(1);
 
 	# Periodic state writer
 	ticks := chan of int;
@@ -344,42 +311,43 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# window through here); a loop that never drains it leaves every
 	# posted menu mapped-and-grabbing but windowless — invisible.
 	c = <-top.wreq =>
+		if(c == "exit")
+			quit();
 		tkclient->wmctl(top, c);
 		if(c != nil && len c > 0 && c[0] == '!')
-			rendertext();
+			refresh(1);
 	key := <-top.ctxt.kbd =>
 		handlekey(key);
 		shellstatedirty = 1;
-		rendertext();
+		refresh(1);
 	p := <-top.ctxt.ptr =>
-		# Tk owns mouse positioning / selection; mirror it back.
+		# Tk owns mouse positioning / selection
 		tk->pointer(top, *p);
-		syncfromwidget();
+		updatestatus();
 	a := <-actch =>
 		handleaction(a);
+		shellstatedirty = 1;
+		refresh(1);
 	<-ticks =>
 		writeshellstate();
 	output := <-outputch =>
 		if(holding) {
 			holdqueue = output :: holdqueue;
 		} else {
-			wasoninput := (curline == nlines - 1);
+			# the end stays in view if it was in it
+			seeend := scrolling && endvisible();
 			appendoutput(output);
-			if(wasoninput) {
-				curline = nlines - 1;
-				curcol = len promptstr + inputcol;
-			}
-			if(atbottom && scrolling)
-				scrolltobottom();
+			if(seeend)
+				t("see end");
 			shellstatedirty = 1;
-			rendertext();
+			refresh(0);
 		}
 	cmd := <-shctlch =>
 		handleshctl(cmd);
-		rendertext();
+		refresh(0);
 	<-themech =>
 		reloadcolors();
-		rendertext();
+		refresh(0);
 	}
 }
 
@@ -389,6 +357,15 @@ updatetitle()
 	if(holding)
 		title += " (holding)";
 	tkclient->settitle(top, title);
+}
+
+# Kill the shell and its commands, then this.
+quit()
+{
+	if(shpgrp > 0)
+		postnote(1, shpgrp, "kill");
+	postnote(1, sys->pctl(0, nil), "kill");
+	exit;
 }
 
 # ---------- Context menu (B3) ----------
@@ -438,16 +415,14 @@ handleaction(a: string)
 	"menu" =>
 		buildmenu();
 		tk->cmd(top, ".ctx post " + menuxyt(toks));
-	"cut" =>	docut(); rendertext();
+	"cut" =>	docut();
 	"snarf" =>	dosnarf();
-	"paste" =>	dopaste(); rendertext();
-	"send" =>	dosend(); rendertext();
+	"paste" =>	dopaste();
+	"send" =>	dosend();
 	"plumb" =>	doplumb();
-	"scroll" =>	scrolling = !scrolling; rendertext();
-	"clear" =>	clearscreen(); rendertext();
-	"exit" =>
-		postnote(1, sys->pctl(0, nil), "kill");
-		exit;
+	"scroll" =>	scrolling = !scrolling;
+	"clear" =>	clearscreen();
+	"exit" =>	quit();
 	"btn" =>
 		if(tl toks != nil){
 			i := int hd tl toks;
@@ -455,8 +430,7 @@ handleaction(a: string)
 				s := buttons[i].cmd;
 				if(len s > 0 && s[len s-1] != '\n')
 					s += "\n";
-				insertinput(s);
-				rendertext();
+				typeinput(s);
 			}
 		}
 	}
@@ -484,6 +458,9 @@ buildui()
 		"pack .status -side bottom -fill x",
 		"pack propagate . 0",
 		".main.t tag configure prompt -foreground " + c_prompt,
+		# output goes in at outpoint, before what is being typed
+		".main.t mark set outpoint 1.0",
+		".main.t mark gravity outpoint left",
 		"bind .main.t <Button-3> {send act menu %X %Y}",
 	};
 	tkcmds(cmds);
@@ -500,44 +477,22 @@ tkcmds(cmds: array of string)
 	}
 }
 
-# ---------- Rendering: the text widget is a view of the transcript ----------
-
-# The full visible text is the transcript plus the live input line
-# (promptstr + inputbuf) standing in for the empty last buffer line.
-displaytext(): string
+# a command to the text widget
+t(c: string): string
 {
-	s := "";
-	for(i := 0; i < nlines; i++){
-		if(i > 0)
-			s += "\n";
-		if(i == nlines - 1)
-			s += promptstr + inputbuf;
-		else
-			s += lines[i];
-	}
-	return s;
+	return tk->cmd(top, ".main.t " + c);
 }
 
-rendertext()
+# ---------- The view ----------
+
+# After an event: the cursor in view if see, the button bar and status
+# bar made current.
+refresh(see: int)
 {
 	if(top == nil)
 		return;
-	tk->cmd(top, ".main.t delete 1.0 end");
-	tk->cmd(top, ".main.t insert end " + tk->quote(displaytext()));
-	# tag the prompt portion of the input (last) line
-	if(promptstr != "")
-		tk->cmd(top, sys->sprint(".main.t tag add prompt %d.0 %d.%d",
-			nlines, nlines, len promptstr));
-	# selection
-	tk->cmd(top, ".main.t tag remove sel 1.0 end");
-	if(selactive)
-		tk->cmd(top, sys->sprint(".main.t tag add sel %d.%d %d.%d",
-			selstartline+1, selstartcol, selendline+1, selendcol));
-	tk->cmd(top, sys->sprint(".main.t mark set insert %d.%d", curline+1, curcol));
-	if(atbottom)
-		tk->cmd(top, ".main.t see end");
-	else
-		tk->cmd(top, ".main.t see insert");
+	if(see)
+		t("see insert");
 	recalcvis();
 	rebuildbuttons();
 	updatestatus();
@@ -554,7 +509,7 @@ reportcaret()
 {
 	if(softkbd == nil)
 		return;
-	(n, b) := sys->tokenize(tk->cmd(top, ".main.t bbox insert"), " ");
+	(n, b) := sys->tokenize(t("bbox insert"), " ");
 	if(n != 4)
 		return;
 	x := int hd b; b = tl b;
@@ -567,44 +522,11 @@ reportcaret()
 	softkbd->set_rect(o.x + x, o.y + y, w, h);
 }
 
-# After native mouse handling, copy the widget cursor and selection back.
-syncfromwidget()
+endvisible(): int
 {
-	(l, c) := parseindex(tk->cmd(top, ".main.t index insert"));
-	if(l >= 0){
-		curline = l;
-		curcol = c;
-	}
-	sf := tk->cmd(top, ".main.t index sel.first");
-	if(sf != nil && len sf > 0 && sf[0] >= '0' && sf[0] <= '9'){
-		(a, b) := parseindex(sf);
-		(d, e) := parseindex(tk->cmd(top, ".main.t index sel.last"));
-		if(a >= 0 && d >= 0){
-			selactive = 1;
-			selstartline = a; selstartcol = b;
-			selendline = d; selendcol = e;
-		}
-	} else
-		selactive = 0;
-	updatestatus();
-}
-
-parseindex(s: string): (int, int)
-{
-	if(s == nil || len s == 0 || s[0] < '0' || s[0] > '9')
-		return (-1, 0);
-	(ls, cs) := splitdot(s);
-	(l, nil) := str->toint(ls, 10);
-	(c, nil) := str->toint(cs, 10);
-	return (l - 1, c);
-}
-
-splitdot(s: string): (string, string)
-{
-	for(i := 0; i < len s; i++)
-		if(s[i] == '.')
-			return (s[:i], s[i+1:]);
-	return (s, "0");
+	if(t("compare end == 1.0") == "1")
+		return 1;
+	return t("bbox {end -1c}") != "";
 }
 
 recalcvis()
@@ -634,6 +556,20 @@ rebuildbuttons()
 	}
 }
 
+nlines(): int
+{
+	(l, nil) := splitdot(t("index end"));
+	return int l;
+}
+
+splitdot(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == '.')
+			return (s[:i], s[i+1:]);
+	return (s, "0");
+}
+
 updatestatus()
 {
 	if(top == nil)
@@ -644,7 +580,7 @@ updatestatus()
 	mode := "cooked";
 	if(israw)
 		mode = "raw";
-	status := sys->sprint("Shell (%s)  %d lines", mode, nlines);
+	status := sys->sprint("Shell (%s)  %d lines", mode, nlines());
 	if(holding)
 		status += "  HOLD";
 	if(!scrolling)
@@ -683,43 +619,47 @@ loadcolors()
 	}
 }
 
-# ---------- System clipboard via /chan/snarf ----------
+# ---------- Selection, snarf and plumbing ----------
 
-snarfput(s: string)
+selrange(): (string, string)
 {
-	fd := sys->create("/chan/snarf", Sys->OWRITE, 8r666);
-	if(fd == nil)
-		fd = sys->open("/chan/snarf", Sys->OWRITE);
-	if(fd != nil){
-		b := array of byte s;
-		sys->write(fd, b, len b);
-	}
+	(n, l) := sys->tokenize(t("tag ranges sel"), " ");
+	if(n < 2)
+		return (nil, nil);
+	return (hd l, hd tl l);
+}
+
+getseltext(): string
+{
+	(a, b) := selrange();
+	if(a == nil)
+		return "";
+	return t("get " + a + " " + b);
+}
+
+# Before the input, the transcript: the input is what is from outpoint on.
+ininput(ix: string): int
+{
+	return t("compare " + ix + " >= outpoint") == "1";
 }
 
 snarfget(): string
 {
-	fd := sys->open("/chan/snarf", Sys->OREAD);
-	if(fd == nil)
-		return snarfbuf;
-	s := "";
-	buf := array[4096] of byte;
-	for(;;){
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		s += string buf[:n];
-	}
-	if(s == "")
-		return snarfbuf;
-	return s;
+	s := tkclient->snarfget();
+	if(s != "")
+		snarfbuf = s;
+	return snarfbuf;
 }
 
+# Cut takes a selection out of the input; out of the transcript it is a
+# snarf (what was said stays said).
 docut()
 {
 	dosnarf();
-	# Delete selection from transcript (only in transcript, not input line)
-	# This is a simplified cut — it snarfs the text and clears the selection
-	selactive = 0;
+	(a, b) := selrange();
+	if(a != nil && ininput(a))
+		t("delete " + a + " " + b);
+	t("tag remove sel 1.0 end");
 }
 
 dosnarf()
@@ -727,27 +667,24 @@ dosnarf()
 	s := getseltext();
 	if(s != "") {
 		snarfbuf = s;
-		snarfput(s);
+		tkclient->snarfput(s);
 	}
 }
 
 dopaste()
 {
-	buf := snarfget();
-	if(buf != "")
-		snarfbuf = buf;
-	if(snarfbuf != "")
-		insertinput(snarfbuf);
+	s := snarfget();
+	if(s != "")
+		typeinput(s);
 }
 
 doplumb()
 {
-	# Plumb selected text, or word at last click position
+	# Plumb selected text, or the word at the cursor
 	s := getseltext();
-	if(s == "" && selstartline >= 0) {
-		line := getlineat(selstartline);
-		s = wordatpos(line, selstartcol);
-	}
+	if(s == "")
+		s = wordatpos(t("get {insert linestart} {insert lineend}"),
+			int splitdot(t("index insert")).t1);
 	plumbtext(s);
 }
 
@@ -757,22 +694,17 @@ dosend()
 	# as input to the shell (select-and-execute idiom).
 	# If there's no selection, fall back to snarf buffer.
 	s := getseltext();
-	if(s == "") {
-		buf := snarfget();
-		if(buf != "")
-			snarfbuf = buf;
-		s = snarfbuf;
-	}
+	if(s == "")
+		s = snarfget();
 	if(s == "")
 		return;
 	# Ensure it ends with newline so the shell executes it
-	if(len s > 0 && s[len s - 1] != '\n')
+	if(s[len s - 1] != '\n')
 		s += "\n";
-	selactive = 0;
-	insertinput(s);
+	t("tag remove sel 1.0 end");
+	t("mark set insert end");
+	typeinput(s);
 }
-
-# ---------- Plumbing ----------
 
 plumbtext(text: string)
 {
@@ -864,15 +796,18 @@ startshell(ctxt: ref Draw->Context)
 		newcons = nil;
 	}
 
-	# Start the file server for cons reads/writes
-	spawn consserver(consio, consctlio);
+	# Start the file servers for cons reads and writes, each on its
+	# own: output waiting for the window never holds up input
+	rawch := chan of int;
+	spawn rawstateforwarder(rawch);
+	spawn consreader(consio);
+	spawn conswriter(consio);
+	if(consctlio != nil)
+		spawn consctlserver(consctlio, rawch);
 
 	# Start the shctl server
 	if(shctlio != nil)
 		spawn shctlserver(shctlio);
-
-	# Give consserver a moment to start
-	sys->sleep(50);
 
 	# Load and run the shell
 	sh := load Command "/dis/sh.dis";
@@ -887,77 +822,146 @@ startshell(ctxt: ref Draw->Context)
 	# (wm/matrix, wm/man, wm/clock, etc.) can open their own windows.
 	# Previously this was nil, which made every GUI app fall back to
 	# headless / refuse to start.
-	spawn sh->init(ctxt, shellargv);
+	pidc := chan of int;
+	spawn runshell(sh, ctxt, pidc);
+	shpgrp = <-pidc;
 }
 
-# consserver: services reads and writes on synthetic /dev/cons and /dev/consctl.
-# Shell writes → outputch → display.
-# User keyboard → sendbyteschan → shell reads.
-consserver(consio, consctlio: ref Sys->FileIO)
+# The shell, in a process group of its own, so that an interrupt can
+# kill what it runs and a quit all of it, and not this.
+runshell(sh: Command, ctxt: ref Draw->Context, pidc: chan of int)
 {
-	# Pending shell read requests: (nbytes, reply channel) pairs
-	rdqueue: list of (int, Sys->Rread);
+	pidc <-= sys->pctl(Sys->NEWPGRP, nil);
+	sh->init(ctxt, shellargv);
+}
 
-	# Pending input bytes (user typed, shell hasn't read yet)
-	inputqueue: list of array of byte;
-
-	# Channel for rawon state changes (communicated to main goroutine)
-	rawch := chan of int;
-	spawn rawstateforwarder(rawch);
-
-	if(consctlio != nil) {
-		spawn consctlserver(consctlio, rawch);
+# Interrupt: kill the commands the shell runs (every process of its group
+# but the shell itself); it goes on to its next prompt.
+interrupt()
+{
+	if(shpgrp <= 0)
+		return;
+	alt {
+	intrch <-= 1 =>
+		;
+	* =>
+		;
 	}
+	fd := sys->open("/prog", Sys->OREAD);
+	if(fd == nil)
+		return;
+	for(;;){
+		(n, d) := sys->dirread(fd);
+		if(n <= 0)
+			break;
+		for(i := 0; i < n; i++){
+			pid := int d[i].name;
+			if(pid == shpgrp || pid <= 0)
+				continue;
+			(nf, f) := sys->tokenize(readfile("/prog/" + d[i].name + "/status"), " ");
+			if(nf > 1 && int hd tl f == shpgrp)
+				postnote(0, pid, "kill");
+		}
+	}
+}
+
+# A read of /dev/cons waiting: its count, where the bytes go, and
+# whether its reader may have been killed since it asked.
+Rdreq: adt {
+	nbytes:	int;
+	rc:	Sys->Rread;
+	stale:	int;
+};
+
+intrch: chan of int;	# an interrupt was made: the reads waiting may be dead
+
+# consreader: services reads of the synthetic /dev/cons: the shell has
+# the keyboard's bytes in the order they were sent, a read taking no
+# more than it asks for and leaving the rest for the next.
+consreader(consio: ref Sys->FileIO)
+{
+	rdqueue: list of ref Rdreq;	# the oldest first
+	pending := array[0] of byte;
 
 	for(;;) alt {
 	(nil, nbytes, nil, rc) := <-consio.read =>
 		if(rc == nil)
 			continue;
-		# Shell wants to read from cons
-		if(inputqueue != nil) {
-			data := hd inputqueue;
-			inputqueue = tl inputqueue;
-			if(len data > nbytes)
-				data = data[0:nbytes];
-			rc <-= (data, nil);
-		} else {
-			rdqueue = (nbytes, rc) :: rdqueue;
-		}
-
-	(nil, data, nil, wc) := <-consio.write =>
-		if(wc == nil)
-			continue;
-		# Shell wrote output
-		s := string data;
-		wc <-= (len data, nil);
-		outputch <-= s;
+		rdqueue = append(rdqueue, ref Rdreq(nbytes, rc, 0));
+		pending = satisfy(rdqueue, pending);
+		rdqueue = unsatisfied;
 
 	ibytes := <-sendbyteschan =>
-		# Try to satisfy pending shell read requests
-		if(rdqueue != nil) {
-			# Reverse to deliver in FIFO order
-			rds: list of (int, Sys->Rread);
-			for(rl := rdqueue; rl != nil; rl = tl rl)
-				rds = (hd rl) :: rds;
-			rdqueue = nil;
+		b := array[len pending + len ibytes] of byte;
+		b[0:] = pending;
+		b[len pending:] = ibytes;
+		pending = satisfy(rdqueue, b);
+		rdqueue = unsatisfied;
 
-			for(; rds != nil && len ibytes > 0; rds = tl rds) {
-				(rnb, rq) := hd rds;
-				chunk := ibytes;
-				if(len chunk > rnb)
-					chunk = chunk[0:rnb];
-				rq <-= (chunk, nil);
-				if(len chunk < len ibytes)
-					ibytes = ibytes[len chunk:];
-				else
-					ibytes = nil;
+	<-intrch =>
+		for(l := rdqueue; l != nil; l = tl l)
+			(hd l).stale = 1;
+	}
+}
+
+unsatisfied: list of ref Rdreq;
+
+# Answer the reads waiting, the oldest first, while there are bytes;
+# the bytes left, and the reads left in unsatisfied.  A read whose
+# reader was killed (a command reading the console, interrupted) is
+# not given what was typed for the next.
+satisfy(rds: list of ref Rdreq, b: array of byte): array of byte
+{
+	for(; rds != nil && len b > 0; rds = tl rds) {
+		r := hd rds;
+		nb := r.nbytes;
+		if(nb > len b)
+			nb = len b;
+		r.rc <-= (b[0:nb], nil);
+		# the reply channel holds one: a reader waiting on it takes
+		# the bytes at once and it has room again; a dead one's
+		# keeps them
+		if(r.stale){
+			alt {
+			r.rc <-= (nil, nil) =>
+				;
+			* =>
+				continue;
 			}
-			# Re-queue unserviced reads
-			for(; rds != nil; rds = tl rds)
-				rdqueue = (hd rds) :: rdqueue;
 		}
-		if(ibytes != nil && len ibytes > 0)
-			inputqueue = ibytes :: inputqueue;
+		b = b[nb:];
+	}
+	unsatisfied = rds;
+	return b;
+}
+
+append(l: list of ref Rdreq, r: ref Rdreq): list of ref Rdreq
+{
+	if(l == nil)
+		return r :: nil;
+	return hd l :: append(tl l, r);
+}
+
+# conswriter: services writes of the synthetic /dev/cons, the shell's
+# output; a character split between two writes waits for its end.
+conswriter(consio: ref Sys->FileIO)
+{
+	part := array[0] of byte;
+	for(;;) {
+		(nil, data, nil, wc) := <-consio.write;
+		if(wc == nil)
+			continue;
+		wc <-= (len data, nil);
+		if(len part > 0){
+			b := array[len part + len data] of byte;
+			b[0:] = part;
+			b[len part:] = data;
+			data = b;
+		}
+		n := sys->utfbytes(data, len data);
+		part = data[n:];
+		if(n > 0)
+			outputch <-= string data[0:n];
 	}
 }
 
@@ -1068,8 +1072,46 @@ parseshctlarg(s: string): (string, string)
 
 sendinput(s: string)
 {
-	b := array of byte s;
-	sendbyteschan <-= b;
+	sendbyteschan <-= array of byte s;
+}
+
+# ---------- Input ----------
+
+# Put s into the input where the cursor is (at its end if the cursor is
+# in the transcript), and send the lines it ends.
+typeinput(s: string)
+{
+	if(!ininput("insert"))
+		t("mark set insert end");
+	typeat(s);
+	sendlines();
+}
+
+# Send each whole line of the input, the first first, taking it into
+# the transcript: output from then on goes in after it.
+sendlines()
+{
+	for(;;){
+		input := t("get outpoint end");
+		for(i := 0; i < len input && input[i] != '\n'; i++)
+			;
+		if(i == len input)
+			return;
+		line := input[0:i];
+		if(line != "")
+			addhistory(line);
+		histpos = -1;
+		t(sys->sprint("mark set outpoint {outpoint +%dc}", i + 1));
+		sendinput(line + "\n");
+	}
+}
+
+# The input, all of it, replaced by s.
+setinput(s: string)
+{
+	t("delete outpoint end");
+	t("insert end " + tk->quote(s));
+	t("mark set insert end");
 }
 
 # ---------- Keyboard handling ----------
@@ -1094,16 +1136,11 @@ handlekey(key: int)
 	if(ctrl) {
 		case key {
 		3 =>	# Ctrl-C: interrupt
-			s := "";
-			s[0] = Kdel_char;
-			sendinput(s);
-			inputbuf = "";
-			inputcol = 0;
-			appendoutput("^C\n");
-			curline = nlines - 1;
-			curcol = len promptstr;
+			setinput("");
+			output("^C\n");
+			interrupt();
 		4 =>	# Ctrl-D: EOF
-			if(inputbuf == "") {
+			if(t("get outpoint end") == "") {
 				s := "";
 				s[0] = Keof_char;
 				sendinput(s);
@@ -1111,24 +1148,17 @@ handlekey(key: int)
 		12 =>	# Ctrl-L: clear
 			clearscreen();
 		17 =>	# Ctrl-Q: quit
-			postnote(1, sys->pctl(0, nil), "kill");
-			exit;
+			quit();
 		21 =>	# Ctrl-U: clear input line
-			inputbuf = "";
-			inputcol = 0;
-			cursortoinput();
+			setinput("");
 		14 =>	# Ctrl-N: next history
 			if(histpos >= 0) {
 				histpos++;
 				if(histpos >= nhist) {
 					histpos = -1;
-					inputbuf = "";
-					inputcol = 0;
-				} else {
-					inputbuf = history[histpos];
-					inputcol = len inputbuf;
-				}
-				cursortoinput();
+					setinput("");
+				} else
+					setinput(history[histpos]);
 			}
 		16 =>	# Ctrl-P: previous history
 			if(nhist > 0) {
@@ -1136,220 +1166,91 @@ handlekey(key: int)
 					histpos = nhist;
 				if(histpos > 0) {
 					histpos--;
-					inputbuf = history[histpos];
-					inputcol = len inputbuf;
-					cursortoinput();
+					setinput(history[histpos]);
 				}
 			}
 		23 =>	# Ctrl-W: delete word before cursor
-			if(curline != nlines - 1)
-				cursortoinput();
-			else
-				syncinputcol();
-			if(inputcol > 0) {
-				j := inputcol;
-				# Skip whitespace backwards
-				while(j > 0 && isspace(inputbuf[j-1]))
-					j--;
-				# Skip non-whitespace backwards
-				while(j > 0 && !isspace(inputbuf[j-1]))
-					j--;
-				inputbuf = inputbuf[0:j] + inputbuf[inputcol:];
-				inputcol = j;
-				curcol = len promptstr + inputcol;
-			}
+			if(!ininput("insert"))
+				t("mark set insert end");
+			line := t("get outpoint insert");
+			j := len line;
+			# Skip whitespace backwards
+			while(j > 0 && isspace(line[j-1]))
+				j--;
+			# Skip non-whitespace backwards
+			while(j > 0 && !isspace(line[j-1]))
+				j--;
+			t(sys->sprint("delete {outpoint +%dc} insert", j));
 		}
 		return;
 	}
 
 	case key {
 	'\n' =>
-		if(curline == nlines - 1) {
-			# Cursor on input line: send inputbuf
-			line := inputbuf + "\n";
-			if(inputbuf != "")
-				addhistory(inputbuf);
-			histpos = -1;
-			appendoutput(inputbuf + "\n");
-			inputbuf = "";
-			inputcol = 0;
-			sendinput(line);
-		} else {
+		if(!ininput("insert")) {
 			# Cursor on transcript line: send that line (Plan 9 idiom)
-			text := lines[curline];
-			if(text != "")
-				addhistory(text);
-			histpos = -1;
-			sendinput(text + "\n");
-			appendoutput(text + "\n");
-			inputbuf = "";
-			inputcol = 0;
+			setinput(t("get {insert linestart} {insert lineend}"));
 		}
-		curline = nlines - 1;
-		curcol = len promptstr;
-		if(atbottom)
-			scrolltobottom();
-		;
+		t("mark set insert end");
+		typeinput("\n");
 	Kbs =>
-		if(curline == nlines - 1 && curcol > len promptstr) {
-			# On input line past prompt — edit inputbuf
-			syncinputcol();
-			if(inputcol > 0) {
-				inputbuf = inputbuf[0:inputcol-1] + inputbuf[inputcol:];
-				inputcol--;
-				curcol = len promptstr + inputcol;
-			}
-		} else if(curline != nlines - 1 && curcol > 0) {
-			# In transcript — edit in place
-			line := lines[curline];
-			lines[curline] = line[0:curcol-1] + line[curcol:];
-			curcol--;
-		}
+		# not into the transcript's line before, nor out of the input
+		if(ininput("insert")) {
+			if(t("compare insert > outpoint") == "1")
+				t("delete insert-1c insert");
+		} else if(t("compare insert > {insert linestart}") == "1")
+			t("delete insert-1c insert");
 	Kdel =>
-		if(curline == nlines - 1 && curcol >= len promptstr) {
-			# On input line past prompt — edit inputbuf
-			syncinputcol();
-			if(inputcol < len inputbuf)
-				inputbuf = inputbuf[0:inputcol] + inputbuf[inputcol+1:];
-		} else if(curline != nlines - 1) {
-			# In transcript — edit in place
-			line := lines[curline];
-			if(curcol < len line)
-				lines[curline] = line[0:curcol] + line[curcol+1:];
-		}
+		if(t("compare insert < {insert lineend}") == "1" || ininput("insert"))
+			t("delete insert insert+1c");
 	Kleft =>
-		if(curcol > 0)
-			curcol--;
-		else if(curline > 0) {
-			curline--;
-			curcol = len getlineat(curline);
-		}
-		selactive = 0;
-		scrolltocursor();
+		move("insert-1c");
 	Kright =>
-		{
-			line := getlineat(curline);
-			if(curcol < len line)
-				curcol++;
-			else if(curline < nlines - 1) {
-				curline++;
-				curcol = 0;
-			}
-		}
-		selactive = 0;
-		scrolltocursor();
+		move("insert+1c");
 	Khome =>
-		curcol = 0;
-		selactive = 0;
+		if(ininput("insert"))
+			move("outpoint");
+		else
+			move("insert linestart");
 	Kend =>
-		curcol = len getlineat(curline);
-		selactive = 0;
+		move("insert lineend");
 	Kup =>
-		if(curline > 0) {
-			curline--;
-			fixcol();
-		}
-		selactive = 0;
-		scrolltocursor();
+		move("insert-1l");
 	Kdown =>
-		if(curline < nlines - 1) {
-			curline++;
-			fixcol();
-		}
-		selactive = 0;
-		scrolltocursor();
+		move("insert+1l");
 	Kpgup =>
-		if(vislines > 0) {
-			topline -= vislines;
-			if(topline < 0)
-				topline = 0;
-			atbottom = 0;
-			curline -= vislines;
-			if(curline < 0) curline = 0;
-			fixcol();
-		}
+		t("yview scroll -1 page");
 	Kpgdown =>
-		if(vislines > 0) {
-			topline += vislines;
-			maxtl := nlines - vislines;
-			if(maxtl < 0) maxtl = 0;
-			if(topline > maxtl) topline = maxtl;
-			if(topline >= nlines - vislines)
-				atbottom = 1;
-			curline += vislines;
-			if(curline >= nlines) curline = nlines - 1;
-			fixcol();
-		}
-	'\t' =>
-		if(curline == nlines - 1 && curcol >= len promptstr) {
-			syncinputcol();
-			insertinput("\t");
-			curcol = len promptstr + inputcol;
-		} else if(curline != nlines - 1) {
-			insertintranscript("\t");
-		}
+		t("yview scroll 1 page");
 	Kesc =>
 		# Toggle hold mode
 		holding = !holding;
-		if(!holding) {
-			# Flush queued output
+		if(!holding)
 			flushholdqueue();
-		}
 		updatetitle();
 	* =>
-		if(key >= 16r20) {
-			if(curline == nlines - 1 && curcol >= len promptstr) {
-				# On input line past prompt — edit inputbuf
-				syncinputcol();
-				s := "";
-				s[0] = key;
-				insertinput(s);
-				curcol = len promptstr + inputcol;
-			} else if(curline != nlines - 1) {
-				# In transcript — edit in place (Plan 9 style)
-				s := "";
-				s[0] = key;
-				insertintranscript(s);
-			}
+		if(key >= 16r20 || key == '\t') {
+			s := "";
+			s[0] = key;
+			# in the transcript, edit it in place (Plan 9 style)
+			typeat(s);
 		}
 	}
 }
 
-insertinput(s: string)
+# s typed at the cursor, which goes after it.  (The widget does not
+# always move its insert mark past text put where it is.)
+typeat(s: string)
 {
-	for(i := 0; i < len s; i++) {
-		if(s[i] == '\n') {
-			line := inputbuf + "\n";
-			if(inputbuf != "")
-				addhistory(inputbuf);
-			histpos = -1;
-			appendoutput(inputbuf + "\n");
-			inputbuf = "";
-			inputcol = 0;
-			sendinput(line);
-			curline = nlines - 1;
-			curcol = len promptstr;
-		} else {
-			if(inputcol >= len inputbuf)
-				inputbuf += s[i:i+1];
-			else
-				inputbuf = inputbuf[0:inputcol] + s[i:i+1]
-					+ inputbuf[inputcol:];
-			inputcol++;
-		}
-	}
+	ix := t("index insert");
+	t("insert " + ix + " " + tk->quote(s));
+	t(sys->sprint("mark set insert {%s +%dc}", ix, len s));
 }
 
-# Insert text at cursor position within a transcript line (Plan 9 style editing).
-insertintranscript(s: string)
+move(ix: string)
 {
-	if(curline < 0 || curline >= nlines - 1)
-		return;
-	line := lines[curline];
-	if(curcol > len line)
-		curcol = len line;
-	lines[curline] = line[0:curcol] + s + line[curcol:];
-	curcol += len s;
+	t("mark set insert {" + ix + "}");
+	t("tag remove sel 1.0 end");
 }
 
 # ---------- Hold mode ----------
@@ -1361,11 +1262,8 @@ flushholdqueue()
 	for(q := holdqueue; q != nil; q = tl q)
 		rev = (hd q) :: rev;
 	holdqueue = nil;
-	for(; rev != nil; rev = tl rev) {
+	for(; rev != nil; rev = tl rev)
 		appendoutput(hd rev);
-	}
-	if(atbottom && scrolling)
-		scrolltobottom();
 	shellstatedirty = 1;
 }
 
@@ -1384,202 +1282,97 @@ addhistory(line: string)
 
 # ---------- Output handling ----------
 
+# Text into the transcript, at outpoint, before what is being typed.
+output(s: string)
+{
+	if(s == "")
+		return;
+	# the cursor where the input begins stays there, after the output
+	atout := t("compare insert == outpoint") == "1";
+	t("insert outpoint " + tk->quote(s));
+	t(sys->sprint("mark set outpoint {outpoint +%dc}", len s));
+	if(atout)
+		t("mark set insert outpoint");
+	# a line not ended is a prompt (or a question): dim it
+	if(s[len s - 1] != '\n')
+		t("tag add prompt {outpoint linestart} outpoint");
+}
+
+# The shell's output: what a terminal would do with \r, \b, a tab and
+# an escape sequence, done; the rest into the transcript.
 appendoutput(s: string)
 {
+	o := "";
 	for(i := 0; i < len s; i++) {
 		c := s[i];
 		case c {
-		'\n' =>
-			nlines++;
-			if(nlines >= MAXLINES)
-				trimtranscript();
-			growlines();
-			lines[nlines-1] = "";
 		'\r' =>
-			# Carriage return — move to start of current line
-			lines[nlines-1] = "";
+			# Carriage return — the line begins again; \r\n is \n
+			if(i + 1 < len s && s[i+1] == '\n')
+				continue;
+			output(o);
+			o = "";
+			t("delete {outpoint linestart} outpoint");
 		'\b' =>
-			line := lines[nlines-1];
-			if(len line > 0)
-				lines[nlines-1] = line[0:len line - 1];
-		'\t' =>
-			line := lines[nlines-1];
-			spaces := TABSTOP - (len line % TABSTOP);
-			for(j := 0; j < spaces; j++)
-				lines[nlines-1] += " ";
-		* =>
-			if(c == 16r1B) {
-				# ANSI escape — skip the sequence
-				i++;
-				if(i < len s && s[i] == '[') {
-					i++;
-					while(i < len s &&
-					    !((s[i] >= 'A' && s[i] <= 'Z') ||
-					      (s[i] >= 'a' && s[i] <= 'z')))
-						i++;
-				}
-			} else if(c == 0) {
-				# NUL → replacement character
-				lines[nlines-1] += "□";
-			} else if(c >= 16r20) {
-				lines[nlines-1] += s[i:i+1];
+			if(o != "" && o[len o - 1] != '\n')
+				o = o[0:len o - 1];
+			else if(o == "") {
+				if(t("compare outpoint > {outpoint linestart}") == "1")
+					t("delete outpoint-1c outpoint");
 			}
+		'\t' =>
+			col := len o;
+			for(j := len o - 1; j >= 0; j--)
+				if(o[j] == '\n'){
+					col = len o - j - 1;
+					break;
+				}
+			if(j < 0)
+				col += len t("get {outpoint linestart} outpoint");
+			for(k := TABSTOP - col % TABSTOP; k > 0; k--)
+				o[len o] = ' ';
+		16r1B =>
+			# ANSI escape — skip the sequence
+			i++;
+			if(i < len s && s[i] == '[') {
+				i++;
+				while(i < len s &&
+				    !((s[i] >= 'A' && s[i] <= 'Z') ||
+				      (s[i] >= 'a' && s[i] <= 'z')))
+					i++;
+			}
+		0 =>
+			# NUL → replacement character
+			o[len o] = '□';
+		* =>
+			if(c >= 16r20 || c == '\n')
+				o[len o] = c;
 		}
 	}
-
-	# Save the last line as prompt hint
-	if(nlines > 0)
-		promptstr = lines[nlines-1];
+	output(o);
+	trimtranscript();
 }
 
+# No more than MAXLINES lines: past it, the oldest go, to TRIMLINES.
 trimtranscript()
 {
-	keep := TRIMLINES;
-	if(keep >= nlines)
+	n := nlines();
+	if(n <= MAXLINES)
 		return;
-	drop := nlines - keep;
-	for(i := 0; i < keep; i++)
-		lines[i] = lines[i + drop];
-	for(i = keep; i < nlines; i++)
-		lines[i] = "";
-	nlines = keep;
-	topline -= drop;
-	if(topline < 0)
-		topline = 0;
-	if(selactive) {
-		selstartline -= drop;
-		selendline -= drop;
-		if(selstartline < 0 || selendline < 0)
-			selactive = 0;
-	}
-	curline -= drop;
-	if(curline < 0) {
-		curline = 0;
-		curcol = 0;
-	}
+	(ol, nil) := splitdot(t("index outpoint"));
+	drop := n - TRIMLINES;
+	if(drop >= int ol)
+		drop = int ol - 1;
+	if(drop > 0)
+		t(sys->sprint("delete 1.0 %d.0", drop + 1));
 }
 
-# growlines is a safety net: trimtranscript keeps nlines < len lines,
-# but this prevents a crash if the trim logic is ever changed.
-growlines()
-{
-	if(nlines >= len lines) {
-		newlines := array[len lines * 2] of string;
-		newlines[0:] = lines;
-		lines = newlines;
-	}
-}
-
+# The transcript cleared to the prompt, the input kept.
 clearscreen()
 {
-	lines[0] = promptstr;
-	for(i := 1; i < nlines; i++)
-		lines[i] = "";
-	nlines = 1;
-	topline = 0;
-	atbottom = 1;
-	curline = 0;
-	curcol = len promptstr;
+	t("delete 1.0 {outpoint linestart}");
 }
 
-# The Tk text widget owns scrolling; rendertext() does ".main.t see end"
-# whenever atbottom is set, so this just records the intent.
-scrolltobottom()
-{
-	atbottom = 1;
-}
-
-scrolltocursor()
-{
-	if(vislines <= 0)
-		return;
-	if(curline < topline)
-		topline = curline;
-	else if(curline >= topline + vislines)
-		topline = curline - vislines + 1;
-	if(topline < 0)
-		topline = 0;
-}
-
-fixcol()
-{
-	line := getlineat(curline);
-	if(curcol > len line)
-		curcol = len line;
-}
-
-# Sync inputcol from the global cursor when on the input line.
-syncinputcol()
-{
-	if(curline != nlines - 1)
-		return;
-	inputcol = curcol - len promptstr;
-	if(inputcol < 0)
-		inputcol = 0;
-	if(inputcol > len inputbuf)
-		inputcol = len inputbuf;
-}
-
-# Move cursor to end of input line (for typing when cursor is in transcript).
-cursortoinput()
-{
-	curline = nlines - 1;
-	inputcol = len inputbuf;
-	curcol = len promptstr + inputcol;
-}
-
-# ---------- Selection ----------
-
-getlineat(row: int): string
-{
-	if(row < nlines - 1)
-		return lines[row];
-	return promptstr + inputbuf;
-}
-
-getsel(): (int, int, int, int)
-{
-	if(!selactive)
-		return (0, 0, 0, 0);
-	sl := selstartline;
-	sc := selstartcol;
-	el := selendline;
-	ec := selendcol;
-	if(sl > el || (sl == el && sc > ec)) {
-		(sl, el) = (el, sl);
-		(sc, ec) = (ec, sc);
-	}
-	return (sl, sc, el, ec);
-}
-
-getseltext(): string
-{
-	(sl, sc, el, ec) := getsel();
-	if(!selactive)
-		return "";
-	total := nlines;
-	if(sl == el) {
-		line := getlineat(sl);
-		if(sc > len line) sc = len line;
-		if(ec > len line) ec = len line;
-		return line[sc:ec];
-	}
-	line := getlineat(sl);
-	if(sc > len line) sc = len line;
-	s := line[sc:];
-	for(i := sl + 1; i < el && i < total; i++)
-		s += "\n" + getlineat(i);
-	line = getlineat(el);
-	if(ec > len line) ec = len line;
-	s += "\n" + line[0:ec];
-	return s;
-}
-
-# ---------- Drawing ----------
-
-# Draw selection highlight for one wrapped chunk of a logical line.
-# chunkstart..chunkend is the character range of this visual chunk.
-# Draw a prompt chunk with the ';' character in accent color.
 # ---------- Real-file IPC ----------
 
 initshelldirs()
@@ -1604,22 +1397,10 @@ writeshellstate()
 	if(!shellstatedirty)
 		return;
 	# Write transcript body (read-only for Veltro)
-	body := getbodytext();
-	writestatefile(SHELL_DIR + "/body", body);
+	writestatefile(SHELL_DIR + "/body", t("get 1.0 outpoint"));
 	# Write current input line
-	writestatefile(SHELL_DIR + "/input", inputbuf);
+	writestatefile(SHELL_DIR + "/input", t("get outpoint end"));
 	shellstatedirty = 0;
-}
-
-getbodytext(): string
-{
-	s := "";
-	for(i := 0; i < nlines; i++) {
-		if(i > 0)
-			s += "\n";
-		s += lines[i];
-	}
-	return s;
 }
 
 writestatefile(path, data: string)
@@ -1632,7 +1413,17 @@ writestatefile(path, data: string)
 	fd = nil;
 }
 
-# ---------- Text wrapping ----------
+readfile(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	buf := array[256] of byte;
+	n := sys->read(fd, buf, len buf);
+	if(n <= 0)
+		return nil;
+	return string buf[0:n];
+}
 
 # ---------- Helpers ----------
 

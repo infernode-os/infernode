@@ -7,6 +7,11 @@
 load std
 
 XENITH=/mnt/xenith
+
+if {! ftest -f $XENITH/new/ctl} {
+	raise 'skip:Xenith not mounted at /mnt/xenith'
+}
+
 failed=0
 
 fn ok {

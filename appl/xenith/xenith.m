@@ -37,6 +37,7 @@ Xenith : module {
 	xenithexit : fn(err : string);
 	internalerror : fn(s : string);
 	recovering : fn();
+	norecover : fn();
 	recovered : fn(e : string) : string;
 	getsnarf : fn(); 
 	putsnarf : fn();

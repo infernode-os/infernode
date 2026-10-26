@@ -44,6 +44,8 @@ init(nil: ref Draw->Context, args: list of string)
 	check("ctldel", "ctl del then more commands in one write", ctldel);
 	check("editxpipe", "Edit X with a pipe command locks each file it runs in", editxpipe);
 	check("hidden", "text reaching a window hidden by one filling its column", hidden);
+	check("putchange", "a change made while a large file is written by Put leaves it unsaved", putchange);
+	check("pipeshort", "a window's text changed while an Edit pipe command runs on it is kept", pipeshort);
 	if(failed)
 		raise "fail:tests failed";
 	sys->print("ALL PASS\n");
@@ -477,5 +479,79 @@ hidden(): string
 	put(b+"/ctl", "clean\n");
 	put(a+"/ctl", "delete\n");
 	put(b+"/ctl", "delete\n");
+	return nil;
+}
+
+# An Edit pipe command lets go of its window while it runs. The text
+# changed meanwhile, the command's output was put in where the text had
+# been: the change and the output were both lost
+pipeshort(): string
+{
+	w := newwin("/tmp/xrace-pipe");
+	if(w == nil)
+		return sys->sprint("no window: %r");
+	put(w+"/body", seq(50));
+	c := chan of string;
+	spawn putc(w+"/edit", ",|sleep 3; echo piped", c);
+	sys->sleep(1000);
+	afd := sys->open(w+"/addr", Sys->ORDWR);	# held, so it is not reset
+	sys->fprint(afd, ",");
+	if((e := put(w+"/data", "x\n")) != nil)
+		return e;
+	afd = nil;
+	if((e = <-c) != nil)
+		return "the Edit: "+e;
+	if(!alive())
+		return "Xenith stopped answering";
+	# the change made meanwhile kept (the Edit refused, said so)
+	got := readall(w+"/body");
+	put(w+"/ctl", "clean\n");
+	put(w+"/ctl", "delete\n");
+	if(got != "x\n")
+		return sys->sprint("the text after is %q, not the one written while the command ran", got);
+	return nil;
+}
+
+putc(f, s: string, c: chan of string)
+{
+	c <-= put(f, s);
+}
+
+# Put writes a large file in the background, of the text as it was. A
+# change made meanwhile by a client with nomark set left the undo
+# sequence as it was, and the window was shown saved when it was not
+putchange(): string
+{
+	w := newwin("/tmp/xrace-putchange");
+	if(w == nil)
+		return sys->sprint("no window: %r");
+	line := "";
+	for(i := 0; i < 64; i++)
+		line += "0123456789abcdef";
+	line += "\n";
+	fd := sys->open(w+"/body", Sys->OWRITE);
+	for(i = 0; i < 4096; i++)	# 4MB
+		sys->fprint(fd, "%s", line);
+	fd = nil;
+	put(w+"/ctl", "nomark\n");
+	if((e := put(w+"/ctl", "put\n")) != nil)
+		return "put: "+e;
+	if((e = put(w+"/body", "after\n")) != nil)
+		return e;
+	for(i = 0; i < 100; i++){	# the save done
+		sys->sleep(100);
+		if(index(readall(w+"/tag"), " Put ") < 0 && i > 5)
+			break;
+	}
+	sys->sleep(500);
+	(nil, l) := sys->tokenize(readall(w+"/ctl"), " ");
+	dirty := "";
+	if(len l >= 5)
+		dirty = hd tl tl tl tl l;
+	put(w+"/ctl", "clean\n");
+	put(w+"/ctl", "delete\n");
+	sys->remove("/tmp/xrace-putchange");
+	if(dirty != "1")
+		return sys->sprint("the window is shown saved (dirty %q) with a change made while it was written", dirty);
 	return nil;
 }

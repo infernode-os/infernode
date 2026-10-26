@@ -336,6 +336,14 @@ Xfid.open(x : self ref Xfid)
 				q0 = t.q0;
 				q1 = t.q1;
 			}
+			# a pipe command lets go of its window while it runs: the
+			# text can be shorter by now than the range it saved, and
+			# the read past its end was an internal error
+			nc := t.file.buf.nc;
+			if(q1 > nc)
+				q1 = nc;
+			if(q0 > q1)
+				q0 = q1;
 			r := utils->stralloc(BUFSIZE);
 			while(q0 < q1){
 				n := q1 - q0;

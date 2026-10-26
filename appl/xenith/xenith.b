@@ -989,13 +989,24 @@ mousetask()
 									}
 									# what was written is the text as it was at
 									# Put: an edit made while it was written is
-									# not saved
-									dirty := f.seq != w.saveseq;
+									# not saved. The seq alone missed a client's
+									# with nomark set, and typing not committed,
+									# and the window was shown saved when it was not
+									unmarked := f.buf.nchange != w.savenchange;
+									for(i := 0; i < f.ntext; i++)
+										if(f.text[i].ncache > 0)
+											unmarked = TRUE;
+									dirty := f.seq != w.saveseq || unmarked;
+									# a change no undo step holds: no step
+									# brings back the text saved
+									putseq := w.saveseq;
+									if(unmarked)
+										putseq = -1;
 									f.mod = dirty;
 									w.dirty = dirty;
 									f.unread = FALSE;
-									for(i := 0; i < f.ntext; i++) {
-										f.text[i].w.putseq = w.saveseq;
+									for(i = 0; i < f.ntext; i++) {
+										f.text[i].w.putseq = putseq;
 										f.text[i].w.dirty = dirty;
 									}
 								}
@@ -1024,7 +1035,8 @@ mousetask()
 }
 
 # The procs whose exceptions are recovered (the mouse, keyboard and wait
-# tasks, a 9P request's): an internal error in one raises, and it goes on
+# tasks, a 9P request's, an Edit's): an internal error in one raises, and
+# it goes on
 recoverers : list of int;
 recoverlock : chan of int;
 
@@ -1033,6 +1045,19 @@ recovering()
 	pid := sys->pctl(0, nil);
 	recoverlock <-= 1;
 	recoverers = pid :: recoverers;
+	<-recoverlock;
+}
+
+# the caller's proc recovers no longer (it is ending)
+norecover()
+{
+	pid := sys->pctl(0, nil);
+	recoverlock <-= 1;
+	l : list of int;
+	for(r := recoverers; r != nil; r = tl r)
+		if(hd r != pid)
+			l = hd r :: l;
+	recoverers = l;
 	<-recoverlock;
 }
 

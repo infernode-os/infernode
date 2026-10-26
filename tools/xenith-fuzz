@@ -9,7 +9,8 @@
 # inside Lucifer (-l), whose start-up command runs tests/xenith_fuzz.b: a
 # storm of random clicks, drags, chords, wheel and scroll-bar use and
 # typing through the pointer and keyboard devices, while a client changes
-# windows through /mnt/xenith, as an agent does; then checks that Xenith
+# windows through /mnt/xenith and plumbs to it, as an agent does (a
+# plumber is started for a standalone Xenith); then checks that Xenith
 # still answers, that each window's text reads back whole, that Put writes
 # what a window holds and that undo and redo restore a window's text.
 #
@@ -87,9 +88,10 @@ for d in "$ROOT"/*/; do
 	*)	mkdir -p "$sandbox/$d" ;;
 	esac
 done
-for d in page imgload; do
+for d in page imgload xenith; do
 	cp -a "$ROOT/tests/$d" "$sandbox/tests/$d"
 done
+mkdir -p "$sandbox/usr/$(id -un)"	# a home, for Dump and Load
 
 # The stacks in a log (lines "fp pc mp prog type path") as source lines,
 # through the .sbl files mk leaves beside each .b
@@ -159,7 +161,9 @@ echo 'center id=xenith' > /mnt/ui/activity/0/presentation/ctl
 sleep $((secs+100)); echo 'fuzz: NO OUTCOME'; echo halt > /dev/sysctl" </dev/null > "$log" 2>&1
 	else
 		SDL_VIDEODRIVER=dummy with_timeout $((secs+90)) "$EMU" $flag -g800x600 -r"$sandbox" \
-			/dis/sh.dis -c "load std; cd /tmp/xenith-fuzz/r$s/w; xenith -l /tmp/xenith-fuzz/r$s/dump" </dev/null > "$log" 2>&1
+			/dis/sh.dis -c "load std
+bind -bc '#splumber' /chan; plumber /tests/xenith/plumbing & sleep 1
+cd /tmp/xenith-fuzz/r$s/w; xenith -l /tmp/xenith-fuzz/r$s/dump" </dev/null > "$log" 2>&1
 	fi
 	# Xenith's buffer file, left by the halt
 	find "$sandbox/tmp" -maxdepth 1 -name '*xenith' -newer "$r/dump" -exec rm -f {} + 2>/dev/null

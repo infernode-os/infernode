@@ -65,7 +65,19 @@ basewords := array[] of {
 	">wc", "echo hello", "seq 1 40", "date",
 	"foo", "bar", "baz", "(paren)", "[brack]", "{brace}",
 	"Look foo", "Live", "Render", "Font", "ID", "Lineno", "Incl",
-	"Kill date",
+	"Kill date", "Dump", "Load", "Putall", "Tab 8", "Indent on",
+	"Edit X ,|sort", "Edit ,s/o/0/g", "Edit u", "Edit B f1", "Edit ,x/[",
+};
+
+# for a window's edit file: the sam command language, some of it wrong
+# (none grows the text by more than a little at a time)
+editcmds := array[] of {
+	",x/foo/c/FOO/", ",s/a/A/g", ",s/A/a/g", ",x/[a-z]+/a/!/", ",x/!/d",
+	",g/foo/d", "1,3d", "$a/tail\n/", "0i/head\n/", "1m$", "2t0", "u",
+	"u3", "u-1", ".,+2t$", "=", "=#", "k", "'", ",y/e/c/E/", "X/f[0-9]/ ,s/x/y/g",
+	"X ,|sort", "Y/fbig/ ,x/1/c/2/", "B f2", "D", "b f3", "w", ",|tr a-z A-Z",
+	",<echo pasted", ",>wc", "1,$k", ",x/(/", "s/a", "q", "e", "#3,#9d",
+	"/foo/,/bar/d", "-/x/", "+-p",
 };
 
 # in the work directory: its files, some documents
@@ -481,7 +493,7 @@ mousefuzz(seed: int, done: chan of int)
 			}
 			ptr(rx(), ry(), 0);
 		10 =>	# a window's or column's button: drag it
-			x = X0 + rand->rand(12);
+			x = X0 + (X1-X0)*rand->rand(4)/(2+rand->rand(3)) + rand->rand(12);
 			b := 1 << rand->rand(3);
 			ptr(x, y, b); pause();
 			ptr(rx(), ry(), b); pause();
@@ -604,7 +616,7 @@ agentfuzz(seed: int, done: chan of int)
 			continue;
 		}
 		d := X+"/"+w.id;
-		case rand->rand(25) {
+		case rand->rand(27) {
 		0 or 1 or 2 =>
 			xwrite(d+"/body", randtext(1+rand->rand(5)));
 		3 =>
@@ -637,7 +649,7 @@ agentfuzz(seed: int, done: chan of int)
 				xwrite(d+"/ctl", "addr=dot");
 			}
 		13 =>
-			xwrite(d+"/edit", ",x/foo/c/FOO/");
+			xwrite(d+"/edit", editcmds[rand->rand(len editcmds)]);
 		14 =>
 			xwrite(d+"/tag", " "+words[rand->rand(len words)]);
 		15 =>
@@ -667,6 +679,11 @@ agentfuzz(seed: int, done: chan of int)
 			xread(d+"/doc/ctl");
 		24 =>
 			xwrite(d+"/doc/ctl", (array[] of {"render", "text", "scale 150", "fit page", "sheet 2", "refresh", "live", "nolive"})[rand->rand(8)]);
+		25 =>
+			# a message to the plumber, for Xenith (to open, or look at)
+			plumb(words[rand->rand(len words)]);
+		26 =>
+			xwrite(d+"/ctl", (array[] of {"mark", "nomark", "menu", "nomenu", "cleartag", "dump echo hi", "dumpdir /tmp"})[rand->rand(7)]);
 		}
 		sys->sleep(rand->rand(60));
 	}
@@ -680,6 +697,17 @@ agentfuzz(seed: int, done: chan of int)
 
 ndata := 0;
 
+# s plumbed, as from another program: a file's name opens it, other
+# text is looked at
+plumb(s: string)
+{
+	fd := sys->open("/chan/plumb.send", Sys->OWRITE);
+	if(fd == nil)
+		return;
+	b := array of byte sys->sprint("fuzz\nedit\n%s\ntext\n\n%d\n%s", dir, len array of byte s, s);
+	sys->write(fd, b, len b);
+}
+
 data(s: string)
 {
 	sys->print("fuzz: DATA %s\n", s);
@@ -689,19 +717,26 @@ data(s: string)
 integrity()
 {
 	# every window's text reads back as long as its ctl says: the body
-	# first, as reading it commits typing the ctl does not count
+	# first, as reading it commits typing the ctl does not count. A
+	# command's output can still arrive between the two (an Edit pipe's),
+	# so a difference is read again, a moment later, before it counts
 	for(l := windows(); l != nil; l = tl l){
 		w := hd l;
-		if(w.isdir)
+		if(w.isdir || isdoc(w))
 			continue;
-		b := xread(X+"/"+w.id+"/body");
-		(n, f) := sys->tokenize(xread(X+"/"+w.id+"/ctl"), " ");
-		if(n < 3 || isdoc(w))
-			continue;
-		size := int hd tl tl f;
-		if(len b != size)
-			data(sys->sprint("window %s (%s): its ctl says %d characters, its body reads %d",
-				w.id, w.name, size, len b));
+		for(try := 0; try < 3; try++){
+			b := xread(X+"/"+w.id+"/body");
+			(n, f) := sys->tokenize(xread(X+"/"+w.id+"/ctl"), " ");
+			if(n < 3)
+				break;
+			size := int hd tl tl f;
+			if(len b == size)
+				break;
+			if(try == 2)
+				data(sys->sprint("window %s (%s): its ctl says %d characters, its body reads %d",
+					w.id, w.name, size, len b));
+			sys->sleep(1000);
+		}
 	}
 
 	# Put writes what the window holds: each of the work files shown

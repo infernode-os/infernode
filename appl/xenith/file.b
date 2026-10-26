@@ -213,8 +213,20 @@ File.undo(f : self ref File, isundo : int, q0 : int, q1 : int) : (int, int)
 	buf = utils->stralloc(BUFSIZE);
 	while(delta.nc > 0){
 		up = delta.nc-Undosize;
+		if(up < 0){
+			forget(f);
+			return (q0, q1);
+		}
 		delta.read(up, a, 0, Undosize);
 		u = strtoundo(a.s);
+		# a record that does not fit the text: the history no longer
+		# matches it. Applied, it raised part way through, leaving half
+		# a record in the other list (undo after it read text as one),
+		# with an Edit's window lock held
+		if(!fits(f, u, up)){
+			forget(f);
+			return (q0, q1);
+		}
 		if(isundo){
 			if(u.seq < stop){
 				f.seq = u.seq;
@@ -275,9 +287,6 @@ File.undo(f : self ref File, isundo : int, q0 : int, q1 : int) : (int, int)
 				utils->strfree(fn0);
 				fn0 = nil;
 			}
-		* =>
-			error(sys->sprint("undo: 0x%ux", u.typex));
-			error("");
 		}
 		delta.delete(up, delta.nc);
 	}
@@ -287,6 +296,35 @@ File.undo(f : self ref File, isundo : int, q0 : int, q1 : int) : (int, int)
 	if(isundo)
 		f.seq = 0;
 	return (q0, q1);
+}
+
+fits(f : ref File, u : Undo, up : int) : int
+{
+	if(u.p0 < 0 || u.n < 0)
+		return 0;
+	case u.typex {
+	Delete =>
+		return u.p0+u.n <= f.buf.nc;
+	Insert =>
+		return u.p0 <= f.buf.nc && u.n <= up;
+	Filename =>
+		return u.n <= up;
+	}
+	return 0;
+}
+
+# The undo history dropped, the text kept as it is: changed, and with
+# a sequence of its own, so no window shows it saved
+forget(f : ref File)
+{
+	f.delta.reset();
+	f.epsilon.reset();
+	dat->seq++;
+	f.seq = dat->seq;
+	f.mod = TRUE;
+	m := sys->sprint("%s: the undo history no longer matched the text and was dropped\n", f.name);
+	sys->fprint(sys->fildes(2), "xenith: %s", m);	# a log keeps it
+	utils->warning(nil, m);
 }
 
 File.reset(f : self ref File)

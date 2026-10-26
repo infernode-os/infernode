@@ -11,6 +11,7 @@ rowm: Rowm;
 scroll: Scroll;
 editlog: Editlog;
 editcomd: Editcmd;
+xenith: Xenith;
 
 sprint, print: import sys;
 FALSE, TRUE, BUFSIZE, Null, Empty, Inactive: import Dat;
@@ -34,6 +35,7 @@ init(mods : ref Dat->Mods)
 	scroll = mods.scroll;
 	editlog = mods.editlog;
 	editcomd = mods.editcmd;
+	xenith = mods.xenith;
 	editing = Inactive;
 }
 
@@ -115,6 +117,7 @@ editthread()
 	cmdp: ref Cmd;
 
 	mypid := sys->pctl(0, nil);
+	xenith->recovering();	# an internal error comes back as one
 	sync := chan of int;
 	spawn editwaitproc(mypid, sync);
 	yourpid := <- sync;
@@ -139,6 +142,7 @@ editthread()
 			allwindows(ALLELOGTERM, nil);
 			err = "internal error: " + utils->getexc();
 	}
+	xenith->norecover();
 	editerrc <-= err;
 	utils->postnote(Utils->PNPROC, mypid, yourpid, "kill");
 }
@@ -241,6 +245,10 @@ editcmd(ct: ref Text, r: string, n: int)
 	editing = Inactive;
 	if(err != nil)
 		warning(nil, sprint("Edit: %s\n", err));
+	# what has not been saved kept, as after any exception (the row is
+	# held here, the edit thread done)
+	if(len err > 15 && err[0:15] == "internal error:" && (m := xenith->recovered(err)) != nil)
+		warning(nil, "xenith: "+m+"\n");
 
 	# update everyone whose edit log has data
 	allwindows(ALLUPDATE, nil);

@@ -471,7 +471,16 @@ undo(et : ref Text, flag1 : int)
 				if(o == 0)
 					o = 'M';
 				w.lock(o);
-				w.undo(flag1);
+				# let go if it raises: in an Edit (its u) nothing
+				# else would, and every window waited for it
+				{
+					w.undo(flag1);
+				}
+				exception e{
+					* =>
+						w.unlock();
+						raise e;
+				}
 				w.unlock();
 			}
 		}
@@ -735,6 +744,7 @@ putfile(f: ref File, q0: int, q1: int, name: string)
 		# its own copy, not the Buffer the window goes on using
 		w.savename = name;
 		w.saveseq = f.seq;
+		w.savenchange = f.buf.nchange;
 		w.asyncsave = asyncio->asyncsavefile(name, w.id, textbytes(f.buf, q0, q1));
 		return;
 	}

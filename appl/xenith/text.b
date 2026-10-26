@@ -693,6 +693,38 @@ Text.readc(t : self ref Text, q : int) : int
 	return onechar.s[0];
 }
 
+# The text from q, n characters of it, typing not yet in the file among
+# them, as readc reads one: the file has what follows the typing later.
+# Read from the file at q, a scroll up over typing read the wrong text,
+# and past the end of the file
+Text.readtext(t : self ref Text, q : int, n : int) : string
+{
+	r := utils->stralloc(BUFSIZE);
+	s := "";
+	q1 := q+n;
+	while(q < q1){
+		m := q1-q;
+		if(t.ncache > 0 && q >= t.cq0 && q < t.cq0+t.ncache){
+			if(m > t.cq0+t.ncache-q)
+				m = t.cq0+t.ncache-q;
+			s += t.cache[q-t.cq0:q-t.cq0+m];
+		}else{
+			fq := q;
+			if(t.ncache > 0 && q >= t.cq0+t.ncache)
+				fq = q-t.ncache;
+			else if(t.ncache > 0 && q+m > t.cq0)
+				m = t.cq0-q;	# up to the typing
+			if(m > BUFSIZE)
+				m = BUFSIZE;
+			t.file.buf.read(fq, r, 0, m);
+			s += r.s[0:m];
+		}
+		q += m;
+	}
+	utils->strfree(r);
+	return s;
+}
+
 Text.bswidth(t : self ref Text, c : int) : int
 {
 	q, eq : int;
@@ -1787,11 +1819,8 @@ Text.setorigin(t : self ref Text, org : int, exact : int)
 	}
 	else if(a<0 && -a<t.frame.nchars){
 		n = t.org - org;
-		r = utils->stralloc(n);
-		t.file.buf.read(org, r, 0, n);
-		frinsert(t.frame, r.s, n, 0);
-		utils->strfree(r);
-		r = nil;
+		s := t.readtext(org, n);
+		frinsert(t.frame, s, n, 0);
 	}else
 		frdelete(t.frame, 0, t.frame.nchars);
 	t.org = org;

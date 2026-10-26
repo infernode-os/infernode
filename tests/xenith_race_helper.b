@@ -46,6 +46,9 @@ init(nil: ref Draw->Context, args: list of string)
 	check("hidden", "text reaching a window hidden by one filling its column", hidden);
 	check("putchange", "a change made while a large file is written by Put leaves it unsaved", putchange);
 	check("xloopchange", "a window changed while a later one's pipe command in Edit X runs is kept", xloopchange);
+	check("editcmdloading", "an Edit run while a file loads works on all of it", editcmdloading);
+	check("putonechar", "Put with a name one character long from a window with no name", putonechar);
+	check("redostale", "a change by a client with nomark set after an undo empties the redo list", redostale);
 	check("pipeshort", "a window's text changed while an Edit pipe command runs on it is kept", pipeshort);
 	if(failed)
 		raise "fail:tests failed";
@@ -591,5 +594,132 @@ xloopchange(): string
 	# the one whose command ran (the Edit refused), its text as it was
 	if(gotb != "piped\n" && gotb != seq(30))
 		return sys->sprint("the other window holds %q", gotb);
+	return nil;
+}
+
+# A client holding the data file open with nomark set (as win does)
+# changes the text without marking it, and marking was what emptied the
+# redo list: an Undo, then the client's change, then Redo replayed the
+# undone change where the text no longer was (an internal error; undo
+# history dropped since)
+redostale(): string
+{
+	w := newwin("/tmp/xrace-redo");
+	if(w == nil)
+		return sys->sprint("no window: %r");
+	put(w+"/body", "AAAA\n");
+	put(w+"/body", "BBBB\n");
+	dfd := sys->open(w+"/data", Sys->OWRITE);	# held, as win holds it
+	if(dfd == nil)
+		return sys->sprint("data: %r");
+	put(w+"/ctl", "nomark\n");
+	# the user's Undo, as a click on it in the tag (an Edit's u, through
+	# the edit file, turns nomark off as the file closes). Opening data
+	# marked the file with nothing changed: the first Undo goes back past
+	# that mark, the second undoes BBBB
+	put(w+"/tag", " Undo");	# a tag write marks nothing
+	efd := sys->open(w+"/event", Sys->ORDWR);
+	if(efd == nil)
+		return sys->sprint("event: %r");
+	for(i := 0; i < 2; i++){
+		tag := readall(w+"/tag");
+		q := index(tag, "Undo");
+		if(q < 0)
+			return sys->sprint("no Undo in the tag %q", tag);
+		sys->fprint(efd, "Mx%d %d\n", q, q+4);	# x: the tag
+		sys->sleep(300);
+	}
+	efd = nil;
+	if((t := readall(w+"/body")) != "AAAA\n")
+		return sys->sprint("after the undo the text is %q", t);
+	afd := sys->open(w+"/addr", Sys->ORDWR);	# held, so it is not reset
+	sys->fprint(afd, ",");
+	b := array of byte "x\n";
+	if(sys->write(dfd, b, len b) != len b)
+		return sys->sprint("data write: %r");
+	afd = nil;
+	dfd = nil;
+	if((e := put(w+"/edit", "u-1\n")) != nil)
+		return "redo: "+e;
+	if(!alive())
+		return "Xenith stopped answering";
+	got := readall(w+"/body");
+	errs := readall(X+"/"+errorsid()+"/body");
+	put(w+"/ctl", "clean\n");
+	put(w+"/ctl", "delete\n");
+	if(got != "x\n")
+		return sys->sprint("after redo the text is %q", got);
+	if(index(errs, "undo history") >= 0)
+		return "the undo history was dropped: the redo list was stale";
+	return nil;
+}
+
+# the +Errors window's id, "" if none
+errorsid(): string
+{
+	(nil, l) := sys->tokenize(readall(X+"/index"), "\n");
+	for(; l != nil; l = tl l)
+		if(index(hd l, "+Errors") >= 0){
+			(nil, f) := sys->tokenize(hd l, " \t");
+			return hd f;
+		}
+	return "";
+}
+
+# An Edit's commands ran on what of a file still loading had come: $a
+# put its text in the middle, and ,d left the rest
+editcmdloading(): string
+{
+	f := "/tmp/xrace-big3";
+	n := bigfile(f);
+	w := newwin(f);
+	if(w == nil)
+		return sys->sprint("no window: %r");
+	put(w+"/ctl", "get\n");
+	if((e := put(w+"/edit", "$a/END/")) != nil)
+		return e;
+	sys->sleep(2000);
+	body := readall(w+"/body");
+	whole := string readallb(f);
+	put(w+"/ctl", "clean\n");
+	put(w+"/ctl", "delete\n");
+	if(body != whole+"END")
+		return sys->sprint("body is not the file then END (%d characters; they are %d): %s", len body, n+3, readall(X+"/"+errorsid()+"/body"));
+	return nil;
+}
+
+# Put x in the tag of a window with no name: the name made from the
+# argument looked at the first character of the window's directory,
+# and there was none (a nil dereference in the mouse task)
+putonechar(): string
+{
+	fd := sys->open(X+"/new/ctl", Sys->ORDWR);
+	if(fd == nil)
+		return sys->sprint("new: %r");
+	b := array[128] of byte;
+	n := sys->read(fd, b, len b);
+	if(n <= 0)
+		return "new: no ctl";
+	(nil, l) := sys->tokenize(string b[0:n], " ");
+	w := X+"/"+hd l;
+	put(w+"/body", "one character\n");
+	put(w+"/tag", " Put x");
+	efd := sys->open(w+"/event", Sys->ORDWR);
+	if(efd == nil)
+		return sys->sprint("event: %r");
+	tag := readall(w+"/tag");
+	q := index(tag, "Put x");
+	sys->fprint(efd, "Mx%d %d\n", q, q+5);	# x: the tag
+	sys->sleep(1000);
+	efd = nil;
+	if(!alive())
+		return "Xenith stopped answering";
+	errs := readall(X+"/"+errorsid()+"/body");
+	put(w+"/ctl", "clean\n");
+	put(w+"/ctl", "delete\n");
+	fd = nil;
+	sys->remove("/x");	# Xenith's directory is the root here
+	if(index(errs, "nil") >= 0)
+		return "the Put raised an exception: "+errs;
 	return nil;
 }

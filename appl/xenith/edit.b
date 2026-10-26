@@ -154,6 +154,9 @@ allelogterm(w: ref Window)
 
 alleditinit(w: ref Window)
 {
+	# all of a file still loading: an Edit saw only what had come, so
+	# ,d left the rest and $a put its text in the middle
+	textm->loadrest(w.body.file);
 	w.tag.commit(TRUE);
 	w.body.commit(TRUE);
 	w.body.file.editclean = FALSE;

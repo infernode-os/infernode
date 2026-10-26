@@ -601,6 +601,8 @@ build_kernel() {
             "/dis/tests/exception_test.dis=$ROOT/dis/tests/exception_test.dis"
             # formats and parses reals in the kernel's own VM (os/port/printfp.c)
             "/dis/tests/fltfmt_test.dis=$ROOT/dis/tests/fltfmt_test.dis"
+            # NaN and infinity in the kernel's own VM (libkernfp/nan.c)
+            "/dis/tests/nan_test.dis=$ROOT/dis/tests/nan_test.dis"
             # 150 threads blocked in sys->sleep at once -- 150 concurrent
             # kprocs (os/port/dis.c release()) -- proves conf.nproc holds
             # more than the 100 that hung the board under a real GUI
@@ -1827,6 +1829,8 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         '/dis/tests/exception_test.dis' \
         '/dis/tests/fltfmt_test.dis' \
         'echo 0 > /dev/jit; /dis/tests/fltfmt_test.dis; echo 1 > /dev/jit' \
+        '/dis/tests/nan_test.dis' \
+        'echo 0 > /dev/jit; /dis/tests/nan_test.dis; echo 1 > /dev/jit' \
         '/dis/procstorm.dis 150' \
         'echo env-round-trip > /env/probe' \
         'cat /env/probe' \
@@ -1967,6 +1971,17 @@ if [[ "$(grep -c '^8 passed$' <<<"$SHOUT")" -ge 2 ]]; then
     pass "fltfmt_test: %g, %f, %e, string and real of a string are right in the kernel, JIT and interpreter (8 passed twice)"
 else
     fail "fltfmt_test did not report 8 passed with the JIT and without: $(grep -E 'passed|got ' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
+fi
+
+# NaN and infinity in the kernel's VM. libkernfp/nan.c took a double as
+# two longs -- 64-bit each on this kernel -- so isnan never saw a NaN,
+# NaN() was a denormal, Inf() was 0.0, and the Limbo compiler run on a
+# board died at startup ("bad canonical NaN"). Two "4 passed": JIT and
+# interpreter.
+if [[ "$(grep -c '^4 passed$' <<<"$SHOUT")" -ge 2 ]]; then
+    pass "nan_test: isnan, the canonical NaN, real of \"NaN\" and \"Inf\", and Infinity's bits are right in the kernel, JIT and interpreter (4 passed twice)"
+else
+    fail "nan_test did not report 4 passed with the JIT and without: $(grep -aE 'nan_test|passed|FAIL|assert' <<<"$SHOUT" | head -6 | tr '\n' ' ')"
 fi
 
 # 150 Limbo threads blocked in sys->sleep at once, so the kernel holds

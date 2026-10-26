@@ -368,6 +368,77 @@ testPdfApart(t: ref T)
 	e->close(h2);
 }
 
+# Documents opened and closed on procs of their own at once, as each
+# window's are: the engines' tables (pdf.b's, htmldoc's) were changed
+# unlocked, and two opened at once took one slot (two windows sharing
+# a document, the other lost) or one opened as another closed was lost
+ATONCE: con 8;
+testAtOnce(t: ref T)
+{
+	needdisplay(t);
+	three := readfile("/tests/page/three.pdf");
+	square := readfile("/tests/render/square.pdf");
+	if(three == nil || square == nil)
+		t.fatal(sys->sprint("fixtures: %r"));
+	(pe, nil) := docreg->engine(docreg->kindof("pdf"));
+	(he, nil) := docreg->engine(docreg->kindof("html"));
+	if(pe == nil || he == nil)
+		t.fatal("no engine");
+	c := chan of string;
+	for(i := 0; i < ATONCE; i++)
+		spawn atonce(i, pe, he, three, square, c);
+	for(i = 0; i < ATONCE; i++)
+		if((err := <-c) != nil)
+			t.error(err);
+}
+
+atonce(i: int, pe, he: Docengine, three, square: array of byte, c: chan of string)
+{
+	err: string;
+	{
+		err = atonce0(i, pe, he, three, square);
+	} exception e {
+	"*" =>
+		err = "exception: " + e;
+	}
+	c <-= err;
+}
+
+atonce0(i: int, pe, he: Docengine, three, square: array of byte): string
+{
+	for(r := 0; r < 20; r++){
+		# a PDF: its own pages, not another's
+		(data, n) := (three, 3);
+		if((i+r)&1)
+			(data, n) = (square, 1);
+		(h, err) := pe->open(data, "/x/doc.pdf", nil);
+		if(h < 0)
+			return "pdf: " + err;
+		# HTML: its own text, kept while others are dropped
+		word := sys->sprint("word%dx%d", i, r);
+		hh: int;
+		(hh, err) = he->open(array of byte ("<html><body><p>"+word+"</p></body></html>"), "/x/p.html", style(300));
+		if(hh < 0)
+			return "html: " + err;
+		sys->sleep(0);
+		if((m := pe->nsheets(h)) != n)
+			return sys->sprint("proc %d: a PDF of %d pages has %d (another's)", i, n, m);
+		if((txt := he->text(hh)) == nil || index(txt, word) < 0)
+			return sys->sprint("proc %d: an HTML page lost its text (%q)", i, txt);
+		pe->close(h);
+		he->close(hh);
+	}
+	return nil;
+}
+
+index(s, t: string): int
+{
+	for(i := 0; i+len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return i;
+	return -1;
+}
+
 testImage(t: ref T)
 {
 	needdisplay(t);
@@ -411,6 +482,101 @@ testMarkdown(t: ref T)
 	t.assert(docreg->loaded() != nil && !contains(docreg->loaded(), "/dis/xenith/doc/webdoc.dis"),
 		"Markdown does not load the HTML engine (nor Charon's)");
 	e->close(h);
+}
+
+# A document longer than any one image can be: at 4000 pixels wide,
+# its height in RGB24 is beyond the 1GB a block of memory may be
+# (Markdown at twice the scale on a Retina display, tens of thousands
+# of pixels tall, failed with allocimage).  It is laid out, not drawn
+# whole, and a strip from its end drawn when it is painted.
+testMarkdownLong(t: ref T)
+{
+	needdisplay(t);
+	# 4500 paragraphs, by doubling (one at a time is quadratic)
+	para := "A paragraph of a long document.\n\n";
+	body := "";
+	for(n := 4500; n > 0; n >>= 1){
+		if(n & 1)
+			body += para;
+		para += para;
+	}
+	src := "# Long\n\n" + body + "The last word is Omega.\n";
+	(e, h) := openfile(t, "markdown", "/x/long.md", array of byte src, style(4000));
+	sz := e->sheetsize(h, 0);
+	t.asserteq(sz.x, 4000, "laid out to the style's width");
+	t.assert(big sz.x * big sz.y * big 3 > big (1<<30),
+		sys->sprint("taller than one image of it could be (%d by %d)", sz.x, sz.y));
+	runs := e->runs(h, 0);
+	last: ref Docengine->Run;
+	for(i := 0; i < len runs; i++)
+		if(runs[i].text == "Omega.")
+			last = ref runs[i];
+	if(last == nil)
+		t.fatal("the last word is not among the words laid out");
+	t.assert(last.r.max.y <= sz.y && last.r.min.y > sz.y - 200, "the last word is at the end of the document");
+	# a strip round the last word, painted where it is
+	org := Point(0, last.r.min.y - 20);
+	im := display.newimage(Rect((0, 0), (sz.x, 80)), Draw->RGB24, 0, Draw->Blue);
+	if(im == nil)
+		t.fatal("no image");
+	t.assertnil(e->paint(h, 0, 100, im, im.r, org), "a strip from the end is painted");
+	t.assert(someink(im), "with the last words on it");
+	# the strip is the document's, not its top again
+	top := display.newimage(Rect((0, 0), (sz.x, 80)), Draw->RGB24, 0, Draw->Blue);
+	e->paint(h, 0, 100, top, top.r, Point(0, 0));
+	t.assert(!sameimage(im, top), "the strip at the end differs from the one at the top");
+	e->close(h);
+}
+
+# A strip painted alone is that part of the document painted whole:
+# drawing a strip begins at the block it falls in, where measuring put
+# that block, so what comes before (a list's spacing, a table) must
+# leave it where it is
+testMarkdownStrips(t: ref T)
+{
+	needdisplay(t);
+	src := "# Heading\n\nA paragraph of text that is long enough to wrap onto a second line at this width.\n\n" +
+		"- one\n- two\n  - nested\n- three\n\n1. first\n2. second\n\n- [ ] a task\n- [x] done\n\n" +
+		"```\ncode block\n  indented\n```\n\n> a quotation\n\n| a | b |\n|---|---|\n| one | two |\n| three | four |\n\n" +
+		"---\n\n## Second\n\nText with `code` and **bold** and *italic* and a [link](http://example.com).\n\n" +
+		"- after\n\nThe end.\n";
+	(e, h) := openfile(t, "markdown", "/x/strips.md", array of byte src, style(400));
+	whole := painted(t, e, h, 0, 100, "markdown whole");
+	sz := whole.r.size();
+	bad := 0;
+	for(y := 0; y + 30 <= sz.y; y += 13){
+		strip := display.newimage(Rect((0, 0), (sz.x, 30)), Draw->RGB24, 0, Draw->Blue);
+		if(e->paint(h, 0, 100, strip, strip.r, Point(0, y)) != nil){
+			bad++;
+			continue;
+		}
+		part := display.newimage(Rect((0, 0), (sz.x, 30)), Draw->RGB24, 0, Draw->Blue);
+		part.draw(part.r, whole, nil, Point(0, y));
+		if(!sameimage(strip, part)){
+			if(bad == 0)
+				t.log(sys->sprint("first strip that differs: at %d", y));
+			bad++;
+		}
+	}
+	t.asserteq(bad, 0, "every strip is the document's, painted whole");
+	e->close(h);
+}
+
+sameimage(a, b: ref Image): int
+{
+	if(!a.r.size().eq(b.r.size()))
+		return 0;
+	n := a.r.dx() * 3;
+	ba := array[n] of byte;
+	bb := array[n] of byte;
+	for(y := 0; y < a.r.dy(); y++){
+		a.readpixels(Rect((0, y), (a.r.dx(), y + 1)), ba);
+		b.readpixels(Rect((0, y), (b.r.dx(), y + 1)), bb);
+		for(i := 0; i < n; i++)
+			if(ba[i] != bb[i])
+				return 0;
+	}
+	return 1;
 }
 
 testMarkdownLinks(t: ref T)
@@ -501,9 +667,12 @@ init(nil: ref Draw->Context, args: list of string)
 	run("PdfBox", testPdfBox);
 	run("Image", testImage);
 	run("Markdown", testMarkdown);
+	run("MarkdownLong", testMarkdownLong);
+	run("MarkdownStrips", testMarkdownStrips);
 	run("MarkdownLinks", testMarkdownLinks);
 	run("Mermaid", testMermaid);
 	run("Html", testHtml);
+	run("AtOnce", testAtOnce);	# last: it loads every engine
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

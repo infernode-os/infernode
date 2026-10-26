@@ -18,6 +18,11 @@ limbo - Author a complete, compilable Limbo source file.
     args MUST NOT contain code tokens: { } ; "implement" "import"
     "include" "package main" "def main" "#include".
 
+  PATH
+    path, optional: where to save the new file (an absolute path ending
+    in .b, e.g. /tmp/veltro/scratch/fib.b).  Without it the source is only
+    returned: nothing is saved until you write it to a file.
+
   RETURNS
     The Limbo source code in a single ```limbo fenced block, then a
     <gate> block saying whether it compiled (status: compiled), did not
@@ -42,13 +47,11 @@ limbo - Author a complete, compilable Limbo source file.
     file anew, and changes what was not asked to be changed.
 
   WHY THIS TOOL EXISTS
-    The orchestrator's general-purpose training produces Go-style or
-    Python-style code that the Inferno compiler rejects (verified 0/10
-    compile-pass). This tool dispatches to a Limbo-trained model that
-    produces compileable code (10/10 on the same scenarios). Even with
-    a fallback to a non-specialised model, quality is more predictable
-    when the request goes through this tool than when the orchestrator
-    inlines its own attempt.
+    A new file is written by a Limbo-trained model when one is configured
+    (/lib/veltro/limbo-model), else by the session's model given Limbo's
+    rules and a whole example program; either way it is compiled before it
+    is returned.  Editing a file you have is yours to do (above); what you
+    may write is set by your namespace.
 
   EXAMPLES IN THIS DOCUMENT ARE DOCUMENTATION. Never copy an example's
   argument text as your own tool call. Construct args from the user's

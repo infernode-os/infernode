@@ -94,6 +94,21 @@ Llmclient: module
 	# bytes matter for Anthropic prompt-cache prefix matching.
 	buildanthropicrequest: fn(req: ref AskRequest): string;
 
+	# Parse an Anthropic Messages API response: the whole body, or a
+	# streamed body's events.  Exposed for tests: the STOP: line, and the
+	# structured content (thinking blocks kept whole) replayed as history.
+	parseanthropicresponse: fn(body: string, req: ref AskRequest): (ref AskResponse, string);
+	parseanthropicsse: fn(body: string, req: ref AskRequest): (ref AskResponse, string);
+
+	# What a Claude model's request may carry (temperature, prefill,
+	# thinking), by its generation.
+	CLAUDE_LEGACY, CLAUDE_46, CLAUDE_MODERN: con iota;
+	claudegen:      fn(model: string): int;
+
+	# Milliseconds to wait before trying a failed request again, or -1
+	# for an error not worth retrying.
+	retrydelay:     fn(err: string, attempt: int): int;
+
 	# JSON escape helper
 	jsonescapestr:  fn(s: string): string;
 };

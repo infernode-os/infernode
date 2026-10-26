@@ -27,9 +27,15 @@ State: adt {
 
 display: ref Display;
 docs: array of ref State;
+# a document's opener runs on a proc of its own (sheetview), beside
+# another's and the closes Xenith makes: two at once took one slot,
+# one document lost and two windows sharing the other
+docslock: chan of int;
 
 init(d: ref Display): string
 {
+	if(docslock == nil)
+		docslock = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	display = d;
@@ -66,8 +72,10 @@ open(data: array of byte, name: string, nil: ref Style): (int, string)
 
 close(h: int)
 {
+	docslock <-= 1;
 	if(h >= 0 && h < len docs)
 		docs[h] = nil;
+	<-docslock;
 }
 
 nsheets(h: int): int
@@ -184,6 +192,14 @@ files(nil: int): string
 }
 
 add(s: ref State): int
+{
+	docslock <-= 1;
+	h := add0(s);
+	<-docslock;
+	return h;
+}
+
+add0(s: ref State): int
 {
 	for(i := 0; i < len docs; i++)
 		if(docs[i] == nil){

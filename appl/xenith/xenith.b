@@ -225,6 +225,7 @@ main(argl : list of string)
 	ncol = -1;
 
 	mainpid = sys->pctl(0, nil);
+	recoverlock = chan[1] of int;
 	loadfile = nil;
 	fontnames = array[2] of string;
 	fontnames[0:] = deffontnames[0:2];
@@ -428,9 +429,12 @@ shutdown(msg : string)
 	i : int;
 
 	# notify(nil);
-	if(!dumping && msg != "kill" && msg != "exit" && (1 || sys->pctl(0, nil)==mainpid) && row != nil){
+	# kept where Dump's own file is not overwritten: this replaced the
+	# session the user last dumped
+	if(!dumping && msg != "kill" && msg != "exit" && row != nil){
 		dumping = TRUE;
-		row.dump(nil);
+		if((m := rescue()) != nil)
+			sys->fprint(sys->fildes(2), "xenith: %s\n", m);
 	}
 	for(i=0; oknotes[i] != nil; i++)
 		if(utils->strncmp(oknotes[i], msg, len oknotes[i]) == 0)
@@ -513,31 +517,33 @@ keyboardtask()
 
 	{
 		keytid = sys->pctl(0, nil);
+		recovering();
 		null = ref Timer;
 		null.c = chan of int;
 		timer = null;
 		typetext = nil;
 		for(;;){
+			{
 			alt{
 			<-(timer.c) =>
 				timerm->timerstop(timer);
+				# the tag's typing committed, the row held as for any
+				# change to a window (a commit renames it and redraws
+				# the tag), and only while the tag is still there
+				row.qlock.lock();
 				t = typetext;
-				if(t!=nil && t.what==Tag && !t.w.qlock.locked()){
+				if(t!=nil && t.what==Tag && t.file!=nil && t.w!=nil && t.w.col!=nil && !t.w.qlock.locked()){
 					t.w.lock('K');
 					t.w.commit(t);
 					t.w.unlock();
 					bflush();
 				}
+				row.qlock.unlock();
 				timer = null;
 			r = <-ckeyboard =>
 				gotkey := 1;
 				while (gotkey) {
-					typetext = row.typex(r, mouse.xy);
-					t = typetext;
-					if(t!=nil && t.col!=nil)
-						activecol = t.col;
-					if(t!=nil && t.w!=nil)
-						t.w.body.file.curtext = t.w.body;
+					t = row.typex(r, mouse.xy);	# sets typetext
 					if(timer != null)
 						spawn timerm->timerwaittask(timer);
 					if(t!=nil && t.what==Tag)
@@ -552,6 +558,11 @@ keyboardtask()
 					}
 					bflush();
 				}
+			}
+			}
+			exception{
+				* =>
+					taskrecover("keyboard", utils->getexc());
 			}
 		}
 	}
@@ -573,10 +584,12 @@ mousetask()
 
 	{
 		mousetid = sys->pctl(0, nil);
+		recovering();
 		sync := chan of int;
 		spawn waitproc(mousetid, sync);
 		<- sync;
 		for(;;){
+			{
 			alt{
 			*mouse = *<-dat->cmouse =>
 				row.qlock.lock();
@@ -588,20 +601,44 @@ mousetask()
 					break;
 				}
 				if (mouse.buttons & M_HELP) {
-					row.qlock.unlock();  # Release before warning to avoid blocking
-					warning(nil, "no help provided (yet)");
+					warning(nil, "no help provided (yet)");	# changes the row: held
 					bflush();
+					row.qlock.unlock();
 					break;
 				}
 				if(mouse.buttons & M_RESIZE){
-					clipr := mainwin.clipr;  # Capture state before releasing lock
-					row.qlock.unlock();  # Release during expensive draw operations
+					# the row held throughout: let go while the screen
+					# was cleared and the scroll bars' image made again,
+					# a client's write drew a window, with the old
+					# image, where the new layout was being put
 					draw(mainwin, mainwin.r, bgcol, nil, mainwin.r.min);
 					scrl->scrresize();
-					row.qlock.lock();  # Reacquire for reshape
-					row.reshape(clipr);
+					row.reshape(mainwin.clipr);
 					row.qlock.unlock();
 					bflush();
+					break;
+				}
+				# a scroll under way follows the pointer wherever it
+				# goes and ends when its button is let go, over text or
+				# not: its end was looked for only below, past the
+				# returns for no text and no buttons, so it never came,
+				# and the next click of that button scrolled the old
+				# window again
+				if(scrollstate != nil && scrollstate.active){
+					st := scrollstate.t;
+					if(!(mouse.buttons & (1<<(scrollstate.but-1))))
+						scrl->scrollend();
+					else if(st == nil || st.file == nil || st.w == nil || st.w.col == nil)
+						scrl->scrollend();	# its window went (Del, Delcol, a client's del)
+					else{
+						# the window locked as when the scroll began: a
+						# client reading it holds the window, not the row
+						st.w.lock('M');
+						scrl->scrollupdate();
+						st.w.unlock();
+					}
+					bflush();
+					row.qlock.unlock();
 					break;
 				}
 				t = row.which(mouse.xy);
@@ -640,19 +677,6 @@ mousetask()
 				else if(mouse.buttons == 4)
 					but = 3;
 				barttext = t;
-				# Check for active scroll state and handle updates/end
-				if(scrollstate != nil && scrollstate.active) {
-					# Check if button released
-					if(!(mouse.buttons & (1<<(scrollstate.but-1)))) {
-						scrl->scrollend();
-					} else {
-						# Update scroll position
-						scrl->scrollupdate();
-					}
-					bflush();
-					row.qlock.unlock();
-					break;
-				}
 				if(t.what==Body && mouse.xy.in(t.scrollr)){
 					if(w != nil && docview->shown(w)){
 						# a document's scroll bar, as acme's: 1 back
@@ -867,9 +891,17 @@ mousetask()
 							warning(nil, sprint("text load: %s\n", msg.err));
 						} else {
 							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil && w.body.file != nil) {
-								# Insert chunk into buffer
-								w.body.file.buf.insert(msg.q0 + msg.offset, msg.data, len msg.data);
+							# the window's own load, still under way: a
+							# chunk of one cancelled (Get, the load
+							# finished at once by an edit) is still on
+							# its way, and went into the new text
+							op := asyncload(w, msg.opid);
+							if(op != nil && w.col != nil && w.body.file != nil) {
+								# put after what came before it: where the
+								# window's count says, kept by this side
+								w.body.file.buf.insert(op.q0 + op.nrunes, msg.data, len msg.data);
+								op.nrunes += len msg.data;
+								op.nbytes = msg.nbytes;
 								# Fill frame to show content as it loads
 								t := w.body;
 								t.fill();
@@ -880,11 +912,16 @@ mousetask()
 					TextComplete =>
 						# Mark file as fully loaded
 						row.qlock.lock();
-						if(msg.err != nil) {
+						w := look->lookid(msg.winid, 0);
+						if(asyncload(w, msg.opid) == nil)
+							;	# a load cancelled or finished at once
+						else if(msg.err != nil) {
+							# done with, so that nothing waits on it
+							w.asyncload = nil;
+							w.body.file.unread = 0;
 							warning(nil, sprint("text load: %s\n", msg.err));
 						} else {
-							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil) {
+							if(w.col != nil) {
 								w.body.file.unread = 0;
 								w.dirty = FALSE;
 								w.asyncload = nil;
@@ -899,7 +936,7 @@ mousetask()
 						# Add directory entry to window's list
 						row.qlock.lock();
 						w := look->lookid(msg.winid, 0);
-						if(w != nil && w.col != nil && w.isdir) {
+						if(asyncload(w, msg.opid) != nil && w.col != nil && w.isdir) {
 							# Add entry to dlp array
 							dl := ref Dirlist(msg.name, 0);  # Width calculated later
 							ndl := w.ndl + 1;
@@ -918,7 +955,7 @@ mousetask()
 							warning(nil, sprint("dir load: %s\n", msg.err));
 						} else {
 							w := look->lookid(msg.winid, 0);
-							if(w != nil && w.col != nil && w.isdir) {
+							if(asyncload(w, msg.opid) != nil && w.col != nil && w.isdir) {
 								w.body.file.unread = 0;
 								w.asyncload = nil;
 								# Sort and display directory entries
@@ -952,13 +989,24 @@ mousetask()
 									}
 									# what was written is the text as it was at
 									# Put: an edit made while it was written is
-									# not saved
-									dirty := f.seq != w.saveseq;
+									# not saved. The seq alone missed a client's
+									# with nomark set, and typing not committed,
+									# and the window was shown saved when it was not
+									unmarked := f.buf.nchange != w.savenchange;
+									for(i := 0; i < f.ntext; i++)
+										if(f.text[i].ncache > 0)
+											unmarked = TRUE;
+									dirty := f.seq != w.saveseq || unmarked;
+									# a change no undo step holds: no step
+									# brings back the text saved
+									putseq := w.saveseq;
+									if(unmarked)
+										putseq = -1;
 									f.mod = dirty;
 									w.dirty = dirty;
 									f.unread = FALSE;
-									for(i := 0; i < f.ntext; i++) {
-										f.text[i].w.putseq = w.saveseq;
+									for(i = 0; i < f.ntext; i++) {
+										f.text[i].w.putseq = putseq;
 										f.text[i].w.dirty = dirty;
 									}
 								}
@@ -971,6 +1019,11 @@ mousetask()
 				}
 				bflush();
 			}
+			}
+			exception{
+				* =>
+					taskrecover("mouse", utils->getexc());
+			}
 		}
 	}
 	exception e {
@@ -979,6 +1032,158 @@ mousetask()
 			raise e;
 			# xenithexit(nil);
 	}
+}
+
+# The procs whose exceptions are recovered (the mouse, keyboard and wait
+# tasks, a 9P request's, an Edit's): an internal error in one raises, and
+# it goes on
+recoverers : list of int;
+recoverlock : chan of int;
+
+recovering()
+{
+	pid := sys->pctl(0, nil);
+	recoverlock <-= 1;
+	recoverers = pid :: recoverers;
+	<-recoverlock;
+}
+
+# the caller's proc recovers no longer (it is ending)
+norecover()
+{
+	pid := sys->pctl(0, nil);
+	recoverlock <-= 1;
+	l : list of int;
+	for(r := recoverers; r != nil; r = tl r)
+		if(hd r != pid)
+			l = hd r :: l;
+	recoverers = l;
+	<-recoverlock;
+}
+
+# utils->error: an internal error, an assertion that failed. It exited
+# Xenith, wherever it was, every unsaved window lost. In a proc that
+# recovers it raises, and what has not been saved is kept as the proc
+# recovers; elsewhere it is kept as Xenith exits.
+internalerror(s : string)
+{
+	pid := sys->pctl(0, nil);
+	if(pid == rescuer)	# a window that cannot be read: left out
+		raise "xenith: "+s;
+	for(l := recoverers; l != nil; l = tl l)
+		if(hd l == pid)
+			raise "xenith: "+s;
+	xenithexit("error");
+}
+
+errtimes : list of int;
+rescuer : int;	# the proc keeping what has not been saved
+
+# An exception recovered from, the row held: what has not been saved is
+# kept first, as the state it left may be wrong; what to tell the user.
+# Many in a minute (one raised again at every event) and Xenith exits,
+# having kept it.
+recovered(e : string) : string
+{
+	now := sys->millisec();
+	n := 0;
+	l : list of int;
+	for(t := errtimes; t != nil; t = tl t)
+		if(now-hd t < 60*1000){
+			l = hd t :: l;
+			n++;
+		}
+	errtimes = now :: l;
+	m := rescue();
+	# on the console too: a log keeps it (tools/xenith-fuzz looks there)
+	sys->fprint(sys->fildes(2), "xenith: recovered from %s\n", e);
+	if(m != nil)
+		sys->fprint(sys->fildes(2), "xenith: %s\n", m);
+	if(n >= 9){
+		sys->fprint(sys->fildes(2), "xenith: %d exceptions in a minute, the last %s\n", n+1, e);
+		xenithexit("error");
+	}
+	return m;
+}
+
+# What has not been saved kept where Xenith has gone wrong, in a file of
+# its own (Dump's is the user's); what to tell the user, nil if there
+# was nothing to keep. The row taken if it can be within a second: the
+# proc holding it may be the one that went wrong, or wait on it.
+rescue() : string
+{
+	if(row == nil || row.ncol == 0)
+		return nil;
+	got := 0;
+	if(!row.qlock.held())
+		for(i := 0; i < 20; i++){
+			got = row.qlock.trylock();
+			if(got)
+				break;
+			sys->sleep(50);
+		}
+	f := rescuefile();
+	bad := -1;
+	orescuer := rescuer;
+	rescuer = sys->pctl(0, nil);
+	{
+		bad = row.rescue(f);
+	}
+	exception{
+		* =>
+			;
+	}
+	rescuer = orescuer;
+	if(got)
+		row.qlock.unlock();
+	if(bad < 0)
+		return sprint("unsaved work could not be kept: cannot write %s", f);
+	s := sprint("unsaved work kept in %s (Load %s, or xenith -l %s)", f, f, f);
+	if(bad > 0)
+		s += sprint("; %d windows could not be read", bad);
+	return s;
+}
+
+rescuefile() : string
+{
+	if(dat->home != nil)
+		return dat->home+"/xenith.rescue";
+	return "/tmp/xenith.rescue."+utils->getuser();
+}
+
+# An exception in the mouse, keyboard or wait task: the locks it holds
+# let go, the fault reported, and the task carries on. It died holding the
+# row, and every window froze with it, their unsaved text with them.
+taskrecover(task : string, e : string)
+{
+	for(i := 0; i < row.ncol; i++){
+		c := row.col[i];
+		for(j := 0; j < c.nw; j++)
+			if(c.w[j].qlock.held())
+				c.w[j].unlock();
+	}
+	if(!row.qlock.held())
+		row.qlock.lock();
+	m := recovered(e);
+	{
+		warning(nil, sprint("xenith: %s: %s\n", task, e));
+		if(m != nil)
+			warning(nil, "xenith: "+m+"\n");
+		bflush();
+	}
+	exception{
+		* =>
+			sys->fprint(sys->fildes(2), "xenith: %s: %s\n", task, e);
+	}
+	row.qlock.unlock();
+}
+
+# w's load in the background, if it is the operation opid
+asyncload(w : ref Window, opid : int) : ref Asyncio->AsyncOp
+{
+	if(w == nil || w.asyncload == nil || w.asyncload.opid != opid)
+		return nil;
+	return w.asyncload;
 }
 
 # list of processes that have exited but we have not heard of yet
@@ -1000,6 +1205,7 @@ waittask()
 	pids : ref Pid;
 
 	waittid = sys->pctl(0, nil);
+	recovering();
 	command = nil;
 	for(;;){
 	{
@@ -1020,6 +1226,7 @@ waittask()
 			break;
 		cmd = <-ckill =>
 			found = FALSE;
+			row.qlock.lock();	# warning changes the row
 			for(c=command; c != nil; c=c.next){
 				# -1 for blank 
 				if(c.name[0:len c.name - 1] == cmd){
@@ -1030,6 +1237,8 @@ waittask()
 			}
 			if(!found)
 				warning(nil, sprint("Kill: no process %s\n", cmd));
+			bflush();
+			row.qlock.unlock();
 			cmd = nil;
 			break;
 		status = <-cwait =>
@@ -1080,24 +1289,37 @@ waittask()
 			}
 			break;
 		c = <-ccommand =>
+			# a command that has exited already (its wait came
+			# first: alt takes either when both are ready) is done
+			# with here, not listed; c was set nil for it and then
+			# listed, a nil dereference
 			lastp : ref Pid = nil;
+			done := 0;
 			for(p := pids; p != nil; p = p.next){
 				if(p.pid == c.pid){
-					status = p.msg;
-					if(status[len status - 1] != ':')
-						warning(c.md, sprint("%s\n", status));
 					if(lastp == nil)
 						pids = p.next;
 					else
 						lastp.next = p.next;
+					status = p.msg;
+					if(status[len status - 1] != ':'){
+						row.qlock.lock();
+						warning(c.md, sprint("%s\n", status));
+						bflush();
+						row.qlock.unlock();
+					}
 					if(c.iseditcmd)
 						cedit <- = 0;
 					fsys->fsysdelid(c.md);
-					c = nil;
+					done = 1;
 					break;
 				}
 				lastp = p;
-			}	
+			}
+			if(done){
+				c = nil;
+				break;
+			}
 			c.next = command;
 			command = c;
 			row.qlock.lock();
@@ -1112,7 +1334,10 @@ waittask()
 	}
 	exception{
 		* =>
-			warning(nil, "waittask: " + utils->getexc() + "\n");
+			# the row let go if a locked section raised this: caught
+			# with the row held, it was kept, and every click and
+			# request after waited for it for ever
+			taskrecover("waittask", utils->getexc());
 	}
 	}
 }

@@ -1,10 +1,15 @@
 implement Editor;
 
 #
-# wm/editor - Draw-based text editor with 9P interface
+# wm/editor - Tk text editor with 9P interface
 #
 # A simple text editor with a Styx (9P) filesystem interface for
 # programmatic access by Veltro agents and other tools.
+#
+# The document is the Tk text widget's text, as the transcript is
+# wm/sh's: there is no copy of it to keep in step.  Every change, typed,
+# pasted or asked for by a client, goes through ins and del, which keep
+# the undo log, so whatever changed it, undo takes it back.
 #
 # The 9P filesystem is mounted at /mnt/edit and bound to /edit.
 # The filesystem layout uses per-document directories to support
@@ -19,6 +24,14 @@ implement Editor;
 #       event      Blocking read for editor events
 #       addr       Cursor position (line col)
 #
+# The document's ctl takes save, saveas <path>, name <path>, goto <line>,
+# find <text>, insert <line> <col> <text>, append <text>,
+# delete <line> <col> <line> <col>, replace and replaceall <find>\t<repl>,
+# clean and dirty; a newline ending a command is not part of it.
+#
+# open, new and quit are refused while the document has changes not
+# saved: save them, or write clean to the document's ctl to let them go.
+#
 # Keyboard:
 #   Type to insert text at cursor
 #   Backspace    delete char before cursor
@@ -27,25 +40,21 @@ implement Editor;
 #   Arrow keys   move cursor
 #   Home/End     start/end of line
 #   Ctrl-S       save (prompts for path if unnamed)
-#   Ctrl-Q       quit
+#   Ctrl-Q       quit (with changes not saved, asks for a second Ctrl-Q)
 #   Ctrl-Z       undo last edit
 #   Ctrl-Y       redo last undone edit
 #   Ctrl-F       find (prompts in status bar)
 #   Ctrl-G       find next
-#   Ctrl-H       replace (prompts in status bar)
 #   Ctrl-X       cut selection
 #   Ctrl-C       copy selection
 #   Ctrl-V       paste
 #   Ctrl-A       select all
-#   Ctrl-Home    go to top of file
-#   Ctrl-End     go to end of file
 #   Page Up/Down scroll by screenful
 #
 # Mouse:
 #   Button 1     place cursor / select text
 #   Double-click select word
-#   Triple-click select line
-#   Button 2     paste (snarf buffer)
+#   Button 2     drag to scroll
 #   Button 3     context menu (undo, redo, save, find, replace, ...)
 #
 
@@ -103,108 +112,37 @@ SELCOL:	con int 16rB4D5FEFF;		# light blue selection
 LNCOL:	con int 16rBBBBBBFF;		# line number color
 DIRTYCOL: con int 16rCC4444FF;		# dirty indicator
 
-# Dimensions
-MARGIN: con 4;				# text margin
-LNWIDTH: con 48;			# line number gutter width
-TABSTOP: con 4;			# tab width in spaces
-
-# Undo types
-UndoInsert, UndoDelete, UndoReplace, UndoJoinLine, UndoSplitLine: con iota;
-MAXUNDO: con 100;
-
-Undo: adt {
-	kind: int;
-	line: int;
-	col: int;
-	text: string;
-	oldtext: string;
-};
-
-# ---------- Document ADT ----------
-# All per-document state is in Doc. Today there is one Doc;
-# the per-document directory scheme (doc.id) supports future multi-doc.
+# ---------- The document ----------
+# The text is the widget's; Doc holds what is not text.  Today there is
+# one Doc; the per-document directory scheme (doc.id) supports future
+# multi-doc.
 
 Doc: adt {
 	id:		int;
-	lines:		array of string;
-	nlines:		int;
-	curline:	int;
-	curcol:		int;
-	topline:	int;
-	dirty:		int;
 	filepath:	string;
-
-	# Selection
-	selactive:	int;
-	selstartline:	int;
-	selstartcol:	int;
-	selendline:	int;
-	selendcol:	int;
-
-	# Undo/Redo
-	undostack:	array of ref Undo;
-	undocount:	int;
-	redostack:	array of ref Undo;
-	redocount:	int;
-
-	# Find
 	searchstr:	string;
-	findmode:	int;
-	findbuf:	string;
-
-	# Goto line
-	gotomode:	int;
-	gotobuf:	string;
-
-	# Replace
-	replacemode:	int;		# 0=off, 1=entering search, 2=entering replacement
-	replacebuf:	string;
-	replacefind:	string;		# search term for replace
-	replacewith:	string;		# replacement text
-
-	# Save as
-	saveasmode:	int;
-	saveasbuf:	string;
-
-	# Snarf
-	snarf:		string;
 };
 
-newdoc(id: int): ref Doc
-{
-	d := ref Doc;
-	d.id = id;
-	d.lines = array[1024] of string;
-	d.lines[0] = "";
-	d.nlines = 1;
-	d.curline = 0;
-	d.curcol = 0;
-	d.topline = 0;
-	d.dirty = 0;
-	d.filepath = "";
-	d.selactive = 0;
-	d.selstartline = 0;
-	d.selstartcol = 0;
-	d.selendline = 0;
-	d.selendcol = 0;
-	d.undostack = array[MAXUNDO] of ref Undo;
-	d.undocount = 0;
-	d.redostack = array[MAXUNDO] of ref Undo;
-	d.redocount = 0;
-	d.searchstr = "";
-	d.findmode = 0;
-	d.findbuf = "";
-	d.gotomode = 0;
-	d.gotobuf = "";
-	d.replacemode = 0;
-	d.replacebuf = "";
-	d.replacefind = "";
-	d.replacewith = "";
-	d.saveasmode = 0;
-	d.saveasbuf = "";
-	d.snarf = "";
-	return d;
-}
+# A change, as undo takes it back: text inserted at ix, or deleted from
+# it.  ix is the widget's index (line.char) when the change was made;
+# undo and redo take changes back in the order they were made, so the
+# text is then as it was and ix names the same place.
+Ins, Del: con iota;
+Change: adt {
+	op:	int;
+	ix:	string;
+	text:	string;
+	seq:	int;		# the action it was part of: undo takes back one at a time
+};
+
+MAXUNDO: con 20000;	# changes kept; past it the oldest go
+
+undo, redo: list of ref Change;
+nundo := 0;
+seq := 0;		# the action changes are part of now
+savedseq := 0;	# the action on top of undo when the text was saved (-1: none)
+lastkind := 0;	# the kind of key last typed, to make a run of typing one action
+Ktyping: con 1;	# lastkind for text typed (Kbs and Kdel for their own)
 
 # ---------- QID encoding ----------
 # Path = (docid << 8) | filetype
@@ -237,7 +175,7 @@ qidfile(path: big): int
 
 # ---------- 9P ↔ Editor communication ----------
 
-Rgetbody, Rsetbody, Rgetaddr, Rsetaddr, Rdoctl, Rgetindex, Rgctl: con iota;
+Rgetbody, Rsetbody, Raddbody, Rgetaddr, Rsetaddr, Rdoctl, Rgetindex, Rgctl: con iota;
 
 EditReq: adt {
 	op:	int;
@@ -260,6 +198,9 @@ themech: chan of int;
 statedirty: int;	# set when doc changes, cleared after writing state files
 vislines: int;		# visible rows in the text widget (for paging)
 prompting: int;		# 1 while the status entry is shown
+statusmsg: string;	# shown in the status bar until the next key
+exitasked: int;	# an exit was refused for changes not saved: the next one goes
+shown: string;		# the title last set
 
 # Theme colours, resolved to #rrggbbff strings for Tk
 c_bg:	string;
@@ -291,8 +232,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	sys->pctl(Sys->NEWPGRP, nil);
 	tkclient->init();
 
-	# Initialize document
-	doc = newdoc(1);
+	doc = ref Doc(1, "", "");
 
 	# Parse args
 	argv = tl argv;
@@ -301,7 +241,8 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	# Start 9P server before creating window (so it's available immediately)
 	editreq = chan of ref EditReq;
-	eventch = chan of string;
+	# events wait here for a reader, not only for one already waiting
+	eventch = chan[32] of string;
 	spawn startfsys();
 
 	# Create the Tk toplevel
@@ -319,14 +260,25 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	buildui();
 
-	# Load file if specified
-	if(doc.filepath != "")
-		loadfile(doc.filepath);
+	# Load file if specified; one that is not there yet is a new file
+	# of that name
+	if(doc.filepath != ""){
+		e := loadfile(doc.filepath);
+		if(e != nil){
+			(ok, nil) := sys->stat(doc.filepath);
+			if(ok < 0)
+				statusmsg = "new file";
+			else {
+				statusmsg = e;
+				doc.filepath = "";
+			}
+		}
+	}
 
 	tkclient->onscreen(top, nil);
 	tkclient->startinput(top, "kbd" :: "ptr" :: nil);
 
-	rendertext();
+	refresh(1);
 
 	# Write initial state so Veltro tool can read immediately after launch.
 	# Without this, body/addr/index files don't exist until the first user
@@ -337,9 +289,6 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# Periodic state writer / ctl-file poll
 	ticks := chan of int;
 	spawn timer(ticks, 500);
-
-	statedirty = 1;
-	writeeditstate();
 
 	# Listen for live theme changes
 	themech = chan[1] of int;
@@ -352,39 +301,50 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# window through here); a loop that never drains it leaves every
 	# posted menu mapped-and-grabbing but windowless — invisible.
 	c = <-top.wreq =>
+		# the frame's close and the window manager's Delete: changes
+		# not saved are kept, the first time
+		if(c == "exit"){
+			doexit();
+			refresh(0);
+			break;
+		}
 		tkclient->wmctl(top, c);
 		if(c != nil && len c > 0 && c[0] == '!')
-			rendertext();
+			refresh(1);
 	key := <-top.ctxt.kbd =>
 		if(prompting)
 			tk->keyboard(top, key);
 		else {
+			statusmsg = "";
+			if(key != 17)
+				exitasked = 0;
 			handlekey(key);
 			statedirty = 1;
-			rendertext();
+			refresh(1);
 		}
 	p := <-top.ctxt.ptr =>
-		# Tk owns mouse positioning / selection natively; mirror the
-		# resulting cursor and selection back into the document model.
+		# Tk owns mouse positioning / selection natively
+		if(p.buttons != 0)
+			lastkind = 0;
 		tk->pointer(top, *p);
-		syncfromwidget();
-		updatestatus();
+		refresh(0);
 	a := <-actch =>
 		handleaction(a);
+		statedirty = 1;
+		refresh(1);
 	<-ticks =>
-		changed := checkctlfile();
-		if(changed) {
+		if(checkctlfile()) {
 			statedirty = 1;
-			rendertext();
+			refresh(1);
 		}
 		writeeditstate();
 	req := <-editreq =>
 		handleeditreq(req);
 		statedirty = 1;
-		rendertext();
+		refresh(1);
 	<-themech =>
 		reloadcolors();
-		rendertext();
+		refresh(0);
 	}
 }
 
@@ -428,6 +388,12 @@ tkcmds(cmds: array of string)
 	}
 }
 
+# a command to the text widget
+t(c: string): string
+{
+	return tk->cmd(top, ".main.t " + c);
+}
+
 # ---------- Action dispatch (menu items + prompt completion) ----------
 
 handleaction(a: string)
@@ -436,6 +402,9 @@ handleaction(a: string)
 	if(toks == nil)
 		return;
 	tok := hd toks;
+	lastkind = 0;
+	if(tok != "menu" && tok != "exit")
+		exitasked = 0;
 	case tok {
 	"menu" =>
 		buildmenu();
@@ -444,27 +413,21 @@ handleaction(a: string)
 		val := tk->cmd(top, ".prompt get");
 		endprompt();
 		finishprompt(val);
-		rendertext();
 	"promptcancel" =>
 		endprompt();
 		promptkind = PNONE;
-		rendertext();
-	"undo" =>	doundo(); rendertext();
-	"redo" =>	doredo(); rendertext();
-	"save" =>	dosave(); rendertext();
+	"undo" =>	doundo();
+	"redo" =>	doredo();
+	"save" =>	dosave();
 	"saveas" =>	startsaveas();
 	"find" =>	startfind();
 	"replace" =>	startreplace();
 	"goto" =>	startgoto();
-	"selall" =>	selectall(); rendertext();
-	"cut" =>	docut(); rendertext();
+	"selall" =>	selectall();
+	"cut" =>	docut();
 	"copy" =>	docopy();
-	"paste" =>	dopaste(); rendertext();
-	"exit" =>
-		if(checkdirty()){
-			postnote(1, sys->pctl(0, nil), "kill");
-			exit;
-		}
+	"paste" =>	dopaste();
+	"exit" =>	doexit();
 	}
 }
 
@@ -504,50 +467,39 @@ menuxyt(toks: list of string): string
 	return "40 40";
 }
 
-# ---------- Rendering: the text widget is a view of the document ----------
+# Exit, unless there are changes not saved: then say so, and go at
+# the next exit asked for.
+doexit()
+{
+	if(isdirty() && !exitasked){
+		exitasked = 1;
+		lastkind = 0;
+		statusmsg = "changes not saved: exit again to discard them";
+		return;
+	}
+	postevent("quit");
+	postnote(1, sys->pctl(0, nil), "kill");
+	exit;
+}
 
-# Rebuild the text widget from the document model, then reflect the
-# cursor and selection.  The document model stays the single source of
-# truth (so undo / find / the 9P body all keep working unchanged); the
-# widget is a pure renderer that also gives us native mouse + scrolling.
-rendertext()
+# ---------- The view of the document ----------
+
+# After an event: the cursor in view if see, the status bar and the
+# title made current.
+refresh(see: int)
 {
 	if(top == nil)
 		return;
-	tk->cmd(top, ".main.t delete 1.0 end");
-	tk->cmd(top, ".main.t insert end " + tk->quote(getbodytext()));
-	tk->cmd(top, ".main.t tag remove sel 1.0 end");
-	if(doc.selactive)
-		tk->cmd(top, sys->sprint(".main.t tag add sel %d.%d %d.%d",
-			doc.selstartline+1, doc.selstartcol, doc.selendline+1, doc.selendcol));
-	tk->cmd(top, sys->sprint(".main.t mark set insert %d.%d", doc.curline+1, doc.curcol));
-	tk->cmd(top, ".main.t see insert");
+	if(see)
+		t("see insert");
 	recalcvis();
 	updatestatus();
-	tk->cmd(top, "update");
-}
-
-# After native mouse handling, copy the widget's cursor and selection
-# back into the document model.
-syncfromwidget()
-{
-	(l, c) := parseindex(tk->cmd(top, ".main.t index insert"));
-	if(l >= 0){
-		doc.curline = l;
-		doc.curcol = c;
+	s := titlestr();
+	if(s != shown){
+		shown = s;
+		tkclient->settitle(top, s);
 	}
-	sf := tk->cmd(top, ".main.t index sel.first");
-	if(sf != nil && len sf > 0 && sf[0] >= '0' && sf[0] <= '9'){
-		sl := tk->cmd(top, ".main.t index sel.last");
-		(a, b) := parseindex(sf);
-		(d, e) := parseindex(sl);
-		if(a >= 0 && d >= 0){
-			doc.selactive = 1;
-			doc.selstartline = a; doc.selstartcol = b;
-			doc.selendline = d; doc.selendcol = e;
-		}
-	} else
-		doc.selactive = 0;
+	tk->cmd(top, "update");
 }
 
 # "L.C" -> (L-1, C); (-1, 0) if unparseable.
@@ -587,9 +539,12 @@ updatestatus()
 	if(name == "")
 		name = "(new)";
 	dq := "";
-	if(doc.dirty)
+	if(isdirty())
 		dq = " *";
-	s := sys->sprint("%s%s    -    Ln %d, Col %d", name, dq, doc.curline+1, doc.curcol+1);
+	(l, c) := parseindex(t("index insert"));
+	s := sys->sprint("%s%s    -    Ln %d, Col %d", name, dq, l+1, c+1);
+	if(statusmsg != "")
+		s += "    -    " + statusmsg;
 	tk->cmd(top, ".status configure -text " + tk->quote(s));
 }
 
@@ -629,13 +584,8 @@ finishprompt(val: string)
 	PGOTO =>
 		if(val != ""){
 			(ln, nil) := str->toint(val, 10);
-			if(ln > 0){
-				doc.curline = ln - 1;
-				if(doc.curline >= doc.nlines)
-					doc.curline = doc.nlines - 1;
-				doc.curcol = 0;
-				scrolltocursor();
-			}
+			if(ln > 0)
+				gotoline(ln);
 		}
 	PREPLACEFIND =>
 		preplacefind = val;
@@ -680,97 +630,86 @@ loadcolors()
 
 handleeditreq(req: ref EditReq)
 {
+	lastkind = 0;
 	case req.op {
 	Rgetbody =>
 		req.reply <-= getbodytext();
 	Rsetbody =>
+		newaction();
 		setbodytext(req.data);
 		postevent("modified");
 		req.reply <-= "ok";
+	Raddbody =>
+		# the rest of a body longer than one 9P message: part of
+		# the same action as the write that began it
+		ins("end", req.data);
+		req.reply <-= "ok";
 	Rgetaddr =>
-		req.reply <-= sys->sprint("%d %d", doc.curline + 1, doc.curcol + 1);
+		(l, c) := parseindex(t("index insert"));
+		req.reply <-= sys->sprint("%d %d", l + 1, c + 1);
 	Rsetaddr =>
 		(line, rest) := splitfirst(req.data);
 		(col, nil) := splitfirst(rest);
 		(ln, nil) := str->toint(line, 10);
 		(cn, nil) := str->toint(col, 10);
-		if(ln > 0) {
-			doc.curline = ln - 1;
-			if(doc.curline >= doc.nlines)
-				doc.curline = doc.nlines - 1;
-		}
-		if(cn > 0) {
-			doc.curcol = cn - 1;
-			fixcol();
-		}
-		scrolltocursor();
+		(l, c) := parseindex(t("index insert"));
+		if(ln > 0)
+			l = ln - 1;
+		if(cn > 0)
+			c = cn - 1;
+		setcursor(sys->sprint("%d.%d", l + 1, c));
 		req.reply <-= "ok";
 	Rdoctl =>
 		req.reply <-= handledocctl(req.data);
 	Rgetindex =>
-		d := sys->sprint("%d %s %d\n", doc.id, doc.filepath, doc.dirty);
-		req.reply <-= d;
+		req.reply <-= indexline();
 	Rgctl =>
 		req.reply <-= handlegctl(req.data);
 	}
 }
 
-getbodytext(): string
+indexline(): string
 {
-	s := "";
-	for(i := 0; i < doc.nlines; i++) {
-		if(i > 0)
-			s += "\n";
-		s += doc.lines[i];
-	}
-	return s;
+	return sys->sprint("%d %s %d\n", doc.id, doc.filepath, isdirty());
 }
 
+getbodytext(): string
+{
+	return t("get 1.0 end");
+}
+
+# Replace the whole text, as one change undo takes back.
 setbodytext(text: string)
 {
-	doc.nlines = 0;
-	doc.lines = array[1024] of string;
-	start := 0;
-	for(i := 0; i < len text; i++) {
-		if(text[i] == '\n') {
-			growbuf();
-			doc.lines[doc.nlines] = text[start:i];
-			doc.nlines++;
-			start = i + 1;
-		}
-	}
-	growbuf();
-	if(start < len text)
-		doc.lines[doc.nlines] = text[start:];
-	else
-		doc.lines[doc.nlines] = "";
-	doc.nlines++;
-	doc.dirty = 1;
-	doc.curline = 0;
-	doc.curcol = 0;
-	doc.topline = 0;
-	doc.selactive = 0;
-	doc.undocount = 0;
-	doc.redocount = 0;
+	del("1.0", "end");
+	ins("1.0", text);
+	setcursor("1.0");
+}
+
+# A ctl command is a line: the newline echo ends it with is not part of
+# what it says (a text inserted keeps any newline of its own before it).
+chomp(s: string): string
+{
+	if(len s > 0 && s[len s - 1] == '\n')
+		s = s[0:len s - 1];
+	return s;
 }
 
 handledocctl(cmd: string): string
 {
+	cmd = chomp(cmd);
 	(op, rest) := splitfirst(cmd);
 	op = str->tolower(op);
+	lastkind = 0;
 	case op {
 	"save" =>
-		dosave();
-		return "ok";
+		if(doc.filepath == "")
+			return "error: no file name: use saveas";
+		return savefile(doc.filepath);
 	"goto" =>
 		(lns, nil) := str->toint(rest, 10);
-		if(lns > 0) {
-			doc.curline = lns - 1;
-			if(doc.curline >= doc.nlines)
-				doc.curline = doc.nlines - 1;
-			doc.curcol = 0;
-			scrolltocursor();
-		}
+		if(lns > 0)
+			gotoline(lns);
 		return "ok";
 	"find" =>
 		if(rest != "") {
@@ -779,20 +718,19 @@ handledocctl(cmd: string): string
 		}
 		return "ok";
 	"saveas" =>
-		if(rest != "")
-			dosaveas(rest);
-		return "ok";
+		if(rest == "")
+			return "error: usage: saveas <path>";
+		return dosaveas(rest);
 	"name" =>
-		if(rest != "") {
+		if(rest != "")
 			doc.filepath = rest;
-			tkclient->settitle(top, titlestr());
-		}
 		return "ok";
 	"clean" =>
-		doc.dirty = 0;
+		savedseq = topseq();
+		exitasked = 0;
 		return "ok";
 	"dirty" =>
-		doc.dirty = 1;
+		savedseq = -1;
 		return "ok";
 	"insert" =>
 		# insert <line> <col> <text>
@@ -801,15 +739,16 @@ handledocctl(cmd: string): string
 		(ln, nil) := str->toint(ls, 10);
 		(cn, nil) := str->toint(cs, 10);
 		if(ln > 0 && cn > 0) {
-			doc.curline = ln - 1;
-			doc.curcol = cn - 1;
-			if(doc.curline >= doc.nlines)
-				doc.curline = doc.nlines - 1;
-			fixcol();
-			insertstring(text);
-			doc.dirty = 1;
+			newaction();
+			setcursor(ins(sys->sprint("%d.%d", ln, cn - 1), text));
 			postevent("modified");
 		}
+		return "ok";
+	"append" =>
+		# append <text>: at the end of the text as it is now
+		newaction();
+		setcursor(ins("end", rest));
+		postevent("modified");
 		return "ok";
 	"delete" =>
 		# delete <startline> <startcol> <endline> <endcol>
@@ -822,12 +761,10 @@ handledocctl(cmd: string): string
 		(el, nil) := str->toint(els, 10);
 		(ec, nil) := str->toint(ecs, 10);
 		if(sl > 0 && sc > 0 && el > 0 && ec > 0) {
-			doc.selactive = 1;
-			doc.selstartline = sl - 1;
-			doc.selstartcol = sc - 1;
-			doc.selendline = el - 1;
-			doc.selendcol = ec - 1;
-			deletesel();
+			newaction();
+			a := sys->sprint("%d.%d", sl, sc - 1);
+			del(a, sys->sprint("%d.%d", el, ec - 1));
+			setcursor(earlier(a, sys->sprint("%d.%d", el, ec - 1)));
 			postevent("modified");
 		}
 		return "ok";
@@ -854,43 +791,44 @@ handledocctl(cmd: string): string
 	}
 }
 
+UNSAVED: con "error: changes not saved: save them, or write clean to let them go";
+
 handlegctl(cmd: string): string
 {
+	cmd = chomp(cmd);
 	(op, rest) := splitfirst(cmd);
 	op = str->tolower(op);
+	lastkind = 0;
 	case op {
 	"open" =>
-		sys->fprint(stderr, "edit: handlegctl open: rest=%s\n", rest);
-		if(rest != "") {
-			doc.filepath = rest;
-			loadfile(doc.filepath);
-			sys->fprint(stderr, "edit: handlegctl open: loaded %d lines\n", doc.nlines);
-			tkclient->settitle(top, titlestr());
-			postevent("opened " + doc.filepath);
+		if(rest == "")
+			return "error: usage: open <path>";
+		if(isdirty())
+			return UNSAVED;
+		e := loadfile(rest);
+		if(e != nil){
+			(ok, nil) := sys->stat(rest);
+			if(ok >= 0)
+				return "error: " + e;
+			# not there yet: a new file of that name
+			newdoc();
 		}
+		doc.filepath = rest;
+		postevent("opened " + doc.filepath);
 		return "ok";
 	"new" =>
-		doc.lines = array[1024] of string;
-		doc.lines[0] = "";
-		doc.nlines = 1;
-		doc.curline = 0;
-		doc.curcol = 0;
-		doc.topline = 0;
-		doc.dirty = 0;
+		if(isdirty())
+			return UNSAVED;
+		newdoc();
 		doc.filepath = "";
-		doc.selactive = 0;
-		doc.undocount = 0;
-		doc.redocount = 0;
-		tkclient->settitle(top, titlestr());
 		postevent("new");
 		return "ok";
 	"quit" =>
-		if(checkdirty()) {
-			postevent("quit");
-			postnote(1, sys->pctl(0, nil), "kill");
-			exit;
-		}
-		return "ok";
+		if(isdirty())
+			return UNSAVED;
+		postevent("quit");
+		postnote(1, sys->pctl(0, nil), "kill");
+		exit;
 	* =>
 		return "error: unknown global ctl: " + op;
 	}
@@ -898,7 +836,7 @@ handlegctl(cmd: string): string
 
 postevent(msg: string)
 {
-	# Non-blocking send — if nobody is reading events, drop it
+	# Non-blocking send — if 32 wait unread, drop it
 	alt {
 	eventch <-= msg =>
 		;
@@ -1198,6 +1136,7 @@ Serve:
 			}
 			qid := Sys->Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
+			c.data = nil;
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
 
 		Read =>
@@ -1230,6 +1169,13 @@ Serve:
 	navops <-= nil;
 }
 
+ask(op, did: int, data: string): string
+{
+	reply := chan of string;
+	editreq <-= ref EditReq(op, did, data, reply);
+	return <-reply;
+}
+
 handlefsread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 {
 	did := qiddoc(c.path);
@@ -1242,10 +1188,7 @@ handlefsread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 			srv.reply(styxservers->readstr(m, "edit\n"));
 			return;
 		Gindex =>
-			reply := chan of string;
-			editreq <-= ref EditReq(Rgetindex, 0, "", reply);
-			data := <-reply;
-			srv.reply(styxservers->readstr(m, data));
+			srv.reply(styxservers->readstr(m, ask(Rgetindex, 0, "")));
 			return;
 		}
 		srv.reply(ref Rmsg.Error(m.tag, Styxservers->Eperm));
@@ -1255,32 +1198,38 @@ handlefsread(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
 	# Per-doc files
 	case fid {
 	Fbody =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rgetbody, did, "", reply);
-		data := <-reply;
-		srv.reply(styxservers->readstr(m, data));
+		# the text as it was at the first read, for the reads after
+		# it: a body longer than one read is read whole, as one text
+		if(m.offset == big 0 || c.data == nil)
+			c.data = array of byte ask(Rgetbody, did, "");
+		srv.reply(styxservers->readbytes(m, c.data));
 	Fctl =>
 		srv.reply(styxservers->readstr(m, ""));
 	Fevent =>
-		# Non-blocking receive with timeout to avoid deadlocking serveloop
-		ev := "";
-		timeout := chan of int;
-		spawn evtimeout(timeout, 5000);
-		alt {
-		ev = <-eventch =>
-			;
-		<-timeout =>
-			ev = "";
-		}
-		srv.reply(styxservers->readstr(m, ev + "\n"));
+		# wait for an event in a proc of its own: the other files
+		# are served meanwhile
+		spawn eventread(srv, m);
 	Faddr =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rgetaddr, did, "", reply);
-		data := <-reply;
-		srv.reply(styxservers->readstr(m, data + "\n"));
+		srv.reply(styxservers->readstr(m, ask(Rgetaddr, did, "") + "\n"));
 	* =>
 		srv.reply(ref Rmsg.Error(m.tag, Styxservers->Eperm));
 	}
+}
+
+# Answer a read of event with the next event, or an empty line after
+# five seconds of none.
+eventread(srv: ref Styxserver, m: ref Tmsg.Read)
+{
+	ev := "";
+	timeout := chan of int;
+	spawn evtimeout(timeout, 5000);
+	alt {
+	ev = <-eventch =>
+		;
+	<-timeout =>
+		ev = "";
+	}
+	srv.reply(styxservers->readstr(m, ev + "\n"));
 }
 
 handlefswrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
@@ -1291,9 +1240,7 @@ handlefswrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 
 	# Global ctl
 	if(did == 0 && fid == Ggctl) {
-		reply := chan of string;
-		editreq <-= ref EditReq(Rgctl, 0, data, reply);
-		result := <-reply;
+		result := ask(Rgctl, 0, data);
 		if(len result >= 6 && result[0:6] == "error:")
 			srv.reply(ref Rmsg.Error(m.tag, result));
 		else
@@ -1309,22 +1256,31 @@ handlefswrite(srv: ref Styxserver, m: ref Tmsg.Write, c: ref Fid)
 	# Per-doc files
 	case fid {
 	Fbody =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rsetbody, did, data, reply);
-		<-reply;
+		# A write at 0 replaces the text; the writes after it, a
+		# body too long for one message, add the rest to it.  A
+		# character split between two writes waits for its end.
+		op := Raddbody;
+		b := m.data;
+		if(m.offset == big 0)
+			op = Rsetbody;
+		else if(c.data != nil){
+			nb := array[len c.data + len b] of byte;
+			nb[0:] = c.data;
+			nb[len c.data:] = b;
+			b = nb;
+		}
+		n := sys->utfbytes(b, len b);
+		c.data = b[n:];
+		ask(op, did, string b[0:n]);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 	Fctl =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rdoctl, did, data, reply);
-		result := <-reply;
+		result := ask(Rdoctl, did, data);
 		if(len result >= 6 && result[0:6] == "error:")
 			srv.reply(ref Rmsg.Error(m.tag, result));
 		else
 			srv.reply(ref Rmsg.Write(m.tag, len m.data));
 	Faddr =>
-		reply := chan of string;
-		editreq <-= ref EditReq(Rsetaddr, did, data, reply);
-		<-reply;
+		ask(Rsetaddr, did, data);
 		srv.reply(ref Rmsg.Write(m.tag, len m.data));
 	* =>
 		srv.reply(ref Rmsg.Error(m.tag, Styxservers->Eperm));
@@ -1340,7 +1296,7 @@ titlestr(): string
 		s += " " + doc.filepath;
 	else
 		s += " (new)";
-	if(doc.dirty)
+	if(isdirty())
 		s += " *";
 	return s;
 }
@@ -1354,6 +1310,7 @@ handlekey(key: int)
 		ctrl = 1;
 
 	if(ctrl) {
+		lastkind = 0;
 		case key {
 		1 =>	# Ctrl-A: select all
 			selectall();
@@ -1363,14 +1320,8 @@ handlekey(key: int)
 			startfind();
 		7 =>	# Ctrl-G: find next
 			findnext();
-		8 =>	# Ctrl-H: replace
-			startreplace();
 		17 =>	# Ctrl-Q: quit
-			if(checkdirty()) {
-				postevent("quit");
-				postnote(1, sys->pctl(0, nil), "kill");
-				exit;
-			}
+			doexit();
 		19 =>	# Ctrl-S: save
 			dosave();
 		22 =>	# Ctrl-V: paste
@@ -1386,111 +1337,70 @@ handlekey(key: int)
 	}
 
 	case key {
-	Kbs =>
-		if(deletesel())
-			;
-		else if(doc.curcol > 0) {
-			pushundo(UndoDelete, doc.curline, doc.curcol-1, doc.lines[doc.curline][doc.curcol-1:doc.curcol]);
-			doc.lines[doc.curline] = doc.lines[doc.curline][0:doc.curcol-1] + doc.lines[doc.curline][doc.curcol:];
-			doc.curcol--;
-			doc.dirty = 1;
-		} else if(doc.curline > 0) {
-			pushundo(UndoJoinLine, doc.curline-1, len doc.lines[doc.curline-1], doc.lines[doc.curline]);
-			doc.curcol = len doc.lines[doc.curline-1];
-			doc.lines[doc.curline-1] += doc.lines[doc.curline];
-			deleteline(doc.curline);
-			doc.curline--;
-			doc.dirty = 1;
+	Kbs or Kdel =>
+		# a run of them is one action; a selection goes by itself
+		if(lastkind != key || hassel())
+			newaction();
+		if(delsel())
+			lastkind = 0;
+		else {
+			if(key == Kbs)
+				del("insert-1c", "insert");
+			else
+				del("insert", "insert+1c");
+			lastkind = key;
 		}
-	Kdel =>
-		if(deletesel())
-			;
-		else if(doc.curcol < len doc.lines[doc.curline]) {
-			pushundo(UndoDelete, doc.curline, doc.curcol, doc.lines[doc.curline][doc.curcol:doc.curcol+1]);
-			doc.lines[doc.curline] = doc.lines[doc.curline][0:doc.curcol] + doc.lines[doc.curline][doc.curcol+1:];
-			doc.dirty = 1;
-		} else if(doc.curline < doc.nlines - 1) {
-			pushundo(UndoJoinLine, doc.curline, len doc.lines[doc.curline], doc.lines[doc.curline+1]);
-			doc.lines[doc.curline] += doc.lines[doc.curline+1];
-			deleteline(doc.curline+1);
-			doc.dirty = 1;
-		}
-	'\n' =>
-		deletesel();
-		rest := "";
-		if(doc.curcol < len doc.lines[doc.curline])
-			rest = doc.lines[doc.curline][doc.curcol:];
-		pushundo(UndoSplitLine, doc.curline, doc.curcol, "");
-		doc.lines[doc.curline] = doc.lines[doc.curline][0:doc.curcol];
-		insertline(doc.curline+1, rest);
-		doc.curline++;
-		doc.curcol = 0;
-		doc.dirty = 1;
-	'\t' =>
-		deletesel();
-		insertchar('\t');
-		doc.dirty = 1;
 	Kup =>
-		if(doc.curline > 0) {
-			doc.curline--;
-			fixcol();
-		}
-		doc.selactive = 0;
+		move("insert-1l");
 	Kdown =>
-		if(doc.curline < doc.nlines - 1) {
-			doc.curline++;
-			fixcol();
-		}
-		doc.selactive = 0;
+		move("insert+1l");
 	Kleft =>
-		if(doc.curcol > 0)
-			doc.curcol--;
-		else if(doc.curline > 0) {
-			doc.curline--;
-			doc.curcol = len doc.lines[doc.curline];
-		}
-		doc.selactive = 0;
+		move("insert-1c");
 	Kright =>
-		if(doc.curcol < len doc.lines[doc.curline])
-			doc.curcol++;
-		else if(doc.curline < doc.nlines - 1) {
-			doc.curline++;
-			doc.curcol = 0;
-		}
-		doc.selactive = 0;
+		move("insert+1c");
 	Khome =>
-		doc.curcol = 0;
-		doc.selactive = 0;
+		move("insert linestart");
 	Kend =>
-		doc.curcol = len doc.lines[doc.curline];
-		doc.selactive = 0;
+		move("insert lineend");
 	Kpgup =>
-		if(vislines > 0) {
-			doc.curline -= vislines;
-			if(doc.curline < 0)
-				doc.curline = 0;
-			fixcol();
-		}
-		doc.selactive = 0;
+		move("insert-" + string vislines + "l");
 	Kpgdown =>
-		if(vislines > 0) {
-			doc.curline += vislines;
-			if(doc.curline >= doc.nlines)
-				doc.curline = doc.nlines - 1;
-			fixcol();
-		}
-		doc.selactive = 0;
+		move("insert+" + string vislines + "l");
 	Kesc =>
-		doc.selactive = 0;
+		t("tag remove sel 1.0 end");
+		lastkind = 0;
 	* =>
-		if(key >= 16r20 || key == '\t') {
-			deletesel();
-			insertchar(key);
-			doc.dirty = 1;
+		if(key >= 16r20 || key == '\t' || key == '\n') {
+			# a run of typing is one action, to the end of its line
+			if(lastkind != Ktyping || hassel())
+				newaction();
+			delsel();
+			s := "";
+			s[0] = key;
+			t("mark set insert " + ins("insert", s));
+			lastkind = Ktyping;
+			if(key == '\n')
+				lastkind = 0;
 		}
 	}
+}
 
-	scrolltocursor();
+move(ix: string)
+{
+	t("mark set insert {" + ix + "}");
+	t("tag remove sel 1.0 end");
+	lastkind = 0;
+}
+
+setcursor(ix: string)
+{
+	t("mark set insert {" + ix + "}");
+	t("tag remove sel 1.0 end");
+}
+
+gotoline(ln: int)
+{
+	setcursor(sys->sprint("%d.0", ln));
 }
 
 startgoto()
@@ -1503,382 +1413,254 @@ startsaveas()
 	beginprompt(PSAVEAS, "Save as:");
 }
 
-dosaveas(path: string)
+# Save under a new name; the name stays the old one if it cannot be.
+dosaveas(path: string): string
 {
-	doc.filepath = path;
-	if(savefile(doc.filepath))
-		tkclient->settitle(top, titlestr());
+	r := savefile(path);
+	if(r == "ok")
+		doc.filepath = path;
+	return r;
 }
 
-# ---------- Buffer manipulation ----------
+# ---------- Changes and undo ----------
 
-insertchar(c: int)
+# The next change begins a new action.
+newaction()
 {
-	s := "";
-	s[0] = c;
-	pushundo(UndoInsert, doc.curline, doc.curcol, s);
-	if(doc.curcol >= len doc.lines[doc.curline])
-		doc.lines[doc.curline] += s;
-	else
-		doc.lines[doc.curline] = doc.lines[doc.curline][0:doc.curcol] + s + doc.lines[doc.curline][doc.curcol:];
-	doc.curcol++;
+	seq++;
 }
 
-insertstring(s: string)
+topseq(): int
 {
-	for(i := 0; i < len s; i++) {
-		if(s[i] == '\n') {
-			rest := "";
-			if(doc.curcol < len doc.lines[doc.curline])
-				rest = doc.lines[doc.curline][doc.curcol:];
-			doc.lines[doc.curline] = doc.lines[doc.curline][0:doc.curcol];
-			insertline(doc.curline+1, rest);
-			doc.curline++;
-			doc.curcol = 0;
-		} else {
-			if(doc.curcol >= len doc.lines[doc.curline])
-				doc.lines[doc.curline] += s[i:i+1];
-			else
-				doc.lines[doc.curline] = doc.lines[doc.curline][0:doc.curcol] + s[i:i+1] + doc.lines[doc.curline][doc.curcol:];
-			doc.curcol++;
+	if(undo == nil)
+		return 0;
+	return (hd undo).seq;
+}
+
+isdirty(): int
+{
+	return topseq() != savedseq;
+}
+
+push(c: ref Change)
+{
+	undo = c :: undo;
+	if(++nundo > MAXUNDO){
+		# keep the newest three quarters
+		keep: list of ref Change;
+		n := 0;
+		for(l := undo; l != nil && n < MAXUNDO*3/4; l = tl l){
+			keep = hd l :: keep;
+			n++;
 		}
+		undo = nil;
+		for(; keep != nil; keep = tl keep)
+			undo = hd keep :: undo;
+		nundo = n;
 	}
+	redo = nil;
 }
 
-insertline(at: int, s: string)
+rawins(ix, s: string)
 {
-	growbuf();
-	for(i := doc.nlines; i > at; i--)
-		doc.lines[i] = doc.lines[i-1];
-	doc.lines[at] = s;
-	doc.nlines++;
+	t("insert " + ix + " " + tk->quote(s));
 }
 
-deleteline(at: int)
+rawdel(ix0, ix1: string)
 {
-	for(i := at; i < doc.nlines - 1; i++)
-		doc.lines[i] = doc.lines[i+1];
-	doc.lines[doc.nlines-1] = "";
-	doc.nlines--;
-	if(doc.nlines == 0) {
-		doc.lines[0] = "";
-		doc.nlines = 1;
-	}
+	t("delete " + ix0 + " " + ix1);
 }
 
-growbuf()
+after(ix: string, n: int): string
 {
-	if(doc.nlines >= len doc.lines) {
-		newlines := array[len doc.lines * 2] of string;
-		newlines[0:] = doc.lines;
-		doc.lines = newlines;
-	}
+	return t("index {" + ix + "+" + string n + "c}");
 }
 
-fixcol()
+earlier(a, b: string): string
 {
-	if(doc.curcol > len doc.lines[doc.curline])
-		doc.curcol = len doc.lines[doc.curline];
+	if(t("compare " + a + " > " + b) == "1")
+		return b;
+	return a;
 }
 
-scrolltocursor()
+# Insert s at ix, logged; where it ends.  (The widget's insert mark is
+# not always moved past text put where it is: the caller moves it.)
+ins(ix, s: string): string
 {
-	if(vislines <= 0)
+	if(s == "")
+		return t("index {" + ix + "}");
+	ix = t("index {" + ix + "}");
+	if(seq == 0)
+		newaction();
+	# typing goes on the change it continues
+	c: ref Change;
+	if(undo != nil)
+		c = hd undo;
+	if(c != nil && c.seq == seq && c.op == Ins && after(c.ix, len c.text) == ix)
+		c.text += s;
+	else
+		push(ref Change(Ins, ix, s, seq));
+	rawins(ix, s);
+	redo = nil;
+	return after(ix, len s);
+}
+
+# Delete from a to b, logged.
+del(a, b: string)
+{
+	a = t("index {" + a + "}");
+	b = t("index {" + b + "}");
+	if(t("compare " + a + " > " + b) == "1")
+		(a, b) = (b, a);
+	s := t("get " + a + " " + b);
+	if(s == "")
 		return;
-	if(doc.curline < doc.topline)
-		doc.topline = doc.curline;
-	else if(doc.curline >= doc.topline + vislines)
-		doc.topline = doc.curline - vislines + 1;
+	if(seq == 0)
+		newaction();
+	# a run of backspaces, or of deletes, is one change
+	c: ref Change;
+	if(undo != nil && (hd undo).seq == seq && (hd undo).op == Del)
+		c = hd undo;
+	if(c != nil && c.ix == b){
+		c.ix = a;
+		c.text = s + c.text;
+	} else if(c != nil && c.ix == a)
+		c.text += s;
+	else
+		push(ref Change(Del, a, s, seq));
+	rawdel(a, b);
+	redo = nil;
+}
+
+# Take back the last action.
+doundo()
+{
+	if(undo == nil)
+		return;
+	s := (hd undo).seq;
+	at := "";
+	while(undo != nil && (hd undo).seq == s){
+		c := hd undo;
+		undo = tl undo;
+		nundo--;
+		case c.op {
+		Ins =>
+			rawdel(c.ix, after(c.ix, len c.text));
+			at = c.ix;
+		Del =>
+			rawins(c.ix, c.text);
+			at = after(c.ix, len c.text);
+		}
+		redo = c :: redo;
+	}
+	setcursor(at);
+	lastkind = 0;
+	postevent("modified");
+}
+
+# Make again the last action undone.
+doredo()
+{
+	if(redo == nil)
+		return;
+	s := (hd redo).seq;
+	at := "";
+	while(redo != nil && (hd redo).seq == s){
+		c := hd redo;
+		redo = tl redo;
+		case c.op {
+		Ins =>
+			rawins(c.ix, c.text);
+			at = after(c.ix, len c.text);
+		Del =>
+			rawdel(c.ix, after(c.ix, len c.text));
+			at = c.ix;
+		}
+		undo = c :: undo;
+		nundo++;
+	}
+	setcursor(at);
+	lastkind = 0;
+	postevent("modified");
+}
+
+# A new text: no undo, nothing to save.
+newdoc()
+{
+	rawdel("1.0", "end");
+	undo = redo = nil;
+	nundo = 0;
+	savedseq = 0;
+	exitasked = 0;
+	setcursor("1.0");
 }
 
 # ---------- Selection ----------
 
-iswordchar(c: int): int
+selrange(): (string, string)
 {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') || c == '_';
+	r := t("tag ranges sel");
+	(n, l) := sys->tokenize(r, " ");
+	if(n < 2)
+		return (nil, nil);
+	return (hd l, hd tl l);
 }
 
-wordbound(line, col: int): (int, int)
+hassel(): int
 {
-	s := doc.lines[line];
-	if(len s == 0)
-		return (0, 0);
-	if(col >= len s)
-		col = len s - 1;
-	if(col < 0)
-		col = 0;
-	# If not on a word char, select the single character
-	if(!iswordchar(s[col]))
-		return (col, col + 1);
-	ws := col;
-	while(ws > 0 && iswordchar(s[ws - 1]))
-		ws--;
-	we := col;
-	while(we < len s && iswordchar(s[we]))
-		we++;
-	return (ws, we);
-}
-
-selectall()
-{
-	doc.selactive = 1;
-	doc.selstartline = 0;
-	doc.selstartcol = 0;
-	doc.selendline = doc.nlines - 1;
-	doc.selendcol = len doc.lines[doc.nlines - 1];
-	doc.curline = doc.selendline;
-	doc.curcol = doc.selendcol;
-}
-
-getsel(): (int, int, int, int)
-{
-	if(!doc.selactive)
-		return (0, 0, 0, 0);
-	sl := doc.selstartline;
-	sc := doc.selstartcol;
-	el := doc.selendline;
-	ec := doc.selendcol;
-	if(sl > el || (sl == el && sc > ec)) {
-		(sl, el) = (el, sl);
-		(sc, ec) = (ec, sc);
-	}
-	return (sl, sc, el, ec);
+	(a, nil) := selrange();
+	return a != nil;
 }
 
 getseltext(): string
 {
-	(sl, sc, el, ec) := getsel();
-	if(!doc.selactive)
+	(a, b) := selrange();
+	if(a == nil)
 		return "";
-	if(sl == el)
-		return doc.lines[sl][sc:ec];
-	s := doc.lines[sl][sc:];
-	for(i := sl + 1; i < el; i++)
-		s += "\n" + doc.lines[i];
-	s += "\n" + doc.lines[el][0:ec];
-	return s;
+	return t("get " + a + " " + b);
 }
 
-deletesel(): int
+# Delete the selection, if there is one.
+delsel(): int
 {
-	if(!doc.selactive)
+	(a, b) := selrange();
+	if(a == nil)
 		return 0;
-	(sl, sc, el, ec) := getsel();
-	# Save selected text for undo
-	seltext := getseltext();
-	pushundo(UndoReplace, sl, sc, seltext);
-	if(sl == el) {
-		doc.lines[sl] = doc.lines[sl][0:sc] + doc.lines[sl][ec:];
-	} else {
-		doc.lines[sl] = doc.lines[sl][0:sc] + doc.lines[el][ec:];
-		for(i := sl + 1; i <= el; i++)
-			deleteline(sl + 1);
-	}
-	doc.curline = sl;
-	doc.curcol = sc;
-	doc.selactive = 0;
-	doc.dirty = 1;
+	del(a, b);
+	setcursor(a);
 	return 1;
+}
+
+selectall()
+{
+	t("tag add sel 1.0 end");
+	t("mark set insert end");
 }
 
 docopy()
 {
 	s := getseltext();
-	if(s != "") {
-		doc.snarf = s;
-		snarfput(s);
-	}
+	if(s != "")
+		tkclient->snarfput(s);
 }
 
 docut()
 {
+	if(!hassel())
+		return;
 	docopy();
-	deletesel();
+	newaction();
+	delsel();
 }
 
 dopaste()
 {
-	buf := snarfget();
-	if(buf != "")
-		doc.snarf = buf;
-	if(doc.snarf != "") {
-		deletesel();
-		insertstring(doc.snarf);
-		doc.dirty = 1;
-	}
-}
-
-# System clipboard via /chan/snarf, with an in-process fallback.
-snarfput(s: string)
-{
-	fd := sys->create("/chan/snarf", Sys->OWRITE, 8r666);
-	if(fd == nil)
-		fd = sys->open("/chan/snarf", Sys->OWRITE);
-	if(fd != nil){
-		b := array of byte s;
-		sys->write(fd, b, len b);
-	}
-}
-
-snarfget(): string
-{
-	fd := sys->open("/chan/snarf", Sys->OREAD);
-	if(fd == nil)
-		return doc.snarf;
-	s := "";
-	buf := array[4096] of byte;
-	for(;;){
-		n := sys->read(fd, buf, len buf);
-		if(n <= 0)
-			break;
-		s += string buf[:n];
-	}
+	s := tkclient->snarfget();
 	if(s == "")
-		return doc.snarf;
-	return s;
-}
-
-# ---------- Undo ----------
-
-pushundo(kind, line, col: int, text: string)
-{
-	if(doc.undocount >= MAXUNDO) {
-		for(i := 0; i < MAXUNDO - 1; i++)
-			doc.undostack[i] = doc.undostack[i+1];
-		doc.undocount = MAXUNDO - 1;
-	}
-	doc.undostack[doc.undocount] = ref Undo(kind, line, col, text, "");
-	doc.undocount++;
-	doc.redocount = 0;	# new edit clears redo stack
-}
-
-pushredo(kind, line, col: int, text: string)
-{
-	if(doc.redocount >= MAXUNDO) {
-		for(i := 0; i < MAXUNDO - 1; i++)
-			doc.redostack[i] = doc.redostack[i+1];
-		doc.redocount = MAXUNDO - 1;
-	}
-	doc.redostack[doc.redocount] = ref Undo(kind, line, col, text, "");
-	doc.redocount++;
-}
-
-doundo()
-{
-	if(doc.undocount <= 0)
 		return;
-	doc.undocount--;
-	u := doc.undostack[doc.undocount];
-	# Push inverse onto redo stack
-	pushredo(u.kind, u.line, u.col, u.text);
-	case u.kind {
-	UndoInsert =>
-		doc.lines[u.line] = doc.lines[u.line][0:u.col] + doc.lines[u.line][u.col + len u.text:];
-		doc.curline = u.line;
-		doc.curcol = u.col;
-	UndoDelete =>
-		doc.lines[u.line] = doc.lines[u.line][0:u.col] + u.text + doc.lines[u.line][u.col:];
-		doc.curline = u.line;
-		doc.curcol = u.col + len u.text;
-	UndoReplace =>
-		# Re-insert the deleted selection text at (u.line, u.col)
-		doc.curline = u.line;
-		doc.curcol = u.col;
-		insertstring(u.text);
-	UndoJoinLine =>
-		rest := doc.lines[u.line][u.col:];
-		doc.lines[u.line] = doc.lines[u.line][0:u.col];
-		insertline(u.line + 1, rest);
-		doc.curline = u.line + 1;
-		doc.curcol = 0;
-	UndoSplitLine =>
-		if(u.line + 1 < doc.nlines) {
-			doc.lines[u.line] += doc.lines[u.line + 1];
-			deleteline(u.line + 1);
-		}
-		doc.curline = u.line;
-		doc.curcol = u.col;
-	}
-	doc.dirty = 1;
-}
-
-doredo()
-{
-	if(doc.redocount <= 0)
-		return;
-	doc.redocount--;
-	u := doc.redostack[doc.redocount];
-	# Re-apply the original operation (inverse of undo)
-	case u.kind {
-	UndoInsert =>
-		# Undo removed the insert; redo re-inserts
-		doc.lines[u.line] = doc.lines[u.line][0:u.col] + u.text + doc.lines[u.line][u.col:];
-		doc.curline = u.line;
-		doc.curcol = u.col + len u.text;
-	UndoDelete =>
-		# Undo re-inserted the deleted text; redo deletes again
-		doc.lines[u.line] = doc.lines[u.line][0:u.col] + doc.lines[u.line][u.col + len u.text:];
-		doc.curline = u.line;
-		doc.curcol = u.col;
-	UndoReplace =>
-		# Undo re-inserted the selection; redo deletes it again
-		# The re-inserted text starts at (u.line, u.col) and may span lines
-		# We need to delete the same text that was re-inserted
-		doc.curline = u.line;
-		doc.curcol = u.col;
-		# Calculate end position of the re-inserted text
-		eline := u.line;
-		ecol := u.col;
-		for(ci := 0; ci < len u.text; ci++) {
-			if(u.text[ci] == '\n') {
-				eline++;
-				ecol = 0;
-			} else
-				ecol++;
-		}
-		doc.selactive = 1;
-		doc.selstartline = u.line;
-		doc.selstartcol = u.col;
-		doc.selendline = eline;
-		doc.selendcol = ecol;
-		# Delete without pushing to undo (we manage stacks manually)
-		(sl, sc2, el, ec2) := getsel();
-		if(sl == el)
-			doc.lines[sl] = doc.lines[sl][0:sc2] + doc.lines[sl][ec2:];
-		else {
-			doc.lines[sl] = doc.lines[sl][0:sc2] + doc.lines[el][ec2:];
-			for(di := sl + 1; di <= el; di++)
-				deleteline(sl + 1);
-		}
-		doc.curline = sl;
-		doc.curcol = sc2;
-		doc.selactive = 0;
-	UndoJoinLine =>
-		# Undo split the line; redo joins it back
-		if(u.line + 1 < doc.nlines) {
-			doc.lines[u.line] += doc.lines[u.line + 1];
-			deleteline(u.line + 1);
-		}
-		doc.curline = u.line;
-		doc.curcol = u.col;
-	UndoSplitLine =>
-		# Undo joined the line; redo splits again
-		rest := doc.lines[u.line][u.col:];
-		doc.lines[u.line] = doc.lines[u.line][0:u.col];
-		insertline(u.line + 1, rest);
-		doc.curline = u.line + 1;
-		doc.curcol = 0;
-	}
-	# Push back onto undo without clearing redo
-	if(doc.undocount >= MAXUNDO) {
-		for(i := 0; i < MAXUNDO - 1; i++)
-			doc.undostack[i] = doc.undostack[i+1];
-		doc.undocount = MAXUNDO - 1;
-	}
-	doc.undostack[doc.undocount] = ref Undo(u.kind, u.line, u.col, u.text, "");
-	doc.undocount++;
-	doc.dirty = 1;
+	newaction();
+	delsel();
+	setcursor(ins("insert", s));
 }
 
 # ---------- Find ----------
@@ -1888,49 +1670,44 @@ startfind()
 	beginprompt(PFIND, "Find:");
 }
 
+# Find doc.searchstr after the cursor, from the top again past the end,
+# and select it.
 findnext()
 {
 	if(doc.searchstr == "")
 		return;
-	for(line := doc.curline; line < doc.nlines; line++) {
-		startcol := 0;
-		if(line == doc.curline)
-			startcol = doc.curcol + 1;
-		idx := strindex(doc.lines[line], doc.searchstr, startcol);
-		if(idx >= 0) {
-			doc.curline = line;
-			doc.curcol = idx;
-			doc.selactive = 1;
-			doc.selstartline = line;
-			doc.selstartcol = idx;
-			doc.selendline = line;
-			doc.selendcol = idx + len doc.searchstr;
-			scrolltocursor();
-			return;
-		}
+	ix := search(doc.searchstr, "insert+1c");
+	if(ix == nil){
+		statusmsg = "not found: " + doc.searchstr;
+		return;
 	}
-	for(line = 0; line <= doc.curline; line++) {
-		idx := strindex(doc.lines[line], doc.searchstr, 0);
-		if(idx >= 0) {
-			doc.curline = line;
-			doc.curcol = idx;
-			doc.selactive = 1;
-			doc.selstartline = line;
-			doc.selstartcol = idx;
-			doc.selendline = line;
-			doc.selendcol = idx + len doc.searchstr;
-			scrolltocursor();
-			return;
-		}
-	}
+	setcursor(ix);
+	t("tag add sel " + ix + " " + after(ix, len doc.searchstr));
+}
+
+# The index of the first pat at or after ix, from the top again past
+# the end; nil if there is none.  (Not the widget's search, which
+# takes no more than 127 bytes of pattern and cuts the rest off.)
+search(pat, ix: string): string
+{
+	text := getbodytext();
+	i := strindex(text, pat, len t("get 1.0 {" + ix + "}"));
+	if(i < 0)
+		i = strindex(text, pat, 0);
+	if(i < 0)
+		return nil;
+	return after("1.0", i);
 }
 
 strindex(s, sub: string, start: int): int
 {
-	if(len sub == 0 || len s == 0)
+	n := len sub;
+	if(n == 0)
 		return -1;
-	for(i := start; i <= len s - len sub; i++) {
-		if(s[i:i+len sub] == sub)
+	for(i := start; i <= len s - n; i++){
+		for(j := 0; j < n && s[i+j] == sub[j]; j++)
+			;
+		if(j == n)
 			return i;
 	}
 	return -1;
@@ -1943,119 +1720,78 @@ startreplace()
 	beginprompt(PREPLACEFIND, "Replace:");
 }
 
+# Replace the next find at or after the cursor, from the top again
+# past the end.
 doreplace(find, repl: string)
 {
 	if(find == "")
 		return;
-	# Find next occurrence from cursor and replace it
-	for(line := doc.curline; line < doc.nlines; line++) {
-		startcol := 0;
-		if(line == doc.curline)
-			startcol = doc.curcol;
-		idx := strindex(doc.lines[line], find, startcol);
-		if(idx >= 0) {
-			pushundo(UndoReplace, line, idx, find);
-			doc.lines[line] = doc.lines[line][0:idx] + repl + doc.lines[line][idx + len find:];
-			doc.curline = line;
-			doc.curcol = idx + len repl;
-			doc.dirty = 1;
-			scrolltocursor();
-			return;
-		}
+	ix := search(find, "insert");
+	if(ix == nil){
+		statusmsg = "not found: " + find;
+		return;
 	}
-	# Wrap around
-	for(line = 0; line <= doc.curline; line++) {
-		limit := len doc.lines[line];
-		if(line == doc.curline)
-			limit = doc.curcol;
-		idx := strindex(doc.lines[line], find, 0);
-		if(idx >= 0 && idx < limit) {
-			pushundo(UndoReplace, line, idx, find);
-			doc.lines[line] = doc.lines[line][0:idx] + repl + doc.lines[line][idx + len find:];
-			doc.curline = line;
-			doc.curcol = idx + len repl;
-			doc.dirty = 1;
-			scrolltocursor();
-			return;
-		}
-	}
+	newaction();
+	del(ix, after(ix, len find));
+	setcursor(ins(ix, repl));
 }
 
 doreplaceall(find, repl: string): int
 {
 	if(find == "")
 		return 0;
+	text := getbodytext();
+	found: list of int;	# the last first
+	for(i := strindex(text, find, 0); i >= 0; i = strindex(text, find, i + len find))
+		found = i :: found;
+	# from the end back, so the places before are where they were
+	newaction();
 	count := 0;
-	for(line := 0; line < doc.nlines; line++) {
-		col := 0;
-		for(;;) {
-			idx := strindex(doc.lines[line], find, col);
-			if(idx < 0)
-				break;
-			pushundo(UndoReplace, line, idx, find);
-			doc.lines[line] = doc.lines[line][0:idx] + repl + doc.lines[line][idx + len find:];
-			col = idx + len repl;
-			count++;
-		}
+	for(; found != nil; found = tl found){
+		ix := after("1.0", hd found);
+		del(ix, after(ix, len find));
+		ins(ix, repl);
+		count++;
 	}
-	if(count > 0)
-		doc.dirty = 1;
+	setcursor("1.0");
 	return count;
 }
 
 # ---------- File I/O ----------
 
-loadfile(path: string)
+# Read path into the document, with no undo and nothing to save; the
+# document is left as it was if path cannot be read.
+loadfile(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil) {
-		sys->fprint(stderr, "edit: cannot open %s: %r\n", path);
-		doc.filepath = "";
-		return;
-	}
-
+	if(fd == nil)
+		return sys->sprint("cannot open %s: %r", path);
 	(ok, d) := sys->fstat(fd);
 	if(ok < 0)
-		return;
+		return sys->sprint("cannot stat %s: %r", path);
 	if(d.mode & Sys->DMDIR)
-		return;
+		return path + " is a directory";
 
-	BLEN: con 8192;
-	buf := array[BLEN + Sys->UTFmax] of byte;
-	content := "";
-	inset := 0;
+	buf := array[8192] of byte;
+	nb := 0;
 	for(;;) {
-		n := sys->read(fd, buf[inset:], BLEN);
-		if(n <= 0)
-			break;
-		n += inset;
-		nutf := sys->utfbytes(buf, n);
-		content += string buf[0:nutf];
-		inset = n - nutf;
-		buf[0:] = buf[nutf:n];
-	}
-
-	doc.nlines = 0;
-	start := 0;
-	for(i := 0; i < len content; i++) {
-		if(content[i] == '\n') {
-			growbuf();
-			doc.lines[doc.nlines] = content[start:i];
-			doc.nlines++;
-			start = i + 1;
+		if(nb == len buf){
+			b := array[2 * len buf] of byte;
+			b[0:] = buf;
+			buf = b;
 		}
+		n := sys->read(fd, buf[nb:], len buf - nb);
+		if(n < 0)
+			return sys->sprint("cannot read %s: %r", path);
+		if(n == 0)
+			break;
+		nb += n;
 	}
-	growbuf();
-	if(start < len content)
-		doc.lines[doc.nlines] = content[start:];
-	else
-		doc.lines[doc.nlines] = "";
-	doc.nlines++;
-
-	doc.curline = 0;
-	doc.curcol = 0;
-	doc.topline = 0;
-	doc.dirty = 0;
+	newdoc();
+	rawins("1.0", string buf[0:nb]);
+	setcursor("1.0");
+	doc.filepath = path;
+	return nil;
 }
 
 dosave()
@@ -2067,48 +1803,36 @@ dosave()
 	savefile(doc.filepath);
 }
 
-savefile(path: string): int
+# Write the text to path; "ok", or why not.  A failure is said in the
+# status bar too, and the text stays not saved.
+savefile(path: string): string
 {
+	b := array of byte getbodytext();
 	fd := sys->create(path, Sys->OWRITE, 8r664);
 	if(fd == nil)
-		return 0;
-
-	err := 0;
-	for(i := 0; i < doc.nlines; i++) {
-		data := array of byte doc.lines[i];
-		n := sys->write(fd, data, len data);
-		if(n != len data) {
-			err = 1;
-			break;
-		}
-		if(i < doc.nlines - 1) {
-			nl := array of byte "\n";
-			n = sys->write(fd, nl, len nl);
-			if(n != len nl) {
-				err = 1;
-				break;
-			}
-		}
+		return saveerr(sys->sprint("cannot create %s: %r", path));
+	for(o := 0; o < len b; ){
+		n := len b - o;
+		if(n > Sys->ATOMICIO)
+			n = Sys->ATOMICIO;
+		if(sys->write(fd, b[o:], n) != n)
+			return saveerr(sys->sprint("cannot write %s: %r", path));
+		o += n;
 	}
 	fd = nil;
 
-	if(err)
-		return 0;
-
-	doc.dirty = 0;
-	tkclient->settitle(top, titlestr());
-	postevent("save " + doc.filepath);
-	return 1;
+	savedseq = topseq();
+	exitasked = 0;
+	lastkind = 0;
+	statusmsg = "saved";
+	postevent("save " + path);
+	return "ok";
 }
 
-checkdirty(): int
+saveerr(e: string): string
 {
-	if(!doc.dirty)
-		return 1;
-	if(doc.filepath != "")
-		return savefile(doc.filepath);
-	# Dirty unnamed file: refuse to quit (user must save or discard)
-	return 0;
+	statusmsg = e;
+	return "error: " + e;
 }
 
 # ---------- Helpers ----------
@@ -2218,6 +1942,9 @@ readf(path: string): string
 # capability, not as ambient /tmp/veltro state.
 # The tick loop polls command files and writes state files so the
 # Veltro editor tool can read/write the editor across namespace forks.
+# A command file is taken by renaming it before it is read, so one
+# written meanwhile is a new file, not lost in a truncation; the outcome
+# of each is written to result.
 
 initeditdir()
 {
@@ -2254,10 +1981,9 @@ writeeditstate()
 		return;
 	body := getbodytext();
 	writestatefile(EDIT_INST + "/body", body);
-	addr := sys->sprint("%d %d", doc.curline + 1, doc.curcol + 1);
-	writestatefile(EDIT_INST + "/addr", addr);
-	idx := sys->sprint("%d %s %d\n", doc.id, doc.filepath, doc.dirty);
-	writestatefile(EDIT_DIR + "/index", idx);
+	(l, c) := parseindex(t("index insert"));
+	writestatefile(EDIT_INST + "/addr", sys->sprint("%d %d", l + 1, c + 1));
+	writestatefile(EDIT_DIR + "/index", indexline());
 	statedirty = 0;
 }
 
@@ -2274,51 +2000,67 @@ writestatefile(path, data: string)
 checkctlfile(): int
 {
 	changed := 0;
+	lastkind = 0;
 
-	# Global ctl: open <path>, quit
-	gcmd := readrmfile(EDIT_DIR + "/ctl");
-	if(gcmd != nil && gcmd != "") {
-		handlegctl(gcmd);
+	# Global ctl: open <path>, new, quit
+	(gcmd, nil) := takefile(EDIT_DIR, "ctl");
+	if(gcmd != nil) {
+		# quit does not come back to say so
+		if(str->tolower(chomp(gcmd)) == "quit" && !isdirty())
+			writestatefile(EDIT_DIR + "/result", "ok");
+		writestatefile(EDIT_DIR + "/result", handlegctl(gcmd));
 		changed = 1;
 	}
 
 	# Per-doc ctl: save, saveas <p>, goto <n>, find <s>, name <p>, insert, delete
-	dcmd := readrmfile(EDIT_INST + "/ctl");
-	if(dcmd != nil && dcmd != "") {
-		handledocctl(dcmd);
+	(dcmd, nil) := takefile(EDIT_INST, "ctl");
+	if(dcmd != nil) {
+		writestatefile(EDIT_DIR + "/result", handledocctl(dcmd));
 		changed = 1;
 	}
 
 	# body.in: replace document body
-	newbody := readrmfile(EDIT_INST + "/body.in");
-	if(newbody != nil) {
+	(newbody, there) := takefile(EDIT_INST, "body.in");
+	if(there) {
+		newaction();
 		setbodytext(newbody);
+		postevent("modified");
+		writestatefile(EDIT_DIR + "/result", "ok");
 		changed = 1;
 	}
 
 	return changed;
 }
 
-readrmfile(path: string): string
+# The contents of dir/name, which is removed, and whether it was there.
+# It is renamed first, so a writer that comes after makes a new one
+# rather than writing into the one being taken.
+takefile(dir, name: string): (string, int)
 {
-	# Open for read+write so we can atomically read and truncate
-	fd := sys->open(path, Sys->ORDWR);
+	path := dir + "/" + name;
+	taken := name + ".taken";
+	d := sys->nulldir;
+	d.name = taken;
+	if(sys->wstat(path, d) >= 0)
+		path = dir + "/" + taken;
+	# else a file system that cannot rename: read it where it is
+	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
-		return nil;
-	buf := array[65536] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0) {
-		fd = nil;
-		return nil;
+		return (nil, 0);
+	buf := array[8192] of byte;
+	nb := 0;
+	for(;;){
+		if(nb == len buf){
+			b := array[2 * len buf] of byte;
+			b[0:] = buf;
+			buf = b;
+		}
+		n := sys->read(fd, buf[nb:], len buf - nb);
+		if(n <= 0)
+			break;
+		nb += n;
 	}
-	s := string buf[0:n];
-	# Truncate the file by seeking to start and writing zero bytes
-	# Use create to replace contents atomically
 	fd = nil;
-	fd = sys->create(path, Sys->OWRITE, 8r666);
-	fd = nil;
-	# Strip trailing whitespace
-	while(len s > 0 && (s[len s - 1] == '\n' || s[len s - 1] == ' ' || s[len s - 1] == '\t'))
-		s = s[0:len s - 1];
-	return s;
+	sys->remove(path);
+	return (string buf[0:nb], 1);
 }

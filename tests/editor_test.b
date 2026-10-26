@@ -247,7 +247,7 @@ testInsert(t: ref T)
 	if(!editorRunning())
 		t.skip("editor not running");
 	setbody("hello world");
-	docctl("insert 1 6 beautiful ");
+	docctl("insert 1 7 beautiful ");
 	sys->sleep(200);
 	body := getbody();
 	t.assertseq(body, "hello beautiful world", "insert should add text at position");
@@ -339,9 +339,16 @@ testNew(t: ref T)
 	if(!editorRunning())
 		t.skip("editor not running");
 	setbody("this should be cleared");
+	# changes not saved are kept: new is refused until they are let go
+	gctl("new");
+	t.assertseq(getbody(), "this should be cleared", "new should keep changes not saved");
+	r := readfile(EDIT_DIR + "/result");
+	t.assert(len r > 6 && r[0:6] == "error:", "new over changes not saved should be refused: " + r);
+	docctl("clean");
 	gctl("new");
 	body := getbody();
 	t.assert(body == "" || body == "\n", "new should clear document body");
+	t.assertseq(readfile(EDIT_DIR + "/result"), "ok", "new's answer");
 }
 
 # Test sequence: set body, goto, find

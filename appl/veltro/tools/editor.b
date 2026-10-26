@@ -85,6 +85,10 @@ doc(): string
 		"  delete <sl> <sc> <el> <ec>  Delete range\n" +
 		"  close                    Close editor (quit)\n" +
 		"  status                   Show document info\n\n" +
+		"Each command returns the editor's answer. open and close are\n" +
+		"refused while the document has changes not saved (the user's\n" +
+		"too): save them first. write, insert and the rest can be undone\n" +
+		"by the user.\n\n" +
 		"Typical workflow:\n" +
 		"  launch editor                  1. Start the editor app\n" +
 		"  editor open /usr/me/file.b     2. Open a file\n" +
@@ -179,19 +183,16 @@ dowrite(text: string): string
 	if(text == "")
 		return "error: usage: write <text>";
 	# Write to body.in — edit polls this and replaces its buffer
-	return writefile(sys->sprint("%s/1/body.in", EDIT_ROOT), text);
+	return send(sys->sprint("%s/1/body.in", EDIT_ROOT), text);
 }
 
 doappend(text: string): string
 {
 	if(text == "")
 		return "error: usage: append <text>";
-	# Read current state, append, submit via body.in
-	body := readfile(sys->sprint("%s/1/body", EDIT_ROOT));
-	if(len body >= 6 && body[0:6] == "error:")
-		return body;
-	newbody := body + text;
-	return writefile(sys->sprint("%s/1/body.in", EDIT_ROOT), newbody);
+	# the editor adds it to its text as it is then: a copy read here
+	# and written back whole would lose what was typed meanwhile
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "append " + text);
 }
 
 dosave(): string
@@ -202,7 +203,7 @@ dosave(): string
 	err := checkwritable(path);
 	if(err != nil)
 		return err;
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "save");
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "save");
 }
 
 doopen(path: string): string
@@ -218,7 +219,7 @@ doopen(path: string): string
 		return sys->sprint("error: path is outside the agent namespace: %s", path);
 	if(d.mode & Sys->DMDIR)
 		return sys->sprint("error: cannot open directory: %s", path);
-	return writefile(sys->sprint("%s/ctl", EDIT_ROOT), "open " + path);
+	return ctl(sys->sprint("%s/ctl", EDIT_ROOT), "open " + path);
 }
 
 dogoto(args: string): string
@@ -226,14 +227,14 @@ dogoto(args: string): string
 	args = strip(args);
 	if(args == "")
 		return "error: usage: goto <line>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "goto " + args);
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "goto " + args);
 }
 
 dofind(args: string): string
 {
 	if(args == "")
 		return "error: usage: find <string>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "find " + args);
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "find " + args);
 }
 
 doreplacecmd(args: string): string
@@ -244,7 +245,7 @@ doreplacecmd(args: string): string
 	if(find == "")
 		return "error: usage: replace <find> <replacement>";
 	# Use tab separator for ctl command
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "replace " + find + "\t" + repl);
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "replace " + find + "\t" + repl);
 }
 
 doreplaceallcmd(args: string): string
@@ -252,7 +253,7 @@ doreplaceallcmd(args: string): string
 	(find, repl) := splitfirst(args);
 	if(find == "")
 		return "error: usage: replaceall <find> <replacement>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "replaceall " + find + "\t" + repl);
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "replaceall " + find + "\t" + repl);
 }
 
 doaddr(): string
@@ -264,14 +265,14 @@ doinsert(args: string): string
 {
 	if(args == "")
 		return "error: usage: insert <line> <col> <text>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "insert " + args);
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "insert " + args);
 }
 
 dodelete(args: string): string
 {
 	if(args == "")
 		return "error: usage: delete <startline> <startcol> <endline> <endcol>";
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "delete " + args);
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "delete " + args);
 }
 
 doname(args: string): string
@@ -282,12 +283,12 @@ doname(args: string): string
 	err := checkwritable(args);
 	if(err != nil)
 		return err;
-	return writefile(sys->sprint("%s/1/ctl", EDIT_ROOT), "name " + args);
+	return ctl(sys->sprint("%s/1/ctl", EDIT_ROOT), "name " + args);
 }
 
 doclose(): string
 {
-	return writefile(sys->sprint("%s/ctl", EDIT_ROOT), "quit");
+	return ctl(sys->sprint("%s/ctl", EDIT_ROOT), "quit");
 }
 
 dostatus(): string
@@ -315,21 +316,65 @@ readfile(path: string): string
 	return result;
 }
 
-writefile(path, data: string): string
+# A command: a line, as the editor reads it (a text it carries keeps
+# any newline at its end).
+ctl(path, cmd: string): string
 {
-	# Use create to handle both new files (ctl, body.in) and existing ones
-	fd := sys->create(path, Sys->OWRITE, 8r666);
-	if(fd == nil)
-		return sys->sprint("error: cannot create %s: %r (is edit running?)", path);
+	return send(path, cmd + "\n");
+}
 
+# Give data to the editor at path, and return its answer.  It is written
+# under a name of its own and renamed into place once whole, so the
+# editor never takes part of it; not while the last one is there, which
+# the editor has not taken, so that is not lost.  The editor answers in
+# result once it has done what it says.
+send(path, data: string): string
+{
+	result := EDIT_ROOT + "/result";
+	tmp := sys->sprint("%s.%d", path, sys->pctl(0, nil));
+	fd := sys->create(tmp, Sys->OWRITE, 8r666);
+	if(fd == nil)
+		return sys->sprint("error: cannot create %s: %r (is edit running?)", tmp);
 	b := array of byte data;
 	n := sys->write(fd, b, len b);
 	fd = nil;
-
-	if(n != len b)
+	if(n != len b){
+		sys->remove(tmp);
 		return sys->sprint("error: write failed: %r");
+	}
+	for(i := 0; sys->stat(path).t0 >= 0; i++){
+		if(i >= WAIT){
+			sys->remove(tmp);
+			return "error: the editor has not taken the last command (is it running? launch editor first)";
+		}
+		sys->sleep(100);
+	}
+	sys->remove(result);
+	d := sys->nulldir;
+	d.name = basename(path);
+	if(sys->wstat(tmp, d) < 0){
+		sys->remove(tmp);
+		return sys->sprint("error: cannot rename %s: %r", tmp);
+	}
+	for(i = 0; i < WAIT; i++){
+		if(sys->stat(result).t0 >= 0){
+			r := readfile(result);
+			if(r != "")
+				return r;
+		}
+		sys->sleep(100);
+	}
+	return "error: the editor did not answer (is it running? launch editor first)";
+}
 
-	return "ok";
+WAIT: con 20;	# tenths of a second: the editor looks every half second
+
+basename(path: string): string
+{
+	for(i := len path - 1; i >= 0; i--)
+		if(path[i] == '/')
+			return path[i+1:];
+	return path;
 }
 
 currentpath(): string

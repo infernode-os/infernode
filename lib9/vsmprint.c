@@ -23,7 +23,11 @@ fmtStrFlush(Fmt *f)
 	if(f->start == nil)
 		return 0;
 	n = (int)f->farg;
-	n += 256;
+	/* double it: growing by 256 made a string of n bytes n/256 copies */
+	if(n < (1<<30))
+		n *= 2;
+	else
+		n += 1<<20;
 	f->farg = (void*)n;
 	s = f->start;
 	f->start = realloc(s, n);

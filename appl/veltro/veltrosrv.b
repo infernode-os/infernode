@@ -87,7 +87,12 @@ include "veltrosrv.m";
 DEFAULT_MAX_STEPS: con 100;
 MAX_MAX_STEPS: con 500;
 TOOL_TIMEOUT: con 60000;		# ms per tool call
-LLM_READ_TIMEOUT: con 300000;	# ms; long for extended thinking
+# ms; a backstop for a link that is gone.  llmsrv's own watchdog ends a
+# request that stops (2 min quiet, 5 min before the first byte), so this
+# is the whole turn: one queued behind another on a one-at-a-time server,
+# then slowly generated, as mistral-small3.2 on a Jetson is, takes more
+# than the five minutes it used to be.
+LLM_READ_TIMEOUT: con 600000;
 MAX_TOOL_FAILURES: con 3;
 AGENT_TEMP: con "0.2";		# measured: ~22% delegation-miss at 0.7, ~0 at 0.2
 AGENT_NAME_PATH: con "/lib/veltro/agent-name";
@@ -400,6 +405,33 @@ writescratch(s: ref Session, content: string, step: int): string
 	if(sys->write(fd, b, len b) != len b)
 		return "(cannot write scratch file)";
 	return path;
+}
+
+# The line number of the last numbered line of a read's result ("  101\t...").
+lastlineno(s: string): int
+{
+	n := 0;
+	(nil, lines) := sys->tokenize(s, "\n");
+	for(; lines != nil; lines = tl lines) {
+		l := hd lines;
+		i := 0;
+		while(i < len l && l[i] == ' ')
+			i++;
+		j := i;
+		while(j < len l && l[j] >= '0' && l[j] <= '9')
+			j++;
+		if(j > i && j < len l && l[j] == '\t')
+			n = int l[i:j];
+	}
+	return n;
+}
+
+splitword(s: string): (string, string)
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] == ' ')
+			return (s[0:i], s[i+1:]);
+	return (s, "");
 }
 
 firstlines(s: string, n: int): string
@@ -721,7 +753,7 @@ launch(s: ref Session, id, name, args: string): ref Call
 {
 	c := ref Call(id, name, args, chan[1] of string, chan[1] of int);
 	spawn calltoolworker(s, name, args, c.resultch);
-	spawn timer(c.timeoutch, TOOL_TIMEOUT);
+	spawn timer(c.timeoutch, tooltimeout(name));
 	return c;
 }
 
@@ -732,8 +764,22 @@ collect(c: ref Call): string
 		return result;
 	<-c.timeoutch =>
 		return sys->sprint("error: tool '%s' timed out after %d seconds",
-			c.name, TOOL_TIMEOUT / 1000);
+			c.name, tooltimeout(c.name) / 1000);
 	}
+}
+
+# A tool that asks a model itself (limbo writing a file, a sub-agent, the
+# wiki's answer, an image described) takes as long as the model does: on a
+# local model sharing its GPU with other sessions, the limbo tool's author
+# took more than the 60 seconds every tool was given, and the agent, told it
+# had timed out, asked again, and again.
+tooltimeout(name: string): int
+{
+	case str->tolower(name) {
+	"limbo" or "spawn" or "wiki" or "vision" =>
+		return LLM_READ_TIMEOUT;
+	}
+	return TOOL_TIMEOUT;
 }
 
 # After a call: provenance, cache, spill.  Returns what the model sees.
@@ -748,12 +794,24 @@ finish(s: ref Session, step: int, name, args, result: string): string
 	if(len result > AgentLib->STREAM_THRESHOLD) {
 		# Never re-scratch a read of a scratch file: each read would
 		# produce another scratch file of similar size, without end.
-		isscratchread := nm == "read" &&
-			len args >= len SCRATCH_PATH &&
-			args[0:len SCRATCH_PATH] == SCRATCH_PATH;
+		# A native call's arguments are JSON: judged as such, the path
+		# never matched, and each read of a long spilled result was spilled
+		# again (the model, to stop it, read 60 lines at a time).
+		pos := s.al->toolargs(nm, args);
+		isscratchread := nm == "read" && hasprefix(pos, SCRATCH_PATH + "/");
 		if(isscratchread) {
-			result = result[0:AgentLib->STREAM_THRESHOLD] +
-				"\n... (truncated — content continues in " + args + ")";
+			(path, nil) := splitword(pos);
+			shown := result[0:AgentLib->STREAM_THRESHOLD];
+			# whole lines only, and where the next read starts
+			for(e := len shown - 1; e > 0 && shown[e] != '\n'; e--)
+				;
+			if(e > 0)
+				shown = shown[0:e+1];
+			more := "";
+			last := lastlineno(shown);
+			if(last > 0)
+				more = sys->sprint("; read %s with offset %d for what follows", path, last);
+			result = shown + "... (truncated at " + string len array of byte shown + " bytes" + more + ")";
 		} else {
 			scratch := writescratch(s, result, step);
 			# The first 3 lines stay inline so the model has something to

@@ -368,6 +368,77 @@ testPdfApart(t: ref T)
 	e->close(h2);
 }
 
+# Documents opened and closed on procs of their own at once, as each
+# window's are: the engines' tables (pdf.b's, htmldoc's) were changed
+# unlocked, and two opened at once took one slot (two windows sharing
+# a document, the other lost) or one opened as another closed was lost
+ATONCE: con 8;
+testAtOnce(t: ref T)
+{
+	needdisplay(t);
+	three := readfile("/tests/page/three.pdf");
+	square := readfile("/tests/render/square.pdf");
+	if(three == nil || square == nil)
+		t.fatal(sys->sprint("fixtures: %r"));
+	(pe, nil) := docreg->engine(docreg->kindof("pdf"));
+	(he, nil) := docreg->engine(docreg->kindof("html"));
+	if(pe == nil || he == nil)
+		t.fatal("no engine");
+	c := chan of string;
+	for(i := 0; i < ATONCE; i++)
+		spawn atonce(i, pe, he, three, square, c);
+	for(i = 0; i < ATONCE; i++)
+		if((err := <-c) != nil)
+			t.error(err);
+}
+
+atonce(i: int, pe, he: Docengine, three, square: array of byte, c: chan of string)
+{
+	err: string;
+	{
+		err = atonce0(i, pe, he, three, square);
+	} exception e {
+	"*" =>
+		err = "exception: " + e;
+	}
+	c <-= err;
+}
+
+atonce0(i: int, pe, he: Docengine, three, square: array of byte): string
+{
+	for(r := 0; r < 20; r++){
+		# a PDF: its own pages, not another's
+		(data, n) := (three, 3);
+		if((i+r)&1)
+			(data, n) = (square, 1);
+		(h, err) := pe->open(data, "/x/doc.pdf", nil);
+		if(h < 0)
+			return "pdf: " + err;
+		# HTML: its own text, kept while others are dropped
+		word := sys->sprint("word%dx%d", i, r);
+		hh: int;
+		(hh, err) = he->open(array of byte ("<html><body><p>"+word+"</p></body></html>"), "/x/p.html", style(300));
+		if(hh < 0)
+			return "html: " + err;
+		sys->sleep(0);
+		if((m := pe->nsheets(h)) != n)
+			return sys->sprint("proc %d: a PDF of %d pages has %d (another's)", i, n, m);
+		if((txt := he->text(hh)) == nil || index(txt, word) < 0)
+			return sys->sprint("proc %d: an HTML page lost its text (%q)", i, txt);
+		pe->close(h);
+		he->close(hh);
+	}
+	return nil;
+}
+
+index(s, t: string): int
+{
+	for(i := 0; i+len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			return i;
+	return -1;
+}
+
 testImage(t: ref T)
 {
 	needdisplay(t);
@@ -601,6 +672,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("MarkdownLinks", testMarkdownLinks);
 	run("Mermaid", testMermaid);
 	run("Html", testHtml);
+	run("AtOnce", testAtOnce);	# last: it loads every engine
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

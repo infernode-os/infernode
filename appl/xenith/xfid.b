@@ -143,6 +143,7 @@ waitproc(pid : int, sync: chan of int)
 Xfid.ctl(x : self ref Xfid)
 {
 	x.tid = sys->pctl(0, nil);
+	xenith->recovering();
 	sync := chan of int;
 	spawn waitproc(x.tid, sync);
 	<-sync;
@@ -183,8 +184,11 @@ Xfid.recover(x : self ref Xfid, e : string)
 		w.unlock();
 	if(!row.qlock.held())
 		row.qlock.lock();
+	m := xenith->recovered(e);
 	{
 		warning(nil, sprint("xenith: 9P request: %s\n", e));
+		if(m != nil)
+			warning(nil, "xenith: "+m+"\n");
 	}
 	exception{
 		* =>
@@ -262,6 +266,7 @@ Xfid.open(x : self ref Xfid)
 	q : int;
 
 	fc.iounit = 0;
+	x.f.snap = nil;
 	w = x.f.w;
 	if(w != nil){
 		t := w.body;
@@ -331,6 +336,14 @@ Xfid.open(x : self ref Xfid)
 				q0 = t.q0;
 				q1 = t.q1;
 			}
+			# a pipe command lets go of its window while it runs: the
+			# text can be shorter by now than the range it saved, and
+			# the read past its end was an internal error
+			nc := t.file.buf.nc;
+			if(q1 > nc)
+				q1 = nc;
+			if(q0 > q1)
+				q0 = q1;
 			r := utils->stralloc(BUFSIZE);
 			while(q0 < q1){
 				n := q1 - q0;
@@ -471,6 +484,10 @@ Xfid.read(x : self ref Xfid)
 		respond(x, fc, nil);
 		return;
 	}
+	if(q == QWdoctext || q == QWdoclinks){
+		docread(x, w, q);
+		return;
+	}
 	# the row held as by every other request: with the window's lock
 	# alone, a read paged the buffer while the mouse task, holding the
 	# row, reshaped or filled the same window (a neighbour deleted, a
@@ -542,12 +559,6 @@ Xfid.read(x : self ref Xfid)
 	QWdocctl =>
 		str = 1;
 		sbuf = docview->ctlread(w);
-	QWdoctext =>
-		str = 1;
-		sbuf = docview->textread(w);
-	QWdoclinks =>
-		str = 1;
-		sbuf = docview->linksread(w);
 	QWdocfind =>
 		str = 1;
 		sbuf = docview->foundread(w);
@@ -596,6 +607,43 @@ Xfid.read(x : self ref Xfid)
 	row.qlock.unlock();
 }
  
+# A document's text or links, made by its engine: for a long PDF that
+# takes a while, and it was made again for each read, the row held
+# (Xenith stood still while a client read them). Made once, from the
+# read at the start, with neither the row nor the window held; the
+# reads after it take the rest of that.
+docread(x : ref Xfid, w : ref Window, q : int)
+{
+	fc : Smsg0;
+
+	off := int offset(x.fcall);
+	if(off == 0 || x.f.snap == nil){
+		row.qlock.lock();
+		w.lock('F');
+		gone := w.col == nil;
+		w.unlock();
+		row.qlock.unlock();
+		if(gone){
+			respond(x, fc, Edel);
+			return;
+		}
+		s : string;
+		if(q == QWdoctext)
+			s = docview->textread(w);
+		else
+			s = docview->linksread(w);
+		x.f.snap = array of byte s;
+	}
+	b := x.f.snap;
+	if(off > len b)
+		off = len b;
+	if(off+count(x.fcall) > len b)
+		setcount(x.fcall, len b-off);
+	fc.count = count(x.fcall);
+	fc.data = b[off:off+fc.count];
+	respond(x, fc, nil);
+}
+
 Xfid.write(x : self ref Xfid)
 {
 	fc  : Smsg0;
@@ -829,6 +877,11 @@ Xfid.write(x : self ref Xfid)
 	row.qlock.unlock();
 }
 
+fault()
+{
+	utils->error("a fault made for a test, in a proc that does not recover");
+}
+
 # Helper for ctlwrite: handles lock/unlock, clean, show, name, dump commands
 # Returns (handled, m, err, settag) - split to avoid yacc stack overflow
 ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
@@ -857,6 +910,16 @@ ctlcmd1(x: ref Xfid, w: ref Window, p: string): (int, int, string, int)
 		w.ctlfid = ~0;
 		w.ctllock.unlock();
 		return (TRUE, 6, nil, FALSE);
+	}
+	# for tests (tests/host/xenith_rescue_test.sh), with $xenithfaults
+	# set where Xenith started: an internal error, in this request's
+	# proc, which recovers ("fault"), or in one that does not ("fault exit")
+	if(strncmp(p, "fault", 5) == 0 && utils->getenv("xenithfaults") != nil){
+		if(strncmp(p, "fault exit", 10) == 0){
+			spawn fault();
+			return (TRUE, 10, nil, FALSE);
+		}
+		utils->error("a fault made for a test");
 	}
 	if(strncmp(p, "clean", 5) == 0){	# mark window 'clean', seq=0
 		t = w.body;

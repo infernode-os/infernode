@@ -149,6 +149,11 @@ b=`{read 16 < $W/body}
 check 'its body is its text, not its bytes' $"b '240 West Center'
 t=`{read 16 < $W/doc/text}
 check 'doc/text is its text' $"t '240 West Center'
+# read in pieces from one open, all of it: made once, at the start
+{while {read 100} {}} < $W/doc/text > /tmp/xdoc.text
+cat $W/body > /tmp/xdoc.body
+if {cmp /tmp/xdoc.text /tmp/xdoc.body} {ok 'doc/text read in pieces is all its text'} {bad 'doc/text read in pieces is not its text'}
+rm -f /tmp/xdoc.text /tmp/xdoc.body
 img=`{cat $W/image}
 check 'the image file names it' ${index 1 $img} $PDF
 

@@ -41,12 +41,17 @@ Held: adt {
 
 display: ref Display;
 pages: list of ref Held;
+# pages: each window's document is set, browsed and dropped on a proc
+# of its own, and one added while another was dropped was lost
+pageslock: chan of int;
 inited := 0;
 
 init(d: ref Display): string
 {
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
+	if(pageslock == nil)
+		pageslock = chan[1] of int;
 	if(inited)
 		return nil;
 	browser = load Browser Browser->PATH;
@@ -63,11 +68,15 @@ set(id: int, data: array of byte, url: string, width, height: int): (int, string
 {
 	if(!inited)
 		return (0, "htmldoc not initialised");
+	pageslock <-= 1;
 	s := find(id);
-	if(s == nil) {
+	new := s == nil;
+	if(new) {
 		s = Session.new(width, height);
 		pages = ref Held(id, s, nil, nil, nil) :: pages;
-	} else if(s.width != width || s.height != height)
+	}
+	<-pageslock;
+	if(!new && (s.width != width || s.height != height))
 		s.resize(width, height);
 	if((err := s.show(data, "text/html", url)) != nil)
 		return (0, err);
@@ -99,25 +108,35 @@ text(id: int): string
 
 drop(id: int)
 {
-	l: list of ref Held;
+	l, gone: list of ref Held;
+	pageslock <-= 1;
 	for(; pages != nil; pages = tl pages){
 		p := hd pages;
 		if(p.id != id)
 			l = p :: l;
-		else if(p.ev != nil){
+		else
+			gone = p :: gone;
+	}
+	pages = l;
+	<-pageslock;
+	for(; gone != nil; gone = tl gone){
+		p := hd gone;
+		if(p.ev != nil){
 			if(p.fs != nil)
 				p.fs->unpost();
-			# whoever reads the page's events stops
+			# whoever reads the page's events stops, when it next
+			# reads: sent only if it was reading then, it read on
 			p.s.unlisten(p.ev);
 			p.s.close();
-			alt {
-			p.ev <-= "gone" =>	;
-			* =>	;
-			}
+			spawn sendgone(p.ev);
 		}else
 			p.s.close();
 	}
-	pages = l;
+}
+
+sendgone(c: chan of string)
+{
+	c <-= "gone";
 }
 
 find(id: int): ref Session
@@ -136,15 +155,20 @@ browse(id: int, url: string, width, height: int): (chan of string, string)
 		return (nil, "htmldoc not initialised");
 	if(isweb(url) && (err := startwebfs()) != nil)
 		return (nil, err);
+	pageslock <-= 1;
 	s := find(id);
 	c: chan of string;
+	h: ref Held;
 	if(s == nil) {
 		s = Session.new(width, height);
 		c = s.listen();
-		h := ref Held(id, s, c, nil, nil);
+		h = ref Held(id, s, c, nil, nil);
 		pages = h :: pages;
+	}
+	<-pageslock;
+	if(h != nil)
 		postpage(h);
-	} else if(s.width != width || s.height != height)
+	else if(s.width != width || s.height != height)
 		s.resize(width, height);
 	s.open(url);
 	return (c, nil);

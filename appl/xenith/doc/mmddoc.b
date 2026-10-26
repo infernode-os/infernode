@@ -46,7 +46,16 @@ init(d: ref Display): string
 	return nil;
 }
 
+# loaded once, though two documents may be opening at once
 loadmermaid(): string
+{
+	docslock <-= 1;
+	err := loadmermaid0();
+	<-docslock;
+	return err;
+}
+
+loadmermaid0(): string
 {
 	if(mermaid != nil)
 		return nil;

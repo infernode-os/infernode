@@ -251,6 +251,18 @@ echo clearimage > /mnt/xenith/1/ctl	# back to text
 `tools/xen file ...` runs Xenith by itself, dark and filling the emu
 window, on files from the host; Exit ends the instance. See [XEN.md](XEN.md).
 
+### When Xenith goes wrong
+
+What has not been saved is kept when Xenith goes wrong: an exception in
+the mouse, keyboard or wait task or in a 9P request (Xenith goes on), an
+internal error anywhere else, or an exit nobody asked for (Xenith ends).
+Every window is written to `$home/xenith.rescue` as Dump writes them,
+with an unnamed window's text (named `unnamed.N` in the directory Xenith
+started in) and typing not yet committed; `+Errors` and the console say
+so. `Load $home/xenith.rescue`, or `xenith -l $home/xenith.rescue`,
+brings the windows back with their changes. Dump's own file,
+`$home/xenith.dump`, is left alone.
+
 ### Event Streams
 
 Agents can monitor user activity:

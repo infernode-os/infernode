@@ -363,6 +363,15 @@ settext(w: ref Window, s: string)
 	w.body.q0 = w.body.q1 = 0;
 }
 
+occurrences(s, t: string): int
+{
+	n := 0;
+	for(i := 0; i + len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			n++;	# overlapping, as the search below counts
+	return n;
+}
+
 bodytext(w: ref Window): string
 {
 	nc := w.body.file.buf.nc;
@@ -828,19 +837,19 @@ button1(w: ref Window)
 # The word clicked on the drawing selected in the window's text too,
 # so Snarf, Look and the rest take it: the occurrence of it whose
 # place among its kind matches its place among the words drawn (the
-# text and the drawing go in the same order)
+# text and the drawing go in the same order). The sheets before the
+# word's are counted in their text, kept, not their words, which were
+# drawn out of each again: a click on page 500 of a PDF parsed 500
+# pages, the row held
 selectword(w: ref Window, v: ref View, n, k: int, word: string)
 {
 	nth := 0;
-	for(m := 0; m <= n; m++){
-		runs := v.eng->runs(v.h, m);
-		last := len runs;
-		if(m == n)
-			last = k;
-		for(i := 0; i < last; i++)
-			if(runs[i].text == word)
-				nth++;
-	}
+	for(m := 0; m < n; m++)
+		nth += occurrences(v.eng->sheettext(v.h, m), word);
+	runs := v.eng->runs(v.h, n);
+	for(j := 0; j < k && j < len runs; j++)
+		if(runs[j].text == word)
+			nth++;
 	text := bodytext(w);
 	q := -1;
 	for(i := 0; i + len word <= len text; i++)

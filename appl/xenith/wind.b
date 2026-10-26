@@ -639,8 +639,10 @@ Window.event(w : self ref Window, fmt : string)
 
 	if(w.nopen[Dat->QWevent] == byte 0)
 		return;
+	# changed by none of the window's own (mouse, keys, a client): told
+	# as Xenith's, where it once exited, every unsaved window lost
 	if(w.owner == 0)
-		error("no window owner");
+		w.owner = 'F';
 	n = len fmt;
 	w.events[len w.events] = w.owner;
 	w.events += fmt;
@@ -838,6 +840,7 @@ Window.applycolors(w: self ref Window)
 	if(!w.isdir && !w.isscratch && (w.body.file.mod || w.body.ncache))
 		b = modbutton;
 	br := Rect(w.tag.scrollr.min, (w.tag.scrollr.min.x + b.r.dx(), w.tag.scrollr.min.y + b.r.dy()));
-	draw(mainwin, br, b, nil, b.r.min);
+	if(w.tag.frame.maxlines > 0)	# not hidden under a window filling its column
+		draw(mainwin, br, b, nil, b.r.min);
 }
 

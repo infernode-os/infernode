@@ -1988,7 +1988,9 @@ jobs:
         fi
 
         # The boot firmware once more, apart from mkpiimage's copy, to
-        # hold the images' bytes against.
+        # hold the images' bytes against. pi-firmware.sh takes a card's
+        # root and will not make one, so the directory is made here.
+        mkdir -p "$RUNNER_TEMP/bootfw"
         sh tools/pi-firmware.sh --manifest tools/pi-bootfw-manifest.txt "$RUNNER_TEMP/bootfw"
 
         for board in rpi3bplus:bcm2837:qemu-system-aarch64 rpi4b:bcm2711:$RUNNER_TEMP/qemu/bin/qemu-system-aarch64; do

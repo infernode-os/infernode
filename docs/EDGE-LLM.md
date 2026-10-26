@@ -230,8 +230,8 @@ against it. This is May's "Option A", generalised:
 | macOS | llama-server, Ollama, MLX (SwiftLM) | Metal | separate process; works today |
 | Linux, Jetson | llama-server, Ollama | CPU, CUDA, Vulkan | separate process; works today |
 | Pi 5 / Pi 4 under Pi OS | llama-server | CPU (NEON; dot-product on the Pi 5's A76 only) | separate process; hosted emu (`build-linux-arm64.sh`) |
-| Android | llama.cpp | CPU, Adreno OpenCL, Hexagon | a thread in the APK's process via JNI, or llama-server under Termux for a first test |
-| iOS | MLX (SwiftLM) or llama.cpp | Metal | a thread in the app's process; there is no second process on iOS |
+| Android | llama.cpp | CPU first; Adreno OpenCL, Hexagon later | a second process the app starts (see "On the phones", below) |
+| iOS | llama.cpp (MLX later, if it earns it) | Metal | a thread in the app's process; there is no second process on iOS |
 
 **What an engine must do to sit here.** This is the conformance
 checklist, and the first thing to test against any candidate:
@@ -257,6 +257,10 @@ checklist, and the first thing to test against any candidate:
    InferNode changes.
 
 ### P3 — in-kernel: an engine as a built-in module
+
+*Deferred (2026-10-26; see "Decision: where the model runs", below).
+Kept as the design to start from if a disconnected bare-metal device is
+ever needed.*
 
 ```
 llmsrv -b local -M /n/models/llama-3.2-1b-q4_0.gguf
@@ -392,11 +396,102 @@ can then reach is what was bound in front of it, and nothing else.
 | Pi 5 (Pi OS) | P2 | P1 server for bare-metal Pis | 1B–3B; 4B at a push | AI HAT+ 2 (Hailo-10H, 8GB of its own) runs only vendor-converted models, mostly from families this project excludes, and reviews disagree on its speed, one finding the CPU faster ([review](https://www.hardware-corner.net/local-llms-raspberry-pi-ai-hat-plus-2/)). Not in the pattern now; it could sit behind P2 later. |
 | Pi 5 (bare metal) | — | — | — | No port: the RP1 southbridge. Raspberry Pi published a partial draft RP1 datasheet in 2023 ([CNX](https://www.cnx-software.com/2023/10/07/raspberry-pi-rp1-datasheet-block-diagram/)); whether it is enough for Ethernet and USB is worth re-checking before the next board is chosen. The GICv3 it needs already boots under `virt`. |
 | Pi 4 (Pi OS) | P2 | — | 1B; 3B is slow | ~1.6 tok/s at 3B |
-| Pi 4 (bare metal) | **P1** | P3 | 1B (3B fits, slowly) | P1 against a Pi 5 or Jetson today; P3 is the spike |
+| Pi 4 (bare metal) | **P1** | — (P3 deferred) | — | P1 against a Pi 5 or Jetson |
 | Pi 3B+ (bare metal) | P1 | — | — | 1GB |
 | RISC-V (`virt`, PolarFire) | P1 | — | — | no vector unit on the U54s |
-| Android | P1, or P2 via Termux | P2 in-process | 1B–3B; Gemma 4 E2B | loopback key (P2 rule 5) matters most here |
-| iOS | P1 | P2 in-process | Granite 4.0 Micro, Ministral 3 3B, Gemma 4 E2B to try (SwiftLM was proven with Llama 3.2 3B, now out: prove it again with one of these) | `-c0` does not matter to inference, which is native; the memory entitlement does |
+| Android | P1, or P2 via Termux | **P2 on the device: the focus** | Granite 4.0 Micro first; the eval decides | loopback key (P2 rule 5) matters most here |
+| iOS | P1 | **P2 on the device: the focus** | Granite 4.0 Micro, Ministral 3 3B, Gemma 4 E2B to try (SwiftLM was proven with Llama 3.2 3B, now out: prove it again with one of these) | `-c0` does not matter to inference, which is native; the memory entitlement does |
+
+## Decision (2026-10-26): where the model runs
+
+Settled with the project owner. The answer depends on the host:
+
+- **Phones (Android, iOS): on the device**, P2. This is where the work
+  goes now.
+- **Bare metal: on another machine**, P1, as the Pis already do (a
+  bare-metal Pi mounts `/mnt/llm` from a peer running `serve-llm`).
+- **P3, an engine inside InferNode, is deferred.** It is the only way a
+  bare-metal board could answer on its own, but it is a new inference
+  engine to write and maintain, and slower than llama.cpp. It will be
+  revisited only if a disconnected bare-metal device is needed.
+- **Hosts with an OS (macOS, Linux, Pi OS)** already run P2 with Ollama
+  or llama-server, and need nothing new.
+
+## On the phones
+
+*Proposed (2026-10-26); none of it built yet.*
+
+**One engine: llama.cpp on both phones.** It is what the Pi OS, Linux
+and macOS hosts already run, so there is one model format (GGUF), one
+manifest of hashes, and one engine to hold to the conformance list
+above. It has Metal on iOS, and CPU, Adreno and Hexagon backends on
+Android. MLX stays possible on iOS behind the same seam, if
+measurements show it is worth a second engine.
+
+**Android: a second process, not a thread.** The app ships
+`llama-server` in `jniLibs/` as `libllama-server.so`. Since Android 10
+an app may not execute files it wrote to its own data directory, but it
+may execute what the installer put in its native library directory. Two
+consequences:
+
+- **Native libraries must be extracted at install**, not left
+  compressed in the APK (`useLegacyPackaging`, or
+  `android:extractNativeLibs="true"`). That costs install size.
+- **The app starts the engine.** `InfernodeService`, the foreground
+  service already in the manifest, starts it with `--host 127.0.0.1
+  --port <random> --api-key <random> --jinja -m <model>`, and restarts
+  it if it dies.
+
+A separate process keeps a crash in the model parser out of emu, keeps
+C++ out of `libemu.so`, and can be killed and restarted on its own.
+
+**Handing over the key** needs no new mechanism on Android. The app
+sets `OPENAI_API_KEY` in its environment before `emu_run`, and the
+login profile's `provisionkey openai OPENAI_API_KEY` puts it in factotum,
+where llmsrv looks first. The app writes `lib/ndb/llm` (`mode=local`,
+`backend=openai`, the `url` with that boot's port, the model) as data;
+nothing executes it. If the engine is not up, llmsrv's calls fail and
+the agent says so: boot never waits on the engine
+(`docs/postmortems/2026-05-04-local-boot-decoupled-from-remote-llm.md`).
+
+**iOS: a thread, and a different handover.** iOS has no second process
+and no `os`, so llama.cpp's server is built into the app as a library
+and run on a thread. The profile's `os sh` route to the key does not
+exist there; the key reaches factotum some other way, still to be
+designed, and must never be written to a file in the root. iOS needs
+the `increased-memory-limit` entitlement for a 2GB model.
+
+**The model is downloaded, not bundled.** A 2GB model does not belong
+in an APK or IPA. On first use the app fetches the chosen model from a
+pinned revision and checks its SHA-256 against a manifest committed in
+this tree before using it (`DESIGN-PRINCIPLES.md`, "The host boundary").
+Two things to check per model: whether the publisher distributes a GGUF
+itself (otherwise we convert it and host the result), and whether the
+file fits where we would host it. During development a model can be
+pushed with `adb`. The app checks free memory before starting the
+engine and offers a smaller model if there is not enough.
+
+**First model: Granite 4.0 Micro** (Apache 2.0, text only, ~2GB), until
+the model-eval run picks the default.
+
+**Order:**
+
+1. **A dry run on a desktop.** llama-server and Granite 4.0 Micro
+   behind `llmsrv -b openai` with an `--api-key`. Check the conformance
+   list (tools through `--jinja`, streaming, the prefix cache, the
+   bearer key), run `tests/model-eval/`, and time Veltro's first answer.
+   This is the phone's engine and model, minus the phone.
+2. **Android.** llama-server cross-built with the NDK from a pinned
+   llama.cpp commit in `build-android-apk.sh`. Then the service that
+   starts it, the key and `lib/ndb/llm`, and the packaging change. CPU
+   only.
+3. **Getting the model.** The download, the manifest, the hash check,
+   the memory check; then an "On this device" choice in Settings.
+4. **iOS.** The same engine on a thread, Metal on, the key handover,
+   the entitlement. Needs a Mac.
+5. **Speed.** Adreno or Hexagon on Android, measured against the CPU,
+   and as much heat as speed (a phone that throttles is slower within
+   minutes).
 
 ## Order of work
 
@@ -419,14 +514,10 @@ INFR tickets are not filed yet.
 4. **P1 recipe for bare metal.** A bare-metal Pi 4 mounting `/mnt/llm`
    from a Pi 5 running `serve-llm`, written up in `docs/BAREMETAL.md`,
    with a host test if the harness can stand up the pair.
-5. **P2 on the phones.** In-process engine threads with a per-boot
-   bearer key: Android first (llama.cpp via the NDK, Hexagon or Adreno
-   later), iOS next (SwiftLM is proven; decide whether to use the
-   WWDC26 `LanguageModel` adapter inside the app).
-6. **P3 spike.** A proposal issue with the `$Infer` sketch, then a
-   C engine for one architecture and Q4_0 under emu first (where it can
-   be debugged and compared with llama.cpp token for token), then on
-   the bare-metal Pi 4.
+5. **P2 on the phones: the focus.** The plan is "On the phones",
+   above.
+6. **P3: deferred.** Only if a disconnected bare-metal device is
+   needed; then a proposal issue with the `$Infer` sketch first.
 
 ## References
 

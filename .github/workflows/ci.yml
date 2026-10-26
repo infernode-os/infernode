@@ -573,6 +573,17 @@ jobs:
           fi
         fi
 
+    - name: Run presentation tab strip test
+      run: |
+        # An app in the presentation zone has the tab strip above it, in
+        # every one of several headless boots: lucipres and presrender
+        # join the zone's wmsrv in either order, and taking the first
+        # join for lucipres left the strip blank in about one boot in
+        # three.  A boot that is too slow is a skip (77), not a failure.
+        rc=0
+        ROOT=. bash tests/host/presentation_tabstrip_test.sh || rc=$?
+        [ $rc = 0 ] || [ $rc = 77 ]
+
     - name: Run walk-leak regression test
       run: |
         # A failed name lookup must not leak main-pool memory: namec's

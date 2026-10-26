@@ -164,8 +164,13 @@ MAXTASKPRES: con 32;
 taskpres: array of ref TaskPres;
 ntaskpres := 0;
 curtaskpres: ref TaskPres;		# currently active task's presentation state
-lucipresclient: ref Client;		# lucipres wmclient (set by preswmloop on first join)
-presrenderclient: ref Client;		# presrender wmclient (2nd infra join; content renderer)
+lucipresclient: ref Client;		# lucipres wmclient (set by preswmloop on its join)
+presrenderclient: ref Client;		# presrender wmclient (content renderer)
+# The wmsrv tokens lucipres and presrender registered with, recorded by
+# infrawmrelay before the registration reaches wmsrv, so preswmloop
+# knows which join is which; -1 until then and once matched.
+lucipretoken := -1;
+presrendertoken := -1;
 presrender_g: Presrender;		# loaded presrender module ref
 showpresrender := 0;			# 1 when the current artifact is presrender content
 
@@ -590,8 +595,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 	applock = tp0.applock;
 	presRszCh = tp0.rszch;
 
-	# Build Draw->Context for lucipres (shared screen + task's wmsrv channel)
-	presCtxt := ref Draw->Context(display, presscr, tp0.wmchan);
+	# Draw->Contexts for lucipres and presrender: the shared screen, and
+	# each its own channel to the task's wmsrv, through infrawmrelay, so
+	# preswmloop can tell the two apart whichever joins first.
+	lucipreswm := chan of (string, chan of (string, ref Wmcontext));
+	presrenderwm := chan of (string, chan of (string, ref Wmcontext));
+	spawn infrawmrelay("lucipres", lucipreswm, tp0.wmchan);
+	spawn infrawmrelay("presrender", presrenderwm, tp0.wmchan);
 
 	# Activity 0's join/req are the main preswmloop channels.
 	# New tasks relay their events into these via joinrelay/reqrelay.
@@ -624,18 +634,18 @@ init(ctxt: ref Draw->Context, args: list of string)
 	spawn lucictx->init(ctximg, display, mainfont,
 		mountpt, actid, ctxMouseCh, ctxEvCh, ctxRszCh, ctxreqch);
 
-	spawn lucipres->init(presCtxt,
+	spawn lucipres->init(ref Draw->Context(display, presscr, lucipreswm),
 		"lucipres" :: mountpt :: string actid :: nil);
 
 	# Presrender: the content renderer, a peer wmclient window that draws
-	# the currently-centered CONTENT artifact.  Spawned right after
-	# lucipres so its wmsrv join is the second (infrastructure) join; no
-	# artid arg means it follows "current".  Its z-order is managed by
-	# enforcepreszorder() like an app window.
+	# the currently-centered CONTENT artifact.  It may join before
+	# lucipres: preswmloop knows each by its token, not by the order of
+	# the joins.  No artid arg means it follows "current".  Its z-order is
+	# managed by enforcepreszorder() like an app window.
 	presrender_g = load Presrender Presrender->PATH;
 	if(presrender_g == nil)
 		nomod(Presrender->PATH);
-	spawn presrender_g->init(presCtxt,
+	spawn presrender_g->init(ref Draw->Context(display, presscr, presrenderwm),
 		"presrender" :: mountpt :: string actid :: nil);
 
 	# Spawn event handlers
@@ -1374,11 +1384,16 @@ lookuptaskpres(id: int): ref TaskPres
 #   preswmloop is a hand-rolled WM server for the presentation zone.  It multiplexes
 #   exactly one wmsrv instance across two kinds of clients:
 #
-#   1. lucipres (first join):
+#   1. lucipres:
 #      Gets the full zone rect.  Draws the tab strip + artifact content.
 #      Always present; its window is at z-order bottom (z=1).
+#      It and presrender (a content-area window) are spawned together
+#      and either may join first, so neither is known by the order of
+#      its join: infrawmrelay records the token each registers with.
+#      Taking the first join for lucipres gave it presrender's window,
+#      below the tab strip and under the app: no tabs over an app.
 #
-#   2. GUI app clients (subsequent joins, one per app):
+#   2. GUI app clients (one per app, known by their pending tokens):
 #      Gets the content-area rect (below the tab strip) so the tab strip stays visible.
 #      Each app window is allocated ONCE at first !reshape.
 #      Visibility is controlled by Client.top() / Client.bottom() (z-order), never by
@@ -1417,11 +1432,14 @@ preswmloop(scr: ref Screen, zoner: Rect,
 	curzone := zoner;
 	for(;;) alt {
 	(c, rc) := <-join =>
-		if(lucipresclient == nil) {
-			# First join = lucipres
+		if(lucipresclient == nil && c.token == lucipretoken) {
 			lucipresclient = c;
+			lucipretoken = -1;
+		} else if(presrenderclient == nil && c.token == presrendertoken) {
+			presrenderclient = c;
+			presrendertoken = -1;
 		} else {
-			# Subsequent join = an app; search ALL tasks' pending arrays
+			# Otherwise an app; search ALL tasks' pending arrays
 			# to find the token→id mapping, then link to the right task's slot.
 			appid2 := "";
 			foundtp: ref TaskPres;
@@ -1462,11 +1480,6 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					}
 				}
 				foundtp.applock <-= 1;
-			} else if(presrenderclient == nil) {
-				# No app token matched and presrender not yet identified:
-				# this is the presrender infrastructure client (spawned
-				# right after lucipres, before any app can launch).
-				presrenderclient = c;
 			}
 		}
 		rc <-= nil;
@@ -3365,6 +3378,19 @@ appwmrelay(tp: ref TaskPres, id: string, appwm: chan of (string, chan of (string
 	addpendingtask(tp, tok, id);
 	tp.applock <-= 1;
 	tp.wmchan <-= (tokenstr, rc);
+}
+
+# infrawmrelay: appwmrelay for lucipres and presrender.  Records the
+# token of the one registration on its proxy wmchan, then forwards it to
+# activity 0's wmsrv, whose join preswmloop then knows by that token.
+infrawmrelay(name: string, wm, dst: chan of (string, chan of (string, ref Wmcontext)))
+{
+	(tokenstr, rc) := <-wm;
+	if(name == "lucipres")
+		lucipretoken = int tokenstr;
+	else
+		presrendertoken = int tokenstr;
+	dst <-= (tokenstr, rc);
 }
 
 # addpendingtask: register a token→id mapping in the task's pending arrays

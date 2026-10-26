@@ -6056,6 +6056,12 @@ try:
     typed("ps; echo VMPSBEFORE", 3)
     typed("kill $pid; sleep 1; echo VMPS; ps; echo VMKILLED", 3)
     typed("vm 1 sh -c 'load tk'", 4)
+    # vmstress: echo servers and allocators in VMs 1-3, traffic to them
+    # from VM 0 and between them, a job started every 300 ms, bursts
+    # in all four at once, sleepers killed across VMs; every count
+    m = len(buf)
+    typed("vmstress run /tmp/vs 75", 0.5)
+    waitfor(rb"vmstress: stopped", 200, m)
     typed("vm")
 finally:
     p.kill(); p.communicate()
@@ -6104,6 +6110,15 @@ PYEOF
         pass "virt: vm: VM 0 kills it (devprog across VMs)"
     fi
     vcheck "vm: \$Tk stays VM 0's: VM 1's shell cannot load it" "not built-in"
+    vs="$(grep -aE '^vmstress: [0-9]+s starts' <<<"$VMOUT" | tail -1)"
+    if [[ -z "$vs" ]]; then
+        fail "virt: vmstress: no report (did it start? $(grep -a 'vmstress:' <<<"$VMOUT" | head -2 | tr '\n' ' '))"
+    elif grep -qE 'startfail 0 .*burstfail 0 kills [1-9][0-9]* killfail 0 traffic ok [1-9][0-9]* bad 0;' <<<"$vs" &&
+        ! grep -qE 'starts 0 |done 0 |bursts 0 ' <<<"$vs" && grep -aq '^vmstress: stopped' <<<"$VMOUT"; then
+        pass "virt: vmstress: churn, bursts, kills and traffic across four VMs, nothing failed (${vs%%;*})"
+    else
+        fail "virt: vmstress: $vs"
+    fi
     vrefute "vm: nothing panics"                              "panic:"
     vrefute "vm: no exception goes unhandled"                 "unhandled exception"
 else

@@ -996,6 +996,7 @@ dis/ventisrv.dis
 dis/vid9p.dis
 dis/wav2iaf.dis
 dis/vm.dis
+dis/vmstress.dis
 dis/wc.dis
 dis/webfs.dis
 dis/webgrab.dis

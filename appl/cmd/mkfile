@@ -221,6 +221,7 @@ TARG=\
 	gateprobe.dis\
 	jitbench.dis\
 	jitbench2.dis\
+	vmstress.dis\
 	jitbug.dis\
 	jitbug2.dis\
 	jitcrash.dis\

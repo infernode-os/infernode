@@ -150,7 +150,8 @@ def fake_tool_result(name: str, args: str) -> str:
 
 def call(url: str, model: str, messages: list[dict], tools: list[dict],
          temperature: float, timeout: int = 180,
-         extra_options: dict | None = None) -> tuple[dict, float]:
+         extra_options: dict | None = None,
+         api_key: str | None = None) -> tuple[dict, float]:
     payload = {
         "model": model,
         "messages": messages,
@@ -167,10 +168,15 @@ def call(url: str, model: str, messages: list[dict], tools: list[dict],
         rest = {k: v for k, v in extra_options.items() if k != "reasoning_effort"}
         if rest:
             payload["options"] = rest
+    headers = {"Content-Type": "application/json"}
+    # An engine behind a per-boot key (a phone's llama-server; see
+    # docs/EDGE-LLM.md, "P2") refuses a request without it.
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     t0 = time.perf_counter()
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -182,7 +188,8 @@ def call(url: str, model: str, messages: list[dict], tools: list[dict],
 def run_loop(url: str, model: str, scenario: dict,
              tools: list[dict], temperature: float,
              max_turns: int = 4,
-             extra_options: dict | None = None) -> dict:
+             extra_options: dict | None = None,
+             api_key: str | None = None) -> dict:
     """Execute one scenario over an agent loop. Returns a record with
     every tool call attempted, any final text content, and per-call
     wall-clock latencies."""
@@ -207,7 +214,8 @@ def run_loop(url: str, model: str, scenario: dict,
         for _ in range(max_turns):
             try:
                 choice, dt = call(url, model, messages, tools, temperature,
-                                  extra_options=extra_options)
+                                  extra_options=extra_options,
+                                  api_key=api_key)
                 latencies.append(dt)
             except Exception as e:
                 return {"error": str(e), "calls": all_calls,
@@ -234,7 +242,8 @@ def run_loop(url: str, model: str, scenario: dict,
     for _ in range(max_turns):
         try:
             choice, dt = call(url, model, messages, tools, temperature,
-                              extra_options=extra_options)
+                              extra_options=extra_options,
+                              api_key=api_key)
             latencies.append(dt)
         except Exception as e:
             return {"error": str(e), "calls": all_calls,
@@ -482,6 +491,8 @@ def main():
     ap.add_argument("--output", default="-")
     ap.add_argument("--results-jsonl", default=None,
                     help="Append per-run results here as JSON lines so a crash leaves partial data behind")
+    ap.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"),
+                    help="Bearer key for an engine that requires one (default: $OPENAI_API_KEY)")
     ap.add_argument("--reasoning", default=None,
                     help="Reasoning effort for thinking-capable models (low|medium|high). Forwarded as the OpenAI-standard 'reasoning_effort' field.")
     args = ap.parse_args()
@@ -503,7 +514,8 @@ def main():
             for s in scenarios:
                 for run_idx in range(args.runs):
                     run = run_loop(args.url, m, s, tools, args.temperature,
-                                   extra_options=extra_options)
+                                   extra_options=extra_options,
+                                   api_key=args.api_key)
                     status, label = grade(s, run)
                     rows.append((m, s["name"], run_idx, status))
 

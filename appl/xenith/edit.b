@@ -171,7 +171,17 @@ allupdate(w: ref Window)
 		return;
 	if(f.elog.typex == Null)
 		elogterm(f);
-	else if(f.elog.typex != Empty){
+	else if(f.elog.typex != Empty && f.buf.nchange != f.elognchange){
+		# changed since the Edit's changes to it were made (an X loop's
+		# pipe command lets go of the row, and its Undo, its u, change
+		# it at once): made where the text no longer is, they lost the
+		# change and themselves
+		elogterm(f);
+		name := f.name;
+		if(name == nil)
+			name = "a window";
+		warning(nil, sprint("Edit: %s changed while the Edit ran: its changes to it were not made\n", name));
+	}else if(f.elog.typex != Empty){
 		# an X's other files are changed here with nobody holding
 		# their windows: what they report to an event reader needs an
 		# owner, or it took Xenith down (no window owner), as warning()

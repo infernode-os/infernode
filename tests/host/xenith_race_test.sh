@@ -17,7 +17,8 @@
 #	text reaching a window hidden under one grown to fill its column
 #	does not take Xenith down;
 #	a window's text changed while an Edit pipe command runs on it is
-#	kept (the Edit refused), not lost with the command's output;
+#	kept (the Edit refused), not lost with the command's output, and
+#	one changed while a later window's command in Edit X runs;
 #	a change made while Put writes a large file in the background
 #	leaves the window unsaved.
 #

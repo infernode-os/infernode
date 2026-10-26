@@ -45,6 +45,7 @@ init(nil: ref Draw->Context, args: list of string)
 	check("editxpipe", "Edit X with a pipe command locks each file it runs in", editxpipe);
 	check("hidden", "text reaching a window hidden by one filling its column", hidden);
 	check("putchange", "a change made while a large file is written by Put leaves it unsaved", putchange);
+	check("xloopchange", "a window changed while a later one's pipe command in Edit X runs is kept", xloopchange);
 	check("pipeshort", "a window's text changed while an Edit pipe command runs on it is kept", pipeshort);
 	if(failed)
 		raise "fail:tests failed";
@@ -553,5 +554,42 @@ putchange(): string
 	sys->remove("/tmp/xrace-putchange");
 	if(dirty != "1")
 		return sys->sprint("the window is shown saved (dirty %q) with a change made while it was written", dirty);
+	return nil;
+}
+
+# Edit X makes its changes to every file at the end, and lets go of the
+# row for each file's pipe command. A file already done, changed while a
+# later one's command ran, had its Edit changes made where the text no
+# longer was: the change made and the Edit's both lost
+xloopchange(): string
+{
+	a := newwin("/tmp/xrace-xloop1");
+	b := newwin("/tmp/xrace-xloop2");
+	if(a == nil || b == nil)
+		return sys->sprint("no window: %r");
+	put(a+"/body", seq(30));
+	put(b+"/body", seq(30));
+	c := chan of string;
+	spawn putc(a+"/edit", "X/xrace-xloop/ ,|sleep 2; echo piped", c);
+	sys->sleep(3000);	# the first window's command done, the second's running
+	afd := sys->open(a+"/addr", Sys->ORDWR);	# held, so it is not reset
+	sys->fprint(afd, ",");
+	if((e := put(a+"/data", "x\n")) != nil)
+		return e;
+	afd = nil;
+	if((e = <-c) != nil)
+		return "the Edit: "+e;
+	got := readall(a+"/body");
+	gotb := readall(b+"/body");
+	put(a+"/ctl", "clean\n");
+	put(b+"/ctl", "clean\n");
+	put(a+"/ctl", "delete\n");
+	put(b+"/ctl", "delete\n");
+	if(got != "x\n")
+		return sys->sprint("the window changed meanwhile holds %q", got);
+	# the other's command's output made, or, if the window changed was
+	# the one whose command ran (the Edit refused), its text as it was
+	if(gotb != "piped\n" && gotb != seq(30))
+		return sys->sprint("the other window holds %q", gotb);
 	return nil;
 }

@@ -19,14 +19,24 @@ All notable changes to InferNode are documented in this file.
   narrower than two borders, and wm/wm asked for a window of negative
   size for the edges between, which the image pool refused on standard
   error at the start of every sweep.
-- **wm/tetris opens at its board's size under wm/wm.** It went on screen
-  before its board was made and pinned the window at the size it had
-  then, nothing: an 8x8 square of frame in the corner. The pinning is for
-  Lucifer's presentation zone, where the window comes up the zone's size,
-  and is kept there; under a window manager the board sizes the window,
-  as it did before the July Tk work. `tests/host/wm_theme_test.sh`, which
-  opens every wm application, now fails one that opens as little more
-  than its frame (it passed tetris, finding no pixels inside to check).
+- **Every wm program opens at a size that shows it.** Under wm/wm,
+  wm/tetris opened as an 8x8 square of frame in the corner, wm/coffee
+  and wm/memory filled the screen with their content in a corner of it,
+  and a wm/wm run as a client was a 108x108 empty square. The first
+  three were made for Lucifer's presentation zone in July: tetris pinned
+  its window before its board was made, coffee and memory asked for the
+  whole display. They now ask for what they show and keep the size the
+  window manager gives, the zone's in Lucifer, as before. A nested
+  wm/wm asks for 640x480. `tests/host/wm_size_test.sh` opens every
+  program in `dis/wm` on a 2560x1600 screen and fails one that opens as
+  its frame alone or as the whole screen; `tests/host/wm_theme_test.sh`
+  fails one that opens as little more than its frame (it passed tetris,
+  finding no pixels inside to check).
+- **A theme switch reaches a canvas's items.** An item given a colour of
+  its own (a rectangle's `-fill`) kept the old theme's other colours: in
+  wm/memory the bars' outlines stayed the old theme's grey. Seen once
+  memory's window was no longer the whole screen, where they were too
+  few to count.
 - **The wm/wm tests run in CI.** `tests/host/wm_test.sh`, written with
   the last fix to New to keep it from breaking again, was not run by any
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and

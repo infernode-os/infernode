@@ -97,7 +97,17 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		themec = lucitheme->watch();
 	win := wmclient->window(ctxt, "Wm", buts);
 	wmwin = win;
-	wmclient->win.reshape(((0, 0), (100, 100)));
+	# Run as another wm/wm's client, a desktop in a window: room for a
+	# window or two, as a shell's (it asked for 100x100, an empty square
+	# in the corner).  At the top, or in Lucifer's zone, it is given the
+	# display or the zone whatever it asks.
+	wr := Rect((0, 0), (640, 480));
+	dr := display.image.r;
+	if(wr.dx() > dr.dx())
+		wr.max.x = dr.dx();
+	if(wr.dy() > dr.dy())
+		wr.max.y = dr.dy();
+	wmclient->win.reshape(wr);
 	wmclient->win.onscreen("place");
 	if(win.image == nil){
 		sys->fprint(sys->fildes(2), "wm: cannot get image to draw on\n");

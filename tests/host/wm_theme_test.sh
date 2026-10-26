@@ -125,6 +125,8 @@ def theme(n):
 B, H = theme('brimstone'), theme('halo')
 bonly = set(B.values()) - set(H.values())
 names = {v: k for k, v in B.items()}
+# what draws a picture of its own over most of its window
+PICTURE = {'wm_coffee'}
 failed = 0
 for name in sorted(os.listdir(W)):
     d = os.path.join(W, name)
@@ -146,7 +148,18 @@ for name in sorted(os.listdir(W)):
     if frame != H['windowborder']:
         print('FAIL: %s: frame %s, want halo windowborder %s' % (name, frame, H['windowborder'])); failed = 1; continue
     tot = stale = 0; seen = {}
-    for y in range(y0 + 5, y1 - 5, 3):
+    ybot = y1 - 5
+    if name in PICTURE:
+        # a photograph below its controls (coffee's): its greys are the
+        # theme's greys by chance, and none of them is drawn by the theme.
+        # Check down to the first row that is mostly not theme colours.
+        theme_cols = set(B.values()) | set(H.values())
+        for y in range(y0 + 5, y1 - 5):
+            row = [b(x, y) for x in range(x0 + 5, x1 - 5, 3)]
+            if sum(c not in theme_cols for c in row) * 2 > len(row):
+                ybot = y
+                break
+    for y in range(y0 + 5, ybot, 3):
         for x in range(x0 + 5, x1 - 5, 3):
             c = b(x, y); tot += 1
             if c in bonly:

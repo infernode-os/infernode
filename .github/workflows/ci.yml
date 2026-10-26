@@ -906,9 +906,10 @@ jobs:
       run: |
         # wm/wm driven by the pointer: New, the sweep and its cursor,
         # the frame, focus, the menu's operations, a theme switch, a
-        # client leaving, wm/page.  wm_test.sh was written to keep New
+        # client leaving, wm/page, and every program in dis/wm opening
+        # at a size that shows it.  wm_test.sh was written to keep New
         # from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_theme_test wm_ghost_test page_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test page_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done

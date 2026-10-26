@@ -21,6 +21,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FIX = "/usr/agentloop"
 FLAKED = []	# the flaky scenario has failed once
+PROGRESS = {}	# a scenario's last step served
+# The window /v1/models reports (MOCK_WINDOW), and the one requests are
+# held to (MOCK_HARDWINDOW): longer, refused as vLLM refuses it.  Tokens
+# are counted as a quarter of the request's bytes.
+import os
+WINDOW = int(os.environ.get("MOCK_WINDOW", "0"))
+HARDWINDOW = int(os.environ.get("MOCK_HARDWINDOW", "0"))
 
 # What raw_write writes, and the test expects back byte for byte.
 RAWTEXT = '\n"quoted" first line\n\tsys->print("%d\\n", i);\n'
@@ -78,6 +85,13 @@ SCENARIOS = {
     # A model that takes its time: cancel must not wait for it.
     "slow": [
         {"delay": 20, "content": "Too late."},
+    ],
+    # One turn of many reads, each of a page of a long file: past the
+    # mark before the turn ends (compaction_test).
+    "long_turn": [
+        {"tools": [tool("read", {"path": FIX + "/big.txt", "offset": str(i)})]} for i in range(24)
+    ] + [
+        {"content": "Read them all."},
     ],
     "single_read": [
         {"tools": [tool("read", FIX + "/a.txt")]},
@@ -305,7 +319,10 @@ LOG = None
 
 def scenario_of(body):
     msgs = body.get("messages", [])
-    idx, name = None, None
+    # llmsrv asking for a summary: not a step of the scenario it summarises
+    if msgs and str(msgs[-1].get("content", "")).startswith("Summarise the conversation"):
+        return "compact_summary", 0
+    idx, name, summary = None, None, False
     for i, m in enumerate(msgs):
         if m.get("role") != "user":
             continue
@@ -315,9 +332,15 @@ def scenario_of(body):
         mt = re.search(r"SCENARIO:([a-z_]+)", c or "")
         if mt:
             idx, name = i, mt.group(1)
+            summary = (c or "").startswith("Context from earlier")
     if name is None:
         return None, 0
     turn = sum(1 for m in msgs[idx + 1:] if m.get("role") == "assistant")
+    # Named only by a summary: the turn was compacted in its middle, and
+    # goes on from the last step served.
+    if summary:
+        turn = PROGRESS.get(name, -1) + 1
+    PROGRESS[name] = turn
     return name, turn
 
 
@@ -346,8 +369,19 @@ def calls_of(name, turn, r):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def notfound(self):
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
-        body = json.dumps({"data": [{"id": "mock"}]}).encode()
+        # the model list only (not Ollama's /api/ps)
+        if not self.path.endswith("/models"):
+            return self.notfound()
+        m = {"id": "mock"}
+        if WINDOW:
+            m["max_model_len"] = WINDOW
+        body = json.dumps({"data": [m]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -356,7 +390,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(n) or b"{}")
+        raw = self.rfile.read(n) or b"{}"
+        # chat completions only (not Ollama's /api/show)
+        if not self.path.endswith("/chat/completions"):
+            return self.notfound()
+        body = json.loads(raw)
+        if HARDWINDOW and len(raw) // 4 > HARDWINDOW:
+            with open(LOG, "a") as f:
+                f.write(json.dumps({"scenario": "overflow", "turn": 0, "tokens": len(raw) // 4,
+                                    "body": body}) + "\n")
+            msg = json.dumps({"error": {"message": "This model's maximum context length is %d tokens. "
+                                        "However, you requested %d tokens." % (HARDWINDOW, len(raw) // 4)}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
         name, turn = scenario_of(body)
         with open(LOG, "a") as f:
             f.write(json.dumps({"scenario": name, "turn": turn, "body": body}) + "\n")
@@ -395,6 +445,15 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         r = reply_for(name, turn) if name else {"content": "no scenario"}
+        # A summary says what the conversation was, as a model's would: its
+        # scenario, and how far it had gone (the steps of the model's after
+        # the scenario's message), so a turn compacted in its middle goes on
+        # from there.
+        if name == "compact_summary":
+            text = str(msgs[-1].get("content", ""))
+            seen = re.findall(r"SCENARIO:[a-z_]+", text)
+            if seen:
+                r = {"content": r["content"] + " (" + seen[-1] + ")"}
         if name == "spill_readback" and turn == 1:
             told = None
             for m in msgs:

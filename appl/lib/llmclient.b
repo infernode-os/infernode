@@ -2319,6 +2319,170 @@ httpget(host, port, path, headers: string): (string, string)
 	return (rbody, nil);
 }
 
+# ==================== Context window ====================
+#
+# How much a model can be given, as its server says: an OpenAI-shape
+# server's model list (vLLM and SGLang give max_model_len; others
+# context_length or context_window); Ollama's running model (/api/ps) or
+# its num_ctx, the window Ollama gives it, which is not the model's own
+# (and a prompt longer than it is cut, silently, from the front); the
+# Anthropic API's models endpoint (max_input_tokens).
+
+contextwindow(backend, baseurl, apikey, model: string): (int, string)
+{
+	if(backend == "openai")
+		return openaiwindow(baseurl, apikey, model);
+	return anthropicwindow(baseurl, apikey, model);
+}
+
+openaiwindow(baseurl, apikey, model: string): (int, string)
+{
+	if(baseurl == nil || baseurl == "")
+		baseurl = "http://localhost:11434/v1";
+	headers := "";
+	if(apikey != nil && apikey != "" && apikey != "not-needed")
+		headers = "Authorization: Bearer " + apikey + "\r\n";
+	(body, err) := getjson(baseurl + "/models", headers);
+	if(err == nil) {
+		(jv, nil) := readjsonstring(body);
+		if(jv != nil && (data := jv.get("data")) != nil) {
+			pick da := data {
+			Array =>
+				for(i := 0; i < len da.a; i++) {
+					m := da.a[i];
+					if(jstr(m, "id") != model && len da.a != 1)
+						continue;
+					for(keys := "max_model_len" :: "context_length" :: "context_window" ::
+					    "max_context_length" :: nil; keys != nil; keys = tl keys)
+						if((n := jint(m, hd keys)) > 0)
+							return (n, hd keys);
+				}
+			}
+		}
+	}
+
+	# Ollama: the window it runs the model with
+	base := baseurl;
+	if(len base > 3 && base[len base - 3:] == "/v1")
+		base = base[0:len base - 3];
+	(body, err) = getjson(base + "/api/ps", "");
+	if(err == nil) {
+		(jv, nil) := readjsonstring(body);
+		if(jv != nil && (ms := jv.get("models")) != nil) {
+			pick ma := ms {
+			Array =>
+				for(i := 0; i < len ma.a; i++)
+					if(ollamaname(jstr(ma.a[i], "name")) == ollamaname(model) &&
+					   (n := jint(ma.a[i], "context_length")) > 0)
+						return (n, "ollama context_length");
+			}
+		}
+	}
+	(body, err) = postjson(base + "/api/show", "{\"model\":" + jquote(model) + "}");
+	if(err == nil) {
+		(jv, nil) := readjsonstring(body);
+		if(jv != nil) {
+			# num_ctx, when the model's parameters set it
+			(nil, ps) := sys->tokenize(jstr(jv, "parameters"), "\n");
+			for(; ps != nil; ps = tl ps) {
+				(nil, w) := sys->tokenize(hd ps, " \t");
+				if(len w == 2 && hd w == "num_ctx") {
+					(n, nil) := str->toint(hd tl w, 10);
+					if(n > 0)
+						return (n, "ollama num_ctx");
+				}
+			}
+			if(jv.get("model_info") != nil)
+				return (OLLAMADEFAULTCTX, "ollama default num_ctx");
+		}
+	}
+	return (0, "the server does not say");
+}
+
+# Ollama's window for a model whose num_ctx is not set: its default.
+OLLAMADEFAULTCTX: con 4096;
+
+# A model's name as Ollama lists it: a name without a tag is ":latest".
+ollamaname(n: string): string
+{
+	if(n == "" || contains(n, ":"))
+		return n;
+	return n + ":latest";
+}
+
+anthropicwindow(apiurl, apikey, model: string): (int, string)
+{
+	if(apiurl == nil || apiurl == "")
+		apiurl = "api.anthropic.com";
+	headers := "x-api-key: " + apikey + "\r\n" + "anthropic-version: 2023-06-01\r\n";
+	(body, err) := httpsget(apiurl, "443", "/v1/models/" + model, headers);
+	if(err != nil)
+		return (0, err);
+	(jv, nil) := readjsonstring(body);
+	if(jv != nil && (n := jint(jv, "max_input_tokens")) > 0)
+		return (n, "max_input_tokens");
+	return (0, "the models endpoint does not say");
+}
+
+getjson(url, headers: string): (string, string)
+{
+	(scheme, host, port, path, uerr) := parseurl(url);
+	if(uerr != nil)
+		return (nil, uerr);
+	if(scheme == "https")
+		return httpsget(host, port, path, headers);
+	return httpget(host, port, path, headers);
+}
+
+postjson(url, body: string): (string, string)
+{
+	(scheme, host, port, path, uerr) := parseurl(url);
+	if(uerr != nil)
+		return (nil, uerr);
+	headers := "Content-Type: application/json\r\n";
+	if(scheme == "https")
+		return httpspost(host, port, path, headers, body);
+	return httppost(host, port, path, headers, body);
+}
+
+# A refusal of a prompt longer than the window, by how servers word it:
+#	vLLM, OpenAI	"maximum context length is 65536 tokens"
+#	SGLang		"longer than the model's context length (65536 tokens)"
+#	Anthropic	"prompt is too long: 210000 tokens > 200000 maximum"
+#	llama.cpp	"exceeds the available context size"
+overflowwindow(err: string): (int, int)
+{
+	l := str->tolower(err);
+	if(contains(l, "maximum context length is")) {
+		(nil, r) := str->splitstrl(l, "maximum context length is");
+		return (firstint(r[len "maximum context length is":]), 1);
+	}
+	if(contains(l, "context length (")) {
+		(nil, r) := str->splitstrl(l, "context length (");
+		return (firstint(r[len "context length (":]), 1);
+	}
+	if(contains(l, "prompt is too long")) {
+		(nil, r) := str->splitstrl(l, " > ");
+		if(r != nil)
+			return (firstint(r[3:]), 1);
+		return (0, 1);
+	}
+	if(contains(l, "context size") || contains(l, "context window") && contains(l, "exceed"))
+		return (0, 1);
+	return (0, 0);
+}
+
+firstint(s: string): int
+{
+	i := 0;
+	while(i < len s && (s[i] < '0' || s[i] > '9'))
+		i++;
+	n := 0;
+	for(; i < len s && s[i] >= '0' && s[i] <= '9'; i++)
+		n = n * 10 + s[i] - '0';
+	return n;
+}
+
 # List the backend's available models via the OpenAI-compatible
 # GET /v1/models endpoint. Returns a newline-separated list of model
 # ids. Response shape: {"object":"list","data":[{"id":"name",...},...]}.

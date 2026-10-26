@@ -24,7 +24,10 @@ implement Llmsrv;
 #           compact      rw: write to trigger compaction
 #           ctl          w:  "reset", "close", or "cancel" (stop the
 #                            generation under way)
-#           usage        r:  "estimated_tokens/context_limit\n"
+#           usage        r:  "estimated_tokens/window\n"
+#           window       rw: the context window, in tokens: as the backend
+#                            reports it for the model (or llmsrv -C says);
+#                            written, this session's; 0, the model's again
 #
 # Usage:
 #   llmsrv                                    # mount at /mnt/llm (Anthropic API)
@@ -104,8 +107,9 @@ Qreasoning: con 30;  # per-session reasoning_effort override:
                      # must also clear reasoning. (See
                      # /tool/limbo flow for canonical use.)
 Qmodels:  con 31;    # top-level, read-only — backend's available models
+Qwindow:  con 32;    # per-session: the context window, in tokens
 
-NSESSFILES: con 13;  # number of files per session dir
+NSESSFILES: con 14;  # number of files per session dir
 
 # Session state
 LlmSession: adt {
@@ -134,6 +138,8 @@ LlmSession: adt {
 	reasoningeffort: string; # "" | "low" | "medium" | "high"
 	prefill:        string;
 	tools:          list of ref ToolDef;
+	window:         int;     # the context window set for this session; 0,
+	                         # the model's (modelwindow)
 	autocompact:    int;     # auto-compact high-water mark in estimated
 	                         # tokens; 0 = disabled (client owns its own
 	                         # compaction policy). Defaults to the daemon
@@ -189,7 +195,9 @@ apikey: string;
 apiurl: string;       # Anthropic: hostname; OpenAI: base URL
 defaultmodel: string;
 autocompactdefault: int;   # default session auto-compact high-water mark
-                           # (estimated tokens); -c flag, 0 = disabled.
+                           # (estimated tokens); -c flag, 0 = disabled,
+                           # AUTOMARK (the default) = from the window.
+windowdefault := 0;        # -C: the window, whatever the backend says
 defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
                            # daemon launch. Threaded into AskRequest so
                            # gpt-oss-style reasoning models default to a
@@ -203,7 +211,7 @@ defaultreasoning: string;  # ""|"low"|"medium"|"high" — set via -r flag at
 
 usage()
 {
-	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-M model] [-r low|medium|high] [-c autocompact-tokens]\n");
+	sys->fprint(stderr, "Usage: llmsrv [-D] [-m mountpt] [-b api|openai] [-u url] [-M model] [-r low|medium|high] [-c autocompact-tokens] [-C window-tokens]\n");
 	raise "fail:usage";
 }
 
@@ -256,7 +264,7 @@ init(nil: ref Draw->Context, args: list of string)
 	defaultmodel = "claude-sonnet-5-5";
 	modelset := 0;
 	defaultreasoning = "";
-	autocompactdefault = DEFAULTAUTOCOMPACT;
+	autocompactdefault = AUTOMARK;
 
 	while((o := arg->opt()) != 0)
 		case o {
@@ -269,11 +277,14 @@ init(nil: ref Draw->Context, args: list of string)
 			modelset = 1;
 		}
 		'r' => defaultreasoning = arg->earg();
-		'c' => autocompactdefault = strtoint(arg->earg());
+		'c' => {
+			autocompactdefault = strtoint(arg->earg());
+			if(autocompactdefault < 0)
+				autocompactdefault = 0;
+		}
+		'C' => windowdefault = strtoint(arg->earg());
 		* =>   usage();
 		}
-	if(autocompactdefault < 0)
-		autocompactdefault = 0;
 	arg = nil;
 	# An OpenAI-compatible backend must not inherit the Anthropic default.
 	# Empty means "use the backend's configured default"; callers can still
@@ -412,6 +423,7 @@ newsession(): ref LlmSession
 		                  # MUST also clear this or Ollama 500s.
 		"",            # prefill
 		nil,           # tools
+		0,             # window: the model's
 		autocompactdefault, # autocompact high-water mark (daemon -c default)
 		nil,           # streamch
 		nil,           # streamleft
@@ -491,6 +503,8 @@ resolvemodel(name: string): string
 estimatedtokens(sess: ref LlmSession): int
 {
 	total := len sess.systemprompt / 4;
+	for(tl0 := sess.tools; tl0 != nil; tl0 = tl tl0)
+		total += (len (hd tl0).name + len (hd tl0).description + len (hd tl0).inputschema) / 4;
 	for(ml := sess.messages; ml != nil; ml = tl ml) {
 		m := hd ml;
 		if(m.sc != "")
@@ -503,15 +517,94 @@ estimatedtokens(sess: ref LlmSession): int
 	return total;
 }
 
-CONTEXTLIMIT: con 200000;
+# --- The context window ---
+#
+# Where a session's history is compacted is a matter of the window it
+# runs in, which is the model's and its server's: 1M tokens for a current
+# Claude, 65536 for gpt-oss as SGLang serves it here, 4096 for a model
+# Ollama runs at its default.  A mark of 150000 for all of them was never
+# reached on the small ones: the request failed first, or Ollama cut the
+# history's start, silently.  So the window is learned, per model, from
+# the backend (llmclient->contextwindow), or set (-C, the deployment's;
+# the session's window file); and the mark is the window less room for
+# the reply (marklimit).
 
-# Default auto-compact high-water mark (estimated tokens) for new sessions,
-# overridable per-daemon with -c and per-session via `ctl autocompact <n>`.
-# 150000 ≈ 75% of CONTEXTLIMIT, matching veltro's COMPACT_THRESHOLD. This is
-# a server-side safety net (INFR-223) so long-lived clients that don't drive
-# /compact themselves (the agent harness, sub-agents) can't grow context unbounded.
-# Clients that own their own compaction policy set the session value to 0.
-DEFAULTAUTOCOMPACT: con 150000;
+# A session's high-water mark is derived from its window unless set:
+# AUTOMARK.  -c and `ctl autocompact <n>` set one; 0 disables (a client
+# that owns its compaction policy).
+AUTOMARK: con -1;
+
+# Where the backend does not say: the Anthropic API's least, and, for an
+# OpenAI-shape server, a generous guess.  A server that refuses a prompt
+# too long says so, and its window is learned from the refusal
+# (overflowed); the one that cuts a prompt silently, Ollama, says its
+# window when asked (llmclient->contextwindow).  Guessed small, a large
+# model's session is compacted every few steps.
+ANTHROPICWINDOW: con 200000;
+OPENAIWINDOW: con 131072;
+
+windows: list of (string, int);	# model -> window, as learned
+
+# A session's window: set, or its model's.  Learned from the backend when
+# fetch (in the generation's process, not the serving loop, which must not
+# wait on the network); otherwise as last learned, or the fallback.
+sesswindow(sess: ref LlmSession, fetch: int): int
+{
+	if(sess.window > 0)
+		return sess.window;
+	return modelwindow(sess.model, fetch);
+}
+
+modelwindow(model: string, fetch: int): int
+{
+	if(windowdefault > 0)
+		return windowdefault;
+	for(l := windows; l != nil; l = tl l) {
+		(m, w) := hd l;
+		if(m == model)
+			return w;
+	}
+	fallback := ANTHROPICWINDOW;
+	if(backend == "openai")
+		fallback = OPENAIWINDOW;
+	if(!fetch)
+		return fallback;
+	(w, why) := llmclient->contextwindow(backend, apiurl, apikey, model);
+	if(w <= 0) {
+		sys->fprint(stderr, "llmsrv: model %#q: window not known (%s); taking %d (set window= in /lib/ndb/llm)\n",
+			model, why, fallback);
+		w = fallback;
+	} else
+		sys->fprint(stderr, "llmsrv: model %#q: window %d (%s)\n", model, w, why);
+	learnwindow(model, w);
+	return w;
+}
+
+learnwindow(model: string, w: int)
+{
+	kept: list of (string, int);
+	for(l := windows; l != nil; l = tl l) {
+		(m, nil) := hd l;
+		if(m != model)
+			kept = hd l :: kept;
+	}
+	windows = (model, w) :: kept;
+}
+
+# The mark: the window less room for the reply (a quarter of it, at least
+# 16K tokens, at most half).
+marklimit(sess: ref LlmSession, fetch: int): int
+{
+	if(sess.autocompact >= 0)
+		return sess.autocompact;
+	w := sesswindow(sess, fetch);
+	room := w / 4;
+	if(room < 16384)
+		room = 16384;
+	if(room > w / 2)
+		room = w / 2;
+	return w - room;
+}
 
 # --- Backend call ---
 
@@ -727,8 +820,16 @@ Serve:
 					break;
 				}
 				estimated := estimatedtokens(sess);
-				content := sys->sprint("%d/%d\n", estimated, CONTEXTLIMIT);
+				content := sys->sprint("%d/%d\n", estimated, sesswindow(sess, 0));
 				srv.reply(styxservers->readbytes(m, array of byte content));
+
+			Qwindow =>
+				sess := findsession(sid);
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				srv.reply(styxservers->readbytes(m, array of byte sys->sprint("%d\n", sesswindow(sess, 0))));
 
 			Qmaxtokens =>
 				sess := findsession(sid);
@@ -905,6 +1006,20 @@ Serve:
 				sess.prefill = pf;
 				srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
+			Qwindow =>
+				sess := findsession(sid);
+				if(sess == nil) {
+					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
+					break;
+				}
+				n := strtoint(strip(string m.data));
+				if(len m.data > MAXSETTING || n < 0) {
+					srv.reply(ref Rmsg.Error(m.tag, "window: a number of tokens, or 0 for the model's"));
+					break;
+				}
+				sess.window = n;
+				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+
 			Qmaxtokens =>
 				sess := findsession(sid);
 				if(sess == nil) {
@@ -996,9 +1111,13 @@ Serve:
 					# mark in estimated tokens; 0 disables (caller owns its
 					# own compaction policy). See rungeneration (INFR-223).
 					if(hasprefix(cmd, "autocompact")) {
-						n := strtoint(strip(cmd[len "autocompact":]));
-						if(n < 0)
-							srv.reply(ref Rmsg.Error(m.tag, "autocompact needs a non-negative integer (0 disables)"));
+						# auto: from the session's window
+						arg := strip(cmd[len "autocompact":]);
+						n := AUTOMARK;
+						if(arg != "auto")
+							n = strtoint(arg);	# -1, not a number
+						if(arg != "auto" && n < 0)
+							srv.reply(ref Rmsg.Error(m.tag, "autocompact needs a non-negative integer (0 disables) or auto"));
 						else {
 							sess.autocompact = n;
 							srv.reply(ref Rmsg.Write(m.tag, len m.data));
@@ -1205,6 +1324,7 @@ rungeneration(sess: ref LlmSession, prompt: string)
 	# A group of its own, the backend's readers in it, so cancel can stop
 	# all of it.
 	sess.genpid = sys->pctl(Sys->NEWPGRP, nil);
+	sesswindow(sess, 1);	# learned here, off the serving loop
 	# Check for TOOL_RESULTS
 	if(hasprefix(prompt, "TOOL_RESULTS\n") || hasprefix(prompt, "TOOL_RESULTS\r\n")) {
 		(results, perr) := llmclient->parsetoolresults(prompt);
@@ -1252,15 +1372,23 @@ intoolexchange(sess: ref LlmSession): int
 # since the high-water mark is reached rarely.
 maybeautocompact(sess: ref LlmSession)
 {
+	mk := marklimit(sess, 1);
 	before := estimatedtokens(sess);
-	if(sess.autocompact <= 0 || before < sess.autocompact)
+	if(mk <= 0 || before < mk)
 		return;
-	err := compactnow(sess);
+	autocompact(sess, 0, before, mk);
+}
+
+autocompact(sess: ref LlmSession, midturn, before, mk: int): string
+{
+	err := compactnow(sess, midturn);
 	if(err != nil)
 		sys->fprint(stderr, "llmsrv: auto-compact (session %d) failed: %s\n", sess.id, err);
 	else
-		sys->fprint(stderr, "llmsrv: auto-compacted session %d (~%d -> ~%d tokens, threshold %d)\n",
-			sess.id, before, estimatedtokens(sess), sess.autocompact);
+		sys->fprint(stderr, "llmsrv: auto-compacted session %d%s (~%d -> ~%d tokens, mark %d, window %d)\n",
+			sess.id, (array[] of {"", " mid-turn"})[midturn], before, estimatedtokens(sess), mk,
+			sesswindow(sess, 0));
+	return err;
 }
 
 askprompt(sess: ref LlmSession, prompt: string)
@@ -1281,6 +1409,12 @@ askprompt(sess: ref LlmSession, prompt: string)
 	);
 
 	(resp, err) := callbackend(req);
+	# Too long for the window: compacted, and asked again, once.  The
+	# window it names is learned.
+	if(err != nil && overflowed(sess, err) && compactnow(sess, 0) == nil) {
+		req.messages = sess.messages;
+		(resp, err) = callbackend(req);
+	}
 	if(err != nil) {
 		# Error recovery
 		if(iscontentfiltererror(err) || istooluseerror(err)) {
@@ -1309,6 +1443,14 @@ askprompt(sess: ref LlmSession, prompt: string)
 
 askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 {
+	# A long turn grows past the mark in the middle: its earlier steps
+	# are compacted before the results are sent, the step they answer
+	# kept.  Compacted only between turns, one turn of many reads ran the
+	# history past the window before the turn ended.
+	mk := marklimit(sess, 1);
+	if(mk > 0 && (before := estimatedtokens(sess) + resultstokens(results)) >= mk)
+		autocompact(sess, 1, before, mk);
+
 	# Copy message list for the request (matches Go pattern: req gets snapshot
 	# without tool_result; session gets tool_result immediately to prevent
 	# orphaned tool_use if the API call fails).
@@ -1338,6 +1480,18 @@ askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 
 	(resp, err) := callbackend(req);
 
+	# Too long for the window: the results taken off again, the history
+	# compacted, the results sent again, once.
+	if(err != nil && overflowed(sess, err)) {
+		sess.messages = copymessages(history);
+		if(compactnow(sess, 1) == nil) {
+			req.messages = copymessages(sess.messages);
+			sess.messages = addmessage(sess.messages, "user", toolresultstext, toolresultsjson);
+			(resp, err) = callbackend(req);
+		} else
+			sess.messages = addmessage(sess.messages, "user", toolresultstext, toolresultsjson);
+	}
+
 	if(err != nil) {
 		if(iscontentfiltererror(err)) {
 			sess.messages = nil;
@@ -1357,6 +1511,32 @@ askwithtoolresults(sess: ref LlmSession, results: list of ref ToolResult)
 	sess.totaltokens += resp.tokens;
 	sess.contexttokens = resp.tokens;
 	sess.lastresponse = resp.response;
+}
+
+# Whether err is the backend refusing a prompt too long for the window;
+# the window it names, if it names one, is the model's from now on.
+overflowed(sess: ref LlmSession, err: string): int
+{
+	(w, is) := llmclient->overflowwindow(err);
+	if(!is)
+		return 0;
+	if(w > 0) {
+		sys->fprint(stderr, "llmsrv: model %#q: window %d (the backend's refusal says)\n", sess.model, w);
+		# The server's word is the window, over what it was told (-C).
+		sess.window = w;
+		learnwindow(sess.model, w);
+		if(windowdefault > w)
+			windowdefault = w;
+	}
+	return 1;
+}
+
+resultstokens(results: list of ref ToolResult): int
+{
+	n := 0;
+	for(; results != nil; results = tl results)
+		n += len (hd results).content / 4;
+	return n;
 }
 
 # Stop the generation under way: the model's answer is not waited for.
@@ -1493,7 +1673,7 @@ asyncstreamread(id: int, m: ref Tmsg.Read, sess: ref LlmSession)
 # for serializing against generation, since this rewrites sess.messages: the
 # auto path runs inside the generation proc; the manual path rejects writes
 # while a turn is in flight (see asynccompact).
-compactnow(sess: ref LlmSession): string
+compactnow(sess: ref LlmSession, midturn: int): string
 {
 	# Count messages
 	nmsg := 0;
@@ -1507,7 +1687,7 @@ compactnow(sess: ref LlmSession): string
 	# of it summarised, the model no longer had what it had just said: a
 	# question it had put to the user went into the summary as still open,
 	# and it put it again at the end of every reply after.
-	(older, recent) := compactsplit(sess.messages, compactkeep(sess));
+	(older, recent) := compactsplit(sess.messages, compactkeep(sess), midturn);
 	if(len older < 2)
 		return "";
 
@@ -1538,8 +1718,12 @@ compactnow(sess: ref LlmSession): string
 	sess.messages = nil;
 	sess.messages = addmessage(sess.messages, "user",
 		"Context from earlier in this session:\n" + resp.response, "");
-	sess.messages = addmessage(sess.messages, "assistant",
-		"Understood. I have the context from our previous work and will continue from there.", "");
+	# What is kept begins with the user's message, or, cut in the middle
+	# of a turn, with the model's next step: after the summary, which is
+	# the user's, the model's answer is that step.
+	if(recent == nil || (hd recent).role != "assistant")
+		sess.messages = addmessage(sess.messages, "assistant",
+			"Understood. I have the context from our previous work and will continue from there.", "");
 	# Kept, but not their thinking: a thinking block is bound to the
 	# conversation before it, which is now the summary, and the API
 	# refuses one replayed into a history that changed under it.
@@ -1682,9 +1866,9 @@ stripthinking(sc: string): string
 # session's mark (a quarter of the context, with none).
 compactkeep(sess: ref LlmSession): int
 {
-	if(sess.autocompact > 0)
-		return sess.autocompact / 2;
-	return CONTEXTLIMIT / 4;
+	if((mk := marklimit(sess, 0)) > 0)
+		return mk / 2;
+	return sesswindow(sess, 0) / 4;
 }
 
 # The history split where the last exchanges begin: as many as fit in
@@ -1693,7 +1877,7 @@ compactkeep(sess: ref LlmSession): int
 # answers a call left in the summary.
 COMPACTKEEPTURNS: con 2;
 
-compactsplit(msgs: list of ref LlmMessage, budget: int): (list of ref LlmMessage, list of ref LlmMessage)
+compactsplit(msgs: list of ref LlmMessage, budget, midturn: int): (list of ref LlmMessage, list of ref LlmMessage)
 {
 	a := array[len msgs] of ref LlmMessage;
 	i := 0;
@@ -1702,6 +1886,32 @@ compactsplit(msgs: list of ref LlmMessage, budget: int): (list of ref LlmMessage
 	cut := len a;
 	size := 0;
 	turns := 0;
+	# In the middle of a turn, the history ends with the model's tool calls
+	# whose results are to come: that step is kept, whatever its size, and
+	# the steps before it are cut between, each a step of the model's and
+	# the results that answer it.
+	if(midturn) {
+		last := len a - 1;
+		while(last > 0 && a[last].role != "assistant")
+			last--;
+		if(last > 0)
+			cut = last;
+		for(j := cut - 1; j > 0 && turns < COMPACTKEEPTURNS; j--) {
+			size += len a[j].content / 4 + len a[j].sc / 4;
+			if(size > budget)
+				break;
+			if(a[j].role == "assistant" && a[j-1].role == "user") {
+				cut = j;
+				turns++;
+			}
+		}
+		older, recent: list of ref LlmMessage;
+		for(j = cut - 1; j >= 0; j--)
+			older = a[j] :: older;
+		for(j = len a - 1; j >= cut; j--)
+			recent = a[j] :: recent;
+		return (older, recent);
+	}
 	for(j := len a - 1; j > 0 && turns < COMPACTKEEPTURNS; j--) {
 		size += len a[j].content / 4 + len a[j].sc / 4;
 		if(size > budget)
@@ -1731,7 +1941,7 @@ asynccompact(id, tag, count: int, sess: ref LlmSession)
 		return;
 	}
 
-	err := compactnow(sess);
+	err := compactnow(sess, 0);
 	if(err != nil) {
 		asyncrepl <-= ref Asyncreply(id, ref Rmsg.Error(tag, "compact: " + err));
 		return;
@@ -1861,6 +2071,8 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "ctl", big 0, 8r222), nil);
 	Qusage =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "usage", big 0, 8r444), nil);
+	Qwindow =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "window", big 0, 8r666), nil);
 	Qmaxtokens =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "maxtokens", big 0, 8r666), nil);
 	Qreasoning =>
@@ -1934,6 +2146,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(sid, Qctl);
 				"usage" =>
 					n.path = MKPATH(sid, Qusage);
+				"window" =>
+					n.path = MKPATH(sid, Qwindow);
 				"maxtokens" =>
 					n.path = MKPATH(sid, Qmaxtokens);
 				"reasoning" =>
@@ -2002,6 +2216,7 @@ navigator(navops: chan of ref Navop)
 					MKPATH(sid, Qcompact),
 					MKPATH(sid, Qctl),
 					MKPATH(sid, Qusage),
+					MKPATH(sid, Qwindow),
 					MKPATH(sid, Qmaxtokens),
 					MKPATH(sid, Qreasoning),
 				};

@@ -328,7 +328,8 @@ jobs:
           tests/host/agentloop_characterization_test.sh \
           tests/host/tools9p_result_test.sh tests/host/wiki9p_test.sh \
           tests/host/agent_delegation_test.sh tests/host/prompt_defaults_test.sh \
-          tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh
+          tests/host/luciuisrv_closed_test.sh tests/host/compaction_test.sh \
+          tests/host/context_window_test.sh
         # Concurrent calls to one tool each read their own result.
         ROOT=. bash tests/host/tools9p_result_test.sh
         ROOT=. bash tests/host/lucibridge_tool_timeout_test.sh
@@ -344,6 +345,7 @@ jobs:
         ROOT=. bash tests/host/luciuisrv_closed_test.sh
         # A long session is compacted without breaking a turn of tool calls.
         ROOT=. bash tests/host/compaction_test.sh
+        ROOT=. bash tests/host/context_window_test.sh
         # The LLM-maintained wiki (wiki9p over wikifs) against a scripted model.
         ROOT=. bash tests/host/wiki9p_test.sh
         ROOT=. FRONTENDS=veltrosrv bash tests/host/agentloop_characterization_test.sh

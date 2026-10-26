@@ -74,6 +74,17 @@ Llmclient: module
 	# Returns a newline-separated list of model ids, or ("", err).
 	listmodels:     fn(baseurl, apikey: string): (string, string);
 
+	# The context window of a model, in tokens, as its backend reports
+	# it, and where that came from ("max_model_len", "ollama num_ctx",
+	# ...); (0, why) when the backend does not say.  backend is "openai"
+	# or "api" (Anthropic).
+	contextwindow:  fn(backend, baseurl, apikey, model: string): (int, string);
+
+	# The window a refusal of a too-long prompt names ("maximum context
+	# length is 65536 tokens"), 0 if it names none; and whether err is
+	# such a refusal at all.
+	overflowwindow: fn(err: string): (int, int);
+
 	# Parse TOOL_RESULTS wire format into ToolResult list
 	parsetoolresults: fn(text: string): (list of ref ToolResult, string);
 

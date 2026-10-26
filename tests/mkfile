@@ -315,6 +315,41 @@ DISBIN=$ROOT/dis/tests
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs
 
+# xenith_frame_test and its suite include Xenith's own interfaces
+# (../appl/xenith/*.m): built again when one of them changes. Left as
+# they were, they no longer loaded (link typecheck) after a change to
+# one, until the tests were built again from nothing
+XENITHM=\
+	$ROOT/appl/xenith/asyncio.m\
+	$ROOT/appl/xenith/buff.m\
+	$ROOT/appl/xenith/col.m\
+	$ROOT/appl/xenith/dat.m\
+	$ROOT/appl/xenith/disk.m\
+	$ROOT/appl/xenith/docview.m\
+	$ROOT/appl/xenith/ecmd.m\
+	$ROOT/appl/xenith/edit.m\
+	$ROOT/appl/xenith/elog.m\
+	$ROOT/appl/xenith/exec.m\
+	$ROOT/appl/xenith/file.m\
+	$ROOT/appl/xenith/format.m\
+	$ROOT/appl/xenith/frame.m\
+	$ROOT/appl/xenith/fsys.m\
+	$ROOT/appl/xenith/graph.m\
+	$ROOT/appl/xenith/gui.m\
+	$ROOT/appl/xenith/look.m\
+	$ROOT/appl/xenith/regx.m\
+	$ROOT/appl/xenith/row.m\
+	$ROOT/appl/xenith/scrl.m\
+	$ROOT/appl/xenith/styxaux.m\
+	$ROOT/appl/xenith/text.m\
+	$ROOT/appl/xenith/time.m\
+	$ROOT/appl/xenith/util.m\
+	$ROOT/appl/xenith/wind.m\
+	$ROOT/appl/xenith/xenith.m\
+	$ROOT/appl/xenith/xfid.m\
+
+xenith_frame_test.dis xenith_framesuite.dis:	$XENITHM
+
 # agentlib_test needs -I for appl/veltro (tool.m)
 agentlib_test.dis: agentlib_test.b $ROOT/module/agentlib.m
 	limbo -I$ROOT/module -I$ROOT/appl/veltro -gw agentlib_test.b

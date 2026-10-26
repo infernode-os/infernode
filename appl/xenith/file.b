@@ -117,11 +117,23 @@ File.insert(f : self ref File, p0 : int, s : string, ns : int)
 {
 	if (p0 > f.buf.nc)
 		error("bad assert in File.insert");
+	redone(f);
 	if(f.seq > 0)
 		f.uninsert(f.delta, p0, ns);
 	f.buf.insert(p0, s, ns);
 	if(ns)
 		f.mod = TRUE;
+}
+
+# A change made: what was undone cannot be redone over it. Marking the
+# file emptied the redo list, and a change made without marking (by a
+# client with nomark set, as win writes) left it: Redo then put back
+# what was undone where the text no longer was (an internal error, and
+# Xenith exited)
+redone(f : ref File)
+{
+	if(f.epsilon.nc)
+		f.epsilon.delete(0, f.epsilon.nc);
 }
 
 File.uninsert(f : self ref File, delta : ref Buffer, p0 : int, ns : int)
@@ -135,6 +147,7 @@ File.delete(f : self ref File, p0 : int, p1 : int)
 {
 	if (p0>p1 || p0>f.buf.nc || p1>f.buf.nc)
 		error("bad assert in File.delete");
+	redone(f);
 	if(f.seq > 0)
 		f.undelete(f.delta, p0, p1);
 	f.buf.delete(p0, p1);

@@ -20,7 +20,11 @@
 #	kept (the Edit refused), not lost with the command's output, and
 #	one changed while a later window's command in Edit X runs;
 #	a change made while Put writes a large file in the background
-#	leaves the window unsaved.
+#	leaves the window unsaved;
+#	an Edit run while a file loads works on all of it;
+#	Put x from a window with no name;
+#	a change by a client with nomark set after an Undo empties the
+#	redo list.
 #
 # Runs tests/inferno/xenith_race_test.sh (tests/xenith_race_helper.b)
 # inside a headless Xenith (xenith_inside.sh). Needs the SDL GUI

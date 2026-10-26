@@ -520,7 +520,10 @@ getname(t : ref Text, argt : ref Text, arg : string, narg : int, isput : int) : 
 		ndir = 0;
 		if(n>0 && arg[0]!='/'){
 			(dir, ndir) = dirname(t, nil, 0);
-			if(n==1 && dir[0]=='.'){	# sigh 
+			# the directory's length, as Acme has it: the argument's
+			# (n) took dir[0] of no directory, with an argument one
+			# character long (a nil dereference)
+			if(ndir==1 && dir[0]=='.'){	# sigh 
 				dir = nil;
 				ndir = 0;
 			}

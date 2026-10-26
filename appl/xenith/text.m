@@ -52,6 +52,7 @@ Textm : module {
 		constrain : fn(t : self ref Text, p : int, q : int) : (int, int);
 		setorigin : fn(t : self ref Text, p : int, q : int);
 		readc : fn(t : self ref Text, n : int) : int;
+		readtext : fn(t : self ref Text, q : int, n : int) : string;
 		reset : fn(t : self ref Text);
 		reshape : fn(t : self ref Text, r : Draw->Rect, keepextra: int) : int;
 		close : fn(t : self ref Text);

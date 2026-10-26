@@ -279,6 +279,100 @@ getattr(attrs: list of (string, string), key: string): string
 	return "";
 }
 
+# The folders text names that the task would see only if granted, that
+# this agent holds (held: its own grants, from /tool/paths), and that
+# paths= does not give.  Nothing is granted here: the caller refuses the
+# create and suggests these, for the agent to grant itself or leave out.
+# Prose names a path; it never confers one (a brief can be copied mail
+# or a web page).  Only ordinary file trees are suggested: /n/local and
+# /usr, never services, control files or task metadata.  A named file
+# gives its folder (a writable grant is a cowfs folder), said as such.
+ungranted(text, paths: string, held: list of string): list of string
+{
+	(nil, grants) := sys->tokenize(paths, ",");
+	need: list of string;
+	(nil, words) := sys->tokenize(text, " \t\n");
+	for(; words != nil; words = tl words) {
+		w := hd words;
+		while(len w > 0 && strchr("\"'`(<[", w[0]))
+			w = w[1:];
+		while(len w > 0 && strchr("\"'`)>],.;:!?/", w[len w - 1]))
+			w = w[0:len w - 1];
+		if(!plaintree(w) || !covered(w, held))
+			continue;
+		(ok, d) := sys->stat(w);
+		if(ok < 0 || (d.mode & Sys->DMDIR) == 0) {
+			for(i := len w - 1; i > 0 && w[i] != '/'; i--)
+				;
+			w = w[0:i];
+		}
+		if(!plaintree(w) || !covered(w, held) || covered(w, grants) || strlistcontains(need, w))
+			continue;
+		need = w :: need;
+	}
+	return need;
+}
+
+# An ordinary file tree of the user's, below its root: /n/local/<...> or
+# /usr/<...>.  Everything else a task sees either way or gets only by
+# capability, and is never suggested.
+plaintree(p: string): int
+{
+	if(hasprefix(p, "/n/local/") && len p > len "/n/local/")
+		return !hasdotdot(p);
+	if(hasprefix(p, "/usr/") && len p > len "/usr/")
+		return !hasdotdot(p);
+	return 0;
+}
+
+hasdotdot(p: string): int
+{
+	(nil, parts) := sys->tokenize(p, "/");
+	for(; parts != nil; parts = tl parts)
+		if(hd parts == ".." || hd parts == ".")
+			return 1;
+	return 0;
+}
+
+# The paths of a grants listing (/tool/paths: "<path> <perm>" a line).
+heldpaths(listing: string): list of string
+{
+	held: list of string;
+	for(lines := splitlines(listing); lines != nil; lines = tl lines) {
+		(nil, f) := sys->tokenize(hd lines, " \t");
+		if(f != nil && hd f != "/tmp/veltro/scratch")
+			held = hd f :: held;
+	}
+	return held;
+}
+
+plural(l: list of string, one, many: string): string
+{
+	if(l != nil && tl l != nil)
+		return many;
+	return one;
+}
+
+covered(p: string, grants: list of string): int
+{
+	for(; grants != nil; grants = tl grants) {
+		g := strip(hd grants);
+		while(len g > 1 && g[len g - 1] == '/')
+			g = g[0:len g - 1];
+		if(g != "" && (p == g || hasprefix(p, g + "/")))
+			return 1;
+	}
+	return 0;
+}
+
+strchr(set: string, c: int): int
+{
+	for(i := 0; i < len set; i++)
+		if(set[i] == c)
+			return 1;
+	return 0;
+}
+
 readprovisionstate(id: int): string
 {
 	raw := readfile("/tool/provision");
@@ -340,6 +434,28 @@ docreate(args: string): string
 					return sys->sprint("error: tool '%s' not in delegation budget", t);
 			}
 		}
+	}
+
+	# A task sees only what paths= grants it. A brief that names a folder
+	# of the user's without granting it creates a task that cannot open the
+	# folder it was sent to work on, and answers that the path does not
+	# exist (mistral-small3.2 did). Refuse it and say what could be granted,
+	# before anything is made.  Nothing is granted from the brief: it is
+	# text, possibly copied from mail or a page, and a grant is only ever
+	# what paths= says (security review, 2026-10).
+	need := ungranted(getattr(attrs, "brief") + " " + getattr(attrs, "instructions"),
+		getattr(attrs, "paths"), heldpaths(readfile("/tool/paths")));
+	if(need != nil) {
+		p := joinstrs(need, ",");
+		if(getattr(attrs, "paths") != "")
+			p = getattr(attrs, "paths") + "," + p;
+		# Say whose move it is: told "unless you grant it", mistral-small3.2
+		# asked the user to bind a folder that was already bound.
+		return sys->sprint("error: not created: the brief names a path in %s.  You have %s, but a task sees only what its create's paths= gives it.  " +
+			"The user has nothing to do.  If the task needs %s, call task create again, the same but with paths=%s before brief=; " +
+			"it gets the whole folder.  If it should not have %s, leave that path out of the brief.\nsuggest: paths=%s",
+			joinstrs(need, " and "), plural(need, "that folder", "those folders"), plural(need, "it", "them"), p,
+			plural(need, "it", "them"), p);
 	}
 
 	# Idempotency guard (INFR-390): the meta-agent repeatedly re-creates the

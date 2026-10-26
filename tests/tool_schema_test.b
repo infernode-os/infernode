@@ -477,6 +477,8 @@ testToolArgsByName(t: ref T)
 	t.assertseq(a("vision", "{\"imagepath\":\"/i.png\",\"backend\":\"local\"}"), "--local /i.png", "vision: backend is a flag");
 	t.assertseq(a("write", "{\"content\":\"x\",\"path\":\"/lib/f\"}"), "-r /lib/f x\n", "write: the path first, whatever order sent");
 	t.assertseq(a("task", "{\"command\":\"status\",\"args\":\"1\"}"), "status 1", "command and args as before");
+	t.assertseq(a("limbo", "{\"path\":\"/tmp/veltro/scratch/f.b\",\"description\":\"a program\"}"), "-o /tmp/veltro/scratch/f.b a program", "limbo: a path to save to");
+	t.assertseq(a("limbo", "{\"description\":\"compile /tmp/f.b\"}"), "compile /tmp/f.b", "limbo: compile as before");
 	t.assertseq(a("read", "/f 3"), "/f 3", "already positional: unchanged");
 }
 

@@ -109,10 +109,12 @@ screq(sc: string): ref AskRequest
 VALIDSC: con "[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read\",\"input\":{\"args\":\"/x\"}}]";
 
 # Byte-exact goldens captured from the current builders. These lock the wire
-# shape (incl. the Anthropic cache_control prompt-cache markers) so any future
+# shape (incl. the Anthropic cache_control prompt-cache markers: the system
+# prompt, the last tool, and the newest message, the conversation's
+# rolling breakpoint) so any future
 # refactor of the builders must reproduce the bytes verbatim. If a builder
 # change is intentional, update these strings deliberately.
-ANTHROPIC_GOLDEN: con "{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":1024,\"temperature\":1.00,\"system\":[{\"type\":\"text\",\"text\":\"You are Veltro.\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}],\"tools\":[{\"name\":\"read\",\"description\":\"Read a file\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"}},\"required\":[\"args\"]},\"cache_control\":{\"type\":\"ephemeral\"}}],\"tool_choice\":{\"type\":\"auto\"}}";
+ANTHROPIC_GOLDEN: con "{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":1024,\"temperature\":1.00,\"system\":[{\"type\":\"text\",\"text\":\"You are Veltro.\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\",\"cache_control\":{\"type\":\"ephemeral\"}}]}],\"tools\":[{\"name\":\"read\",\"description\":\"Read a file\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"}},\"required\":[\"args\"]},\"cache_control\":{\"type\":\"ephemeral\"}}],\"tool_choice\":{\"type\":\"auto\"}}";
 OPENAI_GOLDEN: con "{\"model\":\"claude-sonnet-4-5\",\"max_tokens\":1024,\"temperature\":1.00,\"messages\":[{\"role\":\"system\",\"content\":\"You are Veltro.\"},{\"role\":\"user\",\"content\":\"hello\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read\",\"description\":\"Read a file\",\"parameters\":{\"type\":\"object\",\"properties\":{\"args\":{\"type\":\"string\"}},\"required\":[\"args\"]}}}],\"tool_choice\":\"auto\"}";
 
 # ---- seam: valid sc splices verbatim and the whole body is valid JSON ----

@@ -136,6 +136,11 @@ for name in sorted(os.listdir(W)):
         print('FAIL: %s: no window' % name); failed = 1; continue
     # the topmost window is the application's
     x0, y0, x1, y1 = map(int, win[0][1:5])
+    # it opens at a size that shows something: wm/tetris opened as its
+    # 4px frame alone, 8x8, and the check below saw no pixels to fail
+    # (wm/date, a line of text, is the smallest at 162x24)
+    if x1 - x0 < 24 or y1 - y0 < 24:
+        print('FAIL: %s: opened %dx%d, its frame and almost nothing in it' % (name, x1 - x0, y1 - y0)); failed = 1; continue
     b = load(shot)
     frame = b(x0 + 1, (y0 + y1) // 2)
     if frame != H['windowborder']:

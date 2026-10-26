@@ -19,6 +19,14 @@ All notable changes to InferNode are documented in this file.
   narrower than two borders, and wm/wm asked for a window of negative
   size for the edges between, which the image pool refused on standard
   error at the start of every sweep.
+- **wm/tetris opens at its board's size under wm/wm.** It went on screen
+  before its board was made and pinned the window at the size it had
+  then, nothing: an 8x8 square of frame in the corner. The pinning is for
+  Lucifer's presentation zone, where the window comes up the zone's size,
+  and is kept there; under a window manager the board sizes the window,
+  as it did before the July Tk work. `tests/host/wm_theme_test.sh`, which
+  opens every wm application, now fails one that opens as little more
+  than its frame (it passed tetris, finding no pixels inside to check).
 - **The wm/wm tests run in CI.** `tests/host/wm_test.sh`, written with
   the last fix to New to keep it from breaking again, was not run by any
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and

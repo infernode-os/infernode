@@ -176,18 +176,19 @@ init(ctxt: ref Draw->Context, argv: list of string)
 
 	tkclient->onscreen(win, nil);
 	tkclient->startinput(win, "kbd"::"ptr"::nil);
-	# Keep the toplevel at its window size instead of shrink-wrapping to the
-	# board.  Embedded in the lucifer presentation zone the window is large
-	# (e.g. 677x844); with geometry propagation on, "." collapses to the
-	# board's natural size and Tk draws it at a stale origin, so the board
-	# lands off-window.  Pinning the size (as the classic score screen already
-	# did) lets us anchor the board top-centre in the window below.
-	cmd(win, "pack propagate . 0");
-	# Once on screen the window has its real size (in the presentation
-	# zone, the zone's); bound the board by that, not the whole display.
+	# Once on screen the window has its real size.  Embedded in the
+	# lucifer presentation zone it is the zone's (e.g. 677x844): keep the
+	# toplevel at that size instead of shrink-wrapping to the board (with
+	# geometry propagation on, "." collapses to the board's natural size
+	# and Tk draws it at a stale origin, so the board lands off-window),
+	# and bound the board by it, not the whole display.  Under a window
+	# manager the window is what was asked for, nothing yet: pinned, it
+	# stayed its borders alone, so there the board sizes the window.
 	(aw, ah) := (int cmd(win, ". cget -actwidth"), int cmd(win, ". cget -actheight"));
-	if (aw >= 2 * BOARDWIDTH * blocksize && ah >= BOARDHEIGHT * blocksize)
+	if (aw >= 2 * BOARDWIDTH * blocksize && ah >= BOARDHEIGHT * blocksize) {
 		maxsize = Point(aw, ah);
+		cmd(win, "pack propagate . 0");
+	}
 	for (;;) {
 		bd := Board.new(win, ".f", blocksize, maxsize);
 		if (bd == nil) {

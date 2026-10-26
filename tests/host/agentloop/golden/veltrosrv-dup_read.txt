@@ -22,7 +22,7 @@ tool-result call_dup_read_1_0:
   | == veltro
   | Read twice.
   | == log
-  | session <llm>, prompt 14220 bytes
+  | session <llm>, prompt 14270 bytes
   | step 1: writing 20 bytes to LLM
   | stream: reading /mnt/llm/<llm>/stream
   | stream: done (0 chunks, 0 bytes)

@@ -114,6 +114,9 @@ SCENARIOS = {
         {"tools": []},
         {"content": "Spill read."},
     ],
+    "doubled_text": [
+        {"content": "This sentence came twice from the backend.", "resend": True},
+    ],
     "big_output": [
         {"tools": [tool("read", FIX + "/big.txt")]},
         {"content": "Read the big one."},
@@ -211,6 +214,11 @@ SCENARIOS = {
     ],
     # Activity 0 asks for Limbo through the limbo tool, whose compile gate
     # must say whether the code compiles.
+    # A new file written, and saved where the agent said.
+    "limbo_save": [
+        {"tools": [tool("limbo", {"description": "SCENARIO:limbo_ok go", "path": "/tmp/veltro/scratch/saved.b"})]},
+        {"content": "Saved it."},
+    ],
     "gate": [
         {"tools": [tool("limbo", "SCENARIO:limbo_ok go"), tool("limbo", "SCENARIO:limbo_bad go")]},
         {"content": "Gate checked."},
@@ -247,6 +255,13 @@ SCENARIOS = {
         {"tools": [tool("task", {"command": "create",
                                  "args": "label=Reader paths=/lib/veltro tools=read brief=SCENARIO:text_only go"})]},
         {"content": "Granted the baseline."},
+    ],
+    # A brief naming a folder of the user's with no paths= for it is
+    # refused, saying what to grant: no task is made that cannot see it.
+    "ungranted_brief": [
+        {"tools": [tool("task", {"command": "create",
+                                 "args": "label=Lister tools=read brief=add bread to /usr/deltest/notes/todo.txt"})]},
+        {"content": "Was told to grant it."},
     ],
     # A task edits a file in a folder the user granted: the change is
     # staged; activity 0, told so, promotes it on the user's word.
@@ -402,6 +417,12 @@ class Handler(BaseHTTPRequestHandler):
                 delta["tool_calls"] = [dict(c, index=i) for i, c in enumerate(calls)]
             events = [
                 {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+            ]
+            # As SGLang's gpt-oss parser was seen to: the text sent again,
+            # whole, in a chunk of its own.
+            if r.get("resend") and text:
+                events.append({"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]})
+            events += [
                 {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                  "usage": usage},
             ]

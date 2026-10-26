@@ -915,7 +915,7 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 		* =>
 			sys->sleep(HTTP_POLL_MS);
 			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+			if(idle_ms >= quietlimit(in_body || len headersbuf > 0)) {
 				if(conn.cfd != nil)
 					sys->fprint(conn.cfd, "hangup");
 				if(httperr != "")
@@ -924,12 +924,12 @@ _sseconsume(conn: Sys->Connection, rch: chan of (int, array of byte),
 				if(ant != nil) {
 					(aresp, nil) := antbuild(ant, req);
 					return (aresp, sys->sprint("HTTP read no-progress timeout after %d ms",
-						HTTP_NO_PROGRESS_MS), ant.shown);
+						idle_ms), ant.shown);
 				}
 				(presp, nil) := _ssebuild_response(st, req);
 				return (presp, sys->sprint(
 					"HTTP read no-progress timeout after %d ms (got %d bytes of content, %d tool deltas)",
-					HTTP_NO_PROGRESS_MS, len st.fulltext, listlen(st.tcids)), st.shown);
+					idle_ms, len st.fulltext, listlen(st.tcids)), st.shown);
 			}
 		}
 	}
@@ -1522,7 +1522,13 @@ _ssehandle_event(jv: ref JValue, st: ref _SseState, req: ref AskRequest)
 		if(cv != nil) {
 			pick c := cv {
 			String =>
-				if(c.s != "") {
+				# The whole text so far, sent again in a chunk of its own:
+				# SGLang (gpt-oss, with its tool-call parser) was seen to,
+				# and the reply was shown and kept twice over.  No reply
+				# repeats all of itself in one chunk; it is dropped.
+				if(c.s != "" && len c.s >= 32 && c.s == st.fulltext)
+					;
+				else if(c.s != "") {
 					st.fulltext += c.s;
 					if(req.streamch != nil) {
 						st.shown = 1;
@@ -2176,8 +2182,24 @@ jsonescapestr(s: string): string
 # in-flight sys->read to fail. The reader thread then deposits its
 # final (n, buf) tuple onto a buffered channel and exits. We don't wait
 # for it.
+#
+# Before the first byte the wait is longer, HTTP_FIRST_BYTE_MS.  A server
+# that serves one request at a time (Ollama's default) sends nothing to a
+# request queued behind another until that one is done, and an agent with a
+# task running asks while the task does: mistral-small3.2 on a Jetson took
+# more than 120s that way, and the turn was lost as "model unavailable".
+# Once bytes come, a quiet of HTTP_NO_PROGRESS_MS is still a hang.
 HTTP_POLL_MS:        con 200;
 HTTP_NO_PROGRESS_MS: con 120000;
+HTTP_FIRST_BYTE_MS:  con 300000;
+
+# How long a connection may be quiet, given whether anything has come yet.
+quietlimit(got: int): int
+{
+	if(got > 0)
+		return HTTP_NO_PROGRESS_MS;
+	return HTTP_FIRST_BYTE_MS;
+}
 
 # Per-read reader thread: blocks on sys->read, pushes one chunk per
 # iteration. Caller's channel must be buffered (capacity >= 1) so a
@@ -2214,12 +2236,12 @@ _httpreadloop(conn: Sys->Connection): (string, string)
 		* =>
 			sys->sleep(HTTP_POLL_MS);
 			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+			if(idle_ms >= quietlimit(len response)) {
 				if(conn.cfd != nil)
 					sys->fprint(conn.cfd, "hangup");
 				return (response, sys->sprint(
 					"HTTP read no-progress timeout after %d ms (got %d bytes)",
-					HTTP_NO_PROGRESS_MS, len response));
+					idle_ms, len response));
 			}
 		}
 	}
@@ -2382,12 +2404,12 @@ _httpsreadloop(conn: Sys->Connection, tc: ref Conn): (string, string)
 		* =>
 			sys->sleep(HTTP_POLL_MS);
 			idle_ms += HTTP_POLL_MS;
-			if(idle_ms >= HTTP_NO_PROGRESS_MS) {
+			if(idle_ms >= quietlimit(len response)) {
 				if(conn.cfd != nil)
 					sys->fprint(conn.cfd, "hangup");
 				return (response, sys->sprint(
 					"HTTPS read no-progress timeout after %d ms (got %d bytes)",
-					HTTP_NO_PROGRESS_MS, len response));
+					idle_ms, len response));
 			}
 		}
 	}

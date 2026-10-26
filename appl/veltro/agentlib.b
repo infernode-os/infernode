@@ -1014,6 +1014,11 @@ toolargs(tool, inputjson: string): string
 		if(b != "" && !hasprefix(b, "--"))
 			b = "--" + b;
 		return joinargs(b :: jval(vals, "imagepath") :: jval(vals, "prompt") :: nil);
+	"limbo" =>
+		path := jval(vals, "path");
+		if(path != "")
+			return "-o " + path + " " + jval(vals, "description");
+		return jval(vals, "description");
 	"find" or "search" => order = "pattern" :: "path" :: nil;
 	"grep" => order = "flags" :: "pattern" :: "path" :: nil;
 	"window" => order = "op" :: "id" :: "name" :: nil;

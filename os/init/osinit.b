@@ -1848,6 +1848,7 @@ btjoin(txt: string)
 		sys->print("init: bt: /net/bt/ctl: %r\n");
 		return;
 	}
+	ownaddr := 0;
 	for(i := 0; i < len txt;){
 		j := i;
 		while(j < len txt && txt[j] != '\n')
@@ -1856,8 +1857,30 @@ btjoin(txt: string)
 		i = j + 1;
 		if(line == nil || line[0] == '#')
 			continue;
+		if(len line > 7 && line[0:7] == "bdaddr ")
+			ownaddr = 1;
 		if(sys->fprint(fd, "%s", line) < 0)
 			sys->print("init: bt: %s: %r\n", line);
+	}
+	#
+	# A 3B+'s controller has no address of its own: after the patch it
+	# reports the patch's default, the same on every board, so two of
+	# them would be one device to everything they pair with. Unless the
+	# bt file named one, btboardaddr gives it the board's, as Raspberry
+	# Pi OS does; a 4B's controller has its own and is left alone.
+	#
+	if(!ownaddr){
+		ba := load Command "/dis/btboardaddr.dis";
+		if(ba == nil)
+			sys->print("init: bt: cannot load /dis/btboardaddr.dis: %r\n");
+		else{
+			{
+				ba->init(nil, "btboardaddr" :: nil);
+			} exception e {
+			"fail:*" =>
+				sys->print("init: bt: btboardaddr: %s; add a bdaddr line to %s\n", e[5:], Btfile);
+			}
+		}
 	}
 	(a, got) := slurp("/net/bt/addr");
 	if(got)

@@ -217,6 +217,28 @@ Pages are fetched through webfs at `/mnt/web`, which Xenith starts if
 nothing is mounted there. A password is drawn masked. There is no
 JavaScript until the engine's script host lands.
 
+## Your start-up file
+
+Before it starts Xenith, `lib/xen/boot.sh` runs a file of yours, if
+there is one: `/usr/inferno/lib/xen/profile`, kept in
+`~/.infernode/usr/inferno/lib/xen/profile` (a user with a home of
+their own has `/usr/<name>/lib/xen/profile`), as the plumbing rules
+are found. It is run in the shell that then runs Xenith, so what it
+binds is in Xenith's name space from the start, for Xenith itself and
+every command run from it: a package's commands and files, an engine
+for a kind of document. One line puts the troff package in every
+Xenith:
+
+```sh
+run /n/local/Users/me/src/infernode-troff/troffns
+```
+
+Xenith reads `/lib/xenith/doctypes` as it starts, after this file, so
+a kind of document added here (a file bound over it) is one it shows.
+A file that fails is said on the error output (`$TMPDIR/xen.log` for
+a detached `xen`) and Xenith starts all the same. The desktop does not
+read it.
+
 ## Plumbing
 
 Inside Xenith, plumbing works as in acme: button 3 (Cmd+click) on a file

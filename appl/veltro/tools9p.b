@@ -2049,6 +2049,12 @@ addtoolpaths(paths: list of string, tool: string): list of string
 		return addpath(paths, "/tmp/veltro/fractal");
 	"man" =>
 		return addpath(paths, "/tmp/veltro/man");
+	"spawn" =>
+		# Each child's own model session, opened (/mnt/llm/new) before
+		# the child's namespace is narrowed; the child keeps only its
+		# open files.  Without it no child had a model, and every spawn
+		# failed "LLM returned empty response".
+		return addpath(paths, "/mnt/llm");
 	"limbo" =>
 		# The model it asks, and the compiler and interfaces its compile
 		# gate needs (without them the gate could not run).

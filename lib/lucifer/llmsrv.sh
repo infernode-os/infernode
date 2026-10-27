@@ -47,8 +47,10 @@ if {~ $llmmode remote} {
 	# autocompact=<tokens>: where a session's history is summarised
 	# (llmsrv -c; its own default when unset).
 	llmcompact=`{sed -n 's/^autocompact=//p' /lib/ndb/llm >[2] /dev/null}
+	llmwindow=`{sed -n 's/^window=//p' /lib/ndb/llm >[2] /dev/null}
 	llmopts=()
 	if {! ~ $#llmcompact 0} { llmopts=(-c $llmcompact) }
+	if {! ~ $#llmwindow 0} { llmopts=($llmopts -C $llmwindow) }
 	# backend=cli/codex are the host-side CLI gateways (claude-gate,
 	# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
 	# the same way.

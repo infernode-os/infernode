@@ -283,8 +283,7 @@ error(s : string)
 {
 	sys->fprint(stderr, "xenith: %s: %r\n", s);
 	debug(sys->sprint("error %s : %r\n", s));
-	# s[-1] = 0;	# create broken process for debugging
-	xenith->xenithexit("error");
+	xenith->internalerror(s);
 }
 
 dlock : ref Lock;

@@ -17,6 +17,7 @@
 #	only the text opens one below it, showing the document, live;
 #	a large one (saved in the background) Put beside its document is
 #	written whole;
+#	Markdown far longer than any one image of it is set all the same;
 #	an image looked at is a document of one sheet its size;
 #	a PDF's links listed in doc/links, button 3 on one to a page goes
 #	to it, on one to a URI browses it in a window of Xenith's and does
@@ -148,6 +149,11 @@ b=`{read 16 < $W/body}
 check 'its body is its text, not its bytes' $"b '240 West Center'
 t=`{read 16 < $W/doc/text}
 check 'doc/text is its text' $"t '240 West Center'
+# read in pieces from one open, all of it: made once, at the start
+{while {read 100} {}} < $W/doc/text > /tmp/xdoc.text
+cat $W/body > /tmp/xdoc.body
+if {cmp /tmp/xdoc.text /tmp/xdoc.body} {ok 'doc/text read in pieces is all its text'} {bad 'doc/text read in pieces is not its text'}
+rm -f /tmp/xdoc.text /tmp/xdoc.body
 img=`{cat $W/image}
 check 'the image file names it' ${index 1 $img} $PDF
 
@@ -466,6 +472,10 @@ for kind in md html {
 		hasdoctext $bid Typed
 		t=`{cat $XENITH/$bid/doc/text}
 		if {~ $"t *Typed*} {ok $kind^': refresh takes typing not yet committed'} {bad $kind^': refresh after typing:' $"t}
+		# each window on the file holds a copy of the typing; it goes
+		# into the text once, not once for each window
+		b=`{cat $XENITH/$aid/body}
+		if {~ $"b *Typed*Typed* *yped*yped*} {bad $kind^': the typing went into the text twice:' $"b} {ok $kind^': the typing went into the text once'}
 		echo ' Saved' >> $XENITH/$aid/body
 		sleep 2
 		t=`{cat $XENITH/$bid/doc/text}
@@ -567,25 +577,24 @@ rm -f /tmp/xenith_doc_big.want
 
 if {echo refresh > $M/doc/ctl} {bad 'refresh on a window showing text was taken'} {ok 'refresh on a window showing its text is refused'}
 
-# ---- a source document too long to set: its text, not the error ----
+# ---- a source document longer than any one image of it: set ----
 # a program's window, its kind named (render markdown), its text far
-# too long for an image of it: the window shows its text again
+# too long for one image of it (6 CHANGELOGs, 120000 pixels tall at
+# this width, over the 256MB the image pool has): it is laid out and
+# drawn a strip at a time, not refused for want of image memory
+# (allocimage, as it was)
 (lid rest) = `{cat $XENITH/new/ctl}
 echo name /+Long > $XENITH/$lid/ctl
 rm -f /tmp/xenith_doc_long.md
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 {
+for i in 1 2 3 4 5 6 {
 	cat /CHANGELOG.md >> /tmp/xenith_doc_long.md
 }
 cat /tmp/xenith_doc_long.md > $XENITH/$lid/body
 if {echo render markdown > $XENITH/$lid/doc/ctl} {ok 'render markdown taken by a window named for no kind'} {bad 'render markdown refused'}
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 {
-	if {grep -s '^loading|^kind' $XENITH/$lid/doc/ctl} {sleep 1}
-}
-if {grep -s . $XENITH/$lid/doc/ctl} {
-	bad 'a document too long to set is still the window''s:' `{cat $XENITH/$lid/doc/ctl}
-} {
-	ok 'a document too long to set gives the window its text again'
-}
+loaded $lid
+check 'a document longer than any image of it is set' `{attr $lid sheets} 1
+col=`{attr $lid column}
+if {ntest ${expr ${index 2 $col} 100000 '>'}} {ok 'as tall as its text needs:' $col} {bad 'its column:' $col}
 check 'and the text is whole' `{wc -c < $XENITH/$lid/body} `{wc -c < /tmp/xenith_doc_long.md}
 echo delete > $XENITH/$lid/ctl
 rm -f /tmp/xenith_doc_long.md

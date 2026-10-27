@@ -450,15 +450,41 @@ undo(et : ref Text, flag1 : int)
 	if(et==nil || et.w== nil)
 		return;
 	seq = seqof(et.w, flag1);
+	# nothing to undo: every other window with nothing to undo has the
+	# same seq, 0, and was undone with it
+	if(seq == 0)
+		return;
+	# the executing window first, as Acme does: its display follows,
+	# the others' do not jump
+	et.w.undo(flag1);
 	for(i=0; i<row.ncol; i++){
 		c = row.col[i];
 		for(j=0; j<c.nw; j++){
 			w = c.w[j];
-			if(seqof(w, flag1) == seq)
-				w.undo(flag1);
+			if(w.body.file == et.w.body.file)
+				continue;	# et.w and its Zeroxes, locked with it
+			if(seqof(w, flag1) == seq){
+				# the other files the same change made (Edit X):
+				# locked as et.w is, so their events have an owner
+				# and a client reading them does not see them change
+				o := et.w.owner;
+				if(o == 0)
+					o = 'M';
+				w.lock(o);
+				# let go if it raises: in an Edit (its u) nothing
+				# else would, and every window waited for it
+				{
+					w.undo(flag1);
+				}
+				exception e{
+					* =>
+						w.unlock();
+						raise e;
+				}
+				w.unlock();
+			}
 		}
 	}
-	# et.w.undo(flag1);
 }
 
 getname(t : ref Text, argt : ref Text, arg : string, narg : int, isput : int) : string
@@ -494,7 +520,10 @@ getname(t : ref Text, argt : ref Text, arg : string, narg : int, isput : int) : 
 		ndir = 0;
 		if(n>0 && arg[0]!='/'){
 			(dir, ndir) = dirname(t, nil, 0);
-			if(n==1 && dir[0]=='.'){	# sigh 
+			# the directory's length, as Acme has it: the argument's
+			# (n) took dir[0] of no directory, with an argument one
+			# character long (a nil dereference)
+			if(ndir==1 && dir[0]=='.'){	# sigh 
 				dir = nil;
 				ndir = 0;
 			}
@@ -589,6 +618,12 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	# Clear render mode before reloading file
 	if(et.w.rendermode != 0)
 		renderoff(et.w);
+	# typing not yet in the file is a change, as any other: committed,
+	# the window is dirty and not read over. Left, Get read the file
+	# with the typing still held, which Text.loadx refused by taking
+	# Xenith down (a client's get while the body was typed in)
+	if(et.w.body.ncache)
+		et.w.commit(et.w.body);
 	if(!et.w.isdir && (et.w.body.file.buf.nc>0 && !et.w.clean(TRUE, FALSE)))
 		return;
 	w = et.w;
@@ -607,6 +642,12 @@ get(et : ref Text, t : ref Text, argt : ref Text, flag1 : int, arg : string, nar
 	}
 	r = name;
 	n = len name;
+	# a load still under way stopped: its chunks went into the new text
+	# (they are dropped by their operation, no longer the window's)
+	if(w.asyncload != nil){
+		asyncio->asynccancel(w.asyncload);
+		w.asyncload = nil;
+	}
 	for(i=0; i<t.file.ntext; i++){
 		u = t.file.text[i];
 		# second and subsequent calls with zero an already empty buffer, but OK 
@@ -706,6 +747,7 @@ putfile(f: ref File, q0: int, q1: int, name: string)
 		# its own copy, not the Buffer the window goes on using
 		w.savename = name;
 		w.saveseq = f.seq;
+		w.savenchange = f.buf.nchange;
 		w.asyncsave = asyncio->asyncsavefile(name, w.id, textbytes(f.buf, q0, q1));
 		return;
 	}
@@ -812,6 +854,8 @@ put(et : ref Text, argt : ref Text, arg : string, narg : int)
 		return;
 	w = et.w;
 	f := w.body.file;
+	# all of a file still loading written, not what has come so far
+	textm->loadrest(f);
 	# a web page, a PDF or an image is not written over with the text
 	# it is shown with: its text is written only to a file named
 	if(docview->readonly(w) && narg <= 0 && getarg(argt, FALSE, TRUE).t1 == nil){
@@ -991,6 +1035,7 @@ look(et : ref Text, t : ref Text, argt : ref Text, arg : string, narg : int)
 
 	if(et != nil && et.w != nil){
 		t = et.w.body;
+		et.w.commit(t);	# Look in the tag: the body's typing is in its file
 		if(narg > 0){
 			lookx->search(t, arg, narg);
 			return;
@@ -1282,14 +1327,26 @@ kill(argt : ref Text, arg : string, narg : int)
 	if(r != nil)
 		kill(nil, r, na);
 	# loop condition: *arg is not a blank 
+	cmds : list of string;
 	for(;;){
 		(a, na) = findbl(arg, narg);
 		if(a == arg)
 			break;
 		cmd = arg[0:narg-na];
-		dat->ckill <-= cmd;
+		cmds = cmd :: cmds;
 		(arg, narg) = skipbl(a, na);
 	}
+	if(cmds != nil)
+		spawn sendkills(utils->reverse(cmds));
+}
+
+# The names to kill sent to waittask by a proc of their own: sent with
+# the row held, more than ckill holds waited for waittask, which waited
+# for the row
+sendkills(cmds : list of string)
+{
+	for(; cmds != nil; cmds = tl cmds)
+		dat->ckill <-= hd cmds;
 }
 
 lineno(et : ref Text)
@@ -1619,6 +1676,10 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		wids : string = "";
 		filename: string;
 
+		# the window read, and the reference execute took for this let
+		# go, with the row held: if the window was deleted meanwhile it
+		# is freed here, beside the procs using its file and frames
+		row.qlock.lock();
 		if(win != nil){
 			filename = win.body.file.name;
 			wids = string win.id;
@@ -1635,6 +1696,7 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 			if(dat->activewin != nil)
 				winid = (dat->activewin).id;
 		}
+		row.qlock.unlock();
 		# sys->pctl(Sys->FORKNS|Sys->FORKFD|Sys->NEWPGRP, nil);
 		sys->pctl(Sys->FORKNS|Sys->NEWFD|Sys->FORKENV|Sys->NEWPGRP, 0::1::2::fsys->fsyscfd()::nil);
 		if(rdir != nil){
@@ -1646,7 +1708,10 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 			utils->setenv("%", filename);
 		c.md = fsys->fsysmount(rdir, ndir, incl, nincl);
 		if(c.md == nil){
-			warning(nil, "can't mount /mnt/xenith");
+			# reported by waittask, which holds the row: warning() here,
+			# beside the procs laying out the windows, broke the frames
+			# it drew in (with no /mnt/xenith, Xenith died starting)
+			dat->cerr <-= sys->sprint("can't mount /mnt/xenith: %r\n");
 			exit;
 		}
 		if(winid > 0 && (pipechar=='|' || pipechar=='>')){
@@ -1688,8 +1753,11 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		tfd = nil;
 		utils->setenv("xenithwin", wids);
 	}else{
-		if(win != nil)
+		if(win != nil){
+			row.qlock.lock();	# as above
 			win.close();
+			row.qlock.unlock();
+		}
 		sys->pctl(Sys->FORKFD|Sys->NEWPGRP, nil);
 		if(rdir != nil){
 			dir = rdir[0:ndir];
@@ -1698,7 +1766,8 @@ run(win : ref Window, s : string, rdir : string, ndir : int, newns : int, argadd
 		}
 		p = array[2] of ref Sys->FD;
 		if(sys->pipe(p) < 0){
-			error("child: can't pipe");
+			# the command fails, not Xenith (error() took it down)
+			dat->cerr <-= sys->sprint("can't run %s: no pipe: %r\n", s);
 			exit;
 		}
 		pc = chan of int;

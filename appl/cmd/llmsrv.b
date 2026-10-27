@@ -291,6 +291,10 @@ init(nil: ref Draw->Context, args: list of string)
 	# select a model explicitly with -M or the per-session model file.
 	if(backend == "openai" && !modelset)
 		defaultmodel = "";
+	# -M haiku is the alias's model, as a session's model file has it: sent
+	# as it was, the Anthropic API refused it ("model: haiku", 404).
+	if(backend != "openai")
+		defaultmodel = resolvemodel(defaultmodel);
 
 	# Factotum is preferred. Environment fallback supports direct headless
 	# daemon startup where no interactive factotum/secstore unlock is possible;

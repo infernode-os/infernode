@@ -12,9 +12,11 @@
 #	VELTRO_LIVE_URL=http://127.0.0.1:11435/v1 tests/host/veltro_live_test.sh
 #	VELTRO_LIVE_MODEL=sonnet VELTRO_LIVE_URL=... tests/host/veltro_live_test.sh edit
 #
-# The URL is an OpenAI-shape endpoint (claude-gate, Ollama, vLLM, SGLang);
-# VELTRO_LIVE_MODEL names its model (default haiku).  KEEP=1 keeps the
-# emulator's output.
+# The URL is an OpenAI-shape endpoint (claude-gate, Ollama, vLLM, SGLang),
+# or "anthropic" for the Anthropic API itself, its key in the file
+# VELTRO_LIVE_KEY (read into the emulator's environment, never its
+# arguments); VELTRO_LIVE_MODEL names the model (default haiku).  KEEP=1
+# keeps the emulator's output.
 #
 #	edit	read a file, change every line that needs it, say how many
 #	spawn	a child agent reads a file with its own tool call
@@ -33,6 +35,17 @@ for f in dis/veltro/veltrosrv.dis dis/veltro/tools9p.dis dis/llmsrv.dis; do
 	[ -f "$ROOT/$f" ] || { echo "SKIP: $f not built"; exit 77; }
 done
 MODEL=${VELTRO_LIVE_MODEL:-haiku}
+if [ "$VELTRO_LIVE_URL" = anthropic ]; then
+	[ -r "${VELTRO_LIVE_KEY:-}" ] || { echo "SKIP: VELTRO_LIVE_KEY names no readable key file"; exit 77; }
+	LLMSRV="llmsrv -M $MODEL"
+	KEYCOPY="$ROOT/tmp/.veltro_live_key"
+	(umask 077; mkdir -p "$ROOT/tmp"; cp "$VELTRO_LIVE_KEY" "$KEYCOPY")
+	KEYLINE='ANTHROPIC_API_KEY=`{cat /tmp/.veltro_live_key}'
+else
+	LLMSRV="llmsrv -b openai -u $VELTRO_LIVE_URL -M $MODEL"
+	KEYCOPY=
+	KEYLINE=
+fi
 SCENARIOS="edit spawn write fanout docs project"
 [ $# -gt 0 ] && SCENARIOS="$*"
 
@@ -45,6 +58,7 @@ cleanup() {
 	# and the overlays its writes were staged in, which a later test
 	# would find as changes an earlier session kept
 	rm -rf "$ROOT/usr/live" "$ROOT/tmp/veltro/cow"
+	[ -z "$KEYCOPY" ] || rm -f "$KEYCOPY"
 	[ "${KEEP:-0}" = 1 ] && echo "work kept in $WORK" || rm -rf "$WORK"
 }
 trap cleanup EXIT HUP INT TERM
@@ -83,7 +97,8 @@ echo 'next: d.txt' > /usr/live/maze/c.txt
 echo 'the word is: periwinkle' > /usr/live/maze/d.txt
 bind -a '#I' /net
 ndb/cs
-llmsrv -b openai -u $VELTRO_LIVE_URL -M $MODEL &
+$KEYLINE
+$LLMSRV &
 sleep 1
 /dis/veltro/tools9p.dis -b read,list read list write edit grep find spawn &
 sleep 1

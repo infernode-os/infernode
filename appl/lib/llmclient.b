@@ -543,6 +543,9 @@ antusage(st: ref AntState, u: ref JValue)
 {
 	if(u == nil)
 		return;
+	if((cr := jint(u, "cache_read_input_tokens")) > 0 || jint(u, "cache_creation_input_tokens") > 0)
+		sys->fprint(stderr, "llmclient: usage: input %d, cache read %d, cache written %d\n",
+			jint(u, "input_tokens"), cr, jint(u, "cache_creation_input_tokens"));
 	intok := jint(u, "input_tokens") + jint(u, "cache_creation_input_tokens") +
 		jint(u, "cache_read_input_tokens");
 	if(intok > 0)

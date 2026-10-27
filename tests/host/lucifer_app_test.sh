@@ -96,7 +96,7 @@ for p in $progs; do
 	-*)	echo "SKIP: wm/$p:$(wmprog_how "$p" | sed 's/^-//')" ;;
 	esac
 done
-echo "SKIP: wm/deb: it opens two windows (its Stack window first) and Lucifer's zone shows one, the first"
+echo "SKIP: wm/deb: it opens two windows, its Stack window and its main one, and Lucifer's zone shows neither"
 
 LOG=$H/log
 cd "$ROOT"

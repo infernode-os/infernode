@@ -112,8 +112,9 @@ From `bcm2837-rpi-3-b-plus.dts` and `bcm283x-rpi-wifi-bt.dtsi`
 The console cable does not move: the same header pins carry TXD/RXD,
 only the alternate function changes. What does change is the clock. The
 mini-UART's baud divisor is derived from the VPU core clock, which the
-firmware scales unless `config.txt` pins it (`enable_uart=1` does this
-on the Pi 3, fixing `core_freq=250`). The PL011 runs from
+firmware scales unless `config.txt` pins it (older firmware did this for
+`enable_uart=1`; the card's `config.txt` now says `core_freq` and
+`core_freq_min` outright, `docs/BAREMETAL.md` section 4). The PL011 runs from
 `init_uart_clock`, which is why the current console never had this
 problem (`uart.c` records the distinction). The card's `config.txt`
 gains `enable_uart=1` and the README's config recipe is updated in the
@@ -321,9 +322,12 @@ switch and is never granted.
 
 The CYW43455's Bluetooth core boots from ROM and takes a patch RAM
 image over HCI: `BCM4345C0.hcd`, from `RPi-Distro/bluez-firmware`,
-under the same Cypress/Broadcom binary-redistribution stanza as the
-WiFi blobs. Not committed, not in any artefact, asked for by the boot
-script as `/n/dos/firmware/BCM4345C0.hcd`. Without it the controller
+under the same Cypress licence as the WiFi blobs, and so on their
+road: not committed, not in a hosted release, and on the release's Pi
+card images in `firmware/` beside `LICENCE.cypress`
+(`tools/pi-btfw-manifest.txt` pins it; `tools/pi-firmware.sh` fetches
+it for a card made by hand). Asked for by the boot script as
+`/n/dos/firmware/BCM4345C0.hcd`. Without it the controller
 still answers HCI at 115200 with its ROM firmware and a default
 address, so `addr` and `status` work before the patch and are the
 first thing to see on the board.

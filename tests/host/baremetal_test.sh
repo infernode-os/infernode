@@ -132,13 +132,19 @@ if [[ -z "$CC" || -z "$LLD" || -z "$OBJCOPY" ]]; then
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
-if [[ -z "$QEMU" ]]; then
+# BAREMETAL_BUILD_ONLY builds the kernels and boots nothing, so it needs
+# no QEMU: it is how the release job (.github/workflows/release.yml,
+# raspberry-pi) makes the kernels for the card images on a runner that
+# has none.
+BUILDONLY="${BAREMETAL_BUILD_ONLY:-}"
+if [[ -z "$QEMU" && -z "$BUILDONLY" ]]; then
     skip "qemu-system-aarch64 not installed"
     echo ""
     echo "Passed: $PASSED  Failed: $FAILED  Skipped: $SKIPPED"
     exit 0
 fi
 for mach in raspi3b; do
+    [[ -n "$BUILDONLY" ]] && break
     if ! "$QEMU" -machine help 2>/dev/null | grep -q "^$mach"; then
         skip "this QEMU build has no $mach machine model"
         echo ""
@@ -1480,6 +1486,8 @@ else
     skip "llvm-nm not available for alignment check"
 fi
 
+[[ -n "$BUILDONLY" ]] && return
+
 #
 # 3. It boots and reports.
 #
@@ -1865,7 +1873,44 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
 # broken. Two checks below were written, failed, and were investigated
 # before the cause turned out to be the terminal rather than the shell.
 SHOUT="$(tr -d '\r' <<<"$SHOUT")"
+# Keep the transcript. Dozens of checks below grep it, and a check that
+# fails in CI says only FAIL unless the artifact has what it grepped
+# (CI uploads $BUILD/*.txt). The other sessions are kept the same way,
+# as $PLAT-shell-*.txt.
+printf '%s\n' "$SHOUT" > "$BUILD/$PLAT-shell.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
+
+# What the shell said in reply to one typed command: the lines after
+# its echo, up to the next line the shell starts with a prompt. The
+# n'th time the command was typed if it was typed more than once.
+#
+# Not "the line that starts '; cmd' and the next two". The kernel
+# writes to the same console whenever it likes -- etherusb's link
+# watcher, its time-server timeout, a ping's reply -- and a line of its
+# that lands just after a prompt takes the prompt with it:
+#
+#     ; etherusb: link watch ended: no link state for ecm
+#     cat '#G/gpio/128/level'
+#     ?
+#
+# That is from a run of this session on a loaded host, and the check
+# anchored on "^; cat '#G/gpio/128/level'" took the SECOND cat for the
+# first and read 1 where it wanted ?. One landing between an echo and
+# its reply pushes the reply out of a fixed window the same way. The
+# echo is found with or without prompts in front of it, compared
+# whole, and the reply's own lines can be anywhere in it.
+reply_to() {
+    CMD="$2" N="${3:-1}" awk '
+        inreply && /^; / { exit }
+        inreply { print; next }
+        {
+            l = $0
+            while (substr(l, 1, 2) == "; ")
+                l = substr(l, 3)
+            if (l == ENVIRON["CMD"] && ++seen == ENVIRON["N"])
+                inreply = 1
+        }' <<<"$1"
+}
 
 # The marker appears twice: once as the terminal echo of what was
 # typed, and once as the command's output. Only the second is evidence,
@@ -1897,12 +1942,13 @@ fi
 # shared with the Pi 4 so a soak can watch both boards' heat. QEMU's
 # firmware model answers the temperature tag; the line after the marker
 # must be a number of degrees.
-if grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1 | grep -qE '^[0-9]+\.[0-9]$'; then
-    pass "#P/cputemp reads the firmware's temperature ($(grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1) C)"
+R="$(reply_to "$SHOUT" "echo PTEMP; cat '#P/cputemp'")"
+if grep -qxE '[0-9]+\.[0-9]' <<<"$R"; then
+    pass "#P/cputemp reads the firmware's temperature ($(grep -xE '[0-9]+\.[0-9]' <<<"$R") C)"
 else
-    fail "#P/cputemp -- $(grep -A2 '^PTEMP$' <<<"$SHOUT" | tail -2 | tr '\n' ' ')"
+    fail "#P/cputemp -- $(tr '\n' ' ' <<<"$R")"
 fi
-echo "  #P/throttled under QEMU: $(grep -A1 '^PTHROT$' <<<"$SHOUT" | tail -1)"
+echo "  #P/throttled under QEMU: $(reply_to "$SHOUT" "echo PTHROT; cat '#P/throttled'" | grep -vx PTHROT | tr '\n' ' ')"
 
 if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SHOUT"; then
     pass "an authenticated 9P mount (Keyring->auth both ends, ML-KEM + ed25519) works on the kernel (#725)"
@@ -2196,6 +2242,7 @@ OUT="$OUT_SAVED"
 # and this block does not pretend otherwise.
 TBOUT="$(shell_session "$BUILD/$PLAT-kernel.img" 'echo tryboot > /dev/sysctl')"
 TBOUT="$(tr -d '\r' <<<"$TBOUT")"
+printf '%s\n' "$TBOUT" > "$BUILD/$PLAT-shell-tryboot.txt"
 OUT_SAVED="$OUT"; OUT="$TBOUT"
 check "tryboot: resetting; next boot is the CANDIDATE kernel" \
       "tryboot on /dev/sysctl reaches the board's reset path (pre-existing path, pinned)"
@@ -2550,40 +2597,47 @@ fi
 #     until something is written and the last write afterwards; on a
 #     board the firmware answers and the "?" never appears.
 #
-if grep -A4 "ls '#G/gpio/128' '#G/gpio/135'" <<<"$SHOUT" | grep -q '#G/gpio/135/level'; then
+R="$(reply_to "$SHOUT" "ls '#G/gpio/128' '#G/gpio/135'")"
+if grep -q '#G/gpio/135/level' <<<"$R"; then
     pass "expander lines are pins 128..135 in #G/gpio, each with ctl and level"
 else
-    fail "#G/gpio/128 and 135 did not list as pin directories"
+    fail "#G/gpio/128 and 135 did not list as pin directories -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "ls '#G/gpio/136'" <<<"$SHOUT" | grep -q 'does not exist\|file does not exist\|not found'; then
+R="$(reply_to "$SHOUT" "ls '#G/gpio/136'")"
+if grep -q 'does not exist\|file does not exist\|not found' <<<"$R"; then
     pass "the expander stops at 135: #G/gpio/136 does not exist"
 else
-    fail "#G/gpio/136 should not exist"
+    fail "#G/gpio/136 should not exist -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | head -2 | grep -q '^?$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/128/level'" 1)"
+if grep -qx '?' <<<"$R"; then
     pass "an expander level the firmware will not report and nothing has written reads as ?"
 else
-    fail "#G/gpio/128/level did not read ? before the first write under QEMU"
+    fail "#G/gpio/128/level did not read ? before the first write under QEMU -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | tail -1 | grep -q '^1$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/128/level'" 2)"
+if grep -qx '1' <<<"$R"; then
     pass "writing 1 to #G/gpio/128/level (BT_ON) goes to the firmware and reads back"
 else
-    fail "#G/gpio/128/level did not read 1 after the write"
+    fail "#G/gpio/128/level did not read 1 after the write -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "echo 0 > '#G/gpio/129/level'" <<<"$SHOUT" | grep -q 'in use by ether4330'; then
+R="$(reply_to "$SHOUT" "echo 0 > '#G/gpio/129/level'")"
+if grep -q 'in use by ether4330' <<<"$R"; then
     pass "#G/gpio/129 (WL_ON) is claimed by ether4330: the radio's power cannot be pulled from under its driver"
 else
-    fail "a write to #G/gpio/129/level was not refused as ether4330's"
+    fail "a write to #G/gpio/129/level was not refused as ether4330's -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "echo function out > '#G/gpio/128/ctl'" <<<"$SHOUT" | grep -q 'no function select'; then
+R="$(reply_to "$SHOUT" "echo function out > '#G/gpio/128/ctl'")"
+if grep -q 'no function select' <<<"$R"; then
     pass "an expander line's ctl refuses function/pull truthfully: the hardware has neither"
 else
-    fail "#G/gpio/128/ctl did not refuse a function write"
+    fail "#G/gpio/128/ctl did not refuse a function write -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A2 "^; cat '#G/gpio/129/ctl'" <<<"$SHOUT" | grep -q '^function \(unknown\|out\|in\)$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/129/ctl'")"
+if grep -q '^function \(unknown\|out\|in\)$' <<<"$R"; then
     pass "an expander line's ctl reads its configuration as the firmware reports it (or unknown, under QEMU)"
 else
-    fail "#G/gpio/129/ctl did not read as a function/pull report"
+    fail "#G/gpio/129/ctl did not read as a function/pull report -- $(tr '\n' ' ' <<<"$R")"
 fi
 
 #
@@ -2628,6 +2682,7 @@ PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
         'echo 0 > /dev/jit; /dis/echo.dis JIT-TO-INTERP-HANDOFF-OK; echo 1 > /dev/jit' \
         'ls -d /mnt/mntprobe; /dis/echo.dis MNT-PROBE-DONE')"
 PLOUT="$(tr -d '\r' <<<"$PLOUT")"
+printf '%s\n' "$PLOUT" > "$BUILD/$PLAT-shell-pl011.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- #t session ---"; echo "$PLOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$PLOUT"
@@ -2815,6 +2870,7 @@ if [[ -n "$KBDEP" ]]; then
             "cat /usb/usb/$KBDEP/ctl")"
     QEMUARGS="$SAVEDARGS"
     DETOUT="$(tr -d '\r' <<<"$DETOUT")"
+    printf '%s\n' "$DETOUT" > "$BUILD/$PLAT-shell-detach.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- double detach ---"; echo "$DETOUT"; }
     if grep -q "kbdusb: $KBDEP detached" <<<"$DETOUT"; then
         pass "detach written at the shell detaches the keyboard and its driver exits"
@@ -3297,6 +3353,7 @@ FSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat '\''#l/ether0/addr'\''')"
 QEMUARGS="$SAVEDARGS"
 FSOUT="$(tr -d '\r' <<<"$FSOUT")"
+printf '%s\n' "$FSOUT" > "$BUILD/$PLAT-shell-fs.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- filesystem ---"; echo "$FSOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$FSOUT"
@@ -3433,6 +3490,7 @@ QEMUARGS="$SAVEDARGS"
 # checks that the transcript itself showed passing went red on the
 # anchored match. So leading prompt fragments are stripped before any
 # line is matched. An output line never begins with "; ".
+tr -d '\r' <<<"$NSOUT" > "$BUILD/$PLAT-shell-ns.txt"
 NSOUT="$(tr -d '\r' <<<"$NSOUT" | sed 's/^\(; \)*//')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- namespace ---"; echo "$NSOUT"; }
 
@@ -3564,6 +3622,7 @@ CLOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'rm -f /n/dos/cpulisten' \
         'echo CPUL-END')"
 CLOUT="$(tr -d '\r' <<<"$CLOUT")"
+printf '%s\n' "$CLOUT" > "$BUILD/$PLAT-shell-cpulisten.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- cpu listener session ---"; echo "$CLOUT"; }
 CLOFF="$(sed -n '/^CPUL-OFF$/,/^CPUL-NOKEY$/p' <<<"$CLOUT")"
 CLNOKEY="$(sed -n '/^CPUL-NOKEY$/,/^CPUL-ON$/p' <<<"$CLOUT")"
@@ -3683,6 +3742,9 @@ NC3="$(shell_session "$BUILD/$PLAT-kernel.img" \
 unset SESSION_DRAIN
 kill $NCHOST 2>/dev/null; wait $NCHOST 2>/dev/null
 NC2="$(tr -d '\r' <<<"$NC2")"; NC3="$(tr -d '\r' <<<"$NC3")"
+tr -d '\r' <<<"$NC1" > "$BUILD/$PLAT-shell-netcons1.txt"
+printf '%s\n' "$NC2" > "$BUILD/$PLAT-shell-netcons2.txt"
+printf '%s\n' "$NC3" > "$BUILD/$PLAT-shell-netcons3.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- network console, boot 2 ---"; echo "$NC2"; echo "  --- boot 3 ---"; echo "$NC3"; }
 if grep -q 'init: network console on tcp!\*!17010 (every interface), token required' <<<"$NC2" \
    && grep -q 'NETCONS-LO-SERVED$' <<<"$NC2" \
@@ -3911,6 +3973,7 @@ FS32="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ls /n/dos')"
 QEMUARGS="$SAVEDARGS"
 FS32="$(tr -d '\r' <<<"$FS32")"
+printf '%s\n' "$FS32" > "$BUILD/$PLAT-shell-fat32.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- fat32 ---"; echo "$FS32"; }
 
 if grep -q 'fat32 works on bare metal' <<<"$FS32"; then
@@ -4360,6 +4423,7 @@ DRAWOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ls /dev/draw' \
         'cat /dev/draw/new')"
 DRAWOUT="$(tr -d '\r' <<<"$DRAWOUT")"
+printf '%s\n' "$DRAWOUT" > "$BUILD/$PLAT-shell-draw.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- draw ---"; echo "$DRAWOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$DRAWOUT"
@@ -4388,6 +4452,7 @@ DRAW2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "bind '#i' /dev" \
         'drawtest')"
 DRAW2="$(tr -d '\r' <<<"$DRAW2")"
+printf '%s\n' "$DRAW2" > "$BUILD/$PLAT-shell-drawtest.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- drawtest ---"; echo "$DRAW2"; }
 
 OUT_SAVED="$OUT"; OUT="$DRAW2"
@@ -4417,6 +4482,7 @@ TOUCH2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'mouseusb -t' \
         'ls /dev/touch')"
 TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
+printf '%s\n' "$TOUCH2" > "$BUILD/$PLAT-shell-touch.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
 
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
@@ -4446,6 +4512,7 @@ TKOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "bind '#i' /dev" \
         'tktest')"
 TKOUT="$(tr -d '\r' <<<"$TKOUT")"
+printf '%s\n' "$TKOUT" > "$BUILD/$PLAT-shell-tktest.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- tktest ---"; echo "$TKOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$TKOUT"
@@ -4657,6 +4724,7 @@ if build_kernel "$BUILD/$PLAT-wifi.img" "" "-DETHER4330STUB"; then
         'echo WIFI8; echo wibble 1 > /net/ether1/0/ctl' \
         'echo WIFI9; cat /net/ether1/ifstats')"
     WOUT="$(tr -d '\r' <<<"$WOUT")"
+    printf '%s\n' "$WOUT" > "$BUILD/$PLAT-shell-wifi.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- radio ctl ---"; echo "$WOUT"; }
 
     # The text a session produced between one marker and the next.
@@ -4763,6 +4831,7 @@ if [[ "$SOAKSECS" -gt 0 ]]; then
         '{while {~ 1 1} {cat /dis/sh.dis /dis/sh.dis > /tmp/big; cat /tmp/big > /dev/null; rm /tmp/big}} &' \
         "sleep $SOAKSECS")"
     SOAKOUT="$(tr -d '\r' <<<"$SOAKOUT")"
+    printf '%s\n' "$SOAKOUT" > "$BUILD/$PLAT-shell-soak.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- soak session ---"; echo "$SOAKOUT" | tail -20; }
     if ! grep -q "dRaInEd" <<<"$SOAKOUT"; then
         fail "scheduler soak: the shell did not come back after $SOAKSECS s of load (wedged, or the drain deadline is too short)"
@@ -4862,7 +4931,7 @@ platform_flags
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
 
-if ! "$QEMU" -machine help 2>/dev/null | grep -q '^virt '; then
+if [[ -z "$BUILDONLY" ]] && ! "$QEMU" -machine help 2>/dev/null | grep -q '^virt '; then
     skip "this QEMU build has no virt machine model"
     return
 fi
@@ -4874,7 +4943,7 @@ else
     grep -m 20 'error:\|undefined symbol' "$BUILD/cc.log"
     return
 fi
-[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+[[ -n "$BUILDONLY" ]] && return
 
 OUT="$(boot_kernel "$BUILD/$PLAT-kernel.img" 60)"
 printf '%s\n' "$OUT" > "$BUILD/$PLAT-boot.txt"
@@ -6046,7 +6115,7 @@ platform_flags
 
 echo -e "${BOLD}--- $PLAT (qemu $QEMUARGS) ---${NC}"
 
-if ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
+if [[ -z "$BUILDONLY" ]] && ! "$QEMU" -machine help 2>/dev/null | grep -q '^raspi4b '; then
     skip "bcm2711: this QEMU has no raspi4b machine (it arrived in 9.0)"
     return
 fi
@@ -6076,7 +6145,7 @@ else
     tail -5 "$BUILD/cc.log"
     return
 fi
-[[ -n "${BAREMETAL_BUILD_ONLY:-}" ]] && return
+[[ -n "$BUILDONLY" ]] && return
 
 # A blank USB disk on the DWC OTG: this controller is not an xHCI, so the
 # walker must name it and leave it alone (os/init/osinit.b, the gate on

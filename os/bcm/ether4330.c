@@ -54,10 +54,11 @@
  * third is this system's card. For the 43455 the names are
  * brcmfmac43455-sdio.bin, brcmfmac43455-sdio.txt (the NVRAM) and
  * brcmfmac43455-sdio.clm_blob (the regulatory table). None of them is
- * in this tree and none may be: they are Cypress binaries under a
- * redistribution-only licence. tools/pi-firmware.sh fetches them at a
- * pinned revision, checks them against tools/pi-firmware-manifest.txt
- * and puts them on the card; os/bcm2837/README.md says more.
+ * in this tree and none may be: they are Cypress binaries, licensed for
+ * use with Cypress parts. The release's Pi card images carry them;
+ * otherwise tools/pi-firmware.sh fetches them at a pinned revision,
+ * checks them against tools/pi-firmware-manifest.txt and puts them on
+ * the card. tools/pi-firmware-manifest.txt says why.
  *
  * NEVER HANGS THE BOOT. Every loop here has a bound. A radio that is
  * absent costs two command timeouts at boot and one line; a firmware

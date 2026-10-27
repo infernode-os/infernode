@@ -1865,6 +1865,11 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
 # broken. Two checks below were written, failed, and were investigated
 # before the cause turned out to be the terminal rather than the shell.
 SHOUT="$(tr -d '\r' <<<"$SHOUT")"
+# Keep the transcript. Dozens of checks below grep it, and a check that
+# fails in CI says only FAIL unless the artifact has what it grepped
+# (CI uploads $BUILD/*.txt). The other sessions are kept the same way,
+# as $PLAT-shell-*.txt.
+printf '%s\n' "$SHOUT" > "$BUILD/$PLAT-shell.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
 # The marker appears twice: once as the terminal echo of what was
@@ -2196,6 +2201,7 @@ OUT="$OUT_SAVED"
 # and this block does not pretend otherwise.
 TBOUT="$(shell_session "$BUILD/$PLAT-kernel.img" 'echo tryboot > /dev/sysctl')"
 TBOUT="$(tr -d '\r' <<<"$TBOUT")"
+printf '%s\n' "$TBOUT" > "$BUILD/$PLAT-shell-tryboot.txt"
 OUT_SAVED="$OUT"; OUT="$TBOUT"
 check "tryboot: resetting; next boot is the CANDIDATE kernel" \
       "tryboot on /dev/sysctl reaches the board's reset path (pre-existing path, pinned)"
@@ -2628,6 +2634,7 @@ PLOUT="$(pl011_session "$BUILD/$PLAT-kernel.img" \
         'echo 0 > /dev/jit; /dis/echo.dis JIT-TO-INTERP-HANDOFF-OK; echo 1 > /dev/jit' \
         'ls -d /mnt/mntprobe; /dis/echo.dis MNT-PROBE-DONE')"
 PLOUT="$(tr -d '\r' <<<"$PLOUT")"
+printf '%s\n' "$PLOUT" > "$BUILD/$PLAT-shell-pl011.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- #t session ---"; echo "$PLOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$PLOUT"
@@ -2815,6 +2822,7 @@ if [[ -n "$KBDEP" ]]; then
             "cat /usb/usb/$KBDEP/ctl")"
     QEMUARGS="$SAVEDARGS"
     DETOUT="$(tr -d '\r' <<<"$DETOUT")"
+    printf '%s\n' "$DETOUT" > "$BUILD/$PLAT-shell-detach.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- double detach ---"; echo "$DETOUT"; }
     if grep -q "kbdusb: $KBDEP detached" <<<"$DETOUT"; then
         pass "detach written at the shell detaches the keyboard and its driver exits"
@@ -3297,6 +3305,7 @@ FSOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'cat '\''#l/ether0/addr'\''')"
 QEMUARGS="$SAVEDARGS"
 FSOUT="$(tr -d '\r' <<<"$FSOUT")"
+printf '%s\n' "$FSOUT" > "$BUILD/$PLAT-shell-fs.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- filesystem ---"; echo "$FSOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$FSOUT"
@@ -3433,6 +3442,7 @@ QEMUARGS="$SAVEDARGS"
 # checks that the transcript itself showed passing went red on the
 # anchored match. So leading prompt fragments are stripped before any
 # line is matched. An output line never begins with "; ".
+tr -d '\r' <<<"$NSOUT" > "$BUILD/$PLAT-shell-ns.txt"
 NSOUT="$(tr -d '\r' <<<"$NSOUT" | sed 's/^\(; \)*//')"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- namespace ---"; echo "$NSOUT"; }
 
@@ -3564,6 +3574,7 @@ CLOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'rm -f /n/dos/cpulisten' \
         'echo CPUL-END')"
 CLOUT="$(tr -d '\r' <<<"$CLOUT")"
+printf '%s\n' "$CLOUT" > "$BUILD/$PLAT-shell-cpulisten.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- cpu listener session ---"; echo "$CLOUT"; }
 CLOFF="$(sed -n '/^CPUL-OFF$/,/^CPUL-NOKEY$/p' <<<"$CLOUT")"
 CLNOKEY="$(sed -n '/^CPUL-NOKEY$/,/^CPUL-ON$/p' <<<"$CLOUT")"
@@ -3683,6 +3694,9 @@ NC3="$(shell_session "$BUILD/$PLAT-kernel.img" \
 unset SESSION_DRAIN
 kill $NCHOST 2>/dev/null; wait $NCHOST 2>/dev/null
 NC2="$(tr -d '\r' <<<"$NC2")"; NC3="$(tr -d '\r' <<<"$NC3")"
+tr -d '\r' <<<"$NC1" > "$BUILD/$PLAT-shell-netcons1.txt"
+printf '%s\n' "$NC2" > "$BUILD/$PLAT-shell-netcons2.txt"
+printf '%s\n' "$NC3" > "$BUILD/$PLAT-shell-netcons3.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- network console, boot 2 ---"; echo "$NC2"; echo "  --- boot 3 ---"; echo "$NC3"; }
 if grep -q 'init: network console on tcp!\*!17010 (every interface), token required' <<<"$NC2" \
    && grep -q 'NETCONS-LO-SERVED$' <<<"$NC2" \
@@ -3911,6 +3925,7 @@ FS32="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ls /n/dos')"
 QEMUARGS="$SAVEDARGS"
 FS32="$(tr -d '\r' <<<"$FS32")"
+printf '%s\n' "$FS32" > "$BUILD/$PLAT-shell-fat32.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- fat32 ---"; echo "$FS32"; }
 
 if grep -q 'fat32 works on bare metal' <<<"$FS32"; then
@@ -4360,6 +4375,7 @@ DRAWOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'ls /dev/draw' \
         'cat /dev/draw/new')"
 DRAWOUT="$(tr -d '\r' <<<"$DRAWOUT")"
+printf '%s\n' "$DRAWOUT" > "$BUILD/$PLAT-shell-draw.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- draw ---"; echo "$DRAWOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$DRAWOUT"
@@ -4388,6 +4404,7 @@ DRAW2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "bind '#i' /dev" \
         'drawtest')"
 DRAW2="$(tr -d '\r' <<<"$DRAW2")"
+printf '%s\n' "$DRAW2" > "$BUILD/$PLAT-shell-drawtest.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- drawtest ---"; echo "$DRAW2"; }
 
 OUT_SAVED="$OUT"; OUT="$DRAW2"
@@ -4417,6 +4434,7 @@ TOUCH2="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'mouseusb -t' \
         'ls /dev/touch')"
 TOUCH2="$(tr -d '\r' <<<"$TOUCH2")"
+printf '%s\n' "$TOUCH2" > "$BUILD/$PLAT-shell-touch.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- touch ---"; echo "$TOUCH2"; }
 
 OUT_SAVED="$OUT"; OUT="$TOUCH2"
@@ -4446,6 +4464,7 @@ TKOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "bind '#i' /dev" \
         'tktest')"
 TKOUT="$(tr -d '\r' <<<"$TKOUT")"
+printf '%s\n' "$TKOUT" > "$BUILD/$PLAT-shell-tktest.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- tktest ---"; echo "$TKOUT"; }
 
 OUT_SAVED="$OUT"; OUT="$TKOUT"
@@ -4657,6 +4676,7 @@ if build_kernel "$BUILD/$PLAT-wifi.img" "" "-DETHER4330STUB"; then
         'echo WIFI8; echo wibble 1 > /net/ether1/0/ctl' \
         'echo WIFI9; cat /net/ether1/ifstats')"
     WOUT="$(tr -d '\r' <<<"$WOUT")"
+    printf '%s\n' "$WOUT" > "$BUILD/$PLAT-shell-wifi.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- radio ctl ---"; echo "$WOUT"; }
 
     # The text a session produced between one marker and the next.
@@ -4763,6 +4783,7 @@ if [[ "$SOAKSECS" -gt 0 ]]; then
         '{while {~ 1 1} {cat /dis/sh.dis /dis/sh.dis > /tmp/big; cat /tmp/big > /dev/null; rm /tmp/big}} &' \
         "sleep $SOAKSECS")"
     SOAKOUT="$(tr -d '\r' <<<"$SOAKOUT")"
+    printf '%s\n' "$SOAKOUT" > "$BUILD/$PLAT-shell-soak.txt"
     [[ "$VERBOSE" -eq 1 ]] && { echo "  --- soak session ---"; echo "$SOAKOUT" | tail -20; }
     if ! grep -q "dRaInEd" <<<"$SOAKOUT"; then
         fail "scheduler soak: the shell did not come back after $SOAKSECS s of load (wedged, or the drain deadline is too short)"

@@ -183,14 +183,16 @@ for name, th, st in apps:
     # Drawn below the tab strip, not just a tab over an empty zone:
     # wm/deb, hung before its window went on screen, passed as drawn
     # (its tab's label) and as following the theme (the empty zone's
-    # colours).  More than one colour there, past a speck.
-    cnt = {}
+    # colours).  Something there not the theme's background, past a
+    # speck: a clock's face or a date's one line is enough, and so is
+    # a colour of the app's own filling it (wm/lens, a nested wm/wm).
+    bg = TH[th]['bg']
+    tot = drawn = 0
     for y in range(zone[1] + TABH, zone[3], 3):
         for x in range(zone[0], zone[2], 3):
-            px = im.px(x, y)
-            cnt[px] = cnt.get(px, 0) + 1
-    tot = sum(cnt.values())
-    if tot == 0 or (tot - max(cnt.values())) * 200 < tot:
+            tot += 1
+            drawn += im.px(x, y) != bg
+    if drawn * 5000 < tot:
         fail('%s: nothing drawn below its tab' % what); continue
     # Where it drew, below the tab strip (an app's tab label, when the
     # strip is drawn, spans more of it than the app might): what differs

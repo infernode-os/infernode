@@ -35,6 +35,7 @@ Lstate: adt {
 	mcache: list of (ref DocNode, ref Image);  # Mermaid diagrams, drawn once
 	words: list of ref Word;	# the words drawn, where, last first
 	href: string;		# the link being set, or nil
+	rec: int;		# measuring, the words kept as if drawn
 };
 
 # weights and slopes, as indices into Lstate.f
@@ -73,32 +74,34 @@ renderwords(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, array
 # the words drawn on it, where
 layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array of int, array of Word)
 {
-	if(style == nil || style.font == nil)
+	laid := measure(doc, style);
+	if(laid == nil)
 		return (nil, 0, nil, nil);
+	width := style.width;
+	if(width <= 0)
+		width = 800;
+	img := display.newimage(Rect(Point(0, 0), Point(width, laid.height)), drawm->RGB24, 0, drawm->Black);
+	if(img == nil)
+		return (nil, 0, nil, nil);
+	drawband(doc, style, img, laid);
+	return (img, laid.height - px(style.margin), laid.ys, laid.words);
+}
 
+# Lay out without drawing: the height, the blocks' tops, the words
+measure(doc: list of ref DocNode, style: ref Style): ref Laid
+{
+	if(style == nil || style.font == nil)
+		return nil;
 	width := style.width;
 	if(width <= 0)
 		width = 800;
 	scale = getscale();
-
-	# Lay out without drawing for the height, then draw
 	ls := newstate(nil, style, width);
+	ls.rec = 1;
 	renderblocks(ls, doc);
 	height := ls.y + ls.m;
 	if(height < style.font.height * 2)
 		height = style.font.height * 2;
-
-	r := Rect(Point(0, 0), Point(width, height));
-	img := display.newimage(r, drawm->RGB24, 0, drawm->Black);
-	if(img == nil)
-		return (nil, 0, nil, nil);
-	img.draw(r, style.bgcolor, nil, Point(0, 0));
-
-	mc := ls.mcache;
-	ls = newstate(img, style, width);
-	ls.mcache = mc;
-	renderblocks(ls, doc);
-
 	ys := array[len ls.ys] of int;
 	i := len ys;
 	for(l := ls.ys; l != nil; l = tl l)
@@ -107,14 +110,43 @@ layout(doc: list of ref DocNode, style: ref Style): (ref Draw->Image, int, array
 	i = len words;
 	for(wl := ls.words; wl != nil; wl = tl wl)
 		words[--i] = *hd wl;
-	return (img, ls.y, ys, words);
+	return ref Laid(height, ys, words, ls.mcache);
+}
+
+# Lay out again, drawing what falls on dst (its rectangle in the
+# document's coordinates; the rest is clipped), and stop below it
+drawband(doc: list of ref DocNode, style: ref Style, dst: ref Image, laid: ref Laid)
+{
+	if(style == nil || style.font == nil || dst == nil)
+		return;
+	width := style.width;
+	if(width <= 0)
+		width = 800;
+	scale = getscale();
+	dst.draw(dst.r, style.bgcolor, nil, Point(0, 0));
+	ls := newstate(dst, style, width);
+	if(laid == nil){
+		renderblocks(ls, doc);
+		return;
+	}
+	ls.mcache = laid.diagrams;
+	# from the block the band begins in, where measuring put it: the
+	# blocks above it laid out again would draw nothing on it
+	inlist := 0;
+	for(k := 0; k + 1 < len laid.ys && laid.ys[k+1] <= dst.r.min.y && tl doc != nil; k++){
+		inlist = listkind(hd doc);
+		doc = tl doc;
+	}
+	if(k < len laid.ys)
+		ls.y = laid.ys[k];
+	renderblocksfrom(ls, doc, inlist);
 }
 
 newstate(img: ref Image, style: ref Style, width: int): ref Lstate
 {
 	m := px(style.margin);
 	return ref Lstate(img, style, m, m, m, width - m, m,
-		bodyfaces(style.font), 0, style.font.height, style.font.ascent, 0, nil, nil, nil, nil);
+		bodyfaces(style.font), 0, style.font.height, style.font.ascent, 0, nil, nil, nil, nil, 0);
 }
 
 px(n: int): int
@@ -247,18 +279,31 @@ face(ls: ref Lstate, w: int): (ref Font, int, int)
 # Render a list of block-level nodes
 renderblocks(ls: ref Lstate, doc: list of ref DocNode)
 {
-	inlist := 0;
+	renderblocksfrom(ls, doc, 0);
+}
+
+# The kind of list a block is an item of, or 0
+listkind(node: ref DocNode): int
+{
+	if(node.kind == Nbullet && istask(node))
+		return -1;
+	if(node.kind == Nbullet || node.kind == Nnumber)
+		return node.kind;
+	return 0;
+}
+
+# The blocks laid out from ls.y on, after a block of list kind inlist
+renderblocksfrom(ls: ref Lstate, doc: list of ref DocNode, inlist: int)
+{
 	for(; doc != nil; doc = tl doc){
+		# drawing a band: nothing below it is drawn on it
+		if(ls.img != nil && ls.y >= ls.img.r.max.y)
+			break;
 		node := hd doc;
 		ls.ys = ls.y :: ls.ys;
 		# a list's items sit together; the list is spaced as a
 		# paragraph, from what follows and from a list of another kind
-		islist := 0;
-		if(node.kind == Nbullet || node.kind == Nnumber){
-			islist = node.kind;
-			if(node.kind == Nbullet && istask(node))
-				islist = -1;
-		}
+		islist := listkind(node);
 		if(inlist && islist != inlist && (!islist || toplevel(node)))
 			ls.y += ls.lh / 3;
 		inlist = islist;
@@ -358,8 +403,9 @@ rendercodeblock(ls: ref Lstate, node: ref DocNode)
 	pad := px(6);
 	blockh := nlines * font.height + 2 * pad;
 
-	if(ls.img != nil){
-		fill(ls, Rect(Point(ls.left, ls.y), Point(ls.right, ls.y + blockh)), ls.style.codebgcolor);
+	if(ls.img != nil || ls.rec){
+		if(ls.img != nil)
+			fill(ls, Rect(Point(ls.left, ls.y), Point(ls.right, ls.y + blockh)), ls.style.codebgcolor);
 		ty := ls.y + pad;
 		linestart := 0;
 		for(i = 0; i <= len txt; i++){
@@ -367,7 +413,8 @@ rendercodeblock(ls: ref Lstate, node: ref DocNode)
 				line := "";
 				if(i > linestart)
 					line = txt[linestart:i];
-				ls.img.text(Point(ls.left + pad, ty), ls.style.fgcolor, Point(0, 0), font, line);
+				if(ls.img != nil)
+					ls.img.text(Point(ls.left + pad, ty), ls.style.fgcolor, Point(0, 0), font, line);
 				drewline(ls, line, font, Point(ls.left + pad, ty));
 				ty += font.height;
 				linestart = i + 1;
@@ -796,8 +843,10 @@ measurecell(ls: ref Lstate, cell: list of ref DocNode): (int, int)
 	y := ls.y;
 	left := ls.left;
 	right := ls.right;
+	rec := ls.rec;
 
 	ls.img = nil;
+	ls.rec = 0;
 	ls.left = ls.x = 0;
 	ls.right = 1 << 30;
 	renderinlines(ls, cell, 0, ls.style.fgcolor, 0);
@@ -808,6 +857,7 @@ measurecell(ls: ref Lstate, cell: list of ref DocNode): (int, int)
 	ww := ls.maxx;
 
 	ls.img = img;
+	ls.rec = rec;
 	ls.x = x;
 	ls.y = y;
 	ls.left = left;
@@ -911,10 +961,11 @@ rendertext(ls: ref Lstate, text: string, w: int, color: ref Image, underline: in
 			ww := font.width(word) + emb;
 			if(ls.x + ww > ls.right && ls.x > ls.left)
 				newline(ls);
-			if(ls.img != nil){
-				p := Point(ls.x, ls.y + dy);
-				ls.img.text(p, color, Point(0, 0), font, word);
+			p := Point(ls.x, ls.y + dy);
+			if(ls.img != nil || ls.rec)
 				drew(ls, word, Rect(p, p.add(Point(ww, font.height))));
+			if(ls.img != nil){
+				ls.img.text(p, color, Point(0, 0), font, word);
 				if(emb)
 					ls.img.text(p.add(Point(emb, 0)), color, Point(0, 0), font, word);
 				decorate(ls, ls.x, ls.x + ww, font, color, underline);
@@ -981,12 +1032,13 @@ renderinlinecode(ls: ref Lstate, text: string)
 		newline(ls);
 
 	dy := ls.asc - font.ascent;
+	bgr := Rect(Point(ls.x, ls.y + dy), Point(ls.x + tw + 2*pad, ls.y + dy + font.height));
 	if(ls.img != nil){
-		bgr := Rect(Point(ls.x, ls.y + dy), Point(ls.x + tw + 2*pad, ls.y + dy + font.height));
 		ls.img.draw(bgr, ls.style.codebgcolor, nil, Point(0, 0));
 		ls.img.text(Point(ls.x + pad, ls.y + dy), ls.style.fgcolor, Point(0, 0), font, text);
-		drew(ls, text, bgr);
 	}
+	if(ls.img != nil || ls.rec)
+		drew(ls, text, bgr);
 	ls.x += tw + 2*pad;
 	if(ls.x > ls.maxx)
 		ls.maxx = ls.x;

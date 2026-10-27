@@ -186,6 +186,50 @@ testOpen(t: ref T)
 	v.close();
 }
 
+# A source set in pages painted sharp at any scale (troff's, through
+# troff for InferNode's engine; here the PDF engine stands in for it,
+# as a source kind) is fitted and zoomed as a PDF is, not set to the
+# width at 100: on a Retina screen, where a point is two pixels, a live
+# troff document opened at half its size
+testPagedSource(t: ref T)
+{
+	if(display == nil)
+		t.skip("no display");
+	pdf := docreg->kindof("pdf");
+	k := ref *pdf;
+	k.name = "pagedsource";
+	k.class = Docreg->Source;
+	c := chan[16] of ref Ev;
+	v := sheetview->new(k, "three.pdf", c);
+	v.dst = display.newimage(Rect((0, 0), (500, 400)), Draw->RGB24, 0, Draw->Black);
+	v.r = v.dst.r;
+	v.bg = display.color(int 16r808080FF);
+	v.open(threepages(), "three.pdf");
+	if(!until(v, "opened"))
+		t.fatal("not opened: " + v.err);
+	t.asserteq(v.flowing(), 0, "paged, not flowing");
+	t.asserteq(v.fit, Sheetview->Fitwidth, "fitted to the width");
+	t.asserteq(v.scale, (500 - 2*Sheetview->GAP) * 100 / 400, "the scale the width gives");
+	v.zoom(200);
+	t.asserteq(v.scale, 200, "zoomed");
+	t.asserteq(v.sizes[0].x, 400, "its sheets as they were, not set again to a width");
+	v.close();
+
+	# Markdown, painted at 100 only, still flows
+	md := docreg->kindof("markdown");
+	v = sheetview->new(md, "a.md", c);
+	v.dst = display.newimage(Rect((0, 0), (500, 400)), Draw->RGB24, 0, Draw->Black);
+	v.r = v.dst.r;
+	v.bg = display.color(int 16r808080FF);
+	v.style = ref Docengine->Style(0, nil, nil, nil, nil, nil, nil, 0);
+	v.open(array of byte "# A heading\n\nA paragraph.\n", "a.md");
+	if(!until(v, "opened"))
+		t.fatal("Markdown not opened: " + v.err);
+	t.asserteq(v.flowing(), 1, "Markdown flows");
+	t.asserteq(v.scale, 100, "at 100");
+	v.close();
+}
+
 testPaint(t: ref T)
 {
 	v := opened(t);
@@ -448,6 +492,7 @@ init(nil: ref Draw->Context, args: list of string)
 	sheetview->init(display);
 
 	run("Open", testOpen);
+	run("PagedSource", testPagedSource);
 	run("Paint", testPaint);
 	run("Paging", testPaging);
 	run("Find", testFind);

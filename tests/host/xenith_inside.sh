@@ -18,6 +18,9 @@
 # start a plumber with those rules before Xenith, as a session has one.
 # The rules must send something to the port edit, which Xenith reads.
 #
+# Set XENITH_INSIDE_SH to commands for the emulator's shell to run
+# before Xenith starts: the variables they set are in its environment.
+#
 # Xenith forks its namespace, so only commands it runs itself see
 # /mnt/xenith. It is handed a dump file whose one external-command
 # entry ("e", re-run on load as Acme does) runs the script, reporting
@@ -68,6 +71,11 @@ xenith_inside() {
     _net=
     if [ -n "$XENITH_INSIDE_NET" ]; then
         _net="bind -a '#I' /net; ndb/cs;"
+    fi
+    # XENITH_INSIDE_SH=commands: run in the emulator's shell first; the
+    # variables they set are Xenith's environment
+    if [ -n "$XENITH_INSIDE_SH" ]; then
+        _net="$_net $XENITH_INSIDE_SH;"
     fi
     # XENITH_INSIDE_PLUMB=rules: a plumber, as a session has
     if [ -n "$XENITH_INSIDE_PLUMB" ]; then

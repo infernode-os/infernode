@@ -15,7 +15,7 @@ harnesses; pick by goal:
 | "Does this widget/layout/theme render right" | `tools/tk-snapshot.sh` → PNG |
 | Canvas/dynamic-image apps | `tests/tkimgrender.b` |
 | Screenshot a live running desktop | `scap` + `tools/p9img2png.py` |
-| Synthetic clicks/keystrokes | `/chan/uitest` (under `wm/wm`; routing into hosted Tk regions not yet verified) |
+| Synthetic clicks/keystrokes | `/dev/pointer` and `/dev/keyboard` (anywhere, Lucifer and its apps included); `/chan/uitest` under `wm/wm` |
 | Tk engine/widget API regression | `tests/tk_test.b` |
 
 ## Full headless Lucifer boot
@@ -105,20 +105,34 @@ boot, scap, decode, correct 1024x768 render.)
 Combine with a `/mnt/ui` driver before the `scap` call to screenshot a
 specific app or state.
 
-## Synthetic input — `/chan/uitest`
+## Synthetic input
 
-Under `wm/wm` (not lucifer), a file2chan driver accepts one command per
-write: `ptr X Y BUTTONS` and `key RUNE` (decimal). Events enter the same
-channels as real devices:
+**`/dev/pointer` and `/dev/keyboard`, anywhere.** emu's own input queues,
+below any window manager, so they drive Lucifer and every app hosted in
+it as a real mouse and keyboard do (verified 2026-10-27: a click into
+wm/editor in Lucifer's zone, then text typed, shown in its body):
+
+```sh
+echo m 670 400 1 > /dev/pointer      # button 1 down at 670 400 (screen pixels)
+echo m 670 400 0 > /dev/pointer      # up
+echo m 300 300 8 > /dev/pointer      # wheel up (16 down, 32 left, 64 right)
+echo -n 'some text' > /dev/keyboard  # typed, a rune at a time
+```
+
+A write of `m x y` with no buttons only moves the pointer.  Used by
+`tests/host/xenith_zerox_typing_test.sh`, `xenith_scroll_quit_test.sh`
+and `tests/inferno/xenith_doc_test.sh`.
+
+**`/chan/uitest`, under `wm/wm`.** wm/wm's own driver, one command per
+write: `ptr X Y BUTTONS`, `key RUNE` (decimal), `text STRING`.  A read
+lists wm/wm's windows (`id minx miny maxx maxy`, topmost first), which
+is what `tests/host/wm_test.sh` and `wm_size_test.sh` check.
 
 ```sh
 echo ptr 400 280 1 > /chan/uitest    # button 1 down
 echo ptr 400 280 0 > /chan/uitest    # up
 echo key 32 > /chan/uitest           # space
 ```
-
-Its integration test is currently skipped pending verification of event
-routing into hosted Tk regions — treat as available-but-unproven.
 
 Also available: the Inferno sh Tk builtins (`man/1/sh-tk` — `load tk`,
 `tk window`, `chan`/`send`) let a shell script create and drive Tk widgets

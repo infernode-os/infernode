@@ -65,19 +65,15 @@ init(ctxt: ref Context, nil: list of string)
 	for (i := 0; i < len task_cfg; i++)
 		cmd(t, task_cfg[i]);
 
-	# The panel the cups are drawn in, at the animation's least size, so
-	# the window opens big enough to show them.
+	# The panel the cups are drawn in, at the animation's least size.  The
+	# window keeps the size it is given: what it asks for under wm/wm,
+	# the zone in Lucifer.
 	cmd(t, "panel .f.p -bd 3 -relief flat -width 400 -height 300");
 	cmd(t, "pack .f.p -fill both -expand 1");
+	cmd(t, "pack propagate . 0");
 	tk->cmd(t, "update");
 	tkclient->startinput(t, "ptr"::"kbd"::nil);
 	tkclient->onscreen(t, nil);
-	# The window is the size the window manager gave: under wm/wm what was
-	# asked, in the presentation zone the zone's, which propagation would
-	# otherwise shrink back to the button row and the panel, leaving the
-	# cups in a strip.  It asked for the whole display, for the zone, and
-	# wm/wm gave it that.
-	cmd(t, "pack propagate . 0");
 
 	ctl := chan of (string, int, int);
 	spawn animate(ctl);

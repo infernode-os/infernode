@@ -86,14 +86,11 @@ realinit(ctxt: ref Draw->Context)
 	n := getmem(mfd);
 	maxx := initdraw(n);
 
-	# On screen at the size the arenas need, and then the window is the
-	# size the window manager gave: under wm/wm what was asked, in the
-	# presentation zone the zone's, which propagation would otherwise
-	# shrink back to the canvas.  It asked for the whole display, for the
-	# zone, and wm/wm gave it that.
+	# The window keeps the size it is given: what it asks for under wm/wm,
+	# the zone in Lucifer.
+	cmd(t, "pack propagate . 0");
 	tkclient->startinput(t, "ptr"::nil);
 	tkclient->onscreen(t, nil);
-	cmd(t, "pack propagate . 0");
 
 	pid: int;
 	for(;;) alt {

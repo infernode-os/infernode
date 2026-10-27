@@ -48,6 +48,17 @@ All notable changes to InferNode are documented in this file.
   windows, is `/chan/wmwindows`. `tests/host/uitest_transport_test.sh`,
   skipped since it was written for want of a way to reach an app hosted
   in wm/wm, now runs and passes (where ffmpeg and vdec are built).
+- **wm/lens fills Lucifer's zone.** It drew a 300x300 image in the
+  zone's top-left corner, sized when it started rather than by the
+  window it was given, and the rest of the zone kept the old theme's
+  background after a switch.
+- **`tests/host/lucifer_app_test.sh`** opens every program in `dis/wm`
+  in Lucifer's zone and checks that it keeps running, draws, fills the
+  zone or centres in it, follows a theme switch, and (editor, shell)
+  takes typing. It finds wm/colors and wm/view taken for ended by
+  Lucifer a moment after they open (they return from `init` and run on
+  in a process group of their own, as upstream's do), and wm/deb's main
+  window never shown (it opens two, and the zone shows the first).
 - **The wm/wm tests run in CI.** `tests/host/wm_test.sh`, written with
   the last fix to New to keep it from breaking again, was not run by any
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and

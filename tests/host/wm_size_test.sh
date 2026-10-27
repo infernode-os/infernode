@@ -10,7 +10,7 @@
 #
 # The programs are what is in dis/wm, not a list kept here: a new one is
 # run with no arguments, and one that needs some, or is not a program to
-# open under wm/wm, is named in how() below.
+# open under wm/wm, is named in wmprogs.sh.
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -24,21 +24,7 @@ if [ -n "$syms" ] && ! printf '%s\n' "$syms" | grep -q sdl3_mainloop; then
 	exit 77
 fi
 
-# How each is run: a program and its arguments, or "-" and why it is
-# not opened under wm/wm.
-how() {
-	case $1 in
-	samengine|samrx|samstub|samtk)
-		echo "- a module of wm/sam's, not a program" ;;
-	logon)	echo "- the boot screen: it draws on the display itself, before any window manager" ;;
-	presrender)
-		echo "- Lucifer's presentation renderer: it follows /mnt/ui" ;;
-	page)	echo "wm/page /README.md" ;;		# with nothing named it reads standard input
-	sam)	echo "wm/sam /README.md" ;;
-	view)	echo "wm/view /MacOSX/Xenith.png" ;;	# with nothing named it opens nothing
-	*)	echo "wm/$1" ;;
-	esac
-}
+. "$(dirname "$0")/wmprogs.sh"
 
 W="$ROOT/tmp/wm_size_test.$$"
 mkdir -p "$W"
@@ -50,9 +36,8 @@ run1() {
 		/dis/sh.dis -c "app=($2); wm/wm sh /tests/wm/size.sh" </dev/null >"$W/$1" 2>&1 || true
 }
 pids= n=0
-for f in dis/wm/*.dis; do
-	p=$(basename "$f" .dis)
-	h=$(how "$p")
+for p in $(wmprogs); do
+	h=$(wmprog_how "$p")
 	case $h in
 	-*)	echo "SKIP: wm/$p:${h#-}"; continue ;;
 	esac

@@ -29,8 +29,9 @@
 # a run that failed keeps it, with the stacks of Xenith's procs when it
 # hung mapped to source lines where the .sbl files are at hand.
 # The emulator's root is a copy of what Xenith needs, made afresh under
-# $ROOT/tmp/xenith-fuzz/root, so what random use opens and Puts is never
-# the tree's. Exit status 1 if any run
+# $ROOT/tmp/xenith-fuzz/root.<pid> for each xenith-fuzz, so what random
+# use opens and Puts is never the tree's, and two at once do not share
+# one; it is kept when a run failed, or with -k. Exit status 1 if any run
 # failed: froze (HUNG, STUCK), lost a proc (BROKEN), left (no outcome),
 # or lost text (DATA).
 #
@@ -76,7 +77,7 @@ mkdir -p "$logs"
 # The emulator's root: a copy of what Xenith and Lucifer need, so what
 # random use opens and Puts is never the tree's (tools/fuzz-common.sh)
 . "$ROOT/tools/fuzz-common.sh"
-sandbox=$top/root
+sandbox=$top/root.$$
 sandbox "$sandbox"
 
 one() {
@@ -136,4 +137,5 @@ for p in $pids; do
 	wait $p || failed=$((failed + 1))
 done
 echo "xenith-fuzz: $runs runs, $failed failed (logs in $logs)"
+[ $failed = 0 ] && [ $keep = 0 ] && rm -rf "${sandbox:?}"
 [ $failed = 0 ]

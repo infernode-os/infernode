@@ -21,7 +21,8 @@ implement WmFuzz;
 # It prints lines beginning "fuzz:"; the outcome lines are RESPONSIVE,
 # HUNG, BROKEN (a proc died), EXITED (the application was asked to
 # exit, by its menu: not a failure), STUCK (the input threads did not
-# finish), DATA (an integrity check failed) and INTEGRITY ok.
+# finish, or the shell answered only when a new one was started), DATA
+# (an integrity check failed) and INTEGRITY ok.
 #
 
 include "sys.m";
@@ -37,6 +38,7 @@ WmFuzz: module {
 E: con "/edit";
 EDITDIR: con "/tmp/veltro/editor";
 SHELLBODY: con "/tmp/veltro/shell/body";
+RESTARTED: con "a new one is started";	# wm/shell, on a stuck shell
 
 app := "editor";
 dir := "/tmp/wmfuzz";
@@ -382,6 +384,32 @@ chomp(s: string): string
 
 # ---------- The shell ----------
 
+rev(l: list of string): list of string
+{
+	r: list of string;
+	for(; l != nil; l = tl l)
+		r = hd l :: r;
+	return r;
+}
+
+# Ctrl-C, and the line being typed cleared.
+intr()
+{
+	g->key('C'-'@');
+	sys->sleep(1000);
+	g->key('U'-'@');
+}
+
+# How many times t is in s.
+count(s, t: string): int
+{
+	n := 0;
+	for(i := 0; i+len t <= len s; i++)
+		if(s[i:i+len t] == t)
+			n++;
+	return n;
+}
+
 # Echo mark, and whether it is shown within n quarter seconds.
 shown(mark: string, n: int): int
 {
@@ -406,40 +434,52 @@ shown(mark: string, n: int): int
 # A command typed is run and its output shown.
 checkshell()
 {
-	if(g->readfile(SHELLBODY) == nil){
+	body := g->readfile(SHELLBODY);
+	if(body == nil){
 		sys->print("fuzz: EXITED\n");
 		return;
 	}
-	# out of a menu, the keys to the window; what runs interrupted
+	# shells found stuck while it was used (two Ctrl-Cs that found
+	# nothing to kill, sh not reading), each started again
+	if((nr := count(body, RESTARTED)) > 0){
+		sys->print("fuzz: (%d new shells started while it was used)\n", nr);
+		# what each followed
+		(nil, l) := sys->tokenize(body, "\n");
+		last: list of string;
+		for(; l != nil; l = tl l){
+			if(g->contains(hd l, RESTARTED)){
+				for(last = rev(last); last != nil; last = tl last)
+					sys->print("	before: %s\n", hd last);
+				sys->print("	%s\n", hd l);
+			}
+			last = hd l :: last;
+			if(len last > 6)
+				last = rev(tl rev(last));
+		}
+	}
+	# out of a menu, the keys to the window
 	g->ptr(g->x0 + 60, g->y0 + 40, 1);
 	g->ptr(g->x0 + 60, g->y0 + 40, 0);
 	sys->sleep(300);
-	g->key('C'-'@');
-	sys->sleep(1000);
-	g->key('U'-'@');
 	mark := sys->sprint("fuzzalive%d", seed);
-	if(shown(mark, 20))
-		return;
-	# stuck (a loop of builtins, or waiting on what does not come): a
-	# second interrupt with nothing to kill starts a new shell
-	g->key('C'-'@');
-	sys->sleep(1000);
-	g->key('C'-'@');
-	sys->sleep(2000);
-	if(g->contains(g->readfile(SHELLBODY), "a new one is started"))
-		sys->print("fuzz: (the shell did not answer: a new one was started)\n");
-	mark += "r";
+	# each try first interrupts what runs: a command typed ahead may be
+	# one reading the console (cat, wc), which takes what is typed
+	intr();
 	if(shown(mark, 20))
 		return;
 	# a quote or a brace left open (by text sent from the transcript):
-	# sh reads on for its end, which no interrupt ends.  Close them.
+	# sh reads on for its end, which no interrupt ends.  A quote, then
+	# a syntax error, ends either: the quote closes one open (or opens
+	# one closed, closed the next time round), the error ends what sh
+	# was reading.
 	for(k := 0; k < 3; k++){
+		intr();
 		g->text("'\n");
-		g->text("}\n");
-		sys->sleep(1000);
+		g->text(")\n");
+		sys->sleep(500);
 		mark += "x";
 		if(shown(mark, 20)){
-			sys->print("fuzz: (a quote or a brace was open)\n");
+			sys->print("fuzz: (a quote or a brace was open, or a command took the input)\n");
 			return;
 		}
 	}
@@ -447,10 +487,24 @@ checkshell()
 		sys->print("fuzz: EXITED\n");
 		return;
 	}
+	# stuck: a second interrupt with nothing to kill starts a new
+	# shell, which may answer; the old one did not, and that is a
+	# failure whether or not the new one does
+	g->key('C'-'@');
+	sys->sleep(1000);
+	g->key('C'-'@');
+	sys->sleep(2000);
+	mark += "r";
+	if(shown(mark, 20)){
+		if(count(g->readfile(SHELLBODY), RESTARTED) > nr)
+			sys->print("fuzz: STUCK: the shell did not answer; a new one did\n");
+		return;
+	}
 	sys->print("fuzz: HUNG: echo %s not shown in 10s; the transcript ends\n", mark);
-	t := g->readfile(SHELLBODY);
-	if(len t > 600)
-		t = t[len t - 600:];
-	sys->print("%s\n", t);
+	(nil, l) := sys->tokenize(g->readfile(SHELLBODY), "\n");
+	n := len l;
+	for(; l != nil; l = tl l)
+		if(n-- <= 12)
+			sys->print("%s\n", hd l);
 	g->dumpprocs();
 }

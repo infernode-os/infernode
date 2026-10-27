@@ -27,11 +27,15 @@
 # Each run's output is in $ROOT/tmp/wm-fuzz/logs/<app>-<seed>.log; a run
 # that failed keeps it, with the stacks of the procs when it hung mapped
 # to source lines.  The emulator's root is a copy of what the
-# applications need (tools/fuzz-common.sh), so what is saved or typed
-# into the shell is never the tree's.  A run in which the application
+# applications need (tools/fuzz-common.sh), made afresh for each
+# wm-fuzz under $ROOT/tmp/wm-fuzz/root.<pid> (two at once do not share
+# one), so what is saved or typed into the shell is never the tree's;
+# it is kept when a run failed, or with -k.  A run in which the application
 # was asked to exit (its menu's exit) passes, and says so.  Exit status
-# 1 if any run failed: froze (HUNG, STUCK), lost a proc (BROKEN), left
-# (no outcome), or lost text (DATA).
+# 1 if any run failed: froze (HUNG, STUCK: the shell answered only when
+# a new one was started), lost a proc (BROKEN), left (no outcome), or
+# lost text (DATA).  Shells started again while it was used (two
+# Ctrl-Cs that found it stuck) are counted in the log.
 #
 # Needs the SDL GUI emulator and the tests built (cd tests; mk install).
 
@@ -74,7 +78,7 @@ fi
 top=$ROOT/tmp/wm-fuzz
 logs=$top/logs
 mkdir -p "$logs"
-sb=$top/root
+sb=$top/root.$$
 sandbox "$sb"
 
 one() {
@@ -109,7 +113,7 @@ EOF
 		echo "$app seed $s: FAIL"; printf '%s\n' "$bad" | sed 's/^/	/'
 		return 1
 	fi
-	echo "$app seed $s: ok$(grep -q '^fuzz: EXITED' "$log" && echo ' (exited by its menu)')"
+	echo "$app seed $s: ok$(grep -q '^fuzz: EXITED' "$log" && echo ' (exited by its menu)')$(sed -n 's/^fuzz: (\([0-9]*\) new shells started.*/ (\1 new shells started)/p' "$log")"
 	[ $keep = 1 ] || rm -rf "${r:?}" "${log:?}"
 	return 0
 }
@@ -125,4 +129,5 @@ for p in $pids; do
 	wait $p || failed=$((failed + 1))
 done
 echo "wm-fuzz: $app, $runs runs, $failed failed (logs in $logs)"
+[ $failed = 0 ] && [ $keep = 0 ] && rm -rf "${sb:?}"
 [ $failed = 0 ]

@@ -67,9 +67,13 @@ directory is laid out contiguously.
 Every name that is not already an upper-case 8.3 name \- in an Inferno
 tree, every name \- gets a long-name entry, which is what
 .IR dossrv (4)
-reads, and a generated short alias
+reads. Its short name is the name upper-cased when that is 8.3
+.RB ( config.txt
+is
+.BR CONFIG.TXT ,
+which is all a Raspberry Pi 3's boot ROM reads) and a generated alias
 .RB ( NAME~1.EXT )
-because the format requires one.
+otherwise.
 .PP
 The cluster size is the largest of 4096, 2048, 1024 and 512 bytes that
 still leaves the 65525 clusters that make a volume FAT32;

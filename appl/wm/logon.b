@@ -976,7 +976,13 @@ createsecstoreacct(pass: string): string
 	storedir := "/usr/inferno/secstore";
 	userdir := storedir + "/" + user;
 
-	sys->create(storedir, Sys->OREAD, Sys->DMDIR | 8r700);
+	# Every directory on the way, not only the last two: a Pi card's
+	# usr/ starts empty, and /usr/inferno itself did not exist, so the
+	# first boot's account could not be made ("'/usr/inferno' does not
+	# exist"). A hosted tree has them all already; creating one that
+	# exists fails harmlessly, which is why only the last is checked.
+	for(d := "/usr/inferno" :: storedir :: nil; d != nil; d = tl d)
+		sys->create(hd d, Sys->OREAD, Sys->DMDIR | 8r700);
 	fd := sys->create(userdir, Sys->OREAD, Sys->DMDIR | 8r700);
 	if(fd == nil)
 		return sys->sprint("can't create %s: %r", userdir);

@@ -287,6 +287,15 @@ jobs:
         chmod +x tests/host/release_dirs_test.sh
         ROOT=. bash tests/host/release_dirs_test.sh
 
+    - name: Check what goes on a Raspberry Pi card image
+      run: |
+        # tools/mkpiimage.sh, which makes the release's card images: each
+        # board's firmware, config.txt and kernel, the built dis/, and of
+        # lib/ fonts/ icons/ only what git tracks; read back by the test's
+        # own FAT32 reader, and by fsck.fat.
+        sudo apt-get install -y dosfstools
+        ROOT=. bash tests/host/piimage_test.sh
+
     - name: Run codex-gate preflight checks
       run: |
         # INFR-413: the gateway pins the Codex CLI's plugin, app, MCP, skill,

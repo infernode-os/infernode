@@ -1,0 +1,41 @@
+# tools/pi-btfw-manifest.txt -- the CYW43455's Bluetooth patch the Pi
+# kernel's bt9p uploads at `up`, pinned by commit and SHA256.  Read by
+# tools/pi-firmware.sh (--manifest), which tools/mkpiimage.sh runs.
+#
+# Format: tools/pi-firmware-manifest.txt's.
+#     commit <sha1 of RPi-Distro/bluez-firmware>
+#     file <name on the card> <sha256> <bytes> <licence> <revision URL>
+#
+# WHAT IT IS
+#
+# The radio's Bluetooth core boots from ROM and takes a patch over HCI
+# (docs/BLUETOOTH.md, "Firmware").  bt9p asks for it as
+# /n/dos/firmware/BCM4345C0.hcd when the card's bt file says
+# "firmware /n/dos/firmware/BCM4345C0.hcd".  One file serves both
+# boards: Raspberry Pi's packaging links the 3B+'s and the 4B's names to
+# it (debian/bluez-firmware.links).  Uploaded, it names itself
+# "BCM43455 37.4MHz Raspberry Pi 3+-0190", as the build the board ran
+# (os/bcm2837/README.md) did.
+#
+# LICENCE, AND WHERE IT MAY GO
+#
+# The Cypress licence the Wi-Fi firmware is under (debian/copyright:
+# CYPRESS-WIRELESS-CONNECTIVITY-DEVICES-DRIVER-END-USER-LICENSE-AGREEMENT;
+# the same words as os/bcm/card/LICENCE.cypress), so it takes the Wi-Fi
+# firmware's road for the same reasons (tools/pi-firmware-manifest.txt):
+# never in the tree or a hosted release, and in the Pi card images
+# beside LICENCE.cypress.  Not the LICENSE.cypress beside it upstream:
+# at this commit that file is a saved web page, not the licence.
+#
+# REPINNING
+#
+# As tools/pi-firmware-manifest.txt says.  The file lives at
+# debian/firmware/broadcom/BCM4345C0.hcd; check that the board still
+# reports the build after a repin, as the README's first light did.
+#
+# Pinned: RPi-Distro/bluez-firmware, branch pios/trixie as of
+# 2025-10-02, package version 1.2-13+rpt2.
+
+commit cdf61dc691a49ff01a124752bd04194907f0f9cd
+
+file BCM4345C0.hcd 51c45e77ddad91a19e96dc8fb75295b2087c279940df2634b23baf71b6dea42c 63806 binary-redist-Cypress https://raw.githubusercontent.com/RPi-Distro/bluez-firmware/cdf61dc691a49ff01a124752bd04194907f0f9cd/debian/firmware/broadcom/BCM4345C0.hcd

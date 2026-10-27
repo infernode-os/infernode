@@ -381,8 +381,12 @@ if {~ $emuhost MacOSX Linux Nt}{
 		# a session reaches: lib/lucifer/llmsrv.sh's runs in the boot's
 		# background, in a namespace of its own; it reads the same field.
 		llmcompact=`{sed -n 's/^autocompact=//p' /lib/ndb/llm >[2] /dev/null}
+		# window=<tokens>: the model's context window, where the backend
+		# does not report it (llmsrv -C); the mark follows from it.
+		llmwindow=`{sed -n 's/^window=//p' /lib/ndb/llm >[2] /dev/null}
 		llmopts=()
 		if {! ~ $#llmcompact 0} { llmopts=(-c $llmcompact) }
+		if {! ~ $#llmwindow 0} { llmopts=($llmopts -C $llmwindow) }
 		# backend=cli/codex are the host-side CLI gateways (claude-gate,
 		# codex-gate) — OpenAI-shaped on localhost, so llmsrv dials them
 		# the same way.

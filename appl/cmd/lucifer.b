@@ -129,13 +129,23 @@ AppSlot: adt {
 	owneract: int;		# activity that created this app (immutable after alloc)
 	client: ref Client;	# its first connection: the main window, filling the zone
 	pid:	int;		# app's main proc and process group, -1 until it runs
-	others:	list of ref Client;	# its later connections, oldest first (below)
+	others:	list of ref Other;	# its later connections, oldest first (relayout)
 	kbd:	ref Client;	# which of them typing goes to; nil is client
+	div:	ref Image;	# the line between its main window and the others
 
 	top:	fn(a: self ref AppSlot);
 	bottom:	fn(a: self ref AppSlot);
 	focus:	fn(a: self ref AppSlot): ref Client;
+	other:	fn(a: self ref AppSlot, c: ref Client): ref Other;
 };
+
+# One of an app's other windows: a dialog, wm/deb's Stack window.
+Other: adt {
+	c:	ref Client;
+	h:	int;		# the height it asked for; 0 while it is unmapped
+};
+MINOTHERH: con 24;	# the least an app's other window is given
+DIVIDERH: con 2;	# the line above an app's other windows
 MAXAPPSLOTS: con 48;
 MAXTOKENPENDING: con 16;
 
@@ -1463,7 +1473,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 							# (a second toplevel, a dialog): one of its
 							# other windows, placed in the zone and shown
 							# with it (the req handler below).
-							foundtp.appslots[asi].others = appendclient(foundtp.appslots[asi].others, c);
+							foundtp.appslots[asi].others = appendother(foundtp.appslots[asi].others, ref Other(c, 0));
 							break;
 						}
 						foundtp.appslots[asi].client = c;
@@ -1502,7 +1512,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 				continue;
 			}
 			cleanupappslot(c);
-			dropother(c);
+			dropother(c, contentarea(curzone), scr);
 			# App disconnected: free its windows and stop its minder in
 			# wmsrv, as wm/wm does; otherwise the minder blocks forever
 			# holding the client and its window images on presscr.
@@ -1593,41 +1603,37 @@ preswmloop(scr: ref Screen, zoner: Rect,
 						c.top();
 					}
 				} else if(oa != nil) {
-					# One of an app's other windows: wm/deb's Stack
-					# window, a dialog.  The zone shows one app at a
-					# time, its main window filling it; these go over
-					# that, at the size they ask for, and are shown,
-					# hidden and raised with it.  A window that keeps
-					# its size keeps its place (a Tk update asks again).
-					wr := placeother(menurect(s), reshapehow(s), contentarea(curzone));
-					oimg := c.image("app");
-					if(oimg != nil && oimg.r.dx() == wr.dx() && oimg.r.dy() == wr.dy())
-						c.setimage("app", oimg);
-					else if(wr.dx() <= 0 || wr.dy() <= 0 ||
-					   (oimg = scr.newwindow(wr, Draw->Refbackup, Draw->Nofill)) == nil) {
-						err = "window creation failed";
-						n = -1;
-					} else {
-						oimg.draw(oimg.r, bgcol, nil, (0, 0));
-						c.setimage("app", oimg);
-						if(oshown)
-							oa.top();
-						else
-							c.bottom();
+					# One of an app's other windows (wm/deb's Stack
+					# window, a dialog): the tab is divided for it
+					# (relayout).  Its height is the one it asks for
+					# when it is mapped; a reshape it is told of asks
+					# again for the place it was given.
+					if((o := oa.other(c)) != nil && (reshapehow(s) != nil || o.h <= 0)) {
+						o.h = menurect(s).dy();
+						if(o.h <= 0)	# "!onscreen" names no size
+							o.h = contentarea(curzone).dy() / 3;
 					}
-				} else if(c.image("app") == nil) {
-					# First reshape for this app: allocate content-area window
-					tabh2 := 0;
-					if(mainfont != nil) tabh2 = mainfont.height + 13;
-					if(mobile && tabh2 < MOBILE_TAPMIN) tabh2 = MOBILE_TAPMIN;
-					appr := Rect((curzone.min.x, curzone.min.y + tabh2), curzone.max);
-					img := scr.newwindow(appr, Draw->Refbackup, Draw->Nofill);
-					if(img == nil) {
-						err = "window creation failed";
+					if((err = relayout(oa, contentarea(curzone), scr, c, 0)) != nil)
 						n = -1;
-					} else {
+					else if(oshown)
+						oa.top();
+					else
+						oa.bottom();
+				} else if(c.image("app") == nil) {
+					# First reshape for this app: its window in the content
+					# area, above any others it made first (relayout)
+					(ma, nil) := mainslot(c);
+					if(ma != nil)
+						err = relayout(ma, contentarea(curzone), scr, c, 0);
+					else if((img := scr.newwindow(contentarea(curzone), Draw->Refbackup, Draw->Nofill)) == nil)
+						err = "window creation failed";
+					else {
 						img.draw(img.r, bgcol, nil, (0, 0));
 						c.setimage("app", img);
+					}
+					if(err != nil)
+						n = -1;
+					else {
 						# Register c in the wmsrv z-list via top().
 						# scr.newwindow() puts the image at z-top on the Screen,
 						# but wmsrv's Client.bottom() requires c.znext != nil to
@@ -1654,10 +1660,13 @@ preswmloop(scr: ref Screen, zoner: Rect,
 							otp2.applock <-= 1;
 							if(hideit) break;
 						}
-						if(hideit)
-							c.bottom();
-						else if((ma := mainslot(c).t0) != nil)
-							ma.top();	# its other windows, made first (wm/deb's Stack), over it
+						if(hideit) {
+							if(ma != nil)
+								ma.bottom();
+							else
+								c.bottom();
+						} else if(ma != nil)
+							ma.top();
 					}
 				} else {
 					# Subsequent !reshape/!onscreen: re-send the existing
@@ -1679,18 +1688,21 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					c.setimage(hd tl dtoks, nil);
 				else if(dn >= 2 && hd tl dtoks == "." && oa != nil) {
 					# One of an app's other windows unmapped (wm/deb's
-					# Stack closed from its title bar): it goes, and
-					# typing goes back to the main window.  Mapped
-					# again, it asks for a window anew.
+					# Stack, sent "exit"): it goes, the main window has
+					# its room back, and the typing.  Mapped again, it
+					# asks for a window anew.
 					c.setimage("app", nil);
+					if((o := oa.other(c)) != nil)
+						o.h = 0;
 					if(oa.kbd == c)
 						slotfocus(oa, oa.client, oshown);
+					relayout(oa, contentarea(curzone), scr, nil, 0);
+					if(oshown)
+						oa.top();
+					else
+						oa.bottom();
 				}
 			}
-			# "raise .": wm/deb's Stack menu entry maps its window and
-			# raises it.  Over the app's other windows, if it is shown.
-			if(s == "raise ." && oa != nil && oshown)
-				c.top();
 			# "start kbd": a window that starts taking typing gets it, as
 			# under wm/wm (a dialog asking for a string must have it).
 			if(s == "start kbd" && c != lucipresclient && c != presrenderclient) {
@@ -1715,14 +1727,7 @@ preswmloop(scr: ref Screen, zoner: Rect,
 				c.setimage("app", existimg);
 			# "embedded" (wmlib->embedded): yes, the zone frames and places
 			# its windows, so the client draws no frame of its own.  The OK
-			# below is the answer.  But not for an app's other windows: they
-			# go over its main one, and with no frame (there is no title
-			# bar) one is a rectangle of the theme's background over a
-			# text pane of the same colour, there and not seen.
-			if(s == "embedded" && oa != nil) {
-				err = "not embedded";
-				n = -1;
-			}
+			# below is the answer.
 			# All other req messages ("start ptr", "start kbd", "raise", etc.) — reply OK
 			alt { rc <-= (n, err) => ; * => ; }
 		}
@@ -1764,22 +1769,16 @@ preswmloop(scr: ref Screen, zoner: Rect,
 			<-rtp.applock;
 			for(asi3 := 0; asi3 < rtp.nappslots; asi3++) {
 				if(rtp.appslots[asi3] != nil && rtp.appslots[asi3].client != nil) {
-					oldimg3 := rtp.appslots[asi3].client.image("app");
-					if(oldimg3 != nil)
-						oldimg3.draw(oldimg3.r, bgcol, nil, (0, 0));
-					img3 := presscr.newwindow(appr2, Draw->Refbackup, Draw->Nofill);
-					if(img3 != nil) {
-						rtp.appslots[asi3].client.setimage("app", img3);
-						# Notify with window name "." (NOT "app"): wmclient's
-						# wmreq rejects any other name, so "!reshape app" was
-						# silently dropped and the app never repainted its new
-						# window — leaving a fresh Refbackup window showing
-						# stale backed-up screen content (e.g. the previously
-						# visible app) under the active tab.  "." makes the app
-						# pick up the reallocated image and redraw.
-						rtp.appslots[asi3].client.ctl <-= sys->sprint("!reshape . -1 %s", r2s(appr2));
-					}
-					# scr.newwindow() above tops the window on the Screen
+					# New windows for all the app's windows, on the new
+					# screen.  Each is told with "!reshape ." (NOT "app"):
+					# wmclient's wmreq rejects any other name, so "!reshape
+					# app" was silently dropped and the app never repainted
+					# its new window — leaving a fresh Refbackup window
+					# showing stale backed-up screen content (e.g. the
+					# previously visible app) under the active tab.  "."
+					# makes the app pick up the reallocated image and redraw.
+					relayout(rtp.appslots[asi3], appr2, presscr, nil, 1);
+					# relayout's newwindow() tops each window on the Screen
 					# z-stack.  Reallocating every app on a resize therefore
 					# leaves whichever app was iterated last on top — not
 					# necessarily the active one — so a stale window can
@@ -1787,23 +1786,6 @@ preswmloop(scr: ref Screen, zoner: Rect,
 					# resize / activity switch).  Bottom every window except
 					# the focused activity's active app; lucipres's own
 					# reshape re-raises the active app above it.
-					# The app's other windows keep their size and as
-					# much of their place as the new zone has room for.
-					for(ol := rtp.appslots[asi3].others; ol != nil; ol = tl ol) {
-						oc := hd ol;
-						oi := oc.image("app");
-						if(oi == nil)
-							continue;
-						wr3 := clamptozone(oi.r, appr2);
-						oi.draw(oi.r, bgcol, nil, (0, 0));
-						if((oi = presscr.newwindow(wr3, Draw->Refbackup, Draw->Nofill)) != nil) {
-							oc.setimage("app", oi);
-							# spawned: the app may be busy asking for
-							# its main window's image, which is this
-							# loop's to give
-							spawn sendctlmsg(oc.ctl, sys->sprint("!reshape . -1 %s", r2s(wr3)));
-						}
-					}
 					if(!(rtp.actid == actid && rtp.appslots[asi3].id == rtp.activeappid))
 						rtp.appslots[asi3].bottom();
 				}
@@ -2496,7 +2478,9 @@ themechanged(ev: string)
 			# Spawned: an app's windows often share one loop (wm/deb's
 			# do), which is not back at its alt for the next one yet.
 			for(ol := ttp.appslots[tai].others; ol != nil; ol = tl ol)
-				spawn sendctlmsg((hd ol).ctl, "retheme");
+				spawn sendctlmsg((hd ol).c.ctl, "retheme");
+			if((dv := ttp.appslots[tai].div) != nil)
+				dv.draw(dv.r, bordercol, nil, (0, 0));
 		}
 		ttp.applock <-= 1;
 	}
@@ -3077,27 +3061,129 @@ strtoint(s: string): int
 
 # --- App lifecycle management ---
 
-# An app's windows: the zone shows one app at a time, its main window
-# (its first connection) filling the zone.  An app that makes another
-# toplevel -- wm/deb's Stack window, a dialog, a file selector -- makes
-# another connection; it is one of the app's other windows, over the main
-# one at the size it asks for, raised and hidden with the app.
+# An app's windows.  The zone shows one app at a time, in its tab.  An app
+# that makes another toplevel -- wm/deb's Stack window, a dialog, a file
+# selector -- makes another connection: one of the app's other windows.
+# The tab is divided for them, not covered: they go along its bottom,
+# the newest highest, each the tab's width and the height it asked for,
+# together at most half the tab, the newest given its height first (the
+# window just opened is the one wanting attention); a line divides them
+# from the main window, which has the rest (relayout).  Nothing of the
+# app is hidden, and the app is as it is under wm/wm: a dialog that
+# blocks it still does.
 
-# AppSlot.top: raise the app's windows: the main one, then the others over
-# it in the order they came, and over all of them one with a menu posted
-# (a client with more than one window).
+# relayout: place app a's windows in area on scr.  A window whose place
+# has changed gets a new one, and its client is told with a reshape; the
+# client asking (whose request this answers) is given its window as the
+# answer.  A window not yet asked for is left until it is.  force: new
+# windows for all (scr is new).
+relayout(a: ref AppSlot, area: Rect, scr: ref Screen, asking: ref Client, force: int): string
+{
+	err: string;
+	y := area.max.y;
+	if(hasothers(a)) {
+		# heights, newest first; then placed, oldest at the bottom
+		room := area.dy() / 2;
+		hl: list of int;
+		for(l := a.others; l != nil; l = tl l)
+			hl = (hd l).h :: hl;
+		hs: list of int;
+		for(; hl != nil; hl = tl hl) {
+			h := hd hl;
+			if(h > 0) {
+				if(h > room)
+					h = room;
+				if(h < MINOTHERH)
+					h = MINOTHERH;
+				room -= h;
+			}
+			hs = h :: hs;
+		}
+		for(l = a.others; l != nil; (l, hs) = (tl l, tl hs)) {
+			(o, h) := (hd l, hd hs);
+			if(o.h <= 0)
+				continue;
+			if(placewin(o.c, Rect((area.min.x, y - h), (area.max.x, y)), scr, asking, force) != nil &&
+			   o.c == asking)
+				err = "window creation failed";
+			y -= h;
+		}
+		dr := Rect((area.min.x, y - DIVIDERH), (area.max.x, y));
+		y -= DIVIDERH;
+		if(force || a.div == nil || !a.div.r.eq(dr)) {
+			a.div = scr.newwindow(dr, Draw->Refbackup, Draw->Nofill);
+			if(a.div != nil)
+				a.div.draw(a.div.r, bordercol, nil, (0, 0));
+		}
+	} else
+		a.div = nil;
+	if(a.client != nil &&
+	   placewin(a.client, Rect(area.min, (area.max.x, y)), scr, asking, force) != nil &&
+	   a.client == asking)
+		err = "window creation failed";
+	return err;
+}
+
+# placewin: c's window at r (relayout).
+placewin(c: ref Client, r: Rect, scr: ref Screen, asking: ref Client, force: int): string
+{
+	old := c.image("app");
+	if(old == nil && c != asking)
+		return nil;
+	if(!force && old != nil && (w := c.window("app")) != nil && w.r.eq(r)) {
+		if(c == asking)
+			c.setimage("app", old);
+		return nil;
+	}
+	img := scr.newwindow(r, Draw->Refbackup, Draw->Nofill);
+	if(img == nil)
+		return "window creation failed";
+	img.draw(img.r, bgcol, nil, (0, 0));
+	if(old != nil) {
+		# What the old window showed, where it was on the screen, until
+		# the client draws the new one: an app blocked in a dialog it
+		# opened (wm/deb in its file selector) cannot, and its window
+		# would be blank.  The main window keeps its top left as the
+		# tab divides, so it is as if cut off at the bottom.
+		ow := c.window("app");
+		if(!force && ow != nil && ow.img == old)
+			img.draw(img.r, old, nil, img.r.min.sub(ow.r.min).add(old.r.min));
+		else
+			old.draw(old.r, bgcol, nil, (0, 0));	# a new screen: no ghost of it
+		# the old window stays until the client takes the new one:
+		# under everything, where it shows nothing
+		old.bottom();
+	}
+	c.setimage("app", img);
+	if(c != asking)
+		spawn sendctlmsg(c.ctl, sys->sprint("!reshape . -1 %s", r2s(r)));
+	return nil;
+}
+
+hasothers(a: ref AppSlot): int
+{
+	for(l := a.others; l != nil; l = tl l)
+		if((hd l).h > 0)
+			return 1;
+	return 0;
+}
+
+# AppSlot.top: raise the app's windows, and over them one with a menu
+# posted (a client with more than one window).
 AppSlot.top(a: self ref AppSlot)
 {
 	if(a.client == nil)
 		return;
 	a.client.top();
+	if(a.div != nil)
+		a.div.top();
 	menu: ref Client;
 	if(len a.client.wins > 1)
 		menu = a.client;
 	for(l := a.others; l != nil; l = tl l) {
-		(hd l).top();
-		if(len (hd l).wins > 1)
-			menu = hd l;
+		(hd l).c.top();
+		if(len (hd l).c.wins > 1)
+			menu = (hd l).c;
 	}
 	if(menu != nil)
 		menu.top();
@@ -3106,7 +3192,9 @@ AppSlot.top(a: self ref AppSlot)
 AppSlot.bottom(a: self ref AppSlot)
 {
 	for(l := a.others; l != nil; l = tl l)
-		(hd l).bottom();
+		(hd l).c.bottom();
+	if(a.div != nil)
+		a.div.bottom();
 	if(a.client != nil)
 		a.client.bottom();
 }
@@ -3119,11 +3207,20 @@ AppSlot.focus(a: self ref AppSlot): ref Client
 	return a.client;
 }
 
-appendclient(l: list of ref Client, c: ref Client): list of ref Client
+# AppSlot.other: c as one of the app's other windows, nil if it is not.
+AppSlot.other(a: self ref AppSlot, c: ref Client): ref Other
+{
+	for(l := a.others; l != nil; l = tl l)
+		if((hd l).c == c)
+			return hd l;
+	return nil;
+}
+
+appendother(l: list of ref Other, o: ref Other): list of ref Other
 {
 	if(l == nil)
-		return c :: nil;
-	return hd l :: appendclient(tl l, c);
+		return o :: nil;
+	return hd l :: appendother(tl l, o);
 }
 
 # otherslot: the app c is one of the other windows of, and whether that
@@ -3137,14 +3234,11 @@ otherslot(c: ref Client): (ref AppSlot, int)
 		<-tp.applock;
 		for(i := 0; i < tp.nappslots; i++) {
 			a := tp.appslots[i];
-			if(a == nil)
-				continue;
-			for(l := a.others; l != nil; l = tl l)
-				if(hd l == c) {
-					shown := tp.actid == actid && a.id == tp.activeappid;
-					tp.applock <-= 1;
-					return (a, shown);
-				}
+			if(a != nil && a.other(c) != nil) {
+				shown := tp.actid == actid && a.id == tp.activeappid;
+				tp.applock <-= 1;
+				return (a, shown);
+			}
 		}
 		tp.applock <-= 1;
 	}
@@ -3173,19 +3267,24 @@ mainslot(c: ref Client): (ref AppSlot, int)
 }
 
 # dropother: c, one of an app's other windows, has gone: take it from the
-# app, and the typing back to the main window if it had it.
-dropother(c: ref Client)
+# app, give its room back to the main window, and the typing if it had it.
+dropother(c: ref Client, area: Rect, scr: ref Screen)
 {
 	(a, shown) := otherslot(c);
 	if(a == nil)
 		return;
 	if(a.kbd == c)
 		slotfocus(a, a.client, shown);
-	nl: list of ref Client;
+	nl: list of ref Other;
 	for(l := a.others; l != nil; l = tl l)
-		if(hd l != c)
-			nl = appendclient(nl, hd l);
+		if((hd l).c != c)
+			nl = appendother(nl, hd l);
 	a.others = nl;
+	relayout(a, area, scr, nil, 0);
+	if(shown)
+		a.top();
+	else
+		a.bottom();
 }
 
 # slotfocus: app a's typing goes to nc, its main window's client or one of
@@ -3209,18 +3308,18 @@ slotfocus(a: ref AppSlot, nc: ref Client, shown: int)
 }
 
 # ptrtarget: which of app a's windows the pointer at p is over: one with a
-# menu posted, where the menu or its window is; else the newest of its
-# other windows there; else the main one.
+# menu posted, where the menu or its window is; else one of its other
+# windows there; else the main one.
 ptrtarget(a: ref AppSlot, p: Point): ref Client
 {
 	if(a.client != nil && len a.client.wins > 1 && a.client.contains(p))
 		return a.client;
 	t := a.client;
 	for(l := a.others; l != nil; l = tl l) {
-		c := hd l;
+		c := (hd l).c;
 		if(len c.wins > 1 && c.contains(p))
 			return c;
-		if((i := c.image("app")) != nil && i.r.contains(p))
+		if((w := c.window("app")) != nil && w.r.contains(p))
 			t = c;
 	}
 	return t;
@@ -3247,30 +3346,6 @@ reshapehow(s: string): string
 	for(i := 0; i < 7; i++)
 		toks = tl toks;
 	return hd toks;
-}
-
-# placeother: where one of an app's other windows goes in the content area
-# (area), asked for at r, placed by how.  "place" is wm/wm's choosing of
-# a free spot; the zone has none to choose, the main window filling it,
-# so the window goes across its middle, a third of the way down, where
-# dialog's centre() puts a dialog.
-placeother(r: Rect, how: string, area: Rect): Rect
-{
-	case how {
-	"max" =>
-		return area;
-	"place" =>
-		w := r.dx();
-		h := r.dy();
-		if(w > area.dx())
-			w = area.dx();
-		if(h > area.dy())
-			h = area.dy();
-		x := area.min.x + (area.dx() - w) / 2;
-		y := area.min.y + (area.dy() - h) / 3;
-		return Rect((x, y), (x + w, y + h));
-	}
-	return clamptozone(r, area);
 }
 
 # cleanupappslot: remove an app client from the slot array and delete its artifact.
@@ -3598,7 +3673,7 @@ launchapp(id, dispath, appdata: string, targetact: int)
 		writeappstatus(id, "dead", targetact);
 		return;
 	}
-	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil, -1, nil, nil);
+	tp.appslots[tp.nappslots] = ref AppSlot(id, targetact, nil, -1, nil, nil, nil);
 	tp.nappslots++;
 	tp.applock <-= 1;
 	# Load the GUI app module

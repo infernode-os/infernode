@@ -286,6 +286,11 @@ jobs:
         # made the user's home inside the package.
         chmod +x tests/host/release_dirs_test.sh
         ROOT=. bash tests/host/release_dirs_test.sh
+        # No private key in a release package: the tree's
+        # usr/inferno/keyring/default (a test key) is scrubbed by every
+        # package job, and a key left anywhere refuses the package.
+        chmod +x tests/host/release_scrub_test.sh
+        ROOT=. bash tests/host/release_scrub_test.sh
 
     - name: Run codex-gate preflight checks
       run: |

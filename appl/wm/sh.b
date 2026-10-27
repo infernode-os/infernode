@@ -62,7 +62,7 @@ shwin_cfg := array[] of {
 	"frame .b -bd 1 -relief ridge",
 	"frame .ft -bd 0",
 	"scrollbar .ft.scroll -command {send scroll t}",
-	"text .ft.t -bd 1 -relief flat -yscrollcommand {send scroll s} -bg white -selectforeground black -selectbackground #CCCCCC",
+	"text .ft.t -bd 1 -relief flat -yscrollcommand {send scroll s}",
 	".ft.t tag configure sel -relief flat",
 	"pack .ft.scroll -side left -fill y",
 	"pack .ft.t -fill both -expand 1",

@@ -186,9 +186,16 @@ for name, th, st in apps:
     # colours).  Something there not the theme's background, past a
     # speck: a clock's face or a date's one line is enough, and so is
     # a colour of the app's own filling it (wm/lens, a nested wm/wm).
+    # The tab strip is passed over when it is there (the current tab is
+    # underlined in the accent colour); on a boot that draws none the
+    # zone found begins where the apps do, and wm/date's one line is
+    # at its top.
+    top = zone[1]
+    if any(im.px(x, y) == TH[th]['accent'] for y in range(zone[1], zone[1] + TABH) for x in range(zone[0], zone[2], 2)):
+        top += TABH
     bg = TH[th]['bg']
     tot = drawn = 0
-    for y in range(zone[1] + TABH, zone[3], 3):
+    for y in range(top, zone[3], 3):
         for x in range(zone[0], zone[2], 3):
             tot += 1
             drawn += im.px(x, y) != bg

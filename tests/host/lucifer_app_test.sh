@@ -2,7 +2,8 @@
 #
 # lucifer_app_test.sh — every program in dis/wm opened in Lucifer's
 # presentation zone, one boot, one after another: it is still running a
-# moment later (Lucifer did not reap it), it drew in the zone, its
+# moment later (Lucifer did not reap it), it drew in the zone, below its
+# tab (wm/deb, hung making its second window, showed only its tab), its
 # content fills the zone or is centred in it (not in a corner: wm/lens
 # drew a 300x300 image in the zone's top left), it follows a theme
 # switch, and wm/editor and wm/shell take a click and typing through
@@ -13,8 +14,8 @@
 # tab strip at all, for any app, a fault of its own to be fixed first.
 #
 # The programs are found in dis/wm (wmprogs.sh), as wm_size_test.sh
-# finds them; deb is not opened here (below).  LUCIFER_APPS="lens tetris"
-# opens those alone (with wm/editor among them, which fills the zone).
+# finds them.  LUCIFER_APPS="lens tetris" opens those alone (with
+# wm/editor among them, which fills the zone).
 #
 set -e
 . "$(dirname "$0")/common.sh"
@@ -60,9 +61,6 @@ theme=brimstone
 		case $h in
 		-*)	continue ;;
 		esac
-		case $p in
-		deb)	continue ;;
-		esac
 		set -- $h
 		shift
 		data=
@@ -96,7 +94,6 @@ for p in $progs; do
 	-*)	echo "SKIP: wm/$p:$(wmprog_how "$p" | sed 's/^-//')" ;;
 	esac
 done
-echo "SKIP: wm/deb: it opens two windows, its Stack window and its main one, and Lucifer's zone shows neither"
 
 LOG=$H/log
 cd "$ROOT"
@@ -183,6 +180,27 @@ for name, th, st in apps:
     im, n, b = shots[name]
     if n < 20 or b is None:
         fail('%s: drew nothing in the zone' % what); continue
+    # Drawn below the tab strip, not just a tab over an empty zone:
+    # wm/deb, hung before its window went on screen, passed as drawn
+    # (its tab's label) and as following the theme (the empty zone's
+    # colours).  Something there not the theme's background, past a
+    # speck: a clock's face or a date's one line is enough, and so is
+    # a colour of the app's own filling it (wm/lens, a nested wm/wm).
+    # The tab strip is passed over when it is there (the current tab is
+    # underlined in the accent colour); on a boot that draws none the
+    # zone found begins where the apps do, and wm/date's one line is
+    # at its top.
+    top = zone[1]
+    if any(im.px(x, y) == TH[th]['accent'] for y in range(zone[1], zone[1] + TABH) for x in range(zone[0], zone[2], 2)):
+        top += TABH
+    bg = TH[th]['bg']
+    tot = drawn = 0
+    for y in range(top, zone[3], 3):
+        for x in range(zone[0], zone[2], 3):
+            tot += 1
+            drawn += im.px(x, y) != bg
+    if drawn * 5000 < tot:
+        fail('%s: nothing drawn below its tab' % what); continue
     # Where it drew, below the tab strip (an app's tab label, when the
     # strip is drawn, spans more of it than the app might): what differs
     # from the empty zone, or changes with the theme.  A background the
@@ -212,6 +230,19 @@ for name, th, st in apps:
         if stale * 100 > 2 * tot:
             fail('%s: %d%% of the zone still in %s colours after the switch to %s' % (what, stale * 100 // tot, th, OTHER[th])); continue
         msg.append('follows the theme')
+    if name == 'deb':
+        # Its Stack window is a second toplevel: the tab is divided for
+        # it, not covered, a line across the zone between the main
+        # window above and the Stack below, in either theme.
+        def divider(img, t):
+            xs = range(zone[0] + 2, zone[2] - 2, 4)
+            for y in range(zone[1] + (zone[3] - zone[1]) // 4, zone[3] - 20):
+                if sum(img.px(x, y) == TH[t]['border'] for x in xs) * 100 >= 95 * len(xs):
+                    return y
+            return None
+        if divider(im, th) is None or (imb is not None and divider(imb, OTHER[th]) is None):
+            fail('%s: its tab is not divided for its Stack window' % what); continue
+        msg.append('divided for its Stack window')
     ii = os.path.join(H, 'tmp/i_%s.img' % name)
     if os.path.exists(ii):
         n2, _ = changed(P.load(ii), im, zone)

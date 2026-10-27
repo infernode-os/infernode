@@ -1872,6 +1872,38 @@ SHOUT="$(tr -d '\r' <<<"$SHOUT")"
 printf '%s\n' "$SHOUT" > "$BUILD/$PLAT-shell.txt"
 [[ "$VERBOSE" -eq 1 ]] && { echo "  --- shell session ---"; echo "$SHOUT"; }
 
+# What the shell said in reply to one typed command: the lines after
+# its echo, up to the next line the shell starts with a prompt. The
+# n'th time the command was typed if it was typed more than once.
+#
+# Not "the line that starts '; cmd' and the next two". The kernel
+# writes to the same console whenever it likes -- etherusb's link
+# watcher, its time-server timeout, a ping's reply -- and a line of its
+# that lands just after a prompt takes the prompt with it:
+#
+#     ; etherusb: link watch ended: no link state for ecm
+#     cat '#G/gpio/128/level'
+#     ?
+#
+# That is from a run of this session on a loaded host, and the check
+# anchored on "^; cat '#G/gpio/128/level'" took the SECOND cat for the
+# first and read 1 where it wanted ?. One landing between an echo and
+# its reply pushes the reply out of a fixed window the same way. The
+# echo is found with or without prompts in front of it, compared
+# whole, and the reply's own lines can be anywhere in it.
+reply_to() {
+    CMD="$2" N="${3:-1}" awk '
+        inreply && /^; / { exit }
+        inreply { print; next }
+        {
+            l = $0
+            while (substr(l, 1, 2) == "; ")
+                l = substr(l, 3)
+            if (l == ENVIRON["CMD"] && ++seen == ENVIRON["N"])
+                inreply = 1
+        }' <<<"$1"
+}
+
 # The marker appears twice: once as the terminal echo of what was
 # typed, and once as the command's output. Only the second is evidence,
 # so drop any line that still carries the command word.
@@ -1902,12 +1934,13 @@ fi
 # shared with the Pi 4 so a soak can watch both boards' heat. QEMU's
 # firmware model answers the temperature tag; the line after the marker
 # must be a number of degrees.
-if grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1 | grep -qE '^[0-9]+\.[0-9]$'; then
-    pass "#P/cputemp reads the firmware's temperature ($(grep -A1 '^PTEMP$' <<<"$SHOUT" | tail -1) C)"
+R="$(reply_to "$SHOUT" "echo PTEMP; cat '#P/cputemp'")"
+if grep -qxE '[0-9]+\.[0-9]' <<<"$R"; then
+    pass "#P/cputemp reads the firmware's temperature ($(grep -xE '[0-9]+\.[0-9]' <<<"$R") C)"
 else
-    fail "#P/cputemp -- $(grep -A2 '^PTEMP$' <<<"$SHOUT" | tail -2 | tr '\n' ' ')"
+    fail "#P/cputemp -- $(tr '\n' ' ' <<<"$R")"
 fi
-echo "  #P/throttled under QEMU: $(grep -A1 '^PTHROT$' <<<"$SHOUT" | tail -1)"
+echo "  #P/throttled under QEMU: $(reply_to "$SHOUT" "echo PTHROT; cat '#P/throttled'" | grep -vx PTHROT | tr '\n' ' ')"
 
 if grep -q '^AUTHMOUNT-$' <<<"$SHOUT" && grep -q '^/n/remote/dis/sh.dis' <<<"$SHOUT"; then
     pass "an authenticated 9P mount (Keyring->auth both ends, ML-KEM + ed25519) works on the kernel (#725)"
@@ -2556,40 +2589,47 @@ fi
 #     until something is written and the last write afterwards; on a
 #     board the firmware answers and the "?" never appears.
 #
-if grep -A4 "ls '#G/gpio/128' '#G/gpio/135'" <<<"$SHOUT" | grep -q '#G/gpio/135/level'; then
+R="$(reply_to "$SHOUT" "ls '#G/gpio/128' '#G/gpio/135'")"
+if grep -q '#G/gpio/135/level' <<<"$R"; then
     pass "expander lines are pins 128..135 in #G/gpio, each with ctl and level"
 else
-    fail "#G/gpio/128 and 135 did not list as pin directories"
+    fail "#G/gpio/128 and 135 did not list as pin directories -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "ls '#G/gpio/136'" <<<"$SHOUT" | grep -q 'does not exist\|file does not exist\|not found'; then
+R="$(reply_to "$SHOUT" "ls '#G/gpio/136'")"
+if grep -q 'does not exist\|file does not exist\|not found' <<<"$R"; then
     pass "the expander stops at 135: #G/gpio/136 does not exist"
 else
-    fail "#G/gpio/136 should not exist"
+    fail "#G/gpio/136 should not exist -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | head -2 | grep -q '^?$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/128/level'" 1)"
+if grep -qx '?' <<<"$R"; then
     pass "an expander level the firmware will not report and nothing has written reads as ?"
 else
-    fail "#G/gpio/128/level did not read ? before the first write under QEMU"
+    fail "#G/gpio/128/level did not read ? before the first write under QEMU -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "^; cat '#G/gpio/128/level'" <<<"$SHOUT" | tail -1 | grep -q '^1$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/128/level'" 2)"
+if grep -qx '1' <<<"$R"; then
     pass "writing 1 to #G/gpio/128/level (BT_ON) goes to the firmware and reads back"
 else
-    fail "#G/gpio/128/level did not read 1 after the write"
+    fail "#G/gpio/128/level did not read 1 after the write -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "echo 0 > '#G/gpio/129/level'" <<<"$SHOUT" | grep -q 'in use by ether4330'; then
+R="$(reply_to "$SHOUT" "echo 0 > '#G/gpio/129/level'")"
+if grep -q 'in use by ether4330' <<<"$R"; then
     pass "#G/gpio/129 (WL_ON) is claimed by ether4330: the radio's power cannot be pulled from under its driver"
 else
-    fail "a write to #G/gpio/129/level was not refused as ether4330's"
+    fail "a write to #G/gpio/129/level was not refused as ether4330's -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A1 "echo function out > '#G/gpio/128/ctl'" <<<"$SHOUT" | grep -q 'no function select'; then
+R="$(reply_to "$SHOUT" "echo function out > '#G/gpio/128/ctl'")"
+if grep -q 'no function select' <<<"$R"; then
     pass "an expander line's ctl refuses function/pull truthfully: the hardware has neither"
 else
-    fail "#G/gpio/128/ctl did not refuse a function write"
+    fail "#G/gpio/128/ctl did not refuse a function write -- $(tr '\n' ' ' <<<"$R")"
 fi
-if grep -A2 "^; cat '#G/gpio/129/ctl'" <<<"$SHOUT" | grep -q '^function \(unknown\|out\|in\)$'; then
+R="$(reply_to "$SHOUT" "cat '#G/gpio/129/ctl'")"
+if grep -q '^function \(unknown\|out\|in\)$' <<<"$R"; then
     pass "an expander line's ctl reads its configuration as the firmware reports it (or unknown, under QEMU)"
 else
-    fail "#G/gpio/129/ctl did not read as a function/pull report"
+    fail "#G/gpio/129/ctl did not read as a function/pull report -- $(tr '\n' ' ' <<<"$R")"
 fi
 
 #

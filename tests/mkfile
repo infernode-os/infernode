@@ -35,6 +35,7 @@ TARG=\
 	hostplumb_test.dis\
 	exception_test.dis\
 	fltfmt_test.dis\
+	nan_test.dis\
 	arrayinit_test.dis\
 	bufio_test.dis\
 	kbddrainer_test.dis\
@@ -84,6 +85,8 @@ TARG=\
 	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
 	pool_nomem_helper.dis\
+	xenith_race_helper.dis\
+	xenith_fuzz.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
 	jit_test.dis\
@@ -91,6 +94,7 @@ TARG=\
 	json_test.dis\
 	llmclient_think_gating_test.dis\
 	llmclient_reqshape_test.dis\
+	llmclient_anthropic_test.dis\
 	llmsrv_test.dis\
 	keyring_test.dis\
 	mail_provision_test.dis\
@@ -137,6 +141,7 @@ TARG=\
 	taskparse_test.dis\
 	ssl_transport_test.dis\
 	stderr_test.dis\
+	strcat_test.dis\
 	string_test.dis\
 	tcp_test.dis\
 	tempfile_test.dis\
@@ -174,6 +179,7 @@ TARG=\
 	veltro_security_test.dis\
 	veltro_test.dis\
 	veltro_tools_test.dis\
+	veltro_edit_test.dis\
 	pathmanage_test.dis\
 	tools9p_test.dis\
 	pres_launch_test.dis\
@@ -308,6 +314,41 @@ DISBIN=$ROOT/dis/tests
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs
+
+# xenith_frame_test and its suite include Xenith's own interfaces
+# (../appl/xenith/*.m): built again when one of them changes. Left as
+# they were, they no longer loaded (link typecheck) after a change to
+# one, until the tests were built again from nothing
+XENITHM=\
+	$ROOT/appl/xenith/asyncio.m\
+	$ROOT/appl/xenith/buff.m\
+	$ROOT/appl/xenith/col.m\
+	$ROOT/appl/xenith/dat.m\
+	$ROOT/appl/xenith/disk.m\
+	$ROOT/appl/xenith/docview.m\
+	$ROOT/appl/xenith/ecmd.m\
+	$ROOT/appl/xenith/edit.m\
+	$ROOT/appl/xenith/elog.m\
+	$ROOT/appl/xenith/exec.m\
+	$ROOT/appl/xenith/file.m\
+	$ROOT/appl/xenith/format.m\
+	$ROOT/appl/xenith/frame.m\
+	$ROOT/appl/xenith/fsys.m\
+	$ROOT/appl/xenith/graph.m\
+	$ROOT/appl/xenith/gui.m\
+	$ROOT/appl/xenith/look.m\
+	$ROOT/appl/xenith/regx.m\
+	$ROOT/appl/xenith/row.m\
+	$ROOT/appl/xenith/scrl.m\
+	$ROOT/appl/xenith/styxaux.m\
+	$ROOT/appl/xenith/text.m\
+	$ROOT/appl/xenith/time.m\
+	$ROOT/appl/xenith/util.m\
+	$ROOT/appl/xenith/wind.m\
+	$ROOT/appl/xenith/xenith.m\
+	$ROOT/appl/xenith/xfid.m\
+
+xenith_frame_test.dis xenith_framesuite.dis:	$XENITHM
 
 # agentlib_test needs -I for appl/veltro (tool.m)
 agentlib_test.dis: agentlib_test.b $ROOT/module/agentlib.m

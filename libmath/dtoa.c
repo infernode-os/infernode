@@ -791,7 +791,18 @@ dig_done:
 			switch (c) {
 			case 'i':
 			case 'I':
-				if (match(&s, "nfinity")) {
+				/*
+				 * "inf" or "infinity", as C99's strtod and later
+				 * releases of this file take it. Only the long
+				 * form was accepted, and the kernel's fltfmt
+				 * prints infinity as "+Inf": a real printed and
+				 * read back came back 0. (The hosted emulator
+				 * uses the C library's strtod and round-trips.)
+				 */
+				if (match(&s, "nf")) {
+					--s;
+					if (!match(&s, "inity"))
+						++s;
 					word0(rv) = 0x7ff00000;
 					word1(rv) = 0;
 					goto ret;

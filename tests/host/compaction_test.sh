@@ -104,13 +104,21 @@ FAILED=0
 ok() { echo "PASS: $1"; }
 bad() { echo "FAIL: $1"; FAILED=$((FAILED + 1)); }
 
-n=$(python3 -I -c 'import json,sys; print(sum(1 for l in open(sys.argv[1]) if str(json.loads(l)["body"]["messages"][-1].get("content","")).startswith("Summarize this conversation")))' "$WORK/req.log")
+n=$(python3 -I -c 'import json,sys; print(sum(1 for l in open(sys.argv[1]) if str(json.loads(l)["body"]["messages"][-1].get("content","")).startswith("Summarise the conversation")))' "$WORK/req.log")
 [ "$n" -gt 2 ] && ok "the session was compacted ($n times)" || bad "the session was compacted ($n times)"
 grep -q 'Model unavailable' "$LOG" && bad "no tool result outlives its call (the model service refused a turn)" || ok "no tool result outlives its call"
 for want in "Read both." "Read twice." "Done looking." "Giving up."; do
 	section text | grep -q -- "$want" && ok "a turn finishes across compaction: $want" || bad "a turn finishes across compaction: $want"
 done
 
+# What the summariser is given is the work, not its prose alone: the
+# calls the agent made and what they returned.
+python3 -I -c 'import json,sys
+for l in open(sys.argv[1]):
+    c = str(json.loads(l)["body"]["messages"][-1].get("content", ""))
+    if c.startswith("Summarise the conversation") and "[Assistant called read]" in c and "[Tool result]: " in c: sys.exit(0)
+sys.exit(1)' "$WORK/req.log" &&
+	ok "the summariser sees the tool calls and their results" || bad "the summariser sees the tool calls and their results"
 # The chat compacted: the summary first, then the last exchange as it was,
 # not in the summary.
 section context | grep -q 'Context from earlier' && ok "the chat was compacted" || bad "the chat was compacted"
@@ -120,7 +128,7 @@ python3 -I -c 'import json,sys
 for l in open(sys.argv[1]):
     m = json.loads(l)["body"]["messages"]
     c = str(m[-1].get("content", ""))
-    if c.startswith("Summarize this conversation") and "Question FOUR" in c: sys.exit(1)' "$WORK/req.log" &&
+    if c.startswith("Summarise the conversation") and "Question FOUR" in c: sys.exit(1)' "$WORK/req.log" &&
 	ok "what is kept is not summarised" || bad "what is kept is not summarised"
 [ "$FAILED" -eq 0 ] || { tail -40 "$LOG"; echo "compaction_test: $FAILED failed"; exit 1; }
 echo "compaction_test: PASS"

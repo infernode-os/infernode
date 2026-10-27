@@ -9,6 +9,7 @@ Filem : module {
 		epsilon : ref Bufferm->Buffer;	# inversion of delta for redo
 		elogbuf: ref Bufferm->Buffer;	# log of pending editor changes
 		elog: Editlog->Elog;			# current pending change
+		elognchange: int;			# buf.nchange when the edit log began
 		name : string;				# name of associated file
 		qidpath : big;				# of file when read
 		mtime : int;				# of file when read

@@ -45,9 +45,10 @@ ToolExec: module {
 };
 
 # Limits
-DEFAULT_TIMEOUT: con 5000;   # 5 seconds
-MAX_TIMEOUT: con 30000;      # 30 seconds
-MAX_OUTPUT: con 16384;       # 16KB max output
+DEFAULT_TIMEOUT: con 30000;  # 30 seconds; 5 cut off a build half way
+MAX_TIMEOUT: con 120000;     # 120 seconds, under the harness's bound on a call
+MAX_OUTPUT: con 16384;       # 16KB max output kept
+HEAD_OUTPUT: con 4096;       # of it, from the start; the rest is the end
 
 init(): string
 {
@@ -85,8 +86,10 @@ doc(): string
 		"IMPORTANT: Inferno shell syntax, not POSIX:\n" +
 		"  - No &&, ||; use ; to sequence\n" +
 		"  - Single quotes for strings\n\n" +
-		"Returns program output.\n" +
-		"Default timeout: 5 seconds (max 30s).";
+		"Returns program output: all of it, or, when it is long, its start\n" +
+		"and its end (where errors are), and how much was left out.\n" +
+		"Default timeout: 30 seconds; -t <seconds> before the command sets\n" +
+		"another (at most 120).";
 }
 
 schema(): string
@@ -97,7 +100,8 @@ schema(): string
 		"\"parameters\":{" +
 			"\"type\":\"object\"," +
 			"\"properties\":{" +
-				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. '/dis/bind.dis -a /mnt/foo /n/bar'.\"}" +
+				"\"command\":{\"type\":\"string\",\"description\":\"Full command line, e.g. '/dis/bind.dis -a /mnt/foo /n/bar'.\"}," +
+				"\"timeout\":{\"type\":\"string\",\"description\":\"Seconds to let it run. Optional; default 30, at most 120.\"}" +
 			"}," +
 			"\"required\":[\"command\"]" +
 		"}" +
@@ -121,6 +125,25 @@ exec(args: string): string
 	# Strip leading/trailing whitespace
 	while(len cmd > 0 && (cmd[0] == ' ' || cmd[0] == '\t'))
 		cmd = cmd[1:];
+
+	# -t <seconds>: how long it may run
+	timeoutms := DEFAULT_TIMEOUT;
+	if(len cmd > 3 && cmd[0:3] == "-t ") {
+		i := 3;
+		while(i < len cmd && cmd[i] == ' ')
+			i++;
+		secs := 0;
+		for(; i < len cmd && cmd[i] >= '0' && cmd[i] <= '9'; i++)
+			secs = secs * 10 + cmd[i] - '0';
+		if(secs > 0) {
+			timeoutms = secs * 1000;
+			if(secs > MAX_TIMEOUT / 1000)
+				timeoutms = MAX_TIMEOUT;
+			while(i < len cmd && (cmd[i] == ' ' || cmd[i] == '\t'))
+				i++;
+			cmd = cmd[i:];
+		}
+	}
 	while(len cmd > 0 && (cmd[len cmd - 1] == ' ' || cmd[len cmd - 1] == '\t' || cmd[len cmd - 1] == '\n'))
 		cmd = cmd[0:len cmd - 1];
 
@@ -224,11 +247,15 @@ exec(args: string): string
 	done := 0;
 
 	timeout := chan[1] of int;
-	spawn timer(timeout, DEFAULT_TIMEOUT);
+	spawn timer(timeout, timeoutms);
 
 	reader := chan[1] of string;
 	spawn readoutput(fds[0], reader);
 
+	# A long output is kept as its start and its end, and the command
+	# runs to its finish: cut off at the cap, a build or a test run was
+	# killed half way, and its errors, at the end, were lost.
+	omitted := 0;
 	while(!done) {
 		alt {
 		s := <-reader =>
@@ -236,16 +263,26 @@ exec(args: string): string
 				done = 1;
 			} else {
 				output += s;
-				if(len output > MAX_OUTPUT) {
-					output = output[0:MAX_OUTPUT] + "\n... (output truncated)";
-					done = 1;
+				if(len output > 2 * MAX_OUTPUT) {
+					drop := len output - (MAX_OUTPUT - HEAD_OUTPUT);
+					omitted += drop - HEAD_OUTPUT;
+					output = output[0:HEAD_OUTPUT] + output[drop:];
 				}
 			}
 		<-timeout =>
-			output += "\n... (timeout after 5 seconds)";
+			output += sys->sprint("\n... (timeout after %d seconds)", timeoutms / 1000);
 			done = 1;
 		}
 	}
+	if(len output > MAX_OUTPUT) {
+		drop := len output - (MAX_OUTPUT - HEAD_OUTPUT);
+		omitted += drop - HEAD_OUTPUT;
+		output = output[0:HEAD_OUTPUT] + output[drop:];
+	}
+	if(omitted > 0)
+		output = output[0:HEAD_OUTPUT] +
+			sys->sprint("\n... [%d bytes of output left out] ...\n", omitted) +
+			output[HEAD_OUTPUT:];
 
 	# Close read fd to unblock readoutput goroutine if still blocked on read
 	fds[0] = nil;

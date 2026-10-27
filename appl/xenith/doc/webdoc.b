@@ -52,16 +52,32 @@ VIEWH: con 600;		# the viewport when the view's height is not known
 
 display: ref Display;
 docs: array of ref State;
+# a document's opener runs on a proc of its own (sheetview), beside
+# another's and the closes Xenith makes: two at once took one slot,
+# one document lost and two windows sharing the other
+docslock: chan of int;
 
 init(d: ref Display): string
 {
+	if(docslock == nil)
+		docslock = chan[1] of int;
 	sys = load Sys Sys->PATH;
 	draw = load Draw Draw->PATH;
 	display = d;
 	return nil;
 }
 
+# loaded once: two documents opening at once each loaded it, and
+# the one loaded first lost its documents to the other
 loadhtmldoc(): string
+{
+	docslock <-= 1;
+	err := loadhtmldoc0();
+	<-docslock;
+	return err;
+}
+
+loadhtmldoc0(): string
 {
 	if(htmldoc != nil)
 		return nil;
@@ -153,10 +169,8 @@ relay(h: int, c, ev: chan of string)
 	for(;;){
 		e := <-c;
 		if(e == "gone"){
-			alt {
-			ev <-= "gone" =>	;
-			* =>	;
-			}
+			# sent only if the view was reading then, it read on
+			spawn sendgone(ev);
 			return;
 		}
 		s := get(h);
@@ -177,12 +191,19 @@ relay(h: int, c, ev: chan of string)
 	}
 }
 
+sendgone(c: chan of string)
+{
+	c <-= "gone";
+}
+
 close(h: int)
 {
 	if(get(h) != nil && htmldoc != nil)
 		htmldoc->drop(h);
+	docslock <-= 1;
 	if(h >= 0 && h < len docs)
 		docs[h] = nil;
+	<-docslock;
 }
 
 nsheets(h: int): int
@@ -666,6 +687,14 @@ split(e: string): (string, string)
 }
 
 add(s: ref State): int
+{
+	docslock <-= 1;
+	h := add0(s);
+	<-docslock;
+	return h;
+}
+
+add0(s: ref State): int
 {
 	for(i := 0; i < len docs; i++)
 		if(docs[i] == nil){

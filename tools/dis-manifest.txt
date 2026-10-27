@@ -756,6 +756,7 @@ dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
+dis/tests/nan_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis
 dis/tests/js-spike/gctest.dis
@@ -775,6 +776,7 @@ dis/tests/limbo_asgcall_test.dis
 dis/tests/limbo_inline_test.dis
 dis/tests/limbo_ldt_test.dis
 dis/tests/lists_test.dis
+dis/tests/llmclient_anthropic_test.dis
 dis/tests/llmclient_proxy_test.dis
 dis/tests/llmclient_reqshape_test.dis
 dis/tests/llmclient_sse_fallback_test.dis
@@ -850,6 +852,7 @@ dis/tests/spawn_helpers_test.dis
 dis/tests/spawn_test.dis
 dis/tests/ssl_transport_test.dis
 dis/tests/stderr_test.dis
+dis/tests/strcat_test.dis
 dis/tests/string_test.dis
 dis/tests/task_concurrent_probe.dis
 dis/tests/task_consistency_test.dis
@@ -882,6 +885,7 @@ dis/tests/utf21_test.dis
 dis/tests/veltro_cc_alignment_test.dis
 dis/tests/veltro_charon_security_test.dis
 dis/tests/veltro_concurrent_test.dis
+dis/tests/veltro_edit_test.dis
 dis/tests/veltro_launch_test.dis
 dis/tests/veltro_more_tools_test.dis
 dis/tests/veltro_present_security_test.dis
@@ -910,7 +914,9 @@ dis/tests/x402_test.dis
 dis/tests/x509_test.dis
 dis/tests/xenith_concurrency_test.dis
 dis/tests/xenith_exit_test.dis
+dis/tests/xenith_fuzz.dis
 dis/tests/xenith_htmldoc_test.dis
+dis/tests/xenith_race_helper.dis
 dis/tests/xml_test.dis
 dis/time.dis
 dis/timestamp.dis

@@ -321,6 +321,38 @@ is then removed.
 | 8 | Tk chrome + canvas viewport + form controls; `/mnt/charon` | interactive |
 | 9 | default switch; old engine removed (done) | everything |
 
+## Roadmap: more than one Dis VM
+
+The native kernel's experimental multi-VM work (#944, `feat/dis-multivm`;
+not yet stable) runs a Dis VM a core, each with its own heap, collector and
+modules. VMs share no Dis objects; programs in different VMs talk through
+files, and in testing pipes are the fastest way between them. `$Draw` and
+`$Tk` load only in VM 0. Charon is built the other way today: the engine,
+the page's scripts and painting share one heap, and `layout`, `page`,
+`fonts` and the script engine all call `draw(2)`.
+
+Splitting the script engine from layout is the wrong cut. A page's
+scripts read geometry synchronously and often (on JSTOR's search page box
+lookups, most of them relayout, were 2.9 s of 23), and each read would
+become a round trip between VMs. Script, style and layout of one document
+are a serial path in every browser; more cores do not shorten it.
+
+The cuts that fit, in order:
+
+| # | Step | Gain |
+|---|---|---|
+| V1 | Image decoding in a worker VM: bytes in, pixels out over a pipe; VM 0 makes the image | a decode no longer holds up the page; no Draw needed in the worker |
+| V2 | TLS and content decoding in a worker VM, behind the fetch files `webfs` already serves | network CPU off the page's core |
+| V3 | Paint to a display list, as this sketch always meant (`paint` draws straight into an `Image` now); text measured from font metrics without `draw(2)` | the engine no longer needs VM 0 |
+| V4 | One VM a page: fetch, parse, style, layout and scripts in the page's VM; VM 0 keeps the window, chrome and drawing, fed the display list over a pipe | the window answers while a page works; pages run on separate cores; sites kept apart |
+| V5 | Scripts parsed and compiled in worker VMs, if the compiled form can cross as bytes cheaper than parsing again (JSTOR: 3.3 s parse, 2 s lazy compile) | measure first |
+
+Prerequisites: the multi-VM kernel stable; a faster pipe between VMs,
+since V1, V2 and V4 all move bulk data that way; and the hosted emu able to
+run more than one VM, without which none of this reaches Charon on a
+desktop. Estimate for one load: perhaps a fifth to a third off from V1,
+V2 and V5; V4's gain is in responsiveness and in many pages at once.
+
 ## Decisions (2026-10-01)
 
 1. **The rewrite**: yes. New modules under `appl/lib/web/`

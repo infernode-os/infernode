@@ -1702,6 +1702,12 @@ fetch tool and a manifest of pins: a commit of
 `RPi-Distro/firmware-nonfree`, a revision URL per file, and a SHA256
 per file, per `docs/DESIGN-PRINCIPLES.md` ("The host boundary" —
 anything fetched is pinned and verified before it is installed).
+(2026-10-25: the release's Raspberry Pi card images now carry them, in
+`firmware/` with the licence's text, and the hosted packages still do
+not. "Not MIT" kept them out of the tree; what kept them out of the
+tarball, `.app` and `.zip` is that those run on computers with no
+Cypress part, and a card for a 3B+ or 4B is for one that has it.
+`tools/pi-firmware-manifest.txt` has the reasoning.)
 
 **Which build.** Raspberry Pi ships two tunings of the 43455 image.
 `standard` keeps roaming, DFS channels and antenna diversity;
@@ -1859,7 +1865,8 @@ counted data frames and dropped them. Both are filled in by milestones
 `.txt` (NVRAM) and `.clm_blob` (regulatory) are Cypress binaries under
 `binary-redist-Cypress` -- object form only, Cypress ICs only, no
 derivative works -- and are not MIT, so they are not in this tree and
-must never be packed into a release ("placement is shipping"). What is
+must never be packed into a hosted release ("placement is shipping";
+the Pi card images carry them, see "Why the card" above). What is
 committed is `tools/pi-firmware-manifest.txt`, pinning the commit of
 `RPi-Distro/firmware-nonfree` they come from and the SHA256 of each,
 and `tools/pi-firmware.sh`, which fetches them by that commit,

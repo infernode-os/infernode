@@ -699,6 +699,9 @@ extern	void		tksetpanelimage(Tk *tk, Image*, Image*);
 /* General - colrs.c */
 extern	void		tksetenvcolours(TkEnv*);
 
+/* General - canvs.c */
+extern	void		tkcvsretheme(Tk*);
+
 /* General - ebind.c */
 extern	void		tkcmdbind(Tk*, int, char*, void*);
 extern	TkCtxt*		tkdeldepth(Tk*);

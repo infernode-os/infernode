@@ -902,6 +902,21 @@ jobs:
         chmod +x tests/host/jit_boot_test.sh
         SDL_VIDEODRIVER=dummy tests/host/jit_boot_test.sh
 
+    - name: Run wm/wm tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # wm/wm driven by the pointer: New, the sweep and its cursor,
+        # the frame, focus, the menu's operations, a theme switch, a
+        # client leaving, wm/page, wm/sam edited through its windows,
+        # and every program in dis/wm opening at a size that shows it.
+        # wm_test.sh was written to keep New from breaking again, and
+        # nothing ran it.
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test page_test sam_gui_test; do
+          echo "--- $t ---"
+          ROOT=. sh tests/host/$t.sh
+        done
+
     - name: Upload Linux GUI build artifacts
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: success()

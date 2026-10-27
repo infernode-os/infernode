@@ -97,7 +97,17 @@ init(ctxt: ref Draw->Context, argv: list of string)
 		themec = lucitheme->watch();
 	win := wmclient->window(ctxt, "Wm", buts);
 	wmwin = win;
-	wmclient->win.reshape(((0, 0), (100, 100)));
+	# Run as another wm/wm's client, a desktop in a window: room for a
+	# window or two, as a shell's (it asked for 100x100, an empty square
+	# in the corner).  At the top, or in Lucifer's zone, it is given the
+	# display or the zone whatever it asks.
+	wr := Rect((0, 0), (640, 480));
+	dr := display.image.r;
+	if(wr.dx() > dr.dx())
+		wr.max.x = dr.dx();
+	if(wr.dy() > dr.dy())
+		wr.max.y = dr.dy();
+	wmclient->win.reshape(wr);
 	wmclient->win.onscreen("place");
 	if(win.image == nil){
 		sys->fprint(sys->fildes(2), "wm: cannot get image to draw on\n");
@@ -131,14 +141,10 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	fakekbd = chan of string;
 	exitc := chan of int;
 
-	# UI test driver: synthetic input via /chan/uitest, so interaction
-	# is scriptable and CI-testable (tests/host).  Writes, one command
-	# per write:  "ptr X Y BUTTONS"  |  "key RUNE"  (rune as decimal)  |
-	# "text STRING".
-	# Events enter the exact channels the real devices feed.
-	uitest := sys->file2chan("/chan", "uitest");
-	if(uitest != nil)
-		spawn uitestproc(uitest, wmctxt.ptr);
+	# The windows, as a file (/chan/wmwindows, and /mnt/wm/wmwindows).
+	wmwindows := sys->file2chan("/chan", "wmwindows");
+	if(wmwindows != nil)
+		spawn wmwindowsproc(wmwindows);
 	for(;;) alt {
 	wmsz := <-wmsize =>
 		win.image = win.screen.newwindow(wmsz, Draw->Refnone, Draw->Nofill);
@@ -730,7 +736,10 @@ showborders(b: array of ref Image, r: Rect, show: int)
 
 showborder(b: ref Image, show: int, r: Rect): ref Image
 {
-	if(!show)
+	# a sweep just begun is narrower than two borders: the top and
+	# bottom edges between the sides are empty, and a window that size
+	# is refused
+	if(!show || r.dx() <= 0 || r.dy() <= 0)
 		return nil;
 	if(b != nil && b.r.size().eq(r.size()))
 		b.origin(r.min, r.min);
@@ -947,14 +956,13 @@ exportproc(fd: ref Sys->FD)
 }
 
 
-# Synthetic input for tests: parse "/chan/uitest" writes and feed the
-# same channels real input arrives on.  Reads list the windows (above).
-uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
+# /chan/wmwindows: the windows, topmost first, "id minx miny maxx maxy"
+# a line, hidden ones not listed.  Input for a test is written to
+# /dev/pointer and /dev/keyboard, as for anything else on the screen.
+wmwindowsproc(f: ref Sys->FileIO)
 {
 	for(;;) alt {
 	(off, nil, nil, rc) := <-f.read =>
-		# the windows, topmost first: "id minx miny maxx maxy" each,
-		# so a test can check where moves and reshapes left them
 		if(rc == nil)
 			break;
 		t := "";
@@ -965,31 +973,9 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 		if(off > len b)
 			off = len b;
 		rc <-= (b[off:], nil);
-	(nil, data, nil, wc) := <-f.write =>
-		if(wc == nil)
-			break;
-		(n, toks) := sys->tokenize(string data, " \t\n");
-		err := "";
-		if(n >= 4 && hd toks == "ptr") {
-			x := int hd tl toks;
-			y := int hd tl tl toks;
-			b := int hd tl tl tl toks;
-			ptr <-= ref Draw->Pointer(b, (x, y), sys->millisec());
-		} else if(n >= 2 && hd toks == "key")
-			fakekbd <-= hd tl toks;
-		else if(n >= 2 && hd toks == "text"){
-			# the rest of the line, a rune at a time, as typed
-			t := string data;
-			if(t[len t - 1] == '\n')
-				t = t[0:len t - 1];
-			for(i := len "text "; i < len t; i++)
-				fakekbd <-= string t[i];
-		} else
-			err = "usage: ptr X Y BUTTONS | key RUNE | text STRING";
-		if(err != "")
-			wc <-= (0, err);
-		else
-			wc <-= (len data, nil);
+	(nil, nil, nil, wc) := <-f.write =>
+		if(wc != nil)
+			wc <-= (0, "wmwindows is read only");
 	}
 }
 

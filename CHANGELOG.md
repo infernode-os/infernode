@@ -55,10 +55,15 @@ All notable changes to InferNode are documented in this file.
 - **`tests/host/lucifer_app_test.sh`** opens every program in `dis/wm`
   in Lucifer's zone and checks that it keeps running, draws, fills the
   zone or centres in it, follows a theme switch, and (editor, shell)
-  takes typing. It finds wm/colors and wm/view taken for ended by
-  Lucifer a moment after they open (they return from `init` and run on
-  in a process group of their own, as upstream's do), and wm/deb's main
-  window never shown (it opens two, and the zone shows the first).
+  takes typing. wm/deb is not opened: it opens two windows, its Stack
+  window and its main one, and Lucifer's zone shows neither.
+- **wm/colors and wm/view open in Lucifer.** Lucifer took them for
+  ended a moment after they opened, and the zone said "No content".
+  They return from `init` and run on in a spawned process, which made a
+  process group of its own; Lucifer watches the group it gave `init`,
+  and saw it empty. The group is now made in `init`, before the spawn:
+  in Lucifer, where `init` leads its group already, that changes
+  nothing, and under wm/wm colors' Delete still spares wm/wm.
 - **The wm/wm tests run in CI.** `tests/host/wm_test.sh`, written with
   the last fix to New to keep it from breaking again, was not run by any
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and

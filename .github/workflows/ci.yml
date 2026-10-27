@@ -381,6 +381,17 @@ jobs:
         ROOT=. bash tests/host/sh_noexec_script_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
+    - name: Run sh pipeline command-substitution check
+      run: |
+        # A pipeline whose later command has a `{...} must end: the
+        # substitution's wait read the exit of a command of the
+        # pipeline already done, and sh waited for it for good.
+        # 77 = skip (no emu).
+        chmod +x tests/host/sh_pipe_bq_test.sh
+        rc=0
+        ROOT=. bash tests/host/sh_pipe_bq_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
     - name: Run dossrv badent alias check
       run: |
         # dossrv must decide "damaged entry" from the on-disk name, not
@@ -1598,6 +1609,17 @@ jobs:
         chmod +x tests/host/sh_noexec_script_test.sh
         rc=0
         ROOT=. bash tests/host/sh_noexec_script_test.sh || rc=$?
+        [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
+
+    - name: Run sh pipeline command-substitution check
+      run: |
+        # A pipeline whose later command has a `{...} must end: the
+        # substitution's wait read the exit of a command of the
+        # pipeline already done, and sh waited for it for good.
+        # 77 = skip (no emu).
+        chmod +x tests/host/sh_pipe_bq_test.sh
+        rc=0
+        ROOT=. bash tests/host/sh_pipe_bq_test.sh || rc=$?
         [ "$rc" = 0 ] || [ "$rc" = 77 ] || exit "$rc"
 
     - name: Run test suite

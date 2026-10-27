@@ -449,7 +449,7 @@ walk(ctxt: ref Context, n: ref Node, last: int): string
 		return nil;
 	case (n.ntype) {
 	n_PIPE =>
-		return waitfor(ctxt, walkpipeline(ctxt, n, nil, -1));
+		return waitfor(ctxt, walkpipeline(ctxt, n, nil, -1, globpipeline(ctxt, n)));
 	n_ASSIGN or n_LOCAL =>
 		assign(ctxt, n);
 		return nil;
@@ -510,7 +510,39 @@ assign(ctxt: ref Context, n: ref Node): list of ref Listnode
 	return val;
 }
 
-walkpipeline(ctxt: ref Context, n: ref Node, wrpipe: ref Sys->FD, wfdno: int): list of int
+# The words of each command of a pipeline, left to right, all found
+# before any of its commands is started: finding them can run a
+# command (`{...}) and wait for it, and that wait would read, and
+# drop, the exit of a command of the pipeline already done: the
+# pipeline then waited for it, and sh with it, for good.
+Pipewords: adt {
+	l: list of (list of ref Listnode, ref Redirlist);
+};
+
+globpipeline(ctxt: ref Context, n: ref Node): ref Pipewords
+{
+	w := ref Pipewords;
+	globpipe(ctxt, n, w);
+	# found from the left, kept from the right: turned round
+	l := w.l;
+	for (w.l = nil; l != nil; l = tl l)
+		w.l = hd l :: w.l;
+	return w;
+}
+
+globpipe(ctxt: ref Context, n: ref Node, w: ref Pipewords)
+{
+	if (n == nil)
+		return;
+	if (n.ntype == n_PIPE) {
+		globpipe(ctxt, n.left, w);
+		n = n.right;
+	}
+	r := ref Redirlist(nil);
+	w.l = (glob(glom(ctxt, n, r, nil)), r) :: w.l;
+}
+
+walkpipeline(ctxt: ref Context, n: ref Node, wrpipe: ref Sys->FD, wfdno: int, w: ref Pipewords): list of int
 {
 	if (n == nil)
 		return nil;
@@ -528,12 +560,12 @@ walkpipeline(ctxt: ref Context, n: ref Node, wrpipe: ref Sys->FD, wfdno: int): l
 				(fd1, fd2) = (fd2, fd1);
 			(nwfdno, rfdno) = (fd2, fd1);
 		}
-		pids = walkpipeline(ctxt, n.left, fds[1], nwfdno);
+		pids = walkpipeline(ctxt, n.left, fds[1], nwfdno, w);
 		fds[1] = nil;
 		n = n.right;
 	}
-	r := ref Redirlist(nil);
-	rlist := glob(glom(ctxt, n, r, nil));
+	(rlist, r) := hd w.l;
+	w.l = tl w.l;
 	if (fds[0] != nil) {
 		if (rfdno == -1)
 			rfdno = 0;

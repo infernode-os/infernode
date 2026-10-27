@@ -16,7 +16,8 @@
 #	display, a kernel= that is on the card);
 #	and piromcheck refuses a card with each fault a board has shown --
 #	so the check that stands in for the board cannot quietly pass;
-#	usr/ is there and empty; no skiplogon, wifi, netconsole or rootpath;
+#	usr/inferno is the tree's home, less its test key; no skiplogon, wifi,
+#	netconsole or rootpath;
 #	firmware/ holds the radio's firmware under the names the driver
 #	asks for, its Bluetooth patch, and the licence they are
 #	distributed under;
@@ -210,11 +211,21 @@ for board in rpi3bplus rpi4b; do
 		|| failed "$board: git tracks $ngit files in lib/ fonts/ icons/ and the card has $ncard"
 	grep -q "^/$untracked " "$L" && failed "$board: an untracked file in lib/ is on the card" \
 		|| pass "$board: an untracked file in lib/ is not"
-	if grep -q '^/usr/$' "$L" && ! grep -q '^/usr/.' "$L"; then
-		pass "$board: usr/ is there and empty"
-	else
-		failed "$board: usr/ is missing or not empty"
-	fi
+	# usr/inferno, the home the first boot makes its secstore account in:
+	# a card without it could not make one ("'/usr/inferno' does not
+	# exist", on a 4B) -- and no key in it, though git tracks one
+	ok=1
+	for f in usr/inferno/lib/profile usr/inferno/lib/plumbing usr/inferno/namespace usr/inferno/charon/config; do
+		has "$L" "/$f" "$f" || ok=0
+	done
+	for d in keyring secstore tmp; do
+		grep -q "^/usr/inferno/$d/\$" "$L" || { echo "    no /usr/inferno/$d/"; ok=0; }
+		grep -q "^/usr/inferno/$d/." "$L" && { echo "    /usr/inferno/$d/ is not empty: $(grep "^/usr/inferno/$d/." "$L" | head -2 | tr '\n' ' ')"; ok=0; }
+	done
+	[ $ok = 1 ] && pass "$board: usr/inferno is the tree's home, with empty keyring/, secstore/ and tmp/" \
+		|| failed "$board: usr/inferno"
+	grep -q '^/usr/inferno/keyring/default ' "$L" && failed "$board: the tree's test key (usr/inferno/keyring/default) is on the card" \
+		|| pass "$board: the tree's test key is not on the card"
 
 	FSCK=$(command -v fsck.fat 2>/dev/null || ls /usr/sbin/fsck.fat /sbin/fsck.fat 2>/dev/null | head -1)
 	if [ -n "$FSCK" ]; then

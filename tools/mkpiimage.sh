@@ -48,7 +48,9 @@
 #   - lib/, fonts/ and icons/: the files git tracks and nothing else, so
 #     that a developer's own configuration (lib/ndb/llm, keys) cannot
 #     reach an image built from their tree;
-#   - an empty usr/.
+#   - usr/inferno, the home a hosted tree carries, as git tracks it but
+#     for keyring/default (a test key): it is the machine's writable
+#     home, and the first boot makes its secstore account under it.
 # No skiplogon, wifi, netconsole or rootpath: a new card starts the
 # login screen and offers nothing on the network.
 #
@@ -156,6 +158,16 @@ mkdir -p "$STAGE/tree"
 (cd "$ROOT" && git ls-files -z -- lib fonts icons | tar --null -T - -cf -) | tar -xf - -C "$STAGE/tree" \
 	|| die "could not copy the tracked lib/, fonts/ and icons/"
 
+# usr/inferno, the home a hosted tree has (profile, plumbing, namespace,
+# charon's config; empty keyring/, secstore/ and tmp/), as git has it --
+# less keyring/default, a test key: a key on every card would be the
+# same key on every board. Without /usr/inferno the first boot could not
+# make its secstore account at all.
+(cd "$ROOT" && git ls-files -z -- usr/inferno | tr '\0' '\n' \
+	| grep -v -e '^usr/inferno/keyring/' -e '/\.gitkeep$' | tr '\n' '\0' | tar --null -T - -cf -) \
+	| tar -xf - -C "$STAGE/tree" || die "could not copy the tracked usr/inferno"
+mkdir -p "$STAGE/tree/usr/inferno/keyring" "$STAGE/tree/usr/inferno/secstore" "$STAGE/tree/usr/inferno/tmp"
+
 set -- "/infernode8.img=$KERNEL" \
 	"/README.txt=$ROOT/os/bcm/card/README.txt" \
 	"/LICENSE=$ROOT/LICENSE" "/NOTICE=$ROOT/NOTICE" \
@@ -171,7 +183,7 @@ for f in $CARDFILES; do
 	set -- "$@" "/$f=$ROOT/os/$SOC/card/$f"
 done
 set -- "$@" "/dis=$ROOT/dis" "/lib=$STAGE/tree/lib" "/fonts=$STAGE/tree/fonts" \
-	"/icons=$STAGE/tree/icons" "/usr="
+	"/icons=$STAGE/tree/icons" "/usr=$STAGE/tree/usr"
 
 python3 "$ROOT/tools/mkcard.py" "$OUT" "$SIZE" "$@" || die "mkcard failed"
 echo "mkpiimage: $OUT is a card for the $BOARD ($SOC)"

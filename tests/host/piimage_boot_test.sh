@@ -9,7 +9,9 @@
 #	grown from it, and usr/ from it, writable;
 #	the shell started, on the serial console, and answering there
 #	(it reads /dev/sysctl back);
-#	the login screen taking the framebuffer from the text console;
+#	the login screen taking the framebuffer from the text console, and
+#	the first-boot login -- a new password typed twice on the USB
+#	keyboard -- making its secstore account on the card;
 #	no panic or fault on the way.
 #
 # This is the card as a whole, booted: a file missing from it, a usr/
@@ -55,13 +57,14 @@ cp "$IMAGE" "$tmp/card.img" || exit 1
 # The boot, driven from Python for the timeouts: the console is the
 # second -serial on both machines (the first is the PL011, the radio's).
 # Wait for the milestones, then type to the shell and read its answer.
-python3 - "$QEMU" "$MACH" "$tmp/card.img" "$KERNEL" "$BOOT_TIMEOUT" > "$tmp/console.txt" 2> "$tmp/driver.txt" <<'EOF'
-import subprocess, sys, threading, time
-qemu, mach, card, kernel, limit = sys.argv[1:6]
+python3 - "$QEMU" "$MACH" "$tmp/card.img" "$KERNEL" "$BOOT_TIMEOUT" "$tmp/qmp" > "$tmp/console.txt" 2> "$tmp/driver.txt" <<'EOF'
+import json, socket, subprocess, sys, threading, time
+qemu, mach, card, kernel, limit, qmp = sys.argv[1:7]
 limit = int(limit)
 p = subprocess.Popen([qemu, "-M", mach, "-kernel", kernel,
                       "-drive", "file=%s,if=sd,format=raw" % card,
                       "-netdev", "user,id=n0", "-device", "usb-net,netdev=n0",
+                      "-device", "usb-kbd", "-qmp", "unix:%s,server=on,wait=off" % qmp,
                       "-display", "none", "-serial", "null", "-serial", "stdio"],
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 buf = bytearray()
@@ -90,6 +93,41 @@ if b"init: starting the shell" in buf:
         pass
     # the echoed command holds "echo SYSCTL-READ"; only its output starts a line with it
     wait([b"\nSYSCTL-READ"], min(end, time.time() + 30))
+    time.sleep(1)
+# The first boot's login, as a person makes it: a new password typed
+# twice on the USB keyboard, at the login screen. A card whose home
+# was missing failed exactly here, on a 4B ("cannot create
+# /usr/inferno/secstore/inferno"), and no test had ever typed one:
+# every other boot under QEMU sets skiplogon.
+if b"console released to the draw device" in buf:
+    def qkey(f, ch):
+        q = {"\n": "ret"}.get(ch, ch)
+        for down in (True, False):
+            f.write(json.dumps({"execute": "input-send-event", "arguments": {"events":
+                [{"type": "key", "data": {"down": down, "key": {"type": "qcode", "data": q}}}]}}) + "\n")
+            f.flush(); f.readline()
+            time.sleep(0.05)
+    try:
+        s = socket.socket(socket.AF_UNIX); s.connect(qmp)
+        f = s.makefile("rw"); f.readline()
+        f.write(json.dumps({"execute": "qmp_capabilities"}) + "\n"); f.flush(); f.readline()
+        time.sleep(3)
+        for word in ("piboottest42\n", "piboottest42\n"):
+            for ch in word:
+                qkey(f, ch)
+            time.sleep(2)
+    except OSError as e:
+        sys.stderr.write("qmp: %s\n" % e)
+    # the account is made, then unlocked, then the desktop starts; the
+    # key derivation is slow under emulation
+    deadline = min(end, time.time() + 90)
+    while time.time() < deadline:
+        p.stdin.write(b"ls /usr/inferno/secstore/inferno/PAK; echo; echo PAK-CHECKED\r")
+        p.stdin.flush()
+        time.sleep(4)
+        if b"/usr/inferno/secstore/inferno/PAK\r\n" in buf or b"/usr/inferno/secstore/inferno/PAK\n" in buf:
+            break
+        time.sleep(4)
     time.sleep(1)
 p.kill()
 p.wait()
@@ -121,6 +159,19 @@ if tr -d '\r' < "$C" | grep -qx 'SYSCTL-READ' && grep -q '(based on Inferno' "$C
 	pass "the shell answers on the serial console ($(grep -m1 '(based on Inferno' "$C" | grep -o 'InferNode [^(]*'))"
 else
 	failed "the shell did not answer on the serial console"
+fi
+# The first-boot login made its secstore account on the card: ls names
+# the PAK file on a line of its own (the echoed command, and a "does not
+# exist", both have more on that line).
+if tr -d '\r' < "$C" | grep -qx '/usr/inferno/secstore/inferno/PAK'; then
+	pass "the first-boot login made its secstore account on the card"
+else
+	failed "the first-boot login made no secstore account ($(tr -d '\r' < "$C" | grep -v 'PAK-CHECKED' | grep -m1 -E 'cannot create|does not exist|logon:' || echo 'no PAK'))"
+fi
+if grep -q 'wm/logon failed' "$C"; then
+	failed "logon failed: $(grep -m1 'wm/logon failed' "$C")"
+else
+	pass "logon did not fail"
 fi
 # What sercap.py, the bench's capture, marks as a fault -- less the
 # self-tests that name one and pass.

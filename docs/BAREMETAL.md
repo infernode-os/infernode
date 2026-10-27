@@ -283,8 +283,11 @@ that is `config.txt` with the two lines substituted does the same.)
 **The kernel**: `bcm2837-kernel.img`, on the card as **`infernode8.img`**.
 
 **Userspace**, from a built tree: `dis/`, `lib/`, `fonts/`, `icons/`, and
-an empty `usr/` (it becomes the machine's writable home: secstore
-accounts, keyrings).
+`usr/inferno` (the machine's writable home: secstore accounts,
+keyrings). It must exist: the first boot makes its secstore account in
+`usr/inferno/secstore/`. `mkpiimage.sh` copies the tree's, profile and
+plumbing and all, but not `usr/inferno/keyring/default`, which is a
+test key and would otherwise be the same key on every card.
 
 **Radio firmware**, if you want Wi-Fi: `tools/pi-firmware.sh` fetches the
 three `brcmfmac43455-sdio.*` files, checks them against pinned SHA-256s

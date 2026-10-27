@@ -56,24 +56,8 @@ init(ctxt: ref Context, nil: list of string)
 		ctxt = tkclient->makedrawcontext();
 	display = ctxt.display;
 
-	# Request a generous initial size (bounded by the display) rather than
-	# shrink-wrapping to the button row: the presentation zone sizes an app
-	# to its content, so a small natural size leaves the cups in a narrow
-	# left strip.  Sized large + pack-propagate off (below) the window fills
-	# the zone and the animation centres in it.
-	dr := ctxt.display.image.r;
-	iw := dr.dx() - 40;
-	ih := dr.dy() - 40;
-	if(iw < 400) iw = 400;
-	if(ih < 300) ih = 300;
 	menubut: chan of string;
-	(t, menubut) = tkclient->toplevel(ctxt, sys->sprint("-width %d -height %d", iw, ih), "Infernal Coffee", 0);
-
-	# Disable geometry propagation BEFORE packing content, so the requested
-	# window size survives: otherwise packing the (small) button row shrinks
-	# "." to its natural width before onscreen, and the presentation zone
-	# then lays us out at that narrow width.
-	cmd(t, "pack propagate . 0");
+	(t, menubut) = tkclient->toplevel(ctxt, "", "Infernal Coffee", 0);
 
 	cmdch := chan of string;
 	tk->namechan(t, cmdch, "cmd");
@@ -81,6 +65,12 @@ init(ctxt: ref Context, nil: list of string)
 	for (i := 0; i < len task_cfg; i++)
 		cmd(t, task_cfg[i]);
 
+	# The panel the cups are drawn in, at the animation's least size.  The
+	# window keeps the size it is given: what it asks for under wm/wm,
+	# the zone in Lucifer.
+	cmd(t, "panel .f.p -bd 3 -relief flat -width 400 -height 300");
+	cmd(t, "pack .f.p -fill both -expand 1");
+	cmd(t, "pack propagate . 0");
 	tk->cmd(t, "update");
 	tkclient->startinput(t, "ptr"::"kbd"::nil);
 	tkclient->onscreen(t, nil);
@@ -131,21 +121,10 @@ animate(ctl: chan of (string, int, int))
 	}
 	}
 
-	# Create and pack the panel; the buffer is (re)sized to the panel's
-	# actual extent in the loop below.  The animation centres itself in the
-	# buffer (center := buffer.r.max.div(2)); a fixed 400x300 buffer
-	# anchored the cup cluster to the top-left of a larger (e.g. presentation
-	# zone) panel, and querying the size once here is unreliable because the
-	# panel has not yet been resized to the presentation zone.  Matching the
-	# buffer to the live panel size centres the cups in whatever window we
-	# end up in.
-	cmd(t, "panel .f.p -bd 3 -relief flat");
-	cmd(t, "pack .f.p -fill both -expand 1");
-	# Stop the toplevel shrink-wrapping to the button row so the window
-	# keeps the size the wm (e.g. the presentation zone) gives it; otherwise
-	# the panel is only as wide as the buttons and the cups sit in a narrow
-	# left strip instead of centred in the zone.
-	cmd(t, "pack propagate . 0");
+	# The buffer is (re)sized to the panel's actual extent in the loop
+	# below.  The animation centres itself in the buffer (center :=
+	# buffer.r.max.div(2)), so matching the buffer to the live panel size
+	# centres the cups in whatever window we end up in.
 	cmd(t, "update");
 
 	buffer: ref Image;

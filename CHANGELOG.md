@@ -4,6 +4,71 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Window manager
+
+- **New's cross shows.** emu changed the pointer's cursor through SDL on
+  the thread that wrote `/dev/cursor`, though SDL allows cursor calls
+  only on its main thread. On macOS the main thread rebuilds the
+  window's cursor from SDL's state, and a change made under it from
+  another thread could be lost: wm/wm's menu closed on New and the
+  arrow stayed. Its gunsight and box could go the same way. The main
+  loop now makes the change.
+  `tests/host/wm_cursor_test.sh` checks each cursor wm/wm sets is made
+  SDL's, on the main thread.
+- **A sweep just begun draws no warning.** Its first rectangle is
+  narrower than two borders, and wm/wm asked for a window of negative
+  size for the edges between, which the image pool refused on standard
+  error at the start of every sweep.
+- **Every wm program opens at a size that shows it.** Under wm/wm,
+  wm/tetris opened as an 8x8 square of frame in the corner, wm/coffee
+  and wm/memory filled the screen with their content in a corner of it,
+  and a wm/wm run as a client was a 108x108 empty square. The first
+  three were made for Lucifer's presentation zone in July: tetris pinned
+  its window before its board was made, coffee and memory asked for the
+  whole display. They now ask for what they show and keep the size the
+  window manager gives, the zone's in Lucifer, as before. A nested
+  wm/wm asks for 640x480. `tests/host/wm_size_test.sh` opens every
+  program in `dis/wm` on a 2560x1600 screen and fails one that opens as
+  its frame alone or as the whole screen; `tests/host/wm_theme_test.sh`
+  fails one that opens as little more than its frame (it passed tetris,
+  finding no pixels inside to check).
+- **A theme switch reaches a canvas's items.** An item given a colour of
+  its own (a rectangle's `-fill`) kept the old theme's other colours: in
+  wm/memory the bars' outlines stayed the old theme's grey. Seen once
+  memory's window was no longer the whole screen, where they were too
+  few to count.
+- **One way to drive the GUI: `/dev/pointer` and `/dev/keyboard`.**
+  wm/wm had a test driver of its own, `/chan/uitest`, beside emu's
+  devices, which already drove Lucifer and every app in it. Each write
+  to `/dev/pointer` is now delivered as an event of its own, motion
+  included, so a drag written press, move, release is not merged into a
+  click, and it no longer moves the host's pointer: the host answered
+  with a motion carrying its own buttons, none, which let go of a
+  button a test held. `/chan/uitest` is gone; what it listed, wm/wm's
+  windows, is `/chan/wmwindows`. `tests/host/uitest_transport_test.sh`,
+  skipped since it was written for want of a way to reach an app hosted
+  in wm/wm, now runs and passes (where ffmpeg and vdec are built).
+- **wm/lens fills Lucifer's zone.** It drew a 300x300 image in the
+  zone's top-left corner, sized when it started rather than by the
+  window it was given, and the rest of the zone kept the old theme's
+  background after a switch.
+- **`tests/host/lucifer_app_test.sh`** opens every program in `dis/wm`
+  in Lucifer's zone and checks that it keeps running, draws, fills the
+  zone or centres in it, follows a theme switch, and (editor, shell)
+  takes typing. wm/deb is not opened: it opens two windows, its Stack
+  window and its main one, and Lucifer's zone shows neither.
+- **wm/colors and wm/view open in Lucifer.** Lucifer took them for
+  ended a moment after they opened, and the zone said "No content".
+  They return from `init` and run on in a spawned process, which made a
+  process group of its own; Lucifer watches the group it gave `init`,
+  and saw it empty. The group is now made in `init`, before the spawn:
+  in Lucifer, where `init` leads its group already, that changes
+  nothing, and under wm/wm colors' Delete still spares wm/wm.
+- **The wm/wm tests run in CI.** `tests/host/wm_test.sh`, written with
+  the last fix to New to keep it from breaking again, was not run by any
+  workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and
+  `page_test.sh`. The Linux GUI job runs them all now.
+
 ## [0.8.1] - 2026-10-22
 
 This release fixes what 0.8.0 shipped broken. Charon opened on a test

@@ -7,8 +7,8 @@
 #
 load std
 
-fn ptr { echo ptr $1 $2 $3 > /chan/uitest }
-fn show { sleep 2; echo R $1 `{cat /chan/uitest} }
+fn ptr { echo m $1 $2 $3 > /dev/pointer }
+fn show { sleep 2; echo R $1 `{cat /chan/wmwindows} }
 fn menu { ptr $1 $2 4; ptr $1 $3 4; ptr $1 $3 0 }
 fn click { ptr $1 $2 $3; ptr $1 $2 0 }
 

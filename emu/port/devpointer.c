@@ -54,6 +54,7 @@ static struct {
 	int	wr;
 	Pointer	clicks[Nevent];
 	Rendez r;
+	Rendez w;	/* an injected event waits here for room */
 	int	full;
 	int	put;
 	int	get;
@@ -110,6 +111,40 @@ ptrqnotempty(void *x)
 	return ptrq.full || ptrq.put != ptrq.get || ptrq.wr != ptrq.rd;
 }
 
+static int
+ptrqnotfull(void *x)
+{
+	USED(x);
+	return !ptrq.full;
+}
+
+/*
+ * An event written to /dev/pointer (a test, any headless driver):
+ * queued as it is, motion included, where mousetrack keeps only the
+ * latest position between button changes, as a mouse's motion is.  A
+ * drag written as press, move, release would otherwise lose the move
+ * when the reader fell behind, and wm/wm's sweep, which takes its
+ * rectangle from the motion while the button is held, came out too
+ * small.  It waits for room rather than being dropped.
+ */
+static void
+mouseinject(int b, int x, int y)
+{
+	Sleep(&ptrq.w, ptrqnotfull, 0);
+	mouse.v.x = x;
+	mouse.v.y = y;
+	mouse.v.b = b;
+	mouse.v.msec = osmillisec();
+	ptrq.clicks[ptrq.wr] = mouse.v;
+	if(++ptrq.wr >= Nevent)
+		ptrq.wr = 0;
+	if(ptrq.wr == ptrq.rd)
+		ptrq.full = 1;
+	mouse.modify = 1;
+	ptrq.put++;
+	Wakeup(&ptrq.r);
+}
+
 static Pointer
 mouseconsume(void)
 {
@@ -117,6 +152,7 @@ mouseconsume(void)
 
 	Sleep(&ptrq.r, ptrqnotempty, 0);
 	ptrq.full = 0;
+	Wakeup(&ptrq.w);
 	ptrq.get = ptrq.put;
 	if(ptrq.rd != ptrq.wr){
 		e = ptrq.clicks[ptrq.rd];
@@ -257,21 +293,21 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 		if(*a == 0)
 			error(Eshort);
 		y = strtoul(a, &a, 0);
-		if(*a != 0)
-			b = strtoul(a, 0, 0);
-		else
-			b = mouse.v.b;
 		/*
-		 * Inject a full pointer event (button + position), not just a
-		 * cursor move.  A write of "m<x> <y> <b>" now delivers button
-		 * state through mousetrack() so tests (and any headless driver)
-		 * can synthesise clicks — e.g. a Button-3 press to post a Tk
-		 * context menu — with no host mouse.  Omitting the button field
-		 * keeps the previous move-only behaviour (b defaults to the
-		 * current button state, so mousetrack enqueues nothing).
+		 * "m<x> <y> <b>" is a pointer event, buttons and position, as
+		 * a mouse would send it (mouseinject).  The host's pointer is
+		 * not moved for it: moving it makes the host report a motion
+		 * with its own buttons, none, which let go of a button the
+		 * event holds (a menu held open, a drag).  "m<x> <y>" alone
+		 * moves the pointer (wmlib's "ptr" request), host's and all.
 		 */
-		mousetrack(b, x, y, 0);
-		setpointer(x, y);
+		if(*a != 0){
+			b = strtoul(a, 0, 0);
+			mouseinject(b, x, y);
+		}else{
+			mousetrack(mouse.v.b, x, y, 0);
+			setpointer(x, y);
+		}
 		break;
 	case Qcursor:
 		/* TO DO: perhaps interpret data as an Image */

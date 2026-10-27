@@ -50,7 +50,14 @@ new(k: ref Kind, name: string, c: chan of ref Ev): ref View
 
 View.flowing(v: self ref View): int
 {
-	return v.web || (v.kind != nil && v.kind.class == Docreg->Source);
+	if(v.web)
+		return 1;
+	if(v.kind == nil || v.kind.class != Docreg->Source)
+		return 0;
+	# a source its engine sets in pages it paints sharp at any scale
+	# (troff's) is paged, fitted and zoomed as a PDF is; one painted at
+	# 100 only (Markdown, HTML) is set to the width
+	return v.eng == nil || v.h < 0 || !v.eng->scalable(v.h);
 }
 
 # ---- opening ----

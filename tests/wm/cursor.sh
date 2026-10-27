@@ -1,6 +1,6 @@
 #!/dis/sh.dis
 #
-# wm/wm's cursors, driven by the pointer (/chan/uitest): New's cross,
+# wm/wm's cursors, driven by the pointer (/dev/pointer): New's cross,
 # the arrow again once swept, the gunsight Delete asks with, the arrow
 # again when it is cancelled.  After each step it prints R and the
 # step's name; tests/host/wm_cursor_test.sh checks the cursor changes
@@ -9,7 +9,7 @@
 #
 load std
 
-fn ptr { echo ptr $1 $2 $3 > /chan/uitest }
+fn ptr { echo m $1 $2 $3 > /dev/pointer }
 fn mark { sleep 1; echo R $1 >[1=2] }
 # button 3 pressed at x y, moved to y2, released: the item there
 fn menu { ptr $1 $2 4; ptr $1 $3 4; ptr $1 $3 0 }
@@ -36,6 +36,6 @@ ptr 600 600 1
 ptr 600 600 0
 mark cancelled
 
-echo R windows `{cat /chan/uitest} >[1=2]
+echo R windows `{cat /chan/wmwindows} >[1=2]
 echo R done >[1=2]
 echo halt > '#c/sysctl'

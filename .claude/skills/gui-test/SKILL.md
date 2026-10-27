@@ -15,7 +15,7 @@ harnesses; pick by goal:
 | "Does this widget/layout/theme render right" | `tools/tk-snapshot.sh` → PNG |
 | Canvas/dynamic-image apps | `tests/tkimgrender.b` |
 | Screenshot a live running desktop | `scap` + `tools/p9img2png.py` |
-| Synthetic clicks/keystrokes | `/dev/pointer` and `/dev/keyboard` (anywhere, Lucifer and its apps included); `/chan/uitest` under `wm/wm` |
+| Synthetic clicks/keystrokes | `/dev/pointer` and `/dev/keyboard`, anywhere (wm/wm, Lucifer and its apps); `/chan/wmwindows` lists wm/wm's windows |
 | Tk engine/widget API regression | `tests/tk_test.b` |
 
 ## Full headless Lucifer boot
@@ -119,20 +119,23 @@ echo m 300 300 8 > /dev/pointer      # wheel up (16 down, 32 left, 64 right)
 echo -n 'some text' > /dev/keyboard  # typed, a rune at a time
 ```
 
-A write of `m x y` with no buttons only moves the pointer.  Used by
-`tests/host/xenith_zerox_typing_test.sh`, `xenith_scroll_quit_test.sh`
-and `tests/inferno/xenith_doc_test.sh`.
+A write of `m x y` with no buttons only moves the pointer.  Used by the
+wm/wm tests (`tests/wm/*.sh`, `tests/page/drive.sh`), Xenith's
+(`xenith_zerox_typing_test.sh`, `xenith_scroll_quit_test.sh`,
+`tests/inferno/xenith_doc_test.sh`) and `uitest_transport_test.sh`.
 
-**`/chan/uitest`, under `wm/wm`.** wm/wm's own driver, one command per
-write: `ptr X Y BUTTONS`, `key RUNE` (decimal), `text STRING`.  A read
-lists wm/wm's windows (`id minx miny maxx maxy`, topmost first), which
-is what `tests/host/wm_test.sh` and `wm_size_test.sh` check.
+A key of its own (Home, End, the arrows: Inferno's runes in the private
+area, `module/keyboard.m`) is written with `unicode -t`, in hex:
+`unicode -t e010 > /dev/keyboard` presses Home.  Each write to
+/dev/pointer is delivered as its own event, motion included, so a press,
+a move and a release written in turn are a drag (`man/3/pointer`).
 
-```sh
-echo ptr 400 280 1 > /chan/uitest    # button 1 down
-echo ptr 400 280 0 > /chan/uitest    # up
-echo key 32 > /chan/uitest           # space
-```
+**What wm/wm shows: `/chan/wmwindows`.** A read lists wm/wm's windows
+(`id minx miny maxx maxy`, topmost first), which is what
+`tests/host/wm_test.sh` and `wm_size_test.sh` check.  A wm/wm run as
+another's client makes its own, over the outer one's: start it in a
+name space of its own (`@{pctl forkns; wm/wm}`) to keep reading the
+outer one (`tests/wm/size.sh`).
 
 Also available: the Inferno sh Tk builtins (`man/1/sh-tk` — `load tk`,
 `tk window`, `chan`/`send`) let a shell script create and drive Tk widgets

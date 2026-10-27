@@ -32,21 +32,20 @@ cat > "$DIR/drive.sh" <<EOF
 load std
 wm/wm wm/sam /$T/fox.txt &
 sleep 5
-fn click { echo ptr \$1 \$2 1 > /chan/uitest; echo ptr \$1 \$2 0 > /chan/uitest }
-fn type { for c in \$* { echo key \$c > /chan/uitest } }
+fn click { echo m \$1 \$2 1 > /dev/pointer; echo m \$1 \$2 0 > /dev/pointer }
 click 300 120
 sleep 1
-type 44 115 47 111 47 48 47 103 10
+echo ',s/o/0/g' > /dev/keyboard
 sleep 1
 click 60 182
 sleep 1
-click 60 182; echo ptr 60 182 257 > /chan/uitest; echo ptr 60 182 0 > /chan/uitest
+click 60 182; echo m 60 182 257 > /dev/pointer; echo m 60 182 0 > /dev/pointer
 sleep 1
 click 300 120
 sleep 1
-type 99 47 115 108 101 101 112 121 47 10
+echo 'c/sleepy/' > /dev/keyboard
 sleep 1
-type 119 10
+echo w > /dev/keyboard
 sleep 2
 echo R_DONE
 EOF

@@ -37,6 +37,17 @@ All notable changes to InferNode are documented in this file.
   wm/memory the bars' outlines stayed the old theme's grey. Seen once
   memory's window was no longer the whole screen, where they were too
   few to count.
+- **One way to drive the GUI: `/dev/pointer` and `/dev/keyboard`.**
+  wm/wm had a test driver of its own, `/chan/uitest`, beside emu's
+  devices, which already drove Lucifer and every app in it. Each write
+  to `/dev/pointer` is now delivered as an event of its own, motion
+  included, so a drag written press, move, release is not merged into a
+  click, and it no longer moves the host's pointer: the host answered
+  with a motion carrying its own buttons, none, which let go of a
+  button a test held. `/chan/uitest` is gone; what it listed, wm/wm's
+  windows, is `/chan/wmwindows`. `tests/host/uitest_transport_test.sh`,
+  skipped since it was written for want of a way to reach an app hosted
+  in wm/wm, now runs and passes (where ffmpeg and vdec are built).
 - **The wm/wm tests run in CI.** `tests/host/wm_test.sh`, written with
   the last fix to New to keep it from breaking again, was not run by any
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and

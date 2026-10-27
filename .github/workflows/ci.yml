@@ -1728,6 +1728,77 @@ jobs:
         retention-days: 14
 
   # ─────────────────────────────────────────────
+  # macOS GUI: the SDL3 emulator, as the release builds it, and the GUI
+  # tests under SDL's windowless driver.  The macos job above builds the
+  # headless emulator, so without this nothing that needs a display was
+  # tested on a Mac.
+  # ─────────────────────────────────────────────
+  macos-gui:
+    name: macOS ARM64 SDL3 GUI Build & Test
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+      OBJTYPE: arm64
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install SDL3, opus and libfido2
+      run: brew install sdl3 opus libfido2 || brew install sdl3 opus libfido2
+
+    - name: Build mk
+      run: |
+        chmod +x makemk.sh
+        ./makemk.sh
+        test -x MacOSX/$OBJTYPE/bin/mk || { echo "mk build failed"; exit 1; }
+
+    - name: Build libraries and limbo
+      run: |
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        for dir in lib9 libbio libmp libsec libmath limbo libinterp; do
+          (cd $dir && mk install) || { echo "$dir build failed"; exit 1; }
+        done
+        for dir in libfreetype libkeyring libdraw libmemdraw libmemlayer; do
+          (cd $dir && mk install) || true
+        done
+        (cd libtk && mk install) || { echo "libtk build failed"; exit 1; }
+
+    - name: Build SDL3 GUI emulator
+      run: |
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        cd emu/MacOSX
+        SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=sdl3
+        test -f o.emu || { echo "Emulator build failed"; exit 1; }
+        nm o.emu | grep -q sdl3_mainloop || { echo "o.emu is not the SDL3 build"; exit 1; }
+
+    - name: Build runtime tree
+      run: |
+        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
+    - name: Run GUI tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
+        # here (77).
+        failed=
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test page_test; do
+          echo "--- $t ---"
+          rc=0
+          ROOT=. sh tests/host/$t.sh || rc=$?
+          case $rc in
+          0)	;;
+          77)	echo "($t skipped)" ;;
+          *)	failed="$failed $t" ;;
+          esac
+        done
+        [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
+
+  # ─────────────────────────────────────────────
   # Windows AMD64: MSVC build from source
   # ─────────────────────────────────────────────
   ios:

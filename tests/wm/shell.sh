@@ -68,6 +68,22 @@ enter 'echo afternested'
 sleep 2
 is interrupt-nested 'afternested' `{lines '^afternested|^NESTED'}
 
+# Ctrl-C to a command computing (here a shell in a loop of its
+# builtins): its stack is not to be read while it is ready to run, and
+# it was not taken for a command, nor killed; twice, the shell itself
+# was started again.  It is killed, and the shell is the same one after
+# (its variable kept)
+enter 'kept=yes'
+enter 'sh -c ''load std; while {} {}'''
+sleep 2
+key 3
+sleep 2
+key 3
+sleep 2
+enter 'echo afterbusy $kept'
+sleep 2
+is interrupt-busy 'afterbusy yes' `{lines '^afterbusy'}
+
 # a loop of sh's builtins has no command to kill: a second Ctrl-C, with
 # the shell not reading what is typed, starts a new one
 enter 'while {} {}'

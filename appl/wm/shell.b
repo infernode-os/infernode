@@ -844,15 +844,63 @@ runshell(sh: Command, ctxt: ref Draw->Context, pidc: chan of int)
 	sh->init(ctxt, shellargv);
 }
 
-# The shell, when two interrupts running found nothing to kill and it
-# was not reading what is typed: it is stuck (a loop of its builtins, or
-# waiting on what will not come), and only a new one answers.  (An
-# open quote or brace is not that: sh is reading for its end.)
-stuck := 0;
+# The shell, at an interrupt that found nothing to kill and it not
+# reading what is typed: between two commands, or stuck (a loop of its
+# builtins, or waiting on what will not come), where only a new one
+# answers.  (An open quote or brace is not that: sh is reading for its
+# end.)  Stuck is so at two such interrupts, the second within STUCKMS
+# and a half second after the first at least: sh waiting where it was
+# (its stack the same), or computing at both, and at neither its
+# output waiting for the window to take it (as in a flood of it, where
+# the window is slow).  Between two commands, as when it runs what was
+# typed ahead, it is neither, and a new shell would have lost what it
+# had (its directory, its variables) for nothing.
+Idle: adt {
+	ms:	int;	# when
+	stack:	string;
+	busy:	int;	# computing: its stack not to be read
+	output:	int;	# its output waiting
+};
+idle: ref Idle;
+STUCKMS: con 10000;
+
+stuck(a, b: ref Idle): int
+{
+	t := b.ms - a.ms;
+	if(t < 500 || t > STUCKMS || a.output || b.output)
+		return 0;
+	if(a.busy || b.busy)
+		return a.busy && b.busy;
+	return b.stack == a.stack;
+}
+
+# A process's stack (/prog/n/stack), and whether it is computing: the
+# stack of one ready to run is not to be read ("thread must be
+# stopped"), so it is tried again while a tenth of a second passes,
+# for one that only seemed so.  Nil and not computing: it is gone.
+readstack(pid: int): (string, int)
+{
+	f := "/prog/" + string pid + "/stack";
+	buf := array[8192] of byte;
+	for(try := 0; try < 20; try++){
+		fd := sys->open(f, Sys->OREAD);
+		if(fd == nil)
+			return (nil, 0);
+		s := "";
+		while((n := sys->read(fd, buf, len buf)) > 0)
+			s += string buf[0:n];
+		if(n == 0)
+			return (s, 0);
+		if(sys->sprint("%r") != "thread must be stopped")
+			return (nil, 0);
+		sys->sleep(5);
+	}
+	return (nil, 1);
+}
 
 newshell()
 {
-	stuck = 0;
+	idle = nil;
 	output("shell: the shell did not answer: a new one is started\n");
 	alt {
 	restartch <-= 1 =>
@@ -876,6 +924,8 @@ newshell()
 # leaves sh waiting for ever; they end when the commands they run are
 # killed.  (By the module a process is in now, a helper of sh globbing in
 # Filepat looked like a command; a command reading in Bufio, like sh.)
+# One computing, whose stack is not to be read, is a command: sh's own
+# compute only a moment.
 interrupt()
 {
 	if(shpgrp <= 0)
@@ -886,7 +936,7 @@ interrupt()
 	* =>
 		;
 	}
-	shstack := readall("/prog/" + string shpgrp + "/stack");
+	(shstack, shbusy) := readstack(shpgrp);
 	shmp := shdata(shstack);
 	fd := sys->open("/prog", Sys->OREAD);
 	if(fd == nil)
@@ -903,16 +953,26 @@ interrupt()
 			(nf, f) := sys->tokenize(readfile("/prog/" + d[i].name + "/status"), " ");
 			if(nf < 2 || int hd tl f != shpgrp)
 				continue;
-			if(iscommand(readall("/prog/" + d[i].name + "/stack"), shmp)){
+			(stack, busy) := readstack(pid);
+			if(busy || iscommand(stack, shmp)){
 				postnote(0, pid, "kill");
 				nkilled++;
 			}
 		}
 	}
-	if(nkilled > 0 || reading(shstack))
-		stuck = 0;
-	else if(++stuck >= 2)
+	if(nkilled > 0 || reading(shstack)){
+		idle = nil;
+		return;
+	}
+	if(shstack == nil && !shbusy){	# gone, or not to be read
+		idle = nil;
+		return;
+	}
+	now := ref Idle(sys->millisec(), shstack, shbusy, outputting);
+	if(idle != nil && stuck(idle, now))
 		newshell();
+	else
+		idle = now;
 }
 
 # A read of /dev/cons waiting: its count, where the bytes go, and
@@ -1082,10 +1142,16 @@ conswriter(consio: ref Sys->FileIO)
 		}
 		n := sys->utfbytes(data, len data);
 		part = data[n:];
-		if(n > 0)
+		if(n > 0){
+			outputting++;
 			outputch <-= string data[0:n];
+			outputting--;
+		}
 	}
 }
+
+# output written that the window has yet to take: the next write waits
+outputting := 0;
 
 # consctlserver handles /dev/consctl reads and writes in a separate goroutine,
 # preventing nil dereference when consctlio is nil and avoiding blocking consserver.
@@ -1533,18 +1599,6 @@ writestatefile(path, data: string)
 	b := array of byte data;
 	sys->write(fd, b, len b);
 	fd = nil;
-}
-
-readall(path: string): string
-{
-	fd := sys->open(path, Sys->OREAD);
-	if(fd == nil)
-		return nil;
-	s := "";
-	buf := array[8192] of byte;
-	while((n := sys->read(fd, buf, len buf)) > 0)
-		s += string buf[0:n];
-	return s;
 }
 
 readfile(path: string): string

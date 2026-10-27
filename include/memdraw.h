@@ -45,7 +45,7 @@ struct Memimage
 	Memcmap	*cmap;
 
 	Memdata	*data;	/* pointer to data; shared by windows in this image */
-	int		zero;		/* data->bdata+zero==&byte containing (0,0) */
+	vlong	zero;		/* data->bdata+zero==&byte containing (0,0); vlong: an image far down its coordinates passes an int */
 	ulong	width;	/* width in words of a single scan line */
 	Memlayer	*layer;	/* nil if not a layer*/
 	ulong	flags;

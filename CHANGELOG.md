@@ -90,7 +90,8 @@ All notable changes to InferNode are documented in this file.
 - **mail9p is tested against an IMAP server.** Past `connect`, nothing
   of it was: `tests/host/mail9p_imap_test.sh` runs a session against a
   fake server over verified TLS (an account's boxes, messages, flags,
-  search and archive, over TLS and over STARTTLS), and checks a server
+  search and archive, over TLS and over STARTTLS, and a message sent
+  through a fake SMTP server each way), and checks a server
   is refused when its certificate names another host or comes from a CA
   not trusted. The test's CA is its only root, bound over `/lib/certs`.
 - **TLS matches an IP address against the certificate's IP addresses.**
@@ -99,11 +100,18 @@ All notable changes to InferNode are documented in this file.
   naming the address in an `iPAddress` subjectAltName, as RFC 6125
   has it, was refused. An address is now matched against those alone,
   a name against DNS names and the CN.
-- **mail9p never sends its SMTP password in clear.** Sending used
+- **mail9p sends over STARTTLS, and never in clear.** Sending used
   plain port 25 unless the account used implicit TLS for IMAP, and
-  authenticated there with `AUTH PLAIN`; a STARTTLS account would have
-  sent the password in clear. Sends now use implicit TLS on port 465
-  whatever the IMAP mode.
+  authenticated there with `AUTH PLAIN`: a STARTTLS account would have
+  sent the password in clear. smtp(2)'s `authopen` now takes
+  `IMPLICIT_TLS` (465) or `STARTTLS` (587, RFC 3207, refused if not
+  offered or refused by the server) and refuses `PLAIN`; mail9p sends
+  as the account's IMAP mode has it. `smtp=` may be `host!port`. A
+  reply's continuation lines (EHLO's) are no longer taken for replies.
+- **No "Broken: write on closed pipe" after a TLS connection.** When
+  the caller closed its end while the server still sent (an SMTP
+  server's `221` after `QUIT`), webclient's TLS reader died on the write
+  and the system printed it.
 
 ### Veltro and the agent loop
 

@@ -12,7 +12,7 @@
 #
 # usage: fake_imap.py --mode tls|starttls|refuse --cert C --key K --log F
 
-import argparse, socket, ssl, sys
+import argparse, socket, ssl, sys, threading
 
 MSGS = [
     {"uid": 101, "flags": ["\\Seen"],
@@ -165,8 +165,9 @@ def main():
     s.bind(("127.0.0.1", 0))
     s.listen(4)
     print(s.getsockname()[1], flush=True)
-    while True:
-        c, _ = s.accept()
+    # one thread a connection: a session left open (an account not
+    # disconnected) does not keep the next waiting
+    def handle(c):
         c.settimeout(30)
         try:
             if a.mode == "tls":
@@ -191,7 +192,7 @@ def main():
                     log.write("after NO: %s\n" % (rest.decode(errors="replace").strip() or "nothing"))
                     log.flush()
                     c.close()
-                    continue
+                    return
                 c.sendall(b"%s OK Begin TLS negotiation now\r\n" % tag.encode())
                 t = ctx.wrap_socket(c, server_side=True)
                 f = t.makefile("rwb")
@@ -204,6 +205,10 @@ def main():
                 c.close()
             except OSError:
                 pass
+
+    while True:
+        c, _ = s.accept()
+        threading.Thread(target=handle, args=(c,), daemon=True).start()
 
 
 if __name__ == "__main__":

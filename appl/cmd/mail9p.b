@@ -1429,7 +1429,7 @@ smtpcreds(a: ref Account): (string, string, string)
 	if(fac == nil)
 		return (nil, nil, "cannot load Factotum");
 	fac->init();
-	(u, p) := fac->getuserpasswd("proto=pass service=smtp dom=" + a.smtpserver);
+	(u, p) := fac->getuserpasswd("proto=pass service=smtp dom=" + hostof(a.smtpserver));
 	if(u != nil && p != nil)
 		return (u, p, nil);
 	(u, p) = fac->getuserpasswd("proto=pass service=imap dom=" + hostof(a.server));
@@ -1522,10 +1522,12 @@ smtpsend(a: ref Account, msg: string, recips: list of string): string
 	if(cerr != nil)
 		return cerr;
 
-	# Implicit TLS on port 465 whatever the IMAP mode: authopen sends
-	# AUTH PLAIN, the password, and smtp has no STARTTLS, so plain port
-	# 25 would send it in clear.
-	(ok, oerr) := smtp->authopen(u, p, a.smtpserver, 1);
+	# SMTP as the account's IMAP: implicit TLS (465), or STARTTLS (587).
+	# Never in clear: the password goes in AUTH PLAIN.
+	mode := Smtp->IMPLICIT_TLS;
+	if(a.mode == Imap->STARTTLS)
+		mode = Smtp->STARTTLS;
+	(ok, oerr) := smtp->authopen(u, p, a.smtpserver, mode);
 	if(ok < 0)
 		return "smtp authopen: " + oerr;
 

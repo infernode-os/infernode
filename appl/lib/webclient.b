@@ -148,12 +148,19 @@ tlsconnfd(conn: ref Conn): (ref Sys->FD, string)
 tlsreadpump(conn: ref Conn, fd: ref Sys->FD)
 {
 	buf := array [16384] of byte;
-	for(;;) {
-		n := conn.read(buf, len buf);
-		if(n <= 0)
-			break;
-		if(sys->write(fd, buf[:n], n) != n)
-			break;
+	{
+		for(;;) {
+			n := conn.read(buf, len buf);
+			if(n <= 0)
+				break;
+			if(sys->write(fd, buf[:n], n) != n)
+				break;
+		}
+	} exception {
+	"write on closed pipe" =>
+		# the caller closed its end while the server still sent
+		# (an SMTP server's 221 after QUIT): nobody to read it
+		;
 	}
 	# Signal EOF by closing our end
 	fd = nil;

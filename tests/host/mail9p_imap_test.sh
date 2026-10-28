@@ -2,8 +2,9 @@
 #
 # tests/host/mail9p_imap_test.sh
 #
-# mail9p against an IMAP server (tests/host/mail9p/fake_imap.py), over
-# TLS whose certificate the client verifies.  The test's own CA is the
+# mail9p against an IMAP server (tests/host/mail9p/fake_imap.py) and an
+# SMTP one (tests/host/mail9p/fake_smtp.py), over TLS whose certificate
+# the client verifies.  The test's own CA is the
 # only root: a directory holding it is bound over /lib/certs in emu's
 # name space, where the TLS client reads its roots.  The certificates are
 # made here, with openssl, for 127.0.0.1 (an iPAddress subjectAltName).
@@ -13,8 +14,12 @@
 #     search (SEARCH, the UIDs read back from the box's ctl); archive
 #     (COPY to Archive and \Deleted)
 #   - connect over STARTTLS: the same server's session after the upgrade
+#   - compose sent: over implicit TLS for the TLS account, after STARTTLS
+#     for the STARTTLS one (AUTH PLAIN inside TLS, the message's Subject
+#     arriving)
 #   - refused: a certificate naming only localhost, for 127.0.0.1; one
-#     from a CA not trusted; a server declining STARTTLS
+#     from a CA not trusted; an IMAP server declining STARTTLS; an SMTP
+#     server not offering it, and one refusing it (no AUTH sent to either)
 #   - disconnect logs out
 #
 # Run from project root: ./tests/host/mail9p_imap_test.sh [-v]
@@ -78,8 +83,21 @@ P_ST=$(serve starttls good starttls)
 P_NAME=$(serve tls localonly name)
 P_CA=$(serve tls stranger ca)
 P_NO=$(serve refuse good refuse)
-for p in "$P_TLS" "$P_ST" "$P_NAME" "$P_CA" "$P_NO"; do
-    [[ -n "$p" ]] || { echo "FAIL: a fake IMAP server did not start"; cat "$D"/*.err; exit 1; }
+# sserve mode cert log -> its port
+sserve() {
+    local pf="$D/$3.port"
+    python3 -I "$ROOT/tests/host/mail9p/fake_smtp.py" --mode "$1" \
+        --cert "$D/$2.pem" --key "$D/$2.key" --log "$D/$3.log" > "$pf" 2>"$D/$3.err" &
+    PIDS="$PIDS $!"
+    for i in $(seq 50); do [[ -s "$pf" ]] && break; sleep 0.1; done
+    head -1 "$pf"
+}
+S_TLS=$(sserve tls good smtps)
+S_ST=$(sserve starttls good submission)
+S_NO=$(sserve nostarttls good smtpno)
+S_REF=$(sserve refuse good smtpref)
+for p in "$P_TLS" "$P_ST" "$P_NAME" "$P_CA" "$P_NO" "$S_TLS" "$S_ST" "$S_NO" "$S_REF"; do
+    [[ -n "$p" ]] || { echo "FAIL: a fake server did not start"; cat "$D"/*.err; exit 1; }
 done
 
 A=/mnt/mail/accounts/bob
@@ -94,7 +112,7 @@ mail9p &
 sleep 1
 
 echo '<<< 01 connect-tls >>>'
-echo connect bob 127.0.0.1!$P_TLS > /mnt/mail/ctl
+echo connect bob 127.0.0.1!$P_TLS 'smtp=127.0.0.1!$S_TLS' > /mnt/mail/ctl
 
 echo '<<< 02 account-ctl >>>'
 cat $A/ctl
@@ -126,8 +144,38 @@ echo '<<< 10 archive >>>'
 echo archive 101 > $B/ctl
 
 echo '<<< 11 connect-starttls >>>'
-echo connect st 127.0.0.1!$P_ST starttls > /mnt/mail/ctl
+echo connect st 127.0.0.1!$P_ST starttls 'smtp=127.0.0.1!$S_ST' > /mnt/mail/ctl
 cat /mnt/mail/accounts/st/ctl
+
+echo '<<< 16 compose-tls >>>'
+echo 'From: alice@example.com
+To: carol@example.org
+Subject: Sent over TLS
+
+Hi.' > $A/compose
+
+echo '<<< 17 compose-starttls >>>'
+echo 'From: alice@example.com
+To: carol@example.org
+Subject: Sent after STARTTLS
+
+Hi.' > /mnt/mail/accounts/st/compose
+
+echo '<<< 18 compose-not-offered >>>'
+echo connect sno 127.0.0.1!$P_ST starttls 'smtp=127.0.0.1!$S_NO' > /mnt/mail/ctl
+echo 'From: alice@example.com
+To: carol@example.org
+Subject: Never sent
+
+Hi.' > /mnt/mail/accounts/sno/compose
+
+echo '<<< 19 compose-refused >>>'
+echo connect sref 127.0.0.1!$P_ST starttls 'smtp=127.0.0.1!$S_REF' > /mnt/mail/ctl
+echo 'From: alice@example.com
+To: carol@example.org
+Subject: Never sent
+
+Hi.' > /mnt/mail/accounts/sref/compose
 
 echo '<<< 12 wrong-name >>>'
 echo connect name 127.0.0.1!$P_NAME > /mnt/mail/ctl
@@ -141,6 +189,8 @@ echo connect no 127.0.0.1!$P_NO starttls > /mnt/mail/ctl
 echo '<<< 15 disconnect >>>'
 echo disconnect bob > /mnt/mail/ctl
 echo disconnect st > /mnt/mail/ctl
+echo disconnect sno > /mnt/mail/ctl
+echo disconnect sref > /mnt/mail/ctl
 sleep 1
 ls /mnt/mail/accounts
 
@@ -189,6 +239,28 @@ expect 12 "a certificate naming only localhost refused for 127.0.0.1" "connect: 
 expect 13 "a certificate from an untrusted CA refused" "connect: tlsdial: tls: certificate chain verification failed"
 expect 14 "a server declining STARTTLS refused" "connect: STARTTLS refused"
 served refuse "14 nothing sent after STARTTLS's NO" '^after NO: nothing$'
+out=$(slice 16)
+if [[ -z "$out" ]]; then pass "16 compose over implicit TLS accepted"; else fail "16 compose over TLS: $out"; fi
+served smtps "16 AUTH PLAIN as the factotum key's user, inside TLS" '^user alice$'
+served smtps "16 the message sent: its Subject arrived" '^data Subject: Sent over TLS$'
+served smtps "16 to its To: address" '^RCPT TO:<carol@example.org>$'
+out=$(slice 17)
+if [[ -z "$out" ]]; then pass "17 compose after STARTTLS accepted"; else fail "17 compose after STARTTLS: $out"; fi
+served submission "17 STARTTLS taken, then EHLO again" '^STARTTLS$'
+served submission "17 the message sent after STARTTLS" '^data Subject: Sent after STARTTLS$'
+if [[ "$(sed -n '/^STARTTLS$/q;p' "$D/submission.log" | grep -c AUTH)" = 0 ]] &&
+   grep -q '^user alice$' "$D/submission.log"; then
+    pass "17 AUTH only after STARTTLS"
+else
+    fail "17 AUTH before STARTTLS: $(cat "$D/submission.log")"
+fi
+expect 18 "an SMTP server not offering STARTTLS refused" "STARTTLS not offered"
+expect 19 "an SMTP server refusing STARTTLS refused" "STARTTLS refused: 454"
+if grep -q 'AUTH\|^user\|^MAIL\|^data' "$D/smtpno.log" "$D/smtpref.log"; then
+    fail "18/19 credentials or mail sent in clear: $(cat "$D/smtpno.log" "$D/smtpref.log")"
+else
+    pass "18/19 nothing sent in clear past EHLO and STARTTLS"
+fi
 served tls "15 disconnect logs out" '^LOGOUT'
 out=$(slice 15)
 if ! echo "$out" | grep -q /mnt/mail/accounts/; then pass "15 no accounts left"; else fail "15 accounts left: $out"; fi

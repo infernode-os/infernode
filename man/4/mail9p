@@ -175,9 +175,17 @@ SMTP send tries the
 key first and falls back to the
 .BR service=imap
 key for the corresponding IMAP server, since most providers share
-credentials. Sends go over implicit TLS on port 465, whatever the
-account's IMAP mode: the password is sent, and STARTTLS on SMTP is not
-yet supported, so port 25 would send it in clear.
+credentials. Sends follow the account's IMAP mode: implicit TLS on
+port 465 for
+.BR tls ,
+STARTTLS on port 587 for
+.BR starttls .
+Neither is ever in clear: an SMTP server that does not offer STARTTLS,
+or refuses it, is refused before the password is sent.
+.B smtp=
+may name
+.IB host ! port
+for another port.
 .SH EXAMPLES
 .PP
 Connect, list folders, read the latest message in INBOX, mark it
@@ -238,10 +246,6 @@ Archive and move STORE
 .B \eDeleted
 but do not EXPUNGE, mirroring Gmail-style retention. There is no
 EXPUNGE verb exposed yet.
-.PP
-STARTTLS for SMTP is not supported; sends go over implicit TLS on
-port 465 only, so a server offering SMTP only with STARTTLS (on 587)
-cannot be sent through.
 .SH SEE ALSO
 .IR factotum (4),
 .IR llmsrv (4),

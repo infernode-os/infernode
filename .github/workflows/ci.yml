@@ -683,6 +683,121 @@ jobs:
         retention-days: 14
 
   # ─────────────────────────────────────────────
+  # Linux AMD64: the host tests no other job runs
+  # ─────────────────────────────────────────────
+  linux-amd64-host:
+    name: Linux AMD64 Host Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    permissions:
+      contents: read
+    env:
+      ROOT: ${{ github.workspace }}
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Install build dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential libfido2-dev libudev-dev
+
+    - name: Bootstrap build (mk, libraries, limbo, emulator)
+      run: |
+        chmod +x build-linux-amd64.sh
+        ./build-linux-amd64.sh headless
+
+    - name: Build runtime tree
+      run: |
+        export PATH="$ROOT/Linux/amd64/bin:$PATH"
+        ./tools/verify-dis-build.sh
+
+    - name: Compile test suite
+      run: |
+        LIMBO="$ROOT/Linux/amd64/bin/limbo"
+
+        # Build the testing module first
+        mkdir -p dis/tests dis/lib
+
+        # Build testing library
+        COMPILE_FAILURES=0
+        if [ -d tests/testing ]; then
+          cd tests/testing
+          for f in *.b; do
+            if [ -f "$f" ]; then
+              if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/dis/lib/${f%.b}.dis" "$f" 2>&1; then
+                echo "ERROR: Failed to compile testing/$f"
+                COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
+              fi
+            fi
+          done
+          cd "$ROOT"
+        fi
+
+        # Build test runner and test files into tests/ where the runner expects them
+        cd tests
+        for f in *.b; do
+          name="${f%.b}"
+          echo "Compiling $f..."
+          if ! "$LIMBO" -I "$ROOT/module" -o "$ROOT/tests/$name.dis" "$f" 2>&1; then
+            echo "ERROR: Failed to compile $f"
+            COMPILE_FAILURES=$((COMPILE_FAILURES + 1))
+          fi
+        done
+        cd "$ROOT"
+
+        # Verify runner was compiled
+        test -f tests/runner.dis || { echo "Test runner not compiled"; exit 1; }
+
+        echo "Compiled test .dis files:"
+        ls tests/*_test.dis 2>/dev/null | wc -l
+
+        if [ "$COMPILE_FAILURES" -gt 0 ]; then
+          echo "ERROR: $COMPILE_FAILURES test file(s) failed to compile"
+          exit 1
+        fi
+
+    - name: Run host tests
+      run: |
+        # tests/host scripts that no other step runs, found by running
+        # every one: the JIT's leaks, exec and namespace confinement,
+        # secstore and factotum, tools9p, the 9P services (mail9p,
+        # calendar9p, vid9p, jsfs), the serve-llm daemon, and
+        # source checks.  Those with a display are in the GUI job; those
+        # needing a live service, a key or hardware are in none.  Each
+        # must pass: a skip here (exit 77) is a test that stopped
+        # running, and fails too.
+        failed=
+        for t in activity_switch_test amd64_jit_code_leak_test \
+            amd64_jit_typecom_bound_test amd64_jit_typecom_slab_test \
+            awk_builtins_test calendar9p_test commands_test \
+            cpu_boundary_test dhcp_client_test dialogue_test \
+            dis_parser_bounds_test editor_capability_test emu_root_test \
+            emulator_leader_lifecycle_test exec_confinement_test \
+            exec_fork_no_panic_test exec_timeout_kill_test \
+            factotum_keyfile_test font_regression_test ipchecksum_test \
+            iproute_test jit_interp_handoff_test jit_real_test jsfs_test \
+            listen_rate_fairness_test llmctl_test llmsrv_flush_test \
+            mail9p_test modifier_mouse_emulation_test mount_clone_walk_test \
+            network_capability_test nsaudit_metadata_test \
+            pathmanage_test plumbrules_test profile_legacykey_test \
+            refadt_zero_test sdl3_keyboard_test secstore_apikey_test \
+            secstore_e2e_test secstore_legacy_auth_test secstore_logon_test \
+            secstored_test security_check_test serve_llm_smoke_test \
+            spawn_budget_test stale_dis_test statcheck_bounds_test \
+            strcat_test task_provisioning_test tcpseq_test \
+            tls_malformed_server_test tools9p_activity_ns_test \
+            tools9p_basics_test tools9p_env_isolation_test \
+            tools9p_integration_test tools9p_write_exec_view_test \
+            vid9p_test vid9p_transport_test write_capability_test \
+            xenith_build_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
+
+  # ─────────────────────────────────────────────
   # Linux AMD64 GUI: SDL3 build from source
   # ─────────────────────────────────────────────
   linux-amd64-gui:
@@ -936,6 +1051,31 @@ jobs:
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
+
+    - name: Run Xenith and display host tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # Host tests that need the SDL emulator, which no step ran:
+        # Xenith's 9P files (tests/host/xenith_inside.sh), its races,
+        # rescue, documents and browsing, the SDL renderer and keyboard,
+        # /dev/wmsize, Charon's engine and its origin filter.  Each must pass: a skip here
+        # (exit 77) is a test that stopped running, and fails too.
+        failed=
+        for t in sdl3_rendering_test wmsize_test uitest_transport_test \
+            charon_headless_test charon_accept_test originfs_test \
+            xenith_acme_files_test xenith_blankname_test xenith_edit_test \
+            xenith_event_test xenith_image_test xenith_browse_test \
+            xenith_scroll_focus_test xenith_scroll_quit_test \
+            xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
+            xenith_race_test xenith_doc_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
 
     - name: Upload Linux GUI build artifacts
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

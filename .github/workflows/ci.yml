@@ -801,9 +801,10 @@ jobs:
         # secstore and factotum, tools9p, the 9P services (mail9p,
         # calendar9p, jsfs), the serve-llm daemon, and
         # source checks.  Those with a display are in the GUI job; those
-        # needing a live service, a key, hardware, or ffmpeg and
-        # tools/vdec (vid9p's) are in none.  Each must pass: a skip here
-        # (exit 77) is a test that stopped running, and fails too.
+        # needing a live service, a key or hardware are in none (vid9p's,
+        # needing ffmpeg and tools/vdec, are with the GUI job's video
+        # tests).  Each must pass: a skip here (exit 77) is a test that
+        # stopped running, and fails too.
         mkdir -p tmp
         failed=
         for t in ${{ matrix.tests }}; do
@@ -1077,8 +1078,8 @@ jobs:
         # Host tests that need the SDL emulator, which no step ran:
         # Xenith's 9P files (tests/host/xenith_inside.sh), its races,
         # rescue, documents and browsing, the SDL renderer, /dev/wmsize,
-        # Charon's engine and its origin filter (uitest_transport_test
-        # also needs ffmpeg and tools/vdec, and is left out).  Each must
+        # Charon's engine and its origin filter (uitest_transport_test,
+        # which needs vdec too, is with the video tests below).  Each must
         # pass: a skip here (exit 77) is a test that stopped running, and
         # fails too.
         failed=
@@ -1089,6 +1090,32 @@ jobs:
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
             xenith_race_test xenith_doc_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
+
+    - name: Build tools/vdec (vid9p's decoder)
+      run: |
+        # FFmpeg 6.1, as the crate is pinned to.  ffmpeg-next's default
+        # features link libavdevice, libavfilter and libswresample too;
+        # libavdevice-dev brings the other two.
+        sudo apt-get install -y clang ffmpeg libavcodec-dev libavformat-dev \
+          libavutil-dev libswscale-dev libavdevice-dev
+        (cd tools/vdec && cargo build --release --locked)
+
+    - name: Run video tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # vid9p serving frames vdec decoded, its transport (play, pause,
+        # seek) paced by the clock, and the Matrix video pane driving it
+        # through /dev/pointer and /dev/keyboard.  A skip fails, as above.
+        failed=
+        for t in vid9p_test vid9p_transport_test uitest_transport_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?

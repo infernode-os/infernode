@@ -185,6 +185,12 @@ non-boot keyboards work on real hardware.
 
 ### Veltro and the agent loop
 
+- **serve-llm starts with no model configured.** When
+  `~/.infernode/lib/ndb/llm` named no `model=` (or did not exist),
+  `serve-profile` passed llmsrv `-M` with nothing after it: the next
+  option became the model (`-r`), or llmsrv refused to start and
+  `/mnt/llm` was exported empty. `tests/host/serve_llm_smoke_test.sh`
+  now mounts `/mnt/llm` with the key and reads a session's model.
 - **The Limbo compile gate runs**, and `limbo compile <file.b>`
   checks any file.
 - **Edits to user folders are staged**, reported as staged, applied

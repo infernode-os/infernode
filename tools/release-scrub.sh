@@ -32,11 +32,17 @@ find "$STAGE" -type d -name keyring -path '*/usr/*/keyring' | while read -r d; d
 	find "$d" -mindepth 1 -type f -print -exec rm -f {} \; | sed 's/^/release-scrub: removed /'
 done
 
-found=$(find "$STAGE" -type f -size -64k -print | while read -r f; do
-	# an Inferno key file: "NNNN" then the algorithm, as keyring.c writes it
-	if head -c 64 "$f" 2>/dev/null | head -2 | tr -d '\r' | {
+# an Inferno key file: "NNNN" then the algorithm, as keyring.c writes it.
+# A function, not inline: bash 3.2 (macOS's /bin/sh) misreads a case
+# pattern's ")" inside $( ).
+isinfernokey() {
+	head -c 64 "$1" 2>/dev/null | head -2 | tr -d '\r' | {
 		read -r n && read -r alg && case $n in ''|*[!0-9]*) false ;; esac &&
-		case $alg in ed25519|elgamal|rsa|dsa) true ;; *) false ;; esac; }; then
+		case $alg in ed25519|elgamal|rsa|dsa) true ;; *) false ;; esac; }
+}
+
+found=$(find "$STAGE" -type f -size -64k -print | while read -r f; do
+	if isinfernokey "$f"; then
 		echo "$f"
 	elif grep -q -E -e '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' "$f" 2>/dev/null; then
 		echo "$f"

@@ -4,6 +4,81 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-29
+
+This release adds SD-card images for the Raspberry Pi 3B+ and 4B, which
+boot the native kernel to its login screen. Packages no longer ship the
+tree's test key: anyone who authenticated with the default key should
+make their own (see Security). Lucifer shows every window an app opens,
+dialogs and secondary windows among them. Xenith keeps unsaved work in a
+rescue file when it hits an internal error, and a fuzzer found and fixed
+its races and lost edits. The Veltro harness gets whole replies,
+thinking, retries and working child agents, and llmsrv compacts a
+session before it outgrows its model's window. mail9p speaks STARTTLS
+for IMAP and SMTP and never sends a password in clear.
+
+### Security
+
+- **No package ships the tree's test key.** Every release package
+  carried `usr/inferno/keyring/default`, an ed25519 private key for
+  `testnode` committed to this public repository, and `listen`,
+  `styxlisten`, `mount`, `dial`, `cpu` and `rcmd` use it when no key is
+  named. Every install from a release therefore held the same private
+  key. `tools/release-scrub.sh` now empties each `usr/*/keyring/` in a
+  package and refuses the package if an Inferno key file or a PEM
+  private key is left anywhere in it; every package job runs it, and
+  `tests/host/release_scrub_test.sh` fails if one does not. **If you
+  authenticated with the default key from an earlier release, make a
+  key of your own (`auth/createsignerkey`, `getauthinfo`) and stop
+  trusting `testnode`.**
+
+### Packages
+
+- **Raspberry Pi 3B+ and 4B card images.** Each release has
+  `infernode-<version>-rpi3bplus.img.xz` and
+  `infernode-<version>-rpi4b.img.xz` (about 22 MB), written whole with
+  Raspberry Pi Imager ("Use custom"), `dd` or Etcher. A card boots the
+  native kernel to the first-boot login screen and offers nothing on the
+  network until its `wifi` or `bt` file says so; its `README.txt` says
+  how. The boot firmware and the Bluetooth patch are pinned by commit and
+  SHA-256. The radio's Wi-Fi firmware and Bluetooth patch ship on these
+  images only, beside `LICENCE.cypress`, whose grant covers use with
+  Cypress chips and so not the PC packages. `tests/host/piimage_test.sh`
+  reads the images back and checks their files; the release job checks
+  each against the boot ROM's rules (`tools/piromcheck.py`) and boots it
+  under QEMU, through the first login (`tests/host/piimage_boot_test.sh`).
+  Both boards have booted the images; the 4B has joined Wi-Fi, brought
+  up Bluetooth and made its first login from one. Not yet tried on a
+  board: the 3B+'s Wi-Fi, Bluetooth and first login, and a card written
+  by Imager or Etcher rather than `dd`.
+- **First-boot login makes the whole home path.** `wm/logon` made
+  `secstore/` but not `/usr/inferno` above it, so on a card with an
+  empty `usr/` the new password was refused.
+- **macOS stapling is retried.** `xcrun stapler` sometimes lost its
+  connection to Apple fetching the notarization ticket (NSURLErrorDomain
+  -1005) after notarization had succeeded, failing the job; it is now
+  tried five times.
+
+### Emulator
+
+- **The idle collector rests on a static heap, now also when something
+  wakes now and then.** 0.8.1's fix counted the collector's passes round
+  the heap afresh in each idle moment, and a moment ends as soon as
+  anything is runnable. Headless Charon has a proc that wakes and does
+  nothing, so no moment was long enough and the collector never
+  stopped: a whole core, again. Passes are now counted from the heap's
+  last change. `idle_cpu_test.sh` failed 3 of 3 before, passes after.
+- **`s += s` no longer overflows its block.** Appending a string to
+  itself in place set the new length before copying the right operand,
+  which was by then the new length too, so twice the bytes were copied,
+  past the block, under the interpreter and the JIT alike. It corrupted
+  the heap in CI. `tests/strcat_test.b`.
+- **An image far from 0 in its coordinates is made.** memdraw's byte
+  offset to pixel (0,0) was an `int`; for an image whose top is past
+  about row 160000 at 3400 pixels wide it wrapped and allocation
+  faulted. A strip far down a long Markdown document is such an image.
+  `tests/memdraw_far_test.b`.
+
 ### Window manager
 
 - **The pointer is warped on SDL's main thread.** A move written to
@@ -63,8 +138,22 @@ All notable changes to InferNode are documented in this file.
 - **`tests/host/lucifer_app_test.sh`** opens every program in `dis/wm`
   in Lucifer's zone and checks that it keeps running, draws, fills the
   zone or centres in it, follows a theme switch, and (editor, shell)
-  takes typing. wm/deb is not opened: it opens two windows, its Stack
-  window and its main one, and Lucifer's zone shows neither.
+  takes typing.
+- **Lucifer shows every window an app opens.** Only an app's first
+  window was shown in the presentation zone; a dialog or a second
+  toplevel was dropped, and wm/deb, whose Stack window registers second,
+  hung at start. The zone now divides the app's tab among its windows,
+  newest on top, with a divider between; a click gives the window under
+  it the keyboard.
+- **The tab strip shows over an app on every boot.** lucipres, which
+  draws it, and presrender could join the zone in either order, and the
+  first was taken for lucipres; on about one boot in three the strip
+  stayed blank under the app. They are now told apart by their
+  registration tokens. `tests/host/presentation_tabstrip_test.sh`
+  boots Lucifer six times and checks the strip each time.
+- **The file selector follows the theme.** Every app's Open dialog had
+  its path entry, column frames and titles in fixed colours that a theme
+  switch kept.
 - **wm/colors and wm/view open in Lucifer.** Lucifer took them for
   ended a moment after they opened, and the zone said "No content".
   They return from `init` and run on in a spawned process, which made a
@@ -76,6 +165,85 @@ All notable changes to InferNode are documented in this file.
   the last fix to New to keep it from breaking again, was not run by any
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and
   `page_test.sh`. The Linux GUI job runs them all now.
+
+### Xenith
+
+- **Unsaved work is kept when Xenith goes wrong.** An internal error in
+  the mouse, keyboard or wait task, in a 9P request or in an Edit is now
+  recovered from rather than ending Xenith. After one, and on any exit
+  nobody asked for, every window (unnamed ones and typing not yet
+  committed included) is written to `$home/xenith.rescue` in Dump's
+  format; `+Errors` says where, and `Load` brings the windows back.
+  Dump's own `xenith.dump` is no longer overwritten, and a Zerox of a
+  window a client held no longer cost the dump every window after it in
+  its column. `tests/host/xenith_rescue_test.sh`; `docs/XENITH.md` has a
+  section on the file.
+- **Races and lost edits, found by a fuzzer.** `tools/xenith-fuzz` drives
+  a headless Xenith (standalone or in Lucifer) with random clicks, drags,
+  chords, typing and a client writing through `/mnt/xenith` at once, then
+  checks it answers, that Put writes what a window holds and that undo
+  and redo restore its text. Fixed from what it and the race tests found:
+  - a B3 in a scroll bar went on scrolling after it was let go;
+  - a client's `get` lost typing in the body; a B3 in the tag lost it;
+  - a search begun at the end of the file did not come round;
+  - Put of a file still loading wrote only what had loaded, and an edit
+    or an Edit (`$a`) made while it loaded went in the wrong place;
+  - an Edit pipe (`,|cmd`, `X ,|sort`) overwrote text changed while its
+    command ran, losing both; it now refuses that window and keeps the
+    text;
+  - a background Put marked a window saved though a change arrived
+    during the write;
+  - Redo after a client's change with `nomark` set put undone text back
+    where the text no longer was; an undo record that no longer matched
+    the text is now dropped with a warning, not half applied;
+  - text reaching a window hidden under one grown to fill its column,
+    `Put x` in an unnamed window, and a command that could not start all
+    ended Xenith;
+  - locks held after an exception, a window freed under a 9P request,
+    and documents opened twice from two procs.
+
+  `tests/host/xenith_race_test.sh` has a check for each.
+- **Typing goes into a live document's text once.** With a source shown
+  `Live` beside its text, a refresh committed each window's copy of the
+  pending typing, so it went in twice.
+- **Cmd-V pastes into a page's form field.** A page browsed in Xenith
+  dropped ^V in a field, so a password or a search could not be pasted.
+- **The standalone Xenith runs the user's start-up file.**
+  `lib/xen/boot.sh` runs `/usr/<user>/lib/xen/profile` (or
+  `/usr/inferno/lib/xen/profile`) before Xenith, in the shell that runs
+  it, so what it binds (a package such as troff, its own `doctypes`) is
+  in Xenith's name space. `docs/XEN.md`, "Your start-up file".
+- **Markdown is laid out once and drawn a strip at a time.** Each
+  Markdown document was drawn whole into one image as tall as itself,
+  70 MB and more at 2x, and with `Live` a second while the first was
+  shown, until a refresh failed with `allocimage`. Image memory for
+  `AGENTS.md` live at 2x fell from a 224 MB peak to 51 MB.
+
+### Documents
+
+- **A source set in pages is fitted, not set to the width.** The
+  document view held every source document at scale 100 and set it to
+  the view's width, as Markdown and HTML are. A troff document, set in
+  pages and painted sharp at any scale, opened at half size on a Retina
+  screen. A source whose engine paints at any scale is now paged, fitted
+  and zoomed as a PDF is.
+
+### Charon and the browser engine
+
+- **An image a page's script puts in is fetched.** Images were sent for
+  once, as the page loaded; one a script added later showed its alt
+  text (JSTOR's logo). `tests/host/charon_scriptimg_test.sh`.
+- **A shadow tree's top element is not the root, and a scrolling grid
+  item has no automatic minimum.** JSTOR's home page had its heading,
+  search and hero in a 144-pixel column, then was laid out 35000 pixels
+  wide. `tests/host/charon_shadowgrid_test.sh`.
+- **Box lookups and mutation observers cost less on heavy pages.** Boxes
+  are indexed by node once per layout, and observers found by target:
+  about 7% of the busy time on JSTOR's search results.
+- `tests/host/charon_notpage_test.sh` expects a link to audio to be
+  saved, as it has been since 0.8.1, and runs in CI.
+- docs/CHARON-ENGINE.md: a roadmap for Charon across more than one Dis
+  VM.
 
 ### Mail
 
@@ -121,6 +289,67 @@ All notable changes to InferNode are documented in this file.
   option became the model (`-r`), or llmsrv refused to start and
   `/mnt/llm` was exported empty. `tests/host/serve_llm_smoke_test.sh`
   now mounts `/mnt/llm` with the key and reads a session's model.
+- **Whole replies.** llmsrv capped every session's output at 1024
+  tokens and reported a reply cut off by it as `end_turn`. The cap is
+  now the backend's, and a cut-off reply is `STOP:max_tokens`; the loop
+  continues cut-off text and sends cut-off tool calls again rather than
+  running them.
+- **Current Claude models, thinking and streaming.** The aliases name
+  the 5.5 models (default `claude-sonnet-5-5`), each request carries
+  what its model accepts, thinking blocks are kept and sent back with
+  their signatures, and the Anthropic path streams. Not yet run against
+  the API itself, only against recorded requests and responses.
+- **Retries.** A request refused before any of its answer was shown
+  (429, 5xx, 529, a backend not yet listening) is retried with backoff,
+  honouring `Retry-After`. llmclient waits up to 5 minutes for a first
+  byte, so a request queued on a one-at-a-time server is not lost.
+- **Compaction before a session outgrows its model's window.** llmsrv
+  compacted at a fixed 150,000 tokens, past gpt-oss's 65,536 on SGLang
+  and Ollama's default 4096. Each model's window is now learned from its
+  backend (vLLM, SGLang, Ollama, Anthropic), is a file
+  (`/mnt/llm/<id>/window`, or `window=` in `/lib/ndb/llm`), and is
+  learned again from a "context too long" refusal, after which llmsrv
+  compacts and asks once more. A turn of many tool results is compacted
+  in its middle, the step under way kept whole.
+  `tests/host/context_window_test.sh`.
+- **Child agents work.** No spawned child ever had a model: tools9p kept
+  `/mnt/llm` out of spawn's name space. Children now get it, and native
+  tool definitions.
+- **Steering and a stable prompt.** Input typed during a turn is
+  delivered with the next tool results. The system prompt is sent once
+  (later changes ride on the next message), and only `exec` and
+  `spawn` docs are inlined, about 49 KB less with every tool on.
+  `veltro -r` restores the exact history.
+- **Tools.** `edit` takes several changes per call and matches past the
+  read tool's line numbers, trailing blanks and curly quotes; `read`
+  gives 2000 lines or 30 KB and the next offset; `exec`'s timeout is 30
+  s (settable to 120), and long output keeps its start and end; read-only
+  calls in a batch run concurrently. The `limbo` tool may edit and
+  compile the agent's own Limbo and closes its model session after each
+  call (they had piled up to llmsrv's limit). Tools that call a model
+  get the model's time limit, not 60 s. `task` refuses a brief naming a
+  folder the task would not see, saying which `paths=` to add.
+
+### Bare metal
+
+- **NaN and infinity on the 64-bit kernels.** libkernfp took a double
+  apart assuming a 32-bit `long`, so `isNaN` never saw a NaN and `Inf()`
+  was 0.0; the Limbo compiler died on a board with "bad canonical NaN".
+  `strtod` now also reads `Inf`, as reals are printed. `tests/nan_test.b`.
+- **A Pi 3B+'s Bluetooth controller gets the board's own address.**
+  Every 3B+ reported the patch's default `43:45:c0:00:1f:ac`.
+  `btboardaddr(1)` gives it the address Raspberry Pi OS does, from the
+  board's serial, unless the card's `bt` file names a `bdaddr`.
+- **`/dev/gpio` lists its pins by name.** The generator formatted each
+  name on its own stack, gone by the time the listing used it, so every
+  pin listed as nothing.
+- **bt9p: a listen open on a queued call is not refused.** The `listen`
+  file was mode `444`; when a call arrived before the listener, the
+  read-write open was refused and `listen(1)` exited, and every later
+  call to that PSM was turned away. Under load, 3 L2CAP connections in
+  20 s instead of about 350.
+- `baremetal_test.sh` keeps the bcm2837 shell transcripts and finds a
+  command's reply after its echo, past console lines that interleave.
 
 ## [0.8.1] - 2026-10-22
 

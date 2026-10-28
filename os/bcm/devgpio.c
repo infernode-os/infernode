@@ -222,7 +222,6 @@ gpiogen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 {
 	Qid q;
 	int pin;
-	char nm[8];
 
 	USED(tab);
 	USED(ntab);
@@ -250,9 +249,15 @@ gpiogen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 		if(s < 0 || s >= Npin + Nexppin)
 			return -1;
 		pin = s < Npin ? s : Gpioexpbase + s - Npin;
-		snprint(nm, sizeof nm, "%d", pin);
+		/*
+		 * In up->genbuf, as devprog names its pids, not a buffer of
+		 * our own: devdir keeps the pointer, and devwalk and
+		 * devdirread use the name after we return, when a buffer on
+		 * this stack is dead. Listings came back garbage.
+		 */
+		snprint(up->genbuf, sizeof up->genbuf, "%d", pin);
 		mkqid(&q, QPATH(pin, Qpin), 0, QTDIR);
-		devdir(c, q, nm, 0, eve, DMDIR|0555, dp);
+		devdir(c, q, up->genbuf, 0, eve, DMDIR|0555, dp);
 		return 1;
 	case Qpin:
 	case Qctl:
@@ -279,9 +284,9 @@ gpiogen(Chan *c, char *name, Dirtab *tab, int ntab, int s, Dir *dp)
 				devdir(c, q, "gpio", 0, eve, DMDIR|0555, dp);
 				return 1;
 			}
-			snprint(nm, sizeof nm, "%d", pin);
+			snprint(up->genbuf, sizeof up->genbuf, "%d", pin);	/* as above */
 			mkqid(&q, QPATH(pin, Qpin), 0, QTDIR);
-			devdir(c, q, nm, 0, eve, DMDIR|0555, dp);
+			devdir(c, q, up->genbuf, 0, eve, DMDIR|0555, dp);
 			return 1;
 		}
 		if(s == 0){

@@ -710,7 +710,7 @@ jobs:
               network_capability_test pathmanage_test plumbrules_test
               secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
-              tools9p_integration_test vid9p_test
+              tools9p_integration_test
           - shard: 2
             tests: >-
               amd64_jit_code_leak_test awk_builtins_test calendar9p_test
@@ -727,7 +727,7 @@ jobs:
               strcat_test task_provisioning_test tcpseq_test
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
-              vid9p_transport_test write_capability_test xenith_build_test
+              write_capability_test xenith_build_test
     permissions:
       contents: read
     env:
@@ -799,11 +799,12 @@ jobs:
         # tests/host scripts that no other step runs, found by running
         # every one: the JIT's leaks, exec and namespace confinement,
         # secstore and factotum, tools9p, the 9P services (mail9p,
-        # calendar9p, vid9p, jsfs), the serve-llm daemon, and
+        # calendar9p, jsfs), the serve-llm daemon, and
         # source checks.  Those with a display are in the GUI job; those
-        # needing a live service, a key or hardware are in none.  Each
-        # must pass: a skip here (exit 77) is a test that stopped
-        # running, and fails too.
+        # needing a live service, a key, hardware, or ffmpeg and
+        # tools/vdec (vid9p's) are in none.  Each must pass: a skip here
+        # (exit 77) is a test that stopped running, and fails too.
+        mkdir -p tmp
         failed=
         for t in ${{ matrix.tests }}; do
           echo "::group::$t"

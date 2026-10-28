@@ -57,9 +57,22 @@ def connect(port):
     s = socket.create_connection(("127.0.0.1", port), timeout=2)
     s.settimeout(1)
     return s
+# The greeting's first bytes, however TCP splits them: "0001\n" can come
+# alone, before the "2".
+def greeting(s):
+    got = b""
+    while len(got) < 6:
+        try:
+            b = s.recv(32)
+        except OSError:
+            break
+        if not b:
+            break
+        got += b
+    return got
 
 held = connect(port)
-if not held.recv(32).startswith(b"0001\n2"):
+if not greeting(held).startswith(b"0001\n2"):
     raise SystemExit("first handshake got no auth greeting")
 
 # With -P 1 these are all rejected by the source cap.  With the old order,
@@ -76,14 +89,14 @@ held.close()
 time.sleep(0.15)
 s = connect(port)
 try:
-    got = s.recv(32)
+    got = greeting(s)
 finally:
     s.close()
 if not got.startswith(b"0001\n2"):
     raise SystemExit("eligible handshake was starved by source-cap rejects")
 
 held = connect(port2)
-if not held.recv(32).startswith(b"0001\n2"):
+if not greeting(held).startswith(b"0001\n2"):
     raise SystemExit("global-cap handshake got no auth greeting")
 
 # These find the one global slot occupied.  They must not consume the seven
@@ -100,7 +113,7 @@ held.close()
 time.sleep(0.15)
 s = connect(port2)
 try:
-    got = s.recv(32)
+    got = greeting(s)
 finally:
     s.close()
 if not got.startswith(b"0001\n2"):

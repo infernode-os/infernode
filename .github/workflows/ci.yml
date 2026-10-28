@@ -1076,11 +1076,13 @@ jobs:
       run: |
         # Host tests that need the SDL emulator, which no step ran:
         # Xenith's 9P files (tests/host/xenith_inside.sh), its races,
-        # rescue, documents and browsing, the SDL renderer and keyboard,
-        # /dev/wmsize, Charon's engine and its origin filter.  Each must pass: a skip here
-        # (exit 77) is a test that stopped running, and fails too.
+        # rescue, documents and browsing, the SDL renderer, /dev/wmsize,
+        # Charon's engine and its origin filter (uitest_transport_test
+        # also needs ffmpeg and tools/vdec, and is left out).  Each must
+        # pass: a skip here (exit 77) is a test that stopped running, and
+        # fails too.
         failed=
-        for t in sdl3_rendering_test wmsize_test uitest_transport_test \
+        for t in sdl3_rendering_test wmsize_test \
             charon_headless_test charon_accept_test originfs_test \
             xenith_acme_files_test xenith_blankname_test xenith_edit_test \
             xenith_event_test xenith_image_test xenith_browse_test \

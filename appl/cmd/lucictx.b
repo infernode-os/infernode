@@ -300,6 +300,8 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 
 	# Context flash timer (animate activity indicator fade-out)
 	spawn ctxtimer(evch);
+	reloadch := chan[1] of int;
+	reloadch_g = reloadch;
 
 	# Event loop
 	prevbuttons := 0;
@@ -611,6 +613,15 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 		}
 	ev := <-evch =>
 		handleevent(ev);
+		if(reloaddue(reloadch)){
+			flushreload();
+			redrawctx();
+		}else if(!stales(ev))
+			redrawctx();
+	<-reloadch =>
+		reloadarmed = 0;
+		if(reloaddue(reloadch))
+			flushreload();
 		redrawctx();
 	newimg := <-rsz =>
 		mainwin = newimg;
@@ -755,11 +766,66 @@ handleevent(ev: string)
 		}
 		return;
 	}
+	# What the zone shows is loaded again (flushreload), not at each of
+	# these: an agent's every step is an event, and loading everything
+	# for each of a burst of them left the zone minutes behind
 	if(ev == "catalog" || ev == "tick")
+		dirtycat = 1;
+	if(hasprefix(ev, "context") || ev == "tick")
+		dirtyctx = 1;
+	if((dirtycat || dirtyctx) && !reloadarmed){
+		# the reload's time comes even with no event after (one taken
+		# by the file browser while it is open)
+		reloadarmed = 1;
+		since := sys->millisec() - lastreload;
+		if(since < 0 || since > RELOADMS)
+			since = RELOADMS;
+		spawn reloadafter(reloadch_g, RELOADMS - since);
+	}
+	if(hasprefix(ev, "theme "))
+		reloadcolors();
+}
+
+# What events have made stale, and the reload of it: at once if none
+# was made in the last RELOADMS, else once that has passed
+dirtycat := 0;
+dirtyctx := 0;
+reloadch_g: chan of int;
+lastreload := 0;
+reloadarmed := 0;
+RELOADMS: con 200;
+
+# Whether ev only makes what the zone shows stale (drawn with the reload)
+stales(ev: string): int
+{
+	return ev == "catalog" || ev == "tick" || hasprefix(ev, "context");
+}
+
+reloaddue(reloadch: chan of int): int
+{
+	if(!dirtycat && !dirtyctx)
+		return 0;
+	since := sys->millisec() - lastreload;
+	if(since >= RELOADMS || since < 0)
+		return 1;
+	if(!reloadarmed){
+		reloadarmed = 1;
+		spawn reloadafter(reloadch, RELOADMS - since);
+	}
+	return 0;
+}
+
+reloadafter(reloadch: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	reloadch <-= 1;
+}
+
+flushreload()
+{
+	if(dirtycat)
 		loadcatalog();
-	if(ev == "catalog")
-		return;
-	if(hasprefix(ev, "context") || ev == "tick") {
+	if(dirtyctx){
 		# Reload tools on every tick — detects add/remove via /tool/ctl
 		reloadtools();
 		loadcontext();
@@ -767,8 +833,8 @@ handleevent(ev: string)
 		loadmanifest();
 		loadagentname();
 	}
-	if(hasprefix(ev, "theme "))
-		reloadcolors();
+	dirtycat = dirtyctx = 0;
+	lastreload = sys->millisec();
 }
 
 reloadcolors()

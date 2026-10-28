@@ -30,7 +30,7 @@ pin does not yet build against — tracked as a follow-up.)
 ### Linux (Ubuntu/Debian)
 
 ```sh
-sudo apt-get install -y clang libavcodec-dev libavformat-dev libavutil-dev libswscale-dev ffmpeg
+sudo apt-get install -y clang libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev ffmpeg
 cargo build --release
 ```
 

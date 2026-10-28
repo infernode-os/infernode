@@ -21,6 +21,10 @@ include "x509.m";
 	x509: X509;
 	Signed, Certificate, SubjectPKInfo, PublicKey, ExtClass: import x509;
 
+include "ip.m";
+	ip: IP;
+	IPaddr: import ip;
+
 include "tls.m";
 
 # Record content types
@@ -1800,6 +1804,11 @@ verifyhostname(hostname: string, certder: array of byte): string
 	if(cerr != nil)
 		return "tls: hostname verify: decode TBSCert: " + cerr;
 
+	# An IP address is matched against the SAN's iPAddress entries
+	# alone, a name against its dNSName entries and then the CN
+	# (RFC 6125 1.7.2, 6.2.1).
+	(isip, addr) := ipliteral(hostname);
+
 	# SubjectAltName first (RFC 6125). Decode only that extension, so an
 	# unrelated extension this x509 cannot parse does not hide it, and
 	# fail closed: a SAN that is present but undecodable is an error.
@@ -1817,9 +1826,12 @@ verifyhostname(hostname: string, certder: array of byte): string
 			san_checked = 1;
 			for(al := san.alias; al != nil; al = tl al) {
 				gn := hd al;
-				pick dns := gn {
+				pick g := gn {
 				dNSName =>
-					if(matchhostname(hostname, dns.str))
+					if(!isip && matchhostname(hostname, g.str))
+						return nil;
+				iPAddress =>
+					if(isip && ipmatch(addr, g.ip))
 						return nil;
 				}
 			}
@@ -1830,7 +1842,9 @@ verifyhostname(hostname: string, certder: array of byte): string
 
 	# If SAN was present but didn't match, fail (RFC 6125 §6.4.4)
 	if(san_checked)
-		return sys->sprint("tls: hostname %s does not match any SAN dNSName", hostname);
+		return sys->sprint("tls: hostname %s does not match any subjectAltName", hostname);
+	if(isip)
+		return sys->sprint("tls: certificate names no IP address %s", hostname);
 
 	# Fall back to CN in subject
 	for(rdl := cert.subject.rd_names; rdl != nil; rdl = tl rdl) {
@@ -1849,6 +1863,52 @@ verifyhostname(hostname: string, certder: array of byte): string
 	}
 
 	return sys->sprint("tls: hostname %s does not match certificate", hostname);
+}
+
+# An IPv4 or IPv6 address written as text, as a reference identity: one
+# with a colon, or digits and dots (IPaddr.parse alone would take an
+# all-hex name, a host called cafe, for an IPv6 address)
+ipliteral(s: string): (int, IPaddr)
+{
+	colon := 0;
+	numeric := 1;
+	for(i := 0; i < len s; i++) {
+		c := s[i];
+		if(c == ':')
+			colon = 1;
+		else if(c != '.' && (c < '0' || c > '9'))
+			numeric = 0;
+	}
+	if(!colon && !numeric || s == "")
+		return (0, IPaddr(nil));
+	if(ip == nil) {
+		ip = load IP IP->PATH;
+		if(ip == nil)
+			return (0, IPaddr(nil));
+		ip->init();
+	}
+	(ok, a) := IPaddr.parse(s);
+	if(ok < 0)
+		return (0, a);
+	return (1, a);
+}
+
+# An iPAddress entry is the address's 4 or 16 bytes (RFC 5280 4.2.1.6)
+ipmatch(a: IPaddr, b: array of byte): int
+{
+	case len b {
+	4 =>
+		if(!a.isv4())
+			return 0;
+		v := a.v4();
+		for(i := 0; i < 4; i++)
+			if(v[i] != b[i])
+				return 0;
+		return 1;
+	16 =>
+		return a.eq(IPaddr.newv6(b));
+	}
+	return 0;
 }
 
 oideq(a, b: ref ASN1->Oid): int

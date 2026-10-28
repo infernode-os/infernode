@@ -77,6 +77,51 @@ All notable changes to InferNode are documented in this file.
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and
   `page_test.sh`. The Linux GUI job runs them all now.
 
+### Mail
+
+- **mail9p connects with STARTTLS.** `connect name server starttls`
+  was refused by the IMAP library as not yet implemented. It connects
+  in clear on port 143, reads the greeting, sends STARTTLS and on its
+  OK speaks TLS on the same connection; a server declining it is
+  refused rather than logged in to in clear. A server may be given as
+  `host!port`, for a local bridge's port; the factotum key and the
+  certificate are the host's. `tests/host/mail9p_imap_test.sh` drives
+  both against a fake IMAP server.
+- **mail9p is tested against an IMAP server.** Past `connect`, nothing
+  of it was: `tests/host/mail9p_imap_test.sh` runs a session against a
+  fake server over verified TLS (an account's boxes, messages, flags,
+  search and archive, over TLS and over STARTTLS, and a message sent
+  through a fake SMTP server each way), and checks a server
+  is refused when its certificate names another host or comes from a CA
+  not trusted. The test's CA is its only root, bound over `/lib/certs`.
+- **TLS matches an IP address against the certificate's IP addresses.**
+  A server reached by address (`127.0.0.1`, a bridge on the LAN) was
+  matched only against the certificate's DNS names, so a certificate
+  naming the address in an `iPAddress` subjectAltName, as RFC 6125
+  has it, was refused. An address is now matched against those alone,
+  a name against DNS names and the CN.
+- **mail9p sends over STARTTLS, and never in clear.** Sending used
+  plain port 25 unless the account used implicit TLS for IMAP, and
+  authenticated there with `AUTH PLAIN`: a STARTTLS account would have
+  sent the password in clear. smtp(2)'s `authopen` now takes
+  `IMPLICIT_TLS` (465) or `STARTTLS` (587, RFC 3207, refused if not
+  offered or refused by the server) and refuses `PLAIN`; mail9p sends
+  as the account's IMAP mode has it. `smtp=` may be `host!port`. A
+  reply's continuation lines (EHLO's) are no longer taken for replies.
+- **No "Broken: write on closed pipe" after a TLS connection.** When
+  the caller closed its end while the server still sent (an SMTP
+  server's `221` after `QUIT`), webclient's TLS reader died on the write
+  and the system printed it.
+
+### Veltro and the agent loop
+
+- **serve-llm starts with no model configured.** When
+  `~/.infernode/lib/ndb/llm` named no `model=` (or did not exist),
+  `serve-profile` passed llmsrv `-M` with nothing after it: the next
+  option became the model (`-r`), or llmsrv refused to start and
+  `/mnt/llm` was exported empty. `tests/host/serve_llm_smoke_test.sh`
+  now mounts `/mnt/llm` with the key and reads a session's model.
+
 ## [0.8.1] - 2026-10-22
 
 This release fixes what 0.8.0 shipped broken. Charon opened on a test
@@ -185,12 +230,6 @@ non-boot keyboards work on real hardware.
 
 ### Veltro and the agent loop
 
-- **serve-llm starts with no model configured.** When
-  `~/.infernode/lib/ndb/llm` named no `model=` (or did not exist),
-  `serve-profile` passed llmsrv `-M` with nothing after it: the next
-  option became the model (`-r`), or llmsrv refused to start and
-  `/mnt/llm` was exported empty. `tests/host/serve_llm_smoke_test.sh`
-  now mounts `/mnt/llm` with the key and reads a session's model.
 - **The Limbo compile gate runs**, and `limbo compile <file.b>`
   checks any file.
 - **Edits to user folders are staged**, reported as staged, applied

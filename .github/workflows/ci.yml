@@ -707,8 +707,8 @@ jobs:
               dis_parser_bounds_test editor_capability_test
               exec_fork_no_panic_test exec_timeout_kill_test
               factotum_keyfile_test llmctl_test llmsrv_flush_test
-              network_capability_test pathmanage_test plumbrules_test
-              secstore_legacy_auth_test spawn_budget_test
+              mail9p_imap_test network_capability_test pathmanage_test
+              plumbrules_test secstore_legacy_auth_test spawn_budget_test
               statcheck_bounds_test tools9p_env_isolation_test
               tools9p_integration_test
           - shard: 2
@@ -801,9 +801,10 @@ jobs:
         # secstore and factotum, tools9p, the 9P services (mail9p,
         # calendar9p, jsfs), the serve-llm daemon, and
         # source checks.  Those with a display are in the GUI job; those
-        # needing a live service, a key, hardware, or ffmpeg and
-        # tools/vdec (vid9p's) are in none.  Each must pass: a skip here
-        # (exit 77) is a test that stopped running, and fails too.
+        # needing a live service, a key or hardware are in none (vid9p's,
+        # needing ffmpeg and tools/vdec, are with the GUI job's video
+        # tests).  Each must pass: a skip here (exit 77) is a test that
+        # stopped running, and fails too.
         mkdir -p tmp
         failed=
         for t in ${{ matrix.tests }}; do
@@ -1077,8 +1078,8 @@ jobs:
         # Host tests that need the SDL emulator, which no step ran:
         # Xenith's 9P files (tests/host/xenith_inside.sh), its races,
         # rescue, documents and browsing, the SDL renderer, /dev/wmsize,
-        # Charon's engine and its origin filter (uitest_transport_test
-        # also needs ffmpeg and tools/vdec, and is left out).  Each must
+        # Charon's engine and its origin filter (uitest_transport_test,
+        # which needs vdec too, is with the video tests below).  Each must
         # pass: a skip here (exit 77) is a test that stopped running, and
         # fails too.
         failed=
@@ -1089,6 +1090,34 @@ jobs:
             xenith_scroll_focus_test xenith_scroll_quit_test \
             xenith_zerox_typing_test xenith_rescue_test xenith_agent_test \
             xenith_race_test xenith_doc_test; do
+          echo "::group::$t"
+          rc=0
+          ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
+          echo "::endgroup::"
+          [ $rc = 0 ] || { echo "::error::$t exited $rc"; failed="$failed $t"; }
+        done
+        [ -z "$failed" ] || { echo "failed:$failed"; exit 1; }
+
+    - name: Build tools/vdec (vid9p's decoder)
+      run: |
+        # FFmpeg 6.1, as the crate is pinned to.  ffmpeg-next's default
+        # features link libavdevice, libavfilter and libswresample too;
+        # libavdevice-dev brings the other two.
+        sudo apt-get install -y clang ffmpeg libavcodec-dev libavformat-dev \
+          libavutil-dev libswscale-dev libavdevice-dev
+        # no --locked: Cargo.lock is ignored (tools/vdec/.gitignore);
+        # Cargo.toml pins ffmpeg-next to 6.1
+        (cd tools/vdec && cargo build --release)
+
+    - name: Run video tests
+      env:
+        SDL_VIDEODRIVER: dummy
+      run: |
+        # vid9p serving frames vdec decoded, its transport (play, pause,
+        # seek) paced by the clock, and the Matrix video pane driving it
+        # through /dev/pointer and /dev/keyboard.  A skip fails, as above.
+        failed=
+        for t in vid9p_test vid9p_transport_test uitest_transport_test; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?
@@ -1910,59 +1939,26 @@ jobs:
           MacOSX/${{ matrix.arch }}/bin/mk
         retention-days: 14
 
-  # ─────────────────────────────────────────────
-  # macOS GUI: the SDL3 emulator, as the release builds it, and the GUI
-  # tests under SDL's windowless driver.  The macos job above builds the
-  # headless emulator, so without this nothing that needs a display was
-  # tested on a Mac.
-  # ─────────────────────────────────────────────
-  macos-gui:
-    name: macOS ARM64 SDL3 GUI Build & Test
-    runs-on: macos-15
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    env:
-      ROOT: ${{ github.workspace }}
-      OBJTYPE: arm64
-
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-    - name: Install SDL3, opus and libfido2
-      run: brew install sdl3 opus libfido2 || brew install sdl3 opus libfido2
-
-    - name: Build mk
-      run: |
-        chmod +x makemk.sh
-        ./makemk.sh
-        test -x MacOSX/$OBJTYPE/bin/mk || { echo "mk build failed"; exit 1; }
-
-    - name: Build libraries and limbo
-      run: |
-        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
-        for dir in lib9 libbio libmp libsec libmath limbo libinterp; do
-          (cd $dir && mk install) || { echo "$dir build failed"; exit 1; }
-        done
-        for dir in libfreetype libkeyring libdraw libmemdraw libmemlayer; do
-          (cd $dir && mk install) || true
-        done
-        (cd libtk && mk install) || { echo "libtk build failed"; exit 1; }
-
+    # The SDL3 emulator, as the release builds it, and the GUI tests under
+    # SDL's windowless driver: the steps above build the headless one, so
+    # without these nothing that needs a display is tested on a Mac.  On
+    # the Apple Silicon runner only, in this job rather than one of its
+    # own: macos-15 runners are scarce at busy hours, and a job left
+    # queued for one is cancelled.
     - name: Build SDL3 GUI emulator
+      if: matrix.arch == 'arm64'
       run: |
         export PATH="$ROOT/MacOSX/$OBJTYPE/bin:/usr/bin:/bin"
+        (cd libfreetype && mk install) || true
         cd emu/MacOSX
+        # the headless build's objects were compiled without -DGUI_SDL3
+        rm -f *.o o.emu
         SYSTARG=MacOSX SHELL=/bin/sh mk GUIBACK=sdl3
         test -f o.emu || { echo "Emulator build failed"; exit 1; }
         nm o.emu | grep -q sdl3_mainloop || { echo "o.emu is not the SDL3 build"; exit 1; }
 
-    - name: Build runtime tree
-      run: |
-        export PATH="$ROOT/MacOSX/$OBJTYPE/bin:$PATH"
-        ./tools/verify-dis-build.sh
-
     - name: Run GUI tests
+      if: matrix.arch == 'arm64'
       env:
         SDL_VIDEODRIVER: dummy
       run: |

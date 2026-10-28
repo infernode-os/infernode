@@ -15,11 +15,11 @@
 #     of an account that does not exist
 #   - mail9p still answers after all of them
 #
-# An account's files (ctl, boxes, the messages) need a live IMAP server
-# over TLS whose certificate verifies; tests/imap_test.dis -live covers
-# the protocol against one.  This test was first written for the
-# scaffold, whose connect made an account without dialling, and went
-# stale when connect was wired to IMAP.
+# An account's files (ctl, boxes, the messages), and connecting over
+# TLS and STARTTLS, are tests/host/mail9p_imap_test.sh's, against a fake
+# server.  This test was first written for the scaffold, whose connect
+# made an account without dialling, and went stale when connect was
+# wired to IMAP.
 #
 # Run from project root: ./tests/host/mail9p_test.sh [-v]
 #

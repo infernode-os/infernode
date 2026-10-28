@@ -77,6 +77,31 @@ All notable changes to InferNode are documented in this file.
   workflow; nor were `wm_theme_test.sh`, `wm_ghost_test.sh` and
   `page_test.sh`. The Linux GUI job runs them all now.
 
+### Mail
+
+- **mail9p connects with STARTTLS.** `connect name server starttls`
+  was refused by the IMAP library as not yet implemented. It connects
+  in clear on port 143, reads the greeting, sends STARTTLS and on its
+  OK speaks TLS on the same connection; a server declining it is
+  refused rather than logged in to in clear. A server may be given as
+  `host!port`, for a local bridge's port; the factotum key and the
+  certificate are the host's. `tests/host/mail9p_test.sh` drives both
+  against a fake IMAP server.
+- **mail9p never sends its SMTP password in clear.** Sending used
+  plain port 25 unless the account used implicit TLS for IMAP, and
+  authenticated there with `AUTH PLAIN`; a STARTTLS account would have
+  sent the password in clear. Sends now use implicit TLS on port 465
+  whatever the IMAP mode.
+
+### Veltro and the agent loop
+
+- **serve-llm starts with no model configured.** When
+  `~/.infernode/lib/ndb/llm` named no `model=` (or did not exist),
+  `serve-profile` passed llmsrv `-M` with nothing after it: the next
+  option became the model (`-r`), or llmsrv refused to start and
+  `/mnt/llm` was exported empty. `tests/host/serve_llm_smoke_test.sh`
+  now mounts `/mnt/llm` with the key and reads a session's model.
+
 ## [0.8.1] - 2026-10-22
 
 This release fixes what 0.8.0 shipped broken. Charon opened on a test
@@ -185,12 +210,6 @@ non-boot keyboards work on real hardware.
 
 ### Veltro and the agent loop
 
-- **serve-llm starts with no model configured.** When
-  `~/.infernode/lib/ndb/llm` named no `model=` (or did not exist),
-  `serve-profile` passed llmsrv `-M` with nothing after it: the next
-  option became the model (`-r`), or llmsrv refused to start and
-  `/mnt/llm` was exported empty. `tests/host/serve_llm_smoke_test.sh`
-  now mounts `/mnt/llm` with the key and reads a session's model.
 - **The Limbo compile gate runs**, and `limbo compile <file.b>`
   checks any file.
 - **Edits to user folders are staged**, reported as staged, applied

@@ -3,7 +3,8 @@ implement Imap;
 #
 # IMAP4rev1 client (RFC 3501)
 #
-# Connects over TLS (port 993) using webclient->tlsdial().
+# Connects over TLS (port 993) using webclient->tlsdial(), or in clear
+# on port 143 upgraded with STARTTLS (webclient->tlsclient()).
 # Tagged command/response protocol with untagged data parsing.
 #
 
@@ -75,13 +76,22 @@ open(user, password, server: string, mode: int): string
 	if(connected)
 		return "already connected";
 
+	# server is a host, or host!port for a port of its own (a local
+	# bridge's, say); the key and the certificate are the host's
+	port := "993";
+	if(mode == STARTTLS)
+		port = "143";
+	(host, bang) := str->splitl(server, "!");
+	if(bang != nil)
+		port = bang[1:];
+
 	# Try factotum first if no credentials given
 	if(user == nil || password == nil) {
 		factotum = load Factotum Factotum->PATH;
 		if(factotum != nil) {
 			factotum->init();
 			(u, p) := factotum->getuserpasswd(
-				"proto=pass service=imap dom=" + server);
+				"proto=pass service=imap dom=" + host);
 			if(u != nil && p != nil) {
 				user = u;
 				password = p;
@@ -91,22 +101,21 @@ open(user, password, server: string, mode: int): string
 			return "no credentials: supply user/password or configure factotum";
 	}
 
-	port := "993";
-	if(mode == STARTTLS)
-		port = "143";
-
-	addr := "tcp!" + server + "!" + port;
+	addr := "tcp!" + host + "!" + port;
 
 	if(mode == IMPLICIT_TLS) {
 		# TLS from the start (port 993)
-		(tlsfd, terr) := webclient->tlsdial(addr, server);
+		(tlsfd, terr) := webclient->tlsdial(addr, host);
 		if(terr != nil)
 			return "tlsdial: " + terr;
 		fd = tlsfd;
 	} else {
-		# Plaintext connect, then STARTTLS
-		# For now, only IMPLICIT_TLS is supported
-		return "STARTTLS not yet implemented";
+		# Plaintext until the server takes STARTTLS (port 143); the
+		# greeting is read before it, and nothing else is sent in clear
+		(tlsfd, serr) := starttls(addr, host);
+		if(serr != nil)
+			return serr;
+		fd = tlsfd;
 	}
 
 	ibuf = bufio->fopen(fd, Bufio->OREAD);
@@ -116,19 +125,21 @@ open(user, password, server: string, mode: int): string
 	tagnum = 0;
 	connected = 1;
 
-	# Read server greeting
-	(greeting, gerr) := readline();
-	if(gerr != nil) {
-		disconnect();
-		return "greeting: " + gerr;
-	}
-	if(DEBUG)
-		sys->print("S: %s\n", greeting);
+	if(mode == IMPLICIT_TLS) {
+		# Read server greeting
+		(greeting, gerr) := readline();
+		if(gerr != nil) {
+			disconnect();
+			return "greeting: " + gerr;
+		}
+		if(DEBUG)
+			sys->print("S: %s\n", greeting);
 
-	# Check for OK greeting
-	if(!hasprefix(greeting, "* OK")) {
-		disconnect();
-		return "bad greeting: " + greeting;
+		# Check for OK greeting
+		if(!hasprefix(greeting, "* OK")) {
+			disconnect();
+			return "bad greeting: " + greeting;
+		}
 	}
 
 	# Authenticate
@@ -139,6 +150,59 @@ open(user, password, server: string, mode: int): string
 	}
 
 	return nil;
+}
+
+# The greeting and STARTTLS (RFC 3501 6.2.1) in clear, then TLS on the
+# same connection.  A server refusing it is refused: no LOGIN in clear.
+starttls(addr, host: string): (ref Sys->FD, string)
+{
+	(ok, c) := sys->dial(addr, nil);
+	if(ok < 0)
+		return (nil, sys->sprint("dial %s: %r", addr));
+	(greeting, gerr) := rawline(c.dfd);
+	if(gerr != nil)
+		return (nil, "greeting: " + gerr);
+	if(!hasprefix(greeting, "* OK"))
+		return (nil, "bad greeting: " + greeting);
+	cmd := array of byte "S000 STARTTLS\r\n";
+	if(sys->write(c.dfd, cmd, len cmd) != len cmd)
+		return (nil, sys->sprint("STARTTLS write: %r"));
+	for(;;) {
+		(line, err) := rawline(c.dfd);
+		if(err != nil)
+			return (nil, "STARTTLS: " + err);
+		if(hasprefix(line, "S000 ")) {
+			if(!hasprefix(line, "S000 OK"))
+				return (nil, "STARTTLS refused: " + line[5:]);
+			break;
+		}
+	}
+	(tlsfd, terr) := webclient->tlsclient(c.dfd, host);
+	if(terr != nil)
+		return (nil, "STARTTLS: " + terr);
+	return (tlsfd, nil);
+}
+
+# A line read a byte at a time, so that nothing after it is taken from
+# the connection: after STARTTLS's OK comes the TLS handshake.
+rawline(rfd: ref Sys->FD): (string, string)
+{
+	line := "";
+	b := array[1] of byte;
+	for(;;) {
+		if(sys->read(rfd, b, 1) != 1)
+			return (nil, "connection closed");
+		if(b[0] == byte '\n')
+			break;
+		if(len line >= 8192)
+			return (nil, "line too long");
+		line[len line] = int b[0];
+	}
+	if(len line > 0 && line[len line - 1] == '\r')
+		line = line[0:len line - 1];
+	if(DEBUG)
+		sys->print("S: %s\n", line);
+	return (line, nil);
 }
 
 # Authenticate with LOGIN command

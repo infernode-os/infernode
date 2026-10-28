@@ -477,10 +477,21 @@ delaccount(name: string): int
 # generic mail host works).
 defaultsmtp(imapserver: string): string
 {
+	imapserver = hostof(imapserver);
 	prefix := "imap.";
 	if(len imapserver > len prefix && imapserver[0:len prefix] == prefix)
 		return "smtp." + imapserver[len prefix:];
 	return imapserver;
+}
+
+# An IMAP server given as host!port (a local bridge's port, say) is the
+# host for its keys and for the SMTP server derived from it.
+hostof(server: string): string
+{
+	for(i := 0; i < len server; i++)
+		if(server[i] == '!')
+			return server[0:i];
+	return server;
 }
 
 # Load a fresh Imap module instance. Each account has its own loaded
@@ -1421,7 +1432,7 @@ smtpcreds(a: ref Account): (string, string, string)
 	(u, p) := fac->getuserpasswd("proto=pass service=smtp dom=" + a.smtpserver);
 	if(u != nil && p != nil)
 		return (u, p, nil);
-	(u, p) = fac->getuserpasswd("proto=pass service=imap dom=" + a.server);
+	(u, p) = fac->getuserpasswd("proto=pass service=imap dom=" + hostof(a.server));
 	if(u != nil && p != nil)
 		return (u, p, nil);
 	return (nil, nil, "no SMTP creds in factotum (tried service=smtp,imap)");
@@ -1511,12 +1522,10 @@ smtpsend(a: ref Account, msg: string, recips: list of string): string
 	if(cerr != nil)
 		return cerr;
 
-	# Implicit-TLS port 465 if account uses IMAPS, otherwise plain port 25.
-	usessl := 0;
-	if(a.mode == Imap->IMPLICIT_TLS)
-		usessl = 1;
-
-	(ok, oerr) := smtp->authopen(u, p, a.smtpserver, usessl);
+	# Implicit TLS on port 465 whatever the IMAP mode: authopen sends
+	# AUTH PLAIN, the password, and smtp has no STARTTLS, so plain port
+	# 25 would send it in clear.
+	(ok, oerr) := smtp->authopen(u, p, a.smtpserver, 1);
 	if(ok < 0)
 		return "smtp authopen: " + oerr;
 

@@ -106,10 +106,19 @@ tlsdial(addr, servername: string): (ref Sys->FD, string)
 	if(c == nil)
 		return (nil, sys->sprint("dial %s: %r", addr));
 
+	return tlsclient(c.dfd, servername);
+}
+
+tlsclient(fd: ref Sys->FD, servername: string): (ref Sys->FD, string)
+{
+	err := loadtls();
+	if(err != nil)
+		return (nil, err);
+
 	cfg := tls->defaultconfig();
 	cfg.servername = servername;
 
-	(conn, terr) := tls->client(c.dfd, cfg);
+	(conn, terr) := tls->client(fd, cfg);
 	if(terr != nil)
 		return (nil, "tls: " + terr);
 

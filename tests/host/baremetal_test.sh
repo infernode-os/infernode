@@ -1855,6 +1855,7 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         'for(i in x y z){ echo loop2-$i }' \
         "ls '#G/gpio/128' '#G/gpio/135'" \
         "ls '#G/gpio/136'" \
+        "ls '#G/gpio'" \
         "cat '#G/gpio/128/level'" \
         "echo 1 > '#G/gpio/128/level'" \
         "cat '#G/gpio/128/level'" \
@@ -2602,6 +2603,17 @@ if grep -q '#G/gpio/135/level' <<<"$R"; then
     pass "expander lines are pins 128..135 in #G/gpio, each with ctl and level"
 else
     fail "#G/gpio/128 and 135 did not list as pin directories -- $(tr '\n' ' ' <<<"$R")"
+fi
+# A listing names every pin: gpiogen gave devdir a name in a buffer on
+# its own stack, and devdir keeps the pointer, so by the time the
+# directory was packed the names were whatever the stack held next.
+# A walk to a pin by name compared it sooner and mostly got away with it.
+R="$(reply_to "$SHOUT" "ls '#G/gpio'")"
+ng="$(tr -d '\r' <<<"$R" | grep -cE '^#G/gpio/([0-9]|[1-4][0-9]|5[0-3]|12[89]|13[0-5])$')"
+if [[ "$ng" -eq 62 ]]; then
+    pass "ls '#G/gpio' names all 62 pins, 0..53 and 128..135 (a name devdir keeps outlives the generator)"
+else
+    fail "ls '#G/gpio' named $ng of 62 pins: $(head -4 <<<"$R" | tr '\n' ' ')"
 fi
 R="$(reply_to "$SHOUT" "ls '#G/gpio/136'")"
 if grep -q 'does not exist\|file does not exist\|not found' <<<"$R"; then

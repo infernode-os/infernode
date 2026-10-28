@@ -10,8 +10,9 @@
 # /dev/pointer and /dev/keyboard.  The zone is found from the
 # screenshots: what the apps changed against the empty zone, together.
 #
-# The tab above the app is not checked: on some boots Lucifer draws no
-# tab strip at all, for any app, a fault of its own to be fixed first.
+# The tab above the app is not checked here: presentation_tabstrip_test.sh
+# checks the strip, which stayed blank for a whole session on boots where
+# presrender joined Lucifer's zone before lucipres.
 #
 # The programs are found in dis/wm (wmprogs.sh), as wm_size_test.sh
 # finds them.  LUCIFER_APPS="lens tetris" opens those alone (with
@@ -187,9 +188,9 @@ for name, th, st in apps:
     # speck: a clock's face or a date's one line is enough, and so is
     # a colour of the app's own filling it (wm/lens, a nested wm/wm).
     # The tab strip is passed over when it is there (the current tab is
-    # underlined in the accent colour); on a boot that draws none the
-    # zone found begins where the apps do, and wm/date's one line is
-    # at its top.
+    # underlined in the accent colour); when it is not (as on the boots
+    # where it stayed blank) the zone found begins where the apps do,
+    # and wm/date's one line is at its top.
     top = zone[1]
     if any(im.px(x, y) == TH[th]['accent'] for y in range(zone[1], zone[1] + TABH) for x in range(zone[0], zone[2], 2)):
         top += TABH

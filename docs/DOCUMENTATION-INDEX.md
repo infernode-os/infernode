@@ -110,6 +110,7 @@
 | [HELLAPHONE.md](HELLAPHONE.md) | InferNode on a phone: Android (Termux) |
 | [IOS.md](IOS.md) | InferNode on iOS: design plan and build spec |
 | [IOS-ONDEVICE-LLM.md](IOS-ONDEVICE-LLM.md) | On-device LLM inference on iOS behind `/mnt/llm` |
+| [ONDEVICE-LLM.md](ONDEVICE-LLM.md) | On-device models behind `/mnt/llm`: Apple Foundation Models on macOS 27, gates, a mount per provider (design) |
 | [BAREMETAL.md](BAREMETAL.md) | **Bare metal, start here** - the manual: build, run under QEMU (`virt`, `raspi3b`), put it on a Pi 3B+, the card's control files, the command line, `/dev/sysctl`, debug keys, devices, boot sequence, testing |
 | [BAREMETAL-BOARD-INTERFACE.md](BAREMETAL-BOARD-INTERFACE.md) | The contract between the shared native kernel and a board directory: files, hooks in call order, what the shared drivers call downward |
 | [BAREMETAL-PORTING-LESSONS.md](BAREMETAL-PORTING-LESSONS.md) | What a port to other hardware should take from the first one |

@@ -119,8 +119,11 @@ tlsclient(fd: ref Sys->FD, servername: string): (ref Sys->FD, string)
 	cfg.servername = servername;
 
 	(conn, terr) := tls->client(fd, cfg);
-	if(terr != nil)
-		return (nil, "tls: " + terr);
+	if(terr != nil) {
+		if(len terr < 4 || terr[0:4] != "tls:")
+			terr = "tls: " + terr;
+		return (nil, terr);
+	}
 
 	# Wrap TLS conn as a pipe-like FD pair
 	return tlsconnfd(conn);

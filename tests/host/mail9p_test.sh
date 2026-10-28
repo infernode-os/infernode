@@ -13,17 +13,13 @@
 #   - malformed ctl writes are refused with their reason: an unknown
 #     argument, no server, no name, an unknown verb, disconnect and sync
 #     of an account that does not exist
-#   - connect starttls to a server given as host!port (a fake IMAP
-#     server here): the greeting read, STARTTLS sent, and on its OK a TLS
-#     handshake begun on the same connection, with no LOGIN in clear;
-#     a server refusing STARTTLS refused in turn, nothing more sent
 #   - mail9p still answers after all of them
 #
-# An account's files (ctl, boxes, the messages) need a live IMAP server
-# over TLS whose certificate verifies; tests/imap_test.dis -live covers
-# the protocol against one.  This test was first written for the
-# scaffold, whose connect made an account without dialling, and went
-# stale when connect was wired to IMAP.
+# An account's files (ctl, boxes, the messages), and connecting over
+# TLS and STARTTLS, are tests/host/mail9p_imap_test.sh's, against a fake
+# server.  This test was first written for the scaffold, whose connect
+# made an account without dialling, and went stale when connect was
+# wired to IMAP.
 #
 # Run from project root: ./tests/host/mail9p_test.sh [-v]
 #
@@ -65,62 +61,8 @@ done
 # check below is a grep on a slice of the one transcript.  emu does not
 # exit when the script ends, so it is stopped by the timeout.
 T=$(mktemp)
-F=$(mktemp)
-FAKE=
-trap 'rm -f "$T" "$F"; [[ -n "$FAKE" ]] && kill "$FAKE" 2>/dev/null' EXIT
+trap 'rm -f "$T"' EXIT
 cd "$ROOT"
-
-# A fake IMAP server for connect starttls, two connections: the first
-# has STARTTLS taken, and what the client sends next is recorded (a TLS
-# handshake record, 16 03 ..., not a LOGIN); the second has it refused,
-# and anything sent after recorded.  It prints its port first.
-PORTF=$(mktemp)
-python3 -I - "$F" > "$PORTF" <<'FAKEIMAP' &
-import socket, sys
-s = socket.socket()
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", 0))
-s.listen(2)
-print(s.getsockname()[1], flush=True)
-log = open(sys.argv[1], "w")
-def readline(c, buf):
-    while b"\r\n" not in buf:
-        d = c.recv(1024)
-        if not d:
-            return None, b""
-        buf += d
-    line, rest = buf.split(b"\r\n", 1)
-    return line, rest
-def drain(c, rest, want):
-    try:
-        while len(rest) < want:
-            d = c.recv(4096)
-            if not d:
-                break
-            rest += d
-    except socket.timeout:
-        pass
-    return rest
-for mode in ("take", "refuse"):
-    c, _ = s.accept()
-    c.settimeout(10)
-    c.sendall(b"* OK IMAP4rev1 fake ready\r\n")
-    line, rest = readline(c, b"")
-    log.write("cmd %s\n" % (line or b"").decode(errors="replace"))
-    if mode == "take":
-        c.sendall(b"S000 OK Begin TLS negotiation now\r\n")
-        log.write("after %s\n" % drain(c, rest, 3)[:3].hex())
-    else:
-        c.sendall(b"S000 NO STARTTLS not offered\r\n")
-        after = drain(c, rest, 1 << 20)
-        log.write("after %s\n" % (after.decode(errors="replace").strip() or "nothing"))
-    log.flush()
-    c.close()
-FAKEIMAP
-FAKE=$!
-for i in $(seq 50); do [[ -s "$PORTF" ]] && break; sleep 0.1; done
-PORT=$(head -1 "$PORTF"); rm -f "$PORTF"
-[[ -n "$PORT" ]] || { echo "ERROR: the fake IMAP server did not start" >&2; exit 1; }
 with_timeout 40 "$EMU" -r"$ROOT" /dis/sh.dis -c "path=(/dis /dis/cmd .)
 mount -ac {mntgen} /mnt
 mail9p &
@@ -160,12 +102,6 @@ echo disconnect nosuch > /mnt/mail/ctl
 
 echo '<<< 11 sync-missing >>>'
 echo sync nosuch > /mnt/mail/ctl
-
-echo '<<< 13 starttls-taken >>>'
-echo connect alice 127.0.0.1!$PORT starttls > /mnt/mail/ctl
-
-echo '<<< 14 starttls-refused >>>'
-echo connect alice 127.0.0.1!$PORT starttls > /mnt/mail/ctl
 
 echo '<<< 12 still-answers >>>'
 ls /mnt/mail
@@ -227,17 +163,6 @@ expect 08 "connect with no name refused" 'connect: name required'
 expect 09 "an unknown verb refused" 'unknown ctl verb'
 expect 10 "disconnect of no such account refused" 'disconnect: no such account'
 expect 11 "sync of no such account refused" 'sync: no such account'
-expect 13 "connect starttls: TLS begun on the STARTTLS connection" 'connect: STARTTLS: tls'
-expect 14 "connect starttls refused by the server is refused" 'connect: STARTTLS refused: NO STARTTLS not offered'
-fake=$(cat "$F")
-info "fake server: $fake"
-if [[ "$(echo "$fake" | grep -c '^cmd S000 STARTTLS$')" = 2 ]] &&
-   echo "$fake" | sed -n 2p | grep -q '^after 1603' &&
-   echo "$fake" | sed -n 4p | grep -q '^after nothing$'; then
-    pass "15 STARTTLS sent after the greeting; a TLS handshake after its OK, nothing after its NO"
-else
-    fail "15 the fake server saw: $fake"
-fi
 expect 12 "mail9p still answers" '/mnt/mail/ctl'
 
 echo ""

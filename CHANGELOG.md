@@ -85,8 +85,20 @@ All notable changes to InferNode are documented in this file.
   OK speaks TLS on the same connection; a server declining it is
   refused rather than logged in to in clear. A server may be given as
   `host!port`, for a local bridge's port; the factotum key and the
-  certificate are the host's. `tests/host/mail9p_test.sh` drives both
-  against a fake IMAP server.
+  certificate are the host's. `tests/host/mail9p_imap_test.sh` drives
+  both against a fake IMAP server.
+- **mail9p is tested against an IMAP server.** Past `connect`, nothing
+  of it was: `tests/host/mail9p_imap_test.sh` runs a session against a
+  fake server over verified TLS (an account's boxes, messages, flags,
+  search and archive, over TLS and over STARTTLS), and checks a server
+  is refused when its certificate names another host or comes from a CA
+  not trusted. The test's CA is its only root, bound over `/lib/certs`.
+- **TLS matches an IP address against the certificate's IP addresses.**
+  A server reached by address (`127.0.0.1`, a bridge on the LAN) was
+  matched only against the certificate's DNS names, so a certificate
+  naming the address in an `iPAddress` subjectAltName, as RFC 6125
+  has it, was refused. An address is now matched against those alone,
+  a name against DNS names and the CN.
 - **mail9p never sends its SMTP password in clear.** Sending used
   plain port 25 unless the account used implicit TLS for IMAP, and
   authenticated there with `AUTH PLAIN`; a STARTTLS account would have

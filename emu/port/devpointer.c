@@ -299,8 +299,11 @@ pointerwrite(Chan* c, void* va, long n, vlong off)
 		 * not moved for it: moving it makes the host report a motion
 		 * with its own buttons, none, which let go of a button the
 		 * event holds (a menu held open, a drag).  "m<x> <y>" alone
-		 * moves the pointer (wmlib's "ptr" request), host's and all.
+		 * moves the pointer (wmlib's "ptr" request), host's and all;
+		 * blanks after y, a shell's echo's newline, are not buttons.
 		 */
+		while(*a == ' ' || *a == '\t' || *a == '\n' || *a == '\r')
+			a++;
 		if(*a != 0){
 			b = strtoul(a, 0, 0);
 			mouseinject(b, x, y);

@@ -1181,14 +1181,51 @@ flushmemscreen(Rectangle r)
 /*
  * Set mouse pointer position
  * Coordinates from InferNode are in texture space; we convert to window space.
+ *
+ * setpointer runs on the thread that wrote /dev/pointer (wmlib's "ptr"
+ * request), but SDL allows a warp only on its main thread, and the
+ * conversion reads the window's geometry, which the main thread changes
+ * on a resize.  So setpointer records where the pointer is to go and
+ * sdl3_mainloop moves it (apply_warp), as for the cursor.
  */
+static SDL_SpinLock warp_lock = 0;
+static int warp_pending;	/* a warp is waiting for the main thread */
+static int warp_x, warp_y;	/* where to, in texture coordinates */
+
 void
 setpointer(int x, int y)
 {
-	float win_x, win_y;
-
 	if (!sdl_running)
 		return;
+
+	SDL_LockSpinlock(&warp_lock);
+	warp_x = x;
+	warp_y = y;
+	warp_pending = 1;
+	SDL_UnlockSpinlock(&warp_lock);
+	mouse_x = x;
+	mouse_y = y;
+}
+
+/*
+ * Move the host's pointer where setpointer last asked.  MUST be called
+ * on the main thread; sdl3_mainloop calls it each iteration.
+ */
+static void
+apply_warp(void)
+{
+	float win_x, win_y;
+	int x, y;
+
+	SDL_LockSpinlock(&warp_lock);
+	if (!warp_pending) {
+		SDL_UnlockSpinlock(&warp_lock);
+		return;
+	}
+	warp_pending = 0;
+	x = warp_x;
+	y = warp_y;
+	SDL_UnlockSpinlock(&warp_lock);
 
 	/*
 	 * Convert from texture coordinates to window coordinates.
@@ -1213,8 +1250,6 @@ setpointer(int x, int y)
 	}
 
 	SDL_WarpMouseInWindow(sdl_window, win_x, win_y);
-	mouse_x = x;
-	mouse_y = y;
 }
 
 /*
@@ -1735,6 +1770,8 @@ sdl3_mainloop(void)
 
 		/* and any cursor change (drawcursor only recorded it) */
 		apply_cursor();
+		/* and any warp of the pointer (setpointer only recorded it) */
+		apply_warp();
 
 		/*
 		 * Long-press fire: a single finger held still past the threshold

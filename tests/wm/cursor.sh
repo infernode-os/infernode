@@ -2,9 +2,10 @@
 #
 # wm/wm's cursors, driven by the pointer (/dev/pointer): New's cross,
 # the arrow again once swept, the gunsight Delete asks with, the arrow
-# again when it is cancelled.  After each step it prints R and the
-# step's name; tests/host/wm_cursor_test.sh checks the cursor changes
-# emu made through SDL between them (not a test: the runner runs every
+# again when it is cancelled; then the pointer warped by a move written
+# to /dev/pointer.  After each step it prints R and the step's name;
+# tests/host/wm_cursor_test.sh checks the cursor changes and warps emu
+# made through SDL between them (not a test: the runner runs every
 # script in tests/inferno).
 #
 load std
@@ -35,6 +36,11 @@ mark delete
 ptr 600 600 1
 ptr 600 600 0
 mark cancelled
+
+# the pointer moved there, as wmlib's "ptr" request moves it: a write
+# with no buttons warps the host's pointer
+echo m 300 300 > /dev/pointer
+mark warp
 
 echo R windows `{cat /chan/wmwindows} >[1=2]
 echo R done >[1=2]

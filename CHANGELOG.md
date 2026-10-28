@@ -6,6 +6,14 @@ All notable changes to InferNode are documented in this file.
 
 ### Window manager
 
+- **The pointer is warped on SDL's main thread.** A move written to
+  `/dev/pointer` (wmlib's `ptr` request) warped the host's pointer from
+  the thread that wrote it, though SDL allows a warp only on its main
+  thread, and read the window's geometry, which the main thread changes
+  on a resize; the main loop now does both, as it does the cursor. And
+  `m x y` followed by a newline, as a shell's `echo` writes it, is a
+  move, not a press of no buttons. `tests/host/wm_cursor_test.sh`
+  checks the warp is made on the main thread.
 - **New's cross shows.** emu changed the pointer's cursor through SDL on
   the thread that wrote `/dev/cursor`, though SDL allows cursor calls
   only on its main thread. On macOS the main thread rebuilds the

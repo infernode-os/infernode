@@ -686,9 +686,43 @@ jobs:
   # Linux AMD64: the host tests no other job runs
   # ─────────────────────────────────────────────
   linux-amd64-host:
-    name: Linux AMD64 Host Tests
+    name: Linux AMD64 Host Tests (${{ matrix.shard }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # two halves of about 18 minutes each, the whole being too long
+        # for one job beside the build
+        include:
+          - shard: 1
+            tests: >-
+              activity_switch_test amd64_jit_typecom_bound_test
+              amd64_jit_typecom_slab_test commands_test dhcp_client_test
+              dis_parser_bounds_test editor_capability_test
+              exec_fork_no_panic_test exec_timeout_kill_test
+              factotum_keyfile_test llmctl_test llmsrv_flush_test
+              network_capability_test pathmanage_test plumbrules_test
+              secstore_legacy_auth_test spawn_budget_test
+              statcheck_bounds_test tools9p_env_isolation_test
+              tools9p_integration_test vid9p_test
+          - shard: 2
+            tests: >-
+              amd64_jit_code_leak_test awk_builtins_test calendar9p_test
+              cpu_boundary_test dialogue_test emu_root_test
+              emulator_leader_lifecycle_test exec_confinement_test
+              font_regression_test ipchecksum_test iproute_test
+              jit_interp_handoff_test jit_real_test jsfs_test
+              listen_rate_fairness_test mail9p_test
+              modifier_mouse_emulation_test mount_clone_walk_test
+              nsaudit_metadata_test profile_legacykey_test
+              refadt_zero_test sdl3_keyboard_test secstore_apikey_test
+              secstore_e2e_test secstore_logon_test secstored_test
+              security_check_test serve_llm_smoke_test stale_dis_test
+              strcat_test task_provisioning_test tcpseq_test
+              tls_malformed_server_test tools9p_activity_ns_test
+              tools9p_basics_test tools9p_write_exec_view_test
+              vid9p_transport_test write_capability_test xenith_build_test
     permissions:
       contents: read
     env:
@@ -766,29 +800,7 @@ jobs:
         # must pass: a skip here (exit 77) is a test that stopped
         # running, and fails too.
         failed=
-        for t in activity_switch_test amd64_jit_code_leak_test \
-            amd64_jit_typecom_bound_test amd64_jit_typecom_slab_test \
-            awk_builtins_test calendar9p_test commands_test \
-            cpu_boundary_test dhcp_client_test dialogue_test \
-            dis_parser_bounds_test editor_capability_test emu_root_test \
-            emulator_leader_lifecycle_test exec_confinement_test \
-            exec_fork_no_panic_test exec_timeout_kill_test \
-            factotum_keyfile_test font_regression_test ipchecksum_test \
-            iproute_test jit_interp_handoff_test jit_real_test jsfs_test \
-            listen_rate_fairness_test llmctl_test llmsrv_flush_test \
-            mail9p_test modifier_mouse_emulation_test mount_clone_walk_test \
-            network_capability_test nsaudit_metadata_test \
-            pathmanage_test plumbrules_test profile_legacykey_test \
-            refadt_zero_test sdl3_keyboard_test secstore_apikey_test \
-            secstore_e2e_test secstore_legacy_auth_test secstore_logon_test \
-            secstored_test security_check_test serve_llm_smoke_test \
-            spawn_budget_test stale_dis_test statcheck_bounds_test \
-            strcat_test task_provisioning_test tcpseq_test \
-            tls_malformed_server_test tools9p_activity_ns_test \
-            tools9p_basics_test tools9p_env_isolation_test \
-            tools9p_integration_test tools9p_write_exec_view_test \
-            vid9p_test vid9p_transport_test write_capability_test \
-            xenith_build_test; do
+        for t in ${{ matrix.tests }}; do
           echo "::group::$t"
           rc=0
           ROOT=. bash tests/host/$t.sh < /dev/null || rc=$?

@@ -90,9 +90,17 @@ nprog(void)
  * been allocated or freed since, and a heap of a few hundred MB (a web
  * page laid out) took a core to do it, over and over, for as long as
  * the emulator sat idle.
+ *
+ * Going round is counted over however many idle moments it takes, while
+ * the heap does not change between them (idlemark, idlefrom): a program
+ * that wakes now and then to do nothing (Charon's) cuts each moment
+ * short, and counted afresh in each one the three colours were never
+ * reached, so the collector went round for ever.
  */
 static ulong idleseen;
 static int idleknown;
+static ulong idlemark;	/* the heap's activity when idlefrom was taken */
+static int idlefrom;	/* gccolor then */
 
 static void
 execatidle(void)
@@ -103,12 +111,16 @@ execatidle(void)
 		return;
 	if(idleknown && heapactivity() == idleseen)
 		return;
+	if(heapactivity() != idlemark) {
+		idlemark = heapactivity();
+		idlefrom = gccolor;
+	}
 
 	gcidle++;
 	up->type = IdleGC;
 	up->iprog = nil;
 	addrun(up->prog);
-	done = gccolor+3;
+	done = idlefrom+3;
 	while(gccolor < done && gcruns()) {
 		if(isched.vmq != nil || isched.runhd != isched.runtl) {
 			gcpartial++;
@@ -119,10 +131,11 @@ execatidle(void)
 		if(((ulong)gcidlepass&0xFF) == 0)
 			osyield();
 	}
-	if(gccolor >= done) {	/* all the way round, not cut short */
+	if(gccolor >= done) {	/* all the way round since the heap last changed */
 		idleseen = heapactivity();
 		idleknown = 1;
 	}
+	idlemark = heapactivity();	/* what this pass freed is not a change */
 	up->type = Interp;
 	delrunq(up->prog);
 }

@@ -1105,7 +1105,9 @@ jobs:
         # libavdevice-dev brings the other two.
         sudo apt-get install -y clang ffmpeg libavcodec-dev libavformat-dev \
           libavutil-dev libswscale-dev libavdevice-dev
-        (cd tools/vdec && cargo build --release --locked)
+        # no --locked: Cargo.lock is ignored (tools/vdec/.gitignore);
+        # Cargo.toml pins ffmpeg-next to 6.1
+        (cd tools/vdec && cargo build --release)
 
     - name: Run video tests
       env:

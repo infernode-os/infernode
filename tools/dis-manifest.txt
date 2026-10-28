@@ -758,6 +758,7 @@ dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
 dis/tests/nan_test.dis
+dis/tests/ninep_utf_test.dis
 dis/tests/pool_nomem_helper.dis
 dis/tests/jit_unload_test.dis
 dis/tests/js-spike/gctest.dis
@@ -855,6 +856,7 @@ dis/tests/ssl_transport_test.dis
 dis/tests/stderr_test.dis
 dis/tests/strcat_test.dis
 dis/tests/string_test.dis
+dis/tests/styx_utf_test.dis
 dis/tests/task_concurrent_probe.dis
 dis/tests/task_consistency_test.dis
 dis/tests/taskparse_test.dis

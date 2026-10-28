@@ -546,10 +546,15 @@ gbytes(a: array of byte, o: int): (array of byte, int)
 
 utflen(s: string): int
 {
-	# the domain is 16-bit unicode only, which is all that Inferno now implements
+	# the bytes of s in UTF-8, as array of byte makes them: a rune
+	# beyond 16rFFFF is four of them (one past 16r10FFFF, or a
+	# surrogate, three: U+FFFD's), where this counted three, and a
+	# message carrying one (an error, a name) was packed past its end
 	n := l := len s;
 	for(i:=0; i<l; i++)
 		if((c := s[i]) > 16r7F){
+			if(c > 16rFFFF)
+				return len array of byte s;
 			n++;
 			if(c > 16r7FF)
 				n++;

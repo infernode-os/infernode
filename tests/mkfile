@@ -172,6 +172,8 @@ TARG=\
 	webclient_test.dis\
 	url_test.dis\
 	utf21_test.dis\
+	styx_utf_test.dis\
+	ninep_utf_test.dis\
 	wireformat_test.dis\
 	veltro_concurrent_test.dis\
 	veltro_charon_security_test.dis\

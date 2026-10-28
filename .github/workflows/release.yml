@@ -183,6 +183,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/appl" -name '*.dis' -delete
@@ -481,6 +484,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE/resources"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/resources/appl" -name '*.dis' -delete
@@ -704,6 +710,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/appl" -name '*.dis' -delete
@@ -1000,6 +1009,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/resources/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE/resources"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/resources/appl" -name '*.dis' -delete
@@ -1240,6 +1252,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$RESOURCES/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$RESOURCES"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$RESOURCES/appl" -name '*.dis' -delete
@@ -1540,6 +1555,9 @@ jobs:
         for d in dis acme xenith lib fonts man doc icons module services locale usr mnt n appl; do
           [ -d "$d" ] && cp -a "$d" "$STAGE/"
         done
+        # the tree's usr/inferno/keyring/default is a test key: out, and the
+        # package refused if any private key is left in it (tools/release-scrub.sh)
+        sh tools/release-scrub.sh "$STAGE"
         # appl: the source, and the .sbl files beside it that the debugger and
         # profiler read (/dis/x.dis -> /appl/x.sbl); not its .dis, which dis/ has
         find "$STAGE/appl" -name '*.dis' -delete
@@ -1785,6 +1803,17 @@ jobs:
           foreach ($d in @("dis", "acme", "xenith", "lib", "fonts", "module", "services", "locale", "usr", "mnt")) {
             if (Test-Path $d) { Copy-Item -Recurse $d "$Stage\$d" }
           }
+          # The tree's usr/inferno/keyring/default is a test key: every file
+          # under a keyring\ goes, and the package is refused if a private
+          # key is left anywhere in it (tools/release-scrub.sh, in PowerShell).
+          Get-ChildItem -Path "$Stage\usr" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq 'keyring' } | ForEach-Object {
+              Write-Host "release-scrub: removed $($_.FullName)"; Remove-Item -Force $_.FullName }
+          $keys = Get-ChildItem -Path $Stage -Recurse -File | Where-Object { $_.Length -lt 65536 } | Where-Object {
+            $head = (Get-Content -LiteralPath $_.FullName -TotalCount 2 -ErrorAction SilentlyContinue)
+            ($head.Count -eq 2 -and $head[0] -match '^\d+$' -and $head[1] -match '^(ed25519|elgamal|rsa|dsa)$') -or
+            (Select-String -LiteralPath $_.FullName -Pattern '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' -Quiet -ErrorAction SilentlyContinue) }
+          if ($keys) { $keys | ForEach-Object { Write-Host "release-scrub: a private key is in the package: $($_.FullName)" }; throw "release-scrub: refusing $Stage" }
           New-Item -ItemType Directory -Force -Path "$Stage\tmp" | Out-Null
           foreach ($f in @("LICENSE", "NOTICE", "TRADEMARK.md", "README.md", "QUICKSTART.md", "setup-windows.ps1", "setup-windows.bat")) {
             if (Test-Path $f) { Copy-Item $f "$Stage\" }

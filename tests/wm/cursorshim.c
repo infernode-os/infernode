@@ -1,8 +1,8 @@
 /*
  * cursorshim.c — LD_PRELOAD shim for tests/host/wm_cursor_test.sh.
- * Logs each cursor change emu makes through SDL, with the cursor's
- * mask bits counted (which cursor it is) and whether the call came on
- * the main thread, the only one SDL allows it on.
+ * Logs each cursor change and pointer warp emu makes through SDL, with
+ * the cursor's mask bits counted (which cursor it is) and whether the
+ * call came on the main thread, the only one SDL allows it on.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -61,4 +61,15 @@ SDL_DestroyCursor(SDL_Cursor *c)
 		real = (void (*)(SDL_Cursor*))dlsym(RTLD_NEXT, "SDL_DestroyCursor");
 	fprintf(stderr, "C destroy %s\n", thread());
 	real(c);
+}
+
+void
+SDL_WarpMouseInWindow(SDL_Window *w, float x, float y)
+{
+	static void (*real)(SDL_Window*, float, float);
+
+	if(real == NULL)
+		real = (void (*)(SDL_Window*, float, float))dlsym(RTLD_NEXT, "SDL_WarpMouseInWindow");
+	fprintf(stderr, "C warp %s\n", thread());
+	real(w, x, y);
 }

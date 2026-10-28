@@ -2,26 +2,30 @@
 #
 # tests/host/mail9p_test.sh
 #
-# Integration tests for mail9p (INFR-8) — the 9P-shape scaffold.
+# mail9p (INFR-8) at /mnt/mail with no IMAP server to reach:
+#   - mount /mnt/mail succeeds; the root lists ctl and accounts
+#   - connect with no credentials is refused, naming factotum
+#   - connect with a factotum key, to a server that is not there, is
+#     refused with the dial's error
+#   - a refused connect leaves no account behind, so the same name can be
+#     connected again (the second refusal is the dial's, not "already
+#     exists")
+#   - malformed ctl writes are refused with their reason: an unknown
+#     argument, no server, no name, an unknown verb, disconnect and sync
+#     of an account that does not exist
+#   - mail9p still answers after all of them
 #
-# Covers what the scaffold actually does without IMAP wiring:
-#   - mount /mnt/mail succeeds
-#   - root listing contains ctl + accounts
-#   - connect <name> <server> adds an account
-#   - duplicate connect is rejected
-#   - /accounts/<name>/{ctl,boxes} appear
-#   - /accounts/<name>/ctl reads "disconnected <server>"
-#   - boxes/ is empty (next-pass content)
-#   - account-ctl verbs (select / search) accept arguments
-#   - disconnect removes the account
-#   - unknown ctl verbs return errors
+# An account's files (ctl, boxes, the messages) need a live IMAP server
+# over TLS whose certificate verifies; tests/imap_test.dis -live covers
+# the protocol against one.  This test was first written for the
+# scaffold, whose connect made an account without dialling, and went
+# stale when connect was wired to IMAP.
 #
 # Run from project root: ./tests/host/mail9p_test.sh [-v]
 #
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 . "$(dirname "$0")/common.sh"
-SH="/dis/sh.dis"
 VERBOSE=0
 
 while getopts "v" opt; do
@@ -40,43 +44,26 @@ fi
 
 PASSED=0; FAILED=0; SKIPPED=0
 
-pass()  { local msg="$1"; echo -e "${GREEN}PASS${NC}: $msg"; PASSED=$((PASSED+1)); return 0; }
-fail()  { local msg="$1"; echo -e "${RED}FAIL${NC}: $msg"; FAILED=$((FAILED+1)); return 0; }
-skip()  { local msg="$1"; echo -e "${YELLOW}SKIP${NC}: $msg"; SKIPPED=$((SKIPPED+1)); return 0; }
-info()  { local msg="$1"; [[ "$VERBOSE" -eq 1 ]] && echo "  $msg" || true; return 0; }
+pass()  { echo -e "${GREEN}PASS${NC}: $1"; PASSED=$((PASSED+1)); }
+fail()  { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); }
+skip()  { echo -e "${YELLOW}SKIP${NC}: $1"; SKIPPED=$((SKIPPED+1)); }
+info()  { [[ "$VERBOSE" -eq 1 ]] && echo "  $1" || true; }
 
 echo -e "${BOLD}mail9p integration tests${NC}"
 echo ""
 
 [[ -x "$EMU" ]] || { echo "ERROR: emu not found at $EMU" >&2; exit 1; }
-[[ -f "$ROOT/dis/mail9p.dis" ]] || {
-    skip "mail9p.dis not found — build mail9p first";
-    echo "Total: $PASSED passed, $FAILED failed, $SKIPPED skipped";
-    exit 0; }
+for f in dis/mail9p.dis dis/auth/factotum.dis; do
+    [[ -f "$ROOT/$f" ]] || { skip "$f not built"; exit 77; }
+done
 
-# Run a short Inferno sh -c command, capture stdout+stderr, return its
-# exit code via $? and the output via $OUTPUT.
-emu_c() {
-    local name="$1" tout="$2" cmd="$3"
-    local log="/tmp/.mail9p-test-${name}.log"
-    timeout "$tout" "$EMU" -r"$ROOT" "$SH" -c "path=(/dis /dis/cmd .); $cmd" \
-            </dev/null >"$log" 2>&1
-    local rc=$?
-    OUTPUT=$(cat "$log")
-    if [[ "$rc" -eq 0 ]] || [[ "$rc" -eq 124 ]]; then
-        info "[$name] rc=$rc: $OUTPUT"
-        return 0
-    else
-        info "[$name] error rc=$rc: $OUTPUT"
-        return 1
-    fi
-}
-
-# Run the whole exercise in one emu instance — the scaffold's state is
-# per-process, so cycling emu per test would lose connects between
-# steps. Each test below is a grep on a single combined transcript.
-TRANSCRIPT_LOG="/tmp/.mail9p-test-transcript.log"
-emu_c transcript 30 "
+# One emu for the whole exercise: mail9p's state is its process's.  Each
+# check below is a grep on a slice of the one transcript.  emu does not
+# exit when the script ends, so it is stopped by the timeout.
+T=$(mktemp)
+trap 'rm -f "$T"' EXIT
+cd "$ROOT"
+with_timeout 40 "$EMU" -r"$ROOT" /dis/sh.dis -c "path=(/dis /dis/cmd .)
 mount -ac {mntgen} /mnt
 mail9p &
 sleep 1
@@ -87,243 +74,97 @@ ls /mnt/mail
 echo '<<< 02 ctl-read-empty >>>'
 cat /mnt/mail/ctl
 
-echo '<<< 03 connect >>>'
+echo '<<< 03 connect-no-credentials >>>'
 echo connect alice imap.example.com > /mnt/mail/ctl
 
-echo '<<< 04 accounts-after-connect >>>'
+echo '<<< 04 connect-unreachable >>>'
+auth/factotum
+echo 'key proto=pass service=imap dom=127.0.0.1 user=alice !password=x' > /mnt/factotum/ctl
+echo connect alice 127.0.0.1 > /mnt/mail/ctl
+
+echo '<<< 05 no-account-left >>>'
 ls /mnt/mail/accounts
 
-echo '<<< 05 account-dir >>>'
-ls /mnt/mail/accounts/alice
+echo '<<< 06 bad-arg >>>'
+echo connect alice 127.0.0.1 bogus > /mnt/mail/ctl
 
-echo '<<< 06 account-ctl-read >>>'
-cat /mnt/mail/accounts/alice/ctl
+echo '<<< 07 no-server >>>'
+echo connect alice > /mnt/mail/ctl
 
-echo '<<< 07 boxes-empty >>>'
-ls /mnt/mail/accounts/alice/boxes
+echo '<<< 08 no-name >>>'
+echo connect > /mnt/mail/ctl
 
-echo '<<< 08 connect-duplicate-state >>>'
-# Attempt duplicate connect; then read acct ctl to verify the original
-# server string still wins (the second connect was rejected so alice
-# still points at imap.example.com, not imap2.example.com).
-echo connect alice imap2.example.com > /mnt/mail/ctl >[2] /dev/null
-cat /mnt/mail/accounts/alice/ctl
+echo '<<< 09 unknown-verb >>>'
+echo nonsense > /mnt/mail/ctl
 
-echo '<<< 09 connect-missing-server-state >>>'
-# echo without server arg; account 'bob' must NOT appear under /accounts.
-echo connect bob > /mnt/mail/ctl >[2] /dev/null
+echo '<<< 10 disconnect-missing >>>'
+echo disconnect nosuch > /mnt/mail/ctl
+
+echo '<<< 11 sync-missing >>>'
+echo sync nosuch > /mnt/mail/ctl
+
+echo '<<< 12 still-answers >>>'
+ls /mnt/mail
 ls /mnt/mail/accounts
-
-echo '<<< 10 unknown-verb-state >>>'
-# Unknown verb; account list must be unchanged (still just alice).
-echo nonsense > /mnt/mail/ctl >[2] /dev/null
-ls /mnt/mail/accounts
-
-echo '<<< 11 acctctl-select >>>'
-echo select INBOX > /mnt/mail/accounts/alice/ctl
-
-echo '<<< 12 acctctl-search >>>'
-echo search FROM alice > /mnt/mail/accounts/alice/ctl
-
-echo '<<< 13 acctctl-unknown-state >>>'
-# Acct-ctl unknown verb; following acct ctl read must still succeed
-# (server didn't crash) and report alice's original server.
-echo nonsense > /mnt/mail/accounts/alice/ctl >[2] /dev/null
-cat /mnt/mail/accounts/alice/ctl
-
-echo '<<< 14 second-account >>>'
-echo connect bob imap.bob.com > /mnt/mail/ctl
-ls /mnt/mail/accounts
-
-echo '<<< 15 disconnect-first >>>'
-echo disconnect alice > /mnt/mail/ctl
-ls /mnt/mail/accounts
-
-echo '<<< 16 disconnect-missing-state >>>'
-# Disconnect nonexistent; remaining accounts must be unchanged (still bob).
-echo disconnect nosuch > /mnt/mail/ctl >[2] /dev/null
-ls /mnt/mail/accounts
-
-echo '<<< 17 sync-existing >>>'
-echo sync bob > /mnt/mail/ctl
-
-echo '<<< 18 sync-missing-state >>>'
-# Sync nonexistent; bob's account must remain readable (server alive).
-echo sync nosuch > /mnt/mail/ctl >[2] /dev/null
-cat /mnt/mail/accounts/bob/ctl
 
 echo '<<< end >>>'
-" || true
+" </dev/null >"$T" 2>&1
+info "$(cat "$T")"
 
-cp "/tmp/.mail9p-test-transcript.log" "$TRANSCRIPT_LOG" 2>/dev/null || true
-
-# Slice the transcript between markers. Markers look like
-#   <<< 01 root-listing >>>
-# slice 01  returns the lines between that and the next "<<< " line.
+# the lines between <<< NN ... >>> and the next marker
 slice() {
     awk -v num="$1" '
         $0 ~ ("<<< " num " ") { capture = 1; next }
         capture && /<<< / { exit }
         capture { print }
-    ' "$TRANSCRIPT_LOG"
+    ' "$T"
 }
 
-# === Test 1: root listing ===
+# expect NN 'description' 'pattern': the slice matches the pattern
+expect() {
+    local out
+    out=$(slice "$1")
+    if echo "$out" | grep -q -- "$3"; then
+        pass "$1 $2"
+    else
+        fail "$1 $2: got: $out"
+    fi
+}
+
+grep -q '<<< end >>>' "$T" || fail "the script did not finish: $(tail -5 "$T")"
+
 out=$(slice 01)
-if echo "$out" | grep -q ctl && echo "$out" | grep -q accounts; then
-    pass "01 root listing contains ctl and accounts"
+if echo "$out" | grep -q '/ctl$' && echo "$out" | grep -q '/accounts$'; then
+    pass "01 root lists ctl and accounts"
 else
-    fail "01 root listing missing ctl or accounts"
-    info "$out"
+    fail "01 root listing: $out"
 fi
 
-# === Test 2: ctl reads as empty (write-only file, read returns 0 bytes) ===
 out=$(slice 02)
-# The cat itself produces no output; the marker is a single blank line.
-nbytes=$(echo -n "$out" | wc -c)
-if [[ "$nbytes" -le 1 ]]; then
-    pass "02 /ctl reads empty (write-only semantics)"
-else
-    fail "02 /ctl read returned non-empty: $out"
-fi
-
-# === Test 3: connect verb (no error printed in stderr) ===
-out=$(slice 03)
 if [[ -z "$out" ]]; then
-    pass "03 connect alice imap.example.com — no error"
+    pass "02 ctl reads empty"
 else
-    fail "03 connect produced unexpected output: $out"
+    fail "02 ctl read returned: $out"
 fi
 
-# === Test 4: accounts dir lists alice ===
-out=$(slice 04)
-if echo "$out" | grep -q alice; then
-    pass "04 account 'alice' visible under /accounts"
-else
-    fail "04 alice not listed under /accounts: $out"
-fi
+expect 03 "connect with no credentials refused" 'connect: no credentials.*factotum'
+expect 04 "connect to a server not there refused with the dial's error" 'connect: tls.*dial tcp!127.0.0.1!993'
 
-# === Test 5: account dir contains ctl and boxes ===
 out=$(slice 05)
-if echo "$out" | grep -q ctl && echo "$out" | grep -q boxes; then
-    pass "05 /accounts/alice contains ctl and boxes"
-else
-    fail "05 /accounts/alice missing ctl or boxes: $out"
-fi
-
-# === Test 6: account ctl reads "disconnected <server>" ===
-out=$(slice 06)
-if echo "$out" | grep -q "disconnected imap.example.com"; then
-    pass "06 account ctl reports 'disconnected imap.example.com'"
-else
-    fail "06 account ctl unexpected output: $out"
-fi
-
-# === Test 7: boxes dir is empty (scaffold doesn't populate yet) ===
-out=$(slice 07)
-nbytes=$(echo -n "$out" | wc -c)
-if [[ "$nbytes" -le 1 ]]; then
-    pass "07 /accounts/alice/boxes is empty (next-pass populates)"
-else
-    fail "07 boxes dir unexpectedly non-empty: $out"
-fi
-
-# === Test 8: duplicate connect — original server string preserved ===
-out=$(slice 08)
-if echo "$out" | grep -q "disconnected imap.example.com" \
-        && ! echo "$out" | grep -q "imap2"; then
-    pass "08 duplicate connect rejected (alice still points to original server)"
-else
-    fail "08 duplicate connect should be rejected; got: $out"
-fi
-
-# === Test 9: missing-server connect — bob must not appear ===
-out=$(slice 09)
-if ! echo "$out" | grep -q bob; then
-    pass "09 connect without server arg rejected (no 'bob' account created)"
-else
-    fail "09 connect without server arg should not create account: $out"
-fi
-
-# === Test 10: unknown verb — accounts unchanged (still alice only) ===
-out=$(slice 10)
-if echo "$out" | grep -q alice && ! echo "$out" | grep -q bob; then
-    pass "10 unknown ctl verb rejected (state unchanged)"
-else
-    fail "10 unknown ctl verb should not change state: $out"
-fi
-
-# === Test 11: account-ctl select accepts arg (no error) ===
-out=$(slice 11)
 if [[ -z "$out" ]]; then
-    pass "11 acct ctl 'select INBOX' accepted"
+    pass "05 refused connects leave no account"
 else
-    fail "11 acct ctl select produced output: $out"
+    fail "05 accounts after refused connects: $out"
 fi
 
-# === Test 12: account-ctl search accepts arg ===
-out=$(slice 12)
-if [[ -z "$out" ]]; then
-    pass "12 acct ctl 'search FROM alice' accepted"
-else
-    fail "12 acct ctl search produced output: $out"
-fi
-
-# === Test 13: account-ctl unknown verb — server still responsive ===
-out=$(slice 13)
-if echo "$out" | grep -q "disconnected imap.example.com"; then
-    pass "13 acct ctl unknown verb rejected (server still responsive after)"
-else
-    fail "13 acct ctl unknown verb broke server: $out"
-fi
-
-# === Test 14: second account coexists ===
-out=$(slice 14)
-if echo "$out" | grep -q alice && echo "$out" | grep -q bob; then
-    pass "14 second account 'bob' coexists with alice"
-else
-    fail "14 expected both alice and bob: $out"
-fi
-
-# === Test 15: disconnect removes account ===
-out=$(slice 15)
-if ! echo "$out" | grep -q alice && echo "$out" | grep -q bob; then
-    pass "15 disconnect alice removes only alice, bob remains"
-else
-    fail "15 disconnect did not remove alice cleanly: $out"
-fi
-
-# === Test 16: disconnect of nonexistent account — accounts unchanged ===
-out=$(slice 16)
-if echo "$out" | grep -q bob && ! echo "$out" | grep -q nosuch; then
-    pass "16 disconnect of nonexistent account rejected (bob still present)"
-else
-    fail "16 disconnect nosuch should not change state: $out"
-fi
-
-# === Test 17: sync existing account ok ===
-out=$(slice 17)
-if [[ -z "$out" ]]; then
-    pass "17 sync bob accepted (stub — IMAP-pass implements)"
-else
-    fail "17 sync produced unexpected output: $out"
-fi
-
-# === Test 18: sync of nonexistent — server alive, bob's ctl readable ===
-out=$(slice 18)
-if echo "$out" | grep -q "disconnected imap.bob.com"; then
-    pass "18 sync of nonexistent account rejected (bob still readable after)"
-else
-    fail "18 sync nosuch broke server: $out"
-fi
+expect 06 "an unknown connect argument refused" 'connect: unrecognised arg: bogus'
+expect 07 "connect with no server refused" 'connect: server required'
+expect 08 "connect with no name refused" 'connect: name required'
+expect 09 "an unknown verb refused" 'unknown ctl verb'
+expect 10 "disconnect of no such account refused" 'disconnect: no such account'
+expect 11 "sync of no such account refused" 'sync: no such account'
+expect 12 "mail9p still answers" '/mnt/mail/ctl'
 
 echo ""
 echo -e "Total: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}, ${YELLOW}$SKIPPED skipped${NC}"
-
-# Clean up
-rm -f "$TRANSCRIPT_LOG" /tmp/.mail9p-test-*.log 2>/dev/null
-
-if [[ "$FAILED" -gt 0 ]]; then
-    exit 1
-fi
-exit 0
+[[ "$FAILED" -eq 0 ]]

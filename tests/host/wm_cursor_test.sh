@@ -5,11 +5,13 @@
 # Delete's gunsight comes and goes the same way.  Each must be made on
 # the main thread, the only one SDL allows cursor calls on: emu made
 # them on the thread that wrote /dev/cursor, and on macOS the cursor
-# could be lost (the cross never showed after New).
+# could be lost (the cross never showed after New).  A move written to
+# /dev/pointer warps the host's pointer, on the main thread too.
 #
 # wm/wm (appl/wm/wm.b) runs under the SDL dummy driver, driven by
 # tests/wm/cursor.sh; a shim preloaded into emu (tests/wm/cursorshim.c)
-# logs each cursor call, which cursor (its mask bits) and which thread.
+# logs each cursor call and warp, which cursor (its mask bits) and which
+# thread.
 # Linux only: it needs LD_PRELOAD.
 #
 set -e
@@ -80,6 +82,20 @@ expect new 112 "the cross"
 expect swept default
 expect delete 207 "the gunsight"
 expect cancelled default
+# a move written to /dev/pointer warps the host's pointer, on the main
+# thread: emu warped it on the thread that wrote, as it did the cursor
+if ! grep -q '^R warp$' "$LOG"; then
+	fail "warp: never reached"
+else
+	got=$(calls warp)
+	if printf '%s\n' "$got" | grep -q '^warp other$'; then
+		fail "warp: the pointer warped off the main thread"
+	elif printf '%s\n' "$got" | grep -q '^warp main$'; then
+		echo "PASS: warp (on the main thread)"
+	else
+		fail "warp: the pointer never warped (calls: $(echo $got))"
+	fi
+fi
 got=$(sed -n 's/^R windows *//p' "$LOG")
 [ "$got" = "0 100 100 400 300" ] && echo "PASS: the window is where it was swept" ||
 	fail "windows '$got', want '0 100 100 400 300'"

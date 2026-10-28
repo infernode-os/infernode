@@ -12,6 +12,10 @@ Guifuzz: module
 	deadline:	int;		# when input stops (sys->millisec)
 	nmouse, nkeys:	int;	# actions made
 	menureach:	int;	# how far below where a menu opens it is let go
+	nokeys:	string;	# letters never typed (one that quits, say)
+	b2reach:	int;	# as menureach, for button 2 (0: let go anywhere)
+	menuguard:	int;	# a menu open: never let go on its last item
+	appwin:	string;	# the application's line in /chan/uitest (menuguard)
 
 	# input through /chan/uitest (wm/wm's) if uitest, else #m/pointer
 	# and #c/keyboard; nil or why not
@@ -36,9 +40,14 @@ Guifuzz: module
 	# exited set, and the deadline brought in
 	watch:	fn(modname: string);
 	exited:	int;
+	# the application's first proc (the lowest pid running modname)
+	apppid:	fn(modname: string): int;
 	broken:	fn(): int;
 	dumpprocs:	fn();
 	timeout:	fn(ms: int): chan of int;
+
+	# the last inputs sent, oldest first: what came before an exit
+	trail:	fn(): list of string;
 
 	readfile:	fn(f: string): string;
 	writefile:	fn(f, s: string): int;

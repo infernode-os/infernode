@@ -1,0 +1,117 @@
+#!/bin/bash
+#
+# lucifer-fuzz — grind a zone of Lucifer with random use until it breaks.
+#
+#	lucifer-fuzz [-a ctx] [-n runs] [-s seed] [-t secs] [-j jobs] [-i] [-k]
+#
+# Each run boots Lucifer headless (the SDL dummy driver, 1024x768) and
+# runs tests/lucifuzz.b in it: random clicks, drags, the wheel and keys
+# in the zone's rectangle, while a client changes what the zone shows as
+# an agent and tools9p do.  For the context zone (-a ctx): the
+# activity's resources, gaps and background tasks through /mnt/ui, with
+# values long, empty, odd and out of range, and the namespace manifest.
+# Then it checks the zone is still there, takes an event and goes back
+# to waiting, and that /mnt/ui answers with what was last added.
+#
+#	-a	the zone: ctx (the context zone, on the right)
+#	-n	runs (4); their seeds are seed, seed+1, ...
+#	-s	the first seed (the time)
+#	-t	seconds of input in each run (30)
+#	-j	runs at once (half the CPUs: a Lucifer is heavy)
+#	-i	the interpreter (emu -c0), whose stacks say where; the JIT
+#		(-c1) otherwise
+#	-k	keep the run's directory and log even when it passed
+#
+# Each run's output is in $ROOT/tmp/lucifer-fuzz/logs/<zone>-<seed>.log;
+# a run that failed keeps it, with the stacks of the procs mapped to
+# source lines.  The emulator's root is a copy of what Lucifer needs
+# (tools/fuzz-common.sh), made afresh for each lucifer-fuzz under
+# $ROOT/tmp/lucifer-fuzz/root.<pid>, and kept when a run failed or with
+# -k.  Exit status 1 if any run failed: froze (HUNG, STUCK), lost a proc
+# (BROKEN), lost the zone (GONE), left (no outcome), or lost what was
+# written (DATA).
+#
+# Needs the SDL GUI emulator and the tests built (cd tests; mk install).
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tests/host/common.sh"
+. "$ROOT/tools/fuzz-common.sh"
+cd "$ROOT"
+
+zone=ctx
+runs=4
+seed=$(date +%s)
+secs=30
+ncpu=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null || echo 2)
+jobs=$(( ncpu / 2 ))
+[ $jobs -ge 1 ] || jobs=1
+flag=-c1
+keep=0
+while getopts a:n:s:t:j:ik c; do
+	case $c in
+	a)	zone=$OPTARG ;;
+	n)	runs=$OPTARG ;;
+	s)	seed=$OPTARG ;;
+	t)	secs=$OPTARG ;;
+	j)	jobs=$OPTARG ;;
+	i)	flag=-c0 ;;
+	k)	keep=1 ;;
+	*)	sed -n '3,/^$/s/^# \{0,1\}//p' "$0" >&2; exit 2 ;;
+	esac
+done
+case $zone in
+ctx)	region="768 92 1024 768" ;;
+*)	echo "lucifer-fuzz: -a ctx" >&2; exit 2 ;;
+esac
+
+[ -x "$EMU" ] || { echo "lucifer-fuzz: no emulator at $EMU" >&2; exit 2; }
+if command -v nm >/dev/null 2>&1 && ! nm "$EMU" 2>/dev/null | grep -q sdl3_mainloop; then
+	echo "lucifer-fuzz: $EMU is a headless build; the SDL GUI emulator is needed" >&2
+	exit 2
+fi
+[ -f dis/tests/lucifuzz.dis ] || { echo "lucifer-fuzz: build the tests first (cd tests; mk install)" >&2; exit 2; }
+
+top=$ROOT/tmp/lucifer-fuzz
+logs=$top/logs
+mkdir -p "$logs"
+sb=$top/root.$$
+sandbox "$sb"
+
+one() {
+	s=$1
+	r=$sb/tmp/lucifer-fuzz/r$s
+	rm -rf "${r:?}"
+	mkdir -p "$r"
+	log=$logs/$zone-$s.log
+	SDL_VIDEODRIVER=dummy with_timeout $((secs+200)) "$EMU" $flag \
+		-pheap=1024m -pmain=1024m -pimage=1024m -g1024x768 -r"$sb" /dis/sh.dis -l -c "
+skiplogon=1; cd /tmp/lucifer-fuzz/r$s; run /lib/lucifer/boot.sh & sleep 45
+/dis/tests/lucifuzz.dis -a $zone -s $s -t $secs -R $region >[2=1]
+echo 'fuzz: NO OUTCOME'; echo halt > /dev/sysctl" </dev/null > "$log" 2>&1
+	bad=$(grep -E '^fuzz: (HUNG|BROKEN|STUCK|GONE|DATA|NO OUTCOME)' "$log" | head -4)
+	if [ -z "$bad" ] && ! grep -q '^fuzz: INTEGRITY ok' "$log"; then
+		bad="no outcome: $(grep -v '^fs: fsqid' "$log" | tail -2 | tr '\n' ' ')"
+	fi
+	if [ -n "$bad" ]; then
+		mapstacks "$log" > "$log.map" && mv "$log.map" "$log"
+		echo "$zone seed $s: FAIL"; printf '%s\n' "$bad" | sed 's/^/	/'
+		return 1
+	fi
+	echo "$zone seed $s: ok"
+	[ $keep = 1 ] || rm -rf "${r:?}" "${log:?}"
+	return 0
+}
+
+failed=0
+pids=
+for i in $(seq 0 $((runs - 1))); do
+	one $((seed + i)) &
+	pids="$pids $!"
+	while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do sleep 1; done
+done
+for p in $pids; do
+	wait $p || failed=$((failed + 1))
+done
+echo "lucifer-fuzz: $zone, $runs runs, $failed failed (logs in $logs)"
+[ $failed = 0 ] && [ $keep = 0 ] && rm -rf "${sb:?}"
+[ $failed = 0 ]

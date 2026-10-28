@@ -89,6 +89,7 @@ TARG=\
 	xenith_fuzz.dis\
 	guifuzz.dis\
 	wmfuzz.dis\
+	lucifuzz.dis\
 	jit_unload_test.dis\
 	jit_retslice_test.dis\
 	jit_test.dis\
@@ -355,7 +356,7 @@ XENITHM=\
 xenith_frame_test.dis xenith_framesuite.dis:	$XENITHM
 
 # the fuzzers' common part
-guifuzz.dis wmfuzz.dis:	guifuzz.m
+guifuzz.dis wmfuzz.dis lucifuzz.dis:	guifuzz.m
 
 # agentlib_test needs -I for appl/veltro (tool.m)
 agentlib_test.dis: agentlib_test.b $ROOT/module/agentlib.m

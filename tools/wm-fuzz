@@ -2,7 +2,7 @@
 #
 # wm-fuzz — grind a wm/wm application with random use until it breaks.
 #
-#	wm-fuzz [-a editor|shell] [-n runs] [-s seed] [-t secs] [-j jobs]
+#	wm-fuzz [-a editor|shell|page] [-n runs] [-s seed] [-t secs] [-j jobs]
 #		[-i] [-k]
 #
 # Each run starts wm/wm (the SDL dummy driver) with the application in
@@ -13,9 +13,12 @@
 # checks the application still answers: the editor's text reads back
 # whole, undo all the way back and redo all the way forward give it
 # back, and saveas writes it; the shell runs a command typed and shows
-# its output.
+# its output; wm/page, showing two PDFs and a Markdown file as one
+# document, writes the page it shows as an image, of a page's size,
+# twice (W).
 #
-#	-a	the application: editor (wm/editor) or shell (wm/shell)
+#	-a	the application: editor (wm/editor), shell (wm/shell) or
+#		page (wm/page)
 #	-n	runs (8); their seeds are seed, seed+1, ...
 #	-s	the first seed (the time)
 #	-t	seconds of input in each run (30)
@@ -64,8 +67,8 @@ while getopts a:n:s:t:j:ik c; do
 	esac
 done
 case $app in
-editor|shell)	;;
-*)	echo "wm-fuzz: -a editor or -a shell" >&2; exit 2 ;;
+editor|shell|page)	;;
+*)	echo "wm-fuzz: -a editor, shell or page" >&2; exit 2 ;;
 esac
 
 [ -x "$EMU" ] || { echo "wm-fuzz: no emulator at $EMU" >&2; exit 2; }
@@ -93,8 +96,21 @@ one() {
 		seq 1 60 | sed "s/^/f$i line /" > "$r/tmp/files/f$i"
 	done
 	seq 1 3000 | sed 's/^/a longer file, line /' > "$r/tmp/files/fbig"
+	{
+		echo '# A document'
+		echo
+		for i in $(seq 1 40); do
+			echo "## Part $i"
+			echo
+			echo "Some *text* with a [link](https://example.com/$i), \`code\`, and é漢🚀."
+			echo
+			echo "- one"; echo "- two"
+			echo
+		done
+	} > "$r/tmp/files/doc.md"
 	start="wm/editor $f/f1"
 	[ $app = shell ] && start="cd $f; wm/shell"
+	[ $app = page ] && start="cd $f; wm/page /tests/page/three.pdf /tests/page/links.pdf $f/doc.md"
 	cat > "$r/tmp/run" <<EOF
 load std
 $start &

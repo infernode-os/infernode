@@ -40,8 +40,37 @@ init(seed: int, ui: int): string
 	return nil;
 }
 
+TRAIL: con 40;
+trailbuf := array[TRAIL] of string;
+ntrail := 0;
+
+note(s: string)
+{
+	trailbuf[ntrail++ % TRAIL] = sys->sprint("%d %s", sys->millisec(), s);
+}
+
+trail(): list of string
+{
+	l: list of string;
+	for(i := ntrail - 1; i >= 0 && i >= ntrail - TRAIL; i--)
+		l = trailbuf[i % TRAIL] :: l;
+	return l;
+}
+
+# With menuguard, button 2 or 3 held (a menu open, chosen from where it
+# is let go): never on the menu's last item (exit, in most), so a run
+# is not ended by chance.  The menu is a window of wm's other than the
+# application's (/chan/uitest lists them).
+held := 0;
+
 ptr(x, y, b: int)
 {
+	if(menuguard && uitest != nil){
+		if(held & 6)
+			(x, y) = offlast(x, y);
+		held = b;
+	}
+	note(sys->sprint("ptr %d %d %d", x, y, b));
 	if(uitest != nil)
 		sys->fprint(uitest, "ptr %d %d %d", x, y, b);
 	else
@@ -49,6 +78,21 @@ ptr(x, y, b: int)
 }
 
 key(r: int)
+{
+	# a menu open takes keys too: Up to its last item (exit), Enter
+	# to choose it.  One held waits; one left open is closed (Esc)
+	for(i := 0; menuguard && (held & 6) && i < 100; i++)
+		sys->sleep(10);
+	if(menuguard && menuopen()){
+		note("key 27 (a menu open)");
+		sendkey(16r1b);
+		sys->sleep(50);
+	}
+	note(sys->sprint("key %d", r));
+	sendkey(r);
+}
+
+sendkey(r: int)
 {
 	if(uitest != nil){
 		sys->fprint(uitest, "key %d", r);
@@ -84,6 +128,43 @@ pause()
 	}
 }
 
+# Whether a window of the application's other than its own (a menu) is
+# open
+menuopen(): int
+{
+	(nil, lines) := sys->tokenize(readfile("/chan/uitest"), "\n");
+	for(; lines != nil; lines = tl lines)
+		if(hd lines != appwin)
+			return 1;
+	return 0;
+}
+
+# x, y moved off the last item of a menu open, if it is on it
+offlast(x, y: int): (int, int)
+{
+	(nil, lines) := sys->tokenize(readfile("/chan/uitest"), "\n");
+	for(; lines != nil; lines = tl lines){
+		if(hd lines == appwin)
+			continue;
+		(n, l) := sys->tokenize(hd lines, " ");
+		if(n < 5)
+			continue;
+		l = tl l;
+		mx0 := int hd l; l = tl l;
+		my0 := int hd l; l = tl l;
+		mx1 := int hd l; l = tl l;
+		my1 := int hd l;
+		# its last item, and below it in its column (dragged there,
+		# Tk's menu chooses the last)
+		if(x >= mx0 - 20 && x < mx1 + 20 && y >= my1 - 40){
+			y = my1 - 60;
+			if(y < my0)
+				y = my0 - 20;
+		}
+	}
+	return (x, y);
+}
+
 rx(): int
 {
 	return x0 + rand(x1-x0);
@@ -115,11 +196,17 @@ mouse(seed: int, done: chan of int)
 				ptr(rx(), ry(), 1);
 			}
 			ptr(rx(), ry(), 0);
-		5 =>	# B2: a click, or dragged
+		5 =>	# B2: a click, or dragged (or a menu, chosen from where
+			# it is let go)
 			ptr(x, y, 2); pause();
-			if(rand(2))
-				ptr(rx(), ry(), 2);
-			ptr(rx(), ry(), 0);
+			if(b2reach > 0){
+				ptr(x + rand(60) - 10, y + rand(b2reach) - 20, 2); pause();
+				ptr(x + rand(60) - 10, y + rand(b2reach) - 20, 0);
+			}else{
+				if(rand(2))
+					ptr(rx(), ry(), 2);
+				ptr(rx(), ry(), 0);
+			}
 		6 =>	# B3: a menu, chosen from where it is let go
 			ptr(x, y, 4); pause();
 			ptr(x + rand(60) - 10, y + rand(menureach) - 20, 4); pause();
@@ -182,6 +269,9 @@ keys(seed: int, special: array of int, words: array of string, punct: string, do
 			c := 'a' + rand(26);
 			if(rand(8) == 0)
 				c = punct[rand(len punct)];
+			for(i := 0; i < len nokeys; i++)
+				if(c == nokeys[i])
+					c = ' ';
 			key(c);
 		}
 		if(rand(10) == 0)
@@ -192,36 +282,64 @@ keys(seed: int, special: array of int, words: array of string, punct: string, do
 
 watch(modname: string)
 {
+	pid := apppid(modname);
+	gone := 0;
 	while(sys->millisec() < deadline){
 		sys->sleep(250);
 		if(broken())
 			deadline = 0;
-		else if(!running(modname)){
+		else if(pid > 0 && sys->open("/prog/" + string pid + "/status", Sys->OREAD) != nil)
+			gone = 0;
+		else if(pid <= 0 && (pid = apppid(modname)) > 0)
+			gone = 0;
+		else if(++gone >= 2){
 			exited = 1;
 			deadline = 0;
 		}
 	}
 }
 
-# Whether a proc runs modname (the last word of its status).
-running(modname: string): int
+# The application's first proc (the one that ran its init, the
+# lowest pid of those running its module): the application is gone
+# when it is.  By the module a proc is in now, the last word of its
+# status, or a frame of its stack in modname's .dis (it may be in a
+# library it calls, as wm/page in sheetview).
+apppid(modname: string): int
 {
+	dis := "/" + lower(modname) + ".dis";
 	fd := sys->open("/prog", Sys->OREAD);
 	if(fd == nil)
-		return 1;
+		return -1;
+	low := -1;
 	for(;;){
 		(nd, d) := sys->dirread(fd);
 		if(nd <= 0)
 			break;
 		for(i := 0; i < nd; i++){
-			(nil, l) := sys->tokenize(readfile("/prog/"+d[i].name+"/status"), " ");
+			pid := int d[i].name;
+			if(low > 0 && pid >= low)
+				continue;
+			p := "/prog/" + d[i].name;
+			(nil, l) := sys->tokenize(readfile(p + "/status"), " ");
 			for(; l != nil && tl l != nil; l = tl l)
 				;
-			if(l != nil && (hd l == modname || hd l == modname+"[$Sys]" || hd l == modname+"[$Tk]" || hd l == modname+"[$Draw]"))
-				return 1;
+			if(l != nil && (hd l == modname || hd l == modname+"[$Sys]" || hd l == modname+"[$Tk]" || hd l == modname+"[$Draw]")){
+				low = pid;
+				continue;
+			}
+			if(contains(readfile(p + "/stack"), dis))
+				low = pid;
 		}
 	}
-	return 0;
+	return low;
+}
+
+lower(s: string): string
+{
+	for(i := 0; i < len s; i++)
+		if(s[i] >= 'A' && s[i] <= 'Z')
+			s[i] += 'a' - 'A';
+	return s;
 }
 
 broken(): int

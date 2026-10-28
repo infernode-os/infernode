@@ -947,6 +947,25 @@ exportproc(fd: ref Sys->FD)
 }
 
 
+# The windows, topmost first: "id minx miny maxx maxy" each, so a test
+# can check where moves and reshapes left them; then the others an
+# application has (a menu posted), its tag after.  In a function of its
+# own: a window held in uitestproc's frame (by a local, or a temporary
+# the compiler keeps) kept its image, and a client killed left its
+# window on the screen (INFR-433).
+winlist(): string
+{
+	t := "";
+	for(z := wmsrv->top(); z != nil; z = z.znext)
+		if((w := z.window(".")) != nil)
+			t += sys->sprint("%d %d %d %d %d\n", z.id, w.r.min.x, w.r.min.y, w.r.max.x, w.r.max.y);
+	for(z = wmsrv->top(); z != nil; z = z.znext)
+		for(ws := z.wins; ws != nil; ws = tl ws)
+			if((sw := hd ws).tag != ".")
+				t += sys->sprint("%d %d %d %d %d %s\n", z.id, sw.r.min.x, sw.r.min.y, sw.r.max.x, sw.r.max.y, sw.tag);
+	return t;
+}
+
 # Synthetic input for tests: parse "/chan/uitest" writes and feed the
 # same channels real input arrives on.  Reads list the windows (above).
 uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
@@ -958,15 +977,9 @@ uitestproc(f: ref Sys->FileIO, ptr: chan of ref Draw->Pointer)
 	spawn bufferproc(keys, fakekbd);
 	for(;;) alt {
 	(off, nil, nil, rc) := <-f.read =>
-		# the windows, topmost first: "id minx miny maxx maxy" each,
-		# so a test can check where moves and reshapes left them
 		if(rc == nil)
 			break;
-		t := "";
-		for(z := wmsrv->top(); z != nil; z = z.znext)
-			if((w := z.window(".")) != nil)
-				t += sys->sprint("%d %d %d %d %d\n", z.id, w.r.min.x, w.r.min.y, w.r.max.x, w.r.max.y);
-		b := array of byte t;
+		b := array of byte winlist();
 		if(off > len b)
 			off = len b;
 		rc <-= (b[off:], nil);

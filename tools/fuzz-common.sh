@@ -35,13 +35,27 @@ mapstacks() {
 import re, sys, os
 root, log = sys.argv[1], sys.argv[2]
 cache = {}
+found = None
+def where(base):
+	# every .sbl under appl and tests, by name: a module's is where its
+	# source is, whatever its dis path (dis/lucictx.dis: appl/cmd)
+	global found
+	if found is None:
+		found = {}
+		for top in ('appl', 'tests'):
+			for d, _, fs in os.walk(os.path.join(root, top)):
+				for f in fs:
+					if f.endswith('.sbl'):
+						found.setdefault(f, []).append(os.path.join(d, f))
+	return found.get(base, [])
 def sbl(dis):
 	if dis in cache:
 		return cache[dis]
 	m = dis.replace('/dis/', '', 1)[:-4]
 	pcs = None
-	for c in (root+'/appl/'+m+'.sbl', root+'/appl/xenith/'+os.path.basename(m)+'.sbl',
-	          root+'/appl/'+m+'/'+os.path.basename(m)+'.sbl', root+'/'+m+'.sbl'):
+	byname = sorted(where(os.path.basename(m) + '.sbl'), key=lambda c: (not c.endswith('/' + m + '.sbl'), len(c)))
+	for c in [root+'/appl/'+m+'.sbl', root+'/appl/xenith/'+os.path.basename(m)+'.sbl',
+	          root+'/appl/'+m+'/'+os.path.basename(m)+'.sbl', root+'/'+m+'.sbl'] + byname:
 		try:
 			L = open(c).read().split('\n')
 		except OSError:

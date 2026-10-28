@@ -757,6 +757,7 @@ dis/tests/jit_ownhandler_test.dis
 dis/tests/jit_test.dis
 dis/tests/jit_retslice_test.dis
 dis/tests/jit_unload_helper.dis
+dis/tests/lucifuzz.dis
 dis/tests/nan_test.dis
 dis/tests/ninep_utf_test.dis
 dis/tests/pool_nomem_helper.dis

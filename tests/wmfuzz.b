@@ -16,7 +16,7 @@ implement WmFuzz;
 #	shell	that a command typed runs and its output is shown.
 # then halts the emulator (unless -n).
 #
-#	wmfuzz -a editor|shell [-s seed] [-t secs] [-d dir] [-n]
+#	wmfuzz -a editor|shell|page [-s seed] [-t secs] [-d dir] [-n]
 #
 # It prints lines beginning "fuzz:"; the outcome lines are RESPONSIVE,
 # HUNG, BROKEN (a proc died), EXITED (the application was asked to
@@ -58,15 +58,40 @@ shellwords := array[] of {
 
 # keys: no Ctrl-Q (it quits); for the shell no Esc (hold would freeze
 # the output looked for at the end) and no Ctrl-D (EOF ends sh)
+# Keyboard's (keyboard.m): the arrows, Home, End, Page Up and Down,
+# Insert and Delete
+Home: con 16rE010;
+End: con 16rE011;
+Up: con 16rE012;
+Down: con 16rE013;
+Left: con 16rE014;
+Right: con 16rE015;
+Pgup: con 16rE016;
+Pgdown: con 16rE017;
+Ins: con 16rE063;
+Del: con 16rE064;
+
 editkeys := array[] of {
-	'\n', '\b', '\t', 16r1b, 16rFF9F,
-	16rFF61, 16rFF57, 16rFF52, 16rFF54, 16rFF51, 16rFF53, 16rFF55, 16rFF56,
+	'\n', '\b', '\t', 16r1b, Del, Ins,
+	Home, End, Up, Down, Left, Right, Pgup, Pgdown,
 	'A'-'@', 'C'-'@', 'F'-'@', 'G'-'@', 'S'-'@', 'V'-'@', 'X'-'@', 'Y'-'@', 'Z'-'@',
 	'Z'-'@', 'Z'-'@', 'Y'-'@',
 };
+# wm/page: paging, scrolling, zoom, fit, turning, find, go to, write;
+# Esc ends a prompt.  Never q or Delete (they quit).
+pagekeys := array[] of {
+	' ', '\b', '\n', 16r1b, Pgup, Pgdown, Up, Down, Left, Right,
+	Home, End, 'n', 'p', '+', '-', '+', 'w', 'f', 'r', 'R', '/', 'g', 'W',
+};
+pagewords := array[] of {
+	"1\n", "2\n", "3\n", "7\n", "0\n", "99999\n", "-1\n", "page\n", "link\n",
+	"é漢🚀\n", "",
+};
+PAGEWRITE: con "/tmp/fuzzpage.bit";
+
 shellkeys := array[] of {
-	'\n', '\n', '\b', '\t', 16rFF9F,
-	16rFF61, 16rFF57, 16rFF52, 16rFF54, 16rFF51, 16rFF53, 16rFF55, 16rFF56,
+	'\n', '\n', '\b', '\t', Del, Ins,
+	Home, End, Up, Down, Left, Right, Pgup, Pgdown,
 	'C'-'@', 'L'-'@', 'N'-'@', 'P'-'@', 'U'-'@', 'W'-'@',
 };
 
@@ -109,6 +134,12 @@ init(nil: ref Draw->Context, args: list of string)
 	# the shell's menu ends with exit, which goes at once: not so far
 	if(app == "shell")
 		g->menureach = 130;
+	# wm/page's button 2 menu ends with exit
+	if(app == "page"){
+		g->nokeys = "q";
+		g->b2reach = 170;
+		g->menuguard = 1;
+	}
 	g->deadline = sys->millisec() + secs*1000;
 	done := chan of int;
 	n := 2;
@@ -117,15 +148,18 @@ init(nil: ref Draw->Context, args: list of string)
 		# no brackets or quotes: one left open makes sh read on for its
 		# end, which no interrupt ends, and the check at the end is lost
 		spawn g->keys(g->rand(1<<30), shellkeys, shellwords, " /.,|<>é漢🚀", done);
+	else if(app == "page")
+		spawn g->keys(g->rand(1<<30), pagekeys, pagewords, " /.,|<>é漢🚀0123456789", done);
 	else {
 		spawn g->keys(g->rand(1<<30), editkeys, editwords, " /.,()[]{}|<>'\"é漢🚀", done);
 		spawn client(done);
 		n++;
 	}
-	if(app == "shell")
-		spawn g->watch("Shell");
-	else
-		spawn g->watch("Editor");
+	case app {
+	"shell" =>	spawn g->watch("Shell");
+	"page" =>	spawn g->watch("Page");
+	* =>		spawn g->watch("Editor");
+	}
 	while(n > 0){
 		alt{
 		<-done =>
@@ -143,10 +177,15 @@ init(nil: ref Draw->Context, args: list of string)
 	sys->sleep(1000);
 	if(g->broken())
 		;
-	else if(g->exited)
+	else if(g->exited){
 		sys->print("fuzz: EXITED\n");
+		for(l := g->trail(); l != nil; l = tl l)
+			sys->print("	%s\n", hd l);
+	}
 	else if(app == "shell")
 		checkshell();
+	else if(app == "page")
+		checkpage();
 	else
 		checkeditor();
 	finish();
@@ -164,6 +203,9 @@ finish()
 window(): int
 {
 	for(i := 0; i < 40; i++){
+		(nil, lines) := sys->tokenize(g->readfile("/chan/uitest"), "\n");
+		if(lines != nil)
+			g->appwin = hd lines;
 		(n, l) := sys->tokenize(g->readfile("/chan/uitest"), " \n");
 		if(n >= 5){
 			l = tl l;
@@ -507,4 +549,72 @@ checkshell()
 		if(n-- <= 12)
 			sys->print("%s\n", hd l);
 	g->dumpprocs();
+}
+
+# ---------- The pages ----------
+
+# The page shown written as an image (W): it answers, and what it
+# shows is an image of the size of a page.  Twice, a page on between.
+checkpage()
+{
+	# out of a menu, the keys to the window; a prompt ended
+	g->ptr(g->x0 + 60, g->y0 + 60, 1);
+	g->ptr(g->x0 + 60, g->y0 + 60, 0);
+	sys->sleep(300);
+	g->key(16r1b);
+	sys->sleep(300);
+	if(!pagewrite("first"))
+		return;
+	g->key('n');
+	sys->sleep(500);
+	if(!pagewrite("second"))
+		return;
+	sys->print("fuzz: INTEGRITY ok\n");
+}
+
+pagewrite(what: string): int
+{
+	sys->remove(PAGEWRITE);
+	g->key('W');
+	sys->sleep(300);
+	g->text(PAGEWRITE + "\n");
+	for(i := 0; i < 40; i++){
+		sys->sleep(250);
+		(w, h, err) := imagesize(PAGEWRITE);
+		if(err == nil){
+			if(w < 16 || h < 16 || w > 20000 || h > 20000){
+				sys->print("fuzz: DATA: the %s page written is %dx%d\n", what, w, h);
+				return 0;
+			}
+			if(what == "first")
+				sys->print("fuzz: RESPONSIVE (%dx%d)\n", w, h);
+			return 1;
+		}
+	}
+	(nil, nil, err) := imagesize(PAGEWRITE);
+	sys->print("fuzz: HUNG: the %s page not written in 10s (%s)\n", what, err);
+	g->dumpprocs();
+	return 0;
+}
+
+# The size of an image file (image(6)): its header, uncompressed or
+# compressed, read whole once it is there.
+imagesize(f: string): (int, int, string)
+{
+	b := g->readfile(f);
+	if(b == nil)
+		return (0, 0, "none");
+	if(len b >= 11 && b[0:11] == "compressed\n")
+		b = b[11:];
+	if(len b < 60)
+		return (0, 0, "short");
+	(n, l) := sys->tokenize(b[0:60], " ");
+	if(n < 5)
+		return (0, 0, "no header");
+	l = tl l;
+	x0 := int hd l; l = tl l;
+	y0 := int hd l; l = tl l;
+	x1 := int hd l; l = tl l;
+	y1 := int hd l;
+	return (x1 - x0, y1 - y0, nil);
 }

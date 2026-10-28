@@ -6071,6 +6071,10 @@ try:
     typed("ps; echo VMPSBEFORE", 3)
     typed("kill $pid; sleep 1; echo VMPS; ps; echo VMKILLED", 3)
     typed("vm 1 sh -c 'load tk'", 4)
+    # the VM directories by name, as a listing gives them: vmgen once
+    # gave devdir a name on its own stack, dead by the time devdirread
+    # packed it -- every listing came back garbage
+    typed("ls '#V/vm'; echo VMLSEND", 2)
     # vmstress: echo servers and allocators in VMs 1-3, traffic to them
     # from VM 0 and between them, a job started every 300 ms, bursts
     # in all four at once, sleepers killed across VMs; every count
@@ -6125,6 +6129,12 @@ PYEOF
         pass "virt: vm: VM 0 kills it (devprog across VMs)"
     fi
     vcheck "vm: \$Tk stays VM 0's: VM 1's shell cannot load it" "not built-in"
+    vls="$(sed -n "/ls .#V\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | grep -acE '^#V/vm/[0-3]$')"
+    if [[ "$vls" -eq 4 ]]; then
+        pass "virt: vm: ls '#V/vm' names VMs 0-3 (a name devdir keeps outlives the generator)"
+    else
+        fail "virt: vm: ls '#V/vm' gave $vls of 4 VM names: $(sed -n "/ls .#V\/vm.; echo VMLSEND/,/^VMLSEND/p" <<<"$VMOUT" | head -6 | tr '\n' ' ')"
+    fi
     vs="$(grep -aE '^vmstress: [0-9]+s starts' <<<"$VMOUT" | tail -1)"
     if [[ -z "$vs" ]]; then
         fail "virt: vmstress: no report (did it start? $(grep -a 'vmstress:' <<<"$VMOUT" | head -2 | tr '\n' ' '))"

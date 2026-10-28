@@ -47,7 +47,6 @@ vmgen(Chan *c, char *name, Dirtab *tab, int ntab, int i, Dir *dp)
 {
 	Qid q;
 	int t, n;
-	char buf[16];
 
 	USED(name);
 	USED(tab);
@@ -83,9 +82,17 @@ vmgen(Chan *c, char *name, Dirtab *tab, int ntab, int i, Dir *dp)
 		}
 		if(i > MAXVM)
 			return -1;
-		snprint(buf, sizeof buf, "%d", i-1);
+		/*
+		 * Not a buffer of our own: devdir keeps the pointer, and
+		 * devwalk compares the name and devdirread packs it after
+		 * we return. One on this stack was dead by then -- listings
+		 * showed garbage, and a walk to "1" failed once in 142,000
+		 * on the Pi 4's soak. up->genbuf outlives the call, as
+		 * devprog's pids do.
+		 */
+		snprint(up->genbuf, sizeof up->genbuf, "%d", i-1);
 		mkqid(&q, QID(i-1, Qndir), 0, QTDIR);
-		devdir(c, q, buf, 0, eve, DMDIR|0555, dp);
+		devdir(c, q, up->genbuf, 0, eve, DMDIR|0555, dp);
 		return 1;
 	case Qndir:
 		switch(i){

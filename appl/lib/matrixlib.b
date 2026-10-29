@@ -109,19 +109,14 @@ parsecomposition(text: string): (ref Composition, string)
 		if(first == "layout") {
 			if(c.layout != nil)
 				return (nil, "duplicate layout declaration");
-			if(len rest < 3)
+			if(len rest != 3)
 				return (nil, "layout needs: hsplit|vsplit ratio1 ratio2");
 			orient := parseorient(hd rest);
 			if(orient < 0)
 				return (nil, "layout: expected hsplit or vsplit");
-			rest = tl rest;
-			(r1, r1err) := parseint(hd rest);
-			if(r1err != nil)
-				return (nil, "layout: bad ratio1");
-			rest = tl rest;
-			(r2, r2err) := parseint(hd rest);
-			if(r2err != nil)
-				return (nil, "layout: bad ratio2");
+			(r1, r2, rerr) := parseratios(tl rest);
+			if(rerr != nil)
+				return (nil, "layout: " + rerr);
 
 			(n1, n2) := childnames("", orient);
 			leaf1 := ref LayoutNode.Leaf(n1, "", "", nil, nil, "", "", "", 0, Rect((0,0),(0,0)));
@@ -139,10 +134,15 @@ parsecomposition(text: string): (ref Composition, string)
 				return (nil, "service needs: name mount");
 			sname := hd rest;
 			smount := hd tl rest;
-			if(!safeleaf(sname))
+			if(!safemodname(sname))
 				return (nil, "service: unsafe module name");
 			if(!safemount(smount))
 				return (nil, "service: unsafe mount path");
+			# The name is the service's identity: its modules/<name>
+			# directory and its /tmp/matrix/<name> outdir.
+			for(sl := c.services; sl != nil; sl = tl sl)
+				if((hd sl).name == sname)
+					return (nil, "service " + sname + ": declared twice");
 			se := ref ServiceEntry(sname, smount, "", nil, 0);
 			c.services = se :: c.services;
 			continue;
@@ -155,14 +155,11 @@ parsecomposition(text: string): (ref Composition, string)
 			orient := parseorient(hd rest);
 			if(orient >= 0) {
 				# Region split
-				rest = tl rest;
-				(r1, r1e) := parseint(hd rest);
-				if(r1e != nil)
-					return (nil, first + ": bad ratio1");
-				rest = tl rest;
-				(r2, r2e) := parseint(hd rest);
-				if(r2e != nil)
-					return (nil, first + ": bad ratio2");
+				if(len rest != 3)
+					return (nil, first + ": split needs: hsplit|vsplit ratio1 ratio2");
+				(r1, r2, rerr) := parseratios(tl rest);
+				if(rerr != nil)
+					return (nil, first + ": " + rerr);
 
 				# Find the leaf with this name
 				found := 0;
@@ -216,11 +213,14 @@ parsecomposition(text: string): (ref Composition, string)
 			} else {
 				if(len rest != 2)
 					return (nil, first + ": display module needs: name mount");
-				if(!safeleaf(modname))
+				if(!safemodname(modname))
 					return (nil, first + ": unsafe module name");
 				if(!safemount(mount))
 					return (nil, first + ": unsafe mount path");
 			}
+			for(al := c.assigns; al != nil; al = tl al)
+				if((hd al).region == first)
+					return (nil, first + ": region assigned twice");
 			ma := ref ModuleAssign(first, modname, mount, args);
 			c.assigns = ma :: c.assigns;
 			continue;
@@ -242,13 +242,14 @@ parsecomposition(text: string): (ref Composition, string)
 		watches = hd wl :: watches;
 	c.watches = watches;
 
-	# Apply module assignments to layout leaves
+	# Apply module assignments to layout leaves.  Without a layout
+	# there are no regions: the assignment would vanish unseen.
 	for(al := c.assigns; al != nil; al = tl al) {
 		a := hd al;
-		if(c.layout != nil) {
-			if(!assignleaf(c.layout, a.region, a.modname, a.mount, a.args))
-				return (nil, a.region + ": region not found in layout");
-		}
+		if(c.layout == nil)
+			return (nil, a.region + ": region assignment needs a layout");
+		if(!assignleaf(c.layout, a.region, a.modname, a.mount, a.args))
+			return (nil, a.region + ": region not found in layout");
 	}
 
 	return (c, nil);
@@ -484,6 +485,24 @@ parseorient(s: string): int
 	return -1;
 }
 
+# A split's two weights.  Zero is a weight (a region given no room:
+# the picker's "vsplit 100 0"); a negative one put the divider outside
+# the pane.  MAXRATIO keeps width*weight inside an int.
+MAXRATIO: con 10000;
+
+parseratios(toks: list of string): (int, int, string)
+{
+	(r1, e1) := parseint(hd toks);
+	if(e1 != nil || r1 < 0 || r1 > MAXRATIO)
+		return (0, 0, "bad ratio1");
+	(r2, e2) := parseint(hd tl toks);
+	if(e2 != nil || r2 < 0 || r2 > MAXRATIO)
+		return (0, 0, "bad ratio2");
+	if(r1 + r2 == 0)
+		return (0, 0, "ratios sum to zero");
+	return (r1, r2, nil);
+}
+
 # Parse integer
 parseint(s: string): (int, string)
 {
@@ -505,6 +524,15 @@ safeleaf(s: string): int
 		return 0;
 	}
 	return 1;
+}
+
+# A module name: a safe leaf not beginning with a dot.  Dot names are
+# hidden from listings (the picker skips them), and /tmp/matrix/.ns
+# is the runtime's own shadow directory, which a service named .ns
+# would be granted as its outdir.
+safemodname(s: string): int
+{
+	return safeleaf(s) && s[0] != '.';
 }
 
 safemount(path: string): int
@@ -665,9 +693,9 @@ trim(s: string): string
 {
 	start := 0;
 	end := len s;
-	while(start < end && (s[start] == ' ' || s[start] == '\t'))
+	while(start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r'))
 		start++;
-	while(end > start && (s[end-1] == ' ' || s[end-1] == '\t'))
+	while(end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\r'))
 		end--;
 	if(start == 0 && end == len s)
 		return s;

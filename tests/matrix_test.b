@@ -474,6 +474,66 @@ testUnsafeCompositionTokens(t: ref T)
 	t.assertseq(err, "left: unsafe app path", "unsafe app path rejected");
 }
 
+# What the parser refuses because nothing sensible can come of it:
+# each case was accepted, and either ignored or turned into a broken
+# layout or a clash in the runtime.
+# Every composition the library ships parses.
+testShippedCompositions(t: ref T)
+{
+	names := lsnames("/lib/matrix/compositions");
+	n := 0;
+	for(; names != nil; names = tl names) {
+		nm := hd names;
+		(nil, err) := matrixlib->parsecomposition(readfile("/lib/matrix/compositions/" + nm));
+		t.assertnil(err, nm + " parses");
+		n++;
+	}
+	t.assert(n >= 10, sys->sprint("the library ships compositions (%d)", n));
+}
+
+testCompositionRefusals(t: ref T)
+{
+	cases := array[] of {
+		# A negative weight puts the divider outside the pane.
+		("layout hsplit -10 40\n", "layout: bad ratio1"),
+		("layout hsplit 1 1\nleft vsplit 3 -1\n", "left: bad ratio2"),
+		# Both zero divide nothing.
+		("layout hsplit 0 0\n", "layout: ratios sum to zero"),
+		# Weights big enough to overflow width*weight.
+		("layout hsplit 9999999 1\n", "layout: bad ratio1"),
+		# Trailing tokens were dropped without a word.
+		("layout hsplit 60 40 20\n", "layout needs: hsplit|vsplit ratio1 ratio2"),
+		("layout hsplit 1 1\nleft vsplit 1 1 1\n", "left: split needs: hsplit|vsplit ratio1 ratio2"),
+		# A region assigned with no layout was ignored.
+		("left cpu-gauge /m\nservice s /m\n", "left: region assignment needs a layout"),
+		# A region assigned twice kept the first, silently.
+		("layout hsplit 1 1\nleft a /m\nleft b /m\n", "left: region assigned twice"),
+		# One name is one modules/<name> and one /tmp/matrix/<name>.
+		("service s /a\nservice s /b\n", "service s: declared twice"),
+		# Dot names hide (the picker skips them) and .ns is the
+		# runtime's own shadow directory.
+		("service .ns /m\n", "service: unsafe module name"),
+		("layout hsplit 1 1\nleft .hidden /m\n", "left: unsafe module name"),
+	};
+	for(i := 0; i < len cases; i++) {
+		(text, want) := cases[i];
+		(c, err) := matrixlib->parsecomposition(text);
+		t.assertseq(err, want, sys->sprint("refused: %q", text));
+		t.assert(c == nil, "no composition with the error");
+	}
+
+	# Still accepted: a zero weight (the picker's "vsplit 100 0"), a
+	# dot inside a name, and lines ending CR LF.
+	(nil, err) := matrixlib->parsecomposition("layout vsplit 100 0\ntop comp-list /lib/matrix/compositions\n");
+	t.assertnil(err, "a zero weight");
+	(nil, err) = matrixlib->parsecomposition("service s.v2 /m\n");
+	t.assertnil(err, "a dot inside a name");
+	(c, cerr) := matrixlib->parsecomposition("# crlf\r\nlayout hsplit 1 1\r\nleft a /m/a\r\nservice s /m\r\n");
+	t.assertnil(cerr, "CR LF line ends");
+	if(c != nil)
+		t.assertseq(servicebyname(c, "s").mount, "/m", "CR not part of the mount");
+}
+
 testUnrecognizedLine(t: ref T)
 {
 	(nil, err) := matrixlib->parsecomposition("gibberish\n");
@@ -1490,6 +1550,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ServiceNeedsMount", testServiceNeedsMount);
 	run("UnsafeCompositionTokens", testUnsafeCompositionTokens);
 	run("UnrecognizedLine", testUnrecognizedLine);
+	run("CompositionRefusals", testCompositionRefusals);
+	run("ShippedCompositions", testShippedCompositions);
 	run("CommentsAndBlanks", testCommentsAndBlanks);
 	run("TextRoundTrip", testTextRoundTrip);
 	run("WatchGrammar", testWatchGrammar);

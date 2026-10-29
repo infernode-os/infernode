@@ -27,13 +27,17 @@ Discovery (man pages versus stories):
 
 Runtime:
   status               Runtime state and loaded modules (name, type,
-                       running|stopped, mount).
+                       status, mount).  A module's status is running,
+                       stopped, exited (a service whose run returned),
+                       or failed with why.
   composition          The live composition text.
   compose <text>       Write a new composition. ';' separates lines:
                        "compose layout hsplit 50 50; left cpu-gauge
                        /tmp/matrix/sysmon-svc; service sysmon-svc /"
                        Unchanged entries keep their live instance
-                       (incremental reload).
+                       (incremental reload).  A composition that does
+                       not parse is refused with the parser's message,
+                       and the live one stays.
   ctl load <name>      Load a pinned composition by name.
   ctl unload           Unload all modules.
   ctl pin <name>       Save the live composition to the library.

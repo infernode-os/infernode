@@ -168,15 +168,19 @@ kinds sit in different trust domains:
   executes in its own process group with a private namespace in which
   only its mount (read-only) and its output directory (read-write)
   resolve — no `/dis`, no `/lib`, no control filesystem, no fresh
-  device attaches, no environment. The mount named in the composition
-  IS the capability grant; `service foo /` is an explicit
+  device attaches, no environment. The mount is bound `MREADONLY`, so
+  the read-only grant holds all the way down: nothing in it opens for
+  writing, is created or is removed. The mount named in the
+  composition IS the capability grant; `service foo /` is an explicit
   whole-namespace grant. If the grant cannot be constructed (e.g. the
   mount does not exist), the service fails closed and never runs.
 - **Display modules are trusted.** They draw into a shared image and
   handle events synchronously inside the Matrix process, so per-process
   namespace confinement cannot apply. Matrix loads them from the local
   library (`/dis/matrix/`) only; a display module is code you install,
-  not code you fetch.
+  not code you fetch. Trusted is not infallible: a display module that
+  raises in any call is dropped from its region, which then says which
+  call raised and why, and the runtime carries on.
 
 A composition can contain any mix of display and service modules,
 including none of one type.
@@ -349,7 +353,18 @@ A service module's `outdir` is a real directory under `/tmp/matrix/`
 (one per service), which the control filesystem serves read-only as
 `/mnt/matrix/modules/<name>/out/`. The module creates files there as
 needed — local readers may use the real path directly; Veltro and
-remote agents read the served view.
+remote agents read the served view. Readers cannot remove what they
+read there, so a service writes a set of current files (or a bounded
+ring), not a stream it expects to be drained.
+
+A service lives as long as its `run()`. When `run()` ends — returns,
+raises, or is refused its namespace — its process group goes with it,
+so nothing it started outlives it, and its `ctl` says how it ended
+(below). A service told to `shutdown()` whose `run()` has not returned
+within 2 s is killed, child processes and all: the next composition
+may start the same service on the same outdir. A reload starts a
+service whose `run()` has ended afresh, even if its entry is
+unchanged, so `load -` restarts one that exited or failed.
 
 ### Tk-Hosted Display Module
 
@@ -489,6 +504,23 @@ is the composition name:
 # pinned 2026-04-04
 ```
 
+### What is refused
+
+Beyond lines it does not recognise, the parser refuses what nothing
+sensible can come of, naming the region or service:
+
+- a split weight that is negative, over 10000, or two that are both
+  zero (a single zero is a weight: `layout vsplit 100 0` gives the
+  second region no room);
+- trailing tokens on a `layout` or split line;
+- a region assignment in a composition with no layout;
+- a region assigned twice;
+- two services of one name (the name is the service's `modules/<name>`
+  and its `/tmp/matrix/<name>`);
+- module names beginning with a dot.
+
+Lines may end CR LF.
+
 ### Maximum layout depth
 
 The layout tree is limited to 4 levels of nesting. This is sufficient
@@ -550,7 +582,7 @@ headless mode, locally, or remotely.
     notifications               # Runtime event log (read-only ring)
     modules/
         <name>/
-            ctl                 # Module status: running|stopped
+            ctl                 # Module status (below)
             type                # display|service
             mount               # Mount path this module reads from
             out/                # Service output (read-only view of
@@ -568,6 +600,15 @@ headless mode, locally, or remotely.
                                 #   written via the pin/unpin verbs)
 ```
 
+A module's `ctl` reads one line:
+
+| Status | Meaning |
+|--------|---------|
+| `running` | loaded; for a service, its `run()` is running |
+| `stopped` | not loaded (a display module in headless mode, a service shut down) |
+| `exited` | a service whose `run()` returned |
+| `failed <why>` | a module that could not start or stopped by error: `failed init: <error>`, `failed raised <exception>`, `failed namespace: <error>`, or for a display module the call that raised |
+
 Module directories keep a stable qid identity for the lifetime of the
 Matrix process: a fid opened on `modules/<name>/...` before a
 composition reload still refers to the same module afterwards. A
@@ -579,22 +620,51 @@ identity.
 
 ```
 load <composition-name>         # Load a pinned composition by name
-load -                          # Load composition from /mnt/matrix/composition
+load -                          # Reload the current composition
 unload                          # Unload all modules, clear layout
+edit                            # Open the current composition in the editor
 pin <name>                      # Save current composition to library
 unpin <name>                    # Remove a pinned composition
 ```
 
+`load <name>` refuses a pinned composition that does not parse; the
+write fails with the parser's diagnostic, prefixed by the name, and the
+running composition stays.
+
 ### Composition editing (write to `/mnt/matrix/composition`)
 
-The current composition is always readable as a text file. Writing a
-new composition triggers an incremental reload: entries unchanged
+The current composition is always readable as a text file. One write
+is one composition. The mnt device splits a write longer than one 9P
+message into Twrites of at most iounit bytes, so a fragment that fills
+the iounit is held on its fid and the first shorter write completes
+the text (tools9p's rule); text that ends exactly on a message boundary
+completes when the file is closed. A completed text is parsed as it is
+written: one that does not parse fails the write with the parser's
+diagnostic, and the running composition stays (one completed at close,
+its writer gone, reports the error in `notifications` instead). If a
+second composition arrives before the runtime has applied the first,
+the second wins.
+
+Writing a new composition triggers an incremental reload: entries unchanged
 between old and new — a display leaf with the same region, module,
 and mount; a service with the same name and mount — keep their live
 module instance (a kept service keeps its running process and
 in-module state), removed entries are shut down, added ones are
 loaded, and the layout is recomputed. Veltro's workflow: read the
-current composition, modify it, write it back.
+current composition, modify it, write it back. The Veltro `matrix`
+tool's `compose` reports the runtime's refusal as an error, and success
+only once the composition is live.
+
+### notifications
+
+`/mnt/matrix/notifications` is a bounded ring of lines (the oldest
+dropped past 32K), each beginning with the runtime's millisecond clock:
+
+```
+<ms> <path> <value> <text>              # a watch rule's notify
+<ms> <path> error <action>: <error>      # a watch rule's action failed
+<ms> composition error <diagnostic>      # a composition completed at close did not parse
+```
 
 
 ## GUI Control Surface
@@ -687,6 +757,7 @@ through filesystem operations.
    `/n/tbl4/portfolio/defense/status`. Writes alert files to its output
    directory when: a high-confidence signal arrives (confidence > 0.7),
    or defense status changes. Veltro reads these alerts.
+   (As built: confidence >= 0.7, each signal id alerted once.)
 
 **Composition:**
 
@@ -765,8 +836,13 @@ Every composition reload tears the watcher down and starts the new
 composition's rules with fresh (all-unseen) state, so a just-loaded
 composition can never fire immediately; a load loop would need the
 watched value to genuinely change once per hop. As belt and braces,
-consecutive `load`/`unload` fires are rate-limited by a short
-cooldown. No new daemon, no policy engine — the watcher writes the
+`load`/`unload` fires are rate-limited by a 2 s cooldown that spans
+compositions — A's rule loading B and B's loading straight back is
+the case it exists for, so the watcher B's load starts does not start
+with the cooldown spent. A fire inside the cooldown is dropped, not
+deferred. A watcher stopped by a reload never acts on the composition
+that replaced its own. An action that fails (a composition that went
+missing or no longer parses) is reported in `notifications`. No new daemon, no policy engine — the watcher writes the
 same ctl verbs any agent would.
 
 The watch language is deliberately declarative and minimal (no regex,
@@ -1043,9 +1119,10 @@ composing existing primitives (9P file serving + payment gating), not
 from building a platform. This follows the Plan 9 philosophy: small,
 composable mechanisms rather than monolithic services.
 
-### No watch rules in v1
+### Watch rules after the static model
 
-The static composition model must be validated first. If the composition
-format, module interface, and Veltro interaction loop work with static
-compositions, watch rules are a straightforward addition. If the static
-model has problems, watch rules would compound them.
+Watch rules were held back until the static composition model —
+format, module interface, Veltro's read-modify-write loop — had been
+validated, on the reasoning that problems in the static model would be
+compounded by reactive behaviour on top of it. They were added once it
+held, as the minimal declarative layer described under Watch Rules.

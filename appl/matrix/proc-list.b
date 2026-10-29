@@ -200,8 +200,13 @@ pointer(p: ref Pointer): int
 			lastbtn1 = btn;
 			return 0;
 		}
-		idx := (p.xy.y - bodyy) / ROWH + scroll;
-		if(idx >= 0 && idx < len rows) {
+		# Only a row draw() shows: below the last one is blank pane,
+		# and the row that would come next is not on screen to be
+		# selected (or killed by k).
+		vis := (r_g.max.y - bodyy - PAD) / ROWH;
+		line := (p.xy.y - bodyy) / ROWH;
+		idx := line + scroll;
+		if(line < vis && idx >= 0 && idx < len rows) {
 			if(sel_pid == rows[idx].pid)
 				sel_pid = "";	# toggle off
 			else
@@ -260,7 +265,7 @@ parselist()
 		rows = array[0] of Row;
 		return;
 	}
-	tmp := array[nl] of Row;
+	tmp := array[nl + 1] of Row;	# the last line may have no newline
 	k := 0;
 	start := 0;
 	for(i = 0; i <= len c; i++) {

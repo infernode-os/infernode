@@ -85,6 +85,7 @@ TARG=\
 	jit_ownhandler_test.dis\
 	jit_unload_helper.dis\
 	matrix_svcfixture.dis\
+	matrix_modules_test.dis\
 	pool_nomem_helper.dis\
 	xenith_race_helper.dis\
 	xenith_fuzz.dis\

@@ -297,7 +297,8 @@ readsignals()
 		count++;
 	}
 
-	# Reverse into array (signals arrive newest-first from server)
+	# Into the array in file order (slist is reversed): the source
+	# writes newest-first, so new signals are at the top.
 	signals = array[count] of ref Signal;
 	i := 0;
 	for(; slist != nil; slist = tl slist) {

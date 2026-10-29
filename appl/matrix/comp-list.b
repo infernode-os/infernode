@@ -157,6 +157,8 @@ ctlwrite(cmd: string)
 rescan(): int
 {
 	(entries, n) := readdir->init(mountpath, Readdir->NAME);
+	if(n < 0)
+		n = 0;	# no such directory: list nothing
 	sig := "";
 	nn := 0;
 	tmp := array[n] of string;

@@ -337,8 +337,16 @@ readboxes(): int
 	}
 	rb := array[4096] of byte;
 	n := sys->read(fd, rb, len rb);
-	if(n <= 0)
+	if(n <= 0) {
+		# Emptied: the vision service sees nothing now, so neither
+		# does the overlay (the last boxes stayed painted).
+		if(boxes != nil) {
+			boxes = nil;
+			lastboxes = "";
+			return 1;
+		}
 		return 0;
+	}
 	s := string rb[0:n];
 	if(s == lastboxes)
 		return 0;

@@ -9,7 +9,10 @@ implement SceneFixture;
 # loads modules from /dis as it runs, which run()'s confined namespace
 # (the mount alone) does not have, so its process is created in
 # init() and only released by run(); it writes nothing but the scene.
-# A scene that is already served is left to whoever serves it.
+# A scene that is already served is left to whoever serves it.  One
+# this fixture served is taken down at shutdown -- its scenefs killed
+# and unmounted -- or the next load would find it there, take it for
+# someone else's, and leave it frozen with no demo driving it.
 # Composition usage:
 #
 #	service scene-fixture /mnt/scene
@@ -35,6 +38,7 @@ SceneFixture: module
 scene: string;
 democmd: Command;
 pid := -1;
+servepid := -1;	# our scenefs's process group, if we serve the scene
 stop: chan of int;
 start: chan of int;
 ended: chan of int;
@@ -57,26 +61,31 @@ init(mount: string, nil: string): string
 	spawn demo(pidc);
 	pid = <-pidc;
 	fds := array[2] of ref Sys->FD;
-	if(sys->pipe(fds) < 0)
+	if(sys->pipe(fds) < 0) {
+		shutdown();
 		return sys->sprint("scene-fixture: pipe: %r");
+	}
 	sync := chan of int;
 	spawn serve(fds[1], sync);
-	<-sync;
+	servepid = <-sync;
 	fds[1] = nil;
 	(ok, nil) = sys->stat(scene);
 	if(ok < 0)
 		sys->create(scene, Sys->OREAD, Sys->DMDIR|8r775);
-	if(sys->mount(fds[0], nil, scene, Sys->MREPL, nil) < 0)
-		return sys->sprint("scene-fixture: mount %s: %r", scene);
+	if(sys->mount(fds[0], nil, scene, Sys->MREPL, nil) < 0) {
+		err := sys->sprint("scene-fixture: mount %s: %r", scene);
+		shutdown();
+		return err;
+	}
 	return nil;
 }
 
 serve(fd: ref Sys->FD, sync: chan of int)
 {
-	sys->pctl(Sys->NEWFD, fd.fd :: 2 :: nil);
+	gpid := sys->pctl(Sys->NEWPGRP|Sys->NEWFD, fd.fd :: 2 :: nil);
 	sys->dup(fd.fd, 0);
 	fd = nil;
-	sync <-= 1;
+	sync <-= gpid;
 	cmd := load Command "/dis/scenefs.dis";
 	if(cmd != nil)
 		cmd->init(nil, "scenefs" :: nil);
@@ -114,6 +123,13 @@ shutdown()
 		if(fd != nil)
 			sys->fprint(fd, "kill");
 		pid = -1;
+	}
+	if(servepid >= 0) {
+		sys->unmount(nil, scene);
+		fd := sys->open("/prog/" + string servepid + "/ctl", Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "killgrp");
+		servepid = -1;
 	}
 	alt {
 	stop <-= 1 =>	;

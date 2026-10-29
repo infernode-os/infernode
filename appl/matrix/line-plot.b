@@ -104,16 +104,44 @@ loadcolors()
 	};
 }
 
+# The file's last TAILMAX bytes, from the start of a line: a history
+# that grows by appends is plotted to its newest sample, at a bounded
+# cost per update.  (One 16K read saw only the first 16K: once the
+# file passed that, the plot froze.)
+TAILMAX: con 64*1024;
+
+readtail(path: string): string
+{
+	fd := sys->open(path, Sys->OREAD);
+	if(fd == nil)
+		return nil;
+	(ok, d) := sys->fstat(fd);
+	off := big 0;
+	if(ok >= 0 && d.length > big TAILMAX)
+		off = d.length - big TAILMAX;
+	buf := array[TAILMAX] of byte;
+	n := 0;
+	while(n < len buf) {
+		r := sys->pread(fd, buf[n:], len buf - n, off + big n);
+		if(r <= 0)
+			break;
+		n += r;
+	}
+	b := buf[0:n];
+	if(off > big 0) {
+		for(i := 0; i < len b && b[i] != byte '\n'; i++)
+			;
+		if(i < len b)
+			b = b[i+1:];
+	}
+	return string b;
+}
+
 reload(): int
 {
-	fd := sys->open(mountpath, Sys->OREAD);
-	if(fd == nil)
+	s := readtail(mountpath);
+	if(s == nil || s == "")
 		return 0;
-	buf := array[16384] of byte;
-	n := sys->read(fd, buf, len buf);
-	if(n <= 0)
-		return 0;
-	s := string buf[0:n];
 	if(s == lastraw)
 		return 0;
 	lastraw = s;

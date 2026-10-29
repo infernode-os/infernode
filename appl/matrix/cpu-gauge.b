@@ -198,7 +198,7 @@ readhistory()
 		history = array[0] of int;
 		return;
 	}
-	tmp := array[nl] of int;
+	tmp := array[nl + 1] of int;	# the last line may have no newline
 	k := 0;
 	start := 0;
 	hist_min = 101;

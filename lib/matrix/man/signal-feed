@@ -13,8 +13,9 @@ WRITES
 	none (renders only)
 
 DESCRIPTION
-	Lines are reversed on load (source delivers newest-first) and
-	rendered newest-last.  Direction colours each row (long/short)
+	Rows render in file order, the first line at the top: a source
+	that writes newest-first (as TBL4's does) shows new signals at
+	the top.  Direction colours each row (long/short)
 	with a +/-/~ indicator; the timestamp renders as HH:MM sliced
 	from an ISO timestamp.  Wheel scrolls one row; click or drag in
 	the right gutter jumps the scrollbar proportionally.  The format

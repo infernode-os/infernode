@@ -3081,8 +3081,19 @@ handlekey(k: int)
 WATCH_MS: con 1000;
 WATCH_LOAD_COOLDOWN_MS: con 2000;
 
-watchstopc: chan of int;
-watchlastload := 0;	# millisec of the last load/unload fire (cooldown)
+# The running watcher.  stopped is checked before every action, not
+# only between polls: a watcher stopped by a reload must not act on
+# the composition that replaced its own.
+Watchrun: adt {
+	stopped:	int;
+};
+watchrun: ref Watchrun;
+# The last load/unload a watch rule fired, for the cooldown.  It
+# spans compositions, as the ping-pong it guards against does (A's
+# rule loads B, B's loads A): a watcher started by that load must not
+# start with the cooldown spent.
+watchfired := 0;
+watchlastload := 0;	# millisec
 
 startwatchers()
 {
@@ -3093,21 +3104,16 @@ startwatchers()
 	complock <-= 1;
 	if(rules == nil)
 		return;
-	watchstopc = chan[1] of int;
-	spawn watcher(rules, watchstopc);
+	watchrun = ref Watchrun(0);
+	spawn watcher(rules, watchrun);
 }
 
 stopwatchers()
 {
-	if(watchstopc == nil)
+	if(watchrun == nil)
 		return;
-	alt {
-	watchstopc <-= 1 =>
-		;
-	* =>
-		;	# stop already pending
-	}
-	watchstopc = nil;
+	watchrun.stopped = 1;
+	watchrun = nil;
 }
 
 # One poller for all rules.  Transition-edge semantics: an action
@@ -3118,26 +3124,19 @@ stopwatchers()
 # all-unseen state).  An unreadable path never fires.  load/unload
 # fires are additionally rate-limited by a cooldown as belt and
 # braces against composition ping-pong.
-watcher(rules: list of ref WatchRule, stopc: chan of int)
+watcher(rules: list of ref WatchRule, w: ref Watchrun)
 {
 	n := 0;
 	for(rl := rules; rl != nil; rl = tl rl)
 		n++;
 	seen := array[n] of {* => 0};
 	last := array[n] of string;
-	watchlastload = -WATCH_LOAD_COOLDOWN_MS;
-	for(;;) {
-		alt {
-		<-stopc =>
-			return;
-		* =>
-			;
-		}
+	while(!w.stopped) {
 		i := 0;
-		for(rl = rules; rl != nil; rl = tl rl) {
+		for(rl = rules; rl != nil && !w.stopped; rl = tl rl) {
 			r := hd rl;
 			v := readfile(r.path);
-			if(v != nil) {
+			if(v != nil && !w.stopped) {
 				v = trimws(v);
 				if(seen[i] && v != last[i])
 					firewatch(r, v);
@@ -3163,7 +3162,8 @@ firewatch(r: ref WatchRule, v: string)
 				sys->millisec(), r.path, v, trimws(act[7:])));
 		"load" or "unload" =>
 			now := sys->millisec();
-			if(now - watchlastload >= WATCH_LOAD_COOLDOWN_MS) {
+			if(!watchfired || now - watchlastload >= WATCH_LOAD_COOLDOWN_MS) {
+				watchfired = 1;
 				watchlastload = now;
 				watcherr(r, act, handlectl(act));
 			}

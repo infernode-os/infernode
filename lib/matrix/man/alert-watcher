@@ -16,11 +16,13 @@ WRITES
 
 DESCRIPTION
 	Polls every 5000 ms.  A signal qualifies when its confidence
-	field is >= "0.7" by string comparison.  The alert counter is
-	in-memory: it resets on reload, and qualifying signals re-emit
-	every poll (no dedup) - consumers should treat the outdir as a
-	stream to drain, not a set.  The first status read primes the
-	comparison; changes alert from the second poll on.
+	field, read as a number, is >= 0.7.  Each qualifying signal id
+	is alerted once, while the signals file holds it; an id that
+	leaves the file and returns qualifies again.  Alert numbers
+	carry on from the highest alert-NNNN already in the outdir, so
+	a restart neither overwrites nor reorders earlier alerts.  The
+	first status read primes the comparison; changes alert from the
+	second poll on.
 
 SEE ALSO
 	signal-feed (renders the same signals file)

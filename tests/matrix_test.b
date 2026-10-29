@@ -1185,8 +1185,8 @@ testControlFSAlertE2E(t: ref T)
 	mkfixture();
 	# Stale alerts from earlier runs of this suite would satisfy
 	# the poll below; clear them.
-	for(i := 0; i < 10; i++)
-		sys->remove(sys->sprint("/tmp/matrix/alert-watcher/alert-%04d", i));
+	for(al := lsnames("/tmp/matrix/alert-watcher"); al != nil; al = tl al)
+		sys->remove("/tmp/matrix/alert-watcher/" + hd al);
 
 	newtext := "# alert-e2e\nservice alert-watcher " + FIXMOUNT + "\n";
 	t.assert(writestr("/mnt/matrix/composition", newtext) > 0, "composition write accepted");
@@ -1199,6 +1199,24 @@ testControlFSAlertE2E(t: ref T)
 		"control-fs view matches the real outdir");
 	t.assertseq(trim(readfile("/mnt/matrix/modules/alert-watcher/ctl")), "running",
 		"confined service reports running");
+
+	# A signal is alerted once, not at every poll (5 s): the outdir
+	# is read-only to its readers, so repeats only piled up.  A new
+	# signal is alerted, its confidence read as a number (".9" is
+	# below "0.7" as a string).
+	sys->sleep(6000);
+	(dup, nil) := sys->stat("/tmp/matrix/alert-watcher/alert-0001");
+	t.assert(dup < 0, "a signal still in the file is not alerted again");
+	createstr(FIXMOUNT + "/signals", "1 BTC long 0.95 breakout 1234\n" +
+		"2 ETH short .9 reversal 1240\n" +
+		"3 SOL long 0.5 drift 1241\n");
+	if(!waitfor("/tmp/matrix/alert-watcher/alert-0001", 8000))
+		t.fatal("a new qualifying signal was not alerted");
+	t.assert(hasprefix(readfile("/tmp/matrix/alert-watcher/alert-0001"), "high-confidence signal: ETH"),
+		"the new signal's alert");
+	sys->sleep(500);
+	(more, nil) := sys->stat("/tmp/matrix/alert-watcher/alert-0002");
+	t.assert(more < 0, "no alert for a signal under the threshold, none repeated");
 
 	# Restore the shipped composition for the tests that follow.
 	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
@@ -1449,6 +1467,49 @@ copyfile(src, dst: string): int
 	return 0;
 }
 
+# The load cooldown spans compositions.  A's rule loads B on crisis,
+# B's loads A on normal: flipping the value back within the cooldown
+# of A's load must not ping-pong straight back to A.  (Each watcher
+# reset the cooldown as it started, so B's could always fire.)
+testControlFSWatchCooldown(t: ref T)
+{
+	mkfixture();
+	p := FIXMOUNT + "/portfolio/defense/status";
+	createstr(p, "normal\n");
+	ping := "# mtest-ping\nwatch " + p + "\ncrisis -> load mtest-pong\n";
+	pong := "# mtest-pong\nwatch " + p + "\nnormal -> load mtest-ping\n";
+	createstr("/lib/matrix/compositions/mtest-ping", ping);
+	createstr("/lib/matrix/compositions/mtest-pong", pong);
+
+	t.assert(writestr("/mnt/matrix/ctl", "load mtest-ping") > 0, "load ping accepted");
+	t.assert(waitcomp(ping, 3000), "ping loaded");
+	sys->sleep(1500);	# ping's watcher takes its baseline
+
+	createstr(p, "crisis\n");
+	t.assert(waitcomp(pong, 4000), "crisis loaded pong");
+	sys->sleep(300);	# pong's watcher takes its baseline: crisis
+	createstr(p, "normal\n");
+	# pong's next poll sees normal about a second after ping's load:
+	# inside the 2 s cooldown, so it does not fire.
+	sys->sleep(3000);
+	t.assertseq(readfile("/mnt/matrix/composition"), pong, "no ping-pong inside the cooldown");
+
+	sys->remove("/lib/matrix/compositions/mtest-ping");
+	sys->remove("/lib/matrix/compositions/mtest-pong");
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+}
+
+waitcomp(text: string, ms: int): int
+{
+	for(w := 0; w < ms; w += 100) {
+		if(readfile("/mnt/matrix/composition") == text)
+			return 1;
+		sys->sleep(100);
+	}
+	return 0;
+}
+
 testControlFSCtlVerbs(t: ref T)
 {
 	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
@@ -1577,6 +1638,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSServiceLifecycle", testControlFSServiceLifecycle);
 		run("ControlFSAlertE2E", testControlFSAlertE2E);
 		run("ControlFSWatch", testControlFSWatch);
+		run("ControlFSWatchCooldown", testControlFSWatchCooldown);
 		run("ControlFSCtlVerbs", testControlFSCtlVerbs);
 		run("ControlFSUnload", testControlFSUnload);
 	}

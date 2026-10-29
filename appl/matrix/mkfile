@@ -31,6 +31,7 @@ SYSMODULES=\
 	math.m\
 	matrix.m\
 	matrixtk.m\
+	readdir.m\
 	scene.m\
 	tk.m\
 

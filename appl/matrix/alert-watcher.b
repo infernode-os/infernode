@@ -3,15 +3,20 @@ implement AlertWatcher;
 #
 # alert-watcher - Matrix service module for TBL4 alerts
 #
-# Monitors /n/tbl4/signals for high-confidence signals and
-# /n/tbl4/portfolio/defense/status for status changes.
-# Writes alert files to its output directory.
+# Monitors <mount>/signals for high-confidence signals and
+# <mount>/portfolio/defense/status for status changes.
+# Writes alert files to its output directory: one per signal id that
+# qualifies, once, and one per status change.  Numbering carries on
+# from the alert files already there, so a restart neither overwrites
+# nor reorders them.
 #
 
 include "sys.m";
 	sys: Sys;
 
 include "draw.m";
+
+include "readdir.m";
 
 include "matrix.m";
 
@@ -27,9 +32,10 @@ outdir_g: string;
 running: int;
 alertseq: int;
 lastdefense: string;
+alerted: list of string;	# ids of the qualifying signals already alerted
 
 POLL_MS: con 5000;
-CONFIDENCE_THRESHOLD: con "0.7";
+CONFIDENCE_THRESHOLD: con 0.7;
 
 init(mount: string, outdir: string): string
 {
@@ -38,9 +44,29 @@ init(mount: string, outdir: string): string
 	mountpath = mount;
 	outdir_g = outdir;
 	running = 1;
-	alertseq = 0;
+	alertseq = nextseq(outdir);
 	lastdefense = "";
+	alerted = nil;
 	return nil;
+}
+
+# One past the highest alert-NNNN in the outdir.
+nextseq(dir: string): int
+{
+	rd := load Readdir Readdir->PATH;
+	if(rd == nil)
+		return 0;
+	(ents, n) := rd->init(dir, Readdir->NAME);
+	next := 0;
+	for(i := 0; i < n; i++) {
+		nm := ents[i].name;
+		if(len nm <= 6 || nm[0:6] != "alert-")
+			continue;
+		v := int nm[6:];
+		if(v + 1 > next)
+			next = v + 1;
+	}
+	return next;
 }
 
 run()
@@ -76,7 +102,10 @@ checksignals()
 	if(content == "")
 		return;
 
-	# Process line by line
+	# Process line by line.  A signal is alerted once, when it first
+	# qualifies; the ids still qualifying are kept for the next poll
+	# (and only those, so the list follows the file, not its history).
+	seen: list of string;
 	start := 0;
 	for(i := 0; i <= len content; i++) {
 		if(i == len content || content[i] == '\n') {
@@ -84,22 +113,34 @@ checksignals()
 				line := content[start:i];
 				(ntoks, toks) := sys->tokenize(line, " \t");
 				if(ntoks >= 6) {
-					toks = tl toks;  # skip id
+					id := hd toks; toks = tl toks;
 					asset := hd toks; toks = tl toks;
 					dir := hd toks; toks = tl toks;
 					conf := hd toks; toks = tl toks;
 					stype := hd toks;
-					if(conf >= CONFIDENCE_THRESHOLD) {
-						msg := sys->sprint(
-							"high-confidence signal: %s %s %s (conf=%s)",
-							asset, dir, stype, conf);
-						writealert(msg);
+					if(real conf >= CONFIDENCE_THRESHOLD && !member(id, seen)) {
+						seen = id :: seen;
+						if(!member(id, alerted)) {
+							msg := sys->sprint(
+								"high-confidence signal: %s %s %s (conf=%s)",
+								asset, dir, stype, conf);
+							writealert(msg);
+						}
 					}
 				}
 			}
 			start = i + 1;
 		}
 	}
+	alerted = seen;
+}
+
+member(s: string, l: list of string): int
+{
+	for(; l != nil; l = tl l)
+		if(hd l == s)
+			return 1;
+	return 0;
 }
 
 checkdefense()

@@ -49,7 +49,9 @@ SEC = 512
 BOOT = {
     # bootcode.bin is the ROM's; start.elf and fixup.dat are what
     # bootcode.bin loads; config.txt is start.elf's first read.
-    "rpi3bplus": (["bootcode.bin", "start.elf", "fixup.dat"], ["config.txt"]),
+    # After a tryboot reset start.elf reads tryboot.txt instead of
+    # config.txt: the firmware cards are made with ignores [tryboot].
+    "rpi3bplus": (["bootcode.bin", "start.elf", "fixup.dat"], ["config.txt", "tryboot.txt"]),
     # A Pi 4 boots from its EEPROM, which reads start4.elf, fixup4.dat,
     # config.txt and, after a tryboot reset, tryboot.txt instead.
     "rpi4b": (["start4.elf", "fixup4.dat"], ["config.txt", "tryboot.txt"]),

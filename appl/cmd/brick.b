@@ -409,12 +409,24 @@ d2open(d: ref D2): string
 	d.epoch = int hd tl tl w;
 	d.tau = int hd tl tl tl w;
 	d.seq = 0;
+	# The old session's files, if any, are closed elsewhere: closing a
+	# file on a dead mount waits out a request deadline (5 s each, seen
+	# when reconnecting).
+	if(d.grant != nil || d.cmd != nil){
+		spawn dropfds(d.grant, d.cmd);
+		d.grant = d.cmd = nil;
+	}
 	# (opening clone again would make another session: keep this one's)
 	d.grant = sys->open(d.bmnt + "/d2/grant", Sys->OREAD);
 	d.cmd = sys->open(d.bmnt + "/d2/cmd", Sys->OWRITE);
 	if(d.grant == nil || d.cmd == nil)
 		return sys->sprint("can't open %s/d2: %r", d.bmnt);
 	return nil;
+}
+
+dropfds(nil, nil: ref Sys->FD)
+{
+	# The last references go when this returns.
 }
 
 # Mount the brick again and open a new session (brick d2 -r); never arms.
@@ -453,7 +465,7 @@ transport(e: string): int
 {
 	return contains(e, "link down") || contains(e, "timed out") || contains(e, "hungup") ||
 		contains(e, "hung up") || contains(e, "outcome unknown") || contains(e, "i/o") ||
-		contains(e, "does not exist") || contains(e, "gone");
+		contains(e, "does not exist") || contains(e, "gone") || contains(e, "rpc error");
 }
 
 d2clock(tick: chan of int, ms: int)

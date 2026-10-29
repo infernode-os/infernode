@@ -298,6 +298,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	complock = chan[1] of int;
 	complock <-= 1;
+	svclk = chan[1] of int;
+	svclk <-= 1;
+	notiflk = chan[1] of int;
+	notiflk <-= 1;
+	# Kills what an ended service leaves; from this namespace, where
+	# /prog is (a confined service's has none).
+	svckillc = chan of int;
+	spawn svckiller();
 	reloadch = chan[1] of string;
 
 	# Parse initial composition.  With no argument, the picker is
@@ -583,9 +591,15 @@ Serve:
 				# exactly on a boundary completes at the clunk.  A
 				# complete text is parsed here, so a bad composition
 				# is the writer's error, not a line on stderr.
+				# A write with no fragment held starts a text, at
+				# any offset (a writer may send one composition
+				# after another on one fd); one continuing a held
+				# fragment must follow it.
+				next := fragtake(c.fid);
 				if(m.offset == big 0)
 					c.data = nil;
-				else if(m.offset != big len c.data) {
+				else if(c.data != nil && m.offset != next) {
+					c.data = nil;
 					srv.reply(ref Rmsg.Error(m.tag, "composition: write out of sequence"));
 					break;
 				}
@@ -596,6 +610,7 @@ Serve:
 				}
 				c.data = catbytes(c.data, m.data);
 				if(len m.data >= srv.iounit()) {
+					fragput(c.fid, m.offset + big len m.data);
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					break;
 				}
@@ -615,6 +630,7 @@ Serve:
 			# complete now; its writer has gone, so a parse error
 			# can only be told in notifications.
 			c := srv.getfid(m.fid);
+			fragtake(m.fid);
 			if(c != nil && TYPE(c.path) == Qcomposition && c.data != nil) {
 				text := string c.data;
 				c.data = nil;
@@ -751,6 +767,28 @@ queuereload(text: string)
 	}
 }
 
+# The offset a fid's held composition fragment continues at.  Only
+# the 9P proc touches it.
+fragnext: list of (int, big);
+
+fragput(fid: int, off: big)
+{
+	fragnext = (fid, off) :: fragnext;
+}
+
+fragtake(fid: int): big
+{
+	off := big -1;
+	keep: list of (int, big);
+	for(l := fragnext; l != nil; l = tl l)
+		if((hd l).t0 == fid)
+			off = (hd l).t1;
+		else
+			keep = hd l :: keep;
+	fragnext = keep;
+	return off;
+}
+
 catbytes(a, b: array of byte): array of byte
 {
 	if(a == nil)
@@ -859,6 +897,8 @@ svcstatus(se: ref ServiceEntry): string
 	}
 	if((why := svcended(se.pid)) != nil)
 		return why;
+	if(svcgone(se.pid))
+		return "failed killed";
 	return "running";
 }
 
@@ -1018,7 +1058,16 @@ synthindex(): string
 
 # ── notifications ───────────────────────────────────────────
 
+notiflk: chan of int;
+
 notifappend(line: string)
+{
+	<-notiflk;
+	notifappend0(line);
+	notiflk <-= 1;
+}
+
+notifappend0(line: string)
 {
 	notifbuf += line + "\n";
 	# Drop oldest whole lines once over budget.
@@ -1773,7 +1822,7 @@ pickerclick(at: Point)
 {
 	for(i := 0; i < len pickerrects; i++)
 		if(pickerrects[i].contains(at)) {
-			handlectl("load " + pickerhits[i]);
+			uictl("load " + pickerhits[i]);
 			return;
 		}
 }
@@ -2526,7 +2575,30 @@ runservice(name, mount, outdir: string, mod: MatrixService, pidc: chan of int)
 		sys->fprint(stderr, "matrix: service %s raised %s\n", name, e);
 	}
 	svcend(pid, why);
-	killgrp(pid);
+	# Its process group goes with it.  A confined namespace has no
+	# /prog to kill it through, so the main namespace's killer does
+	# it, while this proc waits in the group (a group whose leader
+	# has gone can no longer be named).
+	svckillc <-= pid;
+	<-chan of int;
+}
+
+svckillc: chan of int;
+
+svckiller()
+{
+	for(;;)
+		killgrp(<-svckillc);
+}
+
+# A service proc that is gone without saying how it ended was killed
+# (proc-list's k, a shell's kill).
+svcgone(pid: int): int
+{
+	if(pid <= 0)
+		return 0;
+	(ok, nil) := sys->stat("/prog/" + string pid);
+	return ok < 0 && svcended(pid) == nil;
 }
 
 # ── Service state ───────────────────────────────────────────
@@ -2542,10 +2614,6 @@ svcerrs: list of (string, string);
 
 svclock()
 {
-	if(svclk == nil) {
-		svclk = chan[1] of int;
-		svclk <-= 1;
-	}
 	<-svclk;
 }
 
@@ -2613,6 +2681,14 @@ killgrp(pid: int)
 	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(fd != nil)
 		sys->fprint(fd, "killgrp");
+}
+
+hasservice(l: list of ref ServiceEntry, name: string): int
+{
+	for(; l != nil; l = tl l)
+		if((hd l).name == name)
+			return 1;
+	return 0;
 }
 
 # How long a shut-down service's run() has to return before its
@@ -2789,7 +2865,11 @@ shutdowndisplaymodules(node: ref LayoutNode)
 	}
 }
 
-shutdownservices(services: list of ref ServiceEntry)
+# A service the new composition starts again (same name, so the same
+# outdir) is killed at once: its replacement must not share the
+# outdir with it for the grace, as one whose run() sleeps between
+# polls would.  Any other has the grace to return.
+shutdownservices(services, next: list of ref ServiceEntry)
 {
 	for(sl := services; sl != nil; sl = tl sl) {
 		se := hd sl;
@@ -2800,8 +2880,13 @@ shutdownservices(services: list of ref ServiceEntry)
 			* =>
 				;	# the reaper kills it all the same
 			}
-			if(se.pid > 0)
-				spawn reapservice(se.pid);
+			if(se.pid > 0) {
+				if(hasservice(next, se.name) && svcended(se.pid) == nil) {
+					killgrp(se.pid);
+					svcforget(se.pid);
+				} else
+					spawn reapservice(se.pid);
+			}
 		}
 		se.mod = nil;
 		se.pid = 0;
@@ -2858,14 +2943,24 @@ rebuildctxmenu()
 			tk->quote(larr[i]), i));
 }
 
+# A ctl verb from a click: its error has no writer to return to, so
+# it goes where the runtime's other errors do.
+uictl(verb: string)
+{
+	if((err := handlectl(verb)) != nil) {
+		sys->fprint(stderr, "matrix: %s: %s\n", verb, err);
+		notifappend(sys->sprint("%d ctl error %s: %s", sys->millisec(), verb, err));
+	}
+}
+
 domenuitem(action: string)
 {
 	if(len action > 5 && action[0:5] == "load ") {
-		handlectl(action);
+		uictl(action);
 		return;
 	}
 	if(action == "unload") {
-		handlectl(action);
+		uictl(action);
 		return;
 	}
 	if(action == "edit") {
@@ -3226,7 +3321,16 @@ reloadcomposition(text: string)
 	if(comp != nil)
 		for(sl := comp.services; sl != nil; sl = tl sl) {
 			se := hd sl;
-			if(se.mod != nil && svcended(se.pid) != nil) {
+			if(se.mod != nil && (svcended(se.pid) != nil || svcgone(se.pid))) {
+				# What its init set up is undone: a scene it
+				# served, say, which the fresh instance would
+				# otherwise find and take for someone else's.
+				{
+					se.mod->shutdown();
+				} exception {
+				* =>
+					;
+				}
 				svcforget(se.pid);
 				se.mod = nil;
 				se.pid = 0;
@@ -3247,7 +3351,7 @@ reloadcomposition(text: string)
 
 	if(old != nil) {
 		shutdowndisplaymodules(old.layout);
-		shutdownservices(old.services);
+		shutdownservices(old.services, comp.services);
 	}
 
 	loadservicemodules();				# starts only new services; first, as at startup

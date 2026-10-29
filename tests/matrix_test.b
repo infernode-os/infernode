@@ -1341,6 +1341,18 @@ testControlFSCompositionWrite(t: ref T)
 	(gone, nil) := sys->stat("/mnt/matrix/modules/mem-gauge");
 	t.assert(gone < 0, "long composition's last lines took effect");
 
+	# One composition after another on one fd: each a write of its
+	# own, at the offset the last left.
+	fd := sys->open("/mnt/matrix/composition", Sys->OWRITE);
+	one := "# mtest-one\nservice sysmon-svc /\n";
+	two := "# mtest-two\nservice sysmon-svc /\n";
+	b1 := array of byte one;
+	b2 := array of byte two;
+	t.asserteq(sys->write(fd, b1, len b1), len b1, "first composition on the fd");
+	t.asserteq(sys->write(fd, b2, len b2), len b2, "second composition on the same fd");
+	fd = nil;
+	t.assert(waitcomp(two, 3000), "the second is applied");
+
 	# The agent's tool reports the runtime's refusal, and success
 	# only once the composition is live.
 	tool := load VTool "/dis/veltro/tools/matrix.dis";
@@ -1370,6 +1382,7 @@ svcmode(mode: string): string
 {
 	mnt := SVCMOUNT + "/" + mode;
 	mkfixdir(mnt);
+	sys->remove(SVCOUT + "/pids");
 	createstr(mnt + "/mode", mode + "\n");
 	text := "# mtest-svc " + mode + "\nservice mtest-svc " + mnt + "\n";
 	if(writestr("/mnt/matrix/composition", text) < 0)
@@ -1412,44 +1425,96 @@ testControlFSServiceLifecycle(t: ref T)
 	t.assertnil(svcmode("ok"), "ok composition");
 	t.assertseq(svcctl("running", 2000), "running", "a running service");
 
+	sys->remove(SVCOUT + "/shutdown");
 	t.assertnil(svcmode("exit"), "exit composition");
 	t.assertseq(svcctl("exited", 2000), "exited", "run() returned: exited");
 	# A reload restarts a service that ended, though its entry is
-	# unchanged.
+	# unchanged, and the ended instance is shut down first (undoing
+	# what its init set up).
+	sys->remove(SVCOUT + "/shutdown");
+	sys->remove(SVCOUT + "/pids");
 	createstr(SVCMOUNT + "/exit/mode", "ok\n");
 	t.assert(writestr("/mnt/matrix/ctl", "load -") > 0, "load - accepted");
 	t.assertseq(svcctl("running", 3000), "running", "load - restarts an exited service");
+	t.assertseq(trim(readfile(SVCOUT + "/shutdown")), "exit", "the ended instance was shut down");
+
+	# Killed from outside (proc-list's k, a shell's kill): failed,
+	# and a reload restarts it.
+	pid := hd svcpids(t);
+	writestr("/prog/" + pid + "/ctl", "kill");
+	st := svcctl("failed", 2000);
+	t.assertseq(st, "failed killed", "a killed service");
+	sys->remove(SVCOUT + "/pids");
+	t.assert(writestr("/mnt/matrix/ctl", "load -") > 0, "load - accepted");
+	t.assertseq(svcctl("running", 3000), "running", "load - restarts a killed service");
 
 	t.assertnil(svcmode("raise"), "raise composition");
-	st := svcctl("failed", 2000);
+	st = svcctl("failed", 2000);
 	t.assert(hasprefix(st, "failed") && contains(st, "boom"), "run() raised: " + st);
 
 	t.assertnil(svcmode("initfail"), "initfail composition");
 	st = svcctl("failed", 2000);
 	t.assert(hasprefix(st, "failed init") && contains(st, "nope"), "init refused: " + st);
 
-	sys->remove("/tmp/matrix/mtest-svc/pids");
+	# What run() started does not outlive it, confined or not: the
+	# confined namespace has no /prog to kill it through.
+	t.assertnil(svcmode("exitchild"), "exitchild composition");
+	pl := svcpids(t);
+	t.assertseq(svcctl("exited", 2000), "exited", "exitchild exited");
+	t.assert(waitgone(tl pl, 3000), "a service's child does not outlive its run()");
+
+	# One that ignores shutdown is killed after the grace, child and
+	# all ...
 	t.assertnil(svcmode("block"), "block composition");
+	pl = svcpids(t);
+	t.assert(alive(hd pl) && alive(hd tl pl), "blocking service and its child run");
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitgone(pl, 6000), "a service that ignores shutdown is killed, child and all");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+
+	# ... and at once when the next composition starts it again: the
+	# two would share its outdir.
+	t.assertnil(svcmode("block"), "block composition again");
+	pl = svcpids(t);
+	t.assertnil(svcmode("ok2"), "replaced by an instance on another mount");
+	t.assert(waitgone(pl, 600), "a replaced service is killed before its successor runs");
+	t.assertseq(svcctl("running", 2000), "running", "its successor runs");
+
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+	sys->remove(SVCFIX);
+}
+
+SVCOUT: con "/tmp/matrix/mtest-svc";
+
+# The pids the fixture's run() wrote, after removing any old ones.
+svcpids(t: ref T): list of string
+{
 	pids := "";
 	for(w := 0; w < 3000 && pids == ""; w += 100) {
-		pids = trim(readfile("/tmp/matrix/mtest-svc/pids"));
+		pids = trim(readfile(SVCOUT + "/pids"));
 		if(pids == "")
 			sys->sleep(100);
 	}
+	sys->remove(SVCOUT + "/pids");
 	(n, pl) := sys->tokenize(pids, " ");
-	if(n != 2)
-		t.fatal("blocking service wrote no pids: " + pids);
-	t.assert(alive(hd pl) && alive(hd tl pl), "blocking service and its child run");
-	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
-	gone := 0;
-	for(w = 0; w < 6000 && !gone; w += 200) {
-		gone = !alive(hd pl) && !alive(hd tl pl);
-		if(!gone)
-			sys->sleep(200);
+	if(n == 0)
+		t.fatal("the service wrote no pids");
+	return pl;
+}
+
+waitgone(pl: list of string, ms: int): int
+{
+	for(w := 0; w < ms; w += 50) {
+		gone := 1;
+		for(l := pl; l != nil; l = tl l)
+			if(alive(hd l))
+				gone = 0;
+		if(gone)
+			return 1;
+		sys->sleep(50);
 	}
-	t.assert(gone, "a service that ignores shutdown is killed, child and all");
-	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
-	sys->remove(SVCFIX);
+	return 0;
 }
 
 copyfile(src, dst: string): int

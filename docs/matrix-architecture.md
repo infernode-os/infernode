@@ -361,10 +361,12 @@ A service lives as long as its `run()`. When `run()` ends — returns,
 raises, or is refused its namespace — its process group goes with it,
 so nothing it started outlives it, and its `ctl` says how it ended
 (below). A service told to `shutdown()` whose `run()` has not returned
-within 2 s is killed, child processes and all: the next composition
-may start the same service on the same outdir. A reload starts a
-service whose `run()` has ended afresh, even if its entry is
-unchanged, so `load -` restarts one that exited or failed.
+within 2 s is killed, child processes and all — at once, with no
+grace, when the next composition starts the same service again, since
+the two would share its outdir. A reload starts a service whose
+`run()` has ended afresh, even if its entry is unchanged, so `load -`
+restarts one that exited, failed or was killed; the ended instance's
+`shutdown()` is called first, to undo what its `init()` set up.
 
 ### Tk-Hosted Display Module
 
@@ -607,7 +609,7 @@ A module's `ctl` reads one line:
 | `running` | loaded; for a service, its `run()` is running |
 | `stopped` | not loaded (a display module in headless mode, a service shut down) |
 | `exited` | a service whose `run()` returned |
-| `failed <why>` | a module that could not start or stopped by error: `failed init: <error>`, `failed raised <exception>`, `failed namespace: <error>`, or for a display module the call that raised |
+| `failed <why>` | a module that could not start or stopped by error: `failed init: <error>`, `failed raised <exception>`, `failed namespace: <error>`, `failed killed` (a service process killed from outside), or for a display module the call that raised |
 
 Module directories keep a stable qid identity for the lifetime of the
 Matrix process: a fid opened on `modules/<name>/...` before a
@@ -641,9 +643,11 @@ the text (tools9p's rule); text that ends exactly on a message boundary
 completes when the file is closed. A completed text is parsed as it is
 written: one that does not parse fails the write with the parser's
 diagnostic, and the running composition stays (one completed at close,
-its writer gone, reports the error in `notifications` instead). If a
-second composition arrives before the runtime has applied the first,
-the second wins.
+its writer gone, reports the error in `notifications` instead). A write
+with no fragment held starts a new text at any offset, so a writer may
+send one composition after another on one open file. If a second
+composition arrives before the runtime has applied the first, the
+second wins.
 
 Writing a new composition triggers an incremental reload: entries unchanged
 between old and new — a display leaf with the same region, module,
@@ -664,6 +668,7 @@ dropped past 32K), each beginning with the runtime's millisecond clock:
 <ms> <path> <value> <text>              # a watch rule's notify
 <ms> <path> error <action>: <error>      # a watch rule's action failed
 <ms> composition error <diagnostic>      # a composition completed at close did not parse
+<ms> ctl error <verb>: <error>           # a picker or menu click's load failed
 ```
 
 

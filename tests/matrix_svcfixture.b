@@ -9,9 +9,12 @@ implement MatrixSvcFixture;
 #	ok	run until shutdown (the well-behaved case)
 #	exit	return from run at once
 #	raise	raise from run
-#	block	ignore shutdown, with a child proc doing the same; both
-#		pids are written to <outdir>/pids
+#	block	ignore shutdown, with a child proc doing the same
+#	exitchild	start a child proc, then return from run
 #	initfail	refuse at init
+#
+# run writes its pid (and its child's, if it has one) to <outdir>/pids;
+# shutdown writes <outdir>/shutdown.
 #
 
 include "sys.m";
@@ -56,23 +59,33 @@ run()
 {
 	case mode {
 	"exit" =>
+		pids("");
 		return;
 	"raise" =>
 		raise "boom";
 	"block" =>
 		pidc := chan of int;
 		spawn child(pidc);
-		cpid := <-pidc;
-		fd := sys->create(outdir_g + "/pids", Sys->OWRITE, 8r644);
-		if(fd != nil)
-			sys->fprint(fd, "%d %d\n", sys->pctl(0, nil), cpid);
-		fd = nil;
+		pids(sys->sprint(" %d", <-pidc));
 		for(;;)
 			sys->sleep(100);
+	"exitchild" =>
+		pidc := chan of int;
+		spawn child(pidc);
+		pids(sys->sprint(" %d", <-pidc));
+		return;
 	* =>
+		pids("");
 		while(!stop)
 			sys->sleep(50);
 	}
+}
+
+pids(more: string)
+{
+	fd := sys->create(outdir_g + "/pids", Sys->OWRITE, 8r644);
+	if(fd != nil)
+		sys->fprint(fd, "%d%s\n", sys->pctl(0, nil), more);
 }
 
 child(pidc: chan of int)
@@ -85,4 +98,7 @@ child(pidc: chan of int)
 shutdown()
 {
 	stop = 1;
+	fd := sys->create(outdir_g + "/shutdown", Sys->OWRITE, 8r644);
+	if(fd != nil)
+		sys->fprint(fd, "%s\n", mode);
 }

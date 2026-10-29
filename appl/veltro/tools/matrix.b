@@ -380,15 +380,20 @@ readfile(path: string): string
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)
 		return sys->sprint("error: cannot open %s: %r", path);
-	result := "";
+	# Bytes first, one conversion at the end: a character split
+	# across two reads would be mangled converting each read alone.
+	all: array of byte;
 	buf := array[8192] of byte;
 	for(;;) {
 		n := sys->read(fd, buf, len buf);
 		if(n <= 0)
 			break;
-		result += string buf[0:n];
+		b := array[len all + n] of byte;
+		b[0:] = all;
+		b[len all:] = buf[0:n];
+		all = b;
 	}
-	return result;
+	return string all;
 }
 
 writestr(path, s: string): int

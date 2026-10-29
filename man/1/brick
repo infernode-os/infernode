@@ -30,11 +30,16 @@ brick \- pair with, configure and mount a styxbrick
 .br
 .B brick d2
 [
+.B -u
+] [
 .B -d
 .I keydir
 ] [
 .B -l
 .I leasems
+] [
+.B -r
+.I addr
 ]
 .I brickmnt
 .I dir
@@ -200,6 +205,35 @@ again; reading
 .B ctl
 says why.
 .PP
+After the brick restarts, its D2 session and the mount's 9P state are gone
+for good: nothing could arm again until
+.B "brick d2"
+itself was restarted.
+With
+.B -r
+.I addr
+(and
+.B -u
+for datagrams) it restores the connection itself: when its commands have
+failed on the transport (link down, timed out, hung up) for 2 s, it mounts
+the brick at
+.I brickmnt
+again and opens a new D2 session.
+It does not arm: from the start of the reconnection
+.B ctl
+reads
+.B failsafe
+with the reason, and its
+.B last
+line reads
+.B reconnecting
+and then
+.BR reconnected ,
+after which an application may write
+.BR arm .
+Measured on a bench: about 16 s from the brick being back to
+.BR reconnected .
+.PP
 .B Brick fetch
 copies
 .I file
@@ -262,7 +296,7 @@ Pair over USB, give the brick its network, then use it from anywhere:
 .EE
 Hold a servo on a safety output, then let it go:
 .EX
-	brick d2 /n/brick /n/d2
+	brick d2 -u -r 192.168.1.23 /n/brick /n/d2
 	echo arm >/n/d2/ctl
 	echo 1600 >/n/d2/pwm.2
 	echo release >/n/d2/pwm.2

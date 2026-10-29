@@ -231,7 +231,7 @@ and then
 .BR reconnected ,
 after which an application may write
 .BR arm .
-Measured on a bench: about 16 s from the brick being back to
+Measured on a bench: about 7 s from the brick being back to
 .BR reconnected .
 .PP
 .B Brick fetch

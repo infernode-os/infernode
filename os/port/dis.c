@@ -409,6 +409,7 @@ newprog(Prog *p, Modlink *m)
 	}
 
 	n->vm = up->vm;
+	n->curvm = up->vm;
 	n->group = nil;
 
 	lock(&pidlk);
@@ -673,6 +674,24 @@ killprog(Prog *p, char *cause)
 {
 	Osenv *env;
 	char msg[ERRMAX+2*KNAMELEN];
+
+	/*
+	 * A Prog inside a file another VM serves (devsrv) is on that VM's
+	 * run queue, under that VM's interpreter, not the one held here
+	 * (devprog takes the Prog's own). Its state, its run-queue link and
+	 * its stack are that VM's to change: unlinking it from this VM's
+	 * queue and freeing its stack while the other ran it corrupted both
+	 * VMs' heaps (vmstress, killing its clients at the end, on virt).
+	 * So only mark it, as a kill in a system call is marked, and wake it
+	 * if it sleeps: it raises the kill under its own VM when it next
+	 * runs there (xec), and cdone will not let it sleep meanwhile.
+	 */
+	if(p->curvm != nil && p->curvm != up->vm) {
+		p->kill = "";
+		p->flags |= Pkilled;
+		swiprog(p);
+		return 0;
+	}
 
 	if(p == isched.runhd) {
 		p->kill = "";
@@ -1246,6 +1265,16 @@ acquire(void)
 {
 	int empty;
 	Prog *p;
+
+	/*
+	 * Say which VM this process's Prog is about to be under, before
+	 * it is: devsrv and devprog take another VM's interpreter for a
+	 * Prog that is not that VM's, and a kill from the Prog's own VM
+	 * must then leave it alone (killprog).
+	 */
+	p = up->type == Interp ? up->iprog : up->prog;
+	if(p != nil)
+		p->curvm = up->vm;
 
 	lock(&isched.l);
 	if(isched.idle) {

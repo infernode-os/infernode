@@ -363,6 +363,7 @@ struct Prog
 {
 	REG		reg;		/* Register set (R is the running VM's; see interp.h) */
 	Vm*		vm;		/* the VM it runs in, for ever (#944) */
+	Vm*		curvm;		/* the VM whose interpreter it is under now: vm, or another while inside a file that VM serves; see killprog */
 	Prog*		link;		/* Run queue */
 	Channel*		chan;	/* Channel pointer */
 	void*		ptr;		/* Channel data pointer */

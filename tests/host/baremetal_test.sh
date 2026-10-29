@@ -6081,6 +6081,10 @@ try:
     m = len(buf)
     typed("vmstress run /tmp/vs 75", 0.5)
     waitfor(rb"vmstress: stopped", 200, m)
+    # its end kills, from VM 0, clients that may be inside a file another
+    # VM serves: each must die, in its own VM, and nothing else may break
+    time.sleep(10)
+    typed("echo VSAFTER; for(i in 2 3){cat '#V/vm/'^$i^/status}; ps | grep Vmstress; echo VSAFTEREND", 3)
     typed("vm")
 finally:
     p.kill(); p.communicate()
@@ -6143,6 +6147,12 @@ PYEOF
         pass "virt: vmstress: churn, bursts, kills and traffic across four VMs, nothing failed (${vs%%;*})"
     else
         fail "virt: vmstress: $vs"
+    fi
+    vsafter="$(sed -n '/^VSAFTER$/,/^VSAFTEREND$/p' <<<"$VMOUT")"
+    if grep -aq '^vm 2 progs 0 ' <<<"$vsafter" && grep -aq '^vm 3 progs 0 ' <<<"$vsafter" && ! grep -aq 'Vmstress' <<<"$vsafter"; then
+        pass "virt: vmstress: everything it started is gone 10 s after it stops -- clients killed from VM 0 while inside another VM's served file included"
+    else
+        fail "virt: vmstress: left behind after its end: $(tr '\n' ' ' <<<"$vsafter")"
     fi
     vrefute "vm: nothing panics"                              "panic:"
     vrefute "vm: no exception goes unhandled"                 "unhandled exception"

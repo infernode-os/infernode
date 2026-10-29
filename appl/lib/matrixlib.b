@@ -300,12 +300,13 @@ validateaction(act: string): string
 # Shadow-root sequence counter; racing callers are distinct procs,
 # and pid+millisec keep the names unique regardless.
 shadowseq := 0;
+SHADOWBASE: con "/tmp/matrix/.ns";
 
 # Namespace confinement for service modules (the nsconstruct
 # shadow-dir idiom, matrix-local so Matrix stays decoupled from
 # Veltro's shadow paths).  Builds a fresh root containing only the
 # spines of mount and outdir, binds the real trees at the leaves —
-# mount read-only, outdir with MCREATE — then replaces / with the
+# mount MREADONLY, outdir with MCREATE — then replaces / with the
 # shadow.  Channels captured by the binds keep working after the
 # root swap; nothing else resolves.
 restrictsvcns(mount, outdir: string): string
@@ -315,12 +316,27 @@ restrictsvcns(mount, outdir: string): string
 	if(outdir == nil || len outdir == 0 || outdir[0] != '/')
 		return "outdir must be an absolute path";
 
+	# The shadow root must be new.  pid, sequence and millisec are all
+	# small and repeat from one emu boot to the next, and shadows are
+	# left on disk (their read-only spines are still mount points in
+	# whatever runs in them), so an old one can carry the same name:
+	# reusing it made a spine its read-only directories refused.
+	err := mkdirp(SHADOWBASE);
+	if(err != nil)
+		return err;
 	pid := sys->pctl(0, nil);
-	shadow := sys->sprint("/tmp/matrix/.ns/%d-%d-%d",
-		pid, shadowseq++, sys->millisec());
+	shadow: string;
+	for(try := 0;; try++) {
+		shadow = sys->sprint("%s/%d-%d-%d", SHADOWBASE,
+			pid, shadowseq++, sys->millisec());
+		if(sys->create(shadow, Sys->OREAD|Sys->OEXCL, Sys->DMDIR|8r755) != nil)
+			break;
+		if(try >= 100)
+			return sys->sprint("cannot create %s: %r", shadow);
+	}
 
 	# Build both spines fully while everything is still writable.
-	err := mkdirp(shadow + mount);
+	err = mkdirp(shadow + mount);
 	if(err != nil)
 		return err;
 	err = mkdirp(shadow + outdir);
@@ -336,8 +352,12 @@ restrictsvcns(mount, outdir: string): string
 	mkrospine(shadow, outdir);
 
 	# Read-only grant first, writable grant second: on exact
-	# overlap the MCREATE bind wins.
-	if(sys->bind(mount, shadow + mount, Sys->MREPL) < 0)
+	# overlap the MCREATE bind wins.  MREADONLY holds all the way
+	# down the mounted tree — no open for writing, no create, no
+	# remove — where leaving out MCREATE would refuse a create only
+	# in the bind point itself.  An outdir inside the mount is its
+	# own mount point and stays writable.
+	if(sys->bind(mount, shadow + mount, Sys->MREPL|Sys->MREADONLY) < 0)
 		return sys->sprint("cannot bind %s: %r", mount);
 	if(sys->bind(outdir, shadow + outdir, Sys->MREPL|Sys->MCREATE) < 0)
 		return sys->sprint("cannot bind %s: %r", outdir);

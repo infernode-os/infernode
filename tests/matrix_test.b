@@ -740,6 +740,18 @@ probe(mount, outdir: string, resc: chan of string)
 	fd := sys->open(mount + "/signals", Sys->OREAD);
 	if(fd == nil)
 		r += "mount-unreadable;";
+	# The mount is a read-only grant all the way down: no file in it
+	# opened for writing, nothing made in a directory below it (an
+	# unflagged bind refuses a create only at the bind point itself),
+	# nothing removed.
+	wfd := sys->open(mount + "/signals", Sys->OWRITE);
+	if(wfd != nil)
+		r += "mount-writable;";
+	sfd := sys->create(mount + "/portfolio/probe-file", Sys->OWRITE, 8r644);
+	if(sfd != nil)
+		r += "mount-subdir-create;";
+	if(sys->remove(mount + "/risk") >= 0)
+		r += "mount-remove;";
 	cfd := sys->create(outdir + "/probe-file", Sys->OWRITE, 8r644);
 	if(cfd == nil)
 		r += "outdir-unwritable;";
@@ -749,6 +761,27 @@ probe(mount, outdir: string, resc: chan of string)
 	dfd := sys->open("#U*/", Sys->OREAD);
 	if(dfd != nil)
 		r += "devattach-open;";
+	resc <-= r;
+}
+
+probenested(mount, outdir: string, resc: chan of string)
+{
+	sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->FORKNS, nil);
+	mkfixdir(outdir);
+	err := matrixlib->restrictsvcns(mount, outdir);
+	if(err != nil) {
+		resc <-= "restrict-failed: " + err;
+		return;
+	}
+	sys->pctl(Sys->NODEVS, nil);
+	r := "";
+	if(sys->create(outdir + "/probe-file", Sys->OWRITE, 8r644) == nil)
+		r += "outdir-unwritable;";
+	if(sys->open(mount + "/tbl4/signals", Sys->OWRITE) != nil)
+		r += "mount-writable;";
+	if(sys->create(mount + "/tbl4/probe-file", Sys->OWRITE, 8r644) != nil)
+		r += "mount-create;";
 	resc <-= r;
 }
 
@@ -763,6 +796,13 @@ testIsolation(t: ref T)
 	# The restriction was private to the probe's forked namespace.
 	(ok, nil) := sys->stat("/dis");
 	t.assert(ok >= 0, "parent namespace unaffected");
+
+	# An outdir inside the read-only mount is still writable: it is
+	# a mount point of its own below the read-only one.
+	resn := chan of string;
+	spawn probenested("/tmp/mtest", "/tmp/mtest/tbl4/out", resn);
+	rn := <-resn;
+	t.assertseq(rn, "", "outdir nested in a read-only mount");
 
 	# A grant that cannot be bound must fail closed.
 	resc2 := chan of string;

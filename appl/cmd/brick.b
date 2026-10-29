@@ -8,7 +8,7 @@ implement Brick;
 #	brick pair [-d keydir] usbmnt
 #	brick wifi usbmnt  <creds
 #	brick mount [-abu] [-d keydir] addr mountpoint
-#	brick d2 [-d keydir] [-l leasems] brickmnt dir
+#	brick d2 [-u] [-d keydir] [-l leasems] [-r addr] brickmnt dir
 #
 # Over USB the brick is mounted with plain `mount -A`; physical access
 # is the trust boundary.  Over the network it serves Styx inside TLS 1.3
@@ -50,6 +50,8 @@ Brick: module
 PORT: con "564";
 udp := 0;
 leasems := 500;
+reconnaddr: string;	# brick d2 -r: the brick's address, to mount again after a loss
+RECONNMS: con 2000;	# transport failing this long: mount again
 window := 1;		# brick fetch: reads in flight
 nbytes := big 0;	# brick fetch: bytes wanted (0: to end of file)
 
@@ -86,6 +88,8 @@ init(nil: ref Draw->Context, args: list of string)
 			udp = 1;
 		'l' =>
 			leasems = int arg->earg();
+		'r' =>
+			reconnaddr = arg->earg();
 		'w' =>
 			window = int arg->earg();
 		'n' =>
@@ -136,7 +140,7 @@ usage()
 		"\tbrick pair [-d keydir] usbmnt\n" +
 		"\tbrick wifi usbmnt <creds\n" +
 		"\tbrick mount [-abu] [-d keydir] addr mountpoint\n" +
-		"\tbrick d2 [-d keydir] [-l leasems] brickmnt dir\n" +
+		"\tbrick d2 [-u] [-d keydir] [-l leasems] [-r addr] brickmnt dir\n" +
 		"\tbrick fetch [-w window] [-n bytes] file\n");
 	raise "fail:usage";
 }
@@ -308,6 +312,15 @@ dmount(addr, mntpt: string, flags: int)
 # automatic, so after any lapse (a lost link, or this program dying) the
 # outputs stay at failsafe until an application arms again.
 #
+# With -r addr (and -u for datagrams) brick d2 also restores the
+# connection: when its commands have failed on the transport (link down,
+# timed out, hung up) for RECONNMS, it mounts the brick at brickmnt again
+# and opens a new D2 session.  After the brick restarts its old session
+# is gone for good, so without this nothing could arm again until brick
+# d2 itself was restarted.  It does not arm: ctl reads "failsafe
+# (the brick restarted ...)" and "last reconnecting", then "last
+# reconnected", until an application writes arm, as after any lapse.
+#
 Out: adt {
 	name:	string;	# pwm/2
 	val:	int;
@@ -326,6 +339,8 @@ D2: adt {
 	armed:	int;
 	lapsed:	string;	# why we are disarmed, if we were armed
 	last:	string;	# the last command's outcome
+	bmnt:	string;	# where the brick is mounted
+	failsince:	int;	# when commands began failing on the transport (0: they are not)
 };
 
 d2serve(bmnt, dir: string)
@@ -335,19 +350,9 @@ d2serve(bmnt, dir: string)
 		fail("d2", "no D2 key in " + keydir + "; run brick pair");
 	d := ref D2;
 	d.key = key;
-	# The session: opening clone made it; its text names it.
-	(nil, w) := sys->tokenize(readfile(bmnt + "/d2/clone"), " \n");
-	if(len w != 4)
-		fail("d2", "bad answer from " + bmnt + "/d2/clone");
-	d.devid = hd w;
-	d.boot = hd tl w;
-	d.epoch = int hd tl tl w;
-	d.tau = int hd tl tl tl w;
-	# (opening clone again would make another session: keep this one's)
-	d.grant = sys->open(bmnt + "/d2/grant", Sys->OREAD);
-	d.cmd = sys->open(bmnt + "/d2/cmd", Sys->OWRITE);
-	if(d.grant == nil || d.cmd == nil)
-		fail("d2", sys->sprint("can't open %s/d2: %r", bmnt));
+	d.bmnt = bmnt;
+	if((e := d2open(d)) != nil)
+		fail("d2", e);
 	# The safety outputs, from the brick's status.
 	outs: list of ref Out;
 	(nil, lines) := sys->tokenize(readfile(bmnt + "/d2/status"), "\n");
@@ -389,6 +394,66 @@ d2serve(bmnt, dir: string)
 	tick := chan of int;
 	spawn d2clock(tick, leasems / 5);
 	spawn d2core(d, o, ctl, reads, writes, tick);
+}
+
+# Open a D2 session on the brick at d.bmnt: opening clone makes it, its
+# text names it; grant and cmd are this session's.
+d2open(d: ref D2): string
+{
+	s := readfile0(d.bmnt + "/d2/clone");
+	(nil, w) := sys->tokenize(s, " \n");
+	if(len w != 4)
+		return "bad answer from " + d.bmnt + "/d2/clone";
+	d.devid = hd w;
+	d.boot = hd tl w;
+	d.epoch = int hd tl tl w;
+	d.tau = int hd tl tl tl w;
+	d.seq = 0;
+	# (opening clone again would make another session: keep this one's)
+	d.grant = sys->open(d.bmnt + "/d2/grant", Sys->OREAD);
+	d.cmd = sys->open(d.bmnt + "/d2/cmd", Sys->OWRITE);
+	if(d.grant == nil || d.cmd == nil)
+		return sys->sprint("can't open %s/d2: %r", d.bmnt);
+	return nil;
+}
+
+# Mount the brick again and open a new session (brick d2 -r); never arms.
+reconnect(d: ref D2, done: chan of int)
+{
+	e: string;
+	# Disarmed from the start: ctl must never read "live" for a session
+	# that is being replaced (the brick refuses its commands anyway).
+	if(d.armed || d.lapsed == nil)
+		d.lapsed = "the brick restarted or the link was lost";
+	d.armed = 0;
+	d.last = "reconnecting";
+	{
+		sys->unmount(nil, d.bmnt);
+		if(udp)
+			dmount(reconnaddr, d.bmnt, Sys->MREPL);
+		else
+			mount(reconnaddr, d.bmnt, Sys->MREPL);
+		e = d2open(d);
+	} exception x {
+	"fail:*" =>
+		e = "mount again: " + x[5:];
+	}
+	if(e == nil){
+		d.failsince = 0;
+		d.last = "reconnected";
+	}else{
+		d.last = e;
+		d.failsince = sys->millisec() - RECONNMS + 1000;	# try again in a second
+	}
+	done <-= 1;
+}
+
+# An error from the transport rather than a refusal by D2.
+transport(e: string): int
+{
+	return contains(e, "link down") || contains(e, "timed out") || contains(e, "hungup") ||
+		contains(e, "hung up") || contains(e, "outcome unknown") || contains(e, "i/o") ||
+		contains(e, "does not exist") || contains(e, "gone");
 }
 
 d2clock(tick: chan of int, ms: int)
@@ -474,7 +539,11 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 		# (seq, armed) is shared, and only a renewal and a ctl or value
 		# write can overlap, which the brick orders by seq.
 		h := held(o);
-		if(d.armed && h != nil && !renewing){
+		if(reconnaddr != nil && d.failsince != 0 && !renewing &&
+		   sys->millisec() - d.failsince > RECONNMS){
+			renewing = 1;
+			spawn reconnect(d, renewed);
+		}else if(d.armed && h != nil && !renewing){
 			renewing = 1;
 			spawn renew(d, h, renewed);
 		}
@@ -516,6 +585,7 @@ d2send(d: ref D2, kind: string, outs: list of string, lease: int): string
 		}
 		if(n <= 0)
 			return d2refused(d, sys->sprint("grant: %r"));
+		d.failsince = 0;
 		(nil, w) := sys->tokenize(string buf[0:n], " \n");
 		if(len w != 3)
 			return d2refused(d, "grant: bad answer");
@@ -541,6 +611,11 @@ d2send(d: ref D2, kind: string, outs: list of string, lease: int): string
 d2refused(d: ref D2, e: string): string
 {
 	d.last = e;
+	if(transport(e)){
+		if(d.failsince == 0)
+			d.failsince = sys->millisec();
+		return e;
+	}
 	if(contains(e, "not armed") || contains(e, "session") || contains(e, "holding") ||
 	   contains(e, "boot")){
 		if(d.armed)

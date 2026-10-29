@@ -134,6 +134,16 @@ runsvc()
 	svc->run();
 }
 
+spinning := 1;
+
+spin(pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	x := 0;
+	while(spinning)
+		x++;
+}
+
 testServiceEndToEnd(t: ref T)
 {
 	svc = load MatrixService "/dis/matrix/sysmon-svc.dis";
@@ -141,6 +151,10 @@ testServiceEndToEnd(t: ref T)
 		t.fatal(sys->sprint("cannot load sysmon-svc: %r"));
 	err := svc->init("/", OUTDIR);
 	t.assertnil(err, "init ok");
+	# A proc that does nothing but compute, for the CPU figures to see.
+	spinpid := chan of int;
+	spawn spin(spinpid);
+	spinner := <-spinpid;
 	spawn runsvc();
 	sys->sleep(3500);	# ~3 polls at 1 Hz
 
@@ -200,6 +214,34 @@ testServiceEndToEnd(t: ref T)
 		ncr++;
 	}
 	t.assert(ncr >= 1, "cpurates non-empty");
+
+	# The CPU figures are of CPU time: a proc computing without
+	# pause has a rate well above zero, and so has the whole.  The
+	# time /prog gives is M:SS.t; read as a number it was minutes,
+	# and every rate was 0.
+	srate := -1;
+	for(crl = cr; crl != nil; crl = tl crl) {
+		(nil, rt) := sys->tokenize(hd crl, " \t");
+		if(len rt == 2 && int hd rt == spinner)
+			srate = int hd tl rt;
+	}
+	(nil, ct) := sys->tokenize(readfile(OUTDIR + "/cpu/current"), " \t\n");
+	# Only where /prog keeps CPU time: the native kernel charges a
+	# clock tick to the running Prog; emu charges nothing, and every
+	# Prog's time reads 0:00.0.
+	(nil, st) := sys->tokenize(readfile("/prog/" + string spinner + "/status"), " \t\n");
+	if(len st >= 4 && hd tl tl tl st == "0:00.0")
+		t.log("no per-Prog CPU time here (emu): cpu rates not checked");
+	else {
+		t.assert(srate >= 20, sys->sprint("a spinning proc's cpu rate (%d)", srate));
+		t.assert(int hd ct >= 20, sys->sprint("cpu/current while a proc spins (%d)", int hd ct));
+	}
+	# busy counts runnable procs only: the spinner, not every proc
+	# blocked in a channel or a read.
+	busyn := int hd tl ct;
+	total := int hd tl tl ct;
+	t.assert(busyn >= 1 && busyn < total, sys->sprint("busy %d of %d", busyn, total));
+	spinning = 0;
 
 	# net/current: census lines "tcp t c a" and "udp t c a".
 	net := readfile(OUTDIR + "/net/current");

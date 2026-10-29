@@ -72,7 +72,6 @@ ts_hist:	array of int;
 hist_n:		int;			# samples written so far
 hist_w:		int;			# next write index
 
-last_total_ticks:	big;
 last_poll_ms:		int;
 
 # Per-pid tick counts from the previous poll, for proc/cpurates.
@@ -91,7 +90,6 @@ init(nil: string, outdir: string): string
 	running = 1;
 	hist_n = 0;
 	hist_w = 0;
-	last_total_ticks = big 0;
 	last_poll_ms = 0;
 
 	lastticks = nil;
@@ -142,30 +140,23 @@ poll()
 	(heap_cur, heap_max, main_cur, main_max, image_cur, image_max) :=
 		parsemem(mem);
 
-	# CPU: aggregate ticks across /prog and divide by elapsed real time.
-	(proc_snapshot, total_ticks, busy_count, proc_count, perproc) := scanprog();
+	# CPU: each proc's CPU time against the previous poll, over the
+	# elapsed real time.  The whole is the sum over the procs seen at
+	# both polls, so one that exits takes its time with it rather
+	# than making the total go backwards.
+	(proc_snapshot, busy_count, proc_count, perproc) := scanprog();
 	writefile(outdir_g + "/proc/list", proc_snapshot);
 
-	pct := 0;
 	dt_ms := 0;
-	if(last_poll_ms != 0 && last_total_ticks != big 0) {
+	if(last_poll_ms != 0)
 		dt_ms = now - last_poll_ms;
-		dt_ticks := total_ticks - last_total_ticks;
-		# Inferno tick is roughly 1ms; for portability, normalise:
-		# 1 tick per ms means pct = dt_ticks * 100 / dt_ms.  If
-		# dt_ticks > dt_ms, clamp to 100.
-		if(dt_ms > 0) {
-			p := int (dt_ticks * big 100 / big dt_ms);
-			if(p < 0) p = 0;
-			if(p > 100) p = 100;
-			pct = p;
-		}
-	}
-	last_total_ticks = total_ticks;
 	last_poll_ms = now;
 
-	# Per-process rates from tick deltas against the previous poll.
-	writecpurates(perproc, dt_ms);
+	# Per-process rates from CPU-time deltas against the previous poll.
+	dcpu := writecpurates(perproc, dt_ms);
+	pct := 0;
+	if(dt_ms > 0)
+		pct = clamppct(dcpu * big 100 / big dt_ms);
 
 	# Net census (+ verbatim stats where the platform provides them).
 	(tcp_tot, tcp_conn, tcp_ann) := censusproto("tcp");
@@ -205,30 +196,65 @@ poll()
 
 # ─── Per-process CPU rates ─────────────────────────────────
 
-writecpurates(perproc: list of (string, big), dt_ms: int)
+# Writes proc/cpurates; returns the CPU ms used since the last poll
+# by the procs seen at both.
+writecpurates(perproc: list of (string, big), dt_ms: int): big
 {
 	out := "";
+	total := big 0;
 	newlast: list of (string, big);
 	for(pl := perproc; pl != nil; pl = tl pl) {
-		(pid, ticks) := hd pl;
+		(pid, cpu) := hd pl;
 		pct := 0;
 		if(dt_ms > 0) {
 			for(ol := lastticks; ol != nil; ol = tl ol) {
-				(opid, oticks) := hd ol;
+				(opid, ocpu) := hd ol;
 				if(opid == pid) {
-					p := int ((ticks - oticks) * big 100 / big dt_ms);
-					if(p < 0) p = 0;
-					if(p > 100) p = 100;
-					pct = p;
+					if(cpu > ocpu)
+						total += cpu - ocpu;
+					pct = clamppct((cpu - ocpu) * big 100 / big dt_ms);
 					break;
 				}
 			}
 		}
 		out += sys->sprint("%s %d\n", pid, pct);
-		newlast = (pid, ticks) :: newlast;
+		newlast = (pid, cpu) :: newlast;
 	}
 	lastticks = newlast;
 	writefile(outdir_g + "/proc/cpurates", out);
+	return total;
+}
+
+clamppct(p: big): int
+{
+	if(p < big 0)
+		return 0;
+	if(p > big 100)
+		return 100;
+	return int p;
+}
+
+# /prog/<pid>/status gives CPU time as minutes:seconds.tenths
+# ("   1:02.3", devprog's progtime): to ms.
+cputime(s: string): big
+{
+	m := 0;
+	for(i := 0; i < len s; i++)
+		if(s[i] == ':')
+			break;
+	if(i == len s)
+		return big 0;
+	m = int s[0:i];
+	rest := s[i+1:];
+	sec := 0;
+	tenths := 0;
+	for(j := 0; j < len rest; j++)
+		if(rest[j] == '.')
+			break;
+	sec = int rest[0:j];
+	if(j + 1 < len rest)
+		tenths = int rest[j+1:j+2];
+	return (big m * big 60 + big sec) * big 1000 + big tenths * big 100;
 }
 
 # ─── Net census ────────────────────────────────────────────
@@ -311,17 +337,16 @@ parsemem(content: string): (big, big, big, big, big, big)
 
 # ─── /prog scanning ────────────────────────────────────────
 
-scanprog(): (string, big, int, int, list of (string, big))
+scanprog(): (string, int, int, list of (string, big))
 {
 	snapshot := "";
-	total_ticks := big 0;
 	busy := 0;
 	count := 0;
 	perproc: list of (string, big);
 
 	fd := sys->open("/prog", Sys->OREAD);
 	if(fd == nil)
-		return ("", big 0, 0, 0, nil);
+		return ("", 0, 0, nil);
 
 	for(;;) {
 		(n, dirs) := sys->dirread(fd);
@@ -337,25 +362,22 @@ scanprog(): (string, big, int, int, list of (string, big))
 				snapshot += "\n";
 			# status: "%8d %8d %10s %s %10s %5dK %s"
 			# fields: pid grpid user time state size_k module
-			# "time" is "ticks" — parse the leading integer.
+			# time is CPU time, M:SS.t.  state is devprog's: ready
+			# is runnable; alt, send, recv are blocked on channels,
+			# release in a system call, and so on.
 			(ntoks, toks) := sys->tokenize(status, " \t\n");
 			if(ntoks >= 7) {
 				toks = tl toks; toks = tl toks; toks = tl toks;
-				ticks := big hd toks;
-				total_ticks += ticks;
-				perproc = (pid, ticks) :: perproc;
+				perproc = (pid, cputime(hd toks)) :: perproc;
 				toks = tl toks;
-				state := hd toks;
-				if(state != "Sleep" && state != "Wait" &&
-				   state != "Exit" && state != "exiting" &&
-				   state != "exiting]" && state != "broken")
+				if(hd toks == "ready")
 					busy++;
 			}
 			count++;
 		}
 	}
 	fd = nil;
-	return (snapshot, total_ticks, busy, count, perproc);
+	return (snapshot, busy, count, perproc);
 }
 
 # ─── History writers ───────────────────────────────────────

@@ -329,19 +329,32 @@ stopped(dir: string): int
 	return ok >= 0;
 }
 
+# each client's last count read whole: a client rewrites its file
+# (create, then write) every 5 s, and a read between the two finds it
+# empty -- which, summed as nothing, made the total go backwards
+lastcount: list of (string, string);
+
 report(dir: string, clients: list of string, t0: int)
 {
 	tok := 0;
 	tbad := 0;
 	per := "";
 	for(l := clients; l != nil; l = tl l){
-		s := readfile(hd l);
-		(n, f) := sys->tokenize(s, " \n");
+		s := oneline(readfile(hd l));
+		(n, f) := sys->tokenize(s, " ");
+		if(n >= 2)
+			lastcount = (hd l, s) :: dropcount(hd l, lastcount);
+		else
+			for(lc := lastcount; lc != nil; lc = tl lc)
+				if((hd lc).t0 == hd l){
+					s = (hd lc).t1;
+					(n, f) = sys->tokenize(s, " ");
+				}
 		if(n >= 2){
 			tok += int hd f;
 			tbad += int hd tl f;
 		}
-		per += sys->sprint(" %s=%s", basename(hd l), oneline(s));
+		per += sys->sprint(" %s=%s", basename(hd l), s);
 	}
 	vms := "";
 	for(k := 0; k < NVM; k++)
@@ -525,6 +538,15 @@ copy(src, dst: string)
 	b := array[8192] of byte;
 	while((n := sys->read(f, b, len b)) > 0)
 		sys->write(t, b, n);
+}
+
+dropcount(name: string, l: list of (string, string)): list of (string, string)
+{
+	r: list of (string, string);
+	for(; l != nil; l = tl l)
+		if((hd l).t0 != name)
+			r = hd l :: r;
+	return r;
 }
 
 readfile(f: string): string

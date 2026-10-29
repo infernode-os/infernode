@@ -125,6 +125,9 @@ npass: int;
 # notifications file: bounded in-memory ring appended by watch-rule
 # notify actions (and anything else runtime-worthy).
 NOTIFMAX: con 32*1024;
+
+# Longest composition text accepted through the composition file.
+MAXCOMP: con 1024*1024;
 notifbuf: string;
 
 # ── Globals ─────────────────────────────────────────────────
@@ -572,20 +575,52 @@ Serve:
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			Qcomposition =>
-				# Write new composition → trigger reload
-				alt {
-				reloadch <-= string m.data =>
-					;
-				* =>
-					;  # drop if reload already pending
+				# One write is one composition, but the mnt device
+				# splits a long one into Twrites of at most iounit
+				# bytes: a fragment that fills the iounit is kept on
+				# its fid, and the first shorter one completes the
+				# text (tools9p's rule, INFR-521).  Text that ends
+				# exactly on a boundary completes at the clunk.  A
+				# complete text is parsed here, so a bad composition
+				# is the writer's error, not a line on stderr.
+				if(m.offset == big 0)
+					c.data = nil;
+				else if(m.offset != big len c.data) {
+					srv.reply(ref Rmsg.Error(m.tag, "composition: write out of sequence"));
+					break;
 				}
-				srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				if(len c.data + len m.data > MAXCOMP) {
+					c.data = nil;
+					srv.reply(ref Rmsg.Error(m.tag, "composition: too long"));
+					break;
+				}
+				c.data = catbytes(c.data, m.data);
+				if(len m.data >= srv.iounit()) {
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					break;
+				}
+				text := string c.data;
+				c.data = nil;
+				if((perr := applycomposition(text)) != nil)
+					srv.reply(ref Rmsg.Error(m.tag, "composition: " + perr));
+				else
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
 
 			* =>
 				srv.reply(ref Rmsg.Error(m.tag, Eperm));
 			}
 
 		Clunk =>
+			# A composition that ended on an iounit boundary is
+			# complete now; its writer has gone, so a parse error
+			# can only be told in notifications.
+			c := srv.getfid(m.fid);
+			if(c != nil && TYPE(c.path) == Qcomposition && c.data != nil) {
+				text := string c.data;
+				c.data = nil;
+				if((perr := applycomposition(text)) != nil)
+					notifappend(sys->sprint("%d composition error %s", sys->millisec(), perr));
+			}
 			srv.clunk(m);
 
 		Remove =>
@@ -617,15 +652,13 @@ handlectl(data: string): string
 			text = readfile(path);
 			if(text == nil)
 				return "composition not found: " + name;
+			(nil, perr) := matrixlib->parsecomposition(text);
+			if(perr != nil)
+				return name + ": " + perr;
 			comppath = path;
 			compname = name;
 		}
-		alt {
-		reloadch <-= text =>
-			;
-		* =>
-			;
-		}
+		queuereload(text);
 		return nil;
 	}
 
@@ -644,12 +677,7 @@ handlectl(data: string): string
 			compname = "picker";
 		} else
 			text = "# empty\n";
-		alt {
-		reloadch <-= text =>
-			;
-		* =>
-			;
-		}
+		queuereload(text);
 		return nil;
 	}
 
@@ -689,6 +717,48 @@ handlectl(data: string): string
 	}
 
 	return "usage: load <name>|load -|unload|edit|pin <name>|unpin <name>";
+}
+
+# Parse a composition and, if it parses, queue it for the main loop
+# to apply.  The parser is pure, so the 9P proc can run it and give
+# the writer the diagnostic; the reload itself belongs to the loop
+# that owns the modules.
+applycomposition(text: string): string
+{
+	(nil, perr) := matrixlib->parsecomposition(text);
+	if(perr != nil)
+		return perr;
+	queuereload(text);
+	return nil;
+}
+
+# Hand a composition to the main loop.  The latest one wins: a newer
+# composition replaces one still waiting, where it used to be dropped
+# (so the last of two quick writes was lost, and the runtime showed
+# the first).
+queuereload(text: string)
+{
+	for(;;) alt {
+	reloadch <-= text =>
+		return;
+	* =>
+		alt {
+		<-reloadch =>
+			;
+		* =>
+			;
+		}
+	}
+}
+
+catbytes(a, b: array of byte): array of byte
+{
+	if(a == nil)
+		return b;
+	r := array[len a + len b] of byte;
+	r[0:] = a;
+	r[len a:] = b;
+	return r;
 }
 
 safeleaf(s: string): int
@@ -737,35 +807,59 @@ QPATH(t, slot, pass: int): big
 
 # ── Module slot registry ────────────────────────────────────
 
-# Current (name, mtype, mount, running) tuples from the composition.
+# Current (name, mtype, mount, status) tuples from the composition.
 # Caller holds complock.
-collectmods(): list of (string, string, string, int)
+collectmods(): list of (string, string, string, string)
 {
-	mods: list of (string, string, string, int);
+	mods: list of (string, string, string, string);
 	if(comp == nil)
 		return nil;
 	if(comp.layout != nil)
 		mods = collectleaves(comp.layout, mods);
 	for(sl := comp.services; sl != nil; sl = tl sl) {
 		se := hd sl;
-		mods = (se.name, "service", se.mount, se.mod != nil) :: mods;
+		mods = (se.name, "service", se.mount, svcstatus(se)) :: mods;
 	}
 	return mods;
 }
 
-collectleaves(node: ref LayoutNode, acc: list of (string, string, string, int)): list of (string, string, string, int)
+collectleaves(node: ref LayoutNode, acc: list of (string, string, string, string)): list of (string, string, string, string)
 {
 	pick n := node {
 	Split =>
 		acc = collectleaves(n.child1, acc);
 		acc = collectleaves(n.child2, acc);
 	Leaf =>
-		if(n.modname == "app")
-			acc = (appname(n), "app", n.mount, n.apppid > 0) :: acc;
-		else if(n.modname != "")
-			acc = (n.modname, "display", n.mount, n.mod != nil) :: acc;
+		if(n.modname == "app") {
+			st := "stopped";
+			if(n.apppid > 0)
+				st = "running";
+			acc = (appname(n), "app", n.mount, st) :: acc;
+		} else if(n.modname != "") {
+			st := "stopped";
+			if(n.mod != nil || n.tkmod != nil)
+				st = "running";
+			else if((e := geterr(n.name)) != nil)
+				st = "failed " + e;
+			acc = (n.modname, "display", n.mount, st) :: acc;
+		}
 	}
 	return acc;
+}
+
+# A service is running while its run() is: one that returned reads
+# exited, one that raised (or was refused its namespace) failed, with
+# why.  stopped is a service not started, or shut down.
+svcstatus(se: ref ServiceEntry): string
+{
+	if(se.mod == nil) {
+		if((e := svcerr(se.name)) != nil)
+			return "failed " + e;
+		return "stopped";
+	}
+	if((why := svcended(se.pid)) != nil)
+		return why;
+	return "running";
 }
 
 # Re-sync the slot registry with the live composition.  Existing
@@ -820,10 +914,9 @@ modstatus(name, mtype: string): string
 	status := "stopped";
 	<-complock;
 	for(ml := collectmods(); ml != nil; ml = tl ml) {
-		(mname, mmtype, nil, running) := hd ml;
+		(mname, mmtype, nil, st) := hd ml;
 		if(mname == name && mmtype == mtype) {
-			if(running)
-				status = "running";
+			status = st;
 			break;
 		}
 	}
@@ -1427,8 +1520,8 @@ guiloop()
 {
 	for(;;) {
 		if(dirty) {
+			dirty = 0;	# before: a module failing in draw asks for another
 			redraw();
-			dirty = 0;
 		}
 		alt {
 		c := <-wmctl or
@@ -1713,11 +1806,22 @@ drawlayout(dst: ref Image, node: ref LayoutNode)
 				lc.stale = 1;
 			}
 			if(lc.img == nil) {	# out of image memory: draw direct
-				n.mod->draw(dst);
+				{
+					n.mod->draw(dst);
+				} exception e {
+				"*" =>
+					leaffail(n, "draw", e);
+				}
 				return;
 			}
 			if(lc.stale) {
-				n.mod->draw(lc.img);
+				{
+					n.mod->draw(lc.img);
+				} exception e {
+				"*" =>
+					leaffail(n, "draw", e);
+					return;
+				}
 				lc.stale = 0;
 			}
 			dst.draw(n.r, lc.img, nil, n.r.min);
@@ -1810,14 +1914,21 @@ loadleafmodules(node: ref LayoutNode)
 			loadtkleaf(n, path);
 			return;
 		}
-		err := mod->init(display_g, font_g, n.mount);
+		err: string;
+		{
+			err = mod->init(display_g, font_g, n.mount);
+			if(err == nil)
+				mod->resize(n.r);
+		} exception e {
+		"*" =>
+			err = "raised " + e;
+		}
 		if(err != nil) {
 			sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
 			seterr(n.name, "init: " + err);
 			return;
 		}
 		seterr(n.name, nil);
-		mod->resize(n.r);
 		n.mod = mod;
 		iv := UPDATE_MS;
 		if((tkr := load MatrixTicker path) != nil) {
@@ -1840,6 +1951,35 @@ seterr(name, err: string)
 	if(err != nil && err != "")
 		nl = (name, err) :: nl;
 	moderrs = nl;
+}
+
+# A display module that raised is dropped from its region, which then
+# says why (drawlayout), and the runtime carries on: a module's bug is
+# its region's failure, not the runtime's.  Its own shutdown is not
+# called (it may be what is broken); a Tk module's widgets go.
+leaffail(n: ref LayoutNode.Leaf, what, e: string)
+{
+	if(n == nil)
+		return;
+	sys->fprint(stderr, "matrix: %s (%s) %s raised %s\n", n.modname, n.name, what, e);
+	seterr(n.name, what + " raised " + e);
+	if(focusleaf == n) {
+		focusmod = nil;
+		focusleaf = nil;
+	}
+	n.mod = nil;
+	if(n.tkmod != nil) {
+		if(n.tkitem != "")
+			tk->cmd(top, ".c delete " + n.tkitem);
+		if(n.tkwin != "")
+			tk->cmd(top, "destroy " + n.tkwin);
+		n.tkmod = nil;
+		n.tkwin = "";
+		n.tkitem = "";
+		tkfocus = 0;
+	}
+	markstale(n);
+	dirty = 1;
 }
 
 geterr(name: string): string
@@ -1919,7 +2059,13 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	# pack size.
 	tk->cmd(top, sys->sprint(".c itemconfigure %s -width %d -height %d",
 		itm, n.r.dx(), n.r.dy()));
-	err := tkm->init(top, w, n.mount);
+	err: string;
+	{
+		err = tkm->init(top, w, n.mount);
+	} exception e {
+	"*" =>
+		err = "raised " + e;
+	}
 	if(err != nil) {
 		sys->fprint(stderr, "matrix: init %s: %s\n", n.modname, err);
 		seterr(n.name, "init: " + err);
@@ -1940,7 +2086,12 @@ loadtkleaf(n: ref LayoutNode.Leaf, path: string)
 	n.tkmod = tkm;
 	n.tkwin = w;
 	n.tkitem = itm;
-	tkm->resize(n.r);
+	{
+		tkm->resize(n.r);
+	} exception e {
+	"*" =>
+		leaffail(n, "resize", e);
+	}
 	tk->cmd(top, "update");
 }
 
@@ -2308,17 +2459,31 @@ loadservicemodules()
 		mod := load MatrixService path;
 		if(mod == nil) {
 			sys->fprint(stderr, "matrix: cannot load service module %s: %r\n", path);
+			setsvcerr(se.name, sys->sprint("cannot load %s: %r", path));
 			continue;
 		}
 		se.outdir = "/tmp/matrix/" + se.name;
 		ensuredir(se.outdir);
-		err := mod->init(se.mount, se.outdir);
+		err: string;
+		{
+			err = mod->init(se.mount, se.outdir);
+		} exception e {
+		"*" =>
+			err = "raised " + e;
+		}
 		if(err != nil) {
 			sys->fprint(stderr, "matrix: init %s: %s\n", se.name, err);
+			setsvcerr(se.name, "init: " + err);
 			continue;
 		}
+		setsvcerr(se.name, nil);
 		se.mod = mod;
-		spawn runservice(se);
+		# The proc takes the module handle with it, and its pid is
+		# known before anything can shut it down: a reload (or a
+		# transplant) changes se, never what is running.
+		pidc := chan of int;
+		spawn runservice(se.name, se.mount, se.outdir, mod, pidc);
+		se.pid = <-pidc;
 	}
 }
 
@@ -2331,25 +2496,143 @@ loadservicemodules()
 # mount == "/" is the composition author's explicit whole-namespace
 # grant, so the bind-replace step is skipped; everything else still
 # applies.  Fail closed: if restriction fails, the service never runs.
-runservice(se: ref ServiceEntry)
+#
+# A service lives as long as its run(): when run() ends, however it
+# ends, the process group goes with it, so nothing it started outlives
+# it.  How it ended is kept for the module's ctl file.
+runservice(name, mount, outdir: string, mod: MatrixService, pidc: chan of int)
 {
-	se.pid = sys->pctl(Sys->NEWPGRP, nil);
+	pid := sys->pctl(Sys->NEWPGRP, nil);
+	pidc <-= pid;
 	sys->pctl(Sys->FORKNS, nil);
 	sys->pctl(Sys->NEWENV, nil);
-	if(se.mount != "/") {
-		err := matrixlib->restrictsvcns(se.mount, se.outdir);
+	if(mount != "/") {
+		err := matrixlib->restrictsvcns(mount, outdir);
 		if(err != nil) {
 			sys->fprint(stderr, "matrix: %s: namespace restriction failed: %s — service not started\n",
-				se.name, err);
-			se.mod = nil;	# status must read stopped, not running
-			se.pid = 0;
+				name, err);
+			svcend(pid, "failed namespace: " + err);
 			return;
 		}
 	}
 	sys->pctl(Sys->NEWFD, 2 :: nil);
 	sys->pctl(Sys->NODEVS, nil);
-	se.mod->run();
-	se.pid = 0;
+	why := "exited";
+	{
+		mod->run();
+	} exception e {
+	"*" =>
+		why = "failed raised " + e;
+		sys->fprint(stderr, "matrix: service %s raised %s\n", name, e);
+	}
+	svcend(pid, why);
+	killgrp(pid);
+}
+
+# ── Service state ───────────────────────────────────────────
+#
+# How each service proc ended, by pid (pids are not reused while
+# the runtime runs), and why each service of the composition
+# failed to start, by name.  Written by service and main procs,
+# read by the 9P proc.
+
+svclk: chan of int;
+svcends: list of (int, string);
+svcerrs: list of (string, string);
+
+svclock()
+{
+	if(svclk == nil) {
+		svclk = chan[1] of int;
+		svclk <-= 1;
+	}
+	<-svclk;
+}
+
+svcend(pid: int, why: string)
+{
+	svclock();
+	svcends = (pid, why) :: svcends;
+	svclk <-= 1;
+}
+
+svcended(pid: int): string
+{
+	svclock();
+	why: string;
+	for(l := svcends; l != nil; l = tl l)
+		if((hd l).t0 == pid) {
+			why = (hd l).t1;
+			break;
+		}
+	svclk <-= 1;
+	return why;
+}
+
+# Forget a shut-down service's end, so the list holds only the
+# composition's.
+svcforget(pid: int)
+{
+	svclock();
+	keep: list of (int, string);
+	for(l := svcends; l != nil; l = tl l)
+		if((hd l).t0 != pid)
+			keep = hd l :: keep;
+	svcends = keep;
+	svclk <-= 1;
+}
+
+setsvcerr(name, err: string)
+{
+	svclock();
+	nl: list of (string, string);
+	for(l := svcerrs; l != nil; l = tl l)
+		if((hd l).t0 != name)
+			nl = hd l :: nl;
+	if(err != nil && err != "")
+		nl = (name, err) :: nl;
+	svcerrs = nl;
+	svclk <-= 1;
+}
+
+svcerr(name: string): string
+{
+	svclock();
+	e: string;
+	for(l := svcerrs; l != nil; l = tl l)
+		if((hd l).t0 == name) {
+			e = (hd l).t1;
+			break;
+		}
+	svclk <-= 1;
+	return e;
+}
+
+killgrp(pid: int)
+{
+	fd := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+# How long a shut-down service's run() has to return before its
+# process group is killed.
+SVCGRACE_MS: con 2000;
+
+# A service told to shut down whose run() has not returned by the
+# grace (blocked in a read, say) is killed, with everything it
+# started: the next composition may start the same service on the
+# same outdir.
+reapservice(pid: int)
+{
+	for(waited := 0; waited < SVCGRACE_MS; waited += 100) {
+		if(svcended(pid) != nil)
+			break;
+		sys->sleep(100);
+	}
+	if(svcended(pid) == nil)
+		killgrp(pid);
+	svcforget(pid);
 }
 
 # Update all display modules, return 1 if any changed
@@ -2370,13 +2653,27 @@ updatedisplaymodules(node: ref LayoutNode): int
 			t.acc = 0;
 		}
 		if(n.mod != nil) {
-			ch := n.mod->update();
+			ch := 0;
+			{
+				ch = n.mod->update();
+			} exception e {
+			"*" =>
+				leaffail(n, "update", e);
+				return 1;
+			}
 			if(ch)
 				markstale(n);
 			return ch;
 		}
-		if(n.tkmod != nil)
-			return n.tkmod->update();
+		if(n.tkmod != nil) {
+			{
+				return n.tkmod->update();
+			} exception e {
+			"*" =>
+				leaffail(n, "update", e);
+				return 1;
+			}
+		}
 		if(n.modname == "app" && n.apppid > 0)
 			return 1;	# its window may have changed: re-copy it
 	}
@@ -2393,14 +2690,25 @@ resizedisplaymodules(node: ref LayoutNode)
 		resizedisplaymodules(n.child2);
 	Leaf =>
 		markstale(n);
-		if(n.mod != nil)
-			n.mod->resize(n.r);
+		if(n.mod != nil) {
+			{
+				n.mod->resize(n.r);
+			} exception e {
+			"*" =>
+				leaffail(n, "resize", e);
+			}
+		}
 		if(n.tkmod != nil) {
 			tk->cmd(top, sys->sprint(".c coords %s %d %d",
 				n.tkitem, n.r.min.x, n.r.min.y));
 			tk->cmd(top, sys->sprint(".c itemconfigure %s -width %d -height %d",
 				n.tkitem, n.r.dx(), n.r.dy()));
-			n.tkmod->resize(n.r);
+			{
+				n.tkmod->resize(n.r);
+			} exception e {
+			"*" =>
+				leaffail(n, "resize", e);
+			}
 		}
 		if(n.modname == "app") {
 			# Push a name-"." reshape so the app re-initiates
@@ -2431,10 +2739,15 @@ rethemedisplaymodules(node: ref LayoutNode)
 		rethemedisplaymodules(n.child1);
 		rethemedisplaymodules(n.child2);
 	Leaf =>
-		if(n.mod != nil)
-			n.mod->retheme(display_g);
-		if(n.tkmod != nil)
-			n.tkmod->retheme();
+		{
+			if(n.mod != nil)
+				n.mod->retheme(display_g);
+			if(n.tkmod != nil)
+				n.tkmod->retheme();
+		} exception e {
+		"*" =>
+			leaffail(n, "retheme", e);
+		}
 	}
 }
 
@@ -2448,11 +2761,21 @@ shutdowndisplaymodules(node: ref LayoutNode)
 		shutdowndisplaymodules(n.child2);
 	Leaf =>
 		if(n.mod != nil) {
-			n.mod->shutdown();
+			{
+				n.mod->shutdown();
+			} exception {
+			* =>
+				;
+			}
 			n.mod = nil;
 		}
 		if(n.tkmod != nil) {
-			n.tkmod->shutdown();
+			{
+				n.tkmod->shutdown();
+			} exception {
+			* =>
+				;
+			}
 			if(n.tkitem != "")
 				tk->cmd(top, ".c delete " + n.tkitem);
 			if(n.tkwin != "")
@@ -2470,9 +2793,18 @@ shutdownservices(services: list of ref ServiceEntry)
 {
 	for(sl := services; sl != nil; sl = tl sl) {
 		se := hd sl;
-		if(se.mod != nil)
-			se.mod->shutdown();
+		if(se.mod != nil) {
+			{
+				se.mod->shutdown();
+			} exception {
+			* =>
+				;	# the reaper kills it all the same
+			}
+			if(se.pid > 0)
+				spawn reapservice(se.pid);
+		}
 		se.mod = nil;
+		se.pid = 0;
 	}
 }
 
@@ -2648,7 +2980,15 @@ routeptr(node: ref LayoutNode, p, rawp: ref Pointer): int
 			focusmod = n.mod;
 			focusleaf = n;
 			tkfocus = 0;
-			if(n.mod->pointer(p)) {
+			used := 0;
+			{
+				used = n.mod->pointer(p);
+			} exception e {
+			"*" =>
+				leaffail(n, "pointer", e);
+				return 1;
+			}
+			if(used) {
 				markstale(n);
 				return 1;
 			}
@@ -2720,7 +3060,17 @@ handlekey(k: int)
 		}
 		return;
 	}
-	if(focusmod != nil && focusmod->key(k)) {
+	if(focusmod == nil)
+		return;
+	used := 0;
+	{
+		used = focusmod->key(k);
+	} exception e {
+	"*" =>
+		leaffail(focusleaf, "key", e);
+		return;
+	}
+	if(used) {
 		markstale(focusleaf);
 		dirty = 1;
 	}
@@ -2815,13 +3165,22 @@ firewatch(r: ref WatchRule, v: string)
 			now := sys->millisec();
 			if(now - watchlastload >= WATCH_LOAD_COOLDOWN_MS) {
 				watchlastload = now;
-				handlectl(act);
+				watcherr(r, act, handlectl(act));
 			}
 		* =>
-			handlectl(act);	# pin
+			watcherr(r, act, handlectl(act));	# pin
 		}
 		return;
 	}
+}
+
+# A rule's action that failed (a composition that went missing or no
+# longer parses) is told where its rule's notify lines go.
+watcherr(r: ref WatchRule, act, err: string)
+{
+	if(err != nil)
+		notifappend(sys->sprint("%d %s error %s: %s",
+			sys->millisec(), r.path, act, err));
 }
 
 trimws(s: string): string
@@ -2844,6 +3203,7 @@ reloadcomposition(text: string)
 	(newcomp, err) := matrixlib->parsecomposition(text);
 	if(err != nil) {
 		sys->fprint(stderr, "matrix: reload parse error: %s\n", err);
+		notifappend(sys->sprint("%d composition error %s", sys->millisec(), err));
 		return;
 	}
 
@@ -2852,11 +3212,27 @@ reloadcomposition(text: string)
 	# a just-loaded composition can never fire immediately.
 	stopwatchers();
 	moderrs = nil;	# stale failures must not annotate the new layout's leaves
+	svclock();
+	svcerrs = nil;
+	svclk <-= 1;
 
 	# Incremental: entries unchanged between old and new keep their
 	# live module instance (and, for services, their running proc).
 	# transplant moves those handles into newcomp and nils them in
 	# old; whatever old still holds is what actually shuts down.
+	# A service whose run() has ended is not kept, unchanged entry or
+	# not: the reload starts it afresh (so `load -` restarts one that
+	# exited or failed).
+	if(comp != nil)
+		for(sl := comp.services; sl != nil; sl = tl sl) {
+			se := hd sl;
+			if(se.mod != nil && svcended(se.pid) != nil) {
+				svcforget(se.pid);
+				se.mod = nil;
+				se.pid = 0;
+			}
+		}
+
 	<-complock;
 	old := comp;
 	matrixlib->transplant(old, newcomp);

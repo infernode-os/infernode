@@ -1214,6 +1214,181 @@ testControlFSWatch(t: ref T)
 	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
 }
 
+# A composition written to /mnt/matrix/composition is parsed by the
+# runtime as it is written: one that does not parse is the writer's
+# error, with the parser's diagnostic, and the live one stays; one
+# longer than a 9P message arrives whole.
+testControlFSCompositionWrite(t: ref T)
+{
+	live := readfile("/mnt/matrix/composition");
+
+	bad := "# mtest-bad\nlayout hsplit 50 50\nleft cpu-gauge\n";
+	t.assert(writestr("/mnt/matrix/composition", bad) < 0, "unparseable composition refused");
+	e := sys->sprint("%r");
+	t.assert(contains(e, "left cpu-gauge"), "refusal carries the diagnostic: " + e);
+	sys->sleep(500);
+	t.assertseq(readfile("/mnt/matrix/composition"), live, "live composition kept");
+
+	# A pinned composition that does not parse is refused at load.
+	createstr("/lib/matrix/compositions/mtest-broken", bad);
+	t.assert(writestr("/mnt/matrix/ctl", "load mtest-broken") < 0, "broken pinned composition refused");
+	e = sys->sprint("%r");
+	t.assert(contains(e, "mtest-broken"), "load refusal names the composition: " + e);
+	sys->remove("/lib/matrix/compositions/mtest-broken");
+
+	# Longer than one message: padded with comments well past the
+	# iounit, the real lines at the end.  Split into Twrites, each
+	# fragment alone would be a different composition (or none).
+	long := "# mtest-long\n";
+	pad := "# ";
+	for(i := 0; i < 70; i++)
+		pad += "x";
+	for(i = 0; i < 400; i++)
+		long += pad + "\n";
+	long += "layout hsplit 60 40\n" +
+		"left cpu-gauge /tmp/matrix/sysmon-svc\n" +
+		"right proc-list /tmp/matrix/sysmon-svc\n" +
+		"service sysmon-svc /\n";
+	t.assert(len array of byte long > 3*8192, "long composition spans messages");
+	t.asserteq(writestr("/mnt/matrix/composition", long), len array of byte long,
+		"long composition written");
+	applied := 0;
+	for(w := 0; w < 3000 && !applied; w += 250) {
+		if(readfile("/mnt/matrix/composition") == long)
+			applied = 1;
+		else
+			sys->sleep(250);
+	}
+	t.assert(applied, "long composition applied whole");
+	(gone, nil) := sys->stat("/mnt/matrix/modules/mem-gauge");
+	t.assert(gone < 0, "long composition's last lines took effect");
+
+	# The agent's tool reports the runtime's refusal, and success
+	# only once the composition is live.
+	tool := load VTool "/dis/veltro/tools/matrix.dis";
+	if(tool == nil)
+		t.fatal(sys->sprint("cannot load matrix tool: %r"));
+	tool->init();
+	r := tool->exec("compose layout hsplit 50 50; left cpu-gauge");
+	t.assert(hasprefix(r, "error:"), "tool reports a refused composition: " + r);
+	r = tool->exec("compose layout hsplit 50 50; left cpu-gauge /tmp/matrix/sysmon-svc; " +
+		"right proc-list /tmp/matrix/sysmon-svc; service sysmon-svc /tmp");
+	t.assert(hasprefix(r, "composition applied"), "tool reports an applied composition: " + r);
+
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+}
+
+# A service's ctl says how it is: running while its run() is, exited
+# once run() returns, failed (with why) when run() raises or init
+# refuses; and a service shut down whose run() will not return is
+# killed, with what it started, after a grace.
+SVCFIX: con "/dis/matrix/mtest-svc.dis";
+SVCMOUNT: con "/tmp/mtest/svc";
+
+# Each mode its own mount: an entry with the same name and mount is
+# unchanged, and a reload keeps its instance.
+svcmode(mode: string): string
+{
+	mnt := SVCMOUNT + "/" + mode;
+	mkfixdir(mnt);
+	createstr(mnt + "/mode", mode + "\n");
+	text := "# mtest-svc " + mode + "\nservice mtest-svc " + mnt + "\n";
+	if(writestr("/mnt/matrix/composition", text) < 0)
+		return sys->sprint("composition refused: %r");
+	for(w := 0; w < 3000; w += 100) {
+		if(readfile("/mnt/matrix/composition") == text)
+			return nil;
+		sys->sleep(100);
+	}
+	return "composition not applied";
+}
+
+# Poll the service's ctl until it starts with want, up to ms.
+svcctl(want: string, ms: int): string
+{
+	st := "";
+	for(w := 0; w < ms; w += 100) {
+		st = trim(readfile("/mnt/matrix/modules/mtest-svc/ctl"));
+		if(hasprefix(st, want))
+			break;
+		sys->sleep(100);
+	}
+	return st;
+}
+
+alive(pid: string): int
+{
+	(ok, nil) := sys->stat("/prog/" + pid);
+	return ok >= 0;
+}
+
+testControlFSServiceLifecycle(t: ref T)
+{
+	b := readfile("/dis/tests/matrix_svcfixture.dis");
+	if(b == "")
+		t.fatal("no /dis/tests/matrix_svcfixture.dis");
+	if(copyfile("/dis/tests/matrix_svcfixture.dis", SVCFIX) < 0)
+		t.fatal(sys->sprint("cannot install %s: %r", SVCFIX));
+
+	t.assertnil(svcmode("ok"), "ok composition");
+	t.assertseq(svcctl("running", 2000), "running", "a running service");
+
+	t.assertnil(svcmode("exit"), "exit composition");
+	t.assertseq(svcctl("exited", 2000), "exited", "run() returned: exited");
+	# A reload restarts a service that ended, though its entry is
+	# unchanged.
+	createstr(SVCMOUNT + "/exit/mode", "ok\n");
+	t.assert(writestr("/mnt/matrix/ctl", "load -") > 0, "load - accepted");
+	t.assertseq(svcctl("running", 3000), "running", "load - restarts an exited service");
+
+	t.assertnil(svcmode("raise"), "raise composition");
+	st := svcctl("failed", 2000);
+	t.assert(hasprefix(st, "failed") && contains(st, "boom"), "run() raised: " + st);
+
+	t.assertnil(svcmode("initfail"), "initfail composition");
+	st = svcctl("failed", 2000);
+	t.assert(hasprefix(st, "failed init") && contains(st, "nope"), "init refused: " + st);
+
+	sys->remove("/tmp/matrix/mtest-svc/pids");
+	t.assertnil(svcmode("block"), "block composition");
+	pids := "";
+	for(w := 0; w < 3000 && pids == ""; w += 100) {
+		pids = trim(readfile("/tmp/matrix/mtest-svc/pids"));
+		if(pids == "")
+			sys->sleep(100);
+	}
+	(n, pl) := sys->tokenize(pids, " ");
+	if(n != 2)
+		t.fatal("blocking service wrote no pids: " + pids);
+	t.assert(alive(hd pl) && alive(hd tl pl), "blocking service and its child run");
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	gone := 0;
+	for(w = 0; w < 6000 && !gone; w += 200) {
+		gone = !alive(hd pl) && !alive(hd tl pl);
+		if(!gone)
+			sys->sleep(200);
+	}
+	t.assert(gone, "a service that ignores shutdown is killed, child and all");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+	sys->remove(SVCFIX);
+}
+
+copyfile(src, dst: string): int
+{
+	in := sys->open(src, Sys->OREAD);
+	if(in == nil)
+		return -1;
+	out := sys->create(dst, Sys->OWRITE, 8r644);
+	if(out == nil)
+		return -1;
+	buf := array[8192] of byte;
+	while((n := sys->read(in, buf, len buf)) > 0)
+		if(sys->write(out, buf, n) != n)
+			return -1;
+	return 0;
+}
+
 testControlFSCtlVerbs(t: ref T)
 {
 	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
@@ -1336,6 +1511,8 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSVeltroTool", testControlFSVeltroTool);
 		run("ControlFSNotifications", testControlFSNotifications);
 		run("ControlFSReload", testControlFSReload);
+		run("ControlFSCompositionWrite", testControlFSCompositionWrite);
+		run("ControlFSServiceLifecycle", testControlFSServiceLifecycle);
 		run("ControlFSAlertE2E", testControlFSAlertE2E);
 		run("ControlFSWatch", testControlFSWatch);
 		run("ControlFSCtlVerbs", testControlFSCtlVerbs);

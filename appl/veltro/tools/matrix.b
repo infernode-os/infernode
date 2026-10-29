@@ -243,10 +243,23 @@ docompose(text: string): string
 	cerr := agentcomposepolicy(text);
 	if(cerr != nil)
 		return "error: " + cerr;
+	# The runtime parses what is written and refuses a composition
+	# that does not parse, with the parser's diagnostic as the error.
 	if(writestr(MATRIX + "/composition", text) < 0)
-		return sys->sprint("error: composition write failed: %r");
-	return "composition written; reload applied.\n\n" + readfile(MATRIX + "/composition");
+		return sys->sprint("error: composition refused: %r");
+	# It applies an accepted one on its own loop; say which happened,
+	# rather than show the composition still loaded as if it were new.
+	for(waited := 0; waited < APPLYWAIT; waited += 100) {
+		if(readfile(MATRIX + "/composition") == text)
+			return "composition applied.\n\n" + text;
+		sys->sleep(100);
+	}
+	return "composition accepted; the runtime has not applied it yet " +
+		"(check 'matrix composition' and 'matrix status').\n";
 }
+
+# How long compose waits to see its composition applied, ms.
+APPLYWAIT: con 5000;
 
 agentcomposepolicy(text: string): string
 {

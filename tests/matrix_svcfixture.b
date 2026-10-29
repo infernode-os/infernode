@@ -1,0 +1,88 @@
+implement MatrixSvcFixture;
+
+#
+# matrix_svcfixture - a Matrix service that misbehaves on request,
+# for matrix_test's service lifecycle checks.  The test copies it
+# into /dis/matrix under a test name and composes it; what it does
+# is the first word of <mount>/mode, read at init:
+#
+#	ok	run until shutdown (the well-behaved case)
+#	exit	return from run at once
+#	raise	raise from run
+#	block	ignore shutdown, with a child proc doing the same; both
+#		pids are written to <outdir>/pids
+#	initfail	refuse at init
+#
+
+include "sys.m";
+	sys: Sys;
+
+include "draw.m";
+
+include "matrix.m";
+
+MatrixSvcFixture: module
+{
+	init:	fn(mount: string, outdir: string): string;
+	run:	fn();
+	shutdown:	fn();
+};
+
+mode: string;
+outdir_g: string;
+stop: int;
+
+init(mount: string, outdir: string): string
+{
+	sys = load Sys Sys->PATH;
+	outdir_g = outdir;
+	mode = "ok";
+	fd := sys->open(mount + "/mode", Sys->OREAD);
+	if(fd != nil) {
+		buf := array[64] of byte;
+		n := sys->read(fd, buf, len buf);
+		if(n > 0) {
+			(nil, toks) := sys->tokenize(string buf[0:n], " \t\n");
+			if(toks != nil)
+				mode = hd toks;
+		}
+	}
+	if(mode == "initfail")
+		return "nope";
+	return nil;
+}
+
+run()
+{
+	case mode {
+	"exit" =>
+		return;
+	"raise" =>
+		raise "boom";
+	"block" =>
+		pidc := chan of int;
+		spawn child(pidc);
+		cpid := <-pidc;
+		fd := sys->create(outdir_g + "/pids", Sys->OWRITE, 8r644);
+		if(fd != nil)
+			sys->fprint(fd, "%d %d\n", sys->pctl(0, nil), cpid);
+		fd = nil;
+		for(;;)
+			sys->sleep(100);
+	* =>
+		while(!stop)
+			sys->sleep(50);
+	}
+}
+
+child(pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	for(;;)
+		sys->sleep(100);
+}
+
+shutdown()
+{
+	stop = 1;
+}

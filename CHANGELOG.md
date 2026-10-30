@@ -225,6 +225,11 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
   interpreter stack, and the common X25519 primitive rejects low-order peer
   keys that produce the RFC 7748 all-zero shared secret. This covers TLS 1.2,
   TLS 1.3, and hybrid key agreement callers.
+- **The common cryptographic generator uses rekeyed ChaCha20.** The inherited
+  two-key 3DES X9.17 state has been replaced with a 256-bit ChaCha20 state that
+  rekeys itself before each response and advances a per-call nonce. Hosted
+  seeds come from the operating-system CSPRNG; native seeds come from the
+  platform hardware generator.
 - **Voice exports require keyring authentication and expose audio only.** The
   original `voice/listen` script anonymously exported all of `/dev`, allowing
   a network peer to inject input and operate control devices. It now constructs

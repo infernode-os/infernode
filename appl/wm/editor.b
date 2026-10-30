@@ -76,19 +76,25 @@ include "styxservers.m";
 
 include "lucitheme.m";
 
-# Key codes (formerly imported from widget.m)
-Khome:	con 16rFF61;
-Kend:	con 16rFF57;
-Kup:	con 16rFF52;
-Kdown:	con 16rFF54;
-Kleft:	con 16rFF51;
-Kright:	con 16rFF53;
-Kpgup:	con 16rFF55;
-Kpgdown:	con 16rFF56;
-Kdel:	con 16rFF9F;
-Kins:	con 16rFF63;
+include "keyboard.m";
+
+# Key codes: keyboard.h's, as the emulator and the native kernel send
+# them.  They were X11 keysyms (16rFF52 for Up) from widget.m, which
+# nothing sends since the Tk port: the arrows were typed as glyphs and
+# Delete, which comes as DEL (16r7F), was typed as a character.
+Khome:	con Keyboard->Home;
+Kend:	con Keyboard->End;
+Kup:	con Keyboard->Up;
+Kdown:	con Keyboard->Down;
+Kleft:	con Keyboard->Left;
+Kright:	con Keyboard->Right;
+Kpgup:	con Keyboard->Pgup;
+Kpgdown:	con Keyboard->Pgdown;
+Kdel:	con Keyboard->Del;
+Kins:	con Keyboard->Ins;
 Kbs:	con 8;
 Kesc:	con 27;
+DEL:	con 16r7F;
 
 Editor: module
 {
@@ -1402,7 +1408,7 @@ handlekey(key: int)
 			doc.curline--;
 			doc.dirty = 1;
 		}
-	Kdel =>
+	Kdel or DEL =>
 		if(deletesel())
 			;
 		else if(doc.curcol < len doc.lines[doc.curline]) {
@@ -1483,7 +1489,9 @@ handlekey(key: int)
 	Kesc =>
 		doc.selactive = 0;
 	* =>
-		if(key >= 16r20 || key == '\t') {
+		# a character: not a key keyboard.h gives (an arrow, a function
+		# key), which would be typed as a private-use glyph
+		if((key >= 16r20 && !(key >= Keyboard->Spec && key <= Keyboard->Specend)) || key == '\t') {
 			deletesel();
 			insertchar(key);
 			doc.dirty = 1;

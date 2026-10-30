@@ -6,12 +6,31 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **Arrow keys move; keys that are not characters type nothing.** An
+  arrow, Home, End, Page Up or Down, Insert or a function key typed a
+  private-use glyph in Tk entries and text (every form field and
+  dialog), wm/shell and wm/sh, wm/editor, wm/man's search, Charon's
+  find bar, Lucifer's conversation input, Xenith, Acme and wm/sam, and
+  in wm/shell it deleted the selection too. Most matched X11 keysyms
+  (`16rFF52` for Up), which nothing has sent since the widget toolkit
+  went; they match keyboard.h's keys now. A key in keyboard.h's range
+  (`Keyboard->Spec` to the new `Keyboard->Specend`) that a program does
+  not take is dropped where it would have been inserted, Tk's own text
+  and entry bindings included, and no longer replaces a selection.
+  Delete as SDL sends it (DEL, 0x7F) deletes in wm/editor, Charon and
+  Lucifer's input, and works in wm/about and wm/keyring as keyboard.h's
+  Delete does. Lucifer's serial-console arrows are keyboard.h's keys,
+  not keysyms. Tk's tkTextInsert, which typed text goes through, read
+  its argument with the wrong buffer end. Tested by
+  `tests/host/wm_editor_keys_test.sh`, a step of
+  `tests/host/wm_shell_test.sh` and `tk_test.b`'s SpecialKeys.
 - **The old icons are gone; every program draws `icon(2)`'s glyphs.**
   wm/deb's controls, its Stack window's open and closed marks,
   wm/bounce's arrows and dialog(2)'s error, warning, information and
   question icons are Tabler glyphs in the theme's colours, repainted on
-  a theme switch; webget's help page shows them too. The 135 old icon
-  files left are removed, so `icons/` holds `icons/ui`, Tk's cursors
+  a theme switch; webget's help page shows them too. The old icon
+  files are removed, 235 of them (`icons/` is 187KB, from 807KB), so
+  `icons/` holds `icons/ui`, Tk's cursors
   (unchanged), and the artwork that is not an icon: wm/coffee's cups and
   backdrop and the picture `draw-example(2)` draws, all kept as they
   were. A glyph that cannot be drawn leaves a blank button, not a
@@ -47,8 +66,8 @@ All notable changes to InferNode are documented in this file.
   could not be read closed the window. `tests/host/wm_dir_test.sh`
   drives it.
 - **Icons: Tabler's glyphs, drawn at any size in any colour.**
-  `icons/ui` holds the 45 glyphs the interface uses, from Tabler Icons
-  (MIT), 22.6KB of SVG; `icons/ui/LIST` names them and
+  `icons/ui` holds the 63 glyphs the interface uses, from Tabler Icons
+  (MIT), 30KB of SVG; `icons/ui/LIST` names them and
   `tools/update-icons.sh` fetches any added. `icon(2)` draws one with
   readsvg at the size asked for and paints it in a theme's colour, so
   a glyph is sharp on any display and a theme switch repaints it.

@@ -385,6 +385,7 @@ SYSMODULES=\
 	wirefmt.m\
 	workdir.m\
 	x402.m\
+	icon.m\
 
 DISBIN=$ROOT/dis/tests
 

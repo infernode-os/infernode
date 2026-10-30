@@ -1154,6 +1154,11 @@ if(0)	# DEBUGGING
 			t.file.text[i].fill();
 		return;
 	}
+	# a key keyboard.h gives that no case above took (a function key,
+	# Print, an Alt combination) is not a character: it was typed as a
+	# private-use glyph
+	if(r >= Keyboard->Spec && r <= Keyboard->Specend)
+		return;
 	# otherwise ordinary character; just insert, typically in caches of all texts 
 	typesync(t);
 if(0)	# DEBUGGING 

@@ -105,6 +105,9 @@ SYSMODULES=\
 	viewport.m\
 	wmdeb.m\
 	workdir.m\
+	cptree.m\
+	icon.m\
+	names.m\
 
 DISBIN=$ROOT/dis/wm
 

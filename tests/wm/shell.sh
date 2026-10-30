@@ -56,6 +56,17 @@ code 3
 line echo kept
 snap discard
 
+# the arrow and other keys move the caret and type nothing: Left, c,
+# End, F1, Insert, e makes abcde of abd
+key echo abd
+code e014
+key c
+code e011
+code e041
+code e063
+line e
+snap arrows
+
 # ESC holds what is typed until ESC again
 code 1b
 line echo held

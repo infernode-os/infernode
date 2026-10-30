@@ -237,6 +237,44 @@ testEntryInput(t: ref T)
 	t.assertseq(tk->cmd(top, ".e get"), "hello", "typed text reaches entry");
 }
 
+# Keys that are not characters (keyboard.h's, 16rE000 up: the arrows,
+# Page Up and Down, the function keys) type nothing in an entry or a
+# text and leave the selection; they were typed as private-use glyphs
+# wherever no binding of their own took them.  Characters, a brace and
+# a backslash among them, still type, replacing the selection.
+testSpecialKeys(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	Up: con 16rE012;
+	Pgdown: con 16rE017;
+	F1: con 16rE041;
+	tk->cmd(top, "entry .e; pack .e; focus .e; update");
+	for(s := "a {b}c\\"; s != nil; s = s[1:])
+		tk->keyboard(top, s[0]);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "characters typed into the entry, a blank, braces and a backslash too");
+	tk->keyboard(top, Up);
+	tk->keyboard(top, Pgdown);
+	tk->keyboard(top, F1);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "Up, Page Down and F1 typed nothing into the entry");
+	tk->cmd(top, ".e selection range 0 end");
+	tk->keyboard(top, F1);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "F1 left the entry's selection");
+	tk->keyboard(top, 'z');
+	t.assertseq(tk->cmd(top, ".e get"), "z", "a character replaced the selection");
+	tk->keyboard(top, 16rE014);	# Left
+	tk->keyboard(top, ' ');
+	t.assertseq(tk->cmd(top, ".e get"), " z", "Left moved the caret, and a blank typed alone is typed");
+
+	tk->cmd(top, "text .t; pack .t; focus .t; update");
+	tk->keyboard(top, 'x');
+	tk->keyboard(top, F1);
+	tk->keyboard(top, 16rE063);	# Ins
+	tk->keyboard(top, 'y');
+	t.assertseq(tk->cmd(top, ".t get 1.0 end"), "xy", "F1 and Ins typed nothing into the text");
+}
+
 # A button's -command fires on invoke (how the app tests click actions).
 testButtonInvoke(t: ref T)
 {
@@ -548,6 +586,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("GlyphColour",     testGlyphColour);
 	run("ForegroundRendered", testForegroundRendered);
 	run("DoubleClick",     testDoubleClick);
+	run("SpecialKeys",     testSpecialKeys);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

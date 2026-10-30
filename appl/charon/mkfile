@@ -23,6 +23,7 @@ SYSMODULES=\
 	web/layout.m\
 	web/page.m\
 	web/style.m\
+	keyboard.m\
 
 DISBIN=$ROOT/dis/wm
 

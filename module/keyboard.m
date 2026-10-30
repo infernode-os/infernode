@@ -6,6 +6,9 @@ Keyboard : module {
 	Esc: con 16r1b;
 
 	Spec: con 16rE000;		# Special Function Keys - mapped to Unicode reserved range
+	Specend: con 16rF8FF;	# the last of that range: a key from Spec to Specend is
+				# not a character, and a program typing what it is
+				# given types none of them
 	Shift: con Spec|16r00;	# Shifter (Held) Keys 
 	View: con Spec|16r10;	# View Keys
 	PF: con	Spec|16r20;	# num pad

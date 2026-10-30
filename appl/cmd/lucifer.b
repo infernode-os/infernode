@@ -44,6 +44,8 @@ include "lucitheme.m";
 include "menu.m";
 
 include "softkbd.m";
+
+include "keyboard.m";
 	softkbd: Softkbd;
 
 Lucifer: module {
@@ -2809,9 +2811,11 @@ kbdproc()
 	for(;;) {
 		c := <-win.ctxt.kbd;
 
-		# Decode ANSI escape sequences to Inferno key codes.
-		# Inferno key codes (>= 0xFF00) pass through unmodified.
-		if(c < 16rFF00) {
+		# Decode ANSI escape sequences (a serial console's) to
+		# keyboard.h's keys, as the emulator and the native kernel send
+		# them, so every app sees one set; those keys pass through.
+		# (It made X11 keysyms, 16rFF52 for Up, which no app took.)
+		if(c < Keyboard->Spec || c > Keyboard->Specend) {
 			case escstate {
 			0 =>
 				if(c == 27) {
@@ -2828,12 +2832,12 @@ kbdproc()
 				# Bare ESC+char: deliver char as-is (fall through to route)
 			2 =>
 				escstate = 0;
-				if(c == 'A')       c = 16rFF52;	# up
-				else if(c == 'B') c = 16rFF54;	# down
-				else if(c == 'C') c = 16rFF53;	# right
-				else if(c == 'D') c = 16rFF51;	# left
-				else if(c == 'H') c = 16rFF61;	# home
-				else if(c == 'F') c = 16rFF57;	# end
+				if(c == 'A')       c = Keyboard->Up;
+				else if(c == 'B') c = Keyboard->Down;
+				else if(c == 'C') c = Keyboard->Right;
+				else if(c == 'D') c = Keyboard->Left;
+				else if(c == 'H') c = Keyboard->Home;
+				else if(c == 'F') c = Keyboard->End;
 				else if(c == '1' || c == '4' || c == '5' ||
 				        c == '6' || c == '7' || c == '8') {
 					escarg = c - '0';
@@ -2844,10 +2848,10 @@ kbdproc()
 			3 =>
 				if(c == '~') {
 					escstate = 0;
-					if(escarg == 1 || escarg == 7)      c = 16rFF61;	# home
-					else if(escarg == 4 || escarg == 8) c = 16rFF57;	# end
-					else if(escarg == 5)                c = 16rFF55;	# pgup
-					else if(escarg == 6)                c = 16rFF56;	# pgdn
+					if(escarg == 1 || escarg == 7)      c = Keyboard->Home;
+					else if(escarg == 4 || escarg == 8) c = Keyboard->End;
+					else if(escarg == 5)                c = Keyboard->Pgup;
+					else if(escarg == 6)                c = Keyboard->Pgdown;
 					else continue;
 				} else if(c >= '0' && c <= '9') {
 					escarg = escarg * 10 + (c - '0');

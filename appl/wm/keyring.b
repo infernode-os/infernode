@@ -567,7 +567,10 @@ secstorelocked(): int
 
 handlekey(k: int)
 {
-	Kdel: con 16rFF9F;
+	# Delete: DEL as SDL sends it, or keyboard.h's (16rFF9F, an X11
+	# keysym, was never sent: Delete did nothing)
+	Kdel: con 16rE064;	# Keyboard->Del
+	DEL: con 16r7F;
 	# Ctrl-Q quits
 	if(k == 'q' - 16r60){
 		exit;
@@ -592,7 +595,7 @@ handlekey(k: int)
 		return;
 	}
 	# Delete removes the selected key in list mode
-	if(k == Kdel && mode == ModeList){
+	if((k == Kdel || k == DEL) && mode == ModeList){
 		deleteselected();
 		return;
 	}

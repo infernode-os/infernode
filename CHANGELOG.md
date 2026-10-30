@@ -21,6 +21,19 @@ All notable changes to InferNode are documented in this file.
   icon that is not in the tree. Making an image no longer leaves an
   error in Tk's `lasterror`, which dialog(2) read as a failure and
   answered its own question with the default ("discard").
+- **wm/ftree works again, and is upstream's tool with the name space
+  added.** The arrow, page and home keys did nothing: ftree matched X11
+  keysyms, which nothing sends since the Tk port dropped the widget
+  toolkit's translation. Its agent's state file was written only on a
+  click, so an agent read a stale selection and view; it is written on
+  every change, the agent's `scroll` moves the view, and the view
+  stays where the user scrolled it. Refresh kept nothing open; it
+  keeps what was open. Restored from upstream: Copy, Paste into and
+  Remove (which now asks first), the `-d`, `-e`, `-E` and `-p` options
+  of a touch-screen start panel, and a name space of its own, so a bind
+  made in ftree no longer changes the name space of whatever started
+  it. The root shows as `/`, not `//`. `ftree(1)` is back.
+  `tests/host/ftree_test.sh` drives it.
 - **`wm/dir` is back, on new icons.** Inferno's file browser, the Files
   entry of upstream's window menu, was dropped in the migration. It is
   restored with its icons drawn by `icon(2)` in the theme's colours.

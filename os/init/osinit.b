@@ -207,6 +207,14 @@ init()
 		sys->print("init: cannot bind #A on /dev: %r\n");
 
 	#
+	# And the camera, /dev/camera (os/port/devcam.c), likewise after
+	# /dev. Nothing runs until something writes "stream on" to its
+	# ctl, so it costs nothing to have bound.
+	#
+	if(sys->bind("#V", "/dev", Sys->MAFTER) < 0)
+		sys->print("init: cannot bind #V on /dev: %r\n");
+
+	#
 	# And where USB serial ports appear: usbserial makes eiaU0 and its
 	# ctl and status files in #seia, a #s of their own, and that is
 	# bound after /dev now, at boot, so that every namespace forked from

@@ -1147,10 +1147,11 @@ itself -- so the loader is unaffected:
 
 `tryboot.cmd` holds the single word `tryboot`; `cmdline.txt` may be
 empty or absent. The `[tryboot]` section is the firmware's conditional
-filter for a boot made with the flag set; on firmware old enough not to
-know it, a `tryboot.txt` that is a copy of `config.txt` with the two
-`[tryboot]` lines in place of the two above it does the same job, and
-that is the file the firmware documentation historically described.
+filter for a boot made with the flag set, but the firmware release cards
+are made with (`raspberrypi/firmware` 1.20260915) ignores it and reads a
+`tryboot.txt` instead -- a copy of `config.txt` with the two `[tryboot]`
+lines in place of the two above it -- so every card carries one,
+`os/bcm2837/card/tryboot.txt` (docs/BAREMETAL.md, section 4).
 For a card with no kernel yet, `kernel=serialboot.img` in place of the
 `kernel=infernode8.img` line, and the first candidate is installed from
 a serial-fed kernel exactly as above.

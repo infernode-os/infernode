@@ -146,7 +146,7 @@ has() {
 
 for board in rpi3bplus rpi4b; do
 	case $board in
-	rpi3bplus) soc=bcm2837; own="bootcode.bin start.elf fixup.dat"; other="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb tryboot.txt" ;;
+	rpi3bplus) soc=bcm2837; own="bootcode.bin start.elf fixup.dat"; other="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb" ;;
 	rpi4b)     soc=bcm2711; own="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"; other="bootcode.bin start.elf fixup.dat" ;;
 	esac
 	img=$tmp/$board.img
@@ -268,7 +268,8 @@ sed -e '/^max_framebuffers/d' os/bcm2837/card/config.txt > "$tmp/rom/onefb.txt"
 sed -e 's/^kernel=.*/kernel=kernel8.img/' os/bcm2837/card/config.txt > "$tmp/rom/nokernel.txt"
 romcard() {	# romcard <out> <config.txt>: the 3B+'s boot files and that config
 	python3 tools/mkcard.py "$1" 48 /bootcode.bin="$tmp/fw/bootcode.bin" /start.elf="$tmp/fw/start.elf" \
-		/fixup.dat="$tmp/fw/fixup.dat" /config.txt="$2" /infernode8.img="$tmp/kernel.img" >/dev/null
+		/fixup.dat="$tmp/fw/fixup.dat" /config.txt="$2" /tryboot.txt=os/bcm2837/card/tryboot.txt \
+		/infernode8.img="$tmp/kernel.img" >/dev/null
 }
 # refused <name> <image> <pattern>: piromcheck fails it, saying <pattern>
 refused() {
@@ -286,6 +287,12 @@ if python3 tools/piromcheck.py --firmware "$tmp/fw" rpi3bplus "$tmp/rom/good.img
 else
 	failed "piromcheck refuses the good card: $(head -2 "$tmp/rom/out" | tr '\n' ' ')"
 fi
+# the fault that kept a release card's candidate kernel from ever
+# running: no tryboot.txt, which is what the firmware reads after a
+# tryboot reset (the [tryboot] section it ignores)
+python3 tools/mkcard.py "$tmp/rom/notry.img" 48 /bootcode.bin="$tmp/fw/bootcode.bin" /start.elf="$tmp/fw/start.elf" \
+	/fixup.dat="$tmp/fw/fixup.dat" /config.txt=os/bcm2837/card/config.txt /infernode8.img="$tmp/kernel.img" >/dev/null
+refused "no tryboot.txt" "$tmp/rom/notry.img" "tryboot.txt"
 # the fault that kept a 3B+ at a steady red LED: bootcode.bin with only
 # a generated alias for a short name, as mkcard wrote it before
 python3 - "$tmp/rom/good.img" "$tmp/rom/alias.img" <<'EOF'
@@ -319,7 +326,7 @@ doc = open(sys.argv[2]).read()
 blocks = ["\n".join(l[4:] for l in b.strip("\n").split("\n")) for b in re.findall(r"\n((?:    \S.*\n|\n)+)", doc)]
 sys.exit(0 if any(b.strip() == body for b in blocks) else 1)
 EOF
-for f in os/bcm2837/card/config.txt os/bcm2711/card/config.txt os/bcm2711/card/tryboot.txt; do
+for f in os/bcm2837/card/config.txt os/bcm2837/card/tryboot.txt os/bcm2711/card/config.txt os/bcm2711/card/tryboot.txt; do
 	# the console's baud is divided from the core clock once, at boot:
 	# a firmware left to scale it garbles the console (and the shell on it)
 	fq=$(sed -n 's/^core_freq=//p' "$f" | head -1)

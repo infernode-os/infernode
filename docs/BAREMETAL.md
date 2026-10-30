@@ -277,8 +277,25 @@ matter here too: the 3B+'s boot ROM reads only those, and finds
 nothing unless `bootcode.bin`'s is `BOOTCODE.BIN` (`tools/mkcard.py`
 writes it so). `cmdline.txt` may be empty
 or absent. Do **not** add `dtoverlay=disable-bt`: the PL011 is the
-radio's now. (On firmware too old to know `[tryboot]`, a `tryboot.txt`
-that is `config.txt` with the two lines substituted does the same.)
+radio's now.
+
+**And a `tryboot.txt`.** After a tryboot reset the firmware cards are
+made with (`raspberrypi/firmware` 1.20260915) reads `tryboot.txt`
+*instead of* `config.txt`, and never consults the `[tryboot]` section:
+without the file the reset is acknowledged and the ordinary kernel
+boots, so a candidate silently never runs (a release card on the bench
+3B+, 2026-10-28). The section stays for firmware that does honour it.
+It is `os/bcm2837/card/tryboot.txt`: `config.txt` with the two tryboot
+lines in place of the kernel's, and no section:
+
+    arm_64bit=1
+    enable_uart=1
+    init_uart_clock=48000000
+    kernel=tryboot.img
+    cmdline=tryboot.cmd
+    max_framebuffers=2
+    core_freq=250
+    core_freq_min=250
 
 **The kernel**: `bcm2837-kernel.img`, on the card as **`infernode8.img`**.
 
@@ -341,7 +358,7 @@ kernel asks for the maximum the firmware reports, so the boot log's
 `mbox: ARM clock ... max` line says which it got. Its fan or heatsink is
 the board owner's business.
 
-**And a `tryboot.txt`** -- the Pi 4 needs it and the 3B+ does not. On a
+**And a `tryboot.txt`**, as on the 3B+. On a
 Pi 4 a tryboot reset is handled by the boot EEPROM, which then reads
 `tryboot.txt` *instead of* `config.txt`; the `[tryboot]` section above
 is never consulted. Without the file the reset is acknowledged and the

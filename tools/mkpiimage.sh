@@ -41,7 +41,7 @@
 #     for use with Cypress parts, which is what this card is for. The
 #     reason these files go on a Pi card and in no other release is in
 #     tools/pi-firmware-manifest.txt;
-#   - os/<soc>/card/: config.txt, tryboot.cmd and (Pi 4) tryboot.txt;
+#   - os/<soc>/card/: config.txt, tryboot.txt and tryboot.cmd;
 #   - os/bcm/card/README.txt, LICENSE and NOTICE;
 #   - the kernel as infernode8.img;
 #   - dis/, which must already be built (tools/verify-dis-build.sh);
@@ -115,7 +115,7 @@ case $BOARD in
 rpi3bplus)
 	SOC=bcm2837
 	FIRMWARE="bootcode.bin start.elf fixup.dat"
-	CARDFILES="config.txt tryboot.cmd" ;;
+	CARDFILES="config.txt tryboot.txt tryboot.cmd" ;;
 rpi4b)
 	SOC=bcm2711
 	FIRMWARE="start4.elf fixup4.dat bcm2711-rpi-4-b.dtb"

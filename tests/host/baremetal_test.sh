@@ -349,6 +349,11 @@ build_kernel() {
         "$LIMBO" -I"$ROOT/module" -o "$BUILD/niltest.dis" \
             "$ROOT/os/init/niltest.b" 2>>"$BUILD/cc.log" || return 1
 
+        # The camera device (#V) against its simulated sensor: the
+        # settings, a frame's colours after debayering, raw, pacing.
+        "$LIMBO" -I"$ROOT/module" -o "$BUILD/camtest.dis" \
+            "$ROOT/os/init/camtest.b" 2>>"$BUILD/cc.log" || return 1
+
         rootmanifest=(
             "/osinit.dis=$BUILD/osinit.dis"
             "/dis/etherusb.dis=$BUILD/etherusb.dis"
@@ -367,6 +372,7 @@ build_kernel() {
             "/dis/isotest.dis=$BUILD/isotest.dis"
             "/dis/iplocktest.dis=$BUILD/iplocktest.dis"
             "/dis/niltest.dis=$BUILD/niltest.dis"
+            "/dis/camtest.dis=$BUILD/camtest.dis"
 
             # The FAT filesystem, as a program. Imported from upstream
             # Inferno (appl/cmd/dossrv.b) -- MIT, the same provenance as
@@ -1865,7 +1871,10 @@ SHOUT="$(shell_session "$BUILD/$PLAT-kernel.img" \
         "echo PTEMP; cat '#P/cputemp'" \
         "echo PTHROT; cat '#P/throttled'" \
         "listen 'tcp!*!17030' export / &" \
-        'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis')"
+        'sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis' \
+        'ls /dev/camera' \
+        'cat /dev/camera/modes' \
+        'camtest')"
 
 # Strip carriage returns once, here.
 #
@@ -1987,6 +1996,32 @@ if grep -q '^niltest: OFFSET CAUGHT dereference of nil' <<<"$SHOUT"; then
     pass "page zero is not mapped: a nil ref's later field faults too (#735)"
 else
     fail "page zero -- $(grep -a -E 'niltest: OFFSET|unhandled exception|panic:' <<<"$SHOUT" | head -2 | tr '\n' ' ')"
+fi
+
+# The camera, #V (os/port/devcam.c; infernode-os/infernode#1005),
+# bound after /dev by osinit. QEMU has no Pi camera, so what is here is
+# the simulated sensor (os/port/campattern.c), which makes raw Bayer
+# frames as the IMX708 will: os/init/camtest.b checks the settings, a
+# frame's colours after debayering, raw's samples, the pacing and the
+# refusals, one "camtest:" line each.
+# Typed after the authenticated mount, so ls answers while the shell is
+# still printing prompts for the lines typed ahead of it: its first
+# name came back as "; /dev/camera/ctl". The prompts are taken off.
+CAMLS="$(sed 's/^\(; \)*//' <<<"$SHOUT")"
+if grep -qx '/dev/camera/frame' <<<"$CAMLS" && grep -qx '/dev/camera/ctl' <<<"$CAMLS"; then
+    pass "#V is bound after /dev: /dev/camera/ctl and frame"
+else
+    fail "/dev/camera -- $(reply_to "$SHOUT" 'ls /dev/camera' | head -3 | tr '\n' ' ')"
+fi
+if grep -qx 'test 640 480 60 rggb10' <<<"$SHOUT"; then
+    pass "/dev/camera/modes lists the simulated sensor's modes"
+else
+    fail "/dev/camera/modes -- $(reply_to "$SHOUT" 'cat /dev/camera/modes' | head -3 | tr '\n' ' ')"
+fi
+if grep -q '^camtest: PASS' <<<"$SHOUT" && ! grep -q '^camtest: FAIL' <<<"$SHOUT"; then
+    pass "camtest: the camera's files against the simulated sensor ($(grep -a '^camtest: PASS' <<<"$SHOUT"))"
+else
+    fail "camtest -- $(grep -a -E '^camtest: (FAIL|PASS)|panic:' <<<"$SHOUT" | head -4 | tr '\n' ' ')"
 fi
 
 # The exception handler's search, in the kernel's own interpreter: an
@@ -5112,6 +5147,13 @@ try:
     typed("cat /net/ether0/ifstats")
     typed("iplocktest", 3)
     typed("niltest", 2)
+    # the camera (os/init/camtest.b): it debayers a few frames, which
+    # takes seconds under emulation, so wait for its verdict rather
+    # than type over it
+    typed("camtest", 0.5)
+    end = time.time() + 60
+    while time.time() < end and b"camtest: PASS" not in buf and b"camtest: FAILED" not in buf:
+        time.sleep(0.2)
     typed("listen 'tcp!*!17030' export / &")
     typed("sleep 1; mount tcp!127.0.0.1!17030 /n/remote; echo AUTHMOUNT-$status; ls /n/remote/dis/sh.dis", 4)
     typed("cat /dev/sdctl")
@@ -5182,6 +5224,10 @@ vcheck "os/ip: the interface lock is balanced after an unanswerable IPv6 datagra
 # exception (the bcm2837 check tells the story)
 vcheck "a nil dereference in JIT code is the program's exception, not a panic" "niltest: STILL RUNNING"
 vcheck "page zero is not mapped: a nil ref's later field faults too (#735)" "niltest: OFFSET CAUGHT dereference of nil"
+# os/init/camtest.b: the camera device (#V) against its simulated sensor
+# (the bcm2837 check tells the story)
+vcheck "camtest: the camera's files against the simulated sensor" "camtest: PASS"
+vrefute "camtest: no camera check fails" "camtest: FAIL"
 vcheck "DHCP answers over virtio-net"              "etherusb: 10.0.2.15 mask"
 vcheck "a default route is installed"              "etherusb: default route via 10.0.2.2"
 # The USB adapter beside virtio-net: ether0 is the kernel driver's and

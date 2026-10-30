@@ -323,9 +323,9 @@ static Chan*
 ipattach(char* spec)
 {
 	Chan *c;
-	int dev;
+	ulong dev;
 
-	dev = atoi(spec);
+	dev = strtoul(spec, nil, 0);
 	if(dev >= Nfs)
 		error("bad specification");
 
@@ -450,15 +450,11 @@ ipopen(Chan* c, int omode)
 			qunlock(&p->ql);
 			nexterror();
 		}
-		if((perm & (cv->perm>>6)) != perm) {
-			if(strcmp(ATTACHER(c), cv->owner) != 0)
-				error(Eperm);
-		 	if((perm & cv->perm) != perm)
-				error(Eperm); 
-
-		}
-		cv->inuse++;
-		if(cv->inuse == 1){
+		if(strcmp(ATTACHER(c), cv->owner) == 0)
+			perm <<= 6;
+		if((perm & cv->perm) != perm && !iseve())
+			error(Eperm);
+		if(++cv->inuse == 1){
 			kstrdup(&cv->owner, ATTACHER(c));
 			cv->perm = 0660;
 		}
@@ -468,25 +464,25 @@ ipopen(Chan* c, int omode)
 		break;
 	case Qlisten:
 		cv = f->p[PROTO(c->qid)]->conv[CONV(c->qid)];
-		if((perm & (cv->perm>>6)) != perm) {
-			if(strcmp(ATTACHER(c), cv->owner) != 0)
-				error(Eperm);
-		 	if((perm & cv->perm) != perm)
-				error(Eperm); 
-
+		qlock(&cv->ql);
+		if(waserror()){
+			qunlock(&cv->ql);
+			nexterror();
 		}
-
+		if(strcmp(ATTACHER(c), cv->owner) == 0)
+			perm <<= 6;
+		if((perm & cv->perm) != perm && !iseve())
+			error(Eperm);
 		if(cv->state != Announced)
 			error("not announced");
+		cv->inuse++;
+		qunlock(&cv->ql);
+		poperror();
 
 		if(waserror()){
 			closeconv(cv);
 			nexterror();
 		}
-		qlock(&cv->ql);
-		cv->inuse++;
-		qunlock(&cv->ql);
-
 		nc = nil;
 		while(nc == nil) {
 			/* give up if we got a hangup */
@@ -507,7 +503,6 @@ ipopen(Chan* c, int omode)
 			if(nc != nil){
 				cv->incall = nc->next;
 				mkqid(&c->qid, QID(PROTO(c->qid), nc->x, Qctl), 0, QTFILE);
-				kstrdup(&cv->owner, ATTACHER(c));
 			}
 			qunlock(&cv->ql);
 
@@ -530,7 +525,6 @@ ipwstat(Chan *c, uchar *dp, int n)
 	Dir *d;
 	Conv *cv;
 	Fs *f;
-	Proto *p;
 
 	f = ipfs[c->dev];
 	switch(TYPE(c->qid)) {
@@ -550,14 +544,23 @@ ipwstat(Chan *c, uchar *dp, int n)
 	n = convM2D(dp, n, d, (char*)&d[1]);
 	if(n == 0)
 		error(Eshortstat);
-	p = f->p[PROTO(c->qid)];
-	cv = p->conv[CONV(c->qid)];
-	if(!iseve() && strcmp(ATTACHER(c), cv->owner) != 0)
+	cv = f->p[PROTO(c->qid)]->conv[CONV(c->qid)];
+	qlock(&cv->ql);
+	if(waserror()){
+		qunlock(&cv->ql);
+		nexterror();
+	}
+	if(strcmp(ATTACHER(c), cv->owner) != 0 && !iseve())
 		error(Eperm);
-	if(!emptystr(d->uid))
+	if(!emptystr(d->uid)){
+		if(strcmp(d->uid, commonuser()) != 0 && !iseve())
+			error(Eperm);
 		kstrdup(&cv->owner, d->uid);
+	}
 	if(d->mode != ~0UL)
-		cv->perm = d->mode & 0777;
+		cv->perm = d->mode & 0666;
+	qunlock(&cv->ql);
+	poperror();
 	poperror();
 	free(d);
 	return n;
@@ -1386,7 +1389,7 @@ Fsnewcall(Conv *c, uchar *raddr, ushort rport, uchar *laddr, ushort lport, uchar
 	}
 
 	/* find a free conversation */
-	nc = Fsprotoclone(c->p, network);
+	nc = Fsprotoclone(c->p, c->owner);
 	if(nc == nil) {
 		qunlock(&c->ql);
 		return nil;

@@ -155,6 +155,17 @@ capwritehash(uchar *a, int l)
 }
 
 static int
+samehash(uchar *a, uchar *b, int n)
+{
+	int diff;
+
+	diff = 0;
+	while(n-- > 0)
+		diff |= *a++ ^ *b++;
+	return diff == 0;
+}
+
+static int
 capwriteuse(uchar *a, int len)
 {
 	int n;
@@ -182,18 +193,22 @@ capwriteuse(uchar *a, int len)
 		return -1;
 	if(*users[0] == 0 || *users[1] == 0)
 		return -1;
+	if(n == 2 && strcmp(up->env->user, users[0]) != 0){
+		memset(digest, 0, sizeof digest);
+		return -1;
+	}
 	qlock(&allcaps.l);
 	for(l = &allcaps.caps; (c = *l) != nil; l = &c->next)
-		if(memcmp(c->hash, digest, sizeof(c->hash)) == 0){
+		if(samehash(c->hash, digest, sizeof(c->hash))){
 			*l = c->next;
 			qunlock(&allcaps.l);
 			free(c);
-			if(n == 2 && strcmp(up->env->user, users[0]) != 0)
-				return -1;
+			memset(digest, 0, sizeof digest);
 			setid(users[1], 0);	/* could use users[2] to mean `host OS user' */
 			return 0;
 		}
 	qunlock(&allcaps.l);
+	memset(digest, 0, sizeof digest);
 	return -1;
 }
 

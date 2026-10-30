@@ -388,6 +388,8 @@ mntattach(char *muxattach)
 
 	bogus = *((struct bogus *)muxattach);
 	c = bogus.chan;
+	if(bogus.authchan != nil && bogus.authchan->mchan != c)
+		error(Ebadusefd);
 
 	m = c->mux;
 

@@ -191,6 +191,35 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
   limit, including segments inserted at the head of the resequencing queue.
   This is an upstream Inferno omission; 9front has carried the limits since
   2013.
+- **Malformed transport and ICMPv6 packets are rejected before indexed or
+  trimmed access.** UDP lengths smaller than the UDP header, TCP data offsets
+  larger than the IP payload, and truncated neighbor solicitation or
+  advertisement bodies are dropped. These checks port applicable 9front fixes
+  `7838d689` and `9211c6c5`.
+- **Inherited IP and mount boundary checks are current.** Negative IP device
+  attaches are rejected before indexing a stack, conversation permissions and
+  accepted-call ownership are enforced under lock, authentication fids must
+  belong to the mounted connection, IPv6 lifetime comparisons cannot wrap,
+  TCP backoff cannot roll over, and UDP transmits checksum negative zero as
+  `ffff` rather than the IPv4 “no checksum” value.
+- **Inherited SSL, capability, and 9P identity checks are current.** Opening an
+  existing SSL conversation now applies its owner/other mode correctly;
+  presenting a capability as the wrong source user cannot consume it; legacy
+  Styx servers bound oversized replies to the negotiated message size; and
+  persistent 9P authentication verifies factotum's caller identity.
+- **Authentication RPC concurrency is bounded.** Factotum refuses a seventeenth
+  active RPC worker, preventing unauthenticated connection attempts from
+  pinning an unbounded number of protocol processes.
+- **Untrusted image data cannot cross decoder or geometry bounds.** Compressed
+  image transforms stop at the supplied buffer, the LZ history starts zeroed
+  instead of disclosing stack contents, and image allocation/load paths reject
+  rectangles whose size or offsets overflow. This ports the applicable 9front
+  draw hardening through `e252b1b9`, `c4f5b99c`, and `d7538ebb`.
+- **Certificate and X25519 inputs fail closed.** BER decoding stops at a fixed
+  recursion depth instead of allowing a crafted certificate to exhaust the
+  interpreter stack, and the common X25519 primitive rejects low-order peer
+  keys that produce the RFC 7748 all-zero shared secret. This covers TLS 1.2,
+  TLS 1.3, and hybrid key agreement callers.
 - **Voice exports require keyring authentication and expose audio only.** The
   original `voice/listen` script anonymously exported all of `/dev`, allowing
   a network peer to inject input and operate control devices. It now constructs

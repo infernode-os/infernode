@@ -46,9 +46,9 @@ def udp(payload, sport, dport, src=PEER_IP, dst=GUEST_IP):
     return struct.pack("!HHHH", sport, dport, 8 + len(payload), 0) + payload
 
 
-def tcp(payload, sport, dport, seq, ack, flags, window=65535):
+def tcp(payload, sport, dport, seq, ack, flags, window=65535, data_offset=5):
     hdr = struct.pack("!HHIIBBHHH", sport, dport, seq, ack,
-                      5 << 4, flags, window, 0, 0)
+                      data_offset << 4, flags, window, 0, 0)
     pseudo = PEER_IP + GUEST_IP + bytes((0, 6)) + struct.pack("!H", len(hdr) + len(payload))
     csum = checksum(pseudo + hdr + payload)
     return hdr[:16] + struct.pack("!H", csum) + hdr[18:] + payload
@@ -289,7 +289,7 @@ def parse_tcp(frame, dport):
 
 def tcp_regression(h):
     sport, dport = 40000, 8700
-    h.command("listen -A 'tcp!*!8700' {cat > /dev/null} &")
+    h.command("listen -A 'tcp!*!8702' {cat > /dev/null} &")
     time.sleep(1)
     synseq = 1000
     h.send(eth(ipv4(tcp(b"", sport, dport, synseq, 0, 0x02), 6, 0x5000)))
@@ -320,6 +320,36 @@ def tcp_regression(h):
     print("TCP-RESEQ-LIMIT-PASS", flush=True)
 
 
+def malformed_transport_regression(h):
+    # 9front 7838d689: transport lengths smaller than their headers used to
+    # reach trimblock with a negative/underflowed size.  A listening UDP
+    # conversation is required to reach the vulnerable post-lookup path.
+    h.command("listen -A 'udp!*!8701' {cat > /dev/null} &")
+    h.command("listen -A 'tcp!*!8700' {cat > /dev/null} &")
+    time.sleep(1)
+    short_udp = struct.pack("!HHHH", 40001, 8701, 4, 0)
+    h.send(eth(ipv4(short_udp, 17, 0x5200)))
+
+    # The actual TCP segment is 20 bytes, but data offset claims 60.  It must
+    # be rejected before the declared header length is subtracted.
+    bad_tcp = tcp(b"", 40002, 8702, 1, 0, 0x02, data_offset=15)
+    h.send(eth(ipv4(bad_tcp, 6, 0x5201)))
+    time.sleep(0.5)
+    h.command("echo TRANSPORT-BOUNDS-PASS")
+    if not h.wait_console("TRANSPORT-BOUNDS-PASS", 3):
+        raise RuntimeError("malformed transport length stopped the guest")
+    print("TRANSPORT-BOUNDS-PASS", flush=True)
+
+
+def negative_devip_attach_regression(h):
+    h.command("bind '#I-1' /net.alt")
+    time.sleep(0.5)
+    h.command("echo DEVIP-NEGATIVE-PASS")
+    if not h.wait_console("DEVIP-NEGATIVE-PASS", 3):
+        raise RuntimeError("negative IP device attach stopped the guest")
+    print("DEVIP-NEGATIVE-PASS", flush=True)
+
+
 def main():
     if len(sys.argv) != 3:
         print("usage: qemu_net_security.py qemu kernel.img", file=sys.stderr)
@@ -330,7 +360,10 @@ def main():
             raise RuntimeError("guest did not reach its shell")
         configure(h)
         failures = []
-        for name, test in (("fragment", icmp_regression), ("tcp", tcp_regression)):
+        for name, test in (("fragment", icmp_regression),
+                           ("transport", malformed_transport_regression),
+                           ("devip", negative_devip_attach_regression),
+                           ("tcp", tcp_regression)):
             try:
                 test(h)
             except Exception as exc:

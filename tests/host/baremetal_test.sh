@@ -5042,7 +5042,7 @@ vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv
 
 # Raw Ethernet from a UDP socket netdev gives the native stack packets the
 # host kernel cannot normalise first. Keep the valid fragmented control beside
-# the two adversarial cases: a claimed IPv4 length beyond the received bytes,
+# the adversarial cases: claimed IPv4/transport lengths beyond received bytes,
 # and hundreds of one-byte descending TCP segments (head insertion).
 if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
     if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
@@ -5059,6 +5059,16 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
         pass "virt: IPv4 validates IHL before checksum and trims link padding"
     else
         fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
+    fi
+    if grep -q '^TRANSPORT-BOUNDS-PASS$' <<<"$NETSEC"; then
+        pass "virt: malformed UDP/TCP header lengths are rejected without panic"
+    else
+        fail "virt: transport header length checks did not pass -- $NETSEC"
+    fi
+    if grep -q '^DEVIP-NEGATIVE-PASS$' <<<"$NETSEC"; then
+        pass "virt: a negative IP device attach is rejected without corruption"
+    else
+        fail "virt: negative IP device attach check did not pass -- $NETSEC"
     fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"

@@ -482,7 +482,7 @@ ipifcadd(Ipifc *ifc, char **argv, int argc, int tentative, Iplifc *lifcp)
 		lifc->autoflag = 1;
 		lifc->validlt = 0xffffffff;
 		lifc->preflt = 0xffffffff;
-		lifc->origint = NOW / 10^3;
+		lifc->origint = NOW / 1000;
 	}
 	lifc->next = nil;
 
@@ -1248,7 +1248,14 @@ v6addrtype(uchar *addr)
 	return unknownv6;
 }
 
-#define v6addrcurr(lifc) (( (lifc)->origint + (lifc)->preflt >= (NOW/10^3) ) || ( (lifc)->preflt == 0xffffffff ))
+static int
+v6addrcurr(Iplifc *lifc)
+{
+	ulong now;
+
+	now = NOW/1000;
+	return lifc->preflt == 0xffffffff || lifc->preflt >= now-lifc->origint;
+}
 
 static void
 findprimaryipv6(Fs *f, uchar *local)
@@ -1570,22 +1577,21 @@ ipifcremmulti(Conv *c, uchar *ma, uchar *ia)
 		return; 	/* we don't have it open */
 
 	*l = multi->next;
+	multi->next = nil;
 
 	for(p = f->ipifc->conv; *p; p++){
 		if((*p)->inuse == 0)
 			continue;
 
 		ifc = (Ipifc*)(*p)->ptcl;
-		if(waserror()){
-			wunlock(&ifc->rwl);
-			nexterror();
-		}
 		wlock(&ifc->rwl);
-		for(lifc = ifc->lifc; lifc; lifc = lifc->next)
-			if(ipcmp(ia, lifc->local) == 0)
-				remselfcache(f, ifc, lifc, ma);
+		if(!waserror()){
+			for(lifc = ifc->lifc; lifc; lifc = lifc->next)
+				if(ipcmp(ia, lifc->local) == 0)
+					remselfcache(f, ifc, lifc, ma);
+			poperror();
+		}
 		wunlock(&ifc->rwl);
-		poperror();
 	}
 
 	free(multi);
@@ -1703,7 +1709,7 @@ ipifcaddpref6(Ipifc *ifc, char**argv, int argc)
 	uchar	autoflag = 1;
 	long 	validlt = 0xffffffff;
 	long 	preflt = 0xffffffff;
-	long	origint = NOW / 10^3;
+	long	origint = NOW / 1000;
 	uchar	prefix[IPaddrlen];
 	int	plen = 64;
 	Iplifc	*lifc;

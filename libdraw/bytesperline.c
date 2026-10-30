@@ -5,16 +5,10 @@ static
 int
 unitsperline(Rectangle r, int d, int bitsperunit)
 {
-	ulong l, t;
-
-	if(r.min.x >= 0){
-		l = (r.max.x*d+bitsperunit-1)/bitsperunit;
-		l -= (r.min.x*d)/bitsperunit;
-	}else{			/* make positive before divide */
-		t = (-r.min.x*d+bitsperunit-1)/bitsperunit;
-		l = t+(r.max.x*d+bitsperunit-1)/bitsperunit;
-	}
-	return l;
+	if(d <= 0 || d > 32)
+		abort();
+	return ((vlong)r.max.x*d - ((vlong)r.min.x*d & -bitsperunit)
+		+ bitsperunit - 1) / bitsperunit;
 }
 
 int

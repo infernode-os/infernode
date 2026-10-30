@@ -32,6 +32,10 @@ allocmemimaged(Rectangle r, ulong chan, Memdata *md)
 		werrstr("bad channel descriptor %.8lux", chan);
 		return nil;
 	}
+	if(badrect(r)){
+		werrstr("bad rectangle %R", r);
+		return nil;
+	}
 
 	l = wordsperline(r, d);
 
@@ -65,6 +69,7 @@ allocmemimage(Rectangle r, ulong chan)
 {
 	int d;
 	ulong l, nw;
+	uvlong nwords;
 	Memdata *md;
 	Memimage *i;
 
@@ -72,9 +77,18 @@ allocmemimage(Rectangle r, ulong chan)
 		werrstr("bad channel descriptor %.8lux", chan);
 		return nil;
 	}
+	if(badrect(r)){
+		werrstr("bad rectangle %R", r);
+		return nil;
+	}
 
 	l = wordsperline(r, d);
-	nw = l*Dy(r);
+	nwords = (uvlong)l*Dy(r);
+	if(nwords >= ((1UL<<31)-2*sizeof(ulong))/sizeof(ulong)){
+		werrstr("bad rectangle %R, depth %d", r, d);
+		return nil;
+	}
+	nw = nwords;
 	md = malloc(sizeof(Memdata));
 	if(md == nil)
 		return nil;

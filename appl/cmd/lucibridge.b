@@ -405,7 +405,6 @@ runsetupwizard()
 
 		if(choice == "Remote API") {
 			writefile(pctl, "create id=keyring type=app dis=/dis/wm/keyring.dis label=Keyring");
-			sys->sleep(500);
 			writefile(pctl, "center id=keyring");
 			writemsg("veltro",
 				"Keyring is open. Select API Key, enter `anthropic` as the service, paste your key. " +
@@ -415,7 +414,6 @@ runsetupwizard()
 			# remainder of the line). -c llm tells wm/settings to open
 			# directly on the LLM Service panel — INFR-100.
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the Ollama backend, " +
@@ -433,7 +431,6 @@ runsetupwizard()
 				gate = "codex-gate";
 			}
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Keep Mode on Local, choose the " +
@@ -445,7 +442,6 @@ runsetupwizard()
 				"Then close InferNode and relaunch it.");
 		} else if(choice == "Remote 9P") {
 			writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-			sys->sleep(500);
 			writefile(pctl, "center id=settings");
 			writemsg("veltro",
 				"Settings is open on **LLM Service**. Switch Mode to Remote (9P), and enter the " +
@@ -464,8 +460,7 @@ runsetupwizard()
 			continue;	# keep listening; don't park
 		}
 		# A configurator was opened — park until the user quits and relaunches.
-		for(;;)
-			sys->sleep(60000);
+		<-chan of int;
 	}
 }
 
@@ -2153,7 +2148,6 @@ init(nil: ref Draw->Context, args: list of string)
 					pctl := sys->sprint("/mnt/ui/activity/%d/presentation/ctl", actid);
 					# Open directly on the LLM Service panel (INFR-100).
 					writefile(pctl, "create id=settings type=app dis=/dis/wm/settings.dis label=Settings data=-c llm");
-					sys->sleep(500);
 					writefile(pctl, "center id=settings");
 					writemsg("veltro", "Settings is open on **LLM Service**. Check your LLM configuration, then restart.");
 				} else if(agentlib->hasprefix(choice, TASKEVENT) || agentlib->hasprefix(choice, MSGEVENT)) {
@@ -2171,7 +2165,7 @@ init(nil: ref Draw->Context, args: list of string)
 						"relaunch — or tap Open Settings above.");
 					continue;	# keep listening; don't park
 				}
-				for(;;) sys->sleep(60000);
+				<-chan of int;	# parked until quit and relaunch
 			}
 			fatal("/mnt/llm/ not mounted — LLM service unreachable");
 		}

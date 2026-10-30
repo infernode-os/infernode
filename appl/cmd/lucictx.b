@@ -2124,7 +2124,6 @@ launchdisapp(path: string)
 	writetofile(pctl, "center id=" + name);
 }
 
-# Send "open <path>" to edit. Use 9P if available, else real-file IPC.
 # Plumb a file-open so the plumber routes it to the presentation view by
 # type (pdf/image/markdown -> content, text/source -> editor) — the same
 # shared path ftree uses.  Returns 1 if the plumber accepted it, 0 if none

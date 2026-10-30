@@ -83,8 +83,9 @@ fi
 
 # nothing of the window left running: its own procs (module Shell) and
 # its theme watchers (Lucitheme) as they were before it
-# (a status file has no newline: the occurrences are counted, not lines)
-procs() { grep -o "$2" "$ROOT/$T/procs.$1" | wc -l; }
+# (a status file has no newline: the occurrences are counted, not lines;
+# arithmetic, as macOS's wc pads its count with blanks)
+procs() { echo $(($(grep -o "$2" "$ROOT/$T/procs.$1" | wc -l))); }
 if [ ! -f "$ROOT/$T/procs.after" ]; then
 	fail "exit: no list of the processes after"
 elif [ "$(procs after ' Shell')" = 0 ] && [ "$(procs after Lucitheme)" = "$(procs before Lucitheme)" ]; then

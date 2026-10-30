@@ -309,14 +309,18 @@ spaces(n: int): string
 	return s;
 }
 
+include "keyboard.m";
+
 # ── Keyboard ──────────────────────────────────────────────────
 
-Khome:   con 16rFF61;
-Kend:    con 16rFF57;
-Kup:     con 16rFF52;
-Kdown:   con 16rFF54;
-Kpgup:   con 16rFF55;
-Kpgdown: con 16rFF56;
+# keyboard.h's keys, as the emulator and the native kernel send them
+# (they were X11 keysyms, which nothing sends: the keys did nothing)
+Khome:   con Keyboard->Home;
+Kend:    con Keyboard->End;
+Kup:     con Keyboard->Up;
+Kdown:   con Keyboard->Down;
+Kpgup:   con Keyboard->Pgup;
+Kpgdown: con Keyboard->Pgdown;
 Kbs:     con 8;
 
 handlekey(k: int)

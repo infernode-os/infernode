@@ -4,7 +4,8 @@
 # dummy driver, typed at through /dev/keyboard (tests/wm/shell.sh): a
 # line sent and its output shown; ^D sending what is typed and, alone,
 # end of file; ^P bringing back the last line; ^C discarding what is
-# typed; ESC holding input until ESC again; raw mode while a program
+# typed; Left and End moving the caret and F1 and Insert typing
+# nothing; ESC holding input until ESC again; raw mode while a program
 # holds /dev/consctl, a key at a time and not echoed; /chan/shctl's
 # commands; the window gone when the shell exits, nothing of it left
 # running, and gone when a -c command is done.  Each step is checked
@@ -62,6 +63,9 @@ if [ "$(nlines discard kept)" = 1 ] && [ "$(nlines discard discarded)" = 0 ]; th
 else
 	fail "discard: $(body discard)"
 fi
+
+[ "$(nlines arrows abcde)" = 1 ] && pass "arrow keys move the caret, special keys type nothing" ||
+	fail "arrows: no line 'abcde' in: $(body arrows | tail -3)"
 
 if [ "$(nlines holding held)" = 0 ] && [ "$(nlines released held)" = 1 ]; then
 	pass "ESC holds what is typed until ESC again"

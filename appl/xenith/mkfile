@@ -35,9 +35,6 @@ TARG=\
 	docreg.dis\
 	docview.dis\
 
-ICONS=\
-	abcde.bit\
-
 MODULES=\
 	xenith.m\
 	asyncio.m\

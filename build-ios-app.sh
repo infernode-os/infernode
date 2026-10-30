@@ -73,7 +73,7 @@ if [ "$GUI" -eq 1 ]; then
 		-framework AudioToolbox -framework AVFoundation -framework CoreBluetooth \
 		-framework CoreMotion -framework GameController -framework OpenGLES \
 		-weak_framework CoreHaptics"
-	STAGE_DIRS="dis lib fonts icons man"	# icons: Tk bitmaps (/icons/tk), app images; man: wm/man
+	STAGE_DIRS="dis lib fonts icons man"	# icons: icon(2)'s glyphs (/icons/ui), Tk's cursors (/icons/tk); man: wm/man
 else
 	MODE="headless"
 	APPSRC=main_ios.m

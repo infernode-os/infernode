@@ -366,6 +366,7 @@ dis/lib/git/git.dis
 dis/lib/hash.dis
 dis/lib/hid.dis
 dis/lib/html.dis
+dis/lib/icon.dis
 dis/lib/ida/ida.dis
 dis/lib/ida/idatab.dis
 dis/lib/imageremap.dis
@@ -744,6 +745,7 @@ dis/tests/hello_test.dis
 dis/tests/hid_test.dis
 dis/tests/hostplumb_test.dis
 dis/tests/html_test.dis
+dis/tests/icon_test.dis
 dis/tests/imap_test.dis
 dis/tests/imgload_test.dis
 dis/tests/interop_test.dis
@@ -1016,6 +1018,8 @@ dis/wm/coffee.dis
 dis/wm/colors.dis
 dis/wm/date.dis
 dis/wm/deb.dis
+dis/wm/dir.dis
+dis/wm/edit.dis
 dis/wm/editor.dis
 dis/wm/fractals.dis
 dis/wm/ftree.dis

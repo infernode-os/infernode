@@ -65,6 +65,7 @@ TARG=\
 	intsem_test.dis\
 	html_test.dis\
 	imgload_test.dis\
+	icon_test.dis\
 	docengine_test.dis\
 	pdfrender.dis\
 	pdftext_test.dis\
@@ -384,6 +385,7 @@ SYSMODULES=\
 	wirefmt.m\
 	workdir.m\
 	x402.m\
+	icon.m\
 
 DISBIN=$ROOT/dis/tests
 

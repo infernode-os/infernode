@@ -17,7 +17,10 @@ implement TkTest;
 #   - explicit per-widget colours are honoured;
 #   - glyphs take the foreground colour: an anti-aliased (k8) font drawn
 #     through libmemdraw's coverdraw came out black whatever the colour
-#     when built with gcc, so dark themes were unreadable.
+#     when built with gcc, so dark themes were unreadable;
+#   - two presses of a button, soon after and near each other, are a
+#     double click: only the X11 driver marked one, so on SDL hosts no
+#     <Double-Button-1> binding fired (wm/dir opened nothing).
 #
 
 include "sys.m";
@@ -81,6 +84,54 @@ newtop(t: ref T): ref Toplevel
 }
 
 # ── Tests ──────────────────────────────────────────────────────
+
+# a press and release of button 1 at x y, the press at msec
+click(top: ref Toplevel, x, y, msec: int)
+{
+	tk->pointer(top, Draw->Pointer(1, (x, y), msec));
+	tk->pointer(top, Draw->Pointer(0, (x, y), msec + 10));
+}
+
+# what the label's bindings sent since the last call
+heard(c: chan of string): string
+{
+	s := "";
+	for(;;) alt {
+	e := <-c =>
+		s += e + " ";
+	* =>
+		return s;
+	}
+}
+
+testDoubleClick(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	c := chan[16] of string;
+	tk->namechan(top, c, "c");
+	# mapped, as onscreen does, or pointer events find no widget
+	tk->cmd(top, "label .l -width 200 -height 100 -text x; pack .l; . map; update");
+	tk->cmd(top, "bind .l <Double-Button-1> {send c double}");
+	tk->cmd(top, "bind .l <ButtonRelease-1> {send c up}");
+	heard(c);
+	click(top, 20, 20, 1000);
+	click(top, 21, 20, 1150);
+	t.assertseq(heard(c), "up double up ", "two clicks 150ms apart: the second a double");
+	click(top, 20, 20, 3000);
+	click(top, 20, 20, 3500);
+	t.assertseq(heard(c), "up up ", "500ms apart: no double");
+	click(top, 20, 20, 5000);
+	click(top, 80, 60, 5100);
+	t.assertseq(heard(c), "up up ", "far apart: no double");
+	click(top, 20, 20, 0);
+	click(top, 20, 20, 0);
+	t.assertseq(heard(c), "up up ", "no time stamps: no double");
+	tk->pointer(top, Draw->Pointer(1|(1<<8), (20, 20), 9000));
+	tk->pointer(top, Draw->Pointer(0, (20, 20), 9010));
+	t.assertseq(heard(c), "double up ", "a press X11 marked double (bit 8) still is one");
+}
 
 testToplevel(t: ref T)
 {
@@ -184,6 +235,44 @@ testEntryInput(t: ref T)
 		tk->keyboard(top, s[i]);
 	tk->cmd(top, "update");
 	t.assertseq(tk->cmd(top, ".e get"), "hello", "typed text reaches entry");
+}
+
+# Keys that are not characters (keyboard.h's, 16rE000 up: the arrows,
+# Page Up and Down, the function keys) type nothing in an entry or a
+# text and leave the selection; they were typed as private-use glyphs
+# wherever no binding of their own took them.  Characters, a brace and
+# a backslash among them, still type, replacing the selection.
+testSpecialKeys(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	Up: con 16rE012;
+	Pgdown: con 16rE017;
+	F1: con 16rE041;
+	tk->cmd(top, "entry .e; pack .e; focus .e; update");
+	for(s := "a {b}c\\"; s != nil; s = s[1:])
+		tk->keyboard(top, s[0]);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "characters typed into the entry, a blank, braces and a backslash too");
+	tk->keyboard(top, Up);
+	tk->keyboard(top, Pgdown);
+	tk->keyboard(top, F1);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "Up, Page Down and F1 typed nothing into the entry");
+	tk->cmd(top, ".e selection range 0 end");
+	tk->keyboard(top, F1);
+	t.assertseq(tk->cmd(top, ".e get"), "a {b}c\\", "F1 left the entry's selection");
+	tk->keyboard(top, 'z');
+	t.assertseq(tk->cmd(top, ".e get"), "z", "a character replaced the selection");
+	tk->keyboard(top, 16rE014);	# Left
+	tk->keyboard(top, ' ');
+	t.assertseq(tk->cmd(top, ".e get"), " z", "Left moved the caret, and a blank typed alone is typed");
+
+	tk->cmd(top, "text .t; pack .t; focus .t; update");
+	tk->keyboard(top, 'x');
+	tk->keyboard(top, F1);
+	tk->keyboard(top, 16rE063);	# Ins
+	tk->keyboard(top, 'y');
+	t.assertseq(tk->cmd(top, ".t get 1.0 end"), "xy", "F1 and Ins typed nothing into the text");
 }
 
 # A button's -command fires on invoke (how the app tests click actions).
@@ -496,6 +585,8 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DynamicImage",    testDynamicImage);
 	run("GlyphColour",     testGlyphColour);
 	run("ForegroundRendered", testForegroundRendered);
+	run("DoubleClick",     testDoubleClick);
+	run("SpecialKeys",     testSpecialKeys);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

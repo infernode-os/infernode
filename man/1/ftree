@@ -1,0 +1,133 @@
+.TH FTREE 1
+.SH NAME
+ftree \- file tree and name space browser
+.SH SYNOPSIS
+.B wm/ftree
+[
+.B -n
+] [
+.B -d
+] [
+.B -e
+|
+.B -E
+|
+.B -p
+] [
+.I root
+]
+.SH DESCRIPTION
+.I Ftree
+shows the given
+.I root
+directory
+(default:
+.BR / )
+as a tree: the files and folders of a folder are listed beneath it,
+indented, folders first.
+A folder is shown closed,
+.BR ▸ ,
+until opened, when its mark is
+.B ▾
+and what it holds is listed under it.
+Clicking button 1 on the mark, or double-clicking the name, opens or
+closes a folder; double-clicking a file, or button 2, opens it.
+A file opens through the
+.IR plumber (8),
+so in Lucifer it lands in the presentation view, an editor for text and
+a viewer for images and documents; with no plumber, it is put in
+Lucifer's presentation view directly.
+.PP
+Button 3 pops up a menu of operations on the selected file or folder:
+.BR open ;
+.BR copy ,
+which remembers it, and
+.BR "paste into" ,
+which copies what was remembered, a folder whole, into the selected
+folder;
+.BR remove... ,
+which asks, then removes it and all it holds;
+.BR "bind here..." ,
+which asks for a source and flags
+.RB ( -b ,
+.BR -a ,
+.BR -c )
+and binds it on the selected folder (or a file's folder), and
+.BR unmount ;
+.B "expand all"
+and
+.BR "collapse all" ;
+.BR refresh ,
+which reads the tree again keeping what is open open;
+.BR "ns mode" ,
+which shows, beside each mount point, what is bound or mounted there,
+its flags and how many layers a union has;
+.BR goto ,
+which shows another folder as the root, or opens a file; and
+.BR exit .
+.PP
+The arrow keys move the selection; Right or Enter opens, Left closes
+or goes to the folder above; Page Up, Page Down, Home and End move
+further.
+Ctrl-B binds, Ctrl-U unmounts, Ctrl-G goes to a path, Ctrl-N switches ns
+mode, r refreshes and q or Ctrl-Q quits.
+.PP
+.I Ftree
+runs in a name space of its own: what it binds and unmounts changes
+what it shows, not the name space of the program that started it.
+.PP
+The options are:
+.TP
+.B -n
+Start in ns mode.
+.TP
+.B -d
+Allow only opening: no copy, paste, remove, bind or unmount.
+.TP
+.B -e
+Ignore `exit' but offer move and resize.
+.TP
+.B -E
+Ignore exit, and do not offer move or resize.
+.TP
+.B -p
+Do exit, but do not offer move or resize.
+.PP
+The last three make a user interface for handheld touch screens: a
+start panel is
+.I ftree
+with
+.BR -E ,
+always there, the rest of the interaction made by the name space under
+.I root
+and the plumbing rules.
+.SH FILES
+.TP
+.B /tmp/veltro/ftree/state
+.TP
+.B /tmp/veltro/ftree/view
+What is shown, for an agent: the root, the selection and the rows on
+screen.
+.TP
+.B /tmp/veltro/ftree/ctl
+Commands from an agent:
+.BI cd " path" \fR,
+.BI select " path" \fR,
+.BR expand ,
+.BR collapse ,
+.BR refresh ,
+.BR nsmode ,
+.BI bind " src target" " \fR[\fPflags\fR]" \fR,
+.BI unmount " path" \fR,
+.B scroll
+.BR up | down | top | bottom .
+.SH SOURCE
+.B /appl/wm/ftree.b
+.br
+.B /appl/lib/ftree/cptree.b
+.SH SEE ALSO
+.IR dir (1),
+.IR bind (1),
+.IR wm (1),
+.IR plumbing (6),
+.IR plumber (8)

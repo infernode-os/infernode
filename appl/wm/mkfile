@@ -20,12 +20,14 @@ TARG=\
 	settings.dis\
 	scene.dis\
 	editor.dis\
+	edit.dis\
 	fractals.dis\
 	tetris.dis\
 	coffee.dis\
 	memory.dis\
 	rt.dis\
 	deb.dis\
+	dir.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\
@@ -103,6 +105,9 @@ SYSMODULES=\
 	viewport.m\
 	wmdeb.m\
 	workdir.m\
+	cptree.m\
+	icon.m\
+	names.m\
 
 DISBIN=$ROOT/dis/wm
 

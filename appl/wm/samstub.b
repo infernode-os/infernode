@@ -1050,6 +1050,12 @@ newtext(tag, tp: int, r: Rect): int
 
 keypress(key: string)
 {
+	# a key keyboard.h gives (an arrow, a function key: 16rE000 to
+	# 16rF8FF) is not a character: it was typed into the file as a
+	# private-use glyph, after cutting the selection
+	if (len key == 1 && key[0] >= 16rE000 && key[0] <= 16rF8FF)
+		return;
+
 	# Find text and flayer
 	fl := ctxt.which;
 	tag := fl.tag;

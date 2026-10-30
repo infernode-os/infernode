@@ -46,6 +46,8 @@ include "draw.m";
 include "tk.m";
 	tk: Tk;
 
+include "keyboard.m";
+
 include "tkclient.m";
 	tkclient: Tkclient;
 
@@ -348,7 +350,10 @@ main(ctxt: ref Draw->Context, argv: list of string)
 		char := c[1];
 		if(char == '\\')
 			char = c[2];
-		if(char != ESC)
+		# a key that is not a character (an arrow, a function key)
+		# goes to a program reading raw, and otherwise types nothing
+		spec := char >= Keyboard->Spec && char <= Keyboard->Specend;
+		if(char != ESC && !spec)
 			cut(t, 1);
 		if(rawon){
 			if(int cmd(t, ".ft.t compare insert >= outpoint")){
@@ -357,6 +362,8 @@ main(ctxt: ref Draw->Context, argv: list of string)
 				break;
 			}
 		}
+		if(spec)
+			break;
 		case char {
 		* =>
 			cmd(t, ".ft.t insert insert "+c);

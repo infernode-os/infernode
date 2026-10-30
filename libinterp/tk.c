@@ -344,6 +344,35 @@ tkenterleave(TkTop *t)
 		tkupdate(t2);
 }
 
+/*
+ * A press of the button pressed last, soon after and near it, is a
+ * double click.  Only the X11 driver marks one (bit 8 of the buttons);
+ * the SDL one, and /dev/pointer, send two plain presses, so Tk times
+ * them itself, as X11 does (DblTime in win-x11a.c), or no
+ * <Double-Button-1> binding ever fired.  Events with no time stamp
+ * (msec 0, made by a program) are never doubles.
+ */
+enum {
+	Dblmsec	= 300,
+	Dbldist	= 12,
+};
+
+static int
+tkdblclick(TkCtxt *c, int b, ulong msec, int x, int y)
+{
+	int dbl;
+
+	dbl = msec != 0 && c->pmsec != 0 && b == c->pb && msec - c->pmsec < Dblmsec &&
+		abs(x - c->px) < Dbldist && abs(y - c->py) < Dbldist;
+	c->pmsec = msec;
+	c->pb = b;
+	c->px = x;
+	c->py = y;
+	if(dbl)
+		return TkDouble;
+	return 0;
+}
+
 void
 Tk_pointer(void *a)
 {
@@ -461,10 +490,12 @@ Tk_pointer(void *a)
 	if (target != nil) {
 		etype = 0;
 		dtype = 0;
-		if(f->p.buttons & (1<<8))		/* Double */
+		if(f->p.buttons & (1<<8))		/* Double, as X11 marks one */
 			dtype = TkDouble;
 	
 		d = lastb ^ m.b;
+		if(d & m.b)
+			dtype |= tkdblclick(c, d & m.b, f->p.msec, m.x, m.y);
 		if (d)	{
 			/* cancel any autorepeat, notifying existing client */
 			tkrepeat(nil, nil, nil, 0, 0);

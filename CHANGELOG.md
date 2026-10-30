@@ -4,6 +4,93 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Applications
+
+- **Arrow keys move; keys that are not characters type nothing.** An
+  arrow, Home, End, Page Up or Down, Insert or a function key typed a
+  private-use glyph in Tk entries and text (every form field and
+  dialog), wm/shell and wm/sh, wm/editor, wm/man's search, Charon's
+  find bar, Lucifer's conversation input, Xenith, Acme and wm/sam, and
+  in wm/shell it deleted the selection too. Most matched X11 keysyms
+  (`16rFF52` for Up), which nothing has sent since the widget toolkit
+  went; they match keyboard.h's keys now. A key in keyboard.h's range
+  (`Keyboard->Spec` to the new `Keyboard->Specend`) that a program does
+  not take is dropped where it would have been inserted, Tk's own text
+  and entry bindings included, and no longer replaces a selection.
+  Delete as SDL sends it (DEL, 0x7F) deletes in wm/editor, Charon and
+  Lucifer's input, and works in wm/about and wm/keyring as keyboard.h's
+  Delete does. Lucifer's serial-console arrows are keyboard.h's keys,
+  not keysyms. Tk's tkTextInsert, which typed text goes through, read
+  its argument with the wrong buffer end. Tested by
+  `tests/host/wm_editor_keys_test.sh`, a step of
+  `tests/host/wm_shell_test.sh` and `tk_test.b`'s SpecialKeys.
+- **The old icons are gone; every program draws `icon(2)`'s glyphs.**
+  wm/deb's controls, its Stack window's open and closed marks,
+  wm/bounce's arrows and dialog(2)'s error, warning, information and
+  question icons are Tabler glyphs in the theme's colours, repainted on
+  a theme switch; webget's help page shows them too. The old icon
+  files are removed, 235 of them (`icons/` is 187KB, from 807KB), so
+  `icons/` holds `icons/ui`, Tk's cursors
+  (unchanged), and the artwork that is not an icon: wm/coffee's cups and
+  backdrop and the picture `draw-example(2)` draws, all kept as they
+  were. A glyph that cannot be drawn leaves a blank button, not a
+  program that fails to start: `icon(2)` makes every Tk image it is
+  asked for whatever happens to the glyph, and
+  `tests/host/icons_test.sh` (run in CI) fails if anything names an
+  icon that is not in the tree. Making an image no longer leaves an
+  error in Tk's `lasterror`, which dialog(2) read as a failure and
+  answered its own question with the default ("discard").
+- **wm/ftree works again, and is upstream's tool with the name space
+  added.** The arrow, page and home keys did nothing: ftree matched X11
+  keysyms, which nothing sends since the Tk port dropped the widget
+  toolkit's translation. Its agent's state file was written only on a
+  click, so an agent read a stale selection and view; it is written on
+  every change, the agent's `scroll` moves the view, and the view
+  stays where the user scrolled it. Refresh kept nothing open; it
+  keeps what was open. Restored from upstream: Copy, Paste into and
+  Remove (which now asks first), the `-d`, `-e`, `-E` and `-p` options
+  of a touch-screen start panel, and a name space of its own, so a bind
+  made in ftree no longer changes the name space of whatever started
+  it. The root shows as `/`, not `//`. `ftree(1)` is back.
+  `tests/host/ftree_test.sh` drives it.
+- **`wm/dir` is back, on new icons.** Inferno's file browser, the Files
+  entry of upstream's window menu, was dropped in the migration. It is
+  restored with its icons drawn by `icon(2)` in the theme's colours.
+  A folder opens in the same window (a window each is an option), and
+  a file opens through the plumber, so in Lucifer it lands in the
+  presentation view; with no plumber, a program runs, an image opens
+  in `wm/view`, a PDF in `wm/page` and anything else in `wm/edit`.
+  Fixed on the way: `..` was the working directory's parent, not the
+  folder's; resizing the window indexed an empty string; a name with a
+  blank broke its label; long names made one column; a folder that
+  could not be read closed the window. `tests/host/wm_dir_test.sh`
+  drives it.
+- **Icons: Tabler's glyphs, drawn at any size in any colour.**
+  `icons/ui` holds the 63 glyphs the interface uses, from Tabler Icons
+  (MIT), 30KB of SVG; `icons/ui/LIST` names them and
+  `tools/update-icons.sh` fetches any added. `icon(2)` draws one with
+  readsvg at the size asked for and paints it in a theme's colour, so
+  a glyph is sharp on any display and a theme switch repaints it.
+- **Double-click works in Tk applications on SDL hosts.** Tk took a
+  double click only from a press the X11 driver marked as one; SDL and
+  `/dev/pointer` send two plain presses, so no `<Double-Button-1>`
+  binding ever fired on macOS, Windows or Linux with SDL (wm/dir
+  opened nothing, ftree's double-click did nothing, a text widget
+  never selected a word). Tk now times presses itself as X11 does:
+  the same button again within 300ms and 12 pixels.
+- **`wm/edit` is back.** Inferno's own editor was dropped in the
+  migration and its name later given to the editor now called
+  `wm/editor`, so `wm/task`'s Files button, which loads
+  `/dis/wm/edit.dis`, did nothing. It is restored from upstream with
+  its bugs fixed: it opened at 384x188 with a white text area under the
+  theme's light text, it took the arrow and page keys for changes (so
+  reading a file asked to discard it), a name that did not exist was an
+  error rather than a new file, and an empty Save As name was tried as a
+  file. It follows a theme switch, Limbo mode's colours among it.
+  `tests/host/wm_edit_test.sh` drives it. `man/1/edit` described
+  `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
+  `wm/edit`'s.
+
 ## [0.9.1] - 2026-10-30
 
 This security patch release fixes remotely reachable IPv4 reassembly and voice

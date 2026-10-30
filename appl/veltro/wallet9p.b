@@ -12,6 +12,8 @@ implement Wallet9p;
 #       accounts     r:  newline-separated account names
 #       default      r:  default account name
 #       new          rw: write "eth base myaccount" → read account name
+#       pending      r:  payments awaiting approval
+#       event        r:  "pending" whenever that list changes (blocking)
 #       {name}/          per-account directory
 #           address  r:  public address
 #           balance  r:  balance (queries chain/API)
@@ -78,6 +80,7 @@ Qnew:      con 3;
 Qpending:  con 4;
 Qdefault:  con 5;
 Qnetwork:  con 6;
+Qevent:    con 7;
 # Per-account files start at 16
 Qacctdir:  con 16;
 Qaddress:  con 17;
@@ -102,6 +105,16 @@ NACCTFILES: con 7;	# files per account dir
 MAXHISTORY: con 200;	# history entries kept per account
 PENDTTL:    con 900;	# seconds before an unapproved payment expires
 MAXPENDING: con 100;	# total pending-payment records kept
+
+# A reader of event: what it has not read yet, and its read if it waits.
+EvFid: adt {
+	fid:	int;
+	q:	list of string;
+	rd:	ref Tmsg.Read;
+};
+evfids: list of ref EvFid;
+evsrv: ref Styxserver;
+expirec: chan of int;	# a pending payment's time is up
 
 # Account state
 AcctState: adt {
@@ -490,6 +503,7 @@ init(nil: ref Draw->Context, args: list of string)
 	# Start debounced sync thread
 	initsyncthread();
 
+	expirec = chan[8] of int;
 	fds := array[2] of ref Sys->FD;
 	sys->pipe(fds);
 
@@ -532,7 +546,23 @@ readuser(): string
 
 serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 {
-	while((gm := <-tchan) != nil) {
+	evsrv = srv;
+	for(;;) {
+		gm: ref Tmsg;
+		alt {
+		gm = <-tchan =>
+			;
+		id := <-expirec =>
+			# an unapproved payment left the list when its time ran out
+			if((pp := findpending(id)) != nil && pp.result == nil) {
+				checkpendingexpiry(pp);
+				if(pp.result != nil)
+					postevent("pending");
+			}
+			continue;
+		}
+		if(gm == nil)
+			break;
 		pick m := gm {
 		Readerror =>
 			return;
@@ -543,6 +573,8 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 				ft := FTYPE(c.path);
 				if(ft == Qnew)
 					setnewstate(m.fid, "");
+				if(ft == Qevent)
+					evfids = ref EvFid(m.fid, nil, nil) :: evfids;
 			}
 			srv.default(gm);
 
@@ -555,12 +587,62 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver)
 		Clunk =>
 			delnewstate(m.fid);
 			delfidresult(m.fid);
+			delevfid(m.fid);
+			srv.default(gm);
+
+		Flush =>
+			for(el := evfids; el != nil; el = tl el)
+				if((hd el).rd != nil && (hd el).rd.tag == m.oldtag)
+					(hd el).rd = nil;
 			srv.default(gm);
 
 		* =>
 			srv.default(gm);
 		}
 	}
+}
+
+# Every reader of event is told; one not reading has it queued, once.
+postevent(msg: string)
+{
+	for(el := evfids; el != nil; el = tl el) {
+		ef := hd el;
+		if(ef.rd != nil) {
+			evsrv.reply(ref Rmsg.Read(ef.rd.tag, array of byte (msg + "\n")));
+			ef.rd = nil;
+		} else if(!inlist(msg, ef.q))
+			ef.q = appendstr(ef.q, msg);
+	}
+}
+
+appendstr(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendstr(tl l, s);
+}
+
+findevfid(fid: int): ref EvFid
+{
+	for(el := evfids; el != nil; el = tl el)
+		if((hd el).fid == fid)
+			return hd el;
+	return nil;
+}
+
+delevfid(fid: int)
+{
+	keep: list of ref EvFid;
+	for(el := evfids; el != nil; el = tl el)
+		if((hd el).fid != fid)
+			keep = hd el :: keep;
+	evfids = keep;
+}
+
+expirytimer(id: int)
+{
+	sys->sleep((PENDTTL + 1) * 1000);
+	expirec <-= id;
 }
 
 doread(srv: ref Styxserver, m: ref Tmsg.Read)
@@ -605,6 +687,17 @@ doread(srv: ref Styxserver, m: ref Tmsg.Read)
 			readstr(srv, m, ns.result + "\n");
 		else
 			readstr(srv, m, "");
+
+	Qevent =>
+		# a stream: each read is the next event, waited for
+		ef := findevfid(m.fid);
+		if(ef == nil)
+			srv.reply(ref Rmsg.Error(m.tag, "event not open"));
+		else if(ef.q != nil) {
+			srv.reply(ref Rmsg.Read(m.tag, array of byte (hd ef.q + "\n")));
+			ef.q = tl ef.q;
+		} else
+			ef.rd = m;
 
 	Qpending =>
 		s := "";
@@ -1125,6 +1218,8 @@ newpending(kind, acct, amount, recipient, token: string): (ref PendingPay, strin
 	np := ref PendingPay(nextpendingid++, kind, acct, amount, recipient,
 		token, "agent", t, "", "", "", 0, "", nil);
 	pendingpays = np :: pendingpays;
+	spawn expirytimer(np.id);
+	postevent("pending");
 	return (np, nil);
 }
 
@@ -1188,6 +1283,13 @@ hascontrol(s: string): int
 
 approvepending(id: int): string
 {
+	err := approvepending0(id);
+	postevent("pending");
+	return err;
+}
+
+approvepending0(id: int): string
+{
 	pp := findpending(id);
 	if(pp == nil || pp.result != nil)
 		return "pending payment not found: " + string id;
@@ -1242,6 +1344,7 @@ denypending(id: int): string
 	if(pp == nil || pp.result != nil)
 		return "pending payment not found: " + string id;
 	pp.result = "denied";
+	postevent("pending");
 	return nil;
 }
 
@@ -2054,6 +2157,8 @@ navigator(navops: chan of ref Navop)
 					n.path = MKPATH(0, Qpending);
 				else if(name == "network")
 					n.path = MKPATH(0, Qnetwork);
+				else if(name == "event")
+					n.path = MKPATH(0, Qevent);
 				else {
 					# Look for account name
 					id := acctidbyname(name);
@@ -2101,6 +2206,7 @@ navigator(navops: chan of ref Navop)
 
 			if(ft == Qroot) {
 				# Root: ctl, accounts, new, pending, network, then account dirs
+				entries = MKPATH(0, Qevent) :: entries;
 				entries = MKPATH(0, Qnetwork) :: entries;
 				entries = MKPATH(0, Qpending) :: entries;
 				entries = MKPATH(0, Qnew) :: entries;
@@ -2172,6 +2278,9 @@ dirgen(p: big): (ref Sys->Dir, string)
 		perm = 8r444;
 	Qnetwork =>
 		name = "network";
+		perm = 8r444;
+	Qevent =>
+		name = "event";
 		perm = 8r444;
 	Qacctdir =>
 		as := findacctbyid(aid);

@@ -20,6 +20,13 @@ All notable changes to InferNode are documented in this file.
   scratch directory is refused, not dropped as the scratch. lucibridge
   hears a task closed while it works as luciuisrv's `activity delete`
   event, not by reading its status every second.
+- **wallet9p's `event` file: the wallet GUI's pending count no longer
+  polls (#1019).** wm/wallet read `/mnt/wallet/pending` every two
+  seconds while it was open. wallet9p now serves `event`, a line
+  `pending` to every reader each time the payments awaiting approval
+  change: one queued, approved, denied, or expired (a timer at its
+  deadline). The GUI waits on it, and waits on wallet9p's own start
+  rather than looking for its files.
 - **wm/shell, wm/man, wm/fractals and wm/ftree serve their agent files;
   none polls (#1019).** Each wrote state files under `/tmp/veltro/<app>`
   on a timer and read commands from a file it truncated, every half

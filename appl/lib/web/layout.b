@@ -11575,7 +11575,7 @@ bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 		case it.kind {
 		Iword or Ispace =>
 			for(i := 0; i < len it.text; i++)
-				if(it.text[i] >= 16r590) {
+				if(it.text[i] >= 16r590 && rtlish(it.text[i])) {
 					need = 1;
 					break;
 				}
@@ -11686,6 +11686,24 @@ bidiitems(b: ref Box, items: list of ref Item): (list of ref Item, int)
 	for(; r != nil; r = tl r)
 		out = hd r :: out;
 	return (out, para);
+}
+
+# whether c can make a left-to-right paragraph's levels other than 0:
+# a strong right-to-left character, an Arabic number, or an explicit
+# embedding, override or isolate.  Without one, every level is 0 (UAX
+# #9: W7 makes European numbers L, N1 and N2 give neutrals the
+# paragraph's direction), so dashes, quotes and the like above U+0590
+# do not need the algorithm, which was a tenth of the time Wikipedia's
+# English pages took
+rtlish(c: int): int
+{
+	case bidi->class(c) {
+	Bidi->R or Bidi->AL or Bidi->AN or
+	Bidi->LRE or Bidi->LRO or Bidi->RLE or Bidi->RLO or Bidi->PDF or
+	Bidi->LRI or Bidi->RLI or Bidi->FSI or Bidi->PDI =>
+		return 1;
+	}
+	return 0;
 }
 
 # the width of a word's characters [a:e), letter-spacing included

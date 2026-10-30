@@ -1865,25 +1865,51 @@ taskartifacts(): string
 }
 
 # A task closed while it works stops working: its turn is cancelled, not
-# left to run on with no one to see it.
+# left to run on with no one to see it.  The close is luciuisrv's global
+# event "activity delete N"; the watcher blocks reading it.
 closewatch(turnover: chan of int)
 {
-	statpath := sys->sprint("/mnt/ui/activity/%d/status", actid);
-	for(;;) {
-		alt {
-		<-turnover =>
-			return;
-		* =>
-			;
-		}
-		if(agentlib->strip(agentlib->readfile(statpath)) == "hidden") {
-			log("activity closed: cancelling the turn");
-			ctl("cancel");
-			<-turnover;
-			return;
-		}
-		sys->sleep(1000);
+	closed := chan of int;
+	pidc := chan of int;
+	spawn closereader(pidc, closed);
+	pid := <-pidc;
+	alt {
+	<-turnover =>
+		kill(pid);
+	<-closed =>
+		log("activity closed: cancelling the turn");
+		ctl("cancel");
+		<-turnover;
 	}
+}
+
+closereader(pidc: chan of int, closed: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	# Opened before the status is read, so a close between the two is
+	# still heard.
+	fd := sys->open("/mnt/ui/event", Sys->OREAD);
+	if(agentlib->strip(agentlib->readfile(sys->sprint("/mnt/ui/activity/%d/status", actid))) == "hidden") {
+		closed <-= 1;
+		return;
+	}
+	if(fd == nil)
+		return;
+	want := sys->sprint("activity delete %d", actid);
+	buf := array[Sys->ATOMICIO] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0) {
+		if(agentlib->strip(string buf[0:n]) == want) {
+			closed <-= 1;
+			return;
+		}
+	}
+}
+
+kill(pid: int)
+{
+	fd := sys->open(sys->sprint("/prog/%d/ctl", pid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "kill");
 }
 
 filelen(path: string): big

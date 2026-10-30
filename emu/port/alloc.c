@@ -506,6 +506,29 @@ poolbiggest(Pool *p)
 	return big;
 }
 
+extern Proc *vmowner;
+
+/*
+ * the Limbo code that asked, when the VM's own proc did: its module, and
+ * in the interpreter the instruction, which R.PC has passed (resolve it
+ * with the module's .sbl)
+ */
+static void
+limbowhere(char *buf, int n)
+{
+	Module *m;
+
+	buf[0] = 0;
+	if(vmowner != up || R.M == nil || (m = R.M->m) == nil || m->name == nil)
+		return;
+	if(m->name[0] == '$')	/* a built-in module, in C */
+		snprint(buf, n, "; asked by %s", m->name);
+	else if(R.M->compiled || R.PC == nil || R.M->prog == nil)
+		snprint(buf, n, "; asked by %s (compiled)", m->name);
+	else
+		snprint(buf, n, "; asked by %s at pc %ld", m->name, (long)(R.PC - R.M->prog) - 1);
+}
+
 /*
  * An allocation refused: say how much, why, for whom, and how the pool
  * stood, so that an "out of memory" with a pool nearly empty (INFR-472)
@@ -516,7 +539,7 @@ poolbiggest(Pool *p)
 static void
 poolnomem(Pool *p, ulong size, ulong pc, char *why)
 {
-	char where[128];
+	char where[128], limbo[128];
 	ulong n, cur, arena, big;
 
 	lock(&p->l);
@@ -529,8 +552,9 @@ poolnomem(Pool *p, ulong size, ulong pc, char *why)
 		return;
 	if(poolpcwhere == nil || poolpcwhere(pc, where, sizeof(where)) == nil)
 		snprint(where, sizeof(where), "pc %#lux", pc);
-	print("pool %s: cannot allocate %lud bytes (%s) for %s: cursize %lud arenasize %lud maxsize %lud largest free %lud; refusal %lud%s\n",
-		p->name, size, why, where, cur, arena, p->maxsize, big, n,
+	limbowhere(limbo, sizeof(limbo));
+	print("pool %s: cannot allocate %lud bytes (%s) for %s: cursize %lud arenasize %lud maxsize %lud largest free %lud%s; refusal %lud%s\n",
+		p->name, size, why, where, cur, arena, p->maxsize, big, limbo, n,
 		n == 10? ", now reporting every 1000th": "");
 }
 

@@ -2460,6 +2460,7 @@ themewatcher()
 	lt := load Lucitheme Lucitheme->PATH;
 	if(lt == nil)
 		return;
+	lt->serve();	# a session's root; done already under a profile
 	c := lt->watch();
 	for(;;)
 		themechanged("theme " + <-c);

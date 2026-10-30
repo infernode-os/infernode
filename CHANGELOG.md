@@ -6,6 +6,17 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **A theme switch reaches every program without any of them polling.**
+  Sixteen programs (wm/wm, Lucifer, Xenith, Charon, and wm/ftree, wallet,
+  matrix, editor, deb, fractals, about, keyring, shell, settings, dir and
+  man) each re-read `/lib/lucifer/theme/current` every second to notice
+  a switch. `themefs`, run by the profile (and by wm/wm or Lucifer when
+  a session starts without one), serves `current` and `event` before
+  `/lib/lucifer/theme`: `current` reads and writes as the file did, and
+  a write, from Settings, Xenith's Theme or `echo halo >`, is kept in the
+  file under it and given to every reader of `event`, which waits for it.
+  `lucitheme->watch` reads `event`. A name that is no theme is refused.
+  `tests/host/themefs_test.sh`.
 - **The agent's name space, as it is, from tools9p's control tree
   (#1020).** `/mnt/toolctl` (outside every agent's name space) has three
   new files beside `ctl`. `view`, mounted

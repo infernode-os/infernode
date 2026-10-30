@@ -744,7 +744,7 @@ jobs:
               refadt_zero_test sdl3_keyboard_test secstore_apikey_test
               secstore_e2e_test secstore_logon_test secstored_test
               security_check_test serve_llm_smoke_test stale_dis_test
-              strcat_test task_provisioning_test tcpseq_test
+              strcat_test task_provisioning_test tcpseq_test themefs_test
               tls_malformed_server_test tools9p_activity_ns_test
               tools9p_basics_test tools9p_write_exec_view_test
               write_capability_test xenith_build_test

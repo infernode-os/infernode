@@ -922,6 +922,7 @@ dis/tests/xenith_fuzz.dis
 dis/tests/xenith_htmldoc_test.dis
 dis/tests/xenith_race_helper.dis
 dis/tests/xml_test.dis
+dis/themefs.dis
 dis/time.dis
 dis/timestamp.dis
 dis/tlsperf.dis

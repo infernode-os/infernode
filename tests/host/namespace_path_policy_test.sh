@@ -33,14 +33,17 @@ fail() { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); }
 
 BAD_PRIV=(
 	"/chan"
+	"/chan/cons"
 	"/fd"
 	"/usr"
 	"/usr/inferno/keyring"
+	"/usr/inferno/secstore"
 	"/keyring/signer"
 	"/USR/INFERNO/KEYRING"
 	"/MNT/FACTOTUM"
 	"/TMP/VELTRO/COW"
 	"/mnt/toolctl.17"
+	"/tool.17"
 	"/MNT/TOOLCTL.17/CTL"
   "/mnt/ui"
   "/mnt/ui/activity/0/presentation"
@@ -113,6 +116,7 @@ BAD_INVALID=(
 
 GOOD=(
   "/tmp"
+	"/usr/inferno"
   "/tmp/veltro/scratch"
   "/mnt/msg"
   "/mnt/msg/draft"
@@ -288,6 +292,18 @@ if emu_c "nsconstruct-direct" 30 "/dis/tests/veltro_security_test.dis"; then
     fi
 else
     fail "nsconstruct direct policy test failed (output: $OUTPUT)"
+fi
+
+if emu_c "usr-credential-mask" 20 \
+    "mkdir -p /tmp/nshome/keyring /tmp/nshome/secstore; echo public > /tmp/nshome/public; echo secret > /tmp/nshome/keyring/default; echo secret > /tmp/nshome/secstore/state; bind /tmp/nshome /usr/inferno; tools9p -p /usr/inferno:ro read & sleep 3; echo /usr/inferno/public > /tool/read/run; sleep 1; echo PUBLIC; cat /tool/read/run; echo /usr/inferno/keyring/default > /tool/read/run; sleep 1; echo KEYRING; cat /tool/read/run; echo /usr/inferno/secstore/state > /tool/read/run; sleep 1; echo SECSTORE; cat /tool/read/run"; then
+    if echo "$OUTPUT" | grep -q 'public' &&
+       ! echo "$OUTPUT" | grep -q '^secret$'; then
+        pass "home grants retain public files but mask keyring and secstore"
+    else
+        fail "home grant exposed credentials or lost its public file (output: $OUTPUT)"
+    fi
+else
+    fail "home credential masking probe failed (output: $OUTPUT)"
 fi
 
 echo ""

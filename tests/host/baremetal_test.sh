@@ -5055,6 +5055,11 @@ if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PL
     else
         fail "virt: lying IPv4 fragment was not rejected -- $NETSEC"
     fi
+    if grep -q '^IPV4-IHL-PASS$' <<<"$NETSEC" && grep -q '^IPV4-TRIM-PASS$' <<<"$NETSEC"; then
+        pass "virt: IPv4 validates IHL before checksum and trims link padding"
+    else
+        fail "virt: IPv4 ingress length checks did not pass -- $NETSEC"
+    fi
     if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
         pass "virt: descending one-byte TCP segments hit the packet-count limit"
     else
@@ -5270,7 +5275,7 @@ vrefute "usb: the adapter takes no default route"   "default route via 10.0.3.2"
 # patch. The same watcher covers GENET (Pi 4) and GEM (PolarFire), whose
 # drivers already kept nif.link from their PHYs.
 cp "$VSD" "$BUILD/$PLAT-hotplug-sd.img"
-VHPOUT="$(python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hotplug-sd.img" <<'PYEOF'
+python3 - "$QEMU" "$BUILD/$PLAT-kernel.img" "$VIRTARGS" "$BUILD/$PLAT-hotplug-sd.img" <<'PYEOF' > "$BUILD/$PLAT-hotplug.txt"
 import subprocess, socket, time, json, os, sys, threading
 qemu, img, extra, sd = sys.argv[1:5]
 PORT = int(os.environ["QMPBASE"]) + 16   # per-run base: two harnesses on one host must not share QEMU's QMP sockets
@@ -5315,7 +5320,7 @@ finally:
     p.kill()
 sys.stdout.write(buf.decode(errors="replace").replace("\r", ""))
 PYEOF
-)"
+VHPOUT="$(cat "$BUILD/$PLAT-hotplug.txt")"
 if ! grep -q '^VHP-ADDRESS-AT-BOOT$' <<<"$VHPOUT"; then
     fail "virt: hot plug: ether0 got no address at boot, so the link could not be pulled"
 else

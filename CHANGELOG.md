@@ -194,10 +194,11 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
 - **Voice exports require keyring authentication and expose audio only.** The
   original `voice/listen` script anonymously exported all of `/dev`, allowing
   a network peer to inject input and operate control devices. It now constructs
-  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners,
-  dialers, and loopback tests no longer pass `-A`. There is no anonymous mode in
-  the shipped voice scripts. Provision a signer and peer auth information with
-  `auth/createsignerkey` and `getauthinfo` before using voice on a fresh node.
+  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners
+  and dialers explicitly select their keyring. There is no anonymous remote
+  mode in the shipped voice scripts; acceptance tests use a process-local 9P
+  pipe and open no listener. Provision a signer and peer auth information with
+  `auth/createsignerkey` and `auth/mkauthinfo` before using voice on a fresh node.
 - **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
   `killtree`, which kills N's group and every descendant group. The exec tool
   uses it on deadlines and output caps, so a confined command cannot survive by
@@ -209,11 +210,14 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
 - **Namespace checks match the host filesystem and actual parent authority.**
   Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
   bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
-  aliases are rejected. A parent root grant no longer authorizes a child path
-  the parent cannot see. Confined `NODEVS` processes cannot follow host symlinks
+  and `/tool.*` aliases are rejected. A parent root grant no longer authorizes
+  a child path the parent cannot see, and `/usr` grants mask both keyring and
+  secstore credentials. Confined `NODEVS` processes cannot follow host symlinks
   out of a granted tree.
-- **mc9p responses are private to the requesting fid.** One client can no
-  longer read or replace another client's endpoint response.
+- **mc9p responses and filesystem authority are scoped.** One client can no
+  longer read or replace another client's endpoint response. The `fs` domain
+  requires a non-root `-r` directory, rejects requests outside it, and applies
+  `NODEVS` so host symlinks cannot escape it.
 
 ## [0.9.0] - 2026-10-29
 

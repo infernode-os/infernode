@@ -455,35 +455,49 @@ ipiput4(Fs *f, Ipifc *ifc, Block *bp)
 	}
 
 	h = (Ip4hdr*)(bp->rp);
+	hl = (h->vihl&0xF)<<2;
+	olen = nhgets(h->length);
 
-	/* dump anything that whose header doesn't checksum */
+	/*
+	 * Validate lengths before checksuming or moving headers.  ipcsum derives
+	 * its read length from the packet's IHL nibble, so calling it first lets a
+	 * short frame make the checksum loop read bytes that were never received.
+	 */
+	if(hl < IP4HDR || hl > blocklen(bp) || olen < hl || olen > blocklen(bp)) {
+		ip->stats[InHdrErrors]++;
+		netlog(f, Logip, "ip: %V bad length header %d packet %d received %d\n",
+			h->src, hl, olen, blocklen(bp));
+		freeblist(bp);
+		return;
+	}
+
+	/* The checksum covers the declared header, now known to be present. */
 	if((bp->flag & Bipck) == 0 && ipcsum(&h->vihl)) {
 		ip->stats[InHdrErrors]++;
 		netlog(f, Logip, "ip: checksum error %V\n", h->src);
 		freeblist(bp);
 		return;
 	}
+	/* No protocol or reassembly path may see link-layer padding. */
+	if(olen < blocklen(bp)) {
+		bp = trimblock(bp, 0, olen);
+		if(bp == nil)
+			return;
+		h = (Ip4hdr*)bp->rp;
+	}
 	v4tov6(v6dst, h->dst);
 	notforme = ipforme(f, v6dst) == 0;
 
-	/* Check header length and version */
-	if((h->vihl&0x0F) != IP_HLEN4) {
-		hl = (h->vihl&0xF)<<2;
-		if(hl < (IP_HLEN4<<2)) {
-			ip->stats[InHdrErrors]++;
-			netlog(f, Logip, "ip: %V bad hivl %ux\n", h->src, h->vihl);
-			freeblist(bp);
-			return;
-		}
+	/* Strip options only after their bytes and total length are checked. */
+	if(hl != IP4HDR) {
 	  /* If this is not routed strip off the options */
 		if(notforme == 0) {
-			olen = nhgets(h->length);
-			dp = bp->rp + (hl - (IP_HLEN4<<2));
-			memmove(dp, h, IP_HLEN4<<2);
+			dp = bp->rp + (hl - IP4HDR);
+			memmove(dp, h, IP4HDR);
 			bp->rp = dp;
 			h = (Ip4hdr*)(bp->rp);
 			h->vihl = (IP_VER4|IP_HLEN4);
-			hnputs(h->length, olen-hl+(IP_HLEN4<<2));
+			hnputs(h->length, olen-hl+IP4HDR);
 		}
 	}
 

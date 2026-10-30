@@ -33,9 +33,9 @@ def eth(payload, etype=0x0800, dst=GUEST_MAC, src=PEER_MAC):
 
 
 def ipv4(payload, proto, ident, frag=0, src=PEER_IP, dst=GUEST_IP,
-         claimed=None):
+         claimed=None, vihl=0x45):
     total = 20 + len(payload) if claimed is None else claimed
-    hdr = struct.pack("!BBHHHBBH4s4s", 0x45, 0, total, ident, frag,
+    hdr = struct.pack("!BBHHHBBH4s4s", vihl, 0, total, ident, frag,
                       64, proto, 0, src, dst)
     hdr = hdr[:10] + struct.pack("!H", checksum(hdr)) + hdr[12:]
     return hdr + payload
@@ -225,6 +225,7 @@ def icmp_regression(h):
     print("FRAGMENT-VALID-PASS", flush=True)
 
     failures = h.ipstat("ReasmFails")
+    header_errors = h.ipstat("InHdrErrors")
 
     # Same bytes, but the last fragment claims another 1000 bytes. It must be
     # rejected before the reassembly queue can extend a Block to that claim.
@@ -238,9 +239,41 @@ def icmp_regression(h):
         if f[23] == 1 and f[34] == 0 and struct.unpack("!H", f[38:40])[0] == 0x1234:
             total = struct.unpack("!H", f[16:18])[0]
             raise RuntimeError("lying fragment produced a %d-byte ICMP reply" % total)
-    if h.ipstat("ReasmFails") <= failures:
-        raise RuntimeError("lying fragment was not rejected by IPv4 reassembly")
+    # The hardened ingress path rejects a total length larger than the
+    # received frame before reassembly.  Keep accepting ReasmFails as well so
+    # this regression remains valid if the check is later moved into the
+    # reassembler; the security property is rejection before upper layers.
+    if (h.ipstat("ReasmFails") <= failures and
+            h.ipstat("InHdrErrors") <= header_errors):
+        raise RuntimeError("lying fragment was not rejected at IPv4 ingress")
     print("FRAGMENT-LIE-PASS", flush=True)
+
+    # ipcsum derives its read length from IHL. A 60-byte IHL in a received
+    # frame whose IP block is shorter must be rejected before checksuming.
+    errors = h.ipstat("InHdrErrors")
+    h.send(eth(ipv4(icmp, 1, 0x4102, claimed=20 + len(icmp), vihl=0x4F)))
+    time.sleep(0.5)
+    if h.ipstat("InHdrErrors") <= errors:
+        raise RuntimeError("oversized IPv4 IHL was not rejected at ingress")
+    print("IPV4-IHL-PASS", flush=True)
+
+    # Link-layer bytes beyond the declared IPv4 total are padding, not input
+    # to an upper-layer protocol.
+    padded = icmp + bytes(range(64))
+    h.send(eth(ipv4(padded, 1, 0x4103, claimed=20 + len(icmp))))
+    end = time.monotonic() + 2
+    while time.monotonic() < end:
+        f = h.recv(end)
+        if f is None or len(f) < 42 or f[12:14] != b"\x08\x00":
+            continue
+        if f[23] == 1 and f[34] == 0 and struct.unpack("!H", f[38:40])[0] == 0x1234:
+            total = struct.unpack("!H", f[16:18])[0]
+            if total != 20 + len(icmp):
+                raise RuntimeError("IPv4 padding reached ICMP reply (%d bytes)" % total)
+            print("IPV4-TRIM-PASS", flush=True)
+            break
+    else:
+        raise RuntimeError("padded IPv4 control was not answered")
 
 
 def parse_tcp(frame, dport):

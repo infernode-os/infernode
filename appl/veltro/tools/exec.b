@@ -233,14 +233,14 @@ exec(args: string): string
 	# Buffered capacity 1: goroutines can complete their send and exit
 	# even after the alt has moved on, preventing indefinite blocking.
 	result := chan[1] of string;
-	pidch := chan[1] of int;
-	spawn runcommand(cmd, fds[1], result, pidch);
+	ctlch := chan[1] of ref Sys->FD;
+	spawn runcommand(cmd, fds[1], result, ctlch);
 	fds[1] = nil;
 
-	# The worker reports its process-group id before it execs anything, so a
-	# timed-out or over-long command can be killed as a unit below rather
-	# than abandoned to keep running after this tool returns (INFR-421).
-	workerpid := <-pidch;
+	# Hold an already-open capability to the worker's process control. The
+	# leader remains alive until cleanup, so descendants cannot make the group
+	# unnameable by letting the leader exit first.
+	groupctl := <-ctlch;
 
 	# Read output with timeout
 	output := "";
@@ -296,12 +296,20 @@ exec(args: string): string
 	# a killed group leader
 	# will not report back, so do not block waiting for it.
 	err := "";
+	finished := 0;
 	alt {
 	e := <-result =>
 		err = e;
+		finished = 1;
 	* =>
-		killtree(workerpid);
-		output += "\n... (command still running at return; process group terminated)";
+		;
+	}
+	killed := killtree(groupctl);
+	if(!finished) {
+		if(killed)
+			output += "\n... (command still running at return; process tree terminated)";
+		else
+			output += "\n... (command still running at return; process tree could not be terminated)";
 	}
 
 	if(output == "" && err != "")
@@ -318,13 +326,19 @@ exec(args: string): string
 
 # Run command in a separate thread with isolated fd group.
 # NEWFD prevents dup from affecting other goroutines' stdout/stderr.
-runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, pidch: chan of int)
+runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, ctlch: chan of ref Sys->FD)
 {
 	# Become a process-group leader so the parent can kill this command and
 	# everything it spawns as one unit if it overruns its deadline (INFR-421).
 	# NEWPGRP returns this proc's pid, which is also the new group id.
 	pid := sys->pctl(Sys->NEWPGRP, nil);
-	pidch <-= pid;
+	ctl := sys->open("#p/" + string pid + "/ctl", Sys->OWRITE);
+	ctlch <-= ctl;
+	if(ctl == nil) {
+		result <-= sys->sprint("cannot open private process control: %r");
+		return;
+	}
+	ctl = nil;
 
 	# Open this worker's wait channel before NODEVS. The shell normally reaches
 	# it through #p or ambient /prog; retaining this one FD lets the namespace
@@ -351,20 +365,22 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, pidch: chan 
 
 	err := sh->systemfd(nil, cmd, waitfd);
 	result <-= err;
+
+	# Keep the leader alive until the parent has reaped the whole tree. Drop
+	# every descriptor first so the output reader reaches EOF.
+	waitfd = nil;
+	sys->pctl(Sys->NEWFD, nil);
+	park := chan of int;
+	<-park;
 }
 
-# Kill a worker's descendant process-group tree.  The exec tool is exempt from the
-# NODEVS restriction that hides /prog from other tools, so it can write here;
-# best-effort, so if /prog is absent the command keeps the pre-fix behaviour.
-killtree(pid: int)
+# Kill through the ctl opened before the worker dropped device attachment.
+killtree(ctl: ref Sys->FD): int
 {
-	if(pid <= 0)
-		return;
-	ctl := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(ctl == nil)
-		return;
+		return 0;
 	msg := array of byte "killtree";
-	sys->write(ctl, msg, len msg);
+	return sys->write(ctl, msg, len msg) == len msg;
 }
 
 # Timer thread
@@ -451,8 +467,8 @@ convertquotes(s: string): string
 #   >{cmd}   — process substitution (write end)
 #
 # Note: Inferno does NOT support bash's $() syntax or bare backticks.
-# Semicolons and pipes are stripped to prevent command chaining that could
-# discover paths outside the agent's declared namespace (defense-in-depth).
+# Semicolons, pipes, and ampersands are stripped to prevent command chaining
+# or backgrounding outside the tool call's lifetime (defense-in-depth).
 sanitizecmd(s: string): string
 {
 	result := "";
@@ -497,9 +513,8 @@ sanitizecmd(s: string): string
 			continue;
 		}
 
-		# Strip semicolons and pipes — prevents command chaining
-		# that could discover namespace contents outside declared scope
-		if(c == ';' || c == '|') {
+		# Strip chaining and backgrounding operators.
+		if(c == ';' || c == '|' || c == '&') {
 			i++;
 			continue;
 		}

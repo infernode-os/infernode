@@ -11,8 +11,8 @@ All notable changes to InferNode are documented in this file.
   wm/bounce's arrows and dialog(2)'s error, warning, information and
   question icons are Tabler glyphs in the theme's colours, repainted on
   a theme switch; webget's help page shows them too. The 135 old icon
-  files left are removed, so `icons/` holds `icons/ui`, Tk's two
-  cursors, and the artwork that is not an icon: wm/coffee's cups and
+  files left are removed, so `icons/` holds `icons/ui`, Tk's cursors
+  (unchanged), and the artwork that is not an icon: wm/coffee's cups and
   backdrop and the picture `draw-example(2)` draws, all kept as they
   were. A glyph that cannot be drawn leaves a blank button, not a
   program that fails to start: `icon(2)` makes every Tk image it is

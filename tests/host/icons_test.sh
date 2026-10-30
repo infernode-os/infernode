@@ -11,8 +11,9 @@
 #  - every glyph a program names (icon->paint, tkimage, a (tkname,
 #    glyph, size) set, wm/dir's kinds, dialog(2)'s icons) is in it;
 #  - no source names a file under /icons that is not in the tree, and no
-#    Tk -bitmap, -file or -maskfile names one missing from /icons/tk (a
-#    missing one fails the widget naming it, and the program with it).
+#    Tk -bitmap, -file or -maskfile, nor a cursor ("cursor.sweep"), names
+#    one missing from /icons/tk (a missing bitmap fails the widget naming
+#    it, and the program with it; a missing cursor is not shown).
 #
 set -eu
 ROOT=${ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
@@ -60,11 +61,13 @@ done
 # Tk bitmap files: -bitmap, -file, -maskfile with a literal name, which Tk
 # looks for in /icons/tk unless it is a path
 gone=""
-for f in $(git grep -h -o -E -e '-(bitmap|file|maskfile) [A-Za-z0-9_.]+(\.bit|\.mask|\.[a-z]+)' -- 'appl/*.b' 2>/dev/null |
-	sed -E 's/^-[a-z]+ //' | sort -u); do
+# (cursors too: wm/sam names its own, setcursor("cursor.sweep"))
+for f in $( { git grep -h -o -E -e '-(bitmap|file|maskfile) [A-Za-z0-9_.]+(\.bit|\.mask|\.[a-z]+)' -- 'appl/*.b' |
+		sed -E 's/^-[a-z]+ //'
+	git grep -h -o -E -e '"cursor\.[a-z]+"' -- 'appl/*.b' | tr -d '"'; } 2>/dev/null | sort -u); do
 	[ -f "icons/tk/$f" ] || gone="$gone $f"
 done
-[ -z "$gone" ] && ok "every Tk bitmap a program names is in /icons/tk" \
+[ -z "$gone" ] && ok "every Tk bitmap and cursor a program names is in /icons/tk" \
 	|| bad "Tk bitmaps named and not there:$gone"
 
 exit $failed

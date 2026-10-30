@@ -1175,9 +1175,9 @@ walletcontrolpath(path: string): int
 
 ftreecontrolpath(path: string): int
 {
-	# ftree is a trusted user namespace browser. Its ctl file can bind and
-	# unmount in the user's GUI namespace, so it is never an agent grant.
-	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+	# ftree is a trusted user namespace browser. Its ctl (#sftree, mounted at
+	# /mnt/ftree) binds and unmounts in ftree's name space: never an agent grant.
+	return path == "/mnt/ftree" || prefix(path, "/mnt/ftree/");
 }
 
 tmpveltrointernalpath(path: string): int
@@ -1197,9 +1197,9 @@ appipccontrolpath(path: string): int
 	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
 		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
 		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
-		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
-		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
-		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+		path == "/mnt/shell" || prefix(path, "/mnt/shell/") ||
+		path == "/mnt/fractal" || prefix(path, "/mnt/fractal/") ||
+		path == "/mnt/man" || prefix(path, "/mnt/man/");
 }
 
 appipctoolpath(path: string, tools: list of string): int
@@ -1213,13 +1213,13 @@ appipctoolpath(path: string, tools: list of string): int
 	if((path == "/mnt/editor" || prefix(path, "/mnt/editor/")) &&
 	   inlist("editor", tools))
 		return 1;
-	if((path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/")) &&
+	if((path == "/mnt/shell" || prefix(path, "/mnt/shell/")) &&
 	   inlist("shell", tools))
 		return 1;
-	if((path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/")) &&
+	if((path == "/mnt/fractal" || prefix(path, "/mnt/fractal/")) &&
 	   inlist("fractal", tools))
 		return 1;
-	if((path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/")) &&
+	if((path == "/mnt/man" || prefix(path, "/mnt/man/")) &&
 	   inlist("man", tools))
 		return 1;
 	return 0;

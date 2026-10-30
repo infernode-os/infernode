@@ -75,7 +75,8 @@ fi
 	|| bad "b removed before the answer"
 [ ! -e "$D/tree/b" ] && ok "answered yes, Remove removes the folder whole" || bad "b still there"
 
-[ ! -d "$D/tree/c.txt" ] && ! view disallowed | grep -q 'a1.txt' && ok "-d refuses a bind" \
-	|| bad "-d bound: $(view disallowed | tr '\n' '|')"
+[ ! -d "$D/tree/c.txt" ] && ! view disallowed | grep -q 'a1.txt' && grep -q 'not allowed (ftree -d)' "$LOG" &&
+	ok "-d refuses a bind, and the ctl write says why" \
+	|| bad "-d bound, or did not say why: $(view disallowed | tr '\n' '|')"
 
 exit $failed

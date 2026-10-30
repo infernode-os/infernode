@@ -943,9 +943,9 @@ walletaccountcontrolpath(path: string): int
 
 ftreecontrolpath(path: string): int
 {
-	# ftree is a trusted user namespace browser. Its ctl file can bind and
-	# unmount in the user's GUI namespace, so it is never an agent grant.
-	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+	# ftree is a trusted user namespace browser. Its ctl (#sftree, mounted at
+	# /mnt/ftree) binds and unmounts in ftree's name space: never an agent grant.
+	return path == "/mnt/ftree" || prefix(path, "/mnt/ftree/");
 }
 
 tmpveltrointernalpath(path: string): int
@@ -970,14 +970,21 @@ mountcharon()
 }
 
 # Mount a server posted in #s (post9p(2)) for this invocation: the
-# editor's, for the editor tool.  None posted, no mount: the tool says
+# editor's, shell's, man's and fractals', for their tools.  None posted, no mount: the tool says
 # it is not running.
 mountposted(posted, mnt: string)
 {
-	fd := sys->open(posted, Sys->ORDWR);
-	if(fd == nil)
-		return;
 	ensuredir(mnt);
+	fd := sys->open(posted, Sys->ORDWR);
+	if(fd == nil) {
+		# nothing posted: the srv directory, empty, over the mount
+		# point, so the tool sees no files there (not whatever an
+		# earlier run left in the host's directory) and says so
+		(dir, nil) := str->splitstrr(posted, "/");
+		if(dir != nil)
+			sys->bind(dir[0:len dir - 1], mnt, Sys->MREPL);
+		return;
+	}
 	if(sys->mount(fd, nil, mnt, Sys->MREPL, nil) < 0)
 		sys->fprint(stderr, "tools9p: mount %s: %r\n", posted);
 }
@@ -992,9 +999,9 @@ appipccontrolpath(path: string): int
 	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
 		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
 		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
-		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
-		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
-		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+		path == "/mnt/shell" || prefix(path, "/mnt/shell/") ||
+		path == "/mnt/fractal" || prefix(path, "/mnt/fractal/") ||
+		path == "/mnt/man" || prefix(path, "/mnt/man/");
 }
 
 uiagentcontrolpath(path: string): int
@@ -1443,8 +1450,10 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 	# mount has to happen here, before NODEVS shuts device attachment off.
 	if(ti.name == "charon")
 		mountcharon();
-	if(ti.name == "editor")
-		mountposted("#seditor/fs", "/mnt/editor");
+	case ti.name {
+	"editor" or "shell" or "man" or "fractal" =>
+		mountposted("#s" + ti.name + "/fs", "/mnt/" + ti.name);
+	}
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
@@ -2100,11 +2109,11 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	"editor" =>
 		return addpath(paths, "/mnt/editor");
 	"shell" =>
-		return addpath(paths, "/tmp/veltro/shell");
+		return addpath(paths, "/mnt/shell");
 	"fractal" =>
-		return addpath(paths, "/tmp/veltro/fractal");
+		return addpath(paths, "/mnt/fractal");
 	"man" =>
-		return addpath(paths, "/tmp/veltro/man");
+		return addpath(paths, "/mnt/man");
 	"spawn" =>
 		# Each child's own model session, opened (/mnt/llm/new) before
 		# the child's namespace is narrowed; the child keeps only its

@@ -11,11 +11,13 @@ implement Shell;
 # /dev/consctl).  Usage and behaviour are wm/sh's; to them it adds
 # the theme's colours as Xenith's body takes them and the theme's
 # font (following a theme switch), a history of the lines sent, the
-# caret kept in sight of a soft keyboard, and the transcript in
-# /tmp/veltro/shell for Veltro's shell tool:
+# caret kept in sight of a soft keyboard, and the transcript served and
+# posted as #sshell/fs (appfs(2); tools9p mounts it at /mnt/shell for
+# Veltro's shell tool), read from the window as it is now:
 #
-#	/tmp/veltro/shell/body	the transcript up to outpoint
-#	/tmp/veltro/shell/input	what is typed and not yet read
+#	body	the transcript up to outpoint
+#	input	what is typed and not yet read
+#	event	a read waits for the next change ("changed")
 #
 # Keyboard, in cooked mode (in raw mode each key goes to the program):
 #	Enter	send the line	^D	end of file (sends what is typed)
@@ -67,6 +69,7 @@ include "sh.m";
 include "lucitheme.m";
 
 include "softkbd.m";
+include "appfs.m";
 	softkbd: Softkbd;
 
 Shell: module
@@ -92,7 +95,6 @@ MAXHIST:	con 100;	# lines kept for ^p and ^n
 
 Name:	con "Shell";
 SHFONT:	con "/fonts/combined/unicode.14.font";
-SHELL_DIR:	con "/tmp/veltro/shell";
 
 Rdreq: adt
 {
@@ -164,7 +166,6 @@ histpos := -1;
 c_bg, c_fg, c_hold, c_sel: string;
 
 lastcaret := "";
-statepending := 0;
 themepgrp := -1;
 
 badmod(p: string)
@@ -303,8 +304,8 @@ main(ctxt: ref Draw->Context, argv: list of string)
 	tpid := chan of int;
 	spawn themelistener(themech, tpid);
 	themepgrp = <-tpid;
-	statech := chan[1] of int;
-	initshelldirs();
+	appreqs := chan of ref Appfs->Req;
+	startfs(appreqs);
 
 	ioc := chan of (int, ref FileIO, ref FileIO, string, ref FileIO);
 	spawn newsh(ctxt, ioc, argv);
@@ -338,13 +339,12 @@ main(ctxt: ref Draw->Context, argv: list of string)
 		tkclient->wmctl(t, "retheme");
 		setcols(t);
 		cmd(t, "update");
-	<-statech =>
-		statepending = 0;
-		writeshellstate(t);
+	r := <-appreqs =>
+		shellrequest(t, r);
 	ecmd := <-edit =>
 		editor(t, ecmd);
 		sendinput(t);
-		statechanged(statech);
+		statechanged();
 
 	c := <-keys =>
 		char := c[1];
@@ -405,7 +405,7 @@ main(ctxt: ref Draw->Context, argv: list of string)
 		}
 		cmd(t, ".ft.t see insert;update");
 		reportcaret(t);
-		statechanged(statech);
+		statechanged();
 
 	c := <-but1 =>
 		button1 = (c == "pressed");
@@ -517,7 +517,7 @@ main(ctxt: ref Draw->Context, argv: list of string)
 		}
 		append(rdrpc);
 		sendinput(t);
-		statechanged(statech);
+		statechanged();
 
 	c := <-scroll =>
 		if(c[0] == 't'){
@@ -559,7 +559,7 @@ main(ctxt: ref Draw->Context, argv: list of string)
 			cmd(t, s);
 		}
 		reportcaret(t);
-		statechanged(statech);
+		statechanged();
 	}
 }
 
@@ -703,48 +703,46 @@ reportcaret(t: ref Tk->Toplevel)
 	softkbd->set_rect(o.x + x, o.y + y, w, h);
 }
 
-initshelldirs()
-{
-	mkdirq("/tmp/veltro");
-	mkdirq(SHELL_DIR);
-}
+appfs: Appfs;
+appfstether: ref Sys->FD;	# the files go with it (appfs(2))
 
-mkdirq(path: string)
+startfs(appreqs: chan of ref Appfs->Req)
 {
-	(ok, nil) := sys->stat(path);
-	if(ok < 0)
-		sys->create(path, Sys->OREAD, Sys->DMDIR | 8r755);
-}
-
-# The transcript changed: write it for Veltro half a second from now,
-# once however many changes come before then.
-statechanged(c: chan of int)
-{
-	if(statepending)
+	appfs = load Appfs Appfs->PATH;
+	if(appfs == nil || appfs->init() != nil) {
+		appfs = nil;
 		return;
-	statepending = 1;
-	spawn wakeup(c, 500);
+	}
+	err: string;
+	(nil, appfstether, err) = appfs->serve("shell", array[] of {"body", "input"}, appreqs);
+	if(err != nil) {
+		sys->fprint(sys->fildes(2), "wm/shell: serve: %s\n", err);
+		appfs = nil;
+	}
 }
 
-wakeup(c: chan of int, ms: int)
+# The transcript changed: a reader of event is told.
+statechanged()
 {
-	sys->sleep(ms);
-	c <-= 1;
+	if(appfs != nil)
+		appfs->event("changed");
 }
 
-writeshellstate(t: ref Tk->Toplevel)
+# The transcript as it is, read; nothing is written there.
+shellrequest(t: ref Tk->Toplevel, r: ref Appfs->Req)
 {
-	writestatefile(SHELL_DIR + "/body", tk->cmd(t, ".ft.t get 1.0 outpoint"));
-	writestatefile(SHELL_DIR + "/input", tk->cmd(t, ".ft.t get outpoint end"));
-}
-
-writestatefile(path, data: string)
-{
-	fd := sys->create(path, Sys->OWRITE, 8r644);
-	if(fd == nil)
+	if(r.data != nil) {
+		r.reply <-= "read-only";
 		return;
-	b := array of byte data;
-	sys->write(fd, b, len b);
+	}
+	case r.file {
+	"body" =>
+		r.reply <-= tk->cmd(t, ".ft.t get 1.0 outpoint");
+	"input" =>
+		r.reply <-= tk->cmd(t, ".ft.t get outpoint end");
+	* =>
+		r.reply <-= "";
+	}
 }
 
 # ---------- Plumbing ----------

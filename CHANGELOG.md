@@ -6,6 +6,21 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **wm/shell, wm/man, wm/fractals and wm/ftree serve their agent files;
+  none polls (#1019).** Each wrote state files under `/tmp/veltro/<app>`
+  on a timer and read commands from a file it truncated, every half
+  second (wm/shell wrote its transcript half a second after each
+  change, and wm/ftree also re-read its own name space every two
+  seconds). `appfs(2)`, a small library, serves a program's files and an
+  `event` file, posted as `#s<app>/fs`: a read is answered from what the
+  program shows at that moment, a command is done when its write
+  returns, and one refused (no such manual page, a bad fractal command,
+  a bind under `ftree -d`) is the write's error. The files go with the
+  program. tools9p mounts each at `/mnt/<app>` for its tool alone, and
+  binds an empty directory there when the program is not running, so
+  the tool says so whatever an earlier run left behind. The policy
+  lists name `/mnt/shell`, `/mnt/man`, `/mnt/fractal` and `/mnt/ftree`.
+  Nothing is left under `/tmp/veltro` for these programs.
 - **The editor tool drives wm/editor through its served files; nothing
   polls (#1019).** wm/editor kept a copy of its document in
   `/tmp/veltro/editor`, rewritten every half second, and read commands

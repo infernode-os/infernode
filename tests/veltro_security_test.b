@@ -637,7 +637,7 @@ tmpVeltroTrustedIpcNotGrantableWorker(result: chan of string)
 {
 	sys->pctl(Sys->FORKNS, nil);
 	caps := ref NsConstruct->Capabilities(
-		"read" :: nil, "/tmp/veltro/ftree" :: nil, nil, nil,
+		"read" :: nil, "/mnt/ftree" :: nil, nil, nil,
 		0 :: 1 :: 2 :: nil, nil, 0, 0, -1, nil
 	, nil);
 	err := nsconstruct->restrictns(caps);
@@ -2492,9 +2492,9 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/mnt/charon",
 		"/mnt/charon/ctl",
 		"/mnt/editor",
-		"/tmp/veltro/shell",
-		"/tmp/veltro/fractal",
-		"/tmp/veltro/man",
+		"/mnt/shell",
+		"/mnt/fractal",
+		"/mnt/man",
 	};
 
 	for(i := 0; i < len bad; i++) {

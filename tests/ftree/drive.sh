@@ -1,11 +1,11 @@
 #!/dis/sh.dis
 #
 # wm/ftree driven by keys, the pointer and its agent's ctl file
-# (/tmp/veltro/ftree/ctl), on the tree in $1 (made by
+# (#sftree/fs's ctl, mounted at /mnt/ftree), on the tree in $1 (made by
 # tests/host/ftree_test.sh, which checks what this prints and what it
 # leaves in the tree; not a test: the runner runs every script in
 # tests/inferno).  After each step it prints R, the step's name and
-# ftree's state file (/tmp/veltro/ftree/state) on one line, and V and
+# ftree's state file (/mnt/ftree/state) on one line, and V and
 # the step's name before its view file, a line at a time.
 #
 # The tree is a/ (a1.txt), b/ (b1.txt) and c.txt.  wm/wm puts the
@@ -16,19 +16,19 @@
 load std
 
 d=$1
-ctl=/tmp/veltro/ftree/ctl
+ctl=/mnt/ftree/ctl
 fn ptr { echo m $1 $2 $3 > /dev/pointer }
 fn click { ptr $1 $2 0; ptr $1 $2 1; ptr $1 $2 0; sleep 1 }
 fn key { unicode -t $1 > /dev/keyboard; sleep 1 }
-fn show { sleep 1; echo R $1 `{cat /tmp/veltro/ftree/state}; echo V $1; cat /tmp/veltro/ftree/view }
+fn show { sleep 1; echo R $1 `{cat /mnt/ftree/state}; echo V $1; cat /mnt/ftree/view }
 # the menu's item at y chosen (53 the first, 71, 89, 107), button 3
 # held from 100 43
 fn menu { ptr 100 43 0; ptr 100 43 4; sleep 1; ptr 130 $1 4; ptr 130 $1 0; sleep 2 }
-fn tell { echo $* > $ctl; sleep 2 }
+fn tell { echo $* > $ctl; sleep 1 }
 
-mkdir -p /tmp/veltro/ftree
 wm/ftree $d/tree &
 sleep 5
+mount -A '#sftree/fs' /mnt/ftree
 show start
 
 # the keys: c.txt clicked, Up to b, Right opens it
@@ -69,9 +69,10 @@ show removed
 # -d: bind refused
 kill Ftree >[2] /dev/null
 sleep 1
-rm -f $ctl
+unmount /mnt/ftree
 wm/ftree -d $d/tree &
 sleep 5
+mount -A '#sftree/fs' /mnt/ftree
 tell bind $d/tree/a $d/tree/c.txt
 show disallowed
 echo R done

@@ -514,18 +514,24 @@ setholding(t: ref Tk->Toplevel, hold: int)
 setcols(t: ref Tk->Toplevel)
 {
 	(fg, unfocused, hold) := ("#000000FF", "#666666FF", "#000099FF");
+	(selbg, selfg) := ("#005DBBFF", "#FFFFFFFF");
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme != nil){
 		th := lucitheme->gettheme();
 		(fg, unfocused, hold) = (col(th.text), col(th.editunfocused), col(th.edithold));
+		(selbg, selfg) = (col(th.accent), col(th.bg));
 	}
 	fgcol := fg;
 	if(holding)
 		fgcol = hold;
 	else if(!haskbdfocus)
 		fgcol = unfocused;
-	# the selection stays the theme's: its bg on its accent
 	cmd(t, ".ft.t configure -foreground "+fgcol);
+	# the selection the theme's, as Tk draws one: its bg on its
+	# accent.  Tk draws it with the sel tag, which keeps the colours
+	# it was made with (the first theme's) unless they are set.
+	cmd(t, ".ft.t configure -selectbackground "+selbg+" -selectforeground "+selfg);
+	cmd(t, ".ft.t tag configure sel -background "+selbg+" -foreground "+selfg);
 }
 
 col(v: int): string

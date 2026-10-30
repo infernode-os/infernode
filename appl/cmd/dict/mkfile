@@ -19,6 +19,14 @@ MODULES=\
 
 SYSMODULES=\
 	bufio.m\
+	acmewin.m\
+	arg.m\
+	draw.m\
+	libc.m\
+	math.m\
+	sh.m\
+	string.m\
+	sys.m\
 
 DISBIN=$ROOT/dis/dict
 

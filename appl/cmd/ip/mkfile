@@ -27,8 +27,15 @@ SYSMODULES=\
 	security.m\
 	sys.m\
 	wpakey.m\
+	daytime.m\
+	dhcp.m\
+	dial.m\
+	rand.m\
+	timers.m\
 
 DISBIN=$ROOT/dis/ip
+
+MODULES=
 
 <$ROOT/mkfiles/mkdis
 <$ROOT/mkfiles/mksubdirs

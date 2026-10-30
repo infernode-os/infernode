@@ -3,6 +3,7 @@ arch arch
 audio audio
 bench bench
 boot boot
+camera camera
 cap cap
 cmd cmd
 cons cons

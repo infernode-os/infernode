@@ -896,7 +896,7 @@ ethertxproc(void *a)
 {
 	Chan *out, *in;
 	Ether *e;
-	Block *b;
+	Block *b, * volatile held;
 	long o, no;
 	int nf, maxnf;
 
@@ -908,17 +908,32 @@ ethertxproc(void *a)
 		maxnf = 1;	/* a transfer is a frame */
 	if(e->family == Fncm && e->maxdgrams > 0 && e->maxdgrams < maxnf)
 		maxnf = e->maxdgrams;
+	held = nil;
 	if(waserror()){
 		print("%s: writer exits: %s\n", e->nif.name, up->env->errstr);
+		freeb(held);
 		etherunbind(e);
 		if(out != in)
 			cclose(out);
 		pexit("hangup", 1);
 	}
 	for(;;){
-		b = qbread(e->oq, Maxframe+18);
-		if(b == nil)
-			error(Ehungup);
+		/*
+		 * A frame that did not fit in the last transfer goes first
+		 * in this one. It was dropped, uncounted: a device's NTB
+		 * limit is its own (the Jetson's NCM gadget says 16384 out,
+		 * ten full frames, against a batch of sixteen), so a busy
+		 * queue lost a frame in every transfer, and TCP out over
+		 * NCM ran at a tenth of what came in (#958).
+		 */
+		if(held != nil){
+			b = held;
+			held = nil;
+		}else{
+			b = qbread(e->oq, Maxframe+18);
+			if(b == nil)
+				error(Ehungup);
+		}
 		o = 0;
 		nf = 0;
 		for(;;){
@@ -926,9 +941,16 @@ ethertxproc(void *a)
 				no = ncmwrap(e, b->rp, BLEN(b) > Maxframe ? Maxframe : BLEN(b), o, nf);
 			else
 				no = wrap(e, b->rp, BLEN(b), o);
+			if(no < 0){
+				if(nf > 0)
+					held = b;	/* full: send what is packed; this one next */
+				else{
+					freeb(b);	/* fits in no transfer at all */
+					e->nif.oerrs++;
+				}
+				break;
+			}
 			freeb(b);
-			if(no < 0)
-				break;	/* full: send what is packed */
 			o = no;
 			nf++;
 			if(nf >= maxnf)
@@ -937,11 +959,6 @@ ethertxproc(void *a)
 			if(b == nil)
 				break;
 		}
-		/*
-		 * The frame that did not fit is dropped, as it always has
-		 * been here; the batch is sized so that only an oversized
-		 * NTB limit from a device makes that happen.
-		 */
 		if(e->family == Fncm && nf > 0)
 			o = ncmfinish(e, o, nf);
 		if(o > 0){

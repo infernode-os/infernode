@@ -232,6 +232,7 @@ TARG=\
 
 
 MODULES=\
+	$ROOT/appl/veltro/veltrosrv.m\
 
 SYSMODULES=\
 	arg.m\
@@ -298,6 +299,37 @@ SYSMODULES=\
 	wmclient.m\
 	wmlib.m\
 	workdir.m\
+	agentlib.m\
+	att.m\
+	attrdb.m\
+	audit.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	bthci.m\
+	btmock.m\
+	hid.m\
+	imap.m\
+	json.m\
+	l2cap.m\
+	lock.m\
+	mailparse.m\
+	mermaid.m\
+	nsconstruct.m\
+	pdf.m\
+	rfcomm.m\
+	rlayout.m\
+	sdp.m\
+	secstore.m\
+	smp.m\
+	softkbd.m\
+	srv.m\
+	tls.m\
+	twofa.m\
+	twofaslot.m\
+	viewport.m\
+	webclient.m\
+	wmsrv.m\
 
 DISBIN=$ROOT/dis
 

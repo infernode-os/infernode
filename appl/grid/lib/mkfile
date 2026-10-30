@@ -5,6 +5,8 @@ TARG=announce.dis
 MODULES=\
 
 SYSMODULES=\
+	grid/announce.m\
+	sys.m\
 
 DISBIN=$ROOT/dis/grid/lib
 

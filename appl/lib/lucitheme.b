@@ -123,6 +123,8 @@ setkey(th: ref Theme, key: string, val: int)
 	"editstattext" => th.editstattext = val;
 	"editscroll" =>	th.editscroll = val;
 	"editthumb" =>	th.editthumb = val;
+	"editunfocused" => th.editunfocused = val;
+	"edithold" =>	th.edithold = val;
 	"diagbg" =>	th.diagbg = val;
 	"diagnode" =>	th.diagnode = val;
 	"diagborder" =>	th.diagborder = val;
@@ -211,7 +213,11 @@ brimstone(): ref Theme
 		int 16r89DCEBFF,	# pie7
 
 		# Window chrome (trailing field — see lucitheme.m)
-		int 16r1A1A1AFF		# windowborder — subdued frame around wmclient apps
+		int 16r1A1A1AFF,	# windowborder — subdued frame around wmclient apps
+
+		# A shell window's text (trailing fields — see lucitheme.m)
+		int 16r8A8A8AFF,	# editunfocused
+		int 16r6FA3E0FF		# edithold
 	);
 }
 
@@ -235,10 +241,17 @@ loadtheme(name: string): ref Theme
 	if(data == nil)
 		return nil;
 	th := brimstone();
+	# not Brimstone's when the theme does not set them: a light
+	# theme's shell text would be a dark theme's grey
+	th.editunfocused = th.edithold = 0;	# no colour parse() gives
 	for(l := parse(data); l != nil; l = tl l){
 		(key, val) := hd l;
 		setkey(th, key, val);
 	}
+	if(th.editunfocused == 0)
+		th.editunfocused = th.text2;
+	if(th.edithold == 0)
+		th.edithold = th.accent;
 	return th;
 }
 

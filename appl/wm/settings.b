@@ -4,16 +4,17 @@ implement Settings;
 # settings - System preferences for Lucifer
 #
 # A graphical settings app that provides a non-technical interface
-# for configuring: theme, tool budget, active tools, namespace
-# paths, agent prompts, and startup profile.
+# for configuring: the LLM service, active tools, tool budget,
+# namespace paths, agent prompts, startup profile, messaging,
+# security, auditing, snapshots, web pages, and theme.
 #
 # Configuration reads/writes:
-#   Theme:        /lib/lucifer/theme/current (persistent, live: lucitheme)
 #   Tool budget:  /tool/budget + /tool/ctl budget-add/budget-remove (live, ephemeral)
 #   Active tools: /tool/tools + /tool/ctl add/remove (live, ephemeral)
 #   Paths:        /tool/paths + /tool/ctl bindpath/unbindpath (live, ephemeral)
 #   Prompts:      /lib/veltro/meta.txt, /lib/veltro/agents/task.txt (persistent)
 #   Profile:      /lib/sh/profile (persistent, restart required)
+#   Theme:        /lib/lucifer/theme/current (persistent, live: lucitheme)
 #
 # Settings marked "restart required" flash a warning in the status bar.
 #
@@ -80,11 +81,11 @@ Runnable: module
 
 # ── Categories ─────────────────────────────────────────────────
 
-CatTheme, CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots, CatWeb: con iota;
+# What the system does first, how it looks last.
+CatLLM, CatTools, CatBudget, CatPaths, CatPrompts, CatProfile, CatMessaging, CatSecurity, CatAudit, CatSnapshots, CatWeb, CatTheme: con iota;
 NCATS: con 12;
 
 catnames := array[] of {
-	"Theme",
 	"LLM Service",
 	"Initial Active Tools",
 	"Delegatable Tools",
@@ -96,13 +97,13 @@ catnames := array[] of {
 	"Auditing",
 	"Snapshots",
 	"Web Pages",
+	"Theme",
 };
 
 # Short aliases for -c <name>: tab-friendly identifiers a launcher can
 # pass to open Settings directly on a given panel. Index parallels
-# CatTheme..CatProfile. See INFR-100.
+# the categories above. See INFR-100.
 catshortnames := array[] of {
-	"theme",
 	"llm",
 	"tools",
 	"delegated",
@@ -114,6 +115,7 @@ catshortnames := array[] of {
 	"audit",
 	"snapshots",
 	"web",
+	"theme",
 };
 
 # ── State ──────────────────────────────────────────────────────
@@ -223,7 +225,7 @@ init(ctxt: ref Draw->Context, argv: list of string)
 	# Parse -c <name> to choose initial category. Quietly ignore unknown
 	# flags / arguments — launchers should not crash settings if a future
 	# build of lucibridge passes options this version doesn't understand.
-	startcat := CatTheme;
+	startcat := CatLLM;
 	if(argv != nil)
 		argv = tl argv;	# drop progname
 	while(argv != nil) {

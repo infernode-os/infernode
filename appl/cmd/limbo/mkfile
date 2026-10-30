@@ -29,6 +29,7 @@ SYSMODULES= \
 	math.m\
 	string.m\
 	sys.m\
+	workdir.m\
 
 DISBIN=$ROOT/dis
 

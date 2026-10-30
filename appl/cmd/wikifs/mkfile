@@ -11,6 +11,12 @@ SYSMODULES=\
 	bufio.m\
 	draw.m\
 	daytime.m\
+	arg.m\
+	sh.m\
+	string.m\
+	styx.m\
+	styxservers.m\
+	sys.m\
 
 DISBIN=$ROOT/dis
 

@@ -1575,6 +1575,43 @@ waitcomp(text: string, ms: int): int
 	return 0;
 }
 
+# The control fs takes back the slots of paths that went away once it
+# has handed out enough, so out/ stays bounded under a service that
+# names files as it goes (alert-0001, alert-0002, ...).  A fid still
+# open on a path that went away must never read the file now in its
+# old slot.
+testControlFSPassReclaim(t: ref T)
+{
+	if(copyfile("/dis/tests/matrix_svcfixture.dis", SVCFIX) < 0)
+		t.fatal(sys->sprint("cannot install %s: %r", SVCFIX));
+	t.assertnil(svcmode("reclaim"), "service composition");
+	out := "/mnt/matrix/modules/mtest-svc/out";
+	t.assert(waitfor(out, 3000), "out/ served");
+
+	createstr(SVCOUT + "/stale", "AAAA\n");
+	fd := sys->open(out + "/stale", Sys->OREAD);
+	if(fd == nil)
+		t.fatal(sys->sprint("cannot open out/stale: %r"));
+	sys->remove(SVCOUT + "/stale");
+	for(i := 0; i < 300; i++)
+		createstr(sys->sprint("%s/f%03d", SVCOUT, i), "BBBB\n");
+	n := len lsnames(out);
+	t.assert(n >= 300, sys->sprint("out/ lists the new files (%d)", n));
+	buf := array[16] of byte;
+	r := sys->pread(fd, buf, len buf, big 0);
+	got := "";
+	if(r > 0)
+		got = string buf[0:r];
+	t.assert(r < 0, "a fid on a path gone away reads nothing (read " + got + ")");
+	t.assertseq(readfile(out + "/f299"), "BBBB\n", "files served after the sweep");
+
+	for(i = 0; i < 300; i++)
+		sys->remove(sys->sprint("%s/f%03d", SVCOUT, i));
+	t.assert(writestr("/mnt/matrix/ctl", "load sysmon") > 0, "restore accepted");
+	t.assert(waitfor("/mnt/matrix/modules/mem-gauge", 3000), "shipped composition restored");
+	sys->remove(SVCFIX);
+}
+
 testControlFSCtlVerbs(t: ref T)
 {
 	t.assert(writestr("/mnt/matrix/ctl", "bogus-verb") < 0, "bad ctl verb rejected");
@@ -1701,6 +1738,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSReload", testControlFSReload);
 		run("ControlFSCompositionWrite", testControlFSCompositionWrite);
 		run("ControlFSServiceLifecycle", testControlFSServiceLifecycle);
+		run("ControlFSPassReclaim", testControlFSPassReclaim);
 		run("ControlFSAlertE2E", testControlFSAlertE2E);
 		run("ControlFSWatch", testControlFSWatch);
 		run("ControlFSWatchCooldown", testControlFSWatchCooldown);

@@ -55,6 +55,10 @@ include "lucitheme.m";
 include "readdir.m";
 	readdir: Readdir;
 
+include "hash.m";
+	hash: Hash;
+	HashTable: import hash;
+
 include "matrix.m";
 
 include "matrixtk.m";
@@ -74,7 +78,8 @@ APPTICK_MS: con 100;	# how often an app region's window is re-copied into the fr
 # ── 9P qid space ───────────────────────────────────────────
 #
 # 64-bit qid path: bits 0..7 node type; 8..19 module slot (4096);
-# 20..43 passthrough slot (16M).  Module slots are append-only and
+# 20..43 passthrough slot (16M); 44..62 the passthrough slot's
+# generation.  Module slots are append-only and
 # never renumbered (mail9p idiom), so a fid opened before a
 # composition reload keeps resolving to the same module afterwards.
 
@@ -90,7 +95,8 @@ Qmodmount:	con 19;
 Qmodout:	con 20;	# modules/<name>/out/ (service modules only)
 
 # Passthrough node backed by a real file or directory; the real
-# path lives in passtab (slot packed into bits 20..43).
+# path lives in passtab (slot packed into bits 20..43, its generation
+# into 44..62).
 Qpass:	con 32;
 
 LIBCOMPS: con "/lib/matrix/compositions";
@@ -112,15 +118,29 @@ ModSlot: adt
 modslots: array of ref ModSlot;
 nmodslots: int;
 
-# Passthrough registry: synthetic qid → real path.  Append-only for
-# the server lifetime; parentq lets ".." walk back out.
+# Passthrough registry: synthetic qid -> real path; parentq lets ".."
+# walk back out.  A path keeps its slot, and so its qid, while it
+# exists.  It grew by every path ever walked or listed (a service
+# writing alert-0001, alert-0002, ... for months), each lookup a scan
+# of all of them: now paths are found by hash, and when the table
+# passes a mark the slots of paths that are gone are taken back.  A
+# taken-back slot's generation moves on, so a fid still on the old
+# path finds it gone rather than finding the new one.  The navigator
+# proc alone writes the table; a slot reused gets a new PassEnt, so a
+# reader holding the old one sees it consistent.
 PassEnt: adt
 {
 	rpath:	string;
 	parentq:	big;
+	gen:	int;
 };
 passtab: array of ref PassEnt;
-npass: int;
+passgen: array of int;	# each slot's current generation
+npass: int;		# slots ever used
+passfree: list of int;	# slots taken back
+passidx: ref HashTable;	# rpath -> slot
+passsweep := 256;	# sweep for gone paths when this many are in use
+passlive := 0;
 
 # notifications file: bounded in-memory ring appended by watch-rule
 # notify actions (and anything else runtime-worthy).
@@ -429,6 +449,9 @@ start9p()
 		readdir = load Readdir Readdir->PATH;
 	if(readdir == nil)
 		nomod(Readdir->PATH);
+	hash = load Hash Hash->PATH;
+	if(hash == nil)
+		nomod(Hash->PATH);
 
 	fds := array[2] of ref Sys->FD;
 	if(sys->pipe(fds) < 0) {
@@ -540,12 +563,12 @@ Serve:
 			Qpass =>
 				# Raw byte passthrough: .dis binaries and live service
 				# outputs must not round-trip through string.
-				i := PASSIDX(c.path);
-				if(i < 0 || i >= npass) {
+				pe := passent(c.path);
+				if(pe == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
 				}
-				fd := sys->open(passtab[i].rpath, Sys->OREAD);
+				fd := sys->open(pe.rpath, Sys->OREAD);
 				if(fd == nil) {
 					srv.reply(ref Rmsg.Error(m.tag, Enotfound));
 					break;
@@ -833,6 +856,29 @@ MODSLOT(path: big): int
 	return (int (path >> 8)) & 16rFFF;
 }
 
+PASSGEN(path: big): int
+{
+	return int ((path >> 44) & big 16r7FFFF);
+}
+
+PASSQ(idx: int): big
+{
+	return QPATH(Qpass, 0, idx) | (big (passgen[idx] & 16r7FFFF) << 44);
+}
+
+# The live entry a passthrough qid names, or nil if its slot was taken
+# back (its path went away) since the qid was handed out.
+passent(path: big): ref PassEnt
+{
+	i := PASSIDX(path);
+	if(i < 0 || i >= npass)
+		return nil;
+	e := passtab[i];
+	if(e == nil || (e.gen & 16r7FFFF) != PASSGEN(path))
+		return nil;
+	return e;
+}
+
 PASSIDX(path: big): int
 {
 	return int ((path >> 20) & big 16rFFFFFF);
@@ -968,16 +1014,53 @@ modstatus(name, mtype: string): string
 
 passfor(parentq: big, rpath: string): int
 {
-	for(i := 0; i < npass; i++)
-		if(passtab[i].rpath == rpath)
-			return i;
-	if(passtab == nil || npass == len passtab) {
-		grown := array[npass + 32] of ref PassEnt;
-		grown[0:] = passtab[0:npass];
-		passtab = grown;
+	if(passidx == nil)
+		passidx = hash->new(1024);
+	if((hv := passidx.find(rpath)) != nil)
+		return hv.i;
+	if(passfree == nil && passlive >= passsweep) {
+		passreclaim();
+		passsweep = 2 * passlive;
+		if(passsweep < 256)
+			passsweep = 256;
 	}
-	passtab[npass] = ref PassEnt(rpath, parentq);
-	return npass++;
+	i: int;
+	if(passfree != nil) {
+		i = hd passfree;
+		passfree = tl passfree;
+	} else {
+		if(passtab == nil || npass == len passtab) {
+			grown := array[npass + 32] of ref PassEnt;
+			grown[0:] = passtab[0:npass];
+			passtab = grown;
+			g := array[len grown] of {* => 0};
+			g[0:] = passgen[0:npass];
+			passgen = g;
+		}
+		i = npass++;
+	}
+	passtab[i] = ref PassEnt(rpath, parentq, passgen[i]);
+	passidx.insert(rpath, Hash->HashVal(i, 0.0, nil));
+	passlive++;
+	return i;
+}
+
+# Take back the slots of paths that no longer exist.
+passreclaim()
+{
+	for(i := 0; i < npass; i++) {
+		e := passtab[i];
+		if(e == nil)
+			continue;
+		(ok, nil) := sys->stat(e.rpath);
+		if(ok >= 0)
+			continue;
+		passidx.delete(e.rpath);
+		passtab[i] = nil;
+		passgen[i]++;
+		passfree = i :: passfree;
+		passlive--;
+	}
 }
 
 # Real directory behind a passthrough-capable dir qid, or nil.
@@ -996,10 +1079,10 @@ realdirof(path: big): string
 			return nil;
 		return OUTBASE + "/" + ms.name;
 	Qpass =>
-		i := PASSIDX(path);
-		if(i < 0 || i >= npass)
+		pe := passent(path);
+		if(pe == nil)
 			return nil;
-		return passtab[i].rpath;
+		return pe.rpath;
 	}
 	return nil;
 }
@@ -1144,10 +1227,10 @@ dirgen(p: big): (ref Sys->Dir, string)
 			return (nil, Enotfound);
 		return (dir(Qid(p, vers, Sys->QTDIR), "out", big 0, 8r555), nil);
 	Qpass =>
-		i := PASSIDX(p);
-		if(i < 0 || i >= npass)
+		pe := passent(p);
+		if(pe == nil)
 			return (nil, Enotfound);
-		(ok, sd) := sys->stat(passtab[i].rpath);
+		(ok, sd) := sys->stat(pe.rpath);
 		if(ok < 0)
 			return (nil, Enotfound);
 		d := ref sys->zerodir;
@@ -1192,7 +1275,7 @@ replypassdir(n: ref Navop.Readdir, dirq: big, rpath: string)
 	count := n.count;
 	for(; i < nent && count > 0; i++) {
 		idx := passfor(dirq, rpath + "/" + entries[i].name);
-		n.reply <-= dirgen(QPATH(Qpass, 0, idx));
+		n.reply <-= dirgen(PASSQ(idx));
 		count--;
 	}
 	n.reply <-= (nil, nil);
@@ -1298,12 +1381,12 @@ matrixnavigator(navops: chan of ref Navop)
 					Qmodout =>
 						n.path = QPATH(Qmoddirent, MODSLOT(n.path), 0);
 					Qpass =>
-						i := PASSIDX(n.path);
-						if(i < 0 || i >= npass) {
+						pe := passent(n.path);
+						if(pe == nil) {
 							n.reply <-= (nil, Enotfound);
 							continue;
 						}
-						n.path = passtab[i].parentq;
+						n.path = pe.parentq;
 					}
 					n.reply <-= dirgen(n.path);
 					continue;
@@ -1320,7 +1403,7 @@ matrixnavigator(navops: chan of ref Navop)
 					continue;
 				}
 				idx := passfor(n.path, child);
-				n.path = QPATH(Qpass, 0, idx);
+				n.path = PASSQ(idx);
 				n.reply <-= dirgen(n.path);
 
 			* =>

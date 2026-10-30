@@ -199,9 +199,12 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
 - **Inherited IP and mount boundary checks are current.** Negative IP device
   attaches are rejected before indexing a stack, conversation permissions and
   accepted-call ownership are enforced under lock, authentication fids must
-  belong to the mounted connection, IPv6 lifetime comparisons cannot wrap,
-  TCP backoff cannot roll over, and UDP transmits checksum negative zero as
-  `ffff` rather than the IPv4 “no checksum” value.
+  belong to the mounted connection, mount-cache data comes from immutable
+  kernel replies rather than mutable caller buffers, and completion cannot race
+  request recycling. Protocol conversation counts are capped to the qid field;
+  IPv6 lifetime comparisons cannot wrap, TCP backoff cannot roll over, and UDP
+  transmits checksum negative zero as `ffff` rather than the IPv4 “no checksum”
+  value.
 - **Inherited SSL, capability, and 9P identity checks are current.** Opening an
   existing SSL conversation now applies its owner/other mode correctly;
   presenting a capability as the wrong source user cannot consume it; legacy
@@ -213,8 +216,10 @@ containment gaps found in the 0.9.0 review. Upgrading is recommended for every
 - **Untrusted image data cannot cross decoder or geometry bounds.** Compressed
   image transforms stop at the supplied buffer, the LZ history starts zeroed
   instead of disclosing stack contents, and image allocation/load paths reject
-  rectangles whose size or offsets overflow. This ports the applicable 9front
-  draw hardening through `e252b1b9`, `c4f5b99c`, and `d7538ebb`.
+  rectangles whose size or offsets overflow. Window stacking checks every image
+  before dereferencing its layer, and zero or negative full-circle arcs take
+  bounded special paths. This ports the applicable 9front draw hardening through
+  `e252b1b9`, `c4f5b99c`, `d7538ebb`, `e8228856`, and `0fea8e09`.
 - **Certificate and X25519 inputs fail closed.** BER decoding stops at a fixed
   recursion depth instead of allowing a crafted certificate to exhaust the
   interpreter stack, and the common X25519 primitive rejects low-order peer

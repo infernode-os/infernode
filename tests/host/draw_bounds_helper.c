@@ -2,6 +2,22 @@
 #include "draw.h"
 #include "memdraw.h"
 
+static int arcdrew;
+Memimage *memopaque;
+
+Memimage* allocmemimage(Rectangle r, ulong chan) { (void)r; (void)chan; arcdrew = 1; return nil; }
+void freememimage(Memimage *i) { (void)i; }
+void memfillcolor(Memimage *i, ulong c) { (void)i; (void)c; }
+void memfillpoly(Memimage *i, Point *p, int n, int w, Memimage *s, Point sp, int op)
+{ (void)i; (void)p; (void)n; (void)w; (void)s; (void)sp; (void)op; }
+void memellipse(Memimage *i, Point p, int a, int b, int t, Memimage *s, Point sp, int op)
+{ (void)i; (void)p; (void)a; (void)b; (void)t; (void)s; (void)sp; (void)op; arcdrew = 1; }
+void memimagedraw(Memimage *d, Rectangle r, Memimage *s, Point sp, Memimage *m, Point mp, int op)
+{ (void)d; (void)r; (void)s; (void)sp; (void)m; (void)mp; (void)op; }
+void memdraw(Memimage *d, Rectangle r, Memimage *s, Point sp, Memimage *m, Point mp, int op)
+{ (void)d; (void)r; (void)s; (void)sp; (void)m; (void)mp; (void)op; }
+void icossin(int a, int *c, int *s) { (void)a; *c = *s = 0; }
+
 static int
 check(int ok, char *what)
 {
@@ -38,6 +54,9 @@ main(void)
 	icossin2((int)(1U<<31), (int)(1U<<31), &c, &s);
 	failed += check(c == -724 && s == -724,
 		"icossin2 overflows at the minimum integer coordinate");
+	arcdrew = 0;
+	memarc(nil, ZP, 1, 1, 0, nil, ZP, 0, 0, S);
+	failed += check(!arcdrew, "zero-angle arc attempted to draw");
 
 	memset(compressed, 0x5A, sizeof compressed);
 	compressed[0] = 0xFF;

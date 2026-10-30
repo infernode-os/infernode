@@ -33,6 +33,7 @@ ${CC:-cc} -I"$platform/include" -I"$ROOT/include" \
 	"$ROOT/libdraw/bytesperline.c" \
 	"$ROOT/libdraw/computil.c" \
 	"$ROOT/libmemdraw/icossin2.c" \
+	"$ROOT/libmemdraw/arc.c" \
 	"$ROOT/libmemdraw/cload.c" \
 	"$platform/lib/libdraw.a" \
 	"$platform/lib/lib9.a" \

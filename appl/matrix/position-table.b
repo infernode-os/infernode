@@ -135,19 +135,18 @@ drawscroll(dst: ref Image, total, visrows: int)
 	dst.draw(Rect((sx, ty), (r_g.max.x, ty + th)), dimcol, nil, (0, 0));
 }
 
+# What update() read, so it reports a change only when there is one
+# (it reported one every tick, and the runtime redrew the region).
+rsig := "";
+lastsig := "";
+
 update(): int
 {
-	oldlen := 0;
-	if(positions != nil)
-		oldlen = len positions;
+	rsig = "";
 	readpositions();
-	newlen := 0;
-	if(positions != nil)
-		newlen = len positions;
-	if(newlen != oldlen)
-		return 1;
-	# Could compare individual fields, but for POC, always redraw
-	return 1;
+	ch := rsig != lastsig;
+	lastsig = rsig;
+	return ch;
 }
 
 draw(dst: ref Image)
@@ -335,6 +334,7 @@ readposfile(path: string): ref Position
 		return nil;
 
 	line := string buf[0:n];
+	rsig += path + "\n" + line;
 	# Strip trailing newline
 	if(len line > 0 && line[len line - 1] == '\n')
 		line = line[0:len line - 1];

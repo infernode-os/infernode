@@ -107,6 +107,7 @@ resize(r: Rect) { r_g = r; }
 
 update(): int
 {
+	rsig = "";
 	ids := readsessions();
 	new := array[len ids] of SessView;
 	for(i := 0; i < len ids; i++) {
@@ -114,7 +115,9 @@ update(): int
 		new[i].watermark = readwatermark(ids[i]);
 	}
 	sessions = new;
-	return 1;
+	ch := rsig != lastsig;
+	lastsig = rsig;
+	return ch;
 }
 
 draw(dst: ref Image)
@@ -264,7 +267,19 @@ readwatermark(id: int): int
 	return max;
 }
 
+# What update() read, so it reports a change only when there is one
+# (it reported one every tick, and the runtime redrew the region).
+rsig := "";
+lastsig := "";
+
 readf(path: string): string
+{
+	s := readf0(path);
+	rsig += path + "\n" + s + "\n";
+	return s;
+}
+
+readf0(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)

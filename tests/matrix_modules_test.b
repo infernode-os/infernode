@@ -256,6 +256,60 @@ testSceneFixtureRestart(t: ref T)
 	svc->shutdown();
 }
 
+# update() says whether its region needs redrawing: these nine said
+# yes at every tick, so the runtime redrew them all every 2 s (and at
+# a video pane's 40 ms, any that shared its cadence).  Unchanged files,
+# no change; a file it reads rewritten, a change.
+testUpdateOnlyOnChange(t: ref T)
+{
+	D := FIX + "/upd";
+	mkdirp(D + "/cpu");
+	mkdirp(D + "/net");
+	mkdirp(D + "/proc");
+	mkdirp(D + "/mem");
+	mkdirp(D + "/positions");
+	mkdirp(D + "/portfolio/defense");
+	mkdirp(D + "/llm/1");
+	writefile(D + "/cpu/current", "5 1 3\n");
+	writefile(D + "/cpu/history", "1 5\n2 6\n");
+	writefile(D + "/net/current", "tcp 3 1 1\nudp 1 0 0\n");
+	writefile(D + "/net/history", "1 3 1 1\n");
+	writefile(D + "/proc/list", "  999991  999991  root  0:00.0  ready  3K Fake\n");
+	writefile(D + "/proc/cpurates", "999991 4\n");
+	writefile(D + "/mem/current", "1000 2000 3 4 5 6 7 main\n");
+	writefile(D + "/positions/BTC", "BTC 1 100 0\n");
+	writefile(D + "/risk", "0.02 0.03 1000 500 normal\n");
+	writefile(D + "/signals", "1 BTC long 0.9 breakout 1234\n");
+	writefile(D + "/llm/sessions", "1\n");
+	writefile(D + "/llm/1/current", "100 1000\n");
+	writefile(D + "/llm/1/history", "1 100 1000\n");
+	cases := array[] of {
+		("cpu-gauge", D, D + "/cpu/current", "9 2 3\n"),
+		("mem-gauge", D, D + "/mem/current", "1500 2000 3 4 5 6 7 main\n"),
+		("net-gauge", D, D + "/net/current", "tcp 4 2 1\nudp 1 0 0\n"),
+		("proc-list", D, D + "/proc/list", "  999992  999992  root  0:00.0  alt  3K Fake\n"),
+		("position-table", D, D + "/positions/BTC", "BTC 2 100 0\n"),
+		("risk-gauge", D + "/risk", D + "/risk", "0.05 0.03 1000 500 normal\n"),
+		("signal-feed", D + "/signals", D + "/signals", "2 ETH short 0.8 reversal 1240\n"),
+		("llm-context", D + "/llm", D + "/llm/1/current", "200 1000\n"),
+		("llm-sessions", D + "/llm", D + "/llm/1/history", "1 100 1000\n2 200 1000\n"),
+	};
+	r := Rect((0, 0), (300, 200));
+	for(i := 0; i < len cases; i++) {
+		(name, mount, touch, text) := cases[i];
+		(mod, err) := drive2(name, mount, r);
+		if(mod == nil) {
+			t.error(name + ": " + err);
+			continue;
+		}
+		t.asserteq(mod->update(), 0, name + ": nothing changed, no redraw");
+		writefile(touch, text);
+		t.asserteq(mod->update(), 1, name + ": a file it reads changed");
+		t.asserteq(mod->update(), 0, name + ": and then not again");
+		mod->shutdown();
+	}
+}
+
 init(nil: ref Draw->Context, args: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -280,6 +334,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("ProcListClickBelowRows", testProcListClickBelowRows);
 	run("HistoryPastOneRead", testHistoryPastOneRead);
 	run("SceneFixtureRestart", testSceneFixtureRestart);
+	run("UpdateOnlyOnChange", testUpdateOnlyOnChange);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

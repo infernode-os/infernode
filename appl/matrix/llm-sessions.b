@@ -116,6 +116,7 @@ resize(r: Rect) { r_g = r; }
 
 update(): int
 {
+	rsig = "";
 	ids := readsessions();
 	new := array[len ids] of Track;
 	tmin = 0;
@@ -131,7 +132,9 @@ update(): int
 		}
 	}
 	tracks = new;
-	return 1;
+	ch := rsig != lastsig;
+	lastsig = rsig;
+	return ch;
 }
 
 draw(dst: ref Image)
@@ -290,7 +293,19 @@ readhistory(id: int): Track
 	return t;
 }
 
+# What update() read, so it reports a change only when there is one
+# (it reported one every tick, and the runtime redrew the region).
+rsig := "";
+lastsig := "";
+
 readf(path: string): string
+{
+	s := readf0(path);
+	rsig += path + "\n" + s + "\n";
+	return s;
+}
+
+readf0(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)

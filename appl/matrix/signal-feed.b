@@ -134,10 +134,18 @@ drawscroll(dst: ref Image, total, visrows: int)
 	dst.draw(Rect((sx, ty), (r_g.max.x, ty + th)), dimcol, nil, (0, 0));
 }
 
+# What update() read, so it reports a change only when there is one
+# (it reported one every tick, and the runtime redrew the region).
+rsig := "";
+lastsig := "";
+
 update(): int
 {
+	rsig = "";
 	readsignals();
-	return 1;
+	ch := rsig != lastsig;
+	lastsig = rsig;
+	return ch;
 }
 
 draw(dst: ref Image)
@@ -273,6 +281,7 @@ readsignals()
 		content += string buf[0:n];
 	}
 	fd = nil;
+	rsig = content;
 	if(content == "") {
 		signals = nil;
 		return;

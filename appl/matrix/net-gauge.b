@@ -88,9 +88,12 @@ resize(r: Rect) { r_g = r; }
 
 update(): int
 {
+	rsig = "";
 	readcurrent();
 	readhistory();
-	return 1;
+	ch := rsig != lastsig;
+	lastsig = rsig;
+	return ch;
 }
 
 draw(dst: ref Image)
@@ -228,7 +231,19 @@ readhistory()
 	history = tmp[0:k];
 }
 
+# What update() read, so it reports a change only when there is one
+# (it reported one every tick, and the runtime redrew the region).
+rsig := "";
+lastsig := "";
+
 readfile(path: string): string
+{
+	s := readfile0(path);
+	rsig += path + "\n" + s + "\n";
+	return s;
+}
+
+readfile0(path: string): string
 {
 	fd := sys->open(path, Sys->OREAD);
 	if(fd == nil)

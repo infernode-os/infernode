@@ -8480,10 +8480,10 @@ imgsrc(d: ref Doc, n: int): string
 				continue;	# a source for another viewport (apple.com's hero, by width and height)
 			if(d.hasattr(c, "type") && !decodes(d.attr(c, "type")))
 				continue;
-			if((u := srcset(d.attr(c, "srcset"))) != nil)
+			if((u := srcset(d.attr(c, "srcset"), slotwidth(d.attr(c, "sizes")))) != nil)
 				return u;
 		}
-	if((u := srcset(d.attr(n, "srcset"))) != nil)
+	if((u := srcset(d.attr(n, "srcset"), slotwidth(d.attr(n, "sizes")))) != nil)
 		return u;
 	return d.attr(n, "src");
 }
@@ -8501,8 +8501,9 @@ decodes(t: string): int
 
 # The candidate of a srcset for a 1x display: among density
 # descriptors the one nearest 1x; among width descriptors the
-# narrowest that is at least a typical viewport wide, else the widest.
-srcset(s: string): string
+# narrowest that is at least slot wide (in device pixels), else the
+# widest.
+srcset(s: string, slot: int): string
 {
 	best := "";
 	bestd := 0.0;
@@ -8550,7 +8551,7 @@ srcset(s: string): string
 			}
 		}
 		if(w > 0) {
-			if(bestw == 0 || bestw < SRCSETW && w > bestw || w >= SRCSETW && w < bestw) {
+			if(bestw == 0 || bestw < slot && w > bestw || w >= slot && w < bestw) {
 				best = u;
 				bestw = w;
 			}
@@ -8572,7 +8573,215 @@ srcset(s: string): string
 	return best;
 }
 
-SRCSETW: con 1024;	# the width a w-descriptor candidate should cover
+SRCSETW: con 1024;	# the width a w-descriptor candidate should cover, at most
+
+# The width an image will be shown at, from its sizes attribute (HTML
+# §4.8.4.2.2): the length of the first entry whose media condition
+# holds, in device pixels; never more than SRCSETW, which is what was
+# taken before sizes was read (a thumbnail shown 150px wide took a
+# 1024px candidate, fetched and decoded at seven times its pixels).
+# Without sizes, or with one not understood (auto among them), SRCSETW.
+slotwidth(sizes: string): int
+{
+	if(trimsp(sizes) == "" || layenv == nil)
+		return SRCSETW;
+	toks := css->tokenize(sizes);
+	st := 0;
+	for(i := 0; i <= len toks; i++) {
+		if(i < len toks && toks[i].kind != Css->Kcomma)
+			continue;
+		part := trimtoks(toks[st:i]);
+		st = i + 1;
+		if(len part == 0)
+			continue;
+		cond := trimtoks(part[0:len part - 1]);
+		if(len cond > 0 && !style->mediamatch(cond, layenv))
+			continue;
+		v := sizelen(part[len part - 1]);
+		if(v < 0.0)
+			return SRCSETW;
+		w := int v;	# (int rounds)
+		if(w > SRCSETW)
+			w = SRCSETW;
+		if(w < 1)
+			w = 1;
+		return w;
+	}
+	return SRCSETW;
+}
+
+trimtoks(t: array of ref Css->Tok): array of ref Css->Tok
+{
+	a := 0;
+	b := len t;
+	while(a < b && t[a].kind == Css->Kws)
+		a++;
+	while(b > a && t[b-1].kind == Css->Kws)
+		b--;
+	return t[a:b];
+}
+
+# a sizes length in device pixels, or -1 for one not understood
+sizelen(t: ref Css->Tok): real
+{
+	case t.kind {
+	Css->Knumber =>
+		if(t.n == 0.0)
+			return 0.0;
+	Css->Kdimension =>
+		(ok, v) := unitlen(t.n, t.s);
+		if(ok && v >= 0.0)
+			return v;
+	Css->Kfunction =>
+		args := splitcomma(t.kids);
+		case t.s {
+		"calc" =>
+			if(len args == 1)
+				return sizecalc(args[0]);
+		"min" or "max" =>
+			r := -1.0;
+			for(k := 0; k < len args; k++) {
+				v := sizecalc(args[k]);
+				if(v < 0.0)
+					return -1.0;
+				if(r < 0.0 || t.s == "min" && v < r || t.s == "max" && v > r)
+					r = v;
+			}
+			return r;
+		"clamp" =>
+			if(len args == 3) {
+				lo := sizecalc(args[0]);
+				v := sizecalc(args[1]);
+				hi := sizecalc(args[2]);
+				if(lo < 0.0 || v < 0.0 || hi < 0.0)
+					return -1.0;
+				if(v > hi)
+					v = hi;
+				if(v < lo)
+					v = lo;
+				return v;
+			}
+		}
+	}
+	return -1.0;
+}
+
+splitcomma(t: array of ref Css->Tok): array of array of ref Css->Tok
+{
+	l: list of array of ref Css->Tok;
+	n := 0;
+	st := 0;
+	for(i := 0; i <= len t; i++)
+		if(i == len t || t[i].kind == Css->Kcomma) {
+			l = trimtoks(t[st:i]) :: l;
+			n++;
+			st = i + 1;
+		}
+	a := array[n] of array of ref Css->Tok;
+	for(; l != nil; l = tl l)
+		a[--n] = hd l;
+	return a;
+}
+
+# n of a unit, in device pixels: (understood, length)
+unitlen(n: real, u: string): (int, real)
+{
+	dpr := layenv.dpr;
+	if(dpr <= 0.0)
+		dpr = 1.0;
+	case u {
+	"px" =>	return (1, n * dpr);
+	"em" or "rem" =>	return (1, n * 16.0 * dpr);
+	"vw" =>	return (1, n * real layenv.width / 100.0);
+	"vh" =>	return (1, n * real layenv.height / 100.0);
+	"vmin" =>
+		m := layenv.width;
+		if(layenv.height < m)
+			m = layenv.height;
+		return (1, n * real m / 100.0);
+	"vmax" =>
+		m := layenv.width;
+		if(layenv.height > m)
+			m = layenv.height;
+		return (1, n * real m / 100.0);
+	}
+	return (0, 0.0);
+}
+
+# a calc() sum of products: lengths, numbers, + - * / and parentheses;
+# -1 for anything else (a percentage has no basis here)
+sizecalc(t: array of ref Css->Tok): real
+{
+	(v, i, ok) := sizesum(t, 0);
+	if(!ok || i != len t || v < 0.0)
+		return -1.0;
+	return v;
+}
+
+sizesum(t: array of ref Css->Tok, i: int): (real, int, int)
+{
+	(v, j, ok) := sizeprod(t, i);
+	while(ok) {
+		while(j < len t && t[j].kind == Css->Kws)
+			j++;
+		if(j >= len t || t[j].kind != Css->Kdelim || t[j].s != "+" && t[j].s != "-")
+			break;
+		op := t[j].s;
+		w: real;
+		(w, j, ok) = sizeprod(t, j + 1);
+		if(op == "+")
+			v += w;
+		else
+			v -= w;
+	}
+	return (v, j, ok);
+}
+
+sizeprod(t: array of ref Css->Tok, i: int): (real, int, int)
+{
+	(v, j, ok) := sizeterm(t, i);
+	while(ok) {
+		while(j < len t && t[j].kind == Css->Kws)
+			j++;
+		if(j >= len t || t[j].kind != Css->Kdelim || t[j].s != "*" && t[j].s != "/")
+			break;
+		op := t[j].s;
+		w: real;
+		(w, j, ok) = sizeterm(t, j + 1);
+		if(op == "*")
+			v *= w;
+		else if(w != 0.0)
+			v /= w;
+		else
+			ok = 0;
+	}
+	return (v, j, ok);
+}
+
+sizeterm(t: array of ref Css->Tok, i: int): (real, int, int)
+{
+	while(i < len t && t[i].kind == Css->Kws)
+		i++;
+	if(i >= len t)
+		return (0.0, i, 0);
+	x := t[i];
+	case x.kind {
+	Css->Knumber =>
+		return (x.n, i + 1, 1);
+	Css->Kblock =>
+		if(x.s == "(") {
+			(v, j, ok) := sizesum(x.kids, 0);
+			return (v, i + 1, ok && j == len x.kids);
+		}
+	Css->Kdimension =>
+		(ok, v) := unitlen(x.n, x.s);
+		return (v, i + 1, ok);
+	Css->Kfunction =>
+		v := sizelen(x);
+		return (v, i + 1, v >= 0.0);
+	}
+	return (0.0, i, 0);
+}
 
 isblank(c: int): int
 {

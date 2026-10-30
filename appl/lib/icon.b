@@ -22,6 +22,8 @@ include "bufio.m";
 include "imagefile.m";
 	readsvg: RImagefile;
 
+include "lucitheme.m";
+
 include "icon.m";
 
 display: ref Display;
@@ -96,19 +98,48 @@ tkimage(t: ref Tk->Toplevel, tkname, name: string, size, colour: int): string
 {
 	if(tk == nil)
 		tk = load Tk Tk->PATH;
-	(i, m, err) := paint(name, size, colour);
-	if(i == nil)
-		return err;
-	ty := tk->cmd(t, "image type " + tkname);
-	if(ty == nil || ty[0] == '!'){
+	# the image is made first, whatever happens to the glyph: a widget
+	# naming it is still made (blank) if the glyph cannot be drawn
+	if(!haveimage(t, tkname)){
 		e := tk->cmd(t, "image create bitmap " + tkname);
 		if(e != nil && e[0] == '!')
 			return "icon: " + e;
 	}
+	(i, m, err) := paint(name, size, colour);
+	if(i == nil)
+		return err;
 	e := tk->putimage(t, tkname, i, m);
 	if(e != nil && e[0] == '!')
 		return "icon: " + e;
 	return nil;
+}
+
+tkglyphs(t: ref Tk->Toplevel, set: array of (string, string, int)): string
+{
+	colour := int 16rCCCCCCFF;
+	lt := load Lucitheme Lucitheme->PATH;
+	if(lt != nil)
+		colour = lt->gettheme().text;
+	err: string;
+	for(i := 0; i < len set; i++){
+		(tkname, name, size) := set[i];
+		e := tkimage(t, tkname, name, size, colour);
+		if(e != nil && err == nil)
+			err = e;
+	}
+	return err;
+}
+
+# Whether t has an image of that name.  Asked of "image names", not
+# "image type", which on a name that is not there sets Tk's lasterror,
+# and programs (dialog(2), wm/edit) take that as having failed.
+haveimage(t: ref Tk->Toplevel, tkname: string): int
+{
+	(nil, l) := sys->tokenize(tk->cmd(t, "image names"), " ");
+	for(; l != nil; l = tl l)
+		if(hd l == tkname)
+			return 1;
+	return 0;
 }
 
 # A name is a file in DIR, not a path out of it.

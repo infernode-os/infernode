@@ -66,6 +66,8 @@ the glyph painted in
 .IR colour :
 it creates the image if there is none of that name, and replaces it,
 repainting it wherever it is shown, if there is.
+The image is created even if the glyph cannot be drawn, so widgets
+naming it are still made, blank.
 .PP
 Each returns a diagnostic string on error: a name with a
 .B /

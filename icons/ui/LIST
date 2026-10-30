@@ -47,6 +47,8 @@ search
 sort-ascending
 
 # operations
+arrow-left
+arrow-right
 copy
 clipboard
 cut
@@ -56,3 +58,23 @@ plus
 x
 eye
 settings
+bookmark
+history
+help
+
+# dialogs (dialog(2))
+alert-circle
+alert-triangle
+info-circle
+help-circle
+
+# the debugger's controls (wm/deb)
+player-play
+player-stop
+arrow-right-bar
+step-into
+step-out
+arrow-forward-up
+circle-dot
+unlink
+square-x

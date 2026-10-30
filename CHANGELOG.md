@@ -6,6 +6,21 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **The old icons are gone; every program draws `icon(2)`'s glyphs.**
+  wm/deb's controls, its Stack window's open and closed marks,
+  wm/bounce's arrows and dialog(2)'s error, warning, information and
+  question icons are Tabler glyphs in the theme's colours, repainted on
+  a theme switch; webget's help page shows them too. The 135 old icon
+  files left are removed, so `icons/` holds `icons/ui`, Tk's two
+  cursors, and the artwork that is not an icon: wm/coffee's cups and
+  backdrop and the picture `draw-example(2)` draws, all kept as they
+  were. A glyph that cannot be drawn leaves a blank button, not a
+  program that fails to start: `icon(2)` makes every Tk image it is
+  asked for whatever happens to the glyph, and
+  `tests/host/icons_test.sh` (run in CI) fails if anything names an
+  icon that is not in the tree. Making an image no longer leaves an
+  error in Tk's `lasterror`, which dialog(2) read as a failure and
+  answered its own question with the default ("discard").
 - **`wm/dir` is back, on new icons.** Inferno's file browser, the Files
   entry of upstream's window menu, was dropped in the migration. It is
   restored with its icons drawn by `icon(2)` in the theme's colours.

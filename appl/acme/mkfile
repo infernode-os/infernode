@@ -29,9 +29,6 @@ TARG=\
 	elog.dis\
 	styxaux.dis\
 
-ICONS=\
-	abcde.bit\
-
 MODULES=\
 	acme.m\
 	buff.m\

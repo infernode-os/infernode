@@ -2480,17 +2480,15 @@ rootbind(base: string)
 	if(rootunion(base + "/fonts", "/fonts"))
 		sys->print("init: /fonts grown from %s/fonts\n", base);
 	#
-	# Artwork, and it belongs here rather than in the kernel. The
-	# icons tree is 1.6MB against a 2.1MB kernel, so compiling it in
-	# would nearly double the image and the time every serial load
-	# takes, to save a card read of a bitmap nobody opens twice.
+	# Artwork, and it belongs here rather than in the kernel, beside
+	# the fonts: a card read rather than kernel bytes every serial
+	# load carries.
 	#
-	# Without this /icons is empty on the board and the failures are
-	# not obviously about a missing file: coffee opens
-	# /icons/coffee0.bit, gets nil, and prints "failed to allocate
-	# image", and Tk turns -bitmap small_color_left.bit into
-	# /icons/tk/small_color_left.bit and reports a bitmap it could
-	# not load. Both read like memory trouble and are not.
+	# Without this /icons is empty on the board: icon(2) finds no
+	# /icons/ui/*.svg, so wm/dir, wm/deb and the rest show blank
+	# buttons and no icons, Tk's cursors (/icons/tk) are missing, and
+	# coffee opens /icons/coffee0.bit, gets nil, and prints "failed to
+	# allocate image", which reads like memory trouble and is not.
 	#
 	if(rootunion(base + "/icons", "/icons"))
 		sys->print("init: /icons grown from %s/icons\n", base);

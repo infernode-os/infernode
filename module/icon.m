@@ -30,4 +30,10 @@ Icon: module
 	# no image of that name, replaced (and so repainted wherever it is
 	# shown) if it has.
 	tkimage:	fn(t: ref Tk->Toplevel, tkname, name: string, size, colour: int): string;
+
+	# tkimage for each (tkname, name, size) in set, in the current
+	# theme's text colour (lucitheme); called again after a theme
+	# switch, it repaints them.  Every image is made, blank where its
+	# glyph cannot be drawn; the error is the first such.
+	tkglyphs:	fn(t: ref Tk->Toplevel, set: array of (string, string, int)): string;
 };

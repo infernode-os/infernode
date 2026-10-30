@@ -8,7 +8,8 @@ implement IconTest;
 # stroke-width); a glyph drawn once is kept; a name that is a path, or
 # no glyph, is refused; a painted glyph is the colour asked for, drawn
 # through its mask; a Tk image made from a glyph is its size, and made
-# again in another colour keeps its name.
+# again in another colour keeps its name; a set made with tkglyphs is
+# every image, one whose glyph is missing blank but made.
 #
 
 include "sys.m";
@@ -198,12 +199,28 @@ testTkimage(t: ref T)
 		t.fatal("no toplevel");
 	err := icon->tkimage(top, "Folder", "folder", 32, int 16rCCCCCCFF);
 	t.assertnil(err, "tkimage made");
+	# programs (dialog(2), wm/edit) read lasterror after building a window
+	t.assertseq(tk->cmd(top, "variable lasterror"), "", "making it left no Tk error");
 	t.assertseq(tk->cmd(top, "image width Folder"), "32", "Tk image width");
 	t.assertseq(tk->cmd(top, "image height Folder"), "32", "Tk image height");
 	err = icon->tkimage(top, "Folder", "folder", 32, int 16r2266CCFF);
 	t.assertnil(err, "tkimage made again in another colour");
 	t.assertseq(tk->cmd(top, "image names"), "Folder", "still one image, by the same name");
 	t.assertseq(tk->cmd(top, "label .l -image Folder"), ".l", "a label shows it");
+}
+
+# A set painted in the theme's colour: every image made, one whose glyph
+# is not there blank but made, so a button naming it is still made.
+testTkglyphs(t: ref T)
+{
+	top := tk->toplevel(display, "");
+	if(top == nil)
+		t.fatal("no toplevel");
+	err := icon->tkglyphs(top, array[] of {("Run", "player-play", 18), ("Gone", "no-such-glyph", 18)});
+	t.assertnotnil(err, "a missing glyph is reported");
+	t.assertseq(tk->cmd(top, "image width Run"), "18", "the drawn one is its size");
+	t.assertseq(tk->cmd(top, "image type Gone"), "bitmap", "the missing one is still an image");
+	t.assertseq(tk->cmd(top, "button .b -image Gone"), ".b", "and a button naming it is made");
 }
 
 init(nil: ref Draw->Context, args: list of string)
@@ -243,6 +260,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("Refused", testRefused);
 	run("Paint", testPaint);
 	run("Tkimage", testTkimage);
+	run("Tkglyphs", testTkglyphs);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

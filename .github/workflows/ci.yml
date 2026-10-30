@@ -292,6 +292,15 @@ jobs:
         chmod +x tests/host/release_scrub_test.sh
         ROOT=. bash tests/host/release_scrub_test.sh
 
+    - name: Check the tree's icons
+      run: |
+        # icons/ holds icon(2)'s glyphs (icons/ui), Tk's cursors and the
+        # artwork coffee and draw-example(2) draw, nothing else; every
+        # glyph a program names is there, and no Tk bitmap or /icons
+        # path a program names is missing (one missing fails the widget
+        # naming it).
+        ROOT=. sh tests/host/icons_test.sh
+
     - name: Check what goes on a Raspberry Pi card image
       run: |
         # tools/mkpiimage.sh, which makes the release's card images: each

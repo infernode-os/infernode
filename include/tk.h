@@ -558,6 +558,10 @@ struct TkCtxt
 	Tk*		mgrab;
 	Tk*		entered;
 	TkMouse	mstate;
+	ulong	pmsec;		/* the last button press, for a double click: when, */
+	int		pb;			/* which button, */
+	int		px;			/* and where */
+	int		py;
 
 	Tk*		tkmenu;
 	void*	extn;

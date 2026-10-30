@@ -17,7 +17,10 @@ implement TkTest;
 #   - explicit per-widget colours are honoured;
 #   - glyphs take the foreground colour: an anti-aliased (k8) font drawn
 #     through libmemdraw's coverdraw came out black whatever the colour
-#     when built with gcc, so dark themes were unreadable.
+#     when built with gcc, so dark themes were unreadable;
+#   - two presses of a button, soon after and near each other, are a
+#     double click: only the X11 driver marked one, so on SDL hosts no
+#     <Double-Button-1> binding fired (wm/dir opened nothing).
 #
 
 include "sys.m";
@@ -81,6 +84,54 @@ newtop(t: ref T): ref Toplevel
 }
 
 # ── Tests ──────────────────────────────────────────────────────
+
+# a press and release of button 1 at x y, the press at msec
+click(top: ref Toplevel, x, y, msec: int)
+{
+	tk->pointer(top, Draw->Pointer(1, (x, y), msec));
+	tk->pointer(top, Draw->Pointer(0, (x, y), msec + 10));
+}
+
+# what the label's bindings sent since the last call
+heard(c: chan of string): string
+{
+	s := "";
+	for(;;) alt {
+	e := <-c =>
+		s += e + " ";
+	* =>
+		return s;
+	}
+}
+
+testDoubleClick(t: ref T)
+{
+	top := newtop(t);
+	if(top == nil)
+		return;
+	c := chan[16] of string;
+	tk->namechan(top, c, "c");
+	# mapped, as onscreen does, or pointer events find no widget
+	tk->cmd(top, "label .l -width 200 -height 100 -text x; pack .l; . map; update");
+	tk->cmd(top, "bind .l <Double-Button-1> {send c double}");
+	tk->cmd(top, "bind .l <ButtonRelease-1> {send c up}");
+	heard(c);
+	click(top, 20, 20, 1000);
+	click(top, 21, 20, 1150);
+	t.assertseq(heard(c), "up double up ", "two clicks 150ms apart: the second a double");
+	click(top, 20, 20, 3000);
+	click(top, 20, 20, 3500);
+	t.assertseq(heard(c), "up up ", "500ms apart: no double");
+	click(top, 20, 20, 5000);
+	click(top, 80, 60, 5100);
+	t.assertseq(heard(c), "up up ", "far apart: no double");
+	click(top, 20, 20, 0);
+	click(top, 20, 20, 0);
+	t.assertseq(heard(c), "up up ", "no time stamps: no double");
+	tk->pointer(top, Draw->Pointer(1|(1<<8), (20, 20), 9000));
+	tk->pointer(top, Draw->Pointer(0, (20, 20), 9010));
+	t.assertseq(heard(c), "double up ", "a press X11 marked double (bit 8) still is one");
+}
 
 testToplevel(t: ref T)
 {
@@ -496,6 +547,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("DynamicImage",    testDynamicImage);
 	run("GlyphColour",     testGlyphColour);
 	run("ForegroundRendered", testForegroundRendered);
+	run("DoubleClick",     testDoubleClick);
 
 	if(testing->summary(passed, failed, skipped) > 0)
 		raise "fail:tests failed";

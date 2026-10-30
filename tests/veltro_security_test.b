@@ -2631,7 +2631,7 @@ testStagedWriteOverlay(t: ref T)
 		base :: nil
 	, nil);
 
-	nsconstruct->emitmanifest(caps, manifest);
+	nsconstruct->emitmanifest(caps, nsconstruct->openmanifest(manifest));
 	mdata := readfilecontent(manifest);
 	t.assert(contains(mdata, "path=" + base), "manifest includes writable granted path");
 	t.assert(contains(mdata, "perm=cow"), "manifest marks writable path as cow");
@@ -2677,7 +2677,7 @@ directwritemanifest1(t: ref T)
 		nil, 0, 0, 42,
 		"/mnt/msg/draft" :: nil
 	, nil);
-	nsconstruct->emitmanifest(caps, manifest);
+	nsconstruct->emitmanifest(caps, nsconstruct->openmanifest(manifest));
 	mdata := readfilecontent(manifest);
 	t.assert(contains(mdata, "path=/mnt/msg/draft"), "manifest includes transactional endpoint");
 	t.assert(contains(mdata, "path=/mnt/msg/draft label=mnt/msg/draft perm=rw"),

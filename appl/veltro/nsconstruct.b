@@ -1509,19 +1509,25 @@ overlaywritepaths(paths: list of string, actid: int): string
 	return nil;
 }
 
-# Emit namespace manifest for the UI to display.
-# Writes to /tmp/veltro/.ns/manifest — one entry per line:
-#   path=/dev/time label=System Clock perm=ro
-# Must be called AFTER restrictns() from the restricted namespace
-# so stat checks reflect exactly what the agent can access.
-emitmanifest(caps: ref Capabilities, mpath: string)
+# The manifest's file, made in the name space the UI reads: called
+# before restrictns, which may give the agent a /tmp of its own.
+openmanifest(mpath: string): ref Sys->FD
 {
 	if(sys == nil)
 		init();
-
 	mkdirp("/tmp/veltro/.ns");
+	return sys->create(mpath, Sys->OWRITE, FILE_MODE);
+}
 
-	fd := sys->create(mpath, Sys->OWRITE, FILE_MODE);
+# Emit namespace manifest for the UI to display, on fd (openmanifest's),
+# one entry per line:
+#   path=/dev/time label=System Clock perm=ro
+# Must be called AFTER restrictns() from the restricted namespace
+# so stat checks reflect exactly what the agent can access.
+emitmanifest(caps: ref Capabilities, fd: ref Sys->FD)
+{
+	if(sys == nil)
+		init();
 	if(fd == nil)
 		return;
 

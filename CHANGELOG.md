@@ -6,6 +6,20 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **A task is ready when its provisioning write returns; nothing polls
+  for it (#1019).** The task tool read tools9p's `provision` file every
+  50ms until its child was ready, and tools9p looked for the child's
+  tree every half second and its manifest every 50ms. The child now
+  tells its parent when its name space is made, and the write is
+  answered then, or with why not. A child granted `/tmp` (or a
+  veltrosrv agent) made its manifest in the `/tmp` of its own that the
+  grant gives it, where neither the UI nor its parent could see it: it
+  was never ready, and its task was refused after 30 seconds. The
+  manifest's file is now made before the name space is restricted
+  (`nsconstruct`'s `openmanifest`). A path with `..` in it under the
+  scratch directory is refused, not dropped as the scratch. lucibridge
+  hears a task closed while it works as luciuisrv's `activity delete`
+  event, not by reading its status every second.
 - **wm/shell, wm/man, wm/fractals and wm/ftree serve their agent files;
   none polls (#1019).** Each wrote state files under `/tmp/veltro/<app>`
   on a timer and read commands from a file it truncated, every half

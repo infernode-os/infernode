@@ -66,6 +66,9 @@ include "nsconstruct.m";
 
 Tools9p: module {
 	init: fn(nil: ref Draw->Context, nil: list of string);
+	# A child task's tools9p, started by its parent's provisionrun: ready
+	# is sent "" once its first name space is made, or why it was not.
+	provisioned: fn(args: list of string, ready: chan of string);
 };
 
 # Qid types for synthetic files
@@ -133,6 +136,7 @@ ProvisionState: adt {
 provisionstates: list of ref ProvisionState;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
 manifestgate: chan of int;  # Closed startup manifest phase before tool calls
+provready: chan of string;	# a provisioned child's parent, told when it is ready
 evpostc: chan of string;    # events posted by procs other than serveloop
 
 # Mapping from tool name to .dis path
@@ -405,6 +409,12 @@ init(nil: ref Draw->Context, args: list of string)
 	# Each tools9p writes to its own manifest path so activities don't
 	# overwrite each other's namespace descriptions.
 	spawn emitmanifestnow(manifestpath(mountpt), manifestgate);
+}
+
+provisioned(args: list of string, ready: chan of string)
+{
+	provready = ready;
+	init(nil, args);
 }
 
 # Look up tool path by name
@@ -1752,6 +1762,12 @@ provisionparse(args: string): (int, string, list of string, string)
 			if(raw == "")
 				return (id, nil, nil, "empty path in paths=");
 			(ppath, pperm) := splitpathperm(raw);
+			# Validated before anything is skipped: a name with ".." in it
+			# within the scratch prefix was dropped as the scratch, not
+			# refused, and the request went through.
+			perr := validatepath(ppath);
+			if(perr != nil)
+				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
 			# Every task has its own workspace at /tmp/veltro/scratch
 			# already; asking for it is asking for what it has.  Refused,
 			# it cost a retry and left a dead activity behind.
@@ -1766,9 +1782,6 @@ provisionparse(args: string): (int, string, list of string, string)
 			explicitrw := len raw > 3 && (raw[len raw - 3:] == ":rw" || raw[len raw - 3:] == " rw");
 			if(!explicitrw && baselinepath(ppath))
 				continue;
-			perr := validatepath(ppath);
-			if(perr != nil)
-				return (id, nil, nil, sys->sprint("denied invalid path %s: %s", ppath, perr));
 			if(!childpathallowed(ppath))
 				return (id, nil, nil, sys->sprint("denied path %s (outside this agent's grants)", ppath));
 			if(pathperm(ppath) == "ro")
@@ -1893,7 +1906,18 @@ runlucibridge(lb: ShCommand, id: int, lbargs: list of string, done: chan of int)
 # Launch the validated child and publish a narrow lifecycle result only after
 # the namespace manifest exists. This keeps trusted readiness metadata out of
 # the task tool's namespace.
-provisionrun(id: int, mpt: string, rargs: list of string)
+# The write that asked for it is answered here, when the child is ready
+# or has failed: the task tool waits on its write, not on the state.
+provisionrun(srv: ref Styxserver, tag, n: int, id: int, mpt: string, rargs: list of string)
+{
+	err := provisionstart(id, mpt, rargs);
+	if(err != nil)
+		srv.reply(ref Rmsg.Error(tag, err));
+	else
+		srv.reply(ref Rmsg.Write(tag, n));
+}
+
+provisionstart(id: int, mpt: string, rargs: list of string): string
 {
 	sys->fprint(stderr, "tools9p: provisioning activity %d at %s\n", id, mpt);
 	mpath := manifestpath(mpt);
@@ -1903,54 +1927,39 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	# every earlier session's task 1 there, and reported them as its own.
 	removeshadowdir(sys->sprint("/tmp/veltro/scratch/%d", id));
 
-	t9p := load ShCommand "/dis/veltro/tools9p.dis";
+	t9p := load Tools9p "/dis/veltro/tools9p.dis";
 	if(t9p == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load tools9p.dis: %r\n");
-		provisionfail(id, mpt, "cannot load tools9p");
-		return;
+		return provisionfail(id, mpt, "cannot load tools9p");
 	}
 	lb := load ShCommand "/dis/lucibridge.dis";
 	if(lb == nil) {
 		sys->fprint(stderr, "tools9p: provision: cannot load lucibridge.dis: %r\n");
-		provisionfail(id, mpt, "cannot load lucibridge");
-		return;
+		return provisionfail(id, mpt, "cannot load lucibridge");
 	}
-	spawn t9p->init(nil, rargs);
-
-	ctlpath := controlmount(mpt) + "/ctl";
-	ready := 0;
-	for(i := 0; i < 20; i++) {
-		sys->sleep(500);
-		(ok, nil) := sys->stat(ctlpath);
-		if(ok >= 0) {
-			ready = 1;
-			break;
-		}
+	# The child says when its tree is mounted and its name space made;
+	# one that fails says why, and one that hangs is given up on.
+	ready := chan[1] of string;
+	spawn childtools(t9p, rargs, ready);
+	tick := chan of int;
+	spawn provisiontimer(tick, 30*1000);
+	why: string;
+	alt {
+	why = <-ready =>
+		;
+	<-tick =>
+		why = "child did not finish namespace setup";
 	}
-	if(!ready) {
-		sys->fprint(stderr, "tools9p: provision: %s did not mount after 10s\n", mpt);
-		provisionfail(id, mpt, "child tool service did not mount");
-		return;
-	}
-
-	nsready := 0;
-	for(i = 0; i < 400; i++) {
-		(ok, nil) := sys->stat(mpath);
-		if(ok >= 0) {
-			nsready = 1;
-			break;
-		}
-		sys->sleep(50);
-	}
-	if(!nsready) {
-		sys->fprint(stderr, "tools9p: provision: activity %d did not finish namespace setup\n", id);
-		provisionfail(id, mpt, "child did not finish namespace setup");
-		return;
+	if(why == nil && sys->stat(mpath).t0 < 0)
+		why = "child did not finish namespace setup";
+	if(why != nil) {
+		sys->fprint(stderr, "tools9p: provision: activity %d: %s\n", id, why);
+		return provisionfail(id, mpt, why);
 	}
 
 	if(getprovisionstate(id) == "cancelled") {
 		provisioncleanup(mpt);
-		return;
+		return "provision failed: provisioning cancelled";
 	}
 	sys->fprint(stderr, "tools9p: provision: %s confined\n", mpt);
 	setprovisionstate(id, "ready");
@@ -1959,6 +1968,33 @@ provisionrun(id: int, mpt: string, rargs: list of string)
 	if(verbose)
 		lbargs = "lucibridge" :: "-v" :: "-a" :: string id :: "-s" :: nil;
 	spawn runprovisionedagent(lb, id, lbargs);
+	return nil;
+}
+
+provisionbg(id: int, mpt: string, rargs: list of string)
+{
+	provisionstart(id, mpt, rargs);
+}
+
+childtools(t9p: Tools9p, args: list of string, ready: chan of string)
+{
+	{
+		t9p->provisioned(args, ready);
+	} exception e {
+	"*" =>
+		ready <-= "child tool service did not start: " + e;
+	}
+}
+
+provisiontimer(tick: chan of int, ms: int)
+{
+	sys->sleep(ms);
+	alt {
+	tick <-= 1 =>
+		;
+	* =>
+		;
+	}
 }
 
 # Return manifest file path for a given tools9p mount point.
@@ -1983,6 +2019,8 @@ emitmanifestnow(mpath: string, ready: chan of int)
 	nsconstruct := load NsConstruct NsConstruct->PATH;
 	if(nsconstruct == nil) {
 		ready <-= 1;
+		if(provready != nil)
+			provready <-= "cannot load nsconstruct";
 		return;
 	}
 	nsconstruct->init();
@@ -2010,17 +2048,20 @@ emitmanifestnow(mpath: string, ready: chan of int)
 		toolnames, allpaths, nil, nil, nil, nil, 0, hasxenith, activityid, genwritepaths()
 	, nil);
 	{
+		mfd := nsconstruct->openmanifest(mpath);
 		nserr := nsconstruct->restrictns(caps);
 		if(nserr != nil)
 			sys->fprint(stderr, "tools9p: manifest restrictns failed: %s\n", nserr);
 		else {
-			nsconstruct->emitmanifest(caps, mpath);
+			nsconstruct->emitmanifest(caps, mfd);
 		}
 	} exception e {
 	"*" =>
 		sys->fprint(stderr, "tools9p: manifest exception: %s\n", e);
 	}
 	ready <-= 1;
+	if(provready != nil)
+		provready <-= "";
 	# the first name space is made: a reader of event (lucictx) reads
 	# the manifest now rather than looking for it
 	evpostc <-= "paths";
@@ -2454,7 +2495,9 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + perr0));
 					} else {
 						setprovisionstate(pid0, "starting");
-						spawn provisionrun(pid0, pmpt, prargs);
+						# lucifer's loop writes this one: it is not kept
+						# waiting; the activity's status says how it went
+						spawn provisionbg(pid0, pmpt, prargs);
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
 					}
 				} else {
@@ -2483,8 +2526,7 @@ Serve:
 						srv.reply(ref Rmsg.Error(m.tag, "provision refused: " + qerr));
 					} else {
 						setprovisionstate(qid0, "starting");
-						spawn provisionrun(qid0, qmpt, qrargs);
-						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						spawn provisionrun(srv, m.tag, len m.data, qid0, qmpt, qrargs);
 					}
 				}
 

@@ -1968,12 +1968,14 @@ serveloop(tchanc: chan of chan of ref Tmsg, errc: chan of string, caps: ref NsCo
 		spawn toolbroker(bready);
 		<-bready;
 	}
+	mfd := nsconstruct->openmanifest(manifest);
 	nserr := nsconstruct->restrictns(caps);
 	if(nserr != nil) {
 		errc <-= "namespace restriction failed: " + nserr;
 		return;
 	}
-	nsconstruct->emitmanifest(caps, manifest);
+	nsconstruct->emitmanifest(caps, mfd);
+	mfd = nil;
 	if(verbose)
 		sys->fprint(stderr, "veltrosrv: namespace restricted\n");
 	errc <-= nil;

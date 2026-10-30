@@ -291,8 +291,12 @@ echo ""
 echo "── child provision narrowing ──"
 
 if emu_c "provision_subset" 14 \
-    "tools9p -b diff -p /tmp:rw read list diff task & sleep 3; echo '9 tools=diff paths=/tmp:rw' > /tool/provision; sleep 5; echo TOOLS; cat /tool.9/tools; echo PATHS; cat /mnt/toolctl.9/paths"; then
-    if echo "$OUTPUT" | grep -q "^exec$"; then
+    "tools9p -b diff -p /tmp:rw read list diff task & sleep 3; echo '9 tools=diff paths=/tmp:rw' > /tool/provision; echo STATE; cat /tool/provision; echo TOOLS; cat /tool.9/tools; echo PATHS; cat /mnt/toolctl.9/paths"; then
+    # The write is answered once the child is confined; a child granted
+    # /tmp made its manifest in its own /tmp and was never ready.
+    if ! echo "$OUTPUT" | grep -q "^9 ready"; then
+        fail "a child granted /tmp:rw is ready when its provision write returns (output: $OUTPUT)"
+    elif echo "$OUTPUT" | grep -q "^exec$"; then
         fail "child provision should not grant exec outside the parent budget"
     elif ! echo "$OUTPUT" | grep -q "^diff$"; then
         fail "child provision should preserve allowed diff tool"

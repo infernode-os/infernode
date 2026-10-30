@@ -119,9 +119,17 @@ Lucitheme: module
 	settheme: fn(name: string): string;
 
 	# A channel on which the active theme's name arrives each time
-	# it changes, from whatever wrote it. The current file is the
-	# whole interface: there is no server to run.
+	# it changes, from whatever wrote it: a read of the served
+	# event file (see serve), so nothing polls. Where the theme is
+	# not served, nothing ever arrives.
 	watch: fn(): chan of string;
+
+	# Serve the theme directory's current and event, before it, in
+	# this name space (and those made from it), so a write of
+	# current reaches every watcher; nil, or why not. Done once by
+	# a session's root (the profile, wm/wm, Lucifer); a second call
+	# finds it served and does nothing.
+	serve: fn(): string;
 
 	# The installed themes' names, sorted.
 	themes: fn(): list of string;

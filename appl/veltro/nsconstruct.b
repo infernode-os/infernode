@@ -1104,6 +1104,9 @@ privilegedcontrolpath(path: string, tools: list of string): int
 {
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -1172,9 +1175,9 @@ walletcontrolpath(path: string): int
 
 ftreecontrolpath(path: string): int
 {
-	# ftree is a trusted user namespace browser. Its ctl file can bind and
-	# unmount in the user's GUI namespace, so it is never an agent grant.
-	return path == "/tmp/veltro/ftree" || prefix(path, "/tmp/veltro/ftree/");
+	# ftree is a trusted user namespace browser. Its ctl (#sftree, mounted at
+	# /mnt/ftree) binds and unmounts in ftree's name space: never an agent grant.
+	return path == "/mnt/ftree" || prefix(path, "/mnt/ftree/");
 }
 
 tmpveltrointernalpath(path: string): int
@@ -1193,10 +1196,10 @@ appipccontrolpath(path: string): int
 	# path grant would let generic filesystem/shell tools drive the app protocol.
 	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
 		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
-		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
-		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
-		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
-		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
+		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
+		path == "/mnt/shell" || prefix(path, "/mnt/shell/") ||
+		path == "/mnt/fractal" || prefix(path, "/mnt/fractal/") ||
+		path == "/mnt/man" || prefix(path, "/mnt/man/");
 }
 
 appipctoolpath(path: string, tools: list of string): int
@@ -1207,16 +1210,16 @@ appipctoolpath(path: string, tools: list of string): int
 	if((path == "/mnt/charon" || prefix(path, "/mnt/charon/")) &&
 	   inlist("charon", tools))
 		return 1;
-	if((path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/")) &&
+	if((path == "/mnt/editor" || prefix(path, "/mnt/editor/")) &&
 	   inlist("editor", tools))
 		return 1;
-	if((path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/")) &&
+	if((path == "/mnt/shell" || prefix(path, "/mnt/shell/")) &&
 	   inlist("shell", tools))
 		return 1;
-	if((path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/")) &&
+	if((path == "/mnt/fractal" || prefix(path, "/mnt/fractal/")) &&
 	   inlist("fractal", tools))
 		return 1;
-	if((path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/")) &&
+	if((path == "/mnt/man" || prefix(path, "/mnt/man/")) &&
 	   inlist("man", tools))
 		return 1;
 	return 0;
@@ -1506,19 +1509,25 @@ overlaywritepaths(paths: list of string, actid: int): string
 	return nil;
 }
 
-# Emit namespace manifest for the UI to display.
-# Writes to /tmp/veltro/.ns/manifest — one entry per line:
-#   path=/dev/time label=System Clock perm=ro
-# Must be called AFTER restrictns() from the restricted namespace
-# so stat checks reflect exactly what the agent can access.
-emitmanifest(caps: ref Capabilities, mpath: string)
+# The manifest's file, made in the name space the UI reads: called
+# before restrictns, which may give the agent a /tmp of its own.
+openmanifest(mpath: string): ref Sys->FD
 {
 	if(sys == nil)
 		init();
-
 	mkdirp("/tmp/veltro/.ns");
+	return sys->create(mpath, Sys->OWRITE, FILE_MODE);
+}
 
-	fd := sys->create(mpath, Sys->OWRITE, FILE_MODE);
+# Emit namespace manifest for the UI to display, on fd (openmanifest's),
+# one entry per line:
+#   path=/dev/time label=System Clock perm=ro
+# Must be called AFTER restrictns() from the restricted namespace
+# so stat checks reflect exactly what the agent can access.
+emitmanifest(caps: ref Capabilities, fd: ref Sys->FD)
+{
+	if(sys == nil)
+		init();
 	if(fd == nil)
 		return;
 
@@ -1656,6 +1665,9 @@ verifyns(expected: list of string): string
 		"/.git",
 		"/CLAUDE.md",
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/msg/ctl",

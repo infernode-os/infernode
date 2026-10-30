@@ -61,6 +61,17 @@ GUI and launcher code write to the trusted control alias to configure the
 agent's capabilities. Restricted tool invocations see `/tool` but not the
 generic control file.
 
+The control alias also shows the result, beside `ctl` (#1020):
+
+| File | Read |
+|------|------|
+| `ns` | The name space a tool call gets, as `ns(1)` prints it, made by the same `applynsrestriction()` a call uses |
+| `event` | Waits, then `paths`, `tools` or `budget`, one a line, when that list changes through `ctl`; each open has its own queue |
+| `view` | That name space served: `mount -A /mnt/toolctl/view /n/agent` shows the agent's world as a tool call sees it, read-only, made at the open |
+
+Neither is in an agent's `/tool` (nsconstruct filters it), and none can be
+granted with `bindpath`.
+
 ---
 
 ## How Path Changes Are Applied

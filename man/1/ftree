@@ -103,14 +103,19 @@ always there, the rest of the interaction made by the name space under
 and the plumbing rules.
 .SH FILES
 .TP
-.B /tmp/veltro/ftree/state
-.TP
-.B /tmp/veltro/ftree/view
-What is shown, for an agent: the root, the selection and the rows on
-screen.
-.TP
-.B /tmp/veltro/ftree/ctl
-Commands from an agent:
+.B #sftree/fs
+Its files for an agent or a program outside its name space (mounted at,
+say,
+.BR /mnt/ftree ;
+a second ftree is
+.BR #sftree/fs.1 ):
+.B state
+and
+.BR view ,
+what is shown, the root, the selection and the rows on screen, read
+as it is;
+.BR ctl ,
+commands, each done when its write returns and refused with the reason:
 .BI cd " path" \fR,
 .BI select " path" \fR,
 .BR expand ,
@@ -120,7 +125,11 @@ Commands from an agent:
 .BI bind " src target" " \fR[\fPflags\fR]" \fR,
 .BI unmount " path" \fR,
 .B scroll
-.BR up | down | top | bottom .
+.BR up | down | top | bottom ;
+and
+.BR event ,
+a read waiting for the next change.
+A bind is in ftree's own name space.
 .SH SOURCE
 .B /appl/wm/ftree.b
 .br

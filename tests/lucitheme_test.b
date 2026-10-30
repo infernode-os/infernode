@@ -369,9 +369,17 @@ testWatch(t: ref T)
 watchprobe(pidc: chan of int, res: chan of string)
 {
 	pid := sys->pctl(Sys->NEWPGRP, nil);
-	# watch reads the current name before it returns: only then may the
-	# test change it, or the watcher may start from the new name and see
-	# no change (it did, on a slow CI runner)
+	# the theme served (as the profile, wm/wm or Lucifer does): watch
+	# reads its event file, so nothing is polled.  The server is in this
+	# group, killed with it.
+	err := lucitheme->serve();
+	if(err != nil) {
+		pidc <-= pid;
+		res <-= "serve: " + err;
+		<-chan of int;
+	}
+	# watch opens event before it returns: only then may the test change
+	# the name, or the change could come before the reader is there
 	c := lucitheme->watch();
 	pidc <-= pid;
 	res <-= <-c;

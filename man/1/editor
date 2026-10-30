@@ -141,11 +141,27 @@ supports commands:
 .BR "insert line col text" ","
 .BR "delete sl sc el ec" "."
 .PP
-A real-file IPC interface at
-.B /tmp/veltro/editor/
-is also maintained for cross-namespace access by the Veltro
+A write to
+.B body
+replaces the text (one longer than a message arrives in pieces, from
+offset 0), and a ctl command is carried out before its write returns:
+one refused is the write's error.
+A read of
+.B event
+waits for the next event; each open has its own.
+.PP
+The same tree is posted as
+.B #seditor/fs
+.RB ( fs.1
+for a second editor; see
+.IR post9p (2)),
+for programs outside the editor's name space: the Veltro
 .I editor
-tool.
+tool, for which
+.IR tools9p (8)
+mounts it at
+.BR /mnt/editor ,
+and Lucifer's context zone.
 .SH FILES
 .TP
 .B /dis/wm/editor.dis
@@ -157,8 +173,8 @@ Compiled editor.
 .B /edit/
 Bind point for 9P filesystem.
 .TP
-.B /tmp/veltro/editor/
-Real-file IPC directory.
+.B #seditor/fs
+The tree, posted.
 .SH SOURCE
 .B /appl/wm/editor.b
 .SH SEE ALSO

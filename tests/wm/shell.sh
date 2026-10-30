@@ -3,7 +3,8 @@
 # wm/shell under wm/wm, typed at through /dev/keyboard, for
 # tests/host/wm_shell_test.sh (not a test: the runner runs every
 # script in tests/inferno).  After each step the transcript, as the
-# window writes it for Veltro (/tmp/veltro/shell/body), is copied to
+# window serves it for Veltro (#sshell/fs's body, mounted at
+# /mnt/shell), is copied to
 # /tmp/body.<step>, and the windows (a read of /chan/wmwindows) are
 # printed as "R <step> ...".  The processes (/prog/*/status) are
 # copied to /tmp/procs.before and procs.after, before the window and
@@ -16,7 +17,7 @@ fn key { echo -n $* > /dev/keyboard }
 # a key by its code, in hex: 4 is ^D, a newline
 fn code { unicode -t $1 > /dev/keyboard }
 fn line { key $*; code a }
-fn snap { sleep 2; cp /tmp/veltro/shell/body /tmp/body.$1; echo R $1 `{cat /chan/wmwindows} }
+fn snap { sleep 2; cp /mnt/shell/body /tmp/body.$1; echo R $1 `{cat /chan/wmwindows} }
 
 sleep 1
 cat /prog/*/status > /tmp/procs.before
@@ -24,6 +25,7 @@ cat /prog/*/status > /tmp/procs.before
 sleep 4
 w=`{cat /chan/wmwindows}
 echo R start $w
+mount -A '#sshell/fs' /mnt/shell
 # a click well inside the window, below the prompt: the caret at the end
 x=${expr ${index 2 $w} ${index 4 $w} + 2 /}
 y=${expr ${index 3 $w} ${index 5 $w} + 2 /}

@@ -76,10 +76,12 @@ NsConstruct: module {
 	# later shadow construction can recreate the private backing tree.
 	restricttoolns: fn(caps: ref Capabilities): string;
 
-	# Emit namespace manifest for the UI to display.
-	# Writes to mpath — one entry per line.
-	# Must be called AFTER restrictns() from the restricted namespace.
-	emitmanifest: fn(caps: ref Capabilities, mpath: string);
+	# Emit namespace manifest for the UI to display, one entry per line.
+	# Called AFTER restrictns() from the restricted namespace, on a file
+	# made by openmanifest BEFORE it: an agent granted /tmp has a /tmp of
+	# its own, and a manifest made there is not where the UI reads it.
+	openmanifest: fn(mpath: string): ref Sys->FD;
+	emitmanifest: fn(caps: ref Capabilities, fd: ref Sys->FD);
 
 	# Verify namespace matches expected security policy
 	# Reads /prog/$pid/ns and checks for dangerous paths

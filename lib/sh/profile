@@ -179,6 +179,11 @@ if {~ $emuhost MacOSX Linux Nt}{
 	if {! ftest -d $home} { mkdir -p $home }
 }
 
+# The theme's current and event, served before /lib/lucifer/theme (after
+# the user's theme directory is bound there): a write of current reaches
+# every program watching (lucitheme(2)); none of them polls.
+themefs >[2] /dev/null
+
 # ── Audit log (tamper-evident security log) — OFF by default ──
 # Disabled unless opted in: most installs don't need it, and the emitters
 # are no-ops while the log is unmounted, so "off" means simply not mounting.

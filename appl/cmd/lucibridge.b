@@ -1627,6 +1627,13 @@ headlessdeny(): int
 	return ok >= 0;
 }
 
+approvalanswer(response: string): string
+{
+	if(response == "Allow")
+		return "allow";
+	return "deny";
+}
+
 # Answer the agent's requests for approval with a dialogue tile.
 approver(done: chan of int)
 {
@@ -1649,9 +1656,7 @@ approver(done: chan of int)
 		awaiting = 1;	# before the tile: a quick answer is the tile's
 		didx := writedialogue("Permission required", tool + ":" + what, "", "Allow,Deny");
 		response := readuserinput();
-		answer := "allow";
-		if(response == "Deny" || response == "deny" || response == "no")
-			answer = "deny";
+		answer := approvalanswer(response);
 		writefile(sess + "/approve", answer + " " + callid);
 		if(didx >= 0) {
 			if(answer == "deny")

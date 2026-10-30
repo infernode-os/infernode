@@ -176,6 +176,25 @@ firstlines(s: string, n: int): string
 	return out;
 }
 
+approvalanswer(response: string): string
+{
+	if(response == "Allow")
+		return "allow";
+	return "deny";
+}
+
+testApprovalAnswer(t: ref T)
+{
+	t.assertseq(approvalanswer("Allow"), "allow", "explicit Allow grants");
+	t.assertseq(approvalanswer("Deny"), "deny", "explicit Deny refuses");
+	t.assertseq(approvalanswer("allow"), "deny", "case variants do not grant");
+	t.assertseq(approvalanswer("yes"), "deny", "affirmative prose does not grant");
+	t.assertseq(approvalanswer("what will that do?"), "deny", "user question does not grant");
+	t.assertseq(approvalanswer("task 17 complete"), "deny", "task event does not grant");
+	t.assertseq(approvalanswer("message 17 delivered"), "deny", "message event does not grant");
+	t.assertseq(approvalanswer(""), "deny", "empty input does not grant");
+}
+
 # ============================================================================
 # Read-class tools never require approval
 # ============================================================================
@@ -463,6 +482,7 @@ init(nil: ref Draw->Context, args: list of string)
 	run("OtherToolsNeverApproval", testOtherToolsNeverApproval);
 
 	# firstlines
+	run("ApprovalAnswer", testApprovalAnswer);
 	run("FirstlinesShorterThanBuffer", testFirstlinesShorterThanBuffer);
 	run("FirstlinesExactN", testFirstlinesExactN);
 	run("FirstlinesTrunc", testFirstlinesTrunc);

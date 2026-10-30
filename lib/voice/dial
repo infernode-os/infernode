@@ -30,10 +30,9 @@ bind -a '#A' /dev
 echo 'play_buffer_ms 100' > /dev/audioctl >[2] /dev/null
 echo 'rec_buffer_ms 100'  > /dev/audioctl >[2] /dev/null
 
-# Mount the peer's exported /dev tree at /n/voice. -A skips TLS — same
-# rationale as voice/listen.
+# Mount the peer's authenticated, encrypted audio export at /n/voice.
 mkdir -p /n/voice
-if {! mount -A $peer /n/voice} {
+if {! mount $peer /n/voice} {
 	echo 'voice/dial: mount' $peer 'failed' >[1=2]
 	exit mount
 }

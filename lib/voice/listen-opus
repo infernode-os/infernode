@@ -48,7 +48,7 @@ local_enc=$apid
 cat /n/opus/dec > /dev/audio &
 local_dec=$apid
 
-echo 'voice/listen-opus:' $addr 'exporting /n/opus (enc/dec/ctl/status)'
+echo 'voice/listen-opus:' $addr 'exporting authenticated /n/opus (enc/dec/ctl/status)'
 echo '  local enc pid=' $local_enc '(mic -> encoder)'
 echo '  local dec pid=' $local_dec '(decoder -> speaker)'
-listen -A $addr { export /n/opus & }
+listen $addr { export /n/opus & }

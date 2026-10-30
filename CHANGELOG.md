@@ -4,73 +4,51 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
-### Applications
+## [0.9.1] - 2026-10-30
 
-- **The old icons are gone; every program draws `icon(2)`'s glyphs.**
-  wm/deb's controls, its Stack window's open and closed marks,
-  wm/bounce's arrows and dialog(2)'s error, warning, information and
-  question icons are Tabler glyphs in the theme's colours, repainted on
-  a theme switch; webget's help page shows them too. The 135 old icon
-  files left are removed, so `icons/` holds `icons/ui`, Tk's cursors
-  (unchanged), and the artwork that is not an icon: wm/coffee's cups and
-  backdrop and the picture `draw-example(2)` draws, all kept as they
-  were. A glyph that cannot be drawn leaves a blank button, not a
-  program that fails to start: `icon(2)` makes every Tk image it is
-  asked for whatever happens to the glyph, and
-  `tests/host/icons_test.sh` (run in CI) fails if anything names an
-  icon that is not in the tree. Making an image no longer leaves an
-  error in Tk's `lasterror`, which dialog(2) read as a failure and
-  answered its own question with the default ("discard").
-- **wm/ftree works again, and is upstream's tool with the name space
-  added.** The arrow, page and home keys did nothing: ftree matched X11
-  keysyms, which nothing sends since the Tk port dropped the widget
-  toolkit's translation. Its agent's state file was written only on a
-  click, so an agent read a stale selection and view; it is written on
-  every change, the agent's `scroll` moves the view, and the view
-  stays where the user scrolled it. Refresh kept nothing open; it
-  keeps what was open. Restored from upstream: Copy, Paste into and
-  Remove (which now asks first), the `-d`, `-e`, `-E` and `-p` options
-  of a touch-screen start panel, and a name space of its own, so a bind
-  made in ftree no longer changes the name space of whatever started
-  it. The root shows as `/`, not `//`. `ftree(1)` is back.
-  `tests/host/ftree_test.sh` drives it.
-- **`wm/dir` is back, on new icons.** Inferno's file browser, the Files
-  entry of upstream's window menu, was dropped in the migration. It is
-  restored with its icons drawn by `icon(2)` in the theme's colours.
-  A folder opens in the same window (a window each is an option), and
-  a file opens through the plumber, so in Lucifer it lands in the
-  presentation view; with no plumber, a program runs, an image opens
-  in `wm/view`, a PDF in `wm/page` and anything else in `wm/edit`.
-  Fixed on the way: `..` was the working directory's parent, not the
-  folder's; resizing the window indexed an empty string; a name with a
-  blank broke its label; long names made one column; a folder that
-  could not be read closed the window. `tests/host/wm_dir_test.sh`
-  drives it.
-- **Icons: Tabler's glyphs, drawn at any size in any colour.**
-  `icons/ui` holds the 45 glyphs the interface uses, from Tabler Icons
-  (MIT), 22.6KB of SVG; `icons/ui/LIST` names them and
-  `tools/update-icons.sh` fetches any added. `icon(2)` draws one with
-  readsvg at the size asked for and paints it in a theme's colour, so
-  a glyph is sharp on any display and a theme switch repaints it.
-- **Double-click works in Tk applications on SDL hosts.** Tk took a
-  double click only from a press the X11 driver marked as one; SDL and
-  `/dev/pointer` send two plain presses, so no `<Double-Button-1>`
-  binding ever fired on macOS, Windows or Linux with SDL (wm/dir
-  opened nothing, ftree's double-click did nothing, a text widget
-  never selected a word). Tk now times presses itself as X11 does:
-  the same button again within 300ms and 12 pixels.
-- **`wm/edit` is back.** Inferno's own editor was dropped in the
-  migration and its name later given to the editor now called
-  `wm/editor`, so `wm/task`'s Files button, which loads
-  `/dis/wm/edit.dis`, did nothing. It is restored from upstream with
-  its bugs fixed: it opened at 384x188 with a white text area under the
-  theme's light text, it took the arrow and page keys for changes (so
-  reading a file asked to discard it), a name that did not exist was an
-  error rather than a new file, and an empty Save As name was tried as a
-  file. It follows a theme switch, Limbo mode's colours among it.
-  `tests/host/wm_edit_test.sh` drives it. `man/1/edit` described
-  `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
-  `wm/edit`'s.
+This security patch release fixes remotely reachable IPv4 reassembly and voice
+export flaws, bounds TCP out-of-order queues, and closes the hosted agent
+containment gaps found in the 0.9.0 review. Upgrading is recommended for every
+0.9.0 installation, especially bare-metal nodes and systems that ran
+`voice/listen`.
+
+### Security
+
+- **IPv4 fragments cannot claim bytes that were not received.** Reassembly now
+  validates and trims every fragment to its IPv4 total length, rejects lengths
+  beyond the received block, rejects invalid fragment alignment, and caps the
+  assembled extent before handing a packet to ICMP, TCP, or UDP. The flaw is
+  inherited from upstream Inferno; the final Bell Labs Plan 9 source has the
+  same trust error, while 9front's receive path has used received block lengths
+  and capped completed assemblies since 2019.
+- **TCP out-of-order storage is bounded by both bytes and Blocks.** InferNode
+  now carries 9front's receive-window byte limit and MSS-derived packet-count
+  limit, including segments inserted at the head of the resequencing queue.
+  This is an upstream Inferno omission; 9front has carried the limits since
+  2013.
+- **Voice exports require keyring authentication and expose audio only.** The
+  original `voice/listen` script anonymously exported all of `/dev`, allowing
+  a network peer to inject input and operate control devices. It now constructs
+  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners,
+  dialers, and loopback tests no longer pass `-A`. There is no anonymous mode in
+  the shipped voice scripts. Provision a signer and peer auth information with
+  `auth/createsignerkey` and `getauthinfo` before using voice on a fresh node.
+- **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
+  `killtree`, which kills N's group and every descendant group. The exec tool
+  uses it on deadlines and output caps, so a confined command cannot survive by
+  calling `NEWPGRP`.
+- **Approval and messaging surfaces are content-bound.** Lucifer grants a gated
+  call only for the exact `Allow` action, not delivered task/message events or
+  conversational text. Message pending entries show a losslessly escaped,
+  immutable body, and approval sends that exact body.
+- **Namespace checks match the host filesystem and actual parent authority.**
+  Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
+  bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
+  aliases are rejected. A parent root grant no longer authorizes a child path
+  the parent cannot see. Confined `NODEVS` processes cannot follow host symlinks
+  out of a granted tree.
+- **mc9p responses are private to the requesting fid.** One client can no
+  longer read or replace another client's endpoint response.
 
 ## [0.9.0] - 2026-10-29
 

@@ -32,6 +32,16 @@ fail() { echo -e "${RED}FAIL${NC}: $1"; FAILED=$((FAILED+1)); }
 [[ -f "$ROOT/dis/tests/veltro_security_test.dis" ]] || { echo "SKIP: veltro_security_test.dis not found"; exit 77; }
 
 BAD_PRIV=(
+	"/chan"
+	"/fd"
+	"/usr"
+	"/usr/inferno/keyring"
+	"/keyring/signer"
+	"/USR/INFERNO/KEYRING"
+	"/MNT/FACTOTUM"
+	"/TMP/VELTRO/COW"
+	"/mnt/toolctl.17"
+	"/MNT/TOOLCTL.17/CTL"
   "/mnt/ui"
   "/mnt/ui/activity/0/presentation"
   "/mnt/factotum"

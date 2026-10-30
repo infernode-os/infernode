@@ -539,6 +539,7 @@ invalidGrantPath(p: string): string
 
 privilegedControlGrant(p: string): int
 {
+	p = asciilower(p);
 	dangerous := array[] of {
 		"/tool/ctl",
 		"/mnt/toolctl",
@@ -559,6 +560,8 @@ privilegedControlGrant(p: string): int
 	for(i := 0; i < len dangerous; i++)
 		if(p == dangerous[i] || prefix(p, dangerous[i] + "/"))
 			return 1;
+	if(prefix(p, "/mnt/toolctl."))
+		return 1;
 	if(walletAccountControlGrant(p))
 		return 1;
 	if(ftreeControlGrant(p))
@@ -577,7 +580,29 @@ privilegedControlGrant(p: string): int
 		return 1;
 	if(fixedServiceControlGrant(p))
 		return 1;
+	if(ambientAuthorityGrant(p))
+		return 1;
 	return 0;
+}
+
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientAuthorityGrant(p: string): int
+{
+	if(p == "/chan" || p == "/fd" || prefix(p, "/fd/"))
+		return 1;
+	if(p == "/usr")
+		return 1;
+	return pathhascomponent(p, "keyring") &&
+		(p == "/keyring" || prefix(p, "/keyring/") ||
+		 prefix(p, "/usr/") || prefix(p, "/mnt/"));
 }
 
 # nsconstruct's walletcontrolpath: per-account ctl and sign, under the

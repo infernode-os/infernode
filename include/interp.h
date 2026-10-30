@@ -474,6 +474,7 @@ extern	void		keyringmodinit(void);
 extern	void		killcomm(Progq **p);
 extern	int		killprog(Prog*, char*);
 extern	int		killgrp(Prog*, char*);
+extern	int		killgrptree(Prog*, char*);
 extern	Modlink*	linkmod(Module*, Import*, int);
 extern	Modlink*	mklinkmod(Module*, int);
 extern	Module*		load(char*);

@@ -5040,6 +5040,30 @@ vrefute "nothing panics"                           "panic:"
 vcheck "init reaches the shell"                    "init: starting the shell"
 vcheck "the interrupt controller is the GICv2 QEMU gives by default" "gic:  GICv2"
 
+# Raw Ethernet from a UDP socket netdev gives the native stack packets the
+# host kernel cannot normalise first. Keep the valid fragmented control beside
+# the two adversarial cases: a claimed IPv4 length beyond the received bytes,
+# and hundreds of one-byte descending TCP segments (head insertion).
+if NETSEC="$(python3 "$ROOT/tests/host/qemu_net_security.py" "$QEMU" "$BUILD/$PLAT-kernel.img" 2>&1)"; then
+    if grep -q '^FRAGMENT-VALID-PASS$' <<<"$NETSEC"; then
+        pass "virt: valid fragmented ICMP is still reassembled"
+    else
+        fail "virt: raw network control did not pass -- $NETSEC"
+    fi
+    if grep -q '^FRAGMENT-LIE-PASS$' <<<"$NETSEC"; then
+        pass "virt: IPv4 reassembly rejects a total length beyond received bytes"
+    else
+        fail "virt: lying IPv4 fragment was not rejected -- $NETSEC"
+    fi
+    if grep -q '^TCP-RESEQ-LIMIT-PASS$' <<<"$NETSEC"; then
+        pass "virt: descending one-byte TCP segments hit the packet-count limit"
+    else
+        fail "virt: TCP resequencing packet limit was not observed -- $NETSEC"
+    fi
+else
+    fail "virt: raw network security regressions failed -- $NETSEC"
+fi
+
 #
 # The same boot on a GICv3: the interrupt controller of the Orin, the
 # Pi 5 and most boards since 2016, and what virt has above eight cores.

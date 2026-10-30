@@ -99,8 +99,16 @@ testListenShape(t: ref T)
 		"voice/listen writes INFR-194 capture buffer cap");
 	t.assert(contains(s, "listen "),
 		"voice/listen calls listen builtin");
-	t.assert(contains(s, "export /dev"),
-		"voice/listen exports /dev");
+	t.assert(!contains(s, "listen -A"),
+		"voice/listen requires authenticated transport");
+	t.assert(!contains(s, "export /dev"),
+		"voice/listen does not export the whole device tree");
+	t.assert(contains(s, "export /tmp/voice-export"),
+		"voice/listen exports the narrow audio tree");
+	t.assert(contains(s, "bind /dev/audio /tmp/voice-export/audio"),
+		"voice/listen includes only the audio data endpoint");
+	t.assert(contains(s, "bind /dev/audioctl /tmp/voice-export/audioctl"),
+		"voice/listen includes only the audio control endpoint");
 }
 
 testDialShape(t: ref T)

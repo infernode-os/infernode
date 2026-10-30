@@ -2004,7 +2004,11 @@ fi
 # frames as the IMX708 will: os/init/camtest.b checks the settings, a
 # frame's colours after debayering, raw's samples, the pacing and the
 # refusals, one "camtest:" line each.
-if grep -qx '/dev/camera/frame' <<<"$SHOUT" && grep -qx '/dev/camera/ctl' <<<"$SHOUT"; then
+# Typed after the authenticated mount, so ls answers while the shell is
+# still printing prompts for the lines typed ahead of it: its first
+# name came back as "; /dev/camera/ctl". The prompts are taken off.
+CAMLS="$(sed 's/^\(; \)*//' <<<"$SHOUT")"
+if grep -qx '/dev/camera/frame' <<<"$CAMLS" && grep -qx '/dev/camera/ctl' <<<"$CAMLS"; then
     pass "#V is bound after /dev: /dev/camera/ctl and frame"
 else
     fail "/dev/camera -- $(reply_to "$SHOUT" 'ls /dev/camera' | head -3 | tr '\n' ' ')"

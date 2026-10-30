@@ -41,6 +41,8 @@ include "security.m";
 	random: Random;
 include "sdg.m";
 	sdg: Sdg;
+include "audit.m";
+	audit: Audit;
 
 Brick: module
 {
@@ -158,6 +160,8 @@ pair(mnt: string)
 {
 	(nil, cert) := loadkeys(1);
 	mine := hex(certpin(cert));
+	if((e := auditlog("pair", "keydir=" + keydir + " pin=" + mine)) != nil)
+		fail("pair", e);
 	writefile(mnt + "/config/peer", mine + "\n");
 
 	theirs := readfile(mnt + "/config/spki");
@@ -170,8 +174,10 @@ pair(mnt: string)
 
 	# The datagram transport too, if the brick has one: our X25519 public
 	# key and a fresh PSK go to it, its public key comes back.
-	if(sys->stat(mnt + "/config/sdg").t0 < 0)
+	if(sys->stat(mnt + "/config/sdg").t0 < 0){
+		auditlog("paired", "keydir=" + keydir + " brick=" + theirs);
 		return;
+	}
 	random = load Random Random->PATH;
 	if(random == nil)
 		fail("load", sys->sprint("can't load %s: %r", Random->PATH));
@@ -200,7 +206,9 @@ pair(mnt: string)
 		writefile(mnt + "/config/d2", "key " + hex(d2key));
 		createfile(keydir + "/d2.key", hex(d2key) + "\n", 8r600);
 		sys->print("d2 key    set\n");
-	}
+		auditlog("paired", "keydir=" + keydir + " brick=" + theirs + " sdg=" + pub + " d2key=new");
+	}else
+		auditlog("paired", "keydir=" + keydir + " brick=" + theirs + " sdg=" + pub);
 }
 
 wifi(mnt: string)
@@ -212,6 +220,9 @@ wifi(mnt: string)
 	creds := string buf[0:n];
 	if(n == 0 || n == len buf || !hasprefix(creds, "ssid "))
 		fail("wifi", "expected \"ssid NAME\\npass PASSPHRASE\\n\" on standard input");
+	(nil, ws) := sys->tokenize(creds, "\n");
+	if((e := auditlog("wifi", "mnt=" + mnt + " " + hd ws)) != nil)	# the ssid line, never the passphrase
+		fail("wifi", e);
 	writefile(mnt + "/config/wifi", creds);
 }
 
@@ -453,6 +464,7 @@ reconnect(d: ref D2, done: chan of int)
 	if(e == nil){
 		d.failsince = 0;
 		d.last = "reconnected";
+		auditlog("d2reconnect", d2what(d, nil));
 	}else{
 		d.last = e;
 		d.failsince = sys->millisec() - RECONNMS + 1000;	# try again in a second
@@ -494,7 +506,13 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			break;
 		case trim(string data) {
 		"arm" =>
-			e := d2send(d, "arm", held(o), 1);
+			# Arming gives this program authority over the outputs: not
+			# without its record, where this install requires one.
+			e := auditlog("d2arm", d2what(d, held(o)));
+			if(e != nil)
+				d.last = e;
+			else
+				e = d2send(d, "arm", held(o), 1);
 			if(e == nil){
 				d.armed = 1;
 				d.lapsed = nil;
@@ -506,6 +524,7 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			e := d2send(d, "safe", nil, 0);
 			d.armed = 0;
 			d.lapsed = "safe";
+			auditlog("d2safe", d2what(d, nil));	# after: safe never waits on, or fails for, the record
 			wc <-= (len data, e);
 		* =>
 			wc <-= (0, "unknown control message");
@@ -630,11 +649,37 @@ d2refused(d: ref D2, e: string): string
 	}
 	if(contains(e, "not armed") || contains(e, "session") || contains(e, "holding") ||
 	   contains(e, "boot")){
-		if(d.armed)
+		if(d.armed){
 			d.lapsed = e;
+			auditlog("d2lapse", d2what(d, nil) + " why=" + e);
+		}
 		d.armed = 0;
 	}
 	return e;
+}
+
+# Which brick and session, and what is held, for an audit record.
+d2what(d: ref D2, outs: list of string): string
+{
+	s := "brick=" + d.devid + " session=" + string d.epoch;
+	for(; outs != nil; outs = tl outs)
+		s += " " + hd outs;
+	return s;
+}
+
+# An audit record (auditfs(4)): nil, or why none was made when this
+# install requires auditing (Audit->ONFILE).  With auditing off, or no
+# /mnt/audit, it is silently nothing.
+auditlog(event, msg: string): string
+{
+	if(audit == nil && (audit = load Audit Audit->PATH) != nil)
+		audit->init();
+	if(audit != nil && audit->log("brick", event, msg) == 0)
+		return nil;
+	(ok, nil) := sys->stat(Audit->ONFILE);
+	if(ok < 0)
+		return nil;
+	return "auditing is required here and the record could not be made";
 }
 
 armedstr(d: ref D2): string

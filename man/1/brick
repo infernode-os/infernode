@@ -234,6 +234,34 @@ after which an application may write
 Measured on a bench: about 7 s from the brick being back to
 .BR reconnected .
 .PP
+.I Brick
+records what gives or changes authority in the audit log
+.RI ( auditfs (4)):
+.BR pair " and " paired ,
+.B wifi
+(the network's name, never the passphrase),
+and for
+.BR "brick d2" :
+.B d2arm
+(the brick, the session and the outputs held),
+.BR d2safe ,
+.B d2lapse
+(with the reason) and
+.BR d2reconnect .
+Where auditing is off, or
+.B /mnt/audit
+is not in the name space, nothing is recorded and nothing is refused.
+Where the install requires auditing
+.RB ( /usr/inferno/audit/on
+exists) and the record cannot be made,
+.BR pair ,
+.B wifi
+and
+.B arm
+are refused;
+.B safe
+never is: it is recorded after it is done.
+.PP
 .B Brick fetch
 copies
 .I file

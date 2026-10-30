@@ -32,6 +32,7 @@ extern Dev srvdevtab;
 extern Dev etherdevtab;
 extern Dev ssldevtab;
 extern Dev uartdevtab;
+extern Dev camdevtab;
 
 Dev*	devtab[] =
 {
@@ -52,5 +53,6 @@ Dev*	devtab[] =
 	&etherdevtab,		/* 'l' -- #l, the kernel Ethernet data path */
 	&ssldevtab,		/* 'D' -- #D, SSL/TLS record layer; secstore's transport */
 	&uartdevtab,		/* 't' -- #t, serial ports: eia0 the PL011, the console */
+	&camdevtab,		/* 'V' -- #V, the camera: the simulated sensor so far (os/port/devcam.c, campattern.c) */
 	nil,
 };

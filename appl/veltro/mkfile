@@ -76,211 +76,211 @@ TOOLS=\
 all:V: $MAIN $TOOLS $SOURCES
 
 # Main programs
-agentlib.dis: agentlib.b $MODDIR/agentlib.m
+agentlib.dis: agentlib.b $MODDIR/agentlib.m $MODDIR/bufio.m $MODDIR/json.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/wirefmt.m
 	limbo $LIMBOFLAGS -gw agentlib.b
 
-veltro.dis: veltro.b $MODDIR/agentlib.m tool.m $MODDIR/nsconstruct.m
+veltro.dis: veltro.b $MODDIR/agentlib.m tool.m $MODDIR/nsconstruct.m veltrosrv.m $MODDIR/arg.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw veltro.b
 
-tools9p.dis: tools9p.b tool.m
+tools9p.dis: tools9p.b tool.m $MODDIR/arg.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/nsconstruct.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw tools9p.b
 
-nsconstruct.dis: nsconstruct.b $MODDIR/nsconstruct.m
+nsconstruct.dis: nsconstruct.b $MODDIR/nsconstruct.m $MODDIR/audit.m $MODDIR/cowfs.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/keyring.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw nsconstruct.b
 
-cowfs.dis: cowfs.b
+cowfs.dis: cowfs.b $MODDIR/cowfs.m $MODDIR/draw.m $MODDIR/readdir.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw cowfs.b
 
-subagent.dis: subagent.b subagent.m tool.m
+subagent.dis: subagent.b subagent.m tool.m $MODDIR/agentlib.m $MODDIR/auditprov.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw subagent.b
 
-veltrosrv.dis: veltrosrv.b veltrosrv.m $MODDIR/agentlib.m
+veltrosrv.dis: veltrosrv.b veltrosrv.m $MODDIR/agentlib.m $MODDIR/arg.m $MODDIR/audit.m $MODDIR/auditprov.m $MODDIR/draw.m $MODDIR/nsconstruct.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw veltrosrv.b
 
-mc9p.dis: mc9p.b
+mc9p.dis: mc9p.b $MODDIR/arg.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m $MODDIR/tls.m
 	limbo $LIMBOFLAGS -gw mc9p.b
 
-speech9p.dis: speech9p.b
+speech9p.dis: speech9p.b $MODDIR/arg.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw speech9p.b
 
-msg9p.dis: msg9p.b
+msg9p.dis: msg9p.b $MODDIR/arg.m $MODDIR/draw.m $MODDIR/msgsrc.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw msg9p.b
 
-msgwatch.dis: msgwatch.b $MODDIR/agentlib.m
+msgwatch.dis: msgwatch.b $MODDIR/agentlib.m $MODDIR/arg.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw msgwatch.b
 
-ninepsrc.dis: ninepsrc.b
+ninepsrc.dis: ninepsrc.b $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/msgsrc.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw ninepsrc.b
 
-wiki9p.dis: wiki9p.b
+wiki9p.dis: wiki9p.b $MODDIR/arg.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/readdir.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw wiki9p.b
 
-wallet9p.dis: wallet9p.b
+wallet9p.dis: wallet9p.b $MODDIR/arg.m $MODDIR/draw.m $MODDIR/ethcrypto.m $MODDIR/ethrpc.m $MODDIR/factotum.m $MODDIR/keyring.m $MODDIR/string.m $MODDIR/stripe.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m $MODDIR/wallet.m $MODDIR/x402.m
 	limbo $LIMBOFLAGS -gw wallet9p.b
 
 # Sources
-sources/email.dis: sources/email.b
+sources/email.dis: sources/email.b $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/factotum.m $MODDIR/imap.m $MODDIR/msgsrc.m $MODDIR/smtp.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o sources/email.dis sources/email.b
-sources/mockmail.dis: sources/mockmail.b
+sources/mockmail.dis: sources/mockmail.b $MODDIR/draw.m $MODDIR/msgsrc.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o sources/mockmail.dis sources/mockmail.b
 
 # Tools
-tools/read.dis: tools/read.b tool.m
+tools/read.dis: tools/read.b tool.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/read.dis tools/read.b
 
-tools/list.dis: tools/list.b tool.m
+tools/list.dis: tools/list.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/list.dis tools/list.b
 
-tools/find.dis: tools/find.b tool.m
+tools/find.dis: tools/find.b tool.m $MODDIR/draw.m $MODDIR/filepat.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/find.dis tools/find.b
 
-tools/search.dis: tools/search.b tool.m
+tools/search.dis: tools/search.b tool.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/regex.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/search.dis tools/search.b
 
-tools/write.dis: tools/write.b tool.m
+tools/write.dis: tools/write.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/write.dis tools/write.b
 
-tools/edit.dis: tools/edit.b tool.m
+tools/edit.dis: tools/edit.b tool.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/json.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/edit.dis tools/edit.b
 
-tools/exec.dis: tools/exec.b tool.m
+tools/exec.dis: tools/exec.b tool.m $MODDIR/draw.m $MODDIR/sh.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/exec.dis tools/exec.b
 
-tools/launch.dis: tools/launch.b tool.m
+tools/launch.dis: tools/launch.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/launch.dis tools/launch.b
 
-tools/spawn.dis: tools/spawn.b tool.m $MODDIR/nsconstruct.m subagent.m
+tools/spawn.dis: tools/spawn.b tool.m $MODDIR/nsconstruct.m subagent.m $MODDIR/agentlib.m $MODDIR/auditprov.m $MODDIR/bufio.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/json.m $MODDIR/rfc3339.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/spawn.dis tools/spawn.b
 
-tools/xenith.dis: tools/xenith.b tool.m
+tools/xenith.dis: tools/xenith.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/xenith.dis tools/xenith.b
 
-tools/editor.dis: tools/editor.b tool.m
+tools/editor.dis: tools/editor.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/editor.dis tools/editor.b
 
-tools/shell.dis: tools/shell.b tool.m
+tools/shell.dis: tools/shell.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/shell.dis tools/shell.b
 
-tools/present.dis: tools/present.b tool.m
+tools/present.dis: tools/present.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/present.dis tools/present.b
 
 # New tools (Phase 1c)
-tools/diff.dis: tools/diff.b tool.m
+tools/diff.dis: tools/diff.b tool.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/diff.dis tools/diff.b
 
-tools/json.dis: tools/json.b tool.m
+tools/json.dis: tools/json.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/json.dis tools/json.b
 
-tools/webfetch.dis: tools/webfetch.b tool.m
+tools/webfetch.dis: tools/webfetch.b tool.m $MODDIR/draw.m $MODDIR/publicnet.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m
 	limbo $LIMBOFLAGS -gw -o tools/webfetch.dis tools/webfetch.b
 
-tools/git.dis: tools/git.b tool.m
+tools/git.dis: tools/git.b tool.m $MODDIR/daytime.m $MODDIR/draw.m $MODDIR/factotum.m $MODDIR/git.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/url.m
 	limbo $LIMBOFLAGS -gw -o tools/git.dis tools/git.b
 
-tools/grep.dis: tools/grep.b tool.m
+tools/grep.dis: tools/grep.b tool.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/regex.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/grep.dis tools/grep.b
 
-tools/memory.dis: tools/memory.b tool.m
+tools/memory.dis: tools/memory.b tool.m $MODDIR/bufio.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/memory.dis tools/memory.b
 
-tools/todo.dis: tools/todo.b tool.m
+tools/todo.dis: tools/todo.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/todo.dis tools/todo.b
 
 # Speech tools
-tools/say.dis: tools/say.b tool.m
+tools/say.dis: tools/say.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/say.dis tools/say.b
 
-tools/hear.dis: tools/hear.b tool.m
+tools/hear.dis: tools/hear.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/hear.dis tools/hear.b
 
 # Phone tools (devphone — /phone/sms and /phone/phone)
-tools/sms.dis: tools/sms.b tool.m
+tools/sms.dis: tools/sms.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/sms.dis tools/sms.b
 
-tools/dial.dis: tools/dial.b tool.m
+tools/dial.dis: tools/dial.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/dial.dis tools/dial.b
 
-tools/websearch.dis: tools/websearch.b tool.m
+tools/websearch.dis: tools/websearch.b tool.m $MODDIR/draw.m $MODDIR/factotum.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m
 	limbo $LIMBOFLAGS -gw -o tools/websearch.dis tools/websearch.b
 
 # Browse tool
-tools/browse.dis: tools/browse.b tool.m
+tools/browse.dis: tools/browse.b tool.m $MODDIR/draw.m $MODDIR/formatter.m $MODDIR/html.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m
 	limbo $LIMBOFLAGS -gw -o tools/browse.dis tools/browse.b
 
 # Charon browser tool
-tools/charon.dis: tools/charon.b tool.m
+tools/charon.dis: tools/charon.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/charon.dis tools/charon.b
 
 # GPU tool
-tools/gpu.dis: tools/gpu.b tool.m
+tools/gpu.dis: tools/gpu.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/gpu.dis tools/gpu.b
 
 # Vision tool
-tools/vision.dis: tools/vision.b tool.m
+tools/vision.dis: tools/vision.b tool.m $MODDIR/draw.m $MODDIR/encoding.m $MODDIR/factotum.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m
 	limbo $LIMBOFLAGS -gw -o tools/vision.dis tools/vision.b
 
 # Fractal tool
-tools/fractal.dis: tools/fractal.b tool.m
+tools/fractal.dis: tools/fractal.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/fractal.dis tools/fractal.b
 
 # Task delegation tool
-tools/task.dis: tools/task.b tool.m
+tools/task.dis: tools/task.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/task.dis tools/task.b
 
 # Gap tool
-tools/gap.dis: tools/gap.b tool.m
+tools/gap.dis: tools/gap.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/gap.dis tools/gap.b
 
 # Plan tool
-tools/plan.dis: tools/plan.b tool.m
+tools/plan.dis: tools/plan.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/plan.dis tools/plan.b
 
 # Keyring tool (credential management)
-tools/keyring.dis: tools/keyring.b tool.m
+tools/keyring.dis: tools/keyring.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/keyring.dis tools/keyring.b
 
 # Wiki knowledge base tool
-tools/wiki.dis: tools/wiki.b tool.m
+tools/wiki.dis: tools/wiki.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/wiki.dis tools/wiki.b
 
 # Limbo authoring tool — LLM-as-tool routing to devstral-limbo-v3
-tools/limbo.dis: tools/limbo.b tool.m
+tools/limbo.dis: tools/limbo.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/limbo.dis tools/limbo.b
 
 # HTTP client tool
-tools/http.dis: tools/http.b tool.m
+tools/http.dis: tools/http.b tool.m $MODDIR/draw.m $MODDIR/publicnet.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m
 	limbo $LIMBOFLAGS -gw -o tools/http.dis tools/http.b
 
 # Manual page viewer control tool
-tools/man.dis: tools/man.b tool.m
+tools/man.dis: tools/man.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/man.dis tools/man.b
 
 # Matrix compositional module runtime control tool
-tools/matrix.dis: tools/matrix.b tool.m
+tools/matrix.dis: tools/matrix.b tool.m $MODDIR/draw.m $MODDIR/readdir.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/matrix.dis tools/matrix.b
 
-tools/window.dis: tools/window.b tool.m
+tools/window.dis: tools/window.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/window.dis tools/window.b
 
 # Namespace mount guidance tool (stub: namespace mounting is user-only)
-tools/mount.dis: tools/mount.b tool.m
+tools/mount.dis: tools/mount.b tool.m $MODDIR/draw.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/mount.dis tools/mount.b
 
 # x402-aware paid-fetch tool
-tools/payfetch.dis: tools/payfetch.b tool.m
+tools/payfetch.dis: tools/payfetch.b tool.m $MODDIR/draw.m $MODDIR/encoding.m $MODDIR/publicnet.m $MODDIR/string.m $MODDIR/sys.m $MODDIR/webclient.m $MODDIR/x402.m
 	limbo $LIMBOFLAGS -gw -o tools/payfetch.dis tools/payfetch.b
 
 # Wallet operations tool
-tools/wallet.dis: tools/wallet.b tool.m
+tools/wallet.dis: tools/wallet.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/wallet.dis tools/wallet.b
 
-tools/contacts.dis: tools/contacts.b tool.m
+tools/contacts.dis: tools/contacts.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/contacts.dis tools/contacts.b
 
-sources/sms.dis: sources/sms.b
+sources/sms.dis: sources/sms.b $MODDIR/draw.m $MODDIR/msgsrc.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o sources/sms.dis sources/sms.b
 
-taskboard9p.dis: taskboard9p.b
+taskboard9p.dis: taskboard9p.b $MODDIR/arg.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/styx.m $MODDIR/styxservers.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o taskboard9p.dis taskboard9p.b
 
 install:V: all

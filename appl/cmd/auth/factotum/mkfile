@@ -16,6 +16,10 @@ SYSMODULES=\
 	draw.m\
 	bufio.m\
 	string.m\
+	audit.m\
+	dial.m\
+	readdir.m\
+	secstore.m\
 
 MODULES=\
 	authio.m\

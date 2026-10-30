@@ -157,7 +157,7 @@ and passed as `-foreground #rrggbbff`.
 | `wm/fractals` | migrated | dynamic image (off-screen draw + putimage) |
 | `wm/ftree` | migrated | tree as listbox (flattened visible nodes) |
 | `wm/editor` | migrated | text widget as a view of the doc model |
-| `wm/shell` | migrated | terminal: text-widget view of transcript+input |
+| `wm/shell` | migrated | terminal: the text widget is the transcript, as in wm/sh |
 | `wm/settings` | migrated | master-detail form (9 panels; theme switcher) |
 | `wm/matrix` + `matrix/*` | migrated | composited frame via label+putimage |
 | `charon/gui` (+`layout`/`common`) | migrated | inline flat status strip + scrollbars |

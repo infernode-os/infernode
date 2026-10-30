@@ -119,6 +119,13 @@ jobs:
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         ./tools/verify-dis-build.sh
 
+    - name: Check mkfile header dependencies
+      run: |
+        # Every module header a Limbo source includes, at any depth, is a
+        # prerequisite of its .dis: one that is not changes without mk
+        # rebuilding, and the stale .dis fails at load (link typecheck).
+        python3 tools/check-mkfile-deps.py
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/amd64/bin/limbo"
@@ -1062,11 +1069,12 @@ jobs:
       run: |
         # wm/wm driven by the pointer: New, the sweep and its cursor,
         # the frame, focus, the menu's operations, a theme switch, a
-        # client leaving, wm/page, wm/sam edited through its windows,
-        # and every program in dis/wm opening at a size that shows it,
-        # under wm/wm and in Lucifer's zone.  wm_test.sh was written to
+        # client leaving, wm/shell typed at (the shell New starts),
+        # wm/page, wm/sam edited through its windows, and every program
+        # in dis/wm opening at a size that shows it, under wm/wm and in
+        # Lucifer's zone.  wm_test.sh was written to
         # keep New from breaking again, and nothing ran it.
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test page_test sam_gui_test lucifer_app_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test page_test sam_gui_test lucifer_app_test; do
           echo "--- $t ---"
           ROOT=. sh tests/host/$t.sh
         done
@@ -1965,7 +1973,7 @@ jobs:
         # As the Linux GUI job; wm_cursor_test needs LD_PRELOAD and skips
         # here (77).
         failed=
-        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test page_test sam_gui_test lucifer_app_test; do
+        for t in wm_test wm_cursor_test wm_size_test wm_theme_test wm_ghost_test wm_shell_test page_test sam_gui_test lucifer_app_test; do
           echo "--- $t ---"
           rc=0
           ROOT=. sh tests/host/$t.sh || rc=$?

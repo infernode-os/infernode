@@ -242,35 +242,15 @@ echo "=== Building Applications (Limbo -> Dis bytecode) ==="
 
 MK="$ROOT/Linux/arm64/bin/mk"
 
-# Build library modules
-echo "Building library modules..."
-cd "$ROOT/appl/lib"
-$MK install 2>&1 || { echo "WARNING: some library modules failed to build"; }
-
-# Build core commands (includes lucifer, luciuisrv, lucibridge, etc.)
-echo "Building command utilities..."
-cd "$ROOT/appl/cmd"
-$MK install 2>&1 || { echo "WARNING: some commands failed to build"; }
-
-# Build window manager components (editor, shell, wm, etc.)
-echo "Building wm components..."
-cd "$ROOT/appl/wm"
-$MK install 2>&1 || { echo "WARNING: some wm modules failed to build"; }
-
-# Build shell modules
-echo "Building shell modules..."
-cd "$ROOT/appl/cmd/sh"
-$MK install 2>&1 || { echo "WARNING: some shell modules failed to build"; }
-
-# Build Charon web browser
-echo "Building Charon web browser..."
-cd "$ROOT/appl/charon"
-$MK install 2>&1 || { echo "WARNING: some charon modules failed to build"; }
-
-# Build Veltro agent system (tools9p, agentlib, etc.)
-echo "Building Veltro agent system..."
-cd "$ROOT/appl/veltro"
-$MK install 2>&1 || { echo "WARNING: some veltro modules failed to build"; }
+# The whole tree, as CLAUDE.md and hooks/post-merge build it: appl's
+# DIRS (lib, cmd and its sh, wm, charon, xenith, acme, ...) and the two
+# directories not in them.  A hand-picked list left out appl/xenith,
+# whose docreg.dis wm/page loads: built by this script alone, wm/page
+# could not start.
+for d in appl appl/mpeg appl/veltro tests; do
+    echo "Building $d..."
+    (cd "$ROOT/$d" && $MK install 2>&1) || echo "WARNING: some modules in $d failed to build"
+done
 
 # Verify essential files
 echo ""

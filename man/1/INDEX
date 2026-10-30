@@ -218,6 +218,8 @@ uuencode uuencode
 wc wc
 webgrab webgrab
 wm wm
+wm-shell wm-shell
+shell wm-shell
 xd xd
 yacc yacc
 zeros zeros

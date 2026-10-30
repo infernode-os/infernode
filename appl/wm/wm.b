@@ -1007,7 +1007,7 @@ button3menu(wmctxt: ref Wmcontext, clientctxt: ref Draw->Context, p: ref Pointer
 		r := sweepout(ptr, mc.buttons);
 		if(!r.eq(Rect((0, 0), (0, 0)))){
 			sweptr = r;
-			spawn command(clientctxt, "wm/sh" :: nil, nil);
+			spawn command(clientctxt, "wm/shell" :: nil, nil);
 		}
 	Rresize =>
 		(c, nil) := pointto(ptr, 1, mc.buttons);

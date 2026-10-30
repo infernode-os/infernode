@@ -87,6 +87,15 @@ Lucitheme: module
 		# existed; positional initialisers in lucitheme.b construct it
 		# in the same trailing slot.) ---
 		windowborder: int;
+
+		# --- A shell window's text, after windowborder for the
+		# same reason: while it holds what is typed (wm/shell,
+		# wm/sh), and when the window has not the keyboard (wm/sh,
+		# as rio dims it; wm/shell does not, as Xenith does not):
+		# rio's dark blue and grey.  A theme that does not set them
+		# has its own accent and text2. ---
+		editunfocused: int;
+		edithold:     int;
 	};
 
 	# Load the currently active theme.

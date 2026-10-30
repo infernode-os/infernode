@@ -28,6 +28,10 @@ SYSMODULES=\
 	sys.m\
 	url.m\
 	webget.m\
+	asn1.m\
+	keyring.m\
+	pkcs.m\
+	sslsession.m\
 
 DISBIN=$ROOT/dis/svc/webget
 

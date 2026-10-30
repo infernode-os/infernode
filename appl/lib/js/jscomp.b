@@ -1653,8 +1653,13 @@ finish(id: ref Node, flen, nformal: int): ref Code
 	c.flen = flen;
 	c.nparams = nformal;
 	c.nregs = cs.nregs + 1;
-	c.ops = cs.ops[0:cs.nops];
-	c.pos = cs.pos[0:cs.nops];
+	# copies, not slices: a slice keeps the buffer it is cut from, 256
+	# words or more each, doubled as it grew; JSTOR's home page held 60 MB
+	# of them for 15000 compiled functions
+	c.ops = array[cs.nops] of int;
+	c.ops[0:] = cs.ops[0:cs.nops];
+	c.pos = array[cs.nops] of int;
+	c.pos[0:] = cs.pos[0:cs.nops];
 	c.whole = cs.src;
 	c.consts = revv(cs.consts);
 	c.funcs = revcode(cs.funcs);

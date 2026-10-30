@@ -1016,6 +1016,7 @@ dis/wm/coffee.dis
 dis/wm/colors.dis
 dis/wm/date.dis
 dis/wm/deb.dis
+dis/wm/edit.dis
 dis/wm/editor.dis
 dis/wm/fractals.dis
 dis/wm/ftree.dis

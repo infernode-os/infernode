@@ -20,6 +20,7 @@ TARG=\
 	settings.dis\
 	scene.dis\
 	editor.dis\
+	edit.dis\
 	fractals.dis\
 	tetris.dis\
 	coffee.dis\

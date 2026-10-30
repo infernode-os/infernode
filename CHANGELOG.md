@@ -4,6 +4,21 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Applications
+
+- **`wm/edit` is back.** Inferno's own editor was dropped in the
+  migration and its name later given to the editor now called
+  `wm/editor`, so `wm/task`'s Files button, which loads
+  `/dis/wm/edit.dis`, did nothing. It is restored from upstream with
+  its bugs fixed: it opened at 384x188 with a white text area under the
+  theme's light text, it took the arrow and page keys for changes (so
+  reading a file asked to discard it), a name that did not exist was an
+  error rather than a new file, and an empty Save As name was tried as a
+  file. It follows a theme switch, Limbo mode's colours among it.
+  `tests/host/wm_edit_test.sh` drives it. `man/1/edit` described
+  `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
+  `wm/edit`'s.
+
 ## [0.9.0] - 2026-10-29
 
 This release adds SD-card images for the Raspberry Pi 3B+ and 4B, which

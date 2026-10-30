@@ -352,6 +352,7 @@ D2: adt {
 	last:	string;	# the last command's outcome
 	bmnt:	string;	# where the brick is mounted
 	failsince:	int;	# when commands began failing on the transport (0: they are not)
+	lapserec:	int;	# a d2lapse is recorded for this armed period
 };
 
 d2serve(bmnt, dir: string)
@@ -448,6 +449,7 @@ reconnect(d: ref D2, done: chan of int)
 	# that is being replaced (the brick refuses its commands anyway).
 	if(d.armed || d.lapsed == nil)
 		d.lapsed = "the brick restarted or the link was lost";
+	lapse(d, "reconnect: " + d.lapsed);
 	d.armed = 0;
 	d.last = "reconnecting";
 	{
@@ -511,11 +513,18 @@ d2core(d: ref D2, o: array of ref Out, ctl: ref Sys->FileIO,
 			e := auditlog("d2arm", d2what(d, held(o)));
 			if(e != nil)
 				d.last = e;
-			else
+			else{
 				e = d2send(d, "arm", held(o), 1);
+				# The outcome too: d2arm alone cannot tell a refused arm from one that took.
+				if(e == nil)
+					auditlog("d2armed", d2what(d, held(o)));
+				else
+					auditlog("d2armfail", d2what(d, nil) + " why=" + e);
+			}
 			if(e == nil){
 				d.armed = 1;
 				d.lapsed = nil;
+				d.lapserec = 0;
 			}
 			wc <-= (len data, e);
 		"safe" =>
@@ -645,17 +654,30 @@ d2refused(d: ref D2, e: string): string
 	if(transport(e)){
 		if(d.failsince == 0)
 			d.failsince = sys->millisec();
+		# Authority is unprovable from here: the brick will fail safe within a lease.
+		lapse(d, "link: " + e);
 		return e;
 	}
 	if(contains(e, "not armed") || contains(e, "session") || contains(e, "holding") ||
 	   contains(e, "boot")){
 		if(d.armed){
 			d.lapsed = e;
-			auditlog("d2lapse", d2what(d, nil) + " why=" + e);
+			lapse(d, e);
 		}
 		d.armed = 0;
 	}
 	return e;
+}
+
+# One d2lapse per armed period, where authority is first lost or first
+# unprovable: a link failure, a reconnect, or the brick's refusal, whichever
+# comes first (review 2026-10-30 G4: a lapse under -r went unrecorded).
+lapse(d: ref D2, why: string)
+{
+	if(!d.armed || d.lapserec)
+		return;
+	d.lapserec = 1;
+	auditlog("d2lapse", d2what(d, nil) + " why=" + why);
 }
 
 # Which brick and session, and what is held, for an audit record.

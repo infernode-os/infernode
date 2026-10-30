@@ -243,10 +243,15 @@ records what gives or changes authority in the audit log
 and for
 .BR "brick d2" :
 .B d2arm
-(the brick, the session and the outputs held),
+(the brick, the session and the outputs held: the intent) and then
+.B d2armed
+or
+.B d2armfail
+(the brick's answer),
 .BR d2safe ,
 .B d2lapse
-(with the reason) and
+(with the reason, once an arming, where authority is first lost or first
+unprovable: a link failure, a reconnect, or the brick's refusal) and
 .BR d2reconnect .
 Where auditing is off, or
 .B /mnt/audit

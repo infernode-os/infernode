@@ -240,6 +240,7 @@ tilescrollx := 0;		# horizontal scroll offset for tile strip
 tiletotalw := 0;		# total pixel width of all tiles (for scroll cap)
 blinkon := 0;			# toggled by tileblinker goroutine
 tilelock: chan of int;		# mutex for tiles/ntiles/blinkon access
+blinkwake: chan of int;		# a tile became urgent: the blinker starts again
 
 # Urgency colors (allocated from theme)
 yellowcol: ref Image;
@@ -674,6 +675,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 		spawn nslistener();
 	spawn globallistener();
 	spawn themewatcher();
+	blinkwake = chan[1] of int;
 	spawn tileblinker();
 
 	# Main loop (header redraws + quit/resize)
@@ -2254,8 +2256,15 @@ loadtiles()
 			tiles = na;
 		}
 		tiles[ntiles++] = ref TileInfo(id, label, status, urg, 0, 0);
+		if(urg > 0)
+			wakeblinker();
 	}
 	tilelock <-= 1;
+}
+
+wakeblinker()
+{
+	alt { blinkwake <-= 1 => ; * => ; }
 }
 
 # Update a single tile field without full reload
@@ -2268,8 +2277,11 @@ updatetile(id: int, field, val: string)
 				tiles[i].status = val;
 			else if(field == "label")
 				tiles[i].label = val;
-			else if(field == "urgency")
+			else if(field == "urgency") {
 				tiles[i].urgency = strtoint(val);
+				if(tiles[i].urgency > 0)
+					wakeblinker();
+			}
 			tilelock <-= 1;
 			return;
 		}
@@ -2503,7 +2515,8 @@ themechanged(ev: string)
 	alt { uievent <-= 1 => ; * => ; }
 }
 
-# Toggle blink state for urgency tiles
+# Toggle blink state for urgency tiles; with none urgent, wait for one
+# rather than waking twice a second to find none
 tileblinker()
 {
 	for(;;) {
@@ -2524,6 +2537,8 @@ tileblinker()
 		tilelock <-= 1;
 		if(hasurgency)
 			alt { uievent <-= 1 => ; * => ; }
+		else
+			<-blinkwake;
 	}
 }
 

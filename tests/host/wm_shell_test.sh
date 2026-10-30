@@ -7,8 +7,9 @@
 # typed; ESC holding input until ESC again; raw mode while a program
 # holds /dev/consctl, a key at a time and not echoed; /chan/shctl's
 # commands; the window gone when the shell exits, nothing of it left
-# running, and gone when a -c command is done.  Each step is checked in the transcript the window writes
-# for Veltro (/tmp/veltro/shell/body).
+# running, and gone when a -c command is done.  Each step is checked
+# in the transcript the window writes for Veltro
+# (/tmp/veltro/shell/body).
 #
 set -e
 . "$(dirname "$0")/common.sh"

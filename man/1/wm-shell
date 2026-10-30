@@ -41,7 +41,13 @@ a line at a time.
 Text typed elsewhere in the window edits the transcript and is not sent.
 It is
 .B wm/sh
-with the theme's colours and font, following a theme switch,
+with the theme's colours and font, following a theme switch
+(its text, background and selection as Xenith's body has them:
+.BR edittext ,
+.B editbg
+and
+.BR menuhilit ;
+the text is not dimmed when the window has not the keyboard),
 a history of the lines sent,
 and the transcript kept where Veltro's shell tool reads it;
 .B wm/wm
@@ -110,8 +116,9 @@ Clear the transcript above the line being written.
 .B Esc
 Hold: nothing typed is sent until
 .B Esc
-again; the text is drawn in the theme's accent meanwhile, and the
-title says
+again; the text is drawn in the theme's
+.B edithold
+colour meanwhile, and the title says
 .BR (holding) .
 .PD
 .PP

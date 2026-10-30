@@ -9,9 +9,10 @@ implement Shell;
 # at the mark outpoint; what is typed after it is the input, sent a
 # line at a time (cooked) or a key at a time (raw, after "rawon" on
 # /dev/consctl).  Usage and behaviour are wm/sh's; to them it adds
-# the theme's colours and font (following a theme switch), a history
-# of the lines sent, the caret kept in sight of a soft keyboard, and
-# the transcript in /tmp/veltro/shell for Veltro's shell tool:
+# the theme's colours as Xenith's body takes them and the theme's
+# font (following a theme switch), a history of the lines sent, the
+# caret kept in sight of a soft keyboard, and the transcript in
+# /tmp/veltro/shell for Veltro's shell tool:
 #
 #	/tmp/veltro/shell/body	the transcript up to outpoint
 #	/tmp/veltro/shell/input	what is typed and not yet read
@@ -139,7 +140,6 @@ shwin_cfg := array[] of {
 rdreq: list of Rdreq;
 menuindex := "0";
 holding := 0;
-haskbdfocus := 1;
 plumbed := 0;
 rawon := 0;
 rawinput := "";
@@ -159,7 +159,7 @@ nhist := 0;
 histpos := -1;
 
 # the theme's colours, as Tk takes them
-c_bg, c_fg, c_unfocused, c_hold, c_sel: string;
+c_bg, c_fg, c_hold, c_sel: string;
 
 lastcaret := "";
 statepending := 0;
@@ -330,11 +330,6 @@ main(ctxt: ref Draw->Context, argv: list of string)
 	c := <-wm.ctl or
 	c = <-t.wreq or
 	c = <-titlectl =>
-		(nil, flds) := sys->tokenize(c, " \t");
-		if(flds != nil && hd flds == "haskbdfocus" && tl flds != nil){
-			haskbdfocus = int hd tl flds;
-			setcols(t);
-		}
 		tkclient->wmctl(t, c);
 	<-themech =>
 		loadcolors();
@@ -585,32 +580,33 @@ loadcolors()
 {
 	lucitheme := load Lucitheme Lucitheme->PATH;
 	if(lucitheme == nil){
-		(c_bg, c_fg, c_unfocused, c_hold, c_sel) =
-			("#FFFDF6FF", "#333333FF", "#666666FF", "#2266CCFF", "#B4D5FEFF");
+		(c_bg, c_fg, c_hold, c_sel) =
+			("#FFFDF6FF", "#333333FF", "#000099FF", "#B4D5FEFF");
 		return;
 	}
 	th := lucitheme->gettheme();
 	c_bg = col(th.editbg);
 	c_fg = col(th.edittext);
-	c_unfocused = col(th.text2);
-	c_hold = col(th.accent);
-	c_sel = col(th.accent);
+	c_hold = col(th.edithold);
+	c_sel = col(th.menuhilit);
 }
 
-# The text in the theme's colours: the window's text when it has the
-# keyboard, dimmer when it has not, the accent while holding.  The
-# text widget is coloured here, not left to Tk's defaults, as these
-# are the editor's colours and Tk keeps them through a theme switch.
+# The text in the theme's colours, as Xenith's body takes them: its
+# text on its background, a selection in menuhilit with the text as
+# it was, and no dimming without the keyboard; edithold while holding
+# (Xenith has no hold).  The text widget is coloured here, not left to
+# Tk's defaults, as Tk keeps colours an app sets through a switch.
 setcols(t: ref Tk->Toplevel)
 {
 	fgcol := c_fg;
 	if(holding)
 		fgcol = c_hold;
-	else if(!haskbdfocus)
-		fgcol = c_unfocused;
 	cmd(t, ". configure -background "+c_bg);
 	cmd(t, ".ft.t configure -background "+c_bg+" -foreground "+fgcol+
-		" -selectbackground "+c_sel+" -selectforeground "+c_bg);
+		" -selectbackground "+c_sel+" -selectforeground "+fgcol);
+	# the sel tag is what Tk draws a selection with, and it keeps the
+	# colours it was made with (the first theme's accent) otherwise
+	cmd(t, ".ft.t tag configure sel -background "+c_sel+" -foreground "+fgcol);
 }
 
 # The window is done: the shell has gone, and everything that held its

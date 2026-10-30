@@ -80,6 +80,7 @@ SYSMODULES=\
 	draw.m\
 	imagefile.m\
 	imgload.m\
+	lucitheme.m\
 	plumbmsg.m\
 	sh.m\
 	string.m\

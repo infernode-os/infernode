@@ -273,6 +273,7 @@ SYSMODULES=\
 	bufio.m\
 	daytime.m\
 	draw.m\
+	lucitheme.m\
 	git.m\
 	gpu.m\
 	json.m\

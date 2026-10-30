@@ -969,6 +969,19 @@ mountcharon()
 		sys->fprint(stderr, "tools9p: mount charon: %r\n");
 }
 
+# Mount a server posted in #s (post9p(2)) for this invocation: the
+# editor's, for the editor tool.  None posted, no mount: the tool says
+# it is not running.
+mountposted(posted, mnt: string)
+{
+	fd := sys->open(posted, Sys->ORDWR);
+	if(fd == nil)
+		return;
+	ensuredir(mnt);
+	if(sys->mount(fd, nil, mnt, Sys->MREPL, nil) < 0)
+		sys->fprint(stderr, "tools9p: mount %s: %r\n", posted);
+}
+
 appipccontrolpath(path: string): int
 {
 	# These real-file IPC trees are capabilities of their fixed-function tools,
@@ -978,7 +991,7 @@ appipccontrolpath(path: string): int
 	# charon invocation only.
 	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
 		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
-		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
+		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
 		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
 		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
 		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
@@ -1430,6 +1443,8 @@ asyncexec(srv: ref Styxserver, cr: ref Callreply, ti: ref ToolInfo, c: ref Fid, 
 	# mount has to happen here, before NODEVS shuts device attachment off.
 	if(ti.name == "charon")
 		mountcharon();
+	if(ti.name == "editor")
+		mountposted("#seditor/fs", "/mnt/editor");
 	# Exec opens only its own wait descriptor inside the trusted wrapper, then
 	# applies NODEVS before parsing or running model-supplied shell text.
 	if(ti.name != "exec" && sys->pctl(Sys->NODEVS, nil) < 0) {
@@ -2083,7 +2098,7 @@ addtoolpaths(paths: list of string, tool: string): list of string
 	"charon" =>
 		return addpath(paths, "/mnt/charon");
 	"editor" =>
-		return addpath(paths, "/tmp/veltro/editor");
+		return addpath(paths, "/mnt/editor");
 	"shell" =>
 		return addpath(paths, "/tmp/veltro/shell");
 	"fractal" =>

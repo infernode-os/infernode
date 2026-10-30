@@ -634,7 +634,7 @@ appIpcControlGrant(p: string): int
 {
 	return p == "/mnt/charon" || prefix(p, "/mnt/charon/") ||
 		p == "/tmp/veltro/browser" || prefix(p, "/tmp/veltro/browser/") ||
-		p == "/tmp/veltro/editor" || prefix(p, "/tmp/veltro/editor/") ||
+		p == "/mnt/editor" || prefix(p, "/mnt/editor/") ||
 		p == "/tmp/veltro/shell" || prefix(p, "/tmp/veltro/shell/") ||
 		p == "/tmp/veltro/fractal" || prefix(p, "/tmp/veltro/fractal/") ||
 		p == "/tmp/veltro/man" || prefix(p, "/tmp/veltro/man/");

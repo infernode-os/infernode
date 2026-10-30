@@ -730,7 +730,6 @@ handleevent(ev: string)
 		newid := strtoint(ev[len "switchactivity ":]);
 		if(newid >= 0) {
 			actid_g = newid;
-			editor_launched = 0;
 			updatetoolmount();
 			reloadtools();
 			loadcontext();
@@ -1640,8 +1639,7 @@ filebrowser(startpath: string): string
 						sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", fpath);
 					else if(!plumbopenfile(fpath, curpath)) {
 						# No plumber — fall back to opening in the editor.
-						has9p := ensureeditor();
-						openineditor(fpath, has9p);
+						openineditor(fpath);
 					}
 					break;
 				}
@@ -2059,8 +2057,7 @@ openpath(path: string)
 		sys->fprint(sys->fildes(2), "lucictx: skipping non-launchable .dis: %s\n", path);
 	} else {
 		# File: open in edit (ensure it's running first)
-		has9p := ensureeditor();
-		openineditor(path, has9p);
+		openineditor(path);
 	}
 }
 
@@ -2149,64 +2146,29 @@ plumbopenfile(path, dir: string): int
 	return 1;
 }
 
-openineditor(path: string, has9p: int)
+# Open path in the editor: through its posted server (#seditor/fs,
+# post9p(2)) when one runs, mounted in a name space of the proc's own;
+# else start one on the file.  Nothing waits for it to appear.
+openineditor(path: string)
 {
-	cmd := "open " + path;
-	if(has9p) {
-		fd := sys->open("/edit/ctl", Sys->OWRITE);
-		if(fd != nil) {
-			b := array of byte cmd;
-			n := sys->write(fd, b, len b);
-			if(n == len b)
-				return;
-		}
-		sys->fprint(sys->fildes(2), "lucictx: openineditor 9P failed, using real-file: %r\n");
-	}
-	# Real-file IPC: edit polls /tmp/veltro/editor/ctl on timer ticks
-	wfd := sys->create("/tmp/veltro/editor/ctl", Sys->OWRITE, 8r666);
-	if(wfd != nil) {
-		b := array of byte cmd;
-		sys->write(wfd, b, len b);
-	}
+	done := chan of int;
+	spawn editoropen(path, done);
+	if(<-done)
+		return;
+	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
+	writetofile(pctl, "create id=editor type=app dis=/dis/wm/editor.dis label=editor data=" + path);
+	writetofile(pctl, "center id=editor");
 }
 
-# Ensure edit is running. If /edit/ctl doesn't exist, create a
-# presentation artifact to launch it in the presentation zone.
-# Guards against re-entry: once we've tried to launch, don't retry
-# until the activity changes (switchactivity resets the flag).
-editor_launched := 0;	# 1 = already attempted launch for this activity
-
-ensureeditor(): int
+editoropen(path: string, done: chan of int)
 {
-	# Check 9P path first (fast, instant open)
-	fd := sys->open("/edit/ctl", Sys->OREAD);
-	if(fd != nil) {
-		fd = nil;
-		editor_launched = 1;
-		return 1;	# 9P available
+	sys->pctl(Sys->FORKNS, nil);
+	fd := sys->open("#seditor/fs", Sys->ORDWR);
+	if(fd == nil || sys->mount(fd, nil, "/mnt/editor", Sys->MREPL, nil) < 0) {
+		done <-= 0;
+		return;
 	}
-	# If we already tried launching, don't spam creation attempts
-	if(editor_launched)
-		return 0;
-	editor_launched = 1;
-	# Launch via presentation system
-	sys->fprint(sys->fildes(2), "lucictx: ensureeditor: launching editor\n");
-	pctl := sys->sprint("%s/activity/%d/presentation/ctl", mountpt_g, actid_g);
-	cmd := "create id=editor type=app dis=/dis/wm/editor.dis label=editor";
-	writetofile(pctl, cmd);
-	writetofile(pctl, "center id=editor");
-	# Poll until /edit/ctl appears
-	for(i := 0; i < 20; i++) {
-		sys->sleep(250);
-		fd = sys->open("/edit/ctl", Sys->OREAD);
-		if(fd != nil) {
-			fd = nil;
-			sys->fprint(sys->fildes(2), "lucictx: ensureeditor: 9P ready after %dms\n", (i+1)*250);
-			return 1;
-		}
-	}
-	sys->fprint(sys->fildes(2), "lucictx: ensureeditor: no 9P, using real-file IPC\n");
-	return 0;
+	done <-= writetofile("/mnt/editor/ctl", "open " + path) > 0;
 }
 
 # Find a PinnedPath matching the given source path, or nil if not found.

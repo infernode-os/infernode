@@ -114,6 +114,7 @@ TARG=\
 	parseman.dis\
 	plumbing.dis\
 	plumbmsg.dis\
+	post9p.dis\
 	pop3.dis\
 	profile.dis\
 	publicnet.dis\

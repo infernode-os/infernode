@@ -6,6 +6,25 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **The editor tool drives wm/editor through its served files; nothing
+  polls (#1019).** wm/editor kept a copy of its document in
+  `/tmp/veltro/editor`, rewritten every half second, and read commands
+  from files there that it truncated after reading, so two commands in
+  half a second lost one, a command to an editor that was not running
+  "succeeded", and the agent read a dead editor's text. Its 9P tree
+  (`/edit`) is now also posted as `#seditor/fs` (`post9p(2)`, the
+  posting Charon's session already used, now a library), and tools9p
+  mounts it at `/mnt/editor` for the editor tool alone: a command is
+  done when its write returns, one refused is the tool's error, and
+  "not running" is said when it is not. A body longer than one message
+  arrives whole (it kept the last piece), each reader of `event` gets
+  every event (two took turns, and a read held up every other request
+  for up to five seconds), and a read of `body` is one text. Lucifer's
+  context zone opens a file in a running editor through the posting, or
+  starts one on the file, where it waited for one to appear. The
+  editor's half-second timer is gone. `editor_test.b` drives the posted
+  editor (no sleeps; a long body, events per open),
+  `editor_capability_test.sh` a real one.
 - **A theme switch reaches every program without any of them polling.**
   Sixteen programs (wm/wm, Lucifer, Xenith, Charon, and wm/ftree, wallet,
   matrix, editor, deb, fractals, about, keyring, shell, settings, dir and

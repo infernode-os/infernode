@@ -406,6 +406,7 @@ dis/lib/pdfenc.dis
 dis/lib/sheetview.dis
 dis/lib/plumbing.dis
 dis/lib/plumbmsg.dis
+dis/lib/post9p.dis
 dis/lib/pngload.dis
 dis/lib/pop3.dis
 dis/lib/popup.dis

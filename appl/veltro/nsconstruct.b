@@ -1196,7 +1196,7 @@ appipccontrolpath(path: string): int
 	# path grant would let generic filesystem/shell tools drive the app protocol.
 	return path == "/mnt/charon" || prefix(path, "/mnt/charon/") ||
 		path == "/tmp/veltro/browser" || prefix(path, "/tmp/veltro/browser/") ||
-		path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/") ||
+		path == "/mnt/editor" || prefix(path, "/mnt/editor/") ||
 		path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/") ||
 		path == "/tmp/veltro/fractal" || prefix(path, "/tmp/veltro/fractal/") ||
 		path == "/tmp/veltro/man" || prefix(path, "/tmp/veltro/man/");
@@ -1210,7 +1210,7 @@ appipctoolpath(path: string, tools: list of string): int
 	if((path == "/mnt/charon" || prefix(path, "/mnt/charon/")) &&
 	   inlist("charon", tools))
 		return 1;
-	if((path == "/tmp/veltro/editor" || prefix(path, "/tmp/veltro/editor/")) &&
+	if((path == "/mnt/editor" || prefix(path, "/mnt/editor/")) &&
 	   inlist("editor", tools))
 		return 1;
 	if((path == "/tmp/veltro/shell" || prefix(path, "/tmp/veltro/shell/")) &&

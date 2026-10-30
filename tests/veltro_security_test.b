@@ -2491,7 +2491,7 @@ privilegedGrantPathsWorker(result: chan of string)
 		"/tmp/veltro/browser",
 		"/mnt/charon",
 		"/mnt/charon/ctl",
-		"/tmp/veltro/editor",
+		"/mnt/editor",
 		"/tmp/veltro/shell",
 		"/tmp/veltro/fractal",
 		"/tmp/veltro/man",

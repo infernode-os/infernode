@@ -304,13 +304,27 @@ startwebfs(): string
 	webfs := load Command "/dis/webfs.dis";
 	if(webfs == nil)
 		return sys->sprint("cannot load webfs: %r");
-	spawn webfs->init(nil, "webfs" :: nil);
-	for(i := 0; i < 100; i++) {
-		if(webfsup())
-			return nil;
-		sys->sleep(20);
+	# its init returns mounted; in a proc of its own, as it takes a
+	# process group of its own
+	done := chan of string;
+	spawn runwebfs(webfs, done);
+	if((e := <-done) != nil)
+		return "webfs did not start: " + e;
+	if(!webfsup())
+		return "webfs did not start";
+	return nil;
+}
+
+runwebfs(webfs: Command, done: chan of string)
+{
+	{
+		webfs->init(nil, "webfs" :: nil);
+	} exception e {
+	"*" =>
+		done <-= e;
+		return;
 	}
-	return "webfs did not start";
+	done <-= nil;
 }
 
 webfsup(): int

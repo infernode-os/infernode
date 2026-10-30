@@ -6,6 +6,31 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **`wm/dir` is back, on new icons.** Inferno's file browser, the Files
+  entry of upstream's window menu, was dropped in the migration. It is
+  restored with its icons drawn by `icon(2)` in the theme's colours.
+  A folder opens in the same window (a window each is an option), and
+  a file opens through the plumber, so in Lucifer it lands in the
+  presentation view; with no plumber, a program runs, an image opens
+  in `wm/view`, a PDF in `wm/page` and anything else in `wm/edit`.
+  Fixed on the way: `..` was the working directory's parent, not the
+  folder's; resizing the window indexed an empty string; a name with a
+  blank broke its label; long names made one column; a folder that
+  could not be read closed the window. `tests/host/wm_dir_test.sh`
+  drives it.
+- **Icons: Tabler's glyphs, drawn at any size in any colour.**
+  `icons/ui` holds the 45 glyphs the interface uses, from Tabler Icons
+  (MIT), 22.6KB of SVG; `icons/ui/LIST` names them and
+  `tools/update-icons.sh` fetches any added. `icon(2)` draws one with
+  readsvg at the size asked for and paints it in a theme's colour, so
+  a glyph is sharp on any display and a theme switch repaints it.
+- **Double-click works in Tk applications on SDL hosts.** Tk took a
+  double click only from a press the X11 driver marked as one; SDL and
+  `/dev/pointer` send two plain presses, so no `<Double-Button-1>`
+  binding ever fired on macOS, Windows or Linux with SDL (wm/dir
+  opened nothing, ftree's double-click did nothing, a text widget
+  never selected a word). Tk now times presses itself as X11 does:
+  the same button again within 300ms and 12 pixels.
 - **`wm/edit` is back.** Inferno's own editor was dropped in the
   migration and its name later given to the editor now called
   `wm/editor`, so `wm/task`'s Files button, which loads

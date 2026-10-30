@@ -30,6 +30,7 @@ wm/coffee
 wm/colors
 wm/date
 wm/deb
+wm/dir
 wm/edit
 wm/editor
 wm/fractals

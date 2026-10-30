@@ -27,6 +27,7 @@ TARG=\
 	memory.dis\
 	rt.dis\
 	deb.dis\
+	dir.dis\
 	matrix.dis\
 	shell.dis\
 	view.dis\

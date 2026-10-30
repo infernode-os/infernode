@@ -1,0 +1,90 @@
+.TH ICON 2
+.SH NAME
+icon \- the interface's glyphs, at any size in any colour
+.SH SYNOPSIS
+.EX
+include "draw.m";
+include "tk.m";
+include "icon.m";
+icon := load Icon Icon->PATH;
+
+init:    fn(d: ref Draw->Display): string;
+mask:    fn(name: string, size: int): (ref Draw->Image, string);
+paint:   fn(name: string, size, colour: int):
+             (ref Draw->Image, ref Draw->Image, string);
+tkimage: fn(t: ref Tk->Toplevel, tkname, name: string,
+             size, colour: int): string;
+.EE
+.SH DESCRIPTION
+.I Icon
+draws the glyphs of InferNode's interface: folders and files, mounts and
+devices, the arrows and operations of a window.
+Each is an SVG file,
+.BI /icons/ui/ name .svg ,
+drawn by
+.B readsvg
+(see
+.IR imagefile (2))
+at the size asked for, so a glyph is sharp at any size and on a display of
+any scale, and painted in a colour the caller gives, as a rule one of the
+current theme's (see
+.IR lucitheme (2)),
+so a theme switch is a repaint.
+.PP
+.B Init
+takes the display the images are to be made on, a
+.BR Toplevel 's
+for a Tk program.
+.B Mask
+returns the glyph
+.I name
+drawn at
+.I size
+by
+.I size
+pixels as a
+.B GREY8
+image: 255 where the glyph is, 0 where it is not, to draw a colour
+through.
+A glyph drawn once at a size is kept, and asking for it again draws
+nothing.
+.B Paint
+returns an image of
+.I colour
+(an
+.B RGBA32
+value, as
+.B Display.color
+takes) and the glyph's mask, to draw with
+.BR Image.draw .
+.B Tkimage
+makes the Tk image
+.I tkname
+in
+.I t
+the glyph painted in
+.IR colour :
+it creates the image if there is none of that name, and replaces it,
+repainting it wherever it is shown, if there is.
+.PP
+Each returns a diagnostic string on error: a name with a
+.B /
+in it, or that is no glyph, a size outside 1 to 1024, or a draw device
+that cannot be had.
+.SH FILES
+.TP
+.B /icons/ui/*.svg
+The glyphs, from Tabler Icons (MIT licence,
+.BR /icons/ui/LICENSE ).
+.TP
+.B /icons/ui/LIST
+Their names.
+To add one, add its name and run
+.BR tools/update-icons.sh ,
+which fetches every glyph listed from the pinned Tabler release.
+.SH SOURCE
+.B /appl/lib/icon.b
+.SH SEE ALSO
+.IR draw-image (2),
+.IR imagefile (2),
+.IR tk (2)

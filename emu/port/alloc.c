@@ -143,7 +143,7 @@ memlowpass(int n)
 }
 
 int
-poolsetsize(char *s, int size)
+poolsetsize(char *s, ulong size)
 {
 	int i;
 

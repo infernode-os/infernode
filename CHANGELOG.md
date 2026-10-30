@@ -91,6 +91,52 @@ All notable changes to InferNode are documented in this file.
   `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
   `wm/edit`'s.
 
+## [0.9.1] - 2026-10-30
+
+This security patch release fixes remotely reachable IPv4 reassembly and voice
+export flaws, bounds TCP out-of-order queues, and closes the hosted agent
+containment gaps found in the 0.9.0 review. Upgrading is recommended for every
+0.9.0 installation, especially bare-metal nodes and systems that ran
+`voice/listen`.
+
+### Security
+
+- **IPv4 fragments cannot claim bytes that were not received.** Reassembly now
+  validates and trims every fragment to its IPv4 total length, rejects lengths
+  beyond the received block, rejects invalid fragment alignment, and caps the
+  assembled extent before handing a packet to ICMP, TCP, or UDP. The flaw is
+  inherited from upstream Inferno; the final Bell Labs Plan 9 source has the
+  same trust error, while 9front's receive path has used received block lengths
+  and capped completed assemblies since 2019.
+- **TCP out-of-order storage is bounded by both bytes and Blocks.** InferNode
+  now carries 9front's receive-window byte limit and MSS-derived packet-count
+  limit, including segments inserted at the head of the resequencing queue.
+  This is an upstream Inferno omission; 9front has carried the limits since
+  2013.
+- **Voice exports require keyring authentication and expose audio only.** The
+  original `voice/listen` script anonymously exported all of `/dev`, allowing
+  a network peer to inject input and operate control devices. It now constructs
+  a fresh export containing only `audio` and `audioctl`; raw and Opus listeners,
+  dialers, and loopback tests no longer pass `-A`. There is no anonymous mode in
+  the shipped voice scripts. Provision a signer and peer auth information with
+  `auth/createsignerkey` and `getauthinfo` before using voice on a fresh node.
+- **Exec cleanup owns the whole descendant group tree.** `/prog/N/ctl` accepts
+  `killtree`, which kills N's group and every descendant group. The exec tool
+  uses it on deadlines and output caps, so a confined command cannot survive by
+  calling `NEWPGRP`.
+- **Approval and messaging surfaces are content-bound.** Lucifer grants a gated
+  call only for the exact `Allow` action, not delivered task/message events or
+  conversational text. Message pending entries show a losslessly escaped,
+  immutable body, and approval sends that exact body.
+- **Namespace checks match the host filesystem and actual parent authority.**
+  Policy comparisons are ASCII case-insensitive for case-insensitive hosts;
+  bare `/chan`, `/fd`, `/usr`, keyring paths, and numbered `/mnt/toolctl.*`
+  aliases are rejected. A parent root grant no longer authorizes a child path
+  the parent cannot see. Confined `NODEVS` processes cannot follow host symlinks
+  out of a granted tree.
+- **mc9p responses are private to the requesting fid.** One client can no
+  longer read or replace another client's endpoint response.
+
 ## [0.9.0] - 2026-10-29
 
 This release adds SD-card images for the Raspberry Pi 3B+ and 4B, which

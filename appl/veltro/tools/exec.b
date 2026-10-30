@@ -292,14 +292,15 @@ exec(args: string): string
 	# leaving it alive orphans a process outside this tool's accounting.
 	# Two abandoned limbo.dis compiles left this way are what faulted the
 	# emulator in the escape campaign (INFR-421).  Kill the worker's whole
-	# process group so nothing survives the return; a killed group leader
+	# descendant process tree so a command cannot escape cleanup with NEWPGRP;
+	# a killed group leader
 	# will not report back, so do not block waiting for it.
 	err := "";
 	alt {
 	e := <-result =>
 		err = e;
 	* =>
-		killgrp(workerpid);
+		killtree(workerpid);
 		output += "\n... (command still running at return; process group terminated)";
 	}
 
@@ -352,17 +353,17 @@ runcommand(cmd: string, outfd: ref Sys->FD, result: chan of string, pidch: chan 
 	result <-= err;
 }
 
-# Kill a worker's whole process group.  The exec tool is exempt from the
+# Kill a worker's descendant process-group tree.  The exec tool is exempt from the
 # NODEVS restriction that hides /prog from other tools, so it can write here;
 # best-effort, so if /prog is absent the command keeps the pre-fix behaviour.
-killgrp(pid: int)
+killtree(pid: int)
 {
 	if(pid <= 0)
 		return;
 	ctl := sys->open("/prog/" + string pid + "/ctl", Sys->OWRITE);
 	if(ctl == nil)
 		return;
-	msg := array of byte "killgrp";
+	msg := array of byte "killtree";
 	sys->write(ctl, msg, len msg);
 }
 

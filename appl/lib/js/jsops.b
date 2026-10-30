@@ -228,7 +228,7 @@ Code: adt {
 	spos, send:	int;
 	lits:	array of ref Lit;	# object literals' keys, and the shape made from them
 	lazy:	ref Lazy;	# not yet compiled: how to, when first called
-	pos:	array of int;	# by pc: source position (for messages), or nil
+	pos:	array of int;	# source positions (for messages) as runs: pc, position, ...; or nil
 	whole:	string;	# the source those positions are in
 	file:	string;
 	allreg:	int;	# Cextra: the register given every argument, as an array

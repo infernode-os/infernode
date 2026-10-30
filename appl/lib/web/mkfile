@@ -39,6 +39,10 @@ SYSMODULES=\
 	math.m\
 	bufio.m\
 	convcs.m\
+	encoding.m\
+	filter.m\
+	plumbmsg.m\
+	woff2.m\
 
 DISBIN=$ROOT/dis/lib/web
 

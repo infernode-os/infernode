@@ -340,6 +340,26 @@ SYSMODULES=\
 	wpakey.m\
 	x402.m\
 	xml.m\
+	audit.m\
+	auditchain.m\
+	auditprov.m\
+	bioauth.m\
+	dhcp.m\
+	dialog.m\
+	docreg.m\
+	keyringinst.m\
+	mailparse.m\
+	mermaid.m\
+	popup.m\
+	publicnet.m\
+	scoretable.m\
+	selectfile.m\
+	softkbd.m\
+	tabs.m\
+	tkclient.m\
+	tls.m\
+	viewport.m\
+	wmdeb.m\
 
 
 

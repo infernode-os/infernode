@@ -79,6 +79,30 @@ SYSMODULES=\
 	wmclient.m\
 	wmlib.m\
 	wmsrv.m\
+	bioauth.m\
+	debug.m\
+	dial.m\
+	dialnorm.m\
+	dialog.m\
+	dis.m\
+	docengine.m\
+	docreg.m\
+	keyring.m\
+	keyringinst.m\
+	pdf.m\
+	rand.m\
+	rlayout.m\
+	secstore.m\
+	security.m\
+	selectfile.m\
+	sheetview.m\
+	softkbd.m\
+	tabs.m\
+	twofa.m\
+	twofaslot.m\
+	viewport.m\
+	wmdeb.m\
+	workdir.m\
 
 DISBIN=$ROOT/dis/wm
 

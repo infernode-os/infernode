@@ -119,6 +119,13 @@ jobs:
         export PATH="$ROOT/Linux/amd64/bin:$PATH"
         ./tools/verify-dis-build.sh
 
+    - name: Check mkfile header dependencies
+      run: |
+        # Every module header a Limbo source includes, at any depth, is a
+        # prerequisite of its .dis: one that is not changes without mk
+        # rebuilding, and the stale .dis fails at load (link typecheck).
+        python3 tools/check-mkfile-deps.py
+
     - name: Compile test suite
       run: |
         LIMBO="$ROOT/Linux/amd64/bin/limbo"

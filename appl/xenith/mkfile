@@ -89,6 +89,9 @@ SYSMODULES=\
 	tk.m\
 	workdir.m\
 	wmclient.m\
+	complete.m\
+	env.m\
+	keyboard.m\
 
 DISBIN=$ROOT/dis/xenith
 

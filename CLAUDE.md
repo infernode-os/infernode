@@ -92,6 +92,8 @@ remove a module and you update the manifest in the same commit.
 
 After that, every `git pull` triggers an automatic rebuild of stale bytecode. See `hooks/post-merge` for details.
 
+That rebuild is `mk install`, so it only recompiles a `.dis` whose mkfile names the changed header as a prerequisite (`MODULES`/`SYSMODULES` for `mkfiles/mkdis`, the rule itself in `appl/veltro`). **Include a new header in a `.b` and name it in that mkfile too.** `tools/check-mkfile-deps.py` checks every source's includes, followed as `limbo` finds them, against its mkfile (CI runs it); `-fix` adds what is missing. A mkfile that reads `mkdis` sets both lists, even empty: an unset one is inherited from the parent `mk` through the environment, as one word.
+
 **The wrong-target trap (READ THIS BEFORE COMPILING ANYTHING).** A module
 declares `PATH: con "/dis/foo.dis";` so the runtime loads `dis/foo.dis`, and its
 mkfile installs there. If you hand-compile with `limbo -o dis/cmd/foo.dis ...`

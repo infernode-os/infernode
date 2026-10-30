@@ -312,37 +312,43 @@ SHADOWBASE: con "/tmp/matrix/.ns";
 # root swap; nothing else resolves.
 restrictsvcns(mount, outdir: string): string
 {
+	(nil, err) := restrictsvcnsin(SHADOWBASE, mount, outdir);
+	return err;
+}
+
+restrictsvcnsin(base, mount, outdir: string): (string, string)
+{
 	if(mount == nil || len mount == 0 || mount[0] != '/')
-		return "mount must be an absolute path";
+		return (nil, "mount must be an absolute path");
 	if(outdir == nil || len outdir == 0 || outdir[0] != '/')
-		return "outdir must be an absolute path";
+		return (nil, "outdir must be an absolute path");
 
 	# The shadow root must be new.  pid, sequence and millisec are all
 	# small and repeat from one emu boot to the next, and shadows are
 	# left on disk (their read-only spines are still mount points in
 	# whatever runs in them), so an old one can carry the same name:
 	# reusing it made a spine its read-only directories refused.
-	err := mkdirp(SHADOWBASE);
+	err := mkdirp(base);
 	if(err != nil)
-		return err;
+		return (nil, err);
 	pid := sys->pctl(0, nil);
 	shadow: string;
 	for(try := 0;; try++) {
-		shadow = sys->sprint("%s/%d-%d-%d", SHADOWBASE,
+		shadow = sys->sprint("%s/%d-%d-%d", base,
 			pid, shadowseq++, sys->millisec());
 		if(sys->create(shadow, Sys->OREAD|Sys->OEXCL, Sys->DMDIR|8r755) != nil)
 			break;
 		if(try >= 100)
-			return sys->sprint("cannot create %s: %r", shadow);
+			return (nil, sys->sprint("cannot create %s: %r", shadow));
 	}
 
 	# Build both spines fully while everything is still writable.
 	err = mkdirp(shadow + mount);
 	if(err != nil)
-		return err;
+		return (shadow, err);
 	err = mkdirp(shadow + outdir);
 	if(err != nil)
-		return err;
+		return (shadow, err);
 
 	# The absence of MCREATE only guards the mount point itself;
 	# spine directories are real dirs whose fs permissions govern
@@ -359,12 +365,51 @@ restrictsvcns(mount, outdir: string): string
 	# in the bind point itself.  An outdir inside the mount is its
 	# own mount point and stays writable.
 	if(sys->bind(mount, shadow + mount, Sys->MREPL|Sys->MREADONLY) < 0)
-		return sys->sprint("cannot bind %s: %r", mount);
+		return (shadow, sys->sprint("cannot bind %s: %r", mount));
 	if(sys->bind(outdir, shadow + outdir, Sys->MREPL|Sys->MCREATE) < 0)
-		return sys->sprint("cannot bind %s: %r", outdir);
+		return (shadow, sys->sprint("cannot bind %s: %r", outdir));
 
 	if(sys->bind(shadow, "/", Sys->MREPL) < 0)
-		return sys->sprint("cannot replace /: %r");
+		return (shadow, sys->sprint("cannot replace /: %r"));
+	return (shadow, nil);
+}
+
+# Remove a shadow root: nothing but directories, made writable and
+# removed from the bottom up.  Run it in a namespace with no binds on
+# the shadow (the runtime's own, not the service's), so a walk can
+# never reach a granted tree; and it removes nothing that is not a
+# directory, stopping instead, so a mistake cannot cost a file.
+rmshadow(shadow: string): string
+{
+	if(shadow == nil || !hasprefix(shadow, "/tmp/matrix/.ns/"))
+		return "not a shadow: " + shadow;
+	return rmdirs(shadow);
+}
+
+rmdirs(path: string): string
+{
+	(ok, d) := sys->stat(path);
+	if(ok < 0)
+		return nil;
+	if((d.mode & Sys->DMDIR) == 0)
+		return "not a directory: " + path;
+	nd := sys->nulldir;
+	nd.mode = Sys->DMDIR | 8r755;
+	sys->wstat(path, nd);
+	fd := sys->open(path, Sys->OREAD);
+	if(fd != nil) {
+		for(;;) {
+			(n, dirs) := sys->dirread(fd);
+			if(n <= 0)
+				break;
+			for(i := 0; i < n; i++)
+				if((err := rmdirs(path + "/" + dirs[i].name)) != nil)
+					return err;
+		}
+		fd = nil;
+	}
+	if(sys->remove(path) < 0)
+		return sys->sprint("cannot remove %s: %r", path);
 	return nil;
 }
 

@@ -326,6 +326,9 @@ init(ctxt: ref Draw->Context, args: list of string)
 	# /prog is (a confined service's has none).
 	svckillc = chan of int;
 	spawn svckiller();
+	# This instance's shadow roots go under a directory of its own,
+	# so one instance's sweep never touches another's.
+	instbase = sys->sprint("%s/i%d-%d", SHADOWS, sys->pctl(0, nil), sys->millisec());
 	reloadch = chan[1] of string;
 
 	# Parse initial composition.  With no argument, the picker is
@@ -354,6 +357,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 	}
 	comp = c;
 	syncmodslots();
+
+	# Shadows left by instances no longer running go before the 9P
+	# server answers (a client seeing ctl must not race the sweep) and
+	# before any service makes one of its own.
+	readdir = load Readdir Readdir->PATH;
+	if(readdir == nil)
+		nomod(Readdir->PATH);
+	sweepshadows();
 
 	# Start 9P server (always, both modes)
 	start9p();
@@ -2639,12 +2650,13 @@ runservice(name, mount, outdir: string, mod: MatrixService, pidc: chan of int)
 	sys->pctl(Sys->FORKNS, nil);
 	sys->pctl(Sys->NEWENV, nil);
 	if(mount != "/") {
-		err := matrixlib->restrictsvcns(mount, outdir);
+		(nil, err) := matrixlib->restrictsvcnsin(instbase, mount, outdir);
 		if(err != nil) {
 			sys->fprint(stderr, "matrix: %s: namespace restriction failed: %s — service not started\n",
 				name, err);
 			svcend(pid, "failed namespace: " + err);
-			return;
+			svckillc <-= pid;	# the killer removes the shadow begun
+			<-chan of int;
 		}
 	}
 	sys->pctl(Sys->NEWFD, 2 :: nil);
@@ -2670,8 +2682,104 @@ svckillc: chan of int;
 
 svckiller()
 {
-	for(;;)
-		killgrp(<-svckillc);
+	for(;;) {
+		pid := <-svckillc;
+		killgrp(pid);
+		spawn svcrmshadow(pid);
+	}
+}
+
+# ── Shadow roots ────────────────────────────────────────────
+#
+# A confined service's namespace is built on a shadow root of empty
+# directories under instbase, named for the service proc's pid; it is
+# removed when the service's process group is killed, from this
+# namespace, where nothing is bound on it.  One left by an instance
+# that died is swept at the next start.
+
+SHADOWS: con "/tmp/matrix/.ns";
+instbase: string;
+
+# Remove a killed service proc's shadow roots: every <pid>-* under
+# instbase, which finds one killed while it was still building its
+# namespace, before anything knew its name.  Once the proc is gone, so
+# that it makes no directory after the removal.
+svcrmshadow(pid: int)
+{
+	for(w := 0; w < SVCGRACE_MS; w += 50) {
+		(ok, nil) := sys->stat("/prog/" + string pid);
+		if(ok < 0)
+			break;
+		sys->sleep(50);
+	}
+	pre := string pid + "-";
+	(ents, n) := readdir->init(instbase, Readdir->NAME);
+	for(i := 0; i < n; i++)
+		if(len ents[i].name > len pre && ents[i].name[0:len pre] == pre)
+			if((err := matrixlib->rmshadow(instbase + "/" + ents[i].name)) != nil)
+				sys->fprint(stderr, "matrix: %s\n", err);
+}
+
+# Remove the shadow directories of instances no longer running: those
+# named i<pid>-<ms> whose pid is not a Matrix now, and, when no other
+# Matrix runs, those an earlier version made directly in SHADOWS.
+sweepshadows()
+{
+	(ents, n) := readdir->init(SHADOWS, Readdir->NAME);
+	others := othermatrix();
+	me := sys->pctl(0, nil);
+	for(i := 0; i < n; i++) {
+		nm := ents[i].name;
+		if(len nm > 1 && nm[0] == 'i') {
+			# pids start again at each emu boot: one with my pid is
+			# an earlier boot's (two instances cannot share a pid).
+			pid := int nm[1:];
+			if(pid != me && ismatrix(pid))
+				continue;
+		} else if(others)
+			continue;
+		if((err := matrixlib->rmshadow(SHADOWS + "/" + nm)) != nil)
+			sys->fprint(stderr, "matrix: sweep: %s\n", err);
+	}
+}
+
+ismatrix(pid: int): int
+{
+	st := readfile("/prog/" + string pid + "/status");
+	if(st == nil)
+		return 0;
+	(nil, toks) := sys->tokenize(st, " \t\n");
+	last := "";
+	for(; toks != nil; toks = tl toks)
+		last = hd toks;
+	# exactly Matrix (MatrixTest is not), with the [$Sys] a proc
+	# blocked in a system call shows
+	return last == "Matrix" || len last > 7 && last[0:7] == "Matrix[";
+}
+
+# Is another Matrix running in this emu?
+othermatrix(): int
+{
+	me := sys->pctl(0, nil);
+	(ents, n) := readdir->init("/prog", Readdir->NONE);
+	for(i := 0; i < n; i++) {
+		pid := int ents[i].name;
+		if(pid != me && ismatrix(pid) && !samegroup(pid, me))
+			return 1;
+	}
+	return 0;
+}
+
+# Is pid in my process group (one of this instance's own procs)?
+samegroup(pid, me: int): int
+{
+	a := readfile("/prog/" + string pid + "/status");
+	b := readfile("/prog/" + string me + "/status");
+	if(a == nil || b == nil)
+		return 0;
+	(nil, ta) := sys->tokenize(a, " \t\n");
+	(nil, tb) := sys->tokenize(b, " \t\n");
+	return ta != nil && tl ta != nil && tb != nil && tl tb != nil && hd tl ta == hd tl tb;
 }
 
 # A service proc that is gone without saying how it ended was killed
@@ -2789,8 +2897,10 @@ reapservice(pid: int)
 			break;
 		sys->sleep(100);
 	}
-	if(svcended(pid) == nil)
+	if(svcended(pid) == nil) {
 		killgrp(pid);
+		svcrmshadow(pid);	# its own proc already
+	}
 	svcforget(pid);
 }
 
@@ -2966,6 +3076,7 @@ shutdownservices(services, next: list of ref ServiceEntry)
 			if(se.pid > 0) {
 				if(hasservice(next, se.name) && svcended(se.pid) == nil) {
 					killgrp(se.pid);
+					spawn svcrmshadow(se.pid);
 					svcforget(se.pid);
 				} else
 					spawn reapservice(se.pid);
@@ -3414,6 +3525,8 @@ reloadcomposition(text: string)
 				* =>
 					;
 				}
+				if(svcgone(se.pid))
+					spawn svcrmshadow(se.pid);	# killed from outside
 				svcforget(se.pid);
 				se.mod = nil;
 				se.pid = 0;

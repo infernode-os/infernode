@@ -26,6 +26,15 @@ MatrixLib: module
 	# success.  The caller applies NODEVS afterwards.
 	restrictsvcns:	fn(mount, outdir: string): string;
 
+	# The same, with the shadow root made under base: returns the
+	# shadow root's path (nil if none was made) and the error.
+	restrictsvcnsin:	fn(base, mount, outdir: string): (string, string);
+
+	# Remove a shadow root made by restrictsvcnsin, from a namespace
+	# with no binds on it (the caller's own, not the confined
+	# proc's).  Removes directories only.  nil on success.
+	rmshadow:	fn(shadow: string): string;
+
 	# Move live module handles from old to new for entries that are
 	# unchanged: display leaves match on (region name, modname,
 	# mount), services on (name, mount).  Matched handles are nil'd

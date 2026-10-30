@@ -368,6 +368,14 @@ the two would share its outdir. A reload starts a service whose
 restarts one that exited, failed or was killed; the ended instance's
 `shutdown()` is called first, to undo what its `init()` set up.
 
+A confined service's namespace is built on a shadow root, a tree of
+empty directories under `/tmp/matrix/.ns/i<pgrp>-<ms>/` (one directory
+per Matrix instance). It is removed once the service's process group
+is gone, from Matrix's own namespace, where nothing is bound on it,
+and the removal takes directories only. An instance that dies leaves
+its shadows; the next instance to start sweeps those of instances no
+longer running.
+
 ### Tk-Hosted Display Module
 
 A third kind (`module/matrixtk.m`), for regions that want real Tk

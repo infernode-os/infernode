@@ -256,7 +256,9 @@ pidofmodule(modname: string): int
 				last = hd tp;
 				nf++;
 			}
-			if(!hasprefix(last, modname))
+			# The module exactly (this test's own module is
+			# MatrixTest), or with the [$Sys] suffix.
+			if(last != modname && !hasprefix(last, modname + "["))
 				continue;
 			if(dirs[i].name == pgrp)
 				return int dirs[i].name;
@@ -890,6 +892,17 @@ testControlFSStart(t: ref T)
 	sh = load Sh Sh->PATH;
 	if(sh == nil)
 		t.fatal(sys->sprint("cannot load sh: %r"));
+	# Shadow roots left by instances no longer running, for the
+	# start to sweep: a dead instance's, one in an earlier version's
+	# layout, and a dead instance's holding a file, which the sweep
+	# must leave (it removes directories only).
+	mkfixdir(NSDIR + "/i999999-1/tmp/mtest");
+	mkfixdir(NSDIR + "/1-2-3/tmp/mtest");
+	mkfixdir(NSDIR + "/i999998-1");
+	createstr(NSDIR + "/i999998-1/keep", "keep\n");
+	nd := sys->nulldir;
+	nd.mode = Sys->DMDIR | 8r555;
+	sys->wstat(NSDIR + "/i999999-1/tmp", nd);
 	sh->system(nil, "/dis/wm/matrix.dis -h /lib/matrix/compositions/sysmon &");
 	# Poll on content, not existence: a stale real file under a
 	# mnt/matrix directory (host-tree pollution from an unmounted
@@ -905,7 +918,47 @@ testControlFSStart(t: ref T)
 		t.fatal("/mnt/matrix/ctl never reported running");
 	matrixpid = pidofmodule("Matrix");
 	t.assert(matrixpid > 0, "matrix pid found in /prog");
+	t.log(sys->sprint("matrix pid %d", matrixpid));
+
+	(dead, nil) := sys->stat(NSDIR + "/i999999-1");
+	t.assert(dead < 0, "a dead instance's shadows swept at start");
+	(legacy, nil) := sys->stat(NSDIR + "/1-2-3");
+	t.assert(legacy < 0, "an earlier layout's shadow swept at start");
+	t.assertseq(readfile(NSDIR + "/i999998-1/keep"), "keep\n", "the sweep removes no file");
+	sys->remove(NSDIR + "/i999998-1/keep");
+	sys->remove(NSDIR + "/i999998-1");
 }
+
+NSDIR: con "/tmp/matrix/.ns";
+
+# A confined service's shadow root goes when its process group does:
+# with only the whole-namespace sysmon-svc running, this instance's
+# shadow directory holds none.
+testControlFSShadowsCleaned(t: ref T)
+{
+	# The directory is named for the instance's process group.
+	(nil, st) := sys->tokenize(readfile("/prog/" + string matrixpid + "/status"), " \t\n");
+	if(st == nil || tl st == nil)
+		t.fatal("no status for the matrix pid");
+	inst := "";
+	for(l := lsnames(NSDIR); l != nil; l = tl l)
+		if(hasprefix(hd l, "i" + hd tl st + "-"))
+			inst = NSDIR + "/" + hd l;
+	if(inst == "")
+		t.fatal("no shadow directory for this instance (no confined service ran?)");
+	n := -1;
+	for(w := 0; w < 4000; w += 200) {
+		n = 0;
+		for(l = lsnames(inst); l != nil; l = tl l)
+			n++;
+		if(n == 0)
+			break;
+		sys->sleep(200);
+	}
+	t.asserteq(n, 0, "no shadow roots left once confined services have stopped");
+}
+
+
 
 testControlFSComposition(t: ref T)
 {
@@ -1739,6 +1792,7 @@ init(nil: ref Draw->Context, args: list of string)
 		run("ControlFSCompositionWrite", testControlFSCompositionWrite);
 		run("ControlFSServiceLifecycle", testControlFSServiceLifecycle);
 		run("ControlFSPassReclaim", testControlFSPassReclaim);
+		run("ControlFSShadowsCleaned", testControlFSShadowsCleaned);
 		run("ControlFSAlertE2E", testControlFSAlertE2E);
 		run("ControlFSWatch", testControlFSWatch);
 		run("ControlFSWatchCooldown", testControlFSWatchCooldown);

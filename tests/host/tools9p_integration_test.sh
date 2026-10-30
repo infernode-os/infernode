@@ -422,7 +422,7 @@ else
 fi
 
 if emu_c "provision_specific_ro" 14 \
-    "tools9p -p /tmp:rw -p /tmp/readonly:ro read task & sleep 3; echo '12 paths=/tmp/readonly/file:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.12/paths"; then
+    "mkdir -p /tmp/readonly; touch /tmp/readonly/file; tools9p -p /tmp:rw -p /tmp/readonly:ro read task & sleep 3; echo '12 paths=/tmp/readonly/file:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.12/paths"; then
     if echo "$OUTPUT" | grep -q "^/tmp/readonly/file ro"; then
         pass "narrow ro grant overrides a broad rw ancestor during delegation"
     else
@@ -430,6 +430,18 @@ if emu_c "provision_specific_ro" 14 \
     fi
 else
     fail "specific read-only delegation test failed"
+fi
+
+if emu_c "provision_unseen_descendant" 12 \
+    "mkdir -p /tmp/visible-root; tools9p -p /tmp/visible-root:rw read task & sleep 3; echo '27 paths=/tmp/visible-root/not-visible:rw' > /tool/provision; sleep 2; cat /mnt/toolctl.27/paths >[2] /dev/null"; then
+    if echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/visible-root/not-visible' &&
+       ! echo "$OUTPUT" | grep -q '^/tmp/visible-root/not-visible'; then
+        pass "parent root grant cannot mint a child path the parent cannot see"
+    else
+        fail "child provisioning widened an unseen descendant (output: $OUTPUT)"
+    fi
+else
+    fail "unseen descendant delegation probe failed"
 fi
 
 if emu_c "provision_readonly_baseline" 14 \
@@ -619,7 +631,7 @@ else
 fi
 
 if emu_c "provision_sibling_prefix" 14 \
-    "tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
+    "mkdir -p /tmp/veltro/ok; tools9p -p /tmp/veltro:rw read task & sleep 3; echo '15 paths=/tmp/veltroevil:rw' > /tool/provision; echo '16 paths=/tmp/veltro/ok:rw' > /tool/provision; sleep 5; cat /mnt/toolctl.16/paths"; then
     if echo "$OUTPUT" | grep -q '^/tmp/veltroevil'; then
         fail "child provisioning treated sibling prefix as covered by parent grant"
     elif ! echo "$OUTPUT" | grep -q 'provision refused: denied path /tmp/veltroevil'; then

@@ -740,13 +740,16 @@ childbudget(): list of string
 
 childpathallowed(path: string): int
 {
+	check := asciilower(path);
 	# Trusted control endpoints are never delegatable through child task
 	# provisioning. A broad parent grant such as /mnt/msg or /mnt/wallet may be
 	# intentionally attenuated by nsconstruct; it must not become lexical
 	# authority to mint hidden controller files in a child namespace.
-	if(privilegedcontrolpath(path))
+	if(privilegedcontrolpath(check))
 		return 0;
-	if(directmailsendpath(path))
+	if(directmailsendpath(check))
+		return 0;
+	if(ambientauthoritypath(check))
 		return 0;
 
 	# Bare /mnt/msg is deliberately attenuated by nsconstruct to the read-only
@@ -762,21 +765,48 @@ childpathallowed(path: string): int
 		return 0;
 	}
 	for(ep := extpaths; ep != nil; ep = tl ep)
-		if(pathwithin(hd ep, path))
-			return 1;
+		if(pathwithin(hd ep, path)) {
+			(ok, nil) := sys->stat(path);
+			return ok >= 0;
+		}
 	for(bp := boundpaths; bp != nil; bp = tl bp)
-		if(pathwithin((hd bp).path, path))
-			return 1;
+		if(pathwithin((hd bp).path, path)) {
+			(ok, nil) := sys->stat(path);
+			return ok >= 0;
+		}
 	return 0;
 }
 
 bindpathallowed(path: string): int
 {
-	if(privilegedcontrolpath(path))
+	check := asciilower(path);
+	if(privilegedcontrolpath(check))
 		return 0;
-	if(directmailsendpath(path))
+	if(directmailsendpath(check))
+		return 0;
+	if(ambientauthoritypath(check))
 		return 0;
 	return 1;
+}
+
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientauthoritypath(path: string): int
+{
+	if(path == "/chan" || path == "/fd" || prefix(path, "/fd/"))
+		return 1;
+	if(path == "/usr")
+		return 1;
+	return pathhascomponent(path, "keyring") &&
+		(path == "/keyring" || prefix(path, "/keyring/") ||
+		 prefix(path, "/usr/") || prefix(path, "/mnt/"));
 }
 
 directmailsendpath(path: string): int
@@ -867,6 +897,8 @@ privilegedcontrolpath(path: string): int
 	for(i := 0; i < len dangerous; i++)
 		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
+	if(prefix(path, "/mnt/toolctl."))
+		return 1;
 	if(walletaccountcontrolpath(path))
 		return 1;
 	if(ftreecontrolpath(path))

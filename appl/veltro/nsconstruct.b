@@ -1070,11 +1070,34 @@ validatepath(p: string): string
 
 grantpathallowed(path: string, tools: list of string): int
 {
-	if(privilegedcontrolpath(path, tools))
+	check := asciilower(path);
+	if(privilegedcontrolpath(check, tools))
 		return 0;
-	if(directmailsendpath(path))
+	if(directmailsendpath(check))
+		return 0;
+	if(ambientauthoritypath(check))
 		return 0;
 	return 1;
+}
+
+asciilower(s: string): string
+{
+	r := s;
+	for(i := 0; i < len r; i++)
+		if(r[i] >= 'A' && r[i] <= 'Z')
+			r[i] += 'a' - 'A';
+	return r;
+}
+
+ambientauthoritypath(path: string): int
+{
+	if(path == "/chan" || path == "/fd" || prefix(path, "/fd/"))
+		return 1;
+	if(path == "/usr")
+		return 1;
+	return pathhascomponent(path, "keyring") &&
+		(path == "/keyring" || prefix(path, "/keyring/") ||
+		 prefix(path, "/usr/") || prefix(path, "/mnt/"));
 }
 
 privilegedcontrolpath(path: string, tools: list of string): int
@@ -1099,6 +1122,12 @@ privilegedcontrolpath(path: string, tools: list of string): int
 	for(i := 0; i < len dangerous; i++)
 		if(path == dangerous[i] || prefix(path, dangerous[i] + "/"))
 			return 1;
+	# Each tools9p instance also publishes its trusted controller as
+	# /mnt/toolctl.<id>.  Treat numbered aliases exactly like the canonical
+	# mount; otherwise a caller can grant the same controller under a name the
+	# policy did not recognise.
+	if(prefix(path, "/mnt/toolctl."))
+		return 1;
 	if(walletcontrolpath(path))
 		return 1;
 	if(ftreecontrolpath(path))

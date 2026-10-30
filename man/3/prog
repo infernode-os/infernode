@@ -116,7 +116,7 @@ result is the empty string.
 Messages written to the
 .B ctl
 file control the execution of the process.
-.TF killgrp
+.TF killtree
 .PD
 .TP
 .B kill
@@ -125,6 +125,13 @@ Kill the process.
 .B killgrp
 Kill all processes in the same group as the process.
 A process writing to its own ctl file does not kill itself.
+.TP
+.B killtree
+Kill all processes in the process group and in every descendant process group.
+This is intended for supervisors that must reclaim a command tree even when a
+confined command has used
+.I sys->pctl(Sys->NEWPGRP, ...)
+to create another group.
 .TP
 .B exceptions propagate
 Applies to process group leaders only (ie any process that executes a system

@@ -588,7 +588,7 @@ ip4reassemble(IP *ip, int offset, Block *bp, Ip4hdr *ih)
 	Fragment4 *f, *fnext;
 	ulong src, dst;
 	Block *bl, **l, *last, *prev;
-	int ovlap, len, fragsize, pktposn;
+	int actual, ovlap, len, fragsize, pktlen, pktposn;
 
 	src = nhgetl(ih->src);
 	dst = nhgetl(ih->dst);
@@ -599,7 +599,34 @@ ip4reassemble(IP *ip, int offset, Block *bp, Ip4hdr *ih)
 	 */
 	if(bp->next){
 		bp = pullupblock(bp, blocklen(bp));
+		if(bp == nil){
+			ip->stats[ReasmFails]++;
+			return nil;
+		}
 		ih = (Ip4hdr*)(bp->rp);
+	}
+
+	/*
+	 * A wire length is not evidence that those bytes were received.  The
+	 * old code copied the peer's claim into flen and later extended wp to
+	 * it, exposing bytes beyond the fragment to upper-layer checksums.
+	 */
+	pktlen = nhgets(ih->length);
+	actual = blocklen(bp);
+	if(pktlen < IP4HDR || pktlen > actual){
+		ip->stats[ReasmFails]++;
+		freeblist(bp);
+		return nil;
+	}
+	bp->wp = bp->rp + pktlen;
+	fragsize = pktlen - IP4HDR;
+	pktposn = (offset & 0x1fff) << 3;
+	if(pktposn > IP_MAX-IP4HDR-1 ||
+	   fragsize > IP_MAX-IP4HDR-1-pktposn ||
+	   ((offset & IP_MF) && (fragsize & 7))){
+		ip->stats[ReasmFails]++;
+		freeblist(bp);
+		return nil;
 	}
 
 	qlock(&ip->fraglock4);
@@ -636,8 +663,8 @@ ip4reassemble(IP *ip, int offset, Block *bp, Ip4hdr *ih)
 		bp->rp += sizeof(Ipfrag);
 	}
 
-	BKFG(bp)->foff = offset<<3;
-	BKFG(bp)->flen = nhgets(ih->length)-IP4HDR;
+	BKFG(bp)->foff = pktposn;
+	BKFG(bp)->flen = fragsize;
 
 	/* First fragment allocates a reassembly queue */
 	if(f == nil) {

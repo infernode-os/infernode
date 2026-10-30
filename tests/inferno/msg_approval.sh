@@ -3,6 +3,7 @@
 load std
 path=(/dis/veltro /dis .)
 mount -ac {mntgen} /n
+mkdir -p /tmp/veltro
 /dis/veltro/msg9p.dis >[2] /dev/null &
 sleep 1
 echo register email /dis/veltro/sources/mockmail.dis > /mnt/msg/ctl

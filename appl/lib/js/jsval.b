@@ -742,8 +742,12 @@ addelem(h, i: int, v: V): int
 		e[i] = v;
 		return 1;
 	}
-	if(i > 2 * n + 16)
-		return 0;	# sparse: in the shape instead
+	# sparse: in the shape instead.  The gap is bounded by the elements
+	# there are, not the index: a flags enum (e[e.A = 1<<23] = "A"; ...)
+	# passed a test of i against 2n at every power of two, and the
+	# elements doubled, nearly all holes, until memory ran out
+	if(i - n > 16 + n / 8)
+		return 0;
 	if(e == nil || i >= len e) {
 		ne := array[2 * i + 8] of V;
 		if(e != nil)

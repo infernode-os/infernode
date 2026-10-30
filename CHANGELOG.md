@@ -6,6 +6,18 @@ All notable changes to InferNode are documented in this file.
 
 ### Applications
 
+- **The agent's name space, as it is, from tools9p's control tree
+  (#1020).** `/mnt/toolctl` (outside every agent's name space) has three
+  new files beside `ctl`. `view`, mounted
+  (`mount -A /mnt/toolctl/view /n/agent`), is the name space a tool call
+  gets, made by the same restriction a call uses and served read-only, so
+  what is shown is what the agent can reach, not a description of it.
+  `ns` is the same name space as `ns(1)` prints it. A read of `event`
+  waits, then says `paths`, `tools` or `budget` when that list changes.
+  Lucifer's context zone follows `event` instead of re-reading `/tool`
+  every five seconds: a folder granted is drawn at once, and nothing runs
+  while nothing changes. The three cannot be granted to an agent.
+  `tests/host/toolctl_view_test.sh`, `tests/host/lucictx_event_test.sh`.
 - **Arrow keys move; keys that are not characters type nothing.** An
   arrow, Home, End, Page Up or Down, Insert or a function key typed a
   private-use glyph in Tk entries and text (every form field and

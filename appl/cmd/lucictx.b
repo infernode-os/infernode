@@ -139,8 +139,9 @@ knowntoolnames: list of string;
 pinnedpaths: list of ref PinnedPath;
 
 # Path and tool change tracking for timer-based namespace refresh
-lastpathsraw := "";
-lasttoolsraw := "";
+watchmount := "";	# the toolctl tree whose event file toolwatch reads, or nil
+watchpid := -1;
+fading := 0;		# fadetimer running
 
 # Channel references (for filebrowser access)
 mousech_g: chan of ref Pointer;
@@ -285,21 +286,11 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	loadpinnedpaths();
 	loadmanifest();
 
-	# Snapshot current paths and tools so timer detects future changes
-	raw := readfile(toolmount_g + "/paths");
-	if(raw == nil) raw = "";
-	lastpathsraw = raw;
-	toolsrc := toolmount_g + "/tools";
-	if(actid_g == 0)
-		toolsrc = toolmount_g + "/budget";
-	traw := readfile(toolsrc);
-	if(traw == nil) traw = "";
-	lasttoolsraw = traw;
-
 	redrawctx();
 
-	# Context flash timer (animate activity indicator fade-out)
-	spawn ctxtimer(evch);
+	# tools9p says when its lists change (#1020); nothing is polled
+	startwatch(evch);
+	startfade(evch);
 
 	# Event loop
 	prevbuttons := 0;
@@ -624,66 +615,70 @@ init(img: ref Draw->Image, dsp: ref Draw->Display,
 	}
 }
 
-ctxtimer(evch: chan of string)
+# Read the current activity's /mnt/toolctl*/event, a tick for each
+# change tools9p reports.  Started again on a switch of activity; if
+# tools9p is not up yet, at the next context event.
+startwatch(evch: chan of string)
 {
-	# Poll interval: fast (1s) while waiting for manifest to appear,
-	# slower (5s) once it's loaded and only resource activity needs refresh.
-	for(;;) {
-		interval := 5000;
-		if(nsmanifest == nil)
-			interval = 1000;	# poll faster until manifest appears
-
-		sys->sleep(interval);
-
-		needtick := 0;
-
-		# Always tick if manifest hasn't loaded yet
-		if(nsmanifest == nil) {
-			mp := "/tmp/veltro/.ns/manifest";
-			if(actid_g > 0)
-				mp = "/tmp/veltro/.ns/manifest." + string actid_g;
-			(ok, nil) := sys->stat(mp);
-			if(ok >= 0)
-				needtick = 1;
-		}
-
-		# Tick if /tool/paths changed (namespace bind/unbind from any source)
-		if(!needtick) {
-			curpaths := readfile(toolmount_g + "/paths");
-			if(curpaths == nil)
-				curpaths = "";
-			if(curpaths != lastpathsraw) {
-				lastpathsraw = curpaths;
-				needtick = 1;
-			}
-		}
-
-		# Tick if /tool/tools changed (tool add/remove via ctl)
-		if(!needtick) {
-			curtools := readfile(toolmount_g + "/tools");
-			if(curtools == nil)
-				curtools = "";
-			if(curtools != lasttoolsraw) {
-				lasttoolsraw = curtools;
-				needtick = 1;
-			}
-		}
-
-		# Also tick for resource activity animation
-		if(!needtick) {
-			now := sys->millisec();
-			for(r := resources; r != nil; r = tl r) {
-				res := hd r;
-				if(res.status == "active" || (res.lastused > 0 && now - res.lastused < RES_ACTIVE_FADE_MS)) {
-					needtick = 1;
-					break;
-				}
-			}
-		}
-
-		if(needtick)
-			alt { evch <-= "tick" => ; * => ; }
+	mnt := toolctlmount();
+	if(mnt == watchmount)
+		return;
+	if(watchpid >= 0) {
+		fd := sys->open(sys->sprint("/prog/%d/ctl", watchpid), Sys->OWRITE);
+		if(fd != nil)
+			sys->fprint(fd, "kill");
+		watchpid = -1;
 	}
+	watchmount = nil;
+	fd := sys->open(mnt + "/event", Sys->OREAD);
+	if(fd == nil)
+		return;
+	watchmount = mnt;
+	pidc := chan of int;
+	spawn toolwatch(evch, fd, mnt, pidc);
+	watchpid = <-pidc;
+}
+
+toolwatch(evch: chan of string, fd: ref Sys->FD, mnt: string, pidc: chan of int)
+{
+	pidc <-= sys->pctl(0, nil);
+	buf := array[256] of byte;
+	while(sys->read(fd, buf, len buf) > 0)
+		evch <-= "tick";
+	if(watchmount == mnt) {
+		watchmount = nil;
+		watchpid = -1;
+	}
+}
+
+# The activity indicator fades over RES_ACTIVE_FADE_MS: a redraw a
+# second while a resource is active or fading, and no timer otherwise.
+startfade(evch: chan of string)
+{
+	if(fading || !anyfading())
+		return;
+	fading = 1;
+	spawn fadetimer(evch);
+}
+
+fadetimer(evch: chan of string)
+{
+	while(anyfading()) {
+		sys->sleep(1000);
+		evch <-= "fade";
+	}
+	fading = 0;
+}
+
+anyfading(): int
+{
+	now := sys->millisec();
+	for(r := resources; r != nil; r = tl r) {
+		res := hd r;
+		if(res.status == "active" || (res.lastused > 0 && now - res.lastused < RES_ACTIVE_FADE_MS))
+			return 1;
+	}
+	return 0;
 }
 
 # Return the tools9p mount point for the current activity.
@@ -742,19 +737,13 @@ handleevent(ev: string)
 			loadcatalog();
 			loadpinnedpaths();
 			loadmanifest();
-			# Snapshot new activity's state so timer detects changes
-			raw2 := readfile(toolmount_g + "/paths");
-			if(raw2 == nil) raw2 = "";
-			lastpathsraw = raw2;
-			toolsrc2 := toolmount_g + "/tools";
-			if(actid_g == 0)
-				toolsrc2 = toolmount_g + "/budget";
-			traw2 := readfile(toolsrc2);
-			if(traw2 == nil) traw2 = "";
-			lasttoolsraw = traw2;
+			startwatch(evch_g);
+			startfade(evch_g);
 		}
 		return;
 	}
+	if(ev == "fade")
+		return;	# a redraw only
 	if(ev == "catalog" || ev == "tick")
 		loadcatalog();
 	if(ev == "catalog")
@@ -766,6 +755,8 @@ handleevent(ev: string)
 		loadpinnedpaths();
 		loadmanifest();
 		loadagentname();
+		startwatch(evch_g);	# if tools9p was not up before
+		startfade(evch_g);
 	}
 	if(hasprefix(ev, "theme "))
 		reloadcolors();

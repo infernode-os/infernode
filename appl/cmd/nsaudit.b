@@ -542,6 +542,9 @@ privilegedControlGrant(p: string): int
 	p = asciilower(p);
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",

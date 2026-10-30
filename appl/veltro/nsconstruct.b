@@ -1104,6 +1104,9 @@ privilegedcontrolpath(path: string, tools: list of string): int
 {
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -1656,6 +1659,9 @@ verifyns(expected: list of string): string
 		"/.git",
 		"/CLAUDE.md",
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/msg/ctl",

@@ -70,7 +70,8 @@ Tools9p: module {
 
 # Qid types for synthetic files
 Qroot, Qtools, Qhelp, Qregistry, Qctl, Qpaths, Qbudget, Qactivity, Qprovision,
-	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable: con iota;
+	Qmeta, Qmetarole, Qmetaxenith, Qmetaactid, Qmetanodevs, Qgrantable,
+	Qns, Qevent, Qview: con iota;
 Qtoolbase: con 100;       # Tool qid blocks start at 100
 TOOL_STRIDE: con 5;       # Qids per tool: 0=dir, 1=ctl, 2=doc, 3=schema, 4=run
 Qtool_dir: con 0;         # Offset: tool directory
@@ -132,6 +133,7 @@ ProvisionState: adt {
 provisionstates: list of ref ProvisionState;
 helpresult: array of byte;  # Last help query result (global, not per-fid)
 manifestgate: chan of int;  # Closed startup manifest phase before tool calls
+evpostc: chan of string;    # events posted by procs other than serveloop
 
 # Mapping from tool name to .dis path
 # Veltro tools are in /dis/veltro/tools/
@@ -342,6 +344,7 @@ init(nil: ref Draw->Context, args: list of string)
 	cleanupchan = chan[32] of int;
 	taskcreatelock = chan[1] of int;
 	manifestgate = chan[1] of int;
+	evpostc = chan[4] of string;
 	cleanshadows();
 	spawn shadowcleanloop();
 
@@ -879,6 +882,9 @@ privilegedcontrolpath(path: string): int
 {
 	dangerous := array[] of {
 		"/tool/ctl",
+		"/tool/ns",
+		"/tool/event",
+		"/tool/view",
 		"/mnt/toolctl",
 		"/mnt/toolctl/ctl",
 		"/mnt/factotum",
@@ -1991,6 +1997,9 @@ emitmanifestnow(mpath: string, ready: chan of int)
 		sys->fprint(stderr, "tools9p: manifest exception: %s\n", e);
 	}
 	ready <-= 1;
+	# the first name space is made: a reader of event (lucictx) reads
+	# the manifest now rather than looking for it
+	evpostc <-= "paths";
 }
 
 # Apply namespace restriction to the current (already-forked) namespace.
@@ -2111,7 +2120,17 @@ serveloop(tchan: chan of ref Tmsg, srv: ref Styxserver, pidc: chan of int, navop
 	restricted := 0;
 
 Serve:
-	while((gm := <-tchan) != nil) {
+	for(;;) {
+		gm: ref Tmsg;
+		alt {
+		gm = <-tchan =>
+			;
+		w := <-evpostc =>
+			postevent(srv, w);
+			continue;
+		}
+		if(gm == nil)
+			break;
 		# Wait for mount completion before allowing tool invocations.
 		# Restriction is applied per-invocation in asyncexec() so that
 		# paths bound after startup are always captured at call time.
@@ -2147,6 +2166,14 @@ Serve:
 
 			qid := Qid(c.path, 0, c.qtype);
 			c.open(mode, qid);
+			if(TYPE(c.path) == Qevent)
+				evfids = ref Evfid(m.fid, nil, nil) :: evfids;
+			if(TYPE(c.path) == Qview) {
+				v := ref View(m.fid, chan[32] of array of byte, chan[1] of ref Tmsg.Read,
+					chan[8] of int, chan[1] of int);
+				views = v :: views;
+				spawn viewproc(srv, v);
+			}
 			srv.reply(ref Rmsg.Open(m.tag, qid, srv.iounit()));
 
 		Read =>
@@ -2191,6 +2218,24 @@ Serve:
 
 			Qpaths =>
 				srv.reply(styxservers->readbytes(m, array of byte genpathlist()));
+
+			Qns =>
+				# Built once per open, at its first read, so a reader
+				# taking it in pieces sees one name space.  Building it
+				# walks /tool, which this loop serves: off the loop.
+				if(c.data == nil)
+					spawn nsview(srv, m, c);
+				else
+					srv.reply(styxservers->readbytes(m, c.data));
+
+			Qevent =>
+				evread(srv, m);
+
+			Qview =>
+				if((v := findview(m.fid)) != nil)
+					v.rc <-= m;
+				else
+					srv.reply(ref Rmsg.Error(m.tag, "view not open"));
 
 			Qbudget =>
 				srv.reply(styxservers->readbytes(m, array of byte genbudgetlist()));
@@ -2267,6 +2312,14 @@ Serve:
 				data = data[0:len data - 1];
 
 			case qtype {
+			Qview =>
+				# 9P messages for the agent's name space: to its proc
+				if((v := findview(m.fid)) != nil) {
+					v.wc <-= m.data;
+					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+				} else
+					srv.reply(ref Rmsg.Error(m.tag, "view not open"));
+
 			Qhelp =>
 				# Write tool name, store documentation globally
 				# (so a different fid's read sees it)
@@ -2283,11 +2336,14 @@ Serve:
 					cerr := ctladd(data[4:]);
 					if(cerr != nil)
 						srv.reply(ref Rmsg.Error(m.tag, cerr));
-					else
+					else {
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						postevent(srv, "tools");
+					}
 				} else if(len data > 7 && data[0:7] == "remove ") {
 					ctlremove(data[7:]);
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "tools");
 				} else if(len data > 9 && data[0:9] == "bindpath ") {
 					# "bindpath <path> [ro|rw]" — default perm is "rw"
 					rest := data[9:];
@@ -2311,6 +2367,7 @@ Serve:
 					else
 						boundpaths = ref BoundPath(bpath, bperm) :: boundpaths;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "paths");
 				} else if(len data > 11 && data[0:11] == "unbindpath ") {
 					p := data[11:];
 					perr := validatepath(p);
@@ -2324,6 +2381,7 @@ Serve:
 							nl = hd bl :: nl;
 					boundpaths = nl;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "paths");
 				} else if(len data > 8 && data[0:8] == "setperm ") {
 					# "setperm <path> <ro|rw>" — change perm on existing bound path
 					rest := data[8:];
@@ -2337,6 +2395,7 @@ Serve:
 					if(existing2 != nil) {
 						existing2.perm = sperm;
 						srv.reply(ref Rmsg.Write(m.tag, len m.data));
+						postevent(srv, "paths");
 					} else {
 						srv.reply(ref Rmsg.Error(m.tag, "path not bound: " + spath));
 					}
@@ -2349,6 +2408,7 @@ Serve:
 					if(!strlist_contains(budget, bname))
 						budget = bname :: budget;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "budget");
 				} else if(len data > 14 && data[0:14] == "budget-remove ") {
 					bname := data[14:];
 					nbl: list of string;
@@ -2357,6 +2417,7 @@ Serve:
 							nbl = hd bbl :: nbl;
 					budget = nbl;
 					srv.reply(ref Rmsg.Write(m.tag, len m.data));
+					postevent(srv, "budget");
 				} else if(len data > 10 && data[0:10] == "provision ") {
 					# "provision <id> [tools=<csv>] [paths=<csv>]"
 					# Validate inline so a refused delegation fails THIS write
@@ -2444,16 +2505,327 @@ Serve:
 				if(f != nil && (ti := findtoolbyqid(TYPE(f.path))) != nil)
 					spawn asyncexec(srv, ref Callreply(m.tag, 0, nil, 1), ti, nil, argstring(args));
 			}
+			evclunk(m.fid);
+			viewclunk(m.fid);
 			srv.clunk(m);
 
 		Remove =>
 			srv.remove(m);
+
+		Flush =>
+			evflush(m.oldtag);
+			for(vl := views; vl != nil; vl = tl vl)
+				alt {
+				(hd vl).fc <-= m.oldtag =>
+					;
+				* =>
+					;
+				}
+			srv.default(gm);
 
 		* =>
 			srv.default(gm);
 		}
 	}
 	navops <-= nil;  # shut down navigator
+}
+
+#
+# event: one word a line, 'tools', 'paths' or 'budget', when that list
+# changes through ctl.  Each open fid has its own queue, so a reader
+# misses nothing between its reads; a read with nothing queued waits.
+#
+Evfid: adt {
+	fid:	int;
+	q:	list of string;		# words not yet read, oldest first
+	rd:	ref Tmsg.Read;		# the read waiting, if any
+};
+evfids: list of ref Evfid;
+
+findevfid(fid: int): ref Evfid
+{
+	for(l := evfids; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+evread(srv: ref Styxserver, m: ref Tmsg.Read)
+{
+	e := findevfid(m.fid);
+	if(e == nil) {
+		srv.reply(ref Rmsg.Error(m.tag, "event not open"));
+		return;
+	}
+	if(e.q == nil) {
+		e.rd = m;
+		return;
+	}
+	evreply(srv, e, m);
+}
+
+evreply(srv: ref Styxserver, e: ref Evfid, m: ref Tmsg.Read)
+{
+	s := "";
+	for(l := e.q; l != nil; l = tl l)
+		s += hd l + "\n";
+	e.q = nil;
+	b := array of byte s;
+	if(len b > m.count)
+		b = b[0:m.count];
+	srv.reply(ref Rmsg.Read(m.tag, b));
+}
+
+postevent(srv: ref Styxserver, w: string)
+{
+	for(l := evfids; l != nil; l = tl l) {
+		e := hd l;
+		if(!strlist_contains(e.q, w))
+			e.q = appendstr(e.q, w);
+		if(e.rd != nil) {
+			m := e.rd;
+			e.rd = nil;
+			evreply(srv, e, m);
+		}
+	}
+}
+
+appendstr(l: list of string, s: string): list of string
+{
+	if(l == nil)
+		return s :: nil;
+	return hd l :: appendstr(tl l, s);
+}
+
+evclunk(fid: int)
+{
+	nl: list of ref Evfid;
+	for(l := evfids; l != nil; l = tl l)
+		if((hd l).fid != fid)
+			nl = hd l :: nl;
+	evfids = nl;
+}
+
+evflush(tag: int)
+{
+	for(l := evfids; l != nil; l = tl l)
+		if((hd l).rd != nil && (hd l).rd.tag == tag)
+			(hd l).rd = nil;
+}
+
+#
+# ns: the name space a tool call gets, as ns(1) prints it.  It is made
+# as a call's is (asyncexec), by applynsrestriction, for read: a tool
+# that adds no paths of its own, so what is in it is the grants every
+# call has.  (exec is given only the rw grants; a few tools add their
+# own, as charon adds /mnt/charon.)  The proc is gone after the read.
+#
+NSVIEWTOOL: con "read";
+
+nsview(srv: ref Styxserver, m: ref Tmsg.Read, c: ref Fid)
+{
+	<-manifestgate;
+	manifestgate <-= 1;
+	mypid := sys->pctl(Sys->FORKNS, nil);
+	err := isolateenv();
+	if(err == nil && sys->pctl(Sys->NODEVS, nil) < 0)
+		err = sys->sprint("cannot disable device attachment: %r");
+	if(err == nil && mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0)
+		err = sys->sprint("cannot bind %s: %r", mountpt_g);
+	if(err == nil)
+		err = applynsrestriction(NSVIEWTOOL);
+	ns: string;
+	if(err == nil) {
+		ns = readfile(sys->sprint("/prog/%d/ns", mypid));
+		if(ns == nil)
+			err = sys->sprint("cannot read the name space: %r");
+	}
+	if(err != nil)
+		srv.reply(ref Rmsg.Error(m.tag, err));
+	else {
+		c.data = array of byte ns;
+		srv.reply(styxservers->readbytes(m, c.data));
+	}
+	cleanupchan <-= mypid;
+}
+
+#
+# view: the name space a tool call gets, served.  Opening it makes that
+# name space as nsview does, in a proc of its own, and exports its root
+# over a pipe; what is written to the file is 9P to that export and what
+# is read is its replies, so
+#	mount /mnt/toolctl/view /n/agent
+# shows the agent's world as it is.  It is read-only: a message that
+# would change a file (create, remove, wstat, write, an open for
+# writing) is answered here, with an error, and not passed on.  The
+# proc, and the name space, go with the fid.
+#
+View: adt {
+	fid:	int;
+	wc:	chan of array of byte;	# 9P from the client
+	rc:	chan of ref Tmsg.Read;	# the client's read for replies
+	fc:	chan of int;		# a flushed tag
+	done:	chan of int;		# the fid clunked
+};
+views: list of ref View;
+
+findview(fid: int): ref View
+{
+	for(l := views; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			return hd l;
+	return nil;
+}
+
+viewclunk(fid: int)
+{
+	nl: list of ref View;
+	for(l := views; l != nil; l = tl l)
+		if((hd l).fid == fid)
+			(hd l).done <-= 1;
+		else
+			nl = hd l :: nl;
+	views = nl;
+}
+
+viewproc(srv: ref Styxserver, v: ref View)
+{
+	<-manifestgate;
+	manifestgate <-= 1;
+	sys->pctl(Sys->NEWPGRP, nil);
+	mypid := sys->pctl(Sys->FORKNS, nil);
+	err := isolateenv();
+	if(err == nil && sys->pctl(Sys->NODEVS, nil) < 0)
+		err = sys->sprint("cannot disable device attachment: %r");
+	if(err == nil && mountpt_g != "/tool" && sys->bind(mountpt_g, "/tool", Sys->MREPL) < 0)
+		err = sys->sprint("cannot bind %s: %r", mountpt_g);
+	if(err == nil)
+		err = applynsrestriction(NSVIEWTOOL);
+	fds := array[2] of ref Sys->FD;
+	if(err == nil && sys->pipe(fds) < 0)
+		err = sys->sprint("pipe: %r");
+	if(err == nil && sys->export(fds[0], "/", Sys->EXPASYNC) < 0)
+		err = sys->sprint("export: %r");
+	inq := chan of array of byte;
+	if(err == nil) {
+		fds[0] = nil;
+		spawn viewpipe(fds[1], inq);
+	}
+
+	out: array of byte;	# whole replies not yet read
+	cin: array of byte;	# a message from the client not yet whole
+	xin: array of byte;	# a reply from the export not yet whole
+	rd: ref Tmsg.Read;
+	dead := err != nil;
+Loop:
+	for(;;) {
+		alt {
+		b := <-v.wc =>
+			if(dead)
+				break;
+			cin = catbytes(cin, b);
+			while(len cin > 0) {
+				(n, t) := Tmsg.unpack(cin);
+				if(n <= 0)
+					break;
+				if(t != nil && (e := viewrefuse(t)) != nil)
+					out = catbytes(out, (ref Rmsg.Error(t.tag, e)).pack());
+				else if(sys->write(fds[1], cin[0:n], n) != n) {
+					dead = 1;
+					if(err == nil)
+						err = sys->sprint("export: %r");
+				}
+				cin = cin[n:];
+			}
+		m := <-v.rc =>
+			rd = m;
+		b := <-inq =>
+			if(b == nil)
+				dead = 1;
+			else {
+				# only whole replies join out, so one made here
+				# never lands inside one of the export's
+				xin = catbytes(xin, b);
+				while(len xin >= 4 && (n := msgsize(xin)) <= len xin) {
+					if(n < 7) {	# not 9P: give up on it
+						dead = 1;
+						break;
+					}
+					out = catbytes(out, xin[0:n]);
+					xin = xin[n:];
+				}
+			}
+		tag := <-v.fc =>
+			if(rd != nil && rd.tag == tag)
+				rd = nil;
+		<-v.done =>
+			break Loop;
+		}
+		if(rd != nil && len out > 0) {
+			n := len out;
+			if(n > rd.count)
+				n = rd.count;
+			srv.reply(ref Rmsg.Read(rd.tag, out[0:n]));
+			out = out[n:];
+			rd = nil;
+		} else if(rd != nil && dead) {
+			if(err != nil)
+				srv.reply(ref Rmsg.Error(rd.tag, err));
+			else
+				srv.reply(ref Rmsg.Read(rd.tag, nil));
+			rd = nil;
+		}
+	}
+	cleanupchan <-= mypid;
+	# the pipe's reader and this proc: the export hangs up when they go
+	fd := sys->open(sys->sprint("/prog/%d/ctl", mypid), Sys->OWRITE);
+	if(fd != nil)
+		sys->fprint(fd, "killgrp");
+}
+
+viewpipe(fd: ref Sys->FD, inq: chan of array of byte)
+{
+	buf := array[Styx->MAXRPC] of byte;
+	while((n := sys->read(fd, buf, len buf)) > 0)
+		inq <-= buf[0:n];
+	inq <-= nil;
+}
+
+# Why a message for the read-only view is refused, or nil to pass it on.
+viewrefuse(t: ref Tmsg): string
+{
+	ro := "the agent's name space is read-only here";
+	pick m := t {
+	Create =>
+		return ro;
+	Remove =>
+		return ro;
+	Wstat =>
+		return ro;
+	Write =>
+		return ro;
+	Open =>
+		# OREAD, or 3 (exec); not OWRITE, ORDWR, OTRUNC or ORCLOSE
+		if((m.mode & 3) == Sys->OWRITE || (m.mode & 3) == Sys->ORDWR || (m.mode & (Sys->OTRUNC|Sys->ORCLOSE)))
+			return ro;
+	}
+	return nil;
+}
+
+# the size a 9P message says it is, from its first four bytes
+msgsize(b: array of byte): int
+{
+	return int b[0] | int b[1]<<8 | int b[2]<<16 | int b[3]<<24;
+}
+
+catbytes(a, b: array of byte): array of byte
+{
+	if(len a == 0)
+		return b;
+	c := array[len a + len b] of byte;
+	c[0:] = a;
+	c[len a:] = b;
+	return c;
 }
 
 dir(qid: Sys->Qid, name: string, length: big, perm: int): ref Sys->Dir
@@ -2515,6 +2887,15 @@ dirgen(p: big): (ref Sys->Dir, string)
 		return (dir(Qid(p, vers, Sys->QTFILE), "actid", big 0, 8r444), nil);
 	Qmetanodevs =>
 		return (dir(Qid(p, vers, Sys->QTFILE), "nodevs", big 0, 8r444), nil);
+
+	Qns =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "ns", big 0, 8r444), nil);
+
+	Qevent =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "event", big 0, 8r444), nil);
+
+	Qview =>
+		return (dir(Qid(p, vers, Sys->QTFILE), "view", big 0, 8r644), nil);
 	}
 
 	# Check if it's a tool directory or subfile
@@ -2572,6 +2953,12 @@ navigator(navops: chan of ref Navop)
 					n.path = big Qactivity;
 				"meta" =>
 					n.path = big Qmeta;
+				"ns" =>
+					n.path = big Qns;
+				"event" =>
+					n.path = big Qevent;
+				"view" =>
+					n.path = big Qview;
 				"provision" =>
 					if(findtool("task") == nil) {
 						n.reply <-= (nil, Enotfound);
@@ -2706,16 +3093,34 @@ navigator(navops: chan of ref Navop)
 					i++;
 				}
 
-				if(findtool("task") != nil && i <= 9 && count > 0) {
+				# Entries 9 and 10: the name space a tool call gets, and
+				# changes to the lists (#1020)
+				if(i <= 9 && count > 0) {
+					n.reply <-= dirgen(big Qns);
+					count--;
+					i++;
+				}
+				if(i <= 10 && count > 0) {
+					n.reply <-= dirgen(big Qevent);
+					count--;
+					i++;
+				}
+				if(i <= 11 && count > 0) {
+					n.reply <-= dirgen(big Qview);
+					count--;
+					i++;
+				}
+
+				if(findtool("task") != nil && i <= 12 && count > 0) {
 					n.reply <-= dirgen(big Qprovision);
 					count--;
 					i++;
 				}
 
 				# Remaining entries: registered tool directories
-				baseoff := 9;
+				baseoff := 12;
 				if(findtool("task") != nil)
-					baseoff = 10;
+					baseoff = 13;
 				idx := 0;
 				for(t := tools; t != nil && count > 0; t = tl t) {
 					ti := hd t;

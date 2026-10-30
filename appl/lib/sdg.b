@@ -295,7 +295,10 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 	mac1key := sha256(cat(array of byte "mac1", k.server));
 	ckey := sha256(cat(array of byte "cookie--", k.server));
 	cookie: array of byte;
-	pkts := chan of array of byte;
+	# Buffered: a packet that arrives while we are busy with the last
+	# (message 2 is two X25519s) waits, rather than being dropped by
+	# reader1 (forge1: a forged response made us drop the genuine one).
+	pkts := chan[16] of array of byte;
 	rpid := chan of int;
 	spawn reader1(s.fd, pkts, rpid);
 	reader := <-rpid;
@@ -342,9 +345,15 @@ connect(addr: string, k: ref Keys): (ref Sess, string)
 				continue;
 			}
 			if(len r == RESPLEN && int r[0] == Presp && get4(r, 5) == me){
-				v := handshake2(hs, r[9:]);
+				# On a copy: message 2 changes the state before its tag is
+				# checked, and a forged response (anyone who saw the
+				# initiation has our index) would otherwise spoil it for
+				# the genuine one that follows (review 2026-10-30, F1).
+				h := ref *hs;
+				v := handshake2(h, r[9:]);
 				if(v == nil || len v != 1 || int v[0] != 1)
 					continue;
+				hs = h;
 				kill(reader);	# from here on the relay reads the network
 				s.me = me;
 				s.them = get4(r, 1);
@@ -376,7 +385,7 @@ reader1(fd: ref Sys->FD, pkts: chan of array of byte, pid: chan of int)
 		pkts <-= r =>
 			;
 		* =>
-			;	# nobody listening (the handshake is over): drop
+			;	# the queue is full, or the handshake is over: drop
 		}
 	}
 }

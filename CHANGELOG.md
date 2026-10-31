@@ -4,7 +4,60 @@ All notable changes to InferNode are documented in this file.
 
 ## [Unreleased]
 
+### Window manager
+
+- **New opens wm/shell, rebuilt on wm/sh (#1007).** wm/wm's New started
+  wm/sh; it starts wm/shell, which is now wm/sh's terminal with the
+  theme, history and Veltro's files added. Its console had not been a
+  console: `^D` sent the byte 4 instead of ending the read, so `cat`
+  never saw end of file; typed input reached a program newest first,
+  and a short read dropped the rest; `^C` put DEL into the shell's next
+  line; lines a program read were shown twice; ESC froze output rather
+  than holding input; the window stayed when its shell exited; button 3
+  never plumbed; and every key redrew the whole transcript. It now has
+  wm/sh's line discipline, `/dev/consctl` (`rawon`, `rawoff`, `holdon`,
+  `holdoff`), noscroll, menus, chords and `/chan/shctl`, and closes when
+  its shell is done. What you will notice: the menu is on button 2 and
+  button 3 plumbs, as in wm/sh (on a Mac, Option-click is button 2);
+  `^Q` no longer closes the window; `^P` and `^N` bring back lines sent,
+  `^L` clears; there is no status bar; the text is coloured as Xenith's
+  body is. `wm-shell(1)` describes it.
+- **`^C` in a shell window stops what the shell is running.** Inferno's
+  console has no interrupt, so a runaway command in wm/shell could only
+  be stopped by closing the window. `^C` now kills every process the
+  shell started (the shell runs in a process group of its own) and
+  leaves the shell, and an interactive `sh` ends the line when a command
+  it waited for is killed, as rc does on an interrupt: in
+  `build; deploy`, `deploy` is not run. Scripts and `sh -c` are as
+  they were. In raw mode `^C` goes to the program, as every key does.
+  A shell window closed, deleted from wm/wm's menu or killed from
+  outside takes its shell, what the shell runs and its theme watcher
+  with it; the watcher was left running.
+- **wm/sh's text in the theme's colours (#1007).** It drew its text in
+  rio's black, grey and blues whatever the theme, so on a dark theme it
+  was black on near black, and a selection kept the first theme's
+  colours after a switch.
+
+### Themes
+
+- **Two colours for a shell window: `editunfocused` and `edithold`
+  (#1007).** Text in a window that does not have the keyboard (wm/sh
+  dims it, as rio does) and text while input is held (ESC). Each
+  shipped theme sets them, readable on its `editbg`; a theme of your own
+  that does not gets its own `text2` and `accent`.
+
+### Settings
+
+- **Settings opens on LLM Service, and Theme is last (#1007).** Theme was
+  first in the list and what Settings opened on.
+
 ### Applications
+
+- **An app tool finds the program's second instance when the first has
+  gone.** wm/shell, wm/editor, wm/man and wm/fractals post their files
+  as `#s<app>/fs`, and a second instance as `fs.1`. tools9p mounted only
+  `fs`, so with the first shell closed and a second open, the shell tool
+  said the shell was not running. It mounts the first still posted.
 
 - **A task is ready when its provisioning write returns; nothing polls
   for it (#1019).** The task tool read tools9p's `provision` file every
@@ -168,6 +221,22 @@ All notable changes to InferNode are documented in this file.
   `tests/host/wm_edit_test.sh` drives it. `man/1/edit` described
   `wm/editor`; that page is now `editor(1)`, and `edit(1)` is
   `wm/edit`'s.
+
+### Building
+
+- **`build-linux-amd64.sh` and `build-linux-arm64.sh` build the whole
+  Limbo tree (#1007).** They built six chosen directories, not
+  `appl/xenith`, whose `docreg.dis` wm/page loads: in a tree built by
+  either script alone wm/page could not start. They build what
+  `CLAUDE.md` and `hooks/post-merge` build.
+- **A changed header rebuilds what includes it (#1007).** mk rebuilds a
+  `.dis` when a header its mkfile names changes; 346 headers that
+  sources include were not named, so a change to one left the `.dis` it
+  built stale, and the Dis VM refused it at load (`link typecheck`),
+  after `hooks/post-merge` too. `tools/check-mkfile-deps.py` follows
+  each source's includes as `limbo` does and checks them against its
+  mkfile (`-fix` adds what is missing); CI runs it. Include a new
+  header and name it in the mkfile.
 
 ## [0.9.1] - 2026-10-30
 

@@ -414,6 +414,7 @@ timeoutTask(ch: chan of int, ms: int)
 | `publicnet_host_test.b` | Shared URL-host parsing + SSRF blocklist |
 | `wallet_policy_test.b` | wallet9p budgets, approval queue, per-fid isolation |
 | `wallet_capability_test.b` | Wallet agent-namespace narrowing |
+| `gps_capability_test.b` | The `gps` tool's grant: an agent given the tool sees `/mnt/gps`'s read files and not `ctl`, `feed` or `nmea`, and the tool reads the position through them; a generic path grant of `/mnt/gps` without the tool gives nothing |
 | `wpa_test.b` | WPA2 key derivation (RFC 6070, 802.11i, RFC 3394) + the four-way handshake |
 | `dhcp_test.b` | DHCP option encoding (RFC 2132) + a whole exchange against a synthetic server |
 | `nmea_test.b` | NMEA 0183 (`module/nmea.m`): sentences framed and checksummed, positions and times read, a receiver's burst for one time assembled into one fix (a lost GGA, a new receiver), a fix lost told once, satellites in view and used by system (NMEA 4.10 system ids), GST errors, garbled sentences taken without harm |

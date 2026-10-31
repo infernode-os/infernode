@@ -56,6 +56,7 @@ TOOLS=\
     tools/websearch.dis\
     tools/browse.dis\
     tools/charon.dis\
+    tools/gps.dis\
     tools/gpu.dis\
     tools/vision.dis\
     tools/fractal.dis\
@@ -212,6 +213,9 @@ tools/charon.dis: tools/charon.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/
 	limbo $LIMBOFLAGS -gw -o tools/charon.dis tools/charon.b
 
 # GPU tool
+tools/gps.dis: tools/gps.b tool.m $MODDIR/draw.m $MODDIR/sys.m
+	limbo $LIMBOFLAGS -gw -o tools/gps.dis tools/gps.b
+
 tools/gpu.dis: tools/gpu.b tool.m $MODDIR/draw.m $MODDIR/string.m $MODDIR/sys.m
 	limbo $LIMBOFLAGS -gw -o tools/gpu.dis tools/gpu.b
 

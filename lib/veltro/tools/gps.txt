@@ -1,0 +1,23 @@
+gps - Where this machine is, from its GPS receiver
+
+Reads the GPS receiver at /mnt/gps (gpsfs): the position, the whole
+fix, the receiver's state, the satellites in view, or waits for the
+next fix. Read only: it cannot choose the receiver or set a position.
+A location is personal: use it for what the user asked, and do not
+send it anywhere they did not ask you to.
+
+Usage:
+  gps [position]       latitude and longitude, decimal degrees (north, east positive)
+  gps fix              the whole fix, attr=value: time lat lon alt (metres above sea
+                       level) speed (m/s) course (degrees true) mode q sats hdop err (metres)
+  gps status           state=fix|nofix|nosource, the source, the age of the fix
+  gps satellites       one line a satellite: system prn elevation azimuth snr used
+  gps wait [seconds]   wait for the next fix (default 30, at most 300)
+
+"error: no fix" means the receiver has no position now; gps status says
+why. "error: no GPS receiver" means /mnt/gps is not served.
+
+Examples:
+  gps
+  gps fix
+  gps wait 10

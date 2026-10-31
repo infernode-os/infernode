@@ -741,6 +741,7 @@ dis/tests/gentmpl.dis
 dis/tests/geomap_test.dis
 dis/tests/git_test.dis
 dis/tests/goroutine_leak_test.dis
+dis/tests/gps_capability_test.dis
 dis/tests/gpu_bench.dis
 dis/tests/gpu_smoke.dis
 dis/tests/gpu_test.dis
@@ -971,6 +972,7 @@ dis/veltro/tools/find.dis
 dis/veltro/tools/fractal.dis
 dis/veltro/tools/gap.dis
 dis/veltro/tools/git.dis
+dis/veltro/tools/gps.dis
 dis/veltro/tools/gpu.dis
 dis/veltro/tools/grep.dis
 dis/veltro/tools/hear.dis

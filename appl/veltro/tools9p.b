@@ -171,6 +171,8 @@ TOOL_PATHS := array[] of {
 	# Web browsing
 	("browse",    "/dis/veltro/tools/browse.dis"),
 	("charon",    "/dis/veltro/tools/charon.dis"),
+	# Where this machine is (requires gpsfs at /mnt/gps; read only)
+	("gps",     "/dis/veltro/tools/gps.dis"),
 	# GPU inference (requires gpusrv mounted at /mnt/gpu)
 	("gpu",     "/dis/veltro/tools/gpu.dis"),
 	# Speech tools (require /mnt/speech via speech9p)
@@ -1059,6 +1061,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
 		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
+		path == "/mnt/gps" || prefix(path, "/mnt/gps/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||

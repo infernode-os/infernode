@@ -377,6 +377,18 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 		if(gpuok >= 0 && !inlist("gpu", mntpaths))
 			mntpaths = "gpu" :: mntpaths;
 	}
+	# /mnt/gps — the GPS receiver (gpsfs(4)). Fixed-function: only the gps
+	# tool, and only its read files (narrowed below), never ctl or feed, so
+	# an agent can learn where it is but cannot choose the receiver or put a
+	# position in. Generic path grants cannot reach it.
+	gpsmnt := 0;
+	if(inlist("gps", caps.tools)) {
+		(gpsok, nil) := sys->stat("/mnt/gps");
+		if(gpsok >= 0 && !inlist("gps", mntpaths)) {
+			mntpaths = "gps" :: mntpaths;
+			gpsmnt = 1;
+		}
+	}
 	# /mnt/git — fixed-function git service (git/fs, mounted by the git tool
 	# during trusted init; migrated from /n/git per docs/NAMESPACE-LAYOUT.md,
 	# INFR-401). Derived only from the git tool; generic path grants cannot
@@ -440,6 +452,13 @@ restrictnsx(caps: ref Capabilities, hidemetadata: int): string
 				uerr := filterdir("/mnt/ui", uiallow, 0);
 				if(uerr != nil)
 					return sys->sprint("restrict /mnt/ui: %s", uerr);
+			}
+			# /mnt/gps sub-restriction: the read files only.
+			if(gpsmnt) {
+				gerr := restrictdir("/mnt/gps",
+					"position" :: "fix" :: "event" :: "satellites" :: "status" :: nil, 0);
+				if(gerr != nil)
+					return sys->sprint("restrict /mnt/gps: %s", gerr);
 			}
 			# /mnt/msg sub-restriction: granting "/mnt/msg" exposes only the READ
 			# surface (status — the inbox). The proposal endpoint (draft), trusted
@@ -1271,6 +1290,7 @@ fixedservicecontrolpath(path: string): int
 		path == "/mnt/git" || prefix(path, "/mnt/git/") ||
 		path == "/n/git" || prefix(path, "/n/git/") ||
 		path == "/mnt/gpu" || prefix(path, "/mnt/gpu/") ||
+		path == "/mnt/gps" || prefix(path, "/mnt/gps/") ||
 		path == "/mnt/web" || prefix(path, "/mnt/web/") ||
 		path == "/n/web" || prefix(path, "/n/web/") ||
 		path == "/mnt/wiki" || prefix(path, "/mnt/wiki/") ||
@@ -1562,6 +1582,7 @@ emitmanifest(caps: ref Capabilities, fd: ref Sys->FD)
 		("/mnt/matrix", "Matrix Runtime", "rw"),
 		("/mnt/wsys", "Window Pictures", "ro"),
 		("/mnt/gpu", "GPU Service", "rw"),
+		("/mnt/gps", "GPS Receiver", "ro"),
 		("/mnt/git", "Git", "rw"),
 		("/mnt/web", "Web Service", "rw"),
 		("/mnt/wiki", "Wiki Store", "rw"),

@@ -148,7 +148,10 @@ removed one at a time:
 
 ## Candidates, by fit
 
-1. **`road` + `gps`** (Plan 9 2E). A live GPS moving map over vector
+1. **`road` + `gps`** (Plan 9 2E). *Revived:* `gps` became gpsfs(4)
+   at `/mnt/gps` (serial, `#g` for a phone's own location, TCP, gpsd,
+   logs), and `road` became `wm/road`, a moving map following
+   `/mnt/gps/event`. A live GPS moving map over vector
    data, written in the Plan 9 way: the position is read from a file.
    Done in Limbo, it would be a map that reads its position from a file
    that a GPS, an agent or a network feed writes. The TIGER data is old;

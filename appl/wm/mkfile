@@ -25,6 +25,7 @@ TARG=\
 	tetris.dis\
 	coffee.dis\
 	memory.dis\
+	road.dis\
 	rt.dis\
 	deb.dis\
 	dir.dis\

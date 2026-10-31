@@ -1038,6 +1038,7 @@ dis/wm/man.dis
 dis/wm/matrix.dis
 dis/wm/memory.dis
 dis/wm/presrender.dis
+dis/wm/road.dis
 dis/wm/rt.dis
 dis/wm/sam.dis
 dis/wm/samengine.dis

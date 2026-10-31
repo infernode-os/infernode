@@ -502,6 +502,10 @@ nvmeshutdown(void)
 	if(!nvme.present || nvme.dead || done)
 		return;
 	done = 1;
+	if((R(Csts) & Rdy) == 0 || R(Csts) == ~0U){
+		print("nvme: down already\n");	/* the link's first drop: it holds nothing */
+		return;
+	}
 	if(!canqlock(&nvme.q))
 		print("nvme: busy on the way down\n");
 	nvme.canwait = 0;

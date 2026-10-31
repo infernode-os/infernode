@@ -182,6 +182,9 @@ reboot(void)
 void
 tryboot(void)
 {
+#ifdef NVME0
+	nvmeshutdown();
+#endif
 	uartputstr("tryboot: resetting; next boot is the CANDIDATE kernel\n");
 	boardtryboot();
 	exit(0);

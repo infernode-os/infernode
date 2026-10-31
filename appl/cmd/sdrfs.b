@@ -43,7 +43,11 @@ implement Sdrfs;
 #
 # The files are also posted as #ssdr/fs (post9p(2)).
 #
-# Usage:	sdrfs [-S] [-m mountpoint] [-s spec] [command ...]
+# -w is how long to wait for rtl_tcp's greeting (15 seconds): while
+# another client holds it, rtl_tcp answers a dial but does not greet,
+# and after one leaves it takes five seconds to take the next.
+#
+# Usage:	sdrfs [-S] [-m mountpoint] [-s spec] [-w seconds] [command ...]
 #
 
 include "sys.m";
@@ -150,6 +154,7 @@ Auto: con 16r7fffffff;
 directs := array[] of {"off", "i", "q"};
 
 user := "sdr";
+greetwait := 15*1000;	# rtl_tcp takes 5s to take a new client after the last
 stderr: ref Sys->FD;
 
 init(nil: ref Draw->Context, argv: list of string)
@@ -167,7 +172,7 @@ init(nil: ref Draw->Context, argv: list of string)
 	mnt := "/mnt/sdr";
 	spec := "sdr";
 	arg->init(argv);
-	arg->setusage("sdrfs [-S] [-m mountpoint] [-s spec] [command ...]");
+	arg->setusage("sdrfs [-S] [-m mountpoint] [-s spec] [-w seconds] [command ...]");
 	while((o := arg->opt()) != 0)
 		case o {
 		'm' =>
@@ -176,6 +181,10 @@ init(nil: ref Draw->Context, argv: list of string)
 			spec = arg->earg();
 		'S' =>
 			spec = nil;
+		'w' =>
+			greetwait = int arg->earg() * 1000;
+			if(greetwait <= 0)
+				arg->usage();
 		* =>
 			arg->usage();
 		}
@@ -690,23 +699,56 @@ dial(gen: int, addr: string, evc: chan of ref Event)
 		evc <-= ref Event(gen, Dopen, nil, 0, 0, nil, sys->sprint("dial %s: %r", addr));
 		return;
 	}
-	b := array[Greeting] of byte;
-	for(n := 0; n < Greeting; ) {
-		k := sys->read(c.dfd, b[n:], Greeting - n);
-		if(k <= 0) {
-			e := "hung up";
-			if(k < 0)
-				e = sys->sprint("%r");
-			evc <-= ref Event(gen, Dopen, nil, 0, 0, nil, sys->sprint("%s: no greeting: %s", addr, e));
-			return;
-		}
-		n += k;
+	# rtl_tcp serves one client at a time: while another holds it, a
+	# dial is answered but not greeted
+	gc := chan[1] of (array of byte, string);
+	spawn greeting(c.dfd, gc);
+	tc := chan[1] of int;
+	spawn timer(greetwait, tc);
+	b: array of byte;
+	e: string;
+	alt {
+	(b, e) = <-gc =>
+		;
+	<-tc =>
+		if(c.cfd != nil)
+			sys->fprint(c.cfd, "hangup");
+		evc <-= ref Event(gen, Dopen, nil, 0, 0, nil,
+			sys->sprint("%s: not greeted in %d seconds: rtl_tcp busy with another client?", addr, greetwait/1000));
+		return;
+	}
+	if(e != nil) {
+		evc <-= ref Event(gen, Dopen, nil, 0, 0, nil, sys->sprint("%s: no greeting: %s", addr, e));
+		return;
 	}
 	if(string b[0:4] != "RTL0") {
 		evc <-= ref Event(gen, Dopen, nil, 0, 0, nil, addr + ": not rtl_tcp: no RTL0 greeting");
 		return;
 	}
 	evc <-= ref Event(gen, Dopen, ref c, get32(b, 4), get32(b, 8), nil, nil);
+}
+
+greeting(fd: ref Sys->FD, gc: chan of (array of byte, string))
+{
+	b := array[Greeting] of byte;
+	for(n := 0; n < Greeting; ) {
+		k := sys->read(fd, b[n:], Greeting - n);
+		if(k <= 0) {
+			e := "hung up";
+			if(k < 0)
+				e = sys->sprint("%r");
+			gc <-= (nil, e);
+			return;
+		}
+		n += k;
+	}
+	gc <-= (b, nil);
+}
+
+timer(ms: int, tc: chan of int)
+{
+	sys->sleep(ms);
+	tc <-= 1;
 }
 
 # the stream, in chunks of whole samples

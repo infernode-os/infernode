@@ -12,6 +12,9 @@ sdrfs \- software-defined radio receiver as a file system
 .B -s
 .I spec
 ] [
+.B -w
+.I seconds
+] [
 .I command ...
 ]
 .SH DESCRIPTION
@@ -41,6 +44,14 @@ names another spec,
 .B -S
 posts none), so a process that did not see the mount can mount them.
 Not posted, sdrfs exits when the mount goes.
+.PP
+.I Rtl_tcp
+serves one client at a time.
+While another holds it, a dial is answered but not greeted, and after a
+client leaves it takes five seconds to take the next.
+.B -w
+is how long a dial waits for the greeting (15 seconds) before it is
+refused as busy.
 .SH FILESYSTEM
 .TF status
 .TP
@@ -143,7 +154,7 @@ only while something listens.
 Every open has its own queue; one that falls more than 8 MB behind
 loses the oldest, whole samples, counted in
 .BR status .
-When the stream ends, or the source changes, a read gives what was
+When the stream ends (the dongle unplugged, say), or the source changes, a read gives what was
 queued, then end of file (or the reason).
 .SH CAPABILITY MODEL
 One radio is one tuner on one frequency.
@@ -199,6 +210,13 @@ gain 49.6' > /mnt/sdr/ctl
 Only
 .I rtl_tcp
 is a source; there is no driver of its own for the dongle.
+Since
+.I sdrfs
+hangs up when the last reader goes, the next first reader waits the
+five seconds
+.I rtl_tcp
+takes to take a new client.
+.PP
 One dongle a server; a second is a second
 .I sdrfs
 at another mount point.

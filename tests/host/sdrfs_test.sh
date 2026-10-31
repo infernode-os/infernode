@@ -9,7 +9,8 @@
 # order; two readers on one stream, a setting written while they read
 # sent at once; a reader that does not read losing the oldest, still in
 # whole samples; refused: something that is not rtl_tcp, nothing
-# listening, bad settings, a write with one bad line (none of it done);
+# listening, an rtl_tcp that does not greet (busy with another
+# client), bad settings, a write with one bad line (none of it done);
 # stop; a second sdrfs finds it served.
 #
 set -e
@@ -36,11 +37,12 @@ start() {	# name args... -> its port
 }
 PR=$(start rtl serve "$D/rtl.log" 6)
 PH=$(start http http)
+PB=$(start busy busy)
 PN=$(python3 -I "$ROOT/tests/host/gps/fake_feed.py" port)	# nothing there
-[ -n "$PR" ] && [ -n "$PH" ] || { echo "FAIL: a fake did not start"; cat "$D"/*.err; exit 1; }
+[ -n "$PR" ] && [ -n "$PH" ] && [ -n "$PB" ] || { echo "FAIL: a fake did not start"; cat "$D"/*.err; exit 1; }
 
 cd "$ROOT"
-with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/sdr/drive.sh "/$T" "$PR" "$PH" "$PN" \
+with_timeout 90 "$EMU" -r"$ROOT" /dis/sh.dis /tests/sdr/drive.sh "/$T" "$PR" "$PH" "$PN" "$PB" \
 	</dev/null >"$D/log" 2>&1 || true
 
 failed=0
@@ -111,6 +113,8 @@ has status.dropped "dropped=[1-9]" && pass "a reader that does not read loses th
 
 has err.notrtl "not rtl_tcp" && pass "something that is not rtl_tcp refused" || fail "notrtl: '$(f err.notrtl)'"
 has err.nothing "dial tcp!127.0.0.1!$PN" && pass "nothing listening refused" || fail "nothing: '$(f err.nothing)'"
+has err.busy "not greeted in 2 seconds: rtl_tcp busy" && pass "an rtl_tcp busy with another client: refused after -w" ||
+	fail "busy: '$(f err.busy)'"
 ! has ctl.refused "^source" && pass "a refused source leaves none" || fail "ctl: $(f ctl.refused | head -1)"
 has err.freq "bad frequency 0" && has err.rate "bad rate 500000" && has err.gain "bad gain loud" &&
 	has err.direct "direct: off, i or q" && has err.bogus "unknown command bogus" &&

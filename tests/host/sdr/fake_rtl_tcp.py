@@ -6,6 +6,9 @@
                                         does, logging to LOG
     fake_rtl_tcp.py http                listen and answer as something that is
                                         not rtl_tcp; print the port
+    fake_rtl_tcp.py busy                listen, accept and say nothing, as
+                                        rtl_tcp does while another client
+                                        holds it; print the port
 
 rtl_tcp (librtlsdr) greets a client with 12 bytes, "RTL0", the tuner type
 and the number of its gains (big-endian 32-bit), then sends samples until
@@ -120,13 +123,23 @@ def http():
         c.close()
 
 
+def busy():
+    s = listen()
+    held = []
+    while True:
+        c, _ = s.accept()
+        held.append(c)
+
+
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "serve":
         serve(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 5)
     elif len(sys.argv) == 2 and sys.argv[1] == "http":
         http()
+    elif len(sys.argv) == 2 and sys.argv[1] == "busy":
+        busy()
     else:
-        sys.exit("usage: fake_rtl_tcp.py serve LOG [TUNER] | http")
+        sys.exit("usage: fake_rtl_tcp.py serve LOG [TUNER] | http | busy")
 
 
 if __name__ == "__main__":

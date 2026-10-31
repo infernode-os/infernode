@@ -3,14 +3,15 @@
 # sdrfs driven through its files, for tests/host/sdrfs_test.sh (not a
 # test).  $1 is the test's directory; $2 the port of a fake rtl_tcp
 # (tests/host/sdr/fake_rtl_tcp.py), $3 of something that is not
-# rtl_tcp, $4 of nothing.  What each step gives is written beside it.
+# rtl_tcp, $4 of nothing, $5 of an rtl_tcp busy with another client.
+# What each step gives is written beside it.
 # A write that may be refused is made in a shell of its own.
 #
 load std
 
 d=$1
 s=/mnt/sdr
-sdrfs
+sdrfs -w 2
 ls $s > $d/ls
 cat $s/status > $d/status.start
 cat $s/ctl > $d/ctl.start
@@ -56,6 +57,7 @@ cat $s/status > $d/status.dropped
 # refusals
 sh -c 'echo source 127.0.0.1!'^$3^' > '^$s^'/ctl' >[2] $d/err.notrtl
 sh -c 'echo source 127.0.0.1!'^$4^' > '^$s^'/ctl' >[2] $d/err.nothing
+sh -c 'echo source 127.0.0.1!'^$5^' > '^$s^'/ctl' >[2] $d/err.busy
 cat $s/ctl > $d/ctl.refused
 sh -c 'echo freq 0 > '^$s^'/ctl' >[2] $d/err.freq
 sh -c 'echo rate 500000 > '^$s^'/ctl' >[2] $d/err.rate
